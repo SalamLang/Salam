@@ -6,6 +6,9 @@
 #include <string.h>
 #include <limits.h>
 
+typedef struct {
+} interpreter_state_t;
+
 typedef enum {
 	// values
 	TOKEN_TYPE_IDENTIFIER,
@@ -158,6 +161,19 @@ ast_node_t* parser_block(parser_t* parser);
 ast_node_t* parser_statement(parser_t* parser);
 ast_node_t* parser_return(parser_t* parser);
 ast_node_t* parser_expression(parser_t* parser);
+
+int evaluate_expression_literal(ast_node_t* node);
+int evaluate_expression_identifier(ast_node_t* node);
+int evaluate_expression_binary_op(ast_node_t* node, interpreter_state_t* state);
+
+
+int evaluate_expression(ast_node_t* node, interpreter_state_t* state);
+int evaluate_binary_operation(ast_node_t* node, interpreter_state_t* state);
+int evaluate_literal(ast_node_t* node);
+int evaluate_identifier(ast_node_t* node, interpreter_state_t* state);
+void interpret_return_statement(ast_node_t* node, interpreter_state_t* state);
+void interpret_function_declaration(ast_node_t* node, interpreter_state_t* state);
+void interpret_block(ast_node_t* node, interpreter_state_t* state);
 
 char* token_type2str(token_type_t type)
 {
@@ -988,11 +1004,109 @@ void print_xml_ast_node(ast_node_t* node, int indent_level) {
 	}
 }
 
-void print_xml_ast_tree(ast_node_t* root) {
+void print_xml_ast_tree(ast_node_t* root)
+{
 	printf("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
 	printf("<AST>\n");
-	print_xml_ast_node(root, 1);  // Start with initial indentation level of 1
+	print_xml_ast_node(root, 1);
 	printf("</AST>\n");
+}
+
+void interpret(ast_node_t* node, interpreter_state_t* state)
+{
+    if (node == NULL) {
+        return;
+    }
+
+    switch (node->type) {
+        case AST_FUNCTION_DECLARATION:
+            interpret_function_declaration(node, state);
+            break;
+        case AST_RETURN_STATEMENT:
+            interpret_return_statement(node, state);
+            break;
+        case AST_BLOCK:
+            interpret_block(node, state);
+            break;
+        default:
+            break;
+    }
+}
+
+void interpret_function_declaration(ast_node_t* node, interpreter_state_t* state)
+{
+    printf("Function Declaration: %s\n", node->data.function_declaration.name);
+    interpret(node->data.function_declaration.body, state);
+}
+
+void interpret_return_statement(ast_node_t* node, interpreter_state_t* state)
+{
+    printf("Return Statement\n");
+    evaluate_expression(node->data.return_statement.expression, state);
+}
+
+void interpret_block(ast_node_t* node, interpreter_state_t* state)
+{
+    printf("Block\n");
+    for (size_t i = 0; i < node->data.block.num_statements; i++) {
+        interpret(node->data.block.statements[i], state);
+    }
+}
+
+int evaluate_literal(ast_node_t* node)
+{
+    if (node->data.expression.data.literal.literal_type == TOKEN_TYPE_NUMBER)
+		return atoi(node->data.expression.data.literal.value);
+	return 0;
+}
+
+int evaluate_identifier(ast_node_t* node, interpreter_state_t* state)
+{
+    printf("Variable: %s\n", node->data.expression.data.identifier.name);
+    return 0;
+}
+
+int evaluate_binary_operation(ast_binary_op_t* binary_op, interpreter_state_t* state) {
+    int left = evaluate_expression(binary_op->left, state);
+    int right = evaluate_expression(binary_op->right, state);
+
+    const char* operator_str = binary_op->operator;
+
+    if (strcmp(operator_str, "+") == 0) {
+        return left + right;
+    } else if (strcmp(operator_str, "-") == 0) {
+        return left - right;
+    } else if (strcmp(operator_str, "*") == 0) {
+        return left * right;
+    } else if (strcmp(operator_str, "/") == 0) {
+        return right != 0 ? left / right : 0;
+    } else {
+        return 0;
+    }
+}
+
+// int evaluate_function_call(ast_node_t* node, interpreter_state_t* state) {
+//     printf("Function Call: %s\n", node->data.function_call.name);
+//     return 0;
+// }
+
+int evaluate_expression(ast_node_t* node, interpreter_state_t* state) {
+    if (node == NULL) {
+        return 0;
+    }
+
+    switch (node->type) {
+        case AST_EXPRESSION_LITERAL:
+            return evaluate_literal(node);
+        case AST_EXPRESSION_IDENTIFIER:
+            return evaluate_identifier(node, state);
+        case AST_EXPRESSION_BINARY_OP:
+            return evaluate_binary_operation(node, state);
+        // case AST_EXPRESION_FUNCTION_CALL:
+        //     return evaluate_function_call(node, state);
+        default:
+            return 0;
+    }
 }
 
 int main(int argc, char** argv)
@@ -1016,6 +1130,8 @@ int main(int argc, char** argv)
 	parser_parse(parser);
 
 	print_xml_ast_tree(parser->ast_tree);
+
+	interpret(parser->ast_tree, NULL);
 
 	exit(EXIT_SUCCESS);
 }

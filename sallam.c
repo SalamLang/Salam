@@ -66,6 +66,7 @@ typedef struct {
 	int column;
 
 	array_t* tokens;
+	int last_char_size;
 } lexer_t;
 
 struct ast_node;
@@ -243,7 +244,11 @@ void array_free(array_t* arr)
 
 void token_print(token_t* t)
 {
-	printf("%zu - %s - %s\n", t->location.length, token_type2str(t->type), t->value);
+	printf("%d ", t->type);
+	// printf("...\n");
+	// printf("%zu - ", t->location.length);
+	printf("%s - ", token_type2str(t->type));
+	printf("%s\n", t->value);
 }
 
 void array_print(array_t* arr)
@@ -307,6 +312,23 @@ wchar_t read_token(lexer_t* lexer)
 	}
 
 	lexer->index += char_size;
+	lexer->last_char_size = char_size;
+
+	return current_char;
+}
+
+wchar_t unread_token(lexer_t* lexer)
+{
+	lexer->index -= lexer->last_char_size;
+	lexer->column -= lexer->last_char_size;
+
+	wchar_t current_char;
+	int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
+	if (char_size < 0) {
+		printf("Syntax Error: invalid unicode character\n");
+		exit(EXIT_FAILURE);
+		return 0;
+	}
 
 	return current_char;
 }
@@ -324,8 +346,8 @@ void read_number(lexer_t* lexer, wchar_t ch)
 	size_t length = strlen(number);
 	token_t* t = token_create(TOKEN_TYPE_NUMBER, number, length, lexer->line, lexer->column - length, lexer->line, lexer->column);
 	array_push(lexer->tokens, t);
-
-	// printf("number = %s\n", number);
+	
+	unread_token(lexer);
 }
 
 void read_string(lexer_t* lexer, wchar_t ch)
@@ -347,7 +369,7 @@ void read_string(lexer_t* lexer, wchar_t ch)
 	token_t* t = token_create(TOKEN_TYPE_STRING, string, length, lexer->line, lexer->column - length, lexer->line, lexer->column);
 	array_push(lexer->tokens, t);
 
-	// printf("string = %s\n", string);
+	unread_token(lexer);
 }
 
 size_t mb_strlen(char* identifier)
@@ -389,6 +411,8 @@ void read_identifier(lexer_t* lexer, wchar_t ch)
 	size_t length = mb_strlen(identifier);
 	token_t* t = token_create(type, identifier, length, lexer->line, lexer->column - length, lexer->line, lexer->column);
 	array_push(lexer->tokens, t);
+
+	unread_token(lexer);
 }
 
 char* wchar_to_char(wchar_t wide_char)
@@ -629,7 +653,6 @@ ast_node_t* parser_return(parser_t* parser) {
 	return node;
 }
 
-
 ast_node_t* parser_statement(parser_t* parser)
 {
 	printf("Parsing statement\n");
@@ -646,25 +669,22 @@ ast_node_t* parser_statement(parser_t* parser)
 	return statement;
 }
 
-// Define nud and led function types
 typedef ast_node_t* (*nud_func_t)(parser_t* parser, token_t* token);
 typedef ast_node_t* (*led_func_t)(parser_t* parser, token_t* token, ast_node_t* left);
 
-// Define token precedence levels
 enum {
     PRECEDENCE_LOWEST,
     PRECEDENCE_SUM,       // +
-    PRECEDENCE_DIFFERENCE // -
+    PRECEDENCE_DIFFERENCE, // -
+	// PRECEDENCE_HIGHEST,
 };
 
-// Declare nud and led functions
 ast_node_t* nud_number(parser_t* parser, token_t* token);
 ast_node_t* nud_string(parser_t* parser, token_t* token);
 ast_node_t* nud_identifier(parser_t* parser, token_t* token);
 ast_node_t* nud_parentheses(parser_t* parser, token_t* token);
 ast_node_t* led_plus_minus(parser_t* parser, token_t* token, ast_node_t* left);
 
-// Define token precedence and associated nud/led functions
 typedef struct {
     int precedence;
     nud_func_t nud;
@@ -680,18 +700,15 @@ token_info_t token_infos[] = {
     [TOKEN_TYPE_MINUS] = {PRECEDENCE_DIFFERENCE, NULL, led_plus_minus},
 };
 
-// Declare Pratt parsing functions
 ast_node_t* pratt_parse(parser_t* parser, int precedence);
 ast_node_t* pratt_parse_expression(parser_t* parser);
 
-// Update your existing parser functions to use Pratt parsing
 ast_node_t* parser_primary(parser_t* parser) {
     printf("Parsing primary\n");
 
     token_t* current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
     ast_node_t* primary_node = NULL;
 
-    // Check if the token type has a nud function
     if (token_infos[current_token->type].nud != NULL) {
         primary_node = token_infos[current_token->type].nud(parser, current_token);
     } else {
@@ -717,10 +734,20 @@ ast_node_t* pratt_parse(parser_t* parser, int precedence) {
 
     while (precedence < token_infos[((token_t*)parser->lexer->tokens->data[parser->token_index])->type].precedence) {
         current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
+		printf("---->");
+		token_print(current_token);
         parser->token_index++;
 
         left = token_infos[current_token->type].led(parser, current_token, left);
     }
+
+	printf("last step in prat parsing\n");
+	if (left == NULL) {
+		printf("left is null\n");
+	} else {
+		printf("left is not null\n");
+	}
+	token_print((token_t*) left);
 
     return left;
 }
@@ -787,9 +814,20 @@ ast_node_t* nud_identifier(parser_t* parser, token_t* token) {
 }
 
 ast_node_t* nud_parentheses(parser_t* parser, token_t* token) {
+	// printf("token type: ");
+	// token_print(token); // PARENTHESIS_OPEN
+
+	// printf("first ===>");
+	// token_print((token_t*)parser->lexer->tokens->data[parser->token_index]);
+
+	// parser_token_next(parser);
+
     ast_node_t* expression_node = pratt_parse(parser, PRECEDENCE_LOWEST);
 
-    parser_token_eat(parser, TOKEN_TYPE_PARENTHESE_CLOSE);
+	printf("next ===>");
+	token_print((token_t*)parser->lexer->tokens->data[parser->token_index]);
+	
+	parser_token_eat(parser, TOKEN_TYPE_PARENTHESE_CLOSE);
 
     return expression_node;
 }

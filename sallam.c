@@ -314,15 +314,11 @@ void lexer_lex(lexer_t* lexer)
 		}
 
 		wchar_t current_char = read_token(lexer);
-		if (is_number(current_char)) {
-			read_number(lexer, current_char);
-		} else if (is_alpha(current_char)) {
-			read_identifier(lexer, current_char);
-		} else if (current_char == '{') {
+		if (current_char == '{') {
 			token_t* t = token_create(TOKEN_TYPE_SECTION_OPEN, "{", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		} else if (current_char == '}') {
-			token_t* t = token_create(TOKEN_TYPE_SECTION_CLOSE, "{", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+			token_t* t = token_create(TOKEN_TYPE_SECTION_CLOSE, "}", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		} else if (current_char == '(') {
 			token_t* t = token_create(TOKEN_TYPE_PARENTHESE_OPEN, "(", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
@@ -336,6 +332,10 @@ void lexer_lex(lexer_t* lexer)
 		} else if (current_char == '-') {
 			token_t* t = token_create(TOKEN_TYPE_MINUS, "-", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
+		} else if (is_number(current_char)) {
+			read_number(lexer, current_char);
+		} else if (is_alpha(current_char)) {
+			read_identifier(lexer, current_char);
 		} else {
 			size_t length = wchar_length(current_char);
 			token_t* t = token_create(TOKEN_TYPE_ERROR, wchar_to_char(current_char), length, lexer->line, lexer->column - length, lexer->line, lexer->column);

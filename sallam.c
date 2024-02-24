@@ -646,107 +646,152 @@ ast_node_t* parser_statement(parser_t* parser)
 	return statement;
 }
 
-ast_node_t* parser_parentheses(parser_t* parser) {
-	printf("Parsing parentheses\n");
+// Define nud and led function types
+typedef ast_node_t* (*nud_func_t)(parser_t* parser, token_t* token);
+typedef ast_node_t* (*led_func_t)(parser_t* parser, token_t* token, ast_node_t* left);
 
-	parser_token_eat(parser, TOKEN_TYPE_PARENTHESE_OPEN);
+// Define token precedence levels
+enum {
+    PRECEDENCE_LOWEST,
+    PRECEDENCE_SUM,       // +
+    PRECEDENCE_DIFFERENCE // -
+};
 
-	ast_node_t* expression_node = parser_expression(parser);
+// Declare nud and led functions
+ast_node_t* nud_number(parser_t* parser, token_t* token);
+ast_node_t* nud_string(parser_t* parser, token_t* token);
+ast_node_t* nud_identifier(parser_t* parser, token_t* token);
+ast_node_t* nud_parentheses(parser_t* parser, token_t* token);
+ast_node_t* led_plus_minus(parser_t* parser, token_t* token, ast_node_t* left);
 
-	parser_token_eat(parser, TOKEN_TYPE_PARENTHESE_CLOSE);
+// Define token precedence and associated nud/led functions
+typedef struct {
+    int precedence;
+    nud_func_t nud;
+    led_func_t led;
+} token_info_t;
 
-	return expression_node;
-}
+token_info_t token_infos[] = {
+    [TOKEN_TYPE_NUMBER] = {PRECEDENCE_LOWEST, nud_number, NULL},
+    [TOKEN_TYPE_STRING] = {PRECEDENCE_LOWEST, nud_string, NULL},
+    [TOKEN_TYPE_IDENTIFIER] = {PRECEDENCE_LOWEST, nud_identifier, NULL},
+    [TOKEN_TYPE_PARENTHESE_OPEN] = {PRECEDENCE_LOWEST, nud_parentheses, NULL},
+    [TOKEN_TYPE_PLUS] = {PRECEDENCE_SUM, NULL, led_plus_minus},
+    [TOKEN_TYPE_MINUS] = {PRECEDENCE_DIFFERENCE, NULL, led_plus_minus},
+};
 
+// Declare Pratt parsing functions
+ast_node_t* pratt_parse(parser_t* parser, int precedence);
+ast_node_t* pratt_parse_expression(parser_t* parser);
+
+// Update your existing parser functions to use Pratt parsing
 ast_node_t* parser_primary(parser_t* parser) {
-	printf("Parsing primary\n");
+    printf("Parsing primary\n");
 
-	token_t* current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
-	ast_node_t* primary_node = malloc(sizeof(ast_node_t));
-	primary_node->type = AST_EXPRESSION;
+    token_t* current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
+    ast_node_t* primary_node = NULL;
 
-	switch (current_token->type) {
-		case TOKEN_TYPE_NUMBER:
-		case TOKEN_TYPE_STRING:
-		case TOKEN_TYPE_IDENTIFIER:
-			printf("Primary: %s\n", current_token->value);
+    // Check if the token type has a nud function
+    if (token_infos[current_token->type].nud != NULL) {
+        primary_node = token_infos[current_token->type].nud(parser, current_token);
+    } else {
+        printf("Error: Unexpected token in primary expression\n");
+        token_print(current_token);
+        exit(EXIT_FAILURE);
+    }
 
-			ast_expression_t* literal_expr = malloc(sizeof(ast_expression_t));
-			literal_expr->type = AST_EXPRESSION_LITERAL;
-			literal_expr->data.literal.literal_type = current_token->type;
-			literal_expr->data.literal.value = strdup(current_token->value);
-
-			primary_node->data.expression = *literal_expr;
-
-			parser->token_index++;
-			break;
-        case TOKEN_TYPE_PARENTHESE_OPEN:
-            return parser_parentheses(parser);
-		default:
-			printf("Error: Unexpected token in primary expression\n");
-			token_print(current_token);
-			exit(EXIT_FAILURE);
-	}
-
-	return primary_node;
-}
-
-ast_node_t* parser_term(parser_t* parser) {
-	printf("Parsing term\n");
-
-	ast_node_t* term_node = parser_primary(parser);
-
-	while (parser->lexer->tokens->length > parser->token_index) {
-		token_t* current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
-
-		if (current_token->type == TOKEN_TYPE_PLUS || current_token->type == TOKEN_TYPE_MINUS) {
-			parser_token_next(parser);
-			ast_node_t* next_term_node = parser_primary(parser);
-
-			ast_expression_t* binary_op_expr = malloc(sizeof(ast_expression_t));
-			binary_op_expr->type = AST_EXPRESSION_BINARY_OP;
-			binary_op_expr->data.binary_op.operator = strdup(current_token->value);
-			binary_op_expr->data.binary_op.left = (ast_expression_t*) term_node;
-			binary_op_expr->data.binary_op.right = (ast_expression_t*) next_term_node;
-
-			term_node = malloc(sizeof(ast_node_t));
-			term_node->type = AST_EXPRESSION;
-			term_node->data.expression = *binary_op_expr;
-		} else {
-			break;
-		}
-	}
-
-	return term_node;
+    return primary_node;
 }
 
 ast_node_t* parser_expression(parser_t* parser) {
-	printf("Parsing expression\n");
+    printf("Parsing expression\n");
 
-	ast_node_t* expression_node = parser_term(parser);
+    return pratt_parse_expression(parser);
+}
 
-	while (parser->lexer->tokens->length > parser->token_index) {
-		token_t* current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
+ast_node_t* pratt_parse(parser_t* parser, int precedence) {
+    token_t* current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
+    parser->token_index++;
 
-		if (current_token->type == TOKEN_TYPE_PLUS || current_token->type == TOKEN_TYPE_MINUS) {
-			parser_token_next(parser);
-			ast_node_t* next_term_node = parser_term(parser);
+    ast_node_t* left = token_infos[current_token->type].nud(parser, current_token);
 
-			ast_expression_t* binary_op_expr = malloc(sizeof(ast_expression_t));
-			binary_op_expr->type = AST_EXPRESSION_BINARY_OP;
-			binary_op_expr->data.binary_op.operator = strdup(current_token->value);
-			binary_op_expr->data.binary_op.left = (ast_expression_t*) expression_node;
-			binary_op_expr->data.binary_op.right = (ast_expression_t*) next_term_node;
+    while (precedence < token_infos[((token_t*)parser->lexer->tokens->data[parser->token_index])->type].precedence) {
+        current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
+        parser->token_index++;
 
-			expression_node = malloc(sizeof(ast_node_t));
-			expression_node->type = AST_EXPRESSION;
-			expression_node->data.expression = *binary_op_expr;
-		} else {
-			break;
-		}
-	}
+        left = token_infos[current_token->type].led(parser, current_token, left);
+    }
 
-	return expression_node;
+    return left;
+}
+
+ast_node_t* pratt_parse_expression(parser_t* parser) {
+    return pratt_parse(parser, PRECEDENCE_LOWEST);
+}
+
+ast_node_t* led_plus_minus(parser_t* parser, token_t* token, ast_node_t* left) {
+    ast_node_t* right = pratt_parse(parser, token_infos[token->type].precedence);
+    
+    ast_expression_t* binary_op_expr = malloc(sizeof(ast_expression_t));
+    binary_op_expr->type = AST_EXPRESSION_BINARY_OP;
+    binary_op_expr->data.binary_op.operator = strdup(token->value);
+    binary_op_expr->data.binary_op.left = (ast_expression_t*)left;
+    binary_op_expr->data.binary_op.right = (ast_expression_t*)right;
+
+    ast_node_t* binary_op_node = malloc(sizeof(ast_node_t));
+    binary_op_node->type = AST_EXPRESSION;
+    binary_op_node->data.expression = *binary_op_expr;
+
+    return binary_op_node;
+}
+
+ast_node_t* nud_number(parser_t* parser, token_t* token) {
+    ast_node_t* primary_node = malloc(sizeof(ast_node_t));
+    primary_node->type = AST_EXPRESSION;
+
+    ast_expression_t* literal_expr = malloc(sizeof(ast_expression_t));
+    literal_expr->type = AST_EXPRESSION_LITERAL;
+    literal_expr->data.literal.literal_type = token->type;
+    literal_expr->data.literal.value = strdup(token->value);
+
+    primary_node->data.expression = *literal_expr;
+
+    return primary_node;
+}
+
+ast_node_t* nud_string(parser_t* parser, token_t* token) {
+    ast_node_t* primary_node = malloc(sizeof(ast_node_t));
+    primary_node->type = AST_EXPRESSION;
+
+    ast_expression_t* literal_expr = malloc(sizeof(ast_expression_t));
+    literal_expr->type = AST_EXPRESSION_LITERAL;
+    literal_expr->data.literal.literal_type = token->type;
+    literal_expr->data.literal.value = strdup(token->value);
+
+    primary_node->data.expression = *literal_expr;
+
+    return primary_node;
+}
+
+ast_node_t* nud_identifier(parser_t* parser, token_t* token) {
+    ast_node_t* primary_node = malloc(sizeof(ast_node_t));
+    primary_node->type = AST_EXPRESSION;
+
+    ast_expression_t* identifier_expr = malloc(sizeof(ast_expression_t));
+    identifier_expr->type = AST_EXPRESSION_IDENTIFIER;
+    identifier_expr->data.identifier.name = strdup(token->value);
+
+    primary_node->data.expression = *identifier_expr;
+
+    return primary_node;
+}
+
+ast_node_t* nud_parentheses(parser_t* parser, token_t* token) {
+    ast_node_t* expression_node = pratt_parse(parser, PRECEDENCE_LOWEST);
+
+    parser_token_eat(parser, TOKEN_TYPE_PARENTHESE_CLOSE);
+
+    return expression_node;
 }
 
 ast_node_t* parser_block(parser_t* parser)

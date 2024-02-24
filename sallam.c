@@ -99,25 +99,36 @@ wchar_t read_token(lexer_t* lexer)
     return current_char;
 }
 
-
-void read_identifier(lexer_t* lexer, wchar_t ch)
-{
-    printf("read_identifier\n");
-    printf("ch = %lc\n", ch);
-}
-
 void read_number(lexer_t* lexer, wchar_t ch)
 {
     char* number = (char*)malloc(100);
     int i = 0;
     while (is_number(ch)) {
-        // convert ch into ascii number
         number[i++] = ch - L'۰' + '0';
         ch = read_token(lexer);
     }
     number[i] = 0;
     printf("number = %s\n", number);
 }
+
+void read_identifier(lexer_t* lexer, wchar_t ch)
+{
+    char identifier[256];
+    int i = 0;
+    while (is_ident(ch)) {
+        int char_size = wctomb(&identifier[i], ch);
+        if (char_size < 0) {
+            printf("Error: Failed to convert wide character to multibyte\n");
+            exit(1);
+        }
+        i += char_size;
+        ch = read_token(lexer);
+    }
+    identifier[i] = 0;
+    printf("identifier = %s\n", identifier);
+}
+
+
 
 void lexer_lex(lexer_t* lexer)
 {
@@ -150,25 +161,39 @@ void lexer_lex(lexer_t* lexer)
             read_identifier(lexer, current_char);
         }
          else {
-            printf("Character: %lc\n", current_char);
+            printf("character: %lc\n", current_char);
         }
     }
+}
+
+void help()
+{
+    printf("Welcome to Sallam Programming Language!\n");
+    printf("Sallam is the first Persian/Iranian computer scripting language.\n");
+    printf("\n");
+
+    printf("Usage:\n");
+    printf("  sallam <filename>\t\t\t# Execute a Sallam script\n");
+    printf("\n");
+
+    printf("Example:\n");
+    printf("  sallam my_script.sallam\t\t# Run the Sallam script 'my_script.sallam'\n");
+    printf("\n");
+
+    printf("Feel free to explore and create using Sallam!\n");
+    printf("For more information, visit: https://sallam-lang.js.org\n");
 }
 
 int main(int argc, char** argv)
 {
     setlocale(LC_ALL, "");
 
-    printf("Sallam\n");
-    printf("argc = %d\n", argc);
-    for (int i = 0; i < argc; i++)
-    {
-        printf("argv[%d] = %s\n", i, argv[i]);
+    if (argc == 1 || argc > 2) {
+        help();
+        return 0;
     }
 
-    printf("سلام\n");
-
-    char* file_data = file_read("input.sallam");
+    char* file_data = file_read(argv[1]);
     printf("%s\n", file_data);
 
     lexer_t* lexer = lexer_create(file_data);

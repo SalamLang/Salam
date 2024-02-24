@@ -109,18 +109,18 @@ char* file_read(char* file_Name)
 	return file_data;
 }
 
-token_t* token_create(token_type_t type, char* value, int a, int b, int c, int b2, int c2)
+token_t* token_create(token_type_t type, const char* value, int a, int b, int c, int b2, int c2)
 {
-	token_t* t = malloc(sizeof(token_t));
-	t->type = type;
-	strcpy(t->value, value);
-	t->location.length = a;
-	t->location.line = b;
-	t->location.column = c;
-	t->location.end_line = b2;
-	t->location.end_column = c2;
+    token_t* t = malloc(sizeof(token_t));
+    t->type = type;
+    t->value = strdup(value);
+    t->location.length = a;
+    t->location.line = b;
+    t->location.column = c;
+    t->location.end_line = b2;
+    t->location.end_column = c2;
 
-	return t;
+    return t;
 }
 
 array_t* array_create(size_t size)

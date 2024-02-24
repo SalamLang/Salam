@@ -525,12 +525,74 @@ void parser_statement(parser_t* parser) {
     }
 }
 
+void parser_primary(parser_t* parser) {
+    printf("Parsing primary\n");
+
+    token_t* current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
+
+    switch (current_token->type) {
+        case TOKEN_TYPE_NUMBER:
+        case TOKEN_TYPE_STRING:
+        case TOKEN_TYPE_IDENTIFIER:
+            printf("Primary: %s\n", current_token->value);
+            parser->token_index++;
+            break;
+        default:
+            printf("Error: Unexpected token in primary expression\n");
+            exit(EXIT_FAILURE);
+    }
+}
+
+void parser_parentheses(parser_t* parser) {
+    printf("Parsing parentheses\n");
+
+    parser_token_eat(parser, TOKEN_TYPE_PARENTHESE_OPEN);
+    parser_expression(parser);
+    parser_token_eat(parser, TOKEN_TYPE_PARENTHESE_CLOSE);
+}
+
+void parser_term(parser_t* parser) {
+    printf("Parsing term\n");
+
+    token_t* current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
+
+    if (current_token->type == TOKEN_TYPE_PARENTHESE_OPEN) {
+        parser_parentheses(parser);
+    } else {
+        parser_primary(parser);
+    }
+
+    while (parser->lexer->tokens->length > parser->token_index) {
+        current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
+
+        if (current_token->type == TOKEN_TYPE_PLUS || current_token->type == TOKEN_TYPE_MINUS) {
+            parser_token_next(parser);
+            if (current_token->type == TOKEN_TYPE_PARENTHESE_OPEN) {
+                parser_parentheses(parser);
+            } else {
+                parser_primary(parser);
+            }
+        } else {
+            break;
+        }
+    }
+}
+
 void parser_expression(parser_t* parser) {
     printf("Parsing expression\n");
 
-	// ( and ) and + and - operator
-	// we have string, number
-	// TODO
+    parser_term(parser);
+
+    while (parser->lexer->tokens->length > parser->token_index) {
+        token_t* current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
+
+        if (current_token->type == TOKEN_TYPE_PLUS || current_token->type == TOKEN_TYPE_MINUS) {
+            parser_token_next(parser);
+            parser_term(parser);
+        } else {
+            break;
+        }
+    }
 }
 
 void parser_block(parser_t* parser) {
@@ -586,8 +648,8 @@ int main(int argc, char** argv)
 
 	array_print(lexer->tokens);
 
-	// parser_t* parser = parser_create(lexer);
-	// parser_parse(parser);
+	parser_t* parser = parser_create(lexer);
+	parser_parse(parser);
 
 	exit(EXIT_SUCCESS);
 }

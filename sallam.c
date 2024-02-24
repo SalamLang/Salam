@@ -646,6 +646,18 @@ ast_node_t* parser_statement(parser_t* parser)
 	return statement;
 }
 
+ast_node_t* parser_parentheses(parser_t* parser) {
+	printf("Parsing parentheses\n");
+
+	parser_token_eat(parser, TOKEN_TYPE_PARENTHESE_OPEN);
+
+	ast_node_t* expression_node = parser_expression(parser);
+
+	parser_token_eat(parser, TOKEN_TYPE_PARENTHESE_CLOSE);
+
+	return expression_node;
+}
+
 ast_node_t* parser_primary(parser_t* parser) {
 	printf("Parsing primary\n");
 
@@ -659,7 +671,6 @@ ast_node_t* parser_primary(parser_t* parser) {
 		case TOKEN_TYPE_IDENTIFIER:
 			printf("Primary: %s\n", current_token->value);
 
-			// Create a literal expression node
 			ast_expression_t* literal_expr = malloc(sizeof(ast_expression_t));
 			literal_expr->type = AST_EXPRESSION_LITERAL;
 			literal_expr->data.literal.literal_type = current_token->type;
@@ -669,22 +680,15 @@ ast_node_t* parser_primary(parser_t* parser) {
 
 			parser->token_index++;
 			break;
+        case TOKEN_TYPE_PARENTHESE_OPEN:
+            return parser_parentheses(parser);
 		default:
 			printf("Error: Unexpected token in primary expression\n");
+			token_print(current_token);
 			exit(EXIT_FAILURE);
 	}
 
 	return primary_node;
-}
-
-ast_node_t* parser_parentheses(parser_t* parser) {
-	printf("Parsing parentheses\n");
-
-	parser_token_eat(parser, TOKEN_TYPE_PARENTHESE_OPEN);
-	ast_node_t* expression_node = parser_expression(parser);
-	parser_token_eat(parser, TOKEN_TYPE_PARENTHESE_CLOSE);
-
-	return expression_node;
 }
 
 ast_node_t* parser_term(parser_t* parser) {

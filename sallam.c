@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <wchar.h>
 #include <locale.h>
+#include <stdbool.h>
 
 char* file_read(char* file_Name)
 {
@@ -61,6 +62,63 @@ lexer_t* lexer_create(const char* data)
     return lexer;
 }
 
+bool is_number(wchar_t ch)
+{
+    return ch >= L'۰' && ch <= L'۹';
+}
+
+bool is_alpha(wchar_t ch)
+{
+    return ch >= L'آ' && ch <= L'ی' || ch == L'_';
+}
+
+bool is_ident(wchar_t ch)
+{
+    return is_alpha(ch) || is_number(ch);
+}
+
+wchar_t read_token(lexer_t* lexer)
+{
+    wchar_t current_char;
+    int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
+    if (char_size < 0) {
+        printf("Syntax Error: invalid unicode character\n");
+        exit(1);
+        return 0;
+    }
+
+    if (current_char == '\n') {
+        lexer->line++;
+        lexer->column = 0;
+    } else {
+        lexer->column += char_size;
+    }
+
+    lexer->index += char_size;
+
+    return current_char;
+}
+
+
+void read_identifier(lexer_t* lexer, wchar_t ch)
+{
+    printf("read_identifier\n");
+    printf("ch = %lc\n", ch);
+}
+
+void read_number(lexer_t* lexer, wchar_t ch)
+{
+    char* number = (char*)malloc(100);
+    int i = 0;
+    while (is_number(ch)) {
+        // convert ch into ascii number
+        number[i++] = ch - L'۰' + '0';
+        ch = read_token(lexer);
+    }
+    number[i] = 0;
+    printf("number = %s\n", number);
+}
+
 void lexer_lex(lexer_t* lexer)
 {
     printf("lexer_lex\n");
@@ -83,11 +141,17 @@ void lexer_lex(lexer_t* lexer)
             continue;
         }
 
-        wchar_t current_char;
-        int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
+        wchar_t current_char = read_token(lexer);
 
-        printf("Character: %lc\n", current_char);
-        lexer->index += char_size;
+        // check if current_char is ۱۲۳۴۵۶۷۸۹۰
+        if (is_number(current_char)) {
+            read_number(lexer, current_char);
+        } else if (is_alpha(current_char)) {
+            read_identifier(lexer, current_char);
+        }
+         else {
+            printf("Character: %lc\n", current_char);
+        }
     }
 }
 

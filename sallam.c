@@ -268,9 +268,9 @@ void read_identifier(lexer_t* lexer, wchar_t ch)
         mapping_index++;
     }
 
-    size_t length = mb_strlen(identifier);
-    token_t* t = token_create(type, identifier, length, lexer->line, lexer->column - length, lexer->line, lexer->column);
-    array_push(lexer->tokens, t);
+	size_t length = mb_strlen(identifier);
+	token_t* t = token_create(type, identifier, length, lexer->line, lexer->column - length, lexer->line, lexer->column);
+	array_push(lexer->tokens, t);
 }
 
 char* wchar_to_char(wchar_t wide_char)

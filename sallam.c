@@ -741,13 +741,13 @@ ast_node_t* pratt_parse(parser_t* parser, int precedence) {
         left = token_infos[current_token->type].led(parser, current_token, left);
     }
 
-	printf("last step in prat parsing\n");
-	if (left == NULL) {
-		printf("left is null\n");
-	} else {
-		printf("left is not null\n");
-	}
-	token_print((token_t*) left);
+	// printf("last step in prat parsing\n");
+	// if (left == NULL) {
+	// 	printf("left is null\n");
+	// } else {
+	// 	printf("left is not null\n");
+	// }
+	// token_print((token_t*) left);
 
     return left;
 }
@@ -814,8 +814,8 @@ ast_node_t* nud_identifier(parser_t* parser, token_t* token) {
 }
 
 ast_node_t* nud_parentheses(parser_t* parser, token_t* token) {
-	// printf("token type: ");
-	// token_print(token); // PARENTHESIS_OPEN
+	printf("token type: ");
+	token_print(token); // PARENTHESIS_OPEN
 
 	// printf("first ===>");
 	// token_print((token_t*)parser->lexer->tokens->data[parser->token_index]);

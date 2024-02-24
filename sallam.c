@@ -68,11 +68,74 @@ typedef struct {
 	array_t* tokens;
 } lexer_t;
 
-
 typedef struct {
 	lexer_t* lexer;
 	size_t token_index;
 } parser_t;
+
+struct ast_node;
+
+typedef struct {
+    char* name;
+    struct ast_node* body;
+} ast_function_declaration_t;
+
+typedef struct {
+    struct ast_node* expression;
+} ast_return_statement_t;
+
+typedef struct {
+    struct ast_node** statements;
+    size_t num_statements;
+} ast_block_t;
+
+typedef struct ast_literal {
+    token_type_t literal_type;
+    char* value;
+} ast_literal_t;
+
+typedef struct ast_identifier {
+    char* name;
+} ast_identifier_t;
+
+typedef struct ast_binary_op {
+    char* operator;
+    struct ast_expression* left;
+    struct ast_expression* right;
+} ast_binary_op_t;
+
+typedef enum {
+	AST_EXPRESSION_LITERAL,
+	AST_EXPRESSION_IDENTIFIER,
+	AST_EXPRESSION_BINARY_OP,
+} ast_expression_type_t;
+
+typedef struct ast_expression {
+    ast_expression_type_t type;
+
+    union {
+        ast_literal_t literal;
+        ast_identifier_t identifier;
+        ast_binary_op_t binary_op;
+    } data;
+} ast_expression_t;
+
+typedef enum {
+    AST_FUNCTION_DECLARATION,
+    AST_RETURN_STATEMENT,
+    AST_BLOCK,
+    AST_EXPRESSION
+} ast_node_type_t;
+
+typedef struct ast_node {
+    ast_node_type_t type;
+    union {
+        ast_function_declaration_t function_declaration;
+        ast_return_statement_t return_statement;
+        ast_block_t block;
+        ast_expression_t expression;
+    } data;
+} ast_node_t;
 
 wchar_t read_token(lexer_t* lexer);
 void read_number(lexer_t* lexer, wchar_t ch);

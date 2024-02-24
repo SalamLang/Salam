@@ -797,80 +797,113 @@ void parser_parse(parser_t* parser)
 	}
 }
 
-void print_xml_ast_node(ast_node_t* node) {
-	if (node == NULL) {
-		return;
-	}
+void print_indentation(int indent_level) {
+    for (int i = 0; i < indent_level; i++) {
+        printf("  ");
+    }
+}
 
-	// printf("node type:%d\n", node->type);
+void print_xml_ast_node(ast_node_t* node, int indent_level) {
+    if (node == NULL) {
+        return;
+    }
 
-	switch (node->type) {
-		case AST_FUNCTION_DECLARATION:
-			printf("<FunctionDeclaration>\n");
-			printf("  <Name>%s</Name>\n", node->data.function_declaration.name);
-			printf("  <Body>\n");
-			print_xml_ast_node(node->data.function_declaration.body);
-			printf("  </Body>\n");
-			printf("</FunctionDeclaration>\n");
-			break;
-		case AST_RETURN_STATEMENT:
-			printf("<ReturnStatement>\n");
-			printf("  <Expression>\n");
-			print_xml_ast_node(node->data.return_statement.expression);
-			printf("  </Expression>\n");
-			printf("</ReturnStatement>\n");
-			break;
-		case AST_BLOCK:
-			printf("<Block>\n");
-			for (size_t i = 0; i < node->data.block.num_statements; i++) {
-				printf("  <Statement>\n");
-				print_xml_ast_node(node->data.block.statements[i]);
-				printf("  </Statement>\n");
-			}
-			printf("</Block>\n");
-			break;
-		case AST_EXPRESSION:
-			printf("<Expression>\n");
-			switch (node->data.expression.type) {
-				case AST_EXPRESSION_LITERAL:
-					printf("  <Literal>\n");
-					printf("    <Type>%s</Type>\n", token_type2str(node->data.expression.data.literal.literal_type));
-					printf("    <Value>%s</Value>\n", node->data.expression.data.literal.value);
-					printf("  </Literal>\n");
-					break;
-				case AST_EXPRESSION_IDENTIFIER:
-					printf("  <Identifier>\n");
-					printf("    <Name>%s</Name>\n", node->data.expression.data.identifier.name);
-					printf("  </Identifier>\n");
-					break;
-				case AST_EXPRESSION_BINARY_OP:
-					printf("  <BinaryOperation>\n");
-					printf("    <Operator>%s</Operator>\n", node->data.expression.data.binary_op.operator);
-					printf("    <Left>\n");
-					print_xml_ast_node((ast_node_t*) node->data.expression.data.binary_op.left);
-					printf("    </Left>\n");
-					printf("    <Right>\n");
-					print_xml_ast_node((ast_node_t*) node->data.expression.data.binary_op.right);
-					printf("    </Right>\n");
-					printf("  </BinaryOperation>\n");
-					break;
-				default:
-					printf("    <!-- Unhandled Expression Type -->\n");
-					break;
-			}
-			printf("</Expression>\n");
-			break;
-		default:
-			printf("<!-- Unhandled AST Node Type -->\n");
-			break;
-	}
+    print_indentation(indent_level);
+
+    switch (node->type) {
+        case AST_FUNCTION_DECLARATION:
+            printf("<FunctionDeclaration>\n");
+            print_indentation(indent_level + 1);
+            printf("<Name>%s</Name>\n", node->data.function_declaration.name);
+            print_indentation(indent_level + 1);
+            printf("<Body>\n");
+            print_xml_ast_node(node->data.function_declaration.body, indent_level + 2);
+            print_indentation(indent_level + 1);
+            printf("</Body>\n");
+            print_indentation(indent_level);
+            printf("</FunctionDeclaration>\n");
+            break;
+        case AST_RETURN_STATEMENT:
+            printf("<ReturnStatement>\n");
+            print_indentation(indent_level + 1);
+            printf("<Expression>\n");
+            print_xml_ast_node(node->data.return_statement.expression, indent_level + 2);
+            print_indentation(indent_level + 1);
+            printf("</Expression>\n");
+            print_indentation(indent_level);
+            printf("</ReturnStatement>\n");
+            break;
+        case AST_BLOCK:
+            printf("<Block>\n");
+            for (size_t i = 0; i < node->data.block.num_statements; i++) {
+                print_indentation(indent_level + 1);
+                printf("<Statement>\n");
+                print_xml_ast_node(node->data.block.statements[i], indent_level + 2);
+                print_indentation(indent_level + 1);
+                printf("</Statement>\n");
+            }
+            print_indentation(indent_level);
+            printf("</Block>\n");
+            break;
+        case AST_EXPRESSION:
+            printf("<Expression>\n");
+            switch (node->data.expression.type) {
+                case AST_EXPRESSION_LITERAL:
+                    print_indentation(indent_level + 1);
+                    printf("<Literal>\n");
+                    print_indentation(indent_level + 2);
+                    printf("<Type>%s</Type>\n", token_type2str(node->data.expression.data.literal.literal_type));
+                    print_indentation(indent_level + 2);
+                    printf("<Value>%s</Value>\n", node->data.expression.data.literal.value);
+                    print_indentation(indent_level + 1);
+                    printf("</Literal>\n");
+                    break;
+                case AST_EXPRESSION_IDENTIFIER:
+                    print_indentation(indent_level + 1);
+                    printf("<Identifier>\n");
+                    print_indentation(indent_level + 2);
+                    printf("<Name>%s</Name>\n", node->data.expression.data.identifier.name);
+                    print_indentation(indent_level + 1);
+                    printf("</Identifier>\n");
+                    break;
+                case AST_EXPRESSION_BINARY_OP:
+                    print_indentation(indent_level + 1);
+                    printf("<BinaryOperation>\n");
+                    print_indentation(indent_level + 2);
+                    printf("<Operator>%s</Operator>\n", node->data.expression.data.binary_op.operator);
+                    print_indentation(indent_level + 2);
+                    printf("<Left>\n");
+                    print_xml_ast_node((ast_node_t*)node->data.expression.data.binary_op.left, indent_level + 3);
+                    print_indentation(indent_level + 2);
+                    printf("</Left>\n");
+                    print_indentation(indent_level + 2);
+                    printf("<Right>\n");
+                    print_xml_ast_node((ast_node_t*)node->data.expression.data.binary_op.right, indent_level + 3);
+                    print_indentation(indent_level + 2);
+                    printf("</Right>\n");
+                    print_indentation(indent_level + 1);
+                    printf("</BinaryOperation>\n");
+                    break;
+                default:
+                    print_indentation(indent_level + 1);
+                    printf("<!-- Unhandled Expression Type -->\n");
+                    break;
+            }
+            print_indentation(indent_level);
+            printf("</Expression>\n");
+            break;
+        default:
+            print_indentation(indent_level);
+            printf("<!-- Unhandled AST Node Type -->\n");
+            break;
+    }
 }
 
 void print_xml_ast_tree(ast_node_t* root) {
-	printf("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-	printf("<AST>\n");
-	print_xml_ast_node(root);
-	printf("</AST>\n");
+    printf("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    printf("<AST>\n");
+    print_xml_ast_node(root, 1);  // Start with initial indentation level of 1
+    printf("</AST>\n");
 }
 
 int main(int argc, char** argv)

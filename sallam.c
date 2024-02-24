@@ -71,7 +71,7 @@ typedef struct {
 
 typedef struct {
 	lexer_t* lexer;
-	int token_index;
+	size_t token_index;
 } parser_t;
 
 wchar_t read_token(lexer_t* lexer);
@@ -231,7 +231,7 @@ wchar_t read_token(lexer_t* lexer)
 	int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
 	if (char_size < 0) {
 		printf("Syntax Error: invalid unicode character\n");
-		exit(1);
+		exit(EXIT_FAILURE);
 		return 0;
 	}
 
@@ -249,7 +249,7 @@ wchar_t read_token(lexer_t* lexer)
 
 void read_number(lexer_t* lexer, wchar_t ch)
 {
-	char* number = (char*)malloc(100);
+	char* number = (char*)malloc(sizeof(char) * 20);
 	int i = 0;
 	while (is_number(ch)) {
 		number[i++] = ch - L'۰' + '0';
@@ -262,6 +262,23 @@ void read_number(lexer_t* lexer, wchar_t ch)
 	array_push(lexer->tokens, t);
 
 	// printf("number = %s\n", number);
+}
+
+void read_string(lexer_t* lexer, wchar_t ch)
+{
+	char* string = (char*)malloc(sizeof(char) * 1024);
+	int i = 0;
+	while (ch != L'"') {
+		string[i++] = ch;
+		ch = read_token(lexer);
+	}
+	string[i] = 0;
+
+	size_t length = strlen(string);
+	token_t* t = token_create(TOKEN_TYPE_STRING, string, length, lexer->line, lexer->column - length, lexer->line, lexer->column);
+	array_push(lexer->tokens, t);
+
+	// printf("string = %s\n", string);
 }
 
 size_t mb_strlen(char* identifier)
@@ -283,7 +300,7 @@ void read_identifier(lexer_t* lexer, wchar_t ch)
 		int char_size = wctomb(&identifier[i], ch);
 		if (char_size < 0) {
 			printf("Error: Failed to convert wide character to multibyte\n");
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 		i += char_size;
 		ch = read_token(lexer);
@@ -364,6 +381,8 @@ void lexer_lex(lexer_t* lexer)
 		} else if (current_char == '-') {
 			token_t* t = token_create(TOKEN_TYPE_MINUS, "-", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
+		} else if (current_char == '\"') {
+			read_string(lexer, current_char);
 		} else if (is_number(current_char)) {
 			read_number(lexer, current_char);
 		} else if (is_alpha(current_char)) {
@@ -425,27 +444,26 @@ void parser_token_next(parser_t* parser)
 	}
 }
 
-void parser_token_skip(parser_t* parser, token_type_t type)
+token_t* parser_token_skip(parser_t* parser, token_type_t type)
 {
 	if (parser->lexer->tokens->length > parser->token_index) {
 		token_t* token = (token_t*)parser->lexer->tokens->data[parser->token_index];
 
 		if (token->type == type) {
-			parser->token_index++;
-			return (token_t*)parser->lexer->tokens->data[parser->token_index];
+			return (token_t*)parser->lexer->tokens->data[parser->token_index++];
 		}
 	}
+
 	return NULL;
 }
 
-void parser_token_eat(parser_t* parser, token_type_t type)
+token_t* parser_token_eat(parser_t* parser, token_type_t type)
 {
 	if (parser->lexer->tokens->length > parser->token_index) {
 		token_t* token = (token_t*)parser->lexer->tokens->data[parser->token_index];
 
 		if (token->type == type) {
-			parser->token_index++;
-			return (token_t*)parser->lexer->tokens->data[parser->token_index];
+			return (token_t*)parser->lexer->tokens->data[parser->token_index++];
 		} else {
 			printf("Error: Expected %s\n", token_type2str(type));
 			exit(EXIT_FAILURE);
@@ -460,21 +478,12 @@ void parser_token_eat(parser_t* parser, token_type_t type)
 
 void parser_function(parser_t* parser) {
     printf("Parsing function\n");
-	parser_token_next(parser);
+	token_t* t;
+
+	parser_token_eat(parser, TOKEN_TYPE_FUNCTION);
 
 	token_t* name = parser_token_eat(parser, TOKEN_TYPE_IDENTIFIER);
-
-    if (parser->lexer->tokens->length > parser->token_index) {
-        token_t* token = parser->lexer->tokens->data[parser->token_index];
-		token_print(token);
-        if (token->type == TOKEN_TYPE_IDENTIFIER) {
-            printf("Function Name: %s\n", token->value);
-            parser->token_index++;
-        } else {
-            printf("Error: Expected function name\n");
-            exit(EXIT_FAILURE);
-        }
-    }
+	token_print(name);
 
     // if (parser->lexer->tokens->length > parser->token_index && ((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_PARENTHESE_OPEN) {
     //     printf("Parsing parameters\n");
@@ -505,35 +514,29 @@ void parser_statement(parser_t* parser) {
     if (parser->lexer->tokens->length > parser->token_index && ((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_RETURN) {
         parser_return(parser);
     } else {
-
+		printf("Error: Unexpected token as statement\n");
+		exit(EXIT_FAILURE);
     }
 }
 
 void parser_expression(parser_t* parser) {
     printf("Parsing expression\n");
 
-    if (parser->lexer->tokens->length > parser->token_index && ((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_IDENTIFIER) {
-        printf("Parsed Identifier: %s\n", ((token_t*)parser->lexer->tokens->data[parser->token_index])->value);
-        parser->token_index++;
-    } else {
-        printf("Error: Expected an identifier in the expression\n");
-        exit(EXIT_FAILURE);
-    }
+	// ( and ) and + and - operator
+	// we have string, number
+	// TODO
 }
 
 void parser_block(parser_t* parser) {
     printf("Parsing block\n");
 
+	parser_token_eat(parser, TOKEN_TYPE_SECTION_OPEN);
+
     while (parser->lexer->tokens->length > parser->token_index && ((token_t*) parser->lexer->tokens->data[parser->token_index])->type != TOKEN_TYPE_SECTION_CLOSE) {
         parser_statement(parser);
     }
 
-    if (parser->lexer->tokens->length > parser->token_index && ((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_SECTION_CLOSE) {
-        parser->token_index++;
-    } else {
-        printf("Error: Expected closing brace\n");
-        exit(EXIT_FAILURE);
-    }
+	parser_token_eat(parser, TOKEN_TYPE_SECTION_CLOSE);
 }
 
 void parser_parse(parser_t* parser)
@@ -580,5 +583,5 @@ int main(int argc, char** argv)
 	parser_t* parser = parser_create(lexer);
 	parser_parse(parser);
 
-	return 0;
+	exit(EXIT_SUCCESS);
 }

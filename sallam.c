@@ -41,25 +41,26 @@ keyword_mapping_t keyword_mapping[] = {
     {NULL, TOKEN_TYPE_ERROR}
 };
 
-char* token_type2str(token_type_t type)
-{
-    switch(type) {
-        case TOKEN_TYPE_IDENTIFIER: return "IDENTIFIER";
-        case TOKEN_TYPE_NUMBER: return "NUMBER";
-        case TOKEN_TYPE_STRING: return "STRING";
-        case TOKEN_TYPE_FUNCTION: return "FUNCTION";
-        case TOKEN_TYPE_RETURN: return "RETURN";
-        case TOKEN_TYPE_SECTION_OPEN: return "SECTION_OPEN";
-        case TOKEN_TYPE_SECTION_CLOSE: return "SECTION_CLOSE";
-        case TOKEN_TYPE_PARENTHESE_OPEN: return "PARENTHESIS_OPEN";
-        case TOKEN_TYPE_PARENTHESE_CLOSE: return "PARENTHESIS_CLOSE";
-        case TOKEN_TYPE_PLUS: return "PLUS";
-        case TOKEN_TYPE_MINUS: return "MINUS";
-        case TOKEN_TYPE_EOF: return "EOF";
-        case TOKEN_TYPE_ERROR: return "ERROR";
-        default: return "UNKNOWN";
-    }
-}
+
+wchar_t read_token(lexer_t* lexer);
+void read_number(lexer_t* lexer, wchar_t ch);
+size_t mb_strlen(char* identifier);
+void read_identifier(lexer_t* lexer, wchar_t ch);
+char* wchar_to_char(wchar_t wide_char);
+size_t wchar_length(wchar_t wide_char);
+
+lexer_t* lexer_create(const char* data);
+void lexer_free(lexer_t* lexer);
+void lexer_lex(lexer_t* lexer);
+
+parser_t* parser_create(lexer_t* lexer);
+void parser_free(parser_t* parser);
+void parser_parse(parser_t* parser);
+void parser_function(parser_t* parser);
+void parser_block(parser_t* parser);
+void parser_statement(parser_t* parser);
+void parser_return(parser_t* parser);
+void parser_expression(parser_t* parser);
 
 typedef struct {
 	token_type_t type;
@@ -87,6 +88,26 @@ typedef struct {
 
 	array_t* tokens;
 } lexer_t;
+
+char* token_type2str(token_type_t type)
+{
+    switch(type) {
+        case TOKEN_TYPE_IDENTIFIER: return "IDENTIFIER";
+        case TOKEN_TYPE_NUMBER: return "NUMBER";
+        case TOKEN_TYPE_STRING: return "STRING";
+        case TOKEN_TYPE_FUNCTION: return "FUNCTION";
+        case TOKEN_TYPE_RETURN: return "RETURN";
+        case TOKEN_TYPE_SECTION_OPEN: return "SECTION_OPEN";
+        case TOKEN_TYPE_SECTION_CLOSE: return "SECTION_CLOSE";
+        case TOKEN_TYPE_PARENTHESE_OPEN: return "PARENTHESIS_OPEN";
+        case TOKEN_TYPE_PARENTHESE_CLOSE: return "PARENTHESIS_CLOSE";
+        case TOKEN_TYPE_PLUS: return "PLUS";
+        case TOKEN_TYPE_MINUS: return "MINUS";
+        case TOKEN_TYPE_EOF: return "EOF";
+        case TOKEN_TYPE_ERROR: return "ERROR";
+        default: return "UNKNOWN";
+    }
+}
 
 char* file_read(char* file_Name)
 {
@@ -368,6 +389,107 @@ void help()
 	printf("\n");
 }
 
+typedef struct {
+	lexer_t* lexer;
+	int token_index;
+} parser_t;
+
+parser_t* parser_create(lexer_t* lexer)
+{
+	parser_t* parser = malloc(sizeof(parser_t));
+	parser->lexer = lexer;
+	parser->token_index = 0;
+
+	return parser;
+}
+
+void parser_free(parser_t* parser)
+{
+	lexer_free(parser->lexer);
+	free(parser);
+}
+
+void parser_function(parser_t* parser) {
+    printf("Parsing function\n");
+
+    if (parser->lexer->tokens->length > parser->token_index) {
+        token_t* token = parser->lexer->tokens->data[parser->token_index];
+        if (token->type == TOKEN_TYPE_IDENTIFIER) {
+            printf("Function Name: %s\n", token->value);
+            parser->token_index++;
+        } else {
+            printf("Error: Expected function name\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    if (parser->lexer->tokens->length > parser->token_index && ((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_PARENTHESE_OPEN) {
+        printf("Parsing parameters\n");
+        parser->token_index++;
+        // Implement parameter parsing logic here
+
+        if (parser->lexer->tokens->length > parser->token_index && ((token_t*) parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_PARENTHESE_CLOSE) {
+            parser->token_index++;
+        } else {
+            printf("Error: Expected closing parenthesis\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    parser_block(parser);
+}
+
+
+void parser_return(parser_t* parser) {
+    printf("Parsing return statement\n");
+
+    parser->token_index++;
+    parser_expression(parser);
+}
+
+void parser_statement(parser_t* parser) {
+    printf("Parsing statement\n");
+
+    if (parser->lexer->tokens->length > parser->token_index && ((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_RETURN) {
+        parser_return(parser);
+    } else {
+
+    }
+}
+
+void parser_expression(parser_t* parser) {
+    printf("Parsing expression\n");
+
+    if (parser->lexer->tokens->length > parser->token_index && ((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_IDENTIFIER) {
+        printf("Parsed Identifier: %s\n", ((token_t*)parser->lexer->tokens->data[parser->token_index])->value);
+        parser->token_index++;
+    } else {
+        printf("Error: Expected an identifier in the expression\n");
+        exit(EXIT_FAILURE);
+    }
+}
+
+void parser_block(parser_t* parser) {
+    printf("Parsing block\n");
+
+    while (parser->lexer->tokens->length > parser->token_index && ((token_t*) parser->lexer->tokens->data[parser->token_index])->type != TOKEN_TYPE_SECTION_CLOSE) {
+        parser_statement(parser);
+    }
+
+    if (parser->lexer->tokens->length > parser->token_index && ((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_SECTION_CLOSE) {
+        parser->token_index++;
+    } else {
+        printf("Error: Expected closing brace\n");
+        exit(EXIT_FAILURE);
+    }
+}
+
+void parser_parse(parser_t* parser)
+{
+	while (
+	printf("parse it\n");
+}
+
 int main(int argc, char** argv)
 {
 	setlocale(LC_ALL, "");
@@ -389,6 +511,9 @@ int main(int argc, char** argv)
 	// array_push(lexer->tokens, t);
 	printf("=>%zu\n", lexer->tokens->length);
 	array_print(lexer->tokens);
+
+	parser_t* parser = parser_create(lexer);
+	parser_parse(parser);
 
 	return 0;
 }

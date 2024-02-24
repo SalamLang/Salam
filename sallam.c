@@ -620,8 +620,13 @@ ast_node_t* parser_function(parser_t* parser) {
 ast_node_t* parser_return(parser_t* parser) {
 	printf("Parsing return statement\n");
 
+	ast_node_t* node = malloc(sizeof(ast_node_t));
+	node->type = AST_RETURN_STATEMENT;
+
 	parser->token_index++;
-	parser_expression(parser);
+	node->data.return_statement.expression = parser_expression(parser);
+
+	return node;
 }
 
 
@@ -645,70 +650,99 @@ ast_node_t* parser_primary(parser_t* parser) {
 	printf("Parsing primary\n");
 
 	token_t* current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
+	ast_node_t* primary_node = malloc(sizeof(ast_node_t));
+	primary_node->type = AST_EXPRESSION;
 
 	switch (current_token->type) {
 		case TOKEN_TYPE_NUMBER:
 		case TOKEN_TYPE_STRING:
 		case TOKEN_TYPE_IDENTIFIER:
 			printf("Primary: %s\n", current_token->value);
+
+			// Create a literal expression node
+			ast_expression_t* literal_expr = malloc(sizeof(ast_expression_t));
+			literal_expr->type = AST_EXPRESSION_LITERAL;
+			literal_expr->data.literal.literal_type = current_token->type;
+			literal_expr->data.literal.value = strdup(current_token->value);
+
+			primary_node->data.expression = *literal_expr;
+
 			parser->token_index++;
 			break;
 		default:
 			printf("Error: Unexpected token in primary expression\n");
 			exit(EXIT_FAILURE);
 	}
+
+	return primary_node;
 }
 
 ast_node_t* parser_parentheses(parser_t* parser) {
 	printf("Parsing parentheses\n");
 
 	parser_token_eat(parser, TOKEN_TYPE_PARENTHESE_OPEN);
-	parser_expression(parser);
+	ast_node_t* expression_node = parser_expression(parser);
 	parser_token_eat(parser, TOKEN_TYPE_PARENTHESE_CLOSE);
+
+	return expression_node;
 }
 
 ast_node_t* parser_term(parser_t* parser) {
 	printf("Parsing term\n");
 
-	token_t* current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
-
-	if (current_token->type == TOKEN_TYPE_PARENTHESE_OPEN) {
-		parser_parentheses(parser);
-	} else {
-		parser_primary(parser);
-	}
-
-	while (parser->lexer->tokens->length > parser->token_index) {
-		current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
-
-		if (current_token->type == TOKEN_TYPE_PLUS || current_token->type == TOKEN_TYPE_MINUS) {
-			parser_token_next(parser);
-			if (current_token->type == TOKEN_TYPE_PARENTHESE_OPEN) {
-				parser_parentheses(parser);
-			} else {
-				parser_primary(parser);
-			}
-		} else {
-			break;
-		}
-	}
-}
-
-ast_node_t* parser_expression(parser_t* parser) {
-	printf("Parsing expression\n");
-
-	parser_term(parser);
+	ast_node_t* term_node = parser_primary(parser);
 
 	while (parser->lexer->tokens->length > parser->token_index) {
 		token_t* current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
 
 		if (current_token->type == TOKEN_TYPE_PLUS || current_token->type == TOKEN_TYPE_MINUS) {
 			parser_token_next(parser);
-			parser_term(parser);
+			ast_node_t* next_term_node = parser_primary(parser);
+
+			ast_expression_t* binary_op_expr = malloc(sizeof(ast_expression_t));
+			binary_op_expr->type = AST_EXPRESSION_BINARY_OP;
+			binary_op_expr->data.binary_op.operator = strdup(current_token->value);
+			binary_op_expr->data.binary_op.left = (ast_expression_t*) term_node;
+			binary_op_expr->data.binary_op.right = (ast_expression_t*) next_term_node;
+
+			term_node = malloc(sizeof(ast_node_t));
+			term_node->type = AST_EXPRESSION;
+			term_node->data.expression = *binary_op_expr;
 		} else {
 			break;
 		}
 	}
+
+	return term_node;
+}
+
+ast_node_t* parser_expression(parser_t* parser) {
+	printf("Parsing expression\n");
+
+	ast_node_t* expression_node = parser_term(parser);
+
+	while (parser->lexer->tokens->length > parser->token_index) {
+		token_t* current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
+
+		if (current_token->type == TOKEN_TYPE_PLUS || current_token->type == TOKEN_TYPE_MINUS) {
+			parser_token_next(parser);
+			ast_node_t* next_term_node = parser_term(parser);
+
+			ast_expression_t* binary_op_expr = malloc(sizeof(ast_expression_t));
+			binary_op_expr->type = AST_EXPRESSION_BINARY_OP;
+			binary_op_expr->data.binary_op.operator = strdup(current_token->value);
+			binary_op_expr->data.binary_op.left = (ast_expression_t*) expression_node;
+			binary_op_expr->data.binary_op.right = (ast_expression_t*) next_term_node;
+
+			expression_node = malloc(sizeof(ast_node_t));
+			expression_node->type = AST_EXPRESSION;
+			expression_node->data.expression = *binary_op_expr;
+		} else {
+			break;
+		}
+	}
+
+	return expression_node;
 }
 
 ast_node_t* parser_block(parser_t* parser)
@@ -768,7 +802,7 @@ void print_xml_ast_node(ast_node_t* node) {
 		return;
 	}
 
-	printf("node type:%d\n", node->type);
+	// printf("node type:%d\n", node->type);
 
 	switch (node->type) {
 		case AST_FUNCTION_DECLARATION:
@@ -781,16 +815,15 @@ void print_xml_ast_node(ast_node_t* node) {
 			break;
 		case AST_RETURN_STATEMENT:
 			printf("<ReturnStatement>\n");
-			// printf("  <Expression>\n");
-			// print_xml_ast_node(node->data.return_statement.expression);
-			// printf("  </Expression>\n");
+			printf("  <Expression>\n");
+			print_xml_ast_node(node->data.return_statement.expression);
+			printf("  </Expression>\n");
 			printf("</ReturnStatement>\n");
 			break;
 		case AST_BLOCK:
 			printf("<Block>\n");
 			for (size_t i = 0; i < node->data.block.num_statements; i++) {
 				printf("  <Statement>\n");
-				printf("...\n");
 				print_xml_ast_node(node->data.block.statements[i]);
 				printf("  </Statement>\n");
 			}
@@ -798,7 +831,33 @@ void print_xml_ast_node(ast_node_t* node) {
 			break;
 		case AST_EXPRESSION:
 			printf("<Expression>\n");
-			printf("  <!-- Implement logic for different expression types -->\n");
+			switch (node->data.expression.type) {
+				case AST_EXPRESSION_LITERAL:
+					printf("  <Literal>\n");
+					printf("    <Type>%s</Type>\n", token_type2str(node->data.expression.data.literal.literal_type));
+					printf("    <Value>%s</Value>\n", node->data.expression.data.literal.value);
+					printf("  </Literal>\n");
+					break;
+				case AST_EXPRESSION_IDENTIFIER:
+					printf("  <Identifier>\n");
+					printf("    <Name>%s</Name>\n", node->data.expression.data.identifier.name);
+					printf("  </Identifier>\n");
+					break;
+				case AST_EXPRESSION_BINARY_OP:
+					printf("  <BinaryOperation>\n");
+					printf("    <Operator>%s</Operator>\n", node->data.expression.data.binary_op.operator);
+					printf("    <Left>\n");
+					print_xml_ast_node((ast_node_t*) node->data.expression.data.binary_op.left);
+					printf("    </Left>\n");
+					printf("    <Right>\n");
+					print_xml_ast_node((ast_node_t*) node->data.expression.data.binary_op.right);
+					printf("    </Right>\n");
+					printf("  </BinaryOperation>\n");
+					break;
+				default:
+					printf("    <!-- Unhandled Expression Type -->\n");
+					break;
+			}
 			printf("</Expression>\n");
 			break;
 		default:

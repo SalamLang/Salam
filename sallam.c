@@ -4,6 +4,7 @@
 #include <locale.h>
 #include <stdbool.h>
 #include <string.h>
+#include <limits.h>
 
 typedef enum {
     // values
@@ -242,23 +243,19 @@ char* wchar_to_char(wchar_t wide_char)
     return mb_char;
 }
 
-// size_t wchar_length(wchar_t wide_char)
-// {
-//     char mb_char[MB_LEN_MAX];
-//     if (mbrtowc(NULL, &wide_char, MB_LEN_MAX, NULL) == (size_t)-1) {
-//         perror("Error in mbrtowc");
-//         return 0;
-//     }
-// 
-//     return mbrtowc(mb_char, &wide_char, MB_LEN_MAX, NULL);
-// }
+size_t wchar_length(wchar_t wide_char)
+{
+    char mb_char[MB_LEN_MAX];
+    if (wcrtomb(mb_char, wide_char, NULL) == (size_t)-1) {
+        perror("Error in wcrtomb");
+        return 0;
+    }
+
+    return mbrlen(mb_char, MB_LEN_MAX, NULL);
+}
 
 void lexer_lex(lexer_t* lexer)
 {
-    printf("lexer_lex\n");
-    printf("lexer->data = %s\n", lexer->data);
-    printf("lexer->index = %d\n", lexer->index);
-
     while (lexer->data[lexer->index] != 0) {
         if (lexer->data[lexer->index] == '\a' || lexer->data[lexer->index] == '\r') {
             lexer->column++;
@@ -299,10 +296,15 @@ void lexer_lex(lexer_t* lexer)
             token_t* t = token_create(TOKEN_TYPE_MINUS, "-", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
             array_push(lexer->tokens, t);
         } else {
-            size_t length = wcslen(current_char);
+            size_t length = wchar_length(current_char);
             token_t* t = token_create(TOKEN_TYPE_ERROR, wchar_to_char(current_char), length, lexer->line, lexer->column - length, lexer->line, lexer->column);
             array_push(lexer->tokens, t);
         }
+    }
+
+    if (lexer->data[lexer->index] == 0) {
+        token_t* t = token_create(TOKEN_TYPE_EOF, "\0", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+        array_push(lexer->tokens, t);
     }
 }
 

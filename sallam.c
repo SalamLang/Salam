@@ -269,7 +269,12 @@ void read_string(lexer_t* lexer, wchar_t ch)
 	char* string = (char*)malloc(sizeof(char) * 1024);
 	int i = 0;
 	while (ch != L'"') {
-		string[i++] = ch;
+		int char_size = wctomb(&string[i], ch);
+		if (char_size < 0) {
+			printf("Error: Failed to convert wide character to multibyte\n");
+			exit(EXIT_FAILURE);
+		}
+		i += char_size;
 		ch = read_token(lexer);
 	}
 	string[i] = 0;
@@ -382,6 +387,7 @@ void lexer_lex(lexer_t* lexer)
 			token_t* t = token_create(TOKEN_TYPE_MINUS, "-", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		} else if (current_char == '\"') {
+			current_char = read_token(lexer);
 			read_string(lexer, current_char);
 		} else if (is_number(current_char)) {
 			read_number(lexer, current_char);
@@ -580,8 +586,8 @@ int main(int argc, char** argv)
 
 	array_print(lexer->tokens);
 
-	parser_t* parser = parser_create(lexer);
-	parser_parse(parser);
+	// parser_t* parser = parser_create(lexer);
+	// parser_parse(parser);
 
 	exit(EXIT_SUCCESS);
 }

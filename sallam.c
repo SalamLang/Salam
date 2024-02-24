@@ -31,14 +31,45 @@ typedef enum {
 } token_type_t;
 
 typedef struct {
+    const char* keyword;
+    token_type_t token_type;
+} keyword_mapping_t;
+
+keyword_mapping_t keyword_mapping[] = {
+    {"عملکرد", TOKEN_TYPE_FUNCTION},
+    {"برگشت", TOKEN_TYPE_RETURN},
+    {NULL, TOKEN_TYPE_ERROR}
+};
+
+char* token_type2str(token_type_t type)
+{
+    switch(type) {
+        case TOKEN_TYPE_IDENTIFIER: return "IDENTIFIER";
+        case TOKEN_TYPE_NUMBER: return "NUMBER";
+        case TOKEN_TYPE_STRING: return "STRING";
+        case TOKEN_TYPE_FUNCTION: return "FUNCTION";
+        case TOKEN_TYPE_RETURN: return "RETURN";
+        case TOKEN_TYPE_SECTION_OPEN: return "SECTION_OPEN";
+        case TOKEN_TYPE_SECTION_CLOSE: return "SECTION_CLOSE";
+        case TOKEN_TYPE_PARENTHESE_OPEN: return "PARENTHESIS_OPEN";
+        case TOKEN_TYPE_PARENTHESE_CLOSE: return "PARENTHESIS_CLOSE";
+        case TOKEN_TYPE_PLUS: return "PLUS";
+        case TOKEN_TYPE_MINUS: return "MINUS";
+        case TOKEN_TYPE_EOF: return "EOF";
+        case TOKEN_TYPE_ERROR: return "ERROR";
+        default: return "UNKNOWN";
+    }
+}
+
+typedef struct {
 	token_type_t type;
 	char* value;
 	struct {
-		int length;
-		int line;
-		int column;
-		int end_line;
-		int end_column;
+		size_t length;
+		size_t line;
+		size_t column;
+		size_t end_line;
+		size_t end_column;
 	} location;
 } token_t;
 
@@ -82,6 +113,7 @@ token_t* token_create(token_type_t type, char* value, int a, int b, int c, int b
 {
 	token_t* t = malloc(sizeof(token_t));
 	t->type = type;
+	strcpy(t->value, value);
 	t->location.length = a;
 	t->location.line = b;
 	t->location.column = c;
@@ -126,7 +158,8 @@ void array_print(array_t* arr)
 	
 	printf("Array Contents:\n");
 	for (size_t i = 0; i < arr->length; i++) {
-		printf("[%zu]: %p\n", i, arr->data[i]);
+		token_t* t = arr->data[i];
+		printf("[%zu]: %zu - %s - %s\n", i, t->location.length, token_type2str(t->type), t->value);
 	}
 }
 
@@ -193,7 +226,7 @@ void read_number(lexer_t* lexer, wchar_t ch)
 	number[i] = 0;
 
 	size_t length = strlen(number);
-	token_t* t = token_create(TOKEN_TYPE_IDENTIFIER, number, length, lexer->line, lexer->column - length, lexer->line, lexer->column);
+	token_t* t = token_create(TOKEN_TYPE_NUMBER, number, length, lexer->line, lexer->column - length, lexer->line, lexer->column);
 	array_push(lexer->tokens, t);
 
 	// printf("number = %s\n", number);
@@ -225,11 +258,19 @@ void read_identifier(lexer_t* lexer, wchar_t ch)
 	}
 	identifier[i] = 0;
 
-	size_t length = mb_strlen(identifier);
-	token_t* t = token_create(TOKEN_TYPE_IDENTIFIER, identifier, length, lexer->line, lexer->column - length, lexer->line, lexer->column);
-	array_push(lexer->tokens, t);
-	
-	// printf("identifier = %s\n", identifier);
+    int mapping_index = 0;
+	token_type_t type = TOKEN_TYPE_IDENTIFIER;
+    while (keyword_mapping[mapping_index].keyword != NULL) {
+        if (strcmp(identifier, keyword_mapping[mapping_index].keyword) == 0) {
+			type = keyword_mapping[mapping_index].token_type;
+			break;
+        }
+        mapping_index++;
+    }
+
+    size_t length = mb_strlen(identifier);
+    token_t* t = token_create(type, identifier, length, lexer->line, lexer->column - length, lexer->line, lexer->column);
+    array_push(lexer->tokens, t);
 }
 
 char* wchar_to_char(wchar_t wide_char)
@@ -346,9 +387,8 @@ int main(int argc, char** argv)
 	// array_push(lexer->tokens, t);
 	// array_push(lexer->tokens, t);
 	// array_push(lexer->tokens, t);
-	printf("=>%ld\n", lexer->tokens->length);
-
-	printf("lexer has been done\n");
+	printf("=>%zu\n", lexer->tokens->length);
+	array_print(lexer->tokens);
 
 	return 0;
 }

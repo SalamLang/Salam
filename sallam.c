@@ -242,16 +242,16 @@ char* wchar_to_char(wchar_t wide_char)
     return mb_char;
 }
 
-size_t wchar_length(wchar_t wide_char)
-{
-    char mb_char[MB_LEN_MAX];
-    if (mbrtowc(NULL, &wide_char, MB_LEN_MAX, NULL) == (size_t)-1) {
-        perror("Error in mbrtowc");
-        return 0;
-    }
-
-    return mbrtowc(mb_char, &wide_char, MB_LEN_MAX, NULL);
-}
+// size_t wchar_length(wchar_t wide_char)
+// {
+//     char mb_char[MB_LEN_MAX];
+//     if (mbrtowc(NULL, &wide_char, MB_LEN_MAX, NULL) == (size_t)-1) {
+//         perror("Error in mbrtowc");
+//         return 0;
+//     }
+// 
+//     return mbrtowc(mb_char, &wide_char, MB_LEN_MAX, NULL);
+// }
 
 void lexer_lex(lexer_t* lexer)
 {
@@ -302,7 +302,6 @@ void lexer_lex(lexer_t* lexer)
             size_t length = wcslen(current_char);
             token_t* t = token_create(TOKEN_TYPE_ERROR, wchar_to_char(current_char), length, lexer->line, lexer->column - length, lexer->line, lexer->column);
             array_push(lexer->tokens, t);
-            // printf("character: %lc\n", current_char);
         }
     }
 }

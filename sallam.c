@@ -3,6 +3,58 @@
 #include <wchar.h>
 #include <locale.h>
 #include <stdbool.h>
+#include <string.h>
+
+typedef enum {
+    // values
+    TOKEN_TYPE_IDENTIFIER,
+    TOKEN_TYPE_NUMBER,
+    TOKEN_TYPE_STRING,
+
+    // keywords
+    TOKEN_TYPE_FUNCTION,
+    TOKEN_TYPE_RETURN,
+    
+    // symbols
+    TOKEN_TYPE_SECTION_OPEN,
+    TOKEN_TYPE_SECTION_CLOSE,
+    TOKEN_TYPE_PARENTHESE_OPEN,
+    TOKEN_TYPE_PARENTHESE_CLOSE,
+
+    TOKEN_TYPE_PLUS,
+    TOKEN_TYPE_MINUS,
+
+    // others
+    TOKEN_TYPE_EOF,
+    TOKEN_TYPE_ERROR,
+} token_type_t;
+
+typedef struct {
+    token_type_t type;
+    char* value;
+    struct {
+        int length;
+        int line;
+        int column;
+        int end_line;
+        int end_column;
+    } location;
+} token_t;
+
+typedef struct {
+    size_t size;
+    size_t length;
+    void** data;
+} array_t;
+
+typedef struct {
+    char* data;
+    int index;
+    int line;
+    int column;
+
+    array_t* tokens;
+} lexer_t;
 
 char* file_read(char* file_Name)
 {
@@ -25,41 +77,71 @@ char* file_read(char* file_Name)
     return file_data;
 }
 
-typedef enum {
-    TOKEN_TYPE_EOF,
-    TOKEN_TYPE_IDENTIFIER,
-    TOKEN_TYPE_NUMBER,
-    TOKEN_TYPE_STRING,
-    TOKEN_TYPE_FUNCTION,
-    TOKEN_TYPE_RETURN,
-    TOKEN_TYPE_ERROR
-} token_type_t;
+token_t* token_create(token_type_t type, char* value, int a, int b, int c, int b2, int c2)
+{
+    token_t* t = malloc(sizeof(token_t));
+    t->type = type;
+    t->location.length = a;
+    t->location.line = b;
+    t->location.column = c;
+    t->location.end_line = b2;
+    t->location.end_column = c2;
 
-typedef struct {
-    token_type_t type;
-    char* value;
-    struct {
-        int length;
-        int line;
-        int column;
-        int end_line;
-        int end_column;
-    } location;
-} token_t;
+    return t;
+}
 
-typedef struct {
-    char* data;
-    int index;
-    int line;
-    int column;
-} lexer_t;
+array_t* array_create(size_t size)
+{
+    size_t min_size = 1;
+
+    array_t* arr = malloc(sizeof(array_t));
+    arr->length = 0;
+    arr->size = size > min_size ? size : min_size;
+    arr->data = malloc(sizeof(void*) * arr->size);
+    return arr;
+}
+
+void array_push(array_t* arr, void* data)
+{
+    if (arr->length >= arr->size) {
+        size_t new_size = arr->size * 2;
+        arr->data = realloc(arr->data, sizeof(void*) * new_size);
+        arr->size = new_size;
+    }
+
+    arr->data[arr->length++] = data;
+}
+
+void array_free(array_t* arr)
+{
+    free(arr->data);
+    free(arr);
+}
+
+void array_print(array_t* arr)
+{
+    printf("Array Length: %zu\n", arr->length);
+    printf("Array Size: %zu\n", arr->size);
+    
+    printf("Array Contents:\n");
+    for (size_t i = 0; i < arr->length; i++) {
+        printf("[%zu]: %p\n", i, arr->data[i]);
+    }
+}
 
 lexer_t* lexer_create(const char* data)
 {
     lexer_t* lexer = (lexer_t*)malloc(sizeof(lexer_t));
     lexer->data = (char*) data;
     lexer->index = 0;
+    lexer->tokens = array_create(10);
     return lexer;
+}
+
+void lexer_free(lexer_t* lexer)
+{
+    array_free(lexer->tokens);
+    free(lexer);
 }
 
 bool is_number(wchar_t ch)
@@ -108,7 +190,23 @@ void read_number(lexer_t* lexer, wchar_t ch)
         ch = read_token(lexer);
     }
     number[i] = 0;
-    printf("number = %s\n", number);
+
+    size_t length = strlen(number);
+    token_t* t = token_create(TOKEN_TYPE_IDENTIFIER, number, length, lexer->line, lexer->column - length, lexer->line, lexer->column);
+    array_push(lexer->tokens, t);
+
+    // printf("number = %s\n", number);
+}
+
+size_t mb_strlen(char* identifier)
+{
+    size_t wcs_len = mbstowcs(NULL, identifier, 0);
+    if (wcs_len == (size_t)-1) {
+        perror("Error in mbstowcs");
+        exit(EXIT_FAILURE);
+    }
+
+    return wcs_len;
 }
 
 void read_identifier(lexer_t* lexer, wchar_t ch)
@@ -125,10 +223,35 @@ void read_identifier(lexer_t* lexer, wchar_t ch)
         ch = read_token(lexer);
     }
     identifier[i] = 0;
-    printf("identifier = %s\n", identifier);
+
+    size_t length = mb_strlen(identifier);
+    token_t* t = token_create(TOKEN_TYPE_IDENTIFIER, identifier, length, lexer->line, lexer->column - length, lexer->line, lexer->column);
+    array_push(lexer->tokens, t);
+    
+    // printf("identifier = %s\n", identifier);
 }
 
+char* wchar_to_char(wchar_t wide_char)
+{
+    char* mb_char = (char*)malloc(6);
+    if (wcstombs(mb_char, &wide_char, 6) == (size_t)-1) {
+        perror("Error in wcstombs");
+        exit(EXIT_FAILURE);
+    }
 
+    return mb_char;
+}
+
+size_t wchar_length(wchar_t wide_char)
+{
+    char mb_char[MB_LEN_MAX];
+    if (mbrtowc(NULL, &wide_char, MB_LEN_MAX, NULL) == (size_t)-1) {
+        perror("Error in mbrtowc");
+        return 0;
+    }
+
+    return mbrtowc(mb_char, &wide_char, MB_LEN_MAX, NULL);
+}
 
 void lexer_lex(lexer_t* lexer)
 {
@@ -153,15 +276,33 @@ void lexer_lex(lexer_t* lexer)
         }
 
         wchar_t current_char = read_token(lexer);
-
-        // check if current_char is ۱۲۳۴۵۶۷۸۹۰
         if (is_number(current_char)) {
             read_number(lexer, current_char);
         } else if (is_alpha(current_char)) {
             read_identifier(lexer, current_char);
-        }
-         else {
-            printf("character: %lc\n", current_char);
+        } else if (current_char == '{') {
+            token_t* t = token_create(TOKEN_TYPE_SECTION_OPEN, "{", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+            array_push(lexer->tokens, t);
+        } else if (current_char == '}') {
+            token_t* t = token_create(TOKEN_TYPE_SECTION_CLOSE, "{", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+            array_push(lexer->tokens, t);
+        } else if (current_char == '(') {
+            token_t* t = token_create(TOKEN_TYPE_PARENTHESE_OPEN, "(", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+            array_push(lexer->tokens, t);
+        } else if (current_char == ')') {
+            token_t* t = token_create(TOKEN_TYPE_PARENTHESE_CLOSE, ")", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+            array_push(lexer->tokens, t);
+        } else if (current_char == '+') {
+            token_t* t = token_create(TOKEN_TYPE_PLUS, "+", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+            array_push(lexer->tokens, t);
+        } else if (current_char == '-') {
+            token_t* t = token_create(TOKEN_TYPE_MINUS, "-", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+            array_push(lexer->tokens, t);
+        } else {
+            size_t length = wcslen(current_char);
+            token_t* t = token_create(TOKEN_TYPE_ERROR, wchar_to_char(current_char), length, lexer->line, lexer->column - length, lexer->line, lexer->column);
+            array_push(lexer->tokens, t);
+            // printf("character: %lc\n", current_char);
         }
     }
 }
@@ -182,6 +323,7 @@ void help()
 
     printf("Feel free to explore and create using Sallam!\n");
     printf("For more information, visit: https://sallam-lang.js.org\n");
+    printf("\n");
 }
 
 int main(int argc, char** argv)
@@ -198,6 +340,12 @@ int main(int argc, char** argv)
 
     lexer_t* lexer = lexer_create(file_data);
     lexer_lex(lexer);
+
+    // token_t* t = token_create(TOKEN_TYPE_ERROR, "value", 1, 2, 3, 4, 5);
+    // array_push(lexer->tokens, t);
+    // array_push(lexer->tokens, t);
+    // array_push(lexer->tokens, t);
+    printf("=>%ld\n", lexer->tokens->length);
 
     printf("lexer has been done\n");
 

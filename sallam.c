@@ -815,11 +815,12 @@ void print_xml_ast_node(ast_node_t* node, int indent_level) {
             printf("<FunctionDeclaration>\n");
             print_indentation(indent_level + 1);
             printf("<Name>%s</Name>\n", node->data.function_declaration.name);
-            print_indentation(indent_level + 1);
-            printf("<Body>\n");
-            print_xml_ast_node(node->data.function_declaration.body, indent_level + 2);
-            print_indentation(indent_level + 1);
-            printf("</Body>\n");
+            // print_indentation(indent_level + 1);
+            // printf("<Body>\n");
+            // print_xml_ast_node(node->data.function_declaration.body, indent_level + 2);
+            print_xml_ast_node(node->data.function_declaration.body, indent_level + 1);
+            // print_indentation(indent_level + 1);
+            // printf("</Body>\n");
             print_indentation(indent_level);
             printf("</FunctionDeclaration>\n");
             break;
@@ -836,11 +837,12 @@ void print_xml_ast_node(ast_node_t* node, int indent_level) {
         case AST_BLOCK:
             printf("<Block>\n");
             for (size_t i = 0; i < node->data.block.num_statements; i++) {
-                print_indentation(indent_level + 1);
-                printf("<Statement>\n");
-                print_xml_ast_node(node->data.block.statements[i], indent_level + 2);
-                print_indentation(indent_level + 1);
-                printf("</Statement>\n");
+                // print_indentation(indent_level + 1);
+                // printf("<Statement>\n");
+                // print_xml_ast_node(node->data.block.statements[i], indent_level + 2);
+                print_xml_ast_node(node->data.block.statements[i], indent_level + 1);
+                // print_indentation(indent_level + 1);
+                // printf("</Statement>\n");
             }
             print_indentation(indent_level);
             printf("</Block>\n");

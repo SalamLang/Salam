@@ -427,7 +427,7 @@ wchar_t unread_token(lexer_t* lexer)
 
 void read_number(lexer_t* lexer, wchar_t ch)
 {
-	char* number = (char*)malloc(sizeof(char) * 20);
+	char number[21];
 	int i = 0;
 	while (is_number(ch)) {
 		number[i++] = ch - L'۰' + '0';
@@ -435,18 +435,15 @@ void read_number(lexer_t* lexer, wchar_t ch)
 	}
 	number[i] = 0;
 
-	size_t length = strlen(number);
-	token_t* t = token_create(TOKEN_TYPE_NUMBER, number, length, lexer->line, lexer->column - length, lexer->line, lexer->column);
+	token_t* t = token_create(TOKEN_TYPE_NUMBER, number, i, lexer->line, lexer->column - i, lexer->line, lexer->column);
 	array_push(lexer->tokens, t);
-
-	free(number);
 
 	unread_token(lexer);
 }
 
 void read_string(lexer_t* lexer, wchar_t ch)
 {
-	char* string = (char*)malloc(sizeof(char) * 1024);
+	char* string = (char*) malloc(sizeof(char) * 1024);
 	int i = 0;
 	while (ch != L'"') {
 		int char_size = wctomb(&string[i], ch);
@@ -511,8 +508,8 @@ void read_identifier(lexer_t* lexer, wchar_t ch)
 
 char* wchar_to_char(wchar_t wide_char)
 {
-	char* mb_char = (char*)malloc(6);
-	if (wcstombs(mb_char, &wide_char, 6) == (size_t)-1) {
+	char* mb_char = (char*) malloc(sizeof(char) * 6);
+	if (wcstombs(mb_char, &wide_char, 6) == (size_t) -1) {
 		perror("Error in wcstombs");
 		exit(EXIT_FAILURE);
 	}
@@ -615,7 +612,7 @@ void help()
 
 parser_t* parser_create(lexer_t* lexer)
 {
-	parser_t* parser = malloc(sizeof(parser_t));
+	parser_t* parser = (parser_t*) malloc(sizeof(parser_t));
 	parser->lexer = lexer;
 	parser->token_index = 0;
 	parser->ast_tree = NULL;
@@ -720,7 +717,7 @@ token_t* parser_token_eat(parser_t* parser, token_type_t type)
 ast_node_t* parser_function(parser_t* parser) {
 	printf("Parsing function\n");
 
-	ast_node_t* node = malloc(sizeof(ast_node_t));
+	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
 	node->type = AST_FUNCTION_DECLARATION;
 
 	parser_token_eat(parser, TOKEN_TYPE_FUNCTION);
@@ -741,7 +738,7 @@ ast_node_t* parser_function(parser_t* parser) {
 	//     }
 	// }
 
-	node->data.function_declaration = malloc(sizeof(ast_function_declaration_t));
+	node->data.function_declaration = (ast_function_declaration_t*) malloc(sizeof(ast_function_declaration_t));
 	node->data.function_declaration->name = strdup(name->value);
 	// free(name);
 	// node->data.function_declaration->name = (name->value);
@@ -757,11 +754,11 @@ ast_node_t* parser_function(parser_t* parser) {
 ast_node_t* parser_statement_print(parser_t* parser) {
 	printf("Parsing statement print\n");
 
-	ast_node_t* node = malloc(sizeof(ast_node_t));
+	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
 	node->type = AST_STATEMENT_PRINT;
 
 	parser->token_index++;
-	node->data.statement_print = malloc(sizeof(ast_statement_print_t));
+	node->data.statement_print = (ast_statement_print_t*) malloc(sizeof(ast_statement_print_t));
 	node->data.statement_print->expression = parser_expression(parser);
 
 	printf("end of print stmt\n");
@@ -772,12 +769,12 @@ ast_node_t* parser_statement_print(parser_t* parser) {
 ast_node_t* parser_statement_return(parser_t* parser) {
 	printf("Parsing statement return\n");
 
-	ast_node_t* node = malloc(sizeof(ast_node_t));
+	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
 	node->type = AST_STATEMENT_RETURN;
 
 	parser->token_index++;
 	printf("before reading expr in return\n");
-	node->data.statement_return = malloc(sizeof(ast_statement_return_t));
+	node->data.statement_return = (ast_statement_return_t*) malloc(sizeof(ast_statement_return_t));
 	node->data.statement_return->expression = parser_expression(parser);
 	printf("after reading expr in return\n");
 
@@ -836,7 +833,7 @@ ast_node_t* parser_expression(parser_t* parser)
 	printf("Parsing expression\n");
 
 	printf("1: \n");
-	ast_node_t* node = malloc(sizeof(ast_node_t) * 2);
+	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t) * 2);
 	printf("2: \n");
 	node->type = AST_EXPRESSION;
 	node->data.expression = parser_expression_pratt(parser, PRECEDENCE_LOWEST);
@@ -875,9 +872,9 @@ ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expressio
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
-	ast_expression_t* binary_op_expr = malloc(sizeof(ast_expression_t));
+	ast_expression_t* binary_op_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 	binary_op_expr->type = AST_EXPRESSION_BINARY_OP;
-	binary_op_expr->data.binary_op = malloc(sizeof(ast_binary_op_t));
+	binary_op_expr->data.binary_op = (ast_binary_op_t*) malloc(sizeof(ast_binary_op_t));
 	binary_op_expr->data.binary_op->operator = strdup(token->value);
 	binary_op_expr->data.binary_op->left = left;
 	binary_op_expr->data.binary_op->right = right;

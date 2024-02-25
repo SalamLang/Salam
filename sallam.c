@@ -10,13 +10,113 @@ typedef struct {
     int value;
 } VariableData;
 
-typedef struct SymbolTable {
-    struct SymbolTable* parent;
+typedef struct SymbolTableEntry {
     char* identifier;
     VariableData data;
+	struct SymbolTableEntry* next;
+} SymbolTableEntry;
+
+typedef struct {
+    SymbolTableEntry** entries;
+    size_t size;
+    size_t capacity;
 } SymbolTable;
 
-SymbolTable* globalSymbolTable = NULL;
+typedef struct SymbolTableStack {
+    SymbolTable* table;
+    struct SymbolTableStack* next;
+} SymbolTableStack;
+
+SymbolTableStack* symbolTableStack = NULL;
+
+
+SymbolTable* createSymbolTable(size_t capacity)
+{
+    SymbolTable* table = (SymbolTable*) malloc(sizeof(SymbolTable));
+    table->entries = (SymbolTableEntry**) calloc(capacity, sizeof(SymbolTableEntry*));
+    table->size = 0;
+    table->capacity = capacity;
+    return table;
+}
+
+void pushSymbolTable()
+{
+    SymbolTable* table = createSymbolTable(3);
+    SymbolTableStack* newScope = (SymbolTableStack*)malloc(sizeof(SymbolTableStack));
+    newScope->table = table;
+    newScope->next = symbolTableStack;
+    symbolTableStack = newScope;
+}
+
+void popSymbolTable()
+{
+    if (symbolTableStack == NULL) {
+        return;
+    }
+
+    SymbolTableStack* top = symbolTableStack;
+    symbolTableStack = top->next;
+
+    SymbolTable* table = top->table;
+    for (size_t i = 0; i < table->capacity; ++i) {
+        SymbolTableEntry* entry = table->entries[i];
+        while (entry != NULL) {
+            SymbolTableEntry* next = entry->next;
+            free(entry->identifier);  // Free the identifier memory
+            free(entry);
+            entry = next;
+        }
+    }
+    free(table->entries);
+    free(table);
+    free(top);
+}
+
+unsigned int hash(const char* str, size_t capacity)
+{
+    unsigned int hash = 0;
+    while (*str) {
+        hash = (hash * 31) + (*str++);
+    }
+    return hash % capacity;
+}
+
+void addToSymbolTable(SymbolTableStack* symbolTableStack, const char* identifier, int value)
+{
+    if (symbolTableStack == NULL) {
+        return;
+    }
+
+    SymbolTable* table = symbolTableStack->table;
+    unsigned int index = hash(identifier, table->capacity);
+
+    SymbolTableEntry* entry = (SymbolTableEntry*)malloc(sizeof(SymbolTableEntry));
+    entry->identifier = strdup(identifier);
+    entry->data.value = value;
+    entry->next = table->entries[index];
+    table->entries[index] = entry;
+    table->size++;
+}
+
+VariableData* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier)
+{
+    while (currentScope != NULL) {
+        SymbolTable* table = currentScope->table;
+        unsigned int index = hash(identifier, table->capacity);
+        SymbolTableEntry* entry = table->entries[index];
+
+        while (entry != NULL) {
+            if (strcmp(entry->identifier, identifier) == 0) {
+                return &entry->data;
+            }
+            entry = entry->next;
+        }
+
+        currentScope = currentScope->next;
+    }
+
+    return NULL;
+}
 
 typedef struct {
 	// TODO
@@ -267,40 +367,6 @@ token_info_t token_infos[] = {
 	[TOKEN_TYPE_MINUS] = {PRECEDENCE_DIFFERENCE, NULL, led_plus_minus},
 	[TOKEN_TYPE_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal},
 };
-
-SymbolTable* createSymbolTable(SymbolTable* parent)
-{
-    SymbolTable* table = (SymbolTable*)malloc(sizeof(SymbolTable));
-    table->parent = parent;
-    table->identifier = NULL;
-    return table;
-}
-
-void addToSymbolTable(SymbolTable* table, const char* identifier, int value)
-{
-    table->identifier = strdup(identifier);
-    table->data.value = value;
-}
-
-VariableData* findInSymbolTable(SymbolTable* table, const char* identifier)
-{
-    while (table != NULL) {
-        if (table->identifier != NULL && strcmp(table->identifier, identifier) == 0) {
-            return &table->data;
-        }
-        table = table->parent;
-    }
-    return NULL;
-}
-
-SymbolTable* removeScope(SymbolTable* table)
-{
-    SymbolTable* parent = table->parent;
-    free(table->identifier);
-    free(table);
-    return parent;
-}
-
 
 char* token_op_type2str(ast_expression_type_t type)
 {
@@ -1299,7 +1365,7 @@ void print_xml_ast_tree(ast_node_t* root)
 
 void interpreter_create()
 {
-	globalSymbolTable = createSymbolTable(NULL);
+
 }
 
 bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
@@ -1309,6 +1375,10 @@ bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
 	}
 
 	switch (node->type) {
+		case AST_BLOCK:
+			interpreter_block(node, state);
+			break;
+
 		case AST_FUNCTION_DECLARATION:
 			interpreter_function_declaration(node->data.function_declaration, state);
 			break;
@@ -1321,10 +1391,6 @@ bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
 		case AST_STATEMENT_PRINT:
 			interpreter_statement_print(node->data.statement_print, state);
 			break;
-
-		// case AST_BLOCK:
-		//     interpreter_block(node, state);
-		//     break;
 
 		case AST_EXPRESSION:
 			interpreter_expression(node->data.expression, state);
@@ -1365,7 +1431,7 @@ void interpreter_block(ast_node_t* node, interpreter_state_t* state)
 	// printf("Block\n");
 
 	// Scope entry
-	globalSymbolTable = createSymbolTable(globalSymbolTable);
+    pushSymbolTable(symbolTableStack);
 
 	for (size_t i = 0; i < node->data.block->num_statements; i++) {
 		bool res = interpreter_interpret(node->data.block->statements[i], state);
@@ -1376,7 +1442,7 @@ void interpreter_block(ast_node_t* node, interpreter_state_t* state)
 	}
 
 	// Scope exit
-	globalSymbolTable = removeScope(globalSymbolTable);
+	popSymbolTable(symbolTableStack);
 }
 
 int interpreter_literal(ast_literal_t* expr)
@@ -1390,9 +1456,17 @@ int interpreter_literal(ast_literal_t* expr)
 
 int interpreter_identifier(ast_identifier_t* expr, interpreter_state_t* state)
 {
-	printf("Variable: %s\n", expr->name);
+	// printf("Variable: %s\n", expr->name);
 
-	return 0;
+	VariableData* variable = findInSymbolTable(symbolTableStack, expr->name);
+	if (variable != NULL) {
+		printf("Variable found: %s = %d\n", expr->name, variable->value);
+		return variable->value;
+	} else {
+		printf("Variable not found: %s\n", expr->name);
+		addToSymbolTable(symbolTableStack, expr->name, 0);
+		return 0;
+	}
 }
 
 int interpreter_operator_binary(ast_expression_binary_t* binary_op, interpreter_state_t* state) {
@@ -1422,21 +1496,21 @@ int interpreter_operator_binary(ast_expression_binary_t* binary_op, interpreter_
 
 int interpreter_expression_assignment(ast_expression_assignment_t* expr, interpreter_state_t* state)
 {
-	printf("Assignment\n");
+	// printf("Assignment\n");
 
 	if (expr->left->type == AST_EXPRESSION_IDENTIFIER) {
-		printf("Assignment to variable: %s\n", expr->left->data.identifier->name);
+		// printf("Assignment to variable: %s\n", expr->left->data.identifier->name);
 		int res = interpreter_expression(expr->right, state);
-		printf("Assignment Result: %d\n", res);
+		// printf("Assignment Result: %d\n", res);
 
 		char* identifier = expr->left->data.identifier->name;
-		VariableData* variable = findInSymbolTable(globalSymbolTable, identifier);
+		VariableData* variable = findInSymbolTable(symbolTableStack, identifier);
 		if (variable != NULL) {
-			printf("Variable found: %s = %d\n", identifier, variable->value);
+			// printf("Variable found: %s = %d\n", identifier, variable->value);
 			variable->value = interpreter_expression(expr->right, state);
 		} else {
-			printf("Variable not found: %s\n", identifier);
-			addToSymbolTable(globalSymbolTable, identifier, interpreter_expression(expr->right, state));
+			// printf("Variable not found: %s\n", identifier);
+			addToSymbolTable(symbolTableStack, identifier, interpreter_expression(expr->right, state));
 		}
 	} else {
 		printf("Error: Assignment to non-variable\n");
@@ -1482,12 +1556,10 @@ int interpreter_expression(ast_expression_t* expr, interpreter_state_t* state)
 
 void interpreter_free()
 {
-	while (globalSymbolTable->parent != NULL) {
-		SymbolTable* temp = globalSymbolTable;
-		globalSymbolTable = globalSymbolTable->parent;
-		free(temp);
-	}
-	free(globalSymbolTable);
+    while (symbolTableStack != NULL) {
+        popSymbolTable();
+    }
+	free(symbolTableStack);
 }
 
 int main(int argc, char** argv)

@@ -18,6 +18,11 @@ typedef enum {
 	// keywords
 	TOKEN_TYPE_FUNCTION,
 	TOKEN_TYPE_RETURN,
+	TOKEN_TYPE_PRINT,
+	TOKEN_TYPE_IF,
+	TOKEN_TYPE_ELSEIF,
+	TOKEN_TYPE_AND,
+	TOKEN_TYPE_OR,
 
 	// symbols
 	TOKEN_TYPE_SECTION_OPEN,
@@ -41,6 +46,11 @@ typedef struct {
 keyword_mapping_t keyword_mapping[] = {
 	{"عملکرد", TOKEN_TYPE_FUNCTION},
 	{"برگشت", TOKEN_TYPE_RETURN},
+	{"نمایش", TOKEN_TYPE_PRINT},
+	{"واگرنه", TOKEN_TYPE_ELSEIF},
+	{"اگر", TOKEN_TYPE_IF},
+	{"و", TOKEN_TYPE_AND},
+	{"یا", TOKEN_TYPE_OR},
 	{NULL, TOKEN_TYPE_ERROR}
 };
 
@@ -81,12 +91,22 @@ typedef struct {
 
 typedef struct {
 	struct ast_node* expression;
-} ast_return_statement_t;
+} ast_statement_return_t;
+
+typedef struct {
+	struct ast_node* expression;
+} ast_statement_print_t;
 
 typedef struct {
 	struct ast_node** statements;
 	size_t num_statements;
 } ast_block_t;
+
+typedef struct {
+	struct ast_node* expression;
+	ast_block_t* block;
+	ast_statement_if_t* next;
+} ast_statement_if_t;
 
 typedef struct ast_literal {
 	token_type_t literal_type;
@@ -121,7 +141,10 @@ typedef struct ast_expression {
 
 typedef enum {
 	AST_FUNCTION_DECLARATION,
-	AST_RETURN_STATEMENT,
+	AST_STATEMENT_RETURN,
+	AST_STATEMENT_PRINT,
+	AST_STATEMENT_IF,
+	AST_STATEMENT_ELSEIF,
 	AST_BLOCK,
 	AST_EXPRESSION
 } ast_node_type_t;
@@ -130,7 +153,8 @@ typedef struct ast_node {
 	ast_node_type_t type;
 	union {
 		ast_function_declaration_t* function_declaration;
-		ast_return_statement_t* return_statement;
+		ast_statement_return_t* statement_return;
+		ast_statement_print_t* statement_print;
 		ast_block_t* block;
 		ast_expression_t* expression;
 	} data;
@@ -164,7 +188,8 @@ void parser_parse(parser_t* parser);
 ast_node_t* parser_function(parser_t* parser);
 ast_node_t* parser_block(parser_t* parser);
 ast_node_t* parser_statement(parser_t* parser);
-ast_node_t* parser_return(parser_t* parser);
+ast_node_t* parser_statement_return(parser_t* parser);
+ast_node_t* parser_statement_print(parser_t* parser);
 ast_node_t* parser_expression(parser_t* parser);
 
 int evaluate_expression(ast_expression_t* expr, interpreter_state_t* state);
@@ -172,7 +197,8 @@ int evaluate_binary_operation(ast_binary_op_t* expr, interpreter_state_t* state)
 int evaluate_literal(ast_literal_t* expr);
 int evaluate_identifier(ast_identifier_t* expr, interpreter_state_t* state);
 
-void interpret_return_statement(ast_return_statement_t* stmt, interpreter_state_t* state);
+void interpret_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state);
+void interpret_statement_return(ast_statement_return_t* stmt, interpreter_state_t* state);
 void interpret_function_declaration(ast_function_declaration_t* stmt, interpreter_state_t* state);
 void interpret_block(ast_node_t* node, interpreter_state_t* state);
 
@@ -194,6 +220,11 @@ char* token_type2str(token_type_t type)
 		case TOKEN_TYPE_STRING: return "STRING";
 		case TOKEN_TYPE_FUNCTION: return "FUNCTION";
 		case TOKEN_TYPE_RETURN: return "RETURN";
+		case TOKEN_TYPE_PRINT: return "PRINT";
+		case TOKEN_TYPE_IF: return "IF";
+		case TOKEN_TYPE_ELSEIF: return "ELSEIF";
+		case TOKEN_TYPE_OR: return "OR";
+		case TOKEN_TYPE_AND: return "AND";
 		case TOKEN_TYPE_SECTION_OPEN: return "SECTION_OPEN";
 		case TOKEN_TYPE_SECTION_CLOSE: return "SECTION_CLOSE";
 		case TOKEN_TYPE_PARENTHESE_OPEN: return "PARENTHESIS_OPEN";
@@ -584,8 +615,8 @@ void ast_node_free(ast_node_t* node)
 			free(node->data.function_declaration->name);
 			ast_node_free((ast_node_t*) node->data.function_declaration->body);
 			break;
-		case AST_RETURN_STATEMENT:
-			ast_node_free((ast_node_t*) node->data.return_statement->expression);
+		case AST_STATEMENT_RETURN:
+			ast_node_free((ast_node_t*) node->data.statement_return->expression);
 			break;
 		case AST_BLOCK:
 			for (size_t i = 0; i < node->data.block->num_statements; i++) {
@@ -679,14 +710,26 @@ ast_node_t* parser_function(parser_t* parser) {
 	return node;
 }
 
-ast_node_t* parser_return(parser_t* parser) {
-	printf("Parsing return statement\n");
+ast_node_t* parser_statement_print(parser_t* parser) {
+	printf("Parsing statement print\n");
 
 	ast_node_t* node = malloc(sizeof(ast_node_t));
-	node->type = AST_RETURN_STATEMENT;
+	node->type = AST_STATEMENT_PRINT;
 
 	parser->token_index++;
-	node->data.return_statement->expression = parser_expression(parser);
+	node->data.statement_return->expression = parser_expression(parser);
+
+	return node;
+}
+
+ast_node_t* parser_statement_return(parser_t* parser) {
+	printf("Parsing statement return\n");
+
+	ast_node_t* node = malloc(sizeof(ast_node_t));
+	node->type = AST_STATEMENT_RETURN;
+
+	parser->token_index++;
+	node->data.statement_return->expression = parser_expression(parser);
 
 	return node;
 }
@@ -695,16 +738,16 @@ ast_node_t* parser_statement(parser_t* parser)
 {
 	printf("Parsing statement\n");
 
-	ast_node_t* statement = NULL;
+	ast_node_t* stmt = NULL;
 
 	if (parser->lexer->tokens->length > parser->token_index && ((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_RETURN) {
-		statement = parser_return(parser);
+		stmt = parser_statement_return(parser);
 	} else {
 		printf("Error: Unexpected token as statement\n");
 		exit(EXIT_FAILURE);
 	}
 
-	return statement;
+	return stmt;
 }
 
 typedef ast_expression_t* (*nud_func_t)(parser_t* parser, token_t* token);
@@ -894,7 +937,7 @@ void parser_parse(parser_t* parser)
 				parser->ast_tree = block_node;
 				break;
 			case TOKEN_TYPE_RETURN:
-				ast_node_t* return_node = parser_return(parser);
+				ast_node_t* return_node = parser_statement_return(parser);
 				parser->ast_tree = return_node;
 				break;
 			default:
@@ -999,13 +1042,13 @@ void print_xml_ast_node(ast_node_t* node, int indent_level) {
 			print_indentation(indent_level);
 			printf("</FunctionDeclaration>\n");
 			break;
-		case AST_RETURN_STATEMENT:
+		case AST_STATEMENT_RETURN:
 			printf("<ReturnStatement>\n");
 
 			// print_indentation(indent_level + 1);
 			// printf("<Expression>\n");
 
-			print_xml_ast_node(node->data.return_statement->expression, indent_level + 1);
+			print_xml_ast_node(node->data.statement_return->expression, indent_level + 1);
 
 			// print_indentation(indent_level + 1);
 			// printf("</Expression>\n");
@@ -1055,8 +1098,11 @@ void interpret(ast_node_t* node, interpreter_state_t* state)
 		case AST_FUNCTION_DECLARATION:
 			interpret_function_declaration(node->data.function_declaration, state);
 			break;
-		case AST_RETURN_STATEMENT:
-			interpret_return_statement(node->data.return_statement, state);
+		case AST_STATEMENT_RETURN:
+			interpret_statement_return(node->data.statement_return, state);
+			break;
+		case AST_STATEMENT_PRINT:
+			interpret_statement_print(node->data.statement_print, state);
 			break;
 		// case AST_BLOCK:
 		//     interpret_block(node, state);
@@ -1077,12 +1123,20 @@ void interpret_function_declaration(ast_function_declaration_t* stmt, interprete
 	interpret_block(stmt->body, state);
 }
 
-void interpret_return_statement(ast_return_statement_t* stmt, interpreter_state_t* state)
+void interpret_statement_return(ast_statement_return_t* stmt, interpreter_state_t* state)
 {
 	printf("Return Statement\n");
 
 	int res = evaluate_expression(stmt->expression->data.expression, state);
-	printf("Result: %d\n", res);
+	printf("Return Result: %d\n", res);
+}
+
+void interpret_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state)
+{
+	printf("Print Statement\n");
+
+	int res = evaluate_expression(stmt->expression->data.expression, state);
+	printf("Print Result: %d\n", res);
 }
 
 void interpret_block(ast_node_t* node, interpreter_state_t* state)

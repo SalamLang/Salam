@@ -102,10 +102,12 @@ typedef struct {
 	size_t num_statements;
 } ast_block_t;
 
+struct ast_statement_if_t;
+
 typedef struct {
 	struct ast_node* expression;
 	ast_block_t* block;
-	ast_statement_if_t* next;
+	struct ast_statement_if_t* next;
 } ast_statement_if_t;
 
 typedef struct ast_literal {
@@ -740,13 +742,22 @@ ast_node_t* parser_statement(parser_t* parser)
 
 	ast_node_t* stmt = NULL;
 
-	if (parser->lexer->tokens->length > parser->token_index && ((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_RETURN) {
-		stmt = parser_statement_return(parser);
-	} else {
+	if (parser->lexer->tokens->length > parser->token_index) {
+		token_t* tok = (token_t*)parser->lexer->tokens->data[parser->token_index];
+		switch (tok->type) {
+			case TOKEN_TYPE_RETURN:
+				stmt = parser_statement_return(parser);
+				break;
+			case TOKEN_TYPE_PRINT:
+				stmt = parser_statement_print(parser);
+				break;
+		}
+	}
+	
+	if (stmt == NULL) {
 		printf("Error: Unexpected token as statement\n");
 		exit(EXIT_FAILURE);
 	}
-
 	return stmt;
 }
 
@@ -1033,46 +1044,47 @@ void print_xml_ast_node(ast_node_t* node, int indent_level) {
 			printf("<FunctionDeclaration>\n");
 			print_indentation(indent_level + 1);
 			printf("<Name>%s</Name>\n", node->data.function_declaration->name);
-			// print_indentation(indent_level + 1);
-			// printf("<Body>\n");
-			// print_xml_ast_node(node->data.function_declaration->body, indent_level + 2);
-			print_xml_ast_node(node->data.function_declaration->body, indent_level + 1);
-			// print_indentation(indent_level + 1);
-			// printf("</Body>\n");
+	
+				print_xml_ast_node(node->data.function_declaration->body, indent_level + 1);
+
 			print_indentation(indent_level);
 			printf("</FunctionDeclaration>\n");
 			break;
-		case AST_STATEMENT_RETURN:
-			printf("<ReturnStatement>\n");
 
-			// print_indentation(indent_level + 1);
-			// printf("<Expression>\n");
+		case AST_STATEMENT_PRINT:
+			printf("<StatementPrint>\n");
 
-			print_xml_ast_node(node->data.statement_return->expression, indent_level + 1);
-
-			// print_indentation(indent_level + 1);
-			// printf("</Expression>\n");
+				print_xml_ast_node(node->data.statement_print->expression, indent_level + 1);
 
 			print_indentation(indent_level);
-			printf("</ReturnStatement>\n");
+			printf("</StatementPrint>\n");
 			break;
+			
+		case AST_STATEMENT_RETURN:
+			printf("<StatementReturn>\n");
+
+				print_xml_ast_node(node->data.statement_return->expression, indent_level + 1);
+
+			print_indentation(indent_level);
+			printf("</StatementReturn>\n");
+			break;
+
 		case AST_BLOCK:
 			printf("<Block>\n");
 			for (size_t i = 0; i < node->data.block->num_statements; i++) {
-				// print_indentation(indent_level + 1);
-				// printf("<Statement>\n");
 
 				print_xml_ast_node(node->data.block->statements[i], indent_level + 1);
 
-				// print_indentation(indent_level + 1);
-				// printf("</Statement>\n");
 			}
+
 			print_indentation(indent_level);
 			printf("</Block>\n");
 			break;
+
 		case AST_EXPRESSION:
 			print_xml_ast_expression(node->data.expression, indent_level);
 			break;
+
 		default:
 			print_indentation(indent_level);
 			printf("<!-- Unhandled AST Node Type -->\n");

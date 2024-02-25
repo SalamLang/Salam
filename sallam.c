@@ -439,6 +439,8 @@ void read_number(lexer_t* lexer, wchar_t ch)
 	token_t* t = token_create(TOKEN_TYPE_NUMBER, number, length, lexer->line, lexer->column - length, lexer->line, lexer->column);
 	array_push(lexer->tokens, t);
 
+	free(number);
+
 	unread_token(lexer);
 }
 
@@ -739,7 +741,11 @@ ast_node_t* parser_function(parser_t* parser) {
 	//     }
 	// }
 
+	node->data.function_declaration = malloc(sizeof(ast_function_declaration_t));
 	node->data.function_declaration->name = strdup(name->value);
+	// free(name);
+	// node->data.function_declaration->name = (name->value);
+	// printf("===>!\n");
 	// node->data.function_declaration->name = "name";
 	// malloc(sizeof(char) * 10);
 	// strcpy(node->data.function_declaration->name, "name");
@@ -755,7 +761,8 @@ ast_node_t* parser_statement_print(parser_t* parser) {
 	node->type = AST_STATEMENT_PRINT;
 
 	parser->token_index++;
-	node->data.statement_return->expression = parser_expression(parser);
+	node->data.statement_print = malloc(sizeof(ast_statement_print_t));
+	node->data.statement_print->expression = parser_expression(parser);
 
 	printf("end of print stmt\n");
 
@@ -770,6 +777,7 @@ ast_node_t* parser_statement_return(parser_t* parser) {
 
 	parser->token_index++;
 	printf("before reading expr in return\n");
+	node->data.statement_return = malloc(sizeof(ast_statement_return_t));
 	node->data.statement_return->expression = parser_expression(parser);
 	printf("after reading expr in return\n");
 
@@ -889,7 +897,7 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 
 	literal_expr->data.literal = malloc(sizeof(ast_literal_t));
 	printf("next of middle number\n");
-	literal_expr->data.literal->value = strdup(token->value); // TODO strdup
+	literal_expr->data.literal->value = strdup(token->value);
 	// printf("-->%s\n", token->value);
 	printf("next of middle number\n");
 	literal_expr->data.literal->literal_type = token->type;

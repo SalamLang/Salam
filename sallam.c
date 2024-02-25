@@ -592,24 +592,31 @@ void read_number(lexer_t* lexer, wchar_t ch)
 
 void read_string(lexer_t* lexer, wchar_t ch)
 {
-	char* string = (char*) malloc(sizeof(char) * 1024);
-	int i = 0;
-	while (ch != L'"') {
-		int char_size = wctomb(&string[i], ch);
-		if (char_size < 0) {
-			printf("Error: Failed to convert wide character to multibyte\n");
-			exit(EXIT_FAILURE);
-		}
-		i += char_size;
-		ch = read_token(lexer);
-	}
-	string[i] = 0;
+    char* string = (char*) malloc(sizeof(char) * 1024); // 1023 + 1 for null terminator
+    int i = 0;
 
-	token_t* t = token_create(TOKEN_TYPE_STRING, string, i, lexer->line, lexer->column - i, lexer->line, lexer->column);
-	array_push(lexer->tokens, t);
+    while (ch != L'"') {
+        if (i >= 1023) {
+            printf("Error: String length exceeds the maximum allowed length.\n");
+            exit(EXIT_FAILURE);
+        }
 
-	unread_token(lexer);
-	free(string);
+        int char_size = wctomb(&string[i], ch);
+        if (char_size < 0) {
+            printf("Error: Failed to convert wide character to multibyte\n");
+            exit(EXIT_FAILURE);
+        }
+        i += char_size;
+
+        ch = read_token(lexer);
+    }
+
+    string[i] = '\0';
+
+    token_t* t = token_create(TOKEN_TYPE_STRING, string, i, lexer->line, lexer->column - i, lexer->line, lexer->column);
+    array_push(lexer->tokens, t);
+
+    free(string);
 }
 
 size_t mb_strlen(char* identifier)

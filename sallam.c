@@ -810,6 +810,8 @@ ast_expression_t* parser_primary(parser_t* parser)
 		exit(EXIT_FAILURE);
 	}
 
+	printf("end of primary\n");
+
 	return primary_node;
 }
 
@@ -845,7 +847,7 @@ ast_expression_t* pratt_parse(parser_t* parser, int precedence)
 
 ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	printf("Parsing binary operation\n");
+	printf("Parsing operation binary\n");
 
 	ast_expression_t* right = pratt_parse(parser, token_infos[token->type].precedence);
 
@@ -866,9 +868,16 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 	ast_expression_t* literal_expr = malloc(sizeof(ast_expression_t));
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
+	printf("middle of number\n");
+
 	literal_expr->data.literal = malloc(sizeof(ast_literal_t));
+	printf("next of middle number\n");
 	literal_expr->data.literal->literal_type = token->type;
-	literal_expr->data.literal->value = strdup(token->value);
+	printf("next of middle number\n");
+	printf("-->%s\n", token->value);
+	literal_expr->data.literal->value = token->value; // strdup
+
+	printf("end of number\n");
 
 	return literal_expr;
 }
@@ -882,7 +891,7 @@ ast_expression_t* nud_string(parser_t* parser, token_t* token)
 
 	literal_expr->data.literal = malloc(sizeof(ast_literal_t));
 	literal_expr->data.literal->literal_type = token->type;
-	literal_expr->data.literal->value = strdup(token->value);
+	literal_expr->data.literal->value = token->value; // strdup
 
 	return literal_expr;
 }
@@ -895,7 +904,7 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 	identifier_expr->type = AST_EXPRESSION_IDENTIFIER;
 
 	identifier_expr->data.identifier = malloc(sizeof(ast_identifier_t));
-	identifier_expr->data.identifier->name = strdup(token->value);
+	identifier_expr->data.identifier->name = token->value; // strdup
 
 	return identifier_expr;
 }
@@ -967,13 +976,15 @@ void parser_parse(parser_t* parser)
 	}
 }
 
-void print_indentation(int indent_level) {
+void print_indentation(int indent_level)
+{
 	for (int i = 0; i < indent_level; i++) {
 		printf("  ");
 	}
 }
 
-void print_xml_ast_expression(ast_expression_t* expr, int indent_level) {
+void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
+{
 	printf("<Expression>\n");
 
 	switch (expr->type) {
@@ -1041,7 +1052,8 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level) {
 	printf("</Expression>\n");
 }
 
-void print_xml_ast_node(ast_node_t* node, int indent_level) {
+void print_xml_ast_node(ast_node_t* node, int indent_level)
+{
 	if (node == NULL) {
 		return;
 	}

@@ -799,8 +799,15 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
 	printf("number type: %s\n", token_type2str(token->type));
+	printf("number value: %s\n", token->value);
+	printf("1\n");
+	literal_expr->data.literal = malloc(sizeof(ast_literal_t));
 	literal_expr->data.literal->literal_type = token->type;
+	printf("2\n");
 	literal_expr->data.literal->value = strdup(token->value);
+
+	printf("TokenType: %s\n", token_type2str(token->type));
+	printf("TokenValue: %s\n", token->value);
 
 	printf("ok");
 
@@ -909,6 +916,7 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level) {
 			printf("<Type>%s</Type>\n", token_type2str(expr->data.literal->literal_type));
 			print_indentation(indent_level + 2);
 			printf("<Value>%s</Value>\n", expr->data.literal->value);
+			print_indentation(indent_level + 1);
 			printf("</Literal>\n");
 			break;
 		case AST_EXPRESSION_IDENTIFIER:

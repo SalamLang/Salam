@@ -42,7 +42,7 @@ SymbolTable* createSymbolTable(size_t capacity)
 void pushSymbolTable()
 {
     SymbolTable* table = createSymbolTable(3);
-    SymbolTableStack* newScope = (SymbolTableStack*)malloc(sizeof(SymbolTableStack));
+    SymbolTableStack* newScope = (SymbolTableStack*) malloc(sizeof(SymbolTableStack));
     newScope->table = table;
     newScope->next = symbolTableStack;
     symbolTableStack = newScope;
@@ -90,7 +90,7 @@ void addToSymbolTable(SymbolTableStack* symbolTableStack, const char* identifier
     SymbolTable* table = symbolTableStack->table;
     unsigned int index = hash(identifier, table->capacity);
 
-    SymbolTableEntry* entry = (SymbolTableEntry*)malloc(sizeof(SymbolTableEntry));
+    SymbolTableEntry* entry = (SymbolTableEntry*) malloc(sizeof(SymbolTableEntry));
     entry->identifier = strdup(identifier);
     entry->data.value = value;
     entry->next = table->entries[index];
@@ -423,7 +423,7 @@ char* file_read(char* file_Name)
 	long file_size = ftell(file);
 	fseek(file, 0, SEEK_SET);
 
-	char* file_data = (char*)malloc(file_size + 1);
+	char* file_data = (char*) malloc(file_size + 1);
 	fread(file_data, 1, file_size, file);
 	file_data[file_size] = 0;
 
@@ -497,7 +497,7 @@ void array_print(array_t* arr)
 
 lexer_t* lexer_create(const char* data)
 {
-	lexer_t* lexer = (lexer_t*)malloc(sizeof(lexer_t));
+	lexer_t* lexer = (lexer_t*) malloc(sizeof(lexer_t));
 	lexer->data = (char*) data;
 	lexer->index = 0;
 	lexer->tokens = array_create(10);

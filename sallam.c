@@ -7,6 +7,19 @@
 #include <limits.h>
 
 typedef struct {
+    int value;
+} VariableData;
+
+typedef struct SymbolTable {
+    struct SymbolTable* parent;
+    char* identifier;
+    VariableData data;
+} SymbolTable;
+
+SymbolTable* globalSymbolTable = NULL;
+
+typedef struct {
+	// TODO
 } interpreter_state_t;
 
 typedef enum {
@@ -133,12 +146,12 @@ typedef struct {
 	char* operator;
 	struct ast_expression* left;
 	struct ast_expression* right;
-} ast_operator_binary_t;
+} ast_expression_binary_t;
 
 typedef struct {
 	struct ast_expression* left;
 	struct ast_expression* right;
-} ast_op_assignment_t;
+} ast_expression_assignment_t;
 
 typedef enum {
 	AST_EXPRESSION_LITERAL,
@@ -153,8 +166,8 @@ typedef struct ast_expression {
 	union {
 		ast_literal_t* literal;
 		ast_identifier_t* identifier;
-		ast_operator_binary_t* binary_op;
-		ast_op_assignment_t* assignment;
+		ast_expression_binary_t* binary_op;
+		ast_expression_assignment_t* assignment;
 	} data;
 } ast_expression_t;
 
@@ -217,15 +230,15 @@ ast_node_t* parser_statement_return(parser_t* parser);
 ast_node_t* parser_statement_print(parser_t* parser);
 ast_node_t* parser_expression(parser_t* parser);
 
-int evaluate_expression(ast_expression_t* expr, interpreter_state_t* state);
-int evaluate_operator_binary(ast_operator_binary_t* expr, interpreter_state_t* state);
-int evaluate_literal(ast_literal_t* expr);
-int evaluate_identifier(ast_identifier_t* expr, interpreter_state_t* state);
+int interpreter_expression(ast_expression_t* expr, interpreter_state_t* state);
+int interpreter_operator_binary(ast_expression_binary_t* expr, interpreter_state_t* state);
+int interpreter_literal(ast_literal_t* expr);
+int interpreter_identifier(ast_identifier_t* expr, interpreter_state_t* state);
 
-void interpret_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state);
-void interpret_statement_return(ast_statement_return_t* stmt, interpreter_state_t* state);
-void interpret_function_declaration(ast_function_declaration_t* stmt, interpreter_state_t* state);
-void interpret_block(ast_node_t* node, interpreter_state_t* state);
+void interpreter_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state);
+void interpreter_statement_return(ast_statement_return_t* stmt, interpreter_state_t* state);
+void interpreter_function_declaration(ast_function_declaration_t* stmt, interpreter_state_t* state);
+void interpreter_block(ast_node_t* node, interpreter_state_t* state);
 
 typedef ast_expression_t* (*nud_func_t)(parser_t* parser, token_t* token);
 typedef ast_expression_t* (*led_func_t)(parser_t* parser, token_t* token, ast_expression_t* left);
@@ -254,6 +267,40 @@ token_info_t token_infos[] = {
 	[TOKEN_TYPE_MINUS] = {PRECEDENCE_DIFFERENCE, NULL, led_plus_minus},
 	[TOKEN_TYPE_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal},
 };
+
+SymbolTable* createSymbolTable(SymbolTable* parent)
+{
+    SymbolTable* table = (SymbolTable*)malloc(sizeof(SymbolTable));
+    table->parent = parent;
+    table->identifier = NULL;
+    return table;
+}
+
+void addToSymbolTable(SymbolTable* table, const char* identifier, int value)
+{
+    table->identifier = strdup(identifier);
+    table->data.value = value;
+}
+
+VariableData* findInSymbolTable(SymbolTable* table, const char* identifier)
+{
+    while (table != NULL) {
+        if (table->identifier != NULL && strcmp(table->identifier, identifier) == 0) {
+            return &table->data;
+        }
+        table = table->parent;
+    }
+    return NULL;
+}
+
+SymbolTable* removeScope(SymbolTable* table)
+{
+    SymbolTable* parent = table->parent;
+    free(table->identifier);
+    free(table);
+    return parent;
+}
+
 
 char* token_op_type2str(ast_expression_type_t type)
 {
@@ -768,7 +815,8 @@ token_t* parser_token_eat(parser_t* parser, token_type_t type)
 	return NULL;
 }
 
-ast_node_t* parser_function(parser_t* parser) {
+ast_node_t* parser_function(parser_t* parser)
+{
 	printf("Parsing function\n");
 
 	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
@@ -929,7 +977,7 @@ ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* 
 
 	ast_expression_t* binary_op_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 	binary_op_expr->type = AST_EXPRESSION_ASSIGNMENT;
-	binary_op_expr->data.assignment = (ast_op_assignment_t*) malloc(sizeof(ast_op_assignment_t));
+	binary_op_expr->data.assignment = (ast_expression_assignment_t*) malloc(sizeof(ast_expression_assignment_t));
 	binary_op_expr->data.assignment->left = left;
 	binary_op_expr->data.assignment->right = right;
 
@@ -944,7 +992,7 @@ ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expressio
 
 	ast_expression_t* binary_op_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 	binary_op_expr->type = AST_EXPRESSION_BINARY;
-	binary_op_expr->data.binary_op = (ast_operator_binary_t*) malloc(sizeof(ast_operator_binary_t));
+	binary_op_expr->data.binary_op = (ast_expression_binary_t*) malloc(sizeof(ast_expression_binary_t));
 	binary_op_expr->data.binary_op->operator = strdup(token->value);
 	binary_op_expr->data.binary_op->left = left;
 	binary_op_expr->data.binary_op->right = right;
@@ -1035,6 +1083,13 @@ ast_node_t* parser_block(parser_t* parser)
 
 void parser_parse(parser_t* parser)
 {
+	if (parser->lexer->tokens->length == 1 &&
+		((ast_node_t*)parser->lexer->tokens->data[0])->type == TOKEN_TYPE_EOF
+	) {
+		parser->ast_tree = NULL;
+		return;
+	}
+
 	while (parser->token_index < parser->lexer->tokens->length) {
 		token_t* current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
 
@@ -1242,7 +1297,12 @@ void print_xml_ast_tree(ast_node_t* root)
 	printf("</AST>\n");
 }
 
-bool interpret(ast_node_t* node, interpreter_state_t* state)
+void interpreter_create()
+{
+	globalSymbolTable = createSymbolTable(NULL);
+}
+
+bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
 {
 	if (node == NULL) {
 		return false;
@@ -1250,26 +1310,25 @@ bool interpret(ast_node_t* node, interpreter_state_t* state)
 
 	switch (node->type) {
 		case AST_FUNCTION_DECLARATION:
-			interpret_function_declaration(node->data.function_declaration, state);
+			interpreter_function_declaration(node->data.function_declaration, state);
 			break;
 
 		case AST_STATEMENT_RETURN:
-			interpret_statement_return(node->data.statement_return, state);
+			interpreter_statement_return(node->data.statement_return, state);
 			return true;
 			break;
 
 		case AST_STATEMENT_PRINT:
-			interpret_statement_print(node->data.statement_print, state);
+			interpreter_statement_print(node->data.statement_print, state);
 			break;
 
 		// case AST_BLOCK:
-		//     interpret_block(node, state);
+		//     interpreter_block(node, state);
 		//     break;
 
-		// case AST_EXPRESSION:
-		// 	printf("expr...\n");
-		// 	// interpret_expression(node, state);
-		// 	break;
+		case AST_EXPRESSION:
+			interpreter_expression(node->data.expression, state);
+			break;
 
 		default:
 			break;
@@ -1278,43 +1337,49 @@ bool interpret(ast_node_t* node, interpreter_state_t* state)
 	return false;
 }
 
-void interpret_function_declaration(ast_function_declaration_t* stmt, interpreter_state_t* state)
+void interpreter_function_declaration(ast_function_declaration_t* stmt, interpreter_state_t* state)
 {
 	// printf("Function Declaration: %s\n", stmt->name);
 
-	interpret_block(stmt->body, state);
+	interpreter_block(stmt->body, state);
 }
 
-void interpret_statement_return(ast_statement_return_t* stmt, interpreter_state_t* state)
+void interpreter_statement_return(ast_statement_return_t* stmt, interpreter_state_t* state)
 {
 	// printf("Return Statement\n");
 
-	int res = evaluate_expression(stmt->expression->data.expression, state);
+	int res = interpreter_expression(stmt->expression->data.expression, state);
 	printf("Return Result: %d\n", res);
 }
 
-void interpret_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state)
+void interpreter_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state)
 {
 	// printf("Print Statement\n");
 
-	int res = evaluate_expression(stmt->expression->data.expression, state);
+	int res = interpreter_expression(stmt->expression->data.expression, state);
 	printf("Print Result: %d\n", res);
 }
 
-void interpret_block(ast_node_t* node, interpreter_state_t* state)
+void interpreter_block(ast_node_t* node, interpreter_state_t* state)
 {
 	// printf("Block\n");
 
+	// Scope entry
+	globalSymbolTable = createSymbolTable(globalSymbolTable);
+
 	for (size_t i = 0; i < node->data.block->num_statements; i++) {
-		bool res = interpret(node->data.block->statements[i], state);
+		bool res = interpreter_interpret(node->data.block->statements[i], state);
 
 		if (res == true) {
 			break;
 		}
 	}
+
+	// Scope exit
+	globalSymbolTable = removeScope(globalSymbolTable);
 }
 
-int evaluate_literal(ast_literal_t* expr)
+int interpreter_literal(ast_literal_t* expr)
 {
 	// printf("Literal: %s\n", expr->value);
 
@@ -1323,18 +1388,18 @@ int evaluate_literal(ast_literal_t* expr)
 	return 0;
 }
 
-int evaluate_identifier(ast_identifier_t* expr, interpreter_state_t* state)
+int interpreter_identifier(ast_identifier_t* expr, interpreter_state_t* state)
 {
 	printf("Variable: %s\n", expr->name);
 
 	return 0;
 }
 
-int evaluate_operator_binary(ast_operator_binary_t* binary_op, interpreter_state_t* state) {
+int interpreter_operator_binary(ast_expression_binary_t* binary_op, interpreter_state_t* state) {
 	const char* operator_str = binary_op->operator;
 
-	int left = evaluate_expression(binary_op->left, state);
-	int right = evaluate_expression(binary_op->right, state);
+	int left = interpreter_expression(binary_op->left, state);
+	int right = interpreter_expression(binary_op->right, state);
 
 	if (strcmp(operator_str, "+") == 0) {
 		return left + right;
@@ -1349,12 +1414,40 @@ int evaluate_operator_binary(ast_operator_binary_t* binary_op, interpreter_state
 	}
 }
 
-// int evaluate_function_call(ast_node_t* node, interpreter_state_t* state) {
+// int interpreter_function_call(ast_node_t* node, interpreter_state_t* state)
+// {
 //     printf("Function Call: %s\n", node->data.function_call.name);
 //     return 0;
 // }
 
-int evaluate_expression(ast_expression_t* expr, interpreter_state_t* state) {
+int interpreter_expression_assignment(ast_expression_assignment_t* expr, interpreter_state_t* state)
+{
+	printf("Assignment\n");
+
+	if (expr->left->type == AST_EXPRESSION_IDENTIFIER) {
+		printf("Assignment to variable: %s\n", expr->left->data.identifier->name);
+		int res = interpreter_expression(expr->right, state);
+		printf("Assignment Result: %d\n", res);
+
+		char* identifier = expr->left->data.identifier->name;
+		VariableData* variable = findInSymbolTable(globalSymbolTable, identifier);
+		if (variable != NULL) {
+			printf("Variable found: %s = %d\n", identifier, variable->value);
+			variable->value = interpreter_expression(expr->right, state);
+		} else {
+			printf("Variable not found: %s\n", identifier);
+			addToSymbolTable(globalSymbolTable, identifier, interpreter_expression(expr->right, state));
+		}
+	} else {
+		printf("Error: Assignment to non-variable\n");
+		exit(EXIT_FAILURE);
+	}
+
+	return 0;
+}
+
+int interpreter_expression(ast_expression_t* expr, interpreter_state_t* state)
+{
 	int res = 66;
 	if (expr == NULL) {
 		return res;
@@ -1362,25 +1455,39 @@ int evaluate_expression(ast_expression_t* expr, interpreter_state_t* state) {
 
 	switch (expr->type) {
 		case AST_EXPRESSION_LITERAL:
-			res = evaluate_literal(expr->data.literal);
+			res = interpreter_literal(expr->data.literal);
 			return res;
 
 		case AST_EXPRESSION_IDENTIFIER:
-			res = evaluate_identifier(expr->data.identifier, state);
+			res = interpreter_identifier(expr->data.identifier, state);
 			return res;
 
 		case AST_EXPRESSION_BINARY:
-			res = evaluate_operator_binary(expr->data.binary_op, state);
+			res = interpreter_operator_binary(expr->data.binary_op, state);
 			return res;
 
 		// case AST_EXPRESION_FUNCTION_CALL:
-		//     return evaluate_function_call(expr, state);
+		//     return interpreter_function_call(expr, state);
+
+		case AST_EXPRESSION_ASSIGNMENT:
+			res = interpreter_expression_assignment(expr->data.assignment, state);
+			return res;
 
 		default:
 			printf("Error: default expr type: %d\n", expr->type);
 			exit(EXIT_FAILURE);
 			return res;
 	}
+}
+
+void interpreter_free()
+{
+	while (globalSymbolTable->parent != NULL) {
+		SymbolTable* temp = globalSymbolTable;
+		globalSymbolTable = globalSymbolTable->parent;
+		free(temp);
+	}
+	free(globalSymbolTable);
 }
 
 int main(int argc, char** argv)
@@ -1405,7 +1512,9 @@ int main(int argc, char** argv)
 
 	print_xml_ast_tree(parser->ast_tree);
 
-	interpret(parser->ast_tree, NULL);
+	interpreter_create();
+	interpreter_interpret(parser->ast_tree, NULL);
+	interpreter_free();
 
 	exit(EXIT_SUCCESS);
 }

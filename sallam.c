@@ -798,14 +798,13 @@ ast_node_t* parser_function(parser_t* parser) {
 ast_node_t* parser_statement_print(parser_t* parser) {
 	printf("Parsing statement print\n");
 
+	parser->token_index++;
+
 	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
 	node->type = AST_STATEMENT_PRINT;
 
-	parser->token_index++;
 	node->data.statement_print = (ast_statement_print_t*) malloc(sizeof(ast_statement_print_t));
 	node->data.statement_print->expression = parser_expression(parser);
-
-	printf("end of print stmt\n");
 
 	return node;
 }
@@ -813,14 +812,13 @@ ast_node_t* parser_statement_print(parser_t* parser) {
 ast_node_t* parser_statement_return(parser_t* parser) {
 	printf("Parsing statement return\n");
 
+	parser->token_index++;
+
 	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
 	node->type = AST_STATEMENT_RETURN;
 
-	parser->token_index++;
-	printf("before reading expr in return\n");
 	node->data.statement_return = (ast_statement_return_t*) malloc(sizeof(ast_statement_return_t));
 	node->data.statement_return->expression = parser_expression(parser);
-	printf("after reading expr in return\n");
 
 	return node;
 }
@@ -841,6 +839,17 @@ ast_node_t* parser_statement(parser_t* parser)
 			
 			case TOKEN_TYPE_PRINT:
 				stmt = parser_statement_print(parser);
+				break;
+			
+			case TOKEN_TYPE_SECTION_OPEN:
+				stmt = parser_block(parser);
+				break;
+			
+			case TOKEN_TYPE_IDENTIFIER:
+			case TOKEN_TYPE_PARENTHESE_OPEN:
+			case TOKEN_TYPE_STRING:
+			case TOKEN_TYPE_NUMBER:
+				stmt = parser_expression(parser);
 				break;
 		}
 	}
@@ -867,8 +876,6 @@ ast_expression_t* parser_primary(parser_t* parser)
 		exit(EXIT_FAILURE);
 	}
 
-	printf("end of primary\n");
-
 	return primary_node;
 }
 
@@ -876,13 +883,9 @@ ast_node_t* parser_expression(parser_t* parser)
 {
 	printf("Parsing expression\n");
 
-	printf("1: \n");
 	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t) * 2);
-	printf("2: \n");
 	node->type = AST_EXPRESSION;
 	node->data.expression = parser_expression_pratt(parser, PRECEDENCE_LOWEST);
-
-	printf("end of expression\n");
 
 	return node;
 }
@@ -896,16 +899,12 @@ ast_expression_t* parser_expression_pratt(parser_t* parser, int precedence)
 
 	ast_expression_t* left = token_infos[current_token->type].nud(parser, current_token);
 
-	printf("before loop of pratt\n");
-
 	while (precedence < token_infos[((token_t*)parser->lexer->tokens->data[parser->token_index])->type].precedence) {
 		current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
 		parser->token_index++;
 
 		left = token_infos[current_token->type].led(parser, current_token, left);
 	}
-
-	printf("after loop of pratt\n");
 
 	return left;
 }
@@ -930,20 +929,12 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 {
 	printf("Parsing number\n");
 
-	printf("size of ast_expression_t: %ld\n", sizeof(ast_expression_t));
 	ast_expression_t* literal_expr = malloc(sizeof(ast_expression_t));
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
-	printf("middle of number\n");
-
 	literal_expr->data.literal = malloc(sizeof(ast_literal_t));
-	printf("next of middle number\n");
 	literal_expr->data.literal->value = strdup(token->value);
-	// printf("-->%s\n", token->value);
-	printf("next of middle number\n");
 	literal_expr->data.literal->literal_type = token->type;
-
-	printf("end of number\n");
 
 	return literal_expr;
 }

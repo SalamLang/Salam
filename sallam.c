@@ -7,24 +7,24 @@
 #include <limits.h>
 
 typedef struct {
-    int value;
+	int value;
 } VariableData;
 
 typedef struct SymbolTableEntry {
-    char* identifier;
-    VariableData data;
+	char* identifier;
+	VariableData data;
 	struct SymbolTableEntry* next;
 } SymbolTableEntry;
 
 typedef struct {
-    SymbolTableEntry** entries;
-    size_t size;
-    size_t capacity;
+	SymbolTableEntry** entries;
+	size_t size;
+	size_t capacity;
 } SymbolTable;
 
 typedef struct SymbolTableStack {
-    SymbolTable* table;
-    struct SymbolTableStack* next;
+	SymbolTable* table;
+	struct SymbolTableStack* next;
 } SymbolTableStack;
 
 SymbolTableStack* symbolTableStack = NULL;
@@ -32,90 +32,90 @@ SymbolTableStack* symbolTableStack = NULL;
 
 SymbolTable* createSymbolTable(size_t capacity)
 {
-    SymbolTable* table = (SymbolTable*) malloc(sizeof(SymbolTable));
-    table->entries = (SymbolTableEntry**) calloc(capacity, sizeof(SymbolTableEntry*));
-    table->size = 0;
-    table->capacity = capacity;
-    return table;
+	SymbolTable* table = (SymbolTable*) malloc(sizeof(SymbolTable));
+	table->entries = (SymbolTableEntry**) calloc(capacity, sizeof(SymbolTableEntry*));
+	table->size = 0;
+	table->capacity = capacity;
+	return table;
 }
 
 void pushSymbolTable()
 {
-    SymbolTable* table = createSymbolTable(3);
-    SymbolTableStack* newScope = (SymbolTableStack*) malloc(sizeof(SymbolTableStack));
-    newScope->table = table;
-    newScope->next = symbolTableStack;
-    symbolTableStack = newScope;
+	SymbolTable* table = createSymbolTable(3);
+	SymbolTableStack* newScope = (SymbolTableStack*) malloc(sizeof(SymbolTableStack));
+	newScope->table = table;
+	newScope->next = symbolTableStack;
+	symbolTableStack = newScope;
 }
 
 void popSymbolTable()
 {
-    if (symbolTableStack == NULL) {
-        return;
-    }
+	if (symbolTableStack == NULL) {
+		return;
+	}
 
-    SymbolTableStack* top = symbolTableStack;
-    symbolTableStack = top->next;
+	SymbolTableStack* top = symbolTableStack;
+	symbolTableStack = top->next;
 
-    SymbolTable* table = top->table;
-    for (size_t i = 0; i < table->capacity; ++i) {
-        SymbolTableEntry* entry = table->entries[i];
-        while (entry != NULL) {
-            SymbolTableEntry* next = entry->next;
-            free(entry->identifier);  // Free the identifier memory
-            free(entry);
-            entry = next;
-        }
-    }
-    free(table->entries);
-    free(table);
-    free(top);
+	SymbolTable* table = top->table;
+	for (size_t i = 0; i < table->capacity; ++i) {
+		SymbolTableEntry* entry = table->entries[i];
+		while (entry != NULL) {
+			SymbolTableEntry* next = entry->next;
+			free(entry->identifier);  // Free the identifier memory
+			free(entry);
+			entry = next;
+		}
+	}
+	free(table->entries);
+	free(table);
+	free(top);
 }
 
 unsigned int hash(const char* str, size_t capacity)
 {
-    unsigned int hash = 0;
-    while (*str) {
-        hash = (hash * 31) + (*str++);
-    }
-    return hash % capacity;
+	unsigned int hash = 0;
+	while (*str) {
+		hash = (hash * 31) + (*str++);
+	}
+	return hash % capacity;
 }
 
 void addToSymbolTable(SymbolTableStack* symbolTableStack, const char* identifier, int value)
 {
-    if (symbolTableStack == NULL) {
-        return;
-    }
+	if (symbolTableStack == NULL) {
+		return;
+	}
 
-    SymbolTable* table = symbolTableStack->table;
-    unsigned int index = hash(identifier, table->capacity);
+	SymbolTable* table = symbolTableStack->table;
+	unsigned int index = hash(identifier, table->capacity);
 
-    SymbolTableEntry* entry = (SymbolTableEntry*) malloc(sizeof(SymbolTableEntry));
-    entry->identifier = strdup(identifier);
-    entry->data.value = value;
-    entry->next = table->entries[index];
-    table->entries[index] = entry;
-    table->size++;
+	SymbolTableEntry* entry = (SymbolTableEntry*) malloc(sizeof(SymbolTableEntry));
+	entry->identifier = strdup(identifier);
+	entry->data.value = value;
+	entry->next = table->entries[index];
+	table->entries[index] = entry;
+	table->size++;
 }
 
 VariableData* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier)
 {
-    while (currentScope != NULL) {
-        SymbolTable* table = currentScope->table;
-        unsigned int index = hash(identifier, table->capacity);
-        SymbolTableEntry* entry = table->entries[index];
+	while (currentScope != NULL) {
+		SymbolTable* table = currentScope->table;
+		unsigned int index = hash(identifier, table->capacity);
+		SymbolTableEntry* entry = table->entries[index];
 
-        while (entry != NULL) {
-            if (strcmp(entry->identifier, identifier) == 0) {
-                return &entry->data;
-            }
-            entry = entry->next;
-        }
+		while (entry != NULL) {
+			if (strcmp(entry->identifier, identifier) == 0) {
+				return &entry->data;
+			}
+			entry = entry->next;
+		}
 
-        currentScope = currentScope->next;
-    }
+		currentScope = currentScope->next;
+	}
 
-    return NULL;
+	return NULL;
 }
 
 typedef struct {
@@ -146,14 +146,14 @@ typedef enum {
 	TOKEN_TYPE_PLUS, // +
 	TOKEN_TYPE_MINUS, // -
 
-    TOKEN_TYPE_EQUAL, // =
-    TOKEN_TYPE_EQUAL_EQUAL, // ==
-    TOKEN_TYPE_NOT_EQUAL, // !=
-    TOKEN_TYPE_NOT, // !
-    TOKEN_TYPE_LESS_THAN, // <
-    TOKEN_TYPE_GREATER_THAN, // >
-    TOKEN_TYPE_LESS_THAN_EQUAL, // <=
-    TOKEN_TYPE_GREATER_THAN_EQUAL, // >=
+	TOKEN_TYPE_EQUAL, // =
+	TOKEN_TYPE_EQUAL_EQUAL, // ==
+	TOKEN_TYPE_NOT_EQUAL, // !=
+	TOKEN_TYPE_NOT, // !
+	TOKEN_TYPE_LESS_THAN, // <
+	TOKEN_TYPE_GREATER_THAN, // >
+	TOKEN_TYPE_LESS_THAN_EQUAL, // <=
+	TOKEN_TYPE_GREATER_THAN_EQUAL, // >=
 
 	// others
 	TOKEN_TYPE_EOF,
@@ -661,7 +661,7 @@ size_t wchar_length(wchar_t wide_char)
 void lexer_lex(lexer_t* lexer)
 {
 	while (lexer->data[lexer->index] != 0) {
-        char current_char = lexer->data[lexer->index];
+		char current_char = lexer->data[lexer->index];
 
 		if (current_char == '\a' || current_char == '\r' || current_char == ' ' || current_char == '\t') {
 			lexer->column++;
@@ -698,46 +698,46 @@ void lexer_lex(lexer_t* lexer)
 			token_t* t = token_create(TOKEN_TYPE_MINUS, "-", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		} else if (current_char == '=') {
-            if (lexer->index + 1 < lexer->length && lexer->data[lexer->index + 1] == '=') {
-                token_t* t = token_create(TOKEN_TYPE_EQUAL_EQUAL, "==", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
-                array_push(lexer->tokens, t);
-                lexer->index++;
-                lexer->column++;
-            } else {
-                token_t* t = token_create(TOKEN_TYPE_EQUAL, "=", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
-                array_push(lexer->tokens, t);
-            }
-        } else if (current_char == '!') {
-            if (lexer->index + 1 < lexer->length && lexer->data[lexer->index + 1] == '=') {
-                token_t* t = token_create(TOKEN_TYPE_NOT_EQUAL, "!=", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
-                array_push(lexer->tokens, t);
-                lexer->index++;
-                lexer->column++;
-            } else {
-                token_t* t = token_create(TOKEN_TYPE_NOT, "!", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
-                array_push(lexer->tokens, t);
-            }
-        } else if (current_char == '>') {
-            if (lexer->index + 1 < lexer->length && lexer->data[lexer->index + 1] == '=') {
-                token_t* t = token_create(TOKEN_TYPE_GREATER_THAN_EQUAL, ">=", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
-                array_push(lexer->tokens, t);
-                lexer->index++;
-                lexer->column++;
-            } else {
-                token_t* t = token_create(TOKEN_TYPE_GREATER_THAN, ">", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
-                array_push(lexer->tokens, t);
-            }
-        } else if (current_char == '<') {
-            if (lexer->index + 1 < lexer->length && lexer->data[lexer->index + 1] == '=') {
-                token_t* t = token_create(TOKEN_TYPE_LESS_THAN_EQUAL, "<=", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
-                array_push(lexer->tokens, t);
-                lexer->index++;
-                lexer->column++;
-            } else {
-                token_t* t = token_create(TOKEN_TYPE_LESS_THAN, "<", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
-                array_push(lexer->tokens, t);
-            }
-        } else if (current_wchar == '\"') {
+			if (lexer->index + 1 < lexer->length && lexer->data[lexer->index + 1] == '=') {
+				token_t* t = token_create(TOKEN_TYPE_EQUAL_EQUAL, "==", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
+				array_push(lexer->tokens, t);
+				lexer->index++;
+				lexer->column++;
+			} else {
+				token_t* t = token_create(TOKEN_TYPE_EQUAL, "=", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+				array_push(lexer->tokens, t);
+			}
+		} else if (current_char == '!') {
+			if (lexer->index + 1 < lexer->length && lexer->data[lexer->index + 1] == '=') {
+				token_t* t = token_create(TOKEN_TYPE_NOT_EQUAL, "!=", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
+				array_push(lexer->tokens, t);
+				lexer->index++;
+				lexer->column++;
+			} else {
+				token_t* t = token_create(TOKEN_TYPE_NOT, "!", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+				array_push(lexer->tokens, t);
+			}
+		} else if (current_char == '>') {
+			if (lexer->index + 1 < lexer->length && lexer->data[lexer->index + 1] == '=') {
+				token_t* t = token_create(TOKEN_TYPE_GREATER_THAN_EQUAL, ">=", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
+				array_push(lexer->tokens, t);
+				lexer->index++;
+				lexer->column++;
+			} else {
+				token_t* t = token_create(TOKEN_TYPE_GREATER_THAN, ">", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+				array_push(lexer->tokens, t);
+			}
+		} else if (current_char == '<') {
+			if (lexer->index + 1 < lexer->length && lexer->data[lexer->index + 1] == '=') {
+				token_t* t = token_create(TOKEN_TYPE_LESS_THAN_EQUAL, "<=", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
+				array_push(lexer->tokens, t);
+				lexer->index++;
+				lexer->column++;
+			} else {
+				token_t* t = token_create(TOKEN_TYPE_LESS_THAN, "<", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+				array_push(lexer->tokens, t);
+			}
+		} else if (current_wchar == '\"') {
 			current_wchar = read_token(lexer);
 			read_string(lexer, current_wchar);
 		} else if (is_number(current_wchar)) {
@@ -1431,7 +1431,7 @@ void interpreter_block(ast_node_t* node, interpreter_state_t* state)
 	// printf("Block\n");
 
 	// Scope entry
-    pushSymbolTable(symbolTableStack);
+	pushSymbolTable(symbolTableStack);
 
 	for (size_t i = 0; i < node->data.block->num_statements; i++) {
 		bool res = interpreter_interpret(node->data.block->statements[i], state);
@@ -1556,9 +1556,9 @@ int interpreter_expression(ast_expression_t* expr, interpreter_state_t* state)
 
 void interpreter_free()
 {
-    while (symbolTableStack != NULL) {
-        popSymbolTable();
-    }
+	while (symbolTableStack != NULL) {
+		popSymbolTable();
+	}
 	free(symbolTableStack);
 }
 

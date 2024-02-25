@@ -725,6 +725,7 @@ ast_node_t* parser_function(parser_t* parser) {
 
 	token_t* name = parser_token_eat(parser, TOKEN_TYPE_IDENTIFIER);
 	token_print(name);
+	printf("FUNCTION NAME: %s\n", name->value);
 
 	// if (parser->lexer->tokens->length > parser->token_index && ((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_PARENTHESE_OPEN) {
 	//     printf("Parsing parameters\n");
@@ -739,6 +740,9 @@ ast_node_t* parser_function(parser_t* parser) {
 	// }
 
 	node->data.function_declaration->name = strdup(name->value);
+	// node->data.function_declaration->name = "name";
+	// malloc(sizeof(char) * 10);
+	// strcpy(node->data.function_declaration->name, "name");
 	node->data.function_declaration->body = parser_block(parser);
 
 	return node;
@@ -765,7 +769,9 @@ ast_node_t* parser_statement_return(parser_t* parser) {
 	node->type = AST_STATEMENT_RETURN;
 
 	parser->token_index++;
+	printf("before reading expr in return\n");
 	node->data.statement_return->expression = parser_expression(parser);
+	printf("after reading expr in return\n");
 
 	return node;
 }
@@ -821,7 +827,9 @@ ast_node_t* parser_expression(parser_t* parser)
 {
 	printf("Parsing expression\n");
 
-	ast_node_t* node = malloc(sizeof(ast_node_t));
+	printf("1: \n");
+	ast_node_t* node = malloc(sizeof(ast_node_t) * 2);
+	printf("2: \n");
 	node->type = AST_EXPRESSION;
 	node->data.expression = parser_expression_pratt(parser, PRECEDENCE_LOWEST);
 
@@ -873,6 +881,7 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 {
 	printf("Parsing number\n");
 
+	printf("size of ast_expression_t: %ld\n", sizeof(ast_expression_t));
 	ast_expression_t* literal_expr = malloc(sizeof(ast_expression_t));
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
@@ -880,10 +889,10 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 
 	literal_expr->data.literal = malloc(sizeof(ast_literal_t));
 	printf("next of middle number\n");
-	literal_expr->data.literal->literal_type = token->type;
+	literal_expr->data.literal->value = (token->value); // TODO strdup
+	// printf("-->%s\n", token->value);
 	printf("next of middle number\n");
-	printf("-->%s\n", token->value);
-	literal_expr->data.literal->value = token->value; // strdup
+	literal_expr->data.literal->literal_type = token->type;
 
 	printf("end of number\n");
 
@@ -899,7 +908,7 @@ ast_expression_t* nud_string(parser_t* parser, token_t* token)
 
 	literal_expr->data.literal = malloc(sizeof(ast_literal_t));
 	literal_expr->data.literal->literal_type = token->type;
-	literal_expr->data.literal->value = token->value; // strdup
+	literal_expr->data.literal->value = strdup(token->value);
 
 	return literal_expr;
 }
@@ -912,7 +921,7 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 	identifier_expr->type = AST_EXPRESSION_IDENTIFIER;
 
 	identifier_expr->data.identifier = malloc(sizeof(ast_identifier_t));
-	identifier_expr->data.identifier->name = token->value; // strdup
+	identifier_expr->data.identifier->name = strdup(token->value);
 
 	return identifier_expr;
 }
@@ -932,21 +941,25 @@ ast_node_t* parser_block(parser_t* parser)
 {
 	printf("Parsing block\n");
 
-	ast_block_t* block_data = malloc(sizeof(ast_block_t));
-	block_data->num_statements = 0;
-	block_data->statements = NULL;
+	ast_node_t* block_node = malloc(sizeof(ast_node_t));
+	block_node->type = AST_BLOCK;
+	block_node->data.block = malloc(sizeof(ast_block_t));
+	block_node->data.block->num_statements = 0;
+	block_node->data.block->statements = malloc(sizeof(ast_node_t*) * 10 + 1);
 
 	parser_token_eat(parser, TOKEN_TYPE_SECTION_OPEN);
 
-	while (parser->lexer->tokens->length > parser->token_index && ((token_t*) parser->lexer->tokens->data[parser->token_index])->type != TOKEN_TYPE_SECTION_CLOSE) {
+	while (
+		parser->lexer->tokens->length > parser->token_index &&
+		((token_t*) parser->lexer->tokens->data[parser->token_index])->type != TOKEN_TYPE_SECTION_CLOSE
+	) {
 		ast_node_t* statement = parser_statement(parser);
-		block_data->statements = realloc(block_data->statements, (block_data->num_statements + 1) * sizeof(ast_node_t*));
-		block_data->statements[block_data->num_statements++] = statement;
+		// block_node->data.block->statements = realloc(block_node->data.block->statements, (block_node->data.block->num_statements + 1) * sizeof(ast_node_t*));
+		block_node->data.block->statements[
+			block_node->data.block->num_statements++
+		] = statement;
 	}
-
-	ast_node_t* block_node = malloc(sizeof(ast_node_t));
-	block_node->type = AST_BLOCK;
-	block_node->data.block = block_data;
+	block_node->data.block->statements[block_node->data.block->num_statements] = NULL;
 
 	parser_token_eat(parser, TOKEN_TYPE_SECTION_CLOSE);
 
@@ -964,19 +977,24 @@ void parser_parse(parser_t* parser)
 				parser->ast_tree = function_node;
 				break;
 
-			case TOKEN_TYPE_SECTION_OPEN:
-				ast_node_t* block_node = parser_block(parser);
-				parser->ast_tree = block_node;
-				break;
+			// case TOKEN_TYPE_SECTION_OPEN:
+			// 	ast_node_t* block_node = parser_block(parser);
+			// 	parser->ast_tree = block_node;
+			// 	break;
 
-			case TOKEN_TYPE_RETURN:
-				ast_node_t* return_node = parser_statement_return(parser);
-				parser->ast_tree = return_node;
-				break;
+			// case TOKEN_TYPE_RETURN:
+			// 	ast_node_t* return_node = parser_statement_return(parser);
+			// 	parser->ast_tree = return_node;
+			// 	break;
+
+			// default:
+			// 	ast_node_t* statement_node = parser_statement(parser);
+			// 	parser->ast_tree = statement_node;
+			// 	break;
 
 			default:
-				ast_node_t* statement_node = parser_statement(parser);
-				parser->ast_tree = statement_node;
+				printf("Error: bad token as statement\n");
+				exit(EXIT_FAILURE);
 				break;
 		}
 
@@ -1072,7 +1090,8 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 		case AST_FUNCTION_DECLARATION:
 			printf("<FunctionDeclaration>\n");
 			print_indentation(indent_level + 1);
-			printf("<Name>%s</Name>\n", node->data.function_declaration->name);
+
+				printf("<Name>%s</Name>\n", node->data.function_declaration->name);
 	
 				print_xml_ast_node(node->data.function_declaration->body, indent_level + 1);
 

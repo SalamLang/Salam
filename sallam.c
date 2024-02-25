@@ -137,6 +137,11 @@ typedef struct ast_node {
 } ast_node_t;
 
 typedef struct {
+	char* name;
+	ast_expression_t* expression;
+} ast_variable_declaration_t;
+
+typedef struct {
 	lexer_t* lexer;
 	size_t token_index;
 	ast_node_t* ast_tree;
@@ -1068,6 +1073,7 @@ void interpret(ast_node_t* node, interpreter_state_t* state)
 void interpret_function_declaration(ast_function_declaration_t* stmt, interpreter_state_t* state)
 {
 	printf("Function Declaration: %s\n", stmt->name);
+
 	interpret_block(stmt->body, state);
 }
 
@@ -1082,6 +1088,7 @@ void interpret_return_statement(ast_return_statement_t* stmt, interpreter_state_
 void interpret_block(ast_node_t* node, interpreter_state_t* state)
 {
 	printf("Block\n");
+
 	for (size_t i = 0; i < node->data.block->num_statements; i++) {
 		interpret(node->data.block->statements[i], state);
 	}
@@ -1090,6 +1097,7 @@ void interpret_block(ast_node_t* node, interpreter_state_t* state)
 int evaluate_literal(ast_literal_t* expr)
 {
 	printf("Literal: %s\n", expr->value);
+
 	if (expr->literal_type == TOKEN_TYPE_NUMBER)
 		return atoi(expr->value);
 	return 0;
@@ -1098,18 +1106,16 @@ int evaluate_literal(ast_literal_t* expr)
 int evaluate_identifier(ast_identifier_t* expr, interpreter_state_t* state)
 {
 	printf("Variable: %s\n", expr->name);
+
 	return 0;
 }
 
 int evaluate_binary_operation(ast_binary_op_t* binary_op, interpreter_state_t* state) {
 	const char* operator_str = binary_op->operator;
-	printf("OP: %s\n", operator_str);
 
 	int left = evaluate_expression(binary_op->left, state);
 	int right = evaluate_expression(binary_op->right, state);
 
-	printf("LEFT: %d\n", left);
-	printf("RIGHT: %d\n", right);
 	if (strcmp(operator_str, "+") == 0) {
 		return left + right;
 	} else if (strcmp(operator_str, "-") == 0) {
@@ -1133,26 +1139,25 @@ int evaluate_expression(ast_expression_t* expr, interpreter_state_t* state) {
 		return 110;
 	}
 
-	printf("expr type: %d\n", expr->type);
-	printf("expr type name: %s\n", token_op_type2str(expr->type));
-
 	int res;
 	switch (expr->type) {
 		case AST_EXPRESSION_LITERAL:
 			res = evaluate_literal(expr->data.literal);
-			printf("literal result: %d\n", res);
+			// printf("literal result: %d\n", res);
 			return res;
 		case AST_EXPRESSION_IDENTIFIER:
 			res = evaluate_identifier(expr->data.identifier, state);
-			printf("identifier result: %d\n", res);
+			// printf("identifier result: %d\n", res);
+			return res;
 		case AST_EXPRESSION_BINARY_OP:
 			res = evaluate_binary_operation(expr->data.binary_op, state);
-			printf("binary op result: %d\n", res);
+			// printf("binary op result: %d\n", res);
+			return res;
 		// case AST_EXPRESION_FUNCTION_CALL:
 		//     return evaluate_function_call(expr, state);
 		default:
 			printf("default expr type: %d\n", expr->type);
-			return 0;
+			return -100;
 	}
 }
 

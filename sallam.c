@@ -6,13 +6,25 @@
 #include <string.h>
 #include <limits.h>
 
+typedef enum {
+	VALUE_TYPE_INT,
+	VALUE_TYPE_FLOAT,
+	VALUE_TYPE_BOOL,
+	VALUE_TYPE_STRING,
+} VariableDataType;
+
 typedef struct {
-	int value;
+	VariableDataType type;
+	union {
+		int int_value;
+		float float_value;
+		char* string_value;
+	};	
 } VariableData;
 
 typedef struct SymbolTableEntry {
 	char* identifier;
-	VariableData data;
+	VariableData* data;
 	struct SymbolTableEntry* next;
 } SymbolTableEntry;
 
@@ -28,6 +40,8 @@ typedef struct SymbolTableStack {
 } SymbolTableStack;
 
 SymbolTableStack* symbolTableStack = NULL;
+
+void free_variable_data(VariableData* val);
 
 SymbolTable* createSymbolTable(size_t capacity)
 {
@@ -80,7 +94,7 @@ unsigned int hash(const char* str, size_t capacity)
 	return hash % capacity;
 }
 
-void addToSymbolTable(SymbolTableStack* symbolTableStack, const char* identifier, int value)
+void addToSymbolTable(SymbolTableStack* symbolTableStack, const char* identifier, VariableData* value)
 {
 	if (symbolTableStack == NULL) {
 		return;
@@ -91,7 +105,7 @@ void addToSymbolTable(SymbolTableStack* symbolTableStack, const char* identifier
 
 	SymbolTableEntry* entry = (SymbolTableEntry*) malloc(sizeof(SymbolTableEntry));
 	entry->identifier = strdup(identifier);
-	entry->data.value = value;
+	entry->data = value;
 	entry->next = table->entries[index];
 	table->entries[index] = entry;
 	table->size++;
@@ -105,7 +119,7 @@ VariableData* findInSymbolTableCurrent(SymbolTableStack* currentScope, const cha
 
 	while (entry != NULL) {
 		if (strcmp(entry->identifier, identifier) == 0) {
-			return &entry->data;
+			return entry->data;
 		}
 		entry = entry->next;
 	}
@@ -332,10 +346,10 @@ ast_node_t* parser_statement_return(parser_t* parser);
 ast_node_t* parser_statement_print(parser_t* parser);
 ast_node_t* parser_expression(parser_t* parser);
 
-int interpreter_expression(ast_expression_t* expr, interpreter_state_t* state);
-int interpreter_operator_binary(ast_expression_binary_t* expr, interpreter_state_t* state);
-int interpreter_literal(ast_literal_t* expr);
-int interpreter_identifier(ast_identifier_t* expr, interpreter_state_t* state);
+VariableData* interpreter_expression(ast_expression_t* expr, interpreter_state_t* state);
+VariableData* interpreter_operator_binary(ast_expression_binary_t* expr, interpreter_state_t* state);
+VariableData* interpreter_literal(ast_literal_t* expr);
+VariableData* interpreter_identifier(ast_identifier_t* expr, interpreter_state_t* state);
 
 void interpreter_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state);
 void interpreter_statement_return(ast_statement_return_t* stmt, interpreter_state_t* state);
@@ -1408,7 +1422,8 @@ bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
 			break;
 
 		case AST_EXPRESSION:
-			interpreter_expression(node->data.expression, state);
+			VariableData* val = interpreter_expression(node->data.expression, state);
+			free_variable_data(val);
 			break;
 
 		default:
@@ -1425,20 +1440,42 @@ void interpreter_function_declaration(ast_function_declaration_t* stmt, interpre
 	interpreter_block(stmt->body, state);
 }
 
+void interpreter_expression_data(VariableData* data)
+{
+	if (data == NULL) {
+		printf("NULL\n");
+		return;
+	} else if (data->type == VALUE_TYPE_INT) {
+		printf("%d\n", data->int_value);
+	} else if (data->type == VALUE_TYPE_FLOAT) {
+		printf("%f\n", data->float_value);
+	} else if (data->type == VALUE_TYPE_BOOL) {
+		printf("%s\n", data->int_value == 1 ? "true" : "false");
+	} else if (data->type == VALUE_TYPE_STRING) {
+		printf("%s\n", data->string_value);
+	} else {
+		printf("Unknown\n");
+	}
+}
+
 void interpreter_statement_return(ast_statement_return_t* stmt, interpreter_state_t* state)
 {
 	// printf("Return Statement\n");
 
-	int res = interpreter_expression(stmt->expression->data.expression, state);
-	printf("Return Result: %d\n", res);
+	VariableData* res = interpreter_expression(stmt->expression->data.expression, state);
+	printf("Return Result: ");
+	interpreter_expression_data(res);
+	free_variable_data(res);
 }
 
 void interpreter_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state)
 {
 	// printf("Print Statement\n");
 
-	int res = interpreter_expression(stmt->expression->data.expression, state);
-	printf("Print Result: %d\n", res);
+	VariableData* res = interpreter_expression(stmt->expression->data.expression, state);
+	printf("Print Result: ");
+	interpreter_expression_data(res);
+	free_variable_data(res);
 }
 
 void interpreter_block(ast_node_t* node, interpreter_state_t* state)
@@ -1460,47 +1497,92 @@ void interpreter_block(ast_node_t* node, interpreter_state_t* state)
 	popSymbolTable(symbolTableStack);
 }
 
-int interpreter_literal(ast_literal_t* expr)
+VariableData* interpreter_literal(ast_literal_t* expr)
 {
-	// printf("Literal: %s\n", expr->value);
+	if (expr == NULL) {
+		return NULL;
+	}
 
-	if (expr->literal_type == TOKEN_TYPE_NUMBER)
-		return atoi(expr->value);
-	return 0;
+	printf("1\n");
+    VariableData* val = (VariableData*) malloc(sizeof(VariableData));
+	printf("2\n");
+
+    if (expr->literal_type == TOKEN_TYPE_NUMBER) {
+        val->type = VALUE_TYPE_INT;
+        val->int_value = atoi(expr->value);
+    } else if (expr->literal_type == TOKEN_TYPE_STRING) {
+        val->type = VALUE_TYPE_STRING;
+        val->string_value = strdup(expr->value);
+    } else {
+        // TODO: Handle other literal types if needed
+    }
+
+	printf("3\n");
+
+    return val;
 }
 
-int interpreter_identifier(ast_identifier_t* expr, interpreter_state_t* state)
+void free_variable_data(VariableData* val)
+{
+    if (val->type == VALUE_TYPE_STRING) {
+        free(val->string_value);
+    }
+    free(val);
+}
+
+VariableData* interpreter_identifier(ast_identifier_t* expr, interpreter_state_t* state)
 {
 	// printf("Variable: %s\n", expr->name);
 
 	VariableData* variable = findInSymbolTable(symbolTableStack, expr->name);
 	if (variable != NULL) {
-		printf("Variable found: %s = %d\n", expr->name, variable->value);
-		return variable->value;
+		// printf("Variable found: %s = %d\n", expr->name, variable->value);
+		return variable;
 	} else {
-		printf("Variable not found: %s\n", expr->name);
-		addToSymbolTable(symbolTableStack, expr->name, 0);
-		return 0;
+		printf("Error: Variable not found: %s\n", expr->name);
+		exit(EXIT_FAILURE);
 	}
+	
+	return NULL;
 }
 
-int interpreter_operator_binary(ast_expression_binary_t* binary_op, interpreter_state_t* state) {
+VariableData* interpreter_operator_binary(ast_expression_binary_t* binary_op, interpreter_state_t* state) {
 	const char* operator_str = binary_op->operator;
 
-	int left = interpreter_expression(binary_op->left, state);
-	int right = interpreter_expression(binary_op->right, state);
+	VariableData* val = (VariableData*) malloc(sizeof(VariableData));
+	VariableData* left = interpreter_expression(binary_op->left, state);
+	VariableData* right = interpreter_expression(binary_op->right, state);
+
+	if (left->type != VALUE_TYPE_INT || right->type != VALUE_TYPE_INT) {
+		printf("Error: cannot calculate binary operator for non-int values!\n");
+		exit(EXIT_FAILURE);
+	}
 
 	if (strcmp(operator_str, "+") == 0) {
-		return left + right;
+		val->type = VALUE_TYPE_INT;
+		val->int_value = left->int_value + right->int_value;
+		return val;
 	} else if (strcmp(operator_str, "-") == 0) {
-		return left - right;
+		val->type = VALUE_TYPE_INT;
+		val->int_value = left->int_value - right->int_value;
+		return val;
 	} else if (strcmp(operator_str, "*") == 0) {
-		return left * right;
+		val->type = VALUE_TYPE_INT;
+		val->int_value = left->int_value * right->int_value;
+		return val;
 	} else if (strcmp(operator_str, "/") == 0) {
-		return right != 0 ? left / right : 0;
-	} else {
-		return 88;
+		if (right->int_value == 0) {
+			printf("Error: cannot divide by zero!\n");
+			exit(EXIT_FAILURE);
+			return NULL;
+		}
+
+		val->type = VALUE_TYPE_INT;
+		val->int_value = left->int_value / right->int_value;
+		return val;
 	}
+	
+	return NULL;
 }
 
 // int interpreter_function_call(ast_node_t* node, interpreter_state_t* state)
@@ -1509,64 +1591,61 @@ int interpreter_operator_binary(ast_expression_binary_t* binary_op, interpreter_
 //     return 0;
 // }
 
-int interpreter_expression_assignment(ast_expression_assignment_t* expr, interpreter_state_t* state)
+VariableData* interpreter_expression_assignment(ast_expression_assignment_t* expr, interpreter_state_t* state)
 {
 	// printf("Assignment\n");
 
 	if (expr->left->type == AST_EXPRESSION_IDENTIFIER) {
-		// printf("Assignment to variable: %s\n", expr->left->data.identifier->name);
-		int res = interpreter_expression(expr->right, state);
-		// printf("Assignment Result: %d\n", res);
+		VariableData* res = interpreter_expression(expr->right, state);
 
 		char* identifier = expr->left->data.identifier->name;
 		VariableData* variable = findInSymbolTableCurrent(symbolTableStack, identifier);
 		if (variable != NULL) {
 			// printf("Variable found: %s = %d\n", identifier, variable->value);
-			variable->value = interpreter_expression(expr->right, state);
+			variable = res;
 		} else {
 			// printf("Variable not found: %s\n", identifier);
-			addToSymbolTable(symbolTableStack, identifier, interpreter_expression(expr->right, state));
+			addToSymbolTable(symbolTableStack, identifier, res);
 		}
+
+		return res;
 	} else {
 		printf("Error: Assignment to non-variable\n");
 		exit(EXIT_FAILURE);
 	}
 
-	return 0;
+	return NULL;
 }
 
-int interpreter_expression(ast_expression_t* expr, interpreter_state_t* state)
+VariableData* interpreter_expression(ast_expression_t* expr, interpreter_state_t* state)
 {
-	int res = 66;
 	if (expr == NULL) {
-		return res;
+		return NULL;
 	}
 
 	switch (expr->type) {
 		case AST_EXPRESSION_LITERAL:
-			res = interpreter_literal(expr->data.literal);
-			return res;
+			return interpreter_literal(expr->data.literal);
 
 		case AST_EXPRESSION_IDENTIFIER:
-			res = interpreter_identifier(expr->data.identifier, state);
-			return res;
+			return interpreter_identifier(expr->data.identifier, state);
 
 		case AST_EXPRESSION_BINARY:
-			res = interpreter_operator_binary(expr->data.binary_op, state);
-			return res;
+			return interpreter_operator_binary(expr->data.binary_op, state);
 
 		// case AST_EXPRESION_FUNCTION_CALL:
 		//     return interpreter_function_call(expr, state);
 
 		case AST_EXPRESSION_ASSIGNMENT:
-			res = interpreter_expression_assignment(expr->data.assignment, state);
-			return res;
+			return interpreter_expression_assignment(expr->data.assignment, state);
 
 		default:
 			printf("Error: default expr type: %d\n", expr->type);
 			exit(EXIT_FAILURE);
-			return res;
+			// return NULL;
 	}
+	
+	return NULL;
 }
 
 void interpreter_free()

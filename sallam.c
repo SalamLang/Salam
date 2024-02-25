@@ -179,21 +179,6 @@ enum {
 	PRECEDENCE_DIFFERENCE, // -
 };
 
-typedef struct {
-	int precedence;
-	nud_func_t nud;
-	led_func_t led;
-} token_info_t;
-
-token_info_t token_infos[] = {
-	[TOKEN_TYPE_NUMBER] = {PRECEDENCE_LOWEST, nud_number, NULL},
-	[TOKEN_TYPE_STRING] = {PRECEDENCE_LOWEST, nud_string, NULL},
-	[TOKEN_TYPE_IDENTIFIER] = {PRECEDENCE_LOWEST, nud_identifier, NULL},
-	[TOKEN_TYPE_PARENTHESE_OPEN] = {PRECEDENCE_LOWEST, nud_parentheses, NULL},
-	[TOKEN_TYPE_PLUS] = {PRECEDENCE_SUM, NULL, led_plus_minus},
-	[TOKEN_TYPE_MINUS] = {PRECEDENCE_DIFFERENCE, NULL, led_plus_minus},
-};
-
 wchar_t read_token(lexer_t* lexer);
 void read_number(lexer_t* lexer, wchar_t ch);
 size_t mb_strlen(char* identifier);
@@ -228,6 +213,12 @@ void interpret_block(ast_node_t* node, interpreter_state_t* state);
 typedef ast_expression_t* (*nud_func_t)(parser_t* parser, token_t* token);
 typedef ast_expression_t* (*led_func_t)(parser_t* parser, token_t* token, ast_expression_t* left);
 
+typedef struct {
+	int precedence;
+	nud_func_t nud;
+	led_func_t led;
+} token_info_t;
+
 ast_expression_t* nud_number(parser_t* parser, token_t* token);
 ast_expression_t* nud_string(parser_t* parser, token_t* token);
 ast_expression_t* nud_identifier(parser_t* parser, token_t* token);
@@ -235,6 +226,15 @@ ast_expression_t* nud_parentheses(parser_t* parser, token_t* token);
 ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expression_t* left);
 
 ast_expression_t* pratt_parse(parser_t* parser, int precedence);
+
+token_info_t token_infos[] = {
+	[TOKEN_TYPE_NUMBER] = {PRECEDENCE_LOWEST, nud_number, NULL},
+	[TOKEN_TYPE_STRING] = {PRECEDENCE_LOWEST, nud_string, NULL},
+	[TOKEN_TYPE_IDENTIFIER] = {PRECEDENCE_LOWEST, nud_identifier, NULL},
+	[TOKEN_TYPE_PARENTHESE_OPEN] = {PRECEDENCE_LOWEST, nud_parentheses, NULL},
+	[TOKEN_TYPE_PLUS] = {PRECEDENCE_SUM, NULL, led_plus_minus},
+	[TOKEN_TYPE_MINUS] = {PRECEDENCE_DIFFERENCE, NULL, led_plus_minus},
+};
 
 char* token_op_type2str(ast_expression_type_t type)
 {

@@ -127,13 +127,13 @@ typedef enum {
 } ast_node_type_t;
 
 typedef struct ast_node {
-	ast_node_type_t type;
-	union {
-		ast_function_declaration_t function_declaration;
-		ast_return_statement_t return_statement;
-		ast_block_t block;
-		ast_expression_t expression;
-	} data;
+    ast_node_type_t type;
+    union {
+        ast_function_declaration_t* function_declaration;
+        ast_return_statement_t* return_statement;
+        ast_block_t* block;
+        ast_expression_t* expression;
+    } data;
 } ast_node_t;
 
 typedef struct {
@@ -543,30 +543,30 @@ void ast_node_free(ast_node_t* node)
 
 	switch (node->type) {
 		case AST_FUNCTION_DECLARATION:
-			free(node->data.function_declaration.name);
-			ast_node_free((ast_node_t*) node->data.function_declaration.body);
+			free(node->data.function_declaration->name);
+			ast_node_free((ast_node_t*) node->data.function_declaration->body);
 			break;
 		case AST_RETURN_STATEMENT:
-			ast_node_free((ast_node_t*) node->data.return_statement.expression);
+			ast_node_free((ast_node_t*) node->data.return_statement->expression);
 			break;
 		case AST_BLOCK:
-			for (size_t i = 0; i < node->data.block.num_statements; i++) {
-				ast_node_free((ast_node_t*) node->data.block.statements[i]);
+			for (size_t i = 0; i < node->data.block->num_statements; i++) {
+				ast_node_free((ast_node_t*) node->data.block->statements[i]);
 			}
-			free(node->data.block.statements);
+			free(node->data.block->statements);
 			break;
 		case AST_EXPRESSION:
-			switch (node->data.expression.type) {
+			switch (node->data.expression->type) {
 				case AST_EXPRESSION_LITERAL:
-					free(node->data.expression.data.literal.value);
+					free(node->data.expression->data.literal.value);
 					break;
 				case AST_EXPRESSION_IDENTIFIER:
-					free(node->data.expression.data.identifier.name);
+					free(node->data.expression->data.identifier.name);
 					break;
 				case AST_EXPRESSION_BINARY_OP:
-					free(node->data.expression.data.binary_op.operator);
-					ast_node_free((ast_node_t*) node->data.expression.data.binary_op.left);
-					ast_node_free((ast_node_t*) node->data.expression.data.binary_op.right);
+					free(node->data.expression->data.binary_op.operator);
+					ast_node_free((ast_node_t*) node->data.expression->data.binary_op.left);
+					ast_node_free((ast_node_t*) node->data.expression->data.binary_op.right);
 					break;
 			}
 			break;
@@ -647,8 +647,8 @@ ast_node_t* parser_function(parser_t* parser) {
 	//     }
 	// }
 
-	node->data.function_declaration.name = strdup(name->value);
-	node->data.function_declaration.body = parser_block(parser);
+	node->data.function_declaration->name = strdup(name->value);
+	node->data.function_declaration->body = parser_block(parser);
 
 	return node;
 }
@@ -660,7 +660,7 @@ ast_node_t* parser_return(parser_t* parser) {
 	node->type = AST_RETURN_STATEMENT;
 
 	parser->token_index++;
-	node->data.return_statement.expression = parser_expression(parser);
+	node->data.return_statement->expression = parser_expression(parser);
 
 	return node;
 }
@@ -779,7 +779,7 @@ ast_node_t* led_plus_minus(parser_t* parser, token_t* token, ast_node_t* left) {
 
 	ast_node_t* binary_op_node = malloc(sizeof(ast_node_t));
 	binary_op_node->type = AST_EXPRESSION;
-	binary_op_node->data.expression = *binary_op_expr;
+	binary_op_node->data.expression = binary_op_expr;
 
 	return binary_op_node;
 }
@@ -793,7 +793,7 @@ ast_node_t* nud_number(parser_t* parser, token_t* token) {
 	literal_expr->data.literal.literal_type = token->type;
 	literal_expr->data.literal.value = strdup(token->value);
 
-	primary_node->data.expression = *literal_expr;
+	primary_node->data.expression = literal_expr;
 
 	return primary_node;
 }
@@ -807,7 +807,7 @@ ast_node_t* nud_string(parser_t* parser, token_t* token) {
 	literal_expr->data.literal.literal_type = token->type;
 	literal_expr->data.literal.value = strdup(token->value);
 
-	primary_node->data.expression = *literal_expr;
+	primary_node->data.expression = literal_expr;
 
 	return primary_node;
 }
@@ -820,7 +820,7 @@ ast_node_t* nud_identifier(parser_t* parser, token_t* token) {
 	identifier_expr->type = AST_EXPRESSION_IDENTIFIER;
 	identifier_expr->data.identifier.name = strdup(token->value);
 
-	primary_node->data.expression = *identifier_expr;
+	primary_node->data.expression = identifier_expr;
 
 	return primary_node;
 }
@@ -862,7 +862,7 @@ ast_node_t* parser_block(parser_t* parser)
 
 	ast_node_t* block_node = malloc(sizeof(ast_node_t));
 	block_node->type = AST_BLOCK;
-	block_node->data.block = *block_data;
+	block_node->data.block = block_data;
 
 	parser_token_eat(parser, TOKEN_TYPE_SECTION_CLOSE);
 
@@ -913,11 +913,11 @@ void print_xml_ast_node(ast_node_t* node, int indent_level) {
 		case AST_FUNCTION_DECLARATION:
 			printf("<FunctionDeclaration>\n");
 			print_indentation(indent_level + 1);
-			printf("<Name>%s</Name>\n", node->data.function_declaration.name);
+			printf("<Name>%s</Name>\n", node->data.function_declaration->name);
 			// print_indentation(indent_level + 1);
 			// printf("<Body>\n");
-			// print_xml_ast_node(node->data.function_declaration.body, indent_level + 2);
-			print_xml_ast_node(node->data.function_declaration.body, indent_level + 1);
+			// print_xml_ast_node(node->data.function_declaration->body, indent_level + 2);
+			print_xml_ast_node(node->data.function_declaration->body, indent_level + 1);
 			// print_indentation(indent_level + 1);
 			// printf("</Body>\n");
 			print_indentation(indent_level);
@@ -927,7 +927,7 @@ void print_xml_ast_node(ast_node_t* node, int indent_level) {
 			printf("<ReturnStatement>\n");
 			// print_indentation(indent_level + 1);
 			// printf("<Expression>\n");
-			print_xml_ast_node(node->data.return_statement.expression, indent_level + 1);
+			print_xml_ast_node(node->data.return_statement->expression, indent_level + 1);
 			// print_indentation(indent_level + 1);
 			// printf("</Expression>\n");
 			print_indentation(indent_level);
@@ -935,11 +935,11 @@ void print_xml_ast_node(ast_node_t* node, int indent_level) {
 			break;
 		case AST_BLOCK:
 			printf("<Block>\n");
-			for (size_t i = 0; i < node->data.block.num_statements; i++) {
+			for (size_t i = 0; i < node->data.block->num_statements; i++) {
 				// print_indentation(indent_level + 1);
 				// printf("<Statement>\n");
-				// print_xml_ast_node(node->data.block.statements[i], indent_level + 2);
-				print_xml_ast_node(node->data.block.statements[i], indent_level + 1);
+				// print_xml_ast_node(node->data.block->statements[i], indent_level + 2);
+				print_xml_ast_node(node->data.block->statements[i], indent_level + 1);
 				// print_indentation(indent_level + 1);
 				// printf("</Statement>\n");
 			}
@@ -948,14 +948,14 @@ void print_xml_ast_node(ast_node_t* node, int indent_level) {
 			break;
 		case AST_EXPRESSION:
 			printf("<Expression>\n");
-			switch (node->data.expression.type) {
+			switch (node->data.expression->type) {
 				case AST_EXPRESSION_LITERAL:
 					print_indentation(indent_level + 1);
 					printf("<Literal>\n");
 					print_indentation(indent_level + 2);
-					printf("<Type>%s</Type>\n", token_type2str(node->data.expression.data.literal.literal_type));
+					printf("<Type>%s</Type>\n", token_type2str(node->data.expression->data.literal.literal_type));
 					print_indentation(indent_level + 2);
-					printf("<Value>%s</Value>\n", node->data.expression.data.literal.value);
+					printf("<Value>%s</Value>\n", node->data.expression->data.literal.value);
 					print_indentation(indent_level + 1);
 					printf("</Literal>\n");
 					break;
@@ -963,7 +963,7 @@ void print_xml_ast_node(ast_node_t* node, int indent_level) {
 					print_indentation(indent_level + 1);
 					printf("<Identifier>\n");
 					print_indentation(indent_level + 2);
-					printf("<Name>%s</Name>\n", node->data.expression.data.identifier.name);
+					printf("<Name>%s</Name>\n", node->data.expression->data.identifier.name);
 					print_indentation(indent_level + 1);
 					printf("</Identifier>\n");
 					break;
@@ -971,15 +971,15 @@ void print_xml_ast_node(ast_node_t* node, int indent_level) {
 					print_indentation(indent_level + 1);
 					printf("<BinaryOperation>\n");
 					print_indentation(indent_level + 2);
-					printf("<Operator>%s</Operator>\n", node->data.expression.data.binary_op.operator);
+					printf("<Operator>%s</Operator>\n", node->data.expression->data.binary_op.operator);
 					print_indentation(indent_level + 2);
 					printf("<Left>\n");
-					print_xml_ast_node((ast_node_t*)node->data.expression.data.binary_op.left, indent_level + 3);
+					print_xml_ast_node((ast_node_t*)node->data.expression->data.binary_op.left, indent_level + 3);
 					print_indentation(indent_level + 2);
 					printf("</Left>\n");
 					print_indentation(indent_level + 2);
 					printf("<Right>\n");
-					print_xml_ast_node((ast_node_t*)node->data.expression.data.binary_op.right, indent_level + 3);
+					print_xml_ast_node((ast_node_t*)node->data.expression->data.binary_op.right, indent_level + 3);
 					print_indentation(indent_level + 2);
 					printf("</Right>\n");
 					print_indentation(indent_level + 1);
@@ -1035,8 +1035,8 @@ void interpret(ast_node_t* node, interpreter_state_t* state)
 
 void interpret_function_declaration(ast_node_t* node, interpreter_state_t* state)
 {
-    printf("Function Declaration: %s\n", node->data.function_declaration.name);
-    interpret_block(node->data.function_declaration.body, state);
+    printf("Function Declaration: %s\n", node->data.function_declaration->name);
+    interpret_block(node->data.function_declaration->body, state);
 }
 
 void interpret_return_statement(ast_node_t* node, interpreter_state_t* state)
@@ -1044,7 +1044,7 @@ void interpret_return_statement(ast_node_t* node, interpreter_state_t* state)
     printf("Return Statement\n");
 
 	ast_expression_t* expr = malloc(sizeof(ast_expression_t));
-	expr = node->data.return_statement.expression->data.expression;
+	expr = node->data.return_statement->expression->data.expression;
 
     int res = evaluate_expression(expr, state);
 	printf("Result: %d\n", res);
@@ -1053,8 +1053,8 @@ void interpret_return_statement(ast_node_t* node, interpreter_state_t* state)
 void interpret_block(ast_node_t* node, interpreter_state_t* state)
 {
     printf("Block\n");
-    for (size_t i = 0; i < node->data.block.num_statements; i++) {
-        interpret(node->data.block.statements[i], state);
+    for (size_t i = 0; i < node->data.block->num_statements; i++) {
+        interpret(node->data.block->statements[i], state);
     }
 }
 
@@ -1072,16 +1072,8 @@ int evaluate_identifier(ast_expression_t* expr, interpreter_state_t* state)
 }
 
 int evaluate_binary_operation(ast_expression_t* binary_op, interpreter_state_t* state) {
-	ast_node_t* left_ast = malloc(sizeof(ast_node_t));
-	left_ast->type = AST_EXPRESSION;
-	left_ast->data.expression = *binary_op->data.binary_op.left;
-
-	ast_node_t* right_ast = malloc(sizeof(ast_node_t));
-	right_ast->type = AST_EXPRESSION;
-	right_ast->data.expression = *binary_op->data.binary_op.right;
-
-    int left = evaluate_expression(left_ast, state);
-    int right = evaluate_expression(right_ast, state);
+    int left = evaluate_expression(binary_op->data.binary_op.left, state);
+    int right = evaluate_expression(binary_op->data.binary_op.right, state);
 
     const char* operator_str = binary_op->data.binary_op.operator;
 	printf("Op: %s\n", operator_str);

@@ -225,7 +225,7 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token);
 ast_expression_t* nud_parentheses(parser_t* parser, token_t* token);
 ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expression_t* left);
 
-ast_expression_t* pratt_parse(parser_t* parser, int precedence);
+ast_expression_t* parser_expression_pratt(parser_t* parser, int precedence);
 
 token_info_t token_infos[] = {
 	[TOKEN_TYPE_NUMBER] = {PRECEDENCE_LOWEST, nud_number, NULL},
@@ -753,6 +753,8 @@ ast_node_t* parser_statement_print(parser_t* parser) {
 	parser->token_index++;
 	node->data.statement_return->expression = parser_expression(parser);
 
+	printf("end of print stmt\n");
+
 	return node;
 }
 
@@ -821,12 +823,14 @@ ast_node_t* parser_expression(parser_t* parser)
 
 	ast_node_t* node = malloc(sizeof(ast_node_t));
 	node->type = AST_EXPRESSION;
-	node->data.expression = pratt_parse(parser, PRECEDENCE_LOWEST);
+	node->data.expression = parser_expression_pratt(parser, PRECEDENCE_LOWEST);
+
+	printf("end of expression\n");
 
 	return node;
 }
 
-ast_expression_t* pratt_parse(parser_t* parser, int precedence)
+ast_expression_t* parser_expression_pratt(parser_t* parser, int precedence)
 {
 	printf("Parsing pratt\n");
 
@@ -835,12 +839,16 @@ ast_expression_t* pratt_parse(parser_t* parser, int precedence)
 
 	ast_expression_t* left = token_infos[current_token->type].nud(parser, current_token);
 
+	printf("before loop of pratt\n");
+
 	while (precedence < token_infos[((token_t*)parser->lexer->tokens->data[parser->token_index])->type].precedence) {
 		current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
 		parser->token_index++;
 
 		left = token_infos[current_token->type].led(parser, current_token, left);
 	}
+
+	printf("after loop of pratt\n");
 
 	return left;
 }
@@ -849,7 +857,7 @@ ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expressio
 {
 	printf("Parsing operation binary\n");
 
-	ast_expression_t* right = pratt_parse(parser, token_infos[token->type].precedence);
+	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
 	ast_expression_t* binary_op_expr = malloc(sizeof(ast_expression_t));
 	binary_op_expr->type = AST_EXPRESSION_BINARY_OP;
@@ -913,7 +921,7 @@ ast_expression_t* nud_parentheses(parser_t* parser, token_t* token)
 {
 	printf("Parsing parentheses\n");
 
-	ast_expression_t* expression_node = pratt_parse(parser, PRECEDENCE_LOWEST);
+	ast_expression_t* expression_node = parser_expression_pratt(parser, PRECEDENCE_LOWEST);
 
 	parser_token_eat(parser, TOKEN_TYPE_PARENTHESE_CLOSE);
 

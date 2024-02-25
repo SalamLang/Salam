@@ -156,6 +156,8 @@ typedef enum {
 	TOKEN_TYPE_RETURN, // برگشت
 	TOKEN_TYPE_PRINT, // نمایش
 	TOKEN_TYPE_IF, // اگر
+	TOKEN_TYPE_TRUE, // درست
+	TOKEN_TYPE_FALSE, // غلط
 	TOKEN_TYPE_ELSEIF, // واگرنه
 	TOKEN_TYPE_AND, // و
 	TOKEN_TYPE_OR, // یا
@@ -194,6 +196,8 @@ keyword_mapping_t keyword_mapping[] = {
 	{"نمایش", TOKEN_TYPE_PRINT},
 	{"واگرنه", TOKEN_TYPE_ELSEIF},
 	{"اگر", TOKEN_TYPE_IF},
+	{"درست", TOKEN_TYPE_TRUE},
+	{"غلط", TOKEN_TYPE_FALSE},
 	{"و", TOKEN_TYPE_AND},
 	{"یا", TOKEN_TYPE_OR},
 	{NULL, TOKEN_TYPE_ERROR}
@@ -365,6 +369,7 @@ typedef struct {
 	led_func_t led;
 } token_info_t;
 
+ast_expression_t* nud_bool(parser_t* parser, token_t* token);
 ast_expression_t* nud_number(parser_t* parser, token_t* token);
 ast_expression_t* nud_string(parser_t* parser, token_t* token);
 ast_expression_t* nud_identifier(parser_t* parser, token_t* token);
@@ -381,6 +386,8 @@ enum {
 };
 
 token_info_t token_infos[] = {
+	[TOKEN_TYPE_TRUE] = {PRECEDENCE_LOWEST, nud_bool, NULL},
+	[TOKEN_TYPE_FALSE] = {PRECEDENCE_LOWEST, nud_bool, NULL},
 	[TOKEN_TYPE_NUMBER] = {PRECEDENCE_LOWEST, nud_number, NULL},
 	[TOKEN_TYPE_STRING] = {PRECEDENCE_LOWEST, nud_string, NULL},
 	[TOKEN_TYPE_IDENTIFIER] = {PRECEDENCE_LOWEST, nud_identifier, NULL},
@@ -396,6 +403,7 @@ char* token_op_type2str(ast_expression_type_t type)
 		case AST_EXPRESSION_LITERAL: return "LITERAL";
 		case AST_EXPRESSION_IDENTIFIER: return "IDENTIFIER";
 		case AST_EXPRESSION_BINARY: return "BINARY_OP";
+		case AST_EXPRESSION_ASSIGNMENT: return "ASSIGNMENT";
 		default: return "OP_UNKNOWN";
 	}
 }
@@ -410,6 +418,8 @@ char* token_type2str(token_type_t type)
 		case TOKEN_TYPE_RETURN: return "RETURN";
 		case TOKEN_TYPE_PRINT: return "PRINT";
 		case TOKEN_TYPE_IF: return "IF";
+		case TOKEN_TYPE_TRUE: return "TRUE";
+		case TOKEN_TYPE_FALSE: return "FALSE";
 		case TOKEN_TYPE_ELSEIF: return "ELSEIF";
 		case TOKEN_TYPE_OR: return "OR";
 		case TOKEN_TYPE_AND: return "AND";
@@ -1016,24 +1026,6 @@ ast_node_t* parser_statement(parser_t* parser)
 	return stmt;
 }
 
-ast_expression_t* parser_primary(parser_t* parser)
-{
-	printf("Parsing primary\n");
-
-	token_t* current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
-	ast_expression_t* primary_node = NULL;
-
-	if (token_infos[current_token->type].nud != NULL) {
-		primary_node = token_infos[current_token->type].nud(parser, current_token);
-	} else {
-		printf("Error: Unexpected token in primary expression\n");
-		token_print(current_token);
-		exit(EXIT_FAILURE);
-	}
-
-	return primary_node;
-}
-
 ast_node_t* parser_expression(parser_t* parser)
 {
 	printf("Parsing expression\n");
@@ -1093,6 +1085,20 @@ ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expressio
 	binary_op_expr->data.binary_op->right = right;
 
 	return binary_op_expr;
+}
+
+ast_expression_t* nud_bool(parser_t* parser, token_t* token)
+{
+	printf("Parsing bool\n");
+
+	ast_expression_t* literal_expr = malloc(sizeof(ast_expression_t));
+	literal_expr->type = AST_EXPRESSION_LITERAL;
+
+	literal_expr->data.literal = malloc(sizeof(ast_literal_t));
+	literal_expr->data.literal->value = strdup(token->value);
+	literal_expr->data.literal->literal_type = token->type;
+
+	return literal_expr;
 }
 
 ast_expression_t* nud_number(parser_t* parser, token_t* token)
@@ -1511,7 +1517,13 @@ VariableData* interpreter_literal(ast_literal_t* expr)
     } else if (expr->literal_type == TOKEN_TYPE_STRING) {
         val->type = VALUE_TYPE_STRING;
         val->string_value = strdup(expr->value);
-    } else {
+    } else if (expr->literal_type == TOKEN_TYPE_TRUE) {
+		val->type = VALUE_TYPE_BOOL;
+		val->int_value = 1;
+	} else if (expr->literal_type == TOKEN_TYPE_FALSE) {
+		val->type = VALUE_TYPE_BOOL;
+		val->int_value = 0;
+	} else {
         // TODO: Handle other literal types if needed
     }
 

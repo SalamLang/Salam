@@ -456,11 +456,11 @@ void read_string(lexer_t* lexer, wchar_t ch)
 	}
 	string[i] = 0;
 
-	size_t length = strlen(string);
-	token_t* t = token_create(TOKEN_TYPE_STRING, string, length, lexer->line, lexer->column - length, lexer->line, lexer->column);
+	token_t* t = token_create(TOKEN_TYPE_STRING, string, i, lexer->line, lexer->column - i, lexer->line, lexer->column);
 	array_push(lexer->tokens, t);
 
 	unread_token(lexer);
+	free(string);
 }
 
 size_t mb_strlen(char* identifier)
@@ -1154,10 +1154,10 @@ void print_xml_ast_tree(ast_node_t* root)
 	printf("</AST>\n");
 }
 
-void interpret(ast_node_t* node, interpreter_state_t* state)
+bool interpret(ast_node_t* node, interpreter_state_t* state)
 {
 	if (node == NULL) {
-		return;
+		return false;
 	}
 
 	switch (node->type) {
@@ -1167,6 +1167,7 @@ void interpret(ast_node_t* node, interpreter_state_t* state)
 
 		case AST_STATEMENT_RETURN:
 			interpret_statement_return(node->data.statement_return, state);
+			return true;
 			break;
 
 		case AST_STATEMENT_PRINT:
@@ -1185,6 +1186,8 @@ void interpret(ast_node_t* node, interpreter_state_t* state)
 		default:
 			break;
 	}
+
+	return false;
 }
 
 void interpret_function_declaration(ast_function_declaration_t* stmt, interpreter_state_t* state)
@@ -1215,7 +1218,11 @@ void interpret_block(ast_node_t* node, interpreter_state_t* state)
 	// printf("Block\n");
 
 	for (size_t i = 0; i < node->data.block->num_statements; i++) {
-		interpret(node->data.block->statements[i], state);
+		bool res = interpret(node->data.block->statements[i], state);
+
+		if (res == true) {
+			break;
+		}
 	}
 }
 

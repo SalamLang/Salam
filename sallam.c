@@ -183,7 +183,6 @@ wchar_t read_token(lexer_t* lexer);
 void read_number(lexer_t* lexer, wchar_t ch);
 size_t mb_strlen(char* identifier);
 void read_identifier(lexer_t* lexer, wchar_t ch);
-char* wchar_to_char(wchar_t wide_char);
 size_t wchar_length(wchar_t wide_char);
 
 lexer_t* lexer_create(const char* data);
@@ -506,17 +505,6 @@ void read_identifier(lexer_t* lexer, wchar_t ch)
 	unread_token(lexer);
 }
 
-char* wchar_to_char(wchar_t wide_char)
-{
-	char* mb_char = (char*) malloc(sizeof(char) * 6);
-	if (wcstombs(mb_char, &wide_char, 6) == (size_t) -1) {
-		perror("Error in wcstombs");
-		exit(EXIT_FAILURE);
-	}
-
-	return mb_char;
-}
-
 size_t wchar_length(wchar_t wide_char)
 {
 	char mb_char[MB_LEN_MAX];
@@ -548,7 +536,6 @@ void lexer_lex(lexer_t* lexer)
 
 		wchar_t current_char = read_token(lexer);
 		if (current_char == L'\u200C') {
-			printf("Ignoring ZWNJ character at line %d, column %d\n", lexer->line, lexer->column - 1);
 			lexer->index++;
 			lexer->column++;
 			continue;
@@ -578,9 +565,9 @@ void lexer_lex(lexer_t* lexer)
 		} else if (is_alpha(current_char)) {
 			read_identifier(lexer, current_char);
 		} else {
-			printf("Error: Unexpected character '%s' at line %d, column %d\n", wchar_to_char(current_char), lexer->line, lexer->column - 1);
-			size_t length = wchar_length(current_char);
-			token_t* t = token_create(TOKEN_TYPE_ERROR, wchar_to_char(current_char), length, lexer->line, lexer->column - length, lexer->line, lexer->column);
+			printf("Error: Unexpected character '%c' at line %d, column %d\n", current_char, lexer->line, lexer->column - 1);
+
+			token_t* t = token_create(TOKEN_TYPE_ERROR, (char[]){lexer->data[lexer->index],'\0'}, 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		}
 	}

@@ -478,7 +478,12 @@ void lexer_lex(lexer_t* lexer)
 		}
 
 		wchar_t current_char = read_token(lexer);
-		if (current_char == '{') {
+		if (current_char == L'\u200C') {
+			printf("Ignoring ZWNJ character at line %d, column %d\n", lexer->line, lexer->column - 1);
+			lexer->index++;
+			lexer->column++;
+			continue;
+		} else if (current_char == '{') {
 			token_t* t = token_create(TOKEN_TYPE_SECTION_OPEN, "{", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		} else if (current_char == '}') {
@@ -504,6 +509,7 @@ void lexer_lex(lexer_t* lexer)
 		} else if (is_alpha(current_char)) {
 			read_identifier(lexer, current_char);
 		} else {
+			printf("Error: Unexpected character '%s' at line %d, column %d\n", wchar_to_char(current_char), lexer->line, lexer->column - 1);
 			size_t length = wchar_length(current_char);
 			token_t* t = token_create(TOKEN_TYPE_ERROR, wchar_to_char(current_char), length, lexer->line, lexer->column - length, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);

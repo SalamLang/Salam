@@ -16,22 +16,31 @@ typedef enum {
 	TOKEN_TYPE_STRING,
 
 	// keywords
-	TOKEN_TYPE_FUNCTION,
-	TOKEN_TYPE_RETURN,
-	TOKEN_TYPE_PRINT,
-	TOKEN_TYPE_IF,
-	TOKEN_TYPE_ELSEIF,
-	TOKEN_TYPE_AND,
-	TOKEN_TYPE_OR,
+	TOKEN_TYPE_FUNCTION, // عملکرد
+	TOKEN_TYPE_RETURN, // برگشت
+	TOKEN_TYPE_PRINT, // نمایش
+	TOKEN_TYPE_IF, // اگر
+	TOKEN_TYPE_ELSEIF, // واگرنه
+	TOKEN_TYPE_AND, // و
+	TOKEN_TYPE_OR, // یا
 
 	// symbols
-	TOKEN_TYPE_SECTION_OPEN,
-	TOKEN_TYPE_SECTION_CLOSE,
-	TOKEN_TYPE_PARENTHESE_OPEN,
-	TOKEN_TYPE_PARENTHESE_CLOSE,
+	TOKEN_TYPE_SECTION_OPEN, // {
+	TOKEN_TYPE_SECTION_CLOSE, // }
+	TOKEN_TYPE_PARENTHESE_OPEN, // (
+	TOKEN_TYPE_PARENTHESE_CLOSE, // )
 
-	TOKEN_TYPE_PLUS,
-	TOKEN_TYPE_MINUS,
+	TOKEN_TYPE_PLUS, // +
+	TOKEN_TYPE_MINUS, // -
+
+    TOKEN_TYPE_EQUAL, // =
+    TOKEN_TYPE_EQUAL_EQUAL, // ==
+    TOKEN_TYPE_NOT_EQUAL, // !=
+    TOKEN_TYPE_NOT, // !
+    TOKEN_TYPE_LESS_THAN, // <
+    TOKEN_TYPE_GREATER_THAN, // >
+    TOKEN_TYPE_LESS_THAN_EQUAL, // <=
+    TOKEN_TYPE_GREATER_THAN_EQUAL, // >=
 
 	// others
 	TOKEN_TYPE_EOF,
@@ -74,6 +83,7 @@ typedef struct {
 
 typedef struct {
 	char* data;
+	int length;
 	int index;
 	int line;
 	int column;
@@ -264,6 +274,14 @@ char* token_type2str(token_type_t type)
 		case TOKEN_TYPE_PARENTHESE_CLOSE: return "PARENTHESIS_CLOSE";
 		case TOKEN_TYPE_PLUS: return "PLUS";
 		case TOKEN_TYPE_MINUS: return "MINUS";
+		case TOKEN_TYPE_EQUAL: return "EQUAL";
+		case TOKEN_TYPE_EQUAL_EQUAL: return "EQUAL_EQUAL";
+		case TOKEN_TYPE_NOT_EQUAL: return "NOT_EQUAL";
+		case TOKEN_TYPE_NOT: return "NOT";
+		case TOKEN_TYPE_LESS_THAN: return "LESS_THAN";
+		case TOKEN_TYPE_GREATER_THAN: return "GREATER_THAN";
+		case TOKEN_TYPE_LESS_THAN_EQUAL: return "LESS_THAN_EQUAL";
+		case TOKEN_TYPE_GREATER_THAN_EQUAL: return "GREATER_THAN_EQUAL";
 		case TOKEN_TYPE_EOF: return "EOF";
 		case TOKEN_TYPE_ERROR: return "ERROR";
 		default: return "TOK_UNKNOWN";
@@ -360,6 +378,7 @@ lexer_t* lexer_create(const char* data)
 	lexer->data = (char*) data;
 	lexer->index = 0;
 	lexer->tokens = array_create(10);
+	lexer->length = strlen(data);
 
 	return lexer;
 }
@@ -519,55 +538,93 @@ size_t wchar_length(wchar_t wide_char)
 void lexer_lex(lexer_t* lexer)
 {
 	while (lexer->data[lexer->index] != 0) {
-		if (lexer->data[lexer->index] == '\a' || lexer->data[lexer->index] == '\r') {
+        char current_char = lexer->data[lexer->index];
+
+		if (current_char == '\a' || current_char == '\r' || current_char == ' ' || current_char == '\t') {
 			lexer->column++;
 			lexer->index++;
 			continue;
-		} else if (lexer->data[lexer->index] == ' ' || lexer->data[lexer->index] == '\t') {
-			lexer->column++;
-			lexer->index++;
-			continue;
-		} else if (lexer->data[lexer->index] == '\n') {
+		} else if (current_char == '\n') {
 			lexer->index++;
 			lexer->line++;
 			lexer->column = 0;
 			continue;
 		}
 
-		wchar_t current_char = read_token(lexer);
-		if (current_char == L'\u200C') {
+		wchar_t current_wchar = read_token(lexer);
+		if (current_wchar == L'\u200C') {
 			lexer->index++;
 			lexer->column++;
 			continue;
-		} else if (current_char == '{') {
+		} else if (current_wchar == '{') {
 			token_t* t = token_create(TOKEN_TYPE_SECTION_OPEN, "{", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_char == '}') {
+		} else if (current_wchar == '}') {
 			token_t* t = token_create(TOKEN_TYPE_SECTION_CLOSE, "}", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_char == '(') {
+		} else if (current_wchar == '(') {
 			token_t* t = token_create(TOKEN_TYPE_PARENTHESE_OPEN, "(", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_char == ')') {
+		} else if (current_wchar == ')') {
 			token_t* t = token_create(TOKEN_TYPE_PARENTHESE_CLOSE, ")", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_char == '+') {
+		} else if (current_wchar == '+') {
 			token_t* t = token_create(TOKEN_TYPE_PLUS, "+", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_char == '-') {
+		} else if (current_wchar == '-') {
 			token_t* t = token_create(TOKEN_TYPE_MINUS, "-", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_char == '\"') {
-			current_char = read_token(lexer);
-			read_string(lexer, current_char);
-		} else if (is_number(current_char)) {
-			read_number(lexer, current_char);
-		} else if (is_alpha(current_char)) {
-			read_identifier(lexer, current_char);
+		} else if (current_char == '=') {
+            if (lexer->index + 1 < lexer->length && lexer->data[lexer->index + 1] == '=') {
+                token_t* t = token_create(TOKEN_TYPE_EQUAL_EQUAL, "==", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
+                array_push(lexer->tokens, t);
+                lexer->index++;
+                lexer->column++;
+            } else {
+                token_t* t = token_create(TOKEN_TYPE_EQUAL, "=", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+                array_push(lexer->tokens, t);
+            }
+        } else if (current_char == '!') {
+            if (lexer->index + 1 < lexer->length && lexer->data[lexer->index + 1] == '=') {
+                token_t* t = token_create(TOKEN_TYPE_NOT_EQUAL, "!=", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
+                array_push(lexer->tokens, t);
+                lexer->index++;
+                lexer->column++;
+            } else {
+                token_t* t = token_create(TOKEN_TYPE_NOT, "!", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+                array_push(lexer->tokens, t);
+            }
+        } else if (current_char == '>') {
+            if (lexer->index + 1 < lexer->length && lexer->data[lexer->index + 1] == '=') {
+                token_t* t = token_create(TOKEN_TYPE_GREATER_THAN_EQUAL, ">=", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
+                array_push(lexer->tokens, t);
+                lexer->index++;
+                lexer->column++;
+            } else {
+                token_t* t = token_create(TOKEN_TYPE_GREATER_THAN, ">", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+                array_push(lexer->tokens, t);
+            }
+        } else if (current_char == '<') {
+            if (lexer->index + 1 < lexer->length && lexer->data[lexer->index + 1] == '=') {
+                token_t* t = token_create(TOKEN_TYPE_LESS_THAN_EQUAL, "<=", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
+                array_push(lexer->tokens, t);
+                lexer->index++;
+                lexer->column++;
+            } else {
+                token_t* t = token_create(TOKEN_TYPE_LESS_THAN, "<", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+                array_push(lexer->tokens, t);
+            }
+        } else if (current_wchar == '\"') {
+			current_wchar = read_token(lexer);
+			read_string(lexer, current_wchar);
+		} else if (is_number(current_wchar)) {
+			read_number(lexer, current_wchar);
+		} else if (is_alpha(current_wchar)) {
+			read_identifier(lexer, current_wchar);
 		} else {
 			printf("Error: Unexpected character '%c' at line %d, column %d\n", current_char, lexer->line, lexer->column - 1);
 
-			token_t* t = token_create(TOKEN_TYPE_ERROR, (char[]){lexer->data[lexer->index],'\0'}, 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+			token_t* t = token_create(TOKEN_TYPE_ERROR, (char[]){current_char,'\0'}, 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		}
 	}

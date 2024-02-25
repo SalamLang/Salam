@@ -293,7 +293,7 @@ char* file_read(char* file_Name)
 
 token_t* token_create(token_type_t type, const char* value, int a, int b, int c, int b2, int c2)
 {
-	token_t* t = malloc(sizeof(token_t));
+	token_t* t = (token_t*) malloc(sizeof(token_t));
 	t->type = type;
 	t->value = strdup(value);
 	t->location.length = a;
@@ -889,7 +889,7 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 
 	literal_expr->data.literal = malloc(sizeof(ast_literal_t));
 	printf("next of middle number\n");
-	literal_expr->data.literal->value = (token->value); // TODO strdup
+	literal_expr->data.literal->value = strdup(token->value); // TODO strdup
 	// printf("-->%s\n", token->value);
 	printf("next of middle number\n");
 	literal_expr->data.literal->literal_type = token->type;

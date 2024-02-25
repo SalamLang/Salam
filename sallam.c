@@ -133,7 +133,7 @@ typedef struct {
 	char* operator;
 	struct ast_expression* left;
 	struct ast_expression* right;
-} ast_op_binary_t;
+} ast_operator_binary_t;
 
 typedef struct {
 	struct ast_expression* left;
@@ -153,7 +153,7 @@ typedef struct ast_expression {
 	union {
 		ast_literal_t* literal;
 		ast_identifier_t* identifier;
-		ast_op_binary_t* binary_op;
+		ast_operator_binary_t* binary_op;
 		ast_op_assignment_t* assignment;
 	} data;
 } ast_expression_t;
@@ -218,7 +218,7 @@ ast_node_t* parser_statement_print(parser_t* parser);
 ast_node_t* parser_expression(parser_t* parser);
 
 int evaluate_expression(ast_expression_t* expr, interpreter_state_t* state);
-int evaluate_binary_operation(ast_op_binary_t* expr, interpreter_state_t* state);
+int evaluate_operator_binary(ast_operator_binary_t* expr, interpreter_state_t* state);
 int evaluate_literal(ast_literal_t* expr);
 int evaluate_identifier(ast_identifier_t* expr, interpreter_state_t* state);
 
@@ -923,7 +923,7 @@ ast_expression_t* parser_expression_pratt(parser_t* parser, int precedence)
 
 ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	printf("Parsing operation binary\n");
+	printf("Parsing operator binary\n");
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
@@ -938,13 +938,13 @@ ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* 
 
 ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	printf("Parsing operation binary\n");
+	printf("Parsing operator binary\n");
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
 	ast_expression_t* binary_op_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 	binary_op_expr->type = AST_EXPRESSION_BINARY;
-	binary_op_expr->data.binary_op = (ast_op_binary_t*) malloc(sizeof(ast_op_binary_t));
+	binary_op_expr->data.binary_op = (ast_operator_binary_t*) malloc(sizeof(ast_operator_binary_t));
 	binary_op_expr->data.binary_op->operator = strdup(token->value);
 	binary_op_expr->data.binary_op->left = left;
 	binary_op_expr->data.binary_op->right = right;
@@ -1108,7 +1108,7 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 
 		case AST_EXPRESSION_BINARY:
 			print_indentation(indent_level + 1);
-			printf("<BinaryOperation>\n");
+			printf("<BinaryOperator>\n");
 
 				print_indentation(indent_level + 2);
 				printf("<Operator>%s</Operator>\n", expr->data.binary_op->operator);
@@ -1132,7 +1132,7 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 				printf("</Right>\n");
 
 			print_indentation(indent_level + 1);
-			printf("</BinaryOperation>\n");
+			printf("</BinaryOperator>\n");
 			break;
 
 		case AST_EXPRESSION_ASSIGNMENT:
@@ -1330,7 +1330,7 @@ int evaluate_identifier(ast_identifier_t* expr, interpreter_state_t* state)
 	return 0;
 }
 
-int evaluate_binary_operation(ast_op_binary_t* binary_op, interpreter_state_t* state) {
+int evaluate_operator_binary(ast_operator_binary_t* binary_op, interpreter_state_t* state) {
 	const char* operator_str = binary_op->operator;
 
 	int left = evaluate_expression(binary_op->left, state);
@@ -1370,7 +1370,7 @@ int evaluate_expression(ast_expression_t* expr, interpreter_state_t* state) {
 			return res;
 
 		case AST_EXPRESSION_BINARY:
-			res = evaluate_binary_operation(expr->data.binary_op, state);
+			res = evaluate_operator_binary(expr->data.binary_op, state);
 			return res;
 
 		// case AST_EXPRESION_FUNCTION_CALL:

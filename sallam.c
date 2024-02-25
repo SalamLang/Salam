@@ -29,7 +29,6 @@ typedef struct SymbolTableStack {
 
 SymbolTableStack* symbolTableStack = NULL;
 
-
 SymbolTable* createSymbolTable(size_t capacity)
 {
 	SymbolTable* table = (SymbolTable*) malloc(sizeof(SymbolTable));
@@ -62,7 +61,7 @@ void popSymbolTable()
 		SymbolTableEntry* entry = table->entries[i];
 		while (entry != NULL) {
 			SymbolTableEntry* next = entry->next;
-			free(entry->identifier);  // Free the identifier memory
+			free(entry->identifier);
 			free(entry);
 			entry = next;
 		}
@@ -98,18 +97,28 @@ void addToSymbolTable(SymbolTableStack* symbolTableStack, const char* identifier
 	table->size++;
 }
 
+VariableData* findInSymbolTableCurrent(SymbolTableStack* currentScope, const char* identifier)
+{
+	SymbolTable* table = currentScope->table;
+	unsigned int index = hash(identifier, table->capacity);
+	SymbolTableEntry* entry = table->entries[index];
+
+	while (entry != NULL) {
+		if (strcmp(entry->identifier, identifier) == 0) {
+			return &entry->data;
+		}
+		entry = entry->next;
+	}
+
+	return NULL;
+}
+
 VariableData* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier)
 {
 	while (currentScope != NULL) {
-		SymbolTable* table = currentScope->table;
-		unsigned int index = hash(identifier, table->capacity);
-		SymbolTableEntry* entry = table->entries[index];
-
-		while (entry != NULL) {
-			if (strcmp(entry->identifier, identifier) == 0) {
-				return &entry->data;
-			}
-			entry = entry->next;
+		VariableData* data = findInSymbolTableCurrent(currentScope, identifier);
+		if (data != NULL) {
+			return data;
 		}
 
 		currentScope = currentScope->next;
@@ -303,13 +312,6 @@ typedef struct {
 	ast_node_t* ast_tree;
 } parser_t;
 
-enum {
-	PRECEDENCE_LOWEST,
-	PRECEDENCE_SUM,       // +
-	PRECEDENCE_DIFFERENCE, // -
-	PRECEDENCE_HIGHEST, // -
-};
-
 wchar_t read_token(lexer_t* lexer);
 void read_number(lexer_t* lexer, wchar_t ch);
 size_t mb_strlen(char* identifier);
@@ -358,13 +360,19 @@ ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* 
 
 ast_expression_t* parser_expression_pratt(parser_t* parser, int precedence);
 
+enum {
+	PRECEDENCE_LOWEST = 0,    // START FROM HERE
+	PRECEDENCE_HIGHEST = 1,   // =
+	PRECEDENCE_SUM = 2,       // + -
+};
+
 token_info_t token_infos[] = {
 	[TOKEN_TYPE_NUMBER] = {PRECEDENCE_LOWEST, nud_number, NULL},
 	[TOKEN_TYPE_STRING] = {PRECEDENCE_LOWEST, nud_string, NULL},
 	[TOKEN_TYPE_IDENTIFIER] = {PRECEDENCE_LOWEST, nud_identifier, NULL},
 	[TOKEN_TYPE_PARENTHESE_OPEN] = {PRECEDENCE_LOWEST, nud_parentheses, NULL},
 	[TOKEN_TYPE_PLUS] = {PRECEDENCE_SUM, NULL, led_plus_minus},
-	[TOKEN_TYPE_MINUS] = {PRECEDENCE_DIFFERENCE, NULL, led_plus_minus},
+	[TOKEN_TYPE_MINUS] = {PRECEDENCE_SUM, NULL, led_plus_minus},
 	[TOKEN_TYPE_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal},
 };
 
@@ -981,7 +989,7 @@ ast_node_t* parser_statement(parser_t* parser)
 	}
 	
 	if (stmt == NULL) {
-		printf("Error: Unexpected token as statement\n");
+		printf("Error: Unexpected token as statement %s\n", token_type2str(((token_t*)parser->lexer->tokens->data[parser->token_index])->type));
 		exit(EXIT_FAILURE);
 	}
 	return stmt;
@@ -1504,7 +1512,7 @@ int interpreter_expression_assignment(ast_expression_assignment_t* expr, interpr
 		// printf("Assignment Result: %d\n", res);
 
 		char* identifier = expr->left->data.identifier->name;
-		VariableData* variable = findInSymbolTable(symbolTableStack, identifier);
+		VariableData* variable = findInSymbolTableCurrent(symbolTableStack, identifier);
 		if (variable != NULL) {
 			// printf("Variable found: %s = %d\n", identifier, variable->value);
 			variable->value = interpreter_expression(expr->right, state);

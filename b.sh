@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Compile sallam.c
+rm s
 gcc sallam.c -o s
 
 # Check if compilation was successful

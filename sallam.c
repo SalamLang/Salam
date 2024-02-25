@@ -1503,9 +1503,7 @@ VariableData* interpreter_literal(ast_literal_t* expr)
 		return NULL;
 	}
 
-	printf("1\n");
     VariableData* val = (VariableData*) malloc(sizeof(VariableData));
-	printf("2\n");
 
     if (expr->literal_type == TOKEN_TYPE_NUMBER) {
         val->type = VALUE_TYPE_INT;
@@ -1516,8 +1514,6 @@ VariableData* interpreter_literal(ast_literal_t* expr)
     } else {
         // TODO: Handle other literal types if needed
     }
-
-	printf("3\n");
 
     return val;
 }

@@ -120,25 +120,31 @@ typedef struct {
 	struct ast_statement_if_t* next;
 } ast_statement_if_t;
 
-typedef struct ast_literal {
+typedef struct {
 	token_type_t literal_type;
 	char* value;
 } ast_literal_t;
 
-typedef struct ast_identifier {
+typedef struct {
 	char* name;
 } ast_identifier_t;
 
-typedef struct ast_binary_op {
+typedef struct {
 	char* operator;
 	struct ast_expression* left;
 	struct ast_expression* right;
-} ast_binary_op_t;
+} ast_op_binary_t;
+
+typedef struct {
+	struct ast_expression* left;
+	struct ast_expression* right;
+} ast_op_assignment_t;
 
 typedef enum {
 	AST_EXPRESSION_LITERAL,
 	AST_EXPRESSION_IDENTIFIER,
-	AST_EXPRESSION_BINARY_OP,
+	AST_EXPRESSION_BINARY,
+	AST_EXPRESSION_ASSIGNMENT,
 } ast_expression_type_t;
 
 typedef struct ast_expression {
@@ -147,7 +153,8 @@ typedef struct ast_expression {
 	union {
 		ast_literal_t* literal;
 		ast_identifier_t* identifier;
-		ast_binary_op_t* binary_op;
+		ast_op_binary_t* binary_op;
+		ast_op_assignment_t* assignment;
 	} data;
 } ast_expression_t;
 
@@ -187,6 +194,7 @@ enum {
 	PRECEDENCE_LOWEST,
 	PRECEDENCE_SUM,       // +
 	PRECEDENCE_DIFFERENCE, // -
+	PRECEDENCE_HIGHEST, // -
 };
 
 wchar_t read_token(lexer_t* lexer);
@@ -210,7 +218,7 @@ ast_node_t* parser_statement_print(parser_t* parser);
 ast_node_t* parser_expression(parser_t* parser);
 
 int evaluate_expression(ast_expression_t* expr, interpreter_state_t* state);
-int evaluate_binary_operation(ast_binary_op_t* expr, interpreter_state_t* state);
+int evaluate_binary_operation(ast_op_binary_t* expr, interpreter_state_t* state);
 int evaluate_literal(ast_literal_t* expr);
 int evaluate_identifier(ast_identifier_t* expr, interpreter_state_t* state);
 
@@ -233,6 +241,7 @@ ast_expression_t* nud_string(parser_t* parser, token_t* token);
 ast_expression_t* nud_identifier(parser_t* parser, token_t* token);
 ast_expression_t* nud_parentheses(parser_t* parser, token_t* token);
 ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expression_t* left);
+ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* left);
 
 ast_expression_t* parser_expression_pratt(parser_t* parser, int precedence);
 
@@ -243,6 +252,7 @@ token_info_t token_infos[] = {
 	[TOKEN_TYPE_PARENTHESE_OPEN] = {PRECEDENCE_LOWEST, nud_parentheses, NULL},
 	[TOKEN_TYPE_PLUS] = {PRECEDENCE_SUM, NULL, led_plus_minus},
 	[TOKEN_TYPE_MINUS] = {PRECEDENCE_DIFFERENCE, NULL, led_plus_minus},
+	[TOKEN_TYPE_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal},
 };
 
 char* token_op_type2str(ast_expression_type_t type)
@@ -250,7 +260,7 @@ char* token_op_type2str(ast_expression_type_t type)
 	switch (type) {
 		case AST_EXPRESSION_LITERAL: return "LITERAL";
 		case AST_EXPRESSION_IDENTIFIER: return "IDENTIFIER";
-		case AST_EXPRESSION_BINARY_OP: return "BINARY_OP";
+		case AST_EXPRESSION_BINARY: return "BINARY_OP";
 		default: return "OP_UNKNOWN";
 	}
 }
@@ -673,7 +683,7 @@ void ast_expression_free(ast_expression_t* expr)
 		case AST_EXPRESSION_IDENTIFIER:
 			free(expr->data.identifier);
 			break;
-		case AST_EXPRESSION_BINARY_OP:
+		case AST_EXPRESSION_BINARY:
 			free(expr->data.binary_op->operator);
 			ast_expression_free(expr->data.binary_op->left);
 			ast_expression_free(expr->data.binary_op->right);
@@ -846,6 +856,8 @@ ast_node_t* parser_statement(parser_t* parser)
 				break;
 			
 			case TOKEN_TYPE_IDENTIFIER:
+			case TOKEN_TYPE_PLUS:
+			case TOKEN_TYPE_MINUS:
 			case TOKEN_TYPE_PARENTHESE_OPEN:
 			case TOKEN_TYPE_STRING:
 			case TOKEN_TYPE_NUMBER:
@@ -909,6 +921,21 @@ ast_expression_t* parser_expression_pratt(parser_t* parser, int precedence)
 	return left;
 }
 
+ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* left)
+{
+	printf("Parsing operation binary\n");
+
+	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
+
+	ast_expression_t* binary_op_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+	binary_op_expr->type = AST_EXPRESSION_ASSIGNMENT;
+	binary_op_expr->data.assignment = (ast_op_assignment_t*) malloc(sizeof(ast_op_assignment_t));
+	binary_op_expr->data.assignment->left = left;
+	binary_op_expr->data.assignment->right = right;
+
+	return binary_op_expr;
+}
+
 ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expression_t* left)
 {
 	printf("Parsing operation binary\n");
@@ -916,8 +943,8 @@ ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expressio
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
 	ast_expression_t* binary_op_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
-	binary_op_expr->type = AST_EXPRESSION_BINARY_OP;
-	binary_op_expr->data.binary_op = (ast_binary_op_t*) malloc(sizeof(ast_binary_op_t));
+	binary_op_expr->type = AST_EXPRESSION_BINARY;
+	binary_op_expr->data.binary_op = (ast_op_binary_t*) malloc(sizeof(ast_op_binary_t));
 	binary_op_expr->data.binary_op->operator = strdup(token->value);
 	binary_op_expr->data.binary_op->left = left;
 	binary_op_expr->data.binary_op->right = right;
@@ -1079,7 +1106,7 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 			printf("</Identifier>\n");
 			break;
 
-		case AST_EXPRESSION_BINARY_OP:
+		case AST_EXPRESSION_BINARY:
 			print_indentation(indent_level + 1);
 			printf("<BinaryOperation>\n");
 
@@ -1106,6 +1133,32 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 
 			print_indentation(indent_level + 1);
 			printf("</BinaryOperation>\n");
+			break;
+
+		case AST_EXPRESSION_ASSIGNMENT:
+			print_indentation(indent_level + 1);
+			printf("<Assignment>\n");
+
+				print_indentation(indent_level + 2);
+				printf("<Left>\n");
+
+					print_indentation(indent_level + 3);
+					print_xml_ast_expression(expr->data.assignment->left, indent_level + 3);
+
+				print_indentation(indent_level + 2);
+				printf("</Left>\n");
+
+				print_indentation(indent_level + 2);
+				printf("<Right>\n");
+
+					print_indentation(indent_level + 3);
+					print_xml_ast_expression(expr->data.assignment->right, indent_level + 3);
+
+				print_indentation(indent_level + 2);
+				printf("</Right>\n");
+
+			print_indentation(indent_level + 1);
+			printf("</Assignment>\n");
 			break;
 
 		default:
@@ -1277,7 +1330,7 @@ int evaluate_identifier(ast_identifier_t* expr, interpreter_state_t* state)
 	return 0;
 }
 
-int evaluate_binary_operation(ast_binary_op_t* binary_op, interpreter_state_t* state) {
+int evaluate_binary_operation(ast_op_binary_t* binary_op, interpreter_state_t* state) {
 	const char* operator_str = binary_op->operator;
 
 	int left = evaluate_expression(binary_op->left, state);
@@ -1316,7 +1369,7 @@ int evaluate_expression(ast_expression_t* expr, interpreter_state_t* state) {
 			res = evaluate_identifier(expr->data.identifier, state);
 			return res;
 
-		case AST_EXPRESSION_BINARY_OP:
+		case AST_EXPRESSION_BINARY:
 			res = evaluate_binary_operation(expr->data.binary_op, state);
 			return res;
 

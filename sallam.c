@@ -784,6 +784,7 @@ ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expressio
 
 	ast_expression_t* binary_op_expr = malloc(sizeof(ast_expression_t));
 	binary_op_expr->type = AST_EXPRESSION_BINARY_OP;
+	binary_op_expr->data.binary_op = malloc(sizeof(ast_binary_op_t));
 	binary_op_expr->data.binary_op->operator = strdup(token->value);
 	binary_op_expr->data.binary_op->left = left;
 	binary_op_expr->data.binary_op->right = right;
@@ -798,18 +799,9 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 	ast_expression_t* literal_expr = malloc(sizeof(ast_expression_t));
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
-	printf("number type: %s\n", token_type2str(token->type));
-	printf("number value: %s\n", token->value);
-	printf("1\n");
 	literal_expr->data.literal = malloc(sizeof(ast_literal_t));
 	literal_expr->data.literal->literal_type = token->type;
-	printf("2\n");
 	literal_expr->data.literal->value = strdup(token->value);
-
-	printf("TokenType: %s\n", token_type2str(token->type));
-	printf("TokenValue: %s\n", token->value);
-
-	printf("ok");
 
 	return literal_expr;
 }
@@ -820,6 +812,8 @@ ast_expression_t* nud_string(parser_t* parser, token_t* token)
 
 	ast_expression_t* literal_expr = malloc(sizeof(ast_expression_t));
 	literal_expr->type = AST_EXPRESSION_LITERAL;
+
+	literal_expr->data.literal = malloc(sizeof(ast_literal_t));
 	literal_expr->data.literal->literal_type = token->type;
 	literal_expr->data.literal->value = strdup(token->value);
 
@@ -832,6 +826,8 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 
 	ast_expression_t* identifier_expr = malloc(sizeof(ast_expression_t));
 	identifier_expr->type = AST_EXPRESSION_IDENTIFIER;
+
+	identifier_expr->data.identifier = malloc(sizeof(ast_identifier_t));
 	identifier_expr->data.identifier->name = strdup(token->value);
 
 	return identifier_expr;

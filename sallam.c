@@ -162,15 +162,11 @@ ast_node_t* parser_statement(parser_t* parser);
 ast_node_t* parser_return(parser_t* parser);
 ast_node_t* parser_expression(parser_t* parser);
 
-int evaluate_expression_literal(ast_node_t* node);
-int evaluate_expression_identifier(ast_node_t* node);
-int evaluate_expression_binary_op(ast_node_t* node, interpreter_state_t* state);
+int evaluate_expression(ast_expression_t* expr, interpreter_state_t* state);
+int evaluate_binary_operation(ast_expression_t* expr, interpreter_state_t* state);
+int evaluate_literal(ast_expression_t* expr);
+int evaluate_identifier(ast_expression_t* expr, interpreter_state_t* state);
 
-
-int evaluate_expression(ast_node_t* node, interpreter_state_t* state);
-int evaluate_binary_operation(ast_node_t* node, interpreter_state_t* state);
-int evaluate_literal(ast_node_t* node);
-int evaluate_identifier(ast_node_t* node, interpreter_state_t* state);
 void interpret_return_statement(ast_node_t* node, interpreter_state_t* state);
 void interpret_function_declaration(ast_node_t* node, interpreter_state_t* state);
 void interpret_block(ast_node_t* node, interpreter_state_t* state);
@@ -1047,7 +1043,10 @@ void interpret_return_statement(ast_node_t* node, interpreter_state_t* state)
 {
     printf("Return Statement\n");
 
-    int res = evaluate_expression(node->data.return_statement.expression, state);
+	ast_expression_t* expr = malloc(sizeof(ast_expression_t));
+	expr = node->data.return_statement.expression->data.expression;
+
+    int res = evaluate_expression(expr, state);
 	printf("Result: %d\n", res);
 }
 
@@ -1059,33 +1058,35 @@ void interpret_block(ast_node_t* node, interpreter_state_t* state)
     }
 }
 
-int evaluate_literal(ast_node_t* node)
+int evaluate_literal(ast_expression_t* expr)
 {
-    if (node->data.expression.data.literal.literal_type == TOKEN_TYPE_NUMBER)
-		return atoi(node->data.expression.data.literal.value);
+    if (expr->data.literal.literal_type == TOKEN_TYPE_NUMBER)
+		return atoi(expr->data.literal.value);
 	return 0;
 }
 
-int evaluate_identifier(ast_node_t* node, interpreter_state_t* state)
+int evaluate_identifier(ast_expression_t* expr, interpreter_state_t* state)
 {
-    printf("Variable: %s\n", node->data.expression.data.identifier.name);
+    printf("Variable: %s\n", expr->data.identifier.name);
     return 0;
 }
 
-int evaluate_binary_operation(ast_node_t* binary_op, interpreter_state_t* state) {
+int evaluate_binary_operation(ast_expression_t* binary_op, interpreter_state_t* state) {
 	ast_node_t* left_ast = malloc(sizeof(ast_node_t));
 	left_ast->type = AST_EXPRESSION;
-	left_ast->data.expression = *binary_op->data.expression.data.binary_op.left;
+	left_ast->data.expression = *binary_op->data.binary_op.left;
 
 	ast_node_t* right_ast = malloc(sizeof(ast_node_t));
 	right_ast->type = AST_EXPRESSION;
-	right_ast->data.expression = *binary_op->data.expression.data.binary_op.right;
+	right_ast->data.expression = *binary_op->data.binary_op.right;
 
     int left = evaluate_expression(left_ast, state);
     int right = evaluate_expression(right_ast, state);
 
-    const char* operator_str = binary_op->data.expression.data.binary_op.operator;
-
+    const char* operator_str = binary_op->data.binary_op.operator;
+	printf("Op: %s\n", operator_str);
+	printf("LEFT: %d\n", left);
+	printf("RIGHT: %d\n", right);
     if (strcmp(operator_str, "+") == 0) {
         return left + right;
     } else if (strcmp(operator_str, "-") == 0) {
@@ -1095,7 +1096,7 @@ int evaluate_binary_operation(ast_node_t* binary_op, interpreter_state_t* state)
     } else if (strcmp(operator_str, "/") == 0) {
         return right != 0 ? left / right : 0;
     } else {
-        return 0;
+        return 88;
     }
 }
 
@@ -1104,27 +1105,27 @@ int evaluate_binary_operation(ast_node_t* binary_op, interpreter_state_t* state)
 //     return 0;
 // }
 
-int evaluate_expression(ast_node_t* node, interpreter_state_t* state) {
-    if (node == NULL) {
+int evaluate_expression(ast_expression_t* expr, interpreter_state_t* state) {
+    if (expr == NULL) {
         return 110;
     }
 
 	int res;
-    switch (node->data.expression.type) {
+    switch (expr->type) {
         case AST_EXPRESSION_LITERAL:
-            res = evaluate_literal(node);
+            res = evaluate_literal(expr);
 			printf("literal result: %d\n", res);
 			return res;
         case AST_EXPRESSION_IDENTIFIER:
-            res = evaluate_identifier(node, state);
+            res = evaluate_identifier(expr, state);
 			printf("identifier result: %d\n", res);
         case AST_EXPRESSION_BINARY_OP:
-            res = evaluate_binary_operation(node, state);
+            res = evaluate_binary_operation(expr, state);
 			printf("binary op result: %d\n", res);
         // case AST_EXPRESION_FUNCTION_CALL:
-        //     return evaluate_function_call(node, state);
+        //     return evaluate_function_call(expr, state);
         default:
-			printf("default node expr type: %d\n", node->type);
+			printf("default expr type: %d\n", expr->type);
             return 0;
     }
 }

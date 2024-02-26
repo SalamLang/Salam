@@ -933,17 +933,14 @@ void ast_node_free(ast_node_t* node)
 
 void parser_free(parser_t* parser)
 {
-	printf("parser free start\n");
 	if (parser == NULL) {
 		return;
 	}
 
-	printf("parser free check ast\n");
 	if (parser->ast_tree != NULL) {
 		ast_node_free(parser->ast_tree);
 	}
-	printf("parser free all\n");
-	// free(parser);
+	free(parser);
 }
 
 void parser_token_next(parser_t* parser)
@@ -1522,46 +1519,37 @@ void interpreter_create()
 
 bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
 {
-	printf("interpreter_interpret - start\n");
+	// printf("Interpreter Interpret\n");
+
 	if (node == NULL) {
 		return false;
 	}
 
 	switch (node->type) {
 		case AST_BLOCK:
-			printf("interpreter_interpret - switch - block\n");
 			interpreter_block(node, state);
-			printf("interpreter_interpret - block - after switch\n");
 			break;
 
 		case AST_FUNCTION_DECLARATION:
-			printf("interpreter_interpret - switch - function\n");
 			interpreter_function_declaration(node->data.function_declaration, state);
-			printf("interpreter_interpret - function - after switch\n");
 			break;
 
 		case AST_STATEMENT_RETURN:
-			printf("interpreter_interpret - switch - return\n");
 			interpreter_statement_return(node->data.statement_return, state);
-			printf("interpreter_interpret - return - after switch\n");
 			return true;
 			break;
 
 		case AST_STATEMENT_PRINT:
-			printf("interpreter_interpret - switch - print\n");
 			interpreter_statement_print(node->data.statement_print, state);
-			printf("interpreter_interpret - print - after switch\n");
 			break;
 
 		case AST_EXPRESSION:
-			printf("interpreter_interpret - switch - expr\n");
 			VariableData* val = interpreter_expression(node->data.expression, state);
-			printf("interpreter_interpret - expr - after switch\n");
 			// free_variable_data(val);
 			break;
 
 		default:
-			printf("interpreter_interpret - switch - default\n");
+			printf("interpreter_interpret - default\n");
 			break;
 	}
 
@@ -1577,7 +1565,6 @@ void interpreter_function_declaration(ast_function_declaration_t* stmt, interpre
 
 void interpreter_expression_data(VariableData* data)
 {
-	printf("type of data: %d\n", data->type);
 	if (data == NULL) {
 		printf("NULL\n");
 		return;
@@ -1588,8 +1575,7 @@ void interpreter_expression_data(VariableData* data)
 	} else if (data->type == VALUE_TYPE_BOOL) {
 		printf("%s\n", data->int_value == 1 ? "True" : "False");
 	} else if (data->type == VALUE_TYPE_STRING) {
-		printf("ok");
-		// printf("%s\n", data->string_value);
+		printf("%s\n", data->string_value);
 	} else {
 		printf("Unknown\n");
 	}
@@ -1600,26 +1586,15 @@ void interpreter_statement_return(ast_statement_return_t* stmt, interpreter_stat
 	// printf("Return Statement\n");
 
 	VariableData* res = interpreter_expression(stmt->expression->data.expression, state);
-	printf("Return Result: ");
 	interpreter_expression_data(res);
 	free_variable_data(res);
 }
 
 void interpreter_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state)
 {
-	printf("Print Statement\n");
+	// printf("Print Statement\n");
 
 	VariableData* res = interpreter_expression(stmt->expression->data.expression, state);
-	printf("Print Result: ");
-	if (res == NULL) {
-		printf("res is null\n");
-		return;
-	} else {
-		printf("res is not null\n");
-	}
-
-	printf("type of data: ");
-	printf("%d\n", res->type);
 	interpreter_expression_data(res);
 	free_variable_data(res);
 }
@@ -1854,12 +1829,9 @@ int main(int argc, char** argv)
 	print_xml_ast_tree(parser->ast_tree);
 
 	interpreter_create();
-	printf("start interpreter\n");
 	interpreter_interpret(parser->ast_tree, NULL);
-	printf("end of interpreter\n");
 	// printf("after free interpreter\n");
 	parser_free(parser);
-	printf("after parser free");
 	// interpreter_free();
 	// lexer_free(lexer);
 

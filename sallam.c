@@ -539,11 +539,20 @@ void array_push(array_t* arr, void* data)
 
 void array_free(array_t* arr)
 {
-	for (size_t i = 0; i < arr->length; i++) {
-		free(arr->data[i]);
+	if (arr == NULL) {
+		return;
 	}
-	free(arr->data);
+
+	if (arr->data != NULL) {
+		for (size_t i = 0; i < arr->length; i++) {
+			free(arr->data[i]);
+		}
+		free(arr->data);
+		arr->data = NULL;
+	}
+
 	free(arr);
+	arr = NULL;
 }
 
 void token_print(token_t* t)
@@ -586,16 +595,28 @@ void lexer_free(lexer_t* lexer)
 	}
 
 	if (lexer->tokens != NULL) {
-		while (lexer->tokens->length > 0) {
-			token_t* t = (token_t*) array_pop(lexer->tokens);
-			free(t->value);
-			free(t);
-		}
-		// array_free(lexer->tokens);
+		// while (lexer->tokens->length > 0) {
+		// 	token_t* t = (token_t*) array_pop(lexer->tokens);
+		// 	if (t != NULL) {
+		// 		if (t->value != NULL) {
+		// 			free(t->value);
+		// 			t->value = NULL;
+		// 		}
+		// 		free(t);
+		// 		t = NULL;
+		// 	}
+		// }
+		array_free(lexer->tokens);
+		lexer->tokens = NULL;
 	}
 
-	free(lexer->data);
+	if (lexer->data != NULL) {
+		free(lexer->data);
+		lexer->data = NULL;
+	}
+
 	free(lexer);
+	lexer = NULL;
 }
 
 bool is_number(wchar_t ch)
@@ -1918,8 +1939,7 @@ int main(int argc, char** argv)
 	parser_free(parser);
 	printf("end parser free\n");
 
-
-	// lexer_free(lexer);
+	lexer_free(lexer);
 
 	exit(EXIT_SUCCESS);
 }

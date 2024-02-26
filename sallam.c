@@ -1800,52 +1800,49 @@ ast_literal_t* interpreter_identifier(ast_identifier_t* expr, interpreter_state_
 }
 
 ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, interpreter_state_t* state) {
-	return interpreter_expression(binary_op->left, state);
-	// // ast_literal_t* val = (ast_literal_t*) malloc(sizeof(ast_literal_t));
-	// ast_literal_t* left = interpreter_expression(binary_op->left, state);
-	// ast_literal_t* right = interpreter_expression(binary_op->right, state);
+	ast_literal_t* left = interpreter_expression(binary_op->left, state);
+	ast_literal_t* right = interpreter_expression(binary_op->right, state);
 
-	// if (left == NULL || right == NULL) {
-	// 	printf("Error: cannot calculate binary operator for NULL values!\n");
-	// 	exit(EXIT_FAILURE);
-	// } else if ((left->type != VALUE_TYPE_INT && left->type != VALUE_TYPE_BOOL) || (right->type != VALUE_TYPE_INT && right->type != VALUE_TYPE_BOOL)) {
-	// 	printf("Error: cannot calculate binary operator for non-int values!\n");
-	// 	exit(EXIT_FAILURE);
-	// } else if (strcmp(binary_op->operator, "+") == 0) {
-	// 	left->type = VALUE_TYPE_INT;
-	// 	left->int_value = left->int_value + right->int_value;
-	// 	return left;
-	// } else if (strcmp(binary_op->operator, "-") == 0) {
-	// 	left->type = VALUE_TYPE_INT;
-	// 	left->int_value = left->int_value - right->int_value;
-	// 	return left;
-	// } else if (strcmp(binary_op->operator, "*") == 0) {
-	// 	left->type = VALUE_TYPE_INT;
-	// 	left->int_value = left->int_value * right->int_value;
-	// 	return left;
-	// } else if (strcmp(binary_op->operator, "و") == 0) {
-	// 	left->type = VALUE_TYPE_BOOL;
-	// 	left->int_value = left->int_value && right->int_value;
-	// 	return left;
-	// } else if (strcmp(binary_op->operator, "یا") == 0) {
-	// 	left->type = VALUE_TYPE_BOOL;
-	// 	left->int_value = left->int_value || right->int_value;
-	// 	return left;
-	// } else if (strcmp(binary_op->operator, "/") == 0) {
-	// 	if (right->int_value == 0) {
-	// 		printf("Error: cannot divide by zero!\n");
-	// 		exit(EXIT_FAILURE);
-	// 	} else {
-	// 		left->type = VALUE_TYPE_INT;
-	// 		left->int_value = left->int_value / right->int_value;
-	// 		return left;
-	// 	}
-	// }
+	if (left == NULL || right == NULL) {
+		printf("Error: cannot calculate binary operator for NULL values!\n");
+		exit(EXIT_FAILURE);
+	} else if ((left->type != VALUE_TYPE_INT && left->type != VALUE_TYPE_BOOL) || (right->type != VALUE_TYPE_INT && right->type != VALUE_TYPE_BOOL)) {
+		printf("Error: cannot calculate binary operator for non-int values!\n");
+		exit(EXIT_FAILURE);
+	} else if (strcmp(binary_op->operator, "+") == 0) {
+		left->type = VALUE_TYPE_INT;
+		left->int_value = left->int_value + right->int_value;
+		return left;
+	} else if (strcmp(binary_op->operator, "-") == 0) {
+		left->type = VALUE_TYPE_INT;
+		left->int_value = left->int_value - right->int_value;
+		return left;
+	} else if (strcmp(binary_op->operator, "*") == 0) {
+		left->type = VALUE_TYPE_INT;
+		left->int_value = left->int_value * right->int_value;
+		return left;
+	} else if (strcmp(binary_op->operator, "و") == 0) {
+		left->type = VALUE_TYPE_BOOL;
+		left->int_value = left->int_value && right->int_value;
+		return left;
+	} else if (strcmp(binary_op->operator, "یا") == 0) {
+		left->type = VALUE_TYPE_BOOL;
+		left->int_value = left->int_value || right->int_value;
+		return left;
+	} else if (strcmp(binary_op->operator, "/") == 0) {
+		if (right->int_value == 0) {
+			printf("Error: cannot divide by zero!\n");
+			exit(EXIT_FAILURE);
+		} else {
+			left->type = VALUE_TYPE_INT;
+			left->int_value = left->int_value / right->int_value;
+			return left;
+		}
+	}
 
-	// ast_expression_data_free(left);
-	// ast_expression_data_free(right);
-	// // ast_expression_data_free(val);
-	// return NULL;
+	ast_expression_data_free(left);
+	ast_expression_data_free(right);
+	return NULL;
 }
 
 // int interpreter_function_call(ast_node_t* node, interpreter_state_t* state)
@@ -1894,8 +1891,8 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_state_
 		case AST_EXPRESSION_IDENTIFIER:
 			return interpreter_identifier(expr->data.identifier, state);
 
-		// case AST_EXPRESSION_BINARY:
-		// 	return interpreter_operator_binary(expr->data.binary_op, state);
+		case AST_EXPRESSION_BINARY:
+			return interpreter_operator_binary(expr->data.binary_op, state);
 
 		// case AST_EXPRESION_FUNCTION_CALL:
 		//     return interpreter_function_call(expr, state);

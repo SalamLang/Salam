@@ -376,13 +376,16 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token);
 ast_expression_t* nud_parentheses(parser_t* parser, token_t* token);
 ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expression_t* left);
 ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* left);
+ast_expression_t* led_and(parser_t* parser, token_t* token, ast_expression_t* left);
+ast_expression_t* led_or(parser_t* parser, token_t* token, ast_expression_t* left);
 
 ast_expression_t* parser_expression_pratt(parser_t* parser, int precedence);
 
 enum {
 	PRECEDENCE_LOWEST = 0,    // START FROM HERE
 	PRECEDENCE_HIGHEST = 1,   // =
-	PRECEDENCE_SUM = 2,       // + -
+	PRECEDENCE_ANDOR = 2,     // AND OR
+	PRECEDENCE_SUM = 3,       // + -
 };
 
 token_info_t token_infos[] = {
@@ -393,6 +396,8 @@ token_info_t token_infos[] = {
 	[TOKEN_TYPE_IDENTIFIER] = {PRECEDENCE_LOWEST, nud_identifier, NULL},
 	[TOKEN_TYPE_PARENTHESE_OPEN] = {PRECEDENCE_LOWEST, nud_parentheses, NULL},
 	[TOKEN_TYPE_PLUS] = {PRECEDENCE_SUM, NULL, led_plus_minus},
+	[TOKEN_TYPE_AND] = {PRECEDENCE_ANDOR, NULL, led_and},
+	[TOKEN_TYPE_OR] = {PRECEDENCE_ANDOR, NULL, led_or},
 	[TOKEN_TYPE_MINUS] = {PRECEDENCE_SUM, NULL, led_plus_minus},
 	[TOKEN_TYPE_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal},
 };
@@ -1071,6 +1076,38 @@ ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* 
 	return binary_op_expr;
 }
 
+ast_expression_t* led_and(parser_t* parser, token_t* token, ast_expression_t* left)
+{
+	printf("Parsing operator and\n");
+
+	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
+
+	ast_expression_t* binary_op_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+	binary_op_expr->type = AST_EXPRESSION_BINARY;
+	binary_op_expr->data.binary_op = (ast_expression_binary_t*) malloc(sizeof(ast_expression_binary_t));
+	binary_op_expr->data.binary_op->operator = strdup(token->value);
+	binary_op_expr->data.binary_op->left = left;
+	binary_op_expr->data.binary_op->right = right;
+
+	return binary_op_expr;
+}
+
+ast_expression_t* led_or(parser_t* parser, token_t* token, ast_expression_t* left)
+{
+	printf("Parsing operator and\n");
+
+	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
+
+	ast_expression_t* binary_op_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+	binary_op_expr->type = AST_EXPRESSION_BINARY;
+	binary_op_expr->data.binary_op = (ast_expression_binary_t*) malloc(sizeof(ast_expression_binary_t));
+	binary_op_expr->data.binary_op->operator = strdup(token->value);
+	binary_op_expr->data.binary_op->left = left;
+	binary_op_expr->data.binary_op->right = right;
+
+	return binary_op_expr;
+}
+
 ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expression_t* left)
 {
 	printf("Parsing operator binary\n");
@@ -1563,7 +1600,7 @@ VariableData* interpreter_operator_binary(ast_expression_binary_t* binary_op, in
 	VariableData* left = interpreter_expression(binary_op->left, state);
 	VariableData* right = interpreter_expression(binary_op->right, state);
 
-	if (left->type != VALUE_TYPE_INT || right->type != VALUE_TYPE_INT) {
+	if ((left->type != VALUE_TYPE_INT && left->type != VALUE_TYPE_BOOL) || (right->type != VALUE_TYPE_INT && right->type != VALUE_TYPE_BOOL)) {
 		printf("Error: cannot calculate binary operator for non-int values!\n");
 		exit(EXIT_FAILURE);
 	}

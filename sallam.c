@@ -1013,8 +1013,8 @@ ast_node_t* parser_function(parser_t* parser)
 	parser_token_eat_nodata(parser, TOKEN_TYPE_FUNCTION);
 
 	token_t* name = parser_token_eat(parser, TOKEN_TYPE_IDENTIFIER);
-	token_print(name);
-	printf("FUNCTION NAME: %s\n", name->value);
+	// token_print(name);
+	// printf("FUNCTION NAME: %s\n", name->value);
 
 	// if (parser->lexer->tokens->length > parser->token_index && ((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_PARENTHESE_OPEN) {
 	//     printf("Parsing parameters\n");
@@ -1545,8 +1545,9 @@ bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
 			break;
 
 		case AST_EXPRESSION:
-			// VariableData* val = interpreter_expression(node->data.expression, state);
-			interpreter_expression(node->data.expression, state);
+			VariableData* val = interpreter_expression(node->data.expression, state);
+			// interpreter_expression(node->data.expression, state);
+			// free(val);
 			// free_variable_data(val);
 			break;
 

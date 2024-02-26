@@ -595,18 +595,18 @@ void lexer_free(lexer_t* lexer)
 	}
 
 	if (lexer->tokens != NULL) {
-		// while (lexer->tokens->length > 0) {
-		// 	token_t* t = (token_t*) array_pop(lexer->tokens);
-		// 	if (t != NULL) {
-		// 		if (t->value != NULL) {
-		// 			free(t->value);
-		// 			t->value = NULL;
-		// 		}
-		// 		free(t);
-		// 		t = NULL;
-		// 	}
-		// }
-		array_free(lexer->tokens);
+		while (lexer->tokens->length > 0) {
+			token_t* t = (token_t*) array_pop(lexer->tokens);
+			if (t != NULL) {
+				if (t->value != NULL) {
+					free(t->value);
+					t->value = NULL;
+				}
+				free(t);
+				t = NULL;
+			}
+		}
+		// array_free(lexer->tokens);
 		lexer->tokens = NULL;
 	}
 
@@ -1931,6 +1931,8 @@ int main(int argc, char** argv)
 	interpreter_create();
 	interpreter_interpret(parser->ast_tree, NULL);
 
+	printf("====================================\n");
+
 	printf("free interpreter\n");
 	interpreter_free();
 	printf("end interpreter free\n");
@@ -1939,7 +1941,7 @@ int main(int argc, char** argv)
 	parser_free(parser);
 	printf("end parser free\n");
 
-	lexer_free(lexer);
+	// lexer_free(lexer);
 
 	exit(EXIT_SUCCESS);
 }

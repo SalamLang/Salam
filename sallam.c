@@ -1375,28 +1375,41 @@ ast_expression_t* nud_parentheses(parser_t* parser, token_t* token)
 	return expression_node;
 }
 
-ast_node_t* parser_block(parser_t* parser)
-{
+ast_node_t* parser_block(parser_t* parser) {
 	printf("Parsing block\n");
 
-	ast_node_t* block_node = (ast_node_t*) malloc(sizeof(ast_node_t));
+	ast_node_t* block_node = (ast_node_t*)malloc(sizeof(ast_node_t));
 	block_node->type = AST_BLOCK;
-	block_node->data.block = (ast_block_t*) malloc(sizeof(ast_block_t));
+	block_node->data.block = (ast_block_t*)malloc(sizeof(ast_block_t));
 	block_node->data.block->num_statements = 0;
-	block_node->data.block->statements = (ast_node_t**) malloc(sizeof(ast_node_t*) * 10 + 1);
+
+	size_t allocated_size = 5;
+	block_node->data.block->statements = (ast_node_t**)malloc(sizeof(ast_node_t*) * (allocated_size + 1));
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_SECTION_OPEN);
 
 	while (
 		parser->lexer->tokens->length > parser->token_index &&
-		((token_t*) parser->lexer->tokens->data[parser->token_index])->type != TOKEN_TYPE_SECTION_CLOSE
+		((token_t*)parser->lexer->tokens->data[parser->token_index])->type != TOKEN_TYPE_SECTION_CLOSE
 	) {
 		ast_node_t* statement = parser_statement(parser);
-		// block_node->data.block->statements = realloc(block_node->data.block->statements, (block_node->data.block->num_statements + 1) * sizeof(ast_node_t*));
-		block_node->data.block->statements[
-			block_node->data.block->num_statements++
-		] = statement;
+
+		if (block_node->data.block->num_statements >= allocated_size) {
+			allocated_size *= 2;
+			block_node->data.block->statements = (ast_node_t**)realloc(
+				block_node->data.block->statements, sizeof(ast_node_t*) * (allocated_size + 1)
+			);
+
+			if (block_node->data.block->statements == NULL) {
+				fprintf(stderr, "Error in parsing block: Memory reallocation failed.\n");
+				exit(EXIT_FAILURE);
+				break;
+			}
+		}
+
+		block_node->data.block->statements[block_node->data.block->num_statements++] = statement;
 	}
+
 	block_node->data.block->statements[block_node->data.block->num_statements] = NULL;
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_SECTION_CLOSE);

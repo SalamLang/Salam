@@ -545,7 +545,15 @@ lexer_t* lexer_create(const char* data)
 
 void lexer_free(lexer_t* lexer)
 {
-	array_free(lexer->tokens);
+	if (lexer == NULL) {
+		return;
+	}
+
+	if (lexer->tokens != NULL) {
+		array_free(lexer->tokens);
+	}
+
+	free(lexer->data);
 	free(lexer);
 }
 
@@ -892,8 +900,20 @@ void ast_node_free(ast_node_t* node)
 
 void parser_free(parser_t* parser)
 {
-	ast_node_free(parser->ast_tree);
-	lexer_free(parser->lexer);
+	if (parser == NULL) {
+		return;
+	}
+
+	if (parser->ast_tree != NULL) {
+		printf("free ast_tree\n");
+		ast_node_free(parser->ast_tree);
+	}
+
+	if (parser->lexer != NULL) {
+		printf("free lexer\n");
+		lexer_free(parser->lexer);
+	}
+
 	free(parser);
 }
 
@@ -1625,38 +1645,37 @@ VariableData* interpreter_identifier(ast_identifier_t* expr, interpreter_state_t
 }
 
 VariableData* interpreter_operator_binary(ast_expression_binary_t* binary_op, interpreter_state_t* state) {
-	const char* operator_str = binary_op->operator;
-
 	VariableData* val = (VariableData*) malloc(sizeof(VariableData));
 	VariableData* left = interpreter_expression(binary_op->left, state);
 	VariableData* right = interpreter_expression(binary_op->right, state);
 
-	if ((left->type != VALUE_TYPE_INT && left->type != VALUE_TYPE_BOOL) || (right->type != VALUE_TYPE_INT && right->type != VALUE_TYPE_BOOL)) {
+	if (left == NULL || right == NULL) {
+		printf("Error: cannot calculate binary operator for NULL values!\n");
+		exit(EXIT_FAILURE);
+	} else if ((left->type != VALUE_TYPE_INT && left->type != VALUE_TYPE_BOOL) || (right->type != VALUE_TYPE_INT && right->type != VALUE_TYPE_BOOL)) {
 		printf("Error: cannot calculate binary operator for non-int values!\n");
 		exit(EXIT_FAILURE);
-	}
-
-	if (strcmp(operator_str, "+") == 0) {
+	} else if (strcmp(binary_op->operator, "+") == 0) {
 		val->type = VALUE_TYPE_INT;
 		val->int_value = left->int_value + right->int_value;
 		return val;
-	} else if (strcmp(operator_str, "-") == 0) {
+	} else if (strcmp(binary_op->operator, "-") == 0) {
 		val->type = VALUE_TYPE_INT;
 		val->int_value = left->int_value - right->int_value;
 		return val;
-	} else if (strcmp(operator_str, "*") == 0) {
+	} else if (strcmp(binary_op->operator, "*") == 0) {
 		val->type = VALUE_TYPE_INT;
 		val->int_value = left->int_value * right->int_value;
 		return val;
-	} else if (strcmp(operator_str, "و") == 0) {
+	} else if (strcmp(binary_op->operator, "و") == 0) {
 		val->type = VALUE_TYPE_BOOL;
 		val->int_value = left->int_value && right->int_value;
 		return val;
-	} else if (strcmp(operator_str, "یا") == 0) {
+	} else if (strcmp(binary_op->operator, "یا") == 0) {
 		val->type = VALUE_TYPE_BOOL;
 		val->int_value = left->int_value || right->int_value;
 		return val;
-	} else if (strcmp(operator_str, "/") == 0) {
+	} else if (strcmp(binary_op->operator, "/") == 0) {
 		if (right->int_value == 0) {
 			printf("Error: cannot divide by zero!\n");
 			exit(EXIT_FAILURE);
@@ -1771,7 +1790,7 @@ int main(int argc, char** argv)
 	interpreter_interpret(parser->ast_tree, NULL);
 	interpreter_free();
 	parser_free(parser);
-	lexer_free(lexer);
+	// lexer_free(lexer);
 
 	exit(EXIT_SUCCESS);
 }

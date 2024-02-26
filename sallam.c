@@ -1833,6 +1833,13 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, i
 	if (left == NULL || right == NULL) {
 		printf("Error: cannot calculate binary operator for NULL values!\n");
 		exit(EXIT_FAILURE);
+	} else if (left->type == VALUE_TYPE_STRING && right->type == VALUE_TYPE_STRING && strcmp(binary_op->operator, "+") == 0) {
+		left->type = VALUE_TYPE_STRING;
+		int leftlen = strlen(left->string_value);
+		int rightlen = strlen(right->string_value);
+		left->string_value = (char*)realloc(left->string_value, leftlen + rightlen + 1);
+		strcat(left->string_value, right->string_value);
+		return left;
 	} else if ((left->type != VALUE_TYPE_INT && left->type != VALUE_TYPE_BOOL) || (right->type != VALUE_TYPE_INT && right->type != VALUE_TYPE_BOOL)) {
 		printf("Error: cannot calculate binary operator for non-int values!\n");
 		exit(EXIT_FAILURE);

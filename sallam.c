@@ -1550,20 +1550,27 @@ VariableData* interpreter_literal(ast_literal_t* expr)
     if (expr->literal_type == TOKEN_TYPE_NUMBER) {
         val->type = VALUE_TYPE_INT;
         val->int_value = atoi(expr->value);
+		return val;
     } else if (expr->literal_type == TOKEN_TYPE_STRING) {
         val->type = VALUE_TYPE_STRING;
         val->string_value = strdup(expr->value);
+		return val;
     } else if (expr->literal_type == TOKEN_TYPE_TRUE) {
 		val->type = VALUE_TYPE_BOOL;
 		val->int_value = 1;
+		return val;
 	} else if (expr->literal_type == TOKEN_TYPE_FALSE) {
 		val->type = VALUE_TYPE_BOOL;
 		val->int_value = 0;
+		return val;
 	} else {
         // TODO: Handle other literal types if needed
+		printf("Error: No handler for other literal types!\n");
+		exit(EXIT_FAILURE);
     }
 
-    return val;
+	free_variable_data(val);
+	return NULL;
 }
 
 void free_variable_data(VariableData* val)
@@ -1581,15 +1588,16 @@ VariableData* interpreter_identifier(ast_identifier_t* expr, interpreter_state_t
 {
 	// printf("Variable: %s\n", expr->name);
 
-	VariableData* variable = findInSymbolTable(symbolTableStack, expr->name);
-	if (variable != NULL) {
-		// printf("Variable found: %s = %d\n", expr->name, variable->value);
-		return variable;
+	VariableData* val = findInSymbolTable(symbolTableStack, expr->name);
+	if (val != NULL) {
+		// printf("Variable found: %s = %d\n", expr->name, val->value);
+		return val;
 	} else {
 		printf("Error: Variable not found: %s\n", expr->name);
 		exit(EXIT_FAILURE);
 	}
-	
+
+	free_variable_data(val);
 	return NULL;
 }
 
@@ -1629,14 +1637,16 @@ VariableData* interpreter_operator_binary(ast_expression_binary_t* binary_op, in
 		if (right->int_value == 0) {
 			printf("Error: cannot divide by zero!\n");
 			exit(EXIT_FAILURE);
-			return NULL;
+		} else {
+			val->type = VALUE_TYPE_INT;
+			val->int_value = left->int_value / right->int_value;
+			return val;
 		}
-
-		val->type = VALUE_TYPE_INT;
-		val->int_value = left->int_value / right->int_value;
-		return val;
 	}
-	
+
+	free_variable_data(left);
+	free_variable_data(right);
+	free_variable_data(val);
 	return NULL;
 }
 

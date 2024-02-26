@@ -6,7 +6,7 @@ rm s
 # gcc sallam.c -o s -fsanitize=leak -llsan -Walloc-zero
 # gcc -g -fsanitize=address -Walloca sallam.c -o s -lefence
 gcc -g -fsanitize=undefined,address -Walloca sallam.c -o s -lefence
-gcc -g -Walloca sallam.c -o s
+# gcc -g -Walloca sallam.c -o s
 
 # Check if compilation was successful
 if [ $? -eq 0 ]; then

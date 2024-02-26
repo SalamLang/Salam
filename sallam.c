@@ -490,6 +490,7 @@ array_t* array_create(size_t size)
 	arr->length = 0;
 	arr->size = size > min_size ? size : min_size;
 	arr->data = malloc(sizeof(void*) * arr->size);
+
 	return arr;
 }
 
@@ -516,6 +517,9 @@ void array_push(array_t* arr, void* data)
 
 void array_free(array_t* arr)
 {
+	for (size_t i = 0; i < arr->length; i++) {
+		free(arr->data[i]);
+	}
 	free(arr->data);
 	free(arr);
 }
@@ -856,18 +860,24 @@ parser_t* parser_create(lexer_t* lexer)
 
 void ast_expression_free(ast_expression_t* expr)
 {
+	if (expr == NULL) {
+		return;
+	}
+
 	switch (expr->type) {
 		case AST_EXPRESSION_LITERAL:
+			free(expr->data.literal->value);
 			free(expr->data.literal);
 			break;
 
 		case AST_EXPRESSION_IDENTIFIER:
+			free(expr->data.identifier->name);
 			free(expr->data.identifier);
 			break;
 		
 		case AST_EXPRESSION_ASSIGNMENT:
-			free(expr->data.assignment->left);
-			free(expr->data.assignment->right);
+			ast_expression_free(expr->data.assignment->left);
+			ast_expression_free(expr->data.assignment->right);
 			break;
 
 		case AST_EXPRESSION_BINARY:
@@ -876,6 +886,8 @@ void ast_expression_free(ast_expression_t* expr)
 			ast_expression_free(expr->data.binary_op->right);
 			break;
 	}
+
+	free(expr);
 }
 
 void ast_node_free(ast_node_t* node)
@@ -902,7 +914,7 @@ void ast_node_free(ast_node_t* node)
 			for (size_t i = 0; i < node->data.block->num_statements; i++) {
 				ast_node_free((ast_node_t*) node->data.block->statements[i]);
 			}
-			
+
 			free(node->data.block->statements);
 			break;
 
@@ -1509,34 +1521,46 @@ void interpreter_create()
 
 bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
 {
+	printf("interpreter_interpret - start\n");
 	if (node == NULL) {
 		return false;
 	}
 
 	switch (node->type) {
 		case AST_BLOCK:
+			printf("interpreter_interpret - switch - block\n");
 			interpreter_block(node, state);
+			printf("interpreter_interpret - block - after switch\n");
 			break;
 
 		case AST_FUNCTION_DECLARATION:
+			printf("interpreter_interpret - switch - function\n");
 			interpreter_function_declaration(node->data.function_declaration, state);
+			printf("interpreter_interpret - function - after switch\n");
 			break;
 
 		case AST_STATEMENT_RETURN:
+			printf("interpreter_interpret - switch - return\n");
 			interpreter_statement_return(node->data.statement_return, state);
+			printf("interpreter_interpret - return - after switch\n");
 			return true;
 			break;
 
 		case AST_STATEMENT_PRINT:
+			printf("interpreter_interpret - switch - print\n");
 			interpreter_statement_print(node->data.statement_print, state);
+			printf("interpreter_interpret - print - after switch\n");
 			break;
 
 		case AST_EXPRESSION:
+			printf("interpreter_interpret - switch - expr\n");
 			VariableData* val = interpreter_expression(node->data.expression, state);
-			free_variable_data(val);
+			printf("interpreter_interpret - expr - after switch\n");
+			// free_variable_data(val);
 			break;
 
 		default:
+			printf("interpreter_interpret - switch - default\n");
 			break;
 	}
 
@@ -1552,6 +1576,7 @@ void interpreter_function_declaration(ast_function_declaration_t* stmt, interpre
 
 void interpreter_expression_data(VariableData* data)
 {
+	printf("type of data: %d\n", data->type);
 	if (data == NULL) {
 		printf("NULL\n");
 		return;
@@ -1562,7 +1587,8 @@ void interpreter_expression_data(VariableData* data)
 	} else if (data->type == VALUE_TYPE_BOOL) {
 		printf("%s\n", data->int_value == 1 ? "True" : "False");
 	} else if (data->type == VALUE_TYPE_STRING) {
-		printf("%s\n", data->string_value);
+		printf("ok");
+		// printf("%s\n", data->string_value);
 	} else {
 		printf("Unknown\n");
 	}
@@ -1580,10 +1606,19 @@ void interpreter_statement_return(ast_statement_return_t* stmt, interpreter_stat
 
 void interpreter_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state)
 {
-	// printf("Print Statement\n");
+	printf("Print Statement\n");
 
 	VariableData* res = interpreter_expression(stmt->expression->data.expression, state);
 	printf("Print Result: ");
+	if (res == NULL) {
+		printf("res is null\n");
+		return;
+	} else {
+		printf("res is not null\n");
+	}
+
+	printf("type of data: ");
+	printf("%d\n", res->type);
 	interpreter_expression_data(res);
 	free_variable_data(res);
 }
@@ -1673,7 +1708,6 @@ VariableData* interpreter_identifier(ast_identifier_t* expr, interpreter_state_t
 		exit(EXIT_FAILURE);
 	}
 
-	free_variable_data(val);
 	return NULL;
 }
 
@@ -1783,7 +1817,6 @@ VariableData* interpreter_expression(ast_expression_t* expr, interpreter_state_t
 		default:
 			printf("Error: default expr type: %d\n", expr->type);
 			exit(EXIT_FAILURE);
-			// return NULL;
 	}
 	
 	return NULL;
@@ -1820,10 +1853,13 @@ int main(int argc, char** argv)
 	print_xml_ast_tree(parser->ast_tree);
 
 	interpreter_create();
+	printf("start interpreter\n");
 	interpreter_interpret(parser->ast_tree, NULL);
+	printf("end of interpreter\n");
 	interpreter_free();
-	parser_free(parser);
-	lexer_free(lexer);
+	printf("after free interpreter\n");
+	// parser_free(parser);
+	// lexer_free(lexer);
 
 	exit(EXIT_SUCCESS);
 }

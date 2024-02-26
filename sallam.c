@@ -277,13 +277,13 @@ typedef struct {
 
 typedef struct {
 	char* data;
-	int length;
-	int index;
-	int line;
-	int column;
+	size_t length;
+	size_t index;
+	size_t line;
+	size_t column;
 
 	array_t* tokens;
-	int last_char_size;
+	size_t last_char_size;
 } lexer_t;
 
 struct ast_node;
@@ -413,7 +413,7 @@ typedef ast_expression_t* (*nud_func_t)(parser_t* parser, token_t* token);
 typedef ast_expression_t* (*led_func_t)(parser_t* parser, token_t* token, ast_expression_t* left);
 
 typedef struct {
-	int precedence;
+	size_t precedence;
 	nud_func_t nud;
 	led_func_t led;
 } token_info_t;
@@ -428,7 +428,7 @@ ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* 
 ast_expression_t* led_and(parser_t* parser, token_t* token, ast_expression_t* left);
 ast_expression_t* led_or(parser_t* parser, token_t* token, ast_expression_t* left);
 
-ast_expression_t* parser_expression_pratt(parser_t* parser, int precedence);
+ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence);
 
 enum {
 	PRECEDENCE_LOWEST = 0,    // START FROM HERE
@@ -886,7 +886,7 @@ void lexer_lex(lexer_t* lexer)
 		} else if (is_alpha(current_wchar)) {
 			read_identifier(lexer, current_wchar);
 		} else {
-			printf("Error: Unexpected character '%c' at line %d, column %d\n", current_char, lexer->line, lexer->column - 1);
+			printf("Error: Unexpected character '%c' at line %zu, column %zu\n", current_char, lexer->line, lexer->column - 1);
 
 			token_t* t = token_create(TOKEN_TYPE_ERROR, (char[]){current_char,'\0'}, 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
@@ -1254,7 +1254,7 @@ ast_node_t* parser_expression(parser_t* parser)
 	return node;
 }
 
-ast_expression_t* parser_expression_pratt(parser_t* parser, int precedence)
+ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence)
 {
 	printf("Parsing pratt\n");
 
@@ -1835,8 +1835,8 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, i
 		exit(EXIT_FAILURE);
 	} else if (left->type == VALUE_TYPE_STRING && right->type == VALUE_TYPE_STRING && strcmp(binary_op->operator, "+") == 0) {
 		left->type = VALUE_TYPE_STRING;
-		int leftlen = strlen(left->string_value);
-		int rightlen = strlen(right->string_value);
+		size_t leftlen = strlen(left->string_value);
+		size_t rightlen = strlen(right->string_value);
 		if (leftlen == 0 && rightlen == 0) {
 			// Skip
 		} else if (leftlen != 0 && rightlen != 0) {

@@ -907,7 +907,7 @@ void ast_node_free(ast_node_t* node)
 
 		case AST_STATEMENT_RETURN:
 			ast_node_free((ast_node_t*) node->data.statement_return->expression);
-			free(node->data.statement_print);
+			free(node->data.statement_return);
 			break;
 		
 		case AST_STATEMENT_PRINT:
@@ -920,6 +920,7 @@ void ast_node_free(ast_node_t* node)
 				ast_node_free((ast_node_t*) node->data.block->statements[i]);
 			}
 			free(node->data.block->statements);
+			free(node->data.block);
 			break;
 
 		case AST_EXPRESSION:

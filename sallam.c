@@ -878,12 +878,14 @@ void ast_expression_free(ast_expression_t* expr)
 		case AST_EXPRESSION_ASSIGNMENT:
 			ast_expression_free(expr->data.assignment->left);
 			ast_expression_free(expr->data.assignment->right);
+			free(expr->data.assignment);
 			break;
 
 		case AST_EXPRESSION_BINARY:
 			free(expr->data.binary_op->operator);
 			ast_expression_free(expr->data.binary_op->left);
 			ast_expression_free(expr->data.binary_op->right);
+			free(expr->data.binary_op);
 			break;
 	}
 
@@ -900,21 +902,23 @@ void ast_node_free(ast_node_t* node)
 		case AST_FUNCTION_DECLARATION:
 			free(node->data.function_declaration->name);
 			ast_node_free((ast_node_t*) node->data.function_declaration->body);
+			free(node->data.function_declaration);
 			break;
 
 		case AST_STATEMENT_RETURN:
 			ast_node_free((ast_node_t*) node->data.statement_return->expression);
+			free(node->data.statement_print);
 			break;
 		
 		case AST_STATEMENT_PRINT:
 			ast_node_free((ast_node_t*) node->data.statement_print->expression);
+			free(node->data.statement_print);
 			break;
 
 		case AST_BLOCK:
 			for (size_t i = 0; i < node->data.block->num_statements; i++) {
 				ast_node_free((ast_node_t*) node->data.block->statements[i]);
 			}
-
 			free(node->data.block->statements);
 			break;
 
@@ -928,21 +932,17 @@ void ast_node_free(ast_node_t* node)
 
 void parser_free(parser_t* parser)
 {
+	printf("parser free start\n");
 	if (parser == NULL) {
 		return;
 	}
 
+	printf("parser free check ast\n");
 	if (parser->ast_tree != NULL) {
-		printf("free ast_tree\n");
 		ast_node_free(parser->ast_tree);
 	}
-
-	// if (parser->lexer != NULL) {
-	// 	printf("free lexer\n");
-	// 	lexer_free(parser->lexer);
-	// }
-
-	free(parser);
+	printf("parser free all\n");
+	// free(parser);
 }
 
 void parser_token_next(parser_t* parser)
@@ -1856,9 +1856,10 @@ int main(int argc, char** argv)
 	printf("start interpreter\n");
 	interpreter_interpret(parser->ast_tree, NULL);
 	printf("end of interpreter\n");
-	interpreter_free();
-	printf("after free interpreter\n");
-	// parser_free(parser);
+	// printf("after free interpreter\n");
+	parser_free(parser);
+	printf("after parser free");
+	// interpreter_free();
 	// lexer_free(lexer);
 
 	exit(EXIT_SUCCESS);

@@ -493,6 +493,16 @@ array_t* array_create(size_t size)
 	return arr;
 }
 
+void* array_pop(array_t* arr)
+{
+	if (arr->length == 0) {
+		return NULL;
+	}
+
+	void* data = arr->data[--arr->length];
+	return data;
+}
+
 void array_push(array_t* arr, void* data)
 {
 	if (arr->length >= arr->size) {
@@ -550,7 +560,12 @@ void lexer_free(lexer_t* lexer)
 	}
 
 	if (lexer->tokens != NULL) {
-		array_free(lexer->tokens);
+		while (lexer->tokens->length > 0) {
+			token_t* t = (token_t*) array_pop(lexer->tokens);
+			free(t->value);
+			free(t);
+		}
+		// array_free(lexer->tokens);
 	}
 
 	free(lexer->data);
@@ -909,10 +924,10 @@ void parser_free(parser_t* parser)
 		ast_node_free(parser->ast_tree);
 	}
 
-	if (parser->lexer != NULL) {
-		printf("free lexer\n");
-		lexer_free(parser->lexer);
-	}
+	// if (parser->lexer != NULL) {
+	// 	printf("free lexer\n");
+	// 	lexer_free(parser->lexer);
+	// }
 
 	free(parser);
 }
@@ -938,6 +953,23 @@ token_t* parser_token_skip(parser_t* parser, token_type_t type)
 	}
 
 	return NULL;
+}
+
+void parser_token_eat_nodata(parser_t* parser, token_type_t type)
+{
+	if (parser->lexer->tokens->length > parser->token_index) {
+		token_t* token = (token_t*)parser->lexer->tokens->data[parser->token_index];
+
+		if (token->type == type) {
+			parser->token_index++;
+		} else {
+			printf("Error: Expected %s\n", token_type2str(type));
+			exit(EXIT_FAILURE);
+		}
+	} else {
+		printf("Error: Unexpected end of file\n");
+		exit(EXIT_FAILURE);
+	}
 }
 
 token_t* parser_token_eat(parser_t* parser, token_type_t type)
@@ -966,7 +998,7 @@ ast_node_t* parser_function(parser_t* parser)
 	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
 	node->type = AST_FUNCTION_DECLARATION;
 
-	parser_token_eat(parser, TOKEN_TYPE_FUNCTION);
+	parser_token_eat_nodata(parser, TOKEN_TYPE_FUNCTION);
 
 	token_t* name = parser_token_eat(parser, TOKEN_TYPE_IDENTIFIER);
 	token_print(name);
@@ -1219,7 +1251,7 @@ ast_expression_t* nud_parentheses(parser_t* parser, token_t* token)
 
 	ast_expression_t* expression_node = parser_expression_pratt(parser, PRECEDENCE_LOWEST);
 
-	parser_token_eat(parser, TOKEN_TYPE_PARENTHESE_CLOSE);
+	parser_token_eat_nodata(parser, TOKEN_TYPE_PARENTHESE_CLOSE);
 
 	return expression_node;
 }
@@ -1234,7 +1266,7 @@ ast_node_t* parser_block(parser_t* parser)
 	block_node->data.block->num_statements = 0;
 	block_node->data.block->statements = malloc(sizeof(ast_node_t*) * 10 + 1);
 
-	parser_token_eat(parser, TOKEN_TYPE_SECTION_OPEN);
+	parser_token_eat_nodata(parser, TOKEN_TYPE_SECTION_OPEN);
 
 	while (
 		parser->lexer->tokens->length > parser->token_index &&
@@ -1248,7 +1280,7 @@ ast_node_t* parser_block(parser_t* parser)
 	}
 	block_node->data.block->statements[block_node->data.block->num_statements] = NULL;
 
-	parser_token_eat(parser, TOKEN_TYPE_SECTION_CLOSE);
+	parser_token_eat_nodata(parser, TOKEN_TYPE_SECTION_CLOSE);
 
 	return block_node;
 }
@@ -1790,7 +1822,7 @@ int main(int argc, char** argv)
 	interpreter_interpret(parser->ast_tree, NULL);
 	interpreter_free();
 	parser_free(parser);
-	// lexer_free(lexer);
+	lexer_free(lexer);
 
 	exit(EXIT_SUCCESS);
 }

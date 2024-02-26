@@ -859,15 +859,22 @@ void ast_node_free(ast_node_t* node)
 			free(node->data.function_declaration->name);
 			ast_node_free((ast_node_t*) node->data.function_declaration->body);
 			break;
+
 		case AST_STATEMENT_RETURN:
 			ast_node_free((ast_node_t*) node->data.statement_return->expression);
 			break;
+		
+		case AST_STATEMENT_PRINT:
+			ast_node_free((ast_node_t*) node->data.statement_print->expression);
+			break;
+
 		case AST_BLOCK:
 			for (size_t i = 0; i < node->data.block->num_statements; i++) {
 				ast_node_free((ast_node_t*) node->data.block->statements[i]);
 			}
 			free(node->data.block->statements);
 			break;
+			
 		case AST_EXPRESSION:
 			ast_expression_free(node->data.expression);
 			break;
@@ -1465,7 +1472,8 @@ bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
 			break;
 
 		case AST_EXPRESSION:
-			interpreter_expression(node->data.expression, state);
+			VariableData* val = interpreter_expression(node->data.expression, state);
+			free_variable_data(val);
 			break;
 
 		default:
@@ -1746,6 +1754,8 @@ int main(int argc, char** argv)
 	interpreter_create();
 	interpreter_interpret(parser->ast_tree, NULL);
 	interpreter_free();
+	parser_free(parser);
+	lexer_free(lexer);
 
 	exit(EXIT_SUCCESS);
 }

@@ -1837,8 +1837,16 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, i
 		left->type = VALUE_TYPE_STRING;
 		int leftlen = strlen(left->string_value);
 		int rightlen = strlen(right->string_value);
-		left->string_value = (char*)realloc(left->string_value, leftlen + rightlen + 1);
-		strcat(left->string_value, right->string_value);
+		if (leftlen == 0 && rightlen == 0) {
+			// Skip
+		} else if (leftlen != 0 && rightlen != 0) {
+			left->string_value = (char*)realloc(left->string_value, leftlen + rightlen + 1);
+			strcat(left->string_value, right->string_value);
+		} else if (leftlen == 0) {
+			left->string_value = strdup(right->string_value);
+		} else if (rightlen == 0) {
+			// Skip
+		}
 		return left;
 	} else if ((left->type != VALUE_TYPE_INT && left->type != VALUE_TYPE_BOOL) || (right->type != VALUE_TYPE_INT && right->type != VALUE_TYPE_BOOL)) {
 		printf("Error: cannot calculate binary operator for non-int values!\n");

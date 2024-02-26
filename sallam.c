@@ -11,20 +11,32 @@ typedef enum {
 	VALUE_TYPE_FLOAT,
 	VALUE_TYPE_BOOL,
 	VALUE_TYPE_STRING,
-} VariableDataType;
+} ast_literal_type_t;
+
+char* literal_type2name(ast_literal_type_t type)
+{
+	switch (type) {
+		case VALUE_TYPE_INT: return "INT";
+		case VALUE_TYPE_FLOAT: return "FLOAT";
+		case VALUE_TYPE_BOOL: return "BOOL";
+		case VALUE_TYPE_STRING: return "STRING";
+		default: return "TYPE_UNKNOWN";
+	}
+}
 
 typedef struct {
-	VariableDataType type;
+	ast_literal_type_t type;
 	union {
 		int int_value;
+		bool bool_value;
 		float float_value;
 		char* string_value;
-	};	
-} VariableData;
+	};
+} ast_literal_t;
 
 typedef struct SymbolTableEntry {
 	char* identifier;
-	VariableData* data;
+	ast_literal_t* data;
 	struct SymbolTableEntry* next;
 } SymbolTableEntry;
 
@@ -41,7 +53,7 @@ typedef struct SymbolTableStack {
 
 SymbolTableStack* symbolTableStack = NULL;
 
-void free_variable_data(VariableData* val);
+void ast_expression_data_free(ast_literal_t* val);
 
 SymbolTable* createSymbolTable(size_t capacity)
 {
@@ -75,9 +87,14 @@ void popSymbolTable()
 		SymbolTableEntry* entry = table->entries[i];
 		while (entry != NULL) {
 			SymbolTableEntry* next = entry->next;
-			free(entry->identifier);
-			free_variable_data(entry->data);
+			if (entry->identifier != NULL) {
+				free(entry->identifier);
+			}
+			if (entry->data != NULL) {
+				ast_expression_data_free(entry->data);
+			}
 			free(entry);
+
 			entry = next;
 		}
 	}
@@ -95,7 +112,7 @@ unsigned int hash(const char* str, size_t capacity)
 	return hash % capacity;
 }
 
-void addToSymbolTable(SymbolTableStack* symbolTableStack, const char* identifier, VariableData* value)
+void addToSymbolTable(SymbolTableStack* symbolTableStack, const char* identifier, ast_literal_t* value)
 {
 	if (symbolTableStack == NULL) {
 		return;
@@ -112,7 +129,7 @@ void addToSymbolTable(SymbolTableStack* symbolTableStack, const char* identifier
 	table->size++;
 }
 
-VariableData* findInSymbolTableCurrent(SymbolTableStack* currentScope, const char* identifier)
+ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const char* identifier)
 {
 	SymbolTable* table = currentScope->table;
 	unsigned int index = hash(identifier, table->capacity);
@@ -128,10 +145,10 @@ VariableData* findInSymbolTableCurrent(SymbolTableStack* currentScope, const cha
 	return NULL;
 }
 
-VariableData* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier)
+ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier)
 {
 	while (currentScope != NULL) {
-		VariableData* data = findInSymbolTableCurrent(currentScope, identifier);
+		ast_literal_t* data = findInSymbolTableCurrent(currentScope, identifier);
 		if (data != NULL) {
 			return data;
 		}
@@ -262,11 +279,6 @@ typedef struct {
 } ast_statement_if_t;
 
 typedef struct {
-	token_type_t literal_type;
-	char* value;
-} ast_literal_t;
-
-typedef struct {
 	char* name;
 } ast_identifier_t;
 
@@ -351,10 +363,10 @@ ast_node_t* parser_statement_return(parser_t* parser);
 ast_node_t* parser_statement_print(parser_t* parser);
 ast_node_t* parser_expression(parser_t* parser);
 
-VariableData* interpreter_expression(ast_expression_t* expr, interpreter_state_t* state);
-VariableData* interpreter_operator_binary(ast_expression_binary_t* expr, interpreter_state_t* state);
-VariableData* interpreter_literal(ast_literal_t* expr);
-VariableData* interpreter_identifier(ast_identifier_t* expr, interpreter_state_t* state);
+ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_state_t* state);
+ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* expr, interpreter_state_t* state);
+ast_literal_t* interpreter_literal(ast_literal_t* expr);
+ast_literal_t* interpreter_identifier(ast_identifier_t* expr, interpreter_state_t* state);
 
 void interpreter_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state);
 void interpreter_statement_return(ast_statement_return_t* stmt, interpreter_state_t* state);
@@ -867,8 +879,7 @@ void ast_expression_free(ast_expression_t* expr)
 
 	switch (expr->type) {
 		case AST_EXPRESSION_LITERAL:
-			free(expr->data.literal->value);
-			free(expr->data.literal);
+			ast_expression_data_free(expr->data.literal);
 			break;
 
 		case AST_EXPRESSION_IDENTIFIER:
@@ -1209,9 +1220,9 @@ ast_expression_t* nud_bool(parser_t* parser, token_t* token)
 	ast_expression_t* literal_expr = malloc(sizeof(ast_expression_t));
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
-	literal_expr->data.literal = malloc(sizeof(ast_literal_t));
-	literal_expr->data.literal->value = strdup(token->value);
-	literal_expr->data.literal->literal_type = token->type;
+	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
+	literal_expr->data.literal->type = VALUE_TYPE_BOOL;
+	literal_expr->data.literal->bool_value = strcmp(token->value, "درست") == 0;
 
 	return literal_expr;
 }
@@ -1224,8 +1235,8 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
 	literal_expr->data.literal = malloc(sizeof(ast_literal_t));
-	literal_expr->data.literal->value = strdup(token->value);
-	literal_expr->data.literal->literal_type = token->type;
+	literal_expr->data.literal->type = VALUE_TYPE_INT;
+	literal_expr->data.literal->int_value = atoi(token->value);
 
 	return literal_expr;
 }
@@ -1238,8 +1249,8 @@ ast_expression_t* nud_string(parser_t* parser, token_t* token)
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
 	literal_expr->data.literal = malloc(sizeof(ast_literal_t));
-	literal_expr->data.literal->literal_type = token->type;
-	literal_expr->data.literal->value = strdup(token->value);
+	literal_expr->data.literal->type = VALUE_TYPE_STRING;
+	literal_expr->data.literal->string_value = token->value;
 
 	return literal_expr;
 }
@@ -1357,10 +1368,18 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 			printf("<Literal>\n");
 
 				print_indentation(indent_level + 2);
-				printf("<Type>%s</Type>\n", token_type2str(expr->data.literal->literal_type));
+				printf("<Type>%s</Type>\n", literal_type2name(expr->data.literal->type));
 
 				print_indentation(indent_level + 2);
-				printf("<Value>%s</Value>\n", expr->data.literal->value);
+				if (expr->data.literal->type == VALUE_TYPE_STRING) {
+					printf("<Value>%s</Value>\n", expr->data.literal->string_value);
+				} else if (expr->data.literal->type == VALUE_TYPE_INT) {
+					printf("<Value>%d</Value>\n", expr->data.literal->int_value);
+				} else if (expr->data.literal->type == VALUE_TYPE_BOOL) {
+					printf("<Value>%s</Value>\n", expr->data.literal->bool_value ? "True" : "False");
+				} else {
+					printf("<!-- Unhandled Literal Type -->\n");
+				}
 
 			print_indentation(indent_level + 1);
 			printf("</Literal>\n");
@@ -1545,10 +1564,10 @@ bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
 			break;
 
 		case AST_EXPRESSION:
-			VariableData* val = interpreter_expression(node->data.expression, state);
+			ast_literal_t* val = interpreter_expression(node->data.expression, state);
 			// interpreter_expression(node->data.expression, state);
 			// free(val);
-			// free_variable_data(val);
+			// ast_expression_data_free(val);
 			break;
 
 		default:
@@ -1566,7 +1585,7 @@ void interpreter_function_declaration(ast_function_declaration_t* stmt, interpre
 	interpreter_block(stmt->body, state);
 }
 
-void interpreter_expression_data(VariableData* data)
+void interpreter_expression_data(ast_literal_t* data)
 {
 	if (data == NULL) {
 		printf("NULL\n");
@@ -1576,7 +1595,7 @@ void interpreter_expression_data(VariableData* data)
 	} else if (data->type == VALUE_TYPE_FLOAT) {
 		printf("%f\n", data->float_value);
 	} else if (data->type == VALUE_TYPE_BOOL) {
-		printf("%s\n", data->int_value == 1 ? "True" : "False");
+		printf("%s\n", data->bool_value ? "True" : "False");
 	} else if (data->type == VALUE_TYPE_STRING) {
 		printf("%s\n", data->string_value);
 	} else {
@@ -1588,18 +1607,18 @@ void interpreter_statement_return(ast_statement_return_t* stmt, interpreter_stat
 {
 	// printf("Return Statement\n");
 
-	VariableData* res = interpreter_expression(stmt->expression->data.expression, state);
+	ast_literal_t* res = interpreter_expression(stmt->expression->data.expression, state);
 	interpreter_expression_data(res);
-	// free_variable_data(res);
+	// ast_expression_data_free(res);
 }
 
 void interpreter_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state)
 {
 	// printf("Print Statement\n");
 
-	VariableData* res = interpreter_expression(stmt->expression->data.expression, state);
+	ast_literal_t* res = interpreter_expression(stmt->expression->data.expression, state);
 	interpreter_expression_data(res);
-	// free_variable_data(res);
+	// ast_expression_data_free(res);
 }
 
 void interpreter_block(ast_node_t* node, interpreter_state_t* state)
@@ -1621,41 +1640,16 @@ void interpreter_block(ast_node_t* node, interpreter_state_t* state)
 	popSymbolTable(symbolTableStack);
 }
 
-VariableData* interpreter_literal(ast_literal_t* expr)
+ast_literal_t* interpreter_literal(ast_literal_t* expr)
 {
 	if (expr == NULL) {
 		return NULL;
 	}
 
-	VariableData* val = (VariableData*) malloc(sizeof(VariableData));
-
-	if (expr->literal_type == TOKEN_TYPE_NUMBER) {
-		val->type = VALUE_TYPE_INT;
-		val->int_value = atoi(expr->value);
-		return val;
-	} else if (expr->literal_type == TOKEN_TYPE_STRING) {
-		val->type = VALUE_TYPE_STRING;
-		val->string_value = strdup(expr->value);
-		return val;
-	} else if (expr->literal_type == TOKEN_TYPE_TRUE) {
-		val->type = VALUE_TYPE_BOOL;
-		val->int_value = 1;
-		return val;
-	} else if (expr->literal_type == TOKEN_TYPE_FALSE) {
-		val->type = VALUE_TYPE_BOOL;
-		val->int_value = 0;
-		return val;
-	} else {
-		// TODO: Handle other literal types if needed
-		printf("Error: No handler for other literal types!\n");
-		exit(EXIT_FAILURE);
-	}
-
-	free_variable_data(val);
-	return NULL;
+	return expr;
 }
 
-void free_variable_data(VariableData* val)
+void ast_expression_data_free(ast_literal_t* val)
 {
 	if (val == NULL) {
 		return;
@@ -1674,11 +1668,11 @@ void free_variable_data(VariableData* val)
 	free(val);
 }
 
-VariableData* interpreter_identifier(ast_identifier_t* expr, interpreter_state_t* state)
+ast_literal_t* interpreter_identifier(ast_identifier_t* expr, interpreter_state_t* state)
 {
 	// printf("Variable: %s\n", expr->name);
 
-	VariableData* val = findInSymbolTable(symbolTableStack, expr->name);
+	ast_literal_t* val = findInSymbolTable(symbolTableStack, expr->name);
 	if (val != NULL) {
 		// printf("Variable found: %s = %d\n", expr->name, val->value);
 		return val;
@@ -1690,10 +1684,10 @@ VariableData* interpreter_identifier(ast_identifier_t* expr, interpreter_state_t
 	return NULL;
 }
 
-VariableData* interpreter_operator_binary(ast_expression_binary_t* binary_op, interpreter_state_t* state) {
-	VariableData* val = (VariableData*) malloc(sizeof(VariableData));
-	VariableData* left = interpreter_expression(binary_op->left, state);
-	VariableData* right = interpreter_expression(binary_op->right, state);
+ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, interpreter_state_t* state) {
+	ast_literal_t* val = (ast_literal_t*) malloc(sizeof(ast_literal_t));
+	ast_literal_t* left = interpreter_expression(binary_op->left, state);
+	ast_literal_t* right = interpreter_expression(binary_op->right, state);
 
 	if (left == NULL || right == NULL) {
 		printf("Error: cannot calculate binary operator for NULL values!\n");
@@ -1732,9 +1726,9 @@ VariableData* interpreter_operator_binary(ast_expression_binary_t* binary_op, in
 		}
 	}
 
-	free_variable_data(left);
-	free_variable_data(right);
-	free_variable_data(val);
+	ast_expression_data_free(left);
+	ast_expression_data_free(right);
+	ast_expression_data_free(val);
 	return NULL;
 }
 
@@ -1744,15 +1738,15 @@ VariableData* interpreter_operator_binary(ast_expression_binary_t* binary_op, in
 //     return 0;
 // }
 
-VariableData* interpreter_expression_assignment(ast_expression_assignment_t* expr, interpreter_state_t* state)
+ast_literal_t* interpreter_expression_assignment(ast_expression_assignment_t* expr, interpreter_state_t* state)
 {
 	// printf("Assignment\n");
 
 	if (expr->left->type == AST_EXPRESSION_IDENTIFIER) {
-		VariableData* res = interpreter_expression(expr->right, state);
+		ast_literal_t* res = interpreter_expression(expr->right, state);
 
 		char* identifier = expr->left->data.identifier->name;
-		VariableData* variable = findInSymbolTableCurrent(symbolTableStack, identifier);
+		ast_literal_t* variable = findInSymbolTableCurrent(symbolTableStack, identifier);
 		if (variable != NULL) {
 			// printf("Variable found: %s = %d\n", identifier, variable->value);
 			variable = res;
@@ -1760,7 +1754,7 @@ VariableData* interpreter_expression_assignment(ast_expression_assignment_t* exp
 			// printf("Variable not found: %s\n", identifier);
 			addToSymbolTable(symbolTableStack, identifier, res);
 		}
-		// free_variable_data(variable); // TODO
+		// ast_expression_data_free(variable); // TODO
 
 		return res;
 	} else {
@@ -1771,7 +1765,7 @@ VariableData* interpreter_expression_assignment(ast_expression_assignment_t* exp
 	return NULL;
 }
 
-VariableData* interpreter_expression(ast_expression_t* expr, interpreter_state_t* state)
+ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_state_t* state)
 {
 	if (expr == NULL) {
 		return NULL;

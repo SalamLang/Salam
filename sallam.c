@@ -902,6 +902,7 @@ void ast_node_free(ast_node_t* node)
 			for (size_t i = 0; i < node->data.block->num_statements; i++) {
 				ast_node_free((ast_node_t*) node->data.block->statements[i]);
 			}
+			
 			free(node->data.block->statements);
 			break;
 

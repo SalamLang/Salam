@@ -76,6 +76,7 @@ void popSymbolTable()
 		while (entry != NULL) {
 			SymbolTableEntry* next = entry->next;
 			free(entry->identifier);
+			free_variable_data(entry->data);
 			free(entry);
 			entry = next;
 		}
@@ -882,9 +883,9 @@ void ast_expression_free(ast_expression_t* expr)
 			break;
 
 		case AST_EXPRESSION_BINARY:
-			free(expr->data.binary_op->operator);
 			ast_expression_free(expr->data.binary_op->left);
 			ast_expression_free(expr->data.binary_op->right);
+			free(expr->data.binary_op->operator);
 			free(expr->data.binary_op);
 			break;
 	}
@@ -900,8 +901,8 @@ void ast_node_free(ast_node_t* node)
 
 	switch (node->type) {
 		case AST_FUNCTION_DECLARATION:
-			free(node->data.function_declaration->name);
 			ast_node_free((ast_node_t*) node->data.function_declaration->body);
+			free(node->data.function_declaration->name);
 			free(node->data.function_declaration);
 			break;
 
@@ -1544,7 +1545,8 @@ bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
 			break;
 
 		case AST_EXPRESSION:
-			VariableData* val = interpreter_expression(node->data.expression, state);
+			// VariableData* val = interpreter_expression(node->data.expression, state);
+			interpreter_expression(node->data.expression, state);
 			// free_variable_data(val);
 			break;
 
@@ -1587,7 +1589,7 @@ void interpreter_statement_return(ast_statement_return_t* stmt, interpreter_stat
 
 	VariableData* res = interpreter_expression(stmt->expression->data.expression, state);
 	interpreter_expression_data(res);
-	free_variable_data(res);
+	// free_variable_data(res);
 }
 
 void interpreter_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state)
@@ -1596,7 +1598,7 @@ void interpreter_statement_print(ast_statement_print_t* stmt, interpreter_state_
 
 	VariableData* res = interpreter_expression(stmt->expression->data.expression, state);
 	interpreter_expression_data(res);
-	free_variable_data(res);
+	// free_variable_data(res);
 }
 
 void interpreter_block(ast_node_t* node, interpreter_state_t* state)
@@ -1832,7 +1834,7 @@ int main(int argc, char** argv)
 	interpreter_interpret(parser->ast_tree, NULL);
 	// printf("after free interpreter\n");
 	parser_free(parser);
-	// interpreter_free();
+	interpreter_free();
 	// lexer_free(lexer);
 
 	exit(EXIT_SUCCESS);

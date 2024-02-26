@@ -1428,8 +1428,7 @@ bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
 			break;
 
 		case AST_EXPRESSION:
-			VariableData* val = interpreter_expression(node->data.expression, state);
-			free_variable_data(val);
+			interpreter_expression(node->data.expression, state);
 			break;
 
 		default:
@@ -1456,7 +1455,7 @@ void interpreter_expression_data(VariableData* data)
 	} else if (data->type == VALUE_TYPE_FLOAT) {
 		printf("%f\n", data->float_value);
 	} else if (data->type == VALUE_TYPE_BOOL) {
-		printf("%s\n", data->int_value == 1 ? "true" : "false");
+		printf("%s\n", data->int_value == 1 ? "True" : "False");
 	} else if (data->type == VALUE_TYPE_STRING) {
 		printf("%s\n", data->string_value);
 	} else {
@@ -1532,9 +1531,12 @@ VariableData* interpreter_literal(ast_literal_t* expr)
 
 void free_variable_data(VariableData* val)
 {
-    if (val->type == VALUE_TYPE_STRING) {
+	if (val == NULL) {
+		return;
+	} else if (val->type == VALUE_TYPE_STRING) {
         free(val->string_value);
     }
+
     free(val);
 }
 
@@ -1577,6 +1579,14 @@ VariableData* interpreter_operator_binary(ast_expression_binary_t* binary_op, in
 	} else if (strcmp(operator_str, "*") == 0) {
 		val->type = VALUE_TYPE_INT;
 		val->int_value = left->int_value * right->int_value;
+		return val;
+	} else if (strcmp(operator_str, "و") == 0) {
+		val->type = VALUE_TYPE_BOOL;
+		val->int_value = left->int_value && right->int_value;
+		return val;
+	} else if (strcmp(operator_str, "یا") == 0) {
+		val->type = VALUE_TYPE_BOOL;
+		val->int_value = left->int_value || right->int_value;
 		return val;
 	} else if (strcmp(operator_str, "/") == 0) {
 		if (right->int_value == 0) {

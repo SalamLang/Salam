@@ -621,31 +621,31 @@ void read_number(lexer_t* lexer, wchar_t ch)
 
 void read_string(lexer_t* lexer, wchar_t ch)
 {
-    char* string = (char*) malloc(sizeof(char) * 1024); // 1023 + 1 for null terminator
-    int i = 0;
+	char* string = (char*) malloc(sizeof(char) * 1024); // 1023 + 1 for null terminator
+	int i = 0;
 
-    while (ch != L'"') {
-        if (i >= 1023) {
-            printf("Error: String length exceeds the maximum allowed length.\n");
-            exit(EXIT_FAILURE);
-        }
+	while (ch != L'"') {
+		if (i >= 1023) {
+			printf("Error: String length exceeds the maximum allowed length.\n");
+			exit(EXIT_FAILURE);
+		}
 
-        int char_size = wctomb(&string[i], ch);
-        if (char_size < 0) {
-            printf("Error: Failed to convert wide character to multibyte\n");
-            exit(EXIT_FAILURE);
-        }
-        i += char_size;
+		int char_size = wctomb(&string[i], ch);
+		if (char_size < 0) {
+			printf("Error: Failed to convert wide character to multibyte\n");
+			exit(EXIT_FAILURE);
+		}
+		i += char_size;
 
-        ch = read_token(lexer);
-    }
+		ch = read_token(lexer);
+	}
 
-    string[i] = '\0';
+	string[i] = '\0';
 
-    token_t* t = token_create(TOKEN_TYPE_STRING, string, i, lexer->line, lexer->column - i, lexer->line, lexer->column);
-    array_push(lexer->tokens, t);
+	token_t* t = token_create(TOKEN_TYPE_STRING, string, i, lexer->line, lexer->column - i, lexer->line, lexer->column);
+	array_push(lexer->tokens, t);
 
-    free(string);
+	free(string);
 }
 
 size_t mb_strlen(char* identifier)
@@ -837,9 +837,16 @@ void ast_expression_free(ast_expression_t* expr)
 		case AST_EXPRESSION_LITERAL:
 			free(expr->data.literal);
 			break;
+
 		case AST_EXPRESSION_IDENTIFIER:
 			free(expr->data.identifier);
 			break;
+		
+		case AST_EXPRESSION_ASSIGNMENT:
+			free(expr->data.assignment->left);
+			free(expr->data.assignment->right);
+			break;
+
 		case AST_EXPRESSION_BINARY:
 			free(expr->data.binary_op->operator);
 			ast_expression_free(expr->data.binary_op->left);
@@ -874,7 +881,7 @@ void ast_node_free(ast_node_t* node)
 			}
 			free(node->data.block->statements);
 			break;
-			
+
 		case AST_EXPRESSION:
 			ast_expression_free(node->data.expression);
 			break;
@@ -1553,17 +1560,17 @@ VariableData* interpreter_literal(ast_literal_t* expr)
 		return NULL;
 	}
 
-    VariableData* val = (VariableData*) malloc(sizeof(VariableData));
+	VariableData* val = (VariableData*) malloc(sizeof(VariableData));
 
-    if (expr->literal_type == TOKEN_TYPE_NUMBER) {
-        val->type = VALUE_TYPE_INT;
-        val->int_value = atoi(expr->value);
+	if (expr->literal_type == TOKEN_TYPE_NUMBER) {
+		val->type = VALUE_TYPE_INT;
+		val->int_value = atoi(expr->value);
 		return val;
-    } else if (expr->literal_type == TOKEN_TYPE_STRING) {
-        val->type = VALUE_TYPE_STRING;
-        val->string_value = strdup(expr->value);
+	} else if (expr->literal_type == TOKEN_TYPE_STRING) {
+		val->type = VALUE_TYPE_STRING;
+		val->string_value = strdup(expr->value);
 		return val;
-    } else if (expr->literal_type == TOKEN_TYPE_TRUE) {
+	} else if (expr->literal_type == TOKEN_TYPE_TRUE) {
 		val->type = VALUE_TYPE_BOOL;
 		val->int_value = 1;
 		return val;
@@ -1572,10 +1579,10 @@ VariableData* interpreter_literal(ast_literal_t* expr)
 		val->int_value = 0;
 		return val;
 	} else {
-        // TODO: Handle other literal types if needed
+		// TODO: Handle other literal types if needed
 		printf("Error: No handler for other literal types!\n");
 		exit(EXIT_FAILURE);
-    }
+	}
 
 	free_variable_data(val);
 	return NULL;
@@ -1586,10 +1593,18 @@ void free_variable_data(VariableData* val)
 	if (val == NULL) {
 		return;
 	} else if (val->type == VALUE_TYPE_STRING) {
-        free(val->string_value);
-    }
+		if (val->string_value != NULL) {
+			free(val->string_value);
+		}
+	} else if (val->type == VALUE_TYPE_INT) {
+		// Nothing to free
+	} else if (val->type == VALUE_TYPE_BOOL) {
+		// Nothing to free
+	} else if (val->type == VALUE_TYPE_FLOAT) {
+		// Nothing to free
+	}
 
-    free(val);
+	free(val);
 }
 
 VariableData* interpreter_identifier(ast_identifier_t* expr, interpreter_state_t* state)
@@ -1680,6 +1695,7 @@ VariableData* interpreter_expression_assignment(ast_expression_assignment_t* exp
 			// printf("Variable not found: %s\n", identifier);
 			addToSymbolTable(symbolTableStack, identifier, res);
 		}
+		// free_variable_data(variable); // TODO
 
 		return res;
 	} else {

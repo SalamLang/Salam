@@ -53,6 +53,8 @@ typedef struct SymbolTableStack {
 
 SymbolTableStack* symbolTableStack = NULL;
 
+void interpreter_expression_data(ast_literal_t* data);
+
 void ast_expression_data_free(ast_literal_t* val);
 
 SymbolTable* createSymbolTable(size_t capacity)
@@ -89,9 +91,11 @@ void popSymbolTable()
 			SymbolTableEntry* next = entry->next;
 			if (entry->identifier != NULL) {
 				free(entry->identifier);
+				entry->identifier = NULL;
 			}
 			if (entry->data != NULL) {
 				ast_expression_data_free(entry->data);
+				entry->data = NULL;
 			}
 			free(entry);
 
@@ -99,8 +103,11 @@ void popSymbolTable()
 		}
 	}
 	free(table->entries);
+	table->entries = NULL;
 	free(table);
+	table = NULL;
 	free(top);
+	top = NULL;
 }
 
 unsigned int hash(const char* str, size_t capacity)
@@ -368,8 +375,8 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* expr, interp
 ast_literal_t* interpreter_literal(ast_literal_t* expr);
 ast_literal_t* interpreter_identifier(ast_identifier_t* expr, interpreter_state_t* state);
 
-void interpreter_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state);
-void interpreter_statement_return(ast_statement_return_t* stmt, interpreter_state_t* state);
+ast_literal_t* interpreter_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state);
+ast_literal_t* interpreter_statement_return(ast_statement_return_t* stmt, interpreter_state_t* state);
 void interpreter_function_declaration(ast_function_declaration_t* stmt, interpreter_state_t* state);
 void interpreter_block(ast_node_t* node, interpreter_state_t* state);
 
@@ -499,10 +506,10 @@ array_t* array_create(size_t size)
 {
 	size_t min_size = 1;
 
-	array_t* arr = malloc(sizeof(array_t));
+	array_t* arr = (array_t*) malloc(sizeof(array_t));
 	arr->length = 0;
 	arr->size = size > min_size ? size : min_size;
-	arr->data = malloc(sizeof(void*) * arr->size);
+	arr->data = (void*) malloc(sizeof(void*) * arr->size);
 
 	return arr;
 }
@@ -884,24 +891,34 @@ void ast_expression_free(ast_expression_t* expr)
 
 		case AST_EXPRESSION_IDENTIFIER:
 			free(expr->data.identifier->name);
+			expr->data.identifier->name = NULL;
 			free(expr->data.identifier);
+			expr->data.identifier = NULL;
 			break;
 		
 		case AST_EXPRESSION_ASSIGNMENT:
 			ast_expression_free(expr->data.assignment->left);
+			expr->data.assignment->left = NULL;
 			ast_expression_free(expr->data.assignment->right);
+			expr->data.assignment->right = NULL;
 			free(expr->data.assignment);
+			expr->data.assignment = NULL;
 			break;
 
 		case AST_EXPRESSION_BINARY:
 			ast_expression_free(expr->data.binary_op->left);
+			expr->data.binary_op->left = NULL;
 			ast_expression_free(expr->data.binary_op->right);
+			expr->data.binary_op->right = NULL;
 			free(expr->data.binary_op->operator);
+			expr->data.binary_op->operator = NULL;
 			free(expr->data.binary_op);
+			expr->data.binary_op = NULL;
 			break;
 	}
 
 	free(expr);
+	expr = NULL;
 }
 
 void ast_node_free(ast_node_t* node)
@@ -912,35 +929,46 @@ void ast_node_free(ast_node_t* node)
 
 	switch (node->type) {
 		case AST_FUNCTION_DECLARATION:
-			ast_node_free((ast_node_t*) node->data.function_declaration->body);
+			ast_node_free(node->data.function_declaration->body);
+			node->data.function_declaration->body = NULL;
 			free(node->data.function_declaration->name);
+			node->data.function_declaration->name = NULL;
 			free(node->data.function_declaration);
+			node->data.function_declaration = NULL;
 			break;
 
 		case AST_STATEMENT_RETURN:
-			ast_node_free((ast_node_t*) node->data.statement_return->expression);
+			ast_node_free(node->data.statement_return->expression);
+			node->data.statement_return->expression = NULL;
 			free(node->data.statement_return);
 			break;
 		
 		case AST_STATEMENT_PRINT:
-			ast_node_free((ast_node_t*) node->data.statement_print->expression);
+			ast_node_free(node->data.statement_print->expression);
+			node->data.statement_print->expression = NULL;
 			free(node->data.statement_print);
+			node->data.statement_print = NULL;
 			break;
 
 		case AST_BLOCK:
 			for (size_t i = 0; i < node->data.block->num_statements; i++) {
-				ast_node_free((ast_node_t*) node->data.block->statements[i]);
+				ast_node_free(node->data.block->statements[i]);
+				node->data.block->statements[i] = NULL;
 			}
 			free(node->data.block->statements);
+			node->data.block->statements = NULL;
 			free(node->data.block);
+			node->data.block = NULL;
 			break;
 
 		case AST_EXPRESSION:
 			ast_expression_free(node->data.expression);
+			node->data.expression = NULL;
 			break;
 	}
 
 	free(node);
+	node = NULL;
 }
 
 void parser_free(parser_t* parser)
@@ -951,8 +979,11 @@ void parser_free(parser_t* parser)
 
 	if (parser->ast_tree != NULL) {
 		ast_node_free(parser->ast_tree);
+		parser->ast_tree = NULL;
 	}
+
 	free(parser);
+	parser = NULL;
 }
 
 void parser_token_next(parser_t* parser)
@@ -1217,7 +1248,7 @@ ast_expression_t* nud_bool(parser_t* parser, token_t* token)
 {
 	printf("Parsing bool\n");
 
-	ast_expression_t* literal_expr = malloc(sizeof(ast_expression_t));
+	ast_expression_t* literal_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
 	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
@@ -1231,10 +1262,10 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 {
 	printf("Parsing number\n");
 
-	ast_expression_t* literal_expr = malloc(sizeof(ast_expression_t));
+	ast_expression_t* literal_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
-	literal_expr->data.literal = malloc(sizeof(ast_literal_t));
+	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
 	literal_expr->data.literal->type = VALUE_TYPE_INT;
 	literal_expr->data.literal->int_value = atoi(token->value);
 
@@ -1245,10 +1276,10 @@ ast_expression_t* nud_string(parser_t* parser, token_t* token)
 {
 	printf("Parsing string\n");
 
-	ast_expression_t* literal_expr = malloc(sizeof(ast_expression_t));
+	ast_expression_t* literal_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
-	literal_expr->data.literal = malloc(sizeof(ast_literal_t));
+	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
 	literal_expr->data.literal->type = VALUE_TYPE_STRING;
 	literal_expr->data.literal->string_value = token->value;
 
@@ -1259,10 +1290,10 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 {
 	printf("Parsing identifier\n");
 
-	ast_expression_t* identifier_expr = malloc(sizeof(ast_expression_t));
+	ast_expression_t* identifier_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 	identifier_expr->type = AST_EXPRESSION_IDENTIFIER;
 
-	identifier_expr->data.identifier = malloc(sizeof(ast_identifier_t));
+	identifier_expr->data.identifier = (ast_identifier_t*) malloc(sizeof(ast_identifier_t));
 	identifier_expr->data.identifier->name = strdup(token->value);
 
 	return identifier_expr;
@@ -1283,11 +1314,11 @@ ast_node_t* parser_block(parser_t* parser)
 {
 	printf("Parsing block\n");
 
-	ast_node_t* block_node = malloc(sizeof(ast_node_t));
+	ast_node_t* block_node = (ast_node_t*) malloc(sizeof(ast_node_t));
 	block_node->type = AST_BLOCK;
-	block_node->data.block = malloc(sizeof(ast_block_t));
+	block_node->data.block = (ast_block_t*) malloc(sizeof(ast_block_t));
 	block_node->data.block->num_statements = 0;
-	block_node->data.block->statements = malloc(sizeof(ast_node_t*) * 10 + 1);
+	block_node->data.block->statements = (ast_node_t**) malloc(sizeof(ast_node_t*) * 10 + 1);
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_SECTION_OPEN);
 
@@ -1545,6 +1576,8 @@ bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
 		return false;
 	}
 
+	ast_literal_t* val;
+
 	switch (node->type) {
 		case AST_BLOCK:
 			interpreter_block(node, state);
@@ -1555,16 +1588,18 @@ bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
 			break;
 
 		case AST_STATEMENT_RETURN:
-			interpreter_statement_return(node->data.statement_return, state);
+			val = interpreter_statement_return(node->data.statement_return, state);
+			interpreter_expression_data(val);
 			return true;
 			break;
 
 		case AST_STATEMENT_PRINT:
-			interpreter_statement_print(node->data.statement_print, state);
+			val = interpreter_statement_print(node->data.statement_print, state);
+			interpreter_expression_data(val);
 			break;
 
 		case AST_EXPRESSION:
-			ast_literal_t* val = interpreter_expression(node->data.expression, state);
+			val = interpreter_expression(node->data.expression, state);
 			// interpreter_expression(node->data.expression, state);
 			// free(val);
 			// ast_expression_data_free(val);
@@ -1603,21 +1638,21 @@ void interpreter_expression_data(ast_literal_t* data)
 	}
 }
 
-void interpreter_statement_return(ast_statement_return_t* stmt, interpreter_state_t* state)
+ast_literal_t* interpreter_statement_return(ast_statement_return_t* stmt, interpreter_state_t* state)
 {
 	// printf("Return Statement\n");
 
-	ast_literal_t* res = interpreter_expression(stmt->expression->data.expression, state);
-	interpreter_expression_data(res);
+	return interpreter_expression(stmt->expression->data.expression, state);
+	// interpreter_expression_data(res);
 	// ast_expression_data_free(res);
 }
 
-void interpreter_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state)
+ast_literal_t* interpreter_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state)
 {
 	// printf("Print Statement\n");
-
-	ast_literal_t* res = interpreter_expression(stmt->expression->data.expression, state);
-	interpreter_expression_data(res);
+	
+	return interpreter_expression(stmt->expression->data.expression, state);
+	// interpreter_expression_data(res);
 	// ast_expression_data_free(res);
 }
 
@@ -1656,6 +1691,7 @@ void ast_expression_data_free(ast_literal_t* val)
 	} else if (val->type == VALUE_TYPE_STRING) {
 		if (val->string_value != NULL) {
 			free(val->string_value);
+			val->string_value = NULL;
 		}
 	} else if (val->type == VALUE_TYPE_INT) {
 		// Nothing to free
@@ -1666,6 +1702,7 @@ void ast_expression_data_free(ast_literal_t* val)
 	}
 
 	free(val);
+	val = NULL;
 }
 
 ast_literal_t* interpreter_identifier(ast_identifier_t* expr, interpreter_state_t* state)
@@ -1685,51 +1722,52 @@ ast_literal_t* interpreter_identifier(ast_identifier_t* expr, interpreter_state_
 }
 
 ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, interpreter_state_t* state) {
-	ast_literal_t* val = (ast_literal_t*) malloc(sizeof(ast_literal_t));
-	ast_literal_t* left = interpreter_expression(binary_op->left, state);
-	ast_literal_t* right = interpreter_expression(binary_op->right, state);
+	return interpreter_expression(binary_op->left, state);
+	// // ast_literal_t* val = (ast_literal_t*) malloc(sizeof(ast_literal_t));
+	// ast_literal_t* left = interpreter_expression(binary_op->left, state);
+	// ast_literal_t* right = interpreter_expression(binary_op->right, state);
 
-	if (left == NULL || right == NULL) {
-		printf("Error: cannot calculate binary operator for NULL values!\n");
-		exit(EXIT_FAILURE);
-	} else if ((left->type != VALUE_TYPE_INT && left->type != VALUE_TYPE_BOOL) || (right->type != VALUE_TYPE_INT && right->type != VALUE_TYPE_BOOL)) {
-		printf("Error: cannot calculate binary operator for non-int values!\n");
-		exit(EXIT_FAILURE);
-	} else if (strcmp(binary_op->operator, "+") == 0) {
-		val->type = VALUE_TYPE_INT;
-		val->int_value = left->int_value + right->int_value;
-		return val;
-	} else if (strcmp(binary_op->operator, "-") == 0) {
-		val->type = VALUE_TYPE_INT;
-		val->int_value = left->int_value - right->int_value;
-		return val;
-	} else if (strcmp(binary_op->operator, "*") == 0) {
-		val->type = VALUE_TYPE_INT;
-		val->int_value = left->int_value * right->int_value;
-		return val;
-	} else if (strcmp(binary_op->operator, "و") == 0) {
-		val->type = VALUE_TYPE_BOOL;
-		val->int_value = left->int_value && right->int_value;
-		return val;
-	} else if (strcmp(binary_op->operator, "یا") == 0) {
-		val->type = VALUE_TYPE_BOOL;
-		val->int_value = left->int_value || right->int_value;
-		return val;
-	} else if (strcmp(binary_op->operator, "/") == 0) {
-		if (right->int_value == 0) {
-			printf("Error: cannot divide by zero!\n");
-			exit(EXIT_FAILURE);
-		} else {
-			val->type = VALUE_TYPE_INT;
-			val->int_value = left->int_value / right->int_value;
-			return val;
-		}
-	}
+	// if (left == NULL || right == NULL) {
+	// 	printf("Error: cannot calculate binary operator for NULL values!\n");
+	// 	exit(EXIT_FAILURE);
+	// } else if ((left->type != VALUE_TYPE_INT && left->type != VALUE_TYPE_BOOL) || (right->type != VALUE_TYPE_INT && right->type != VALUE_TYPE_BOOL)) {
+	// 	printf("Error: cannot calculate binary operator for non-int values!\n");
+	// 	exit(EXIT_FAILURE);
+	// } else if (strcmp(binary_op->operator, "+") == 0) {
+	// 	left->type = VALUE_TYPE_INT;
+	// 	left->int_value = left->int_value + right->int_value;
+	// 	return left;
+	// } else if (strcmp(binary_op->operator, "-") == 0) {
+	// 	left->type = VALUE_TYPE_INT;
+	// 	left->int_value = left->int_value - right->int_value;
+	// 	return left;
+	// } else if (strcmp(binary_op->operator, "*") == 0) {
+	// 	left->type = VALUE_TYPE_INT;
+	// 	left->int_value = left->int_value * right->int_value;
+	// 	return left;
+	// } else if (strcmp(binary_op->operator, "و") == 0) {
+	// 	left->type = VALUE_TYPE_BOOL;
+	// 	left->int_value = left->int_value && right->int_value;
+	// 	return left;
+	// } else if (strcmp(binary_op->operator, "یا") == 0) {
+	// 	left->type = VALUE_TYPE_BOOL;
+	// 	left->int_value = left->int_value || right->int_value;
+	// 	return left;
+	// } else if (strcmp(binary_op->operator, "/") == 0) {
+	// 	if (right->int_value == 0) {
+	// 		printf("Error: cannot divide by zero!\n");
+	// 		exit(EXIT_FAILURE);
+	// 	} else {
+	// 		left->type = VALUE_TYPE_INT;
+	// 		left->int_value = left->int_value / right->int_value;
+	// 		return left;
+	// 	}
+	// }
 
-	ast_expression_data_free(left);
-	ast_expression_data_free(right);
-	ast_expression_data_free(val);
-	return NULL;
+	// ast_expression_data_free(left);
+	// ast_expression_data_free(right);
+	// // ast_expression_data_free(val);
+	// return NULL;
 }
 
 // int interpreter_function_call(ast_node_t* node, interpreter_state_t* state)
@@ -1778,8 +1816,8 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_state_
 		case AST_EXPRESSION_IDENTIFIER:
 			return interpreter_identifier(expr->data.identifier, state);
 
-		case AST_EXPRESSION_BINARY:
-			return interpreter_operator_binary(expr->data.binary_op, state);
+		// case AST_EXPRESSION_BINARY:
+		// 	return interpreter_operator_binary(expr->data.binary_op, state);
 
 		// case AST_EXPRESION_FUNCTION_CALL:
 		//     return interpreter_function_call(expr, state);
@@ -1797,10 +1835,10 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_state_
 
 void interpreter_free()
 {
-	while (symbolTableStack != NULL) {
-		popSymbolTable();
-	}
-	free(symbolTableStack);
+	// while (symbolTableStack != NULL) {
+	// 	popSymbolTable();
+	// }
+	// free(symbolTableStack);
 }
 
 int main(int argc, char** argv)
@@ -1827,9 +1865,16 @@ int main(int argc, char** argv)
 
 	interpreter_create();
 	interpreter_interpret(parser->ast_tree, NULL);
-	// printf("after free interpreter\n");
-	parser_free(parser);
+
+	printf("free interpreter\n");
 	interpreter_free();
+	printf("end interpreter free\n");
+
+	printf("free parser\n");
+	parser_free(parser);
+	printf("end parser free\n");
+
+
 	// lexer_free(lexer);
 
 	exit(EXIT_SUCCESS);

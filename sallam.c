@@ -121,21 +121,48 @@ unsigned int hash(const char* str, size_t capacity)
 	return hash % capacity;
 }
 
+static SymbolTableEntry* findSymbolInParentScopes(SymbolTableStack* symbolTableStack, const char* identifier)
+{
+    if (symbolTableStack == NULL) {
+        return NULL;
+    }
+
+    SymbolTable* table = symbolTableStack->table;
+    unsigned int index = hash(identifier, table->capacity);
+
+    SymbolTableEntry* entry = table->entries[index];
+    while (entry != NULL) {
+        if (strcmp(entry->identifier, identifier) == 0) {
+            return entry;
+        }
+        entry = entry->next;
+    }
+
+    return findSymbolInParentScopes(symbolTableStack->next, identifier);
+}
+
 void addToSymbolTable(SymbolTableStack* symbolTableStack, const char* identifier, ast_literal_t* value)
 {
-	if (symbolTableStack == NULL) {
-		return;
-	}
+    if (symbolTableStack == NULL) {
+        return;
+    }
 
-	SymbolTable* table = symbolTableStack->table;
-	unsigned int index = hash(identifier, table->capacity);
+    SymbolTableEntry* existingEntry = findSymbolInParentScopes(symbolTableStack, identifier);
 
-	SymbolTableEntry* entry = (SymbolTableEntry*) malloc(sizeof(SymbolTableEntry));
-	entry->identifier = strdup(identifier);
-	entry->data = value;
-	entry->next = table->entries[index];
-	table->entries[index] = entry;
-	table->size++;
+    if (existingEntry != NULL) {
+        existingEntry->data = value;
+        return;
+    }
+
+    SymbolTable* table = symbolTableStack->table;
+    unsigned int index = hash(identifier, table->capacity);
+
+    SymbolTableEntry* entry = (SymbolTableEntry*)malloc(sizeof(SymbolTableEntry));
+    entry->identifier = strdup(identifier);
+    entry->data = value;
+    entry->next = table->entries[index];
+    table->entries[index] = entry;
+    table->size++;
 }
 
 ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const char* identifier)

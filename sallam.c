@@ -1888,12 +1888,21 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_assignment_t* ex
 		char* identifier = expr->left->data.identifier->name;
 		ast_literal_t* variable = findInSymbolTableCurrent(symbolTableStack, identifier);
 		if (variable != NULL) {
-			// printf("Variable found: %s = %d\n", identifier, variable->value);
-			variable = res;
+			variable->type = res->type;
+			if (res->type == VALUE_TYPE_STRING) {
+				variable->string_value = strdup(res->string_value);
+			} else if (res->type == VALUE_TYPE_INT) {
+				variable->int_value = res->int_value;
+			} else if (res->type == VALUE_TYPE_BOOL) {
+				variable->bool_value = res->bool_value;
+			} else if (res->type == VALUE_TYPE_FLOAT) {
+				variable->float_value = res->float_value;
+			}
+			// ast_expression_data_free(res);
 		} else {
-			// printf("Variable not found: %s\n", identifier);
 			addToSymbolTable(symbolTableStack, identifier, res);
 		}
+		// free(identifier);
 		// ast_expression_data_free(variable); // TODO
 
 		return res;

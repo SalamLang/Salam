@@ -2359,7 +2359,10 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, i
 ast_literal_t* interpreter_function_call(ast_function_call_t* node, interpreter_t* interpreter)
 {
     printf("Function Call: %s\n", node->name);
-    
+
+	// Check if functions exists in interpreter->parser->...
+	bool exists = false;
+	for (size_t i = 0; i < interpreter
 	return NULL;
 }
 

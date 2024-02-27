@@ -1013,6 +1013,7 @@ void ast_node_free(ast_node_t* node)
 
 	switch (node->type) {
         case AST_STATEMENT_IF:
+        case AST_STATEMENT_ELSEIF:
 			// printf("... if\n");
             if (node->data.statement_if != NULL) {
                 // printf("condition\n");

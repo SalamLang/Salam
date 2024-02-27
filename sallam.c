@@ -358,10 +358,6 @@ typedef enum {
 	AST_EXPRESSION,
 } ast_node_type_t;
 
-typedef struct {
-	int return_code;
-} interpreter_t;
-
 struct ast_statement_if_t;
 
 typedef struct {
@@ -397,9 +393,14 @@ typedef struct {
 	array_t* expressions;
 } parser_t;
 
+typedef struct {
+	int return_code;
+	parser_t* parser;
+} interpreter_t;
+
 bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter);
 
-interpreter_t* interpreter_interpret(parser_t* parser);
+interpreter_t* interpreter_interpret(interpreter_t* interpreter, parser_t* parser);
 ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpreter);
 
 void interpreter_expression_data(ast_literal_t* data);
@@ -1997,9 +1998,11 @@ void print_xml_ast_tree(parser_t* parser)
 	printf("</AST>\n");
 }
 
-void interpreter_create()
+interpreter_t* interpreter_create(parser_t* parser)
 {
-
+	interpreter_t* interpreter = (interpreter_t*) malloc(sizeof(interpreter_t));
+	interpreter->parser = parser;
+	return interpreter;
 }
 
 ast_node_t* interpreter_statement_if(ast_statement_if_t* node, interpreter_t* interpreter)
@@ -2085,15 +2088,13 @@ ast_literal_t* interpreter_interpret_function(ast_function_declaration_t* functi
 	}
 }
 
-interpreter_t* interpreter_interpret(parser_t* parser)
+interpreter_t* interpreter_interpret(interpreter_t* interpreter, parser_t* parser)
 {
 	printf("Interpreter Interpret\n");
 
 	if (parser == NULL) {
 		return NULL;
 	}
-
-	interpreter_t* interpreter = (interpreter_t*) malloc(sizeof(interpreter_t));
 
 	// Scope entry
 	pushSymbolTable(symbolTableStack);
@@ -2362,8 +2363,32 @@ ast_literal_t* interpreter_function_call(ast_function_call_t* node, interpreter_
 
 	// Check if functions exists in interpreter->parser->...
 	bool exists = false;
-	for (size_t i = 0; i < interpreter
-	return NULL;
+	ast_function_declaration_t* func_exists = NULL;
+
+	if (interpreter->parser->functions != NULL) {
+		for (size_t i = 0; i < interpreter->parser->functions->length; i++) {
+			ast_function_declaration_t* func = interpreter->parser->functions->data[i];
+			if (func != NULL && func->name != NULL && strcmp(func->name, node->name) == 0) {
+				func_exists = func;
+				exists = true;
+				break;
+			}
+		}
+	}
+	
+	if (exists && func_exists != NULL) {
+		// TODO: using `func_exists`
+		ast_literal_t* val = (ast_literal_t*) malloc(sizeof(ast_literal_t));
+		val->type = VALUE_TYPE_INT;
+		val->left = NULL;
+		val->right = NULL;
+		val->int_value = 55;
+		return val;
+	} else {
+		printf("Error: function wont exists!\n");
+		exit(EXIT_FAILURE);
+		return NULL;
+	}
 }
 
 
@@ -2488,22 +2513,22 @@ int main(int argc, char** argv)
 
 	print_xml_ast_tree(parser);
 
-	interpreter_create();
-	interpreter_t* interpreter = interpreter_interpret(parser);
+	interpreter_t* interpreter = interpreter_create(parser);
+	interpreter_interpret(interpreter, parser);
 
 	printf("====================================\n");
 
-	// printf("free lexer\n");
-	// lexer_free(lexer);
-	// printf("end lexer free\n");
+	printf("free lexer\n");
+	lexer_free(lexer);
+	printf("end lexer free\n");
 
-	// printf("free parser\n");
-	// parser_free(parser);
-	// printf("end parser free\n");
+	printf("free parser\n");
+	parser_free(parser);
+	printf("end parser free\n");
 
-	// printf("free interpreter\n");
-	// interpreter_free(interpreter);
-	// printf("end interpreter free\n");
+	printf("free interpreter\n");
+	interpreter_free(interpreter);
+	printf("end interpreter free\n");
 
 	exit(EXIT_SUCCESS);
 }

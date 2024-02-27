@@ -328,7 +328,13 @@ typedef enum {
 	AST_EXPRESSION_IDENTIFIER,
 	AST_EXPRESSION_BINARY,
 	AST_EXPRESSION_ASSIGNMENT,
+	AST_EXPRESSION_FUNCTION_CALL,
 } ast_expression_type_t;
+
+typedef struct {
+	char* name;
+	array_t* arguments;
+} ast_function_call_t;
 
 typedef struct ast_expression {
 	ast_expression_type_t type;
@@ -338,6 +344,7 @@ typedef struct ast_expression {
 		ast_identifier_t* identifier;
 		ast_expression_binary_t* binary_op;
 		ast_expression_assignment_t* assignment;
+		ast_function_call_t* function_call;
 	} data;
 } ast_expression_t;
 
@@ -374,6 +381,7 @@ typedef struct ast_node {
 		ast_block_t* block;
 		ast_expression_t* expression;
 		ast_statement_if_t* statement_if;
+		ast_function_call_t* function_call;
 	} data;
 } ast_node_t;
 
@@ -2347,11 +2355,12 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, i
 	return res;
 }
 
-// int interpreter_function_call(ast_node_t* node, interpreter_t* interpreter)
-// {
-//     printf("Function Call: %s\n", node->data.function_call.name);
-//     return 0;
-// }
+ast_literal_t* interpreter_function_call(ast_function_call_t* node, interpreter_t* interpreter)
+{
+    printf("Function Call: %s\n", node->name);
+    
+	return NULL;
+}
 
 
 bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter)
@@ -2424,8 +2433,8 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 		case AST_EXPRESSION_BINARY:
 			return interpreter_operator_binary(expr->data.binary_op, interpreter);
 
-		// case AST_EXPRESION_FUNCTION_CALL:
-		//     return interpreter_function_call(expr, interpreter);
+		case AST_EXPRESSION_FUNCTION_CALL:
+		    return interpreter_function_call(expr->data.function_call, interpreter);
 
 		case AST_EXPRESSION_ASSIGNMENT:
 			return interpreter_expression_assignment(expr->data.assignment, interpreter);

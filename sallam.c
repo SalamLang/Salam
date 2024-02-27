@@ -57,7 +57,7 @@ SymbolTableStack* symbolTableStack = NULL;
 SymbolTable* createSymbolTable(size_t capacity)
 {
 	SymbolTable* table = (SymbolTable*) malloc(sizeof(SymbolTable));
-	table->entries = (SymbolTableEntry**) calloc(capacity, sizeof(SymbolTableEntry*));
+	table->entries = (SymbolTableEntry**) calloc(capacity, sizeof(SymbolTableEntry*) );
 	table->size = 0;
 	table->capacity = capacity;
 	return table;
@@ -153,7 +153,7 @@ void addToSymbolTable(SymbolTableStack* symbolTableStack, const char* identifier
     SymbolTable* table = symbolTableStack->table;
     unsigned int index = hash(identifier, table->capacity);
 
-    SymbolTableEntry* entry = (SymbolTableEntry*)malloc(sizeof(SymbolTableEntry));
+    SymbolTableEntry* entry = (SymbolTableEntry*) malloc(sizeof(SymbolTableEntry));
     entry->identifier = strdup(identifier);
     entry->data = value;
     entry->next = table->entries[index];
@@ -350,8 +350,9 @@ struct ast_statement_if_t;
 typedef struct {
 	struct ast_node* condition;
 	struct ast_node* block;
-	array_t* elseifs;
+	struct ast_node_t** elseifs;
 	struct ast_node* else_block;
+	size_t num_elseifs;
 } ast_statement_if_t;
 
 typedef struct ast_node {
@@ -983,10 +984,12 @@ void ast_expression_free(ast_expression_t* expr)
 					ast_expression_free(expr->data.binary_op->left);
 					expr->data.binary_op->left = NULL;
 				}
+
 				if (expr->data.binary_op->right != NULL) {
 					ast_expression_free(expr->data.binary_op->right);
 					expr->data.binary_op->right = NULL;
 				}
+
 				if (expr->data.binary_op->operator != NULL) {
 					free(expr->data.binary_op->operator);
 					expr->data.binary_op->operator = NULL;
@@ -1026,11 +1029,12 @@ void ast_node_free(ast_node_t* node)
 
                 // printf("elseifs\n");
                 if (node->data.statement_if->elseifs != NULL) {
-                    for (size_t i = 0; i < node->data.statement_if->elseifs->length; i++) {
-                        ast_node_free((ast_node_t*)node->data.statement_if->elseifs->data[i]);
-						node->data.statement_if->elseifs->data[i] = NULL;
+                    for (size_t i = 0; i < node->data.statement_if->num_elseifs; i++) {
+                        ast_node_free((ast_node_t*) node->data.statement_if->elseifs[i]);
+						// free(node->data.statement_if->elseifs[i]);
+						node->data.statement_if->elseifs[i] = NULL;
                     }
-                    array_free(node->data.statement_if->elseifs);
+					free(node->data.statement_if->elseifs);
                     node->data.statement_if->elseifs = NULL;
                 }
 
@@ -1143,10 +1147,10 @@ void parser_token_next(parser_t* parser)
 token_t* parser_token_skip(parser_t* parser, token_type_t type)
 {
 	if (parser->lexer->tokens->length > parser->token_index) {
-		token_t* token = (token_t*)parser->lexer->tokens->data[parser->token_index];
+		token_t* token = (token_t*) parser->lexer->tokens->data[parser->token_index];
 
 		if (token->type == type) {
-			return (token_t*)parser->lexer->tokens->data[parser->token_index++];
+			return (token_t*) parser->lexer->tokens->data[parser->token_index++];
 		}
 	}
 
@@ -1156,7 +1160,7 @@ token_t* parser_token_skip(parser_t* parser, token_type_t type)
 void parser_token_eat_nodata(parser_t* parser, token_type_t type)
 {
 	if (parser->lexer->tokens->length > parser->token_index) {
-		token_t* token = (token_t*)parser->lexer->tokens->data[parser->token_index];
+		token_t* token = (token_t*) parser->lexer->tokens->data[parser->token_index];
 
 		if (token->type == type) {
 			parser->token_index++;
@@ -1173,10 +1177,10 @@ void parser_token_eat_nodata(parser_t* parser, token_type_t type)
 token_t* parser_token_eat(parser_t* parser, token_type_t type)
 {
 	if (parser->lexer->tokens->length > parser->token_index) {
-		token_t* token = (token_t*)parser->lexer->tokens->data[parser->token_index];
+		token_t* token = (token_t*) parser->lexer->tokens->data[parser->token_index];
 
 		if (token->type == type) {
-			return (token_t*)parser->lexer->tokens->data[parser->token_index++];
+			return (token_t*) parser->lexer->tokens->data[parser->token_index++];
 		} else {
 			printf("Error: Expected %s\n", token_type2str(type));
 			exit(EXIT_FAILURE);
@@ -1202,7 +1206,7 @@ ast_node_t* parser_function(parser_t* parser)
 	// token_print(name);
 	// printf("FUNCTION NAME: %s\n", name->value);
 
-	// if (parser->lexer->tokens->length > parser->token_index && ((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_PARENTHESE_OPEN) {
+	// if (parser->lexer->tokens->length > parser->token_index && ((token_t*) parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_PARENTHESE_OPEN) {
 	//     printf("Parsing parameters\n");
 	//     parser->token_index++;
 
@@ -1258,7 +1262,7 @@ ast_node_t* parser_statement_return(parser_t* parser) {
 bool parser_expression_has(parser_t* parser)
 {
 	if (parser->lexer->tokens->length > parser->token_index) {
-		token_t* tok = (token_t*)parser->lexer->tokens->data[parser->token_index];
+		token_t* tok = (token_t*) parser->lexer->tokens->data[parser->token_index];
 		if (tok->type == TOKEN_TYPE_IDENTIFIER ||
 			tok->type == TOKEN_TYPE_PLUS ||
 			tok->type == TOKEN_TYPE_MINUS ||
@@ -1280,19 +1284,18 @@ ast_node_t* parser_statement_if(parser_t* parser) {
 	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
 	node->type = AST_STATEMENT_IF;
 
+	size_t allocated_size = 2;
+
 	node->data.statement_if = (ast_statement_if_t*) malloc(sizeof(ast_statement_if_t));
 	node->data.statement_if->condition = parser_expression(parser);
 	node->data.statement_if->block = parser_block(parser);
-
-	node->data.statement_if->elseifs = array_create(10);
+	node->data.statement_if->num_elseifs = 0;
+	node->data.statement_if->elseifs = (struct ast_node_t**) malloc(sizeof(ast_node_t*) * (allocated_size + 1));
 	node->data.statement_if->else_block = NULL;
-	while (parser->lexer->tokens->length > parser->token_index && ((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_ELSEIF) {
+	while (parser->lexer->tokens->length > parser->token_index && ((token_t*) parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_ELSEIF) {
 		parser->token_index++; // eat ELSEIF token
 
-		if (parser_expression_has(parser) == false) {
-			node->data.statement_if->else_block = parser_block(parser);
-			break;
-		} else {
+		if (parser_expression_has(parser)) {
 			ast_node_t* elseif = (ast_node_t*) malloc(sizeof(ast_node_t));
 			elseif->type = AST_STATEMENT_ELSEIF;
 
@@ -1300,7 +1303,23 @@ ast_node_t* parser_statement_if(parser_t* parser) {
 			elseif->data.statement_if->condition = parser_expression(parser);
 			elseif->data.statement_if->block = parser_block(parser);
 
-			array_push(node->data.statement_if->elseifs, elseif);
+			if (node->data.statement_if->num_elseifs >= allocated_size) {
+				allocated_size *= 2;
+				node->data.statement_if->elseifs = (struct ast_node_t**) realloc(
+					node->data.statement_if->elseifs, sizeof(ast_node_t*) * (allocated_size + 1)
+				);
+
+				if (node->data.statement_if->elseifs == NULL) {
+					fprintf(stderr, "Error in parsing block: Memory reallocation failed.\n");
+					exit(EXIT_FAILURE);
+					break;
+				}
+			}
+
+			node->data.statement_if->elseifs[node->data.statement_if->num_elseifs++] = (struct ast_node_t*) elseif;
+		} else {
+			node->data.statement_if->else_block = parser_block(parser);
+			break;
 		}
 	}
 
@@ -1314,7 +1333,7 @@ ast_node_t* parser_statement(parser_t* parser)
 	ast_node_t* stmt = NULL;
 
 	if (parser->lexer->tokens->length > parser->token_index) {
-		token_t* tok = (token_t*)parser->lexer->tokens->data[parser->token_index];
+		token_t* tok = (token_t*) parser->lexer->tokens->data[parser->token_index];
 
 		switch (tok->type) {
 			case TOKEN_TYPE_RETURN:
@@ -1345,7 +1364,7 @@ ast_node_t* parser_statement(parser_t* parser)
 	}
 	
 	if (stmt == NULL) {
-		printf("Error: Unexpected token as statement %s\n", token_type2str(((token_t*)parser->lexer->tokens->data[parser->token_index])->type));
+		printf("Error: Unexpected token as statement %s\n", token_type2str(((token_t*) parser->lexer->tokens->data[parser->token_index])->type));
 		exit(EXIT_FAILURE);
 	}
 	return stmt;
@@ -1355,7 +1374,7 @@ ast_node_t* parser_expression(parser_t* parser)
 {
 	printf("Parsing expression\n");
 
-	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t) * 2);
+	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
 	node->type = AST_EXPRESSION;
 	node->data.expression = parser_expression_pratt(parser, PRECEDENCE_LOWEST);
 
@@ -1366,13 +1385,13 @@ ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence)
 {
 	printf("Parsing pratt\n");
 
-	token_t* current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
+	token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
 	parser->token_index++;
 
 	ast_expression_t* left = token_infos[current_token->type].nud(parser, current_token);
 
-	while (precedence < token_infos[((token_t*)parser->lexer->tokens->data[parser->token_index])->type].precedence) {
-		current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
+	while (precedence < token_infos[((token_t*) parser->lexer->tokens->data[parser->token_index])->type].precedence) {
+		current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
 		parser->token_index++;
 
 		left = token_infos[current_token->type].led(parser, current_token, left);
@@ -1529,25 +1548,25 @@ ast_expression_t* nud_parentheses(parser_t* parser, token_t* token)
 ast_node_t* parser_block(parser_t* parser) {
 	printf("Parsing block\n");
 
-	ast_node_t* block_node = (ast_node_t*)malloc(sizeof(ast_node_t));
+	ast_node_t* block_node = (ast_node_t*) malloc(sizeof(ast_node_t));
 	block_node->type = AST_BLOCK;
-	block_node->data.block = (ast_block_t*)malloc(sizeof(ast_block_t));
+	block_node->data.block = (ast_block_t*) malloc(sizeof(ast_block_t));
 	block_node->data.block->num_statements = 0;
 
 	size_t allocated_size = 5;
-	block_node->data.block->statements = (ast_node_t**)malloc(sizeof(ast_node_t*) * (allocated_size + 1));
+	block_node->data.block->statements = (ast_node_t**) malloc(sizeof(ast_node_t*) * (allocated_size + 1));
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_SECTION_OPEN);
 
 	while (
 		parser->lexer->tokens->length > parser->token_index &&
-		((token_t*)parser->lexer->tokens->data[parser->token_index])->type != TOKEN_TYPE_SECTION_CLOSE
+		((token_t*) parser->lexer->tokens->data[parser->token_index])->type != TOKEN_TYPE_SECTION_CLOSE
 	) {
 		ast_node_t* statement = parser_statement(parser);
 
 		if (block_node->data.block->num_statements >= allocated_size) {
 			allocated_size *= 2;
-			block_node->data.block->statements = (ast_node_t**)realloc(
+			block_node->data.block->statements = (ast_node_t**) realloc(
 				block_node->data.block->statements, sizeof(ast_node_t*) * (allocated_size + 1)
 			);
 
@@ -1571,14 +1590,14 @@ ast_node_t* parser_block(parser_t* parser) {
 void parser_parse(parser_t* parser)
 {
 	if (parser->lexer->tokens->length == 1 &&
-		((ast_node_t*)parser->lexer->tokens->data[0])->type == TOKEN_TYPE_EOF
+		((ast_node_t*) parser->lexer->tokens->data[0])->type == TOKEN_TYPE_EOF
 	) {
 		parser->ast_tree = NULL;
 		return;
 	}
 
 	while (parser->token_index < parser->lexer->tokens->length) {
-		token_t* current_token = (token_t*)parser->lexer->tokens->data[parser->token_index];
+		token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
 
 		switch (current_token->type) {
 			case TOKEN_TYPE_FUNCTION:
@@ -1731,31 +1750,42 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 
 	switch (node->type) {
 		case AST_STATEMENT_IF:
+		case AST_STATEMENT_ELSEIF:
 			printf("<StatementIf>\n");
 
 				print_indentation(indent_level + 1);
 				printf("<Condition>\n");
 
-					print_indentation(indent_level + 1);
+					print_indentation(indent_level + 2);
 					print_xml_ast_expression(node->data.statement_if->condition->data.expression, indent_level + 2);
 
 				print_indentation(indent_level + 1);
 				printf("</Condition>\n");
 
-				print_indentation(indent_level + 1);
-				printf("<Block>\n");
+				print_xml_ast_node(node->data.statement_if->block, indent_level + 1);
 
-					print_xml_ast_node(node->data.statement_if->block, indent_level + 2);
+				if (node->data.statement_if->num_elseifs > 0) {
+					print_indentation(indent_level + 1);
+					printf("<ElseIfBlocks>\n");
 
-				print_indentation(indent_level + 1);
-				printf("</Block>\n");
+						for (size_t i = 0; i < node->data.statement_if->num_elseifs; i++) {
+							print_xml_ast_node((ast_node_t*) node->data.statement_if->elseifs[i], indent_level + 2);
+						}
 
-				for (size_t i = 0; i < node->data.statement_if->elseifs->length; i++) {
-					print_xml_ast_node((ast_node_t*)node->data.statement_if->elseifs->data[i], indent_level + 1);
+					print_indentation(indent_level + 1);
+					printf("</ElseIfBlocks>\n");
 				}
 
 				if (node->data.statement_if->else_block != NULL) {
-					print_xml_ast_node(node->data.statement_if->else_block, indent_level + 1);
+					print_indentation(indent_level + 1);
+					printf("<Else>\n");
+
+						if (node->data.statement_if->else_block != NULL) {
+							print_xml_ast_node(node->data.statement_if->else_block, indent_level + 2);
+						}
+					
+					print_indentation(indent_level + 1);
+					printf("</Else>\n");
 				}
 
 			print_indentation(indent_level);
@@ -1836,8 +1866,8 @@ bool interpreter_statement_if(ast_statement_if_t* node, interpreter_state_t* sta
     if (interpreter_expression_truly(node->condition->data.expression, state)) {
         return interpreter_interpret(node->block, state);
     } else {
-        for (size_t i = 0; i < node->elseifs->length; i++) {
-            ast_node_t* elseif = (ast_node_t*) node->elseifs->data[i];
+        for (size_t i = 0; i < node->num_elseifs; i++) {
+            ast_node_t* elseif = (ast_node_t*) node->elseifs[i];
 			if (interpreter_expression_truly(elseif->data.statement_if->condition->data.expression, state)) {
 				return interpreter_interpret(elseif->data.statement_if->block, state);
 			}
@@ -1886,7 +1916,11 @@ bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
 			break;
 
 		case AST_EXPRESSION:
-			val = interpreter_expression(node->data.expression, state);
+			// val = interpreter_expression(node->data.expression, state);
+			interpreter_expression(node->data.expression, state);
+			// if (node->type != AST_EXPRESSION_ASSIGNMENT) {
+			// 	ast_expression_data_free(val);
+			// }
 			// interpreter_expression(node->data.expression, state);
 			// free(val);
 			// ast_expression_data_free(val);
@@ -2023,14 +2057,12 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, i
 			// Skip
 		} else if (leftlen != 0 && rightlen != 0) {
 			size_t new_size = leftlen + rightlen + 1;
-			// left->string_value = (char*) realloc(left->string_value, new_size);
-			// strncat(left->string_value, right->string_value, rightlen);
-			// left->string_value[new_size - 1] = '\0';
-			// char* temp = (char*)realloc(left->string_value, new_size);
+			char* temp = (char*) malloc(sizeof(char) * new_size);
+			strncpy(temp, left->string_value, leftlen);
+			strncpy(temp + leftlen, right->string_value, rightlen);
+			temp[new_size - 1] = '\0';
 			// free(left->string_value);
-			// left->string_value = temp;
-			// strncat(left->string_value, right->string_value, rightlen);
-			// left->string_value[new_size - 1] = '\0';
+			left->string_value = temp;
 		} else if (leftlen == 0) {
 			left->string_value = strdup(right->string_value);
 		} else if (rightlen == 0) {

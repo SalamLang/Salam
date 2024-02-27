@@ -296,10 +296,12 @@ typedef struct {
 
 typedef struct {
 	struct ast_node* expression;
+	struct ast_literal_t* expression_value;
 } ast_statement_return_t;
 
 typedef struct {
 	struct ast_node* expression;
+	struct ast_literal_t* expression_value;
 } ast_statement_print_t;
 
 typedef struct {
@@ -424,10 +426,10 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* expr, interp
 ast_literal_t* interpreter_literal(ast_literal_t* expr);
 ast_literal_t* interpreter_identifier(ast_identifier_t* expr, interpreter_state_t* state);
 
-ast_literal_t* interpreter_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state);
-ast_literal_t* interpreter_statement_return(ast_statement_return_t* stmt, interpreter_state_t* state);
-void interpreter_function_declaration(ast_function_declaration_t* stmt, interpreter_state_t* state);
-void interpreter_block(ast_node_t* node, interpreter_state_t* state);
+ast_node_t* interpreter_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state);
+ast_node_t* interpreter_statement_return(ast_statement_return_t* stmt, interpreter_state_t* state);
+ast_node_t* interpreter_function_declaration(ast_function_declaration_t* stmt, interpreter_state_t* state);
+ast_node_t* interpreter_block(ast_node_t* node, interpreter_state_t* state);
 
 typedef ast_expression_t* (*nud_func_t)(parser_t* parser, token_t* token);
 typedef ast_expression_t* (*led_func_t)(parser_t* parser, token_t* token, ast_expression_t* left);
@@ -1916,7 +1918,7 @@ ast_node_t* interpreter_statement_if(ast_statement_if_t* node, interpreter_state
 
 ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_state_t* state)
 {
-	ast_literal_t* val;
+	printf("Interpreter Interpret Once\n");
 
 	switch (node->type) {
 		case AST_BLOCK:
@@ -1937,21 +1939,16 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_state_t* st
 
 		case AST_STATEMENT_PRINT:
 			return interpreter_statement_print(node->data.statement_print, state);
-			// ast_node_t* val = interpreter_statement_print(node->data.statement_print, state);
-			// interpreter_expression_data(val);
-			// return val;
 			break;
 
 		case AST_EXPRESSION:
-			return interpreter_expression(node->data.expression, state);
-			// val = interpreter_expression(node->data.expression, state);
-			// interpreter_expression(node->data.expression, state);
-			// if (node->type != AST_EXPRESSION_ASSIGNMENT) {
-			// 	ast_expression_data_free(val);
-			// }
-			// interpreter_expression(node->data.expression, state);
-			// free(val);
-			// ast_expression_data_free(val);
+			ast_literal_t* val = interpreter_expression(node->data.expression, state);
+			ast_node_t* res = (ast_node_t*) malloc(sizeof(ast_node_t));
+			res->type = AST_EXPRESSION;
+			res->data.expression = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+			res->data.expression->type = AST_EXPRESSION_LITERAL;
+			res->data.expression->data.literal = val;
+			return res;
 			break;
 
 		default:
@@ -1964,14 +1961,15 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_state_t* st
 
 interpreter_t* interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
 {
-	// printf("Interpreter Interpret\n");
+	printf("Interpreter Interpret\n");
+
 	interpreter_t* interpreter = (interpreter_t*) malloc(sizeof(interpreter_t));
 
 	if (node == NULL) {
 		return false;
 	}
-
-	interpreter_interpret_once(node, state);
+	
+	ast_node_t* point = interpreter_interpret_once(node, state);
 
 	return interpreter;
 }
@@ -1980,7 +1978,13 @@ ast_node_t* interpreter_function_declaration(ast_function_declaration_t* stmt, i
 {
 	// printf("Function Declaration: %s\n", stmt->name);
 
-	return interpreter_block(stmt->body, state);
+	ast_node_t* res = malloc(sizeof(ast_node_t));
+	res->type = AST_FUNCTION_DECLARATION;
+	res->data.function_declaration = (ast_function_declaration_t*) malloc(sizeof(ast_function_declaration_t));
+	res->data.function_declaration->name = strdup(stmt->name);
+	res->data.function_declaration->body = interpreter_block(stmt->body, state);
+
+	return res;
 }
 
 void interpreter_expression_data(ast_literal_t* data)
@@ -2001,22 +2005,28 @@ void interpreter_expression_data(ast_literal_t* data)
 	}
 }
 
-ast_literal_t* interpreter_statement_return(ast_statement_return_t* stmt, interpreter_state_t* state)
+ast_node_t* interpreter_statement_return(ast_statement_return_t* stmt, interpreter_state_t* state)
 {
 	// printf("Return Statement\n");
 
-	return interpreter_expression(stmt->expression->data.expression, state);
-	// interpreter_expression_data(res);
-	// ast_expression_data_free(res);
+	ast_node_t* res = (ast_node_t*) malloc(sizeof(ast_node_t));
+	res->type = AST_STATEMENT_RETURN;
+	res->data.statement_return = (ast_statement_return_t*) malloc(sizeof(ast_statement_return_t));
+	res->data.statement_return->expression_value = interpreter_expression(stmt->expression->data.expression, state);
+
+	return res;
 }
 
-ast_literal_t* interpreter_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state)
+ast_node_t* interpreter_statement_print(ast_statement_print_t* stmt, interpreter_state_t* state)
 {
 	// printf("Print Statement\n");
 	
-	return interpreter_expression(stmt->expression->data.expression, state);
-	// interpreter_expression_data(res);
-	// ast_expression_data_free(res);
+	ast_node_t* res = (ast_node_t*) malloc(sizeof(ast_node_t));
+	res->type = AST_STATEMENT_PRINT;
+	res->data.statement_print = (ast_statement_print_t*) malloc(sizeof(ast_statement_print_t));
+	res->data.statement_print->expression_value = interpreter_expression(stmt->expression->data.expression, state);
+
+	return res;
 }
 
 ast_node_t* interpreter_block(ast_node_t* node, interpreter_state_t* state)

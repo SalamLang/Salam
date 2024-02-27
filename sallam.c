@@ -351,7 +351,6 @@ typedef enum {
 
 typedef struct {
 	int return_code;
-	interpreter_t* interpreter;
 } interpreter_t;
 
 struct ast_statement_if_t;
@@ -385,7 +384,7 @@ typedef struct {
 	lexer_t* lexer;
 	size_t token_index;
 	array_t* functions;
-	array_t* variables;
+	array_t* expressions;
 } parser_t;
 
 bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter);
@@ -424,7 +423,7 @@ ast_literal_t* interpreter_identifier(ast_identifier_t* expr, interpreter_t* int
 
 ast_node_t* interpreter_statement_print(ast_statement_print_t* stmt, interpreter_t* interpreter);
 ast_node_t* interpreter_statement_return(ast_statement_return_t* stmt, interpreter_t* interpreter);
-ast_node_t* interpreter_function_declaration(ast_function_declaration_t* stmt, interpreter_t* interpreter);
+ast_function_declaration_t* interpreter_function_declaration(ast_function_declaration_t* stmt, interpreter_t* interpreter);
 ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter);
 
 typedef ast_expression_t* (*nud_func_t)(parser_t* parser, token_t* token);
@@ -946,7 +945,7 @@ parser_t* parser_create(lexer_t* lexer)
 	parser->lexer = lexer;
 	parser->token_index = 0;
 	parser->functions = array_create(5);
-	parser->variables = array_create(5);
+	parser->expressions = array_create(5);
 
 	return parser;
 }
@@ -1148,9 +1147,22 @@ void parser_free(parser_t* parser)
 		return;
 	}
 
-	if (parser->ast_tree != NULL) {
-		ast_node_free(parser->ast_tree);
-		parser->ast_tree = NULL;
+	if (parser->functions != NULL) {
+		for (size_t i = 0; i < parser->functions->length; i++) {
+			ast_node_free((ast_node_t*) parser->functions->data[i]);
+			parser->functions->data[i] = NULL;
+		}
+		array_free(parser->functions);
+		parser->functions = NULL;
+	}
+
+	if (parser->expressions != NULL) {
+		for (size_t i = 0; i < parser->expressions->length; i++) {
+			ast_node_free((ast_node_t*) parser->expressions->data[i]);
+			parser->expressions->data[i] = NULL;
+		}
+		array_free(parser->expressions);
+		parser->expressions = NULL;
 	}
 
 	free(parser);
@@ -1639,7 +1651,7 @@ void parser_parse(parser_t* parser)
 			default:
 				if (parser_expression_has(parser)) {
 					ast_node_t* expression_node = parser_expression(parser);
-					array_push(parser->variables, expression_node);
+					array_push(parser->expressions, expression_node);
 				} else {
 					printf("Error: bad token as statement\n");
 					exit(EXIT_FAILURE);
@@ -1865,12 +1877,33 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 	}
 }
 
-void print_xml_ast_tree(ast_node_t* root)
+void print_xml_ast_tree(parser_t* parser)
 {
 	printf("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
 	printf("<AST>\n");
 
-		print_xml_ast_node(root, 1);
+		print_indentation(1);
+		printf("<Functions>\n");
+
+			for (size_t i = 0; i < parser->functions->length; i++) {
+				print_xml_ast_node(parser->functions->data[i], 2);
+			}
+
+		print_indentation(1);
+		printf("</Functions>\n");
+
+		////////////////////////////////////////////
+		////////////////////////////////////////////
+
+		print_indentation(1);
+		printf("<Expressions>\n");
+
+			for (size_t i = 0; i < parser->expressions->length; i++) {
+				print_xml_ast_node(parser->expressions->data[i], 2);
+			}
+		
+		print_indentation(1);
+		printf("</Expressions>\n");
 
 	printf("</AST>\n");
 }
@@ -1912,7 +1945,12 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 			break;
 
 		case AST_FUNCTION_DECLARATION:
-			return interpreter_function_declaration(node->data.function_declaration, interpreter);
+			ast_function_declaration_t* function = interpreter_function_declaration(node->data.function_declaration, interpreter);
+
+			ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
+			node->type = AST_FUNCTION_DECLARATION;
+			node->data.function_declaration = function;
+			return node;
 			break;
 
 		case AST_STATEMENT_RETURN:
@@ -1929,6 +1967,7 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 
 		case AST_EXPRESSION:
 			ast_literal_t* val = interpreter_expression(node->data.expression, interpreter);
+
 			ast_node_t* res = (ast_node_t*) malloc(sizeof(ast_node_t));
 			res->type = AST_EXPRESSION;
 			res->data.expression = (ast_expression_t*) malloc(sizeof(ast_expression_t));
@@ -1954,22 +1993,35 @@ interpreter_t* interpreter_interpret(parser_t* parser)
 	}
 
 	interpreter_t* interpreter = (interpreter_t*) malloc(sizeof(interpreter_t));
-	interpreter->state = state;
-	
-	ast_node_t* point = interpreter_interpret_once(node, interpreter);
+
+	for (size_t i = 0; i < parser->expressions->length; i++) {
+		printf("Interpreting global expression\n");
+		ast_node_t* expression = (ast_node_t*) parser->expressions->data[i];
+		ast_literal_t* val = interpreter_expression(expression->data.expression, interpreter);
+		expression->type = AST_EXPRESSION_LITERAL;
+		expression->data.expression->data.literal = val;
+		parser->expressions->data[i] = expression;
+	}
+
+	for (size_t i = 0; i < parser->functions->length; i++) {
+		printf("Interpreting global function\n");
+		ast_node_t* function = (ast_node_t*) parser->functions->data[i];
+		ast_function_declaration_t* val = interpreter_function_declaration(function->data.function_declaration, interpreter);
+		function->type = AST_FUNCTION_DECLARATION;
+		function->data.function_declaration = val;
+		parser->functions->data[i] = function;
+	}
 
 	return interpreter;
 }
 
-ast_node_t* interpreter_function_declaration(ast_function_declaration_t* stmt, interpreter_t* interpreter)
+ast_function_declaration_t* interpreter_function_declaration(ast_function_declaration_t* stmt, interpreter_t* interpreter)
 {
-	// printf("Function Declaration: %s\n", stmt->name);
+	printf("Function Declaration: %s\n", stmt->name);
 
-	ast_node_t* res = malloc(sizeof(ast_node_t));
-	res->type = AST_FUNCTION_DECLARATION;
-	res->data.function_declaration = (ast_function_declaration_t*) malloc(sizeof(ast_function_declaration_t));
-	res->data.function_declaration->name = strdup(stmt->name);
-	res->data.function_declaration->body = interpreter_block(stmt->body, interpreter);
+	ast_function_declaration_t* res = (ast_function_declaration_t*) malloc(sizeof(ast_function_declaration_t));
+	res->name = strdup(stmt->name);
+	res->body = interpreter_block(stmt->body, interpreter);
 
 	return res;
 }

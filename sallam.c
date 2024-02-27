@@ -431,6 +431,7 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token);
 ast_expression_t* nud_parentheses(parser_t* parser, token_t* token);
 ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expression_t* left);
 ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* left);
+ast_expression_t* led_equal_equal(parser_t* parser, token_t* token, ast_expression_t* left);
 ast_expression_t* led_and(parser_t* parser, token_t* token, ast_expression_t* left);
 ast_expression_t* led_or(parser_t* parser, token_t* token, ast_expression_t* left);
 
@@ -455,6 +456,7 @@ token_info_t token_infos[] = {
 	[TOKEN_TYPE_OR] = {PRECEDENCE_ANDOR, NULL, led_or},
 	[TOKEN_TYPE_MINUS] = {PRECEDENCE_SUM, NULL, led_plus_minus},
 	[TOKEN_TYPE_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal},
+	[TOKEN_TYPE_EQUAL_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
 };
 
 char* token_op_type2str(ast_expression_type_t type)
@@ -844,18 +846,20 @@ void lexer_lex(lexer_t* lexer)
 		} else if (current_wchar == '-') {
 			token_t* t = token_create(TOKEN_TYPE_MINUS, "-", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_char == '=') {
-			if (lexer->index + 1 < lexer->length && lexer->data[lexer->index + 1] == '=') {
-				token_t* t = token_create(TOKEN_TYPE_EQUAL_EQUAL, "==", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
-				array_push(lexer->tokens, t);
-				lexer->index++;
-				lexer->column++;
-			} else {
-				token_t* t = token_create(TOKEN_TYPE_EQUAL, "=", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
-				array_push(lexer->tokens, t);
-			}
+        } else if (current_wchar == L'=') {
+            if (lexer->index < lexer->length && lexer->data[lexer->index] == L'=') {
+                // wprintf(L"has ==\n");
+                token_t* t = token_create(TOKEN_TYPE_EQUAL_EQUAL, "==", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
+                array_push(lexer->tokens, t);
+                lexer->index++;
+                lexer->column++;
+            } else {
+                // wprintf(L"has =\n");
+                token_t* t = token_create(TOKEN_TYPE_EQUAL, "=", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+                array_push(lexer->tokens, t);
+            }
 		} else if (current_char == '!') {
-			if (lexer->index + 1 < lexer->length && lexer->data[lexer->index + 1] == '=') {
+			if (lexer->index < lexer->length && lexer->data[lexer->index] == '=') {
 				token_t* t = token_create(TOKEN_TYPE_NOT_EQUAL, "!=", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
 				lexer->index++;
@@ -865,7 +869,7 @@ void lexer_lex(lexer_t* lexer)
 				array_push(lexer->tokens, t);
 			}
 		} else if (current_char == '>') {
-			if (lexer->index + 1 < lexer->length && lexer->data[lexer->index + 1] == '=') {
+			if (lexer->index < lexer->length && lexer->data[lexer->index] == '=') {
 				token_t* t = token_create(TOKEN_TYPE_GREATER_THAN_EQUAL, ">=", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
 				lexer->index++;
@@ -875,7 +879,7 @@ void lexer_lex(lexer_t* lexer)
 				array_push(lexer->tokens, t);
 			}
 		} else if (current_char == '<') {
-			if (lexer->index + 1 < lexer->length && lexer->data[lexer->index + 1] == '=') {
+			if (lexer->index < lexer->length && lexer->data[lexer->index] == '=') {
 				token_t* t = token_create(TOKEN_TYPE_LESS_THAN_EQUAL, "<=", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
 				lexer->index++;
@@ -1379,7 +1383,7 @@ ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence)
 
 ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	printf("Parsing operator binary\n");
+	printf("Parsing operator assignment\n");
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
@@ -1388,6 +1392,22 @@ ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* 
 	binary_op_expr->data.assignment = (ast_expression_assignment_t*) malloc(sizeof(ast_expression_assignment_t));
 	binary_op_expr->data.assignment->left = left;
 	binary_op_expr->data.assignment->right = right;
+
+	return binary_op_expr;
+}
+
+ast_expression_t* led_equal_equal(parser_t* parser, token_t* token, ast_expression_t* left)
+{
+	printf("Parsing operator equal\n");
+
+	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
+
+	ast_expression_t* binary_op_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+	binary_op_expr->type = AST_EXPRESSION_BINARY;
+	binary_op_expr->data.binary_op = (ast_expression_binary_t*) malloc(sizeof(ast_expression_binary_t));
+	binary_op_expr->data.binary_op->left = left;
+	binary_op_expr->data.binary_op->right = right;
+	binary_op_expr->data.binary_op->operator = strdup(token->value);
 
 	return binary_op_expr;
 }
@@ -1710,6 +1730,38 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 	print_indentation(indent_level);
 
 	switch (node->type) {
+		case AST_STATEMENT_IF:
+			printf("<StatementIf>\n");
+
+				print_indentation(indent_level + 1);
+				printf("<Condition>\n");
+
+					print_indentation(indent_level + 1);
+					print_xml_ast_expression(node->data.statement_if->condition->data.expression, indent_level + 2);
+
+				print_indentation(indent_level + 1);
+				printf("</Condition>\n");
+
+				print_indentation(indent_level + 1);
+				printf("<Block>\n");
+
+					print_xml_ast_node(node->data.statement_if->block, indent_level + 2);
+
+				print_indentation(indent_level + 1);
+				printf("</Block>\n");
+
+				for (size_t i = 0; i < node->data.statement_if->elseifs->length; i++) {
+					print_xml_ast_node((ast_node_t*)node->data.statement_if->elseifs->data[i], indent_level + 1);
+				}
+
+				if (node->data.statement_if->else_block != NULL) {
+					print_xml_ast_node(node->data.statement_if->else_block, indent_level + 1);
+				}
+
+			print_indentation(indent_level);
+			printf("</StatementIf>\n");
+			break;
+
 		case AST_FUNCTION_DECLARATION:
 			printf("<FunctionDeclaration>\n");
 			print_indentation(indent_level + 1);
@@ -1970,14 +2022,47 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, i
 		if (leftlen == 0 && rightlen == 0) {
 			// Skip
 		} else if (leftlen != 0 && rightlen != 0) {
-			left->string_value = (char*)realloc(left->string_value, leftlen + rightlen + 1);
-			strcat(left->string_value, right->string_value);
+			size_t new_size = leftlen + rightlen + 1;
+			left->string_value = (char*) realloc(left->string_value, new_size);
+			strncat(left->string_value, right->string_value, rightlen);
+			left->string_value[new_size - 1] = '\0';
+			// char* temp = (char*)realloc(left->string_value, new_size);
+			// free(left->string_value);
+			// left->string_value = temp;
+			// strncat(left->string_value, right->string_value, rightlen);
+			// left->string_value[new_size - 1] = '\0';
 		} else if (leftlen == 0) {
 			left->string_value = strdup(right->string_value);
 		} else if (rightlen == 0) {
 			// Skip
 		}
 		return left;
+	} else if (strcmp(binary_op->operator, "==") == 0) {
+		if (left->type != right->type) {
+			left->type = VALUE_TYPE_BOOL;
+			left->bool_value = false;
+			return left;
+		} else if (left->type == VALUE_TYPE_STRING) {
+			left->type = VALUE_TYPE_BOOL;
+			left->bool_value = strcmp(left->string_value, right->string_value) == 0;
+			return left;
+		} else if (left->type == VALUE_TYPE_INT) {
+			left->type = VALUE_TYPE_BOOL;
+			left->bool_value = left->int_value == right->int_value;
+			return left;
+		} else if (left->type == VALUE_TYPE_BOOL) {
+			left->type = VALUE_TYPE_BOOL;
+			left->bool_value = left->bool_value == right->bool_value;
+			return left;
+		} else if (left->type == VALUE_TYPE_FLOAT) {
+			left->type = VALUE_TYPE_BOOL;
+			left->bool_value = left->float_value == right->float_value;
+			return left;
+		} else {
+			printf("Error: cannot compare unknown types!\n");
+			exit(EXIT_FAILURE);
+			return NULL;
+		}
 	} else if ((left->type != VALUE_TYPE_INT && left->type != VALUE_TYPE_BOOL) || (right->type != VALUE_TYPE_INT && right->type != VALUE_TYPE_BOOL)) {
 		printf("Error: cannot calculate binary operator for non-int values!\n");
 		exit(EXIT_FAILURE);
@@ -2036,7 +2121,7 @@ bool interpreter_expression_truly(ast_expression_t* expr, interpreter_state_t* s
 	} else if (res->type == VALUE_TYPE_FLOAT) {
 		return res->float_value != 0.0;
 	} else if (res->type == VALUE_TYPE_STRING) {
-		return strlen(res->string_value) > 0;
+		return res->string_value != NULL && strlen(res->string_value) > 0;
 	}
 
 	return false;

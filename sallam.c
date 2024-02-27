@@ -96,7 +96,7 @@ void popSymbolTable()
 				entry->identifier = NULL;
 			}
 			if (entry->data != NULL) {
-				// ast_expression_data_free(&entry->data);
+				// ast_expression_data_free(&(entry->data));
 				entry->prevdata = entry->data;
 				entry->data = NULL;
 			}
@@ -986,95 +986,95 @@ void debug_current_token(parser_t* parser)
 	printf("=========> Current token: %s - %s\n", token_type2str(t->type) ,t->value);
 }
 
-void ast_expression_free(ast_expression_t* expr)
+void ast_expression_free(ast_expression_t** expr)
 {
-	printf("ast_expression_free\n");
+    printf("ast_expression_free\n");
 
-	if (expr == NULL) {
-		return;
-	}
+    if (expr == NULL || *expr == NULL) {
+        return;
+    }
 
-	switch (expr->type) {
-		case AST_EXPRESSION_LITERAL:
-			if (expr->data.literal != NULL) {
-				ast_expression_data_free(&expr->data.literal);
-				expr->data.literal = NULL;
-			}
-			break;
+    switch ((*expr)->type) {
+        case AST_EXPRESSION_LITERAL:
+            if ((*expr)->data.literal != NULL) {
+                ast_expression_data_free(&((*expr)->data.literal));
+                (*expr)->data.literal = NULL;
+            }
+            break;
 
-		case AST_EXPRESSION_IDENTIFIER:
-			if (expr->data.identifier != NULL) {
-				if (expr->data.identifier->name != NULL) {
-					free(expr->data.identifier->name);
-					expr->data.identifier->name = NULL;
-				}
+        case AST_EXPRESSION_IDENTIFIER:
+            if ((*expr)->data.identifier != NULL) {
+                if ((*expr)->data.identifier->name != NULL) {
+                    free((*expr)->data.identifier->name);
+                    (*expr)->data.identifier->name = NULL;
+                }
 
-				free(expr->data.identifier);
-				expr->data.identifier = NULL;
-			}
-			break;
-		
-		case AST_EXPRESSION_FUNCTION_CALL:
-			if (expr->data.function_call != NULL) {
-				free(expr->data.function_call->name);
-				expr->data.function_call->name = NULL;
+                free((*expr)->data.identifier);
+                (*expr)->data.identifier = NULL;
+            }
+            break;
 
-				if (expr->data.function_call->arguments != NULL) {
-					for (size_t i = 0; i > expr->data.function_call->arguments->length; i++) {
-						free(expr->data.function_call->arguments->data[i]);
-						expr->data.function_call->arguments->data[i] = NULL;
-					}
+        case AST_EXPRESSION_FUNCTION_CALL:
+            if ((*expr)->data.function_call != NULL) {
+                free((*expr)->data.function_call->name);
+                (*expr)->data.function_call->name = NULL;
 
-					free(expr->data.function_call->arguments->data);
-					expr->data.function_call->arguments->data = NULL;
-	
-					free(expr->data.function_call->arguments);
-					expr->data.function_call->arguments = NULL;
-				}
-			}
-			break;
+                if ((*expr)->data.function_call->arguments != NULL) {
+                    for (size_t i = 0; i < (*expr)->data.function_call->arguments->length; i++) {
+						ast_expression_free((ast_expression_t**)&((*expr)->data.function_call->arguments->data[i]));
+                        (*expr)->data.function_call->arguments->data[i] = NULL;
+                    }
 
-		case AST_EXPRESSION_ASSIGNMENT:
-			if (expr->data.assignment != NULL) {
-				if (expr->data.assignment->left != NULL) {
-					ast_expression_free(expr->data.assignment->left);
-					expr->data.assignment->left = NULL;
-				}
-				if (expr->data.assignment->right != NULL) {
-					ast_expression_free(expr->data.assignment->right);
-					expr->data.assignment->right = NULL;
-				}
+                    free((*expr)->data.function_call->arguments->data);
+                    (*expr)->data.function_call->arguments->data = NULL;
 
-				free(expr->data.assignment);
-				expr->data.assignment = NULL;
-			}
-			break;
+                    free((*expr)->data.function_call->arguments);
+                    (*expr)->data.function_call->arguments = NULL;
+                }
+            }
+            break;
 
-		case AST_EXPRESSION_BINARY:
-			if (expr->data.binary_op != NULL) {
-				if (expr->data.binary_op->left != NULL) {
-					ast_expression_free(expr->data.binary_op->left);
-					expr->data.binary_op->left = NULL;
-				}
+        case AST_EXPRESSION_ASSIGNMENT:
+            if ((*expr)->data.assignment != NULL) {
+                if ((*expr)->data.assignment->left != NULL) {
+                    ast_expression_free(&((*expr)->data.assignment->left));
+                    (*expr)->data.assignment->left = NULL;
+                }
+                if ((*expr)->data.assignment->right != NULL) {
+                    ast_expression_free(&((*expr)->data.assignment->right));
+                    (*expr)->data.assignment->right = NULL;
+                }
 
-				if (expr->data.binary_op->right != NULL) {
-					ast_expression_free(expr->data.binary_op->right);
-					expr->data.binary_op->right = NULL;
-				}
+                free((*expr)->data.assignment);
+                (*expr)->data.assignment = NULL;
+            }
+            break;
 
-				if (expr->data.binary_op->operator != NULL) {
-					free(expr->data.binary_op->operator);
-					expr->data.binary_op->operator = NULL;
-				}
-				
-				free(expr->data.binary_op);
-				expr->data.binary_op = NULL;
-			}
-			break;
-	}
+        case AST_EXPRESSION_BINARY:
+            if ((*expr)->data.binary_op != NULL) {
+                if ((*expr)->data.binary_op->left != NULL) {
+                    ast_expression_free(&((*expr)->data.binary_op->left));
+                    (*expr)->data.binary_op->left = NULL;
+                }
 
-	free(expr);
-	expr = NULL;
+                if ((*expr)->data.binary_op->right != NULL) {
+                    ast_expression_free(&((*expr)->data.binary_op->right));
+                    (*expr)->data.binary_op->right = NULL;
+                }
+
+                if ((*expr)->data.binary_op->operator != NULL) {
+                    free((*expr)->data.binary_op->operator);
+                    (*expr)->data.binary_op->operator = NULL;
+                }
+
+                free((*expr)->data.binary_op);
+                (*expr)->data.binary_op = NULL;
+            }
+            break;
+    }
+
+    free(*expr);
+    *expr = NULL;
 }
 
 void ast_node_free(ast_node_t* node)
@@ -1141,7 +1141,7 @@ void ast_node_free(ast_node_t* node)
 				}
 
 				if (node->data.statement_return->expression_value != NULL) {
-					ast_expression_data_free(&node->data.statement_return->expression_value);
+					ast_expression_data_free(&(node->data.statement_return->expression_value));
 					node->data.statement_return->expression_value = NULL;
 				}
 
@@ -1158,7 +1158,7 @@ void ast_node_free(ast_node_t* node)
 				}
 
 				if (node->data.statement_print->expression_value != NULL) {
-					ast_expression_data_free(&node->data.statement_print->expression_value);
+					ast_expression_data_free(&(node->data.statement_print->expression_value));
 					node->data.statement_print->expression_value = NULL;
 				}
 
@@ -1189,15 +1189,15 @@ void ast_node_free(ast_node_t* node)
 				// printf("free expr\n");
 				// printf("print expr for debug: ");
 				// if (node->data.expression->data.assignment->left != NULL) {
-				// 	ast_expression_free(node->data.expression->data.assignment->left);
+				// 	ast_expression_free(&(node->data.expression->data.assignment->left));
 				// }
 				// if (node->data.expression->data.assignment->right != NULL) {
-				// 	ast_expression_free(node->data.expression->data.assignment->right);
+				// 	ast_expression_free(&(node->data.expression->data.assignment->right));
 				// }
 				// if (node->data.expression->data.assignment != NULL) {
 				// 	free(node->data.expression->data.assignment);
 				// }
-				ast_expression_free(node->data.expression);
+				ast_expression_free(&(node->data.expression));
 				node->data.expression = NULL;
 			}
 			break;
@@ -2267,13 +2267,13 @@ void ast_expression_data_free(ast_literal_t** val)
 
     if ((*val)->left != NULL) {
         printf("ast_expression_data_free left\n");
-        ast_expression_data_free(&(*val)->left);
+        ast_expression_data_free(&((*val)->left));
         (*val)->left = NULL;
     }
 
     if ((*val)->right != NULL) {
         printf("ast_expression_data_free right\n");
-        ast_expression_data_free(&(*val)->right);
+        ast_expression_data_free(&((*val)->right));
         (*val)->right = NULL;
     }
 
@@ -2472,13 +2472,13 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_assignment_t* ex
 			} else if (res->type == VALUE_TYPE_FLOAT) {
 				variable->float_value = res->float_value;
 			}
-			// ast_expression_data_free(&res);
+			// ast_expression_data_free(&(res));
 		} else {
 			printf("Saving %s variable\n", identifier);
 			addToSymbolTable(symbolTableStack, identifier, res);
 		}
 		// free(identifier);
-		// ast_expression_data_free(&variable); // TODO
+		// ast_expression_data_free(&(variable)); // TODO
 
 		return res;
 	} else {

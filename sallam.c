@@ -7,6 +7,35 @@
 #include <limits.h>
 
 typedef enum {
+	INTERPRETER_NODE_TYPE_FUNCTION,
+	INTERPRETER_NODE_TYPE_RETURN,
+	INTERPRETER_NODE_TYPE_PRINT,
+	INTERPRETER_NODE_TYPE_IF,
+	INTERPRETER_NODE_TYPE_ELSEIF,
+	INTERPRETER_NODE_TYPE_BLOCK,
+	INTERPRETER_NODE_TYPE_EXPRESSION,
+	INTERPRETER_NODE_TYPE_ASSIGNMENT,
+} interpreter_node_type_t;
+
+// typedef struct {
+// 	interpreter_node_type_t type;
+// 	union {
+// 		ast_function_declaration_t* function;
+// 		ast_node_t* statement_return;
+// 		ast_statement_print_t* statement_print;
+// 		ast_statement_if_t* statement_if;
+// 		ast_block_t* block;
+// 		ast_expression_t* expression;
+// 	} data;
+// } interpreter_node_t;
+
+typedef struct {
+	int return_code;
+	ast_expression_t** variables;
+	ast_function_declaration_t** functions;
+} interpreter_t;
+
+typedef enum {
 	VALUE_TYPE_INT,
 	VALUE_TYPE_FLOAT,
 	VALUE_TYPE_BOOL,
@@ -24,7 +53,9 @@ char* literal_type2name(ast_literal_type_t type)
 	}
 }
 
-typedef struct {
+struct ast_literal_t;
+
+typedef struct ast_literal_t {
 	ast_literal_type_t type;
 	union {
 		int int_value;
@@ -32,6 +63,9 @@ typedef struct {
 		float float_value;
 		char* string_value;
 	};
+
+	struct ast_literal_t* left;
+	struct ast_literal_t* right;
 } ast_literal_t;
 
 typedef struct SymbolTableEntry {
@@ -318,6 +352,7 @@ typedef struct {
 } ast_expression_assignment_t;
 
 typedef enum {
+	AST_EXPRESSION_VALUE,
 	AST_EXPRESSION_LITERAL,
 	AST_EXPRESSION_IDENTIFIER,
 	AST_EXPRESSION_BINARY,
@@ -380,7 +415,7 @@ typedef struct {
 
 bool interpreter_expression_truly(ast_expression_t* expr, interpreter_state_t* state);
 
-bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state);
+interpreter_t* interpreter_interpret(ast_node_t* node, interpreter_state_t* state);
 
 void interpreter_expression_data(ast_literal_t* data);
 
@@ -948,6 +983,16 @@ void ast_expression_free(ast_expression_t* expr)
 	switch (expr->type) {
 		case AST_EXPRESSION_LITERAL:
 			ast_expression_data_free(expr->data.literal);
+			// if (expr->data.literal->left != NULL) {
+			// 	ast_expression_free(expr->data.literal->left);
+			// 	expr->data.literal->left = NULL;
+			// }
+			// if (expr->data.literal->right != NULL) {
+			// 	ast_expression_free(expr->data.literal->right);
+			// 	expr->data.literal->right = NULL;
+			// }
+			// free(expr->data.literal);
+			// expr->data.literal = NULL;
 			break;
 
 		case AST_EXPRESSION_IDENTIFIER:
@@ -1491,6 +1536,8 @@ ast_expression_t* nud_bool(parser_t* parser, token_t* token)
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
 	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
+	literal_expr->data.literal->left = NULL;
+	literal_expr->data.literal->right = NULL;
 	literal_expr->data.literal->type = VALUE_TYPE_BOOL;
 	literal_expr->data.literal->bool_value = strcmp(token->value, "درست") == 0;
 
@@ -1505,6 +1552,8 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
 	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
+	literal_expr->data.literal->left = NULL;
+	literal_expr->data.literal->right = NULL;
 	literal_expr->data.literal->type = VALUE_TYPE_INT;
 	literal_expr->data.literal->int_value = atoi(token->value);
 
@@ -1519,6 +1568,8 @@ ast_expression_t* nud_string(parser_t* parser, token_t* token)
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
 	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
+	literal_expr->data.literal->left = NULL;
+	literal_expr->data.literal->right = NULL;
 	literal_expr->data.literal->type = VALUE_TYPE_STRING;
 	literal_expr->data.literal->string_value = token->value;
 
@@ -1885,7 +1936,7 @@ bool interpreter_statement_if(ast_statement_if_t* node, interpreter_state_t* sta
     return false;
 }
 
-bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
+interpreter_t* interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
 {
 	// printf("Interpreter Interpret\n");
 
@@ -2026,6 +2077,13 @@ void ast_expression_data_free(ast_literal_t* val)
 		// Nothing to free
 	}
 
+	if (val->left != NULL) {
+		ast_expression_data_free(val->left);
+	}
+	if (val->right != NULL) {
+		ast_expression_data_free(val->right);
+	}
+
 	free(val);
 	val = NULL;
 }
@@ -2047,131 +2105,102 @@ ast_literal_t* interpreter_identifier(ast_identifier_t* expr, interpreter_state_
 }
 
 ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, interpreter_state_t* state) {
+	bool invalid = false;
+
 	ast_literal_t* left = interpreter_expression(binary_op->left, state);
 	ast_literal_t* right = interpreter_expression(binary_op->right, state);
 
-	printf("if...\n");
+	ast_literal_t* res = (ast_literal_t*) malloc(sizeof(ast_literal_t));
+	res->left = left;
+	res->right = right;
+
 	if (left == NULL || right == NULL) {
 		printf("Error: cannot calculate binary operator for NULL values!\n");
-		exit(EXIT_FAILURE);
+		invalid = true;
 	} else if (left->type == VALUE_TYPE_STRING && right->type == VALUE_TYPE_STRING && strcmp(binary_op->operator, "+") == 0) {
-		printf("1....\n");
-		left->type = VALUE_TYPE_STRING;
-		printf("1###....\n");
+		res->type = VALUE_TYPE_STRING;
 		size_t leftlen = strlen(left->string_value);
-		printf("1<<<....\n");
 		size_t rightlen = strlen(right->string_value);
-		printf("1>>>....\n");
+
 		if (leftlen == 0 && rightlen == 0) {
-			// Skip
+			res->string_value = strdup("");
 		} else if (leftlen != 0 && rightlen != 0) {
 			size_t new_size = sizeof(char*) * (leftlen + rightlen + 1);
 
-			// char* temp = (char*) realloc(left->string_value, new_size);
-			// left->string_value = temp;
-			// strcat(left->string_value, right->string_value);
-			// return left;
-
-			ast_literal_t* res = (ast_literal_t*) malloc(sizeof(ast_literal_t));
-			res->type = TOKEN_TYPE_STRING;
 			res->string_value = (char*) malloc(new_size);
+
 			strcpy(res->string_value, left->string_value);
 			strcat(res->string_value, right->string_value);
-
-			free(left->string_value);
-			left->string_value = NULL;
-			free(left);
-			left = NULL;
-			free(right->string_value);
-			right->string_value = NULL;
-			free(right);
-
-			// ast_expression_data_free(left);
-			// left = NULL;
-			// ast_expression_data_free(right);
-			// right = NULL;
-			return res;
 		} else if (leftlen == 0) {
-			printf("0000000\n");
-            // free(left->string_value);
-			// free(left);
-			left->string_value = strdup(right->string_value);
+			res->string_value = strdup(right->string_value);
 		} else if (rightlen == 0) {
-			// Skip
+			res->string_value = strdup(left->string_value);
 		}
-		return left;
 	} else if (strcmp(binary_op->operator, "==") == 0) {
-		printf("2....\n");
 		if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_FLOAT) {
-			left->type = VALUE_TYPE_BOOL;
-			left->bool_value = left->int_value == right->float_value ? true : false;
-			return left;
+			res->type = VALUE_TYPE_BOOL;
+			res->bool_value = left->int_value == right->float_value ? true : false;
 		} else if (left->type == VALUE_TYPE_FLOAT && right->type == VALUE_TYPE_INT) {
-			left->type = VALUE_TYPE_BOOL;
-			left->bool_value = left->float_value == right->int_value ? true : false;
-			return left;
+			res->type = VALUE_TYPE_BOOL;
+			res->bool_value = left->float_value == right->int_value ? true : false;
 		} else if (left->type != right->type) {
-			left->type = VALUE_TYPE_BOOL;
-			left->bool_value = false;
-			return left;
+			res->type = VALUE_TYPE_BOOL;
+			res->bool_value = false;
 		} else if (left->type == VALUE_TYPE_STRING) {
-			left->type = VALUE_TYPE_BOOL;
-			left->bool_value = strcmp(left->string_value, right->string_value) == 0 ? true : false;
-			return left;
+			res->type = VALUE_TYPE_BOOL;
+			res->bool_value = strcmp(left->string_value, right->string_value) == 0 ? true : false;
 		} else if (left->type == VALUE_TYPE_INT) {
-			left->type = VALUE_TYPE_BOOL;
-			left->bool_value = left->int_value == right->int_value ? true : false;
-			return left;
+			res->type = VALUE_TYPE_BOOL;
+			res->bool_value = left->int_value == right->int_value ? true : false;
 		} else if (left->type == VALUE_TYPE_BOOL) {
-			left->type = VALUE_TYPE_BOOL;
-			left->bool_value = left->bool_value == right->bool_value ? true : false;
-			return left;
+			res->type = VALUE_TYPE_BOOL;
+			res->bool_value = left->bool_value == right->bool_value ? true : false;
 		} else if (left->type == VALUE_TYPE_FLOAT) {
-			left->type = VALUE_TYPE_BOOL;
-			left->bool_value = left->float_value == right->float_value ? true : false;
-			return left;
+			res->type = VALUE_TYPE_BOOL;
+			res->bool_value = left->float_value == right->float_value ? true : false;
 		} else {
 			printf("Error: cannot compare unknown types!\n");
-			exit(EXIT_FAILURE);
-			return NULL;
+			invalid = true;
 		}
 	} else if ((left->type != VALUE_TYPE_INT && left->type != VALUE_TYPE_BOOL) || (right->type != VALUE_TYPE_INT && right->type != VALUE_TYPE_BOOL)) {
 		printf("Error: cannot calculate binary operator for non-int values!\n");
-		exit(EXIT_FAILURE);
+		invalid = true;
 	} else if (strcmp(binary_op->operator, "+") == 0) {
-		left->type = VALUE_TYPE_INT;
-		left->int_value = left->int_value + right->int_value;
-		return left;
+		res->type = VALUE_TYPE_INT;
+		res->int_value = left->int_value + right->int_value;
 	} else if (strcmp(binary_op->operator, "-") == 0) {
-		left->type = VALUE_TYPE_INT;
-		left->int_value = left->int_value - right->int_value;
-		return left;
+		res->type = VALUE_TYPE_INT;
+		res->int_value = left->int_value - right->int_value;
 	} else if (strcmp(binary_op->operator, "*") == 0) {
-		left->type = VALUE_TYPE_INT;
-		left->int_value = left->int_value * right->int_value;
-		return left;
+		res->type = VALUE_TYPE_INT;
+		res->int_value = left->int_value * right->int_value;
 	} else if (strcmp(binary_op->operator, "و") == 0) {
-		left->type = VALUE_TYPE_BOOL;
-		left->int_value = left->int_value && right->int_value;
-		return left;
+		res->type = VALUE_TYPE_BOOL;
+		res->int_value = left->int_value && right->int_value;
 	} else if (strcmp(binary_op->operator, "یا") == 0) {
-		left->type = VALUE_TYPE_BOOL;
-		left->int_value = left->int_value || right->int_value;
-		return left;
+		res->type = VALUE_TYPE_BOOL;
+		res->int_value = left->int_value || right->int_value;
 	} else if (strcmp(binary_op->operator, "/") == 0) {
 		if (right->int_value == 0) {
 			printf("Error: cannot divide by zero!\n");
-			exit(EXIT_FAILURE);
+			invalid = true;
 		} else {
-			left->type = VALUE_TYPE_INT;
-			left->int_value = left->int_value / right->int_value;
-			return left;
+			res->type = VALUE_TYPE_INT;
+			res->int_value = left->int_value / right->int_value;
 		}
+	} else {
+		printf("Error: unknown operator: %s\n", binary_op->operator);
+		invalid = true;
 	}
 
-	ast_expression_data_free(left);
-	ast_expression_data_free(right);
-	return NULL;
+	if (invalid) {
+		ast_expression_data_free(res);
+		ast_expression_data_free(left);
+		ast_expression_data_free(right);
+		exit(EXIT_FAILURE);
+		return NULL;
+	}
+	return res;
 }
 
 // int interpreter_function_call(ast_node_t* node, interpreter_state_t* state)
@@ -2265,12 +2294,15 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_state_
 	return NULL;
 }
 
-void interpreter_free()
+void interpreter_free(interpreter_t* interpreter)
 {
 	// while (symbolTableStack != NULL) {
 	// 	popSymbolTable();
 	// }
 	// free(symbolTableStack);
+
+	free(interpreter);
+	interpreter = NULL;
 }
 
 int main(int argc, char** argv)
@@ -2296,19 +2328,19 @@ int main(int argc, char** argv)
 	print_xml_ast_tree(parser->ast_tree);
 
 	interpreter_create();
-	interpreter_interpret(parser->ast_tree, NULL);
+	interpreter_t* interpreter = interpreter_interpret(parser->ast_tree, NULL);
 
 	printf("====================================\n");
-
-	printf("free interpreter\n");
-	interpreter_free();
-	printf("end interpreter free\n");
 
 	printf("free parser\n");
 	parser_free(parser);
 	printf("end parser free\n");
 
 	// lexer_free(lexer);
+
+	printf("free interpreter\n");
+	interpreter_free(interpreter);
+	printf("end interpreter free\n");
 
 	exit(EXIT_SUCCESS);
 }

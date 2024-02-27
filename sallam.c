@@ -2023,9 +2023,9 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, i
 			// Skip
 		} else if (leftlen != 0 && rightlen != 0) {
 			size_t new_size = leftlen + rightlen + 1;
-			left->string_value = (char*) realloc(left->string_value, new_size);
-			strncat(left->string_value, right->string_value, rightlen);
-			left->string_value[new_size - 1] = '\0';
+			// left->string_value = (char*) realloc(left->string_value, new_size);
+			// strncat(left->string_value, right->string_value, rightlen);
+			// left->string_value[new_size - 1] = '\0';
 			// char* temp = (char*)realloc(left->string_value, new_size);
 			// free(left->string_value);
 			// left->string_value = temp;
@@ -2139,7 +2139,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_assignment_t* ex
 		if (variable != NULL) {
 			variable->type = res->type;
 			if (res->type == VALUE_TYPE_STRING) {
-				variable->string_value = strdup(res->string_value);
+				variable->string_value = res->string_value;
 			} else if (res->type == VALUE_TYPE_INT) {
 				variable->int_value = res->int_value;
 			} else if (res->type == VALUE_TYPE_BOOL) {

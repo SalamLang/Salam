@@ -1955,7 +1955,7 @@ void interpreter_expression_data(ast_literal_t* data)
 	} else if (data->type == VALUE_TYPE_FLOAT) {
 		printf("%f\n", data->float_value);
 	} else if (data->type == VALUE_TYPE_BOOL) {
-		printf("%s\n", data->bool_value ? "True" : "False");
+		printf("%s\n", data->bool_value == true ? "True" : "False");
 	} else if (data->type == VALUE_TYPE_STRING) {
 		printf("%s\n", data->string_value);
 	} else {
@@ -2050,49 +2050,85 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, i
 	ast_literal_t* left = interpreter_expression(binary_op->left, state);
 	ast_literal_t* right = interpreter_expression(binary_op->right, state);
 
+	printf("if...\n");
 	if (left == NULL || right == NULL) {
 		printf("Error: cannot calculate binary operator for NULL values!\n");
 		exit(EXIT_FAILURE);
 	} else if (left->type == VALUE_TYPE_STRING && right->type == VALUE_TYPE_STRING && strcmp(binary_op->operator, "+") == 0) {
+		printf("1....\n");
 		left->type = VALUE_TYPE_STRING;
+		printf("1###....\n");
 		size_t leftlen = strlen(left->string_value);
+		printf("1<<<....\n");
 		size_t rightlen = strlen(right->string_value);
+		printf("1>>>....\n");
 		if (leftlen == 0 && rightlen == 0) {
 			// Skip
 		} else if (leftlen != 0 && rightlen != 0) {
-			size_t new_size = leftlen + rightlen + 1;
-			char* temp = (char*) malloc(sizeof(char) * new_size);
-			strncpy(temp, left->string_value, leftlen);
-			strncpy(temp + leftlen, right->string_value, rightlen);
-			temp[new_size - 1] = '\0';
-			// free(left->string_value);
-			left->string_value = temp;
+			size_t new_size = sizeof(char*) * (leftlen + rightlen + 1);
+
+			// char* temp = (char*) realloc(left->string_value, new_size);
+			// left->string_value = temp;
+			// strcat(left->string_value, right->string_value);
+			// return left;
+
+			ast_literal_t* res = (ast_literal_t*) malloc(sizeof(ast_literal_t));
+			res->type = TOKEN_TYPE_STRING;
+			res->string_value = (char*) malloc(new_size);
+			strcpy(res->string_value, left->string_value);
+			strcat(res->string_value, right->string_value);
+
+			free(left->string_value);
+			left->string_value = NULL;
+			free(left);
+			left = NULL;
+			free(right->string_value);
+			right->string_value = NULL;
+			free(right);
+
+			// ast_expression_data_free(left);
+			// left = NULL;
+			// ast_expression_data_free(right);
+			// right = NULL;
+			return res;
 		} else if (leftlen == 0) {
+			printf("0000000\n");
+            // free(left->string_value);
+			// free(left);
 			left->string_value = strdup(right->string_value);
 		} else if (rightlen == 0) {
 			// Skip
 		}
 		return left;
 	} else if (strcmp(binary_op->operator, "==") == 0) {
-		if (left->type != right->type) {
+		printf("2....\n");
+		if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_FLOAT) {
+			left->type = VALUE_TYPE_BOOL;
+			left->bool_value = left->int_value == right->float_value ? true : false;
+			return left;
+		} else if (left->type == VALUE_TYPE_FLOAT && right->type == VALUE_TYPE_INT) {
+			left->type = VALUE_TYPE_BOOL;
+			left->bool_value = left->float_value == right->int_value ? true : false;
+			return left;
+		} else if (left->type != right->type) {
 			left->type = VALUE_TYPE_BOOL;
 			left->bool_value = false;
 			return left;
 		} else if (left->type == VALUE_TYPE_STRING) {
 			left->type = VALUE_TYPE_BOOL;
-			left->bool_value = strcmp(left->string_value, right->string_value) == 0;
+			left->bool_value = strcmp(left->string_value, right->string_value) == 0 ? true : false;
 			return left;
 		} else if (left->type == VALUE_TYPE_INT) {
 			left->type = VALUE_TYPE_BOOL;
-			left->bool_value = left->int_value == right->int_value;
+			left->bool_value = left->int_value == right->int_value ? true : false;
 			return left;
 		} else if (left->type == VALUE_TYPE_BOOL) {
 			left->type = VALUE_TYPE_BOOL;
-			left->bool_value = left->bool_value == right->bool_value;
+			left->bool_value = left->bool_value == right->bool_value ? true : false;
 			return left;
 		} else if (left->type == VALUE_TYPE_FLOAT) {
 			left->type = VALUE_TYPE_BOOL;
-			left->bool_value = left->float_value == right->float_value;
+			left->bool_value = left->float_value == right->float_value ? true : false;
 			return left;
 		} else {
 			printf("Error: cannot compare unknown types!\n");

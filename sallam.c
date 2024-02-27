@@ -2115,10 +2115,13 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter, parser_t* parse
 	if (parser->functions != NULL) {
 		for (size_t i = 0; i < parser->functions->length; i++) {
 			ast_node_t* function = (ast_node_t*) parser->functions->data[i];
+			ast_function_declaration_t* val;
 			if (strcmp(function->data.function_declaration->name, "سلام") == 0) {
-				ast_function_declaration_t* val = interpreter_function_declaration(function->data.function_declaration, interpreter);
+				val = interpreter_function_declaration(function->data.function_declaration, interpreter);
 				function->type = AST_FUNCTION_DECLARATION;
 				function->data.function_declaration = val;
+				parser->functions->data[i] = function;
+			} else {
 				parser->functions->data[i] = function;
 			}
 		}

@@ -7,35 +7,6 @@
 #include <limits.h>
 
 typedef enum {
-	INTERPRETER_NODE_TYPE_FUNCTION,
-	INTERPRETER_NODE_TYPE_RETURN,
-	INTERPRETER_NODE_TYPE_PRINT,
-	INTERPRETER_NODE_TYPE_IF,
-	INTERPRETER_NODE_TYPE_ELSEIF,
-	INTERPRETER_NODE_TYPE_BLOCK,
-	INTERPRETER_NODE_TYPE_EXPRESSION,
-	INTERPRETER_NODE_TYPE_ASSIGNMENT,
-} interpreter_node_type_t;
-
-// typedef struct {
-// 	interpreter_node_type_t type;
-// 	union {
-// 		ast_function_declaration_t* function;
-// 		ast_node_t* statement_return;
-// 		ast_statement_print_t* statement_print;
-// 		ast_statement_if_t* statement_if;
-// 		ast_block_t* block;
-// 		ast_expression_t* expression;
-// 	} data;
-// } interpreter_node_t;
-
-typedef struct {
-	int return_code;
-	ast_expression_t** variables;
-	ast_function_declaration_t** functions;
-} interpreter_t;
-
-typedef enum {
 	VALUE_TYPE_INT,
 	VALUE_TYPE_FLOAT,
 	VALUE_TYPE_BOOL,
@@ -380,6 +351,12 @@ typedef enum {
 	AST_EXPRESSION
 } ast_node_type_t;
 
+typedef struct {
+	int return_code;
+	ast_expression_t** variables;
+	ast_function_declaration_t** functions;
+} interpreter_t;
+
 struct ast_statement_if_t;
 
 typedef struct {
@@ -416,6 +393,7 @@ typedef struct {
 bool interpreter_expression_truly(ast_expression_t* expr, interpreter_state_t* state);
 
 interpreter_t* interpreter_interpret(ast_node_t* node, interpreter_state_t* state);
+ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_state_t* state);
 
 void interpreter_expression_data(ast_literal_t* data);
 
@@ -1914,51 +1892,43 @@ void interpreter_create()
 
 }
 
-bool interpreter_statement_if(ast_statement_if_t* node, interpreter_state_t* state)
+ast_node_t* interpreter_statement_if(ast_statement_if_t* node, interpreter_state_t* state)
 {
     // printf("If\n");
 
     if (interpreter_expression_truly(node->condition->data.expression, state)) {
-        return interpreter_interpret(node->block, state);
+        return interpreter_interpret_once(node->block, state);
     } else {
         for (size_t i = 0; i < node->num_elseifs; i++) {
             ast_node_t* elseif = (ast_node_t*) node->elseifs[i];
 			if (interpreter_expression_truly(elseif->data.statement_if->condition->data.expression, state)) {
-				return interpreter_interpret(elseif->data.statement_if->block, state);
+				return interpreter_interpret_once(elseif->data.statement_if->block, state);
 			}
         }
 
         if (node->else_block != NULL) {
-            return interpreter_interpret(node->else_block, state);
+            return interpreter_interpret_once(node->else_block, state);
         }
     }
 
-    return false;
+    return NULL;
 }
 
-interpreter_t* interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
+ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_state_t* state)
 {
-	// printf("Interpreter Interpret\n");
-
-	if (node == NULL) {
-		return false;
-	}
-
 	ast_literal_t* val;
 
 	switch (node->type) {
 		case AST_BLOCK:
-			interpreter_block(node, state);
+			return interpreter_block(node, state);
 			break;
 
 		case AST_FUNCTION_DECLARATION:
-			interpreter_function_declaration(node->data.function_declaration, state);
+			return interpreter_function_declaration(node->data.function_declaration, state);
 			break;
 
 		case AST_STATEMENT_RETURN:
-			val = interpreter_statement_return(node->data.statement_return, state);
-			interpreter_expression_data(val);
-			return true;
+			return interpreter_statement_return(node->data.statement_return, state);
 			break;
 		
 		case AST_STATEMENT_IF:
@@ -1966,13 +1936,16 @@ interpreter_t* interpreter_interpret(ast_node_t* node, interpreter_state_t* stat
 			break;
 
 		case AST_STATEMENT_PRINT:
-			val = interpreter_statement_print(node->data.statement_print, state);
-			interpreter_expression_data(val);
+			return interpreter_statement_print(node->data.statement_print, state);
+			// ast_node_t* val = interpreter_statement_print(node->data.statement_print, state);
+			// interpreter_expression_data(val);
+			// return val;
 			break;
 
 		case AST_EXPRESSION:
+			return interpreter_expression(node->data.expression, state);
 			// val = interpreter_expression(node->data.expression, state);
-			interpreter_expression(node->data.expression, state);
+			// interpreter_expression(node->data.expression, state);
 			// if (node->type != AST_EXPRESSION_ASSIGNMENT) {
 			// 	ast_expression_data_free(val);
 			// }
@@ -1986,14 +1959,28 @@ interpreter_t* interpreter_interpret(ast_node_t* node, interpreter_state_t* stat
 			break;
 	}
 
-	return false;
+	return NULL;
 }
 
-void interpreter_function_declaration(ast_function_declaration_t* stmt, interpreter_state_t* state)
+interpreter_t* interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
+{
+	// printf("Interpreter Interpret\n");
+	interpreter_t* interpreter = (interpreter_t*) malloc(sizeof(interpreter_t));
+
+	if (node == NULL) {
+		return false;
+	}
+
+	interpreter_interpret_once(node, state);
+
+	return interpreter;
+}
+
+ast_node_t* interpreter_function_declaration(ast_function_declaration_t* stmt, interpreter_state_t* state)
 {
 	// printf("Function Declaration: %s\n", stmt->name);
 
-	interpreter_block(stmt->body, state);
+	return interpreter_block(stmt->body, state);
 }
 
 void interpreter_expression_data(ast_literal_t* data)
@@ -2032,23 +2019,44 @@ ast_literal_t* interpreter_statement_print(ast_statement_print_t* stmt, interpre
 	// ast_expression_data_free(res);
 }
 
-void interpreter_block(ast_node_t* node, interpreter_state_t* state)
+ast_node_t* interpreter_block(ast_node_t* node, interpreter_state_t* state)
 {
 	// printf("Block\n");
+
+	ast_node_t* res = (ast_node_t*) malloc(sizeof(ast_node_t));
+	res->type = AST_BLOCK;
+	res->data.block = (ast_block_t*) malloc(sizeof(ast_block_t));
+	res->data.block->num_statements = 0;
+	int allocated_size = 5;
+	res->data.block->statements = (ast_node_t**) malloc(sizeof(ast_node_t*) * (allocated_size + 1));
 
 	// Scope entry
 	pushSymbolTable(symbolTableStack);
 
 	for (size_t i = 0; i < node->data.block->num_statements; i++) {
-		bool res = interpreter_interpret(node->data.block->statements[i], state);
+		ast_node_t* res = interpreter_interpret_once(node->data.block->statements[i], state);
 
-		if (res == true) {
-			break;
+		if (res->data.block->num_statements >= allocated_size) {
+			allocated_size *= 2;
+			res->data.block->statements = (ast_node_t**) realloc(
+				res->data.block->statements, sizeof(ast_node_t*) * (allocated_size + 1)
+			);
+
+			if (res->data.block->statements == NULL) {
+				fprintf(stderr, "Error in parsing block: Memory reallocation failed.\n");
+				exit(EXIT_FAILURE);
+				break;
+			}
 		}
+
+		res->data.block->statements[res->data.block->num_statements++] = res;
+
+		// TODO: break on return statement
 	}
 
 	// Scope exit
 	popSymbolTable(symbolTableStack);
+	return res;
 }
 
 ast_literal_t* interpreter_literal(ast_literal_t* expr)

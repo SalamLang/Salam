@@ -414,11 +414,11 @@ void read_identifier(lexer_t* lexer, wchar_t ch);
 size_t wchar_length(wchar_t wide_char);
 
 lexer_t* lexer_create(const char* data);
-void lexer_free(lexer_t* lexer);
+void lexer_free(lexer_t** lexer);
 void lexer_lex(lexer_t* lexer);
 
 parser_t* parser_create(lexer_t* lexer);
-void parser_free(parser_t* parser);
+void parser_free(parser_t** parser);
 void parser_parse(parser_t* parser);
 ast_node_t* parser_function(parser_t* parser);
 ast_node_t* parser_block(parser_t* parser);
@@ -647,43 +647,42 @@ lexer_t* lexer_create(const char* data)
 	return lexer;
 }
 
-void lexer_free(lexer_t* lexer)
+void lexer_free(lexer_t** lexer)
 {
-	if (lexer == NULL) {
-		return;
-	}
+    if (lexer == NULL || *lexer == NULL) {
+        return;
+    }
 
-	if (lexer->tokens != NULL) {
-		for (size_t i = 0; i < lexer->tokens->length; i++) {
-			token_t* t = (token_t*) lexer->tokens->data[i];
-			if (t != NULL) {
-				if (t->value != NULL) {
-					free(t->value);
-					t->value = NULL;
-				}
+    if ((*lexer)->tokens != NULL) {
+        for (size_t i = 0; i < (*lexer)->tokens->length; i++) {
+            token_t* t = (token_t*) (*lexer)->tokens->data[i];
+            if (t != NULL) {
+                if (t->value != NULL) {
+                    free(t->value);
+                    t->value = NULL;
+                }
 
-				free(t);
-				t = NULL;
-			}
-		}
+                free(t);
+                t = NULL;
+            }
+        }
 
-		if (lexer->tokens->data != NULL) {
-			free(lexer->tokens->data);
-			lexer->tokens->data = NULL;
-		}
+        if ((*lexer)->tokens->data != NULL) {
+            free((*lexer)->tokens->data);
+            (*lexer)->tokens->data = NULL;
+        }
 
-		// array_free(lexer->tokens);
-		free(lexer->tokens);
-		lexer->tokens = NULL;
-	}
+        free((*lexer)->tokens);
+        (*lexer)->tokens = NULL;
+    }
 
-	if (lexer->data != NULL) {
-		free(lexer->data);
-		lexer->data = NULL;
-	}
+    if ((*lexer)->data != NULL) {
+        free((*lexer)->data);
+        (*lexer)->data = NULL;
+    }
 
-	free(lexer);
-	lexer = NULL;
+    free(*lexer);
+    *lexer = NULL;
 }
 
 bool is_number(wchar_t ch)
@@ -1208,38 +1207,44 @@ void ast_node_free(ast_node_t* node)
 	node = NULL;
 }
 
-void parser_free(parser_t* parser)
+void parser_free(parser_t** parser)
 {
-	if (parser == NULL) {
-		return;
-	}
+    if (parser == NULL || *parser == NULL) {
+        return;
+    }
 
-	if (parser->functions != NULL) {
-		if (parser->functions->data != NULL) {
-			// array_free(parser->functions);
-			for (size_t i = 0; i < parser->functions->length; i++) {
-				ast_node_free((ast_node_t*) parser->functions->data[i]);
-				parser->functions->data[i] = NULL;
+    if ((*parser)->functions != NULL) {
+        if ((*parser)->functions->data != NULL) {
+            for (size_t i = 0; i < (*parser)->functions->length; i++) {
+                ast_node_free((ast_node_t*) (*parser)->functions->data[i]);
+                (*parser)->functions->data[i] = NULL;
+            }
+
+            free((*parser)->functions->data);
+            (*parser)->functions->data = NULL;
+        }
+
+        free((*parser)->functions);
+        (*parser)->functions = NULL;
+    }
+
+    if ((*parser)->expressions != NULL) {
+        if ((*parser)->expressions->data != NULL) {
+			for (size_t i = 0; i < (*parser)->expressions->length; i++) {
+				ast_node_free((ast_node_t*) (*parser)->expressions->data[i]);
+				(*parser)->expressions->data[i] = NULL;
 			}
 
-			free(parser->functions->data);
-			parser->functions->data = NULL;
+            free((*parser)->functions->data);
+            (*parser)->functions->data = NULL;
 		}
-		free(parser->functions);
-		parser->functions = NULL;
-	}
 
-	// if (parser->expressions != NULL) {
-	// 	for (size_t i = 0; i < parser->expressions->length; i++) {
-	// 		ast_node_free((ast_node_t*) parser->expressions->data[i]);
-	// 		parser->expressions->data[i] = NULL;
-	// 	}
-	// 	array_free(parser->expressions);
-	// 	parser->expressions = NULL;
-	// }
+        free((*parser)->expressions);
+        (*parser)->expressions = NULL;
+    }
 
-	free(parser);
-	parser = NULL;
+    free(*parser);
+    *parser = NULL;
 }
 
 void parser_token_next(parser_t* parser)
@@ -2514,15 +2519,15 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 	return NULL;
 }
 
-void interpreter_free(interpreter_t* interpreter)
+void interpreter_free(interpreter_t** interpreter)
 {
 	// while (symbolTableStack != NULL) {
 	// 	popSymbolTable();
 	// }
 	// free(symbolTableStack);
 
-	free(interpreter);
-	interpreter = NULL;
+	free(*interpreter);
+	*interpreter = NULL;
 }
 
 int main(int argc, char** argv)
@@ -2555,15 +2560,15 @@ int main(int argc, char** argv)
 	printf("====================================\n");
 
 	printf("free lexer\n");
-	lexer_free(lexer);
+	lexer_free(&lexer);
 	printf("end lexer free\n");
 
 	printf("free parser\n");
-	parser_free(parser);
+	parser_free(&parser);
 	printf("end parser free\n");
 
 	printf("free interpreter\n");
-	interpreter_free(interpreter);
+	interpreter_free(&interpreter);
 	printf("end interpreter free\n");
 
 	exit(EXIT_SUCCESS);

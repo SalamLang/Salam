@@ -469,8 +469,9 @@ token_info_t token_infos[] = {
 	[TOKEN_TYPE_TRUE] = {PRECEDENCE_LOWEST, nud_bool, NULL},
 	[TOKEN_TYPE_FALSE] = {PRECEDENCE_LOWEST, nud_bool, NULL},
 	[TOKEN_TYPE_NUMBER] = {PRECEDENCE_LOWEST, nud_number, NULL},
-	[TOKEN_TYPE_STRING] = {PRECEDENCE_LOWEST, nud_string, NULL},
+	[TOKEN_TYPE_NUMBER] = {PRECEDENCE_LOWEST, nud_number, NULL},
 	[TOKEN_TYPE_IDENTIFIER] = {PRECEDENCE_LOWEST, nud_identifier, NULL},
+	[TOKEN_TYPE_STRING] = {PRECEDENCE_LOWEST, nud_string, NULL},
 	[TOKEN_TYPE_PARENTHESE_OPEN] = {PRECEDENCE_LOWEST, nud_parentheses, NULL},
 	[TOKEN_TYPE_PLUS] = {PRECEDENCE_SUM, NULL, led_plus_minus},
 	[TOKEN_TYPE_AND] = {PRECEDENCE_ANDOR, NULL, led_and},
@@ -1243,6 +1244,20 @@ token_t* parser_token_skip(parser_t* parser, token_type_t type)
 	return NULL;
 }
 
+bool parser_token_skip_ifhas(parser_t* parser, token_type_t type)
+{
+	if (parser->lexer->tokens->length > parser->token_index) {
+		token_t* token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+
+		if (token->type == type) {
+			parser->token_index++;
+			return true;
+		}
+	}
+
+	return false;
+}
+
 void parser_token_eat_nodata(parser_t* parser, token_type_t type)
 {
 	if (parser->lexer->tokens->length > parser->token_index) {
@@ -1289,8 +1304,6 @@ ast_node_t* parser_function(parser_t* parser)
 	parser_token_eat_nodata(parser, TOKEN_TYPE_FUNCTION);
 
 	token_t* name = parser_token_eat(parser, TOKEN_TYPE_IDENTIFIER);
-	// token_print(name);
-	// printf("FUNCTION NAME: %s\n", name->value);
 
 	// if (parser->lexer->tokens->length > parser->token_index && ((token_t*) parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_PARENTHESE_OPEN) {
 	//     printf("Parsing parameters\n");
@@ -1466,7 +1479,7 @@ ast_node_t* parser_expression(parser_t* parser)
 	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
 	node->type = AST_EXPRESSION;
 	node->data.expression = parser_expression_pratt(parser, PRECEDENCE_LOWEST);
-
+	
 	return node;
 }
 
@@ -1617,13 +1630,37 @@ ast_expression_t* nud_string(parser_t* parser, token_t* token)
 ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 {
 	printf("Parsing identifier\n");
-	
-	ast_expression_t* identifier_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
-	identifier_expr->type = AST_EXPRESSION_IDENTIFIER;
-	identifier_expr->data.identifier = (ast_identifier_t*) malloc(sizeof(ast_identifier_t));
-	identifier_expr->data.identifier->name = strdup(token->value);
 
-	return identifier_expr;
+	char* identifier = strdup(token->value);
+
+	printf("second token of ident: ");
+	debug_current_token(parser);
+
+	ast_expression_t* expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+
+	// Check if current token is (
+	if (parser_token_skip_ifhas(parser, TOKEN_TYPE_PARENTHESE_OPEN)) {
+		printf("inside ( clause\n");
+		debug_current_token(parser);
+
+		expr->type = AST_EXPRESSION_FUNCTION_CALL;
+		expr->data.function_call = (ast_function_call_t*) malloc(sizeof(ast_function_call_t));
+		expr->data.function_call->name = identifier;
+		expr->data.function_call->arguments = NULL;
+		// expr->data.function_call->arguments = array_create(3);
+
+		// Eating ) token
+		parser_token_eat_nodata(parser, TOKEN_TYPE_PARENTHESE_CLOSE);
+
+		printf("after ) clause\n");
+		debug_current_token(parser);
+	} else {
+		expr->type = AST_EXPRESSION_IDENTIFIER;
+		expr->data.identifier = (ast_identifier_t*) malloc(sizeof(ast_identifier_t));
+		expr->data.identifier->name = identifier;
+	}
+	
+	return expr;
 }
 
 ast_expression_t* nud_parentheses(parser_t* parser, token_t* token)
@@ -2029,11 +2066,6 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 		case AST_EXPRESSION:
 			ast_literal_t* val = interpreter_expression(node->data.expression, interpreter);
 
-			// if (node->data.expression != NULL) {
-			// 	ast_expression_free(node->data.expression);
-			// 	node->data.expression = NULL;
-			// }
-
 			node->data.expression = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 			node->data.expression->type = AST_EXPRESSION_LITERAL;
 			node->data.expression->data.literal = val;
@@ -2048,12 +2080,10 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 	return NULL;
 }
 
-
 ast_literal_t* interpreter_interpret_function(ast_function_declaration_t* function, interpreter_t* interpreter)
 {
 	printf("Running function %s\n", function->name);
 
-	// Running block statements and pss into interpreter_interpret_once
 	for (size_t i = 0; i < function->body->data.block->num_statements; i++) {
 		ast_node_t* stmt = function->body->data.block->statements[i];
 		printf("Checking statement %zu/%zu\n", i+1, function->body->data.block->num_statements);
@@ -2092,22 +2122,13 @@ interpreter_t* interpreter_interpret(parser_t* parser)
 	// Functions
 	if (parser->functions != NULL) {
 		for (size_t i = 0; i < parser->functions->length; i++) {
-			printf("Interpreting global function\n");
 			ast_node_t* function = (ast_node_t*) parser->functions->data[i];
-			ast_function_declaration_t* val = interpreter_function_declaration(function->data.function_declaration, interpreter);
-			function->type = AST_FUNCTION_DECLARATION;
-			function->data.function_declaration = val;
-			parser->functions->data[i] = function;
-		}
-	}
-
-	// Run main
-	printf("====================================\n");
-	printf("Running main function...\n");
-	for (size_t i = 0; i < parser->functions->length; i++) {
-		ast_node_t* function = (ast_node_t*) parser->functions->data[i];
-		if (strcmp(function->data.function_declaration->name, "سلام") == 0) {
-			interpreter_interpret_function(function->data.function_declaration, interpreter);
+			if (strcmp(function->data.function_declaration->name, "سلام") == 0) {
+				ast_function_declaration_t* val = interpreter_function_declaration(function->data.function_declaration, interpreter);
+				function->type = AST_FUNCTION_DECLARATION;
+				function->data.function_declaration = val;
+				parser->functions->data[i] = function;
+			}
 		}
 	}
 
@@ -2229,11 +2250,11 @@ void ast_expression_data_free(ast_literal_t* val)
 
 ast_literal_t* interpreter_identifier(ast_identifier_t* expr, interpreter_t* interpreter)
 {
-	// printf("Variable: %s\n", expr->name);
+	printf("Variable: %s\n", expr->name);
 
 	ast_literal_t* val = findInSymbolTable(symbolTableStack, expr->name);
 	if (val != NULL) {
-		// printf("Variable found: %s = %d\n", expr->name, val->value);
+		// printf("Variable found: %s\n", expr->name);
 		return val;
 	} else {
 		printf("Error: Variable not found: %s\n", expr->name);
@@ -2380,6 +2401,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_assignment_t* ex
 		char* identifier = expr->left->data.identifier->name;
 		ast_literal_t* variable = findInSymbolTableCurrent(symbolTableStack, identifier);
 		if (variable != NULL) {
+			printf("Found an exiting variable %s\n", identifier);
 			variable->type = res->type;
 			if (res->type == VALUE_TYPE_STRING) {
 				variable->string_value = res->string_value;
@@ -2392,6 +2414,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_assignment_t* ex
 			}
 			// ast_expression_data_free(res);
 		} else {
+			printf("Saving %s variable\n", identifier);
 			addToSymbolTable(symbolTableStack, identifier, res);
 		}
 		// free(identifier);

@@ -1369,7 +1369,7 @@ ast_node_t* parser_statement_if(parser_t* parser) {
 	node->data.statement_if->num_elseifs = 0;
 	node->data.statement_if->elseifs = (struct ast_node_t**) malloc(sizeof(ast_node_t*) * (allocated_size + 1));
 	node->data.statement_if->else_block = NULL;
-	
+
 	while (parser->lexer->tokens->length > parser->token_index && ((token_t*) parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_ELSEIF) {
 		parser->token_index++; // Eating ELSEIF token
 
@@ -2079,6 +2079,9 @@ interpreter_t* interpreter_interpret(parser_t* parser)
 
 	interpreter_t* interpreter = (interpreter_t*) malloc(sizeof(interpreter_t));
 
+	// Scope entry
+	pushSymbolTable(symbolTableStack);
+
 	// Expressions
 	if (parser->expressions != NULL) {
 		for (size_t i = 0; i < parser->expressions->length; i++) {
@@ -2110,6 +2113,9 @@ interpreter_t* interpreter_interpret(parser_t* parser)
 			interpreter_interpret_function(function->data.function_declaration, interpreter);
 		}
 	}
+
+	// Scope exit
+	popSymbolTable(symbolTableStack);
 
 	return interpreter;
 }
@@ -2174,6 +2180,7 @@ ast_block_t* interpreter_block(ast_block_t* block, interpreter_t* interpreter)
 
 	// Scope exit
 	popSymbolTable(symbolTableStack);
+
 	return block;
 }
 

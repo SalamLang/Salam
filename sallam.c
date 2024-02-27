@@ -1633,16 +1633,10 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 
 	char* identifier = strdup(token->value);
 
-	printf("second token of ident: ");
-	debug_current_token(parser);
-
 	ast_expression_t* expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 
 	// Check if current token is (
 	if (parser_token_skip_ifhas(parser, TOKEN_TYPE_PARENTHESE_OPEN)) {
-		printf("inside ( clause\n");
-		debug_current_token(parser);
-
 		expr->type = AST_EXPRESSION_FUNCTION_CALL;
 		expr->data.function_call = (ast_function_call_t*) malloc(sizeof(ast_function_call_t));
 		expr->data.function_call->name = identifier;
@@ -1651,9 +1645,6 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 
 		// Eating ) token
 		parser_token_eat_nodata(parser, TOKEN_TYPE_PARENTHESE_CLOSE);
-
-		printf("after ) clause\n");
-		debug_current_token(parser);
 	} else {
 		expr->type = AST_EXPRESSION_IDENTIFIER;
 		expr->data.identifier = (ast_identifier_t*) malloc(sizeof(ast_identifier_t));

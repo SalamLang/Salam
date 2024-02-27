@@ -1302,6 +1302,9 @@ ast_node_t* parser_statement_if(parser_t* parser) {
 			elseif->data.statement_if = (ast_statement_if_t*) malloc(sizeof(ast_statement_if_t));
 			elseif->data.statement_if->condition = parser_expression(parser);
 			elseif->data.statement_if->block = parser_block(parser);
+			elseif->data.statement_if->num_elseifs = 0;
+			elseif->data.statement_if->elseifs = NULL;
+			elseif->data.statement_if->else_block = NULL;
 
 			if (node->data.statement_if->num_elseifs >= allocated_size) {
 				allocated_size *= 2;

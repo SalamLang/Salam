@@ -355,7 +355,7 @@ typedef enum {
 	AST_STATEMENT_IF,
 	AST_STATEMENT_ELSEIF,
 	AST_BLOCK,
-	AST_EXPRESSION
+	AST_EXPRESSION,
 } ast_node_type_t;
 
 typedef struct {
@@ -1998,7 +1998,8 @@ ast_node_t* interpreter_statement_if(ast_statement_if_t* node, interpreter_t* in
 
 ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpreter)
 {
-	// printf("Interpreter Interpret Once\n");
+	printf("Interpreter Interpret Once\n");
+	printf("stmt type: %d\n", node->type);
 
 	switch (node->type) {
 		case AST_BLOCK:
@@ -2022,40 +2023,16 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 
 		case AST_STATEMENT_PRINT:
 			node->data.statement_print = interpreter_statement_print(node->data.statement_print, interpreter);
-			interpreter_expression_data(node->data.statement_print->expression_value);
 			return node;
 			break;
 
 		case AST_EXPRESSION:
 			ast_literal_t* val = interpreter_expression(node->data.expression, interpreter);
 
-			if (node->data.expression->data.literal->string_value != NULL) {
-				free(node->data.expression->data.literal->string_value);
-				node->data.expression->data.literal->string_value = NULL;
-			}
-
-			if (node->data.expression->data.literal != NULL) {
-				node->data.expression->data.literal = NULL;
-			}
-
-			// led_equal
-			if (node->data.expression->data.binary_op != NULL) {
-				if (node->data.expression->data.binary_op->left != NULL) {
-					ast_expression_free(node->data.expression->data.binary_op->left);
-					node->data.expression->data.binary_op->left = NULL;
-				}
-				if (node->data.expression->data.binary_op->right != NULL) {
-					ast_expression_free(node->data.expression->data.binary_op->right);
-					node->data.expression->data.binary_op->right = NULL;
-				}
-				free(node->data.expression->data.binary_op);
-				node->data.expression->data.binary_op = NULL;
-			}
-
-			if (node->data.expression != NULL) {
-				ast_expression_free(node->data.expression);
-				node->data.expression = NULL;
-			}
+			// if (node->data.expression != NULL) {
+			// 	ast_expression_free(node->data.expression);
+			// 	node->data.expression = NULL;
+			// }
 
 			node->data.expression = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 			node->data.expression->type = AST_EXPRESSION_LITERAL;
@@ -2074,7 +2051,17 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 
 ast_literal_t* interpreter_interpret_function(ast_function_declaration_t* function, interpreter_t* interpreter)
 {
+	printf("Running function %s\n", function->name);
 
+	// Running block statements and pss into interpreter_interpret_once
+	for (size_t i = 0; i < function->body->data.block->num_statements; i++) {
+		ast_node_t* stmt = function->body->data.block->statements[i];
+		printf("Checking statement %zu/%zu\n", i+1, function->body->data.block->num_statements);
+
+		if (stmt != NULL) {
+			interpreter_interpret_once(stmt, interpreter);
+		}
+	}
 }
 
 interpreter_t* interpreter_interpret(parser_t* parser)
@@ -2115,6 +2102,8 @@ interpreter_t* interpreter_interpret(parser_t* parser)
 	}
 
 	// Run main
+	printf("====================================\n");
+	printf("Running main function...\n");
 	for (size_t i = 0; i < parser->functions->length; i++) {
 		ast_node_t* function = (ast_node_t*) parser->functions->data[i];
 		if (strcmp(function->data.function_declaration->name, "سلام") == 0) {

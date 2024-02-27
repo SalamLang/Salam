@@ -1357,21 +1357,21 @@ bool parser_expression_has(parser_t* parser)
 ast_node_t* parser_statement_if(parser_t* parser) {
 	printf("Parsing statement if\n");
 
-	parser->token_index++;
-
-	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
-	node->type = AST_STATEMENT_IF;
+	parser->token_index++; // Eating IF token
 
 	size_t allocated_size = 2;
 
+	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
+	node->type = AST_STATEMENT_IF;
 	node->data.statement_if = (ast_statement_if_t*) malloc(sizeof(ast_statement_if_t));
 	node->data.statement_if->condition = parser_expression(parser);
 	node->data.statement_if->block = parser_block(parser);
 	node->data.statement_if->num_elseifs = 0;
 	node->data.statement_if->elseifs = (struct ast_node_t**) malloc(sizeof(ast_node_t*) * (allocated_size + 1));
 	node->data.statement_if->else_block = NULL;
+	
 	while (parser->lexer->tokens->length > parser->token_index && ((token_t*) parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_ELSEIF) {
-		parser->token_index++; // eat ELSEIF token
+		parser->token_index++; // Eating ELSEIF token
 
 		if (parser_expression_has(parser)) {
 			ast_node_t* elseif = (ast_node_t*) malloc(sizeof(ast_node_t));
@@ -1633,28 +1633,20 @@ ast_node_t* parser_block(parser_t* parser)
 {
     printf("Parsing block\n");
 
+    size_t allocated_size = 5;
+
     ast_node_t* block_node = (ast_node_t*)malloc(sizeof(ast_node_t));
     block_node->type = AST_BLOCK;
     block_node->data.block = (ast_block_t*)malloc(sizeof(ast_block_t));
     block_node->data.block->num_statements = 0;
-
-    size_t allocated_size = 5;
     block_node->data.block->statements = (ast_node_t**)malloc(sizeof(ast_node_t*) * (allocated_size + 1));
 
     parser_token_eat_nodata(parser, TOKEN_TYPE_SECTION_OPEN);
-
-    token_t* t = parser->lexer->tokens->data[parser->token_index];
-    // printf("current token: %s\n", token_type2str(t->type));
 
 	while (
 		parser->lexer->tokens->length > parser->token_index &&
 		((token_t*)parser->lexer->tokens->data[parser->token_index])->type != TOKEN_TYPE_SECTION_CLOSE
 	) {
-		// printf("current token: %s\n", token_type2str(((token_t*)parser->lexer->tokens->data[parser->token_index])->type));
-		if (((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_SECTION_CLOSE) {
-			// printf("yes and close\n");
-			break;
-		}
 		ast_node_t* statement = parser_statement(parser);
 
 		if (block_node->data.block->num_statements >= allocated_size) {
@@ -2071,6 +2063,12 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 	return NULL;
 }
 
+
+ast_literal_t* interpreter_interpret_function(ast_function_declaration_t* function, interpreter_t* interpreter)
+{
+
+}
+
 interpreter_t* interpreter_interpret(parser_t* parser)
 {
 	printf("Interpreter Interpret\n");
@@ -2106,12 +2104,12 @@ interpreter_t* interpreter_interpret(parser_t* parser)
 	}
 
 	// Run main
-	// for (size_t i = 0; i < parser->functions->length; i++) {
-	// 	ast_node_t* function = (ast_node_t*) parser->functions->data[i];
-	// 	if (strcmp(function->data.function_declaration->name, "سلام") == 0) {
-	// 		interpreter_interpret_once(function->data.function_declaration->body, interpreter);
-	// 	}
-	// }
+	for (size_t i = 0; i < parser->functions->length; i++) {
+		ast_node_t* function = (ast_node_t*) parser->functions->data[i];
+		if (strcmp(function->data.function_declaration->name, "سلام") == 0) {
+			interpreter_interpret_function(function->data.function_declaration, interpreter);
+		}
+	}
 
 	return interpreter;
 }

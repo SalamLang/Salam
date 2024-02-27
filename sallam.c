@@ -400,7 +400,7 @@ typedef struct {
 
 bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter);
 
-interpreter_t* interpreter_interpret(interpreter_t* interpreter, parser_t* parser);
+interpreter_t* interpreter_interpret(interpreter_t* interpreter);
 ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpreter);
 
 void interpreter_expression_data(ast_literal_t* data);
@@ -2088,11 +2088,11 @@ ast_literal_t* interpreter_interpret_function(ast_function_declaration_t* functi
 	}
 }
 
-interpreter_t* interpreter_interpret(interpreter_t* interpreter, parser_t* parser)
+interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 {
 	printf("Interpreter Interpret\n");
 
-	if (parser == NULL) {
+	if (interpreter == NULL || interpreter->parser == NULL) {
 		return NULL;
 	}
 
@@ -2100,29 +2100,36 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter, parser_t* parse
 	pushSymbolTable(symbolTableStack);
 
 	// Expressions
-	if (parser->expressions != NULL) {
-		for (size_t i = 0; i < parser->expressions->length; i++) {
+	if (interpreter->parser->expressions != NULL) {
+		for (size_t i = 0; i < interpreter->parser->expressions->length; i++) {
 			printf("Interpreting global expression\n");
-			ast_node_t* expression = (ast_node_t*) parser->expressions->data[i];
+			ast_node_t* expression = (ast_node_t*) interpreter->parser->expressions->data[i];
 			ast_literal_t* val = interpreter_expression(expression->data.expression, interpreter);
 			expression->type = AST_EXPRESSION_LITERAL;
 			expression->data.expression->data.literal = val;
-			parser->expressions->data[i] = expression;
+			interpreter->parser->expressions->data[i] = expression;
 		}
 	}
 
 	// Functions
-	if (parser->functions != NULL) {
-		for (size_t i = 0; i < parser->functions->length; i++) {
-			ast_node_t* function = (ast_node_t*) parser->functions->data[i];
+	if (interpreter->parser->functions != NULL) {
+		for (size_t i = 0; i < interpreter->parser->functions->length; i++) {
+			ast_node_t* function = (ast_node_t*) interpreter->parser->functions->data[i];
+			printf("Function %s\n", function->data.function_declaration->name);
+			interpreter->parser->functions->data[i] = function;
+		}
+
+		// Running main function
+		for (size_t i = 0; i < interpreter->parser->functions->length; i++) {
+			ast_node_t* function = (ast_node_t*) interpreter->parser->functions->data[i];
 			ast_function_declaration_t* val;
+
+			printf("Function %s\n", function->data.function_declaration->name);
 			if (strcmp(function->data.function_declaration->name, "سلام") == 0) {
 				val = interpreter_function_declaration(function->data.function_declaration, interpreter);
 				function->type = AST_FUNCTION_DECLARATION;
 				function->data.function_declaration = val;
-				parser->functions->data[i] = function;
-			} else {
-				parser->functions->data[i] = function;
+				interpreter->parser->functions->data[i] = function;
 			}
 		}
 	}
@@ -2370,9 +2377,10 @@ ast_literal_t* interpreter_function_call(ast_function_call_t* node, interpreter_
 
 	if (interpreter->parser->functions != NULL) {
 		for (size_t i = 0; i < interpreter->parser->functions->length; i++) {
-			ast_function_declaration_t* func = interpreter->parser->functions->data[i];
-			if (func != NULL && func->name != NULL && strcmp(func->name, node->name) == 0) {
-				func_exists = func;
+			ast_node_t* func = interpreter->parser->functions->data[i];
+			printf("--->%s - %s\n", node->name, func->data.function_declaration->name);
+			if (func != NULL && func->data.function_declaration != NULL && func->data.function_declaration->name != NULL && strcmp(func->data.function_declaration->name, node->name) == 0) {
+				func_exists = func->data.function_declaration;
 				exists = true;
 				break;
 			}
@@ -2388,7 +2396,7 @@ ast_literal_t* interpreter_function_call(ast_function_call_t* node, interpreter_
 		val->int_value = 55;
 		return val;
 	} else {
-		printf("Error: function wont exists!\n");
+		printf("Error: function not exists!\n");
 		exit(EXIT_FAILURE);
 		return NULL;
 	}
@@ -2517,7 +2525,7 @@ int main(int argc, char** argv)
 	print_xml_ast_tree(parser);
 
 	interpreter_t* interpreter = interpreter_create(parser);
-	interpreter_interpret(interpreter, parser);
+	interpreter_interpret(interpreter);
 
 	printf("====================================\n");
 

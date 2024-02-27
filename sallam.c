@@ -641,18 +641,21 @@ void lexer_free(lexer_t* lexer)
 	}
 
 	if (lexer->tokens != NULL) {
-		while (lexer->tokens->length > 0) {
-			token_t* t = (token_t*) array_pop(lexer->tokens);
+		for (size_t i = 0; i < lexer->tokens->length; i++) {
+			token_t* t = (token_t*) lexer->tokens->data[i];
 			if (t != NULL) {
-				if (t->value != NULL) {
-					free(t->value);
-					t->value = NULL;
-				}
 				free(t);
 				t = NULL;
 			}
 		}
+
+		if (lexer->tokens->data != NULL) {
+			free(lexer->tokens->data);
+			lexer->tokens->data = NULL;
+		}
+
 		// array_free(lexer->tokens);
+		free(lexer->tokens);
 		lexer->tokens = NULL;
 	}
 
@@ -945,7 +948,7 @@ parser_t* parser_create(lexer_t* lexer)
 	parser->lexer = lexer;
 	parser->token_index = 0;
 	parser->functions = array_create(5);
-	parser->expressions = array_create(5);
+	parser->expressions = NULL;// = array_create(5);
 
 	return parser;
 }
@@ -957,22 +960,15 @@ void ast_expression_free(ast_expression_t* expr)
 		return;
 	}
 
-	switch (expr->type) {
-		case AST_EXPRESSION_LITERAL:
-			ast_expression_data_free(expr->data.literal);
-			// if (expr->data.literal->left != NULL) {
-			// 	ast_expression_free(expr->data.literal->left);
-			// 	expr->data.literal->left = NULL;
-			// }
-			// if (expr->data.literal->right != NULL) {
-			// 	ast_expression_free(expr->data.literal->right);
-			// 	expr->data.literal->right = NULL;
-			// }
-			// free(expr->data.literal);
-			// expr->data.literal = NULL;
-			break;
+	// switch (expr->type) {
+	// 	case AST_EXPRESSION_LITERAL:
+			if (expr->data.literal != NULL) {
+				ast_expression_data_free(expr->data.literal);
+				expr->data.literal = NULL;
+			}
+			// break;
 
-		case AST_EXPRESSION_IDENTIFIER:
+		// case AST_EXPRESSION_IDENTIFIER:
 			if (expr->data.identifier != NULL) {
 				if (expr->data.identifier->name != NULL) {
 					free(expr->data.identifier->name);
@@ -982,9 +978,9 @@ void ast_expression_free(ast_expression_t* expr)
 				free(expr->data.identifier);
 				expr->data.identifier = NULL;
 			}
-			break;
+			// break;
 		
-		case AST_EXPRESSION_ASSIGNMENT:
+		// case AST_EXPRESSION_ASSIGNMENT:
 			if (expr->data.assignment != NULL) {
 				if (expr->data.assignment->left != NULL) {
 					ast_expression_free(expr->data.assignment->left);
@@ -998,10 +994,10 @@ void ast_expression_free(ast_expression_t* expr)
 				free(expr->data.assignment);
 				expr->data.assignment = NULL;
 			}
-			break;
+			// break;
 
-		case AST_EXPRESSION_BINARY:
-			printf("ast_expression_free AST_EXPRESSION_BINARY\n");
+		// case AST_EXPRESSION_BINARY:
+			// printf("ast_expression_free AST_EXPRESSION_BINARY\n");
 			if (expr->data.binary_op != NULL) {
 				if (expr->data.binary_op->left != NULL) {
 					ast_expression_free(expr->data.binary_op->left);
@@ -1021,8 +1017,8 @@ void ast_expression_free(ast_expression_t* expr)
 				free(expr->data.binary_op);
 				expr->data.binary_op = NULL;
 			}
-			break;
-	}
+			// break;
+	// }
 
 	free(expr);
 	expr = NULL;
@@ -1037,61 +1033,54 @@ void ast_node_free(ast_node_t* node)
 	switch (node->type) {
         case AST_STATEMENT_IF:
         case AST_STATEMENT_ELSEIF:
-			// printf("... if\n");
             if (node->data.statement_if != NULL) {
-                // printf("condition\n");
                 if (node->data.statement_if->condition != NULL) {
                     ast_node_free(node->data.statement_if->condition);
                     node->data.statement_if->condition = NULL;
                 }
 
-                // printf("block\n");
                 if (node->data.statement_if->block != NULL) {
                     ast_node_free(node->data.statement_if->block);
                     node->data.statement_if->block = NULL;
                 }
 
-                // printf("elseifs\n");
                 if (node->data.statement_if->elseifs != NULL) {
                     for (size_t i = 0; i < node->data.statement_if->num_elseifs; i++) {
                         ast_node_free((ast_node_t*) node->data.statement_if->elseifs[i]);
-						// free(node->data.statement_if->elseifs[i]);
 						node->data.statement_if->elseifs[i] = NULL;
                     }
 					free(node->data.statement_if->elseifs);
                     node->data.statement_if->elseifs = NULL;
                 }
 
-                // printf("else_block\n");
                 if (node->data.statement_if->else_block != NULL) {
                     ast_node_free(node->data.statement_if->else_block);
                     node->data.statement_if->else_block = NULL;
                 }
 
-                // printf("statement_if\n");
                 free(node->data.statement_if);
                 node->data.statement_if = NULL;
             }
 			break;
 		
 		case AST_FUNCTION_DECLARATION:
-			// printf("... function\n");
 			if (node->data.function_declaration != NULL) {
 				if (node->data.function_declaration->body != NULL) {
 					ast_node_free(node->data.function_declaration->body);
 					node->data.function_declaration->body = NULL;
 				}
+
 				if (node->data.function_declaration->name != NULL) {
 					free(node->data.function_declaration->name);
 					node->data.function_declaration->name = NULL;
 				}
+
 				free(node->data.function_declaration);
 				node->data.function_declaration = NULL;
 			}
 			break;
 
 		case AST_STATEMENT_RETURN:
-			// printf("... return\n");
 			if (node->data.statement_return != NULL) {
 				if (node->data.statement_return->expression != NULL) {
 					ast_node_free(node->data.statement_return->expression);
@@ -1109,7 +1098,6 @@ void ast_node_free(ast_node_t* node)
 			break;
 
 		case AST_STATEMENT_PRINT:
-			// printf("... print\n");
 			if (node->data.statement_print != NULL) {
 				if (node->data.statement_print->expression != NULL) {
 					ast_node_free(node->data.statement_print->expression);
@@ -1127,23 +1115,23 @@ void ast_node_free(ast_node_t* node)
 			break;
 
 		case AST_BLOCK:
-			// printf("... block\n");
 			if (node->data.block != NULL) {
 				if (node->data.block->statements != NULL) {
 					for (size_t i = 0; i < node->data.block->num_statements; i++) {
 						ast_node_free(node->data.block->statements[i]);
 						node->data.block->statements[i] = NULL;
 					}
+
 					free(node->data.block->statements);
 					node->data.block->statements = NULL;
 				}
+
 				free(node->data.block);
 				node->data.block = NULL;
 			}
 			break;
 
 		case AST_EXPRESSION:
-			// printf("... expression\n");
 			if (node->data.expression != NULL) {
 				ast_expression_free(node->data.expression);
 				node->data.expression = NULL;
@@ -1166,18 +1154,21 @@ void parser_free(parser_t* parser)
 			ast_node_free((ast_node_t*) parser->functions->data[i]);
 			parser->functions->data[i] = NULL;
 		}
-		array_free(parser->functions);
+		// array_free(parser->functions);
+		free(parser->functions->data);
+		parser->functions->data = NULL;
+		free(parser->functions);
 		parser->functions = NULL;
 	}
 
-	if (parser->expressions != NULL) {
-		for (size_t i = 0; i < parser->expressions->length; i++) {
-			ast_node_free((ast_node_t*) parser->expressions->data[i]);
-			parser->expressions->data[i] = NULL;
-		}
-		array_free(parser->expressions);
-		parser->expressions = NULL;
-	}
+	// if (parser->expressions != NULL) {
+	// 	for (size_t i = 0; i < parser->expressions->length; i++) {
+	// 		ast_node_free((ast_node_t*) parser->expressions->data[i]);
+	// 		parser->expressions->data[i] = NULL;
+	// 	}
+	// 	array_free(parser->expressions);
+	// 	parser->expressions = NULL;
+	// }
 
 	free(parser);
 	parser = NULL;
@@ -1391,7 +1382,7 @@ ast_node_t* parser_statement(parser_t* parser)
 			case TOKEN_TYPE_RETURN:
 				stmt = parser_statement_return(parser);
 				break;
-			
+
 			case TOKEN_TYPE_IF:
 				stmt = parser_statement_if(parser);
 				break;
@@ -1456,13 +1447,11 @@ ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* 
 {
 	printf("Parsing operator assignment\n");
 
-	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
-
 	ast_expression_t* binary_op_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 	binary_op_expr->type = AST_EXPRESSION_ASSIGNMENT;
 	binary_op_expr->data.assignment = (ast_expression_assignment_t*) malloc(sizeof(ast_expression_assignment_t));
 	binary_op_expr->data.assignment->left = left;
-	binary_op_expr->data.assignment->right = right;
+	binary_op_expr->data.assignment->right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
 	return binary_op_expr;
 }
@@ -1899,8 +1888,10 @@ void print_xml_ast_tree(parser_t* parser)
 		print_indentation(1);
 		printf("<Functions>\n");
 
-			for (size_t i = 0; i < parser->functions->length; i++) {
-				print_xml_ast_node(parser->functions->data[i], 2);
+			if (parser->functions != NULL) {
+				for (size_t i = 0; i < parser->functions->length; i++) {
+					print_xml_ast_node(parser->functions->data[i], 2);
+				}
 			}
 
 		print_indentation(1);
@@ -1912,8 +1903,10 @@ void print_xml_ast_tree(parser_t* parser)
 		print_indentation(1);
 		printf("<Expressions>\n");
 
-			for (size_t i = 0; i < parser->expressions->length; i++) {
-				print_xml_ast_node(parser->expressions->data[i], 2);
+			if (parser->expressions != NULL) {
+				for (size_t i = 0; i < parser->expressions->length; i++) {
+					print_xml_ast_node(parser->expressions->data[i], 2);
+				}
 			}
 		
 		print_indentation(1);
@@ -1982,12 +1975,38 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 		case AST_EXPRESSION:
 			ast_literal_t* val = interpreter_expression(node->data.expression, interpreter);
 
-			ast_node_t* res = (ast_node_t*) malloc(sizeof(ast_node_t));
-			res->type = AST_EXPRESSION;
-			res->data.expression = (ast_expression_t*) malloc(sizeof(ast_expression_t));
-			res->data.expression->type = AST_EXPRESSION_LITERAL;
-			res->data.expression->data.literal = val;
-			return res;
+			if (node->data.expression->data.literal->string_value != NULL) {
+				free(node->data.expression->data.literal->string_value);
+				node->data.expression->data.literal->string_value = NULL;
+			}
+
+			if (node->data.expression->data.literal != NULL) {
+				node->data.expression->data.literal = NULL;
+			}
+
+			// led_equal
+			if (node->data.expression->data.binary_op != NULL) {
+				if (node->data.expression->data.binary_op->left != NULL) {
+					ast_expression_free(node->data.expression->data.binary_op->left);
+					node->data.expression->data.binary_op->left = NULL;
+				}
+				if (node->data.expression->data.binary_op->right != NULL) {
+					ast_expression_free(node->data.expression->data.binary_op->right);
+					node->data.expression->data.binary_op->right = NULL;
+				}
+				free(node->data.expression->data.binary_op);
+				node->data.expression->data.binary_op = NULL;
+			}
+
+			if (node->data.expression != NULL) {
+				ast_expression_free(node->data.expression);
+				node->data.expression = NULL;
+			}
+
+			node->data.expression = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+			node->data.expression->type = AST_EXPRESSION_LITERAL;
+			node->data.expression->data.literal = val;
+			return node;
 			break;
 
 		default:
@@ -2009,23 +2028,27 @@ interpreter_t* interpreter_interpret(parser_t* parser)
 	interpreter_t* interpreter = (interpreter_t*) malloc(sizeof(interpreter_t));
 
 	// Expressions
-	for (size_t i = 0; i < parser->expressions->length; i++) {
-		printf("Interpreting global expression\n");
-		ast_node_t* expression = (ast_node_t*) parser->expressions->data[i];
-		ast_literal_t* val = interpreter_expression(expression->data.expression, interpreter);
-		expression->type = AST_EXPRESSION_LITERAL;
-		expression->data.expression->data.literal = val;
-		parser->expressions->data[i] = expression;
+	if (parser->expressions != NULL) {
+		for (size_t i = 0; i < parser->expressions->length; i++) {
+			printf("Interpreting global expression\n");
+			ast_node_t* expression = (ast_node_t*) parser->expressions->data[i];
+			ast_literal_t* val = interpreter_expression(expression->data.expression, interpreter);
+			expression->type = AST_EXPRESSION_LITERAL;
+			expression->data.expression->data.literal = val;
+			parser->expressions->data[i] = expression;
+		}
 	}
 
 	// Functions
-	for (size_t i = 0; i < parser->functions->length; i++) {
-		printf("Interpreting global function\n");
-		ast_node_t* function = (ast_node_t*) parser->functions->data[i];
-		ast_function_declaration_t* val = interpreter_function_declaration(function->data.function_declaration, interpreter);
-		function->type = AST_FUNCTION_DECLARATION;
-		function->data.function_declaration = val;
-		parser->functions->data[i] = function;
+	if (parser->functions != NULL) {
+		for (size_t i = 0; i < parser->functions->length; i++) {
+			printf("Interpreting global function\n");
+			ast_node_t* function = (ast_node_t*) parser->functions->data[i];
+			ast_function_declaration_t* val = interpreter_function_declaration(function->data.function_declaration, interpreter);
+			function->type = AST_FUNCTION_DECLARATION;
+			function->data.function_declaration = val;
+			parser->functions->data[i] = function;
+		}
 	}
 
 	// Run main
@@ -2389,11 +2412,14 @@ int main(int argc, char** argv)
 
 	printf("====================================\n");
 
+
+	printf("free lexer\n");
+	lexer_free(lexer);
+	printf("end lexer free\n");
+
 	printf("free parser\n");
 	parser_free(parser);
 	printf("end parser free\n");
-
-	// lexer_free(lexer);
 
 	printf("free interpreter\n");
 	interpreter_free(interpreter);

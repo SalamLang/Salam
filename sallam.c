@@ -1803,6 +1803,33 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 			print_indentation(indent_level + 1);
 			printf("</Literal>\n");
 			break;
+		
+		case AST_EXPRESSION_FUNCTION_CALL:
+			print_indentation(indent_level + 1);
+			printf("<FunctionCall>\n");
+
+				print_indentation(indent_level + 2);
+				printf("<Name>%s</Name>\n", expr->data.function_call->name);
+
+				if (expr->data.function_call->arguments == NULL) {
+					print_indentation(indent_level + 2);
+					printf("<Arguments />\n");
+				} else {
+					print_indentation(indent_level + 2);
+					printf("<Arguments>\n");
+
+						for (size_t i = 0; i < expr->data.function_call->arguments->length; i++) {
+							print_indentation(indent_level + 3);
+							printf("<Argument ... />\n");
+						}
+
+					print_indentation(indent_level + 2);
+					printf("</Arguments>\n");
+				}
+
+			print_indentation(indent_level + 1);
+			printf("</FunctionCall>\n");
+			break;
 
 		case AST_EXPRESSION_IDENTIFIER:
 			print_indentation(indent_level + 1);

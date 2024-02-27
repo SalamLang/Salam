@@ -644,6 +644,11 @@ void lexer_free(lexer_t* lexer)
 		for (size_t i = 0; i < lexer->tokens->length; i++) {
 			token_t* t = (token_t*) lexer->tokens->data[i];
 			if (t != NULL) {
+				if (t->value != NULL) {
+					free(t->value);
+					t->value = NULL;
+				}
+
 				free(t);
 				t = NULL;
 			}
@@ -956,6 +961,7 @@ parser_t* parser_create(lexer_t* lexer)
 void ast_expression_free(ast_expression_t* expr)
 {
 	printf("ast_expression_free\n");
+
 	if (expr == NULL) {
 		return;
 	}
@@ -1133,6 +1139,17 @@ void ast_node_free(ast_node_t* node)
 
 		case AST_EXPRESSION:
 			if (node->data.expression != NULL) {
+				// printf("free expr\n");
+				// printf("print expr for debug: ");
+				// if (node->data.expression->data.assignment->left != NULL) {
+				// 	ast_expression_free(node->data.expression->data.assignment->left);
+				// }
+				// if (node->data.expression->data.assignment->right != NULL) {
+				// 	ast_expression_free(node->data.expression->data.assignment->right);
+				// }
+				// if (node->data.expression->data.assignment != NULL) {
+				// 	free(node->data.expression->data.assignment);
+				// }
 				ast_expression_free(node->data.expression);
 				node->data.expression = NULL;
 			}
@@ -1150,13 +1167,16 @@ void parser_free(parser_t* parser)
 	}
 
 	if (parser->functions != NULL) {
-		for (size_t i = 0; i < parser->functions->length; i++) {
-			ast_node_free((ast_node_t*) parser->functions->data[i]);
-			parser->functions->data[i] = NULL;
+		if (parser->functions->data != NULL) {
+			// array_free(parser->functions);
+			for (size_t i = 0; i < parser->functions->length; i++) {
+				ast_node_free((ast_node_t*) parser->functions->data[i]);
+				parser->functions->data[i] = NULL;
+			}
+
+			free(parser->functions->data);
+			parser->functions->data = NULL;
 		}
-		// array_free(parser->functions);
-		free(parser->functions->data);
-		parser->functions->data = NULL;
 		free(parser->functions);
 		parser->functions = NULL;
 	}
@@ -1574,7 +1594,6 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 	
 	ast_expression_t* identifier_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 	identifier_expr->type = AST_EXPRESSION_IDENTIFIER;
-
 	identifier_expr->data.identifier = (ast_identifier_t*) malloc(sizeof(ast_identifier_t));
 	identifier_expr->data.identifier->name = strdup(token->value);
 
@@ -2156,10 +2175,12 @@ void ast_expression_data_free(ast_literal_t* val)
 	if (val->left != NULL) {
 		printf("ast_expression_data_free left\n");
 		ast_expression_data_free(val->left);
+		val->left = NULL;
 	}
 	if (val->right != NULL) {
 		printf("ast_expression_data_free right\n");
 		ast_expression_data_free(val->right);
+		val->right = NULL;
 	}
 
 	free(val);
@@ -2402,6 +2423,8 @@ int main(int argc, char** argv)
 
 	array_print(lexer->tokens);
 
+
+
 	parser_t* parser = parser_create(lexer);
 	parser_parse(parser);
 
@@ -2411,7 +2434,6 @@ int main(int argc, char** argv)
 	interpreter_t* interpreter = interpreter_interpret(parser);
 
 	printf("====================================\n");
-
 
 	printf("free lexer\n");
 	lexer_free(lexer);

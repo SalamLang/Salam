@@ -54,10 +54,6 @@ typedef struct SymbolTableStack {
 
 SymbolTableStack* symbolTableStack = NULL;
 
-void interpreter_expression_data(ast_literal_t* data);
-
-void ast_expression_data_free(ast_literal_t* val);
-
 SymbolTable* createSymbolTable(size_t capacity)
 {
 	SymbolTable* table = (SymbolTable*) malloc(sizeof(SymbolTable));
@@ -306,14 +302,6 @@ typedef struct {
 	size_t num_statements;
 } ast_block_t;
 
-struct ast_statement_if_t;
-
-typedef struct {
-	struct ast_node* expression;
-	ast_block_t* block;
-	struct ast_statement_if_t* next;
-} ast_statement_if_t;
-
 typedef struct {
 	char* name;
 } ast_identifier_t;
@@ -357,6 +345,15 @@ typedef enum {
 	AST_EXPRESSION
 } ast_node_type_t;
 
+struct ast_statement_if_t;
+
+typedef struct {
+	struct ast_node* condition;
+	struct ast_node* block;
+	array_t* elseifs;
+	struct ast_node* else_block;
+} ast_statement_if_t;
+
 typedef struct ast_node {
 	ast_node_type_t type;
 	union {
@@ -365,6 +362,7 @@ typedef struct ast_node {
 		ast_statement_print_t* statement_print;
 		ast_block_t* block;
 		ast_expression_t* expression;
+		ast_statement_if_t* statement_if;
 	} data;
 } ast_node_t;
 
@@ -378,6 +376,14 @@ typedef struct {
 	size_t token_index;
 	ast_node_t* ast_tree;
 } parser_t;
+
+bool interpreter_expression_truly(ast_expression_t* expr, interpreter_state_t* state);
+
+bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state);
+
+void interpreter_expression_data(ast_literal_t* data);
+
+void ast_expression_data_free(ast_literal_t* val);
 
 wchar_t read_token(lexer_t* lexer);
 void read_number(lexer_t* lexer, wchar_t ch);
@@ -1203,6 +1209,57 @@ ast_node_t* parser_statement_return(parser_t* parser) {
 	return node;
 }
 
+bool parser_expression_has(parser_t* parser)
+{
+	if (parser->lexer->tokens->length > parser->token_index) {
+		token_t* tok = (token_t*)parser->lexer->tokens->data[parser->token_index];
+		if (tok->type == TOKEN_TYPE_IDENTIFIER ||
+			tok->type == TOKEN_TYPE_PLUS ||
+			tok->type == TOKEN_TYPE_MINUS ||
+			tok->type == TOKEN_TYPE_PARENTHESE_OPEN ||
+			tok->type == TOKEN_TYPE_STRING ||
+			tok->type == TOKEN_TYPE_NUMBER
+		) {
+			return true;
+		}
+	}
+	return false;
+}
+
+ast_node_t* parser_statement_if(parser_t* parser) {
+	printf("Parsing statement if\n");
+
+	parser->token_index++;
+
+	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
+	node->type = AST_STATEMENT_IF;
+
+	node->data.statement_if = (ast_statement_if_t*) malloc(sizeof(ast_statement_if_t));
+	node->data.statement_if->condition = parser_expression(parser);
+	node->data.statement_if->block = parser_block(parser);
+
+	node->data.statement_if->elseifs = array_create(10);
+	while (parser->lexer->tokens->length > parser->token_index && ((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_ELSEIF) {
+		parser->token_index++; // eat ELSEIF token
+
+		if (parser_expression_has(parser) == false) {
+			node->data.statement_if->else_block = parser_block(parser);
+			break;
+		} else {
+			ast_node_t* elseif = (ast_node_t*) malloc(sizeof(ast_node_t));
+			elseif->type = AST_STATEMENT_ELSEIF;
+
+			elseif->data.statement_if = (ast_statement_if_t*) malloc(sizeof(ast_statement_if_t));
+			elseif->data.statement_if->condition = parser_expression(parser);
+			elseif->data.statement_if->block = parser_block(parser);
+
+			array_push(node->data.statement_if->elseifs, elseif);
+		}
+	}
+
+	return node;
+}
+
 ast_node_t* parser_statement(parser_t* parser)
 {
 	printf("Parsing statement\n");
@@ -1217,6 +1274,10 @@ ast_node_t* parser_statement(parser_t* parser)
 				stmt = parser_statement_return(parser);
 				break;
 			
+			case TOKEN_TYPE_IF:
+				stmt = parser_statement_if(parser);
+				break;
+			
 			case TOKEN_TYPE_PRINT:
 				stmt = parser_statement_print(parser);
 				break;
@@ -1225,13 +1286,13 @@ ast_node_t* parser_statement(parser_t* parser)
 				stmt = parser_block(parser);
 				break;
 			
-			case TOKEN_TYPE_IDENTIFIER:
-			case TOKEN_TYPE_PLUS:
-			case TOKEN_TYPE_MINUS:
-			case TOKEN_TYPE_PARENTHESE_OPEN:
-			case TOKEN_TYPE_STRING:
-			case TOKEN_TYPE_NUMBER:
-				stmt = parser_expression(parser);
+			default:
+				if (parser_expression_has(parser)) {
+					stmt = parser_expression(parser);
+				} else {
+					printf("Error: Unexpected token as statement %s\n", token_type2str(tok->type));
+					exit(EXIT_FAILURE);
+				}
 				break;
 		}
 	}
@@ -1673,6 +1734,28 @@ void interpreter_create()
 
 }
 
+bool interpreter_statement_if(ast_statement_if_t* node, interpreter_state_t* state)
+{
+    // printf("If\n");
+
+    if (interpreter_expression_truly(node->condition->data.expression, state)) {
+        return interpreter_interpret(node->block, state);
+    } else {
+        for (size_t i = 0; i < node->elseifs->length; i++) {
+            ast_node_t* elseif = (ast_node_t*) node->elseifs->data[i];
+			if (interpreter_expression_truly(elseif->data.statement_if->condition->data.expression, state)) {
+				return interpreter_interpret(elseif->data.statement_if->block, state);
+			}
+        }
+
+        if (node->else_block != NULL) {
+            return interpreter_interpret(node->else_block, state);
+        }
+    }
+
+    return false;
+}
+
 bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
 {
 	// printf("Interpreter Interpret\n");
@@ -1696,6 +1779,10 @@ bool interpreter_interpret(ast_node_t* node, interpreter_state_t* state)
 			val = interpreter_statement_return(node->data.statement_return, state);
 			interpreter_expression_data(val);
 			return true;
+			break;
+		
+		case AST_STATEMENT_IF:
+			return interpreter_statement_if(node->data.statement_if, state);
 			break;
 
 		case AST_STATEMENT_PRINT:
@@ -1892,6 +1979,25 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, i
 //     printf("Function Call: %s\n", node->data.function_call.name);
 //     return 0;
 // }
+
+
+bool interpreter_expression_truly(ast_expression_t* expr, interpreter_state_t* state)
+{
+	// printf("Truly\n");
+
+	ast_literal_t* res = interpreter_expression(expr, state);
+	if (res->type == VALUE_TYPE_BOOL) {
+		return res->bool_value;
+	} else if (res->type == VALUE_TYPE_INT) {
+		return res->int_value != 0;
+	} else if (res->type == VALUE_TYPE_FLOAT) {
+		return res->float_value != 0.0;
+	} else if (res->type == VALUE_TYPE_STRING) {
+		return strlen(res->string_value) > 0;
+	}
+
+	return false;
+}
 
 ast_literal_t* interpreter_expression_assignment(ast_expression_assignment_t* expr, interpreter_state_t* state)
 {

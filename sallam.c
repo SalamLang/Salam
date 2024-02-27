@@ -962,6 +962,12 @@ parser_t* parser_create(lexer_t* lexer)
 	return parser;
 }
 
+void debug_current_token(parser_t* parser)
+{
+	token_t* t = (token_t*) parser->lexer->tokens->data[parser->token_index];
+	printf("=========> Current token: %s - %s\n", token_type2str(t->type) ,t->value);
+}
+
 void ast_expression_free(ast_expression_t* expr)
 {
 	printf("ast_expression_free\n");
@@ -1260,6 +1266,7 @@ token_t* parser_token_eat(parser_t* parser, token_type_t type)
 ast_node_t* parser_function(parser_t* parser)
 {
 	printf("Parsing function\n");
+	debug_current_token(parser);
 
 	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
 	node->type = AST_FUNCTION_DECLARATION;
@@ -1284,13 +1291,14 @@ ast_node_t* parser_function(parser_t* parser)
 
 	node->data.function_declaration = (ast_function_declaration_t*) malloc(sizeof(ast_function_declaration_t));
 	node->data.function_declaration->name = strdup(name->value);
-	// free(name);
-	// node->data.function_declaration->name = (name->value);
-	// printf("===>!\n");
-	// node->data.function_declaration->name = "name";
-	// malloc(sizeof(char) * 10);
-	// strcpy(node->data.function_declaration->name, "name");
 	node->data.function_declaration->body = parser_block(parser);
+
+	printf("after block:");
+	debug_current_token(parser);
+
+	if (node->data.function_declaration->body == NULL) {
+		return NULL;
+	}
 
 	return node;
 }
@@ -1616,45 +1624,58 @@ ast_expression_t* nud_parentheses(parser_t* parser, token_t* token)
 }
 
 ast_node_t* parser_block(parser_t* parser) {
-	printf("Parsing block\n");
+    printf("Parsing block\n");
 
-	ast_node_t* block_node = (ast_node_t*) malloc(sizeof(ast_node_t));
-	block_node->type = AST_BLOCK;
-	block_node->data.block = (ast_block_t*) malloc(sizeof(ast_block_t));
-	block_node->data.block->num_statements = 0;
+    ast_node_t* block_node = (ast_node_t*)malloc(sizeof(ast_node_t));
+    block_node->type = AST_BLOCK;
+    block_node->data.block = (ast_block_t*)malloc(sizeof(ast_block_t));
+    block_node->data.block->num_statements = 0;
 
-	size_t allocated_size = 5;
-	block_node->data.block->statements = (ast_node_t**) malloc(sizeof(ast_node_t*) * (allocated_size + 1));
+    size_t allocated_size = 5;
+    block_node->data.block->statements = (ast_node_t**)malloc(sizeof(ast_node_t*) * (allocated_size + 1));
 
-	parser_token_eat_nodata(parser, TOKEN_TYPE_SECTION_OPEN);
+    parser_token_eat_nodata(parser, TOKEN_TYPE_SECTION_OPEN);
 
-	while (
-		parser->lexer->tokens->length > parser->token_index &&
-		((token_t*) parser->lexer->tokens->data[parser->token_index])->type != TOKEN_TYPE_SECTION_CLOSE
-	) {
-		ast_node_t* statement = parser_statement(parser);
+    token_t* t = parser->lexer->tokens->data[parser->token_index];
+    // printf("current token: %s\n", token_type2str(t->type));
 
-		if (block_node->data.block->num_statements >= allocated_size) {
-			allocated_size *= 2;
-			block_node->data.block->statements = (ast_node_t**) realloc(
-				block_node->data.block->statements, sizeof(ast_node_t*) * (allocated_size + 1)
-			);
-
-			if (block_node->data.block->statements == NULL) {
-				fprintf(stderr, "Error in parsing block: Memory reallocation failed.\n");
-				exit(EXIT_FAILURE);
+	if (((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_SECTION_CLOSE) {
+		// printf("yes and close\n");
+        free(block_node->data.block->statements);
+        block_node->data.block->statements = NULL;
+	} else {
+		while (
+			parser->lexer->tokens->length > parser->token_index &&
+			((token_t*)parser->lexer->tokens->data[parser->token_index])->type != TOKEN_TYPE_SECTION_CLOSE
+		) {
+			// printf("current token: %s\n", token_type2str(((token_t*)parser->lexer->tokens->data[parser->token_index])->type));
+			if (((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_SECTION_CLOSE) {
+				// printf("yes and close\n");
 				break;
 			}
-		}
+			ast_node_t* statement = parser_statement(parser);
 
-		block_node->data.block->statements[block_node->data.block->num_statements++] = statement;
+			if (block_node->data.block->num_statements >= allocated_size) {
+				allocated_size *= 2;
+				block_node->data.block->statements = (ast_node_t**)realloc(
+					block_node->data.block->statements, sizeof(ast_node_t*) * (allocated_size + 1)
+				);
+
+				if (block_node->data.block->statements == NULL) {
+					fprintf(stderr, "Error in parsing block: Memory reallocation failed.\n");
+					exit(EXIT_FAILURE);
+				}
+			}
+
+			block_node->data.block->statements[block_node->data.block->num_statements++] = statement;
+		}
 	}
 
-	block_node->data.block->statements[block_node->data.block->num_statements] = NULL;
+	// printf("eating } token\n");
 
-	parser_token_eat_nodata(parser, TOKEN_TYPE_SECTION_CLOSE);
+    parser_token_eat_nodata(parser, TOKEN_TYPE_SECTION_CLOSE);
 
-	return block_node;
+    return block_node;
 }
 
 void parser_parse(parser_t* parser)
@@ -1667,25 +1688,35 @@ void parser_parse(parser_t* parser)
 
 	while (parser->token_index < parser->lexer->tokens->length) {
 		token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+		printf("inside main loop - current token: %s\n", token_type2str(current_token->type));
+		printf("%s\n", current_token->value);
 
 		switch (current_token->type) {
+			case TOKEN_TYPE_EOF:
+				parser->token_index++;
+				break;
+			
 			case TOKEN_TYPE_FUNCTION:
 				ast_node_t* function_node = parser_function(parser);
-				array_push(parser->functions, function_node);
+				printf("after func:");
+				debug_current_token(parser);
+				if (parser->functions && function_node != NULL) {
+					array_push(parser->functions, function_node);
+				}
 				break;
 
 			default:
 				if (parser_expression_has(parser)) {
 					ast_node_t* expression_node = parser_expression(parser);
-					array_push(parser->expressions, expression_node);
+					if (parser->expressions && expression_node != NULL) {
+						array_push(parser->expressions, expression_node);
+					}
 				} else {
-					printf("Error: bad token as statement\n");
+					printf("Error: bad token as statement %s\n", token_type2str(current_token->type));
 					exit(EXIT_FAILURE);
 				}
 				break;
 		}
-
-		parser->token_index++;
 	}
 }
 
@@ -2434,10 +2465,10 @@ int main(int argc, char** argv)
 
 	print_xml_ast_tree(parser);
 
-	interpreter_create();
-	interpreter_t* interpreter = interpreter_interpret(parser);
+	// interpreter_create();
+	// interpreter_t* interpreter = interpreter_interpret(parser);
 
-	printf("====================================\n");
+	// printf("====================================\n");
 
 	printf("free lexer\n");
 	lexer_free(lexer);
@@ -2447,9 +2478,9 @@ int main(int argc, char** argv)
 	parser_free(parser);
 	printf("end parser free\n");
 
-	printf("free interpreter\n");
-	interpreter_free(interpreter);
-	printf("end interpreter free\n");
+	// printf("free interpreter\n");
+	// interpreter_free(interpreter);
+	// printf("end interpreter free\n");
 
 	exit(EXIT_SUCCESS);
 }

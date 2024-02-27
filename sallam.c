@@ -197,12 +197,12 @@ ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* ide
 }
 
 typedef enum {
-	// values
+	// Values
 	TOKEN_TYPE_IDENTIFIER,
 	TOKEN_TYPE_NUMBER,
 	TOKEN_TYPE_STRING,
 
-	// keywords
+	// Keywords
 	TOKEN_TYPE_FUNCTION, // عملکرد
 	TOKEN_TYPE_RETURN, // برگشت
 	TOKEN_TYPE_PRINT, // نمایش
@@ -213,7 +213,7 @@ typedef enum {
 	TOKEN_TYPE_AND, // و
 	TOKEN_TYPE_OR, // یا
 
-	// symbols
+	// Symbols
 	TOKEN_TYPE_SECTION_OPEN, // {
 	TOKEN_TYPE_SECTION_CLOSE, // }
 	TOKEN_TYPE_PARENTHESE_OPEN, // (
@@ -221,6 +221,8 @@ typedef enum {
 
 	TOKEN_TYPE_PLUS, // +
 	TOKEN_TYPE_MINUS, // -
+	TOKEN_TYPE_MULTIPY, // *
+	TOKEN_TYPE_DIVIDE, // /
 
 	TOKEN_TYPE_EQUAL, // =
 	TOKEN_TYPE_EQUAL_EQUAL, // ==
@@ -866,6 +868,12 @@ void lexer_lex(lexer_t* lexer)
 		} else if (current_wchar == '+') {
 			token_t* t = token_create(TOKEN_TYPE_PLUS, "+", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
+		} else if (current_wchar == '*') {
+			token_t* t = token_create(TOKEN_TYPE_MULTIPY, "*", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+			array_push(lexer->tokens, t);
+		} else if (current_wchar == '/') {
+			token_t* t = token_create(TOKEN_TYPE_DIVIDE, "/", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+			array_push(lexer->tokens, t);
 		} else if (current_wchar == '-') {
 			token_t* t = token_create(TOKEN_TYPE_MINUS, "-", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
@@ -970,7 +978,7 @@ void debug_current_token(parser_t* parser)
 
 void ast_expression_free(ast_expression_t* expr)
 {
-	printf("ast_expression_free\n");
+	// printf("ast_expression_free\n");
 
 	if (expr == NULL) {
 		return;
@@ -1266,7 +1274,6 @@ token_t* parser_token_eat(parser_t* parser, token_type_t type)
 ast_node_t* parser_function(parser_t* parser)
 {
 	printf("Parsing function\n");
-	debug_current_token(parser);
 
 	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
 	node->type = AST_FUNCTION_DECLARATION;
@@ -1293,9 +1300,6 @@ ast_node_t* parser_function(parser_t* parser)
 	node->data.function_declaration->name = strdup(name->value);
 	node->data.function_declaration->body = parser_block(parser);
 
-	printf("after block:");
-	debug_current_token(parser);
-
 	if (node->data.function_declaration->body == NULL) {
 		return NULL;
 	}
@@ -1303,7 +1307,8 @@ ast_node_t* parser_function(parser_t* parser)
 	return node;
 }
 
-ast_node_t* parser_statement_print(parser_t* parser) {
+ast_node_t* parser_statement_print(parser_t* parser)
+{
 	printf("Parsing statement print\n");
 
 	parser->token_index++;
@@ -1317,7 +1322,8 @@ ast_node_t* parser_statement_print(parser_t* parser) {
 	return node;
 }
 
-ast_node_t* parser_statement_return(parser_t* parser) {
+ast_node_t* parser_statement_return(parser_t* parser)
+{
 	printf("Parsing statement return\n");
 
 	parser->token_index++;
@@ -1623,7 +1629,8 @@ ast_expression_t* nud_parentheses(parser_t* parser, token_t* token)
 	return expression_node;
 }
 
-ast_node_t* parser_block(parser_t* parser) {
+ast_node_t* parser_block(parser_t* parser)
+{
     printf("Parsing block\n");
 
     ast_node_t* block_node = (ast_node_t*)malloc(sizeof(ast_node_t));
@@ -1639,39 +1646,36 @@ ast_node_t* parser_block(parser_t* parser) {
     token_t* t = parser->lexer->tokens->data[parser->token_index];
     // printf("current token: %s\n", token_type2str(t->type));
 
-	if (((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_SECTION_CLOSE) {
-		// printf("yes and close\n");
-        free(block_node->data.block->statements);
-        block_node->data.block->statements = NULL;
-	} else {
-		while (
-			parser->lexer->tokens->length > parser->token_index &&
-			((token_t*)parser->lexer->tokens->data[parser->token_index])->type != TOKEN_TYPE_SECTION_CLOSE
-		) {
-			// printf("current token: %s\n", token_type2str(((token_t*)parser->lexer->tokens->data[parser->token_index])->type));
-			if (((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_SECTION_CLOSE) {
-				// printf("yes and close\n");
-				break;
-			}
-			ast_node_t* statement = parser_statement(parser);
-
-			if (block_node->data.block->num_statements >= allocated_size) {
-				allocated_size *= 2;
-				block_node->data.block->statements = (ast_node_t**)realloc(
-					block_node->data.block->statements, sizeof(ast_node_t*) * (allocated_size + 1)
-				);
-
-				if (block_node->data.block->statements == NULL) {
-					fprintf(stderr, "Error in parsing block: Memory reallocation failed.\n");
-					exit(EXIT_FAILURE);
-				}
-			}
-
-			block_node->data.block->statements[block_node->data.block->num_statements++] = statement;
+	while (
+		parser->lexer->tokens->length > parser->token_index &&
+		((token_t*)parser->lexer->tokens->data[parser->token_index])->type != TOKEN_TYPE_SECTION_CLOSE
+	) {
+		// printf("current token: %s\n", token_type2str(((token_t*)parser->lexer->tokens->data[parser->token_index])->type));
+		if (((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_SECTION_CLOSE) {
+			// printf("yes and close\n");
+			break;
 		}
+		ast_node_t* statement = parser_statement(parser);
+
+		if (block_node->data.block->num_statements >= allocated_size) {
+			allocated_size *= 2;
+			block_node->data.block->statements = (ast_node_t**)realloc(
+				block_node->data.block->statements, sizeof(ast_node_t*) * (allocated_size + 1)
+			);
+
+			if (block_node->data.block->statements == NULL) {
+				fprintf(stderr, "Error in parsing block: Memory reallocation failed.\n");
+				exit(EXIT_FAILURE);
+			}
+		}
+
+		block_node->data.block->statements[block_node->data.block->num_statements++] = statement;
 	}
 
-	// printf("eating } token\n");
+	if (block_node->data.block->num_statements == 0) {
+		free(block_node->data.block->statements);
+		block_node->data.block->statements = NULL;
+	}
 
     parser_token_eat_nodata(parser, TOKEN_TYPE_SECTION_CLOSE);
 
@@ -1688,8 +1692,6 @@ void parser_parse(parser_t* parser)
 
 	while (parser->token_index < parser->lexer->tokens->length) {
 		token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
-		printf("inside main loop - current token: %s\n", token_type2str(current_token->type));
-		printf("%s\n", current_token->value);
 
 		switch (current_token->type) {
 			case TOKEN_TYPE_EOF:
@@ -1698,8 +1700,6 @@ void parser_parse(parser_t* parser)
 			
 			case TOKEN_TYPE_FUNCTION:
 				ast_node_t* function_node = parser_function(parser);
-				printf("after func:");
-				debug_current_token(parser);
 				if (parser->functions && function_node != NULL) {
 					array_push(parser->functions, function_node);
 				}
@@ -1998,7 +1998,7 @@ ast_node_t* interpreter_statement_if(ast_statement_if_t* node, interpreter_t* in
 
 ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpreter)
 {
-	printf("Interpreter Interpret Once\n");
+	// printf("Interpreter Interpret Once\n");
 
 	switch (node->type) {
 		case AST_BLOCK:
@@ -2194,7 +2194,9 @@ void ast_expression_data_free(ast_literal_t* val)
 
 	if (val == NULL) {
 		return;
-	} else if (val->type == VALUE_TYPE_STRING) {
+	}
+	
+	if (val->type == VALUE_TYPE_STRING) {
 		if (val->string_value != NULL) {
 			free(val->string_value);
 			val->string_value = NULL;
@@ -2212,6 +2214,7 @@ void ast_expression_data_free(ast_literal_t* val)
 		ast_expression_data_free(val->left);
 		val->left = NULL;
 	}
+
 	if (val->right != NULL) {
 		printf("ast_expression_data_free right\n");
 		ast_expression_data_free(val->right);
@@ -2465,18 +2468,18 @@ int main(int argc, char** argv)
 
 	print_xml_ast_tree(parser);
 
-	// interpreter_create();
-	// interpreter_t* interpreter = interpreter_interpret(parser);
+	interpreter_create();
+	interpreter_t* interpreter = interpreter_interpret(parser);
 
-	// printf("====================================\n");
+	printf("====================================\n");
 
-	printf("free lexer\n");
-	lexer_free(lexer);
-	printf("end lexer free\n");
+	// printf("free lexer\n");
+	// lexer_free(lexer);
+	// printf("end lexer free\n");
 
-	printf("free parser\n");
-	parser_free(parser);
-	printf("end parser free\n");
+	// printf("free parser\n");
+	// parser_free(parser);
+	// printf("end parser free\n");
 
 	// printf("free interpreter\n");
 	// interpreter_free(interpreter);

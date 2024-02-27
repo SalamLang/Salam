@@ -675,7 +675,7 @@ void lexer_free(lexer_t* lexer)
 
 bool is_number(wchar_t ch)
 {
-	return ch >= L'۰' && ch <= L'۹';
+	return (ch >= L'۰' && ch <= L'۹') || (ch >= '0' && ch <= '9');
 }
 
 bool is_alpha(wchar_t ch)
@@ -732,7 +732,11 @@ void read_number(lexer_t* lexer, wchar_t ch)
 	char number[21];
 	int i = 0;
 	while (is_number(ch)) {
-		number[i++] = ch - L'۰' + '0';
+		if (ch >= '0' && ch <= '9') {
+			number[i++] = ch - '0';
+		} else {
+			number[i++] = ch - L'۰' + '0';
+		}
 		ch = read_token(lexer);
 	}
 	number[i] = 0;

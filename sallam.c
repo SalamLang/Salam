@@ -1005,7 +1005,45 @@ void ast_node_free(ast_node_t* node)
 	}
 
 	switch (node->type) {
+        case AST_STATEMENT_IF:
+			printf("... if\n");
+            if (node->data.statement_if != NULL) {
+                printf("condition\n");
+                if (node->data.statement_if->condition != NULL) {
+                    ast_node_free(node->data.statement_if->condition);
+                    node->data.statement_if->condition = NULL;
+                }
+
+                printf("block\n");
+                if (node->data.statement_if->block != NULL) {
+                    ast_node_free(node->data.statement_if->block);
+                    node->data.statement_if->block = NULL;
+                }
+
+                printf("elseifs\n");
+                if (node->data.statement_if->elseifs != NULL) {
+                    for (size_t i = 0; i < node->data.statement_if->elseifs->length; i++) {
+                        ast_node_free((ast_node_t*)node->data.statement_if->elseifs->data[i]);
+						node->data.statement_if->elseifs->data[i] = NULL;
+                    }
+                    array_free(node->data.statement_if->elseifs);
+                    node->data.statement_if->elseifs = NULL;
+                }
+
+                printf("else_block\n");
+                if (node->data.statement_if->else_block != NULL) {
+                    ast_node_free(node->data.statement_if->else_block);
+                    node->data.statement_if->else_block = NULL;
+                }
+
+                printf("statement_if\n");
+                free(node->data.statement_if);
+                node->data.statement_if = NULL;
+            }
+			break;
+		
 		case AST_FUNCTION_DECLARATION:
+			printf("... function\n");
 			if (node->data.function_declaration != NULL) {
 				if (node->data.function_declaration->body != NULL) {
 					ast_node_free(node->data.function_declaration->body);
@@ -1021,6 +1059,7 @@ void ast_node_free(ast_node_t* node)
 			break;
 
 		case AST_STATEMENT_RETURN:
+			printf("... return\n");
 			if (node->data.statement_return != NULL) {
 				if (node->data.statement_return->expression != NULL) {
 					ast_node_free(node->data.statement_return->expression);
@@ -1032,6 +1071,7 @@ void ast_node_free(ast_node_t* node)
 			break;
 
 		case AST_STATEMENT_PRINT:
+			printf("... print\n");
 			if (node->data.statement_print != NULL) {
 				if (node->data.statement_print->expression != NULL) {
 					ast_node_free(node->data.statement_print->expression);
@@ -1043,6 +1083,7 @@ void ast_node_free(ast_node_t* node)
 			break;
 
 		case AST_BLOCK:
+			printf("... block\n");
 			if (node->data.block != NULL) {
 				if (node->data.block->statements != NULL) {
 					for (size_t i = 0; i < node->data.block->num_statements; i++) {
@@ -1058,6 +1099,7 @@ void ast_node_free(ast_node_t* node)
 			break;
 
 		case AST_EXPRESSION:
+			printf("... expression\n");
 			if (node->data.expression != NULL) {
 				ast_expression_free(node->data.expression);
 				node->data.expression = NULL;
@@ -1239,6 +1281,7 @@ ast_node_t* parser_statement_if(parser_t* parser) {
 	node->data.statement_if->block = parser_block(parser);
 
 	node->data.statement_if->elseifs = array_create(10);
+	node->data.statement_if->else_block = NULL;
 	while (parser->lexer->tokens->length > parser->token_index && ((token_t*)parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_ELSEIF) {
 		parser->token_index++; // eat ELSEIF token
 

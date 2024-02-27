@@ -489,6 +489,7 @@ char* token_op_type2str(ast_expression_type_t type)
 		case AST_EXPRESSION_IDENTIFIER: return "IDENTIFIER";
 		case AST_EXPRESSION_BINARY: return "BINARY_OP";
 		case AST_EXPRESSION_ASSIGNMENT: return "ASSIGNMENT";
+		case AST_EXPRESSION_FUNCTION_CALL: return "FUNCTION_CALL";
 		default: return "OP_UNKNOWN";
 	}
 }
@@ -1014,6 +1015,26 @@ void ast_expression_free(ast_expression_t* expr)
 			}
 			// break;
 		
+		// case AST_EXPRESSION_FUNCTION_CALL:
+			if (expr->data.function_call != NULL) {
+				free(expr->data.function_call->name);
+				expr->data.function_call->name = NULL;
+
+				if (expr->data.function_call->arguments != NULL) {
+					for (size_t i = 0; i > expr->data.function_call->arguments->length; i++) {
+						free(expr->data.function_call->arguments->data[i]);
+						expr->data.function_call->arguments->data[i] = NULL;
+					}
+
+					free(expr->data.function_call->arguments->data);
+					expr->data.function_call->arguments->data = NULL;
+	
+					free(expr->data.function_call->arguments);
+					expr->data.function_call->arguments = NULL;
+				}
+			}
+			// break;
+
 		// case AST_EXPRESSION_ASSIGNMENT:
 			if (expr->data.assignment != NULL) {
 				if (expr->data.assignment->left != NULL) {
@@ -2053,6 +2074,7 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 
 		case AST_STATEMENT_PRINT:
 			node->data.statement_print = interpreter_statement_print(node->data.statement_print, interpreter);
+			interpreter_expression_data(node->data.statement_print->expression_value);
 			return node;
 			break;
 
@@ -2071,20 +2093,6 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 	}
 
 	return NULL;
-}
-
-ast_literal_t* interpreter_interpret_function(ast_function_declaration_t* function, interpreter_t* interpreter)
-{
-	printf("Running function %s\n", function->name);
-
-	for (size_t i = 0; i < function->body->data.block->num_statements; i++) {
-		ast_node_t* stmt = function->body->data.block->statements[i];
-		printf("Checking statement %zu/%zu\n", i+1, function->body->data.block->num_statements);
-
-		if (stmt != NULL) {
-			interpreter_interpret_once(stmt, interpreter);
-		}
-	}
 }
 
 interpreter_t* interpreter_interpret(interpreter_t* interpreter)
@@ -2122,7 +2130,6 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 				function->data.function_declaration = val;
 
 				interpreter->parser->functions->data[i] = function;
-				// interpreter_interpret_function(function->data.function_declaration, interpreter);
 			}
 		}
 	}
@@ -2385,7 +2392,7 @@ ast_literal_t* interpreter_function_call(ast_function_call_t* node, interpreter_
 		val->type = VALUE_TYPE_INT;
 		val->left = NULL;
 		val->right = NULL;
-		val->int_value = 55;
+		val->int_value = 135;
 		return val;
 	} else {
 		printf("Error: function not exists!\n");

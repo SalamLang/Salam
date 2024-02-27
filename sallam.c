@@ -2029,8 +2029,7 @@ ast_node_t* interpreter_statement_if(ast_statement_if_t* node, interpreter_t* in
 
 ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpreter)
 {
-	printf("Interpreter Interpret Once\n");
-	printf("stmt type: %d\n", node->type);
+	// printf("Interpreter Interpret Once\n");
 
 	switch (node->type) {
 		case AST_BLOCK:
@@ -2115,21 +2114,15 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 	if (interpreter->parser->functions != NULL) {
 		for (size_t i = 0; i < interpreter->parser->functions->length; i++) {
 			ast_node_t* function = (ast_node_t*) interpreter->parser->functions->data[i];
-			printf("Function %s\n", function->data.function_declaration->name);
-			interpreter->parser->functions->data[i] = function;
-		}
-
-		// Running main function
-		for (size_t i = 0; i < interpreter->parser->functions->length; i++) {
-			ast_node_t* function = (ast_node_t*) interpreter->parser->functions->data[i];
 			ast_function_declaration_t* val;
 
-			printf("Function %s\n", function->data.function_declaration->name);
 			if (strcmp(function->data.function_declaration->name, "سلام") == 0) {
 				val = interpreter_function_declaration(function->data.function_declaration, interpreter);
 				function->type = AST_FUNCTION_DECLARATION;
 				function->data.function_declaration = val;
+
 				interpreter->parser->functions->data[i] = function;
+				// interpreter_interpret_function(function->data.function_declaration, interpreter);
 			}
 		}
 	}
@@ -2378,7 +2371,6 @@ ast_literal_t* interpreter_function_call(ast_function_call_t* node, interpreter_
 	if (interpreter->parser->functions != NULL) {
 		for (size_t i = 0; i < interpreter->parser->functions->length; i++) {
 			ast_node_t* func = interpreter->parser->functions->data[i];
-			printf("--->%s - %s\n", node->name, func->data.function_declaration->name);
 			if (func != NULL && func->data.function_declaration != NULL && func->data.function_declaration->name != NULL && strcmp(func->data.function_declaration->name, node->name) == 0) {
 				func_exists = func->data.function_declaration;
 				exists = true;

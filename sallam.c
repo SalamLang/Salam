@@ -431,7 +431,7 @@ ast_node_t* parser_statement_print(parser_t* parser);
 ast_expression_t* parser_expression(parser_t* parser);
 
 ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* interpreter);
-ast_literal_t* interpreter_operator_binary(ast_expression_t* expr, interpreter_t* interpreter);
+ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter_t* interpreter);
 ast_literal_t* interpreter_literal(ast_expression_t* expr);
 ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* interpreter);
 
@@ -1017,23 +1017,23 @@ void ast_expression_data_free(ast_literal_t** val)
 		// Nothing to free
 	}
 
-	if ((*val)->left != NULL) {
-		printf("ast_expression_data_free left\n");
-		ast_expression_data_free(&((*val)->left));
-		(*val)->left = NULL;
-	}
-
-	if ((*val)->right != NULL) {
-		printf("ast_expression_data_free right\n");
-		ast_expression_data_free(&((*val)->right));
-		(*val)->right = NULL;
-	}
-
-	// if ((*val)->main != NULL) {
-	// 	printf("ast_expression_data_free main\n");
-	// 	ast_expression_free((ast_expression_t**) &((*val)->main));
-	// 	(*val)->main = NULL;
+	// if ((*val)->left != NULL) {
+	// 	printf("ast_expression_data_free left\n");
+	// 	ast_expression_data_free(&((*val)->left));
+	// 	(*val)->left = NULL;
 	// }
+
+	// if ((*val)->right != NULL) {
+	// 	printf("ast_expression_data_free right\n");
+	// 	ast_expression_data_free(&((*val)->right));
+	// 	(*val)->right = NULL;
+	// }
+
+	if ((*val)->main != NULL) {
+		printf("ast_expression_data_free main\n");
+		ast_expression_free((ast_expression_t**) &((*val)->main));
+		(*val)->main = NULL;
+	}
 
 	printf("let's free it's at all\n");
 
@@ -1693,6 +1693,7 @@ ast_expression_t* nud_bool(parser_t* parser, token_t* token)
 	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
 	literal_expr->data.literal->left = NULL;
 	literal_expr->data.literal->right = NULL;
+	literal_expr->data.literal->main = NULL;
 	literal_expr->data.literal->type = VALUE_TYPE_BOOL;
 	literal_expr->data.literal->bool_value = strcmp(token->value, "درست") == 0 ? true : false;
 
@@ -1709,6 +1710,7 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
 	literal_expr->data.literal->left = NULL;
 	literal_expr->data.literal->right = NULL;
+	literal_expr->data.literal->main = NULL;
 	literal_expr->data.literal->type = VALUE_TYPE_INT;
 	literal_expr->data.literal->int_value = atoi(token->value);
 
@@ -1725,6 +1727,7 @@ ast_expression_t* nud_string(parser_t* parser, token_t* token)
 	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
 	literal_expr->data.literal->left = NULL;
 	literal_expr->data.literal->right = NULL;
+	literal_expr->data.literal->main = NULL;
 	literal_expr->data.literal->type = VALUE_TYPE_STRING;
 	literal_expr->data.literal->string_value = strdup(token->value);
 
@@ -1880,6 +1883,17 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 					printf("<Value>%s</Value>\n", expr->data.literal->bool_value ? "True" : "False");
 				} else {
 					printf("<!-- Unhandled Literal Type -->\n");
+				}
+
+				if (expr->data.literal->main != NULL) {
+					print_indentation(indent_level + 2);
+					printf("<Main>\n");
+
+						print_indentation(indent_level + 3);
+						print_xml_ast_expression((ast_expression_t*) expr->data.literal->main, indent_level + 3);
+
+					print_indentation(indent_level + 2);
+					printf("</Main>\n");
 				}
 
 			print_indentation(indent_level + 1);
@@ -2189,10 +2203,11 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 
 		case AST_EXPRESSION:
 			ast_literal_t* val = interpreter_expression(node->data.expression, interpreter);
-
+			ast_expression_t* old_expr = node->data.expression;
 			node->data.expression = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 			node->data.expression->type = AST_EXPRESSION_LITERAL;
 			node->data.expression->data.literal = val;
+			node->data.expression->data.literal->main = (struct ast_expression_t*) old_expr;
 			return node;
 			break;
 
@@ -2346,7 +2361,7 @@ ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* int
 	return NULL;
 }
 
-ast_literal_t* interpreter_operator_binary(ast_expression_t* expr, interpreter_t* interpreter) {
+ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter_t* interpreter) {
 	bool invalid = false;
 
 	ast_literal_t* left = (ast_literal_t*) interpreter_expression(expr->data.binary_op->left, interpreter);
@@ -2514,16 +2529,14 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 		return NULL;
 	}
 
-	ast_literal_t* right = interpreter_expression(expr->data.assignment->right, interpreter);
-
-	char* identifier = strdup(expr->data.assignment->left->data.identifier->name);
-	ast_expression_free(&(expr->data.assignment->left));
-	ast_literal_t* variable = findInSymbolTableCurrent(symbolTableStack, identifier);
 	bool isNew = false;
+	char* identifier = strdup(expr->data.assignment->left->data.identifier->name);
+	ast_literal_t* right = interpreter_expression(expr->data.assignment->right, interpreter);
+	ast_literal_t* variable = findInSymbolTableCurrent(symbolTableStack, identifier);
 
 	if (variable == NULL) {
 		isNew = true;
-		variable = malloc(sizeof(ast_literal_t));
+		variable = (ast_literal_t*) malloc(sizeof(ast_literal_t));
 	}
 
 	variable->type = right->type;
@@ -2542,11 +2555,9 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 		printf("Saving %s variable\n", identifier);
 	} else {
 		printf("Update variable %s\n", identifier);
+		free(identifier);
 	}
 	
-	free(identifier);
-	ast_expression_free((ast_expression_t**) &(expr));
-
 	return variable;
 }
 
@@ -2574,7 +2585,7 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 			break;
 
 		case AST_EXPRESSION_BINARY:
-			lit = interpreter_operator_binary(expr, interpreter);
+			lit = interpreter_expression_binary(expr, interpreter);
 			// if (lit != NULL) {
 			// 	lit->main = (struct ast_expression_t*) expr;
 			// }
@@ -2644,6 +2655,8 @@ int main(int argc, char** argv)
 	interpreter_interpret(interpreter);
 
 	printf("====================================\n");
+
+	print_xml_ast_tree(parser);
 
 	printf("free lexer\n");
 	lexer_free(&lexer);

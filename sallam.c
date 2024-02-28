@@ -1577,6 +1577,7 @@ ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* 
 
 	ast_expression_t* binary_op_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 	binary_op_expr->type = AST_EXPRESSION_ASSIGNMENT;
+	binary_op_expr->data.assignment = NULL;
 	binary_op_expr->data.assignment = (ast_expression_assignment_t*) malloc(sizeof(ast_expression_assignment_t));
 	binary_op_expr->data.assignment->left = left;
 	binary_op_expr->data.assignment->right = parser_expression_pratt(parser, token_infos[token->type].precedence);
@@ -1659,7 +1660,7 @@ ast_expression_t* nud_bool(parser_t* parser, token_t* token)
 	literal_expr->data.literal->left = NULL;
 	literal_expr->data.literal->right = NULL;
 	literal_expr->data.literal->type = VALUE_TYPE_BOOL;
-	literal_expr->data.literal->bool_value = strcmp(token->value, "درست") == 0;
+	literal_expr->data.literal->bool_value = strcmp(token->value, "درست") == 0 ? true : false;
 
 	return literal_expr;
 }
@@ -1700,15 +1701,13 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 {
 	printf("Parsing identifier\n");
 
-	char* identifier = strdup(token->value);
-
 	ast_expression_t* expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 
 	// Check if current token is (
 	if (parser_token_skip_ifhas(parser, TOKEN_TYPE_PARENTHESE_OPEN)) {
 		expr->type = AST_EXPRESSION_FUNCTION_CALL;
 		expr->data.function_call = (ast_function_call_t*) malloc(sizeof(ast_function_call_t));
-		expr->data.function_call->name = identifier;
+		expr->data.function_call->name = strdup(token->value);
 		expr->data.function_call->arguments = NULL;
 		// expr->data.function_call->arguments = array_create(3);
 
@@ -1717,7 +1716,7 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 	} else {
 		expr->type = AST_EXPRESSION_IDENTIFIER;
 		expr->data.identifier = (ast_identifier_t*) malloc(sizeof(ast_identifier_t));
-		expr->data.identifier->name = identifier;
+		expr->data.identifier->name = strdup(token->value);
 	}
 	
 	return expr;

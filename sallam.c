@@ -747,10 +747,11 @@ void read_number(lexer_t* lexer, wchar_t ch)
 	int i = 0;
 	while (is_number(ch)) {
 		if (ch >= '0' && ch <= '9') {
-			number[i++] = ch - '0';
+            number[i] = ch;
 		} else {
-			number[i++] = ch - L'۰' + '0';
+			number[i] = ch - L'۰' + '0';
 		}
+		i++;
 		ch = read_token(lexer);
 	}
 	number[i] = 0;
@@ -1019,7 +1020,7 @@ void ast_expression_free_data(ast_literal_t** val)
 	if ((*val)->main != NULL) {
 		printf("ast_expression_free_data main\n");
 		ast_expression_free((ast_expression_t**) &((*val)->main));
-		(*val)->main = NULL;
+		// (*val)->main = NULL;
 	}
 
 	printf("let's free it's at all\n");
@@ -2090,6 +2091,7 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 		case AST_STATEMENT_RETURN:
 			printf("<StatementReturn>\n");
 
+				print_indentation(indent_level + 1);
 				print_xml_ast_expression(node->data.statement_return->expression, indent_level + 1);
 
 			print_indentation(indent_level);
@@ -2228,6 +2230,9 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 				return NULL;
 			}
 			node->data.expression->data.literal->main = (struct ast_expression_t*) old_expr;
+
+			// print_xml_ast_node(node, 0);
+			// exit(EXIT_FAILURE);
 			return node;
 			break;
 
@@ -2241,7 +2246,7 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 
 interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 {
-	printf("Interpreter Interpret\n");
+	// printf("Interpreter Interpret\n");
 
 	if (interpreter == NULL || (*interpreter->parser) == NULL) {
 		return NULL;
@@ -2274,6 +2279,9 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 				function->data.function_declaration = val;
 
 				(*interpreter->parser)->functions->data[i] = function;
+				// print_xml_ast_node(function, 0);
+				// printf("sign - done - max\n");
+				// exit(EXIT_SUCCESS);
 			}
 		}
 	}
@@ -2286,9 +2294,12 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 
 ast_function_declaration_t* interpreter_function_declaration(ast_function_declaration_t* stmt, interpreter_t* interpreter)
 {
-	printf("Function Declaration: %s\n", stmt->name);
+	// printf("Function Declaration: %s\n", stmt->name);
 
 	stmt->body->data.block = interpreter_block(stmt->body->data.block, interpreter);
+	// print_xml_ast_node(stmt->body, 0);
+	// printf("sign - done - max\n");
+	// exit(EXIT_SUCCESS);
 
 	return stmt;
 }
@@ -2346,6 +2357,7 @@ ast_block_t* interpreter_block(ast_block_t* block, interpreter_t* interpreter)
 
 	for (size_t i = 0; i < block->num_statements; i++) {
 		ast_node_t* node = interpreter_interpret_once(block->statements[i], interpreter);
+		// print_xml_ast_node(node, 0);
 		block->statements[i] = node;
 		// TODO: break on return statement
 	}
@@ -2367,7 +2379,7 @@ ast_literal_t* interpreter_literal(ast_expression_t* expr)
 
 ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* interpreter)
 {
-	printf("Variable: %s\n", expr->data.identifier->name);
+	// printf("Variable: %s\n", expr->data.identifier->name);
 
 	ast_literal_t* val = findInSymbolTable(symbolTableStack, expr->data.identifier->name);
 	if (val != NULL) {
@@ -2484,7 +2496,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 
 ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* interpreter)
 {
-	printf("Function Call: %s\n", node->data.function_call->name);
+	// printf("Function Call: %s\n", node->data.function_call->name);
 
 	// Check if functions exists in (*interpreter->parser)->...
 	bool exists = false;
@@ -2569,9 +2581,9 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 
 	if (isNew == true) {
 		addToSymbolTable(symbolTableStack, identifier, variable);
-		printf("Saving %s variable\n", identifier);
+		// printf("Saving %s variable\n", identifier);
 	} else {
-		printf("Update variable %s\n", identifier);
+		// printf("Update variable %s\n", identifier);
 	}
 	
 	free(identifier);
@@ -2677,13 +2689,22 @@ int main(int argc, char** argv)
 
 	print_xml_ast_tree(parser);
 
+	printf("====================================\n");
+
 	interpreter_t* interpreter = interpreter_create(&parser);
 	interpreter_interpret(interpreter);
 
-	printf("====================================\n");
+	// printf("start signing...\n");
+	// print_xml_ast_tree(parser);
+	// printf("sign-done\n");
+	// exit(EXIT_FAILURE);
 
-	print_xml_ast_tree(parser);
+	// printf("start second signing...\n");
+	// print_xml_ast_tree(parser);
+	// print_xml_ast_tree(*(interpreter->parser));
+	// printf("second sign-done\n");
 
+	return 0;
 	printf("free lexer\n");
 	lexer_free(&lexer);
 	printf("end lexer free\n");

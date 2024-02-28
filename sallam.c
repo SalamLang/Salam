@@ -2517,6 +2517,11 @@ ast_literal_t* interpreter_function_run_return(ast_node_t* node, ast_function_de
 ast_literal_t* interpreter_function_run(ast_function_declaration_t* function, interpreter_t* interpreter)
 {
 	ast_function_declaration_t* fn = interpreter_function_declaration(function, interpreter);
+
+	if (fn == NULL) {
+		return NULL;
+	}
+
 	return interpreter_function_run_return(fn->body, fn, interpreter);
 }
 
@@ -2544,6 +2549,8 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		exit(EXIT_FAILURE);
 		return NULL;
 	}
+
+	print_xml_ast_node(func_exists->body, 1);
 
 	ast_literal_t* ret = interpreter_function_run(func_exists, interpreter);
 	if (ret == NULL) {

@@ -2248,7 +2248,7 @@ void ast_expression_data_free(ast_literal_t** val)
 {
     printf("ast_expression_data_free\n");
 
-    if (*val == NULL) {
+    if (val == NULL || *val == NULL) {
         return;
     }
 
@@ -2304,10 +2304,10 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, i
 	ast_literal_t* right = interpreter_expression(binary_op->right, interpreter);
 
 	ast_literal_t* res = (ast_literal_t*) malloc(sizeof(ast_literal_t));
-	// res->left = left;
-	// res->right = right;
-	res->left = NULL;
-	res->right = NULL;
+	res->left = left;
+	res->right = right;
+	// res->left = NULL;
+	// res->right = NULL;
 
 	if (left == NULL || right == NULL) {
 		printf("Error: cannot calculate binary operator for NULL values!\n");
@@ -2456,12 +2456,15 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_assignment_t* ex
 	// printf("Assignment\n");
 
 	if (expr->left->type == AST_EXPRESSION_IDENTIFIER) {
-		ast_literal_t* res = interpreter_expression(expr->right, interpreter);
+		ast_literal_t* right = interpreter_expression(expr->right, interpreter);
 
 		char* identifier = expr->left->data.identifier->name;
 		ast_literal_t* variable = findInSymbolTableCurrent(symbolTableStack, identifier);
 		if (variable != NULL) {
 			printf("Found an exiting variable %s\n", identifier);
+			variable->left = NULL;
+			variable->right = right;
+
 			variable->type = res->type;
 			if (res->type == VALUE_TYPE_STRING) {
 				variable->string_value = res->string_value;
@@ -2472,15 +2475,18 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_assignment_t* ex
 			} else if (res->type == VALUE_TYPE_FLOAT) {
 				variable->float_value = res->float_value;
 			}
-			// ast_expression_data_free(&(res));
+			return variable;
 		} else {
+			ast_literal_t* res = (ast_literal_t*) malloc(sizeof(ast_literal_t));
+			res->left = NULL;
+			res->right = expr->right;
+
+
 			printf("Saving %s variable\n", identifier);
 			addToSymbolTable(symbolTableStack, identifier, res);
 		}
-		// free(identifier);
+		free(identifier);
 		// ast_expression_data_free(&(variable)); // TODO
-
-		return res;
 	} else {
 		printf("Error: Assignment to non-variable\n");
 		exit(EXIT_FAILURE);

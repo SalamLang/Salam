@@ -431,9 +431,9 @@ ast_node_t* parser_statement_print(parser_t* parser);
 ast_expression_t* parser_expression(parser_t* parser);
 
 ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* interpreter);
-ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* expr, interpreter_t* interpreter);
-ast_literal_t* interpreter_literal(ast_literal_t* expr);
-ast_literal_t* interpreter_identifier(ast_identifier_t* expr, interpreter_t* interpreter);
+ast_literal_t* interpreter_operator_binary(ast_expression_t* expr, interpreter_t* interpreter);
+ast_literal_t* interpreter_literal(ast_expression_t* expr);
+ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* interpreter);
 
 ast_statement_print_t* interpreter_statement_print(ast_statement_print_t* stmt, interpreter_t* interpreter);
 ast_statement_return_t* interpreter_statement_return(ast_statement_return_t* stmt, interpreter_t* interpreter);
@@ -2321,36 +2321,36 @@ ast_block_t* interpreter_block(ast_block_t* block, interpreter_t* interpreter)
 	return block;
 }
 
-ast_literal_t* interpreter_literal(ast_literal_t* expr)
+ast_literal_t* interpreter_literal(ast_expression_t* expr)
 {
 	if (expr == NULL) {
 		return NULL;
 	}
 
-	return expr;
+	return expr->data.literal;
 }
 
-ast_literal_t* interpreter_identifier(ast_identifier_t* expr, interpreter_t* interpreter)
+ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* interpreter)
 {
-	printf("Variable: %s\n", expr->name);
+	printf("Variable: %s\n", expr->data.identifier->name);
 
-	ast_literal_t* val = findInSymbolTable(symbolTableStack, expr->name);
+	ast_literal_t* val = findInSymbolTable(symbolTableStack, expr->data.identifier->name);
 	if (val != NULL) {
-		// printf("Variable found: %s\n", expr->name);
+		// printf("Variable found: %s\n", expr->data.identifier->name);
 		return val;
 	} else {
-		printf("Error: Variable not found: %s\n", expr->name);
+		printf("Error: Variable not found: %s\n", expr->data.identifier->name);
 		exit(EXIT_FAILURE);
 	}
 
 	return NULL;
 }
 
-ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, interpreter_t* interpreter) {
+ast_literal_t* interpreter_operator_binary(ast_expression_t* expr, interpreter_t* interpreter) {
 	bool invalid = false;
 
-	ast_literal_t* left = (ast_literal_t*) interpreter_expression(binary_op->left, interpreter);
-	ast_literal_t* right = (ast_literal_t*) interpreter_expression(binary_op->right, interpreter);
+	ast_literal_t* left = (ast_literal_t*) interpreter_expression(expr->data.binary_op->left, interpreter);
+	ast_literal_t* right = (ast_literal_t*) interpreter_expression(expr->data.binary_op->right, interpreter);
 
 	ast_literal_t* res = (ast_literal_t*) malloc(sizeof(ast_literal_t));
 	res->left = left;
@@ -2361,7 +2361,7 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, i
 	if (left == NULL || right == NULL) {
 		printf("Error: cannot calculate binary operator for NULL values!\n");
 		invalid = true;
-	} else if (left->type == VALUE_TYPE_STRING && right->type == VALUE_TYPE_STRING && strcmp(binary_op->operator, "+") == 0) {
+	} else if (left->type == VALUE_TYPE_STRING && right->type == VALUE_TYPE_STRING && strcmp(expr->data.binary_op->operator, "+") == 0) {
 		res->type = VALUE_TYPE_STRING;
 		size_t leftlen = strlen(left->string_value);
 		size_t rightlen = strlen(right->string_value);
@@ -2380,7 +2380,7 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, i
 		} else if (rightlen == 0) {
 			res->string_value = strdup(left->string_value);
 		}
-	} else if (strcmp(binary_op->operator, "==") == 0) {
+	} else if (strcmp(expr->data.binary_op->operator, "==") == 0) {
 		if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_FLOAT) {
 			res->type = VALUE_TYPE_BOOL;
 			res->bool_value = left->int_value == right->float_value ? true : false;
@@ -2409,22 +2409,22 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, i
 	} else if ((left->type != VALUE_TYPE_INT && left->type != VALUE_TYPE_BOOL) || (right->type != VALUE_TYPE_INT && right->type != VALUE_TYPE_BOOL)) {
 		printf("Error: cannot calculate binary operator for non-int values!\n");
 		invalid = true;
-	} else if (strcmp(binary_op->operator, "+") == 0) {
+	} else if (strcmp(expr->data.binary_op->operator, "+") == 0) {
 		res->type = VALUE_TYPE_INT;
 		res->int_value = left->int_value + right->int_value;
-	} else if (strcmp(binary_op->operator, "-") == 0) {
+	} else if (strcmp(expr->data.binary_op->operator, "-") == 0) {
 		res->type = VALUE_TYPE_INT;
 		res->int_value = left->int_value - right->int_value;
-	} else if (strcmp(binary_op->operator, "*") == 0) {
+	} else if (strcmp(expr->data.binary_op->operator, "*") == 0) {
 		res->type = VALUE_TYPE_INT;
 		res->int_value = left->int_value * right->int_value;
-	} else if (strcmp(binary_op->operator, "و") == 0) {
+	} else if (strcmp(expr->data.binary_op->operator, "و") == 0) {
 		res->type = VALUE_TYPE_BOOL;
 		res->int_value = left->int_value && right->int_value;
-	} else if (strcmp(binary_op->operator, "یا") == 0) {
+	} else if (strcmp(expr->data.binary_op->operator, "یا") == 0) {
 		res->type = VALUE_TYPE_BOOL;
 		res->int_value = left->int_value || right->int_value;
-	} else if (strcmp(binary_op->operator, "/") == 0) {
+	} else if (strcmp(expr->data.binary_op->operator, "/") == 0) {
 		if (right->int_value == 0) {
 			printf("Error: cannot divide by zero!\n");
 			invalid = true;
@@ -2433,7 +2433,7 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, i
 			res->int_value = left->int_value / right->int_value;
 		}
 	} else {
-		printf("Error: unknown operator: %s\n", binary_op->operator);
+		printf("Error: unknown operator: %s\n", expr->data.binary_op->operator);
 		invalid = true;
 	}
 
@@ -2450,9 +2450,9 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, i
 	return res;
 }
 
-ast_literal_t* interpreter_function_call(ast_function_call_t* node, interpreter_t* interpreter)
+ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* interpreter)
 {
-	printf("Function Call: %s\n", node->name);
+	printf("Function Call: %s\n", node->data.function_call->name);
 
 	// Check if functions exists in interpreter->parser->...
 	bool exists = false;
@@ -2461,7 +2461,7 @@ ast_literal_t* interpreter_function_call(ast_function_call_t* node, interpreter_
 	if (interpreter->parser->functions != NULL) {
 		for (size_t i = 0; i < interpreter->parser->functions->length; i++) {
 			ast_node_t* func = interpreter->parser->functions->data[i];
-			if (func != NULL && func->data.function_declaration != NULL && func->data.function_declaration->name != NULL && strcmp(func->data.function_declaration->name, node->name) == 0) {
+			if (func != NULL && func->data.function_declaration != NULL && func->data.function_declaration->name != NULL && strcmp(func->data.function_declaration->name, node->data.function_call->name) == 0) {
 				func_exists = func->data.function_declaration;
 				exists = true;
 				break;
@@ -2504,51 +2504,50 @@ bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpr
 	return false;
 }
 
-ast_literal_t* interpreter_expression_assignment(ast_expression_assignment_t* expr, interpreter_t* interpreter)
+ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpreter_t* interpreter)
 {
 	// printf("Assignment\n");
 
-	if (expr->left->type == AST_EXPRESSION_IDENTIFIER) {
-		ast_literal_t* right = interpreter_expression(expr->right, interpreter);
-
-		char* identifier = strdup(expr->left->data.identifier->name);
-		ast_expression_free(&(expr->left));
-		ast_literal_t* variable = findInSymbolTableCurrent(symbolTableStack, identifier);
-		if (variable != NULL) {
-			printf("Found an exiting variable %s\n", identifier);
-			// variable->main = (struct ast_expression_t*) expr;
-			// variable->right = right;
-			variable->type = right->type;
-
-			if (right->type == VALUE_TYPE_STRING) {
-				variable->string_value = strdup(right->string_value);
-			} else if (right->type == VALUE_TYPE_INT) {
-				variable->int_value = right->int_value;
-			} else if (right->type == VALUE_TYPE_BOOL) {
-				variable->bool_value = right->bool_value;
-			} else if (right->type == VALUE_TYPE_FLOAT) {
-				variable->float_value = right->float_value;
-			}
-
-			ast_expression_free(&(expr->right));
-			return variable;
-		} else {
-			// right->main = (struct ast_expression_t*) expr;
-			printf("Saving %s variable\n", identifier);
-			right->main = (struct ast_expression_t*) expr->right;
-			addToSymbolTable(symbolTableStack, identifier, right);
-			ast_expression_free(expr);
-			return right;
-		}
-		// free(identifier);
-		// identifier = NULL;
-		// ast_expression_data_free(&(variable)); // TODO
-	} else {
+	if (expr->data.assignment->left->type != AST_EXPRESSION_IDENTIFIER) {
 		printf("Error: Assignment to non-variable\n");
 		exit(EXIT_FAILURE);
+		return NULL;
 	}
 
-	return NULL;
+	ast_literal_t* right = interpreter_expression(expr->data.assignment->right, interpreter);
+
+	char* identifier = strdup(expr->data.assignment->left->data.identifier->name);
+	ast_expression_free(&(expr->data.assignment->left));
+	ast_literal_t* variable = findInSymbolTableCurrent(symbolTableStack, identifier);
+	bool isNew = false;
+
+	if (variable == NULL) {
+		isNew = true;
+		variable = malloc(sizeof(ast_literal_t));
+	}
+
+	variable->type = right->type;
+	if (right->type == VALUE_TYPE_STRING) {
+		variable->string_value = strdup(right->string_value);
+	} else if (right->type == VALUE_TYPE_INT) {
+		variable->int_value = right->int_value;
+	} else if (right->type == VALUE_TYPE_BOOL) {
+		variable->bool_value = right->bool_value;
+	} else if (right->type == VALUE_TYPE_FLOAT) {
+		variable->float_value = right->float_value;
+	}
+
+	if (isNew == true) {
+		addToSymbolTable(symbolTableStack, identifier, variable);
+		printf("Saving %s variable\n", identifier);
+	} else {
+		printf("Update variable %s\n", identifier);
+	}
+	
+	free(identifier);
+	ast_expression_free((ast_expression_t**) &(expr));
+
+	return variable;
 }
 
 ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* interpreter)
@@ -2561,35 +2560,35 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 
 	switch (expr->type) {
 		case AST_EXPRESSION_LITERAL:
-			lit = interpreter_literal(expr->data.literal);
+			lit = interpreter_literal(expr);
 			// if (lit != NULL) {
 			// 	lit->main = (struct ast_expression_t*) expr;
 			// }
 			break;
 
 		case AST_EXPRESSION_IDENTIFIER:
-			lit = interpreter_identifier(expr->data.identifier, interpreter);
+			lit = interpreter_identifier(expr, interpreter);
 			// if (lit != NULL) {
 			// 	lit->main = (struct ast_expression_t*) expr;
 			// }
 			break;
 
 		case AST_EXPRESSION_BINARY:
-			lit = interpreter_operator_binary(expr->data.binary_op, interpreter);
+			lit = interpreter_operator_binary(expr, interpreter);
 			// if (lit != NULL) {
 			// 	lit->main = (struct ast_expression_t*) expr;
 			// }
 			break;
 
 		case AST_EXPRESSION_FUNCTION_CALL:
-			lit = interpreter_function_call(expr->data.function_call, interpreter);
+			lit = interpreter_function_call(expr, interpreter);
 			// if (lit != NULL) {
 			// 	lit->main = (struct ast_expression_t*) expr;
 			// }
 			break;
 
 		case AST_EXPRESSION_ASSIGNMENT:
-			lit = interpreter_expression_assignment(expr->data.assignment, interpreter);
+			lit = interpreter_expression_assignment(expr, interpreter);
 			// ast_expression_free(&(expr));
 			// expr = NULL;
 			// if (lit != NULL) {

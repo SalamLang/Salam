@@ -1134,11 +1134,12 @@ void ast_expression_free(ast_expression_t** expr)
 void ast_node_free(ast_node_t** node)
 {
 	printf("ast_node_free\n");
-	printf("node type: %d\n", (*node)->type);
 
 	if (node == NULL || *node == NULL) {
 		return;
 	}
+
+	printf("node type: %d\n", (*node)->type);
 
 	switch ((*node)->type) {
 		case AST_STATEMENT_IF:
@@ -2198,6 +2199,9 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 			node->data.expression = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 			node->data.expression->type = AST_EXPRESSION_LITERAL;
 			node->data.expression->data.literal = val;
+			if (node->data.expression->data.literal == NULL) {
+				return NULL;
+			}
 			node->data.expression->data.literal->main = (struct ast_expression_t*) old_expr;
 			return node;
 			break;
@@ -2544,6 +2548,9 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	} else {
 		printf("Update variable %s\n", identifier);
 	}
+
+	free(variable);
+	variable = NULL;
 	
 	free(identifier);
 	identifier = NULL;
@@ -2637,7 +2644,6 @@ int main(int argc, char** argv)
 	}
 
 	char* file_data = file_read(argv[1]);
-	// printf("%s\n", file_data);
 
 	lexer_t* lexer = lexer_create(file_data);
 	lexer_lex(lexer);
@@ -2671,8 +2677,10 @@ int main(int argc, char** argv)
 	interpreter_free(&interpreter);
 	printf("end interpreter free\n");
 
-	// free(file_data);
-	// file_data = NULL;
+	// if (file_data != NULL) {
+	// 	free(file_data);
+	// 	file_data = NULL;
+	// }
 
 	printf("DONE\n");
 

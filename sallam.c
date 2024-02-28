@@ -37,6 +37,7 @@ typedef struct ast_literal_t {
 		char* string_value;
 	};
 
+	struct ast_expression_t* main;
 	struct ast_literal_t* left;
 	struct ast_literal_t* right;
 } ast_literal_t;
@@ -988,6 +989,8 @@ void debug_current_token(parser_t* parser)
 	printf("=========> Current token: %s - %s\n", token_type2str(t->type) ,t->value);
 }
 
+void ast_expression_free(ast_expression_t** expr);
+
 void ast_expression_data_free(ast_literal_t** val)
 {
 	printf("ast_expression_data_free\n");
@@ -1025,6 +1028,12 @@ void ast_expression_data_free(ast_literal_t** val)
 		ast_expression_data_free(&((*val)->right));
 		(*val)->right = NULL;
 	}
+
+	// if ((*val)->main != NULL) {
+	// 	printf("ast_expression_data_free main\n");
+	// 	ast_expression_free((ast_expression_t**) &((*val)->main));
+	// 	(*val)->main = NULL;
+	// }
 
 	printf("let's free it's at all\n");
 
@@ -2207,16 +2216,16 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 	pushSymbolTable(symbolTableStack);
 
 	// Expressions
-	if (interpreter->parser->expressions != NULL) {
-		for (size_t i = 0; i < interpreter->parser->expressions->length; i++) {
-			printf("Interpreting global expression\n");
-			ast_node_t* expression = (ast_node_t*) interpreter->parser->expressions->data[i];
-			ast_literal_t* val = interpreter_expression(expression->data.expression, interpreter);
-			expression->type = AST_EXPRESSION_LITERAL;
-			expression->data.expression->data.literal = val;
-			interpreter->parser->expressions->data[i] = expression;
-		}
-	}
+	// if (interpreter->parser->expressions != NULL) {
+	// 	for (size_t i = 0; i < interpreter->parser->expressions->length; i++) {
+	// 		printf("Interpreting global expression\n");
+	// 		ast_node_t* expression = (ast_node_t*) interpreter->parser->expressions->data[i];
+	// 		ast_literal_t* val = interpreter_expression(expression->data.expression, interpreter);
+	// 		expression->type = AST_EXPRESSION_LITERAL;
+	// 		expression->data.expression->data.literal = val;
+	// 		interpreter->parser->expressions->data[i] = expression;
+	// 	}
+	// }
 
 	// Functions
 	if (interpreter->parser->functions != NULL) {
@@ -2481,6 +2490,7 @@ bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpr
 	// printf("Truly\n");
 
 	ast_literal_t* res = interpreter_expression(expr, interpreter);
+	ast_expression_data_free(&(res));
 	if (res->type == VALUE_TYPE_BOOL) {
 		return res->bool_value;
 	} else if (res->type == VALUE_TYPE_INT) {
@@ -2501,12 +2511,13 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_assignment_t* ex
 	if (expr->left->type == AST_EXPRESSION_IDENTIFIER) {
 		ast_literal_t* right = interpreter_expression(expr->right, interpreter);
 
-		char* identifier = expr->left->data.identifier->name;
+		char* identifier = strdup(expr->left->data.identifier->name);
+		ast_expression_free(&(expr->left));
 		ast_literal_t* variable = findInSymbolTableCurrent(symbolTableStack, identifier);
 		if (variable != NULL) {
 			printf("Found an exiting variable %s\n", identifier);
-			variable->left = NULL;
-			variable->right = right;
+			// variable->main = (struct ast_expression_t*) expr;
+			// variable->right = right;
 			variable->type = right->type;
 
 			if (right->type == VALUE_TYPE_STRING) {
@@ -2518,9 +2529,16 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_assignment_t* ex
 			} else if (right->type == VALUE_TYPE_FLOAT) {
 				variable->float_value = right->float_value;
 			}
+
+			ast_expression_free(&(expr->right));
+			return variable;
 		} else {
+			// right->main = (struct ast_expression_t*) expr;
 			printf("Saving %s variable\n", identifier);
+			right->main = (struct ast_expression_t*) expr->right;
 			addToSymbolTable(symbolTableStack, identifier, right);
+			ast_expression_free(expr);
+			return right;
 		}
 		// free(identifier);
 		// identifier = NULL;
@@ -2539,28 +2557,55 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 		return NULL;
 	}
 
+	ast_literal_t* lit = NULL;
+
 	switch (expr->type) {
 		case AST_EXPRESSION_LITERAL:
-			return interpreter_literal(expr->data.literal);
+			lit = interpreter_literal(expr->data.literal);
+			// if (lit != NULL) {
+			// 	lit->main = (struct ast_expression_t*) expr;
+			// }
+			break;
 
 		case AST_EXPRESSION_IDENTIFIER:
-			return interpreter_identifier(expr->data.identifier, interpreter);
+			lit = interpreter_identifier(expr->data.identifier, interpreter);
+			// if (lit != NULL) {
+			// 	lit->main = (struct ast_expression_t*) expr;
+			// }
+			break;
 
 		case AST_EXPRESSION_BINARY:
-			return interpreter_operator_binary(expr->data.binary_op, interpreter);
+			lit = interpreter_operator_binary(expr->data.binary_op, interpreter);
+			// if (lit != NULL) {
+			// 	lit->main = (struct ast_expression_t*) expr;
+			// }
+			break;
 
 		case AST_EXPRESSION_FUNCTION_CALL:
-			return interpreter_function_call(expr->data.function_call, interpreter);
+			lit = interpreter_function_call(expr->data.function_call, interpreter);
+			// if (lit != NULL) {
+			// 	lit->main = (struct ast_expression_t*) expr;
+			// }
+			break;
 
 		case AST_EXPRESSION_ASSIGNMENT:
-			return interpreter_expression_assignment(expr->data.assignment, interpreter);
+			lit = interpreter_expression_assignment(expr->data.assignment, interpreter);
+			// ast_expression_free(&(expr));
+			// expr = NULL;
+			// if (lit != NULL) {
+			// 	lit->main = (struct ast_expression_t*) expr;
+			// } else {
+			// 	printf("why AST_EXPRESSION_ASSIGNMENT ret is null!?\n");
+			// }
+			break;
 
 		default:
 			printf("Error: default expr type: %d\n", expr->type);
 			exit(EXIT_FAILURE);
+			return NULL;
 	}
-	
-	return NULL;
+
+	return lit;
 }
 
 void interpreter_free(interpreter_t** interpreter)
@@ -2615,6 +2660,8 @@ int main(int argc, char** argv)
 
 	// free(file_data);
 	// file_data = NULL;
+
+	printf("DONE\n");
 
 	exit(EXIT_SUCCESS);
 }

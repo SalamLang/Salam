@@ -1017,18 +1017,6 @@ void ast_expression_data_free(ast_literal_t** val)
 		// Nothing to free
 	}
 
-	// if ((*val)->left != NULL) {
-	// 	printf("ast_expression_data_free left\n");
-	// 	ast_expression_data_free(&((*val)->left));
-	// 	(*val)->left = NULL;
-	// }
-
-	// if ((*val)->right != NULL) {
-	// 	printf("ast_expression_data_free right\n");
-	// 	ast_expression_data_free(&((*val)->right));
-	// 	(*val)->right = NULL;
-	// }
-
 	if ((*val)->main != NULL) {
 		printf("ast_expression_data_free main\n");
 		ast_expression_free((ast_expression_t**) &((*val)->main));

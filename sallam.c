@@ -2555,9 +2555,11 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 		printf("Saving %s variable\n", identifier);
 	} else {
 		printf("Update variable %s\n", identifier);
-		free(identifier);
 	}
 	
+	free(identifier);
+	identifier = NULL;
+
 	return variable;
 }
 

@@ -986,6 +986,50 @@ void debug_current_token(parser_t* parser)
 	printf("=========> Current token: %s - %s\n", token_type2str(t->type) ,t->value);
 }
 
+void ast_expression_data_free(ast_literal_t** val)
+{
+    printf("ast_expression_data_free\n");
+
+    if (val == NULL || *val == NULL) {
+		printf("is null?\n");
+        return;
+    }
+
+	printf("start checking type on ast_expression_data_free\n");
+
+    if ((*val)->type == VALUE_TYPE_STRING) {
+		printf("has string\n");
+		printf("%s\n", (*val)->string_value);
+        if ((*val)->string_value != "\0" && (*val)->string_value != NULL) {
+            free((*val)->string_value);
+            (*val)->string_value = NULL;
+        }
+    } else if ((*val)->type == VALUE_TYPE_INT) {
+        // Nothing to free
+    } else if ((*val)->type == VALUE_TYPE_BOOL) {
+        // Nothing to free
+    } else if ((*val)->type == VALUE_TYPE_FLOAT) {
+        // Nothing to free
+    }
+
+    if ((*val)->left != NULL) {
+        printf("ast_expression_data_free left\n");
+        ast_expression_data_free(&((*val)->left));
+        (*val)->left = NULL;
+    }
+
+    if ((*val)->right != NULL) {
+        printf("ast_expression_data_free right\n");
+        ast_expression_data_free(&((*val)->right));
+        (*val)->right = NULL;
+    }
+
+	printf("let's free it's at all\n");
+
+    free(*val);
+    *val = NULL;
+}
+
 void ast_expression_free(ast_expression_t** expr)
 {
     printf("ast_expression_free\n");
@@ -1647,7 +1691,7 @@ ast_expression_t* nud_string(parser_t* parser, token_t* token)
 	literal_expr->data.literal->left = NULL;
 	literal_expr->data.literal->right = NULL;
 	literal_expr->data.literal->type = VALUE_TYPE_STRING;
-	literal_expr->data.literal->string_value = token->value;
+	literal_expr->data.literal->string_value = strdup(token->value);
 
 	return literal_expr;
 }
@@ -2251,49 +2295,6 @@ ast_literal_t* interpreter_literal(ast_literal_t* expr)
 	return expr;
 }
 
-void ast_expression_data_free(ast_literal_t** val)
-{
-    printf("ast_expression_data_free\n");
-
-    if (val == NULL || *val == NULL) {
-		printf("is null?\n");
-        return;
-    }
-
-	printf("start checking type on ast_expression_data_free\n");
-
-    if ((*val)->type == VALUE_TYPE_STRING) {
-		printf("has string\n");
-        if ((*val)->string_value != NULL) {
-            free((*val)->string_value);
-            (*val)->string_value = NULL;
-        }
-    } else if ((*val)->type == VALUE_TYPE_INT) {
-        // Nothing to free
-    } else if ((*val)->type == VALUE_TYPE_BOOL) {
-        // Nothing to free
-    } else if ((*val)->type == VALUE_TYPE_FLOAT) {
-        // Nothing to free
-    }
-
-    if ((*val)->left != NULL) {
-        printf("ast_expression_data_free left\n");
-        ast_expression_data_free(&((*val)->left));
-        (*val)->left = NULL;
-    }
-
-    if ((*val)->right != NULL) {
-        printf("ast_expression_data_free right\n");
-        ast_expression_data_free(&((*val)->right));
-        (*val)->right = NULL;
-    }
-
-	printf("let's free it's at all\n");
-
-    free(*val);
-    *val = NULL;
-}
-
 ast_literal_t* interpreter_identifier(ast_identifier_t* expr, interpreter_t* interpreter)
 {
 	printf("Variable: %s\n", expr->name);
@@ -2317,10 +2318,10 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, i
 	ast_literal_t* right = interpreter_expression(binary_op->right, interpreter);
 
 	ast_literal_t* res = (ast_literal_t*) malloc(sizeof(ast_literal_t));
-	res->left = left;
-	res->right = right;
-	// res->left = NULL;
-	// res->right = NULL;
+	// res->left = left;
+	// res->right = right;
+	res->left = NULL;
+	res->right = NULL;
 
 	if (left == NULL || right == NULL) {
 		printf("Error: cannot calculate binary operator for NULL values!\n");
@@ -2483,7 +2484,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_assignment_t* ex
 			variable->type = right->type;
 
 			if (right->type == VALUE_TYPE_STRING) {
-				variable->string_value = right->string_value;
+				variable->string_value = strdup(right->string_value);
 			} else if (right->type == VALUE_TYPE_INT) {
 				variable->int_value = right->int_value;
 			} else if (right->type == VALUE_TYPE_BOOL) {
@@ -2588,8 +2589,8 @@ int main(int argc, char** argv)
 	interpreter_free(&interpreter);
 	printf("end interpreter free\n");
 
-	free(file_data);
-	file_data = NULL;
+	// free(file_data);
+	// file_data = NULL;
 
 	exit(EXIT_SUCCESS);
 }

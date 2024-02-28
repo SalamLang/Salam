@@ -389,7 +389,7 @@ typedef struct {
 } ast_variable_declaration_t;
 
 typedef struct {
-	lexer_t* lexer;
+	lexer_t** lexer;
 	size_t token_index;
 	array_t* functions;
 	array_t* expressions;
@@ -397,7 +397,7 @@ typedef struct {
 
 typedef struct {
 	int return_code;
-	parser_t* parser;
+	parser_t** parser;
 } interpreter_t;
 
 bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter);
@@ -974,7 +974,7 @@ void help()
 parser_t* parser_create(lexer_t** lexer)
 {
 	parser_t* parser = (parser_t*) malloc(sizeof(parser_t));
-	parser->lexer = *lexer;
+	parser->lexer = lexer;
 	parser->token_index = 0;
 	parser->functions = array_create(5);
 	parser->expressions = NULL;// = array_create(5);
@@ -984,7 +984,7 @@ parser_t* parser_create(lexer_t** lexer)
 
 void debug_current_token(parser_t* parser)
 {
-	token_t* t = (token_t*) parser->lexer->tokens->data[parser->token_index];
+	token_t* t = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
 	printf("=========> Current token: %s - %s\n", token_type2str(t->type) ,t->value);
 }
 
@@ -1001,20 +1001,20 @@ void ast_expression_data_free(ast_literal_t** val)
 
 	printf("start checking type on ast_expression_data_free\n");
 
-	// if ((*val)->type == VALUE_TYPE_STRING) {
-	// 	printf("has string\n");
-	// 	printf("%s\n", (*val)->string_value);
-	// 	if ((*val)->string_value != "\0" && (*val)->string_value != NULL) {
-	// 		free((*val)->string_value);
-	// 		// (*val)->string_value = NULL;
-	// 	}
-	// } else if ((*val)->type == VALUE_TYPE_INT) {
-	// 	// Nothing to free
-	// } else if ((*val)->type == VALUE_TYPE_BOOL) {
-	// 	// Nothing to free
-	// } else if ((*val)->type == VALUE_TYPE_FLOAT) {
-	// 	// Nothing to free
-	// }
+	if ((*val)->type == VALUE_TYPE_STRING) {
+		printf("has string\n");
+		printf("%s\n", (*val)->string_value);
+		if ((*val)->string_value != "\0" && (*val)->string_value != NULL) {
+			free((*val)->string_value);
+			// (*val)->string_value = NULL;
+		}
+	} else if ((*val)->type == VALUE_TYPE_INT) {
+		// Nothing to free
+	} else if ((*val)->type == VALUE_TYPE_BOOL) {
+		// Nothing to free
+	} else if ((*val)->type == VALUE_TYPE_FLOAT) {
+		// Nothing to free
+	}
 
 	if ((*val)->main != NULL) {
 		printf("ast_expression_data_free main\n");
@@ -1026,6 +1026,7 @@ void ast_expression_data_free(ast_literal_t** val)
 
 	// free(*val);
 	// *val = NULL;
+	// val = NULL;
 }
 
 void ast_expression_free(ast_expression_t** expr)
@@ -1308,7 +1309,7 @@ void parser_free(parser_t** parser)
 
 void parser_token_next(parser_t* parser)
 {
-	if (parser->lexer->tokens->length > parser->token_index) {
+	if ((*parser->lexer)->tokens->length > parser->token_index) {
 		parser->token_index++;
 	} else {
 		printf("Error: Unexpected end of file\n");
@@ -1318,11 +1319,11 @@ void parser_token_next(parser_t* parser)
 
 token_t* parser_token_skip(parser_t* parser, token_type_t type)
 {
-	if (parser->lexer->tokens->length > parser->token_index) {
-		token_t* token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+	if ((*parser->lexer)->tokens->length > parser->token_index) {
+		token_t* token = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
 
 		if (token->type == type) {
-			return (token_t*) parser->lexer->tokens->data[parser->token_index++];
+			return (token_t*) (*parser->lexer)->tokens->data[parser->token_index++];
 		}
 	}
 
@@ -1331,8 +1332,8 @@ token_t* parser_token_skip(parser_t* parser, token_type_t type)
 
 bool parser_token_skip_ifhas(parser_t* parser, token_type_t type)
 {
-	if (parser->lexer->tokens->length > parser->token_index) {
-		token_t* token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+	if ((*parser->lexer)->tokens->length > parser->token_index) {
+		token_t* token = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
 
 		if (token->type == type) {
 			parser->token_index++;
@@ -1345,8 +1346,8 @@ bool parser_token_skip_ifhas(parser_t* parser, token_type_t type)
 
 void parser_token_eat_nodata(parser_t* parser, token_type_t type)
 {
-	if (parser->lexer->tokens->length > parser->token_index) {
-		token_t* token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+	if ((*parser->lexer)->tokens->length > parser->token_index) {
+		token_t* token = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
 
 		if (token->type == type) {
 			parser->token_index++;
@@ -1362,11 +1363,11 @@ void parser_token_eat_nodata(parser_t* parser, token_type_t type)
 
 token_t* parser_token_eat(parser_t* parser, token_type_t type)
 {
-	if (parser->lexer->tokens->length > parser->token_index) {
-		token_t* token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+	if ((*parser->lexer)->tokens->length > parser->token_index) {
+		token_t* token = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
 
 		if (token->type == type) {
-			return (token_t*) parser->lexer->tokens->data[parser->token_index++];
+			return (token_t*) (*parser->lexer)->tokens->data[parser->token_index++];
 		} else {
 			printf("Error: Expected %s\n", token_type2str(type));
 			exit(EXIT_FAILURE);
@@ -1390,11 +1391,11 @@ ast_node_t* parser_function(parser_t* parser)
 
 	token_t* name = parser_token_eat(parser, TOKEN_TYPE_IDENTIFIER);
 
-	// if (parser->lexer->tokens->length > parser->token_index && ((token_t*) parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_PARENTHESE_OPEN) {
+	// if ((*parser->lexer)->tokens->length > parser->token_index && ((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type == TOKEN_TYPE_PARENTHESE_OPEN) {
 	//     printf("Parsing parameters\n");
 	//     parser->token_index++;
 
-	//     if (parser->lexer->tokens->length > parser->token_index && ((token_t*) parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_PARENTHESE_CLOSE) {
+	//     if ((*parser->lexer)->tokens->length > parser->token_index && ((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type == TOKEN_TYPE_PARENTHESE_CLOSE) {
 	//         parser->token_index++;
 	//     } else {
 	//         printf("Error: Expected closing parenthesis\n");
@@ -1447,8 +1448,8 @@ ast_node_t* parser_statement_return(parser_t* parser)
 
 bool parser_expression_has(parser_t* parser)
 {
-	if (parser->lexer->tokens->length > parser->token_index) {
-		token_t* tok = (token_t*) parser->lexer->tokens->data[parser->token_index];
+	if ((*parser->lexer)->tokens->length > parser->token_index) {
+		token_t* tok = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
 		if (tok->type == TOKEN_TYPE_IDENTIFIER ||
 			tok->type == TOKEN_TYPE_PLUS ||
 			tok->type == TOKEN_TYPE_MINUS ||
@@ -1478,7 +1479,7 @@ ast_node_t* parser_statement_if(parser_t* parser) {
 	node->data.statement_if->elseifs = (struct ast_node_t**) malloc(sizeof(ast_node_t*) * (allocated_size + 1));
 	node->data.statement_if->else_block = NULL;
 
-	while (parser->lexer->tokens->length > parser->token_index && ((token_t*) parser->lexer->tokens->data[parser->token_index])->type == TOKEN_TYPE_ELSEIF) {
+	while ((*parser->lexer)->tokens->length > parser->token_index && ((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type == TOKEN_TYPE_ELSEIF) {
 		parser->token_index++; // Eating ELSEIF token
 
 		if (parser_expression_has(parser)) {
@@ -1521,8 +1522,8 @@ ast_node_t* parser_statement(parser_t* parser)
 
 	ast_node_t* stmt = NULL;
 
-	if (parser->lexer->tokens->length > parser->token_index) {
-		token_t* tok = (token_t*) parser->lexer->tokens->data[parser->token_index];
+	if ((*parser->lexer)->tokens->length > parser->token_index) {
+		token_t* tok = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
 
 		switch (tok->type) {
 			case TOKEN_TYPE_RETURN:
@@ -1556,7 +1557,7 @@ ast_node_t* parser_statement(parser_t* parser)
 	}
 	
 	if (stmt == NULL) {
-		printf("Error: Unexpected token as statement %s\n", token_type2str(((token_t*) parser->lexer->tokens->data[parser->token_index])->type));
+		printf("Error: Unexpected token as statement %s\n", token_type2str(((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type));
 		exit(EXIT_FAILURE);
 	}
 	return stmt;
@@ -1579,13 +1580,13 @@ ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence)
 {
 	printf("Parsing pratt\n");
 
-	token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+	token_t* current_token = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
 	parser->token_index++;
 
 	ast_expression_t* left = token_infos[current_token->type].nud(parser, current_token);
 
-	while (precedence < token_infos[((token_t*) parser->lexer->tokens->data[parser->token_index])->type].precedence) {
-		current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+	while (precedence < token_infos[((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type].precedence) {
+		current_token = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
 		parser->token_index++;
 
 		left = token_infos[current_token->type].led(parser, current_token, left);
@@ -1768,8 +1769,8 @@ ast_node_t* parser_block(parser_t* parser)
 	parser_token_eat_nodata(parser, TOKEN_TYPE_SECTION_OPEN);
 
 	while (
-		parser->lexer->tokens->length > parser->token_index &&
-		((token_t*)parser->lexer->tokens->data[parser->token_index])->type != TOKEN_TYPE_SECTION_CLOSE
+		(*parser->lexer)->tokens->length > parser->token_index &&
+		((token_t*)(*parser->lexer)->tokens->data[parser->token_index])->type != TOKEN_TYPE_SECTION_CLOSE
 	) {
 		ast_node_t* statement = parser_statement(parser);
 
@@ -1800,14 +1801,14 @@ ast_node_t* parser_block(parser_t* parser)
 
 void parser_parse(parser_t* parser)
 {
-	if (parser->lexer->tokens->length == 1 &&
-		((ast_node_t*) parser->lexer->tokens->data[0])->type == TOKEN_TYPE_EOF
+	if ((*parser->lexer)->tokens->length == 1 &&
+		((ast_node_t*) (*parser->lexer)->tokens->data[0])->type == TOKEN_TYPE_EOF
 	) {
 		return;
 	}
 
-	while (parser->token_index < parser->lexer->tokens->length) {
-		token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+	while (parser->token_index < (*parser->lexer)->tokens->length) {
+		token_t* current_token = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
 
 		switch (current_token->type) {
 			case TOKEN_TYPE_EOF:
@@ -2135,7 +2136,7 @@ void print_xml_ast_tree(parser_t* parser)
 interpreter_t* interpreter_create(parser_t** parser)
 {
 	interpreter_t* interpreter = (interpreter_t*) malloc(sizeof(interpreter_t));
-	interpreter->parser = *parser;
+	interpreter->parser = parser;
 	return interpreter;
 }
 
@@ -2213,7 +2214,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 {
 	printf("Interpreter Interpret\n");
 
-	if (interpreter == NULL || interpreter->parser == NULL) {
+	if (interpreter == NULL || (*interpreter->parser) == NULL) {
 		return NULL;
 	}
 
@@ -2221,21 +2222,21 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 	pushSymbolTable(symbolTableStack);
 
 	// Expressions
-	// if (interpreter->parser->expressions != NULL) {
-	// 	for (size_t i = 0; i < interpreter->parser->expressions->length; i++) {
+	// if ((*interpreter->parser)->expressions != NULL) {
+	// 	for (size_t i = 0; i < (*interpreter->parser)->expressions->length; i++) {
 	// 		printf("Interpreting global expression\n");
-	// 		ast_node_t* expression = (ast_node_t*) interpreter->parser->expressions->data[i];
+	// 		ast_node_t* expression = (ast_node_t*) (*interpreter->parser)->expressions->data[i];
 	// 		ast_literal_t* val = interpreter_expression(expression->data.expression, interpreter);
 	// 		expression->type = AST_EXPRESSION_LITERAL;
 	// 		expression->data.expression->data.literal = val;
-	// 		interpreter->parser->expressions->data[i] = expression;
+	// 		(*interpreter->parser)->expressions->data[i] = expression;
 	// 	}
 	// }
 
 	// Functions
-	if (interpreter->parser->functions != NULL) {
-		for (size_t i = 0; i < interpreter->parser->functions->length; i++) {
-			ast_node_t* function = (ast_node_t*) interpreter->parser->functions->data[i];
+	if ((*interpreter->parser)->functions != NULL) {
+		for (size_t i = 0; i < (*interpreter->parser)->functions->length; i++) {
+			ast_node_t* function = (ast_node_t*) (*interpreter->parser)->functions->data[i];
 			ast_function_declaration_t* val;
 
 			if (strcmp(function->data.function_declaration->name, "سلام") == 0) {
@@ -2243,7 +2244,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 				function->type = AST_FUNCTION_DECLARATION;
 				function->data.function_declaration = val;
 
-				interpreter->parser->functions->data[i] = function;
+				(*interpreter->parser)->functions->data[i] = function;
 			}
 		}
 	}
@@ -2456,13 +2457,13 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 {
 	printf("Function Call: %s\n", node->data.function_call->name);
 
-	// Check if functions exists in interpreter->parser->...
+	// Check if functions exists in (*interpreter->parser)->...
 	bool exists = false;
 	ast_function_declaration_t* func_exists = NULL;
 
-	if (interpreter->parser->functions != NULL) {
-		for (size_t i = 0; i < interpreter->parser->functions->length; i++) {
-			ast_node_t* func = interpreter->parser->functions->data[i];
+	if ((*interpreter->parser)->functions != NULL) {
+		for (size_t i = 0; i < (*interpreter->parser)->functions->length; i++) {
+			ast_node_t* func = (*interpreter->parser)->functions->data[i];
 			if (func != NULL && func->data.function_declaration != NULL && func->data.function_declaration->name != NULL && strcmp(func->data.function_declaration->name, node->data.function_call->name) == 0) {
 				func_exists = func->data.function_declaration;
 				exists = true;
@@ -2620,11 +2621,6 @@ void interpreter_free(interpreter_t** interpreter)
 		free(symbolTableStack);
 	}
 
-	if ((*interpreter)->parser != NULL) {
-		free((*interpreter)->parser);
-		(*interpreter)->parser = NULL;
-	}
-
 	if (*interpreter != NULL) {
 		free(*interpreter);
 		*interpreter = NULL;
@@ -2669,7 +2665,7 @@ int main(int argc, char** argv)
 	printf("end parser free\n");
 
 	printf("out-after parser is null %d\n", parser == NULL ? 1 : 0);
-	printf("out-after interp-parser is null %d\n", interpreter->parser == NULL ? 1 : 0);
+	printf("out-after interp-parser is null %d\n", (*interpreter->parser) == NULL ? 1 : 0);
 
 	printf("free interpreter\n");
 	interpreter_free(&interpreter);

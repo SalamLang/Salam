@@ -38,8 +38,6 @@ typedef struct ast_literal_t {
 	};
 
 	struct ast_expression_t* main;
-	struct ast_literal_t* left;
-	struct ast_literal_t* right;
 } ast_literal_t;
 
 typedef struct SymbolTableEntry {
@@ -1679,8 +1677,6 @@ ast_expression_t* nud_bool(parser_t* parser, token_t* token)
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
 	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
-	literal_expr->data.literal->left = NULL;
-	literal_expr->data.literal->right = NULL;
 	literal_expr->data.literal->main = NULL;
 	literal_expr->data.literal->type = VALUE_TYPE_BOOL;
 	literal_expr->data.literal->bool_value = strcmp(token->value, "درست") == 0 ? true : false;
@@ -1696,8 +1692,6 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
 	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
-	literal_expr->data.literal->left = NULL;
-	literal_expr->data.literal->right = NULL;
 	literal_expr->data.literal->main = NULL;
 	literal_expr->data.literal->type = VALUE_TYPE_INT;
 	literal_expr->data.literal->int_value = atoi(token->value);
@@ -1713,8 +1707,6 @@ ast_expression_t* nud_string(parser_t* parser, token_t* token)
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
 	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
-	literal_expr->data.literal->left = NULL;
-	literal_expr->data.literal->right = NULL;
 	literal_expr->data.literal->main = NULL;
 	literal_expr->data.literal->type = VALUE_TYPE_STRING;
 	literal_expr->data.literal->string_value = strdup(token->value);
@@ -2058,6 +2050,7 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 		case AST_STATEMENT_PRINT:
 			printf("<StatementPrint>\n");
 
+				print_indentation(indent_level + 1);
 				print_xml_ast_expression(node->data.statement_print->expression, indent_level + 1);
 
 			print_indentation(indent_level);
@@ -2356,10 +2349,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 	ast_literal_t* right = (ast_literal_t*) interpreter_expression(expr->data.binary_op->right, interpreter);
 
 	ast_literal_t* res = (ast_literal_t*) malloc(sizeof(ast_literal_t));
-	res->left = left;
-	res->right = right;
-	// res->left = NULL;
-	// res->right = NULL;
+	res->main = (struct ast_expression_t*) expr;
 
 	if (left == NULL || right == NULL) {
 		printf("Error: cannot calculate binary operator for NULL values!\n");
@@ -2441,12 +2431,12 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 	}
 
 	if (invalid) {
-		ast_expression_data_free(&res);
-		res = NULL;
-		ast_expression_data_free(&left);
-		left = NULL;
-		ast_expression_data_free(&right);
-		right = NULL;
+		// ast_expression_data_free(&res);
+		// res = NULL;
+		// ast_expression_data_free(&left);
+		// left = NULL;
+		// ast_expression_data_free(&right);
+		// right = NULL;
 		exit(EXIT_FAILURE);
 		return NULL;
 	}
@@ -2476,8 +2466,7 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		// TODO: using `func_exists`
 		ast_literal_t* val = (ast_literal_t*) malloc(sizeof(ast_literal_t));
 		val->type = VALUE_TYPE_INT;
-		val->left = NULL;
-		val->right = NULL;
+		val->main = NULL;
 		val->int_value = 135;
 		return val;
 	} else {
@@ -2527,6 +2516,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 		variable = (ast_literal_t*) malloc(sizeof(ast_literal_t));
 	}
 
+	variable->main = (struct ast_expression_t*) expr;
 	variable->type = right->type;
 	if (right->type == VALUE_TYPE_STRING) {
 		variable->string_value = strdup(right->string_value);

@@ -1077,134 +1077,103 @@ void ast_expression_free(ast_expression_t** expr)
     *expr = NULL;
 }
 
-void ast_node_free(ast_node_t* node)
+void ast_node_free(ast_node_t** node)
 {
-	if (node == NULL) {
-		return;
-	}
+    if (node == NULL || *node == NULL) {
+        return;
+    }
 
-	switch (node->type) {
+    switch ((*node)->type) {
         case AST_STATEMENT_IF:
         case AST_STATEMENT_ELSEIF:
-            if (node->data.statement_if != NULL) {
-                if (node->data.statement_if->condition != NULL) {
-                    ast_node_free(node->data.statement_if->condition);
-                    node->data.statement_if->condition = NULL;
+            if ((*node)->data.statement_if != NULL) {
+                if ((*node)->data.statement_if->condition != NULL) {
+                    ast_node_free(&((*node)->data.statement_if->condition));
                 }
 
-                if (node->data.statement_if->block != NULL) {
-                    ast_node_free(node->data.statement_if->block);
-                    node->data.statement_if->block = NULL;
+                if ((*node)->data.statement_if->block != NULL) {
+                    ast_node_free(&((*node)->data.statement_if->block));
                 }
 
-                if (node->data.statement_if->elseifs != NULL) {
-                    for (size_t i = 0; i < node->data.statement_if->num_elseifs; i++) {
-                        ast_node_free((ast_node_t*) node->data.statement_if->elseifs[i]);
-						node->data.statement_if->elseifs[i] = NULL;
+                if ((*node)->data.statement_if->elseifs != NULL) {
+                    for (size_t i = 0; i < (*node)->data.statement_if->num_elseifs; i++) {
+                        ast_node_free((ast_node_t**) &((*node)->data.statement_if->elseifs[i]));
                     }
-					free(node->data.statement_if->elseifs);
-                    node->data.statement_if->elseifs = NULL;
+                    free((*node)->data.statement_if->elseifs);
                 }
 
-                if (node->data.statement_if->else_block != NULL) {
-                    ast_node_free(node->data.statement_if->else_block);
-                    node->data.statement_if->else_block = NULL;
+                if ((*node)->data.statement_if->else_block != NULL) {
+                    ast_node_free(&((*node)->data.statement_if->else_block));
                 }
 
-                free(node->data.statement_if);
-                node->data.statement_if = NULL;
+                free((*node)->data.statement_if);
             }
-			break;
-		
-		case AST_FUNCTION_DECLARATION:
-			if (node->data.function_declaration != NULL) {
-				if (node->data.function_declaration->body != NULL) {
-					ast_node_free(node->data.function_declaration->body);
-					node->data.function_declaration->body = NULL;
-				}
+            break;
 
-				if (node->data.function_declaration->name != NULL) {
-					free(node->data.function_declaration->name);
-					node->data.function_declaration->name = NULL;
-				}
+        case AST_FUNCTION_DECLARATION:
+            if ((*node)->data.function_declaration != NULL) {
+                if ((*node)->data.function_declaration->body != NULL) {
+                    ast_node_free(&((*node)->data.function_declaration->body));
+                }
 
-				free(node->data.function_declaration);
-				node->data.function_declaration = NULL;
-			}
-			break;
+                if ((*node)->data.function_declaration->name != NULL) {
+                    free((*node)->data.function_declaration->name);
+                }
 
-		case AST_STATEMENT_RETURN:
-			if (node->data.statement_return != NULL) {
-				if (node->data.statement_return->expression != NULL) {
-					ast_node_free(node->data.statement_return->expression);
-					node->data.statement_return->expression = NULL;
-				}
+                free((*node)->data.function_declaration);
+            }
+            break;
 
-				if (node->data.statement_return->expression_value != NULL) {
-					ast_expression_data_free(&(node->data.statement_return->expression_value));
-					node->data.statement_return->expression_value = NULL;
-				}
+        case AST_STATEMENT_RETURN:
+            if ((*node)->data.statement_return != NULL) {
+                if ((*node)->data.statement_return->expression != NULL) {
+                    ast_node_free(&((*node)->data.statement_return->expression));
+                }
 
-				free(node->data.statement_return);
-				node->data.statement_return = NULL;
-			}
-			break;
+                if ((*node)->data.statement_return->expression_value != NULL) {
+                    ast_expression_data_free(&((*node)->data.statement_return->expression_value));
+                }
 
-		case AST_STATEMENT_PRINT:
-			if (node->data.statement_print != NULL) {
-				if (node->data.statement_print->expression != NULL) {
-					ast_node_free(node->data.statement_print->expression);
-					node->data.statement_print->expression = NULL;
-				}
+                free((*node)->data.statement_return);
+            }
+            break;
 
-				if (node->data.statement_print->expression_value != NULL) {
-					ast_expression_data_free(&(node->data.statement_print->expression_value));
-					node->data.statement_print->expression_value = NULL;
-				}
+        case AST_STATEMENT_PRINT:
+            if ((*node)->data.statement_print != NULL) {
+                if ((*node)->data.statement_print->expression != NULL) {
+                    ast_node_free(&((*node)->data.statement_print->expression));
+                }
 
-				free(node->data.statement_print);
-				node->data.statement_print = NULL;
-			}
-			break;
+                if ((*node)->data.statement_print->expression_value != NULL) {
+                    ast_expression_data_free(&((*node)->data.statement_print->expression_value));
+                }
 
-		case AST_BLOCK:
-			if (node->data.block != NULL) {
-				if (node->data.block->statements != NULL) {
-					for (size_t i = 0; i < node->data.block->num_statements; i++) {
-						ast_node_free(node->data.block->statements[i]);
-						node->data.block->statements[i] = NULL;
-					}
+                free((*node)->data.statement_print);
+            }
+            break;
 
-					free(node->data.block->statements);
-					node->data.block->statements = NULL;
-				}
+        case AST_BLOCK:
+            if ((*node)->data.block != NULL) {
+                if ((*node)->data.block->statements != NULL) {
+                    for (size_t i = 0; i < (*node)->data.block->num_statements; i++) {
+                        ast_node_free(&((*node)->data.block->statements[i]));
+                    }
+                    free((*node)->data.block->statements);
+                }
 
-				free(node->data.block);
-				node->data.block = NULL;
-			}
-			break;
+                free((*node)->data.block);
+            }
+            break;
 
-		case AST_EXPRESSION:
-			if (node->data.expression != NULL) {
-				// printf("free expr\n");
-				// printf("print expr for debug: ");
-				// if (node->data.expression->data.assignment->left != NULL) {
-				// 	ast_expression_free(&(node->data.expression->data.assignment->left));
-				// }
-				// if (node->data.expression->data.assignment->right != NULL) {
-				// 	ast_expression_free(&(node->data.expression->data.assignment->right));
-				// }
-				// if (node->data.expression->data.assignment != NULL) {
-				// 	free(node->data.expression->data.assignment);
-				// }
-				ast_expression_free(&(node->data.expression));
-				node->data.expression = NULL;
-			}
-			break;
-	}
+        case AST_EXPRESSION:
+            if ((*node)->data.expression != NULL) {
+                ast_expression_free(&((*node)->data.expression));
+            }
+            break;
+    }
 
-	free(node);
-	node = NULL;
+    free(*node);
+    *node = NULL;
 }
 
 void parser_free(parser_t** parser)
@@ -1216,7 +1185,7 @@ void parser_free(parser_t** parser)
     if ((*parser)->functions != NULL) {
         if ((*parser)->functions->data != NULL) {
             for (size_t i = 0; i < (*parser)->functions->length; i++) {
-                ast_node_free((ast_node_t*) (*parser)->functions->data[i]);
+                ast_node_free((ast_node_t**) &((*parser)->functions->data[i]));
                 (*parser)->functions->data[i] = NULL;
             }
 
@@ -1231,7 +1200,7 @@ void parser_free(parser_t** parser)
     if ((*parser)->expressions != NULL) {
         if ((*parser)->expressions->data != NULL) {
 			for (size_t i = 0; i < (*parser)->expressions->length; i++) {
-				ast_node_free((ast_node_t*) (*parser)->expressions->data[i]);
+				ast_node_free((ast_node_t**) &((*parser)->expressions->data[i]));
 				(*parser)->expressions->data[i] = NULL;
 			}
 
@@ -2464,26 +2433,20 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_assignment_t* ex
 			printf("Found an exiting variable %s\n", identifier);
 			variable->left = NULL;
 			variable->right = right;
+			variable->type = right->type;
 
-			variable->type = res->type;
-			if (res->type == VALUE_TYPE_STRING) {
-				variable->string_value = res->string_value;
-			} else if (res->type == VALUE_TYPE_INT) {
-				variable->int_value = res->int_value;
-			} else if (res->type == VALUE_TYPE_BOOL) {
-				variable->bool_value = res->bool_value;
-			} else if (res->type == VALUE_TYPE_FLOAT) {
-				variable->float_value = res->float_value;
+			if (right->type == VALUE_TYPE_STRING) {
+				variable->string_value = right->string_value;
+			} else if (right->type == VALUE_TYPE_INT) {
+				variable->int_value = right->int_value;
+			} else if (right->type == VALUE_TYPE_BOOL) {
+				variable->bool_value = right->bool_value;
+			} else if (right->type == VALUE_TYPE_FLOAT) {
+				variable->float_value = right->float_value;
 			}
-			return variable;
 		} else {
-			ast_literal_t* res = (ast_literal_t*) malloc(sizeof(ast_literal_t));
-			res->left = NULL;
-			res->right = expr->right;
-
-
 			printf("Saving %s variable\n", identifier);
-			addToSymbolTable(symbolTableStack, identifier, res);
+			addToSymbolTable(symbolTableStack, identifier, right);
 		}
 		free(identifier);
 		// ast_expression_data_free(&(variable)); // TODO

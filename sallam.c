@@ -747,7 +747,7 @@ void read_number(lexer_t* lexer, wchar_t ch)
 	int i = 0;
 	while (is_number(ch)) {
 		if (ch >= '0' && ch <= '9') {
-            number[i] = ch;
+			number[i] = ch;
 		} else {
 			number[i] = ch - L'۰' + '0';
 		}

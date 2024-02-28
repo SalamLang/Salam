@@ -2277,8 +2277,6 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 				val = interpreter_function_declaration(function->data.function_declaration, interpreter);
 				function->type = AST_FUNCTION_DECLARATION;
 				function->data.function_declaration = val;
-
-				(*interpreter->parser)->functions->data[i] = function;
 				// print_xml_ast_node(function, 0);
 				// printf("sign - done - max\n");
 				// exit(EXIT_SUCCESS);
@@ -2494,6 +2492,34 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 	return res;
 }
 
+ast_literal_t* interpreter_function_run_return(ast_node_t* node, ast_function_declaration_t* function, interpreter_t* interpreter)
+{
+	switch (node->type) {
+		case AST_BLOCK:
+			for (size_t i = 0; i < node->data.block->num_statements; i++) {
+				ast_literal_t* ret = interpreter_function_run_return(node->data.block->statements[i], function, interpreter);
+				if (ret != NULL) return ret;
+			}
+			break;
+
+		case AST_STATEMENT_RETURN:
+			return node->data.statement_return->expression->data.literal;
+			// return node->data.statement_return->expression_value;
+			break;
+		
+		default:
+			break;
+	}
+
+	return NULL;
+}
+
+ast_literal_t* interpreter_function_run(ast_function_declaration_t* function, interpreter_t* interpreter)
+{
+	ast_function_declaration_t* fn = interpreter_function_declaration(function, interpreter);
+	return interpreter_function_run_return(fn->body, fn, interpreter);
+}
+
 ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* interpreter)
 {
 	// printf("Function Call: %s\n", node->data.function_call->name);
@@ -2513,18 +2539,21 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		}
 	}
 	
-	if (exists && func_exists != NULL) {
-		// TODO: using `func_exists`
-		ast_literal_t* val = (ast_literal_t*) malloc(sizeof(ast_literal_t));
-		val->type = VALUE_TYPE_INT;
-		val->main = NULL;
-		val->int_value = 135;
-		return val;
-	} else {
+	if (exists == false || func_exists == NULL) {
 		printf("Error: function not exists!\n");
 		exit(EXIT_FAILURE);
 		return NULL;
 	}
+
+	ast_literal_t* ret = interpreter_function_run(func_exists, interpreter);
+	if (ret == NULL) {
+		ast_literal_t* default_ret = malloc(sizeof(ast_literal_t));
+		default_ret->type = VALUE_TYPE_INT;
+		default_ret->main = NULL;
+		default_ret->int_value = 0;
+		return default_ret;
+	}
+	return ret;
 }
 
 

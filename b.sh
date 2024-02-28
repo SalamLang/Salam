@@ -1,5 +1,8 @@
 #!/bin/bash
 
+cls
+clear
+
 # Compile sallam.c
 rm s
 # gcc sallam.c -o s -fsanitize=address

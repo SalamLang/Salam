@@ -1089,24 +1089,30 @@ void ast_node_free(ast_node_t** node)
             if ((*node)->data.statement_if != NULL) {
                 if ((*node)->data.statement_if->condition != NULL) {
                     ast_node_free(&((*node)->data.statement_if->condition));
+					(*node)->data.statement_if->condition = NULL;
                 }
 
                 if ((*node)->data.statement_if->block != NULL) {
                     ast_node_free(&((*node)->data.statement_if->block));
+					(*node)->data.statement_if->block = NULL;
                 }
 
                 if ((*node)->data.statement_if->elseifs != NULL) {
                     for (size_t i = 0; i < (*node)->data.statement_if->num_elseifs; i++) {
                         ast_node_free((ast_node_t**) &((*node)->data.statement_if->elseifs[i]));
+					(*node)->data.statement_if->elseifs[i] = NULL;
                     }
                     free((*node)->data.statement_if->elseifs);
+					(*node)->data.statement_if->elseifs = NULL;
                 }
 
                 if ((*node)->data.statement_if->else_block != NULL) {
                     ast_node_free(&((*node)->data.statement_if->else_block));
+					(*node)->data.statement_if->else_block = NULL;
                 }
 
                 free((*node)->data.statement_if);
+				(*node)->data.statement_if = NULL;
             }
             break;
 
@@ -1114,13 +1120,16 @@ void ast_node_free(ast_node_t** node)
             if ((*node)->data.function_declaration != NULL) {
                 if ((*node)->data.function_declaration->body != NULL) {
                     ast_node_free(&((*node)->data.function_declaration->body));
+					(*node)->data.function_declaration->body = NULL;
                 }
 
                 if ((*node)->data.function_declaration->name != NULL) {
                     free((*node)->data.function_declaration->name);
+					(*node)->data.function_declaration->name = NULL;
                 }
 
                 free((*node)->data.function_declaration);
+				(*node)->data.function_declaration = NULL;
             }
             break;
 
@@ -1128,13 +1137,16 @@ void ast_node_free(ast_node_t** node)
             if ((*node)->data.statement_return != NULL) {
                 if ((*node)->data.statement_return->expression != NULL) {
                     ast_node_free(&((*node)->data.statement_return->expression));
+					(*node)->data.statement_return->expression = NULL;
                 }
 
                 if ((*node)->data.statement_return->expression_value != NULL) {
                     ast_expression_data_free(&((*node)->data.statement_return->expression_value));
+					(*node)->data.statement_return->expression_value = NULL;
                 }
 
                 free((*node)->data.statement_return);
+				(*node)->data.statement_return = NULL;
             }
             break;
 
@@ -1142,13 +1154,16 @@ void ast_node_free(ast_node_t** node)
             if ((*node)->data.statement_print != NULL) {
                 if ((*node)->data.statement_print->expression != NULL) {
                     ast_node_free(&((*node)->data.statement_print->expression));
+					(*node)->data.statement_print->expression = NULL;
                 }
 
                 if ((*node)->data.statement_print->expression_value != NULL) {
                     ast_expression_data_free(&((*node)->data.statement_print->expression_value));
+					(*node)->data.statement_print->expression_value = NULL;
                 }
 
                 free((*node)->data.statement_print);
+				(*node)->data.statement_print = NULL;
             }
             break;
 
@@ -1157,17 +1172,22 @@ void ast_node_free(ast_node_t** node)
                 if ((*node)->data.block->statements != NULL) {
                     for (size_t i = 0; i < (*node)->data.block->num_statements; i++) {
                         ast_node_free(&((*node)->data.block->statements[i]));
+						(*node)->data.block->statements[i] = NULL;
                     }
                     free((*node)->data.block->statements);
+					(*node)->data.block->statements = NULL;
                 }
 
                 free((*node)->data.block);
+				(*node)->data.block = NULL;
             }
             break;
 
         case AST_EXPRESSION:
             if ((*node)->data.expression != NULL) {
                 ast_expression_free(&((*node)->data.expression));
+				(*node)->data.expression = NULL;
+
             }
             break;
     }
@@ -2218,10 +2238,12 @@ void ast_expression_data_free(ast_literal_t** val)
     printf("ast_expression_data_free\n");
 
     if (val == NULL || *val == NULL) {
+		printf("is null?\n");
         return;
     }
 
     if ((*val)->type == VALUE_TYPE_STRING) {
+		printf("has string\n");
         if ((*val)->string_value != NULL) {
             free((*val)->string_value);
             (*val)->string_value = NULL;
@@ -2245,6 +2267,8 @@ void ast_expression_data_free(ast_literal_t** val)
         ast_expression_data_free(&((*val)->right));
         (*val)->right = NULL;
     }
+
+	printf("let's free it's at all\n");
 
     free(*val);
     *val = NULL;

@@ -1079,6 +1079,8 @@ void ast_expression_free(ast_expression_t** expr)
 
 void ast_node_free(ast_node_t** node)
 {
+	printf("ast_node_free\n");
+
     if (node == NULL || *node == NULL) {
         return;
     }
@@ -1086,6 +1088,7 @@ void ast_node_free(ast_node_t** node)
     switch ((*node)->type) {
         case AST_STATEMENT_IF:
         case AST_STATEMENT_ELSEIF:
+			printf("free ast if/else\n");
             if ((*node)->data.statement_if != NULL) {
                 if ((*node)->data.statement_if->condition != NULL) {
                     ast_node_free(&((*node)->data.statement_if->condition));
@@ -1117,6 +1120,7 @@ void ast_node_free(ast_node_t** node)
             break;
 
         case AST_FUNCTION_DECLARATION:
+			printf("free ast function\n");
             if ((*node)->data.function_declaration != NULL) {
                 if ((*node)->data.function_declaration->body != NULL) {
                     ast_node_free(&((*node)->data.function_declaration->body));
@@ -1134,6 +1138,7 @@ void ast_node_free(ast_node_t** node)
             break;
 
         case AST_STATEMENT_RETURN:
+			printf("free ast return\n");
             if ((*node)->data.statement_return != NULL) {
                 if ((*node)->data.statement_return->expression != NULL) {
                     ast_node_free(&((*node)->data.statement_return->expression));
@@ -1151,6 +1156,7 @@ void ast_node_free(ast_node_t** node)
             break;
 
         case AST_STATEMENT_PRINT:
+			printf("free ast print\n");
             if ((*node)->data.statement_print != NULL) {
                 if ((*node)->data.statement_print->expression != NULL) {
                     ast_node_free(&((*node)->data.statement_print->expression));
@@ -1168,6 +1174,7 @@ void ast_node_free(ast_node_t** node)
             break;
 
         case AST_BLOCK:
+			printf("free ast block\n");
             if ((*node)->data.block != NULL) {
                 if ((*node)->data.block->statements != NULL) {
                     for (size_t i = 0; i < (*node)->data.block->num_statements; i++) {
@@ -1184,10 +1191,10 @@ void ast_node_free(ast_node_t** node)
             break;
 
         case AST_EXPRESSION:
+			printf("free ast expr\n");
             if ((*node)->data.expression != NULL) {
                 ast_expression_free(&((*node)->data.expression));
 				(*node)->data.expression = NULL;
-
             }
             break;
     }
@@ -1205,6 +1212,7 @@ void parser_free(parser_t** parser)
     if ((*parser)->functions != NULL) {
         if ((*parser)->functions->data != NULL) {
             for (size_t i = 0; i < (*parser)->functions->length; i++) {
+				printf("Free function %s\n", ((ast_node_t*) (*parser)->functions->data[i])->data.function_declaration->name);
                 ast_node_free((ast_node_t**) &((*parser)->functions->data[i]));
                 (*parser)->functions->data[i] = NULL;
             }
@@ -1353,6 +1361,7 @@ ast_node_t* parser_statement_print(parser_t* parser)
 	node->type = AST_STATEMENT_PRINT;
 
 	node->data.statement_print = (ast_statement_print_t*) malloc(sizeof(ast_statement_print_t));
+	node->data.statement_print->expression_value = NULL;
 	node->data.statement_print->expression = parser_expression(parser);
 
 	return node;
@@ -1368,6 +1377,7 @@ ast_node_t* parser_statement_return(parser_t* parser)
 	node->type = AST_STATEMENT_RETURN;
 
 	node->data.statement_return = (ast_statement_return_t*) malloc(sizeof(ast_statement_return_t));
+	node->data.statement_return->expression_value = NULL;
 	node->data.statement_return->expression = parser_expression(parser);
 
 	return node;
@@ -2192,6 +2202,10 @@ ast_statement_return_t* interpreter_statement_return(ast_statement_return_t* stm
 	// printf("Return Statement\n");
 
 	stmt->expression_value = interpreter_expression(stmt->expression->data.expression, interpreter);
+	// ast_expression_free(&(stmt->expression->data.expression));
+	// stmt->expression->data.expression = NULL;
+	// free(stmt->expression);
+	// stmt->expression = NULL;
 
 	return stmt;
 }
@@ -2201,6 +2215,10 @@ ast_statement_print_t* interpreter_statement_print(ast_statement_print_t* stmt, 
 	// printf("Print Statement\n");
 
 	stmt->expression_value = interpreter_expression(stmt->expression->data.expression, interpreter);
+	// ast_expression_free(&(stmt->expression->data.expression));
+	// stmt->expression->data.expression = NULL;
+	// free(stmt->expression);
+	// stmt->expression = NULL;
 
 	return stmt;
 }
@@ -2241,6 +2259,8 @@ void ast_expression_data_free(ast_literal_t** val)
 		printf("is null?\n");
         return;
     }
+
+	printf("start checking type on ast_expression_data_free\n");
 
     if ((*val)->type == VALUE_TYPE_STRING) {
 		printf("has string\n");
@@ -2383,8 +2403,11 @@ ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, i
 
 	if (invalid) {
 		ast_expression_data_free(&res);
+		res = NULL;
 		ast_expression_data_free(&left);
+		left = NULL;
 		ast_expression_data_free(&right);
+		right = NULL;
 		exit(EXIT_FAILURE);
 		return NULL;
 	}
@@ -2472,7 +2495,8 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_assignment_t* ex
 			printf("Saving %s variable\n", identifier);
 			addToSymbolTable(symbolTableStack, identifier, right);
 		}
-		free(identifier);
+		// free(identifier);
+		// identifier = NULL;
 		// ast_expression_data_free(&(variable)); // TODO
 	} else {
 		printf("Error: Assignment to non-variable\n");
@@ -2563,6 +2587,9 @@ int main(int argc, char** argv)
 	printf("free interpreter\n");
 	interpreter_free(&interpreter);
 	printf("end interpreter free\n");
+
+	free(file_data);
+	file_data = NULL;
 
 	exit(EXIT_SUCCESS);
 }

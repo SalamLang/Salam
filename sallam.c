@@ -694,7 +694,7 @@ bool is_number(wchar_t ch)
 
 bool is_alpha(wchar_t ch)
 {
-	return ch >= L'آ' && ch <= L'ی' || ch == L'_';
+	return ch >= L'آ' && ch <= L'ی' || ch == L'_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
 }
 
 bool is_ident(wchar_t ch)
@@ -1006,7 +1006,7 @@ void ast_expression_data_free(ast_literal_t** val)
 		printf("%s\n", (*val)->string_value);
 		if ((*val)->string_value != "\0" && (*val)->string_value != NULL) {
 			free((*val)->string_value);
-			// (*val)->string_value = NULL;
+			(*val)->string_value = NULL;
 		}
 	} else if ((*val)->type == VALUE_TYPE_INT) {
 		// Nothing to free
@@ -2226,16 +2226,16 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 	pushSymbolTable(symbolTableStack);
 
 	// Expressions
-	// if ((*interpreter->parser)->expressions != NULL) {
-	// 	for (size_t i = 0; i < (*interpreter->parser)->expressions->length; i++) {
-	// 		printf("Interpreting global expression\n");
-	// 		ast_node_t* expression = (ast_node_t*) (*interpreter->parser)->expressions->data[i];
-	// 		ast_literal_t* val = interpreter_expression(expression->data.expression, interpreter);
-	// 		expression->type = AST_EXPRESSION_LITERAL;
-	// 		expression->data.expression->data.literal = val;
-	// 		(*interpreter->parser)->expressions->data[i] = expression;
-	// 	}
-	// }
+	if ((*interpreter->parser)->expressions != NULL) {
+		for (size_t i = 0; i < (*interpreter->parser)->expressions->length; i++) {
+			printf("Interpreting global expression\n");
+			ast_node_t* expression = (ast_node_t*) (*interpreter->parser)->expressions->data[i];
+			ast_literal_t* val = interpreter_expression(expression->data.expression, interpreter);
+			expression->type = AST_EXPRESSION_LITERAL;
+			expression->data.expression->data.literal = val;
+			(*interpreter->parser)->expressions->data[i] = expression;
+		}
+	}
 
 	// Functions
 	if ((*interpreter->parser)->functions != NULL) {
@@ -2548,9 +2548,6 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	} else {
 		printf("Update variable %s\n", identifier);
 	}
-
-	free(variable);
-	variable = NULL;
 	
 	free(identifier);
 	identifier = NULL;

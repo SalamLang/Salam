@@ -163,6 +163,7 @@ void addToSymbolTable(SymbolTableStack* symbolTableStack, const char* identifier
 	entry->identifier = strdup(identifier);
 	entry->data = value;
 	entry->next = table->entries[index];
+
 	table->entries[index] = entry;
 	table->size++;
 }
@@ -418,7 +419,7 @@ lexer_t* lexer_create(const char* data);
 void lexer_free(lexer_t** lexer);
 void lexer_lex(lexer_t* lexer);
 
-parser_t* parser_create(lexer_t* lexer);
+parser_t* parser_create(lexer_t** lexer);
 void parser_free(parser_t** parser);
 void parser_parse(parser_t* parser);
 ast_node_t* parser_function(parser_t* parser);
@@ -970,10 +971,10 @@ void help()
 	printf("\n");
 }
 
-parser_t* parser_create(lexer_t* lexer)
+parser_t* parser_create(lexer_t** lexer)
 {
 	parser_t* parser = (parser_t*) malloc(sizeof(parser_t));
-	parser->lexer = lexer;
+	parser->lexer = *lexer;
 	parser->token_index = 0;
 	parser->functions = array_create(5);
 	parser->expressions = NULL;// = array_create(5);
@@ -1000,20 +1001,20 @@ void ast_expression_data_free(ast_literal_t** val)
 
 	printf("start checking type on ast_expression_data_free\n");
 
-	if ((*val)->type == VALUE_TYPE_STRING) {
-		printf("has string\n");
-		printf("%s\n", (*val)->string_value);
-		if ((*val)->string_value != "\0" && (*val)->string_value != NULL) {
-			free((*val)->string_value);
-			(*val)->string_value = NULL;
-		}
-	} else if ((*val)->type == VALUE_TYPE_INT) {
-		// Nothing to free
-	} else if ((*val)->type == VALUE_TYPE_BOOL) {
-		// Nothing to free
-	} else if ((*val)->type == VALUE_TYPE_FLOAT) {
-		// Nothing to free
-	}
+	// if ((*val)->type == VALUE_TYPE_STRING) {
+	// 	printf("has string\n");
+	// 	printf("%s\n", (*val)->string_value);
+	// 	if ((*val)->string_value != "\0" && (*val)->string_value != NULL) {
+	// 		free((*val)->string_value);
+	// 		// (*val)->string_value = NULL;
+	// 	}
+	// } else if ((*val)->type == VALUE_TYPE_INT) {
+	// 	// Nothing to free
+	// } else if ((*val)->type == VALUE_TYPE_BOOL) {
+	// 	// Nothing to free
+	// } else if ((*val)->type == VALUE_TYPE_FLOAT) {
+	// 	// Nothing to free
+	// }
 
 	if ((*val)->main != NULL) {
 		printf("ast_expression_data_free main\n");
@@ -1023,8 +1024,8 @@ void ast_expression_data_free(ast_literal_t** val)
 
 	printf("let's free it's at all\n");
 
-	free(*val);
-	*val = NULL;
+	// free(*val);
+	// *val = NULL;
 }
 
 void ast_expression_free(ast_expression_t** expr)
@@ -1301,6 +1302,8 @@ void parser_free(parser_t** parser)
 
 	free(*parser);
 	*parser = NULL;
+	printf("*parser is null %d\n", *parser == NULL ? 1 : 0);
+	printf("parser is null %d\n", parser == NULL ? 1 : 0);
 }
 
 void parser_token_next(parser_t* parser)
@@ -2093,40 +2096,46 @@ void print_xml_ast_tree(parser_t* parser)
 	printf("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
 	printf("<AST>\n");
 
-		print_indentation(1);
-		printf("<Functions>\n");
+	if (parser != NULL) {
+		if (parser->functions != NULL) {
+			print_indentation(1);
+			printf("<Functions>\n");
 
-			if (parser->functions != NULL) {
-				for (size_t i = 0; i < parser->functions->length; i++) {
-					print_xml_ast_node(parser->functions->data[i], 2);
+				if (parser->functions != NULL) {
+					for (size_t i = 0; i < parser->functions->length; i++) {
+						print_xml_ast_node(parser->functions->data[i], 2);
+					}
 				}
-			}
 
-		print_indentation(1);
-		printf("</Functions>\n");
+			print_indentation(1);
+			printf("</Functions>\n");
+		}
 
 		////////////////////////////////////////////
 		////////////////////////////////////////////
 
-		print_indentation(1);
-		printf("<Expressions>\n");
+		if (parser->expressions != NULL) {
+			print_indentation(1);
+			printf("<Expressions>\n");
 
-			if (parser->expressions != NULL) {
-				for (size_t i = 0; i < parser->expressions->length; i++) {
-					print_xml_ast_node(parser->expressions->data[i], 2);
+				if (parser->expressions != NULL) {
+					for (size_t i = 0; i < parser->expressions->length; i++) {
+						print_xml_ast_node(parser->expressions->data[i], 2);
+					}
 				}
-			}
-		
-		print_indentation(1);
-		printf("</Expressions>\n");
+			
+			print_indentation(1);
+			printf("</Expressions>\n");
+		}
+	}
 
 	printf("</AST>\n");
 }
 
-interpreter_t* interpreter_create(parser_t* parser)
+interpreter_t* interpreter_create(parser_t** parser)
 {
 	interpreter_t* interpreter = (interpreter_t*) malloc(sizeof(interpreter_t));
-	interpreter->parser = parser;
+	interpreter->parser = *parser;
 	return interpreter;
 }
 
@@ -2600,13 +2609,26 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 
 void interpreter_free(interpreter_t** interpreter)
 {
-	// while (symbolTableStack != NULL) {
-	// 	popSymbolTable();
-	// }
-	// free(symbolTableStack);
+	if (interpreter == NULL || *interpreter == NULL) {
+		return;
+	}
 
-	free(*interpreter);
-	*interpreter = NULL;
+	while (symbolTableStack != NULL) {
+		popSymbolTable();
+	}
+	if (symbolTableStack != NULL) {
+		free(symbolTableStack);
+	}
+
+	if ((*interpreter)->parser != NULL) {
+		free((*interpreter)->parser);
+		(*interpreter)->parser = NULL;
+	}
+
+	if (*interpreter != NULL) {
+		free(*interpreter);
+		*interpreter = NULL;
+	}
 }
 
 int main(int argc, char** argv)
@@ -2626,12 +2648,12 @@ int main(int argc, char** argv)
 
 	array_print(lexer->tokens);
 
-	parser_t* parser = parser_create(lexer);
+	parser_t* parser = parser_create(&lexer);
 	parser_parse(parser);
 
 	print_xml_ast_tree(parser);
 
-	interpreter_t* interpreter = interpreter_create(parser);
+	interpreter_t* interpreter = interpreter_create(&parser);
 	interpreter_interpret(interpreter);
 
 	printf("====================================\n");
@@ -2645,6 +2667,9 @@ int main(int argc, char** argv)
 	printf("free parser\n");
 	parser_free(&parser);
 	printf("end parser free\n");
+
+	printf("out-after parser is null %d\n", parser == NULL ? 1 : 0);
+	printf("out-after interp-parser is null %d\n", interpreter->parser == NULL ? 1 : 0);
 
 	printf("free interpreter\n");
 	interpreter_free(&interpreter);

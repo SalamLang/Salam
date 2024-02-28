@@ -6,6 +6,8 @@
 #include <string.h>
 #include <limits.h>
 
+struct ast_expression;
+
 typedef enum {
 	VALUE_TYPE_INT,
 	VALUE_TYPE_FLOAT,
@@ -293,12 +295,12 @@ typedef struct {
 } ast_function_declaration_t;
 
 typedef struct {
-	struct ast_node* expression;
+	struct ast_expression* expression;
 	struct ast_literal_t* expression_value;
 } ast_statement_return_t;
 
 typedef struct {
-	struct ast_node* expression;
+	struct ast_expression* expression;
 	struct ast_literal_t* expression_value;
 } ast_statement_print_t;
 
@@ -361,7 +363,7 @@ typedef enum {
 struct ast_statement_if_t;
 
 typedef struct {
-	struct ast_node* condition;
+	ast_expression_t* condition;
 	struct ast_node* block;
 	struct ast_node_t** elseifs;
 	struct ast_node* else_block;
@@ -425,7 +427,7 @@ ast_node_t* parser_block(parser_t* parser);
 ast_node_t* parser_statement(parser_t* parser);
 ast_node_t* parser_statement_return(parser_t* parser);
 ast_node_t* parser_statement_print(parser_t* parser);
-ast_node_t* parser_expression(parser_t* parser);
+ast_expression_t* parser_expression(parser_t* parser);
 
 ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* interpreter);
 ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* expr, interpreter_t* interpreter);
@@ -1147,7 +1149,7 @@ void ast_node_free(ast_node_t** node)
 			printf("free ast if/else\n");
 			if ((*node)->data.statement_if != NULL) {
 				if ((*node)->data.statement_if->condition != NULL) {
-					ast_node_free(&((*node)->data.statement_if->condition));
+					ast_expression_free(&((*node)->data.statement_if->condition));
 					(*node)->data.statement_if->condition = NULL;
 				}
 
@@ -1199,7 +1201,7 @@ void ast_node_free(ast_node_t** node)
 			printf("free ast return\n");
 			if ((*node)->data.statement_return != NULL) {
 				if ((*node)->data.statement_return->expression != NULL) {
-					ast_node_free(&((*node)->data.statement_return->expression));
+					ast_expression_free(&((*node)->data.statement_return->expression));
 					(*node)->data.statement_return->expression = NULL;
 				}
 
@@ -1217,7 +1219,7 @@ void ast_node_free(ast_node_t** node)
 			printf("free ast print\n");
 			if ((*node)->data.statement_print != NULL) {
 				if ((*node)->data.statement_print->expression != NULL) {
-					ast_node_free(&((*node)->data.statement_print->expression));
+					ast_expression_free(&((*node)->data.statement_print->expression));
 					(*node)->data.statement_print->expression = NULL;
 				}
 
@@ -1287,20 +1289,20 @@ void parser_free(parser_t** parser)
 		(*parser)->functions = NULL;
 	}
 
-	if ((*parser)->expressions != NULL) {
-		if ((*parser)->expressions->data != NULL) {
-			for (size_t i = 0; i < (*parser)->expressions->length; i++) {
-				ast_node_free((ast_node_t**) &((*parser)->expressions->data[i]));
-				(*parser)->expressions->data[i] = NULL;
-			}
+	// if ((*parser)->expressions != NULL) {
+	// 	if ((*parser)->expressions->data != NULL) {
+	// 		for (size_t i = 0; i < (*parser)->expressions->length; i++) {
+	// 			ast_node_free((ast_node_t**) &((*parser)->expressions->data[i]));
+	// 			(*parser)->expressions->data[i] = NULL;
+	// 		}
 
-			free((*parser)->functions->data);
-			(*parser)->functions->data = NULL;
-		}
+	// 		free((*parser)->functions->data);
+	// 		(*parser)->functions->data = NULL;
+	// 	}
 
-		free((*parser)->expressions);
-		(*parser)->expressions = NULL;
-	}
+	// 	free((*parser)->expressions);
+	// 	(*parser)->expressions = NULL;
+	// }
 
 	free(*parser);
 	*parser = NULL;
@@ -1424,7 +1426,7 @@ ast_node_t* parser_statement_print(parser_t* parser)
 
 	node->data.statement_print = (ast_statement_print_t*) malloc(sizeof(ast_statement_print_t));
 	node->data.statement_print->expression_value = NULL;
-	node->data.statement_print->expression = parser_expression(parser);
+	node->data.statement_print->expression = (ast_expression_t*) parser_expression(parser);
 
 	return node;
 }
@@ -1440,7 +1442,7 @@ ast_node_t* parser_statement_return(parser_t* parser)
 
 	node->data.statement_return = (ast_statement_return_t*) malloc(sizeof(ast_statement_return_t));
 	node->data.statement_return->expression_value = NULL;
-	node->data.statement_return->expression = parser_expression(parser);
+	node->data.statement_return->expression = (ast_expression_t*) parser_expression(parser);
 
 	return node;
 }
@@ -1543,7 +1545,10 @@ ast_node_t* parser_statement(parser_t* parser)
 			
 			default:
 				if (parser_expression_has(parser)) {
-					stmt = parser_expression(parser);
+					stmt = malloc(sizeof(ast_node_t));
+					stmt->type = AST_EXPRESSION;
+					stmt->data.expression = parser_expression(parser);
+					return stmt;
 				} else {
 					printf("Error: Unexpected token as statement %s\n", token_type2str(tok->type));
 					exit(EXIT_FAILURE);
@@ -1559,7 +1564,7 @@ ast_node_t* parser_statement(parser_t* parser)
 	return stmt;
 }
 
-ast_node_t* parser_expression(parser_t* parser)
+ast_expression_t* parser_expression(parser_t* parser)
 {
 	printf("Parsing expression\n");
 
@@ -1823,7 +1828,9 @@ void parser_parse(parser_t* parser)
 
 			default:
 				if (parser_expression_has(parser)) {
-					ast_node_t* expression_node = parser_expression(parser);
+					ast_node_t* expression_node = malloc(sizeof(ast_node_t));
+					expression_node->type = AST_EXPRESSION;
+					expression_node->data.expression = parser_expression(parser);
 					if (parser->expressions && expression_node != NULL) {
 						array_push(parser->expressions, expression_node);
 					}
@@ -1990,7 +1997,7 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 				printf("<Condition>\n");
 
 					print_indentation(indent_level + 2);
-					print_xml_ast_expression(node->data.statement_if->condition->data.expression, indent_level + 2);
+					print_xml_ast_expression(node->data.statement_if->condition, indent_level + 2);
 
 				print_indentation(indent_level + 1);
 				printf("</Condition>\n");
@@ -2040,7 +2047,7 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 		case AST_STATEMENT_PRINT:
 			printf("<StatementPrint>\n");
 
-				print_xml_ast_node(node->data.statement_print->expression, indent_level + 1);
+				print_xml_ast_expression(node->data.statement_print->expression, indent_level + 1);
 
 			print_indentation(indent_level);
 			printf("</StatementPrint>\n");
@@ -2049,7 +2056,7 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 		case AST_STATEMENT_RETURN:
 			printf("<StatementReturn>\n");
 
-				print_xml_ast_node(node->data.statement_return->expression, indent_level + 1);
+				print_xml_ast_expression(node->data.statement_return->expression, indent_level + 1);
 
 			print_indentation(indent_level);
 			printf("</StatementReturn>\n");
@@ -2123,12 +2130,12 @@ ast_node_t* interpreter_statement_if(ast_statement_if_t* node, interpreter_t* in
 {
 	// printf("If\n");
 
-	if (interpreter_expression_truly(node->condition->data.expression, interpreter)) {
+	if (interpreter_expression_truly(node->condition, interpreter)) {
 		return interpreter_interpret_once(node->block, interpreter);
 	} else {
 		for (size_t i = 0; i < node->num_elseifs; i++) {
 			ast_node_t* elseif = (ast_node_t*) node->elseifs[i];
-			if (interpreter_expression_truly(elseif->data.statement_if->condition->data.expression, interpreter)) {
+			if (interpreter_expression_truly(elseif->data.statement_if->condition, interpreter)) {
 				return interpreter_interpret_once(elseif->data.statement_if->block, interpreter);
 			}
 		}
@@ -2264,7 +2271,7 @@ ast_statement_return_t* interpreter_statement_return(ast_statement_return_t* stm
 {
 	// printf("Return Statement\n");
 
-	stmt->expression_value = interpreter_expression(stmt->expression->data.expression, interpreter);
+	stmt->expression_value = (ast_literal_t*) interpreter_expression(stmt->expression, interpreter);
 	// ast_expression_free(&(stmt->expression->data.expression));
 	// stmt->expression->data.expression = NULL;
 	// free(stmt->expression);
@@ -2277,7 +2284,7 @@ ast_statement_print_t* interpreter_statement_print(ast_statement_print_t* stmt, 
 {
 	// printf("Print Statement\n");
 
-	stmt->expression_value = interpreter_expression(stmt->expression->data.expression, interpreter);
+	stmt->expression_value = (ast_literal_t*) interpreter_expression(stmt->expression, interpreter);
 	// ast_expression_free(&(stmt->expression->data.expression));
 	// stmt->expression->data.expression = NULL;
 	// free(stmt->expression);
@@ -2333,14 +2340,14 @@ ast_literal_t* interpreter_identifier(ast_identifier_t* expr, interpreter_t* int
 ast_literal_t* interpreter_operator_binary(ast_expression_binary_t* binary_op, interpreter_t* interpreter) {
 	bool invalid = false;
 
-	ast_literal_t* left = interpreter_expression(binary_op->left, interpreter);
-	ast_literal_t* right = interpreter_expression(binary_op->right, interpreter);
+	ast_literal_t* left = (ast_literal_t*) interpreter_expression(binary_op->left, interpreter);
+	ast_literal_t* right = (ast_literal_t*) interpreter_expression(binary_op->right, interpreter);
 
 	ast_literal_t* res = (ast_literal_t*) malloc(sizeof(ast_literal_t));
-	// res->left = left;
-	// res->right = right;
-	res->left = NULL;
-	res->right = NULL;
+	res->left = left;
+	res->right = right;
+	// res->left = NULL;
+	// res->right = NULL;
 
 	if (left == NULL || right == NULL) {
 		printf("Error: cannot calculate binary operator for NULL values!\n");

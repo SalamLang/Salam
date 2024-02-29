@@ -13,6 +13,7 @@ typedef enum {
 	VALUE_TYPE_FLOAT,
 	VALUE_TYPE_BOOL,
 	VALUE_TYPE_STRING,
+	VALUE_TYPE_ARGUMENT,
 } ast_literal_type_t;
 
 char* literal_type2name(ast_literal_type_t type)
@@ -28,6 +29,11 @@ char* literal_type2name(ast_literal_type_t type)
 
 struct ast_literal_t;
 
+typedef struct {
+	char* name;
+	struct ast_expression_t* value;
+} ast_argument_t;
+
 typedef struct ast_literal_t {
 	ast_literal_type_t type;
 	union {
@@ -35,6 +41,7 @@ typedef struct ast_literal_t {
 		bool bool_value;
 		float float_value;
 		char* string_value;
+		ast_argument_t* argument_value;
 	};
 
 	struct ast_expression_t* main;
@@ -226,6 +233,8 @@ typedef enum {
 	TOKEN_TYPE_MULTIPY, // *
 	TOKEN_TYPE_DIVIDE, // /
 
+	TOKEN_TYPE_COMMA, // ,
+
 	TOKEN_TYPE_EQUAL, // =
 	TOKEN_TYPE_EQUAL_EQUAL, // ==
 	TOKEN_TYPE_NOT_EQUAL, // !=
@@ -292,6 +301,7 @@ struct ast_node;
 typedef struct {
 	char* name;
 	struct ast_node* body;
+	array_t* arguments;
 } ast_function_declaration_t;
 
 typedef struct {
@@ -516,7 +526,9 @@ char* token_type2str(token_type_t type)
 		case TOKEN_TYPE_PARENTHESE_OPEN: return "PARENTHESIS_OPEN";
 		case TOKEN_TYPE_PARENTHESE_CLOSE: return "PARENTHESIS_CLOSE";
 		case TOKEN_TYPE_PLUS: return "PLUS";
+		case TOKEN_TYPE_DIVIDE: return "DIVIDE";
 		case TOKEN_TYPE_MINUS: return "MINUS";
+		case TOKEN_TYPE_COMMA: return "COMMA";
 		case TOKEN_TYPE_EQUAL: return "EQUAL";
 		case TOKEN_TYPE_EQUAL_EQUAL: return "EQUAL_EQUAL";
 		case TOKEN_TYPE_NOT_EQUAL: return "NOT_EQUAL";
@@ -886,6 +898,9 @@ void lexer_lex(lexer_t* lexer)
 			array_push(lexer->tokens, t);
 		} else if (current_wchar == '/') {
 			token_t* t = token_create(TOKEN_TYPE_DIVIDE, "/", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+			array_push(lexer->tokens, t);
+		} else if (current_wchar == ',') {
+			token_t* t = token_create(TOKEN_TYPE_COMMA, ",", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		} else if (current_wchar == '-') {
 			token_t* t = token_create(TOKEN_TYPE_MINUS, "-", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
@@ -1357,6 +1372,19 @@ token_t* parser_token_skip(parser_t* parser, token_type_t type)
 	return NULL;
 }
 
+bool parser_token_ifhas(parser_t* parser, token_type_t type)
+{
+	if ((*parser->lexer)->tokens->length > parser->token_index) {
+		token_t* token = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
+
+		if (token->type == type) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
 bool parser_token_skip_ifhas(parser_t* parser, token_type_t type)
 {
 	if ((*parser->lexer)->tokens->length > parser->token_index) {
@@ -1418,21 +1446,27 @@ ast_node_t* parser_function(parser_t* parser)
 
 	token_t* name = parser_token_eat(parser, TOKEN_TYPE_IDENTIFIER);
 
-	// if ((*parser->lexer)->tokens->length > parser->token_index && ((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type == TOKEN_TYPE_PARENTHESE_OPEN) {
-	//     printf("Parsing parameters\n");
-	//     parser->token_index++;
-
-	//     if ((*parser->lexer)->tokens->length > parser->token_index && ((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type == TOKEN_TYPE_PARENTHESE_CLOSE) {
-	//         parser->token_index++;
-	//     } else {
-	//         printf("Error: Expected closing parenthesis\n");
-	//         exit(EXIT_FAILURE);
-	//     }
-	// }
-
 	node->data.function_declaration = (ast_function_declaration_t*) malloc(sizeof(ast_function_declaration_t));
 	node->data.function_declaration->name = strdup(name->value);
 	node->data.function_declaration->body = parser_block(parser);
+	node->data.function_declaration->arguments = array_create(3);
+
+	if (parser_token_skip_ifhas(parser, TOKEN_TYPE_PARENTHESE_OPEN)) {
+	    printf("Parsing parameters\n");
+
+		while ((*parser->lexer)->tokens->length > parser->token_index && ((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type == TOKEN_TYPE_IDENTIFIER) {
+			ast_identifier_t* arg = malloc(sizeof(ast_identifier_t));
+			arg->name = strdup((*parser->lexer)->tokens->data[parser->token_index]);
+			array_push(node->data.function_declaration->arguments, arg);
+	    }
+
+		parser_token_eat_nodata(parser, TOKEN_TYPE_PARENTHESE_CLOSE);
+	}
+
+	if (node->data.function_declaration->arguments->length == 0) {
+		array_free(node->data.function_declaration->arguments);
+		node->data.function_declaration->arguments = NULL;
+	}
 
 	if (node->data.function_declaration->body == NULL) {
 		return NULL;
@@ -1757,9 +1791,24 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 		expr->data.function_call = (ast_function_call_t*) malloc(sizeof(ast_function_call_t));
 		expr->data.function_call->name = strdup(token->value);
 		expr->data.function_call->arguments = NULL;
-		// expr->data.function_call->arguments = array_create(3);
+		expr->data.function_call->arguments = array_create(3);
 
-		// Eating ) token
+		// Eating parser_expression until find ( token
+		while (parser_expression_has(parser)) {
+			ast_expression_t* arg = parser_expression(parser);
+			array_push(expr->data.function_call->arguments, arg);
+			if (parser_token_ifhas(parser, TOKEN_TYPE_PARENTHESE_CLOSE)) {
+				break;
+			} else {
+				parser_token_eat_nodata(parser, TOKEN_TYPE_COMMA);
+			}
+		}
+
+		if (expr->data.function_call->arguments->length == 0) {
+			array_free(expr->data.function_call->arguments);
+			expr->data.function_call->arguments = NULL;
+		}
+
 		parser_token_eat_nodata(parser, TOKEN_TYPE_PARENTHESE_CLOSE);
 	} else {
 		expr->type = AST_EXPRESSION_IDENTIFIER;
@@ -1927,7 +1976,13 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 
 						for (size_t i = 0; i < expr->data.function_call->arguments->length; i++) {
 							print_indentation(indent_level + 3);
-							printf("<Argument ... />\n");
+							printf("<Argument>\n");
+
+								print_indentation(indent_level + 4);
+								print_xml_ast_expression(expr->data.function_call->arguments->data[i], indent_level + 4);
+
+							print_indentation(indent_level + 3);
+							printf("<Argument>\n");
 						}
 
 					print_indentation(indent_level + 2);
@@ -2518,13 +2573,42 @@ ast_literal_t* interpreter_function_run_return(ast_node_t* node, ast_function_de
 	return NULL;
 }
 
-ast_literal_t* interpreter_function_run(ast_function_declaration_t* function, interpreter_t* interpreter)
+ast_literal_t* interpreter_function_run(ast_function_declaration_t* function, array_t* arguments, interpreter_t* interpreter)
 {
+	// Scope entry
+	pushSymbolTable(symbolTableStack);
+
+	size_t function_arguments_count = function->arguments == NULL ? 0 : function->arguments->length;
+	size_t arguments_count = arguments == NULL ? 0 : arguments->length;
+
+	printf("Number of function arguments: %zu\n", function_arguments_count);
+	printf("Number of arguments: %zu\n", arguments_count);
+
+	if (function_arguments_count != arguments_count) {
+		if (arguments_count > function_arguments_count) {
+			printf("Error: number of arguments is not match with the function - you are passing more arguments!\n");
+		} else {
+			printf("Error: number of arguments is not match with the function - you are passing less arguments!\n");
+		}
+		exit(EXIT_FAILURE);
+		return NULL;
+	}
+
+	for (size_t i = 0; i < arguments_count; i++) {
+		ast_identifier_t* arg_name = function->arguments->data[i];
+		ast_literal_t* arg_value = interpreter_expression((ast_expression_t*) arguments->data[i], interpreter);
+
+		addToSymbolTable(symbolTableStack, arg_name->name, arg_value);
+	}
+
 	ast_function_declaration_t* fn = interpreter_function_declaration(function, interpreter);
 
 	if (fn == NULL) {
 		return NULL;
 	}
+
+	// Scope exit
+	popSymbolTable(symbolTableStack);
 
 	return interpreter_function_run_return(fn->body, fn, interpreter);
 }
@@ -2554,12 +2638,12 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		return NULL;
 	}
 
-	print_xml_ast_node(func_exists->body, 1);
+	// print_xml_ast_node(func_exists->body, 1);
 
-	ast_literal_t* ret = interpreter_function_run(func_exists, interpreter);
+	ast_literal_t* ret = interpreter_function_run(func_exists, node->data.function_call->arguments, interpreter);
 	if (ret == NULL) {
 		ast_literal_t* default_ret = malloc(sizeof(ast_literal_t));
-		default_ret->type = VALUE_TYPE_INT;
+		default_ret->type = VALUE_TYPE_INT; // TODO: void type later!
 		default_ret->main = NULL;
 		default_ret->int_value = 0;
 		return default_ret;

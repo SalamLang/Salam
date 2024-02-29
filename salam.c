@@ -1461,7 +1461,7 @@ ast_node_t* parser_function(parser_t* parser)
 			ast_identifier_t* arg = malloc(sizeof(ast_identifier_t));
 			token_t* t = (*parser->lexer)->tokens->data[parser->token_index];
 			arg->name = strdup(t->value);
-			printf("we have an arg %s\n", arg->name);
+			// printf("we have an arg %s\n", arg->name);
 			array_push(node->data.function_declaration->arguments, arg);
 			parser->token_index++;
 
@@ -2387,7 +2387,7 @@ void interpreter_expression_data(ast_literal_t* data)
 	} else if (data->type == VALUE_TYPE_STRING) {
 		printf("%s\n", data->string_value);
 	} else {
-		printf("Unknown\n");
+		printf("Unknown (%d)\n", data->type);
 	}
 }
 
@@ -2594,8 +2594,8 @@ ast_literal_t* interpreter_function_run(ast_function_declaration_t* function, ar
 	size_t function_arguments_count = function->arguments == NULL ? 0 : function->arguments->length;
 	size_t arguments_count = arguments == NULL ? 0 : arguments->length;
 
-	printf("Number of function arguments: %zu\n", function_arguments_count);
-	printf("Number of arguments: %zu\n", arguments_count);
+	// printf("Number of function arguments: %zu\n", function_arguments_count);
+	// printf("Number of arguments: %zu\n", arguments_count);
 
 	if (function_arguments_count != arguments_count) {
 		if (arguments_count > function_arguments_count) {
@@ -2607,18 +2607,13 @@ ast_literal_t* interpreter_function_run(ast_function_declaration_t* function, ar
 		return NULL;
 	}
 
-	if (arguments_count > 0) {
-		// Scope entry
-		pushSymbolTable(symbolTableStack);
-	}
-
 	for (size_t i = 0; i < arguments_count; i++) {
-		printf("->arg %zu\n", i);
+		// printf("->arg %zu\n", i);
 		ast_identifier_t* arg_name = function->arguments->data[i];
 		ast_literal_t* arg_value = interpreter_expression((ast_expression_t*) arguments->data[i], interpreter);
 		
-		printf("Create argument variable '%s'\n", arg_name->name);
-		interpreter_expression_data(arg_value);
+		// printf("Create argument variable '%s'\n", arg_name->name);
+		// interpreter_expression_data(arg_value);
 
 		addToSymbolTable(symbolTableStack, arg_name->name, arg_value);
 	}
@@ -2627,11 +2622,6 @@ ast_literal_t* interpreter_function_run(ast_function_declaration_t* function, ar
 
 	if (fn == NULL) {
 		return NULL;
-	}
-
-	if (arguments_count > 0) {
-		// Scope exit
-		popSymbolTable(symbolTableStack);
 	}
 
 	return interpreter_function_run_return(fn->body, fn, interpreter);
@@ -2662,7 +2652,8 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		return NULL;
 	}
 
-	// print_xml_ast_node(func_exists->body, 1);
+	// Scope entry
+	pushSymbolTable(symbolTableStack);
 
 	ast_literal_t* ret = interpreter_function_run(func_exists, node->data.function_call->arguments, interpreter);
 	if (ret == NULL) {
@@ -2672,6 +2663,10 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		default_ret->int_value = 0;
 		return default_ret;
 	}
+
+	// Scope exit
+	popSymbolTable(symbolTableStack);
+
 	return ret;
 }
 

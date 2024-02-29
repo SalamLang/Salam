@@ -2880,7 +2880,8 @@ int main(int argc, char** argv)
 	// print_xml_ast_tree(*(interpreter->parser));
 	// printf("second sign-done\n");
 
-	return 0;
+	// return 0;
+
 	printf("free lexer\n");
 	lexer_free(&lexer);
 	printf("end lexer free\n");

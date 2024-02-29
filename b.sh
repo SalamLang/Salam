@@ -1,24 +1,29 @@
 #!/bin/bash
 
+# Variables
+INPUT_FILE=salam.c
+OUTPUT_FILE=s
+EXAMPLE_FILE=input.salam
+
 # Clear screen
 cls
 clear
 
 # Delete file
-if [ -e "s" ]; then
-    rm s
+if [ -e $OUTPUT_FILE ]; then
+    rm $OUTPUT_FILE
 fi
 
-# Compile sallam.c
-gcc -g -ggdb -o s sallam.c
-# gcc -g -fsanitize=undefined,address -Walloca -o s sallam.c -lefence
+# Compile
+gcc -g -ggdb -o $OUTPUT_FILE $INPUT_FILE
+# gcc -g -fsanitize=undefined,address -Walloca -o s $INPUT_FILE -lefence
 
 # Check if compilation was successful
 if [ $? -eq 0 ]; then
-    # ./s input.sallam
-    LSAN_OPTIONS=verbosity=1:log_threads=1 ./s input.sallam
-    # ASAN_OPTIONS=detect_leaks=1 ./s input.sallam
-    # LSAN_OPTIONS=verbosity=1:log_threads=1:detect_leaks=1 ./s input.sallam
+    # ./$OUTPUT_FILE $EXAMPLE_FILE
+    LSAN_OPTIONS=verbosity=1:log_threads=1 ./$OUTPUT_FILE $EXAMPLE_FILE
+    # ASAN_OPTIONS=detect_leaks=1 ./$OUTPUT_FILE $EXAMPLE_FILE
+    # LSAN_OPTIONS=verbosity=1:log_threads=1:detect_leaks=1 ./$OUTPUT_FILE $EXAMPLE_FILE
 else
     echo "Compilation failed!"
 fi

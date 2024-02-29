@@ -1458,11 +1458,9 @@ ast_node_t* parser_function(parser_t* parser)
 	    printf("Parsing parameters\n");
 
 		while ((*parser->lexer)->tokens->length > parser->token_index && ((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type == TOKEN_TYPE_IDENTIFIER) {
-			ast_identifier_t* arg = malloc(sizeof(ast_identifier_t));
 			token_t* t = (*parser->lexer)->tokens->data[parser->token_index];
-			arg->name = strdup(t->value);
-			// printf("we have an arg %s\n", arg->name);
-			array_push(node->data.function_declaration->arguments, arg);
+			// printf("we have an arg %s\n", t->value);
+			array_push(node->data.function_declaration->arguments, strdup(t->value));
 			parser->token_index++;
 
 			if (parser_token_ifhas(parser, TOKEN_TYPE_COMMA) == false) {
@@ -2135,10 +2133,28 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 
 		case AST_FUNCTION_DECLARATION:
 			printf("<FunctionDeclaration>\n");
-			print_indentation(indent_level + 1);
 
+				print_indentation(indent_level + 1);
 				printf("<Name>%s</Name>\n", node->data.function_declaration->name);
-	
+
+				if (node->data.function_declaration->arguments == NULL || node->data.function_declaration->arguments->length == 0) {
+					print_indentation(indent_level + 1);
+					printf("<Arguments />\n");
+				} else {
+					print_indentation(indent_level + 1);
+					printf("<Arguments>\n");
+
+					for (size_t i = 0; i < node->data.function_declaration->arguments->length; i++) {
+						char* ident = node->data.function_declaration->arguments->data[i];
+
+						print_indentation(indent_level + 2);
+						printf("<Argument>%s</Argument>\n", ident);
+					}
+
+					print_indentation(indent_level + 1);
+					printf("</Arguments>\n");
+				}
+
 				print_xml_ast_node(node->data.function_declaration->body, indent_level + 1);
 
 			print_indentation(indent_level);
@@ -2396,6 +2412,8 @@ ast_statement_return_t* interpreter_statement_return(ast_statement_return_t* stm
 	// printf("Return Statement\n");
 
 	stmt->expression_value = (ast_literal_t*) interpreter_expression(stmt->expression, interpreter);
+	// printf("ret val:");
+	// interpreter_expression_data(stmt->expression_value);
 	// ast_expression_free(&(stmt->expression->data.expression));
 	// stmt->expression->data.expression = NULL;
 	// free(stmt->expression);
@@ -2452,7 +2470,7 @@ ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* int
 
 	ast_literal_t* val = findInSymbolTable(symbolTableStack, expr->data.identifier->name);
 	if (val != NULL) {
-		// printf("Variable found: %s\n", expr->data.identifier->name);
+		printf("Variable found: %s\n", expr->data.identifier->name);
 		return val;
 	} else {
 		printf("Error: Variable not found: %s\n", expr->data.identifier->name);
@@ -2565,6 +2583,8 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 
 ast_literal_t* interpreter_function_run_return(ast_node_t* node, ast_function_declaration_t* function, interpreter_t* interpreter)
 {
+	printf("checking current stmt: %d\n", node->type);
+
 	switch (node->type) {
 		case AST_BLOCK:
 			for (size_t i = 0; i < node->data.block->num_statements; i++) {
@@ -2574,7 +2594,9 @@ ast_literal_t* interpreter_function_run_return(ast_node_t* node, ast_function_de
 			break;
 
 		case AST_STATEMENT_RETURN:
-			return node->data.statement_return->expression->data.literal;
+			printf("we have a ret stmt here...\n");
+			return node->data.statement_return->expression_value;
+			// return node->data.statement_return->expression->data.literal;
 			// return node->data.statement_return->expression_value;
 			break;
 		
@@ -2609,13 +2631,13 @@ ast_literal_t* interpreter_function_run(ast_function_declaration_t* function, ar
 
 	for (size_t i = 0; i < arguments_count; i++) {
 		// printf("->arg %zu\n", i);
-		ast_identifier_t* arg_name = function->arguments->data[i];
+		char* arg_name = function->arguments->data[i];
 		ast_literal_t* arg_value = interpreter_expression((ast_expression_t*) arguments->data[i], interpreter);
 		
-		// printf("Create argument variable '%s'\n", arg_name->name);
+		// printf("Create argument variable '%s'\n", arg_name);
 		// interpreter_expression_data(arg_value);
 
-		addToSymbolTable(symbolTableStack, arg_name->name, arg_value);
+		addToSymbolTable(symbolTableStack, arg_name, arg_value);
 	}
 
 	ast_function_declaration_t* fn = interpreter_function_declaration(function, interpreter);
@@ -2663,6 +2685,9 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		default_ret->int_value = 0;
 		return default_ret;
 	}
+
+	printf("final ret val: ");
+	interpreter_expression_data(ret);
 
 	// Scope exit
 	popSymbolTable(symbolTableStack);

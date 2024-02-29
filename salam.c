@@ -473,8 +473,8 @@ ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence);
 
 enum {
 	PRECEDENCE_LOWEST = 0,    // START FROM HERE
-	PRECEDENCE_HIGHEST = 1,   // =
-	PRECEDENCE_ANDOR = 2,     // AND OR
+	PRECEDENCE_ANDOR = 1,     // AND OR
+	PRECEDENCE_HIGHEST = 2,   // =
 	PRECEDENCE_MULTIPY = 3,   // / *
 	PRECEDENCE_SUM = 4,       // + -
 };

@@ -1126,8 +1126,8 @@ void ast_expression_free_assignment(ast_expression_t** expr)
 
 void ast_expression_free_binary(ast_expression_t** expr)
 {
-	printf("=============>\n");
-	printf("AST_EXPRESSION_BINARY\n");
+	printf("ast_expression_free_binary\n");
+
 	if ((*expr)->data.binary_op != NULL) {
 		if ((*expr)->data.binary_op->left != NULL) {
 			ast_expression_free(&((*expr)->data.binary_op->left));
@@ -1152,11 +1152,12 @@ void ast_expression_free_binary(ast_expression_t** expr)
 void ast_expression_free(ast_expression_t** expr)
 {
 	printf("ast_expression_free\n");
-	printf("---- expr type: %d\n", (*expr)->type);
 
 	if (expr == NULL || *expr == NULL) {
 		return;
 	}
+
+	printf("---- expr type: %d\n", (*expr)->type);
 
 	switch ((*expr)->type) {
 		case AST_EXPRESSION_LITERAL:
@@ -1192,8 +1193,7 @@ void ast_node_free(ast_node_t** node)
 		return;
 	}
 
-	// ast_expression_free_data
-	// printf("node type: %d\n", (*node)->type);
+	printf("node type: %d\n", (*node)->type);
 
 	switch ((*node)->type) {
 		case AST_STATEMENT_UNTIL:
@@ -1250,13 +1250,13 @@ void ast_node_free(ast_node_t** node)
 		case AST_FUNCTION_DECLARATION:
 			printf("free ast function\n");
 			if ((*node)->data.function_declaration != NULL) {
-				printf("free function name\n");
+				// printf("free function name\n");
 				if ((*node)->data.function_declaration->name != NULL) {
 					free((*node)->data.function_declaration->name);
 					(*node)->data.function_declaration->name = NULL;
 				}
 				
-				printf("free function body\n");
+				// printf("free function body\n");
 				if ((*node)->data.function_declaration->body != NULL) {
 					ast_node_free(&((*node)->data.function_declaration->body));
 					(*node)->data.function_declaration->body = NULL;
@@ -1275,10 +1275,10 @@ void ast_node_free(ast_node_t** node)
 					(*node)->data.statement_return->expression = NULL;
 				}
 
-				// if ((*node)->data.statement_return->expression_value != NULL) {
-				// 	ast_expression_free_data(&((*node)->data.statement_return->expression_value));
-				// 	(*node)->data.statement_return->expression_value = NULL;
-				// }
+				if ((*node)->data.statement_return->expression_value != NULL) {
+					ast_expression_free_data(&((*node)->data.statement_return->expression_value));
+					(*node)->data.statement_return->expression_value = NULL;
+				}
 
 				free((*node)->data.statement_return);
 				(*node)->data.statement_return = NULL;
@@ -1293,10 +1293,10 @@ void ast_node_free(ast_node_t** node)
 					(*node)->data.statement_print->expression = NULL;
 				}
 
-				// if ((*node)->data.statement_print->expression_value != NULL) {
-				// 	ast_expression_free_data(&((*node)->data.statement_print->expression_value));
-				// 	(*node)->data.statement_print->expression_value = NULL;
-				// }
+				if ((*node)->data.statement_print->expression_value != NULL) {
+					ast_expression_free_data(&((*node)->data.statement_print->expression_value));
+					(*node)->data.statement_print->expression_value = NULL;
+				}
 
 				free((*node)->data.statement_print);
 				(*node)->data.statement_print = NULL;
@@ -1306,11 +1306,11 @@ void ast_node_free(ast_node_t** node)
 		case AST_BLOCK:
 			printf("free ast block\n");
 			if ((*node)->data.block != NULL) {
-				printf("free block of func\n");
+				// printf("free block of func\n");
 				if ((*node)->data.block->statements != NULL) {
-					printf("free stmts of func\n");
+					// printf("free stmts of func\n");
 					for (size_t i = 0; i < (*node)->data.block->num_statements; i++) {
-						printf("free one of stmt of func\n");
+						// printf("free one of stmt of func\n");
 						ast_node_free(&((*node)->data.block->statements[i]));
 						(*node)->data.block->statements[i] = NULL;
 					}
@@ -1326,7 +1326,7 @@ void ast_node_free(ast_node_t** node)
 		case AST_EXPRESSION:
 			printf("free ast expr AST_EXPRESSION\n");
 			if ((*node)->data.expression != NULL) {
-				printf("AST_EXPRESSION is not null so lets do it\n");
+				// printf("AST_EXPRESSION is not null so lets do it\n");
 				ast_expression_free(&((*node)->data.expression));
 				(*node)->data.expression = NULL;
 			}

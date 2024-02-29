@@ -44,7 +44,7 @@ typedef struct ast_literal_t {
 		ast_argument_t* argument_value;
 	};
 
-	struct ast_expression_t* main;
+	struct ast_expression_t* main; // To have a reference into parser ast so we can free it later after interpreter
 } ast_literal_t;
 
 typedef struct SymbolTableEntry {
@@ -712,7 +712,7 @@ bool is_alpha(wchar_t ch)
 {
 	return (
 		ch >= L'آ' && ch <= L'ی' || ch == L'_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
-	) && !(ch == '+' || ch == '-' || ch == '*' || ch == '/' || ch == '=' || ch == '>' || ch == '<' || ch == ',');
+	) && !(ch == '+' || ch == '-' || ch == '*' || ch == '/' || ch == '=' || ch == '>' || ch == '<' || ch == ','	);
 }
 
 bool is_ident(wchar_t ch)
@@ -2258,20 +2258,20 @@ ast_node_t* interpreter_statement_if(ast_statement_if_t* node, interpreter_t* in
 	// printf("If\n");
 
 	if (interpreter_expression_truly(node->condition, interpreter)) {
-		return node->block;
-		// return interpreter_interpret_once(node->block, interpreter);
+		// return node->block;
+		return interpreter_interpret_once(node->block, interpreter);
 	} else {
 		for (size_t i = 0; i < node->num_elseifs; i++) {
 			ast_node_t* elseif = (ast_node_t*) node->elseifs[i];
 			if (interpreter_expression_truly(elseif->data.statement_if->condition, interpreter)) {
-				return elseif->data.statement_if->block;
-				// return interpreter_interpret_once(elseif->data.statement_if->block, interpreter);
+				// return elseif->data.statement_if->block;
+				return interpreter_interpret_once(elseif->data.statement_if->block, interpreter);
 			}
 		}
 
 		if (node->else_block != NULL) {
-			return node->else_block;
-			// return interpreter_interpret_once(node->else_block, interpreter);
+			// return node->else_block;
+			return interpreter_interpret_once(node->else_block, interpreter);
 		}
 	}
 
@@ -2472,7 +2472,7 @@ ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* int
 
 	ast_literal_t* val = findInSymbolTable(symbolTableStack, expr->data.identifier->name);
 	if (val != NULL) {
-		printf("Variable found: %s\n", expr->data.identifier->name);
+		// printf("Variable found: %s\n", expr->data.identifier->name);
 		return val;
 	} else {
 		printf("Error: Variable not found: %s\n", expr->data.identifier->name);
@@ -2688,8 +2688,8 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		return default_ret;
 	}
 
-	printf("final ret val: ");
-	interpreter_expression_data(ret);
+	// printf("final ret val: ");
+	// interpreter_expression_data(ret);
 
 	// Scope exit
 	popSymbolTable(symbolTableStack);
@@ -2702,7 +2702,7 @@ bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpr
 	// printf("Truly\n");
 
 	ast_literal_t* res = interpreter_expression(expr, interpreter);
-	ast_expression_free_data(&(res));
+	// ast_expression_free(&(expr));
 	if (res->type == VALUE_TYPE_BOOL) {
 		return res->bool_value;
 	} else if (res->type == VALUE_TYPE_INT) {
@@ -2862,6 +2862,13 @@ int main(int argc, char** argv)
 
 	interpreter_t* interpreter = interpreter_create(&parser);
 	interpreter_interpret(interpreter);
+
+	printf("====================================\n");
+	printf("DONE\n");
+
+	// print_xml_ast_tree(parser);
+
+	// printf("====================================\n");
 
 	// printf("start signing...\n");
 	// print_xml_ast_tree(parser);

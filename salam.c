@@ -955,19 +955,19 @@ void lexer_lex(lexer_t* lexer)
 
 void help()
 {
-	printf("Welcome to Sallam Programming Language!\n");
-	printf("Sallam is the first Persian/Iranian computer scripting language.\n");
+	printf("Welcome to Salam Programming Language!\n");
+	printf("Salam is the first Persian/Iranian computer scripting language.\n");
 	printf("\n");
 
 	printf("Usage:\n");
-	printf("  salam <filename>\t\t\t# Execute a Sallam script\n");
+	printf("  salam <filename>\t\t\t# Execute a Salam script\n");
 	printf("\n");
 
 	printf("Example:\n");
-	printf("  salam my_script.salam\t\t# Run the Sallam script 'my_script.salam'\n");
+	printf("  salam my_script.salam\t\t# Run the Salam script 'my_script.salam'\n");
 	printf("\n");
 
-	printf("Feel free to explore and create using Sallam!\n");
+	printf("Feel free to explore and create using Salam!\n");
 	printf("For more information, visit: https://salam-lang.js.org\n");
 	printf("\n");
 }

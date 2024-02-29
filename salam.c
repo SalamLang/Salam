@@ -1459,7 +1459,9 @@ ast_node_t* parser_function(parser_t* parser)
 
 		while ((*parser->lexer)->tokens->length > parser->token_index && ((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type == TOKEN_TYPE_IDENTIFIER) {
 			ast_identifier_t* arg = malloc(sizeof(ast_identifier_t));
-			arg->name = strdup((*parser->lexer)->tokens->data[parser->token_index]);
+			token_t* t = (*parser->lexer)->tokens->data[parser->token_index];
+			arg->name = strdup(t->value);
+			printf("we have an arg %s\n", arg->name);
 			array_push(node->data.function_declaration->arguments, arg);
 			parser->token_index++;
 
@@ -2585,8 +2587,9 @@ ast_literal_t* interpreter_function_run_return(ast_node_t* node, ast_function_de
 
 ast_literal_t* interpreter_function_run(ast_function_declaration_t* function, array_t* arguments, interpreter_t* interpreter)
 {
-	// Scope entry
-	pushSymbolTable(symbolTableStack);
+	if (function == NULL) {
+		return NULL;
+	}
 
 	size_t function_arguments_count = function->arguments == NULL ? 0 : function->arguments->length;
 	size_t arguments_count = arguments == NULL ? 0 : arguments->length;
@@ -2604,9 +2607,18 @@ ast_literal_t* interpreter_function_run(ast_function_declaration_t* function, ar
 		return NULL;
 	}
 
+	if (arguments_count > 0) {
+		// Scope entry
+		pushSymbolTable(symbolTableStack);
+	}
+
 	for (size_t i = 0; i < arguments_count; i++) {
+		printf("->arg %zu\n", i);
 		ast_identifier_t* arg_name = function->arguments->data[i];
 		ast_literal_t* arg_value = interpreter_expression((ast_expression_t*) arguments->data[i], interpreter);
+		
+		printf("Create argument variable '%s'\n", arg_name->name);
+		interpreter_expression_data(arg_value);
 
 		addToSymbolTable(symbolTableStack, arg_name->name, arg_value);
 	}
@@ -2617,8 +2629,10 @@ ast_literal_t* interpreter_function_run(ast_function_declaration_t* function, ar
 		return NULL;
 	}
 
-	// Scope exit
-	popSymbolTable(symbolTableStack);
+	if (arguments_count > 0) {
+		// Scope exit
+		popSymbolTable(symbolTableStack);
+	}
 
 	return interpreter_function_run_return(fn->body, fn, interpreter);
 }

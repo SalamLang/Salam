@@ -368,7 +368,6 @@ typedef enum {
 	AST_STATEMENT_PRINT,
 	AST_STATEMENT_IF,
 	AST_STATEMENT_UNTIL,
-	TOKEN_TYPE_UNTIL,
 	AST_STATEMENT_ELSEIF,
 	AST_BLOCK,
 	AST_EXPRESSION,
@@ -2309,6 +2308,18 @@ interpreter_t* interpreter_create(parser_t** parser)
 	interpreter_t* interpreter = (interpreter_t*) malloc(sizeof(interpreter_t));
 	interpreter->parser = parser;
 	return interpreter;
+}
+
+ast_node_t* interpreter_statement_until(ast_statement_until_t* node, interpreter_t* interpreter)
+{
+	// printf("Until\n");
+
+	while (interpreter_expression_truly(node->condition, interpreter) == true) {
+		// return node->block;
+		return interpreter_interpret_once(node->block, interpreter);
+	}
+
+	return NULL;
 }
 
 ast_node_t* interpreter_statement_if(ast_statement_if_t* node, interpreter_t* interpreter)

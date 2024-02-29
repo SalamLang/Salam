@@ -2940,9 +2940,9 @@ int main(int argc, char** argv)
 	printf("====================================\n");
 	printf("DONE\n");
 
-	// print_xml_ast_tree(parser);
+	print_xml_ast_tree(parser);
 
-	// printf("====================================\n");
+	printf("====================================\n");
 
 	// printf("start signing...\n");
 	// print_xml_ast_tree(parser);

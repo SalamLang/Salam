@@ -710,7 +710,9 @@ bool is_number(wchar_t ch)
 
 bool is_alpha(wchar_t ch)
 {
-	return ch >= L'آ' && ch <= L'ی' || ch == L'_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+	return (
+		ch >= L'آ' && ch <= L'ی' || ch == L'_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+	) && !(ch == '+' || ch == '-' || ch == '*' || ch == '/' || ch == '=' || ch == '>' || ch == '<' || ch == ',');
 }
 
 bool is_ident(wchar_t ch)

@@ -2173,17 +2173,20 @@ ast_node_t* interpreter_statement_if(ast_statement_if_t* node, interpreter_t* in
 	// printf("If\n");
 
 	if (interpreter_expression_truly(node->condition, interpreter)) {
-		return interpreter_interpret_once(node->block, interpreter);
+		return node->block;
+		// return interpreter_interpret_once(node->block, interpreter);
 	} else {
 		for (size_t i = 0; i < node->num_elseifs; i++) {
 			ast_node_t* elseif = (ast_node_t*) node->elseifs[i];
 			if (interpreter_expression_truly(elseif->data.statement_if->condition, interpreter)) {
-				return interpreter_interpret_once(elseif->data.statement_if->block, interpreter);
+				return elseif->data.statement_if->block;
+				// return interpreter_interpret_once(elseif->data.statement_if->block, interpreter);
 			}
 		}
 
 		if (node->else_block != NULL) {
-			return interpreter_interpret_once(node->else_block, interpreter);
+			return node->else_block;
+			// return interpreter_interpret_once(node->else_block, interpreter);
 		}
 	}
 
@@ -2211,7 +2214,8 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 			break;
 		
 		case AST_STATEMENT_IF:
-			return interpreter_statement_if(node->data.statement_if, interpreter);
+			node = interpreter_statement_if(node->data.statement_if, interpreter);
+			return node;
 			break;
 
 		case AST_STATEMENT_PRINT:

@@ -475,7 +475,8 @@ enum {
 	PRECEDENCE_LOWEST = 0,    // START FROM HERE
 	PRECEDENCE_HIGHEST = 1,   // =
 	PRECEDENCE_ANDOR = 2,     // AND OR
-	PRECEDENCE_SUM = 3,       // + -
+	PRECEDENCE_MULTIPY = 3,   // / *
+	PRECEDENCE_SUM = 4,       // + -
 };
 
 token_info_t token_infos[] = {
@@ -490,6 +491,8 @@ token_info_t token_infos[] = {
 	[TOKEN_TYPE_AND] = {PRECEDENCE_ANDOR, NULL, led_and},
 	[TOKEN_TYPE_OR] = {PRECEDENCE_ANDOR, NULL, led_or},
 	[TOKEN_TYPE_MINUS] = {PRECEDENCE_SUM, NULL, led_plus_minus},
+	[TOKEN_TYPE_MULTIPY] = {PRECEDENCE_MULTIPY, NULL, led_plus_minus},
+	[TOKEN_TYPE_DIVIDE] = {PRECEDENCE_MULTIPY, NULL, led_plus_minus},
 	[TOKEN_TYPE_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal},
 	[TOKEN_TYPE_EQUAL_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
 };
@@ -528,6 +531,7 @@ char* token_type2str(token_type_t type)
 		case TOKEN_TYPE_PLUS: return "PLUS";
 		case TOKEN_TYPE_DIVIDE: return "DIVIDE";
 		case TOKEN_TYPE_MINUS: return "MINUS";
+		case TOKEN_TYPE_MULTIPY: "MULTIPY";
 		case TOKEN_TYPE_COMMA: return "COMMA";
 		case TOKEN_TYPE_EQUAL: return "EQUAL";
 		case TOKEN_TYPE_EQUAL_EQUAL: return "EQUAL_EQUAL";
@@ -1448,9 +1452,8 @@ ast_node_t* parser_function(parser_t* parser)
 
 	node->data.function_declaration = (ast_function_declaration_t*) malloc(sizeof(ast_function_declaration_t));
 	node->data.function_declaration->name = strdup(name->value);
-	node->data.function_declaration->body = parser_block(parser);
 	node->data.function_declaration->arguments = array_create(3);
-
+	
 	if (parser_token_skip_ifhas(parser, TOKEN_TYPE_PARENTHESE_OPEN)) {
 	    printf("Parsing parameters\n");
 
@@ -1458,10 +1461,17 @@ ast_node_t* parser_function(parser_t* parser)
 			ast_identifier_t* arg = malloc(sizeof(ast_identifier_t));
 			arg->name = strdup((*parser->lexer)->tokens->data[parser->token_index]);
 			array_push(node->data.function_declaration->arguments, arg);
+			parser->token_index++;
+
+			if (parser_token_ifhas(parser, TOKEN_TYPE_COMMA) == false) {
+				break;
+			}
 	    }
 
 		parser_token_eat_nodata(parser, TOKEN_TYPE_PARENTHESE_CLOSE);
 	}
+
+	node->data.function_declaration->body = parser_block(parser);
 
 	if (node->data.function_declaration->arguments->length == 0) {
 		array_free(node->data.function_declaration->arguments);

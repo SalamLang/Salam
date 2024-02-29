@@ -960,15 +960,15 @@ void help()
 	printf("\n");
 
 	printf("Usage:\n");
-	printf("  sallam <filename>\t\t\t# Execute a Sallam script\n");
+	printf("  salam <filename>\t\t\t# Execute a Sallam script\n");
 	printf("\n");
 
 	printf("Example:\n");
-	printf("  sallam my_script.sallam\t\t# Run the Sallam script 'my_script.sallam'\n");
+	printf("  salam my_script.salam\t\t# Run the Sallam script 'my_script.salam'\n");
 	printf("\n");
 
 	printf("Feel free to explore and create using Sallam!\n");
-	printf("For more information, visit: https://sallam-lang.js.org\n");
+	printf("For more information, visit: https://salam-lang.js.org\n");
 	printf("\n");
 }
 
@@ -2566,7 +2566,6 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 	}
 	return ret;
 }
-
 
 bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter)
 {

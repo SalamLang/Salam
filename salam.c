@@ -2583,7 +2583,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 
 ast_literal_t* interpreter_function_run_return(ast_node_t* node, ast_function_declaration_t* function, interpreter_t* interpreter)
 {
-	printf("checking current stmt: %d\n", node->type);
+	// printf("checking current stmt: %d\n", node->type);
 
 	switch (node->type) {
 		case AST_BLOCK:
@@ -2594,7 +2594,7 @@ ast_literal_t* interpreter_function_run_return(ast_node_t* node, ast_function_de
 			break;
 
 		case AST_STATEMENT_RETURN:
-			printf("we have a ret stmt here...\n");
+			// printf("we have a ret stmt here...\n");
 			return node->data.statement_return->expression_value;
 			// return node->data.statement_return->expression->data.literal;
 			// return node->data.statement_return->expression_value;

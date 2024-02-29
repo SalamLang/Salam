@@ -968,7 +968,7 @@ void help()
 	printf("\n");
 
 	printf("Feel free to explore and create using Salam!\n");
-	printf("For more information, visit: https://salam-lang.js.org\n");
+	printf("For more information, visit: https://salamlang.ir\n");
 	printf("\n");
 }
 

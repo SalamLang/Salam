@@ -15,7 +15,7 @@ if [ -e $OUTPUT_FILE ]; then
 fi
 
 # Compile
-# gcc -g -ggdb -o $OUTPUT_FILE $INPUT_FILE
+gcc -g -ggdb -o $OUTPUT_FILE $INPUT_FILE
 gcc -g -fsanitize=undefined,address -Walloca -o s $INPUT_FILE -lefence
 
 # Check if compilation was successful

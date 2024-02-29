@@ -216,6 +216,7 @@ typedef enum {
 	TOKEN_TYPE_RETURN, // برگشت
 	TOKEN_TYPE_PRINT, // نمایش
 	TOKEN_TYPE_IF, // اگر
+	TOKEN_TYPE_UNTIL, // تا
 	TOKEN_TYPE_TRUE, // درست
 	TOKEN_TYPE_FALSE, // غلط
 	TOKEN_TYPE_ELSEIF, // واگرنه
@@ -260,6 +261,7 @@ keyword_mapping_t keyword_mapping[] = {
 	{"نمایش", TOKEN_TYPE_PRINT},
 	{"واگرنه", TOKEN_TYPE_ELSEIF},
 	{"اگر", TOKEN_TYPE_IF},
+	{"تا", TOKEN_TYPE_UNTIL},
 	{"درست", TOKEN_TYPE_TRUE},
 	{"غلط", TOKEN_TYPE_FALSE},
 	{"و", TOKEN_TYPE_AND},
@@ -365,12 +367,17 @@ typedef enum {
 	AST_STATEMENT_RETURN,
 	AST_STATEMENT_PRINT,
 	AST_STATEMENT_IF,
+	AST_STATEMENT_UNTIL,
+	TOKEN_TYPE_UNTIL,
 	AST_STATEMENT_ELSEIF,
 	AST_BLOCK,
 	AST_EXPRESSION,
 } ast_node_type_t;
 
-struct ast_statement_if_t;
+typedef struct {
+	ast_expression_t* condition;
+	struct ast_node* block;
+} ast_statement_until_t;
 
 typedef struct {
 	ast_expression_t* condition;
@@ -389,6 +396,7 @@ typedef struct ast_node {
 		ast_block_t* block;
 		ast_expression_t* expression;
 		ast_statement_if_t* statement_if;
+		ast_statement_until_t* statement_until;
 		ast_function_call_t* function_call;
 	} data;
 } ast_node_t;
@@ -1186,12 +1194,30 @@ void ast_node_free(ast_node_t** node)
 	}
 
 	// ast_expression_free_data
-	printf("node type: %d\n", (*node)->type);
+	// printf("node type: %d\n", (*node)->type);
 
 	switch ((*node)->type) {
+		case AST_STATEMENT_UNTIL:
+			// printf("free ast until\n");
+			if ((*node)->data.statement_until != NULL) {
+				if ((*node)->data.statement_until->condition != NULL) {
+					ast_expression_free(&((*node)->data.statement_until->condition));
+					(*node)->data.statement_until->condition = NULL;
+				}
+
+				if ((*node)->data.statement_until->block != NULL) {
+					ast_node_free(&((*node)->data.statement_until->block));
+					(*node)->data.statement_until->block = NULL;
+				}
+
+				free((*node)->data.statement_until);
+				(*node)->data.statement_until = NULL;
+			}
+			break;
+
 		case AST_STATEMENT_IF:
 		case AST_STATEMENT_ELSEIF:
-			printf("free ast if/else\n");
+			// printf("free ast if/else\n");
 			if ((*node)->data.statement_if != NULL) {
 				if ((*node)->data.statement_if->condition != NULL) {
 					ast_expression_free(&((*node)->data.statement_if->condition));
@@ -1585,6 +1611,20 @@ ast_node_t* parser_statement_if(parser_t* parser) {
 			break;
 		}
 	}
+
+	return node;
+}
+
+ast_node_t* parser_statement_until(parser_t* parser) {
+	printf("Parsing statement until\n");
+
+	parser->token_index++; // Eating UNTIL token
+
+	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
+	node->type = AST_STATEMENT_UNTIL;
+	node->data.statement_until = (ast_statement_until_t*) malloc(sizeof(ast_statement_until_t));
+	node->data.statement_until->condition = parser_expression(parser);
+	node->data.statement_until->block = parser_block(parser);
 
 	return node;
 }
@@ -2090,6 +2130,24 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 	print_indentation(indent_level);
 
 	switch (node->type) {
+		case AST_STATEMENT_UNTIL:
+			printf("<StatementUntil>\n");
+
+				print_indentation(indent_level + 1);
+				printf("<Condition>\n");
+
+					print_indentation(indent_level + 2);
+					print_xml_ast_expression(node->data.statement_if->condition, indent_level + 2);
+
+				print_indentation(indent_level + 1);
+				printf("</Condition>\n");
+
+				print_xml_ast_node(node->data.statement_if->block, indent_level + 1);
+
+			print_indentation(indent_level);
+			printf("</StatementUntil>\n");
+			break;
+
 		case AST_STATEMENT_IF:
 		case AST_STATEMENT_ELSEIF:
 			printf("<StatementIf>\n");
@@ -2300,6 +2358,11 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 		
 		case AST_STATEMENT_IF:
 			node = interpreter_statement_if(node->data.statement_if, interpreter);
+			return node;
+			break;
+
+		case AST_STATEMENT_UNTIL:
+			node = interpreter_statement_until(node->data.statement_until, interpreter);
 			return node;
 			break;
 

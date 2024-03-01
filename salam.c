@@ -2222,6 +2222,7 @@ void parser_parse(parser_t* parser)
 		switch (current_token->type) {
 			case TOKEN_TYPE_EOF:
 				parser->token_index++;
+				return;
 				break;
 			
 			case TOKEN_TYPE_FUNCTION:
@@ -3237,12 +3238,24 @@ int main(int argc, char** argv)
 {
 	setlocale(LC_ALL, "");
 
-	if (argc == 1 || argc > 2) {
+	if (argc == 1 || argc > 3) {
 		help();
 		return 0;
 	}
 
-	char* file_data = file_read(argv[1]);
+	if (argc == 3 && strcmp(argv[1], "--code") != 0) {
+		help();
+		return 0;
+	}
+
+	char* file_data;
+	if (argc == 2) {
+		file_data = file_read(argv[1]);
+	} else {
+		file_data = argv[2];
+	}
+
+	printf("%s\n============", file_data);
 
 	lexer_t* lexer = lexer_create(file_data);
 	lexer_lex(lexer);

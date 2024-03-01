@@ -912,6 +912,7 @@ void read_comment_singleline(lexer_t* lexer)
         if (lexer->data[lexer->index] == '\n' || lexer->data[lexer->index] == '\0') {
             break;
 		}
+		lexer->index++;
     }
 }
 
@@ -919,14 +920,18 @@ void read_comment_multiline(lexer_t* lexer)
 {
     // Eating until finding */
 	// EOF is not allowed
+
+	// TODO: Eating first character lexer->index++;
     while (1) {
 		if (lexer->data[lexer->index] == '\0') {
 			printf("Error: you have to close your multiline comments and it's not allowed to ignore and leave your multiline comment non-closed!\n");
 			exit(EXIT_FAILURE);
 			break;
 		} else if (lexer->data[lexer->index - 1] == '*' && lexer->data[lexer->index] == '/') {
+			lexer->index++;
             break;
 		}
+		lexer->index++;
     }
 }
 

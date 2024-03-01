@@ -86,7 +86,7 @@ typedef enum {
 
 	TOKEN_TYPE_PLUS, // +
 	TOKEN_TYPE_MINUS, // -
-	TOKEN_TYPE_MULTIPY, // *
+	TOKEN_TYPE_MULTIPLY, // *
 	TOKEN_TYPE_DIVIDE, // /
 
 	TOKEN_TYPE_COMMA, // ,
@@ -291,7 +291,7 @@ enum {
 	PRECEDENCE_LOWEST = 0,    // START FROM HERE
 	PRECEDENCE_ANDOR = 1,     // AND OR
 	PRECEDENCE_HIGHEST = 2,   // =
-	PRECEDENCE_MULTIPY = 3,   // / *
+	PRECEDENCE_MULTIPLY = 3,   // / *
 	PRECEDENCE_SUM = 4,       // + -
 };
 
@@ -413,8 +413,8 @@ token_info_t token_infos[] = {
 	[TOKEN_TYPE_AND] = {PRECEDENCE_ANDOR, NULL, led_and},
 	[TOKEN_TYPE_OR] = {PRECEDENCE_ANDOR, NULL, led_or},
 	[TOKEN_TYPE_MINUS] = {PRECEDENCE_SUM, NULL, led_plus_minus},
-	[TOKEN_TYPE_MULTIPY] = {PRECEDENCE_MULTIPY, NULL, led_plus_minus},
-	[TOKEN_TYPE_DIVIDE] = {PRECEDENCE_MULTIPY, NULL, led_plus_minus},
+	[TOKEN_TYPE_MULTIPLY] = {PRECEDENCE_MULTIPLY, NULL, led_plus_minus},
+	[TOKEN_TYPE_DIVIDE] = {PRECEDENCE_MULTIPLY, NULL, led_plus_minus},
 
 	[TOKEN_TYPE_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal},
 
@@ -655,7 +655,7 @@ char* token_type2str(token_type_t type)
 		case TOKEN_TYPE_PLUS: return "PLUS";
 		case TOKEN_TYPE_DIVIDE: return "DIVIDE";
 		case TOKEN_TYPE_MINUS: return "MINUS";
-		case TOKEN_TYPE_MULTIPY: return "MULTIPY";
+		case TOKEN_TYPE_MULTIPLY: return "MULTIPLY";
 		case TOKEN_TYPE_COMMA: return "COMMA";
 		case TOKEN_TYPE_EQUAL: return "EQUAL";
 		case TOKEN_TYPE_EQUAL_EQUAL: return "EQUAL_EQUAL";
@@ -1091,7 +1091,7 @@ void lexer_lex(lexer_t* lexer)
 			token_t* t = token_create(TOKEN_TYPE_PLUS, "+", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		} else if (current_wchar == '*') {
-			token_t* t = token_create(TOKEN_TYPE_MULTIPY, "*", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+			token_t* t = token_create(TOKEN_TYPE_MULTIPLY, "*", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		} else if (current_wchar == '/') {
 			if (lexer->index < lexer->length && lexer->data[lexer->index] == L'/') {

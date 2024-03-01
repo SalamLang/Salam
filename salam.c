@@ -406,7 +406,6 @@ token_info_t token_infos[] = {
 	[TOKEN_TYPE_TRUE] = {PRECEDENCE_LOWEST, nud_bool, NULL},
 	[TOKEN_TYPE_FALSE] = {PRECEDENCE_LOWEST, nud_bool, NULL},
 	[TOKEN_TYPE_NUMBER] = {PRECEDENCE_LOWEST, nud_number, NULL},
-	[TOKEN_TYPE_NUMBER] = {PRECEDENCE_LOWEST, nud_number, NULL},
 	[TOKEN_TYPE_IDENTIFIER] = {PRECEDENCE_LOWEST, nud_identifier, NULL},
 	[TOKEN_TYPE_STRING] = {PRECEDENCE_LOWEST, nud_string, NULL},
 	[TOKEN_TYPE_PARENTHESE_OPEN] = {PRECEDENCE_LOWEST, nud_parentheses, NULL},
@@ -656,7 +655,7 @@ char* token_type2str(token_type_t type)
 		case TOKEN_TYPE_PLUS: return "PLUS";
 		case TOKEN_TYPE_DIVIDE: return "DIVIDE";
 		case TOKEN_TYPE_MINUS: return "MINUS";
-		case TOKEN_TYPE_MULTIPY: "MULTIPY";
+		case TOKEN_TYPE_MULTIPY: return "MULTIPY";
 		case TOKEN_TYPE_COMMA: return "COMMA";
 		case TOKEN_TYPE_EQUAL: return "EQUAL";
 		case TOKEN_TYPE_EQUAL_EQUAL: return "EQUAL_EQUAL";
@@ -1201,7 +1200,7 @@ void ast_expression_free_data(ast_literal_t** val)
 	if ((*val)->type == VALUE_TYPE_STRING) {
 		printf("has string\n");
 		printf("%s\n", (*val)->string_value);
-		if ((*val)->string_value != "\0" && (*val)->string_value != NULL) {
+		if (strcmp((*val)->string_value, "\0") != 0 && (*val)->string_value != NULL) {
 			free((*val)->string_value);
 			(*val)->string_value = NULL;
 		}
@@ -1379,6 +1378,10 @@ void ast_expression_free(ast_expression_t** expr)
 		case AST_EXPRESSION_BINARY:
 			ast_expression_free_binary(expr);
 			break;
+		
+		case AST_EXPRESSION_VALUE:
+			// Ignore
+			break;
 	}
 
 	free(*expr);
@@ -1396,6 +1399,12 @@ void ast_node_free(ast_node_t** node)
 	printf("node type: %d\n", (*node)->type);
 
 	switch ((*node)->type) {
+		case AST_STATEMENT_CONTINUE:
+			break;
+
+		case AST_STATEMENT_BREAK:
+			break;
+
 		case AST_STATEMENT_UNTIL:
 			// printf("free ast until\n");
 			if ((*node)->data.statement_until != NULL) {
@@ -2185,6 +2194,9 @@ void parser_parse(parser_t* parser)
 		return;
 	}
 
+	ast_node_t* expression_node;
+	ast_node_t* function_node;
+
 	while (parser->token_index < (*parser->lexer)->tokens->length) {
 		token_t* current_token = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
 
@@ -2194,7 +2206,7 @@ void parser_parse(parser_t* parser)
 				break;
 			
 			case TOKEN_TYPE_FUNCTION:
-				ast_node_t* function_node = parser_function(parser);
+				function_node = parser_function(parser);
 				if (parser->functions && function_node != NULL) {
 					array_push(parser->functions, function_node);
 				}
@@ -2202,7 +2214,7 @@ void parser_parse(parser_t* parser)
 
 			default:
 				if (parser_expression_has(parser)) {
-					ast_node_t* expression_node = malloc(sizeof(ast_node_t));
+					expression_node = malloc(sizeof(ast_node_t));
 					expression_node->type = AST_EXPRESSION;
 					expression_node->data.expression = parser_expression(parser);
 					if (parser->expressions && expression_node != NULL) {

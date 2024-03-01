@@ -2668,7 +2668,14 @@ ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* int
 {
 	// printf("Variable: %s\n", expr->data.identifier->name);
 
-	ast_literal_t* val = findInSymbolTable(symbolTableStack, expr->data.identifier->name, true);
+	ast_literal_t* val;
+
+	if (interpreter->is_global_scope == true) {
+		val = findInSymbolTable(symbolGlobalTableStack, expr->data.identifier->name, false);
+	} else {
+		val = findInSymbolTable(symbolTableStack, expr->data.identifier->name, true);
+	}
+
 	if (val != NULL) {
 		return val;
 	} else {

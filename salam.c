@@ -776,7 +776,7 @@ wchar_t read_token(lexer_t* lexer)
 	wchar_t current_char;
 	int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
 	if (char_size < 0) {
-		printf("Syntax Error: invalid unicode character\n");
+		printf("Syntax Error: read token - invalid unicode character\n");
 		exit(EXIT_FAILURE);
 		return 0;
 	}
@@ -802,7 +802,7 @@ wchar_t unread_token(lexer_t* lexer)
 	wchar_t current_char;
 	int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
 	if (char_size < 0) {
-		printf("Syntax Error: invalid unicode character\n");
+		printf("Syntax Error: nuread - invalid unicode character\n");
 		exit(EXIT_FAILURE);
 		return 0;
 	}
@@ -1063,7 +1063,7 @@ parser_t* parser_create(lexer_t** lexer)
 	parser->lexer = lexer;
 	parser->token_index = 0;
 	parser->functions = array_create(5);
-	parser->expressions = NULL;// = array_create(5);
+	parser->expressions = array_create(5);
 
 	return parser;
 }
@@ -1418,20 +1418,20 @@ void parser_free(parser_t** parser)
 		(*parser)->functions = NULL;
 	}
 
-	// if ((*parser)->expressions != NULL) {
-	// 	if ((*parser)->expressions->data != NULL) {
-	// 		for (size_t i = 0; i < (*parser)->expressions->length; i++) {
-	// 			ast_node_free((ast_node_t**) &((*parser)->expressions->data[i]));
-	// 			(*parser)->expressions->data[i] = NULL;
-	// 		}
+	if ((*parser)->expressions != NULL) {
+		if ((*parser)->expressions->data != NULL) {
+			for (size_t i = 0; i < (*parser)->expressions->length; i++) {
+				ast_node_free((ast_node_t**) &((*parser)->expressions->data[i]));
+				(*parser)->expressions->data[i] = NULL;
+			}
 
-	// 		free((*parser)->functions->data);
-	// 		(*parser)->functions->data = NULL;
-	// 	}
+			free((*parser)->functions->data);
+			(*parser)->functions->data = NULL;
+		}
 
-	// 	free((*parser)->expressions);
-	// 	(*parser)->expressions = NULL;
-	// }
+		free((*parser)->expressions);
+		(*parser)->expressions = NULL;
+	}
 
 	free(*parser);
 	*parser = NULL;
@@ -2506,7 +2506,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 	// Expressions
 	if ((*interpreter->parser)->expressions != NULL) {
 		for (size_t i = 0; i < (*interpreter->parser)->expressions->length; i++) {
-			printf("Interpreting global expression\n");
+			// printf("Interpreting global expression\n");
 			ast_node_t* expression = (ast_node_t*) (*interpreter->parser)->expressions->data[i];
 			interpreter_expression(expression->data.expression, interpreter);
 		}
@@ -2524,6 +2524,9 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 			}
 		}
 	}
+
+	// Calling main function
+	
 
 	// Scope exit
 	popSymbolTable(symbolTableStack);
@@ -2810,10 +2813,24 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 		return NULL;
 	}
 
+
+	// Scope entry
+	pushSymbolTable(symbolTableStack);
+
+	for (size_t i = 0; i < arguments_count; i++) {
+		char* arg_name = function->data.function_declaration->arguments->data[i];
+		ast_literal_t* arg_value = interpreter_expression((ast_expression_t*) arguments->data[i], interpreter);
+		
+		addToSymbolTable(symbolTableStack, arg_name, arg_value);
+	}
+
 	ast_node_t* returned = interpreter_function_declaration(function, interpreter, arguments);
 	if (returned != NULL && returned->type == AST_STATEMENT_RETURN) {
 		return returned->data.statement_return->expression_value;
 	}
+	
+	// Scope exit
+	popSymbolTable(symbolTableStack);
 
 	return NULL;
 }
@@ -2843,6 +2860,7 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		return NULL;
 	}
 
+
 	ast_literal_t* ret = interpreter_function_run(func_exists, node->data.function_call->arguments, interpreter);
 	if (ret == NULL) {
 		ast_literal_t* default_ret = malloc(sizeof(ast_literal_t));
@@ -2850,9 +2868,6 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		default_ret->main = NULL;
 		return default_ret;
 	}
-
-	// Scope exit
-	popSymbolTable(symbolTableStack);
 
 	return ret;
 }

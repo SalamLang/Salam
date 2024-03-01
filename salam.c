@@ -2947,9 +2947,9 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	ast_literal_t* variable;
 
 	if (interpreter->is_global_scope == true) {
-		variable = findInSymbolTableCurrent(symbolGlobalTableStack, identifier);
+		variable = findInSymbolTable(symbolGlobalTableStack, identifier, false);
 	} else {
-		variable = findInSymbolTableCurrent(symbolTableStack, identifier);
+		variable = findInSymbolTable(symbolTableStack, identifier, true);
 	}
 
 	if (variable == NULL) {

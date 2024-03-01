@@ -2383,11 +2383,11 @@ ast_node_t* interpreter_statement_until(ast_node_t* node, interpreter_t* interpr
 {
 	// printf("Until\n");
 
-	if (interpreter_expression_truly(node->data.statement_until->condition, interpreter)) {
-		printf("is true\n");
-	} else {
-		printf("is false\n");
-	}
+	// if (interpreter_expression_truly(node->data.statement_until->condition, interpreter)) {
+	// 	printf("is true\n");
+	// } else {
+	// 	printf("is false\n");
+	// }
 
 	while (interpreter_expression_truly(node->data.statement_until->condition, interpreter) == true) {
 		ast_node_t* returned = interpreter_block(node->data.statement_until->block, interpreter, TOKEN_TYPE_UNTIL);

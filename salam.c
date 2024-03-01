@@ -3244,11 +3244,6 @@ int main(int argc, char** argv)
 {
 	setlocale(LC_ALL, "");
 
-	printf("Number of args: %d\n", argc);
-	for (int i = 0; i < argc; i++) {
-		printf("'%s'\n", argv[i]);
-	}
-
 	if (argc == 1 || argc > 3) {
 		help();
 		return 0;
@@ -3269,9 +3264,6 @@ int main(int argc, char** argv)
 	}
 
 	if (passingCode) {
-		// Print input source code
-		printf("%s\n============\n", file_data);
-
 		// Running
 		lexer_t* lexer = lexer_create(file_data);
 		lexer_lex(lexer);

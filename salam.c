@@ -339,7 +339,6 @@ void ast_expression_free_identifier(ast_expression_t** expr);
 void ast_expression_free_functioncall(ast_expression_t** expr);
 void ast_expression_free_assignment(ast_expression_t** expr);
 void ast_expression_free_binary(ast_expression_t** expr);
-void ast_expression_free(ast_expression_t** expr);
 void ast_node_free(ast_node_t** node);
 void parser_free(parser_t** parser);
 void parser_token_next(parser_t* parser);
@@ -1147,8 +1146,6 @@ void debug_current_token(parser_t* parser)
 	printf("=========> Current token: %s - %s\n", token_type2str(t->type) ,t->value);
 }
 
-void ast_expression_free(ast_expression_t** expr);
-
 void ast_expression_free_data(ast_literal_t** val)
 {
 	printf("ast_expression_free_data\n");
@@ -1160,6 +1157,7 @@ void ast_expression_free_data(ast_literal_t** val)
 
 	printf("start checking type on ast_expression_free_data\n");
 
+	printf("free expression data\n");
 	if ((*val)->type == VALUE_TYPE_STRING) {
 		printf("has string\n");
 		printf("%s\n", (*val)->string_value);
@@ -1178,6 +1176,7 @@ void ast_expression_free_data(ast_literal_t** val)
 	}
 
 	// TODO: MEMORY LEAKS
+	printf("free expression data main\n");
 	if ((*val)->main != NULL) {
 		printf("ast_expression_free_data main\n");
 		ast_expression_free((ast_expression_t**) &((*val)->main));
@@ -1197,13 +1196,8 @@ void ast_expression_free_literal(ast_expression_t** expr)
 		return;
 	}
 
+	printf("free identifier\n");
 	if ((*expr)->data.literal != NULL) {
-		printf("....\n");
-		if ((*expr)->data.literal == NULL) {
-			printf("literal is null\n");
-		} else {
-			printf("literal is not null\n");
-		}
 		printf("check expr value of literal\n");
 		ast_expression_free_data(&((*expr)->data.literal));
 		(*expr)->data.literal = NULL;
@@ -1218,7 +1212,9 @@ void ast_expression_free_identifier(ast_expression_t** expr)
 		return;
 	}
 
+	printf("free identifier\n");
 	if ((*expr)->data.identifier != NULL) {
+		printf("free identifier name\n");
 		if ((*expr)->data.identifier->name != NULL) {
 			free((*expr)->data.identifier->name);
 			(*expr)->data.identifier->name = NULL;
@@ -1264,11 +1260,15 @@ void ast_expression_free_assignment(ast_expression_t** expr)
 		return;
 	}
 
+	printf("free assignment\n");
 	if ((*expr)->data.assignment != NULL) {
+		printf("free assignment left\n");
 		if ((*expr)->data.assignment->left != NULL) {
 			ast_expression_free(&((*expr)->data.assignment->left));
 			(*expr)->data.assignment->left = NULL;
 		}
+
+		printf("free assignment right\n");
 		if ((*expr)->data.assignment->right != NULL) {
 			ast_expression_free(&((*expr)->data.assignment->right));
 			(*expr)->data.assignment->right = NULL;
@@ -3049,7 +3049,8 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 		variable = (ast_literal_t*) malloc(sizeof(ast_literal_t));
 	}
 
-	variable->main = (struct ast_expression_t*) expr;
+	// variable->main = (struct ast_expression_t*) expr;
+	variable->main = NULL;
 	variable->type = right->type;
 	if (right->type == VALUE_TYPE_STRING) {
 		variable->string_value = strdup(right->string_value);

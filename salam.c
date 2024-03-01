@@ -2472,6 +2472,9 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 
 	printf("Main returned: ");
 	print_xml_ast_node(main_returned, 3);
+	if (main_returned->type == AST_STATEMENT_RETURN) {
+		interpreter_expression_data(main_returned->data.statement_return->expression_value);
+	}
 
 	return interpreter;
 }
@@ -2675,30 +2678,6 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 	return res;
 }
 
-// ast_literal_t* interpreter_function_run_return(ast_node_t* node, ast_function_declaration_t* function, interpreter_t* interpreter)
-// {
-// 	// printf("checking current stmt: %d\n", node->type);
-
-// 	switch (node->type) {
-// 		case AST_BLOCK:
-// 			for (size_t i = 0; i < node->data.block->num_statements; i++) {
-// 				ast_literal_t* ret = interpreter_function_run_return(node->data.block->statements[i], function, interpreter);
-// 				if (ret != NULL) return ret;
-// 			}
-// 			break;
-
-// 		case AST_STATEMENT_RETURN:
-// 			// printf("we have a ret stmt here...\n");
-// 			return node->data.statement_return->expression_value;
-// 			break;
-		
-// 		default:
-// 			break;
-// 	}
-
-// 	return NULL;
-// }
-
 ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments, interpreter_t* interpreter)
 {
 	if (function == NULL) {
@@ -2726,11 +2705,11 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 	}
 
 	ast_node_t* returned = interpreter_function_declaration(function, interpreter);
-	printf("function returned: ");
-	print_xml_ast_node(returned, 3);
+	if (returned != NULL && returned->type == AST_STATEMENT_RETURN) {
+		return returned->data.statement_return->expression_value;
+	}
 
 	return NULL;
-	// return interpreter_function_run_return(fn->body, fn, interpreter);
 }
 
 ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* interpreter)

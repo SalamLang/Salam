@@ -1,1 +1,1 @@
-# SallamLang
+# SalamLang

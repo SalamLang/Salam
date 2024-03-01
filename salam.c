@@ -1138,7 +1138,12 @@ void ast_expression_free_data(ast_literal_t** val)
 
 void ast_expression_free_literal(ast_expression_t** expr)
 {
-	printf("AST_EXPRESSION_LITERAL\n");
+	printf("ast_expression_free_literal\n");
+
+	if (expr || *expr == NULL) {
+		return;
+	}
+
 	if ((*expr)->data.literal != NULL) {
 		printf("....\n");
 		if ((*expr)->data.literal == NULL) {
@@ -1153,7 +1158,12 @@ void ast_expression_free_literal(ast_expression_t** expr)
 
 void ast_expression_free_identifier(ast_expression_t** expr)
 {
-	printf("AST_EXPRESSION_IDENTIFIER\n");
+	printf("ast_expression_free_identifier\n");
+
+	if (expr || *expr == NULL) {
+		return;
+	}
+
 	if ((*expr)->data.identifier != NULL) {
 		if ((*expr)->data.identifier->name != NULL) {
 			free((*expr)->data.identifier->name);
@@ -1167,6 +1177,12 @@ void ast_expression_free_identifier(ast_expression_t** expr)
 
 void ast_expression_free_functioncall(ast_expression_t** expr)
 {
+	printf("ast_expression_free_functioncall\n");
+
+	if (expr || *expr == NULL) {
+		return;
+	}
+
 	if ((*expr)->data.function_call != NULL) {
 		free((*expr)->data.function_call->name);
 		(*expr)->data.function_call->name = NULL;
@@ -1188,6 +1204,12 @@ void ast_expression_free_functioncall(ast_expression_t** expr)
 
 void ast_expression_free_assignment(ast_expression_t** expr)
 {
+	printf("ast_expression_free_assignment\n");
+
+	if (expr || *expr == NULL) {
+		return;
+	}
+
 	if ((*expr)->data.assignment != NULL) {
 		if ((*expr)->data.assignment->left != NULL) {
 			ast_expression_free(&((*expr)->data.assignment->left));
@@ -1206,6 +1228,10 @@ void ast_expression_free_assignment(ast_expression_t** expr)
 void ast_expression_free_binary(ast_expression_t** expr)
 {
 	printf("ast_expression_free_binary\n");
+	
+	if (expr || *expr == NULL) {
+		return;
+	}
 
 	if ((*expr)->data.binary_op != NULL) {
 		if ((*expr)->data.binary_op->left != NULL) {
@@ -1235,7 +1261,7 @@ void ast_expression_free(ast_expression_t** expr)
 	if (expr == NULL || *expr == NULL) {
 		return;
 	}
-
+	
 	printf("---- expr type: %d\n", (*expr)->type);
 
 	switch ((*expr)->type) {
@@ -1426,8 +1452,10 @@ void parser_free(parser_t** parser)
 		if ((*parser)->functions->data != NULL) {
 			for (size_t i = 0; i < (*parser)->functions->length; i++) {
 				printf("Free function %s\n", ((ast_node_t*) (*parser)->functions->data[i])->data.function_declaration->name);
-				ast_node_free((ast_node_t**) &((*parser)->functions->data[i]));
-				(*parser)->functions->data[i] = NULL;
+				if ((*parser)->functions->data[i] != NULL) {
+					ast_node_free((ast_node_t**) &((*parser)->functions->data[i]));
+					(*parser)->functions->data[i] = NULL;
+				}
 			}
 
 			free((*parser)->functions->data);
@@ -1441,8 +1469,10 @@ void parser_free(parser_t** parser)
 	if ((*parser)->expressions != NULL) {
 		if ((*parser)->expressions->data != NULL) {
 			for (size_t i = 0; i < (*parser)->expressions->length; i++) {
-				ast_node_free((ast_node_t**) &((*parser)->expressions->data[i]));
-				(*parser)->expressions->data[i] = NULL;
+				if ((*parser)->expressions->data[i] != NULL) {
+					ast_node_free((ast_node_t**) &((*parser)->expressions->data[i]));
+					(*parser)->expressions->data[i] = NULL;
+				}
 			}
 
 			free((*parser)->functions->data);
@@ -3106,7 +3136,8 @@ int main(int argc, char** argv)
 	printf("end lexer free\n");
 
 	printf("free parser\n");
-	parser_free(&parser);
+	parser_free(interpreter->parser);
+	// parser_free(parser);
 	printf("end parser free\n");
 
 	printf("out-after parser is null %d\n", parser == NULL ? 1 : 0);

@@ -531,6 +531,7 @@ char* token_op_type2str(ast_expression_type_t type)
 char* token_type2str(token_type_t type)
 {
 	switch(type) {
+		case TOKEN_TYPE_UNTIL: return "UNTIL";
 		case TOKEN_TYPE_IDENTIFIER: return "IDENTIFIER";
 		case TOKEN_TYPE_NUMBER: return "NUMBER";
 		case TOKEN_TYPE_STRING: return "STRING";
@@ -1699,6 +1700,10 @@ ast_node_t* parser_statement(parser_t* parser)
 
 			case TOKEN_TYPE_CONTINUE:
 				stmt = parser_statement_continue(parser);
+				break;
+
+			case TOKEN_TYPE_UNTIL:
+				stmt = parser_statement_until(parser);
 				break;
 
 			case TOKEN_TYPE_IF:

@@ -1703,7 +1703,8 @@ bool parser_expression_has(parser_t* parser)
 	return false;
 }
 
-ast_node_t* parser_statement_if(parser_t* parser) {
+ast_node_t* parser_statement_if(parser_t* parser)
+{
 	printf("Parsing statement if\n");
 
 	parser->token_index++; // Eating IF token
@@ -1756,7 +1757,8 @@ ast_node_t* parser_statement_if(parser_t* parser) {
 	return node;
 }
 
-ast_node_t* parser_statement_until(parser_t* parser) {
+ast_node_t* parser_statement_until(parser_t* parser)
+{
 	printf("Parsing statement until\n");
 
 	parser->token_index++; // Eating UNTIL token
@@ -2724,7 +2726,8 @@ ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* int
 	return NULL;
 }
 
-ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter_t* interpreter) {
+ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter_t* interpreter)
+{
 	bool invalid = false;
 
 	ast_literal_t* left = (ast_literal_t*) interpreter_expression(expr->data.binary_op->left, interpreter);

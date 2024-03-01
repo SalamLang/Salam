@@ -512,7 +512,10 @@ token_info_t token_infos[] = {
 	[TOKEN_TYPE_MINUS] = {PRECEDENCE_SUM, NULL, led_plus_minus},
 	[TOKEN_TYPE_MULTIPY] = {PRECEDENCE_MULTIPY, NULL, led_plus_minus},
 	[TOKEN_TYPE_DIVIDE] = {PRECEDENCE_MULTIPY, NULL, led_plus_minus},
+
 	[TOKEN_TYPE_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal},
+
+	[TOKEN_TYPE_NOT_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
 	[TOKEN_TYPE_EQUAL_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
 };
 
@@ -1787,7 +1790,7 @@ ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* 
 
 ast_expression_t* led_equal_equal(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	printf("Parsing operator equal\n");
+	printf("Parsing operator == or !=\n");
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
@@ -2380,6 +2383,12 @@ ast_node_t* interpreter_statement_until(ast_node_t* node, interpreter_t* interpr
 {
 	// printf("Until\n");
 
+	if (interpreter_expression_truly(node->data.statement_until->condition, interpreter)) {
+		printf("is true\n");
+	} else {
+		printf("is false\n");
+	}
+
 	while (interpreter_expression_truly(node->data.statement_until->condition, interpreter) == true) {
 		ast_node_t* returned = interpreter_block(node->data.statement_until->block, interpreter, TOKEN_TYPE_UNTIL);
 
@@ -2624,6 +2633,11 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 	ast_literal_t* res = (ast_literal_t*) malloc(sizeof(ast_literal_t));
 	res->main = (struct ast_expression_t*) expr;
 
+	bool isReverse = false;
+	if (strcmp(expr->data.binary_op->operator, "!=") == 0) {
+		isReverse = true;
+	}
+
 	if (left == NULL || right == NULL) {
 		printf("Error: cannot calculate binary operator for invalid values!\n");
 		invalid = true;
@@ -2646,7 +2660,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 		} else if (rightlen == 0) {
 			res->string_value = strdup(left->string_value);
 		}
-	} else if (strcmp(expr->data.binary_op->operator, "==") == 0) {
+	} else if (strcmp(expr->data.binary_op->operator, "==") == 0 || strcmp(expr->data.binary_op->operator, "!=") == 0) {
 		if (left->type == VALUE_TYPE_NULL && right->type == TOKEN_TYPE_NULL) {
 			res->type = VALUE_TYPE_BOOL;
 			res->bool_value = true;
@@ -2715,7 +2729,10 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 		// right = NULL;
 		exit(EXIT_FAILURE);
 		return NULL;
+	} else if (isReverse && res->type == VALUE_TYPE_BOOL) {
+		res->bool_value = res->bool_value == true ? false : true;
 	}
+
 	return res;
 }
 

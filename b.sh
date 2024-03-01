@@ -23,7 +23,7 @@ fi
 # gcc -g -ggdb -o "$OUTPUT_FILE" "$INPUT_FILE"
 gcc -g -fsanitize=undefined,address -Walloca -o "$OUTPUT_FILE" "$INPUT_FILE" -lefence
 
-# Compile js
+# Compiling for web
 emcc salam.c -o salam.js -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s NO_EXIT_RUNTIME=1
  
 # Check if compilation was successful

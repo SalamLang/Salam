@@ -9,7 +9,7 @@
 struct ast_expression;
 
 typedef enum {
-	VALUE_TYPE_EXPRESSION,
+	VALUE_TYPE_NULL,
 	VALUE_TYPE_INT,
 	VALUE_TYPE_FLOAT,
 	VALUE_TYPE_BOOL,
@@ -20,6 +20,7 @@ typedef enum {
 char* literal_type2name(ast_literal_type_t type)
 {
 	switch (type) {
+		case VALUE_TYPE_NULL: return "NULL";
 		case VALUE_TYPE_INT: return "INT";
 		case VALUE_TYPE_FLOAT: return "FLOAT";
 		case VALUE_TYPE_BOOL: return "BOOL";
@@ -81,6 +82,8 @@ typedef enum {
 	TOKEN_TYPE_CONTINUE, // ادامه
 	TOKEN_TYPE_PRINT, // نمایش
 	TOKEN_TYPE_IF, // اگر
+	TOKEN_TYPE_NULL, // پوچ
+
 	TOKEN_TYPE_UNTIL, // تا
 	TOKEN_TYPE_TRUE, // درست
 	TOKEN_TYPE_FALSE, // غلط
@@ -128,6 +131,7 @@ keyword_mapping_t keyword_mapping[] = {
 	{"نمایش", TOKEN_TYPE_PRINT},
 	{"واگرنه", TOKEN_TYPE_ELSEIF},
 	{"اگر", TOKEN_TYPE_IF},
+	{"پوچ", TOKEN_TYPE_NULL},
 	{"تا", TOKEN_TYPE_UNTIL},
 	{"درست", TOKEN_TYPE_TRUE},
 	{"غلط", TOKEN_TYPE_FALSE},
@@ -1045,6 +1049,8 @@ void ast_expression_free_data(ast_literal_t** val)
 			free((*val)->string_value);
 			(*val)->string_value = NULL;
 		}
+	} else if ((*val)->type == VALUE_TYPE_NULL) {
+		// Nothing to free
 	} else if ((*val)->type == VALUE_TYPE_INT) {
 		// Nothing to free
 	} else if ((*val)->type == VALUE_TYPE_BOOL) {
@@ -2028,6 +2034,8 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 				print_indentation(indent_level + 2);
 				if (expr->data.literal->type == VALUE_TYPE_STRING) {
 					printf("<Value>%s</Value>\n", expr->data.literal->string_value);
+				} else if (expr->data.literal->type == VALUE_TYPE_NULL) {
+					printf("<Value>NULL</value>\n");
 				} else if (expr->data.literal->type == VALUE_TYPE_INT) {
 					printf("<Value>%d</Value>\n", expr->data.literal->int_value);
 				} else if (expr->data.literal->type == VALUE_TYPE_BOOL) {
@@ -2491,6 +2499,8 @@ void interpreter_expression_data(ast_literal_t* data)
 	if (data == NULL) {
 		printf("NULL\n");
 		return;
+	} else if (data->type == VALUE_TYPE_NULL) {
+		printf("NULL\n");
 	} else if (data->type == VALUE_TYPE_INT) {
 		printf("%d\n", data->int_value);
 	} else if (data->type == VALUE_TYPE_FLOAT) {
@@ -2609,7 +2619,10 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 			res->string_value = strdup(left->string_value);
 		}
 	} else if (strcmp(expr->data.binary_op->operator, "==") == 0) {
-		if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_FLOAT) {
+		if (left->type == VALUE_TYPE_NULL && right->type == TOKEN_TYPE_NULL) {
+			res->type = VALUE_TYPE_BOOL;
+			res->bool_value = true;
+		} else if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_FLOAT) {
 			res->type = VALUE_TYPE_BOOL;
 			res->bool_value = left->int_value == right->float_value ? true : false;
 		} else if (left->type == VALUE_TYPE_FLOAT && right->type == VALUE_TYPE_INT) {
@@ -2743,9 +2756,8 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 	ast_literal_t* ret = interpreter_function_run(func_exists, node->data.function_call->arguments, interpreter);
 	if (ret == NULL) {
 		ast_literal_t* default_ret = malloc(sizeof(ast_literal_t));
-		default_ret->type = VALUE_TYPE_INT; // TODO: void type later!
+		default_ret->type = VALUE_TYPE_NULL;
 		default_ret->main = NULL;
-		default_ret->int_value = 0;
 		return default_ret;
 	}
 
@@ -2763,6 +2775,8 @@ bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpr
 	// ast_expression_free(&(expr));
 	if (res->type == VALUE_TYPE_BOOL) {
 		return res->bool_value;
+	} else if (res->type == VALUE_TYPE_NULL) {
+		return false;
 	} else if (res->type == VALUE_TYPE_INT) {
 		return res->int_value != 0;
 	} else if (res->type == VALUE_TYPE_FLOAT) {
@@ -2798,6 +2812,8 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	variable->type = right->type;
 	if (right->type == VALUE_TYPE_STRING) {
 		variable->string_value = strdup(right->string_value);
+	} else if (right->type == VALUE_TYPE_NULL) {
+		// No value
 	} else if (right->type == VALUE_TYPE_INT) {
 		variable->int_value = right->int_value;
 	} else if (right->type == VALUE_TYPE_BOOL) {

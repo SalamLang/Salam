@@ -1128,7 +1128,6 @@ void ast_expression_free_data(ast_literal_t** val)
 	if ((*val)->main != NULL) {
 		printf("ast_expression_free_data main\n");
 		ast_expression_free((ast_expression_t**) &((*val)->main));
-		// (*val)->main = NULL;
 	}
 
 	printf("let's free it's at all\n");
@@ -3000,57 +2999,26 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 	}
 
 	ast_literal_t* lit = NULL;
-	// bool is_global_scope = interpreter->is_global_scope;
-	// printf("global scope is %d\n", is_global_scope ? 1 : 0);
-
-	// if (is_global_scope == true && (expr->type != AST_EXPRESSION_FUNCTION_CALL && expr->type != AST_EXPRESSION_ASSIGNMENT)) {
-	// 	printf("Error: it's not possible to have other type of expressions in global scope!\n");
-	// 	exit(EXIT_FAILURE);
-	// 	return NULL;
-	// }
 
 	switch (expr->type) {
 		case AST_EXPRESSION_LITERAL:
 			lit = interpreter_literal(expr);
-			// if (lit != NULL) {
-			// 	lit->main = (struct ast_expression_t*) expr;
-			// }
 			break;
 
 		case AST_EXPRESSION_IDENTIFIER:
 			lit = interpreter_identifier(expr, interpreter);
-			// if (lit != NULL) {
-			// 	lit->main = (struct ast_expression_t*) expr;
-			// }
 			break;
 
 		case AST_EXPRESSION_BINARY:
 			lit = interpreter_expression_binary(expr, interpreter);
-			// if (lit != NULL) {
-			// 	lit->main = (struct ast_expression_t*) expr;
-			// }
 			break;
 
 		case AST_EXPRESSION_FUNCTION_CALL:
-			// if (is_global_scope == true) interpreter->is_global_scope = false;
 			lit = interpreter_function_call(expr, interpreter);
-			// if (is_global_scope == true) interpreter->is_global_scope = true;
-			// if (lit != NULL) {
-			// 	lit->main = (struct ast_expression_t*) expr;
-			// }
 			break;
 
 		case AST_EXPRESSION_ASSIGNMENT:
-			// if (is_global_scope == true) interpreter->is_global_scope = false;
 			lit = interpreter_expression_assignment(expr, interpreter);
-			// if (is_global_scope == true) interpreter->is_global_scope = true;
-			// ast_expression_free(&(expr));
-			// expr = NULL;
-			// if (lit != NULL) {
-			// 	lit->main = (struct ast_expression_t*) expr;
-			// } else {
-			// 	printf("why AST_EXPRESSION_ASSIGNMENT ret is null!?\n");
-			// }
 			break;
 
 		default:

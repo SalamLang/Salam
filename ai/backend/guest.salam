@@ -1,0 +1,302 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aiguest
+
+import net.http
+import net.router
+import encoding.json
+import crypto
+import str
+
+include aistore "store.salam"
+include aiweb "web.salam"
+include aiengine "engine.salam"
+include ailive "live.salam"
+include aiturn "turn.salam"
+include aipolicy "policy.salam"
+
+const MAX_TEXT := 2000
+const ANSWER_SECONDS := 600
+
+mut ORIGINS := ","
+mut LIMIT := 15
+mut GUESTS_PER_IP := 6
+mut MESSAGES_PER_IP := 60
+
+func gone(v: str): Vector<str>:
+    mut a := Vector {} as Vector<str>
+    a.push(v)
+    ret a
+end
+
+func gtwo(v: str, w: str): Vector<str>:
+    mut a := gone(v)
+    a.push(w)
+    ret a
+end
+
+func gthree(v: str, w: str, x: str): Vector<str>:
+    mut a := gtwo(v, w)
+    a.push(x)
+    ret a
+end
+
+func gnum(v: i64): str:
+    ret "" + v
+end
+
+func guest_cors(ctx: i64):
+    origin := http.Header(ctx, "Origin")
+    if origin.len() > 0 and ORIGINS.find("," + origin + ",") >= 0:
+        http.SetHeader(ctx, "Access-Control-Allow-Origin", origin)
+        http.SetHeader(ctx, "Access-Control-Allow-Headers", "Content-Type, X-Salam-Lang")
+        http.SetHeader(ctx, "Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        http.SetHeader(ctx, "Access-Control-Max-Age", "86400")
+    end
+end
+
+func guest_reply(ctx: i64, status: int, body: str):
+    guest_cors(ctx)
+    aiweb.Reply(ctx, status, body)
+end
+
+func guest_fail(ctx: i64, status: int, code: str, fa: str, en: str):
+    guest_cors(ctx)
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("error", code))
+    m.push(json.Member("message", aiweb.Pick(ctx, fa, en)))
+    m.push(json.MemberInt("limit", LIMIT as i64))
+    aiweb.Reply(ctx, status, json.Object(m))
+end
+
+func guest_preflight(ctx: i64):
+    guest_cors(ctx)
+    http.SetStatus(ctx, 204)
+    http.Text(ctx, "")
+end
+
+func guest_settle(ctx: i64, gid: str, sid: str): int:
+    failed := aiweb.Pick(ctx, "دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید.", "The assistant could not answer just now. Please ask again in a moment.")
+    mut mid := ""
+    mut created := 0 as i64
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, created FROM guest_messages WHERE guest_id = ?1 AND role = 'assistant' AND status = 'pending' ORDER BY id DESC LIMIT 1", gone(gid))
+    if aistore.Next(rows):
+        mid = aistore.Text(rows, 0)
+        created = aistore.Int64(rows, 1)
+    end
+    aistore.Finish(rows)
+    if mid.len() > 0:
+        _o := aistore.Run("UPDATE guest_messages SET status = 'error', body = ?1 WHERE guest_id = ?2 AND role = 'assistant' AND status = 'pending' AND id < ?3", gthree(failed, gid, mid))
+    end
+    aistore.Unlock()
+    if mid.len() == 0:
+        ret 0
+    end
+    mut status := "pending"
+    mut text := ""
+    _p := guest_step(mid, sid, created, aiweb.English(ctx), status, text)
+    ret status == "pending" ? 1 : 0
+end
+
+func guest_send(ctx: i64):
+    body := http.Body(ctx)
+    text := str.Trim(json.Get(body, "text"))
+    if text.len() == 0:
+        guest_fail(ctx, 400, "empty", "پیام خالی است.", "The message is empty.")
+        ret
+    end
+    if text.len() > MAX_TEXT:
+        guest_fail(ctx, 400, "too_long", "پیام خیلی بلند است. در دستیار کامل می‌توانید پیام بلندتر بفرستید.", "The message is too long. The full assistant accepts longer messages.")
+        ret
+    end
+    ip := aiweb.ClientIp(ctx)
+    now := aistore.Now()
+    day := gnum(now - 86400)
+    mut token := str.Trim(json.Get(body, "guest"))
+    mut gid := ""
+    mut sid := ""
+    mut used := 0
+    aistore.Lock()
+    if token.len() >= 20:
+        mut rows := aistore.Stmt("SELECT id, engine_sid, messages FROM guest_sessions WHERE token = ?1", gone(aiweb.Hash(token)))
+        if aistore.Next(rows):
+            gid = aistore.Text(rows, 0)
+            sid = aistore.Text(rows, 1)
+            used = aistore.Text(rows, 2).to_int()
+        end
+        aistore.Finish(rows)
+    end
+    per_ip := aistore.OneText("SELECT COUNT(*) FROM guest_messages m JOIN guest_sessions g ON g.id = m.guest_id WHERE g.ip = ?1 AND m.role = 'user' AND m.created > ?2", gtwo(ip, day)).to_int()
+    new_guests := aistore.OneText("SELECT COUNT(*) FROM guest_sessions WHERE ip = ?1 AND created > ?2", gtwo(ip, day)).to_int()
+    mut pending := gid.len() > 0 ? aistore.OneText("SELECT COUNT(*) FROM guest_messages WHERE guest_id = ?1 AND status = 'pending'", gone(gid)).to_int() : 0
+    aistore.Unlock()
+    if used >= LIMIT:
+        guest_fail(ctx, 403, "guest_limit", "گفت‌وگوی مهمان به سقف " + str.ToPersianDigits("" + LIMIT) + " پیام رسید. برای ادامه، رایگان ثبت‌نام کنید یا وارد شوید.", "This guest chat reached its " + LIMIT + " message limit. Sign up for free or sign in to keep going.")
+        ret
+    end
+    if per_ip >= MESSAGES_PER_IP or (gid.len() == 0 and new_guests >= GUESTS_PER_IP):
+        guest_fail(ctx, 429, "guest_limit", "از این شبکه امروز پیام زیادی فرستاده شده است. برای ادامه، رایگان ثبت‌نام کنید یا وارد شوید.", "Too many guest messages came from this network today. Sign up for free or sign in to keep going.")
+        ret
+    end
+    if pending > 0:
+        pending = guest_settle(ctx, gid, sid)
+    end
+    if pending > 0:
+        guest_fail(ctx, 409, "busy", "هنوز پاسخ پیام قبلی کامل نشده است.", "The answer to the previous message is not finished yet.")
+        ret
+    end
+    mut fresh := ""
+    if gid.len() == 0:
+        fresh = crypto.RandomToken(32)
+        mut a := gthree(aiweb.Hash(fresh), ip, gnum(now))
+        a.push(aiweb.English(ctx) ? "en" : "fa")
+        aistore.Lock()
+        ok := aistore.Run("INSERT INTO guest_sessions (token, ip, created, updated, lang) VALUES (?1, ?2, ?3, ?3, ?4)", a)
+        gid = ok ? aistore.LastId() : ""
+        aistore.Unlock()
+        if gid.len() == 0:
+            guest_fail(ctx, 500, "server", "شروع گفت‌وگو ناموفق بود.", "Starting the chat failed.")
+            ret
+        end
+    end
+    if sid.len() == 0:
+        sid = aiengine.NewSession("guest " + gid)
+        if sid.len() == 0:
+            guest_fail(ctx, 503, "engine", "دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.", "The assistant is not available. Please try again in a moment.")
+            ret
+        end
+        aistore.Lock()
+        _s := aistore.Run("UPDATE guest_sessions SET engine_sid = ?1 WHERE id = ?2", gtwo(sid, gid))
+        aistore.Unlock()
+    end
+    aistore.Lock()
+    _u := aistore.Run("INSERT INTO guest_messages (guest_id, role, body, status, created) VALUES (?1, 'user', ?2, 'done', ?3)", gthree(gid, text, gnum(now)))
+    _a := aistore.Run("INSERT INTO guest_messages (guest_id, role, body, status, created) VALUES (?1, 'assistant', '', 'pending', ?2)", gtwo(gid, gnum(now)))
+    mid := aistore.LastId()
+    _g := aistore.Run("UPDATE guest_sessions SET messages = messages + 1, updated = ?1, ip = ?2 WHERE id = ?3", gthree(gnum(now), ip, gid))
+    aistore.Unlock()
+    ailive.Begin(sid)
+    aiturn.Forget(sid)
+    if not aiengine.Send(sid, aiweb.UiLangNote(ctx) + aipolicy.Defang(text), ""):
+        ailive.End(sid)
+        aistore.Lock()
+        _e := aistore.Run("UPDATE guest_messages SET status = 'error' WHERE id = ?1", gone(mid))
+        aistore.Unlock()
+        guest_fail(ctx, 503, "engine", "دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.", "The assistant is not available. Please try again in a moment.")
+        ret
+    end
+    mut m := Vector {} as Vector<str>
+    if fresh.len() > 0:
+        m.push(json.Member("guest", fresh))
+    end
+    m.push(json.MemberRaw("id", mid))
+    m.push(json.MemberInt("used", (used + 1) as i64))
+    m.push(json.MemberInt("limit", LIMIT as i64))
+    guest_reply(ctx, 201, json.Object(m))
+end
+
+func guest_find(mid: str, token: str, gid &: str, sid &: str, status &: str, body &: str, created &: i64): bool:
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT g.id, g.engine_sid, m.status, m.body, m.created FROM guest_messages m JOIN guest_sessions g ON g.id = m.guest_id WHERE m.id = ?1 AND m.role = 'assistant' AND g.token = ?2", gtwo(mid, aiweb.Hash(token)))
+    mut found := false
+    if aistore.Next(rows):
+        found = true
+        gid = aistore.Text(rows, 0)
+        sid = aistore.Text(rows, 1)
+        status = aistore.Text(rows, 2)
+        body = aistore.Text(rows, 3)
+        created = aistore.Int64(rows, 4)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret found
+end
+
+func guest_step(mid: str, sid: str, created: i64, en: bool, status &: str, body &: str): str:
+    r := aiturn.Progress(sid, created, ANSWER_SECONDS as i64)
+    body = r.text
+    if not r.done:
+        ret r.phase
+    end
+    status = r.failed and body.len() == 0 ? "error" : "done"
+    if status == "error":
+        body = en ? "The assistant could not answer just now. Please ask again in a moment." : "دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید."
+    end
+    aistore.Lock()
+    _u := aistore.Run("UPDATE guest_messages SET body = ?1, status = ?2 WHERE id = ?3 AND status = 'pending'", gthree(body, status, mid))
+    aistore.Unlock()
+    ailive.End(sid)
+    aiturn.Forget(sid)
+    aiengine.Forget(sid)
+    ret "done"
+end
+
+func guest_poll(ctx: i64):
+    mut gid := ""
+    mut sid := ""
+    mut status := ""
+    mut body := ""
+    mut created := 0 as i64
+    mid := http.Param(ctx, "mid")
+    if not guest_find(mid, http.Query(ctx, "guest"), gid, sid, status, body, created):
+        guest_fail(ctx, 404, "not_found", "این پیام پیدا نشد.", "This message was not found.")
+        ret
+    end
+    mut phase := "done"
+    if status == "pending":
+        phase = guest_step(mid, sid, created, aiweb.English(ctx), status, body)
+    end
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("status", status))
+    m.push(json.Member("phase", phase))
+    m.push(json.Member("body", body))
+    guest_reply(ctx, 200, json.Object(m))
+end
+
+pub func Configure(origins: str, limit: int, guests_per_ip: int, messages_per_ip: int):
+    ORIGINS = "," + str.Replace(origins, " ", "") + ","
+    if limit > 0:
+        LIMIT = limit
+    end
+    if guests_per_ip > 0:
+        GUESTS_PER_IP = guests_per_ip
+    end
+    if messages_per_ip > 0:
+        MESSAGES_PER_IP = messages_per_ip
+    end
+end
+
+pub func CorsLines(origin: str): str:
+    if origin.len() == 0 or ORIGINS.find("," + origin + ",") < 0:
+        ret ""
+    end
+    ret "Access-Control-Allow-Origin: " + origin + "\r\nVary: Origin\r\n"
+end
+
+pub func Find(mid: str, token: str, gid &: str, sid &: str, status &: str, body &: str, created &: i64): bool:
+    ret guest_find(mid, token, gid, sid, status, body, created)
+end
+
+pub func Step(mid: str, sid: str, created: i64, en: bool, status &: str, body &: str): str:
+    ret guest_step(mid, sid, created, en, status, body)
+end
+
+pub func Routes(r &: router.Router):
+    router.Post(r, "/guest/messages", guest_send)
+    router.Get(r, "/guest/messages/:mid", guest_poll)
+    router.Options(r, "/guest/messages", guest_preflight)
+    router.Options(r, "/guest/messages/:mid", guest_preflight)
+end

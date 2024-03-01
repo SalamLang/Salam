@@ -1,0 +1,116 @@
+package lexer
+
+include src "../source.salam"
+include tok "../token.salam"
+include lg "../logger.salam"
+include lp "../langpack.salam"
+include i18n "../i18n.salam"
+
+pub func Run(
+    lgr: lg.Logger, pack: int, sf: src.SourceFile, out &: tok.TokenStream
+): bool:
+    ret RunEx(lgr, pack, sf, false, out)
+end
+
+pub func RunEx(
+    lgr: lg.Logger, pack: int, sf: src.SourceFile, keep_comments: bool, out &: tok.TokenStream
+): bool:
+    ret RunSplit(lgr, pack, sf, keep_comments, false, out)
+end
+
+pub func RunSplit(
+    lgr: lg.Logger, pack: int, sf: src.SourceFile, keep_comments: bool, split_blocks: bool, out &: tok.TokenStream
+): bool:
+    mut L := Lx {}
+    L.split_blocks = split_blocks
+    L.s = sf.text
+    L.n = sf.len
+    L.file = sf.path
+    L.last = tok.TK_EOF
+    L.layout_sub = LX_SUB_NAME
+    L.keep_comments = keep_comments
+    L.lgr = lgr
+    L.pack = pack
+    mut marker_at := co.SrcPos {}
+    marker_bad := MarkerProblem(sf.text, sf.len, marker_at)
+    if marker_bad == MARKER_WANT_FA:
+        error_at(
+            L, marker_at, "a Persian file declares its language with '// زبان: فارسی'; mixed forms such as '// lang: fa' are not accepted"
+        )
+    else marker_bad == MARKER_WANT_EN:
+        error_at(
+            L, marker_at, "an English file declares its language with '// lang: en'; a directive that mixes English and Persian words is not accepted"
+        )
+    end
+    lg.Log(
+        lgr, lg.PH_LEXER, lg.LOG_DEBUG, "lexing " + sf.path + " (" + sf.len + " bytes, lang=" + lp.Code(pack) + ")"
+    )
+    until true:
+        if L.layout_mode:
+            if at_end(L):
+                break
+            end
+            layout_step(L)
+            continue
+        end
+        skip_trivia(L)
+        if at_end(L):
+            break
+        end
+        scan_one(L)
+    end
+    if L.layout_mode:
+        lg.Log(lgr, lg.PH_LEXER, lg.LOG_WARN, i18n.Tr("unclosed page block at end of file"))
+    end
+    newline_terminator(L)
+    emit_eof(L)
+    mut suffix := ""
+    if L.had_error:
+        suffix = i18n.Tr(" (with errors)")
+    end
+    lg.Log(
+        lgr, lg.PH_LEXER, lg.LOG_DEBUG, "lexing complete: " + L.toks.len() + " tokens" + suffix
+    )
+    out.file = sf.path
+    out.toks = L.toks
+    out.pack = pack
+    ret not L.had_error
+end
+
+pub func MarkerCode(text: str, length: int): str:
+    mut bad := 0
+    mut bad_pos := co.SrcPos {}
+    ret marker_scan(text, length, bad, bad_pos)
+end
+
+pub func MarkerProblem(text: str, length: int, at &: co.SrcPos): int:
+    mut bad := 0
+    _code := marker_scan(text, length, bad, at)
+    ret bad
+end
+
+pub func Detect(sf: src.SourceFile, fallback: int): int:
+    marked := MarkerCode(sf.text, sf.len)
+    if marked.len() > 0:
+        p := lp.Load(marked)
+        if p != lp.LP_NONE:
+            ret p
+        end
+    end
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut best := fallback
+    mut best_kw := 0
+    codes := ["en", "fa"]
+    each code in codes:
+        p := lp.Load(code)
+        if p == lp.LP_NONE:
+            continue
+        end
+        kw := det_count_keywords(quiet, p, sf)
+        if kw > best_kw or (kw == best_kw and kw > 0 and p == fallback):
+            best_kw = kw
+            best = p
+        end
+    end
+    ret best
+end

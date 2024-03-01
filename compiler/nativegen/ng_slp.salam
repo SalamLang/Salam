@@ -1,0 +1,547 @@
+package nativegen
+
+import str
+
+const SLP_FAIL := 0
+const SLP_BCAST := 1
+const SLP_OP := 2
+const SLP_PHI := 3
+const SLP_LOAD := 4
+
+pub struct Slp:
+    pub ord: Vector<int> = Vector {}
+    pub memo: HashMap<str, int> = HashMap {}
+    pub vmemo: HashMap<str, int> = HashMap {}
+    pub nkind: Vector<int> = Vector {}
+    pub nlanes: Vector<int> = Vector {}
+    pub nl0: Vector<int> = Vector {}
+    pub lanes: Vector<int> = Vector {}
+    pub nops: Vector<int> = Vector {}
+    pub no0: Vector<int> = Vector {}
+    pub opnodes: Vector<int> = Vector {}
+    pub internal: Vector<int> = Vector {}
+    pub w: int = 0
+    pub vty: int = 0
+    pub ety: int = 0
+end
+
+func ordof(s &: Slp, i: int): int:
+    if i < 0 or i >= s.ord.len():
+        ret 0 - 1
+    end
+    ret s.ord[i]
+end
+
+func addr_base(g &: Ng, v: int, off &: i64): int:
+    mut x := v
+    off = 0 as i64
+    repeat 16:
+        if x < 0 or g.v_kind[x] != VK_INS:
+            ret x
+        end
+        d := g.v_def[x]
+        if g.i_op[d] != OP_ADDR or g.i_b[d] >= 0:
+            ret x
+        end
+        off = off + g.i_d[d]
+        x = g.i_a[d]
+    end
+    ret x
+end
+
+func mem_between(g &: Ng, s &: Slp, b: int, lo: int, hi: int, allow_store: bool): bool:
+    mut i := g.b_first[b]
+    until i >= 0:
+        o := ordof(s, i)
+        if o > lo and o < hi:
+            op := g.i_op[i]
+            if op == OP_CALL or op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE:
+                ret true
+            end
+            if op == OP_STORE and not allow_store:
+                ret true
+            end
+            if op == OP_LOAD and allow_store:
+                ret true
+            end
+        end
+        i = g.i_next[i]
+    end
+    ret false
+end
+
+func new_node(s &: Slp, kind: int, lanes_from: Vector<int>, l0: int): int:
+    id := s.nkind.len()
+    s.nkind.push(kind)
+    s.nl0.push(s.lanes.len())
+    repeat s.w in i:
+        s.lanes.push(lanes_from[l0 + i])
+    end
+    s.nops.push(0)
+    s.no0.push(0)
+    ret id
+end
+
+func lane_def(g &: Ng, v: int): int:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret 0 - 1
+    end
+    ret g.v_def[v]
+end
+
+func slp_check(g &: Ng, s &: Slp, src: Vector<int>, l0: int): int:
+    w := s.w
+    mut kk := ""
+    repeat w in q:
+        kk = kk + "," + src[l0 + q]
+    end
+    if s.memo.has(kk):
+        ret s.memo.get(kk)
+    end
+    v0 := src[l0]
+    mut same := true
+    repeat w in q2:
+        if src[l0 + q2] != v0:
+            same = false
+        end
+    end
+    if same:
+        if v0 < 0 or g.v_ty[v0] != s.ety:
+            ret 0 - 1
+        end
+        n := new_node(s, SLP_BCAST, src, l0)
+        s.memo.put(kk, n)
+        ret n
+    end
+    d0 := lane_def(g, v0)
+    if d0 < 0:
+        ret 0 - 1
+    end
+    op := g.i_op[d0]
+    b0 := g.i_blk[d0]
+    repeat w in q3:
+        dq := lane_def(g, src[l0 + q3])
+        if dq < 0 or g.i_op[dq] != op or g.i_blk[dq] != b0 or g.i_ty[dq] != s.ety:
+            ret 0 - 1
+        end
+    end
+    if op == OP_FADD or op == OP_FSUB or op == OP_FMUL or op == OP_FDIV:
+        n2 := new_node(s, SLP_OP, src, l0)
+        s.memo.put(kk, n2)
+        mut aa := Vector {} as Vector<int>
+        mut bb := Vector {} as Vector<int>
+        repeat w in q4:
+            dq2 := lane_def(g, src[l0 + q4])
+            aa.push(g.i_a[dq2])
+            bb.push(g.i_b[dq2])
+        end
+        if op == OP_FADD or op == OP_FMUL:
+            mut bc := 0 - 1
+            repeat 2 in side:
+                cand := side == 0 ? aa[0] : bb[0]
+                mut everywhere := true
+                repeat w in q5:
+                    if aa[q5] != cand and bb[q5] != cand:
+                        everywhere = false
+                    end
+                end
+                if everywhere and bc < 0:
+                    bc = cand
+                end
+            end
+            if bc >= 0:
+                repeat w in q6:
+                    if aa[q6] != bc:
+                        tmp := aa[q6]
+                        aa[q6] = bb[q6]
+                        bb[q6] = tmp
+                    end
+                end
+            end
+        end
+        na := slp_check(g, s, aa, 0)
+        nb := slp_check(g, s, bb, 0)
+        aa.free()
+        bb.free()
+        if na < 0 or nb < 0:
+            s.memo.put(kk, 0 - 1)
+            ret 0 - 1
+        end
+        s.no0[n2] = s.opnodes.len()
+        s.nops[n2] = 2
+        s.opnodes.push(na)
+        s.opnodes.push(nb)
+        ret n2
+    end
+    if op == OP_PHI:
+        n3 := new_node(s, SLP_PHI, src, l0)
+        s.memo.put(kk, n3)
+        np := g.i_pcount[d0]
+        mut kids := Vector {} as Vector<int>
+        repeat np in pi:
+            pb := g.pool[g.i_ps[d0] + 2 * pi + 1]
+            mut inc := Vector {} as Vector<int>
+            repeat w in q7:
+                dq3 := lane_def(g, src[l0 + q7])
+                pv := phi_val_for(g, dq3, pb)
+                inc.push(pv)
+            end
+            mut bad := false
+            each x in inc:
+                if x == 0 - 2:
+                    bad = true
+                end
+            end
+            mut kid := 0 - 1
+            if not bad:
+                kid = slp_check(g, s, inc, 0)
+            end
+            inc.free()
+            if kid < 0:
+                kids.free()
+                s.memo.put(kk, 0 - 1)
+                ret 0 - 1
+            end
+            kids.push(kid)
+        end
+        s.no0[n3] = s.opnodes.len()
+        s.nops[n3] = kids.len()
+        each kd in kids:
+            s.opnodes.push(kd)
+        end
+        kids.free()
+        ret n3
+    end
+    if op == OP_LOAD:
+        es := tsize(g, s.ety) as i64
+        mut off0 := 0 as i64
+        base0 := addr_base(g, g.i_a[d0], off0)
+        mut lo := 2147483647
+        mut hi := 0 - 1
+        repeat w in q8:
+            dq4 := lane_def(g, src[l0 + q8])
+            if (g.i_f[dq4] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+                ret 0 - 1
+            end
+            mut offq := 0 as i64
+            bq := addr_base(g, g.i_a[dq4], offq)
+            if bq != base0 or offq != off0 + (q8 as i64) * es:
+                ret 0 - 1
+            end
+            o := ordof(s, dq4)
+            if o < lo: lo = o end
+            if o > hi: hi = o end
+        end
+        if mem_between(g, s, b0, lo, hi, false):
+            ret 0 - 1
+        end
+        n4 := new_node(s, SLP_LOAD, src, l0)
+        s.memo.put(kk, n4)
+        ret n4
+    end
+    ret 0 - 1
+end
+
+func count_internal(s &: Slp):
+    repeat s.nkind.len() in n:
+        k := s.nkind[n]
+        if k == SLP_OP or k == SLP_PHI:
+            repeat s.nops[n] in j:
+                kid := s.opnodes[s.no0[n] + j]
+                repeat s.w in q:
+                    v := s.lanes[s.nl0[kid] + q]
+                    if v >= 0:
+                        s.internal[v] = s.internal[v] + 1
+                    end
+                end
+            end
+        end
+    end
+end
+
+func last_lane(g &: Ng, s &: Slp, n: int): int:
+    mut best := 0 - 1
+    mut bo := 0 - 1
+    repeat s.w in q:
+        d := lane_def(g, s.lanes[s.nl0[n] + q])
+        if d >= 0 and ordof(s, d) > bo:
+            bo = ordof(s, d)
+            best = d
+        end
+    end
+    ret best
+end
+
+func first_after_phis(g &: Ng, b: int): int:
+    mut i := g.b_first[b]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        i = g.i_next[i]
+    end
+    ret i
+end
+
+func slp_emit(g &: Ng, s &: Slp, n: int): int:
+    kk := "n" + n
+    if s.vmemo.has(kk):
+        ret s.vmemo.get(kk)
+    end
+    k := s.nkind[n]
+    l0 := s.nl0[n]
+    if k == SLP_BCAST:
+        v := s.lanes[l0]
+        bi := ins_new(g, OP_VBCAST, s.vty)
+        g.i_a[bi] = v
+        r := new_res(g, bi)
+        d := lane_def(g, v)
+        mut at_i := 0 - 1
+        if d >= 0 and g.i_op[d] == OP_PHI:
+            at_i = first_after_phis(g, g.i_blk[d])
+        else d >= 0:
+            at_i = g.i_next[d]
+        else:
+            at_i = g.b_last[0]
+        end
+        if at_i >= 0:
+            ins_before(g, at_i, bi)
+        else:
+            ins_append(g, g.i_blk[d], bi)
+        end
+        s.vmemo.put(kk, r)
+        ret r
+    end
+    if k == SLP_PHI:
+        d0 := lane_def(g, s.lanes[l0])
+        pi := ins_new(g, OP_PHI, s.vty)
+        r2 := new_res(g, pi)
+        s.vmemo.put(kk, r2)
+        np := s.nops[n]
+        g.i_ps[pi] = g.pool.len()
+        g.i_pcount[pi] = np
+        repeat np in j:
+            g.pool.push(0 - 1)
+            g.pool.push(g.pool[g.i_ps[d0] + 2 * j + 1])
+        end
+        ins_before(g, g.b_first[g.i_blk[d0]], pi)
+        repeat np in j2:
+            vk := slp_emit(g, s, s.opnodes[s.no0[n] + j2])
+            g.pool[g.i_ps[pi] + 2 * j2] = vk
+        end
+        ret r2
+    end
+    if k == SLP_LOAD:
+        last := last_lane(g, s, n)
+        d1 := lane_def(g, s.lanes[l0])
+        li := ins_new(g, OP_LOAD, s.vty)
+        g.i_a[li] = g.i_a[d1]
+        r3 := new_res(g, li)
+        ins_before(g, last, li)
+        s.vmemo.put(kk, r3)
+        ret r3
+    end
+    last2 := last_lane(g, s, n)
+    d2 := lane_def(g, s.lanes[l0])
+    va := slp_emit(g, s, s.opnodes[s.no0[n]])
+    vb := slp_emit(g, s, s.opnodes[s.no0[n] + 1])
+    oi := ins_new(g, g.i_op[d2], s.vty)
+    dv_taint(g, d2)
+    g.i_a[oi] = va
+    g.i_b[oi] = vb
+    r4 := new_res(g, oi)
+    ins_before(g, last2, oi)
+    s.vmemo.put(kk, r4)
+    ret r4
+end
+
+func slp_reset(s &: Slp):
+    s.memo = HashMap {} as HashMap<str, int>
+    s.vmemo = HashMap {} as HashMap<str, int>
+    s.nkind.clear()
+    s.nlanes.clear()
+    s.nl0.clear()
+    s.lanes.clear()
+    s.nops.clear()
+    s.no0.clear()
+    s.opnodes.clear()
+end
+
+func try_seed(g &: Ng, s &: Slp, stores: Vector<int>): bool:
+    w := s.w
+    mut vals := Vector {} as Vector<int>
+    each st in stores:
+        vals.push(g.i_a[st])
+    end
+    root := slp_check(g, s, vals, 0)
+    if root < 0 or s.nkind[root] == SLP_BCAST:
+        if dump_wanted(g):
+            printerrln "slp: seed rejected by shape, root " + root
+        end
+        vals.free()
+        ret false
+    end
+    s.internal.clear()
+    repeat g.v_kind.len():
+        s.internal.push(0)
+    end
+    count_internal(s)
+    each v in vals:
+        if v >= 0:
+            s.internal[v] = s.internal[v] + 1
+        end
+    end
+    repeat s.nkind.len() in n:
+        k := s.nkind[n]
+        if k == SLP_OP or k == SLP_PHI:
+            repeat w in q:
+                lv := s.lanes[s.nl0[n] + q]
+                if lv >= 0 and s.internal[lv] != g.v_uses[lv]:
+                    if dump_wanted(g):
+                        printerrln "slp: lane %" + lv + " internal " + s.internal[lv] + " uses " + g.v_uses[lv]
+                    end
+                    vals.free()
+                    ret false
+                end
+            end
+        end
+    end
+    vec := slp_emit(g, s, root)
+    mut last := stores[0]
+    each st2 in stores:
+        if ordof(s, st2) > ordof(s, last):
+            last = st2
+        end
+    end
+    vs := ins_new(g, OP_STORE, T_VOID)
+    g.i_a[vs] = vec
+    g.i_b[vs] = g.i_b[stores[0]]
+    g.i_x[vs] = s.vty
+    ins_before(g, last, vs)
+    each st3 in stores:
+        ins_unlink(g, st3)
+    end
+    count_uses(g)
+    vals.free()
+    ret true
+end
+
+func slp_block(g &: Ng, s &: Slp, b: int, ety: int): bool:
+    es := tsize(g, ety) as i64
+    w := 16 / tsize(g, ety)
+    if s.w != w:
+        slp_reset(s)
+    end
+    s.w = w
+    s.ety = ety
+    s.vty = ety == T_F32 ? T_V4F32 : T_V2F64
+    mut sts := Vector {} as Vector<int>
+    mut bases := Vector {} as Vector<int>
+    mut offs := Vector {} as Vector<i64>
+    mut i := g.b_first[b]
+    until i >= 0:
+        if g.i_op[i] == OP_STORE and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0:
+            v := g.i_a[i]
+            if v >= 0 and g.v_ty[v] == ety:
+                mut off := 0 as i64
+                bs := addr_base(g, g.i_b[i], off)
+                sts.push(i)
+                bases.push(bs)
+                offs.push(off)
+            end
+        end
+        i = g.i_next[i]
+    end
+    mut changed := false
+    mut used := Vector {} as Vector<bool>
+    repeat sts.len():
+        used.push(false)
+    end
+    repeat sts.len() in a:
+        if used[a]:
+            continue
+        end
+        mut run := Vector {} as Vector<int>
+        run.push(sts[a])
+        mut runix := Vector {} as Vector<int>
+        runix.push(a)
+        repeat w - 1 in lane:
+            want := offs[a] + ((lane + 1) as i64) * es
+            mut found := 0 - 1
+            repeat sts.len() in c:
+                if found < 0 and not used[c] and c != a and bases[c] == bases[a] and offs[c] == want:
+                    found = c
+                end
+            end
+            if found >= 0:
+                run.push(sts[found])
+                runix.push(found)
+            end
+        end
+        if run.len() == w:
+            mut lo := 2147483647
+            mut hi := 0 - 1
+            each st in run:
+                if ordof(s, st) < lo: lo = ordof(s, st) end
+                if ordof(s, st) > hi: hi = ordof(s, st) end
+            end
+            if not mem_between(g, s, b, lo, hi, true):
+                mut other := false
+                mut j := g.b_first[b]
+                until j >= 0:
+                    o := ordof(s, j)
+                    if o > lo and o < hi and g.i_op[j] == OP_STORE:
+                        mut inrun := false
+                        each st4 in run:
+                            if st4 == j:
+                                inrun = true
+                            end
+                        end
+                        if not inrun:
+                            other = true
+                        end
+                    end
+                    j = g.i_next[j]
+                end
+                if not other and try_seed(g, s, run):
+                    each ri in runix:
+                        used[ri] = true
+                    end
+                    changed = true
+                end
+            end
+        end
+        run.free()
+        runix.free()
+    end
+    sts.free()
+    bases.free()
+    offs.free()
+    used.free()
+    ret changed
+end
+
+func slp(g &: Ng): bool:
+    mut s := Slp {}
+    count_uses(g)
+    repeat g.i_op.len():
+        s.ord.push(0 - 1)
+    end
+    each b in g.b_rpo:
+        mut n := 0
+        mut i := g.b_first[b]
+        until i >= 0:
+            s.ord[i] = n
+            n += 1
+            i = g.i_next[i]
+        end
+    end
+    mut changed := false
+    each b2 in g.b_rpo:
+        if slp_block(g, s, b2, T_F32):
+            changed = true
+        end
+        if slp_block(g, s, b2, T_F64):
+            changed = true
+        end
+    end
+    s.ord.free()
+    ret changed
+end

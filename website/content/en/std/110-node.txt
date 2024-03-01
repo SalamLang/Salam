@@ -1,0 +1,179 @@
+pkg.en = node
+pkg.name = node
+pkg.group = Web and services
+pkg.summary = A Salam program under Node.js: modules, files, processes and JavaScript objects.
+pkg.title = The node package in Salam | Node.js
+pkg.description = The node package in Salam: running a program under Node.js, loading a module with require, files and directories, running another program, promises, and working with JavaScript objects, with examples.
+pkg.import = node
+pkg.intro <<
+<p>This package is for Salam programs that are translated to JavaScript with <code>salam js</code> and run under Node.js, such as the VS Code extension or a build script that has to live in an npm project. It gives you the whole of Node: <code>Require</code> loads any built-in or npm module, the <code>Get...</code> and <code>Set...</code> functions read and write properties, and the <code>Call...</code> functions call methods. A few helpers wrap the common <code>fs</code>, <code>path</code>, <code>os</code> and <code>child_process</code> calls.</p>
+<p>Use it only when the program really runs under Node. A native Salam program reads files with <a href="/std/fs/">fs</a> and starts programs with <a href="/std/os/process/">os/process</a>, and code for a browser page uses <a href="/std/dom/">dom</a>. A native build cannot call these functions, so the examples on this page are type-checked by the site but not run.</p>
+<h3>Core ideas</h3>
+<ul>
+<li><strong>Handles.</strong> Every JavaScript value (object, array, function, promise, even <code>undefined</code>) is held in an <code>i64</code>. Nothing needs freeing; Node's garbage collector owns them.</li>
+<li><strong>Typed calls.</strong> Salam checks argument types, so each call shape has its own function, named after its arguments: <code>CallS2</code> passes two strings, <code>CallV1</code> one JavaScript value, <code>CallSFn0</code> a string and a function. Pick the one that matches the method you call; the result is always a handle.</li>
+<li><strong>Callbacks run later.</strong> A Salam lambda passed to <code>CallFn1</code>, <code>ExecFile</code> or <code>SetPropFn1</code> becomes a JavaScript function. Node calls it after <code>main</code> has returned, from its event loop.</li>
+</ul>
+<h3>Things that trip people up</h3>
+<ul>
+<li><code>GetStr</code> on a missing property returns an empty string and <code>GetNum</code> returns 0, without any error. When "missing" and "empty" mean different things, test <code>IsNullish(GetProp(obj, name))</code> first.</li>
+<li>Every number from JavaScript is an <code>f64</code>, and 64-bit integers do not work under <code>salam js</code>. Cast to <code>int</code> when you need one.</li>
+<li>Salam strings count bytes, also under Node: <code>"سلام".len()</code> is 8, while JavaScript's <code>length</code> of the same text is 4. Text itself passes through unchanged.</li>
+</ul>
+<p>To try a program, translate it and run the result with Node.js 18 or newer:</p>
+<pre class="code" dir="ltr"><code>salam js node-guide-files.salam --output=files.js
+node files.js</code></pre>
+<p>The output under each program is what it printed that way under Node 24.</p>
+
+<h2 id="guide-files">Files and directories</h2>
+<p>The file helpers wrap the synchronous calls of Node's <code>fs</code> and <code>path</code> modules, which keeps a script readable from top to bottom. For anything they do not cover, <code>Require("fs")</code> gives you the module itself. <code>readdirSync</code> returns a JavaScript array: its <code>length</code> is a number property and each element is a property named by its index, so <code>GetStr(names, "0")</code> reads the first one.</p>
+{{example.node-guide-files}}
+<pre class="code" dir="ltr"><code>a.txt 3
+b.txt 1
+total 4</code></pre>
+<p><code>MkdtempSync</code> adds random characters to the prefix, so two runs never collide; <code>RmSyncRecursiveForce</code> removes the directory and everything in it at the end.</p>
+
+<h2 id="guide-config">Reading JSON from JavaScript</h2>
+<p><code>Global("JSON")</code> is the same <code>JSON</code> object a JavaScript program sees, so <code>parse</code> turns text into an object handle and the <code>Get...</code> functions read its fields. A field that is missing comes back as <code>undefined</code>; test it with <code>IsNullish</code> before reading it, and fall back to a default.</p>
+{{example.node-guide-config}}
+<pre class="code" dir="ltr"><code>name: shop
+port: 8080
+debug: true
+db host: 127.0.0.1
+workers: 4
+{"name":"shop","port":8080,"debug":true,"db":{"host":"127.0.0.1"},"workers":4}</code></pre>
+<p>Numbers always arrive as <code>f64</code>, because JavaScript has only one number type. Cast with <code>as int</code> where you need an integer. Note the <code>IsNullish</code> test: <code>GetNum(config, "workers")</code> on its own would have returned 0 for the missing field, not an error.</p>
+
+<h2 id="guide-module">Writing a Node module in Salam</h2>
+<p><code>Exports</code> is <code>module.exports</code> of the translated file, so the functions you attach to it with <code>SetPropFn0</code>, <code>SetPropFn1</code> and <code>SetPropFn1R</code> can be called by any JavaScript code that <code>require</code>s the file. Arguments and results are JavaScript values (<code>i64</code> handles): <code>ToStr</code> turns one into a Salam string, and the small <code>js_str</code> helper here goes the other way by pushing the string into an array and reading it back.</p>
+{{example.node-guide-module}}
+<pre class="code" dir="ltr"><code>hello from Salam
+hello-salam-world</code></pre>
+<p>From JavaScript the module is used as usual: <code>require("./slug.js").slug("Some Title")</code>.</p>
+
+<h2 id="guide-exec">Child processes and events</h2>
+<p><code>ExecFile</code> starts a program and returns at once; the function you pass runs later, when the program has finished, with a failure flag and everything it wrote to standard output and standard error. That is why <em>started the child</em> is printed first. An <code>EventEmitter</code> from the <code>events</code> module lets other parts of the program react when the work is done.</p>
+{{example.node-guide-exec}}
+<pre class="code" dir="ltr"><code>started the child
+child printed 42
+all jobs finished</code></pre>
+<p>Node keeps the process alive while a child or a timer is pending, so <code>main</code> may return long before the callbacks run. Do not free or reuse anything a callback still needs.</p>
+<p><code>failed</code> is also true when the program ran but exited with a non-zero status. Both outputs are collected in memory, up to 32 MB each; a program that writes more is stopped and reported as failed. Use <code>ExecFileRaw</code> when you need the Node error object itself, for example its <code>code</code> property with the exit status.</p>
+
+<h2 id="guide-promise">Promises and asynchronous files</h2>
+<p>Most newer Node APIs return a promise instead of taking a callback. A promise is a handle like any other: call its <code>then</code> method with <code>CallFn1</code> to run code with the result, <code>catch</code> to handle a failure and <code>finally</code> (with <code>CallFn0</code>) for cleanup that must run either way. Here <code>fs.promises.readFile</code> reads one file that exists and one that does not.</p>
+{{example.node-guide-promise}}
+<pre class="code" dir="ltr"><code>reading started
+orders.csv has 2 orders
+refunds.csv failed with ENOENT
+temp folder removed</code></pre>
+<p>A Salam lambda cannot return a value to <code>then</code>, so promises do not chain the way they do in JavaScript. To run one step after another, start the next step inside the callback of the previous one, as the second read does here. <code>NewPromise</code> goes the other way and makes a promise of your own for JavaScript code to wait on: its function receives the <code>resolve</code> and <code>reject</code> functions, which you call with <code>Invoke1</code>.</p>
+>>
+
+doc.Require = Loads a Node module with <code>require</code>.
+doc.Exports = The <code>module.exports</code> object; for building a module.
+doc.GetProp = A property of an object that is itself an object.
+doc.GetNum = A numeric property, as <code>f64</code>; 0 when it is missing.
+doc.GetStr = A string property; an empty string when it is missing.
+doc.GetBool = A boolean property.
+doc.SetProp = Sets a property on an object.
+doc.SetStr = A string property.
+doc.SetNum = A numeric property.
+doc.SetBool = A boolean property.
+doc.SetPropFn0 = Makes a function of no arguments a property of the object, so JavaScript can call it.
+doc.SetPropFn1 = Makes a function of one argument a property.
+doc.SetPropFn1R = Makes a function of one argument with a return value a property.
+doc.Call0 = Calls a method with no arguments.
+doc.CallS1 = With one string.
+doc.CallS2 = With two strings.
+doc.CallS3 = With three strings.
+doc.CallV1 = With one JavaScript value.
+doc.CallV2 = With two values.
+doc.CallV3 = With three values.
+doc.CallVS1 = With one value and one string.
+doc.CallSB1 = With one string and one boolean.
+doc.CallB1 = With one boolean.
+doc.CallFn0 = With a function of no arguments, as <code>nextTick</code> wants.
+doc.CallFn1 = With a function of one argument, as <code>forEach</code> wants.
+doc.CallSFn0 = With one string and a function, as <code>on("event", ...)</code> wants.
+doc.New0 = <code>new</code> with the given constructor.
+doc.New1 = <code>new</code> with one argument.
+doc.New4 = <code>new</code> with four arguments.
+doc.Invoke0 = Calls a JavaScript function value.
+doc.Invoke1 = With one argument.
+doc.Invoke2 = With two arguments.
+doc.IsNullish = The value is <code>null</code> or <code>undefined</code>.
+doc.Global = The global object with this name, such as <code>JSON</code>.
+doc.NewArray = An empty array.
+doc.NewObject = An empty object.
+doc.Push = Adds a value to an array.
+doc.PushStr = Adds a string to an array.
+doc.NewPromise = A new promise; the function takes the resolve and reject functions.
+doc.ToStr = Turns a value into a string with <code>String</code>.
+doc.ToBool = Turns a value into a boolean.
+doc.Platform = The operating system, such as <code>linux</code> or <code>win32</code>.
+doc.IsWindows = It is running on Windows.
+doc.TmpDir = The system temporary directory.
+doc.PathJoin2 = Joins two path pieces.
+doc.PathJoin3 = Three pieces.
+doc.PathDirname = The directory of a path.
+doc.MkdtempSync = Makes a unique temporary directory with a prefix.
+doc.WriteFileSync = Writes a file.
+doc.ReadFileSync = Reads a file.
+doc.RmSyncRecursiveForce = Deletes a file or a directory with everything in it.
+doc.ExecFile = Runs a program with its arguments in the given directory and, once it finishes, calls the function with "it failed", the output and the error output. A non-zero exit status counts as a failure, and each output is capped at 32 MB.
+doc.ExecFileRaw = The same, with the Node error object itself.
+
+ex.Require = node-Basics
+ex.Exports = node-Basics
+ex.GetProp = node-Basics
+ex.GetNum = node-Basics
+ex.GetStr = node-Basics
+ex.GetBool = node-Basics
+ex.SetProp = node-Basics
+ex.SetStr = node-Basics
+ex.SetNum = node-Basics
+ex.SetBool = node-Basics
+ex.SetPropFn0 = node-Basics
+ex.SetPropFn1 = node-Basics
+ex.SetPropFn1R = node-Basics
+ex.Call0 = node-Basics
+ex.CallS1 = node-Basics
+ex.CallS2 = node-Basics
+ex.CallS3 = node-Basics
+ex.CallV2 = node-Basics
+ex.New0 = node-Basics
+ex.New1 = node-Basics
+ex.Invoke0 = node-Basics
+ex.Invoke1 = node-Basics
+ex.IsNullish = node-Basics
+ex.Global = node-Basics
+ex.NewArray = node-Basics
+ex.NewObject = node-Basics
+ex.Push = node-Basics
+ex.PushStr = node-Basics
+ex.ToStr = node-Basics
+ex.ToBool = node-Basics
+ex.Platform = node-Basics
+ex.IsWindows = node-Basics
+ex.TmpDir = node-Basics
+ex.PathJoin2 = node-Basics
+ex.PathJoin3 = node-Basics
+ex.PathDirname = node-Basics
+ex.MkdtempSync = node-Basics
+ex.WriteFileSync = node-Basics
+ex.ReadFileSync = node-Basics
+ex.RmSyncRecursiveForce = node-Basics
+ex.CallV1 = node-Calls
+ex.CallV3 = node-Calls
+ex.CallVS1 = node-Calls
+ex.CallSB1 = node-Calls
+ex.CallB1 = node-Calls
+ex.CallFn0 = node-Calls
+ex.CallFn1 = node-Calls
+ex.CallSFn0 = node-Calls
+ex.New4 = node-Calls
+ex.Invoke2 = node-Calls
+ex.NewPromise = node-Calls
+ex.ExecFile = node-Calls
+ex.ExecFileRaw = node-Calls

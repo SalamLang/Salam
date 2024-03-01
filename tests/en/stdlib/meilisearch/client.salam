@@ -1,0 +1,94 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.meilisearch
+
+include fake "_fake.salam"
+
+const PORT := 19801
+
+func show(label: str, err: meilisearch.Error):
+    println label + ": " + fake.Last()
+    if not meilisearch.Ok(err):
+        println "  error: " + meilisearch.ErrorString(err)
+    end
+end
+
+func main:
+    fake.On("GET", "/health", 200, `{"status":"available"}`)
+    fake.On("GET", "/version", 200, `{"commitSha":"b46889b5","commitDate":"2025-01-01T00:00:00Z","pkgVersion":"1.15.2"}`)
+    fake.On("GET", "/stats", 200, `{"databaseSize":447819776,"usedDatabaseSize":196608,"lastUpdate":"2025-01-02T03:04:05Z","indexes":{"movies":{"numberOfDocuments":19654,"isIndexing":false}}}`)
+    fake.On("POST", "/dumps", 202, `{"taskUid":7,"indexUid":null,"status":"enqueued","type":"dumpCreation","enqueuedAt":"2025-01-02T03:04:05Z"}`)
+    fake.On("POST", "/snapshots", 202, `{"taskUid":8,"indexUid":null,"status":"enqueued","type":"snapshotCreation","enqueuedAt":"2025-01-02T03:04:05Z"}`)
+    fake.On("GET", "/experimental-features", 200, `{"metrics":false,"logsRoute":false}`)
+    fake.On("PATCH", "/experimental-features", 200, `{"metrics":true,"logsRoute":false}`)
+    fake.On("GET", "/broken", 500, `upstream exploded`)
+    fake.On("GET", "/forbidden", 403, `{"message":"The provided API key is invalid.","code":"invalid_api_key","type":"auth","link":"https://docs.meilisearch.com/errors#invalid_api_key"}`)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    c := meilisearch.New("127.0.0.1:" + PORT + "/", "masterKey")
+    println "host: " + c.host
+    mut err := meilisearch.Error {}
+
+    println "health: " + meilisearch.Health(c, err)
+    show("health", err)
+    println "healthy: " + meilisearch.IsHealthy(c)
+
+    v := meilisearch.GetVersion(c, err)
+    println "version: " + v.pkg_version + " " + v.commit_sha + " " + v.commit_date
+
+    st := meilisearch.GetStats(c, err)
+    println "stats: " + st.database_size + " " + st.used_database_size + " " + st.last_update
+    println "stats indexes: " + st.indexes
+
+    d := meilisearch.CreateDump(c, err)
+    println "dump: " + d.task_uid + " " + d.status + " " + d.kind + " [" + d.index_uid + "]"
+    show("dump", err)
+    sn := meilisearch.CreateSnapshot(c, err)
+    println "snapshot: " + sn.task_uid + " " + sn.kind
+
+    println "features: " + meilisearch.GetExperimentalFeatures(c, err)
+    println "features: " + meilisearch.UpdateExperimentalFeatures(c, `{"metrics":true}`, err)
+    show("features", err)
+
+    raw := meilisearch.Request(c, "GET", "/forbidden", "", err)
+    println "raw: [" + raw + "] status=" + err.status + " code=" + err.code + " kind=" + err.kind
+    println "link: " + err.link
+    show("forbidden", err)
+
+    meilisearch.Request(c, "GET", "/broken", "", err)
+    show("broken", err)
+
+    meilisearch.Request(c, "GET", "/missing", "", err)
+    show("missing", err)
+
+    meilisearch.GetVersion(c, err)
+    println "cleared: " + meilisearch.Ok(err)
+
+    anon := meilisearch.New("http://127.0.0.1:" + PORT, "")
+    meilisearch.Health(anon, err)
+    show("anonymous", err)
+
+    down := meilisearch.New("http://127.0.0.1:1", "k")
+    println "down healthy: " + meilisearch.IsHealthy(down)
+    meilisearch.Health(down, err)
+    println "down code: " + err.code + " status=" + err.status
+
+    empty := meilisearch.Client {}
+    meilisearch.Health(empty, err)
+    println "empty: " + meilisearch.ErrorString(err)
+    ret 0
+end

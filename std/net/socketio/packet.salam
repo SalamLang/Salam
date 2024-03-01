@@ -1,0 +1,430 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package socketio
+
+import str
+import mem
+import encoding
+
+@en "EngineOpen"
+@fa "باز کردن موتور"
+pub const EIO_OPEN := 0
+
+@en "EngineClose"
+@fa "بستن موتور"
+pub const EIO_CLOSE := 1
+
+@en "EnginePing"
+@fa "پینگ موتور"
+pub const EIO_PING := 2
+
+@en "EnginePong"
+@fa "پونگ موتور"
+pub const EIO_PONG := 3
+
+@en "EngineMessage"
+@fa "پیام موتور"
+pub const EIO_MESSAGE := 4
+
+@en "EngineUpgrade"
+@fa "ارتقای موتور"
+pub const EIO_UPGRADE := 5
+
+@en "EngineNoop"
+@fa "بی‌کار موتور"
+pub const EIO_NOOP := 6
+
+@en "ConnectPacket"
+@fa "بسته اتصال"
+pub const PKT_CONNECT := 0
+
+@en "DisconnectPacket"
+@fa "بسته قطع اتصال"
+pub const PKT_DISCONNECT := 1
+
+@en "EventPacket"
+@fa "بسته رویداد"
+pub const PKT_EVENT := 2
+
+@en "AckPacket"
+@fa "بسته تایید"
+pub const PKT_ACK := 3
+
+@en "ConnectError"
+@fa "خطای اتصال"
+pub const PKT_CONNECT_ERROR := 4
+
+@en "BinaryEvent"
+@fa "رویداد دودویی"
+pub const PKT_BINARY_EVENT := 5
+
+@en "BinaryAck"
+@fa "تایید دودویی"
+pub const PKT_BINARY_ACK := 6
+
+const RS := 30
+
+const MAX_ATTACHMENTS := 1024
+const MAX_ACK_ID := 1000000000
+
+@en "Bytes"
+@fa "بایت‌ها"
+pub struct Bytes:
+    @en "ptr"
+    @fa "اشاره‌گر"
+    pub ptr: void* = null
+    @en "len"
+    @fa "طول"
+    pub len: int = 0
+end
+
+@en "Packet"
+@fa "بسته"
+pub struct Packet:
+    @en "kind"
+    @fa "نوع"
+    pub kind: int = 0 - 1
+    @en "nsp"
+    @fa "فضای نام"
+    pub nsp: str = "/"
+    @en "id"
+    @fa "شماره تایید"
+    pub id: int = 0 - 1
+    @en "data"
+    @fa "داده"
+    pub data: str = ""
+    @en "attachments"
+    @fa "پیوست‌ها"
+    pub attachments: int = 0
+    @en "ok"
+    @fa "خوانده‌شده"
+    pub ok: bool = false
+end
+
+func _digit_at(s: str, i: int): int:
+    if i < 0 or i >= s.len():
+        ret 0 - 1
+    end
+    c := char_code(s.substr(i, 1))
+    if c < 48 or c > 57:
+        ret 0 - 1
+    end
+    ret c - 48
+end
+
+func _is_ws(ch: str): bool:
+    ret ch == " " or ch == "\t" or ch == "\n" or ch == "\r"
+end
+
+@en "EncodePacket"
+@fa "رمزگذاری بسته"
+pub func EncodePacket(p: Packet): str:
+    mut out := "" + p.kind
+    if p.attachments > 0 and (p.kind == PKT_BINARY_EVENT or p.kind == PKT_BINARY_ACK):
+        out += "" + p.attachments + "-"
+    end
+    if p.nsp.len() > 0 and p.nsp != "/":
+        out += p.nsp + ","
+    end
+    if p.id >= 0:
+        out += "" + p.id
+    end
+    out += p.data
+    ret out
+end
+
+@en "DecodePacket"
+@fa "رمزگشایی بسته"
+pub func DecodePacket(text: str): Packet:
+    mut p := Packet {}
+    n := text.len()
+    if n == 0:
+        ret p
+    end
+    k := _digit_at(text, 0)
+    if k < 0 or k > PKT_BINARY_ACK:
+        ret p
+    end
+    p.kind = k
+    mut i := 1
+    if k == PKT_BINARY_EVENT or k == PKT_BINARY_ACK:
+        mut num := 0
+        mut seen := false
+        until _digit_at(text, i) >= 0 and num <= MAX_ATTACHMENTS:
+            num = num * 10 + _digit_at(text, i)
+            seen = true
+            i += 1
+        end
+        if not seen or num > MAX_ATTACHMENTS or i >= n or text.substr(i, 1) != "-":
+            ret p
+        end
+        p.attachments = num
+        i += 1
+    end
+    if i < n and text.substr(i, 1) == "/":
+        c := str.IndexFrom(text, ",", i)
+        if c < 0:
+            p.nsp = text.substr(i, n - i)
+            i = n
+        else:
+            p.nsp = text.substr(i, c - i)
+            i = c + 1
+        end
+    end
+    if _digit_at(text, i) >= 0:
+        mut id := 0
+        until _digit_at(text, i) >= 0 and id <= MAX_ACK_ID:
+            id = id * 10 + _digit_at(text, i)
+            i += 1
+        end
+        if id > MAX_ACK_ID:
+            ret p
+        end
+        p.id = id
+    end
+    if i < n:
+        p.data = text.substr(i, n - i)
+    end
+    p.ok = true
+    ret p
+end
+
+@en "EncodeEngine"
+@fa "رمزگذاری موتور"
+pub func EncodeEngine(kind: int, body: str): str:
+    ret "" + kind + body
+end
+
+@en "EngineKind"
+@fa "نوع موتور"
+pub func EngineKind(payload: str): int:
+    ret _digit_at(payload, 0)
+end
+
+@en "EngineBody"
+@fa "بدنه موتور"
+pub func EngineBody(payload: str): str:
+    if payload.len() < 2:
+        ret ""
+    end
+    ret payload.substr(1, payload.len() - 1)
+end
+
+@en "SplitPayloads"
+@fa "جداسازی بارها"
+pub func SplitPayloads(body: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    n := body.len()
+    if n == 0:
+        ret out
+    end
+    mut start := 0
+    mut i := 0
+    until i < n:
+        if char_code(body.substr(i, 1)) == RS:
+            out.push(body.substr(start, i - start))
+            start = i + 1
+        end
+        i += 1
+    end
+    out.push(body.substr(start, n - start))
+    ret out
+end
+
+@en "JoinPayloads"
+@fa "پیوستن بارها"
+pub func JoinPayloads(items: Vector<str>): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat items.len() in i:
+        if i > 0:
+            str.BufAppendChar(sb, RS)
+        end
+        str.BufAppend(sb, items.get(i))
+    end
+    ret str.BufStr(sb)
+end
+
+@en "SplitJSONArray"
+@fa "جداسازی آرایه جیسون"
+pub func SplitJSONArray(text: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    s := str.Trim(text)
+    if not str.StartsWith(s, "["):
+        ret out
+    end
+    n := s.len()
+    mut i := 1
+    mut depth := 0
+    mut instr := false
+    mut esc := false
+    mut start := 0 - 1
+    mut done := false
+    until i < n and not done:
+        ch := s.substr(i, 1)
+        if instr:
+            if esc:
+                esc = false
+            else ch == "\\":
+                esc = true
+            else ch == "\"":
+                instr = false
+            end
+        else ch == "\"":
+            instr = true
+            if start < 0:
+                start = i
+            end
+        else ch == "[" or ch == "{":
+            if start < 0:
+                start = i
+            end
+            depth += 1
+        else ch == "]" and depth == 0:
+            if start >= 0:
+                out.push(str.Trim(s.substr(start, i - start)))
+            end
+            done = true
+        else ch == "]" or ch == "}":
+            depth -= 1
+        else ch == "," and depth == 0:
+            if start >= 0:
+                out.push(str.Trim(s.substr(start, i - start)))
+            else:
+                out.push("")
+            end
+            start = 0 - 1
+        else:
+            if not _is_ws(ch) and start < 0:
+                start = i
+            end
+        end
+        i += 1
+    end
+    ret out
+end
+
+@en "Placeholder"
+@fa "جانگهدار"
+pub func Placeholder(num: int): str:
+    ret `{"_placeholder":true,"num":` + num + "}"
+end
+
+@en "PlaceholderNum"
+@fa "شماره جانگهدار"
+pub func PlaceholderNum(frag: str): int:
+    if not str.Contains(frag, "_placeholder"):
+        ret 0 - 1
+    end
+    k := str.Find(frag, "\"num\"")
+    if k < 0:
+        ret 0 - 1
+    end
+    c := str.IndexFrom(frag, ":", k)
+    if c < 0:
+        ret 0 - 1
+    end
+    mut i := c + 1
+    until _is_ws(frag.substr(i, 1)):
+        i += 1
+    end
+    if _digit_at(frag, i) < 0:
+        ret 0 - 1
+    end
+    mut num := 0
+    until _digit_at(frag, i) >= 0 and num <= MAX_ATTACHMENTS:
+        num = num * 10 + _digit_at(frag, i)
+        i += 1
+    end
+    if num > MAX_ATTACHMENTS:
+        ret 0 - 1
+    end
+    ret num
+end
+
+@en "NewBytes"
+@fa "بایت جدید"
+pub func NewBytes(ptr: void*, n: int): Bytes:
+    if ptr == null or n <= 0:
+        ret Bytes {}
+    end
+    buf := mem.Allocate(n as u64)
+    if buf == null:
+        ret Bytes {}
+    end
+    mem.Copy(buf, ptr, n as u64)
+    ret Bytes { ptr = buf, len = n }
+end
+
+@en "BytesFromStr"
+@fa "بایت از رشته"
+pub func BytesFromStr(s: str): Bytes:
+    ret NewBytes(s as void*, s.len())
+end
+
+@en "BytesToStr"
+@fa "بایت به رشته"
+pub func BytesToStr(b: Bytes): str:
+    if b.ptr == null or b.len <= 0:
+        ret ""
+    end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    bp := b.ptr as i8*
+    repeat b.len in i:
+        mut v := bp[i] as int
+        if v < 0:
+            v += 256
+        end
+        if v == 0:
+            ret str.BufStr(sb)
+        end
+        str.BufAppendChar(sb, v)
+    end
+    ret str.BufStr(sb)
+end
+
+@en "BytesToBase64"
+@fa "بایت به بیس۶۴"
+pub func BytesToBase64(b: Bytes): str:
+    if b.ptr == null or b.len <= 0:
+        ret ""
+    end
+    ret encoding.Base64EncodeBytes(b.ptr, b.len)
+end
+
+@en "BytesAt"
+@fa "بایت در"
+pub func BytesAt(b: Bytes, i: int): int:
+    if b.ptr == null or i < 0 or i >= b.len:
+        ret 0 - 1
+    end
+    bp := b.ptr as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+@en "BytesFree"
+@fa "آزادسازی بایت"
+pub func BytesFree(b &: Bytes):
+    if b.ptr != null:
+        mem.Free(b.ptr)
+        b.ptr = null
+    end
+    b.len = 0
+end

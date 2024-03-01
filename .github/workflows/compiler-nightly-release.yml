@@ -1,0 +1,86 @@
+---
+name: 🌙 Compiler - Nightly Release Check
+# checkov:skip=CKV_GHA_7:inputs are only ever read via env: indirection, never interpolated into a run: script
+on:
+  schedule:
+    - cron: '30 4 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Trigger the nightly release even if main has not moved since the last published nightly'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  check-and-trigger:
+    if: github.repository == 'SalamLang/Salam'
+    name: Check for new commits and trigger nightly release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Decide whether a nightly is needed
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -eu
+          head="$(git rev-parse HEAD)"
+          echo "main HEAD: $head"
+
+          last="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=30" \
+            --jq 'map(select(.prerelease and (.tag_name | test("nightly")))) | .[0].target_commitish // ""' 2>/dev/null || true)"
+          echo "last nightly built from: ${last:-<none>}"
+
+          if [ "$FORCE" = "true" ]; then
+            echo "forced by workflow_dispatch input"
+            echo "needed=1" >> "$GITHUB_OUTPUT"
+          elif [ -z "$last" ]; then
+            echo "no nightly release published yet"
+            echo "needed=1" >> "$GITHUB_OUTPUT"
+          elif [ "$last" = "$head" ]; then
+            echo "the published nightly already covers $head"
+            echo "needed=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "main has moved since the last nightly:"
+            git log --oneline "$last..HEAD" 2>/dev/null | head -20 || true
+            echo "needed=1" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Trigger nightly compiler release
+        if: steps.check.outputs.needed == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          NIGHTLY_DATE="$(TZ='Asia/Tehran' date +'%Y-%m-%d')"
+          echo "Triggering nightly release for ${NIGHTLY_DATE}"
+          gh workflow run compiler-release.yml \
+            --ref main \
+            -f nightly=true \
+            -f nightly_date="${NIGHTLY_DATE}"
+          sleep 10
+          url="$(gh run list --workflow=compiler-release.yml --event=workflow_dispatch \
+            --branch=main --limit 1 --json url --jq '.[0].url' 2>/dev/null || true)"
+          echo "Dispatched release run: ${url:-<not visible yet>}"
+          {
+            echo "### 🌙 Nightly release triggered"
+            echo ""
+            echo "- date: \`${NIGHTLY_DATE}\`"
+            echo "- run: ${url:-see the compiler release workflow}"
+            echo ""
+            echo "That run publishes the release; a failure there is reported"
+            echo "on the nightly-failure tracking issue, not here."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Skip - main has not moved
+        if: steps.check.outputs.needed != '1'
+        run: |
+          echo "The published nightly already covers the current main - skipping."

@@ -1,0 +1,114 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "pool"
+@fa "استخر"
+package pool
+
+import mem
+import sync
+import thread
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func GetSystemInfo(info: void*)
+    end
+else:
+    extern:
+        func sysconf(name: int): size
+    end
+end
+
+struct Range:
+    pub body: func (i64) = (i: i64): end
+    pub next: i64* = null
+    pub n: i64 = 0
+    pub mu: sync.Mutex = sync.Mutex {}
+end
+
+func range_worker(rp: Range*):
+    r := rp[0]
+    c := r.next
+    until true:
+        sync.Lock(r.mu)
+        i := c[0]
+        c[0] = i + 1
+        sync.Unlock(r.mu)
+        if i >= r.n:
+            break
+        end
+        r.body(i)
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    func cpu_count_os(): i64:
+        buf := mem.AllocateZeroed(96 as u64)
+        GetSystemInfo(buf)
+        p := ((buf as i64) + 8 + 3 * (sizeof(usize) as i64)) as i32*
+        n := p[0] as i64
+        mem.Free(buf)
+        ret n
+    end
+else:
+    if defined(SALAM_OS_BSD):
+        func cpu_count_os(): i64: ret sysconf(58) end
+    else:
+        func cpu_count_os(): i64: ret sysconf(84) end
+    end
+end
+
+@en "CPUCount"
+@fa "تعداد پردازنده"
+pub func CPUCount(): i64:
+    n := cpu_count_os()
+    if n < 1:
+        ret 1
+    end
+    ret n
+end
+
+@en "ParallelFor"
+@fa "برای موازی"
+pub func ParallelFor(n: i64, workers: i64, body: func (i64)):
+    if n <= 0:
+        ret
+    end
+    mut w := workers
+    if w < 1: w = 1 end
+    if w > n: w = n end
+
+    rp := mem.AllocateZeroed(sizeof(Range) as u64) as Range*
+    c := mem.AllocateZeroed(8 as u64) as i64*
+    rp[0] = Range { body = body, next = c, n = n, mu = sync.NewMutex() }
+
+    mut ts := Vector {} as Vector<thread.Thread>
+    mut k := 0 as i64
+    until k < w:
+        ts = thread.Collect(ts, spawn(range_worker, rp))
+        k = k + 1
+    end
+    thread.JoinAll(ts)
+    ts.free()
+
+    sync.Destroy(rp[0].mu)
+    mem.Free(c as void*)
+    mem.Free(rp as void*)
+end
+
+@en "ParallelForAuto"
+@fa "برای موازی خودکار"
+pub func ParallelForAuto(n: i64, body: func (i64)):
+    ParallelFor(n, CPUCount(), body)
+end

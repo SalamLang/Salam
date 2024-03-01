@@ -1,0 +1,617 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package lsp
+
+import str
+import encoding.value
+
+include tok "../token.salam"
+include lp "../langpack.salam"
+include lx "../lexer/lexer.salam"
+include src "../source.salam"
+include sm "../semantic/semantic.salam"
+
+struct Seg:
+    pub name: str = ""
+    pub call: bool = false
+end
+
+func read_chain(lntext: str, dot: int, out &: Vector<Seg>): bool:
+    mut k := dot
+    mut segs := Vector {} as Vector<Seg>
+    until k > 0:
+        mut j := k
+        mut call := false
+        if j > 0 and byte_at(lntext, j - 1) == 41:
+            mut depth := 0
+            mut m := j - 1
+            until m >= 0:
+                c := byte_at(lntext, m)
+                if c == 41:
+                    depth += 1
+                else c == 40:
+                    depth -= 1
+                    if depth == 0:
+                        break
+                    end
+                end
+                m -= 1
+            end
+            if m < 0:
+                segs.free()
+                ret false
+            end
+            j = m
+            call = true
+        end
+        mut b := j
+        until b > 0 and is_ident_byte(byte_at(lntext, b - 1)):
+            b -= 1
+        end
+        if b == j:
+            segs.free()
+            ret false
+        end
+        segs.push(Seg { name = str.Substr(lntext, b, j - b), call = call })
+        if b > 0 and byte_at(lntext, b - 1) == 46:
+            k = b - 1
+        else:
+            break
+        end
+    end
+    mut i := segs.len() - 1
+    until i >= 0:
+        out.push(segs.get(i))
+        i -= 1
+    end
+    segs.free()
+    ret out.len() > 0
+end
+
+func local_visible(lv: value.Value, line: int, ch: int): bool:
+    fl := vint(lv, "fl", 0)
+    fc := vint(lv, "fc", 0)
+    tl := vint(lv, "tl", 0)
+    if line < fl or line > tl:
+        ret false
+    end
+    if line == fl and ch < fc:
+        ret false
+    end
+    ret true
+end
+
+func find_name(snap: value.Value, name: str, line: int, ch: int): int:
+    locs := obj(snap, "locals")
+    mut best := 0 - 1
+    mut best_line := 0 - 1
+    if value.IsArray(locs):
+        repeat value.ArrayLen(locs) in i:
+            lv := value.ArrayGet(locs, i)
+            di := vint(lv, "d", 0 - 1)
+            if local_visible(lv, line, ch) and str.Equals(vstr(decl_at(snap, di), "name"), name):
+                fl := vint(lv, "fl", 0)
+                if fl >= best_line:
+                    best = di
+                    best_line = fl
+                end
+            end
+        end
+    end
+    if best >= 0:
+        ret best
+    end
+    gs := obj(snap, "globals")
+    if value.IsArray(gs):
+        repeat value.ArrayLen(gs) in i:
+            di := value.AsInt(value.ArrayGet(gs, i)) as int
+            if str.Equals(vstr(decl_at(snap, di), "name"), name):
+                ret di
+            end
+        end
+    end
+    ret 0 - 1
+end
+
+func member_named(snap: value.Value, ty: str, name: str): int:
+    ms := obj(obj(snap, "types"), ty)
+    if not value.IsArray(ms):
+        ret 0 - 1
+    end
+    repeat value.ArrayLen(ms) in i:
+        di := value.AsInt(value.ArrayGet(ms, i)) as int
+        if str.Equals(vstr(decl_at(snap, di), "name"), name):
+            ret di
+        end
+    end
+    ret 0 - 1
+end
+
+func clean_ty(t0: str): str:
+    mut t := str.Trim(t0)
+    until str.EndsWith(t, "*"):
+        t = str.Trim(str.Substr(t, 0, str.Len(t) - 1))
+    end
+    ret t
+end
+
+func decl_value_ty(dv: value.Value, call: bool): str:
+    k := vint(dv, "kind", 0)
+    if k == 4 or k == 5:
+        if call:
+            rk := vstr(dv, "rk")
+            ret clean_ty(str.Len(rk) > 0 ? rk : vstr(dv, "ret"))
+        end
+        ret ""
+    end
+    tk := vstr(dv, "tk")
+    ret clean_ty(str.Len(tk) > 0 ? tk : vstr(dv, "ty"))
+end
+
+func enclosing_struct(d: Doc, line: int): str:
+    ol := obj(d.snap, "outline")
+    if not value.IsArray(ol):
+        ret ""
+    end
+    repeat value.ArrayLen(ol) in i:
+        sv := value.ArrayGet(ol, i)
+        k := vint(sv, "kind", 0)
+        rg := obj(sv, "range")
+        l1 := vint(obj(rg, "start"), "line", 0)
+        l2 := vint(obj(rg, "end"), "line", 0)
+        if k == 23 and line >= l1 and line <= l2:
+            ret vstr(sv, "name")
+        end
+    end
+    ret ""
+end
+
+func resolve_chain(d: Doc, segs: Vector<Seg>, line: int, ch: int, pkg &: str): str:
+    snap := d.snap
+    first := segs.get(0)
+    mut ty := ""
+    if str.Equals(first.name, "this") or str.Equals(first.name, "این"):
+        ty = enclosing_struct(d, line)
+    else:
+        pk := obj(obj(snap, "packages"), first.name)
+        if value.IsArray(pk) and not first.call:
+            if segs.len() == 1:
+                pkg = first.name
+                ret ""
+            end
+            sec := segs.get(1)
+            mut found := 0 - 1
+            repeat value.ArrayLen(pk) in i:
+                di := value.AsInt(value.ArrayGet(pk, i)) as int
+                if str.Equals(vstr(decl_at(snap, di), "name"), sec.name):
+                    found = di
+                    break
+                end
+            end
+            if found < 0:
+                ret ""
+            end
+            ty = decl_value_ty(decl_at(snap, found), sec.call)
+            mut k := 2
+            until k < segs.len():
+                sk := segs.get(k)
+                m := member_named(snap, ty, sk.name)
+                if m < 0:
+                    ret ""
+                end
+                ty = decl_value_ty(decl_at(snap, m), sk.call)
+                k += 1
+            end
+            ret ty
+        end
+        di := find_name(snap, first.name, line, ch)
+        if di < 0:
+            ret ""
+        end
+        ty = decl_value_ty(decl_at(snap, di), first.call)
+    end
+    mut k2 := 1
+    until k2 < segs.len():
+        sk2 := segs.get(k2)
+        m2 := member_named(snap, ty, sk2.name)
+        if m2 < 0:
+            ret ""
+        end
+        ty = decl_value_ty(decl_at(snap, m2), sk2.call)
+        k2 += 1
+    end
+    ret ty
+end
+
+func completion_kind(k: int): int:
+    if k == 0:
+        ret 6
+    else k == 1:
+        ret 21
+    else k == 2:
+        ret 6
+    else k == 3:
+        ret 5
+    else k == 4:
+        ret 3
+    else k == 5:
+        ret 2
+    else k == 6:
+        ret 22
+    else k == 7:
+        ret 13
+    else k == 8:
+        ret 25
+    else k == 9:
+        ret 20
+    else k == 10:
+        ret 9
+    else k == 11:
+        ret 8
+    end
+    ret 1
+end
+
+func decl_item(dv: value.Value, sort: str): str:
+    mut j := jw_new()
+    jw_obj(j)
+    jw_str(j, "label", vstr(dv, "name"))
+    jw_int(j, "kind", completion_kind(vint(dv, "kind", 0)))
+    det := vstr(dv, "detail")
+    if str.Len(det) > 0:
+        jw_str(j, "detail", det)
+    end
+    doc := vstr(dv, "doc")
+    if str.Len(doc) > 0:
+        jw_kobj(j, "documentation")
+        jw_str(j, "kind", "markdown")
+        jw_str(j, "value", doc)
+        jw_end_obj(j)
+    end
+    jw_str(j, "sortText", sort + vstr(dv, "name"))
+    jw_end_obj(j)
+    ret jw_done(j)
+end
+
+func simple_item(label: str, kind: int, detail: str, sort: str): str:
+    mut j := jw_new()
+    jw_obj(j)
+    jw_str(j, "label", label)
+    jw_int(j, "kind", kind)
+    if str.Len(detail) > 0:
+        jw_str(j, "detail", detail)
+    end
+    jw_str(j, "sortText", sort + label)
+    jw_end_obj(j)
+    ret jw_done(j)
+end
+
+func snippet_item(label: str, body: str, detail: str): str:
+    mut j := jw_new()
+    jw_obj(j)
+    jw_str(j, "label", label)
+    jw_int(j, "kind", 15)
+    jw_str(j, "detail", detail)
+    jw_str(j, "insertText", body)
+    jw_int(j, "insertTextFormat", 2)
+    jw_str(j, "sortText", "9" + label)
+    jw_end_obj(j)
+    ret jw_done(j)
+end
+
+func doc_pack(d: Doc): int:
+    mut sf := src.New()
+    sf.path = d.path
+    sf.text = d.text
+    sf.len = str.Len(d.text)
+    ret lx.Detect(sf, lp.Load("en"))
+end
+
+func add_snippets(pack: int, items &: Vector<str>):
+    kw_if := lp.Spelling(pack, tok.TK_KW_IF)
+    kw_each := lp.Spelling(pack, tok.TK_KW_EACH)
+    kw_in := lp.Spelling(pack, tok.TK_KW_IN)
+    kw_repeat := lp.Spelling(pack, tok.TK_KW_REPEAT)
+    kw_until := lp.Spelling(pack, tok.TK_KW_UNTIL)
+    kw_func := lp.Spelling(pack, tok.TK_KW_FUNC)
+    kw_struct := lp.Spelling(pack, tok.TK_KW_STRUCT)
+    kw_pub := lp.Spelling(pack, tok.TK_KW_PUB)
+    kw_switch := lp.Spelling(pack, tok.TK_KW_SWITCH)
+    kw_break := lp.Spelling(pack, tok.TK_KW_BREAK)
+    kw_match := lp.Spelling(pack, tok.TK_KW_MATCH)
+    kw_else := lp.Spelling(pack, tok.TK_KW_ELSE)
+    kw_end := lp.EndSpelling(pack)
+    items.push(snippet_item(kw_if, kw_if + " ${1:condition}:\n\t$0\n" + kw_end, kw_if + " ... " + kw_end))
+    items.push(snippet_item(kw_if + " " + kw_else, kw_if + " ${1:condition}:\n\t$2\n" + kw_else + ":\n\t$0\n" + kw_end, kw_if + " / " + kw_else))
+    items.push(snippet_item(kw_each, kw_each + " ${1:item} " + kw_in + " ${2:items}:\n\t$0\n" + kw_end, kw_each + " ... " + kw_in))
+    items.push(snippet_item(kw_repeat, kw_repeat + " ${1:n} " + kw_in + " ${2:i}:\n\t$0\n" + kw_end, kw_repeat + " n " + kw_in + " i"))
+    items.push(snippet_item(kw_until, kw_until + " ${1:condition}:\n\t$0\n" + kw_end, kw_until + " (while)"))
+    items.push(snippet_item(kw_func, kw_func + " ${1:name}(${2}):\n\t$0\n" + kw_end, kw_func + " ... " + kw_end))
+    items.push(snippet_item(kw_struct, kw_struct + " ${1:Name}:\n\t" + kw_pub + " ${2:field}: ${3:int} = ${4:0}\n" + kw_end, kw_struct + " ... " + kw_end))
+    items.push(snippet_item(kw_switch, kw_switch + " ${1:value}:\n\t${2:0}:\n\t\t$0\n\t\t" + kw_break + "\n\t" + kw_end + "\n" + kw_end, kw_switch + " with " + kw_break))
+    items.push(snippet_item(kw_match, kw_match + " ${1:value}:\n\t${2:Pattern}: ${0:result} " + kw_end + "\n" + kw_end, kw_match + " ... " + kw_end))
+end
+
+func add_keywords(pack: int, items &: Vector<str>):
+    mut seen := HashMap {} as HashMap<str, bool>
+    mut k := tok.TK_KW_FUNC
+    until k <= tok.TK_KW_MATCH:
+        w := lp.Spelling(pack, k)
+        if str.Len(w) > 0 and not seen.has(w):
+            seen.put(w, true)
+            items.push(simple_item(w, 14, "keyword", "8"))
+        end
+        k += 1
+    end
+    each k2 in [tok.TK_KW_SWITCH, tok.TK_KW_INCLUDE, tok.TK_AND, tok.TK_OR, tok.TK_NOT]:
+        w2 := lp.Spelling(pack, k2)
+        if str.Len(w2) > 0 and not seen.has(w2):
+            seen.put(w2, true)
+            items.push(simple_item(w2, 14, "keyword", "8"))
+        end
+    end
+    seen.free()
+end
+
+func add_intrinsics(ty: str, pack: int, items &: Vector<str>):
+    if not (str.StartsWith(ty, "Vector<") or str.StartsWith(ty, "HashMap<") or str.Equals(ty, "str") or str.StartsWith(ty, "File") or str.StartsWith(ty, "MapIter")):
+        ret
+    end
+    fa := lp.Code(pack) == "fa"
+    repeat sm.IntrinsicMethodCount() in i:
+        name := fa ? sm.IntrinsicMethodFa(i) : sm.IntrinsicMethodEn(i)
+        items.push(simple_item(name, 2, ty + " method", "1"))
+    end
+end
+
+func on_completion(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "[]")
+        ret
+    end
+    mut line := 0
+    mut ch := 0
+    pos_of(params, line, ch)
+    d2 := g_docs.get(i)
+    lntext := line_text(d2.text, line)
+    li := line_index(lntext)
+    off := li_offset(li, 0, ch)
+    mut l2 := li
+    li_free(l2)
+    mut b := off
+    until b > 0 and is_ident_byte(byte_at(lntext, b - 1)):
+        b -= 1
+    end
+    mut items := Vector {} as Vector<str>
+    pack := doc_pack(d2)
+    if b > 0 and byte_at(lntext, b - 1) == 46 and d2.has_snap:
+        mut segs := Vector {} as Vector<Seg>
+        if read_chain(lntext, b - 1, segs):
+            mut pkg := ""
+            ty := resolve_chain(d2, segs, line, ch, pkg)
+            if str.Len(pkg) > 0:
+                pk := obj(obj(d2.snap, "packages"), pkg)
+                repeat value.ArrayLen(pk) in k:
+                    di := value.AsInt(value.ArrayGet(pk, k)) as int
+                    items.push(decl_item(decl_at(d2.snap, di), "1"))
+                end
+            else str.Len(ty) > 0:
+                ms := obj(obj(d2.snap, "types"), ty)
+                if value.IsArray(ms):
+                    repeat value.ArrayLen(ms) in k:
+                        di := value.AsInt(value.ArrayGet(ms, k)) as int
+                        items.push(decl_item(decl_at(d2.snap, di), "1"))
+                    end
+                end
+                add_intrinsics(ty, pack, items)
+            end
+        end
+        segs.free()
+        send_result(id, "{\"isIncomplete\":false,\"items\":[" + str.Join(items, ",") + "]}")
+        items.free()
+        ret
+    end
+    if d2.has_snap:
+        mut seen := HashMap {} as HashMap<str, bool>
+        locs := obj(d2.snap, "locals")
+        if value.IsArray(locs):
+            repeat value.ArrayLen(locs) in k:
+                lv := value.ArrayGet(locs, k)
+                if local_visible(lv, line, ch):
+                    dv := decl_at(d2.snap, vint(lv, "d", 0 - 1))
+                    nm := vstr(dv, "name")
+                    if not seen.has(nm):
+                        seen.put(nm, true)
+                        items.push(decl_item(dv, "0"))
+                    end
+                end
+            end
+        end
+        gs := obj(d2.snap, "globals")
+        if value.IsArray(gs):
+            repeat value.ArrayLen(gs) in k:
+                dv := decl_at(d2.snap, value.AsInt(value.ArrayGet(gs, k)) as int)
+                nm := vstr(dv, "name")
+                if not seen.has(nm):
+                    seen.put(nm, true)
+                    items.push(decl_item(dv, "2"))
+                end
+            end
+        end
+        seen.free()
+    end
+    add_keywords(pack, items)
+    add_snippets(pack, items)
+    send_result(id, "{\"isIncomplete\":false,\"items\":[" + str.Join(items, ",") + "]}")
+    items.free()
+end
+
+func split_params(header: str, out &: Vector<str>):
+    op := str.IndexOf(header, "(")
+    if op < 0:
+        ret
+    end
+    mut depth := 0
+    mut start := op + 1
+    n := str.Len(header)
+    mut i := op
+    until i < n:
+        c := byte_at(header, i)
+        if c == 40 or c == 91 or c == 60:
+            depth += 1
+        else c == 41 or c == 93 or c == 62:
+            depth -= 1
+            if depth == 0:
+                p := str.Trim(str.Substr(header, start, i - start))
+                if str.Len(p) > 0:
+                    out.push(p)
+                end
+                ret
+            end
+        else c == 44 and depth == 1:
+            out.push(str.Trim(str.Substr(header, start, i - start)))
+            start = i + 1
+        end
+        i += 1
+    end
+end
+
+func on_signature_help(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "null")
+        ret
+    end
+    mut line := 0
+    mut ch := 0
+    pos_of(params, line, ch)
+    d := g_docs.get(i)
+    if not d.has_snap:
+        send_result(id, "null")
+        ret
+    end
+    li := line_index(d.text)
+    off := li_offset(li, line, ch)
+    mut depth := 0
+    mut active := 0
+    mut k := off - 1
+    mut open_at := 0 - 1
+    mut in_str := false
+    stop := off > 4000 ? off - 4000 : 0
+    until k >= stop:
+        c := byte_at(d.text, k)
+        if c == 34:
+            in_str = not in_str
+        else not in_str:
+            if c == 41 or c == 93:
+                depth += 1
+            else c == 40 or c == 91:
+                if depth == 0:
+                    if c == 40:
+                        open_at = k
+                    end
+                    break
+                end
+                depth -= 1
+            else c == 44 and depth == 0:
+                active += 1
+            end
+        end
+        k -= 1
+    end
+    if open_at < 0:
+        mut l3 := li
+        li_free(l3)
+        send_result(id, "null")
+        ret
+    end
+    cl := li_line_of(li, open_at)
+    ls := li.starts.get(cl)
+    lntext := str.Substr(d.text, ls, open_at - ls)
+    mut l4 := li
+    li_free(l4)
+    mut segs := Vector {} as Vector<Seg>
+    if not read_chain(lntext + ".", str.Len(lntext), segs):
+        segs.free()
+        send_result(id, "null")
+        ret
+    end
+    mut di := 0 - 1
+    if segs.len() == 1:
+        di = find_name(d.snap, segs.get(0).name, line, ch)
+    else:
+        last := segs.get(segs.len() - 1)
+        mut head := Vector {} as Vector<Seg>
+        repeat segs.len() - 1 in h:
+            head.push(segs.get(h))
+        end
+        mut pkg := ""
+        ty := resolve_chain(d, head, line, ch, pkg)
+        if str.Len(pkg) > 0:
+            pk := obj(obj(d.snap, "packages"), pkg)
+            repeat value.ArrayLen(pk) in q:
+                qd := value.AsInt(value.ArrayGet(pk, q)) as int
+                if str.Equals(vstr(decl_at(d.snap, qd), "name"), last.name):
+                    di = qd
+                    break
+                end
+            end
+        else str.Len(ty) > 0:
+            di = member_named(d.snap, ty, last.name)
+        end
+        head.free()
+    end
+    segs.free()
+    if di < 0:
+        send_result(id, "null")
+        ret
+    end
+    dv := decl_at(d.snap, di)
+    kd := vint(dv, "kind", 0)
+    if kd != 4 and kd != 5:
+        send_result(id, "null")
+        ret
+    end
+    label := vstr(dv, "detail")
+    mut ps := Vector {} as Vector<str>
+    split_params(label, ps)
+    mut j := jw_new()
+    jw_obj(j)
+    jw_karr(j, "signatures")
+    jw_obj(j)
+    jw_str(j, "label", label)
+    doc := vstr(dv, "doc")
+    if str.Len(doc) > 0:
+        jw_kobj(j, "documentation")
+        jw_str(j, "kind", "markdown")
+        jw_str(j, "value", doc)
+        jw_end_obj(j)
+    end
+    jw_karr(j, "parameters")
+    each p in ps:
+        jw_obj(j)
+        jw_str(j, "label", p)
+        jw_end_obj(j)
+    end
+    jw_end_arr(j)
+    jw_end_obj(j)
+    jw_end_arr(j)
+    jw_int(j, "activeSignature", 0)
+    jw_int(j, "activeParameter", ps.len() > 0 and active >= ps.len() ? ps.len() - 1 : active)
+    jw_end_obj(j)
+    ps.free()
+    send_result(id, jw_done(j))
+end

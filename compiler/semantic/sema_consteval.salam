@@ -1,0 +1,517 @@
+package semantic
+
+import str
+
+include tok "../token.salam"
+include at "../ast.salam"
+
+func cv_type_str(a &: at.Ast, nid: int): str:
+    n := at.Get(a, nid)
+    if str.Len(n.type_str) > 0:
+        ret n.type_str
+    end
+    if n.ty != 0:
+        ret at.Get(a, n.ty).name
+    end
+    ret ""
+end
+
+func cv_int_range(ts: str, lo &: i64, hi &: i64): bool:
+    if str.Equals(ts, "i8"):
+        lo = 0 - 128
+        hi = 127 as i64
+        ret true
+    end
+    if str.Equals(ts, "i16"):
+        lo = 0 - 32768
+        hi = 32767 as i64
+        ret true
+    end
+    if str.Equals(ts, "i32"):
+        lo = 0 - 2147483648
+        hi = 2147483647 as i64
+        ret true
+    end
+    if str.Equals(ts, "i64") or str.Equals(ts, "size"):
+        lo = fold_i64_min()
+        hi = fold_i64_max()
+        ret true
+    end
+    if str.Equals(ts, "u8"):
+        lo = 0 as i64
+        hi = 255 as i64
+        ret true
+    end
+    if str.Equals(ts, "u16"):
+        lo = 0 as i64
+        hi = 65535 as i64
+        ret true
+    end
+    if str.Equals(ts, "u32"):
+        lo = 0 as i64
+        hi = 4294967295 as i64
+        ret true
+    end
+    if str.Equals(ts, "u64") or str.Equals(ts, "usize"):
+        lo = 0 as i64
+        hi = fold_i64_max()
+        ret true
+    end
+    ret false
+end
+
+func cv_fits(ts: str, v: i64): bool:
+    mut lo := 0 as i64
+    mut hi := 0 as i64
+    if not cv_int_range(ts, lo, hi):
+        ret false
+    end
+    ret v >= lo and v <= hi
+end
+
+func cv_is_float_ts(ts: str): bool:
+    ret str.Equals(ts, "f64")
+end
+
+func cv_as_flt(v &: ConstVal): f64:
+    if v.kind == CV_FLOAT:
+        ret v.f
+    end
+    ret v.i as f64
+end
+
+func cv_set_int(out &: ConstVal, v: i64):
+    out.kind = CV_INT
+    out.i = v
+    out.f = 0.0
+    out.b = false
+end
+
+func cv_set_flt(out &: ConstVal, v: f64):
+    out.kind = CV_FLOAT
+    out.i = 0 as i64
+    out.f = v
+    out.b = false
+end
+
+func cv_set_bool(out &: ConstVal, v: bool):
+    out.kind = CV_BOOL
+    out.i = 0 as i64
+    out.f = 0.0
+    out.b = v
+end
+
+func const_binary_int(
+    a &: at.Ast, nid: int, va: i64, vb: i64, out &: ConstVal
+): bool:
+    op := at.Get(a, nid).op
+    mut r := 0 as i64
+    if op == tok.TK_EQ:
+        cv_set_bool(out, va == vb)
+        ret true
+    else op == tok.TK_NE:
+        cv_set_bool(out, va != vb)
+        ret true
+    else op == tok.TK_LT:
+        cv_set_bool(out, va < vb)
+        ret true
+    else op == tok.TK_GT:
+        cv_set_bool(out, va > vb)
+        ret true
+    else op == tok.TK_LE:
+        cv_set_bool(out, va <= vb)
+        ret true
+    else op == tok.TK_GE:
+        cv_set_bool(out, va >= vb)
+        ret true
+    else op == tok.TK_PLUS:
+        if not add_ok(va, vb):
+            ret false
+        end
+        r = va + vb
+    else op == tok.TK_MINUS:
+        if not sub_ok(va, vb):
+            ret false
+        end
+        r = va - vb
+    else op == tok.TK_STAR:
+        if not mul_ok(va, vb):
+            ret false
+        end
+        r = va * vb
+    else op == tok.TK_SLASH or op == tok.TK_PERCENT:
+        if vb == 0 as i64 or (va == fold_i64_min() and vb == (0 - 1)):
+            ret false
+        end
+        r = op == tok.TK_SLASH ? va / vb : va % vb
+    else op == tok.TK_AMP:
+        r = ((va as u64) & (vb as u64)) as i64
+    else op == tok.TK_PIPE:
+        r = ((va as u64) | (vb as u64)) as i64
+    else op == tok.TK_CARET:
+        r = ((va as u64) ^ (vb as u64)) as i64
+    else op == tok.TK_SHL:
+        if vb < 0 as i64 or vb >= 64 as i64:
+            ret false
+        end
+        r = ((va as u64) << (vb as int)) as i64
+    else op == tok.TK_SHR:
+        if vb < 0 as i64 or vb >= 64 as i64:
+            ret false
+        end
+        r = va >> (vb as int)
+    else:
+        ret false
+    end
+    if not cv_fits(cv_type_str(a, nid), r):
+        ret false
+    end
+    cv_set_int(out, r)
+    ret true
+end
+
+func const_binary_flt(
+    a &: at.Ast, nid: int, fa: f64, fb: f64, out &: ConstVal
+): bool:
+    op := at.Get(a, nid).op
+    mut r := 0.0
+    if op == tok.TK_EQ:
+        cv_set_bool(out, fa == fb)
+        ret true
+    else op == tok.TK_NE:
+        cv_set_bool(out, fa != fb)
+        ret true
+    else op == tok.TK_LT:
+        cv_set_bool(out, fa < fb)
+        ret true
+    else op == tok.TK_GT:
+        cv_set_bool(out, fa > fb)
+        ret true
+    else op == tok.TK_LE:
+        cv_set_bool(out, fa <= fb)
+        ret true
+    else op == tok.TK_GE:
+        cv_set_bool(out, fa >= fb)
+        ret true
+    else op == tok.TK_PLUS:
+        r = fa + fb
+    else op == tok.TK_MINUS:
+        r = fa - fb
+    else op == tok.TK_STAR:
+        r = fa * fb
+    else op == tok.TK_SLASH:
+        if fb == 0.0:
+            ret false
+        end
+        r = fa / fb
+    else:
+        ret false
+    end
+    if not flt_finite(r) or not cv_is_float_ts(cv_type_str(a, nid)):
+        ret false
+    end
+    cv_set_flt(out, r)
+    ret true
+end
+
+func const_binary(
+    s &: Sema, a &: at.Ast, nid: int, out &: ConstVal, depth: int
+): bool:
+    n := at.Get(a, nid)
+    mut va := ConstVal {}
+    mut vb := ConstVal {}
+    if n.a == 0 or n.b == 0:
+        ret false
+    end
+    if n.op == tok.TK_AND or n.op == tok.TK_OR:
+        if not const_eval(s, a, n.a, va, depth) or va.kind != CV_BOOL:
+            ret false
+        end
+        if n.op == tok.TK_AND and not va.b:
+            cv_set_bool(out, false)
+            ret true
+        end
+        if n.op == tok.TK_OR and va.b:
+            cv_set_bool(out, true)
+            ret true
+        end
+        if not const_eval(s, a, n.b, vb, depth) or vb.kind != CV_BOOL:
+            ret false
+        end
+        cv_set_bool(out, vb.b)
+        ret true
+    end
+    if not const_eval(s, a, n.a, va, depth) or not const_eval(s, a, n.b, vb, depth):
+        ret false
+    end
+    if va.kind == CV_BOOL or vb.kind == CV_BOOL:
+        if va.kind != CV_BOOL or vb.kind != CV_BOOL:
+            ret false
+        end
+        if n.op == tok.TK_EQ:
+            cv_set_bool(out, va.b == vb.b)
+            ret true
+        end
+        if n.op == tok.TK_NE:
+            cv_set_bool(out, va.b != vb.b)
+            ret true
+        end
+        ret false
+    end
+    if va.kind == CV_INT and vb.kind == CV_INT:
+        ret const_binary_int(a, nid, va.i, vb.i, out)
+    end
+    ret const_binary_flt(a, nid, cv_as_flt(va), cv_as_flt(vb), out)
+end
+
+func const_unary(
+    s &: Sema, a &: at.Ast, nid: int, out &: ConstVal, depth: int
+): bool:
+    n := at.Get(a, nid)
+    mut v := ConstVal {}
+    if n.a == 0 or not const_eval(s, a, n.a, v, depth):
+        ret false
+    end
+    if n.op == tok.TK_NOT:
+        if v.kind != CV_BOOL:
+            ret false
+        end
+        cv_set_bool(out, not v.b)
+        ret true
+    end
+    if n.op == tok.TK_MINUS:
+        if v.kind == CV_FLOAT:
+            cv_set_flt(out, 0.0 - v.f)
+            ret true
+        end
+        if v.kind != CV_INT or v.i == fold_i64_min():
+            ret false
+        end
+        if not cv_fits(cv_type_str(a, nid), 0 - v.i):
+            ret false
+        end
+        cv_set_int(out, 0 - v.i)
+        ret true
+    end
+    if n.op == tok.TK_TILDE:
+        if v.kind != CV_INT:
+            ret false
+        end
+        r := (~(v.i as u64)) as i64
+        if not cv_fits(cv_type_str(a, nid), r):
+            ret false
+        end
+        cv_set_int(out, r)
+        ret true
+    end
+    ret false
+end
+
+func const_cast(
+    s &: Sema, a &: at.Ast, nid: int, out &: ConstVal, depth: int
+): bool:
+    n := at.Get(a, nid)
+    mut v := ConstVal {}
+    if n.a == 0 or not const_eval(s, a, n.a, v, depth):
+        ret false
+    end
+    ts := cv_type_str(a, nid)
+    if str.Len(ts) == 0:
+        ret false
+    end
+    if str.Equals(ts, "bool"):
+        if v.kind != CV_BOOL:
+            ret false
+        end
+        cv_set_bool(out, v.b)
+        ret true
+    end
+    if cv_is_float_ts(ts):
+        if v.kind == CV_BOOL:
+            ret false
+        end
+        cv_set_flt(out, cv_as_flt(v))
+        ret true
+    end
+    if v.kind == CV_BOOL:
+        ret false
+    end
+    if v.kind == CV_FLOAT:
+        if v.f != ((v.f as i64) as f64):
+            ret false
+        end
+        if not cv_fits(ts, v.f as i64):
+            ret false
+        end
+        cv_set_int(out, v.f as i64)
+        ret true
+    end
+    if not cv_fits(ts, v.i):
+        ret false
+    end
+    cv_set_int(out, v.i)
+    ret true
+end
+
+func const_eval_sym(
+    s &: Sema, a &: at.Ast, symid: int, out &: ConstVal, depth: int
+): bool:
+    if symid == 0:
+        ret false
+    end
+    sv := sym_at(s, symid)
+    if sv.kind != SYM_CONST or sv.is_mut:
+        ret false
+    end
+    if sv.decl != 0:
+        init := at.Get(a, sv.decl).a
+        if init != 0 and const_eval(s, a, init, out, depth):
+            ret true
+        end
+    end
+    if sv.has_ival:
+        cv_set_int(out, sv.ival)
+        ret true
+    end
+    ret false
+end
+
+func const_eval_member(
+    s &: Sema, a &: at.Ast, nid: int, out &: ConstVal, depth: int
+): bool:
+    n := at.Get(a, nid)
+    if n.a == 0 or at.KindOf(a, n.a) != at.AST_IDENTIFIER or str.Len(n.name) == 0:
+        ret false
+    end
+    pk := scope_lookup(s, s.cur, at.Get(a, n.a).name)
+    if pk == 0:
+        ret false
+    end
+    pkv := sym_at(s, pk)
+    if pkv.kind != SYM_PACKAGE or pkv.members == 0:
+        ret false
+    end
+    cs := scope_lookup_local(s, pkv.members, n.name)
+    if cs == 0 or not sym_at(s, cs).is_pub:
+        ret false
+    end
+    ret const_eval_sym(s, a, cs, out, depth)
+end
+
+func const_eval(
+    s &: Sema, a &: at.Ast, nid: int, out &: ConstVal, depth: int
+): bool:
+    if nid == 0 or depth >= 32:
+        ret false
+    end
+    d := depth + 1
+    k := at.KindOf(a, nid)
+    if k == at.AST_LITERAL:
+        n := at.Get(a, nid)
+        if n.op == tok.TK_KW_TRUE:
+            cv_set_bool(out, true)
+            ret true
+        end
+        if n.op == tok.TK_KW_FALSE:
+            cv_set_bool(out, false)
+            ret true
+        end
+        if n.op == tok.TK_INT:
+            mut v := 0 as i64
+            if not lit_int(a, nid, v):
+                ret false
+            end
+            cv_set_int(out, v)
+            ret true
+        end
+        if n.op == tok.TK_FLOAT:
+            cv_set_flt(out, n.value_float)
+            ret true
+        end
+        ret false
+    end
+    if k == at.AST_IDENTIFIER:
+        ret const_eval_sym(s, a, scope_lookup(s, s.cur, at.Get(a, nid).name), out, d)
+    end
+    if k == at.AST_MEMBER:
+        ret const_eval_member(s, a, nid, out, d)
+    end
+    if k == at.AST_UNARY:
+        ret const_unary(s, a, nid, out, d)
+    end
+    if k == at.AST_BINARY:
+        ret const_binary(s, a, nid, out, d)
+    end
+    if k == at.AST_CAST:
+        ret const_cast(s, a, nid, out, d)
+    end
+    if k == at.AST_TERNARY:
+        n2 := at.Get(a, nid)
+        mut c := ConstVal {}
+        if not const_eval(s, a, n2.a, c, d) or c.kind != CV_BOOL:
+            ret false
+        end
+        ret const_eval(s, a, c.b ? n2.b : n2.c, out, d)
+    end
+    ret false
+end
+
+func expr_nonneg(s &: Sema, a &: at.Ast, nid: int, depth: int): bool:
+    if nid == 0 or depth > 8:
+        ret false
+    end
+    mut cv := ConstVal {}
+    if const_eval(s, a, nid, cv, depth):
+        if cv.kind == CV_INT:
+            ret cv.i >= (0 as i64)
+        end
+        if cv.kind == CV_FLOAT:
+            ret cv.f >= 0.0
+        end
+        ret false
+    end
+    if at.KindOf(a, nid) != at.AST_IDENTIFIER:
+        ret false
+    end
+    symid := scope_lookup(s, s.cur, at.Get(a, nid).name)
+    if symid == 0:
+        ret false
+    end
+    sv := sym_at(s, symid)
+    if sv.kind != SYM_VAR or sv.is_mut or sv.loop_bind or sv.decl == 0:
+        ret false
+    end
+    ret expr_nonneg(s, a, at.Get(a, sv.decl).a, depth + 1)
+end
+
+func sema_expr_nonneg(s &: Sema, a &: at.Ast, nid: int): bool:
+    ret expr_nonneg(s, a, nid, 0)
+end
+
+func widens_nonneg(
+    s &: Sema, a &: at.Ast, expr: int, dst: int, src: int
+): bool:
+    if not type_is_integer(s, dst) or not type_is_integer(s, src):
+        ret false
+    end
+    if type_is_signed(s, dst) or not type_is_signed(s, src):
+        ret false
+    end
+    if int_rank(ty_at(s, src).kind) > int_rank(ty_at(s, dst).kind):
+        ret false
+    end
+    ret sema_expr_nonneg(s, a, expr)
+end
+
+func sema_const_eval(s &: Sema, a &: at.Ast, nid: int, out &: ConstVal): bool:
+    ret const_eval(s, a, nid, out, 0)
+end
+
+func sema_const_bool(s &: Sema, a &: at.Ast, nid: int, out &: bool): bool:
+    mut v := ConstVal {}
+    if not const_eval(s, a, nid, v, 0) or v.kind != CV_BOOL:
+        ret false
+    end
+    out = v.b
+    ret true
+end

@@ -1,0 +1,163 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+func struct_mut_checked(s &: Sema, a &: at.Ast, ssym: int): bool:
+    if ssym == 0 or sym_at(s, ssym).kind != SYM_STRUCT:
+        ret false
+    end
+    d := sym_at(s, ssym).decl
+    if d == 0 or at.KindOf(a, d) != at.AST_STRUCT_DEF:
+        ret false
+    end
+    dn := at.Get(a, d)
+    repeat dn.list.len() in i:
+        m := at.Get(a, dn.list.get(i))
+        if m.kind == at.AST_FUNC_DEF and m.is_mut and not m.is_embedded:
+            ret true
+        end
+    end
+    ret false
+end
+
+func cur_readonly_method(s &: Sema, a &: at.Ast): int:
+    if s.cur_func == 0:
+        ret 0
+    end
+    sg := sig_at(s, s.cur_func)
+    if sg.owner == 0 or sg.decl == 0 or sym_at(s, sg.owner).kind != SYM_STRUCT:
+        ret 0
+    end
+    if at.Get(a, sg.decl).is_mut or not struct_mut_checked(s, a, sg.owner):
+        ret 0
+    end
+    ret sg.decl
+end
+
+func type_str_is_indirect(ts: str): bool:
+    ret str.EndsWith(ts, "*") or str.StartsWith(ts, "Vector<") or str.StartsWith(ts, "HashMap<") or str.StartsWith(ts, "MapIter<") or str.StartsWith(ts, "slice<") or str.StartsWith(ts, "dyn ") or str.Equals(ts, "str")
+end
+
+func inline_path_root(a &: at.Ast, e: int): int:
+    mut cur := e
+    until cur != 0:
+        k := at.KindOf(a, cur)
+        if k == at.AST_THIS:
+            ret cur
+        end
+        if k != at.AST_MEMBER and k != at.AST_INDEX:
+            if k == at.AST_IDENTIFIER and not type_str_is_indirect(at.Get(a, cur).type_str):
+                ret cur
+            end
+            ret 0
+        end
+        base := at.Get(a, cur).a
+        if base == 0:
+            ret 0
+        end
+        if at.KindOf(a, base) != at.AST_THIS and type_str_is_indirect(at.Get(a, base).type_str):
+            ret 0
+        end
+        cur = base
+    end
+    ret 0
+end
+
+func sema_check_mut_write(s &: Sema, a &: at.Ast, target: int, sp: co.SrcSpan):
+    md := cur_readonly_method(s, a)
+    if md == 0:
+        ret
+    end
+    root := inline_path_root(a, target)
+    if root == 0 or at.KindOf(a, root) != at.AST_THIS:
+        ret
+    end
+    serr(
+        s, 105, sp, co.Format1(
+            i18.Tr("cannot modify 'this' in method '%s': declare it 'mut func'"), co.ArgStr(at.Get(a, md).name)
+        )
+    )
+end
+
+func sema_check_mut_call(s &: Sema, a &: at.Ast, recv: int, sig: int, mname: str, sp: co.SrcSpan):
+    if sig == 0:
+        ret
+    end
+    decl := sig_at(s, sig).decl
+    if decl == 0 or not at.Get(a, decl).is_mut:
+        ret
+    end
+    root := inline_path_root(a, recv)
+    if root == 0:
+        ret
+    end
+    if at.KindOf(a, root) == at.AST_THIS:
+        md := cur_readonly_method(s, a)
+        if md != 0:
+            serr(
+                s, 105, sp, co.Format2(
+                    i18.Tr("cannot call 'mut func' '%s' on 'this' in method '%s': declare it 'mut func'"), co.ArgStr(mname), co.ArgStr(at.Get(a, md).name)
+                )
+            )
+        end
+        ret
+    end
+    rname := at.Get(a, root).name
+    if str.Len(rname) == 0:
+        ret
+    end
+    rsym := scope_lookup(s, s.cur, rname)
+    if rsym == 0:
+        ret
+    end
+    rv := sym_at(s, rsym)
+    if rv.kind == SYM_CONST:
+        serr(
+            s, 106, sp, co.Format2(
+                i18.Tr("cannot call 'mut func' '%s' on constant '%s'"), co.ArgStr(mname), co.ArgStr(rname)
+            )
+        )
+        ret
+    end
+    if rv.is_mut or rv.is_ref:
+        ret
+    end
+    if rv.kind == SYM_PARAM:
+        serr(
+            s, 106, sp, co.Format2(
+                i18.Tr("cannot call 'mut func' '%s' on parameter '%s': it is a copy; take it by reference ('&:')"), co.ArgStr(mname), co.ArgStr(rname)
+            )
+        )
+        ret
+    end
+    if rv.kind == SYM_VAR:
+        serr(
+            s, 106, sp, co.Format2(
+                i18.Tr("cannot call 'mut func' '%s' on immutable '%s'; declare it with 'mut'"), co.ArgStr(mname), co.ArgStr(rname)
+            )
+        )
+    end
+end
+
+func call_keeps_receiver(s &: Sema, a &: at.Ast, objt: int, mname: str): bool:
+    ssym := struct_sym_of(s, objt)
+    if ssym == 0 or not struct_mut_checked(s, a, ssym):
+        ret false
+    end
+    m := scope_lookup_local(s, sym_at(s, ssym).members, mname)
+    if m == 0 or sym_at(s, m).kind != SYM_METHOD:
+        ret false
+    end
+    ovs := sym_at(s, m).overloads
+    repeat ovs.len() in i:
+        d := sig_at(s, ovs.get(i)).decl
+        if d == 0 or at.Get(a, d).is_mut:
+            ret false
+        end
+    end
+    ret true
+end

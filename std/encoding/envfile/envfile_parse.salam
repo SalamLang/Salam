@@ -1,0 +1,268 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package envfile
+
+import str
+import mem
+import encoding.encerr
+
+struct _DV:
+    pub value: str = ""
+    pub next: int = 0
+    pub flag: int = 1
+    pub ok: bool = true
+end
+
+func _slice(s: str, i: int, ln: int): str:
+    if ln <= 0: ret "" end
+    p := mem.AllocateZeroed((ln + 1) as u64)
+    bp := _bp(s)
+    src := ((bp as u64) + (i as u64)) as void*
+    mem.Copy(p, src, ln as u64)
+    ret p as str
+end
+
+func _is_hspace(c: int): bool: ret c == 32 or c == 9 end
+
+func _is_eol(c: int): bool: ret c == 10 or c == 13 end
+
+func _is_key_char(c: int): bool:
+    if c >= 48 and c <= 57: ret true end
+    if c >= 65 and c <= 90: ret true end
+    if c >= 97 and c <= 122: ret true end
+    ret c == 95 or c == 46 or c == 45
+end
+
+func _skip_bom(s: str, n: int, i: int): int:
+    if n < 3: ret i end
+    bp := _bp(s)
+    if _ub(bp, 0) == 239 and _ub(bp, 1) == 187 and _ub(bp, 2) == 191: ret i + 3 end
+    ret i
+end
+
+func _skip_hspace(s: str, n: int, i: int): int:
+    bp := _bp(s)
+    mut p := i
+    until p < n and _is_hspace(_ub(bp, p)):
+        p += 1
+    end
+    ret p
+end
+
+func _skip_to_eol(s: str, n: int, i: int): int:
+    bp := _bp(s)
+    mut p := i
+    until p < n and _is_eol(_ub(bp, p)) == false:
+        p += 1
+    end
+    if p < n and _ub(bp, p) == 13: p += 1 end
+    if p < n and _ub(bp, p) == 10: p += 1 end
+    ret p
+end
+
+func _skip_blank(s: str, n: int, i: int): int:
+    bp := _bp(s)
+    mut p := i
+    until p < n:
+        c := _ub(bp, p)
+        if _is_hspace(c) or _is_eol(c):
+            p += 1
+        else c == 35:
+            p = _skip_to_eol(s, n, p)
+        else:
+            ret p
+        end
+    end
+    ret p
+end
+
+func _skip_export(s: str, n: int, i: int): int:
+    if i + 7 > n: ret i end
+    bp := _bp(s)
+    word := "export "
+    wp := _bp(word)
+    repeat 7 in k:
+        if _ub(bp, i + k) != _ub(wp, k): ret i end
+    end
+    ret _skip_hspace(s, n, i + 7)
+end
+
+func _escape_char(c: int): int:
+    if c == 110: ret 10 end
+    if c == 114: ret 13 end
+    if c == 116: ret 9 end
+    if c == 98: ret 8 end
+    if c == 102: ret 12 end
+    if c == 118: ret 11 end
+    if c == 92 or c == 34 or c == 39: ret c end
+    ret 0 - 1
+end
+
+func _append_escape(sb &: str.StringBuilder, s: str, p: int): int:
+    c := _ub(_bp(s), p)
+    e := _escape_char(c)
+    if e < 0:
+        str.BufAppendChar(sb, 92)
+        str.BufAppendChar(sb, c)
+    else:
+        str.BufAppendChar(sb, e)
+    end
+    ret p + 1
+end
+
+func _read_key(s: str, n: int, i: int): _DV:
+    bp := _bp(s)
+    mut p := i
+    until p < n and _is_key_char(_ub(bp, p)):
+        p += 1
+    end
+    ret _DV { value = _slice(s, i, p - i), next = p, ok = p > i }
+end
+
+func _read_quoted(s: str, n: int, i: int, q: int): _DV:
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut p := i
+    mut closed := false
+    until p < n:
+        c := _ub(bp, p)
+        if c == q:
+            p += 1
+            closed = true
+            break
+        end
+        if c == 92 and q == 34 and p + 1 < n:
+            p = _append_escape(sb, s, p + 1)
+        else:
+            str.BufAppendChar(sb, c)
+            p += 1
+        end
+    end
+    out := str.BufStr(sb)
+    mut flag := _EXPANDABLE
+    if q == 39: flag = _LITERAL end
+    ret _DV { value = out, next = _skip_to_eol(s, n, p), flag = flag, ok = closed }
+end
+
+func _read_bare(s: str, n: int, i: int, semi: bool): _DV:
+    bp := _bp(s)
+    mut p := i
+    mut cut := i
+    until p < n:
+        c := _ub(bp, p)
+        if _is_eol(c): break end
+        if (c == 35 or (semi and c == 59)) and p > i and _is_hspace(_ub(bp, p - 1)): break end
+        p += 1
+        if _is_hspace(c) == false: cut = p end
+    end
+    ret _DV { value = _slice(s, i, cut - i), next = _skip_to_eol(s, n, p), ok = true }
+end
+
+func _read_value(s: str, n: int, i: int, semi: bool): _DV:
+    if i >= n: ret _DV { value = "", next = i, ok = true } end
+    c := _ub(_bp(s), i)
+    if c == 34 or c == 39: ret _read_quoted(s, n, i + 1, c) end
+    if _is_eol(c): ret _DV { value = "", next = _skip_to_eol(s, n, i), ok = true } end
+    ret _read_bare(s, n, i, semi)
+end
+
+func _parse_entry(d &: Doc, s: str, n: int, i: int): _DV:
+    bp := _bp(s)
+    k := _read_key(s, n, _skip_export(s, n, i))
+    p := _skip_hspace(s, n, k.next)
+    if k.ok == false or p >= n or _ub(bp, p) != 61:
+        ret _DV { value = "envfile: expected KEY=VALUE", next = _skip_to_eol(s, n, i), ok = false }
+    end
+    v := _read_value(s, n, _skip_hspace(s, n, p + 1), false)
+    if v.ok == false:
+        ret _DV { value = "envfile: unterminated quoted value", next = v.next, ok = false }
+    end
+    _push(d, k.value, v.value, v.flag)
+    ret _DV { value = "", next = v.next, ok = true }
+end
+
+func _parse_into(d &: Doc, text: str, err &: encerr.EncodingError, strict: bool):
+    n := text.len()
+    mut p := _skip_bom(text, n, 0)
+    until p < n:
+        p = _skip_blank(text, n, p)
+        if p >= n: ret end
+        r := _parse_entry(d, text, n, p)
+        if r.ok == false and strict:
+            err = encerr.ErrUnexpectedToken(r.value, p)
+            ret
+        end
+        if r.next > p:
+            p = r.next
+        else:
+            p = _skip_to_eol(text, n, p)
+        end
+    end
+end
+
+@en "ParseRaw"
+@fa "تجزیه خام"
+pub func ParseRaw(text: str): Doc:
+    mut out := Doc {}
+    mut err := encerr.NoError()
+    _parse_into(out, text, err, false)
+    ret out
+end
+
+@en "Parse"
+@fa "تجزیه"
+pub func Parse(text: str): Doc:
+    mut raw := ParseRaw(text)
+    defer Free(raw)
+    mut base := Doc {}
+    defer Free(base)
+    ret ExpandDoc(raw, base)
+end
+
+@en "ParseStrict"
+@fa "تجزیه سخت گیرانه"
+pub func ParseStrict(text: str, err &: encerr.EncodingError): Doc:
+    mut raw := Doc {}
+    err = encerr.NoError()
+    _parse_into(raw, text, err, true)
+    defer Free(raw)
+    mut base := Doc {}
+    defer Free(base)
+    ret ExpandDoc(raw, base)
+end
+
+@en "Valid"
+@fa "معتبر"
+pub func Valid(text: str): bool:
+    mut err := encerr.NoError()
+    mut d := ParseStrict(text, err)
+    defer Free(d)
+    ret encerr.IsError(err) == false
+end
+
+@en "ParseScalar"
+@fa "تجزیه مقدار"
+pub func ParseScalar(raw: str): str:
+    ret ParseScalarEx(raw, false)
+end
+
+@en "ParseScalarEx"
+@fa "تجزیه مقدار گسترده"
+pub func ParseScalarEx(raw: str, semi: bool): str:
+    n := raw.len()
+    v := _read_value(raw, n, _skip_hspace(raw, n, 0), semi)
+    ret v.value
+end

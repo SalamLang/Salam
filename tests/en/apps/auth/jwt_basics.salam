@@ -1,0 +1,111 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import jwt
+
+const SECRET := "a-32-byte-or-longer-signing-secret"
+const NOW := 1700000000
+
+func clock(): jwt.Options:
+    mut o := jwt.DefaultOptions()
+    o.now = NOW as i64
+    ret o
+end
+
+func report(label: str, code: int):
+    println label, "->", jwt.ErrorText(code)
+end
+
+func mint(): str:
+    mut c := jwt.NewClaims()
+    c.iss = "api.example.com"
+    c.sub = "user-42"
+    c.aud = "web"
+    c.iat = NOW as i64
+    c.exp = (NOW + 3600) as i64
+    jwt.SetStr(c, "name", "Sara")
+    jwt.SetStr(c, "scope", "todos:read todos:write")
+    jwt.SetBool(c, "mfa", true)
+    jwt.SetRaw(c, "roles", `["author","reviewer"]`)
+    mut err := 0
+    token := jwt.SignHS256(c, SECRET, err)
+    if err != jwt.JWT_OK:
+        println "cannot sign:", jwt.ErrorText(err)
+        ret ""
+    end
+    ret token
+end
+
+func read_it(token: str):
+    mut o := clock()
+    o.issuer = "api.example.com"
+    o.audience = "web"
+    o.leeway = 30 as i64
+    o.require_exp = true
+    mut err := 0
+    t := jwt.Verify(token, SECRET, o, err)
+    report("verify", err)
+    println "  valid   :", t.valid
+    println "  subject :", t.claims.sub
+    println "  name    :", jwt.Str(t, "name")
+    println "  mfa     :", jwt.Bool(t, "mfa")
+    println "  roles   :", jwt.Raw(t, "roles")
+    println "  author? :", jwt.ListHas(t, "roles", "author")
+    println "  admin?  :", jwt.ListHas(t, "roles", "admin")
+    println "  can read:", jwt.HasScope(t, "todos:read")
+    println "  can drop:", jwt.HasScope(t, "todos:delete")
+    println "  seconds :", t.claims.exp - (NOW as i64)
+end
+
+func flip_last(token: str): str:
+    head := token.substr(0, token.len() - 1)
+    if token.substr(token.len() - 1, 1) == "A": ret head.concat("B") end
+    ret head.concat("A")
+end
+
+func rejections(token: str):
+    mut err := 0
+    _a := jwt.Verify(token, "not-the-secret", clock(), err)
+    report("wrong key", err)
+    _b := jwt.Verify(flip_last(token), SECRET, clock(), err)
+    report("tampered", err)
+    mut late := clock()
+    late.now = (NOW + 3601) as i64
+    _c := jwt.Verify(token, SECRET, late, err)
+    report("expired", err)
+    mut other := jwt.OptionsFor(jwt.JWT_HS512)
+    other.now = NOW as i64
+    _d := jwt.Verify(token, SECRET, other, err)
+    report("alg mismatch", err)
+    forged := "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJhZG1pbiJ9."
+    _e := jwt.Verify(forged, SECRET, clock(), err)
+    report("alg none", err)
+    mut audit := clock()
+    audit.audience = "mobile"
+    _f := jwt.Verify(token, SECRET, audit, err)
+    report("wrong audience", err)
+end
+
+func main:
+    token := mint()
+    println "token:"
+    println token
+    println ""
+    read_it(token)
+    println ""
+    rejections(token)
+    ret 0
+end

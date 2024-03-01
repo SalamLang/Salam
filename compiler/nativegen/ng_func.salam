@@ -1,0 +1,976 @@
+package nativegen
+
+import str
+
+func fn_reset(g &: Ng):
+    dv_reset(g)
+    tab_init(g.ltab, 256)
+    g.lval.clear()
+    g.lblk.clear()
+    g.v_kind.clear()
+    g.v_ty.clear()
+    g.v_i.clear()
+    g.v_def.clear()
+    g.v_repl.clear()
+    g.i_op.clear()
+    g.i_ty.clear()
+    g.i_res.clear()
+    g.i_a.clear()
+    g.i_b.clear()
+    g.i_c.clear()
+    g.i_x.clear()
+    g.i_d.clear()
+    g.i_f.clear()
+    g.i_ps.clear()
+    g.i_pcount.clear()
+    g.i_blk.clear()
+    g.i_next.clear()
+    g.i_prev.clear()
+    g.i_dbg.clear()
+    g.pool.clear()
+    g.b_first.clear()
+    g.b_last.clear()
+    g.f_args.clear()
+    g.f_argf.clear()
+    g.f_noret = false
+    g.f_noinline = false
+    g.f_always = false
+    g.f_sret = false
+    g.cb = 0 - 1
+end
+
+func new_val(g &: Ng, kind: int, ty: int, iv: i64): int:
+    id := g.v_kind.len()
+    g.v_kind.push(kind)
+    g.v_ty.push(ty)
+    g.v_i.push(iv)
+    g.v_def.push(0 - 1)
+    ret id
+end
+
+func const_int(g &: Ng, ty: int, iv: i64): int:
+    ret new_val(g, VK_INT, ty, iv)
+end
+
+func new_blk(g &: Ng): int:
+    id := g.b_first.len()
+    g.b_first.push(0 - 1)
+    g.b_last.push(0 - 1)
+    ret id
+end
+
+func local_id(g &: Ng, s: int, l: int): int:
+    id := tab_add(g.ltab, g.src, s, l)
+    until g.lval.len() <= id:
+        g.lval.push(0 - 1)
+        g.lblk.push(0 - 1)
+    end
+    ret id
+end
+
+func local_val(g &: Ng, s: int, l: int, ty: int): int:
+    id := local_id(g, s, l)
+    if g.lval[id] < 0:
+        g.lval[id] = new_val(g, VK_NONE, ty, 0 as i64)
+    end
+    ret g.lval[id]
+end
+
+func local_blk(g &: Ng, s: int, l: int): int:
+    id := local_id(g, s, l)
+    if g.lblk[id] < 0:
+        g.lblk[id] = new_blk(g)
+    end
+    ret g.lblk[id]
+end
+
+func ins_new(g &: Ng, op: int, ty: int): int:
+    i := g.i_op.len()
+    g.i_op.push(op)
+    g.i_ty.push(ty)
+    g.i_res.push(0 - 1)
+    g.i_a.push(0 - 1)
+    g.i_b.push(0 - 1)
+    g.i_c.push(0 - 1)
+    g.i_x.push(0)
+    g.i_d.push(0 as i64)
+    g.i_f.push(0)
+    g.i_ps.push(0)
+    g.i_pcount.push(0)
+    g.i_blk.push(0 - 1)
+    g.i_next.push(0 - 1)
+    g.i_prev.push(0 - 1)
+    g.i_dbg.push(g.cur_dbg)
+    ret i
+end
+
+func ins_append(g &: Ng, b: int, i: int):
+    g.i_blk[i] = b
+    last := g.b_last[b]
+    g.i_prev[i] = last
+    g.i_next[i] = 0 - 1
+    if last >= 0:
+        g.i_next[last] = i
+    else:
+        g.b_first[b] = i
+    end
+    g.b_last[b] = i
+end
+
+func ins_before(g &: Ng, at_i: int, i: int):
+    b := g.i_blk[at_i]
+    g.i_blk[i] = b
+    pv := g.i_prev[at_i]
+    g.i_prev[i] = pv
+    g.i_next[i] = at_i
+    g.i_prev[at_i] = i
+    if pv >= 0:
+        g.i_next[pv] = i
+    else:
+        g.b_first[b] = i
+    end
+end
+
+func ins_unlink(g &: Ng, i: int):
+    dv_unlink(g, i)
+    b := g.i_blk[i]
+    pv := g.i_prev[i]
+    nx := g.i_next[i]
+    if pv >= 0:
+        g.i_next[pv] = nx
+    else:
+        g.b_first[b] = nx
+    end
+    if nx >= 0:
+        g.i_prev[nx] = pv
+    else:
+        g.b_last[b] = pv
+    end
+    g.i_op[i] = OP_NOP
+    g.i_blk[i] = 0 - 1
+end
+
+func emit_ins(g &: Ng, op: int, ty: int, a: int, b: int, c: int): int:
+    i := ins_new(g, op, ty)
+    g.i_a[i] = a
+    g.i_b[i] = b
+    g.i_c[i] = c
+    if g.cb < 0:
+        g.cb = new_blk(g)
+    end
+    ins_append(g, g.cb, i)
+    ret i
+end
+
+func def_res(g &: Ng, i: int, v: int):
+    g.i_res[i] = v
+    g.v_kind[v] = VK_INS
+    g.v_ty[v] = g.i_ty[i]
+    g.v_def[v] = i
+end
+
+func new_res(g &: Ng, i: int): int:
+    v := new_val(g, VK_INS, g.i_ty[i], 0 as i64)
+    g.i_res[i] = v
+    g.v_def[v] = i
+    ret v
+end
+
+func parse_val(g &: Ng, ty: int): int:
+    skip_ws(g)
+    c := cur(g)
+    if c == 37:
+        if read_sigil_name(g, 37):
+            ret local_val(g, g.ws, g.wl, ty)
+        end
+        ret 0 - 1
+    end
+    if c == 64:
+        if read_sigil_name(g, 64):
+            s := intr_alias(g, sym_of(g, g.src, g.ws, g.wl))
+            g.sy_used[s] = true
+            v := new_val(g, VK_GLB, T_PTR, 0 as i64)
+            g.v_def[v] = s
+            ret v
+        end
+        ret 0 - 1
+    end
+    if is_dig(c) or c == 45:
+        if is_flt(g, ty):
+            ret new_val(g, VK_FLT, ty, read_float_bits(g))
+        end
+        ret new_val(g, VK_INT, ty, read_i64(g))
+    end
+    save := g.p
+    k := word_kw(g)
+    if k == KW_TRUE:
+        ret new_val(g, VK_INT, ty, 1 as i64)
+    end
+    if k == KW_FALSE or k == KW_NULL:
+        ret new_val(g, VK_INT, ty, 0 as i64)
+    end
+    if k == KW_UNDEF or k == KW_POISON:
+        ret new_val(g, VK_UNDEF, ty, 0 as i64)
+    end
+    if k == KW_ZEROINIT:
+        ret new_val(g, VK_ZERO, ty, 0 as i64)
+    end
+    if k == KW_GEP or k == KW_PTRTOINT or k == KW_INTTOPTR or k == KW_BITCAST:
+        g.ce_sym = 0 - 1
+        g.ce_off = 0 as i64
+        parse_cexpr(g, k)
+        if g.ce_sym >= 0:
+            g.sy_used[g.ce_sym] = true
+            v2 := new_val(g, VK_GLB, T_PTR, g.ce_off)
+            g.v_def[v2] = g.ce_sym
+            ret v2
+        end
+        ret new_val(g, VK_INT, ty, g.ce_off)
+    end
+    g.p = save
+    fail(g, "native backend: unsupported operand near '" + near(g) + "'")
+    ret new_val(g, VK_UNDEF, ty, 0 as i64)
+end
+
+func parse_tv(g &: Ng): int:
+    t := parse_type(g)
+    ret parse_val(g, t)
+end
+
+func skip_flags(g &: Ng):
+    until true:
+        save := g.p
+        if not word(g):
+            ret
+        end
+        if is_type_word(g):
+            g.p = save
+            ret
+        end
+    end
+end
+
+func skip_flags_nsw(g &: Ng): bool:
+    mut nsw := false
+    until true:
+        save := g.p
+        if not word(g):
+            ret nsw
+        end
+        if is_type_word(g):
+            g.p = save
+            ret nsw
+        end
+        if g.wl == 3 and g.src[g.ws] == (110 as u8) and g.src[g.ws + 1] == (115 as u8) and g.src[g.ws + 2] == (119 as u8):
+            nsw = true
+        end
+    end
+end
+
+func is_type_word(g &: Ng): bool:
+    k := tab_get(g.kw, g.src, g.ws, g.wl)
+    if k == KW_PTR or k == KW_VOID or k == KW_FLOAT or k == KW_DOUBLE or k == KW_LABEL:
+        ret true
+    end
+    if g.wl >= 2 and g.src[g.ws] == (105 as u8) and is_dig(g.src[g.ws + 1] as int):
+        ret true
+    end
+    ret false
+end
+
+func addr_ins(g &: Ng, base: int, idx: int, scale: i64, disp: i64): int:
+    i := emit_ins(g, OP_ADDR, T_PTR, base, idx, 0 - 1)
+    g.i_x[i] = scale as int
+    g.i_d[i] = disp
+    ret i
+end
+
+func parse_gep(g &: Ng): int:
+    _ib := eat_kw(g, KW_INBOUNDS)
+    t0 := parse_type(g)
+    expect(g, 44)
+    mut cur_v := parse_tv(g)
+    mut ty := t0
+    mut first := true
+    mut off := 0 as i64
+    mut last := 0 - 1
+    until eat(g, 44):
+        it := parse_type(g)
+        iv := parse_val(g, it)
+        mut step := 0 as i64
+        mut is_struct := false
+        if first:
+            step = tsize(g, ty) as i64
+            first = false
+        else g.t_kind[ty] == TK_STRUCT:
+            is_struct = true
+        else g.t_kind[ty] == TK_ARRAY:
+            ty = g.t_elem[ty]
+            step = tsize(g, ty) as i64
+        end
+        if is_struct:
+            fi := g.v_i[iv] as int
+            off += field_off(g, ty, fi) as i64
+            ty = field_ty(g, ty, fi)
+        else g.v_kind[iv] == VK_INT:
+            off += g.v_i[iv] * step
+        else:
+            last = addr_ins(g, cur_v, iv, step, off)
+            cur_v = new_res(g, last)
+            off = 0 as i64
+        end
+    end
+    if last < 0 or off != (0 as i64):
+        last = addr_ins(g, cur_v, 0 - 1, 1 as i64, off)
+    end
+    ret last
+end
+
+func agg_offset(g &: Ng, t0: int, rty &: int): i64:
+    mut ty := t0
+    mut off := 0 as i64
+    until eat(g, 44):
+        idx := read_i64(g) as int
+        if g.t_kind[ty] == TK_STRUCT:
+            off += field_off(g, ty, idx) as i64
+            ty = field_ty(g, ty, idx)
+        else:
+            ty = g.t_elem[ty]
+            off += (idx as i64) * (tsize(g, ty) as i64)
+        end
+    end
+    rty = ty
+    ret off
+end
+
+func icmp_pred(k: int): int:
+    switch k:
+        KW_EQ: ret CC_EQ end
+        KW_NE: ret CC_NE end
+        KW_SLT: ret CC_SLT end
+        KW_SLE: ret CC_SLE end
+        KW_SGT: ret CC_SGT end
+        KW_SGE: ret CC_SGE end
+        KW_ULT: ret CC_ULT end
+        KW_ULE: ret CC_ULE end
+        KW_UGT: ret CC_UGT end
+        KW_UGE: ret CC_UGE end
+    end
+    ret 0 - 1
+end
+
+func fcmp_pred(k: int): int:
+    switch k:
+        KW_FALSE: ret FC_FALSE end
+        KW_OEQ: ret FC_OEQ end
+        KW_OGT: ret FC_OGT end
+        KW_OGE: ret FC_OGE end
+        KW_OLT: ret FC_OLT end
+        KW_OLE: ret FC_OLE end
+        KW_ONE: ret FC_ONE end
+        KW_ORD: ret FC_ORD end
+        KW_UEQ: ret FC_UEQ end
+        KW_UGT: ret FC_UGT end
+        KW_UGE: ret FC_UGE end
+        KW_ULT: ret FC_ULT end
+        KW_ULE: ret FC_ULE end
+        KW_UNE: ret FC_UNE end
+        KW_UNO: ret FC_UNO end
+        KW_TRUE: ret FC_TRUE end
+    end
+    ret 0 - 1
+end
+
+func binop_of(k: int): int:
+    switch k:
+        KW_ADD: ret OP_ADD end
+        KW_SUB: ret OP_SUB end
+        KW_MUL: ret OP_MUL end
+        KW_SDIV: ret OP_SDIV end
+        KW_UDIV: ret OP_UDIV end
+        KW_SREM: ret OP_SREM end
+        KW_UREM: ret OP_UREM end
+        KW_AND: ret OP_AND end
+        KW_OR: ret OP_OR end
+        KW_XOR: ret OP_XOR end
+        KW_SHL: ret OP_SHL end
+        KW_LSHR: ret OP_LSHR end
+        KW_ASHR: ret OP_ASHR end
+        KW_FADD: ret OP_FADD end
+        KW_FSUB: ret OP_FSUB end
+        KW_FMUL: ret OP_FMUL end
+        KW_FDIV: ret OP_FDIV end
+        KW_FREM: ret OP_FREM end
+    end
+    ret 0 - 1
+end
+
+func cast_of(k: int): int:
+    switch k:
+        KW_SEXT: ret OP_SEXT end
+        KW_ZEXT: ret OP_ZEXT end
+        KW_TRUNC: ret OP_TRUNC end
+        KW_PTRTOINT: ret OP_PTRTOINT end
+        KW_INTTOPTR: ret OP_INTTOPTR end
+        KW_BITCAST: ret OP_BITCAST end
+        KW_SITOFP: ret OP_SITOFP end
+        KW_UITOFP: ret OP_UITOFP end
+        KW_FPTOSI: ret OP_FPTOSI end
+        KW_FPTOUI: ret OP_FPTOUI end
+        KW_FPEXT: ret OP_FPEXT end
+        KW_FPTRUNC: ret OP_FPTRUNC end
+    end
+    ret 0 - 1
+end
+
+func line_has(g &: Ng, w: str): bool:
+    mut q := g.p
+    n := w.len()
+    until q < g.sn and g.src[q] != (10 as u8):
+        if q + n <= g.sn:
+            mut ok := true
+            repeat n in k:
+                if g.src[q + k] != w[k] as u8:
+                    ok = false
+                    break
+                end
+            end
+            if ok:
+                ret true
+            end
+        end
+        q += 1
+    end
+    ret false
+end
+
+func skip_ordering(g &: Ng):
+    until true:
+        save := g.p
+        skip_sp(g)
+        c := cur(g)
+        if c == 44 or c == 10 or c < 0 or c == 59:
+            g.p = save
+            ret
+        end
+        if not word(g):
+            g.p = save
+            ret
+        end
+        skip_sp(g)
+        if cur(g) == 40:
+            skip_balanced(g)
+        end
+    end
+end
+
+func parse_call(g &: Ng): int:
+    skip_attrs_to_type(g)
+    rt := parse_type(g)
+    mut nfixed := 0 - 1
+    skip_ws(g)
+    if cur(g) == 40:
+        g.p += 1
+        mut nf := 0
+        mut var := false
+        until g.ok and not eat(g, 41):
+            _c := eat(g, 44)
+            skip_ws(g)
+            if cur(g) == 46:
+                g.p += 3
+                var = true
+            else:
+                _pt := parse_type(g)
+                nf += 1
+            end
+        end
+        if var:
+            nfixed = nf
+        end
+    end
+    callee := parse_val(g, T_PTR)
+    expect(g, 40)
+    ps := g.pool.len()
+    mut na := 0
+    until g.ok and not eat(g, 41):
+        if na > 0:
+            expect(g, 44)
+        end
+        at := parse_type(g)
+        mut flags := 0
+        mut aux := 0 - 1
+        until g.ok:
+            skip_ws(g)
+            c := cur(g)
+            if c == 37 or c == 64 or c == 45 or is_dig(c):
+                break
+            end
+            save := g.p
+            k := word_kw(g)
+            if k == KW_NULL or k == KW_TRUE or k == KW_FALSE or k == KW_UNDEF or k == KW_POISON or k == KW_ZEROINIT or k == KW_GEP or k == KW_PTRTOINT or k == KW_INTTOPTR or k == KW_BITCAST:
+                g.p = save
+                break
+            end
+            if g.wl == 0:
+                fail(g, "native backend: bad call argument near '" + near(g) + "'")
+                break
+            end
+            if k == KW_SIGNEXT:
+                flags = flags | IF_SEXT
+                continue
+            end
+            if k == KW_SRET:
+                flags = flags | IF_SRET
+            end
+            if k == KW_BYVAL:
+                flags = flags | IF_BYVAL
+                expect(g, 40)
+                aux = parse_type(g)
+                expect(g, 41)
+                continue
+            end
+            skip_sp(g)
+            if cur(g) == 40:
+                skip_balanced(g)
+            else str.Equals(word_str_at(g, save), "align"):
+                _al := read_i64(g)
+            end
+        end
+        v := parse_val(g, at)
+        g.pool.push(v)
+        g.pool.push(flags)
+        g.pool.push(aux)
+        na += 1
+    end
+    i := emit_ins(g, OP_CALL, rt, callee, 0 - 1, 0 - 1)
+    g.i_ps[i] = ps
+    g.i_pcount[i] = na
+    g.i_x[i] = nfixed
+    if nfixed >= 0:
+        g.i_f[i] = IF_VARARG
+    end
+    mut nr := false
+    until true:
+        skip_sp(g)
+        c2 := cur(g)
+        if c2 == 10 or c2 < 0 or c2 == 44 or c2 == 59:
+            break
+        end
+        if c2 == 35:
+            g.p += 1
+            _n := read_i64(g)
+            continue
+        end
+        k2 := word_kw(g)
+        if g.wl == 0:
+            break
+        end
+        if k2 == KW_NORETURN:
+            nr = true
+        end
+    end
+    if nr:
+        g.i_f[i] = g.i_f[i] | IF_NORET
+    end
+    ret i
+end
+
+func word_str_at(g &: Ng, save: int): str:
+    s := g.p
+    g.p = save
+    _w := word(g)
+    r := word_str(g)
+    g.p = s
+    ret r
+end
+
+func parse_instr(g &: Ng, res: int):
+    k := word_kw(g)
+    mut i := 0 - 1
+    if k == KW_ALLOCA:
+        t := parse_type(g)
+        i = emit_ins(g, OP_ALLOCA, T_PTR, 0 - 1, 0 - 1, 0 - 1)
+        g.i_x[i] = t
+        if eat(g, 44) and is_type_start(g):
+            cv := parse_tv(g)
+            if g.v_kind[cv] == VK_INT:
+                g.i_d[i] = g.v_i[cv]
+            end
+        end
+    else k == KW_LOAD:
+        mut fl := 0
+        if eat_kw(g, KW_ATOMIC):
+            fl = IF_ATOMIC
+        end
+        if eat_kw(g, KW_VOLATILE):
+            fl = fl | IF_VOLATILE
+        end
+        t2 := parse_type(g)
+        expect(g, 44)
+        pv := parse_tv(g)
+        i = emit_ins(g, OP_LOAD, t2, pv, 0 - 1, line_tbaa(g))
+        g.i_f[i] = fl
+    else k == KW_STORE:
+        mut fl2 := 0
+        if eat_kw(g, KW_ATOMIC):
+            fl2 = IF_ATOMIC
+        end
+        if eat_kw(g, KW_VOLATILE):
+            fl2 = fl2 | IF_VOLATILE
+        end
+        sv := parse_tv(g)
+        expect(g, 44)
+        pv2 := parse_tv(g)
+        if (fl2 & IF_ATOMIC) != 0 and line_has(g, "seq_cst"):
+            fl2 = fl2 | IF_SEQ
+        end
+        i = emit_ins(g, OP_STORE, T_VOID, sv, pv2, line_tbaa(g))
+        g.i_f[i] = fl2
+        g.i_x[i] = g.v_ty[sv]
+    else k == KW_GEP:
+        i = parse_gep(g)
+    else binop_of(k) >= 0:
+        op := binop_of(k)
+        nsw := skip_flags_nsw(g)
+        t3 := parse_type(g)
+        av := parse_val(g, t3)
+        expect(g, 44)
+        bv := parse_val(g, t3)
+        i = emit_ins(g, op, t3, av, bv, 0 - 1)
+        if nsw:
+            g.i_f[i] = IF_NSW
+        end
+    else k == KW_FNEG:
+        skip_flags(g)
+        t4 := parse_type(g)
+        av2 := parse_val(g, t4)
+        i = emit_ins(g, OP_FNEG, t4, av2, 0 - 1, 0 - 1)
+    else k == KW_ICMP or k == KW_FCMP:
+        if k == KW_FCMP:
+            skip_flags_pred(g)
+        end
+        pk := word_kw(g)
+        mut pr := icmp_pred(pk)
+        mut op2 := OP_ICMP
+        if k == KW_FCMP:
+            pr = fcmp_pred(pk)
+            op2 = OP_FCMP
+        end
+        if pr < 0:
+            fail(g, "native backend: bad compare predicate near '" + near(g) + "'")
+        end
+        t5 := parse_type(g)
+        av3 := parse_val(g, t5)
+        expect(g, 44)
+        bv3 := parse_val(g, t5)
+        i = emit_ins(g, op2, T_I1, av3, bv3, 0 - 1)
+        g.i_x[i] = pr
+    else cast_of(k) >= 0:
+        cop := cast_of(k)
+        st := parse_type(g)
+        sv2 := parse_val(g, st)
+        if not eat_kw(g, KW_TO):
+            fail(g, "native backend: expected 'to' near '" + near(g) + "'")
+        end
+        dt := parse_type(g)
+        i = emit_ins(g, cop, dt, sv2, 0 - 1, 0 - 1)
+        g.i_x[i] = st
+    else k == KW_SELECT:
+        skip_flags(g)
+        cv2 := parse_tv(g)
+        expect(g, 44)
+        t6 := parse_type(g)
+        av4 := parse_val(g, t6)
+        expect(g, 44)
+        bv4 := parse_tv(g)
+        i = emit_ins(g, OP_SELECT, t6, cv2, av4, bv4)
+    else k == KW_PHI:
+        t7 := parse_type(g)
+        ps := g.pool.len()
+        mut n := 0
+        until g.ok and eat(g, 91):
+            pv3 := parse_val(g, t7)
+            expect(g, 44)
+            if read_sigil_name(g, 37):
+                g.pool.push(pv3)
+                g.pool.push(local_blk(g, g.ws, g.wl))
+            end
+            expect(g, 93)
+            n += 1
+            if not eat(g, 44):
+                break
+            end
+        end
+        i = emit_ins(g, OP_PHI, t7, 0 - 1, 0 - 1, 0 - 1)
+        g.i_ps[i] = ps
+        g.i_pcount[i] = n
+    else k == KW_CALL or k == KW_TAIL or k == KW_MUSTTAIL or k == KW_NOTAIL:
+        if k != KW_CALL:
+            _ck := word_kw(g)
+        end
+        i = parse_call(g)
+    else k == KW_BR:
+        t8 := parse_type(g)
+        if t8 == T_LABEL:
+            if read_sigil_name(g, 37):
+                i = emit_ins(g, OP_BR, T_VOID, 0 - 1, local_blk(g, g.ws, g.wl), 0 - 1)
+            end
+        else:
+            cv3 := parse_val(g, t8)
+            expect(g, 44)
+            _l1 := parse_type(g)
+            mut tb := 0 - 1
+            if read_sigil_name(g, 37):
+                tb = local_blk(g, g.ws, g.wl)
+            end
+            expect(g, 44)
+            _l2 := parse_type(g)
+            mut fb := 0 - 1
+            if read_sigil_name(g, 37):
+                fb = local_blk(g, g.ws, g.wl)
+            end
+            i = emit_ins(g, OP_CBR, T_VOID, cv3, tb, fb)
+        end
+    else k == KW_RET:
+        t9 := parse_type(g)
+        if t9 == T_VOID:
+            i = emit_ins(g, OP_RET, T_VOID, 0 - 1, 0 - 1, 0 - 1)
+        else:
+            rv := parse_val(g, t9)
+            i = emit_ins(g, OP_RET, t9, rv, 0 - 1, 0 - 1)
+        end
+    else k == KW_UNREACH:
+        i = emit_ins(g, OP_UNREACH, T_VOID, 0 - 1, 0 - 1, 0 - 1)
+    else k == KW_INSV:
+        at := parse_type(g)
+        av5 := parse_val(g, at)
+        expect(g, 44)
+        ft := parse_type(g)
+        fv := parse_val(g, ft)
+        mut rty := 0
+        off := agg_offset(g, at, rty)
+        i = emit_ins(g, OP_INSV, at, av5, fv, 0 - 1)
+        g.i_d[i] = off
+        g.i_x[i] = rty
+    else k == KW_EXTV:
+        at2 := parse_type(g)
+        av6 := parse_val(g, at2)
+        mut rty2 := 0
+        off2 := agg_offset(g, at2, rty2)
+        i = emit_ins(g, OP_EXTV, rty2, av6, 0 - 1, 0 - 1)
+        g.i_d[i] = off2
+        g.i_x[i] = at2
+    else k == KW_RMW:
+        _vol := eat_kw(g, KW_VOLATILE)
+        rk := word_kw(g)
+        mut rop := RMW_XCHG
+        if rk == KW_ADD: rop = RMW_ADD
+        else rk == KW_SUB: rop = RMW_SUB
+        else rk == KW_AND: rop = RMW_AND
+        else rk == KW_OR: rop = RMW_OR
+        else rk == KW_XOR: rop = RMW_XOR
+        else rk != KW_XCHG:
+            fail(g, "native backend: unsupported atomicrmw near '" + near(g) + "'")
+        end
+        pv4 := parse_tv(g)
+        expect(g, 44)
+        t10 := parse_type(g)
+        vv := parse_val(g, t10)
+        i = emit_ins(g, OP_RMW, t10, pv4, vv, 0 - 1)
+        g.i_x[i] = rop
+    else k == KW_CMPXCHG:
+        until true:
+            save := g.p
+            wk := word_kw(g)
+            if g.wl == 0 or wk == KW_PTR:
+                g.p = save
+                break
+            end
+        end
+        pv5 := parse_tv(g)
+        expect(g, 44)
+        t11 := parse_type(g)
+        cmpv := parse_val(g, t11)
+        expect(g, 44)
+        newv := parse_tv(g)
+        mut fl3 := Vector {} as Vector<int>
+        fl3.push(t11)
+        fl3.push(T_I1)
+        st2 := struct_from_fields(g, fl3)
+        fl3.free()
+        i = emit_ins(g, OP_CMPXCHG, st2, pv5, cmpv, newv)
+    else k == KW_FENCE:
+        i = emit_ins(g, OP_FENCE, T_VOID, 0 - 1, 0 - 1, 0 - 1)
+    else:
+        fail(g, "native backend: unsupported instruction near '" + near(g) + "'")
+    end
+    if res >= 0 and i >= 0:
+        def_res(g, i, res)
+    end
+    skip_line(g)
+end
+
+func skip_flags_pred(g &: Ng):
+    until true:
+        save := g.p
+        k := word_kw(g)
+        if fcmp_pred(k) >= 0 or g.wl == 0:
+            g.p = save
+            ret
+        end
+    end
+end
+
+func parse_params(g &: Ng):
+    expect(g, 40)
+    mut idx := 0
+    until g.ok and not eat(g, 41):
+        if idx > 0:
+            expect(g, 44)
+        end
+        t := parse_type(g)
+        mut flags := 0
+        mut nm := 0 - 1
+        until g.ok:
+            skip_ws(g)
+            c := cur(g)
+            if c == 44 or c == 41:
+                break
+            end
+            if c == 37:
+                if read_sigil_name(g, 37):
+                    nm = local_val(g, g.ws, g.wl, t)
+                end
+                continue
+            end
+            k := word_kw(g)
+            if g.wl == 0:
+                fail(g, "native backend: bad parameter near '" + near(g) + "'")
+                break
+            end
+            if k == KW_BYVAL:
+                flags = flags | IF_BYVAL
+            end
+            if k == KW_NONNULL:
+                flags = flags | IF_NONNULL
+            end
+            if k == KW_SRET:
+                g.f_sret = true
+            end
+            skip_sp(g)
+            if cur(g) == 40:
+                skip_balanced(g)
+            end
+        end
+        mut v := nm
+        if v < 0:
+            v = new_val(g, VK_ARG, t, idx as i64)
+        end
+        g.v_kind[v] = VK_ARG
+        g.v_ty[v] = t
+        g.v_i[v] = idx as i64
+        g.f_args.push(v)
+        g.f_argf.push(flags)
+        idx += 1
+    end
+end
+
+func parse_define(g &: Ng):
+    fn_reset(g)
+    dv_fstart := g.p
+    mut local := false
+    until g.ok and not is_type_start(g):
+        k := word_kw(g)
+        if k == KW_INTERNAL or k == KW_PRIVATE:
+            local = true
+        end
+        if g.wl == 0:
+            fail(g, "native backend: bad define near '" + near(g) + "'")
+            ret
+        end
+    end
+    g.f_ret = parse_type(g)
+    if not read_sigil_name(g, 64):
+        fail(g, "native backend: bad function name")
+        ret
+    end
+    s := sym_of(g, g.src, g.ws, g.wl)
+    g.f_sym = s
+    g.sy_kind[s] = SY_FUNC
+    g.sy_def[s] = true
+    g.sy_local[s] = local
+    parse_params(g)
+    g.f_popn = 0
+    if g.arch == NG_ARCH_X86:
+        mut q0 := dv_fstart
+        until q0 < g.p and g.src[q0] != (64 as u8):
+            if src_at(g, q0, "x86_stdcallcc"):
+                mut pn := 0
+                each av in g.f_args:
+                    pn += align_up(tsize(g, g.v_ty[av]), 4)
+                end
+                g.f_popn = pn
+                set_stdcall(g, s, pn)
+                break
+            end
+            q0 += 1
+        end
+    end
+    until g.ok and not eat(g, 123):
+        if g.p >= g.sn:
+            fail(g, "native backend: unterminated define")
+            ret
+        end
+        k2 := word_kw(g)
+        if k2 == KW_NORETURN:
+            g.f_noret = true
+        else k2 == KW_NOINLINE:
+            g.f_noinline = true
+        else k2 == KW_ALWAYSINLINE:
+            g.f_always = true
+        end
+        if g.wl == 0:
+            g.p += 1
+        end
+    end
+    g.f_sp = line_dbg(g)
+    skip_line(g)
+    until g.ok:
+        skip_ws(g)
+        c := cur(g)
+        if c == 125:
+            g.p += 1
+            break
+        end
+        if c < 0:
+            fail(g, "native backend: unexpected end of function")
+            ret
+        end
+        if c == 37:
+            mut res := 0 - 1
+            if read_sigil_name(g, 37):
+                res = local_val(g, g.ws, g.wl, T_VOID)
+            end
+            expect(g, 61)
+            g.cur_dbg = dbg_loc(g, line_dbg(g), 0 - 1)
+            parse_instr(g, res)
+            continue
+        end
+        g.cur_dbg = dbg_loc(g, line_dbg(g), 0 - 1)
+        save := g.p
+        if word(g) and cur(g) == 58:
+            b := local_blk(g, g.ws, g.wl)
+            g.p += 1
+            g.cb = b
+            skip_line(g)
+            continue
+        end
+        g.p = save
+        parse_instr(g, 0 - 1)
+    end
+    g.cur_dbg = 0 - 1
+    dv_bind(g, dv_fstart, g.p)
+    if g.ok:
+        CompileFunction(g)
+    end
+end

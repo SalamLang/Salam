@@ -1,0 +1,117 @@
+pkg.en = testing
+pkg.name = testing
+pkg.group = System and tools
+pkg.summary = Writing tests for your code: equality assertions, a pass and fail count, and a summary at the end.
+pkg.title = The testing package in Salam | Writing unit tests
+pkg.description = The testing package in Salam: writing unit tests with assertions over numbers, strings and decimals, counting passes and failures, and printing a summary, with an example.
+pkg.intro <<
+<p>A test is a small program that checks your code does what it should. The <code>testing</code> package has assertions that print a clear message when they fail but do not stop the program, so every check runs and <code>Summary</code> says at the end how many passed and how many failed. Put tests in a file whose name ends in <code>_test.salam</code>, write each one as a function whose name starts with <code>test_</code>, and run them all with <code>salam test</code>, locally or in CI (see <a href="#guide-runner">below</a>). A test file can also be an ordinary program with its own <code>main</code>, started with <code>salam run</code>.</p>
+<p><code>Summary</code> returns the number of failures, and returning it from <code>main</code> makes the program end with a non-zero code when something failed, which is what turns a CI job red. For checks inside the program itself, conditions that must never be false in production code, use <code>Assert</code> from <a href="/std/debug/">debug</a> instead, which stops the program. To time code, see <a href="/std/debug/">debug</a> and <a href="/std/time/">time</a>.</p>
+<p>The things people get wrong:</p>
+<ul>
+<li>A failure line says what differed, not where. In a loop over cases, use <code>AssertMsg</code> and put the case name in the message (see <a href="#guide-labels">below</a>).</li>
+<li>Strings are printed without quotes, so a stray space is invisible in <code>got hello  want hello</code>. Put brackets around values in your own messages.</li>
+<li>An exit code only has 8 bits, so 256 failures read as exit code 0. A suite that can have that many should return <code>failures &gt; 0 ? 1 : 0</code>.</li>
+<li>The counters are plain globals with no lock: call the assertions from the main thread only.</li>
+</ul>
+
+<h2 id="guide-runner">Running tests with salam test</h2>
+<p><code>salam test</code> finds every <code>*_test.salam</code> file under the current directory (or the files and directories you name), and in each one calls every function whose name starts with <code>test_</code> (<code>آزمون</code> in a Persian file) and that takes no arguments. You do not write <code>main</code>: the runner writes its own, in memory, and reports each test by name:</p>
+<pre class="code" dir="ltr"><code>salam test                      # every test file under this directory
+salam test calc_test.salam      # one file
+salam test --run=parse          # only tests whose name contains "parse"
+salam test '--run=^test_add$'   # exactly test_add (^ and $ anchor the name)
+salam test --interp             # on the interpreter, no C compiler needed</code></pre>
+<p>Each file runs in its own process, so a crash fails that file and the others still run. The command ends with exit code 1 when any test failed, when a test file does not compile, and when <code>--run</code> matches no test at all. <code>--format=teamcity</code> prints TeamCity service messages instead of plain lines, which is what the JetBrains plugin reads to show the test tree; a file that has its own <code>main</code> and no <code>test_</code> functions is run as one test that passes when it exits with 0.</p>
+
+<h2 id="guide-table">Table driven tests</h2>
+<p>When one function has to give the right answer for many inputs, put the inputs and the expected answers in an array of small structs and loop over it. Adding a case is then one line, and every case runs even when an earlier one fails.</p>
+{{example.testing-guide-table}}
+<p>The program returns what <code>Summary</code> returns, so it ends with exit code 0 when everything passed. Run it like any other program:</p>
+<pre class="code" dir="ltr"><code>salam run fizzbuzz_test.salam
+echo $?</code></pre>
+
+<h2 id="guide-labels">Failure messages that point at the case</h2>
+<p><code>AssertEqStr</code> inside a loop prints <code>strings differ: got ... want ...</code>, which leaves you to work out which row of the table it was. Give each case a name and build the message yourself with <code>AssertMsg</code>. Brackets around the values show spaces at the edges, which is exactly the bug in this example.</p>
+{{example.testing-guide-labels}}
+
+<h2 id="guide-groups">Group the tests of each function</h2>
+<p>A long test file is easier to read when each function under test gets its own test function. <code>Failed</code> counts every failure so far; remember it at the start of a group and compare at the end to report the group as a whole.</p>
+{{example.testing-guide-groups}}
+<p>Floats are compared with <code>AssertEqFloat</code> and a tolerance, never with <code>==</code>: 7 / 3 has no exact binary form, so the last digits differ from any decimal you write down.</p>
+
+<h2 id="guide-errors">Test the error paths too</h2>
+<p>The code that runs when something goes wrong is the code that is run least, so test it on purpose. For a function that reports problems through an <code>err &amp;:</code> out parameter, call it with bad input and check both the result and the message. <code>AssertContains</code> checks for a key word, so the test keeps passing when the wording around it is improved.</p>
+{{example.testing-guide-errors}}
+
+<h2 id="guide-failure">What a failure looks like</h2>
+<p>A failed assertion prints a <code>FAIL:</code> line with what it got and what it wanted, and the program carries on with the next check. The failure lines go to standard error and the summary to standard output, so a CI log shows both but a pipe can separate them.</p>
+{{example.testing-guide-failure}}
+<p>This example prints the failure count instead of returning it, so the page can show its output. A real test file ends with <code>ret testing.Summary()</code>, and the non-zero exit code is what makes the CI job fail.</p>
+
+<h2 id="guide-which">Which assertion to use</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>You are checking</th><th>Use</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Two whole numbers</td><td><code>AssertEqInt</code>, <code>AssertEqInt64</code></td><td>The message shows both values</td></tr>
+<tr><td>Two strings</td><td><code>AssertEqStr</code></td><td>The message shows both strings</td></tr>
+<tr><td>Floats</td><td><code>AssertEqFloat</code> with a small tolerance</td><td>Rounding makes <code>==</code> unreliable</td></tr>
+<tr><td>Part of a longer text</td><td><code>AssertContains</code></td><td>Survives changes to the rest of the text</td></tr>
+<tr><td>That something changed</td><td><code>AssertNeInt</code>, <code>AssertNeStr</code></td><td>For ids, tokens and hashes</td></tr>
+<tr><td>A pointer was or was not set</td><td><code>AssertNil</code>, <code>AssertNotNil</code></td><td>For C libraries and allocations</td></tr>
+<tr><td>Any other condition</td><td><code>AssertMsg</code></td><td>Say in words what went wrong</td></tr>
+</tbody>
+</table></div>
+<p>Prefer the specific assertions to <code>Assert</code>. "ints differ: got 4 want 5" tells you far more than "assertion failed". <code>Reset</code> sets both counters back to zero, for a program that runs several separate suites in a row.</p>
+>>
+
+doc.Assert = Records a failure, printed as <code>FAIL: assertion failed</code>, when the condition is false. Prefer an assertion that says more.
+doc.AssertMsg = Like <code>Assert</code>, with your own message after <code>FAIL: </code>.
+doc.AssertTrue = The condition has to be true.
+doc.AssertFalse = The condition has to be false.
+doc.AssertEqInt = Two whole numbers have to be equal; on failure both values are printed.
+doc.AssertEqInt64 = Two 64-bit whole numbers have to be equal.
+doc.AssertEqFloat = Two decimal numbers may differ by at most <code>eps</code>. Never compare decimals with <code>==</code>.
+doc.AssertContains = The first string has to contain the second; on failure both are printed.
+doc.AssertEqStr = Two strings have to be equal; on failure both are printed, without quotes.
+doc.AssertEqBool = Two booleans have to be equal. The failure message does not show the values.
+doc.AssertNeInt = Two whole numbers have to differ. The failure message does not show the value.
+doc.AssertNeStr = Two strings have to differ. The failure message does not show the value.
+doc.AssertNil = The pointer has to be null.
+doc.AssertNotNil = The pointer must not be null.
+doc.Reset = Sets the counters back to zero.
+doc.Passed = The number of assertions that passed.
+doc.Failed = The number of assertions that failed.
+doc.Summary = Prints <code>--</code> and <code>tests: N passed, M failed</code> to standard output and returns the number of failures.
+doc.SetFilter = Runs only the tests whose name contains the given text; <code>salam test --run=...</code> sets it.
+doc.Selected = Whether a test with this name runs under the current filter.
+doc.SetFormat = Chooses how <code>Begin</code>, <code>End</code> and <code>Finish</code> report: <code>"teamcity"</code> prints TeamCity service messages, which JetBrains IDEs and CI servers read as a test tree; anything else prints plain lines. <code>salam test</code> calls it for you.
+doc.SuiteStart = Starts the report for one test file. <code>salam test</code> calls it for you.
+doc.Begin = Starts one test, with its name and the line it is declared on. Failures recorded until <code>End</code> belong to it.
+doc.End = Ends the current test and reports it as passed or failed.
+doc.Finish = Reports the whole file and ends the program with exit code 1 when a test failed.
+
+ex.AssertMsg = testing-Assert
+ex.AssertTrue = testing-Assert
+ex.AssertFalse = testing-Assert
+ex.AssertEqInt = testing-Assert
+ex.AssertEqInt64 = testing-Assert
+ex.AssertEqFloat = testing-Assert
+ex.AssertContains = testing-Assert
+ex.AssertEqStr = testing-Assert
+ex.AssertEqBool = testing-Assert
+ex.AssertNeInt = testing-Assert
+ex.AssertNeStr = testing-Assert
+ex.AssertNil = testing-Assert
+ex.AssertNotNil = testing-Assert
+ex.Reset = testing-Assert
+ex.Passed = testing-Assert
+ex.Failed = testing-Assert
+ex.Summary = testing-Assert
+ex.SetFilter = testing-Runner
+ex.Selected = testing-Runner
+ex.SetFormat = testing-Runner
+ex.SuiteStart = testing-Runner
+ex.Begin = testing-Runner
+ex.End = testing-Runner
+ex.Finish = testing-Runner

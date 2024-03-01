@@ -1,0 +1,543 @@
+package interp
+
+import str
+import mem
+
+include co "../sal_core.salam"
+
+func val_null(): Value:
+    ret Value {}
+end
+
+func int_ty_is_unsigned(t: int): bool:
+    ret t >= ITY_U8
+end
+
+func int_ty_bits(t: int): int:
+    if t == ITY_I8 or t == ITY_U8:
+        ret 8
+    end
+    if t == ITY_I16 or t == ITY_U16:
+        ret 16
+    end
+    if t == ITY_I32 or t == ITY_U32:
+        ret 32
+    end
+    ret 64
+end
+
+func int_ty_rank(t: int): int:
+    ret int_ty_bits(t)
+end
+
+func int_ty_wrap(t: int, x: i64): i64:
+    bits := int_ty_bits(t)
+    if bits >= 64:
+        ret x
+    end
+    mask := (1 as u64) << (bits as u64)
+    mut bv := (x as u64) & (mask - (1 as u64))
+    if not int_ty_is_unsigned(t) and (bv & (mask >> (1 as u64))) != (0 as u64):
+        bv = bv | (~(mask - (1 as u64)))
+    end
+    ret bv as i64
+end
+
+func val_int(x: i64): Value:
+    ret Value { kind = VAL_INT, i = x }
+end
+
+func val_int_ty(x: i64, t: int): Value:
+    ret Value { kind = VAL_INT, ity = t, i = int_ty_wrap(t, x) }
+end
+
+func val_int_bits(v: Value): u64:
+    ret int_ty_wrap(v.ity, v.i) as u64
+end
+
+func val_char(x: i64): Value:
+    ret Value { kind = VAL_CHAR, i = x }
+end
+
+func val_float(x: f64): Value:
+    ret Value { kind = VAL_FLOAT, f = x }
+end
+
+func val_bool(x: bool): Value:
+    ret Value { kind = VAL_BOOL, b = x }
+end
+
+func val_str(s: str): Value:
+    ret Value { kind = VAL_STR, s = s }
+end
+
+func val_module(m: int): Value:
+    ret Value { kind = VAL_MODULE, id = m }
+end
+
+func val_ptr(addr: i64, elem: int): Value:
+    ret Value { kind = VAL_PTR, pa = addr, pe = elem }
+end
+
+func val_variant(vid: int): Value:
+    ret Value { kind = VAL_VARIANT, id = vid }
+end
+
+func val_arr(aid: int): Value:
+    ret Value { kind = VAL_ARRAY, id = aid }
+end
+
+func val_map(mid: int): Value:
+    ret Value { kind = VAL_MAP, id = mid }
+end
+
+func ptr_elem_size(elem: int): int:
+    if elem == PTR_I8 or elem == PTR_U8 or elem == PTR_BOOL or elem == PTR_CHAR:
+        ret 1
+    end
+    if elem == PTR_I16 or elem == PTR_U16:
+        ret 2
+    end
+    if elem == PTR_I32 or elem == PTR_U32 or elem == PTR_F32:
+        ret 4
+    end
+    ret 8
+end
+
+func str_repeat(s: str, n: i64): Value:
+    if n == (1 as i64):
+        ret val_str(s)
+    end
+    if n < (1 as i64) or str.Len(s) == 0:
+        ret val_str("")
+    end
+    ret val_str(str.Repeat(s, n as int))
+end
+
+func to_bool(v: Value): bool:
+    if v.kind == VAL_BOOL:
+        ret v.b
+    end
+    if v.kind == VAL_INT or v.kind == VAL_CHAR:
+        ret v.i != (0 as i64)
+    end
+    if v.kind == VAL_FLOAT:
+        ret v.f != 0.0
+    end
+    if v.kind == VAL_NULL:
+        ret false
+    end
+    if v.kind == VAL_STR:
+        ret str.Len(v.s) != 0
+    end
+    if v.kind == VAL_PTR:
+        ret v.pa != (0 as i64)
+    end
+    ret true
+end
+
+func to_float(v: Value): f64:
+    if v.kind == VAL_FLOAT:
+        ret v.f
+    end
+    if v.kind == VAL_INT or v.kind == VAL_CHAR:
+        if int_ty_is_unsigned(v.ity):
+            ret val_int_bits(v) as f64
+        end
+        ret v.i as f64
+    end
+    if v.kind == VAL_BOOL:
+        ret v.b ? 1.0 : 0.0
+    end
+    ret 0.0
+end
+
+func to_int(v: Value): i64:
+    if v.kind == VAL_INT or v.kind == VAL_CHAR:
+        ret v.i
+    end
+    if v.kind == VAL_FLOAT:
+        ret v.f as i64
+    end
+    if v.kind == VAL_BOOL:
+        ret v.b ? (1 as i64) : (0 as i64)
+    end
+    if v.kind == VAL_PTR:
+        ret v.pa
+    end
+    if v.kind == VAL_FUNC:
+        ret (FN_TAG << MEM_BOX_SHIFT) | ((v.id + 1) as i64)
+    end
+    ret 0
+end
+
+func fn_id_of(v: Value): int:
+    if v.kind == VAL_FUNC:
+        ret v.id
+    end
+    x := v.kind == VAL_PTR ? v.pa : (v.kind == VAL_INT ? v.i : (0 as i64))
+    if (x >> MEM_BOX_SHIFT) != FN_TAG:
+        ret 0 - 1
+    end
+    ret ((x & (0xFFFFFFFFFFFF as i64)) as int) - 1
+end
+
+func is_intlike(v: Value): bool:
+    ret v.kind == VAL_INT or v.kind == VAL_CHAR
+end
+
+func is_number(v: Value): bool:
+    ret v.kind == VAL_INT or v.kind == VAL_CHAR or v.kind == VAL_FLOAT
+end
+
+func utf8_put(b &: str.StringBuilder, cp: i64):
+    c := cp as int
+    if c < 0x80:
+        str.BufAppendChar(b, c)
+    else c < 0x800:
+        str.BufAppendChar(b, 0xC0 | (c >> 6))
+        str.BufAppendChar(b, 0x80 | (c & 0x3F))
+    else c < 0x10000:
+        str.BufAppendChar(b, 0xE0 | (c >> 12))
+        str.BufAppendChar(b, 0x80 | ((c >> 6) & 0x3F))
+        str.BufAppendChar(b, 0x80 | (c & 0x3F))
+    else:
+        str.BufAppendChar(b, 0xF0 | (c >> 18))
+        str.BufAppendChar(b, 0x80 | ((c >> 12) & 0x3F))
+        str.BufAppendChar(b, 0x80 | ((c >> 6) & 0x3F))
+        str.BufAppendChar(b, 0x80 | (c & 0x3F))
+    end
+end
+
+func to_str(ip &: Interp, v: Value): str:
+    if v.kind == VAL_STR:
+        ret v.s
+    end
+    if v.kind == VAL_INT:
+        if int_ty_is_unsigned(v.ity):
+            ret co.U64Toa(val_int_bits(v))
+        end
+        ret co.I64Toa(v.i)
+    end
+    if v.kind == VAL_CHAR:
+        mut b := str.NewBuilder()
+        utf8_put(b, v.i)
+        r := str.BufStr(b)
+        str.BufFree(b)
+        ret r
+    end
+    if v.kind == VAL_BOOL:
+        ret v.b ? "true" : "false"
+    end
+    if v.kind == VAL_NULL:
+        ret "null"
+    end
+    if v.kind == VAL_FLOAT:
+        ret co.FmtF64(v.f)
+    end
+    if v.kind == VAL_ARRAY:
+        mut ab := str.NewBuilder()
+        str.BufAppend(ab, "[")
+        n := arr_len(ip, v.id)
+        repeat n in i:
+            if i != 0:
+                str.BufAppend(ab, ", ")
+            end
+            str.BufAppend(ab, to_str(ip, arr_get(ip, v.id, i)))
+        end
+        str.BufAppend(ab, "]")
+        ar := str.BufStr(ab)
+        str.BufFree(ab)
+        ret ar
+    end
+    if v.kind == VAL_STRUCT:
+        stv := ip.sts.get(v.id)
+        mut sb := str.NewBuilder()
+        str.BufAppend(sb, stv.type_name)
+        str.BufAppend(sb, "{")
+        repeat stv.fnames.len() in i:
+            if i != 0:
+                str.BufAppend(sb, ", ")
+            end
+            str.BufAppend(sb, stv.fnames.get(i))
+            str.BufAppend(sb, "=")
+            str.BufAppend(sb, to_str(ip, stv.fvals.get(i)))
+        end
+        str.BufAppend(sb, "}")
+        sr := str.BufStr(sb)
+        str.BufFree(sb)
+        ret sr
+    end
+    if v.kind == VAL_MAP:
+        ret "<map>"
+    end
+    if v.kind == VAL_MAPITER:
+        ret "<mapiter>"
+    end
+    if v.kind == VAL_FUNC:
+        ret "<func>"
+    end
+    if v.kind == VAL_MODULE:
+        if v.id == 0:
+            ret "<module>"
+        end
+        md := ip.mods.get(v.id)
+        ret co.Format1("<module %s>", co.ArgStr(md.name))
+    end
+    if v.kind == VAL_PTR:
+        if v.pa == (0 as i64):
+            ret "null"
+        end
+        ret co.Format1("<ptr %p>", co.ArgPtr(v.pa as u64))
+    end
+    if v.kind == VAL_VARIANT:
+        vv := ip.variants.get(v.id)
+        if vv.has_boxed:
+            ret to_str(ip, vv.boxed)
+        end
+        ret ""
+    end
+    ret ""
+end
+
+func val_copy_deep(ip &: Interp, v: Value): Value:
+    if v.kind == VAL_STRUCT:
+        src := ip.sts.get(v.id)
+        if src.is_box:
+            ret v
+        end
+        mut s := SStruct { type_name = src.type_name, def = src.def }
+        nf := src.fnames.len()
+        s.fnames.reserve(nf)
+        s.fvals.reserve(nf)
+        repeat nf in i:
+            s.fnames.push(src.fnames.get(i))
+            fv := src.fvals.get(i)
+            if fv.kind == VAL_STRUCT or fv.kind == VAL_ARRAY:
+                s.fvals.push(val_copy_deep(ip, fv))
+            else:
+                s.fvals.push(fv)
+            end
+        end
+        ret Value { kind = VAL_STRUCT, id = gc_st_put(ip, s) }
+    end
+    if v.kind == VAL_ARRAY:
+        an := ip.arrs.get(v.id)
+        if an.is_view:
+            ret v
+        end
+        n := an.items.len()
+        nid := arr_new(ip, n)
+        mut na := ip.arrs.get(nid)
+        na.items.reserve(n)
+        repeat n in i:
+            iv := an.items.get(i)
+            if iv.kind == VAL_STRUCT or iv.kind == VAL_ARRAY:
+                na.items.push(val_copy_deep(ip, iv))
+            else:
+                na.items.push(iv)
+            end
+        end
+        ip.arrs.set(nid, na)
+        ret val_arr(nid)
+    end
+    ret v
+end
+
+func val_unbox_copy(ip &: Interp, v: Value): Value:
+    src := ip.sts.get(v.id)
+    mut c := SStruct { type_name = src.type_name, def = src.def }
+    repeat src.fnames.len() in i:
+        c.fnames.push(src.fnames.get(i))
+        c.fvals.push(val_copy_deep(ip, src.fvals.get(i)))
+    end
+    ret Value { kind = VAL_STRUCT, id = gc_st_put(ip, c) }
+end
+
+func val_box_dyn(ip &: Interp, v: Value): Value:
+    if v.kind != VAL_STRUCT or ip.sts.get(v.id).is_box:
+        ret v
+    end
+    b := val_copy_deep(ip, v)
+    mut bs := ip.sts.get(b.id)
+    bs.is_box = true
+    ip.sts.set(b.id, bs)
+    ret b
+end
+
+func arr_new(ip &: Interp, cap: int): int:
+    ret gc_arr_put(ip, Arr { cap = cap < 4 ? 4 : cap })
+end
+
+func arr_view(ip &: Interp, base: int, off: int, length: int): int:
+    mut b0 := base
+    mut o0 := off
+    bn := ip.arrs.get(base)
+    if bn.is_view:
+        b0 = bn.base
+        o0 = bn.off + off
+    end
+    ret gc_arr_put(ip, Arr { is_view = true, base = b0, off = o0, vlen = length })
+end
+
+func arr_len(ip &: Interp, id: int): int:
+    an := ip.arrs.get(id)
+    ret an.is_view ? an.vlen : an.items.len()
+end
+
+func arr_elem_ptr_kind(v: Value): int:
+    if v.kind == VAL_INT:
+        if v.ity == ITY_I8:
+            ret PTR_I8
+        end
+        if v.ity == ITY_I16:
+            ret PTR_I16
+        end
+        if v.ity == ITY_I32:
+            ret PTR_I32
+        end
+        if v.ity == ITY_U8:
+            ret PTR_U8
+        end
+        if v.ity == ITY_U16:
+            ret PTR_U16
+        end
+        if v.ity == ITY_U32:
+            ret PTR_U32
+        end
+        if v.ity == ITY_U64:
+            ret PTR_U64
+        end
+        ret PTR_I64
+    end
+    if v.kind == VAL_FLOAT:
+        ret PTR_F64
+    end
+    if v.kind == VAL_BOOL:
+        ret PTR_BOOL
+    end
+    if v.kind == VAL_CHAR:
+        ret PTR_CHAR
+    end
+    if v.kind == VAL_STR:
+        ret PTR_STR
+    end
+    if v.kind == VAL_PTR:
+        ret PTR_I64
+    end
+    ret -1
+end
+
+// Decays an array to a real native pointer to its own storage, so it stays
+// consistent with normal indexing (arr_get/arr_set below) and with anything
+// that dereferences the returned address, matching how a compiled array
+// decays to the address of its own flat storage. Returns 0 as i64 if the
+// array is empty or holds a value kind that has no fixed native layout.
+func arr_materialize(ip &: Interp, id: int): i64:
+    mut rid := id
+    mut roff := 0
+    an := ip.arrs.get(id)
+    if an.is_view:
+        rid = an.base
+        roff = an.off
+    end
+    mut bn := ip.arrs.get(rid)
+    if bn.native_addr != (0 as i64):
+        ret bn.native_addr + ((roff * ptr_elem_size(bn.native_elem)) as i64)
+    end
+    n := bn.items.len()
+    if n == 0:
+        ret 0
+    end
+    ek := arr_elem_ptr_kind(bn.items.get(0))
+    if ek < 0:
+        ret 0
+    end
+    esz := ptr_elem_size(ek) as u64
+    addr := mem.AllocateZeroed((n as u64) * esz) as i64
+    repeat n in i:
+        ptr_store(addr, ek, i as i64, bn.items.get(i))
+    end
+    bn.native_addr = addr
+    bn.native_elem = ek
+    ip.arrs.set(rid, bn)
+    ret addr + ((roff * (esz as int)) as i64)
+end
+
+func arr_get(ip &: Interp, id: int, i: int): Value:
+    an := ip.arrs.get(id)
+    if an.is_view:
+        bn := ip.arrs.get(an.base)
+        if bn.native_addr != (0 as i64):
+            ret ptr_load(bn.native_addr, bn.native_elem, (an.off + i) as i64)
+        end
+        ret bn.items.get(an.off + i)
+    end
+    if an.native_addr != (0 as i64):
+        ret ptr_load(an.native_addr, an.native_elem, i as i64)
+    end
+    ret an.items.get(i)
+end
+
+func arr_set(ip &: Interp, id: int, i: int, v: Value):
+    mut an := ip.arrs.get(id)
+    if an.is_view:
+        mut bn := ip.arrs.get(an.base)
+        if bn.native_addr != (0 as i64):
+            ptr_store(bn.native_addr, bn.native_elem, (an.off + i) as i64, v)
+            ret
+        end
+        bn.items.set(an.off + i, v)
+        ip.arrs.set(an.base, bn)
+        ret
+    end
+    if an.native_addr != (0 as i64):
+        ptr_store(an.native_addr, an.native_elem, i as i64, v)
+        ret
+    end
+    an.items.set(i, v)
+    ip.arrs.set(id, an)
+end
+
+func arr_push(ip &: Interp, id: int, v: Value):
+    mut an := ip.arrs.get(id)
+    if an.is_view:
+        pos := an.off + an.vlen
+        mut bn := ip.arrs.get(an.base)
+        if pos < bn.items.len():
+            bn.items.set(pos, v)
+        else:
+            bn.items.push(v)
+        end
+        ip.arrs.set(an.base, bn)
+        an.vlen += 1
+        ip.arrs.set(id, an)
+        ret
+    end
+    if an.native_addr != (0 as i64):
+        new_n := an.items.len() + 1
+        esz := ptr_elem_size(an.native_elem) as u64
+        an.native_addr = mem.Reallocate(an.native_addr as void*, (new_n as u64) * esz) as i64
+        ptr_store(an.native_addr, an.native_elem, (new_n - 1) as i64, v)
+        an.items.push(v)
+        ip.arrs.set(id, an)
+        ret
+    end
+    if an.items.len() == an.cap:
+        an.cap = co.GrowCap(
+            an.cap as u64, (an.items.len() + 1) as u64, 4 as u64
+        ) as int
+    end
+    an.items.push(v)
+    ip.arrs.set(id, an)
+end
+
+func arr_shrink(ip &: Interp, id: int):
+    mut an := ip.arrs.get(id)
+    if an.is_view:
+        an.vlen -= 1
+    else:
+        _last := an.items.pop()
+    end
+    ip.arrs.set(id, an)
+end

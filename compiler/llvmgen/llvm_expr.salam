@@ -1,0 +1,979 @@
+package llvmgen
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include sm "../semantic/semantic.salam"
+include cg "../codegen/codegen.salam"
+
+func nowrap_flag(v &: Lv, k: int, isflt: bool, issigned: bool): str:
+    if isflt:
+        if not v.fp_contract and not v.fast_math:
+            ret ""
+        end
+        if k == tok.TK_PLUS or k == tok.TK_MINUS or k == tok.TK_STAR:
+            ret v.fast_math ? " reassoc nsz contract" : " contract"
+        end
+        ret ""
+    end
+    if not v.nowrap or not issigned:
+        ret ""
+    end
+    if k == tok.TK_PLUS or k == tok.TK_MINUS or k == tok.TK_STAR:
+        ret " nsw"
+    end
+    ret ""
+end
+
+func lv_is_int_lit(a &: at.Ast, n: int): bool:
+    if n == 0:
+        ret false
+    end
+    nn := at.Get(a, n)
+    ret nn.kind == at.AST_LITERAL and nn.op == tok.TK_INT
+end
+
+func arith_op(k: int, isflt: bool, issigned: bool): str:
+    if k == tok.TK_PLUS:
+        ret isflt ? "fadd" : "add"
+    end
+    if k == tok.TK_MINUS:
+        ret isflt ? "fsub" : "sub"
+    end
+    if k == tok.TK_STAR:
+        ret isflt ? "fmul" : "mul"
+    end
+    if k == tok.TK_SLASH:
+        ret isflt ? "fdiv" : (issigned ? "sdiv" : "udiv")
+    end
+    if k == tok.TK_PERCENT:
+        ret isflt ? "frem" : (issigned ? "srem" : "urem")
+    end
+    if k == tok.TK_AMP:
+        ret "and"
+    end
+    if k == tok.TK_PIPE:
+        ret "or"
+    end
+    if k == tok.TK_CARET:
+        ret "xor"
+    end
+    if k == tok.TK_SHL:
+        ret "shl"
+    end
+    if k == tok.TK_SHR:
+        ret issigned ? "ashr" : "lshr"
+    end
+    ret ""
+end
+
+func cmp_pred(k: int, isflt: bool, issigned: bool): str:
+    if k == tok.TK_EQ:
+        ret isflt ? "oeq" : "eq"
+    end
+    if k == tok.TK_NE:
+        ret isflt ? "une" : "ne"
+    end
+    if k == tok.TK_LT:
+        ret isflt ? "olt" : (issigned ? "slt" : "ult")
+    end
+    if k == tok.TK_GT:
+        ret isflt ? "ogt" : (issigned ? "sgt" : "ugt")
+    end
+    if k == tok.TK_LE:
+        ret isflt ? "ole" : (issigned ? "sle" : "ule")
+    end
+    if k == tok.TK_GE:
+        ret isflt ? "oge" : (issigned ? "sge" : "uge")
+    end
+    ret ""
+end
+
+func is_cmp_op(k: int): bool:
+    ret k == tok.TK_EQ or k == tok.TK_NE or k == tok.TK_LT or k == tok.TK_GT or k == tok.TK_LE or k == tok.TK_GE
+end
+
+func to_ptr(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv): str:
+    if is_ptr_ts(val.ts) or is_str(s, val.ts) or str.Equals(val.ts, "null"):
+        ret val.ref
+    end
+    r := new_tmp(v)
+    emit(v, r + " = inttoptr " + ty_of(v, s, a, val.ts) + " " + val.ref + " to ptr")
+    ret r
+end
+
+func lv_is_derived_call(a &: at.Ast, n: int): bool:
+    if n == 0:
+        ret false
+    end
+    nn := at.Get(a, n)
+    if nn.kind != at.AST_CALL or not nn.synthetic or nn.a == 0:
+        ret false
+    end
+    cn := at.Get(a, nn.a)
+    ret cn.kind == at.AST_IDENTIFIER and str.StartsWith(cn.name, "_strof_")
+end
+
+func lv_concat_parts(s &: sm.Sema, a &: at.Ast, n: int, out &: Vector<int>):
+    nn := at.Get(a, n)
+    if nn.kind == at.AST_BINARY and nn.op == tok.TK_PLUS and nn.a != 0 and nn.b != 0:
+        ta := at.Get(a, nn.a).type_str
+        tb := at.Get(a, nn.b).type_str
+        if (str.Len(ta) > 0 and is_str(s, ta)) or (str.Len(tb) > 0 and is_str(s, tb)):
+            lv_concat_parts(s, a, nn.a, out)
+            lv_concat_parts(s, a, nn.b, out)
+            ret
+        end
+    end
+    out.push(n)
+end
+
+func lv_part_owned(s &: sm.Sema, a &: at.Ast, n: int): bool:
+    if sm.MemDebug(s):
+        ret false
+    end
+    ts := at.Get(a, n).type_str
+    if str.Len(ts) == 0:
+        ret false
+    end
+    if is_str(s, ts):
+        ret sm.SuCallFresh(s, a, n)
+    end
+    ret lv_dv_owned(s, a, n)
+end
+
+func lv_concat_chain(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): str:
+    node := at.Get(a, n)
+    mut parts := Vector {} as Vector<int>
+    lv_concat_parts(s, a, node.a, parts)
+    lv_concat_parts(s, a, node.b, parts)
+    need(v, LV_H_STRCAT)
+    mut any_own := false
+    repeat parts.len() in i:
+        if lv_part_owned(s, a, parts.get(i)):
+            any_own = true
+        end
+    end
+    if parts.len() == 2 and not any_own:
+        l := str_operand(v, s, a, parts.get(0))
+        r2 := str_operand(v, s, a, parts.get(1))
+        parts.free()
+        r := new_tmp(v)
+        emit(v, r + " = call ptr @salam_ll_strcat(ptr " + l + ", ptr " + r2 + ")")
+        ret r
+    end
+    u := v.usize
+    mut refs := Vector {} as Vector<str>
+    mut lens := Vector {} as Vector<str>
+    repeat parts.len() in j:
+        pr := str_operand(v, s, a, parts.get(j))
+        refs.push(pr)
+        ln := new_tmp(v)
+        emit(v, ln + " = call " + u + " @strlen(ptr " + pr + ")")
+        lens.push(ln)
+    end
+    mut sum := lens.get(0)
+    mut k := 1
+    until k < lens.len():
+        nx := new_tmp(v)
+        emit(v, nx + " = add " + u + " " + sum + ", " + lens.get(k))
+        sum = nx
+        k += 1
+    end
+    tot := new_tmp(v)
+    emit(v, tot + " = add " + u + " " + sum + ", 1")
+    buf := new_tmp(v)
+    emit(v, buf + " = call ptr @malloc(" + u + " " + tot + ")")
+    mut off := "0"
+    repeat refs.len() in q:
+        dst := new_tmp(v)
+        emit(v, dst + " = getelementptr i8, ptr " + buf + ", " + u + " " + off)
+        cp := new_tmp(v)
+        emit(v, cp + " = call ptr @memcpy(ptr " + dst + ", ptr " + refs.get(q) + ", " + u + " " + lens.get(q) + ")")
+        no := new_tmp(v)
+        emit(v, no + " = add " + u + " " + off + ", " + lens.get(q))
+        off = no
+    end
+    endp := new_tmp(v)
+    emit(v, endp + " = getelementptr i8, ptr " + buf + ", " + u + " " + off)
+    emit(v, "store i8 0, ptr " + endp)
+    repeat parts.len() in f:
+        if lv_part_owned(s, a, parts.get(f)):
+            emit(v, "call void @free(ptr " + refs.get(f) + ")")
+        end
+    end
+    parts.free()
+    refs.free()
+    lens.free()
+    ret buf
+end
+
+func lv_dv_owned(s &: sm.Sema, a &: at.Ast, n: int): bool:
+    if n == 0:
+        ret false
+    end
+    nn := at.Get(a, n)
+    ts := nn.type_str
+    if str.Len(ts) == 0:
+        ret false
+    end
+    if not is_str(s, ts):
+        ret str.Equals(ts, "char") or is_float(ts) or (is_int_ts(ts) and not is_bool(ts))
+    end
+    if nn.kind == at.AST_IDENTIFIER:
+        ret str.Equals(nn.name, "_sb")
+    end
+    if nn.kind == at.AST_BINARY and nn.op == tok.TK_PLUS:
+        ret true
+    end
+    if nn.kind != at.AST_CALL or nn.a == 0:
+        ret false
+    end
+    cn := at.Get(a, nn.a)
+    ret cn.kind == at.AST_IDENTIFIER and str.StartsWith(cn.name, "_strof_")
+end
+
+func str_operand(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): str:
+    node := at.Get(a, n)
+    ts := node.type_str
+    if str.Len(ts) > 0 and is_str(s, ts):
+        ret lv_expr(v, s, a, n).ref
+    end
+    val := lv_expr(v, s, a, n)
+    mut r := new_tmp(v)
+    if is_bool(ts):
+        t := strconst(v, "true")
+        f := strconst(v, "false")
+        emit(v, r + " = select i1 " + val.ref + ", ptr " + t + ", ptr " + f)
+    else str.Equals(ts, "char"):
+        need(v, LV_H_CHARSTR)
+        emit(
+            v, r + " = call ptr @salam_ll_charstr(i32 " + conv(v, s, a, val, "i32") + ")"
+        )
+    else is_float(ts):
+        dref := conv(v, s, a, val, "f64")
+        fref := call_runtime_val(v, s, a, "salam_fmt_f64", "double", dref, "ptr")
+        if str.Len(fref) > 0:
+            emit(v, r + " = select i1 true, ptr " + fref + ", ptr " + fref)
+        else:
+            need(v, LV_H_F64STR)
+            emit(
+                v, r + " = call ptr @salam_ll_f64str(double " + dref + ")"
+            )
+        end
+    else is_int_ts(ts):
+        if is_signed_ts(ts):
+            need(v, LV_H_I64STR)
+            emit(
+                v, r + " = call ptr @salam_ll_i64str(i64 " + conv(v, s, a, val, "i64") + ")"
+            )
+        else:
+            need(v, LV_H_U64STR)
+            emit(
+                v, r + " = call ptr @salam_ll_u64str(i64 " + conv(v, s, a, val, "u64") + ")"
+            )
+        end
+    else:
+        lv_error(
+            v, a, n, "string concatenation with an unsupported operand type '" + (str.Len(ts) > 0 ? ts : "?") + "'"
+        )
+        r = val.ref
+    end
+    ret r
+end
+
+func binary_string(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, op: int, out2 &: Llv
+): bool:
+    node := at.Get(a, n)
+    an := at.Get(a, node.a)
+    bn := at.Get(a, node.b)
+    as2 := str.Len(an.type_str) > 0 and is_str(s, an.type_str)
+    bs2 := str.Len(bn.type_str) > 0 and is_str(s, bn.type_str)
+    if op == tok.TK_PLUS and (as2 or bs2) and not v.in_derive:
+        out2 = make_llv(lv_concat_chain(v, s, a, n), "str")
+        ret true
+    end
+    if op == tok.TK_PLUS and (as2 or bs2):
+        l := str_operand(v, s, a, node.a)
+        r2 := str_operand(v, s, a, node.b)
+        r := new_tmp(v)
+        need(v, LV_H_STRCAT)
+        emit(v, r + " = call ptr @salam_ll_strcat(ptr " + l + ", ptr " + r2 + ")")
+        if v.in_derive:
+            if lv_dv_owned(s, a, node.a):
+                emit(v, "call void @free(ptr " + l + ")")
+            end
+            if lv_dv_owned(s, a, node.b):
+                emit(v, "call void @free(ptr " + r2 + ")")
+            end
+        end
+        out2 = make_llv(r, "str")
+        ret true
+    end
+    if op == tok.TK_STAR and (as2 or bs2):
+        sop := as2 ? node.a : node.b
+        nop := as2 ? node.b : node.a
+        sv := lv_expr(v, s, a, sop).ref
+        nv := conv(v, s, a, lv_expr(v, s, a, nop), "i32")
+        r3 := new_tmp(v)
+        need(v, LV_H_REPEAT)
+        emit(v, r3 + " = call ptr @salam_ll_repeat(ptr " + sv + ", i32 " + nv + ")")
+        out2 = make_llv(r3, "str")
+        ret true
+    end
+    if is_cmp_op(op) and as2 and bs2:
+        l2 := lv_expr(v, s, a, node.a)
+        r4 := lv_expr(v, s, a, node.b)
+        c := new_tmp(v)
+        r5 := new_tmp(v)
+        emit(v, c + " = call i32 @strcmp(ptr " + l2.ref + ", ptr " + r4.ref + ")")
+        emit(v, r5 + " = icmp " + cmp_pred(op, false, true) + " i32 " + c + ", 0")
+        out2 = make_llv(r5, "bool")
+        ret true
+    end
+    ret false
+end
+
+func binary_pow(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
+    node := at.Get(a, n)
+    l := conv(v, s, a, lv_expr(v, s, a, node.a), "f64")
+    r2 := conv(v, s, a, lv_expr(v, s, a, node.b), "f64")
+    r := new_tmp(v)
+    emit(v, r + " = call double @llvm.pow.f64(double " + l + ", double " + r2 + ")")
+    if str.Len(node.type_str) > 0 and not is_float(node.type_str):
+        ret make_llv(conv(v, s, a, make_llv(r, "f64"), node.type_str), node.type_str)
+    end
+    ret make_llv(r, str.Len(node.type_str) > 0 ? node.type_str : "f64")
+end
+
+func op_method_name(k: int): str:
+    if k == tok.TK_PLUS:
+        ret "operator_add"
+    end
+    if k == tok.TK_MINUS:
+        ret "operator_sub"
+    end
+    if k == tok.TK_STAR:
+        ret "operator_mul"
+    end
+    if k == tok.TK_SLASH:
+        ret "operator_div"
+    end
+    if k == tok.TK_PERCENT:
+        ret "operator_mod"
+    end
+    if k == tok.TK_POWER:
+        ret "operator_pow"
+    end
+    if k == tok.TK_EQ:
+        ret "operator_eq"
+    end
+    if k == tok.TK_NE:
+        ret "operator_ne"
+    end
+    if k == tok.TK_LT:
+        ret "operator_lt"
+    end
+    if k == tok.TK_GT:
+        ret "operator_gt"
+    end
+    if k == tok.TK_LE:
+        ret "operator_le"
+    end
+    if k == tok.TK_GE:
+        ret "operator_ge"
+    end
+    ret ""
+end
+
+func op_struct(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, sname2 &: str): int:
+    if str.Len(ts) == 0:
+        ret 0
+    end
+    sname2 = is_ptr_ts(ts) ? str.Substr(ts, 0, str.Len(ts) - 1) : ts
+    ss := struct_sym(v, s, a, sname2)
+    if ss != 0:
+        nm := owner_key(s, ss)
+        if str.Len(nm) > 0:
+            sname2 = nm
+        end
+    end
+    ret ss
+end
+
+func pick_arity(s &: sm.Sema, symid: int, want: int): int:
+    sy := sm.SymAt(s, symid)
+    repeat sy.overloads.len() in i:
+        sigid := sy.overloads.get(i)
+        if sm.SigAt(s, sigid).params.len() == want:
+            ret sigid
+        end
+    end
+    ret 0
+end
+
+func op_call(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, recv: int, sname2: str, ss: int, mname: str, rhs: int, out2 &: Llv
+): bool:
+    ms := sm.LookupLocal(s, sm.SymAt(s, ss).members, mname)
+    if ms == 0 or sm.SymAt(s, ms).kind != sm.SYM_METHOD:
+        ret false
+    end
+    sig := pick_arity(s, ms, rhs != 0 ? 1 : 0)
+    if sig == 0:
+        ret false
+    end
+    mut osc := scope_of(s, ss)
+    if osc == 0:
+        osc = v.pkg_scope
+    end
+    ensure_fn(v, s, a, sm.SigAt(s, sig).decl, ss, osc)
+    recvn := at.Get(a, recv)
+    recvref := is_ptr_ts(recvn.type_str) ? lv_expr(v, s, a, recv).ref : lv_addr_of(v, s, a, recv).ptr
+    mut argsb := "ptr " + recvref
+    if rhs != 0:
+        sg := sm.SigAt(s, sig)
+        mut pts := sg.params.len() > 0 ? sm.ToString(s, sg.params.get(0)) : ""
+        rv := lv_expr(v, s, a, rhs)
+        if str.Len(pts) == 0:
+            pts = rv.ts
+        end
+        argsb = argsb + ", " + ty_of(v, s, a, pts) + " " + conv(v, s, a, rv, pts)
+    end
+    rts := sm.ToString(s, sm.SigAt(s, sig).ret_type)
+    fname := mangle(v, s, sname2, mname, sig)
+    if str.Equals(rts, "void"):
+        emit(v, "call void @" + fname + "(" + argsb + ")")
+        out2 = make_llv("0", "void")
+        ret true
+    end
+    r := new_tmp(v)
+    emit(v, r + " = call " + ty_of(v, s, a, rts) + " @" + fname + "(" + argsb + ")")
+    out2 = make_llv(r, rts)
+    ret true
+end
+
+func lv_index_set(v &: Lv, s &: sm.Sema, a &: at.Ast, idx: int, value: int): bool:
+    idxn := at.Get(a, idx)
+    if idxn.a == 0 or str.Len(at.Get(a, idxn.a).type_str) == 0:
+        ret false
+    end
+    if is_ptr_ts(at.Get(a, idxn.a).type_str):
+        ret false
+    end
+    mut sname2 := ""
+    ss := op_struct(v, s, a, at.Get(a, idxn.a).type_str, sname2)
+    if ss == 0:
+        ret false
+    end
+    ms := sm.LookupLocal(s, sm.SymAt(s, ss).members, "operator_index_set")
+    if ms == 0 or sm.SymAt(s, ms).kind != sm.SYM_METHOD:
+        ret false
+    end
+    sig := pick_arity(s, ms, 2)
+    if sig == 0:
+        ret false
+    end
+    mut osc := scope_of(s, ss)
+    if osc == 0:
+        osc = v.pkg_scope
+    end
+    ensure_fn(v, s, a, sm.SigAt(s, sig).decl, ss, osc)
+    an := at.Get(a, idxn.a)
+    recv := is_ptr_ts(an.type_str) ? lv_expr(v, s, a, idxn.a).ref : lv_addr_of(v, s, a, idxn.a).ptr
+    sg := sm.SigAt(s, sig)
+    p0 := sm.ToString(s, sg.params.get(0))
+    p1 := sm.ToString(s, sg.params.get(1))
+    iv := conv(v, s, a, lv_expr(v, s, a, idxn.b), p0)
+    vv := conv(v, s, a, lv_expr(v, s, a, value), p1)
+    fname := mangle(v, s, sname2, "operator_index_set", sig)
+    emit(
+        v, "call void @" + fname + "(ptr " + recv + ", " + ty_of(v, s, a, p0) + " " + iv + ", " + ty_of(v, s, a, p1) + " " + vv + ")"
+    )
+    ret true
+end
+
+func lv_binary(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
+    node := at.Get(a, n)
+    op := node.op
+
+    mut sname2 := ""
+    mut oss := 0
+    if node.a != 0:
+        oss = op_struct(v, s, a, at.Get(a, node.a).type_str, sname2)
+    end
+    if oss != 0:
+        neg := op == tok.TK_NE and node.synthetic
+        mname := neg ? "operator_eq" : op_method_name(op)
+        mut out2 := Llv {}
+        if str.Len(mname) > 0 and op_call(
+            v, s, a, node.a, sname2, oss, mname, node.b, out2
+        ):
+            if not neg:
+                ret out2
+            end
+            r := new_tmp(v)
+            emit(v, r + " = xor i1 " + out2.ref + ", true")
+            ret make_llv(r, "bool")
+        end
+    end
+
+    mut handled := Llv {}
+    if binary_string(v, s, a, n, op, handled):
+        ret handled
+    end
+
+    if op == tok.TK_AND or op == tok.TK_OR:
+        is_and := op == tok.TK_AND
+        rhsL := new_lbl(v, "sc_rhs")
+        scL := new_lbl(v, "sc_short")
+        joinL := new_lbl(v, "sc_join")
+        endL := new_lbl(v, "sc_end")
+        la := as_i1(v, s, a, lv_expr(v, s, a, node.a))
+        if is_and:
+            emit_term(v, "br i1 " + la + ", label %" + rhsL + ", label %" + scL)
+        else:
+            emit_term(v, "br i1 " + la + ", label %" + scL + ", label %" + rhsL)
+        end
+        emit_label(v, scL)
+        emit_term(v, "br label %" + endL)
+        emit_label(v, rhsL)
+        lb := as_i1(v, s, a, lv_expr(v, s, a, node.b))
+        emit_term(v, "br label %" + joinL)
+        emit_label(v, joinL)
+        emit_term(v, "br label %" + endL)
+        emit_label(v, endL)
+        r2 := new_tmp(v)
+        emit(
+            v, r2 + " = phi i1 [ " + (is_and ? "false" : "true") + ", %" + scL + " ], [ " + lb + ", %" + joinL + " ]"
+        )
+        ret make_llv(r2, "bool")
+    end
+    if op == tok.TK_POWER:
+        ret binary_pow(v, s, a, n)
+    end
+    lval := lv_expr(v, s, a, node.a)
+    rval := lv_expr(v, s, a, node.b)
+    if is_cmp_op(op):
+        lp := is_ptr_ts(lval.ts) or str.Equals(lval.ts, "null")
+        rp := is_ptr_ts(rval.ts) or str.Equals(rval.ts, "null")
+        if lp or rp:
+            lc := to_ptr(v, s, a, lval)
+            rc := to_ptr(v, s, a, rval)
+            r3 := new_tmp(v)
+            emit(
+                v, r3 + " = icmp " + cmp_pred(op, false, false) + " ptr " + lc + ", " + rc
+            )
+            ret make_llv(r3, "bool")
+        end
+        common := common_ts(v, lval.ts, rval.ts)
+        lc2 := conv(v, s, a, lval, common)
+        rc2 := conv(v, s, a, rval, common)
+        flt := is_float(common)
+        r4 := new_tmp(v)
+        emit(
+            v, r4 + " = " + (flt ? "fcmp" : "icmp") + " " + cmp_pred(op, flt, is_signed_ts(common)) + " " + ty_of(v, s, a, common) + " " + lc2 + ", " + rc2
+        )
+        ret make_llv(r4, "bool")
+    end
+
+    rt := str.Len(node.type_str) > 0 ? node.type_str : common_ts(v, lval.ts, rval.ts)
+    lc3 := conv(v, s, a, lval, rt)
+    rc3 := conv(v, s, a, rval, rt)
+    flt2 := is_float(rt)
+    o := arith_op(op, flt2, is_signed_ts(rt))
+    if str.Len(o) == 0:
+        lv_error(v, a, n, "binary operator")
+        ret poison(rt)
+    end
+    mut rcs := rc3
+    if (op == tok.TK_SHL or op == tok.TK_SHR) and is_int_ts(rt):
+        rmask := new_tmp(v)
+        emit(
+            v, rmask + " = and " + ty_of(v, s, a, rt) + " " + rc3 + ", " + co.I64Toa(
+                (int_bits(v, rt) - 1) as i64
+            )
+        )
+        rcs = rmask
+    end
+    if v.div_check and (op == tok.TK_SLASH or op == tok.TK_PERCENT) and is_int_ts(rt) and not lv_is_int_lit(a, node.b):
+        nzL := new_lbl(v, "dz_ok")
+        zL := new_lbl(v, "dz_zero")
+        zc := new_tmp(v)
+        emit(v, zc + " = icmp eq " + ty_of(v, s, a, rt) + " " + rcs + ", 0")
+        emit_term(v, "br i1 " + zc + ", label %" + zL + ", label %" + nzL)
+        emit_label(v, zL)
+        need(v, LV_H_OUTBUF)
+        emit(v, "call void @salam_out_flush()")
+        emit(v, new_tmp(v) + " = call i64 @salam_div0(i32 " + (op == tok.TK_PERCENT ? "1" : "0") + ")")
+        emit_term(v, "unreachable")
+        emit_label(v, nzL)
+    end
+    r5 := new_tmp(v)
+    nw := nowrap_flag(v, op, flt2, is_signed_ts(rt))
+    emit(v, r5 + " = " + o + nw + " " + ty_of(v, s, a, rt) + " " + lc3 + ", " + rcs)
+    ret make_llv(r5, rt)
+end
+
+func lv_unary(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
+    node := at.Get(a, n)
+    if node.a != 0 and (node.op == tok.TK_MINUS or node.op == tok.TK_NOT):
+        mut sname2 := ""
+        oss := op_struct(v, s, a, at.Get(a, node.a).type_str, sname2)
+        if oss != 0:
+            mname := node.op == tok.TK_MINUS ? "operator_sub" : "operator_not"
+            mut out2 := Llv {}
+            if op_call(v, s, a, node.a, sname2, oss, mname, 0, out2):
+                ret out2
+            end
+        end
+    end
+    if node.op == tok.TK_NOT:
+        vv := as_i1(v, s, a, lv_expr(v, s, a, node.a))
+        r := new_tmp(v)
+        emit(v, r + " = xor i1 " + vv + ", true")
+        ret make_llv(r, "bool")
+    end
+    if node.op == tok.TK_MINUS:
+        val := lv_expr(v, s, a, node.a)
+        rt := str.Len(node.type_str) > 0 ? node.type_str : val.ts
+        cv := conv(v, s, a, val, rt)
+        r2 := new_tmp(v)
+        if is_float(rt):
+            emit(v, r2 + " = fneg " + ty_of(v, s, a, rt) + " " + cv)
+        else:
+            emit(v, r2 + " = sub " + ty_of(v, s, a, rt) + " 0, " + cv)
+        end
+        ret make_llv(r2, rt)
+    end
+    if node.op == tok.TK_TILDE:
+        val2 := lv_expr(v, s, a, node.a)
+        rt2 := str.Len(node.type_str) > 0 ? node.type_str : val2.ts
+        cv2 := conv(v, s, a, val2, rt2)
+        r3 := new_tmp(v)
+        emit(v, r3 + " = xor " + ty_of(v, s, a, rt2) + " " + cv2 + ", -1")
+        ret make_llv(r3, rt2)
+    end
+    lv_error(v, a, n, "unary operator")
+    ret poison(node.type_str)
+end
+
+func lv_incdec(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
+    node := at.Get(a, n)
+    tgt := node.a
+    tk := tgt != 0 ? at.KindOf(a, tgt) : 0 - 1
+    if tgt == 0 or (
+        tk != at.AST_IDENTIFIER and tk != at.AST_MEMBER and tk != at.AST_INDEX
+    ):
+        lv_error(v, a, n, "operand of '++'/'--' is not assignable")
+        ret poison(node.type_str)
+    end
+    addr := lv_addr_of(v, s, a, tgt)
+    ts := addr.ts
+    oldv := new_tmp(v)
+    emit(v, oldv + " = load " + ty_of(v, s, a, ts) + ", ptr " + addr.ptr + addr.tbaa)
+    flt := is_float(ts)
+    step := flt ? "1.0" : "1"
+    ik := node.op == tok.TK_PLUS_PLUS ? tok.TK_PLUS : tok.TK_MINUS
+    op2 := arith_op(ik, flt, is_signed_ts(ts))
+    newv := new_tmp(v)
+    nw2 := nowrap_flag(v, ik, flt, is_signed_ts(ts))
+    emit(v, newv + " = " + op2 + nw2 + " " + ty_of(v, s, a, ts) + " " + oldv + ", " + step)
+    emit(v, "store " + ty_of(v, s, a, ts) + " " + newv + ", ptr " + addr.ptr + addr.tbaa)
+    ret make_llv(node.is_prefix ? newv : oldv, ts)
+end
+
+func write_free(v &: Lv, ref: str, err: bool):
+    ln := new_tmp(v)
+    emit(v, ln + " = call " + v.usize + " @strlen(ptr " + ref + ")")
+    if err:
+        emit(
+            v, new_tmp(v) + " = call " + v.usize + " @" + write_name(v) + "(i32 2, ptr " + ref + ", " + v.usize + " " + ln + ")"
+        )
+    else:
+        mut n64 := ln
+        if not str.Equals(v.usize, "i64"):
+            z := new_tmp(v)
+            emit(v, z + " = zext " + v.usize + " " + ln + " to i64")
+            n64 = z
+        end
+        need(v, LV_H_OUTBUF)
+        emit(v, "call void @salam_out_write(ptr " + ref + ", i64 " + n64 + ")")
+    end
+end
+
+func lower_print_free(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, segs &: Vector<cg.PfSeg>, err: bool
+):
+    mut i := 0
+    until i < segs.len():
+        sg := segs.get(i)
+        if sg.kind == cg.PF_LIT:
+            n := str.Len(sg.text)
+            if n > 0:
+                lit := strconst(v, sg.text)
+                if err:
+                    emit(
+                        v, new_tmp(v) + " = call " + v.usize + " @" + write_name(v) + "(i32 2, ptr " + lit + ", " + v.usize + " " + co.I64Toa(n as i64) + ")"
+                    )
+                else:
+                    need(v, LV_H_OUTBUF)
+                    emit(v, "call void @salam_out_write(ptr " + lit + ", i64 " + co.I64Toa(n as i64) + ")")
+                end
+            end
+            i += 1
+            continue
+        end
+        val := lv_expr(v, s, a, sg.expr)
+        mut ref := ""
+        if sg.kind == cg.PF_STR:
+            ref = val.ref
+        else sg.kind == cg.PF_BOOL:
+            ref = call_runtime_val(v, s, a, "salam_tostr_bool", "i1", val.ref, "ptr")
+        else sg.kind == cg.PF_CHAR:
+            ref = call_runtime_val(v, s, a, "salam_char_from_code", "i32", conv(v, s, a, val, "i32"), "ptr")
+        else sg.kind == cg.PF_I32:
+            ref = call_runtime_val(v, s, a, "salam_tostr_i32", "i32", conv(v, s, a, val, "i32"), "ptr")
+        else sg.kind == cg.PF_U32:
+            ref = call_runtime_val(v, s, a, "salam_tostr_u32", "i32", conv(v, s, a, val, "u32"), "ptr")
+        else sg.kind == cg.PF_I64:
+            ref = call_runtime_val(v, s, a, "salam_tostr_i64", "i64", conv(v, s, a, val, "i64"), "ptr")
+        else sg.kind == cg.PF_U64 or sg.kind == cg.PF_SIZE:
+            ref = call_runtime_val(v, s, a, "salam_tostr_u64", "i64", conv(v, s, a, val, "u64"), "ptr")
+        else:
+            ref = strconst(v, "<f64>")
+        end
+        if str.Len(ref) == 0:
+            ref = strconst(v, "?")
+        end
+        write_free(v, ref, err)
+        if sg.kind == cg.PF_STR and lv_is_derived_call(a, sg.expr):
+            emit(v, "call void @free(ptr " + ref + ")")
+        end
+        i += 1
+    end
+end
+
+func lower_print_buf(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, segs &: Vector<cg.PfSeg>, err: bool
+):
+    need(v, LV_H_OUTBUF)
+    mut refs := Vector {} as Vector<str>
+    defer refs.free()
+    repeat segs.len() in i:
+        sg := segs.get(i)
+        if sg.kind == cg.PF_LIT:
+            refs.push("")
+            continue
+        end
+        val := lv_expr(v, s, a, sg.expr)
+        if sg.kind == cg.PF_STR or sg.kind == cg.PF_BOOL:
+            refs.push(val.ref)
+        else sg.kind == cg.PF_CHAR:
+            refs.push(conv(v, s, a, val, "i32"))
+        else sg.kind == cg.PF_F64:
+            refs.push(call_runtime_val(v, s, a, "salam_fmt_f64", "double", conv(v, s, a, val, "f64"), "ptr"))
+        else sg.kind == cg.PF_U32 or sg.kind == cg.PF_U64 or sg.kind == cg.PF_SIZE:
+            refs.push(conv(v, s, a, val, "u64"))
+        else:
+            refs.push(conv(v, s, a, val, "i64"))
+        end
+    end
+    emit(v, "call void @salam_out_lock()")
+    if err:
+        emit(v, "call void @salam_out_flush_l()")
+    end
+    repeat segs.len() in j:
+        sg := segs.get(j)
+        r := refs.get(j)
+        if sg.kind == cg.PF_LIT:
+            tn := str.Len(sg.text)
+            if tn > 0:
+                emit(v, "call void @salam_out_write(ptr " + strconst(v, sg.text) + ", i64 " + co.I64Toa(tn as i64) + ")")
+            end
+        else sg.kind == cg.PF_STR or sg.kind == cg.PF_F64:
+            emit(v, "call void @salam_out_str(ptr " + r + ")")
+        else sg.kind == cg.PF_BOOL:
+            sp := new_tmp(v)
+            emit(v, sp + " = select i1 " + r + ", ptr " + strconst(v, "true") + ", ptr " + strconst(v, "false"))
+            sl := new_tmp(v)
+            emit(v, sl + " = select i1 " + r + ", i64 4, i64 5")
+            emit(v, "call void @salam_out_write(ptr " + sp + ", i64 " + sl + ")")
+        else sg.kind == cg.PF_CHAR:
+            emit(v, "call void @salam_out_byte(i32 " + r + ")")
+        else sg.kind == cg.PF_U32 or sg.kind == cg.PF_U64 or sg.kind == cg.PF_SIZE:
+            emit(v, "call void @salam_out_u64(i64 " + r + ")")
+        else:
+            emit(v, "call void @salam_out_i64(i64 " + r + ")")
+        end
+    end
+    if err:
+        emit(v, "call void @salam_out_flush_fd_l(i32 2)")
+    else:
+        emit(v, "call void @salam_out_end1()")
+    end
+    emit(v, "call void @salam_out_unlock()")
+    repeat segs.len() in fi:
+        fsg := segs.get(fi)
+        if fsg.kind == cg.PF_STR and lv_is_derived_call(a, fsg.expr):
+            emit(v, "call void @free(ptr " + refs.get(fi) + ")")
+        end
+    end
+end
+
+func lv_lower_print(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nl: bool, err: bool
+):
+    mut segs := Vector {} as Vector<cg.PfSeg>
+    defer segs.free()
+    cg.PfBuild(a, n, nl, segs)
+    if segs.len() == 0:
+        ret
+    end
+
+    if v.freestanding:
+        lower_print_free(v, s, a, segs, err)
+        ret
+    end
+
+    buffered := v.single_threaded and not err
+
+    if buffered:
+        mut all_lit := true
+        mut i := 0
+        until i < segs.len() and all_lit:
+            if segs.get(i).kind != cg.PF_LIT:
+                all_lit = false
+            end
+            i += 1
+        end
+        if all_lit:
+            mut raw := co.SbNew()
+            repeat segs.len() in j:
+                co.SbPuts(raw, segs.get(j).text)
+            end
+            rawlen := co.SbLen(raw)
+            lit := strconst(v, co.SbCstr(raw))
+            co.SbFree(raw)
+            if rawlen > (0 as i64):
+                need(v, LV_H_OUTBUF)
+                emit(v, "call void @salam_out_lock()")
+                emit(
+                    v, "call void @salam_out_write(ptr " + lit + ", i64 " + co.I64Toa(rawlen) + ")"
+                )
+                emit(v, "call void @salam_out_end1()")
+                emit(v, "call void @salam_out_unlock()")
+            end
+            ret
+        end
+    end
+
+    if v.single_threaded:
+        lower_print_buf(v, s, a, segs, err)
+        ret
+    end
+
+    mut fmt := co.SbNew()
+    mut argsb := co.SbNew()
+    mut dfree := Vector {} as Vector<str>
+    defer dfree.free()
+    repeat segs.len() in k:
+        sg := segs.get(k)
+        if sg.kind == cg.PF_LIT:
+            tn := str.Len(sg.text)
+            mut ti := 0
+            until ti < tn:
+                ch := byte_at(sg.text, ti)
+                if ch == 37:
+                    co.SbPutc(fmt, 37)
+                end
+                co.SbPutc(fmt, ch)
+                ti += 1
+            end
+        else:
+            val := lv_expr(v, s, a, sg.expr)
+            co.SbPuts(fmt, cg.PfSpec(sg.kind))
+            mut av := ""
+            if sg.kind == cg.PF_STR:
+                av = ", ptr " + val.ref
+                if lv_is_derived_call(a, sg.expr):
+                    dfree.push(val.ref)
+                end
+            else sg.kind == cg.PF_BOOL:
+                t2 := strconst(v, "true")
+                f2 := strconst(v, "false")
+                sel := new_tmp(v)
+                emit(
+                    v, sel + " = select i1 " + val.ref + ", ptr " + t2 + ", ptr " + f2
+                )
+                av = ", ptr " + sel
+            else sg.kind == cg.PF_CHAR:
+                av = ", i32 " + conv(v, s, a, val, "i32")
+            else sg.kind == cg.PF_F64:
+                dref := conv(v, s, a, val, "f64")
+                fref := call_runtime_val(
+                    v, s, a, "salam_fmt_f64", "double", dref, "ptr"
+                )
+                av = ", ptr " + fref
+            else sg.kind == cg.PF_I32:
+                av = ", i32 " + conv(v, s, a, val, "i32")
+            else sg.kind == cg.PF_U32:
+                av = ", i32 " + conv(v, s, a, val, "u32")
+            else sg.kind == cg.PF_I64:
+                av = ", i64 " + conv(v, s, a, val, "i64")
+            else sg.kind == cg.PF_U64:
+                av = ", i64 " + val.ref
+            else sg.kind == cg.PF_SIZE:
+                av = ", " + v.usize + " " + conv(v, s, a, val, "usize")
+            end
+            co.SbPuts(argsb, av)
+        end
+    end
+    f := strconst(v, co.SbCstr(fmt))
+    if v.single_threaded:
+        need(v, LV_H_OUTBUF)
+        emit(v, "call void @salam_out_flush()")
+    end
+    t := new_tmp(v)
+    if err and target_is_windows_of(v.triple):
+        u := v.usize
+        emit(v, t + " = call i32 (ptr, " + u + ", ptr, ...) @snprintf(ptr null, " + u + " 0, ptr " + f + co.SbCstr(argsb) + ")")
+        en := new_tmp(v)
+        emit(v, en + " = " + (str.Equals(u, "i32") ? "add i32 " + t + ", 0" : "sext i32 " + t + " to " + u))
+        ecap := new_tmp(v)
+        emit(v, ecap + " = add " + u + " " + en + ", 1")
+        ebuf := new_tmp(v)
+        emit(v, ebuf + " = call ptr @malloc(" + u + " " + ecap + ")")
+        ebufok := new_tmp(v)
+        emit(v, ebufok + " = icmp ne ptr " + ebuf + ", null")
+        wrL := new_lbl(v, "werr_ok")
+        skL := new_lbl(v, "werr_skip")
+        emit_term(v, "br i1 " + ebufok + ", label %" + wrL + ", label %" + skL)
+        emit_label(v, wrL)
+        ef := new_tmp(v)
+        emit(v, ef + " = call i32 (ptr, " + u + ", ptr, ...) @snprintf(ptr " + ebuf + ", " + u + " " + ecap + ", ptr " + f + co.SbCstr(argsb) + ")")
+        ew := new_tmp(v)
+        emit(v, ew + " = call " + u + " @" + write_name(v) + "(i32 2, ptr " + ebuf + ", " + u + " " + en + ")")
+        emit(v, "call void @free(ptr " + ebuf + ")")
+        emit_term(v, "br label %" + skL)
+        emit_label(v, skL)
+    else err:
+        emit(
+            v, t + " = call i32 (i32, ptr, ...) @dprintf(i32 2, ptr " + f + co.SbCstr(argsb) + ")"
+        )
+    else:
+        emit(
+            v, t + " = call i32 (ptr, ...) @printf(ptr " + f + co.SbCstr(argsb) + ")"
+        )
+        t2b := new_tmp(v)
+        emit(v, t2b + " = call i32 @fflush(ptr null)")
+    end
+    repeat dfree.len() in di:
+        emit(v, "call void @free(ptr " + dfree.get(di) + ")")
+    end
+    co.SbFree(fmt)
+    co.SbFree(argsb)
+end

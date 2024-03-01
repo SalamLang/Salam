@@ -1,0 +1,572 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package profself
+
+import io
+import os
+import str
+import time
+
+include co "sal_core.salam"
+
+pub const TP_DRIVER := 0
+pub const TP_SOURCE := 1
+pub const TP_LEXER := 2
+pub const TP_PARSER := 3
+pub const TP_SEMANTIC := 4
+pub const TP_CODEGEN := 5
+pub const TP_LLVM := 6
+pub const TP_JSGEN := 7
+pub const TP_WRITE := 8
+pub const TP_CC := 9
+pub const TP_LINK := 10
+pub const TP_COUNT := 11
+
+pub const TC_TOKENS := 0
+pub const TC_AST_NODES := 1
+pub const TC_SYMBOLS := 2
+pub const TC_FUNCS_EMITTED := 3
+pub const TC_MODULES_BUILT := 4
+pub const TC_MODULES_CACHED := 5
+pub const TC_ARENA_BYTES := 6
+pub const TC_ARENA_BLOCKS := 7
+pub const TC_COUNT := 8
+
+pub const PROF_FMT_TABLE := 0
+pub const PROF_FMT_JSON := 1
+
+const PROF_MAX_DEPTH := 64
+const PROF_MAX_FILES := 512
+const PROF_TOP_FILES := 8
+const PROF_LABEL_MAX := 200
+
+mut _on := false
+mut _trace := false
+mut _depth_overflow := false
+mut _files_full := false
+mut _start_ns := 0 as i64
+mut _start_cpu_ns := 0 as i64
+
+mut _ph_total := Vector {} as Vector<i64>
+mut _ph_self := Vector {} as Vector<i64>
+mut _ph_cpu := Vector {} as Vector<i64>
+mut _ph_calls := Vector {} as Vector<i64>
+
+mut _counter := Vector {} as Vector<i64>
+
+mut _st_ph := Vector {} as Vector<i64>
+mut _st_t0 := Vector {} as Vector<i64>
+mut _st_cpu0 := Vector {} as Vector<i64>
+mut _st_child := Vector {} as Vector<i64>
+mut _st_label := Vector {} as Vector<str>
+mut _depth := 0
+
+mut _file_label := Vector {} as Vector<str>
+mut _file_total := Vector {} as Vector<i64>
+mut _file_ns := Vector {} as Vector<i64>
+
+mut _ev_name := Vector {} as Vector<str>
+mut _ev_ph := Vector {} as Vector<i64>
+mut _ev_ts := Vector {} as Vector<i64>
+mut _ev_dur := Vector {} as Vector<i64>
+
+func phase_name(ph: int): str:
+    if ph == TP_DRIVER: ret "driver" end
+    if ph == TP_SOURCE: ret "source" end
+    if ph == TP_LEXER: ret "lexer" end
+    if ph == TP_PARSER: ret "parser" end
+    if ph == TP_SEMANTIC: ret "semantic" end
+    if ph == TP_CODEGEN: ret "codegen" end
+    if ph == TP_LLVM: ret "llvm" end
+    if ph == TP_JSGEN: ret "jsgen" end
+    if ph == TP_WRITE: ret "write" end
+    if ph == TP_CC: ret "cc" end
+    if ph == TP_LINK: ret "link" end
+    ret "?"
+end
+
+func counter_name(c: int): str:
+    if c == TC_TOKENS: ret "tokens" end
+    if c == TC_AST_NODES: ret "ast_nodes" end
+    if c == TC_SYMBOLS: ret "symbols" end
+    if c == TC_FUNCS_EMITTED: ret "funcs_emitted" end
+    if c == TC_MODULES_BUILT: ret "modules_built" end
+    if c == TC_MODULES_CACHED: ret "modules_cached" end
+    if c == TC_ARENA_BYTES: ret "arena_bytes" end
+    if c == TC_ARENA_BLOCKS: ret "arena_blocks" end
+    ret "?"
+end
+
+func fmt_bytes(b: i64): str:
+    if b >= 1073741824: ret co.Format1("%.1f", co.ArgFloat((b as f64) / 1073741824.0)) + " GB" end
+    if b >= 1048576: ret co.Format1("%.1f", co.ArgFloat((b as f64) / 1048576.0)) + " MB" end
+    if b >= 1024: ret co.Format1("%.1f", co.ArgFloat((b as f64) / 1024.0)) + " KB" end
+    ret co.I64Toa(b) + " B"
+end
+
+func fmt_num(n: i64): str:
+    raw := co.I64Toa(n)
+    ln := str.Len(raw)
+    mut out := ""
+    mut i := 0
+    until i < ln:
+        if i > 0 and ((ln - i) % 3) == 0:
+            out = out + ","
+        end
+        out = out + str.Substr(raw, i, 1)
+        i += 1
+    end
+    ret out
+end
+
+func pad_right(s: str, w: int): str:
+    mut out := s
+    until str.Len(out) < w:
+        out = out + " "
+    end
+    ret out
+end
+
+func pad_left(s: str, w: int): str:
+    mut out := s
+    until str.Len(out) < w:
+        out = " " + out
+    end
+    ret out
+end
+
+func json_escape(s: str): str:
+    mut out := ""
+    mut i := 0
+    n := str.Len(s)
+    until i < n:
+        ch := str.Substr(s, i, 1)
+        if str.Equals(ch, "\""):
+            out = out + "\\\""
+        else str.Equals(ch, "\\"):
+            out = out + "\\\\"
+        else str.Equals(ch, "\n"):
+            out = out + "\\n"
+        else str.Equals(ch, "\r"):
+            out = out + "\\r"
+        else str.Equals(ch, "\t"):
+            out = out + "\\t"
+        else:
+            out = out + ch
+        end
+        i += 1
+    end
+    ret out
+end
+
+func phase_order(): Vector<i64>:
+    mut order := Vector {} as Vector<i64>
+    mut i := 0
+    until i < TP_COUNT:
+        order.push(i as i64)
+        i += 1
+    end
+    mut a := 0
+    until a < TP_COUNT:
+        mut best := a
+        mut b := a + 1
+        until b < TP_COUNT:
+            ib := order.get(b) as int
+            ibest := order.get(best) as int
+            if _ph_self.get(ib) > _ph_self.get(ibest):
+                best = b
+            end
+            b += 1
+        end
+        if best != a:
+            tmp := order.get(a)
+            order.set(a, order.get(best))
+            order.set(best, tmp)
+        end
+        a += 1
+    end
+    ret order
+end
+
+func file_order(): Vector<i64>:
+    mut order := Vector {} as Vector<i64>
+    n := _file_label.len()
+    mut i := 0
+    until i < n:
+        order.push(i as i64)
+        i += 1
+    end
+    mut a := 0
+    until a < n:
+        mut best := a
+        mut b := a + 1
+        until b < n:
+            ib := order.get(b) as int
+            ibest := order.get(best) as int
+            if _file_total.get(ib) > _file_total.get(ibest):
+                best = b
+            end
+            b += 1
+        end
+        if best != a:
+            tmp := order.get(a)
+            order.set(a, order.get(best))
+            order.set(best, tmp)
+        end
+        a += 1
+    end
+    ret order
+end
+
+func report_table(wall_ns: i64, cpu_ns: i64):
+    io.EPrint("\nSalam compile time report\n")
+    io.EPrint(
+        "  wall " + fmt_dur(wall_ns) + "   cpu " + fmt_dur(cpu_ns) + "   peak rss " + fmt_bytes(co.PeakRss()) + "\n"
+    )
+
+    order := phase_order()
+    io.EPrint(
+        "\n  " + pad_right("phase", 10) + " " + pad_left("self", 10) + " " + pad_left("total", 11) + " " + pad_left("%self", 8) + " " + pad_left("calls", 8) + "\n"
+    )
+    io.EPrint("  ----------------------------------------------------\n")
+    mut i := 0
+    until i < TP_COUNT:
+        p := order.get(i) as int
+        calls := _ph_calls.get(p)
+        if calls > 0:
+            selfns := _ph_self.get(p)
+            mut pct := 0.0
+            if wall_ns > 0:
+                pct = ((selfns as f64) * 100.0) / (wall_ns as f64)
+            end
+            io.EPrint(
+                "  " + pad_right(phase_name(p), 10) + " " + pad_left(fmt_dur(selfns), 10) + " " + pad_left(fmt_dur(_ph_total.get(p)), 11) + " " + pad_left(co.Format1("%.1f", co.ArgFloat(pct)) + "%", 8) + " " + pad_left(co.I64Toa(calls), 8) + "\n"
+            )
+        end
+        i += 1
+    end
+    defer order.free()
+
+    nfiles := _file_label.len()
+    if nfiles > 0:
+        forder := file_order()
+        mut shown := nfiles
+        if shown > PROF_TOP_FILES: shown = PROF_TOP_FILES end
+        io.EPrint("\n  slowest inputs\n")
+        mut f := 0
+        until f < shown:
+            fi := forder.get(f) as int
+            mut worst := 0
+            mut p := 1
+            until p < TP_COUNT:
+                if _file_ns.get(fi * TP_COUNT + p) > _file_ns.get(fi * TP_COUNT + worst):
+                    worst = p
+                end
+                p += 1
+            end
+            mut line := "    " + pad_right(_file_label.get(fi), 44) + " " + pad_left(fmt_dur(_file_total.get(fi)), 10)
+            wns := _file_ns.get(fi * TP_COUNT + worst)
+            if wns > 0:
+                line = line + "   (" + phase_name(worst) + " " + fmt_dur(wns) + ")"
+            end
+            io.EPrint(line + "\n")
+            f += 1
+        end
+        forder.free()
+        if _files_full:
+            io.EPrint("    (input table full, some files not listed)\n")
+        end
+    end
+
+    io.EPrint("\n  counters\n")
+    io.EPrint(
+        "    " + pad_right("tokens", 16) + " " + pad_left(fmt_num(_counter.get(TC_TOKENS)), 12) + "   " + pad_right("ast nodes", 16) + " " + pad_left(fmt_num(_counter.get(TC_AST_NODES)), 12) + "\n"
+    )
+    io.EPrint(
+        "    " + pad_right("symbols", 16) + " " + pad_left(fmt_num(_counter.get(TC_SYMBOLS)), 12) + "   " + pad_right("funcs emitted", 16) + " " + pad_left(fmt_num(_counter.get(TC_FUNCS_EMITTED)), 12) + "\n"
+    )
+    io.EPrint(
+        "    " + pad_right("modules built", 16) + " " + pad_left(fmt_num(_counter.get(TC_MODULES_BUILT)), 12) + "   " + pad_right("modules cached", 16) + " " + pad_left(fmt_num(_counter.get(TC_MODULES_CACHED)), 12) + "\n"
+    )
+    io.EPrint(
+        "    " + pad_right("arena", 16) + " " + pad_left(fmt_bytes(_counter.get(TC_ARENA_BYTES)), 12) + "   " + pad_right("arena blocks", 16) + " " + pad_left(fmt_num(_counter.get(TC_ARENA_BLOCKS)), 12) + "\n"
+    )
+
+    if _depth_overflow:
+        io.EPrint(
+            "\n  warning: timing scopes nested deeper than the profiler stack; some readings were dropped\n"
+        )
+    end
+    io.EPrint("\n")
+end
+
+func file_slot(label: str): int:
+    repeat _file_label.len() in i:
+        if str.Equals(_file_label.get(i), label):
+            ret i
+        end
+    end
+    if _file_label.len() >= PROF_MAX_FILES:
+        _files_full = true
+        ret -1
+    end
+    mut keep := label
+    n := str.Len(label)
+    if n >= PROF_LABEL_MAX:
+        keep = str.Substr(label, n - (PROF_LABEL_MAX - 1), PROF_LABEL_MAX - 1)
+    end
+    idx := _file_label.len()
+    _file_label.push(keep)
+    _file_total.push(0 as i64)
+    mut p := 0
+    until p < TP_COUNT:
+        _file_ns.push(0 as i64)
+        p += 1
+    end
+    ret idx
+end
+
+func fmt_dur(ns: i64): str:
+    if ns >= 1000000000:
+        ret co.Format1("%.3f", co.ArgFloat((ns as f64) / 1000000000.0)) + " s"
+    end
+    if ns >= 1000000:
+        ret co.Format1("%.2f", co.ArgFloat((ns as f64) / 1000000.0)) + " ms"
+    end
+    if ns >= 1000:
+        ret co.Format1("%.2f", co.ArgFloat((ns as f64) / 1000.0)) + " us"
+    end
+    ret co.I64Toa(ns) + " ns"
+end
+
+func report_json(wall_ns: i64, cpu_ns: i64):
+    mut out := "{\"schema\":\"salam.timereport.v1\""
+    out = out + ",\"wall_ns\":" + co.I64Toa(wall_ns)
+    out = out + ",\"cpu_ns\":" + co.I64Toa(cpu_ns)
+    out = out + ",\"peak_rss\":" + co.I64Toa(co.PeakRss())
+    mut trunc := "false"
+    if _depth_overflow or _files_full: trunc = "true" end
+    out = out + ",\"truncated\":" + trunc
+
+    out = out + ",\"phases\":{"
+    mut first := true
+    mut i := 0
+    until i < TP_COUNT:
+        calls := _ph_calls.get(i)
+        if calls > 0:
+            if not first: out = out + "," end
+            out = out + "\"" + phase_name(i) + "\":{\"self_ns\":" + co.I64Toa(_ph_self.get(i))
+            out = out + ",\"total_ns\":" + co.I64Toa(_ph_total.get(i))
+            out = out + ",\"cpu_ns\":" + co.I64Toa(_ph_cpu.get(i))
+            out = out + ",\"calls\":" + co.I64Toa(calls) + "}"
+            first = false
+        end
+        i += 1
+    end
+    out = out + "}"
+
+    out = out + ",\"files\":["
+    mut f := 0
+    nfiles := _file_label.len()
+    until f < nfiles:
+        if f > 0: out = out + "," end
+        out = out + "{\"name\":\"" + json_escape(_file_label.get(f)) + "\""
+        out = out + ",\"total_ns\":" + co.I64Toa(_file_total.get(f)) + ",\"phases\":{"
+        mut pfirst := true
+        mut p := 0
+        until p < TP_COUNT:
+            v := _file_ns.get(f * TP_COUNT + p)
+            if v != 0:
+                if not pfirst: out = out + "," end
+                out = out + "\"" + phase_name(p) + "\":" + co.I64Toa(v)
+                pfirst = false
+            end
+            p += 1
+        end
+        out = out + "}}"
+        f += 1
+    end
+    out = out + "]"
+
+    out = out + ",\"counters\":{"
+    mut c := 0
+    until c < TC_COUNT:
+        if c > 0: out = out + "," end
+        out = out + "\"" + counter_name(c) + "\":" + co.I64Toa(_counter.get(c))
+        c += 1
+    end
+    out = out + "}}\n"
+    io.EPrint(out)
+end
+
+@en "PhaseName"
+@fa "نام فاز"
+pub func PhaseName(ph: int): str: ret phase_name(ph) end
+
+@en "Enable"
+@fa "فعال کردن"
+pub func Enable(trace_events: bool):
+    _on = true
+    _trace = trace_events
+    _depth_overflow = false
+    _files_full = false
+    _depth = 0
+    mut i := 0
+    until i < TP_COUNT:
+        _ph_total.push(0 as i64)
+        _ph_self.push(0 as i64)
+        _ph_cpu.push(0 as i64)
+        _ph_calls.push(0 as i64)
+        i += 1
+    end
+    mut c := 0
+    until c < TC_COUNT:
+        _counter.push(0 as i64)
+        c += 1
+    end
+    _start_ns = time.MonoNanos()
+    _start_cpu_ns = co.CpuNanos()
+end
+
+@en "On"
+@fa "روشن"
+pub func On(): bool: ret _on end
+
+@en "Begin"
+@fa "آغاز"
+pub func Begin(ph: int, label: str): i64:
+    if not _on: ret 0 end
+    if ph < 0 or ph >= TP_COUNT: ret 0 end
+    if _depth >= PROF_MAX_DEPTH:
+        _depth_overflow = true
+        ret 0
+    end
+    if _depth < _st_ph.len():
+        _st_ph.set(_depth, ph as i64)
+        _st_child.set(_depth, 0 as i64)
+        _st_label.set(_depth, label)
+        _st_cpu0.set(_depth, co.CpuNanos())
+        _st_t0.set(_depth, time.MonoNanos())
+    else:
+        _st_ph.push(ph as i64)
+        _st_child.push(0 as i64)
+        _st_label.push(label)
+        _st_cpu0.push(co.CpuNanos())
+        _st_t0.push(time.MonoNanos())
+    end
+    _depth += 1
+    ret _depth
+end
+
+@en "End"
+@fa "پایان"
+pub func End(_ph: int, token: i64):
+    if not _on or token == 0: ret end
+    if token > (_depth as i64): ret end
+    now := time.MonoNanos()
+    cpu := co.CpuNanos()
+    _depth = (token as int) - 1
+    fph := _st_ph.get(_depth) as int
+    t0 := _st_t0.get(_depth)
+    cpu0 := _st_cpu0.get(_depth)
+    child := _st_child.get(_depth)
+    label := _st_label.get(_depth)
+    mut dt := 0 as i64
+    if now > t0: dt = now - t0 end
+    _ph_total.set(fph, _ph_total.get(fph) + dt)
+    mut selfd := 0 as i64
+    if dt > child: selfd = dt - child end
+    _ph_self.set(fph, _ph_self.get(fph) + selfd)
+    if cpu > cpu0:
+        _ph_cpu.set(fph, _ph_cpu.get(fph) + (cpu - cpu0))
+    end
+    _ph_calls.set(fph, _ph_calls.get(fph) + 1)
+    if _depth > 0:
+        _st_child.set(_depth - 1, _st_child.get(_depth - 1) + dt)
+    end
+    mut fi := -1
+    if str.Len(label) > 0:
+        fi = file_slot(label)
+    end
+    if fi >= 0:
+        _file_total.set(fi, _file_total.get(fi) + dt)
+        k := fi * TP_COUNT + fph
+        _file_ns.set(k, _file_ns.get(k) + dt)
+    end
+    if _trace:
+        mut nm := phase_name(fph)
+        if fi >= 0: nm = _file_label.get(fi) end
+        _ev_name.push(nm)
+        _ev_ph.push(fph as i64)
+        _ev_ts.push(t0)
+        _ev_dur.push(dt)
+    end
+end
+
+@en "Count"
+@fa "شمارش"
+pub func Count(c: int, n: i64):
+    if not _on: ret end
+    if c < 0 or c >= TC_COUNT: ret end
+    _counter.set(c, _counter.get(c) + n)
+end
+
+@en "Report"
+@fa "گزارش"
+pub func Report(fmt: int):
+    if not _on: ret end
+    until _depth > 0:
+        End(_st_ph.get(_depth - 1) as int, _depth as i64)
+    end
+    now := time.MonoNanos()
+    cpu := co.CpuNanos()
+    mut wall_ns := 0 as i64
+    if now > _start_ns: wall_ns = now - _start_ns end
+    mut cpu_ns := 0 as i64
+    if cpu > _start_cpu_ns: cpu_ns = cpu - _start_cpu_ns end
+    if fmt == PROF_FMT_JSON:
+        report_json(wall_ns, cpu_ns)
+    else:
+        report_table(wall_ns, cpu_ns)
+    end
+end
+
+@en "WriteTrace"
+@fa "نوشتن ردیابی"
+pub func WriteTrace(path: str): bool:
+    if not _on or str.Len(path) == 0: ret false end
+    mut out := "[\n"
+    mut i := 0
+    n := _ev_name.len()
+    until i < n:
+        if i > 0: out = out + ",\n" end
+        ts := (_ev_ts.get(i) - _start_ns) as f64
+        dur := _ev_dur.get(i) as f64
+        out = out + "{\"name\":\"" + json_escape(_ev_name.get(i)) + "\""
+        out = out + ",\"cat\":\"" + phase_name(_ev_ph.get(i) as int) + "\""
+        out = out + ",\"ph\":\"X\",\"pid\":1,\"tid\":1"
+        out = out + ",\"ts\":" + co.Format1("%.3f", co.ArgFloat(ts / 1000.0))
+        out = out + ",\"dur\":" + co.Format1("%.3f", co.ArgFloat(dur / 1000.0)) + "}"
+        i += 1
+    end
+    out = out + "\n]\n"
+    ret os.WriteFile(path, out) >= 0
+end
+
+@en "Shutdown"
+@fa "خاموش کردن"
+pub func Shutdown():
+    _on = false
+end

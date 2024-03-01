@@ -1,0 +1,395 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/router"
+@fa "مسیریاب"
+package router
+
+import mem
+
+const _CH_SLASH := 47
+
+const _CH_COLON := 58
+
+const _CH_STAR := 42
+
+@en "Param"
+@fa "پارامتر"
+pub struct Param:
+    @en "key"
+    @fa "کلید"
+    pub key: str = ""
+    @en "value"
+    @fa "مقدار"
+    pub value: str = ""
+end
+
+@en "ParamList"
+@fa "پارامترها"
+pub struct ParamList:
+    @en "items"
+    @fa "اقلام"
+    pub items: Vector<Param> = Vector {}
+end
+
+@en "Route"
+@fa "مسیر مسیریابی"
+pub struct Route:
+    @en "method"
+    @fa "روش"
+    pub method: str = ""
+    @en "pattern"
+    @fa "الگو"
+    pub pattern: str = ""
+    @en "fn"
+    @fa "گرداننده"
+    pub fn: i64 = 0
+    @en "mid"
+    @fa "شناسه روش"
+    pub mid: int = 0
+    @en "spec"
+    @fa "نوع الگو"
+    pub spec: int = 0
+end
+
+@en "Router"
+@fa "مسیریاب"
+pub struct Router:
+    @en "routes"
+    @fa "مسیرها"
+    pub routes: Vector<Route> = Vector {}
+    @en "static_prefix"
+    @fa "پیشوند ایستا"
+    pub static_prefix: str = ""
+    @en "static_dir"
+    @fa "پوشه ایستا"
+    pub static_dir: str = ""
+    @en "has_static"
+    @fa "ایستا فعال"
+    pub has_static: bool = false
+    @en "static_listing"
+    @fa "فهرست ایستا"
+    pub static_listing: bool = false
+    @en "fallback"
+    @fa "مدیر پیش‌فرض"
+    pub fallback: i64 = 0
+    @en "idx"
+    @fa "جدول نمایه"
+    pub idx: Vector<int> = Vector {}
+    @en "idx_mask"
+    @fa "پوشش نمایه"
+    pub idx_mask: int = 0
+    @en "n_literal"
+    @fa "شمار ثابت‌ها"
+    pub n_literal: int = 0
+    @en "n_dynamic"
+    @fa "شمار پویاها"
+    pub n_dynamic: int = 0
+end
+
+@en "Match"
+@fa "تطابق"
+pub struct Match:
+    @en "matched"
+    @fa "پیدا شد"
+    pub matched: bool = false
+    @en "fn"
+    @fa "گرداننده"
+    pub fn: i64 = 0
+    @en "params"
+    @fa "پارامترها"
+    pub params: ParamList = ParamList {}
+end
+
+func _free_params(p &: ParamList):
+    n := p.items.len()
+    mut i := 0
+    until i < n:
+        kv := p.items.get(i)
+        mem.Free(kv.key as void *)
+        mem.Free(kv.value as void *)
+        i += 1
+    end
+    p.items.free()
+    p.items = Vector {} as Vector<Param>
+end
+
+func _method_id(m: str): int:
+    if m == "GET": ret 1 end
+    if m == "POST": ret 2 end
+    if m == "PUT": ret 3 end
+    if m == "DELETE": ret 4 end
+    if m == "PATCH": ret 5 end
+    if m == "HEAD": ret 6 end
+    if m == "OPTIONS": ret 7 end
+    ret 0
+end
+
+func _hash_key(mid: int, s: str): int:
+    mut h := 2166136261 as i64
+    h = ((h ^ (mid as i64)) * 16777619) & 4294967295
+    p := s as i8 *
+    n := s.len()
+    mut i := 0
+    until i < n:
+        h = ((h ^ ((p[i] as i64) & 255)) * 16777619) & 4294967295
+        i += 1
+    end
+    ret (h & 2147483647) as int
+end
+
+func _param_get(p: ParamList, key: str): str:
+    n := p.items.len()
+    mut i := 0
+    until i < n:
+        kv := p.items.get(i)
+        if kv.key == key: ret kv.value end
+        i += 1
+    end
+    ret ""
+end
+
+func _specificity(pattern: str): int:
+    if pattern.find("*") >= 0: ret 2 end
+    if pattern.find(":") >= 0: ret 1 end
+    ret 0
+end
+
+func _byte_at(s: str, i: int): int:
+    p := s as i8 *
+    ret p[i]
+end
+
+func _try_match(pattern: str, path: str, out_params &: ParamList): bool:
+    mut pi := 0
+    mut pp := 0
+    plen := pattern.len()
+    pathlen := path.len()
+    until pi < plen or pp < pathlen:
+        if pi < plen and _byte_at(pattern, pi) == _CH_STAR:
+            ret true
+        end
+        if pi < plen and _byte_at(pattern, pi) == _CH_COLON:
+            mut ne := pi + 1
+            until ne < plen and _byte_at(pattern, ne) != _CH_SLASH:
+                ne += 1
+            end
+            pname := pattern.substr(pi + 1, ne - pi - 1)
+            mut ve := pp
+            until ve < pathlen and _byte_at(path, ve) != _CH_SLASH:
+                ve += 1
+            end
+            pval := path.substr(pp, ve - pp)
+            out_params.items.push(Param { key = pname, value = pval })
+            pi = ne
+            pp = ve
+        else:
+            if pi >= plen or pp >= pathlen:
+                break
+            end
+            if _byte_at(pattern, pi) != _byte_at(path, pp):
+                ret false
+            end
+            pi += 1
+            pp += 1
+        end
+    end
+    until pi < plen and _byte_at(pattern, pi) == _CH_SLASH: pi = pi + 1 end
+    until pp < pathlen and _byte_at(path, pp) == _CH_SLASH: pp = pp + 1 end
+    ret pi == plen and pp == pathlen
+end
+
+func _idx_insert(r &: Router, ri: int):
+    route := r.routes.get(ri)
+    if route.spec != 0: ret end
+    mut slot := _hash_key(route.mid, route.pattern) & r.idx_mask
+    until r.idx.get(slot) != 0:
+        prev := r.routes.get(r.idx.get(slot) - 1)
+        if prev.mid == route.mid and prev.method == route.method and prev.pattern == route.pattern:
+            ret
+        end
+        slot = (slot + 1) & r.idx_mask
+    end
+    r.idx.set(slot, ri + 1)
+end
+
+func _idx_grow(r &: Router, cap: int):
+    r.idx.free()
+    r.idx = Vector {} as Vector<int>
+    repeat cap in _:
+        r.idx.push(0)
+    end
+    r.idx_mask = cap - 1
+    n := r.routes.len()
+    mut i := 0
+    until i < n:
+        _idx_insert(r, i)
+        i += 1
+    end
+end
+
+func _add(r &: Router, method: str, pattern: str, fn: i64):
+    mut rt := Route {}
+    rt.method = method
+    rt.pattern = pattern
+    rt.fn = fn
+    rt.spec = _specificity(pattern)
+    rt.mid = _method_id(method)
+    r.routes.push(rt)
+    if rt.spec != 0:
+        r.n_dynamic += 1
+        ret
+    end
+    r.n_literal += 1
+    cap := r.idx_mask + 1
+    if (r.n_literal * 2) > cap:
+        mut want := 16
+        until want < (r.n_literal * 4):
+            want = want * 2
+        end
+        _idx_grow(r, want)
+    else:
+        _idx_insert(r, r.routes.len() - 1)
+    end
+end
+
+func _dispatch_exact(r: Router, method: str, path: str): Match:
+    mut m := Match {}
+    mid := _method_id(method)
+    if r.idx_mask > 0:
+        mut slot := _hash_key(mid, path) & r.idx_mask
+        until r.idx.get(slot) != 0:
+            route := r.routes.get(r.idx.get(slot) - 1)
+            if route.mid == mid and route.pattern == path:
+                if mid != 0 or route.method == method:
+                    m.matched = true
+                    m.fn = route.fn
+                    ret m
+                end
+            end
+            slot = (slot + 1) & r.idx_mask
+        end
+    end
+    if r.n_dynamic == 0: ret m end
+    n := r.routes.len()
+    mut best := 3
+    mut i := 0
+    until i < n:
+        route := r.routes.get(i)
+        if route.spec != 0 and route.mid == mid and route.spec < best:
+            if mid != 0 or route.method == method:
+                mut params := ParamList {}
+                if _try_match(route.pattern, path, params):
+                    _free_params(m.params)
+                    m.matched = true
+                    m.fn = route.fn
+                    m.params = params
+                    best = route.spec
+                else:
+                    _free_params(params)
+                end
+            end
+        end
+        i += 1
+    end
+    ret m
+end
+
+@en "NewRouter"
+@fa "مسیریاب جدید"
+pub func NewRouter(): Router:
+    ret Router {}
+end
+
+@en "Get"
+@fa "دریافت"
+pub func Get(r &: Router, path: str, fn: i64): _add(r, "GET", path, fn) end
+
+@en "Post"
+@fa "ارسال"
+pub func Post(r &: Router, path: str, fn: i64): _add(r, "POST", path, fn) end
+
+@en "Put"
+@fa "قراردادن"
+pub func Put(r &: Router, path: str, fn: i64): _add(r, "PUT", path, fn) end
+
+@en "Delete"
+@fa "حذف"
+pub func Delete(r &: Router, path: str, fn: i64): _add(r, "DELETE", path, fn) end
+
+@en "Patch"
+@fa "وصله"
+pub func Patch(r &: Router, path: str, fn: i64): _add(r, "PATCH", path, fn) end
+
+@en "Head"
+@fa "سر"
+pub func Head(r &: Router, path: str, fn: i64): _add(r, "HEAD", path, fn) end
+
+@en "Options"
+@fa "گزینه ها"
+pub func Options(r &: Router, path: str, fn: i64): _add(r, "OPTIONS", path, fn) end
+
+@en "Method"
+@fa "روش"
+pub func Method(r &: Router, method: str, path: str, fn: i64):
+    _add(r, method, path, fn)
+end
+
+@en "Group"
+@fa "گروه"
+pub func Group(r &: Router, prefix: str, method: str, path: str, fn: i64):
+    _add(r, method, prefix + path, fn)
+end
+
+@en "Static"
+@fa "ایستا"
+pub func Static(r &: Router, prefix: str, dir: str):
+    r.static_prefix = prefix
+    r.static_dir = dir
+    r.has_static = true
+end
+
+@en "EnableListing"
+@fa "فعال سازی فهرست پوشه"
+pub func EnableListing(r &: Router):
+    r.static_listing = true
+end
+
+@en "SetFallback"
+@fa "تنظیم مدیر پیش‌فرض"
+pub func SetFallback(r &: Router, fn: i64):
+    r.fallback = fn
+end
+
+@en "ParamGet"
+@fa "دریافت پارامتر"
+pub func ParamGet(m: Match, key: str): str:
+    ret _param_get(m.params, key)
+end
+
+@en "Dispatch"
+@fa "اعزام"
+pub func Dispatch(r: Router, method: str, path: str): Match:
+    m := _dispatch_exact(r, method, path)
+    if not m.matched and method == "HEAD":
+        ret _dispatch_exact(r, "GET", path)
+    end
+    ret m
+end
+
+@en "FreeMatch"
+@fa "آزادسازی تطابق"
+pub func FreeMatch(m &: Match):
+    _free_params(m.params)
+end

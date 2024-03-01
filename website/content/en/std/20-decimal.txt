@@ -1,0 +1,171 @@
+pkg.en = decimal
+pkg.name = decimal
+pkg.group = Numbers and collections
+pkg.summary = Exact decimal numbers for money and accounting, with none of the rounding error of floating point.
+pkg.title = The decimal package in Salam | Exact money arithmetic
+pkg.description = The decimal package in Salam: exact decimals for money, addition and division without error, banker's rounding, percentages, splitting an amount evenly, and formatting with thousands separators, with examples.
+pkg.intro <<
+<p>In <code>f64</code>, 0.1 + 0.2 is not exactly 0.3. For science and graphics that tiny error does not matter; for money it does, because a lost cent in the accounts is not acceptable. The <code>decimal</code> package keeps a number as a <a href="/std/bigint/">bigint</a> and a <em>scale</em>, the count of digits after the point, so 10.05 is 1005 with scale 2 and no error can creep in. Use it for prices, invoices, balances, tax and interest. Use <code>f64</code> and <a href="/std/math/">math</a> for measurements and statistics, and plain <code>i64</code> cents when every amount has the same two places and never exceeds about 92 quadrillion.</p>
+<p>Addition, subtraction and multiplication are always exact. The scale of a sum is the larger of the two, and the scale of a product is the two added together. Division may not terminate, as one third does not, so <code>Div</code> takes the number of places you want and a <code>Rounding</code> method. Seven methods are offered; accounting usually wants <code>HalfEven</code>, and customer-facing totals often <code>HalfUp</code>.</p>
+<p>What people get wrong:</p>
+<ul>
+<li>Letting the scale grow. Each <code>Mul</code> adds the scales together, so a balance multiplied by a rate every month carries more digits each time. Round to cents after every step that a statement shows.</li>
+<li>Expecting school rounding from the formatters. <code>ToStrFixed</code>, <code>FormatGrouped</code>, <code>Round</code> and <code>Percent</code> round half to even, so 2.345 shows as 2.34. Call <code>RoundHalfUp</code> first when you want 2.35.</li>
+<li>Dividing by zero. <code>Div</code>, <code>DivRound</code> and <code>DivInt</code> return 0 instead of stopping the program, so check the divisor yourself.</li>
+<li>Copying with <code>=</code>. A <code>Dec</code> holds a <code>bigint.Int</code>, so <code>b := a</code> shares its digits; use <code>Clone</code> for an independent copy, and free each number once.</li>
+</ul>
+
+<h2 id="guide-float">Why not f64?</h2>
+<p>Adding 0.1 ten times in <code>f64</code> gives 0.9999999999999999, because 0.1 has no exact binary form. The same loop with <code>Dec</code> gives exactly 1.0. Build amounts from text with <code>Parse</code> or from whole cents with <code>FromScaled</code>; <code>FromFloat</code> works when you already have an <code>f64</code>, as long as you say how many places it should keep.</p>
+{{example.decimal-guide-float}}
+
+<h2 id="guide-invoice">An invoice with discount and tax</h2>
+<p>Prices usually come from a database or a form as text, so <code>Parse</code> is the natural start. <code>MulInt</code> multiplies by a quantity without any rounding, and <code>Percent</code> takes a percentage and rounds the result to the places you ask for, half to even. Print with <code>ToStrFixed</code> so that 12 shows as 12.00, or with <code>FormatGrouped</code> for thousands separators.</p>
+{{example.decimal-guide-invoice}}
+<p>Round once per step that a real invoice shows (the discount, the tax), not at the very end only. Customers and tax offices check each printed line, so each line must already be in cents. The example does not free its numbers to stay short; a long-running server should <code>Free</code> each one, as the split example does.</p>
+
+<h2 id="guide-interest">Interest and the cost of rounding</h2>
+<p>A bank pays interest in whole cents every year, and those rounded cents then earn interest themselves. The example runs five years with yearly rounding and compares the result with the exact formula: the difference is one cent. <code>Div</code> and <code>DivInt</code> always ask for the number of places and a <code>Rounding</code> method, because a division such as one twelfth has no end.</p>
+{{example.decimal-guide-interest}}
+
+<h2 id="guide-split">Splitting a bill without losing a cent</h2>
+<p>Dividing 100.00 by 3 and rounding gives 33.33 three times, which adds up to 99.99. <code>Split</code> gives the missing cent to the first share, so the shares always add up to the original amount. <code>Allocate</code> does the same for shares in a ratio, such as profit split between partners.</p>
+{{example.decimal-guide-split}}
+<p>The leftover smallest units go to the first shares, one each, in both functions; <code>Allocate</code> does not look at which share lost the most to rounding. <code>Split</code> with fewer than one share, and <code>Allocate</code> with no ratios, a negative ratio or ratios that add up to zero, return an empty vector. Both return a new vector of numbers; free it with <code>FreeAll</code>, which releases every number and the vector.</p>
+
+<h2 id="guide-parse">What Parse accepts</h2>
+<p><code>Parse</code> skips spaces around the number, accepts a sign, Persian digits, underscores between digits and scientific notation. It refuses a comma as the decimal separator and the Persian separator <code>٫</code>: replace either with a dot before parsing if your users type them. <code>ParseOr</code> returns zero on failure, which suits optional fields but hides typing mistakes.</p>
+{{example.decimal-guide-parse}}
+<p>Scientific notation can lower the scale: <code>2.5e3</code> becomes 2500 with scale 0, and <code>1.50e1</code> becomes 15.0.</p>
+
+<h2 id="guide-pitfalls">Rounding, growing scales and zero</h2>
+<p>The three surprises from the list above, in one program. The price is a typical half-cent case, the repeated <code>Mul</code> is a monthly rate applied four times, and the zero divisor is a team with no members.</p>
+{{example.decimal-guide-pitfalls}}
+<p><code>FromFloat</code> has a limit of its own: it multiplies the <code>f64</code> by ten for each place and converts to <code>i64</code>, so a value times 10<sup>scale</sup> must stay below about 9.2 × 10<sup>18</sup>. For large amounts, parse text instead.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>An amount from text</td><td><code>Parse</code></td></tr>
+<tr><td>An amount from whole cents</td><td><code>FromScaled(cents, 2)</code></td></tr>
+<tr><td>Price times quantity</td><td><code>MulInt</code></td></tr>
+<tr><td>A discount or a tax rate</td><td><code>Percent</code></td></tr>
+<tr><td>Round to cents</td><td><code>Round</code> (half to even) or <code>RoundHalfUp</code></td></tr>
+<tr><td>Divide fairly</td><td><code>Split</code>, <code>Allocate</code></td></tr>
+<tr><td>Show to a user</td><td><code>ToStrFixed</code>, <code>FormatGrouped</code></td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.Rounding = How to round when digits have to be dropped. The example below shows every method applied to −2.5.
+doc.Rounding.Down = Towards zero: the extra digits are thrown away.
+doc.Rounding.Up = Away from zero.
+doc.Rounding.Floor = Downwards, towards negative infinity.
+doc.Rounding.Ceil = Upwards, towards positive infinity.
+doc.Rounding.HalfUp = To the nearest, with a half going away from zero. This is the rounding taught at school.
+doc.Rounding.HalfDown = To the nearest, with a half going towards zero.
+doc.Rounding.HalfEven = To the nearest, with a half going to the even number, known as banker's rounding. Over many additions it keeps the rounding error at zero on average.
+doc.Dec = An exact decimal number.
+doc.Dec.unscaled = The whole number without the point; for 10.05 it is 1005.
+doc.Dec.scale = The number of digits after the point.
+doc.Dec.free = Releases the number's memory.
+doc.Dec.is_zero = True when the number is zero.
+doc.Dec.sign = The sign: minus one, zero or one.
+doc.Dec.clone = An independent copy of the number.
+doc.Dec.to_str = The number as text with all its decimal places.
+doc.Zero = The number zero.
+doc.FromInt = Builds a decimal with no decimal places from a whole number.
+doc.FromScaled = Builds the number from a whole number and a scale; <code>FromScaled(1005, 2)</code> is 10.05. It suits amounts stored in minor units such as cents.
+doc.New = Builds the number from a big number and a scale.
+doc.Clone = An independent copy of the number.
+doc.Free = Releases the number's memory.
+doc.FromFloat = Converts an <code>f64</code> with the number of decimal places you ask for, rounding half away from zero. The f64's own error is rounded away, so 0.1 to three places is exactly 0.100. The value times 10<sup>scale</sup> must fit in an <code>i64</code>.
+doc.IsZero = True when the number is zero.
+doc.Sign = The sign of the number.
+doc.IsNegative = True when the number is negative.
+doc.Scale = The number of decimal places.
+doc.Unscaled = The whole number without the point, as a big number.
+doc.Cmp = Compares two numbers whatever their scales; 1.50 and 1.5 are equal.
+doc.Equals = True when the two numbers are equal in value.
+doc.Less = True when the first is smaller.
+doc.Greater = True when the first is larger.
+doc.Min = The smaller of two numbers.
+doc.Max = The larger of two numbers.
+doc.Neg = The number with its sign reversed.
+doc.Abs = The absolute value.
+doc.Add = Exact addition; the result's scale is the larger of the two.
+doc.Sub = Exact subtraction.
+doc.Mul = Exact multiplication; the result's scale is the sum of the two.
+doc.Div = Division with the number of decimal places and the rounding method you give; a negative scale counts as 0. A zero divisor gives 0 rather than an error.
+doc.DivRound = Division rounded half to even to <code>scale</code> places. A zero divisor gives 0.
+doc.Pow = The number raised to the whole power <code>n</code>, exactly; the scale is multiplied by <code>n</code>. A negative <code>n</code> gives 0.
+doc.MulInt = Multiplies by a whole number.
+doc.AddInt = Adds a whole number.
+doc.SubInt = Subtracts a whole number.
+doc.DivInt = Divides by a whole number, with the places and rounding you choose. Dividing by 0 gives 0.
+doc.Percent = <code>pct</code> per cent of the number, rounded half to even to the given number of places; a 9 per cent tax, for instance.
+doc.Sum = The exact sum of every number in a vector; 0 for an empty vector.
+doc.Rescale = Moves the number to a new scale, rounding with the given method when it has to.
+doc.Round = Rounds the number to the given number of decimal places, half to even.
+doc.RoundHalfUp = The ordinary school rounding: a half goes away from zero.
+doc.Truncate = Throws the extra digits away without rounding.
+doc.Trim = Removes the trailing zeros; 1.2500 becomes 1.25.
+doc.ToStr = The number as text with all its decimal places.
+doc.ToStrFixed = The number as text with exactly <code>scale</code> decimal places, padding with zeros or rounding half to even.
+doc.FormatGrouped = The number as text with <code>scale</code> places, rounded half to even, a <code>group</code> separator every three digits and <code>point</code> as the decimal separator, such as <code>FormatGrouped(d, 2, ",", ".")</code>.
+doc.Parse = Turns text into a decimal. It skips spaces at both ends and accepts a sign, Persian or Arabic digits, <code>_</code> between digits and an exponent such as <code>e3</code>; a comma or <code>٫</code> as the decimal point fails. When it cannot parse, <code>ok</code> turns false.
+doc.ParseOr = Turns text into a decimal, returning zero when it cannot.
+doc.ToInt = The whole part of the number, cutting towards zero; when it does not fit in an i64, <code>ok</code> turns false.
+doc.ToFloat = The nearest f64, for display or an approximate calculation only.
+doc.Split = Divides an amount into <code>n</code> equal shares whose total is exactly the amount; the leftover smallest units go to the first shares, one each. Fewer than one share gives an empty vector.
+doc.Allocate = Divides an amount by the given whole-number ratios, keeping the total exactly the amount; the leftover units go to the first shares. A negative ratio or a zero total ratio gives an empty vector.
+doc.FreeAll = Releases the memory of every number in a vector, and of the vector itself.
+
+ex.Rounding = decimal-Round
+ex.Dec = decimal-Dec
+ex.Dec.free = decimal-Dec
+ex.Dec.is_zero = decimal-Dec
+ex.Dec.sign = decimal-Dec
+ex.Dec.clone = decimal-Dec
+ex.Dec.to_str = decimal-Dec
+ex.Zero = decimal-Dec
+ex.FromInt = decimal-Dec
+ex.FromScaled = decimal-Dec
+ex.New = decimal-Dec
+ex.Clone = decimal-Dec
+ex.Free = decimal-Dec
+ex.FromFloat = decimal-Dec
+ex.IsZero = decimal-Dec
+ex.Sign = decimal-Dec
+ex.IsNegative = decimal-Dec
+ex.Scale = decimal-Dec
+ex.Unscaled = decimal-Dec
+ex.Equals = decimal-Cmp
+ex.Less = decimal-Cmp
+ex.Greater = decimal-Cmp
+ex.Min = decimal-Cmp
+ex.Max = decimal-Cmp
+ex.Neg = decimal-Add
+ex.Abs = decimal-Add
+ex.Sub = decimal-Add
+ex.Mul = decimal-Add
+ex.Div = decimal-Add
+ex.DivRound = decimal-Add
+ex.Pow = decimal-Add
+ex.MulInt = decimal-Add
+ex.AddInt = decimal-Add
+ex.SubInt = decimal-Add
+ex.DivInt = decimal-Add
+ex.Percent = decimal-Add
+ex.Sum = decimal-Split
+ex.Rescale = decimal-Round
+ex.RoundHalfUp = decimal-Round
+ex.Truncate = decimal-Round
+ex.Trim = decimal-Round
+ex.ToStr = decimal-Parse
+ex.ToStrFixed = decimal-Parse
+ex.FormatGrouped = decimal-Parse
+ex.ParseOr = decimal-Parse
+ex.ToInt = decimal-Parse
+ex.ToFloat = decimal-Parse
+ex.Allocate = decimal-Split
+ex.FreeAll = decimal-Split

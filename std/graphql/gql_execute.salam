@@ -1,0 +1,393 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import encoding.value
+
+@en "Ex"
+@fa "وضعیت اجرا"
+pub struct Ex:
+    @en "sch"
+    @fa "طرح‌واره"
+    pub sch: Schema = Schema {}
+    @en "doc"
+    @fa "سند"
+    pub doc: Document = Document {}
+    @en "vars"
+    @fa "متغیرها"
+    pub vars: value.Value = value.Value {}
+    @en "ctx"
+    @fa "زمینه"
+    pub ctx: value.Value = value.Value {}
+    @en "errors"
+    @fa "خطاها"
+    pub errors: GqlErrorList = GqlErrorList {}
+    @en "pathKeys"
+    @fa "کلیدهای مسیر"
+    pub pathKeys: Vector<str> = Vector {}
+    @en "pathIdx"
+    @fa "شاخص‌های مسیر"
+    pub pathIdx: Vector<int> = Vector {}
+    @en "depth"
+    @fa "عمق"
+    pub depth: int = 0
+    @en "maxDepth"
+    @fa "بیشینه عمق"
+    pub maxDepth: int = 512
+end
+
+func _ex_push_key(ex &: Ex, key: str):
+    ex.pathKeys.push(key)
+    ex.pathIdx.push(0 - 1)
+end
+
+func _ex_push_index(ex &: Ex, idx: int):
+    ex.pathKeys.push("")
+    ex.pathIdx.push(idx)
+end
+
+func _ex_pop(ex &: Ex):
+    if ex.pathKeys.len() == 0: ret end
+    ex.pathKeys.pop()
+    ex.pathIdx.pop()
+end
+
+func _ex_error(ex &: Ex, message: str, line: int, col: int):
+    mut e := NewError(ERR_EXECUTION, message)
+    if line > 0:
+        e.line = line
+        e.col = col
+        e.hasLocation = true
+    end
+    mut i := 0
+    until i < ex.pathKeys.len():
+        if ex.pathIdx.get(i) >= 0:
+            PathPushIndex(e, ex.pathIdx.get(i))
+        else:
+            PathPushKey(e, ex.pathKeys.get(i))
+        end
+        i += 1
+    end
+    AddError(ex.errors, e)
+end
+
+func _ex_arg_from_literal(ex &: Ex, argDef: InputValueDef, a: AstArgument, out &: value.Value, name: str): bool:
+    lit := LiteralToValue(ex.sch, ex.doc, a.value, ex.vars)
+    if not lit.ok:
+        _ex_error(ex, _gql_arg_msg(name, lit.message), a.line, 0)
+        ret false
+    end
+    co := CoerceInput(ex.sch, ex.sch.doc, argDef.typeRef, lit.value)
+    if not co.ok:
+        _ex_error(ex, _gql_arg_msg(name, co.message), a.line, 0)
+        ret false
+    end
+    value.ObjectSet(out, name, co.value)
+    ret true
+end
+
+func _ex_arg_supplied(ex: Ex, sel: AstSelection, name: str, found &: AstArgument): bool:
+    mut i := 0
+    until i < sel.args.len():
+        a := sel.args.get(i)
+        if a.name == name:
+            v := ValueAt(ex.doc, a.value)
+            if v.kind == VAL_VARIABLE and not value.ObjectHas(ex.vars, v.s): ret false end
+            found = a
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func _ex_default_arg(ex &: Ex, argDef: InputValueDef, out &: value.Value): bool:
+    if argDef.hasDefault:
+        d := LiteralToValue(ex.sch, ex.sch.doc, argDef.defaultValue, value.NewValueObject())
+        if d.ok: value.ObjectSet(out, argDef.name, d.value) end
+        ret true
+    end
+    if TypeRefIsNonNull(ex.sch.doc, argDef.typeRef):
+        _ex_error(ex, _gql_required_arg_msg(argDef.name), 0, 0)
+        ret false
+    end
+    ret true
+end
+
+func _ex_coerce_args(ex &: Ex, fieldDef: FieldDef, sel: AstSelection, ok &: bool): value.Value:
+    mut out := value.NewValueObject()
+    ok = true
+    mut i := 0
+    until i < fieldDef.args.len():
+        argDef := fieldDef.args.get(i)
+        mut a := AstArgument {}
+        if _ex_arg_supplied(ex, sel, argDef.name, a):
+            if not _ex_arg_from_literal(ex, argDef, a, out, argDef.name): ok = false end
+        else:
+            if not _ex_default_arg(ex, argDef, out): ok = false end
+        end
+        i += 1
+    end
+    ret out
+end
+
+func _ex_default_resolve(parent: value.Value, fieldName: str): value.Value:
+    if not value.IsObject(parent): ret value.ValueNull() end
+    if not value.ObjectHas(parent, fieldName): ret value.ValueNull() end
+    ret value.ObjectGet(parent, fieldName)
+end
+
+func _ex_call_resolver(ex &: Ex, fn: i64, parent: value.Value, args: value.Value, objectType: str, fieldName: str, failed &: bool, message &: str): value.Value:
+    slot := _rs_alloc()
+    _rs_prepare(slot, parent, args, ex.ctx, objectType, fieldName)
+    callhandler(fn, slot as i64)
+    s := _rs_at(slot as i64)
+    failed = s.failed
+    message = s.message
+    mut out := value.ValueNull()
+    if s.resolved and not s.failed: out = s.result end
+    _rs_release(slot)
+    ret out
+end
+
+func _ex_resolve_field(ex &: Ex, objectType: str, parent: value.Value, sel: AstSelection, args: value.Value, failed &: bool): value.Value:
+    failed = false
+    if sel.name == "__typename": ret value.ValueString(objectType) end
+    fn := _rs_lookup(ex.sch, objectType, sel.name)
+    if fn == 0: ret _ex_default_resolve(parent, sel.name) end
+    mut rfailed := false
+    mut msg := ""
+    out := _ex_call_resolver(ex, fn, parent, args, objectType, sel.name, rfailed, msg)
+    if rfailed:
+        _ex_error(ex, msg, sel.line, sel.col)
+        failed = true
+        ret value.ValueNull()
+    end
+    ret out
+end
+
+func _ex_resolve_abstract(ex &: Ex, abstractName: str, v: value.Value, sel: AstSelection): str:
+    if value.IsObject(v) and value.ObjectHas(v, "__typename"):
+        name := value.AsString(value.ObjectGet(v, "__typename"))
+        if IsPossibleType(ex.sch, abstractName, name): ret name end
+        _ex_error(ex, _gql_bad_typename_msg(name, abstractName), sel.line, sel.col)
+        ret ""
+    end
+    mut poss := PossibleTypes(ex.sch, abstractName)
+    defer poss.free()
+    if poss.len() == 1: ret poss.get(0) end
+    _ex_error(ex, _gql_no_typename_msg(abstractName), sel.line, sel.col)
+    ret ""
+end
+
+func _ex_complete_leaf(ex &: Ex, typeName: str, v: value.Value, sel: AstSelection): value.Value:
+    r := CoerceLeafResult(ex.sch, typeName, v)
+    if r.ok: ret r.value end
+    _ex_error(ex, r.message, sel.line, sel.col)
+    ret value.ValueNull()
+end
+
+func _ex_complete_list(ex &: Ex, elemRef: int, g: FieldGroup, v: value.Value, sel: AstSelection, bubble &: bool): value.Value:
+    if not value.IsArray(v):
+        _ex_error(ex, _gql_expected_list_msg(), sel.line, sel.col)
+        bubble = true
+        ret value.ValueNull()
+    end
+    mut out := value.NewValueArray()
+    mut i := 0
+    until i < value.ArrayLen(v):
+        _ex_push_index(ex, i)
+        mut itemBubble := false
+        item := _ex_complete_value(ex, elemRef, g, value.ArrayGet(v, i), sel, itemBubble)
+        _ex_pop(ex)
+        if itemBubble:
+            bubble = true
+            ret value.ValueNull()
+        end
+        value.ArrayPush(out, item)
+        i += 1
+    end
+    ret out
+end
+
+func _ex_complete_object(ex &: Ex, typeName: str, g: FieldGroup, v: value.Value, sel: AstSelection, bubble &: bool): value.Value:
+    mut concrete := typeName
+    if IsAbstractType(ex.sch, typeName):
+        concrete = _ex_resolve_abstract(ex, typeName, v, sel)
+        if concrete == "":
+            bubble = true
+            ret value.ValueNull()
+        end
+    end
+    mut sub := MergeSelections(ex.doc, g)
+    defer sub.free()
+    ret _ex_selection_set(ex, concrete, sub, v, bubble)
+end
+
+func _ex_complete_value(ex &: Ex, typeRef: int, g: FieldGroup, v: value.Value, sel: AstSelection, bubble &: bool): value.Value:
+    t := TypeRefAt(ex.sch.doc, typeRef)
+    if t.nonNull:
+        mut innerBubble := false
+        out := _ex_complete_nullable(ex, t, g, v, sel, innerBubble)
+        if innerBubble or value.IsNull(out):
+            if not innerBubble: _ex_error(ex, _gql_null_nonnull_msg(), sel.line, sel.col) end
+            bubble = true
+            ret value.ValueNull()
+        end
+        ret out
+    end
+    ret _ex_complete_nullable(ex, t, g, v, sel, bubble)
+end
+
+func _ex_complete_nullable(ex &: Ex, t: AstTypeRef, g: FieldGroup, v: value.Value, sel: AstSelection, bubble &: bool): value.Value:
+    if value.IsNull(v): ret value.ValueNull() end
+    if t.kind == TREF_LIST: ret _ex_complete_list(ex, t.inner, g, v, sel, bubble) end
+    if IsLeafType(ex.sch, t.name): ret _ex_complete_leaf(ex, t.name, v, sel) end
+    ret _ex_complete_object(ex, t.name, g, v, sel, bubble)
+end
+
+func _ex_typename_field(ex &: Ex, objectType: str, g: FieldGroup, out &: value.Value): bool:
+    s := SelectionAt(ex.doc, g.sels.get(0))
+    if s.name != "__typename": ret false end
+    value.ObjectSet(out, g.key, value.ValueString(objectType))
+    ret true
+end
+
+func _ex_introspection_field(ex &: Ex, objectType: str, g: FieldGroup, out &: value.Value): bool:
+    if objectType != ex.sch.queryType: ret false end
+    ret _in_root_field(ex, g, out)
+end
+
+func _ex_field(ex &: Ex, objectType: str, parent: value.Value, g: FieldGroup, out &: value.Value, bubble &: bool): bool:
+    sel := SelectionAt(ex.doc, g.sels.get(0))
+    fieldDef := _ex_field_def(ex, objectType, sel.name)
+    if fieldDef.typeRef < 0:
+        _ex_error(ex, _gql_unknown_field_msg(sel.name, objectType), sel.line, sel.col)
+        ret false
+    end
+    _ex_push_key(ex, g.key)
+    mut argsOk := true
+    args := _ex_coerce_args(ex, fieldDef, sel, argsOk)
+    mut resolveFailed := false
+    mut raw := value.ValueNull()
+    if argsOk:
+        raw = _ex_resolve_field(ex, objectType, parent, sel, args, resolveFailed)
+    end
+    if not argsOk or resolveFailed:
+        _ex_pop(ex)
+        if TypeRefIsNonNull(ex.sch.doc, fieldDef.typeRef):
+            bubble = true
+            ret false
+        end
+        value.ObjectSet(out, g.key, value.ValueNull())
+        ret true
+    end
+    mut fieldBubble := false
+    completed := _ex_complete_value(ex, fieldDef.typeRef, g, raw, sel, fieldBubble)
+    _ex_pop(ex)
+    if fieldBubble:
+        bubble = true
+        ret false
+    end
+    value.ObjectSet(out, g.key, completed)
+    ret true
+end
+
+func _ex_field_def(ex: Ex, objectType: str, fieldName: str): FieldDef:
+    t := FindType(ex.sch, objectType)
+    f := FindField(t, fieldName)
+    if f.name != "": ret f end
+    mut i := 0
+    until i < t.interfaces.len():
+        it := FindType(ex.sch, t.interfaces.get(i))
+        itf := FindField(it, fieldName)
+        if itf.name != "": ret itf end
+        i += 1
+    end
+    ret FieldDef { typeRef = 0 - 1 }
+end
+
+func _ex_selection_set(ex &: Ex, objectType: str, sels: Vector<int>, parent: value.Value, bubble &: bool): value.Value:
+    ex.depth += 1
+    if ex.depth > ex.maxDepth:
+        ex.depth -= 1
+        _ex_error(ex, _gql_depth_msg(ex.maxDepth), 0, 0)
+        bubble = true
+        ret value.ValueNull()
+    end
+    mut gs := CollectFields(ex.sch, ex.doc, sels, objectType, ex.vars)
+    defer FreeFieldGroups(gs)
+    mut out := value.NewValueObject()
+    mut i := 0
+    until i < gs.items.len():
+        g := gs.items.get(i)
+        mut childBubble := false
+        if not _ex_typename_field(ex, objectType, g, out) and not _ex_introspection_field(ex, objectType, g, out):
+            _ex_field(ex, objectType, parent, g, out, childBubble)
+        end
+        if childBubble:
+            ex.depth -= 1
+            bubble = true
+            ret value.ValueNull()
+        end
+        i += 1
+    end
+    ex.depth -= 1
+    ret out
+end
+
+func _ex_var_missing(ex &: Ex, vd: AstVariableDef, out &: value.Value): bool:
+    if vd.hasDefault:
+        d := LiteralToValue(ex.sch, ex.doc, vd.defaultValue, value.NewValueObject())
+        if d.ok: value.ObjectSet(out, vd.name, d.value) end
+        ret true
+    end
+    if TypeRefIsNonNull(ex.doc, vd.typeRef):
+        _ex_error(ex, _gql_required_var_msg(vd.name), vd.line, 0)
+        ret false
+    end
+    ret true
+end
+
+func _ex_var_type_known(ex: Ex, vd: AstVariableDef): bool:
+    ret HasType(ex.sch, TypeRefName(ex.doc, vd.typeRef))
+end
+
+func _ex_coerce_variables(ex &: Ex, op: AstOperation, raw: value.Value, ok &: bool): value.Value:
+    mut out := value.NewValueObject()
+    ok = true
+    mut i := 0
+    until i < op.varDefs.len():
+        vd := op.varDefs.get(i)
+        i += 1
+        if not value.ObjectHas(raw, vd.name):
+            if not _ex_var_missing(ex, vd, out): ok = false end
+            continue
+        end
+        if not _ex_var_type_known(ex, vd):
+            _ex_error(ex, _gql_bad_var_type_msg(vd.name), vd.line, 0)
+            ok = false
+            continue
+        end
+        r := CoerceInput(ex.sch, ex.doc, vd.typeRef, value.ObjectGet(raw, vd.name))
+        if not r.ok:
+            _ex_error(ex, _gql_var_msg(vd.name, r.message), vd.line, 0)
+            ok = false
+            continue
+        end
+        value.ObjectSet(out, vd.name, r.value)
+    end
+    ret out
+end

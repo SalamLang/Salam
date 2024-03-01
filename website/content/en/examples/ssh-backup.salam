@@ -1,0 +1,32 @@
+import ssh
+
+func main:
+    mut cfg := ssh.NewConfig("db.example.com", 22, "backup")
+    _ := ssh.WithKeyFile(cfg, "/home/backup/.ssh/id_rsa")
+    mut client := ssh.Connect(cfg)
+    if not ssh.Ok(client):
+        println "connect failed:", ssh.Error(client)
+        ret 1
+    end
+
+    remote := "/tmp/shop-backup.sql.gz"
+    dump := ssh.Exec(client, "pg_dump shop | gzip > " + remote)
+    if dump.exit_code != 0:
+        println "pg_dump failed:", dump.stderr
+        ssh.Close(client)
+        ret 1
+    end
+
+    mut sftp := ssh.SftpOpen(client)
+    info := ssh.Stat(client, sftp, remote)
+    println "dump size on the server:", info.size, "bytes"
+    if ssh.Download(client, sftp, remote, "shop-backup.sql.gz"):
+        println "downloaded"
+        _ := ssh.Remove(client, sftp, remote)
+    else:
+        println "download failed:", ssh.Error(client)
+    end
+    ssh.SftpClose(client, sftp)
+    ssh.Close(client)
+    ret 0
+end

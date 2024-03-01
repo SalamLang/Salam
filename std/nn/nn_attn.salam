@@ -1,0 +1,215 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package nn
+
+import autograd
+import mem
+import math
+import tensor
+
+@en "MultiHeadAttention"
+@fa "توجه چندسر"
+pub struct MultiHeadAttention:
+    @en "wq"
+    @fa "وزن پرسش"
+    pub wq: Linear = Linear {}
+    @en "wk"
+    @fa "وزن کلید"
+    pub wk: Linear = Linear {}
+    @en "wv"
+    @fa "وزن مقدار"
+    pub wv: Linear = Linear {}
+    @en "wo"
+    @fa "وزن خروجی"
+    pub wo: Linear = Linear {}
+    @en "dim"
+    @fa "اندازه"
+    pub dim: int = 0
+    @en "heads"
+    @fa "سرها"
+    pub heads: int = 1
+    @en "dropout"
+    @fa "حذف تصادفی"
+    pub dropout: f64 = 0.0
+    @en "causal"
+    @fa "علی"
+    pub causal: bool = false
+
+    @en "forward"
+    @fa "پیشرو"
+    pub func forward(tp &: autograd.Tape, ps &: ParamStore, x: int, batch: int, seq: int): int:
+        dh := this.dim / this.heads
+        q := _split_heads(tp, this.wq.forward(tp, ps, x), batch, seq, this.heads, dh)
+        k := _split_heads(tp, this.wk.forward(tp, ps, x), batch, seq, this.heads, dh)
+        v := _split_heads(tp, this.wv.forward(tp, ps, x), batch, seq, this.heads, dh)
+        kt := _transpose_last(tp, k)
+        mut scores := autograd.BatchMatMul(tp, q, kt)
+        scores = autograd.Scale(tp, scores, 1.0 / math.Sqrt(dh as f64))
+        if this.causal:
+            mut mask := CausalMask(seq)
+            scores = autograd.Add(tp, scores, autograd.Constant(tp, mask))
+            mask.free()
+        end
+        mut attn := autograd.Softmax(tp, scores)
+        attn = autograd.Dropout(tp, attn, this.dropout)
+        ctx := autograd.BatchMatMul(tp, attn, v)
+        merged := _merge_heads(tp, ctx, batch, seq, this.heads, dh)
+        ret this.wo.forward(tp, ps, merged)
+    end
+end
+
+@en "TransformerEncoderLayer"
+@fa "لایه رمزگذار ترنسفورمر"
+pub struct TransformerEncoderLayer:
+    @en "attn"
+    @fa "توجه"
+    pub attn: MultiHeadAttention = MultiHeadAttention {}
+    @en "ln1"
+    @fa "نرمال‌ساز نخست"
+    pub ln1: LayerNorm = LayerNorm {}
+    @en "ln2"
+    @fa "نرمال‌ساز دوم"
+    pub ln2: LayerNorm = LayerNorm {}
+    @en "ff1"
+    @fa "پیشروی نخست"
+    pub ff1: Linear = Linear {}
+    @en "ff2"
+    @fa "پیشروی دوم"
+    pub ff2: Linear = Linear {}
+    @en "dropout"
+    @fa "حذف تصادفی"
+    pub dropout: f64 = 0.0
+
+    @en "forward"
+    @fa "پیشرو"
+    pub func forward(tp &: autograd.Tape, ps &: ParamStore, x: int, batch: int, seq: int): int:
+        a := this.attn.forward(tp, ps, this.ln1.forward(tp, ps, x), batch, seq)
+        h := autograd.Add(tp, x, autograd.Dropout(tp, a, this.dropout))
+        mut f := autograd.Gelu(tp, this.ff1.forward(tp, ps, this.ln2.forward(tp, ps, h)))
+        f = this.ff2.forward(tp, ps, f)
+        ret autograd.Add(tp, h, autograd.Dropout(tp, f, this.dropout))
+    end
+end
+
+func _split_heads(tp &: autograd.Tape, x: int, b: int, t: int, h: int, dh: int): int:
+    mut s4 := tensor.Shape4(b, t, h, dh)
+    r := autograd.Reshape(tp, x, s4)
+    s4.free()
+    mut perm := Vector {} as Vector<int>
+    perm.push(0)
+    perm.push(2)
+    perm.push(1)
+    perm.push(3)
+    p := autograd.Permute(tp, r, perm)
+    perm.free()
+    mut s3 := tensor.Shape3(b * h, t, dh)
+    out := autograd.Reshape(tp, p, s3)
+    s3.free()
+    ret out
+end
+
+func _merge_heads(tp &: autograd.Tape, x: int, b: int, t: int, h: int, dh: int): int:
+    mut s4 := tensor.Shape4(b, h, t, dh)
+    r := autograd.Reshape(tp, x, s4)
+    s4.free()
+    mut perm := Vector {} as Vector<int>
+    perm.push(0)
+    perm.push(2)
+    perm.push(1)
+    perm.push(3)
+    p := autograd.Permute(tp, r, perm)
+    perm.free()
+    mut s2 := tensor.Shape2(b * t, h * dh)
+    out := autograd.Reshape(tp, p, s2)
+    s2.free()
+    ret out
+end
+
+func _transpose_last(tp &: autograd.Tape, x: int): int:
+    mut perm := Vector {} as Vector<int>
+    perm.push(0)
+    perm.push(2)
+    perm.push(1)
+    out := autograd.Permute(tp, x, perm)
+    perm.free()
+    ret out
+end
+
+@en "NewMultiHeadAttention"
+@fa "توجه چندسر جدید"
+pub func NewMultiHeadAttention(ps &: ParamStore, name: str, dim: int, heads: int, dropout: f64, g &: tensor.Rng): MultiHeadAttention:
+    mut m := MultiHeadAttention {}
+    m.dim = dim
+    m.heads = heads
+    m.dropout = dropout
+    _pn1 := name + ".q"
+    m.wq = NewLinear(ps, _pn1, dim, dim, g)
+    mem.Free(_pn1 as void*)
+    _pn2 := name + ".k"
+    m.wk = NewLinear(ps, _pn2, dim, dim, g)
+    mem.Free(_pn2 as void*)
+    _pn3 := name + ".v"
+    m.wv = NewLinear(ps, _pn3, dim, dim, g)
+    mem.Free(_pn3 as void*)
+    _pn4 := name + ".o"
+    m.wo = NewLinear(ps, _pn4, dim, dim, g)
+    mem.Free(_pn4 as void*)
+    ret m
+end
+
+@en "NewTransformerEncoderLayer"
+@fa "لایه رمزگذار ترنسفورمر جدید"
+pub func NewTransformerEncoderLayer(ps &: ParamStore, name: str, dim: int, heads: int, ff_dim: int, dropout: f64, g &: tensor.Rng): TransformerEncoderLayer:
+    mut l := TransformerEncoderLayer {}
+    l.dropout = dropout
+    _pn5 := name + ".attn"
+    l.attn = NewMultiHeadAttention(ps, _pn5, dim, heads, dropout, g)
+    mem.Free(_pn5 as void*)
+    _pn6 := name + ".ln1"
+    l.ln1 = NewLayerNorm(ps, _pn6, dim)
+    mem.Free(_pn6 as void*)
+    _pn7 := name + ".ln2"
+    l.ln2 = NewLayerNorm(ps, _pn7, dim)
+    mem.Free(_pn7 as void*)
+    _pn8 := name + ".ff1"
+    l.ff1 = NewLinear(ps, _pn8, dim, ff_dim, g)
+    mem.Free(_pn8 as void*)
+    _pn9 := name + ".ff2"
+    l.ff2 = NewLinear(ps, _pn9, ff_dim, dim, g)
+    mem.Free(_pn9 as void*)
+    ret l
+end
+
+@en "CausalMask"
+@fa "ماسک علّی"
+pub func CausalMask(seq: int): tensor.Tensor:
+    m := tensor.Zeros2(seq, seq)
+    p := m.data.data
+    neg := (0.0 - 1.0e9) as f32
+    repeat seq in i:
+        repeat seq in j:
+            if j > i: p[i * seq + j] = neg end
+        end
+    end
+    ret m
+end
+
+@en "NewTransformerDecoderLayer"
+@fa "لایه رمزگشای ترنسفورمر جدید"
+pub func NewTransformerDecoderLayer(ps &: ParamStore, name: str, dim: int, heads: int, ff_dim: int, dropout: f64, g &: tensor.Rng): TransformerEncoderLayer:
+    mut l := NewTransformerEncoderLayer(ps, name, dim, heads, ff_dim, dropout, g)
+    l.attn.causal = true
+    ret l
+end

@@ -1,0 +1,207 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package time
+
+@en "Timer"
+@fa "زمان‌سنج"
+pub struct Timer:
+    @en "deadline_ns"
+    @fa "مهلت"
+    pub deadline_ns: i64 = 0
+    @en "active"
+    @fa "فعال"
+    pub active: bool = false
+
+    @en "expired"
+    @fa "منقضی شده"
+    pub func expired(): bool:
+        if not this.active: ret false end
+        ret _mono_ns() >= this.deadline_ns
+    end
+
+    @en "remaining"
+    @fa "باقی‌مانده"
+    pub func remaining(): Duration:
+        if not this.active: ret Duration { ns = 0 } end
+        rem := this.deadline_ns - _mono_ns()
+        if rem < 0: ret Duration { ns = 0 } end
+        ret Duration { ns = rem }
+    end
+
+    @en "wait"
+    @fa "انتظار"
+    pub func wait():
+        if not this.active: ret end
+        _sleepUntil(this.deadline_ns)
+    end
+
+    @en "reset"
+    @fa "بازنشانی"
+    pub func reset(d: Duration):
+        this.deadline_ns = _mono_ns() + d.ns
+        this.active = true
+    end
+
+    @en "stop"
+    @fa "توقف"
+    pub func stop():
+        this.active = false
+    end
+end
+
+@en "Ticker"
+@fa "تیک‌زن"
+pub struct Ticker:
+    @en "interval_ns"
+    @fa "بازه"
+    pub interval_ns: i64 = 0
+    @en "next_ns"
+    @fa "بعدی"
+    pub next_ns: i64 = 0
+    @en "active"
+    @fa "فعال"
+    pub active: bool = false
+    @en "dropped"
+    @fa "از دست رفته"
+    pub dropped: i64 = 0
+
+    @en "fired"
+    @fa "رخ داده"
+    pub func fired(): bool:
+        if not this.active or this.interval_ns <= 0: ret false end
+        if _mono_ns() < this.next_ns: ret false end
+        this.advance()
+        ret true
+    end
+
+    @en "wait"
+    @fa "انتظار"
+    pub func wait():
+        if not this.active or this.interval_ns <= 0: ret end
+        _sleepUntil(this.next_ns)
+        this.advance()
+    end
+
+    @en "advance"
+    @fa "پیشروی"
+    pub func advance():
+        this.next_ns = this.next_ns + this.interval_ns
+        now := _mono_ns()
+        if this.next_ns <= now:
+            missed := (now - this.next_ns) / this.interval_ns + 1
+            this.dropped = this.dropped + missed
+            this.next_ns = this.next_ns + missed * this.interval_ns
+        end
+    end
+
+    @en "remaining"
+    @fa "باقی‌مانده"
+    pub func remaining(): Duration:
+        if not this.active: ret Duration { ns = 0 } end
+        rem := this.next_ns - _mono_ns()
+        if rem < 0: ret Duration { ns = 0 } end
+        ret Duration { ns = rem }
+    end
+
+    @en "reset"
+    @fa "بازنشانی"
+    pub func reset(d: Duration):
+        this.interval_ns = d.ns
+        this.next_ns = _mono_ns() + d.ns
+        this.active = d.ns > 0
+        this.dropped = 0
+    end
+
+    @en "stop"
+    @fa "توقف"
+    pub func stop():
+        this.active = false
+    end
+end
+
+func _sleepUntil(deadline_ns: i64):
+    until true:
+        rem := deadline_ns - _mono_ns()
+        if rem <= 0: break end
+        ms := rem / 1000000
+        if ms > 0:
+            sleep_ms(ms as int)
+        else:
+            sleep_ms(1)
+        end
+    end
+end
+
+@en "NewTimer"
+@fa "زمان‌سنج جدید"
+pub func NewTimer(d: Duration): Timer:
+    ret Timer { deadline_ns = _mono_ns() + d.ns, active = true }
+end
+
+@en "NewTicker"
+@fa "تیک‌زن جدید"
+pub func NewTicker(d: Duration): Ticker:
+    if d.ns <= 0: ret Ticker { interval_ns = 0, next_ns = 0, active = false } end
+    ret Ticker { interval_ns = d.ns, next_ns = _mono_ns() + d.ns, active = true }
+end
+
+@en "AfterFunc"
+@fa "پس از"
+pub func AfterFunc(d: Duration, fn: func ()):
+    SleepFor(d)
+    fn()
+end
+
+@en "Every"
+@fa "هر"
+pub func Every(d: Duration, fn: func () bool): i64:
+    mut tk := NewTicker(d)
+    if not tk.active: ret 0 end
+    mut n := 0 as i64
+    until true:
+        tk.wait()
+        n += 1
+        if not fn(): break end
+    end
+    ret n
+end
+
+@en "RepeatEvery"
+@fa "تکرار با فاصله"
+pub func RepeatEvery(d: Duration, count: int, fn: func ()):
+    if count <= 0: ret end
+    mut tk := NewTicker(d)
+    if not tk.active: ret end
+    repeat count:
+        tk.wait()
+        fn()
+    end
+end
+
+@en "WaitUntil"
+@fa "صبر برای"
+pub func WaitUntil(fn: func () bool, poll: Duration, limit: Duration): bool:
+    mut t := NewTimer(limit)
+    until true:
+        if fn(): ret true end
+        if t.expired(): ret false end
+        rem := t.remaining()
+        if poll.ns < rem.ns:
+            SleepFor(poll)
+        else:
+            SleepFor(rem)
+        end
+    end
+end

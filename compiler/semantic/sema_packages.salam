@@ -1,0 +1,526 @@
+package semantic
+
+import str
+import os
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include cc "../condcomp.salam"
+include lp "../langpack.salam"
+include src "../source.salam"
+include lx "../lexer/lexer.salam"
+include ps "../parser/parser.salam"
+include pth "../sal_path.salam"
+
+func scratch_import_node(a &: at.Ast): int:
+    id := at.NewNode(a, at.AST_IMPORT)
+    mut n := at.Get(a, id)
+    n.synthetic = true
+    at.Put(a, id, n)
+    ret id
+end
+
+func pkg_cache_get(s &: Sema, path: str): int:
+    repeat s.pkg_cache_paths.len() in i:
+        if str.Equals(s.pkg_cache_paths.get(i), path):
+            ret s.pkg_cache_syms.get(i)
+        end
+    end
+    ret 0
+end
+
+func load_package(s &: Sema, a &: at.Ast, path: str, imp: int): int:
+    cached := pkg_cache_get(s, path)
+    if cached != 0:
+        ret cached
+    end
+    repeat s.loading.len() in li:
+        if str.Equals(s.loading.get(li), path):
+            serr(
+                s, 8, span_of(a, imp), co.Format1(
+                    i18.Tr("circular import detected: '%s'"), co.ArgStr(path)
+                )
+            )
+            ret 0
+        end
+    end
+    mut sf := src.New()
+    if not src.Load(path, sf):
+        if os.Exists(path):
+            serr(s, 8, span_of(a, imp), co.Format1(i18.Tr("cannot read '%s'"), co.ArgStr(path)))
+        else str.Len(g_sm_stdlib_root) == 0 and str.StartsWith(path, "std/"):
+            serr(
+                s, 8, span_of(a, imp), co.Format1(
+                    i18.Tr("the Salam standard library was not found (needed '%s'); reinstall Salam or set SALAM_STD to its 'std' folder"), co.ArgStr(path)
+                )
+            )
+        else:
+            serr(
+                s, 8, span_of(a, imp), co.Format1(i18.Tr("import not found: '%s'"), co.ArgStr(path))
+            )
+        end
+        ret 0
+    end
+    mut s_log := s.log
+    lg.AddDiagSource(s_log, path, sf.text, sf.len)
+    s.log = s_log
+    mut fb := lp.Load(i18.Lang())
+    if fb == lp.LP_NONE:
+        fb = lp.Load("en")
+    end
+    pack := lx.Detect(sf, fb)
+    mut toks := tok.StreamNew(path)
+    _lx_ok := lx.Run(s.log, pack, sf, toks)
+    mut prog := 0
+    _ps_ok := ps.Run(s.log, toks, a, prog)
+    tok.StreamFree(toks)
+    entry_pack := s.cctab.pack
+    SetFilePack(s, path, pack)
+    cc.TableSetPack(s.cctab, pack)
+    _cc_ok := cc.PruneProgram(a, s.log, path, s.cctab, prog)
+    cc.TableSetPack(s.cctab, entry_pack)
+    sema_check_toplevel_order_in_file(s, a, prog, path)
+
+    files := package_files(path)
+    defer files.free()
+    mut fi := 1
+    until fi < files.len():
+        fpath := files.get(fi)
+        mut fsf := src.New()
+        if src.Load(fpath, fsf):
+            mut s_log2 := s.log
+            lg.AddDiagSource(s_log2, fpath, fsf.text, fsf.len)
+            s.log = s_log2
+            mut ftoks := tok.StreamNew(fpath)
+            _f1 := lx.Run(s.log, pack, fsf, ftoks)
+            mut fprog := 0
+            _f2 := ps.Run(s.log, ftoks, a, fprog)
+            tok.StreamFree(ftoks)
+            fentry_pack := s.cctab.pack
+            SetFilePack(s, fpath, pack)
+            cc.TableSetPack(s.cctab, pack)
+            _f3 := cc.PruneProgram(a, s.log, fpath, s.cctab, fprog)
+            cc.TableSetPack(s.cctab, fentry_pack)
+            sema_check_toplevel_order_in_file(s, a, fprog, fpath)
+            merge_program(a, prog, fprog)
+        end
+        fi += 1
+    end
+    lg.Log(s.log, lg.PH_SEMANTIC, lg.LOG_DEBUG, "resolving package " + path)
+
+    prog_name := at.Get(a, prog).name
+    pkgscope := scope_new(s, SCOPE_GLOBAL, 0)
+    mut pgv := scope_at(s, pkgscope)
+    pgv.label = prog_name
+    pgv.lang = lp.Code(pack)
+    scope_put(s, pkgscope, pgv)
+    save_global := s.global
+    save_cur := s.cur
+    save_dir := s.dir
+    save_pkg := s.pkg
+    save_lang := s.lang
+    save_file := s.file
+    save_prog := s.program
+    save_pending := s.pending
+    save_in_pkg := s.in_pkg
+    save_gen_pkg := s.gen_pkg
+    save_self_type := s.self_type
+    save_cur_func := s.cur_func
+    save_expected := s.expected
+    save_loop_depth := s.loop_depth
+    save_switch_depth := s.switch_depth
+    save_each_n := s.each_n
+    save_arm_depth := s.match_arm_depth
+    save_yield_exp := s.match_yield_expected
+    save_yield_act := s.match_yield_active
+    save_gen_inst := s.in_generic_inst
+    save_in_derive := s.in_derive
+    save_requal := s.requal
+    save_lam := s.lam
+    save_yield := s.match_yield_collect
+    save_pre := s.pre_stmts
+    save_pre_ok := s.pre_ok
+    save_try_marks := s.try_marks
+    save_try_ctx := s.try_ctx
+    s.pre_stmts = Vector {} as Vector<int>
+    s.pre_ok = false
+    s.try_marks = 0
+    s.try_ctx = Vector {} as Vector<TryCtx>
+    s.gen_pkg = 0
+    s.self_type = TYPE_NONE
+    s.cur_func = 0
+    s.expected = TYPE_NONE
+    s.loop_depth = 0
+    s.switch_depth = 0
+    s.each_n = 0
+    s.match_arm_depth = 0
+    s.match_yield_expected = TYPE_NONE
+    s.match_yield_active = false
+    s.in_generic_inst = false
+    s.in_derive = false
+    s.requal = false
+    s.lam = Vector {} as Vector<LambdaCtx>
+    s.match_yield_collect = Vector {} as Vector<MatchYield>
+    s.in_pkg = true
+    s.global = pkgscope
+    s.cur = pkgscope
+    s.dir = dir_of(path)
+    s.pkg = str.Len(prog_name) > 0 ? prog_name : "main"
+    s.lang = lp.Code(pack)
+    s.file = path
+    s.program = prog
+    s.pending = Vector {} as Vector<int>
+    s.loading.push(path)
+    load_imports(s, a, prog)
+    err_prelude_scan(s, a, prog)
+    sema_collect(s, a, prog)
+    sema_check_pass(s, a, prog)
+    _lp0 := s.loading.pop()
+    s.in_pkg = save_in_pkg
+    s.global = save_global
+    s.cur = save_cur
+    s.dir = save_dir
+    s.pkg = save_pkg
+    s.lang = save_lang
+    s.file = save_file
+    s.program = save_prog
+    s.pending.free()
+    s.pending = save_pending
+    s.lam.free()
+    s.lam = save_lam
+    s.match_yield_collect.free()
+    s.match_yield_collect = save_yield
+    s.pre_stmts.free()
+    s.pre_stmts = save_pre
+    s.pre_ok = save_pre_ok
+    s.try_marks = save_try_marks
+    s.try_ctx.free()
+    s.try_ctx = save_try_ctx
+    s.gen_pkg = save_gen_pkg
+    s.self_type = save_self_type
+    s.cur_func = save_cur_func
+    s.expected = save_expected
+    s.loop_depth = save_loop_depth
+    s.switch_depth = save_switch_depth
+    s.each_n = save_each_n
+    s.match_arm_depth = save_arm_depth
+    s.match_yield_expected = save_yield_exp
+    s.match_yield_active = save_yield_act
+    s.in_generic_inst = save_gen_inst
+    s.in_derive = save_in_derive
+    s.requal = save_requal
+    pk := symbol_new(s, SYM_PACKAGE, prog_name)
+    mut pkv := sym_at(s, pk)
+    pkv.members = pkgscope
+    pkv.pkgname = str.Len(prog_name) > 0 ? prog_name : "main"
+    pkv.decl = prog
+    sym_put(s, pk, pkv)
+    s.pkg_cache_paths.push(path)
+    s.pkg_cache_syms.push(pk)
+    ret pk
+end
+
+func report_package_import(s &: Sema, sp: co.SrcSpan, spec: str, path: str, code: int):
+    mut msg := ""
+    if code == pm.RES_NO_PROJECT:
+        msg = co.Format2(i18.Tr("package '%s' can only be imported inside a project; run 'salam init', then: salam add %s"), co.ArgStr(spec), co.ArgStr(spec))
+    else code == pm.RES_NOT_DEPENDENCY:
+        msg = co.Format2(i18.Tr("package '%s' is not a dependency of this project; run: salam add %s"), co.ArgStr(spec), co.ArgStr(spec))
+    else code == pm.RES_NOT_FETCHED:
+        msg = co.Format1(i18.Tr("package '%s' is not downloaded yet; run: salam deps"), co.ArgStr(spec))
+    else code == pm.RES_NO_ENTRY:
+        msg = co.Format2(i18.Tr("package '%s' has no entry file (looked for '%s')"), co.ArgStr(spec), co.ArgStr(path))
+    else:
+        msg = co.Format1(i18.Tr("cannot read salam.toml in '%s'"), co.ArgStr(pm.ProjectRoot()))
+    end
+    serr(s, 8, sp, msg)
+end
+
+func load_import_file(s &: Sema, a &: at.Ast, imp: int):
+    n := at.Get(a, imp)
+    mut spec := n.name
+    if n.value_kind == tok.TV_STRING and str.Len(n.value_str) > 0:
+        spec = n.value_str
+    end
+    if str.Len(spec) == 0:
+        ret
+    end
+    sp := span_of(a, imp)
+    is_file := n.value_kind == tok.TV_STRING and not n.is_extern
+    if is_file and str.StartsWith(spec, "./"):
+        rest := str.Substr(spec, 2, str.Len(spec) - 2)
+        serr(
+            s, 8, sp, co.Format3(
+                i18.Tr("include path '%s' must not start with './'; write '%s' for a file next to this one, or '@/%s' from the project root"), co.ArgStr(spec), co.ArgStr(rest), co.ArgStr(rest)
+            )
+        )
+        ret
+    end
+    mut path := ""
+    if n.is_extern:
+        mut code := 0
+        path = pm.ResolveImport(s.dir, spec, code)
+        if code != pm.RES_OK:
+            report_package_import(s, sp, spec, path, code)
+            ret
+        end
+    else:
+        path = resolve_import_node(a, s.dir, imp, s.lang)
+    end
+    if is_file and not src.HasOverlay(path) and not os.Exists(path):
+        serr(
+            s, 8, sp, co.Format2(
+                i18.Tr("included file not found: '%s' (looked for '%s')"), co.ArgStr(spec), co.ArgStr(path)
+            )
+        )
+        ret
+    end
+    if is_file and not src.HasOverlay(path) and os.IsDir(path):
+        serr(
+            s, 8, sp, co.Format1(i18.Tr("'%s' is a directory, not a file to include"), co.ArgStr(spec))
+        )
+        ret
+    end
+    if str.Len(path) == 0:
+        serr(
+            s, 8, sp, co.Format1(
+                i18.Tr("standard library package '%s' not found"), co.ArgStr(spec)
+            )
+        )
+        ret
+    end
+    at.SetTypeStr(a, imp, path)
+    pk := load_package(s, a, path, imp)
+    if pk == 0:
+        ret
+    end
+    pkv := sym_at(s, pk)
+    local := norm_ident(import_local_name(a, imp, spec))
+    bind := symbol_new(s, SYM_PACKAGE, local)
+    mut bv := sym_at(s, bind)
+    bv.members = pkv.members
+    bv.pkgname = pkv.pkgname
+    bv.decl = pkv.decl
+    sym_put(s, bind, bv)
+    if scope_lookup_local(s, s.cur, local) != 0:
+        serr(
+            s, 1, sp, co.Format1(i18.Tr("duplicate import name '%s'"), co.ArgStr(local))
+        )
+    else:
+        _b1 := scope_define(s, s.cur, bind)
+    end
+    if str.Len(pkv.pkgname) > 0 and not str.Equals(pkv.pkgname, local) and scope_lookup_local(s, s.cur, pkv.pkgname) == 0:
+        mut pkgname_ok := lang0(s.lang) == 0 or lang0(s.lang) == 101
+        if not pkgname_ok and pkv.decl != 0:
+            want := alias_for_lang(at.Get(a, pkv.decl).aliases, s.lang)
+            pkgname_ok = str.Len(want) == 0 or str.Equals(want, pkv.pkgname)
+        end
+        if pkgname_ok:
+            cb := symbol_new(s, SYM_PACKAGE, pkv.pkgname)
+            mut cbv := sym_at(s, cb)
+            cbv.members = pkv.members
+            cbv.pkgname = pkv.pkgname
+            cbv.decl = pkv.decl
+            sym_put(s, cb, cbv)
+            _b2 := scope_define(s, s.cur, cb)
+        end
+    end
+    if pkv.decl != 0:
+        al := at.Get(a, pkv.decl).aliases
+        mut ai := 0
+        until ai + 1 < al.len():
+            if str.Equals(al.get(ai), s.lang):
+                alias := norm_ident(al.get(ai + 1))
+                if str.Len(alias) > 0 and not str.Equals(alias, local) and scope_lookup_local(s, s.cur, alias) == 0:
+                    b2 := symbol_new(s, SYM_PACKAGE, alias)
+                    mut b2v := sym_at(s, b2)
+                    b2v.members = pkv.members
+                    b2v.pkgname = pkv.pkgname
+                    b2v.decl = pkv.decl
+                    sym_put(s, b2, b2v)
+                    _b3 := scope_define(s, s.cur, b2)
+                end
+            end
+            ai += 2
+        end
+    end
+end
+
+func load_imports(s &: Sema, a &: at.Ast, program: int):
+    save_file := s.file
+    pl := at.Get(a, program).list
+    repeat pl.len() in i:
+        did := pl.get(i)
+        if at.KindOf(a, did) == at.AST_IMPORT:
+            _sfi := sema_use_decl_file(s, a, did)
+            load_import_file(s, a, did)
+        end
+    end
+    s.file = save_file
+end
+
+func std_package_path(name: str): str:
+    root := get_stdlib_root()
+    if str.Len(root) == 0 or str.Len(name) == 0 or str.IndexOf(name, " ") >= 0 or str.IndexOf(name, ".") >= 0:
+        ret ""
+    end
+    base := pth.PathJoin(root, "std")
+    if os.Exists(pth.PathJoin(pth.PathJoin(base, name), name + ".salam")):
+        ret name
+    end
+    mut dirs := os.ListDir(base)
+    defer dirs.free()
+    each d in dirs:
+        if os.Exists(pth.PathJoin(pth.PathJoin(pth.PathJoin(base, d), name), name + ".salam")):
+            ret d + "." + name
+        end
+    end
+    ret ""
+end
+
+func queue_import_fix(s &: Sema, a &: at.Ast, name: str):
+    if s.program == 0:
+        ret
+    end
+    path := std_package_path(name)
+    if str.Len(path) == 0:
+        ret
+    end
+    pl := at.Get(a, s.program).list
+    mut last := 0
+    mut first := 0
+    repeat 2 in pass:
+        repeat pl.len() in i:
+            nid := pl.get(i)
+            n := at.Get(a, nid)
+            same := pass == 0 ? str.Equals(n.src_file, s.file) : str.Len(n.src_file) == 0
+            if not same or n.synthetic:
+                continue
+            end
+            if first == 0:
+                first = nid
+            end
+            if n.kind == at.AST_IMPORT:
+                last = nid
+            end
+        end
+        if first != 0:
+            break
+        end
+    end
+    if first == 0:
+        ret
+    end
+    line := kw_spell(s, "", tok.TK_KW_IMPORT) + " " + path
+    mut f := lg.Fix {}
+    f.title = co.Format1(i18.Tr("Add '%s'"), co.ArgStr(line))
+    f.preferred = true
+    f.safe = true
+    if last != 0:
+        sp := span_of(a, last)
+        f.index = sp.begin.index as int
+        f.mode = lg.FIX_LINE_AFTER
+        f.text = line + "\n"
+    else:
+        sp := span_of(a, first)
+        f.index = sp.begin.index as int
+        f.mode = lg.FIX_LINE_BEFORE
+        f.text = line + "\n\n"
+    end
+    queue_fix(f)
+end
+
+func sema_check_unused_imports(s &: Sema, a &: at.Ast):
+    entry := lp.EntryFor(s.lang)
+    gsc := scope_at(s, s.global)
+    mut has_entry := false
+    repeat gsc.symbols.len() in i:
+        f := sym_at(s, gsc.symbols.get(i))
+        if f.kind == SYM_FUNC and str.Len(f.name) > 0 and (str.Equals(f.name, "main") or str.Equals(f.name, entry)):
+            has_entry = true
+            break
+        end
+    end
+    if not has_entry:
+        ret
+    end
+    save_file := s.file
+    pl := at.Get(a, s.program).list
+    repeat pl.len() in i2:
+        iid := pl.get(i2)
+        imp := at.Get(a, iid)
+        if imp.kind != at.AST_IMPORT:
+            continue
+        end
+        _sfui := sema_use_decl_file(s, a, iid)
+        spec := import_spec_of(imp)
+        if str.Len(spec) == 0:
+            continue
+        end
+        local := norm_ident(import_local_name(a, iid, spec))
+        if str.Len(local) == 0 or byte_at(local, 0) == 95:
+            continue
+        end
+        bind := scope_lookup_local(s, s.global, local)
+        if bind == 0:
+            continue
+        end
+        bv := sym_at(s, bind)
+        if bv.kind != SYM_PACKAGE or bv.used:
+            continue
+        end
+        mut rf := fix_at(span_of(a, iid))
+        rf.title = i18.Tr("Remove the import")
+        rf.mode = lg.FIX_LINES
+        rf.preferred = true
+        rf.safe = true
+        queue_fix(rf)
+        serr(
+            s, 82, span_of(a, iid), co.Format1(
+                i18.Tr("unused import '%s': none of its members are used; remove the import, or use the member you imported it for; starting the name with '_' hides this error but is not advised"), co.ArgStr(local)
+            )
+        )
+    end
+    s.file = save_file
+end
+
+func sema_load_err_prelude(s &: Sema, a &: at.Ast):
+    if s.prelude_err != 0 or s.prelude_err_tried or str.Equals(s.pkg, "core"):
+        ret
+    end
+    s.prelude_err_tried = true
+    path := resolve_import("", "core")
+    if str.Len(path) == 0:
+        ret
+    end
+    imp := scratch_import_node(a)
+    pk := load_package(s, a, path, imp)
+    if pk != 0:
+        s.prelude_err = sym_at(s, pk).members
+        s.prelude_err_pkg = pk
+        err_prelude_aliases(s, a)
+        s.throws_sym = scope_lookup_local(s, s.prelude_err, "Throws")
+    end
+end
+
+func sema_load_prelude(s &: Sema, a &: at.Ast):
+    if s.prelude != 0 or s.prelude_tried:
+        ret
+    end
+    s.prelude_tried = true
+    if str.Equals(s.pkg, "collections"):
+        ret
+    end
+    path := resolve_import("", "collections")
+    if str.Len(path) == 0:
+        ret
+    end
+    imp := scratch_import_node(a)
+    pk := load_package(s, a, path, imp)
+    if pk != 0:
+        s.prelude = sym_at(s, pk).members
+    end
+end

@@ -1,0 +1,458 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package dsp
+
+import audio
+import math
+import mem
+
+@en "Compressor"
+@fa "فشرده‌ساز"
+pub struct Compressor:
+    @en "threshold"
+    @fa "آستانه"
+    pub threshold: f64 = -20.0
+    @en "ratio"
+    @fa "نسبت"
+    pub ratio: f64 = 4.0
+    @en "attack"
+    @fa "حمله"
+    pub attack: f64 = 0.005
+    @en "release"
+    @fa "رهایش"
+    pub release: f64 = 0.1
+    @en "makeup"
+    @fa "جبران"
+    pub makeup: f64 = 0.0
+end
+
+func _coef(seconds: f64, rate: int): f64:
+    if seconds <= 0.0 or rate <= 0:
+        ret 0.0
+    end
+    ret math.Exp(-1.0 / (seconds * (rate as f64)))
+end
+
+func _lerp_at(src: f32*, frames: int, channels: int, pos: f64, ch: int): f64:
+    mut i0 := pos as int
+    if i0 < 0:
+        i0 = 0
+    end
+    if i0 > frames - 1:
+        i0 = frames - 1
+    end
+    mut i1 := i0 + 1
+    if i1 > frames - 1:
+        i1 = frames - 1
+    end
+    t := pos - (i0 as f64)
+    a := src[i0 * channels + ch] as f64
+    b := src[i1 * channels + ch] as f64
+    ret a + (b - a) * t
+end
+
+@en "Delay"
+@fa "تاخیر"
+pub func Delay(c &: audio.Clip, seconds: f64, mix: f64, feedback: f64):
+    if audio.IsEmpty(c) or seconds <= 0.0:
+        ret
+    end
+    lag := (seconds * (c.rate as f64)) as int
+    if lag <= 0 or lag >= c.frames:
+        ret
+    end
+    p := audio.Data(c)
+    mut f := lag
+    until f < c.frames:
+        mut ch := 0
+        until ch < c.channels:
+            at := f * c.channels + ch
+            back := (f - lag) * c.channels + ch
+            echo := (p[back] as f64) * feedback
+            p[at] = ((p[at] as f64) * (1.0 - mix) + echo * mix + (p[at] as f64) * mix * 0.0) as f32
+            ch += 1
+        end
+        f += 1
+    end
+end
+
+@en "Echo"
+@fa "پژواک"
+pub func Echo(c: audio.Clip, seconds: f64, repeats: int, decay: f64): audio.Clip:
+    if audio.IsEmpty(c) or seconds <= 0.0 or repeats <= 0:
+        ret audio.Clone(c)
+    end
+    lag := (seconds * (c.rate as f64)) as int
+    if lag <= 0:
+        ret audio.Clone(c)
+    end
+    mut out := audio.New(c.rate, c.channels, c.frames + lag * repeats)
+    if out.samples == null:
+        ret out
+    end
+    out.bits = c.bits
+    src := audio.Data(c)
+    dst := audio.Data(out)
+    mut r := 0
+    until r < repeats + 1:
+        gain := math.Pow(decay, r as f64)
+        offset := lag * r
+        mut f := 0
+        until f < c.frames:
+            mut ch := 0
+            until ch < c.channels:
+                at := (f + offset) * out.channels + ch
+                dst[at] = ((dst[at] as f64) + (src[f * c.channels + ch] as f64) * gain) as f32
+                ch += 1
+            end
+            f += 1
+        end
+        r += 1
+    end
+    ret out
+end
+
+@en "Reverb"
+@fa "بازآوا"
+pub func Reverb(c: audio.Clip, room: f64, mix: f64): audio.Clip:
+    if audio.IsEmpty(c):
+        ret audio.Clone(c)
+    end
+    mut out := audio.Clone(c)
+    if out.samples == null:
+        ret out
+    end
+    mut size := room
+    if size < 0.0:
+        size = 0.0
+    end
+    if size > 1.0:
+        size = 1.0
+    end
+    combs := [1557, 1617, 1491, 1422]
+    feed := 0.7 + 0.28 * size
+    p := audio.Data(out)
+    src := audio.Data(c)
+    mut k := 0
+    until k < 4:
+        lag := combs[k] * c.rate / 44100
+        if lag > 0 and lag < c.frames:
+            mut f := lag
+            until f < c.frames:
+                mut ch := 0
+                until ch < c.channels:
+                    at := f * c.channels + ch
+                    back := (f - lag) * c.channels + ch
+                    p[at] = ((p[at] as f64) + (p[back] as f64) * feed * 0.25) as f32
+                    ch += 1
+                end
+                f += 1
+            end
+        end
+        k += 1
+    end
+    n := audio.SampleCount(out)
+    mut i := 0
+    until i < n:
+        p[i] = ((src[i] as f64) * (1.0 - mix) + (p[i] as f64) * mix) as f32
+        i += 1
+    end
+    audio.Clamp(out)
+    ret out
+end
+
+@en "Chorus"
+@fa "همخوان"
+pub func Chorus(c: audio.Clip, depth: f64, speed: f64, mix: f64): audio.Clip:
+    if audio.IsEmpty(c):
+        ret audio.Clone(c)
+    end
+    out := audio.Clone(c)
+    if out.samples == null:
+        ret out
+    end
+    src := audio.Data(c)
+    dst := audio.Data(out)
+    base := 0.02 * (c.rate as f64)
+    swing := depth * 0.01 * (c.rate as f64)
+    mut f := 0
+    until f < c.frames:
+        t := (f as f64) / (c.rate as f64)
+        lag := base + swing * math.Sin(2.0 * math.PI * speed * t)
+        pos := (f as f64) - lag
+        mut ch := 0
+        until ch < c.channels:
+            at := f * c.channels + ch
+            mut wet := 0.0
+            if pos >= 0.0:
+                wet = _lerp_at(src, c.frames, c.channels, pos, ch)
+            end
+            dst[at] = ((src[at] as f64) * (1.0 - mix) + wet * mix) as f32
+            ch += 1
+        end
+        f += 1
+    end
+    ret out
+end
+
+@en "Flanger"
+@fa "فلنجر"
+pub func Flanger(c: audio.Clip, depth: f64, speed: f64, mix: f64): audio.Clip:
+    if audio.IsEmpty(c):
+        ret audio.Clone(c)
+    end
+    out := audio.Clone(c)
+    if out.samples == null:
+        ret out
+    end
+    src := audio.Data(c)
+    dst := audio.Data(out)
+    swing := depth * 0.003 * (c.rate as f64)
+    mut f := 0
+    until f < c.frames:
+        t := (f as f64) / (c.rate as f64)
+        lag := swing * (0.5 + 0.5 * math.Sin(2.0 * math.PI * speed * t))
+        pos := (f as f64) - lag
+        mut ch := 0
+        until ch < c.channels:
+            at := f * c.channels + ch
+            mut wet := 0.0
+            if pos >= 0.0:
+                wet = _lerp_at(src, c.frames, c.channels, pos, ch)
+            end
+            dst[at] = ((src[at] as f64) * (1.0 - mix) + wet * mix) as f32
+            ch += 1
+        end
+        f += 1
+    end
+    ret out
+end
+
+@en "Tremolo"
+@fa "لرزش دامنه"
+pub func Tremolo(c &: audio.Clip, speed: f64, depth: f64):
+    if audio.IsEmpty(c):
+        ret
+    end
+    p := audio.Data(c)
+    mut f := 0
+    until f < c.frames:
+        t := (f as f64) / (c.rate as f64)
+        g := 1.0 - depth * 0.5 * (1.0 - math.Cos(2.0 * math.PI * speed * t))
+        mut ch := 0
+        until ch < c.channels:
+            at := f * c.channels + ch
+            p[at] = ((p[at] as f64) * g) as f32
+            ch += 1
+        end
+        f += 1
+    end
+end
+
+@en "CompressorProcess"
+@fa "پردازش فشرده‌ساز"
+pub func CompressorProcess(k: Compressor, c &: audio.Clip):
+    if audio.IsEmpty(c):
+        ret
+    end
+    limit_gain := audio.DbToGain(k.threshold)
+    att := _coef(k.attack, c.rate)
+    rel := _coef(k.release, c.rate)
+    makeup := audio.DbToGain(k.makeup)
+    mut env := 0.0
+    p := audio.Data(c)
+    mut f := 0
+    until f < c.frames:
+        mut peak := 0.0
+        mut ch := 0
+        until ch < c.channels:
+            v := math.Abs(p[f * c.channels + ch] as f64)
+            if v > peak:
+                peak = v
+            end
+            ch += 1
+        end
+        if peak > env:
+            env = att * env + (1.0 - att) * peak
+        else:
+            env = rel * env + (1.0 - rel) * peak
+        end
+        mut gain := 1.0
+        if env > limit_gain and env > 0.0 and k.ratio > 0.0:
+            over := audio.GainToDb(env) - k.threshold
+            want := k.threshold + over / k.ratio
+            gain = audio.DbToGain(want) / env
+        end
+        mut c2 := 0
+        until c2 < c.channels:
+            at := f * c.channels + c2
+            p[at] = ((p[at] as f64) * gain * makeup) as f32
+            c2 += 1
+        end
+        f += 1
+    end
+end
+
+@en "LimiterProcess"
+@fa "پردازش محدودساز"
+pub func LimiterProcess(c &: audio.Clip, ceiling_db: f64):
+    if audio.IsEmpty(c):
+        ret
+    end
+    k := Compressor { threshold = ceiling_db, ratio = 50.0, attack = 0.001, release = 0.05 }
+    CompressorProcess(k, c)
+    limit := audio.DbToGain(ceiling_db)
+    p := audio.Data(c)
+    n := audio.SampleCount(c)
+    mut i := 0
+    until i < n:
+        v := p[i] as f64
+        if v > limit:
+            p[i] = limit as f32
+        else v < 0.0 - limit:
+            p[i] = (0.0 - limit) as f32
+        end
+        i += 1
+    end
+end
+
+@en "GateProcess"
+@fa "پردازش دروازه"
+pub func GateProcess(c &: audio.Clip, threshold_db: f64, release: f64):
+    if audio.IsEmpty(c):
+        ret
+    end
+    limit_gain := audio.DbToGain(threshold_db)
+    rel := _coef(release, c.rate)
+    mut env := 0.0
+    p := audio.Data(c)
+    mut f := 0
+    until f < c.frames:
+        mut peak := 0.0
+        mut ch := 0
+        until ch < c.channels:
+            v := math.Abs(p[f * c.channels + ch] as f64)
+            if v > peak:
+                peak = v
+            end
+            ch += 1
+        end
+        if peak > env:
+            env = peak
+        else:
+            env = rel * env + (1.0 - rel) * peak
+        end
+        g := env >= limit_gain ? 1.0 : 0.0
+        mut c2 := 0
+        until c2 < c.channels:
+            at := f * c.channels + c2
+            p[at] = ((p[at] as f64) * g) as f32
+            c2 += 1
+        end
+        f += 1
+    end
+end
+
+@en "TimeStretch"
+@fa "کشش زمانی"
+pub func TimeStretch(c: audio.Clip, factor: f64): audio.Clip:
+    if audio.IsEmpty(c) or factor <= 0.0:
+        ret audio.Clip {}
+    end
+    frames := ((c.frames as f64) * factor) as int
+    if frames <= 0:
+        ret audio.Clip {}
+    end
+    mut out := audio.New(c.rate, c.channels, frames)
+    if out.samples == null:
+        ret out
+    end
+    out.bits = c.bits
+    win := 1024
+    hop_out := win / 2
+    mut hop_in := ((hop_out as f64) / factor) as int
+    if hop_in < 1:
+        hop_in = 1
+    end
+    src := audio.Data(c)
+    dst := audio.Data(out)
+    norm := mem.Allocate((frames * 8) as u64) as f64*
+    if norm == null:
+        ret out
+    end
+    mut i := 0
+    until i < frames:
+        norm[i] = 0.0
+        i += 1
+    end
+    mut at_out := 0
+    mut at_in := 0
+    until at_out < frames:
+        mut k := 0
+        until k < win:
+            si := at_in + k
+            di := at_out + k
+            if si >= c.frames or di >= frames:
+                break
+            end
+            w := WindowValue(WindowHann, k, win, 0.0)
+            mut ch := 0
+            until ch < c.channels:
+                dst[di * c.channels + ch] = ((dst[di * c.channels + ch] as f64) + (src[si * c.channels + ch] as f64) * w) as f32
+                ch += 1
+            end
+            norm[di] += w
+            k += 1
+        end
+        at_out += hop_out
+        at_in += hop_in
+        if at_in >= c.frames:
+            break
+        end
+    end
+    mut f := 0
+    until f < frames:
+        g := norm[f] > 0.0001 ? 1.0 / norm[f] : 0.0
+        mut ch := 0
+        until ch < c.channels:
+            at := f * c.channels + ch
+            dst[at] = ((dst[at] as f64) * g) as f32
+            ch += 1
+        end
+        f += 1
+    end
+    mem.Free(norm as void*)
+    ret out
+end
+
+@en "PitchShift"
+@fa "جابجایی زیروبمی"
+pub func PitchShift(c: audio.Clip, semitones: f64): audio.Clip:
+    if audio.IsEmpty(c):
+        ret audio.Clip {}
+    end
+    ratio := math.Pow(2.0, semitones / 12.0)
+    mut stretched := TimeStretch(c, ratio)
+    if audio.IsEmpty(stretched):
+        ret audio.Clip {}
+    end
+    mut out := ResampleSinc(stretched, ((c.rate as f64) / ratio) as int, 16)
+    audio.Free(stretched)
+    if audio.IsEmpty(out):
+        ret out
+    end
+    out.rate = c.rate
+    ret out
+end

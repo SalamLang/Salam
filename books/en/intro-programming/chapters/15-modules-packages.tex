@@ -1,0 +1,288 @@
+\chapter{Modules and Packages}%
+\label{ch:modules-packages}
+
+A program that outgrows a single file needs structure. \textbf{Modules} and
+\textbf{packages} are how Salam splits a large program into pieces, controls what
+each piece exposes to the others, and pulls in the standard library. You have been
+quietly using this system every time you wrote \code{import str}; now we look at
+it properly.
+
+\section{Importing the standard library}
+
+The standard library is organised into modules, each a self-contained bundle of
+related functions: \code{math} for numbers, \code{str} for strings, \code{io} for
+input and output, and many more. To use one, \code{import} it by name and call its
+functions with the module name as a prefix:
+
+\begin{salamen}
+import math
+
+func main:
+    println math.Sqrt(144.0)
+    println math.MaxI(7, 3)
+end
+\end{salamen}
+
+\begin{progout}
+12
+7
+\end{progout}
+
+The prefix \code{math.} is called \textbf{qualification}, and it does two
+useful things. It tells the reader exactly where \code{Sqrt} comes from, and it
+keeps names from colliding: \code{math.Max} and your own \code{max} can coexist
+without confusion.
+
+\begin{note}
+A handful of operations need no import at all: \code{print}, \code{println}, and
+\code{len} are built into the language and are always available. Everything else
+in the standard library lives in a module you import.
+\end{note}
+
+\section{Importing several modules}
+
+Write one \code{import} per module, each on its own line:
+
+\begin{salamen}
+import math
+import str
+
+func main:
+    println str.Upper("salam")
+    println math.Gcd(12, 18)
+end
+\end{salamen}
+
+\begin{progout}
+SALAM
+6
+\end{progout}
+
+Import only what you use: an \code{import} whose module is never called is a
+compile error, just like an unused variable.
+
+\section{Libraries and your own files}
+
+Salam keeps two kinds of loading apart, each with its own keyword:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \code{import} brings in a \textbf{library} by name, with no quotes:
+        \code{import math}, \code{import net.http}. When you write
+        \code{import math}, Salam looks for the module in the standard library,
+        specifically the file \code{std/math/math.salam}; a nested name such as
+        \code{net.http} resolves to \code{std/net/http/http.salam}.
+  \item \code{include} brings in one of \textbf{your own files} by its path, in
+        quotes: \code{include "helpers.salam"}. This is how you split your own
+        program across files, the subject of the next section.
+\end{itemize}
+
+The two never mix: \code{import "helpers.salam"} is an error that tells you to use
+\code{include}, and \code{include math} is an error too, because \code{include}
+always takes a path.
+
+An \code{include} path is written one of two ways:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{Relative to the current file}: \code{include "helpers.salam"} or
+        \code{include "../shared/util.salam"}.
+  \item \textbf{From the project root}, with \code{@/} in front. The project
+        root is the folder of the program's entry file, so a line such as
+        \code{include "@/shared/util.salam"} works from any file, however
+        deeply it is nested.
+\end{itemize}
+
+A path may not start with \code{./}, so write \code{"helpers.salam"}
+rather than \code{"./helpers.salam"}. The compiler checks every \code{include} while it
+builds: a path that does not exist, names a folder, or cannot be read stops the
+build with an error that shows the path it looked for.
+
+Order matters at the top of a file. The \code{package} line (if any) comes
+first, then every \code{import}, then every \code{include}, and only then your
+constants, types and functions. An \code{import} written below an
+\code{include} is error \code{E108}, whose message tells you to move it up.
+
+\section{Aliasing an include}
+
+Sometimes a file's package name is long, or clashes with a name you want to use
+yourself. Give the include a shorter \textbf{alias} by writing it before the path:
+
+\begin{salamen}
+include geo "geometry.salam"
+
+func main:
+    println geo.area_of_circle(2.0)
+end
+\end{salamen}
+
+(The file \code{geometry.salam} itself appears later in this chapter.) Now the \code{geometry} package is reached as \code{geo}. Aliases are a matter of
+convenience and clarity; use them when they make the code read better, and leave
+them off otherwise.
+
+\section{Writing your own modules}
+
+A module is just a \code{.salam} file with definitions in it. To split your
+program across files, put related functions and types in their own file and
+\code{include} it where you need them. Two pieces of machinery make this work: the \code{package}
+declaration and the \code{pub} keyword.
+
+\subsection{Declaring a package}
+
+Every file belongs to a \textbf{package}, named at the top with the \code{package}
+keyword. Your program's entry point lives in package \code{main}:
+
+\begin{salamen}
+package main
+
+func main:
+    println "Hello from package main"
+end
+\end{salamen}
+
+\begin{progout}
+Hello from package main
+\end{progout}
+
+A file with no \code{package} line belongs to \code{main} by default, which is
+why the small single-file programs earlier in this book never needed one. As soon
+as you split code across files, naming the package makes the structure explicit.
+
+\subsection{Exposing names with \texttt{pub}}
+
+By default, a top-level function, struct, or type is \textbf{private} to its
+package: files in other packages cannot see it. To make something visible to code that imports
+your module, mark it \code{pub} (short for \emph{public}):
+
+\begin{salamen}
+// file: geometry.salam
+package geometry
+
+func square(x: f64): f64:          // no 'pub': private to the package
+    ret x * x
+end
+
+pub func area_of_circle(r: f64): f64:
+    ret 3.14159 * square(r)
+end
+\end{salamen}
+
+Two rules shape this file. A private function must be used somewhere in its
+package (an unused one is a compile error), and private functions come before the
+first \code{pub} one, so the public part of a file is always at its end
+(error \code{E088} otherwise). Another file can then include
+\code{geometry.salam} and use its public functions, while \code{square} stays
+hidden:
+
+\begin{salamen}
+// file: main.salam
+package main
+include "geometry.salam"
+
+func main:
+    println geometry.area_of_circle(2.0)
+end
+\end{salamen}
+
+\begin{progout}
+12.56636
+\end{progout}
+
+The package's functions are reached through its name, \code{geometry}. Trying
+to call \code{geometry.square(2.0)} from \code{main.salam} does not compile:
+the error says \code{'square' is not exported by package 'geometry' (mark it
+\textquotesingle{}pub\textquotesingle{})}.
+
+This is \textbf{encapsulation}: a module presents a small, deliberate public
+surface (the things it promises to support) while keeping its internal
+helpers private and free to change. The same \code{pub} keyword marks the public
+parts of the standard library itself; open any \code{std} module and you will see
+\code{pub func} and \code{pub struct} on exactly the names you are meant to use.
+
+\begin{tip}
+Make things \code{pub} sparingly. The smaller a module's public surface, the
+easier it is to use correctly and the freer you are to rewrite its insides without
+breaking anyone. Start everything private; promote a name to \code{pub} only when
+another file genuinely needs it.
+\end{tip}
+
+\section{A tour of the standard library's layout}
+
+It helps to know roughly what is available before you need it. The standard
+library is a collection of modules under \code{std}, each in its own folder. A
+selection:
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Module} & \textbf{Purpose} \\
+\midrule
+\code{io}, \code{console} & printing and reading input, files \\
+\code{fmt}    & formatting values into strings \\
+\code{math}   & numeric functions and constants \\
+\code{str}    & string operations \\
+\code{rand}   & random numbers \\
+\code{time}   & dates, timestamps, sleeping \\
+\code{collections} & generic containers (\code{Vector}, \code{HashMap}, \dots) \\
+\code{os}, \code{fs} & the operating system and file system \\
+\code{encoding.json}, \code{encoding.csv} & data formats \\
+\code{regex}  & regular expressions \\
+\code{option}, \code{result} & the \code{Option} and \code{Result} types \\
+\code{mem}    & manual memory management \\
+\code{sync}, \code{thread} & concurrency primitives \\
+\code{testing} & assertions for unit tests \\
+\code{net}, \code{net.tcp}, \code{net.http} & networking \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The next two chapters take a proper tour: Chapter~16 covers the everyday modules
+(\code{io}, \code{fmt}, \code{math}, \code{str}, \code{rand}, \code{time}), and
+Chapter~17 covers data structures and the world outside your program
+(\code{collections}, \code{os}, \code{fs}, \code{encoding.json}, and friends).
+
+\begin{deep}[In Depth: qualified names in the compiled program]
+Qualification is not only for readability; it also guarantees that names from
+different modules never collide in the compiled program. When \code{math.Sqrt} is
+compiled, the compiler gives it an internal name that includes its package, so it
+cannot clash with a \code{Sqrt} from any other module or with your own code. The
+package system, in other words, gives you human-friendly short names at the
+source level and collision-proof unique names underneath: the best of both
+worlds, with no run-time cost.
+\end{deep}
+
+\section{Chapter summary}
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \code{import name} brings in a standard-library module; call its
+        functions qualified, as \code{name.func(...)}.
+  \item Write one \code{import} per library. Give an \code{include} an
+        \code{alias} by writing the alias before its path.
+  \item \code{import math} resolves to \code{std/math/math.salam}. Your own
+        files come in with \code{include "file.salam"}, relative to the current
+        file, or \code{include "@/path/file.salam"} from the project root.
+  \item A path never starts with \code{./}, and every \code{import} comes
+        before every \code{include}.
+  \item Every file has a \code{package}; the entry point is in \code{main} (the
+        default when omitted).
+  \item Top-level names are private to their package unless marked \code{pub}.
+  \item \code{print}, \code{println}, and \code{len} are built in and need no
+        import.
+\end{itemize}
+
+\section{Exercises}
+
+\exercise Write a program that imports \code{math} and \code{str} and prints
+the square root of 2 alongside the word
+\code{"root"} in uppercase.
+
+\exercise Split a program into \code{main.salam} and \code{words.salam}, include
+\code{words.salam} under the alias \code{w}, and use it to reverse a word.
+
+\exercise Sketch (on paper) a two-file program: a \code{shapes.salam} module with
+a \code{pub} function and a private helper, and a \code{main.salam} that includes
+it. Mark which names are visible where.
+
+\exercise Open one of the real \code{std} modules in the Salam source and list
+five \code{pub} functions it offers. Try calling two of them.
+
+\exercise Explain in a comment why qualification (\code{math.Max}) lets you keep
+your own function called \code{max} without conflict.

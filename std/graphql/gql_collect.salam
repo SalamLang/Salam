@@ -1,0 +1,170 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import encoding.value
+
+@en "FieldGroup"
+@fa "گروه فیلد"
+pub struct FieldGroup:
+    @en "key"
+    @fa "کلید"
+    pub key: str = ""
+    @en "sels"
+    @fa "گزینش‌ها"
+    pub sels: Vector<int> = Vector {}
+end
+
+@en "FieldGroups"
+@fa "گروه‌های فیلد"
+pub struct FieldGroups:
+    @en "items"
+    @fa "گروه‌ها"
+    pub items: Vector<FieldGroup> = Vector {}
+end
+
+func _cl_group_index(gs: FieldGroups, key: str): int:
+    mut i := 0
+    until i < gs.items.len():
+        if gs.items.get(i).key == key: ret i end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func _cl_add(gs &: FieldGroups, key: str, selId: int):
+    idx := _cl_group_index(gs, key)
+    if idx >= 0:
+        mut g := gs.items.get(idx)
+        g.sels.push(selId)
+        gs.items.set(idx, g)
+        ret
+    end
+    mut g := FieldGroup {}
+    g.key = key
+    g.sels.push(selId)
+    gs.items.push(g)
+end
+
+func _cl_visited(names: Vector<str>, name: str): bool:
+    mut i := 0
+    until i < names.len():
+        if names.get(i) == name: ret true end
+        i += 1
+    end
+    ret false
+end
+
+func _cl_directive_if(sch: Schema, doc: Document, d: AstDirective, vars: value.Value, fallback: bool): bool:
+    mut i := 0
+    until i < d.args.len():
+        a := d.args.get(i)
+        if a.name == "if":
+            r := LiteralToValue(sch, doc, a.value, vars)
+            if r.ok and value.IsBool(r.value): ret value.AsBool(r.value) end
+            ret fallback
+        end
+        i += 1
+    end
+    ret fallback
+end
+
+func _cl_should_include(sch: Schema, doc: Document, ds: Vector<AstDirective>, vars: value.Value): bool:
+    mut keep := true
+    mut i := 0
+    until i < ds.len():
+        d := ds.get(i)
+        if d.name == "skip":
+            if _cl_directive_if(sch, doc, d, vars, false): ret false end
+        else d.name == "include":
+            if not _cl_directive_if(sch, doc, d, vars, true): keep = false end
+        end
+        i += 1
+    end
+    ret keep
+end
+
+func _cl_fragment_applies(sch: Schema, condition: str, objectType: str, hasCondition: bool): bool:
+    if not hasCondition: ret true end
+    ret IsPossibleType(sch, condition, objectType)
+end
+
+func _cl_visit_spread(sch: Schema, doc: Document, s: AstSelection, objectType: str, vars: value.Value, gs &: FieldGroups, visited &: Vector<str>):
+    if _cl_visited(visited, s.name): ret end
+    fragIdx := FindFragment(doc, s.name)
+    if fragIdx < 0: ret end
+    frag := doc.frags.get(fragIdx)
+    if not IsPossibleType(sch, frag.typeCondition, objectType): ret end
+    visited.push(s.name)
+    _cl_walk(sch, doc, frag.selections, objectType, vars, gs, visited)
+end
+
+func _cl_walk(sch: Schema, doc: Document, sels: Vector<int>, objectType: str, vars: value.Value, gs &: FieldGroups, visited &: Vector<str>):
+    mut i := 0
+    until i < sels.len():
+        selId := sels.get(i)
+        s := SelectionAt(doc, selId)
+        i += 1
+        if not _cl_should_include(sch, doc, s.directives, vars): continue end
+        if s.kind == SEL_FIELD:
+            _cl_add(gs, ResponseKey(s), selId)
+        else s.kind == SEL_FRAGMENT_SPREAD:
+            _cl_visit_spread(sch, doc, s, objectType, vars, gs, visited)
+        else:
+            if _cl_fragment_applies(sch, s.typeCondition, objectType, s.hasTypeCondition):
+                _cl_walk(sch, doc, s.selections, objectType, vars, gs, visited)
+            end
+        end
+    end
+end
+
+@en "CollectFields"
+@fa "گردآوری فیلدها"
+pub func CollectFields(sch: Schema, doc: Document, sels: Vector<int>, objectType: str, vars: value.Value): FieldGroups:
+    mut gs := FieldGroups {}
+    mut visited := Vector {} as Vector<str>
+    defer visited.free()
+    _cl_walk(sch, doc, sels, objectType, vars, gs, visited)
+    ret gs
+end
+
+@en "MergeSelections"
+@fa "ادغام گزینش‌ها"
+pub func MergeSelections(doc: Document, g: FieldGroup): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    mut i := 0
+    until i < g.sels.len():
+        s := SelectionAt(doc, g.sels.get(i))
+        mut j := 0
+        until j < s.selections.len():
+            out.push(s.selections.get(j))
+            j += 1
+        end
+        i += 1
+    end
+    ret out
+end
+
+@en "FreeFieldGroups"
+@fa "آزادسازی گروه‌های فیلد"
+pub func FreeFieldGroups(gs &: FieldGroups):
+    mut i := 0
+    until i < gs.items.len():
+        mut g := gs.items.get(i)
+        g.sels.free()
+        i += 1
+    end
+    gs.items.free()
+end

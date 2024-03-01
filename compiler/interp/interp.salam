@@ -1,0 +1,365 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package interp
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include lg "../logger.salam"
+
+extern:
+    func getenv(name: str): void*
+    func malloc(size: u64): void*
+    func calloc(count: u64, size: u64): void*
+    func realloc(ptr: void*, size: u64): void*
+    func free(ptr: void*)
+    func memset(ptr: void*, value: int, n: u64): void*
+    func memcpy(dst: void*, src: void*, n: u64): void*
+    func memmove(dst: void*, src: void*, n: u64): void*
+    func remove(path: str): int
+    func rename(old: str, new_path: str): int
+    func fopen(path: str, mode: str): void*
+    func fclose(fp: void*): int
+    func fflush(fp: void*): int
+    func fseek(fp: void*, off: int, whence: int): int
+    func ftell(fp: void*): int
+    func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fgetc(stream: void*): int
+    func fgets(buf: void*, n: int, fp: void*): void*
+    noret func exit(code: int)
+    noret func abort()
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _mkdir(path: str): int
+        func _rmdir(path: str): int
+        func _chdir(path: str): int
+        func GetCurrentDirectoryA(sz: int, buf: void*): int
+        func GetFileAttributesA(path: str): int
+        func _fseeki64(fp: void*, off: i64, whence: int): int
+        func FindFirstFileA(pat: str, data: void*): void*
+        func FindNextFileA(h: void*, data: void*): int
+        func FindClose(h: void*): int
+        func GetSystemTimeAsFileTime(ft: void*)
+        func _getpid(): int
+        func _popen(cmd: str, mode: str): void*
+        func _pclose(fp: void*): int
+        func MultiByteToWideChar(codepage: u32, flags: u32, src: str, srclen: i32, dst: void*, dstlen: i32): i32
+        func WideCharToMultiByte(codepage: u32, flags: u32, src: void*, srclen: i32, dst: void*, dstlen: i32, def: void*, used: void*): i32
+    end
+else:
+    extern:
+        func mkdir(path: str, mode: int): int
+        func rmdir(path: str): int
+        func chdir(path: str): int
+        func access(path: str, mode: int): int
+        func getcwd(buf: void*, sz: int): void*
+        func opendir(path: str): void*
+        func readdir(d: void*): void*
+        func closedir(d: void*): int
+        func fseeko(fp: void*, off: i64, whence: int): int
+        func clock_gettime(clock_id: int, ts: void*): int
+        func popen(cmd: str, mode: str): void*
+        func pclose(fp: void*): int
+        func getpid(): int
+        func system(cmd: str): int
+    end
+end
+
+pub const ITY_NONE := 0
+pub const ITY_I8 := 1
+pub const ITY_I16 := 2
+pub const ITY_I32 := 3
+pub const ITY_I64 := 4
+pub const ITY_U8 := 5
+pub const ITY_U16 := 6
+pub const ITY_U32 := 7
+pub const ITY_U64 := 8
+
+pub const VAL_NULL := 0
+pub const VAL_INT := 1
+pub const VAL_CHAR := 2
+pub const VAL_FLOAT := 3
+pub const VAL_BOOL := 4
+pub const VAL_STR := 5
+pub const VAL_ARRAY := 6
+pub const VAL_MAP := 7
+pub const VAL_MAPITER := 8
+pub const VAL_STRUCT := 9
+pub const VAL_FUNC := 10
+pub const VAL_MODULE := 11
+pub const VAL_PTR := 12
+pub const VAL_VARIANT := 13
+
+pub const PTR_I8 := 0
+pub const PTR_U8 := 1
+pub const PTR_I16 := 2
+pub const PTR_U16 := 3
+pub const PTR_I32 := 4
+pub const PTR_U32 := 5
+pub const PTR_I64 := 6
+pub const PTR_U64 := 7
+pub const PTR_F32 := 8
+pub const PTR_F64 := 9
+pub const PTR_BOOL := 10
+pub const PTR_CHAR := 11
+pub const PTR_STR := 12
+pub const PTR_OPAQUE := 13
+pub const PTR_STRUCT := 14
+
+pub const FLOW_NORMAL := 0
+pub const FLOW_RETURN := 1
+pub const FLOW_BREAK := 2
+pub const FLOW_CONTINUE := 3
+pub const FLOW_MATCH_RET := 4
+
+pub const ILOC_VAR := 0
+pub const ILOC_FIELD := 1
+pub const ILOC_ARR := 2
+pub const ILOC_PTR := 3
+pub const ILOC_MEM := 4
+pub const ILOC_OPIDX := 5
+
+pub const INTERP_MAX_DEPTH := 1000
+
+pub const INTERP_BIG_STACK := 536870912
+
+pub const INTERP_SMALL_STACK := 67108864
+
+pub const INTERP_STACK_PER_FRAME := 16384
+
+const K_IP_INTR_COUNT := 22
+
+mut k_ip_intrinsics := [
+    "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "log", "log10", "exp", "floor", "ceil", "fabs", "fmod", "pow", "strlen", "strcmp", "strtol", "strtod", "salam_input", "time"
+]
+
+pub type EnvId = int
+pub type ArrId = int
+pub type MapId = int
+pub type IterId = int
+pub type StructId = int
+pub type ClosId = int
+pub type VariantId = int
+pub type ModId = int
+
+pub struct Value:
+    pub kind: int = VAL_NULL
+    pub ity: int = ITY_NONE
+    pub i: i64 = 0 as i64
+    pub f: f64 = 0.0
+    pub b: bool = false
+    pub s: str = ""
+    pub id: int = 0
+    pub pa: i64 = 0 as i64
+    pub pe: int = 0
+end
+
+pub struct Arr:
+    pub items: Vector<Value> = Vector {}
+    pub cap: int = 0
+    pub is_view: bool = false
+    pub base: ArrId = 0
+    pub off: int = 0
+    pub vlen: int = 0
+    pub native_addr: i64 = 0 as i64
+    pub native_elem: int = 0
+end
+
+pub struct SMap:
+    pub keys: Vector<Value> = Vector {}
+    pub vals: Vector<Value> = Vector {}
+    pub used: Vector<bool> = Vector {}
+    pub count: int = 0
+    pub cap: int = 0
+    pub index: Vector<int> = Vector {}
+    pub index_cap: int = 0
+    pub index_used: int = 0
+    pub free_hint: int = 0
+end
+
+pub struct SMapIter:
+    pub map: MapId = 0
+    pub idx: int = 0
+end
+
+pub struct SStruct:
+    pub type_name: str = ""
+    pub def: int = 0
+    pub fnames: Vector<str> = Vector {}
+    pub fvals: Vector<Value> = Vector {}
+    pub is_box: bool = false
+end
+
+pub struct Closure:
+    pub fn: int = 0
+    pub env: EnvId = 0
+end
+
+pub struct SVariant:
+    pub tag: int = 0
+    pub has_boxed: bool = false
+    pub boxed: Value = Value {}
+end
+
+pub struct EnvMark:
+    pub envs: int = 0
+    pub closures: int = 0
+    pub defs: int = 0
+end
+
+pub struct Env:
+    pub parent: EnvId = 0
+    pub names: Vector<str> = Vector {}
+    pub vals: Vector<Value> = Vector {}
+    pub indexed: bool = false
+    pub tab: Itab = Itab {}
+end
+
+pub struct Module:
+    pub name: str = ""
+    pub env: EnvId = 0
+end
+
+pub struct FuncList:
+    pub nodes: Vector<int> = Vector {}
+end
+
+pub struct Itab:
+    pub keys: Vector<str> = Vector {}
+    pub vals: Vector<int> = Vector {}
+    pub cap: int = 0
+    pub count: int = 0
+end
+
+pub struct Ptab:
+    pub keys: Vector<int> = Vector {}
+    pub vals: Vector<int> = Vector {}
+    pub cap: int = 0
+    pub count: int = 0
+end
+
+pub struct Frame:
+    pub defer_stmts: Vector<int> = Vector {}
+    pub defer_envs: Vector<int> = Vector {}
+end
+
+pub struct Loc:
+    pub kind: int = ILOC_VAR
+    pub target: int = 0
+    pub env: EnvId = 0
+    pub slot: int = 0
+    pub obj: Value = Value {}
+    pub field_idx: int = 0
+    pub arr: ArrId = 0
+    pub idx: i64 = 0 as i64
+    pub pa: i64 = 0 as i64
+    pub pe: int = 0
+    pub pts: str = ""
+    pub mem: i64 = 0 as i64
+    pub mem_ts: str = ""
+    pub key: Value = Value {}
+    pub get_m: int = 0
+    pub set_m: int = 0
+end
+
+pub struct Options:
+    pub capture: bool = false
+    pub has_input: bool = false
+    pub input_data: str = ""
+    pub lang: str = "en"
+    pub timeout_ms: int = 0
+    pub args: Vector<str> = Vector {}
+end
+
+pub struct Interp:
+    pub max_depth: int = INTERP_MAX_DEPTH
+    pub vm_state: int = 0
+    pub vm_fns: Vector<i64> = Vector {}
+    pub vm_of: Vector<int> = Vector {}
+    pub vm_frames: Vector<i64> = Vector {}
+    pub vm_direct: int = 0
+    pub tw_depth: int = 0
+    pub obuf: str.StringBuilder = str.NewBuilder()
+    pub gc_new: int = 0
+    pub gc_next: int = 200000
+    pub gc_min: int = 200000
+    pub sts_free: Vector<int> = Vector {}
+    pub arrs_free: Vector<int> = Vector {}
+    pub maps_free: Vector<int> = Vector {}
+    pub vars_free: Vector<int> = Vector {}
+    pub log: lg.Logger = lg.New(2, false)
+    pub break_levels: int = 0
+    pub entry: str = ""
+    pub lang: str = "en"
+    pub capture: bool = false
+    pub out_text: str = ""
+    pub err_text: str = ""
+    pub in_has: bool = false
+    pub in_data: str = ""
+    pub in_pos: int = 0
+    pub globals: EnvId = 0
+    pub envs: Vector<Env> = Vector {}
+    pub arrs: Vector<Arr> = Vector {}
+    pub maps: Vector<SMap> = Vector {}
+    pub iters: Vector<SMapIter> = Vector {}
+    pub sts: Vector<SStruct> = Vector {}
+    pub closures: Vector<Closure> = Vector {}
+    pub variants: Vector<SVariant> = Vector {}
+    pub mods: Vector<Module> = Vector {}
+    pub fnlists: Vector<FuncList> = Vector {}
+    pub funcs: Vector<int> = Vector {}
+    pub structs: Vector<int> = Vector {}
+    pub enums: Vector<int> = Vector {}
+    pub impls: Vector<int> = Vector {}
+    pub extern_fns: Vector<Value> = Vector {}
+    pub extern_decls: Vector<int> = Vector {}
+    pub mem_boxes: Vector<Value> = Vector {}
+    pub ffi_ready: bool = false
+    pub plain_calls: Vector<bool> = Vector {}
+    pub node_ity: Vector<int> = Vector {}
+    pub fn_file: Vector<str> = Vector {}
+    pub cur_file: str = ""
+    pub errfile: str = ""
+    pub errtrace: str = ""
+    pub tb_call: Vector<int> = Vector {}
+    pub tb_file: Vector<str> = Vector {}
+    pub exit_fns: Vector<int> = Vector {}
+    pub prog_args: Vector<str> = Vector {}
+    pub def_env_defs: Vector<int> = Vector {}
+    pub def_env_envs: Vector<int> = Vector {}
+    pub tab_funcs: Itab = Itab {}
+    pub tab_structs: Itab = Itab {}
+    pub tab_enums: Itab = Itab {}
+    pub tab_modules: Itab = Itab {}
+    pub tab_extern_fns: Itab = Itab {}
+    pub tab_extern_decls: Itab = Itab {}
+    pub tab_def_envs: Ptab = Ptab {}
+    pub failed: bool = false
+    pub errmsg: str = ""
+    pub errspan: co.SrcSpan = co.EmptySpan()
+    pub have_errspan: bool = false
+    pub steps: u64 = 0 as u64
+    pub deadline_ms: i64 = 0 as i64
+    pub depth: int = 0
+    pub match_expr_depth: int = 0
+    pub match_subj: Vector<Value> = Vector {}
+    pub pending_flow: int = FLOW_NORMAL
+end
+
+pub func FailText(ip &: Interp): str:
+    ret fail_text(ip)
+end

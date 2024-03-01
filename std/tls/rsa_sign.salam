@@ -1,0 +1,174 @@
+package tls
+
+func _rsa_private_op_blinded(msg: void*, mlen: int, nmod: void*, nlen: int, dexp: void*, dlen: int, eexp: void*, elen: int, phi: void*, philen: int, out: void*, klen: int): bool:
+    mut n := _big_from_bytes(nmod, nlen)
+    defer _big_free(n)
+    mut e := _big_from_bytes(eexp, elen)
+    defer _big_free(e)
+    mut d := _big_from_bytes(dexp, dlen)
+    defer _big_wipe_free(d)
+    mut ph := _big_from_bytes(phi, philen)
+    defer _big_wipe_free(ph)
+    mut m := _big_from_bytes(msg, mlen)
+    defer _big_free(m)
+    if n.bad or e.bad or d.bad or ph.bad or m.bad:
+        ret false
+    end
+    if _big_is_zero(n) or _big_cmp(m, n) >= 0:
+        ret false
+    end
+
+    mut rbytes := _newbuf(nlen)
+    defer _buf_wipe(rbytes)
+    crypto.RandomBytes(rbytes.p, nlen)
+    mut rraw := _big_from_bytes(rbytes.p, nlen)
+    defer _big_wipe_free(rraw)
+    if rraw.bad:
+        ret false
+    end
+    mut r := _big_new(n.n + 1)
+    defer _big_wipe_free(r)
+    if not _big_mod(r, rraw, n):
+        ret false
+    end
+    if _big_is_zero(r):
+        ret false
+    end
+
+    mut re := _big_new(n.n + 1)
+    defer _big_free(re)
+    if not _big_modexp_barrett(re, r, e, n):
+        ret false
+    end
+
+    mut prod := _big_new(2 * n.n + 2)
+    defer _big_wipe_free(prod)
+    _big_mul(prod, m, re)
+    if prod.bad:
+        ret false
+    end
+    mut blinded := _big_new(n.n + 1)
+    defer _big_wipe_free(blinded)
+    if not _big_mod(blinded, prod, n):
+        ret false
+    end
+
+    mut s := _big_new(n.n + 1)
+    defer _big_wipe_free(s)
+    if not _big_modexp_barrett(s, blinded, d, n):
+        ret false
+    end
+
+    mut one := _big_new(1)
+    defer _big_free(one)
+    _big_set_u32(one, 1 as u32)
+    mut phim1 := _big_new(ph.n + 1)
+    defer _big_wipe_free(phim1)
+    if not _big_sub(phim1, ph, one):
+        ret false
+    end
+    mut rinv := _big_new(n.n + 1)
+    defer _big_wipe_free(rinv)
+    if not _big_modexp_barrett(rinv, r, phim1, n):
+        ret false
+    end
+
+    mut prod2 := _big_new(2 * n.n + 2)
+    defer _big_wipe_free(prod2)
+    _big_mul(prod2, s, rinv)
+    if prod2.bad:
+        ret false
+    end
+    mut result := _big_new(n.n + 1)
+    defer _big_wipe_free(result)
+    if not _big_mod(result, prod2, n):
+        ret false
+    end
+    ret _big_to_bytes(result, out, klen)
+end
+
+func _rsa_sign_pkcs1(kind: int, digest: void*, n: Buf, e: Buf, d: Buf, phi: Buf, sigout: void*): bool:
+    klen := n.len
+    if klen < 16 or klen > RSA_MAX_BYTES:
+        ret false
+    end
+    hlen := _hash_size(kind)
+    mut di := _hexbuf(_rsa_digestinfo(kind))
+    defer _buf_free(di)
+    tlen := di.len + hlen
+    if klen < tlen + 11:
+        ret false
+    end
+    mut em := _newbuf(klen)
+    defer _buf_free(em)
+    _put8(em, 0x00)
+    _put8(em, 0x01)
+    pslen := klen - tlen - 3
+    repeat pslen:
+        _put8(em, 0xFF)
+    end
+    _put8(em, 0x00)
+    _putbuf(em, di)
+    _putraw(em, digest, hlen)
+    ret _rsa_private_op_blinded(em.p, em.len, n.p, n.len, d.p, d.len, e.p, e.len, phi.p, phi.len, sigout, klen)
+end
+
+func _rsa_sign_pss(kind: int, digest: void*, n: Buf, e: Buf, d: Buf, phi: Buf, slen: int, sigout: void*): bool:
+    klen := n.len
+    if klen < 16 or klen > RSA_MAX_BYTES:
+        ret false
+    end
+    hlen := _hash_size(kind)
+
+    mut nbig := _big_from_bytes(n.p, n.len)
+    defer _big_free(nbig)
+    modbits := _big_bitlen(nbig)
+    if modbits < 2:
+        ret false
+    end
+    emlen := (modbits - 1 + 7) / 8
+    if emlen < hlen + slen + 2:
+        ret false
+    end
+    dblen := emlen - hlen - 1
+    skip := klen - emlen
+
+    mut salt := _newbuf(slen)
+    defer _buf_wipe(salt)
+    _putzeros(salt, slen)
+    crypto.RandomBytes(salt.p, slen)
+
+    mut mprime := _newbuf(8 + hlen + slen)
+    defer _buf_free(mprime)
+    _putzeros(mprime, 8)
+    _putraw(mprime, digest, hlen)
+    _putbuf(mprime, salt)
+    mut hpr := _newbuf(hlen)
+    defer _buf_free(hpr)
+    _putzeros(hpr, hlen)
+    _hash_oneshot(kind, mprime.p, mprime.len, hpr.p)
+
+    mut dbmask := _newbuf(dblen)
+    defer _buf_free(dbmask)
+    _putzeros(dbmask, dblen)
+    _mgf1(kind, hpr.p, hlen, dbmask.p, dblen)
+
+    pslen := dblen - slen - 1
+    mut em := _newbuf(klen)
+    defer _buf_free(em)
+    _putzeros(em, skip)
+    repeat pslen in i:
+        _put8(em, 0x00 ^ _bufat(dbmask, i))
+    end
+    _put8(em, 0x01 ^ _bufat(dbmask, pslen))
+    repeat slen in i:
+        _put8(em, _bufat(salt, i) ^ _bufat(dbmask, pslen + 1 + i))
+    end
+    unused := 8 * emlen - (modbits - 1)
+    topmask := (0xFF >> unused) & 0xFF
+    _bufset(em, skip, _bufat(em, skip) & topmask)
+    _putbuf(em, hpr)
+    _put8(em, 0xbc)
+
+    ret _rsa_private_op_blinded(em.p, em.len, n.p, n.len, d.p, d.len, e.p, e.len, phi.p, phi.len, sigout, klen)
+end

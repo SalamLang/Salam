@@ -1,0 +1,420 @@
+package parser
+
+import str
+
+include tok "../token.salam"
+include at "../ast.salam"
+
+func lambda_ahead(p &: Ps, a &: at.Ast): bool:
+    if not p_at(p, tok.TK_LPAREN):
+        ret false
+    end
+    save_pos := p.pos
+    save_panic := p.panic
+    save_had_error := p.had_error
+    p.panic = true
+
+    p_advance(p)
+    mut ok := true
+    if not p_at(p, tok.TK_RPAREN):
+        mut go := true
+        until go:
+            if not p_at(p, tok.TK_IDENT):
+                ok = false
+                break
+            end
+            p_advance(p)
+            if not p_at(p, tok.TK_COLON):
+                ok = false
+                break
+            end
+            parse_type_anno(p, a)
+            go = p_match(p, tok.TK_COMMA)
+        end
+    end
+    if ok:
+        ok = p_at(p, tok.TK_RPAREN)
+    end
+    if ok:
+        p_advance(p)
+    end
+    mut next_kind := tok.TK_EOF
+    if ok:
+        next_kind = p_peek(p).kind
+    end
+    is_lambda := ok and (next_kind == tok.TK_FAT_ARROW or next_kind == tok.TK_COLON)
+
+    p.pos = save_pos
+    p.panic = save_panic
+    p.had_error = save_had_error
+    ret is_lambda
+end
+
+func lambda_return_type_ahead(p &: Ps, a &: at.Ast): bool:
+    if not p_at(p, tok.TK_COLON):
+        ret false
+    end
+    nk := p_peek2(p).kind
+    if nk == tok.TK_STMT_END or (tok.IsKeyword(nk) and nk != tok.TK_KW_FUNC):
+        ret false
+    end
+    save_pos := p.pos
+    save_panic := p.panic
+    save_had_error := p.had_error
+    p.panic = true
+    parse_type_anno(p, a)
+    found := p_at(p, tok.TK_COLON) and p.pos > save_pos + 1
+    p.pos = save_pos
+    p.panic = save_panic
+    p.had_error = save_had_error
+    ret found
+end
+
+func is_container_word(w: str): bool:
+    ret str.Equals(w, "Vector") or str.Equals(w, "HashMap") or str.Equals(w, "وکتور") or str.Equals(w, "بردار") or str.Equals(w, "نگاشت")
+end
+
+func generic_ctor_ahead(p &: Ps): bool:
+    t := p_peek(p)
+    if not is_container_word(t.lexeme) or p_peek2(p).kind != tok.TK_LT:
+        ret false
+    end
+    mut depth := 0
+    mut i := 1
+    until i < 64:
+        k := p_peekn(p, i).kind
+        if k == tok.TK_EOF or p_peekn(p, i).begin_line != t.begin_line:
+            ret false
+        end
+        if k == tok.TK_LT:
+            depth += 1
+        else k == tok.TK_GT:
+            depth -= 1
+            if depth == 0:
+                ret p_peekn(p, i + 1).kind == tok.TK_LPAREN
+            end
+        else k == tok.TK_SHR:
+            depth -= 2
+            if depth <= 0:
+                ret depth == 0 and p_peekn(p, i + 1).kind == tok.TK_LPAREN
+            end
+        end
+        i += 1
+    end
+    ret false
+end
+
+func parse_generic_ctor(p &: Ps, a &: at.Ast): int:
+    t := p_peek(p)
+    p_foreign_error(p, "write 'Vector {} as Vector<int>' (or 'HashMap {} as HashMap<str, int>') for an empty container", "a container is not created by calling it")
+    lit := p_mk(p, a, at.AST_STRUCT_LIT)
+    at.SetName(a, lit, t.lexeme)
+    p_fin(p, a, lit)
+    cast := mk_from_node(a, at.AST_CAST, lit)
+    ps_set_a(a, cast, lit)
+    at.SetTypeNode(a, cast, parse_type(p, a))
+    if p_match(p, tok.TK_LPAREN):
+        mut depth := 1
+        until depth > 0 and not p_at_eof(p):
+            if p_at(p, tok.TK_LPAREN):
+                depth += 1
+            else p_at(p, tok.TK_RPAREN):
+                depth -= 1
+            end
+            p_advance(p)
+        end
+    end
+    p_fin(p, a, cast)
+    ret cast
+end
+
+func builtin_callable_name(k: int): str:
+    if k == tok.TK_KW_PRINT:
+        ret "print"
+    end
+    if k == tok.TK_KW_PRINTLN:
+        ret "println"
+    end
+    if k == tok.TK_KW_PRINTERR:
+        ret "printerr"
+    end
+    if k == tok.TK_KW_PRINTERRLN:
+        ret "printerrln"
+    end
+    if k == tok.TK_KW_INPUT:
+        ret "input"
+    end
+    ret ""
+end
+
+func tk_is_literal_kind(k: int): bool:
+    ret k == tok.TK_INT or k == tok.TK_FLOAT or k == tok.TK_STRING or k == tok.TK_TRIPLE_STRING or k == tok.TK_RAW_STRING or k == tok.TK_CHAR or k == tok.TK_UTF8_CHAR or k == tok.TK_KW_TRUE or k == tok.TK_KW_FALSE or k == tok.TK_KW_NULL
+end
+
+func tk_is_binary_only(k: int): bool:
+    ret k == tok.TK_SLASH or k == tok.TK_PERCENT or k == tok.TK_POWER or k == tok.TK_EQ or k == tok.TK_NE or k == tok.TK_LE or k == tok.TK_GE or k == tok.TK_PIPE or k == tok.TK_CARET or k == tok.TK_AND or k == tok.TK_OR or k == tok.TK_SHL or k == tok.TK_SHR
+end
+
+func input_prompt_starts(k: int): bool:
+    ret k == tok.TK_STRING or k == tok.TK_TRIPLE_STRING or k == tok.TK_RAW_STRING or k == tok.TK_IDENT or k == tok.TK_KW_THIS or k == tok.TK_INT or k == tok.TK_FLOAT or k == tok.TK_CHAR or k == tok.TK_UTF8_CHAR
+end
+
+// TODO: drop once the published seed parses 'input ""'; std/io still spells it 'input ()'.
+func input_parens_bridge(p &: Ps): bool:
+    ret str.EndsWith(p.file, "std/io/io.salam") or str.EndsWith(p.file, "std\\io\\io.salam")
+end
+
+func parse_input_expr(p &: Ps, a &: at.Ast): int:
+    call := p_mk(p, a, at.AST_CALL)
+    callee := p_mk(p, a, at.AST_IDENTIFIER)
+    at.SetName(a, callee, "input")
+    ps_set_a(a, call, callee)
+    kw := p_peek(p)
+    p_advance(p)
+    p_fin(p, a, callee)
+    if p_at(p, tok.TK_LPAREN):
+        if not input_parens_bridge(p):
+            p_error_at(p, p_peek(p), "input takes no parentheses: write 'input \"\"' or 'input \"prompt\"'")
+        end
+        p_advance(p)
+        if not p_at(p, tok.TK_RPAREN):
+            mut go := true
+            until go:
+                at.AddChild(a, call, parse_expr(p, a))
+                go = p_list_next(p, tok.TK_RPAREN)
+            end
+        end
+        p_expect(p, tok.TK_RPAREN, "')' after arguments")
+    else input_prompt_starts(p_peek(p).kind):
+        at.AddChild(a, call, parse_expr(p, a))
+    else:
+        p_error_at(p, kw, "input needs a prompt: write 'input \"\"' or 'input \"prompt\"'")
+    end
+    p_fin(p, a, call)
+    ret call
+end
+
+func parse_primary(p &: Ps, a &: at.Ast): int:
+    t := p_peek(p)
+    if tk_is_literal_kind(t.kind):
+        n := p_mk(p, a, at.AST_LITERAL)
+        at.SetOp(a, n, t.kind)
+        at.SetTokenValue(a, n, t.value)
+        at.SetName(a, n, t.lexeme)
+        p_advance(p)
+        p_fin(p, a, n)
+        ret n
+    end
+    if t.kind == tok.TK_KW_THIS:
+        n := p_mk(p, a, at.AST_THIS)
+        p_advance(p)
+        p_fin(p, a, n)
+        ret n
+    end
+    if t.kind == tok.TK_KW_INPUT:
+        ret parse_input_expr(p, a)
+    end
+    if t.kind == tok.TK_KW_PRINT or t.kind == tok.TK_KW_PRINTLN or t.kind == tok.TK_KW_PRINTERR or t.kind == tok.TK_KW_PRINTERRLN:
+        n := p_mk(p, a, at.AST_IDENTIFIER)
+        at.SetName(a, n, builtin_callable_name(t.kind))
+        p_advance(p)
+        p_fin(p, a, n)
+        ret n
+    end
+    if t.kind == tok.TK_KW_FUNC and p_peek2(p).kind == tok.TK_LPAREN:
+        before := p.pos
+        p_advance(p)
+        if lambda_ahead(p, a):
+            p_error_at(p, t, "a lambda is written without 'func': '(x: int): ret x * 2 end'")
+            ret parse_lambda(p, a)
+        end
+        p.pos = before
+    end
+    if t.kind == tok.TK_LPAREN:
+        if lambda_ahead(p, a):
+            ret parse_lambda(p, a)
+        end
+        p_advance(p)
+        e := parse_expr(p, a)
+        p_expect(p, tok.TK_RPAREN, "')'")
+        ret e
+    end
+    if t.kind == tok.TK_LBRACKET:
+        ret parse_array_lit(p, a)
+    end
+    if t.kind == tok.TK_KW_MATCH:
+        ret parse_match(p, a)
+    end
+    if t.kind == tok.TK_AMP:
+        n := p_mk(p, a, at.AST_FUNC_ADDR)
+        p_advance(p)
+        at.SetName(a, n, p_name(p, "expected a function name after '&'"))
+        if p_at(p, tok.TK_DOT) and p_peek2(p).kind == tok.TK_IDENT:
+            pkg := p_mk(p, a, at.AST_IDENTIFIER)
+            at.SetName(a, pkg, at.Get(a, n).name)
+            p_fin(p, a, pkg)
+            p_advance(p)
+            at.SetName(a, n, p_name(p, "expected a function name after '&'"))
+            mut nv2 := at.Get(a, n)
+            nv2.a = pkg
+            at.Put(a, n, nv2)
+        end
+        p_fin(p, a, n)
+        ret n
+    end
+    if t.kind == tok.TK_IDENT and generic_ctor_ahead(p):
+        ret parse_generic_ctor(p, a)
+    end
+    if t.kind == tok.TK_IDENT:
+        if p_peek2(p).kind == tok.TK_LBRACE and not p.no_struct_lit:
+            ret parse_struct_lit(p, a)
+        end
+        if not p.no_struct_lit and pkg_struct_lit_words(p) > 0:
+            ret parse_struct_lit(p, a)
+        end
+        n := p_mk(p, a, at.AST_IDENTIFIER)
+        at.SetName(a, n, p_munch_value_name(p))
+        p_fin(p, a, n)
+        ret n
+    end
+    if p_at_reserved_word(p) and not p_at(p, tok.TK_KW_END) and not p_at(p, tok.TK_KW_ELSE):
+        p_reserved_word_error(p)
+    else p_at(p, tok.TK_STAR) and p_prev(p).kind == tok.TK_STAR and p_prev(p).end_index == p_peek(p).begin_index:
+        p_error(p, "'***' is not a Salam operator: power is '**' and multiplication is '*'")
+    else p_at(p, tok.TK_STAR):
+        p_error(p, "'*' cannot start a value: Salam has no prefix '*'; read through a pointer with 'p[0]'")
+    else p_at(p, tok.TK_PLUS):
+        p_error(p, "Salam has no unary '+': write the value on its own")
+    else tk_is_binary_only(p_peek(p).kind):
+        p_error(p, "this operator needs a value on its left")
+    else:
+        p_error(p, "expected an expression")
+    end
+    n := p_mk(p, a, at.AST_IDENTIFIER)
+    at.SetName(a, n, "<error>")
+    if not p_at_eof(p):
+        p_advance(p)
+    end
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_lambda(p &: Ps, a &: at.Ast): int:
+    n := p_mk(p, a, at.AST_LAMBDA)
+    p_expect(p, tok.TK_LPAREN, "'(' to open lambda parameters")
+    if not p_at(p, tok.TK_RPAREN):
+        mut go := true
+        until go:
+            param := p_mk(p, a, at.AST_PARAM)
+            pname := p_name(p, "expected parameter name")
+            at.SetName(a, param, pname)
+            if pname.len() == 0:
+                break
+            end
+            at.SetTypeNode(a, param, parse_type_anno(p, a))
+            p_fin(p, a, param)
+            at.AddChild(a, n, param)
+            go = p_match(p, tok.TK_COMMA)
+        end
+    end
+    p_expect(p, tok.TK_RPAREN, "')' after lambda parameters")
+    if lambda_return_type_ahead(p, a):
+        p_foreign_error(p, "remove the return type; it is inferred from the body: '(x: int): ret x * 2 end'", "a lambda cannot declare a return type")
+        save_panic := p.panic
+        p.panic = true
+        parse_type_anno(p, a)
+        p.panic = save_panic
+    end
+    if p_at(p, tok.TK_COLON):
+        ps_set_a(a, n, parse_block(p, a))
+    else:
+        p_error(p, "expected ':' to begin the lambda body")
+        ps_set_a(a, n, p_mk(p, a, at.AST_BLOCK))
+    end
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_array_lit(p &: Ps, a &: at.Ast): int:
+    n := p_mk(p, a, at.AST_ARRAY_LIT)
+    p_advance(p)
+
+    p_skip_terminators(p)
+    until not p_at(p, tok.TK_RBRACKET) and not p_at_eof(p):
+        at.AddChild(a, n, parse_expr(p, a))
+        p_match(p, tok.TK_COMMA)
+        p_skip_terminators(p)
+    end
+    p_expect(p, tok.TK_RBRACKET, "']' to close array literal")
+    p_fin(p, a, n)
+    ret n
+end
+
+func pkg_struct_lit_words(p &: Ps): int:
+    line := p_peek(p).begin_line
+    mut n := 0
+    until n < 8 and p_peekn(p, n).kind == tok.TK_IDENT and p_peekn(p, n).begin_line == line:
+        n += 1
+    end
+    if n == 0 or p_peekn(p, n).kind != tok.TK_DOT:
+        ret 0
+    end
+    mut m := n + 1
+    until m < n + 9 and p_peekn(p, m).kind == tok.TK_IDENT and p_peekn(p, m).begin_line == line:
+        m += 1
+    end
+    if m > n + 1 and p_peekn(p, m).kind == tok.TK_LBRACE:
+        ret n
+    end
+    if m == n + 1 and tok.IsKeyword(p_peekn(p, m).kind) and p_peekn(p, m).begin_line == line and p_peekn(p, m + 1).kind == tok.TK_LBRACE:
+        ret n
+    end
+    ret 0
+end
+
+func parse_struct_lit(p &: Ps, a &: at.Ast): int:
+    n := p_mk(p, a, at.AST_STRUCT_LIT)
+    nm := p_munch_name(p)
+    at.SetName(a, n, nm)
+    if p_at(p, tok.TK_DOT) and p_peek2(p).kind == tok.TK_IDENT:
+        p_advance(p)
+        at.SetName(a, n, nm + "." + p_munch_name(p))
+    else p_at(p, tok.TK_DOT) and tok.IsKeyword(p_peek2(p).kind):
+        p_advance(p)
+        at.SetName(a, n, nm + "." + p_member_name(p, "expected a type name after '.'"))
+    end
+    p_expect(p, tok.TK_LBRACE, "'{' in struct literal")
+
+    p_skip_terminators(p)
+    mut colon_reported := false
+    until not p_at(p, tok.TK_RBRACE) and not p_at_eof(p):
+        fi := p_mk(p, a, at.AST_FIELD_INIT)
+        mut fname := ""
+        if p_at(p, tok.TK_IDENT):
+            fname = p_munch_name(p)
+        else:
+            fname = p_member_name(p, "expected field name in struct literal")
+        end
+        at.SetName(a, fi, fname)
+        if fname.len() == 0:
+            break
+        end
+        if p_at(p, tok.TK_COLON) or p_at(p, tok.TK_COLON_ASSIGN):
+            if not colon_reported:
+                p_foreign_error(p, "write 'Point { x = 1, y = 2 }': struct fields are set with '='", "a struct literal sets fields with '=', not ':'")
+                colon_reported = true
+            end
+            p_advance(p)
+        else:
+            p_expect(p, tok.TK_ASSIGN, "'=' in field initializer")
+        end
+        ps_set_a(a, fi, parse_expr(p, a))
+        p_fin(p, a, fi)
+        at.AddChild(a, n, fi)
+        p_match(p, tok.TK_COMMA)
+        p_skip_terminators(p)
+    end
+    p_expect(p, tok.TK_RBRACE, "'}' to close struct literal")
+    p_fin(p, a, n)
+    ret n
+end

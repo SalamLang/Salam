@@ -1,0 +1,411 @@
+---
+name: Native backend gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-backend-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    uses: ./.github/workflows/_changes.yml # zizmor: ignore[self-repository]
+    with:
+      paths: |
+        compiler/*
+        std/*
+        tools/bash/backend-sweep.sh
+        tools/bash/run-one-build.sh
+        tools/bash/native-*.sh
+        tools/fuzz/*
+        .github/workflows/native-backend-gate.yml
+        .github/actions/setup-*
+        .github/workflows/_changes.yml
+
+  linux:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      SALAM_STD: ${{ github.workspace }}/std
+    timeout-minutes: 120
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Build the compiler
+        run: sh tools/bash/build-selfhost.sh
+
+      - name: Encoder output matches GNU as
+        run: |
+          find tests/en/llvm -name '*.salam' ! -name '_*' -print0 | sort -z |
+            xargs -0 sh tools/bash/native-encoder-check.sh ./salam
+
+      - name: Compiler built by the native backend reproduces itself
+        run: sh tools/bash/native-selfhost-check.sh ./salam
+
+      - name: Test programs agree with the C backend
+        run: |
+          sh tools/bash/backend-sweep.sh ./salam native \
+            general features basics types switch match data editor-selected stdlib
+
+      - name: Random programs agree with the C backend
+        run: python3 -I tools/fuzz/salamfuzz.py ./salam --count 30 --seed "$((GITHUB_RUN_NUMBER * 30))"
+
+      - name: The built-in linker's thread-local storage
+        run: |
+          sh tools/bash/fetch-musl-sysroots.sh --out /tmp/muslcc --arches x86_64
+          SALAM_MUSL_SYSROOT=/tmp/muslcc/sr-x86_64 sh tools/bash/native-tls-check.sh ./salam x86_64 env
+
+  macos-debug-build:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      SALAM_STD: ${{ github.workspace }}/std
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Build the compiler
+        run: sh tools/bash/build-selfhost.sh
+
+      - name: Build the macOS debug programs
+        run: sh tools/bash/native-lldb-check.sh build ./salam macos-debug
+
+      - name: Upload them
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-macos-debug
+          path: macos-debug
+          retention-days: 3
+
+  macos-debug:
+    needs: macos-debug-build
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the programs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: native-macos-debug
+          path: macos-debug
+
+      - name: lldb reads the debug info and unwinds the stack
+        run: sh tools/bash/native-lldb-check.sh run macos-debug
+
+  windows-cross:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      SALAM_STD: ${{ github.workspace }}/std
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mingw-w64 and wine
+        run: |
+          echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 wine64
+          WINE_BIN="$(command -v wine64 || command -v wine || true)"
+          if [ -z "$WINE_BIN" ]; then
+            echo "::error::no wine or wine64 binary found after installing wine64"
+            exit 1
+          fi
+          sudo ln -sf "$WINE_BIN" /usr/local/bin/wine
+
+      - name: Initialize the wine prefix
+        run: |
+          echo "WINEDEBUG=-all" >> "$GITHUB_ENV"
+          echo "XDG_RUNTIME_DIR=/tmp/xdg-runtime" >> "$GITHUB_ENV"
+          mkdir -p /tmp/xdg-runtime && chmod 0700 /tmp/xdg-runtime
+          export WINEDEBUG=-all XDG_RUNTIME_DIR=/tmp/xdg-runtime
+          timeout 60 wineboot --init >/tmp/wineboot-init.log 2>&1
+          timeout 30 wineserver -w || wineserver -k || true
+          if [ ! -f ~/.wine/system.reg ]; then
+            echo "::error::wine prefix init failed:"
+            cat /tmp/wineboot-init.log
+            exit 1
+          fi
+
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Build the compiler
+        run: sh tools/bash/build-selfhost.sh
+
+      - name: Windows programs built by the native backend run correctly
+        run: |
+          find tests/en/llvm -name '*.salam' ! -name '_*' -print0 | sort -z |
+            xargs -0 sh tools/bash/native-windows-check.sh ./salam
+
+      - name: Windows -g builds keep their code and carry DWARF
+        run: sh tools/bash/native-windows-debug-check.sh ./salam
+
+  linux-cross:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      SALAM_STD: ${{ github.workspace }}/std
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: i686
+            triple: i686-linux-musl
+            runner: env
+          - arch: arm
+            triple: arm-linux-musleabihf
+            runner: qemu-arm-static
+          - arch: aarch64
+            triple: aarch64-linux-musl
+            runner: qemu-aarch64-static
+          - arch: riscv64
+            triple: riscv64-linux-musl
+            runner: qemu-riscv64-static
+    name: linux-cross (${{ matrix.arch }})
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install qemu user emulation
+        if: matrix.runner != 'env'
+        run: |
+          echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static
+
+      - name: Install debuggers
+        run: |
+          echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y gdb gdb-multiarch
+
+      - name: Fetch the musl sysroot
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: sh tools/bash/fetch-musl-sysroots.sh --out /tmp/muslcc --arches "$ARCH"
+
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Build the compiler
+        run: sh tools/bash/build-selfhost.sh
+
+      - name: Programs built by the native backend run under emulation
+        env:
+          ARCH: ${{ matrix.arch }}
+          TRIPLE: ${{ matrix.triple }}
+          RUNNER: ${{ matrix.runner }}
+        run: |
+          SALAM_MUSL_SYSROOT=/tmp/muslcc/sr-$ARCH sh tools/bash/native-cross-check.sh ./salam "$TRIPLE" "$RUNNER" \
+            basics features types data games match switch llvm general stdlib
+
+      - name: Random programs agree with the C backend under emulation
+        env:
+          ARCH: ${{ matrix.arch }}
+          TRIPLE: ${{ matrix.triple }}
+          RUNNER: ${{ matrix.runner }}
+        run: |
+          SALAM_MUSL_SYSROOT=/tmp/muslcc/sr-$ARCH python3 -I tools/fuzz/salamfuzz.py ./salam --count 15 \
+            --seed "$((GITHUB_RUN_NUMBER * 30))" --target "$TRIPLE" --runner "$RUNNER"
+
+      - name: gdb reads the debug info
+        env:
+          ARCH: ${{ matrix.arch }}
+          TRIPLE: ${{ matrix.triple }}
+          RUNNER: ${{ matrix.runner }}
+        run: SALAM_MUSL_SYSROOT=/tmp/muslcc/sr-$ARCH sh tools/bash/native-gdb-check.sh ./salam "$TRIPLE" "$RUNNER"
+
+      - name: The built-in linker's branch thunks
+        if: matrix.arch == 'arm' || matrix.arch == 'aarch64'
+        env:
+          ARCH: ${{ matrix.arch }}
+          RUNNER: ${{ matrix.runner }}
+        run: sh tools/bash/native-thunk-check.sh ./salam "$ARCH" "$RUNNER"
+
+      - name: The built-in linker's thread-local storage
+        env:
+          ARCH: ${{ matrix.arch }}
+          RUNNER: ${{ matrix.runner }}
+        run: SALAM_MUSL_SYSROOT=/tmp/muslcc/sr-$ARCH sh tools/bash/native-tls-check.sh ./salam "$ARCH" "$RUNNER"
+
+      - name: Dynamic musl links by the built-in linker
+        env:
+          ARCH: ${{ matrix.arch }}
+          RUNNER: ${{ matrix.runner }}
+        run: SALAM_MUSL_SYSROOT=/tmp/muslcc/sr-$ARCH sh tools/bash/native-musl-dyn-check.sh ./salam "$ARCH" "$RUNNER"
+
+      - name: Dynamic glibc links by the built-in linker
+        env:
+          ARCH: ${{ matrix.arch }}
+          RUNNER: ${{ matrix.runner }}
+        run: |
+          case "$ARCH" in
+            i686) pkgs="gcc-i686-linux-gnu"; libc=/usr/i686-linux-gnu ;;
+            arm) pkgs="gcc-arm-linux-gnueabihf"; libc=/usr/arm-linux-gnueabihf ;;
+            aarch64) pkgs="libc6-dev-arm64-cross"; libc=/usr/aarch64-linux-gnu ;;
+            riscv64) pkgs="libc6-dev-riscv64-cross"; libc=/usr/riscv64-linux-gnu ;;
+          esac
+          [ "$RUNNER" = env ] && sudo apt-get update
+          sudo apt-get install -y "$pkgs" lld
+          sh tools/bash/native-glibc-check.sh ./salam "$ARCH" "$libc" "$RUNNER" basics llvm general
+
+      - name: Build the benchmarks with and without the vectorizers
+        if: matrix.arch == 'aarch64'
+        env:
+          ARCH: ${{ matrix.arch }}
+          TRIPLE: ${{ matrix.triple }}
+        run: SALAM_MUSL_SYSROOT=/tmp/muslcc/sr-$ARCH sh tools/bash/native-bench-stage.sh ./salam "$TRIPLE" bench-stage
+
+      - name: Upload the benchmarks
+        if: matrix.arch == 'aarch64'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: a64-bench-stage
+          path: bench-stage
+          retention-days: 3
+
+  linux-arm64-run:
+    needs: linux-cross
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download the benchmarks
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: a64-bench-stage
+          path: bench-stage
+      - name: Vectorized benchmarks print the same on AArch64 hardware
+        run: |
+          chmod +x bench-stage/*.on bench-stage/*.off
+          sh tools/bash/native-bench-run.sh bench-stage
+
+  windows-arm64-build:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      SALAM_STD: ${{ github.workspace }}/std
+      LLVM_MINGW: llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch llvm-mingw
+        run: |
+          curl -fsSL --retry 3 -o /tmp/llvm-mingw.tar.xz \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20261020/${LLVM_MINGW}.tar.xz"
+          echo "55064b60b991a1e1e8090b8c2f84e82b22cfe5903d12c159d65064cf5e8ae335  /tmp/llvm-mingw.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/llvm-mingw.tar.xz -C /tmp
+          echo "/tmp/${LLVM_MINGW}/bin" >> "$GITHUB_PATH"
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+      - name: Build the compiler
+        run: sh tools/bash/build-selfhost.sh
+      - name: Build the test programs for Windows on Arm with the built-in linker
+        run: |
+          find tests/en/llvm -name '*.salam' ! -name '_*' -print0 | sort -z |
+            SALAM_LINKER=builtin NATIVE_WIN_TRIPLE=aarch64-w64-windows-gnu NATIVE_WIN_STAGE=winarm-stage/builtin \
+              xargs -0 sh tools/bash/native-windows-check.sh ./salam
+      - name: Build them again linked by lld
+        run: |
+          find tests/en/llvm -name '*.salam' ! -name '_*' -print0 | sort -z |
+            SALAM_LINKER=system NATIVE_WIN_TRIPLE=aarch64-w64-windows-gnu NATIVE_WIN_STAGE=winarm-stage/lld \
+              xargs -0 sh tools/bash/native-windows-check.sh ./salam
+      - name: Build the compiler itself for Windows on Arm
+        run: |
+          mkdir -p winarm-stage/selfhost
+          ./salam build compiler/main.salam --backend=native --release --target=aarch64-w64-windows-gnu \
+            --output=winarm-stage/selfhost/salam.exe --log-level=error
+          ./salam llvm compiler/main.salam --target=x86_64-linux-gnu -o winarm-stage/selfhost/ref.ll --log-level=error
+          tar -cf winarm-stage/selfhost/src.tar compiler std tests/en/llvm
+      - name: Package Salam for Windows on Arm
+        run: sh tools/bash/package-winarm.sh ./salam "/tmp/${LLVM_MINGW}" winarm-stage/package
+      - name: Upload the programs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: winarm-stage
+          path: winarm-stage
+          retention-days: 3
+  windows-arm64-run:
+    needs: windows-arm64-build
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download the programs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: winarm-stage
+          path: winarm-stage
+      - name: Programs linked by the built-in linker run on Windows on Arm
+        shell: bash
+        run: sh tools/bash/native-stage-run.sh winarm-stage/builtin
+      - name: Programs linked by lld run on Windows on Arm
+        if: always()
+        shell: bash
+        run: sh tools/bash/native-stage-run.sh winarm-stage/lld
+      - name: The compiler built for Windows on Arm reproduces the reference IR
+        if: always()
+        shell: bash
+        run: |
+          cd winarm-stage/selfhost
+          mkdir src
+          tar -xf src.tar -C src
+          SALAM_STD="$(pwd -W)/src/std" ./salam.exe llvm src/compiler/main.salam --target=x86_64-linux-gnu -o out.ll --log-level=error
+          grep -v ' UTC\\00"$' ref.ll >ref.trim
+          grep -v ' UTC\\00"$' out.ll | tr -d '\r' >out.trim
+          if ! cmp -s ref.trim out.trim; then
+            diff ref.trim out.trim | head -20
+            exit 1
+          fi
+          echo "salam.exe on Windows on Arm reproduces the reference IR"
+      - name: The packaged compiler builds and runs programs on Windows on Arm by itself
+        if: always()
+        shell: bash
+        run: |
+          cd winarm-stage/selfhost
+          [ -d src ] || { mkdir src && tar -xf src.tar -C src; }
+          sh ../../tools/bash/native-host-check.sh ../package/salam.exe src/tests/en/llvm/*.salam

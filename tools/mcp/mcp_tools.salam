@@ -1,0 +1,729 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "mcptool"
+@fa "ابزارام‌سی‌پی"
+package mcptool
+
+import str
+import os
+import os.temp
+import fs.path
+import fs.file
+import encoding.json
+import encoding.value
+import encoding.encerr
+
+include mcptxt "mcp_text.salam"
+include mcpexec "mcp_exec.salam"
+include mcpout "mcp_result.salam"
+include mcphint "mcp_hints.salam"
+include mcpguide "mcp_guide.salam"
+
+@en "Target"
+pub struct Target:
+    pub ok: bool = false
+    pub full: str = ""
+    pub label: str = ""
+    pub work: str = ""
+    pub problem: str = ""
+end
+
+func _scrub(t: Target, s: str): str:
+    if t.work.len() == 0: ret s end
+    ret str.Replace(s, t.work.concat("/"), "")
+end
+
+func _exec(t: Target, args: Vector<str>): mcpexec.Outcome:
+    if t.work.len() == 0: ret mcpexec.Run(args) end
+    mut r := mcpexec.RunIn(t.work, args)
+    r.out = _scrub(t, r.out)
+    r.err = _scrub(t, r.err)
+    ret r
+end
+
+func _exec_program(t: Target, args: Vector<str>, input_text: str): mcpexec.Outcome:
+    mut work := t.work
+    if work.len() == 0: work = mcpexec.Workdir() end
+    mut r := mcpexec.RunWith(work, args, input_text, mcpexec.ProgramTimeout())
+    r.out = _scrub(t, r.out)
+    r.err = _scrub(t, r.err)
+    ret r
+end
+
+func _rfind(s: str, ch: str): int:
+    mut at := 0 - 1
+    mut i := 0
+    until i < s.len():
+        if s.substr(i, 1) == ch: at = i end
+        i += 1
+    end
+    ret at
+end
+
+func _log_diag(ln: str, found &: bool): value.Value:
+    found = false
+    mut d := value.NewValueObject()
+    mut lvl := "error"
+    mut skip := 9
+    mut at := ln.find("][ERROR] ")
+    if at < 0:
+        at = ln.find("][WARN] ")
+        skip = 8
+        lvl = "warning"
+    end
+    if at < 0: ret d end
+    msg := ln.substr(at + skip, ln.len() - at - skip).trim()
+    if not str.EndsWith(msg, ")"): ret d end
+    open_p := _rfind(msg, "(")
+    if open_p < 0: ret d end
+    loc := msg.substr(open_p + 1, msg.len() - open_p - 2)
+    c2 := _rfind(loc, ":")
+    if c2 < 0: ret d end
+    head := loc.substr(0, c2)
+    c1 := _rfind(head, ":")
+    if c1 < 0: ret d end
+    line_n := head.substr(c1 + 1, head.len() - c1 - 1).to_int()
+    col_n := loc.substr(c2 + 1, loc.len() - c2 - 1).to_int()
+    if line_n <= 0: ret d end
+    mut body := msg.substr(0, open_p).trim()
+    mut code := ""
+    if body.find(": ") == 4 and (str.StartsWith(body, "E") or str.StartsWith(body, "W")):
+        code = body.substr(0, 4)
+        body = body.substr(6, body.len() - 6)
+    end
+    value.ObjectSet(d, "level", value.ValueString(lvl))
+    value.ObjectSet(d, "code", value.ValueString(code))
+    value.ObjectSet(d, "message", value.ValueString(body))
+    value.ObjectSet(d, "file", value.ValueString(head.substr(0, c1)))
+    value.ObjectSet(d, "line", value.ValueInt(line_n as i64))
+    value.ObjectSet(d, "column", value.ValueInt(col_n as i64))
+    found = true
+    ret d
+end
+
+func _sv(v: value.Value, k: str): str:
+    if not value.IsObject(v): ret "" end
+    if not value.ObjectHas(v, k): ret "" end
+    f := value.ObjectGet(v, k)
+    if not value.IsString(f): ret "" end
+    ret value.AsString(f)
+end
+
+func _iv(v: value.Value, k: str): int:
+    if not value.IsObject(v): ret 0 end
+    if not value.ObjectHas(v, k): ret 0 end
+    f := value.ObjectGet(v, k)
+    if not value.IsNumber(f): ret 0 end
+    ret value.AsInt(f) as int
+end
+
+func _source_file(t: Target, f: str): str:
+    if f.len() == 0: ret "" end
+    if path.IsAbs(f): ret f end
+    if t.work.len() > 0: ret path.Join(t.work, f) end
+    ret path.Join(mcpexec.Root(), f)
+end
+
+func _display_file(t: Target, f: str): str:
+    if t.work.len() > 0 and str.StartsWith(f, t.work.concat("/")): ret f.substr(t.work.len() + 1, f.len() - t.work.len() - 1) end
+    std_root := mcpexec.StdRoot().concat("/")
+    if str.StartsWith(f, std_root): ret "std/".concat(f.substr(std_root.len(), f.len() - std_root.len())) end
+    ret mcpexec.Relative(f)
+end
+
+func _line_of(full: str, n: int): str:
+    if full.len() == 0 or n <= 0 or not file.Exists(full): ret "" end
+    lines := mcptxt.Lines(file.ReadText(full))
+    if n > lines.len(): ret "" end
+    ret lines.get(n - 1)
+end
+
+func _ascii(s: str): bool:
+    mut i := 0
+    until i < s.len():
+        if (s[i] as int) < 0 or (s[i] as int) > 126: ret false end
+        i += 1
+    end
+    ret true
+end
+
+func _caret(src: str, col: int): str:
+    if col <= 0 or col > src.len() + 1 or not _ascii(src): ret "" end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := 0
+    until i < col - 1:
+        if src[i] == '\t':
+            str.BufAppend(sb, "\t")
+        else:
+            str.BufAppend(sb, " ")
+        end
+        i += 1
+    end
+    str.BufAppend(sb, "^")
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _weak_help(help: str): bool:
+    ret help.len() == 0 or str.StartsWith(help, "pick a different name")
+end
+
+func _enrich(t: Target, d &: value.Value):
+    if _iv(d, "line") <= 0: ret end
+    f := _sv(d, "file")
+    full := _source_file(t, f)
+    value.ObjectSet(d, "file", value.ValueString(_display_file(t, full)))
+    src := _line_of(full, _iv(d, "line"))
+    if src.len() > 0: value.ObjectSet(d, "source", value.ValueString(src)) end
+    if _weak_help(_sv(d, "help")):
+        hint := mcphint.Hint(src, _sv(d, "message"), _line_of(full, _iv(d, "line") - 1), _iv(d, "column"))
+        if hint.len() > 0: value.ObjectSet(d, "hint", value.ValueString(hint)) end
+    end
+    code := _sv(d, "code")
+    if code.len() > 0 and code != "E001":
+        ex := mcpguide.ExampleFor(code)
+        if ex.len() > 0: value.ObjectSet(d, "example", value.ValueString(ex)) end
+    end
+end
+
+func _diag_array(t: Target, err: str): value.Value:
+    lines := mcpexec.Diagnostics(err)
+    mut arr := value.NewValueArray()
+    mut i := 0
+    until i < lines.len():
+        mut e := encerr.EncodingError {}
+        d := json.Decode(lines.get(i), e)
+        if not encerr.IsError(e) and not str.StartsWith(_sv(d, "message"), "build aborted"): value.ArrayPush(arr, d) end
+        i += 1
+    end
+    if value.ArrayLen(arr) == 0:
+        raw := mcptxt.Lines(err)
+        mut j := 0
+        until j < raw.len():
+            mut found := false
+            d := _log_diag(raw.get(j), found)
+            if found: value.ArrayPush(arr, d) end
+            j += 1
+        end
+    end
+    mut out := value.NewValueArray()
+    mut k := 0
+    until k < value.ArrayLen(arr):
+        mut d := value.ArrayGet(arr, k)
+        if k < 40: _enrich(t, d) end
+        value.ArrayPush(out, d)
+        k += 1
+    end
+    ret out
+end
+
+func _count_level(arr: value.Value, lvl: str): int:
+    mut n := 0
+    mut i := 0
+    until i < value.ArrayLen(arr):
+        if _sv(value.ArrayGet(arr, i), "level") == lvl: n += 1 end
+        i += 1
+    end
+    ret n
+end
+
+func _plural(n: int, word: str): str:
+    if n == 1: ret "1 ".concat(word) end
+    ret str.FromInt(n).concat(" ").concat(word).concat("s")
+end
+
+func _one_diag(n: int, d: value.Value, seen_codes &: Vector<str>): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, str.FromInt(n))
+    str.BufAppend(sb, ". ")
+    str.BufAppend(sb, _sv(d, "level"))
+    code := _sv(d, "code")
+    if code.len() > 0:
+        str.BufAppend(sb, " ")
+        str.BufAppend(sb, code)
+    end
+    if _iv(d, "line") > 0:
+        str.BufAppend(sb, " at ")
+        str.BufAppend(sb, _sv(d, "file"))
+        str.BufAppend(sb, ":")
+        str.BufAppend(sb, str.FromInt(_iv(d, "line")))
+        str.BufAppend(sb, ":")
+        str.BufAppend(sb, str.FromInt(_iv(d, "column")))
+    end
+    str.BufAppend(sb, "\n   ")
+    str.BufAppend(sb, _sv(d, "message"))
+    str.BufAppend(sb, "\n")
+    src := _sv(d, "source")
+    if src.len() > 0:
+        num := str.FromInt(_iv(d, "line"))
+        str.BufAppend(sb, "   ")
+        str.BufAppend(sb, num)
+        str.BufAppend(sb, " | ")
+        str.BufAppend(sb, src)
+        str.BufAppend(sb, "\n")
+        caret := _caret(src, _iv(d, "column"))
+        if caret.len() > 0:
+            str.BufAppend(sb, "   ")
+            str.BufAppend(sb, " ".repeat(num.len()))
+            str.BufAppend(sb, " | ")
+            str.BufAppend(sb, caret)
+            str.BufAppend(sb, "\n")
+        end
+    end
+    help := _sv(d, "help")
+    if help.len() > 0:
+        str.BufAppend(sb, "   help: ")
+        str.BufAppend(sb, help)
+        str.BufAppend(sb, "\n")
+    end
+    hint := _sv(d, "hint")
+    mut hint_seen := false
+    mut hs := 0
+    until hs < seen_codes.len():
+        if seen_codes.get(hs) == hint: hint_seen = true end
+        hs += 1
+    end
+    if hint.len() > 0 and not hint_seen:
+        seen_codes.push(hint)
+        str.BufAppend(sb, "   hint: ")
+        str.BufAppend(sb, hint)
+        str.BufAppend(sb, "\n")
+    end
+    ex := _sv(d, "example")
+    mut repeat_code := false
+    mut sc := 0
+    until sc < seen_codes.len():
+        if seen_codes.get(sc) == code: repeat_code = true end
+        sc += 1
+    end
+    if ex.len() > 0 and not repeat_code:
+        seen_codes.push(code)
+        str.BufAppend(sb, "   more: salam_docs with query '")
+        str.BufAppend(sb, code)
+        str.BufAppend(sb, "' explains this code; ")
+        str.BufAppend(sb, ex)
+        str.BufAppend(sb, " is a minimal program that triggers it\n")
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _diag_text(arr: value.Value): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    total := value.ArrayLen(arr)
+    mut seen := Vector {} as Vector<str>
+    mut i := 0
+    until i < total and i < 25:
+        str.BufAppend(sb, _one_diag(i + 1, value.ArrayGet(arr, i), seen))
+        i += 1
+    end
+    if total > 25:
+        str.BufAppend(sb, "... and ")
+        str.BufAppend(sb, str.FromInt(total - 25))
+        str.BufAppend(sb, " more (see structuredContent.diagnostics)\n")
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _cascade_note(arr: value.Value): str:
+    if value.ArrayLen(arr) < 3: ret "" end
+    first := value.ArrayGet(arr, 0)
+    if _sv(first, "level") != "error" or _sv(first, "code").len() > 0: ret "" end
+    ret "The first error is a parse error, so several of the later ones are probably knock-on effects. Fix the first one, check again, and only then look at the rest.\n\n"
+end
+
+func _compiler_log_line(ln: str): bool:
+    t := ln.trim()
+    if not str.StartsWith(t, "[20"): ret false end
+    ret t.find("][ERROR] ") > 0 or t.find("][WARN] ") > 0
+end
+
+func _human(err: str, drop_log: bool): str:
+    lines := mcptxt.Lines(err)
+    mut keep := Vector {} as Vector<str>
+    mut skip_help := false
+    mut i := 0
+    until i < lines.len():
+        ln := lines.get(i)
+        t := ln.trim()
+        if str.StartsWith(t, "{\"level\""):
+            skip_help = false
+        else drop_log and _compiler_log_line(ln):
+            skip_help = true
+        else skip_help and str.StartsWith(t, "help:"):
+            skip_help = true
+        else:
+            skip_help = false
+            keep.push(ln)
+        end
+        i += 1
+    end
+    ret mcptxt.Join(keep, "\n")
+end
+
+func _finish(t: Target, verb: str, r: mcpexec.Outcome, show_stdout: bool): mcpout.ToolResult:
+    if not r.launched: ret mcpout.Failure(r.reason) end
+    failed := r.code != 0
+    arr := _diag_array(t, r.err)
+    errors := _count_level(arr, "error")
+    warnings := _count_level(arr, "warning")
+    mut body := str.NewBuilder()
+    defer str.BufFree(body)
+    str.BufAppend(body, "salam ")
+    str.BufAppend(body, verb)
+    str.BufAppend(body, " ")
+    str.BufAppend(body, t.label)
+    str.BufAppend(body, ": ")
+    if r.timed_out:
+        str.BufAppend(body, "TIMED OUT after ")
+        str.BufAppend(body, str.FromInt(mcpexec.ProgramTimeout()))
+        str.BufAppend(body, " seconds (an endless loop, often an inverted `until` condition, or a program waiting on input)")
+    else not failed and errors == 0:
+        str.BufAppend(body, "OK")
+        if warnings > 0:
+            str.BufAppend(body, " with ")
+            str.BufAppend(body, _plural(warnings, "warning"))
+        end
+    else errors > 0:
+        str.BufAppend(body, _plural(errors, "error"))
+        if warnings > 0:
+            str.BufAppend(body, ", ")
+            str.BufAppend(body, _plural(warnings, "warning"))
+        end
+    else:
+        str.BufAppend(body, "failed")
+    end
+    str.BufAppend(body, " (exit code ")
+    str.BufAppend(body, str.FromInt(r.code))
+    str.BufAppend(body, ")\n\n")
+    if value.ArrayLen(arr) > 0:
+        str.BufAppend(body, _cascade_note(arr))
+        str.BufAppend(body, mcpout.Section("Diagnostics", _diag_text(arr)))
+    end
+    stdout_text := mcptxt.Truncate(r.out, 20000)
+    if show_stdout:
+        str.BufAppend(body, mcpout.Section("Program output", stdout_text))
+    end
+    has_diags := value.ArrayLen(arr) > 0
+    log := mcptxt.HeadLines(_human(r.err, has_diags), 60)
+    if show_stdout:
+        str.BufAppend(body, mcpout.Section("Stderr", log))
+    else value.ArrayLen(arr) == 0 or failed:
+        str.BufAppend(body, mcpout.Section("Compiler log", log))
+    end
+    text := str.BufStr(body)
+
+    mut data := value.NewValueObject()
+    value.ObjectSet(data, "ok", value.ValueBool(not failed))
+    value.ObjectSet(data, "exitCode", value.ValueInt(r.code as i64))
+    value.ObjectSet(data, "timedOut", value.ValueBool(r.timed_out))
+    value.ObjectSet(data, "errors", value.ValueInt(errors as i64))
+    value.ObjectSet(data, "warnings", value.ValueInt(warnings as i64))
+    value.ObjectSet(data, "diagnostics", arr)
+    if show_stdout:
+        value.ObjectSet(data, "stdout", value.ValueString(stdout_text))
+        value.ObjectSet(data, "stderr", value.ValueString(mcptxt.Truncate(_human(r.err, has_diags), 20000)))
+    end
+    ret mcpout.Rich(text, data, failed)
+end
+
+func _base(cmd: str, full: str): Vector<str>:
+    a := Vector {} as Vector<str>
+    a.push(cmd)
+    a.push(full)
+    a.push("--error-format=json")
+    a.push("--log-level=error")
+    ret a
+end
+
+func _push_backend(a: Vector<str>, backend: str, release: bool, target: str):
+    if backend.len() > 0: a.push("--backend=".concat(backend)) end
+    if release: a.push("--release") end
+    if target.len() > 0: a.push("--target=".concat(target)) end
+end
+
+func _text_data(key: str, text: str): value.Value:
+    mut data := value.NewValueObject()
+    value.ObjectSet(data, key, value.ValueString(text))
+    ret data
+end
+
+func _format_dir(t: Target): mcpout.ToolResult:
+    a := Vector {} as Vector<str>
+    a.push("format")
+    a.push(t.full)
+    a.push("--check")
+    r := _exec(t, a)
+    if not r.launched: ret mcpout.Failure(r.reason) end
+    if r.code == 0: ret mcpout.Rich("Already formatted: ".concat(t.label), _text_data("status", "formatted"), false) end
+    body := "These files need formatting (salam_format on one file returns its formatted text):\n\n".concat(mcptxt.HeadLines(_scrub(t, r.out.concat(r.err)), 60))
+    ret mcpout.Rich(body, _text_data("status", "needs formatting"), false)
+end
+
+@en "FromPath"
+@fa "از مسیر"
+pub func FromPath(p: str): Target:
+    full := mcpexec.Resolve(p)
+    if full.len() == 0:
+        ret Target { problem = "Refused path '".concat(p).concat("': paths must be inside the workspace (relative to it, or absolute under it), must not contain '..', and must not contain shell metacharacters.") }
+    end
+    if not file.Exists(full) and not os.IsDir(full):
+        ret Target { problem = "No such file or directory in the workspace: ".concat(p).concat(". To check code that is not saved yet, pass it as `source` instead.") }
+    end
+    ret Target { ok = true, full = full, label = p }
+end
+
+@en "FromSource"
+@fa "از متن"
+pub func FromSource(source: str): Target:
+    names := Vector {} as Vector<str>
+    texts := Vector {} as Vector<str>
+    ret FromFiles(source, names, texts, "")
+end
+
+@en "FromFiles"
+@fa "از پرونده‌ها"
+pub func FromFiles(source: str, names: Vector<str>, texts: Vector<str>, entry: str): Target:
+    mut all_names := Vector {} as Vector<str>
+    mut all_texts := Vector {} as Vector<str>
+    mut total := 0
+    if source.trim().len() > 0:
+        all_names.push("main.salam")
+        all_texts.push(source)
+        total += source.len()
+    end
+    mut i := 0
+    until i < names.len():
+        n := names.get(i)
+        if not mcpexec.SafeRelative(n):
+            ret Target { problem = "Refused file name '".concat(n).concat("': use a plain relative name such as 'util.salam' or 'lib/util.salam', without '..', ':' or shell metacharacters.") }
+        end
+        if n == "main.salam" and source.trim().len() > 0:
+            ret Target { problem = "Both source and files[\"main.salam\"] were given; pass the entry program once." }
+        end
+        all_names.push(n)
+        all_texts.push(texts.get(i))
+        total += texts.get(i).len()
+        i += 1
+    end
+    if all_names.len() == 0:
+        ret Target { problem = "No program given: pass the full text of a Salam program as `source` (and any included files in `files`)." }
+    end
+    if total > 262144:
+        ret Target { problem = "The program is larger than 256 KB." }
+    end
+    if all_names.len() > 64:
+        ret Target { problem = "At most 64 files can be passed at once." }
+    end
+    mut main_name := entry
+    if main_name.len() == 0:
+        main_name = all_names.get(0)
+        mut k := 0
+        until k < all_names.len():
+            if all_names.get(k) == "main.salam": main_name = "main.salam" end
+            k += 1
+        end
+    end
+    mut known := false
+    mut k2 := 0
+    until k2 < all_names.len():
+        if all_names.get(k2) == main_name: known = true end
+        k2 += 1
+    end
+    if not known:
+        ret Target { problem = "entry '".concat(main_name).concat("' is not one of the files passed.") }
+    end
+    work := mcpexec.StageFiles(all_names, all_texts)
+    if work.len() == 0:
+        ret Target { problem = "Could not stage the program on the server." }
+    end
+    ret Target { ok = true, full = path.Join(work, main_name), label = main_name, work = work }
+end
+
+@en "Release"
+@fa "رها کن"
+pub func Release(t: Target):
+    mcpexec.Unstage(t.work)
+end
+
+@en "Build"
+@fa "ساخت"
+pub func Build(t: Target, backend: str, release: bool, target: str): mcpout.ToolResult:
+    if not t.ok: ret mcpout.Failure(t.problem) end
+    if backend.len() > 0 and backend != "c" and backend != "llvm":
+        ret mcpout.Failure("unknown backend '".concat(backend).concat("': use c or llvm."))
+    end
+    out := temp.File()
+    a := _base("build", t.full)
+    a.push("--output=".concat(out))
+    _push_backend(a, backend, release, target)
+    r := _exec(t, a)
+    temp.Remove(out)
+    ret _finish(t, "build", r, false)
+end
+
+@en "Check"
+@fa "بررسی"
+pub func Check(t: Target): mcpout.ToolResult:
+    if not t.ok: ret mcpout.Failure(t.problem) end
+    a := _base("inspect", t.full)
+    a.push("--emit-symbol")
+    mut r := _exec(t, a)
+    r.out = ""
+    ret _finish(t, "check", r, false)
+end
+
+@en "Run"
+@fa "اجرا"
+pub func Run(t: Target, stdin_text: str, backend: str): mcpout.ToolResult:
+    if not t.ok: ret mcpout.Failure(t.problem) end
+    if backend.len() > 0 and backend != "c" and backend != "llvm":
+        ret mcpout.Failure("unknown backend '".concat(backend).concat("': use c or llvm."))
+    end
+    a := _base("run", t.full)
+    if backend.len() > 0: a.push("--backend=".concat(backend)) end
+    ret _finish(t, "run", _exec_program(t, a, stdin_text), true)
+end
+
+@en "Exec"
+@fa "تفسیر"
+pub func Exec(t: Target, stdin_text: str): mcpout.ToolResult:
+    if not t.ok: ret mcpout.Failure(t.problem) end
+    a := _base("exec", t.full)
+    limit := mcpexec.ProgramTimeout()
+    if limit > 0: a.push("--timeout=".concat(str.FromInt(limit * 1000))) end
+    ret _finish(t, "exec", _exec_program(t, a, stdin_text), true)
+end
+
+@en "Format"
+@fa "قالب‌بندی"
+pub func Format(t: Target): mcpout.ToolResult:
+    if not t.ok: ret mcpout.Failure(t.problem) end
+    if os.IsDir(t.full): ret _format_dir(t) end
+    original := file.ReadText(t.full)
+    mut scratch := ""
+    mut copy := t.full
+    if t.work.len() == 0:
+        scratch = temp.Directory()
+        copy = path.Join(scratch, path.Basename(t.full))
+        file.WriteText(copy, original)
+    end
+    a := Vector {} as Vector<str>
+    a.push("format")
+    a.push(copy)
+    r := mcpexec.RunIn(path.Dirname(copy), a)
+    formatted := file.ReadText(copy)
+    if scratch.len() > 0: temp.RemoveDir(scratch) end
+    if not r.launched: ret mcpout.Failure(r.reason) end
+    if r.code != 0:
+        ret mcpout.Failure("salam format could not format ".concat(t.label).concat(" (it usually means the file does not parse; run salam_check first):\n\n").concat(mcptxt.HeadLines(_scrub(t, r.out.concat(r.err)), 40)))
+    end
+    mut data := value.NewValueObject()
+    value.ObjectSet(data, "changed", value.ValueBool(formatted != original))
+    value.ObjectSet(data, "formatted", value.ValueString(formatted))
+    if formatted == original: ret mcpout.Rich("Already formatted: ".concat(t.label), data, false) end
+    body := "Canonical formatting of ".concat(t.label).concat(" (nothing was written; replace the file with this text):\n\n```salam\n").concat(mcptxt.Truncate(formatted, 60000).trim()).concat("\n```")
+    ret mcpout.Rich(body, data, false)
+end
+
+@en "Translate"
+@fa "ترجمه"
+pub func Translate(t: Target, lang: str): mcpout.ToolResult:
+    if not t.ok: ret mcpout.Failure(t.problem) end
+    if lang != "en" and lang != "fa": ret mcpout.Failure("unknown language '".concat(lang).concat("': use en or fa.")) end
+    if os.IsDir(t.full): ret mcpout.Failure("salam_translate takes a single file.") end
+    out := temp.File().concat(".salam")
+    a := Vector {} as Vector<str>
+    a.push("translate")
+    a.push(lang)
+    a.push(t.full)
+    a.push("--output=".concat(out))
+    r := _exec(t, a)
+    text := file.ReadText(out)
+    temp.Remove(out)
+    if not r.launched: ret mcpout.Failure(r.reason) end
+    if r.code != 0 or text.len() == 0:
+        ret mcpout.Failure("salam translate failed for ".concat(t.label).concat(":\n\n").concat(mcptxt.HeadLines(_scrub(t, r.out.concat(r.err)), 40)))
+    end
+    mut lang_name := "English"
+    if lang == "fa": lang_name = "Persian" end
+    body := t.label.concat(" in ").concat(lang_name).concat(" Salam (nothing was written). Compile Persian source with --lang=fa, or keep the `// زبان: فارسی` first line:\n\n```salam\n").concat(mcptxt.Truncate(text, 60000).trim()).concat("\n```")
+    ret mcpout.Rich(body, _text_data("translated", text), false)
+end
+
+@en "Inspect"
+@fa "بازرسی"
+pub func Inspect(t: Target, emit: str): mcpout.ToolResult:
+    if not t.ok: ret mcpout.Failure(t.problem) end
+    if emit.len() > 0 and emit != "symbols" and emit != "tokens" and emit != "ast":
+        ret mcpout.Failure("unknown emit '".concat(emit).concat("': use tokens, ast or symbols."))
+    end
+    mut flag := "--emit-symbol"
+    if emit == "tokens": flag = "--emit-tokens" end
+    if emit == "ast": flag = "--emit-ast" end
+    a := _base("inspect", t.full)
+    a.push(flag)
+    r := _exec(t, a)
+    if not r.launched: ret mcpout.Failure(r.reason) end
+    if r.code != 0 and r.out.trim().len() == 0: ret _finish(t, "inspect", r, false) end
+    body := mcptxt.Truncate(r.out, 60000)
+    mut data := value.NewValueObject()
+    value.ObjectSet(data, "xml", value.ValueString(body))
+    value.ObjectSet(data, "diagnostics", _diag_array(t, r.err))
+    ret mcpout.Rich(body, data, r.code != 0)
+end
+
+@en "LlvmIr"
+@fa "کد میانی"
+pub func LlvmIr(t: Target, target: str): mcpout.ToolResult:
+    if not t.ok: ret mcpout.Failure(t.problem) end
+    out := temp.File()
+    a := _base("llvm", t.full)
+    a.push("--output=".concat(out))
+    if target.len() > 0: a.push("--target=".concat(target)) end
+    r := _exec(t, a)
+    ir := file.ReadText(out)
+    temp.Remove(out)
+    if r.code != 0: ret _finish(t, "llvm", r, false) end
+    ret mcpout.Text(mcptxt.Truncate(_scrub(t, ir), 60000))
+end
+
+@en "Js"
+@fa "جاوااسکریپت"
+pub func Js(t: Target): mcpout.ToolResult:
+    if not t.ok: ret mcpout.Failure(t.problem) end
+    out := temp.File().concat(".js")
+    a := _base("js", t.full)
+    a.push("--output=".concat(out))
+    r := _exec(t, a)
+    code := file.ReadText(out)
+    temp.Remove(out)
+    if r.code != 0: ret _finish(t, "js", r, false) end
+    ret mcpout.Text(mcptxt.Truncate(code, 60000))
+end
+
+@en "Version"
+@fa "نسخه"
+pub func Version(): mcpout.ToolResult:
+    a := Vector {} as Vector<str>
+    a.push("version")
+    r := mcpexec.Run(a)
+    if not r.launched: ret mcpout.Failure(r.reason) end
+    ret mcpout.Text(r.out.concat(r.err).trim())
+end

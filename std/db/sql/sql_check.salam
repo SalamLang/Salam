@@ -1,0 +1,2062 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package sql
+
+import str
+import mem
+
+@en "STMT_UNKNOWN"
+@fa "دستور ناشناخته"
+pub const STMT_UNKNOWN := 0
+
+@en "STMT_SELECT"
+@fa "دستور گزینش"
+pub const STMT_SELECT := 1
+
+@en "STMT_INSERT"
+@fa "دستور درج"
+pub const STMT_INSERT := 2
+
+@en "STMT_UPDATE"
+@fa "دستور بروزرسانی"
+pub const STMT_UPDATE := 3
+
+@en "STMT_DELETE"
+@fa "دستور حذف"
+pub const STMT_DELETE := 4
+
+@en "STMT_DDL"
+@fa "دستور طرح"
+pub const STMT_DDL := 5
+
+k_sql_aggregates := [
+    "COUNT", "SUM", "AVG", "MIN", "MAX", "TOTAL", "GROUP_CONCAT", "STRING_AGG", "ARRAY_AGG",
+    "JSON_AGG", "JSONB_AGG", "BIT_AND", "BIT_OR", "BOOL_AND", "BOOL_OR", "EVERY", "STDDEV",
+    "STDDEV_POP", "STDDEV_SAMP", "VARIANCE", "VAR_POP", "VAR_SAMP"
+]
+
+struct Scope:
+    pub base: int = 0
+    pub name_base: int = 0
+    pub srcs: Vector<str> = Vector {}
+    pub cols: Vector<str> = Vector {}
+    pub kinds: Vector<int> = Vector {}
+    pub nulls: Vector<bool> = Vector {}
+    pub prims: Vector<bool> = Vector {}
+    pub names: Vector<str> = Vector {}
+    pub opens: Vector<bool> = Vector {}
+end
+
+struct Checker:
+    pub p: Parser = Parser {}
+    pub cat: Catalog = Catalog {}
+    pub local: Catalog = Catalog {}
+    pub owned: Vector<str> = Vector {}
+    pub ptoks: Vector<int> = Vector {}
+    pub pkinds: Vector<int> = Vector {}
+    pub pnulls: Vector<bool> = Vector {}
+    pub ptables: Vector<str> = Vector {}
+    pub pcols: Vector<str> = Vector {}
+    pub results: Vector<ResultCol> = Vector {}
+    pub kind: int = 0
+    pub table: str = ""
+    pub want_results: bool = false
+end
+
+@en "Param"
+@fa "پارامتر"
+pub struct Param:
+    @en "marker"
+    @fa "نشانه"
+    pub marker: str = ""
+    @en "ordinal"
+    @fa "شماره"
+    pub ordinal: int = 0
+    @en "table"
+    @fa "جدول"
+    pub table: str = ""
+    @en "column"
+    @fa "ستون"
+    pub column: str = ""
+    @en "kind"
+    @fa "نوع"
+    pub kind: int = 7
+    @en "not_null"
+    @fa "تهی‌ناپذیر"
+    pub not_null: bool = false
+end
+
+@en "ResultCol"
+@fa "ستون نتیجه"
+pub struct ResultCol:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "table"
+    @fa "جدول"
+    pub table: str = ""
+    @en "kind"
+    @fa "نوع"
+    pub kind: int = 7
+    @en "nullable"
+    @fa "تهی‌پذیر"
+    pub nullable: bool = true
+end
+
+@en "Analysis"
+@fa "تحلیل"
+pub struct Analysis:
+    @en "ok"
+    @fa "بدون خطا"
+    pub ok: bool = true
+    @en "kind"
+    @fa "نوع"
+    pub kind: int = 0
+    @en "table"
+    @fa "جدول"
+    pub table: str = ""
+    @en "params"
+    @fa "پارامترها"
+    pub params: Vector<Param> = Vector {}
+    @en "results"
+    @fa "نتیجه‌ها"
+    pub results: Vector<ResultCol> = Vector {}
+    @en "report"
+    @fa "گزارش"
+    pub report: Report = Report {}
+    @en "owned"
+    @fa "رشته‌های تحت مالکیت"
+    pub owned: Vector<str> = Vector {}
+end
+
+func c_own(ck &: Checker, s: str): str:
+    ck.owned.push(s)
+    ret s
+end
+
+func c_name(ck &: Checker, tok: int): str:
+    if tok < 0:
+        ret ""
+    end
+    ret c_own(ck, tok_name(ck.p.src, ck.p.toks.get(tok)))
+end
+
+func c_err(ck &: Checker, tok: int, code: str, message: str, help: str):
+    p_err_at(ck.p, tok, code, message, help)
+end
+
+func c_warn(ck &: Checker, tok: int, code: str, message: str, help: str):
+    if tok < 0:
+        ret
+    end
+    t := ck.p.toks.get(tok)
+    mut n := t.len
+    if n < 1:
+        n = 1
+    end
+    add_diag(ck.p.rep, WARNING, code, message, help, t.line, t.col, t.off, n)
+end
+
+func min3(a: int, b: int, c: int): int:
+    mut m := a
+    if b < m:
+        m = b
+    end
+    if c < m:
+        m = c
+    end
+    ret m
+end
+
+func edit_dist(a: str, b: str): int:
+    la := a.len()
+    lb := b.len()
+    if la == 0:
+        ret lb
+    end
+    if lb == 0:
+        ret la
+    end
+    mut prev := Vector {} as Vector<int>
+    mut cur := Vector {} as Vector<int>
+    mut j := 0
+    until j < lb + 1:
+        prev.push(j)
+        cur.push(0)
+        j = j + 1
+    end
+    mut i := 1
+    until i < la + 1:
+        cur.set(0, i)
+        ca := ch_upper(a[i - 1])
+        mut k := 1
+        until k < lb + 1:
+            cost := ca == ch_upper(b[k - 1]) ? 0 : 1
+            cur.set(k, min3(prev.get(k) + 1, cur.get(k - 1) + 1, prev.get(k - 1) + cost))
+            k = k + 1
+        end
+        mut m := 0
+        until m < lb + 1:
+            prev.set(m, cur.get(m))
+            m = m + 1
+        end
+        i = i + 1
+    end
+    out := prev.get(lb)
+    prev.free()
+    cur.free()
+    ret out
+end
+
+func near_of(cands: Vector<str>, want: str): str:
+    mut best := ""
+    mut bestd := 3
+    mut i := 0
+    until i < cands.len():
+        cand := cands.get(i)
+        if not str.IsEmpty(cand):
+            d := edit_dist(cand, want)
+            if d < bestd:
+                bestd = d
+                best = cand
+            end
+        end
+        i = i + 1
+    end
+    ret best
+end
+
+func did_you_mean(name: str): str:
+    if str.IsEmpty(name):
+        ret ""
+    end
+    ret "did you mean \"" + name + "\"?"
+end
+
+func scope_free(sc &: Scope):
+    sc.srcs.free()
+    sc.cols.free()
+    sc.kinds.free()
+    sc.nulls.free()
+    sc.prims.free()
+    sc.names.free()
+    sc.opens.free()
+end
+
+func scope_find_src_here(sc: Scope, name: str): int:
+    mut i := sc.name_base
+    until i < sc.names.len():
+        if str.EqualFold(sc.names.get(i), name):
+            ret i
+        end
+        i = i + 1
+    end
+    ret 0 - 1
+end
+
+func scope_find_src(sc: Scope, name: str): int:
+    mut i := 0
+    until i < sc.names.len():
+        if str.EqualFold(sc.names.get(i), name):
+            ret i
+        end
+        i = i + 1
+    end
+    ret 0 - 1
+end
+
+func scope_inherit(dst &: Scope, src: Scope):
+    mut i := 0
+    until i < src.cols.len():
+        dst.srcs.push(src.srcs.get(i))
+        dst.cols.push(src.cols.get(i))
+        dst.kinds.push(src.kinds.get(i))
+        dst.nulls.push(true)
+        dst.prims.push(false)
+        i = i + 1
+    end
+    mut j := 0
+    until j < src.names.len():
+        dst.names.push(src.names.get(j))
+        dst.opens.push(src.opens.get(j))
+        j = j + 1
+    end
+    dst.base = src.cols.len()
+    dst.name_base = src.names.len()
+end
+
+func lookup_table(ck: Checker, name: str, out &: Table): bool:
+    i := cat_find(ck.local, name)
+    if i >= 0:
+        out = ck.local.tables.get(i)
+        ret true
+    end
+    j := cat_find(ck.cat, name)
+    if j >= 0:
+        out = ck.cat.tables.get(j)
+        ret true
+    end
+    ret false
+end
+
+func table_names(ck &: Checker, out &: Vector<str>):
+    mut i := 0
+    until i < ck.cat.tables.len():
+        out.push(ck.cat.tables.get(i).name)
+        i = i + 1
+    end
+    mut j := 0
+    until j < ck.local.tables.len():
+        out.push(ck.local.tables.get(j).name)
+        j = j + 1
+    end
+end
+
+func scope_add_table(sc &: Scope, as_name: str, t: Table, nullable: bool):
+    sc.names.push(as_name)
+    sc.opens.push(t.open)
+    mut i := 0
+    until i < t.columns.len():
+        col := t.columns.get(i)
+        sc.srcs.push(as_name)
+        sc.cols.push(col.name)
+        sc.kinds.push(col.kind)
+        sc.nulls.push(nullable or not col.not_null)
+        sc.prims.push(col.primary)
+        i = i + 1
+    end
+end
+
+func scope_add_results(sc &: Scope, as_name: str, rows: Vector<ResultCol>, nullable: bool):
+    sc.names.push(as_name)
+    sc.opens.push(false)
+    mut i := 0
+    until i < rows.len():
+        r := rows.get(i)
+        sc.srcs.push(as_name)
+        sc.cols.push(r.name)
+        sc.kinds.push(r.kind)
+        sc.nulls.push(nullable or r.nullable)
+        sc.prims.push(false)
+        i = i + 1
+    end
+end
+
+func note_param(ck &: Checker, tok: int, kind: int, not_null: bool, table: str, column: str):
+    mut i := 0
+    until i < ck.ptoks.len():
+        if ck.ptoks.get(i) == tok:
+            ret
+        end
+        i = i + 1
+    end
+    ck.ptoks.push(tok)
+    ck.pkinds.push(kind)
+    ck.pnulls.push(not_null)
+    ck.ptables.push(table)
+    ck.pcols.push(column)
+end
+
+func col_find(ck &: Checker, sc &: Scope, node: int): int:
+    n := ck.p.ast.nodes.get(node)
+    cname := c_name(ck, n.tok)
+    mut qual := ""
+    if n.t1 >= 0:
+        qual = c_name(ck, n.t1)
+    end
+    mut found := 0 - 1
+    mut hits := 0
+    mut i := sc.base
+    until i < sc.cols.len():
+        if str.EqualFold(sc.cols.get(i), cname):
+            if str.IsEmpty(qual) or str.EqualFold(sc.srcs.get(i), qual):
+                hits = hits + 1
+                if found < 0:
+                    found = i
+                end
+            end
+        end
+        i = i + 1
+    end
+    if found < 0:
+        mut j := 0
+        until j < sc.base:
+            if str.EqualFold(sc.cols.get(j), cname):
+                if str.IsEmpty(qual) or str.EqualFold(sc.srcs.get(j), qual):
+                    found = j
+                    break
+                end
+            end
+            j = j + 1
+        end
+        ret found
+    end
+    if hits > 1:
+        c_err(
+            ck, n.tok, "SQL312", "column \"" + cname + "\" is in more than one table here",
+            "qualify it, as in " + sc.srcs.get(found) + "." + cname
+        )
+    end
+    ret found
+end
+
+func scope_has_open(sc: Scope): bool:
+    mut i := 0
+    until i < sc.opens.len():
+        if sc.opens.get(i):
+            ret true
+        end
+        i = i + 1
+    end
+    ret false
+end
+
+func resolve_col(ck &: Checker, sc &: Scope, node: int):
+    if col_find(ck, sc, node) >= 0:
+        ret
+    end
+    if sc.cols.len() == 0 and sc.names.len() == 0:
+        ret
+    end
+    n := ck.p.ast.nodes.get(node)
+    column := c_name(ck, n.tok)
+    if n.t1 >= 0:
+        qual := c_name(ck, n.t1)
+        si := scope_find_src(sc, qual)
+        if si < 0:
+            best := near_of(sc.names, qual)
+            c_err(
+                ck, n.t1, "SQL310", "no table or alias named \"" + qual + "\" in this statement",
+                did_you_mean(best)
+            )
+            ret
+        end
+        if sc.opens.get(si):
+            ret
+        end
+        mut cands := Vector {} as Vector<str>
+        mut i := 0
+        until i < sc.cols.len():
+            if str.EqualFold(sc.srcs.get(i), qual):
+                cands.push(sc.cols.get(i))
+            end
+            i = i + 1
+        end
+        best := near_of(cands, column)
+        cands.free()
+        c_err(
+            ck, n.tok, "SQL311", "\"" + qual + "\" has no column \"" + column + "\"", did_you_mean(best)
+        )
+        ret
+    end
+    if scope_has_open(sc):
+        ret
+    end
+    best := near_of(sc.cols, column)
+    c_err(
+        ck, n.tok, "SQL311", "no column named \"" + column + "\" in this statement", did_you_mean(best)
+    )
+end
+
+func kind_of_func_upper(u: str): int:
+    if str.Equals(u, "COUNT"):
+        ret TYPE_INT
+    end
+    if str.Equals(u, "SUM") or str.Equals(u, "TOTAL") or str.Equals(u, "AVG"):
+        ret TYPE_FLOAT
+    end
+    if str.Equals(u, "LENGTH") or str.Equals(u, "CHAR_LENGTH") or str.Equals(u, "ROW_NUMBER"):
+        ret TYPE_INT
+    end
+    if str.Equals(u, "ABS") or str.Equals(u, "ROUND"):
+        ret TYPE_FLOAT
+    end
+    if str.Equals(u, "LOWER") or str.Equals(u, "UPPER") or str.Equals(u, "TRIM"):
+        ret TYPE_TEXT
+    end
+    if str.Equals(u, "CONCAT") or str.Equals(u, "SUBSTR") or str.Equals(u, "SUBSTRING"):
+        ret TYPE_TEXT
+    end
+    if str.Equals(u, "NOW") or str.Equals(u, "CURRENT_TIMESTAMP"):
+        ret TYPE_TIME
+    end
+    if str.Equals(u, "DATE") or str.Equals(u, "DATETIME"):
+        ret TYPE_TIME
+    end
+    ret TYPE_UNKNOWN
+end
+
+func func_kind(name: str): int:
+    u := name.upper()
+    k := kind_of_func_upper(u)
+    mem.Free(u as void*)
+    ret k
+end
+
+func lit_kind(op: int): int:
+    if op == LIT_INT:
+        ret TYPE_INT
+    end
+    if op == LIT_FLOAT:
+        ret TYPE_FLOAT
+    end
+    if op == LIT_STRING:
+        ret TYPE_TEXT
+    end
+    if op == LIT_BLOB:
+        ret TYPE_BLOB
+    end
+    if op == LIT_BOOL:
+        ret TYPE_BOOL
+    end
+    if op == LIT_CURRENT:
+        ret TYPE_TIME
+    end
+    ret TYPE_NULL
+end
+
+func is_cmp_op(op: int): bool:
+    if op == OP_EQ or op == OP_NE or op == OP_LT or op == OP_LE:
+        ret true
+    end
+    if op == OP_GT or op == OP_GE or op == OP_IS:
+        ret true
+    end
+    if op == OP_LIKE or op == OP_ILIKE or op == OP_GLOB:
+        ret true
+    end
+    ret op == OP_REGEXP or op == OP_MATCH
+end
+
+func is_aggregate_name(name: str): bool:
+    mut i := 0
+    until i < len(k_sql_aggregates):
+        if str.EqualFold(name, k_sql_aggregates[i]):
+            ret true
+        end
+        i = i + 1
+    end
+    ret false
+end
+
+func expr_has_aggregate(ck &: Checker, id: int): bool:
+    k := nd_kind(ck.p.ast, id)
+    if k == N_NONE:
+        ret false
+    end
+    if k == N_SUBQUERY or k == N_EXISTS:
+        ret false
+    end
+    n := ck.p.ast.nodes.get(id)
+    if k == N_FUNC:
+        if is_aggregate_name(c_name(ck, n.tok)):
+            ret true
+        end
+    end
+    if expr_has_aggregate(ck, n.a) or expr_has_aggregate(ck, n.b):
+        ret true
+    end
+    if expr_has_aggregate(ck, n.c) or expr_has_aggregate(ck, n.d):
+        ret true
+    end
+    mut i := 0
+    until i < n.list.len():
+        if expr_has_aggregate(ck, n.list.get(i)):
+            ret true
+        end
+        i = i + 1
+    end
+    ret false
+end
+
+func collect_bare_cols(ck &: Checker, id: int, out &: Vector<int>):
+    k := nd_kind(ck.p.ast, id)
+    if k == N_NONE:
+        ret
+    end
+    n := ck.p.ast.nodes.get(id)
+    if k == N_COLUMN_REF:
+        out.push(id)
+        ret
+    end
+    if k == N_FUNC:
+        if is_aggregate_name(c_name(ck, n.tok)):
+            ret
+        end
+    end
+    if k == N_SUBQUERY or k == N_EXISTS:
+        ret
+    end
+    collect_bare_cols(ck, n.a, out)
+    collect_bare_cols(ck, n.b, out)
+    collect_bare_cols(ck, n.c, out)
+    collect_bare_cols(ck, n.d, out)
+    mut i := 0
+    until i < n.list.len():
+        collect_bare_cols(ck, n.list.get(i), out)
+        i = i + 1
+    end
+end
+
+func lit_is_number_text(ck &: Checker, node: int): bool:
+    n := ck.p.ast.nodes.get(node)
+    t := ck.p.toks.get(n.tok)
+    if t.len < 3:
+        ret false
+    end
+    mut i := t.off + 1
+    stop := t.off + t.len - 1
+    mut digits := 0
+    mut dots := 0
+    until i < stop:
+        c := ck.p.src[i]
+        if ch_digit(c):
+            digits = digits + 1
+        else c == '.':
+            dots = dots + 1
+        else c == '-' or c == '+':
+            if i != t.off + 1:
+                ret false
+            end
+        else:
+            ret false
+        end
+        i = i + 1
+    end
+    ret digits > 0 and dots < 2
+end
+
+func lit_int_value(ck &: Checker, id: int): int:
+    if nd_kind(ck.p.ast, id) != N_LITERAL:
+        ret 0 - 1
+    end
+    n := ck.p.ast.nodes.get(id)
+    if n.op != LIT_INT:
+        ret 0 - 1
+    end
+    t := ck.p.toks.get(n.tok)
+    if t.len < 1 or t.len > 9:
+        ret 0 - 1
+    end
+    mut v := 0
+    mut i := 0
+    until i < t.len:
+        c := ck.p.src[t.off + i]
+        if not ch_digit(c):
+            ret 0 - 1
+        end
+        v = v * 10 + ((c as int) - 48)
+        i = i + 1
+    end
+    ret v
+end
+
+func check_subquery_arity(ck &: Checker, sc &: Scope, sub: int, want: int, tok: int):
+    k := nd_kind(ck.p.ast, sub)
+    if k != N_SELECT and k != N_SET_OP and k != N_WITH and k != N_VALUES:
+        ret
+    end
+    mut rows := Vector {} as Vector<ResultCol>
+    select_results(ck, sub, sc, rows, true)
+    got := rows.len()
+    rows.free()
+    if got == 0 or got == want:
+        ret
+    end
+    mut what := "one value is"
+    if want > 1:
+        what = str.FromInt(want as i64) + " values are"
+    end
+    c_err(
+        ck, tok, "SQL324", "this subquery returns " + str.FromInt(got as i64) + " columns but " + what + " expected",
+        "select just the column the comparison needs"
+    )
+end
+
+func check_ordinals(ck &: Checker, list_node: int, count: int, label: str):
+    if list_node < 0:
+        ret
+    end
+    items := ck.p.ast.nodes.get(list_node).list
+    mut i := 0
+    until i < items.len():
+        mut e := items.get(i)
+        if nd_kind(ck.p.ast, e) == N_ORDER_ITEM:
+            e = ck.p.ast.nodes.get(e).a
+        end
+        v := lit_int_value(ck, e)
+        if v >= 0:
+            if v < 1 or v > count:
+                c_err(
+                    ck, ck.p.ast.nodes.get(e).tok, "SQL326", label + " " + str.FromInt(v as i64) + " but the statement returns " + str.FromInt(count as i64) + " columns",
+                    "count the result columns from 1, or name the column instead"
+                )
+            end
+        end
+        i = i + 1
+    end
+end
+
+func check_limit_value(ck &: Checker, id: int, what: str):
+    if nd_kind(ck.p.ast, id) != N_LITERAL:
+        ret
+    end
+    n := ck.p.ast.nodes.get(id)
+    if n.op == LIT_INT:
+        ret
+    end
+    if n.op == LIT_STRING or n.op == LIT_BOOL or n.op == LIT_NULL:
+        c_err(
+            ck, n.tok, "SQL327", what + " takes a number",
+            "write the count without quotes, or bind it as a placeholder"
+        )
+    end
+end
+
+func check_duplicate_aliases(ck &: Checker, id: int):
+    n := ck.p.ast.nodes.get(id)
+    mut seen := Vector {} as Vector<str>
+    mut i := 0
+    until i < n.list.len():
+        rc := ck.p.ast.nodes.get(n.list.get(i))
+        if (rc.flags & F_STAR) == 0:
+            name := result_name(ck, n.list.get(i))
+            if not str.IsEmpty(name):
+                mut j := 0
+                until j < seen.len():
+                    if str.EqualFold(seen.get(j), name) and rc.t2 >= 0:
+                        c_warn(
+                            ck, rc.t2, "SQL325", "two result columns are both called \"" + name + "\"",
+                            "give one of them a different alias"
+                        )
+                        break
+                    end
+                    j = j + 1
+                end
+                seen.push(name)
+            end
+        end
+        i = i + 1
+    end
+    seen.free()
+end
+
+func check_cmp_types(ck &: Checker, sc &: Scope, a: int, b: int):
+    mut cnode := 0 - 1
+    mut lnode := 0 - 1
+    if nd_kind(ck.p.ast, a) == N_COLUMN_REF and nd_kind(ck.p.ast, b) == N_LITERAL:
+        cnode = a
+        lnode = b
+    else nd_kind(ck.p.ast, b) == N_COLUMN_REF and nd_kind(ck.p.ast, a) == N_LITERAL:
+        cnode = b
+        lnode = a
+    end
+    if cnode < 0:
+        ret
+    end
+    idx := col_find(ck, sc, cnode)
+    if idx < 0:
+        ret
+    end
+    col_kind := sc.kinds.get(idx)
+    lit := ck.p.ast.nodes.get(lnode)
+    lit_k := lit_kind(lit.op)
+    if lit_k == TYPE_NULL:
+        ret
+    end
+    cname := c_name(ck, ck.p.ast.nodes.get(cnode).tok)
+    numeric := col_kind == TYPE_INT or col_kind == TYPE_FLOAT
+    if numeric and lit_k == TYPE_TEXT:
+        if lit_is_number_text(ck, lnode):
+            ret
+        end
+        msg := "\"" + cname + "\" is " + KindName(col_kind) + " and this compares it with text"
+        if ck.p.d.id == POSTGRES:
+            c_err(ck, lit.tok, "SQL330", msg, "postgres refuses this value for a numeric column")
+        else:
+            c_warn(ck, lit.tok, "SQL330", msg, "a number goes here without quotes")
+        end
+        ret
+    end
+    if col_kind == TYPE_TEXT and (lit_k == TYPE_INT or lit_k == TYPE_FLOAT):
+        if ck.p.d.id == POSTGRES:
+            c_err(
+                ck, lit.tok, "SQL330", "\"" + cname + "\" is text and postgres has no text = number operator",
+                "quote the value"
+            )
+        end
+    end
+end
+
+func check_group_by(ck &: Checker, sc &: Scope, id: int):
+    n := ck.p.ast.nodes.get(id)
+    if n.c < 0:
+        ret
+    end
+    glist := ck.p.ast.nodes.get(n.c).list
+    if glist.len() == 0:
+        ret
+    end
+    mut grouped := Vector {} as Vector<int>
+    mut i := 0
+    until i < glist.len():
+        g := glist.get(i)
+        if nd_kind(ck.p.ast, g) != N_COLUMN_REF:
+            grouped.free()
+            ret
+        end
+        gi := col_find(ck, sc, g)
+        if gi < 0:
+            grouped.free()
+            ret
+        end
+        grouped.push(gi)
+        i = i + 1
+    end
+    mut determined := Vector {} as Vector<str>
+    mut si := 0
+    until si < sc.names.len():
+        src_name := sc.names.get(si)
+        mut pk_total := 0
+        mut pk_grouped := 0
+        mut c := 0
+        until c < sc.cols.len():
+            if sc.prims.get(c) and str.EqualFold(sc.srcs.get(c), src_name):
+                pk_total = pk_total + 1
+                mut g := 0
+                until g < grouped.len():
+                    if grouped.get(g) == c:
+                        pk_grouped = pk_grouped + 1
+                    end
+                    g = g + 1
+                end
+            end
+            c = c + 1
+        end
+        if pk_total > 0 and pk_grouped == pk_total:
+            determined.push(src_name)
+        end
+        si = si + 1
+    end
+    mut j := 0
+    until j < n.list.len():
+        rc := ck.p.ast.nodes.get(n.list.get(j))
+        if (rc.flags & F_STAR) == 0 and not expr_has_aggregate(ck, rc.a):
+            mut bare := Vector {} as Vector<int>
+            collect_bare_cols(ck, rc.a, bare)
+            mut b := 0
+            until b < bare.len():
+                bi := col_find(ck, sc, bare.get(b))
+                if bi >= 0:
+                    mut ok := false
+                    mut g := 0
+                    until g < grouped.len():
+                        if grouped.get(g) == bi:
+                            ok = true
+                        end
+                        g = g + 1
+                    end
+                    mut dt := 0
+                    until dt < determined.len():
+                        if str.EqualFold(determined.get(dt), sc.srcs.get(bi)):
+                            ok = true
+                        end
+                        dt = dt + 1
+                    end
+                    if not ok:
+                        cname := c_name(ck, ck.p.ast.nodes.get(bare.get(b)).tok)
+                        msg := "\"" + cname + "\" is neither grouped nor aggregated"
+                        help := "add it to GROUP BY, or wrap it in an aggregate such as MAX()"
+                        if ck.p.d.id == POSTGRES:
+                            c_err(ck, ck.p.ast.nodes.get(bare.get(b)).tok, "SQL332", msg, help)
+                        else:
+                            c_warn(ck, ck.p.ast.nodes.get(bare.get(b)).tok, "SQL332", msg, help)
+                        end
+                    end
+                end
+                b = b + 1
+            end
+            bare.free()
+        end
+        j = j + 1
+    end
+    determined.free()
+    grouped.free()
+end
+
+func scope_drop(sc &: Scope, idx: int):
+    sc.srcs.remove_at(idx)
+    sc.cols.remove_at(idx)
+    sc.kinds.remove_at(idx)
+    sc.nulls.remove_at(idx)
+    sc.prims.remove_at(idx)
+end
+
+func check_using(ck &: Checker, sc &: Scope, join: int, left_at: int, right_at: int):
+    n := ck.p.ast.nodes.get(join)
+    open_scope := scope_has_open(sc)
+    mut rend := sc.cols.len()
+    mut i := 0
+    until i < n.list.len():
+        tk := ck.p.ast.nodes.get(n.list.get(i)).tok
+        name := c_name(ck, tk)
+        mut left_has := false
+        mut k := left_at
+        until k < right_at:
+            if str.EqualFold(sc.cols.get(k), name):
+                left_has = true
+            end
+            k = k + 1
+        end
+        mut right_at_idx := 0 - 1
+        mut m := right_at
+        until m < rend:
+            if str.EqualFold(sc.cols.get(m), name) and right_at_idx < 0:
+                right_at_idx = m
+            end
+            m = m + 1
+        end
+        if not open_scope:
+            if not left_has:
+                c_err(
+                    ck, tk, "SQL333", "the left side of this join has no column \"" + name + "\"",
+                    "USING needs the column on both sides; an ON condition can name them separately"
+                )
+            else right_at_idx < 0:
+                c_err(
+                    ck, tk, "SQL333", "the right side of this join has no column \"" + name + "\"",
+                    "USING needs the column on both sides; an ON condition can name them separately"
+                )
+            end
+        end
+        if left_has and right_at_idx >= 0:
+            scope_drop(sc, right_at_idx)
+            rend = rend - 1
+        end
+        i = i + 1
+    end
+end
+
+func cast_kind(ck &: Checker, id: int): int:
+    tn := c_own(ck, type_text(ck.p, id))
+    ret kind_from_type(tn)
+end
+
+func expr_kind(ck &: Checker, sc &: Scope, id: int, nullable &: bool): int:
+    nullable = true
+    k := nd_kind(ck.p.ast, id)
+    if k == N_NONE:
+        ret TYPE_UNKNOWN
+    end
+    n := ck.p.ast.nodes.get(id)
+    if k == N_COLUMN_REF:
+        idx := col_find(ck, sc, id)
+        if idx < 0:
+            ret TYPE_UNKNOWN
+        end
+        nullable = sc.nulls.get(idx)
+        ret sc.kinds.get(idx)
+    end
+    if k == N_LITERAL:
+        nullable = n.op == LIT_NULL
+        ret lit_kind(n.op)
+    end
+    if k == N_CAST:
+        ret cast_kind(ck, id)
+    end
+    if k == N_FUNC:
+        name := c_name(ck, n.tok)
+        if str.EqualFold(name, "COUNT"):
+            nullable = false
+            ret TYPE_INT
+        end
+        if str.EqualFold(name, "TOTAL"):
+            nullable = false
+            ret TYPE_FLOAT
+        end
+        if is_aggregate_name(name):
+            mut inner_null := true
+            mut arg_kind := TYPE_UNKNOWN
+            if n.list.len() > 0:
+                arg_kind = expr_kind(ck, sc, n.list.get(0), inner_null)
+            end
+            nullable = true
+            if str.EqualFold(name, "MIN") or str.EqualFold(name, "MAX"):
+                ret arg_kind
+            end
+            agg_kind := func_kind(name)
+            if agg_kind != TYPE_UNKNOWN:
+                ret agg_kind
+            end
+            ret arg_kind
+        end
+        if str.EqualFold(name, "COALESCE") or str.EqualFold(name, "IFNULL"):
+            if n.list.len() > 0:
+                mut inner := true
+                kk := expr_kind(ck, sc, n.list.get(0), inner)
+                nullable = false
+                ret kk
+            end
+            ret TYPE_UNKNOWN
+        end
+        kf := func_kind(name)
+        if kf != TYPE_UNKNOWN:
+            ret kf
+        end
+        if n.list.len() == 1:
+            mut inner := true
+            kk := expr_kind(ck, sc, n.list.get(0), inner)
+            ret kk
+        end
+        ret TYPE_UNKNOWN
+    end
+    if k == N_BINARY:
+        if is_cmp_op(n.op) or n.op == OP_AND or n.op == OP_OR:
+            nullable = false
+            ret TYPE_BOOL
+        end
+        if n.op == OP_CONCAT:
+            ret TYPE_TEXT
+        end
+        if n.op == OP_DIV:
+            ret TYPE_FLOAT
+        end
+        mut ln := true
+        lk := expr_kind(ck, sc, n.a, ln)
+        mut rn := true
+        rk := expr_kind(ck, sc, n.b, rn)
+        nullable = ln or rn
+        if lk == TYPE_FLOAT or rk == TYPE_FLOAT:
+            ret TYPE_FLOAT
+        end
+        if lk == TYPE_INT or rk == TYPE_INT:
+            ret TYPE_INT
+        end
+        ret TYPE_UNKNOWN
+    end
+    if k == N_UNARY:
+        if n.op == OP_NOT:
+            nullable = false
+            ret TYPE_BOOL
+        end
+        ret expr_kind(ck, sc, n.a, nullable)
+    end
+    if k == N_IN or k == N_BETWEEN or k == N_EXISTS:
+        nullable = false
+        ret TYPE_BOOL
+    end
+    if k == N_CASE:
+        if n.list.len() > 0:
+            arm := ck.p.ast.nodes.get(n.list.get(0))
+            ret expr_kind(ck, sc, arm.b, nullable)
+        end
+        ret TYPE_UNKNOWN
+    end
+    if k == N_SUBQUERY:
+        mut rows := Vector {} as Vector<ResultCol>
+        select_results(ck, n.a, sc, rows, true)
+        mut out := TYPE_UNKNOWN
+        if rows.len() > 0:
+            out = rows.get(0).kind
+            nullable = rows.get(0).nullable
+        end
+        rows.free()
+        ret out
+    end
+    ret TYPE_UNKNOWN
+end
+
+func bind_param(ck &: Checker, sc &: Scope, col_node: int, par_node: int):
+    if nd_kind(ck.p.ast, par_node) != N_PARAM:
+        ret
+    end
+    if nd_kind(ck.p.ast, col_node) != N_COLUMN_REF:
+        ret
+    end
+    idx := col_find(ck, sc, col_node)
+    if idx < 0:
+        ret
+    end
+    cn := ck.p.ast.nodes.get(col_node)
+    note_param(
+        ck, ck.p.ast.nodes.get(par_node).tok, sc.kinds.get(idx), not sc.nulls.get(idx), sc.srcs.get(idx),
+        c_name(ck, cn.tok)
+    )
+end
+
+func walk_list(ck &: Checker, sc &: Scope, items: Vector<int>):
+    mut i := 0
+    until i < items.len():
+        walk_expr(ck, sc, items.get(i))
+        i = i + 1
+    end
+end
+
+func walk_expr(ck &: Checker, sc &: Scope, id: int):
+    k := nd_kind(ck.p.ast, id)
+    if k == N_NONE:
+        ret
+    end
+    n := ck.p.ast.nodes.get(id)
+    if k == N_COLUMN_REF:
+        resolve_col(ck, sc, id)
+        ret
+    end
+    if k == N_BINARY:
+        if is_cmp_op(n.op):
+            bind_param(ck, sc, n.a, n.b)
+            bind_param(ck, sc, n.b, n.a)
+            check_cmp_types(ck, sc, n.a, n.b)
+            if nd_kind(ck.p.ast, n.b) == N_SUBQUERY:
+                mut lw := 1
+                if nd_kind(ck.p.ast, n.a) == N_ROW:
+                    lw = ck.p.ast.nodes.get(n.a).list.len()
+                end
+                check_subquery_arity(ck, sc, ck.p.ast.nodes.get(n.b).a, lw, n.tok)
+            end
+        end
+        walk_expr(ck, sc, n.a)
+        walk_expr(ck, sc, n.b)
+        walk_expr(ck, sc, n.c)
+        ret
+    end
+    if k == N_IN:
+        mut i := 0
+        until i < n.list.len():
+            bind_param(ck, sc, n.a, n.list.get(i))
+            i = i + 1
+        end
+        bind_param(ck, sc, n.a, n.b)
+        walk_expr(ck, sc, n.a)
+        if nd_kind(ck.p.ast, n.b) == N_SELECT or nd_kind(ck.p.ast, n.b) == N_SET_OP or nd_kind(ck.p.ast, n.b) == N_WITH:
+            mut want := 1
+            if nd_kind(ck.p.ast, n.a) == N_ROW:
+                want = ck.p.ast.nodes.get(n.a).list.len()
+            end
+            check_subquery_arity(ck, sc, n.b, want, n.tok)
+        else:
+            walk_expr(ck, sc, n.b)
+        end
+        walk_list(ck, sc, n.list)
+        ret
+    end
+    if k == N_BETWEEN:
+        bind_param(ck, sc, n.a, n.b)
+        bind_param(ck, sc, n.a, n.c)
+        walk_expr(ck, sc, n.a)
+        walk_expr(ck, sc, n.b)
+        walk_expr(ck, sc, n.c)
+        ret
+    end
+    if k == N_SUBQUERY or k == N_EXISTS:
+        mut rows := Vector {} as Vector<ResultCol>
+        select_results(ck, n.a, sc, rows, false)
+        rows.free()
+        ret
+    end
+    if k == N_FUNC or k == N_ROW or k == N_LIST:
+        walk_list(ck, sc, n.list)
+        ret
+    end
+    if k == N_CASE:
+        walk_expr(ck, sc, n.a)
+        walk_list(ck, sc, n.list)
+        walk_expr(ck, sc, n.b)
+        ret
+    end
+    if k == N_WHEN:
+        walk_expr(ck, sc, n.a)
+        walk_expr(ck, sc, n.b)
+        ret
+    end
+    if k == N_UNARY or k == N_CAST or k == N_ORDER_ITEM or k == N_RESULT_COL:
+        walk_expr(ck, sc, n.a)
+        ret
+    end
+    if k == N_SET_ITEM:
+        walk_expr(ck, sc, n.a)
+    end
+end
+
+func add_star_results(sc &: Scope, qual: str, out &: Vector<ResultCol>):
+    mut i := sc.base
+    until i < sc.cols.len():
+        if str.IsEmpty(qual) or str.EqualFold(sc.srcs.get(i), qual):
+            out.push(
+                ResultCol {
+                    name = sc.cols.get(i), table = sc.srcs.get(i), kind = sc.kinds.get(i), nullable = sc.nulls.get(i)
+                }
+            )
+        end
+        i = i + 1
+    end
+end
+
+func result_name(ck &: Checker, id: int): str:
+    n := ck.p.ast.nodes.get(id)
+    if n.t2 >= 0:
+        ret c_name(ck, n.t2)
+    end
+    if nd_kind(ck.p.ast, n.a) == N_COLUMN_REF:
+        ret c_name(ck, ck.p.ast.nodes.get(n.a).tok)
+    end
+    inner := ck.p.ast.nodes.get(n.a)
+    if nd_kind(ck.p.ast, n.a) == N_FUNC:
+        ret c_name(ck, inner.tok)
+    end
+    ret ""
+end
+
+func build_from_scope(ck &: Checker, sc &: Scope, from: int, nullable: bool):
+    k := nd_kind(ck.p.ast, from)
+    if k == N_NONE:
+        ret
+    end
+    n := ck.p.ast.nodes.get(from)
+    if k == N_JOIN:
+        left_null := nullable or n.op == J_RIGHT or n.op == J_FULL
+        right_null := nullable or n.op == J_LEFT or n.op == J_FULL
+        left_at := sc.cols.len()
+        build_from_scope(ck, sc, n.a, left_null)
+        right_at := sc.cols.len()
+        build_from_scope(ck, sc, n.b, right_null)
+        if n.list.len() > 0:
+            check_using(ck, sc, from, left_at, right_at)
+        end
+        ret
+    end
+    if k != N_TABLE_REF:
+        ret
+    end
+    if n.a >= 0:
+        alias := n.t2 >= 0 ? c_name(ck, n.t2) : ""
+        mut rows := Vector {} as Vector<ResultCol>
+        mut empty := Scope {}
+        select_results(ck, n.a, empty, rows, true)
+        scope_free(empty)
+        if str.IsEmpty(alias):
+            c_warn(
+                ck, n.tok, "SQL322", "this subquery has no alias",
+                "name it with AS so its columns can be qualified"
+            )
+        end
+        scope_add_results(sc, alias, rows, nullable)
+        rows.free()
+        ret
+    end
+    if (n.flags & F_STAR) != 0:
+        name := n.t2 >= 0 ? c_name(ck, n.t2) : c_name(ck, n.tok)
+        scope_add_table(sc, name, Table { open = true }, nullable)
+        ret
+    end
+    tname := c_name(ck, n.tok)
+    mut t := Table {}
+    if not lookup_table(ck, tname, t):
+        mut names := Vector {} as Vector<str>
+        table_names(ck, names)
+        best := near_of(names, tname)
+        names.free()
+        if n.t1 >= 0:
+            scope_add_table(sc, tname, Table { open = true }, nullable)
+            ret
+        end
+        c_err(ck, n.tok, "SQL317", "no table named \"" + tname + "\"", did_you_mean(best))
+        scope_add_table(sc, tname, Table { open = true }, nullable)
+        ret
+    end
+    alias := n.t2 >= 0 ? c_name(ck, n.t2) : tname
+    if scope_find_src_here(sc, alias) >= 0:
+        c_err(
+            ck, n.t2 >= 0 ? n.t2 : n.tok, "SQL313", "\"" + alias + "\" is used twice in this FROM",
+            "give one of them a different alias"
+        )
+    end
+    scope_add_table(sc, alias, t, nullable)
+end
+
+func check_select_core(ck &: Checker, id: int, outer &: Scope, out &: Vector<ResultCol>, want: bool):
+    n := ck.p.ast.nodes.get(id)
+    mut sc := Scope {}
+    scope_inherit(sc, outer)
+    build_from_scope(ck, sc, n.a, false)
+    if str.IsEmpty(ck.table) and sc.names.len() > sc.base:
+        ck.table = sc.names.get(0)
+    end
+    walk_expr(ck, sc, n.b)
+    walk_expr(ck, sc, n.c)
+    walk_expr(ck, sc, n.d)
+    mut i := 0
+    until i < n.list.len():
+        rc := n.list.get(i)
+        rn := ck.p.ast.nodes.get(rc)
+        if (rn.flags & F_STAR) != 0:
+            mut qual := ""
+            if rn.t1 >= 0:
+                qual = c_name(ck, rn.t1)
+                if scope_find_src(sc, qual) < 0:
+                    best := near_of(sc.names, qual)
+                    c_err(
+                        ck, rn.t1, "SQL310", "no table or alias named \"" + qual + "\" in this statement",
+                        did_you_mean(best)
+                    )
+                end
+            end
+            if want:
+                add_star_results(sc, qual, out)
+            end
+        else:
+            walk_expr(ck, sc, rn.a)
+            if want:
+                mut nullable := true
+                kk := expr_kind(ck, sc, rn.a, nullable)
+                out.push(
+                    ResultCol {
+                        name = result_name(ck, rc), table = "", kind = kk, nullable = nullable
+                    }
+                )
+            end
+        end
+        i = i + 1
+    end
+    if n.e >= 0:
+        walk_list(ck, sc, ck.p.ast.nodes.get(n.e).list)
+    end
+    walk_expr(ck, sc, n.f)
+    walk_expr(ck, sc, n.g)
+    check_group_by(ck, sc, id)
+    check_duplicate_aliases(ck, id)
+    check_limit_value(ck, n.f, "LIMIT")
+    check_limit_value(ck, n.g, "OFFSET")
+    if expr_has_aggregate(ck, n.b):
+        c_err(
+            ck, n.tok, "SQL328", "an aggregate cannot be used in WHERE",
+            "move the condition to HAVING, which runs after the grouping"
+        )
+    end
+    if want:
+        check_ordinals(ck, n.e, out.len(), "ORDER BY names column")
+        check_ordinals(ck, n.c, out.len(), "GROUP BY names column")
+    end
+    scope_free(sc)
+end
+
+func check_values(ck &: Checker, id: int, outer &: Scope, out &: Vector<ResultCol>, want: bool):
+    n := ck.p.ast.nodes.get(id)
+    mut sc := Scope {}
+    scope_inherit(sc, outer)
+    mut width := 0 - 1
+    mut i := 0
+    until i < n.list.len():
+        row := ck.p.ast.nodes.get(n.list.get(i))
+        if width < 0:
+            width = row.list.len()
+        else width != row.list.len():
+            c_err(
+                ck, row.tok, "SQL314", "this row has " + str.FromInt(row.list.len() as i64) + " values but the first row has " + str.FromInt(width as i64),
+                ""
+            )
+        end
+        walk_list(ck, sc, row.list)
+        if want and i == 0:
+            mut j := 0
+            until j < row.list.len():
+                mut nullable := true
+                kk := expr_kind(ck, sc, row.list.get(j), nullable)
+                out.push(ResultCol { name = "", table = "", kind = kk, nullable = nullable })
+                j = j + 1
+            end
+        end
+        i = i + 1
+    end
+    scope_free(sc)
+end
+
+func select_results(ck &: Checker, id: int, outer &: Scope, out &: Vector<ResultCol>, want: bool):
+    k := nd_kind(ck.p.ast, id)
+    if k == N_NONE:
+        ret
+    end
+    n := ck.p.ast.nodes.get(id)
+    if k == N_WITH:
+        bind_ctes(ck, id)
+        select_results(ck, n.a, outer, out, want)
+        ret
+    end
+    if k == N_SET_OP:
+        select_results(ck, n.a, outer, out, want)
+        mut right := Vector {} as Vector<ResultCol>
+        select_results(ck, n.b, outer, right, true)
+        if out.len() > 0 and right.len() > 0 and out.len() != right.len():
+            c_err(
+                ck, n.tok, "SQL323", "the two sides of this set operation return " + str.FromInt(out.len() as i64) + " and " + str.FromInt(right.len() as i64) + " columns",
+                "both sides have to return the same number of columns"
+            )
+        end
+        right.free()
+        ret
+    end
+    if k == N_VALUES:
+        check_values(ck, id, outer, out, want)
+        ret
+    end
+    if k == N_SELECT:
+        check_select_core(ck, id, outer, out, want)
+    end
+end
+
+func bind_ctes(ck &: Checker, id: int):
+    n := ck.p.ast.nodes.get(id)
+    mut i := 0
+    until i < n.list.len():
+        cte := ck.p.ast.nodes.get(n.list.get(i))
+        name := c_name(ck, cte.tok)
+        if cat_find(ck.local, name) < 0:
+            tid := cat_add(ck.local, name, true)
+            mut rows := Vector {} as Vector<ResultCol>
+            mut empty := Scope {}
+            select_results(ck, cte.a, empty, rows, true)
+            scope_free(empty)
+            if cte.list.len() > 0:
+                mut j := 0
+                until j < cte.list.len():
+                    cn := c_name(ck, ck.p.ast.nodes.get(cte.list.get(j)).tok)
+                    mut kk := TYPE_UNKNOWN
+                    if j < rows.len():
+                        kk = rows.get(j).kind
+                    end
+                    cat_add_col(ck.local, tid, Column { name = str.Clone(cn), type_name = str.Clone(""), kind = kk })
+                    j = j + 1
+                end
+            else:
+                mut j := 0
+                until j < rows.len():
+                    r := rows.get(j)
+                    if str.IsEmpty(r.name):
+                        mut t := ck.local.tables.ref(tid)
+                        t.open = true
+                    else:
+                        cat_add_col(ck.local, tid, Column { name = str.Clone(r.name), type_name = str.Clone(""), kind = r.kind })
+                    end
+                    j = j + 1
+                end
+            end
+            rows.free()
+        end
+        i = i + 1
+    end
+end
+
+func target_table(ck &: Checker, from: int, name &: str, t &: Table): bool:
+    if nd_kind(ck.p.ast, from) != N_TABLE_REF:
+        ret false
+    end
+    n := ck.p.ast.nodes.get(from)
+    if n.a >= 0:
+        ret false
+    end
+    name = c_name(ck, n.tok)
+    ret lookup_table(ck, name, t)
+end
+
+func check_write_col(ck &: Checker, t: Table, tname: str, ctok: int): int:
+    cname := c_name(ck, ctok)
+    ci := tab_find(t, cname)
+    if ci < 0:
+        if t.open:
+            ret 0 - 1
+        end
+        mut cands := Vector {} as Vector<str>
+        mut z := 0
+        until z < t.columns.len():
+            cands.push(t.columns.get(z).name)
+            z = z + 1
+        end
+        best := near_of(cands, cname)
+        cands.free()
+        c_err(
+            ck, ctok, "SQL311", "\"" + tname + "\" has no column \"" + cname + "\"", did_you_mean(best)
+        )
+        ret 0 - 1
+    end
+    if t.columns.get(ci).generated:
+        c_err(
+            ck, ctok, "SQL318", "column \"" + cname + "\" is generated and cannot be written",
+            "leave it out of the statement"
+        )
+    end
+    ret ci
+end
+
+func check_insert(ck &: Checker, id: int):
+    ck.kind = STMT_INSERT
+    n := ck.p.ast.nodes.get(id)
+    mut t := Table {}
+    mut tname := ""
+    if not target_table(ck, n.a, tname, t):
+        if not str.IsEmpty(tname):
+            mut names := Vector {} as Vector<str>
+            table_names(ck, names)
+            best := near_of(names, tname)
+            names.free()
+            c_err(
+                ck, ck.p.ast.nodes.get(n.a).tok, "SQL317", "no table named \"" + tname + "\"",
+                did_you_mean(best)
+            )
+        end
+        ret
+    end
+    ck.table = tname
+    mut sc := Scope {}
+    scope_add_table(sc, tname, t, false)
+    trn := ck.p.ast.nodes.get(n.a)
+    if trn.t2 >= 0:
+        scope_add_table(sc, c_name(ck, trn.t2), t, false)
+    end
+    mut cols := Vector {} as Vector<int>
+    mut named := false
+    if n.d >= 0:
+        named = true
+        list := ck.p.ast.nodes.get(n.d).list
+        mut i := 0
+        until i < list.len():
+            ctok := ck.p.ast.nodes.get(list.get(i)).tok
+            ci := check_write_col(ck, t, tname, ctok)
+            if ci >= 0:
+                mut d := 0
+                until d < cols.len():
+                    if cols.get(d) == ci:
+                        c_err(
+                            ck, ctok, "SQL316", "column \"" + c_name(ck, ctok) + "\" is listed twice",
+                            ""
+                        )
+                        break
+                    end
+                    d = d + 1
+                end
+            end
+            cols.push(ci)
+            i = i + 1
+        end
+    else:
+        mut i := 0
+        until i < t.columns.len():
+            cols.push(i)
+            i = i + 1
+        end
+    end
+    if n.b >= 0 and nd_kind(ck.p.ast, n.b) == N_VALUES:
+        rows := ck.p.ast.nodes.get(n.b).list
+        mut i := 0
+        until i < rows.len():
+            row := ck.p.ast.nodes.get(rows.get(i))
+            if row.list.len() != cols.len() and not t.open:
+                c_err(
+                    ck, row.tok, "SQL314", "this row has " + str.FromInt(row.list.len() as i64) + " values but " + str.FromInt(cols.len() as i64) + " columns are expected",
+                    named ? "the column list names " + str.FromInt(cols.len() as i64) + " columns" : "\"" + tname + "\" has " + str.FromInt(cols.len() as i64) + " columns"
+                )
+            end
+            mut j := 0
+            until j < row.list.len():
+                v := row.list.get(j)
+                if j < cols.len() and cols.get(j) >= 0 and nd_kind(ck.p.ast, v) == N_PARAM:
+                    col := t.columns.get(cols.get(j))
+                    note_param(ck, ck.p.ast.nodes.get(v).tok, col.kind, col.not_null, tname, col.name)
+                end
+                walk_expr(ck, sc, v)
+                j = j + 1
+            end
+            i = i + 1
+        end
+        if not t.open:
+            mut z := 0
+            until z < t.columns.len():
+                col := t.columns.get(z)
+                need := col.not_null and not col.has_default and not col.generated and not col.auto
+                if need:
+                    mut present := false
+                    mut d := 0
+                    until d < cols.len():
+                        if cols.get(d) == z:
+                            present = true
+                        end
+                        d = d + 1
+                    end
+                    if not present:
+                        if ck.p.d.id == SQLITE and col.primary:
+                            c_warn(
+                                ck, n.tok, "SQL335", "\"" + col.name + "\" is the primary key and this INSERT leaves it out",
+                                "sqlite stores NULL there unless the column is declared INTEGER PRIMARY KEY"
+                            )
+                        else:
+                            c_err(
+                                ck, n.tok, "SQL315", "\"" + col.name + "\" is NOT NULL with no default and this INSERT leaves it out",
+                                "add it to the column list and to every row"
+                            )
+                        end
+                    end
+                end
+                z = z + 1
+            end
+        end
+    else n.b >= 0:
+        mut empty := Scope {}
+        mut rows := Vector {} as Vector<ResultCol>
+        select_results(ck, n.b, empty, rows, true)
+        scope_free(empty)
+        if rows.len() > 0 and rows.len() != cols.len() and not t.open:
+            c_err(
+                ck, n.tok, "SQL314", "this SELECT returns " + str.FromInt(rows.len() as i64) + " columns but " + str.FromInt(cols.len() as i64) + " are expected",
+                ""
+            )
+        end
+        rows.free()
+    else n.f >= 0:
+        list := ck.p.ast.nodes.get(n.f).list
+        mut i := 0
+        until i < list.len():
+            it := ck.p.ast.nodes.get(list.get(i))
+            ci := check_write_col(ck, t, tname, it.tok)
+            if ci >= 0 and nd_kind(ck.p.ast, it.a) == N_PARAM:
+                col := t.columns.get(ci)
+                note_param(ck, ck.p.ast.nodes.get(it.a).tok, col.kind, col.not_null, tname, col.name)
+            end
+            walk_expr(ck, sc, it.a)
+            i = i + 1
+        end
+    end
+    if n.c >= 0:
+        conf := ck.p.ast.nodes.get(n.c)
+        if conf.a >= 0:
+            tlist := ck.p.ast.nodes.get(conf.a).list
+            mut ti := 0
+            until ti < tlist.len():
+                _tc := check_write_col(ck, t, tname, ck.p.ast.nodes.get(tlist.get(ti)).tok)
+                ti = ti + 1
+            end
+        end
+        mut i := 0
+        until i < conf.list.len():
+            it := ck.p.ast.nodes.get(conf.list.get(i))
+            ci := check_write_col(ck, t, tname, it.tok)
+            if ci >= 0 and nd_kind(ck.p.ast, it.a) == N_PARAM:
+                col := t.columns.get(ci)
+                note_param(ck, ck.p.ast.nodes.get(it.a).tok, col.kind, col.not_null, tname, col.name)
+            end
+            walk_expr(ck, sc, it.a)
+            i = i + 1
+        end
+        walk_expr(ck, sc, conf.b)
+    end
+    if n.e >= 0:
+        mut rl := ck.p.ast.nodes.get(n.e).list
+        mut i := 0
+        until i < rl.len():
+            rc := ck.p.ast.nodes.get(rl.get(i))
+            if (rc.flags & F_STAR) != 0:
+                if ck.want_results:
+                    add_star_results(sc, "", ck.results)
+                end
+            else:
+                walk_expr(ck, sc, rc.a)
+                if ck.want_results:
+                    mut nullable := true
+                    kk := expr_kind(ck, sc, rc.a, nullable)
+                    ck.results.push(ResultCol { name = result_name(ck, rl.get(i)), kind = kk, nullable = nullable })
+                end
+            end
+            i = i + 1
+        end
+    end
+    cols.free()
+    scope_free(sc)
+end
+
+func check_update(ck &: Checker, id: int):
+    ck.kind = STMT_UPDATE
+    n := ck.p.ast.nodes.get(id)
+    mut sc := Scope {}
+    build_from_scope(ck, sc, n.a, false)
+    build_from_scope(ck, sc, n.d, false)
+    mut t := Table {}
+    mut tname := ""
+    have := target_table(ck, n.a, tname, t)
+    ck.table = tname
+    if n.c >= 0:
+        list := ck.p.ast.nodes.get(n.c).list
+        mut written := Vector {} as Vector<int>
+        mut i := 0
+        until i < list.len():
+            it := ck.p.ast.nodes.get(list.get(i))
+            mut ci := 0 - 1
+            if have:
+                ci = check_write_col(ck, t, tname, it.tok)
+            end
+            if ci >= 0:
+                mut w := 0
+                until w < written.len():
+                    if written.get(w) == ci:
+                        c_err(
+                            ck, it.tok, "SQL329", "\"" + c_name(ck, it.tok) + "\" is assigned twice in this SET",
+                            "keep one assignment per column"
+                        )
+                        break
+                    end
+                    w = w + 1
+                end
+                written.push(ci)
+            end
+            if ci >= 0 and nd_kind(ck.p.ast, it.a) == N_PARAM:
+                col := t.columns.get(ci)
+                note_param(ck, ck.p.ast.nodes.get(it.a).tok, col.kind, col.not_null, tname, col.name)
+            end
+            walk_expr(ck, sc, it.a)
+            i = i + 1
+        end
+        written.free()
+    end
+    walk_expr(ck, sc, n.b)
+    if n.b < 0:
+        c_warn(
+            ck, n.tok, "SQL320", "this UPDATE has no WHERE clause and changes every row",
+            "add a WHERE clause, or say so in a comment"
+        )
+    end
+    if n.g >= 0:
+        walk_list(ck, sc, ck.p.ast.nodes.get(n.g).list)
+    end
+    if n.e >= 0:
+        walk_list(ck, sc, ck.p.ast.nodes.get(n.e).list)
+    end
+    scope_free(sc)
+end
+
+func check_delete(ck &: Checker, id: int):
+    ck.kind = STMT_DELETE
+    n := ck.p.ast.nodes.get(id)
+    mut sc := Scope {}
+    build_from_scope(ck, sc, n.a, false)
+    build_from_scope(ck, sc, n.d, false)
+    mut t := Table {}
+    mut tname := ""
+    _have := target_table(ck, n.a, tname, t)
+    ck.table = tname
+    walk_expr(ck, sc, n.b)
+    if n.b < 0:
+        c_warn(
+            ck, n.tok, "SQL320", "this DELETE has no WHERE clause and removes every row",
+            "add a WHERE clause, or use TRUNCATE when that is what you mean"
+        )
+    end
+    if n.e >= 0:
+        walk_list(ck, sc, ck.p.ast.nodes.get(n.e).list)
+    end
+    scope_free(sc)
+end
+
+func check_table_exists(ck &: Checker, tok: int, flags: int):
+    if tok < 0:
+        ret
+    end
+    name := c_name(ck, tok)
+    mut t := Table {}
+    if lookup_table(ck, name, t):
+        ret
+    end
+    if (flags & F_IF_EXISTS) != 0:
+        ret
+    end
+    mut names := Vector {} as Vector<str>
+    table_names(ck, names)
+    best := near_of(names, name)
+    names.free()
+    c_err(ck, tok, "SQL317", "no table named \"" + name + "\"", did_you_mean(best))
+end
+
+func check_create_index(ck &: Checker, id: int):
+    ck.kind = STMT_DDL
+    n := ck.p.ast.nodes.get(id)
+    check_table_exists(ck, n.t1, 0)
+    if n.t1 < 0:
+        ret
+    end
+    name := c_name(ck, n.t1)
+    mut t := Table {}
+    if not lookup_table(ck, name, t):
+        ret
+    end
+    mut sc := Scope {}
+    scope_add_table(sc, name, t, false)
+    walk_list(ck, sc, n.list)
+    walk_expr(ck, sc, n.b)
+    scope_free(sc)
+end
+
+func check_stmt(ck &: Checker, id: int):
+    k := nd_kind(ck.p.ast, id)
+    if k == N_NONE:
+        ret
+    end
+    n := ck.p.ast.nodes.get(id)
+    if k == N_WITH:
+        bind_ctes(ck, id)
+        check_stmt(ck, n.a)
+        ret
+    end
+    if k == N_SELECT or k == N_SET_OP or k == N_VALUES:
+        ck.kind = STMT_SELECT
+        mut empty := Scope {}
+        mut rows := Vector {} as Vector<ResultCol>
+        select_results(ck, id, empty, rows, true)
+        scope_free(empty)
+        if ck.want_results:
+            mut i := 0
+            until i < rows.len():
+                ck.results.push(rows.get(i))
+                i = i + 1
+            end
+        end
+        rows.free()
+        ret
+    end
+    if k == N_INSERT:
+        check_insert(ck, id)
+        ret
+    end
+    if k == N_UPDATE:
+        check_update(ck, id)
+        ret
+    end
+    if k == N_DELETE:
+        check_delete(ck, id)
+        ret
+    end
+    if k == N_CREATE_INDEX:
+        check_create_index(ck, id)
+        ret
+    end
+    if k == N_CREATE_VIEW:
+        ck.kind = STMT_DDL
+        mut empty := Scope {}
+        mut rows := Vector {} as Vector<ResultCol>
+        select_results(ck, n.a, empty, rows, false)
+        scope_free(empty)
+        rows.free()
+        ret
+    end
+    if k == N_DROP or k == N_TRUNCATE:
+        ck.kind = STMT_DDL
+        check_table_exists(ck, n.tok, n.flags)
+        ret
+    end
+    if k == N_ALTER_TABLE:
+        ck.kind = STMT_DDL
+        check_table_exists(ck, n.tok, n.flags)
+        ret
+    end
+    if k == N_CREATE_TABLE:
+        ck.kind = STMT_DDL
+    end
+end
+
+func a_own(a &: Analysis, s: str): str:
+    c := str.Clone(s)
+    a.owned.push(c)
+    ret c
+end
+
+func param_number(src: str, t: Token): int:
+    if t.len < 2:
+        ret 0
+    end
+    if src[t.off] != '$':
+        ret 0
+    end
+    mut v := 0
+    mut i := 1
+    until i < t.len:
+        c := src[t.off + i]
+        if not ch_digit(c):
+            ret 0
+        end
+        v = v * 10 + ((c as int) - 48)
+        i = i + 1
+    end
+    ret v
+end
+
+func collect_params(ck &: Checker, a &: Analysis):
+    mut ord := 0
+    mut highest := 0
+    mut seen := Vector {} as Vector<int>
+    mut i := 0
+    until i < ck.p.toks.len():
+        t := ck.p.toks.get(i)
+        if t.kind == TK_PARAM:
+            ord = ord + 1
+            num := param_number(ck.p.src, t)
+            if num > 0:
+                seen.push(num)
+                if num > highest:
+                    highest = num
+                end
+            end
+            mut kind := TYPE_UNKNOWN
+            mut nn := false
+            mut tbl := ""
+            mut col := ""
+            mut j := 0
+            until j < ck.ptoks.len():
+                if ck.ptoks.get(j) == i:
+                    kind = ck.pkinds.get(j)
+                    nn = ck.pnulls.get(j)
+                    tbl = ck.ptables.get(j)
+                    col = ck.pcols.get(j)
+                    break
+                end
+                j = j + 1
+            end
+            marker := tok_text(ck.p.src, t)
+            a.params.push(
+                Param {
+                    marker = a_own(a, marker), ordinal = num > 0 ? num : ord, table = a_own(a, tbl),
+                    column = a_own(a, col), kind = kind, not_null = nn
+                }
+            )
+            mem.Free(marker as void*)
+        end
+        i = i + 1
+    end
+    mut want := 1
+    until want < highest + 1:
+        mut found := false
+        mut k := 0
+        until k < seen.len():
+            if seen.get(k) == want:
+                found = true
+            end
+            k = k + 1
+        end
+        if not found:
+            add_diag(
+                ck.p.rep, ERROR, "SQL319", "this statement uses $" + str.FromInt(highest as i64) + " but never $" + str.FromInt(want as i64),
+                "numbered placeholders have to run from $1 upwards with no gaps", 1, 1, 0, 1
+            )
+        end
+        want = want + 1
+    end
+    seen.free()
+end
+
+func free_checker(ck &: Checker):
+    mut i := 0
+    until i < ck.owned.len():
+        mem.Free(ck.owned.get(i) as void*)
+        i = i + 1
+    end
+    ck.owned.free()
+    ck.ptoks.free()
+    ck.pkinds.free()
+    ck.pnulls.free()
+    ck.ptables.free()
+    ck.pcols.free()
+    ck.results.free()
+    FreeCatalog(ck.local)
+    free_parser(ck.p)
+end
+
+func run_check(ck &: Checker, sql: str, c: Catalog):
+    ck.cat = c
+    ck.local = NewCatalog(c.d)
+    parse_into(ck.p, sql, c.d)
+    if ck.p.rep.errors > 0:
+        ret
+    end
+    mut i := 0
+    until i < ck.p.ast.roots.len():
+        check_stmt(ck, ck.p.ast.roots.get(i))
+        i = i + 1
+    end
+end
+
+@en "Check"
+@fa "بررسی"
+pub func Check(sql: str, c: Catalog): Report:
+    mut ck := Checker {}
+    run_check(ck, sql, c)
+    out := ck.p.rep
+    free_checker(ck)
+    ret out
+end
+
+@en "Analyze"
+@fa "تحلیل کن"
+pub func Analyze(sql: str, c: Catalog): Analysis:
+    mut ck := Checker {}
+    ck.want_results = true
+    run_check(ck, sql, c)
+    mut a := Analysis {}
+    a.kind = ck.kind
+    collect_params(ck, a)
+    a.report = ck.p.rep
+    a.ok = ck.p.rep.errors == 0
+    a.table = a_own(a, ck.table)
+    mut i := 0
+    until i < ck.results.len():
+        r := ck.results.get(i)
+        a.results.push(
+            ResultCol {
+                name = a_own(a, r.name), table = a_own(a, r.table), kind = r.kind, nullable = r.nullable
+            }
+        )
+        i = i + 1
+    end
+    free_checker(ck)
+    ret a
+end
+
+@en "FreeAnalysis"
+@fa "آزادسازی تحلیل"
+pub func FreeAnalysis(a &: Analysis):
+    mut i := 0
+    until i < a.owned.len():
+        mem.Free(a.owned.get(i) as void*)
+        i = i + 1
+    end
+    a.owned.free()
+    a.params.free()
+    a.results.free()
+    FreeReport(a.report)
+end
+
+@en "StmtKindName"
+@fa "نام دستور"
+pub func StmtKindName(k: int): str:
+    if k == STMT_SELECT:
+        ret "select"
+    end
+    if k == STMT_INSERT:
+        ret "insert"
+    end
+    if k == STMT_UPDATE:
+        ret "update"
+    end
+    if k == STMT_DELETE:
+        ret "delete"
+    end
+    if k == STMT_DDL:
+        ret "ddl"
+    end
+    ret "unknown"
+end

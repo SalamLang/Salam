@@ -1,0 +1,53 @@
+import grpc
+import compress
+import sync
+
+mut server := grpc.NewServer(0)
+mut ready := sync.NewWaitGroup()
+
+func total(c: i64):
+    mut sum := 0
+    mut count := 0
+    mut more := true
+    until more:
+        mut ok := false
+        reading := grpc.RecvStr(c, ok)
+        if not ok:
+            more = false
+        else:
+            sum += reading.to_int()
+            count += 1
+        end
+    end
+    _ := grpc.SendStr(c, "" + count + " readings, total " + sum)
+    grpc.SetStatus(c, grpc.GRPC_OK, "")
+end
+
+func run_server():
+    _ := grpc.Listen(server)
+    sync.Done(ready)
+    _ := grpc.ServeCount(server, 1)
+end
+
+func main:
+    grpc.RegisterStreamMethod("/meter.Meter/Upload", total, true, false)
+    sync.Add(ready, 1)
+    t := spawn(run_server)
+    sync.Wait(ready)
+    mut ch := grpc.Dial("127.0.0.1", grpc.Port(server))
+    grpc.SetTimeout(ch, 5000)
+    call := grpc.StartCall(ch, "/meter.Meter/Upload", grpc.NewMetadata())
+    readings := ["12", "7", "30", "1"]
+    each i, r in readings:
+        mut msg := compress.BufFromStr(r)
+        _ := grpc.SendMessage(ch, call, msg, i == len(readings) - 1)
+        compress.BufFree(msg)
+    end
+    mut ok := false
+    answer := grpc.RecvMessage(ch, call, ok)
+    println compress.BufToStrUnsafe(answer)
+    println grpc.StatusString(grpc.FinishCall(ch, call))
+    grpc.CloseChannel(ch)
+    join(t)
+    grpc.StopServer(server)
+end

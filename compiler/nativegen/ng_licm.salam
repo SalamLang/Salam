@@ -1,0 +1,857 @@
+package nativegen
+
+pub struct Lp:
+    pub head: Vector<int> = Vector {}
+    pub size: Vector<int> = Vector {}
+    pub inl: Vector<int> = Vector {}
+    pub wl: Vector<int> = Vector {}
+    pub succ: Vector<int> = Vector {}
+end
+
+func lp_find(g &: Ng, l &: Lp):
+    l.head.clear()
+    l.size.clear()
+    mut seen := Vector {} as Vector<bool>
+    repeat g.b_first.len():
+        seen.push(false)
+    end
+    each b in g.b_rpo:
+        blk_succs(g, b, l.succ)
+        each h in l.succ:
+            if dominates(g, h, b) and not seen[h]:
+                seen[h] = true
+                l.head.push(h)
+                l.size.push(0)
+            end
+        end
+    end
+    seen.free()
+end
+
+func lp_body(g &: Ng, l &: Lp, h: int, mark: int): int:
+    l.wl.clear()
+    l.inl[h] = mark
+    mut n := 1
+    repeat g.b_npred[h] in q:
+        p := g.b_pred[g.b_ps[h] + q]
+        if dominates(g, h, p) and l.inl[p] != mark:
+            l.inl[p] = mark
+            l.wl.push(p)
+            n += 1
+        end
+    end
+    until l.wl.len() > 0:
+        b := l.wl.pop()
+        repeat g.b_npred[b] in q2:
+            p2 := g.b_pred[g.b_ps[b] + q2]
+            if l.inl[p2] != mark and g.b_order[p2] >= 0:
+                l.inl[p2] = mark
+                l.wl.push(p2)
+                n += 1
+            end
+        end
+    end
+    ret n
+end
+
+func lp_outside_pred(g &: Ng, l &: Lp, h: int, mark: int): int:
+    mut out := 0 - 1
+    repeat g.b_npred[h] in q:
+        p := g.b_pred[g.b_ps[h] + q]
+        if l.inl[p] != mark:
+            if out >= 0 and out != p:
+                ret 0 - 2
+            end
+            out = p
+        end
+    end
+    ret out
+end
+
+func merge_preheader(g &: Ng, l &: Lp, h: int, mark: int): bool:
+    mut outs := Vector {} as Vector<int>
+    repeat g.b_npred[h] in q:
+        p := g.b_pred[g.b_ps[h] + q]
+        if l.inl[p] != mark:
+            pt := g.b_last[p]
+            if pt < 0 or (g.i_op[pt] != OP_BR and g.i_op[pt] != OP_CBR) or (g.i_op[pt] == OP_CBR and g.i_b[pt] == g.i_c[pt]):
+                outs.free()
+                ret false
+            end
+            mut dup := false
+            each o in outs:
+                if o == p:
+                    dup = true
+                end
+            end
+            if not dup:
+                outs.push(p)
+            end
+        end
+    end
+    if outs.len() < 2 or outs.len() > 8:
+        outs.free()
+        ret false
+    end
+    nb := new_blk(g)
+    mut i := g.b_first[h]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        ps := g.i_ps[i]
+        mut first := 0 - 1
+        mut same := true
+        repeat g.i_pcount[i] in k:
+            if l.inl[g.pool[ps + 2 * k + 1]] != mark:
+                v := g.pool[ps + 2 * k]
+                if first < 0:
+                    first = v
+                else v != first:
+                    same = false
+                end
+            end
+        end
+        mut inv := first
+        if not same:
+            np := ins_new(g, OP_PHI, g.i_ty[i])
+            g.i_ps[np] = g.pool.len()
+            mut c := 0
+            repeat g.i_pcount[i] in k2:
+                pb := g.pool[ps + 2 * k2 + 1]
+                if l.inl[pb] != mark:
+                    g.pool.push(g.pool[ps + 2 * k2])
+                    g.pool.push(pb)
+                    c += 1
+                end
+            end
+            g.i_pcount[np] = c
+            inv = new_res(g, np)
+            ins_append(g, nb, np)
+        end
+        mut w := 0
+        mut put := false
+        repeat g.i_pcount[i] in k3:
+            pb2 := g.pool[ps + 2 * k3 + 1]
+            if l.inl[pb2] != mark:
+                if not put:
+                    g.pool[ps + 2 * w] = inv
+                    g.pool[ps + 2 * w + 1] = nb
+                    w += 1
+                    put = true
+                end
+            else:
+                g.pool[ps + 2 * w] = g.pool[ps + 2 * k3]
+                g.pool[ps + 2 * w + 1] = pb2
+                w += 1
+            end
+        end
+        g.i_pcount[i] = w
+        i = g.i_next[i]
+    end
+    br := ins_new(g, OP_BR, T_VOID)
+    g.i_b[br] = h
+    ins_append(g, nb, br)
+    each o2 in outs:
+        replace_succ(g, g.b_last[o2], h, nb)
+    end
+    outs.free()
+    ret true
+end
+
+func make_preheaders(g &: Ng, l &: Lp): bool:
+    mut changed := false
+    mut mark := 0
+    each h in l.head:
+        mark += 1
+        _n := lp_body(g, l, h, mark)
+        p := lp_outside_pred(g, l, h, mark)
+        if p == 0 - 2 and not g.off_mph and merge_preheader(g, l, h, mark):
+            changed = true
+            continue
+        end
+        if p < 0:
+            continue
+        end
+        pt := g.b_last[p]
+        if pt < 0 or g.i_op[pt] != OP_CBR:
+            continue
+        end
+        if g.i_b[pt] == g.i_c[pt]:
+            continue
+        end
+        nb := new_blk(g)
+        br := ins_new(g, OP_BR, T_VOID)
+        g.i_b[br] = h
+        ins_append(g, nb, br)
+        replace_succ(g, pt, h, nb)
+        mut i := g.b_first[h]
+        until i >= 0 and g.i_op[i] == OP_PHI:
+            ps := g.i_ps[i]
+            repeat g.i_pcount[i] in k:
+                if g.pool[ps + 2 * k + 1] == p:
+                    g.pool[ps + 2 * k + 1] = nb
+                end
+            end
+            i = g.i_next[i]
+        end
+        changed = true
+    end
+    ret changed
+end
+
+func lp_inv(g &: Ng, l &: Lp, v: int, mark: int): bool:
+    if v < 0:
+        ret true
+    end
+    k := g.v_kind[v]
+    if k != VK_INS:
+        ret true
+    end
+    d := g.v_def[v]
+    b := g.i_blk[d]
+    ret b >= 0 and l.inl[b] != mark
+end
+
+func hoistable(g &: Ng, l &: Lp, i: int, mark: int): bool:
+    op := g.i_op[i]
+    if not gvn_pure(op) or g.i_res[i] < 0:
+        ret false
+    end
+    m := val_mask(op)
+    if (m & 1) != 0 and not lp_inv(g, l, g.i_a[i], mark):
+        ret false
+    end
+    if (m & 2) != 0 and not lp_inv(g, l, g.i_b[i], mark):
+        ret false
+    end
+    if (m & 4) != 0 and not lp_inv(g, l, g.i_c[i], mark):
+        ret false
+    end
+    ret true
+end
+
+func loop_writes(g &: Ng, b: int): int:
+    mut w := 0
+    mut i := g.b_first[b]
+    until i >= 0:
+        op := g.i_op[i]
+        if op == OP_STORE:
+            c := mem_cls(g, i)
+            if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0 or c == 0:
+                w = w | 4
+            else:
+                w = w | c
+            end
+        else op == OP_CALL and call_no_write(g, i):
+            w = w | 0
+        else op == OP_CALL or op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE:
+            w = w | 4
+        else op == OP_LOAD and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+            w = w | 4
+        end
+        i = g.i_next[i]
+    end
+    ret w
+end
+
+func load_hoistable(g &: Ng, l &: Lp, i: int, mark: int, wr: int): bool:
+    if g.i_op[i] != OP_LOAD or (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0 or (wr & 4) != 0:
+        ret false
+    end
+    c := mem_cls(g, i)
+    if c == 0 or (wr & c) != 0:
+        ret false
+    end
+    a := g.i_a[i]
+    if a < 0 or (g.v_kind[a] == VK_INS and l.inl[g.i_blk[g.v_def[a]]] == mark):
+        ret false
+    end
+    mut disp := 0 as i64
+    r := addr_root(g, a, disp)
+    if r < 0 or disp < (0 as i64) or disp >= (4096 as i64):
+        ret false
+    end
+    if g.v_kind[r] == VK_ARG:
+        k := g.v_i[r] as int
+        ret k >= 0 and k < g.f_argf.len() and (g.f_argf[k] & IF_NONNULL) != 0
+    end
+    if g.v_kind[r] == VK_INS and g.i_op[g.v_def[r]] == OP_ALLOCA:
+        d := g.v_def[r]
+        n := g.i_d[d] < (1 as i64) ? (1 as i64) : g.i_d[d]
+        ret disp + (tsize(g, g.i_ty[i]) as i64) <= (tsize(g, g.i_x[d]) as i64) * n
+    end
+    ret false
+end
+
+func lr_add_inv(g &: Ng, l &: Lp, mark: int, v: int): bool:
+    ret v >= 0 and (is_cint(g, v) or lp_inv(g, l, v, mark))
+end
+
+func licm_reassoc(g &: Ng, l &: Lp, mark: int, i: int): bool:
+    if g.i_op[i] != OP_ADD or g.i_res[i] < 0 or is_vec(g, g.i_ty[i]) or not lp_inv(g, l, g.i_a[i], mark) and not lp_inv(g, l, g.i_b[i], mark):
+        ret false
+    end
+    t := g.i_ty[i]
+    repeat 2 in k:
+        a := k == 0 ? g.i_a[i] : g.i_b[i]
+        b := k == 0 ? g.i_b[i] : g.i_a[i]
+        if not is_cint(g, b) and lp_inv(g, l, b, mark) and a >= 0 and a < g.v_uses.len() and g.v_kind[a] == VK_INS and g.v_uses[a] == 1:
+            d := g.v_def[a]
+            if g.i_op[d] == OP_ADD and l.inl[g.i_blk[d]] == mark:
+                repeat 2 in q:
+                    x := q == 0 ? g.i_a[d] : g.i_b[d]
+                    c := q == 0 ? g.i_b[d] : g.i_a[d]
+                    if lr_add_inv(g, l, mark, c) and not lr_add_inv(g, l, mark, x):
+                        n := ins_new(g, OP_ADD, t)
+                        g.i_a[n] = b
+                        g.i_b[n] = c
+                        nv := new_res(g, n)
+                        ins_before(g, i, n)
+                        g.i_a[i] = x
+                        g.i_b[i] = nv
+                        g.i_f[i] = g.i_f[i] & (0 - 1 - IF_NSW)
+                        ret true
+                    end
+                end
+            end
+        end
+    end
+    ret false
+end
+
+func licm_addr_split(g &: Ng, l &: Lp, mark: int, i: int): bool:
+    if g.i_op[i] != OP_ADDR or g.i_res[i] < 0 or not lp_inv(g, l, g.i_a[i], mark):
+        ret false
+    end
+    x := g.i_b[i]
+    if x < 0 or g.v_kind[x] != VK_INS or lp_inv(g, l, x, mark):
+        ret false
+    end
+    mut d := g.v_def[x]
+    mut wide := false
+    if g.i_op[d] == OP_SEXT:
+        y0 := g.i_a[d]
+        if y0 < 0 or g.v_kind[y0] != VK_INS:
+            ret false
+        end
+        d = g.v_def[y0]
+        if g.i_op[d] != OP_ADD or (g.i_f[d] & IF_NSW) == 0:
+            ret false
+        end
+        wide = true
+    end
+    if g.i_op[d] != OP_ADD:
+        ret false
+    end
+    repeat 2 in k:
+        c := k == 0 ? g.i_a[d] : g.i_b[d]
+        y := k == 0 ? g.i_b[d] : g.i_a[d]
+        if not is_cint(g, c) and lp_inv(g, l, c, mark) and not lp_inv(g, l, y, mark):
+            mut cw := c
+            mut yw := y
+            if wide:
+                sc := ins_new(g, OP_SEXT, T_I64)
+                g.i_a[sc] = c
+                g.i_x[sc] = g.v_ty[c]
+                cw = new_res(g, sc)
+                ins_before(g, i, sc)
+                sy := ins_new(g, OP_SEXT, T_I64)
+                g.i_a[sy] = y
+                g.i_x[sy] = g.v_ty[y]
+                yw = new_res(g, sy)
+                ins_before(g, i, sy)
+            else g.v_ty[c] != T_I64 or g.v_ty[y] != T_I64:
+                ret false
+            end
+            nb := ins_new(g, OP_ADDR, T_PTR)
+            g.i_a[nb] = g.i_a[i]
+            g.i_b[nb] = cw
+            g.i_x[nb] = g.i_x[i]
+            g.i_d[nb] = 0 as i64
+            nbv := new_res(g, nb)
+            ins_before(g, i, nb)
+            g.i_a[i] = nbv
+            g.i_b[i] = yw
+            ret true
+        end
+    end
+    ret false
+end
+
+func entry_const(g &: Ng, h: int, p: int, v: int, out &: i64): bool:
+    if v < 0:
+        ret false
+    end
+    mut x := v
+    if g.v_kind[x] == VK_INS:
+        d := g.v_def[x]
+        if g.i_op[d] != OP_PHI or g.i_blk[d] != h:
+            ret false
+        end
+        x = 0 - 1
+        repeat g.i_pcount[d] in k:
+            if g.pool[g.i_ps[d] + 2 * k + 1] == p:
+                x = g.pool[g.i_ps[d] + 2 * k]
+            end
+        end
+        if x < 0:
+            ret false
+        end
+    end
+    if g.v_kind[x] == VK_INT:
+        out = g.v_i[x]
+        ret true
+    end
+    if g.v_kind[x] == VK_ZERO:
+        out = 0 as i64
+        ret true
+    end
+    ret false
+end
+
+func fi_walk(g &: Ng, l &: Lp, mark: int, h: int, p: int, b: int, at_b: int, done &: Vector<int>, stk &: Vector<int>): bool:
+    if at_b == b:
+        ret true
+    end
+    if at_b < 0 or (at_b == h and stk.len() > 0) or l.inl[at_b] != mark:
+        ret false
+    end
+    each s0 in stk:
+        if s0 == at_b:
+            ret false
+        end
+    end
+    each d0 in done:
+        if d0 == at_b:
+            ret true
+        end
+    end
+    if stk.len() + done.len() >= 32:
+        ret false
+    end
+    t := g.b_last[at_b]
+    if t < 0:
+        ret false
+    end
+    stk.push(at_b)
+    mut ok := false
+    if g.i_op[t] == OP_BR:
+        ok = fi_walk(g, l, mark, h, p, b, g.i_b[t], done, stk)
+    else g.i_op[t] == OP_CBR:
+        mut c := 0 as i64
+        if entry_const(g, h, p, g.i_a[t], c):
+            ok = fi_walk(g, l, mark, h, p, b, c != (0 as i64) ? g.i_b[t] : g.i_c[t], done, stk)
+        else:
+            ok = fi_walk(g, l, mark, h, p, b, g.i_b[t], done, stk) and fi_walk(g, l, mark, h, p, b, g.i_c[t], done, stk)
+        end
+    end
+    _x := stk.pop()
+    if ok:
+        done.push(at_b)
+    end
+    ret ok
+end
+
+func first_iter_reaches(g &: Ng, l &: Lp, mark: int, h: int, p: int, b: int): bool:
+    mut done := Vector {} as Vector<int>
+    mut stk := Vector {} as Vector<int>
+    ok := fi_walk(g, l, mark, h, p, b, h, done, stk)
+    done.free()
+    stk.free()
+    ret ok
+end
+
+func call_hoistable(g &: Ng, l &: Lp, i: int, mark: int, wr: int, h: int, p: int): bool:
+    if g.i_op[i] != OP_CALL or g.i_res[i] < 0 or wr != 0 or (g.i_f[i] & IF_VARARG) != 0:
+        ret false
+    end
+    fv := g.i_a[i]
+    if fv < 0 or g.v_kind[fv] != VK_GLB or not call_no_write(g, i) or alloc_call(g, i):
+        ret false
+    end
+    repeat g.i_pcount[i] in k:
+        if not lp_inv(g, l, g.pool[g.i_ps[i] + 3 * k], mark):
+            ret false
+        end
+    end
+    ret first_iter_reaches(g, l, mark, h, p, g.i_blk[i])
+end
+
+func licm(g &: Ng): bool:
+    build_dom(g)
+    count_uses(g)
+    mut l := Lp {}
+    repeat g.b_first.len():
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    if l.head.len() == 0:
+        l.inl.free()
+        ret false
+    end
+    if make_preheaders(g, l):
+        build_cfg(g)
+        build_dom(g)
+        l.inl.clear()
+        repeat g.b_first.len():
+            l.inl.push(0)
+        end
+        lp_find(g, l)
+    end
+    mut mark := 1000000
+    repeat l.head.len() in q:
+        mark += 1
+        l.size[q] = lp_body(g, l, l.head[q], mark)
+    end
+    mut ord := Vector {} as Vector<int>
+    repeat l.head.len() in q2:
+        ord.push(q2)
+    end
+    mut a := 1
+    until a < ord.len():
+        x := ord[a]
+        mut j := a - 1
+        until j >= 0 and l.size[ord[j]] > l.size[x]:
+            ord[j + 1] = ord[j]
+            j -= 1
+        end
+        ord[j + 1] = x
+        a += 1
+    end
+    mut moved := false
+    mut mk := 2000000
+    each li in ord:
+        h := l.head[li]
+        mk += 1
+        _s := lp_body(g, l, h, mk)
+        p := lp_outside_pred(g, l, h, mk)
+        if p < 0:
+            continue
+        end
+        pt := g.b_last[p]
+        if pt < 0 or g.i_op[pt] != OP_BR:
+            continue
+        end
+        mut wr := 0
+        each b0 in g.b_rpo:
+            if l.inl[b0] == mk:
+                wr = wr | loop_writes(g, b0)
+            end
+        end
+        each b in g.b_rpo:
+            if l.inl[b] != mk:
+                continue
+            end
+            mut i := g.b_first[b]
+            until i >= 0:
+                nx0 := g.i_next[i]
+                if not g.off_asplit and licm_addr_split(g, l, mk, i):
+                    moved = true
+                end
+                if not g.off_lreas and licm_reassoc(g, l, mk, i):
+                    moved = true
+                    ni := g.i_prev[i]
+                    if ni >= 0 and hoistable(g, l, ni, mk):
+                        nop2 := g.i_op[ni]
+                        ins_unlink(g, ni)
+                        g.i_op[ni] = nop2
+                        ins_before(g, pt, ni)
+                    end
+                end
+                nx := nx0
+                if hoistable(g, l, i, mk) or (not g.off_lhoist and load_hoistable(g, l, i, mk, wr)) or (not g.off_chst and call_hoistable(g, l, i, mk, wr, h, p)):
+                    op := g.i_op[i]
+                    ins_unlink(g, i)
+                    g.i_op[i] = op
+                    ins_before(g, pt, i)
+                    moved = true
+                end
+                i = nx
+            end
+        end
+    end
+    ord.free()
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+    ret moved
+end
+
+func loop_weights(g &: Ng):
+    nb := g.b_first.len()
+    g.b_wt.clear()
+    repeat nb:
+        g.b_wt.push(1)
+    end
+    mut l := Lp {}
+    repeat nb:
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut mark := 0
+    each h in l.head:
+        mark += 1
+        _n := lp_body(g, l, h, mark)
+        repeat nb in b:
+            if l.inl[b] == mark and g.b_wt[b] < 512:
+                g.b_wt[b] = g.b_wt[b] * 8
+            end
+        end
+    end
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+end
+
+func sp_bad(seen &: Vector<int>, mark: int, v: int):
+    if v >= 0:
+        seen[v] = mark
+    end
+end
+
+func sp_note(g &: Ng, seen &: Vector<int>, mark: int, l &: Lp, lp: int, v: int):
+    if v < 0 or seen[v] == mark or seen[v] == 0 - mark:
+        ret
+    end
+    k := g.v_kind[v]
+    if k != VK_INS and k != VK_ARG:
+        ret
+    end
+    if is_agg(g, g.v_ty[v]):
+        ret
+    end
+    if k == VK_INS:
+        d := g.v_def[v]
+        if d < 0 or g.i_op[d] == OP_ALLOCA or g.i_op[d] == OP_ADDR:
+            ret
+        end
+        db := g.i_blk[d]
+        if db < 0 or l.inl[db] == mark:
+            ret
+        end
+    end
+    if g.lp_cnt[lp] >= 12:
+        ret
+    end
+    seen[v] = mark
+    g.lp_cnt[lp] = g.lp_cnt[lp] + 1
+    g.lpv_loop.push(lp)
+    g.lpv_val.push(v)
+end
+
+func lp_pressure(g &: Ng, l &: Lp, mark: int, h: int, seen2 &: Vector<int>, stamp: int): int:
+    mut n := 0
+    mut i0 := g.b_first[h]
+    until i0 >= 0 and g.i_op[i0] == OP_PHI:
+        n += 1
+        i0 = g.i_next[i0]
+    end
+    each b in g.b_rpo:
+        if l.inl[b] != mark:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            m := val_mask(g.i_op[i])
+            repeat 3 in k:
+                mut v := 0 - 1
+                if k == 0 and (m & 1) != 0: v = g.i_a[i] end
+                if k == 1 and (m & 2) != 0: v = g.i_b[i] end
+                if k == 2 and (m & 4) != 0: v = g.i_c[i] end
+                if v >= 0 and seen2[v] != stamp and (g.v_kind[v] == VK_ARG or (g.v_kind[v] == VK_INS and l.inl[g.i_blk[g.v_def[v]]] != mark)):
+                    seen2[v] = stamp
+                    n += 1
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret n
+end
+
+func split_plan(g &: Ng):
+    nb := g.b_first.len()
+    g.b_lp.clear()
+    g.lp_pre.clear()
+    g.lp_par.clear()
+    g.lp_cnt.clear()
+    g.lp_head.clear()
+    g.lpv_loop.clear()
+    g.lpv_val.clear()
+    g.sp_loop.clear()
+    g.sp_val.clear()
+    g.sp_reg.clear()
+    repeat nb:
+        g.b_lp.push(0 - 1)
+    end
+    mut l := Lp {}
+    repeat nb:
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    nl := l.head.len()
+    mut sz := Vector {} as Vector<int>
+    mut mark := 0
+    repeat nl in q:
+        mark += 1
+        sz.push(lp_body(g, l, l.head[q], mark))
+        g.lp_pre.push(0 - 1)
+        g.lp_par.push(0 - 1)
+        g.lp_cnt.push(0)
+        g.lp_head.push(l.head[q])
+    end
+    repeat nl in q2:
+        mark += 1
+        _n := lp_body(g, l, l.head[q2], mark)
+        repeat nb in b:
+            if l.inl[b] == mark:
+                cl := g.b_lp[b]
+                if cl < 0 or sz[cl] > sz[q2]:
+                    g.b_lp[b] = q2
+                end
+            end
+        end
+    end
+    repeat nl in q3:
+        h := l.head[q3]
+        mut best := 0 - 1
+        repeat nl in q4:
+            if q4 != q3 and sz[q4] > sz[q3]:
+                mark += 1
+                _n2 := lp_body(g, l, l.head[q4], mark)
+                if l.inl[h] == mark and (best < 0 or sz[q4] < sz[best]):
+                    best = q4
+                end
+            end
+        end
+        g.lp_par[q3] = best
+    end
+    mut seen := Vector {} as Vector<int>
+    repeat g.v_kind.len():
+        seen.push(0)
+    end
+    repeat nl in q5:
+        h2 := l.head[q5]
+        mark += 1
+        _n3 := lp_body(g, l, h2, mark)
+        p := lp_outside_pred(g, l, h2, mark)
+        if p < 0:
+            continue
+        end
+        pt := g.b_last[p]
+        if pt < 0 or g.i_op[pt] != OP_BR or g.i_b[pt] != h2:
+            continue
+        end
+        mut seen2 := Vector {} as Vector<int>
+        repeat g.v_kind.len():
+            seen2.push(0)
+        end
+        live_n := lp_pressure(g, l, mark, h2, seen2, 1)
+        seen2.free()
+        if live_n <= 11:
+            continue
+        end
+        g.lp_pre[q5] = p
+        par := g.lp_par[q5]
+        if par >= 0:
+            mark += 1
+            pm := mark
+            _n4 := lp_body(g, l, l.head[par], pm)
+            mark += 1
+            _n5 := lp_body(g, l, h2, mark)
+            each bp in g.b_rpo:
+                if l.inl[bp] == pm:
+                    mut ip := g.b_first[bp]
+                    until ip >= 0:
+                        opp := g.i_op[ip]
+                        mp := val_mask(opp)
+                        if (mp & 1) != 0: sp_bad(seen, 0 - mark, g.i_a[ip]) end
+                        if (mp & 2) != 0: sp_bad(seen, 0 - mark, g.i_b[ip]) end
+                        if (mp & 4) != 0: sp_bad(seen, 0 - mark, g.i_c[ip]) end
+                        if opp == OP_CALL:
+                            repeat g.i_pcount[ip] in kp:
+                                sp_bad(seen, 0 - mark, g.pool[g.i_ps[ip] + 3 * kp])
+                            end
+                        else opp == OP_PHI:
+                            repeat g.i_pcount[ip] in kp2:
+                                sp_bad(seen, 0 - mark, g.pool[g.i_ps[ip] + 2 * kp2])
+                            end
+                        end
+                        ip = g.i_next[ip]
+                    end
+                end
+            end
+        end
+        each b2 in g.b_rpo:
+            if l.inl[b2] != mark or g.b_lp[b2] != q5:
+                continue
+            end
+            mut i := g.b_first[b2]
+            until i >= 0:
+                op := g.i_op[i]
+                m := val_mask(op)
+                if (m & 1) != 0: sp_note(g, seen, mark, l, q5, g.i_a[i]) end
+                if (m & 2) != 0: sp_note(g, seen, mark, l, q5, g.i_b[i]) end
+                if (m & 4) != 0: sp_note(g, seen, mark, l, q5, g.i_c[i]) end
+                if op == OP_CALL:
+                    repeat g.i_pcount[i] in k:
+                        sp_note(g, seen, mark, l, q5, g.pool[g.i_ps[i] + 3 * k])
+                    end
+                else op == OP_PHI:
+                    ps := g.i_ps[i]
+                    repeat g.i_pcount[i] in k2:
+                        pb := g.pool[ps + 2 * k2 + 1]
+                        if pb >= 0 and l.inl[pb] == mark:
+                            sp_note(g, seen, mark, l, q5, g.pool[ps + 2 * k2])
+                        end
+                    end
+                end
+                i = g.i_next[i]
+            end
+        end
+    end
+    seen.free()
+    sz.free()
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+end
+
+func split_lookup(g &: Ng, v: int): int:
+    if g.cur_b < 0 or g.sp_val.len() == 0:
+        ret 0 - 1
+    end
+    mut lp := g.b_lp[g.cur_b]
+    until lp >= 0:
+        mut k := g.sp_val.len() - 1
+        until k >= 0:
+            if g.sp_val[k] == v and g.sp_loop[k] == lp:
+                ret g.sp_reg[k]
+            end
+            k -= 1
+        end
+        lp = g.lp_par[lp]
+    end
+    ret 0 - 1
+end
+
+func ensure_preheaders(g &: Ng):
+    build_dom(g)
+    mut l := Lp {}
+    repeat g.b_first.len():
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    if l.head.len() > 0 and make_preheaders(g, l):
+        build_cfg(g)
+    end
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+end

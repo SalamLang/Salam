@@ -1,0 +1,540 @@
+package llvmgen
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include sm "../semantic/semantic.salam"
+
+func param_is_ref(s &: sm.Sema, a &: at.Ast, sig: int, i: int): bool:
+    decl := sm.SigAt(s, sig).decl
+    if decl == 0:
+        ret false
+    end
+    dn := at.Get(a, decl)
+    if i >= dn.list.len():
+        ret false
+    end
+    ret at.Get(a, dn.list.get(i)).is_ref
+end
+
+func libc_size_param(fname: str, i: int): bool:
+    if str.Equals(fname, "malloc"):
+        ret i == 0
+    end
+    if str.Equals(fname, "realloc"):
+        ret i == 1
+    end
+    if str.Equals(fname, "calloc"):
+        ret i == 0 or i == 1
+    end
+    if str.Equals(fname, "memset"):
+        ret i == 2
+    end
+    if str.Equals(fname, "memcpy") or str.Equals(fname, "memmove"):
+        ret i == 2
+    end
+    if str.Equals(fname, "write") or str.Equals(fname, "read") or str.Equals(fname, "send") or str.Equals(fname, "recv"):
+        ret i == 2
+    end
+    if str.Equals(fname, "fread") or str.Equals(fname, "fwrite"):
+        ret i == 1 or i == 2
+    end
+    if str.Equals(fname, "pthread_detach") or str.Equals(fname, "pthread_join"):
+        ret i == 0
+    end
+    if str.Equals(fname, "snprintf"):
+        ret i == 1
+    end
+    ret false
+end
+
+func libc_size_ret(fname: str): int:
+    if str.Equals(fname, "read") or str.Equals(fname, "write") or str.Equals(fname, "send") or str.Equals(fname, "recv"):
+        ret 1
+    end
+    if str.Equals(fname, "fread") or str.Equals(fname, "fwrite"):
+        ret 2
+    end
+    ret 0
+end
+
+func emit_arg(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ab &: str.StringBuilder, arg: int, sig: int, i: int, cname: str
+):
+    if param_is_ref(s, a, sig, i):
+        if at.Get(a, arg).ref_arg_ptr:
+            pv := lv_expr(v, s, a, arg)
+            co.SbPuts(ab, "ptr " + pv.ref)
+            ret
+        end
+        addr := lv_addr_of(v, s, a, arg)
+        co.SbPuts(ab, "ptr " + addr.ptr)
+        ret
+    end
+    val := lv_expr(v, s, a, arg)
+    sg := sm.SigAt(s, sig)
+    pts := i < sg.params.len() ? sm.ToString(s, sg.params.get(i)) : val.ts
+    mut ty := ty_of(v, s, a, pts)
+    mut ref2 := conv(v, s, a, val, pts)
+    if str.Equals(ty, "i64") and not str.Equals(v.usize, "i64") and libc_size_param(cname, i):
+        t := new_tmp(v)
+        emit(v, t + " = trunc i64 " + ref2 + " to " + v.usize)
+        ty = v.usize
+        ref2 = t
+    end
+    co.SbPuts(ab, ty + " " + ref2)
+end
+
+func fill_defaults(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ab &: str.StringBuilder, n: int, sig: int, first0: bool
+):
+    if sig == 0:
+        ret
+    end
+    decl := sm.SigAt(s, sig).decl
+    if decl == 0:
+        ret
+    end
+    dn := at.Get(a, decl)
+    np := dn.list.len()
+    nn := at.Get(a, n)
+    mut first := first0
+    mut i := nn.list.len()
+    if i >= np:
+        ret
+    end
+    mut dhome := 0
+    if sm.SigAt(s, sig).owner != 0:
+        dhome = sm.SymAt(s, sm.SigAt(s, sig).owner).home
+    end
+    saved_ps := v.pkg_scope
+    saved_lambda := v.cur_lambda
+    mut held := Vector {} as Vector<LvVar>
+    each lvv in v.locals:
+        held.push(lvv)
+    end
+    v.locals.clear()
+    v.cur_lambda = 0
+    if dhome != 0:
+        v.pkg_scope = dhome
+    end
+    until i < np:
+        param := at.Get(a, dn.list.get(i))
+        if param.a != 0:
+            if not first:
+                co.SbPuts(ab, ", ")
+            end
+            emit_arg(v, s, a, ab, param.a, sig, i, "")
+            first = false
+        end
+        i += 1
+    end
+    v.pkg_scope = saved_ps
+    v.cur_lambda = saved_lambda
+    v.locals.clear()
+    each hv in held:
+        v.locals.push(hv)
+    end
+    held.free()
+end
+
+func call_user(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str): Llv:
+    mut fsym := 0
+    if v.pkg_scope != 0:
+        lf := sm.LookupLocal(s, v.pkg_scope, nm)
+        if lf != 0 and sm.SymAt(s, lf).kind == sm.SYM_FUNC:
+            fsym = lf
+        end
+    end
+    if fsym == 0:
+        fsym = sym_of(v, s, a, nm)
+    end
+    if fsym == 0 or sm.SymAt(s, fsym).kind != sm.SYM_FUNC:
+        lv_error(v, a, n, "call to unknown/unsupported function '" + nm + "'")
+        ret poison(at.Get(a, n).type_str)
+    end
+    sig := pick_overload(v, s, a, fsym, n)
+    ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, v.pkg_scope)
+    nn := at.Get(a, n)
+    cname := sm.SigAt(s, sig).decl != 0 and at.Get(a, sm.SigAt(s, sig).decl).is_extern ? nm : ""
+    mut ab := co.SbNew()
+    repeat nn.list.len() in i:
+        if i > 0:
+            co.SbPuts(ab, ", ")
+        end
+        emit_arg(v, s, a, ab, nn.list.get(i), sig, i, cname)
+    end
+    fill_defaults(v, s, a, ab, n, sig, nn.list.len() == 0)
+    argsx := co.SbCstr(ab)
+    co.SbFree(ab)
+    rts := sm.ToString(s, sm.SigAt(s, sig).ret_type)
+
+    is_ext := sm.SigAt(s, sig).decl != 0 and at.Get(a, sm.SigAt(s, sig).decl).is_extern
+    fname := is_ext ? nm : mangle(v, s, "", nm, sig)
+    mut callty := ""
+    if is_ext and sm.SigAt(s, sig).variadic:
+        mut sp := co.SbNew()
+        co.SbPutc(sp, 40)
+        sg := sm.SigAt(s, sig)
+        repeat sg.params.len() in j:
+            if j > 0:
+                co.SbPuts(sp, ", ")
+            end
+            mut pty := ty_of(v, s, a, sm.ToString(s, sg.params.get(j)))
+            if str.Equals(pty, "i64") and not str.Equals(v.usize, "i64") and libc_size_param(nm, j):
+                pty = v.usize
+            end
+            co.SbPuts(sp, pty)
+        end
+        co.SbPuts(sp, sg.params.len() > 0 ? ", ...)" : "...)")
+        callty = " " + co.SbCstr(sp)
+        co.SbFree(sp)
+    end
+    cc := StdcallCc(v, fname)
+    iok := is_ext ? lv_extern_io_pre(v, fname) : 0
+    if str.Equals(rts, "void"):
+        emit(v, "call" + cc + " void" + callty + " @" + fname + "(" + argsx + ")")
+        lv_extern_io_post(v, iok)
+        ret make_llv("0", "void")
+    end
+    rty := ty_of(v, s, a, rts)
+    sret := is_ext ? libc_size_ret(fname) : 0
+    if sret != 0 and str.Equals(rty, "i64") and not str.Equals(v.usize, "i64"):
+        narrow := new_tmp(v)
+        emit(v, narrow + " = call" + cc + " " + v.usize + callty + " @" + fname + "(" + argsx + ")")
+        lv_extern_io_post(v, iok)
+        r0 := new_tmp(v)
+        emit(v, r0 + " = " + (sret == 1 ? "sext " : "zext ") + v.usize + " " + narrow + " to i64")
+        ret make_llv(r0, rts)
+    end
+    r := new_tmp(v)
+    emit(v, r + " = call" + cc + " " + rty + callty + " @" + fname + "(" + argsx + ")")
+    lv_extern_io_post(v, iok)
+    ret make_llv(r, rts)
+end
+
+func lv_extern_io_pre(v &: Lv, nm: str): int:
+    if v.freestanding:
+        ret 0
+    end
+    k := cg.ExternIoKind(nm)
+    wr := cg.StdioWriter(nm)
+    if k == 0 and not wr:
+        ret 0
+    end
+    if v.single_threaded:
+        need(v, LV_H_OUTBUF)
+        emit(v, "call void @salam_out_flush()")
+    end
+    need(v, LV_H_STDIO)
+    emit(v, "call void @salam_stdio_sync()")
+    if k == 2 and v.single_threaded:
+        ret 2
+    end
+    ret wr ? 3 : 0
+end
+
+func lv_extern_io_post(v &: Lv, k: int):
+    if k == 2:
+        emit(v, new_tmp(v) + " = call i32 @fflush(ptr null)")
+    else k == 3:
+        emit(v, "store volatile i8 1, ptr @salam_stdio_dirty, align 1")
+    end
+end
+
+func ast_str_lit_len(a &: at.Ast, n: int): i64:
+    if n == 0:
+        ret (0 - 1)
+    end
+    node := at.Get(a, n)
+    if node.kind != at.AST_LITERAL:
+        ret (0 - 1)
+    end
+    if node.op != tok.TK_STRING and node.op != tok.TK_TRIPLE_STRING and node.op != tok.TK_RAW_STRING:
+        ret (0 - 1)
+    end
+    if node.value_kind != tok.TV_STRING:
+        ret (0 - 1)
+    end
+    ret str.Len(node.value_str)
+end
+
+func len_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, arg: int): Llv:
+    ts := at.Get(a, arg).type_str
+    if is_slice(ts):
+        val := lv_expr(v, s, a, arg)
+        l := new_tmp(v)
+        emit(v, l + " = extractvalue { ptr, i64 } " + val.ref + ", 1")
+        ret make_llv(conv(v, s, a, make_llv(l, "i64"), "i32"), "i32")
+    end
+    if str.Len(ts) > 0 and idx_byte(ts, 91) >= 0:
+        ret make_llv(co.I64Toa(array_dim(ts)), "i32")
+    end
+    if str.Len(ts) == 0 or not is_str(s, ts):
+        lv_error(v, a, n, "len() of an unsupported type")
+        ret poison("i32")
+    end
+    klen := ast_str_lit_len(a, arg)
+    if klen >= (0 as i64):
+        ret make_llv(co.I64Toa(klen), "i32")
+    end
+    val2 := lv_expr(v, s, a, arg)
+    l2 := new_tmp(v)
+    emit(v, l2 + " = call " + v.usize + " @strlen(ptr " + val2.ref + ")")
+    ret make_llv(usize_to_i32(v, l2), "i32")
+end
+
+func call_len(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
+    ret len_of(v, s, a, n, at.Get(a, n).list.get(0))
+end
+
+func emit_call(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, sig: int, lead: str, fname: str, rts: str
+): Llv:
+    nn := at.Get(a, n)
+    mut ab := co.SbNew()
+    mut first := str.Len(lead) == 0
+    if not first:
+        co.SbPuts(ab, lead)
+    end
+    repeat nn.list.len() in i:
+        if not first:
+            co.SbPuts(ab, ", ")
+        end
+        emit_arg(v, s, a, ab, nn.list.get(i), sig, i, fname)
+        first = false
+    end
+    fill_defaults(v, s, a, ab, n, sig, first)
+    argsx := co.SbCstr(ab)
+    co.SbFree(ab)
+    if str.Equals(rts, "void"):
+        emit(v, "call void @" + fname + "(" + argsx + ")")
+        ret make_llv("0", "void")
+    end
+    r := new_tmp(v)
+    emit(v, r + " = call " + ty_of(v, s, a, rts) + " @" + fname + "(" + argsx + ")")
+    ret make_llv(r, rts)
+end
+
+func call_pkg(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, pk: int, fname_: str
+): Llv:
+    py := sm.SymAt(s, pk)
+    touch_pkg_named(v, s, a, py.pkgname)
+    fs := sm.LookupLocal(s, py.members, fname_)
+    if fs == 0 or sm.SymAt(s, fs).kind != sm.SYM_FUNC or sm.SymAt(s, fs).overloads.len() == 0:
+        lv_error(v, a, n, "package function '" + fname_ + "' not found")
+        ret poison(at.Get(a, n).type_str)
+    end
+    sig := pick_overload(v, s, a, fs, n)
+    ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, py.members)
+    is_ext := sm.SigAt(s, sig).decl != 0 and at.Get(a, sm.SigAt(s, sig).decl).is_extern
+    mut own_pkg := py.pkgname
+    if str.Len(own_pkg) == 0:
+        own_pkg = py.name
+    end
+    fname := is_ext ? fname_ : mangle_in(v, s, own_pkg, "", fname_, sig)
+    iok := is_ext ? lv_extern_io_pre(v, fname) : 0
+    rv := emit_call(
+        v, s, a, n, sig, "", fname, sm.ToString(s, sm.SigAt(s, sig).ret_type)
+    )
+    lv_extern_io_post(v, iok)
+    ret rv
+end
+
+func runtime_fn(s &: sm.Sema, name: str, out_pk &: int): int:
+    mut p := 0
+    until p < sm.PackageCount(s):
+        pk := sm.PackageAt(s, p)
+        if pk != 0:
+            pkm := sm.SymAt(s, pk).members
+            if pkm != 0:
+                fs := sm.LookupLocal(s, pkm, name)
+                if fs != 0 and sm.SymAt(s, fs).kind == sm.SYM_FUNC and sm.SymAt(s, fs).overloads.len() > 0:
+                    out_pk = pk
+                    ret sm.SymAt(s, fs).overloads.get(0)
+                end
+            end
+        end
+        p += 1
+    end
+    ret 0
+end
+
+func call_runtime(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, rtname: str, recv: int, out2 &: Llv
+): bool:
+    mut pk := 0
+    sig := runtime_fn(s, rtname, pk)
+    if sig == 0 or sm.SigAt(s, sig).decl == 0:
+        ret false
+    end
+    touch_pkg_named(v, s, a, sm.SymAt(s, pk).pkgname)
+    ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, sm.SymAt(s, pk).members)
+    params := sm.SigAt(s, sig).params
+    mut ab := co.SbNew()
+    mut base := 0
+    if recv != 0:
+        rv := lv_expr(v, s, a, recv)
+        mut pts0 := rv.ts
+        if params.len() > 0:
+            pts0 = sm.ToString(s, params.get(0))
+        end
+        co.SbPuts(ab, ty_of(v, s, a, pts0) + " " + conv(v, s, a, rv, pts0))
+        base = 1
+    end
+    nn := at.Get(a, n)
+    repeat nn.list.len() in i:
+        av := lv_expr(v, s, a, nn.list.get(i))
+        mut pts := av.ts
+        if i + base < params.len():
+            pts = sm.ToString(s, params.get(i + base))
+        end
+        if base > 0 or i > 0:
+            co.SbPuts(ab, ", ")
+        end
+        co.SbPuts(ab, ty_of(v, s, a, pts) + " " + conv(v, s, a, av, pts))
+    end
+    argsx := co.SbCstr(ab)
+    co.SbFree(ab)
+    rts := sm.ToString(s, sm.SigAt(s, sig).ret_type)
+    if str.Equals(rts, "void"):
+        emit(v, "call void @" + rtname + "(" + argsx + ")")
+        out2 = make_llv("0", "void")
+        ret true
+    end
+    r := new_tmp(v)
+    emit(v, r + " = call " + ty_of(v, s, a, rts) + " @" + rtname + "(" + argsx + ")")
+    out2 = make_llv(r, rts)
+    ret true
+end
+
+func call_runtime_val(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, rtname: str, argty: str, argref: str, retty: str
+): str:
+    mut pk := 0
+    sig := runtime_fn(s, rtname, pk)
+    if sig == 0 or sm.SigAt(s, sig).decl == 0:
+        ret ""
+    end
+    touch_pkg_named(v, s, a, sm.SymAt(s, pk).pkgname)
+    ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, sm.SymAt(s, pk).members)
+    r := new_tmp(v)
+    emit(v, r + " = call " + retty + " @" + rtname + "(" + argty + " " + argref + ")")
+    ret r
+end
+
+func call_vec_str(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, rtname: str, recv: int, out2 &: Llv
+): bool:
+    mut pk := 0
+    sig := runtime_fn(s, rtname, pk)
+    if sig == 0 or sm.SigAt(s, sig).decl == 0:
+        ret false
+    end
+    touch_pkg_named(v, s, a, sm.SymAt(s, pk).pkgname)
+    ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, sm.SymAt(s, pk).members)
+    nn := at.Get(a, n)
+    mut vts := nn.type_str
+    if str.Len(vts) == 0:
+        vts = "Vector<str>"
+    end
+    vty := ty_of(v, s, a, vts)
+    cnt := new_tmp(v)
+    emit_alloca(v, cnt + " = alloca i32")
+    mut ab := co.SbNew()
+    if recv != 0:
+        co.SbPuts(ab, "ptr " + lv_expr(v, s, a, recv).ref)
+    end
+    repeat nn.list.len() in i:
+        av := lv_expr(v, s, a, nn.list.get(i))
+        if recv != 0 or i > 0:
+            co.SbPuts(ab, ", ")
+        end
+        co.SbPuts(ab, "ptr " + av.ref)
+    end
+    if recv != 0 or nn.list.len() > 0:
+        co.SbPuts(ab, ", ")
+    end
+    co.SbPuts(ab, "ptr " + cnt)
+    argsx := co.SbCstr(ab)
+    co.SbFree(ab)
+    data := new_tmp(v)
+    emit(v, data + " = call ptr @" + rtname + "(" + argsx + ")")
+    ln := new_tmp(v)
+    emit(v, ln + " = load i32, ptr " + cnt)
+    v0 := new_tmp(v)
+    v1 := new_tmp(v)
+    v2 := new_tmp(v)
+    emit(v, v0 + " = insertvalue " + vty + " undef, ptr " + data + ", 0")
+    emit(v, v1 + " = insertvalue " + vty + " " + v0 + ", i32 " + ln + ", 1")
+    emit(v, v2 + " = insertvalue " + vty + " " + v1 + ", i32 " + ln + ", 2")
+    out2 = make_llv(v2, vts)
+    ret true
+end
+
+func call_file(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, m: str, out2 &: Llv
+): bool:
+    if str.Equals(m, "read"):
+        ret call_runtime(v, s, a, n, "salam_file_read", obj, out2)
+    end
+    if str.Equals(m, "readline"):
+        ret call_runtime(v, s, a, n, "salam_file_readline", obj, out2)
+    end
+    if str.Equals(m, "write"):
+        ret call_runtime(v, s, a, n, "salam_file_write", obj, out2)
+    end
+    if str.Equals(m, "seek"):
+        ret call_runtime(v, s, a, n, "salam_file_seek", obj, out2)
+    end
+    if str.Equals(m, "close"):
+        ret call_runtime(v, s, a, n, "salam_file_close", obj, out2)
+    end
+    ret false
+end
+
+func enum_member_value(v &: Lv, s &: sm.Sema, m: int): Llv:
+    mv := sm.SymAt(s, m)
+    if mv.enum_val_kind == tok.TV_FLOAT:
+        ret make_llv(fp_text(co.Format1("%.17g", co.ArgFloat(mv.enum_value_f))), "f64")
+    end
+    if mv.enum_val_kind == tok.TV_STRING:
+        ret make_llv(strconst(v, mv.enum_value_str), "str")
+    end
+    ret make_llv(co.I64Toa(mv.enum_value), "i32")
+end
+
+func pkg_value(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, pk: int, out2 &: Llv
+): bool:
+    py := sm.SymAt(s, pk)
+    if py.members == 0:
+        ret false
+    end
+    nn := at.Get(a, n)
+    m := sm.LookupLocal(s, py.members, nn.name)
+    if m == 0:
+        ret false
+    end
+    mk := sm.SymAt(s, m).kind
+    if mk == sm.SYM_ENUM_MEMBER:
+        out2 = enum_member_value(v, s, m)
+        ret true
+    end
+    if mk != sm.SYM_CONST and mk != sm.SYM_VAR:
+        ret false
+    end
+    touch_pkg_named(v, s, a, py.pkgname)
+    gi := global_find_in(v, py.pkgname, nn.name)
+    if gi < 0:
+        ret false
+    end
+    g := v.globals.get(gi)
+    r := new_tmp(v)
+    emit(v, r + " = load " + ty_of(v, s, a, g.ts) + ", ptr " + g.ptr)
+    out2 = make_llv(r, g.ts)
+    ret true
+end

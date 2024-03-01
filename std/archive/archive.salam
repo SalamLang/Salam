@@ -1,0 +1,173 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "archive"
+@fa "بایگانی"
+package archive
+
+import mem
+import compress
+import os
+
+extern:
+    func fopen(path: str, mode: str): void*
+    func fclose(fp: void*): int
+    func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fseek(fp: void*, off: int, whence: int): int
+    func ftell(fp: void*): int
+end
+
+@en "Entry"
+@fa "مدخل"
+pub struct Entry:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "size"
+    @fa "اندازه"
+    pub size: i64 = 0 as i64
+    @en "compressed_size"
+    @fa "اندازه فشرده"
+    pub compressed_size: i64 = 0 as i64
+    @en "is_dir"
+    @fa "پوشه"
+    pub is_dir: bool = false
+    @en "method"
+    @fa "روش"
+    pub method: int = 0
+    @en "crc32"
+    @fa "چک‌جمع"
+    pub crc32: u32 = 0 as u32
+    @en "mtime"
+    @fa "زمان تغییر"
+    pub mtime: i64 = 0 as i64
+end
+
+func _safe_entry_name(name: str): bool:
+    n := name.len()
+    if n == 0:
+        ret false
+    end
+    bp := name as u8*
+    first := bp[0] as int
+    if first == 47 or first == 92 or (n >= 2 and (bp[1] as int) == 58):
+        ret false
+    end
+    mut start := 0
+    mut i := 0
+    until i <= n:
+        c := i < n ? bp[i] as int : 47
+        if c == 47 or c == 92:
+            if i - start == 2 and (bp[start] as int) == 46 and (bp[start + 1] as int) == 46:
+                ret false
+            end
+            start = i + 1
+        end
+        i += 1
+    end
+    ret true
+end
+
+@en "ReadBinaryFile"
+@fa "خواندن پرونده دودویی"
+pub func ReadBinaryFile(path: str, ok &: bool): compress.ByteBuf:
+    ok = false
+    fp := fopen(path, "rb")
+    if fp == null:
+        ret compress.NewByteBuf()
+    end
+    fseek(fp, 0, 2)
+    size := ftell(fp)
+    fseek(fp, 0, 0)
+    mut buf := compress.NewByteBufCap(size)
+    if size > 0:
+        raw := mem.Allocate(size as u64)
+        got := fread(raw, 1 as u64, size as u64, fp)
+        compress.BufPushBytes(buf, raw, got as int)
+        mem.Free(raw)
+    end
+    fclose(fp)
+    ok = true
+    ret buf
+end
+
+@en "WriteBinaryFile"
+@fa "نوشتن پرونده دودویی"
+pub func WriteBinaryFile(path: str, p: void*, n: int): bool:
+    fp := fopen(path, "wb")
+    if fp == null:
+        ret false
+    end
+    mut written := 0 as u64
+    if n > 0:
+        written = fwrite(p, 1 as u64, n as u64, fp)
+    end
+    fclose(fp)
+    ret (written as int) == n
+end
+
+@en "WriteBinaryFileBuf"
+@fa "نوشتن پرونده دودویی از بافر"
+pub func WriteBinaryFileBuf(path: str, b: compress.ByteBuf): bool:
+    ret WriteBinaryFile(path, b.data, b.len)
+end
+
+@en "EnsureDir"
+@fa "اطمینان از پوشه"
+pub func EnsureDir(dir: str):
+    if dir.len() == 0: ret end
+    if os.Exists(dir): ret end
+    os.MkdirAll(dir)
+end
+
+@en "LEGet16"
+@fa "خواندن شانزده بیتی کم ارزش‌اول"
+pub func LEGet16(p: void*, off: int): int:
+    bp := p as u8*
+    ret (bp[off] as int) | ((bp[off + 1] as int) << 8)
+end
+
+@en "LEGet32"
+@fa "خواندن عدد۳۲ کم ارزش‌اول"
+pub func LEGet32(p: void*, off: int): int:
+    bp := p as u8*
+    ret (bp[off] as int) | ((bp[off + 1] as int) << 8) | ((bp[off + 2] as int) << 16) | ((bp[off + 3] as int) << 24)
+end
+
+@en "LEPut16"
+@fa "نوشتن شانزده بیتی کم ارزش‌اول"
+pub func LEPut16(b &: compress.ByteBuf, v: int):
+    compress.BufPush(b, v & 255)
+    compress.BufPush(b, (v >> 8) & 255)
+end
+
+@en "LEPut32"
+@fa "نوشتن عدد۳۲ کم ارزش‌اول"
+pub func LEPut32(b &: compress.ByteBuf, v: int):
+    compress.BufPush(b, v & 255)
+    compress.BufPush(b, (v >> 8) & 255)
+    compress.BufPush(b, (v >> 16) & 255)
+    compress.BufPush(b, (v >> 24) & 255)
+end
+
+@en "FreeEntries"
+@fa "آزادسازی فهرست"
+pub func FreeEntries(v &: Vector<Entry>):
+    repeat v.len() in i:
+        nm := v.get(i).name
+        if nm.len() > 0: mem.Free(nm as void*) end
+    end
+    v.free()
+end

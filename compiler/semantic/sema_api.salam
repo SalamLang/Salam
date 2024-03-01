@@ -1,0 +1,1041 @@
+package semantic
+
+import str
+import os
+
+include pth "../sal_path.salam"
+include co "../sal_core.salam"
+include at "../ast.salam"
+include lg "../logger.salam"
+include dg "../diag.salam"
+include cc "../condcomp.salam"
+include x "../xml.salam"
+
+pub func New(lgr: lg.Logger, file: str, lang: str): Sema:
+    mut s := Sema {}
+    s.log = lgr
+    s.diag = dg.New(lgr, lg.PH_SEMANTIC)
+    s.file = file
+    if str.Len(lang) > 0:
+        s.lang = lang
+    else:
+        s.lang = "en"
+    end
+    repeat TY_F64 + 1 in k:
+        s.types.push(Type { kind = k })
+    end
+    s.scopes.push(Scope {})
+    s.syms.push(Symbol {})
+    s.sigs.push(Sig {})
+    g := scope_new(s, SCOPE_GLOBAL, 0)
+    mut gv := scope_at(s, g)
+    gv.lang = s.lang
+    scope_put(s, g, gv)
+    s.global = g
+    s.cur = g
+    s.dir = dir_of(file)
+    if str.Len(g_sm_project_root) == 0 and str.Len(file) > 0:
+        g_sm_project_root = s.dir
+    end
+    s.pkg = "main"
+    s.relax_unused = g_sm_relax_unused
+    ret s
+end
+
+pub func SetLogger(sm &: Sema, lgr: lg.Logger):
+    sm.log = lgr
+    dg.SetLogger(sm.diag, lgr)
+end
+
+pub func Rebind(sm &: Sema, file: str, lang: str): int:
+    sm.diag = dg.New(sm.log, lg.PH_SEMANTIC)
+    sm.file = file
+    if str.Len(lang) > 0:
+        sm.lang = lang
+    else:
+        sm.lang = "en"
+    end
+    g := scope_new(sm, SCOPE_GLOBAL, 0)
+    mut gv := scope_at(sm, g)
+    gv.lang = sm.lang
+    scope_put(sm, g, gv)
+    sm.global = g
+    sm.cur = g
+    sm.dir = dir_of(file)
+    sm.pkg = "main"
+    sm.self_type = TYPE_NONE
+    sm.cur_func = 0
+    sm.loop_depth = 0
+    sm.switch_depth = 0
+    sm.program = 0
+    sm.expected = TYPE_NONE
+    sm.gen_pkg = 0
+    sm.in_pkg = false
+    sm.relax_unused = g_sm_relax_unused
+    sm.requal = false
+    sm.noret_calls.clear()
+    sm.exhaustive.clear()
+    sm.covers_all.clear()
+    sm.each_n = 0
+    sm.match_arm_depth = 0
+    sm.match_yield_expected = TYPE_NONE
+    sm.match_yield_active = false
+    sm.imported.clear()
+    sm.loading.clear()
+    sm.pending.clear()
+    sm.lam.clear()
+    sm.match_yield_collect.clear()
+    ret g
+end
+
+pub func RebindScope(sm &: Sema, scope: int, pkg: str, file: str):
+    sm.global = scope
+    sm.cur = scope
+    sm.pkg = pkg
+    sm.file = file
+    sm.dir = dir_of(file)
+end
+
+pub func Free(sm &: Sema):
+    repeat sm.types.len() in i0:
+        mut t := sm.types.get(i0)
+        t.params.free()
+    end
+    sm.types.free()
+    sm.noret_calls.free()
+    sm.exhaustive.free()
+    sm.covers_all.free()
+    sm.arrays_intern.free()
+    sm.ptrs_intern.free()
+    sm.fpack_file.free()
+    sm.fpack_code.free()
+    repeat sm.scopes.len() in i1:
+        mut sc := sm.scopes.get(i1)
+        sc.symbols.free()
+    end
+    sm.scopes.free()
+    repeat sm.syms.len() in i2:
+        mut sy := sm.syms.get(i2)
+        sy.overloads.free()
+        sy.generic_args.free()
+    end
+    sm.syms.free()
+    repeat sm.sigs.len() in i3:
+        mut sg := sm.sigs.get(i3)
+        sg.params.free()
+    end
+    sm.sigs.free()
+    sm.imported.free()
+    sm.layout_ids.free()
+    sm.pkg_cache_paths.free()
+    sm.pkg_cache_syms.free()
+    sm.loading.free()
+    sm.pending.free()
+    sm.lam.free()
+    sm.match_yield_collect.free()
+    sm.pre_stmts.free()
+    sm.try_ctx.free()
+    sm.prelude_err_alias.free()
+    sm.call_decl.free()
+    sm.own_fns.free()
+    sm.own_glob.free()
+    sm.own_file.free()
+    sm.own_derive.free()
+    sm.own_idx.free()
+    sm.sum_fresh.free()
+    sm.sum_off.free()
+    sm.sum_np.free()
+    sm.sp_keep.free()
+    sm.sp_free.free()
+    sm.sp_grow.free()
+    sm.sp_mfree.free()
+    sm.sp_gf.free()
+    sm.sum_ralias.free()
+    sm.sum_rchain.free()
+    sm.sum_rref.free()
+    mut tbl := sm.cctab
+    cc.TableFree(tbl)
+    mut e := sm.diag
+    dg.Free(e)
+    sm.diag = e
+end
+
+pub func MemDebug(sm &: Sema): bool:
+    i := cc.Lookup(sm.cctab, "SALAM_MEM_DEBUG")
+    ret i >= 0 and cc.EntryBool(sm.cctab, i)
+end
+
+pub func SetFilePack(sm &: Sema, path: str, pack: int):
+    sm.fpack_file.push(path)
+    sm.fpack_code.push(pack)
+end
+
+pub func FilePack(sm &: Sema, path: str): int:
+    repeat sm.fpack_file.len() in i:
+        if str.Equals(sm.fpack_file.get(i), path):
+            ret sm.fpack_code.get(i)
+        end
+    end
+    ret str.Equals(sm.lang, "fa") ? 2 : 1
+end
+
+pub func SetCc(sm &: Sema, table: cc.Table):
+    mut old := sm.cctab
+    cc.TableFree(old)
+    sm.cctab = table
+    sm.has_cc = true
+end
+
+pub func Prim(sm &: Sema, kind: int): int:
+    ret type_prim(sm, kind)
+end
+
+pub func ArrayOf(sm &: Sema, elem: int, length: i64): int:
+    ret type_array(sm, elem, length)
+end
+
+pub func SliceOf(sm &: Sema, elem: int): int:
+    ret type_slice(sm, elem)
+end
+
+pub func PtrTo(sm &: Sema, pointee: int): int:
+    ret type_ptr(sm, pointee)
+end
+
+pub func StructType(sm &: Sema, decl_sym: int, name: str): int:
+    ret type_struct(sm, decl_sym, name)
+end
+
+pub func EnumType(sm &: Sema, decl_sym: int, name: str): int:
+    ret type_enum(sm, decl_sym, name)
+end
+
+pub func DynType(sm &: Sema, iface_decl: int, name: str): int:
+    ret type_dyn(sm, iface_decl, name)
+end
+
+pub func MapOf(sm &: Sema, key: int, val: int): int:
+    ret type_map(sm, key, val)
+end
+
+pub func MapIterOf(sm &: Sema, key: int, val: int): int:
+    ret type_map_iter(sm, key, val)
+end
+
+pub func VecOf(sm &: Sema, elem: int): int:
+    ret type_vec(sm, elem)
+end
+
+pub func FileType(sm &: Sema): int:
+    ret type_file(sm)
+end
+
+pub func FuncType(sm &: Sema, ret_t: int, params: Vector<int>): int:
+    ret type_func_new(sm, ret_t, params)
+end
+
+pub func VariantOf(sm &: Sema, members: Vector<int>): int:
+    ret type_variant_new(sm, members)
+end
+
+pub func VariantTag(sm &: Sema, variant: int, member: int): int:
+    ret type_variant_tag(sm, variant, member)
+end
+
+pub func PrimKindFromName(name: str, lang: str): int:
+    ret type_prim_kind_from_name(name, lang)
+end
+
+pub func IsError(sm &: Sema, t: int): bool:
+    ret type_is_error(sm, t)
+end
+
+pub func IsInteger(sm &: Sema, t: int): bool:
+    ret type_is_integer(sm, t)
+end
+
+pub func IsFloat(sm &: Sema, t: int): bool:
+    ret type_is_float(sm, t)
+end
+
+pub func IsNumeric(sm &: Sema, t: int): bool:
+    ret type_is_numeric(sm, t)
+end
+
+pub func IsSigned(sm &: Sema, t: int): bool:
+    ret type_is_signed(sm, t)
+end
+
+pub func Equiv(sm &: Sema, a: int, b: int): bool:
+    ret type_equiv(sm, a, b)
+end
+
+pub func Assignable(sm &: Sema, dst: int, src: int): bool:
+    ret type_assignable(sm, dst, src)
+end
+
+pub func Castable(sm &: Sema, dst: int, src: int): bool:
+    ret type_castable(sm, dst, src)
+end
+
+pub func CommonArith(sm &: Sema, a: int, b: int): int:
+    ret type_common_arith(sm, a, b)
+end
+
+pub func ToString(sm &: Sema, t: int): str:
+    ret type_to_string(sm, t)
+end
+
+pub func TypeAt(sm &: Sema, t: int): Type:
+    ret ty_at(sm, t)
+end
+
+pub func TypeCount(sm &: Sema): int:
+    ret sm.types.len()
+end
+
+pub func NewScope(sm &: Sema, kind: int, parent: int): int:
+    ret scope_new(sm, kind, parent)
+end
+
+pub func NewSymbol(sm &: Sema, kind: int, name: str): int:
+    ret symbol_new(sm, kind, name)
+end
+
+pub func Define(sm &: Sema, sc: int, sym: int): int:
+    ret scope_define(sm, sc, sym)
+end
+
+pub func LookupLocal(sm &: Sema, sc: int, name: str): int:
+    ret scope_lookup_local(sm, sc, name)
+end
+
+pub func Lookup(sm &: Sema, sc: int, name: str): int:
+    ret scope_lookup(sm, sc, name)
+end
+
+pub func LookupWhere(sm &: Sema, sc: int, name: str, where &: int): int:
+    ret scope_lookup_where(sm, sc, name, where)
+end
+
+pub func ScopeAt(sm &: Sema, sc: int): Scope:
+    ret scope_at(sm, sc)
+end
+
+pub func ScopePut(sm &: Sema, sc: int, v: Scope):
+    scope_put(sm, sc, v)
+end
+
+pub func SymAt(sm &: Sema, id: int): Symbol:
+    ret sym_at(sm, id)
+end
+
+pub func SymPut(sm &: Sema, id: int, v: Symbol):
+    sym_put(sm, id, v)
+end
+
+pub func NewSig(sm &: Sema): int:
+    id := sm.sigs.len()
+    sm.sigs.push(Sig {})
+    ret id
+end
+
+pub func SigAt(sm &: Sema, id: int): Sig:
+    ret sig_at(sm, id)
+end
+
+pub func SigCount(sm &: Sema): int:
+    ret sm.sigs.len()
+end
+
+pub func SigPut(sm &: Sema, id: int, v: Sig):
+    sig_put(sm, id, v)
+end
+
+pub func AddOverload(sm &: Sema, sym: int, sig: int):
+    mut sy := sym_at(sm, sym)
+    sy.overloads.push(sig)
+    sym_put(sm, sym, sy)
+end
+
+pub func SetRecordRefs(enabled: bool):
+    g_sm_refs_on = enabled
+    g_sm_ref_node.clear()
+    g_sm_ref_sym.clear()
+end
+
+pub func RefCount(): int:
+    ret g_sm_ref_node.len()
+end
+
+pub func RefNode(i: int): int:
+    ret g_sm_ref_node.get(i)
+end
+
+pub func RefSym(i: int): int:
+    ret g_sm_ref_sym.get(i)
+end
+
+pub func SymCount(sm: Sema): int:
+    ret sm.syms.len()
+end
+
+pub func DisplayType(sm &: Sema, t: int): str:
+    if t < 0:
+        ret ""
+    end
+    ret type_plain_disp(sm, t)
+end
+
+pub func IntrinsicMethodCount(): int:
+    ret K_SM_INTR_METHOD_COUNT
+end
+
+pub func IntrinsicMethodEn(i: int): str:
+    ret k_sm_intr_methods[i * 2 + 1]
+end
+
+pub func IntrinsicMethodFa(i: int): str:
+    ret k_sm_intr_methods[i * 2]
+end
+
+pub func ScopeCount(sm: Sema): int:
+    ret sm.scopes.len()
+end
+
+pub func MangleFunc(
+    sm &: Sema, struct_name: str, fn_name: str, param_types: Vector<int>
+): str:
+    ret mangle_func(sm, struct_name, fn_name, param_types)
+end
+
+pub func ImplOwnerKey(typestr: str): str:
+    ret impl_owner_key(typestr)
+end
+
+pub func FindImplOwner(sm &: Sema, typestr: str): int:
+    ret find_impl_owner(sm, typestr)
+end
+
+pub func Err(sm &: Sema, code: int, sp: co.SrcSpan, msg: str):
+    serr(sm, code, sp, msg)
+end
+
+pub func Warn(sm &: Sema, code: int, sp: co.SrcSpan, msg: str):
+    swarn(sm, code, sp, msg)
+end
+
+pub func Ty(sm &: Sema, k: int): int:
+    ret sema_ty(sm, k)
+end
+
+pub func ErrTy(sm &: Sema): int:
+    ret sema_err_ty(sm)
+end
+
+pub func Decorate(sm &: Sema, a &: at.Ast, n: int, t: int): int:
+    ret sema_decorate(sm, a, n, t)
+end
+
+pub func VecStrType(sm &: Sema, a &: at.Ast, sp: co.SrcSpan): int:
+    ret sema_vec_str(sm, a, sp)
+end
+
+pub func StructSymOf(sm &: Sema, t: int): int:
+    ret struct_sym_of(sm, t)
+end
+
+pub func IntrinsicTypeCanon(name: str): str:
+    ret intrinsic_type_canon(name)
+end
+
+pub func IntrinsicMethodCanon(name: str): str:
+    ret intrinsic_method_canon(name)
+end
+
+pub func CheckIntrinsicTypeLang(sm &: Sema, used: str, sp: co.SrcSpan):
+    sema_check_intrinsic_type_lang(sm, used, sp)
+end
+
+pub func CheckIntrinsicMethodLang(
+    sm &: Sema, used: str, canon: str, sp: co.SrcSpan
+):
+    sema_check_intrinsic_method_lang(sm, used, canon, sp)
+end
+
+pub func AliasForLang(aliases: Vector<str>, lang: str): str:
+    ret alias_for_lang(aliases, lang)
+end
+
+pub func ScopeMemberCanon(
+    sm &: Sema, a &: at.Ast, members: int, name: str, sp: co.SrcSpan
+): str:
+    ret scope_member_canon(sm, a, members, name, sp)
+end
+
+pub func PkgMemberCanon(
+    sm &: Sema, a &: at.Ast, pk: int, name: str, sp: co.SrcSpan
+): str:
+    ret pkg_member_canon(sm, a, pk, name, sp)
+end
+
+pub func LocalCanon(sm &: Sema, a &: at.Ast, name: str, sp: co.SrcSpan): str:
+    ret local_canon(sm, a, name, sp)
+end
+
+pub func PureFn(sm &: Sema, a &: at.Ast): int:
+    ret sema_pure_fn(sm, a)
+end
+
+pub func ResolveType(sm &: Sema, a &: at.Ast, tnode: int): int:
+    ret sema_resolve_type(sm, a, tnode)
+end
+
+pub func BuiltinCount(): int:
+    ret K_SM_BUILTIN_COUNT
+end
+
+pub func BuiltinLookup(name: str): int:
+    ret builtin_lookup(name)
+end
+
+pub func AtomicArity(name: str): int:
+    ret atomic_arity(name)
+end
+
+pub func BuiltinAt(i: int): Builtin:
+    mut b := Builtin {}
+    if i < 0 or i >= K_SM_BUILTIN_COUNT:
+        ret b
+    end
+    b.name = k_sm_builtin_names[i]
+    b.runtime = k_sm_builtin_runtime[i]
+    b.nargs = k_sm_builtin_nargs[i]
+    b.ret_type = k_sm_builtin_ret[i]
+    b.arg = k_sm_builtin_arg[i]
+    ret b
+end
+
+pub func BuiltinGlobalConst(
+    a &: at.Ast, id: int, name: str, is_str &: bool
+): bool:
+    ret builtin_global_const(a, id, name, is_str, false)
+end
+
+pub func SetStdlibRoot(root: str):
+    set_stdlib_root_impl(root)
+end
+
+pub func GetStdlibRoot(): str:
+    ret get_stdlib_root()
+end
+
+pub func SysrootSubdir(triple: str): str:
+    ret mingw_sysroot_subdir(triple)
+end
+
+pub func FindSysroot(triple: str, out &: str): bool:
+    sub := mingw_sysroot_subdir(triple)
+    if str.Len(sub) == 0:
+        ret false
+    end
+    env := os.Env("SALAM_SYSROOTS")
+    if str.Len(env) > 0:
+        cand := pth.PathJoin(env, sub)
+        if sysroot_looks_valid(cand):
+            out = cand
+            ret true
+        end
+    end
+    root := get_stdlib_root()
+    if str.Len(root) > 0:
+        cand2 := pth.PathJoin(pth.PathJoin(root, "sysroots"), sub)
+        if sysroot_looks_valid(cand2):
+            out = cand2
+            ret true
+        end
+    end
+    mut exedir := ""
+    if get_exe_dir(exedir):
+        rel := [
+            "sysroots", "../share/salam/sysroots", "../lib/salam/sysroots"
+        ]
+        repeat 3 in i:
+            cand3 := pth.PathJoin(pth.PathJoin(exedir, rel[i]), sub)
+            if sysroot_looks_valid(cand3):
+                out = cand3
+                ret true
+            end
+        end
+    end
+    ret false
+end
+
+pub func FindBundledTool(name: str, out &: str): bool:
+    if str.Len(name) == 0:
+        ret false
+    end
+    mut exedir := ""
+    if not get_exe_dir(exedir):
+        ret false
+    end
+    rel := [
+        "", "bin", "toolchain/bin", "../toolchain/bin", "../lib/salam/toolchain/bin", "mingw64/bin", "llvm/bin", "tcc"
+    ]
+    repeat 8 in i:
+        cand := pth.PathJoin(pth.PathJoin(exedir, rel[i]), name + K_SM_EXE_SUFFIX)
+        if os.Exists(cand) and not os.IsDir(cand):
+            out = cand
+            ret true
+        end
+    end
+    ret false
+end
+
+pub func FindPathTool(name: str, out &: str): bool:
+    if str.Len(name) == 0:
+        ret false
+    end
+    path := os.Env("PATH")
+    if str.Len(path) == 0:
+        ret false
+    end
+    sep := K_SM_PATH_SEP
+    mut rest := path
+    until str.Len(rest) > 0:
+        mut seg := rest
+        idx := str.IndexOf(rest, sep)
+        if idx >= 0:
+            seg = str.Substr(rest, 0, idx)
+            rest = str.Substr(rest, idx + 1, str.Len(rest) - idx - 1)
+        else:
+            rest = ""
+        end
+        if str.Len(seg) > 0:
+            cand := pth.PathJoin(seg, name + K_SM_EXE_SUFFIX)
+            if os.Exists(cand) and not os.IsDir(cand):
+                out = cand
+                ret true
+            end
+        end
+    end
+    ret false
+end
+
+pub func SetProjectRoot(dir: str):
+    g_sm_project_root = dir
+end
+
+pub func ProjectRoot(): str:
+    ret g_sm_project_root
+end
+
+pub func ResolveImport(dir: str, spec: str): str:
+    ret resolve_import(dir, spec)
+end
+
+pub func ResolveImportNode(a &: at.Ast, dir: str, imp: int, lang: str): str:
+    ret resolve_import_node(a, dir, imp, lang)
+end
+
+pub func PackageFiles(main_path: str): Vector<str>:
+    ret package_files(main_path)
+end
+
+pub func MergeProgram(a &: at.Ast, dst: int, srcprog: int):
+    merge_program(a, dst, srcprog)
+end
+
+pub func Run(sm &: Sema, a &: at.Ast, program: int): bool:
+    prog := at.Get(a, program)
+    sm.program = program
+    SemaIfChainReset()
+    if str.Len(prog.name) > 0:
+        sm.pkg = prog.name
+    else:
+        sm.pkg = "main"
+    end
+    lg.Log(
+        sm.log, lg.PH_SEMANTIC, lg.LOG_INFO, "analyzing " + prog.list.len() + " top-level definitions"
+    )
+    load_imports(sm, a, program)
+    err_prelude_scan(sm, a, program)
+    if sm.prelude_err != 0:
+        th_wrap_main(sm, a, program)
+    end
+    if not str.Equals(sm.pkg, "core"):
+        corep := resolve_import("", "core")
+        if str.Len(corep) > 0:
+            cimp := scratch_import_node(a)
+            _core := load_package(sm, a, corep, cimp)
+        end
+    end
+    sema_collect(sm, a, program)
+    sema_check_toplevel_order(sm, a, program)
+    sema_check_pass(sm, a, program)
+    CheckDomRefs(sm, a, program)
+    SemaOwnPost(sm, a)
+    if not sm.in_pkg and not sm.relax_unused:
+        sema_check_unused_funcs(sm, a)
+        sema_check_unused_imports(sm, a)
+    end
+    ecount := dg.ErrorCount(sm.diag)
+    wcount := dg.WarningCount(sm.diag)
+    lg.Log(
+        sm.log, lg.PH_SEMANTIC, lg.LOG_INFO, "analysis complete: " + ecount + " error" + plural_suffix(ecount) + ", " + wcount + " warning" + plural_suffix(wcount)
+    )
+    ret dg.ErrorCount(sm.diag) == 0
+end
+
+pub func RunCached(sm &: Sema, a &: at.Ast, program: int): bool:
+    ret Run(sm, a, program)
+end
+
+pub func PackageCount(sm &: Sema): int:
+    ret sm.pkg_cache_syms.len()
+end
+
+pub func PackageAt(sm &: Sema, i: int): int:
+    ret sm.pkg_cache_syms.get(i)
+end
+
+pub func PackagePathAt(sm &: Sema, i: int): str:
+    ret sm.pkg_cache_paths.get(i)
+end
+
+pub func PackageDeclAt(sm &: Sema, i: int): int:
+    ret sym_at(sm, sm.pkg_cache_syms.get(i)).decl
+end
+
+pub func SymbolsToXml(w &: x.Writer, sm &: Sema):
+    x.Open(w, "symbols")
+    x.AttrInt(w, "errors", dg.ErrorCount(sm.diag) as i64)
+    x.AttrInt(w, "warnings", dg.WarningCount(sm.diag) as i64)
+    repeat dg.Count(sm.diag) in i:
+        d := dg.ItemAt(sm.diag, i)
+        x.Open(w, "diagnostic")
+        x.Attr(w, "severity", d.sev == dg.SEV_ERROR ? "error" : "warning")
+        x.AttrInt(w, "code", d.code as i64)
+        x.AttrInt(w, "line", d.span.begin.line as i64)
+        x.AttrInt(w, "col", d.span.begin.col as i64)
+        x.Attr(w, "message", d.body)
+        x.Close(w)
+    end
+    gsc := scope_at(sm, sm.global)
+    repeat gsc.symbols.len() in i2:
+        emit_symbol(w, sm, gsc.symbols.get(i2))
+    end
+    x.Close(w)
+end
+
+pub func LayoutSchemaInit(root: str):
+    layout_schema_init(root)
+end
+
+pub func LayoutSchemaErrors(): Vector<str>:
+    lay_ensure()
+    mut out := Vector {} as Vector<str>
+    repeat g_lay_schema_errors.len() in i:
+        out.push(g_lay_schema_errors.get(i))
+    end
+    ret out
+end
+
+pub func LayoutResolve(a &: at.Ast, lb: int):
+    layout_resolve(a, lb)
+end
+
+pub func LayoutElemOf(a &: at.Ast, el: int): int:
+    op := at.Get(a, el).op
+    if op > 0 and op <= g_lay_elems.len():
+        ret op - 1
+    end
+    ret 0 - 1
+end
+
+pub func LayoutElemLookup(name: str): int:
+    lay_ensure()
+    ret lay_elem_lookup(name)
+end
+
+pub func LayoutElemSpelling(name: str, fa: bool): str:
+    lay_ensure()
+    ei := lay_elem_lookup(name)
+    if ei < 0:
+        ret ""
+    end
+    e := g_lay_elems.get(ei)
+    ret fa ? e.fa_name : e.key
+end
+
+pub func LayoutAttrSpelling(name: str, fa: bool): str:
+    lay_ensure()
+    key := lay_attr_key(name)
+    if str.Len(key) == 0 or not fa:
+        ret key
+    end
+    repeat g_lay_attrs.len() in i:
+        av := g_lay_attrs.get(i)
+        if str.Equals(av.key, key) and str.Len(av.fa_name) > 0:
+            ret av.fa_name
+        end
+    end
+    ret ""
+end
+
+pub func LayoutElemCount(): int:
+    lay_ensure()
+    ret g_lay_elems.len()
+end
+
+pub func LayoutElemKey(i: int): str:
+    ret g_lay_elems.get(i).key
+end
+
+pub func LayoutElemTag(i: int): str:
+    ret g_lay_elems.get(i).tag
+end
+
+pub func LayoutElemKind(i: int): int:
+    ret g_lay_elems.get(i).kind
+end
+
+pub func LayoutElemGenerator(i: int): str:
+    ret g_lay_elems.get(i).generator
+end
+
+pub func LayoutElemRequired(i: int): str:
+    ret g_lay_elems.get(i).required
+end
+
+pub func LayoutCsvHas(csv: str, v: str): bool:
+    ret lay_csv_has(csv, v)
+end
+
+pub func LayoutElemInHead(i: int): bool:
+    ret g_lay_elems.get(i).head
+end
+
+pub func LayoutAttrFor(ei: int, name: str): int:
+    ret lay_attr_for(ei, name)
+end
+
+pub func LayoutCssValueEn(name: str, value: str): str:
+    lay_ensure()
+    mut key := lay_attr_key(name)
+    if str.Len(key) == 0:
+        pl := lay_pseudo_prefix_len(name)
+        if pl > 0:
+            key = lay_pseudo_rest_key(str.Substr(name, pl, str.Len(name) - pl))
+        end
+    end
+    if str.Len(key) == 0:
+        ret ""
+    end
+    repeat g_lay_attrs.len() in i:
+        av := g_lay_attrs.get(i)
+        if str.Equals(av.key, key) and av.vtype == VT_CSS:
+            ret lay_css_value_ok(av.allowed, value) ? lay_css_map(av.allowed, value) : ""
+        end
+    end
+    ret ""
+end
+
+pub func LayoutAttrKey(name: str): str:
+    lay_ensure()
+    ret lay_attr_key(name)
+end
+
+pub func LayoutAttrCount(): int:
+    lay_ensure()
+    ret g_lay_attrs.len()
+end
+
+pub func LayoutAttrName(i: int): str:
+    ret g_lay_attrs.get(i).key
+end
+
+pub func LayoutAttrOut(i: int): str:
+    ret g_lay_attrs.get(i).out
+end
+
+pub func LayoutAttrDest(i: int): int:
+    ret g_lay_attrs.get(i).dest
+end
+
+pub func LayoutAttrVtype(i: int): int:
+    ret g_lay_attrs.get(i).vtype
+end
+
+pub func LayoutAttrAllowed(i: int): str:
+    ret g_lay_attrs.get(i).allowed
+end
+
+pub func LayoutAttrMultiple(i: int): bool:
+    ret g_lay_attrs.get(i).multiple
+end
+
+pub func LayoutAttrScope(i: int): str:
+    ret g_lay_attrs.get(i).scope
+end
+
+pub func LayoutAttrHasDefault(i: int): bool:
+    ret g_lay_attrs.get(i).has_default
+end
+
+pub func LayoutAttrDefault(i: int): str:
+    ret g_lay_attrs.get(i).defval
+end
+
+pub func LayoutMapLength(v: str, bare_px: bool): str:
+    ret lay_map_length(v, bare_px)
+end
+
+pub func LayoutMapValue(ai: int, v: str): str:
+    ret lay_map_value(ai, v)
+end
+
+pub func LayoutValueGenerator(group: str, canon: str): str:
+    ret lay_value_generator(group, canon)
+end
+
+pub func LayoutPseudoPrefixLen(name: str): int:
+    ret lay_pseudo_prefix_len(name)
+end
+
+pub func LayoutDynValue(group: str, v: str): str:
+    lay_ensure()
+    ret lay_dyn_value(group, v)
+end
+
+pub func LayoutMapColor(v: str): str:
+    lay_ensure()
+    ret lay_map_color(v)
+end
+
+pub func SetRelaxUnused(relax: bool):
+    g_sm_relax_unused = relax
+end
+
+pub func SetOwnership(mode: int):
+    g_sm_ownership = mode
+end
+
+pub func SetSwitchLint(mode: int, min_links: int):
+    g_sm_ifchain = mode
+    g_sm_ifchain_min = min_links
+end
+
+pub func SetConsts(defs &: Vector<str>):
+    set_consts(defs)
+end
+
+pub func DceReset():
+    g_sm_dce_edge_from.free()
+    g_sm_dce_edge_to.free()
+    g_sm_dce_roots.free()
+    g_sm_dce_reach.free()
+    g_sm_dce_edge_from = Vector {} as Vector<str>
+    g_sm_dce_edge_to = Vector {} as Vector<str>
+    g_sm_dce_roots = Vector {} as Vector<str>
+    g_sm_dce_reach = Vector {} as Vector<str>
+    g_sm_dce_enabled = false
+    g_sm_dce_init = true
+end
+
+pub func DceEnable():
+    g_sm_dce_enabled = true
+end
+
+pub func DceDisable():
+    g_sm_dce_enabled = false
+end
+
+pub func DceEnabled(): bool:
+    ret g_sm_dce_enabled
+end
+
+pub func DceMarkRoot(pkg: str, fn: str):
+    dce_mark_root(pkg, fn)
+end
+
+pub func DceNoteCall(
+    caller_pkg: str, caller_fn: str, callee_pkg: str, callee_fn: str
+):
+    dce_note_call(caller_pkg, caller_fn, callee_pkg, callee_fn)
+end
+
+pub func DceFinish():
+    if not g_sm_dce_init:
+        ret
+    end
+    g_sm_dce_reach.free()
+    g_sm_dce_reach = Vector {} as Vector<str>
+    mut worklist := Vector {} as Vector<str>
+    defer worklist.free()
+    repeat g_sm_dce_roots.len() in i:
+        k := g_sm_dce_roots.get(i)
+        if dce_key_in(g_sm_dce_reach, k):
+            continue
+        end
+        g_sm_dce_reach.push(k)
+        worklist.push(k)
+    end
+    until worklist.len() > 0:
+        cur := worklist.get(worklist.len() - 1)
+        _p := worklist.pop()
+        repeat g_sm_dce_edge_from.len() in j:
+            if not str.Equals(g_sm_dce_edge_from.get(j), cur):
+                continue
+            end
+            dst := g_sm_dce_edge_to.get(j)
+            if dce_key_in(g_sm_dce_reach, dst):
+                continue
+            end
+            g_sm_dce_reach.push(dst)
+            worklist.push(dst)
+        end
+    end
+end
+
+pub func DceReachable(pkg: str, fn: str): bool:
+    if not g_sm_dce_init:
+        ret true
+    end
+    ret dce_key_in(g_sm_dce_reach, dce_key(pkg, fn))
+end
+
+pub func LvalueMutable(
+    sm &: Sema, a &: at.Ast, n: int, is_lvalue &: bool
+): bool:
+    mut root := 0
+    v := sema_classify_write(sm, a, n, root)
+    is_lvalue = v != LV_NOT_LVALUE
+    ret v == LV_OK
+end
+
+pub func ExePath(out &: str): bool:
+    args := os.Args()
+    defer args.free()
+    if args.len() == 0:
+        ret false
+    end
+    argv0 := args.get(0)
+    if str.Len(pth.PathDir(argv0)) > 0:
+        out = argv0
+        ret true
+    end
+    ret FindPathTool(argv0, out)
+end
+
+pub func ReadReleaseReceipt(): str:
+    mut exedir := ""
+    if not get_exe_dir(exedir):
+        ret ""
+    end
+    p := pth.PathJoin(exedir, ".salam-release")
+    if not file_exists(p) or os.IsDir(p):
+        ret ""
+    end
+    ret os.ReadFile(p)
+end

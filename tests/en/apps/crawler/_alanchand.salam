@@ -1,0 +1,324 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package alanchand
+
+import net.http
+import str
+import io
+import os
+import time
+
+pub const CURRENCY_URL := "https://alanchand.com/en"
+pub const GOLD_URL := "https://alanchand.com/en/gold-price"
+pub const CRYPTO_URL := "https://alanchand.com/en/crypto-price"
+
+pub const USER_AGENT := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
+
+const DIGITS := "0123456789"
+const JAR_FILE := "alanchand-cookies.txt"
+const MAX_REDIRECTS := 3
+const RETRY_DELAY_MS := 1500
+
+func jar_path(): str:
+    ret os.TempDir().concat("/").concat(JAR_FILE)
+end
+
+func apply_browser_headers(c &: http.Client):
+    c.SetHeader("User-Agent", USER_AGENT)
+    c.SetHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+    c.SetHeader("Accept-Language", "en-US,en;q=0.9,fa;q=0.8")
+    c.SetHeader("Upgrade-Insecure-Requests", "1")
+    c.SetHeader("Sec-Fetch-Dest", "document")
+    c.SetHeader("Sec-Fetch-Mode", "navigate")
+    c.SetHeader("Sec-Fetch-Site", "none")
+    c.SetHeader("Sec-Fetch-User", "?1")
+    c.SetHeader("Sec-Ch-Ua", "\"Chromium\";v=\"127\", \"Not)A;Brand\";v=\"99\"")
+    c.SetHeader("Sec-Ch-Ua-Mobile", "?0")
+    c.SetHeader("Sec-Ch-Ua-Platform", "\"Windows\"")
+    c.SetHeader("Cache-Control", "no-cache")
+    c.SetHeader("Pragma", "no-cache")
+end
+
+func is_challenge(status: int): bool:
+    ret status == 0 or status == 403 or status == 429 or status == 503
+end
+
+func is_redirect(status: int): bool:
+    ret status == 301 or status == 302 or status == 303 or status == 307 or status == 308
+end
+
+func absolute(base: str, location: str): str:
+    if str.StartsWith(location, "http://") or str.StartsWith(location, "https://"):
+        ret location
+    end
+    scheme_end := str.Find(base, "://")
+    if scheme_end < 0:
+        ret location
+    end
+    slash := str.IndexFrom(base, "/", scheme_end + 3)
+    mut root := base
+    if slash >= 0:
+        root = base.substr(0, slash)
+    end
+    if str.StartsWith(location, "/"):
+        ret root.concat(location)
+    end
+    ret root.concat("/").concat(location)
+end
+
+func follow(c &: http.Client, first: http.Response, url: str): http.Response:
+    mut r := first
+    mut here := url
+    mut hop := 0
+    until hop < MAX_REDIRECTS and is_redirect(r.status):
+        next := http.GetHeader(r, "Location")
+        if next.len() == 0:
+            ret r
+        end
+        here = absolute(here, next)
+        r = c.Get(here)
+        hop = hop + 1
+    end
+    ret r
+end
+
+func entities(s: str): str:
+    mut t := str.Replace(s, "&nbsp;", " ")
+    t = str.Replace(t, "&amp;", "&")
+    t = str.Replace(t, "&lt;", "<")
+    t = str.Replace(t, "&gt;", ">")
+    t = str.Replace(t, "&quot;", "\"")
+    t = str.Replace(t, "&#039;", "'")
+    t = str.Replace(t, "&rsquo;", "'")
+    ret t
+end
+
+func squeeze(s: str): str:
+    mut t := str.Replace(s, "\r", " ")
+    t = str.Replace(t, "\n", " ")
+    t = str.Replace(t, "\t", " ")
+    until str.Contains(t, "  "):
+        t = str.Replace(t, "  ", " ")
+    end
+    ret str.Trim(t)
+end
+
+pub func NewSession(): http.Client:
+    mut c := http.NewClient()
+    apply_browser_headers(c)
+    _restored := LoadCookies(c)
+    ret c
+end
+
+pub func LoadCookies(c &: http.Client): int:
+    raw := io.ReadFile(jar_path())
+    if raw.len() == 0:
+        ret 0
+    end
+    lines := str.Split(raw, "\n")
+    defer lines.free()
+    mut n := 0
+    each line in lines:
+        tab := str.Find(line, "\t")
+        if tab > 0:
+            c.SetCookie(line.substr(0, tab), str.Trim(line.substr(tab + 1, line.len() - tab - 1)))
+            n = n + 1
+        end
+    end
+    ret n
+end
+
+pub func SaveCookies(c &: http.Client): int:
+    mut out := ""
+    mut n := 0
+    it := c.cookies.iter()
+    until it.has_next():
+        out = out.concat(it.key()).concat("\t").concat(it.value()).concat("\n")
+        n = n + 1
+        it.next()
+    end
+    if n == 0:
+        ret 0
+    end
+    _written := io.WriteFile(jar_path(), out)
+    ret n
+end
+
+pub func Fetch(c &: http.Client, url: str): str:
+    mut r := follow(c, c.Get(url), url)
+    if is_challenge(r.status):
+        println "  challenged (status " + str.FromInt(r.status as i64) + "), retrying with cookies"
+        time.Sleep(RETRY_DELAY_MS)
+        r = follow(c, c.Get(url), url)
+    end
+    if not http.Ok(r):
+        println "  fetch failed: status " + str.FromInt(r.status as i64) + " for " + url
+        ret ""
+    end
+    ret r.body
+end
+
+pub func Clean(html: str): str:
+    mut out := ""
+    mut i := 0
+    until i < html.len():
+        lt_at := str.IndexFrom(html, "<", i)
+        if lt_at < 0:
+            out = out.concat(html.substr(i, html.len() - i))
+            i = html.len()
+        else:
+            out = out.concat(html.substr(i, lt_at - i)).concat(" ")
+            gt_at := str.IndexFrom(html, ">", lt_at)
+            if gt_at < 0:
+                i = html.len()
+            else:
+                i = gt_at + 1
+            end
+        end
+    end
+    ret squeeze(entities(out))
+end
+
+pub func Inner(html: str, marker: str, from: int, closing: str, next &: int): str:
+    at := str.IndexFrom(html, marker, from)
+    if at < 0:
+        next = 0 - 1
+        ret ""
+    end
+    gt_at := str.IndexFrom(html, ">", at)
+    if gt_at < 0:
+        next = 0 - 1
+        ret ""
+    end
+    close := str.IndexFrom(html, closing, gt_at)
+    if close < 0:
+        next = 0 - 1
+        ret ""
+    end
+    next = close + closing.len()
+    ret html.substr(gt_at + 1, close - gt_at - 1)
+end
+
+pub func Text(html: str, marker: str, from: int, closing: str, next &: int): str:
+    ret Clean(Inner(html, marker, from, closing, next))
+end
+
+pub func CellText(html: str, marker: str, from: int): str:
+    mut at := 0
+    text := Text(html, marker, from, "</td>", at)
+    if at < 0:
+        ret ""
+    end
+    ret text
+end
+
+pub func SpanText(html: str, marker: str, from: int): str:
+    mut at := 0
+    text := Text(html, marker, from, "</span>", at)
+    if at < 0:
+        ret ""
+    end
+    ret text
+end
+
+pub func Lead(inner: str): str:
+    cut := str.Find(inner, "<")
+    if cut < 0:
+        ret squeeze(entities(inner))
+    end
+    ret squeeze(entities(inner.substr(0, cut)))
+end
+
+pub func Direction(inner: str): str:
+    if str.Contains(inner, "priceSymbol up"):
+        ret "up"
+    end
+    if str.Contains(inner, "priceSymbol down"):
+        ret "down"
+    end
+    ret "flat"
+end
+
+pub func NumberText(text: str): str:
+    mut out := ""
+    mut seen := false
+    mut i := 0
+    until i < text.len():
+        c := text.substr(i, 1)
+        if str.Contains(DIGITS, c):
+            out = out.concat(c)
+            seen = true
+        else c == "." or c == ",":
+            if c == "." and seen:
+                out = out.concat(c)
+            end
+        else c == "-" and out.len() == 0:
+            out = "-"
+        else seen:
+            break
+        end
+        i = i + 1
+    end
+    if not seen:
+        ret ""
+    end
+    ret str.TrimSuffix(out, ".")
+end
+
+pub func ScriptArray(html: str, name: str): str:
+    mut at := str.Find(html, "const " + name)
+    if at < 0:
+        at = str.Find(html, "let " + name)
+    end
+    if at < 0:
+        at = str.Find(html, "var " + name)
+    end
+    if at < 0:
+        ret ""
+    end
+    open := str.IndexFrom(html, "[", at)
+    if open < 0:
+        ret ""
+    end
+    close := str.IndexFrom(html, "];", open)
+    if close < 0:
+        ret ""
+    end
+    ret html.substr(open, close - open + 1)
+end
+
+pub func LastUpdate(html: str): str:
+    at := str.Find(html, "Last Update")
+    if at < 0:
+        ret ""
+    end
+    stop := str.IndexFrom(html, "</p>", at)
+    if stop < 0:
+        ret ""
+    end
+    line := Clean(html.substr(at, stop - at))
+    ret str.Trim(str.TrimPrefix(line, "Last Update :"))
+end
+
+pub func Banner(title: str, url: str, html: str):
+    mut stamp := LastUpdate(html)
+    if stamp.len() == 0:
+        stamp = "unknown"
+    end
+    println title
+    println "Source      : " + url
+    println "Last update : " + stamp
+    println ""
+end

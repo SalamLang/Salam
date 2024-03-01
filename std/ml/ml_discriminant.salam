@@ -1,0 +1,295 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ml
+
+import math
+import matrix
+
+@en "LDA"
+@fa "تحلیل تشخیصی خطی"
+pub struct LDA:
+    @en "ridge"
+    @fa "منظم‌سازی"
+    pub ridge: f64 = 0.000001
+    @en "means"
+    @fa "میانگین‌ها"
+    pub means: matrix.Matrix = matrix.Matrix {}
+    @en "cov"
+    @fa "کوواریانس"
+    pub cov: matrix.Matrix = matrix.Matrix {}
+    @en "log_priors"
+    @fa "لگاریتم پیشین‌ها"
+    pub log_priors: matrix.Matrix = matrix.Matrix {}
+    @en "n_classes"
+    @fa "شمار رده‌ها"
+    pub n_classes: int = 0
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    pub func fit(x &: matrix.Matrix, y &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty() or y.rows != x.rows or y.cols != 1: ret false end
+        k := CountClasses(y)
+        if k < 2: ret false end
+        n := x.rows
+        p := x.cols
+        matrix.Free(this.means)
+        matrix.Free(this.cov)
+        matrix.Free(this.log_priors)
+        mut counts := Vector {} as Vector<int>
+        counts.zeros(k)
+        this.means = _class_means(x, y, k, counts)
+        this.log_priors = matrix.Zeros(k, 1)
+        repeat k in c:
+            mut pr := (counts.get(c) as f64) / (n as f64)
+            if pr < 1.0e-12: pr = 1.0e-12 end
+            this.log_priors.set(c, 0, math.Log(pr))
+        end
+        this.cov = matrix.Zeros(p, p)
+        repeat n in i:
+            c := y.at(i, 0) as int
+            repeat p in a:
+                da := x.at(i, a) - this.means.at(c, a)
+                repeat p in bb:
+                    this.cov.add_at(a, bb, da * (x.at(i, bb) - this.means.at(c, bb)))
+                end
+            end
+        end
+        matrix.ScaleInPlace(this.cov, 1.0 / ((n - k) as f64))
+        repeat p in a: this.cov.add_at(a, a, this.ridge) end
+        counts.free()
+        this.n_classes = k
+        this.ok = true
+        ret true
+    end
+
+    @en "predict_proba"
+    @fa "پیش‌بینی احتمال"
+    pub func predict_proba(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false or x.cols != this.means.cols: ret matrix.Matrix {} end
+        mut out := matrix.Zeros(x.rows, this.n_classes)
+        mut inv := matrix.InverseSPD(this.cov)
+        if inv.is_empty():
+            matrix.Free(out)
+            ret matrix.Matrix {}
+        end
+        repeat this.n_classes in c:
+            mut mu := matrix.Row(this.means, c)
+            mut mut_t := matrix.Transpose(mu)
+            mut smu := matrix.MatMul(inv, mut_t)
+            matrix.Free(mut_t)
+            mut mm := 0.0
+            repeat x.cols in j: mm += mu.at(0, j) * smu.at(j, 0) end
+            repeat x.rows in i:
+                mut s := 0.0
+                repeat x.cols in j: s += x.at(i, j) * smu.at(j, 0) end
+                out.set(i, c, s - 0.5 * mm + this.log_priors.at(c, 0))
+            end
+            matrix.Free(mu)
+            matrix.Free(smu)
+        end
+        matrix.Free(inv)
+        _softmax_rows(out)
+        ret out
+    end
+
+    @en "predict"
+    @fa "پیش‌بینی"
+    pub func predict(x &: matrix.Matrix): matrix.Matrix:
+        mut probs := this.predict_proba(x)
+        if probs.is_empty(): ret probs end
+        out := _argmax_rows(probs)
+        matrix.Free(probs)
+        ret out
+    end
+
+    @en "score"
+    @fa "امتیاز"
+    pub func score(x &: matrix.Matrix, y &: matrix.Matrix): f64:
+        mut p := this.predict(x)
+        if p.is_empty(): ret 0.0 end
+        r := Accuracy(y, p)
+        matrix.Free(p)
+        ret r
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        matrix.Free(this.means)
+        matrix.Free(this.cov)
+        matrix.Free(this.log_priors)
+    end
+end
+
+@en "QDA"
+@fa "تحلیل تشخیصی درجه دو"
+pub struct QDA:
+    @en "ridge"
+    @fa "منظم‌سازی"
+    pub ridge: f64 = 0.000001
+    @en "means"
+    @fa "میانگین‌ها"
+    pub means: matrix.Matrix = matrix.Matrix {}
+    @en "covs"
+    @fa "کوواریانس‌ها"
+    pub covs: Vector<matrix.Matrix> = Vector {}
+    @en "log_priors"
+    @fa "لگاریتم پیشین‌ها"
+    pub log_priors: matrix.Matrix = matrix.Matrix {}
+    @en "n_classes"
+    @fa "شمار رده‌ها"
+    pub n_classes: int = 0
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    pub func fit(x &: matrix.Matrix, y &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty() or y.rows != x.rows or y.cols != 1: ret false end
+        k := CountClasses(y)
+        if k < 2: ret false end
+        n := x.rows
+        p := x.cols
+        this.free()
+        mut counts := Vector {} as Vector<int>
+        counts.zeros(k)
+        this.means = _class_means(x, y, k, counts)
+        this.log_priors = matrix.Zeros(k, 1)
+        repeat k in c:
+            mut cov := matrix.Zeros(p, p)
+            repeat n in i:
+                if (y.at(i, 0) as int) == c:
+                    repeat p in a:
+                        da := x.at(i, a) - this.means.at(c, a)
+                        repeat p in bb:
+                            cov.add_at(a, bb, da * (x.at(i, bb) - this.means.at(c, bb)))
+                        end
+                    end
+                end
+            end
+            mut denom := counts.get(c) - 1
+            if denom < 1: denom = 1 end
+            matrix.ScaleInPlace(cov, 1.0 / (denom as f64))
+            repeat p in a: cov.add_at(a, a, this.ridge) end
+            this.covs.push(cov)
+            mut pr := (counts.get(c) as f64) / (n as f64)
+            if pr < 1.0e-12: pr = 1.0e-12 end
+            this.log_priors.set(c, 0, math.Log(pr))
+        end
+        counts.free()
+        this.n_classes = k
+        this.ok = true
+        ret true
+    end
+
+    @en "predict_proba"
+    @fa "پیش‌بینی احتمال"
+    pub func predict_proba(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false or x.cols != this.means.cols: ret matrix.Matrix {} end
+        p := x.cols
+        mut out := matrix.Zeros(x.rows, this.n_classes)
+        repeat this.n_classes in c:
+            mut cov := this.covs.get(c)
+            mut inv := matrix.InverseSPD(cov)
+            logdet := matrix.LogDetSPD(cov)
+            if inv.is_empty():
+                matrix.Free(out)
+                ret matrix.Matrix {}
+            end
+            repeat x.rows in i:
+                mut q := 0.0
+                repeat p in a:
+                    da := x.at(i, a) - this.means.at(c, a)
+                    repeat p in bb:
+                        q += da * inv.at(a, bb) * (x.at(i, bb) - this.means.at(c, bb))
+                    end
+                end
+                out.set(i, c, 0.0 - 0.5 * q - 0.5 * logdet + this.log_priors.at(c, 0))
+            end
+            matrix.Free(inv)
+        end
+        _softmax_rows(out)
+        ret out
+    end
+
+    @en "predict"
+    @fa "پیش‌بینی"
+    pub func predict(x &: matrix.Matrix): matrix.Matrix:
+        mut probs := this.predict_proba(x)
+        if probs.is_empty(): ret probs end
+        out := _argmax_rows(probs)
+        matrix.Free(probs)
+        ret out
+    end
+
+    @en "score"
+    @fa "امتیاز"
+    pub func score(x &: matrix.Matrix, y &: matrix.Matrix): f64:
+        mut p := this.predict(x)
+        if p.is_empty(): ret 0.0 end
+        r := Accuracy(y, p)
+        matrix.Free(p)
+        ret r
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        matrix.Free(this.means)
+        matrix.Free(this.log_priors)
+        repeat this.covs.len() in c:
+            mut cv := this.covs.get(c)
+            matrix.Free(cv)
+        end
+        this.covs.free()
+    end
+end
+
+func _class_means(x &: matrix.Matrix, y &: matrix.Matrix, k: int, counts &: Vector<int>): matrix.Matrix:
+    mut m := matrix.Zeros(k, x.cols)
+    repeat x.rows in i:
+        c := y.at(i, 0) as int
+        counts.set(c, counts.get(c) + 1)
+        repeat x.cols in j: m.add_at(c, j, x.at(i, j)) end
+    end
+    repeat k in c:
+        if counts.get(c) > 0:
+            repeat x.cols in j: m.mul_at(c, j, 1.0 / (counts.get(c) as f64)) end
+        end
+    end
+    ret m
+end
+
+func _softmax_rows(m &: matrix.Matrix):
+    repeat m.rows in i:
+        mut mx := m.at(i, 0)
+        repeat m.cols in c:
+            if m.at(i, c) > mx: mx = m.at(i, c) end
+        end
+        mut s := 0.0
+        repeat m.cols in c:
+            e := math.Exp(m.at(i, c) - mx)
+            m.set(i, c, e)
+            s += e
+        end
+        repeat m.cols in c: m.set(i, c, m.at(i, c) / s) end
+    end
+end

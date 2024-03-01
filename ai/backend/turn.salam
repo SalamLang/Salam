@@ -1,0 +1,347 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aiturn
+
+import sync
+import str
+import conv
+
+include aistore "store.salam"
+include aiengine "engine.salam"
+include ailive "live.salam"
+include aicheck "check.salam"
+include aipolicy "policy.salam"
+
+const CHECK_SECONDS := 10
+const FIX_ROUNDS := 2
+const START_SECONDS := 45
+const INTERRUPTED_SECONDS := 30
+const EM := 8212
+const EN := 8211
+
+mut EM_S := ""
+mut EN_S := ""
+mut CHECK_LOCK := sync.Mutex {}
+mut CHECKED := HashMap {} as HashMap<str, str>
+mut ROUNDS := HashMap {} as HashMap<str, int>
+mut VERIFYING := HashMap {} as HashMap<str, str>
+mut ASKED := HashMap {} as HashMap<str, i64>
+mut RELAXED := HashMap {} as HashMap<str, str>
+mut TALLY := HashMap {} as HashMap<str, int>
+mut TALLIED := HashMap {} as HashMap<str, str>
+
+func check_due(sid: str): bool:
+    _l := sync.Lock(CHECK_LOCK)
+    t := aistore.Now()
+    mut due := false
+    if not CHECKED.has(sid):
+        CHECKED.put(sid, conv.FormatInt(t))
+    else t - (CHECKED.get(sid).to_int() as i64) >= CHECK_SECONDS:
+        CHECKED.put(sid, conv.FormatInt(t))
+        due = true
+    end
+    _u := sync.Unlock(CHECK_LOCK)
+    ret due
+end
+
+func dash(cp: int): bool:
+    ret cp == EM or cp == EN
+end
+
+func persian(cp: int): bool:
+    ret (cp >= 1536 and cp <= 1791) or (cp >= 64336 and cp <= 65023) or (cp >= 65136 and cp <= 65279) or (cp >= 1776 and cp <= 1785)
+end
+
+func digit(cp: int): bool:
+    ret (cp >= 48 and cp <= 57) or (cp >= 1776 and cp <= 1785) or (cp >= 1632 and cp <= 1641)
+end
+
+func comma_after(b &: str.StringBuilder, prev: int):
+    if persian(prev):
+        str.BufAppendCp(b, 1548)
+    else:
+        str.BufAppend(b, ",")
+    end
+end
+
+func fix_prompt(report: str): str:
+    ret "<compiler_check>\nThe Salam code in your last answer does not compile with the Salam compiler:\n\n" + report + "\n\nLook up the right syntax (salam_docs, salam_find_examples), check every code block with salam_check until it passes, then write your whole answer again with the corrected code. Answer the user's last message directly. Do not mention this check.\n</compiler_check>"
+end
+
+func asked_at(sid: str, created: i64): i64:
+    _l := sync.Lock(CHECK_LOCK)
+    t := ASKED.has(sid) ? ASKED.get(sid) : created
+    _u := sync.Unlock(CHECK_LOCK)
+    ret t
+end
+
+func retried(sid: str):
+    _l := sync.Lock(CHECK_LOCK)
+    ASKED.put(sid, aistore.Now())
+    _u := sync.Unlock(CHECK_LOCK)
+end
+
+func relaxed(sid: str): bool:
+    _l := sync.Lock(CHECK_LOCK)
+    v := RELAXED.has(sid)
+    _u := sync.Unlock(CHECK_LOCK)
+    ret v
+end
+
+func tally(sid: str, text: str, lines: int): int:
+    mark := text.len() + ":" + text.substr(0, text.len() < 80 ? text.len() : 80)
+    _l := sync.Lock(CHECK_LOCK)
+    if TALLY.size() > 5000:
+        TALLY = HashMap {} as HashMap<str, int>
+        TALLIED = HashMap {} as HashMap<str, str>
+    end
+    mut total := TALLY.has(sid) ? TALLY.get(sid) : 0
+    if not TALLIED.has(sid) or TALLIED.get(sid) != mark:
+        total += lines
+        TALLY.put(sid, total)
+        TALLIED.put(sid, mark)
+    end
+    _u := sync.Unlock(CHECK_LOCK)
+    ret total
+end
+
+func verify(sid: str, text: str): bool:
+    _l := sync.Lock(CHECK_LOCK)
+    round := ROUNDS.has(sid) ? ROUNDS.get(sid) : 0
+    if round >= FIX_ROUNDS or VERIFYING.has(sid):
+        busy := VERIFYING.has(sid)
+        _u := sync.Unlock(CHECK_LOCK)
+        ret busy
+    end
+    VERIFYING.put(sid, "1")
+    _u := sync.Unlock(CHECK_LOCK)
+    mut ask := ""
+    mut foreign := ""
+    if not relaxed(sid):
+        foreign = aipolicy.Foreign(text)
+        lines := aipolicy.ForeignLines(text)
+        total := tally(sid, text, lines)
+        if foreign.len() == 0 and aipolicy.Spread(total, lines):
+            foreign = "pieces of other-language code spread over this conversation (" + total + " lines in all)"
+        end
+    end
+    if foreign.len() > 0:
+        ask = aipolicy.LanguagePrompt(foreign)
+    else:
+        report := aicheck.Problems(text)
+        if report.len() > 0:
+            ask = fix_prompt(report)
+        end
+    end
+    mut sent := false
+    if ask.len() > 0:
+        ailive.Begin(sid)
+        sent = aiengine.Followup(sid, ask)
+    end
+    _a := sync.Lock(CHECK_LOCK)
+    _v := VERIFYING.remove(sid)
+    if sent:
+        ROUNDS.put(sid, round + 1)
+        ASKED.put(sid, aistore.Now())
+    else:
+        ROUNDS.put(sid, FIX_ROUNDS)
+    end
+    _b := sync.Unlock(CHECK_LOCK)
+    ret sent
+end
+
+pub func SaveUsage(table: str, id: str, u: aiengine.Usage):
+    if not u.ok or id.len() == 0:
+        ret
+    end
+    mut a := Vector {} as Vector<str>
+    a.push(conv.FormatInt(u.input))
+    a.push(conv.FormatInt(u.output))
+    a.push(conv.FormatInt(u.reasoning))
+    a.push(conv.FormatInt(u.cache_read))
+    a.push(conv.FormatInt(u.cache_write))
+    a.push(conv.FormatFloatPrec(u.cost, 8))
+    a.push(conv.FormatFloatPrec(u.cost_in, 8))
+    a.push(conv.FormatFloatPrec(u.cost_out, 8))
+    a.push(conv.FormatInt(u.tools as i64))
+    a.push(conv.FormatInt(u.steps as i64))
+    a.push(id)
+    mut extra := ""
+    if table == "messages":
+        a.push(conv.FormatInt(u.ms))
+        a.push(conv.FormatInt(aistore.Now()))
+        extra = ", ms = ?12, finished = ?13"
+    end
+    aistore.Lock()
+    _u := aistore.Run("UPDATE " + table + " SET tokens_in = ?1, tokens_out = ?2, tokens_reasoning = ?3, cache_read = ?4, cache_write = ?5, cost = ?6, cost_in = ?7, cost_out = ?8, tools = ?9, steps = ?10" + extra + " WHERE id = ?11", a)
+    aistore.Unlock()
+end
+
+pub func Init():
+    CHECK_LOCK = sync.NewMutex()
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppendCp(b, EM)
+    EM_S = str.BufStr(b)
+    str.BufReset(b)
+    str.BufAppendCp(b, EN)
+    EN_S = str.BufStr(b)
+end
+
+pub func Forget(sid: str):
+    _l := sync.Lock(CHECK_LOCK)
+    _r := CHECKED.remove(sid)
+    _o := ROUNDS.remove(sid)
+    _a := ASKED.remove(sid)
+    _x := RELAXED.remove(sid)
+    _t := TALLIED.remove(sid)
+    _u := sync.Unlock(CHECK_LOCK)
+end
+
+pub func Relax(sid: str, on_flag: bool):
+    _l := sync.Lock(CHECK_LOCK)
+    if on_flag:
+        RELAXED.put(sid, "1")
+    else:
+        _r := RELAXED.remove(sid)
+    end
+    _u := sync.Unlock(CHECK_LOCK)
+end
+
+pub func Plain(text: str): str:
+    if text.find(EM_S) < 0 and text.find(EN_S) < 0:
+        ret text
+    end
+    cps := str.CodePoints(text)
+    n := cps.len()
+    mut has := false
+    each cp in cps:
+        if dash(cp):
+            has = true
+        end
+    end
+    if not has:
+        ret text
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut i := 0
+    until i < n:
+        c := cps.get(i)
+        if c == 32 and i + 1 < n and dash(cps.get(i + 1)):
+            if i + 2 >= n:
+                break
+            end
+            if cps.get(i + 2) == 32:
+                prev := i > 0 ? cps.get(i - 1) : 32
+                if prev == 10 or i == 0:
+                    str.BufAppend(b, " - ")
+                else:
+                    comma_after(b, prev)
+                    str.BufAppend(b, " ")
+                end
+                i += 3
+                continue
+            end
+        end
+        if dash(c):
+            if i + 1 >= n:
+                break
+            end
+            prev := i > 0 ? cps.get(i - 1) : 10
+            next := cps.get(i + 1)
+            if prev == 10 or prev == 32 or digit(prev) or digit(next) or c == EN:
+                str.BufAppend(b, "-")
+            else:
+                comma_after(b, prev)
+                if next != 32:
+                    str.BufAppend(b, " ")
+                end
+            end
+            i += 1
+            continue
+        end
+        str.BufAppendCp(b, c)
+        i += 1
+    end
+    ret str.BufStr(b)
+end
+
+pub func Progress(sid: str, created: i64, limit: i64): aiengine.Reply:
+    ret Advance(sid, created, limit, START_SECONDS as i64, true, true)
+end
+
+pub func Advance(sid: str, created: i64, limit: i64, start_limit: i64, check: bool, want_steps: bool): aiengine.Reply:
+    mut r := aiengine.Reply {}
+    if sid.len() == 0:
+        r.failed = true
+        r.done = true
+        ret r
+    end
+    mut text := ""
+    mut phase := ""
+    mut idle := false
+    mut failed := false
+    tracked := ailive.Snapshot(sid, text, phase, idle, failed)
+    mut stop := false
+    if tracked and failed and not idle:
+        stop = true
+        r.text = text
+        r.done = true
+        r.failed = true
+    else tracked and ailive.Connected() and not idle and not failed and not check_due(sid):
+        r.text = text
+        r.phase = phase
+    else:
+        r = aiengine.Poll(sid)
+        if not r.done and tracked and text.len() > r.text.len():
+            r.text = text
+            r.phase = phase
+        end
+    end
+    if not r.done and r.idle and not r.started and aistore.Now() - asked_at(sid, created) > start_limit:
+        aiengine.Abort(sid)
+        r.done = true
+        r.failed = true
+    else r.interrupted and aistore.Now() - asked_at(sid, created) > INTERRUPTED_SECONDS:
+        aiengine.Abort(sid)
+        r.done = true
+        r.failed = r.text.len() == 0
+    else r.done and r.failed and r.text.len() == 0 and aistore.Now() - created <= limit and aiengine.Retry(sid):
+        ailive.Begin(sid)
+        retried(sid)
+        r = aiengine.Reply {}
+        stop = false
+    end
+    if stop:
+        aiengine.Abort(sid)
+    end
+    if check and r.done and not r.failed and r.text.len() > 0 and verify(sid, r.text):
+        r.done = false
+        r.text = ""
+        r.phase = "checking"
+    end
+    if not r.done and aistore.Now() - created > limit:
+        aiengine.Abort(sid)
+        r.done = true
+        r.failed = r.text.len() == 0
+        r.timed_out = true
+    end
+    if tracked and want_steps:
+        r.activity = ailive.Activity(sid, r.done)
+    end
+    r.text = ailive.Guard(Plain(r.text), r.done)
+    ret r
+end

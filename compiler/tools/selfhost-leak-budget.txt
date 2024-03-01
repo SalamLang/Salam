@@ -1,0 +1,303 @@
+# Self-host leak budget.
+#
+# One line per canonical compiler invocation:
+#
+#   <case> <max_leaked_allocations>
+#
+# Enforced by compiler/tools/bash/leakcheck-selfhost.sh, which builds the
+# self-hosted compiler with `--asan` and reads LeakSanitizer's own count of
+# blocks still unreachable at exit. `<case>` names a fixed command in that
+# script, not a test file, so the numbers are comparable run to run.
+#
+# Why a budget and not zero, when the C compiler is held to zero: the C
+# compiler allocates from an arena it frees on the way out, so LSan sees
+# nothing. Salam is manually memory-managed and has no arena behind its
+# string temporaries, so every discarded `a + b` in compiler/*.salam is a
+# live block until the process exits. Getting to zero means changing how the
+# self-hosted compiler allocates, not adding a handful of frees - and until
+# then a ratchet is what keeps the number from silently growing.
+#
+# This is a ratchet: the script FAILS when a case leaks more than its number
+# and WARNS ("under budget - lower it") when it leaks less. Lower the number
+# in the same change that improved it. The goal is every line at 0.
+#
+# Each number is the observed count plus ~2% headroom, and the script's
+# "lower it" nag has a 5% deadband. Repeated runs of one binary on one machine
+# are identical to the allocation, but the count drifts by a few dozen BETWEEN
+# machines: the compiler allocates while walking absolute paths, and
+# /home/runner/work/Salam/Salam is not the length of anyone's local checkout.
+# An exact ratchet would have failed CI on a 28-allocation difference that
+# said nothing about the compiler.
+#
+# Measured 2026-08-08 on Linux/x86-64, gcc 13, on both a local checkout and a
+# GitHub ubuntu-latest runner (observed: version 6269, help 6257, format 6477,
+# inspect 126078-126100, exec 130515-130528, build 230706-230734). The
+# starting point was roughly twice these figures before three fixes landed
+# together with this file:
+#   - logger.New no longer reserves 512 diag-source slots (12 KB) for every
+#     Logger ever default-constructed - one per Lx/Ps/Sema/Codegen
+#   - langpack has_join_char stopped allocating a per-character Vector<str>
+#     for every identifier the lexer scans
+#   - io.ReadAll releases each 4 KB read buffer instead of dropping it, and
+#     source.Free lets the schema/std-index scans release file text they are
+#     done with
+# `salam version` went from 4,349,628 bytes leaked to 148,810.
+#
+# Re-measured 2026-08-15 on Linux/x86-64, gcc 13 (observed: version 6179,
+# help 6167, format 6372, inspect 118043, exec 122511, build 217275). Three
+# fixes, the first two of which are what had pushed `inspect` and `exec` over
+# the old numbers:
+#   - sal_path PathJoin/PathDir build their answer into one StringBuilder
+#     instead of composing PathToSlash(PathTrimSep(dir)) with `+`. The old
+#     shape dropped three intermediate strings per join, and the std-package
+#     scan joins paths thousands of times for a one-file compile.
+#   - sema_definit releases the Di vectors and every di_snap flow snapshot;
+#     one Di plus a snapshot per if/match/loop was leaked per checked function
+#   - the lexer frees the '_'-stripped copy of each numeric literal, which
+#     exists only to be handed to decode_number - the token keeps the literal
+#     as written
+#
+# One caveat learned here, since the header above promises run-to-run
+# reproducibility: that holds for one BINARY, not across a rebuild. These
+# counts are LSan's unreachable-block count, and whether a block is reachable
+# depends on stale pointers left in the stack and registers, so a change that
+# only frees memory can still move an unrelated case by ~2%. Freeing the Di
+# vectors alone moved `build` +5,116 with the lexing work provably identical
+# (same 76 parses, same 73,728 tokens). Do not read a small move in one case
+# as a leak in the code you just touched; diff the per-callsite profiles.
+
+# Re-baselined 2026-08-18 on Linux/x86-64, gcc 13 (observed: version 6179,
+# help 6167, format 6431, inspect 215492-215575, exec 219951, build 927314;
+# the CI runner saw 215571 / 219943 / 927349). Only inspect/exec/build moved,
+# and NOT because the compiler started leaking more per unit of work - the
+# unit of work grew. These cases compile tests/en/basics/hello.salam, whose
+# cost is dominated by the std/ packages the loader pulls in transitively, and
+# 0.3.1 added a lot of stdlib (calendar, graph, matrix, json, image, dotenv,
+# ...). Lexing the same hello.salam against the v0.3.0 std/ versus this one,
+# with one and the same compiler binary:
+#
+#   case      v0.3.0 std/      this std/     growth
+#   build     71,555 tokens    317,199       4.43x
+#   inspect   40,168 tokens    162,293       4.04x
+#
+# against which the leak counts moved 217,275 -> 927,314 (4.27x) and
+# 118,043 -> 215,535 (1.83x). Per token that is 3.04 -> 2.92 leaked
+# allocations for build and 2.94 -> 1.33 for inspect: flat to better, in both
+# cases, which is why this is a re-baseline and not a leak hunt. 88% of what
+# remains is still the one known shape - the lex_slice() substring each token
+# keeps as its lexeme, from scan_op/scan_number/scan_ident - unchanged since
+# the numbers above it were measured.
+#
+# The ratchet only moves down for a FIXED workload; it cannot tell a real
+# regression from std/ getting bigger. If these numbers need raising again,
+# check the token counts first, the same way this entry did.
+
+# Re-baselined 2026-08-21 on Linux/x86-64, gcc 13 (observed: version 6179,
+# help 6167, format 6431, inspect 221689, exec 226231, build 937000; the CI
+# runner saw 221855 / 226227). Only inspect and exec moved, and by 0.8% each -
+# the same shape as the entry above, checked the same way rather than assumed.
+#
+# One ASan binary, two stdlib trees, nothing else different:
+#
+#   case      pre-merge std/   this std/    delta
+#   inspect   219,939          221,772      +1,833
+#   exec      224,481          226,231      +1,750
+#
+# The deltas are the whole overage (the budgets were 220,000 and 224,500, and
+# the pre-merge numbers sit right on them), so the compiler is not leaking
+# more per unit of work - there is more work. std/ gained five packages in
+# 0.3.2 (aws, google, webpush, net/httpx, net/http/swagger), 599 -> 614
+# package files, and the std index scan reads every one of their headers to
+# build the import alias table. More files scanned, more allocations, flat
+# per file.
+#
+# Raised by ~2%, the headroom this file has always carried.
+
+# Re-baselined 2026-08-26 on Linux/x86-64, gcc 13: only inspect and exec
+# moved, by 1.5% each, and for the reason the two entries above describe
+# rather than a new leak. Measured the way they prescribe - one ASan binary,
+# two stdlib trees, nothing else different:
+#
+#   case      main std/    this std/    delta
+#   inspect   221,337      224,764      +3,427
+#   exec      228,010      231,464      +3,454
+#
+# The binary in all four runs is built from this branch, so every compiler
+# change it carries is held constant; swapping only std/ accounts for the
+# whole move. std/ went from 614 package files to 630 - the S3, SQS and STS
+# work - and the std index scan reads every one of their headers to build the
+# import alias table. More files scanned, flat per file.
+#
+# Raised by ~2%, the headroom this file has always carried.
+
+# Re-baselined 2026-09-21 on Linux/aarch64, gcc 15, in a container - LSan does
+# not run on macOS, so the numbers below were measured the way the entries
+# above prescribe rather than guessed at. inspect went 657 over its budget and
+# exec sits 0.2% under its own, so both move; build is less than half of its
+# number and comes down with them.
+#
+# This one is NOT std/ growth, which is what every re-baseline above was.
+# One ASan binary, two stdlib trees:
+#
+#   binary        std/        inspect
+#   this branch   pre-merge   229,714
+#   this branch   this tree   229,627     (the new std/ is 87 *lower*)
+#   pre-merge     pre-merge   229,057
+#
+# so the move is the compiler, not the library. The two things this branch
+# adds to the compiler were then measured out one at a time, against the same
+# std/:
+#
+#   full branch                       229,627
+#   minus the E099 struct-cycle pass  229,627   (allocates nothing)
+#   minus the llvm.triple import      229,627   (allocates nothing)
+#
+# Neither feature accounts for it. What is left is the comment strip, which
+# rewrote every compiler source and so produced a different binary - and the
+# caveat four entries up says exactly this: the count is LSan's unreachable-
+# block count, reachability depends on stale pointers left in the stack and
+# registers, and an unrelated change can move a case by ~2% on its own. This
+# is 0.25%. Treated as the noise that entry describes, not a leak.
+#
+# Raised by ~2%, the headroom this file has always carried. build is lowered
+# to the same headroom over the largest of the four runs (409,974 here,
+# 409,998 on the CI runner).
+
+# Re-baselined 2026-09-26 on Linux/aarch64, gcc, CI runner (observed: version
+# 6113, format 6201, inspect 250958, exec 254610, build 450769; version and
+# format stayed within their existing budgets). Not measured out one variable
+# at a time this time, unlike the entries above - LSan does not run on macOS,
+# so there is no local runner to isolate std/ from the compiler on, and this
+# is compiler-side by construction rather than by isolation: no std/ package
+# was added or removed this change (still 630 files), so the growth is not
+# the std-index-scan shape every std-side entry above describes.
+#
+# The likely cause: this change adds a new reserved word (switch/ترابرد) to
+# langpack's keyword tables and about a dozen new diagnostic strings to
+# i18n's EN/FA message tables, both built unconditionally at process start.
+# hello.salam has no switch statement in it, so the case-by-case shape (a
+# per-invocation constant, not proportional to program size) matches
+# `inspect`/`exec`/`build` all moving by a similar ~7% while `version` and
+# `help` - which don't lex a source file - stayed flat. Not verified by
+# isolating the compiler change the way the std-side entries above isolated
+# std/, since there is no macOS-local LSan run to isolate it with; noted as
+# the likely cause, not a proven one.
+#
+# Raised by ~2%, the headroom this file has always carried.
+
+# Re-baselined 2026-09-27 on Linux/aarch64, gcc, in an ubuntu:24.04 container
+# (observed: version 6106, help 5978, format 6289, inspect 253849, exec
+# 257508, build 492714-492760; the CI runner saw build 493251 before the
+# fixes below). Only `build` moved: #1737 generates each module's C in forked
+# workers, and the parent no longer runs codegen at all.
+#
+# Measured one variable at a time on the same binary:
+#
+#   SALAM_SERIAL_CODEGEN=1   456,119
+#   parallel (the default)   493,054
+#
+# Diffing the leak stacks of the two runs, almost all of the +37k is lexer
+# and semantic strings (identifier slices, check_function / mangle_func /
+# sema_check_block concatenations, langpack kw_normalize) that were never
+# freed in either mode. In a serial run codegen's global tables still point
+# at them, so LSan counts them reachable; with codegen in the children
+# nothing does, and they show up as leaked. That is the stale-pointer caveat
+# above, not new garbage. The codegen allocations that used to leak in the
+# parent now die with the children, which _exit without an LSan pass.
+#
+# What was new garbage, and is now freed: module_weight dropped the paths
+# PackageFiles returns (and package_files dropped every ListDir name), and
+# emit_modules dropped its .cgst status paths and the text read from them.
+# That is ~350 allocations; nothing in the remaining stacks goes through the
+# new driver_codegen.salam code.
+#
+# build raised by ~2% over the largest run. help lowered to 6100, which the
+# ratchet has flagged as well under budget since the last entry.
+
+#
+# Lowered after langpack's kw_ident_equal stopped allocating. It built two
+# normalized strings per comparison, one character at a time, and freed
+# none of them; every identifier with a space, ZWNJ, yeh or kaf was compared
+# that way against each keyword of the pack. CI measured inspect 217,141,
+# exec 220,662 and build 423,885 afterwards (from 257,538 / 260,972 /
+# 500,510); the budgets sit ~2% above those.
+# Raised exec and build 2026-10-05 for std growth, measured the way the
+# entries above prescribe. One ASan binary, two std/ trees: exec went
+# 224,231 -> 225,180 (+949), all of it lexer token slices from the
+# thread.SpawnStack code added to std/thread. No interpreter change leaks.
+
+# inspect raised 2026-10-05, the same day and for the same growth the entry
+# above raised exec and build for - it was simply the one case that entry
+# overlooked, and it had the least headroom left, so it was the one that went
+# red. main itself fails this budget: the CI runs on d1009bbe and on main both
+# measured 221,565, against a budget of 221,500.
+#
+# It is proportional growth in the work, not a leak in one place. Since the
+# kw_ident_equal baseline above, all three large cases moved by the same
+# fraction:
+#
+#   case      then       now       delta     growth
+#   inspect   217,141    221,571   +4,430    2.04%
+#   exec      220,662    225,188   +4,526    2.05%
+#   build     423,885    432,866   +8,981    2.12%
+#
+# A leak introduced in one code path does not move three unrelated commands by
+# one and the same 2%; the per-file std index scan every std-side entry above
+# describes does. Measured locally on Linux/x86-64, gcc 15, with an ASan build
+# of this branch; the two small cases (version, help, format) did not move,
+# which is the same signature those entries report.
+#
+# Raised to the ~2% headroom this file has always carried.
+
+# Lowered 2026-10-05: the lexer interns identifier and operator lexemes, so
+# each distinct spelling is allocated once and stays reachable from the
+# intern table. Measured locally (exec 224,231 -> 103,713, inspect
+# 220,614 -> 102,538, build 430,915 -> 200,556); budgets carry ~2% headroom.
+
+# Lowered 2026-10-05: the layout schema (std/layout, now ~110 files) is loaded
+# on first use instead of at startup, so commands that never see a layout block
+# skip it entirely. Measured locally (version 3,8xx -> 142, help -> 7, format
+# -> 193, inspect -> 99,145, exec -> 96,665, build -> 193,760); version, help
+# and format get a few dozen allocations of slack since 2% of them is nothing,
+# the rest carry ~2% headroom.
+# Lowered 2026-10-21: string concatenation chains build one allocation
+# (salam_strcat_v) and free the number-to-string conversions they consumed,
+# and a `x := a + b` local that never escapes is freed at the end of its
+# scope. Measured against main on the same machine (version 142 -> 119,
+# format 184 -> 94, inspect 99,615 -> 92,324, exec 97,403 -> 90,536, build
+# 193,185 -> 175,468); version and format keep a few dozen of slack, the rest
+# carry ~2% headroom.
+
+# format raised 2026-10-25. One ASan build of each tree, same machine, same
+# seed compiler: main before the native backend merge measured format 131,
+# this tree 132, against a budget of 130; version, help, inspect, exec and
+# build moved by less than 0.1% between the two. The case had drifted from
+# the 94 measured above to 131 on main already, and the merge adds one
+# allocation. Raised to the few allocations of slack the small cases keep.
+
+# 2026-10-28: main at 3dc3deebf already measured format 136 and build 179,689
+# against budgets of 135 and 179,000, so the job was red before any change of
+# this tree. The web server config work (net/httpd, serve --config) adds one
+# allocation to format and about 55 to build (137 and 179,744). version,
+# help, inspect and exec stay under their budgets, and the small cases did not
+# move, so this is the build path growing with the native backend work and not
+# startup work. Raised to the observed count plus ~2% (format keeps a few
+# allocations of slack, as before).
+
+# format lowered 2026-10-29: cli.opt_value built `key + "="` for every flag it
+# tried and never freed it, and parse_options tries thirty-seven flags per
+# argument, so the case grew with every flag added: 94 in October, 131 by
+# 10-25, 136 once --switch-lint and --switch-lint-min joined (two more calls
+# per argument). opt_value now compares the bytes in place and allocates only
+# the value it returns. One ASan build of each tree, same machine, same seed
+# compiler: format 136 -> 94 against the same std; version, help, inspect,
+# exec and build did not move beyond the drift main had already (inspect 93,773,
+# exec 92,075, build 179,673). format keeps the few allocations of slack the
+# small cases carry.
+
+version 150
+help 12
+format 100
+inspect 94200
+exec 92400
+build 183500

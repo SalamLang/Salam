@@ -1,0 +1,1767 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aicloud
+
+import net.http
+import net.router
+import net.tcp
+import tls
+import encoding
+import encoding.json
+import crypto
+import str
+import sync
+import time
+import chan
+import conv
+
+include aistore "store.salam"
+include aiweb "web.salam"
+
+const CALL_MS := 30000
+const MAX_OUTPUT := 120000
+const MAX_API := 80000
+const WORKERS := 24
+const STATE_SECONDS := 900
+const REVOKED_NOTE := "The provider rejected the saved login: the token was revoked or has expired. Tell the user to reconnect it (send /github or /figma in Telegram, or open Connections on the Salam AI site) and stop using it until then."
+const DEFAULT_FIGMA_SCOPES := "current_user:read file_comments:read file_comments:write file_content:read file_dev_resources:read file_dev_resources:write file_metadata:read file_versions:read folder_metadata:read folders:read library_assets:read library_content:read selections:read team_library_content:read webhooks:read webhooks:write"
+const DEFAULT_GITHUB_SCOPES := "repo workflow admin:org admin:public_key admin:repo_hook admin:org_hook admin:gpg_key admin:ssh_signing_key admin:enterprise read:audit_log codespace copilot gist notifications project read:packages write:packages user write:discussion write:network_configurations"
+const READ_SCRIPT := "f=\"$SBX_PATH\"; if [ -d \"$f\" ]; then echo \"$f is a directory; use list_dir\"; exit 2; fi; if [ ! -e \"$f\" ]; then echo \"no such file: $f\"; exit 2; fi; awk -v o=\"$SBX_OFFSET\" -v l=\"$SBX_LIMIT\" 'NR >= o && NR < o + l { printf \"%d\\t%s\\n\", NR, $0 }' \"$f\""
+const EDIT_SCRIPT := "import json, os, sys\np = os.environ['SBX_PATH']\nd = json.load(sys.stdin)\ntry:\n    s = open(p, encoding='utf-8').read()\nexcept FileNotFoundError:\n    print('no such file: ' + p)\n    sys.exit(2)\nn = s.count(d['old'])\nif n == 0:\n    print('old_text was not found in ' + p)\n    sys.exit(2)\nif n > 1 and not d['all']:\n    print('old_text appears ' + str(n) + ' times in ' + p + '; add more context or set replace_all')\n    sys.exit(2)\nopen(p, 'w', encoding='utf-8').write(s.replace(d['old'], d['new']))\nprint('edited ' + p + ' (' + str(n) + ' replacement' + ('s' if n > 1 else '') + ')')\n"
+
+mut GITHUB_API := "https://api.github.com"
+mut GITHUB_WEB := "https://github.com"
+mut FIGMA_API := "https://api.figma.com"
+mut FIGMA_WEB := "https://www.figma.com"
+mut SANDBOX_HOST := ""
+mut SANDBOX_PORT := 0
+mut SANDBOX_SECRET := ""
+mut MASTER := ""
+mut APP_URL := "https://ai.salamlang.ir"
+mut ISSUER := "https://ai-api.salamlang.ir"
+mut GH_ID := ""
+mut GH_SECRET := ""
+mut FG_ID := ""
+mut FG_SECRET := ""
+mut FG_SCOPES := DEFAULT_FIGMA_SCOPES
+mut GH_SCOPES := DEFAULT_GITHUB_SCOPES
+mut LOCK := sync.Mutex {}
+mut JOBS := chan.Chan {} as chan.Chan<str>
+mut JOB_DATA := HashMap {} as HashMap<str, str>
+mut RESULTS := HashMap {} as HashMap<str, str>
+mut STARTED := HashMap {} as HashMap<str, i64>
+mut CHECKED := HashMap {} as HashMap<str, str>
+
+struct Outcome:
+    pub ok: bool = true
+    pub text: str = ""
+    pub summary: str = ""
+    pub detail: str = ""
+    pub kind: str = "exec"
+    pub lang: str = ""
+    pub cwd: str = ""
+end
+
+struct Reply:
+    pub status: int = 0
+    pub body: str = ""
+end
+
+struct Exec:
+    pub ok: bool = false
+    pub code: int = 0
+    pub out: str = ""
+    pub timed_out: bool = false
+end
+
+func one(v: str): Vector<str>:
+    mut a := Vector {} as Vector<str>
+    a.push(v)
+    ret a
+end
+
+func two(v: str, w: str): Vector<str>:
+    mut a := one(v)
+    a.push(w)
+    ret a
+end
+
+func three(v: str, w: str, x: str): Vector<str>:
+    mut a := two(v, w)
+    a.push(x)
+    ret a
+end
+
+func four(v: str, w: str, x: str, y: str): Vector<str>:
+    mut a := three(v, w, x)
+    a.push(y)
+    ret a
+end
+
+func i64s(n: i64): str:
+    ret conv.FormatInt(n)
+end
+
+func clip(s: str, max: int): str:
+    if s.len() <= max:
+        ret s
+    end
+    mut cut := max
+    until cut > 0:
+        b := s[cut] as int
+        if b < 128 or b >= 192:
+            break
+        end
+        cut -= 1
+    end
+    ret s.substr(0, cut) + "\n[... output cut ...]"
+end
+
+func hex_nibble(c: int): int:
+    if c >= 48 and c <= 57:
+        ret c - 48
+    end
+    if c >= 97 and c <= 102:
+        ret c - 87
+    end
+    ret 0
+end
+
+func hex_byte(h: str, at: int): int:
+    ret hex_nibble(h[at] as int) * 16 + hex_nibble(h[at + 1] as int)
+end
+
+func hex_of(v: int): str:
+    d := "0123456789abcdef"
+    ret d.substr((v >> 4) & 15, 1) + d.substr(v & 15, 1)
+end
+
+func crypt(text: str, nonce: str, to_hex: bool): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    key := crypto.HmacSha256Hex(MASTER, "enc")
+    n := to_hex ? text.len() : text.len() / 2
+    mut block := ""
+    mut i := 0
+    until i < n:
+        if i % 32 == 0:
+            block = crypto.HmacSha256Hex(key, nonce + ":" + (i / 32))
+        end
+        k := hex_byte(block, (i % 32) * 2)
+        mut c := 0
+        if to_hex:
+            c = text[i] as int
+        else:
+            c = hex_byte(text, i * 2)
+        end
+        x := c ^ k
+        if to_hex:
+            str.BufAppend(b, hex_of(x))
+        else:
+            str.BufAppendCp(b, x)
+        end
+        i += 1
+    end
+    ret str.BufStr(b)
+end
+
+func seal(plain: str): str:
+    nonce := crypto.RandomHex(12)
+    cipher := crypt(plain, nonce, true)
+    tag := crypto.HmacSha256Hex(crypto.HmacSha256Hex(MASTER, "mac"), nonce + cipher)
+    ret "v1$" + nonce + "$" + cipher + "$" + tag
+end
+
+func unseal(blob: str): str:
+    parts := blob.split("$")
+    if parts.len() != 4 or parts.get(0) != "v1":
+        ret ""
+    end
+    want := crypto.HmacSha256Hex(crypto.HmacSha256Hex(MASTER, "mac"), parts.get(1) + parts.get(2))
+    if not crypto.SecretEquals(want, parts.get(3)):
+        ret ""
+    end
+    ret crypt(parts.get(2), parts.get(1), false)
+end
+
+func split_url(url: str, host &: str, port &: int, secure &: bool, path &: str):
+    mut rest := url
+    secure = true
+    port = 443
+    if str.StartsWith(rest, "http://"):
+        secure = false
+        port = 80
+        rest = rest.substr(7, rest.len() - 7)
+    else str.StartsWith(rest, "https://"):
+        rest = rest.substr(8, rest.len() - 8)
+    end
+    slash := rest.find("/")
+    path = "/"
+    if slash >= 0:
+        path = rest.substr(slash, rest.len() - slash)
+        rest = rest.substr(0, slash)
+    end
+    colon := rest.find(":")
+    if colon > 0:
+        port = rest.substr(colon + 1, rest.len() - colon - 1).to_int()
+        rest = rest.substr(0, colon)
+    end
+    host = rest
+end
+
+func hex_value(s: str): int:
+    mut v := 0
+    mut i := 0
+    lower := str.Lower(str.Trim(s))
+    until i < lower.len():
+        c := lower[i] as int
+        if c == 59:
+            break
+        end
+        if not ((c >= 48 and c <= 57) or (c >= 97 and c <= 102)):
+            ret -1
+        end
+        v = v * 16 + hex_nibble(c)
+        i += 1
+    end
+    if i == 0:
+        ret -1
+    end
+    ret v
+end
+
+func dechunk(raw: str): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut pos := 0
+    until pos < raw.len():
+        rest := raw.substr(pos, raw.len() - pos)
+        le := rest.find("\r\n")
+        if le < 0:
+            break
+        end
+        size := hex_value(rest.substr(0, le))
+        if size <= 0:
+            break
+        end
+        if rest.len() < le + 2 + size:
+            break
+        end
+        str.BufAppend(b, rest.substr(le + 2, size))
+        pos = pos + le + 2 + size + 2
+    end
+    ret str.BufStr(b)
+end
+
+func complete(raw: str): bool:
+    he := raw.find("\r\n\r\n")
+    if he < 0:
+        ret false
+    end
+    head := str.Lower(raw.substr(0, he))
+    got := raw.len() - he - 4
+    if head.find("transfer-encoding: chunked") >= 0:
+        ret str.EndsWith(raw, "0\r\n\r\n")
+    end
+    cl := head.find("content-length:")
+    if cl >= 0:
+        tail := head.substr(cl + 15, head.len() - cl - 15)
+        le := tail.find("\r\n")
+        want := str.Trim(le >= 0 ? tail.substr(0, le) : tail).to_int()
+        ret got >= want
+    end
+    ret false
+end
+
+func exchange(host: str, port: int, secure: bool, req: str, wait_ms: int): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    if secure:
+        cfg := tls.NewConfig(host)
+        mut c := tls.Dial(host, port, cfg)
+        if not tls.ConnOk(c):
+            tls.Close(c)
+            ret ""
+        end
+        tcp.SetDeadline(tcp.ConnFromFd(tls.Fd(c)), wait_ms)
+        if tls.Write(c, req) <= 0:
+            tls.Close(c)
+            ret ""
+        end
+        mut seen := ""
+        until true:
+            got := tls.Read(c, 65536)
+            if got.len() == 0:
+                break
+            end
+            str.BufAppend(b, got)
+            seen = seen + got
+            if complete(seen):
+                break
+            end
+        end
+        tls.Close(c)
+    else:
+        c := tcp.Dial(host, port)
+        if not tcp.ConnOk(c):
+            tcp.Close(c)
+            ret ""
+        end
+        tcp.SetDeadline(c, wait_ms)
+        if tcp.Write(c, req) <= 0:
+            tcp.Close(c)
+            ret ""
+        end
+        mut seen := ""
+        until true:
+            got := tcp.Read(c, 65536)
+            if got.len() == 0:
+                break
+            end
+            str.BufAppend(b, got)
+            seen = seen + got
+            if complete(seen):
+                break
+            end
+        end
+        tcp.Close(c)
+    end
+    ret str.BufStr(b)
+end
+
+func fetch(method: str, url: str, headers: Vector<str>, body: str, wait_ms: int): Reply:
+    mut out := Reply {}
+    mut host := ""
+    mut port := 443
+    mut secure := true
+    mut path := "/"
+    split_url(url, host, port, secure, path)
+    if host.len() == 0:
+        ret out
+    end
+    mut req := method + " " + path + " HTTP/1.1\r\nHost: " + host + "\r\nUser-Agent: salam-ai\r\nConnection: close\r\n"
+    each h in headers:
+        req = req + h + "\r\n"
+    end
+    if method != "GET" and method != "DELETE" or body.len() > 0:
+        req = req + "Content-Length: " + body.len() + "\r\n"
+    end
+    req = req + "\r\n" + body
+    raw := exchange(host, port, secure, req, wait_ms)
+    he := raw.find("\r\n\r\n")
+    sp := raw.find(" ")
+    if he < 0 or sp < 0 or sp > he:
+        ret out
+    end
+    head := str.Lower(raw.substr(0, he))
+    mut rest := raw.substr(he + 4, raw.len() - he - 4)
+    if head.find("transfer-encoding: chunked") >= 0:
+        rest = dechunk(rest)
+    end
+    out.status = raw.substr(sp + 1, 3).to_int()
+    out.body = rest
+    ret out
+end
+
+func form_encode(pairs: Vector<str>): str:
+    mut parts := Vector {} as Vector<str>
+    mut i := 0
+    until i + 1 < pairs.len():
+        parts.push(url_escape(pairs.get(i)) + "=" + url_escape(pairs.get(i + 1)))
+        i += 2
+    end
+    ret str.Join(parts, "&")
+end
+
+func url_escape(s: str): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut i := 0
+    until i < s.len():
+        c := s[i] as int
+        if (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 45 or c == 46 or c == 95 or c == 126:
+            str.BufAppend(b, s.substr(i, 1))
+        else:
+            str.BufAppend(b, "%" + str.Upper(hex_of(c)))
+        end
+        i += 1
+    end
+    ret str.BufStr(b)
+end
+
+func sh_quote(s: str): str:
+    ret "'" + str.Replace(s, "'", "'\\''") + "'"
+end
+
+func enabled_secret(): bool:
+    ret MASTER.len() >= 16
+end
+
+func sandbox_on(): bool:
+    ret SANDBOX_HOST.len() > 0
+end
+
+func sandbox_call(path: str, body: str, wait_ms: int): Reply:
+    mut out := Reply {}
+    if not sandbox_on():
+        ret out
+    end
+    c := tcp.Dial(SANDBOX_HOST, SANDBOX_PORT)
+    if not tcp.ConnOk(c):
+        tcp.Close(c)
+        ret out
+    end
+    tcp.SetDeadline(c, wait_ms)
+    req := "POST " + path + " HTTP/1.1\r\nHost: " + SANDBOX_HOST + "\r\nUser-Agent: salam-ai\r\nAuthorization: Bearer " + SANDBOX_SECRET + "\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: " + body.len() + "\r\n\r\n" + body
+    if tcp.Write(c, req) <= 0:
+        tcp.Close(c)
+        ret out
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut seen := ""
+    until true:
+        got := tcp.Read(c, 65536)
+        if got.len() == 0:
+            break
+        end
+        str.BufAppend(b, got)
+        seen = seen + got
+        if complete(seen):
+            break
+        end
+    end
+    tcp.Close(c)
+    raw := str.BufStr(b)
+    he := raw.find("\r\n\r\n")
+    sp := raw.find(" ")
+    if he < 0 or sp < 0 or sp > he:
+        ret out
+    end
+    mut rest := raw.substr(he + 4, raw.len() - he - 4)
+    if str.Lower(raw.substr(0, he)).find("transfer-encoding: chunked") >= 0:
+        rest = dechunk(rest)
+    end
+    out.status = raw.substr(sp + 1, 3).to_int()
+    out.body = rest
+    ret out
+end
+
+func sbx_exec(session: str, cmd: str, cwd: str, timeout: int, stdin: str, env: Vector<str>): Exec:
+    mut res := Exec {}
+    mut e := Vector {} as Vector<str>
+    mut i := 0
+    until i + 1 < env.len():
+        e.push(json.Member(env.get(i), env.get(i + 1)))
+        i += 2
+    end
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("session", session))
+    m.push(json.Member("cmd", cmd))
+    m.push(json.Member("cwd", cwd))
+    m.push(json.MemberInt("timeout", timeout as i64))
+    m.push(json.Member("stdin", stdin))
+    m.push(json.MemberRaw("env", json.Object(e)))
+    r := sandbox_call("/v1/exec", json.Object(m), (timeout + 40) * 1000)
+    if r.status == 0:
+        res.out = "The sandbox did not answer. Try again in a moment."
+        ret res
+    end
+    if r.status != 200:
+        msg := json.Get(r.body, "message")
+        res.out = msg.len() > 0 ? msg : "The sandbox refused the call (" + r.status + ")."
+        ret res
+    end
+    res.ok = true
+    res.code = json.Get(r.body, "exit").to_int()
+    res.out = json.Get(r.body, "output")
+    res.timed_out = json.Get(r.body, "timed_out") == "true"
+    ret res
+end
+
+func finish_exec(res: Exec, show_empty: bool): str:
+    mut text := clip(res.out, MAX_OUTPUT)
+    if res.timed_out:
+        text = text + "\n[the command timed out and was stopped]"
+    else res.ok and res.code != 0:
+        text = text + "\n[exit code " + res.code + "]"
+    end
+    if text.len() == 0 and show_empty:
+        text = "(no output)"
+    end
+    ret text
+end
+
+func integration_row(uid: str, provider: str, token &: str, login &: str, scope &: str): bool:
+    aistore.Lock()
+    mut q := aistore.Stmt("SELECT token_enc, refresh_enc, expires, login, scope FROM integrations WHERE user_id = ?1 AND provider = ?2", two(uid, provider))
+    mut found := false
+    mut blob := ""
+    mut refresh := ""
+    mut expires := 0 as i64
+    if aistore.Next(q):
+        found = true
+        blob = aistore.Text(q, 0)
+        refresh = aistore.Text(q, 1)
+        expires = aistore.Int64(q, 2)
+        login = aistore.Text(q, 3)
+        scope = aistore.Text(q, 4)
+    end
+    aistore.Finish(q)
+    aistore.Unlock()
+    if not found:
+        ret false
+    end
+    token = unseal(blob)
+    if provider == "figma" and refresh.len() > 0 and expires > 0 and expires - 300 < aistore.Now():
+        fresh := figma_refresh(uid, unseal(refresh))
+        if fresh.len() > 0:
+            token = fresh
+        end
+    end
+    ret token.len() > 0
+end
+
+func save_integration(uid: str, provider: str, token: str, refresh: str, expires: i64, login: str, scope: str): bool:
+    mut a := four(uid, provider, seal(token), refresh.len() > 0 ? seal(refresh) : "")
+    a.push(i64s(expires))
+    a.push(login)
+    a.push(scope)
+    a.push(i64s(aistore.Now()))
+    aistore.Lock()
+    ok := aistore.Run("REPLACE INTO integrations (user_id, provider, token_enc, refresh_enc, expires, login, scope, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", a)
+    aistore.Unlock()
+    ret ok
+end
+
+func figma_headers(token: str, oauth: bool): Vector<str>:
+    mut h := Vector {} as Vector<str>
+    h.push(oauth ? "Authorization: Bearer " + token : "X-Figma-Token: " + token)
+    h.push("Accept: application/json")
+    ret h
+end
+
+func is_oauth_token(token: str): bool:
+    ret not (str.StartsWith(token, "figd_") or token.len() < 30)
+end
+
+func figma_refresh(uid: str, refresh: str): str:
+    if FG_ID.len() == 0 or refresh.len() == 0:
+        ret ""
+    end
+    mut h := Vector {} as Vector<str>
+    h.push("Authorization: Basic " + encoding.Base64Encode(FG_ID + ":" + FG_SECRET))
+    h.push("Content-Type: application/x-www-form-urlencoded")
+    h.push("Accept: application/json")
+    mut pairs := Vector {} as Vector<str>
+    pairs.push("refresh_token")
+    pairs.push(refresh)
+    r := fetch("POST", FIGMA_API + "/v1/oauth/refresh", h, form_encode(pairs), CALL_MS)
+    fresh := json.Get(r.body, "access_token")
+    if r.status != 200 or fresh.len() == 0:
+        ret ""
+    end
+    aistore.Lock()
+    _u := aistore.Run("UPDATE integrations SET token_enc = ?1, expires = ?2 WHERE user_id = ?3 AND provider = 'figma'", three(seal(fresh), i64s(aistore.Now() + json.Get(r.body, "expires_in").to_int()), uid))
+    aistore.Unlock()
+    ret fresh
+end
+
+func github_headers(token: str): Vector<str>:
+    mut h := Vector {} as Vector<str>
+    h.push("Authorization: Bearer " + token)
+    h.push("Accept: application/vnd.github+json")
+    h.push("X-GitHub-Api-Version: 2022-11-28")
+    ret h
+end
+
+func verify_github(token: str, login &: str, scope &: str): bool:
+    r := fetch("GET", GITHUB_API + "/user", github_headers(token), "", CALL_MS)
+    if r.status != 200:
+        ret false
+    end
+    login = json.Get(r.body, "login")
+    scope = "repo"
+    ret login.len() > 0
+end
+
+func verify_figma(token: str, login &: str): bool:
+    r := fetch("GET", FIGMA_API + "/v1/me", figma_headers(token, is_oauth_token(token)), "", CALL_MS)
+    if r.status != 200:
+        ret false
+    end
+    login = json.Get(r.body, "handle")
+    if login.len() == 0:
+        login = json.Get(r.body, "email")
+    end
+    ret true
+end
+
+func token_chars(t: str): bool:
+    if t.len() < 20 or t.len() > 400:
+        ret false
+    end
+    mut i := 0
+    until i < t.len():
+        c := t[i] as int
+        if c <= 32 or c >= 127:
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+func provider_ok(p: str): bool:
+    ret p == "github" or p == "figma"
+end
+
+func oauth_ready(provider: str): bool:
+    if provider == "github":
+        ret GH_ID.len() > 0 and GH_SECRET.len() > 0
+    end
+    ret FG_ID.len() > 0 and FG_SECRET.len() > 0
+end
+
+func redirect_uri(provider: str): str:
+    ret APP_URL + "/auth/callback/" + provider
+end
+
+func store_token(uid: str, provider: str, token: str, login &: str): int:
+    if not enabled_secret():
+        ret 3
+    end
+    if not token_chars(token):
+        ret 1
+    end
+    mut scope := ""
+    mut valid := false
+    if provider == "github":
+        valid = verify_github(token, login, scope)
+    else:
+        valid = verify_figma(token, login)
+        scope = "token"
+    end
+    if not valid:
+        ret 2
+    end
+    if not save_integration(uid, provider, token, "", 0, login, scope):
+        ret 3
+    end
+    ret 0
+end
+
+func login_valid(uid: str, provider: str): bool:
+    mut token := ""
+    mut login := ""
+    mut scope := ""
+    if not integration_row(uid, provider, token, login, scope):
+        ret true
+    end
+    ret token_ok(uid, provider, token)
+end
+
+func provider_json(uid: str, provider: str): str:
+    mut login := ""
+    mut scope := ""
+    aistore.Lock()
+    mut q := aistore.Stmt("SELECT login, scope, created FROM integrations WHERE user_id = ?1 AND provider = ?2", two(uid, provider))
+    mut connected := false
+    mut created := "0"
+    if aistore.Next(q):
+        connected = true
+        login = aistore.Text(q, 0)
+        scope = aistore.Text(q, 1)
+        created = aistore.Text(q, 2)
+    end
+    aistore.Finish(q)
+    aistore.Unlock()
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("provider", provider))
+    m.push(json.MemberBool("connected", connected))
+    m.push(json.MemberBool("expired", connected and not login_valid(uid, provider)))
+    m.push(json.Member("login", login))
+    m.push(json.Member("scope", scope))
+    m.push(json.MemberRaw("created", created))
+    m.push(json.MemberBool("oauth", oauth_ready(provider)))
+    ret json.Object(m)
+end
+
+func collapse_slashes(path: str): str:
+    q := path.find("?")
+    mut p := q >= 0 ? path.substr(0, q) : path
+    until p.find("//") >= 0:
+        p = str.Replace(p, "//", "/")
+    end
+    if q >= 0:
+        ret p + path.substr(q, path.len() - q)
+    end
+    ret p
+end
+
+func github_blocked(method: str, path: str): str:
+    mut p := str.Lower(path)
+    q := p.find("?")
+    if q >= 0:
+        p = p.substr(0, q)
+    end
+    p = str.TrimSuffix(collapse_slashes(p), "/")
+    segs := p.split("/")
+    if method == "DELETE":
+        if segs.len() == 4 and segs.get(1) == "repos":
+            ret "Deleting a repository is not allowed from the assistant. Ask the user to do it on GitHub."
+        end
+        if segs.len() == 3 and segs.get(1) == "repositories":
+            ret "Deleting a repository is not allowed from the assistant. Ask the user to do it on GitHub."
+        end
+        if segs.len() == 3 and segs.get(1) == "orgs":
+            ret "Deleting an organization is not allowed from the assistant. Ask the user to do it on GitHub."
+        end
+    end
+    if segs.len() == 5 and segs.get(1) == "repos" and segs.get(4) == "transfer":
+        ret "Transferring a repository is not allowed from the assistant. Ask the user to do it on GitHub."
+    end
+    if str.StartsWith(p, "/user/keys") or str.StartsWith(p, "/user/gpg_keys") or str.StartsWith(p, "/user/ssh_signing_keys") or str.StartsWith(p, "/user/emails") or str.StartsWith(p, "/applications") or str.StartsWith(p, "/authorizations") or str.StartsWith(p, "/user/blocks"):
+        ret "This GitHub endpoint manages account credentials and is not available to the assistant."
+    end
+    ret ""
+end
+
+func token_ok(uid: str, provider: str, token: str): bool:
+    key := uid + "|" + provider
+    tag := crypto.HmacSha256Hex(MASTER, token).substr(0, 12)
+    _l := sync.Lock(LOCK)
+    cached := CHECKED.has(key) ? CHECKED.get(key) : ""
+    _u := sync.Unlock(LOCK)
+    if cached.len() > 0:
+        parts := cached.split("|")
+        if parts.len() == 3 and parts.get(2) == tag and aistore.Now() - (parts.get(0).to_int() as i64) < 300:
+            ret parts.get(1) == "1"
+        end
+    end
+    mut ok := true
+    if provider == "github":
+        r := fetch("GET", GITHUB_API + "/user", github_headers(token), "", CALL_MS)
+        ok = r.status != 401
+    else:
+        r := fetch("GET", FIGMA_API + "/v1/me", figma_headers(token, is_oauth_token(token)), "", CALL_MS)
+        ok = r.status != 401 and r.status != 403
+    end
+    _a := sync.Lock(LOCK)
+    CHECKED.put(key, aistore.Now() + "|" + (ok ? "1" : "0") + "|" + tag)
+    _b := sync.Unlock(LOCK)
+    ret ok
+end
+
+func login_state(uid: str, provider: str): str:
+    mut token := ""
+    mut login := ""
+    mut scope := ""
+    if not integration_row(uid, provider, token, login, scope):
+        ret "not connected"
+    end
+    if not token_ok(uid, provider, token):
+        ret "connected as " + login + ", but the provider rejected the saved login (revoked); ask the user to reconnect it before using it"
+    end
+    ret "connected as " + login
+end
+
+func sandbox_login(uid: str, env &: Vector<str>, secrets &: Vector<str>): str:
+    mut setup := ""
+    mut token := ""
+    mut login := ""
+    mut scope := ""
+    if integration_row(uid, "github", token, login, scope) and token_ok(uid, "github", token):
+        env.push("GH_TOKEN")
+        env.push(token)
+        env.push("GITHUB_TOKEN")
+        env.push(token)
+        secrets.push(token)
+        helper := "!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f"
+        setup = setup + "git config --global credential.https://github.com.helper " + sh_quote(helper) + " >/dev/null 2>&1; git config --global user.name >/dev/null 2>&1 || git config --global user.name " + sh_quote(login) + "; git config --global user.email >/dev/null 2>&1 || git config --global user.email " + sh_quote(login + "@users.noreply.github.com") + "; "
+    end
+    mut ftoken := ""
+    if integration_row(uid, "figma", ftoken, login, scope) and token_ok(uid, "figma", ftoken):
+        env.push("FIGMA_TOKEN")
+        env.push(ftoken)
+        env.push("FIGMA_AUTH_HEADER")
+        env.push(is_oauth_token(ftoken) ? "Authorization: Bearer " + ftoken : "X-Figma-Token: " + ftoken)
+        secrets.push(ftoken)
+    end
+    ret setup
+end
+
+func scrub(text: str, secrets: Vector<str>): str:
+    mut out := text
+    each secret in secrets:
+        if secret.len() > 8:
+            out = str.Replace(out, secret, "***")
+        end
+    end
+    ret out
+end
+
+func tool_github_api(uid: str, args: str): Outcome:
+    mut o := Outcome {}
+    o.kind = "read"
+    mut method := str.Upper(json.Get(args, "method"))
+    if method.len() == 0:
+        method = "GET"
+    end
+    mut path := json.Get(args, "path")
+    o.summary = "GitHub " + method + " " + clip(path, 120)
+    o.detail = o.summary
+    if not str.StartsWith(path, "/") or path.find("..") >= 0 or path.find(" ") >= 0:
+        o.ok = false
+        o.text = "path must start with / and be a GitHub REST path such as /user/repos or /repos/OWNER/REPO/contents/PATH."
+        ret o
+    end
+    if method != "GET" and method != "POST" and method != "PUT" and method != "PATCH" and method != "DELETE":
+        o.ok = false
+        o.text = "method must be GET, POST, PUT, PATCH or DELETE."
+        ret o
+    end
+    if method != "GET":
+        o.kind = "write"
+    end
+    path = collapse_slashes(path)
+    blocked := github_blocked(method, path)
+    if blocked.len() > 0:
+        o.ok = false
+        o.text = blocked
+        ret o
+    end
+    mut token := ""
+    mut login := ""
+    mut scope := ""
+    if not integration_row(uid, "github", token, login, scope):
+        o.ok = false
+        o.text = "The user has not connected GitHub. Tell them to send /github in Telegram or open Connections on the Salam AI site."
+        ret o
+    end
+    if not token_ok(uid, "github", token):
+        o.ok = false
+        o.text = REVOKED_NOTE
+        ret o
+    end
+    body := json.Get(args, "body")
+    mut headers := github_headers(token)
+    if body.len() > 0:
+        headers.push("Content-Type: application/json")
+    end
+    r := fetch(method, GITHUB_API + path, headers, body, CALL_MS)
+    if r.status == 0:
+        o.ok = false
+        o.text = "GitHub did not answer."
+        ret o
+    end
+    o.ok = r.status >= 200 and r.status < 400
+    o.text = "HTTP " + r.status + "\n" + clip(r.body, MAX_API)
+    ret o
+end
+
+func git_safe_arg(a: str): bool:
+    if a.len() > 400 or a.find("\n") >= 0 or a.find("\r") >= 0:
+        ret false
+    end
+    if str.StartsWith(a, "-") and (str.StartsWith(a, "--upload-pack") or str.StartsWith(a, "--receive-pack") or str.StartsWith(a, "--exec") or str.StartsWith(a, "-c") or str.StartsWith(a, "--config")):
+        ret false
+    end
+    if a.find("://") >= 0 and not str.StartsWith(a, "https://github.com/"):
+        ret false
+    end
+    if str.StartsWith(a, "git@") or str.StartsWith(a, "ssh:") or str.StartsWith(a, "file:") or str.StartsWith(a, "ext:"):
+        ret false
+    end
+    ret true
+end
+
+func tool_github_git(session: str, uid: str, args: str): Outcome:
+    mut o := Outcome {}
+    items := json.Items(json.Get(args, "args"))
+    mut words := Vector {} as Vector<str>
+    each it in items:
+        words.push(json.Unquote(it))
+    end
+    cwd := json.Get(args, "cwd")
+    o.summary = "git " + clip(str.Join(words, " "), 120)
+    o.detail = "git " + str.Join(words, " ")
+    o.cwd = cwd.len() > 0 ? cwd : "/work"
+    if words.len() == 0:
+        o.ok = false
+        o.text = "args must list the git arguments, for example [\"clone\", \"https://github.com/OWNER/REPO.git\"]."
+        ret o
+    end
+    sub := words.get(0)
+    if sub != "clone" and sub != "fetch" and sub != "pull" and sub != "push" and sub != "ls-remote":
+        o.ok = false
+        o.text = "Only clone, fetch, pull, push and ls-remote use the GitHub login. For other git commands use shell."
+        ret o
+    end
+    each w in words:
+        if not git_safe_arg(w):
+            o.ok = false
+            o.text = "This git argument is not allowed: " + clip(w, 80)
+            ret o
+        end
+    end
+    mut token := ""
+    mut login := ""
+    mut scope := ""
+    if not integration_row(uid, "github", token, login, scope):
+        o.ok = false
+        o.text = "The user has not connected GitHub. Tell them to send /github in Telegram or open Connections on the Salam AI site."
+        ret o
+    end
+    if not token_ok(uid, "github", token):
+        o.ok = false
+        o.text = REVOKED_NOTE
+        ret o
+    end
+    mut quoted := Vector {} as Vector<str>
+    each w in words:
+        quoted.push(sh_quote(w))
+    end
+    helper := "!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f"
+    cmd := "git config --global user.name >/dev/null 2>&1 || git config --global user.name " + sh_quote(login) + "; git config --global user.email >/dev/null 2>&1 || git config --global user.email " + sh_quote(login + "@users.noreply.github.com") + "; git -c credential.helper=" + sh_quote(helper) + " " + str.Join(quoted, " ")
+    mut env := Vector {} as Vector<str>
+    env.push("GH_TOKEN")
+    env.push(token)
+    env.push("GIT_TERMINAL_PROMPT")
+    env.push("0")
+    res := sbx_exec(session, cmd, o.cwd, 300, "", env)
+    o.ok = res.ok and res.code == 0 and not res.timed_out
+    o.text = finish_exec(res, true)
+    ret o
+end
+
+func tool_figma_api(uid: str, args: str): Outcome:
+    mut o := Outcome {}
+    o.kind = "read"
+    mut method := str.Upper(json.Get(args, "method"))
+    if method.len() == 0:
+        method = "GET"
+    end
+    path := json.Get(args, "path")
+    o.summary = "Figma " + method + " " + clip(path, 120)
+    o.detail = o.summary
+    if not str.StartsWith(path, "/v1/") or path.find("..") >= 0 or path.find(" ") >= 0:
+        o.ok = false
+        o.text = "path must start with /v1/, for example /v1/files/FILE_KEY or /v1/files/FILE_KEY/nodes?ids=1:2."
+        ret o
+    end
+    commenting := method == "POST" and path.find("/comments") > 0
+    if method != "GET" and not commenting:
+        o.ok = false
+        o.text = "Only GET requests and POST comments are allowed for Figma."
+        ret o
+    end
+    if commenting:
+        o.kind = "write"
+    end
+    mut token := ""
+    mut login := ""
+    mut scope := ""
+    if not integration_row(uid, "figma", token, login, scope):
+        o.ok = false
+        o.text = "The user has not connected Figma. Tell them to send /figma in Telegram or open Connections on the Salam AI site."
+        ret o
+    end
+    if not token_ok(uid, "figma", token):
+        o.ok = false
+        o.text = REVOKED_NOTE
+        ret o
+    end
+    mut headers := figma_headers(token, is_oauth_token(token))
+    body := json.Get(args, "body")
+    if body.len() > 0:
+        headers.push("Content-Type: application/json")
+    end
+    r := fetch(method, FIGMA_API + path, headers, body, CALL_MS)
+    if r.status == 0:
+        o.ok = false
+        o.text = "Figma did not answer."
+        ret o
+    end
+    o.ok = r.status >= 200 and r.status < 400
+    o.text = "HTTP " + r.status + "\n" + clip(r.body, MAX_API)
+    ret o
+end
+
+func tool_figma_export(session: str, uid: str, args: str): Outcome:
+    mut o := Outcome {}
+    key := json.Get(args, "file_key")
+    ids := json.Get(args, "ids")
+    mut format := str.Lower(json.Get(args, "format"))
+    if format != "svg" and format != "pdf" and format != "jpg":
+        format = "png"
+    end
+    mut scale := json.Get(args, "scale")
+    if scale.len() == 0 or scale.to_int() < 1 or scale.to_int() > 4:
+        scale = "2"
+    end
+    mut dir := json.Get(args, "dir")
+    if dir.len() == 0:
+        dir = "assets"
+    end
+    o.summary = "Figma export " + clip(ids, 80)
+    o.detail = o.summary
+    o.kind = "write"
+    o.cwd = "/work"
+    if key.len() == 0 or ids.len() == 0 or key.find("/") >= 0:
+        o.ok = false
+        o.text = "file_key and ids are required, for example file_key FILE_KEY and ids \"1:2,3:4\"."
+        ret o
+    end
+    mut token := ""
+    mut login := ""
+    mut scope := ""
+    if not integration_row(uid, "figma", token, login, scope):
+        o.ok = false
+        o.text = "The user has not connected Figma. Tell them to send /figma in Telegram or open Connections on the Salam AI site."
+        ret o
+    end
+    mut q := Vector {} as Vector<str>
+    q.push("ids")
+    q.push(ids)
+    q.push("format")
+    q.push(format)
+    q.push("scale")
+    q.push(scale)
+    r := fetch("GET", FIGMA_API + "/v1/images/" + url_escape(key) + "?" + form_encode(q), figma_headers(token, is_oauth_token(token)), "", CALL_MS)
+    if r.status != 200:
+        o.ok = false
+        o.text = "Figma answered HTTP " + r.status + ": " + clip(r.body, 600)
+        ret o
+    end
+    images := json.Get(r.body, "images")
+    names := json.Keys(images)
+    if names.len() == 0:
+        o.ok = false
+        o.text = "Figma returned no images for these ids."
+        ret o
+    end
+    mut script := "mkdir -p " + sh_quote(dir) + "; "
+    mut env := Vector {} as Vector<str>
+    mut n := 0
+    each id in names:
+        link := json.Get(images, id)
+        if str.StartsWith(link, "http"):
+            env.push("SBX_URL" + n)
+            env.push(link)
+            file := str.Replace(str.Replace(id, ":", "-"), ";", "-")
+            script = script + "curl -fsSL -o " + sh_quote(dir + "/" + file + "." + format) + " \"$SBX_URL" + n + "\" && echo " + sh_quote("saved " + dir + "/" + file + "." + format) + "; "
+            n += 1
+        end
+    end
+    if n == 0:
+        o.ok = false
+        o.text = "Figma could not render these nodes."
+        ret o
+    end
+    res := sbx_exec(session, script, "/work", 180, "", env)
+    o.ok = res.ok and res.code == 0
+    o.text = finish_exec(res, true)
+    ret o
+end
+
+func summarize_cmd(cmd: str): str:
+    first := cmd.split("\n").get(0)
+    ret clip(first, 140)
+end
+
+func tool_shell(session: str, uid: str, args: str, tool: str): Outcome:
+    mut o := Outcome {}
+    mut cmd := json.Get(args, "command")
+    if tool == "run_tests" and cmd.len() == 0:
+        cmd = "if [ -f package.json ]; then npm test; elif [ -f go.mod ]; then go test ./...; elif [ -f Cargo.toml ]; then cargo test; elif [ -f pytest.ini ] || [ -f pyproject.toml ]; then python3 -m pytest; elif [ -f Makefile ]; then make test; elif ls *.salam >/dev/null 2>&1; then salam test; else echo 'no test runner found'; exit 2; fi"
+    end
+    cwd := json.Get(args, "cwd")
+    mut timeout := json.Get(args, "timeout").to_int()
+    if timeout <= 0:
+        timeout = 120
+    end
+    if timeout > 900:
+        timeout = 900
+    end
+    o.summary = summarize_cmd(cmd)
+    o.detail = cmd
+    o.cwd = cwd.len() > 0 ? cwd : "/work"
+    if cmd.len() == 0:
+        o.ok = false
+        o.text = "command is required."
+        ret o
+    end
+    mut env := Vector {} as Vector<str>
+    mut secrets := Vector {} as Vector<str>
+    setup := sandbox_login(uid, env, secrets)
+    res := sbx_exec(session, setup + cmd, o.cwd, timeout, "", env)
+    o.ok = res.ok and res.code == 0 and not res.timed_out
+    o.text = scrub(finish_exec(res, true), secrets)
+    ret o
+end
+
+func tool_read(session: str, args: str): Outcome:
+    mut o := Outcome {}
+    o.kind = "read"
+    path := json.Get(args, "path")
+    mut offset := json.Get(args, "offset").to_int()
+    if offset <= 0:
+        offset = 1
+    end
+    mut limit := json.Get(args, "limit").to_int()
+    if limit <= 0 or limit > 2000:
+        limit = 2000
+    end
+    o.summary = "Read " + path
+    o.detail = path
+    if path.len() == 0:
+        o.ok = false
+        o.text = "path is required."
+        ret o
+    end
+    mut env := Vector {} as Vector<str>
+    env.push("SBX_PATH")
+    env.push(path)
+    env.push("SBX_OFFSET")
+    env.push("" + offset)
+    env.push("SBX_LIMIT")
+    env.push("" + limit)
+    res := sbx_exec(session, READ_SCRIPT, "/work", 30, "", env)
+    o.ok = res.ok and res.code == 0
+    o.text = finish_exec(res, true)
+    ret o
+end
+
+func tool_write(session: str, args: str): Outcome:
+    mut o := Outcome {}
+    o.kind = "write"
+    path := json.Get(args, "path")
+    content := json.Get(args, "content")
+    o.summary = "Write " + path
+    o.detail = path
+    if path.len() == 0:
+        o.ok = false
+        o.text = "path is required."
+        ret o
+    end
+    mut env := Vector {} as Vector<str>
+    env.push("SBX_PATH")
+    env.push(path)
+    res := sbx_exec(session, "mkdir -p \"$(dirname -- \"$SBX_PATH\")\" && cat > \"$SBX_PATH\" && echo \"wrote $SBX_PATH ($(wc -c < \"$SBX_PATH\") bytes)\"", "/work", 60, content, env)
+    o.ok = res.ok and res.code == 0
+    o.text = finish_exec(res, true)
+    ret o
+end
+
+func tool_edit(session: str, args: str): Outcome:
+    mut o := Outcome {}
+    o.kind = "write"
+    path := json.Get(args, "path")
+    o.summary = "Edit " + path
+    o.detail = path
+    if path.len() == 0:
+        o.ok = false
+        o.text = "path is required."
+        ret o
+    end
+    mut payload := Vector {} as Vector<str>
+    payload.push(json.Member("old", json.Get(args, "old_text")))
+    payload.push(json.Member("new", json.Get(args, "new_text")))
+    payload.push(json.MemberBool("all", json.Get(args, "replace_all") == "true"))
+    mut env := Vector {} as Vector<str>
+    env.push("SBX_PATH")
+    env.push(path)
+    res := sbx_exec(session, "python3 -c " + sh_quote(EDIT_SCRIPT), "/work", 60, json.Object(payload), env)
+    o.ok = res.ok and res.code == 0
+    o.text = finish_exec(res, true)
+    ret o
+end
+
+func tool_list(session: str, args: str): Outcome:
+    mut o := Outcome {}
+    o.kind = "read"
+    mut path := json.Get(args, "path")
+    if path.len() == 0:
+        path = "."
+    end
+    o.summary = "List " + path
+    o.detail = path
+    mut env := Vector {} as Vector<str>
+    env.push("SBX_PATH")
+    env.push(path)
+    res := sbx_exec(session, "ls -1Ap -- \"$SBX_PATH\"", "/work", 30, "", env)
+    o.ok = res.ok and res.code == 0
+    o.text = finish_exec(res, true)
+    ret o
+end
+
+func tool_glob(session: str, args: str): Outcome:
+    mut o := Outcome {}
+    o.kind = "read"
+    pattern := json.Get(args, "pattern")
+    mut path := json.Get(args, "path")
+    if path.len() == 0:
+        path = "."
+    end
+    o.summary = "Find " + pattern
+    o.detail = pattern
+    mut env := Vector {} as Vector<str>
+    env.push("SBX_PATH")
+    env.push(path)
+    env.push("SBX_PATTERN")
+    env.push(pattern)
+    res := sbx_exec(session, "rg --files -g \"$SBX_PATTERN\" -- \"$SBX_PATH\" | head -n 1000", "/work", 30, "", env)
+    o.ok = res.ok and res.code == 0
+    o.text = finish_exec(res, true)
+    ret o
+end
+
+func tool_grep(session: str, args: str): Outcome:
+    mut o := Outcome {}
+    o.kind = "read"
+    pattern := json.Get(args, "pattern")
+    mut path := json.Get(args, "path")
+    if path.len() == 0:
+        path = "."
+    end
+    o.summary = "Search " + pattern
+    o.detail = pattern
+    mut env := Vector {} as Vector<str>
+    env.push("SBX_PATH")
+    env.push(path)
+    env.push("SBX_PATTERN")
+    env.push(pattern)
+    mut flags := "-n --no-heading"
+    if json.Get(args, "ignore_case") == "true":
+        flags = flags + " -i"
+    end
+    glob := json.Get(args, "glob")
+    if glob.len() > 0:
+        env.push("SBX_GLOB")
+        env.push(glob)
+        flags = flags + " -g \"$SBX_GLOB\""
+    end
+    res := sbx_exec(session, "rg " + flags + " -e \"$SBX_PATTERN\" -- \"$SBX_PATH\" | head -n 500", "/work", 30, "", env)
+    o.ok = res.ok and (res.code == 0 or res.code == 1)
+    o.text = finish_exec(res, false)
+    if o.ok and res.out.len() == 0:
+        o.text = "(no matches)"
+    end
+    ret o
+end
+
+func session_owner(session: str, chat &: str, uid &: str): bool:
+    aistore.Lock()
+    mut q := aistore.Stmt("SELECT id, user_id FROM chats WHERE bridge_token = ?1 AND cloud = 1", one(session))
+    mut found := false
+    if aistore.Next(q):
+        found = true
+        chat = aistore.Text(q, 0)
+        uid = aistore.Text(q, 1)
+    end
+    aistore.Finish(q)
+    aistore.Unlock()
+    ret found
+end
+
+func run_tool(session: str, uid: str, tool: str, args: str): Outcome:
+    mut o := Outcome {}
+    switch tool:
+        "github_api":
+            ret tool_github_api(uid, args)
+        end
+        "figma_api":
+            ret tool_figma_api(uid, args)
+        end
+    end
+    if not sandbox_on():
+        o.ok = false
+        o.text = "The cloud sandbox is not available on this server."
+        ret o
+    end
+    switch tool:
+        "shell", "run_tests":
+            ret tool_shell(session, uid, args, tool)
+        end
+        "read_file":
+            ret tool_read(session, args)
+        end
+        "write_file":
+            ret tool_write(session, args)
+        end
+        "edit_file":
+            ret tool_edit(session, args)
+        end
+        "list_dir":
+            ret tool_list(session, args)
+        end
+        "glob":
+            ret tool_glob(session, args)
+        end
+        "grep":
+            ret tool_grep(session, args)
+        end
+        "github_git":
+            ret tool_github_git(session, uid, args)
+        end
+        "figma_export":
+            ret tool_figma_export(session, uid, args)
+        end
+    end
+    o.ok = false
+    o.text = "The tool " + tool + " is only available in Salam Agent on the user's own computer, not in the cloud sandbox."
+    ret o
+end
+
+func outcome_json(o: Outcome): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("status", o.ok ? "ok" : "error"))
+    m.push(json.Member("output", o.text))
+    m.push(json.Member("summary", o.summary))
+    m.push(json.Member("detail", o.detail))
+    m.push(json.Member("lang", o.lang))
+    m.push(json.Member("kind", o.kind))
+    m.push(json.Member("cwd", o.cwd))
+    m.push(json.MemberBool("outside", false))
+    ret json.Object(m)
+end
+
+func persist(id: str, o: Outcome):
+    mut a := Vector {} as Vector<str>
+    a.push(o.ok ? "ok" : "error")
+    a.push(o.ok ? "done" : "error")
+    a.push(clip(o.text, MAX_OUTPUT))
+    a.push(clip(o.summary, 480))
+    a.push(o.detail)
+    a.push(clip(o.lang, 16))
+    a.push(clip(o.kind, 8))
+    a.push(clip(o.cwd, 990))
+    a.push(i64s(aistore.Now()))
+    a.push(id)
+    aistore.Lock()
+    _r := aistore.Run("UPDATE bridge_calls SET status = ?1, state = ?2, output = ?3, summary = ?4, detail = ?5, lang = ?6, kind = ?7, cwd = ?8, outside = 0, finished = ?9 WHERE id = ?10", a)
+    aistore.Unlock()
+end
+
+func worker():
+    mut open := true
+    until true:
+        id := JOBS.recv(open)
+        if not open:
+            break
+        end
+        _l := sync.Lock(LOCK)
+        data := JOB_DATA.has(id) ? JOB_DATA.get(id) : ""
+        _u := sync.Unlock(LOCK)
+        if data.len() > 0:
+            session := json.Get(data, "session")
+            o := run_tool(session, json.Get(data, "uid"), json.Get(data, "tool"), json.Get(data, "args"))
+            persist(id, o)
+            _a := sync.Lock(LOCK)
+            RESULTS.put(id, outcome_json(o))
+            if JOB_DATA.has(id):
+                _r := JOB_DATA.remove(id)
+            end
+            _b := sync.Unlock(LOCK)
+        end
+    end
+end
+
+func authorize_url(provider: str, state: str, sign_in: bool): str:
+    mut q := Vector {} as Vector<str>
+    if provider == "github":
+        q.push("client_id")
+        q.push(GH_ID)
+        q.push("redirect_uri")
+        q.push(redirect_uri(provider))
+        q.push("scope")
+        q.push(sign_in ? "read:user user:email" : GH_SCOPES)
+        q.push("state")
+        q.push(state)
+        if sign_in:
+            q.push("allow_signup")
+            q.push("true")
+        end
+        ret GITHUB_WEB + "/login/oauth/authorize?" + form_encode(q)
+    end
+    q.push("client_id")
+    q.push(FG_ID)
+    q.push("redirect_uri")
+    q.push(redirect_uri(provider))
+    q.push("scope")
+    q.push(sign_in ? "current_user:read" : FG_SCOPES)
+    q.push("state")
+    q.push(state)
+    q.push("response_type")
+    q.push("code")
+    ret FIGMA_WEB + "/oauth?" + form_encode(q)
+end
+
+func exchange_code(provider: str, code: str, token &: str, refresh &: str, expires &: i64):
+    if provider == "github":
+        mut h := Vector {} as Vector<str>
+        h.push("Accept: application/json")
+        h.push("Content-Type: application/json")
+        mut m := Vector {} as Vector<str>
+        m.push(json.Member("client_id", GH_ID))
+        m.push(json.Member("client_secret", GH_SECRET))
+        m.push(json.Member("code", code))
+        m.push(json.Member("redirect_uri", redirect_uri(provider)))
+        r := fetch("POST", GITHUB_WEB + "/login/oauth/access_token", h, json.Object(m), CALL_MS)
+        token = json.Get(r.body, "access_token")
+        ret
+    end
+    mut h := Vector {} as Vector<str>
+    h.push("Authorization: Basic " + encoding.Base64Encode(FG_ID + ":" + FG_SECRET))
+    h.push("Content-Type: application/x-www-form-urlencoded")
+    h.push("Accept: application/json")
+    mut pairs := Vector {} as Vector<str>
+    pairs.push("redirect_uri")
+    pairs.push(redirect_uri(provider))
+    pairs.push("code")
+    pairs.push(code)
+    pairs.push("grant_type")
+    pairs.push("authorization_code")
+    r := fetch("POST", FIGMA_API + "/v1/oauth/token", h, form_encode(pairs), CALL_MS)
+    token = json.Get(r.body, "access_token")
+    refresh = json.Get(r.body, "refresh_token")
+    expires = aistore.Now() + json.Get(r.body, "expires_in").to_int()
+end
+
+func oauth_start(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    provider := http.Param(ctx, "provider")
+    if not provider_ok(provider) or not oauth_ready(provider) or not enabled_secret():
+        aiweb.Fail(ctx, 503, "oauth", "ورود با این سرویس فعال نیست. می‌توانید توکن شخصی را وارد کنید.")
+        ret
+    end
+    state := crypto.RandomHex(24)
+    now := aistore.Now()
+    aistore.Lock()
+    _d := aistore.Run("DELETE FROM integration_states WHERE expires < ?1", one(i64s(now)))
+    ok := aistore.Run("INSERT INTO integration_states (state, user_id, provider, expires, purpose) VALUES (?1, ?2, ?3, ?4, 'connect')", four(aiweb.Hash(state), i64s(uid), provider, i64s(now + STATE_SECONDS)))
+    aistore.Unlock()
+    if not ok:
+        aiweb.Fail(ctx, 500, "server", "ساخت اتصال ناموفق بود. دوباره تلاش کنید.")
+        ret
+    end
+    aiweb.Reply(ctx, 200, `{"url": ` + json.Str(authorize_url(provider, state, false)) + `, "state": ` + json.Str(state) + "}")
+end
+
+func github_profile(token: str, subject &: str, login &: str, name &: str, email &: str, verified &: bool): bool:
+    r := fetch("GET", GITHUB_API + "/user", github_headers(token), "", CALL_MS)
+    if r.status != 200:
+        ret false
+    end
+    subject = json.Get(r.body, "id")
+    login = json.Get(r.body, "login")
+    name = json.Get(r.body, "name")
+    email = ""
+    verified = false
+    mails := fetch("GET", GITHUB_API + "/user/emails", github_headers(token), "", CALL_MS)
+    if mails.status == 200:
+        each it in json.Items(mails.body):
+            if json.Get(it, "verified") == "true":
+                if email.len() == 0 or json.Get(it, "primary") == "true":
+                    email = json.Get(it, "email")
+                    verified = true
+                end
+            end
+        end
+    end
+    ret subject.len() > 0 and login.len() > 0
+end
+
+func figma_profile(token: str, subject &: str, login &: str, name &: str, email &: str, verified &: bool): bool:
+    r := fetch("GET", FIGMA_API + "/v1/me", figma_headers(token, is_oauth_token(token)), "", CALL_MS)
+    if r.status != 200:
+        ret false
+    end
+    subject = json.Get(r.body, "id")
+    login = json.Get(r.body, "handle")
+    name = json.Get(r.body, "handle")
+    email = json.Get(r.body, "email")
+    verified = false
+    ret subject.len() > 0
+end
+
+func list_integrations(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberBool("sandbox", sandbox_on()))
+    m.push(json.MemberBool("storage", enabled_secret()))
+    mut items := Vector {} as Vector<str>
+    items.push(provider_json(i64s(uid), "github"))
+    items.push(provider_json(i64s(uid), "figma"))
+    m.push(json.MemberRaw("integrations", json.Array(items)))
+    aiweb.Reply(ctx, 200, json.Object(m))
+end
+
+func save_token(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    provider := http.Param(ctx, "provider")
+    if not provider_ok(provider):
+        aiweb.Fail(ctx, 404, "not_found", "این سرویس پیدا نشد.")
+        ret
+    end
+    mut login := ""
+    code := store_token(i64s(uid), provider, str.Trim(json.Get(http.Body(ctx), "token")), login)
+    if code == 3:
+        aiweb.Fail(ctx, 503, "storage", "ذخیره‌ی امن توکن‌ها روی این سرور فعال نیست.")
+        ret
+    end
+    if code != 0:
+        aiweb.Fail(ctx, 400, "token", "این توکن از طرف سرویس پذیرفته نشد. توکن و دسترسی‌هایش را بررسی کنید.")
+        ret
+    end
+    aiweb.Reply(ctx, 200, provider_json(i64s(uid), provider))
+end
+
+func remove_integration(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    provider := http.Param(ctx, "provider")
+    aistore.Lock()
+    _d := aistore.Run("DELETE FROM integrations WHERE user_id = ?1 AND provider = ?2", two(i64s(uid), provider))
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"ok": true}`)
+end
+
+pub func Configure(sandbox_url: str, sandbox_secret: str, secret_key: str, app_url: str, issuer: str, gh_id: str, gh_secret: str, fg_id: str, fg_secret: str, fg_scopes: str):
+    LOCK = sync.NewMutex()
+    SANDBOX_SECRET = sandbox_secret
+    MASTER = secret_key
+    if app_url.len() > 0:
+        APP_URL = str.TrimSuffix(app_url, "/")
+    end
+    if issuer.len() > 0:
+        ISSUER = str.TrimSuffix(issuer, "/")
+    end
+    GH_ID = gh_id
+    GH_SECRET = gh_secret
+    FG_ID = fg_id
+    FG_SECRET = fg_secret
+    if fg_scopes.len() > 0:
+        FG_SCOPES = fg_scopes
+    end
+    if sandbox_url.len() > 0:
+        mut host := ""
+        mut port := 80
+        mut secure := false
+        mut path := ""
+        split_url(sandbox_url, host, port, secure, path)
+        SANDBOX_HOST = host
+        SANDBOX_PORT = port
+    end
+end
+
+pub func SetGithubScopes(scopes: str):
+    if str.Trim(scopes).len() > 0:
+        GH_SCOPES = str.Trim(scopes)
+    end
+end
+
+pub func SetApis(github_api: str, github_web: str, figma_api: str, figma_web: str):
+    if github_api.len() > 0:
+        GITHUB_API = str.TrimSuffix(github_api, "/")
+    end
+    if github_web.len() > 0:
+        GITHUB_WEB = str.TrimSuffix(github_web, "/")
+    end
+    if figma_api.len() > 0:
+        FIGMA_API = str.TrimSuffix(figma_api, "/")
+    end
+    if figma_web.len() > 0:
+        FIGMA_WEB = str.TrimSuffix(figma_web, "/")
+    end
+end
+
+pub func Start():
+    JOBS.init(256)
+    repeat WORKERS:
+        _w := spawn(worker)
+    end
+end
+
+pub func Enabled(): bool:
+    ret sandbox_on()
+end
+
+pub func Submit(id: str, session: str, uid: str, tool: str, args: str):
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("session", session))
+    m.push(json.Member("uid", uid))
+    m.push(json.Member("tool", tool))
+    m.push(json.Member("args", args))
+    _l := sync.Lock(LOCK)
+    JOB_DATA.put(id, json.Object(m))
+    STARTED.put(id, time.NowMillis())
+    _u := sync.Unlock(LOCK)
+    JOBS.send(id)
+end
+
+pub func Take(id: str): str:
+    _l := sync.Lock(LOCK)
+    mut out := ""
+    if RESULTS.has(id):
+        out = RESULTS.get(id)
+        _r := RESULTS.remove(id)
+        if STARTED.has(id):
+            _s := STARTED.remove(id)
+        end
+    end
+    _u := sync.Unlock(LOCK)
+    ret out
+end
+
+pub func Known(id: str): bool:
+    _l := sync.Lock(LOCK)
+    k := STARTED.has(id)
+    _u := sync.Unlock(LOCK)
+    ret k
+end
+
+pub func Sweep(max_ms: i64):
+    now := time.NowMillis()
+    mut old := Vector {} as Vector<str>
+    _l := sync.Lock(LOCK)
+    each k, v in STARTED:
+        if now - v > max_ms:
+            old.push(k)
+        end
+    end
+    each k in old:
+        _s := STARTED.remove(k)
+        if RESULTS.has(k):
+            _r := RESULTS.remove(k)
+        end
+        if JOB_DATA.has(k):
+            _j := JOB_DATA.remove(k)
+        end
+    end
+    _u := sync.Unlock(LOCK)
+end
+
+pub func Owner(session: str, chat &: str, uid &: str): bool:
+    ret session_owner(session, chat, uid)
+end
+
+pub func Destroy(session: str):
+    if not sandbox_on() or session.len() != 32:
+        ret
+    end
+    _r := sandbox_call("/v1/destroy", `{"session": ` + json.Str(session) + "}", 20000)
+end
+
+pub func StoreToken(uid: str, provider: str, token: str, login &: str): int:
+    if not provider_ok(provider):
+        ret 2
+    end
+    ret store_token(uid, provider, token, login)
+end
+
+pub func Forget(uid: str, provider: str):
+    aistore.Lock()
+    _d := aistore.Run("DELETE FROM integrations WHERE user_id = ?1 AND provider = ?2", two(uid, provider))
+    aistore.Unlock()
+end
+
+pub func OauthReady(provider: str): bool:
+    ret oauth_ready(provider)
+end
+
+pub func Connected(uid: str, provider: str): str:
+    aistore.Lock()
+    login := aistore.OneText("SELECT login FROM integrations WHERE user_id = ?1 AND provider = ?2", two(uid, provider))
+    aistore.Unlock()
+    ret login
+end
+
+pub func Revoked(uid: str, provider: str): bool:
+    ret not login_valid(uid, provider)
+end
+
+pub func Prelude(session: str, uid: str): str:
+    gh := login_state(uid, "github")
+    fg := login_state(uid, "figma")
+    text := "<cloud_session>\nsession: " + session + "\nsandbox: a private Linux container for this conversation with bash, git, curl, ripgrep, python3, node and the Salam compiler; the working folder is /work and files last while the conversation is active. It has no access to the user's own computer.\ngithub: " + (gh.len() > 0 ? "connected as " + gh : "not connected") + "\nfigma: " + (fg.len() > 0 ? "connected as " + fg : "not connected") + "\nUse the desktop tools (shell, read_file, write_file, edit_file, list_dir, glob, grep, run_tests) and pass the session value above in every call. Paths are relative to /work. For GitHub use github_api for the REST API and github_git for clone, fetch, pull and push in the sandbox. The sandbox shell is also already signed in as the user: plain git clone, pull and push to github.com work with their login, and GH_TOKEN, GITHUB_TOKEN, FIGMA_TOKEN and FIGMA_AUTH_HEADER (for curl -H) are set when connected. Never print or repeat those values. For Figma use figma_api to read files and nodes and figma_export to save images into the sandbox. If a service is not connected, tell the user to send /github or /figma in Telegram, or to open Connections on the Salam AI site. Look before you change things, keep edits small, run the tests after changing code, and tell the user what you did.\n</cloud_session>\n\n"
+    ret text
+end
+
+pub func AuthorizeUrl(provider: str, state: str, sign_in: bool): str:
+    ret authorize_url(provider, state, sign_in)
+end
+
+pub func FinishConnect(uid: str, provider: str, code: str): bool:
+    if not provider_ok(provider):
+        ret false
+    end
+    mut token := ""
+    mut refresh := ""
+    mut expires := 0 as i64
+    exchange_code(provider, code, token, refresh, expires)
+    if token.len() == 0:
+        ret false
+    end
+    mut login := ""
+    mut scope := ""
+    mut valid := false
+    if provider == "github":
+        valid = verify_github(token, login, scope)
+    else:
+        valid = verify_figma(token, login)
+        scope = FG_SCOPES
+    end
+    ret valid and save_integration(uid, provider, token, refresh, expires, login, scope)
+end
+
+pub func Identity(provider: str, code: str, subject &: str, login &: str, name &: str, email &: str, verified &: bool): bool:
+    if not provider_ok(provider):
+        ret false
+    end
+    mut token := ""
+    mut refresh := ""
+    mut expires := 0 as i64
+    exchange_code(provider, code, token, refresh, expires)
+    if token.len() == 0:
+        ret false
+    end
+    if provider == "github":
+        ret github_profile(token, subject, login, name, email, verified)
+    end
+    ret figma_profile(token, subject, login, name, email, verified)
+end
+
+pub func Routes(r &: router.Router):
+    router.Get(r, "/integrations", list_integrations)
+    router.Post(r, "/integrations/:provider/token", save_token)
+    router.Delete(r, "/integrations/:provider", remove_integration)
+    router.Post(r, "/integrations/:provider/oauth", oauth_start)
+    each path in ["/integrations", "/integrations/:provider", "/integrations/:provider/token", "/integrations/:provider/oauth"]:
+        router.Options(r, path, aiweb.Preflight)
+    end
+end

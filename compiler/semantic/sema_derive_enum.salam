@@ -1,0 +1,119 @@
+package semantic
+
+import str
+
+include at "../ast.salam"
+
+const ENUM_OP_NAME := 0
+const ENUM_OP_FROMSTRING := 1
+const ENUM_OP_NAMES := 2
+
+func derive_enum_name(s &: Sema, prefix: str, t: int): str:
+    ret prefix + derive_key(type_to_string(s, t))
+end
+
+func derive_enum_one(s &: Sema, a &: at.Ast, t: int, prefix: str, op: int): str:
+    if t < 0 or s.program == 0:
+        ret ""
+    end
+    esym := ty_at(s, t).decl
+    if esym == 0 or sym_at(s, esym).members == 0:
+        ret ""
+    end
+    if scope_at(s, sym_at(s, esym).members).symbols.len() == 0:
+        ret ""
+    end
+    fname := derive_enum_name(s, prefix, t)
+    if derive_registry_find(s, fname) != 0:
+        ret fname
+    end
+    if scope_lookup_local(s, s.global, fname) != 0:
+        ret ""
+    end
+    derive_registry_claim(s, fname)
+    mut text := ""
+    if op == ENUM_OP_NAME:
+        text = name_source(s, esym, fname)
+    else op == ENUM_OP_FROMSTRING:
+        text = fromstring_source(s, esym, fname)
+    else:
+        text = names_source(s, esym, fname)
+    end
+    if str.Len(text) == 0:
+        derive_registry_drop(s, derive_registry_find(s, fname))
+        ret ""
+    end
+    prog := derive_parse(s, a, text, "<derived>")
+    mut fn := 0
+    if prog != 0:
+        fn = derive_install_all(s, a, prog, fname, sym_at(s, esym).home)
+    end
+    if fn == 0:
+        derive_registry_drop(s, derive_registry_find(s, fname))
+        ret ""
+    end
+    slot := derive_registry_find(s, fname)
+    s.derived_decls.set(slot - 1, fn)
+    ret fname
+end
+
+func name_source(s &: Sema, esym: int, fname: str): str:
+    ev := sym_at(s, esym)
+    en := derive_ident(ev.name)
+    mut out := "func " + fname + "(_v: " + en + "): str:\n"
+    mems := scope_at(s, ev.members).symbols
+    repeat mems.len() in i:
+        m := sym_at(s, mems.get(i))
+        if m.kind != SYM_ENUM_MEMBER:
+            continue
+        end
+        out = out + "    if _v == " + en + "." + derive_ident(m.name) + ": ret \"" + m.name + "\" end\n"
+    end
+    ret out + "    ret \"\"\nend\n"
+end
+
+func fromstring_source(s &: Sema, esym: int, fname: str): str:
+    ev := sym_at(s, esym)
+    en := derive_ident(ev.name)
+    mut first_member := ""
+    mut out := "func " + fname + "(_s: str, _ok &: bool): " + en + ":\n"
+    mems := scope_at(s, ev.members).symbols
+    repeat mems.len() in i:
+        m := sym_at(s, mems.get(i))
+        if m.kind != SYM_ENUM_MEMBER:
+            continue
+        end
+        if str.Len(first_member) == 0:
+            first_member = derive_ident(m.name)
+        end
+        out = out + "    if _s == \"" + m.name + "\": _ok = true ret " + en + "." + derive_ident(m.name) + " end\n"
+    end
+    ret out + "    _ok = false\n    ret " + en + "." + first_member + "\nend\n"
+end
+
+func names_source(s &: Sema, esym: int, fname: str): str:
+    ev := sym_at(s, esym)
+    mut out := "func " + fname + "(): Vector<str>:\n"
+    out = out + "    mut _v := Vector {} as Vector<str>\n"
+    mems := scope_at(s, ev.members).symbols
+    repeat mems.len() in i:
+        m := sym_at(s, mems.get(i))
+        if m.kind != SYM_ENUM_MEMBER:
+            continue
+        end
+        out = out + "    _v.push(\"" + m.name + "\")\n"
+    end
+    ret out + "    ret _v\nend\n"
+end
+
+func sema_derive_enum_name(s &: Sema, a &: at.Ast, t: int): str:
+    ret derive_enum_one(s, a, t, "_enum_name_", ENUM_OP_NAME)
+end
+
+func sema_derive_enum_fromstring(s &: Sema, a &: at.Ast, t: int): str:
+    ret derive_enum_one(s, a, t, "_enum_fromstring_", ENUM_OP_FROMSTRING)
+end
+
+func sema_derive_enum_names(s &: Sema, a &: at.Ast, t: int): str:
+    ret derive_enum_one(s, a, t, "_enum_names_", ENUM_OP_NAMES)
+end

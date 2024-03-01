@@ -1,0 +1,294 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "config"
+@fa "پیکربندی"
+package config
+
+import str
+import conv
+import io
+import collections
+import encoding.yaml
+import encoding.envfile
+
+@en "Config"
+@fa "پیکربندی"
+pub struct Config:
+    @en "m"
+    @fa "نگاشت"
+    pub m: collections.OrderedMap = collections.OrderedMap {}
+end
+
+func _yaml_flatten(out &: Config, text: str, path: str):
+    keys := yaml.Keys(text, path)
+    defer keys.free()
+    repeat keys.len() in i:
+        k := keys.get(i)
+        mut full := k
+        if path.len() > 0: full = path.concat(".").concat(k) end
+        t := yaml.TypeOf(text, full)
+        if t == "map":
+            _yaml_flatten(out, text, full)
+        else:
+            Set(out, full, yaml.Get(text, full))
+        end
+    end
+end
+
+func _parse_value(raw: str): str:
+    ret envfile.ParseScalarEx(raw, true)
+end
+
+func _from_doc(d &: envfile.Doc): Config:
+    mut out := Config {}
+    repeat envfile.Len(d) in i:
+        Set(out, envfile.KeyAt(d, i), envfile.ValueAt(d, i))
+    end
+    ret out
+end
+
+func _to_doc(c &: Config): envfile.Doc:
+    mut d := envfile.New()
+    repeat c.m.len() in i:
+        envfile.Set(d, c.m.key_at(i), c.m.val_at(i))
+    end
+    ret d
+end
+
+func _section_of(key: str): str:
+    dot := key.find(".")
+    if dot < 0: ret "" end
+    ret key.substr(0, dot)
+end
+
+func _name_of(key: str): str:
+    dot := key.find(".")
+    if dot < 0: ret key end
+    ret key.substr(dot + 1, key.len() - dot - 1)
+end
+
+@en "New"
+@fa "جدید"
+pub func New(): Config:
+    ret Config {}
+end
+
+@en "Len"
+@fa "طول"
+pub func Len(c &: Config): int: ret c.m.len() end
+
+@en "Has"
+@fa "دارد"
+pub func Has(c &: Config, key: str): bool: ret c.m.has(key) end
+
+@en "Set"
+@fa "تنظیم"
+pub func Set(c &: Config, key: str, val: str):
+    c.m.set(key, val)
+end
+
+@en "Get"
+@fa "دریافت"
+pub func Get(c &: Config, key: str): str: ret c.m.get(key) end
+
+@en "GetOr"
+@fa "دریافت با پیش فرض"
+pub func GetOr(c &: Config, key: str, def: str): str: ret c.m.get_or(key, def) end
+
+@en "GetInt"
+@fa "دریافت صحیح"
+pub func GetInt(c &: Config, key: str, def: i64): i64:
+    i := c.m.index_of(key)
+    if i < 0: ret def end
+    ret conv.ParseInt(c.m.val_at(i))
+end
+
+@en "GetFloat"
+@fa "دریافت اعشاری"
+pub func GetFloat(c &: Config, key: str, def: f64): f64:
+    i := c.m.index_of(key)
+    if i < 0: ret def end
+    ret conv.ParseFloat(c.m.val_at(i))
+end
+
+@en "GetBool"
+@fa "دریافت منطقی"
+pub func GetBool(c &: Config, key: str, def: bool): bool:
+    i := c.m.index_of(key)
+    if i < 0: ret def end
+    ret conv.ParseBool(c.m.val_at(i))
+end
+
+@en "Remove"
+@fa "حذف"
+pub func Remove(c &: Config, key: str): bool:
+    ret c.m.remove(key) >= 0
+end
+
+@en "Keys"
+@fa "کلیدها"
+pub func Keys(c &: Config): Vector<str>:
+    ret c.m.clone_keys()
+end
+
+@en "Section"
+@fa "بخش"
+pub func Section(c &: Config, name: str): Config:
+    mut out := Config {}
+    prefix := name.concat(".")
+    repeat c.m.len() in i:
+        k := c.m.key_at(i)
+        if str.StartsWith(k, prefix):
+            Set(out, k.substr(prefix.len(), k.len() - prefix.len()), c.m.val_at(i))
+        end
+    end
+    ret out
+end
+
+@en "Merge"
+@fa "ادغام"
+pub func Merge(base &: Config, override &: Config): Config:
+    mut out := Config {}
+    repeat base.m.len() in i:
+        Set(out, base.m.key_at(i), base.m.val_at(i))
+    end
+    repeat override.m.len() in i:
+        Set(out, override.m.key_at(i), override.m.val_at(i))
+    end
+    ret out
+end
+
+@en "Free"
+@fa "آزادسازی"
+pub func Free(c &: Config):
+    c.m.free()
+end
+
+@en "ParseINI"
+@fa "تجزیه آی ان آی"
+pub func ParseINI(text: str): Config:
+    mut out := Config {}
+    mut section := ""
+    lines := text.split("\n")
+    defer lines.free()
+    repeat lines.len() in i:
+        line := str.Trim(lines.get(i))
+        mut head := ""
+        if line.len() > 0: head = line.substr(0, 1) end
+        if head != "" and head != "#" and head != ";":
+            if head == "[" and str.EndsWith(line, "]"):
+                section = str.Trim(line.substr(1, line.len() - 2))
+            else:
+                eq_at := line.find("=")
+                if eq_at > 0:
+                    mut key := str.Trim(line.substr(0, eq_at))
+                    val := _parse_value(line.substr(eq_at + 1, line.len() - eq_at - 1))
+                    if section.len() > 0:
+                        key = section.concat(".").concat(key)
+                    end
+                    Set(out, key, val)
+                end
+            end
+        end
+    end
+    ret out
+end
+
+@en "ParseEnv"
+@fa "تجزیه محیط"
+pub func ParseEnv(text: str): Config:
+    mut d := envfile.Parse(text)
+    defer envfile.Free(d)
+    ret _from_doc(d)
+end
+
+@en "ParseYAML"
+@fa "تجزیه یامل"
+pub func ParseYAML(text: str): Config:
+    mut out := Config {}
+    _yaml_flatten(out, text, "")
+    ret out
+end
+
+@en "LoadINI"
+@fa "بارگذاری آی ان آی"
+pub func LoadINI(path: str): Config:
+    ret ParseINI(io.ReadFile(path))
+end
+
+@en "LoadEnv"
+@fa "بارگذاری محیط"
+pub func LoadEnv(path: str): Config:
+    ret ParseEnv(io.ReadFile(path))
+end
+
+@en "LoadYAML"
+@fa "بارگذاری یامل"
+pub func LoadYAML(path: str): Config:
+    ret ParseYAML(io.ReadFile(path))
+end
+
+@en "FormatINI"
+@fa "قالب آی ان آی"
+pub func FormatINI(c &: Config): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    repeat c.m.len() in i:
+        k := c.m.key_at(i)
+        if _section_of(k) == "":
+            str.BufAppend(b, k)
+            str.BufAppend(b, " = ")
+            str.BufAppend(b, envfile.Quote(c.m.val_at(i)))
+            str.BufAppend(b, "\n")
+        end
+    end
+    done := Vector {} as Vector<str> defer done.free()
+    repeat c.m.len() in i:
+        sec := _section_of(c.m.key_at(i))
+        if sec != "" and collections.contains(done, sec) == false:
+            done.push(sec)
+            str.BufAppend(b, "[")
+            str.BufAppend(b, sec)
+            str.BufAppend(b, "]\n")
+            repeat c.m.len() in j:
+                kj := c.m.key_at(j)
+                if _section_of(kj) == sec:
+                    str.BufAppend(b, _name_of(kj))
+                    str.BufAppend(b, " = ")
+                    str.BufAppend(b, envfile.Quote(c.m.val_at(j)))
+                    str.BufAppend(b, "\n")
+                end
+            end
+        end
+    end
+    out := str.BufStr(b)
+    ret out
+end
+
+@en "FormatEnv"
+@fa "قالب محیط"
+pub func FormatEnv(c &: Config): str:
+    mut d := _to_doc(c)
+    defer envfile.Free(d)
+    ret envfile.Format(d)
+end
+
+@en "FormatEnvExport"
+@fa "قالب محیط صادراتی"
+pub func FormatEnvExport(c &: Config): str:
+    mut d := _to_doc(c)
+    defer envfile.Free(d)
+    ret envfile.FormatExport(d)
+end

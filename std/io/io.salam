@@ -1,0 +1,214 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "io"
+@fa "ورودی خروجی"
+package io
+
+import str
+import mem
+
+extern:
+    func salam_open(path: str, mode: str): File*
+    func salam_file_read(f: File*, size: u64): str
+    func salam_file_readline(f: File*): str
+    func salam_file_write(f: File*, data: str): int
+    func salam_file_close(f: File*)
+    func salam_file_seek(f: File*, off: i64, whence: int): int
+    func fflush(stream: void*): int
+    func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+end
+
+if SALAM_OS_LINUX or SALAM_OS_ANDROID:
+    extern:
+        func openat(dirfd: int, path: str, flags: int): int
+        func read(fd: int, buf: void*, n: u64): i64
+        func close(fd: int): int
+    end
+end
+
+const COPY_CHUNK := 65536
+
+if SALAM_OS_LINUX or SALAM_OS_ANDROID:
+    func _read_file_fast(path: str, out &: str): bool:
+        fd := openat(0 - 100, path, 0)
+        if fd < 0: ret false end
+        mut cap := COPY_CHUNK
+        mut buf := mem.Allocate((cap + 1) as u64)
+        mut used := 0
+        until 1 == 1:
+            if used == cap:
+                cap = cap * 2
+                buf = mem.Reallocate(buf, (cap + 1) as u64)
+            end
+            n := read(fd, ((buf as i64) + (used as i64)) as void*, (cap - used) as u64)
+            if n <= (0 as i64): break end
+            used += n as int
+        end
+        close(fd)
+        buf = mem.Reallocate(buf, (used + 1) as u64)
+        mem.Set(((buf as i64) + (used as i64)) as void*, 0, 1 as u64)
+        out = buf as str
+        ret true
+    end
+else:
+    func _read_file_fast(path: str, out &: str): bool: ret false end
+end
+
+@en "Input"
+@fa "بخوان"
+pub func Input(): str: ret input () end
+
+@en "Read"
+@fa "خواندن"
+pub func Read(f: File*, size: u64): str: ret f.read(size) end
+
+@en "Readline"
+@fa "خواندن خط"
+pub func Readline(f: File*): str: ret f.readline() end
+
+@en "Write"
+@fa "نوشتن"
+pub func Write(f: File*, data: str): int: ret f.write(data) end
+
+@en "Seek"
+@fa "جابجایی مکان نما"
+pub func Seek(f: File*, offset: i64, whence: int): int: ret f.seek(offset, whence) end
+
+@en "Close"
+@fa "بستن"
+pub func Close(f: File*): f.close() end
+
+@en "ReadFile"
+@fa "خواندن پرونده"
+pub func ReadFile(path: str): str:
+    mut quick := ""
+    if _read_file_fast(path, quick): ret quick end
+    f := salam_open(path, "rb")
+    if f == null:
+        ret ""
+    end
+    out := ReadAll(f)
+    f.close()
+    ret out
+end
+
+@en "WriteFile"
+@fa "نوشتن پرونده"
+pub func WriteFile(path: str, data: str): int:
+    f := salam_open(path, "wb")
+    if f == null:
+        ret 0 - 1
+    end
+    n := f.write(data)
+    f.close()
+    ret n
+end
+
+@en "AppendFile"
+@fa "افزودن به پرونده"
+pub func AppendFile(path: str, data: str): int:
+    f := salam_open(path, "ab")
+    if f == null:
+        ret 0 - 1
+    end
+    n := f.write(data)
+    f.close()
+    ret n
+end
+
+@en "Lines"
+@fa "خط ها"
+pub func Lines(path: str): Vector<str>:
+    text := ReadFile(path)
+    ret text.trim().split("\n")
+end
+
+@en "EPrint"
+@fa "نوشتن خطا"
+pub func EPrint(s: str): printerr s end
+
+@en "EPrintln"
+@fa "نوشتن خطا با خط جدید"
+pub func EPrintln(s: str): printerrln s end
+
+@en "Flush"
+@fa "تخلیه"
+pub func Flush():
+    _r := fflush(null as void*)
+end
+
+@en "ReadAll"
+@fa "خواندن همه"
+pub func ReadAll(f: File*): str:
+    if f == null:
+        ret ""
+    end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut chunk := f.read(4096)
+    until chunk.len() > 0:
+        str.BufAppend(sb, chunk)
+        mem.Free(chunk as void*)
+        chunk = f.read(4096)
+    end
+    mem.Free(chunk as void*)
+    out := str.BufStr(sb)
+    ret out
+end
+
+@en "Copy"
+@fa "کپی"
+pub func Copy(dst: File*, src: File*): i64:
+    if src == null or dst == null:
+        ret 0
+    end
+    buf := mem.Allocate(COPY_CHUNK as u64)
+    if buf == null:
+        ret 0
+    end
+    sp := src as void*
+    dp := dst as void*
+    mut total := 0 as i64
+    mut going := true
+    until going:
+        got := fread(buf, 1 as u64, COPY_CHUNK as u64, sp)
+        if got == 0 as u64:
+            going = false
+        else:
+            put := fwrite(buf, 1 as u64, got, dp)
+            total += put as i64
+            if put != got: going = false end
+        end
+    end
+    mem.Free(buf)
+    ret total
+end
+
+@en "WriteLines"
+@fa "نوشتن خط ها"
+pub func WriteLines(path: str, lines: Vector<str>): int:
+    f := salam_open(path, "wb")
+    if f == null:
+        ret 0 - 1
+    end
+    mut total := 0
+    repeat lines.len() in i:
+        total += f.write(lines.get(i))
+        total += f.write("\n")
+    end
+    f.close()
+    ret total
+end

@@ -1,0 +1,175 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import encoding.json
+import encoding.encerr
+
+mut next_id := 9007199254740990 as i64
+
+enum Role:
+    Member,
+    Admin
+end
+
+struct Address:
+    pub city: str = ""
+    pub country: str = ""
+end
+
+struct CreateUser:
+    @json "user_name"
+    pub name: str = ""
+    pub email: str = ""
+    @json "" "optional"
+    pub role: Role = Role.Member
+    @json "" "optional"
+    pub address: Address = Address {}
+    @json "" "omitempty"
+    pub tags: Vector<str> = Vector {} as Vector<str>
+end
+
+struct User:
+    @json "" "string"
+    pub id: i64 = 0
+    @json "user_name"
+    pub name: str = ""
+    pub email: str = ""
+    pub role: Role = Role.Member
+    @json "" "omitempty"
+    pub address: Address = Address {}
+    @json "" "omitempty"
+    pub tags: Vector<str> = Vector {} as Vector<str>
+end
+
+struct ApiError:
+    pub error: str = ""
+    pub detail: str = ""
+    @json "" "omitempty"
+    pub at: int = 0
+end
+
+struct Page:
+    pub total: int = 0
+    pub items: Vector<User> = Vector {} as Vector<User>
+end
+
+func fail(what: str, e: encerr.EncodingError): str:
+    ret json.Marshal(ApiError { error = what, detail = e.message, at = e.position })
+end
+
+func reject(what: str, detail: str): str:
+    ret json.Marshal(ApiError { error = what, detail = detail })
+end
+
+func create_user(body: str, out &: Vector<User>): str:
+    mut req := CreateUser {}
+    mut e := encerr.NoError()
+    if json.Unmarshal(body, req, e) == false:
+        ret fail("bad_request", e)
+    end
+    if req.email.len() == 0:
+        ret reject("unprocessable", "email must not be empty")
+    end
+    next_id = next_id + (1 as i64)
+    mut u := User {
+        id = next_id, name = req.name, email = req.email, role = req.role, address = req.address
+    }
+    repeat req.tags.len() in i:
+        u.tags.push(req.tags.get(i))
+    end
+    out.push(u)
+    ret json.Marshal(u)
+end
+
+func list_users(users &: Vector<User>): str:
+    mut p := Page { total = users.len() }
+    repeat users.len() in i:
+        p.items.push(users.get(i))
+    end
+    ret json.Marshal(p)
+end
+
+func create_lenient(body: str): str:
+    mut req := CreateUser {}
+    mut e := encerr.NoError()
+    if json.UnmarshalLenient(body, req, e) == false:
+        ret fail("bad_request", e)
+    end
+    ret json.Marshal(req)
+end
+
+func post(label: str, body: str, users &: Vector<User>):
+    println label
+    print "  -> "
+    println body
+    print "  <- "
+    println create_user(body, users)
+end
+
+func main:
+    mut users := Vector {} as Vector<User>
+    defer users.free()
+
+    println "== POST /users =="
+    post(
+        "a complete request", "{\"user_name\":\"ali\",\"email\":\"ali@example.com\",\"role\":\"Admin\",\"address\":{\"city\":\"Tehran\",\"country\":\"IR\"},\"tags\":[\"founder\",\"ops\"]}", users
+    )
+    post(
+        "only the required fields", "{\"user_name\":\"sara\",\"email\":\"sara@example.com\"}", users
+    )
+
+    println ""
+    println "== requests the decoder rejects =="
+    post("a missing field", "{\"user_name\":\"kian\"}", users)
+    post(
+        "a field this version does not have", "{\"user_name\":\"kian\",\"email\":\"k@example.com\",\"nickname\":\"kk\"}", users
+    )
+    post(
+        "the wrong type", "{\"user_name\":42,\"email\":\"k@example.com\"}", users
+    )
+    post(
+        "the same key twice", "{\"user_name\":\"a\",\"user_name\":\"b\",\"email\":\"k@example.com\"}", users
+    )
+    post(
+        "an enum member that does not exist", "{\"user_name\":\"k\",\"email\":\"k@example.com\",\"role\":\"Owner\"}", users
+    )
+    post("not an object at all", "[1,2,3]", users)
+    post("truncated", "{\"user_name\":\"k\",", users)
+
+    println ""
+    println "== a rule the decoder cannot know =="
+    post("empty email", "{\"user_name\":\"k\",\"email\":\"\"}", users)
+
+    println ""
+    println "== an older client, decoded leniently =="
+    print "  <- "
+    println create_lenient("{\"user_name\":\"omid\",\"email\":\"o@example.com\",\"nickname\":\"om\"}")
+
+    println ""
+    println "== GET /users =="
+    print "  <- "
+    println list_users(users)
+
+    println ""
+    println "== round trip =="
+    text := list_users(users)
+    mut back := Page {}
+    mut e := encerr.NoError()
+    print "decodes: "
+    println json.Unmarshal(text, back, e)
+    print "re-encodes identically: "
+    println json.Marshal(back) == text
+    print "first user's city: "
+    println back.items.get(0).address.city
+end

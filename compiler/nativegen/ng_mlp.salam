@@ -1,0 +1,409 @@
+package nativegen
+
+struct Llp:
+    pub head: int = 0
+    pub phi: int = 0
+    pub addr: int = 0
+    pub ty: int = 0
+    pub ld: int = 0
+    pub dry: bool = true
+    pub fail: bool = false
+    pub steps: int = 0
+    pub cache: HashMap<int, int> = HashMap {}
+end
+
+func same_addr(g &: Ng, x: int, y: int): bool:
+    if x == y:
+        ret true
+    end
+    if x < 0 or y < 0:
+        ret false
+    end
+    mut dx := 0 as i64
+    mut dy := 0 as i64
+    rx := addr_root(g, x, dx)
+    ry := addr_root(g, y, dy)
+    if rx < 0 or ry < 0 or dx != dy:
+        ret false
+    end
+    if rx == ry:
+        ret true
+    end
+    ret g.v_kind[rx] == VK_GLB and g.v_kind[ry] == VK_GLB and g.v_def[rx] == g.v_def[ry] and g.v_i[rx] == g.v_i[ry]
+end
+
+func mlp_clobber(g &: Ng, i: int, a: int, lsz: int): bool:
+    op := g.i_op[i]
+    if op == OP_CALL or op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE:
+        ret true
+    end
+    if op == OP_LOAD:
+        ret (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0
+    end
+    if op != OP_STORE:
+        ret false
+    end
+    if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+        ret true
+    end
+    sa := g.i_b[i]
+    if same_addr(g, sa, a):
+        ret true
+    end
+    mut d1 := 0 as i64
+    mut d2 := 0 as i64
+    r1 := addr_root(g, sa, d1)
+    r2 := addr_root(g, a, d2)
+    if r1 >= 0 and r2 >= 0 and r1 != r2:
+        k1 := g.v_kind[r1]
+        k2 := g.v_kind[r2]
+        if k1 == VK_GLB and k2 == VK_GLB and g.v_def[r1] != g.v_def[r2]:
+            ret false
+        end
+        if k1 == VK_GLB and k2 == VK_GLB and g.v_def[r1] == g.v_def[r2]:
+            o1 := d1 + g.v_i[r1]
+            o2 := d2 + g.v_i[r2]
+            if g.i_a[i] >= 0 and (o1 + (tsize(g, g.v_ty[g.i_a[i]]) as i64) <= o2 or o2 + (lsz as i64) <= o1):
+                ret false
+            end
+        end
+        if (k1 == VK_GLB and root_kind(g, r2) == 1) or (k2 == VK_GLB and root_kind(g, r1) == 1):
+            ret false
+        end
+    end
+    if r1 == r2 and r1 >= 0 and sa != a and d1 != d2 and g.i_a[i] >= 0:
+        ssz := tsize(g, g.v_ty[g.i_a[i]]) as i64
+        if d1 + ssz <= d2 or d2 + (lsz as i64) <= d1:
+            ret false
+        end
+    end
+    ret true
+end
+
+func mlp_avail(g &: Ng, b: int, a: int, ty: int, depth: int): int:
+    mut i := g.b_last[b]
+    until i >= 0:
+        op := g.i_op[i]
+        if op == OP_STORE and same_addr(g, g.i_b[i], a) and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0:
+            v := g.i_a[i]
+            if v >= 0 and g.v_ty[v] == ty:
+                ret v
+            end
+            ret 0 - 1
+        end
+        if op == OP_LOAD and same_addr(g, g.i_a[i], a) and g.i_ty[i] == ty and g.i_res[i] >= 0 and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0:
+            ret g.i_res[i]
+        end
+        if mlp_clobber(g, i, a, tsize(g, ty)):
+            ret 0 - 1
+        end
+        i = g.i_prev[i]
+    end
+    if depth < 4 and g.b_npred[b] == 1:
+        ret mlp_avail(g, g.b_pred[g.b_ps[b]], a, ty, depth + 1)
+    end
+    ret 0 - 1
+end
+
+func mlp_deref(g &: Ng, a: int, t: int): bool:
+    mut d := 0 as i64
+    r := addr_root(g, a, d)
+    if r >= 0 and g.v_kind[r] == VK_GLB:
+        sy := g.v_def[r]
+        off := d + g.v_i[r]
+        ret sy >= 0 and g.sy_def[sy] and off >= (0 as i64) and off + (tsize(g, t) as i64) <= (g.sy_size[sy] as i64)
+    end
+    ret lpro_safe(g, a, t)
+end
+
+func merge_load_phis(g &: Ng): bool:
+    build_dom(g)
+    repl_grow(g)
+    mut changed := false
+    mut vals := Vector {} as Vector<int>
+    each b in g.b_rpo:
+        np := g.b_npred[b]
+        if np < 2 or np > 4:
+            continue
+        end
+        mut loop_head := false
+        repeat np in q0:
+            if dominates(g, b, g.b_pred[g.b_ps[b] + q0]):
+                loop_head = true
+            end
+        end
+        if loop_head:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            op := g.i_op[i]
+            if op == OP_LOAD and g.i_res[i] >= 0 and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0 and not is_agg(g, g.i_ty[i]) and not is_vec(g, g.i_ty[i]):
+                a := g.i_a[i]
+                mut ok := a >= 0 and (g.v_kind[a] != VK_INS or dominates(g, g.i_blk[g.v_def[a]], b) and g.i_blk[g.v_def[a]] != b)
+                vals.clear()
+                mut miss := 0 - 1
+                if ok:
+                    repeat np in q:
+                        pb := g.b_pred[g.b_ps[b] + q]
+                        v := mlp_avail(g, pb, a, g.i_ty[i], 0)
+                        if v < 0:
+                            if miss >= 0 or g.off_lpre or g.b_last[pb] < 0 or (g.b_sn[pb] != 1 and not mlp_deref(g, a, g.i_ty[i])):
+                                ok = false
+                                break
+                            end
+                            miss = q
+                        end
+                        vals.push(v)
+                    end
+                end
+                if ok and miss >= 0:
+                    mb := g.b_pred[g.b_ps[b] + miss]
+                    nl := ins_new(g, OP_LOAD, g.i_ty[i])
+                    g.i_a[nl] = a
+                    g.i_c[nl] = g.i_c[i]
+                    g.i_f[nl] = g.i_f[i]
+                    nv := new_res(g, nl)
+                    ins_before(g, g.b_last[mb], nl)
+                    vals[miss] = nv
+                end
+                if ok:
+                    ph := ins_new(g, OP_PHI, g.i_ty[i])
+                    g.i_ps[ph] = g.pool.len()
+                    g.i_pcount[ph] = np
+                    repeat np in q2:
+                        g.pool.push(vals[q2])
+                        g.pool.push(g.b_pred[g.b_ps[b] + q2])
+                    end
+                    pv := new_res(g, ph)
+                    ins_before(g, g.b_first[b], ph)
+                    repl_grow(g)
+                    g.v_repl[g.i_res[i]] = pv
+                    ins_unlink(g, i)
+                    changed = true
+                end
+                i = nx
+                continue
+            end
+            if mlp_clobber(g, i, 0 - 1, 0) or op == OP_STORE:
+                break
+            end
+            i = nx
+        end
+    end
+    vals.free()
+    if changed:
+        remap_all(g)
+        simplify_phis(g)
+    end
+    ret changed
+end
+
+
+func llp_load_at_end(g &: Ng, s &: Llp, b: int): int:
+    if s.dry:
+        ret 1
+    end
+    nl := ins_new(g, OP_LOAD, s.ty)
+    g.i_a[nl] = s.addr
+    g.i_c[nl] = g.i_c[s.ld]
+    g.i_f[nl] = g.i_f[s.ld]
+    nv := new_res(g, nl)
+    ins_before(g, g.b_last[b], nl)
+    ret nv
+end
+
+func llp_avail(g &: Ng, s &: Llp, b: int): int:
+    if s.cache.has(b):
+        ret s.cache.get(b)
+    end
+    s.steps += 1
+    if s.fail or s.steps > 32 or not dominates(g, s.head, b) or g.b_last[b] < 0:
+        s.fail = true
+        ret 0 - 1
+    end
+    mut i := g.b_last[b]
+    until i >= 0:
+        op := g.i_op[i]
+        if op == OP_STORE and same_addr(g, g.i_b[i], s.addr) and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0:
+            v := g.i_a[i]
+            if v < 0 or g.v_ty[v] != s.ty:
+                s.fail = true
+                ret 0 - 1
+            end
+            s.cache.put(b, v)
+            ret v
+        end
+        if op == OP_LOAD and same_addr(g, g.i_a[i], s.addr) and g.i_ty[i] == s.ty and g.i_res[i] >= 0 and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0:
+            s.cache.put(b, g.i_res[i])
+            ret g.i_res[i]
+        end
+        if mlp_clobber(g, i, s.addr, tsize(g, s.ty)):
+            v2 := llp_load_at_end(g, s, b)
+            s.cache.put(b, v2)
+            ret v2
+        end
+        i = g.i_prev[i]
+    end
+    if b == s.head:
+        vh := s.dry ? 1 : s.phi
+        s.cache.put(b, vh)
+        ret vh
+    end
+    np := g.b_npred[b]
+    if np == 1:
+        v3 := llp_avail(g, s, g.b_pred[g.b_ps[b]])
+        s.cache.put(b, v3)
+        ret v3
+    end
+    if np == 0 or np > 8:
+        s.fail = true
+        ret 0 - 1
+    end
+    mut ph := 0 - 1
+    mut pv := 1
+    if not s.dry:
+        ph = ins_new(g, OP_PHI, s.ty)
+        pv = new_res(g, ph)
+        ins_before(g, g.b_first[b], ph)
+    end
+    s.cache.put(b, pv)
+    mut vals := Vector {} as Vector<int>
+    repeat np in q:
+        vals.push(llp_avail(g, s, g.b_pred[g.b_ps[b] + q]))
+        if s.fail:
+            vals.free()
+            ret 0 - 1
+        end
+    end
+    if not s.dry:
+        g.i_ps[ph] = g.pool.len()
+        g.i_pcount[ph] = np
+        repeat np in q2:
+            g.pool.push(vals[q2])
+            g.pool.push(g.b_pred[g.b_ps[b] + q2])
+        end
+    end
+    vals.free()
+    ret pv
+end
+
+func llp_find_load(g &: Ng, b: int): int:
+    mut i := g.b_first[b]
+    until i >= 0:
+        op := g.i_op[i]
+        if op == OP_LOAD and g.i_res[i] >= 0 and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0 and not is_agg(g, g.i_ty[i]) and not is_vec(g, g.i_ty[i]):
+            ret i
+        end
+        if op == OP_STORE or mlp_clobber(g, i, 0 - 1, 0):
+            ret 0 - 1
+        end
+        i = g.i_next[i]
+    end
+    ret 0 - 1
+end
+
+func llp_try(g &: Ng, h: int, ld: int, dry: bool, phi: int): bool:
+    mut s := Llp {}
+    s.head = h
+    s.addr = g.i_a[ld]
+    s.ty = g.i_ty[ld]
+    s.ld = ld
+    s.dry = dry
+    s.phi = phi
+    np := g.b_npred[h]
+    mut vals := Vector {} as Vector<int>
+    repeat np in q:
+        p := g.b_pred[g.b_ps[h] + q]
+        if dominates(g, h, p):
+            vals.push(llp_avail(g, s, p))
+        else:
+            vals.push(llp_load_at_end(g, s, p))
+        end
+        if s.fail:
+            break
+        end
+    end
+    ok := not s.fail
+    if ok and not dry:
+        g.i_ps[g.v_def[phi]] = g.pool.len()
+        g.i_pcount[g.v_def[phi]] = np
+        repeat np in q2:
+            g.pool.push(vals[q2])
+            g.pool.push(g.b_pred[g.b_ps[h] + q2])
+        end
+    end
+    vals.free()
+    s.cache.free()
+    ret ok
+end
+
+func loop_load_phis(g &: Ng): bool:
+    build_dom(g)
+    repl_grow(g)
+    mut changed := false
+    each h in g.b_rpo:
+        np := g.b_npred[h]
+        if np < 2 or np > 8:
+            continue
+        end
+        mut back := false
+        mut outs := 0
+        repeat np in q0:
+            if dominates(g, h, g.b_pred[g.b_ps[h] + q0]):
+                back = true
+            else:
+                outs += 1
+            end
+        end
+        if not back or outs == 0:
+            continue
+        end
+        mut ld := llp_find_load(g, h)
+        if ld < 0:
+            t := g.b_last[h]
+            if t >= 0 and g.i_op[t] == OP_CBR:
+                repeat 2 in side:
+                    sb := side == 0 ? g.i_b[t] : g.i_c[t]
+                    if ld < 0 and g.b_npred[sb] == 1 and dominates(g, h, sb):
+                        mut onlyh := true
+                        mut k := g.b_first[h]
+                        until k >= 0:
+                            if g.i_op[k] != OP_PHI and g.i_op[k] != OP_ICMP and g.i_op[k] != OP_CBR:
+                                onlyh = false
+                            end
+                            k = g.i_next[k]
+                        end
+                        if onlyh:
+                            ld = llp_find_load(g, sb)
+                        end
+                    end
+                end
+            end
+        end
+        if ld < 0:
+            continue
+        end
+        a := g.i_a[ld]
+        if a < 0 or (g.v_kind[a] == VK_INS and dominates(g, h, g.i_blk[g.v_def[a]])) or not mlp_deref(g, a, g.i_ty[ld]):
+            continue
+        end
+        if not llp_try(g, h, ld, true, 0 - 1):
+            continue
+        end
+        ph := ins_new(g, OP_PHI, g.i_ty[ld])
+        pv := new_res(g, ph)
+        ins_before(g, g.b_first[h], ph)
+        _ok := llp_try(g, h, ld, false, pv)
+        repl_grow(g)
+        g.v_repl[g.i_res[ld]] = pv
+        ins_unlink(g, ld)
+        changed = true
+    end
+    if changed:
+        remap_all(g)
+        simplify_phis(g)
+    end
+    ret changed
+end

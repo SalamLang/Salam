@@ -1,0 +1,246 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+@en "PCA"
+@fa "تحلیل مولفه اصلی"
+pub struct PCA:
+    @en "components"
+    @fa "مؤلفه‌ها"
+    pub components: Matrix = Matrix {}
+    @en "variances"
+    @fa "واریانس‌ها"
+    pub variances: Matrix = Matrix {}
+    @en "center"
+    @fa "میانگین"
+    pub center: Matrix = Matrix {}
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        this.components.free()
+        this.variances.free()
+        this.center.free()
+    end
+end
+
+func _column_mean(x &: Matrix, j: int): f64:
+    if x.rows == 0: ret 0.0 end
+    mut s := 0.0
+    repeat x.rows in i: s += x.at(i, j) end
+    ret s / (x.rows as f64)
+end
+
+func _column_sd(x &: Matrix, j: int, mu: f64, denom: f64): f64:
+    mut s := 0.0
+    repeat x.rows in i:
+        d := x.at(i, j) - mu
+        s += d * d
+    end
+    if denom <= 0.0: ret 0.0 end
+    ret math.Sqrt(s / denom)
+end
+
+func _denom(n: int, sample: bool): f64:
+    if sample: ret (n - 1) as f64 end
+    ret n as f64
+end
+
+func _scale_column(r &: Matrix, x &: Matrix, j: int, d: f64):
+    sd := _column_sd(x, j, _column_mean(x, j), d)
+    if sd == 0.0: ret end
+    repeat r.rows in i: r.mul_at(i, j, 1.0 / sd) end
+end
+
+func _corr_entry(c &: Matrix, i: int, j: int):
+    if i == j: ret end
+    di := math.Sqrt(math.Abs(c.at(i, i)))
+    dj := math.Sqrt(math.Abs(c.at(j, j)))
+    if di == 0.0 or dj == 0.0:
+        c.set(i, j, 0.0)
+        ret
+    end
+    c.set(i, j, c.at(i, j) / (di * dj))
+end
+
+func _unit_diagonal(c &: Matrix):
+    repeat c.min_dim() in i:
+        if c.at(i, i) != 0.0: c.set(i, i, 1.0) end
+    end
+end
+
+func _sv_to_var(s &: Matrix, n: int): Matrix:
+    mut r := Clone(s)
+    d := _denom(n, true)
+    repeat r.count() in k:
+        v := r.a.get(k)
+        mut out := 0.0
+        if d > 0.0: out = v * v / d end
+        r.a.set(k, out)
+    end
+    ret r
+end
+
+func _center_with(x &: Matrix, mu &: Matrix): Matrix:
+    mut r := Clone(x)
+    repeat x.rows in i:
+        repeat x.cols in j: r.add_at(i, j, 0.0 - mu.a.get(j)) end
+    end
+    ret r
+end
+
+@en "CenterColumns"
+@fa "مرکزی‌سازی ستون‌ها"
+pub func CenterColumns(x &: Matrix): Matrix:
+    mut r := Clone(x)
+    repeat x.cols in j:
+        mu := _column_mean(x, j)
+        repeat x.rows in i: r.add_at(i, j, 0.0 - mu) end
+    end
+    ret r
+end
+
+@en "ColumnMeans"
+@fa "میانگین ستونی"
+pub func ColumnMeans(x &: Matrix): Matrix:
+    mut r := Zeros(1, x.cols)
+    repeat x.cols in j: r.set(0, j, _column_mean(x, j)) end
+    ret r
+end
+
+@en "ColumnStds"
+@fa "انحراف معیار ستون‌ها"
+pub func ColumnStds(x &: Matrix, sample: bool): Matrix:
+    d := _denom(x.rows, sample)
+    mut r := Zeros(1, x.cols)
+    repeat x.cols in j:
+        r.set(0, j, _column_sd(x, j, _column_mean(x, j), d))
+    end
+    ret r
+end
+
+@en "Standardize"
+@fa "استانداردسازی"
+pub func Standardize(x &: Matrix, sample: bool): Matrix:
+    d := _denom(x.rows, sample)
+    mut r := CenterColumns(x)
+    repeat x.cols in j: _scale_column(r, x, j, d) end
+    ret r
+end
+
+@en "Covariance"
+@fa "کوواریانس"
+pub func Covariance(x &: Matrix, sample: bool): Matrix:
+    d := _denom(x.rows, sample)
+    if d <= 0.0: ret Zeros(x.cols, x.cols) end
+    mut c := CenterColumns(x)
+    mut g := Gram(c)
+    ScaleInPlace(g, 1.0 / d)
+    defer c.free()
+    ret g
+end
+
+@en "Correlation"
+@fa "همبستگی"
+pub func Correlation(x &: Matrix): Matrix:
+    mut c := Covariance(x, true)
+    repeat c.rows in i:
+        repeat c.cols in j: _corr_entry(c, i, j) end
+    end
+    _unit_diagonal(c)
+    ret c
+end
+
+@en "PCAFit"
+@fa "برازش مولفه اصلی"
+pub func PCAFit(x &: Matrix): PCA:
+    mut p := PCA {}
+    p.center = ColumnMeans(x)
+    mut cov := Covariance(x, true)
+    mut e := EigSym(cov)
+    p.components = Clone(e.vectors)
+    p.variances = Clone(e.values)
+    defer e.free()
+    defer cov.free()
+    ret p
+end
+
+@en "PCAFromSVD"
+@fa "مولفه اصلی از تجزیه تکین"
+pub func PCAFromSVD(x &: Matrix): PCA:
+    mut p := PCA {}
+    p.center = ColumnMeans(x)
+    mut c := CenterColumns(x)
+    mut f := SVDecompose(c)
+    p.components = Clone(f.v)
+    p.variances = _sv_to_var(f.s, x.rows)
+    defer f.free()
+    defer c.free()
+    ret p
+end
+@en "PCATransform"
+@fa "تبدیل مولفه اصلی"
+pub func PCATransform(p &: PCA, x &: Matrix, k: int): Matrix:
+    mut n := k
+    if n > p.components.cols: n = p.components.cols end
+    mut c := _center_with(x, p.center)
+    mut basis := SubMatrix(p.components, 0, 0, p.components.rows, n)
+    r := MatMul(c, basis)
+    defer c.free()
+    defer basis.free()
+    ret r
+end
+
+@en "ExplainedVariance"
+@fa "واریانس تبیین‌شده"
+pub func ExplainedVariance(p &: PCA): Matrix:
+    mut total := 0.0
+    repeat p.variances.count() in k: total += p.variances.a.get(k) end
+    mut r := Clone(p.variances)
+    if total <= 0.0: ret r end
+    ScaleInPlace(r, 1.0 / total)
+    ret r
+end
+
+@en "LinearRegression"
+@fa "رگرسیون خطی"
+pub func LinearRegression(x &: Matrix, y &: Matrix): Matrix:
+    if x.rows != y.rows or y.cols != 1: ret Zeros(0, 0) end
+    mut ones := Full(x.rows, 1, 1.0)
+    mut design := HStack(ones, x)
+    beta := LeastSquares(design, y)
+    defer ones.free()
+    defer design.free()
+    ret beta
+end
+
+@en "RSquared"
+@fa "آر دو"
+pub func RSquared(y &: Matrix, fitted &: Matrix): f64:
+    if y.count() != fitted.count(): ret 0.0 end
+    mu := Mean(y)
+    mut ss_res := 0.0
+    mut ss_tot := 0.0
+    repeat y.count() in k:
+        d := y.a.get(k) - fitted.a.get(k)
+        t := y.a.get(k) - mu
+        ss_res += d * d
+        ss_tot += t * t
+    end
+    if ss_tot == 0.0: ret 0.0 end
+    ret 1.0 - ss_res / ss_tot
+end

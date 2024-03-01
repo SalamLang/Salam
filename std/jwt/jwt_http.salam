@@ -1,0 +1,184 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package jwt
+
+import net.http
+
+@en "Guard"
+@fa "نگهبان"
+pub struct Guard:
+    @en "secret"
+    @fa "کلید امضا"
+    pub secret: str = ""
+    @en "opts"
+    @fa "گزینه‌ها"
+    pub opts: Options = Options {}
+    @en "cookie"
+    @fa "کوکی"
+    pub cookie: str = ""
+    @en "realm"
+    @fa "قلمرو"
+    pub realm: str = "api"
+end
+
+pure func _lower_ascii(c: int): int:
+    if c >= 65 and c <= 90: ret c + 32 end
+    ret c
+end
+
+func _strip_bearer(value: str): str:
+    n := value.len()
+    if n < 7: ret "" end
+    want := "bearer"
+    p := (value as void*) as i8*
+    w := (want as void*) as i8*
+    repeat 6 in i:
+        mut a := p[i] as int
+        if a < 0: a = a + 256 end
+        mut b := w[i] as int
+        if b < 0: b = b + 256 end
+        if _lower_ascii(a) != b: ret "" end
+    end
+    if value.substr(6, 1) != " ": ret "" end
+    mut start := 6
+    until start < n and value.substr(start, 1) == " ":
+        start += 1
+    end
+    if start >= n: ret "" end
+    ret value.substr(start, n - start)
+end
+
+func _json_error(code: str, reason: str): str:
+    ret `{"error":"`.concat(code).concat(`","reason":"`).concat(reason).concat(`"}`)
+end
+
+func _challenge(ctx: i64, g: Guard, token_was_offered: bool):
+    http.SetStatus(ctx, 401)
+    mut value := `Bearer realm="`.concat(g.realm).concat(`"`)
+    if token_was_offered:
+        value = value.concat(`, error="invalid_token"`)
+    end
+    http.SetHeader(ctx, "WWW-Authenticate", value)
+end
+
+@en "NewGuard"
+@fa "نگهبان جدید"
+pub func NewGuard(secret: str): Guard:
+    ret Guard { secret = secret, opts = DefaultOptions() }
+end
+
+@en "ParseBearer"
+@fa "تجزیه حامل"
+pub func ParseBearer(header_value: str): str:
+    ret _strip_bearer(header_value)
+end
+
+@en "BearerToken"
+@fa "توکن حامل"
+pub func BearerToken(ctx: i64): str:
+    ret _strip_bearer(http.Header(ctx, "Authorization"))
+end
+
+@en "TokenFrom"
+@fa "توکن از"
+pub func TokenFrom(ctx: i64, g: Guard): str:
+    bearer := BearerToken(ctx)
+    if bearer.len() > 0: ret bearer end
+    if g.cookie.len() > 0: ret http.CookieValue(ctx, g.cookie) end
+    ret ""
+end
+
+@en "Check"
+@fa "بررسی"
+pub func Check(ctx: i64, g: Guard, err &: int): Token:
+    raw := TokenFrom(ctx, g)
+    if raw.len() == 0:
+        err = JWT_ERR_MALFORMED
+        ret Token {}
+    end
+    ret Verify(raw, g.secret, g.opts, err)
+end
+
+@en "Unauthorized"
+@fa "غیرمجاز"
+pub func Unauthorized(ctx: i64, g: Guard, reason: str):
+    _challenge(ctx, g, true)
+    http.Json(ctx, _json_error("unauthorized", reason))
+end
+
+@en "MissingCredential"
+@fa "بدون گواهی"
+pub func MissingCredential(ctx: i64, g: Guard):
+    _challenge(ctx, g, false)
+    http.Json(ctx, _json_error("unauthorized", "missing bearer token"))
+end
+
+@en "Forbidden"
+@fa "ممنوع"
+pub func Forbidden(ctx: i64, reason: str):
+    http.SetStatus(ctx, 403)
+    http.Json(ctx, _json_error("forbidden", reason))
+end
+
+@en "Require"
+@fa "نیاز"
+pub func Require(ctx: i64, g: Guard, t &: Token): bool:
+    raw := TokenFrom(ctx, g)
+    if raw.len() == 0:
+        MissingCredential(ctx, g)
+        ret false
+    end
+    mut err := 0
+    verified := Verify(raw, g.secret, g.opts, err)
+    if err != JWT_OK:
+        Unauthorized(ctx, g, ErrorText(err))
+        ret false
+    end
+    t = verified
+    ret true
+end
+
+@en "RequireScope"
+@fa "نیاز به دامنه"
+pub func RequireScope(ctx: i64, g: Guard, scope: str, t &: Token): bool:
+    if not Require(ctx, g, t): ret false end
+    if not HasScope(t, scope):
+        Forbidden(ctx, "missing scope: ".concat(scope))
+        ret false
+    end
+    ret true
+end
+
+@en "RequireClaim"
+@fa "نیاز به ادعا"
+pub func RequireClaim(ctx: i64, g: Guard, key: str, value: str, t &: Token): bool:
+    if not Require(ctx, g, t): ret false end
+    if not ListHas(t, key, value):
+        Forbidden(ctx, "missing ".concat(key).concat(": ").concat(value))
+        ret false
+    end
+    ret true
+end
+
+@en "RequireSubject"
+@fa "نیاز به موضوع"
+pub func RequireSubject(ctx: i64, g: Guard, subject: str, t &: Token): bool:
+    if not Require(ctx, g, t): ret false end
+    if t.claims.sub != subject:
+        Forbidden(ctx, "not your resource")
+        ret false
+    end
+    ret true
+end

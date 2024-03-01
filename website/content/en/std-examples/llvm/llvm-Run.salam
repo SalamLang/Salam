@@ -1,0 +1,64 @@
+import llvm
+import io
+import os
+import mem
+
+func main:
+    println llvm.Available()
+    dir := os.TempDir()
+    ll := dir + "/salam_args_en.ll"
+    _ := io.WriteFile(ll, `define i32 @main(i32 %argc, ptr %argv) {
+entry:
+  %n = mul i32 %argc, 10
+  ret i32 %n
+}
+`)
+
+    parsed := llvm.ParseIR(ll)
+    println parsed.ok
+    checked := llvm.Verify(parsed.mod)
+    println checked.ok, llvm.VERIFY_RETURN_STATUS
+    llvm.SetTargetTriple(parsed.mod, llvm.DefaultTriple())
+    println llvm.TargetTripleOf(parsed.mod) == llvm.DefaultTriple()
+    llvm.FreeModule(parsed.mod)
+    llvm.FreeContext(parsed.ctx)
+
+    mut args := Vector {} as Vector<str>
+    args.push("a")
+    args.push("b")
+    println llvm.RunJITArgs(ll, args).rc
+
+    mut opts := llvm.OptionsDefault()
+    println opts.opt_level, opts.output_mode
+    opts.output_mode = llvm.OUT_JIT
+    opts.run_args = args
+    println llvm.Run(ll, opts).rc
+    opts.output_mode = llvm.OUT_OBJ
+    opts.output_file = dir + "/salam_args_en.o"
+    println llvm.Run(ll, opts).ok
+    opts.output_mode = llvm.OUT_ASM
+    opts.output_file = dir + "/salam_args_en.s"
+    println llvm.Run(ll, opts).ok
+    println llvm.OUT_IR, llvm.OUT_BITCODE, llvm.OUT_EXEC
+
+    println llvm.HostLinkTriple(), llvm.LldAvailable()
+    println llvm.CanLinkTriple("x86_64-unknown-linux-musl"), llvm.CanLinkTriple("x86_64-w64-windows-gnu"), llvm.CanLinkTriple("aarch64-apple-darwin")
+    println llvm.LLD_ELF, llvm.LLD_MINGW, llvm.LLD_COFF, llvm.LLD_MACHO, llvm.LLD_WASM
+    linked := llvm.LinkExternal(dir + "/salam_args_en.o", dir + "/salam_args_en", llvm.OptionsDefault())
+    println linked.ok, linked.err
+    if linked.ok:
+        println os.Run(dir + "/salam_args_en x y")
+    end
+
+    mut musl := llvm.OptionsDefault()
+    musl.target_triple = "x86_64-unknown-linux-musl"
+    println llvm.LinkAuto(dir + "/salam_args_en.o", dir + "/salam_args_en_musl", musl).ok
+    _ := llvm.LinkElf(dir + "/a.o", dir + "/a", musl)
+    _ := llvm.LinkMingw(dir + "/a.o", dir + "/a.exe", musl)
+    _ := llvm.LinkWasi(dir + "/a.o", dir + "/a.wasm", musl)
+    mut argv := mem.Allocate(64 as u64) as str*
+    argv[0] = "ld.lld"
+    argv[1] = "--version"
+    println llvm.Link(llvm.LLD_ELF, argv as void*, 2)
+    mem.Free(argv as void*)
+end

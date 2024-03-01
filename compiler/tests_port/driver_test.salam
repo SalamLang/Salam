@@ -1,0 +1,428 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import testing
+import os
+import io
+import str
+import mem
+
+include dr "../driver/driver.salam"
+include cg "../codegen/codegen.salam"
+include co "../sal_core.salam"
+
+func test_command_consts():
+    testing.AssertEqInt(dr.CMD_INSPECT, 0)
+    testing.AssertEqInt(dr.CMD_BUILD, 1)
+    testing.AssertEqInt(dr.CMD_OBJ, 2)
+    testing.AssertEqInt(dr.CMD_LLVM, 3)
+    testing.AssertEqInt(dr.CMD_JS, 4)
+    testing.AssertEqInt(dr.CMD_RUN, 5)
+    testing.AssertEqInt(dr.CMD_LAYOUT_BUILD, 6)
+    testing.AssertEqInt(dr.CMD_WEB, 7)
+    testing.AssertEqInt(dr.CMD_DEBUG, 8)
+    testing.AssertEqInt(dr.CMD_MEMCHECK, 9)
+    testing.AssertEqInt(dr.CMD_NEW, 10)
+    testing.AssertEqInt(dr.CMD_FMT, 11)
+    testing.AssertEqInt(dr.CMD_REPL, 12)
+    testing.AssertEqInt(dr.CMD_REPL_LAYOUT, 13)
+    testing.AssertEqInt(dr.CMD_HELP, 14)
+    testing.AssertEqInt(dr.CMD_VERSION, 15)
+    testing.AssertEqInt(dr.CMD_SERVE, 16)
+    testing.AssertEqInt(dr.CMD_UNKNOWN, 17)
+    testing.AssertEqInt(dr.CMD_UPDATE, 20)
+end
+
+func test_option_defaults():
+    opt := dr.NewOptions()
+    defer opt.inputs.free()
+    defer opt.run_args.free()
+    defer opt.defines.free()
+    testing.AssertEqInt(opt.command, dr.CMD_INSPECT)
+    testing.AssertEqStr(opt.input, "")
+    testing.AssertEqStr(opt.lang, "en")
+    testing.AssertEqInt(opt.log_level, 2)
+    testing.AssertFalse(opt.emit_tokens_xml)
+    testing.AssertFalse(opt.emit_ast_xml)
+    testing.AssertFalse(opt.emit_symbol_xml)
+    testing.AssertEqStr(opt.xml_out, "")
+    testing.AssertEqInt(opt.color, 0 - 1)
+    testing.AssertEqStr(opt.output, "")
+    testing.AssertEqStr(opt.cc, "tcc")
+    testing.AssertFalse(opt.keep_temp)
+    testing.AssertTrue(opt.safe)
+    testing.AssertFalse(opt.debug_info)
+    testing.AssertFalse(opt.asan)
+    testing.AssertFalse(opt.interp)
+    testing.AssertEqStr(opt.stdlib_path, "")
+    testing.AssertEqStr(opt.exe_path, "")
+    testing.AssertEqInt(opt.inputs.len(), 0)
+    testing.AssertEqInt(opt.run_args.len(), 0)
+    testing.AssertEqInt(opt.defines.len(), 0)
+    testing.AssertEqInt(opt.fmt_indent_width, 4)
+    testing.AssertFalse(opt.llvm_verify)
+    testing.AssertEqStr(opt.llvm_target, "")
+    testing.AssertFalse(opt.version_short)
+end
+
+func test_module_of():
+    testing.AssertEqStr(dr.ModuleOf("foo.salam"), "foo")
+    testing.AssertEqStr(dr.ModuleOf("a/b/foo.salam"), "foo")
+    testing.AssertEqStr(dr.ModuleOf("a\\b\\foo.salam"), "foo")
+    testing.AssertEqStr(dr.ModuleOf("foo"), "foo")
+    testing.AssertEqStr(dr.ModuleOf("dir/mem.salam"), "mem")
+end
+
+func test_dir_of():
+    testing.AssertEqStr(dr.DirOf("foo.salam"), "")
+    testing.AssertEqStr(dr.DirOf("a/b/foo.salam"), "a/b")
+    testing.AssertEqStr(dr.DirOf("a\\b\\foo.salam"), "a/b")
+    testing.AssertEqStr(dr.DirOf("/x/y/z.salam"), "/x/y")
+end
+
+func test_exe_name():
+    testing.AssertEqStr(dr.ExeSuffix("x86_64-w64-windows-gnu"), ".exe")
+    testing.AssertEqStr(dr.ExeSuffix("i686-w64-mingw32"), ".exe")
+    testing.AssertEqStr(dr.ExeSuffix("wasm32-wasi"), "")
+    testing.AssertEqStr(dr.ExeSuffix("aarch64-apple-darwin"), "")
+    testing.AssertEqStr(dr.ExeSuffix("x86_64-unknown-linux-gnu"), "")
+    testing.AssertEqStr(dr.ExeName("hello", "x86_64-w64-windows-gnu"), "hello.exe")
+    testing.AssertEqStr(dr.ExeName("hello.exe", "x86_64-w64-windows-gnu"), "hello.exe")
+    testing.AssertEqStr(dr.ExeName("hello.EXE", "x86_64-pc-windows-msvc"), "hello.EXE")
+    testing.AssertEqStr(dr.ExeName("out/prog", "i686-w64-mingw32"), "out/prog.exe")
+    testing.AssertEqStr(dr.ExeName("hello", "wasm32-wasi"), "hello")
+    testing.AssertEqStr(dr.ExeName("hello.exe", "aarch64-apple-darwin"), "hello.exe")
+    if SALAM_OS_WINDOWS:
+        testing.AssertEqStr(dr.ExeSuffix(""), ".exe")
+        testing.AssertEqStr(dr.ExeName("hello", ""), "hello.exe")
+    else:
+        testing.AssertEqStr(dr.ExeSuffix(""), "")
+        testing.AssertEqStr(dr.ExeName("hello", ""), "hello")
+    end
+end
+
+func test_resolve_color():
+    testing.AssertTrue(dr.ResolveColor(1))
+    testing.AssertFalse(dr.ResolveColor(0))
+    mut ok := false
+    if dr.ResolveColor(0 - 1):
+        ok = true
+    else:
+        ok = true
+    end
+    testing.AssertTrue(ok)
+end
+
+func test_build_missing_input():
+    mut opt := dr.NewOptions()
+    defer opt.inputs.free()
+    defer opt.run_args.free()
+    defer opt.defines.free()
+    opt.inputs.push("this_file_does_not_exist_12345.salam")
+    opt.output = "/tmp/salam_driver_test_missing_out"
+    rc := dr.Build(opt)
+    testing.AssertTrue(rc != 0)
+end
+
+func test_build_syncs_input_with_inputs():
+    mut opt := dr.NewOptions()
+    defer opt.inputs.free()
+    defer opt.run_args.free()
+    defer opt.defines.free()
+    missing := "this_file_does_not_exist_24680.salam"
+    opt.inputs.push(missing)
+    opt.output = "/tmp/salam_driver_test_sync_out"
+    rc := dr.Build(opt)
+    testing.AssertTrue(rc != 0)
+    testing.AssertEqStr(opt.input, missing)
+end
+
+func test_dir_entry_prefers_named_file():
+    dir := "compiler/tests_port/tmp_dr/entrypick"
+    os.MkdirAll(dir)
+    _w1 := io.WriteFile(dir + "/main.salam", "func main:\n    println 1\nend\n")
+    _w2 := io.WriteFile(dir + "/wasm_main.salam", "func main:\n    println 2\nend\n")
+    mut opt := dr.NewOptions()
+    defer opt.inputs.free()
+    defer opt.run_args.free()
+    defer opt.defines.free()
+    opt.inputs.push(dir)
+    opt.output = "compiler/tests_port/tmp_dr/entrypick_out"
+    opt.backend = "c"
+    rc := dr.Build(opt)
+    testing.AssertEqInt(rc, 0)
+    testing.AssertEqStr(opt.input, dir + "/main.salam")
+    _r1 := os.RemoveAll(dir)
+    _r2 := os.Remove("compiler/tests_port/tmp_dr/entrypick_out")
+end
+
+func test_dir_entry_still_ambiguous_without_a_named_file():
+    dir := "compiler/tests_port/tmp_dr/entrytie"
+    os.MkdirAll(dir)
+    _w1 := io.WriteFile(dir + "/one.salam", "func main:\n    println 1\nend\n")
+    _w2 := io.WriteFile(dir + "/two.salam", "func main:\n    println 2\nend\n")
+    mut opt := dr.NewOptions()
+    defer opt.inputs.free()
+    defer opt.run_args.free()
+    defer opt.defines.free()
+    opt.inputs.push(dir)
+    opt.output = "compiler/tests_port/tmp_dr/entrytie_out"
+    opt.backend = "c"
+    rc := dr.Build(opt)
+    testing.AssertTrue(rc != 0)
+    _r1 := os.RemoveAll(dir)
+end
+
+func test_exec_missing_input():
+    mut opt := dr.NewOptions()
+    defer opt.inputs.free()
+    defer opt.run_args.free()
+    defer opt.defines.free()
+    opt.input = "this_file_does_not_exist_67890.salam"
+    rc := dr.Exec(opt)
+    testing.AssertEqInt(rc, 2)
+end
+
+func test_backends_report_failure_on_no_input():
+    mut opt1 := dr.NewOptions()
+    defer opt1.inputs.free()
+    defer opt1.run_args.free()
+    defer opt1.defines.free()
+    testing.AssertTrue(dr.Llvm(opt1) != 0)
+
+    mut opt2 := dr.NewOptions()
+    defer opt2.inputs.free()
+    defer opt2.run_args.free()
+    defer opt2.defines.free()
+    testing.AssertTrue(dr.Js(opt2) != 0)
+
+    mut opt3 := dr.NewOptions()
+    defer opt3.inputs.free()
+    defer opt3.run_args.free()
+    defer opt3.defines.free()
+    testing.AssertTrue(dr.LayoutBuild(opt3) != 0)
+
+    mut opt4 := dr.NewOptions()
+    defer opt4.inputs.free()
+    defer opt4.run_args.free()
+    defer opt4.defines.free()
+    testing.AssertTrue(dr.Web(opt4) != 0)
+end
+
+func test_llvm_real_program():
+    path := "compiler/tests_port/tmp_dr/dt_llvm_hello.salam"
+    _w := io.WriteFile(path, "func main:\n    println 1 + 2\nend\n")
+    outp := "compiler/tests_port/tmp_dr/dt_llvm_hello.ll"
+    mut opt := dr.NewOptions()
+    defer opt.inputs.free()
+    defer opt.run_args.free()
+    defer opt.defines.free()
+    opt.inputs.push(path)
+    opt.input = path
+    opt.output = outp
+    rc := dr.Llvm(opt)
+    testing.AssertEqInt(rc, 0)
+    ll := io.ReadFile(outp)
+    testing.AssertContains(ll, "define")
+    testing.AssertContains(ll, "ModuleID")
+    _r1 := os.Remove(path)
+    _r2 := os.Remove(outp)
+end
+
+func test_js_real_program():
+    path := "compiler/tests_port/tmp_dr/dt_js_hello.salam"
+    _w := io.WriteFile(path, "func main:\n    println 1 + 2\nend\n")
+    outp := "compiler/tests_port/tmp_dr/dt_js_hello.js"
+    mut opt := dr.NewOptions()
+    defer opt.inputs.free()
+    defer opt.run_args.free()
+    defer opt.defines.free()
+    opt.inputs.push(path)
+    opt.input = path
+    opt.output = outp
+    rc := dr.Js(opt)
+    testing.AssertEqInt(rc, 0)
+    js := io.ReadFile(outp)
+    testing.AssertContains(js, "use strict")
+    testing.AssertContains(js, "DOMContentLoaded")
+    _r1 := os.Remove(path)
+    _r2 := os.Remove(outp)
+end
+
+func test_layout_real_program():
+    path := "compiler/tests_port/tmp_dr/dt_layout_hello.salam"
+    _w := io.WriteFile(
+        path, "page:\n    title = \"T\"\n    box:\n        heading: size = 1 content = \"Hi\" end\n    end\nend\n"
+    )
+    mut opt := dr.NewOptions()
+    defer opt.inputs.free()
+    defer opt.run_args.free()
+    defer opt.defines.free()
+    opt.inputs.push(path)
+    rc := dr.LayoutBuild(opt)
+    testing.AssertEqInt(rc, 0)
+    outp := "dt_layout_hello.html"
+    html := io.ReadFile(outp)
+    testing.AssertContains(html, "<h1")
+    testing.AssertContains(html, "<title>T</title>")
+    _r1 := os.Remove(path)
+    _r2 := os.Remove(outp)
+end
+
+func test_web_real_program():
+    pagep := "compiler/tests_port/tmp_dr/dt_web_page.salam"
+    scriptp := "compiler/tests_port/tmp_dr/dt_web_script.salam"
+    _w1 := io.WriteFile(scriptp, "func main:\n    println \"script ran\"\nend\n")
+    _w2 := io.WriteFile(
+        pagep, "page:\n    title = \"W\"\n    box:\n        heading: size = 1 content = \"Hi\" end\n    end\n    script: src = \"dt_web_script.salam\" end\nend\n"
+    )
+    mut opt := dr.NewOptions()
+    defer opt.inputs.free()
+    defer opt.run_args.free()
+    defer opt.defines.free()
+    opt.inputs.push(pagep)
+    rc := dr.Web(opt)
+    testing.AssertEqInt(rc, 0)
+    outp := "dt_web_page.html"
+    html := io.ReadFile(outp)
+    testing.AssertContains(html, "<h1")
+    testing.AssertContains(html, "script ran")
+    testing.AssertFalse(str.Contains(html, `src="dt_web_script.salam"`))
+    _r1 := os.Remove(pagep)
+    _r2 := os.Remove(scriptp)
+    _r3 := os.Remove(outp)
+end
+
+func test_llvm_build_sets_emit_mode():
+    mut opt := dr.NewOptions()
+    defer opt.inputs.free()
+    defer opt.run_args.free()
+    defer opt.defines.free()
+    opt.command = dr.CMD_OBJ
+    opt.llvm_target = "bogus-target-triple"
+    rc := dr.LlvmBuild(opt)
+    testing.AssertEqInt(opt.llvm_emit, 2)
+    testing.AssertTrue(rc != 0)
+end
+
+func test_debug_memcheck_guards():
+    mut opt1 := dr.NewOptions()
+    defer opt1.inputs.free()
+    defer opt1.run_args.free()
+    defer opt1.defines.free()
+    testing.AssertEqInt(dr.Debug(opt1), 2)
+
+    mut opt2 := dr.NewOptions()
+    defer opt2.inputs.free()
+    defer opt2.run_args.free()
+    defer opt2.defines.free()
+    testing.AssertEqInt(dr.Memcheck(opt2), 2)
+
+    mut opt3 := dr.NewOptions()
+    defer opt3.inputs.free()
+    defer opt3.run_args.free()
+    defer opt3.defines.free()
+    opt3.inputs.push("compiler/tests_port/tmp_dr/dt_llvm_hello.salam")
+    testing.AssertEqStr(opt3.cc, "tcc")
+    if os.Run("valgrind --version > /dev/null 2>&1") != 0:
+        testing.AssertEqInt(dr.Memcheck(opt3), 2)
+    end
+end
+
+func tar_put(buf: u8*, off: int, text: str):
+    mut i := 0
+    until i < str.Len(text):
+        buf[off + i] = co.ByteAt(text, i) as u8
+        i += 1
+    end
+end
+
+func build_tar(len_out &: int): void*:
+    total := 512 * 3
+    p := mem.AllocateZeroed(total as u64)
+    b := p as u8*
+    tar_put(b, 0, "probe.bin")
+    tar_put(b, 100, "0000644")
+    tar_put(b, 124, "00000000005")
+    b[156] = 48 as u8
+    tar_put(b, 257, "ustar")
+    mut c := 0
+    until c < 8:
+        b[148 + c] = 32 as u8
+        c += 1
+    end
+    b[512] = 65 as u8
+    b[513] = 0 as u8
+    b[514] = 66 as u8
+    b[515] = 0 as u8
+    b[516] = 67 as u8
+    len_out = total
+    ret p
+end
+
+func test_materialize_sysroot():
+    mut out := ""
+    ok := dr.MaterializeSysroot("dt_test_sysroot", null as void*, 0 as i64, out)
+    testing.AssertFalse(ok)
+
+    mut n := 0
+    p := build_tar(n)
+    mut dir := ""
+    ok2 := dr.MaterializeSysroot("dt_probe", p, n as i64, dir)
+    mem.Free(p)
+    testing.AssertTrue(ok2)
+
+    f := dir + "/probe.bin"
+    testing.AssertTrue(os.Exists(f))
+    testing.AssertEqInt64(os.FileSize(f), 5 as i64)
+    _rm := os.RemoveAll(dir)
+end
+
+func test_freestanding_kernel_triples_agree():
+    triples := [
+        "", "x86_64-pc-linux-gnu", "x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-unknown-uefi", "x86_64-unknown-salamos", "x86_64-unknown-salamos-kernel"
+    ]
+    repeat 7 in i:
+        t := triples[i]
+        testing.AssertEqBool(dr.IsFreestandingTarget(t), cg.IsFreestandingTarget(t))
+    end
+    testing.AssertFalse(cg.IsKernelTarget("x86_64-unknown-salamos"))
+    testing.AssertTrue(cg.IsKernelTarget("x86_64-unknown-salamos-kernel"))
+    testing.AssertFalse(cg.IsKernelTarget("x86_64-unknown-uefi"))
+end
+
+func main:
+    os.MkdirAll("compiler/tests_port/tmp_dr")
+    test_command_consts()
+    test_option_defaults()
+    test_module_of()
+    test_dir_of()
+    test_exe_name()
+    test_resolve_color()
+    test_build_missing_input()
+    test_build_syncs_input_with_inputs()
+    test_dir_entry_prefers_named_file()
+    test_dir_entry_still_ambiguous_without_a_named_file()
+    test_exec_missing_input()
+    test_backends_report_failure_on_no_input()
+    test_llvm_real_program()
+    test_js_real_program()
+    test_layout_real_program()
+    test_web_real_program()
+    test_llvm_build_sets_emit_mode()
+    test_debug_memcheck_guards()
+    test_materialize_sysroot()
+    test_freestanding_kernel_triples_agree()
+    ret testing.Summary()
+end

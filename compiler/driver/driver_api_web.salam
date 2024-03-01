@@ -1,0 +1,502 @@
+package driver
+
+import os
+import str
+import time
+import net.http
+import net.router
+import net.httpd
+
+include tok "../token.salam"
+include src "../source.salam"
+include lg "../logger.salam"
+include dg "../diag.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+include lx "../lexer/lexer.salam"
+include ps "../parser/parser.salam"
+include cc "../condcomp.salam"
+include sm "../semantic/semantic.salam"
+include co "../sal_core.salam"
+include lo "../sal_layout/sal_layout.salam"
+
+pub func Js(opt &: Dr): int:
+    lgr := lg.New(opt.log_level, resolve_color(opt.color))
+    mut module := ""
+    mut rc := 0
+    text := js_build_bundle(lgr, opt, opt.inputs, module, rc)
+    if str.Len(text) == 0:
+        ret rc != 0 ? rc : 1
+    end
+    mut output := opt.output
+    if str.Len(output) == 0:
+        output = module + ".js"
+    end
+    minify_ws := not opt.no_minify
+    if ends_with_ci(output, ".html") or ends_with_ci(output, ".htm"):
+        page := js_html_page(module, text, minify_ws)
+        if not write_file(lgr, output, page):
+            ret 2
+        end
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("built self-contained page: %s"), co.ArgStr(output))
+        )
+    else:
+        if not write_file(lgr, output, text):
+            ret 2
+        end
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("built JavaScript: %s"), co.ArgStr(output))
+        )
+    end
+    ret 0
+end
+
+pub func LayoutBuild(opt &: Dr): int:
+    lgr := lg.New(opt.log_level, resolve_color(opt.color))
+    pack := lp.Load(opt.lang)
+    if pack == lp.LP_NONE:
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
+        )
+        ret 2
+    end
+    mut resolved := Vector {} as Vector<str>
+    defer resolved.free()
+    if opt.inputs.len() == 0 or (opt.inputs.len() == 1 and os.IsDir(opt.inputs.get(0))):
+        mut rdir := "."
+        if opt.inputs.len() == 1:
+            rdir = opt.inputs.get(0)
+        end
+        resolved = resolve_dir_layout(lgr, pack, rdir, false)
+        if resolved.len() == 0:
+            ret 2
+        end
+        repeat resolved.len() in ri:
+            if ri == 0 and opt.inputs.len() > 0:
+                opt.inputs.set(0, resolved.get(0))
+            else:
+                opt.inputs.push(resolved.get(ri))
+            end
+        end
+    end
+    sm.SetStdlibRoot(opt.stdlib_path)
+    sm.LayoutSchemaInit(sm.GetStdlibRoot())
+
+    multi := opt.inputs.len() > 1
+    minify_ws := not opt.no_minify
+    mut diag := dg.NewDefault(opt.log_level, resolve_color(opt.color), lg.PH_CODEGEN)
+    mut rc := 0
+    mut nerr := 0
+    mut nwarn := 0
+
+    mut modules := Vector {} as Vector<str>
+    mut htmls := Vector {} as Vector<str>
+    mut csss := Vector {} as Vector<str>
+    mut jss := Vector {} as Vector<str>
+    mut heads := Vector {} as Vector<str>
+    mut titles := Vector {} as Vector<str>
+    mut langs := Vector {} as Vector<str>
+    mut dirs := Vector {} as Vector<str>
+    defer modules.free()
+    defer htmls.free()
+    defer csss.free()
+    defer jss.free()
+    defer heads.free()
+    defer titles.free()
+    defer langs.free()
+    defer dirs.free()
+
+    repeat opt.inputs.len() in ii:
+        path := opt.inputs.get(ii)
+        mut sf := src.New()
+        if not src.Load(path, sf):
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(path))
+            )
+            rc = 2
+            nerr += 1
+            continue
+        end
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "page build " + path)
+        modpack := lx.Detect(sf, pack)
+        mut toks := tok.StreamNew(path)
+        lok := lx.Run(lgr, modpack, sf, toks)
+        mut a := at.NewAst()
+        mut prog := 0
+        pok := ps.Run(lgr, toks, a, prog)
+        tok.StreamFree(toks)
+        table := cc.TableBuild("", opt.defines)
+        cc.TableSetPack(table, modpack)
+        ck := cc.PruneProgram(a, lgr, sf.path, table, prog)
+        if not lok or not pok or not ck:
+            rc = 1
+            nerr += 1
+            at.FreeAst(a)
+            continue
+        end
+
+        base_dir := dir_of(path)
+        eerr := lo.Expand(lgr, modpack, table, a, prog, base_dir)
+        if eerr > 0:
+            rc = 1
+            nerr += eerr
+        end
+        mut ev_names := lo.HoistEventHandlers(a, prog)
+        _vw := lo.PrepareViews(lgr, modpack, table, a, prog, path)
+        mut s := sm.New(lgr, path, lp.Code(modpack))
+        sm.SetCc(s, table)
+        sema_ok := sm.Run(s, a, prog)
+        nerr += dg.ErrorCount(s.diag)
+        nwarn += dg.WarningCount(s.diag)
+        if not sema_ok or eerr > 0:
+            rc = 1
+            ev_names.free()
+            sm.Free(s)
+            at.FreeAst(a)
+            continue
+        end
+
+        lb := lo.FindLayout(a, prog)
+        if lb == 0:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_WARN, co.Format1(i18.Tr("%s has no page block"), co.ArgStr(path))
+            )
+            ev_names.free()
+            sm.Free(s)
+            at.FreeAst(a)
+            continue
+        end
+        mut r := lo.Generate(lgr, diag, path, a, lb, minify_ws, lp.Code(modpack))
+        if ev_names.len() > 0:
+            ev_js := collect_event_js(lgr, a, s, prog, minify_ws, opt.safe, ev_names)
+            if str.Len(ev_js) > 0:
+                r.js = str.Len(r.js) > 0 ? r.js + (minify_ws ? " " : "\n") + ev_js : ev_js
+            end
+        end
+        ev_names.free()
+        modules.push(page_stem_of(path))
+        htmls.push(r.html)
+        csss.push(r.css)
+        jss.push(r.js)
+        heads.push(r.head)
+        titles.push(r.title)
+        langs.push(r.lang)
+        dirs.push(r.dir)
+        sm.Free(s)
+        at.FreeAst(a)
+    end
+
+    nerr += diag.errors
+    nwarn += diag.warnings
+    if nerr > 0:
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                i18.Tr("page build failed with %d error%s; no output written"), co.ArgInt(nerr as i64), co.ArgStr(plural_suffix(nerr))
+            )
+        )
+        dg.Free(diag)
+        ret rc != 0 ? rc : 1
+    end
+
+    mut mcss := ""
+    mut mjs := ""
+    repeat modules.len() in oi:
+        mod := modules.get(oi)
+        mut r := lo.NewResult()
+        r.html = htmls.get(oi)
+        r.css = csss.get(oi)
+        r.js = jss.get(oi)
+        r.head = heads.get(oi)
+        r.title = titles.get(oi)
+        r.lang = langs.get(oi)
+        r.dir = dirs.get(oi)
+        mut html_path := mod + ".html"
+        if not multi and str.Len(opt.output) > 0:
+            html_path = opt.output
+        end
+        if opt.inline_mode:
+            _w := write_file(lgr, html_path, lo.Document(r, true, "", "", minify_ws))
+        else multi:
+            _w := write_file(
+                lgr, html_path, lo.Document(r, false, "style.css", "script.js", minify_ws)
+            )
+            if str.Len(r.css) > 0:
+                mcss += r.css
+            end
+            if str.Len(r.js) > 0:
+                mjs += r.js
+            end
+        else:
+            mut css_href := ""
+            mut js_href := ""
+            if str.Len(r.css) > 0:
+                css_href = mod + ".css"
+            end
+            if str.Len(r.js) > 0:
+                js_href = mod + ".js"
+            end
+            _w := write_file(
+                lgr, html_path, lo.Document(r, false, css_href, js_href, minify_ws)
+            )
+            if str.Len(css_href) > 0:
+                _w1 := write_file(lgr, css_href, r.css)
+            end
+            if str.Len(js_href) > 0:
+                _w2 := write_file(lgr, js_href, r.js)
+            end
+        end
+    end
+    if multi and not opt.inline_mode:
+        if str.Len(mcss) > 0:
+            _w3 := write_file(lgr, "style.css", mcss)
+        end
+        if str.Len(mjs) > 0:
+            _w4 := write_file(lgr, "script.js", mjs)
+        end
+    end
+    lg.Log(
+        lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format4(
+            "page build complete (%d error%s, %d warning%s)", co.ArgInt(nerr as i64), co.ArgStr(plural_suffix(nerr)), co.ArgInt(nwarn as i64), co.ArgStr(plural_suffix(nwarn))
+        )
+    )
+    dg.Free(diag)
+    ret rc
+end
+
+pub func Web(opt &: Dr): int:
+    lgr := lg.New(opt.log_level, resolve_color(opt.color))
+    pack := lp.Load(opt.lang)
+    if pack == lp.LP_NONE:
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
+        )
+        ret 2
+    end
+    mut resolved := Vector {} as Vector<str>
+    defer resolved.free()
+    if opt.inputs.len() == 0 or (opt.inputs.len() == 1 and os.IsDir(opt.inputs.get(0))):
+        mut rdir := "."
+        if opt.inputs.len() == 1:
+            rdir = opt.inputs.get(0)
+        end
+        resolved = resolve_dir_layout(lgr, pack, rdir, true)
+        if resolved.len() != 1:
+            ret 2
+        end
+        if opt.inputs.len() == 0:
+            opt.inputs.push(resolved.get(0))
+        else:
+            opt.inputs.set(0, resolved.get(0))
+        end
+    end
+    path := opt.inputs.get(0)
+    sm.SetStdlibRoot(opt.stdlib_path)
+    sm.LayoutSchemaInit(sm.GetStdlibRoot())
+    mut sf := src.New()
+    if not src.Load(path, sf):
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(path))
+        )
+        ret 2
+    end
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "web build " + path)
+
+    modpack := lx.Detect(sf, pack)
+    mut toks := tok.StreamNew(path)
+    lok := lx.Run(lgr, modpack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    pok := ps.Run(lgr, toks, a, prog)
+    tok.StreamFree(toks)
+    table := cc.TableBuild("", opt.defines)
+    cc.TableSetPack(table, modpack)
+    base_dir := dir_of(path)
+    lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+    ck := cc.PruneProgram(a, lgr, sf.path, table, prog)
+    if not lok or not pok or not ck:
+        at.FreeAst(a)
+        ret 1
+    end
+
+    lb := lo.FindLayout(a, prog)
+    if lb == 0:
+        if str.Len(opt.output) == 0:
+            opt.output = page_stem_of(path) + ".html"
+        end
+        at.FreeAst(a)
+        ret Js(opt)
+    end
+
+    mut diag := dg.NewDefault(opt.log_level, resolve_color(opt.color), lg.PH_CODEGEN)
+    mut rc := 0
+    eerr := lo.Expand(lgr, modpack, table, a, prog, base_dir)
+    if eerr > 0:
+        rc = 1
+    end
+    mut ev_names := lo.HoistEventHandlers(a, prog)
+    _vw := lo.PrepareViews(lgr, modpack, table, a, prog, path)
+    mut s := sm.New(lgr, path, lp.Code(modpack))
+    sm.SetCc(s, table)
+    if not sm.RunCached(s, a, prog):
+        rc = 1
+    end
+
+    lo.LocalizeNames(a, lb)
+
+    mut scripts := Vector {} as Vector<str>
+    defer scripts.free()
+    collect_scripts(a, lb, scripts)
+
+    minify_ws := not opt.no_minify
+    mut bundles := ""
+    mut si := 0
+    until si < scripts.len() and rc == 0:
+        sp := join_path2(base_dir, scripts.get(si))
+        mut entry1 := Vector {} as Vector<str>
+        entry1.push(sp)
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("compiling page script %s"), co.ArgStr(sp))
+        )
+        mut brc := 0
+        mut mo := ""
+        bundle := js_build_bundle(lgr, opt, entry1, mo, brc)
+        entry1.free()
+        if str.Len(bundle) == 0 and brc != 0:
+            rc = brc
+            break
+        end
+        bundles += bundle
+        bundles += minify_ws ? " " : "\n"
+        si += 1
+    end
+
+    mut r := lo.NewResult()
+    if rc == 0:
+        r = lo.Generate(lgr, diag, path, a, lb, minify_ws, lp.Code(modpack))
+        if dg.HasErrors(diag):
+            rc = 1
+        end
+    end
+    if rc == 0 and ev_names.len() > 0:
+        ev_js := collect_event_js(lgr, a, s, prog, minify_ws, opt.safe, ev_names)
+        if str.Len(ev_js) > 0:
+            r.js = str.Len(r.js) > 0 ? r.js + (minify_ws ? " " : "\n") + ev_js : ev_js
+        end
+    end
+    ev_names.free()
+    if rc == 0 and str.Len(bundles) > 0:
+        if str.Len(r.js) > 0:
+            r.js = r.js + (minify_ws ? " " : "\n") + bundles
+        else:
+            r.js = bundles
+        end
+    end
+    if rc == 0:
+        mod := page_stem_of(path)
+        mut html_path := opt.output
+        if str.Len(html_path) == 0:
+            html_path = mod + ".html"
+        end
+        if opt.split:
+            stem := strip_ext(html_path)
+            css_path := path_ext2(stem, "css")
+            js_path := path_ext2(stem, "js")
+            mut css_href := ""
+            mut js_href := ""
+            if str.Len(r.css) > 0:
+                css_href = base_name(css_path)
+            end
+            if str.Len(r.js) > 0:
+                js_href = base_name(js_path)
+            end
+            if not write_file(lgr, html_path, lo.Document(r, false, css_href, js_href, minify_ws)):
+                rc = 2
+            end
+            if rc == 0 and str.Len(css_href) > 0 and not write_file(lgr, css_path, r.css):
+                rc = 2
+            end
+            if rc == 0 and str.Len(js_href) > 0 and not write_file(lgr, js_path, r.js):
+                rc = 2
+            end
+        else:
+            if not write_file(lgr, html_path, lo.Document(r, true, "", "", minify_ws)):
+                rc = 2
+            end
+        end
+        if rc == 0:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format3(
+                    "web build complete: %s (%d page script%s)", co.ArgStr(html_path), co.ArgInt(scripts.len() as i64), co.ArgStr(plural_suffix(scripts.len()))
+                )
+            )
+        end
+    end
+    sm.Free(s)
+    at.FreeAst(a)
+    dg.Free(diag)
+    ret rc
+end
+
+pub func Serve(opt &: Dr): int:
+    if str.Len(opt.serve_config) > 0:
+        if opt.serve_test:
+            ret httpd.Check(opt.serve_config)
+        end
+        if not httpd.LoadFile(opt.serve_config):
+            repeat httpd.ProblemCount() in i:
+                io.EPrintln(httpd.ProblemAt(i))
+            end
+            ret 2
+        end
+        println "salam: serving " + co.I64Toa(httpd.SiteCount() as i64) + " site(s) from " + opt.serve_config + " (Ctrl+C to stop)"
+        ret httpd.Run()
+    end
+    if opt.serve_test:
+        io.EPrintln(i18.Tr("salam: --test needs --config=FILE"))
+        ret 2
+    end
+    mut dir := opt.input
+    if str.Len(dir) == 0:
+        dir = "."
+    end
+    if not os.IsDir(dir):
+        lgr := lg.New(opt.log_level, resolve_color(opt.color))
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                i18.Tr("salam: serve directory '%s' does not exist"), co.ArgStr(dir)
+            )
+        )
+        ret 2
+    end
+    mut host := opt.serve_host
+    if str.Len(host) == 0:
+        host = "127.0.0.1"
+    end
+    mut port := opt.serve_port
+    if port <= 0:
+        port = 8000
+    end
+
+    mut r := router.NewRouter()
+    router.EnableListing(r)
+    router.Static(r, "/", dir)
+    mut s := http.NewServer(port)
+    http.SetHost(s, host)
+    http.EnableAccessLog(s)
+    http.Use(s, r)
+
+    addr := host + ":" + co.I64Toa(port as i64)
+    if not http.RunBackground(s):
+        lgr := lg.New(opt.log_level, resolve_color(opt.color))
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("salam: cannot listen on %s"), co.ArgStr(addr))
+        )
+        ret 2
+    end
+    println "salam: serving " + dir + " at http://" + addr + "/ (Ctrl+C to stop)"
+    until true:
+        time.Sleep(60000)
+    end
+end

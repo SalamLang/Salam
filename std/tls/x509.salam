@@ -1,0 +1,313 @@
+package tls
+
+const PK_UNKNOWN := 0
+const PK_RSA := 1
+const PK_EC_P256 := 2
+const PK_EC_P384 := 3
+
+const SIG_UNKNOWN := 0
+const SIG_RSA_PKCS1_SHA256 := 1
+const SIG_RSA_PKCS1_SHA384 := 2
+const SIG_RSA_PKCS1_SHA512 := 3
+const SIG_RSA_PSS_SHA256 := 4
+const SIG_RSA_PSS_SHA384 := 5
+const SIG_ECDSA_SHA256 := 6
+const SIG_ECDSA_SHA384 := 7
+
+const OID_RSA_ENCRYPTION := "2a864886f70d010101"
+const OID_RSASSA_PSS := "2a864886f70d01010a"
+const OID_SHA256_RSA := "2a864886f70d01010b"
+const OID_SHA384_RSA := "2a864886f70d01010c"
+const OID_SHA512_RSA := "2a864886f70d01010d"
+const OID_EC_PUBLICKEY := "2a8648ce3d0201"
+const OID_PRIME256V1 := "2a8648ce3d030107"
+const OID_SECP384R1 := "2b81040022"
+const OID_ECDSA_SHA256 := "2a8648ce3d040302"
+const OID_ECDSA_SHA384 := "2a8648ce3d040303"
+const OID_SHA256 := "608648016503040201"
+const OID_SHA384 := "608648016503040202"
+
+struct Cert:
+    pub tbs: Reader = Reader {}
+    pub serial: Reader = Reader {}
+    pub issuer: Reader = Reader {}
+    pub subject: Reader = Reader {}
+    pub subject_cn: str = ""
+
+    pub pk_alg: int = 0
+    pub rsa_n: Reader = Reader {}
+    pub rsa_e: Reader = Reader {}
+    pub ec_point: Reader = Reader {}
+
+    pub sig_alg: int = 0
+    pub sig: Reader = Reader {}
+
+    pub not_before: i64 = 0
+    pub not_after: i64 = 0
+
+    pub has_basic_constraints: bool = false
+    pub is_ca: bool = false
+    pub has_path_len: bool = false
+    pub path_len: int = 0
+    pub has_key_usage: bool = false
+    pub key_usage: int = 0
+    pub has_eku: bool = false
+    pub eku_server_auth: bool = false
+    pub san: Reader = Reader {}
+    pub has_san: bool = false
+
+    pub ok: bool = false
+end
+
+func _sig_alg_from_oid(o: Reader, params: Reader): int:
+    if _oid_is(o, OID_SHA256_RSA):
+        ret SIG_RSA_PKCS1_SHA256
+    end
+    if _oid_is(o, OID_SHA384_RSA):
+        ret SIG_RSA_PKCS1_SHA384
+    end
+    if _oid_is(o, OID_SHA512_RSA):
+        ret SIG_RSA_PKCS1_SHA512
+    end
+    if _oid_is(o, OID_ECDSA_SHA256):
+        ret SIG_ECDSA_SHA256
+    end
+    if _oid_is(o, OID_ECDSA_SHA384):
+        ret SIG_ECDSA_SHA384
+    end
+    if _oid_is(o, OID_RSASSA_PSS):
+        ret _pss_params_digest(params)
+    end
+    ret SIG_UNKNOWN
+end
+
+func _pss_params_digest(params: Reader): int:
+    mut p := params
+    mut s := _der_seq(p)
+    if p.bad:
+        ret SIG_UNKNOWN
+    end
+    if not _der_is(s, ASN1_CTX0):
+        ret SIG_UNKNOWN
+    end
+    t := _der_tag(s, ASN1_CTX0)
+    if not t.ok:
+        ret SIG_UNKNOWN
+    end
+    mut inner := t.body
+    mut hp := Reader {}
+    o := _der_algid(inner, hp)
+    if inner.bad:
+        ret SIG_UNKNOWN
+    end
+    if _oid_is(o, OID_SHA256):
+        ret SIG_RSA_PSS_SHA256
+    end
+    if _oid_is(o, OID_SHA384):
+        ret SIG_RSA_PSS_SHA384
+    end
+    ret SIG_UNKNOWN
+end
+
+func _sig_hash(alg: int): int:
+    if alg == SIG_RSA_PKCS1_SHA384 or alg == SIG_RSA_PSS_SHA384 or alg == SIG_ECDSA_SHA384:
+        ret HASH_SHA384
+    end
+    if alg == SIG_RSA_PKCS1_SHA512:
+        ret HASH_SHA512
+    end
+    ret HASH_SHA256
+end
+
+func _parse_spki(spki: Reader, c &: Cert): bool:
+    mut s := spki
+    mut inner := _der_seq(s)
+    if s.bad:
+        ret false
+    end
+    mut params := Reader {}
+    o := _der_algid(inner, params)
+    if inner.bad:
+        ret false
+    end
+    key := _der_bitstring(inner, false)
+    if inner.bad:
+        ret false
+    end
+    if _oid_is(o, OID_RSA_ENCRYPTION):
+        mut k := key
+        mut ks := _der_seq(k)
+        if k.bad:
+            ret false
+        end
+        c.rsa_n = _der_uint(ks)
+        c.rsa_e = _der_uint(ks)
+        if ks.bad or _rdleft(ks) != 0:
+            ret false
+        end
+        if c.rsa_n.len < 128:
+            ret false
+        end
+        c.pk_alg = PK_RSA
+        ret true
+    end
+    if _oid_is(o, OID_EC_PUBLICKEY):
+        mut p := params
+        curve := _der_oid(p)
+        if p.bad:
+            ret false
+        end
+        if _oid_is(curve, OID_PRIME256V1):
+            if key.len != 65 or _rdat(key, 0) != 0x04:
+                ret false
+            end
+            c.ec_point = key
+            c.pk_alg = PK_EC_P256
+            ret true
+        end
+        if _oid_is(curve, OID_SECP384R1):
+            if key.len != 97 or _rdat(key, 0) != 0x04:
+                ret false
+            end
+            c.ec_point = key
+            c.pk_alg = PK_EC_P384
+            ret true
+        end
+        ret false
+    end
+    ret false
+end
+
+func _cert_parse(p: void*, n: int): Cert:
+    mut c := Cert {}
+    mut top := _newreader(p, n)
+    mut outer := _der_seq(top)
+    if top.bad:
+        ret c
+    end
+    if _rdleft(top) != 0:
+        ret c
+    end
+
+    tbs := _der_tag(outer, ASN1_SEQUENCE)
+    if not tbs.ok:
+        ret c
+    end
+    c.tbs = tbs.full
+    mut t := tbs.body
+
+    mut version := 1
+    if _der_is(t, ASN1_CTX0):
+        vt := _der_tag(t, ASN1_CTX0)
+        if not vt.ok:
+            ret c
+        end
+        mut vb := vt.body
+        vi := _der_uint(vb)
+        if vb.bad or vi.len != 1:
+            ret c
+        end
+        version = _rdat(vi, 0) + 1
+    end
+    if version != 3:
+        ret c
+    end
+
+    c.serial = _der_uint(t)
+    if t.bad:
+        ret c
+    end
+
+    ia := _der_tag(t, ASN1_SEQUENCE)
+    if not ia.ok:
+        ret c
+    end
+    mut ib := ia.body
+    inner_sig_oid := _der_oid(ib)
+    if ib.bad:
+        ret c
+    end
+    inner_params := _rdrest(ib)
+    inner_alg := _sig_alg_from_oid(inner_sig_oid, inner_params)
+
+    issuer := _der_tag(t, ASN1_SEQUENCE)
+    if not issuer.ok:
+        ret c
+    end
+    c.issuer = issuer.full
+
+    mut validity := _der_seq(t)
+    if t.bad:
+        ret c
+    end
+    nb := _der(validity)
+    na := _der(validity)
+    if not nb.ok or not na.ok or _rdleft(validity) != 0:
+        ret c
+    end
+    c.not_before = _parse_time(nb)
+    c.not_after = _parse_time(na)
+    if c.not_before == 0 or c.not_after == 0:
+        ret c
+    end
+
+    subject := _der_tag(t, ASN1_SEQUENCE)
+    if not subject.ok:
+        ret c
+    end
+    c.subject = subject.full
+    c.subject_cn = _name_cn(subject.full)
+
+    spki := _der_tag(t, ASN1_SEQUENCE)
+    if not spki.ok:
+        ret c
+    end
+    if not _parse_spki(spki.full, c):
+        ret c
+    end
+
+    if _der_is(t, ASN1_CTX1):
+        _der_skip(t)
+    end
+    if _der_is(t, ASN1_CTX2):
+        _der_skip(t)
+    end
+    if _der_is(t, ASN1_CTX3):
+        et := _der_tag(t, ASN1_CTX3)
+        if not et.ok:
+            ret c
+        end
+        if not _parse_extensions(et.body, c):
+            ret c
+        end
+    end
+    if t.bad or _rdleft(t) != 0:
+        ret c
+    end
+
+    oa := _der_tag(outer, ASN1_SEQUENCE)
+    if not oa.ok:
+        ret c
+    end
+    mut ob := oa.body
+    outer_oid := _der_oid(ob)
+    if ob.bad:
+        ret c
+    end
+    outer_params := _rdrest(ob)
+    c.sig_alg = _sig_alg_from_oid(outer_oid, outer_params)
+    if inner_alg != c.sig_alg:
+        ret c
+    end
+    if not _cteqrd(ia.full, oa.full):
+        ret c
+    end
+
+    c.sig = _der_bitstring(outer, false)
+    if outer.bad or _rdleft(outer) != 0:
+        ret c
+    end
+
+    c.ok = true
+    ret c
+end

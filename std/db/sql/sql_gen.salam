@@ -1,0 +1,548 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package sql
+
+import str
+import mem
+
+@en "Q_ONE"
+@fa "پرسمان یکی"
+pub const Q_ONE := 0
+
+@en "Q_MANY"
+@fa "پرسمان چندی"
+pub const Q_MANY := 1
+
+@en "Q_EXEC"
+@fa "پرسمان اجرا"
+pub const Q_EXEC := 2
+
+@en "Q_EXECROWS"
+@fa "پرسمان شمار"
+pub const Q_EXECROWS := 3
+
+k_salam_words := [
+    "and", "as", "break", "component", "const", "continue", "deprecated", "defer", "dyn", "each",
+    "else", "end", "enum", "eq", "export", "extern", "false", "func", "gt", "gte", "if", "impl",
+    "import", "include", "inline", "input", "interface", "layout", "link", "lt", "lte", "match",
+    "mut", "neq", "noinline", "noret", "not", "null", "on", "or", "package", "print", "println",
+    "pub", "pure", "repeat", "ret", "static", "struct", "switch", "this", "to", "true", "type",
+    "until", "use", "by"
+]
+
+@en "Query"
+@fa "پرسمان"
+pub struct Query:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "kind"
+    @fa "نوع"
+    pub kind: int = 0
+    @en "text"
+    @fa "متن"
+    pub text: str = ""
+    @en "line"
+    @fa "خط"
+    pub line: int = 1
+end
+
+func is_salam_word(s: str): bool:
+    mut i := 0
+    until i < len(k_salam_words):
+        if str.Equals(s, k_salam_words[i]):
+            ret true
+        end
+        i = i + 1
+    end
+    ret false
+end
+
+func ident_ok(s: str): bool:
+    n := s.len()
+    if n == 0:
+        ret false
+    end
+    c := s[0]
+    if not ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_'):
+        ret false
+    end
+    mut i := 1
+    until i < n:
+        d := s[i]
+        if not ((d >= 'a' and d <= 'z') or (d >= 'A' and d <= 'Z') or (d >= '0' and d <= '9') or d == '_'):
+            ret false
+        end
+        i = i + 1
+    end
+    ret not is_salam_word(s)
+end
+
+func safe_name(raw: str, fallback: str, nth: int): str:
+    if ident_ok(raw):
+        ret str.Clone(raw)
+    end
+    ret fallback + str.FromInt(nth as i64)
+end
+
+func unique_name(taken &: Vector<str>, want: str): str:
+    mut n := 1
+    mut candidate := str.Clone(want)
+    until true:
+        mut hit := false
+        mut i := 0
+        until i < taken.len():
+            if str.Equals(taken.get(i), candidate):
+                hit = true
+                break
+            end
+            i = i + 1
+        end
+        if not hit:
+            taken.push(candidate)
+            ret candidate
+        end
+        mem.Free(candidate as void*)
+        n = n + 1
+        candidate = want + "_" + str.FromInt(n as i64)
+    end
+end
+
+func salam_string(s: str): str:
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "\"")
+    mut i := 0
+    until i < s.len():
+        c := s[i]
+        if c == '"':
+            str.BufAppend(sb, "\\\"")
+        else c == '\\':
+            str.BufAppend(sb, "\\\\")
+        else c == '\n':
+            str.BufAppend(sb, "\\n")
+        else c == '\r':
+            str.BufAppend(sb, "\\r")
+        else c == '\t':
+            str.BufAppend(sb, "\\t")
+        else:
+            str.BufAppendChar(sb, c as int)
+        end
+        i = i + 1
+    end
+    str.BufAppend(sb, "\"")
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func plain_type(kind: int): str:
+    if kind == TYPE_INT:
+        ret "i64"
+    end
+    if kind == TYPE_FLOAT:
+        ret "f64"
+    end
+    if kind == TYPE_BOOL:
+        ret "bool"
+    end
+    ret "str"
+end
+
+func zero_of(kind: int): str:
+    if kind == TYPE_INT:
+        ret "0 as i64"
+    end
+    if kind == TYPE_FLOAT:
+        ret "0.0"
+    end
+    if kind == TYPE_BOOL:
+        ret "false"
+    end
+    ret "\"\""
+end
+
+func reader_of(kind: int): str:
+    if kind == TYPE_INT:
+        ret "Int64"
+    end
+    if kind == TYPE_FLOAT:
+        ret "Float"
+    end
+    ret "Text"
+end
+
+func adder_of(kind: int): str:
+    if kind == TYPE_INT:
+        ret "AddInt"
+    end
+    if kind == TYPE_FLOAT:
+        ret "AddFloat"
+    end
+    if kind == TYPE_BOOL:
+        ret "AddBool"
+    end
+    ret "AddText"
+end
+
+func kind_word(k: str): int:
+    if str.Equals(k, "one"):
+        ret Q_ONE
+    end
+    if str.Equals(k, "many"):
+        ret Q_MANY
+    end
+    if str.Equals(k, "exec"):
+        ret Q_EXEC
+    end
+    if str.Equals(k, "execrows"):
+        ret Q_EXECROWS
+    end
+    ret 0 - 1
+end
+
+func trim_semi(s: str): str:
+    t := str.Trim(s)
+    n := t.len()
+    if n > 0 and t[n - 1] == ';':
+        out := t.substr(0, n - 1)
+        mem.Free(t as void*)
+        ret str.Trim(out)
+    end
+    ret t
+end
+
+func merge_report(err &: Report, from: Report, name: str, base: int):
+    mut i := 0
+    until i < from.items.len():
+        d := from.items.get(i)
+        add_diag(
+            err, d.severity, d.code, name + ": " + d.message, d.help, base + d.line, d.col, d.offset,
+            d.length
+        )
+        i = i + 1
+    end
+end
+
+func read_expr(kind: int, col: int): str:
+    at := "(" + str.FromInt(col as i64) + ")"
+    if kind == TYPE_BOOL:
+        ret "r.Int64" + at + " != 0"
+    end
+    ret "r." + reader_of(kind) + at
+end
+
+func emit_reads(sb &: str.StringBuilder, a: Analysis, names: Vector<str>, pad: str):
+    mut i := 0
+    until i < a.results.len():
+        c := a.results.get(i)
+        field := names.get(i)
+        base := plain_type(c.kind)
+        if c.nullable:
+            str.BufAppend(sb, pad + "if r.IsNull(" + str.FromInt(i as i64) + "):\n")
+            str.BufAppend(sb, pad + "    out." + field + " = option.None() as option.Option<" + base + ">\n")
+            str.BufAppend(sb, pad + "else:\n")
+            str.BufAppend(sb, pad + "    out." + field + " = option.Some(" + read_expr(c.kind, i) + ")\n")
+            str.BufAppend(sb, pad + "end\n")
+        else:
+            str.BufAppend(sb, pad + "out." + field + " = " + read_expr(c.kind, i) + "\n")
+        end
+        i = i + 1
+    end
+end
+
+func emit_args(sb &: str.StringBuilder, a: Analysis, names: Vector<str>):
+    if a.params.len() == 0:
+        str.BufAppend(sb, "    a := sql.NewArgs()\n")
+        ret
+    end
+    str.BufAppend(sb, "    mut a := sql.NewArgs()\n")
+    mut i := 0
+    until i < a.params.len():
+        p := a.params.get(i)
+        str.BufAppend(sb, "    sql." + adder_of(p.kind) + "(a, " + names.get(i) + ")\n")
+        i = i + 1
+    end
+end
+
+func param_list(a: Analysis, names: Vector<str>): str:
+    mut sb := str.NewBuilder()
+    mut i := 0
+    until i < a.params.len():
+        str.BufAppend(sb, ", " + names.get(i) + ": " + plain_type(a.params.get(i).kind))
+        i = i + 1
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func name_set(a: Analysis, want_results: bool, fallback: str): Vector<str>:
+    mut taken := Vector {} as Vector<str>
+    mut out := Vector {} as Vector<str>
+    n := want_results ? a.results.len() : a.params.len()
+    mut i := 0
+    until i < n:
+        mut raw := ""
+        if want_results:
+            raw = a.results.get(i).name
+        else:
+            raw = a.params.get(i).column
+        end
+        safe := safe_name(raw, fallback, i + 1)
+        out.push(unique_name(taken, safe))
+        mem.Free(safe as void*)
+        i = i + 1
+    end
+    taken.free()
+    ret out
+end
+
+func free_names(v &: Vector<str>):
+    mut i := 0
+    until i < v.len():
+        mem.Free(v.get(i) as void*)
+        i = i + 1
+    end
+    v.free()
+end
+
+@en "ParseQueries"
+@fa "خواندن پرسمان ها"
+pub func ParseQueries(src: str, err &: Report): Vector<Query>:
+    mut out := Vector {} as Vector<Query>
+    mut lines := str.Split(src, "\n")
+    mut name := ""
+    mut kind := 0 - 1
+    mut at := 0
+    mut body := str.NewBuilder()
+    mut have := false
+    mut i := 0
+    until i < lines.len():
+        raw := lines.get(i)
+        line := str.Trim(raw)
+        if str.StartsWith(line, "-- name:") or str.StartsWith(line, "--name:"):
+            if have:
+                text := trim_semi(str.BufStr(body))
+                out.push(Query { name = name, kind = kind, text = text, line = at })
+                str.BufFree(body)
+                body = str.NewBuilder()
+            end
+            rest := str.Trim(str.Substr(line, str.IndexOf(line, ":") + 1, line.len()))
+            mut parts := str.Fields(rest)
+            if parts.len() < 2:
+                add_diag(
+                    err, ERROR, "SQL500", "a query header needs a name and a kind",
+                    "write '-- name: GetUser :one'", i + 1, 1, 0, 1
+                )
+            else:
+                nm := parts.get(0)
+                kw := parts.get(1)
+                k := kind_word(str.TrimPrefix(kw, ":"))
+                if not ident_ok(nm):
+                    add_diag(
+                        err, ERROR, "SQL501", "'" + nm + "' cannot be a Salam function name",
+                        "use letters, digits and underscore, and not a keyword", i + 1, 1, 0, 1
+                    )
+                end
+                if k < 0:
+                    add_diag(
+                        err, ERROR, "SQL502", "'" + kw + "' is not a query kind",
+                        "one of :one, :many, :exec or :execrows", i + 1, 1, 0, 1
+                    )
+                end
+                name = str.Clone(nm)
+                kind = k
+                at = i + 1
+                have = true
+            end
+            parts.free()
+            mem.Free(rest as void*)
+            mem.Free(line as void*)
+            i = i + 1
+            continue
+        end
+        if have and not str.StartsWith(line, "--"):
+            str.BufAppend(body, raw)
+            str.BufAppend(body, "\n")
+        end
+        mem.Free(line as void*)
+        i = i + 1
+    end
+    if have:
+        text := trim_semi(str.BufStr(body))
+        out.push(Query { name = name, kind = kind, text = text, line = at })
+    end
+    str.BufFree(body)
+    lines.free()
+    ret out
+end
+
+@en "FreeQueries"
+@fa "آزادسازی پرسمان ها"
+pub func FreeQueries(v &: Vector<Query>):
+    mut i := 0
+    until i < v.len():
+        q := v.get(i)
+        mem.Free(q.name as void*)
+        mem.Free(q.text as void*)
+        i = i + 1
+    end
+    v.free()
+end
+
+@en "Generate"
+@fa "تولید کد"
+pub func Generate(pkg: str, queries: Vector<Query>, c: Catalog, err &: Report): str:
+    mut analyses := Vector {} as Vector<Analysis>
+    mut needs_option := false
+    mut i := 0
+    until i < queries.len():
+        q := queries.get(i)
+        mut a := Analyze(q.text, c)
+        merge_report(err, a.report, q.name, q.line)
+        mut j := 0
+        until j < a.results.len():
+            if a.results.get(j).nullable:
+                needs_option = true
+            end
+            j = j + 1
+        end
+        analyses.push(a)
+        i = i + 1
+    end
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "package " + pkg + "\n\n")
+    str.BufAppend(sb, "import db\n")
+    str.BufAppend(sb, "import db.sql\n")
+    str.BufAppend(sb, "import mem\n")
+    if needs_option:
+        str.BufAppend(sb, "import option\n")
+    end
+    str.BufAppend(sb, "\n")
+    mut k := 0
+    until k < queries.len():
+        q := queries.get(k)
+        a := analyses.get(k)
+        if q.kind == Q_ONE or q.kind == Q_MANY:
+            mut fields := name_set(a, true, "col")
+            str.BufAppend(sb, "struct " + q.name + "Row:\n")
+            mut f := 0
+            until f < a.results.len():
+                rc := a.results.get(f)
+                base := plain_type(rc.kind)
+                if rc.nullable:
+                    str.BufAppend(
+                        sb, "    pub " + fields.get(f) + ": option.Option<" + base + "> = option.None() as option.Option<" + base + ">\n"
+                    )
+                else:
+                    str.BufAppend(sb, "    pub " + fields.get(f) + ": " + base + " = " + zero_of(rc.kind) + "\n")
+                end
+                f = f + 1
+            end
+            if a.results.len() == 0:
+                str.BufAppend(sb, "    pub empty: bool = false\n")
+            end
+            str.BufAppend(sb, "end\n\n")
+            free_names(fields)
+        end
+        k = k + 1
+    end
+    if queries.len() > 0:
+        str.BufAppend(sb, "func fill_query(c: dyn db.Connection, raw: str, a: sql.Args): str:\n")
+        str.BufAppend(sb, "    mut rep := sql.Report {}\n")
+        str.BufAppend(sb, "    out := sql.Fill(raw, a, sql.DialectNamed(c.Kind()), rep)\n")
+        str.BufAppend(sb, "    sql.FreeReport(rep)\n")
+        str.BufAppend(sb, "    ret out\n")
+        str.BufAppend(sb, "end\n\n")
+    end
+    mut m := 0
+    until m < queries.len():
+        q := queries.get(m)
+        a := analyses.get(m)
+        mut pnames := name_set(a, false, "arg")
+        mut fields := name_set(a, true, "col")
+        plist := param_list(a, pnames)
+        sig := "pub func " + q.name + "(c: dyn db.Connection" + plist
+        if q.kind == Q_ONE:
+            str.BufAppend(sb, sig + ", ok &: bool): " + q.name + "Row:\n")
+        else q.kind == Q_MANY:
+            str.BufAppend(sb, sig + "): Vector<" + q.name + "Row>:\n")
+        else q.kind == Q_EXECROWS:
+            str.BufAppend(sb, sig + "): i64:\n")
+        else:
+            str.BufAppend(sb, sig + "): bool:\n")
+        end
+        mem.Free(plist as void*)
+        emit_args(sb, a, pnames)
+        str.BufAppend(sb, "    q := fill_query(c, " + salam_string(q.text) + ", a)\n")
+        str.BufAppend(sb, "    sql.FreeArgs(a)\n")
+        if q.kind == Q_ONE:
+            str.BufAppend(sb, "    mut out := " + q.name + "Row {}\n")
+            str.BufAppend(sb, "    ok = false\n")
+            str.BufAppend(sb, "    r := c.Query(q)\n")
+            str.BufAppend(sb, "    if r.Ok():\n")
+            str.BufAppend(sb, "        if r.Next():\n")
+            emit_reads(sb, a, fields, "            ")
+            str.BufAppend(sb, "            ok = true\n")
+            str.BufAppend(sb, "        end\n")
+            str.BufAppend(sb, "        r.Close()\n")
+            str.BufAppend(sb, "    end\n")
+            str.BufAppend(sb, "    mem.Free(q as void*)\n")
+            str.BufAppend(sb, "    ret out\n")
+        else q.kind == Q_MANY:
+            str.BufAppend(sb, "    mut rows := Vector {} as Vector<" + q.name + "Row>\n")
+            str.BufAppend(sb, "    r := c.Query(q)\n")
+            str.BufAppend(sb, "    if r.Ok():\n")
+            str.BufAppend(sb, "        until r.Next():\n")
+            str.BufAppend(sb, "            mut out := " + q.name + "Row {}\n")
+            emit_reads(sb, a, fields, "            ")
+            str.BufAppend(sb, "            rows.push(out)\n")
+            str.BufAppend(sb, "        end\n")
+            str.BufAppend(sb, "        r.Close()\n")
+            str.BufAppend(sb, "    end\n")
+            str.BufAppend(sb, "    mem.Free(q as void*)\n")
+            str.BufAppend(sb, "    ret rows\n")
+        else q.kind == Q_EXECROWS:
+            str.BufAppend(sb, "    rc := c.Exec(q)\n")
+            str.BufAppend(sb, "    mut n := 0 as i64\n")
+            str.BufAppend(sb, "    if rc == 0:\n")
+            str.BufAppend(sb, "        n = c.Changes()\n")
+            str.BufAppend(sb, "    end\n")
+            str.BufAppend(sb, "    mem.Free(q as void*)\n")
+            str.BufAppend(sb, "    ret n\n")
+        else:
+            str.BufAppend(sb, "    done := c.Exec(q) == 0\n")
+            str.BufAppend(sb, "    mem.Free(q as void*)\n")
+            str.BufAppend(sb, "    ret done\n")
+        end
+        str.BufAppend(sb, "end\n")
+        if m + 1 < queries.len():
+            str.BufAppend(sb, "\n")
+        end
+        free_names(pnames)
+        free_names(fields)
+        m = m + 1
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    mut z := 0
+    until z < analyses.len():
+        mut a := analyses.get(z)
+        FreeAnalysis(a)
+        z = z + 1
+    end
+    analyses.free()
+    ret out
+end

@@ -1,0 +1,134 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+func _gzip_skip_cstring(p: void*, start: int, n: int): int:
+    bp := p as u8*
+    mut pos := start
+    until pos < n and (bp[pos] as int) != 0:
+        pos += 1
+    end
+    if pos < n: pos += 1 end
+    ret pos
+end
+
+func _gzip_le_get16(p: void*, off: int): int:
+    bp := p as u8*
+    ret (bp[off] as int) | ((bp[off + 1] as int) << 8)
+end
+
+func _gzip_le_get32(p: void*, off: int): int:
+    bp := p as u8*
+    ret (bp[off] as int) | ((bp[off + 1] as int) << 8) | ((bp[off + 2] as int) << 16) | ((bp[off + 3] as int) << 24)
+end
+
+func _gzip_le_put32(b &: ByteBuf, v: int):
+    BufPush(b, v & 255)
+    BufPush(b, (v >> 8) & 255)
+    BufPush(b, (v >> 16) & 255)
+    BufPush(b, (v >> 24) & 255)
+end
+
+@en "GzipCompress"
+@fa "فشرده سازی جی زیپ"
+pub func GzipCompress(p: void*, n: int): ByteBuf:
+    mut out := NewByteBuf()
+    BufPush(out, 0x1f)
+    BufPush(out, 0x8b)
+    BufPush(out, 8)
+    BufPush(out, 0)
+    _gzip_le_put32(out, 0)
+    BufPush(out, 0)
+    BufPush(out, 255)
+
+    mut comp := RawDeflate(p, n)
+    BufPushBuf(out, comp)
+    BufFree(comp)
+
+    crc := CRC32(p, n)
+    _gzip_le_put32(out, crc as int)
+    _gzip_le_put32(out, n)
+    ret out
+end
+
+@en "GzipDecompress"
+@fa "کدگشایی جی زیپ"
+pub func GzipDecompress(p: void*, n: int, ok &: bool): ByteBuf:
+    ret GzipDecompressMax(p, n, 0, ok)
+end
+
+@en "GzipDecompressMax"
+@fa "کدگشایی جی زیپ با سقف"
+pub func GzipDecompressMax(p: void*, n: int, max: int, ok &: bool): ByteBuf:
+    ok = false
+    if n < 18:
+        ret NewByteBuf()
+    end
+    bp := p as u8*
+    if (bp[0] as int) != 0x1f or (bp[1] as int) != 0x8b:
+        ret NewByteBuf()
+    end
+    if (bp[2] as int) != 8:
+        ret NewByteBuf()
+    end
+    flg := bp[3] as int
+    mut pos := 10
+
+    if (flg & 4) != 0:
+        xlen := _gzip_le_get16(p, pos)
+        pos += 2 + xlen
+    end
+    if (flg & 8) != 0:
+        pos = _gzip_skip_cstring(p, pos, n)
+    end
+    if (flg & 16) != 0:
+        pos = _gzip_skip_cstring(p, pos, n)
+    end
+    if (flg & 2) != 0:
+        pos += 2
+    end
+    if pos >= n - 8:
+        ret NewByteBuf()
+    end
+
+    isize := _gzip_le_get32(p, n - 4)
+    deflate_len := n - 8 - pos
+    src := ((p as i64) + (pos as i64)) as void*
+    mut inflate_ok := false
+    out := RawInflateMax(src, deflate_len, isize, max, inflate_ok)
+    if not inflate_ok:
+        ret out
+    end
+    ok = true
+    ret out
+end
+
+@en "GzipCompressBuf"
+@fa "فشرده سازی جی زیپ بافر"
+pub func GzipCompressBuf(b: ByteBuf): ByteBuf:
+    ret GzipCompress(b.data, b.len)
+end
+
+@en "GzipCompressStr"
+@fa "فشرده سازی جی زیپ رشته"
+pub func GzipCompressStr(s: str): ByteBuf:
+    ret GzipCompress(s as void*, s.len())
+end
+
+@en "GzipDecompressBuf"
+@fa "کدگشایی جی زیپ بافر"
+pub func GzipDecompressBuf(b: ByteBuf, ok &: bool): ByteBuf:
+    ret GzipDecompress(b.data, b.len, ok)
+end

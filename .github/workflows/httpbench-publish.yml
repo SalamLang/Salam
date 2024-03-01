@@ -1,0 +1,93 @@
+---
+name: 🌐 HTTP Bench - Publish Results
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+permissions:
+  contents: read
+concurrency:
+  group: httpbench-publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: startsWith(github.event.head_commit.message, 'release:') || github.event_name == 'workflow_dispatch'
+    name: Run the router comparison and open a results PR
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Install nginx, Apache and PHP
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            nginx apache2 apache2-dev php-cli
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26'
+
+      - name: Run the comparison
+        env:
+          DURATION: '10'
+          WARMUP: '3'
+        run: |
+          set -euo pipefail
+          SALAM_BIN="$(command -v salam)"
+          export SALAM_BIN
+          bash tests/en/apps/httpbench/bench/run.sh
+          snapshot="tests/en/apps/httpbench/bench/results-$(date -u +%Y-%m-%d).jsonl"
+          cp /tmp/httpbench/results.json "$snapshot"
+          "$SALAM_BIN" run tests/en/apps/httpbench/bench/report.salam /tmp/httpbench/results.json \
+            > /tmp/report.md
+          {
+            echo '# HTTP router comparison'
+            echo
+            echo "Machine: GitHub-hosted \`ubuntu-24.04\` runner, $(nproc) vCPUs. Not a dedicated"
+            echo "benchmark host, so treat this as a reproducible lower bound, not a peak number;"
+            echo "rerun \`tests/en/apps/httpbench/bench/run.sh\` on quieter hardware for the full spread."
+            echo
+            echo "Raw per-request data: [\`$(basename "$snapshot")\`](./$(basename "$snapshot"))."
+            echo
+            cat /tmp/report.md
+          } > tests/en/apps/httpbench/bench/BENCHMARK.md
+          cat tests/en/apps/httpbench/bench/BENCHMARK.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open results PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          short_sha="$(git rev-parse --short HEAD)"
+          branch="httpbench/results-${short_sha}"
+          if git diff --quiet -- tests/en/apps/httpbench/bench/BENCHMARK.md 'tests/en/apps/httpbench/bench/results-*.jsonl'; then
+            echo "results unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898213+github-actions[bot]@users.noreply.github.com"
+          git switch -c "${branch}"
+          git add tests/en/apps/httpbench/bench/BENCHMARK.md tests/en/apps/httpbench/bench/results-*.jsonl
+          git commit -m "httpbench: results for ${short_sha}"
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "${branch}"
+          if [ -z "$(gh pr list -R "${REPO}" --head "${branch}" --json number --jq '.[].number')" ]; then
+            gh pr create -R "${REPO}" --base main --head "${branch}" \
+              --title "httpbench: results for ${short_sha}" \
+              --body "HTTP router comparison (Salam, Go net/http, Fiber, Gin, Echo, nginx, Apache, Node/Express, PHP) on a GitHub-hosted runner."
+          fi

@@ -1,0 +1,92 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import os
+import io
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include src "../source.salam"
+include lp "../langpack.salam"
+include lx "../lexer/lexer.salam"
+include at "../ast.salam"
+include ps "../parser/parser.salam"
+include cc "../condcomp.salam"
+include sm "../semantic/semantic.salam"
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include ip "../interp/interp.salam"
+
+func main:
+    args := os.Args()
+    defer args.free()
+    if args.len() < 2:
+        io.EPrintln("usage: interp_run <file.salam> [lang]")
+        ret 2
+    end
+    path := args[1]
+    lang := args.len() > 2 ? args[2] : "en"
+
+    quiet := lg.New(lg.LOG_ERROR, false)
+    i18.SetLang(lang)
+    sm.LayoutSchemaInit(sm.GetStdlibRoot())
+
+    base := lp.Load(lang)
+    if base == lp.LP_NONE:
+        lg.Log(
+            quiet, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(lang))
+        )
+        ret 2
+    end
+    entry := lp.Entry(base)
+
+    mut sf := src.New()
+    if not src.Load(path, sf):
+        lg.Log(
+            quiet, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(path))
+        )
+        ret 2
+    end
+    modpack := lx.Detect(sf, base)
+    mut toks := tok.StreamNew(path)
+    lok := lx.Run(quiet, modpack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    pok := ps.Run(quiet, toks, a, prog)
+    tok.StreamFree(toks)
+    mut s := sm.New(quiet, path, lp.Code(modpack))
+    sm.SetCc(s, cc.TableBuild("", Vector {} as Vector<str>))
+    _ck := cc.PruneProgram(a, quiet, path, s.cctab, prog)
+    sok := sm.Run(s, a, prog)
+    if not lok or not pok or not sok:
+        lg.Log(
+            quiet, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("build aborted: errors in source")
+        )
+        sm.Free(s)
+        at.FreeAst(a)
+        ret 1
+    end
+
+    mut opts := ip.NewOptions()
+    opts.capture = false
+    opts.lang = lang
+    mut vm := ip.New(quiet, entry, opts)
+    rc := ip.Run(vm, a, s, prog)
+    ip.Free(vm)
+    sm.Free(s)
+    at.FreeAst(a)
+    ret rc
+end

@@ -1,0 +1,75 @@
+pkg.en = runtime
+pkg.name = runtime
+pkg.group = System and tools
+pkg.summary = Facts about the running program: the system, the memory, the uptime and the build options.
+pkg.title = The runtime package in Salam | A program's memory and uptime
+pkg.description = The runtime package in Salam: the operating system and architecture, memory in use, the program's uptime and its build options, with an example.
+pkg.intro <<
+<p>The <code>runtime</code> package answers questions about the running program and the machine under it: which system and processor, how many cores, how much memory, how long the program has been up and how it was compiled. It is what a <code>/health</code> route, a startup log line or a benchmark guard needs.</p>
+<p>It gathers facts from <a href="/std/os/platform/">os/platform</a> and adds the uptime and the build flags. For details such as the host name or the kernel version, use <a href="/std/os/platform/">os/platform</a> directly; for the program's own allocation counts, <a href="/std/mem/">mem</a>; for timing a piece of code, <a href="/std/time/">time</a> or the timers in <a href="/std/debug/">debug</a>.</p>
+<p>Where the numbers come from:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>System</th><th>CpuCount</th><th>TotalMemory</th><th>AvailableMemory, UsedMemory</th></tr></thead>
+<tbody>
+<tr><td>Linux</td><td>a system call</td><td>reads <code>/proc/meminfo</code></td><td>reads <code>/proc/meminfo</code></td></tr>
+<tr><td>Windows</td><td>the <code>NUMBER_OF_PROCESSORS</code> variable</td><td>runs PowerShell</td><td>runs PowerShell</td></tr>
+<tr><td>macOS, BSD</td><td>runs <code>sysctl</code></td><td>runs <code>sysctl</code></td><td>minus one</td></tr>
+</tbody>
+</table></div>
+<p>The things people get wrong:</p>
+<ul>
+<li>The memory functions are not free everywhere. On Linux they read a small file, but on Windows each call starts PowerShell and takes a good part of a second. Cache the numbers, or refresh them on a timer, instead of reading them on every request.</li>
+<li>Every number can be minus one when the system does not report it. Check before you do arithmetic.</li>
+<li>The memory figures are for the whole machine, not this program. In a container you see the host's memory, not the container's limit.</li>
+<li>The uptime counts from <code>MarkStart</code>. Without it the clock starts at the first <code>UptimeMs</code> call, so the first health check reports 0. It uses the wall clock, so changing the system time moves it.</li>
+</ul>
+
+<h2 id="guide-health">A /health route</h2>
+<p>A load balancer, Docker's <code>HEALTHCHECK</code> or a monitoring service calls a health route every few seconds to see whether the program is alive. Call <code>MarkStart</code> first thing in <code>main</code>, so the uptime counts from the start of the program and not from the first request, and answer with a small JSON object built from the runtime facts.</p>
+{{example.runtime-health}}
+<p>The example starts the server in the background with <a href="/std/net/http/">net/http</a> and calls its own route, so it runs without anything else. The numbers in the body change on every run, so it prints only the status, the content type and two checks. A real body looks like <code>{"status": "ok", "os": "linux", "arch": "x64", "cpus": 8, "uptime_ms": 5412, "used_memory": 6442450944, "build": "release"}</code>.</p>
+
+<h2 id="guide-memory">Report memory in a readable way</h2>
+<p><code>TotalMemory</code> and <code>AvailableMemory</code> return bytes, and minus one where the system does not report them. <code>UsedMemory</code> is the difference, or minus one when either is missing. Turn the bytes into MiB for people, and handle the minus one before doing any arithmetic, or a percentage of a negative number ends up on a dashboard.</p>
+{{example.runtime-memory}}
+<p>The first three lines use fixed numbers so the output is the same everywhere; the last two call the real functions.</p>
+
+<h2 id="guide-workers">Size a worker pool from the core count</h2>
+<p>A server or a batch job often starts one worker per core. <code>CpuCount</code> gives the cores that are online, but a sensible rule also lets the operator override it, puts a ceiling on very large machines and falls back to a small number when the count is unknown. <code>Summary</code> puts the main facts in one line, which is handy to log once at startup.</p>
+{{example.runtime-workers}}
+<p>A real <code>Summary</code> line looks like <code>linux/x64 cpus=8 uptime_ms=3 build=release</code>.</p>
+
+<h2 id="guide-build">Know how the program was built</h2>
+<p><code>BuildFlags</code> returns <code>release</code> for a <code>--release</code> build, or the checks that are compiled in, joined with commas: <code>safe</code> for the default development build with bounds checks, <code>mem_debug</code> and <code>asan</code> for the memory checking builds. <code>IsSafeBuild</code>, <code>IsMemDebugBuild</code> and <code>IsAsanBuild</code> test each one. These are fixed when the program is compiled, so checking them costs nothing.</p>
+{{example.runtime-build-check}}
+<p><code>salam run</code> makes a development build, which is why this example warns. Build it with <code>salam build file.salam --release</code> and the same program runs the benchmark. The same check is useful at startup of a server, to log a warning when a debug build reaches production by mistake.</p>
+>>
+
+doc.OS = The name of the operating system: <code>linux</code>, <code>windows</code>, <code>mac</code>, <code>freebsd</code>, <code>wasm</code> or <code>unknown</code>.
+doc.Arch = The name of the processor architecture.
+doc.CpuCount = The number of processor cores that are online, or minus one when it cannot be found.
+doc.TotalMemory = The machine's total memory in bytes, or minus one. On Windows and macOS it starts a helper program, so it is slow there.
+doc.AvailableMemory = The memory in bytes the machine can still hand out, on Linux and Windows; minus one elsewhere.
+doc.UsedMemory = Total minus available memory in bytes, or minus one when either is missing.
+doc.MarkStart = Records the start instant for the uptime; call it at the top of <code>main</code>. Later calls do nothing.
+doc.UptimeMs = The milliseconds since <code>MarkStart</code>, by the wall clock. If <code>MarkStart</code> was never called, the first call starts the count.
+doc.UptimeSeconds = The uptime in seconds, with fractions.
+doc.IsAsanBuild = True when the program was built with the ASan memory checker.
+doc.IsMemDebugBuild = True when the program was built with allocation counting (<code>-DSALAM_MEM_DEBUG</code> or <code>--asan</code>).
+doc.IsSafeBuild = True when the program was built with array bounds checking, which is every build except <code>--release</code>.
+doc.BuildFlags = <code>release</code>, or the checks that are compiled in joined with commas: <code>safe</code>, <code>mem_debug</code>, <code>asan</code>.
+doc.Summary = One line with the system, architecture, cores, uptime and build flags, such as <code>linux/x64 cpus=8 uptime_ms=3 build=release</code>.
+
+ex.OS = runtime-Summary
+ex.Arch = runtime-Summary
+ex.CpuCount = runtime-Summary
+ex.TotalMemory = runtime-Summary
+ex.AvailableMemory = runtime-Summary
+ex.UsedMemory = runtime-Summary
+ex.MarkStart = runtime-Summary
+ex.UptimeMs = runtime-Summary
+ex.UptimeSeconds = runtime-Summary
+ex.IsAsanBuild = runtime-Summary
+ex.IsMemDebugBuild = runtime-Summary
+ex.IsSafeBuild = runtime-Summary
+ex.BuildFlags = runtime-Summary

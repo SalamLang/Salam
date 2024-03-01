@@ -1,0 +1,81 @@
+pkg.en = ctx
+pkg.name = ctx
+pkg.group = Time and concurrency
+pkg.summary = A context for cancellation and deadlines, passed from the main piece of work down to the smaller ones.
+pkg.title = The ctx package in Salam | Cancellation and deadlines
+pkg.description = The ctx package in Salam: building a context with cancellation, a timeout or a deadline, checking whether it is done, and waiting on it, with an example.
+pkg.intro <<
+<p>A context tells long-running work when to stop: either someone called <code>Cancel</code>, or its deadline passed. Contexts form a tree: you start from <code>Background</code> and make a child each time with <code>WithCancel</code>, <code>WithTimeout</code> or <code>WithDeadline</code>.</p>
+<p>Cancelling a context ends all its children, but not its parent. The work should check <code>IsDone</code> from time to time, or wait on it with <code>Wait</code>. Free each context with <code>Free</code> when you are done with it, children before parents.</p>
+
+<p>Use a context when work that may take long has to stop early: a request whose client went away, a batch job with a time budget, a background thread at shutdown. It is built on <a href="/std/sync/">sync</a> and works across threads. For one stop flag and nothing else, an <a href="/std/atomic/">atomic</a>.<code>Flag</code> is enough; to pass results back, use a <a href="/std/chan/">chan</a>.</p>
+<p>The things people get wrong:</p>
+<ul>
+<li>Expecting a context to interrupt a call. No standard library function takes one: a network request, a file read or a <code>sync.SleepMs</code> runs to its end. Check <code>IsDone</code> between steps, sleep with <code>Wait</code>, and give network calls their own timeout options.</li>
+<li>Freeing in the wrong order. A child keeps a copy of its parent that points at the parent's memory, and freeing the root destroys the lock the whole tree shares. Free children first, the root last, each exactly once.</li>
+<li>Assuming the deadlines follow a steady clock. They are measured with <code>sync.NowMs</code>, which on Linux and macOS is the wall clock, so setting the system time moves them.</li>
+</ul>
+
+<h2 id="guide-tree">Guide: one context per request</h2>
+<p>The usual shape is one context for a whole piece of work, such as an HTTP request or a batch job, and a child for every smaller task it starts. When the request is cancelled, every task under it sees <code>IsDone</code> turn true, while work hanging from another branch keeps going. The program below builds that tree and cancels the request in the middle.</p>
+{{example.ctx-guide-tree}}
+<p>Cancelling goes down the tree, never up: <code>root</code> and <code>audit</code> are untouched. That is why each task should get its own child instead of sharing the parent: you can stop one task alone by cancelling its child, or all of them by cancelling the parent.</p>
+
+<h2 id="guide-steps">Guide: check between steps</h2>
+<p>A context does not stop anything by force. The work has to look at it, and the right place is between steps, before each item of a loop or before each slow call. Pass the context as the first argument of every function that may take long, and return early when it is done.</p>
+{{example.ctx-guide-steps}}
+<p>The same function serves all three cases, and the caller decides which one applies. <code>Err</code> tells the two reasons apart: <code>cancelled</code> when someone called <code>Cancel</code>, <code>deadline exceeded</code> when the time ran out. <code>WithDeadline(root, 1)</code> uses an instant long past, so its context is done from the start.</p>
+
+<h2 id="guide-budget">Guide: time budgets</h2>
+<p>A child can never outlive its parent. A child with a longer timeout than its parent still ends at the parent's deadline, and <code>Deadline</code> reports the nearest deadline of the context and all its parents. A child with a shorter timeout ends earlier on its own, and its parent goes on.</p>
+{{example.ctx-guide-budget}}
+<p>So a request can get a total budget of two seconds at the top, and a step deep inside can ask for a minute without breaking it. <code>Wait</code> returns <code>true</code> as soon as the context finishes, here after about 50 milliseconds, and <code>false</code> if its own time limit ran out first.</p>
+
+<h2 id="guide-worker">Guide: stopping a thread</h2>
+<p>A context is safe to share between threads, so it is the clean way to tell a background thread to stop. The thread loops until <code>IsDone</code> is true and sleeps with <code>Wait</code> between rounds, so a <code>Cancel</code> from the main thread wakes it at once instead of after its next sleep.</p>
+{{example.ctx-guide-worker}}
+<p>A loop that calls <code>sync.SleepMs</code> instead of <code>Wait</code> would also stop, but only after the sleep ends. Free the context only after the thread is joined, since the thread still reads it until it returns.</p>
+
+<h2 id="guide-choose">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>You want</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>A root for a new tree</td><td><code>Background</code>, which never finishes by itself</td></tr>
+<tr><td>A task you stop by hand</td><td><code>WithCancel</code>, then <code>Cancel</code></td></tr>
+<tr><td>A task with a time limit</td><td><code>WithTimeout(parent, ms)</code></td></tr>
+<tr><td>A task that must end at a fixed time</td><td><code>WithDeadline(parent, at_ms)</code> with an instant from <code>sync.NowMs</code></td></tr>
+<tr><td>To check without blocking</td><td><code>IsDone</code>, and <code>Err</code> for the reason</td></tr>
+<tr><td>To sleep but wake on cancel</td><td><code>Wait(c, ms)</code></td></tr>
+</tbody>
+</table></div>
+<p>Two mistakes are common. Freeing a parent while its children are still in use leaves them pointing at freed memory, so free children first. And a context only helps when the work checks it: a long call that never looks at <code>IsDone</code> runs to the end however early you cancel.</p>
+>>
+
+doc.Context = A context.
+doc.Context.state = The internal state: cancelled, the deadline and whether there is one.
+doc.Context.parent = The parent context, or null for the root.
+doc.Context.mu = The lock every context in one tree shares.
+doc.Context.cv = The condition variable that cancellation wakes.
+doc.Context.is_root = Whether this context is the root.
+doc.Background = The root context, which never finishes by itself.
+doc.WithCancel = A child that ends when <code>Cancel</code> is called.
+doc.WithTimeout = A child that ends <code>ms</code> milliseconds from now.
+doc.WithDeadline = A child that ends at the instant <code>at_ms</code>, in milliseconds, as <code>sync.NowMs</code> gives it.
+doc.Cancel = Ends the context and all its children and wakes everything waiting.
+doc.IsDone = True when the context, or one of its parents, has been cancelled or has passed its deadline.
+doc.Err = Why it finished: <code>cancelled</code> or <code>deadline exceeded</code>, or an empty string while it is still running.
+doc.Deadline = The nearest deadline in the context and its parents, in milliseconds, or zero when there is none.
+doc.Wait = Waits at most <code>ms</code> milliseconds for the context to finish and says whether it did.
+doc.Free = Releases the context's memory.
+
+ex.Context = ctx-Context
+ex.Background = ctx-Context
+ex.WithCancel = ctx-Context
+ex.WithTimeout = ctx-Context
+ex.WithDeadline = ctx-Context
+ex.Cancel = ctx-Context
+ex.IsDone = ctx-Context
+ex.Err = ctx-Context
+ex.Deadline = ctx-Context
+ex.Wait = ctx-Context
+ex.Free = ctx-Context

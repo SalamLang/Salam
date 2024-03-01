@@ -1,0 +1,327 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package lsp
+
+import str
+import mem
+include co "../sal_core.salam"
+
+struct LineIndex:
+    pub text: str = ""
+    pub n: int = 0
+    pub starts: Vector<int> = Vector {}
+end
+
+struct Pos:
+    pub line: int = 0
+    pub ch: int = 0
+end
+
+struct Json:
+    pub sb: str.StringBuilder = str.NewBuilder()
+    pub first: Vector<bool> = Vector {}
+end
+
+func byte_at(s: str, i: int): int:
+    ret co.ByteAt(s, i)
+end
+
+func line_index(text: str): LineIndex:
+    mut li := LineIndex {}
+    li.text = text
+    li.n = str.Len(text)
+    li.starts.push(0)
+    mut i := 0
+    until i < li.n:
+        if byte_at(text, i) == 10:
+            li.starts.push(i + 1)
+        end
+        i += 1
+    end
+    ret li
+end
+
+func li_free(li &: LineIndex):
+    li.starts.free()
+end
+
+func li_line_of(li: LineIndex, off: int): int:
+    mut lo_ := 0
+    mut hi_ := li.starts.len() - 1
+    until lo_ < hi_:
+        mid := (lo_ + hi_ + 1) / 2
+        if li.starts.get(mid) <= off:
+            lo_ = mid
+        else:
+            hi_ = mid - 1
+        end
+    end
+    ret lo_
+end
+
+func li_line_end(li: LineIndex, line: int): int:
+    if line + 1 < li.starts.len():
+        mut e := li.starts.get(line + 1) - 1
+        if e > li.starts.get(line) and byte_at(li.text, e - 1) == 13:
+            e -= 1
+        end
+        ret e
+    end
+    ret li.n
+end
+
+func utf16_units(s: str, from: int, to_: int): int:
+    mut u := 0
+    mut i := from
+    until i < to_:
+        b := byte_at(s, i)
+        if b < 128:
+            u += 1
+        else b >= 240:
+            u += 2
+        else b >= 192:
+            u += 1
+        end
+        i += 1
+    end
+    ret u
+end
+
+func li_pos(li: LineIndex, off0: int): Pos:
+    mut off := off0
+    if off < 0:
+        off = 0
+    end
+    if off > li.n:
+        off = li.n
+    end
+    line := li_line_of(li, off)
+    ret Pos { line = line, ch = utf16_units(li.text, li.starts.get(line), off) }
+end
+
+func li_offset(li: LineIndex, line: int, ch: int): int:
+    if line < 0:
+        ret 0
+    end
+    if line >= li.starts.len():
+        ret li.n
+    end
+    mut i := li.starts.get(line)
+    lend := li_line_end(li, line)
+    mut u := 0
+    until i < lend and u < ch:
+        b := byte_at(li.text, i)
+        mut step := 1
+        mut w := 1
+        if b >= 240:
+            step = 4
+            w = 2
+        else b >= 224:
+            step = 3
+        else b >= 192:
+            step = 2
+        end
+        u += w
+        i += step
+    end
+    if i > lend:
+        i = lend
+    end
+    ret i
+end
+
+func bytes_to_str(p: void*, n: int): str:
+    d := mem.Allocate((n + 1) as u64)
+    if n > 0:
+        mem.Copy(d, p, n as u64)
+    end
+    bp := d as i8*
+    bp[n] = 0 as i8
+    ret d as str
+end
+
+func is_ident_byte(b: int): bool:
+    ret (b >= 48 and b <= 57) or (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b == 95 or b >= 128
+end
+
+func hexdig(v: int): int:
+    ret v < 10 ? 48 + v : 87 + v
+end
+
+func json_escape_into(sb &: str.StringBuilder, s: str):
+    str.BufAppendChar(sb, 34)
+    n := str.Len(s)
+    mut i := 0
+    mut run := 0
+    until i < n:
+        c := byte_at(s, i)
+        if c == 34 or c == 92 or c < 32:
+            if i > run:
+                str.BufAppend(sb, str.Substr(s, run, i - run))
+            end
+            if c == 34:
+                str.BufAppend(sb, `\"`)
+            else c == 92:
+                str.BufAppend(sb, "\\\\")
+            else c == 10:
+                str.BufAppend(sb, "\\n")
+            else c == 13:
+                str.BufAppend(sb, "\\r")
+            else c == 9:
+                str.BufAppend(sb, "\\t")
+            else:
+                str.BufAppend(sb, "\\u00")
+                str.BufAppendChar(sb, hexdig(c / 16))
+                str.BufAppendChar(sb, hexdig(c % 16))
+            end
+            run = i + 1
+        end
+        i += 1
+    end
+    if n > run:
+        if run == 0:
+            str.BufAppend(sb, s)
+        else:
+            str.BufAppend(sb, str.Substr(s, run, n - run))
+        end
+    end
+    str.BufAppendChar(sb, 34)
+end
+
+func jq(s: str): str:
+    mut sb := str.NewBuilder()
+    json_escape_into(sb, s)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func jw_new(): Json:
+    ret Json {}
+end
+
+func jw_sep(j &: Json):
+    d := j.first.len()
+    if d == 0:
+        ret
+    end
+    if j.first.get(d - 1):
+        j.first.set(d - 1, false)
+    else:
+        str.BufAppendChar(j.sb, 44)
+    end
+end
+
+func jw_obj(j &: Json):
+    jw_sep(j)
+    str.BufAppendChar(j.sb, 123)
+    j.first.push(true)
+end
+
+func jw_arr(j &: Json):
+    jw_sep(j)
+    str.BufAppendChar(j.sb, 91)
+    j.first.push(true)
+end
+
+func jw_end_obj(j &: Json):
+    _p := j.first.pop()
+    str.BufAppendChar(j.sb, 125)
+end
+
+func jw_end_arr(j &: Json):
+    _p := j.first.pop()
+    str.BufAppendChar(j.sb, 93)
+end
+
+func jw_kobj(j &: Json, k: str):
+    jw_key_raw(j, k)
+    str.BufAppendChar(j.sb, 123)
+    j.first.push(true)
+end
+
+func jw_karr(j &: Json, k: str):
+    jw_key_raw(j, k)
+    str.BufAppendChar(j.sb, 91)
+    j.first.push(true)
+end
+
+func jw_key_raw(j &: Json, k: str):
+    jw_sep(j)
+    json_escape_into(j.sb, k)
+    str.BufAppendChar(j.sb, 58)
+end
+
+func jw_str(j &: Json, k: str, v: str):
+    jw_key_raw(j, k)
+    json_escape_into(j.sb, v)
+end
+
+func jw_int(j &: Json, k: str, v: int):
+    jw_key_raw(j, k)
+    str.BufAppendInt(j.sb, v as i64)
+end
+
+func jw_bool(j &: Json, k: str, v: bool):
+    jw_key_raw(j, k)
+    str.BufAppend(j.sb, v ? "true" : "false")
+end
+
+func jw_raw(j &: Json, k: str, raw: str):
+    jw_key_raw(j, k)
+    str.BufAppend(j.sb, raw)
+end
+
+func jw_null(j &: Json, k: str):
+    jw_key_raw(j, k)
+    str.BufAppend(j.sb, "null")
+end
+
+func jw_vstr(j &: Json, v: str):
+    jw_sep(j)
+    json_escape_into(j.sb, v)
+end
+
+func jw_vint(j &: Json, v: int):
+    jw_sep(j)
+    str.BufAppendInt(j.sb, v as i64)
+end
+
+func jw_vraw(j &: Json, raw: str):
+    jw_sep(j)
+    str.BufAppend(j.sb, raw)
+end
+
+func jw_done(j &: Json): str:
+    out := str.BufStr(j.sb)
+    str.BufFree(j.sb)
+    j.first.free()
+    ret out
+end
+
+func jw_range(j &: Json, k: str, li: LineIndex, b: int, e: int):
+    p1 := li_pos(li, b)
+    p2 := li_pos(li, e)
+    jw_kobj(j, k)
+    jw_kobj(j, "start")
+    jw_int(j, "line", p1.line)
+    jw_int(j, "character", p1.ch)
+    jw_end_obj(j)
+    jw_kobj(j, "end")
+    jw_int(j, "line", p2.line)
+    jw_int(j, "character", p2.ch)
+    jw_end_obj(j)
+    jw_end_obj(j)
+end

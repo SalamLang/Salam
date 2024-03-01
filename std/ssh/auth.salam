@@ -1,0 +1,153 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+const _AUTH_SERVICE := "ssh-connection"
+
+func _auth_request_service(t &: Transport): bool:
+    mut req := NewBuf(32)
+    BufPutByte(req, SSH_MSG_SERVICE_REQUEST)
+    BufPutStringStr(req, "ssh-userauth")
+    if not _packet_send(t.ps, req):
+        FreeBuf(req)
+        ret false
+    end
+    FreeBuf(req)
+    reply := _packet_recv(t.ps)
+    if reply.bad:
+        ret false
+    end
+    mut r := ReaderFromBuf(reply)
+    msgtype := RGetByte(r)
+    mut ok := false
+    if not r.bad:
+        if msgtype == SSH_MSG_SERVICE_ACCEPT:
+            ok = true
+        end
+    end
+    FreeBuf(reply)
+    ret ok
+end
+
+func _auth_send_and_await(t &: Transport, req: Buf): bool:
+    if not _packet_send(t.ps, req):
+        ret false
+    end
+    mut attempts := 0
+    until attempts < 5:
+        reply := _packet_recv(t.ps)
+        if reply.bad:
+            ret false
+        end
+        mut r := ReaderFromBuf(reply)
+        msgtype := RGetByte(r)
+        if msgtype == SSH_MSG_USERAUTH_SUCCESS:
+            FreeBuf(reply)
+            ret true
+        end
+        if msgtype == SSH_MSG_USERAUTH_BANNER:
+            FreeBuf(reply)
+            attempts += 1
+            continue
+        end
+        FreeBuf(reply)
+        ret false
+    end
+    ret false
+end
+
+@en "AuthPassword"
+@fa "احراز هویت با رمز"
+func _auth_password(t &: Transport, user: str, password: str): bool:
+    mut req := NewBuf(64 + user.len() + password.len())
+    BufPutByte(req, SSH_MSG_USERAUTH_REQUEST)
+    BufPutStringStr(req, user)
+    BufPutStringStr(req, _AUTH_SERVICE)
+    BufPutStringStr(req, "password")
+    BufPutBool(req, false)
+    BufPutStringStr(req, password)
+    ok := _auth_send_and_await(t, req)
+    FreeBuf(req)
+    ret ok
+end
+
+func _auth_pubkey_blob(id: Identity): Buf:
+    mut blob := NewBuf(16 + id.e.len + id.n.len)
+    BufPutStringStr(blob, HOSTKEY_SSH_RSA)
+    BufPutMpintBuf(blob, id.e)
+    BufPutMpintBuf(blob, id.n)
+    ret blob
+end
+
+func _auth_try_publickey(t &: Transport, user: str, id: Identity, algo: str): bool:
+    mut blob := _auth_pubkey_blob(id)
+
+    mut signed_data := NewBuf(64 + t.session_id.len + user.len() + blob.len)
+    BufPutStringBuf(signed_data, t.session_id)
+    BufPutByte(signed_data, SSH_MSG_USERAUTH_REQUEST)
+    BufPutStringStr(signed_data, user)
+    BufPutStringStr(signed_data, _AUTH_SERVICE)
+    BufPutStringStr(signed_data, "publickey")
+    BufPutBool(signed_data, true)
+    BufPutStringStr(signed_data, algo)
+    BufPutStringBuf(signed_data, blob)
+
+    kind := _hostkey_digest_kind(algo)
+    hlen := _rsa_hash_size(kind)
+    mut digest := NewBuf(hlen)
+    BufPutZeros(digest, hlen)
+    _hash_for_kind(kind, signed_data.p, signed_data.len, digest.p)
+    FreeBuf(signed_data)
+
+    mut sigbytes := NewBuf(id.n.len)
+    BufPutZeros(sigbytes, id.n.len)
+    signed_ok := _rsa_sign_pkcs1(kind, digest.p, id.n, id.e, id.d, id.phi, sigbytes.p)
+    FreeBuf(digest)
+    if not signed_ok:
+        FreeBuf(blob)
+        FreeBuf(sigbytes)
+        ret false
+    end
+
+    mut sigblob := NewBuf(16 + sigbytes.len)
+    BufPutStringStr(sigblob, algo)
+    BufPutStringBuf(sigblob, sigbytes)
+    FreeBuf(sigbytes)
+
+    mut req := NewBuf(64 + user.len() + blob.len + sigblob.len)
+    BufPutByte(req, SSH_MSG_USERAUTH_REQUEST)
+    BufPutStringStr(req, user)
+    BufPutStringStr(req, _AUTH_SERVICE)
+    BufPutStringStr(req, "publickey")
+    BufPutBool(req, true)
+    BufPutStringStr(req, algo)
+    BufPutStringBuf(req, blob)
+    BufPutStringBuf(req, sigblob)
+    FreeBuf(blob)
+    FreeBuf(sigblob)
+
+    ok := _auth_send_and_await(t, req)
+    FreeBuf(req)
+    ret ok
+end
+
+@en "AuthPublicKey"
+@fa "احراز هویت با کلید عمومی"
+func _auth_publickey(t &: Transport, user: str, id: Identity): bool:
+    if _auth_try_publickey(t, user, id, HOSTKEY_RSA_SHA256):
+        ret true
+    end
+    ret _auth_try_publickey(t, user, id, HOSTKEY_SSH_RSA)
+end

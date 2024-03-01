@@ -1,0 +1,103 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import chan
+import sync
+
+mut hand := chan.Chan {} as chan.Chan<i64>
+mut done := chan.Chan {} as chan.Chan<i64>
+mut wg := sync.NewWaitGroup()
+
+mut sends_done := 0 as i64
+mut max_lead := 0 as i64
+mut lead_mu := sync.NewMutex()
+
+func producer():
+    mut i := 1 as i64
+    until i <= 50:
+        hand.send(i)
+        sync.Lock(lead_mu)
+        sends_done = sends_done + 1
+        sync.Unlock(lead_mu)
+        i = i + 1
+    end
+    hand.close()
+    sync.Done(wg)
+end
+
+func consumer():
+    mut ok := true
+    mut total := 0 as i64
+    until true:
+        v := hand.recv(ok)
+        if not ok: break end
+        sync.Lock(lead_mu)
+        lead := sends_done - v
+        if lead > max_lead: max_lead = lead end
+        sync.Unlock(lead_mu)
+        total = total + v
+    end
+    done.send(total)
+    sync.Done(wg)
+end
+
+func main:
+    hand.init(0 as i64)
+    done.init(1 as i64)
+
+    println "cap:", hand.capacity()
+
+    sync.Add(wg, 2 as i64)
+    t1 := spawn(producer)
+    t2 := spawn(consumer)
+    sync.Wait(wg)
+    join(t1)
+    join(t2)
+
+    mut ok := true
+    total := done.recv(ok)
+    println "total:", total
+    println "no lead:", max_lead <= 0
+
+    mut idle := chan.Chan {} as chan.Chan<i64>
+    idle.init(2 as i64)
+    t0 := sync.NowMs()
+    mut ok2 := true
+    _ := idle.recv_timeout(ok2, 120 as i64)
+    waited := sync.NowMs() - t0
+    println "recv timed out:", not ok2
+    println "waited enough:", waited >= 110
+
+    mut lonely := chan.Chan {} as chan.Chan<i64>
+    lonely.init(0 as i64)
+    sent := lonely.send_timeout(99 as i64, 120 as i64)
+    mut ok3 := true
+    _2 := lonely.try_recv(ok3)
+    println "send timed out:", not sent
+    println "nothing left:", not ok3
+
+    mut small := chan.Chan {} as chan.Chan<i64>
+    small.init(1 as i64)
+    first := small.send_timeout(1 as i64, 100 as i64)
+    second := small.send_timeout(2 as i64, 100 as i64)
+    println "buffered timeout:", first, second
+
+    sync.DestroyWaitGroup(wg)
+    sync.Destroy(lead_mu)
+    hand.free()
+    done.free()
+    idle.free()
+    lonely.free()
+    small.free()
+end

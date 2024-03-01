@@ -1,0 +1,415 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include lg "../logger.salam"
+include lp "../langpack.salam"
+include tok "../token.salam"
+include src "../source.salam"
+include lx "../lexer/lexer.salam"
+include ps "../parser/parser.salam"
+
+func derive_key(ts: str): str:
+    mut out := ""
+    repeat str.Len(ts) in i:
+        b := byte_at(ts, i)
+        if b == 60:
+            out = out + "_o"
+        else b == 44:
+            out = out + "_c"
+        else b == 46:
+            out = out + "_d"
+        else b == 95:
+            out = out + "_u"
+        else b == 91:
+            out = out + "_a"
+        else b == 42:
+            out = out + "_p"
+        else b != 62 and b != 93 and b != 32:
+            out = out + ts.substr(i, 1)
+        end
+    end
+    ret out
+end
+
+func derive_name(s &: Sema, t: int): str:
+    ret "_strof_" + derive_key(type_to_string(s, t))
+end
+
+func derive_registry_find(s &: Sema, name: str): int:
+    repeat s.derived_names.len() in i:
+        if s.derived_scopes.get(i) == s.global and str.Equals(s.derived_names.get(i), name):
+            ret i + 1
+        end
+    end
+    ret 0
+end
+
+func derive_is_decl(s &: Sema, did: int): bool:
+    repeat s.derived_decls.len() in i:
+        if s.derived_decls.get(i) == did:
+            ret true
+        end
+    end
+    ret false
+end
+
+func derive_registry_claim(s &: Sema, name: str):
+    s.derived_scopes.push(s.global)
+    s.derived_names.push(name)
+    s.derived_decls.push(0)
+end
+
+func derive_registry_drop(s &: Sema, slot: int):
+    if slot <= 0:
+        ret
+    end
+    mut j := slot
+    until j < s.derived_names.len():
+        s.derived_scopes.set(j - 1, s.derived_scopes.get(j))
+        s.derived_names.set(j - 1, s.derived_names.get(j))
+        s.derived_decls.set(j - 1, s.derived_decls.get(j))
+        j += 1
+    end
+    _p1 := s.derived_scopes.pop()
+    _p2 := s.derived_names.pop()
+    _p3 := s.derived_decls.pop()
+end
+
+func derive_parse(s &: Sema, a &: at.Ast, text: str, path: str): int:
+    mut sf := src.New()
+    sf.path = path
+    sf.text = text
+    sf.len = text.len()
+    mut s_log := s.log
+    lg.AddDiagSource(s_log, path, sf.text, sf.len)
+    s.log = s_log
+    pack := lp.Load("en")
+    mut toks := tok.StreamNew(path)
+    ok := lx.Run(s.log, pack, sf, toks)
+    mut prog := 0
+    if ok:
+        _ps := ps.Run(s.log, toks, a, prog)
+    end
+    tok.StreamFree(toks)
+    ret prog
+end
+
+func derive_home_of(s &: Sema, from: int, probe: str): int:
+    mut sc := from
+    until sc != 0:
+        if scope_lookup_local(s, sc, probe) != 0:
+            ret sc
+        end
+        sc = scope_at(s, sc).parent
+    end
+    ret 0
+end
+
+func derive_pkg_name_of(s &: Sema, sc: int): str:
+    if sc == 0 or s.global == 0:
+        ret ""
+    end
+    g := scope_at(s, s.global)
+    repeat g.symbols.len() in i:
+        pk := sym_at(s, g.symbols.get(i))
+        if pk.kind == SYM_PACKAGE and pk.members == sc:
+            if str.Len(pk.pkgname) > 0:
+                ret pk.pkgname
+            end
+            ret pk.name
+        end
+    end
+    scv := scope_at(s, sc)
+    if scv.kind == SCOPE_GLOBAL and str.Len(scv.label) > 0:
+        ret scv.label
+    end
+    ret ""
+end
+
+func derive_bridge_for(s &: Sema, home: int): int:
+    if home == 0:
+        ret 0
+    end
+    if s.derive_bridge_home == home and s.derive_bridge_global == s.global:
+        ret s.derive_bridge
+    end
+    sc := scope_new(s, SCOPE_BLOCK, s.global)
+    mut scv := scope_at(s, sc)
+    scv.label = "<derive>"
+    scope_put(s, sc, scv)
+    hv := scope_at(s, home)
+    repeat hv.symbols.len() in i:
+        _d := scope_define(s, sc, hv.symbols.get(i))
+    end
+    s.derive_bridge_home = home
+    s.derive_bridge_global = s.global
+    s.derive_bridge = sc
+    ret sc
+end
+
+func derive_install_fn(s &: Sema, a &: at.Ast, did: int, home: int, pkg: str):
+    mut d := at.Get(a, did)
+    d.synthetic = true
+    d.origin_lang = "en"
+    d.home_pkg = pkg
+    at.Put(a, did, d)
+    at.AddChild(a, s.program, did)
+    fsym := get_or_make_func(s, s.global, at.Get(a, did).name, SYM_FUNC)
+    mut fv := sym_at(s, fsym)
+    if home != 0:
+        fv.home = home
+    else fv.home == 0:
+        fv.home = s.global
+    end
+    fv.used = true
+    sym_put(s, fsym, fv)
+    sig := build_sig(s, a, did, 0)
+    mut fv2 := sym_at(s, fsym)
+    fv2.overloads.push(sig)
+    sym_put(s, fsym, fv2)
+    s.pending.push(did)
+end
+
+func derive_install_all(s &: Sema, a &: at.Ast, prog: int, want: str, home0: int): int:
+    save_cur := s.cur
+    save_lang := s.lang
+    pkg := derive_pkg_name_of(s, home0)
+    home := derive_bridge_for(s, home0)
+    if home != 0:
+        s.cur = home
+    else:
+        s.cur = s.global
+    end
+    s.lang = "en"
+    mut found := 0
+    mut i := 0
+    until i < at.ChildCount(a, prog):
+        did := at.Child(a, prog, i)
+        i += 1
+        d := at.Get(a, did)
+        if d.kind == at.AST_FUNC_DEF and str.Len(d.name) > 0:
+            derive_install_fn(s, a, did, home, pkg)
+            if str.Equals(d.name, want):
+                found = did
+            end
+        end
+    end
+    s.cur = save_cur
+    s.lang = save_lang
+    ret found
+end
+
+func derive_stringify(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): str:
+    if t < 0 or s.program == 0:
+        ret ""
+    end
+    fname := derive_name(s, t)
+    if derive_registry_find(s, fname) != 0:
+        ret fname
+    end
+    if scope_lookup_local(s, s.global, fname) != 0:
+        ret ""
+    end
+    derive_registry_claim(s, fname)
+    text := derive_fn_source(s, a, t, fname, sp)
+    if str.Len(text) == 0:
+        derive_registry_drop(s, derive_registry_find(s, fname))
+        ret ""
+    end
+    prog := derive_parse(s, a, text, "<derived>")
+    mut fn := 0
+    if prog != 0:
+        fn = derive_install_all(s, a, prog, fname, 0)
+    end
+    if fn == 0:
+        derive_registry_drop(s, derive_registry_find(s, fname))
+        ret ""
+    end
+    slot := derive_registry_find(s, fname)
+    s.derived_decls.set(slot - 1, fn)
+    ret fname
+end
+
+func derive_eq_name(s &: Sema, t: int): str:
+    ret "_eqof_" + derive_key(type_to_string(s, t))
+end
+
+func derive_eq_possible(s &: Sema, t: int, depth: int): bool:
+    if t < 0 or depth > 8:
+        ret false
+    end
+    v := ty_at(s, t)
+    k := v.kind
+    if k == TY_ARRAY:
+        ret derive_eq_possible(s, v.elem, depth + 1)
+    end
+    if k == TY_STRUCT:
+        sym := v.decl
+        if sym == 0:
+            ret false
+        end
+        if scope_lookup_local(s, sym_at(s, sym).members, "operator_eq") != 0:
+            ret true
+        end
+        if derive_method_sig(s, sym, "free", 0) != 0 or derive_map_cursor(s, sym) != 0:
+            ret false
+        end
+        if str.Len(derive_seq_count(s, sym)) > 0 and derive_seq_elem(s, sym) != TYPE_NONE:
+            ret false
+        end
+        fields := scope_at(s, sym_at(s, sym).members).symbols
+        repeat fields.len() in i:
+            fv := sym_at(s, fields.get(i))
+            if fv.kind == SYM_FIELD and not derive_eq_possible(s, fv.ty, depth + 1):
+                ret false
+            end
+        end
+        ret true
+    end
+    if k == TY_VARIANT and enum_data_sym(s, t) != 0:
+        ret enum_data_eq_possible(s, t, depth)
+    end
+    if k == TY_VEC or k == TY_MAP or k == TY_MAP_ITER or k == TY_SLICE or k == TY_DYN or k == TY_VARIANT:
+        ret false
+    end
+    if k == TY_FUNC or k == TY_FILE or k == TY_VOID or k == TY_ERROR:
+        ret false
+    end
+    ret true
+end
+
+func derive_eq_field(s &: Sema, t: int, l: str, r: str, depth: int): str:
+    v := ty_at(s, t)
+    if v.kind == TY_ARRAY:
+        iv := "_i" + co.I64Toa(depth as i64)
+        inner := derive_eq_field(s, v.elem, l + "[" + iv + "]", r + "[" + iv + "]", depth + 1)
+        ret DV_IND + "repeat len(" + l + ") in " + iv + ":\n" + inner + DV_IND + "end\n"
+    end
+    ret DV_IND + "if " + l + " != " + r + ": ret false end\n"
+end
+
+func derive_eq_source(s &: Sema, t: int, fname: str): str:
+    spelling := derive_type_spelling(s, t)
+    if str.Len(spelling) == 0:
+        ret ""
+    end
+    if ty_at(s, t).kind == TY_ARRAY:
+        ret "func " + fname + "(_a: " + spelling + ", _b: " + spelling + "): bool:\n" + derive_eq_field(s, t, "_a", "_b", 0) + DV_IND + "ret true\nend\n"
+    end
+    sym := ty_at(s, t).decl
+    mut body := ""
+    fields := scope_at(s, sym_at(s, sym).members).symbols
+    repeat fields.len() in i:
+        fv := sym_at(s, fields.get(i))
+        if fv.kind == SYM_FIELD:
+            body = body + derive_eq_field(s, fv.ty, "_a." + derive_ident(fv.name), "_b." + derive_ident(fv.name), 0)
+        end
+    end
+    ret "func " + fname + "(_a: " + spelling + ", _b: " + spelling + "): bool:\n" + body + DV_IND + "ret true\nend\n"
+end
+
+func derive_struct_eq(s &: Sema, a &: at.Ast, t: int, _sp: co.SrcSpan): str:
+    if t < 0 or s.program == 0 or not derive_eq_possible(s, t, 0):
+        ret ""
+    end
+    fname := derive_eq_name(s, t)
+    if derive_registry_find(s, fname) != 0:
+        ret fname
+    end
+    if scope_lookup_local(s, s.global, fname) != 0:
+        ret ""
+    end
+    derive_registry_claim(s, fname)
+    text := derive_eq_source(s, t, fname)
+    if str.Len(text) == 0:
+        derive_registry_drop(s, derive_registry_find(s, fname))
+        ret ""
+    end
+    prog := derive_parse(s, a, text, "<derived>")
+    mut fn := 0
+    if prog != 0:
+        fn = derive_install_all(s, a, prog, fname, 0)
+    end
+    if fn == 0:
+        derive_registry_drop(s, derive_registry_find(s, fname))
+        ret ""
+    end
+    slot := derive_registry_find(s, fname)
+    s.derived_decls.set(slot - 1, fn)
+    ret fname
+end
+
+func derive_rewrite_eq(s &: Sema, a &: at.Ast, nid: int, fname: str, negate: bool):
+    n := at.Get(a, nid)
+    sp := span_of(a, nid)
+    callee := new_node_at(a, at.AST_IDENTIFIER, sp)
+    at.SetName(a, callee, fname)
+    mut cv := at.Get(a, callee)
+    cv.synthetic = true
+    at.Put(a, callee, cv)
+    mut callid := nid
+    if negate:
+        callid = new_node_at(a, at.AST_CALL, sp)
+    end
+    mut kv := at.Get(a, callid)
+    kv.kind = at.AST_CALL
+    kv.a = callee
+    kv.b = 0
+    kv.op = 0
+    kv.synthetic = true
+    kv.list.free()
+    kv.list = Vector {} as Vector<int>
+    kv.list.push(n.a)
+    kv.list.push(n.b)
+    at.Put(a, callid, kv)
+    _d := sema_decorate(s, a, callid, sema_ty(s, TY_BOOL))
+    if negate:
+        mut uv := at.Get(a, nid)
+        uv.kind = at.AST_UNARY
+        uv.op = tok.TK_NOT
+        uv.a = callid
+        uv.b = 0
+        uv.synthetic = true
+        at.Put(a, nid, uv)
+    end
+end
+
+func derive_print_arg(s &: Sema, a &: at.Ast, callid: int, i: int, t: int): bool:
+    if i >= at.ChildCount(a, callid):
+        ret false
+    end
+    arg := at.Child(a, callid, i)
+    if arg == 0:
+        ret false
+    end
+    sp := span_of(a, arg)
+    fname := derive_stringify(s, a, t, sp)
+    if str.Len(fname) == 0:
+        ret false
+    end
+    wrap := at.NewNode(a, at.AST_CALL)
+    callee := at.NewNode(a, at.AST_IDENTIFIER)
+    at.SetName(a, callee, fname)
+    at.SetSpan(
+        a, callee, sp.begin.line, sp.begin.col, sp.begin.index, sp.finish.line, sp.finish.col, sp.finish.index, sp.length
+    )
+    at.SetSpan(
+        a, wrap, sp.begin.line, sp.begin.col, sp.begin.index, sp.finish.line, sp.finish.col, sp.finish.index, sp.length
+    )
+    mut cv := at.Get(a, callee)
+    cv.synthetic = true
+    at.Put(a, callee, cv)
+    mut wv := at.Get(a, wrap)
+    wv.synthetic = true
+    wv.a = callee
+    at.Put(a, wrap, wv)
+    at.AddChild(a, wrap, arg)
+    _d := sema_decorate(s, a, wrap, sema_ty(s, TY_STR))
+    mut cn := at.Get(a, callid)
+    cn.list.set(i, wrap)
+    at.Put(a, callid, cn)
+    ret true
+end

@@ -1,0 +1,505 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tag
+
+import compress
+import str
+import mem
+
+@en "EncLatin1"
+@fa "رمز لاتین"
+pub const EncLatin1 := 0
+
+@en "EncUtf16"
+@fa "رمز یونی۱۶"
+pub const EncUtf16 := 1
+
+@en "EncUtf16BE"
+@fa "رمز یونی۱۶ بزرگ"
+pub const EncUtf16BE := 2
+
+@en "EncUtf8"
+@fa "رمز یونی۸"
+pub const EncUtf8 := 3
+
+func _b(p: void*, off: int): int:
+    bp := p as u8*
+    ret bp[off] as int
+end
+
+func _tag4(p: void*, off: int): int:
+    ret (_b(p, off) << 24) | (_b(p, off + 1) << 16) | (_b(p, off + 2) << 8) | _b(p, off + 3)
+end
+
+func _id(a: int, b: int, c: int, d: int): int:
+    ret (a << 24) | (b << 16) | (c << 8) | d
+end
+
+func _syncsafe(p: void*, off: int): int:
+    ret ((_b(p, off) & 127) << 21) | ((_b(p, off + 1) & 127) << 14) | ((_b(p, off + 2) & 127) << 7) | (_b(p, off + 3) & 127)
+end
+
+func _be32(p: void*, off: int): int:
+    ret (_b(p, off) << 24) | (_b(p, off + 1) << 16) | (_b(p, off + 2) << 8) | _b(p, off + 3)
+end
+
+func _be24(p: void*, off: int): int:
+    ret (_b(p, off) << 16) | (_b(p, off + 1) << 8) | _b(p, off + 2)
+end
+
+func _decode_text(p: void*, off: int, len: int, encoding: int): str:
+    if len <= 0:
+        ret ""
+    end
+    mut sb := str.NewBuilder()
+    if encoding == EncUtf8:
+        str.BufFree(sb)
+        mut raw := compress.NewByteBuf()
+        mut i := 0
+        until i < len:
+            b := _b(p, off + i)
+            if b == 0:
+                break
+            end
+            compress.BufPush(raw, b)
+            i += 1
+        end
+        out := compress.BufToStrUnsafe(raw)
+        compress.BufFree(raw)
+        if out.len() == 0:
+            mem.Free(out as void*)
+            ret ""
+        end
+        ret out
+    end
+    if encoding == EncLatin1:
+        mut i := 0
+        until i < len:
+            b := _b(p, off + i)
+            if b == 0:
+                break
+            end
+            str.BufAppendCp(sb, b)
+            i += 1
+        end
+        out := str.BufStr(sb)
+        str.BufFree(sb)
+        if out.len() == 0:
+            mem.Free(out as void*)
+            ret ""
+        end
+        ret out
+    end
+    mut at := off
+    mut left := len
+    mut big := encoding == EncUtf16BE
+    if encoding == EncUtf16 and left >= 2:
+        b0 := _b(p, at)
+        b1 := _b(p, at + 1)
+        if b0 == 255 and b1 == 254:
+            big = false
+            at += 2
+            left -= 2
+        else b0 == 254 and b1 == 255:
+            big = true
+            at += 2
+            left -= 2
+        end
+    end
+    mut i := 0
+    until i + 1 < left:
+        mut u := 0
+        if big:
+            u = (_b(p, at + i) << 8) | _b(p, at + i + 1)
+        else:
+            u = _b(p, at + i) | (_b(p, at + i + 1) << 8)
+        end
+        i += 2
+        if u == 0:
+            break
+        end
+        if u >= 0xD800 and u <= 0xDBFF and i + 1 < left:
+            mut lo := 0
+            if big:
+                lo = (_b(p, at + i) << 8) | _b(p, at + i + 1)
+            else:
+                lo = _b(p, at + i) | (_b(p, at + i + 1) << 8)
+            end
+            if lo >= 0xDC00 and lo <= 0xDFFF:
+                i += 2
+                u = 0x10000 + ((u - 0xD800) << 10) + (lo - 0xDC00)
+            end
+        end
+        str.BufAppendCp(sb, u)
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    if out.len() == 0:
+        mem.Free(out as void*)
+        ret ""
+    end
+    ret out
+end
+
+func _take(dst &: str, text: str):
+    if text.len() == 0:
+        if text.len() == 0:
+            ret
+        end
+    end
+    if dst.len() > 0:
+        mem.Free(text as void*)
+        ret
+    end
+    dst = text
+end
+
+func _pair(text: str, first &: int, second &: int):
+    cps := str.CodePoints(text)
+    mut a := 0
+    mut b := 0
+    mut seen_slash := false
+    mut i := 0
+    until i < cps.len():
+        cp := cps.get(i)
+        if cp == 47:
+            seen_slash = true
+        else cp >= 48 and cp <= 57:
+            if seen_slash:
+                b = b * 10 + (cp - 48)
+            else:
+                a = a * 10 + (cp - 48)
+            end
+        end
+        i += 1
+    end
+    cps.free()
+    first = a
+    second = b
+end
+
+func _int_of(text: str): int:
+    cps := str.CodePoints(text)
+    mut v := 0
+    mut i := 0
+    until i < cps.len():
+        cp := cps.get(i)
+        if cp >= 48 and cp <= 57:
+            v = v * 10 + (cp - 48)
+        end
+        i += 1
+    end
+    cps.free()
+    ret v
+end
+
+func _store(p: void*, data: int, size: int, id: int, major: int, out &: Tags): bool:
+    enc := _b(p, data)
+    text_at := data + 1
+    text_len := size - 1
+    if id == _id(84, 73, 84, 50) or id == _id(84, 84, 50, 32):
+        _take(out.title, _decode_text(p, text_at, text_len, enc))
+        ret true
+    end
+    if id == _id(84, 80, 69, 49) or id == _id(84, 80, 49, 32):
+        _take(out.artist, _decode_text(p, text_at, text_len, enc))
+        ret true
+    end
+    if id == _id(84, 65, 76, 66) or id == _id(84, 65, 76, 32):
+        _take(out.album, _decode_text(p, text_at, text_len, enc))
+        ret true
+    end
+    if id == _id(84, 80, 69, 50):
+        _take(out.albumartist, _decode_text(p, text_at, text_len, enc))
+        ret true
+    end
+    if id == _id(84, 67, 79, 77):
+        _take(out.composer, _decode_text(p, text_at, text_len, enc))
+        ret true
+    end
+    if id == _id(84, 67, 79, 78):
+        _take(out.genre, _decode_text(p, text_at, text_len, enc))
+        ret true
+    end
+    if id == _id(84, 89, 69, 82) or id == _id(84, 68, 82, 67) or id == _id(84, 89, 69, 32):
+        v := _decode_text(p, text_at, text_len, enc)
+        if out.year == 0:
+            out.year = _int_of(v)
+        end
+        mem.Free(v as void*)
+        ret true
+    end
+    if id == _id(84, 66, 80, 77):
+        v := _decode_text(p, text_at, text_len, enc)
+        if out.bpm == 0:
+            out.bpm = _int_of(v)
+        end
+        mem.Free(v as void*)
+        ret true
+    end
+    if id == _id(84, 82, 67, 75) or id == _id(84, 82, 75, 32):
+        v := _decode_text(p, text_at, text_len, enc)
+        mut a := 0
+        mut b := 0
+        _pair(v, a, b)
+        if out.track == 0:
+            out.track = a
+            out.tracks = b
+        end
+        mem.Free(v as void*)
+        ret true
+    end
+    if id == _id(84, 80, 79, 83):
+        v := _decode_text(p, text_at, text_len, enc)
+        mut a := 0
+        mut b := 0
+        _pair(v, a, b)
+        if out.disc == 0:
+            out.disc = a
+        end
+        mem.Free(v as void*)
+        ret true
+    end
+    if id == _id(67, 79, 77, 77):
+        if size > 4:
+            mut skip := text_at + 3
+            skip = _skip_term(p, skip, data + size, enc)
+            _take(out.comment, _decode_text(p, skip, data + size - skip, enc))
+        end
+        ret true
+    end
+    if id == _id(85, 83, 76, 84):
+        if size > 4:
+            mut skip := text_at + 3
+            skip = _skip_term(p, skip, data + size, enc)
+            _take(out.lyrics, _decode_text(p, skip, data + size - skip, enc))
+        end
+        ret true
+    end
+    if id == _id(65, 80, 73, 67) and major >= 3:
+        mut at2 := text_at
+        mime := _decode_text(p, at2, data + size - at2, EncLatin1)
+        at2 = _skip_term(p, at2, data + size, EncLatin1)
+        if at2 < data + size:
+            at2 += 1
+            at2 = _skip_term(p, at2, data + size, enc)
+            left := data + size - at2
+            if left > 0 and out.art.len == 0:
+                compress.BufPushBytes(out.art, ((p as i64) + (at2 as i64)) as void*, left)
+                _take(out.art_mime, mime)
+                ret true
+            end
+        end
+        mem.Free(mime as void*)
+        ret true
+    end
+    ret false
+end
+
+func _skip_term(p: void*, from: int, stop: int, encoding: int): int:
+    mut i := from
+    if encoding == EncUtf16 or encoding == EncUtf16BE:
+        until i + 1 < stop:
+            if _b(p, i) == 0 and _b(p, i + 1) == 0:
+                ret i + 2
+            end
+            i += 2
+        end
+        ret stop
+    end
+    until i < stop:
+        if _b(p, i) == 0:
+            ret i + 1
+        end
+        i += 1
+    end
+    ret stop
+end
+
+func _byte_len(s: str): int:
+    tmp := compress.BufFromStr(s)
+    n := compress.BufLen(tmp)
+    compress.BufFree(tmp)
+    ret n
+end
+
+func _put_syncsafe(b &: compress.ByteBuf, v: int):
+    compress.BufPush(b, (v >> 21) & 127)
+    compress.BufPush(b, (v >> 14) & 127)
+    compress.BufPush(b, (v >> 7) & 127)
+    compress.BufPush(b, v & 127)
+end
+
+func _frame(b &: compress.ByteBuf, a: int, c: int, d: int, e: int, text: str):
+    if text.len() == 0:
+        ret
+    end
+    compress.BufPush(b, a)
+    compress.BufPush(b, c)
+    compress.BufPush(b, d)
+    compress.BufPush(b, e)
+    _put_syncsafe(b, _byte_len(text) + 1)
+    compress.BufPush(b, 0)
+    compress.BufPush(b, 0)
+    compress.BufPush(b, EncUtf8)
+    payload := compress.BufFromStr(text)
+    compress.BufPushBuf(b, payload)
+    compress.BufFree(payload)
+end
+
+func _frame_head(b &: compress.ByteBuf, a: int, c: int, d: int, e: int, payload: int):
+    compress.BufPush(b, a)
+    compress.BufPush(b, c)
+    compress.BufPush(b, d)
+    compress.BufPush(b, e)
+    _put_syncsafe(b, payload + 1)
+    compress.BufPush(b, 0)
+    compress.BufPush(b, 0)
+    compress.BufPush(b, EncUtf8)
+end
+
+func _frame_int(b &: compress.ByteBuf, a: int, c: int, d: int, e: int, value: int):
+    if value <= 0:
+        ret
+    end
+    _frame_head(b, a, c, d, e, _decimal_len(value))
+    _push_decimal(b, value)
+end
+
+@en "HasID3v2"
+@fa "آی‌دی۳ دو دارد"
+pub func HasID3v2(p: void*, n: int): bool:
+    if n < 10:
+        ret false
+    end
+    ret _b(p, 0) == 73 and _b(p, 1) == 68 and _b(p, 2) == 51 and _b(p, 3) < 255
+end
+
+@en "ID3v2Version"
+@fa "نگارش آی‌دی۳ دو"
+pub func ID3v2Version(p: void*, n: int): int:
+    if not HasID3v2(p, n):
+        ret 0
+    end
+    ret _b(p, 3)
+end
+
+@en "ID3v2Size"
+@fa "اندازه آی‌دی۳ دو"
+pub func ID3v2Size(p: void*, n: int): int:
+    if not HasID3v2(p, n):
+        ret 0
+    end
+    mut total := 10 + _syncsafe(p, 6)
+    if (_b(p, 5) & 16) != 0:
+        total += 10
+    end
+    if total > n:
+        total = n
+    end
+    ret total
+end
+
+@en "ReadID3v2"
+@fa "خواندن آی‌دی۳ دو"
+pub func ReadID3v2(p: void*, n: int, out &: Tags): bool:
+    if not HasID3v2(p, n):
+        ret false
+    end
+    major := _b(p, 3)
+    if major < 2 or major > 4:
+        ret false
+    end
+    mut body := 10 + _syncsafe(p, 6)
+    if body > n:
+        body = n
+    end
+    mut at := 10
+    if (_b(p, 5) & 64) != 0 and at + 4 <= n:
+        ext := major == 4 ? _syncsafe(p, at) : _be32(p, at)
+        at += ext + 4
+    end
+    id_len := major == 2 ? 3 : 4
+    head := major == 2 ? 6 : 10
+    mut found := false
+    until at + head <= body:
+        mut id := 0
+        mut size := 0
+        if major == 2:
+            id = _id(_b(p, at), _b(p, at + 1), _b(p, at + 2), 32)
+            size = _be24(p, at + 3)
+        else:
+            id = _tag4(p, at)
+            if major == 4:
+                size = _syncsafe(p, at + 4)
+            else:
+                size = _be32(p, at + 4)
+            end
+        end
+        if id == 0 or size <= 0:
+            break
+        end
+        data := at + head
+        if data + size > body:
+            break
+        end
+        if _store(p, data, size, id, major, out):
+            found = true
+        end
+        at = data + size
+        if id_len == 0:
+            break
+        end
+    end
+    ret found
+end
+
+@en "WriteID3v2"
+@fa "نوشتن آی‌دی۳ دو"
+pub func WriteID3v2(t: Tags): compress.ByteBuf:
+    mut body := compress.NewByteBuf()
+    _frame(body, 84, 73, 84, 50, t.title)
+    _frame(body, 84, 80, 69, 49, t.artist)
+    _frame(body, 84, 65, 76, 66, t.album)
+    _frame(body, 84, 80, 69, 50, t.albumartist)
+    _frame(body, 84, 67, 79, 77, t.composer)
+    _frame(body, 84, 67, 79, 78, t.genre)
+    _frame_int(body, 84, 68, 82, 67, t.year)
+    _frame_int(body, 84, 66, 80, 77, t.bpm)
+    if t.track > 0:
+        mut width := _decimal_len(t.track)
+        if t.tracks > 0:
+            width += 1 + _decimal_len(t.tracks)
+        end
+        _frame_head(body, 84, 82, 67, 75, width)
+        _push_decimal(body, t.track)
+        if t.tracks > 0:
+            compress.BufPush(body, 47)
+            _push_decimal(body, t.tracks)
+        end
+    end
+    _frame_int(body, 84, 80, 79, 83, t.disc)
+    mut out := compress.NewByteBuf()
+    compress.BufPush(out, 73)
+    compress.BufPush(out, 68)
+    compress.BufPush(out, 51)
+    compress.BufPush(out, 4)
+    compress.BufPush(out, 0)
+    compress.BufPush(out, 0)
+    _put_syncsafe(out, compress.BufLen(body))
+    compress.BufPushBuf(out, body)
+    compress.BufFree(body)
+    ret out
+end

@@ -1,0 +1,382 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "mcphttp"
+@fa "وب‌ام‌سی‌پی"
+package mcphttp
+
+import str
+import env
+import io
+import os
+import sync
+import net.http
+import net.router
+import time
+import encoding.json
+
+include mcprpc "mcp_rpc.salam"
+include mcpsrv "mcp_server.salam"
+include mcpauth "mcp_auth.salam"
+
+mut g_origins := ""
+mut g_live_lock := sync.Mutex {}
+mut g_live := 0
+mut g_soft_mb := 1500
+mut g_hard_mb := 3200
+
+func _enter():
+    _l := sync.Lock(g_live_lock)
+    g_live += 1
+    _u := sync.Unlock(g_live_lock)
+end
+
+func _leave():
+    _l := sync.Lock(g_live_lock)
+    if g_live > 0: g_live -= 1 end
+    _u := sync.Unlock(g_live_lock)
+end
+
+func _rss_mb(): int:
+    data := io.ReadFile("/proc/self/status")
+    at := data.find("VmRSS:")
+    if at < 0: ret 0 end
+    rest := data.substr(at + 6, data.len() - at - 6)
+    nl := rest.find("\n")
+    line := str.Trim(nl >= 0 ? rest.substr(0, nl) : rest)
+    ret str.Trim(str.TrimSuffix(line, "kB")).to_int() / 1024
+end
+
+func _watchdog():
+    start := time.NowMillis()
+    until true:
+        sync.SleepMs(20000)
+        mb := _rss_mb()
+        if mb > 0 and time.NowMillis() - start > 300000:
+            _l := sync.Lock(g_live_lock)
+            live := g_live
+            _u := sync.Unlock(g_live_lock)
+            if mb >= g_hard_mb or (mb >= g_soft_mb and live == 0):
+                mcprpc.Log("restarting to give memory back at ".concat(str.FromInt(mb)).concat(" MB with ").concat(str.FromInt(live)).concat(" calls in flight"))
+                os.Exit(0)
+            end
+        end
+    end
+end
+
+func _allowed(origin: str): bool:
+    if origin.len() == 0 or g_origins.len() == 0: ret true end
+    ret g_origins.find(",".concat(origin).concat(",")) >= 0
+end
+
+func _cors(ctx: i64):
+    origin := http.Header(ctx, "Origin")
+    if origin.len() > 0 and g_origins.len() > 0:
+        http.SetHeader(ctx, "Access-Control-Allow-Origin", origin)
+        http.SetHeader(ctx, "Vary", "Origin")
+    else:
+        http.SetHeader(ctx, "Access-Control-Allow-Origin", "*")
+    end
+    http.SetHeader(ctx, "Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+    http.SetHeader(ctx, "Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, Mcp-Method, Mcp-Name, MCP-Protocol-Version")
+    http.SetHeader(ctx, "Access-Control-Expose-Headers", "Mcp-Session-Id, WWW-Authenticate")
+    http.SetHeader(ctx, "Access-Control-Max-Age", "86400")
+    http.SetHeader(ctx, "X-Content-Type-Options", "nosniff")
+end
+
+func _plain(ctx: i64, status: int, body: str):
+    http.SetHeader(ctx, "Cache-Control", "no-store")
+    http.SetStatus(ctx, status)
+    http.Text(ctx, body)
+end
+
+func _rpc_error(ctx: i64, status: int, code: int, message: str):
+    http.SetHeader(ctx, "Cache-Control", "no-store")
+    http.SetStatus(ctx, status)
+    http.Json(ctx, mcprpc.ErrorMessage("null", code, message))
+end
+
+func _named(req: mcprpc.Request): str:
+    switch req.method:
+        "tools/call", "prompts/get":
+            ret mcprpc.ParamStr(req.params, "name", "")
+        end
+        "resources/read":
+            ret mcprpc.ParamStr(req.params, "uri", "")
+        end
+    end
+    ret ""
+end
+
+func _headers_match(ctx: i64, req: mcprpc.Request): bool:
+    if req.bad_json: ret true end
+    method := http.Header(ctx, "Mcp-Method")
+    if method.len() > 0 and method != req.method: ret false end
+    name := http.Header(ctx, "Mcp-Name")
+    if name.len() > 0 and name != _named(req): ret false end
+    ret true
+end
+
+func _scheme(ctx: i64): str:
+    p := http.Header(ctx, "X-Forwarded-Proto").lower()
+    if p == "https" or p == "http": ret p end
+    ret "http"
+end
+
+func _resource(ctx: i64): str:
+    ret mcpauth.Resource(_scheme(ctx), http.Header(ctx, "Host").lower())
+end
+
+func _ip(ctx: i64): str:
+    cf := http.Header(ctx, "CF-Connecting-IP")
+    if cf.len() > 0: ret cf end
+    real := http.Header(ctx, "X-Real-IP")
+    if real.len() > 0: ret real end
+    fwd := http.Header(ctx, "X-Forwarded-For")
+    comma := fwd.find(",")
+    if comma >= 0: ret fwd.substr(0, comma).trim() end
+    ret fwd
+end
+
+func _deny(ctx: i64, status: int, error: str, description: str):
+    http.SetHeader(ctx, "WWW-Authenticate", mcpauth.Challenge(_resource(ctx), error, description))
+    _rpc_error(ctx, status, mcprpc.McpErrInvalidRequest, "Sign in with your Salam account to use this server: ".concat(description))
+end
+
+func _signed_in(ctx: i64, who &: mcpauth.Principal): bool:
+    if not mcpauth.Enabled(): ret true end
+    if http.Header(ctx, "X-Forwarded-Proto").lower() == "http":
+        _rpc_error(ctx, 400, mcprpc.McpErrInvalidRequest, "This server needs HTTPS so access tokens are never sent in clear text. Use https://".concat(http.Header(ctx, "Host").lower()).concat("/mcp"))
+        ret false
+    end
+    auth := http.Header(ctx, "Authorization")
+    if not str.StartsWith(auth.lower(), "bearer "):
+        _deny(ctx, 401, "", "no access token")
+        ret false
+    end
+    who = mcpauth.Check(auth.substr(7, auth.len() - 7).trim())
+    if who.ok: ret true end
+    switch who.problem:
+        "scope":
+            _deny(ctx, 403, "insufficient_scope", "the token does not grant the mcp scope")
+            break
+        end
+        "unavailable":
+            http.SetHeader(ctx, "Retry-After", "5")
+            _rpc_error(ctx, 503, mcprpc.McpErrInternal, "the sign-in service is not reachable; try again shortly")
+            break
+        end
+        else:
+            _deny(ctx, 401, "invalid_token", "the access token is invalid or expired")
+        end
+    end
+    ret false
+end
+
+func _arguments(req: mcprpc.Request): str:
+    switch req.method:
+        "tools/call":
+            ret json.Encode(mcprpc.ParamObject(req.params, "arguments"), json.JSONOptions {})
+        end
+        "resources/read":
+            ret mcprpc.ParamStr(req.params, "uri", "")
+        end
+    end
+    ret ""
+end
+
+func _succeeded(reply: str): bool:
+    if reply.find("\"error\": {") >= 0: ret false end
+    ret reply.find("\"isError\": true") < 0
+end
+
+func _metadata(ctx: i64):
+    _cors(ctx)
+    if not mcpauth.Enabled():
+        _plain(ctx, 404, "this server does not require sign-in\n")
+        ret
+    end
+    http.SetHeader(ctx, "Cache-Control", "public, max-age=3600")
+    http.SetStatus(ctx, 200)
+    http.Json(ctx, mcpauth.Metadata(_resource(ctx)))
+end
+
+func _post(ctx: i64):
+    _enter()
+    _serve_post(ctx)
+    _leave()
+end
+
+func _serve_post(ctx: i64):
+    _cors(ctx)
+    if not _allowed(http.Header(ctx, "Origin")):
+        _plain(ctx, 403, "origin not allowed\n")
+        ret
+    end
+    kind := http.Header(ctx, "Content-Type").lower()
+    if kind.find("application/json") < 0:
+        _rpc_error(ctx, 415, mcprpc.McpErrInvalidRequest, "Content-Type must be application/json")
+        ret
+    end
+    proto := http.Header(ctx, "MCP-Protocol-Version")
+    if proto.len() > 0 and not mcpsrv.KnownVersion(proto):
+        _rpc_error(ctx, 400, mcprpc.McpErrInvalidRequest, "Unsupported MCP-Protocol-Version: ".concat(proto))
+        ret
+    end
+    req := mcprpc.Parse(http.Body(ctx))
+    if not _headers_match(ctx, req):
+        http.SetHeader(ctx, "Cache-Control", "no-store")
+        http.SetStatus(ctx, 400)
+        http.Json(ctx, mcprpc.ErrorMessage(req.id_json, mcprpc.McpErrHeaderMismatch, "Mcp-Method or Mcp-Name header does not match the request body"))
+        ret
+    end
+    mut who := mcpauth.Principal {}
+    if not _signed_in(ctx, who): ret end
+    started := time.NowMillis()
+    mut legacy := not req.has_proto
+    reply := mcpsrv.Dispatch(req, legacy)
+    if req.method == "tools/call" or req.method == "resources/read":
+        mcpauth.Record(who, req.method, _named(req), _succeeded(reply), time.NowMillis() - started, _arguments(req), _ip(ctx), http.Header(ctx, "User-Agent"))
+    end
+    http.SetHeader(ctx, "Cache-Control", "no-store")
+    if reply.len() == 0:
+        http.SetStatus(ctx, 202)
+        http.Text(ctx, "")
+        ret
+    end
+    http.SetStatus(ctx, 200)
+    http.Json(ctx, reply)
+end
+
+func _no_stream(ctx: i64):
+    _cors(ctx)
+    http.SetHeader(ctx, "Allow", "POST, OPTIONS")
+    _plain(ctx, 405, "this server is stateless: send JSON-RPC requests with POST\n")
+end
+
+func _preflight(ctx: i64):
+    _cors(ctx)
+    http.SetStatus(ctx, 204)
+    http.Text(ctx, "")
+end
+
+func _health(ctx: i64):
+    _cors(ctx)
+    http.SetHeader(ctx, "Cache-Control", "no-store")
+    http.SetStatus(ctx, 200)
+    http.Json(ctx, `{"ok":true,"name":"salam-mcp","version":"` + SALAM_VERSION + `","dropped_events":` + str.FromInt(mcpauth.Dropped()) + "}")
+end
+
+func _home(ctx: i64):
+    _cors(ctx)
+    http.SetHeader(ctx, "Cache-Control", "public, max-age=300")
+    http.SetStatus(ctx, 200)
+    http.Html(ctx, _page())
+end
+
+func _page(): str:
+    ret `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Salam MCP</title>
+<meta name="description" content="A hosted Model Context Protocol server for the Salam programming language.">
+<style>
+:root{--bg:#fbfaf7;--fg:#1d1d1b;--muted:#5d5b55;--line:#e3e0d8;--code:#f1eee6;--accent:#0b6e4f}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--fg:#ecebe6;--muted:#a3a19a;--line:#2e2d2a;--code:#1f1e1c;--accent:#4cc79a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:46rem;margin:0 auto;padding:3rem 1rem 4rem}
+h1{font-size:2rem;margin:0 0 .25rem}
+h2{font-size:1.1rem;margin:2.25rem 0 .5rem}
+p{margin:.5rem 0}
+.lead{color:var(--muted);margin-bottom:1.5rem}
+.url{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;border:1px solid var(--line);border-radius:.5rem;padding:.75rem 1rem;background:var(--code)}
+.url code{font-size:1.05rem;word-break:break-all;flex:1}
+button{font:inherit;border:1px solid var(--line);background:var(--bg);color:var(--fg);border-radius:.4rem;padding:.3rem .8rem;cursor:pointer}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.5rem;padding:.9rem 1rem;overflow-x:auto;font-size:.9rem}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+ul{padding-left:1.2rem}
+li{margin:.2rem 0}
+a{color:var(--accent)}
+footer{margin-top:3rem;color:var(--muted);font-size:.9rem}
+</style>
+</head>
+<body>
+<main>
+<h1>Salam MCP</h1>
+<p class="lead">A hosted <a href="https://modelcontextprotocol.io">Model Context Protocol</a> server for the Salam programming language. Connect any MCP client and it can type-check Salam code, look up the real standard library and find working examples, with nothing to install.</p>
+<div class="url"><code id="u">https://mcp.salamlang.ir/mcp</code><button type="button" onclick="navigator.clipboard.writeText(document.getElementById('u').textContent);this.textContent='Copied'">Copy</button></div>
+
+<h2>Claude Code</h2>
+<pre><code>claude mcp add --transport http salam https://mcp.salamlang.ir/mcp</code></pre>
+
+<h2>Cursor, VS Code, Windsurf and other clients</h2>
+<pre><code>{
+  "mcpServers": {
+    "salam": { "type": "http", "url": "https://mcp.salamlang.ir/mcp" }
+  }
+}</code></pre>
+<p>In claude.ai or Claude Desktop, add it under Settings, Connectors, Add custom connector, with the same URL.</p>
+
+<h2>Sign in</h2>
+<p>The first time a client connects, it opens a browser window where you sign in with your <a href="https://ai.salamlang.ir">Salam account</a> (or create one) and allow the app. Your client keeps the connection after that. You can see and disconnect your apps any time under <a href="https://ai.salamlang.ir/apps">Connected apps</a>.</p>
+
+<h2>Tools</h2>
+<ul>
+<li><code>salam_check</code> type-checks a program and returns diagnostics with line and column</li>
+<li><code>salam_format</code>, <code>salam_inspect</code>, <code>salam_llvm_ir</code> and <code>salam_js</code> format, dump and compile a program</li>
+<li><code>salam_stdlib_packages</code> and <code>salam_stdlib_symbols</code> list the standard library as it really is</li>
+<li><code>salam_find_examples</code>, <code>salam_read_source</code> and <code>salam_keywords</code> search the test corpus, read sources and map English and Persian keywords</li>
+</ul>
+<p>Programs are sent as text and compiled in a private scratch directory that is deleted after each call. This server never runs your program. Each tool call is recorded in your account with its arguments, so you can review what your apps did. For <code>salam_run</code> and <code>salam_build</code>, run the server locally from the <a href="https://github.com/SalamLang/Salam/tree/main/tools/mcp">repository</a>.</p>
+
+<footer><a href="https://www.salamlang.ir">salamlang.ir</a> · <a href="https://github.com/SalamLang/Salam">GitHub</a> · <a href="https://editor.salamlang.ir">Online editor</a></footer>
+</main>
+</body>
+</html>
+`
+end
+
+@en "Serve"
+@fa "خدمت کن"
+pub func Serve(host: str, port: int): bool:
+    origins := env.GetOr("SALAM_MCP_ORIGINS", "").trim()
+    if origins.len() > 0: g_origins = ",".concat(str.Replace(origins, " ", "")).concat(",") end
+    http.SetMaxBodyBytes(4194304)
+    g_live_lock = sync.NewMutex()
+    g_soft_mb = env.GetOr("SALAM_MCP_MEMORY_SOFT_MB", "1500").to_int()
+    g_hard_mb = env.GetOr("SALAM_MCP_MEMORY_HARD_MB", "3200").to_int()
+    if g_soft_mb > 0:
+        _w := spawn(_watchdog)
+    end
+    mut r := router.NewRouter()
+    router.Get(r, "/", _home)
+    router.Get(r, "/health", _health)
+    router.Post(r, "/mcp", _post)
+    router.Get(r, "/mcp", _no_stream)
+    router.Delete(r, "/mcp", _no_stream)
+    router.Options(r, "/mcp", _preflight)
+    router.Get(r, "/.well-known/oauth-protected-resource", _metadata)
+    router.Get(r, "/.well-known/oauth-protected-resource/mcp", _metadata)
+    router.Options(r, "/.well-known/oauth-protected-resource", _preflight)
+    router.Options(r, "/.well-known/oauth-protected-resource/mcp", _preflight)
+    mut s := http.NewServer(port)
+    http.SetHost(s, host)
+    http.Use(s, r)
+    mcprpc.Log("ready (http) on ".concat(host).concat(":").concat(str.FromInt(port)).concat("/mcp"))
+    http.Run(s)
+    ret false
+end

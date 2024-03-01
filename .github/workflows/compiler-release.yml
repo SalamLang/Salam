@@ -1,0 +1,2759 @@
+---
+name: 🚀 Compiler - Build & Release Binaries
+# checkov:skip=CKV_GHA_7:inputs are only ever read via env: indirection, never interpolated into a run: script
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      nightly:
+        description: Build the full multi-platform release and publish it as a nightly release (used by the nightly-release-check workflow)
+        type: boolean
+        default: false
+      nightly_date:
+        description: 'Date (YYYY-MM-DD) to stamp the nightly tag/title with; defaults to today (UTC) if left blank'
+        type: string
+        default: ''
+env:
+  # Release-gate test suites; set to "false" to ship a release while failing tests are fixed.
+  RELEASE_TESTS: 'true'
+  CCACHE_COMPRESS: '1'
+  CCACHE_COMPRESSLEVEL: '9'
+
+permissions:
+  contents: read
+concurrency:
+  group: >-
+    ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:'))
+    && 'compiler-release-stable'
+    || (github.event_name == 'pull_request' && format('compiler-release-pr-{0}', github.event.pull_request.number))
+    || (github.event_name == 'push' && 'compiler-release-main')
+    || format('compiler-release-{0}', github.run_id) }}
+  cancel-in-progress: true
+jobs:
+  release-guard:
+    name: Release version is not taken
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout VERSION
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: VERSION
+          sparse-checkout-cone-mode: false
+      - name: Refuse to reuse a released version
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          tag="v$(tr -d ' \t\r\n' < VERSION)"
+          if gh release view "$tag" -R "$REPO" --json isPrerelease --jq '.isPrerelease' 2>/dev/null | grep -qx false; then
+            echo "::error::$tag is already released, and immutable releases keep a used tag name forever. Bump VERSION in the release commit: salam run tools/salam/update-version.salam <next version>"
+            exit 1
+          fi
+          echo "$tag has no published release yet"
+  changes:
+    needs: release-guard
+    uses: ./.github/workflows/_changes.yml # zizmor: ignore[self-repository]
+    with:
+      paths: |
+        *
+        !website/*
+        !books/*
+        !editor/*
+        !android/*
+        !extensions/*
+        !runner/*
+        !design/*
+        !*.md
+        !LICENSE
+        !.github/*
+        .github/actions/setup-*
+        .github/workflows/_changes.yml
+        .github/workflows/compiler-release.yml
+        !package.json
+        !bun.lock
+        !bunfig.toml
+        !biome.json
+        !tsconfig.json
+        !vercel.json
+        !build-vercel-editor.sh
+        !.stylelintrc.json
+        !.prettierrc
+        !myst.yml
+        !.readthedocs.yaml
+        !prek*.toml
+        !typos.toml
+        !.trivyignore.yaml
+  build-linux:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    name: Build Salam for Linux
+    runs-on: ubuntu-24.04
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      typesense:
+        image: typesense/typesense:30.2
+        ports:
+          - 8108:8108
+        env:
+          TYPESENSE_API_KEY: salam-ci-typesense-key
+          TYPESENSE_DATA_DIR: /tmp
+          TYPESENSE_ANALYTICS_MINUTE_RATE_LIMIT: '1000'
+        options: >-
+          --health-cmd "bash -c 'echo > /dev/tcp/127.0.0.1/8108'"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      meilisearch:
+        image: getmeili/meilisearch:v1.55.0
+        ports:
+          - 7700:7700
+        env:
+          MEILI_MASTER_KEY: salam-ci-meili-master-key
+          MEILI_NO_ANALYTICS: 'true'
+        options: >-
+          --health-cmd "wget -qO- http://127.0.0.1:7700/health || exit 1"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install dependencies (static LLVM + LLD + cross sysroot inputs)
+        run: |
+          echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
+          wget -4 -qO llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          sudo apt-get update
+          sudo apt-get install -y build-essential ccache cmake ninja-build \
+            llvm-22-dev liblld-22-dev libpolly-22-dev libclang-rt-22-dev \
+            libzstd-dev zlib1g-dev \
+            musl-dev musl-tools mingw-w64 qemu-user-static wine64
+          WINE_BIN="$(command -v wine64 || command -v wine || true)"
+          if [ -z "$WINE_BIN" ]; then
+            echo "::error::no wine or wine64 binary found after installing wine64"
+            exit 1
+          fi
+          sudo ln -sf "$WINE_BIN" /usr/local/bin/wine
+          gcc --version | head -1
+          llvm-config-22 --version
+      - name: Initialize Wine prefix (for running cross-compiled Windows test binaries)
+        run: |
+          echo "WINEDEBUG=-all" >> "$GITHUB_ENV"
+          echo "XDG_RUNTIME_DIR=/tmp/xdg-runtime" >> "$GITHUB_ENV"
+          mkdir -p /tmp/xdg-runtime && chmod 0700 /tmp/xdg-runtime
+          export WINEDEBUG=-all XDG_RUNTIME_DIR=/tmp/xdg-runtime
+          timeout 60 wineboot --init >/tmp/wineboot-init.log 2>&1
+          timeout 30 wineserver -w || wineserver -k || true
+          if [ ! -f ~/.wine/system.reg ]; then
+            echo "::error::wine prefix init failed:"
+            cat /tmp/wineboot-init.log
+            exit 1
+          fi
+          rm -f /tmp/wineboot-init.log
+      - name: Cache cross musl sysroots (aarch64 + i686 + armhf)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /tmp/muslcc/sr-aarch64
+            /tmp/muslcc/sr-i686
+            /tmp/muslcc/sr-arm
+          key: musl-embed-sysroots-v2-${{ github.run_id }}
+          restore-keys: |
+            musl-embed-sysroots-v2-
+      - name: Fetch cross musl sysroots (aarch64 + i686 + armhf) for embedding
+        run: sh tools/bash/fetch-musl-sysroots.sh --out /tmp/muslcc --arches "aarch64 i686 arm"
+      - name: Cache ccache (Linux)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.ccache
+          key: ccache-linux-${{ github.run_id }}
+          restore-keys: |
+            ccache-linux-
+      - name: Restore static third-party libs (sqlite3, per --target=)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/extralibs
+          key: extralibs-sqlite3-3530400-v6-${{ github.run_id }}
+          restore-keys: |
+            extralibs-sqlite3-3530400-v6-
+      - name: Build static third-party libs for all --target= triples
+        id: extralibs
+        run: |
+          set -eu
+          mkdir -p /tmp/extralibs
+          fingerprint() {
+            find "$1" -type f 2>/dev/null \
+              | LC_ALL=C sort | sha256sum | cut -d' ' -f1
+          }
+          EXTRALIBS_BEFORE=$(fingerprint /tmp/extralibs)
+          TARGETS="x86_64-linux-musl aarch64-linux-musl i686-linux-musl arm-linux-musleabihf x86_64-w64-windows-gnu hostlibs"
+          need_build() { [ ! -f "/tmp/extralibs/$2/lib$1.a" ]; }
+          any_needed() { for t in $TARGETS; do need_build "$1" "$t" && return 0; done; return 1; }
+
+          if any_needed sqlite3; then
+            curl -fL --connect-timeout 10 --max-time 120 -o /tmp/sqlite3.zip \
+              "https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip"
+            echo "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d  /tmp/sqlite3.zip" \
+              | sha256sum -c -
+            unzip -q -o /tmp/sqlite3.zip -d /tmp/sqlite3-src
+            SQLITE_C=/tmp/sqlite3-src/sqlite-amalgamation-3530400/sqlite3.c
+          fi
+
+          build_sqlite3() {
+            target="$1"; cc="$2"; ar="$3"
+            mkdir -p "/tmp/extralibs/$target"
+            "$cc" -O2 -DSQLITE_THREADSAFE=1 -c "$SQLITE_C" -o "/tmp/extralibs/$target/sqlite3.o"
+            "$ar" rcs "/tmp/extralibs/$target/libsqlite3.a" "/tmp/extralibs/$target/sqlite3.o"
+            rm -f "/tmp/extralibs/$target/sqlite3.o"
+          }
+          build_all() {
+            target="$1"; cc="$2"; ar="$3"
+            command -v "$cc" >/dev/null 2>&1 || {
+              echo "::warning::$cc not found; skipping static third-party libs for $target"; return 0; }
+            if need_build sqlite3 "$target"; then
+              build_sqlite3 "$target" "$cc" "$ar"; echo "built libsqlite3.a for $target"
+            fi
+          }
+          build_all x86_64-linux-musl musl-gcc ar
+          build_all x86_64-w64-windows-gnu x86_64-w64-mingw32-gcc x86_64-w64-mingw32-ar
+          build_all hostlibs gcc ar
+
+          ARCH_TARGETS=(); ARCH_GCC=(); ARCH_ARCH=(); ARCH_CTRIPLE=()
+          for pair in aarch64:aarch64-linux-musl:aarch64-unknown-linux-musl \
+                      i686:i686-linux-musl:i686-unknown-linux-musl \
+                      arm:arm-linux-musleabihf:arm-unknown-linux-musleabihf; do
+            arch="${pair%%:*}"; rest="${pair#*:}"; target="${rest%%:*}"
+            ctriple="${rest#*:}"
+            need_build sqlite3 "$target" || {
+              echo "reusing cached static libs for $target"; continue; }
+            rm -rf "/tmp/xtc-${arch}"; mkdir -p "/tmp/xtc-${arch}"
+            if curl -fL --connect-timeout 5 --max-time 300 --speed-limit 512 --speed-time 30 \
+                 -o "/tmp/xtc-${arch}.tar" \
+                 "https://github.com/cross-tools/musl-cross/releases/latest/download/${ctriple}.tar.xz" \
+               || curl -fL --connect-timeout 5 --max-time 300 --speed-limit 512 --speed-time 30 \
+                 -o "/tmp/xtc-${arch}.tar" "https://musl.cc/${target}-cross.tgz" \
+                 2>/dev/null; then
+              tar xf "/tmp/xtc-${arch}.tar" -C "/tmp/xtc-${arch}"
+              GCC=$(find "/tmp/xtc-${arch}" -name "${ctriple}-gcc" -o -name "*-linux-musl*-gcc" \
+                      -o -name "*musleabihf-gcc" | head -1)
+              AR=$(find "/tmp/xtc-${arch}" -name "${ctriple}-ar" -o -name "*-linux-musl*-ar" \
+                     -o -name "*musleabihf-ar" | head -1)
+              if [ -n "$GCC" ] && [ -n "$AR" ]; then
+                build_all "$target" "$GCC" "$AR"
+                ARCH_TARGETS+=("$target"); ARCH_GCC+=("$GCC")
+                ARCH_ARCH+=("$arch"); ARCH_CTRIPLE+=("$ctriple")
+                continue
+              else
+                echo "::warning::could not locate cross-gcc/ar for $arch in the fetched toolchain; skipping static third-party libs for $target"
+              fi
+            else
+              echo "::warning::could not fetch $arch musl-cross toolchain; skipping static third-party libs for $target"
+            fi
+            chmod -R u+rwX "/tmp/xtc-${arch}" 2>/dev/null || true
+            rm -rf "/tmp/xtc-${arch}" "/tmp/xtc-${arch}.tar"
+          done
+          for arch in aarch64 i686 arm; do
+            chmod -R u+rwX "/tmp/xtc-${arch}" 2>/dev/null || true
+            rm -rf "/tmp/xtc-${arch}" "/tmp/xtc-${arch}.tar"
+          done
+          rm -rf /tmp/sqlite3.zip /tmp/sqlite3-src
+
+          for target in $TARGETS; do
+            [ -d "/tmp/extralibs/$target" ] || continue
+            if [ "$target" = "hostlibs" ]; then
+              echo "SALAM_EMBED_HOSTLIBS_DIR=/tmp/extralibs/hostlibs" >> "$GITHUB_ENV"
+              continue
+            fi
+            var="SALAM_EMBED_EXTRALIBS_$(echo "$target" | tr 'a-z-' 'A-Z_')_DIR"
+            echo "${var}=/tmp/extralibs/$target" >> "$GITHUB_ENV"
+          done
+
+          EXTRALIBS_AFTER=$(fingerprint /tmp/extralibs)
+          if [ -n "$EXTRALIBS_AFTER" ] && [ "$EXTRALIBS_BEFORE" = "$EXTRALIBS_AFTER" ]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'static libs fully cached; skipping cache save'
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            echo 'static libs changed; a fresh cache entry will be saved'
+          fi
+      - name: Save static third-party libs (sqlite3, per --target=)
+        if: steps.extralibs.outputs.changed == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/extralibs
+          key: extralibs-sqlite3-3530400-v6-${{ github.run_id }}
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Stage the musl and mingw sysroots
+        run: sh tools/bash/stage-sysroots.sh --out="$GITHUB_WORKSPACE/sysroots"
+
+      - name: Stage the wasm32-wasi sysroot
+        run: sh tools/bash/stage-wasi-sysroot.sh --out="$GITHUB_WORKSPACE/sysroots/wasm32-wasi"
+
+      - name: Build libsalam_llvm.a (in-process LLVM + LLD)
+        run: sh std/llvm/native/build.sh --llvm-config llvm-config-22 --out "$GITHUB_WORKSPACE"
+
+      - name: Build libsalam_embed.a (sysroots + static third-party libs)
+        run: |
+          set -eu
+          sr="$GITHUB_WORKSPACE/sysroots"
+          sh tools/bash/build-embed.sh --out "$GITHUB_WORKSPACE" \
+            --musl-x86_64 "$sr/x86_64-linux-musl" \
+            --musl-aarch64 "${SALAM_EMBED_MUSL_AARCH64_DIR:-}" \
+            --musl-i686 "${SALAM_EMBED_MUSL_I686_DIR:-}" \
+            --musl-arm "${SALAM_EMBED_MUSL_ARM_DIR:-}" \
+            --mingw-x86_64 "$sr/x86_64-w64-mingw32" \
+            --mingw-i686 "$sr/i686-w64-mingw32" \
+            --hostlibs "${SALAM_EMBED_HOSTLIBS_DIR:-}" \
+            --extralibs-x86_64-musl "${SALAM_EMBED_EXTRALIBS_X86_64_LINUX_MUSL_DIR:-}" \
+            --extralibs-aarch64-musl "${SALAM_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL_DIR:-}" \
+            --extralibs-i686-musl "${SALAM_EMBED_EXTRALIBS_I686_LINUX_MUSL_DIR:-}" \
+            --extralibs-arm-musl "${SALAM_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF_DIR:-}" \
+            --extralibs-x86_64-mingw "${SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR:-}" \
+            --wasi "$sr/wasm32-wasi"
+
+      - name: Build the flagship self-contained salam (LLVM + LLD + sysroots)
+        run: |
+          set -eu
+          sh tools/bash/build-selfhost.sh \
+            --llvm="$GITHUB_WORKSPACE" --embed="$GITHUB_WORKSPACE" \
+            -- "--libpath=${SALAM_EMBED_HOSTLIBS_DIR:-/tmp/extralibs/hostlibs}"
+          echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
+          ./salam version
+
+      - name: Smoke-test wasm32-wasi with no wasi-sdk (embedded sysroot + in-process LLD)
+        run: |
+          set -eu
+          export SALAM_STD="$PWD/std"
+          printf 'func main:\n    println "ok-wasi"\nend\n' > wsmoke.salam
+          env -u WASI_SDK_PATH PATH=/usr/bin:/bin ./salam build wsmoke.salam --target=wasm32-wasi -o wsmoke.wasm
+          printf '%s\n' 'const {WASI}=require("node:wasi");const w=new WASI({version:"preview1",args:["wsmoke"],returnOnExit:true});' \
+            'WebAssembly.instantiate(require("fs").readFileSync("wsmoke.wasm"),w.getImportObject()).then(({instance})=>process.exit(w.start(instance)));' > wsmoke.cjs
+          out=$(node --no-warnings wsmoke.cjs)
+          [ "$out" = "ok-wasi" ] || { echo "::error::wasm32-wasi smoke printed '$out'"; exit 1; }
+
+      - name: Smoke-test the backend (and cross-compile with a scrubbed PATH)
+        run: |
+          export SALAM_STD="$PWD/std"
+          printf 'func main:\n    println "ok-llvm"\nend\n' > smoke.salam
+          echo "[native] embedded LLVM backend"
+          ./salam llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
+          ./salam llvm smoke.salam --exec -o smoke_exe --log-level=warn && ./smoke_exe
+          if [ "${SELF_CONTAINED:-0}" = "1" ]; then
+            echo "[cross] x86_64-linux-musl, PATH=/nonexistent (in-process LLD + embedded musl)"
+            env PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
+              ./salam build smoke.salam --target=x86_64-linux-musl -o smoke_musl
+            ./smoke_musl; file smoke_musl
+            echo "[cross] x86_64-w64-windows-gnu, PATH=/nonexistent (embedded mingw sysroot)"
+            env PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
+              ./salam build smoke.salam --target=x86_64-w64-windows-gnu -o smoke.exe
+            file smoke.exe
+            if [ -n "${SALAM_EMBED_MUSL_AARCH64_DIR:-}" ]; then
+              echo "[cross] aarch64-linux-musl, PATH=/nonexistent (embedded aarch64 musl)"
+              env PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
+                ./salam build smoke.salam --target=aarch64-linux-musl -o smoke_a64
+              file smoke_a64
+              qemu-aarch64-static ./smoke_a64
+            fi
+            if [ -n "${SALAM_EMBED_MUSL_I686_DIR:-}" ]; then
+              echo "[cross] i686-linux-musl, PATH=/nonexistent (embedded i686 musl)"
+              env PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
+                ./salam build smoke.salam --target=i686-linux-musl -o smoke_i686
+              file smoke_i686
+              ./smoke_i686
+            fi
+            if [ -n "${SALAM_EMBED_MUSL_ARM_DIR:-}" ]; then
+              echo "[cross] arm-linux-musleabihf, PATH=/nonexistent (embedded armhf musl)"
+              env PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
+                ./salam build smoke.salam --target=arm-linux-musleabihf -o smoke_armhf
+              file smoke_armhf
+              qemu-arm-static ./smoke_armhf
+            fi
+          fi
+          rm -f smoke.salam smoke_exe smoke_musl smoke.exe smoke_a64 smoke_i686 smoke_armhf smoke.o salam_mod_*.c salam_mod_*.h
+      - name: Set up pinned tcc
+        if: env.RELEASE_TESTS == 'true' && (startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly))
+        uses: ./.github/actions/setup-tcc # zizmor: ignore[self-repository]
+      - name: Validate full test suite (release gate)
+        if: env.RELEASE_TESTS == 'true' && (startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly))
+        run: |
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev redis-server
+          sudo systemctl start redis-server || true
+          if sudo systemctl start mysql && mysql -uroot -proot -e "CREATE DATABASE IF NOT EXISTS salamtest"; then
+            export SALAM_TEST_MYSQL="127.0.0.1 3306 root root salamtest"
+          fi
+          if sudo systemctl start postgresql && sudo -u postgres psql -qc "ALTER USER postgres PASSWORD 'postgres'"; then
+            export SALAM_TEST_PG="host=localhost user=postgres password=postgres dbname=postgres"
+          fi
+          if curl -sf http://127.0.0.1:8108/health >/dev/null; then
+            export SALAM_TEST_TYPESENSE="http://127.0.0.1:8108 salam-ci-typesense-key"
+          fi
+          if docker run -d --name salam-es -p 127.0.0.1:9200:9200 -e discovery.type=single-node -e xpack.security.enabled=false -e path.repo=/tmp \
+              -e ES_JAVA_OPTS="-Xms512m -Xmx512m" docker.elastic.co/elasticsearch/elasticsearch:8.15.3 \
+            && timeout 180 sh -c 'until curl -sf "http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=5s" >/dev/null; do sleep 3; done'; then
+            export SALAM_TEST_ES="http://127.0.0.1:9200"
+          fi
+          if docker run -d --name salam-es-secure -p 127.0.0.1:9202:9202 -e discovery.type=single-node -e http.port=9202 \
+              -e ELASTIC_PASSWORD=salam-ci-es-password -e ES_JAVA_OPTS="-Xms512m -Xmx512m" docker.elastic.co/elasticsearch/elasticsearch:8.15.3 \
+            && timeout 180 sh -c 'until curl -sfk -u elastic:salam-ci-es-password "https://127.0.0.1:9202/_cluster/health?wait_for_status=yellow&timeout=5s" >/dev/null; do sleep 3; done' \
+            && docker cp salam-es-secure:/usr/share/elasticsearch/config/certs/http_ca.crt /tmp/es_http_ca.crt; then
+            export SALAM_TEST_ES_SECURE="https://localhost:9202 elastic salam-ci-es-password /tmp/es_http_ca.crt"
+          fi
+          if curl -sf http://127.0.0.1:7700/health >/dev/null; then
+            export SALAM_TEST_MEILI="http://127.0.0.1:7700 salam-ci-meili-master-key"
+          fi
+          if docker run -d --name salam-opensearch -p 127.0.0.1:9201:9200 -e discovery.type=single-node -e DISABLE_SECURITY_PLUGIN=true \
+              -e DISABLE_INSTALL_DEMO_CONFIG=true -e OPENSEARCH_JAVA_OPTS="-Xms512m -Xmx512m" opensearchproject/opensearch:2.17.1 \
+            && timeout 240 sh -c 'until curl -sf "http://127.0.0.1:9201/_cluster/health?wait_for_status=yellow&timeout=5s" >/dev/null; do sleep 3; done'; then
+            export SALAM_TEST_OPENSEARCH="http://127.0.0.1:9201"
+          fi
+          SALAM_TEST_PORT=1 SALAM="$GITHUB_WORKSPACE/salam" sh tools/bash/run-tests.sh 2>&1 | tee /tmp/tests.log || true
+          grep -qE 'RESULT: [0-9]+ passed, 0 failed' /tmp/tests.log \
+            || { echo "::error::Linux test suite failed - blocking release"; exit 1; }
+
+      - name: Generated C compiles clean under tcc, gcc and clang
+        if: env.RELEASE_TESTS == 'true' && (startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly))
+        run: |
+          set -eu
+          CLANG=""
+          for c in clang-22 clang; do
+            if command -v "$c" >/dev/null 2>&1; then
+              CLANG="$c"
+              break
+            fi
+          done
+          rc=0
+          for cc in tcc gcc $CLANG; do
+            command -v "$cc" >/dev/null 2>&1 || continue
+            echo "::group::generated C under $cc"
+            log="/tmp/strict-$cc.log"
+            SALAM="$GITHUB_WORKSPACE/salam" SALAM_CC="$cc" SALAM_C_STRICT=1 \
+              sh tools/bash/run-tests.sh general exec errors layout >"$log" 2>&1 || true
+            tail -20 "$log"
+            echo "::endgroup::"
+            if ! grep -qE 'RESULT: [0-9]+ passed, 0 failed' "$log"; then
+              echo "::error::generated C is not clean under $cc"
+              grep -E '^FAIL' "$log" | head -20
+              rc=1
+            fi
+          done
+          exit "$rc"
+      - name: Stage versioned archive
+        run: |
+          set -eu
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          DIST="salam-linux-x86_64"
+          mkdir -p "$DIST"
+          cp salam "$DIST/salam"
+          cp -r std "$DIST/std"
+          cp README.md LICENSE "$DIST/" 2>/dev/null || true
+          {
+            echo "Salam for Linux (x86_64) - flagship self-contained toolchain."
+            echo ""
+            echo "No installation needed. From this folder:"
+            echo ""
+            echo "  ./salam version"
+            echo "  ./salam exec  app.salam                               (interpreter)"
+            echo "  ./salam llvm  app.salam --jit                         (run via built-in LLVM)"
+            echo "  ./salam build app.salam -o app                        (native binary)"
+            if [ "${SELF_CONTAINED:-0}" = "1" ]; then
+              echo ""
+              echo "Cross-compile with ZERO tools installed (LLVM + LLD + sysroots are"
+              echo "compiled into salam itself):"
+              echo ""
+              echo "  ./salam build app.salam --target=x86_64-linux-musl      -o app"
+              echo "  ./salam build app.salam --target=x86_64-w64-windows-gnu -o app.exe"
+              if [ -n "${SALAM_EMBED_MUSL_AARCH64_DIR:-}" ]; then
+                echo "  ./salam build app.salam --target=aarch64-linux-musl     -o app"
+              fi
+              if [ -n "${SALAM_EMBED_MUSL_I686_DIR:-}" ]; then
+                echo "  ./salam build app.salam --target=i686-linux-musl        -o app"
+              fi
+              if [ -n "${SALAM_EMBED_MUSL_ARM_DIR:-}" ]; then
+                echo "  ./salam build app.salam --target=arm-linux-musleabihf   -o app"
+              fi
+              echo ""
+              echo "Embedded targets depend on which sysroots this build bundled (see"
+              echo "above). Other targets link against a system or \$SALAM_SYSROOTS"
+              echo "sysroot. macOS targets are not supported (Apple SDK restrictions)."
+            fi
+          } > "$DIST/RUN-ME.txt"
+          zip -r "salam-${VERSION}-linux-x86_64.zip" "$DIST" >/dev/null
+          tar -czf "salam-${VERSION}-linux-x86_64.tar.gz" "$DIST"
+          ls -la "salam-${VERSION}-linux-x86_64.zip" "salam-${VERSION}-linux-x86_64.tar.gz"
+      - name: Upload versioned archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-linux-zip
+          path: |
+            salam-*-linux-x86_64.zip
+            salam-*-linux-x86_64.tar.gz
+      - name: Upload artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-linux
+          path: salam
+  build-linux-musl:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    name: Build Salam for Linux (x86_64 musl, fully static)
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-dev musl-tools
+          musl-gcc --version | head -1
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+      - name: Build a fully static salam against musl
+        run: |
+          set -eu
+          printf '#!/bin/sh\nexec musl-gcc -static "$@"\n' > /tmp/musl-static-cc
+          chmod +x /tmp/musl-static-cc
+
+          sh tools/bash/build-selfhost.sh -- --backend=c --cc=/tmp/musl-static-cc
+      - name: It must be static, and it must run
+        run: |
+          set -eu
+          file ./salam
+          file ./salam | grep -q 'statically linked' \
+            || { echo "::error::the musl build is not statically linked"; exit 1; }
+          if objdump -T ./salam 2>/dev/null | grep -q 'GLIBC_'; then
+            echo "::error::the musl build still references versioned glibc symbols"
+            objdump -T ./salam | grep 'GLIBC_' | head
+            exit 1
+          fi
+          SALAM_STD="$PWD/std" ./salam version
+          printf 'func main:\n    println "ok-musl"\nend\n' > smoke.salam
+          SALAM_STD="$PWD/std" ./salam exec smoke.salam
+          rm -f smoke.salam
+      - name: Stage versioned archive
+        run: |
+          set -eu
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          DIST="salam-linux-x86_64-musl"
+          mkdir -p "$DIST"
+          cp salam "$DIST/salam"
+          cp -r std "$DIST/std"
+          cp README.md LICENSE "$DIST/" 2>/dev/null || true
+          {
+            echo "Salam for Linux (x86_64, static musl)."
+            echo ""
+            echo "This build depends on no system libraries at all, so it runs on any"
+            echo "x86_64 Linux regardless of which glibc the distribution ships - the"
+            echo "one to reach for on Amazon Linux, RHEL, Debian stable, Alpine, or"
+            echo "inside a slim container. install.sh picks it automatically when the"
+            echo "glibc bundle would not start."
+            echo ""
+            echo "  ./salam version"
+            echo "  ./salam exec  app.salam            (interpreter)"
+            echo "  ./salam build app.salam -o app     (native binary; needs a C compiler)"
+            echo ""
+            echo "It carries no embedded LLVM or sysroots, so it cannot cross-compile"
+            echo "and has no --jit. For that, use the glibc bundle on a host new enough"
+            echo "to run it."
+          } > "$DIST/RUN-ME.txt"
+          zip -r "salam-${VERSION}-linux-x86_64-musl.zip" "$DIST" >/dev/null
+          tar -czf "salam-${VERSION}-linux-x86_64-musl.tar.gz" "$DIST"
+          ls -la "salam-${VERSION}-linux-x86_64-musl.zip" "salam-${VERSION}-linux-x86_64-musl.tar.gz"
+      - name: Upload versioned archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-linux-musl-zip
+          path: |
+            salam-*-linux-x86_64-musl.zip
+            salam-*-linux-x86_64-musl.tar.gz
+
+  build-macos:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    name: Build Salam for macOS
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Restore Homebrew downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: brew-dl-${{ runner.arch }}-${{ github.run_id }}
+          restore-keys: |
+            brew-dl-${{ runner.arch }}-
+      - name: Install dependencies (static LLVM)
+        id: brewdeps
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          fingerprint() {
+            find "$1" -type f 2>/dev/null \
+              | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1
+          }
+          mkdir -p "$HOME/Library/Caches/Homebrew/downloads"
+          PKGS_BEFORE=$(fingerprint "$HOME/Library/Caches/Homebrew/downloads")
+
+          brew untap aws/tap || true
+          brew install llvm@22 ccache
+
+          brew link --overwrite --force llvm@22 \
+            || echo "::warning::brew could not link llvm@22; the absolute prefix below still governs the build"
+
+          LLVM_PREFIX="$(brew --prefix llvm@22)"
+          echo "$LLVM_PREFIX/bin" >> "$GITHUB_PATH"
+
+          LLVM_VER="$("$LLVM_PREFIX/bin/llvm-config" --version)"
+          echo "llvm-config: $LLVM_VER  ($LLVM_PREFIX)"
+          case "$LLVM_VER" in
+          22.*) ;;
+          *)
+              echo "::error::expected LLVM 22 from the llvm@22 keg, got $LLVM_VER"
+              exit 1
+              ;;
+          esac
+
+          if command -v llvm-config >/dev/null 2>&1; then
+              BARE_VER="$(llvm-config --version 2>/dev/null || echo unknown)"
+              echo "bare llvm-config on PATH: $BARE_VER"
+              case "$BARE_VER" in
+              22.*) ;;
+              *) echo "::warning::a bare llvm-config on PATH is $BARE_VER, not 22" ;;
+              esac
+          fi
+
+          PKGS_AFTER=$(fingerprint "$HOME/Library/Caches/Homebrew/downloads")
+          if [ -n "$PKGS_AFTER" ] && [ "$PKGS_BEFORE" = "$PKGS_AFTER" ]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'download cache unchanged; skipping cache save'
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            echo 'download cache changed; a fresh entry will be saved'
+          fi
+      - name: Save Homebrew downloads
+        if: steps.brewdeps.outputs.changed == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: brew-dl-${{ runner.arch }}-${{ github.run_id }}
+      - name: Cache ccache (macOS)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.ccache
+          key: ccache-macos-${{ github.run_id }}
+          restore-keys: |
+            ccache-macos-
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Build salam for macOS (embedded static LLVM)
+        run: |
+          set -eu
+          LLVM_PREFIX="$(brew --prefix llvm@22)"
+          sh std/llvm/native/build.sh \
+            --llvm-config "$LLVM_PREFIX/bin/llvm-config" --out "$GITHUB_WORKSPACE"
+          mkdir -p "$GITHUB_WORKSPACE/maclibs"
+          zstd_a="$(brew --prefix zstd)/lib/libzstd.a"
+          [ -f "$zstd_a" ] || {
+            echo "::error::no static libzstd at $zstd_a - the only other thing -lzstd" >&2
+            echo "  could resolve to is the dylib, which the check below rejects." >&2
+            exit 1
+          }
+          cp "$zstd_a" "$GITHUB_WORKSPACE/maclibs/"
+          sh tools/bash/build-selfhost.sh --llvm="$GITHUB_WORKSPACE" \
+            -- --libpath="$GITHUB_WORKSPACE/maclibs"
+          ./salam version
+      - name: Verify salam is self-contained (no Homebrew dylibs)
+        run: |
+          set -eu
+          echo "dylib dependencies of salam:"
+          otool -L salam
+          bad=$(otool -L salam | awk 'NR > 1 { print $1 }' \
+            | grep -E '^(/opt/homebrew/|/usr/local/(opt|Cellar|lib)/|.*/Cellar/)' || true)
+          if [ -n "$bad" ]; then
+            echo "ERROR: salam links non-system dylibs that will not exist on a user's Mac:"
+            echo "$bad"
+            echo ""
+            echo "These are Homebrew Cellar paths, usually versioned. dyld aborts at"
+            echo "startup on any machine without that exact formula version installed."
+            echo "Either drop the library, or link its"
+            echo "static archive instead of the dylib."
+            exit 1
+          fi
+          echo "OK: salam only links macOS system libraries."
+      - name: Smoke-test the embedded LLVM backend
+        run: |
+          export SALAM_STD="$PWD/std"
+          printf 'func main:\n    println "ok-llvm"\nend\n' > smoke.salam
+          ./salam llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
+          ./salam llvm smoke.salam --exec -o smoke_exe --log-level=warn && ./smoke_exe
+          rm -f smoke.salam smoke_exe smoke.o salam_mod_*.c salam_mod_*.h
+      - name: Validate test suite (release gate)
+        if: env.RELEASE_TESTS == 'true' && (startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly))
+        run: |
+          SALAM="$GITHUB_WORKSPACE/salam" sh tools/bash/run-tests.sh exec errors layout llvm 2>&1 | tee /tmp/tests.log || true
+          grep -qE 'RESULT: [0-9]+ passed, 0 failed' /tmp/tests.log \
+            || { echo "::error::macOS test suite failed - blocking release"; exit 1; }
+      - name: Stage versioned archive
+        run: |
+          set -eu
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          DIST="salam-macos-arm64"
+          mkdir -p "$DIST"
+          cp salam "$DIST/salam"
+          cp -r std "$DIST/std"
+          sh tools/bash/stage-wasi-sysroot.sh --out="$DIST/sysroots/wasm32-wasi"
+          cp README.md LICENSE "$DIST/" 2>/dev/null || true
+          {
+            echo "Salam for macOS - embedded LLVM toolchain."
+            echo ""
+            echo "  ./salam exec  app.salam            (interpreter)"
+            echo "  ./salam llvm  app.salam --jit      (run via built-in LLVM)"
+            echo "  ./salam build app.salam -o app     (native binary; uses the system"
+            echo "                                      clang/ld that ship with Xcode CLT)"
+            echo ""
+            echo "Note: macOS cannot be a fully-static, self-contained cross-compiler."
+            echo "Apple does not permit statically linking libSystem and the macOS SDK"
+            echo "is not redistributable, so linking uses Apple's toolchain. Cross-"
+            echo "compiling FROM Linux/Windows TO macOS is likewise not supported."
+          } > "$DIST/RUN-ME.txt"
+          zip -r "salam-${VERSION}-macos-arm64.zip" "$DIST" >/dev/null
+          tar -czf "salam-${VERSION}-macos-arm64.tar.gz" "$DIST"
+          ls -la "salam-${VERSION}-macos-arm64.zip" "salam-${VERSION}-macos-arm64.tar.gz"
+      - name: Upload versioned archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-macos-zip
+          path: |
+            salam-*-macos-arm64.zip
+            salam-*-macos-arm64.tar.gz
+      - name: Upload artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-macos
+          path: salam
+  build-windows:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    name: Build Salam for Windows (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-2022, primary: false }
+          - { os: windows-2025, primary: false }
+          - { os: windows-2025-vs2026, primary: true }
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Exclude build/test paths from Windows Defender
+        shell: pwsh
+        run: |
+          try {
+            Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+            Add-MpPreference -ExclusionPath "C:\msys64"
+            Add-MpPreference -ExclusionPath "$env:RUNNER_TEMP"
+            Add-MpPreference -ExclusionProcess "tcc.exe"
+            Add-MpPreference -ExclusionProcess "salam.exe"
+            Add-MpPreference -ExclusionProcess "gcc.exe"
+            Set-MpPreference -DisableRealtimeMonitoring $true
+            Write-Host "Windows Defender exclusions applied."
+          } catch {
+            Write-Host "::warning::Could not configure Windows Defender exclusions: $_"
+          }
+
+      - name: Restore MSYS2 packages
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\msys64\var\cache\pacman\pkg
+          key: msys2-mingw64-pkgs-${{ matrix.os }}-${{ github.run_id }}
+          restore-keys: |
+            msys2-mingw64-pkgs-
+
+      - name: Install MINGW64 toolchain + static LLVM + LLD
+        id: msys2deps
+        shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
+        env:
+          MSYSTEM: MINGW64
+          CHERE_INVOKING: '1'
+        run: |
+          fingerprint() {
+            find "$1" -type f 2>/dev/null \
+              | LC_ALL=C sort | sha256sum | cut -d' ' -f1
+          }
+          mkdir -p /c/msys64/var/cache/pacman/pkg
+          PKGS_BEFORE=$(fingerprint /c/msys64/var/cache/pacman/pkg)
+
+          pacman -Sy --noconfirm --needed \
+            mingw-w64-x86_64-gcc \
+            mingw-w64-x86_64-llvm \
+            mingw-w64-x86_64-lld \
+            mingw-w64-x86_64-clang \
+            make ccache git
+          gcc --version | head -1
+          llvm-config --version
+          clang --version | head -1
+
+          PKGS_AFTER=$(fingerprint /c/msys64/var/cache/pacman/pkg)
+          if [ -n "$PKGS_AFTER" ] && [ "$PKGS_BEFORE" = "$PKGS_AFTER" ]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'pacman package cache unchanged; skipping cache save'
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            echo 'pacman package cache changed; a fresh entry will be saved'
+          fi
+
+      - name: Save MSYS2 packages
+        if: steps.msys2deps.outputs.changed == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\msys64\var\cache\pacman\pkg
+          key: msys2-mingw64-pkgs-${{ matrix.os }}-${{ github.run_id }}
+
+      - name: Cache ccache (Windows)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\ccache-win64
+          key: ccache-win64-${{ matrix.os }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-win64-
+
+      - name: Cache cross musl sysroots (for cross-compiling to Linux from Windows)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            C:\muslcc\sr-x86_64
+            C:\muslcc\sr-aarch64
+            C:\muslcc\sr-i686
+            C:\muslcc\sr-arm
+          key: musl-embed-sysroots-win-v3-${{ matrix.os }}-${{ github.run_id }}
+          restore-keys: |
+            musl-embed-sysroots-win-v3-
+
+      - name: Fetch cross musl sysroots (x86_64 + aarch64 + i686 + armhf) for embedding
+        shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
+        env:
+          MSYSTEM: MINGW64
+          CHERE_INVOKING: '1'
+        run: sh tools/bash/fetch-musl-sysroots.sh --out /c/muslcc --headers
+
+      - name: Restore static third-party libs (sqlite3, per --target=)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\extralibs
+          key: extralibs-sqlite3-3530400-win-v5-${{ matrix.os }}-${{ github.run_id }}
+          restore-keys: |
+            extralibs-sqlite3-3530400-win-v5-
+      - name: Build static third-party libs for x86_64-w64-windows-gnu + linux-musl targets
+        id: extralibs
+        shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
+        env:
+          MSYSTEM: MINGW64
+          CHERE_INVOKING: '1'
+        run: |
+          set -eu
+          pacman -Sy --noconfirm --needed git unzip >/dev/null
+
+          mkdir -p /c/extralibs
+          fingerprint() {
+            find "$1" -type f 2>/dev/null \
+              | LC_ALL=C sort | sha256sum | cut -d' ' -f1
+          }
+          EXTRALIBS_BEFORE=$(fingerprint /c/extralibs)
+
+          need_build() { [ ! -f "/c/extralibs/$2/lib$1.a" ]; }
+
+          MUSL_TARGETS=""
+          if [ -n "${SALAM_EMBED_MUSL_DIR:-}" ] && [ -f "${SALAM_EMBED_MUSL_DIR}/include/features.h" ]; then
+            MUSL_TARGETS="$MUSL_TARGETS x86_64-linux-musl:${SALAM_EMBED_MUSL_DIR}:linux-x86_64:x86_64"
+          fi
+          if [ -n "${SALAM_EMBED_MUSL_AARCH64_DIR:-}" ] && [ -f "${SALAM_EMBED_MUSL_AARCH64_DIR}/include/features.h" ]; then
+            MUSL_TARGETS="$MUSL_TARGETS aarch64-linux-musl:${SALAM_EMBED_MUSL_AARCH64_DIR}:linux-aarch64:aarch64"
+          fi
+          if [ -n "${SALAM_EMBED_MUSL_I686_DIR:-}" ] && [ -f "${SALAM_EMBED_MUSL_I686_DIR}/include/features.h" ]; then
+            MUSL_TARGETS="$MUSL_TARGETS i686-linux-musl:${SALAM_EMBED_MUSL_I686_DIR}:linux-x86:i686"
+          fi
+          if [ -n "${SALAM_EMBED_MUSL_ARM_DIR:-}" ] && [ -f "${SALAM_EMBED_MUSL_ARM_DIR}/include/features.h" ]; then
+            MUSL_TARGETS="$MUSL_TARGETS arm-linux-musleabihf:${SALAM_EMBED_MUSL_ARM_DIR}:linux-armv4:arm"
+          fi
+          [ -n "$MUSL_TARGETS" ] || echo "::warning::no musl sysroots with headers staged; skipping static third-party libs for every linux-musl target"
+
+          musl_triples() { for e in $MUSL_TARGETS; do printf '%s\n' "${e%%:*}"; done; }
+          any_needed() { for t in x86_64-w64-windows-gnu $(musl_triples); do need_build "$1" "$t" && return 0; done; return 1; }
+
+          LLVM_AR_WIN=C:/msys64/mingw64/bin/llvm-ar.exe
+          LLVM_RANLIB_WIN=C:/msys64/mingw64/bin/llvm-ranlib.exe
+          if [ ! -f "$LLVM_AR_WIN" ] || [ ! -f "$LLVM_RANLIB_WIN" ]; then
+            echo "::warning::llvm-ar/llvm-ranlib not found at the expected MSYS2 path; musl cross-libs below will be skipped"
+            MUSL_TARGETS=""
+          fi
+
+          XWRAP=/c/xwrap
+          mkdir -p "$XWRAP"
+          make_musl_wrapper() {
+            triple="$1"; sr="$2"
+            d="$XWRAP/$triple"; mkdir -p "$d"
+            printf '#!/bin/sh\nexec clang -target %s -isystem "%s/include" "$@"\n' "$triple" "$sr" \
+              >"$d/$triple-gcc"
+            printf '#!/bin/sh\nexec llvm-ar "$@"\n' >"$d/$triple-ar"
+            printf '#!/bin/sh\nexec llvm-ranlib "$@"\n' >"$d/$triple-ranlib"
+            chmod +x "$d/$triple-gcc" "$d/$triple-ar" "$d/$triple-ranlib"
+            srw=$(cygpath -m "$sr" 2>/dev/null || printf '%s' "$sr")
+            printf '@echo off\r\nclang -target %s -isystem "%s/include" -fuse-ld=lld -static -B"%s" -L"%s" %%*\r\n' \
+              "$triple" "$srw" "$srw" "$srw" >"$d/$triple-gcc.bat"
+            printf '%s\n' "$d"
+          }
+
+          build_sqlite3() {
+            target="$1"; cc="$2"; ar="$3"
+            mkdir -p "/c/extralibs/$target"
+            "$cc" -O2 -DSQLITE_THREADSAFE=1 -c "$SQLITE_C" -o "/c/extralibs/$target/sqlite3.o"
+            "$ar" rcs "/c/extralibs/$target/libsqlite3.a" "/c/extralibs/$target/sqlite3.o"
+            rm -f "/c/extralibs/$target/sqlite3.o"
+          }
+          build_all() {
+            target="$1"; cc="$2"; ar="$3"
+            { command -v "$cc" >/dev/null 2>&1 || [ -x "$cc" ]; } || {
+              echo "::warning::$cc not found/executable; skipping static sqlite3 for $target"; return 0; }
+            if need_build sqlite3 "$target"; then
+              build_sqlite3 "$target" "$cc" "$ar"; echo "built libsqlite3.a for $target"
+            fi
+          }
+
+          if any_needed sqlite3; then
+            curl -fL --connect-timeout 10 --max-time 120 -o /tmp/sqlite3.zip \
+              "https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip"
+            echo "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d  /tmp/sqlite3.zip" \
+              | sha256sum -c -
+            unzip -q -o /tmp/sqlite3.zip -d /tmp/sqlite3-src
+            SQLITE_C=/tmp/sqlite3-src/sqlite-amalgamation-3530400/sqlite3.c
+          fi
+
+          build_all x86_64-w64-windows-gnu gcc ar
+
+          for entry in $MUSL_TARGETS; do
+            triple="${entry%%:*}"; rest="${entry#*:}"
+            sr="${rest%%:*}"
+            wdir=$(make_musl_wrapper "$triple" "$sr")
+            build_all "$triple" "$wdir/$triple-gcc" "$wdir/$triple-ar"
+          done
+          rm -rf /tmp/sqlite3.zip /tmp/sqlite3-src
+
+          echo "SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR=C:/extralibs/x86_64-w64-windows-gnu" \
+            >> "$GITHUB_ENV"
+          echo "SALAM_EMBED_HOSTLIBS_DIR=C:/extralibs/x86_64-w64-windows-gnu" \
+            >> "$GITHUB_ENV"
+          for entry in $MUSL_TARGETS; do
+            triple="${entry%%:*}"
+            [ -d "/c/extralibs/$triple" ] || continue
+            var="SALAM_EMBED_EXTRALIBS_$(echo "$triple" | tr 'a-z-' 'A-Z_')_DIR"
+            echo "${var}=C:/extralibs/$triple" >> "$GITHUB_ENV"
+          done
+
+          EXTRALIBS_AFTER=$(fingerprint /c/extralibs)
+          if [ -n "$EXTRALIBS_AFTER" ] && [ "$EXTRALIBS_BEFORE" = "$EXTRALIBS_AFTER" ]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'static libs fully cached; skipping cache save'
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            echo 'static libs changed; a fresh cache entry will be saved'
+          fi
+
+      - name: Save static third-party libs (sqlite3, per --target=)
+        if: steps.extralibs.outputs.changed == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\extralibs
+          key: extralibs-sqlite3-3530400-win-v5-${{ matrix.os }}-${{ github.run_id }}
+
+      - name: Install a seed compiler
+        id: seed
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Build salam.exe (embedded LLVM; best-effort LLD + mingw/musl sysroots)
+        shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
+        env:
+          MSYSTEM: MINGW64
+          CHERE_INVOKING: '1'
+          CCACHE_DIR: 'C:/ccache-win64'
+          SEED_PATH: ${{ steps.seed.outputs.salam }}
+        run: |
+          set -eu
+          SR=/tmp/mingw-sr/lib
+          mkdir -p "$SR"
+          missing=""
+          for x in crt2.o dllcrt2.o libmingw32.a libmingwex.a libmoldname.a \
+            libmsvcrt.a libadvapi32.a libshell32.a libuser32.a libkernel32.a \
+            libws2_32.a libcrypt32.a libwinhttp.a \
+            crtbegin.o crtend.o libgcc.a libgcc_eh.a; do
+            f=$(find /mingw64 -name "$x" 2>/dev/null | head -1)
+            if [ -n "$f" ]; then
+              cp "$f" "$SR/"
+            else
+              missing="$missing $x"
+            fi
+          done
+          for x in libbcrypt.a libole32.a liboleaut32.a libuuid.a libgdi32.a \
+            libcomdlg32.a libwinspool.a libpsapi.a libiphlpapi.a libsecur32.a \
+            libwinmm.a libversion.a libnetapi32.a libuserenv.a libdbghelp.a; do
+            f=$(find /mingw64 -name "$x" 2>/dev/null | head -1)
+            [ -n "$f" ] && cp "$f" "$SR/" || true
+          done
+          if [ -n "$missing" ]; then
+            echo "::warning::mingw sysroot assembly incomplete, missing:$missing"
+            MINGW_ARG=""
+          else
+            MINGW_ARG=/tmp/mingw-sr
+          fi
+
+          sh tools/bash/stage-wasi-sysroot.sh --out=/tmp/wasi-sr
+          sh std/llvm/native/build.sh --llvm-config llvm-config --out "$GITHUB_WORKSPACE"
+          sh tools/bash/build-embed.sh --out "$GITHUB_WORKSPACE" \
+            --mingw-x86_64 "$MINGW_ARG" \
+            --wasi /tmp/wasi-sr \
+            --musl-x86_64 "${SALAM_EMBED_MUSL_DIR:-}" \
+            --musl-aarch64 "${SALAM_EMBED_MUSL_AARCH64_DIR:-}" \
+            --musl-i686 "${SALAM_EMBED_MUSL_I686_DIR:-}" \
+            --musl-arm "${SALAM_EMBED_MUSL_ARM_DIR:-}" \
+            --hostlibs "${SALAM_EMBED_HOSTLIBS_DIR:-}" \
+            --extralibs-x86_64-mingw "${SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR:-}" \
+            --extralibs-x86_64-musl "${SALAM_EMBED_EXTRALIBS_X86_64_LINUX_MUSL_DIR:-}" \
+            --extralibs-aarch64-musl "${SALAM_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL_DIR:-}" \
+            --extralibs-i686-musl "${SALAM_EMBED_EXTRALIBS_I686_LINUX_MUSL_DIR:-}" \
+            --extralibs-arm-musl "${SALAM_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF_DIR:-}"
+          printf '@echo off\r\ngcc %%* -static -static-libgcc -static-libstdc++\r\n' \
+            > /tmp/cc-static.bat
+
+          sh tools/bash/build-selfhost.sh \
+            --seed="$(cygpath -u "$SEED_PATH")" \
+            --llvm="$GITHUB_WORKSPACE" --embed="$GITHUB_WORKSPACE" \
+            --output="$GITHUB_WORKSPACE/salam.exe" \
+            -- --cc="$(cygpath -m /tmp/cc-static.bat)"
+          if [ -n "$MINGW_ARG" ]; then
+            echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
+          else
+            echo "SELF_CONTAINED=0" >> "$GITHUB_ENV"
+          fi
+          ./salam.exe version
+
+      - name: Verify salam.exe is self-contained (no third-party DLLs)
+        shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
+        env:
+          MSYSTEM: MINGW64
+          CHERE_INVOKING: '1'
+        run: |
+          echo "DLL imports of salam.exe:"
+          objdump -p salam.exe | grep -i 'DLL Name' || true
+          bad=$(objdump -p salam.exe | grep -i 'DLL Name' \
+            | grep -iE 'libzstd|libstdc\+\+|libgcc|libwinpthread|libxml2|libz\.dll|zlib|libz3|libffi|libLLVM|libc\+\+' \
+            || true)
+          if [ -n "$bad" ]; then
+            echo "ERROR: salam.exe depends on non-system DLLs:"
+            echo "$bad"
+            exit 1
+          fi
+          echo "OK: salam.exe imports only Windows system DLLs."
+
+      - name: Restore bundled tcc
+        id: tccbundle
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: salam-windows/tcc
+          key: tcc-bundle-windows-x86_64-${{ hashFiles('tools/ci/tinycc-ref.txt', 'tools/ci/build-tcc.sh') }}-v1
+      - name: Build bundled tcc from the pinned TinyCC commit
+        if: steps.tccbundle.outputs.cache-hit != 'true'
+        shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
+        env:
+          MSYSTEM: MINGW64
+          CHERE_INVOKING: '1'
+        run: |
+          sh tools/ci/build-tcc.sh "$(pwd)/salam-windows/tcc"
+      - name: Save bundled tcc
+        if: steps.tccbundle.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: salam-windows/tcc
+          key: tcc-bundle-windows-x86_64-${{ hashFiles('tools/ci/tinycc-ref.txt', 'tools/ci/build-tcc.sh') }}-v1
+
+      - name: Stage self-contained bundle
+        shell: bash
+        run: |
+          set -eu
+          DIST="salam-windows"
+          mkdir -p "$DIST"
+          cp salam.exe "$DIST/"
+          cp -r std    "$DIST/std"
+          "$DIST/tcc/tcc.exe" -v
+          cp README.md LICENSE "$DIST/" 2>/dev/null || true
+          {
+            echo "Salam for Windows - self-contained."
+            echo ""
+            echo "No installation needed. From this folder:"
+            echo ""
+            echo "  salam.exe version"
+            echo "  salam.exe exec  myprogram.salam              (tree-walking interpreter)"
+            echo "  salam.exe build myprogram.salam              (C backend via bundled tcc)"
+            echo "  salam.exe llvm  myprogram.salam --jit        (run via the built-in LLVM)"
+            echo "  salam.exe llvm  myprogram.salam --exec       (native exe via built-in LLVM)"
+            if [ "${SELF_CONTAINED:-0}" = "1" ]; then
+              echo ""
+              echo "Cross-compile with ZERO tools installed (LLVM + LLD + sysroots are"
+              echo "compiled into salam.exe itself):"
+              echo ""
+              echo "  salam.exe build myprogram.salam --target=x86_64-w64-windows-gnu -o app.exe"
+              if [ -n "${SALAM_EMBED_MUSL_DIR:-}" ]; then
+                echo "  salam.exe build myprogram.salam --target=x86_64-linux-musl      -o app"
+              fi
+              if [ -n "${SALAM_EMBED_MUSL_AARCH64_DIR:-}" ]; then
+                echo "  salam.exe build myprogram.salam --target=aarch64-linux-musl     -o app"
+              fi
+              if [ -n "${SALAM_EMBED_MUSL_I686_DIR:-}" ]; then
+                echo "  salam.exe build myprogram.salam --target=i686-linux-musl        -o app"
+              fi
+              if [ -n "${SALAM_EMBED_MUSL_ARM_DIR:-}" ]; then
+                echo "  salam.exe build myprogram.salam --target=arm-linux-musleabihf   -o app"
+              fi
+            fi
+            echo ""
+            echo "LLVM is compiled into salam.exe itself - no clang/llc/lli needed."
+            echo "salam.exe finds its std/ library and the bundled tcc/ automatically;"
+            echo "keep them next to salam.exe."
+          } > "$DIST/RUN-ME.txt"
+          echo "bundle contents:"; ls -la "$DIST"
+
+      - name: Smoke-test the embedded LLVM backend
+        shell: bash
+        run: |
+          set -e
+          cd salam-windows
+          export SALAM_STD="$PWD/std"
+          printf 'func main:\n    println "ok-llvm"\nend\n' > smoke.salam
+          echo "[1] LLVM emit-obj (in-process)"
+          ./salam.exe llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
+          ls -l smoke.o
+          echo "[2] C backend via bundled tcc (build and run)"
+          ./salam.exe build smoke.salam --output=smoke_tcc.exe --log-level=warn
+          ./smoke_tcc.exe
+          echo "[3] LLVM --exec (build and run; best-effort: tcc cannot link LLVM COFF objects)"
+          if ./salam.exe llvm smoke.salam --exec -o smoke_llvm.exe --log-level=warn \
+               && ./smoke_llvm.exe; then
+            echo "    llvm --exec OK"
+          else
+            echo "    note: llvm --exec unavailable on Windows (no LLVM-capable linker);"
+            echo "          use 'salam llvm --jit' to run, or 'salam build' for a native exe."
+          fi
+          if [ "${SELF_CONTAINED:-0}" = "1" ]; then
+            for pair in x86_64:SALAM_EMBED_MUSL_DIR aarch64:SALAM_EMBED_MUSL_AARCH64_DIR \
+                        i686:SALAM_EMBED_MUSL_I686_DIR arm:SALAM_EMBED_MUSL_ARM_DIR; do
+              tgt="${pair%%:*}"; var="${pair#*:}"
+              eval "val=\${$var:-}"
+              [ -z "$val" ] && continue
+              triple="$tgt-linux-musl"; [ "$tgt" = "arm" ] && triple="arm-linux-musleabihf"
+              echo "[4] cross target $triple, PATH=/nonexistent (embedded musl, no tools on Windows)"
+              PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
+                ./salam.exe build smoke.salam --target="$triple" -o "smoke_$tgt" --log-level=warn
+              file "smoke_$tgt"
+            done
+          fi
+          rm -f smoke.salam smoke*.exe smoke_x86_64 smoke_aarch64 smoke_i686 smoke_arm smoke.o salam_mod_*.c salam_mod_*.h
+          cd ..
+
+      - name: Install native libraries for full test suite (sqlite3)
+        if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
+        shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
+        env:
+          MSYSTEM: MINGW64
+          CHERE_INVOKING: '1'
+        run: |
+          pacman -Sy --noconfirm --needed \
+            mingw-w64-x86_64-sqlite3
+
+      - name: Stage native libs for full test suite (sqlite3, WebView2Loader)
+        if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
+        shell: bash
+        run: |
+          set -eu
+          TCCLIB="salam-windows/tcc/lib"
+          MB="/c/msys64/mingw64/bin"
+          cp "$MB/libsqlite3-0.dll"    "$TCCLIB/libsqlite3.dll"
+          curl -fL --connect-timeout 20 --retry 3 --retry-delay 5 --retry-all-errors \
+            -o webview2.nupkg \
+            "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/1.0.3296.44"
+          mkdir -p wv2pkg
+          unzip -q webview2.nupkg -d wv2pkg
+          ./salam-windows/tcc/tcc.exe -impdef wv2pkg/runtimes/win-x64/native/WebView2Loader.dll \
+            -o "$TCCLIB/WebView2Loader.def"
+          rm -rf wv2pkg webview2.nupkg
+
+      - name: Enable Developer Mode (symlink support for db mock tests)
+        if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
+        shell: pwsh
+        run: |
+          New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" `
+            -Name "AllowDevelopmentWithoutDevMode" -Value 1 -PropertyType DWord -Force | Out-Null
+
+      - name: Cache Chocolatey redis package
+        if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\ProgramData\chocolatey\lib\redis
+          key: choco-redis-${{ runner.os }}-v1
+
+      - name: Validate test suite (release gate)
+        if: env.RELEASE_TESTS == 'true' && (startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly))
+        shell: bash
+        run: |
+          set -eu
+          REDIS_EXE=$(find /c/ProgramData/chocolatey -iname "redis-server.exe" 2>/dev/null | head -1)
+          [ -n "$REDIS_EXE" ] || choco install redis -y --no-progress --limit-output
+          REDIS_EXE=$(find /c/ProgramData/chocolatey -iname "redis-server.exe" 2>/dev/null | head -1)
+          if [ -z "$REDIS_EXE" ]; then
+            echo "::error::redis-server.exe not found after choco install"
+            exit 1
+          fi
+          REDIS_CLI="$(dirname "$REDIS_EXE")/redis-cli.exe"
+          "$REDIS_EXE" --port 6379 &
+          ready=0
+          for _ in $(seq 1 30); do
+            "$REDIS_CLI" -h 127.0.0.1 -p 6379 ping 2>/dev/null | grep -q PONG && { ready=1; break; }
+            sleep 1
+          done
+          [ "$ready" = 1 ] || echo "::warning::redis-server did not answer PING in time; redis tests will fail"
+
+          export PATH="$GITHUB_WORKSPACE/salam-windows/tcc:$GITHUB_WORKSPACE/salam-windows/tcc/lib:/c/msys64/mingw64/bin:$PATH"
+          SALAM="$GITHUB_WORKSPACE/salam-windows/salam.exe" \
+            sh tools/bash/run-tests.sh 2>&1 | tee /tmp/tests.log || true
+          grep -qE 'RESULT: [0-9]+ passed, 0 failed' /tmp/tests.log \
+            || { echo "::error::Windows test suite failed - blocking release"; exit 1; }
+
+      - name: Zip the bundle
+        if: matrix.primary
+        shell: bash
+        run: |
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          7z a -tzip "salam-${VERSION}-windows-x86_64.zip" salam-windows >/dev/null
+          tar -czf "salam-${VERSION}-windows-x86_64.tar.gz" salam-windows
+          ls -la "salam-${VERSION}-windows-x86_64.zip" "salam-${VERSION}-windows-x86_64.tar.gz"
+
+      - name: Upload self-contained bundle
+        if: matrix.primary
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-windows-bundle
+          path: |
+            salam-*-windows-x86_64.zip
+            salam-*-windows-x86_64.tar.gz
+
+      - name: Upload salam.exe
+        if: matrix.primary
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-windows
+          path: salam.exe
+
+  build-windows-i686:
+    if: needs.changes.outputs.run == 'true'
+    name: Build Salam for Windows (32-bit / i686, cross-compiled static LLVM+LLD)
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    needs: [changes, build-linux]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install cross-build prerequisites (cmake, ninja)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake
+
+      - name: Cache llvm-mingw Linux toolchain (cross-compiler + i686 sysroot)
+        id: cache-llvm-mingw
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/llvm-mingw
+          key: llvm-mingw-toolchain-20260616-v1
+
+      - name: Fetch llvm-mingw Linux toolchain
+        if: steps.cache-llvm-mingw.outputs.cache-hit != 'true'
+        run: |
+          set -eu
+          curl -fL --connect-timeout 15 --max-time 600 --retry 3 --retry-delay 10 \
+            -o /tmp/llvm-mingw.tar.xz \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64.tar.xz"
+          mkdir -p /tmp/llvm-mingw
+          tar xJf /tmp/llvm-mingw.tar.xz -C /tmp/llvm-mingw --strip-components=1
+          rm -f /tmp/llvm-mingw.tar.xz
+
+      - name: Cache static LLVM+LLD built for i686-w64-mingw32
+        id: cache-llvm-i686
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/llvm-i686-install
+          key: llvm-i686-mingw32-static-llvmorg-22.1.8-v1
+
+      - name: Build static LLVM+LLD for i686-w64-mingw32 (cache miss only - slow)
+        if: steps.cache-llvm-i686.outputs.cache-hit != 'true'
+        run: |
+          set -eu
+          TC=/tmp/llvm-mingw/bin
+          git clone --depth 1 --branch llvmorg-22.1.8 --filter=blob:none --sparse \
+            https://github.com/llvm/llvm-project.git /tmp/llvm-src
+          git -C /tmp/llvm-src sparse-checkout set llvm lld cmake third-party libunwind
+
+          echo "--- stage 1: native llvm-tblgen (build-time tool, must match the LLVM source tag) ---"
+          cmake -G Ninja -S /tmp/llvm-src/llvm -B /tmp/llvm-native-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_TARGETS_TO_BUILD=X86 \
+            -DLLVM_ENABLE_PROJECTS="" \
+            -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF
+          ninja -C /tmp/llvm-native-build llvm-tblgen
+
+          echo "--- stage 2: cross-compiled static LLVM+LLD for i686-w64-mingw32 ---"
+          cmake -G Ninja -S /tmp/llvm-src/llvm -B /tmp/llvm-cross-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/tmp/llvm-i686-install \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_C_COMPILER="$TC/i686-w64-mingw32-clang" \
+            -DCMAKE_CXX_COMPILER="$TC/i686-w64-mingw32-clang++" \
+            -DCMAKE_AR="$TC/i686-w64-mingw32-ar" \
+            -DCMAKE_RANLIB="$TC/i686-w64-mingw32-ranlib" \
+            -DLLVM_TABLEGEN=/tmp/llvm-native-build/bin/llvm-tblgen \
+            -DLLVM_ENABLE_PROJECTS=lld \
+            -DLLVM_TARGETS_TO_BUILD="X86;AArch64;ARM;WebAssembly" \
+            -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF \
+            -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_LIBXML2=OFF \
+            -DLLVM_ENABLE_TERMINFO=OFF -DLLVM_ENABLE_LIBEDIT=OFF \
+            -DBUILD_SHARED_LIBS=OFF -DLLVM_ENABLE_ASSERTIONS=OFF
+          ninja -C /tmp/llvm-cross-build install
+          echo "installed sizes:"; du -sh /tmp/llvm-i686-install/lib /tmp/llvm-i686-install/include
+          rm -rf /tmp/llvm-src /tmp/llvm-native-build /tmp/llvm-cross-build
+
+      - name: Cache ccache (Windows i686)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/ccache-i686
+          key: ccache-win-i686-v3-${{ github.run_id }}
+          restore-keys: |
+            ccache-win-i686-v3-
+
+      - name: Use this run's Linux salam as the cross-compiler
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux
+          path: /tmp/host-salam
+      - name: Make it executable
+        run: chmod +x /tmp/host-salam/salam
+
+      - name: Build 32-bit salam.exe (cross-compiled, embedded static LLVM+LLD, best-effort)
+        run: |
+          set -eu
+          TC=/tmp/llvm-mingw/bin
+          export CCACHE_DIR=/tmp/ccache-i686; mkdir -p "$CCACHE_DIR"
+          which ccache >/dev/null 2>&1 || sudo apt-get install -y ccache
+          ccache --max-size=500M >/dev/null 2>&1 || true
+
+          cat > /tmp/fake-llvm-config << 'FAKE_LLVM_CONFIG_EOF'
+          #!/usr/bin/env bash
+          set -eu
+          LIBDIR="/tmp/llvm-i686-install/lib"
+          INCDIR="/tmp/llvm-i686-install/include"
+          for arg in "$@"; do
+            case "$arg" in
+              --includedir) echo "$INCDIR" ;;
+              --libdir) echo "$LIBDIR" ;;
+              --bindir) echo "/tmp/llvm-mingw/bin" ;;
+              --version) echo "22.1.8" ;;
+              --ldflags) echo "-L$LIBDIR" ;;
+              --system-libs) echo "-lpsapi -lshell32 -lole32 -luuid -ladvapi32 -lws2_32 -lversion -lntdll -lshlwapi -luser32" ;;
+              --cxxflags) echo "-I$INCDIR -std=c++17" ;;
+              --libs)
+                libs=""
+                for f in "$LIBDIR"/lib*.a; do
+                  [ -e "$f" ] || continue
+                  b=$(basename "$f" .a)
+                  libs="$libs -l${b#lib}"
+                done
+                echo "-Wl,--start-group $libs -Wl,--end-group"
+                ;;
+            esac
+          done
+          FAKE_LLVM_CONFIG_EOF
+          chmod +x /tmp/fake-llvm-config
+
+          WITH_LLD=1 AR="$TC/llvm-ar" CC="$TC/i686-w64-mingw32-clang" \
+            CXX="$TC/i686-w64-mingw32-clang++" \
+            sh std/llvm/native/build.sh --llvm-config /tmp/fake-llvm-config \
+            --out "$GITHUB_WORKSPACE"
+
+          export SALAM_SYSROOTS=/tmp/llvm-mingw
+          mgw_lib=/tmp/llvm-mingw/i686-w64-mingw32/lib
+          if [ -d "$mgw_lib" ]; then
+            rt=$(find /tmp/llvm-mingw -name 'libclang_rt.builtins-i386.a' 2>/dev/null | head -1)
+            if [ -n "$rt" ] && [ ! -f "$mgw_lib/libgcc.a" ]; then
+              cp "$rt" "$mgw_lib/libgcc.a"
+            fi
+            if [ ! -f "$mgw_lib/libgcc_eh.a" ]; then
+              "$TC/llvm-ar" rcs "$mgw_lib/libgcc_eh.a"
+            fi
+            for lib in libunwind.a libc++.a libc++abi.a; do
+              [ -f "$mgw_lib/$lib" ] && continue
+              found=$(find /tmp/llvm-mingw -name "$lib" 2>/dev/null | head -1)
+              if [ -n "$found" ]; then
+                cp "$found" "$mgw_lib/$lib"
+              else
+                echo "::warning::$lib not found under /tmp/llvm-mingw; stubbing an empty archive"
+                "$TC/llvm-ar" rcs "$mgw_lib/$lib"
+              fi
+            done
+          fi
+          if sh tools/bash/build-selfhost.sh --seed=/tmp/host-salam/salam \
+            --llvm="$GITHUB_WORKSPACE" \
+            --output="$GITHUB_WORKSPACE/salam.exe" \
+            -- --target=i686-w64-windows-gnu \
+            --libpath="$mgw_lib" -DSALAM_LLVM_MINGW_CLANG; then
+            echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
+            echo "Built cross-compiled salam.exe with embedded LLVM+LLD."
+          else
+            echo "::warning::cross build with LLVM failed; retrying without it."
+            sh tools/bash/build-selfhost.sh --seed=/tmp/host-salam/salam \
+              --output="$GITHUB_WORKSPACE/salam.exe" \
+              -- --target=i686-w64-windows-gnu --libpath="$mgw_lib"
+            echo "SELF_CONTAINED=0" >> "$GITHUB_ENV"
+          fi
+          file salam.exe
+
+      - name: Verify salam.exe is self-contained (no third-party DLLs)
+        run: |
+          OBJDUMP=/tmp/llvm-mingw/bin/llvm-objdump
+          [ -x "$OBJDUMP" ] || OBJDUMP=objdump
+          echo "DLL imports of salam.exe:"
+          "$OBJDUMP" -p salam.exe | grep -i 'DLL Name' || true
+          bad=$("$OBJDUMP" -p salam.exe | grep -i 'DLL Name' \
+            | grep -iE 'libzstd|libstdc\+\+|libgcc|libwinpthread|libxml2|libz\.dll|zlib|libz3|libffi|libLLVM|libc\+\+|libunwind' \
+            || true)
+          if [ -n "$bad" ]; then
+            echo "ERROR: salam.exe depends on non-system DLLs:"
+            echo "$bad"
+            exit 1
+          fi
+          echo "OK: salam.exe imports only Windows system DLLs."
+
+      - name: Restore bundled tcc (i686 cross)
+        id: tccbundle
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: salam-windows-i686/tcc
+          key: tcc-bundle-windows-i686-cross-${{ hashFiles('tools/ci/tinycc-ref.txt', 'tools/ci/build-tcc.sh') }}-v1
+      - name: Stage 32-bit bundle
+        run: |
+          set -eu
+          DIST="salam-windows-i686"
+          mkdir -p "$DIST"
+          cp salam.exe "$DIST/"
+          cp -r std    "$DIST/std"
+          if [ -f "$DIST/tcc/tcc.exe" ] \
+             && [ -n "$(find "$DIST/tcc" -name libtcc1.a 2>/dev/null | head -1)" ]; then
+            echo "reusing cached tcc bundle at $DIST/tcc"
+          else
+            CROSS_PREFIX=/tmp/llvm-mingw/bin/i686-w64-mingw32- \
+            TCC_CONFIGURE_EXTRA="--targetos=WIN32 --cpu=i386" \
+              sh tools/ci/build-tcc.sh "$(pwd)/$DIST/tcc"
+          fi
+          file "$DIST/tcc/tcc.exe"
+          cp README.md LICENSE "$DIST/" 2>/dev/null || true
+          {
+            if [ "${SELF_CONTAINED:-0}" = "1" ]; then
+              echo "Salam for Windows (32-bit / i686) - cross-compiled, fully static,"
+              echo "embedded LLVM+LLD toolchain."
+              echo ""
+              echo "Cross-compiled from Linux with llvm-mingw + a from-source static"
+              echo "LLVM+LLD build (MSYS2 no longer packages LLVM for i686 at all)."
+              echo "No installation needed. From this folder:"
+              echo ""
+              echo "  salam.exe version"
+              echo "  salam.exe exec  myprogram.salam              (tree-walking interpreter)"
+              echo "  salam.exe build myprogram.salam              (C backend via bundled tcc)"
+              echo "  salam.exe llvm  myprogram.salam --jit        (run via the built-in LLVM)"
+              echo "  salam.exe llvm  myprogram.salam --exec       (native exe via built-in LLVM)"
+              echo ""
+              echo "LLVM + LLD are compiled into salam.exe itself - no clang/llc/lli"
+              echo "needed, and no separate DLLs (fully static, single-file)."
+            else
+              echo "Salam for Windows (32-bit / i686) - MINIMAL build."
+              echo ""
+              echo "The cross-compiled LLVM+LLD build failed this run and fell back"
+              echo "to an interpreter + tcc-only build - see the CI log for why."
+              echo ""
+              echo "  salam.exe version"
+              echo "  salam.exe exec  myprogram.salam    (tree-walking interpreter)"
+              echo "  salam.exe build myprogram.salam    (native exe via bundled 32-bit tcc)"
+            fi
+          } > "$DIST/RUN-ME.txt"
+          echo "bundle contents:"; ls -la "$DIST"
+
+      - name: Save bundled tcc (i686 cross)
+        if: steps.tccbundle.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: salam-windows-i686/tcc
+          key: tcc-bundle-windows-i686-cross-${{ hashFiles('tools/ci/tinycc-ref.txt', 'tools/ci/build-tcc.sh') }}-v1
+      - name: Smoke-test the 32-bit build (format checks only - can't execute an i686 PE on this Linux host)
+        run: |
+          set -e
+          cd salam-windows-i686
+          file salam.exe
+          file tcc/tcc.exe
+          echo "note: no execution smoke test here - this job cross-compiles"
+          echo "from Linux and has no way to run the resulting i686 Windows PE."
+          cd ..
+
+      - name: Zip the 32-bit bundle
+        run: |
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          zip -r "salam-${VERSION}-windows-i686.zip" salam-windows-i686 >/dev/null
+          tar -czf "salam-${VERSION}-windows-i686.tar.gz" salam-windows-i686
+          ls -la "salam-${VERSION}-windows-i686.zip" "salam-${VERSION}-windows-i686.tar.gz"
+
+      - name: Upload 32-bit Windows bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-windows-i686-bundle
+          path: |
+            salam-*-windows-i686.zip
+            salam-*-windows-i686.tar.gz
+
+      - name: Upload 32-bit salam.exe
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-windows-i686
+          path: salam.exe
+
+  build-windows-arm64:
+    if: needs.changes.outputs.run == 'true'
+    name: Build Salam for Windows on Arm (native backend, built-in linker)
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    needs: [changes, build-linux]
+    env:
+      LLVM_MINGW: llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Use this run's Linux salam as the cross-compiler
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux
+          path: /tmp/host-salam
+      - name: Fetch llvm-mingw
+        run: |
+          set -eu
+          chmod +x /tmp/host-salam/salam
+          curl -fsSL --retry 3 -o /tmp/llvm-mingw-arm64.tar.xz \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20261020/${LLVM_MINGW}.tar.xz"
+          echo "55064b60b991a1e1e8090b8c2f84e82b22cfe5903d12c159d65064cf5e8ae335  /tmp/llvm-mingw-arm64.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/llvm-mingw-arm64.tar.xz -C /tmp
+      - name: Package salam.exe, std and the aarch64 runtime
+        run: |
+          set -eu
+          SALAM_STD="$PWD/std" sh tools/bash/package-winarm.sh /tmp/host-salam/salam "/tmp/${LLVM_MINGW}" salam-windows-arm64
+          cp VERSION salam-windows-arm64/
+          file salam-windows-arm64/salam.exe
+      - name: Zip the Windows on Arm bundle
+        run: |
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          zip -qr "salam-${VERSION}-windows-arm64.zip" salam-windows-arm64
+          tar -czf "salam-${VERSION}-windows-arm64.tar.gz" salam-windows-arm64
+          ls -la "salam-${VERSION}-windows-arm64.zip" "salam-${VERSION}-windows-arm64.tar.gz"
+      - name: Upload the Windows on Arm bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-windows-arm64-bundle
+          path: |
+            salam-*-windows-arm64.zip
+            salam-*-windows-arm64.tar.gz
+
+  smoke-windows-arm64:
+    if: needs.changes.outputs.run == 'true'
+    name: Smoke-test the Windows on Arm bundle on Windows on Arm
+    runs-on: windows-11-arm
+    continue-on-error: true
+    needs: [changes, build-windows-arm64]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download the bundle
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-windows-arm64-bundle
+          path: bundle
+      - name: Build and run programs with nothing else installed
+        shell: bash
+        run: |
+          set -eu
+          cd bundle
+          tar -xzf salam-*-windows-arm64.tar.gz
+          ./salam-windows-arm64/salam.exe version
+          sh ../tools/bash/native-host-check.sh salam-windows-arm64/salam.exe ../tests/en/llvm/ll_fib.salam ../tests/en/llvm/ll_hashmap.salam ../tests/en/llvm/ll_float.salam
+
+  build-linux-i686:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    name: Build Salam for Linux (32-bit / i686, embedded LLVM+LLD)
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Stage cross sysroots on host (system musl + mingw-w64) for the i686 container to embed
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools musl-dev mingw-w64
+          sh tools/bash/stage-sysroots.sh --out="$GITHUB_WORKSPACE/sysroots"
+          sh tools/bash/stage-wasi-sysroot.sh --out="$GITHUB_WORKSPACE/sysroots/wasm32-wasi"
+          ls -la sysroots
+      - name: Cache ccache (Linux i686)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/ccache-i686
+          key: ccache-linux-i686-v2-${{ github.run_id }}
+          restore-keys: |
+            ccache-linux-i686-v2-
+      - name: Fetch a seed compiler for the container
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: sh tools/bash/fetch-seed.sh --slug linux-i686 --out "$GITHUB_WORKSPACE/seed"
+
+      - name: Build + smoke-test inside an i386/debian container (native - no QEMU needed for i386 on amd64)
+        run: |
+          set -eu
+          mkdir -p /tmp/ccache-i686
+          docker run --rm --platform=linux/386 \
+            -v "$PWD:/work" -w /work \
+            -v /tmp/ccache-i686:/root/.ccache \
+            -e CCACHE_DIR=/root/.ccache \
+            i386/debian:sid bash -euxc '
+              apt-get update
+              PKGS="build-essential ca-certificates ccache file git cmake ninja-build llvm-22-dev liblld-22-dev libpolly-22-dev libzstd-dev zlib1g-dev"
+              if ! apt-get install -y --no-install-recommends $PKGS; then
+                echo "::warning::i386 dependency resolution failed - retrying with the amd64 index as an Architecture: all fallback."
+                printf "deb [arch=amd64] http://deb.debian.org/debian sid main\n" > /etc/apt/sources.list.d/arch-all-fallback.list
+                apt-get update
+                apt-get install -y --no-install-recommends $PKGS
+              fi
+              git config --global --add safe.directory /work
+              ccache --max-size=300M >/dev/null 2>&1 || true
+              MUSL_SR=/work/sysroots/x86_64-linux-musl
+              MINGW_SR=/work/sysroots/x86_64-w64-mingw32
+              sh std/llvm/native/build.sh --llvm-config llvm-config-22 --out /work
+              sh tools/bash/build-embed.sh --out /work \
+                --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR" \
+                --wasi /work/sysroots/wasm32-wasi
+              sh tools/bash/build-selfhost.sh --seed=/work/seed/salam \
+                --llvm=/work --embed=/work --output=/work/salam
+              echo 1 > /work/.self_contained
+              file /work/salam
+              /work/salam version
+              export SALAM_STD=/work/std
+              printf "func main:\n    println \"ok-linux32\"\nend\n" > /tmp/smoke.salam
+              /work/salam llvm /tmp/smoke.salam --exec -o /tmp/smoke_exec --log-level=warn && /tmp/smoke_exec
+              if [ "$(cat /work/.self_contained)" = 1 ]; then
+                /work/salam build /tmp/smoke.salam --target=x86_64-linux-musl -o /work/.smoke_x86_64 --log-level=warn
+                /work/salam build /tmp/smoke.salam --target=x86_64-w64-windows-gnu -o /work/.smoke_x86_64.exe --log-level=warn
+              fi
+            '
+          echo "SELF_CONTAINED=$(cat .self_contained)" >> "$GITHUB_ENV"
+          rm -f .self_contained
+      - name: Verify cross-compiled x86_64-linux-musl output runs natively on this host
+        if: env.SELF_CONTAINED == '1'
+        run: |
+          sudo chown "$(id -u):$(id -g)" .smoke_x86_64 .smoke_x86_64.exe
+          file .smoke_x86_64
+          chmod +x .smoke_x86_64
+          ./.smoke_x86_64
+          file .smoke_x86_64.exe
+          rm -f .smoke_x86_64 .smoke_x86_64.exe
+      - name: Stage versioned archive
+        run: |
+          set -eu
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          DIST="salam-linux-i686"
+          mkdir -p "$DIST"
+          cp salam "$DIST/salam"
+          cp -r std "$DIST/std"
+          cp README.md LICENSE "$DIST/" 2>/dev/null || true
+          {
+            if [ "${SELF_CONTAINED:-0}" = "1" ]; then
+              echo "Salam for Linux (32-bit / i686) - flagship self-contained toolchain."
+            else
+              echo "Salam for Linux (32-bit / i686) - embedded LLVM (no in-process linker)."
+            fi
+            echo ""
+            echo "  ./salam version"
+            echo "  ./salam exec  app.salam                       (interpreter)"
+            echo "  ./salam llvm  app.salam --jit                 (run via built-in LLVM)"
+            echo "  ./salam build app.salam -o app                (native binary)"
+            if [ "${SELF_CONTAINED:-0}" = "1" ]; then
+              echo ""
+              echo "Cross-compile with ZERO tools installed (LLVM + LLD + sysroots are"
+              echo "compiled into salam itself):"
+              echo ""
+              echo "  ./salam build app.salam --target=x86_64-linux-musl      -o app"
+              echo "  ./salam build app.salam --target=x86_64-w64-windows-gnu -o app.exe"
+            fi
+          } > "$DIST/RUN-ME.txt"
+          zip -r "salam-${VERSION}-linux-i686.zip" "$DIST" >/dev/null
+          tar -czf "salam-${VERSION}-linux-i686.tar.gz" "$DIST"
+          ls -la "salam-${VERSION}-linux-i686.zip" "salam-${VERSION}-linux-i686.tar.gz"
+      - name: Upload versioned archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-linux-i686-zip
+          path: |
+            salam-*-linux-i686.zip
+            salam-*-linux-i686.tar.gz
+      - name: Upload binary
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-linux-i686
+          path: salam
+
+  build-linux-armhf:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    name: Build Salam for Linux (armhf, embedded LLVM+LLD)
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Stage cross sysroots on host (system musl + mingw-w64) for the armhf container to embed
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools musl-dev mingw-w64
+          sh tools/bash/stage-sysroots.sh --out="$GITHUB_WORKSPACE/sysroots"
+          sh tools/bash/stage-wasi-sysroot.sh --out="$GITHUB_WORKSPACE/sysroots/wasm32-wasi"
+      - name: Set up QEMU (armhf containers need user-mode emulation; i386 doesn't)
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm
+      - name: Cache ccache (Linux armhf)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/ccache-armhf
+          key: ccache-linux-armhf-v2-${{ github.run_id }}
+          restore-keys: |
+            ccache-linux-armhf-v2-
+      - name: Fetch a seed compiler for the container
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: sh tools/bash/fetch-seed.sh --slug linux-armhf --out "$GITHUB_WORKSPACE/seed"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build the armhf builder image (cached)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .github/docker/armhf-builder
+          file: .github/docker/armhf-builder/Dockerfile
+          platforms: linux/arm/v7
+          tags: salam-armhf-builder:latest
+          load: true
+          push: false
+          cache-from: type=gha,scope=armhf-builder
+          cache-to: type=gha,mode=max,scope=armhf-builder
+
+      - name: Build + smoke-test inside an arm32v7/debian container (QEMU-emulated compile - slower)
+        run: |
+          set -eu
+          mkdir -p /tmp/ccache-armhf
+          docker run --rm --platform=linux/arm/v7 \
+            --user "$(id -u):$(id -g)" \
+            -v "$PWD:/work" -w /work \
+            -v /tmp/ccache-armhf:/tmp/ccache \
+            -e CCACHE_DIR=/tmp/ccache -e HOME=/tmp \
+            salam-armhf-builder:latest bash -euxc '
+              git config --global --add safe.directory /work
+              ccache --max-size=300M >/dev/null 2>&1 || true
+              MUSL_SR=/work/sysroots/x86_64-linux-musl
+              MINGW_SR=/work/sysroots/x86_64-w64-mingw32
+              sh std/llvm/native/build.sh --llvm-config llvm-config-22 --out /work
+              sh tools/bash/build-embed.sh --out /work \
+                --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR" \
+                --wasi /work/sysroots/wasm32-wasi
+              sh tools/bash/build-selfhost.sh --seed=/work/seed/salam \
+                --llvm=/work --embed=/work --output=/work/salam
+              echo 1 > /work/.self_contained
+              file /work/salam
+              /work/salam version
+              export SALAM_STD=/work/std
+              printf "func main:\n    println \"ok-armhf\"\nend\n" > /tmp/smoke.salam
+              /work/salam llvm /tmp/smoke.salam --exec -o /tmp/smoke_exec --log-level=warn
+              /tmp/smoke_exec
+              if [ "$(cat /work/.self_contained)" = 1 ]; then
+                /work/salam build /tmp/smoke.salam --target=x86_64-linux-musl -o /work/.smoke_x86_64 --log-level=warn
+                /work/salam build /tmp/smoke.salam --target=x86_64-w64-windows-gnu -o /work/.smoke_x86_64.exe --log-level=warn
+              fi
+            '
+          echo "SELF_CONTAINED=$(cat .self_contained)" >> "$GITHUB_ENV"
+          rm -f .self_contained
+      - name: Verify cross-compiled x86_64-linux-musl output runs natively on this host
+        if: env.SELF_CONTAINED == '1'
+        run: |
+          sudo chown "$(id -u):$(id -g)" .smoke_x86_64 .smoke_x86_64.exe
+          file .smoke_x86_64
+          chmod +x .smoke_x86_64
+          ./.smoke_x86_64
+          file .smoke_x86_64.exe
+          rm -f .smoke_x86_64 .smoke_x86_64.exe
+      - name: Stage versioned archive
+        run: |
+          set -eu
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          DIST="salam-linux-armhf"
+          mkdir -p "$DIST"
+          cp salam "$DIST/salam"
+          cp -r std "$DIST/std"
+          cp README.md LICENSE "$DIST/" 2>/dev/null || true
+          {
+            if [ "${SELF_CONTAINED:-0}" = "1" ]; then
+              echo "Salam for Linux (armhf) - flagship self-contained toolchain."
+            else
+              echo "Salam for Linux (armhf) - embedded LLVM (no in-process linker)."
+            fi
+            echo ""
+            echo "  ./salam version"
+            echo "  ./salam exec  app.salam                       (interpreter)"
+            echo "  ./salam llvm  app.salam --jit                 (run via built-in LLVM)"
+            echo "  ./salam build app.salam -o app                (native binary)"
+            if [ "${SELF_CONTAINED:-0}" = "1" ]; then
+              echo ""
+              echo "Cross-compile with ZERO tools installed (LLVM + LLD + sysroots are"
+              echo "compiled into salam itself):"
+              echo ""
+              echo "  ./salam build app.salam --target=x86_64-linux-musl      -o app"
+              echo "  ./salam build app.salam --target=x86_64-w64-windows-gnu -o app.exe"
+            fi
+          } > "$DIST/RUN-ME.txt"
+          zip -r "salam-${VERSION}-linux-armhf.zip" "$DIST" >/dev/null
+          tar -czf "salam-${VERSION}-linux-armhf.tar.gz" "$DIST"
+          ls -la "salam-${VERSION}-linux-armhf.zip" "salam-${VERSION}-linux-armhf.tar.gz"
+      - name: Upload versioned archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-linux-armhf-zip
+          path: |
+            salam-*-linux-armhf.zip
+            salam-*-linux-armhf.tar.gz
+      - name: Upload binary
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-linux-armhf
+          path: salam
+
+  build-linux-aarch64:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    name: Build Salam for Linux (aarch64, native flagship)
+    runs-on: ubuntu-24.04-arm
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install dependencies (static LLVM + LLD + cross sysroot inputs)
+        run: |
+          echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
+          wget -4 -qO llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          sudo apt-get update
+          sudo apt-get install -y build-essential ccache cmake ninja-build \
+            llvm-22-dev liblld-22-dev libpolly-22-dev libclang-rt-22-dev \
+            libzstd-dev zlib1g-dev \
+            libsqlite3-dev \
+            mingw-w64 qemu-user-static
+          gcc --version | head -1
+          llvm-config-22 --version
+      - name: Cache cross musl sysroots (x86_64 + aarch64 + i686 + armhf) for embedding
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /tmp/muslcc/sr-x86_64
+            /tmp/muslcc/sr-aarch64
+            /tmp/muslcc/sr-i686
+            /tmp/muslcc/sr-arm
+          key: musl-embed-sysroots-arm64-v1-${{ github.run_id }}
+          restore-keys: |
+            musl-embed-sysroots-arm64-v1-
+      - name: Fetch cross musl sysroots (x86_64 + aarch64 + i686 + armhf) for embedding
+        run: sh tools/bash/fetch-musl-sysroots.sh --out /tmp/muslcc
+      - name: Stage mingw-w64 x86_64 target files (for cross-to-Windows embed)
+        run: |
+          G=""
+          for d in /usr/lib/gcc/x86_64-w64-mingw32/*win32; do
+            [ -d "$d" ] && G="$d" && break
+          done
+          if [ -n "$G" ]; then
+            mkdir -p /tmp/mingw-sr/lib
+            cp /usr/x86_64-w64-mingw32/lib/{crt2.o,dllcrt2.o,libmingw32.a,libmingwex.a,libmoldname.a,libmsvcrt.a,libadvapi32.a,libshell32.a,libuser32.a,libkernel32.a} /tmp/mingw-sr/lib/
+            cp "$G"/{crtbegin.o,crtend.o,libgcc.a,libgcc_eh.a} /tmp/mingw-sr/lib/
+            echo "SALAM_EMBED_MINGW_DIR=/tmp/mingw-sr" >> "$GITHUB_ENV"
+            echo "staged mingw x86_64 sysroot -> /tmp/mingw-sr"
+          else
+            echo "::warning::mingw-w64 gcc runtime dir not found; not embedding x86_64-w64-windows-gnu target."
+          fi
+      - name: Cache ccache (Linux aarch64)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.ccache
+          key: ccache-linux-aarch64-${{ github.run_id }}
+          restore-keys: |
+            ccache-linux-aarch64-
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Build the flagship self-contained salam (LLVM + LLD + sysroots)
+        run: |
+          set -eu
+          sh tools/bash/stage-sysroots.sh --musl-arch aarch64 \
+            --out="$GITHUB_WORKSPACE/sysroots"
+          sh tools/bash/stage-wasi-sysroot.sh --out="$GITHUB_WORKSPACE/sysroots/wasm32-wasi"
+          sh std/llvm/native/build.sh --llvm-config llvm-config-22 \
+            --out "$GITHUB_WORKSPACE"
+          sh tools/bash/build-embed.sh --out "$GITHUB_WORKSPACE" \
+            --musl-x86_64 "${SALAM_EMBED_MUSL_DIR:-}" \
+            --musl-aarch64 "${SALAM_EMBED_MUSL_AARCH64_DIR:-$GITHUB_WORKSPACE/sysroots/aarch64-linux-musl}" \
+            --musl-i686 "${SALAM_EMBED_MUSL_I686_DIR:-}" \
+            --musl-arm "${SALAM_EMBED_MUSL_ARM_DIR:-}" \
+            --mingw-x86_64 "${SALAM_EMBED_MINGW_DIR:-$GITHUB_WORKSPACE/sysroots/x86_64-w64-mingw32}" \
+            --wasi "$GITHUB_WORKSPACE/sysroots/wasm32-wasi"
+          sh tools/bash/build-selfhost.sh \
+            --llvm="$GITHUB_WORKSPACE" --embed="$GITHUB_WORKSPACE"
+          echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
+          ./salam version
+      - name: Smoke-test the backend (and cross-compile with a scrubbed PATH)
+        run: |
+          export SALAM_STD="$PWD/std"
+          printf 'func main:\n    println "ok-llvm"\nend\n' > smoke.salam
+          echo "[native] embedded LLVM backend"
+          ./salam llvm smoke.salam --emit-obj -o smoke.o --log-level=warn
+          ./salam llvm smoke.salam --exec -o smoke_exe --log-level=warn && ./smoke_exe
+          if [ "${SELF_CONTAINED:-0}" = "1" ]; then
+            if [ -n "${SALAM_EMBED_MUSL_AARCH64_DIR:-}" ]; then
+              echo "[cross] aarch64-linux-musl (native target), PATH=/nonexistent"
+              env PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
+                ./salam build smoke.salam --target=aarch64-linux-musl -o smoke_a64
+              ./smoke_a64; file smoke_a64
+            fi
+            if [ -n "${SALAM_EMBED_MUSL_DIR:-}" ]; then
+              echo "[cross] x86_64-linux-musl, PATH=/nonexistent"
+              env PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
+                ./salam build smoke.salam --target=x86_64-linux-musl -o smoke_x64
+              file smoke_x64; qemu-x86_64-static ./smoke_x64
+            fi
+            if [ -n "${SALAM_EMBED_MUSL_I686_DIR:-}" ]; then
+              echo "[cross] i686-linux-musl, PATH=/nonexistent"
+              env PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
+                ./salam build smoke.salam --target=i686-linux-musl -o smoke_i686
+              file smoke_i686; qemu-i386-static ./smoke_i686
+            fi
+            if [ -n "${SALAM_EMBED_MUSL_ARM_DIR:-}" ]; then
+              echo "[cross] arm-linux-musleabihf, PATH=/nonexistent"
+              env PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
+                ./salam build smoke.salam --target=arm-linux-musleabihf -o smoke_armhf
+              file smoke_armhf; qemu-arm-static ./smoke_armhf
+            fi
+            if [ -n "${SALAM_EMBED_MINGW_DIR:-}" ]; then
+              echo "[cross] x86_64-w64-windows-gnu, PATH=/nonexistent"
+              env PATH=/nonexistent SALAM_STD="$SALAM_STD" SALAM_CACHE=/tmp/sc \
+                ./salam build smoke.salam --target=x86_64-w64-windows-gnu -o smoke.exe
+              file smoke.exe
+            fi
+          fi
+          rm -f smoke.salam smoke_exe smoke_a64 smoke_x64 smoke_i686 smoke_armhf smoke.exe smoke.o salam_mod_*.c salam_mod_*.h
+      - name: Set up pinned tcc
+        if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
+        uses: ./.github/actions/setup-tcc # zizmor: ignore[self-repository]
+      - name: Validate test suite (release gate)
+        if: env.RELEASE_TESTS == 'true' && (startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly))
+        run: |
+          SALAM="$GITHUB_WORKSPACE/salam" sh tools/bash/run-tests.sh exec errors layout llvm general 2>&1 | tee /tmp/tests.log || true
+          grep -qE 'RESULT: [0-9]+ passed, 0 failed' /tmp/tests.log \
+            || { echo "::error::Linux aarch64 test suite failed - blocking release"; exit 1; }
+      - name: Stage versioned archive
+        run: |
+          set -eu
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          DIST="salam-linux-aarch64"
+          mkdir -p "$DIST"
+          cp salam "$DIST/salam"
+          cp -r std "$DIST/std"
+          cp README.md LICENSE "$DIST/" 2>/dev/null || true
+          {
+            echo "Salam for Linux (aarch64) - flagship self-contained toolchain."
+            echo ""
+            echo "No installation needed. From this folder:"
+            echo ""
+            echo "  ./salam version"
+            echo "  ./salam exec  app.salam                               (interpreter)"
+            echo "  ./salam llvm  app.salam --jit                         (run via built-in LLVM)"
+            echo "  ./salam build app.salam -o app                        (native binary)"
+            if [ "${SELF_CONTAINED:-0}" = "1" ]; then
+              echo ""
+              echo "Cross-compile with ZERO tools installed (LLVM + LLD + sysroots are"
+              echo "compiled into salam itself):"
+              echo ""
+              if [ -n "${SALAM_EMBED_MUSL_AARCH64_DIR:-}" ]; then
+                echo "  ./salam build app.salam --target=aarch64-linux-musl     -o app"
+              fi
+              if [ -n "${SALAM_EMBED_MUSL_DIR:-}" ]; then
+                echo "  ./salam build app.salam --target=x86_64-linux-musl      -o app"
+              fi
+              if [ -n "${SALAM_EMBED_MUSL_I686_DIR:-}" ]; then
+                echo "  ./salam build app.salam --target=i686-linux-musl        -o app"
+              fi
+              if [ -n "${SALAM_EMBED_MUSL_ARM_DIR:-}" ]; then
+                echo "  ./salam build app.salam --target=arm-linux-musleabihf   -o app"
+              fi
+              if [ -n "${SALAM_EMBED_MINGW_DIR:-}" ]; then
+                echo "  ./salam build app.salam --target=x86_64-w64-windows-gnu -o app.exe"
+              fi
+              echo ""
+              echo "Embedded targets depend on which sysroots this build bundled (see"
+              echo "above). macOS targets are not supported (Apple SDK restrictions)."
+            fi
+          } > "$DIST/RUN-ME.txt"
+          zip -r "salam-${VERSION}-linux-aarch64.zip" "$DIST" >/dev/null
+          tar -czf "salam-${VERSION}-linux-aarch64.tar.gz" "$DIST"
+          ls -la "salam-${VERSION}-linux-aarch64.zip" "salam-${VERSION}-linux-aarch64.tar.gz"
+      - name: Upload versioned archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-linux-aarch64-zip
+          path: |
+            salam-*-linux-aarch64.zip
+            salam-*-linux-aarch64.tar.gz
+      - name: Upload binary
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-linux-aarch64
+          path: salam
+
+  build-android:
+    name: Build & sign Android AAB + APKs
+    if: |
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'SalamLang/Salam' &&
+      ((github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')) ||
+       (github.event_name == 'workflow_dispatch' && inputs.nightly))
+    uses: ./.github/workflows/_reusable-android-build.yml # zizmor: ignore[self-repository]
+    secrets:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+  android-gate:
+    name: Android build gate (best-effort)
+    needs: build-android
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Report Android build result
+        run: echo "build-android result=${{ needs.build-android.result }}"
+
+  create-release:
+    if: |
+      !cancelled() && !failure() &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'SalamLang/Salam' &&
+      ((github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')) ||
+       (github.event_name == 'workflow_dispatch' && inputs.nightly))
+    name: Create Release
+    runs-on: ubuntu-24.04
+    needs:
+      [
+        build-linux,
+        build-macos,
+        build-windows,
+        build-windows-i686,
+        build-windows-arm64,
+        build-linux-i686,
+        build-linux-armhf,
+        build-linux-aarch64,
+        build-linux-musl,
+        android-gate,
+        build-agent,
+      ]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
+      - name: Read version from VERSION file
+        id: get_version
+        run: |
+          VERSION=$(cat VERSION | sed 's/^[ \t]*//;s/[ \t]*$//')
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "Salam version: ${VERSION}"
+      - name: Compute release tag/title (nightly vs versioned)
+        env:
+          NIGHTLY: ${{ inputs.nightly }}
+          NIGHTLY_DATE_INPUT: ${{ inputs.nightly_date }}
+        run: |
+          if [ "$NIGHTLY" = "true" ]; then
+            NIGHTLY_DATE="$NIGHTLY_DATE_INPUT"
+            [ -n "$NIGHTLY_DATE" ] || NIGHTLY_DATE="$(date -u +%Y-%m-%d)"
+            {
+              echo "TAG=v${VERSION}-nightly-${NIGHTLY_DATE}"
+              echo "RELEASE_TITLE=Salam Nightly Release v${VERSION}-nightly-${NIGHTLY_DATE}"
+              echo "PRERELEASE_FLAG=--prerelease"
+            } >> "$GITHUB_ENV"
+          else
+            {
+              echo "TAG=v${VERSION}"
+              echo "RELEASE_TITLE=Salam Release v${VERSION}"
+              echo "PRERELEASE_FLAG="
+            } >> "$GITHUB_ENV"
+          fi
+      - name: Download Linux artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux
+          path: ./release
+      - name: Rename Linux binary to avoid conflict
+        run: |
+          mv ./release/salam ./release/salam-linux
+      - name: Download macOS artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-macos
+          path: ./release
+      - name: Rename macOS binary to avoid conflict
+        run: |
+          mv ./release/salam ./release/salam-mac
+      - name: Download Windows artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-windows
+          path: ./release
+      - name: Rename Window binary
+        run: |
+          mv ./release/salam.exe ./release/salam-windows.exe
+      - name: Download Windows self-contained bundle
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-windows-bundle
+          path: ./release
+      - name: Download Linux versioned archive
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux-zip
+          path: ./release
+      - name: Download macOS versioned archive
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-macos-zip
+          path: ./release
+      - name: Download Windows i686 binary
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-windows-i686
+          path: ./release-win-i686
+      - name: Download Windows i686 bundle
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-windows-i686-bundle
+          path: ./release
+      - name: Download Windows on Arm bundle
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-windows-arm64-bundle
+          path: ./release
+      - name: Download Linux i686 binary
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux-i686
+          path: ./release-linux-i686
+      - name: Download Linux i686 archive
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux-i686-zip
+          path: ./release
+      - name: Download Linux aarch64 binary
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux-aarch64
+          path: ./release-linux-aarch64
+      - name: Download Linux aarch64 archive
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux-aarch64-zip
+          path: ./release
+      - name: Download Linux armhf binary
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux-armhf
+          path: ./release-linux-armhf
+      - name: Download Linux armhf archive
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux-armhf-zip
+          path: ./release
+      - name: Download the static musl archive
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux-musl-zip
+          path: ./release
+      - name: Download Android AAB + APKs
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-android-release
+          path: ./release
+      - name: Collect 32-bit / cross binaries (rename to avoid name clashes)
+        run: |
+          set -eu
+          [ -f ./release-win-i686/salam.exe ]     && mv ./release-win-i686/salam.exe     ./release/salam-windows-i686.exe || true
+          [ -f ./release-linux-i686/salam ]       && mv ./release-linux-i686/salam       ./release/salam-linux-i686       || true
+          [ -f ./release-linux-aarch64/salam ]    && mv ./release-linux-aarch64/salam    ./release/salam-linux-aarch64    || true
+          [ -f ./release-linux-armhf/salam ]      && mv ./release-linux-armhf/salam      ./release/salam-linux-armhf      || true
+          echo "release/ now contains:"; ls -la ./release
+
+      - name: Stage the stdlib index
+        run: |
+          set -eu
+          src=docs/ai/stdlib-index.json
+          [ -f "$src" ] || { echo "::error::$src is missing"; exit 1; }
+          mkdir -p ./release
+          out="./release/salam-${VERSION}-stdlib-index.json"
+
+          jq --arg version "$VERSION" --arg commit "$GITHUB_SHA" \
+             '{version: $version, commit: $commit} + .' "$src" > "$out"
+
+          jq -e '.version and .commit and .root and (.packages | length > 0)' "$out" >/dev/null \
+            || { echo "::error::stamped stdlib index is malformed"; exit 1; }
+          echo "stamped version=${VERSION} commit=${GITHUB_SHA}"
+          ls -l "$out"
+
+      - name: Generate the stdlib documentation page
+        run: |
+          set -eu
+          out="./release/salam-${VERSION}-stdlib-doc.html"
+          chmod +x ./release/salam-linux
+          rc=0
+          ./release/salam-linux doc std --output="$out" || rc=$?
+          if [ ! -s "$out" ]; then
+            echo "::error::salam doc produced no page at $out (exit $rc)"
+            exit 1
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::salam doc exited $rc; some std/ files did not parse"
+            echo "::warning::and their declarations are missing from the page"
+          fi
+          ls -l "$out"
+      - name: Package the standard library (tar.gz)
+        run: |
+          set -eu
+          STAGE_ROOT=stdlib-stage
+          STAGE_DIR="salam-${VERSION}-stdlib"
+          STAGE="${STAGE_ROOT}/${STAGE_DIR}"
+          rm -rf "$STAGE_ROOT"
+          mkdir -p "$STAGE"
+
+          if git ls-files -z -- std | grep -qz .; then
+            git ls-files -z -- std | tar --null --files-from=- -cf - | tar -xf - -C "$STAGE"
+          else
+            echo "::warning::git ls-files returned nothing for std/; falling back to a filesystem copy"
+            tar -cf - std | tar -xf - -C "$STAGE"
+          fi
+
+          cp VERSION LICENSE "$STAGE/"
+          cp "./release/salam-${VERSION}-stdlib-index.json" "$STAGE/stdlib-index.json"
+          cp "./release/salam-${VERSION}-stdlib-doc.html" "$STAGE/stdlib-doc.html"
+
+          {
+            echo "Salam standard library ${VERSION}"
+            echo ""
+            echo "  std/               the standard library sources, exactly as"
+            echo "                     they are in the v${VERSION} tag"
+            echo "  stdlib-index.json  every package mapped to its public"
+            echo "                     declarations (machine-readable), stamped"
+            echo "                     with the version and commit it came from"
+            echo "  stdlib-doc.html    the same thing as one browsable page"
+            echo ""
+            echo "Point a Salam compiler at this std/ in any of these ways:"
+            echo ""
+            echo "  salam build app.salam --stdlib-path=/path/to/std"
+            echo "  SALAM_STD=/path/to/std salam build app.salam"
+            echo ""
+            echo "or drop a salam.cfg next to the salam binary containing:"
+            echo ""
+            echo "  stdlib = /path/to/std"
+            echo ""
+            echo "The compiler otherwise looks for std/ beside its own binary,"
+            echo "then under the install prefix, then ./std."
+          } > "$STAGE/README.txt"
+
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          mkdir -p ./release
+          OUT_DIR="$(pwd)/release"
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+              --mtime="@${SOURCE_DATE_EPOCH}" \
+              -czf "${OUT_DIR}/salam-${VERSION}-stdlib.tar.gz" \
+              -C "$STAGE_ROOT" "$STAGE_DIR"
+
+          find "$STAGE_ROOT" -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+          ( cd "$STAGE_ROOT" \
+            && find "$STAGE_DIR" -print | LC_ALL=C sort \
+               | zip -qX9 "${OUT_DIR}/salam-${VERSION}-stdlib.zip" -@ )
+
+          count=$(find "$STAGE/std" -name '*.salam' -type f | wc -l)
+          echo "packaged ${count} .salam files"
+          [ "$count" -gt 0 ] || { echo "::error::stdlib archive contains no .salam files"; exit 1; }
+          for pkg in std/str std/fmt std/os std/net; do
+            [ -d "$STAGE/$pkg" ] || { echo "::error::stdlib archive is missing $pkg"; exit 1; }
+          done
+
+          tar_n=$(tar -tzf "${OUT_DIR}/salam-${VERSION}-stdlib.tar.gz" | grep -c '\.salam$' || true)
+          zip_n=$(unzip -Z1 "${OUT_DIR}/salam-${VERSION}-stdlib.zip" | grep -c '\.salam$' || true)
+          echo "tar.gz holds ${tar_n} .salam files, zip holds ${zip_n}"
+          [ "$tar_n" = "$zip_n" ] && [ "$tar_n" = "$count" ] \
+            || { echo "::error::stdlib archives disagree (tar=${tar_n} zip=${zip_n} staged=${count})"; exit 1; }
+
+          ls -l "${OUT_DIR}/salam-${VERSION}-stdlib.tar.gz" "${OUT_DIR}/salam-${VERSION}-stdlib.zip"
+          {
+            echo "### Standard library archive"
+            echo ""
+            echo "\`${count}\` \`.salam\` files from \`std/\`, plus the index and the doc page,"
+            echo "shipped as both \`.tar.gz\` and \`.zip\`."
+            echo ""
+            echo '```'
+            (cd ./release && sha256sum "salam-${VERSION}-stdlib.tar.gz" "salam-${VERSION}-stdlib.zip")
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Check every zip has a matching tar.gz
+        run: |
+          set -eu
+          shopt -s nullglob
+          fail=0
+          for z in release/salam-*.zip; do
+            t="${z%.zip}.tar.gz"
+            if [ ! -f "$t" ]; then
+              echo "::error::$(basename "$z") ships without a .tar.gz counterpart"
+              fail=1
+              continue
+            fi
+            zl=$(mktemp); tl=$(mktemp)
+            unzip -Z1 "$z" | grep -v '/$' | LC_ALL=C sort > "$zl"
+            tar -tzf "$t" | grep -v '/$' | LC_ALL=C sort > "$tl"
+            if cmp -s "$zl" "$tl"; then
+              echo "ok   $(basename "$z") and its .tar.gz hold the same $(wc -l < "$zl") files"
+            else
+              echo "::error::$(basename "$z") and $(basename "$t") hold different files"
+              diff "$zl" "$tl" | head -20 || true
+              fail=1
+            fi
+            rm -f "$zl" "$tl"
+          done
+          for t in release/salam-*.tar.gz; do
+            z="${t%.tar.gz}.zip"
+            [ -f "$z" ] || { echo "::error::$(basename "$t") ships without a .zip counterpart"; fail=1; }
+          done
+          [ "$fail" -eq 0 ] || exit 1
+      - name: Build .deb packages
+        id: build_deb
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dpkg-dev
+          if sh packaging/debian/build-deb.sh --version "$VERSION" --input ./release --output ./debs; then
+            cp ./debs/*.deb ./release/
+            echo "built=$(find ./debs -name '*.deb' | wc -l)" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::deb packaging failed - the release will ship without .deb files"
+            echo "built=0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build .rpm packages
+        id: build_rpm
+        run: |
+          set -eu
+          mkdir -p ./rpms
+          RPM_DATE=$(LC_ALL=C date -u +"%a %b %d %Y")
+          sed \
+            -e "s|@VERSION@|$VERSION|g" \
+            -e "s|@RPM_DATE@|$RPM_DATE|g" \
+            packaging/rpm/salam.spec > /tmp/salam.spec
+          if docker run --rm -v "$PWD:/repo:ro" -v /tmp/salam.spec:/tmp/salam.spec:ro \
+              -v "$PWD/rpms:/rpms" -e VERSION="$VERSION" fedora:41 bash -c '
+            set -eu
+            dnf install -y -q rpm-build rpmdevtools >/dev/null
+            rpmdev-setuptree
+            for f in /repo/release/salam-"$VERSION"-linux-x86_64.tar.gz /repo/release/salam-"$VERSION"-linux-aarch64.tar.gz; do
+              [ -f "$f" ] && cp "$f" ~/rpmbuild/SOURCES/
+            done
+            rpmbuild -bb /tmp/salam.spec
+            if [ -f ~/rpmbuild/SOURCES/salam-"$VERSION"-linux-aarch64.tar.gz ]; then
+              rpmbuild -bb --target aarch64 --nocheck /tmp/salam.spec
+            fi
+            for f in ~/rpmbuild/RPMS/*/salam-*.rpm; do
+              arch=$(basename "$(dirname "$f")")
+              cp "$f" "/rpms/salam-$VERSION-linux-$arch.rpm"
+            done
+          '; then
+            n=$(find ./rpms -name '*.rpm' | wc -l)
+            if [ "$n" -gt 0 ]; then
+              cp ./rpms/*.rpm ./release/
+            else
+              echo "::error::rpm packaging produced no .rpm files"
+            fi
+            echo "built=$n" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::rpm packaging failed - the release will ship without .rpm files"
+            echo "built=0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Summarize .deb/.rpm packaging
+        if: always()
+        env:
+          DEB_COUNT: ${{ steps.build_deb.outputs.built || 0 }}
+          RPM_COUNT: ${{ steps.build_rpm.outputs.built || 0 }}
+        run: |
+          {
+            echo "### Distro packages"
+            echo ""
+            echo "- .deb: $DEB_COUNT file(s)"
+            echo "- .rpm: $RPM_COUNT file(s)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Delete existing release and tag if found
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pre=$(gh release view "$TAG" --json isPrerelease --jq '.isPrerelease' 2>/dev/null || true)
+          if [ "$pre" = "false" ]; then
+            echo "::error::$TAG is already published as a stable release; refusing to delete it. Bump VERSION and push a new release: commit."
+            exit 1
+          fi
+          if gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null; then
+            echo "Deleted existing release $TAG (and its tag)."
+          else
+            echo "No existing release $TAG."
+          fi
+          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/$TAG" >/dev/null 2>&1 || true
+          git tag -d "$TAG" 2>/dev/null || true
+      - name: Create a signed, annotated tag
+        id: signtag
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_SIGNING_KEY_ID: ${{ secrets.GPG_SIGNING_KEY_ID }}
+          GIT_TAGGER_NAME: ${{ secrets.GIT_TAGGER_NAME }}
+          GIT_TAGGER_EMAIL: ${{ secrets.GIT_TAGGER_EMAIL }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "no GPG_PRIVATE_KEY secret; the release will carry an unsigned lightweight tag"
+            exit 0
+          fi
+
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+          KEY_ID="${GPG_SIGNING_KEY_ID:-}"
+          if [ -z "$KEY_ID" ]; then
+            KEY_ID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')
+          fi
+          [ -n "$KEY_ID" ] || { echo "::error::imported a GPG key but could not read its id"; exit 1; }
+          echo "signing with $KEY_ID"
+
+          mkdir -p "$HOME/.gnupg"
+          chmod 700 "$HOME/.gnupg"
+          echo "allow-loopback-pinentry" >> "$HOME/.gnupg/gpg-agent.conf"
+          gpgconf --reload gpg-agent || true
+
+          KEY_UID=$(gpg --list-keys --with-colons "$KEY_ID" | awk -F: '/^uid:/ {print $10; exit}')
+          KEY_EMAIL=$(printf '%s' "$KEY_UID" | sed -n 's/.*<\(.*\)>.*/\1/p')
+          KEY_NAME=$(printf '%s' "$KEY_UID" | sed 's/ *<.*//')
+          git config user.name "${GIT_TAGGER_NAME:-${KEY_NAME:-$GITHUB_ACTOR}}"
+          git config user.email "${GIT_TAGGER_EMAIL:-${KEY_EMAIL:-$GITHUB_ACTOR@users.noreply.github.com}}"
+          echo "tagging as $(git config user.name) <$(git config user.email)>"
+          git config user.signingkey "$KEY_ID"
+          cat > .gpg-batch <<'GPGWRAP'
+          #!/bin/sh
+          if [ -n "${GPG_PASSPHRASE:-}" ]; then
+              exec gpg --batch --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" "$@"
+          fi
+          exec gpg --batch --pinentry-mode loopback "$@"
+          GPGWRAP
+          sed -i 's/^          //' .gpg-batch
+          chmod +x .gpg-batch
+          git config gpg.program "$PWD/.gpg-batch"
+          export GPG_PASSPHRASE
+
+          git tag -s "$TAG" -m "$RELEASE_TITLE" "$GITHUB_SHA"
+          git tag -v "$TAG" || { echo "::error::the tag did not verify locally"; exit 1; }
+
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG"
+          rm -f .gpg-batch
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+          echo "pushed a signed annotated tag $TAG"
+
+      - name: Download the Salam Agent release set
+        if: needs.build-agent.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: salam-agent-*
+          path: agent-release
+          merge-multiple: true
+      - name: Create GitHub Release with auto-generated notes
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          TAG_WAS_SIGNED: ${{ steps.signtag.outputs.signed }}
+        run: |
+          set -eu
+          shopt -s nullglob
+          candidates=(
+            release/salam-*.zip
+            release/salam-*.tar.gz
+            release/salam-*-stdlib-index.json
+            release/salam-*-stdlib-doc.html
+            release/salam-*-android.aab
+            release/salam-*-android-*.apk
+            release/salam-*.deb
+            release/salam-*.rpm
+          )
+          assets=()
+          for c in "${candidates[@]}"; do
+            for f in $c; do
+              [ -e "$f" ] || continue
+              for a in ${assets[@]+"${assets[@]}"}; do
+                [ "$a" = "$f" ] && continue 2
+              done
+              assets+=("$f")
+            done
+          done
+          [ "${#assets[@]}" -gt 0 ] || { echo "::error::no release assets matched"; exit 1; }
+          GLIBC_FLOOR_NOTE="glibc 2.38"
+
+          : > release/SHA256SUMS
+          sums=()
+          for f in "${assets[@]}"; do
+            b="${f#release/}"
+            ( cd release && sha256sum "$b" > "${b}.sha256" && cat "${b}.sha256" >> SHA256SUMS )
+            sums+=("release/${b}.sha256")
+          done
+          sums+=("release/SHA256SUMS")
+
+          ( cd release && sha256sum -c SHA256SUMS ) \
+            || { echo "::error::SHA256SUMS does not verify against the staged assets"; exit 1; }
+
+          agent=()
+          if [ -d agent-release ]; then
+            mv agent-release/SHA256SUMS "agent-release/salam-agent-${VERSION}-SHA256SUMS"
+            mv agent-release/SHA512SUMS "agent-release/salam-agent-${VERSION}-SHA512SUMS"
+            ( cd agent-release && sha256sum -c "salam-agent-${VERSION}-SHA256SUMS" ) \
+              || { echo "::error::the Salam Agent checksums do not verify"; exit 1; }
+            agent=(agent-release/salam-agent-"${VERSION}"-*)
+            [ "${#agent[@]}" -gt 0 ] || { echo "::error::no salam-agent-${VERSION} files were built"; exit 1; }
+          elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            echo "::error::the Salam Agent release set is missing"
+            exit 1
+          fi
+
+          {
+            echo "### Verifying your download"
+            echo ""
+            echo "Every file has a \`.sha256\` beside it, and \`SHA256SUMS\` covers them all."
+            echo ""
+            echo "Check a single file:"
+            echo ""
+            echo '```'
+            echo "sha256sum -c salam-${VERSION}-linux-x86_64.zip.sha256"
+            echo '```'
+            echo ""
+            echo "Check everything you downloaded:"
+            echo ""
+            echo '```'
+            echo "sha256sum --ignore-missing -c SHA256SUMS"
+            echo '```'
+            echo ""
+            echo "On macOS use \`shasum -a 256 -c\` in place of \`sha256sum -c\`."
+            echo "On Windows, \`certutil -hashfile <file> SHA256\` prints the hash to compare by eye."
+            echo ""
+            echo "### Which Linux x86_64 build"
+            echo ""
+            echo "\`linux-x86_64\` is the flagship: embedded LLVM, LLD and sysroots, so"
+            echo "cross-compiles and JITs with nothing else installed. It links glibc"
+            echo "and needs ${GLIBC_FLOOR_NOTE} or newer."
+            echo ""
+            echo "\`linux-x86_64-musl\` is fully static and loads no libc at all, so it"
+            echo "any x86_64 Linux - Amazon Linux, RHEL, Debian stable, Alpine, slim"
+            echo "containers. It has no embedded LLVM, so no cross-compiling and no JIT."
+            echo ""
+            echo "\`install.sh\` reads the local glibc and picks between them."
+            echo ""
+          } > release-notes-preamble.md
+
+          echo "Publishing ${#assets[@]} assets and ${#sums[@]} checksum files:"
+          printf '  %s\n' "${assets[@]}" "${sums[@]}"
+          {
+            echo "### Release checksums (SHA-256)"
+            echo ""
+            echo '```'
+            cat release/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          TARGET_ARG="--target $GITHUB_SHA"
+          [ "$TAG_WAS_SIGNED" = "true" ] && TARGET_ARG=""
+          # shellcheck disable=SC2086
+          gh release create "$TAG" \
+            $TARGET_ARG \
+            --title "$RELEASE_TITLE" \
+            --notes-file release-notes-preamble.md \
+            --generate-notes \
+            ${PRERELEASE_FLAG:+"$PRERELEASE_FLAG"} \
+            "${assets[@]}" "${sums[@]}" ${agent[@]+"${agent[@]}"}
+
+  build-agent:
+    if: |
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'SalamLang/Salam' &&
+      github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')
+    name: Build Salam Agent
+    permissions:
+      contents: read
+    uses: ./.github/workflows/agent-release.yml # zizmor: ignore[self-repository]
+
+  nightly-report:
+    name: Report nightly outcome
+    if: |
+      always() &&
+      github.event_name == 'workflow_dispatch' && inputs.nightly &&
+      github.repository == 'SalamLang/Salam'
+    needs:
+      [
+        build-linux,
+        build-macos,
+        build-windows,
+        build-windows-i686,
+        build-windows-arm64,
+        build-linux-i686,
+        build-linux-armhf,
+        build-linux-aarch64,
+        android-gate,
+        create-release,
+      ]
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - name: Open, update or close the nightly tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RESULTS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          NIGHTLY_DATE: ${{ inputs.nightly_date }}
+        run: |
+          set -eu
+          TITLE="🌙 Nightly release is failing"
+
+          failed=$(printf '%s' "$RESULTS" \
+            | jq -r 'to_entries
+                     | map(select(.value.result == "failure" or .value.result == "cancelled"))
+                     | .[].key')
+
+          num=$(gh issue list --state open --limit 100 --json number,title \
+            | jq -r --arg t "$TITLE" 'map(select(.title == $t)) | .[0].number // empty')
+
+          if [ -z "$failed" ]; then
+            echo "nightly ${NIGHTLY_DATE:-$(date -u +%F)} published successfully"
+            if [ -n "$num" ]; then
+              gh issue comment "$num" \
+                --body "Nightly \`${NIGHTLY_DATE:-$(date -u +%F)}\` published successfully in ${RUN_URL} - closing."
+              gh issue close "$num"
+            fi
+            exit 0
+          fi
+
+          echo "failed jobs:"
+          printf '%s\n' "$failed" | sed 's/^/  /'
+
+          body=$(
+            echo "The nightly release for \`${NIGHTLY_DATE:-$(date -u +%F)}\` did not publish."
+            echo ""
+            echo "Failed jobs:"
+            printf '%s\n' "$failed" | while IFS= read -r job; do
+              printf -- "- \`%s\`\n" "$job"
+            done
+            echo ""
+            echo "Run: ${RUN_URL}"
+            echo ""
+            echo "Nothing is published unless every platform passes its release gate,"
+            echo "so the newest nightly stays stale until this run is green again."
+            echo "This issue is updated on each nightly attempt and closed"
+            echo "automatically by the first one that succeeds."
+          )
+
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body "$body"
+            echo "updated issue #$num"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi

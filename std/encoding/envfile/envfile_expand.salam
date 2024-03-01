@@ -1,0 +1,209 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package envfile
+
+import str
+import collections
+
+struct _DR:
+    pub name: str = ""
+    pub def: str = ""
+    pub has_def: bool = false
+    pub colon: bool = false
+    pub next: int = 0
+    pub ok: bool = false
+end
+
+func _is_var_char(c: int): bool:
+    if c >= 48 and c <= 57: ret true end
+    if c >= 65 and c <= 90: ret true end
+    if c >= 97 and c <= 122: ret true end
+    ret c == 95
+end
+
+func _read_var(s: str, i: int, dotted: bool, endpos &: int): str:
+    n := s.len()
+    bp := _bp(s)
+    endpos = i
+    if i >= n: ret "" end
+    first := _ub(bp, i)
+    if _is_var_char(first) == false or (first >= 48 and first <= 57): ret "" end
+    mut p := i
+    until p < n:
+        c := _ub(bp, p)
+        mut good := _is_var_char(c)
+        if dotted and c == 46: good = true end
+        if good == false: break end
+        p += 1
+    end
+    endpos = p
+    ret s.substr(i, p - i)
+end
+
+func _ref_braced(s: str, i: int): _DR:
+    n := s.len()
+    bp := _bp(s)
+    mut p := 0
+    name := _read_var(s, i + 2, true, p)
+    if name.len() == 0: ret _DR { next = i + 1 } end
+    mut colon := false
+    mut has_def := false
+    mut defval := ""
+    if p < n and _ub(bp, p) == 58:
+        colon = true
+        p += 1
+    end
+    if p < n and _ub(bp, p) == 45:
+        p += 1
+        start := p
+        until p < n and _ub(bp, p) != 125:
+            p += 1
+        end
+        defval = s.substr(start, p - start)
+        has_def = true
+    end
+    if p >= n or _ub(bp, p) != 125: ret _DR { next = i + 1 } end
+    ret _DR { name = name, def = defval, has_def = has_def, colon = colon, next = p + 1, ok = true }
+end
+
+func _ref_at(s: str, i: int): _DR:
+    n := s.len()
+    if i + 1 >= n: ret _DR { next = i + 1 } end
+    if _ub(_bp(s), i + 1) == 123: ret _ref_braced(s, i) end
+    mut p := 0
+    name := _read_var(s, i + 1, false, p)
+    if name.len() == 0: ret _DR { next = i + 1 } end
+    ret _DR { name = name, next = p, ok = true }
+end
+
+func _lookup(name: str, d &: Doc, base &: Doc, found &: bool): str:
+    found = true
+    i := d.m.index_of(name)
+    if i >= 0: ret d.m.val_at(i) end
+    j := base.m.index_of(name)
+    if j >= 0: ret base.m.val_at(j) end
+    found = false
+    ret ""
+end
+
+func _resolve(r: _DR, d &: Doc, base &: Doc): str:
+    mut found := false
+    v := _lookup(r.name, d, base, found)
+    if found:
+        if v.len() > 0: ret v end
+        if r.colon and r.has_def: ret r.def end
+        ret v
+    end
+    if r.has_def: ret r.def end
+    ret ""
+end
+
+func _expand_one(raw: str, d &: Doc, base &: Doc): str:
+    n := raw.len()
+    bp := _bp(raw)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut p := 0
+    until p < n:
+        c := _ub(bp, p)
+        if c == 92 and p + 1 < n and _ub(bp, p + 1) == 36:
+            str.BufAppendChar(sb, 36)
+            p += 2
+            continue
+        end
+        if c != 36:
+            str.BufAppendChar(sb, c)
+            p += 1
+            continue
+        end
+        r := _ref_at(raw, p)
+        if r.ok == false:
+            str.BufAppendChar(sb, c)
+            p += 1
+            continue
+        end
+        str.BufAppend(sb, _resolve(r, d, base))
+        p = r.next
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _collect_refs(raw: str, out &: Vector<str>):
+    n := raw.len()
+    bp := _bp(raw)
+    mut p := 0
+    until p < n:
+        c := _ub(bp, p)
+        if c == 92 and p + 1 < n and _ub(bp, p + 1) == 36:
+            p += 2
+            continue
+        end
+        if c != 36:
+            p += 1
+            continue
+        end
+        r := _ref_at(raw, p)
+        if r.ok and collections.contains(out, r.name) == false:
+            out.push(r.name)
+        end
+        if r.next > p: p = r.next else:
+            p = p + 1
+        end
+    end
+end
+
+@en "ExpandDoc"
+@fa "گسترش سند"
+pub func ExpandDoc(d &: Doc, base &: Doc): Doc:
+    mut out := Doc {}
+    repeat d.m.len() in i:
+        k := d.m.key_at(i)
+        v := d.m.val_at(i)
+        if d.flags.get(i) == _LITERAL:
+            _push(out, k, v, _LITERAL)
+        else:
+            ev := _expand_one(v, out, base)
+            _push(out, k, ev, _LITERAL)
+        end
+    end
+    ret out
+end
+
+@en "Expand"
+@fa "گسترش"
+pub func Expand(raw: str, d &: Doc, base &: Doc): str:
+    ret _expand_one(raw, d, base)
+end
+
+@en "RefNames"
+@fa "نام‌های ارجاع"
+pub func RefNames(d &: Doc): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    repeat d.m.len() in i:
+        if d.flags.get(i) == _EXPANDABLE:
+            _collect_refs(d.m.val_at(i), out)
+        end
+    end
+    ret out
+end
+
+@en "RefNamesIn"
+@fa "نام‌های ارجاع در"
+pub func RefNamesIn(raw: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    _collect_refs(raw, out)
+    ret out
+end

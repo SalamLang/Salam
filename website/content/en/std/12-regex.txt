@@ -1,0 +1,137 @@
+pkg.en = regex
+pkg.name = regex
+pkg.group = Text
+pkg.summary = Searching and replacing with a pattern: finding a number, an email address or a date in text and pulling it apart.
+pkg.title = The regex package in Salam | Pattern matching and replacement
+pkg.description = Regular expressions in Salam: compiling a pattern, matching, finding every occurrence, named groups, replacement and splitting, with examples.
+pkg.intro <<
+<p>A regular expression is a small language for describing the shape of text; <code>[0-9]+</code> means "one or more digits". With one you can ask whether text matches a pattern, find every place it matches, and pull pieces out or replace them.</p>
+<p>Every function comes in two forms: one takes a <code>Regex</code> made with <code>Compile</code>, and its twin whose name ends in <code>Str</code> takes the pattern as text. They do the same work. <code>Compile</code> only stores the pattern, and every call parses it again, so a <code>Regex</code> value is about naming the pattern once, not about speed.</p>
+<p>Use it for patterns: validation, pulling fields out of log lines, rewriting. For a fixed piece of text, the plain functions of <a href="/std/str/">str</a> (<code>Contains</code>, <code>Index</code>, <code>Replace</code>, <code>Split</code>) are simpler and faster. For whole-word, Unicode-aware work on Persian text, see <a href="/std/unicode/">unicode</a>.</p>
+<p>Parentheses in a pattern make a "group", and <code>(?P&lt;name&gt;...)</code> makes a named one. Group zero is the whole match. In a replacement, <code>$1</code> and <code>$2</code> stand for the groups.</p>
+<h3>Limits that cause surprises</h3>
+<ul>
+<li><strong>The engine works on bytes.</strong> <code>.</code> and every class match one byte, so <code>\w</code> never matches a Persian letter, a range such as <code>[آ-ی]</code> does not work, and <code>ب+</code> repeats only the last byte of <code>ب</code>. Put a Persian letter in a group to repeat it, <code>(ب)+</code>, or use a negated class such as <code>[^ ]+</code>. Literal Persian words and alternatives such as <code>(تهران|شیراز)</code> work.</li>
+<li>No <code>\b</code> (it means the letter <code>b</code>), no <code>(?i)</code>, no lookahead and no back references (<code>\1</code> means the digit 1). <code>^</code> and <code>$</code> are the start and end of the whole text, never of a line.</li>
+<li>At most 16 groups, and a repeat count of at most 64: <code>a{100}</code> is an invalid pattern.</li>
+<li>An invalid pattern does not stop the program; it just never matches. Check patterns you did not write with <code>IsValid</code>.</li>
+<li>A match that would take more than 400000 steps is given up and reported as no match. Nested repetition such as <code>(a+)+</code> on long input can hit that limit.</li>
+<li>The functions keep state in globals, so do not use this package from several threads at once.</li>
+</ul>
+<h2 id="guide-validate">Checking input</h2>
+<p>The most common job is deciding whether a value has the right shape: an email address, a phone number, a postal code. <code>Match</code> is true when the pattern matches <em>anywhere</em> in the text, so a pattern used for validation must start with <code>^</code> and end with <code>$</code>; otherwise <code>"abc 09121234567 xyz"</code> would pass as a phone number. Giving each pattern a name with <code>Compile</code>, outside the loop or the request handler, keeps them in one place.</p>
+{{example.regex-guide-validate}}
+<p>A pattern like this checks shape, not truth: an address that passes may still not exist. For an email the only real test is sending a message to it.</p>
+
+<h2 id="guide-logs">Pulling fields out of lines</h2>
+<p>Named groups turn a line of text into fields. <code>FindMatch</code> returns a <code>MatchResult</code>; its <code>ok</code> field says whether the line matched at all, and <code>GroupByName</code> reads one field by its name. Checking <code>ok</code> first matters: a line in an unexpected format should be skipped or reported, not read as empty fields.</p>
+{{example.regex-guide-logs}}
+
+<h2 id="guide-rewrite">Rewriting text</h2>
+<p><code>ReplaceAll</code> puts the same text in place of every match, which is enough for collapsing runs of spaces. When the replacement depends on what was matched, use <code>ReplaceAllExpand</code>: in its template <code>$1</code>, <code>$2</code> and so on are the groups and <code>$0</code> is the whole match. Here a date written year first is turned around, and only the first date is marked. <code>Split</code> with a character class breaks text on any mix of separators.</p>
+{{example.regex-guide-rewrite}}
+
+<h2 id="guide-user-patterns">Patterns that come from users</h2>
+<p>When the pattern itself is typed by a user, for a search box or a filter rule, check it with <code>IsValid</code> before calling <code>Compile</code>. <code>FindAllMatches</code> then gives the position of each match in bytes, which is what you need to highlight the matched words.</p>
+{{example.regex-guide-user}}
+<p>The engine supports the common syntax: classes such as <code>[a-z]</code>, the shorthands <code>\d</code>, <code>\w</code> and <code>\s</code> with their capital opposites, repetition with <code>*</code>, <code>+</code>, <code>?</code> and <code>{n,m}</code>, alternation with <code>|</code>, and plain and named groups. There is no <code>(?i)</code> flag; for a case-insensitive search, lower-case the text with <a href="/std/str/"><code>str</code></a> first and write the pattern in lower case. Positions are in bytes, so a Persian letter takes two of them.</p>
+
+<h2 id="guide-persian">Persian text</h2>
+<p>Because the engine matches bytes, a pattern for Persian text needs a little care. This program pulls hashtags out of a post, shortens a stretched word and finds a city name.</p>
+{{example.regex-guide-persian}}
+<p><code>\w</code> only knows ASCII letters, digits and <code>_</code>, so <code>#\w+</code> finds nothing; "anything up to a space" with <code>[^ ]+</code> works for any script. <code>هه+</code> finds two pieces because the <code>+</code> applies to the second byte of <code>ه</code> only; the group in <code>ه(ه)+</code> repeats the whole letter. The position 13 is in bytes: the five Persian letters before the city name take two bytes each, and the two spaces and the <code>#</code> one each.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<table>
+<tr><th>Job</th><th>Function</th></tr>
+<tr><td>Does the text have this shape?</td><td><code>Match</code> with <code>^...$</code></td></tr>
+<tr><td>Where is the first match?</td><td><code>Find</code>, or <code>FindMatch</code> for the groups too</td></tr>
+<tr><td>Every match as text</td><td><code>FindAll</code>, <code>FindAllN</code> for at most n</td></tr>
+<tr><td>Every match with positions and groups</td><td><code>FindAllMatches</code></td></tr>
+<tr><td>Read fields from one line</td><td><code>FindMatch</code> then <code>Group</code> or <code>GroupByName</code></td></tr>
+<tr><td>Replace with fixed text</td><td><code>Replace</code>, <code>ReplaceAll</code></td></tr>
+<tr><td>Replace using the groups</td><td><code>ReplaceExpand</code>, <code>ReplaceAllExpand</code></td></tr>
+<tr><td>Break text on a separator pattern</td><td><code>Split</code>, <code>SplitN</code></td></tr>
+<tr><td>A pattern typed by a user</td><td><code>IsValid</code> before <code>Compile</code></td></tr>
+</table>
+<p>Every one of these has a <code>...Str</code> twin that takes the pattern as text and behaves the same.</p>
+>>
+
+doc.MatchResult = The result of a search. Rather than reading the fields directly, the Group functions are usually simpler.
+doc.MatchResult.ok = True when a match was found.
+doc.MatchResult.start = Where the match starts, in bytes.
+doc.MatchResult.stop = Where the match ends, in bytes; that position is not part of it.
+doc.MatchResult.count = The number of groups, not counting group zero.
+doc.MatchResult.text = The whole text that was searched, not only the part that matched. For the match itself use <code>Group(m, 0)</code>.
+doc.MatchResult.pattern = The pattern the search was made with.
+doc.MatchResult.gs = Where each group starts.
+doc.MatchResult.ge = Where each group ends.
+doc.FindMatch = Finds the first place the pattern matches and returns everything about it, groups included.
+doc.FindMatchStr = Like <code>FindMatch</code>, with the pattern as text.
+doc.FindMatchFrom = Like <code>FindMatch</code>, but starts the search at byte <code>from</code>, for finding the next occurrence.
+doc.GroupCount = Returns the number of groups in the pattern, not counting group zero.
+doc.GroupOk = True when group number <code>i</code> took part in this match. An optional group may stay empty.
+doc.Group = Returns the text of group number <code>i</code>; group zero is the whole match.
+doc.GroupStart = Where the group starts, in bytes.
+doc.GroupEnd = Where the group ends, in bytes.
+doc.GroupIndex = Returns the number of a named group.
+doc.GroupByName = Returns the text of a named group.
+doc.FindSubmatch = Returns the match and all its groups in a vector; element zero is the whole match.
+doc.FindSubmatchStr = Like <code>FindSubmatch</code>, with the pattern as text.
+doc.FindAllMatches = Returns every match with its details. A <code>limit</code> of minus one means no limit.
+doc.FindAllN = Returns the text of at most <code>limit</code> matches.
+doc.FindAll = Returns the text of every match in a vector.
+doc.FindAllStr = Like <code>FindAll</code>, with the pattern as text.
+doc.SplitN = Splits the text wherever the pattern matches, into at most <code>limit</code> pieces; the last piece is the rest of the text.
+doc.Split = Splits the text wherever the pattern matches. For separators with varying space around them it is more flexible than <code>str.Split</code>.
+doc.SplitStr = Like <code>Split</code>, with the pattern as text.
+doc.Expand = Fills a template from the groups of a match; <code>$1</code>, <code>$2</code> and so on stand for the groups.
+doc.ReplaceExpand = Replaces the first match with the template, in which you can use <code>$1</code> and the rest.
+doc.ReplaceAllExpand = Replaces every match with the template.
+doc.ReplaceExpandStr = Like <code>ReplaceExpand</code>, with the pattern as text.
+doc.ReplaceAllExpandStr = Like <code>ReplaceAllExpand</code>, with the pattern as text.
+doc.Regex = A named pattern. <code>Compile</code> only stores the text; every call parses it again.
+doc.Regex.pattern = The text of the pattern.
+doc.Compile = Wraps a pattern in a <code>Regex</code>. It does not check it: an invalid pattern never matches, so check one that came from a user with <code>IsValid</code> first.
+doc.IsValid = True when the pattern is well formed and within the limits: at most 16 groups and repeat counts up to 64.
+doc.Match = True when the pattern matches anywhere in the text. To match the whole text, anchor the pattern with <code>^</code> and <code>$</code>.
+doc.Find = Returns where the first match starts, in bytes, or minus one.
+doc.Replace = Replaces only the first match with new text.
+doc.ReplaceAll = Replaces every match with new text.
+doc.MatchStr = Like <code>Match</code>, with the pattern as text.
+doc.FindStr = Like <code>Find</code>, with the pattern as text.
+doc.ReplaceStr = Like <code>Replace</code>, with the pattern as text.
+doc.ReplaceAllStr = Like <code>ReplaceAll</code>, with the pattern as text.
+
+ex.MatchResult = regex-Group
+ex.FindMatch = regex-Group
+ex.FindMatchStr = regex-Group
+ex.FindMatchFrom = regex-Group
+ex.GroupCount = regex-Group
+ex.GroupOk = regex-Group
+ex.GroupStart = regex-Group
+ex.GroupEnd = regex-Group
+ex.GroupIndex = regex-Group
+ex.GroupByName = regex-Group
+ex.FindSubmatch = regex-Group
+ex.FindSubmatchStr = regex-Group
+ex.FindAllMatches = regex-FindAll
+ex.FindAllN = regex-FindAll
+ex.FindAllStr = regex-FindAll
+ex.SplitN = regex-FindAll
+ex.Split = regex-FindAll
+ex.SplitStr = regex-FindAll
+ex.ReplaceExpand = regex-Expand
+ex.ReplaceAllExpand = regex-Expand
+ex.ReplaceExpandStr = regex-Expand
+ex.ReplaceAllExpandStr = regex-Expand
+ex.Regex = regex-Compile
+ex.IsValid = regex-Compile
+ex.Match = regex-Compile
+ex.Find = regex-Compile
+ex.Replace = regex-Compile
+ex.ReplaceAll = regex-Compile
+ex.MatchStr = regex-Compile
+ex.FindStr = regex-Compile
+ex.ReplaceStr = regex-Compile
+ex.ReplaceAllStr = regex-Compile

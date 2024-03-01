@@ -1,0 +1,130 @@
+pkg.en = onnx
+pkg.name = onnx
+pkg.group = Machine learning
+pkg.summary = Reading and running ONNX models with no outside dependency.
+pkg.title = The onnx package in Salam | Running an ONNX model
+pkg.description = The onnx package in Salam: loading an ONNX model trained in PyTorch or TensorFlow, looking at its nodes and attributes, and running it over tensors, with an example.
+pkg.import = onnx
+pkg.intro <<
+<p>ONNX is the common exchange format for trained machine learning models. Train in PyTorch, TensorFlow or scikit-learn, export to <code>.onnx</code> once, and this package runs the model inside a Salam program with no Python and no ONNX Runtime library. <code>LoadOnnx</code> reads the file, <code>Run</code> computes the outputs from your input tensors, and the results are ordinary <a href="/std/tensor/">tensor</a> values.</p>
+<p>Use it for inference: scoring, classifying, embedding. To train or fine tune a network in Salam itself, build it with <a href="/std/nn/">nn</a> and <a href="/std/optim/">optim</a>. For large language models in the GGUF format, see <a href="/std/gguf/">gguf</a> and <a href="/std/llm/">llm</a>.</p>
+<h3>Core ideas</h3>
+<ul>
+<li>A <code>Model</code> is the graph from the file: <code>nodes</code> in the order they run, the weights (<code>inits</code>), and the names of the graph's inputs and outputs.</li>
+<li><code>feed_names</code> lists the inputs you supply, in order; <code>Run</code> takes one tensor for each and returns one tensor per graph output.</li>
+<li>Nothing stops the program. Every failure sets the <code>ok</code> argument to false and puts the reason in <code>model.error</code>.</li>
+</ul>
+<h3>Limits to know before you export</h3>
+<ul>
+<li>Every tensor is <code>f32</code> inside. Integer and double weights are converted when the file is read, so an <code>int64</code> above 16777216 loses precision.</li>
+<li>About 65 operators are implemented, enough for feed forward, convolutional and normalization layers (the list is below). Anything else, such as <code>LSTM</code>, <code>Resize</code> or the quantized operators, fails with <code>unsupported op: NAME</code>.</li>
+<li><code>Conv</code> has no groups (so no depthwise convolutions), no dilations and only symmetric padding. <code>MaxPool</code> and <code>AveragePool</code> have no padding.</li>
+<li>Weights must be inside the <code>.onnx</code> file. Models exported with external data (a separate <code>.data</code> file, used above 2 GB) do not load.</li>
+<li>Input shapes are not checked against the file and the opset version is ignored. A wrong shape shows up as an error from the first operator that cannot use it.</li>
+</ul>
+<h2 id="guide-errors">Checking every step</h2>
+<p>Both <code>ParseOnnx</code> (or <code>LoadOnnx</code>) and <code>Run</code> report success through their last argument, a <code>bool</code> they set, and leave the reason in the model's <code>error</code> field. Check it after each call: a file that is not ONNX, a graph with an operator this package does not implement, or the wrong number of inputs all come back this way instead of stopping the program. The model in this example is built in memory with <a href="/std/encoding/protobuf/">encoding/protobuf</a>, a single <code>Relu</code>, so the program runs without any file.</p>
+{{example.onnx-guide-errors}}
+<p><code>feed_names</code> lists the inputs you must supply, in order. It leaves out the graph inputs that are really weights stored in the file, which older exporters list as inputs too.</p>
+
+<h2 id="guide-inspect">Looking inside a model file</h2>
+<p>Before wiring a model into a program, look at what it expects. This tool prints the inputs and outputs, how many nodes of each operator the graph has, and how many numbers the weights hold. Run it on any <code>.onnx</code> file:</p>
+<pre class="code" dir="ltr"><code>salam build onnx-guide-inspect.salam
+./onnx-guide-inspect model.onnx</code></pre>
+{{example.onnx-guide-inspect}}
+<p>Run on the small model that the reference example at the bottom of this page writes, it prints:</p>
+<pre class="code" dir="ltr"><code>IR version 8
+feeds ["x"] outputs ["y"]
+  Mul 1
+  LeakyRelu 1
+1 weight tensors, 3 numbers</code></pre>
+<p>Check the operator counts against the supported list before you build anything on a model:</p>
+<table>
+<tr><th>Kind</th><th>Operators</th></tr>
+<tr><td>Linear algebra</td><td><code>MatMul</code>, <code>Gemm</code>, <code>Conv</code></td></tr>
+<tr><td>Element-wise math</td><td><code>Add</code>, <code>Sub</code>, <code>Mul</code>, <code>Div</code>, <code>Pow</code>, <code>Sqrt</code>, <code>Exp</code>, <code>Log</code>, <code>Abs</code>, <code>Neg</code>, <code>Reciprocal</code>, <code>Floor</code>, <code>Ceil</code>, <code>Round</code>, <code>Sign</code>, <code>Erf</code>, <code>Min</code>, <code>Max</code>, <code>Sum</code>, <code>Mean</code>, <code>Clip</code></td></tr>
+<tr><td>Activations</td><td><code>Relu</code>, <code>LeakyRelu</code>, <code>PRelu</code>, <code>Elu</code>, <code>Selu</code>, <code>Gelu</code>, <code>Sigmoid</code>, <code>HardSigmoid</code>, <code>Tanh</code>, <code>Softplus</code>, <code>Softmax</code>, <code>LogSoftmax</code></td></tr>
+<tr><td>Normalization and pooling</td><td><code>BatchNormalization</code>, <code>InstanceNormalization</code>, <code>LayerNormalization</code>, <code>MaxPool</code>, <code>AveragePool</code>, <code>GlobalAveragePool</code>, <code>Dropout</code> (does nothing at inference)</td></tr>
+<tr><td>Reductions and logic</td><td><code>ReduceSum</code>, <code>ReduceMean</code>, <code>ReduceMax</code>, <code>ReduceMin</code>, <code>Equal</code>, <code>Greater</code>, <code>Less</code>, <code>Where</code></td></tr>
+<tr><td>Shapes</td><td><code>Reshape</code>, <code>Flatten</code>, <code>Transpose</code>, <code>Concat</code>, <code>Split</code>, <code>Slice</code>, <code>Gather</code>, <code>Squeeze</code>, <code>Unsqueeze</code>, <code>Expand</code>, <code>Shape</code>, <code>Cast</code>, <code>Constant</code>, <code>Identity</code></td></tr>
+</table>
+
+<h2 id="guide-classify">Running a trained classifier</h2>
+<p>Train the model where it is convenient, export it once, and run it from Salam with no Python at run time. With PyTorch, a classifier of the iris flowers with four inputs and three outputs is exported like this:</p>
+<pre class="code" dir="ltr"><code>torch.onnx.export(model, torch.zeros(1, 4), "iris.onnx",
+    input_names=["x"], output_names=["logits"],
+    dynamic_axes={"x": {0: "batch"}})</code></pre>
+<p>The program feeds two flowers at once as a <code>2x4</code> tensor, turns the logits into probabilities with <code>tensor.Softmax</code> and takes the most likely class of each row.</p>
+{{example.onnx-guide-classify}}
+<p>The <code>dynamic_axes</code> setting is what lets the batch size change: without it PyTorch may write the batch size of 1 into <code>Reshape</code> and <code>Expand</code> nodes as a constant, and a batch of two then fails inside the graph. The model must be given the same preprocessing it was trained with, here the raw measurements in centimetres.</p>
+>>
+
+doc.Attr = One node attribute, such as alpha.
+doc.Attr.name = The name.
+doc.Attr.kind = The value kind in the ONNX format: 1 float, 2 integer, 3 string, 4 tensor, 6 and 7 lists.
+doc.Attr.f = The float value.
+doc.Attr.i = The integer value.
+doc.Attr.s = The string value.
+doc.Attr.t = The tensor value.
+doc.Attr.floats = The float list.
+doc.Attr.ints = The integer list.
+doc.Attr.free = Frees the attribute.
+doc.Node = One graph node: one operator with named inputs and outputs.
+doc.Node.op = The operator name, such as Gemm or Relu.
+doc.Node.name = The node name.
+doc.Node.inputs = The names of the inputs.
+doc.Node.outputs = The names of the outputs.
+doc.Node.attrs = The attributes.
+doc.Node.attr_index = The index of the attribute with this name; -1 when there is none.
+doc.Node.attr_int = An integer attribute, or the default value.
+doc.Node.attr_float = A float attribute, or the default value.
+doc.Node.free = Frees the node.
+doc.Model = A parsed ONNX model.
+doc.Model.inputs = The names of the graph inputs.
+doc.Model.outputs = The names of the outputs.
+doc.Model.nodes = The nodes, in the order they run.
+doc.Model.init_names = The names of the fixed weights.
+doc.Model.inits = The fixed weights.
+doc.Model.ir_version = The IR version in the file.
+doc.Model.error = The error message.
+doc.Model.ok = It was read correctly.
+doc.Model.feed_names = The inputs you have to supply, meaning the inputs that are not fixed weights; pass them to <code>Run</code> in that order.
+doc.Model.free = Frees the model.
+doc.ParseOnnx = Reads the model from bytes in memory.
+doc.LoadOnnx = Reads the model from a <code>.onnx</code> file. Weights stored in an external data file are not supported.
+doc.Run = Runs the model over the inputs, one tensor per name in <code>feed_names</code>, and returns the outputs in the order of the graph outputs. On failure <code>ok</code> is false, the list is empty and <code>model.error</code> names the operator that failed.
+
+ex.Attr = onnx-Run
+ex.Attr.name = onnx-Run
+ex.Attr.kind = onnx-Run
+ex.Attr.f = onnx-Run
+ex.Attr.i = onnx-Run
+ex.Attr.s = onnx-Run
+ex.Attr.t = onnx-Run
+ex.Attr.floats = onnx-Run
+ex.Attr.ints = onnx-Run
+ex.Attr.free = onnx-Run
+ex.Node = onnx-Run
+ex.Node.op = onnx-Run
+ex.Node.name = onnx-Run
+ex.Node.inputs = onnx-Run
+ex.Node.outputs = onnx-Run
+ex.Node.attrs = onnx-Run
+ex.Node.attr_index = onnx-Run
+ex.Node.attr_int = onnx-Run
+ex.Node.attr_float = onnx-Run
+ex.Node.free = onnx-Run
+ex.Model = onnx-Run
+ex.Model.inputs = onnx-Run
+ex.Model.outputs = onnx-Run
+ex.Model.nodes = onnx-Run
+ex.Model.init_names = onnx-Run
+ex.Model.inits = onnx-Run
+ex.Model.ir_version = onnx-Run
+ex.Model.error = onnx-Run
+ex.Model.ok = onnx-Run
+ex.Model.feed_names = onnx-Run
+ex.Model.free = onnx-Run
+ex.ParseOnnx = onnx-Run
+ex.LoadOnnx = onnx-Run
+ex.Run = onnx-Run

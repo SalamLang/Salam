@@ -1,0 +1,435 @@
+package tls
+
+import net.internal.rawsock
+
+@en "Config"
+@fa "پیکربندی"
+pub struct Config:
+    @en "server_name"
+    @fa "نام کارساز"
+    pub server_name: str = ""
+    @en "ca_file"
+    @fa "پرونده گواهی ریشه"
+    pub ca_file: str = ""
+    @en "insecure_skip_verify"
+    @fa "بدون بررسی گواهی"
+    pub insecure_skip_verify: bool = false
+    @en "alpn"
+    @fa "پروتکل برنامه"
+    pub alpn: str = ""
+    @en "aes_only"
+    @fa "فقط ای‌ای‌اس"
+    pub aes_only: bool = false
+end
+
+@en "Conn"
+@fa "اتصال"
+pub struct Conn:
+    @en "h"
+    @fa "دست‌دهی"
+    pub h: Handshake = Handshake {}
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
+    @en "open"
+    @fa "باز"
+    pub open: bool = false
+    @en "insecure"
+    @fa "ناامن"
+    pub insecure: bool = false
+    @en "pending"
+    @fa "داده معلق"
+    pub pending: Buf = Buf {}
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+end
+
+func _conn_fail(c &: Conn, msg: str): bool:
+    if c.err.len() == 0:
+        c.err = msg
+    end
+    c.open = false
+    ret false
+end
+
+func _traffic_update(h &: Handshake, secret &: Buf): bool:
+    mut next := _newbuf(h.hlen)
+    defer _buf_wipe(next)
+    _putzeros(next, h.hlen)
+    if not _hkdf_expand_label(h.hash, secret.p, secret.len, "traffic upd", null, 0, next.p, h.hlen):
+        ret false
+    end
+    _bufreset(secret)
+    _putbuf(secret, next)
+    ret true
+end
+
+func _do_key_update(c &: Conn, requested: bool): bool:
+    if c.h.ver != TLS13:
+        ret false
+    end
+    if not _traffic_update(c.h, c.h.s_ap_secret):
+        ret false
+    end
+    _tk_free(c.h.rec.rxk)
+    c.h.rec.rxk = _tk_derive(c.h.s_ap_secret.p, c.h.s_ap_secret.len, c.h.cipher)
+    if not c.h.rec.rxk.live:
+        ret false
+    end
+    if not requested:
+        ret true
+    end
+    mut msg := _newbuf(8)
+    defer _buf_free(msg)
+    _put8(msg, HS_KEY_UPDATE)
+    _put24(msg, 1)
+    _put8(msg, 0)
+    if not _rec_write(c.h.rec, REC_HANDSHAKE, msg.p, msg.len):
+        ret false
+    end
+    if not _traffic_update(c.h, c.h.c_ap_secret):
+        ret false
+    end
+    _tk_free(c.h.rec.txk)
+    c.h.rec.txk = _tk_derive(c.h.c_ap_secret.p, c.h.c_ap_secret.len, c.h.cipher)
+    ret c.h.rec.txk.live
+end
+
+func _fill_pending(c &: Conn): bool:
+    mut frag := _newbuf(REC_MAX_PLAINTEXT)
+    defer _buf_free(frag)
+    mut guard := 0
+    until c.pending.len == 0 and guard < 64:
+        guard += 1
+        mut typ := 0
+        if not _rec_read(c.h.rec, typ, frag):
+            c.open = false
+            if c.h.rec.err.len() > 0:
+                c.err = c.h.rec.err
+            end
+            ret false
+        end
+        if typ == REC_APPLICATION_DATA:
+            _putbuf(c.pending, frag)
+        else if typ == REC_ALERT:
+            c.open = false
+            if _bufat(frag, 1) != ALERT_CLOSE_NOTIFY:
+                c.err = _alert_text(frag)
+            end
+            ret false
+        else if typ == REC_HANDSHAKE:
+            if frag.len >= 4:
+                if _bufat(frag, 0) == HS_KEY_UPDATE:
+                    req := _bufat(frag, 4) == 1
+                    if not _do_key_update(c, req):
+                        c.open = false
+                        c.err = "key update failed"
+                        ret false
+                    end
+                end
+            end
+            continue
+        end
+    end
+    ret true
+end
+
+@en "NewConfig"
+@fa "پیکربندی جدید"
+pub func NewConfig(server_name: str): Config:
+    mut c := Config {}
+    c.server_name = server_name
+    ret c
+end
+
+@en "Dial"
+@fa "اتصال امن"
+pub func Dial(host: str, port: int, cfg: Config): Conn:
+    mut c := Conn {}
+    c.insecure = cfg.insecure_skip_verify
+    c.pending = _newbuf(REC_MAX_PLAINTEXT)
+    mut conf := cfg
+    if conf.server_name.len() == 0:
+        conf.server_name = host
+    end
+    c.host = conf.server_name
+    s := rawsock.Connect(host, port)
+    if not rawsock.Ok(s):
+        c.err = "could not connect to " + host
+        ret c
+    end
+    c.h = Handshake {}
+    c.h.rec = _rec_new(s.fd)
+    c.h.priv = _newbuf(32)
+    c.h.pub_key = _newbuf(32)
+    c.h.shared = _newbuf(32)
+    c.h.hs_secret = _newbuf(48)
+    c.h.master = _newbuf(48)
+    c.h.c_hs_secret = _newbuf(48)
+    c.h.s_hs_secret = _newbuf(48)
+    c.h.c_ap_secret = _newbuf(48)
+    c.h.s_ap_secret = _newbuf(48)
+    c.h.certs = _newbuf(8192)
+    c.h.cert_off = _newbuf(128)
+    c.h.crand = _newbuf(32)
+    c.h.srand = _newbuf(32)
+    c.h.ecpriv = _newbuf(32)
+    c.h.ecpub = _newbuf(65)
+    c.h.rec.read_deadline_ms = HANDSHAKE_READ_TIMEOUT_MS
+    _do_handshake(c, conf)
+    c.h.rec.read_deadline_ms = 0
+    ret c
+end
+
+@en "WrapClient"
+@fa "پوشش کارخواه"
+pub func WrapClient(fd: i64, cfg: Config): Conn:
+    mut c := Conn {}
+    c.insecure = cfg.insecure_skip_verify
+    c.pending = _newbuf(REC_MAX_PLAINTEXT)
+    conf := cfg
+    c.host = conf.server_name
+    if fd < 0:
+        c.err = "invalid fd"
+        ret c
+    end
+    c.h = Handshake {}
+    c.h.rec = _rec_new(fd)
+    c.h.priv = _newbuf(32)
+    c.h.pub_key = _newbuf(32)
+    c.h.shared = _newbuf(32)
+    c.h.hs_secret = _newbuf(48)
+    c.h.master = _newbuf(48)
+    c.h.c_hs_secret = _newbuf(48)
+    c.h.s_hs_secret = _newbuf(48)
+    c.h.c_ap_secret = _newbuf(48)
+    c.h.s_ap_secret = _newbuf(48)
+    c.h.certs = _newbuf(8192)
+    c.h.cert_off = _newbuf(128)
+    c.h.crand = _newbuf(32)
+    c.h.srand = _newbuf(32)
+    c.h.ecpriv = _newbuf(32)
+    c.h.ecpub = _newbuf(65)
+    c.h.rec.read_deadline_ms = HANDSHAKE_READ_TIMEOUT_MS
+    _do_handshake(c, conf)
+    c.h.rec.read_deadline_ms = 0
+    ret c
+end
+
+@en "NewServerConfig"
+@fa "پیکربندی کارساز جدید"
+pub func NewServerConfig(cert_file: str, key_file: str): ServerConfig:
+    mut cfg := ServerConfig {}
+    cfg.chain = LoadCertChainFile(cert_file)
+    cfg.key = LoadPrivateKeyFile(key_file)
+    cfg.ok = cfg.chain.count > 0 and cfg.key.ok
+    ret cfg
+end
+
+@en "WrapServer"
+@fa "پوشش کارساز"
+pub func WrapServer(fd: i64, cfg: ServerConfig): Conn:
+    mut c := Conn {}
+    c.pending = _newbuf(REC_MAX_PLAINTEXT)
+    if not cfg.ok:
+        c.err = "server config did not load (bad certificate or key file)"
+        ret c
+    end
+    c.h = Handshake {}
+    c.h.rec = _rec_new(fd)
+    c.h.priv = _newbuf(32)
+    c.h.pub_key = _newbuf(32)
+    c.h.shared = _newbuf(32)
+    c.h.hs_secret = _newbuf(48)
+    c.h.master = _newbuf(48)
+    c.h.c_hs_secret = _newbuf(48)
+    c.h.s_hs_secret = _newbuf(48)
+    c.h.c_ap_secret = _newbuf(48)
+    c.h.s_ap_secret = _newbuf(48)
+    c.h.certs = _newbuf(8192)
+    c.h.cert_off = _newbuf(128)
+    c.h.crand = _newbuf(32)
+    c.h.srand = _newbuf(32)
+    c.h.ecpriv = _newbuf(32)
+    c.h.ecpub = _newbuf(65)
+    c.h.rec.read_deadline_ms = HANDSHAKE_READ_TIMEOUT_MS
+    _do_server_handshake(c, cfg)
+    c.h.rec.read_deadline_ms = 0
+    ret c
+end
+
+@en "ConnOk"
+@fa "اتصال معتبر"
+pub func ConnOk(c: Conn): bool:
+    ret c.open
+end
+
+@en "ConnError"
+@fa "خطای اتصال"
+pub func ConnError(c: Conn): str:
+    ret c.err
+end
+
+@en "Write"
+@fa "نوشتن"
+pub func Write(c &: Conn, data: str): int:
+    ret WriteBytes(c, data as void*, data.len())
+end
+
+@en "WriteBytes"
+@fa "نوشتن بایت"
+pub func WriteBytes(c &: Conn, ptr: void*, n: int): int:
+    if not c.open:
+        ret 0 - 1
+    end
+    if not _rec_write(c.h.rec, REC_APPLICATION_DATA, ptr, n):
+        _conn_fail(c, "write failed: " + c.h.rec.err)
+        ret 0 - 1
+    end
+    ret n
+end
+
+@en "Read"
+@fa "خواندن"
+pub func Read(c &: Conn, max: int): str:
+    if not c.open:
+        ret ""
+    end
+    if not _fill_pending(c):
+        ret ""
+    end
+    if c.pending.len == 0:
+        ret ""
+    end
+    mut take := c.pending.len
+    if max > 0 and take > max:
+        take = max
+    end
+    mut out := _newbuf(take + 1)
+    defer _buf_free(out)
+    repeat take in i:
+        _put8(out, _bufat(c.pending, i))
+    end
+    _bufconsume(c.pending, take)
+    ret _bufstr(out)
+end
+
+@en "ReadBytes"
+@fa "خواندن بایت"
+pub func ReadBytes(c &: Conn, buf: void*, max: int): int:
+    if not c.open:
+        ret 0
+    end
+    if not _fill_pending(c):
+        ret 0
+    end
+    if c.pending.len == 0:
+        ret 0
+    end
+    mut take := c.pending.len
+    if max > 0 and take > max:
+        take = max
+    end
+    mut dst := buf as i8*
+    repeat take in i:
+        dst[i] = _bufat(c.pending, i) as i8
+    end
+    _bufconsume(c.pending, take)
+    ret take
+end
+
+@en "Pending"
+@fa "در انتظار"
+pub func Pending(c: Conn): int:
+    ret c.pending.len
+end
+
+@en "Readable"
+@fa "خواندنی"
+pub func Readable(c: Conn): bool:
+    if c.pending.len > 0:
+        ret true
+    end
+    ret _rec_buffered(c.h.rec) > 0
+end
+
+@en "Fd"
+@fa "توصیفگر"
+pub func Fd(c: Conn): i64:
+    ret c.h.rec.fd
+end
+
+@en "Detach"
+@fa "جداسازی اتصال"
+pub func Detach(c &: Conn):
+    if c.open:
+        _rec_send_alert(c.h.rec, 1, ALERT_CLOSE_NOTIFY)
+    end
+    c.open = false
+    _rec_free(c.h.rec)
+    _hs_free(c.h)
+    _buf_free(c.pending)
+end
+
+@en "Close"
+@fa "بستن اتصال"
+pub func Close(c &: Conn):
+    fd := c.h.rec.fd
+    Detach(c)
+    if fd >= 0:
+        rawsock.Close(rawsock.FromFd(fd))
+    end
+end
+
+@en "Version"
+@fa "نسخه"
+pub func Version(c: Conn): str:
+    if c.h.ver == TLS13:
+        ret "TLS1.3"
+    end
+    if c.h.ver == TLS12:
+        ret "TLS1.2"
+    end
+    ret "none"
+end
+
+@en "CipherName"
+@fa "نام رمز"
+pub func CipherName(c: Conn): str:
+    s := c.h.suite
+    if s == TLS_CHACHA20_POLY1305_SHA256:
+        ret "TLS_CHACHA20_POLY1305_SHA256"
+    end
+    if s == TLS_AES_128_GCM_SHA256:
+        ret "TLS_AES_128_GCM_SHA256"
+    end
+    if s == TLS_AES_256_GCM_SHA384:
+        ret "TLS_AES_256_GCM_SHA384"
+    end
+    if s == TLS12_ECDHE_ECDSA_AES128_GCM_SHA256:
+        ret "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
+    end
+    if s == TLS12_ECDHE_RSA_AES128_GCM_SHA256:
+        ret "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+    end
+    if s == TLS12_ECDHE_ECDSA_AES256_GCM_SHA384:
+        ret "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"
+    end
+    if s == TLS12_ECDHE_RSA_AES256_GCM_SHA384:
+        ret "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+    end
+    if s == TLS12_ECDHE_RSA_CHACHA20_SHA256:
+        ret "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
+    end
+    if s == TLS12_ECDHE_ECDSA_CHACHA20_SHA256:
+        ret "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256"
+    end
+    ret "none"
+end
+
+@en "PeerCertCount"
+@fa "تعداد گواهی همتا"
+pub func PeerCertCount(c: Conn): int:
+    ret c.h.ncerts
+end

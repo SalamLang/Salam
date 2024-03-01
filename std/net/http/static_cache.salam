@@ -1,0 +1,279 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package http
+
+import net.tcp
+import sync
+import mem
+import str
+import os
+
+if SALAM_OS_LINUX:
+    if SALAM_ARCH_X64 or SALAM_ARCH_ARM64:
+        extern:
+            func stat(path: str, buf: void *): int
+        end
+    else:
+        extern:
+            func statx(dirfd: int, path: str, flags: int, mask: u32, buf: void *): int
+        end
+    end
+end
+
+const _SC_MAX_ENTRIES := 1024
+
+const _SC_MAX_FILE := 262144
+
+const _SC_MAX_TOTAL := 33554432
+
+mut _sc_mu := sync.NewMutex()
+
+mut _sc_index := HashMap {} as HashMap<str, int>
+
+mut _sc_key := Vector {} as Vector<str>
+
+mut _sc_slot := Vector {} as Vector<int>
+
+mut _sc_file := Vector {} as Vector<str>
+
+mut _sc_sig := Vector {} as Vector<i64>
+
+mut _sc_ptr := Vector {} as Vector<i64>
+
+mut _sc_len := Vector {} as Vector<int>
+
+mut _sc_refs := Vector {} as Vector<int>
+
+mut _sc_live := Vector {} as Vector<bool>
+
+mut _sc_spare := Vector {} as Vector<int>
+
+mut _sc_bytes := 0
+
+if SALAM_OS_LINUX:
+    if SALAM_ARCH_X64 or SALAM_ARCH_ARM64:
+        func _sc_signature(path: str): i64:
+            buf := mem.Allocate(256 as u64)
+            if stat(path, buf) != 0:
+                mem.Free(buf)
+                ret 0 - 1
+            end
+            w := buf as i64 *
+            sig := (w[11] * (1000000007 as i64) + w[12]) * (31 as i64) + w[6]
+            mem.Free(buf)
+            if sig < (0 as i64): ret 0 - sig end
+            ret sig
+        end
+    else:
+        func _sc_signature(path: str): i64:
+            buf := mem.Allocate(256 as u64)
+            if statx(0 - 100, path, 0, 2047 as u32, buf) != 0:
+                mem.Free(buf)
+                ret 0 - 1
+            end
+            w := buf as i64 *
+            ns := ((buf as i64 + 120) as u32 *)[0] as i64
+            sig := (w[14] * (1000000007 as i64) + ns) * (31 as i64) + w[5]
+            mem.Free(buf)
+            if sig < (0 as i64): ret 0 - sig end
+            ret sig
+        end
+    end
+else:
+    func _sc_signature(path: str): i64: ret 0 - 1 end
+end
+
+func _sc_release(id: int):
+    mem.Free(_sc_ptr.get(id) as void *)
+    mem.Free(_sc_key.get(id) as void *)
+    mem.Free(_sc_file.get(id) as void *)
+    _sc_bytes -= _sc_len.get(id)
+    _sc_ptr.set(id, 0 as i64)
+    _sc_len.set(id, 0)
+    _sc_key.set(id, "")
+    _sc_file.set(id, "")
+    _sc_spare.push(id)
+end
+
+func _sc_drop(id: int):
+    if _sc_live.get(id) == false: ret end
+    _sc_live.set(id, false)
+    _sc_index.remove(_sc_key.get(id))
+    if _sc_refs.get(id) == 0:
+        _sc_release(id)
+    end
+end
+
+func _sc_new_id(): int:
+    if _sc_spare.len() > 0:
+        id := _sc_spare.get(_sc_spare.len() - 1)
+        _sc_spare.pop()
+        ret id
+    end
+    _sc_key.push("")
+    _sc_slot.push(0)
+    _sc_file.push("")
+    _sc_sig.push(0 as i64)
+    _sc_ptr.push(0 as i64)
+    _sc_len.push(0)
+    _sc_refs.push(0)
+    _sc_live.push(false)
+    ret _sc_key.len() - 1
+end
+
+func _sc_put(slot: int, url: str, file: str, sig: i64, buf: void *, n: int):
+    sync.Lock(_sc_mu)
+    if _sc_index.has(url):
+        _sc_drop(_sc_index.get(url))
+    end
+    if _sc_index.size() >= _SC_MAX_ENTRIES or _sc_bytes + n > _SC_MAX_TOTAL:
+        sync.Unlock(_sc_mu)
+        mem.Free(buf)
+        ret
+    end
+    id := _sc_new_id()
+    key := str.Clone(url)
+    _sc_key.set(id, key)
+    _sc_slot.set(id, slot)
+    _sc_file.set(id, str.Clone(file))
+    _sc_sig.set(id, sig)
+    _sc_ptr.set(id, buf as i64)
+    _sc_len.set(id, n)
+    _sc_refs.set(id, 0)
+    _sc_live.set(id, true)
+    _sc_index.put(key, id)
+    _sc_bytes += n
+    sync.Unlock(_sc_mu)
+end
+
+func _sc_serve(slot: int, fd: i64, url: str): bool:
+    sync.Lock(_sc_mu)
+    if _sc_index.has(url) == false:
+        sync.Unlock(_sc_mu)
+        ret false
+    end
+    id := _sc_index.get(url)
+    if _sc_slot.get(id) != slot:
+        sync.Unlock(_sc_mu)
+        ret false
+    end
+    _sc_refs.set(id, _sc_refs.get(id) + 1)
+    file := _sc_file.get(id)
+    want := _sc_sig.get(id)
+    ptr := _sc_ptr.get(id)
+    n := _sc_len.get(id)
+    sync.Unlock(_sc_mu)
+    fresh := _sc_signature(file) == want
+    if fresh:
+        tcp.WriteBytes(tcp.ConnFromFd(fd), ptr as void *, n)
+    end
+    sync.Lock(_sc_mu)
+    _sc_refs.set(id, _sc_refs.get(id) - 1)
+    if fresh == false:
+        _sc_drop(id)
+    end
+    if _sc_live.get(id) == false and _sc_refs.get(id) == 0 and _sc_ptr.get(id) != (0 as i64):
+        _sc_release(id)
+    end
+    sync.Unlock(_sc_mu)
+    ret fresh
+end
+
+func _sc_file_head(sz: i64, ct: str, server_hdr: str): str:
+    mut hb := str.NewBuilder()
+    str.BufAppend(hb, "HTTP/1.1 200 OK\r\nContent-Length: ")
+    str.BufAppendInt(hb, sz)
+    str.BufAppend(hb, "\r\nContent-Type: ")
+    str.BufAppend(hb, ct)
+    str.BufAppend(hb, "\r\nConnection: keep-alive\r\nServer: ")
+    str.BufAppend(hb, server_hdr)
+    str.BufAppend(hb, "\r\nX-Powered-By: ")
+    str.BufAppend(hb, server_hdr)
+    str.BufAppend(hb, "\r\n\r\n")
+    head := str.BufStr(hb)
+    str.BufFree(hb)
+    ret head
+end
+
+func _sc_send_new(slot: int, fd: i64, url: str, file: str, ct: str, server_hdr: str): bool:
+    sig := _sc_signature(file)
+    if sig < (0 as i64): ret false end
+    f := fopen(file, "rb")
+    if f == null: ret false end
+    fseek(f, 0, 2)
+    sz := ftell(f) as i64
+    fseek(f, 0, 0)
+    if sz < (0 as i64) or sz > (_SC_MAX_FILE as i64):
+        fclose(f)
+        ret false
+    end
+    head := _sc_file_head(sz, ct, server_hdr)
+    hl := head.len()
+    total := hl + (sz as int)
+    buf := mem.Allocate((total + 1) as u64)
+    mem.Copy(buf, head as void *, hl as u64)
+    mem.Free(head as void *)
+    got := fread((buf as i64 + hl) as void *, 1 as u64, sz as u64, f)
+    fclose(f)
+    if (got as i64) != sz:
+        mem.Free(buf)
+        ret false
+    end
+    tcp.WriteBytes(tcp.ConnFromFd(fd), buf, total)
+    _sc_put(slot, url, file, sig, buf, total)
+    ret true
+end
+
+if SALAM_OS_LINUX:
+    if SALAM_ARCH_X64 or SALAM_ARCH_ARM64:
+        @en "FileStat"
+        @fa "وضعیت پرونده"
+        pub func FileStat(path: str, size &: i64, mtime &: i64): bool:
+            buf := mem.Allocate(256 as u64)
+            if stat(path, buf) != 0:
+                mem.Free(buf)
+                ret false
+            end
+            w := buf as i64 *
+            size = w[6]
+            mtime = w[11]
+            mem.Free(buf)
+            ret true
+        end
+    else:
+        @en "FileStat"
+        @fa "وضعیت پرونده"
+        pub func FileStat(path: str, size &: i64, mtime &: i64): bool:
+            buf := mem.Allocate(256 as u64)
+            if statx(0 - 100, path, 0, 2047 as u32, buf) != 0:
+                mem.Free(buf)
+                ret false
+            end
+            w := buf as i64 *
+            size = w[5]
+            mtime = w[14]
+            mem.Free(buf)
+            ret true
+        end
+    end
+else:
+    @en "FileStat"
+    @fa "وضعیت پرونده"
+    pub func FileStat(path: str, size &: i64, mtime &: i64): bool:
+        mtime = 0
+        size = os.FileSize(path)
+        ret size >= 0
+    end
+end

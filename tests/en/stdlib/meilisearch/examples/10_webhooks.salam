@@ -1,0 +1,52 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.meilisearch
+
+include fake "../_fake.salam"
+
+const PORT := 19829
+
+func main:
+    created := `{"uuid":"11111111-2222-3333-4444-555555555555","url":"https://shop.example/hooks/meili","headers":{"X-Shop":"1"},"isEditable":true}`
+    fake.On("POST", "/webhooks", 201, created)
+    fake.On("GET", "/webhooks", 200, `{"results":[` + created + `]}`)
+    fake.On("PATCH", "/webhooks/11111111-2222-3333-4444-555555555555", 200, `{"uuid":"11111111-2222-3333-4444-555555555555","url":"https://shop.example/hooks/v2","headers":{"X-Shop":"1"},"isEditable":true}`)
+    fake.On("DELETE", "/webhooks/11111111-2222-3333-4444-555555555555", 204, ``)
+    fake.On("PATCH", "/dynamic-search-rules/black-friday", 202, `{"taskUid":50,"indexUid":null,"status":"enqueued","type":"dynamicSearchRulesUpdate"}`)
+    fake.On("POST", "/dynamic-search-rules", 200, `{"results":[{"uid":"black-friday","active":true,"precedence":1,"conditions":{"query":{"words":"sale"}},"actions":{"pin":[{"id":"42","position":0}]}}],"offset":0,"limit":20,"total":1}`)
+    fake.On("DELETE", "/dynamic-search-rules/black-friday", 202, `{"taskUid":51,"indexUid":null,"status":"enqueued","type":"dynamicSearchRulesDeletion"}`)
+    if not fake.Start(PORT):
+        println "the example server did not start"
+        ret 1
+    end
+    c := meilisearch.New("http://127.0.0.1:" + PORT, "masterKey")
+    mut err := meilisearch.Error {}
+
+    hook := meilisearch.CreateWebhook(c, "https://shop.example/hooks/meili", `{"X-Shop": "1"}`, err)
+    println "webhook: " + hook.url + " editable=" + hook.is_editable
+    println "webhooks: " + meilisearch.ListWebhooks(c, err).len()
+    moved := meilisearch.UpdateWebhook(c, hook.uuid, "https://shop.example/hooks/v2", "", err)
+    println "moved to: " + moved.url
+    println "webhook deleted: " + meilisearch.DeleteWebhook(c, hook.uuid, err)
+
+    pin := `{"active": true, "precedence": 1, "conditions": {"query": {"words": "sale"}}, "actions": {"pin": [{"id": "42", "position": 0}]}}`
+    println "rule saved: " + meilisearch.UpdateSearchRule(c, "black-friday", pin, err).kind
+    rules := meilisearch.ListSearchRules(c, meilisearch.SearchRuleQuery { active = 1 }, err)
+    each rule in rules.results:
+        println "rule " + rule.uid + " active=" + rule.active + " pins " + rule.actions
+    end
+    println "rule removed: " + meilisearch.DeleteSearchRule(c, "black-friday", err).kind
+    ret 0
+end

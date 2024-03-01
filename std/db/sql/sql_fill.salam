@@ -1,0 +1,254 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package sql
+
+import str
+import mem
+
+const ARG_NULL := 0
+const ARG_INT := 1
+const ARG_FLOAT := 2
+const ARG_TEXT := 3
+const ARG_BOOL := 4
+
+@en "Args"
+@fa "مقدارها"
+pub struct Args:
+    @en "kinds"
+    @fa "نوع‌ها"
+    pub kinds: Vector<int> = Vector {}
+    @en "ints"
+    @fa "عددهای صحیح"
+    pub ints: Vector<i64> = Vector {}
+    @en "floats"
+    @fa "عددهای اعشاری"
+    pub floats: Vector<f64> = Vector {}
+    @en "texts"
+    @fa "متن‌ها"
+    pub texts: Vector<str> = Vector {}
+    @en "bools"
+    @fa "مقدارهای منطقی"
+    pub bools: Vector<bool> = Vector {}
+end
+
+func args_push(a &: Args, kind: int, i: i64, f: f64, t: str, b: bool):
+    a.kinds.push(kind)
+    a.ints.push(i)
+    a.floats.push(f)
+    a.texts.push(t)
+    a.bools.push(b)
+end
+
+func quote_text(s: str, d: Dialect): str:
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "'")
+    mut i := 0
+    until i < s.len():
+        c := s[i]
+        if c == '\'':
+            str.BufAppend(sb, "''")
+        else c == '\\' and d.backslash_escape:
+            str.BufAppend(sb, "\\\\")
+        else:
+            str.BufAppendChar(sb, c as int)
+        end
+        i = i + 1
+    end
+    str.BufAppend(sb, "'")
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func arg_literal(a: Args, idx: int, d: Dialect): str:
+    kind := a.kinds.get(idx)
+    if kind == ARG_INT:
+        ret str.FromInt(a.ints.get(idx))
+    end
+    if kind == ARG_FLOAT:
+        ret str.FromFloat(a.floats.get(idx))
+    end
+    if kind == ARG_BOOL:
+        if d.id == POSTGRES:
+            ret str.Clone(a.bools.get(idx) ? "TRUE" : "FALSE")
+        end
+        ret str.Clone(a.bools.get(idx) ? "1" : "0")
+    end
+    if kind == ARG_TEXT:
+        ret quote_text(a.texts.get(idx), d)
+    end
+    ret str.Clone("NULL")
+end
+
+func marker_index(src: str, t: Token, ord: int): int:
+    if t.len < 2:
+        ret ord
+    end
+    if src[t.off] != '$':
+        ret ord
+    end
+    mut v := 0
+    mut i := 1
+    until i < t.len:
+        c := src[t.off + i]
+        if not ch_digit(c):
+            ret ord
+        end
+        v = v * 10 + ((c as int) - 48)
+        i = i + 1
+    end
+    if v < 1:
+        ret ord
+    end
+    ret v - 1
+end
+
+func marker_is_named(src: str, t: Token): bool:
+    if t.len < 1:
+        ret false
+    end
+    c := src[t.off]
+    ret c == ':' or c == '@'
+end
+
+@en "NewArgs"
+@fa "مقدارهای تازه"
+pub func NewArgs(): Args:
+    ret Args {}
+end
+
+@en "AddInt"
+@fa "افزودن عدد"
+pub func AddInt(a &: Args, v: i64):
+    args_push(a, ARG_INT, v, 0.0, "", false)
+end
+
+@en "AddFloat"
+@fa "افزودن اعشار"
+pub func AddFloat(a &: Args, v: f64):
+    args_push(a, ARG_FLOAT, 0 as i64, v, "", false)
+end
+
+@en "AddText"
+@fa "افزودن متن"
+pub func AddText(a &: Args, v: str):
+    args_push(a, ARG_TEXT, 0 as i64, 0.0, str.Clone(v), false)
+end
+
+@en "AddBool"
+@fa "افزودن منطقی"
+pub func AddBool(a &: Args, v: bool):
+    args_push(a, ARG_BOOL, 0 as i64, 0.0, "", v)
+end
+
+@en "AddNull"
+@fa "افزودن خالی"
+pub func AddNull(a &: Args):
+    args_push(a, ARG_NULL, 0 as i64, 0.0, "", false)
+end
+
+@en "ArgCount"
+@fa "شمار مقدار"
+pub func ArgCount(a: Args): int:
+    ret a.kinds.len()
+end
+
+@en "FreeArgs"
+@fa "آزادسازی مقدارها"
+pub func FreeArgs(a &: Args):
+    mut i := 0
+    until i < a.texts.len():
+        if a.kinds.get(i) == ARG_TEXT:
+            mem.Free(a.texts.get(i) as void*)
+        end
+        i = i + 1
+    end
+    a.kinds.free()
+    a.ints.free()
+    a.floats.free()
+    a.texts.free()
+    a.bools.free()
+end
+
+@en "Fill"
+@fa "پرکردن"
+pub func Fill(query: str, a: Args, d: Dialect, err &: Report): str:
+    mut l := Lexer { src = query, n = query.len(), d = d }
+    lex_into(l, err)
+    if err.errors > 0:
+        l.toks.free()
+        ret str.Clone("")
+    end
+    mut used := 0
+    mut ord := 0
+    mut i := 0
+    until i < l.toks.len():
+        t := l.toks.get(i)
+        if t.kind == TK_PARAM:
+            if marker_is_named(query, t):
+                add_diag(
+                    err, ERROR, "SQL401", "a named placeholder cannot be filled in",
+                    "bind by position with ? or $1", t.line, t.col, t.off, t.len
+                )
+                l.toks.free()
+                ret str.Clone("")
+            end
+            idx := marker_index(query, t, ord)
+            if idx + 1 > used:
+                used = idx + 1
+            end
+            ord = ord + 1
+        end
+        i = i + 1
+    end
+    if used != a.kinds.len():
+        add_diag(
+            err, ERROR, "SQL400", "this query takes " + str.FromInt(used as i64) + " values but got " + str.FromInt(a.kinds.len() as i64),
+            "add or remove an argument so the two agree", 1, 1, 0, 1
+        )
+        l.toks.free()
+        ret str.Clone("")
+    end
+    mut sb := str.NewBuilder()
+    mut pos := 0
+    mut k := 0
+    mut seq := 0
+    until k < l.toks.len():
+        t := l.toks.get(k)
+        if t.kind == TK_PARAM:
+            if t.off > pos:
+                piece := query.substr(pos, t.off - pos)
+                str.BufAppend(sb, piece)
+                mem.Free(piece as void*)
+            end
+            lit := arg_literal(a, marker_index(query, t, seq), d)
+            str.BufAppend(sb, lit)
+            mem.Free(lit as void*)
+            pos = t.off + t.len
+            seq = seq + 1
+        end
+        k = k + 1
+    end
+    n := query.len()
+    if pos < n:
+        tail := query.substr(pos, n - pos)
+        str.BufAppend(sb, tail)
+        mem.Free(tail as void*)
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    l.toks.free()
+    ret out
+end

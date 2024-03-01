@@ -1,0 +1,354 @@
+package nativegen
+
+func coff_rtype(g &: Ng, r: int): int:
+    t := g.r_type[r]
+    if t == R_CV_SECREL:
+        ret g.arch == NG_ARCH_A64 ? 8 : 11
+    end
+    if t == R_CV_SECTION:
+        ret g.arch == NG_ARCH_A64 ? 13 : 10
+    end
+    if g.arch == NG_ARCH_A64:
+        switch t:
+            R_ABS64: ret 14 end
+            R_ABS32: ret 8 end
+            R_ADDR32NB: ret 2 end
+            R_PC32: ret 17 end
+            R_A64_CALL26: ret 3 end
+            R_A64_ADRP: ret 4 end
+            R_A64_ADDLO: ret 6 end
+        end
+        fail(g, "native backend: relocation " + str.FromInt(t as i64) + " has no ARM64 COFF form")
+        ret 0
+    end
+    if g.arch == NG_ARCH_X86:
+        if t == R_ABS32:
+            ts := g.sy_sec[g.r_sym[r]]
+            ret (ts >= SEC_DBGINFO and ts <= SEC_DBGLOC) or ts == SEC_EHFRAME ? 11 : 6
+        end
+        if t == R_ADDR32NB: ret 7 end
+        ret 20
+    end
+    if t == R_ABS64: ret 1 end
+    if t == R_ADDR32NB: ret 3 end
+    if t == R_ABS32: ret 11 end
+    ret 4
+end
+
+func coff_secs(g &: Ng): Vector<int>:
+    mut v := Vector {} as Vector<int>
+    v.push(SEC_TEXT)
+    v.push(SEC_RODATA)
+    v.push(SEC_CONST)
+    v.push(SEC_DATA)
+    v.push(SEC_BSS)
+    v.push(SEC_INIT)
+    v.push(SEC_FINI)
+    v.push(SEC_PDATA)
+    v.push(SEC_XDATA)
+    if g.s_dinfo.len() > 0:
+        v.push(SEC_DBGINFO)
+        v.push(SEC_DBGABBREV)
+        v.push(SEC_DBGLINE)
+        v.push(SEC_DBGRANGES)
+        v.push(SEC_DBGLOC)
+    end
+    if g.s_eh.len() > 0:
+        v.push(SEC_EHFRAME)
+    end
+    if g.s_cvsym.len() > 0:
+        v.push(SEC_CVSYM)
+    end
+    if g.s_cvtyp.len() > 0:
+        v.push(SEC_CVTYP)
+    end
+    ret v
+end
+
+func coff_name(sec: int): str:
+    switch sec:
+        SEC_TEXT: ret ".text" end
+        SEC_RODATA: ret ".rdata" end
+        SEC_CONST: ret ".rdata$s" end
+        SEC_DATA: ret ".data" end
+        SEC_BSS: ret ".bss" end
+        SEC_INIT: ret ".ctors" end
+        SEC_FINI: ret ".dtors" end
+        SEC_PDATA: ret ".pdata" end
+        SEC_XDATA: ret ".xdata" end
+        SEC_DBGINFO: ret ".debug_info" end
+        SEC_DBGABBREV: ret ".debug_abbrev" end
+        SEC_DBGLINE: ret ".debug_line" end
+        SEC_DBGRANGES: ret ".debug_ranges" end
+        SEC_DBGLOC: ret ".debug_loc" end
+        SEC_EHFRAME: ret ".debug_frame" end
+        SEC_CVSYM: ret ".debug$S" end
+        SEC_CVTYP: ret ".debug$T" end
+    end
+    ret ".data"
+end
+
+func coff_align_flag(a: int): int:
+    mut n := 1
+    mut k := 1
+    until n < a and k < 14:
+        n = n * 2
+        k += 1
+    end
+    ret k << 20
+end
+
+func coff_flags(g &: Ng, sec: int): i64:
+    al := coff_align_flag(g.sec_align[sec] < 1 ? 1 : g.sec_align[sec]) as i64
+    switch sec:
+        SEC_TEXT: ret (0x60000020 as i64) | (coff_align_flag(g.sec_align[sec] < 16 ? 16 : g.sec_align[sec]) as i64) end
+        SEC_RODATA, SEC_CONST: ret (0x40000040 as i64) | al end
+        SEC_BSS: ret (0xC0000080 as i64) | al end
+        SEC_PDATA, SEC_XDATA: ret (0x40000040 as i64) | (coff_align_flag(4) as i64) end
+        SEC_INIT, SEC_FINI: ret (0xC0000040 as i64) | (coff_align_flag(8) as i64) end
+        SEC_DBGINFO, SEC_DBGABBREV, SEC_DBGLINE, SEC_DBGRANGES, SEC_DBGLOC, SEC_EHFRAME: ret (0x42000040 as i64) | (coff_align_flag(1) as i64) end
+        SEC_CVSYM, SEC_CVTYP: ret (0x42000040 as i64) | (coff_align_flag(4) as i64) end
+    end
+    ret (0xC0000040 as i64) | al
+end
+
+func put_addend(g &: Ng, sec: int, off: int, v: i64, n: int):
+    mut x := v as u64
+    repeat n in i:
+        b := (x & (255 as u64)) as u8
+        switch sec:
+            SEC_TEXT: g.s_text[off + i] = b break end
+            SEC_RODATA: g.s_ro[off + i] = b break end
+            SEC_DATA: g.s_data[off + i] = b break end
+            SEC_INIT: g.s_init[off + i] = b break end
+            SEC_FINI: g.s_fini[off + i] = b break end
+            SEC_PDATA: g.s_pdata[off + i] = b break end
+            SEC_XDATA: g.s_xdata[off + i] = b break end
+            SEC_CONST: g.s_cst[off + i] = b break end
+            SEC_DBGINFO: g.s_dinfo[off + i] = b break end
+            SEC_DBGLINE: g.s_dline[off + i] = b break end
+            SEC_DBGRANGES: g.s_dranges[off + i] = b break end
+            SEC_DBGLOC: g.s_dloc[off + i] = b break end
+            SEC_CVSYM: g.s_cvsym[off + i] = b break end
+        end
+        x = x >> (8 as u64)
+    end
+end
+
+func coff_a64_addend(g &: Ng, off: int, t: int, v: i64):
+    if v == (0 as i64):
+        ret
+    end
+    mut w := (g.s_text[off] as i64) | ((g.s_text[off + 1] as i64) << (8 as i64)) | ((g.s_text[off + 2] as i64) << (16 as i64)) | ((g.s_text[off + 3] as i64) << (24 as i64))
+    if t == R_A64_CALL26:
+        w = (w & (0xFC000000 as i64)) | ((v >> (2 as i64)) & (0x3FFFFFF as i64))
+    else t == R_A64_ADRP:
+        w = (w & (0x9F00001F as i64)) | ((v & (3 as i64)) << (29 as i64)) | (((v >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64))
+    else:
+        w = (w & (0xFFC003FF as i64)) | ((v & (0xFFF as i64)) << (10 as i64))
+    end
+    put_addend(g, SEC_TEXT, off, w, 4)
+end
+
+func coff_sym_bytes(g &: Ng, s: int): Vector<u8>:
+    mut v := Vector {} as Vector<u8>
+    if g.arch == NG_ARCH_X86:
+        v.push(95 as u8)
+    end
+    off := g.syms.off[s]
+    repeat g.syms.len[s] in i:
+        v.push(g.syms.bytes[off + i])
+    end
+    sc := stdcall_bytes(g, s)
+    if g.arch == NG_ARCH_X86 and sc >= 0:
+        v.push(64 as u8)
+        dp := sp(str.FromInt(sc as i64))
+        repeat str_len_of(str.FromInt(sc as i64)) in d:
+            v.push(dp[d])
+        end
+    end
+    ret v
+end
+
+func coff_sym_name(g &: Ng, o &: Ob, strtab &: Ob, s: int):
+    mut nb := coff_sym_bytes(g, s)
+    defer nb.free()
+    n := nb.len()
+    if n <= 8:
+        each c in nb:
+            o.b.push(c)
+        end
+        repeat 8 - n:
+            o.b.push(0 as u8)
+        end
+        ret
+    end
+    ob_le(o, 0 as i64, 4)
+    ob_le(o, (strtab.b.len() + 4) as i64, 4)
+    each c2 in nb:
+        strtab.b.push(c2)
+    end
+    strtab.b.push(0 as u8)
+end
+
+func write_coff(g &: Ng, path: str): bool:
+    secs := coff_secs(g)
+    nsec := secs.len()
+    nsym := g.sy_kind.len()
+    mut idx := Vector {} as Vector<int>
+    repeat nsym:
+        idx.push(0 - 1)
+    end
+    mut symtab := Ob {}
+    mut strtab := Ob {}
+    mut count := 0
+    repeat nsym in s:
+        if not emit_sym_for(g, s):
+            continue
+        end
+        idx[s] = count
+        coff_sym_name(g, symtab, strtab, s)
+        mut value := 0
+        mut secno := 0
+        if g.sy_def[s] and g.sy_sec[s] >= 0:
+            value = g.sy_off[s]
+            repeat nsec in q:
+                if secs[q] == g.sy_sec[s]:
+                    secno = q + 1
+                end
+            end
+        end
+        ob_le(symtab, value as i64, 4)
+        ob_le(symtab, secno as i64, 2)
+        ob_le(symtab, (g.sy_kind[s] == SY_FUNC ? 0x20 : 0) as i64, 2)
+        local := g.sy_def[s] and g.sy_local[s]
+        ob_u8(symtab, local ? 3 : 2)
+        ob_u8(symtab, 0)
+        count += 1
+    end
+    repeat g.r_sec.len() in r:
+        sec := g.r_sec[r]
+        t := g.r_type[r]
+        if t == R_ABS64:
+            put_addend(g, sec, g.r_off[r], g.r_add[r], 8)
+        else t == R_A64_CALL26 or t == R_A64_ADRP or t == R_A64_ADDLO:
+            coff_a64_addend(g, g.r_off[r], t, g.r_add[r])
+        else t == R_ADDR32NB or t == R_ABS32 or t == R_CV_SECREL:
+            put_addend(g, sec, g.r_off[r], g.r_add[r], 4)
+        else t == R_CV_SECTION:
+            continue
+        else:
+            put_addend(g, sec, g.r_off[r], g.r_add[r] + (4 as i64), 4)
+        end
+    end
+    hdr := 20 + 40 * nsec
+    mut o := Ob {}
+    repeat hdr:
+        o.b.push(0 as u8)
+    end
+    mut raw_off := Vector {} as Vector<int>
+    mut raw_sz := Vector {} as Vector<int>
+    mut rel_off := Vector {} as Vector<int>
+    mut rel_n := Vector {} as Vector<int>
+    each sc in secs:
+        if sc == SEC_BSS:
+            raw_off.push(0)
+            raw_sz.push(g.bss_size)
+            rel_off.push(0)
+            rel_n.push(0)
+            continue
+        end
+        ob_pad(o, 16)
+        raw_off.push(o.b.len())
+        b := sec_bytes_any(g, sc)
+        ob_bytes(o, b)
+        raw_sz.push(b.len())
+        mut nr := 0
+        repeat g.r_sec.len() in r2:
+            if g.r_sec[r2] == sc:
+                nr += 1
+            end
+        end
+        ob_pad(o, 4)
+        rel_off.push(o.b.len())
+        rel_n.push(nr)
+        if nr > 65535:
+            ob_le(o, (nr + 1) as i64, 4)
+            ob_le(o, 0 as i64, 4)
+            ob_le(o, 0 as i64, 2)
+        end
+        repeat g.r_sec.len() in r3:
+            if g.r_sec[r3] == sc:
+                ob_le(o, g.r_off[r3] as i64, 4)
+                ob_le(o, idx[g.r_sym[r3]] as i64, 4)
+                ob_le(o, coff_rtype(g, r3) as i64, 2)
+            end
+        end
+    end
+    mut long_at := Vector {} as Vector<int>
+    each scn in secs:
+        nmn := coff_name(scn)
+        if str_len_of(nmn) > 8:
+            long_at.push(strtab.b.len() + 4)
+            np0 := sp(nmn)
+            repeat str_len_of(nmn) in c0:
+                strtab.b.push(np0[c0])
+            end
+            strtab.b.push(0 as u8)
+        else:
+            long_at.push(0 - 1)
+        end
+    end
+    ob_pad(o, 4)
+    sym_off := o.b.len()
+    ob_bytes(o, symtab.b)
+    ob_le(o, (strtab.b.len() + 4) as i64, 4)
+    ob_bytes(o, strtab.b)
+    put_le(o, 0, (g.arch == NG_ARCH_X86 ? 0x14C : (g.arch == NG_ARCH_A64 ? 0xAA64 : 0x8664)) as i64, 2)
+    put_le(o, 2, nsec as i64, 2)
+    put_le(o, 8, sym_off as i64, 4)
+    put_le(o, 12, count as i64, 4)
+    repeat nsec in q2:
+        h := 20 + 40 * q2
+        mut nm := coff_name(secs[q2])
+        if long_at[q2] >= 0:
+            nm = "/" + str.FromInt(long_at[q2] as i64)
+        end
+        np := sp(nm)
+        repeat str_len_of(nm) in c:
+            o.b[h + c] = np[c]
+        end
+        put_le(o, h + 16, raw_sz[q2] as i64, 4)
+        if secs[q2] != SEC_BSS:
+            put_le(o, h + 20, raw_off[q2] as i64, 4)
+        end
+        if rel_n[q2] > 0:
+            put_le(o, h + 24, rel_off[q2] as i64, 4)
+            mut fl := coff_flags(g, secs[q2])
+            if rel_n[q2] > 65535:
+                put_le(o, h + 32, 65535 as i64, 2)
+                fl = fl | (0x01000000 as i64)
+            else:
+                put_le(o, h + 32, rel_n[q2] as i64, 2)
+            end
+            put_le(o, h + 36, fl, 4)
+        else:
+            put_le(o, h + 36, coff_flags(g, secs[q2]), 4)
+        end
+    end
+    ok := write_file(path, o)
+    o.b.free()
+    symtab.b.free()
+    strtab.b.free()
+    idx.free()
+    raw_off.free()
+    raw_sz.free()
+    rel_off.free()
+    rel_n.free()
+    long_at.free()
+    ret ok
+end
+
+func sec_bytes_any(g &: Ng, sec: int): Vector<u8>:
+    ret sec_bytes(g, sec)
+end

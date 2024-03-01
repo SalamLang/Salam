@@ -1,0 +1,89 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.websocket
+import sync
+import mem
+
+mut ready := sync.NewWaitGroup()
+mut port := 0
+mut server log := ""
+
+func wss server():
+    websocket.LoadWSSConfig("tests/fixtures/ssl/server.crt", "tests/fixtures/ssl/server.key")
+    srv := websocket.Listen(0)
+    port = websocket.Port(srv)
+    sync.Done(ready)
+    if not websocket.Ok(srv):
+        ret
+    end
+    mut c := websocket.AcceptWSS(srv)
+    if not websocket.IsOpen(c):
+        server log = "the TLS handshake failed"
+        websocket.CloseServer(srv)
+        ret
+    end
+    server log = "accepted;"
+    websocket.SendText(c, "first")
+    websocket.SendText(c, "second")
+    websocket.SendText(c, "third")
+    raw := mem.Allocate(4 as u64)
+    bp := raw as i8*
+    bp[0] = 0 as i8
+    bp[1] = 200 as i8
+    bp[2] = 0 as i8
+    bp[3] = 255 as i8
+    websocket.SendBinaryBytes(c, raw, 4)
+    mem.Free(raw)
+
+    m := websocket.Poll(c, 5000)
+    server log += "heard=" + m.text + ";"
+    websocket.Close(c)
+    websocket.CloseServer(srv)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(wss server)
+    sync.Wait(ready)
+
+    mut c := websocket.DialWSSUnverified("127.0.0.1", port, "/", "")
+    println "encrypted connection:", websocket.IsOpen(c)
+    println "server sent a 101:", c.hdr.substr(0, 12)
+
+    mut got := ""
+    repeat 3:
+        m := websocket.Poll(c, 1200)
+        got += m.text + " "
+    end
+    println "three messages, read one at a time:", got
+
+    b := websocket.Poll(c, 1200)
+    println "binary over TLS:", b.kind == websocket.BINARY, "bytes:", b.len
+    bp := b.data as i8*
+    mut shown := ""
+    repeat b.len in i:
+        mut v := bp[i] as int
+        if v < 0:
+            v += 256
+        end
+        shown += "" + v + " "
+    end
+    println "  " + shown
+
+    websocket.SendText(c, "and back")
+    websocket.Close(c)
+    join(t)
+    println "server:", server log
+end

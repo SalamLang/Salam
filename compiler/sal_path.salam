@@ -1,0 +1,206 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package salpath
+
+import str
+
+include co "sal_core.salam"
+
+const K_PATH_SEP := 47
+const K_PATH_BACKSEP := 92
+const K_PATH_DOT := 46
+const K_PATH_COLON := 58
+
+inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
+
+func is_sep(b: int): bool:
+    ret b == K_PATH_SEP or b == K_PATH_BACKSEP
+end
+
+func collapse_double_sep(p: str): str:
+    if str.Len(p) < 3:
+        ret p
+    end
+    mut q := p
+    mut i := 2
+    until i < str.Len(q):
+        if byte_at(q, i) == K_PATH_SEP and byte_at(q, i - 1) == K_PATH_SEP:
+            q = str.Substr(q, 0, i) + str.Substr(q, i + 1, str.Len(q) - i - 1)
+        else:
+            i += 1
+        end
+    end
+    ret q
+end
+
+func trimmed_len(dir: str): int:
+    mut n := str.Len(dir)
+    until n > 1 and is_sep(byte_at(dir, n - 1)) and not (n == 3 and byte_at(dir, 1) == K_PATH_COLON):
+        n -= 1
+    end
+    ret n
+end
+
+func buf_append_slashed(sb &: str.StringBuilder, p: str, lo: int, hi: int):
+    mut i := lo
+    until i < hi:
+        b := byte_at(p, i)
+        if b == K_PATH_BACKSEP:
+            str.BufAppendChar(sb, K_PATH_SEP)
+        else:
+            str.BufAppendChar(sb, b)
+        end
+        i += 1
+    end
+end
+
+func slashed_range(p: str, lo: int, hi: int): str:
+    mut sb := str.NewBuilder()
+    buf_append_slashed(sb, p, lo, hi)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func last_sep(p: str): int:
+    mut cut := 0 - 1
+    repeat str.Len(p) in i:
+        if is_sep(byte_at(p, i)):
+            cut = i
+        end
+    end
+    ret cut
+end
+
+pub func PathIsSep(b: int): bool:
+    ret is_sep(b)
+end
+
+pub func PathIsAbs(p: str): bool:
+    n := str.Len(p)
+    if n == 0:
+        ret false
+    end
+    b0 := byte_at(p, 0)
+    if is_sep(b0):
+        ret true
+    end
+    if n >= 2 and byte_at(p, 1) == K_PATH_COLON:
+        if (b0 >= 65 and b0 <= 90) or (b0 >= 97 and b0 <= 122):
+            ret true
+        end
+    end
+    ret false
+end
+
+pub func PathToSlash(p: str): str:
+    if not str.Contains(p, "\\"):
+        ret p
+    end
+    mut sb := str.NewBuilder()
+    repeat str.Len(p) in i:
+        b := byte_at(p, i)
+        if b == K_PATH_BACKSEP:
+            str.BufAppendChar(sb, K_PATH_SEP)
+        else:
+            str.BufAppendChar(sb, b)
+        end
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+pub func PathTrimSep(p: str): str:
+    ret str.Substr(p, 0, trimmed_len(p))
+end
+
+pub func PathBase(p: str): str:
+    cut := last_sep(p)
+    if cut < 0:
+        ret p
+    end
+    ret str.Substr(p, cut + 1, str.Len(p) - cut - 1)
+end
+
+pub func PathStem(p: str): str:
+    b := PathBase(p)
+    dot := str.LastIndex(b, ".")
+    if dot >= 0:
+        ret str.Substr(b, 0, dot)
+    end
+    ret b
+end
+
+pub func PathDir(p: str): str:
+    cut := last_sep(p)
+    if cut < 0:
+        ret ""
+    end
+    ret slashed_range(p, 0, cut)
+end
+
+pub func PathJoin(dir: str, name0: str): str:
+    n := str.Len(name0)
+    mut off := 0
+    until off < n and is_sep(byte_at(name0, off)):
+        off += 1
+    end
+    if str.Len(dir) == 0:
+        ret slashed_range(name0, off, n)
+    end
+    dn := trimmed_len(dir)
+    mut sb := str.NewBuilder()
+    buf_append_slashed(sb, dir, 0, dn)
+    if off < n and not is_sep(byte_at(dir, dn - 1)):
+        str.BufAppendChar(sb, K_PATH_SEP)
+    end
+    buf_append_slashed(sb, name0, off, n)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+pub func PathNormalize(p: str): str:
+    mut q := collapse_double_sep(PathToSlash(p))
+    until str.Len(q) >= 2 and byte_at(q, 0) == K_PATH_DOT and byte_at(q, 1) == K_PATH_SEP:
+        q = str.Substr(q, 2, str.Len(q) - 2)
+    end
+    mut idx := str.IndexOf(q, "/./")
+    until idx >= 0:
+        q = str.Substr(q, 0, idx + 1) + str.Substr(q, idx + 3, str.Len(q) - idx - 3)
+        idx = str.IndexOf(q, "/./")
+    end
+    mut dd := str.IndexOf(q, "/../")
+    until dd >= 0:
+        mut segstart := 0
+        mut k := dd - 1
+        until k >= 0:
+            if byte_at(q, k) == K_PATH_SEP:
+                segstart = k + 1
+                break
+            end
+            k -= 1
+        end
+        seg := str.Substr(q, segstart, dd - segstart)
+        if str.Len(seg) == 0 or str.Equals(seg, "..") or str.Contains(seg, ":"):
+            dd = str.IndexFrom(q, "/../", dd + 1)
+            continue
+        end
+        q = str.Substr(q, 0, segstart) + str.Substr(q, dd + 4, str.Len(q) - dd - 4)
+        dd = str.IndexOf(q, "/../")
+    end
+    ret q
+end

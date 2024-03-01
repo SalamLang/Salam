@@ -1,0 +1,122 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.http
+import net.router
+import net.http.validate
+import net.http.middleware
+import net.internal.rawsock
+import str
+import time
+
+func echo_h(ctx: i64):
+    body := http.Body(ctx)
+    http.Text(ctx, "got:" + body)
+end
+
+func query_h(ctx: i64):
+    name := http.Query(ctx, "name")
+    http.Text(ctx, "hi " + name)
+end
+
+func secure_h(ctx: i64):
+    middleware.Secure(ctx)
+    http.Text(ctx, "secure")
+end
+
+func redirect_h(ctx: i64):
+    http.Redirect(ctx, "/dest")
+end
+
+func signup_h(ctx: i64):
+    email := http.Form(ctx, "email")
+    if validate.IsEmail(email):
+        http.Text(ctx, "email-ok")
+    else:
+        http.SetStatus(ctx, 400)
+        http.Text(ctx, "bad-email")
+    end
+end
+
+func created_h(ctx: i64):
+    http.SetStatus(ctx, 201)
+    http.Json(ctx, `{"ok":true}`)
+end
+
+func run_web():
+    mut r := router.NewRouter()
+    router.Post(r, "/echo", echo_h)
+    router.Get(r, "/q", query_h)
+    router.Get(r, "/sec", secure_h)
+    router.Get(r, "/go", redirect_h)
+    router.Post(r, "/signup", signup_h)
+    router.Get(r, "/create", created_h)
+    s := http.NewServer(19205)
+    http.Use(s, r)
+    http.Run(s)
+end
+
+func send_raw(req: str): str:
+    mut sock := rawsock.Connect("127.0.0.1", 19205)
+    mut tries := 0
+    until not rawsock.Ok(sock) and tries < 200:
+        time.Sleep(10)
+        sock = rawsock.Connect("127.0.0.1", 19205)
+        tries = tries + 1
+    end
+    if not rawsock.Ok(sock):
+        ret ""
+    end
+    rawsock.Send(sock, req)
+    resp := rawsock.Recv(sock, 8192)
+    rawsock.Close(sock)
+    ret resp
+end
+
+func post(path: str, body: str): str:
+    req := "POST " + path + " HTTP/1.0\r\nHost: localhost\r\nContent-Length: " + str.FromInt(len(body) as i64) + "\r\n\r\n" + body
+    ret send_raw(req)
+end
+
+func get(path: str): str:
+    ret send_raw("GET " + path + " HTTP/1.0\r\nHost: localhost\r\n\r\n")
+end
+
+func main:
+    _t := spawn(run_web)
+
+    r1 := post("/echo", "hello")
+    println str.Contains(r1, "got:hello")
+
+    r2 := get("/q?name=Sara")
+    println str.Contains(r2, "hi Sara")
+
+    r3 := get("/sec")
+    println str.Contains(r3, "X-Frame-Options: DENY")
+    println str.Contains(r3, "secure")
+
+    r4 := get("/go")
+    println str.Contains(r4, "302")
+    println str.Contains(r4, "Location: /dest")
+
+    r5 := post("/signup", "email=a@b.com")
+    println str.Contains(r5, "email-ok")
+    r6 := post("/signup", "email=nope")
+    println str.Contains(r6, "400")
+    println str.Contains(r6, "bad-email")
+
+    r7 := get("/create")
+    println str.Contains(r7, "201")
+    println str.Contains(r7, "application/json")
+end

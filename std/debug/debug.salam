@@ -1,0 +1,166 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "debug"
+@fa "اشکال زدایی"
+package debug
+
+import str
+import conv
+import time
+import mem
+
+if SALAM_OS_WINDOWS:
+    link dynamic "kernel32"
+    extern:
+        func DebugBreak()
+    end
+else:
+    extern:
+        func raise(sig: int): int
+    end
+end
+
+extern:
+    noret func abort()
+end
+
+mut _frames := Vector {} as Vector<str>
+mut _trace_enabled := false
+mut _timer_names := Vector {} as Vector<str>
+mut _timer_starts := Vector {} as Vector<i64>
+
+func _find_timer(name: str): int:
+    repeat _timer_names.len() in i:
+        if _timer_names.get(i) == name: ret i end
+    end
+    ret 0 - 1
+end
+
+@en "Assert"
+@fa "ادعا"
+pub func Assert(cond: bool, msg: str):
+    if cond == false:
+        printerrln "assertion failed: ".concat(msg)
+        abort()
+    end
+end
+
+@en "AssertNotNil"
+@fa "ادعای خالی نبودن"
+pub func AssertNotNil(p: void*, msg: str): Assert(p != null, msg) end
+
+@en "Enter"
+@fa "ورود"
+pub func Enter(frame: str):
+    _frames.push(frame)
+    if _trace_enabled: Trace("enter") end
+end
+
+@en "Exit"
+@fa "خروج"
+pub func Exit():
+    n := _frames.len()
+    if n > 0:
+        if _trace_enabled: Trace("exit") end
+        _frames.remove_at(n - 1)
+    end
+end
+
+@en "Stack"
+@fa "پشته"
+pub func Stack(): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    repeat _frames.len() in i:
+        if i > 0: str.BufAppend(b, " > ") end
+        str.BufAppend(b, _frames.get(i))
+    end
+    ret str.BufStr(b)
+end
+
+@en "Depth"
+@fa "عمق"
+pub func Depth(): int: ret _frames.len() end
+
+@en "EnableTrace"
+@fa "فعال‌سازی ردیابی"
+pub func EnableTrace(enabled: bool): _trace_enabled = enabled end
+
+@en "TraceEnabled"
+@fa "ردیابی فعال است"
+pub func TraceEnabled(): bool: ret _trace_enabled end
+
+@en "Trace"
+@fa "ردیابی"
+pub func Trace(msg: str):
+    if _trace_enabled == false: ret end
+    mut line := "[TRACE] "
+    s := Stack()
+    if s.len() > 0: line = line.concat(s).concat(": ") end
+    line = line.concat(msg)
+    printerrln line
+end
+
+@en "StartTimer"
+@fa "شروع تایمر"
+pub func StartTimer(name: str):
+    idx := _find_timer(name)
+    now := time.MonoNanos()
+    if idx >= 0:
+        _timer_starts.set(idx, now)
+    else:
+        _timer_names.push(name)
+        _timer_starts.push(now)
+    end
+end
+
+@en "StopTimer"
+@fa "پایان تایمر"
+pub func StopTimer(name: str): f64:
+    idx := _find_timer(name)
+    if idx < 0: ret 0.0 end
+    started := _timer_starts.get(idx)
+    now := time.MonoNanos()
+    ret ((now - started) as f64) / 1000000.0
+end
+
+@en "Break"
+@fa "شکست‌نقطه"
+pub func Break():
+    if SALAM_OS_WINDOWS:
+        DebugBreak()
+    else:
+        raise(5)
+    end
+end
+
+@en "MemStats"
+@fa "آمار حافظه"
+pub func MemStats(): str:
+    if mem.MemDebugActive() == false:
+        ret "mem stats unavailable (build with -DSALAM_MEM_DEBUG or --asan to enable)"
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, "allocs=")
+    str.BufAppend(b, conv.FormatInt(mem.AllocCount()))
+    str.BufAppend(b, " frees=")
+    str.BufAppend(b, conv.FormatInt(mem.FreeCount()))
+    str.BufAppend(b, " live=")
+    str.BufAppend(b, conv.FormatInt(mem.LiveBytes()))
+    str.BufAppend(b, " peak=")
+    str.BufAppend(b, conv.FormatInt(mem.PeakBytes()))
+    ret str.BufStr(b)
+end

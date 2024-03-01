@@ -1,0 +1,199 @@
+package lexer
+
+import mem
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+
+func scan_digits(L &: Lx, base: int, bad &: bool): int:
+    mut ndig := 0
+    mut prev_us := false
+    mut any := false
+    until true:
+        mut digit := false
+        if base != 0:
+            digit = is_base_digit(peek(L), base)
+        else:
+            digit = at_digit(L, 0) != 0
+        end
+        if digit:
+            if base != 0:
+                adv(L)
+            else:
+                _d := take_digit(L)
+            end
+            ndig += 1
+            prev_us = false
+            any = true
+        else peek(L) == 95:
+            if not any or prev_us:
+                bad = true
+            end
+            adv(L)
+            prev_us = true
+        else:
+            break
+        end
+    end
+    if prev_us:
+        bad = true
+    end
+    ret ndig
+end
+
+func scan_based_int(L &: Lx, b: co.SrcPos, bad &: bool):
+    adv(L)
+    base := advc(L)
+    if scan_digits(L, base, bad) == 0:
+        error_at(L, b, "numeric literal has no digits after its base prefix")
+    end
+    if is_ident_cont(peek(L)) and not at_persian_punct(L):
+        error_at(L, b, "invalid digit in numeric literal")
+        skip_ident(L)
+    end
+end
+
+func exponent_follows(L &: Lx): bool:
+    if at_digit(L, 1) != 0:
+        ret true
+    end
+    sign := peek2(L, 1)
+    ret (sign == 43 or sign == 45) and at_digit(L, 2) != 0
+end
+
+func scan_decimal(L &: Lx, b: co.SrcPos, bad &: bool, named &: bool): bool:
+    mut is_float := false
+    _n1 := scan_digits(L, 0, bad)
+    if peek(L) == 46 and at_digit(L, 1) != 0:
+        is_float = true
+        adv(L)
+        _n2 := scan_digits(L, 0, bad)
+    end
+    if (peek(L) == 101 or peek(L) == 69) and (not L.layout_mode or exponent_follows(L)):
+        is_float = true
+        adv(L)
+        if peek(L) == 43 or peek(L) == 45:
+            adv(L)
+        end
+        if scan_digits(L, 0, bad) == 0:
+            error_at(L, b, "numeric literal has no exponent digits")
+        end
+    end
+    if is_alpha(peek(L)):
+        if L.layout_mode:
+            if peek(L) == 102:
+                is_float = true
+            end
+            skip_ident(L)
+        else peek(L) == 102 and (not is_ident_cont(peek2(L, 1)) or at_persian_punct_at(L, 1)):
+            is_float = true
+            adv(L)
+        else:
+            named = true
+            skip_ident(L)
+        end
+    end
+    ret is_float
+end
+
+func normalize_number(text: str): str:
+    tlen := text.len()
+    mut out := str.NewBuilder()
+    mut i := 0
+    until i < tlen:
+        if byte_at(text, i) == 95:
+            i += 1
+            continue
+        end
+        mut val := 0
+        dlen := decimal_digit_at(text, i, tlen - i, val)
+        if dlen == 2:
+            str.BufAppendChar(out, 48 + val)
+            i += 2
+        else:
+            str.BufAppendChar(out, byte_at(text, i))
+            i += 1
+        end
+    end
+    r := str.BufStr(out)
+    str.BufFree(out)
+    ret r
+end
+
+func decode_number(clean: str, is_float: bool, overflow &: bool): tok.TokenValue:
+    overflow = false
+    if is_float:
+        ret tok.ValueFloat(clean.to_float())
+    end
+    c0 := byte_at(clean, 0)
+    c1 := byte_at(clean, 1)
+    mut base := 10
+    mut di := 0
+    if c0 == 48 and (c1 == 120 or c1 == 88):
+        base = 16
+        di = 2
+    else c0 == 48 and (c1 == 98 or c1 == 66):
+        base = 2
+        di = 2
+    else c0 == 48 and (c1 == 111 or c1 == 79):
+        base = 8
+        di = 2
+    end
+    ret tok.ValueInt(parse_uint(clean, di, base, overflow))
+end
+
+func scan_number(L &: Lx):
+    start := L.pos
+    b := lx_pos(L)
+    mut bad := false
+    c1 := peek2(L, 1)
+    based := peek(L) == 48 and (
+        c1 == 120 or c1 == 88 or c1 == 98 or c1 == 66 or c1 == 111 or c1 == 79
+    )
+    mut is_float := false
+    mut named := false
+    if based:
+        scan_based_int(L, b, bad)
+    else:
+        is_float = scan_decimal(L, b, bad, named)
+    end
+    if bad:
+        error_at(L, b, "misplaced '_' separator in numeric literal")
+    end
+    text := lex_slice(L, start)
+    clean := normalize_number(text)
+    mut overflow := false
+    v := decode_number(clean, is_float, overflow)
+    if str.Len(clean) > 0:
+        mem.Free(clean as void*)
+    end
+    if overflow:
+        error_at(L, b, "integer literal is too large for a 64-bit value")
+    end
+    if is_float and v.fval * 0.5 == v.fval and v.fval != 0.0:
+        error_at(L, b, "floating-point literal is out of range for f64")
+    end
+    if not L.layout_mode and (named or at_letter(L)):
+        error_at(L, b, "a name cannot start with a digit; put the digit after a letter, or add a space if you meant a number")
+    end
+    emit_val(L, is_float ? tok.TK_FLOAT : tok.TK_INT, b, text, v)
+end
+
+func at_letter(L &: Lx): bool:
+    c := peek(L)
+    if is_alpha(c) or c == 95:
+        ret true
+    end
+    if c < 0xD8 or c > 0xDB:
+        ret false
+    end
+    cp := ((c & 0x1F) << 6) | (peek2(L, 1) & 0x3F)
+    if cp >= 0x0660 and cp <= 0x066D:
+        ret false
+    end
+    if cp >= 0x06F0 and cp <= 0x06F9:
+        ret false
+    end
+    ret (cp >= 0x0620 and cp <= 0x064A) or (cp >= 0x066E and cp <= 0x06D3) or (cp >= 0x06FA and cp <= 0x06FF)
+end

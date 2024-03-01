@@ -1,0 +1,418 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "webpush"
+@fa "اعلان وب"
+package webpush
+
+import mem
+import str
+import time
+import conv
+import crypto
+import encoding
+import tls
+import net.http
+
+@en "DEFAULT_TTL"
+@fa "ماندگاری پیش‌فرض"
+pub const DEFAULT_TTL := 2419200
+
+const VAPID_TTL_SECONDS := 43200
+
+const POINT_LEN := 65
+const AUTH_LEN := 16
+const SALT_LEN := 16
+const RECORD_SIZE := 4096
+
+@en "Keys"
+@fa "کلیدها"
+pub struct Keys:
+    @en "public_key"
+    @fa "کلید عمومی"
+    pub public_key: str = ""
+    @en "private_key"
+    @fa "کلید خصوصی"
+    pub private_key: str = ""
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+end
+
+@en "Subscription"
+@fa "اشتراک"
+pub struct Subscription:
+    @en "endpoint"
+    @fa "نقطه پایانی"
+    pub endpoint: str = ""
+    @en "p256dh"
+    @fa "کلید مرورگر"
+    pub p256dh: str = ""
+    @en "auth"
+    @fa "راز احراز هویت"
+    pub auth: str = ""
+end
+
+@en "Options"
+@fa "گزینه‌ها"
+pub struct Options:
+    @en "subject"
+    @fa "موضوع تماس"
+    pub subject: str = ""
+    @en "ttl"
+    @fa "مدت نگهداری"
+    pub ttl: int = 2419200
+    @en "urgency"
+    @fa "فوریت"
+    pub urgency: str = ""
+    @en "topic"
+    @fa "موضوع"
+    pub topic: str = ""
+end
+
+@en "Result"
+@fa "نتیجه"
+pub struct Result:
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+    @en "status"
+    @fa "وضعیت"
+    pub status: int = 0
+    @en "gone"
+    @fa "منقضی"
+    pub gone: bool = false
+    @en "error"
+    @fa "خطا"
+    pub error: str = ""
+end
+
+func _b64url(standard: str): str:
+    mut out := str.Replace(str.Replace(standard, "+", "-"), "/", "_")
+    until out.len() > 0 and out.substr(out.len() - 1, 1) == "=":
+        out = out.substr(0, out.len() - 1)
+    end
+    ret out
+end
+
+func _b64std(urlsafe: str): str:
+    mut out := str.Replace(str.Replace(urlsafe, "-", "+"), "_", "/")
+    until out.len() % 4 != 0:
+        out = out + "="
+    end
+    ret out
+end
+
+func _alloc_copy(b64: str, out_len &: int): void*:
+    capacity := b64.len() + 16
+    ptr := mem.AllocateZeroed(capacity as u64)
+    out_len = 0
+    if ptr == null: ret null end
+    mut ok := true
+    n := encoding.Base64DecodeBytes(b64, ptr, capacity, ok)
+    if not ok or n <= 0:
+        mem.Free(ptr)
+        ret null
+    end
+    out_len = n
+    ret ptr
+end
+
+func _put(dst: void*, off: int, src: void*, n: int):
+    mem.Copy(((dst as i64) + (off as i64)) as void*, src, n as u64)
+end
+
+func _put_byte(dst: void*, off: int, v: int):
+    bp := dst as u8*
+    bp[off] = v as u8
+end
+
+func _put_str(dst: void*, off: int, s: str):
+    if s.len() > 0: _put(dst, off, s as void*, s.len()) end
+end
+
+func _key_info(ua_point: void*, as_point: void*): str:
+    label := "WebPush: info"
+    total := label.len() + 1 + POINT_LEN + POINT_LEN
+    buf := mem.AllocateZeroed(total as u64)
+    if buf == null: ret "" end
+    defer mem.Free(buf)
+    _put_str(buf, 0, label)
+    _put_byte(buf, label.len(), 0)
+    _put(buf, label.len() + 1, ua_point, POINT_LEN)
+    _put(buf, label.len() + 1 + POINT_LEN, as_point, POINT_LEN)
+    ret encoding.Base64EncodeBytes(buf, total)
+end
+
+func _label_info(name: str): str:
+    label := "Content-Encoding: " + name
+    total := label.len() + 1
+    buf := mem.AllocateZeroed(total as u64)
+    if buf == null: ret "" end
+    defer mem.Free(buf)
+    _put_str(buf, 0, label)
+    _put_byte(buf, label.len(), 0)
+    ret encoding.Base64EncodeBytes(buf, total)
+end
+
+func _padded(payload: str): str:
+    total := payload.len() + 1
+    buf := mem.AllocateZeroed(total as u64)
+    if buf == null: ret "" end
+    defer mem.Free(buf)
+    _put_str(buf, 0, payload)
+    _put_byte(buf, payload.len(), 2)
+    ret encoding.Base64EncodeBytes(buf, total)
+end
+
+func _body(salt: void*, as_point: void*, ciphertext_b64: str): str:
+    mut ct_len := 0
+    ct := _alloc_copy(ciphertext_b64, ct_len)
+    if ct == null: ret "" end
+    defer mem.Free(ct)
+    header := SALT_LEN + 4 + 1 + POINT_LEN
+    total := header + ct_len
+    buf := mem.AllocateZeroed(total as u64)
+    if buf == null: ret "" end
+    defer mem.Free(buf)
+    _put(buf, 0, salt, SALT_LEN)
+    _put_byte(buf, SALT_LEN, (RECORD_SIZE >> 24) & 255)
+    _put_byte(buf, SALT_LEN + 1, (RECORD_SIZE >> 16) & 255)
+    _put_byte(buf, SALT_LEN + 2, (RECORD_SIZE >> 8) & 255)
+    _put_byte(buf, SALT_LEN + 3, RECORD_SIZE & 255)
+    _put_byte(buf, SALT_LEN + 4, POINT_LEN)
+    _put(buf, SALT_LEN + 5, as_point, POINT_LEN)
+    _put(buf, header, ct, ct_len)
+    ret encoding.Base64EncodeBytes(buf, total)
+end
+
+func _origin(endpoint: str): str:
+    ep := http.ParseEndpoint(endpoint)
+    if not ep.ok: ret "" end
+    mut out := "https://"
+    if not ep.secure: out = "http://" end
+    out = out + ep.host
+    if (ep.secure and ep.port != 443) or (not ep.secure and ep.port != 80):
+        out = out + ":" + ep.port
+    end
+    ret out
+end
+
+func _jwt_part(json: str): str:
+    ret _b64url(encoding.Base64Encode(json))
+end
+
+func _digest_b64(signing_input: str): str:
+    ret encoding.Base64Encode(encoding.HexDecode(crypto.Sha256Hex(signing_input)))
+end
+
+func _path_of(endpoint: str): str:
+    mut rest := endpoint
+    if str.StartsWith(rest, "https://"): rest = rest.substr(8, rest.len() - 8)
+    else str.StartsWith(rest, "http://"): rest = rest.substr(7, rest.len() - 7)
+    end
+    slash := rest.find("/")
+    if slash < 0: ret "/" end
+    ret rest.substr(slash, rest.len() - slash)
+end
+
+func _host_header(endpoint: str): str:
+    ep := http.ParseEndpoint(endpoint)
+    if not ep.ok: ret "" end
+    if (ep.secure and ep.port != 443) or (not ep.secure and ep.port != 80):
+        ret ep.host + ":" + ep.port
+    end
+    ret ep.host
+end
+
+func _seal(
+    sub: Subscription, payload: str, as_point: str, ecdh: str, salt_b64: str, ok &: bool
+): str:
+    mut ua_len := 0
+    ua := _alloc_copy(_b64std(sub.p256dh), ua_len)
+    if ua == null or ua_len != POINT_LEN: ret "" end
+    defer mem.Free(ua)
+    mut as_len := 0
+    as_ptr := _alloc_copy(as_point, as_len)
+    if as_ptr == null: ret "" end
+    defer mem.Free(as_ptr)
+    mut derive_ok := false
+    ikm := tls.HkdfSha256Raw(ecdh, _b64std(sub.auth), _key_info(ua, as_ptr), 32, derive_ok)
+    if not derive_ok: ret "" end
+    ret _encrypt_records(ikm, payload, as_ptr, salt_b64, ok)
+end
+
+func _encrypt_records(
+    ikm: str, payload: str, as_ptr: void*, salt_b64: str, ok &: bool
+): str:
+    mut derive_ok := false
+    cek := tls.HkdfSha256Raw(ikm, salt_b64, _label_info("aes128gcm"), 16, derive_ok)
+    if not derive_ok: ret "" end
+    nonce := tls.HkdfSha256Raw(ikm, salt_b64, _label_info("nonce"), 12, derive_ok)
+    if not derive_ok: ret "" end
+    mut seal_ok := false
+    ciphertext := tls.AesGcmSealBytes(cek, nonce, _padded(payload), seal_ok)
+    if not seal_ok: ret "" end
+    mut salt_len := 0
+    salt := _alloc_copy(salt_b64, salt_len)
+    if salt == null or salt_len != SALT_LEN: ret "" end
+    defer mem.Free(salt)
+    body := _body(salt, as_ptr, ciphertext)
+    ok = body.len() > 0
+    ret _b64url(body)
+end
+
+func _post(
+    sub: Subscription, authorization: str, opts: Options, encoding_name: str, n: int, body: void*
+): Result:
+    ep := http.ParseEndpoint(sub.endpoint)
+    if not ep.ok: ret Result { error = "the endpoint could not be parsed" } end
+    head := _request_head(sub, authorization, opts, encoding_name, n)
+    mut r := http.SendRaw(ep, head, body, n)
+    defer http.FreeRaw(r)
+    ret _result(r)
+end
+
+func _request_head(
+    sub: Subscription, authorization: str, opts: Options, encoding_name: str, n: int
+): str:
+    mut out := "POST " + _path_of(sub.endpoint) + " HTTP/1.1\r\n"
+    out = out + "Host: " + _host_header(sub.endpoint) + "\r\n"
+    out = out + "Authorization: " + authorization + "\r\n"
+    out = out + "TTL: " + _ttl_of(opts) + "\r\n"
+    if encoding_name.len() > 0:
+        out = out + "Content-Encoding: " + encoding_name + "\r\n"
+        out = out + "Content-Type: application/octet-stream\r\n"
+    end
+    if opts.urgency.len() > 0: out = out + "Urgency: " + opts.urgency + "\r\n" end
+    if opts.topic.len() > 0: out = out + "Topic: " + opts.topic + "\r\n" end
+    out = out + "Content-Length: " + n + "\r\n"
+    ret out + "Connection: close\r\n\r\n"
+end
+
+func _ttl_of(opts: Options): str:
+    if opts.ttl <= 0: ret "" + DEFAULT_TTL end
+    ret "" + opts.ttl
+end
+
+func _result(r: http.RawResponse): Result:
+    if r.error.len() > 0: ret Result { status = r.status, error = r.error } end
+    if r.status == 404 or r.status == 410:
+        ret Result { status = r.status, gone = true, error = "the subscription is gone" }
+    end
+    if r.ok: ret Result { ok = true, status = r.status } end
+    ret Result { status = r.status, error = _reason(r) }
+end
+
+func _reason(r: http.RawResponse): str:
+    text := http.RawText(r)
+    if text.len() > 0 and text.len() < 400: ret str.Trim(text) end
+    ret "the push service answered " + r.status
+end
+
+@en "GenerateKeys"
+@fa "ساخت کلیدها"
+pub func GenerateKeys(): Keys:
+    mut priv := ""
+    mut spki := ""
+    if not tls.EcdhP256Generate(priv, spki): ret Keys {} end
+    point := tls.EcdhP256PublicPoint(priv)
+    if point.len() == 0: ret Keys {} end
+    ret Keys {
+        public_key = _b64url(point), private_key = _b64url(priv), ok = true
+    }
+end
+
+@en "VapidHeaderAt"
+@fa "سرصفحه واپید در زمان"
+pub func VapidHeaderAt(
+    keys: Keys, audience: str, subject: str, epoch_seconds: i64
+): str:
+    if not keys.ok or audience.len() == 0 or subject.len() == 0: ret "" end
+    header := _jwt_part(`{"typ":"JWT","alg":"ES256"}`)
+    claims := _jwt_part(
+        `{"aud":"` + audience + `","exp":` + conv.FormatInt(epoch_seconds + (VAPID_TTL_SECONDS as i64)) + `,"sub":"` + subject + `"}`
+    )
+    signing_input := header + "." + claims
+    mut ok := false
+    signature := tls.P256Sign(_b64std(keys.private_key), _digest_b64(signing_input), ok)
+    if not ok: ret "" end
+    ret "vapid t=" + signing_input + "." + _b64url(signature) + ", k=" + keys.public_key
+end
+
+@en "VapidHeader"
+@fa "سرصفحه واپید"
+pub func VapidHeader(keys: Keys, audience: str, subject: str): str:
+    ret VapidHeaderAt(keys, audience, subject, time.Now())
+end
+
+@en "EncryptWith"
+@fa "رمزنگاری سفارشی"
+pub func EncryptWith(
+    sub: Subscription, payload: str, as_private: str, salt: str, ok &: bool
+): str:
+    ok = false
+    if sub.p256dh.len() == 0 or sub.auth.len() == 0: ret "" end
+    as_priv_b64 := _b64std(as_private)
+    as_point := tls.EcdhP256PublicPoint(as_priv_b64)
+    if as_point.len() == 0: ret "" end
+    mut shared_ok := false
+    ecdh := tls.EcdhP256SharedPoint(as_priv_b64, _b64std(sub.p256dh), shared_ok)
+    if not shared_ok: ret "" end
+    ret _seal(sub, payload, as_point, ecdh, _b64std(salt), ok)
+end
+
+@en "Encrypt"
+@fa "رمزنگاری"
+pub func Encrypt(sub: Subscription, payload: str, ok &: bool): str:
+    ok = false
+    mut priv := ""
+    mut spki := ""
+    if not tls.EcdhP256Generate(priv, spki): ret "" end
+    ret EncryptWith(sub, payload, _b64url(priv), _b64url(tls.RandomSalt(SALT_LEN)), ok)
+end
+
+@en "Send"
+@fa "ارسال"
+pub func Send(keys: Keys, sub: Subscription, payload: str, opts: Options): Result:
+    if sub.endpoint.len() == 0: ret Result { error = "the subscription has no endpoint" } end
+    audience := _origin(sub.endpoint)
+    authorization := VapidHeader(keys, audience, opts.subject)
+    if authorization.len() == 0:
+        ret Result { error = "the VAPID header could not be built" }
+    end
+    if payload.len() == 0: ret _post(sub, authorization, opts, "", 0, null) end
+    mut ok := false
+    body := Encrypt(sub, payload, ok)
+    if not ok: ret Result { error = "the payload could not be encrypted" } end
+    mut n := 0
+    ptr := _alloc_copy(_b64std(body), n)
+    if ptr == null: ret Result { error = "the sealed payload could not be read" } end
+    out := _post(sub, authorization, opts, "aes128gcm", n, ptr)
+    mem.Free(ptr)
+    ret out
+end
+
+@en "NewOptions"
+@fa "گزینه‌های جدید"
+pub func NewOptions(subject: str): Options:
+    ret Options { subject = subject, ttl = DEFAULT_TTL }
+end
+
+@en "KeysFrom"
+@fa "کلیدها از"
+pub func KeysFrom(public_key: str, private_key: str): Keys:
+    if public_key.len() == 0 or private_key.len() == 0: ret Keys {} end
+    ret Keys { public_key = public_key, private_key = private_key, ok = true }
+end

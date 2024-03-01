@@ -1,0 +1,369 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package opensearch
+
+import str
+import conv
+import encoding.json
+
+@en "SearchParams"
+@fa "پارامترهای جستجو"
+pub struct SearchParams:
+    @en "routing"
+    @fa "مسیریابی"
+    pub routing: str = ""
+    @en "preference"
+    @fa "ترجیح"
+    pub preference: str = ""
+    @en "search_pipeline"
+    @fa "خط لوله جستجو"
+    pub search_pipeline: str = ""
+    @en "search_type"
+    @fa "نوع جستجو"
+    pub search_type: str = ""
+    @en "scroll"
+    @fa "پیمایش"
+    pub scroll: str = ""
+    @en "request_cache"
+    @fa "حافظه نهان درخواست"
+    pub request_cache: str = ""
+    @en "allow_partial_search_results"
+    @fa "اجازه نتیجه ناقص"
+    pub allow_partial_search_results: str = ""
+    @en "ignore_unavailable"
+    @fa "نادیده گرفتن ناموجود"
+    pub ignore_unavailable: bool = false
+end
+
+func _os_hit(raw: str): Hit:
+    mut h := Hit { raw = raw }
+    h.index = _os_jstr(raw, "_index")
+    h.id = _os_jstr(raw, "_id")
+    h.score = _os_f64(_os_jraw(raw, "_score"))
+    h.source = _os_jraw(raw, "_source")
+    h.sort = _os_jraw(raw, "sort")
+    h.highlight = _os_jraw(raw, "highlight")
+    h.fields = _os_jraw(raw, "fields")
+    h.inner_hits = _os_jraw(raw, "inner_hits")
+    h.matched_queries = _os_jraw(raw, "matched_queries")
+    ret h
+end
+
+func _os_search_body(body: str, status: int, ok: bool, err: str): SearchResult:
+    mut s := SearchResult { ok = ok, status = status, error = err, raw = body }
+    if body.len() == 0: ret s end
+    s.took = _os_ji64(body, "took", 0)
+    s.timed_out = _os_jbool(body, "timed_out")
+    s.scroll_id = _os_jstr(body, "_scroll_id")
+    s.pit_id = _os_jstr(body, "pit_id")
+    hits := _os_jraw(body, "hits")
+    total := _os_jraw(hits, "total")
+    if str.StartsWith(total, "{"):
+        s.total = _os_ji64(total, "value", 0)
+        s.total_relation = _os_jstr(total, "relation")
+    else total.len() > 0:
+        s.total = _os_i64(total)
+        s.total_relation = "eq"
+    end
+    s.max_score = _os_f64(_os_jraw(hits, "max_score"))
+    mut list := Vector {} as Vector<Hit>
+    each h in _os_items(_os_jraw(hits, "hits")):
+        list.push(_os_hit(h))
+    end
+    s.hits = list
+    s.aggregations = _os_jraw(body, "aggregations")
+    s.suggest = _os_jraw(body, "suggest")
+    ret s
+end
+
+func _os_search_result(r: Response): SearchResult:
+    ret _os_search_body(r.body, r.status, r.ok, r.error)
+end
+
+func _os_params_query(q &: Vector<str>, p: SearchParams):
+    _os_qadd(q, "routing", p.routing)
+    _os_qadd(q, "preference", p.preference)
+    _os_qadd(q, "search_pipeline", p.search_pipeline)
+    _os_qadd(q, "search_type", p.search_type)
+    _os_qadd(q, "scroll", p.scroll)
+    _os_qadd(q, "request_cache", p.request_cache)
+    _os_qadd(q, "allow_partial_search_results", p.allow_partial_search_results)
+    if p.ignore_unavailable: _os_qadd(q, "ignore_unavailable", "true") end
+end
+
+func _os_search_path(index: str): str:
+    if index.len() == 0: ret str.Clone("/_search") end
+    ret "/" + _os_idx(index) + "/_search"
+end
+
+@en "Search"
+@fa "جستجو"
+pub func Search(c: Client, index: str, query: str): SearchResult:
+    ret SearchWith(c, index, SearchRequest { query = query })
+end
+
+@en "SearchWith"
+@fa "جستجو با درخواست"
+pub func SearchWith(c: Client, index: str, req: SearchRequest): SearchResult:
+    path := req.pit_id.len() > 0 ? "/_search" : _os_search_path(index)
+    ret _os_search_result(Perform(c, "POST", path, SearchBody(req)))
+end
+
+@en "SearchRaw"
+@fa "جستجوی خام"
+pub func SearchRaw(c: Client, index: str, body: str): SearchResult:
+    ret _os_search_result(Perform(c, "POST", _os_search_path(index), _os_body_or_empty(body)))
+end
+
+@en "SearchParamsWith"
+@fa "جستجو با پارامتر"
+pub func SearchParamsWith(c: Client, index: str, body: str, p: SearchParams): SearchResult:
+    mut q := Vector {} as Vector<str>
+    _os_params_query(q, p)
+    ret _os_search_result(Perform(c, "POST", _os_search_path(index) + _os_qs(q), _os_body_or_empty(body)))
+end
+
+@en "ParseSearch"
+@fa "تجزیه جستجو"
+pub func ParseSearch(body: str): SearchResult:
+    ret _os_search_body(body, 200, true, "")
+end
+
+@en "SearchScroll"
+@fa "جستجوی پیمایشی"
+pub func SearchScroll(c: Client, index: str, req: SearchRequest, keep_alive: str): SearchResult:
+    mut q := Vector {} as Vector<str>
+    _os_qadd(q, "scroll", keep_alive)
+    ret _os_search_result(Perform(c, "POST", _os_search_path(index) + _os_qs(q), SearchBody(req)))
+end
+
+@en "Scroll"
+@fa "پیمایش"
+pub func Scroll(c: Client, scroll_id: str, keep_alive: str): SearchResult:
+    body := _os_two("scroll", json.Str(keep_alive), "scroll_id", json.Str(scroll_id))
+    ret _os_search_result(Perform(c, "POST", "/_search/scroll", body))
+end
+
+@en "ClearScroll"
+@fa "پاک‌سازی پیمایش"
+pub func ClearScroll(c: Client, scroll_id: str): bool:
+    mut ids := Vector {} as Vector<str>
+    ids.push(scroll_id)
+    r := Perform(c, "DELETE", "/_search/scroll", _os_one("scroll_id", _os_strs(ids)))
+    ret r.ok
+end
+
+@en "CreatePit"
+@fa "ایجاد نقطه زمانی"
+pub func CreatePit(c: Client, index: str, keep_alive: str): str:
+    mut q := Vector {} as Vector<str>
+    _os_qadd(q, "keep_alive", keep_alive)
+    r := Perform(c, "POST", "/" + _os_idx(index) + "/_search/point_in_time" + _os_qs(q), "")
+    if not r.ok: ret str.Clone("") end
+    ret _os_jstr(r.body, "pit_id")
+end
+
+@en "DeletePit"
+@fa "حذف نقطه زمانی"
+pub func DeletePit(c: Client, pit_id: str): bool:
+    mut ids := Vector {} as Vector<str>
+    ids.push(pit_id)
+    r := Perform(c, "DELETE", "/_search/point_in_time", _os_one("pit_id", _os_strs(ids)))
+    ret r.ok
+end
+
+@en "DeleteAllPits"
+@fa "حذف همه نقطه‌های زمانی"
+pub func DeleteAllPits(c: Client): bool:
+    r := Perform(c, "DELETE", "/_search/point_in_time/_all", "")
+    ret r.ok
+end
+
+@en "ListPits"
+@fa "فهرست نقطه‌های زمانی"
+pub func ListPits(c: Client): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    r := Perform(c, "GET", "/_search/point_in_time/_all", "")
+    if not r.ok: ret out end
+    each p in _os_items(_os_jraw(r.body, "pits")):
+        out.push(_os_jstr(p, "pit_id"))
+    end
+    ret out
+end
+
+@en "MSearch"
+@fa "جستجوی چندگانه"
+pub func MSearch(c: Client, index: str, bodies: Vector<str>): Vector<SearchResult>:
+    mut out := Vector {} as Vector<SearchResult>
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    each b in bodies:
+        if index.len() > 0:
+            str.BufAppend(sb, _os_one("index", json.Str(index)))
+        else:
+            str.BufAppend(sb, "{}")
+        end
+        str.BufAppend(sb, "\n")
+        str.BufAppend(sb, json.Minify(_os_body_or_empty(b)))
+        str.BufAppend(sb, "\n")
+    end
+    r := PerformNdjson(c, "POST", "/_msearch", str.BufStr(sb))
+    if not r.ok:
+        repeat bodies.len():
+            out.push(SearchResult { status = r.status, error = r.error })
+        end
+        ret out
+    end
+    each item in _os_items(_os_jraw(r.body, "responses")):
+        st := _os_int(_os_jraw(item, "status"))
+        e := _os_path(item, "error.reason")
+        out.push(_os_search_body(item, st, e.len() == 0 and st < 300, e))
+    end
+    ret out
+end
+
+@en "SearchTemplate"
+@fa "جستجوی الگو"
+pub func SearchTemplate(c: Client, index: str, template_id: str, params: str): SearchResult:
+    body := _os_two("id", json.Str(template_id), "params", _os_body_or_empty(params))
+    ret _os_search_result(Perform(c, "POST", _os_ipath(index, "/_search/template"), body))
+end
+
+@en "SearchInlineTemplate"
+@fa "جستجوی الگوی درون‌خطی"
+pub func SearchInlineTemplate(c: Client, index: str, source: str, params: str): SearchResult:
+    body := _os_two("source", source, "params", _os_body_or_empty(params))
+    ret _os_search_result(Perform(c, "POST", _os_ipath(index, "/_search/template"), body))
+end
+
+@en "RenderTemplate"
+@fa "نمایش الگو"
+pub func RenderTemplate(c: Client, source: str, params: str): str:
+    r := Perform(c, "POST", "/_render/template", _os_two("source", source, "params", _os_body_or_empty(params)))
+    if not r.ok: ret str.Clone("") end
+    ret _os_jraw(r.body, "template_output")
+end
+
+@en "Explain"
+@fa "توضیح امتیاز"
+pub func Explain(c: Client, index: str, id: str, query: str): str:
+    r := Perform(c, "POST", "/" + _os_seg(index) + "/_explain/" + _os_seg(id), _os_one("query", query))
+    if not r.ok: ret str.Clone("") end
+    ret _os_jraw(r.body, "explanation")
+end
+
+@en "Validate"
+@fa "اعتبارسنجی پرسمان"
+pub func Validate(c: Client, index: str, query: str): bool:
+    r := Perform(c, "POST", _os_ipath(index, "/_validate/query"), _os_one("query", query))
+    if not r.ok: ret false end
+    ret _os_jbool(r.body, "valid")
+end
+
+@en "FieldCaps"
+@fa "توانایی فیلدها"
+pub func FieldCaps(c: Client, index: str, fields: Vector<str>): str:
+    mut q := Vector {} as Vector<str>
+    _os_qadd(q, "fields", str.Join(fields, ","))
+    r := Perform(c, "GET", _os_ipath(index, "/_field_caps") + _os_qs(q), "")
+    if not r.ok: ret str.Clone("") end
+    ret _os_jraw(r.body, "fields")
+end
+
+@en "Buckets"
+@fa "سطل‌ها"
+pub func Buckets(aggregations: str, name: str): Vector<Bucket>:
+    mut out := Vector {} as Vector<Bucket>
+    agg := _os_raw_member(aggregations, name)
+    raw := _os_jraw(agg, "buckets")
+    if str.StartsWith(str.Trim(raw), "{"):
+        mut keys := Vector {} as Vector<str>
+        mut vals := Vector {} as Vector<str>
+        _os_members(raw, keys, vals)
+        repeat keys.len() in i:
+            b := vals.get(i)
+            out.push(Bucket { key = keys.get(i), doc_count = _os_ji64(b, "doc_count", 0), raw = b })
+        end
+        ret out
+    end
+    each b in _os_items(raw):
+        mut key := _os_jraw(b, "key")
+        if str.StartsWith(key, `"`): key = _os_unquote(key) end
+        out.push(
+            Bucket {
+                key = key, key_as_string = _os_jstr(b, "key_as_string"), doc_count = _os_ji64(b, "doc_count", 0),
+                raw = b
+            }
+        )
+    end
+    ret out
+end
+
+@en "AggValue"
+@fa "مقدار تجمیع"
+pub func AggValue(aggregations: str, name: str): f64:
+    ret _os_f64(_os_jraw(_os_raw_member(aggregations, name), "value"))
+end
+
+@en "AggField"
+@fa "فیلد تجمیع"
+pub func AggField(aggregations: str, name: str, field: str): f64:
+    ret _os_f64(_os_jraw(_os_raw_member(aggregations, name), field))
+end
+
+@en "AggPercentile"
+@fa "صدک تجمیع"
+pub func AggPercentile(aggregations: str, name: str, percent: f64): f64:
+    mut key := conv.FormatFloat(percent)
+    if key.find(".") < 0: key = key + ".0" end
+    values := _os_jraw(_os_raw_member(aggregations, name), "values")
+    ret _os_f64(_os_raw_member(values, key))
+end
+
+@en "AggRaw"
+@fa "تجمیع خام"
+pub func AggRaw(aggregations: str, name: str): str:
+    ret _os_raw_member(aggregations, name)
+end
+
+@en "Suggestions"
+@fa "پیشنهادها"
+pub func Suggestions(suggest: str, name: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each entry in _os_items(_os_raw_member(suggest, name)):
+        each opt in _os_items(_os_jraw(entry, "options")):
+            out.push(_os_jstr(opt, "text"))
+        end
+    end
+    ret out
+end
+
+@en "JsonPath"
+@fa "مسیر جیسون"
+pub func JsonPath(text: str, path: str): str:
+    ret _os_path(text, path)
+end
+
+@en "JsonPathRaw"
+@fa "مسیر خام جیسون"
+pub func JsonPathRaw(text: str, path: str): str:
+    ret _os_path_raw(text, path)
+end
+
+@en "JsonItems"
+@fa "اقلام جیسون"
+pub func JsonItems(raw: str): Vector<str>:
+    ret _os_items(raw)
+end

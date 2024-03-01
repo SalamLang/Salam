@@ -1,0 +1,1916 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aitelegram
+
+import net.http
+import net.router
+import net.tcp
+import tls
+import encoding.json
+import crypto
+import str
+import sync
+import time
+import chan
+import conv
+
+include aistore "store.salam"
+include aiweb "web.salam"
+include aiengine "engine.salam"
+include ailive "live.salam"
+include aiturn "turn.salam"
+include aipolicy "policy.salam"
+include aiguest "guest.salam"
+include aibilling "billing.salam"
+include aimemory "memory.salam"
+include aitgmd "tgmd.salam"
+include aicloud "cloud.salam"
+
+const DEFAULT_TITLE := "گفت‌وگوی تازه"
+const WORKERS := 12
+const WATCHERS := 64
+const MAX_GUEST_TEXT := 2000
+const MAX_TEXT := 12000
+const CALL_MS := 20000
+const POLL_SECONDS := 25
+const EDIT_MS := 1100
+const STATUS_MS := 2500
+const STATUS_TEXT_MAX := 3000
+const GROW_BYTES := 24
+const CHUNK := 3800
+const CODE_SECONDS := 900
+const FLOOD_PER_MINUTE := 20
+const PENDING_SECONDS := 600
+const MAX_LINKS := 5
+const CLOUD_SECONDS := 3600
+
+mut TOKEN := ""
+mut HOST := "api.telegram.org"
+mut PORT := 443
+mut SECURE := true
+mut PREFIX := ""
+mut BOT := "SalamAgentBot"
+mut APP_URL := "https://ai.salamlang.ir"
+mut GUEST_LIMIT := 15
+mut JOBS := chan.Chan {} as chan.Chan<str>
+mut WATCH := chan.Chan {} as chan.Chan<str>
+mut STATE_LOCK := sync.Mutex {}
+mut BUSY := HashMap {} as HashMap<str, str>
+mut FLOOD := HashMap {} as HashMap<str, str>
+mut STOPPED := HashMap {} as HashMap<str, str>
+
+struct Who:
+    pub tg: str = ""
+    pub chat: str = ""
+    pub name: str = ""
+    pub username: str = ""
+    pub en: bool = false
+    pub uid: str = ""
+    pub cur: str = ""
+    pub known: bool = false
+end
+
+func one(v: str): Vector<str>:
+    mut a := Vector {} as Vector<str>
+    a.push(v)
+    ret a
+end
+
+func two(v: str, w: str): Vector<str>:
+    mut a := one(v)
+    a.push(w)
+    ret a
+end
+
+func three(v: str, w: str, x: str): Vector<str>:
+    mut a := two(v, w)
+    a.push(x)
+    ret a
+end
+
+func four(v: str, w: str, x: str, y: str): Vector<str>:
+    mut a := three(v, w, x)
+    a.push(y)
+    ret a
+end
+
+func i64s(n: i64): str:
+    ret conv.FormatInt(n)
+end
+
+func tr(en: bool, fa: str, en_text: str): str:
+    ret en ? en_text : fa
+end
+
+func digits(en: bool, n: int): str:
+    if en:
+        ret "" + n
+    end
+    ret str.ToPersianDigits("" + n)
+end
+
+func parse_base(base: str, host &: str, port &: int, secure &: bool, prefix &: str):
+    mut rest := base
+    secure = true
+    port = 443
+    if str.StartsWith(rest, "http://"):
+        secure = false
+        port = 80
+        rest = rest.substr(7, rest.len() - 7)
+    else str.StartsWith(rest, "https://"):
+        rest = rest.substr(8, rest.len() - 8)
+    end
+    slash := rest.find("/")
+    prefix = ""
+    if slash >= 0:
+        prefix = str.TrimSuffix(rest.substr(slash, rest.len() - slash), "/")
+        rest = rest.substr(0, slash)
+    end
+    colon := rest.find(":")
+    if colon > 0:
+        port = rest.substr(colon + 1, rest.len() - colon - 1).to_int()
+        rest = rest.substr(0, colon)
+    end
+    host = rest
+end
+
+func hex_value(s: str): int:
+    mut v := 0
+    mut i := 0
+    hexd := "0123456789abcdef"
+    lower := str.Lower(str.Trim(s))
+    until i < lower.len():
+        c := lower.substr(i, 1)
+        if c == ";":
+            break
+        end
+        d := hexd.find(c)
+        if d < 0:
+            ret -1
+        end
+        v = v * 16 + d
+        i += 1
+    end
+    if i == 0:
+        ret -1
+    end
+    ret v
+end
+
+func dechunk(raw: str): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut pos := 0
+    until pos < raw.len():
+        rest := raw.substr(pos, raw.len() - pos)
+        le := rest.find("\r\n")
+        if le < 0:
+            break
+        end
+        size := hex_value(rest.substr(0, le))
+        if size <= 0:
+            break
+        end
+        if rest.len() < le + 2 + size:
+            break
+        end
+        str.BufAppend(b, rest.substr(le + 2, size))
+        pos = pos + le + 2 + size + 2
+    end
+    ret str.BufStr(b)
+end
+
+func complete(raw: str): bool:
+    he := raw.find("\r\n\r\n")
+    if he < 0:
+        ret false
+    end
+    head := str.Lower(raw.substr(0, he))
+    got := raw.len() - he - 4
+    if head.find("transfer-encoding: chunked") >= 0:
+        ret str.EndsWith(raw, "0\r\n\r\n")
+    end
+    cl := head.find("content-length:")
+    if cl >= 0:
+        tail := head.substr(cl + 15, head.len() - cl - 15)
+        le := tail.find("\r\n")
+        want := str.Trim(le >= 0 ? tail.substr(0, le) : tail).to_int()
+        ret got >= want
+    end
+    ret false
+end
+
+func exchange(req: str, wait_ms: int): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    if SECURE:
+        cfg := tls.NewConfig(HOST)
+        mut c := tls.Dial(HOST, PORT, cfg)
+        if not tls.ConnOk(c):
+            tls.Close(c)
+            ret ""
+        end
+        tcp.SetDeadline(tcp.ConnFromFd(tls.Fd(c)), wait_ms)
+        if tls.Write(c, req) <= 0:
+            tls.Close(c)
+            ret ""
+        end
+        mut seen := ""
+        until true:
+            got := tls.Read(c, 65536)
+            if got.len() == 0:
+                break
+            end
+            str.BufAppend(b, got)
+            seen = seen + got
+            if complete(seen):
+                break
+            end
+        end
+        tls.Close(c)
+    else:
+        c := tcp.Dial(HOST, PORT)
+        if not tcp.ConnOk(c):
+            tcp.Close(c)
+            ret ""
+        end
+        tcp.SetDeadline(c, wait_ms)
+        if tcp.Write(c, req) <= 0:
+            tcp.Close(c)
+            ret ""
+        end
+        mut seen := ""
+        until true:
+            got := tcp.Read(c, 65536)
+            if got.len() == 0:
+                break
+            end
+            str.BufAppend(b, got)
+            seen = seen + got
+            if complete(seen):
+                break
+            end
+        end
+        tcp.Close(c)
+    end
+    ret str.BufStr(b)
+end
+
+func call(method: str, body: str, wait_ms: int): str:
+    req := "POST " + PREFIX + "/bot" + TOKEN + "/" + method + " HTTP/1.1\r\nHost: " + HOST + "\r\nUser-Agent: salam-ai\r\nAccept: application/json\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: " + body.len() + "\r\n\r\n" + body
+    raw := exchange(req, wait_ms)
+    he := raw.find("\r\n\r\n")
+    if he < 0:
+        ret ""
+    end
+    head := str.Lower(raw.substr(0, he))
+    mut rest := raw.substr(he + 4, raw.len() - he - 4)
+    if head.find("transfer-encoding: chunked") >= 0:
+        rest = dechunk(rest)
+    end
+    ret rest
+end
+
+func api(method: str, body: str): str:
+    mut resp := call(method, body, CALL_MS)
+    if json.Get(resp, "error_code") == "429":
+        mut wait := json.GetPath(resp, "parameters.retry_after").to_int()
+        if wait <= 0 or wait > 20:
+            wait = 3
+        end
+        sync.SleepMs(wait * 1000 + 200)
+        resp = call(method, body, CALL_MS)
+    end
+    ret resp
+end
+
+func is_ok(resp: str): bool:
+    ret json.Get(resp, "ok") == "true"
+end
+
+func parse_error(resp: str): bool:
+    ret json.Get(resp, "description").find("parse entities") >= 0
+end
+
+func log_fail(method: str, resp: str):
+    println "salam-ai telegram:", method, "failed:", json.Get(resp, "description")
+end
+
+func send_plain(chat: str, text: str, markup: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("chat_id", chat))
+    m.push(json.Member("text", text))
+    m.push(json.MemberRaw("link_preview_options", `{"is_disabled": true}`))
+    if markup.len() > 0:
+        m.push(json.MemberRaw("reply_markup", markup))
+    end
+    resp := api("sendMessage", json.Object(m))
+    if is_ok(resp):
+        ret json.GetPath(resp, "result.message_id")
+    end
+    log_fail("sendMessage", resp)
+    ret ""
+end
+
+func send_md(chat: str, md: str, markup: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("chat_id", chat))
+    m.push(json.Member("text", aitgmd.Html(md)))
+    m.push(json.Member("parse_mode", "HTML"))
+    m.push(json.MemberRaw("link_preview_options", `{"is_disabled": true}`))
+    if markup.len() > 0:
+        m.push(json.MemberRaw("reply_markup", markup))
+    end
+    resp := api("sendMessage", json.Object(m))
+    if is_ok(resp):
+        ret json.GetPath(resp, "result.message_id")
+    end
+    if parse_error(resp):
+        ret send_plain(chat, md, markup)
+    end
+    log_fail("sendMessage", resp)
+    ret ""
+end
+
+func edit_md(chat: str, mid: str, md: str, markup: str): bool:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("chat_id", chat))
+    m.push(json.MemberRaw("message_id", mid))
+    m.push(json.Member("text", aitgmd.Html(md)))
+    m.push(json.Member("parse_mode", "HTML"))
+    m.push(json.MemberRaw("link_preview_options", `{"is_disabled": true}`))
+    if markup.len() > 0:
+        m.push(json.MemberRaw("reply_markup", markup))
+    end
+    resp := api("editMessageText", json.Object(m))
+    if is_ok(resp) or json.Get(resp, "description").find("not modified") >= 0:
+        ret true
+    end
+    if parse_error(resp):
+        mut p := Vector {} as Vector<str>
+        p.push(json.MemberRaw("chat_id", chat))
+        p.push(json.MemberRaw("message_id", mid))
+        p.push(json.Member("text", md))
+        again := api("editMessageText", json.Object(p))
+        ret is_ok(again) or json.Get(again, "description").find("not modified") >= 0
+    end
+    log_fail("editMessageText", resp)
+    ret false
+end
+
+func typing(chat: str):
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("chat_id", chat))
+    m.push(json.Member("action", "typing"))
+    _r := call("sendChatAction", json.Object(m), 8000)
+end
+
+func delete_message(chat: str, mid: str):
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("chat_id", chat))
+    m.push(json.MemberRaw("message_id", mid))
+    _r := call("deleteMessage", json.Object(m), 8000)
+end
+
+func answer_callback(id: str, text: str):
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("callback_query_id", id))
+    if text.len() > 0:
+        m.push(json.Member("text", text))
+    end
+    _r := call("answerCallbackQuery", json.Object(m), 8000)
+end
+
+func url_button(label: str, url: str): str:
+    ret `{"inline_keyboard": [[{` + json.Member("text", label) + ", " + json.Member("url", url) + "}]]}"
+end
+
+func cb_button(label: str, data: str): str:
+    ret "{" + json.Member("text", label) + ", " + json.Member("callback_data", data) + "}"
+end
+
+func keyboard(rows: Vector<str>): str:
+    mut out := Vector {} as Vector<str>
+    each r in rows:
+        out.push("[" + r + "]")
+    end
+    ret `{"inline_keyboard": [` + str.Join(out, ", ") + "]}"
+end
+
+func short_title(text: str): str:
+    mut t := str.Trim(str.Replace(str.Replace(text, "\r", " "), "\n", " "))
+    cps := str.CodePoints(t)
+    if cps.len() > 48:
+        mut b := str.NewBuilder()
+        defer str.BufFree(b)
+        repeat 48 in i:
+            str.BufAppendCp(b, cps.get(i))
+        end
+        t = str.Trim(str.BufStr(b)) + "…"
+    end
+    if t.len() == 0:
+        ret DEFAULT_TITLE
+    end
+    ret t
+end
+
+func plus_one(s: str): str:
+    mut digs := Vector {} as Vector<int>
+    each ch in s.bytes():
+        digs.push((ch as int) - 48)
+    end
+    mut i := digs.len() - 1
+    mut carry := true
+    until i >= 0 and carry:
+        if digs.get(i) == 9:
+            digs.set(i, 0)
+            i -= 1
+        else:
+            digs.set(i, digs.get(i) + 1)
+            carry = false
+        end
+    end
+    mut out := carry ? "1" : ""
+    each d in digs:
+        out = out + d
+    end
+    ret out
+end
+
+func state_get(key: str): str:
+    aistore.Lock()
+    v := aistore.OneText("SELECT v FROM telegram_state WHERE k = ?1", one(key))
+    aistore.Unlock()
+    ret v
+end
+
+func state_set(key: str, value: str):
+    aistore.Lock()
+    _r := aistore.Run("REPLACE INTO telegram_state (k, v) VALUES (?1, ?2)", two(key, value))
+    aistore.Unlock()
+end
+
+func claim(chat: str): bool:
+    _l := sync.Lock(STATE_LOCK)
+    free := not BUSY.has(chat)
+    if free:
+        BUSY.put(chat, "1")
+    end
+    _u := sync.Unlock(STATE_LOCK)
+    ret free
+end
+
+func release(chat: str):
+    _l := sync.Lock(STATE_LOCK)
+    _r := BUSY.remove(chat)
+    _u := sync.Unlock(STATE_LOCK)
+end
+
+func flooded(chat: str): bool:
+    minute := i64s(aistore.Now() / 60)
+    _l := sync.Lock(STATE_LOCK)
+    mut count := 0
+    if FLOOD.has(chat):
+        v := FLOOD.get(chat)
+        bar := v.find("|")
+        if bar > 0 and v.substr(0, bar) == minute:
+            count = v.substr(bar + 1, v.len() - bar - 1).to_int()
+        end
+    end
+    count += 1
+    if FLOOD.size() > 5000:
+        FLOOD = HashMap {} as HashMap<str, str>
+    end
+    FLOOD.put(chat, minute + "|" + count)
+    _u := sync.Unlock(STATE_LOCK)
+    ret count > FLOOD_PER_MINUTE
+end
+
+func mark_stopped(sid: str, flag: bool):
+    _l := sync.Lock(STATE_LOCK)
+    if flag:
+        STOPPED.put(sid, "1")
+    else:
+        _r := STOPPED.remove(sid)
+    end
+    _u := sync.Unlock(STATE_LOCK)
+end
+
+func was_stopped(sid: str): bool:
+    _l := sync.Lock(STATE_LOCK)
+    v := STOPPED.has(sid)
+    _u := sync.Unlock(STATE_LOCK)
+    ret v
+end
+
+func who_of(tg: str, chat: str, name: str, username: str, code: str): Who:
+    mut w := Who { tg = tg, chat = chat, name = name, username = username }
+    mut lang := ""
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT user_id, chat_id, lang FROM telegram_links WHERE tg_id = ?1", one(tg))
+    if aistore.Next(rows):
+        w.uid = aistore.Text(rows, 0)
+        w.cur = aistore.Text(rows, 1)
+        lang = aistore.Text(rows, 2)
+    end
+    aistore.Finish(rows)
+    if w.uid.len() == 0:
+        lang = aistore.OneText("SELECT lang FROM telegram_guests WHERE tg_id = ?1", one(tg))
+    end
+    aistore.Unlock()
+    if lang.len() == 0:
+        lang = state_get("lang:" + tg)
+    end
+    w.known = lang.len() > 0
+    if lang.len() == 0:
+        lang = (code.len() == 0 or str.StartsWith(code, "fa")) ? "fa" : "en"
+    end
+    w.en = lang == "en"
+    ret w
+end
+
+func apply_menu(w: Who):
+    body := "{" + json.MemberRaw("commands", commands_json(w.en)) + `, "scope": {"type": "chat", "chat_id": ` + w.chat + "}}"
+    _r := call("setMyCommands", body, 8000)
+    state_set("menu:" + w.tg, w.en ? "en" : "fa")
+end
+
+func ask_language(w: Who, payload: str):
+    state_set("start:" + w.tg, payload)
+    mut rows := Vector {} as Vector<str>
+    rows.push(cb_button("فارسی", "l:fa") + ", " + cb_button("English", "l:en"))
+    _m := send_plain(w.chat, "زبان خود را انتخاب کنید\nChoose your language", keyboard(rows))
+end
+
+func choose_language(w: Who, en: bool):
+    lang := en ? "en" : "fa"
+    state_set("lang:" + w.tg, lang)
+    mut chosen := w
+    chosen.en = en
+    chosen.known = true
+    set_lang(chosen, en)
+    apply_menu(chosen)
+    payload := state_get("start:" + w.tg)
+    state_set("start:" + w.tg, "")
+    if payload.len() > 0:
+        start_payload(chosen, payload)
+    else:
+        welcome(chosen)
+    end
+end
+
+func touch_seen(w: Who):
+    now := i64s(aistore.Now())
+    aistore.Lock()
+    if w.uid.len() > 0:
+        _a := aistore.Run("UPDATE telegram_links SET last_seen = ?1, tg_chat = ?2, name = ?3, username = ?4 WHERE tg_id = ?5", five(now, w.chat, w.name, w.username, w.tg))
+    else:
+        _b := aistore.Run("UPDATE telegram_guests SET last_seen = ?1, tg_chat = ?2, name = ?3, username = ?4 WHERE tg_id = ?5", five(now, w.chat, w.name, w.username, w.tg))
+    end
+    aistore.Unlock()
+    sync_menu(w)
+end
+
+func sync_menu(w: Who):
+    if not w.known:
+        ret
+    end
+    if state_get("menu:" + w.tg) != (w.en ? "en" : "fa"):
+        apply_menu(w)
+    end
+end
+
+func five(v: str, w: str, x: str, y: str, z: str): Vector<str>:
+    mut a := four(v, w, x, y)
+    a.push(z)
+    ret a
+end
+
+func set_lang(w: Who, en: bool):
+    lang := en ? "en" : "fa"
+    state_set("lang:" + w.tg, lang)
+    aistore.Lock()
+    _a := aistore.Run("UPDATE telegram_links SET lang = ?1 WHERE tg_id = ?2", two(lang, w.tg))
+    _b := aistore.Run("UPDATE telegram_guests SET lang = ?1 WHERE tg_id = ?2", two(lang, w.tg))
+    aistore.Unlock()
+end
+
+func login_url(w: Who): str:
+    code := crypto.RandomHex(16)
+    now := aistore.Now()
+    mut a := four(aiweb.Hash(code), w.tg, w.chat, w.name)
+    a.push(w.username)
+    a.push(w.en ? "en" : "fa")
+    a.push(i64s(now + CODE_SECONDS))
+    aistore.Lock()
+    _d := aistore.Run("DELETE FROM telegram_codes WHERE (kind = 'bot' AND tg_id = ?1) OR expires < ?2", two(w.tg, i64s(now)))
+    ok := aistore.Run("INSERT INTO telegram_codes (code, kind, tg_id, tg_chat, user_id, name, username, lang, expires) VALUES (?1, 'bot', ?2, ?3, 0, ?4, ?5, ?6, ?7)", a)
+    aistore.Unlock()
+    if not ok:
+        ret ""
+    end
+    ret APP_URL + "/telegram?code=" + code
+end
+
+func login_prompt(w: Who, text: str):
+    url := login_url(w)
+    if url.len() == 0:
+        _m := send_plain(w.chat, tr(w.en, "ساخت پیوند ورود ناموفق بود. چند لحظه بعد دوباره تلاش کنید.", "Could not create the sign in link. Please try again in a moment."), "")
+        ret
+    end
+    label := tr(w.en, "ورود یا ثبت‌نام", "Sign in or sign up")
+    _m := send_md(w.chat, text, url_button(label, url))
+end
+
+func help_text(w: Who): str:
+    if w.en:
+        ret "**Salam AI on Telegram**\n\nJust write your question. Commands:\n\n/new start a fresh chat\n/chats your chats (signed in)\n/stop stop the answer being written\n/login sign in or sign up\n/logout disconnect this Telegram from your account\n/account your account and plan\n/github connect GitHub (private repositories)\n/figma connect Figma\n/sandbox your command sandbox\n/lang switch between Persian and English\n/help this message"
+    end
+    ret "**دستیار سلام در تلگرام**\n\nکافی است سؤالتان را بنویسید. دستورها:\n\n/new شروع گفت‌وگوی تازه\n/chats گفت‌وگوهای شما (بعد از ورود)\n/stop متوقف کردن پاسخ در حال نوشته شدن\n/login ورود یا ثبت‌نام\n/logout جدا کردن این تلگرام از حساب\n/account حساب و پلن شما\n/github وصل کردن GitHub (مخازن خصوصی)\n/figma وصل کردن Figma\n/sandbox محیط اجرای دستورها\n/lang تغییر زبان بین فارسی و انگلیسی\n/help همین راهنما"
+end
+
+func welcome(w: Who):
+    apply_menu(w)
+    if w.uid.len() > 0:
+        _m := send_md(w.chat, tr(w.en, "سلام دوباره! به حساب سلام وصل هستید و گفت‌وگوهایتان همین‌جا و در سایت یکی است. سؤالتان را بنویسید یا با /chats گفت‌وگوهای قبلی را باز کنید.", "Welcome back! You are connected to your Salam account, and your chats are the same here and on the website. Ask a question or open an earlier chat with /chats."), "")
+        ret
+    end
+    text := tr(w.en, "سلام! من دستیار هوش مصنوعی سلام هستم. هر چیزی درباره‌ی زبان برنامه‌نویسی سلام یا برنامه‌نویسی بپرسید.\n\nالان مهمان هستید و تا " + digits(false, GUEST_LIMIT) + " پیام می‌توانید بفرستید. با ورود یا ثبت‌نام در حساب سلام، تاریخچه‌ی گفت‌وگوها ذخیره می‌شود و سقف پیام‌ها بیشتر است.", "Hi! I am the Salam AI assistant. Ask me anything about the Salam programming language or programming in general.\n\nYou are a guest for now and can send up to " + digits(true, GUEST_LIMIT) + " messages. Sign in or sign up for a Salam account to keep your chat history and get higher limits.")
+    login_prompt(w, text)
+end
+
+func new_guest(w: Who): str:
+    token := aiweb.Hash(crypto.RandomToken(32))
+    now := i64s(aistore.Now())
+    mut a := three(token, "telegram", now)
+    a.push(w.en ? "en" : "fa")
+    aistore.Lock()
+    ok := aistore.Run("INSERT INTO guest_sessions (token, ip, created, updated, lang) VALUES (?1, ?2, ?3, ?3, ?4)", a)
+    gid := ok ? aistore.LastId() : ""
+    if gid.len() > 0:
+        mut b := four(w.tg, gid, w.chat, w.name)
+        b.push(w.username)
+        b.push(w.en ? "en" : "fa")
+        b.push(now)
+        _t := aistore.Run("REPLACE INTO telegram_guests (tg_id, guest_id, tg_chat, name, username, lang, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)", b)
+    end
+    aistore.Unlock()
+    ret gid
+end
+
+func queue_watch(kind: str, w: Who, mid: str, sid: str, created: i64, owner: str):
+    job := kind + "|" + w.chat + "|" + mid + "|" + sid + "|" + i64s(created) + "|" + owner + "|" + (w.en ? "1" : "0")
+    WATCH.send(job)
+end
+
+func guest_turn(w: Who, text: str):
+    if text.len() > MAX_GUEST_TEXT:
+        _m := send_plain(w.chat, tr(w.en, "پیام خیلی بلند است. بعد از ورود می‌توانید پیام بلندتر بفرستید.", "The message is too long. After signing in you can send longer messages."), "")
+        ret
+    end
+    aistore.Lock()
+    mut gid := aistore.OneText("SELECT guest_id FROM telegram_guests WHERE tg_id = ?1", one(w.tg))
+    aistore.Unlock()
+    if gid.len() == 0:
+        gid = new_guest(w)
+        if gid.len() == 0:
+            _m := send_plain(w.chat, tr(w.en, "شروع گفت‌وگو ناموفق بود. دوباره تلاش کنید.", "Starting the chat failed. Please try again."), "")
+            ret
+        end
+    end
+    now := aistore.Now()
+    aistore.Lock()
+    used := aistore.OneText("SELECT messages FROM guest_sessions WHERE id = ?1", one(gid)).to_int()
+    mut sid := aistore.OneText("SELECT engine_sid FROM guest_sessions WHERE id = ?1", one(gid))
+    pending := aistore.OneText("SELECT COUNT(*) FROM guest_messages WHERE guest_id = ?1 AND status = 'pending' AND created > ?2", two(gid, i64s(now - PENDING_SECONDS - 60))).to_int()
+    aistore.Unlock()
+    if used >= GUEST_LIMIT:
+        login_prompt(w, tr(w.en, "گفت‌وگوی مهمان به سقف " + digits(false, GUEST_LIMIT) + " پیام رسید. برای ادامه، رایگان ثبت‌نام کنید یا وارد شوید.", "This guest chat reached its " + digits(true, GUEST_LIMIT) + " message limit. Sign up for free or sign in to keep going."))
+        ret
+    end
+    if pending > 0:
+        _m := send_plain(w.chat, tr(w.en, "هنوز پاسخ پیام قبلی کامل نشده است. برای متوقف کردن آن /stop را بفرستید.", "The answer to the previous message is not finished yet. Send /stop to cancel it."), "")
+        ret
+    end
+    if sid.len() == 0:
+        sid = aiengine.NewSession("guest " + gid)
+        if sid.len() == 0:
+            _m := send_plain(w.chat, tr(w.en, "دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.", "The assistant is not available. Please try again in a moment."), "")
+            ret
+        end
+        aistore.Lock()
+        _s := aistore.Run("UPDATE guest_sessions SET engine_sid = ?1 WHERE id = ?2", two(sid, gid))
+        aistore.Unlock()
+    end
+    t := i64s(now)
+    aistore.Lock()
+    _u := aistore.Run("INSERT INTO guest_messages (guest_id, role, body, status, created) VALUES (?1, 'user', ?2, 'done', ?3)", three(gid, text, t))
+    _a := aistore.Run("INSERT INTO guest_messages (guest_id, role, body, status, created) VALUES (?1, 'assistant', '', 'pending', ?2)", two(gid, t))
+    mid := aistore.LastId()
+    _g := aistore.Run("UPDATE guest_sessions SET messages = messages + 1, updated = ?1 WHERE id = ?2", two(t, gid))
+    aistore.Unlock()
+    ailive.Begin(sid)
+    aiturn.Forget(sid)
+    if not aiengine.Send(sid, aiweb.LangNote(w.en) + aipolicy.Defang(text), ""):
+        ailive.End(sid)
+        aistore.Lock()
+        _e := aistore.Run("UPDATE guest_messages SET status = 'error' WHERE id = ?1", one(mid))
+        aistore.Unlock()
+        _m := send_plain(w.chat, tr(w.en, "دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.", "The assistant is not available. Please try again in a moment."), "")
+        ret
+    end
+    queue_watch("g", w, mid, sid, now, gid)
+end
+
+func new_chat(w: Who): str:
+    id := crypto.RandomHex(12)
+    t := i64s(aistore.Now())
+    cloud := aicloud.Enabled() ? "1" : "0"
+    mut a := four(id, w.uid, DEFAULT_TITLE, t)
+    a.push(cloud)
+    a.push(cloud == "1" ? crypto.RandomHex(16) : "")
+    aistore.Lock()
+    ok := aistore.Run("INSERT INTO chats (id, user_id, title, created, updated, source, cloud, bridge_token) VALUES (?1, ?2, ?3, ?4, ?4, 'telegram', ?5, ?6)", a)
+    if ok:
+        _l := aistore.Run("UPDATE telegram_links SET chat_id = ?1 WHERE tg_id = ?2", two(id, w.tg))
+    end
+    aistore.Unlock()
+    ret ok ? id : ""
+end
+
+func current_chat(w: Who): str:
+    if w.cur.len() > 0:
+        aistore.Lock()
+        mine := aistore.OneText("SELECT id FROM chats WHERE id = ?1 AND user_id = ?2", two(w.cur, w.uid))
+        aistore.Unlock()
+        if mine.len() > 0:
+            ret mine
+        end
+    end
+    ret new_chat(w)
+end
+
+func settle_user(mid: str, sid: str, created: i64, en: bool, limit: i64): aiengine.Reply:
+    mut r := aiturn.Progress(sid, created, limit)
+    if r.done:
+        mut status := "done"
+        mut body := r.text
+        if r.failed and body.len() == 0:
+            status = "error"
+            body = r.timed_out ? tr(en, "این نوبت بیش از حد طول کشید و متوقف شد. بنویسید «ادامه بده» تا از همین‌جا ادامه دهد.", "This turn took too long and was stopped. Write \"continue\" to pick up from here.") : tr(en, "دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید.", "The assistant could not answer just now. Please ask again in a moment.")
+        end
+        aistore.Lock()
+        _u := aistore.Run("UPDATE messages SET body = ?1, status = ?2, activity = ?4 WHERE id = ?3 AND status = 'pending'", four(body, status, mid, "[]"))
+        aistore.Unlock()
+        r.text = body
+        r.failed = status == "error"
+        if sid.len() > 0:
+            mut usage := aiengine.UsageOf(sid)
+            if usage.ms <= 0:
+                usage.ms = time.NowMillis() - created * 1000
+            end
+            aiturn.SaveUsage("messages", mid, usage)
+            ailive.End(sid)
+            aiturn.Forget(sid)
+            aiengine.Forget(sid)
+        end
+    end
+    ret r
+end
+
+func user_turn(w: Who, text: str):
+    if text.len() > MAX_TEXT:
+        _m := send_plain(w.chat, tr(w.en, "پیام خیلی بلند است. آن را کوتاه‌تر کنید.", "The message is too long. Please shorten it."), "")
+        ret
+    end
+    id := current_chat(w)
+    if id.len() == 0:
+        _m := send_plain(w.chat, tr(w.en, "ساخت گفت‌وگو ناموفق بود.", "Creating the chat failed."), "")
+        ret
+    end
+    now := aistore.Now()
+    aistore.Lock()
+    pending := aistore.OneText("SELECT COUNT(*) FROM messages WHERE chat_id = ?1 AND status = 'pending' AND created > ?2", two(id, i64s(now - PENDING_SECONDS - 60))).to_int()
+    recent := aistore.OneText("SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?1 AND m.role = 'user' AND m.created > ?2", two(w.uid, i64s(now - 3600))).to_int()
+    title := aistore.OneText("SELECT title FROM chats WHERE id = ?1", one(id))
+    mut sid := aistore.OneText("SELECT engine_sid FROM chats WHERE id = ?1", one(id))
+    token := aistore.OneText("SELECT bridge_token FROM chats WHERE id = ?1 AND cloud = 1", one(id))
+    aistore.Unlock()
+    if pending > 0:
+        _m := send_plain(w.chat, tr(w.en, "هنوز پاسخ پیام قبلی کامل نشده است. برای متوقف کردن آن /stop را بفرستید.", "The answer to the previous message is not finished yet. Send /stop to cancel it."), "")
+        ret
+    end
+    limits := aibilling.LimitsOf(w.uid)
+    if limits.chat_hourly > 0 and recent >= limits.chat_hourly:
+        _m := send_plain(w.chat, tr(w.en, "پیام‌های این ساعت پلن «" + limits.name + "» تمام شد. کمی بعد دوباره تلاش کنید یا پلن را ارتقا دهید.", "You have used this hour's messages on the " + limits.name + " plan. Try again a little later or upgrade your plan."), "")
+        ret
+    end
+    mut fresh := false
+    if sid.len() == 0:
+        fresh = true
+        sid = aiengine.NewSession("chat " + id)
+        if sid.len() == 0:
+            _m := send_plain(w.chat, tr(w.en, "دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.", "The assistant is not available. Please try again in a moment."), "")
+            ret
+        end
+        aistore.Lock()
+        _s := aistore.Run("UPDATE chats SET engine_sid = ?1 WHERE id = ?2", two(sid, id))
+        aistore.Unlock()
+    end
+    t := i64s(now)
+    aistore.Lock()
+    _a := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created) VALUES (?1, 'user', ?2, 'done', ?3)", three(id, text, t))
+    _b := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created) VALUES (?1, 'assistant', '', 'pending', ?2)", two(id, t))
+    mid := aistore.LastId()
+    _c := aistore.Run("UPDATE chats SET title = ?1, updated = ?2 WHERE id = ?3", three(title == DEFAULT_TITLE ? short_title(text) : title, t, id))
+    aistore.Unlock()
+    recall := fresh ? aimemory.Recall(w.uid, id) : ""
+    mut free_system := ""
+    free := aiweb.PolicyOf(w.uid, free_system)
+    prompt := aiweb.LangNote(w.en) + aipolicy.Defang(text) + recall
+    ailive.Begin(sid)
+    aiturn.Forget(sid)
+    aiturn.Relax(sid, free)
+    mut sent := false
+    if token.len() > 0:
+        preamble := aicloud.Prelude(token, w.uid) + prompt
+        sent = free ? aiengine.SendDesktopFree(sid, preamble, "", free_system) : aiengine.SendDesktop(sid, preamble, "")
+    else:
+        sent = free ? aiengine.SendFree(sid, prompt, "", free_system) : aiengine.Send(sid, prompt, "")
+    end
+    if not sent:
+        ailive.End(sid)
+        aistore.Lock()
+        _e := aistore.Run("UPDATE messages SET status = 'error', body = ?1 WHERE id = ?2", two("دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.", mid))
+        aistore.Unlock()
+        _m := send_plain(w.chat, tr(w.en, "دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.", "The assistant is not available. Please try again in a moment."), "")
+        ret
+    end
+    queue_watch(token.len() > 0 ? "c" : "u", w, mid, sid, now, w.uid)
+end
+
+func show(chat: str, text: str, ids &: Vector<str>, texts &: Vector<str>, markup: str):
+    chunks := aitgmd.Split(text, CHUNK)
+    n := chunks.len()
+    mut i := 0
+    until i < n:
+        chunk := chunks.get(i)
+        last := i == n - 1
+        extra := last ? markup : ""
+        if i < ids.len():
+            if texts.get(i) != chunk or extra.len() > 0:
+                if edit_md(chat, ids.get(i), chunk, extra):
+                    texts.set(i, chunk)
+                end
+            end
+        else:
+            sent := send_md(chat, chunk, extra)
+            if sent.len() > 0:
+                ids.push(sent)
+                texts.push(chunk)
+            end
+        end
+        i += 1
+    end
+end
+
+func footer(w: Who, kind: str, owner: str): str:
+    if kind != "g":
+        ret ""
+    end
+    aistore.Lock()
+    used := aistore.OneText("SELECT messages FROM guest_sessions WHERE id = ?1", one(owner)).to_int()
+    aistore.Unlock()
+    left := GUEST_LIMIT - used
+    if left > 3:
+        ret ""
+    end
+    if left <= 0:
+        ret "\n\n" + tr(w.en, "پیام‌های مهمان تمام شد. برای ادامه وارد شوید.", "Guest messages are used up. Sign in to continue.")
+    end
+    ret "\n\n" + tr(w.en, "پیام‌های مهمان باقی‌مانده: " + digits(false, left), "Guest messages left: " + digits(true, left))
+end
+
+func steps_text(mid: str): str:
+    mut lines := Vector {} as Vector<str>
+    aistore.Lock()
+    mut q := aistore.Stmt("SELECT summary, state, tool FROM bridge_calls WHERE message_id = ?1 ORDER BY seq DESC LIMIT 6", one(mid))
+    until aistore.Next(q):
+        mut label := aistore.Text(q, 0)
+        if label.len() == 0:
+            label = aistore.Text(q, 2)
+        end
+        if label.len() > 90:
+            label = label.substr(0, aitgmd_cut(label, 90)) + "…"
+        end
+        state := aistore.Text(q, 1)
+        mark := state == "done" ? "✓ " : (state == "running" ? "… " : "✗ ")
+        lines.push(mark + label)
+    end
+    aistore.Finish(q)
+    aistore.Unlock()
+    mut ordered := Vector {} as Vector<str>
+    mut i := lines.len() - 1
+    until i < 0:
+        ordered.push(lines.get(i))
+        i -= 1
+    end
+    ret str.Join(ordered, "\n")
+end
+
+func phase_label(phase: str, en: bool): str:
+    if phase == "searching":
+        ret tr(en, "در حال جست‌وجو در مستندات", "Searching the docs")
+    end
+    if phase == "writing":
+        ret tr(en, "در حال نوشتن پاسخ", "Writing the answer")
+    end
+    if phase == "checking":
+        ret tr(en, "در حال بررسی کد با کامپایلر سلام", "Checking the code with the Salam compiler")
+    end
+    ret tr(en, "در حال فکر کردن", "Thinking")
+end
+
+func first_line(s: str, max: int): str:
+    t := str.Trim(s)
+    nl := t.find("\n")
+    mut line := nl >= 0 ? t.substr(0, nl) : t
+    if line.len() > max:
+        line = line.substr(0, aitgmd_cut(line, max)) + "…"
+    end
+    ret line
+end
+
+func tail_text(s: str, max: int): str:
+    t := str.Trim(s)
+    if t.len() <= max:
+        ret t
+    end
+    mut cut := t.len() - max
+    until cut < t.len() and ((t[cut] as int) < 128 or (t[cut] as int) >= 192):
+        cut += 1
+    end
+    ret "…" + t.substr(cut, t.len() - cut)
+end
+
+func activity_text(sid: str, en: bool): str:
+    items := json.Items(ailive.Activity(sid, false))
+    mut tools := Vector {} as Vector<str>
+    mut thought := ""
+    mut i := items.len() - 1
+    until i >= 0 and (tools.len() < 3 or thought.len() == 0):
+        it := items.get(i)
+        kind := json.Get(it, "kind")
+        if kind == "tool" and tools.len() < 3:
+            mut title := json.Get(it, en ? "title_en" : "title")
+            if title.len() == 0:
+                title = json.Get(it, "title")
+            end
+            if title.len() > 0:
+                tools.push((json.Get(it, "status") == "running" ? "… " : "✓ ") + first_line(title, 80))
+            end
+        else kind == "think" and thought.len() == 0:
+            thought = tail_text(json.Get(it, "text"), 280)
+        end
+        i -= 1
+    end
+    mut ordered := Vector {} as Vector<str>
+    mut k := tools.len() - 1
+    until k >= 0:
+        ordered.push(tools.get(k))
+        k -= 1
+    end
+    if thought.len() > 0:
+        ordered.push("💭 " + thought)
+    end
+    ret str.Join(ordered, "\n")
+end
+
+func status_text(sid: str, mid: str, kind: str, phase: str, secs: i64, en: bool): str:
+    mut head := phase_label(phase, en) + "..."
+    mut limit_note := ""
+    mut limit_wait := 0 as i64
+    if aiengine.Retrying(sid, limit_note, limit_wait):
+        lowered := str.Lower(limit_note)
+        if lowered.find("rate") >= 0 or lowered.find("limit") >= 0 or lowered.find("429") >= 0 or lowered.find("exceeded") >= 0:
+            head = tr(en, "سرویس مدل الان محدود شده و پاسخ‌دهی کند است؛ منتظر می‌مانم و دوباره تلاش می‌کنم", "The model service is rate limited right now, so answers are slow; waiting and retrying")
+        else:
+            head = tr(en, "سرویس مدل پاسخ نداد؛ دوباره تلاش می‌کنم", "The model service did not answer; retrying")
+        end
+        if limit_wait >= 1000:
+            head = head + tr(en, " (حدود ", " (about ") + digits(en, (limit_wait / 1000) as int) + tr(en, " ثانیه)", "s)")
+        end
+        if limit_note.len() > 0 and limit_note.len() <= 140:
+            head = head + "\n" + limit_note
+        end
+        head = head + "..."
+    end
+    if secs >= 5:
+        head = head + " (" + digits(en, (secs / 5 * 5) as int) + tr(en, " ثانیه", "s") + ")"
+    end
+    mut lines := activity_text(sid, en)
+    if lines.len() == 0 and kind == "c":
+        lines = steps_text(mid)
+    end
+    if lines.len() == 0:
+        ret head
+    end
+    ret head + "\n\n" + lines
+end
+
+func watch(job: str):
+    p := job.split("|")
+    if p.len() < 7:
+        ret
+    end
+    kind := p.get(0)
+    chat := p.get(1)
+    mid := p.get(2)
+    sid := p.get(3)
+    created := p.get(4).to_int() as i64
+    owner := p.get(5)
+    en := p.get(6) == "1"
+    w := Who { chat = chat, en = en }
+    began := time.NowMillis()
+    mut ids := Vector {} as Vector<str>
+    mut texts := Vector {} as Vector<str>
+    holder := send_md(chat, phase_label("thinking", en) + "...", "")
+    if holder.len() > 0:
+        ids.push(holder)
+        texts.push("")
+    end
+    mut shown := ""
+    mut shown_len := 0
+    mut shown_status := phase_label("thinking", en) + "..."
+    mut last_edit := time.NowMillis() - EDIT_MS
+    mut last_status := time.NowMillis()
+    mut last_typing := 0 as i64
+    mut gen := ailive.Gen()
+    until true:
+        mut done := false
+        mut failed := false
+        mut text := ""
+        mut phase := "thinking"
+        if kind == "g":
+            mut status := "pending"
+            mut body := ""
+            phase = aiguest.Step(mid, sid, created, en, status, body)
+            text = body
+            done = status != "pending"
+            failed = status == "error"
+        else:
+            r := settle_user(mid, sid, created, en, kind == "c" ? CLOUD_SECONDS as i64 : PENDING_SECONDS as i64)
+            text = r.text
+            phase = r.phase
+            done = r.done
+            failed = r.failed
+        end
+        stopped := was_stopped(sid)
+        now := time.NowMillis()
+        if done or stopped:
+            mut final := text
+            if stopped and not done:
+                final = text + "\n\n" + tr(en, "پاسخ متوقف شد.", "Answer stopped.")
+            end
+            if final.len() == 0:
+                final = tr(en, "پاسخی نوشته نشد.", "No answer was written.")
+            end
+            show(chat, final + footer(w, kind, owner), ids, texts, "")
+            if kind == "g" and done and not failed:
+                aistore.Lock()
+                used := aistore.OneText("SELECT messages FROM guest_sessions WHERE id = ?1", one(owner)).to_int()
+                aistore.Unlock()
+                if used >= GUEST_LIMIT:
+                    login_prompt(Who { tg = "", chat = chat, en = en, name = "", username = "" }, tr(en, "برای ادامه وارد شوید.", "Sign in to continue."))
+                end
+            end
+            if stopped:
+                mark_stopped(sid, false)
+            end
+            break
+        end
+        if text.len() > 0 and text != shown and text.len() - shown_len >= GROW_BYTES and now - last_edit >= EDIT_MS:
+            show(chat, text, ids, texts, "")
+            shown = text
+            shown_len = text.len()
+            shown_status = ""
+            last_edit = time.NowMillis()
+        else (text.len() == 0 or text.len() < STATUS_TEXT_MAX) and now - last_status >= STATUS_MS:
+            status := status_text(sid, mid, kind, phase, (now - began) / 1000, en)
+            if status != shown_status or text != shown:
+                if text.len() > 0:
+                    show(chat, text + "\n\n" + status, ids, texts, "")
+                    shown = text
+                    shown_len = text.len()
+                else:
+                    show(chat, status, ids, texts, "")
+                end
+                shown_status = status
+                last_edit = time.NowMillis()
+            end
+            last_status = time.NowMillis()
+        end
+        if now - last_typing >= 4500:
+            typing(chat)
+            last_typing = now
+        end
+        if ailive.Connected():
+            gen = ailive.Wait(gen, 1000)
+            sync.SleepMs(120)
+        else:
+            sync.SleepMs(500)
+        end
+    end
+end
+
+func stop_turn(w: Who):
+    mut sid := ""
+    mut found := false
+    aistore.Lock()
+    if w.uid.len() > 0:
+        id := current_chat_nolock(w)
+        sid = aistore.OneText("SELECT engine_sid FROM chats WHERE id = ?1 AND user_id = ?2", two(id, w.uid))
+        found = aistore.OneText("SELECT COUNT(*) FROM messages WHERE chat_id = ?1 AND status = 'pending'", one(id)).to_int() > 0
+    else:
+        gid := aistore.OneText("SELECT guest_id FROM telegram_guests WHERE tg_id = ?1", one(w.tg))
+        if gid.len() > 0:
+            sid = aistore.OneText("SELECT engine_sid FROM guest_sessions WHERE id = ?1", one(gid))
+            found = aistore.OneText("SELECT COUNT(*) FROM guest_messages WHERE guest_id = ?1 AND status = 'pending'", one(gid)).to_int() > 0
+        end
+    end
+    aistore.Unlock()
+    if not found or sid.len() == 0:
+        _m := send_plain(w.chat, tr(w.en, "پاسخی در حال نوشته شدن نیست.", "No answer is being written."), "")
+        ret
+    end
+    mark_stopped(sid, true)
+    aiengine.Abort(sid)
+    r := aiengine.Poll(sid)
+    body := r.text.len() > 0 ? r.text : tr(w.en, "پاسخ متوقف شد.", "Answer stopped.")
+    aistore.Lock()
+    if w.uid.len() > 0:
+        id := current_chat_nolock(w)
+        _u := aistore.Run("UPDATE messages SET body = ?1, status = 'done' WHERE chat_id = ?2 AND status = 'pending'", two(body, id))
+    else:
+        gid := aistore.OneText("SELECT guest_id FROM telegram_guests WHERE tg_id = ?1", one(w.tg))
+        _g := aistore.Run("UPDATE guest_messages SET body = ?1, status = 'done' WHERE guest_id = ?2 AND status = 'pending'", two(body, gid))
+    end
+    aistore.Unlock()
+    ailive.End(sid)
+    aiturn.Forget(sid)
+end
+
+func current_chat_nolock(w: Who): str:
+    ret w.cur
+end
+
+func switch_chat(w: Who, id: str): bool:
+    aistore.Lock()
+    mine := aistore.OneText("SELECT title FROM chats WHERE id = ?1 AND user_id = ?2", two(id, w.uid))
+    ok := mine.len() > 0 and aistore.Run("UPDATE telegram_links SET chat_id = ?1 WHERE tg_id = ?2", two(id, w.tg))
+    last := ok ? aistore.OneText("SELECT body FROM messages WHERE chat_id = ?1 AND role = 'assistant' AND status = 'done' ORDER BY id DESC LIMIT 1", one(id)) : ""
+    aistore.Unlock()
+    if not ok:
+        ret false
+    end
+    mut recap := tr(w.en, "گفت‌وگو باز شد: ", "Chat opened: ") + mine
+    if last.len() > 0:
+        mut snippet := last
+        if snippet.len() > 400:
+            snippet = snippet.substr(0, aitgmd_cut(snippet, 400)) + "…"
+        end
+        recap = recap + "\n\n" + tr(w.en, "آخرین پاسخ:", "Last answer:") + "\n" + aiturn.Plain(snippet)
+    end
+    _m := send_plain(w.chat, recap, "")
+    ret true
+end
+
+func aitgmd_cut(s: str, max: int): int:
+    mut cut := max
+    until cut > 0:
+        b := s[cut] as int
+        if b < 128 or b >= 192:
+            break
+        end
+        cut -= 1
+    end
+    ret cut
+end
+
+func list_chats(w: Who):
+    if w.uid.len() == 0:
+        login_prompt(w, tr(w.en, "برای دیدن گفت‌وگوهایتان وارد شوید.", "Sign in to see your chats."))
+        ret
+    end
+    mut rows := Vector {} as Vector<str>
+    aistore.Lock()
+    mut q := aistore.Stmt("SELECT id, title FROM chats WHERE user_id = ?1 ORDER BY updated DESC LIMIT 8", one(w.uid))
+    until aistore.Next(q):
+        id := aistore.Text(q, 0)
+        mut title := aistore.Text(q, 1)
+        if title.len() > 60:
+            title = title.substr(0, aitgmd_cut(title, 60)) + "…"
+        end
+        rows.push(cb_button((id == w.cur ? "• " : "") + title, "c:" + id))
+    end
+    aistore.Finish(q)
+    aistore.Unlock()
+    rows.push(cb_button(tr(w.en, "گفت‌وگوی تازه", "New chat"), "n"))
+    _m := send_plain(w.chat, tr(w.en, "گفت‌وگوهای اخیر شما (همان‌هایی که در سایت می‌بینید):", "Your recent chats (the same ones you see on the website):"), keyboard(rows))
+end
+
+func account_info(w: Who):
+    if w.uid.len() == 0:
+        login_prompt(w, tr(w.en, "هنوز وارد نشده‌اید.", "You are not signed in yet."))
+        ret
+    end
+    aistore.Lock()
+    mut q := aistore.Stmt("SELECT name, email FROM users WHERE id = ?1", one(w.uid))
+    mut name := ""
+    mut email := ""
+    if aistore.Next(q):
+        name = aistore.Text(q, 0)
+        email = aistore.Text(q, 1)
+    end
+    aistore.Finish(q)
+    aistore.Unlock()
+    limits := aibilling.LimitsOf(w.uid)
+    _m := send_plain(w.chat, tr(w.en, "حساب: ", "Account: ") + name + " (" + email + ")\n" + tr(w.en, "پلن: ", "Plan: ") + limits.name + "\n" + tr(w.en, "سقف پیام در ساعت: ", "Messages per hour: ") + (limits.chat_hourly > 0 ? digits(w.en, limits.chat_hourly) : tr(w.en, "بدون سقف", "unlimited")), "")
+end
+
+func do_logout(w: Who):
+    if w.uid.len() == 0:
+        _m := send_plain(w.chat, tr(w.en, "وارد نشده‌اید.", "You are not signed in."), "")
+        ret
+    end
+    aistore.Lock()
+    _d := aistore.Run("DELETE FROM telegram_links WHERE tg_id = ?1", one(w.tg))
+    aistore.Unlock()
+    _m := send_plain(w.chat, tr(w.en, "این تلگرام از حساب جدا شد. حالا به‌عنوان مهمان ادامه می‌دهید. گفت‌وگوهای قبلی در حساب شما می‌مانند.", "This Telegram was disconnected from your account. You are a guest again. Your earlier chats stay in your account."), "")
+end
+
+func finish_link(w: Who, uid: str, user_name: str):
+    aistore.Lock()
+    mut a := four(w.tg, uid, w.chat, w.name)
+    a.push(w.username)
+    a.push(w.en ? "en" : "fa")
+    a.push(i64s(aistore.Now()))
+    count := aistore.OneText("SELECT COUNT(*) FROM telegram_links WHERE user_id = ?1 AND tg_id <> ?2", two(uid, w.tg)).to_int()
+    ok := count < MAX_LINKS and aistore.Run("REPLACE INTO telegram_links (tg_id, user_id, chat_id, tg_chat, name, username, lang, created) VALUES (?1, ?2, '', ?3, ?4, ?5, ?6, ?7)", a)
+    aistore.Unlock()
+    if not ok:
+        _m := send_plain(w.chat, tr(w.en, "این حساب به تعداد مجاز تلگرام وصل است. یکی را از بخش «اتصال‌ها» در سایت جدا کنید.", "This account already has the maximum number of Telegram connections. Remove one from Connections on the website."), "")
+        ret
+    end
+    _m := send_plain(w.chat, tr(w.en, "وصل شد. حساب سلام شما: ", "Connected. Your Salam account: ") + user_name + "\n" + tr(w.en, "از این به بعد گفت‌وگوهایتان در تاریخچه‌ی حساب ذخیره می‌شود. با /chats گفت‌وگوهای قبلی را ببینید.", "From now on your chats are saved in your account history. Use /chats to see earlier ones."), "")
+end
+
+func start_payload(w: Who, payload: str):
+    if payload == "login":
+        login_prompt(w, tr(w.en, "برای ورود یا ثبت‌نام دکمه‌ی زیر را بزنید.", "Tap the button below to sign in or sign up."))
+        ret
+    end
+    if not str.StartsWith(payload, "link_"):
+        welcome(w)
+        ret
+    end
+    code := payload.substr(5, payload.len() - 5)
+    aistore.Lock()
+    mut q := aistore.Stmt("SELECT c.user_id, u.name FROM telegram_codes c JOIN users u ON u.id = c.user_id WHERE c.code = ?1 AND c.kind = 'site' AND c.expires > ?2", two(aiweb.Hash(code), i64s(aistore.Now())))
+    mut uid := ""
+    mut uname := ""
+    if aistore.Next(q):
+        uid = aistore.Text(q, 0)
+        uname = aistore.Text(q, 1)
+    end
+    aistore.Finish(q)
+    aistore.Unlock()
+    if uid.len() == 0:
+        _m := send_plain(w.chat, tr(w.en, "این پیوند منقضی شده است. از سایت دوباره بسازید.", "This link has expired. Create it again on the website."), "")
+        ret
+    end
+    mut rows := Vector {} as Vector<str>
+    rows.push(cb_button(tr(w.en, "بله، وصل کن", "Yes, connect"), "y:" + code))
+    rows.push(cb_button(tr(w.en, "نه", "No"), "x"))
+    _m := send_plain(w.chat, tr(w.en, "این تلگرام به حساب سلام «" + uname + "» وصل شود؟ فقط اگر خودتان این پیوند را از سایت ساخته‌اید تأیید کنید.", "Connect this Telegram to the Salam account \"" + uname + "\"? Only confirm if you created this link on the website yourself."), keyboard(rows))
+end
+
+func confirm_site_link(w: Who, code: str):
+    now := aistore.Now()
+    aistore.Lock()
+    mut q := aistore.Stmt("SELECT c.user_id, u.name FROM telegram_codes c JOIN users u ON u.id = c.user_id WHERE c.code = ?1 AND c.kind = 'site' AND c.expires > ?2", two(aiweb.Hash(code), i64s(now)))
+    mut uid := ""
+    mut uname := ""
+    if aistore.Next(q):
+        uid = aistore.Text(q, 0)
+        uname = aistore.Text(q, 1)
+    end
+    aistore.Finish(q)
+    if uid.len() > 0:
+        _d := aistore.Run("DELETE FROM telegram_codes WHERE code = ?1", one(aiweb.Hash(code)))
+    end
+    aistore.Unlock()
+    if uid.len() == 0:
+        _m := send_plain(w.chat, tr(w.en, "این پیوند منقضی شده است. از سایت دوباره بسازید.", "This link has expired. Create it again on the website."), "")
+        ret
+    end
+    finish_link(w, uid, uname)
+end
+
+func integration_command(w: Who, provider: str, arg: str, message_id: str):
+    name := provider == "github" ? "GitHub" : "Figma"
+    if w.uid.len() == 0:
+        login_prompt(w, tr(w.en, "برای وصل کردن " + name + " اول وارد حساب سلام شوید.", "Sign in to your Salam account first to connect " + name + "."))
+        ret
+    end
+    if arg == "disconnect" or arg == "remove":
+        aicloud.Forget(w.uid, provider)
+        _m := send_plain(w.chat, tr(w.en, name + " از حساب شما جدا شد.", name + " was disconnected from your account."), "")
+        ret
+    end
+    if arg.len() > 0:
+        if message_id.len() > 0:
+            delete_message(w.chat, message_id)
+        end
+        mut login := ""
+        code := aicloud.StoreToken(w.uid, provider, arg, login)
+        if code == 0:
+            _m := send_plain(w.chat, tr(w.en, name + " وصل شد: " + login + ". پیام حاوی توکن پاک شد. حالا می‌توانید مثلا بگویید «مخازن خصوصی من را فهرست کن».", name + " connected: " + login + ". The message with your token was deleted. Now you can ask, for example, \"list my private repositories\"."), "")
+        else code == 3:
+            _m := send_plain(w.chat, tr(w.en, "ذخیره‌ی امن توکن‌ها روی این سرور فعال نیست.", "Secure token storage is not available on this server."), "")
+        else:
+            _m := send_plain(w.chat, tr(w.en, "این توکن از طرف " + name + " پذیرفته نشد. توکن و دسترسی‌هایش را بررسی کنید و دوباره بفرستید.", name + " did not accept this token. Check the token and its permissions, then send it again."), "")
+        end
+        ret
+    end
+    login := aicloud.Connected(w.uid, provider)
+    page := APP_URL + "/connections?connect=" + provider
+    mut how := ""
+    if provider == "github":
+        how = tr(w.en, "برنامه‌ای لازم نیست بسازید؛ فقط یک توکن شخصی بسازید:\n\n۱. این نشانی را باز کنید (دسترسی‌ها از قبل انتخاب شده): https://github.com/settings/tokens/new?scopes=repo,workflow,admin:org,admin:repo_hook,admin:public_key,gist,notifications,user,project,write:discussion,read:packages,write:packages,codespace&description=Salam%20AI\n۲. مدت اعتبار را انتخاب کنید و پایین صفحه Generate token را بزنید.\n۳. توکن (با ghp_ شروع می‌شود) فقط یک بار نشان داده می‌شود؛ آن را کپی کنید.\n۴. اینجا بفرستید: /github ghp_xxxxxxxx (پیام شما بلافاصله پاک می‌شود).\n\nدسترسی‌ها شامل مخزن‌های خصوصی، سازمان‌ها (مدیریت کامل، از جمله تیم‌ها و عضویت‌ها)، workflowها، gist و اعلان‌هاست؛ فقط حذف مخزن را به دستیار نمی‌دهیم. هر زمان خواستید: /github disconnect، و برای باطل کردن کامل توکن را در GitHub حذف کنید. اگر ترجیح می‌دهید با دکمه‌ی زیر از سایت وصل کنید.", "You do not need to build an app; just create a personal access token:\n\n1. Open this link (the permissions are preselected): https://github.com/settings/tokens/new?scopes=repo,workflow,admin:org,admin:repo_hook,admin:public_key,gist,notifications,user,project,write:discussion,read:packages,write:packages,codespace&description=Salam%20AI\n2. Pick an expiry and press Generate token at the bottom.\n3. The token (it starts with ghp_) is shown only once; copy it.\n4. Send it here: /github ghp_xxxxxxxx (your message is deleted right away).\n\nThe access covers private repositories, organizations (full management, including teams and memberships), workflows, gists and notifications, but never deleting a repository. To disconnect at any time: /github disconnect, and delete the token on GitHub to revoke it completely. Or use the button below to connect from the site.")
+    else:
+        how = tr(w.en, "برنامه‌ای لازم نیست بسازید؛ فقط یک توکن شخصی بسازید:\n\n۱. در Figma روی عکس پروفایل بالا سمت چپ بزنید، Settings و بعد زبانه‌ی Security.\n۲. بخش Personal access tokens، گزینه‌ی Generate new token.\n۳. نام را «Salam AI» بگذارید و دسترسی‌ها را این‌طور بدهید: File content و File metadata و Library content روی Read only، Comments روی Read and write، Current user روی Read only.\n۴. توکن (با figd_ شروع می‌شود) فقط یک بار نشان داده می‌شود؛ کپی کنید.\n۵. اینجا بفرستید: /figma figd_xxxxxxxx (پیام شما بلافاصله پاک می‌شود).\n\nهر زمان خواستید: /figma disconnect.", "You do not need to build an app; just create a personal access token:\n\n1. In Figma click your profile picture (top left), then Settings and the Security tab.\n2. Under Personal access tokens press Generate new token.\n3. Name it Salam AI and give: File content, File metadata and Library content as Read only, Comments as Read and write, Current user as Read only.\n4. The token (it starts with figd_) is shown only once; copy it.\n5. Send it here: /figma figd_xxxxxxxx (your message is deleted right away).\n\nTo disconnect at any time: /figma disconnect.")
+    end
+    mut status := login.len() > 0 ? tr(w.en, name + " وصل است: " + login + ". برای جدا کردن: /" + provider + " disconnect", name + " is connected: " + login + ". To disconnect: /" + provider + " disconnect") : tr(w.en, name + " هنوز وصل نیست.", name + " is not connected yet.")
+    if login.len() > 0 and aicloud.Revoked(w.uid, provider):
+        status = tr(w.en, name + " وصل بوده (" + login + ") ولی توکن ذخیره‌شده از طرف " + name + " رد می‌شود، یعنی لغو یا منقضی شده است. دوباره وصلش کنید.", name + " was connected (" + login + ") but " + name + " now rejects the saved token: it was revoked or has expired. Please connect it again.")
+    end
+    _m := send_plain(w.chat, status + "\n\n" + how, url_button(tr(w.en, "باز کردن اتصال‌ها", "Open Connections"), page))
+end
+
+func sandbox_command(w: Who, arg: str):
+    if w.uid.len() == 0:
+        login_prompt(w, tr(w.en, "محیط اجرای دستورها بعد از ورود فعال می‌شود.", "The command sandbox is available after you sign in."))
+        ret
+    end
+    if not aicloud.Enabled():
+        _m := send_plain(w.chat, tr(w.en, "محیط اجرای ابری روی این سرور فعال نیست.", "The cloud sandbox is not available on this server."), "")
+        ret
+    end
+    id := w.cur
+    aistore.Lock()
+    token := id.len() > 0 ? aistore.OneText("SELECT bridge_token FROM chats WHERE id = ?1 AND user_id = ?2 AND cloud = 1", two(id, w.uid)) : ""
+    aistore.Unlock()
+    if arg == "reset":
+        if token.len() > 0:
+            aicloud.Destroy(token)
+        end
+        _m := send_plain(w.chat, tr(w.en, "محیط این گفت‌وگو پاک شد و دفعه‌ی بعد تازه ساخته می‌شود.", "This chat's sandbox was wiped; a fresh one is created next time."), "")
+        ret
+    end
+    _m := send_plain(w.chat, tr(w.en, "هر گفت‌وگو یک محیط لینوکسی خصوصی خودش را دارد (git، node، python، کامپایلر سلام) و دستورها همان‌جا اجرا می‌شوند. از دستیار بخواهید مخزن را کلون کند، تست بگیرد یا کد بنویسد. برای پاک کردن محیط: /sandbox reset", "Every chat has its own private Linux sandbox (git, node, python, the Salam compiler) where commands run. Ask the assistant to clone a repository, run tests or write code. To wipe it: /sandbox reset"), "")
+end
+
+func command(w: Who, cmd: str, arg: str, message_id: str):
+    switch cmd:
+        "start":
+            start_payload(w, arg)
+            break
+        end
+        "help", "h":
+            _m := send_md(w.chat, help_text(w), "")
+            break
+        end
+        "login", "signin", "register":
+            if w.uid.len() > 0:
+                _m := send_plain(w.chat, tr(w.en, "قبلا وارد شده‌اید. برای خروج /logout را بفرستید.", "You are already signed in. Send /logout to disconnect."), "")
+            else:
+                login_prompt(w, tr(w.en, "برای ورود یا ثبت‌نام دکمه‌ی زیر را بزنید. بعد از ورود، تاریخچه‌ی گفت‌وگوها خودکار وصل می‌شود.", "Tap the button below to sign in or sign up. Your chat history is connected automatically afterwards."))
+            end
+            break
+        end
+        "logout", "signout":
+            do_logout(w)
+            break
+        end
+        "new", "newchat":
+            if w.uid.len() > 0:
+                if new_chat(w).len() > 0:
+                    _m := send_plain(w.chat, tr(w.en, "گفت‌وگوی تازه شروع شد.", "A fresh chat started."), "")
+                end
+            else:
+                aistore.Lock()
+                gid := aistore.OneText("SELECT guest_id FROM telegram_guests WHERE tg_id = ?1", one(w.tg))
+                old := gid.len() > 0 ? aistore.OneText("SELECT engine_sid FROM guest_sessions WHERE id = ?1", one(gid)) : ""
+                if gid.len() > 0:
+                    _c := aistore.Run("UPDATE guest_sessions SET engine_sid = '' WHERE id = ?1", one(gid))
+                end
+                aistore.Unlock()
+                if old.len() > 0:
+                    aiengine.Delete(old)
+                end
+                _m := send_plain(w.chat, tr(w.en, "گفت‌وگوی تازه شروع شد.", "A fresh chat started."), "")
+            end
+            break
+        end
+        "chats", "history":
+            list_chats(w)
+            break
+        end
+        "stop", "cancel":
+            stop_turn(w)
+            break
+        end
+        "account", "me":
+            account_info(w)
+            break
+        end
+        "github", "figma":
+            integration_command(w, cmd, arg, message_id)
+            break
+        end
+        "sandbox", "cloud":
+            sandbox_command(w, arg)
+            break
+        end
+        "lang", "language":
+            set_lang(w, not w.en)
+            mut switched := w
+            switched.en = not w.en
+            apply_menu(switched)
+            _m := send_plain(w.chat, w.en ? "زبان فارسی شد." : "Language set to English.", "")
+            break
+        end
+        else:
+            _m := send_plain(w.chat, tr(w.en, "این دستور را نمی‌شناسم. /help را بفرستید.", "I do not know that command. Send /help."), "")
+        end
+    end
+end
+
+func on_callback(cb: str):
+    id := json.Get(cb, "id")
+    data := json.Get(cb, "data")
+    tg := json.GetPath(cb, "from.id")
+    chat := json.GetPath(cb, "message.chat.id")
+    if tg.len() == 0 or chat.len() == 0:
+        answer_callback(id, "")
+        ret
+    end
+    w := who_of(tg, chat, json.GetPath(cb, "from.first_name"), json.GetPath(cb, "from.username"), json.GetPath(cb, "from.language_code"))
+    answer_callback(id, "")
+    if data == "l:fa" or data == "l:en":
+        choose_language(w, data == "l:en")
+        ret
+    end
+    if str.StartsWith(data, "c:"):
+        if w.uid.len() > 0:
+            _ok := switch_chat(w, data.substr(2, data.len() - 2))
+        end
+    else data == "n":
+        if w.uid.len() > 0 and new_chat(w).len() > 0:
+            _m := send_plain(w.chat, tr(w.en, "گفت‌وگوی تازه شروع شد.", "A fresh chat started."), "")
+        end
+    else str.StartsWith(data, "y:"):
+        confirm_site_link(w, data.substr(2, data.len() - 2))
+    else data == "x":
+        _m := send_plain(w.chat, tr(w.en, "لغو شد.", "Canceled."), "")
+    end
+end
+
+func on_message(msg: str):
+    kind := json.GetPath(msg, "chat.type")
+    chat := json.GetPath(msg, "chat.id")
+    tg := json.GetPath(msg, "from.id")
+    if chat.len() == 0 or tg.len() == 0 or json.GetPath(msg, "from.is_bot") == "true":
+        ret
+    end
+    if kind != "private":
+        ret
+    end
+    w := who_of(tg, chat, json.GetPath(msg, "from.first_name"), json.GetPath(msg, "from.username"), json.GetPath(msg, "from.language_code"))
+    touch_seen(w)
+    mut text := str.Trim(json.Get(msg, "text"))
+    if text.len() == 0:
+        text = str.Trim(json.Get(msg, "caption"))
+    end
+    if not w.known:
+        mut payload := ""
+        if str.StartsWith(text, "/start"):
+            payload = str.Trim(text.substr(6, text.len() - 6))
+            at := payload.find("@")
+            if at == 0:
+                cut := payload.find(" ")
+                payload = cut > 0 ? str.Trim(payload.substr(cut, payload.len() - cut)) : ""
+            end
+        end
+        ask_language(w, payload)
+        ret
+    end
+    if text.len() == 0:
+        _m := send_plain(w.chat, tr(w.en, "فعلا فقط پیام متنی پشتیبانی می‌شود. کد یا متن را داخل پیام بفرستید.", "Only text messages are supported for now. Paste your code or text into the message."), "")
+        ret
+    end
+    if (text.substr(0, 1)) == "/":
+        mut head := text
+        mut arg := ""
+        cut := text.find(" ")
+        nl := text.find("\n")
+        mut stop := cut
+        if nl >= 0 and (stop < 0 or nl < stop):
+            stop = nl
+        end
+        if stop > 0:
+            head = text.substr(0, stop)
+            arg = str.Trim(text.substr(stop + 1, text.len() - stop - 1))
+        end
+        mut cmd := str.Lower(head.substr(1, head.len() - 1))
+        at := cmd.find("@")
+        if at >= 0:
+            if cmd.substr(at + 1, cmd.len() - at - 1) != str.Lower(BOT):
+                ret
+            end
+            cmd = cmd.substr(0, at)
+        end
+        command(w, cmd, arg, json.Get(msg, "message_id"))
+        ret
+    end
+    if w.uid.len() > 0:
+        user_turn(w, text)
+    else:
+        guest_turn(w, text)
+    end
+end
+
+func handle_update(raw: str):
+    cb := json.Get(raw, "callback_query")
+    if cb.len() > 0:
+        chat := json.GetPath(cb, "message.chat.id")
+        if flooded(chat):
+            ret
+        end
+        on_callback(cb)
+        ret
+    end
+    msg := json.Get(raw, "message")
+    if msg.len() == 0:
+        ret
+    end
+    chat := json.GetPath(msg, "chat.id")
+    if flooded(chat):
+        ret
+    end
+    on_message(msg)
+end
+
+func chat_of(raw: str): str:
+    cb := json.Get(raw, "callback_query")
+    if cb.len() > 0:
+        ret json.GetPath(cb, "message.chat.id")
+    end
+    ret json.GetPath(json.Get(raw, "message"), "chat.id")
+end
+
+func worker():
+    mut open := true
+    until true:
+        raw := JOBS.recv(open)
+        if not open:
+            break
+        end
+        chat := chat_of(raw)
+        mut tries := 0
+        mut got := claim(chat)
+        until not got and tries < 400:
+            sync.SleepMs(40)
+            tries += 1
+            got = claim(chat)
+        end
+        if got:
+            handle_update(raw)
+            release(chat)
+        end
+    end
+end
+
+func watcher():
+    mut open := true
+    until true:
+        job := WATCH.recv(open)
+        if not open:
+            break
+        end
+        aiweb.Enter()
+        watch(job)
+        aiweb.Leave()
+    end
+end
+
+func commands_json(en: bool): str:
+    mut items := Vector {} as Vector<str>
+    names := Vector {} as Vector<str>
+    fa := Vector {} as Vector<str>
+    english := Vector {} as Vector<str>
+    each n in ["new", "chats", "stop", "login", "logout", "account", "github", "figma", "sandbox", "lang", "help"]:
+        names.push(n)
+    end
+    each n in ["شروع گفت‌وگوی تازه", "گفت‌وگوهای من", "متوقف کردن پاسخ", "ورود یا ثبت‌نام", "جدا شدن از حساب", "حساب و پلن", "وصل کردن GitHub", "وصل کردن Figma", "محیط اجرای دستورها", "تغییر زبان", "راهنما"]:
+        fa.push(n)
+    end
+    each n in ["Start a fresh chat", "My chats", "Stop the answer", "Sign in or sign up", "Disconnect from account", "Account and plan", "Connect GitHub", "Connect Figma", "Command sandbox", "Switch language", "Help"]:
+        english.push(n)
+    end
+    each i, name in names:
+        items.push("{" + json.Member("command", name) + ", " + json.Member("description", en ? english.get(i) : fa.get(i)) + "}")
+    end
+    ret json.Array(items)
+end
+
+func setup_bot():
+    me := api("getMe", "{}")
+    if is_ok(me):
+        name := json.GetPath(me, "result.username")
+        if name.len() > 0:
+            BOT = name
+        end
+        println "salam-ai telegram bot is @" + BOT
+    else:
+        println "salam-ai telegram: getMe failed:", json.Get(me, "description")
+    end
+    _w := api("deleteWebhook", `{"drop_pending_updates": false}`)
+    _d := api("setMyCommands", `{"commands": ` + commands_json(false) + "}")
+    _f := api("setMyCommands", `{"commands": ` + commands_json(false) + `, "language_code": "fa"}`)
+    _e := api("setMyCommands", `{"commands": ` + commands_json(true) + `, "language_code": "en"}`)
+    _i := api("setMyDescription", "{" + json.Member("description", "دستیار هوش مصنوعی سلام برای زبان برنامه‌نویسی سلام. مهمان بپرسید یا برای ذخیره‌ی تاریخچه وارد شوید.") + "}")
+    _p := api("setMyDescription", "{" + json.Member("description", "Salam AI assistant for the Salam programming language. Ask a question as a guest, or sign in to keep your chat history.") + `, "language_code": "en"}`)
+end
+
+func recover_pending():
+    aistore.Lock()
+    _a := aistore.Run("UPDATE messages m JOIN chats c ON c.id = m.chat_id SET m.status = 'error', m.body = 'پاسخ با راه‌اندازی دوباره‌ی سرویس قطع شد. دوباره بپرسید.' WHERE m.status = 'pending' AND c.source = 'telegram'", Vector {} as Vector<str>)
+    _b := aistore.Run("UPDATE guest_messages m JOIN telegram_guests t ON t.guest_id = m.guest_id SET m.status = 'error' WHERE m.status = 'pending'", Vector {} as Vector<str>)
+    aistore.Unlock()
+end
+
+func poll_loop():
+    mut offset := state_get("offset")
+    mut pause := 2000
+    until true:
+        mut m := Vector {} as Vector<str>
+        if offset.len() > 0:
+            m.push(json.MemberRaw("offset", offset))
+        end
+        m.push(json.MemberInt("timeout", POLL_SECONDS as i64))
+        m.push(json.MemberRaw("allowed_updates", `["message", "callback_query"]`))
+        resp := call("getUpdates", json.Object(m), (POLL_SECONDS + 15) * 1000)
+        if not is_ok(resp):
+            code := json.Get(resp, "error_code")
+            if code == "401":
+                println "salam-ai telegram: the bot token was rejected, stopping"
+                break
+            end
+            sync.SleepMs(pause)
+            pause = pause * 2
+            if pause > 30000:
+                pause = 30000
+            end
+            continue
+        end
+        pause = 2000
+        items := json.Items(json.Get(resp, "result"))
+        each u in items:
+            uid := json.Get(u, "update_id")
+            if uid.len() > 0:
+                offset = plus_one(uid)
+            end
+            JOBS.send(u)
+        end
+        if items.len() > 0:
+            state_set("offset", offset)
+        end
+    end
+end
+
+func link_info(ctx: i64):
+    code := http.Param(ctx, "code")
+    aistore.Lock()
+    mut q := aistore.Stmt("SELECT name, username FROM telegram_codes WHERE code = ?1 AND kind = 'bot' AND expires > ?2", two(aiweb.Hash(code), i64s(aistore.Now())))
+    mut found := false
+    mut name := ""
+    mut username := ""
+    if aistore.Next(q):
+        found = true
+        name = aistore.Text(q, 0)
+        username = aistore.Text(q, 1)
+    end
+    aistore.Finish(q)
+    aistore.Unlock()
+    if not found:
+        aiweb.Fail(ctx, 404, "expired", "این پیوند منقضی شده است. از ربات تلگرام دوباره بخواهید.")
+        ret
+    end
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("name", name))
+    m.push(json.Member("username", username))
+    m.push(json.Member("bot", BOT))
+    aiweb.Reply(ctx, 200, json.Object(m))
+end
+
+func link_confirm(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    code := str.Trim(json.Get(http.Body(ctx), "code"))
+    if code.len() < 16 or code.len() > 64:
+        aiweb.Fail(ctx, 400, "code", "کد اتصال درست نیست.")
+        ret
+    end
+    now := aistore.Now()
+    aistore.Lock()
+    mut q := aistore.Stmt("SELECT tg_id, tg_chat, name, username, lang FROM telegram_codes WHERE code = ?1 AND kind = 'bot' AND expires > ?2", two(aiweb.Hash(code), i64s(now)))
+    mut tg := ""
+    mut chat := ""
+    mut name := ""
+    mut username := ""
+    mut lang := "fa"
+    if aistore.Next(q):
+        tg = aistore.Text(q, 0)
+        chat = aistore.Text(q, 1)
+        name = aistore.Text(q, 2)
+        username = aistore.Text(q, 3)
+        lang = aistore.Text(q, 4)
+    end
+    aistore.Finish(q)
+    if tg.len() > 0:
+        _d := aistore.Run("DELETE FROM telegram_codes WHERE code = ?1", one(aiweb.Hash(code)))
+    end
+    count := tg.len() > 0 ? aistore.OneText("SELECT COUNT(*) FROM telegram_links WHERE user_id = ?1 AND tg_id <> ?2", two(i64s(uid), tg)).to_int() : 0
+    mut a := four(tg, i64s(uid), chat, name)
+    a.push(username)
+    a.push(lang)
+    a.push(i64s(now))
+    ok := tg.len() > 0 and count < MAX_LINKS and aistore.Run("REPLACE INTO telegram_links (tg_id, user_id, chat_id, tg_chat, name, username, lang, created) VALUES (?1, ?2, '', ?3, ?4, ?5, ?6, ?7)", a)
+    uname := aistore.OneText("SELECT name FROM users WHERE id = ?1", one(i64s(uid)))
+    aistore.Unlock()
+    if tg.len() == 0:
+        aiweb.Fail(ctx, 404, "expired", "این پیوند منقضی شده است. از ربات تلگرام دوباره بخواهید.")
+        ret
+    end
+    if not ok:
+        aiweb.Fail(ctx, 409, "limit", "این حساب به تعداد مجاز تلگرام وصل است. یکی را جدا کنید.")
+        ret
+    end
+    en := lang == "en"
+    Notify(chat, en, "وصل شد. حساب سلام شما: " + uname + "\nاز این به بعد گفت‌وگوهایتان در تاریخچه‌ی حساب ذخیره می‌شود. با /chats گفت‌وگوهای قبلی را ببینید.", "Connected. Your Salam account: " + uname + "\nFrom now on your chats are saved in your account history. Use /chats to see earlier ones.")
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberBool("ok", true))
+    m.push(json.Member("name", name))
+    m.push(json.Member("username", username))
+    m.push(json.Member("bot", BOT))
+    aiweb.Reply(ctx, 200, json.Object(m))
+end
+
+func link_status(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut q := aistore.Stmt("SELECT tg_id, name, username, created FROM telegram_links WHERE user_id = ?1 ORDER BY created DESC", one(i64s(uid)))
+    until aistore.Next(q):
+        mut m := Vector {} as Vector<str>
+        m.push(json.Member("id", aistore.Text(q, 0)))
+        m.push(json.Member("name", aistore.Text(q, 1)))
+        m.push(json.Member("username", aistore.Text(q, 2)))
+        m.push(json.MemberRaw("created", aistore.Text(q, 3)))
+        items.push(json.Object(m))
+    end
+    aistore.Finish(q)
+    aistore.Unlock()
+    mut out := Vector {} as Vector<str>
+    out.push(json.MemberBool("enabled", Enabled()))
+    out.push(json.Member("bot", BOT))
+    out.push(json.MemberRaw("links", json.Array(items)))
+    aiweb.Reply(ctx, 200, json.Object(out))
+end
+
+func link_start(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    if not Enabled():
+        aiweb.Fail(ctx, 503, "disabled", "ربات تلگرام فعال نیست.")
+        ret
+    end
+    code := crypto.RandomHex(16)
+    now := aistore.Now()
+    aistore.Lock()
+    _d := aistore.Run("DELETE FROM telegram_codes WHERE (kind = 'site' AND user_id = ?1) OR expires < ?2", two(i64s(uid), i64s(now)))
+    ok := aistore.Run("INSERT INTO telegram_codes (code, kind, user_id, expires) VALUES (?1, 'site', ?2, ?3)", three(aiweb.Hash(code), i64s(uid), i64s(now + CODE_SECONDS)))
+    aistore.Unlock()
+    if not ok:
+        aiweb.Fail(ctx, 500, "server", "ساخت اتصال ناموفق بود. دوباره تلاش کنید.")
+        ret
+    end
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("url", "https://t.me/" + BOT + "?start=link_" + code))
+    m.push(json.Member("bot", BOT))
+    aiweb.Reply(ctx, 201, json.Object(m))
+end
+
+func link_remove(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    tg := http.Param(ctx, "tg")
+    aistore.Lock()
+    chat := aistore.OneText("SELECT tg_chat FROM telegram_links WHERE tg_id = ?1 AND user_id = ?2", two(tg, i64s(uid)))
+    _d := aistore.Run("DELETE FROM telegram_links WHERE tg_id = ?1 AND user_id = ?2", two(tg, i64s(uid)))
+    aistore.Unlock()
+    if chat.len() > 0:
+        Notify(chat, false, "این تلگرام از حساب سلام جدا شد.", "This Telegram was disconnected from your Salam account.")
+    end
+    aiweb.Reply(ctx, 200, `{"ok": true}`)
+end
+
+pub func Configure(token: str, base: str, app_url: str, guest_limit: int):
+    TOKEN = token
+    if base.len() > 0:
+        parse_base(base, HOST, PORT, SECURE, PREFIX)
+    end
+    if app_url.len() > 0:
+        APP_URL = str.TrimSuffix(app_url, "/")
+    end
+    if guest_limit > 0:
+        GUEST_LIMIT = guest_limit
+    end
+    STATE_LOCK = sync.NewMutex()
+end
+
+pub func Enabled(): bool:
+    ret TOKEN.len() > 0
+end
+
+pub func BotName(): str:
+    ret BOT
+end
+
+pub func Start():
+    if TOKEN.len() == 0:
+        ret
+    end
+    JOBS.init(512)
+    WATCH.init(512)
+    recover_pending()
+    setup_bot()
+    repeat WORKERS:
+        _w := spawn(worker)
+    end
+    repeat WATCHERS:
+        _t := spawn(watcher)
+    end
+    _p := spawn(poll_loop)
+end
+
+pub func Notify(chat: str, en: bool, text_fa: str, text_en: str):
+    if TOKEN.len() == 0 or chat.len() == 0:
+        ret
+    end
+    _m := send_plain(chat, tr(en, text_fa, text_en), "")
+end
+
+pub func Routes(r &: router.Router):
+    router.Get(r, "/telegram", link_status)
+    router.Post(r, "/telegram/code", link_start)
+    router.Post(r, "/telegram/link", link_confirm)
+    router.Get(r, "/telegram/link/:code", link_info)
+    router.Delete(r, "/telegram/:tg", link_remove)
+    each path in ["/telegram", "/telegram/code", "/telegram/link", "/telegram/link/:code", "/telegram/:tg"]:
+        router.Options(r, path, aiweb.Preflight)
+    end
+end

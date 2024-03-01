@@ -1,0 +1,244 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package elasticsearch
+
+import str
+import encoding.json
+
+func _hit_of(raw: str): Hit:
+    ret Hit {
+        index = json.Get(raw, "_index"),
+        id = json.Get(raw, "_id"),
+        score = _f64(json.Get(raw, "_score")),
+        source = json.Get(raw, "_source"),
+        sort = json.Get(raw, "sort"),
+        highlight = json.Get(raw, "highlight"),
+        fields = json.Get(raw, "fields"),
+        raw = str.Clone(raw)
+    }
+end
+
+func _search_path(index: str, op: str): str:
+    if index.len() == 0: ret "/" + op end
+    ret "/" + _idx(index) + "/" + op
+end
+
+func _search_result(r: Response): SearchResult:
+    mut res := ParseSearchResult(r.body)
+    res.ok = r.ok and res.ok
+    res.status = r.status
+    res.error = r.error
+    ret res
+end
+
+func _by_query_body(query: str, script: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("query", query.len() > 0 ? query : MatchAll()))
+    if script.len() > 0: m.push(json.MemberRaw("script", script)) end
+    ret json.Object(m)
+end
+
+func _by_query_path(index: str, op: str, opts: Options): str:
+    mut q := Vector {} as Vector<str>
+    _qadd(q, "refresh", opts.refresh == REFRESH_WAIT_FOR ? "true" : opts.refresh)
+    _qadd(q, "routing", opts.routing)
+    _qadd(q, "timeout", opts.timeout)
+    _qadd(q, "conflicts", opts.conflicts)
+    ret _search_path(index, op) + _qs(q)
+end
+
+@en "ParseSearchResult"
+@fa "تجزیه نتیجه جستجو"
+pub func ParseSearchResult(body: str): SearchResult:
+    mut res := SearchResult { raw = str.Clone(body) }
+    hits := json.Get(body, "hits")
+    res.ok = hits.len() > 0
+    res.took = _i64(json.Get(body, "took"))
+    res.timed_out = json.Get(body, "timed_out") == "true"
+    total := json.Get(hits, "total")
+    if str.StartsWith(total, "{"):
+        res.total = _i64(json.Get(total, "value"))
+        res.total_relation = json.Get(total, "relation")
+    else:
+        res.total = _i64(total)
+        res.total_relation = str.Clone("eq")
+    end
+    res.max_score = _f64(json.Get(hits, "max_score"))
+    each raw in json.Items(json.Get(hits, "hits")):
+        res.hits.push(_hit_of(raw))
+    end
+    res.aggregations = json.Get(body, "aggregations")
+    res.suggest = json.Get(body, "suggest")
+    res.scroll_id = json.Get(body, "_scroll_id")
+    res.pit_id = json.Get(body, "pit_id")
+    ret res
+end
+
+@en "Search"
+@fa "جستجو"
+pub func Search(c: Client, index: str, req: SearchRequest): SearchResult:
+    ret SearchRaw(c, index, SearchBody(req))
+end
+
+@en "SearchQuery"
+@fa "جستجوی پرسمان"
+pub func SearchQuery(c: Client, index: str, query: str, size: int): SearchResult:
+    ret Search(c, index, SearchRequest { query = query, size = size })
+end
+
+@en "SearchRaw"
+@fa "جستجوی خام"
+pub func SearchRaw(c: Client, index: str, body: str): SearchResult:
+    ret _search_result(Perform(c, "POST", _search_path(index, "_search"), body))
+end
+
+@en "SearchScroll"
+@fa "جستجوی پیمایشی"
+pub func SearchScroll(c: Client, index: str, req: SearchRequest, keep_alive: str): SearchResult:
+    path := _search_path(index, "_search") + "?scroll=" + _seg(keep_alive)
+    ret _search_result(Perform(c, "POST", path, SearchBody(req)))
+end
+
+@en "Scroll"
+@fa "پیمایش"
+pub func Scroll(c: Client, scroll_id: str, keep_alive: str): SearchResult:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("scroll", keep_alive))
+    m.push(json.Member("scroll_id", scroll_id))
+    ret _search_result(Perform(c, "POST", "/_search/scroll", json.Object(m)))
+end
+
+@en "ClearScroll"
+@fa "پاک کردن پیمایش"
+pub func ClearScroll(c: Client, scroll_id: str): bool:
+    r := Perform(c, "DELETE", "/_search/scroll", _one("scroll_id", json.Str(scroll_id)))
+    ret r.ok
+end
+
+@en "OpenPit"
+@fa "گشودن نقطه زمانی"
+pub func OpenPit(c: Client, index: str, keep_alive: str): str:
+    if _opensearch(c):
+        r := Perform(c, "POST", "/" + _idx(index) + "/_search/point_in_time?keep_alive=" + _seg(keep_alive), "")
+        if not r.ok: ret str.Clone("") end
+        ret json.Get(r.body, "pit_id")
+    end
+    r := Perform(c, "POST", "/" + _idx(index) + "/_pit?keep_alive=" + _seg(keep_alive), "")
+    if not r.ok: ret str.Clone("") end
+    ret json.Get(r.body, "id")
+end
+
+@en "ClosePit"
+@fa "بستن نقطه زمانی"
+pub func ClosePit(c: Client, pit_id: str): bool:
+    if _opensearch(c):
+        mut ids := Vector {} as Vector<str>
+        ids.push(pit_id)
+        ret Perform(c, "DELETE", "/_search/point_in_time", _one("pit_id", _strs(ids))).ok
+    end
+    r := Perform(c, "DELETE", "/_pit", _one("id", json.Str(pit_id)))
+    ret r.ok
+end
+
+@en "DeleteByQuery"
+@fa "حذف با پرسمان"
+pub func DeleteByQuery(c: Client, index: str, query: str): i64:
+    ret DeleteByQueryWith(c, index, query, Options {})
+end
+
+@en "DeleteByQueryWith"
+@fa "حذف با پرسمان با گزینه"
+pub func DeleteByQueryWith(c: Client, index: str, query: str, opts: Options): i64:
+    r := Perform(c, "POST", _by_query_path(index, "_delete_by_query", opts), _by_query_body(query, ""))
+    if not r.ok: ret -1 end
+    ret _i64(json.Get(r.body, "deleted"))
+end
+
+@en "UpdateByQuery"
+@fa "به‌روزرسانی با پرسمان"
+pub func UpdateByQuery(c: Client, index: str, query: str, script: str): i64:
+    ret UpdateByQueryWith(c, index, query, script, Options {})
+end
+
+@en "UpdateByQueryWith"
+@fa "به‌روزرسانی با پرسمان با گزینه"
+pub func UpdateByQueryWith(c: Client, index: str, query: str, script: str, opts: Options): i64:
+    r := Perform(c, "POST", _by_query_path(index, "_update_by_query", opts), _by_query_body(query, script))
+    if not r.ok: ret -1 end
+    ret _i64(json.Get(r.body, "updated"))
+end
+
+@en "MSearch"
+@fa "جستجوی چندگانه"
+pub func MSearch(c: Client, index: str, bodies: Vector<str>): Vector<SearchResult>:
+    mut out := Vector {} as Vector<SearchResult>
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    each b in bodies:
+        str.BufAppend(sb, "{}\n")
+        str.BufAppend(sb, _one_line(b))
+        str.BufAppend(sb, "\n")
+    end
+    r := PerformNdjson(c, "POST", _search_path(index, "_msearch"), str.BufStr(sb))
+    if not r.ok: ret out end
+    each raw in json.Items(json.Get(r.body, "responses")):
+        mut one := ParseSearchResult(raw)
+        st := _i64(json.Get(raw, "status")) as int
+        one.status = st
+        err := json.GetPath(raw, "error.reason")
+        if err.len() > 0:
+            one.ok = false
+            one.error = json.GetPath(raw, "error.type") + ": " + err
+        end
+        out.push(one)
+    end
+    ret out
+end
+
+@en "AggValueIn"
+@fa "مقدار تجمیع در"
+pub func AggValueIn(aggs: str, name: str): f64:
+    ret _f64(json.Get(json.Get(aggs, name), "value"))
+end
+
+@en "AggBucketsIn"
+@fa "سطل‌های تجمیع در"
+pub func AggBucketsIn(aggs: str, name: str): Vector<Bucket>:
+    mut out := Vector {} as Vector<Bucket>
+    each raw in json.Items(json.Get(json.Get(aggs, name), "buckets")):
+        mut key := json.Get(raw, "key_as_string")
+        if key.len() == 0: key = json.Get(raw, "key") end
+        out.push(Bucket { key = key, doc_count = _i64(json.Get(raw, "doc_count")), raw = str.Clone(raw) })
+    end
+    ret out
+end
+
+@en "AggValue"
+@fa "مقدار تجمیع"
+pub func AggValue(res: SearchResult, name: str): f64:
+    ret AggValueIn(res.aggregations, name)
+end
+
+@en "AggBuckets"
+@fa "سطل‌های تجمیع"
+pub func AggBuckets(res: SearchResult, name: str): Vector<Bucket>:
+    ret AggBucketsIn(res.aggregations, name)
+end
+
+@en "AggRaw"
+@fa "تجمیع خام"
+pub func AggRaw(res: SearchResult, name: str): str:
+    ret json.Get(res.aggregations, name)
+end

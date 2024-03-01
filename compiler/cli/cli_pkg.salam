@@ -1,0 +1,579 @@
+package cli
+
+import os
+import io
+import str
+
+include dr "../driver/driver.salam"
+include i18 "../i18n.salam"
+include co "../sal_core.salam"
+include sm "../semantic/semantic.salam"
+include pm "../pkgmgr/pkgmgr.salam"
+include pth "../sal_path.salam"
+
+func pkg_project_root(): str:
+    root := pm.FindProjectRoot(".")
+    if str.Len(root) == 0:
+        io.EPrintln(i18.Tr("salam: no salam.toml here or in a parent folder; run 'salam init' first"))
+    end
+    ret root
+end
+
+func pkg_fail(why: str): int:
+    io.EPrintln("salam: " + why)
+    ret 1
+end
+
+func pkg_split_version(arg: str, mod &: str, ver &: str):
+    at_pos := str.LastIndex(arg, "@")
+    if at_pos > 0:
+        mod = str.Substr(arg, 0, at_pos)
+        ver = str.Substr(arg, at_pos + 1, str.Len(arg) - at_pos - 1)
+    else:
+        mod = arg
+        ver = ""
+    end
+end
+
+func pkg_in_std(name: str): bool:
+    p := sm.ResolveImport("", str.Replace(name, ".", "/"))
+    ret str.Len(p) > 0 and os.Exists(p)
+end
+
+func pkg_prepare_native(dir: str): bool:
+    mut natives := Vector {} as Vector<pm.Native>
+    defer natives.free()
+    if not pm.ReadNativeAll(dir, natives):
+        ret true
+    end
+    mut cc := "cc"
+    if SALAM_OS_WINDOWS:
+        cc = "gcc"
+    end
+    repeat natives.len() in i:
+        n := natives.get(i)
+        if pm.SystemHas(n, cc):
+            println co.Format1(i18.Tr("  native library '%s': found on this system"), co.ArgStr(n.link))
+            continue
+        end
+        if str.Len(n.pre_url) > 0 and not str.Equals(pm.NativeMode(), "source"):
+            mut pobjs := Vector {} as Vector<str>
+            defer pobjs.free()
+            mut pwhy := ""
+            if pm.NativePrebuilt(n, pobjs, pwhy):
+                println co.Format2(i18.Tr("  native library '%s': downloaded the prebuilt copy for %s"), co.ArgStr(n.link), co.ArgStr(pm.HostPlatform()))
+                continue
+            end
+            io.EPrintln("salam: " + pwhy)
+        end
+        if n.sources.len() > 0:
+            mut objs := Vector {} as Vector<str>
+            defer objs.free()
+            mut extra := Vector {} as Vector<str>
+            defer extra.free()
+            mut why := ""
+            if not pm.NativeObjects(n, dir, cc, extra, objs, why):
+                io.EPrintln("salam: " + why)
+                ret false
+            end
+            println co.Format1(i18.Tr("  native library '%s': not installed, built from source and cached"), co.ArgStr(n.link))
+            continue
+        end
+        io.EPrintln(co.Format1(i18.Tr("the native library '%s' is not installed on this system"), co.ArgStr(n.link)))
+        hint := pm.NativeHint(n)
+        if str.Len(hint) > 0:
+            io.EPrintln("  install it with: " + hint)
+        end
+        ret false
+    end
+    ret true
+end
+
+func pkg_check_name(name: str): int:
+    if pm.IsPathImport(name):
+        ret 0
+    end
+    if pkg_in_std(name):
+        println co.Format2(i18.Tr("'%s' is part of the standard library; use it with: import %s"), co.ArgStr(name), co.ArgStr(name))
+        if not pkg_prepare_native(pth.PathDir(sm.ResolveImport("", str.Replace(name, ".", "/")))):
+            ret 3
+        end
+        ret 1
+    end
+    io.EPrintln(co.Format1(i18.Tr("salam: unknown package '%s'; a package outside the standard library is named by its repository, for example github.com/owner/repo"), co.ArgStr(name)))
+    ret 2
+end
+
+func pkg_add_cmd(opt &: dr.Dr): int:
+    if opt.inputs.len() == 0:
+        io.EPrintln(i18.Tr("salam: 'add' needs a package, for example: salam add github.com/owner/repo"))
+        ret 2
+    end
+    root := pkg_project_root()
+    if str.Len(root) == 0:
+        ret 2
+    end
+    mut names := Vector {} as Vector<str>
+    mut vers := Vector {} as Vector<str>
+    defer names.free()
+    defer vers.free()
+    repeat opt.inputs.len() in k:
+        mut n0 := ""
+        mut v0 := ""
+        pkg_split_version(opt.inputs.get(k), n0, v0)
+        chk := pkg_check_name(n0)
+        if chk == 0:
+            if str.Len(v0) > 0 and not str.Equals(v0, "latest") and not pm.IsRelease(v0) and not pm.IsConstraint(v0):
+                io.EPrintln(co.Format1(i18.Tr("salam: '%s' is not a release version (expected something like v1.2.0)"), co.ArgStr(v0)))
+                ret 2
+            end
+            names.push(n0)
+            vers.push(v0)
+        else chk == 3:
+            ret 1
+        else chk != 1:
+            ret chk
+        end
+    end
+    mut changed := false
+    repeat names.len() in i:
+        name := names.get(i)
+        mut ver := vers.get(i)
+        mod := pm.DiscoverModule(name)
+        mut why := ""
+        mut commit := ""
+        mut record := ver
+        if pm.IsConstraint(ver):
+            ver = pm.NewestAllowed(mod, record, why)
+            if str.Len(ver) == 0:
+                ret pkg_fail(why)
+            end
+            pm.Pin(mod, ver)
+        else str.Len(ver) == 0 or str.Equals(ver, "latest"):
+            ver = pm.LatestVersion(mod, commit, why)
+            if str.Len(ver) == 0:
+                ret pkg_fail(why)
+            end
+            record = ver
+        end
+        if not pm.Fetch(mod, ver, commit, why):
+            ret pkg_fail(why)
+        end
+        if not pm.SetDependency(root, mod, record):
+            io.EPrintln(co.Format1(i18.Tr("salam: cannot write '%s'"), co.ArgStr(root + "/salam.toml")))
+            ret 1
+        end
+        println co.Format2(i18.Tr("added %s %s"), co.ArgStr(mod), co.ArgStr(ver))
+        changed = true
+    end
+    if changed:
+        mut why2 := ""
+        if not pm.Resolve(root, why2):
+            ret pkg_fail(why2)
+        end
+    end
+    ret 0
+end
+
+func pkg_remove_cmd(opt &: dr.Dr): int:
+    if opt.inputs.len() == 0:
+        io.EPrintln(i18.Tr("salam: 'remove' needs a package, for example: salam remove github.com/owner/repo"))
+        ret 2
+    end
+    root := pkg_project_root()
+    if str.Len(root) == 0:
+        ret 2
+    end
+    repeat opt.inputs.len() in i:
+        mut name := ""
+        mut ver := ""
+        pkg_split_version(opt.inputs.get(i), name, ver)
+        mod := pm.ModuleOf(name)
+        if not pm.RemoveDependency(root, mod):
+            io.EPrintln(co.Format1(i18.Tr("salam: '%s' is not a dependency in salam.toml"), co.ArgStr(mod)))
+            ret 2
+        end
+        println co.Format1(i18.Tr("removed %s"), co.ArgStr(mod))
+    end
+    mut why := ""
+    if not pm.Resolve(root, why):
+        ret pkg_fail(why)
+    end
+    ret 0
+end
+
+func pkg_wanted(opt &: dr.Dr, mod: str): bool:
+    if opt.inputs.len() == 0:
+        ret true
+    end
+    repeat opt.inputs.len() in i:
+        mut name := ""
+        mut ver := ""
+        pkg_split_version(opt.inputs.get(i), name, ver)
+        if str.Equals(pm.ModuleOf(name), mod) or str.Equals(name, mod):
+            ret true
+        end
+    end
+    ret false
+end
+
+func pkg_wants_latest(opt &: dr.Dr, mod: str): bool:
+    repeat opt.inputs.len() in i:
+        mut name := ""
+        mut ver := ""
+        pkg_split_version(opt.inputs.get(i), name, ver)
+        if str.Equals(pm.ModuleOf(name), mod) and str.Equals(ver, "latest"):
+            ret true
+        end
+    end
+    ret false
+end
+
+func pkg_update_cmd(opt &: dr.Dr): int:
+    root := pm.FindProjectRoot(".")
+    if str.Len(root) == 0:
+        io.EPrintln(i18.Tr("salam: no salam.toml here or in a parent folder; run 'salam init' first"))
+        io.EPrintln(i18.Tr("  to update Salam itself, run: salam upgrade"))
+        ret 2
+    end
+    mut deps := Vector {} as Vector<pm.Dep>
+    defer deps.free()
+    if not pm.ReadManifest(root, deps):
+        io.EPrintln(co.Format1(i18.Tr("cannot read salam.toml in '%s'"), co.ArgStr(root)))
+        ret 1
+    end
+    repeat deps.len() in i:
+        d := deps.get(i)
+        if str.Len(d.local) > 0 or not pm.IsPathImport(d.path) or not pkg_wanted(opt, d.path):
+            continue
+        end
+        if pm.IsConstraint(d.version) and not pkg_wants_latest(opt, d.path):
+            mut cwhy := ""
+            best := pm.NewestAllowed(d.path, d.version, cwhy)
+            if str.Len(best) == 0:
+                ret pkg_fail(cwhy)
+            end
+            mut ccommit := ""
+            if not pm.Fetch(d.path, best, ccommit, cwhy):
+                ret pkg_fail(cwhy)
+            end
+            pm.Pin(d.path, best)
+            println co.Format2(i18.Tr("%s uses %s"), co.ArgStr(d.path + " " + d.version), co.ArgStr(best))
+            continue
+        end
+        mut why := ""
+        mut commit := ""
+        mut latest := ""
+        if pkg_wants_latest(opt, d.path):
+            latest = pm.LatestVersion(d.path, commit, why)
+        else:
+            latest = pm.LatestInMajor(d.path, d.version, commit, why)
+        end
+        if str.Len(latest) == 0:
+            ret pkg_fail(why)
+        end
+        if not pkg_wants_latest(opt, d.path) and pm.IsRelease(d.version):
+            mut why3 := ""
+            newest := pm.NewestMajor(d.path, why3)
+            if str.Len(newest) > 0 and pm.CompareVersions(newest, latest) > 0:
+                println co.Format3(i18.Tr("  %s %s is out; it may break your code, move with: salam update %s@latest"), co.ArgStr(d.path), co.ArgStr(newest), co.ArgStr(d.path))
+            end
+        end
+        if pm.CompareVersions(latest, d.version) <= 0:
+            println co.Format2(i18.Tr("%s is up to date (%s)"), co.ArgStr(d.path), co.ArgStr(d.version))
+            continue
+        end
+        if not pm.Fetch(d.path, latest, commit, why):
+            ret pkg_fail(why)
+        end
+        if not pm.SetDependency(root, d.path, latest):
+            io.EPrintln(co.Format1(i18.Tr("salam: cannot write '%s'"), co.ArgStr(root + "/salam.toml")))
+            ret 1
+        end
+        println co.Format3(i18.Tr("updated %s %s -> %s"), co.ArgStr(d.path), co.ArgStr(d.version), co.ArgStr(latest))
+    end
+    mut why2 := ""
+    if not pm.Resolve(root, why2):
+        ret pkg_fail(why2)
+    end
+    ret 0
+end
+
+func pkg_deps_cmd(opt &: dr.Dr): int:
+    if str.Equals(opt.input, "sums"):
+        sroot := pkg_project_root()
+        if str.Len(sroot) == 0:
+            ret 2
+        end
+        mut lk := Vector {} as Vector<pm.Dep>
+        defer lk.free()
+        _hl := pm.ReadLock(sroot, lk)
+        repeat lk.len() in li:
+            l := lk.get(li)
+            if pm.IsPathImport(l.path) and str.Len(l.sum) > 0:
+                println l.path + "@" + l.version + " " + l.sum
+            end
+        end
+        ret 0
+    end
+    if str.Equals(opt.input, "clean"):
+        n := pm.CleanCache()
+        println co.Format2(i18.Tr("removed %d downloaded item(s) from %s"), co.ArgInt(n as i64), co.ArgStr(pm.PkgRoot()))
+        ret 0
+    end
+    if str.Len(opt.input) > 0:
+        io.EPrintln(co.Format1(i18.Tr("salam: 'deps' takes no arguments ('%s')"), co.ArgStr(opt.input)))
+        ret 2
+    end
+    root := pkg_project_root()
+    if str.Len(root) == 0:
+        ret 2
+    end
+    mut fetched := 0
+    mut why := ""
+    if not pm.Sync(root, fetched, why):
+        ret pkg_fail(why)
+    end
+    mut deps := Vector {} as Vector<pm.Dep>
+    defer deps.free()
+    _ok := pm.ReadManifest(root, deps)
+    repeat deps.len() in i:
+        d := deps.get(i)
+        if str.Len(d.local) > 0:
+            println d.path + " => " + d.local
+        end
+    end
+    mut locked := Vector {} as Vector<pm.Dep>
+    defer locked.free()
+    _have := pm.ReadLock(root, locked)
+    repeat locked.len() in j:
+        l := locked.get(j)
+        println l.path + " " + l.version
+    end
+    if fetched > 0:
+        println co.Format1(i18.Tr("downloaded %d package(s)"), co.ArgInt(fetched as i64))
+    end
+    ret 0
+end
+
+func pkg_bin_dir(): str:
+    e := os.Env("SALAM_BIN")
+    if str.Len(e) > 0:
+        ret e
+    end
+    mut h := os.Env("HOME")
+    if str.Len(h) == 0 and SALAM_OS_WINDOWS:
+        h = os.Env("USERPROFILE")
+    end
+    ret pth.PathJoin(pth.PathJoin(h, ".salam"), "bin")
+end
+
+func pkg_exe_name(name: str): str:
+    if SALAM_OS_WINDOWS:
+        ret name + ".exe"
+    else:
+        ret name
+    end
+end
+
+func pkg_build_release(opt &: dr.Dr, dir: str, out: str): int:
+    mut b := dr.NewOptions()
+    b.command = dr.CMD_BUILD
+    b.inputs.push(dir)
+    b.input = dir
+    b.output = out
+    b.safe = false
+    b.stdlib_path = opt.stdlib_path
+    b.log_level = opt.log_level
+    b.color = opt.color
+    if opt.cc_explicit:
+        b.cc = opt.cc
+        b.cc_explicit = true
+        b.backend = opt.backend
+    end
+    ret dr.Build(b)
+end
+
+func pkg_install_here(opt &: dr.Dr): int:
+    root := pkg_project_root()
+    if str.Len(root) == 0:
+        ret 2
+    end
+    mut fetched := 0
+    mut why := ""
+    if not pm.Sync(root, fetched, why):
+        ret pkg_fail(why)
+    end
+    bin := pkg_bin_dir()
+    if os.MkdirAll(bin) != 0:
+        io.EPrintln(co.Format1(i18.Tr("salam: cannot create directory '%s'"), co.ArgStr(bin)))
+        ret 1
+    end
+    name := pth.PathBase(pth.PathTrimSep(root))
+    out := pth.PathJoin(bin, pkg_exe_name(name))
+    rc := pkg_build_release(opt, root, out)
+    if rc != 0:
+        ret rc
+    end
+    println co.Format2(i18.Tr("installed %s to %s"), co.ArgStr(name), co.ArgStr(out))
+    pm.RecordInstall(name, root, "local", out)
+    ret 0
+end
+
+func pkg_install_one(opt &: dr.Dr, arg: str): int:
+    mut name := ""
+    mut ver := ""
+    pkg_split_version(arg, name, ver)
+    if not pm.IsPathImport(name):
+        io.EPrintln(co.Format1(i18.Tr("salam: 'install' takes a program by its repository, for example github.com/owner/tool ('%s')"), co.ArgStr(name)))
+        ret 2
+    end
+    mod := pm.DiscoverModule(name)
+    mut why := ""
+    mut commit := ""
+    if str.Len(ver) == 0 or str.Equals(ver, "latest"):
+        ver = pm.LatestVersion(mod, commit, why)
+        if str.Len(ver) == 0:
+            ret pkg_fail(why)
+        end
+    end
+    if not pm.Fetch(mod, ver, commit, why):
+        ret pkg_fail(why)
+    end
+    sub := str.TrimPrefix(str.TrimPrefix(name, mod), "/")
+    tmp := pth.PathJoin(os.TempDir(), "salam-install-" + str.FromInt(os.Pid() as i64))
+    _rm0 := os.RemoveAll(tmp)
+    if os.CopyTree(pm.VersionDir(mod, ver), tmp) != 0:
+        io.EPrintln(co.Format1(i18.Tr("salam: cannot create directory '%s'"), co.ArgStr(tmp)))
+        ret 1
+    end
+    mut work := tmp
+    if str.Len(sub) > 0:
+        work = pth.PathJoin(tmp, sub)
+    end
+    if not os.Exists(pth.PathJoin(work, "main.salam")):
+        _rm1 := os.RemoveAll(tmp)
+        io.EPrintln(co.Format1(i18.Tr("salam: '%s' has no main.salam, so there is no program to install; use it from a project with salam add"), co.ArgStr(name)))
+        ret 2
+    end
+    if os.Exists(pth.PathJoin(tmp, "salam.toml")):
+        mut ok := false
+        if os.Exists(pth.PathJoin(tmp, "salam.lock")):
+            mut fetched := 0
+            ok = pm.Sync(tmp, fetched, why)
+        else:
+            ok = pm.Resolve(tmp, why)
+        end
+        if not ok:
+            _rm2 := os.RemoveAll(tmp)
+            ret pkg_fail(why)
+        end
+        pm.SetProjectRoot(tmp)
+    end
+    bin := pkg_bin_dir()
+    if os.MkdirAll(bin) != 0:
+        _rm3 := os.RemoveAll(tmp)
+        io.EPrintln(co.Format1(i18.Tr("salam: cannot create directory '%s'"), co.ArgStr(bin)))
+        ret 1
+    end
+    out := pth.PathJoin(bin, pkg_exe_name(pm.PackageNameOf(name)))
+    here := os.Cwd()
+    _cd := os.Chdir(work)
+    rc := pkg_build_release(opt, ".", out)
+    _back := os.Chdir(here)
+    _rm4 := os.RemoveAll(tmp)
+    if rc != 0:
+        ret rc
+    end
+    println co.Format3(i18.Tr("installed %s %s to %s"), co.ArgStr(name), co.ArgStr(ver), co.ArgStr(out))
+    pm.RecordInstall(pm.PackageNameOf(name), name, ver, out)
+    path_env := os.Env("PATH")
+    if not str.Contains(path_env, bin):
+        println co.Format1(i18.Tr("  %s is not on PATH yet; add it to run the program by name"), co.ArgStr(bin))
+    end
+    ret 0
+end
+
+func pkg_install_cmd(opt &: dr.Dr): int:
+    if opt.inputs.len() == 0:
+        ret pkg_install_here(opt)
+    end
+    repeat opt.inputs.len() in i:
+        rc := pkg_install_one(opt, opt.inputs.get(i))
+        if rc != 0:
+            ret rc
+        end
+    end
+    ret 0
+end
+
+func pkg_search_cmd(opt &: dr.Dr): int:
+    if opt.inputs.len() == 0:
+        io.EPrintln(i18.Tr("salam: 'search' needs a word, for example: salam search websocket"))
+        ret 2
+    end
+    mut q := ""
+    repeat opt.inputs.len() in i:
+        if i > 0:
+            q = q + " "
+        end
+        q = q + opt.inputs.get(i)
+    end
+    mut found := 0
+    mut stdhits := Vector {} as Vector<str>
+    defer stdhits.free()
+    pm.SearchStd(sm.GetStdlibRoot(), q, stdhits)
+    repeat stdhits.len() in s:
+        println co.Format1(i18.Tr("%s  (standard library, import it directly)"), co.ArgStr(stdhits.get(s)))
+        found += 1
+    end
+    mut reg := Vector {} as Vector<pm.RegEntry>
+    defer reg.free()
+    mut why := ""
+    if not pm.LoadRegistry(reg, why):
+        io.EPrintln("salam: " + why)
+    end
+    repeat reg.len() in r:
+        e := reg.get(r)
+        if pm.Matches(e, q):
+            println e.name + "  " + e.description
+            found += 1
+        end
+    end
+    if found == 0:
+        println co.Format1(i18.Tr("no package matches '%s'"), co.ArgStr(q))
+        ret 1
+    end
+    ret 0
+end
+
+func pkg_uninstall_cmd(opt &: dr.Dr): int:
+    if opt.inputs.len() == 0:
+        mut lines := Vector {} as Vector<str>
+        defer lines.free()
+        pm.ListInstalled(lines)
+        if lines.len() == 0:
+            println i18.Tr("nothing has been installed with salam install")
+            ret 0
+        end
+        repeat lines.len() in i:
+            parts := str.Split(lines.get(i), "\t")
+            defer parts.free()
+            if parts.len() >= 4:
+                println parts.get(0) + "  " + parts.get(1) + " " + parts.get(2) + "  " + parts.get(3)
+            end
+        end
+        ret 0
+    end
+    repeat opt.inputs.len() in j:
+        name := pth.PathBase(opt.inputs.get(j))
+        path := pm.ForgetInstall(name)
+        if str.Len(path) == 0:
+            io.EPrintln(co.Format1(i18.Tr("salam: '%s' was not installed with salam install"), co.ArgStr(name)))
+            ret 2
+        end
+        _rm := os.Remove(path)
+        println co.Format2(i18.Tr("removed %s (%s)"), co.ArgStr(name), co.ArgStr(path))
+    end
+    ret 0
+end

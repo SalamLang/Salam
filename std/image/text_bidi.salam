@@ -1,0 +1,257 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+@en "TextDirAuto"
+@fa "جهت متن خودکار"
+pub const TextDirAuto := 0
+
+@en "TextDirLTR"
+@fa "جهت متن چپ به راست"
+pub const TextDirLTR := 1
+
+@en "TextDirRTL"
+@fa "جهت متن راست به چپ"
+pub const TextDirRTL := 2
+
+const _BC_L := 0
+const _BC_R := 1
+const _BC_AL := 2
+const _BC_EN := 3
+const _BC_AN := 4
+const _BC_NSM := 5
+const _BC_WS := 6
+const _BC_ON := 7
+const _BC_CS := 8
+const _BC_ES := 9
+const _BC_ET := 10
+
+func _bidi_is_rtl_class(c: int): bool:
+    ret c == _BC_R or c == _BC_AL
+end
+
+func _bidi_implicit_level(c: int, base: int): int:
+    if base == 1:
+        if c == _BC_R: ret 1 end
+        ret 2
+    end
+    if c == _BC_R: ret 1 end
+    if c == _BC_EN or c == _BC_AN: ret 2 end
+    ret 0
+end
+
+func _bidi_side_class(classes &: Vector<int>, i: int, base: int, forward: bool): int:
+    mut k := i
+    until k >= 0 and k < classes.len():
+        c := classes.get(k)
+        if c == _BC_L: ret _BC_L end
+        if c == _BC_R or c == _BC_EN or c == _BC_AN: ret _BC_R end
+        if forward:
+            k += 1
+        else:
+            k -= 1
+        end
+    end
+    if base == 1: ret _BC_R end
+    ret _BC_L
+end
+
+func _bidi_is_neutral(c: int): bool:
+    ret c == _BC_WS or c == _BC_ON
+end
+
+func _bidi_levels(cps &: Vector<int>, base: int, levels &: Vector<int>):
+    mut classes := Vector {} as Vector<int>
+    _bidi_classes(cps, classes)
+    _bidi_weak_rules(classes, base)
+    _bidi_resolve_pairs(cps, classes, base)
+    mut i := 0
+    until i < classes.len():
+        c := classes.get(i)
+        if _bidi_is_neutral(c):
+            before := _bidi_side_class(classes, i - 1, base, false)
+            after := _bidi_side_class(classes, i + 1, base, true)
+            if before == after:
+                levels.push(_bidi_implicit_level(before, base))
+            else:
+                levels.push(base)
+            end
+        else:
+            levels.push(_bidi_implicit_level(c, base))
+        end
+        i += 1
+    end
+    mut k := levels.len() - 1
+    until k >= 0:
+        if not _bidi_is_neutral(classes.get(k)):
+            break
+        end
+        levels.set(k, base)
+        k -= 1
+    end
+    classes.free()
+end
+
+func _bidi_reverse_range(cps &: Vector<int>, lo: int, hi: int):
+    mut a := lo
+    mut b := hi
+    until a < b:
+        tmp := cps.get(a)
+        cps.set(a, cps.get(b))
+        cps.set(b, tmp)
+        a += 1
+        b -= 1
+    end
+end
+
+func _bidi_reorder(cps &: Vector<int>, levels &: Vector<int>):
+    mut max_level := 0
+    mut i := 0
+    until i < levels.len():
+        if levels.get(i) > max_level:
+            max_level = levels.get(i)
+        end
+        i += 1
+    end
+    mut lvl := max_level
+    until lvl >= 1:
+        mut k := 0
+        until k < levels.len():
+            if levels.get(k) >= lvl:
+                mut e := k
+                until e + 1 < levels.len() and levels.get(e + 1) >= lvl:
+                    e += 1
+                end
+                _bidi_reverse_range(cps, k, e)
+                k = e + 1
+            else:
+                k += 1
+            end
+        end
+        lvl -= 1
+    end
+end
+
+func _bidi_mirror(cp: int): int:
+    if cp == 0x28: ret 0x29 end
+    if cp == 0x29: ret 0x28 end
+    if cp == 0x5B: ret 0x5D end
+    if cp == 0x5D: ret 0x5B end
+    if cp == 0x7B: ret 0x7D end
+    if cp == 0x7D: ret 0x7B end
+    if cp == 0x3C: ret 0x3E end
+    if cp == 0x3E: ret 0x3C end
+    if cp == 0x00AB: ret 0x00BB end
+    if cp == 0x00BB: ret 0x00AB end
+    if cp == 0x2039: ret 0x203A end
+    if cp == 0x203A: ret 0x2039 end
+    ret cp
+end
+
+func _bidi_apply_mirroring(cps &: Vector<int>, levels &: Vector<int>):
+    mut i := 0
+    until i < cps.len():
+        if (levels.get(i) % 2) == 1:
+            cps.set(i, _bidi_mirror(cps.get(i)))
+        end
+        i += 1
+    end
+end
+
+func _bidi_has_rtl(cps &: Vector<int>): bool:
+    mut i := 0
+    until i < cps.len():
+        if _bidi_is_rtl_class(_bidi_class(cps.get(i))):
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func _bidi_needs_reorder(cps &: Vector<int>): bool:
+    mut i := 0
+    until i < cps.len():
+        c := _bidi_class(cps.get(i))
+        if _bidi_is_rtl_class(c) or c == _BC_AN:
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func _bidi_base_level(cps &: Vector<int>, dir: int): int:
+    if dir == TextDirRTL: ret 1 end
+    if dir == TextDirLTR: ret 0 end
+    mut i := 0
+    until i < cps.len():
+        c := _bidi_class(cps.get(i))
+        if _bidi_is_rtl_class(c): ret 1 end
+        if c == _BC_L: ret 0 end
+        i += 1
+    end
+    ret 0
+end
+
+func _bidi_visual(cps &: Vector<int>, dir: int): bool:
+    base := _bidi_base_level(cps, dir)
+    if base == 0 and not _bidi_needs_reorder(cps):
+        ret false
+    end
+    mut levels := Vector {} as Vector<int>
+    _bidi_levels(cps, base, levels)
+    _bidi_apply_mirroring(cps, levels)
+    _bidi_reorder(cps, levels)
+    levels.free()
+    ret true
+end
+
+@en "IsRTLText"
+@fa "متن راست به چپ است"
+pub func IsRTLText(text: str): bool:
+    mut cps := Vector {} as Vector<int>
+    _utf8_decode_all(text, cps)
+    out := _bidi_has_rtl(cps)
+    cps.free()
+    ret out
+end
+
+@en "BaseDirection"
+@fa "جهت پایه"
+pub func BaseDirection(text: str): int:
+    mut cps := Vector {} as Vector<int>
+    _utf8_decode_all(text, cps)
+    base := _bidi_base_level(cps, TextDirAuto)
+    cps.free()
+    if base == 1:
+        ret TextDirRTL
+    end
+    ret TextDirLTR
+end
+
+@en "ToVisualOrder"
+@fa "به ترتیب نمایشی"
+pub func ToVisualOrder(text: str, dir: int): str:
+    mut logical := Vector {} as Vector<int>
+    mut shaped := Vector {} as Vector<int>
+    _utf8_decode_all(text, logical)
+    _shape_arabic(logical, shaped)
+    _bidi_visual(shaped, dir)
+    out := _utf8_encode_all(shaped)
+    logical.free()
+    shaped.free()
+    ret out
+end

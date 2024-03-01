@@ -1,0 +1,214 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aws
+
+import mem
+import str
+import crypto
+import time
+
+const HEX_DIGITS := "0123456789abcdef"
+const HMAC_SIZE := 32
+
+@en "Signed"
+@fa "امضاشده"
+pub struct Signed:
+    @en "authorization"
+    @fa "مجوز"
+    pub authorization: str = ""
+    @en "amz_date"
+    @fa "تاریخ آمازون"
+    pub amz_date: str = ""
+    @en "payload_hash"
+    @fa "چکیده بدنه"
+    pub payload_hash: str = ""
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+end
+
+func _unreserved(code: int): bool:
+    if code >= 65 and code <= 90: ret true end
+    if code >= 97 and code <= 122: ret true end
+    if code >= 48 and code <= 57: ret true end
+    ret code == 45 or code == 46 or code == 95 or code == 126
+end
+
+func _hex_byte(v: int): str:
+    ret HEX_DIGITS.substr(v / 16, 1) + HEX_DIGITS.substr(v % 16, 1)
+end
+
+func _uri_encode(s: str, keep_slash: bool): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat s.len() in i:
+        code := s[i] as int
+        if _unreserved(code) or (keep_slash and code == 47):
+            str.BufAppendChar(sb, code)
+        else:
+            str.BufAppend(sb, "%" + _hex_byte(code).upper())
+        end
+    end
+    ret str.BufStr(sb)
+end
+
+func _hex(ptr: void*, n: int): str:
+    bp := ptr as u8*
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat n in i:
+        str.BufAppend(sb, _hex_byte(bp[i] as int))
+    end
+    ret str.BufStr(sb)
+end
+
+func _hmac_into(key: void*, klen: int, msg: str, out: void*):
+    crypto.HmacSha256Raw(key, klen, msg as void*, msg.len(), out)
+end
+
+func _signing_key(secret: str, date_stamp: str, region: str, service: str): void*:
+    out := mem.Allocate(HMAC_SIZE as u64)
+    if out == null: ret null end
+    seed := "AWS4" + secret
+    _hmac_into(seed as void*, seed.len(), date_stamp, out)
+    _hmac_into(out, HMAC_SIZE, region, out)
+    _hmac_into(out, HMAC_SIZE, service, out)
+    _hmac_into(out, HMAC_SIZE, "aws4_request", out)
+    ret out
+end
+
+func _canonical_request(
+    method: str, path: str, query: str, headers: str, signed_headers: str, payload_hash: str
+): str:
+    ret method + "\n" + path + "\n" + query + "\n" + headers + "\n" + signed_headers + "\n" + payload_hash
+end
+
+func _string_to_sign(amz_date: str, scope: str, canonical: str): str:
+    ret ALGORITHM + "\n" + amz_date + "\n" + scope + "\n" + crypto.Sha256Hex(canonical)
+end
+
+func _sign_with(key: void*, string_to_sign: str): str:
+    out := mem.Allocate(HMAC_SIZE as u64)
+    defer mem.Free(out)
+    if out == null: ret "" end
+    _hmac_into(key, HMAC_SIZE, string_to_sign, out)
+    ret _hex(out, HMAC_SIZE)
+end
+
+@en "AmzDate"
+@fa "تاریخ ای ام زد"
+pub func AmzDate(epoch_seconds: i64): str:
+    iso := time.FormatISOUTC(epoch_seconds)
+    ret str.Replace(str.Replace(iso, "-", ""), ":", "")
+end
+
+@en "DateStamp"
+@fa "مهر تاریخ"
+pub func DateStamp(amz_date: str): str:
+    if amz_date.len() < 8: ret amz_date end
+    ret amz_date.substr(0, 8)
+end
+
+@en "Scope"
+@fa "دامنه اعتبار"
+pub func Scope(date_stamp: str, region: str, service: str): str:
+    ret date_stamp + "/" + region + "/" + service + "/aws4_request"
+end
+
+@en "UriEncode"
+@fa "کدگذاری نشانی"
+pub func UriEncode(s: str, keep_slash: bool): str:
+    ret _uri_encode(s, keep_slash)
+end
+
+@en "EncodeKey"
+@fa "کدگذاری کلید"
+pub func EncodeKey(key: str): str:
+    mut trimmed := key
+    if trimmed.len() > 0 and trimmed.substr(0, 1) == "/":
+        trimmed = trimmed.substr(1, trimmed.len() - 1)
+    end
+    ret "/" + _uri_encode(trimmed, true)
+end
+
+@en "Sha256Bytes"
+@fa "شا۲۵۶ بایت"
+pub func Sha256Bytes(ptr: void*, n: int): str:
+    digest := mem.Allocate(HMAC_SIZE as u64)
+    defer mem.Free(digest)
+    if digest == null: ret EMPTY_SHA256 end
+    crypto.Sha256Bytes(ptr, n, digest)
+    ret _hex(digest, HMAC_SIZE)
+end
+
+@en "SignRequest"
+@fa "امضای درخواست"
+pub func SignRequest(
+    cfg: Config, method: str, path: str, query: str, canonical_headers: str, signed_headers: str, payload_hash: str, epoch_seconds: i64
+): Signed:
+    if cfg.secret_key.len() == 0: ret Signed {} end
+    amz_date := AmzDate(epoch_seconds)
+    date_stamp := DateStamp(amz_date)
+    scope := Scope(date_stamp, cfg.region, cfg.service)
+    canonical := _canonical_request(
+        method, path, query, canonical_headers, signed_headers, payload_hash
+    )
+    key := _signing_key(cfg.secret_key, date_stamp, cfg.region, cfg.service)
+    if key == null: ret Signed {} end
+    defer mem.Free(key)
+    signature := _sign_with(key, _string_to_sign(amz_date, scope, canonical))
+    if signature.len() == 0: ret Signed {} end
+    ret Signed {
+        authorization = ALGORITHM + " Credential=" + cfg.access_key + "/" + scope + ", SignedHeaders=" + signed_headers + ", Signature=" + signature, amz_date = amz_date, payload_hash = payload_hash, ok = true
+    }
+end
+
+@en "SignString"
+@fa "امضای رشته"
+pub func SignString(cfg: Config, date_stamp: str, payload: str): str:
+    if cfg.secret_key.len() == 0: ret "" end
+    key := _signing_key(cfg.secret_key, date_stamp, cfg.region, cfg.service)
+    if key == null: ret "" end
+    defer mem.Free(key)
+    ret _sign_with(key, payload)
+end
+
+@en "SignQueryHeaders"
+@fa "امضای سرآیندهای پرسمان"
+pub func SignQueryHeaders(
+    cfg: Config, method: str, path: str, query: str, canonical_headers: str, signed_headers: str, epoch_seconds: i64
+): str:
+    if cfg.secret_key.len() == 0: ret "" end
+    amz_date := AmzDate(epoch_seconds)
+    date_stamp := DateStamp(amz_date)
+    canonical := _canonical_request(
+        method, path, query, canonical_headers, signed_headers, UNSIGNED_PAYLOAD
+    )
+    ret SignString(
+        cfg, date_stamp, _string_to_sign(
+            amz_date, Scope(date_stamp, cfg.region, cfg.service), canonical
+        )
+    )
+end
+
+@en "SignQuery"
+@fa "امضای پرسمان"
+pub func SignQuery(
+    cfg: Config, method: str, path: str, query: str, host: str, epoch_seconds: i64
+): str:
+    ret SignQueryHeaders(
+        cfg, method, path, query, "host:" + host + "\n", "host", epoch_seconds
+    )
+end

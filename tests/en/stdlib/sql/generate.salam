@@ -1,0 +1,128 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.sql
+import str
+
+include h "_harness.salam"
+
+func heads(src: str):
+    mut r := sql.Report {}
+    mut qs := sql.ParseQueries(src, r)
+    println "read " + str.FromInt(qs.len() as i64) + " queries"
+    mut i := 0
+    until i < qs.len():
+        q := qs.get(i)
+        println "  " + q.name + " kind=" + str.FromInt(q.kind as i64) + " line=" + str.FromInt(q.line as i64) + " sql=" + q.text
+        i = i + 1
+    end
+    h.Show("(headers)", r)
+    sql.FreeQueries(qs)
+    sql.FreeReport(r)
+end
+
+func emit(src: str, c: sql.Catalog):
+    mut r := sql.Report {}
+    mut qs := sql.ParseQueries(src, r)
+    code := sql.Generate("store", qs, c, r)
+    if r.errors > 0:
+        h.Show("(generate)", r)
+    else:
+        print code
+    end
+    sql.FreeQueries(qs)
+    sql.FreeReport(r)
+end
+
+func main:
+    lite := sql.DialectOf(sql.SQLITE)
+    mut c := h.Schema("""
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL,
+            name TEXT,
+            age INTEGER,
+            paid BOOLEAN NOT NULL DEFAULT 0
+        );
+        CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, total REAL NOT NULL, note TEXT);
+    """, lite)
+
+    println "-- reading the headers"
+    heads("""
+-- name: GetUser :one
+SELECT id, email FROM users WHERE id = ?;
+
+-- name: ListUsers :many
+SELECT id FROM users;
+
+-- name: AddUser :exec
+INSERT INTO users (email) VALUES (?);
+
+-- name: DropUsers :execrows
+DELETE FROM users WHERE age < ?;
+""")
+
+    println ""
+    println "-- headers the reader will not take"
+    heads("-- name: GetUser\nSELECT 1;\n")
+    heads("-- name: GetUser :maybe\nSELECT 1;\n")
+    heads("-- name: switch :one\nSELECT 1;\n")
+    heads("-- name: has space :one\nSELECT 1;\n")
+    heads("-- name: 9lives :one\nSELECT 1;\n")
+    heads("SELECT 1;\n")
+
+    println ""
+    println "-- the generated file"
+    emit("""
+-- name: GetUser :one
+SELECT id, email, name, age, paid FROM users WHERE email = ?;
+
+-- name: UsersOlderThan :many
+SELECT u.id, u.email, o.total FROM users u LEFT JOIN orders o ON o.user_id = u.id WHERE u.age > ?;
+
+-- name: AddUser :exec
+INSERT INTO users (email, name) VALUES (?, ?);
+
+-- name: TouchUser :execrows
+UPDATE users SET name = ? WHERE id = ?;
+""", c)
+
+    println ""
+    println "-- names the generator has to clean up"
+    emit("""
+-- name: Odd :one
+SELECT id AS type, email AS until, name AS id, age AS id FROM users WHERE id = ?;
+""", c)
+
+    println ""
+    println "-- a query with nothing to return"
+    emit("""
+-- name: Nothing :one
+SELECT 1;
+""", c)
+
+    println ""
+    println "-- a query the schema refuses"
+    emit("""
+-- name: Broken :one
+SELECT id, totl FROM orders WHERE id = ?;
+""", c)
+    emit("""
+-- name: NoTable :many
+SELECT id FROM nope;
+""", c)
+
+    sql.FreeCatalog(c)
+    ret 0
+end

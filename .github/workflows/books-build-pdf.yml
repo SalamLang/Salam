@@ -1,0 +1,144 @@
+---
+name: 📚 Books - Build & Validate PDFs
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: books-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    uses: ./.github/workflows/_changes.yml # zizmor: ignore[self-repository]
+    with:
+      paths: |
+        books/*
+        .github/workflows/books-build-pdf.yml
+        .github/workflows/_changes.yml
+  build:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    name: Build & validate the ${{ matrix.lang }} books
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        lang: [en, fa]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build books image (cached)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: books/docker
+          file: books/docker/Dockerfile
+          tags: salam-books:latest
+          load: true
+          cache-from: type=gha,scope=books
+          cache-to: type=gha,mode=max,scope=books
+
+      - name: Build every ${{ matrix.lang }} book (XeLaTeX in Docker)
+        run: |
+          set -euo pipefail
+          lang="${{ matrix.lang }}"
+          found=0
+          for dir in books/"$lang"/*/; do
+            [ -f "$dir/book.tex" ] || continue
+            found=$((found + 1))
+            rm -f "$dir"book.{aux,log,out,toc,xdv,pdf,fls,fdb_latexmk}
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::no book.tex found under books/$lang"
+            exit 1
+          fi
+          echo "building $found '$lang' book(s)"
+          HOST_UID="$(id -u)"
+          HOST_GID="$(id -g)"
+          export HOST_UID HOST_GID
+          docker compose -f books/docker/docker-compose.yml run --rm books "$lang"
+
+      - name: Verify every generated PDF is valid
+        run: |
+          set -euo pipefail
+          lang="${{ matrix.lang }}"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends poppler-utils qpdf
+          mkdir -p book-pdfs
+          {
+            echo "### 📘 ${lang} books"
+            echo ""
+            echo "| Book | Pages | Size |"
+            echo "|------|-------|------|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          checked=0
+          for dir in books/"$lang"/*/; do
+            [ -f "$dir/book.tex" ] || continue
+            name="$(basename "$dir")"
+            pdf="${dir}book.pdf"
+            if [ ! -f "$pdf" ]; then
+              echo "::error::Expected PDF was not generated: $pdf"
+              exit 1
+            fi
+            echo "::group::qpdf --check $pdf"
+            qpdf --check "$pdf" || echo "::warning::qpdf reported issues for $pdf (see log above)"
+            echo "::endgroup::"
+            info="$(pdfinfo "$pdf")"
+            echo "$info"
+            pages="$(printf '%s\n' "$info" | awk '/^Pages:/ {print $2}')"
+            case "$pages" in
+              ''|*[!0-9]*)
+                echo "::error::Could not read a valid page count from $pdf"
+                exit 1
+                ;;
+            esac
+            if [ "$pages" -lt 1 ]; then
+              echo "::error::$pdf reports $pages pages"
+              exit 1
+            fi
+            if [ "${lang}/${name}" = "fa/salam-programming" ] && [ "$pages" -ne 153 ]; then
+              echo "::error file=books/fa/salam-programming/book.tex::the Persian salam-programming book must be exactly 153 pages (the publisher's page count), got ${pages}"
+              exit 1
+            fi
+            log="${dir}book.log"
+            if [ -f "$log" ]; then
+              warnings="$(grep -aE '^(Overfull|Underfull) \\[hv]box|^LaTeX( [A-Za-z]+)? Warning|^Package [A-Za-z0-9_-]+ Warning' "$log" || true)"
+              if [ -n "$warnings" ]; then
+                printf '%s\n' "$warnings"
+                echo "::error file=${dir}book.tex::${lang}/${name} has LaTeX warnings (listed above)"
+                exit 1
+              fi
+            fi
+            size="$(du -h "$pdf" | cut -f1)"
+            echo "✅ ${lang}/${name} is a valid PDF: ${pages} pages, ${size}"
+            echo "| ${name} | ${pages} | ${size} |" >> "$GITHUB_STEP_SUMMARY"
+            cp "$pdf" "book-pdfs/salam-${lang}-${name}.pdf"
+            checked=$((checked + 1))
+          done
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::no PDFs were checked for $lang"
+            exit 1
+          fi
+          echo "checked $checked '$lang' book PDF(s)"
+
+      - name: Upload the ${{ matrix.lang }} PDF artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-book-${{ matrix.lang }}
+          path: book-pdfs/
+          if-no-files-found: error
+          retention-days: 30

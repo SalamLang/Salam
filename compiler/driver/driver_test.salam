@@ -1,0 +1,401 @@
+package driver
+
+import io
+import os
+import str
+import time
+
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include co "../sal_core.salam"
+include src "../source.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include lp "../langpack.salam"
+include lx "../lexer/lexer.salam"
+include ps "../parser/parser.salam"
+include sm "../semantic/semantic.salam"
+include pth "../sal_path.salam"
+
+struct TestFn:
+    pub name: str = ""
+    pub line: int = 0
+end
+
+struct TestFile:
+    pub path: str = ""
+    pub text: str = ""
+    pub pack: int = 0
+    pub fns: Vector<TestFn> = Vector {}
+    pub has_main: bool = false
+    pub has_testing: bool = false
+    pub insert_at: int = 0
+    pub insert_after_import: bool = false
+    pub parsed: bool = true
+end
+
+func is_test_name(name: str): bool:
+    ret str.StartsWith(name, "test_") or str.StartsWith(name, "آزمون")
+end
+
+func test_files_under(dir: str, out &: Vector<str>):
+    mut names := os.ListDir(dir)
+    defer names.free()
+    each n in names:
+        if str.StartsWith(n, ".") or str.Equals(n, "node_modules") or str.Equals(n, "build") or str.Equals(n, "out"):
+            continue
+        end
+        full := str.Equals(dir, ".") ? n : pth.PathJoin(dir, n)
+        if os.IsDir(full):
+            test_files_under(full, out)
+        else str.EndsWith(n, "_test.salam"):
+            out.push(full)
+        end
+    end
+end
+
+func sort_paths(v &: Vector<str>):
+    mut i := 1
+    until i < v.len():
+        x := v.get(i)
+        mut j := i
+        until j > 0 and str.Compare(v.get(j - 1), x) > 0:
+            v.set(j, v.get(j - 1))
+            j -= 1
+        end
+        v.set(j, x)
+        i += 1
+    end
+end
+
+func param_count(a &: at.Ast, nid: int): int:
+    mut n := 0
+    each c in at.Get(a, nid).list:
+        if at.KindOf(a, c) == at.AST_PARAM:
+            n += 1
+        end
+    end
+    ret n
+end
+
+func discover_tests(path: str, tf &: TestFile): bool:
+    mut sf := src.New()
+    if not src.Load(path, sf):
+        ret false
+    end
+    tf.path = path
+    tf.text = sf.text
+    lgr := lg.New(lg.LOG_OFF, false)
+    tf.pack = lx.Detect(sf, lp.LP_EN)
+    mut toks := tok.StreamNew(path)
+    lexed := lx.Run(lgr, tf.pack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    parsed := ps.Run(lgr, toks, a, prog)
+    tok.StreamFree(toks)
+    tf.parsed = lexed and parsed
+    entry := lp.Entry(tf.pack)
+    mut first := 0 - 1
+    mut last_import := 0 - 1
+    each nid in at.Get(a, prog).list:
+        n := at.Get(a, nid)
+        if n.synthetic:
+            continue
+        end
+        if first < 0:
+            first = n.begin_index as int
+        end
+        if n.kind == at.AST_IMPORT:
+            last_import = n.begin_index as int
+            spec := n.value_kind == tok.TV_STRING ? n.value_str : n.name
+            if str.Equals(spec, "testing") or lp.IdentEqual(spec, "آزمایش"):
+                tf.has_testing = true
+            end
+        else n.kind == at.AST_FUNC_DEF:
+            if str.Equals(n.name, "main") or lp.IdentEqual(n.name, entry):
+                tf.has_main = true
+            else is_test_name(n.name) and param_count(a, nid) == 0 and n.ty == 0:
+                tf.fns.push(TestFn { name = n.name, line = n.begin_line as int })
+            end
+        end
+    end
+    at.FreeAst(a)
+    if last_import >= 0:
+        tf.insert_at = last_import
+        tf.insert_after_import = true
+    else first >= 0:
+        tf.insert_at = first
+    end
+    ret true
+end
+
+func salam_quote(s: str): str:
+    ret "\"" + str.Replace(str.Replace(s, "\\", "\\\\"), "\"", "\\\"") + "\""
+end
+
+func test_line_start(text: str, i: int): int:
+    mut k := i
+    until k > 0 and co.ByteAt(text, k - 1) != 10:
+        k -= 1
+    end
+    ret k
+end
+
+func test_next_line(text: str, i: int): int:
+    n := str.Len(text)
+    mut k := i
+    until k < n and co.ByteAt(text, k) != 10:
+        k += 1
+    end
+    ret k < n ? k + 1 : n
+end
+
+func tname(fa: bool, en: str, persian: str): str:
+    ret fa ? persian : en
+end
+
+func test_harness(tf: TestFile, format: str, run: str, shown: str): str:
+    p := tf.pack
+    fa := p == lp.LP_FA
+    pk := tname(fa, "testing", "آزمایش") + "."
+    imp := lp.Spelling(p, tok.TK_KW_IMPORT)
+    mut text := tf.text
+    if not tf.has_testing:
+        line := imp + " " + tname(fa, "testing", "آزمایش") + "\n"
+        if tf.insert_after_import:
+            at_i := test_next_line(text, tf.insert_at)
+            pre := at_i == str.Len(text) and at_i > 0 and co.ByteAt(text, at_i - 1) != 10 ? "\n" : ""
+            text = str.Substr(text, 0, at_i) + pre + line + str.Substr(text, at_i, str.Len(text) - at_i)
+        else:
+            at_i := test_line_start(text, tf.insert_at)
+            text = str.Substr(text, 0, at_i) + line + "\n" + str.Substr(text, at_i, str.Len(text) - at_i)
+        end
+    end
+    mut b := str.NewBuilder()
+    str.BufAppend(b, text)
+    if str.Len(text) > 0 and co.ByteAt(text, str.Len(text) - 1) != 10:
+        str.BufAppend(b, "\n")
+    end
+    str.BufAppend(b, "\n" + lp.Spelling(p, tok.TK_KW_PUB) + " " + lp.Spelling(p, tok.TK_KW_FUNC) + " " + lp.Entry(p) + ":\n")
+    str.BufAppend(b, "    " + pk + tname(fa, "SetFormat", "قالب گزارش") + "(" + salam_quote(format) + ")\n")
+    if str.Len(run) > 0:
+        str.BufAppend(b, "    " + pk + tname(fa, "SetFilter", "پالایه آزمون") + "(" + salam_quote(run) + ")\n")
+    end
+    str.BufAppend(b, "    " + pk + tname(fa, "SuiteStart", "شروع مجموعه") + "(" + salam_quote(shown) + ")\n")
+    if_kw := lp.Spelling(p, tok.TK_KW_IF)
+    each f in tf.fns:
+        str.BufAppend(b, "    " + if_kw + " " + pk + tname(fa, "Selected", "انتخاب شده") + "(" + salam_quote(f.name) + "):\n")
+        str.BufAppend(b, "        " + pk + tname(fa, "Begin", "شروع آزمون") + "(" + salam_quote(f.name) + ", " + f.line + ")\n")
+        str.BufAppend(b, "        " + f.name + "()\n")
+        str.BufAppend(b, "        " + pk + tname(fa, "End", "اتمام آزمون") + "()\n")
+        str.BufAppend(b, "    " + lp.EndSpelling(p) + "\n")
+    end
+    str.BufAppend(b, "    " + pk + tname(fa, "Finish", "جمع‌بندی آزمون‌ها") + "()\n" + lp.EndSpelling(p) + "\n")
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+func tc_value(s: str): str:
+    mut out := str.Replace(s, "|", "||")
+    out = str.Replace(out, "'", "|'")
+    out = str.Replace(out, "[", "|[")
+    ret str.Replace(out, "]", "|]")
+end
+
+func test_selected(name: str, filter: str): bool:
+    if str.Len(filter) == 0:
+        ret true
+    end
+    mut f := filter
+    at_start := str.StartsWith(f, "^")
+    if at_start:
+        f = str.Substr(f, 1, str.Len(f) - 1)
+    end
+    at_end := str.EndsWith(f, "$")
+    if at_end:
+        f = str.Substr(f, 0, str.Len(f) - 1)
+    end
+    if at_start and at_end:
+        ret str.Equals(name, f)
+    else at_start:
+        ret str.StartsWith(name, f)
+    else at_end:
+        ret str.EndsWith(name, f)
+    end
+    ret str.Contains(name, f)
+end
+
+func report_no_match(opt &: Dr, path: str): int:
+    if not str.Equals(opt.test_format, "teamcity"):
+        println co.Format1(i18.Tr("?    %s: no test matches"), co.ArgStr(path))
+    end
+    if str.Len(opt.test_report) > 0:
+        _w := io.WriteFile(opt.test_report, "nomatch\n")
+    end
+    ret 0
+end
+
+func run_whole_file(opt &: Dr, path: str): int:
+    teamcity := str.Equals(opt.test_format, "teamcity")
+    name := pth.PathBase(path)
+    if not test_selected(name, opt.test_run):
+        ret report_no_match(opt, path)
+    end
+    if teamcity:
+        println "##teamcity[testSuiteStarted name='" + tc_value(path) + "' locationHint='salam://" + tc_value(path) + "']"
+        println "##teamcity[testStarted name='" + tc_value(name) + "' locationHint='salam://" + tc_value(path) + ":1']"
+    end
+    mut child := opt
+    child.input = path
+    child.inputs = Vector {} as Vector<str>
+    child.inputs.push(path)
+    child.command = CMD_RUN
+    rc := opt.interp ? Exec(child) : Run(child)
+    if teamcity:
+        if rc != 0:
+            println "##teamcity[testFailed name='" + tc_value(name) + "' message='exit code " + rc + "']"
+        end
+        println "##teamcity[testFinished name='" + tc_value(name) + "']"
+        println "##teamcity[testSuiteFinished name='" + tc_value(path) + "']"
+    else:
+        if rc != 0:
+            println "FAIL " + path + ": exit code " + rc
+        else:
+            println "ok   " + path
+        end
+    end
+    ret rc
+end
+
+pub func TestOne(opt &: Dr): int:
+    path := opt.input
+    mut tf := TestFile {}
+    if not discover_tests(path, tf):
+        io.EPrintln(co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(path)))
+        ret 2
+    end
+    if not tf.parsed:
+        mut broken := opt
+        broken.input = path
+        broken.inputs = Vector {} as Vector<str>
+        broken.inputs.push(path)
+        broken.command = CMD_RUN
+        brc := opt.interp ? Exec(broken) : Run(broken)
+        ret brc != 0 ? brc : 1
+    end
+    if tf.fns.len() == 0:
+        if tf.has_main:
+            ret run_whole_file(opt, path)
+        end
+        if str.Len(opt.test_run) > 0:
+            ret report_no_match(opt, path)
+        end
+        println co.Format1(i18.Tr("?    %s: no test functions"), co.ArgStr(path))
+        ret 0
+    end
+    if tf.has_main:
+        io.EPrintln(
+            co.Format1(i18.Tr("salam test: %s has test functions and a main function; remove main, salam test writes its own"), co.ArgStr(path))
+        )
+        ret 2
+    end
+    mut any := false
+    each f in tf.fns:
+        if test_selected(f.name, opt.test_run):
+            any = true
+        end
+    end
+    if not any:
+        ret report_no_match(opt, path)
+    end
+    dir := pth.PathDir(path)
+    stem := pth.PathBase(path)
+    vpath := pth.PathJoin(str.Len(dir) > 0 ? dir : ".", str.Substr(stem, 0, str.Len(stem) - 6) + "__salam_test.salam")
+    src.SetOverlay(vpath, test_harness(tf, opt.test_format, opt.test_run, path))
+    mut child := opt
+    child.input = vpath
+    child.inputs = Vector {} as Vector<str>
+    child.inputs.push(vpath)
+    child.command = CMD_RUN
+    ret opt.interp ? Exec(child) : Run(child)
+end
+
+pub func Test(opt &: Dr): int:
+    mut files := Vector {} as Vector<str>
+    defer files.free()
+    mut roots := opt.inputs
+    if roots.len() == 0:
+        roots = Vector {} as Vector<str>
+        roots.push(".")
+    end
+    each r in roots:
+        if os.IsDir(r):
+            test_files_under(r, files)
+        else os.Exists(r):
+            files.push(r)
+        else:
+            io.EPrintln(co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(r)))
+            ret 2
+        end
+    end
+    sort_paths(files)
+    if str.Equals(opt.test_format, "teamcity"):
+        cwd := os.Cwd()
+        repeat files.len() in fi:
+            if not pth.PathIsAbs(files.get(fi)):
+                files.set(fi, pth.PathJoin(cwd, files.get(fi)))
+            end
+        end
+    end
+    if files.len() == 0:
+        println i18.Tr("salam test: no *_test.salam files found")
+        ret 0
+    end
+    mut exe := ""
+    if not sm.ExePath(exe):
+        exe = "salam"
+    end
+    mut failed := 0
+    mut unmatched := 0
+    report := pth.PathJoin(os.TempDir(), "salam-test-" + driver_pid() + "-" + time.NowMicros() + ".report")
+    each f in files:
+        _rm0 := os.Remove(report)
+        mut cmd := salam_quote(exe) + " test --one " + salam_quote(f) + " --report=" + salam_quote(report)
+        if str.Len(opt.test_format) > 0:
+            cmd = cmd + " --format=" + opt.test_format
+        end
+        if str.Len(opt.test_run) > 0:
+            cmd = cmd + " --run=" + salam_quote(opt.test_run)
+        end
+        if opt.interp:
+            cmd = cmd + " --interp"
+        end
+        if str.Len(opt.stdlib_path) > 0:
+            cmd = cmd + " --stdlib-path=" + salam_quote(opt.stdlib_path)
+        end
+        if SALAM_OS_WINDOWS:
+            cmd = "\"" + cmd + "\""
+        end
+        rc := proc_status(system(cmd))
+        if os.Exists(report):
+            unmatched += 1
+            _rm1 := os.Remove(report)
+        else rc != 0:
+            failed += 1
+        end
+    end
+    ran := files.len() - unmatched
+    if str.Len(opt.test_run) > 0 and ran == 0:
+        io.EPrintln(co.Format1(i18.Tr("salam test: no test matches --run=%s"), co.ArgStr(opt.test_run)))
+        ret 1
+    end
+    if not str.Equals(opt.test_format, "teamcity"):
+        if failed > 0:
+            println co.Format2(i18.Tr("FAIL: %d of %d test files failed"), co.ArgInt(failed as i64), co.ArgInt(ran as i64))
+        else:
+            println co.Format1(i18.Tr("PASS: %d test files"), co.ArgInt(ran as i64))
+        end
+    end
+    ret failed > 0 ? 1 : 0
+end

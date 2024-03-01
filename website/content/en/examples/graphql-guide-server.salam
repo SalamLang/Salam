@@ -1,0 +1,46 @@
+import graphql
+import encoding.value
+import net.http
+import net.router
+import str
+
+mut schema := graphql.NewSchema()
+
+func me(slot: i64):
+    ctx := graphql.Context(slot)
+    if value.ObjectHas(ctx, "user"):
+        graphql.ResolveStr(slot, value.AsString(value.ObjectGet(ctx, "user")))
+        ret
+    end
+    graphql.ResolveNull(slot)
+end
+
+func echo(slot: i64):
+    graphql.ResolveStr(slot, graphql.ArgStr(slot, "text"))
+end
+
+func endpoint(ctx: i64):
+    mut request_ctx := value.NewValueObject()
+    auth := http.Header(ctx, "Authorization")
+    if str.StartsWith(auth, "Bearer "):
+        value.ObjectSet(request_ctx, "user", value.ValueString(str.TrimPrefix(auth, "Bearer ")))
+    end
+    res := graphql.HandleHttp(schema, http.Method(ctx), http.Header(ctx, "Content-Type"), http.Body(ctx), http.RawQuery(ctx), value.ValueNull(), request_ctx)
+    http.SetStatus(ctx, res.status)
+    http.SetHeader(ctx, "Content-Type", res.contentType)
+    http.Text(ctx, res.body)
+end
+
+func main:
+    mut err := graphql.NewError(graphql.ERR_SYNTAX, "")
+    graphql.ParseSchemaInto(schema, "type Query { me: String echo(text: String!): String! }", err)
+    _ := graphql.SetResolver(schema, "Query", "me", me)
+    _ := graphql.SetResolver(schema, "Query", "echo", echo)
+    mut r := router.NewRouter()
+    router.Post(r, "/graphql", endpoint)
+    router.Get(r, "/graphql", endpoint)
+    mut s := http.NewServer(8090)
+    http.Use(s, r)
+    println "GraphQL on http://127.0.0.1:8090/graphql"
+    http.Run(s)
+end

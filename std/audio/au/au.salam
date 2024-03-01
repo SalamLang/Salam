@@ -1,0 +1,278 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "au"
+@fa "ای‌یو"
+package au
+
+import audio
+import compress
+import archive
+import encoding.binary
+
+@en "HeaderSize"
+@fa "اندازه سرآیند"
+pub const HeaderSize := 24
+
+@en "EncMuLaw"
+@fa "رمز میولا"
+pub const EncMuLaw := 1
+
+@en "EncPcm8"
+@fa "رمز پی‌سی‌ام۸"
+pub const EncPcm8 := 2
+
+@en "EncPcm16"
+@fa "رمز پی‌سی‌ام۱۶"
+pub const EncPcm16 := 3
+
+@en "EncPcm24"
+@fa "رمز پی‌سی‌ام۲۴"
+pub const EncPcm24 := 4
+
+@en "EncPcm32"
+@fa "رمز پی‌سی‌ام۳۲"
+pub const EncPcm32 := 5
+
+@en "EncFloat32"
+@fa "رمز اعشار۳۲"
+pub const EncFloat32 := 6
+
+@en "EncFloat64"
+@fa "رمز اعشار۶۴"
+pub const EncFloat64 := 7
+
+@en "EncALaw"
+@fa "رمز ای‌لا"
+pub const EncALaw := 27
+
+@en "Header"
+@fa "سرآیند"
+pub struct Header:
+    @en "data_offset"
+    @fa "جای داده"
+    pub data_offset: int = 0
+    @en "data_size"
+    @fa "اندازه داده"
+    pub data_size: int = 0
+    @en "encoding"
+    @fa "رمزگذاری"
+    pub encoding: int = 0
+    @en "rate"
+    @fa "نرخ"
+    pub rate: int = 0
+    @en "channels"
+    @fa "کانال ها"
+    pub channels: int = 0
+end
+
+func _u32(p: void*, off: int): i64:
+    bp := p as u8*
+    ret ((bp[off] as i64) << 24) | ((bp[off + 1] as i64) << 16) | ((bp[off + 2] as i64) << 8) | (bp[off + 3] as i64)
+end
+
+func _bits_of(encoding: int): int:
+    if encoding == EncMuLaw or encoding == EncALaw or encoding == EncPcm8:
+        ret 8
+    end
+    if encoding == EncPcm16:
+        ret 16
+    end
+    if encoding == EncPcm24:
+        ret 24
+    end
+    if encoding == EncPcm32 or encoding == EncFloat32:
+        ret 32
+    end
+    if encoding == EncFloat64:
+        ret 64
+    end
+    ret 0
+end
+
+@en "IsAU"
+@fa "ای‌یو است"
+pub func IsAU(p: void*, n: int): bool:
+    if n < HeaderSize:
+        ret false
+    end
+    bp := p as u8*
+    ret (bp[0] as int) == 46 and (bp[1] as int) == 115 and (bp[2] as int) == 110 and (bp[3] as int) == 100
+end
+
+@en "ReadHeader"
+@fa "خواندن سرآیند"
+pub func ReadHeader(p: void*, n: int, out &: Header): bool:
+    if not IsAU(p, n):
+        ret false
+    end
+    mut h := Header {}
+    h.data_offset = _u32(p, 4) as int
+    size := _u32(p, 8)
+    h.encoding = _u32(p, 12) as int
+    h.rate = _u32(p, 16) as int
+    h.channels = _u32(p, 20) as int
+    if h.data_offset < HeaderSize or h.data_offset > n:
+        ret false
+    end
+    mut avail := n - h.data_offset
+    if size < (avail as i64) and size != (4294967295 as i64):
+        avail = size as int
+    end
+    h.data_size = avail
+    if h.rate <= 0 or h.channels <= 0 or _bits_of(h.encoding) == 0:
+        ret false
+    end
+    out = h
+    ret true
+end
+
+@en "ProbeAU"
+@fa "بررسی ای‌یو"
+pub func ProbeAU(p: void*, n: int, ok &: bool): audio.Info:
+    ok = false
+    mut info := audio.Info {}
+    mut h := Header {}
+    if not ReadHeader(p, n, h):
+        ret info
+    end
+    bits := _bits_of(h.encoding)
+    frame := (bits / 8) * h.channels
+    if frame <= 0:
+        ret info
+    end
+    info.format = audio.FormatAU
+    info.rate = h.rate
+    info.channels = h.channels
+    info.bits = bits
+    info.frames = h.data_size / frame
+    info.lossless = h.encoding != EncMuLaw and h.encoding != EncALaw
+    info.bitrate = h.rate * h.channels * bits
+    info.duration = (info.frames as f64) / (h.rate as f64)
+    ok = true
+    ret info
+end
+
+@en "DecodeAU"
+@fa "کدگشایی ای‌یو"
+pub func DecodeAU(p: void*, n: int, ok &: bool): audio.Clip:
+    ok = false
+    mut h := Header {}
+    if not ReadHeader(p, n, h):
+        ret audio.Clip {}
+    end
+    bits := _bits_of(h.encoding)
+    frame := (bits / 8) * h.channels
+    frames := h.data_size / frame
+    if frames <= 0:
+        ret audio.Clip {}
+    end
+    mut out := audio.New(h.rate, h.channels, frames)
+    if out.samples == null:
+        ret out
+    end
+    out.bits = bits
+    mut good := false
+    if h.encoding == EncMuLaw:
+        good = audio.DecodeLawPcm(p, h.data_offset, out, false)
+        out.bits = 16
+    else h.encoding == EncALaw:
+        good = audio.DecodeLawPcm(p, h.data_offset, out, true)
+        out.bits = 16
+    else h.encoding == EncFloat32 or h.encoding == EncFloat64:
+        good = audio.DecodeFloatPcm(p, n, h.data_offset, out, bits, true)
+    else:
+        good = audio.DecodePcm(p, h.data_offset, out, bits, true, false)
+    end
+    if not good:
+        audio.Free(out)
+        ret audio.Clip {}
+    end
+    ok = true
+    ret out
+end
+
+@en "EncodeAUEncoding"
+@fa "کدگذاری ای‌یو با رمز"
+pub func EncodeAUEncoding(c: audio.Clip, encoding: int): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    if audio.IsEmpty(c):
+        ret out
+    end
+    bits := _bits_of(encoding)
+    if bits == 0:
+        ret out
+    end
+    data_bytes := c.frames * c.channels * (bits / 8)
+    compress.BufPush(out, 46)
+    compress.BufPush(out, 115)
+    compress.BufPush(out, 110)
+    compress.BufPush(out, 100)
+    binary.WriteU32BE(out, HeaderSize)
+    binary.WriteU32BE(out, data_bytes)
+    binary.WriteU32BE(out, encoding)
+    binary.WriteU32BE(out, c.rate)
+    binary.WriteU32BE(out, c.channels)
+    if encoding == EncMuLaw:
+        audio.EncodeLawPcm(out, c, false)
+    else encoding == EncALaw:
+        audio.EncodeLawPcm(out, c, true)
+    else encoding == EncFloat32 or encoding == EncFloat64:
+        audio.EncodeFloatPcm(out, c, bits, true)
+    else:
+        audio.EncodePcm(out, c, bits, true, false)
+    end
+    ret out
+end
+
+@en "EncodeAU"
+@fa "کدگذاری ای‌یو"
+pub func EncodeAU(c: audio.Clip): compress.ByteBuf:
+    mut enc := EncPcm16
+    if c.bits == 8:
+        enc = EncPcm8
+    else c.bits == 24:
+        enc = EncPcm24
+    else c.bits == 32:
+        enc = EncPcm32
+    end
+    ret EncodeAUEncoding(c, enc)
+end
+
+@en "OpenAU"
+@fa "بازکردن ای‌یو"
+pub func OpenAU(path: str, ok &: bool): audio.Clip:
+    mut read_ok := false
+    buf := archive.ReadBinaryFile(path, read_ok)
+    if not read_ok:
+        ok = false
+        ret audio.Clip {}
+    end
+    out := DecodeAU(buf.data, buf.len, ok)
+    compress.BufFree(buf)
+    ret out
+end
+
+@en "SaveAU"
+@fa "ذخیره ای‌یو"
+pub func SaveAU(c: audio.Clip, path: str): bool:
+    buf := EncodeAU(c)
+    if compress.BufLen(buf) == 0:
+        compress.BufFree(buf)
+        ret false
+    end
+    ok := archive.WriteBinaryFileBuf(path, buf)
+    compress.BufFree(buf)
+    ret ok
+end

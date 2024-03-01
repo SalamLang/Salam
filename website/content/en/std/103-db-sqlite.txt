@@ -1,0 +1,254 @@
+pkg.en = db/sqlite
+pkg.name = db/sqlite
+pkg.group = Database
+pkg.summary = An SQLite database in one file or in memory.
+pkg.title = The db/sqlite package in Salam | SQLite
+pkg.description = The db/sqlite package in Salam: opening a database, making a table, inserting with parameters, reading rows, transactions and an in memory database, with examples.
+pkg.import = db.sqlite
+pkg.intro <<
+<p>SQLite is a database that fits in one file and needs no server; for desktop programs, tools and a great many websites it is enough. The program links against the system's sqlite3 library, so that library has to be installed where it runs (it is on almost every Linux and macOS system already).</p>
+<p>There are two ways to work: the functions of this package, such as <code>Query</code> and <code>Next</code>, which reach everything SQLite offers; or the database and row methods and <code>Conn</code>, which is the shared interface of <a href="/std/db/">db</a>. Send user values through <code>Prepare</code> and the <code>Bind...</code> functions, not by pasting them into the SQL text.</p>
+<p>This page starts with a tutorial and a few guides for common jobs; the full reference of every function and type comes after them.</p>
+
+<h2 id="tutorial">Tutorial: a lending library in twelve steps</h2>
+<p>The steps below build the database of a small lending library: books, members and loans. Each step is a complete program, and the output under it is what it printed with SQLite 3.46. Run the steps in order in one folder, because each one opens the same <code>library.db</code> file and uses what the earlier steps left in it. To start over, delete <code>library.db</code> and the <code>library.db-wal</code> and <code>library.db-shm</code> files next to it.</p>
+<p>Nothing needs to be started first. If a program fails to link with a message about <code>sqlite3</code>, install the library: <code>sudo apt install libsqlite3-dev</code> on Debian and Ubuntu, <code>sudo dnf install sqlite-devel</code> on Fedora, or <code>brew install sqlite</code> on macOS.</p>
+
+<h2 id="connect">1. Open the database and set options</h2>
+<p><code>Open</code> opens a file, creating it when it is not there. <code>:memory:</code> (or an empty path) gives a private database in memory that disappears when it is closed, which is handy for tests and caches. SQLite has no connection string: options are <code>PRAGMA</code> statements you run after opening. Three are worth setting in almost every program. <code>journal_mode = WAL</code> lets readers keep reading while a writer works, and it is stored in the file, so setting it once is enough. <code>foreign_keys = ON</code> makes SQLite enforce <code>REFERENCES</code>; it is off by default and belongs to the connection, so every program that opens the file sets it again. <code>busy_timeout</code> makes a connection wait that many milliseconds for a lock instead of failing at once.</p>
+{{example.db-sqlite-open}}
+<p>Look at the last line. SQLite hands back a handle even when the file cannot be opened, so <code>Ok</code> is true and the problem only shows when the first statement fails. That is why this step runs <code>SELECT 1</code> before trusting the database.</p>
+
+<h2 id="schema">2. Create the tables</h2>
+<p><code>Exec</code> runs one or more statements separated by semicolons and returns 0 on success or -1 on failure, with the reason in <code>Error</code>. A triple quoted string keeps a long schema readable. <code>IF NOT EXISTS</code> makes the step safe to run again, and <code>PRAGMA user_version</code> is a free integer in the file header that is handy for a schema version (step 11 uses a migration table instead).</p>
+{{example.db-sqlite-schema}}
+<p>SQLite types are loose: a column declared <code>INTEGER</code> will store text if you give it text. Constraints such as <code>NOT NULL</code>, <code>UNIQUE</code> and <code>CHECK</code> are what actually keep the data clean. An <code>INTEGER PRIMARY KEY</code> column is the row id, filled in for you on insert.</p>
+
+<h2 id="insert">3. Insert rows</h2>
+<p><code>Prepare</code> compiles a statement with <code>?</code> places once; the <code>Bind...</code> functions fill the places (numbered from 1), <code>Next</code> runs it, and <code>Reset</code> readies it for the next row. Preparing once and binding many times is both faster and safer than building a new SQL string for each row. <code>LastInsertId</code> gives the id SQLite chose and <code>Changes</code> how many rows the last statement touched.</p>
+{{example.db-sqlite-insert}}
+<p><code>BindInt</code> takes an <code>i64</code>, so an <code>int</code> field is cast with <code>as i64</code>. The statement is freed by <code>Finish</code>; the <code>defer</code> makes sure that happens however the function ends.</p>
+
+<h2 id="structs">4. Read rows into your own structs</h2>
+<p>A query is a statement too: <code>Next</code> steps to the next row and returns false when there are none left, and <code>Text</code>, <code>Int</code>, <code>Int64</code> and <code>Float</code> read the columns of the current row by position, starting at 0. Put the reading of one row in a small function and every query that selects the same columns can share it.</p>
+{{example.db-sqlite-structs}}
+<p>Ids are <code>i64</code>; read them with <code>Int64</code>. <code>Int</code> is 32 bits and wraps on large values. When the lookup may find nothing, report that separately (here through the <code>found</code> parameter) instead of returning an empty struct that looks like a real book.</p>
+
+<h2 id="params">5. Parameters and SQL injection</h2>
+<p>A bound value is never parsed as SQL, so it cannot change what the statement does. Text pasted into the SQL string can. This step searches with what a user typed, then shows the same text pasted in: the attack string matches every book, and an ordinary name with an apostrophe breaks the statement.</p>
+{{example.db-sqlite-params}}
+<p>Use a parameter for every value that comes from outside the program. The <code>Quote</code> method of the database (from the shared <a href="/std/db/">db</a> interface) wraps text in quotes and doubles the quotes inside it; keep it for the rare place where a value cannot be a parameter, such as SQL you generate for another tool. Table and column names cannot be parameters at all, so pick them from a fixed list in your code.</p>
+
+<h2 id="null">6. NULL values</h2>
+<p>A missing value in SQL is <code>NULL</code>, which is not the same as an empty string or zero. <code>BindNull</code> stores one, and <code>IsNull</code> tells you a column holds one. <code>Text</code> returns <code>""</code> for <code>NULL</code> and <code>Int</code> and <code>Float</code> return 0, so check <code>IsNull</code> first whenever empty and missing mean different things, or let SQL fill in a default with <code>COALESCE</code>.</p>
+{{example.db-sqlite-null}}
+
+<h2 id="tx">7. Transactions</h2>
+<p>Lending a book is two writes: one copy fewer on the shelf, and a new row in <code>loans</code>. They must happen together or not at all. <code>Begin</code> starts a transaction, <code>Commit</code> makes every change in it permanent at once, and <code>Rollback</code> throws them all away. Each helper reports whether exactly one row changed, so a book with no copies left or an unknown member undoes the whole loan.</p>
+{{example.db-sqlite-tx}}
+<p>The due date is computed by SQLite's own <code>date()</code> function. Transactions are also the way to make bulk inserts fast: SQLite writes to disk once per transaction, so a thousand inserts inside one <code>Begin</code> and <code>Commit</code> take a fraction of the time of a thousand separate ones.</p>
+
+<h2 id="update">8. Update and delete</h2>
+<p><code>UPDATE</code> and <code>DELETE</code> go through <code>Exec</code> or a prepared statement like any other SQL. <code>Changes</code> says how many rows the last statement touched, which is how the program learns that an <code>UPDATE ... WHERE</code> matched nothing. <code>TotalChanges</code> counts every row changed since the database was opened.</p>
+{{example.db-sqlite-update}}
+<p>Returning a loan twice fails the second time because of <code>returned IS NULL</code> in the <code>WHERE</code> clause: the condition does the checking, and <code>Changes</code> reports it.</p>
+
+<h2 id="errors">9. Errors</h2>
+<p>Every function reports failure in its return value and keeps the reason in <code>Error</code>. A mistake in the SQL itself shows at once: <code>Prepare</code> returns a statement for which <code>StmtOk</code> is false. A broken constraint shows when the statement runs: <code>Next</code> returns false (just as it does at the end of the rows), and <code>Finish</code> or <code>Reset</code> returns -1. Check <code>Finish</code> to tell the two apart.</p>
+{{example.db-sqlite-errors}}
+<p>Read <code>Error</code> right after the call that failed: the next statement replaces the message. SQLite's messages are in English and name the constraint, which is enough to turn into a message for the user (<code>UNIQUE constraint failed: members.name</code> means the name is taken).</p>
+
+<h2 id="report">10. Reports with joins and grouping</h2>
+<p>Most of the work in a report is SQL. <code>JOIN</code> brings the related rows together, <code>GROUP BY</code> with <code>COUNT</code>, <code>SUM</code> and <code>AVG</code> summarizes them, and SQLite's JSON functions can build a JSON answer for a web API in one query, read back with <code>QueryText</code>.</p>
+{{example.db-sqlite-report}}
+<p>Dates stored as <code>YYYY-MM-DD</code> text sort and compare correctly as plain strings, which is why <code>due &lt; ?</code> finds the late loans.</p>
+
+<h2 id="migrate">11. The shared interface and migrations</h2>
+<p><code>Conn</code> returns the database as a <code>dyn db.Connection</code>, the interface that the MySQL and PostgreSQL packages also implement. Code written against it, such as the helpers and the migrator in <a href="/std/db/">db</a>, works with any of them. A migrator keeps numbered schema changes in order, records which ones ran in a <code>schema_migrations</code> table, and runs each one in its own transaction. <code>db.InTx</code> runs a list of statements as one transaction and rolls back on the first failure.</p>
+{{example.db-sqlite-migrate}}
+<p>The second statement of the fix breaks the <code>CHECK</code> constraint, so the first one is rolled back too and Neuromancer keeps its single copy. Run this step again and the migrator does nothing, because both versions are recorded.</p>
+
+<h2 id="fts">12. Full text search and a backup</h2>
+<p>Two features that make SQLite more than a plain table store. An FTS5 virtual table indexes words for fast search with prefixes (<code>dun*</code>), column filters (<code>author:butler</code>), <code>OR</code>, ranking and highlighting; the search text is just another bound parameter. <code>VACUUM INTO</code> writes a clean, consistent copy of the open database to a new file, safe to run while the program is using it.</p>
+{{example.db-sqlite-fts}}
+<p>The search table here is filled once from <code>books</code>. In a real program keep it in step with triggers on <code>books</code>, or rebuild it after changes. FTS5 is part of the sqlite3 library that most systems ship.</p>
+
+<h2 id="more">More</h2>
+<ul>
+<li><code>QueryInt</code> and <code>QueryText</code> return the first column of the first row in one call, for counts and single values. They return 0 or <code>""</code> when there is no row, and they take no parameters, so use them only with SQL you wrote yourself.</li>
+<li>One <code>Database</code> value is one connection. Do not share it between threads that write at the same time; give each thread its own <code>Open</code> of the same file, as the guide below shows. <a href="/std/db/">db</a> also has a small <code>Pool</code> that holds any <code>Connection</code> values.</li>
+<li><code>INSERT ... RETURNING</code> and <code>ON CONFLICT ... DO UPDATE</code> (upsert) work through <code>Prepare</code>: step once and read the returned columns.</li>
+<li><code>ColumnCount</code>, <code>ColumnName</code> and <code>ColumnType</code> describe a result you did not write yourself, for a table viewer or an export.</li>
+<li>Binary data (BLOBs) has no bind function in this package; store it hex or base64 encoded as text.</li>
+</ul>
+
+<h2 id="guide-upsert">Guide: counters with upsert</h2>
+<p>A view counter, a rate limiter or a stock count needs "add one, or create the row with one". <code>ON CONFLICT (key) DO UPDATE</code> does it in one statement with no race between a read and a write, and <code>RETURNING</code> hands back the new value, read with <code>Next</code> and <code>Int</code> like a query.</p>
+{{example.db-sqlite-upsert}}
+
+<h2 id="guide-dump">Guide: print any query as a table</h2>
+<p>When the columns are not known in advance, as in an admin page, an export or a debugging helper, ask the result about itself. <code>ColumnCount</code> and <code>ColumnName</code> give the header, and the <code>ColumnType</code> method returns one of the shared constants of <a href="/std/db/">db</a> (<code>TYPE_NULL</code>, <code>TYPE_INT</code>, <code>TYPE_FLOAT</code>, <code>TYPE_TEXT</code>, <code>TYPE_BLOB</code>) for each value of the current row. A column can hold a different type in each row, so ask per row, not once.</p>
+{{example.db-sqlite-dump}}
+<p>The package function <code>sqlite.ColumnType</code> returns SQLite's own codes instead, where 5 means <code>NULL</code>; the method shown here maps that to <code>db.TYPE_NULL</code>, which is 0.</p>
+
+<h2 id="guide-wal">Guide: several connections to one file</h2>
+<p>Two programs, or two threads with their own connections, can open the same file. In WAL mode readers see the last committed state and are never blocked by a writer, while only one writer at a time can hold the write lock. A second writer gets <code>database is locked</code> at once, or after waiting <code>busy_timeout</code> milliseconds if that is set.</p>
+{{example.db-sqlite-wal}}
+<p>Keep write transactions short, set <code>busy_timeout</code> on every connection, and retry a write that still fails with <code>database is locked</code>. For a busy web server with many writers at once, a server database such as <a href="/std/db/postgres/">PostgreSQL</a> is the better fit.</p>
+
+<h2 id="guide-json">Guide: JSON columns</h2>
+<p>SQLite stores JSON as text and has functions to check and read it in SQL, so loosely shaped data such as event logs or settings can live next to normal columns. <code>CHECK (json_valid(body))</code> rejects broken JSON at insert time, <code>-&gt;&gt;</code> reads one field, and <code>json_group_object</code> builds an object from rows. The rejected insert also shows <code>Reset</code> returning -1 when the last run of the statement failed.</p>
+{{example.db-sqlite-json}}
+
+<h2 id="guide-which">Guide: which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Create tables, run a fixed script</td><td><code>Exec</code> (one or more statements)</td></tr>
+<tr><td>Any SQL with a value from outside</td><td><code>Prepare</code>, <code>Bind...</code>, <code>Next</code>, <code>Finish</code></td></tr>
+<tr><td>The same statement for many rows</td><td><code>Prepare</code> once, then <code>Reset</code> and bind again for each row, inside <code>Begin</code> and <code>Commit</code></td></tr>
+<tr><td>Read a result</td><td><code>until Next(rows):</code> with <code>Text</code>, <code>Int</code>, <code>Int64</code>, <code>Float</code>, <code>IsNull</code></td></tr>
+<tr><td>One number or one string, fixed SQL</td><td><code>QueryInt</code>, <code>QueryText</code></td></tr>
+<tr><td>The id of a new row, rows changed</td><td><code>LastInsertId</code>, <code>Changes</code>, <code>TotalChanges</code></td></tr>
+<tr><td>All or nothing</td><td><code>Begin</code>, <code>Commit</code>, <code>Rollback</code>, or <code>db.InTx</code> through <code>Conn</code></td></tr>
+<tr><td>Code that should also run on MySQL or PostgreSQL</td><td><code>Conn</code> and the <a href="/std/db/">db</a> helpers</td></tr>
+<tr><td>Find out what went wrong</td><td><code>StmtOk</code>, the return of <code>Finish</code> or <code>Reset</code>, then <code>Error</code></td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.Database = One open SQLite database.
+doc.Database.handle = The SQLite pointer.
+doc.Database.Kind = The name of the database engine.
+doc.Database.Ok = There is a handle. SQLite returns one even when the file could not be opened, so run a first statement before trusting it.
+doc.Database.Ping = True while the handle is open; SQLite has no server to reach, so this does not touch the file.
+doc.Database.Exec = Runs one or more statements separated by semicolons; zero means success.
+doc.Database.Query = Prepares a query and returns its rows; <code>Ok</code> is false when the SQL has an error.
+doc.Database.Begin = Starts a transaction.
+doc.Database.LastInsertId = The id of the last inserted row.
+doc.Database.Changes = The number of rows the last statement changed.
+doc.Database.Error = The last error message.
+doc.Database.Quote = Returns the string quoted and escaped, safe for SQL.
+doc.Database.Close = Closes it; zero means success.
+doc.Rows = One prepared statement or query result.
+doc.Rows.handle = The statement pointer.
+doc.Rows.Ok = It is healthy.
+doc.Rows.Next = Moves to the next row; false when no row is left.
+doc.Rows.ColumnCount = The number of columns.
+doc.Rows.ColumnName = The column name.
+doc.Rows.IsNull = The column value is null.
+doc.Rows.Text = The column value as text.
+doc.Rows.Int = The column value as an integer.
+doc.Rows.Int64 = The column value as a 64 bit integer.
+doc.Rows.Float = The column value as a float.
+doc.Rows.Close = Closes and frees it.
+doc.Rows.ColumnType = The type of the column value in the current row, one of the <code>TYPE_...</code> constants in <a href="/std/db/">db</a>; zero for null.
+doc.Txn = One transaction.
+doc.Txn.handle = The database pointer.
+doc.Txn.Ok = It is healthy.
+doc.Txn.Exec = Runs one or more statements inside the transaction; zero means success.
+doc.Txn.Query = Runs a query and returns the rows.
+doc.Txn.Commit = Commits the transaction.
+doc.Txn.Rollback = Rolls the transaction back.
+doc.Conn = Returns the database as a shared <code>Connection</code>.
+doc.Available = Always true: the program links against the sqlite3 library and does not start without it.
+doc.Version = The SQLite version.
+doc.Open = Opens the database file, making it when it is not there; <code>:memory:</code> or an empty path means a temporary database in memory. A handle comes back even when the file cannot be opened, so check the first statement.
+doc.Ok = There is a handle. SQLite returns one even when the file could not be opened; the first statement then fails with <code>unable to open database file</code>.
+doc.Close = Closes it.
+doc.Exec = Runs one or more statements; zero means success.
+doc.Error = The last error message.
+doc.LastInsertId = The id of the last inserted row.
+doc.Changes = The number of rows the last statement changed.
+doc.TotalChanges = The number of every row changed since it was opened.
+doc.Begin = Starts a transaction.
+doc.Commit = Commits the transaction.
+doc.Rollback = Rolls the transaction back.
+doc.Prepare = Prepares a statement with <code>?</code> parameter places; give the values with the <code>Bind...</code> functions. <code>StmtOk</code> is false when the SQL has an error. The safest way for user values.
+doc.Query = Runs a query; read the rows with <code>Next</code> and call <code>Finish</code> at the end.
+doc.StmtOk = The statement was prepared.
+doc.Next = Steps the statement once; true when a row is ready. False both after the last row and on an error; the return value of <code>Finish</code> or <code>Reset</code> tells them apart.
+doc.Reset = Readies the statement to run again. The bound values stay until you bind new ones; -1 when the last run failed, with the reason in <code>Error</code>.
+doc.Finish = Frees the statement; -1 when its last run failed, with the reason in <code>Error</code>.
+doc.BindText = Gives text to parameter number n; the numbers start at 1.
+doc.BindInt = Gives a 64 bit integer to a parameter.
+doc.BindFloat = Gives a float to a parameter.
+doc.BindNull = Gives null to a parameter.
+doc.ColumnCount = The number of columns.
+doc.Text = The column value as text.
+doc.ColumnName = The column name.
+doc.Int = The column value as an integer.
+doc.Int64 = The column value as a 64 bit integer.
+doc.Float = The column value as a float.
+doc.ColumnType = SQLite's own type code for the column: 1 integer, 2 float, 3 text, 4 binary and 5 null. The <code>ColumnType</code> method of the rows returns the shared constants instead.
+doc.IsNull = The column value is null.
+doc.QueryInt = The first column of the first row as an integer; 0 when there is no row or the SQL fails.
+doc.QueryText = The first column of the first row as text; empty when there is no row or the SQL fails.
+
+ex.Txn = db-sqlite-Basics
+ex.Txn.handle = db-sqlite-Basics
+ex.Txn.Ok = db-sqlite-Basics
+ex.Txn.Exec = db-sqlite-Basics
+ex.Txn.Query = db-sqlite-Basics
+ex.Txn.Commit = db-sqlite-Basics
+ex.Txn.Rollback = db-sqlite-Basics
+ex.Conn = db-sqlite-Basics
+ex.Available = db-sqlite-Basics
+ex.Version = db-sqlite-Basics
+ex.Open = db-sqlite-Basics
+ex.Ok = db-sqlite-Basics
+ex.Close = db-sqlite-Basics
+ex.Exec = db-sqlite-Basics
+ex.Error = db-sqlite-Basics
+ex.LastInsertId = db-sqlite-Basics
+ex.Changes = db-sqlite-Basics
+ex.TotalChanges = db-sqlite-Basics
+ex.Begin = db-sqlite-Basics
+ex.Commit = db-sqlite-Basics
+ex.Rollback = db-sqlite-Basics
+ex.Prepare = db-sqlite-Basics
+ex.Query = db-sqlite-Basics
+ex.StmtOk = db-sqlite-Basics
+ex.Next = db-sqlite-Basics
+ex.Reset = db-sqlite-Basics
+ex.Finish = db-sqlite-Basics
+ex.BindText = db-sqlite-Basics
+ex.BindInt = db-sqlite-Basics
+ex.BindFloat = db-sqlite-Basics
+ex.BindNull = db-sqlite-Basics
+ex.ColumnCount = db-sqlite-Basics
+ex.Text = db-sqlite-Basics
+ex.ColumnName = db-sqlite-Basics
+ex.Int = db-sqlite-Basics
+ex.Int64 = db-sqlite-Basics
+ex.Float = db-sqlite-Basics
+ex.ColumnType = db-sqlite-Basics
+ex.IsNull = db-sqlite-Basics
+ex.QueryInt = db-sqlite-Basics
+ex.QueryText = db-sqlite-Basics
+ex.Database = db-sqlite-Methods
+ex.Database.handle = db-sqlite-Methods
+ex.Database.Kind = db-sqlite-Methods
+ex.Database.Ok = db-sqlite-Methods
+ex.Database.Ping = db-sqlite-Methods
+ex.Database.Exec = db-sqlite-Methods
+ex.Database.Query = db-sqlite-Methods
+ex.Database.Begin = db-sqlite-Methods
+ex.Database.LastInsertId = db-sqlite-Methods
+ex.Database.Changes = db-sqlite-Methods
+ex.Database.Error = db-sqlite-Methods
+ex.Database.Quote = db-sqlite-Methods
+ex.Database.Close = db-sqlite-Methods
+ex.Rows = db-sqlite-Methods
+ex.Rows.handle = db-sqlite-Methods
+ex.Rows.Ok = db-sqlite-Methods
+ex.Rows.Next = db-sqlite-Methods
+ex.Rows.ColumnCount = db-sqlite-Methods
+ex.Rows.ColumnName = db-sqlite-Methods
+ex.Rows.IsNull = db-sqlite-Methods
+ex.Rows.Text = db-sqlite-Methods
+ex.Rows.Int = db-sqlite-Methods
+ex.Rows.Int64 = db-sqlite-Methods
+ex.Rows.Float = db-sqlite-Methods
+ex.Rows.Close = db-sqlite-Methods
+ex.Rows.ColumnType = db-sqlite-Methods

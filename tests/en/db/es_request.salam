@@ -1,0 +1,159 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.elasticsearch
+
+func strs(a: str, b: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push(a)
+    if b.len() > 0: v.push(b) end
+    ret v
+end
+
+func queries():
+    println elasticsearch.MatchAll()
+    println elasticsearch.Match("title", "سلام \"دنیا\"")
+    println elasticsearch.MatchAnd("title", "quick fox")
+    println elasticsearch.MatchFuzzy("title", "سلم")
+    println elasticsearch.MatchPhrase("body", "to be")
+    println elasticsearch.MultiMatch("fox", strs("title^2", "body"))
+    println elasticsearch.Term("tag", "a")
+    println elasticsearch.TermInt("n", 42 as i64)
+    println elasticsearch.TermBool("live", true)
+    println elasticsearch.Terms("tag", strs("a", "b"))
+    println elasticsearch.Range("age", "18", "")
+    println elasticsearch.RangeExclusive("at", "now-1d", "now")
+    println elasticsearch.FieldExists("email")
+    println elasticsearch.Prefix("name", "al")
+    println elasticsearch.Wildcard("name", "a*i")
+    println elasticsearch.Regexp("code", "[0-9]+")
+    println elasticsearch.Fuzzy("name", "jhon")
+    println elasticsearch.Ids(strs("1", "2"))
+    println elasticsearch.QueryString("title:fox AND n:[1 TO 5]")
+    println elasticsearch.SimpleQueryString("fox", strs("title", ""))
+    println elasticsearch.Bool(strs(elasticsearch.Match("t", "x"), ""), strs(elasticsearch.Term("tag", "a"), ""), Vector {} as Vector<str>, strs(elasticsearch.Term("tag", "b"), ""))
+    println elasticsearch.Or(strs(elasticsearch.Term("a", "1"), elasticsearch.Term("b", "2")))
+    println elasticsearch.And(strs(elasticsearch.Term("a", "1"), ""))
+    println elasticsearch.Not(elasticsearch.Term("a", "1"))
+    println elasticsearch.Filtered(elasticsearch.Match("t", "x"), strs(elasticsearch.Range("n", "1", "9"), ""))
+    println elasticsearch.ConstantScore(elasticsearch.Term("a", "1"))
+    println elasticsearch.Nested("comments", elasticsearch.Match("comments.text", "hi"))
+    println elasticsearch.GeoDistance("loc", 35.69, 51.39, "10km")
+    mut vec := Vector {} as Vector<f64>
+    vec.push(0.5)
+    vec.push(-1.25)
+    println elasticsearch.Knn("embedding", vec, 5, 50)
+end
+
+func aggs_and_bodies():
+    mut aggs := elasticsearch.AddAgg("", "tags", elasticsearch.SubAggs(elasticsearch.TermsAgg("tag", 5), elasticsearch.AddAgg("", "avg_n", elasticsearch.AvgAgg("n"))))
+    aggs = elasticsearch.AddAgg(aggs, "total", elasticsearch.SumAgg("n"))
+    aggs = elasticsearch.AddAgg(aggs, "lo", elasticsearch.MinAgg("n"))
+    aggs = elasticsearch.AddAgg(aggs, "hi", elasticsearch.MaxAgg("n"))
+    aggs = elasticsearch.AddAgg(aggs, "people", elasticsearch.CardinalityAgg("user"))
+    aggs = elasticsearch.AddAgg(aggs, "seen", elasticsearch.ValueCountAgg("user"))
+    aggs = elasticsearch.AddAgg(aggs, "s", elasticsearch.StatsAgg("n"))
+    aggs = elasticsearch.AddAgg(aggs, "h", elasticsearch.HistogramAgg("n", 10.0))
+    aggs = elasticsearch.AddAgg(aggs, "days", elasticsearch.DateHistogramAgg("at", "day"))
+    aggs = elasticsearch.AddAgg(aggs, "red", elasticsearch.FilterAgg(elasticsearch.Term("color", "red")))
+    aggs = elasticsearch.AddAgg(aggs, "top", elasticsearch.TopHitsAgg(1))
+    println aggs
+    mut sort := Vector {} as Vector<str>
+    sort.push(elasticsearch.SortDesc("n"))
+    sort.push(elasticsearch.SortAsc("_id"))
+    req := elasticsearch.SearchRequest {
+        query = elasticsearch.Match("title", "fox"), from = 10, size = 5, sort = sort, source = strs("title", "n"), source_excludes = strs("secret", ""), fields = strs("n", ""), aggs = aggs, highlight = elasticsearch.Highlight(strs("title", "")), post_filter = elasticsearch.Term("tag", "a"), collapse = "user", search_after = "[5, \"x\"]", pit_id = "PIT1", pit_keep_alive = "1m", track_total_hits = "true", min_score = "0.5", timeout = "2s"
+    }
+    println elasticsearch.SearchBody(req)
+    println elasticsearch.SearchBody(elasticsearch.SearchRequest {})
+    println elasticsearch.SearchBody(elasticsearch.SearchRequest { no_source = true, size = 0 })
+    mut extra := Vector {} as Vector<str>
+    extra.push(`"explain": true`)
+    println elasticsearch.SearchBody(elasticsearch.SearchRequest { source = strs("a", ""), extra = extra })
+    println elasticsearch.AddMember(`{"a": 1}`, "b", "[2]")
+    println elasticsearch.Script("ctx._source.n += params.k", `{"k": 2}`)
+end
+
+func bulk_body():
+    mut b := elasticsearch.NewBulk()
+    elasticsearch.BulkIndex(b, "items", "1", "{\n  \"title\": \"multi\\nline\"\n}")
+    elasticsearch.BulkIndex(b, "items", "", `{"auto":true}`)
+    elasticsearch.BulkCreate(b, "items", "2", `{"n":2}`)
+    elasticsearch.BulkUpdate(b, "items", "3", `{"n":3}`)
+    elasticsearch.BulkUpsert(b, "items", "4", `{"n":4}`)
+    elasticsearch.BulkDelete(b, "", "5")
+    println elasticsearch.BulkLen(b)
+    print elasticsearch.BulkBody(b)
+    elasticsearch.BulkReset(b)
+    println elasticsearch.BulkLen(b), elasticsearch.BulkBody(b).len()
+end
+
+func clients():
+    mut a := elasticsearch.ConnectAuth("https://es.example.com", "elastic", "s3cret")
+    println elasticsearch.Ok(a), elasticsearch.AuthHeader(a)
+    each n in elasticsearch.Nodes(a): println n end
+    elasticsearch.Close(a)
+    mut k := elasticsearch.ConnectApiKey("http://es:9201/prefix/", "id1:key1")
+    println elasticsearch.AuthHeader(k)
+    each n in elasticsearch.Nodes(k): println n end
+    elasticsearch.Close(k)
+    mut k2 := elasticsearch.ConnectApiKey("localhost", "ZW5jb2RlZA==")
+    println elasticsearch.AuthHeader(k2)
+    each n in elasticsearch.Nodes(k2): println n end
+    elasticsearch.Close(k2)
+    mut cfg := elasticsearch.DefaultConfig()
+    cfg.bearer = "tok"
+    cfg.headers.put("X-Opaque-Id", "job-1")
+    mut d := elasticsearch.NewClient(cfg)
+    println elasticsearch.AuthHeader(d)
+    each n in elasticsearch.Nodes(d): println n end
+    elasticsearch.Close(d)
+    cloud := "my-deploy:ZXUtd2VzdC0xLmF3cy5mb3VuZC5pbyRjZWM2ZjI2MWE3NGJmMjRjZTMzYmI4ODExYjg0Mjk0ZiRjNmYyZTRmZDZkMTQ0M2Q2ZjM4ZDkzY2U2ZTk2MzM2Yw=="
+    println elasticsearch.DecodeCloudId(cloud)
+    mut cc := elasticsearch.ConnectCloud(cloud, "abc")
+    each n in elasticsearch.Nodes(cc): println n end
+    elasticsearch.Close(cc)
+    println elasticsearch.DecodeCloudId("broken:%%%").len()
+    mut bad := elasticsearch.Connect("ftp://nowhere")
+    println elasticsearch.Ok(bad), elasticsearch.Error(bad)
+    r := elasticsearch.Perform(bad, "GET", "/", "")
+    println r.ok, r.error
+    elasticsearch.Close(bad)
+    println elasticsearch.Ok(bad), elasticsearch.Error(bad)
+    println elasticsearch.EncodeBasic("u", "p")
+    println elasticsearch.DEAD_NODE_MS, elasticsearch.DEFAULT_URL, elasticsearch.REFRESH_WAIT_FOR
+end
+
+func parsing():
+    old := elasticsearch.ParseSearchResult(`{"took":1,"timed_out":true,"_scroll_id":"S1","hits":{"total":12,"max_score":null,"hits":[{"_index":"i","_id":"x","_score":null,"_source":{"a":[1,2]},"sort":[1,"b"]}]}}`)
+    println old.ok, old.took, old.timed_out, old.total, old.total_relation, old.max_score, old.scroll_id, old.hits.len()
+    println old.hits.get(0).id, old.hits.get(0).score, old.hits.get(0).source, old.hits.get(0).sort
+    agg := `{"by_tag":{"buckets":[{"key":"a","doc_count":3,"avg_n":{"value":1.5}},{"key":1700000000000,"key_as_string":"2023-11-14","doc_count":2,"avg_n":{"value":null}}]},"n":{"value":7}}`
+    println elasticsearch.AggValueIn(agg, "n")
+    each b in elasticsearch.AggBucketsIn(agg, "by_tag"):
+        println b.key, b.doc_count, elasticsearch.AggValueIn(b.raw, "avg_n")
+    end
+    none := elasticsearch.ParseSearchResult(`{"error":{"type":"x","reason":"y"},"status":400}`)
+    println none.ok, none.hits.len()
+    br := elasticsearch.ParseBulkResult(`{"took":2,"errors":false,"items":[{"update":{"_index":"i","_id":"1","status":200,"result":"noop","_version":4}}]}`)
+    println br.ok, br.took, br.succeeded, br.failed, br.items.get(0).action, br.items.get(0).result, br.items.get(0).version
+end
+
+func main:
+    queries()
+    aggs_and_bodies()
+    bulk_body()
+    clients()
+    parsing()
+end

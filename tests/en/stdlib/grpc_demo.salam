@@ -1,0 +1,331 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import grpc
+import encoding.protobuf
+import compress
+import conv
+import testing
+import sync
+
+const GREETER_PROTO := "syntax = \"proto3\";\n" + "package demo;\n" + "message HelloRequest { string name = 1; }\n" + "message HelloReply { string text = 1; }\n" + "service Greeter {\n" + "  rpc SayHello (HelloRequest) returns (HelloReply);\n" + "  rpc Countdown (HelloRequest) returns (stream HelloReply);\n" + "  rpc Collect (stream HelloRequest) returns (HelloReply);\n" + "}\n"
+
+mut srv wg := sync.NewWaitGroup()
+mut bound port := 0
+mut server := grpc.NewServer(0)
+
+func say hello(call: i64):
+    mut ok := false
+    name := grpc.RecvStr(call, ok)
+    if not ok:
+        grpc.Fail(call, grpc.GRPC_INVALID_ARGUMENT, "no request message")
+        ret
+    end
+    grpc.SendStr(call, "hello, " + name)
+    grpc.SetStatus(call, grpc.GRPC_OK, "")
+end
+
+func countdown(call: i64):
+    mut ok := false
+    grpc.RecvStr(call, ok)
+    mut i := 3
+    until i > 0:
+        grpc.SendStr(call, conv.FormatInt(i as i64))
+        i -= 1
+    end
+    grpc.SendStr(call, "liftoff")
+    grpc.SetStatus(call, grpc.GRPC_OK, "")
+end
+
+func collect(call: i64):
+    mut joined := ""
+    mut more := true
+    until more:
+        mut ok := false
+        part := grpc.RecvStr(call, ok)
+        if not ok:
+            more = false
+        else:
+            if joined != "": joined = joined + "," end
+            joined = joined + part
+        end
+    end
+    grpc.SendStr(call, joined)
+    grpc.SetStatus(call, grpc.GRPC_OK, "")
+end
+
+func echo meta(call: i64):
+    mut ok := false
+    grpc.RecvStr(call, ok)
+    md := grpc.CallMetadata(call)
+    grpc.SendStr(call, grpc.MDGet(md, "x-trace") + "/" + grpc.CallPath(call))
+    grpc.SetStatus(call, grpc.GRPC_OK, "")
+end
+
+func denied(call: i64):
+    grpc.Fail(call, grpc.GRPC_PERMISSION_DENIED, "token expired: re-authenticate")
+end
+
+func serve loopback():
+    grpc.Listen(server)
+    bound port = grpc.Port(server)
+    sync.Done(srv wg)
+    grpc.ServeCount(server, 1)
+end
+
+func check status():
+    testing.AssertEqStr(grpc.StatusName(grpc.GRPC_OK), "OK")
+    testing.AssertEqStr(grpc.StatusName(grpc.GRPC_UNIMPLEMENTED), "UNIMPLEMENTED")
+    testing.AssertEqStr(grpc.StatusName(grpc.GRPC_UNAUTHENTICATED), "UNAUTHENTICATED")
+    testing.AssertEqStr(grpc.StatusName(99), "UNKNOWN")
+    testing.AssertEqInt(grpc.ParseStatusCode("7"), grpc.GRPC_PERMISSION_DENIED)
+    testing.AssertEqInt(grpc.ParseStatusCode(""), grpc.GRPC_UNKNOWN)
+    testing.AssertEqStr(grpc.FormatStatusCode(grpc.GRPC_ABORTED), "10")
+    testing.AssertTrue(grpc.StatusOk(grpc.NewStatus(grpc.GRPC_OK, "")))
+    testing.AssertEqStr(grpc.StatusString(grpc.NewStatus(grpc.GRPC_NOT_FOUND, "gone")), "NOT_FOUND: gone")
+
+    encoded := grpc.EncodeStatusMessage("bad\tinput 100%")
+    testing.AssertEqStr(encoded, "bad%09input 100%25")
+    testing.AssertEqStr(grpc.DecodeStatusMessage(encoded), "bad\tinput 100%")
+    testing.AssertEqStr(grpc.DecodeStatusMessage("50%"), "50%")
+
+    testing.AssertEqStr(grpc.MethodPath("demo.Greeter", "SayHello"), "/demo.Greeter/SayHello")
+end
+
+func check message framing():
+    mut body := compress.BufFromStr("hello")
+    mut framed := grpc.FrameMessage(body, false)
+    testing.AssertEqInt(compress.BufLen(framed), 10)
+    testing.AssertEqInt(compress.BufGet(framed, 0), 0)
+    testing.AssertEqInt(compress.BufGet(framed, 4), 5)
+
+    mut pos := 0
+    testing.AssertTrue(grpc.HasMessage(framed, pos))
+    mut ok := false
+    mut msg := grpc.NextMessage(framed, pos, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqStr(compress.BufToStrUnsafe(msg), "hello")
+    testing.AssertEqInt(pos, 10)
+    testing.AssertFalse(grpc.HasMessage(framed, pos))
+    compress.BufFree(msg)
+
+    mut two := compress.NewByteBuf()
+    compress.BufPushBuf(two, framed)
+    mut second := grpc.FrameMessageStr("world!")
+    compress.BufPushBuf(two, second)
+    testing.AssertEqInt(grpc.MessageCount(two), 2)
+    mut p2 := 0
+    mut ok2 := false
+    mut m1 := grpc.NextMessage(two, p2, ok2)
+    testing.AssertEqStr(compress.BufToStrUnsafe(m1), "hello")
+    mut m2 := grpc.NextMessage(two, p2, ok2)
+    testing.AssertTrue(ok2)
+    testing.AssertEqStr(compress.BufToStrUnsafe(m2), "world!")
+    compress.BufFree(m1)
+    compress.BufFree(m2)
+
+    mut cut := compress.NewByteBuf()
+    mut i := 0
+    until i < 7:
+        compress.BufPush(cut, compress.BufGet(framed, i))
+        i += 1
+    end
+    testing.AssertFalse(grpc.HasMessage(cut, 0))
+
+    mut big := compress.BufFromStr("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    mut z := grpc.FrameMessageGzip(big, true)
+    testing.AssertEqInt(compress.BufGet(z, 0), 1)
+    mut zp := 0
+    mut zok := false
+    mut plain := grpc.NextMessage(z, zp, zok)
+    testing.AssertTrue(zok)
+    testing.AssertEqInt(compress.BufLen(plain), 56)
+
+    compress.BufFree(plain)
+    compress.BufFree(z)
+    compress.BufFree(big)
+    compress.BufFree(cut)
+    compress.BufFree(two)
+    compress.BufFree(second)
+    compress.BufFree(framed)
+    compress.BufFree(body)
+end
+
+func check metadata():
+    mut md := grpc.NewMetadata()
+    testing.AssertTrue(grpc.MDAdd(md, "X-Trace", "abc123"))
+    testing.AssertEqStr(grpc.MDKeyAt(md, 0), "x-trace")
+    testing.AssertEqStr(grpc.MDGet(md, "x-trace"), "abc123")
+    testing.AssertEqStr(grpc.MDGet(md, "X-TRACE"), "abc123")
+    testing.AssertTrue(grpc.MDHas(md, "x-trace"))
+    testing.AssertFalse(grpc.MDHas(md, "nothing"))
+
+    testing.AssertFalse(grpc.MDAdd(md, "grpc-status", "0"))
+    testing.AssertFalse(grpc.MDAdd(md, ":path", "/x"))
+    testing.AssertFalse(grpc.MDAdd(md, "content-type", "text/plain"))
+    testing.AssertFalse(grpc.MDAdd(md, "trace-bin", "raw"))
+    testing.AssertFalse(grpc.MDAddBinary(md, "not-binary", "raw"))
+    testing.AssertTrue(grpc.MDAddBinary(md, "trace-bin", "raw"))
+
+    grpc.MDAdd(md, "x-tag", "one")
+    grpc.MDAdd(md, "x-tag", "two")
+    tags := grpc.MDGetAll(md, "x-tag")
+    testing.AssertEqInt(tags.len(), 2)
+    testing.AssertEqStr(tags.get(1), "two")
+    testing.AssertEqInt(grpc.MDCount(md), 4)
+end
+
+func check proto services():
+    mut ok := false
+    summary := protobuf.ServiceSummary(GREETER_PROTO, ok)
+    testing.AssertTrue(ok)
+    testing.AssertContains(summary, "service Greeter (3 methods)")
+    testing.AssertContains(summary, "rpc SayHello(HelloRequest) returns (HelloReply)")
+    testing.AssertContains(summary, "rpc Countdown(HelloRequest) returns (stream HelloReply)")
+    testing.AssertContains(summary, "rpc Collect(stream HelloRequest) returns (HelloReply)")
+
+    mut pok := false
+    f := protobuf.ParseFile(GREETER_PROTO, pok)
+    testing.AssertTrue(pok)
+    testing.AssertEqInt(protobuf.ServiceCount(f), 1)
+    testing.AssertEqStr(protobuf.ServiceNameAt(f, 0), "Greeter")
+    testing.AssertEqInt(protobuf.ServiceMethodCount(f, 0), 3)
+    testing.AssertEqInt(f.messages.len(), 2)
+
+    mut gok := false
+    src := protobuf.GenerateWithServices(GREETER_PROTO, gok)
+    testing.AssertTrue(gok)
+    testing.AssertContains(src, "import grpc")
+    testing.AssertContains(src, "pub const GreeterSayHelloPath := \"/demo.Greeter/SayHello\"")
+    testing.AssertContains(src, "pub func GreeterSayHello(ch &: grpc.Channel")
+    testing.AssertContains(src, "pub func RegisterGreeterSayHello(fn: i64):")
+    testing.AssertContains(src, "pub func GreeterCountdownStart(")
+    testing.AssertContains(src, "pub func GreeterCountdownRecv(")
+    testing.AssertContains(src, "pub func GreeterCountdownFinish(")
+    testing.AssertContains(src, "grpc.RegisterStreamMethod(GreeterCountdownPath, fn, false, true)")
+    testing.AssertContains(src, "grpc.RegisterStreamMethod(GreeterCollectPath, fn, true, false)")
+    testing.AssertContains(src, "pub func MarshalHelloRequest(m: HelloRequest)")
+end
+
+func check registry():
+    testing.AssertTrue(grpc.HasMethod("/demo.Greeter/SayHello"))
+    testing.AssertFalse(grpc.HasMethod("/demo.Greeter/Nope"))
+    testing.AssertEqInt(grpc.MethodCount(), 5)
+end
+
+func check live calls():
+    sync.Add(srv wg, 1 as i64)
+    t := spawn(serve loopback)
+    sync.Wait(srv wg)
+    testing.AssertTrue(bound port > 0)
+
+    mut ch := grpc.Dial("127.0.0.1", bound port)
+    testing.AssertTrue(grpc.ChannelOk(ch))
+    testing.AssertEqStr(grpc.ChannelError(ch), "")
+
+    mut st := grpc.Status {}
+    testing.AssertEqStr(grpc.UnaryCallStr(ch, "/demo.Greeter/SayHello", "salam", st), "hello, salam")
+    testing.AssertEqInt(st.code, grpc.GRPC_OK)
+
+    mut st2 := grpc.Status {}
+    testing.AssertEqStr(grpc.UnaryCallStr(ch, "/demo.Greeter/SayHello", "world", st2), "hello, world")
+    testing.AssertEqInt(st2.code, grpc.GRPC_OK)
+
+    md := grpc.NewMetadata()
+    sid := grpc.StartCall(ch, "/demo.Greeter/Countdown", md)
+    testing.AssertTrue(sid > 0)
+    body := compress.BufFromStr("go")
+    testing.AssertTrue(grpc.SendMessage(ch, sid, body, true))
+    mut got := Vector {} as Vector<str>
+    mut more := true
+    until more:
+        mut ok := false
+        m := grpc.RecvMessage(ch, sid, ok)
+        if not ok:
+            more = false
+        else:
+            got.push(compress.BufToStrUnsafe(m))
+        end
+    end
+    testing.AssertEqInt(got.len(), 4)
+    testing.AssertEqStr(got.get(0), "3")
+    testing.AssertEqStr(got.get(3), "liftoff")
+    st3 := grpc.FinishCall(ch, sid)
+    testing.AssertEqInt(st3.code, grpc.GRPC_OK)
+
+    md2 := grpc.NewMetadata()
+    sid2 := grpc.StartCall(ch, "/demo.Greeter/Collect", md2)
+    mut a := compress.BufFromStr("x")
+    mut b := compress.BufFromStr("y")
+    mut c := compress.BufFromStr("z")
+    grpc.SendMessage(ch, sid2, a, false)
+    grpc.SendMessage(ch, sid2, b, false)
+    grpc.SendMessage(ch, sid2, c, true)
+    mut cok := false
+    mut joined := grpc.RecvMessage(ch, sid2, cok)
+    testing.AssertTrue(cok)
+    testing.AssertEqStr(compress.BufToStrUnsafe(joined), "x,y,z")
+    st4 := grpc.FinishCall(ch, sid2)
+    testing.AssertEqInt(st4.code, grpc.GRPC_OK)
+
+    mut md3 := grpc.NewMetadata()
+    grpc.MDAdd(md3, "x-trace", "trace-42")
+    sid3 := grpc.StartCall(ch, "/demo.Greeter/EchoMeta", md3)
+    mut e := compress.BufFromStr("ping")
+    grpc.SendMessage(ch, sid3, e, true)
+    mut eok := false
+    mut echoed := grpc.RecvMessage(ch, sid3, eok)
+    testing.AssertTrue(eok)
+    testing.AssertEqStr(compress.BufToStrUnsafe(echoed), "trace-42//demo.Greeter/EchoMeta")
+    testing.AssertEqInt(grpc.FinishCall(ch, sid3).code, grpc.GRPC_OK)
+
+    mut st5 := grpc.Status {}
+    grpc.UnaryCallStr(ch, "/demo.Greeter/Denied", "x", st5)
+    testing.AssertEqInt(st5.code, grpc.GRPC_PERMISSION_DENIED)
+    testing.AssertEqStr(st5.message, "token expired: re-authenticate")
+
+    mut st6 := grpc.Status {}
+    grpc.UnaryCallStr(ch, "/demo.Greeter/Missing", "x", st6)
+    testing.AssertEqInt(st6.code, grpc.GRPC_UNIMPLEMENTED)
+    testing.AssertContains(st6.message, "unknown method")
+
+    compress.BufFree(joined)
+    compress.BufFree(echoed)
+    compress.BufFree(body)
+    compress.BufFree(a)
+    compress.BufFree(b)
+    compress.BufFree(c)
+    compress.BufFree(e)
+    grpc.CloseChannel(ch)
+    join(t)
+end
+
+func main:
+    grpc.RegisterMethod("/demo.Greeter/SayHello", say hello)
+    grpc.RegisterStreamMethod("/demo.Greeter/Countdown", countdown, false, true)
+    grpc.RegisterStreamMethod("/demo.Greeter/Collect", collect, true, false)
+    grpc.RegisterMethod("/demo.Greeter/EchoMeta", echo meta)
+    grpc.RegisterMethod("/demo.Greeter/Denied", denied)
+
+    check status()
+    check message framing()
+    check metadata()
+    check proto services()
+    check registry()
+    check live calls()
+
+    ret testing.Summary()
+end

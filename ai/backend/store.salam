@@ -1,0 +1,222 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aistore
+
+import db.mysql
+import sync
+import time
+import str
+
+mut DB := mysql.Database {}
+mut LOCK := sync.Mutex {}
+mut HOST := ""
+mut USER := ""
+mut PASS := ""
+mut NAME := ""
+mut PORT := 3306
+
+func connect(): bool:
+    DB = mysql.Open(HOST, USER, PASS, NAME, PORT)
+    if not mysql.Ok(DB):
+        ret false
+    end
+    _c := mysql.SetCharset(DB, "utf8mb4")
+    ret true
+end
+
+func ensure():
+    if not mysql.Ok(DB) or not mysql.Ping(DB):
+        if mysql.Ok(DB):
+            mysql.Close(DB)
+        end
+        _c := connect()
+    end
+end
+
+func quote(v: str): str:
+    ret "'" + mysql.Escape(DB, v) + "'"
+end
+
+func bind(sql: str, args: Vector<str>): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    n := sql.len()
+    mut i := 0
+    until i < n:
+        c := sql.substr(i, 1)
+        if c == "?" and i + 1 < n:
+            mut j := i + 1
+            mut num := 0
+            until j < n and sql.substr(j, 1) >= "0" and sql.substr(j, 1) <= "9":
+                num = num * 10 + sql.substr(j, 1).to_int()
+                j += 1
+            end
+            if j > i + 1 and num >= 1 and num <= args.len():
+                str.BufAppend(b, quote(args.get(num - 1)))
+                i = j
+                continue
+            end
+        end
+        str.BufAppend(b, c)
+        i += 1
+    end
+    ret str.BufStr(b)
+end
+
+func lost(): bool:
+    code := mysql.Errno(DB)
+    ret code == 2006 or code == 2013 or code == 2055
+end
+
+pub func Open(host: str, user: str, pass: str, name: str, port: int): bool:
+    HOST = host
+    USER = user
+    PASS = pass
+    NAME = name
+    PORT = port
+    LOCK = sync.NewMutex()
+    if not connect():
+        ret false
+    end
+    tables := Vector {} as Vector<str>
+    tables.push("CREATE TABLE IF NOT EXISTS users (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(80) NOT NULL, email VARCHAR(200) NOT NULL UNIQUE, pass VARCHAR(255) NOT NULL, created BIGINT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS sessions (token CHAR(64) PRIMARY KEY, user_id BIGINT NOT NULL, expires BIGINT NOT NULL, INDEX sessions_user (user_id), CONSTRAINT sessions_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS chats (id CHAR(24) PRIMARY KEY, user_id BIGINT NOT NULL, title VARCHAR(255) NOT NULL, engine_sid VARCHAR(100) NOT NULL DEFAULT '', created BIGINT NOT NULL, updated BIGINT NOT NULL, INDEX chats_user (user_id, updated), CONSTRAINT chats_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS messages (id BIGINT AUTO_INCREMENT PRIMARY KEY, chat_id CHAR(24) NOT NULL, role VARCHAR(16) NOT NULL, body MEDIUMTEXT NOT NULL, status VARCHAR(16) NOT NULL, created BIGINT NOT NULL, INDEX messages_chat (chat_id, id), CONSTRAINT messages_chat_fk FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS oauth_clients (id VARCHAR(500) CHARACTER SET ascii NOT NULL PRIMARY KEY, kind VARCHAR(8) NOT NULL, name VARCHAR(200) NOT NULL, uri VARCHAR(500) NOT NULL DEFAULT '', logo VARCHAR(500) NOT NULL DEFAULT '', redirects TEXT NOT NULL, created BIGINT NOT NULL, fetched BIGINT NOT NULL DEFAULT 0) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS oauth_requests (id CHAR(32) PRIMARY KEY, client_id VARCHAR(500) CHARACTER SET ascii NOT NULL, redirect_uri TEXT NOT NULL, state TEXT NOT NULL, challenge VARCHAR(128) NOT NULL, scope VARCHAR(200) NOT NULL, resource VARCHAR(500) NOT NULL, created BIGINT NOT NULL, answered TINYINT NOT NULL DEFAULT 0, INDEX oauth_requests_created (created)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS oauth_codes (code CHAR(64) PRIMARY KEY, user_id BIGINT NOT NULL, client_id VARCHAR(500) CHARACTER SET ascii NOT NULL, redirect_uri TEXT NOT NULL, challenge VARCHAR(128) NOT NULL, scope VARCHAR(200) NOT NULL, resource VARCHAR(500) NOT NULL, expires BIGINT NOT NULL, used TINYINT NOT NULL DEFAULT 0, grant_id BIGINT NOT NULL DEFAULT 0, CONSTRAINT oauth_codes_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS oauth_grants (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, client_id VARCHAR(500) CHARACTER SET ascii NOT NULL, scope VARCHAR(200) NOT NULL, resource VARCHAR(500) NOT NULL, created BIGINT NOT NULL, last_used BIGINT NOT NULL DEFAULT 0, calls BIGINT NOT NULL DEFAULT 0, revoked TINYINT NOT NULL DEFAULT 0, INDEX oauth_grants_user (user_id, revoked), CONSTRAINT oauth_grants_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS oauth_tokens (token CHAR(64) PRIMARY KEY, grant_id BIGINT NOT NULL, kind VARCHAR(8) NOT NULL, expires BIGINT NOT NULL, used TINYINT NOT NULL DEFAULT 0, INDEX oauth_tokens_grant (grant_id), CONSTRAINT oauth_tokens_grant_fk FOREIGN KEY (grant_id) REFERENCES oauth_grants(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS mcp_events (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, grant_id BIGINT NOT NULL, client_id VARCHAR(500) CHARACTER SET ascii NOT NULL, method VARCHAR(64) NOT NULL, tool VARCHAR(100) NOT NULL DEFAULT '', ok TINYINT NOT NULL, ms INT NOT NULL, args MEDIUMTEXT NOT NULL, ip VARCHAR(64) NOT NULL DEFAULT '', agent VARCHAR(255) NOT NULL DEFAULT '', created BIGINT NOT NULL, INDEX mcp_events_user (user_id, id), INDEX mcp_events_grant (grant_id, id), INDEX mcp_events_created (created), CONSTRAINT mcp_events_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS api_keys (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, name VARCHAR(60) NOT NULL, prefix VARCHAR(24) NOT NULL, hash CHAR(64) NOT NULL UNIQUE, created BIGINT NOT NULL, last_used BIGINT NOT NULL DEFAULT 0, revoked TINYINT NOT NULL DEFAULT 0, INDEX api_keys_user (user_id, revoked), CONSTRAINT api_keys_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS api_requests (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, key_id BIGINT NOT NULL, project VARCHAR(100) NOT NULL DEFAULT '', end_user VARCHAR(200) NOT NULL DEFAULT '', model VARCHAR(60) NOT NULL, stream TINYINT NOT NULL DEFAULT 0, status VARCHAR(16) NOT NULL, ms INT NOT NULL DEFAULT 0, prompt MEDIUMTEXT NOT NULL, response MEDIUMTEXT NOT NULL, prompt_chars INT NOT NULL DEFAULT 0, completion_chars INT NOT NULL DEFAULT 0, ip VARCHAR(64) NOT NULL DEFAULT '', agent VARCHAR(255) NOT NULL DEFAULT '', created BIGINT NOT NULL, INDEX api_requests_user (user_id, id), INDEX api_requests_key (key_id, id), INDEX api_requests_created (created), CONSTRAINT api_requests_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("ALTER TABLE mcp_events MODIFY user_id BIGINT NULL")
+    tables.push("ALTER TABLE oauth_requests ADD COLUMN IF NOT EXISTS redirect_given TINYINT NOT NULL DEFAULT 1")
+    tables.push("ALTER TABLE oauth_codes ADD COLUMN IF NOT EXISTS redirect_given TINYINT NOT NULL DEFAULT 1")
+    tables.push("ALTER TABLE messages ADD COLUMN IF NOT EXISTS tokens_in BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS tokens_out BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS tokens_reasoning BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS cache_read BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS cache_write BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS cost DECIMAL(16,8) NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS tools INT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS steps INT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS ms INT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS finished BIGINT NOT NULL DEFAULT 0")
+    tables.push("CREATE INDEX IF NOT EXISTS messages_created ON messages (created)")
+    tables.push("ALTER TABLE api_requests ADD COLUMN IF NOT EXISTS tokens_in BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS tokens_out BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS tokens_reasoning BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS cache_read BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS cache_write BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS cost DECIMAL(16,8) NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS tools INT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS steps INT NOT NULL DEFAULT 0")
+    tables.push("ALTER TABLE messages ADD COLUMN IF NOT EXISTS activity MEDIUMTEXT NULL")
+    tables.push("ALTER TABLE messages ADD COLUMN IF NOT EXISTS trace MEDIUMTEXT NULL")
+    tables.push("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS id BIGINT NOT NULL AUTO_INCREMENT UNIQUE KEY, ADD COLUMN IF NOT EXISTS last_used BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS client VARCHAR(16) NOT NULL DEFAULT 'web', ADD COLUMN IF NOT EXISTS client_version VARCHAR(32) NOT NULL DEFAULT ''")
+    tables.push("CREATE INDEX IF NOT EXISTS sessions_last_used ON sessions (last_used)")
+    tables.push("CREATE TABLE IF NOT EXISTS guest_sessions (id BIGINT AUTO_INCREMENT PRIMARY KEY, token CHAR(64) NOT NULL UNIQUE, ip VARCHAR(64) NOT NULL DEFAULT '', engine_sid VARCHAR(100) NOT NULL DEFAULT '', lang VARCHAR(4) NOT NULL DEFAULT 'fa', messages INT NOT NULL DEFAULT 0, created BIGINT NOT NULL, updated BIGINT NOT NULL, INDEX guest_sessions_ip (ip, created)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS guest_messages (id BIGINT AUTO_INCREMENT PRIMARY KEY, guest_id BIGINT NOT NULL, role VARCHAR(16) NOT NULL, body MEDIUMTEXT NOT NULL, status VARCHAR(16) NOT NULL, created BIGINT NOT NULL, INDEX guest_messages_guest (guest_id, id), INDEX guest_messages_created (created), CONSTRAINT guest_messages_guest_fk FOREIGN KEY (guest_id) REFERENCES guest_sessions(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS message_files (id BIGINT AUTO_INCREMENT PRIMARY KEY, message_id BIGINT NOT NULL, chat_id CHAR(24) NOT NULL, user_id BIGINT NOT NULL, name VARCHAR(255) NOT NULL, kind VARCHAR(16) NOT NULL, mime VARCHAR(100) NOT NULL, size BIGINT NOT NULL, path VARCHAR(255) NOT NULL, listing TEXT NOT NULL, created BIGINT NOT NULL, INDEX message_files_chat (chat_id, id), INDEX message_files_user (user_id, kind, id), INDEX message_files_kind (kind, id), CONSTRAINT message_files_chat_fk FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS ip VARCHAR(64) NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS agent VARCHAR(255) NOT NULL DEFAULT ''")
+    tables.push("CREATE TABLE IF NOT EXISTS bridge_devices (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, name VARCHAR(80) NOT NULL, os VARCHAR(16) NOT NULL, hash CHAR(64) NOT NULL UNIQUE, created BIGINT NOT NULL, revoked TINYINT NOT NULL DEFAULT 0, INDEX bridge_devices_user (user_id, revoked), CONSTRAINT bridge_devices_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("ALTER TABLE chats ADD COLUMN IF NOT EXISTS device_id BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS workspace VARCHAR(1000) NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS bridge_token VARCHAR(32) NOT NULL DEFAULT ''")
+    tables.push("CREATE INDEX IF NOT EXISTS chats_bridge ON chats (bridge_token)")
+    tables.push("CREATE TABLE IF NOT EXISTS bridge_calls (seq BIGINT AUTO_INCREMENT PRIMARY KEY, id CHAR(24) NOT NULL UNIQUE, user_id BIGINT NOT NULL, chat_id CHAR(24) NOT NULL, message_id BIGINT NOT NULL DEFAULT 0, device_id BIGINT NOT NULL, tool VARCHAR(40) NOT NULL, kind VARCHAR(8) NOT NULL DEFAULT '', args MEDIUMTEXT NOT NULL, summary VARCHAR(500) NOT NULL DEFAULT '', detail MEDIUMTEXT NOT NULL, lang VARCHAR(16) NOT NULL DEFAULT '', outside TINYINT NOT NULL DEFAULT 0, cwd VARCHAR(1000) NOT NULL DEFAULT '', output MEDIUMTEXT NOT NULL, status VARCHAR(16) NOT NULL DEFAULT 'running', state VARCHAR(16) NOT NULL DEFAULT 'running', created BIGINT NOT NULL, finished BIGINT NOT NULL DEFAULT 0, INDEX bridge_calls_chat (chat_id, seq), INDEX bridge_calls_message (message_id, seq), INDEX bridge_calls_user (user_id, seq), CONSTRAINT bridge_calls_chat_fk FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS logins INT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS last_ip VARCHAR(64) NOT NULL DEFAULT ''")
+    tables.push("CREATE TABLE IF NOT EXISTS subscriptions (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, plan VARCHAR(32) NOT NULL, status VARCHAR(16) NOT NULL, source VARCHAR(16) NOT NULL, payment_id BIGINT NOT NULL DEFAULT 0, granted_by BIGINT NOT NULL DEFAULT 0, note VARCHAR(255) NOT NULL DEFAULT '', price BIGINT NOT NULL DEFAULT 0, started BIGINT NOT NULL, expires BIGINT NOT NULL DEFAULT 0, created BIGINT NOT NULL, INDEX subscriptions_user (user_id, id), INDEX subscriptions_live (status, expires), CONSTRAINT subscriptions_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS payments (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, plan VARCHAR(32) NOT NULL, gateway VARCHAR(16) NOT NULL, amount BIGINT NOT NULL, status VARCHAR(16) NOT NULL, token VARCHAR(128) NOT NULL DEFAULT '', ref VARCHAR(64) NOT NULL DEFAULT '', card VARCHAR(32) NOT NULL DEFAULT '', message VARCHAR(255) NOT NULL DEFAULT '', ip VARCHAR(64) NOT NULL DEFAULT '', created BIGINT NOT NULL, paid BIGINT NOT NULL DEFAULT 0, INDEX payments_user (user_id, id), INDEX payments_token (gateway, token), INDEX payments_status (status, id), CONSTRAINT payments_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS salam_prompt TINYINT NOT NULL DEFAULT 1, ADD COLUMN IF NOT EXISTS salam_tools TINYINT NOT NULL DEFAULT 1, ADD COLUMN IF NOT EXISTS system_prompt MEDIUMTEXT NULL, ADD COLUMN IF NOT EXISTS policy_by BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS policy_at BIGINT NOT NULL DEFAULT 0")
+    tables.push("ALTER TABLE users ADD COLUMN IF NOT EXISTS memory_on TINYINT NOT NULL DEFAULT 1")
+    tables.push("ALTER TABLE chats ADD COLUMN IF NOT EXISTS summary VARCHAR(1000) NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS memory_mid BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS memory_failed BIGINT NOT NULL DEFAULT 0")
+    tables.push("CREATE TABLE IF NOT EXISTS memories (id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id BIGINT NOT NULL, chat_id CHAR(24) NOT NULL, slug VARCHAR(80) NOT NULL, title VARCHAR(255) NOT NULL, description VARCHAR(600) NOT NULL DEFAULT '', body MEDIUMTEXT NOT NULL, created BIGINT NOT NULL, updated BIGINT NOT NULL, UNIQUE KEY memories_slug (chat_id, slug), INDEX memories_user (user_id, updated), CONSTRAINT memories_chat_fk FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("ALTER TABLE chats ADD COLUMN IF NOT EXISTS source VARCHAR(12) NOT NULL DEFAULT 'web'")
+    tables.push("CREATE TABLE IF NOT EXISTS telegram_links (tg_id BIGINT PRIMARY KEY, user_id BIGINT NOT NULL, chat_id CHAR(24) NOT NULL DEFAULT '', tg_chat BIGINT NOT NULL, name VARCHAR(160) NOT NULL DEFAULT '', username VARCHAR(64) NOT NULL DEFAULT '', lang VARCHAR(4) NOT NULL DEFAULT 'fa', created BIGINT NOT NULL, INDEX telegram_links_user (user_id), CONSTRAINT telegram_links_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS telegram_guests (tg_id BIGINT PRIMARY KEY, guest_id BIGINT NOT NULL, tg_chat BIGINT NOT NULL, name VARCHAR(160) NOT NULL DEFAULT '', username VARCHAR(64) NOT NULL DEFAULT '', lang VARCHAR(4) NOT NULL DEFAULT 'fa', created BIGINT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS telegram_codes (code CHAR(64) PRIMARY KEY, kind VARCHAR(8) NOT NULL, tg_id BIGINT NOT NULL DEFAULT 0, tg_chat BIGINT NOT NULL DEFAULT 0, user_id BIGINT NOT NULL DEFAULT 0, name VARCHAR(160) NOT NULL DEFAULT '', username VARCHAR(64) NOT NULL DEFAULT '', lang VARCHAR(4) NOT NULL DEFAULT 'fa', expires BIGINT NOT NULL, INDEX telegram_codes_expires (expires)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS telegram_state (k VARCHAR(32) PRIMARY KEY, v VARCHAR(255) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("ALTER TABLE chats ADD COLUMN IF NOT EXISTS cloud TINYINT NOT NULL DEFAULT 0")
+    tables.push("CREATE TABLE IF NOT EXISTS integrations (user_id BIGINT NOT NULL, provider VARCHAR(16) NOT NULL, token_enc TEXT NOT NULL, refresh_enc TEXT NOT NULL, expires BIGINT NOT NULL DEFAULT 0, login VARCHAR(120) NOT NULL DEFAULT '', scope VARCHAR(400) NOT NULL DEFAULT '', created BIGINT NOT NULL, PRIMARY KEY (user_id, provider), CONSTRAINT integrations_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS integration_states (state CHAR(64) PRIMARY KEY, user_id BIGINT NOT NULL, provider VARCHAR(16) NOT NULL, expires BIGINT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("ALTER TABLE users ADD COLUMN IF NOT EXISTS policy_free TINYINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS policy_system MEDIUMTEXT NULL, ADD COLUMN IF NOT EXISTS policy_by BIGINT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS policy_at BIGINT NOT NULL DEFAULT 0")
+    tables.push("ALTER TABLE telegram_links ADD COLUMN IF NOT EXISTS last_seen BIGINT NOT NULL DEFAULT 0")
+    tables.push("ALTER TABLE telegram_guests ADD COLUMN IF NOT EXISTS last_seen BIGINT NOT NULL DEFAULT 0")
+    tables.push("ALTER TABLE messages ADD COLUMN IF NOT EXISTS cost_in DECIMAL(16,8) NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS cost_out DECIMAL(16,8) NOT NULL DEFAULT 0")
+    tables.push("ALTER TABLE api_requests ADD COLUMN IF NOT EXISTS cost_in DECIMAL(16,8) NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS cost_out DECIMAL(16,8) NOT NULL DEFAULT 0")
+    tables.push("UPDATE messages SET cost_in = cost * (tokens_in + 0.1 * cache_read + 1.25 * cache_write) / (tokens_in + 0.1 * cache_read + 1.25 * cache_write + 5 * (tokens_out + tokens_reasoning)), cost_out = cost - cost_in WHERE cost > 0 AND cost_in = 0 AND cost_out = 0 AND tokens_in + cache_read + cache_write + tokens_out + tokens_reasoning > 0")
+    tables.push("UPDATE api_requests SET cost_in = cost * (tokens_in + 0.1 * cache_read + 1.25 * cache_write) / (tokens_in + 0.1 * cache_read + 1.25 * cache_write + 5 * (tokens_out + tokens_reasoning)), cost_out = cost - cost_in WHERE cost > 0 AND cost_in = 0 AND cost_out = 0 AND tokens_in + cache_read + cache_write + tokens_out + tokens_reasoning > 0")
+    tables.push("ALTER TABLE integration_states ADD COLUMN IF NOT EXISTS purpose VARCHAR(10) NOT NULL DEFAULT 'connect', ADD COLUMN IF NOT EXISTS next_path VARCHAR(300) NOT NULL DEFAULT ''")
+    tables.push("CREATE TABLE IF NOT EXISTS identities (provider VARCHAR(16) NOT NULL, subject VARCHAR(64) NOT NULL, user_id BIGINT NOT NULL, login VARCHAR(120) NOT NULL DEFAULT '', email VARCHAR(200) NOT NULL DEFAULT '', created BIGINT NOT NULL, PRIMARY KEY (provider, subject), INDEX identities_user (user_id), CONSTRAINT identities_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS os VARCHAR(16) NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS os_version VARCHAR(64) NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS arch VARCHAR(16) NOT NULL DEFAULT ''")
+    each sql in tables:
+        if mysql.Exec(DB, sql) != 0:
+            ret false
+        end
+    end
+    _svc := mysql.Exec(DB, "INSERT IGNORE INTO oauth_clients (id, kind, name, uri, logo, redirects, created) VALUES ('salam-ai', 'svc', 'دستیار سلام', 'https://ai.salamlang.ir', '', '[]', UNIX_TIMESTAMP())")
+    ret true
+end
+
+pub func Error(): str:
+    ret mysql.Error(DB)
+end
+
+pub func Now(): i64:
+    ret time.Now()
+end
+
+pub func Stmt(sql: str, args: Vector<str>): mysql.Result:
+    ensure()
+    mut res := mysql.Query(DB, bind(sql, args))
+    if not mysql.QueryOk(res) and lost():
+        ensure()
+        res = mysql.Query(DB, bind(sql, args))
+    end
+    ret res
+end
+
+pub func Run(sql: str, args: Vector<str>): bool:
+    ensure()
+    mut rc := mysql.Exec(DB, bind(sql, args))
+    if rc != 0 and lost():
+        ensure()
+        rc = mysql.Exec(DB, bind(sql, args))
+    end
+    ret rc == 0
+end
+
+pub func LastId(): str:
+    ret "" + mysql.LastInsertId(DB)
+end
+
+pub func OneText(sql: str, args: Vector<str>): str:
+    mut rows := Stmt(sql, args)
+    mut out := ""
+    if mysql.Next(rows):
+        out = mysql.Text(rows, 0)
+    end
+    mysql.Finish(rows)
+    ret out
+end
+
+pub func Lock():
+    _l := sync.Lock(LOCK)
+end
+
+pub func Unlock():
+    _u := sync.Unlock(LOCK)
+end
+
+pub func Next(rows &: mysql.Result): bool:
+    ret mysql.Next(rows)
+end
+
+pub func Text(rows: mysql.Result, col: int): str:
+    ret mysql.Text(rows, col)
+end
+
+pub func Int64(rows: mysql.Result, col: int): i64:
+    ret mysql.Int64(rows, col)
+end
+
+pub func Finish(rows: mysql.Result):
+    mysql.Finish(rows)
+end

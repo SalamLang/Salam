@@ -1,0 +1,1355 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package repl
+
+import os
+import io
+import str
+import time
+import mem
+
+include lg "logger.salam"
+include dr "driver/driver.salam"
+include lp "langpack.salam"
+include lx "lexer/lexer.salam"
+include ps "parser/parser.salam"
+include cc "condcomp.salam"
+include sm "semantic/semantic.salam"
+include lo "sal_layout/sal_layout.salam"
+include dg "diag.salam"
+include tok "token.salam"
+include at "ast.salam"
+include src "source.salam"
+include i18 "i18n.salam"
+include co "sal_core.salam"
+
+extern:
+    func system(cmd: str): int
+    func getchar(): int
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func GetStdHandle(nStdHandle: i32): void*
+        func GetFileType(h: void*): i32
+        func GetConsoleMode(h: void*, out_mode: void*): i32
+        func SetConsoleMode(h: void*, mode: u32): i32
+        func ReadConsoleInputA(h: void*, buf: void*, n: i32, out_read: void*): i32
+        func _isatty(fd: int): int
+    end
+else:
+    extern:
+        func isatty(fd: int): int
+        func tcgetattr(fd: int, buf: void*): int
+        func tcsetattr(fd: int, action: int, buf: void*): int
+        func read(fd: int, buf: void*, n: u64): i64
+    end
+end
+
+const HIST_MAX := 200
+
+const STD_INPUT_HANDLE := 0 - 10
+const FILE_TYPE_CHAR := 2
+const ENABLE_PROCESSED_INPUT := 1
+const KEY_EVENT := 1
+const VK_RETURN := 13
+const VK_BACK := 8
+const VK_DELETE := 46
+const VK_LEFT := 37
+const VK_RIGHT := 39
+const VK_HOME := 36
+const VK_END := 35
+const VK_UP := 38
+const VK_DOWN := 40
+
+const TCSAFLUSH := 2
+const CC_VTIME_IDX := 5
+const CC_VMIN_IDX := 6
+const IFLAG_CLEAR_BITS := 1330
+const IFLAG_KEEP_MASK := 4294965965
+const LFLAG_CLEAR_BITS := 32779
+const LFLAG_KEEP_MASK := 4294934516
+const CFLAG_CS8 := 48
+
+const RS_PKG := 0
+const RS_IMPORT := 1
+const RS_EXTERN := 2
+const RS_GLOBAL := 3
+const RS_TYPE := 4
+const RS_DEF := 5
+const RS_STMT := 6
+
+mut g_hist := Vector {} as Vector<str>
+
+mut g_last_out := ""
+mut g_has_last := false
+
+struct Entry:
+    pub kind: int = 6
+    pub name: str = ""
+    pub text: str = ""
+end
+
+struct Session:
+    pub defs: Vector<Entry> = Vector {}
+    pub stmts: Vector<str> = Vector {}
+    pub has_main: bool = false
+end
+
+func stderr_is_tty(): bool:
+    if SALAM_OS_WINDOWS:
+        ret _isatty(2) != 0
+    else:
+        ret isatty(2) != 0
+    end
+end
+
+func resolve_color(flag: int): bool:
+    if flag == 1:
+        ret true
+    end
+    if flag == 0:
+        ret false
+    end
+    ret stderr_is_tty()
+end
+
+func byte_at(s: str, i: int): int:
+    bp := (s as void*) as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+func hist_push(line: str):
+    if str.Len(line) == 0:
+        ret
+    end
+    n := g_hist.len()
+    if n > 0 and str.Equals(g_hist.get(n - 1), line):
+        ret
+    end
+    if n == HIST_MAX:
+        mut i := 0
+        until i < HIST_MAX - 1:
+            g_hist.set(i, g_hist.get(i + 1))
+            i += 1
+        end
+        _p := g_hist.pop()
+    end
+    g_hist.push(line)
+end
+
+func fallback_readline(prompt: str, ok &: bool): str:
+    print prompt
+    mut c := getchar()
+    if c == 0 - 1:
+        ok = false
+        ret ""
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    until c != (0 - 1) and c != 10:
+        if c != 13:
+            str.BufAppendChar(b, c)
+        end
+        c = getchar()
+    end
+    ok = true
+    ret str.BufStr(b)
+end
+
+if SALAM_OS_WINDOWS:
+    func win_readline(prompt: str, ok &: bool): str:
+        hIn := GetStdHandle(STD_INPUT_HANDLE)
+        invalid := (hIn as i64) == (0 - 1)
+        mut is_char := false
+        if not invalid:
+            is_char = GetFileType(hIn) == FILE_TYPE_CHAR
+        end
+        if invalid or not is_char:
+            ret fallback_readline(prompt, ok)
+        end
+
+        mode_buf := mem.Allocate(4 as u64)
+        _gm := GetConsoleMode(hIn, mode_buf)
+        orig := (mode_buf as u32*)[0]
+        mem.Free(mode_buf)
+        _sm := SetConsoleMode(hIn, ENABLE_PROCESSED_INPUT as u32)
+
+        print prompt
+        mut line := ""
+        mut pos := 0
+        mut hi := g_hist.len()
+        mut saved := ""
+        rec := mem.Allocate(24 as u64)
+        nread := mem.Allocate(4 as u64)
+        ok = true
+        mut done := false
+        until not done:
+            rc := ReadConsoleInputA(hIn, rec, 1 as i32, nread)
+            if rc == 0:
+                done = true
+            else:
+                base := rec as i64
+                evtype := ((base + 0) as u16*)[0] as int
+                keydown := ((base + 4) as i32*)[0]
+                if evtype == KEY_EVENT and keydown != 0:
+                    vk := ((base + 10) as u16*)[0] as int
+                    ch := ((base + 14) as i8*)[0] as int
+                    len := str.Len(line)
+                    if vk == VK_RETURN:
+                        println ""
+                        done = true
+                    else vk == VK_BACK and pos > 0:
+                        line = line.substr(0, pos - 1) + line.substr(pos, len - pos)
+                        pos -= 1
+                        print "\r" + prompt + line + " " + "\r" + prompt + line.substr(0, pos)
+                    else vk == VK_DELETE and pos < len:
+                        line = line.substr(0, pos) + line.substr(pos + 1, len - pos - 1)
+                        print "\r" + prompt + line + " " + "\r" + prompt + line.substr(0, pos)
+                    else vk == VK_LEFT and pos > 0:
+                        pos -= 1
+                        print "\r" + prompt + line.substr(0, pos)
+                    else vk == VK_RIGHT and pos < len:
+                        pos += 1
+                        print "\r" + prompt + line.substr(0, pos)
+                    else vk == VK_HOME:
+                        pos = 0
+                        print "\r" + prompt
+                    else vk == VK_END:
+                        pos = len
+                        print "\r" + prompt + line
+                    else vk == VK_UP:
+                        if hi == g_hist.len():
+                            saved = line
+                        end
+                        if hi > 0:
+                            hi -= 1
+                            hline := g_hist.get(hi)
+                            print "\r" + prompt + " ".repeat(len + 1) + "\r" + prompt + hline
+                            line = hline
+                            pos = str.Len(line)
+                        end
+                    else vk == VK_DOWN:
+                        if hi < g_hist.len():
+                            hi += 1
+                            mut hline := saved
+                            if hi < g_hist.len():
+                                hline = g_hist.get(hi)
+                            end
+                            print "\r" + prompt + " ".repeat(len + 1) + "\r" + prompt + hline
+                            line = hline
+                            pos = str.Len(line)
+                        end
+                    else ch == 1:
+                        pos = 0
+                        print "\r" + prompt
+                    else ch == 5:
+                        pos = len
+                        print "\r" + prompt + line
+                    else ch == 21:
+                        print "\r" + prompt + " ".repeat(len + 1) + "\r" + prompt
+                        line = ""
+                        pos = 0
+                    else ch == 3 or (ch == 4 and len == 0):
+                        println ""
+                        ok = false
+                        done = true
+                    else ch >= 32 and ch < 256 and str.Len(line) < 4095:
+                        line = line.substr(0, pos) + char_from_code(ch) + line.substr(pos, len - pos)
+                        pos += 1
+                        print "\r" + prompt + line + " " + "\r" + prompt + line.substr(0, pos)
+                    end
+                end
+            end
+        end
+        mem.Free(rec)
+        mem.Free(nread)
+        _rm := SetConsoleMode(hIn, orig)
+        ret line
+    end
+else:
+    func posix_readline(prompt: str, ok &: bool): str:
+        if isatty(0) == 0:
+            ret fallback_readline(prompt, ok)
+        end
+        orig := mem.Allocate(60 as u64)
+        _gt := tcgetattr(0, orig)
+        raw := mem.Allocate(60 as u64)
+        mem.Copy(raw, orig, 60 as u64)
+        iflag_p := raw as u32*
+        cflag_p := ((raw as i64) + 8) as u32*
+        lflag_p := ((raw as i64) + 12) as u32*
+        iflag_p[0] = iflag_p[0] & (IFLAG_KEEP_MASK as u32)
+        cflag_p[0] = cflag_p[0] | (CFLAG_CS8 as u32)
+        lflag_p[0] = lflag_p[0] & (LFLAG_KEEP_MASK as u32)
+        vmin_p := ((raw as i64) + 17 + CC_VMIN_IDX) as i8*
+        vtime_p := ((raw as i64) + 17 + CC_VTIME_IDX) as i8*
+        vmin_p[0] = 1 as i8
+        vtime_p[0] = 0 as i8
+        _st := tcsetattr(0, TCSAFLUSH, raw)
+        mem.Free(raw)
+
+        print prompt
+        mut line := ""
+        mut pos := 0
+        mut hi := g_hist.len()
+        mut saved := ""
+        ok = true
+        mut done := false
+        until not done:
+            cb := mem.Allocate(1 as u64)
+            nr := read(0, cb, 1 as u64)
+            mut c := 0 - 1
+            if nr > (0 as i64):
+                c = (cb as u8*)[0] as int
+            end
+            mem.Free(cb)
+            len := str.Len(line)
+            if nr <= (0 as i64):
+                if len == 0:
+                    ok = false
+                end
+                done = true
+            else c == 13 or c == 10:
+                print "\r\n"
+                done = true
+            else c == 127 or c == 8:
+                if pos > 0:
+                    line = line.substr(0, pos - 1) + line.substr(pos, len - pos)
+                    pos -= 1
+                    print "\b" + line.substr(pos, len - 1 - pos) + " " + "\b".repeat(len - pos)
+                end
+            else c == 1:
+                print "\b".repeat(pos)
+                pos = 0
+            else c == 5:
+                print line.substr(pos, len - pos)
+                pos = len
+            else c == 21:
+                print "\b".repeat(pos) + " ".repeat(len) + "\b".repeat(len)
+                line = ""
+                pos = 0
+            else c == 3 or (c == 4 and len == 0):
+                print "\r\n"
+                ok = false
+                done = true
+            else c == 27:
+                s1b := mem.Allocate(1 as u64)
+                n1 := read(0, s1b, 1 as u64)
+                s1 := n1 > (0 as i64) ? ((s1b as u8*)[0] as int) : 0
+                mem.Free(s1b)
+                if n1 > (0 as i64) and s1 == 91:
+                    s2b := mem.Allocate(1 as u64)
+                    n2 := read(0, s2b, 1 as u64)
+                    s2 := n2 > (0 as i64) ? ((s2b as u8*)[0] as int) : 0
+                    mem.Free(s2b)
+                    if n2 > (0 as i64) and s2 == 65:
+                        if hi == g_hist.len():
+                            saved = line
+                        end
+                        if hi > 0:
+                            hi -= 1
+                            hline := g_hist.get(hi)
+                            print "\b".repeat(pos) + " ".repeat(len) + "\b".repeat(len) + hline
+                            line = hline
+                            pos = str.Len(line)
+                        end
+                    else s2 == 66:
+                        if hi < g_hist.len():
+                            hi += 1
+                            mut hline := saved
+                            if hi < g_hist.len():
+                                hline = g_hist.get(hi)
+                            end
+                            print "\b".repeat(pos) + " ".repeat(len) + "\b".repeat(len) + hline
+                            line = hline
+                            pos = str.Len(line)
+                        end
+                    else s2 == 67 and pos < len:
+                        print line.substr(pos, 1)
+                        pos += 1
+                    else s2 == 68 and pos > 0:
+                        print "\b"
+                        pos -= 1
+                    else s2 == 51:
+                        tb := mem.Allocate(1 as u64)
+                        nt := read(0, tb, 1 as u64)
+                        tch := nt > (0 as i64) ? ((tb as u8*)[0] as int) : 0
+                        mem.Free(tb)
+                        if nt > (0 as i64) and tch == 126 and pos < len:
+                            line = line.substr(0, pos) + line.substr(pos + 1, len - pos - 1)
+                            print line.substr(pos, len - 1 - pos) + " " + "\b".repeat(len - pos)
+                        end
+                    end
+                end
+            else c >= 32 and c < 256 and str.Len(line) < 4095:
+                line = line.substr(0, pos) + char_from_code(c) + line.substr(pos, len - pos)
+                pos += 1
+                print line.substr(pos - 1, len + 1 - pos) + "\b".repeat(len - pos)
+            end
+        end
+        _rt := tcsetattr(0, TCSAFLUSH, orig)
+        mem.Free(orig)
+        ret line
+    end
+end
+
+func readline(prompt: str, ok &: bool): str:
+    if SALAM_OS_WINDOWS:
+        ret win_readline(prompt, ok)
+    else:
+        ret posix_readline(prompt, ok)
+    end
+end
+
+func skip_ws(s: str, i: int): int:
+    n := str.Len(s)
+    mut p := i
+    until p < n:
+        c := byte_at(s, p)
+        if c != 32 and c != 9:
+            ret p
+        end
+        p += 1
+    end
+    ret p
+end
+
+func ident_byte(c: int): bool:
+    ret c >= 128 or c == 95 or (c >= 48 and c <= 57) or (c >= 97 and c <= 122) or (
+        c >= 65 and c <= 90
+    )
+end
+
+func word_len(s: str, i: int): int:
+    n := str.Len(s)
+    mut e := i
+    until e < n and ident_byte(byte_at(s, e)):
+        e += 1
+    end
+    ret e - i
+end
+
+func line_as_name(line: str): str:
+    p := skip_ws(line, 0)
+    n := str.Len(line)
+    mut e := p
+    until e < n and byte_at(line, e) != 10 and byte_at(line, e) != 13:
+        e += 1
+    end
+    until e > p and (byte_at(line, e - 1) == 32 or byte_at(line, e - 1) == 9):
+        e -= 1
+    end
+    if e > p and byte_at(line, e - 1) == 58:
+        e -= 1
+    end
+    ret str.Substr(line, p, e - p)
+end
+
+func subject_name(s: str, after_kw: int): str:
+    p := skip_ws(s, after_kw)
+    n := str.Len(s)
+    mut e := p
+    until e < n:
+        c := byte_at(s, e)
+        dotted := c == 46 and e + 1 < n and ident_byte(byte_at(s, e + 1))
+        if not ident_byte(c) and not dotted:
+            break
+        end
+        e += 1
+    end
+    ret str.Substr(s, p, e - p)
+end
+
+func word_kind(pack: int, s: str, i: int, n: int): int:
+    ret lp.LookupKeyword(pack, str.Substr(s, i, n))
+end
+
+func is_modifier(k: int): bool:
+    ret k == tok.TK_KW_PUB or k == tok.TK_KW_INLINE or k == tok.TK_KW_NOINLINE or k == tok.TK_KW_PURE or k == tok.TK_KW_NORET or k == tok.TK_KW_DEPRECATED
+end
+
+func names_its_subject(k: int): bool:
+    ret k == tok.TK_KW_FUNC or k == tok.TK_KW_STRUCT or k == tok.TK_KW_ENUM or k == tok.TK_KW_TYPE or k == tok.TK_KW_INTERFACE or k == tok.TK_KW_COMPONENT or k == tok.TK_KW_CONST
+end
+
+func kind_of_keyword(k: int): int:
+    if k == tok.TK_KW_PACKAGE:
+        ret RS_PKG
+    end
+    if k == tok.TK_KW_IMPORT or k == tok.TK_KW_INCLUDE:
+        ret RS_IMPORT
+    end
+    if k == tok.TK_KW_EXTERN or k == tok.TK_KW_EXPORT:
+        ret RS_EXTERN
+    end
+    if k == tok.TK_KW_CONST:
+        ret RS_GLOBAL
+    end
+    if k == tok.TK_KW_STRUCT or k == tok.TK_KW_ENUM or k == tok.TK_KW_TYPE or k == tok.TK_KW_INTERFACE or k == tok.TK_KW_COMPONENT or k == tok.TK_KW_IMPL:
+        ret RS_TYPE
+    end
+    if k == tok.TK_KW_FUNC:
+        ret RS_DEF
+    end
+    ret RS_STMT
+end
+
+func after_metas(text: str): str:
+    n := str.Len(text)
+    mut i := 0
+    until i < n:
+        ls := skip_ws(text, i)
+        if ls >= n:
+            ret ""
+        end
+        if byte_at(text, ls) != 64:
+            ret str.Substr(text, i, n - i)
+        end
+        mut e := ls
+        until e < n and byte_at(text, e) != 10:
+            e += 1
+        end
+        if e >= n:
+            ret ""
+        end
+        i = e + 1
+    end
+    ret ""
+end
+
+func classify(pack: int, text: str, name &: str): int:
+    line := after_metas(text)
+    mut p := skip_ws(line, 0)
+    name = ""
+    ln := str.Len(line)
+    if ln == 0:
+        name = line_as_name(text)
+        ret RS_DEF
+    end
+    if p + 1 < ln and byte_at(line, p) == 47 and (
+        byte_at(line, p + 1) == 47 or byte_at(line, p + 1) == 42
+    ):
+        name = line_as_name(line)
+        ret RS_DEF
+    end
+    mut guard := 0
+    until guard < 8:
+        n := word_len(line, p)
+        if n == 0:
+            ret RS_STMT
+        end
+        k := word_kind(pack, line, p, n)
+        if is_modifier(k):
+            p = skip_ws(line, p + n)
+            guard += 1
+        else:
+            if k == tok.TK_IDENT and n == 4 and str.Equals(str.Substr(line, p, n), "link"):
+                name = line_as_name(line)
+                ret RS_IMPORT
+            end
+            kind := kind_of_keyword(k)
+            if kind == RS_STMT:
+                ret RS_STMT
+            end
+            if names_its_subject(k):
+                name = subject_name(line, p + n)
+            else k == tok.TK_KW_PACKAGE:
+                name = "package"
+            else:
+                name = line_as_name(line)
+            end
+            if str.Len(name) == 0:
+                name = line_as_name(line)
+            end
+            ret kind
+        end
+    end
+    ret RS_STMT
+end
+
+func assign_prev_byte(c: int): bool:
+    ret c == 61 or c == 33 or c == 60 or c == 62 or c == 43 or c == 45 or c == 42 or c == 47 or c == 37 or c == 38 or c == 124 or c == 94 or c == 126
+end
+
+func has_assignment(s: str, from: int): bool:
+    n := str.Len(s)
+    mut q := from
+    until q < n:
+        c := byte_at(s, q)
+        nxt := q + 1 < n ? byte_at(s, q + 1) : 0
+        prev := q == from ? 32 : byte_at(s, q - 1)
+        if c == 61 and nxt != 61 and not assign_prev_byte(prev):
+            ret true
+        end
+        q += 1
+    end
+    ret false
+end
+
+func is_expr_line(pack: int, line: str): bool:
+    p := skip_ws(line, 0)
+    n := str.Len(line)
+    if p >= n:
+        ret false
+    end
+    mut nl := p
+    until nl < n and byte_at(line, nl) != 10:
+        nl += 1
+    end
+    if nl < n and skip_ws(line, nl + 1) < n:
+        ret false
+    end
+    if p + 1 < n and byte_at(line, p) == 47 and (
+        byte_at(line, p + 1) == 47 or byte_at(line, p + 1) == 42
+    ):
+        ret false
+    end
+    w := word_len(line, p)
+    if w > 0 and tok.IsKeyword(word_kind(pack, line, p, w)):
+        ret false
+    end
+    ret not has_assignment(line, p)
+end
+
+func stmt_binding_name(pack: int, text: str): str:
+    mut p := skip_ws(text, 0)
+    mut n := word_len(text, p)
+    if n == 0:
+        ret ""
+    end
+    k := word_kind(pack, text, p, n)
+    if k == tok.TK_KW_MUT:
+        p = skip_ws(text, p + n)
+        n = word_len(text, p)
+        if n == 0:
+            ret ""
+        end
+        if tok.IsKeyword(word_kind(pack, text, p, n)):
+            ret ""
+        end
+    else tok.IsKeyword(k):
+        ret ""
+    end
+    name := str.Substr(text, p, n)
+    q := skip_ws(text, p + n)
+    if q < str.Len(text) and byte_at(text, q) == 58:
+        ret name
+    end
+    ret ""
+end
+
+func no_cand(): Entry:
+    e := Entry {}
+    ret e
+end
+
+func starts_with_mut(pack: int, text: str): bool:
+    p := skip_ws(text, 0)
+    n := word_len(text, p)
+    ret n > 0 and word_kind(pack, text, p, n) == tok.TK_KW_MUT
+end
+
+func with_mut(pack: int, text: str): str:
+    kw := lp.Spelling(pack, tok.TK_KW_MUT)
+    p := skip_ws(text, 0)
+    ret str.Substr(text, 0, p) + (str.Len(kw) > 0 ? kw : "mut") + " " + str.Substr(
+        text, p, str.Len(text) - p
+    )
+end
+
+func session_defines(s &: Session, name: str): bool:
+    mut i := 0
+    until i < s.defs.len():
+        if str.Equals(s.defs.get(i).name, name):
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func refresh_has_main(s &: Session, pack: int):
+    entry := lp.Entry(pack)
+    s.has_main = false
+    mut i := 0
+    until i < s.defs.len():
+        e := s.defs.get(i)
+        if e.kind == RS_DEF and str.Equals(e.name, entry):
+            s.has_main = true
+        end
+        i += 1
+    end
+end
+
+func session_add(s &: Session, pack: int, kind: int, name: str, text: str):
+    repeat s.defs.len() in i:
+        if str.Equals(s.defs.get(i).name, name):
+            hit := Entry { kind = kind, name = name, text = text }
+            s.defs.set(i, hit)
+            refresh_has_main(s, pack)
+            ret
+        end
+    end
+    fresh := Entry { kind = kind, name = name, text = text }
+    s.defs.push(fresh)
+    refresh_has_main(s, pack)
+end
+
+func stmt_replace_index(s &: Session, pack: int, text: str): int:
+    nm := stmt_binding_name(pack, text)
+    if str.Len(nm) == 0:
+        ret 0 - 1
+    end
+    repeat s.stmts.len() in i:
+        if str.Equals(stmt_binding_name(pack, s.stmts.get(i)), nm):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func session_add_stmt(s &: Session, pack: int, text: str):
+    at_i := stmt_replace_index(s, pack, text)
+    if at_i >= 0:
+        s.stmts.set(at_i, text)
+        ret
+    end
+    s.stmts.push(text)
+end
+
+func session_undo(s &: Session): bool:
+    if s.stmts.len() == 0:
+        ret false
+    end
+    _dropped := s.stmts.pop()
+    ret true
+end
+
+func put_block(sb &: str.StringBuilder, text: str):
+    n := str.Len(text)
+    if n == 0:
+        ret
+    end
+    str.BufAppend(sb, text)
+    if byte_at(text, n - 1) != 10:
+        str.BufAppendChar(sb, 10)
+    end
+end
+
+func entry_is_pub(pack: int, text: str): bool:
+    p := skip_ws(text, 0)
+    n := word_len(text, p)
+    ret n > 0 and word_kind(pack, text, p, n) == tok.TK_KW_PUB
+end
+
+func put_bucket(
+    sb &: str.StringBuilder, s &: Session, pack: int, kind: int, cand: Entry, has_cand: bool, pubsel: int
+):
+    repeat s.defs.len() in i:
+        e := s.defs.get(i)
+        mut skip := e.kind != kind
+        if not skip and pubsel >= 0 and entry_is_pub(pack, e.text) != (pubsel == 1):
+            skip = true
+        end
+        if not skip and has_cand and str.Len(cand.name) > 0 and str.Equals(e.name, cand.name):
+            skip = true
+        end
+        if not skip:
+            put_block(sb, e.text)
+        end
+    end
+    if has_cand and cand.kind == kind and (
+        pubsel < 0 or entry_is_pub(pack, cand.text) == (pubsel == 1)
+    ):
+        put_block(sb, cand.text)
+    end
+end
+
+func put_stmts(
+    sb &: str.StringBuilder, s &: Session, pack: int, cand: Entry, has_cand: bool
+):
+    mut place := 0 - 1
+    if has_cand and cand.kind == RS_STMT:
+        place = stmt_replace_index(s, pack, cand.text)
+    end
+    repeat s.stmts.len() in i:
+        if i == place:
+            put_block(sb, cand.text)
+        else:
+            put_block(sb, s.stmts.get(i))
+        end
+    end
+    if has_cand and cand.kind == RS_STMT and place < 0:
+        put_block(sb, cand.text)
+    end
+end
+
+func render(s &: Session, pack: int, cand: Entry, has_cand: bool): str:
+    mut sb := str.NewBuilder()
+    mut k := 0
+    until k < RS_DEF:
+        put_bucket(sb, s, pack, k, cand, has_cand, 0 - 1)
+        k += 1
+    end
+    put_bucket(sb, s, pack, RS_DEF, cand, has_cand, 0)
+    put_bucket(sb, s, pack, RS_DEF, cand, has_cand, 1)
+    cand_is_main := has_cand and cand.kind == RS_DEF and str.Equals(cand.name, lp.Entry(pack))
+    if not s.has_main and not cand_is_main:
+        kw_func := lp.Spelling(pack, tok.TK_KW_FUNC)
+        kw_ret := lp.Spelling(pack, tok.TK_KW_RET)
+        empty := s.stmts.len() == 0 and not (has_cand and cand.kind == RS_STMT)
+        str.BufAppend(sb, str.Len(kw_func) > 0 ? kw_func : "func")
+        str.BufAppend(sb, " " + lp.Entry(pack) + ":\n")
+        put_stmts(sb, s, pack, cand, has_cand)
+        if empty:
+            str.BufAppend(sb, str.Len(kw_ret) > 0 ? kw_ret : "ret")
+            str.BufAppend(sb, " 0\n")
+        end
+        str.BufAppend(sb, lp.EndSpelling(pack) + "\n")
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func incomplete(pack: int, src_text: str, as_stmt: bool): bool:
+    mut probe := src_text
+    if as_stmt:
+        kw_func := lp.Spelling(pack, tok.TK_KW_FUNC)
+        probe = (str.Len(kw_func) > 0 ? kw_func : "func") + " " + lp.Entry(
+            pack
+        ) + ":\n" + src_text + lp.EndSpelling(pack) + "\n"
+    end
+    lgr := lg.New(lg.LOG_OFF, false)
+    mut sf := src.New()
+    sf.path = "<repl>"
+    sf.text = probe
+    sf.len = str.Len(probe)
+    mut toks := tok.StreamNew(sf.path)
+    mut a := at.NewAst()
+    mut more := false
+    if lx.Run(lgr, pack, sf, toks):
+        more = ps.NeedsMore(lgr, toks, a)
+    end
+    at.FreeAst(a)
+    tok.StreamFree(toks)
+    ret more
+end
+
+func read_block(pack: int, first: str, as_stmt: bool, ok &: bool): str:
+    mut block := first + "\n"
+    mut cont_ok := true
+    ok = true
+    until incomplete(pack, block, as_stmt) and cont_ok:
+        cont := readline("  ... ", cont_ok)
+        if cont_ok:
+            if str.Equals(cont, ":abort"):
+                println "abandoned."
+                ok = false
+                ret ""
+            end
+            block += cont + "\n"
+            hist_push(cont)
+        end
+    end
+    ret block
+end
+
+func compile_check(opt &: dr.Dr, pack: int, test_src: str, quiet: bool): bool:
+    lgr := lg.New(quiet ? lg.LOG_OFF : lg.LOG_ERROR, resolve_color(opt.color))
+    mut sf := src.New()
+    sf.path = "<repl>"
+    sf.text = test_src
+    sf.len = str.Len(test_src)
+    if not quiet:
+        lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+    end
+    mut toks := tok.StreamNew(sf.path)
+    ok := lx.Run(lgr, pack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    mut pok := ok
+    if ok:
+        pok = ps.Run(lgr, toks, a, prog)
+    end
+    tok.StreamFree(toks)
+    table := cc.TableBuild("", opt.defines)
+    cc.TableSetPack(table, pack)
+    mut cok := pok
+    if pok:
+        cok = cc.PruneProgram(a, lgr, sf.path, table, prog)
+    end
+    _vw := lo.PrepareViews(lgr, pack, table, a, prog, sf.path)
+    mut s := sm.New(lgr, sf.path, lp.Code(pack))
+    sm.SetCc(s, table)
+    mut sok := false
+    if cok:
+        sok = sm.Run(s, a, prog)
+    end
+    sm.Free(s)
+    at.FreeAst(a)
+    ret ok and pok and cok and sok
+end
+
+func exit_note(rc: int): str:
+    if SALAM_OS_WINDOWS:
+        ret "[program exited with " + co.I64Toa(rc as i64) + "]"
+    else:
+        if rc < 0:
+            ret "[could not run the program]"
+        end
+        sig := rc & 127
+        if sig != 0:
+            ret "[program killed by signal " + co.I64Toa(sig as i64) + "]"
+        end
+        ret "[program exited with " + co.I64Toa(((rc / 256) & 255) as i64) + "]"
+    end
+end
+
+func emit_output(out: str):
+    mut skip := 0
+    if g_has_last and str.StartsWith(out, g_last_out):
+        skip = str.Len(g_last_out)
+    end
+    if str.Len(out) > skip:
+        print str.Substr(out, skip, str.Len(out) - skip)
+    end
+end
+
+func exec_session(opt &: dr.Dr, full_src: str, replay: bool): int:
+    if opt.log_level == lg.LOG_INFO:
+        opt.log_level = lg.LOG_WARN
+    end
+    ts := time.NowMicros() + "-" + str.FromInt(os.Pid() as i64)
+    tmp_src := os.TempDir() + "/salam-repl-" + ts + ".salam"
+    tmp_out := os.TempDir() + "/salam-repl-" + ts + ".out"
+    mut exe_suffix := ""
+    if SALAM_OS_WINDOWS:
+        exe_suffix = ".exe"
+    else:
+        exe_suffix = ""
+    end
+    tmp_exe := os.TempDir() + "/salam-repl-" + ts + exe_suffix
+    if io.WriteFile(tmp_src, full_src) < 0:
+        io.EPrintln("error: could not write a temp file for the session")
+        ret 0 - 1
+    end
+    opt.inputs = Vector {} as Vector<str>
+    opt.inputs.push(tmp_src)
+    opt.input = tmp_src
+    opt.output = tmp_exe
+    opt.exe_path = ""
+    opt.keep_temp = false
+    mut rc := dr.Build(opt)
+    if rc == 0:
+        exe := str.Len(opt.exe_path) > 0 ? opt.exe_path : tmp_exe
+        mut cmdb := str.NewBuilder()
+        if SALAM_OS_WINDOWS:
+            if replay:
+                str.BufAppendChar(cmdb, 34)
+            end
+        end
+        str.BufAppendChar(cmdb, 34)
+        if SALAM_OS_WINDOWS:
+            str.BufAppend(cmdb, exe)
+        else:
+            if str.Contains(exe, "/"):
+                str.BufAppend(cmdb, exe)
+            else:
+                str.BufAppend(cmdb, "./" + exe)
+            end
+        end
+        str.BufAppendChar(cmdb, 34)
+        if replay:
+            str.BufAppend(cmdb, " > ")
+            str.BufAppendChar(cmdb, 34)
+            str.BufAppend(cmdb, tmp_out)
+            str.BufAppendChar(cmdb, 34)
+            str.BufAppend(cmdb, " 2>&1")
+            if SALAM_OS_WINDOWS:
+                str.BufAppendChar(cmdb, 34)
+            end
+        end
+        cmdtext := str.BufStr(cmdb)
+        str.BufFree(cmdb)
+        io.Flush()
+        rc = system(cmdtext)
+        if replay:
+            out := io.ReadFile(tmp_out)
+            emit_output(out)
+            if rc == 0:
+                g_last_out = out
+                g_has_last = true
+            end
+            _r0 := os.Remove(tmp_out)
+        else:
+            g_last_out = ""
+            g_has_last = false
+        end
+        if rc != 0:
+            println exit_note(rc)
+        end
+        _r2 := os.Remove(str.Len(opt.exe_path) > 0 ? opt.exe_path : tmp_exe)
+    end
+    _r1 := os.Remove(tmp_src)
+    ret rc
+end
+
+func echo_wrap(pack: int, block: str): str:
+    kw := lp.Spelling(pack, tok.TK_KW_PRINTLN)
+    mut n := str.Len(block)
+    until n > 0 and (byte_at(block, n - 1) == 10 or byte_at(block, n - 1) == 13):
+        n -= 1
+    end
+    ret (str.Len(kw) > 0 ? kw : "println") + " " + str.Substr(block, 0, n) + "\n"
+end
+
+func turn_def(
+    opt &: dr.Dr, s &: Session, pack: int, kind: int, name: str, block: str
+):
+    again := session_defines(s, name)
+    cand := Entry { kind = kind, name = name, text = block }
+    if not compile_check(opt, pack, render(s, pack, cand, true), false):
+        ret
+    end
+    session_add(s, pack, kind, name, block)
+    if s.has_main and s.stmts.len() > 0:
+        println "note: your own " + lp.Entry(pack) + " replaces the " + co.I64Toa(
+            s.stmts.len() as i64
+        ) + " statement(s) typed so far."
+    end
+    if kind == RS_PKG or kind == RS_IMPORT or kind == RS_EXTERN:
+        println "ok."
+    else:
+        mut tail := ""
+        if s.has_main:
+            tail = " ':run' to execute."
+        end
+        println (again ? "redefined " : "defined ") + name + "." + tail
+    end
+end
+
+func turn_stmt(opt &: dr.Dr, s &: Session, pack: int, block: str):
+    mut cand := Entry { kind = RS_STMT, name = "", text = block }
+    old_i := stmt_replace_index(s, pack, block)
+    if old_i >= 0 and starts_with_mut(pack, s.stmts.get(old_i)) and not starts_with_mut(
+        pack, block
+    ):
+        cand.text = with_mut(pack, block)
+    end
+    if is_expr_line(pack, block):
+        plain := cand.text
+        cand.text = echo_wrap(pack, block)
+        if not compile_check(opt, pack, render(s, pack, cand, true), true):
+            cand.text = plain
+        end
+    end
+    src_text := render(s, pack, cand, true)
+    if compile_check(opt, pack, src_text, false) and exec_session(opt, src_text, true) == 0:
+        session_add_stmt(s, pack, cand.text)
+    end
+end
+
+func layout_exec(opt &: dr.Dr, pack: int, src_text: str):
+    lgr := lg.New(lg.LOG_ERROR, resolve_color(opt.color))
+    mut sf := src.New()
+    sf.path = "<repl>"
+    sf.text = src_text
+    sf.len = str.Len(src_text)
+    lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+    mut toks := tok.StreamNew(sf.path)
+    ok := lx.Run(lgr, pack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    mut pok := ok
+    if ok:
+        pok = ps.Run(lgr, toks, a, prog)
+    end
+    tok.StreamFree(toks)
+    mut cok := pok
+    if pok:
+        table := cc.TableBuild("", opt.defines)
+        cc.TableSetPack(table, pack)
+        cok = cc.PruneProgram(a, lgr, sf.path, table, prog)
+        if cok:
+            _vw := lo.PrepareViews(lgr, pack, table, a, prog, sf.path)
+            mut s := sm.New(lgr, sf.path, lp.Code(pack))
+            sm.SetCc(s, table)
+            _sok := sm.Run(s, a, prog)
+            sm.Free(s)
+        end
+    end
+    if cok:
+        lb := lo.FindLayout(a, prog)
+        if lb != 0:
+            mut diag_e := dg.New(lgr, lg.PH_CODEGEN)
+            res := lo.Generate(lgr, diag_e, "<repl>", a, lb, false, lp.Code(pack))
+            if dg.ErrorCount(diag_e) == 0:
+                print lo.Document(res, true, "", "", false)
+            end
+            dg.Free(diag_e)
+        else:
+            io.EPrintln("error: no layout block found")
+        end
+    end
+    at.FreeAst(a)
+end
+
+func layout_head(p: str): bool:
+    heads := ["page", "صفحه"]
+    repeat len(heads) in i:
+        n := str.Len(heads[i])
+        if str.StartsWith(p, heads[i]) and (
+            str.Len(p) == n or byte_at(p, n) == 58 or byte_at(p, n) == 32 or byte_at(p, n) == 9
+        ):
+            ret true
+        end
+    end
+    ret false
+end
+
+func layout_turn(opt &: dr.Dr, pack: int, first_line: str, block: str):
+    if layout_head(str.TrimLeft(first_line)):
+        layout_exec(opt, pack, block)
+        ret
+    end
+    io.EPrintln("error: page REPL only accepts 'page: ... end' blocks")
+end
+
+func help(is_layout: bool):
+    if is_layout:
+        println "Layout REPL commands:"
+        println "  :clear  erase accumulated session"
+        println "  :defs   show current session"
+        println "  :quit   exit  (also: :q  quit  exit  q  Ctrl-D)"
+        println "  :abort  at the '...' prompt, abandon the block being typed"
+        println ""
+        println "Type a 'layout: ... end' block to render HTML inline."
+        println "Blocks can span multiple lines - the REPL waits until the block"
+        println "parses (every ':' opener matched by an 'end') before running."
+        println ""
+        println "Root-level attributes: title, lang, dir"
+        println "Common elements:  box  heading  p  link  image  input  button"
+        println "Element attrs:    content  color  background  font-size  ..."
+        println ""
+        println `Example:`
+        println `  layout: title = "Hi" box: heading: size = 1 content = "Hello" end end end`
+        ret
+    end
+    println "Commands:"
+    println "  :run        rebuild and run the whole session, showing all output"
+    println "  :defs       print the session as one program"
+    println "  :undo       drop the last statement"
+    println "  :save FILE  write the session to FILE"
+    println "  :load FILE  read FILE in as though it had been typed"
+    println "  :clear      erase the session"
+    println "  :quit       exit  (also: :q  quit  exit  q  Ctrl-D)"
+    println "  :abort      at the '...' prompt, abandon the block being typed"
+    println ""
+    println "Definitions (func/struct/enum/type/const/import/extern) are kept and"
+    println "sorted into a legal program; typing a name again redefines it."
+    println "Statements accumulate in a synthesized main, so a variable bound on one"
+    println "line is still there on the next, and binding it again changes it - to a"
+    println "new value or to a new type. A bare expression is printed."
+    println "Any block waits for the line that completes it (a matching 'end')."
+    println ""
+    println "Every turn re-runs the session from the top, so a statement with an"
+    println "outside effect (writing a file, sending a request) happens again each"
+    println "time. Only the new output is shown."
+end
+
+func save_session(s &: Session, pack: int, arg: str):
+    path := str.TrimLeft(arg)
+    if str.Len(path) == 0:
+        println "usage: :save FILE"
+        ret
+    end
+    text := render(s, pack, no_cand(), false)
+    if io.WriteFile(path, text) < 0:
+        println "could not write " + path
+        ret
+    end
+    println "saved to " + path
+end
+
+func load_session(opt &: dr.Dr, s &: Session, pack: int, is_layout: bool, arg: str):
+    path := str.TrimLeft(arg)
+    if str.Len(path) == 0:
+        println "usage: :load FILE"
+        ret
+    end
+    if not os.Exists(path):
+        println "could not read " + path
+        ret
+    end
+    text := io.ReadFile(path)
+    lines := str.Split(text, "\n")
+    mut block := ""
+    mut turns := 0
+    repeat lines.len() in i:
+        line := lines.get(i)
+        if str.Len(block) == 0 and str.Len(str.TrimLeft(line)) == 0:
+            continue
+        end
+        block += line + "\n"
+        mut name := ""
+        kind := classify(pack, block, name)
+        if incomplete(pack, block, not is_layout and kind == RS_STMT):
+            continue
+        end
+        if is_layout:
+            layout_turn(opt, pack, line, block)
+        else kind != RS_STMT:
+            turn_def(opt, s, pack, kind, name, block)
+        else s.has_main:
+            println lp.Entry(pack) + " is defined - ':run' to execute, ':clear' to start over."
+        else:
+            turn_stmt(opt, s, pack, block)
+        end
+        turns += 1
+        block = ""
+    end
+    if str.Len(str.TrimLeft(block)) > 0:
+        io.EPrintln("error: " + path + " ends in the middle of a block")
+    end
+    println "loaded " + path + " (" + co.I64Toa(turns as i64) + " turn(s))."
+end
+
+func wants_run(pack: int, line: str): bool:
+    entry := lp.Entry(pack)
+    p := skip_ws(line, 0)
+    ret str.StartsWith(str.Substr(line, p, str.Len(line) - p), entry + "()")
+end
+
+func is_save_cmd(line: str): bool:
+    ret str.StartsWith(line, ":save") and (str.Len(line) == 5 or byte_at(line, 5) == 32)
+end
+
+func is_load_cmd(line: str): bool:
+    ret str.StartsWith(line, ":load") and (str.Len(line) == 5 or byte_at(line, 5) == 32)
+end
+
+func cmd_run(opt &: dr.Dr, s &: Session, pack: int, is_layout: bool):
+    if is_layout:
+        println "page REPL: type 'page: ... end' blocks to render HTML."
+        ret
+    end
+    if not s.has_main and s.stmts.len() == 0:
+        println "nothing to run yet - type a statement, or define " + lp.Entry(pack) + "."
+        ret
+    end
+    text := render(s, pack, no_cand(), false)
+    _rc := exec_session(opt, text, false)
+end
+
+pub func Run(opt &: dr.Dr): int:
+    g_hist = Vector {} as Vector<str>
+    g_last_out = ""
+    g_has_last = false
+    pack := lp.Load(opt.lang)
+    if pack == lp.LP_NONE:
+        io.EPrintln(
+            co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
+        )
+        ret 2
+    end
+    sm.SetStdlibRoot(opt.stdlib_path)
+    sm.LayoutSchemaInit(opt.stdlib_path)
+    sm.SetRelaxUnused(true)
+    is_layout := opt.command == dr.CMD_REPL_LAYOUT
+    which := is_layout ? "page" : "general"
+    println "Salam " + which + " REPL (lang=" + opt.lang + "). ':help' for commands."
+    mut ses := Session {}
+
+    mut running := true
+    until running:
+        mut ok := false
+        line := readline("salam> ", ok)
+        if not ok:
+            running = false
+        else str.Len(line) == 0:
+            _blank := 0
+        else str.Equals(line, ":quit") or str.Equals(line, ":q") or str.Equals(line, "quit") or str.Equals(line, "exit") or str.Equals(line, "q"):
+            running = false
+        else str.Equals(line, ":help"):
+            help(is_layout)
+            hist_push(line)
+        else str.Equals(line, ":clear"):
+            ses = Session {}
+            g_last_out = ""
+            g_has_last = false
+            println "session cleared."
+            hist_push(line)
+        else str.Equals(line, ":defs"):
+            if ses.defs.len() == 0 and ses.stmts.len() == 0:
+                println "(empty)"
+            else:
+                print render(ses, pack, no_cand(), false)
+            end
+            hist_push(line)
+        else str.Equals(line, ":undo"):
+            println session_undo(ses) ? "dropped the last statement." : "no statement to drop."
+            hist_push(line)
+        else is_save_cmd(line):
+            save_session(ses, pack, str.Substr(line, 5, str.Len(line) - 5))
+            hist_push(line)
+        else is_load_cmd(line):
+            load_session(
+                opt, ses, pack, is_layout, str.Substr(line, 5, str.Len(line) - 5)
+            )
+            hist_push(line)
+        else str.Equals(line, ":run") or wants_run(pack, line):
+            cmd_run(opt, ses, pack, is_layout)
+            hist_push(line)
+        else byte_at(line, 0) == 58:
+            if str.Equals(line, ":abort"):
+                println "nothing to abandon - :abort answers the '  ... ' prompt."
+            else:
+                println co.Format1(
+                    i18.Tr("unknown command '%s' - ':help' lists them."), co.ArgStr(line)
+                )
+            end
+            hist_push(line)
+        else:
+            mut name := ""
+            first_kind := classify(pack, line, name)
+            mut blk_ok := true
+            block := read_block(pack, line, not is_layout and first_kind == RS_STMT, blk_ok)
+            if blk_ok:
+                if is_layout:
+                    layout_turn(opt, pack, line, block)
+                else:
+                    kind := classify(pack, block, name)
+                    if kind != RS_STMT:
+                        turn_def(opt, ses, pack, kind, name, block)
+                    else ses.has_main:
+                        println lp.Entry(pack) + " is defined - ':run' to execute, ':clear' to start over."
+                    else:
+                        turn_stmt(opt, ses, pack, block)
+                    end
+                end
+            end
+            hist_push(line)
+        end
+    end
+    println "bye."
+    g_hist = Vector {} as Vector<str>
+    ret 0
+end

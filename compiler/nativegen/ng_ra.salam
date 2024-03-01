@@ -1,0 +1,1771 @@
+package nativegen
+
+const RA_INF := 2147483647
+
+k_ra_gpr_sysv := [0, 1, 2, 6, 7, 8, 9, 3, 12, 13, 14, 15, 5]
+k_ra_gpr_win := [0, 1, 2, 8, 9, 3, 6, 7, 12, 13, 14, 15]
+k_ra_xmm := [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+k_ra_gpr_a64 := [0, 1, 2, 3, 5, 6, 7, 8, 9, 12, 13, 14, 15]
+k_ra_gpr_x86 := [0, 1, 2, 3, 5, 6]
+k_ra_xmm_x86 := [16, 17, 18, 19, 20, 21]
+k_ra_gpr_arm := [0, 1, 2, 3, 5, 6, 7, 8, 9, 12]
+k_ra_xmm_arm := [16, 17, 18, 19, 20, 21, 22, 23]
+
+pub struct Ra:
+    pub fr_s: Vector<int> = Vector {}
+    pub fr_e: Vector<int> = Vector {}
+    pub fr_next: Vector<int> = Vector {}
+    pub fr_head: Vector<int> = Vector {}
+    pub fr_tail: Vector<int> = Vector {}
+    pub fr_cur: Vector<int> = Vector {}
+    pub oc_blk: Vector<int> = Vector {}
+    pub oc_first: Vector<int> = Vector {}
+    pub oc_last: Vector<int> = Vector {}
+    pub oc_upex: Vector<bool> = Vector {}
+    pub oc_def: Vector<bool> = Vector {}
+    pub oc_fdef: Vector<int> = Vector {}
+    pub oc_lu: Vector<int> = Vector {}
+    pub oc_next: Vector<int> = Vector {}
+    pub oc_head: Vector<int> = Vector {}
+    pub oc_cur: Vector<int> = Vector {}
+    pub li_blk: Vector<int> = Vector {}
+    pub li_next: Vector<int> = Vector {}
+    pub li_head: Vector<int> = Vector {}
+    pub rg_s: Vector<int> = Vector {}
+    pub rg_e: Vector<int> = Vector {}
+    pub v_r0: Vector<int> = Vector {}
+    pub v_rn: Vector<int> = Vector {}
+    pub v_rc: Vector<int> = Vector {}
+    pub mark: Vector<int> = Vector {}
+    pub order: Vector<int> = Vector {}
+    pub tmp: Vector<int> = Vector {}
+    pub ts: Vector<int> = Vector {}
+    pub te: Vector<int> = Vector {}
+    pub active: Vector<int> = Vector {}
+    pub inactive: Vector<int> = Vector {}
+    pub free_until: Vector<int> = Vector {}
+    pub uses: Vector<int> = Vector {}
+    pub defs: Vector<int> = Vector {}
+    pub wl: Vector<int> = Vector {}
+    pub nuse: Vector<int> = Vector {}
+    pub cp_head: Vector<int> = Vector {}
+    pub cp_to: Vector<int> = Vector {}
+    pub cp_next: Vector<int> = Vector {}
+end
+
+func is_callee_saved(g &: Ng, r: int): bool:
+    if g.arch == NG_ARCH_ARM:
+        ret r >= 5 and r <= 12
+    end
+    if g.arch == NG_ARCH_A64 or g.arch == NG_ARCH_RV64:
+        ret r >= 12 and r <= 15
+    end
+    if g.arch == NG_ARCH_X86:
+        ret r == RBX or r == RBP or r == RSI or r == R10 or r == R11
+    end
+    if r == RBX or r == R12 or r == R13 or r == R14 or r == R15:
+        ret true
+    end
+    if r == RBP and g.os != NG_OS_WINDOWS:
+        ret true
+    end
+    if g.os == NG_OS_WINDOWS:
+        if r == RSI or r == RDI:
+            ret true
+        end
+        if r >= 22 and r <= 31:
+            ret true
+        end
+    end
+    ret false
+end
+
+func is_caller_saved(g &: Ng, r: int): bool:
+    if r == RSP or (r == RBP and g.arch == NG_ARCH_X64):
+        ret false
+    end
+    ret not is_callee_saved(g, r)
+end
+
+func fr_add(ra &: Ra, r: int, s: int, e: int):
+    id := ra.fr_s.len()
+    ra.fr_s.push(s)
+    ra.fr_e.push(e)
+    ra.fr_next.push(0 - 1)
+    if ra.fr_tail[r] >= 0:
+        ra.fr_next[ra.fr_tail[r]] = id
+    else:
+        ra.fr_head[r] = id
+    end
+    ra.fr_tail[r] = id
+end
+
+func fr_use(ra &: Ra, r: int, pos: int):
+    t := ra.fr_tail[r]
+    if t < 0:
+        fr_add(ra, r, 0, pos)
+        ret
+    end
+    if ra.fr_e[t] < pos:
+        ra.fr_e[t] = pos
+    end
+end
+
+func occ(ra &: Ra, v: int, b: int, pos: int, is_def: bool):
+    c := ra.oc_cur[v]
+    if c >= 0 and ra.oc_blk[c] == b:
+        ra.oc_last[c] = pos
+        if is_def:
+            ra.oc_def[c] = true
+            if ra.oc_fdef[c] < 0:
+                ra.oc_fdef[c] = pos
+            end
+        else ra.oc_fdef[c] < 0:
+            ra.oc_lu[c] = pos
+        end
+        ret
+    end
+    id := ra.oc_blk.len()
+    ra.oc_blk.push(b)
+    ra.oc_first.push(pos)
+    ra.oc_last.push(pos)
+    ra.oc_upex.push(not is_def)
+    ra.oc_def.push(is_def)
+    ra.oc_fdef.push(is_def ? pos : 0 - 1)
+    ra.oc_lu.push(is_def ? 0 - 1 : pos)
+    ra.oc_next.push(ra.oc_head[v])
+    ra.oc_head[v] = id
+    ra.oc_cur[v] = id
+end
+
+func liveness(g &: Ng, ra &: Ra):
+    nv := g.mc.vcls.len()
+    ra.oc_head.clear()
+    ra.oc_cur.clear()
+    ra.li_head.clear()
+    ra.nuse.clear()
+    repeat nv:
+        ra.oc_head.push(0 - 1)
+        ra.oc_cur.push(0 - 1)
+        ra.li_head.push(0 - 1)
+        ra.nuse.push(0)
+    end
+    repeat 32:
+        ra.fr_head.push(0 - 1)
+        ra.fr_tail.push(0 - 1)
+        ra.fr_cur.push(0 - 1)
+    end
+    each b in g.mc.lorder:
+        mut i := g.mc.bstart[b]
+        until i < g.mc.bend[b]:
+            mi_regs(g, i, ra.uses, ra.defs)
+            each u in ra.uses:
+                if u >= VBASE:
+                    occ(ra, u, b, 2 * i, false)
+                    ra.nuse[u] = ra.nuse[u] + g.b_wt[b]
+                else u != RSP and (u != RBP or g.arch != NG_ARCH_X64):
+                    fr_use(ra, u, 2 * i)
+                end
+            end
+            op := g.mc.op[i]
+            if op == M_CALL or op == M_CALLR:
+                repeat 32 in r:
+                    if is_caller_saved(g, r):
+                        fr_add(ra, r, 2 * i + 1, 2 * i + 1)
+                    end
+                end
+            end
+            each d in ra.defs:
+                if d >= VBASE:
+                    occ(ra, d, b, 2 * i + 1, true)
+                    ra.nuse[d] = ra.nuse[d] + g.b_wt[b]
+                else d != RSP and (d != RBP or g.arch != NG_ARCH_X64):
+                    fr_add(ra, d, 2 * i + 1, 2 * i + 1)
+                end
+            end
+            i += 1
+        end
+    end
+    propagate_live(g, ra)
+    build_ranges(g, ra)
+end
+
+func propagate_live(g &: Ng, ra &: Ra):
+    nb := g.b_first.len()
+    ra.mark.clear()
+    repeat nb:
+        ra.mark.push(0 - 1)
+    end
+    nv := g.mc.vcls.len()
+    mut v := VBASE
+    until v < nv:
+        mut h := ra.oc_head[v]
+        until h >= 0:
+            if ra.oc_upex[h]:
+                b0 := ra.oc_blk[h]
+                if ra.mark[b0] != v:
+                    ra.mark[b0] = v
+                    ra.wl.push(b0)
+                end
+            end
+            h = ra.oc_next[h]
+        end
+        until ra.wl.len() > 0:
+            b := ra.wl.pop()
+            ra.li_blk.push(b)
+            ra.li_next.push(ra.li_head[v])
+            ra.li_head[v] = ra.li_blk.len() - 1
+            repeat g.b_npred[b] in q:
+                p := g.b_pred[g.b_ps[b] + q]
+                if ra.mark[p] != v:
+                    ra.mark[p] = v
+                    if not defined_in(ra, v, p):
+                        ra.wl.push(p)
+                    else:
+                        ra.mark[p] = 0 - 2 - v
+                    end
+                end
+            end
+        end
+        v += 1
+    end
+end
+
+func defined_in(ra &: Ra, v: int, b: int): bool:
+    mut h := ra.oc_head[v]
+    until h >= 0:
+        if ra.oc_blk[h] == b:
+            ret ra.oc_def[h]
+        end
+        h = ra.oc_next[h]
+    end
+    ret false
+end
+
+func occ_of(ra &: Ra, v: int, b: int): int:
+    mut h := ra.oc_head[v]
+    until h >= 0:
+        if ra.oc_blk[h] == b:
+            ret h
+        end
+        h = ra.oc_next[h]
+    end
+    ret 0 - 1
+end
+
+func live_out(g &: Ng, ra &: Ra, v: int, b: int): bool:
+    repeat g.b_sn[b] in k:
+        s := g.b_succ[g.b_ss[b] + k]
+        if ra.mark[s] == v:
+            ret true
+        end
+    end
+    ret false
+end
+
+func bend_pos(g &: Ng, b: int): int:
+    ret 2 * g.mc.bend[b] - 1
+end
+
+func build_ranges(g &: Ng, ra &: Ra):
+    nv := g.mc.vcls.len()
+    nb := g.b_first.len()
+    ra.v_r0.clear()
+    ra.v_rn.clear()
+    repeat nv:
+        ra.v_r0.push(0)
+        ra.v_rn.push(0)
+    end
+    repeat nb in b0:
+        ra.mark[b0] = 0 - 1
+    end
+    mut v := VBASE
+    until v < nv:
+        if ra.oc_head[v] < 0:
+            v += 1
+            continue
+        end
+        mut h := ra.li_head[v]
+        until h >= 0:
+            ra.mark[ra.li_blk[h]] = v
+            h = ra.li_next[h]
+        end
+        ra.ts.clear()
+        ra.te.clear()
+        mut h2 := ra.li_head[v]
+        until h2 >= 0:
+            b := ra.li_blk[h2]
+            ra.ts.push(2 * g.mc.bstart[b])
+            oc0 := occ_of(ra, v, b)
+            if oc0 >= 0 and ra.oc_upex[oc0] and ra.oc_fdef[oc0] >= 0:
+                ra.te.push(ra.oc_lu[oc0])
+                ra.ts.push(ra.oc_fdef[oc0])
+                if live_out(g, ra, v, b):
+                    ra.te.push(bend_pos(g, b))
+                else:
+                    ra.te.push(ra.oc_last[oc0])
+                end
+            else live_out(g, ra, v, b):
+                ra.te.push(bend_pos(g, b))
+            else:
+                oc := occ_of(ra, v, b)
+                if oc >= 0:
+                    ra.te.push(ra.oc_last[oc])
+                else:
+                    ra.te.push(2 * g.mc.bstart[b])
+                end
+            end
+            h2 = ra.li_next[h2]
+        end
+        mut h3 := ra.oc_head[v]
+        until h3 >= 0:
+            b2 := ra.oc_blk[h3]
+            if ra.mark[b2] != v:
+                ra.ts.push(ra.oc_first[h3])
+                if live_out(g, ra, v, b2):
+                    ra.te.push(bend_pos(g, b2))
+                else:
+                    ra.te.push(ra.oc_last[h3])
+                end
+            end
+            h3 = ra.oc_next[h3]
+        end
+        n := ra.ts.len()
+        mut a := 1
+        until a < n:
+            ks := ra.ts[a]
+            ke := ra.te[a]
+            mut j := a - 1
+            until j >= 0 and ra.ts[j] > ks:
+                ra.ts[j + 1] = ra.ts[j]
+                ra.te[j + 1] = ra.te[j]
+                j -= 1
+            end
+            ra.ts[j + 1] = ks
+            ra.te[j + 1] = ke
+            a += 1
+        end
+        ra.v_r0[v] = ra.rg_s.len()
+        repeat n in q:
+            last := ra.rg_s.len() - 1
+            if last >= ra.v_r0[v] and ra.ts[q] <= ra.rg_e[last] + 1:
+                if ra.te[q] > ra.rg_e[last]:
+                    ra.rg_e[last] = ra.te[q]
+                end
+            else:
+                ra.rg_s.push(ra.ts[q])
+                ra.rg_e.push(ra.te[q])
+            end
+        end
+        ra.v_rn[v] = ra.rg_s.len() - ra.v_r0[v]
+        g.mc.vstart[v] = ra.rg_s[ra.v_r0[v]]
+        g.mc.vend[v] = ra.rg_e[ra.rg_s.len() - 1]
+        v += 1
+    end
+end
+
+func covers(ra &: Ra, v: int, pos: int): bool:
+    mut k := ra.v_rc[v]
+    lim := ra.v_r0[v] + ra.v_rn[v]
+    until k < lim and ra.rg_e[k] < pos:
+        k += 1
+    end
+    ra.v_rc[v] = k
+    ret k < lim and ra.rg_s[k] <= pos
+end
+
+func next_inter(ra &: Ra, a: int, b: int, from: int): int:
+    mut i := ra.v_rc[a]
+    mut j := ra.v_r0[b]
+    li := ra.v_r0[a] + ra.v_rn[a]
+    lj := ra.v_r0[b] + ra.v_rn[b]
+    until i < li and j < lj:
+        if ra.rg_e[i] < from:
+            i += 1
+            continue
+        end
+        if ra.rg_e[j] < from:
+            j += 1
+            continue
+        end
+        s := ra.rg_s[i] > ra.rg_s[j] ? ra.rg_s[i] : ra.rg_s[j]
+        e := ra.rg_e[i] < ra.rg_e[j] ? ra.rg_e[i] : ra.rg_e[j]
+        if s <= e:
+            ret s < from ? from : s
+        end
+        if ra.rg_e[i] < ra.rg_e[j]:
+            i += 1
+        else:
+            j += 1
+        end
+    end
+    ret 0 - 1
+end
+
+func fixed_inter(ra &: Ra, r: int, v: int, from: int): int:
+    mut k := ra.fr_cur[r]
+    until k >= 0 and ra.fr_e[k] < from:
+        k = ra.fr_next[k]
+    end
+    ra.fr_cur[r] = k
+    mut j := ra.v_r0[v]
+    lj := ra.v_r0[v] + ra.v_rn[v]
+    until k >= 0 and j < lj:
+        s := ra.fr_s[k] > ra.rg_s[j] ? ra.fr_s[k] : ra.rg_s[j]
+        e := ra.fr_e[k] < ra.rg_e[j] ? ra.fr_e[k] : ra.rg_e[j]
+        if s <= e:
+            ret s
+        end
+        if ra.fr_e[k] < ra.rg_e[j]:
+            k = ra.fr_next[k]
+        else:
+            j += 1
+        end
+    end
+    ret 0 - 1
+end
+
+func sort_by_start(g &: Ng, ra &: Ra):
+    n := ra.order.len()
+    ra.tmp.clear()
+    repeat n:
+        ra.tmp.push(0)
+    end
+    mut w := 1
+    until w < n:
+        mut lo := 0
+        until lo < n:
+            mid := lo + w < n ? lo + w : n
+            hi := lo + 2 * w < n ? lo + 2 * w : n
+            mut a := lo
+            mut b := mid
+            mut k := lo
+            until k < hi:
+                if a < mid and (b >= hi or g.mc.vstart[ra.order[a]] <= g.mc.vstart[ra.order[b]]):
+                    ra.tmp[k] = ra.order[a]
+                    a += 1
+                else:
+                    ra.tmp[k] = ra.order[b]
+                    b += 1
+                end
+                k += 1
+            end
+            lo += 2 * w
+        end
+        repeat n in j:
+            ra.order[j] = ra.tmp[j]
+        end
+        w = w * 2
+    end
+end
+
+func slot_conflict(ra &: Ra, head &: Vector<int>, nxt &: Vector<int>, sa: int, sb: int): bool:
+    mut x := head[sa]
+    until x >= 0:
+        mut y := head[sb]
+        until y >= 0:
+            if ranges_overlap(ra.rg_s, ra.rg_e, ra.v_r0[x], ra.v_rn[x], ra.rg_s, ra.rg_e, ra.v_r0[y], ra.v_rn[y]):
+                ret true
+            end
+            y = nxt[y]
+        end
+        x = nxt[x]
+    end
+    ret false
+end
+
+func coalesce_spills(g &: Ng, ra &: Ra):
+    nv := g.mc.vcls.len()
+    ns := g.mc.fs_size.len()
+    mut head := Vector {} as Vector<int>
+    mut nxt := Vector {} as Vector<int>
+    repeat ns:
+        head.push(0 - 1)
+    end
+    repeat nv:
+        nxt.push(0 - 1)
+    end
+    mut v := VBASE
+    until v < nv:
+        sl := g.mc.vslot[v]
+        if g.mc.vloc[v] < 0 and sl >= 0 and ra.v_rn[v] > 0:
+            nxt[v] = head[sl]
+            head[sl] = v
+        end
+        v += 1
+    end
+    n := g.mc.op.len()
+    mut ndef := Vector {} as Vector<int>
+    repeat nv:
+        ndef.push(0)
+    end
+    repeat n in i0:
+        mi_regs(g, i0, ra.uses, ra.defs)
+        each dv in ra.defs:
+            if dv >= VBASE:
+                ndef[dv] = ndef[dv] + 1
+            end
+        end
+    end
+    repeat n in i:
+        op := g.mc.op[i]
+        if op != M_COPY and op != M_FMOV_RR:
+            continue
+        end
+        a := g.mc.r0[i]
+        b := g.mc.r1[i]
+        if a < VBASE or b < VBASE or g.mc.vloc[a] >= 0 or g.mc.vloc[b] >= 0:
+            continue
+        end
+        sa := g.mc.vslot[a]
+        sb := g.mc.vslot[b]
+        if sa < 0 or sb < 0 or sa == sb or g.mc.vwide[a] != g.mc.vwide[b] or head[sa] < 0 or head[sb] < 0:
+            continue
+        end
+        same_val := ndef[a] == 1 and ndef[b] == 1 and nxt[a] < 0 and head[sa] == a
+        if not same_val and slot_conflict(ra, head, nxt, sa, sb):
+            continue
+        end
+        mut y := head[sb]
+        mut last := 0 - 1
+        until y >= 0:
+            g.mc.vslot[y] = sa
+            last = y
+            y = nxt[y]
+        end
+        nxt[last] = head[sa]
+        head[sa] = head[sb]
+        head[sb] = 0 - 1
+    end
+    head.free()
+    nxt.free()
+    ndef.free()
+end
+
+func spill_vreg(g &: Ng, v: int):
+    g.mc.vloc[v] = 0 - 1
+    if g.mc.vslot[v] < 0:
+        if g.mc.vwide[v]:
+            g.mc.vslot[v] = new_slot(g, 16, 16)
+        else:
+            g.mc.vslot[v] = new_slot(g, 8, 8)
+        end
+        g.mc.fs_temp[g.mc.vslot[v]] = false
+    end
+end
+
+func reg_ok_for(g &: Ng, r: int, cls: int): bool:
+    if r < 0 or r == RSP or r == R10 or r == R11 or r >= XMM14:
+        ret false
+    end
+    if r == RBP and g.os == NG_OS_WINDOWS and g.arch == NG_ARCH_X64:
+        ret false
+    end
+    if g.arch == NG_ARCH_X86 and ((r > RBP and r < 16 and (r != RSI or g.off_x86si)) or r > 21):
+        ret false
+    end
+    if g.arch == NG_ARCH_ARM and (r == R10 or r == R11 or (r > 12 and r < 16) or r > 23):
+        ret false
+    end
+    ret g.mc.vcls[r] == cls
+end
+
+func choose_reg(g &: Ng, ra &: Ra, v: int): int:
+    cls := g.mc.vcls[v]
+    e := g.mc.vend[v]
+    h := g.mc.vhint[v]
+    if h >= 0:
+        mut hr := h
+        if h >= VBASE:
+            hr = g.mc.vloc[h]
+        end
+        if reg_ok_for(g, hr, cls) and ra.free_until[hr] > e:
+            ret hr
+        end
+    end
+    ph := g.mc.vphint[v]
+    if ph >= 0 and reg_ok_for(g, ph, cls) and ra.free_until[ph] > e:
+        ret ph
+    end
+    if v < ra.cp_head.len():
+        mut ce := ra.cp_head[v]
+        mut nc := 0
+        until ce >= 0 and nc < 16:
+            u := ra.cp_to[ce]
+            ur := g.mc.vloc[u]
+            if ur >= 0 and ur < 32 and reg_ok_for(g, ur, cls) and ra.free_until[ur] > e:
+                ret ur
+            end
+            ce = ra.cp_next[ce]
+            nc += 1
+        end
+        mut ce2 := ra.cp_head[v]
+        mut n2 := 0
+        until ce2 >= 0 and n2 < 16:
+            u2 := ra.cp_to[ce2]
+            if g.mc.vloc[u2] < 0 and u2 < ra.cp_head.len():
+                mut cf := ra.cp_head[u2]
+                mut nf := 0
+                until cf >= 0 and nf < 16:
+                    w := ra.cp_to[cf]
+                    wr := g.mc.vloc[w]
+                    if w != v and wr >= 0 and wr < 32 and reg_ok_for(g, wr, cls) and ra.free_until[wr] > e:
+                        ret wr
+                    end
+                    cf = ra.cp_next[cf]
+                    nf += 1
+                end
+            end
+            ce2 = ra.cp_next[ce2]
+            n2 += 1
+        end
+    end
+    if cls == 1 and g.arch == NG_ARCH_ARM:
+        each xa in k_ra_xmm_arm:
+            if ra.free_until[xa] > e:
+                ret xa
+            end
+        end
+        ret 0 - 1
+    end
+    if g.arch == NG_ARCH_ARM and cls != 1:
+        each ra32 in k_ra_gpr_arm:
+            if ra.free_until[ra32] > e:
+                ret ra32
+            end
+        end
+        ret 0 - 1
+    end
+    if cls == 1 and g.arch == NG_ARCH_X86:
+        each x8 in k_ra_xmm_x86:
+            if ra.free_until[x8] > e:
+                ret x8
+            end
+        end
+        ret 0 - 1
+    end
+    if cls == 1:
+        each x in k_ra_xmm:
+            if ra.free_until[x] > e:
+                ret x
+            end
+        end
+        ret 0 - 1
+    end
+    if g.arch == NG_ARCH_X86:
+        each r86 in k_ra_gpr_x86:
+            if ra.free_until[r86] > e and (r86 != RSI or not g.off_x86si):
+                ret r86
+            end
+        end
+        ret 0 - 1
+    end
+    if g.arch == NG_ARCH_A64 or g.arch == NG_ARCH_RV64:
+        each ra64 in k_ra_gpr_a64:
+            if ra.free_until[ra64] > e:
+                ret ra64
+            end
+        end
+        ret 0 - 1
+    end
+    if g.os == NG_OS_WINDOWS:
+        each r in k_ra_gpr_win:
+            if ra.free_until[r] > e:
+                ret r
+            end
+        end
+        ret 0 - 1
+    end
+    each r2 in k_ra_gpr_sysv:
+        if ra.free_until[r2] > e:
+            ret r2
+        end
+    end
+    ret 0 - 1
+end
+
+func spill_weight(g &: Ng, ra &: Ra, v: int): int:
+    len := g.mc.vend[v] - g.mc.vstart[v] + 1
+    w := ((ra.nuse[v] + 1) as i64) * (100000 as i64) / (len as i64)
+    if w > (2000000000 as i64):
+        ret 2000000000
+    end
+    ret w as int
+end
+
+func cp_edge(ra &: Ra, a: int, b: int):
+    ra.cp_to.push(b)
+    ra.cp_next.push(ra.cp_head[a])
+    ra.cp_head[a] = ra.cp_to.len() - 1
+end
+
+func cp_build(g &: Ng, ra &: Ra):
+    ra.cp_head.clear()
+    ra.cp_to.clear()
+    ra.cp_next.clear()
+    repeat g.mc.vcls.len():
+        ra.cp_head.push(0 - 1)
+    end
+    if g.off_cpref:
+        ret
+    end
+    repeat g.mc.op.len() in i:
+        if g.mc.op[i] == M_COPY:
+            a := g.mc.r0[i]
+            b := g.mc.r1[i]
+            if a >= VBASE and b >= VBASE and a != b and a < ra.cp_head.len() and b < ra.cp_head.len():
+                cp_edge(ra, a, b)
+                cp_edge(ra, b, a)
+            end
+        end
+    end
+end
+
+func linear_scan(g &: Ng, ra &: Ra):
+    nv := g.mc.vcls.len()
+    cp_build(g, ra)
+    ra.order.clear()
+    ra.v_rc.clear()
+    repeat nv in q0:
+        ra.v_rc.push(ra.v_r0[q0])
+    end
+    mut k := VBASE
+    until k < nv:
+        if ra.v_rn[k] > 0:
+            ra.order.push(k)
+        end
+        k += 1
+    end
+    sort_by_start(g, ra)
+    repeat 32 in fr:
+        ra.fr_cur[fr] = ra.fr_head[fr]
+    end
+    ra.free_until.clear()
+    repeat 32:
+        ra.free_until.push(0)
+    end
+    ra.active.clear()
+    ra.inactive.clear()
+    each v in ra.order:
+        pos := g.mc.vstart[v]
+        cls := g.mc.vcls[v]
+        mut j := 0
+        until j < ra.active.len():
+            a := ra.active[j]
+            if g.mc.vend[a] < pos or g.mc.vloc[a] < 0:
+                ra.active[j] = ra.active[ra.active.len() - 1]
+                _p := ra.active.pop()
+            else not covers(ra, a, pos):
+                ra.inactive.push(a)
+                ra.active[j] = ra.active[ra.active.len() - 1]
+                _p2 := ra.active.pop()
+            else:
+                j += 1
+            end
+        end
+        mut j2 := 0
+        until j2 < ra.inactive.len():
+            a2 := ra.inactive[j2]
+            if g.mc.vend[a2] < pos or g.mc.vloc[a2] < 0:
+                ra.inactive[j2] = ra.inactive[ra.inactive.len() - 1]
+                _p3 := ra.inactive.pop()
+            else covers(ra, a2, pos):
+                ra.active.push(a2)
+                ra.inactive[j2] = ra.inactive[ra.inactive.len() - 1]
+                _p4 := ra.inactive.pop()
+            else:
+                j2 += 1
+            end
+        end
+        repeat 32 in r:
+            if reg_ok_for(g, r, cls):
+                ra.free_until[r] = RA_INF
+            else:
+                ra.free_until[r] = 0 - 1
+            end
+        end
+        each a3 in ra.active:
+            ra.free_until[g.mc.vloc[a3]] = 0 - 1
+        end
+        each a4 in ra.inactive:
+            r4 := g.mc.vloc[a4]
+            if ra.free_until[r4] > 0:
+                ni := next_inter(ra, a4, v, pos)
+                if ni >= 0 and ni < ra.free_until[r4]:
+                    ra.free_until[r4] = ni
+                end
+            end
+        end
+        repeat 32 in r5:
+            if ra.free_until[r5] > 0:
+                fi := fixed_inter(ra, r5, v, pos)
+                if fi >= 0 and fi < ra.free_until[r5]:
+                    ra.free_until[r5] = fi
+                end
+            end
+        end
+        reg := choose_reg(g, ra, v)
+        if reg >= 0:
+            g.mc.vloc[v] = reg
+            ra.active.push(v)
+            continue
+        end
+        mut victim := 0 - 1
+        mut vi := 0 - 1
+        mut vw := spill_weight(g, ra, v)
+        if g.opt and cls == 1 and not g.off_belady:
+            mut far := next_ref(g, ra, v, pos + 1)
+            repeat ra.active.len() in qb:
+                ab := ra.active[qb]
+                if g.mc.vcls[ab] == cls:
+                    rb := g.mc.vloc[ab]
+                    nu := next_ref(g, ra, ab, pos)
+                    if nu > far and fixed_inter(ra, rb, v, pos) < 0 and not inactive_blocks(g, ra, rb, v, pos):
+                        victim = ab
+                        vi = qb
+                        far = nu
+                    end
+                end
+            end
+        else:
+            repeat ra.active.len() in q:
+                a5 := ra.active[q]
+                if g.mc.vcls[a5] == cls:
+                    rr := g.mc.vloc[a5]
+                    w := spill_weight(g, ra, a5)
+                    if w < vw and fixed_inter(ra, rr, v, pos) < 0 and not inactive_blocks(g, ra, rr, v, pos):
+                        victim = a5
+                        vi = q
+                        vw = w
+                    end
+                end
+            end
+        end
+        if victim >= 0:
+            rr2 := g.mc.vloc[victim]
+            spill_vreg(g, victim)
+            ra.active[vi] = v
+            g.mc.vloc[v] = rr2
+        else:
+            spill_vreg(g, v)
+        end
+    end
+end
+
+func next_ref(g &: Ng, ra &: Ra, v: int, pos: int): int:
+    n := g.mc.op.len()
+    mut i := pos / 2
+    if i < 0:
+        i = 0
+    end
+    lim := g.mc.vend[v]
+    mut steps := 0
+    until i < n and 2 * i <= lim and steps < 4000:
+        if 2 * i + 1 >= pos:
+            mi_regs(g, i, ra.uses, ra.defs)
+            each u in ra.uses:
+                if u == v:
+                    ret 2 * i
+                end
+            end
+        end
+        i += 1
+        steps += 1
+    end
+    ret RA_INF
+end
+
+func inactive_blocks(g &: Ng, ra &: Ra, r: int, v: int, pos: int): bool:
+    each a in ra.inactive:
+        if g.mc.vloc[a] == r and next_inter(ra, a, v, pos) >= 0:
+            ret true
+        end
+    end
+    ret false
+end
+
+func mc_take(g &: Ng): Mc:
+    old := g.mc
+    g.mc.op = Vector {} as Vector<int>
+    g.mc.sz = Vector {} as Vector<int>
+    g.mc.sz2 = Vector {} as Vector<int>
+    g.mc.r0 = Vector {} as Vector<int>
+    g.mc.r1 = Vector {} as Vector<int>
+    g.mc.imm = Vector {} as Vector<i64>
+    g.mc.mk = Vector {} as Vector<int>
+    g.mc.mb = Vector {} as Vector<int>
+    g.mc.mi = Vector {} as Vector<int>
+    g.mc.ms = Vector {} as Vector<int>
+    g.mc.md = Vector {} as Vector<i64>
+    g.mc.msym = Vector {} as Vector<int>
+    g.mc.cc = Vector {} as Vector<int>
+    g.mc.tgt = Vector {} as Vector<int>
+    g.mc.loc = Vector {} as Vector<int>
+    g.mc.dv = Vector {} as Vector<int>
+    ret old
+end
+
+func mc_free_arrays(m &: Mc):
+    m.op.free()
+    m.sz.free()
+    m.sz2.free()
+    m.r0.free()
+    m.r1.free()
+    m.imm.free()
+    m.mk.free()
+    m.mb.free()
+    m.mi.free()
+    m.ms.free()
+    m.md.free()
+    m.msym.free()
+    m.cc.free()
+    m.tgt.free()
+    m.loc.free()
+    m.dv.free()
+end
+
+func mi_clone(g &: Ng, o &: Mc, i: int): int:
+    j := mi_new(g, o.op[i], o.sz[i])
+    g.mc.sz2[j] = o.sz2[i]
+    g.mc.r0[j] = o.r0[i]
+    g.mc.r1[j] = o.r1[i]
+    g.mc.imm[j] = o.imm[i]
+    g.mc.mk[j] = o.mk[i]
+    g.mc.mb[j] = o.mb[i]
+    g.mc.mi[j] = o.mi[i]
+    g.mc.ms[j] = o.ms[i]
+    g.mc.md[j] = o.md[i]
+    g.mc.msym[j] = o.msym[i]
+    g.mc.cc[j] = o.cc[i]
+    g.mc.tgt[j] = o.tgt[i]
+    g.mc.loc[j] = o.loc[i]
+    g.mc.dv[j] = g.mc_dv >= 0 ? g.mc_dv : o.dv[i]
+    ret j
+end
+
+func spilled(g &: Ng, r: int): bool:
+    ret r >= VBASE and g.mc.vloc[r] < 0
+end
+
+func phys(g &: Ng, r: int): int:
+    if r >= VBASE:
+        ret g.mc.vloc[r]
+    end
+    ret r
+end
+
+func reload(g &: Ng, v: int, scratch: int):
+    m := frame_mem(g.mc.vslot[v], 0 as i64)
+    if g.mc.vwide[v]:
+        _lw := e_rm(g, M_VLD, 16, scratch, m)
+    else g.mc.vcls[v] == 1:
+        _l := e_rm(g, M_FLD, 8, scratch, m)
+    else:
+        _l2 := e_rm(g, M_LD, 8, scratch, m)
+    end
+end
+
+func spill_store(g &: Ng, v: int, scratch: int):
+    m := frame_mem(g.mc.vslot[v], 0 as i64)
+    if g.mc.vwide[v]:
+        _sw := e_mr(g, M_VST, 16, m, scratch)
+    else g.mc.vcls[v] == 1:
+        _s := e_mr(g, M_FST, 8, m, scratch)
+    else:
+        _s2 := e_mr(g, M_ST, 8, m, scratch)
+    end
+end
+
+func is_def_slot(op: int, cc: int): bool:
+    switch op:
+        M_MOV_RR, M_COPY, M_MOVZX_RR, M_MOVSX_RR, M_FMOV_RR, M_CVTSI2F, M_CVTF2SI, M_CVTF2F, M_MOVQ_XG, M_MOVQ_GX, M_SQRT, M_MOV_RI, M_SETCC, M_LD, M_LDZX, M_LDSX, M_LEA, M_FLD, M_LDGOT, M_IMUL_RR, M_FOP_RR, M_XORPS, M_ANDPS, M_UNARY, M_SHIFT_RI, M_SHIFT_RC, M_IMUL_RRI, M_CMOV, M_XCHG, M_LXADD, M_ALU_RM, M_FOP_RM, M_VLD, M_VOP_RR, M_SHUFPS, M_UNPCKLPD, M_PSHUFD, M_VSHI, M_VLD32:
+            ret true
+        end
+        M_ALU_RR, M_ALU_RI:
+            ret cc != ALU_CMP and cc != ALU_SBBCMP and cc != ALU_ADDCMP
+        end
+        M_ARM_SODD:
+            ret cc == 1
+        end
+    end
+    ret false
+end
+
+func is_use_r0_cc(op: int, cc: int): bool:
+    if op == M_ARM_SODD:
+        ret cc == 0
+    end
+    ret is_use_r0(op)
+end
+
+func is_use_r0(op: int): bool:
+    switch op:
+        M_MOV_RR, M_COPY, M_MOVZX_RR, M_MOVSX_RR, M_FMOV_RR, M_CVTSI2F, M_CVTF2SI, M_CVTF2F, M_MOVQ_XG, M_MOVQ_GX, M_SQRT, M_MOV_RI, M_SETCC, M_LD, M_LDZX, M_LDSX, M_LEA, M_FLD, M_LDGOT, M_IMUL_RRI, M_VLD, M_VLD32, M_PSHUFD:
+            ret false
+        end
+    end
+    ret true
+end
+
+func x86_live(g &: Ng, c: int, i: int): bool:
+    mut v := VBASE
+    n := g.mc.vloc.len()
+    until v < n:
+        if g.mc.vloc[v] == c and g.mc.vstart[v] <= 2 * i + 1 and g.mc.vend[v] >= 2 * i:
+            ret true
+        end
+        v += 1
+    end
+    ret false
+end
+
+func x86_borrow(g &: Ng, i: int, r0: int, r1: int, mb: int, mi: int, save &: bool): int:
+    mut pick := 0 - 1
+    each c in [RSI, RBX, RBP]:
+        mut busy := false
+        each x in [r0, r1, mb, mi]:
+            if x >= 0 and not spilled(g, x) and phys(g, x) == c:
+                busy = true
+            end
+        end
+        if not busy:
+            if not x86_live(g, c, i):
+                save = false
+                ret c
+            end
+            if pick < 0:
+                pick = c
+            end
+        end
+    end
+    save = true
+    ret pick
+end
+
+func rewrite(g &: Ng):
+    mut o := mc_take(g)
+    n := o.op.len()
+    mut bslot := 0 - 1
+    mut dv_prev := 0 - 1
+    mut dv_n0 := 0
+    repeat n in i:
+        op := o.op[i]
+        g.mc_loc = o.loc[i]
+        dv_pend := (i > 0 and g.mc.op.len() == dv_n0) ? dv_prev : 0 - 1
+        dv_prev = dv_join(g, dv_pend, o.dv[i])
+        g.mc_dv = dv_prev
+        dv_n0 = g.mc.op.len()
+        r0 := o.r0[i]
+        r1 := o.r1[i]
+        mb := o.mk[i] == MK_BI ? o.mb[i] : 0 - 1
+        mi := (o.mk[i] == MK_BI or o.mk[i] == MK_FRAME) ? o.mi[i] : 0 - 1
+        if op == M_COPY or op == M_FMOV_RR:
+            s0 := spilled(g, r0)
+            s1 := spilled(g, r1)
+            p0 := phys(g, r0)
+            p1 := phys(g, r1)
+            fl := g.mc.vcls[r0] == 1 or g.mc.vcls[r1] == 1
+            if s0 and s1 and g.mc.vslot[r0] == g.mc.vslot[r1]:
+                continue
+            end
+            if s0 and s1:
+                sc := fl ? XMM15 : R11
+                reload(g, r1, sc)
+                spill_store(g, r0, sc)
+            else s1:
+                reload(g, r1, p0)
+            else s0:
+                spill_store(g, r0, p1)
+            else p0 != p1:
+                mut mop := M_MOV_RR
+                if fl:
+                    mop = M_FMOV_RR
+                end
+                _m := e_rr(g, mop, 8, p0, p1)
+            end
+            continue
+        end
+        if op == M_ALU_RR and o.mk[i] == MK_NONE and r0 >= 0 and r1 >= 0 and r0 != r1:
+            f0 := spilled(g, r0)
+            f1 := spilled(g, r1)
+            if f1 and not f0 and g.mc.vcls[r1] == 0:
+                ia := e_rm(g, M_ALU_RM, o.sz[i], phys(g, r0), frame_mem(g.mc.vslot[r1], 0 as i64))
+                g.mc.cc[ia] = o.cc[i]
+                continue
+            end
+            if f0 and not f1 and g.mc.vcls[r0] == 0:
+                ib := e_mr(g, M_ALU_MR, o.sz[i], frame_mem(g.mc.vslot[r0], 0 as i64), phys(g, r1))
+                g.mc.cc[ib] = o.cc[i]
+                continue
+            end
+        end
+        mut ngs := 0
+        mut nxs := 0
+        mut sr0 := 0 - 1
+        mut sr1 := 0 - 1
+        mut smb := 0 - 1
+        mut smi := 0 - 1
+        if spilled(g, mb):
+            smb = R11
+            ngs += 1
+        end
+        if spilled(g, mi):
+            if mi == mb:
+                smi = smb
+            else:
+                smi = ngs == 0 ? R11 : R10
+                ngs += 1
+            end
+        end
+        if spilled(g, r1) and r1 != mb and r1 != mi:
+            if g.mc.vcls[r1] == 1:
+                sr1 = XMM15
+                nxs += 1
+            else:
+                sr1 = ngs == 0 ? R11 : (ngs == 1 ? R10 : 0 - 2)
+                ngs += 1
+            end
+        else r1 >= 0 and r1 == mb and spilled(g, r1):
+            sr1 = smb
+        else r1 >= 0 and r1 == mi and spilled(g, r1):
+            sr1 = smi
+        end
+        if spilled(g, r0):
+            if r0 == r1:
+                sr0 = sr1
+            else r0 == mb:
+                sr0 = smb
+            else r0 == mi:
+                sr0 = smi
+            else g.mc.vcls[r0] == 1:
+                sr0 = nxs == 0 ? XMM15 : XMM14
+                nxs += 1
+            else:
+                sr0 = ngs == 0 ? R11 : (ngs == 1 ? R10 : 0 - 2)
+                ngs += 1
+            end
+        end
+        mut s10 := R10
+        mut bw := 0 - 1
+        if g.arch == NG_ARCH_X86 and (smb == R10 or smi == R10 or sr0 == R10 or sr1 == R10 or sr0 == 0 - 2 or sr1 == 0 - 2):
+            mut bsave := true
+            s10 = x86_borrow(g, i, r0, r1, mb, mi, bsave)
+            if s10 < 0:
+                fail(g, "native backend: register allocator ran out of scratch registers")
+                s10 = RSI
+            end
+            if bsave:
+                bw = s10
+                if bslot < 0:
+                    bslot = new_slot(g, 4, 4)
+                end
+                _bs := e_mr(g, M_ST, 4, frame_mem(bslot, 0 as i64), bw)
+            end
+            if smb == R10: smb = s10 end
+            if smi == R10: smi = s10 end
+            if sr0 == R10: sr0 = s10 end
+            if sr1 == R10: sr1 = s10 end
+        end
+        mut nmb := phys(g, mb)
+        mut nmi := phys(g, mi)
+        mut nms := o.ms[i]
+        mut nmd := o.md[i]
+        if smb >= 0:
+            reload(g, mb, smb)
+            nmb = smb
+        end
+        if smi >= 0:
+            if smi != smb:
+                reload(g, mi, smi)
+            end
+            nmi = smi
+        end
+        if sr0 == 0 - 2 or sr1 == 0 - 2:
+            if o.mk[i] == MK_BI and smb == R11:
+                _l := e_rm(g, M_LEA, 8, R11, Mem { k = MK_BI, b = nmb, i = nmi, s = nms, d = nmd })
+                nmb = R11
+                nmi = 0 - 1
+                nms = 1
+                nmd = 0 as i64
+                smi = 0 - 1
+                if sr1 == 0 - 2:
+                    sr1 = s10
+                end
+                if sr0 == 0 - 2:
+                    sr0 = s10
+                end
+            else:
+                fail(g, "native backend: register allocator ran out of scratch registers")
+            end
+        end
+        if sr1 >= 0 and sr1 != smb and sr1 != smi:
+            reload(g, r1, sr1)
+        end
+        if sr0 >= 0 and sr0 != sr1 and sr0 != smb and sr0 != smi and is_use_r0_cc(op, o.cc[i]):
+            reload(g, r0, sr0)
+        end
+        j := mi_clone(g, o, i)
+        if r0 >= 0:
+            g.mc.r0[j] = sr0 >= 0 ? sr0 : phys(g, r0)
+        end
+        if r1 >= 0:
+            g.mc.r1[j] = sr1 >= 0 ? sr1 : phys(g, r1)
+        end
+        if o.mk[i] == MK_BI:
+            g.mc.mb[j] = nmb
+            g.mc.mi[j] = nmi
+            g.mc.ms[j] = nms
+            g.mc.md[j] = nmd
+        else o.mk[i] == MK_FRAME and mi >= 0:
+            g.mc.mi[j] = nmi
+        end
+        if sr0 >= 0 and is_def_slot(op, o.cc[i]):
+            spill_store(g, r0, sr0)
+        end
+        if bw >= 0:
+            _br := e_rm(g, M_LD, 4, bw, frame_mem(bslot, 0 as i64))
+        end
+    end
+    mc_free_arrays(o)
+end
+
+func ranges_overlap(as_ &: Vector<int>, ae &: Vector<int>, a0: int, an: int, bs: Vector<int>, be: Vector<int>, b0: int, bn: int): bool:
+    mut i := a0
+    mut j := b0
+    until i < a0 + an and j < b0 + bn:
+        if as_[i] <= be[j] and bs[j] <= ae[i]:
+            ret true
+        end
+        if ae[i] < be[j]:
+            i += 1
+        else:
+            j += 1
+        end
+    end
+    ret false
+end
+
+func add_range(rs &: Vector<int>, re &: Vector<int>, s: int, e: int):
+    rs.push(s)
+    re.push(e)
+end
+
+func sort_merge(rs &: Vector<int>, re &: Vector<int>, from: int):
+    n := rs.len()
+    mut a := from + 1
+    until a < n:
+        ks := rs[a]
+        ke := re[a]
+        mut j := a - 1
+        until j >= from and rs[j] > ks:
+            rs[j + 1] = rs[j]
+            re[j + 1] = re[j]
+            j -= 1
+        end
+        rs[j + 1] = ks
+        re[j + 1] = ke
+        a += 1
+    end
+    mut w := from
+    mut k := from
+    until k < n:
+        if w > from and rs[k] <= re[w - 1] + 1:
+            if re[k] > re[w - 1]:
+                re[w - 1] = re[k]
+            end
+        else:
+            rs[w] = rs[k]
+            re[w] = re[k]
+            w += 1
+        end
+        k += 1
+    end
+    until rs.len() > w:
+        _a := rs.pop()
+        _b := re.pop()
+    end
+end
+
+func dominates(g &: Ng, a: int, b: int): bool:
+    mut x := b
+    repeat 100000:
+        if x == a:
+            ret true
+        end
+        if x == 0 or x < 0:
+            ret false
+        end
+        x = g.b_idom[x]
+    end
+    ret false
+end
+
+func color_slots(g &: Ng):
+    ns := g.mc.fs_size.len()
+    n := g.mc.op.len()
+    nb := g.b_first.len()
+    mut bs := Vector {} as Vector<int>
+    mut be := Vector {} as Vector<int>
+    repeat nb:
+        bs.push(0 - 1)
+        be.push(0 - 1)
+    end
+    mut posblk := Vector {} as Vector<int>
+    mut curb := 0 - 1
+    repeat n in i:
+        if g.mc.op[i] == M_LABEL and g.mc.tgt[i] < nb:
+            if curb >= 0:
+                be[curb] = i - 1
+            end
+            curb = g.mc.tgt[i]
+            bs[curb] = i
+        end
+        posblk.push(curb)
+    end
+    if curb >= 0:
+        be[curb] = n - 1
+    end
+    mut lhead := Vector {} as Vector<int>
+    mut lmem_head := Vector {} as Vector<int>
+    mut lmem_next := Vector {} as Vector<int>
+    mut lmem_blk := Vector {} as Vector<int>
+    mut mark := Vector {} as Vector<int>
+    repeat nb:
+        mark.push(0 - 1)
+    end
+    mut wl := Vector {} as Vector<int>
+    each b in g.b_rpo:
+        repeat g.b_sn[b] in k:
+            h := g.b_succ[g.b_ss[b] + k]
+            if dominates(g, h, b):
+                li := lhead.len()
+                lhead.push(h)
+                lmem_head.push(0 - 1)
+                mark[h] = li
+                lmem_blk.push(h)
+                lmem_next.push(lmem_head[li])
+                lmem_head[li] = lmem_blk.len() - 1
+                wl.clear()
+                if b != h:
+                    wl.push(b)
+                    mark[b] = li
+                    lmem_blk.push(b)
+                    lmem_next.push(lmem_head[li])
+                    lmem_head[li] = lmem_blk.len() - 1
+                end
+                until wl.len() > 0:
+                    x := wl.pop()
+                    repeat g.b_npred[x] in q:
+                        pp := g.b_pred[g.b_ps[x] + q]
+                        if mark[pp] != li:
+                            mark[pp] = li
+                            lmem_blk.push(pp)
+                            lmem_next.push(lmem_head[li])
+                            lmem_head[li] = lmem_blk.len() - 1
+                            wl.push(pp)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    nl := lhead.len()
+    mut inloop := Vector {} as Vector<bool>
+    repeat nl * nb:
+        inloop.push(false)
+    end
+    repeat nl in l0:
+        mut hh := lmem_head[l0]
+        until hh >= 0:
+            inloop[l0 * nb + lmem_blk[hh]] = true
+            hh = lmem_next[hh]
+        end
+    end
+    mut ss := Vector {} as Vector<int>
+    mut se := Vector {} as Vector<int>
+    repeat ns:
+        ss.push(0 - 1)
+        se.push(0 - 1)
+    end
+    repeat n in i2:
+        if g.mc.mk[i2] == MK_FRAME:
+            sl := g.mc.mb[i2]
+            if ss[sl] < 0:
+                ss[sl] = i2
+            end
+            mut last := i2
+            if g.mc.op[i2] == M_LEA:
+                pb2 := posblk[i2]
+                lim := pb2 >= 0 ? be[pb2] : n - 1
+                mut q9 := i2 + 1
+                last = lim
+                until q9 <= lim:
+                    if g.mc.op[q9] == M_CALL or g.mc.op[q9] == M_CALLR:
+                        last = q9
+                        break
+                    end
+                    q9 += 1
+                end
+            end
+            if last > se[sl]:
+                se[sl] = last
+            end
+        end
+    end
+    mut rr_s := Vector {} as Vector<int>
+    mut rr_e := Vector {} as Vector<int>
+    mut r0 := Vector {} as Vector<int>
+    mut rn := Vector {} as Vector<int>
+    repeat ns:
+        r0.push(0)
+        rn.push(0)
+    end
+    mut cands := Vector {} as Vector<int>
+    mut lhit := Vector {} as Vector<bool>
+    repeat nl:
+        lhit.push(false)
+    end
+    repeat ns in sl2:
+        if not g.mc.fs_temp[sl2] or ss[sl2] < 0:
+            continue
+        end
+        start := rr_s.len()
+        add_range(rr_s, rr_e, ss[sl2], se[sl2])
+        repeat nl in l1:
+            lhit[l1] = false
+        end
+        mut i3 := ss[sl2]
+        until i3 <= se[sl2]:
+            if g.mc.mk[i3] == MK_FRAME and g.mc.mb[i3] == sl2:
+                pb := posblk[i3]
+                if pb >= 0:
+                    repeat nl in l2:
+                        if not lhit[l2] and inloop[l2 * nb + pb]:
+                            lhit[l2] = true
+                        end
+                    end
+                end
+            end
+            i3 += 1
+        end
+        repeat nl in l3:
+            if lhit[l3]:
+                mut h3 := lmem_head[l3]
+                until h3 >= 0:
+                    lb := lmem_blk[h3]
+                    if bs[lb] >= 0:
+                        add_range(rr_s, rr_e, bs[lb], be[lb])
+                    end
+                    h3 = lmem_next[h3]
+                end
+            end
+        end
+        sort_merge(rr_s, rr_e, start)
+        r0[sl2] = start
+        rn[sl2] = rr_s.len() - start
+        cands.push(sl2)
+    end
+    nc := cands.len()
+    mut a := 1
+    until a < nc:
+        key := cands[a]
+        mut j := a - 1
+        until j >= 0 and rr_s[r0[cands[j]]] > rr_s[r0[key]]:
+            cands[j + 1] = cands[j]
+            j -= 1
+        end
+        cands[j + 1] = key
+        a += 1
+    end
+    mut pslots := Vector {} as Vector<int>
+    mut pr_s := Vector {} as Vector<int>
+    mut pr_e := Vector {} as Vector<int>
+    mut pr_0 := Vector {} as Vector<int>
+    mut pr_n := Vector {} as Vector<int>
+    each c in cands:
+        mut pick := 0 - 1
+        repeat pslots.len() in q2:
+            if pick < 0 and not ranges_overlap(pr_s, pr_e, pr_0[q2], pr_n[q2], rr_s, rr_e, r0[c], rn[c]):
+                pick = q2
+            end
+        end
+        if pick < 0:
+            pslots.push(c)
+            pr_0.push(pr_s.len())
+            repeat rn[c] in t:
+                pr_s.push(rr_s[r0[c] + t])
+                pr_e.push(rr_e[r0[c] + t])
+            end
+            pr_n.push(rn[c])
+        else:
+            root := pslots[pick]
+            if g.mc.fs_size[c] > g.mc.fs_size[root]:
+                g.mc.fs_size[root] = g.mc.fs_size[c]
+            end
+            if g.mc.fs_align[c] > g.mc.fs_align[root]:
+                g.mc.fs_align[root] = g.mc.fs_align[c]
+            end
+            g.mc.fs_alias[c] = root
+            st := pr_s.len()
+            repeat pr_n[pick] in t2:
+                pr_s.push(pr_s[pr_0[pick] + t2])
+                pr_e.push(pr_e[pr_0[pick] + t2])
+            end
+            repeat rn[c] in t3:
+                pr_s.push(rr_s[r0[c] + t3])
+                pr_e.push(rr_e[r0[c] + t3])
+            end
+            sort_merge(pr_s, pr_e, st)
+            pr_0[pick] = st
+            pr_n[pick] = pr_s.len() - st
+        end
+    end
+    bs.free()
+    be.free()
+    posblk.free()
+    lhead.free()
+    lmem_head.free()
+    lmem_next.free()
+    lmem_blk.free()
+    mark.free()
+    wl.free()
+    inloop.free()
+    ss.free()
+    se.free()
+    rr_s.free()
+    rr_e.free()
+    r0.free()
+    rn.free()
+    cands.free()
+    lhit.free()
+    pslots.free()
+    pr_s.free()
+    pr_e.free()
+    pr_0.free()
+    pr_n.free()
+end
+
+func frame_layout(g &: Ng):
+    g.mc.callee_used.clear()
+    mut used := Vector {} as Vector<bool>
+    repeat 32:
+        used.push(false)
+    end
+    n := g.mc.op.len()
+    mut anyf := false
+    repeat n in i:
+        r0 := g.mc.r0[i]
+        if r0 >= 0 and r0 < 32:
+            used[r0] = true
+        end
+        if r0 >= 16 or g.mc.r1[i] >= 16:
+            anyf = true
+        end
+    end
+    mut ngp := 0
+    repeat 16 in r:
+        if used[r] and is_callee_saved(g, r):
+            g.mc.callee_used.push(r)
+            ngp += 1
+        end
+    end
+    ws := g.wsz == 4 ? 4 : 8
+    g.mc.fsave = g.arch == NG_ARCH_ARM and anyf ? 24 : 0
+    mut curo := ws * ngp + g.mc.fsave
+    mut xs := Vector {} as Vector<int>
+    repeat 16 in x:
+        if used[16 + x] and is_callee_saved(g, 16 + x):
+            xs.push(16 + x)
+        end
+    end
+    repeat g.mc.fs_size.len() in s:
+        if g.mc.fs_alias[s] >= 0:
+            continue
+        end
+        sz := g.mc.fs_size[s]
+        mut al := g.mc.fs_align[s]
+        if al < 1:
+            al = 1
+        end
+        if al > 16:
+            al = 16
+        end
+        curo = align_up(curo + sz, al)
+        g.mc.fs_off[s] = curo
+    end
+    repeat g.mc.fs_size.len() in s2:
+        if g.mc.fs_alias[s2] >= 0:
+            g.mc.fs_off[s2] = g.mc.fs_off[g.mc.fs_alias[s2]]
+        end
+    end
+    each xr in xs:
+        curo = align_up(curo + 16, 16)
+        g.mc.callee_used.push(xr)
+        g.mc.callee_used.push(curo)
+    end
+    total := align_up(curo + g.mc.out_args, 16)
+    g.mc.frame_size = total - ws * ngp
+    if g.mc.frame_size < 0:
+        g.mc.frame_size = 0
+    end
+    g.mc.fpo = false
+    g.mc.fpo_pad = 0
+    if (g.os != NG_OS_WINDOWS and g.arch == NG_ARCH_X64) or g.wsz == 4:
+        g.mc.fpo = true
+        mut alloc := ws + curo + g.mc.out_args - ws * ngp
+        if curo == ws * ngp and g.mc.out_args == 0:
+            alloc = 0
+        end
+        if alloc < 0:
+            alloc = 0
+        end
+        alloc = align_up(alloc, ws)
+        until (ws * ngp + alloc) % 16 != 16 - ws and (g.mc.has_call or alloc > 0):
+            alloc += ws
+        end
+        g.mc.fpo_pad = alloc
+        g.mc.frame_size = alloc
+    end
+    used.free()
+    xs.free()
+end
+
+func regalloc(g &: Ng):
+    mut ra := Ra {}
+    nv := g.mc.vcls.len()
+    g.mc.vstart.clear()
+    g.mc.vend.clear()
+    repeat nv:
+        g.mc.vstart.push(0 - 1)
+        g.mc.vend.push(0 - 1)
+    end
+    loop_weights(g)
+    liveness(g, ra)
+    linear_scan(g, ra)
+    coalesce_spills(g, ra)
+    if g.fv_val.len() > 0:
+        dv_markers(g, ra)
+    end
+    rewrite(g)
+    g.mc_dv = 0 - 1
+    color_slots(g)
+    if g.opt and not g.off_scse:
+        scratch_cse(g)
+    end
+    if g.opt and not g.off_shoist:
+        spill_hoist(g)
+    end
+    if g.opt and not g.off_cpelim:
+        copy_elim(g)
+    end
+    if g.opt and not g.off_stfwd:
+        store_forward(g)
+    end
+    frame_layout(g)
+    ra.fr_s.free()
+    ra.fr_e.free()
+    ra.fr_next.free()
+    ra.fr_head.free()
+    ra.fr_tail.free()
+    ra.fr_cur.free()
+    ra.oc_blk.free()
+    ra.oc_first.free()
+    ra.oc_last.free()
+    ra.oc_upex.free()
+    ra.oc_def.free()
+    ra.oc_fdef.free()
+    ra.oc_lu.free()
+    ra.oc_next.free()
+    ra.oc_head.free()
+    ra.oc_cur.free()
+    ra.li_blk.free()
+    ra.li_next.free()
+    ra.li_head.free()
+    ra.rg_s.free()
+    ra.rg_e.free()
+    ra.v_r0.free()
+    ra.v_rn.free()
+    ra.v_rc.free()
+    ra.mark.free()
+    ra.order.free()
+    ra.tmp.free()
+    ra.ts.free()
+    ra.te.free()
+    ra.active.free()
+    ra.inactive.free()
+    ra.free_until.free()
+    ra.uses.free()
+    ra.defs.free()
+    ra.wl.free()
+    ra.nuse.free()
+    ra.cp_head.free()
+    ra.cp_to.free()
+    ra.cp_next.free()
+end
+
+func slot_loc(g &: Ng, s: int): int:
+    if s >= 0 and s < g.mc.fs_alias.len() and g.mc.fs_alias[s] >= 0:
+        ret g.mc.fs_alias[s]
+    end
+    ret s
+end
+
+func frame_read_only(op: int, cc: int): bool:
+    if op == M_LD or op == M_LDZX or op == M_LDSX or op == M_FLD or op == M_VLD or op == M_VLD32 or op == M_ALU_RM or op == M_FOP_RM:
+        ret true
+    end
+    ret op == M_ALU_MI and cc == ALU_CMP
+end
+
+func scratch_cse(g &: Ng):
+    n := g.mc.op.len()
+    mut h10 := 0 - 1
+    mut h11 := 0 - 1
+    mut uses := Vector {} as Vector<int>
+    mut defs := Vector {} as Vector<int>
+    repeat n in i:
+        op := g.mc.op[i]
+        if op == M_NOP or op == M_COPY:
+            continue
+        end
+        if op == M_LABEL or op == M_JMP or op == M_JCC or op == M_CALL or op == M_CALLR or op == M_RET or op == M_UD2:
+            h10 = 0 - 1
+            h11 = 0 - 1
+            continue
+        end
+        r0 := g.mc.r0[i]
+        if op == M_LD and g.mc.sz[i] == 8 and g.mc.mk[i] == MK_FRAME and g.mc.mi[i] < 0 and g.mc.md[i] == (0 as i64) and (r0 == R10 or r0 == R11):
+            s := slot_loc(g, g.mc.mb[i])
+            if (r0 == R11 and h11 == s) or (r0 == R10 and h10 == s):
+                g.mc.op[i] = M_NOP
+                continue
+            end
+            if r0 == R11:
+                h11 = s
+            else:
+                h10 = s
+            end
+            continue
+        end
+        if g.mc.mk[i] == MK_FRAME and not frame_read_only(op, g.mc.cc[i]):
+            s2 := slot_loc(g, g.mc.mb[i])
+            if h10 == s2:
+                h10 = 0 - 1
+            end
+            if h11 == s2:
+                h11 = 0 - 1
+            end
+        end
+        mi_regs(g, i, uses, defs)
+        each d in defs:
+            if d == R10:
+                h10 = 0 - 1
+            end
+            if d == R11:
+                h11 = 0 - 1
+            end
+        end
+    end
+    uses.free()
+    defs.free()
+end

@@ -1,0 +1,675 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package sql
+
+import str
+import mem
+
+@en "TYPE_NULL"
+@fa "نوع خالی"
+pub const TYPE_NULL := 0
+
+@en "TYPE_INT"
+@fa "نوع صحیح"
+pub const TYPE_INT := 1
+
+@en "TYPE_FLOAT"
+@fa "نوع اعشاری"
+pub const TYPE_FLOAT := 2
+
+@en "TYPE_TEXT"
+@fa "نوع متن"
+pub const TYPE_TEXT := 3
+
+@en "TYPE_BLOB"
+@fa "نوع دودویی"
+pub const TYPE_BLOB := 4
+
+@en "TYPE_BOOL"
+@fa "نوع منطقی"
+pub const TYPE_BOOL := 5
+
+@en "TYPE_TIME"
+@fa "نوع زمان"
+pub const TYPE_TIME := 6
+
+@en "TYPE_UNKNOWN"
+@fa "نوع ناشناخته"
+pub const TYPE_UNKNOWN := 7
+
+@en "Column"
+@fa "ستون"
+pub struct Column:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "type_name"
+    @fa "نام نوع"
+    pub type_name: str = ""
+    @en "kind"
+    @fa "نوع"
+    pub kind: int = 7
+    @en "not_null"
+    @fa "تهی‌ناپذیر"
+    pub not_null: bool = false
+    @en "has_default"
+    @fa "پیش‌فرض دارد"
+    pub has_default: bool = false
+    @en "primary"
+    @fa "کلید اصلی"
+    pub primary: bool = false
+    @en "auto"
+    @fa "خودکار"
+    pub auto: bool = false
+    @en "generated"
+    @fa "محاسبه‌شده"
+    pub generated: bool = false
+end
+
+@en "Table"
+@fa "جدول"
+pub struct Table:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "is_view"
+    @fa "دید است"
+    pub is_view: bool = false
+    @en "open"
+    @fa "باز"
+    pub open: bool = false
+    @en "columns"
+    @fa "ستون‌ها"
+    pub columns: Vector<Column> = Vector {}
+end
+
+@en "Catalog"
+@fa "فهرست جداول"
+pub struct Catalog:
+    @en "d"
+    @fa "گویش"
+    pub d: Dialect = Dialect {}
+    @en "tables"
+    @fa "جدول‌ها"
+    pub tables: Vector<Table> = Vector {}
+end
+
+func kind_from_upper(u: str): int:
+    if str.Contains(u, "BOOL"):
+        ret TYPE_BOOL
+    end
+    if str.Contains(u, "SERIAL"):
+        ret TYPE_INT
+    end
+    if str.Contains(u, "TIMESTAMP") or str.Contains(u, "DATETIME"):
+        ret TYPE_TIME
+    end
+    if str.Equals(u, "DATE") or str.StartsWith(u, "TIME"):
+        ret TYPE_TIME
+    end
+    if str.Contains(u, "INT"):
+        ret TYPE_INT
+    end
+    if str.Contains(u, "CHAR") or str.Contains(u, "CLOB") or str.Contains(u, "TEXT"):
+        ret TYPE_TEXT
+    end
+    if str.Contains(u, "UUID") or str.Contains(u, "JSON") or str.Contains(u, "ENUM"):
+        ret TYPE_TEXT
+    end
+    if str.Contains(u, "BLOB") or str.Contains(u, "BYTEA") or str.Contains(u, "BINARY"):
+        ret TYPE_BLOB
+    end
+    if str.Contains(u, "REAL") or str.Contains(u, "FLOA") or str.Contains(u, "DOUBLE"):
+        ret TYPE_FLOAT
+    end
+    if str.Contains(u, "DEC") or str.Contains(u, "NUMERIC") or str.Contains(u, "MONEY"):
+        ret TYPE_FLOAT
+    end
+    if str.IsEmpty(u):
+        ret TYPE_UNKNOWN
+    end
+    ret TYPE_FLOAT
+end
+
+func kind_from_type(t: str): int:
+    u := t.upper()
+    k := kind_from_upper(u)
+    mem.Free(u as void*)
+    ret k
+end
+
+func fills_from_upper(d: Dialect, u: str, primary: bool): bool:
+    if str.Contains(u, "SERIAL"):
+        ret true
+    end
+    if d.id != SQLITE or not primary:
+        ret false
+    end
+    trimmed := str.Trim(u)
+    same := str.Equals(trimmed, "INTEGER")
+    mem.Free(trimmed as void*)
+    ret same
+end
+
+func type_fills_itself(d: Dialect, type_name: str, primary: bool): bool:
+    u := type_name.upper()
+    out := fills_from_upper(d, u, primary)
+    mem.Free(u as void*)
+    ret out
+end
+
+func cat_find(c: Catalog, name: str): int:
+    mut i := 0
+    until i < c.tables.len():
+        if str.EqualFold(c.tables.get(i).name, name):
+            ret i
+        end
+        i = i + 1
+    end
+    ret 0 - 1
+end
+
+func tab_find(t: Table, name: str): int:
+    mut i := 0
+    until i < t.columns.len():
+        if str.EqualFold(t.columns.get(i).name, name):
+            ret i
+        end
+        i = i + 1
+    end
+    ret 0 - 1
+end
+
+func cat_add(c &: Catalog, name: str, is_view: bool): int:
+    id := c.tables.len()
+    c.tables.push(Table { name = str.Clone(name), is_view = is_view })
+    ret id
+end
+
+func cat_add_col(c &: Catalog, tid: int, col: Column):
+    mut t := c.tables.ref(tid)
+    t.columns.push(col)
+end
+
+func cat_mark_primary(c &: Catalog, tid: int, name: str):
+    idx := tab_find(c.tables.get(tid), name)
+    if idx < 0:
+        ret
+    end
+    fills := type_fills_itself(c.d, c.tables.get(tid).columns.get(idx).type_name, true)
+    mut t := c.tables.ref(tid)
+    mut col := t.columns.ref(idx)
+    col.primary = true
+    col.not_null = true
+    if fills:
+        col.auto = true
+        col.has_default = true
+    end
+end
+
+func cat_drop(c &: Catalog, tid: int):
+    mut t := c.tables.ref(tid)
+    mem.Free(t.name as void*)
+    mut i := 0
+    until i < t.columns.len():
+        col := t.columns.get(i)
+        mem.Free(col.name as void*)
+        mem.Free(col.type_name as void*)
+        i = i + 1
+    end
+    t.columns.free()
+    c.tables.remove_at(tid)
+end
+
+func type_text(p: Parser, id: int): str:
+    n := p.ast.nodes.get(id)
+    if n.t1 < 0 or n.t2 < n.t1:
+        ret str.Clone("")
+    end
+    a := p.toks.get(n.t1)
+    b := p.toks.get(n.t2)
+    ret p.src.substr(a.off, b.off + b.len - a.off)
+end
+
+func apply_create_table(p &: Parser, c &: Catalog, id: int):
+    node := p.ast.nodes.get(id)
+    name := tok_name(p.src, p.toks.get(node.tok))
+    if cat_find(c, name) >= 0:
+        if (node.flags & F_IF_EXISTS) == 0:
+            p_err_at(
+                p, node.tok, "SQL301", "table \"" + name + "\" is declared twice",
+                "drop the earlier declaration, or add IF NOT EXISTS"
+            )
+        end
+        mem.Free(name as void*)
+        ret
+    end
+    tid := cat_add(c, name, false)
+    mem.Free(name as void*)
+    if node.c >= 0:
+        mut t := c.tables.ref(tid)
+        t.open = true
+        ret
+    end
+    cols := node.a
+    if cols >= 0:
+        list := p.ast.nodes.get(cols).list
+        mut i := 0
+        until i < list.len():
+            cd := p.ast.nodes.get(list.get(i))
+            cname := tok_name(p.src, p.toks.get(cd.tok))
+            dup := tab_find(c.tables.get(tid), cname)
+            if dup >= 0:
+                p_err_at(p, cd.tok, "SQL302", "column \"" + cname + "\" is declared twice", "")
+                mem.Free(cname as void*)
+            else:
+                tname := type_text(p, list.get(i))
+                prim := (cd.flags & F_PRIMARY) != 0
+                auto := (cd.flags & F_AUTOINC) != 0 or type_fills_itself(c.d, tname, prim)
+                cat_add_col(
+                    c, tid, Column {
+                        name = cname, type_name = tname, kind = kind_from_type(tname), not_null = (cd.flags & F_NOT_NULL) != 0 or prim or auto,
+                        has_default = (cd.flags & F_HAS_DEFAULT) != 0 or auto, primary = prim, auto = auto,
+                        generated = (cd.flags & F_GENERATED) != 0
+                    }
+                )
+            end
+            i = i + 1
+        end
+    end
+    cons := node.b
+    if cons >= 0:
+        clist := p.ast.nodes.get(cons).list
+        mut j := 0
+        until j < clist.len():
+            cn := p.ast.nodes.get(clist.get(j))
+            if cn.op == CON_PRIMARY:
+                mut k := 0
+                until k < cn.list.len():
+                    nm := tok_name(p.src, p.toks.get(p.ast.nodes.get(cn.list.get(k)).tok))
+                    cat_mark_primary(c, tid, nm)
+                    mem.Free(nm as void*)
+                    k = k + 1
+                end
+            end
+            j = j + 1
+        end
+    end
+end
+
+func view_columns(p &: Parser, c &: Catalog, tid: int, id: int):
+    node := p.ast.nodes.get(id)
+    if node.list.len() > 0:
+        mut i := 0
+        until i < node.list.len():
+            nm := tok_name(p.src, p.toks.get(p.ast.nodes.get(node.list.get(i)).tok))
+            cat_add_col(c, tid, Column { name = nm, type_name = str.Clone(""), kind = TYPE_UNKNOWN })
+            i = i + 1
+        end
+        ret
+    end
+    mut body := node.a
+    if nd_kind(p.ast, body) == N_WITH:
+        body = p.ast.nodes.get(body).a
+    end
+    if nd_kind(p.ast, body) != N_SELECT:
+        mut t := c.tables.ref(tid)
+        t.open = true
+        ret
+    end
+    cols := p.ast.nodes.get(body).list
+    mut i := 0
+    until i < cols.len():
+        rc := p.ast.nodes.get(cols.get(i))
+        if (rc.flags & F_STAR) != 0:
+            mut t := c.tables.ref(tid)
+            t.open = true
+            ret
+        end
+        mut tk := 0 - 1
+        if rc.t2 >= 0:
+            tk = rc.t2
+        else nd_kind(p.ast, rc.a) == N_COLUMN_REF:
+            tk = p.ast.nodes.get(rc.a).tok
+        end
+        if tk < 0:
+            mut t := c.tables.ref(tid)
+            t.open = true
+            ret
+        end
+        nm := tok_name(p.src, p.toks.get(tk))
+        cat_add_col(c, tid, Column { name = nm, type_name = str.Clone(""), kind = TYPE_UNKNOWN })
+        i = i + 1
+    end
+end
+
+func col_from_def(p: Parser, node: int, name: str, type_name: str): Column:
+    cd := p.ast.nodes.get(node)
+    prim := (cd.flags & F_PRIMARY) != 0
+    auto := (cd.flags & F_AUTOINC) != 0
+    ret Column {
+        name = name, type_name = type_name, kind = kind_from_type(type_name), not_null = (cd.flags & F_NOT_NULL) != 0 or prim or auto,
+        has_default = (cd.flags & F_HAS_DEFAULT) != 0 or auto, primary = prim, auto = auto,
+        generated = (cd.flags & F_GENERATED) != 0
+    }
+end
+
+func cat_replace_col(c &: Catalog, tid: int, idx: int, col: Column):
+    old := c.tables.get(tid).columns.get(idx)
+    mem.Free(old.name as void*)
+    mem.Free(old.type_name as void*)
+    mut t := c.tables.ref(tid)
+    t.columns.set(idx, col)
+end
+
+func apply_alter_action(p &: Parser, c &: Catalog, tid: int, id: int):
+    node := p.ast.nodes.get(id)
+    if node.op == ALT_ADD:
+        if node.a < 0:
+            ret
+        end
+        cd := p.ast.nodes.get(node.a)
+        cname := tok_name(p.src, p.toks.get(cd.tok))
+        if tab_find(c.tables.get(tid), cname) >= 0:
+            if (node.flags & F_IF_EXISTS) == 0:
+                p_err_at(p, cd.tok, "SQL302", "column \"" + cname + "\" is declared twice", "")
+            end
+            mem.Free(cname as void*)
+            ret
+        end
+        tname := type_text(p, node.a)
+        fills := type_fills_itself(c.d, tname, (cd.flags & F_PRIMARY) != 0)
+        mut col := col_from_def(p, node.a, cname, tname)
+        if fills:
+            col.auto = true
+            col.has_default = true
+            col.not_null = true
+        end
+        cat_add_col(c, tid, col)
+        ret
+    end
+    if node.op == ALT_MODIFY:
+        if node.a < 0:
+            ret
+        end
+        cd := p.ast.nodes.get(node.a)
+        cname := tok_name(p.src, p.toks.get(cd.tok))
+        mut target := 0 - 1
+        if node.t1 >= 0:
+            old := tok_name(p.src, p.toks.get(node.t1))
+            target = tab_find(c.tables.get(tid), old)
+            if target < 0:
+                p_err_at(p, node.t1, "SQL304", "no column named \"" + old + "\"", "")
+            end
+            mem.Free(old as void*)
+        else:
+            target = tab_find(c.tables.get(tid), cname)
+            if target < 0:
+                p_err_at(p, cd.tok, "SQL304", "no column named \"" + cname + "\"", "")
+            end
+        end
+        if target < 0:
+            mem.Free(cname as void*)
+            ret
+        end
+        tname := type_text(p, node.a)
+        cat_replace_col(c, tid, target, col_from_def(p, node.a, cname, tname))
+        ret
+    end
+    if node.op == ALT_DROP:
+        if node.t1 < 0:
+            ret
+        end
+        old := tok_name(p.src, p.toks.get(node.t1))
+        oid := tab_find(c.tables.get(tid), old)
+        if oid < 0:
+            if (node.flags & F_IF_EXISTS) == 0:
+                p_err_at(p, node.t1, "SQL304", "no column named \"" + old + "\"", "")
+            end
+        else:
+            col := c.tables.get(tid).columns.get(oid)
+            mem.Free(col.name as void*)
+            mem.Free(col.type_name as void*)
+            mut t := c.tables.ref(tid)
+            t.columns.remove_at(oid)
+        end
+        mem.Free(old as void*)
+        ret
+    end
+    if node.op == ALT_RENAME_COL:
+        if node.t1 < 0 or node.t2 < 0:
+            ret
+        end
+        old := tok_name(p.src, p.toks.get(node.t1))
+        fresh := tok_name(p.src, p.toks.get(node.t2))
+        oid := tab_find(c.tables.get(tid), old)
+        if oid < 0:
+            p_err_at(p, node.t1, "SQL304", "no column named \"" + old + "\"", "")
+            mem.Free(fresh as void*)
+        else:
+            mut t := c.tables.ref(tid)
+            mut col := t.columns.ref(oid)
+            mem.Free(col.name as void*)
+            col.name = fresh
+        end
+        mem.Free(old as void*)
+        ret
+    end
+    if node.op == ALT_RENAME_TABLE:
+        if node.t2 < 0:
+            ret
+        end
+        fresh := tok_name(p.src, p.toks.get(node.t2))
+        mut t := c.tables.ref(tid)
+        mem.Free(t.name as void*)
+        t.name = fresh
+    end
+end
+
+func apply_alter(p &: Parser, c &: Catalog, id: int):
+    node := p.ast.nodes.get(id)
+    name := tok_name(p.src, p.toks.get(node.tok))
+    tid := cat_find(c, name)
+    if tid < 0:
+        if (node.flags & F_IF_EXISTS) == 0:
+            p_err_at(
+                p, node.tok, "SQL303", "no table named \"" + name + "\"",
+                "the schema has no such table"
+            )
+        end
+        mem.Free(name as void*)
+        ret
+    end
+    mem.Free(name as void*)
+    mut i := 0
+    until i < node.list.len():
+        apply_alter_action(p, c, tid, node.list.get(i))
+        i = i + 1
+    end
+end
+
+func apply_stmt(p &: Parser, c &: Catalog, id: int):
+    k := nd_kind(p.ast, id)
+    if k == N_CREATE_TABLE:
+        apply_create_table(p, c, id)
+        ret
+    end
+    if k == N_CREATE_VIEW:
+        node := p.ast.nodes.get(id)
+        name := tok_name(p.src, p.toks.get(node.tok))
+        if cat_find(c, name) >= 0:
+            mem.Free(name as void*)
+            ret
+        end
+        tid := cat_add(c, name, true)
+        mem.Free(name as void*)
+        view_columns(p, c, tid, id)
+        ret
+    end
+    if k == N_ALTER_TABLE:
+        apply_alter(p, c, id)
+        ret
+    end
+    if k == N_DROP:
+        node := p.ast.nodes.get(id)
+        if node.op != N_CREATE_TABLE and node.op != N_CREATE_VIEW:
+            ret
+        end
+        name := tok_name(p.src, p.toks.get(node.tok))
+        tid := cat_find(c, name)
+        if tid < 0:
+            if (node.flags & F_IF_EXISTS) == 0:
+                p_err_at(
+                    p, node.tok, "SQL303", "no table named \"" + name + "\"",
+                    "add IF EXISTS when the table may not be there"
+                )
+            end
+        else:
+            cat_drop(c, tid)
+        end
+        mem.Free(name as void*)
+    end
+end
+
+@en "NewCatalog"
+@fa "فهرست تازه"
+pub func NewCatalog(d: Dialect): Catalog:
+    ret Catalog { d = d }
+end
+
+@en "Apply"
+@fa "اعمال"
+pub func Apply(c &: Catalog, ddl: str): Report:
+    mut p := Parser {}
+    parse_into(p, ddl, c.d)
+    mut i := 0
+    until i < p.ast.roots.len():
+        apply_stmt(p, c, p.ast.roots.get(i))
+        i = i + 1
+    end
+    out := p.rep
+    free_parser(p)
+    ret out
+end
+
+@en "FreeCatalog"
+@fa "آزادسازی فهرست"
+pub func FreeCatalog(c &: Catalog):
+    until c.tables.len() > 0:
+        cat_drop(c, c.tables.len() - 1)
+    end
+    c.tables.free()
+end
+
+@en "TableCount"
+@fa "شمار جدول"
+pub func TableCount(c: Catalog): int:
+    ret c.tables.len()
+end
+
+@en "TableName"
+@fa "نام جدول"
+pub func TableName(c: Catalog, i: int): str:
+    if i < 0 or i >= c.tables.len():
+        ret ""
+    end
+    ret c.tables.get(i).name
+end
+
+@en "HasTable"
+@fa "جدول دارد"
+pub func HasTable(c: Catalog, name: str): bool:
+    ret cat_find(c, name) >= 0
+end
+
+@en "ColumnCount"
+@fa "شمار ستون"
+pub func ColumnCount(c: Catalog, table: str): int:
+    tid := cat_find(c, table)
+    if tid < 0:
+        ret 0
+    end
+    ret c.tables.get(tid).columns.len()
+end
+
+@en "ColumnAt"
+@fa "ستون شماره"
+pub func ColumnAt(c: Catalog, table: str, i: int): Column:
+    tid := cat_find(c, table)
+    if tid < 0:
+        ret Column {}
+    end
+    t := c.tables.get(tid)
+    if i < 0 or i >= t.columns.len():
+        ret Column {}
+    end
+    ret t.columns.get(i)
+end
+
+@en "HasColumn"
+@fa "ستون دارد"
+pub func HasColumn(c: Catalog, table: str, column: str): bool:
+    tid := cat_find(c, table)
+    if tid < 0:
+        ret false
+    end
+    ret tab_find(c.tables.get(tid), column) >= 0
+end
+
+@en "KindName"
+@fa "نام نوع"
+pub func KindName(k: int): str:
+    if k == TYPE_INT:
+        ret "int"
+    end
+    if k == TYPE_FLOAT:
+        ret "float"
+    end
+    if k == TYPE_TEXT:
+        ret "text"
+    end
+    if k == TYPE_BLOB:
+        ret "blob"
+    end
+    if k == TYPE_BOOL:
+        ret "bool"
+    end
+    if k == TYPE_TIME:
+        ret "time"
+    end
+    if k == TYPE_NULL:
+        ret "null"
+    end
+    ret "unknown"
+end
+
+@en "SalamType"
+@fa "گونه سلام"
+pub func SalamType(k: int, not_null: bool): str:
+    mut base := "str"
+    if k == TYPE_INT:
+        base = "i64"
+    else k == TYPE_FLOAT:
+        base = "f64"
+    else k == TYPE_BOOL:
+        base = "bool"
+    else k == TYPE_BLOB:
+        base = "str"
+    end
+    if not_null:
+        ret base
+    end
+    ret "option.Option<" + base + ">"
+end

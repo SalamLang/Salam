@@ -1,0 +1,285 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "mcpsrv"
+@fa "خدمت‌ام‌سی‌پی"
+package mcpsrv
+
+import str
+import encoding.value
+
+include mcprpc "mcp_rpc.salam"
+include mcpreg "mcp_registry.salam"
+include mcpsrc "mcp_resources.salam"
+include mcpout "mcp_result.salam"
+include mcpexec "mcp_exec.salam"
+include mcpprompt "mcp_prompts.salam"
+
+func _server_name(): str: ret "salam-mcp" end
+
+func _server_version(): str: ret SALAM_VERSION end
+
+func _instructions(): str:
+    ret mcpprompt.Instructions()
+end
+
+func _legacy_versions(): Vector<str>:
+    v := Vector {} as Vector<str>
+    v.push("2025-11-25")
+    v.push("2025-06-18")
+    v.push("2025-03-26")
+    v.push("2024-11-05")
+    ret v
+end
+
+func _is_legacy_version(p: str): bool:
+    all := _legacy_versions()
+    mut i := 0
+    until i < all.len():
+        if all.get(i) == p: ret true end
+        i += 1
+    end
+    ret false
+end
+
+func _supported(): value.Value:
+    mut arr := value.NewValueArray()
+    value.ArrayPush(arr, value.ValueString(mcprpc.McpProtoModern))
+    legacy := _legacy_versions()
+    mut i := 0
+    until i < legacy.len():
+        value.ArrayPush(arr, value.ValueString(legacy.get(i)))
+        i += 1
+    end
+    ret arr
+end
+
+func _capabilities(): value.Value:
+    mut caps := value.NewValueObject()
+    value.ObjectSet(caps, "tools", value.NewValueObject())
+    value.ObjectSet(caps, "resources", value.NewValueObject())
+    value.ObjectSet(caps, "prompts", value.NewValueObject())
+    ret caps
+end
+
+func _server_info(): value.Value:
+    mut info := value.NewValueObject()
+    value.ObjectSet(info, "name", value.ValueString(_server_name()))
+    value.ObjectSet(info, "version", value.ValueString(_server_version()))
+    ret info
+end
+
+func _result(legacy: bool): value.Value:
+    mut r := value.NewValueObject()
+    if legacy: ret r end
+    value.ObjectSet(r, "resultType", value.ValueString("complete"))
+    mut meta := value.NewValueObject()
+    value.ObjectSet(meta, mcprpc.McpMetaServerInfo, _server_info())
+    value.ObjectSet(r, "_meta", meta)
+    ret r
+end
+
+func _cacheable(legacy: bool, ttl_ms: i64): value.Value:
+    mut r := _result(legacy)
+    if legacy: ret r end
+    value.ObjectSet(r, "ttlMs", value.ValueInt(ttl_ms))
+    value.ObjectSet(r, "cacheScope", value.ValueString("public"))
+    ret r
+end
+
+func _discover(legacy: bool): value.Value:
+    mut r := _result(legacy)
+    value.ObjectSet(r, "supportedVersions", _supported())
+    value.ObjectSet(r, "capabilities", _capabilities())
+    value.ObjectSet(r, "instructions", value.ValueString(_instructions()))
+    mut meta := value.NewValueObject()
+    value.ObjectSet(meta, mcprpc.McpMetaServerInfo, _server_info())
+    value.ObjectSet(r, "_meta", meta)
+    ret r
+end
+
+func _initialize(req: mcprpc.Request): value.Value:
+    asked := mcprpc.ParamStr(req.params, "protocolVersion", "")
+    mut agreed := "2025-11-25"
+    if _is_legacy_version(asked): agreed = asked end
+    mut r := value.NewValueObject()
+    value.ObjectSet(r, "protocolVersion", value.ValueString(agreed))
+    value.ObjectSet(r, "capabilities", _capabilities())
+    value.ObjectSet(r, "serverInfo", _server_info())
+    value.ObjectSet(r, "instructions", value.ValueString(_instructions()))
+    ret r
+end
+
+func _content_block(text: str): value.Value:
+    mut b := value.NewValueObject()
+    value.ObjectSet(b, "type", value.ValueString("text"))
+    value.ObjectSet(b, "text", value.ValueString(text))
+    mut arr := value.NewValueArray()
+    value.ArrayPush(arr, b)
+    ret arr
+end
+
+func _tool_result(tr: mcpout.ToolResult, legacy: bool): value.Value:
+    mut r := _result(legacy)
+    value.ObjectSet(r, "content", _content_block(tr.text))
+    value.ObjectSet(r, "isError", value.ValueBool(tr.is_error))
+    if tr.has_structured:
+        value.ObjectSet(r, "structuredContent", tr.structured)
+    end
+    ret r
+end
+
+func _tools_list(legacy: bool): value.Value:
+    mut r := _cacheable(legacy, 3600000)
+    value.ObjectSet(r, "tools", mcpreg.Tools())
+    ret r
+end
+
+func _resources_list(legacy: bool): value.Value:
+    mut r := _cacheable(legacy, 3600000)
+    value.ObjectSet(r, "resources", mcpsrc.List())
+    ret r
+end
+
+func _empty_list(key: str, legacy: bool): value.Value:
+    mut r := _cacheable(legacy, 3600000)
+    value.ObjectSet(r, key, value.NewValueArray())
+    ret r
+end
+
+func _templates_list(legacy: bool): value.Value:
+    mut r := _cacheable(legacy, 3600000)
+    value.ObjectSet(r, "resourceTemplates", mcpsrc.Templates())
+    ret r
+end
+
+func _prompts_list(legacy: bool): value.Value:
+    mut r := _cacheable(legacy, 3600000)
+    value.ObjectSet(r, "prompts", mcpprompt.List())
+    ret r
+end
+
+func _get_prompt(req: mcprpc.Request, legacy: bool): str:
+    name := mcprpc.ParamStr(req.params, "name", "")
+    if not mcpprompt.Has(name):
+        ret mcprpc.ErrorMessage(req.id_json, mcprpc.McpErrInvalidParams, "Unknown prompt: ".concat(name))
+    end
+    args := mcprpc.ParamObject(req.params, "arguments")
+    missing := mcpprompt.MissingArg(name, args)
+    if missing.len() > 0:
+        ret mcprpc.ErrorMessage(req.id_json, mcprpc.McpErrInvalidParams, "Missing required argument: ".concat(missing))
+    end
+    mut r := _result(legacy)
+    got := mcpprompt.Get(name, args)
+    value.ObjectSet(r, "description", value.ObjectGet(got, "description"))
+    value.ObjectSet(r, "messages", value.ObjectGet(got, "messages"))
+    ret mcprpc.ResultMessage(req.id_json, r)
+end
+
+func _version_error(req: mcprpc.Request): str:
+    mut data := value.NewValueObject()
+    value.ObjectSet(data, "supported", _supported())
+    value.ObjectSet(data, "requested", value.ValueString(req.proto))
+    ret mcprpc.ErrorMessageData(req.id_json, mcprpc.McpErrUnsupportedVersion, "Unsupported protocol version", data)
+end
+
+func _call_tool(req: mcprpc.Request, legacy: bool): str:
+    name := mcprpc.ParamStr(req.params, "name", "")
+    if not mcpreg.Has(name):
+        ret mcprpc.ErrorMessage(req.id_json, mcprpc.McpErrInvalidParams, "Unknown tool: ".concat(name))
+    end
+    tr := mcpreg.Call(name, req.params)
+    ret mcprpc.ResultMessage(req.id_json, _tool_result(tr, legacy))
+end
+
+func _read_resource(req: mcprpc.Request, legacy: bool): str:
+    uri := mcprpc.ParamStr(req.params, "uri", "")
+    contents := mcpsrc.Read(uri)
+    if value.ArrayLen(contents) == 0:
+        mut data := value.NewValueObject()
+        value.ObjectSet(data, "uri", value.ValueString(uri))
+        ret mcprpc.ErrorMessageData(req.id_json, mcprpc.McpErrInvalidParams, "Resource not found", data)
+    end
+    mut r := _cacheable(legacy, 300000)
+    value.ObjectSet(r, "contents", contents)
+    ret mcprpc.ResultMessage(req.id_json, r)
+end
+
+func _respond(req: mcprpc.Request, legacy: bool): str:
+    switch req.method:
+        "server/discover":
+            ret mcprpc.ResultMessage(req.id_json, _discover(legacy))
+        end
+        "ping":
+            ret mcprpc.ResultMessage(req.id_json, _result(legacy))
+        end
+        "tools/list":
+            ret mcprpc.ResultMessage(req.id_json, _tools_list(legacy))
+        end
+        "tools/call":
+            ret _call_tool(req, legacy)
+        end
+        "resources/list":
+            ret mcprpc.ResultMessage(req.id_json, _resources_list(legacy))
+        end
+        "resources/read":
+            ret _read_resource(req, legacy)
+        end
+        "resources/templates/list":
+            ret mcprpc.ResultMessage(req.id_json, _templates_list(legacy))
+        end
+        "prompts/list":
+            ret mcprpc.ResultMessage(req.id_json, _prompts_list(legacy))
+        end
+        "prompts/get":
+            ret _get_prompt(req, legacy)
+        end
+    end
+    ret mcprpc.ErrorMessage(req.id_json, mcprpc.McpErrMethodNotFound, "Unknown method: ".concat(req.method))
+end
+
+@en "KnownVersion"
+@fa "نسخه شناخته"
+pub func KnownVersion(p: str): bool:
+    if p == mcprpc.McpProtoModern: ret true end
+    ret _is_legacy_version(p)
+end
+
+@en "IsNotification"
+@fa "اعلان است"
+pub func IsNotification(req: mcprpc.Request): bool:
+    ret not req.has_id
+end
+
+@en "Dispatch"
+@fa "ارسال"
+pub func Dispatch(req: mcprpc.Request, legacy &: bool): str:
+    if req.bad_json:
+        ret mcprpc.ErrorMessage("null", mcprpc.McpErrParse, "Parse error: message is not a JSON object")
+    end
+    if not req.ok:
+        if IsNotification(req): ret "" end
+        ret mcprpc.ErrorMessage(req.id_json, mcprpc.McpErrInvalidRequest, "Invalid request: missing method")
+    end
+    if req.method == "initialize":
+        legacy = true
+        ret mcprpc.ResultMessage(req.id_json, _initialize(req))
+    end
+    if req.has_proto and not KnownVersion(req.proto):
+        if IsNotification(req): ret "" end
+        ret _version_error(req)
+    end
+    if IsNotification(req): ret "" end
+    ret _respond(req, legacy)
+end

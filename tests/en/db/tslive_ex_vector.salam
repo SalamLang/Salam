@@ -1,0 +1,57 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import db.typesense
+
+func main:
+    parts := os.Env("SALAM_TEST_TYPESENSE").split(" ")
+    mut c := typesense.New(parts.get(0), parts.get(1))
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+    _ := typesense.DeleteCollection(c, "ex_vec_items", err)
+    mut s := typesense.Schema { name = "ex_vec_items" }
+    s.fields.push(typesense.NewField("name", typesense.TYPE_STRING))
+    s.fields.push(typesense.VectorField("embedding", 3))
+    println "vector field:", typesense.FieldJSON(s.fields.get(1))
+    _ := typesense.CreateCollection(c, s, err)
+    mut docs := Vector {} as Vector<str>
+    docs.push(`{"id": "1", "name": "apple", "embedding": [0.9, 0.1, 0.0]}`)
+    docs.push(`{"id": "2", "name": "pear", "embedding": [0.8, 0.2, 0.1]}`)
+    docs.push(`{"id": "3", "name": "hammer", "embedding": [0.0, 0.1, 0.9]}`)
+    docs.push(`{"id": "4", "name": "wrench", "embedding": [0.1, 0.0, 0.8]}`)
+    r0 := typesense.ImportDocuments(c, "ex_vec_items", docs, typesense.WriteOptions {}, err)
+    println "imported:", r0.success
+
+    mut p := typesense.NewSearch("*", "")
+    p.vector_query = "embedding:([0.85, 0.15, 0.05], k: 2)"
+    p.exclude_fields = "embedding"
+    r := typesense.Search(c, "ex_vec_items", p, err)
+    println "nearest to a fruit:", r.found
+    each h in r.hits:
+        println "  ", h.document, "close:", h.vector_distance < 0.05
+    end
+
+    mut q := typesense.NewSearch("*", "")
+    q.vector_query = "embedding:([], id: 3, k: 1)"
+    q.exclude_fields = "embedding"
+    println "most like the hammer:", typesense.Search(c, "ex_vec_items", q, err).hits.get(0).document
+
+    mut hybrid := typesense.NewSearch("wrench", "name")
+    hybrid.vector_query = "embedding:([0.05, 0.05, 0.85], k: 4)"
+    hybrid.exclude_fields = "embedding"
+    rh := typesense.Search(c, "ex_vec_items", hybrid, err)
+    println "hybrid top hit:", rh.hits.get(0).document, "has hybrid info:", rh.hits.get(0).hybrid_search_info.len() > 0
+    _ := typesense.DeleteCollection(c, "ex_vec_items", err)
+end

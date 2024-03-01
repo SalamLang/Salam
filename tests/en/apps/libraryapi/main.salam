@@ -1,0 +1,364 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import os
+import crypto
+import jwt
+import conv
+import net.http
+import net.router
+import encoding.json
+
+include store "_store.salam"
+
+const PORT := 8092
+const ACCESS_TTL := 3600
+const MAX_PAGE := 50
+
+func secret(): str:
+    s := os.Env("JWT_SECRET")
+    if s.len() > 0: ret s end
+    ret "dev-only-secret-change-me"
+end
+
+func guard(): jwt.Guard:
+    mut g := jwt.NewGuard(secret())
+    g.opts.issuer = "library.salam"
+    g.opts.require_exp = true
+    g.opts.leeway = 30 as i64
+    ret g
+end
+
+func send(ctx: i64, code: int, body: str):
+    http.SetStatus(ctx, code)
+    http.SetHeader(ctx, "Access-Control-Allow-Origin", "*")
+    http.Json(ctx, body)
+end
+
+func fail(ctx: i64, code: int, message: str):
+    send(ctx, code, `{"error":`.concat(json.Str(message)).concat("}"))
+end
+
+func db_fail(ctx: i64, where: str, err: str):
+    println "[db] ", where, ": ", err
+    fail(ctx, 500, "database error")
+end
+
+func db(ctx: i64, c &: store.Conn): bool:
+    conn := store.Connect()
+    if not store.Ok(conn):
+        println "[db] connect: ", store.Err(conn)
+        fail(ctx, 503, "database unavailable")
+        ret false
+    end
+    c = conn
+    ret true
+end
+
+func caller(ctx: i64): i64:
+    mut t := jwt.Token {}
+    if not jwt.Require(ctx, guard(), t): ret 0 end
+    ret t.claims.sub.to_int()
+end
+
+func librarian(ctx: i64, conn: store.Conn): i64:
+    uid := caller(ctx)
+    if uid == 0 as i64: ret 0 end
+    if not store.IsLibrarian(conn, uid):
+        jwt.Forbidden(ctx, "librarians only")
+        ret 0
+    end
+    ret uid
+end
+
+func int_param(ctx: i64, name: str, fallback: int, max: int): int:
+    raw := http.Query(ctx, name)
+    if raw.len() == 0: ret fallback end
+    v := raw.to_int()
+    if v < 0: ret fallback end
+    if v > max: ret max end
+    ret v
+end
+
+func path_id(ctx: i64): i64:
+    ret http.Param(ctx, "id").to_int()
+end
+
+func borrow_message(reason: str): str:
+    switch reason:
+        "unavailable": ret "every copy is on loan" end
+        "already_out": ret "you already have a copy of this book" end
+        "limit_reached": ret "you are at the three-book limit" end
+    end
+    ret "could not borrow this book"
+end
+
+func register(ctx: i64):
+    mut conn := store.Conn {}
+    if not db(ctx, conn): ret end
+    defer store.Close(conn)
+    body := http.Body(ctx)
+    email := json.Get(body, "email").trim().lower()
+    password := json.Get(body, "password")
+    if email.len() < 3 or email.find("@") < 0:
+        fail(ctx, 400, "a valid email is required")
+        ret
+    end
+    if password.len() < 8:
+        fail(ctx, 400, "password must be at least 8 characters")
+        ret
+    end
+    if store.FindUser(conn, email).id != 0 as i64:
+        fail(ctx, 409, "that email is already registered")
+        ret
+    end
+    mut err := ""
+    id := store.CreateUser(conn, email, crypto.HashPassword(password), err)
+    if id == 0 as i64:
+        db_fail(ctx, "create user", err)
+        ret
+    end
+    send(ctx, 201, `{"id":`.concat(conv.FormatInt(id)).concat(`,"email":`).concat(json.Str(email)).concat(`,"role":"member"}`))
+end
+
+func login(ctx: i64):
+    mut conn := store.Conn {}
+    if not db(ctx, conn): ret end
+    defer store.Close(conn)
+    body := http.Body(ctx)
+    u := store.FindUser(conn, json.Get(body, "email").trim().lower())
+    mut stored := u.hash
+    if stored.len() == 0: stored = crypto.HashPassword("_no_such_user_") end
+    ok := crypto.VerifyPassword(json.Get(body, "password"), stored)
+    if u.id == 0 as i64 or not ok:
+        fail(ctx, 401, "invalid email or password")
+        ret
+    end
+    mut c := jwt.NewClaims()
+    c.sub = conv.FormatInt(u.id)
+    mut err := 0
+    token := jwt.Issue(guard(), c, ACCESS_TTL as i64, err)
+    if err != jwt.JWT_OK:
+        fail(ctx, 500, "could not issue a token")
+        ret
+    end
+    send(ctx, 200, `{"access":`.concat(json.Str(token)).concat(`,"role":`).concat(json.Str(u.role)).concat("}"))
+end
+
+func list_books(ctx: i64):
+    mut conn := store.Conn {}
+    if not db(ctx, conn): ret end
+    defer store.Close(conn)
+    q := http.Query(ctx, "q")
+    available := http.Query(ctx, "available") == "1"
+    limit := int_param(ctx, "limit", 20, MAX_PAGE)
+    offset := int_param(ctx, "offset", 0, 100000)
+    items := store.ListBooks(conn, q, available, limit, offset)
+    total := store.CountBooks(conn, q, available)
+    send(ctx, 200, `{"items":`.concat(items).concat(`,"total":`).concat(conv.FormatInt(total)).concat("}"))
+end
+
+func get_book(ctx: i64):
+    mut conn := store.Conn {}
+    if not db(ctx, conn): ret end
+    defer store.Close(conn)
+    row := store.GetBook(conn, path_id(ctx))
+    if row.len() == 0:
+        fail(ctx, 404, "no such book")
+        ret
+    end
+    send(ctx, 200, row)
+end
+
+func add_book(ctx: i64):
+    mut conn := store.Conn {}
+    if not db(ctx, conn): ret end
+    defer store.Close(conn)
+    if librarian(ctx, conn) == 0 as i64: ret end
+    body := http.Body(ctx)
+    isbn := json.Get(body, "isbn").trim()
+    title := json.Get(body, "title").trim()
+    author := json.Get(body, "author").trim()
+    if isbn.len() == 0 or title.len() == 0 or author.len() == 0:
+        fail(ctx, 400, "isbn, title and author are required")
+        ret
+    end
+    mut copies := json.GetInt(body, "copies")
+    if copies < 1: copies = 1 end
+    if copies > 999: copies = 999 end
+    mut err := ""
+    id := store.AddBook(conn, isbn, title, author, json.Get(body, "year"), copies, err)
+    if id == 0 as i64:
+        if err.find("Duplicate") >= 0:
+            fail(ctx, 409, "a book with that ISBN is already in the catalogue")
+            ret
+        end
+        db_fail(ctx, "add book", err)
+        ret
+    end
+    send(ctx, 201, store.GetBook(conn, id))
+end
+
+func add_copies(ctx: i64):
+    mut conn := store.Conn {}
+    if not db(ctx, conn): ret end
+    defer store.Close(conn)
+    if librarian(ctx, conn) == 0 as i64: ret end
+    id := path_id(ctx)
+    delta := json.GetInt(http.Body(ctx), "delta")
+    if delta < 1 or delta > 100:
+        fail(ctx, 400, "delta must be between 1 and 100")
+        ret
+    end
+    mut err := ""
+    if not store.AddCopies(conn, id, delta, err):
+        if err.len() > 0:
+            db_fail(ctx, "add copies", err)
+            ret
+        end
+        fail(ctx, 404, "no such book")
+        ret
+    end
+    send(ctx, 200, store.GetBook(conn, id))
+end
+
+func delete_book(ctx: i64):
+    mut conn := store.Conn {}
+    if not db(ctx, conn): ret end
+    defer store.Close(conn)
+    if librarian(ctx, conn) == 0 as i64: ret end
+    id := path_id(ctx)
+    if store.GetBook(conn, id).len() == 0:
+        fail(ctx, 404, "no such book")
+        ret
+    end
+    mut err := ""
+    if not store.DeleteBook(conn, id, err):
+        if err.len() > 0:
+            db_fail(ctx, "delete book", err)
+            ret
+        end
+        fail(ctx, 409, "some copies are still on loan")
+        ret
+    end
+    send(ctx, 200, `{"deleted":true}`)
+end
+
+func borrow(ctx: i64):
+    mut conn := store.Conn {}
+    if not db(ctx, conn): ret end
+    defer store.Close(conn)
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    r := store.Borrow(conn, uid, path_id(ctx))
+    switch r.reason:
+        "no_book":
+            fail(ctx, 404, "no such book")
+            break
+        end
+        "db":
+            db_fail(ctx, "borrow", "transaction failed")
+            break
+        end
+        "":
+            send(ctx, 201, `{"loan_id":`.concat(conv.FormatInt(r.loan_id)).concat(`,"due_at":`).concat(json.Str(r.due_at)).concat("}"))
+            break
+        end
+        else:
+            send(ctx, 409, `{"error":`.concat(json.Str(borrow_message(r.reason))).concat(`,"reason":`).concat(json.Str(r.reason)).concat("}"))
+        end
+    end
+end
+
+func return_loan(ctx: i64):
+    mut conn := store.Conn {}
+    if not db(ctx, conn): ret end
+    defer store.Close(conn)
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    reason := store.ReturnLoan(conn, uid, path_id(ctx), store.IsLibrarian(conn, uid))
+    switch reason:
+        "no_loan":
+            fail(ctx, 404, "no such loan")
+            break
+        end
+        "not_yours":
+            jwt.Forbidden(ctx, "that is not your loan")
+            break
+        end
+        "already_returned":
+            fail(ctx, 409, "that loan was already returned")
+            break
+        end
+        "":
+            send(ctx, 200, `{"returned":true}`)
+            break
+        end
+        else:
+            db_fail(ctx, "return", reason)
+        end
+    end
+end
+
+func my_loans(ctx: i64):
+    mut conn := store.Conn {}
+    if not db(ctx, conn): ret end
+    defer store.Close(conn)
+    uid := caller(ctx)
+    if uid == 0 as i64: ret end
+    open_only := http.Query(ctx, "open") == "1"
+    send(ctx, 200, store.MyLoans(conn, uid, open_only))
+end
+
+func overdue(ctx: i64):
+    mut conn := store.Conn {}
+    if not db(ctx, conn): ret end
+    defer store.Close(conn)
+    if librarian(ctx, conn) == 0 as i64: ret end
+    send(ctx, 200, store.OverdueLoans(conn))
+end
+
+func health(ctx: i64):
+    send(ctx, 200, `{"status":"ok","service":"library"}`)
+end
+
+func main:
+    mut err := ""
+    if not store.Configure(err):
+        println "cannot reach the database: ", err
+        println "set DB_HOST / DB_PORT / DB_USER / DB_PASS / DB_NAME, then load schema.sql"
+        ret 1
+    end
+    defer store.Shutdown()
+    mut r := router.NewRouter()
+    router.Post(r, "/auth/register", register)
+    router.Post(r, "/auth/login", login)
+    router.Get(r, "/books", list_books)
+    router.Get(r, "/books/:id", get_book)
+    router.Post(r, "/api/books", add_book)
+    router.Post(r, "/api/books/:id/copies", add_copies)
+    router.Post(r, "/api/books/:id/borrow", borrow)
+    router.Delete(r, "/api/books/:id", delete_book)
+    router.Post(r, "/api/loans/:id/return", return_loan)
+    router.Get(r, "/api/loans/mine", my_loans)
+    router.Get(r, "/api/loans/overdue", overdue)
+    router.Get(r, "/health", health)
+    mut s := http.NewServer(PORT)
+    http.Use(s, r)
+    println "library API on http://localhost:8092"
+    http.Run(s)
+    ret 0
+end

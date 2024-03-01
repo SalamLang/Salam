@@ -1,0 +1,1531 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package http
+
+import net.tcp
+import net.mime
+import net.router
+import net.internal.rawsock
+import tls
+import mem
+import str
+import conv
+import encoding
+import filepath
+import os
+
+extern:
+    func fopen(path: str, mode: str): void *
+    func fread(ptr: void *, size: u64, nmemb: u64, stream: void *): u64
+    func fseek(stream: void *, off: int, whence: int): int
+    func ftell(stream: void *): int
+    func fclose(stream: void *): int
+end
+
+@en "SERVER_VERSION"
+@fa "نسخه سرور"
+pub const SERVER_VERSION := SALAM_VERSION
+
+const _RD_CHUNK := 65536
+
+const _SRV_MAX := 64
+
+const _SRV_SHIFT := 32 as i64
+
+const _SRV_MASK := 4294967295 as i64
+
+mut _reqctx_size := 0 as i64
+
+mut _keepalive_idle_ms := 5000
+
+mut _keepalive_max_reqs := 100000
+
+mut _max_header_bytes := 65536
+
+mut _max_body_bytes := 67108864
+
+mut _srv_routers := Vector {} as Vector<router.Router>
+
+mut _srv_hide := Vector {} as Vector<bool>
+
+mut _srv_log := Vector {} as Vector<bool>
+
+mut _srv_tls := Vector {} as Vector<tls.ServerConfig>
+
+mut _srv_shdr := Vector {} as Vector<str>
+
+mut _srv_hka := Vector {} as Vector<str>
+
+mut _srv_hcl := Vector {} as Vector<str>
+
+mut _srv_hxp := Vector {} as Vector<str>
+
+mut _srv_count := 0
+
+mut _srv_mu := sync.NewMutex()
+
+struct _KV:
+    pub k: str = ""
+    pub v: str = ""
+end
+
+struct _ReqCtx:
+    pub fd: i64 = 0
+    pub status: int = 200
+    pub is_sent: bool = false
+    pub method: str = ""
+    pub path: str = ""
+    pub query: str = ""
+    pub body: str = ""
+    pub body_len: int = 0
+    pub resp_ct: str = ""
+    pub resp_body: str = ""
+    pub resp_len: int = -1
+    pub resp_file: str = ""
+    pub resp_file_len: int = -1
+    pub resp_file_off: int = 0
+    pub req_hdrs: Vector<_KV> = Vector {}
+    pub path_params: Vector<_KV> = Vector {}
+    pub resp_hdrs: Vector<_KV> = Vector {}
+    pub keep_alive: bool = true
+    pub owned: Vector<i64> = Vector {}
+    pub raw: str = ""
+    pub hdr_pos: int = 0
+    pub hdr_end: int = 0
+    pub bad_framing: bool = false
+end
+
+@en "Context"
+@fa "زمینه"
+pub struct Context:
+    @en "h"
+    @fa "دسته"
+    pub h: i64
+end
+
+@en "Server"
+@fa "سرور"
+pub struct Server:
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "host"
+    @fa "میزبان"
+    pub host: str = "0.0.0.0"
+    @en "router"
+    @fa "مسیریاب"
+    pub router: router.Router = router.Router {}
+    @en "hide_tokens"
+    @fa "پنهان‌سازی‌توکن"
+    pub hide_tokens: bool = false
+    @en "access_log"
+    @fa "گزارش‌دسترسی"
+    pub access_log: bool = false
+end
+
+func _srv_init():
+    if _srv_routers.len() > 0:
+        ret
+    end
+    repeat _SRV_MAX in _:
+        _srv_routers.push(router.NewRouter())
+        _srv_hide.push(false)
+        _srv_log.push(false)
+        _srv_tls.push(tls.NewServerConfig("", ""))
+        _srv_shdr.push("Salam")
+        _srv_hka.push("")
+        _srv_hcl.push("")
+        _srv_hxp.push("")
+    end
+end
+
+func _srv_claim(r: router.Router, hide: bool, log: bool): int:
+    sync.Lock(_srv_mu)
+    _srv_init()
+    if _srv_count >= _SRV_MAX:
+        sync.Unlock(_srv_mu)
+        ret 0 - 1
+    end
+    slot := _srv_count
+    _srv_count += 1
+    _srv_routers.set(slot, r)
+    _srv_hide.set(slot, hide)
+    _srv_log.set(slot, log)
+    shdr := _server_header(hide)
+    _srv_shdr.set(slot, shdr)
+    _srv_hka.set(slot, "\r\nConnection: keep-alive\r\nServer: ".concat(shdr))
+    _srv_hcl.set(slot, "\r\nConnection: close\r\nServer: ".concat(shdr))
+    _srv_hxp.set(slot, "\r\nX-Powered-By: ".concat(shdr).concat("\r\n"))
+    sync.Unlock(_srv_mu)
+    ret slot
+end
+
+func _srv_pack(slot: int, fd: i64): i64:
+    if sizeof(void*) == 4:
+        ret (slot as i64 << (28 as i64)) | (fd & (0x0FFFFFFF as i64))
+    end
+    ret (slot as i64 << _SRV_SHIFT) | fd
+end
+
+func _srv_slot_of(packed: i64): int:
+    if sizeof(void*) == 4:
+        ret ((packed >> (28 as i64)) & (15 as i64)) as int
+    end
+    ret (packed >> _SRV_SHIFT) as int
+end
+
+func _srv_fd_of(packed: i64): i64:
+    if sizeof(void*) == 4:
+        ret packed & (0x0FFFFFFF as i64)
+    end
+    ret packed & _SRV_MASK
+end
+
+func _warm_up_split():
+    junk := "a/b".split("/")
+    repeat junk.len() in i:
+        mem.Free(junk.get(i) as void *)
+    end
+    junk.free()
+end
+
+func _reqctx_sizeof(): i64:
+    if _reqctx_size == 0:
+        mut v := Vector {} as Vector<_ReqCtx> v.push(_ReqCtx {})
+        v.push(_ReqCtx {})
+        _reqctx_size = (v.ref(1) as i64) - (v.ref(0) as i64)
+        v.free()
+    end
+    ret _reqctx_size
+end
+
+func _rc(h: i64): _ReqCtx *:
+    ret h as _ReqCtx *
+end
+
+func _scan_crlf(s: str, from: int, lim: int): int:
+    p := s as i8 *
+    mut i := from
+    until i + 1 < lim:
+        c := p[i + 1]
+        if c == (10 as i8):
+            if p[i] == (13 as i8): ret i end
+            i += 2
+        else c == (13 as i8):
+            i += 1
+        else:
+            i += 2
+        end
+    end
+    ret 0 - 1
+end
+
+func _scan_byte(s: str, from: int, lim: int, c: int): int:
+    p := s as i8 *
+    b := c as i8
+    mut i := from
+    until i < lim:
+        if p[i] == b: ret i end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func _eq_at(s: str, pos: int, lit: str): bool:
+    m := lit.len()
+    if pos < 0 or pos + m > s.len(): ret false end
+    sp := s as i8 *
+    lp := lit as i8 *
+    mut i := 0
+    until i < m:
+        if sp[pos + i] != lp[i]: ret false end
+        i += 1
+    end
+    ret true
+end
+
+func _ows_at(s: str, i: int): bool:
+    p := s as i8 *
+    b := p[i] as int
+    ret b == 32 or b == 9
+end
+
+func _eq_at_ifold(s: str, pos: int, name: str): bool:
+    m := name.len()
+    if pos < 0 or pos + m > s.len(): ret false end
+    sp := s as i8 *
+    np := name as i8 *
+    mut i := 0
+    until i < m:
+        mut a := sp[pos + i] as int
+        mut b := np[i] as int
+        if a >= 65 and a <= 90: a += 32 end
+        if b >= 65 and b <= 90: b += 32 end
+        if a != b: ret false end
+        i += 1
+    end
+    ret true
+end
+
+func _eq_at_fold(s: str, pos: int, lit: str): bool:
+    m := lit.len()
+    if pos < 0 or pos + m > s.len(): ret false end
+    sp := s as i8 *
+    lp := lit as i8 *
+    mut i := 0
+    until i < m:
+        mut a := sp[pos + i] as int
+        if a >= 65 and a <= 90: a += 32 end
+        if a != (lp[i] as int): ret false end
+        i += 1
+    end
+    ret true
+end
+
+func salam_ctx_new(fd: i64): i64:
+    p := mem.Allocate(_reqctx_sizeof() as u64)
+    c := p as _ReqCtx * c[0] = _ReqCtx { fd = fd }
+    ret p as i64
+end
+
+func _ctx_own(h: i64, s: str): str:
+    c := _rc(h)
+    c.owned.push((s as void *) as i64)
+    ret s
+end
+
+func salam_ctx_reset(h: i64):
+    c := _rc(h)
+    n := c.owned.len()
+    mut i := 0
+    until i < n:
+        mem.Free(c.owned.get(i) as void *)
+        i += 1
+    end
+    until c.owned.len() > 0:
+        c.owned.pop()
+    end
+    _kvl_clear(c.req_hdrs)
+    _kvl_clear(c.path_params)
+    _kvl_clear(c.resp_hdrs)
+    c.status = 200
+    c.is_sent = false
+    c.keep_alive = true
+    c.raw = ""
+    c.hdr_pos = 0
+    c.hdr_end = 0
+    c.bad_framing = false
+    c.method = ""
+    c.path = ""
+    c.query = ""
+    c.body = ""
+    c.body_len = 0
+    c.resp_ct = ""
+    c.resp_body = ""
+    c.resp_len = -1
+    c.resp_file = ""
+    c.resp_file_len = -1
+    c.resp_file_off = 0
+end
+
+func salam_ctx_free(h: i64):
+    c := _rc(h)
+    n := c.owned.len()
+    mut i := 0
+    until i < n:
+        mem.Free(c.owned.get(i) as void *)
+        i += 1
+    end
+    c.owned.free()
+    c.req_hdrs.free()
+    c.path_params.free()
+    c.resp_hdrs.free()
+    mem.Free(h as void *)
+end
+
+func salam_ctx_fd(h: i64): i64:
+    ret _rc(h).fd
+end
+
+func salam_ctx_get(h: i64, idx: int): str:
+    c := _rc(h)
+    if idx == 0: ret c.method
+    else idx == 1: ret c.path
+    else idx == 2: ret c.query
+    else idx == 3: ret c.body
+    else idx == 4: ret c.resp_ct
+    else idx == 5: ret c.resp_body
+    else:
+        ret ""
+    end
+end
+
+func salam_ctx_set(h: i64, idx: int, val: str):
+    c := _rc(h)
+    if idx == 0: c.method = val
+    else idx == 1: c.path = val
+    else idx == 2: c.query = val
+    else idx == 3: c.body = val
+    else idx == 4: c.resp_ct = val
+    else idx == 5: c.resp_body = val end
+end
+
+func salam_ctx_get_status(h: i64): int:
+    ret _rc(h).status
+end
+
+func salam_ctx_set_status(h: i64, status: int):
+    c := _rc(h)
+    c.status = status
+end
+
+func salam_ctx_is_sent(h: i64): int:
+    if _rc(h).is_sent: ret 1 end
+    ret 0
+end
+
+func _ctx_mark_sent(h: i64):
+    c := _rc(h)
+    c.is_sent = true
+end
+
+func _kvl_get(l &: Vector<_KV>, key: str): str:
+    repeat l.len() in i:
+        kv := l.get(i)
+        if kv.k == key: ret kv.v end
+    end
+    ret ""
+end
+
+func _kvl_get_field(l &: Vector<_KV>, key: str): str:
+    repeat l.len() in i:
+        kv := l.get(i)
+        if str.EqualFold(kv.k, key): ret kv.v end
+    end
+    ret ""
+end
+
+func _kvl_set(l &: Vector<_KV>, key: str, val: str):
+    repeat l.len() in i:
+        if l.get(i).k == key:
+            l.set(i, _KV { k = key, v = val })
+            ret
+        end
+    end
+    l.push(_KV { k = key, v = val })
+end
+
+func _kvl_set_cookie(l &: Vector<_KV>, cookie_name: str, val: str):
+    prefix := cookie_name.concat("=")
+    mut i := 0
+    until i < l.len():
+        kv := l.get(i)
+        if kv.k == "Set-Cookie" and kv.v.len() >= prefix.len() and kv.v.substr(0, prefix.len()) == prefix:
+            l.remove_at(i)
+        else:
+            i += 1
+        end
+    end
+    l.push(_KV { k = "Set-Cookie", v = val })
+end
+
+func _kvl_clear(l &: Vector<_KV>):
+    until l.len() > 0:
+        l.pop()
+    end
+end
+
+func _hdr_lookup(h: i64, name: str): str:
+    c := _rc(h)
+    raw := c.raw
+    if raw.len() == 0: ret "" end
+    e := c.hdr_end
+    nlen := name.len()
+    mut pos := c.hdr_pos
+    until pos < e:
+        line_end := _scan_crlf(raw, pos, e + 2)
+        if line_end < 0 or line_end > e: break end
+        colon := _scan_byte(raw, pos, line_end, 58)
+        if colon >= 0 and colon < line_end and colon - pos == nlen and _eq_at_ifold(raw, pos, name):
+            mut vs := colon + 1
+            until vs < line_end and _ows_at(raw, vs):
+                vs += 1
+            end
+            ret _ctx_own(h, raw.substr(vs, line_end - vs))
+        end
+        pos = line_end + 2
+    end
+    ret ""
+end
+
+func salam_ctx_kv_get(h: i64, list: int, key: str): str:
+    c := _rc(h)
+    if list == 0:
+        if c.req_hdrs.len() > 0:
+            over := _kvl_get_field(c.req_hdrs, key)
+            if over.len() > 0: ret over end
+        end
+        ret _hdr_lookup(h, key)
+    else list == 1: ret _kvl_get(c.path_params, key)
+    else:
+        ret _kvl_get_field(c.resp_hdrs, key)
+    end
+end
+
+func salam_ctx_kv_add(h: i64, list: int, key: str, val: str):
+    c := _rc(h)
+    if list == 0: _kvl_set(c.req_hdrs, key, val)
+    else list == 1: _kvl_set(c.path_params, key, val)
+    else:
+        _kvl_set(c.resp_hdrs, key, val)
+    end
+end
+
+// Appends a value instead of replacing the one already stored under the same
+// name, so a response can carry several Set-Cookie headers.
+func salam_ctx_kv_push(h: i64, list: int, key: str, val: str):
+    c := _rc(h)
+    if list == 0: c.req_hdrs.push(_KV { k = key, v = val })
+    else list == 1: c.path_params.push(_KV { k = key, v = val })
+    else:
+        c.resp_hdrs.push(_KV { k = key, v = val })
+    end
+end
+
+func salam_ctx_kv_set_cookie(h: i64, cookie_name: str, val: str):
+    c := _rc(h)
+    _kvl_set_cookie(c.resp_hdrs, cookie_name, val)
+end
+
+func salam_ctx_kv_clear(h: i64, list: int):
+    c := _rc(h)
+    if list == 0: _kvl_clear(c.req_hdrs)
+    else list == 1: _kvl_clear(c.path_params)
+    else:
+        _kvl_clear(c.resp_hdrs)
+    end
+end
+
+func salam_ctx_kv_n(h: i64, list: int): int:
+    c := _rc(h)
+    if list == 0: ret c.req_hdrs.len()
+    else list == 1: ret c.path_params.len()
+    else:
+        ret c.resp_hdrs.len()
+    end
+end
+
+func salam_ctx_kv_key(h: i64, list: int, idx: int): str:
+    c := _rc(h)
+    if list == 0: ret c.req_hdrs.get(idx).k
+    else list == 1: ret c.path_params.get(idx).k
+    else:
+        ret c.resp_hdrs.get(idx).k
+    end
+end
+
+func salam_ctx_kv_val(h: i64, list: int, idx: int): str:
+    c := _rc(h)
+    if list == 0: ret c.req_hdrs.get(idx).v
+    else list == 1: ret c.path_params.get(idx).v
+    else:
+        ret c.resp_hdrs.get(idx).v
+    end
+end
+
+func _query_parse(req: str, key: str): str:
+    n := req.len()
+    mut pos := 0
+    until pos < n:
+        amp := _scan_byte(req, pos, n, 38)
+        mut fend := amp
+        if fend < 0: fend = n end
+        eq_at := _scan_byte(req, pos, fend, 61)
+        if eq_at >= 0 and eq_at < fend:
+            kraw := req.substr(pos, eq_at - pos)
+            kdec := UrlDecode(kraw)
+            mem.Free(kraw as void *)
+            hit := kdec == key
+            mem.Free(kdec as void *)
+            if hit:
+                vraw := req.substr(eq_at + 1, fend - eq_at - 1)
+                vdec := UrlDecode(vraw)
+                mem.Free(vraw as void *)
+                ret vdec
+            end
+        end
+        if amp < 0: break end
+        pos = amp + 1
+    end
+    ret str.Clone("")
+end
+
+func _parse_http(ctx: i64, req: str, req_len: int):
+    c := _rc(ctx)
+    n := req_len
+    sp1 := req.find(" ")
+    if sp1 < 0: ret end
+    c.method = _ctx_own(ctx, req.substr(0, sp1))
+    sp2 := str.IndexFrom(req, " ", sp1 + 1)
+    if sp2 < 0: ret end
+    pathquery := req.substr(sp1 + 1, sp2 - sp1 - 1)
+    qmark := pathquery.find("?")
+    if qmark >= 0:
+        c.path = _ctx_own(ctx, pathquery.substr(0, qmark))
+        c.query = _ctx_own(ctx, pathquery.substr(qmark + 1, pathquery.len() - qmark - 1))
+        mem.Free(pathquery as void *)
+    else:
+        c.path = _ctx_own(ctx, pathquery)
+        c.query = ""
+    end
+    first_crlf := str.IndexFrom(req, "\r\n", sp2 + 1)
+    if first_crlf < 0: ret end
+    if first_crlf - sp2 - 1 >= 8 and _eq_at(req, sp2 + 1, "HTTP/1.0"):
+        c.keep_alive = false
+    end
+    c.raw = req
+    c.hdr_pos = first_crlf + 2
+    mut pos := first_crlf + 2
+    mut body_start := 0 - 1
+    mut cl_seen := false
+    mut cl_first := 0
+    until pos < n:
+        if pos + 1 < n and _scan_crlf(req, pos, pos + 2) == pos:
+            body_start = pos + 2
+            break
+        end
+        line_end := _scan_crlf(req, pos, n)
+        if line_end < 0:
+            break
+        end
+        colon := _scan_byte(req, pos, line_end, 58)
+        if colon >= 0 and colon - pos == 17 and _eq_at_fold(req, pos, "transfer-encoding"):
+            c.bad_framing = true
+        else colon >= 0 and colon - pos == 14 and _eq_at_fold(req, pos, "content-length"):
+            if _bad_cl_value(req, colon, line_end, cl_seen, cl_first): c.bad_framing = true end
+        end
+        if colon >= 0 and colon < line_end and colon - pos == 10 and _eq_at_fold(req, pos, "connection"):
+            mut vs := colon + 1
+            until vs < line_end and _ows_at(req, vs):
+                vs += 1
+            end
+            if _eq_at_fold(req, vs, "close"): c.keep_alive = false
+            else _eq_at_fold(req, vs, "keep-alive"): c.keep_alive = true end
+        end
+        pos = line_end + 2
+    end
+    c.hdr_end = pos
+    if body_start >= 0 and body_start < n:
+        c.body = _ctx_own(ctx, _str_of(((req as void *) as i64 + body_start) as void *, n - body_start))
+        c.body_len = n - body_start
+    end
+end
+
+func _server_header(hide: bool): str:
+    if hide: ret "Salam" end
+    ret "Salam/".concat(SERVER_VERSION)
+end
+
+func _has_header(ctx: i64, name: str): bool:
+    n := salam_ctx_kv_n(ctx, 2)
+    repeat n in i:
+        if str.EqualFold(salam_ctx_kv_key(ctx, 2, i), name): ret true end
+    end
+    ret false
+end
+
+func _append_status(b &: str.StringBuilder, status: int):
+    if status == 200: str.BufAppend(b, "200 OK") ret end
+    if status == 404: str.BufAppend(b, "404 Not Found") ret end
+    if status == 204: str.BufAppend(b, "204 No Content") ret end
+    if status == 500: str.BufAppend(b, "500 Internal Server Error") ret end
+    str.BufAppendInt(b, status as i64)
+    str.BufAppend(b, " ")
+    str.BufAppend(b, mime.StatusText(status))
+end
+
+func _hdr_dirty(s: str): bool:
+    ret str.Contains(s, "\r") or str.Contains(s, "\n")
+end
+
+func _hdr_clean(s: str): str:
+    a := str.Replace(s, "\r", " ")
+    out := str.Replace(a, "\n", " ")
+    mem.Free(a as void *)
+    ret out
+end
+
+if SALAM_JS:
+    func _buf_presize(b &: str.StringBuilder, want: int):
+        ret
+    end
+else:
+    func _buf_presize(b &: str.StringBuilder, want: int):
+        if b.cap != (0 as i64): ret end
+        b.data = mem.Allocate(want as u64)
+        b.cap = want as i64
+    end
+end
+
+func _fill_response(b &: str.StringBuilder, ctx: i64, slot: int, keep: bool):
+    status := salam_ctx_get_status(ctx)
+    ct := salam_ctx_get(ctx, 4)
+    body := salam_ctx_get(ctx, 5)
+    binary := _rc(ctx).resp_len
+    mut blen := body.len()
+    if binary >= 0: blen = binary end
+    file_len := _rc(ctx).resp_file_len
+    if file_len >= 0: blen = file_len end
+    if binary < 0:
+        _buf_presize(b, 256 + blen)
+    else:
+        _buf_presize(b, 256)
+    end
+    if status == 200:
+        str.BufAppend(b, "HTTP/1.1 200 OK\r\nContent-Length: ")
+    else:
+        str.BufAppend(b, "HTTP/1.1 ")
+        _append_status(b, status)
+        str.BufAppend(b, "\r\nContent-Length: ")
+    end
+    str.BufAppendInt(b, blen as i64)
+    if keep:
+        str.BufAppend(b, _srv_hka.get(slot))
+    else:
+        str.BufAppend(b, _srv_hcl.get(slot))
+    end
+    if _has_header(ctx, "X-Powered-By") == false:
+        str.BufAppend(b, _srv_hxp.get(slot))
+    else:
+        str.BufAppend(b, "\r\n")
+    end
+    if ct.len() > 0 and _has_header(ctx, "Content-Type") == false:
+        str.BufAppend(b, "Content-Type: ")
+        str.BufAppend(b, ct)
+        str.BufAppend(b, "\r\n")
+    end
+    nhdr := salam_ctx_kv_n(ctx, 2)
+    repeat nhdr in i:
+        k0 := salam_ctx_kv_key(ctx, 2, i)
+        v0 := salam_ctx_kv_val(ctx, 2, i)
+        if _hdr_dirty(k0) or _hdr_dirty(v0):
+            hk := _hdr_clean(k0)
+            hv := _hdr_clean(v0)
+            str.BufAppend(b, hk)
+            str.BufAppend(b, ": ")
+            str.BufAppend(b, hv)
+            mem.Free(hk as void *)
+            mem.Free(hv as void *)
+        else:
+            str.BufAppend(b, k0)
+            str.BufAppend(b, ": ")
+            str.BufAppend(b, v0)
+        end
+        str.BufAppend(b, "\r\n")
+    end
+    str.BufAppend(b, "\r\n")
+    if salam_ctx_get(ctx, 0) != "HEAD" and binary < 0 and file_len < 0:
+        str.BufAppend(b, body)
+    end
+end
+
+// A binary body (http.Bytes) is not part of the header buffer: it is written after it.
+func _binary_body(ctx: i64, n &: int): void *:
+    c := _rc(ctx)
+    n = c.resp_len
+    if c.resp_len < 0 or salam_ctx_get(ctx, 0) == "HEAD":
+        n = 0
+        ret null
+    end
+    ret c.resp_body as void *
+end
+
+func _build_response(ctx: i64, slot: int): str:
+    mut b := str.NewBuilder()
+    _fill_response(b, ctx, slot, false)
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+func _dispatch(r: router.Router, ctx: i64): bool:
+    method := salam_ctx_get(ctx, 0)
+    path := salam_ctx_get(ctx, 1)
+    mut m := router.Dispatch(r, method, path)
+    if not m.matched:
+        router.FreeMatch(m)
+        if r.fallback != 0:
+            salam_ctx_kv_clear(ctx, 1)
+            callhandler(r.fallback, ctx)
+            ret true
+        end
+        ret false
+    end
+    salam_ctx_kv_clear(ctx, 1)
+    n := m.params.items.len()
+    mut i := 0
+    until i < n:
+        kv := m.params.items.get(i)
+        salam_ctx_kv_add(ctx, 1, _ctx_own(ctx, kv.key), _ctx_own(ctx, kv.value))
+        i += 1
+    end
+    m.params.items.free()
+    m.params = router.ParamList {}
+    callhandler(m.fn, ctx)
+    ret true
+end
+
+func _net_listen(host: str, port: int): i64:
+    ret rawsock.ListenOn(host, port, rawsock.SOCK_STREAM).fd
+end
+
+func _net_accept(lfd: i64): i64:
+    ret rawsock.Accept(rawsock.FromFd(lfd)).fd
+end
+
+func _str_of(ptr: void *, n: int): str:
+    r := mem.Allocate((n + 1) as u64)
+    mem.Copy(r, ptr, n as u64)
+    p := r as i8 *
+    p[n] = 0 as i8
+    ret r as str
+end
+
+func _bad_cl_value(head: str, colon: int, line_end: int, seen &: bool, first &: int): bool:
+    raw := head.substr(colon + 1, line_end - colon - 1)
+    t := str.Trim(raw)
+    mem.Free(raw as void *)
+    if t.len() == 0:
+        mem.Free(t as void *)
+        ret true
+    end
+    tp := t as u8 *
+    mut k := 0
+    until k < t.len():
+        c := tp[k] as int
+        if c < 48 or c > 57:
+            mem.Free(t as void *)
+            ret true
+        end
+        k += 1
+    end
+    if t.len() > 15:
+        mem.Free(t as void *)
+        ret true
+    end
+    v := t.to_int()
+    mem.Free(t as void *)
+    if v < 0: ret true end
+    if seen and v != first: ret true end
+    seen = true
+    first = v
+    ret false
+end
+
+func _content_length(head: str, head_len: int): int:
+    mut pos := 0
+    until pos < head_len:
+        line_end := _scan_crlf(head, pos, head_len)
+        if line_end < 0 or line_end >= head_len: break end
+        colon := _scan_byte(head, pos, line_end, 58)
+        if colon >= 0 and colon < line_end:
+            if colon - pos == 14 and _eq_at_fold(head, pos, "content-length"):
+                raw := head.substr(colon + 1, line_end - colon - 1)
+                t := str.Trim(raw)
+                mem.Free(raw as void *)
+                mut valid := t.len() > 0 and t.len() <= 15
+                tp := t as u8 *
+                mut k := 0
+                until valid and k < t.len():
+                    c := tp[k] as int
+                    if c < 48 or c > 57: valid = false end
+                    k += 1
+                end
+                mut v := 0
+                if valid: v = t.to_int() end
+                mem.Free(t as void *)
+                if valid and v > 0: ret v end
+                ret 0
+            end
+        end
+        pos = line_end + 2
+    end
+    ret 0
+end
+
+func _has_body_at(s: str, vend: int): bool:
+    if vend == 3 and _eq_at(s, 0, "GET"): ret false end
+    if vend == 4 and _eq_at(s, 0, "HEAD"): ret false end
+    if vend == 7 and _eq_at(s, 0, "OPTIONS"): ret false end
+    ret true
+end
+
+// Joins alen bytes of a with blen bytes at b into a new NUL-terminated buffer.
+func _bytes_join(a: str, alen: int, b: void *, blen: int): str:
+    r := mem.Allocate((alen + blen + 1) as u64)
+    if alen > 0: mem.Copy(r, a as void *, alen as u64) end
+    if blen > 0: mem.Copy((r as i64 + alen) as void *, b, blen as u64) end
+    p := r as i8 *
+    p[alen + blen] = 0 as i8
+    ret r as str
+end
+
+func _bytes_slice(s: str, off: int, n: int): str:
+    ret _str_of(((s as void *) as i64 + off) as void *, n)
+end
+
+// Reads one request. Lengths are tracked explicitly (req_len, pending_len)
+// so bodies may carry NUL bytes; header scanning stops before the body.
+func _read_request(fd: i64, scratch: void *, pending &: str, pending_len &: int, req_len &: int, owned &: bool, oversize &: int): str:
+    sock := rawsock.FromFd(fd)
+    owned = false
+    req_len = 0
+    if pending_len == 0:
+        got := rawsock.RecvBytes(sock, scratch, _RD_CHUNK)
+        if got <= 0: ret "" end
+        sp0 := scratch as i8 *
+        sp0[got] = 0 as i8
+        one := scratch as str
+        head_end := str.IndexFrom(one, "\r\n\r\n", 0)
+        if head_end >= 0:
+            head_len := head_end + 4
+            mut need := head_len
+            vend := one.find(" ")
+            if vend > 0 and _has_body_at(one, vend):
+                need = head_len + _content_length(one, head_len)
+            end
+            if need == got:
+                req_len = got
+                ret one
+            end
+            if need < got:
+                pending = _bytes_slice(one, need, got - need)
+                pending_len = got - need
+                owned = true
+                req_len = need
+                ret _bytes_slice(one, 0, need)
+            end
+        end
+        pending = _str_of(scratch, got)
+        pending_len = got
+    end
+    mut buf := pending
+    mut blen := pending_len
+    pending = ""
+    pending_len = 0
+    mut scan := 0
+    mut head_end := str.IndexFrom(buf, "\r\n\r\n", scan)
+    until head_end < 0:
+        if blen >= _max_header_bytes:
+            mem.Free(buf as void *)
+            oversize = 431
+            ret ""
+        end
+        got := rawsock.RecvBytes(sock, scratch, _RD_CHUNK)
+        if got <= 0:
+            mem.Free(buf as void *)
+            ret ""
+        end
+        grown := _bytes_join(buf, blen, scratch, got)
+        scan = blen - 3
+        if scan < 0: scan = 0 end
+        mem.Free(buf as void *)
+        buf = grown
+        blen += got
+        head_end = str.IndexFrom(buf, "\r\n\r\n", scan)
+    end
+    head_len := head_end + 4
+    mut need := head_len
+    vend := buf.find(" ")
+    if vend > 0 and _has_body_at(buf, vend):
+        need = head_len + _content_length(buf, head_len)
+        if need - head_len > _max_body_bytes:
+            mem.Free(buf as void *)
+            oversize = 413
+            ret ""
+        end
+        if blen < need:
+            full := mem.Allocate((need + 1) as u64)
+            mem.Copy(full, buf as void *, blen as u64)
+            mem.Free(buf as void *)
+            until blen < need:
+                mut want := need - blen
+                if want > _RD_CHUNK: want = _RD_CHUNK end
+                got := rawsock.RecvBytes(sock, (full as i64 + blen) as void *, want)
+                if got <= 0: break end
+                blen += got
+            end
+            fp := full as i8 *
+            fp[blen] = 0 as i8
+            buf = full as str
+        end
+        if blen < need: need = blen end
+    end
+    owned = true
+    req_len = need
+    if need == blen: ret buf end
+    pending = _bytes_slice(buf, need, blen - need)
+    pending_len = blen - need
+    out := _bytes_slice(buf, 0, need)
+    mem.Free(buf as void *)
+    ret out
+end
+
+func _net_send_all(fd: i64, data: str):
+    tcp.Write(tcp.ConnFromFd(fd), data)
+end
+
+func _net_close(fd: i64):
+    tcp.Close(tcp.ConnFromFd(fd))
+end
+
+func _send_file(fd: i64, path: str, ct: str, server_hdr: str, keep: bool): int:
+    f := fopen(path, "rb")
+    if f == null:
+        ret 0
+    end
+    defer fclose(f)
+    fseek(f, 0, 2)
+    sz := ftell(f) as i64
+    fseek(f, 0, 0)
+    if sz < 0:
+        ret 0
+    end
+    mut hb := str.NewBuilder()
+    str.BufAppend(hb, "HTTP/1.1 200 OK\r\nContent-Length: ")
+    str.BufAppendInt(hb, sz)
+    str.BufAppend(hb, "\r\nContent-Type: ")
+    str.BufAppend(hb, ct)
+    if keep:
+        str.BufAppend(hb, "\r\nConnection: keep-alive\r\nServer: ")
+    else:
+        str.BufAppend(hb, "\r\nConnection: close\r\nServer: ")
+    end
+    str.BufAppend(hb, server_hdr)
+    str.BufAppend(hb, "\r\nX-Powered-By: ")
+    str.BufAppend(hb, server_hdr)
+    str.BufAppend(hb, "\r\n\r\n")
+    hdr := str.BufStr(hb)
+    str.BufFree(hb)
+    _net_send_all(fd, hdr)
+    mem.Free(hdr as void *)
+    chunk_cap := 65536 as u64
+    buf := mem.Allocate(chunk_cap)
+    defer mem.Free(buf)
+    conn := tcp.ConnFromFd(fd)
+    mut remaining := sz
+    until remaining > 0:
+        want := remaining < (chunk_cap as i64) ? (remaining as u64) : chunk_cap
+        got := fread(buf, 1 as u64, want, f)
+        if got == (0 as u64):
+            break
+        end
+        if tcp.WriteBytes(conn, buf, got as int) <= 0:
+            break
+        end
+        remaining -= got as i64
+    end
+    ret 1
+end
+
+func _html_escape(s: str): str:
+    n := s.len()
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    repeat n in i:
+        c := s.substr(i, 1)
+        if c == "&": str.BufAppend(b, "&amp;")
+        else c == "<": str.BufAppend(b, "&lt;")
+        else c == ">": str.BufAppend(b, "&gt;")
+        else c == `"`: str.BufAppend(b, "&quot;")
+        else c == "'": str.BufAppend(b, "&#39;")
+        else:
+            str.BufAppend(b, c)
+        end
+    end
+    ret str.BufStr(b)
+end
+
+func _safe_static_path(root: str, rel: str): str:
+    croot := filepath.Clean(root)
+    joined := filepath.Join(croot, rel)
+    cleaned := filepath.Clean(joined)
+    mem.Free(joined as void *)
+    mut ok := false
+    if croot == ".":
+        ok = true
+        if cleaned == "..": ok = false end
+        if str.StartsWith(cleaned, "../"): ok = false end
+        if cleaned != "." and filepath.IsAbs(cleaned): ok = false end
+    else cleaned == croot:
+        ok = true
+    else:
+        ok = _eq_at(cleaned, 0, croot) and _eq_at(cleaned, croot.len(), "/")
+    end
+    mem.Free(croot as void *)
+    if ok: ret cleaned end
+    mem.Free(cleaned as void *)
+    ret str.Clone("")
+end
+
+func _static_dir_redirect(ctx: i64, path: str):
+    mut loc := path.concat("/")
+    q := salam_ctx_get(ctx, 2)
+    if q.len() > 0:
+        loc = loc.concat("?").concat(q)
+    end
+    salam_ctx_set_status(ctx, 301)
+    salam_ctx_kv_add(ctx, 2, "Location", _ctx_own(ctx, loc))
+    salam_ctx_set(ctx, 4, "text/plain; charset=utf-8")
+    salam_ctx_set(ctx, 5, "301 Moved Permanently")
+end
+
+func _dir_listing_html(url_path: str, disk_path: str): str:
+    names := os.ListDir(disk_path)
+    defer names.free()
+    mut dirs := Vector {} as Vector<str>
+    defer dirs.free()
+    mut files := Vector {} as Vector<str>
+    defer files.free()
+    repeat names.len() in i:
+        name := names.get(i)
+        if os.IsDir(filepath.Join(disk_path, name)):
+            dirs.push(name)
+        else:
+            files.push(name)
+        end
+    end
+    _insertion_sort_strs(dirs)
+    _insertion_sort_strs(files)
+    mut rows := str.NewBuilder()
+    defer str.BufFree(rows)
+    if url_path != "/":
+        str.BufAppend(rows, "<li><a href=\"../\">../</a></li>\n")
+    end
+    repeat dirs.len() in i:
+        name := dirs.get(i)
+        href := encoding.URLEncode(name)
+        str.BufAppend(rows, `<li><a href="`)
+        str.BufAppend(rows, href)
+        str.BufAppend(rows, `/">`)
+        str.BufAppend(rows, _html_escape(name))
+        str.BufAppend(rows, "/</a></li>\n")
+    end
+    repeat files.len() in i:
+        name := files.get(i)
+        href := encoding.URLEncode(name)
+        str.BufAppend(rows, `<li><a href="`)
+        str.BufAppend(rows, href)
+        str.BufAppend(rows, `">`)
+        str.BufAppend(rows, _html_escape(name))
+        str.BufAppend(rows, "</a></li>\n")
+    end
+    title := _html_escape(url_path)
+    mut out := "<!doctype html>\n<html><head><meta charset=\"utf-8\"><title>Index of "
+    out = out.concat(title)
+    out = out.concat("</title></head><body>\n<h1>Index of ")
+    out = out.concat(title)
+    out = out.concat("</h1>\n<ul>\n")
+    out = out.concat(str.BufStr(rows))
+    out = out.concat("</ul>\n</body></html>\n")
+    ret out
+end
+
+func _insertion_sort_strs(v &: Vector<str>):
+    n := v.len()
+    repeat n in i:
+        mut j := i
+        until j > 0 and v.get(j - 1) > v.get(j):
+            a := v.get(j - 1)
+            b := v.get(j)
+            v.set(j - 1, b)
+            v.set(j, a)
+            j -= 1
+        end
+    end
+end
+
+func _log_access(slot: int, method: str, path: str, status: int):
+    if _srv_log.get(slot) == false: ret end
+    println method, path, "->", status
+end
+
+func _send_static(slot: int, fd: i64, url: str, file: str, shdr: str, keep: bool): int:
+    ct := mime.MimeType(file)
+    if keep and _sc_send_new(slot, fd, url, file, ct, shdr):
+        ret 1
+    end
+    ret _send_file(fd, file, ct, shdr, keep)
+end
+
+func _route_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &: bool): bool:
+    if req_len == 0:
+        keep = false
+        ret false
+    end
+    salam_ctx_reset(ctx)
+    _parse_http(ctx, req, req_len)
+    if _rc(ctx).bad_framing:
+        if fd >= 0: _net_send_all(fd, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n") end
+        keep = false
+        ret false
+    end
+    keep = _rc(ctx).keep_alive
+    r := _srv_routers.get(slot)
+    shdr := _srv_shdr.get(slot)
+    mut static_handled := false
+    if r.has_static:
+        prefix := r.static_prefix
+        path := salam_ctx_get(ctx, 1)
+        if keep and _eq_at(path, 0, prefix) and _sc_serve(slot, fd, path):
+            _ctx_mark_sent(ctx)
+            static_handled = true
+        else _eq_at(path, 0, prefix):
+            relraw := path.substr(prefix.len(), path.len() - prefix.len())
+            rel := UrlDecode(relraw)
+            mem.Free(relraw as void *)
+            target := _safe_static_path(r.static_dir, rel)
+            mem.Free(rel as void *)
+            if target.len() > 0:
+                if os.IsDir(target) and str.EndsWith(path, "/") == false:
+                    _static_dir_redirect(ctx, path)
+                    static_handled = true
+                else os.IsDir(target):
+                    idx := filepath.Join(target, "index.html")
+                    if os.Exists(idx) and os.IsDir(idx) == false:
+                        if _send_static(slot, fd, path, idx, shdr, keep) == 1:
+                            _ctx_mark_sent(ctx)
+                            static_handled = true
+                        end
+                    else r.static_listing:
+                        salam_ctx_set_status(ctx, 200)
+                        salam_ctx_set(ctx, 4, "text/html; charset=utf-8")
+                        salam_ctx_set(ctx, 5, _ctx_own(ctx, _dir_listing_html(path, target)))
+                        static_handled = true
+                    end
+                    mem.Free(idx as void *)
+                else os.Exists(target):
+                    if _send_static(slot, fd, path, target, shdr, keep) == 1:
+                        _ctx_mark_sent(ctx)
+                        static_handled = true
+                    end
+                end
+            end
+            mem.Free(target as void *)
+        end
+    end
+    if static_handled == false:
+        dispatched := _dispatch(r, ctx)
+        if dispatched == false:
+            salam_ctx_set_status(ctx, 404)
+            salam_ctx_set(ctx, 4, "text/plain; charset=utf-8")
+            salam_ctx_set(ctx, 5, "404 Not Found")
+        end
+    end
+    _log_access(slot, salam_ctx_get(ctx, 0), salam_ctx_get(ctx, 1), salam_ctx_get_status(ctx))
+    ret true
+end
+
+func _serve_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &: bool): bool:
+    if not _route_request(slot, fd, ctx, req, req_len, keep):
+        ret false
+    end
+    if salam_ctx_is_sent(ctx) == 0:
+        mut b := str.NewBuilder()
+        _fill_response(b, ctx, slot, keep)
+        conn := tcp.ConnFromFd(fd)
+        tcp.WriteBytes(conn, b.data, b.len as int)
+        str.BufFree(b)
+        mut n := 0
+        p := _binary_body(ctx, n)
+        if n > 0: tcp.WriteBytes(conn, p, n) end
+        fl := _rc(ctx).resp_file_len
+        if fl > 0 and salam_ctx_get(ctx, 0) != "HEAD":
+            _stream_file_body(fd, _rc(ctx).resp_file, _rc(ctx).resp_file_off, fl)
+        end
+    end
+    ret true
+end
+
+func _conn_step(slot: int, fd: i64, ctx: i64, scratch: void *, pending &: str, pending_len &: int, served &: int): bool:
+    mut owned := false
+    mut oversize := 0
+    mut req_len := 0
+    req := _read_request(fd, scratch, pending, pending_len, req_len, owned, oversize)
+    if oversize == 431:
+        _net_send_all(fd, "HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        ret false
+    end
+    if oversize != 0:
+        _net_send_all(fd, "HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        ret false
+    end
+    if req_len == 0: ret false end
+    mut keep := true
+    ok := _serve_request(slot, fd, ctx, req, req_len, keep)
+    if owned: mem.Free(req as void *) end
+    if ok == false: ret false end
+    served += 1
+    if keep == false or served >= _keepalive_max_reqs: ret false end
+    ret true
+end
+
+func _web_conn_handler(packed: i64):
+    slot := _srv_slot_of(packed)
+    fd := _srv_fd_of(packed)
+    sock := rawsock.FromFd(fd)
+    rawsock.SetNoDelay(sock, true)
+    rawsock.SetTimeout(sock, _keepalive_idle_ms)
+    scratch := mem.Allocate((_RD_CHUNK + 1) as u64)
+    ctx := salam_ctx_new(fd)
+    mut pending := ""
+    mut pending_len := 0
+    mut served := 0
+    until _conn_step(slot, fd, ctx, scratch, pending, pending_len, served):
+        continue
+    end
+    if pending_len > 0: mem.Free(pending as void *) end
+    salam_ctx_free(ctx)
+    mem.Free(scratch)
+    _net_close(fd)
+end
+
+func _web_tls_conn_handler(packed: i64):
+    slot := _srv_slot_of(packed)
+    fd := _srv_fd_of(packed)
+    mut c := tls.WrapServer(fd, _srv_tls.get(slot))
+    if not tls.ConnOk(c):
+        tls.Close(c)
+        ret
+    end
+    req := tls.Read(c, 32768)
+    if req.len() == 0:
+        mem.Free(req as void *)
+        tls.Close(c)
+        ret
+    end
+    ctx := salam_ctx_new(fd)
+    defer salam_ctx_free(ctx)
+    defer mem.Free(req as void *)
+    _parse_http(ctx, req, req.len())
+    r := _srv_routers.get(slot)
+    shdr := _srv_shdr.get(slot)
+    mut static_handled := false
+    if r.has_static:
+        prefix := r.static_prefix
+        path := salam_ctx_get(ctx, 1)
+        if _eq_at(path, 0, prefix):
+            relraw := path.substr(prefix.len(), path.len() - prefix.len())
+            rel := UrlDecode(relraw)
+            mem.Free(relraw as void *)
+            target := _safe_static_path(r.static_dir, rel)
+            mem.Free(rel as void *)
+            if target.len() > 0:
+                if os.IsDir(target) and str.EndsWith(path, "/") == false:
+                    _static_dir_redirect(ctx, path)
+                    static_handled = true
+                else os.IsDir(target):
+                    idx := filepath.Join(target, "index.html")
+                    if os.Exists(idx) and os.IsDir(idx) == false:
+                        _tls_send_file(c, idx, mime.MimeType(idx), shdr)
+                        _ctx_mark_sent(ctx)
+                        static_handled = true
+                    else r.static_listing:
+                        salam_ctx_set_status(ctx, 200)
+                        salam_ctx_set(ctx, 4, "text/html; charset=utf-8")
+                        salam_ctx_set(ctx, 5, _ctx_own(ctx, _dir_listing_html(path, target)))
+                        static_handled = true
+                    end
+                    mem.Free(idx as void *)
+                else os.Exists(target):
+                    _tls_send_file(c, target, mime.MimeType(target), shdr)
+                    _ctx_mark_sent(ctx)
+                    static_handled = true
+                end
+            end
+            mem.Free(target as void *)
+        end
+    end
+    if static_handled == false:
+        dispatched := _dispatch(r, ctx)
+        if dispatched == false:
+            salam_ctx_set_status(ctx, 404)
+            salam_ctx_set(ctx, 4, "text/plain; charset=utf-8")
+            salam_ctx_set(ctx, 5, "404 Not Found")
+        end
+    end
+    _log_access(slot, salam_ctx_get(ctx, 0), salam_ctx_get(ctx, 1), salam_ctx_get_status(ctx))
+    if salam_ctx_is_sent(ctx) == 0:
+        resp := _build_response(ctx, slot)
+        tls.Write(c, resp)
+        mem.Free(resp as void *)
+        mut n := 0
+        p := _binary_body(ctx, n)
+        if n > 0: tls.WriteBytes(c, p, n) end
+        fl := _rc(ctx).resp_file_len
+        if fl > 0 and salam_ctx_get(ctx, 0) != "HEAD":
+            _tls_file_body(c, _rc(ctx).resp_file, _rc(ctx).resp_file_off, fl)
+        end
+    end
+    tls.Close(c)
+end
+
+func _stream_file_body(fd: i64, path: str, off: int, size: int):
+    f := fopen(path, "rb")
+    if f == null: ret end
+    defer fclose(f)
+    if off > 0: fseek(f, off, 0) end
+    chunk_cap := 65536 as u64
+    buf := mem.Allocate(chunk_cap)
+    defer mem.Free(buf)
+    conn := tcp.ConnFromFd(fd)
+    mut remaining := size as i64
+    until remaining > 0:
+        want := remaining < (chunk_cap as i64) ? (remaining as u64) : chunk_cap
+        got := fread(buf, 1 as u64, want, f)
+        if got == (0 as u64):
+            break
+        end
+        if tcp.WriteBytes(conn, buf, got as int) <= 0:
+            break
+        end
+        remaining -= got as i64
+    end
+end
+
+func _tls_file_body(c &: tls.Conn, path: str, off: int, size: int):
+    f := fopen(path, "rb")
+    if f == null: ret end
+    defer fclose(f)
+    if off > 0: fseek(f, off, 0) end
+    chunk_cap := 65536 as u64
+    buf := mem.Allocate(chunk_cap)
+    defer mem.Free(buf)
+    mut remaining := size as i64
+    until remaining > 0:
+        want := remaining < (chunk_cap as i64) ? (remaining as u64) : chunk_cap
+        got := fread(buf, 1 as u64, want, f)
+        if got == (0 as u64):
+            break
+        end
+        tls.WriteBytes(c, buf, got as int)
+        remaining -= got as i64
+    end
+end
+
+func _tls_send_file(c &: tls.Conn, path: str, ct: str, server_hdr: str):
+    f := fopen(path, "rb")
+    if f == null: ret end
+    fseek(f, 0, 2)
+    sz := ftell(f) as i64
+    fseek(f, 0, 0)
+    if sz < 0:
+        fclose(f)
+        ret
+    end
+    mut hdr := "HTTP/1.1 200 OK\r\nContent-Length: "
+    hdr = hdr.concat(conv.FormatInt(sz))
+    hdr = hdr.concat("\r\nContent-Type: ")
+    hdr = hdr.concat(ct)
+    hdr = hdr.concat("\r\nConnection: close\r\nServer: ")
+    hdr = hdr.concat(server_hdr)
+    hdr = hdr.concat("\r\nX-Powered-By: ")
+    hdr = hdr.concat(server_hdr)
+    hdr = hdr.concat("\r\n\r\n")
+    tls.Write(c, hdr)
+    buf := mem.Allocate((sz + 1) as u64)
+    defer mem.Free(buf)
+    got := fread(buf, 1 as u64, sz as u64, f)
+    fclose(f)
+    if got > (0 as u64):
+        tls.WriteBytes(c, buf, got as int)
+    end
+end
+
+@en "SetKeepAliveIdle"
+@fa "تنظیم بیکاری زنده نگه داشتن"
+pub func SetKeepAliveIdle(millis: int):
+    _keepalive_idle_ms = millis
+end
+
+@en "SetMaxHeaderBytes"
+@fa "بیشینه بایت سرایند"
+pub func SetMaxHeaderBytes(n: int):
+    if n > 0: _max_header_bytes = n end
+end
+
+@en "SetMaxBodyBytes"
+@fa "بیشینه بایت بدنه"
+pub func SetMaxBodyBytes(n: int):
+    if n > 0: _max_body_bytes = n end
+end
+
+@en "SetKeepAliveMaxRequests"
+@fa "بیشینه درخواست زنده نگه داشتن"
+pub func SetKeepAliveMaxRequests(n: int):
+    _keepalive_max_reqs = n
+end
+
+@en "File"
+@fa "ارسال پرونده"
+pub func File(h: i64, path: str, content_type: str): bool:
+    f := fopen(path, "rb")
+    if f == null:
+        ret false
+    end
+    fseek(f, 0, 2)
+    sz := ftell(f) as i64
+    fclose(f)
+    if sz < 0:
+        ret false
+    end
+    c := _rc(h)
+    c.resp_ct = _ctx_own(h, str.Clone(content_type))
+    c.resp_file = _ctx_own(h, str.Clone(path))
+    c.resp_file_len = sz as int
+    ret true
+end
+
+@en "LocalPort"
+@fa "درگاه محلی"
+pub func LocalPort(h: i64): int:
+    ret rawsock.LocalPort(rawsock.FromFd(salam_ctx_fd(h)))
+end
+
+@en "Status"
+@fa "وضعیت"
+pub func Status(h: i64): int:
+    ret salam_ctx_get_status(h)
+end
+
+@en "FileRange"
+@fa "ارسال بخشی از پرونده"
+pub func FileRange(h: i64, path: str, content_type: str, offset: int, length: int): bool:
+    if offset < 0 or length < 0:
+        ret false
+    end
+    if not File(h, path, content_type):
+        ret false
+    end
+    c := _rc(h)
+    if offset + length > c.resp_file_len:
+        c.resp_file = ""
+        c.resp_file_len = -1
+        ret false
+    end
+    c.resp_file_off = offset
+    c.resp_file_len = length
+    ret true
+end

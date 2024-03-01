@@ -1,0 +1,579 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "sync"
+@fa "همگام سازی"
+package sync
+
+import mem
+
+if SALAM_OS_UNIX:
+    if not defined(SALAM_CC_TCC):
+        link dynamic "pthread"
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    link dynamic "kernel32"
+    extern:
+        func InitializeCriticalSection(cs: void*)
+        func EnterCriticalSection(cs: void*)
+        func LeaveCriticalSection(cs: void*)
+        func DeleteCriticalSection(cs: void*)
+        func GetModuleHandleA(name: str): void*
+        func GetProcAddress(mod: void*, name: str): void*
+        func GetTickCount(): u32
+        func Sleep(ms: int)
+        func InitializeConditionVariable(cv: void*)
+        func SleepConditionVariableCS(cv: void*, cs: void*, ms: int): int
+        func WakeConditionVariable(cv: void*)
+        func WakeAllConditionVariable(cv: void*)
+        func GetTickCount64(): u64
+    end
+else:
+    extern:
+        func pthread_mutex_init(mutex: void*, attr: void*): int
+        func pthread_mutex_lock(mutex: void*): int
+        func pthread_mutex_unlock(mutex: void*): int
+        func pthread_mutex_destroy(mutex: void*): int
+        func pthread_cond_init(cond: void*, attr: void*): int
+        func pthread_cond_wait(cond: void*, mutex: void*): int
+        func pthread_cond_timedwait(cond: void*, mutex: void*, abstime: void*): int
+        func clock_gettime(clk: int, ts: void*): int
+        func pthread_cond_signal(cond: void*): int
+        func pthread_cond_broadcast(cond: void*): int
+        func pthread_cond_destroy(cond: void*): int
+        func usleep(us: u32): int
+    end
+end
+
+const MUTEX_BYTES := 128
+const COND_BYTES := 128
+
+if SALAM_OS_WINDOWS:
+    _k32 := GetModuleHandleA("kernel32.dll")
+    _cv_init_fn := GetProcAddress(_k32, "InitializeConditionVariable")
+    _cv_sleep_fn := GetProcAddress(_k32, "SleepConditionVariableCS")
+    _cv_wake_fn := GetProcAddress(_k32, "WakeConditionVariable")
+    _cv_wake_all_fn := GetProcAddress(_k32, "WakeAllConditionVariable")
+    _tick64_fn := GetProcAddress(_k32, "GetTickCount64")
+end
+
+@en "Mutex"
+@fa "قفل"
+pub struct Mutex:
+    @en "handle"
+    @fa "دستگیره"
+    pub handle: void* = null
+end
+
+@en "CondVar"
+@fa "متغیر شرط"
+pub struct CondVar:
+    @en "handle"
+    @fa "دستگیره"
+    pub handle: void* = null
+end
+
+@en "WaitGroup"
+@fa "گروه انتظار"
+pub struct WaitGroup:
+    @en "counter"
+    @fa "شمارنده"
+    pub counter: i64* = null
+    @en "mu"
+    @fa "قفل درونی"
+    pub mu: void* = null
+    @en "cv"
+    @fa "شرط درونی"
+    pub cv: void* = null
+end
+
+@en "RWMutex"
+@fa "قفل خواندن نوشتن"
+pub struct RWMutex:
+    @en "state"
+    @fa "وضعیت"
+    pub state: i64* = null
+    @en "mu"
+    @fa "قفل درونی"
+    pub mu: void* = null
+    @en "cv"
+    @fa "شرط درونی"
+    pub cv: void* = null
+end
+
+@en "Semaphore"
+@fa "نشانگر"
+pub struct Semaphore:
+    @en "permits"
+    @fa "مجوزها"
+    pub permits: i64* = null
+    @en "mu"
+    @fa "قفل درونی"
+    pub mu: void* = null
+    @en "cv"
+    @fa "شرط درونی"
+    pub cv: void* = null
+end
+
+@en "Once"
+@fa "یک بار"
+pub struct Once:
+    @en "done"
+    @fa "انجام شد"
+    pub done: i64* = null
+    @en "mu"
+    @fa "قفل درونی"
+    pub mu: void* = null
+end
+
+if SALAM_OS_WINDOWS:
+    func mutex_new(): void*:
+        m := mem.Allocate(MUTEX_BYTES as u64)
+        InitializeCriticalSection(m)
+        ret m
+    end
+
+    func mutex_lock(h: void*): int:
+        EnterCriticalSection(h)
+        ret 0
+    end
+
+    func mutex_unlock(h: void*): int:
+        LeaveCriticalSection(h)
+        ret 0
+    end
+
+    func mutex_free(h: void*):
+        DeleteCriticalSection(h)
+        mem.Free(h)
+    end
+
+    if SALAM_ARCH_X86:
+        func cond_new(): void*:
+            c := mem.Allocate(COND_BYTES as u64)
+            InitializeConditionVariable(c)
+            ret c
+        end
+
+        func cond_wait(c: void*, m: void*):
+            SleepConditionVariableCS(c, m, 0 - 1)
+        end
+
+        func cond_timedwait(c: void*, m: void*, ms: i64): bool:
+            ret SleepConditionVariableCS(c, m, ms as int) != 0
+        end
+
+        func now_ms_os(): i64:
+            ret GetTickCount64() as i64
+        end
+
+        func cond_signal(c: void*):
+            WakeConditionVariable(c)
+        end
+
+        func cond_broadcast(c: void*):
+            WakeAllConditionVariable(c)
+        end
+    else:
+        func cond_new(): void*:
+            c := mem.Allocate(COND_BYTES as u64)
+            if _cv_init_fn != null:
+                f := _cv_init_fn as extern func (void*) void
+                f(c)
+            end
+            ret c
+        end
+
+        func cond_wait(c: void*, m: void*):
+            if _cv_sleep_fn == null:
+                LeaveCriticalSection(m)
+                Sleep(1)
+                EnterCriticalSection(m)
+                ret
+            end
+            f := _cv_sleep_fn as extern func (void*, void*, int) int
+            f(c, m, 0 - 1)
+        end
+
+        func cond_timedwait(c: void*, m: void*, ms: i64): bool:
+            if _cv_sleep_fn == null:
+                LeaveCriticalSection(m)
+                mut nap := ms
+                if nap > 1: nap = 1 end
+                if nap < 0: nap = 0 end
+                Sleep(nap as int)
+                EnterCriticalSection(m)
+                ret false
+            end
+            f := _cv_sleep_fn as extern func (void*, void*, int) int
+            ret f(c, m, ms as int) != 0
+        end
+
+        func now_ms_os(): i64:
+            if _tick64_fn == null: ret GetTickCount() as i64 end
+            f := _tick64_fn as extern func () u64
+            ret f() as i64
+        end
+
+        func cond_signal(c: void*):
+            if _cv_wake_fn == null: ret end
+            f := _cv_wake_fn as extern func (void*) void
+            f(c)
+        end
+
+        func cond_broadcast(c: void*):
+            if _cv_wake_all_fn == null: ret end
+            f := _cv_wake_all_fn as extern func (void*) void
+            f(c)
+        end
+    end
+
+    func cond_free(c: void*): mem.Free(c) end
+
+    func _sync_sleep_ms(ms: int): Sleep(ms) end
+else:
+    func mutex_new(): void*:
+        m := mem.Allocate(MUTEX_BYTES as u64)
+        pthread_mutex_init(m, null)
+        ret m
+    end
+
+    func mutex_lock(h: void*): int:
+        if pthread_mutex_lock(h) == 0: ret 0 end
+        ret 0 - 1
+    end
+
+    func mutex_unlock(h: void*): int:
+        if pthread_mutex_unlock(h) == 0: ret 0 end
+        ret 0 - 1
+    end
+
+    func mutex_free(h: void*):
+        pthread_mutex_destroy(h)
+        mem.Free(h)
+    end
+
+    func cond_new(): void*:
+        c := mem.Allocate(COND_BYTES as u64)
+        pthread_cond_init(c, null)
+        ret c
+    end
+
+    func cond_wait(c: void*, m: void*):
+        pthread_cond_wait(c, m)
+    end
+
+    func ts_read_sec(ts: void*): i64:
+        if sizeof(void*) == 8:
+            q := ts as i64*
+            ret q[0]
+        end
+        q32 := ts as i32*
+        ret q32[0]
+    end
+
+    func ts_read_nsec(ts: void*): i64:
+        if sizeof(void*) == 8:
+            q := ts as i64*
+            ret q[1]
+        end
+        q32 := ts as i32*
+        ret q32[1]
+    end
+
+    func ts_write(ts: void*, sec: i64, nsec: i64):
+        if sizeof(void*) == 8:
+            q := ts as i64*
+            q[0] = sec
+            q[1] = nsec
+            ret
+        end
+        q32 := ts as i32*
+        q32[0] = sec as i32
+        q32[1] = nsec as i32
+    end
+
+    func cond_timedwait(c: void*, m: void*, ms: i64): bool:
+        ts := mem.AllocateZeroed(32 as u64)
+        clock_gettime(0, ts)
+        total := ts_read_nsec(ts) + (ms % 1000) * 1000000
+        ts_write(ts, ts_read_sec(ts) + (ms / 1000) + (total / 1000000000), total % 1000000000)
+        rc := pthread_cond_timedwait(c, m, ts)
+        mem.Free(ts)
+        ret rc == 0
+    end
+
+    func now_ms_os(): i64:
+        ts := mem.AllocateZeroed(32 as u64)
+        clock_gettime(0, ts)
+        ms := ts_read_sec(ts) * 1000 + ts_read_nsec(ts) / 1000000
+        mem.Free(ts)
+        ret ms
+    end
+
+    func cond_signal(c: void*): pthread_cond_signal(c) end
+
+    func cond_broadcast(c: void*): pthread_cond_broadcast(c) end
+
+    func cond_free(c: void*):
+        pthread_cond_destroy(c)
+        mem.Free(c)
+    end
+
+    func _sync_sleep_ms(ms: int):
+        if ms > 0: usleep((ms * 1000) as u32) end
+    end
+end
+
+@en "NewMutex"
+@fa "قفل جدید"
+pub func NewMutex(): Mutex: ret Mutex { handle = mutex_new() } end
+
+@en "Lock"
+@fa "قفل کردن"
+pub func Lock(m: Mutex): int: ret mutex_lock(m.handle) end
+
+@en "Unlock"
+@fa "باز کردن قفل"
+pub func Unlock(m: Mutex): int: ret mutex_unlock(m.handle) end
+
+@en "Destroy"
+@fa "نابودسازی"
+pub func Destroy(m: Mutex): mutex_free(m.handle) end
+
+@en "SleepMs"
+@fa "خواب میلی ثانیه"
+pub func SleepMs(ms: int): _sync_sleep_ms(ms) end
+
+@en "NewCondVar"
+@fa "متغیر شرط جدید"
+pub func NewCondVar(): CondVar: ret CondVar { handle = cond_new() } end
+
+@en "WaitCond"
+@fa "انتظار شرط"
+pub func WaitCond(cv: CondVar, m: Mutex): cond_wait(cv.handle, m.handle) end
+
+@en "WaitCondTimeout"
+@fa "انتظار شرط با مهلت"
+pub func WaitCondTimeout(cv: CondVar, m: Mutex, ms: i64): bool:
+    ret cond_timedwait(cv.handle, m.handle, ms)
+end
+
+@en "NowMs"
+@fa "اکنون میلی ثانیه"
+pub func NowMs(): i64: ret now_ms_os() end
+
+@en "Signal"
+@fa "اعلام"
+pub func Signal(cv: CondVar): cond_signal(cv.handle) end
+
+@en "Broadcast"
+@fa "اعلام سراسری"
+pub func Broadcast(cv: CondVar): cond_broadcast(cv.handle) end
+
+@en "DestroyCondVar"
+@fa "نابودسازی متغیر شرط"
+pub func DestroyCondVar(cv: CondVar): cond_free(cv.handle) end
+
+@en "NewWaitGroup"
+@fa "گروه انتظار جدید"
+pub func NewWaitGroup(): WaitGroup:
+    c := mem.Allocate(8 as u64) as i64*
+    c[0] = 0
+    ret WaitGroup { counter = c, mu = mutex_new(), cv = cond_new() }
+end
+
+@en "Add"
+@fa "افزودن"
+pub func Add(wg: WaitGroup, delta: i64):
+    c := wg.counter
+    mutex_lock(wg.mu)
+    c[0] = c[0] + delta
+    if c[0] <= 0: cond_broadcast(wg.cv) end
+    mutex_unlock(wg.mu)
+end
+
+@en "Done"
+@fa "اتمام"
+pub func Done(wg: WaitGroup):
+    c := wg.counter
+    mutex_lock(wg.mu)
+    c[0] = c[0] - 1
+    if c[0] <= 0: cond_broadcast(wg.cv) end
+    mutex_unlock(wg.mu)
+end
+
+@en "Wait"
+@fa "انتظار"
+pub func Wait(wg: WaitGroup):
+    c := wg.counter
+    mutex_lock(wg.mu)
+    until c[0] > 0:
+        cond_wait(wg.cv, wg.mu)
+    end
+    mutex_unlock(wg.mu)
+end
+
+@en "DestroyWaitGroup"
+@fa "نابودسازی گروه انتظار"
+pub func DestroyWaitGroup(wg: WaitGroup):
+    mem.Free(wg.counter as void*)
+    cond_free(wg.cv)
+    mutex_free(wg.mu)
+end
+
+@en "NewRWMutex"
+@fa "قفل خواندن نوشتن جدید"
+pub func NewRWMutex(): RWMutex:
+    s := mem.Allocate(24 as u64) as i64*
+    s[0] = 0
+    s[1] = 0
+    s[2] = 0
+    ret RWMutex { state = s, mu = mutex_new(), cv = cond_new() }
+end
+
+@en "RLock"
+@fa "قفل خواندن"
+pub func RLock(rw: RWMutex):
+    s := rw.state
+    mutex_lock(rw.mu)
+    until s[1] != 0 or s[2] > 0:
+        cond_wait(rw.cv, rw.mu)
+    end
+    s[0] = s[0] + 1
+    mutex_unlock(rw.mu)
+end
+
+@en "RUnlock"
+@fa "باز کردن قفل خواندن"
+pub func RUnlock(rw: RWMutex):
+    s := rw.state
+    mutex_lock(rw.mu)
+    s[0] = s[0] - 1
+    if s[0] <= 0: cond_broadcast(rw.cv) end
+    mutex_unlock(rw.mu)
+end
+
+@en "WLock"
+@fa "قفل نوشتن"
+pub func WLock(rw: RWMutex):
+    s := rw.state
+    mutex_lock(rw.mu)
+    s[2] = s[2] + 1
+    until s[1] != 0 or s[0] > 0:
+        cond_wait(rw.cv, rw.mu)
+    end
+    s[2] = s[2] - 1
+    s[1] = 1
+    mutex_unlock(rw.mu)
+end
+
+@en "WUnlock"
+@fa "باز کردن قفل نوشتن"
+pub func WUnlock(rw: RWMutex):
+    s := rw.state
+    mutex_lock(rw.mu)
+    s[1] = 0
+    cond_broadcast(rw.cv)
+    mutex_unlock(rw.mu)
+end
+
+@en "DestroyRWMutex"
+@fa "نابودسازی قفل خواندن نوشتن"
+pub func DestroyRWMutex(rw: RWMutex):
+    mem.Free(rw.state as void*)
+    cond_free(rw.cv)
+    mutex_free(rw.mu)
+end
+
+@en "NewSemaphore"
+@fa "نشانگر جدید"
+pub func NewSemaphore(permits: i64): Semaphore:
+    p := mem.Allocate(8 as u64) as i64*
+    p[0] = permits
+    ret Semaphore { permits = p, mu = mutex_new(), cv = cond_new() }
+end
+
+@en "Acquire"
+@fa "گرفتن"
+pub func Acquire(sem: Semaphore):
+    p := sem.permits
+    mutex_lock(sem.mu)
+    until p[0] <= 0:
+        cond_wait(sem.cv, sem.mu)
+    end
+    p[0] = p[0] - 1
+    mutex_unlock(sem.mu)
+end
+
+@en "TryAcquire"
+@fa "کوشش برای گرفتن"
+pub func TryAcquire(sem: Semaphore): bool:
+    p := sem.permits
+    mutex_lock(sem.mu)
+    mut got := false
+    if p[0] > 0:
+        p[0] = p[0] - 1
+        got = true
+    end
+    mutex_unlock(sem.mu)
+    ret got
+end
+
+@en "Release"
+@fa "رها کردن"
+pub func Release(sem: Semaphore):
+    p := sem.permits
+    mutex_lock(sem.mu)
+    p[0] = p[0] + 1
+    cond_signal(sem.cv)
+    mutex_unlock(sem.mu)
+end
+
+@en "DestroySemaphore"
+@fa "نابودسازی نشانگر"
+pub func DestroySemaphore(sem: Semaphore):
+    mem.Free(sem.permits as void*)
+    cond_free(sem.cv)
+    mutex_free(sem.mu)
+end
+
+@en "NewOnce"
+@fa "یک بار جدید"
+pub func NewOnce(): Once:
+    d := mem.Allocate(8 as u64) as i64*
+    d[0] = 0
+    ret Once { done = d, mu = mutex_new() }
+end
+
+@en "Do"
+@fa "انجام"
+pub func Do(o: Once, f: func ()):
+    d := o.done
+    mutex_lock(o.mu)
+    if d[0] == 0:
+        f()
+        d[0] = 1
+    end
+    mutex_unlock(o.mu)
+end
+
+@en "DestroyOnce"
+@fa "نابودسازی یک بار"
+pub func DestroyOnce(o: Once):
+    mem.Free(o.done as void*)
+    mutex_free(o.mu)
+end

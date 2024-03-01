@@ -1,0 +1,181 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.opensearch
+
+const SEARCH := `{"took":5,"timed_out":false,"_shards":{"total":1},"hits":{"total":{"value":2,"relation":"eq"},"max_score":1.5,"hits":[{"_index":"books","_id":"1","_score":1.5,"_source":{"title":"Salam","tags":["a","b"]},"highlight":{"title":["<em>Salam</em>"]}},{"_index":"books","_id":"2","_score":0.5,"_source":{"title":"سلام دنیا"},"sort":[3,"x"]}]},"aggregations":{"avg_n":{"value":12.5},"tags":{"buckets":[{"key":"a","doc_count":3},{"key":7,"key_as_string":"seven","doc_count":1}]},"ranges":{"buckets":{"low":{"doc_count":4},"high":{"doc_count":2}}},"stats_n":{"count":3,"min":1.0,"max":9.0,"avg":4.0,"sum":12.0}},"suggest":{"fix":[{"text":"salm","options":[{"text":"salam","score":0.8}]}]}}`
+const BULK := `{"took":3,"errors":true,"items":[{"index":{"_index":"b","_id":"1","_version":1,"result":"created","status":201}},{"create":{"_index":"b","_id":"1","status":409,"error":{"type":"version_conflict_engine_exception","reason":"[1]: version conflict"}}},{"delete":{"_index":"b","_id":"9","result":"not_found","status":404}}]}`
+
+func strs(a: str, b: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push(a)
+    if b.len() > 0: v.push(b) end
+    ret v
+end
+
+func queries():
+    println opensearch.MatchAll()
+    println opensearch.Match("title", `say "hi"`)
+    println opensearch.MatchAnd("title", "a b")
+    println opensearch.MatchPhraseSlop("title", "a b", 2)
+    println opensearch.MultiMatchType("q", strs("title^2", "body"), "best_fields")
+    println opensearch.TermInt("n", -3), opensearch.TermBool("ok", true)
+    println opensearch.Terms("tag", strs("a", "b"))
+    println opensearch.Range("d", "2026-01-01", ""), opensearch.RangeInt("n", 1, 9)
+    println opensearch.DateRange("d", "now-1d", "now", "", "+03:30")
+    println opensearch.FieldExists("x"), opensearch.Ids(strs("1", "2"))
+    println opensearch.Wildcard("t", "sa*"), opensearch.Regexp("t", "s.l"), opensearch.Prefix("t", "sa")
+    mut b := opensearch.BoolQuery { minimum_should_match = "1", boost = 2.0 }
+    b.must.push(opensearch.Match("title", "salam"))
+    b.should.push(opensearch.Term("tag", "a"))
+    b.must_not.push(opensearch.Term("tag", "z"))
+    println opensearch.BoolOf(b)
+    println opensearch.Or(strs(opensearch.Term("a", "1"), opensearch.Term("b", "2")))
+    println opensearch.Not(opensearch.Term("a", "1"))
+    println opensearch.Nested("tags", opensearch.Term("tags.name", "x"))
+    println opensearch.DisMax(strs(opensearch.Match("a", "x"), opensearch.Match("b", "x")), 0.3)
+    println opensearch.GeoDistance("loc", 35.7, 51.4, "10km")
+    mut v := Vector {} as Vector<f64>
+    v.push(0.5)
+    v.push(-1.0)
+    println opensearch.Knn("vec", v, 5)
+    println opensearch.KnnFiltered("vec", v, 5, opensearch.Term("tag", "a"))
+    println opensearch.KnnRadial("vec", v, 0.25)
+    println opensearch.Neural("emb", "hello", "model-1", 10)
+    println opensearch.Hybrid(strs(opensearch.Match("t", "x"), opensearch.Neural("emb", "x", "", 5)))
+    println opensearch.ScriptScore(opensearch.MatchAll(), "_score * 2", `{"f":2}`)
+    println opensearch.FunctionScore(opensearch.MatchAll(), strs(opensearch.FieldValueFactor("likes", 1.2, "log1p"), ""), "sum", "multiply")
+end
+
+func bodies():
+    mut req := opensearch.SearchRequest { query = opensearch.MatchAll(), from = 10, size = 5, track_total_hits = "true" }
+    req.sort.push(opensearch.SortDesc("n"))
+    req.sort.push(opensearch.SortScore())
+    req.source.push("title")
+    req.source_excludes.push("big")
+    req.aggs = opensearch.AddAgg(opensearch.AddAgg("{}", "tags", opensearch.TermsAgg("tag", 10)), "n", opensearch.StatsAgg("n"))
+    req.highlight = opensearch.HighlightTags(strs("title", ""), "<b>", "</b>")
+    req.collapse = opensearch.Collapse("tag")
+    req.extra.push(`"profile":true`)
+    println opensearch.SearchBody(req)
+    pit := opensearch.SearchRequest { pit_id = "abc==", pit_keep_alive = "1m", search_after = `[5,"x"]`, size = 2, track_total_hits = "1000" }
+    println opensearch.SearchBody(pit)
+    println opensearch.SearchBody(opensearch.SearchRequest { no_source = true, min_score = "0.5", version = true, seq_no_primary_term = true })
+    nested := opensearch.SubAggs(opensearch.DateHistogramAgg("at", "month"), opensearch.AddAgg("{}", "avg", opensearch.AvgAgg("n")))
+    println nested
+    mut bounds := Vector {} as Vector<f64>
+    bounds.push(10.0)
+    bounds.push(20.0)
+    println opensearch.RangeAgg("n", bounds)
+    println opensearch.CompositeAgg(strs("a", "b"), 100)
+    println opensearch.CompletionSuggest("s", "sal", "title.suggest", 3)
+    println opensearch.AddMember(`{"a":1}`, "b", `[2]`), opensearch.AddMember("", "c", "3")
+end
+
+func parsing():
+    s := opensearch.ParseSearch(SEARCH)
+    println "search:", s.ok, s.took, s.total, s.total_relation, s.max_score, s.hits.len()
+    each h in s.hits:
+        println "  hit:", h.index, h.id, h.score, h.source, h.highlight.len(), h.sort
+    end
+    println "avg:", opensearch.AggValue(s.aggregations, "avg_n"), opensearch.AggField(s.aggregations, "stats_n", "max")
+    each b in opensearch.Buckets(s.aggregations, "tags"):
+        println "  bucket:", b.key, b.key_as_string, b.doc_count
+    end
+    each b in opensearch.Buckets(s.aggregations, "ranges"):
+        println "  keyed:", b.key, b.doc_count
+    end
+    println "suggest:", opensearch.Suggestions(s.suggest, "fix")
+    println "path:", opensearch.JsonPath(SEARCH, "hits.hits.1._source.title"), opensearch.JsonPath(SEARCH, "hits.hits.0._source.tags.1")
+    println "path raw:", opensearch.JsonPathRaw(SEARCH, "hits.total"), opensearch.JsonPath(SEARCH, "hits.nope").len()
+    println "items:", opensearch.JsonItems(`[1, {"a":[2,3]}, "x,y", null]`)
+    br := opensearch.ParseBulk(BULK)
+    println "bulk:", br.ok, br.errors, br.succeeded, br.failed, br.error
+    each it in br.items:
+        println "  item:", it.action, it.id, it.status, it.ok, it.result, it.error_type
+    end
+end
+
+func bulk_body():
+    mut b := opensearch.NewBulk()
+    opensearch.BulkIndex(b, "books", "1", "{\n  \"title\": \"Salam\"\n}")
+    opensearch.BulkIndexRouted(b, "books", "2", "user7", `{"title":"x"}`)
+    opensearch.BulkCreate(b, "books", "", `{"title":"auto id"}`)
+    opensearch.BulkUpdate(b, "books", "1", `{"n": 2}`)
+    opensearch.BulkUpsert(b, "books", "3", `{"n": 3}`)
+    opensearch.BulkDelete(b, "books", "4")
+    println "actions:", opensearch.BulkLen(b)
+    print opensearch.BulkBody(b)
+    opensearch.BulkReset(b)
+    println "after reset:", opensearch.BulkLen(b), opensearch.BulkBody(b).len()
+    opensearch.BulkFree(b)
+end
+
+func plugins():
+    println opensearch.KnnIndexSettings(2, 1)
+    println opensearch.KnnVectorField(384, opensearch.KnnMethod { engine = "faiss", space_type = "innerproduct", m = 16, ef_construction = 128 })
+    println opensearch.KnnIndexBody("v", 3, opensearch.KnnMethod {}, strs(opensearch.Property("label", "keyword"), ""))
+    println opensearch.DeleteAfterPolicy("logs", "7d", strs("logs-*", ""))
+    mut w := Vector {} as Vector<f64>
+    w.push(0.3)
+    w.push(0.7)
+    println opensearch.NormalizationPipeline("min_max", "arithmetic_mean", w)
+    println opensearch.RoleBody(strs("cluster_monitor", ""), strs("logs-*", ""), strs("read", "search"))
+    println opensearch.IndexTemplate(strs("logs-*", ""), `{"number_of_shards":1}`, "{" + opensearch.Property("msg", "text") + "}", 10)
+    println opensearch.PropertyWith("title", "text", `{"analyzer":"persian"}`)
+    println opensearch.Pipeline("p", strs(opensearch.Processor("lowercase", `{"field":"t"}`), opensearch.Processor("trim", "")))
+    println opensearch.AliasAction("add", "logs-1", "logs")
+    println opensearch.SqlParam("integer", "5"), opensearch.SqlParam("string", "x")
+end
+
+func clients():
+    mut cfg := opensearch.Config { username = "admin", password = "p@ss:word" }
+    cfg.nodes.push("https://node1:9201/search/, node2")
+    cfg.nodes.push("http://[::1]:9200")
+    mut c := opensearch.NewClient(cfg)
+    println "ok:", opensearch.Ok(c), opensearch.Nodes(c)
+    println "auth:", opensearch.AuthHeader(c)
+    opensearch.Close(c)
+    println "closed:", opensearch.Ok(c), opensearch.Error(c)
+    mut u := opensearch.Connect("http://reader:secret@localhost:9200")
+    println "userinfo:", opensearch.AuthHeader(u)
+    opensearch.Close(u)
+    mut bad := opensearch.Connect("ftp://x")
+    println "bad url:", opensearch.Ok(bad), opensearch.Error(bad)
+    r := opensearch.Perform(bad, "GET", "/", "")
+    println "bad perform:", r.ok, r.error
+    opensearch.Close(bad)
+    mut tok := opensearch.NewClient(opensearch.Config { bearer = "tok123" })
+    println "bearer:", opensearch.AuthHeader(tok), opensearch.Nodes(tok)
+    opensearch.Close(tok)
+    mut aws := opensearch.NewClient(opensearch.Config { aws_region = "us-east-1" })
+    println "aws without keys:", opensearch.Ok(aws), opensearch.Error(aws)
+    opensearch.Close(aws)
+    println "basic:", opensearch.EncodeBasic("admin", "admin")
+end
+
+func sigv4():
+    print opensearch.SignRequest("GET", "example.amazonaws.com", "/", "", "us-east-1", "service", "AKIDEXAMPLE", "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", "", 1440938160 as i64)
+    print opensearch.SignRequest("POST", "search-x.us-west-2.es.amazonaws.com", "/my index/_search?q=a b&size=5", `{"query":{"match_all":{}}}`, "us-west-2", opensearch.SERVICE_ES, "AKIDEXAMPLE", "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", "SESSION", 1700000000 as i64)
+end
+
+func main:
+    queries()
+    bodies()
+    parsing()
+    bulk_body()
+    plugins()
+    clients()
+    sigv4()
+end

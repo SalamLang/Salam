@@ -1,0 +1,93 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.http
+import net.router
+import net.internal.rawsock
+import str
+import time
+
+const PORT := 19473
+
+func probe(ctx: i64):
+    out := http.Header(ctx, "X-Last") + "|" + http.Header(ctx, "x-first") + "|" + http.Query(ctx, "k999") + "|" + http.Query(ctx, "missing") + "|" + http.Header(ctx, "Nope")
+    http.Text(ctx, out)
+end
+
+func send_raw(req: str): str:
+    mut sock := rawsock.Connect("127.0.0.1", PORT)
+    mut tries := 0
+    until not rawsock.Ok(sock) and tries < 300:
+        time.Sleep(10)
+        sock = rawsock.Connect("127.0.0.1", PORT)
+        tries = tries + 1
+    end
+    rawsock.Send(sock, req)
+    mut resp := ""
+    mut going := true
+    until going:
+        chunk := rawsock.Recv(sock, 65536)
+        if chunk.len() == 0:
+            going = false
+        else:
+            resp += chunk
+        end
+    end
+    rawsock.Close(sock)
+    ret resp
+end
+
+func body_of(resp: str): str:
+    at := resp.find("\r\n\r\n")
+    if at < 0: ret "" end
+    ret resp.substr(at + 4, resp.len() - at - 4)
+end
+
+func main:
+    r := router.NewRouter()
+    router.Get(r, "/p", probe)
+    s := http.NewServer(PORT)
+    http.Use(s, r)
+    if not http.RunBackground(s):
+        println "server failed to start"
+        ret
+    end
+
+    mut q := str.NewBuilder()
+    repeat 1000 in i:
+        if i > 0: str.BufAppend(q, "&") end
+        str.BufAppend(q, "k")
+        str.BufAppendInt(q, i as i64)
+        str.BufAppend(q, "=v")
+        str.BufAppendInt(q, i as i64)
+    end
+    mut h := str.NewBuilder()
+    str.BufAppend(h, "GET /p?")
+    str.BufAppend(h, str.BufStr(q))
+    str.BufAppend(h, " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nX-First: one\r\n")
+    repeat 3000 in i:
+        str.BufAppend(h, "a")
+        str.BufAppendInt(h, i as i64)
+        str.BufAppend(h, ":b\r\n")
+    end
+    str.BufAppend(h, "X-Last:   last value\r\n\r\n")
+    resp := send_raw(str.BufStr(h))
+    str.BufFree(q)
+    str.BufFree(h)
+    println resp.find("200 OK") >= 0
+    println body_of(resp)
+
+    small := send_raw("GET /p?k999=x HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nX-Last: z\r\n\r\n")
+    println body_of(small)
+end

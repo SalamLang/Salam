@@ -1,0 +1,455 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "time"
+@fa "زمان"
+package time
+
+import mem
+import conv
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _time64(tp: void*): i64
+        func _localtime64(tp: void*): void*
+        func SleepEx(ms: u32, alertable: int): u32
+        func GetSystemTimeAsFileTime(ft: void*)
+        func QueryPerformanceCounter(counter: void*): int
+        func QueryPerformanceFrequency(freq: void*): int
+    end
+else:
+    extern:
+        func usleep(usec: u32): int
+    end
+    if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
+        extern:
+            func time(tp: void*): i64
+            func localtime(tp: void*): void*
+            func clock_gettime(clock_id: int, ts: void*): int
+        end
+    else:
+        if SALAM_OS_LINUX:
+            extern:
+                func __time64(tp: void*): i64
+                func __localtime64(tp: void*): void*
+                func __clock_gettime64(clock_id: int, ts: void*): int
+            end
+        else:
+            extern:
+                func time(tp: void*): i64
+                func localtime(tp: void*): void*
+            end
+        end
+    end
+end
+
+@en "SecondsPerMinute"
+@fa "ثانیه در دقیقه"
+pub const SecondsPerMinute := 60
+@en "SecondsPerHour"
+@fa "ثانیه در ساعت"
+pub const SecondsPerHour := 3600
+@en "SecondsPerDay"
+@fa "ثانیه در روز"
+pub const SecondsPerDay := 86400
+
+@en "DateTime"
+@fa "تاریخ زمان"
+pub struct DateTime:
+    @en "epoch"
+    @fa "ثانیه مبدا"
+    pub epoch: i64 = 0
+end
+
+if SALAM_OS_WINDOWS:
+    func sleep_ms(ms: int):
+        if ms > 0:
+            SleepEx(ms as u32, 0)
+        end
+    end
+else:
+    func sleep_ms(ms: int):
+        if ms > 0:
+            usleep((ms * 1000) as u32)
+        end
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    func time_now(): i64: ret _time64(null) end
+    func _c_localtime(tp: void*): void*: ret _localtime64(tp) end
+else:
+    if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
+        func time_now(): i64: ret time(null) end
+        func _c_localtime(tp: void*): void*: ret localtime(tp) end
+    else:
+        if SALAM_OS_LINUX:
+            func time_now(): i64: ret __time64(null) end
+            func _c_localtime(tp: void*): void*: ret __localtime64(tp) end
+        else:
+            func time_now(): i64: ret time(null) end
+            func _c_localtime(tp: void*): void*: ret localtime(tp) end
+        end
+    end
+end
+
+func _localtime(epoch: i64): void*:
+    tp := mem.Allocate(8 as u64)
+    tp64 := tp as i64*
+    tp64[0] = epoch
+    tm := _c_localtime(tp)
+    mem.Free(tp)
+    ret tm
+end
+
+func _tm_field(epoch: i64, idx: int): int:
+    tm := _localtime(epoch)
+    if tm == null: ret _gmFieldPure(epoch, idx) end
+    tm32 := tm as int*
+    ret tm32[idx]
+end
+
+func time_year(epoch: i64): int: ret _tm_field(epoch, 5) + 1900 end
+
+func time_month(epoch: i64): int: ret _tm_field(epoch, 4) + 1 end
+
+func time_day(epoch: i64): int: ret _tm_field(epoch, 3) end
+
+func time_hour(epoch: i64): int: ret _tm_field(epoch, 2) end
+
+func time_minute(epoch: i64): int: ret _tm_field(epoch, 1) end
+
+func time_second(epoch: i64): int: ret _tm_field(epoch, 0) end
+
+func pad2(n: int): str:
+    s := conv.FormatInt(n as i64)
+    if s.len() < 2: ret "0".concat(s) end
+    ret s
+end
+
+func _put2(p: u8 *, at: int, n: int):
+    p[at] = (48 + (n / 10) % 10) as u8
+    p[at + 1] = (48 + n % 10) as u8
+end
+
+func _gm_field(epoch: i64, idx: int): int:
+    ret _gmFieldPure(epoch, idx)
+end
+
+func _weekday_name(w: int): str:
+    if w == 0: ret "Sun"
+    else w == 1: ret "Mon"
+    else w == 2: ret "Tue"
+    else w == 3: ret "Wed"
+    else w == 4: ret "Thu"
+    else w == 5: ret "Fri"
+    else:
+        ret "Sat"
+    end
+end
+
+func _month_name(m: int): str:
+    if m == 0: ret "Jan"
+    else m == 1: ret "Feb"
+    else m == 2: ret "Mar"
+    else m == 3: ret "Apr"
+    else m == 4: ret "May"
+    else m == 5: ret "Jun"
+    else m == 6: ret "Jul"
+    else m == 7: ret "Aug"
+    else m == 8: ret "Sep"
+    else m == 9: ret "Oct"
+    else m == 10: ret "Nov"
+    else:
+        ret "Dec"
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    func _now_ns(): i64:
+        buf := mem.Allocate(8 as u64)
+        GetSystemTimeAsFileTime(buf)
+        p := buf as u64*
+        ft := p[0] as i64
+        mem.Free(buf)
+        ret (ft - 116444736000000000) * 100
+    end
+else:
+    if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
+        func _now_ns(): i64:
+            buf := mem.AllocateZeroed(16 as u64)
+            mut out := 0 as i64
+            if clock_gettime(0, buf) == 0:
+                p := buf as i64*
+                out = p[0] * 1000000000 + p[1]
+            end
+            mem.Free(buf)
+            ret out
+        end
+    else:
+        if SALAM_OS_LINUX:
+            func _now_ns(): i64:
+                buf := mem.AllocateZeroed(16 as u64)
+                mut out := 0 as i64
+                if __clock_gettime64(0, buf) == 0:
+                    p := buf as i64*
+                    q := buf as i32*
+                    out = p[0] * 1000000000 + (q[2] as i64)
+                end
+                mem.Free(buf)
+                ret out
+            end
+        else:
+            func _now_ns(): i64:
+                ret time_now() * 1000000000
+            end
+        end
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    func _mono_ns(): i64:
+        buf := mem.AllocateZeroed(16 as u64)
+        mut out := 0 as i64
+        if QueryPerformanceCounter(buf) != 0:
+            fbuf := mem.AllocateZeroed(8 as u64)
+            if QueryPerformanceFrequency(fbuf) != 0:
+                cp := buf as i64*
+                fp := fbuf as i64*
+                counter := cp[0]
+                freq := fp[0]
+                if freq > 0:
+                    whole := counter / freq
+                    frac := counter % freq
+                    out = whole * 1000000000 + (frac * 1000000000) / freq
+                end
+            end
+            mem.Free(fbuf)
+        end
+        mem.Free(buf)
+        ret out
+    end
+else:
+    if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
+        func _mono_clock_id(): int:
+            if SALAM_OS_MAC:
+                ret 8
+            else SALAM_OS_FREEBSD:
+                ret 4
+            else SALAM_OS_OPENBSD or SALAM_OS_NETBSD:
+                ret 3
+            else:
+                ret 1
+            end
+        end
+
+        func _mono_ns(): i64:
+            buf := mem.AllocateZeroed(16 as u64)
+            mut out := 0 as i64
+            if clock_gettime(_mono_clock_id(), buf) == 0:
+                p := buf as i64*
+                out = p[0] * 1000000000 + p[1]
+            end
+            mem.Free(buf)
+            ret out
+        end
+    else:
+        if SALAM_OS_LINUX:
+            func _mono_ns(): i64:
+                buf := mem.AllocateZeroed(16 as u64)
+                mut out := 0 as i64
+                if __clock_gettime64(1, buf) == 0:
+                    p := buf as i64*
+                    q := buf as i32*
+                    out = p[0] * 1000000000 + (q[2] as i64)
+                end
+                mem.Free(buf)
+                ret out
+            end
+        else:
+            func _mono_ns(): i64:
+                ret time_now() * 1000000000
+            end
+        end
+    end
+end
+
+@en "Now"
+@fa "اکنون"
+pub func Now(): i64: ret time_now() end
+
+@en "NowDateTime"
+@fa "تاریخ زمان اکنون"
+pub func NowDateTime(): DateTime:
+    ret DateTime { epoch = time_now() }
+end
+
+@en "FromEpoch"
+@fa "از مبدا"
+pub func FromEpoch(seconds: i64): DateTime:
+    ret DateTime { epoch = seconds }
+end
+
+@en "Epoch"
+@fa "مبدا"
+pub inline pure func Epoch(dt: DateTime): i64:
+    ret dt.epoch
+end
+
+@en "Year"
+@fa "سال"
+pub func Year(epoch: i64): int: ret time_year(epoch) end
+
+@en "Month"
+@fa "ماه"
+pub func Month(epoch: i64): int: ret time_month(epoch) end
+
+@en "Day"
+@fa "روز"
+pub func Day(epoch: i64): int: ret time_day(epoch) end
+
+@en "Hour"
+@fa "ساعت"
+pub func Hour(epoch: i64): int: ret time_hour(epoch) end
+
+@en "Minute"
+@fa "دقیقه"
+pub func Minute(epoch: i64): int: ret time_minute(epoch) end
+
+@en "Second"
+@fa "ثانیه"
+pub func Second(epoch: i64): int: ret time_second(epoch) end
+
+@en "YearUTC"
+@fa "سال جهانی"
+pub func YearUTC(epoch: i64): int: ret _gm_field(epoch, 5) + 1900 end
+
+@en "MonthUTC"
+@fa "ماه جهانی"
+pub func MonthUTC(epoch: i64): int: ret _gm_field(epoch, 4) + 1 end
+
+@en "DayUTC"
+@fa "روز جهانی"
+pub func DayUTC(epoch: i64): int: ret _gm_field(epoch, 3) end
+
+@en "HourUTC"
+@fa "ساعت جهانی"
+pub func HourUTC(epoch: i64): int: ret _gm_field(epoch, 2) end
+
+@en "MinuteUTC"
+@fa "دقیقه جهانی"
+pub func MinuteUTC(epoch: i64): int: ret _gm_field(epoch, 1) end
+
+@en "SecondUTC"
+@fa "ثانیه جهانی"
+pub func SecondUTC(epoch: i64): int: ret _gm_field(epoch, 0) end
+
+@en "Weekday"
+@fa "روز هفته"
+pub func Weekday(epoch: i64): int: ret _tm_field(epoch, 6) end
+
+@en "YearDay"
+@fa "روز سال"
+pub func YearDay(epoch: i64): int: ret _tm_field(epoch, 7) + 1 end
+
+@en "FormatDate"
+@fa "قالب تاریخ"
+pub func FormatDate(epoch: i64): str:
+    y := time_year(epoch)
+    mo := time_month(epoch)
+    d := time_day(epoch)
+    ret conv.FormatInt(y as i64).concat("-").concat(pad2(mo)).concat("-").concat(pad2(d))
+end
+
+@en "FormatTime"
+@fa "قالب ساعت"
+pub func FormatTime(epoch: i64): str:
+    h := time_hour(epoch)
+    mi := time_minute(epoch)
+    s := time_second(epoch)
+    ret pad2(h).concat(":").concat(pad2(mi)).concat(":").concat(pad2(s))
+end
+
+@en "Format"
+@fa "قالب بندی"
+pub func Format(epoch: i64): str:
+    ret FormatDate(epoch).concat(" ").concat(FormatTime(epoch))
+end
+
+@en "FormatISO"
+@fa "قالب ایزو"
+pub func FormatISO(epoch: i64): str:
+    ret FormatDate(epoch).concat("T").concat(FormatTime(epoch))
+end
+
+@en "FormatHTTPDate"
+@fa "قالب تاریخ اچ‌تی‌تی‌پی"
+pub func FormatHTTPDate(epoch: i64): str:
+    out := mem.Allocate(30 as u64)
+    p := out as u8 *
+    wp := _weekday_name(_gm_field(epoch, 6)) as u8 *
+    mp := _month_name(_gm_field(epoch, 4)) as u8 *
+    p[0] = wp[0]
+    p[1] = wp[1]
+    p[2] = wp[2]
+    p[3] = 44 as u8
+    p[4] = 32 as u8
+    _put2(p, 5, _gm_field(epoch, 3))
+    p[7] = 32 as u8
+    p[8] = mp[0]
+    p[9] = mp[1]
+    p[10] = mp[2]
+    p[11] = 32 as u8
+    mut yr := _gm_field(epoch, 5) + 1900
+    if yr < 0: yr = 0 end
+    if yr > 9999: yr = 9999 end
+    _put2(p, 12, yr / 100)
+    _put2(p, 14, yr % 100)
+    p[16] = 32 as u8
+    _put2(p, 17, _gm_field(epoch, 2))
+    p[19] = 58 as u8
+    _put2(p, 20, _gm_field(epoch, 1))
+    p[22] = 58 as u8
+    _put2(p, 23, _gm_field(epoch, 0))
+    p[25] = 32 as u8
+    p[26] = 71 as u8
+    p[27] = 77 as u8
+    p[28] = 84 as u8
+    p[29] = 0 as u8
+    ret out as str
+end
+
+@en "Sleep"
+@fa "خواب"
+pub func Sleep(ms: int):
+    sleep_ms(ms)
+end
+
+@en "DiffSeconds"
+@fa "اختلاف ثانیه"
+pub inline pure func DiffSeconds(later: i64, earlier: i64): i64:
+    ret later - earlier
+end
+
+@en "Since"
+@fa "از زمان"
+pub func Since(t: i64): i64:
+    ret time_now() - t
+end
+
+@en "Until"
+@fa "تا زمان"
+pub func Until(t: i64): i64:
+    ret t - time_now()
+end

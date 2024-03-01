@@ -1,0 +1,989 @@
+package driver
+
+import os
+import str
+import time
+
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include co "../sal_core.salam"
+include pf "../prof_self.salam"
+include lv "../llvmgen/llvmgen.salam"
+include lb "../llvm_bridge.salam"
+include ng "../nativegen/nativegen.salam"
+include nl "../nativelink/nativelink.salam"
+
+func native_target_os(triple: str, err &: str): int:
+    if str.Len(triple) == 0:
+        mut host := ng.NG_OS_LINUX
+        if SALAM_OS_WINDOWS:
+            host = ng.NG_OS_WINDOWS
+        end
+        if SALAM_OS_MAC:
+            host = ng.NG_OS_MACOS
+        end
+        if not SALAM_OS_LINUX and not SALAM_OS_WINDOWS and not SALAM_OS_MAC:
+            host = 0 - 1
+        end
+        if host < 0:
+            err = i18.Tr("the native backend generates x86-64 code for Linux and Windows; use --backend=llvm or --backend=c on this host")
+        end
+        ret host
+    end
+    if native_target_arch(triple) < 0:
+        err = co.Format1(i18.Tr("the native backend does not generate code for '%s'; use --backend=llvm for this target"), co.ArgStr(triple))
+        ret 0 - 1
+    end
+    if str.Contains(triple, "windows") or str.Contains(triple, "mingw") or str.Contains(triple, "win32"):
+        ret ng.NG_OS_WINDOWS
+    end
+    if str.Contains(triple, "linux"):
+        ret ng.NG_OS_LINUX
+    end
+    if is_apple(triple):
+        ret ng.NG_OS_MACOS
+    end
+    err = co.Format1(i18.Tr("the native backend supports Linux and Windows targets, not '%s'"), co.ArgStr(triple))
+    ret 0 - 1
+end
+
+func native_target_arch(triple: str): int:
+    if str.Len(triple) == 0:
+        ret SALAM_ARCH_ARM64 ? ng.NG_ARCH_A64 : ng.NG_ARCH_X64
+    end
+    ta := tri_arch(triple)
+    if str.Equals(ta, "aarch64"):
+        ret ng.NG_ARCH_A64
+    end
+    if str.Equals(ta, "i686"):
+        ret ng.NG_ARCH_X86
+    end
+    if str.Equals(ta, "arm") and not is_apple(triple):
+        ret ng.NG_ARCH_ARM
+    end
+    if str.Equals(ta, "riscv64"):
+        ret ng.NG_ARCH_RV64
+    end
+    if str.Equals(ta, "x86_64"):
+        ret ng.NG_ARCH_X64
+    end
+    ret 0 - 1
+end
+
+func native_by_default(): bool:
+    ret SALAM_OS_WINDOWS and SALAM_ARCH_ARM64
+end
+
+func native_linker(triple: str): str:
+    mut cc := "cc"
+    if str.Contains(triple, "windows") or str.Contains(triple, "mingw"):
+        ta := tri_arch(triple)
+        cc = str.Equals(ta, "aarch64") ? "aarch64-w64-mingw32-clang" : (str.Equals(ta, "i686") ? "i686-w64-mingw32-gcc" : "x86_64-w64-mingw32-gcc")
+    end
+    if SALAM_OS_WINDOWS and not str.Equals(tri_arch(triple), "aarch64"):
+        cc = "gcc"
+    end
+    ret cc
+end
+
+func native_link_cmd(obj: str, exe: str, triple: str, o: lv.Options): str:
+    mut cmd := `"` + native_linker(triple) + `" "` + obj + `" -o "` + exe + `"`
+    each lp in o.lib_paths:
+        cmd += ` -L"` + lp + `"`
+    end
+    repeat o.link_libs.len() in i:
+        spec := lib_spec(o.link_libs.get(i))
+        if str.Len(spec) == 0:
+            continue
+        end
+        if str.StartsWith(spec, "-") or str.Contains(spec, "/") or str.Contains(spec, "\\") or str.Contains(spec, "."):
+            cmd += ` "` + spec + `"`
+            continue
+        end
+        mut kind := ""
+        if i < o.link_kinds.len():
+            kind = o.link_kinds.get(i)
+        end
+        if str.Equals(kind, "framework"):
+            continue
+        end
+        if str.Equals(kind, "static"):
+            cmd += " -Wl,-Bstatic -l" + spec + " -Wl,-Bdynamic"
+            continue
+        end
+        cmd += " -l" + spec
+    end
+    ret cmd + " -lm"
+end
+
+func tri_arch(triple: str): str:
+    if str.Len(triple) == 0:
+        ret "x86_64"
+    end
+    if str.StartsWith(triple, "x86_64") or str.StartsWith(triple, "amd64"):
+        ret "x86_64"
+    end
+    if str.StartsWith(triple, "i686") or str.StartsWith(triple, "i586") or str.StartsWith(triple, "i486") or str.StartsWith(triple, "i386"):
+        ret "i686"
+    end
+    if str.StartsWith(triple, "aarch64") or str.StartsWith(triple, "arm64"):
+        ret "aarch64"
+    end
+    if str.StartsWith(triple, "arm"):
+        ret "arm"
+    end
+    if str.StartsWith(triple, "riscv64"):
+        ret "riscv64"
+    end
+    ret ""
+end
+
+func musl_name(arch: str): str:
+    if str.Equals(arch, "arm"):
+        ret "arm-linux-musleabihf"
+    end
+    ret arch + "-linux-musl"
+end
+
+func is_apple(triple: str): bool:
+    ret str.Contains(triple, "apple") or str.Contains(triple, "darwin") or str.Contains(triple, "macos")
+end
+
+func lib_spec(spec: str): str:
+    if str.StartsWith(spec, "-l") and str.Len(spec) > 2:
+        ret str.Substr(spec, 2, str.Len(spec) - 2)
+    end
+    ret spec
+end
+
+func musl_libdir(root: str): str:
+    each sub in ["", "/lib", "/usr/lib"]:
+        if os.Exists(root + sub + "/crt1.o") and os.Exists(root + sub + "/libc.a"):
+            ret root + sub
+        end
+    end
+    ret ""
+end
+
+if SALAM_OS_LINUX:
+    func musl_host(): bool:
+        arch := glibc_host_arch()
+        if not os.Exists("/lib/ld-musl-" + arch + ".so.1"):
+            ret false
+        end
+        if str.Equals(arch, "aarch64"):
+            ret not os.Exists("/lib/ld-linux-aarch64.so.1")
+        end
+        ret not os.Exists("/lib64/ld-linux-x86-64.so.2")
+    end
+else:
+    func musl_host(): bool:
+        ret false
+    end
+end
+
+func musl_root(o: lv.Options, arch: str): str:
+    if str.Len(o.sysroot) > 0 and str.Len(musl_libdir(o.sysroot)) > 0:
+        ret o.sysroot
+    end
+    env := os.Env("SALAM_MUSL_SYSROOT")
+    if str.Len(env) > 0 and str.Len(musl_libdir(env)) > 0:
+        ret env
+    end
+    base := cache_root() + "/salam/sysroots"
+    names := os.ListDir(base)
+    mut found := ""
+    pre := musl_name(arch) + "_"
+    each nm in names:
+        if str.StartsWith(nm, pre) and str.Len(musl_libdir(base + "/" + nm)) > 0:
+            found = base + "/" + nm
+        end
+    end
+    names.free()
+    if str.Len(found) == 0 and musl_host() and str.Equals(arch, glibc_host_arch()) and str.Len(musl_libdir("/usr")) > 0:
+        found = "/usr"
+    end
+    ret found
+end
+
+func static_lib_path(spec0: str, kind: str, o: lv.Options): str:
+    spec := lib_spec(spec0)
+    if str.EndsWith(spec, ".a") or str.EndsWith(spec, ".o"):
+        ret spec
+    end
+    if str.StartsWith(spec, "-") or str.Equals(kind, "framework"):
+        ret ""
+    end
+    each lp in o.lib_paths:
+        cand := lp + "/lib" + spec + ".a"
+        if os.Exists(cand):
+            ret cand
+        end
+    end
+    ret ""
+end
+
+func musl_ld_name(arch: str): str:
+    switch arch:
+        "i686": ret "/lib/ld-musl-i386.so.1" end
+        "arm": ret "/lib/ld-musl-armhf.so.1" end
+    end
+    ret "/lib/ld-musl-" + arch + ".so.1"
+end
+
+func musl_shared_lib(spec0: str, kind: str, o: lv.Options, dir: str): str:
+    spec := lib_spec(spec0)
+    if str.Equals(kind, "static") or str.Equals(kind, "framework") or str.StartsWith(spec, "-"):
+        ret ""
+    end
+    if str.Contains(spec, ".so"):
+        ret spec
+    end
+    each lp in o.lib_paths:
+        if os.Exists(lp + "/lib" + spec + ".so"):
+            ret lp + "/lib" + spec + ".so"
+        end
+    end
+    if os.Exists(dir + "/lib" + spec + ".so"):
+        ret dir + "/lib" + spec + ".so"
+    end
+    ret ""
+end
+
+func musl_can_dyn(dir: str): bool:
+    ret os.Exists(dir + "/libc.so") and os.Exists(dir + "/Scrt1.o")
+end
+
+func musl_needs_dyn(o: lv.Options, dir: str): bool:
+    repeat o.link_libs.len() in i:
+        spec := lib_spec(o.link_libs.get(i))
+        if str.Len(spec) == 0 or str.Equals(spec, "m") or str.Equals(spec, "c") or str.Equals(spec, "pthread"):
+            continue
+        end
+        mut kind := ""
+        if i < o.link_kinds.len():
+            kind = o.link_kinds.get(i)
+        end
+        if str.Len(static_lib_path(spec, kind, o)) == 0 and str.Len(musl_shared_lib(spec, kind, o, dir)) > 0:
+            ret true
+        end
+    end
+    ret false
+end
+
+func builtin_link_ok(triple: str, o: lv.Options, why &: str): bool:
+    arch := tri_arch(triple)
+    if not str.Contains(triple, "linux-musl") or str.Len(arch) == 0:
+        why = co.Format1(i18.Tr("the built-in linker does not handle target '%s'"), co.ArgStr(triple))
+        ret false
+    end
+    if str.Len(musl_libdir(musl_root(o, arch))) == 0:
+        why = i18.Tr("the built-in linker needs the musl sysroot (crt1.o, libc.a), and none was found")
+        ret false
+    end
+    repeat o.link_libs.len() in i:
+        spec := lib_spec(o.link_libs.get(i))
+        if str.Len(spec) == 0 or str.Equals(spec, "m") or str.Equals(spec, "c") or str.Equals(spec, "pthread"):
+            continue
+        end
+        mut kind := ""
+        if i < o.link_kinds.len():
+            kind = o.link_kinds.get(i)
+        end
+        if str.Len(static_lib_path(spec, kind, o)) == 0:
+            mdir := musl_libdir(musl_root(o, arch))
+            if not musl_can_dyn(mdir) or str.Len(musl_shared_lib(spec, kind, o, mdir)) == 0:
+                why = co.Format1(i18.Tr("the built-in linker links statically, and no static archive was found for library '%s'"), co.ArgStr(spec))
+                ret false
+            end
+        end
+    end
+    ret true
+end
+
+func native_link_builtin(lgr: lg.Logger, obj: str, exe: str, o: lv.Options, triple: str): int:
+    arch := tri_arch(triple)
+    dir := musl_libdir(musl_root(o, arch))
+    dyn := musl_can_dyn(dir) and musl_needs_dyn(o, dir)
+    mut l := nl.New()
+    if dyn:
+        nl.SetDynamic(l, musl_ld_name(arch))
+        nl.AddInput(l, dir + "/Scrt1.o")
+    else:
+        nl.AddInput(l, dir + "/crt1.o")
+    end
+    nl.AddInput(l, dir + "/crti.o")
+    nl.AddInput(l, obj)
+    repeat o.link_libs.len() in i:
+        spec := lib_spec(o.link_libs.get(i))
+        if str.Len(spec) == 0 or str.Equals(spec, "m") or str.Equals(spec, "c") or str.Equals(spec, "pthread"):
+            continue
+        end
+        mut kind := ""
+        if i < o.link_kinds.len():
+            kind = o.link_kinds.get(i)
+        end
+        mut lib := static_lib_path(spec, kind, o)
+        if dyn and str.Len(lib) == 0:
+            lib = musl_shared_lib(spec, kind, o, dir)
+        end
+        nl.AddInput(l, lib)
+    end
+    nl.AddInput(l, dir + (dyn ? "/libc.so" : "/libc.a"))
+    rt := dir + "/libclang_rt.builtins-" + arch + ".a"
+    if os.Exists(rt):
+        nl.AddInput(l, rt)
+    else os.Exists(dir + "/libgcc.a"):
+        nl.AddInput(l, dir + "/libgcc.a")
+    end
+    if os.Exists(dir + "/libgcc_eh.a"):
+        nl.AddInput(l, dir + "/libgcc_eh.a")
+    end
+    nl.AddInput(l, dir + "/crtn.o")
+    if not nl.Link(l, exe):
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, nl.Error(l))
+        ret 1
+    end
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "built-in link: " + nl.Stats(l))
+    ret 0
+end
+
+func mac_sdk(): str:
+    env := os.Env("SDKROOT")
+    if str.Len(env) > 0 and os.Exists(env):
+        ret env
+    end
+    each c in ["/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk", "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"]:
+        if os.Exists(c):
+            ret c
+        end
+    end
+    ret ""
+end
+
+func mac_lib(o: lv.Options, spec0: str, kind: str): str:
+    spec := lib_spec(spec0)
+    if str.EndsWith(spec, ".tbd") or str.EndsWith(spec, ".dylib") or str.EndsWith(spec, ".a"):
+        ret spec
+    end
+    sdk := mac_sdk()
+    if str.Equals(kind, "framework"):
+        if str.Len(sdk) > 0:
+            fw := sdk + "/System/Library/Frameworks/" + spec + ".framework/" + spec + ".tbd"
+            if os.Exists(fw):
+                ret fw
+            end
+        end
+        ret ""
+    end
+    mut dirs := Vector {} as Vector<str>
+    each lp in o.lib_paths:
+        dirs.push(lp)
+    end
+    if str.Len(sdk) > 0:
+        dirs.push(sdk + "/usr/lib")
+    end
+    each d in dirs:
+        each ext in [".tbd", ".dylib", ".a"]:
+            cand := d + "/lib" + spec + ext
+            if os.Exists(cand):
+                ret cand
+            end
+        end
+    end
+    ret ""
+end
+
+func mac_system_lib(spec: str): bool:
+    ret str.Len(spec) == 0 or str.Equals(spec, "m") or str.Equals(spec, "c") or str.Equals(spec, "pthread") or str.Equals(spec, "System") or str.Equals(spec, "dl")
+end
+
+func macho_link_ok(triple: str, o: lv.Options, why &: str): bool:
+    arch := tri_arch(triple)
+    if not is_apple(triple) or not (str.Equals(arch, "x86_64") or str.Equals(arch, "aarch64")):
+        why = co.Format1(i18.Tr("the built-in linker does not handle target '%s'"), co.ArgStr(triple))
+        ret false
+    end
+    repeat o.link_libs.len() in i:
+        spec := lib_spec(o.link_libs.get(i))
+        if mac_system_lib(spec):
+            continue
+        end
+        mut kind := ""
+        if i < o.link_kinds.len():
+            kind = o.link_kinds.get(i)
+        end
+        if str.Len(mac_lib(o, spec, kind)) == 0:
+            why = co.Format1(i18.Tr("the built-in linker could not find library '%s'"), co.ArgStr(spec))
+            ret false
+        end
+    end
+    ret true
+end
+
+func native_link_macho(lgr: lg.Logger, obj: str, exe: str, o: lv.Options): int:
+    mut l := nl.New()
+    nl.AddInput(l, obj)
+    repeat o.link_libs.len() in i:
+        spec := lib_spec(o.link_libs.get(i))
+        if mac_system_lib(spec):
+            continue
+        end
+        mut kind := ""
+        if i < o.link_kinds.len():
+            kind = o.link_kinds.get(i)
+        end
+        nl.AddInput(l, mac_lib(o, spec, kind))
+    end
+    if not nl.Link(l, exe):
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, nl.Error(l))
+        ret 1
+    end
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "built-in link: " + nl.Stats(l))
+    ret 0
+end
+
+func glibc_host_arch(): str:
+    mut a := "x86_64"
+    if SALAM_ARCH_ARM64:
+        a = "aarch64"
+    else SALAM_ARCH_X86:
+        a = "i686"
+    else SALAM_ARCH_ARM:
+        a = "arm"
+    else:
+        a = "x86_64"
+    end
+    ret a
+end
+
+func glibc_arch(triple: str): str:
+    if str.Len(triple) == 0:
+        ret glibc_host_arch()
+    end
+    ret tri_arch(triple)
+end
+
+func glibc_sysroot(o: lv.Options): str:
+    if str.Len(o.sysroot) > 0:
+        ret o.sysroot
+    end
+    ret os.Env("SALAM_GLIBC_SYSROOT")
+end
+
+func glibc_tuples(arch: str): Vector<str>:
+    mut tuples := Vector {} as Vector<str>
+    switch arch:
+        "i686":
+            tuples.push("i386-linux-gnu")
+            tuples.push("i686-linux-gnu")
+            break
+        end
+        "arm":
+            tuples.push("arm-linux-gnueabihf")
+            break
+        end
+    end
+    if tuples.len() == 0:
+        tuples.push(arch + "-linux-gnu")
+    end
+    ret tuples
+end
+
+func glibc_libgcc(o: lv.Options, arch: str): str:
+    sr := glibc_sysroot(o)
+    mut tuples := glibc_tuples(arch)
+    mut sub := ""
+    if str.Equals(arch, "i686") and str.Equals(glibc_host_arch(), "x86_64"):
+        tuples.push("x86_64-linux-gnu")
+        sub = "/32"
+    end
+    mut best := ""
+    mut bestv := ""
+    each t in tuples:
+        each g in ["/usr/lib/gcc/", "/usr/lib/gcc-cross/"]:
+            base := sr + g + t
+            vers := os.ListDir(base)
+            each v in vers:
+                mut cand := base + "/" + v + "/libgcc.a"
+                if str.Equals(t, "x86_64-linux-gnu"):
+                    cand = base + "/" + v + sub + "/libgcc.a"
+                end
+                if os.Exists(cand) and str.Compare(v, bestv) > 0:
+                    best = cand
+                    bestv = v
+                end
+            end
+            vers.free()
+        end
+    end
+    tuples.free()
+    ret best
+end
+
+func glibc_dirs(o: lv.Options, arch: str): Vector<str>:
+    mut d := Vector {} as Vector<str>
+    each lp in o.lib_paths:
+        d.push(lp)
+    end
+    sr := glibc_sysroot(o)
+    tuples := glibc_tuples(arch)
+    each t in tuples:
+        each s in ["/usr/lib/" + t, "/lib/" + t, "/usr/" + t + "/lib"]:
+            d.push(sr + s)
+        end
+    end
+    tuples.free()
+    if str.Len(sr) > 0 or str.Equals(arch, glibc_host_arch()):
+        each s2 in ["/usr/lib64", "/lib64", "/usr/local/lib", "/usr/lib", "/lib"]:
+            if str.Len(sr) == 0 or not str.Equals(s2, "/usr/local/lib"):
+                d.push(sr + s2)
+            end
+        end
+    end
+    ret d
+end
+
+func find_in(dirs: Vector<str>, name: str): str:
+    each dd in dirs:
+        if os.Exists(dd + "/" + name):
+            ret dd + "/" + name
+        end
+    end
+    ret ""
+end
+
+func glibc_lib(dirs: Vector<str>, spec0: str, kind: str): str:
+    spec := lib_spec(spec0)
+    if str.EndsWith(spec, ".a") or str.EndsWith(spec, ".o") or str.Contains(spec, ".so"):
+        ret spec
+    end
+    if str.StartsWith(spec, "-") or str.Equals(kind, "framework"):
+        ret ""
+    end
+    if not str.Equals(kind, "static"):
+        so := find_in(dirs, "lib" + spec + ".so")
+        if str.Len(so) > 0:
+            ret so
+        end
+    end
+    ret find_in(dirs, "lib" + spec + ".a")
+end
+
+func glibc_link_ok(triple: str, o: lv.Options, why &: str): bool:
+    arch := glibc_arch(triple)
+    if str.Len(triple) == 0 and musl_host():
+        why = co.Format1(i18.Tr("the built-in linker does not handle target '%s'"), co.ArgStr(arch + "-linux-musl"))
+        ret false
+    end
+    if (str.Len(triple) > 0 and not str.Contains(triple, "linux-gnu")) or str.Len(arch) == 0:
+        why = co.Format1(i18.Tr("the built-in linker does not handle target '%s'"), co.ArgStr(triple))
+        ret false
+    end
+    mut host_ok := true
+    if SALAM_OS_WINDOWS or SALAM_OS_MAC:
+        host_ok = false
+    end
+    if not host_ok:
+        why = co.Format1(i18.Tr("the built-in linker does not handle target '%s'"), co.ArgStr(triple))
+        ret false
+    end
+    dirs := glibc_dirs(o, arch)
+    if (str.Equals(arch, "i686") or str.Equals(arch, "arm")) and str.Len(glibc_libgcc(o, arch)) == 0:
+        why = co.Format1(i18.Tr("the built-in linker could not find the C library file '%s'"), co.ArgStr("libgcc.a"))
+        ret false
+    end
+    each need in ["Scrt1.o", "crti.o", "crtn.o", "libc.so"]:
+        if str.Len(find_in(dirs, need)) == 0:
+            why = co.Format1(i18.Tr("the built-in linker could not find the C library file '%s'"), co.ArgStr(need))
+            ret false
+        end
+    end
+    repeat o.link_libs.len() in i:
+        spec := lib_spec(o.link_libs.get(i))
+        if str.Len(spec) == 0 or str.Equals(spec, "c"):
+            continue
+        end
+        mut kind := ""
+        if i < o.link_kinds.len():
+            kind = o.link_kinds.get(i)
+        end
+        if str.Len(glibc_lib(dirs, spec, kind)) == 0:
+            why = co.Format1(i18.Tr("the built-in linker could not find library '%s'"), co.ArgStr(spec))
+            ret false
+        end
+    end
+    ret true
+end
+
+func native_link_glibc(lgr: lg.Logger, obj: str, exe: str, o: lv.Options, triple: str): int:
+    dirs := glibc_dirs(o, glibc_arch(triple))
+    mut l := nl.New()
+    nl.SetDynamic(l, "")
+    nl.SetSysroot(l, glibc_sysroot(o))
+    nl.AddInput(l, find_in(dirs, "Scrt1.o"))
+    nl.AddInput(l, find_in(dirs, "crti.o"))
+    nl.AddInput(l, obj)
+    repeat o.link_libs.len() in i:
+        spec := lib_spec(o.link_libs.get(i))
+        if str.Len(spec) == 0 or str.Equals(spec, "c") or str.Equals(spec, "m") or str.Equals(spec, "pthread"):
+            continue
+        end
+        mut kind := ""
+        if i < o.link_kinds.len():
+            kind = o.link_kinds.get(i)
+        end
+        nl.AddInput(l, glibc_lib(dirs, spec, kind))
+    end
+    nl.AddInput(l, find_in(dirs, "libm.so"))
+    nl.AddInput(l, find_in(dirs, "libc.so"))
+    gcc := glibc_libgcc(o, glibc_arch(triple))
+    if str.Len(gcc) > 0:
+        nl.AddInput(l, gcc)
+    end
+    nl.AddInput(l, find_in(dirs, "crtn.o"))
+    if not nl.Link(l, exe):
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, nl.Error(l))
+        ret 1
+    end
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "built-in link: " + nl.Stats(l))
+    ret 0
+end
+
+func llvm_mingw_root(arch: str): str:
+    tri := arch + "-w64-mingw32"
+    env := os.Env("SALAM_LLVM_MINGW")
+    if str.Len(env) > 0 and os.Exists(env + "/" + tri + "/lib/crt2.o"):
+        ret env
+    end
+    mut sep := ":"
+    if SALAM_OS_WINDOWS:
+        sep = ";"
+    end
+    mut root := ""
+    dirs := str.Split(os.Env("PATH"), sep)
+    repeat dirs.len() in i:
+        d := dirs.get(i)
+        if str.Len(root) == 0 and str.Len(d) > 0 and (os.Exists(d + "/" + tri + "-clang") or os.Exists(d + "/" + tri + "-clang.exe")):
+            up := d + "/.."
+            if os.Exists(up + "/" + tri + "/lib/crt2.o"):
+                root = up
+            end
+        end
+    end
+    dirs.free()
+    ret root
+end
+
+func clang_rt_dir(root: str, arch: str): str:
+    base := root + "/lib/clang"
+    mut best := ""
+    vers := os.ListDir(base)
+    each v in vers:
+        if os.Exists(base + "/" + v + "/lib/windows/libclang_rt.builtins-" + arch + ".a") and str.Compare(v, best) > 0:
+            best = v
+        end
+    end
+    vers.free()
+    if str.Len(best) == 0:
+        ret ""
+    end
+    ret base + "/" + best + "/lib/windows"
+end
+
+func mingw_dirs(o: lv.Options, arch: str): Vector<str>:
+    mut d := Vector {} as Vector<str>
+    each lp in o.lib_paths:
+        d.push(lp)
+    end
+    if str.Len(o.sysroot) > 0:
+        d.push(o.sysroot + "/lib")
+        d.push(o.sysroot + "/" + arch + "-w64-mingw32/lib")
+    end
+    base := cache_root() + "/salam/sysroots"
+    names := os.ListDir(base)
+    each nm in names:
+        if str.StartsWith(nm, arch + "-w64-mingw32_") and os.Exists(base + "/" + nm + "/lib/crt2.o"):
+            d.push(base + "/" + nm + "/lib")
+        end
+    end
+    names.free()
+    d.push("/usr/" + arch + "-w64-mingw32/lib")
+    gcc := "/usr/lib/gcc/" + arch + "-w64-mingw32"
+    vers := os.ListDir(gcc)
+    mut best := ""
+    each v in vers:
+        if os.Exists(gcc + "/" + v + "/crtbegin.o") and str.Compare(v, best) > 0:
+            best = v
+        end
+    end
+    vers.free()
+    if str.Len(best) > 0:
+        d.push(gcc + "/" + best)
+    end
+    lm := llvm_mingw_root(arch)
+    if str.Len(lm) > 0:
+        d.push(lm + "/" + arch + "-w64-mingw32/lib")
+        rt := clang_rt_dir(lm, arch)
+        if str.Len(rt) > 0:
+            d.push(rt)
+        end
+    end
+    ret d
+end
+
+func mingw_rtlib(dirs: Vector<str>, arch: str): str:
+    g := find_in(dirs, "libgcc.a")
+    if str.Len(g) > 0:
+        ret g
+    end
+    ret find_in(dirs, "libclang_rt.builtins-" + arch + ".a")
+end
+
+func mingw_link_ok(triple: str, o: lv.Options, why &: str): bool:
+    marc := tri_arch(triple)
+    if not (str.Equals(marc, "x86_64") or str.Equals(marc, "i686") or str.Equals(marc, "aarch64")) or not (str.Contains(triple, "windows") or str.Contains(triple, "mingw")):
+        why = co.Format1(i18.Tr("the built-in linker does not handle target '%s'"), co.ArgStr(triple))
+        ret false
+    end
+    dirs := mingw_dirs(o, marc)
+    each need in ["crt2.o", "crtbegin.o", "crtend.o", "libmingw32.a", "libmingwex.a", "libmsvcrt.a", "libkernel32.a"]:
+        if str.Len(find_in(dirs, need)) == 0:
+            why = co.Format1(i18.Tr("the built-in linker could not find the C library file '%s'"), co.ArgStr(need))
+            ret false
+        end
+    end
+    if str.Len(mingw_rtlib(dirs, marc)) == 0:
+        why = co.Format1(i18.Tr("the built-in linker could not find the C library file '%s'"), co.ArgStr("libgcc.a"))
+        ret false
+    end
+    repeat o.link_libs.len() in i:
+        spec := lib_spec(o.link_libs.get(i))
+        if str.Len(spec) == 0 or str.Equals(spec, "m") or str.Equals(spec, "c") or str.Equals(spec, "pthread"):
+            continue
+        end
+        if str.Len(mingw_lib(dirs, spec)) == 0:
+            why = co.Format1(i18.Tr("the built-in linker could not find library '%s'"), co.ArgStr(spec))
+            ret false
+        end
+    end
+    ret true
+end
+
+func mingw_lib(dirs: Vector<str>, spec0: str): str:
+    spec := lib_spec(spec0)
+    if str.EndsWith(spec, ".a") or str.EndsWith(spec, ".o") or str.EndsWith(spec, ".obj") or str.EndsWith(spec, ".lib"):
+        ret spec
+    end
+    if str.StartsWith(spec, "-"):
+        ret ""
+    end
+    mut r := find_in(dirs, "lib" + spec + ".a")
+    if str.Len(r) == 0:
+        r = find_in(dirs, "lib" + spec + ".dll.a")
+    end
+    ret r
+end
+
+func native_link_mingw(lgr: lg.Logger, obj: str, exe: str, o: lv.Options, triple: str): int:
+    arch := tri_arch(triple)
+    dirs := mingw_dirs(o, arch)
+    rtlib := mingw_rtlib(dirs, arch)
+    mut l := nl.New()
+    nl.SetWindows(l)
+    nl.AddInput(l, find_in(dirs, "crt2.o"))
+    nl.AddInput(l, find_in(dirs, "crtbegin.o"))
+    nl.AddInput(l, obj)
+    repeat o.link_libs.len() in i:
+        spec := lib_spec(o.link_libs.get(i))
+        if str.Len(spec) == 0 or str.Equals(spec, "m") or str.Equals(spec, "c") or str.Equals(spec, "pthread"):
+            continue
+        end
+        nl.AddInput(l, mingw_lib(dirs, spec))
+    end
+    nl.AddInput(l, find_in(dirs, "libmingw32.a"))
+    nl.AddInput(l, rtlib)
+    each lib in ["libgcc_eh.a", "libmoldname.a", "libmingwex.a", "libmsvcrt.a", "libkernel32.a", "libadvapi32.a", "libshell32.a", "libuser32.a"]:
+        path := find_in(dirs, lib)
+        if str.Len(path) > 0:
+            nl.AddInput(l, path)
+        end
+    end
+    nl.AddInput(l, find_in(dirs, "crtend.o"))
+    if not nl.Link(l, exe):
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, nl.Error(l))
+        ret 1
+    end
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "built-in link: " + nl.Stats(l))
+    ret 0
+end
+
+func linker_mode(opt &: Dr): str:
+    mut mode := opt.linker
+    if str.Equals(mode, "auto") and str.Len(os.Env("SALAM_LINKER")) > 0:
+        mode = os.Env("SALAM_LINKER")
+    end
+    ret mode
+end
+
+func builtin_pick(triple: str, o: lv.Options, why &: str): int:
+    if is_apple(triple):
+        ret macho_link_ok(triple, o, why) ? 4 : 0
+    end
+    if str.Contains(triple, "linux-musl"):
+        ret builtin_link_ok(triple, o, why) ? 1 : 0
+    end
+    if str.Contains(triple, "windows") or str.Contains(triple, "mingw"):
+        ret mingw_link_ok(triple, o, why) ? 2 : 0
+    end
+    ret glibc_link_ok(triple, o, why) ? 3 : 0
+end
+
+func builtin_link_mode(lgr: lg.Logger, obj: str, exe: str, triple: str, o: lv.Options, mode: str): int:
+    if not str.Equals(mode, "auto") and not str.Equals(mode, "builtin") and not str.Equals(mode, "system"):
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown --linker value '%s'; use auto, builtin or system"), co.ArgStr(mode)))
+        ret 2
+    end
+    if str.Equals(mode, "system"):
+        ret 0 - 1
+    end
+    mut why := ""
+    mut tgt := triple
+    if str.Len(tgt) == 0 and musl_host():
+        tgt = glibc_host_arch() + "-linux-musl"
+    end
+    kind := builtin_pick(tgt, o, why)
+    if kind == 0:
+        if str.Equals(mode, "builtin"):
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, why)
+            ret 1
+        end
+        ret 0 - 1
+    end
+    if kind == 1:
+        ret native_link_builtin(lgr, obj, exe, o, tgt)
+    end
+    if kind == 2:
+        ret native_link_mingw(lgr, obj, exe, o, triple)
+    end
+    if kind == 4:
+        ret native_link_macho(lgr, obj, exe, o)
+    end
+    ret native_link_glibc(lgr, obj, exe, o, triple)
+end
+
+func native_link(lgr: lg.Logger, obj: str, exe: str, triple: str, o: lv.Options): int:
+    mut lerr := ""
+    lrc := lb.LinkObject(obj, exe, triple, o.sysroot, o.link_libs, o.link_kinds, o.lib_paths, lerr)
+    if lrc == 0:
+        ret 0
+    end
+    if lrc > 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, lerr)
+        ret 1
+    end
+    cmd := native_link_cmd(obj, exe, triple, o)
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "native link: " + cmd)
+    if os.Run(cmd) != 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("linking failed: %s"), co.ArgStr(cmd)))
+        ret 1
+    end
+    ret 0
+end
+
+func mac_dsym(lgr: lg.Logger, exe: str): bool:
+    each tool in ["dsymutil", "llvm-dsymutil"]:
+        cmd := tool + ` "` + exe + `"`
+        if os.Run(cmd + " 2>/dev/null") == 0:
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "native link: " + cmd)
+            ret true
+        end
+    end
+    ret false
+end
+
+func native_finish(lgr: lg.Logger, opt &: Dr, o: lv.Options, ll_src: str, ok: bool, why: str): int:
+    if not ok:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, why)
+        ret 1
+    end
+    mut triple := o.target_triple
+    if str.Len(triple) == 0:
+        triple = native_link_triple()
+    end
+    mut terr := ""
+    tos := native_target_os(triple, terr)
+    if tos < 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, terr)
+        ret 1
+    end
+    _pt := pf.Begin(pf.TP_CODEGEN, opt.input)
+    mut g := ng.New(tos)
+    ng.SetArch(g, native_target_arch(triple))
+    g.release = o.release
+    g.emit_asm = opt.native_asm
+    g.fast_math = opt.fast_math
+    built := ng.Run(g, ll_src)
+    pf.End(pf.TP_CODEGEN, _pt)
+    if not built:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, ng.Error(g))
+        ret 1
+    end
+    stem := output_stem_of(opt.input)
+    if opt.native_asm:
+        apath := stem + ".s"
+        if not ng.WriteAsm(g, apath):
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot write '%s'"), co.ArgStr(apath)))
+            ret 2
+        end
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("wrote %s"), co.ArgStr(apath)))
+    end
+    win := tos == ng.NG_OS_WINDOWS
+    if o.output_mode == lv.LV_OUT_OBJ:
+        mut opath := opt.output
+        if str.Len(opath) == 0:
+            opath = stem + (win ? ".obj" : ".o")
+        end
+        if not ng.WriteObject(g, opath):
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, ng.Error(g))
+            ret 2
+        end
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("wrote %s"), co.ArgStr(opath)))
+        ret 0
+    end
+    g_ll_tmp_seq += 1
+    obj := os.TempDir() + "/salam-native-" + driver_pid() + "-" + time.NowMicros() + "-" + g_ll_tmp_seq + (win ? ".obj" : ".o")
+    if not ng.WriteObject(g, obj):
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, ng.Error(g))
+        ret 2
+    end
+    mut exe := opt.output
+    if str.Len(exe) == 0:
+        exe = stem
+    end
+    exe = exe_name_for(exe, triple)
+    _pl := pf.Begin(pf.TP_LINK, exe)
+    mut rc := builtin_link_mode(lgr, obj, exe, triple, o, linker_mode(opt))
+    mut keep := opt.keep_temp
+    if rc == 0 - 1:
+        rc = native_link(lgr, obj, exe, triple, o)
+        if rc == 0 and o.debug_info and is_apple(triple) and not mac_dsym(lgr, exe):
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_WARN, "no dsymutil found; the debug info stays in " + obj)
+            keep = true
+        end
+    end
+    pf.End(pf.TP_LINK, _pl)
+    if keep:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "kept native object: " + obj)
+    else:
+        _rm := os.Remove(obj)
+    end
+    if rc != 0:
+        ret rc
+    end
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("wrote %s"), co.ArgStr(exe)))
+    if str.Len(opt.exe_path) == 0:
+        opt.exe_path = exe
+    end
+    ret 0
+end

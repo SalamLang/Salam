@@ -1,0 +1,239 @@
+pkg.en = db/postgres
+pkg.name = db/postgres
+pkg.group = Database
+pkg.summary = A PostgreSQL client written in Salam: connection strings and URIs, TLS, queries, transactions, pools and migrations.
+pkg.title = The db/postgres package in Salam | PostgreSQL
+pkg.description = The db/postgres package in Salam: a PostgreSQL client with no outside library, with connection strings, URIs and TLS, queries into structs, safe quoting, NULLs, transactions, errors, pools, migrations and JSON results, in an eleven step tutorial.
+pkg.import = db.postgres
+pkg.intro <<
+<p>This package talks to PostgreSQL directly: it implements the Postgres wire protocol in Salam itself, with password, MD5 and SCRAM-SHA-256 logins and optional TLS, so it needs no <code>libpq</code> or any other outside library. Every row of a result is fetched from the server at once, so <code>RowCount</code> is known before you read any of them. A <code>Database</code> also fits the shared <code>Connection</code> interface of <a href="/std/db/">db</a>, which gives you engine neutral helpers, connection pools and migrations. This page starts with a tutorial; the full reference of every function and type comes after it.</p>
+
+<h2 id="tutorial">Tutorial: a bookshop in eleven steps</h2>
+<p>The steps below build the database of a small bookshop: books, stock and orders. Each step is a complete program, and the output under it is what it printed against a real PostgreSQL 17. Run them in order, because each step uses the data the earlier ones left behind.</p>
+<p>First start a server. With Docker that is one command; it creates the <code>bookshop</code> database and the <code>postgres</code> user with the password <code>secret</code>:</p>
+<pre class="code" dir="ltr"><code>docker run -d --name bookshop-db -p 5432:5432 -e POSTGRES_PASSWORD=secret -e POSTGRES_DB=bookshop postgres:17-alpine</code></pre>
+<p>Without Docker, install PostgreSQL from your system's packages, then run <code>createdb bookshop</code> and give the <code>postgres</code> user that password. The programs connect to <code>127.0.0.1</code> on port 5432. A real application logs in with its own user rather than <code>postgres</code>, as step 2 shows.</p>
+
+<h2 id="connect">1. Connect</h2>
+<p><code>Open</code> takes a connection string of <code>key=value</code> pairs, the same format <code>psql</code> and libpq use. It always returns a <code>Database</code>, even when the login failed, so check <code>Ok</code> before anything else; <code>Error</code> then holds the server's message. <code>Ping</code> sends a tiny query to make sure the connection still works, which is a good health check for a long running service.</p>
+{{example.db-postgres-connect}}
+<p>The server's own messages keep their PostgreSQL wording and start with the severity: <code>FATAL</code> for a refused login, <code>ERROR</code> for a failed statement. An error message ends with a newline, which is why the examples print it with <code>print</code> rather than <code>println</code>. With nothing listening on the port, <code>Open</code> fails at once. <code>connect_timeout</code>, in seconds, limits how long the login waits for each answer from the server, 30 seconds when you leave it out.</p>
+
+<h2 id="options">2. Connection strings, URIs and TLS</h2>
+<p>The same settings can be written three ways: as <code>key=value</code> pairs, as a <code>postgresql://user:password@host:port/dbname?key=value</code> URI, or as the five arguments of <code>OpenFull</code>. This step also creates a login role for the shop, with a password that has a space and an <code>@</code> in it, to show how such a value is written in each form.</p>
+{{example.db-postgres-options}}
+<p>In the <code>key=value</code> form, a value with spaces goes in single quotes. In a URI, characters with a meaning of their own are percent encoded: <code>%40</code> for <code>@</code> and <code>%20</code> for a space. <code>OpenFull</code> joins its arguments without quoting them, so use it only for values without spaces.</p>
+<p>The keys this package reads are <code>host</code> (or <code>hostaddr</code>), <code>port</code>, <code>user</code>, <code>password</code>, <code>dbname</code>, <code>sslmode</code>, <code>sslrootcert</code> and <code>connect_timeout</code>; other keys are ignored. <code>sslmode</code> works as in libpq: <code>prefer</code> (the default) uses TLS when the server offers it, <code>require</code> refuses to go on without it, <code>verify-ca</code> and <code>verify-full</code> also check the server's certificate (against the CA file in <code>sslrootcert</code> when you give one), and <code>disable</code> and <code>allow</code> never ask for TLS. Without one of the <code>verify</code> modes the certificate is not checked. The test server here has TLS turned off, so <code>require</code> fails. Unix domain sockets are not supported; connect over TCP, even on the same machine.</p>
+
+<h2 id="schema">3. Create the tables</h2>
+<p><code>Exec</code> runs SQL that returns no rows and gives back 0 on success and -1 on failure. It accepts several statements separated by semicolons, which suits a schema. Use the PostgreSQL types that fit the data: <code>bigint GENERATED ALWAYS AS IDENTITY</code> for ids, <code>numeric</code> for money, <code>text[]</code> for a list of tags and <code>jsonb</code> for free form details.</p>
+{{example.db-postgres-schema}}
+<p>Constraints such as <code>UNIQUE</code>, <code>CHECK (stock &gt;= 0)</code> and <code>REFERENCES</code> let the database refuse bad data even when a bug in a program tries to write it. Step 9 shows what such a refusal looks like.</p>
+
+<h2 id="insert">4. Insert rows and get the new ids</h2>
+<p>An <code>INSERT ... RETURNING id</code> is a query that returns the generated id, so run it with <code>Query</code> and read the one row. Text that comes from outside the program goes through <code>Quote</code>, which returns it as a quoted, escaped SQL literal: the apostrophe in the second title is doubled and cannot end the string early. <code>ExecCount</code> runs one statement and returns how many rows it inserted, updated or deleted.</p>
+{{example.db-postgres-insert}}
+<p><code>LastInsertId</code> asks the server for <code>lastval()</code>, the last value any sequence or identity column produced in this session. After the three row insert that is the id of the last row; <code>RETURNING</code> is the clearer choice when you need every id. <code>RETURNING</code> also works on <code>UPDATE</code> and <code>DELETE</code>, as the tag change shows.</p>
+<p><code>d.Changes()</code> is the count of rows the last <code>d.Exec(...)</code> changed. It is only kept when you call the method on the value; the package function <code>postgres.Exec(d, ...)</code> works on a copy, so <code>d.Changes()</code> stays 0 after it. <code>ExecCount</code> avoids the question.</p>
+
+<h2 id="structs">5. Read rows into your own structs</h2>
+<p><code>Query</code> returns a <code>Rows</code>. <code>Next</code> moves to the next row and returns false when there is none, so <code>until r.Next():</code> visits every row; inside the loop <code>Text</code>, <code>Int</code>, <code>Int64</code> and <code>Float</code> read one column by its position, starting at 0. Wrap the loop in a function that fills a <code>Vector</code> of your own struct and the rest of the program never sees SQL rows.</p>
+{{example.db-postgres-structs}}
+<p>The prices are read as whole cents (<code>(price * 100)::int</code> in the SQL) rather than with <code>Float</code>, because a binary float cannot hold most decimal amounts exactly. <code>Text</code> gives the exact <code>numeric</code> value as the server wrote it, such as <code>8.25</code>, which is the other safe choice. <code>ColumnName</code> and <code>ColumnType</code> describe the columns: integers and booleans report <code>db.TYPE_INT</code>, <code>real</code>, <code>double precision</code> and <code>numeric</code> report <code>db.TYPE_FLOAT</code>, <code>bytea</code> reports <code>db.TYPE_BLOB</code>, and everything else, dates, arrays and <code>jsonb</code> included, is <code>db.TYPE_TEXT</code>. Always close a <code>Rows</code> when you are done; <code>defer r.Close()</code> right after the query is the easy way.</p>
+
+<h2 id="safe">6. Values from users, safely</h2>
+<p>This package sends SQL as text and has no placeholders, so every value that comes from a user must go through <code>Quote</code> before it is joined into a statement. A quoted value can contain anything, quotes and semicolons included, and it stays one string. Numbers do not need quoting, but they must really be numbers: convert the input to an integer and check it.</p>
+{{example.db-postgres-safe}}
+<p>Both attacks only searched for odd titles, and the table is still there. Inside a <code>LIKE</code> or <code>ILIKE</code> pattern, <code>%</code> and <code>_</code> are wildcards, so the search escapes them with a backslash first; otherwise a search for <code>100%</code> would match every title that starts with <code>100</code>. When the text has a backslash, <code>Quote</code> writes it in PostgreSQL's <code>E'...'</code> form with a leading space, which is still a single literal.</p>
+<p>Never join raw input into a table or column name. If the user picks a sort column, compare their choice with a fixed list of names in your program and use your own copy of the name.</p>
+
+<h2 id="null">7. NULL values</h2>
+<p>A column can hold no value at all: SQL's <code>NULL</code>. <code>Text</code> returns an empty string for it and <code>Int</code> returns 0, which cannot be told apart from a real empty string or a real 0, so call <code>IsNull</code> whenever the difference matters. To write a NULL, put the word <code>NULL</code> into the SQL instead of a quoted value; a small helper keeps that tidy.</p>
+{{example.db-postgres-null}}
+<p>Compare with <code>IS NULL</code>, never <code>= NULL</code>, which is never true. Aggregates such as <code>max</code> and <code>sum</code> over no rows return NULL, not 0; <code>coalesce(x, fallback)</code> replaces a NULL in the SQL itself.</p>
+
+<h2 id="tx">8. Transactions</h2>
+<p>An order changes two tables: the stock of the book goes down and a row is added to <code>orders</code>. Either both happen or neither. <code>Begin</code> starts a transaction and returns a <code>Tx</code> whose <code>Exec</code> and <code>Query</code> run inside it; <code>Commit</code> keeps the changes and <code>Rollback</code> throws them away.</p>
+{{example.db-postgres-tx}}
+<p><code>UPDATE ... WHERE stock &gt;= qty RETURNING ...</code> checks and takes the stock in one statement, so two customers ordering the last copy at the same time cannot both get it: the second one waits for the first transaction to finish and then finds the stock is 0.</p>
+<p>Check every statement inside a transaction. After a failed statement PostgreSQL ignores the rest of the transaction, and a later <code>Commit</code> rolls back instead. <code>Commit</code> then returns -1, so a 0 from it means your changes really were saved.</p>
+
+<h2 id="errors">9. Errors</h2>
+<p>Every call reports failure the same way. <code>Exec</code> returns -1, <code>ExecCount</code> returns -1, and <code>Query</code> returns a <code>Rows</code> whose <code>Ok</code> is false and whose <code>Next</code> returns false at once. <code>Error</code> then has the server's message, with the <code>DETAIL</code> line when there is one; it is cleared when the next statement starts.</p>
+{{example.db-postgres-errors}}
+<p>The second part shows the transaction rule from step 8 in action: after the failed insert, the next statement is refused with <code>current transaction is aborted</code> until <code>Rollback</code>. The last part shows a dropped connection, here cut by the server with <code>pg_terminate_backend</code>, as also happens when the server restarts. <code>Ping</code> notices it, and <code>Reset</code> connects again with the same settings.</p>
+<p>A <code>Query</code> must return rows. An <code>UPDATE</code> or <code>DELETE</code> without <code>RETURNING</code> run through <code>Query</code> does its work, but the <code>Rows</code> it gives back is not <code>Ok</code>; use <code>Exec</code> or <code>ExecCount</code> for those.</p>
+
+<h2 id="pool">10. A pool, and one connection per thread</h2>
+<p>A connection handles one statement at a time. A server that answers many requests keeps a few connections open and lends one to each request. <code>db.Pool</code> from the <a href="/std/db/">db</a> package does the bookkeeping: <code>Add</code> puts connections in, <code>Acquire</code> lends one out as a lease number, <code>Conn</code> gives the connection for that lease and <code>Release</code> returns it. <code>postgres.Conn</code> turns a <code>Database</code> into the shared <code>Connection</code> the pool stores.</p>
+{{example.db-postgres-pool}}
+<p>The pool itself is not locked, so lease and release from one thread. For work spread over <a href="/std/thread/">threads</a>, the simplest safe rule is the one the second half follows: every thread opens its own connection, uses it and closes it. Never use one <code>Database</code> from two threads at the same time.</p>
+
+<h2 id="features">11. PostgreSQL features</h2>
+<p>Everything PostgreSQL can do is one SQL string away. This step uses a few features that save a lot of program code: <code>ON CONFLICT ... DO UPDATE</code> inserts a row or updates the one that is already there, <code>jsonb</code> operators read and search inside JSON documents, <code>unnest</code> turns an array column into rows, full text search finds words in any form, and a window function ranks the authors by takings.</p>
+{{example.db-postgres-features}}
+<p>Every value arrives as text in PostgreSQL's own format: arrays as <code>{scifi,classic}</code>, <code>jsonb</code> as JSON text and booleans as <code>t</code> or <code>f</code> (<code>Int</code> reads those as 1 and 0). When a result has structure, let the SQL build JSON and decode it in Salam, as the JSON guide below shows.</p>
+
+<h2 id="more">More</h2>
+<ul>
+<li>Bulk loading: <code>COPY FROM STDIN</code> is not supported. Insert many rows with one multi row <code>INSERT</code> per few hundred rows, inside a transaction.</li>
+<li><code>QueryInt</code> and <code>QueryText</code> read the first column of the first row in one call, for counts, sums and settings.</li>
+<li>Code written against <code>db.Connection</code> runs unchanged on <a href="/std/db/sqlite/">SQLite</a> and <a href="/std/db/mysql/">MySQL</a>; <code>db.QueryInt</code>, <code>db.RunAll</code> and <code>db.InTx</code> work on all of them.</li>
+<li><code>ServerVersion</code> returns the major version times 10000 plus the minor version, so 170011 is 17.11; compare it with a number to use features of newer servers.</li>
+<li>Results are held in memory in full. For a very large table, read it in pages with <code>ORDER BY id LIMIT 1000</code> and <code>WHERE id &gt; last</code>.</li>
+</ul>
+
+<h2 id="guide-migrate">Guide: schema migrations</h2>
+<p>A real application changes its schema over time, and every copy of the database has to follow. <code>db.Migrator</code> from the <a href="/std/db/">db</a> package keeps numbered steps, each with SQL to apply it and SQL to undo it, and records the applied ones in a <code>schema_migrations</code> table. Each step runs in its own transaction, which in PostgreSQL covers <code>CREATE TABLE</code> and <code>CREATE INDEX</code> too, so a failed step leaves no half made change behind.</p>
+{{example.db-postgres-guide-migrate}}
+<p>Run <code>MigrateUp</code> when the program starts: it applies only the steps the database has not seen, so running it twice is safe. <code>Rollback</code> undoes the newest step and <code>MigrateTo</code> moves to a chosen version.</p>
+
+<h2 id="guide-env">Guide: settings from the environment</h2>
+<p>Passwords do not belong in source code. Like libpq, <code>Open</code> starts from the environment variables <code>PGHOST</code>, <code>PGPORT</code>, <code>PGUSER</code>, <code>PGPASSWORD</code>, <code>PGDATABASE</code>, <code>PGSSLMODE</code> and <code>PGSSLROOTCERT</code>, then applies whatever the connection string sets. So <code>Open("")</code> connects with the environment alone, and the program below works with either a single <code>DATABASE_URL</code> or the <code>PG...</code> variables.</p>
+{{example.db-postgres-guide-env}}
+<p>The output above came from running it with the <code>PG...</code> variables set:</p>
+<pre class="code" dir="ltr"><code>PGHOST=127.0.0.1 PGUSER=postgres PGPASSWORD=secret PGDATABASE=bookshop salam run app.salam
+DATABASE_URL=postgresql://postgres:secret@127.0.0.1:5432/bookshop salam run app.salam</code></pre>
+<p>When no user is given anywhere, the <code>USER</code> environment variable is used, and when no database is given, the database with the same name as the user.</p>
+
+<h2 id="guide-json">Guide: nested results as JSON</h2>
+<p>A list of books, each with its orders, would take one query per book, or one join whose rows you regroup by hand. PostgreSQL can build the whole nested document in one query with <code>json_agg</code> and <code>json_build_object</code>, and <a href="/std/encoding/json/">encoding/json</a> reads it straight into Salam structs whose field names match the JSON keys.</p>
+{{example.db-postgres-guide-json}}
+<p><code>coalesce(..., '[]')</code> turns "no orders" into an empty list instead of NULL. The same pattern works the other way: send a JSON document as one quoted string and unpack it on the server with <code>jsonb_to_recordset</code>.</p>
+
+<h2 id="guide-which">Guide: which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>You want to</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Connect</td><td><code>Open</code> with <code>key=value</code> pairs or a <code>postgresql://</code> URI, then <code>Ok</code></td></tr>
+<tr><td>Run DDL, or a write whose count you do not need</td><td><code>Exec</code> (0 is success)</td></tr>
+<tr><td>Know how many rows a write changed</td><td><code>ExecCount</code></td></tr>
+<tr><td>Get generated ids or changed rows back</td><td><code>Query</code> with <code>INSERT/UPDATE/DELETE ... RETURNING</code></td></tr>
+<tr><td>Read many rows</td><td><code>Query</code>, then <code>until r.Next():</code> and <code>r.Close()</code></td></tr>
+<tr><td>Read one number or one string</td><td><code>QueryInt</code>, <code>QueryText</code></td></tr>
+<tr><td>Put user text into SQL</td><td><code>Quote</code>, always</td></tr>
+<tr><td>Tell NULL from empty</td><td><code>r.IsNull(col)</code></td></tr>
+<tr><td>Change several things at once or not at all</td><td><code>d.Begin()</code>, then <code>Commit</code> or <code>Rollback</code></td></tr>
+<tr><td>Recover after the server dropped the connection</td><td><code>Ping</code>, then <code>Reset</code></td></tr>
+<tr><td>Write code that works on several engines</td><td><code>Conn</code> and the <a href="/std/db/">db</a> helpers</td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.Database = One PostgreSQL connection.
+doc.Database.handle = The connection handle; null when there is none.
+doc.Database.Kind = The name of the database engine.
+doc.Database.Ok = The connection is up.
+doc.Database.Ping = The connection is alive.
+doc.Database.Exec = Runs SQL that returns no rows, one or several statements separated by semicolons; 0 means success and -1 failure. The method form keeps the changed row count for <code>Changes</code>.
+doc.Database.Query = Runs a query and returns the rows; <code>Ok</code> on the result is false when it failed or returned no rows set.
+doc.Database.Begin = Starts a transaction with <code>BEGIN</code>; the transaction is not <code>Ok</code> when that failed.
+doc.Database.LastInsertId = The last value a sequence or identity column produced in this session (<code>SELECT lastval()</code>); 0 when there is none.
+doc.Database.Changes = The number of rows the last <code>Exec</code> called on this value changed.
+doc.Database.Error = The last error message from the server or the connection, ending in a newline; empty after a statement that worked.
+doc.Database.Quote = Returns the string as a quoted, escaped SQL literal, safe to join into a statement; with a backslash in it, in the <code>E'...'</code> form.
+doc.Database.Close = Closes and frees it.
+doc.Rows = The result of one query.
+doc.Rows.handle = The result handle; null when the query failed.
+doc.Rows.row = The index of the current row; -1 before the first <code>Next</code>.
+doc.Rows.count = The number of rows.
+doc.Database.affected = The number of rows changed by the last statement.
+doc.Rows.Ok = The query worked and returned rows.
+doc.Rows.Next = Moves to the next row; false when no row is left.
+doc.Rows.ColumnCount = The number of columns.
+doc.Rows.ColumnName = The column name.
+doc.Rows.ColumnType = The type of the column value in the current row, one of the <code>TYPE_...</code> constants in <a href="/std/db/">db</a>: integers and booleans are <code>TYPE_INT</code>, <code>real</code>, <code>double precision</code> and <code>numeric</code> are <code>TYPE_FLOAT</code>, <code>bytea</code> is <code>TYPE_BLOB</code>, NULL is <code>TYPE_NULL</code> and the rest is <code>TYPE_TEXT</code>.
+doc.Rows.IsNull = The column value is null.
+doc.Rows.Text = The column value as text, in PostgreSQL's own format; empty for NULL.
+doc.Rows.Int = The column value as an integer; <code>t</code> and <code>f</code> read as 1 and 0, NULL as 0.
+doc.Rows.Int64 = The column value as a 64 bit integer; <code>t</code> and <code>f</code> read as 1 and 0, NULL as 0.
+doc.Rows.Float = The column value as a float; 0 for NULL.
+doc.Rows.Close = Closes and frees it.
+doc.Rows.RowCount = The number of rows in the result.
+doc.Txn = One transaction.
+doc.Txn.handle = The connection pointer.
+doc.Txn.Ok = <code>BEGIN</code> worked.
+doc.Txn.Exec = Runs one statement; zero means success.
+doc.Txn.Query = Runs a query and returns the rows.
+doc.Txn.Commit = Commits the transaction and returns 0 when the changes were saved. It returns -1 when the commit failed, or when PostgreSQL rolled back instead because a statement inside the transaction had failed.
+doc.Txn.Rollback = Rolls the transaction back.
+doc.Available = The Postgres client is available; since it is inside Salam itself, this is always true.
+doc.ClientVersion = The protocol version this client matches, as a number: always 180000.
+doc.ServerVersion = The server version as major times 10000 plus minor, such as 170011 for 17.11; 0 without a connection.
+doc.Open = Connects with a connection string, such as <code>host=... port=... user=... password=... dbname=...</code>, or a <code>postgresql://</code> URI. Unset values come from <code>PGHOST</code>, <code>PGPORT</code>, <code>PGUSER</code>, <code>PGPASSWORD</code>, <code>PGDATABASE</code> and <code>PGSSLMODE</code>. It always returns a <code>Database</code>; check <code>Ok</code>.
+doc.OpenFull = Connects with a host, port, user, password and database name. The values are not quoted, so use <code>Open</code> for a value with spaces.
+doc.Ok = The connection is up.
+doc.Ping = The connection is alive.
+doc.Reset = Closes the connection and opens it again with the same settings, for example after the server dropped it.
+doc.Close = Closes it.
+doc.Error = The last error message.
+doc.Exec = Runs SQL that returns no rows; 0 means success and -1 failure.
+doc.ExecCount = Runs one statement and returns the number of rows it inserted, updated or deleted; -1 on failure.
+doc.Query = Runs a query and returns its rows; <code>Ok</code> on the result is false when it failed or returned no rows set.
+doc.Quote = Returns the string as a quoted, escaped SQL literal, safe to join into a statement.
+doc.DatabaseName = The database name.
+doc.UserName = The user name.
+doc.HostName = The host it connected to.
+doc.Port = The port, as text.
+doc.QueryInt = The first column of the first row as an integer; 0 when the query failed or returned nothing.
+doc.QueryText = The first column of the first row as text; empty when the query failed or returned nothing.
+doc.Conn = Returns the connection as a shared <code>Connection</code>.
+
+ex.Database = db-postgres-Client
+ex.Database.handle = db-postgres-Client
+ex.Database.Kind = db-postgres-Client
+ex.Database.Ok = db-postgres-Client
+ex.Database.Ping = db-postgres-Client
+ex.Database.Exec = db-postgres-Client
+ex.Database.Query = db-postgres-Client
+ex.Database.Begin = db-postgres-Client
+ex.Database.LastInsertId = db-postgres-Client
+ex.Database.Changes = db-postgres-Client
+ex.Database.Error = db-postgres-Client
+ex.Database.Quote = db-postgres-Client
+ex.Database.Close = db-postgres-Client
+ex.Rows = db-postgres-Client
+ex.Rows.handle = db-postgres-Client
+ex.Rows.row = db-postgres-Client
+ex.Rows.count = db-postgres-Client
+ex.Database.affected = db-postgres-Client
+ex.Rows.Ok = db-postgres-Client
+ex.Rows.Next = db-postgres-Client
+ex.Rows.ColumnCount = db-postgres-Client
+ex.Rows.ColumnName = db-postgres-Client
+ex.Rows.ColumnType = db-postgres-Client
+ex.Rows.IsNull = db-postgres-Client
+ex.Rows.Text = db-postgres-Client
+ex.Rows.Int = db-postgres-Client
+ex.Rows.Int64 = db-postgres-Client
+ex.Rows.Float = db-postgres-Client
+ex.Rows.Close = db-postgres-Client
+ex.Rows.RowCount = db-postgres-Client
+ex.Txn = db-postgres-Client
+ex.Txn.handle = db-postgres-Client
+ex.Txn.Ok = db-postgres-Client
+ex.Txn.Exec = db-postgres-Client
+ex.Txn.Query = db-postgres-Client
+ex.Txn.Commit = db-postgres-Client
+ex.Txn.Rollback = db-postgres-Client
+ex.Available = db-postgres-Client
+ex.ClientVersion = db-postgres-Client
+ex.ServerVersion = db-postgres-Client
+ex.Open = db-postgres-Client
+ex.OpenFull = db-postgres-Client
+ex.Ok = db-postgres-Client
+ex.Ping = db-postgres-Client
+ex.Reset = db-postgres-Client
+ex.Close = db-postgres-Client
+ex.Error = db-postgres-Client
+ex.Exec = db-postgres-Client
+ex.ExecCount = db-postgres-Client
+ex.Query = db-postgres-Client
+ex.Quote = db-postgres-Client
+ex.DatabaseName = db-postgres-Client
+ex.UserName = db-postgres-Client
+ex.HostName = db-postgres-Client
+ex.Port = db-postgres-Client
+ex.QueryInt = db-postgres-Client
+ex.QueryText = db-postgres-Client
+ex.Conn = db-postgres-Client

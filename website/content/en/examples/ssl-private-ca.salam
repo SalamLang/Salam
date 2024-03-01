@@ -1,0 +1,30 @@
+import ssl
+import net.tcp
+
+func main:
+    ctx := ssl.NewClientContext()
+    if not ssl.LoadVerifyLocationsFile(ctx, "/etc/company/ca.pem"):
+        println "cannot read the company CA:", ssl.LastErrorString()
+        ret 1
+    end
+    ssl.SetVerify(ctx, ssl.VERIFY_PEER)
+    _ := ssl.SetMinVersion(ctx, ssl.TLS1_3)
+
+    sock := tcp.Dial("billing.internal", 8443)
+    conn := ssl.Wrap(ctx, sock.fd)
+    _ := ssl.SetHostname(conn, "billing.internal")
+    ok := ssl.Connect(conn)
+    if not ok or not ssl.PeerVerified(conn):
+        println "refusing the server, verify result", ssl.VerifyResult(conn), ssl.ConnErrorString(conn)
+        ssl.Close(conn)
+        tcp.Close(sock)
+        ret 1
+    end
+    _ := ssl.Write(conn, "PING\n")
+    println "server said:", ssl.Read(conn, 1024)
+    ssl.Shutdown(conn)
+    ssl.Close(conn)
+    tcp.Close(sock)
+    ssl.CloseContext(ctx)
+    ret 0
+end

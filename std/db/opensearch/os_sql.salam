@@ -1,0 +1,465 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package opensearch
+
+import mem
+import str
+import db
+import encoding.json
+
+struct _OsSqlState:
+    pub client: void* = null
+    pub endpoint: str = ""
+    pub ok: bool = false
+    pub err: str = ""
+    pub names: Vector<str> = Vector {}
+    pub types: Vector<str> = Vector {}
+    pub rows: Vector<str> = Vector {}
+    pub pos: int = 0
+    pub cells: Vector<str> = Vector {}
+    pub cursor: str = ""
+    pub total: i64 = 0
+end
+
+@en "SqlRows"
+@fa "ردیف‌های اس کیو ال"
+pub struct SqlRows:
+    @en "handle"
+    @fa "دسته"
+    pub handle: void* = null
+
+    @en "Ok"
+    @fa "معتبر"
+    pub func Ok(): bool:
+        if this.handle == null: ret false end
+        ret _os_sq(this.handle)[0].ok
+    end
+
+    @en "Error"
+    @fa "خطا"
+    pub func Error(): str:
+        if this.handle == null: ret str.Clone("no result") end
+        ret str.Clone(_os_sq(this.handle)[0].err)
+    end
+
+    @en "Total"
+    @fa "مجموع"
+    pub func Total(): i64:
+        if this.handle == null: ret 0 end
+        ret _os_sq(this.handle)[0].total
+    end
+
+    @en "Next"
+    @fa "بعدی"
+    pub func Next(): bool:
+        if this.handle == null: ret false end
+        s := _os_sq(this.handle)
+        if not s[0].ok: ret false end
+        if s[0].pos >= s[0].rows.len():
+            if s[0].cursor.len() == 0: ret false end
+            if not _os_sql_page(s): ret false end
+            if s[0].rows.len() == 0: ret false end
+        end
+        s[0].cells = _os_items(s[0].rows.get(s[0].pos))
+        s[0].pos = s[0].pos + 1
+        ret true
+    end
+
+    @en "ColumnCount"
+    @fa "تعداد ستون"
+    pub func ColumnCount(): int:
+        if this.handle == null: ret 0 end
+        ret _os_sq(this.handle)[0].names.len()
+    end
+
+    @en "ColumnName"
+    @fa "نام ستون"
+    pub func ColumnName(col: int): str:
+        if this.handle == null: ret str.Clone("") end
+        s := _os_sq(this.handle)
+        if col < 0 or col >= s[0].names.len(): ret str.Clone("") end
+        ret str.Clone(s[0].names.get(col))
+    end
+
+    @en "ColumnTypeName"
+    @fa "نام نوع ستون"
+    pub func ColumnTypeName(col: int): str:
+        if this.handle == null: ret str.Clone("") end
+        s := _os_sq(this.handle)
+        if col < 0 or col >= s[0].types.len(): ret str.Clone("") end
+        ret str.Clone(s[0].types.get(col))
+    end
+
+    @en "ColumnType"
+    @fa "نوع ستون"
+    pub func ColumnType(col: int): int:
+        if this.handle == null: ret db.TYPE_NULL end
+        if _os_sq(this.handle)[0].cells.len() > 0 and this.IsNull(col): ret db.TYPE_NULL end
+        ret _os_sql_kind(this.ColumnTypeName(col))
+    end
+
+    @en "IsNull"
+    @fa "خالی است"
+    pub func IsNull(col: int): bool:
+        ret _os_sql_cell(this.handle, col) == "null"
+    end
+
+    @en "Text"
+    @fa "متن"
+    pub func Text(col: int): str:
+        raw := _os_sql_cell(this.handle, col)
+        if raw == "null": ret str.Clone("") end
+        ret _os_unquote(raw)
+    end
+
+    @en "Raw"
+    @fa "خام"
+    pub func Raw(col: int): str:
+        ret str.Clone(_os_sql_cell(this.handle, col))
+    end
+
+    @en "Int"
+    @fa "عدد صحیح"
+    pub func Int(col: int): int:
+        ret _os_int(_os_sql_number(_os_sql_cell(this.handle, col)))
+    end
+
+    @en "Int64"
+    @fa "عدد صحیح۶۴"
+    pub func Int64(col: int): i64:
+        ret _os_i64(_os_sql_number(_os_sql_cell(this.handle, col)))
+    end
+
+    @en "Float"
+    @fa "عدد اعشار"
+    pub func Float(col: int): f64:
+        raw := _os_sql_cell(this.handle, col)
+        if str.StartsWith(raw, `"`): ret _os_f64(_os_unquote(raw)) end
+        ret _os_f64(raw)
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close(): int:
+        if this.handle == null: ret -1 end
+        s := _os_sq(this.handle)
+        if s[0].cursor.len() > 0 and s[0].client != null:
+            c := Client { handle = s[0].client }
+            Perform(c, "POST", "/_plugins/_sql/close", _os_one("cursor", json.Str(s[0].cursor)))
+        end
+        mem.Free(this.handle)
+        this.handle = null
+        ret 0
+    end
+end
+
+@en "Database"
+@fa "پایگاه داده"
+pub struct Database:
+    @en "handle"
+    @fa "دسته"
+    pub handle: void* = null
+
+    @en "Kind"
+    @fa "نوع"
+    pub func Kind(): str: ret db.OPENSEARCH end
+
+    @en "Ok"
+    @fa "معتبر"
+    pub func Ok(): bool:
+        ret _os_client_ok(this.handle)
+    end
+
+    @en "Ping"
+    @fa "پینگ"
+    pub func Ping(): bool:
+        ret _os_client_ping(this.handle)
+    end
+
+    @en "Exec"
+    @fa "اجرا"
+    pub func Exec(sql: str): int:
+        if this.handle == null: ret -1 end
+        ret _os_sql_exec(this.handle, sql)
+    end
+
+    @en "Query"
+    @fa "پرسمان"
+    pub func Query(sql: str): dyn db.Rows:
+        ret Sql(Client { handle = this.handle }, sql)
+    end
+
+    @en "Begin"
+    @fa "شروع تراکنش"
+    pub func Begin(): dyn db.Tx:
+        if this.handle != null:
+            _os_set_error(this.handle, "opensearch has no transactions")
+        end
+        ret Txn {}
+    end
+
+    @en "LastInsertId"
+    @fa "شناسه آخرین درج"
+    pub func LastInsertId(): i64: ret 0 end
+
+    @en "Changes"
+    @fa "تعداد تغییرات"
+    pub func Changes(): i64:
+        if this.handle == null: ret 0 end
+        ret _os_st(Client { handle = this.handle })[0].changes
+    end
+
+    @en "Error"
+    @fa "خطا"
+    pub func Error(): str:
+        ret _os_client_error(this.handle)
+    end
+
+    @en "Quote"
+    @fa "نقل قول"
+    pub func Quote(s: str): str:
+        ret db.QuoteLiteral(s)
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close(): int:
+        if this.handle == null: ret -1 end
+        _os_client_close(this.handle)
+        this.handle = null
+        ret 0
+    end
+end
+
+@en "Txn"
+@fa "تراکنش"
+pub struct Txn:
+    @en "handle"
+    @fa "دسته"
+    pub handle: void* = null
+
+    @en "Ok"
+    @fa "معتبر"
+    pub func Ok(): bool: ret false end
+
+    @en "Exec"
+    @fa "اجرا"
+    pub func Exec(_sql: str): int: ret -1 end
+
+    @en "Query"
+    @fa "پرسمان"
+    pub func Query(_sql: str): dyn db.Rows:
+        ret SqlRows {}
+    end
+
+    @en "Commit"
+    @fa "ثبت تراکنش"
+    pub func Commit(): int: ret -1 end
+
+    @en "Rollback"
+    @fa "بازگردانی"
+    pub func Rollback(): int: ret -1 end
+end
+
+func _os_client_ok(h: void*): bool:
+    ret Ok(Client { handle = h })
+end
+
+func _os_client_ping(h: void*): bool:
+    ret Ping(Client { handle = h })
+end
+
+func _os_client_error(h: void*): str:
+    ret Error(Client { handle = h })
+end
+
+func _os_client_close(h: void*):
+    mut c := Client { handle = h }
+    Close(c)
+end
+
+func _os_sq(h: void*): _OsSqlState*:
+    ret h as _OsSqlState*
+end
+
+func _os_set_error(h: void*, msg: str):
+    st := h as _OsState*
+    st[0].status = 0
+    st[0].err = msg
+    st[0].err_type = ""
+    st[0].err_reason = msg
+end
+
+func _os_sql_cell(h: void*, col: int): str:
+    if h == null: ret "null" end
+    s := _os_sq(h)
+    if col < 0 or col >= s[0].cells.len(): ret "null" end
+    ret s[0].cells.get(col)
+end
+
+func _os_sql_number(raw: str): str:
+    switch raw:
+        "true": ret "1" end
+        "false": ret "0" end
+    end
+    if str.StartsWith(raw, `"`): ret _os_unquote(raw) end
+    ret raw
+end
+
+func _os_sql_kind(t: str): int:
+    switch t:
+        "long", "integer", "short", "byte", "unsigned_long", "boolean": ret db.TYPE_INT end
+        "double", "float", "half_float", "scaled_float": ret db.TYPE_FLOAT end
+        "binary": ret db.TYPE_BLOB end
+        "null", "undefined": ret db.TYPE_NULL end
+    end
+    ret db.TYPE_TEXT
+end
+
+func _os_sql_fill(s: _OsSqlState*, r: Response):
+    if not r.ok:
+        s[0].ok = false
+        s[0].err = r.error
+        s[0].rows = Vector {} as Vector<str>
+        s[0].cursor = ""
+        ret
+    end
+    cols := _os_jraw(r.body, "schema")
+    if cols.len() > 0:
+        mut names := Vector {} as Vector<str>
+        mut types := Vector {} as Vector<str>
+        each col in _os_items(cols):
+            alias := _os_jstr(col, "alias")
+            names.push(alias.len() > 0 ? alias : _os_jstr(col, "name"))
+            types.push(_os_jstr(col, "type"))
+        end
+        s[0].names = names
+        s[0].types = types
+    end
+    if json.Has(r.body, "total"): s[0].total = _os_ji64(r.body, "total", 0) end
+    s[0].rows = _os_items(_os_jraw(r.body, "datarows"))
+    s[0].pos = 0
+    s[0].cursor = _os_jstr(r.body, "cursor")
+    s[0].ok = true
+end
+
+func _os_sql_page(s: _OsSqlState*): bool:
+    c := Client { handle = s[0].client }
+    r := Perform(c, "POST", s[0].endpoint, _os_one("cursor", json.Str(s[0].cursor)))
+    _os_sql_fill(s, r)
+    ret s[0].ok
+end
+
+func _os_sql_request(c: Client, endpoint: str, body: str): SqlRows:
+    s := mem.AllocateZeroed(sizeof(_OsSqlState) as u64) as _OsSqlState*
+    s[0] = _OsSqlState {}
+    s[0].client = c.handle
+    s[0].endpoint = endpoint
+    _os_sql_fill(s, Perform(c, "POST", endpoint, body))
+    ret SqlRows { handle = s as void* }
+end
+
+func _os_sql_body(query: str, params: Vector<str>, fetch_size: int): str:
+    mut m := Vector {} as Vector<str>
+    m.push(_os_m("query", json.Str(query)))
+    if params.len() > 0: m.push(_os_m("parameters", _os_arr(params))) end
+    if fetch_size > 0: m.push(_os_m("fetch_size", str.FromInt(fetch_size as i64))) end
+    ret _os_obj(m)
+end
+
+func _os_sql_exec(h: void*, sql: str): int:
+    c := Client { handle = h }
+    _os_st(c)[0].changes = 0
+    t := str.Trim(sql).lower()
+    if not str.StartsWith(t, "delete"):
+        _os_set_error(h, "opensearch SQL only writes with DELETE; use Index, Bulk or UpdateByQuery for the rest")
+        ret -1
+    end
+    r := Perform(c, "POST", "/_plugins/_sql", _os_sql_body(sql, Vector {} as Vector<str>, 0))
+    if not r.ok: ret -1 end
+    rows := _os_items(_os_jraw(r.body, "datarows"))
+    if rows.len() == 0: ret 0 end
+    first := _os_items(rows.get(0))
+    if first.len() == 0: ret 0 end
+    n := _os_i64(first.get(0))
+    _os_st(c)[0].changes = n
+    ret n as int
+end
+
+@en "SqlParam"
+@fa "پارامتر اس کیو ال"
+pub func SqlParam(kind: str, value: str): str:
+    mut v := json.Str(value)
+    if kind == "integer" or kind == "long" or kind == "double" or kind == "float" or kind == "boolean":
+        v = value
+    end
+    ret _os_two("type", json.Str(kind), "value", v)
+end
+
+@en "Sql"
+@fa "اس کیو ال"
+pub func Sql(c: Client, query: str): SqlRows:
+    ret _os_sql_request(c, "/_plugins/_sql", _os_sql_body(query, Vector {} as Vector<str>, 0))
+end
+
+@en "SqlWith"
+@fa "اس کیو ال با پارامتر"
+pub func SqlWith(c: Client, query: str, params: Vector<str>, fetch_size: int): SqlRows:
+    ret _os_sql_request(c, "/_plugins/_sql", _os_sql_body(query, params, fetch_size))
+end
+
+@en "SqlFormat"
+@fa "اس کیو ال با قالب"
+pub func SqlFormat(c: Client, query: str, format: str): str:
+    r := Perform(c, "POST", "/_plugins/_sql?format=" + _os_seg(format), _os_sql_body(query, Vector {} as Vector<str>, 0))
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "SqlExplain"
+@fa "توضیح اس کیو ال"
+pub func SqlExplain(c: Client, query: str): str:
+    r := Perform(c, "POST", "/_plugins/_sql/_explain", _os_sql_body(query, Vector {} as Vector<str>, 0))
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "Ppl"
+@fa "پی پی ال"
+pub func Ppl(c: Client, query: str): SqlRows:
+    ret _os_sql_request(c, "/_plugins/_ppl", _os_one("query", json.Str(query)))
+end
+
+@en "PplFormat"
+@fa "پی پی ال با قالب"
+pub func PplFormat(c: Client, query: str, format: str): str:
+    r := Perform(c, "POST", "/_plugins/_ppl?format=" + _os_seg(format), _os_one("query", json.Str(query)))
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "PplExplain"
+@fa "توضیح پی پی ال"
+pub func PplExplain(c: Client, query: str): str:
+    r := Perform(c, "POST", "/_plugins/_ppl/_explain", _os_one("query", json.Str(query)))
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "Conn"
+@fa "اتصال عمومی"
+pub func Conn(c: Client): dyn db.Connection:
+    ret Database { handle = c.handle }
+end

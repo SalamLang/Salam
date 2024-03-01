@@ -1,0 +1,197 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import str
+import db.elasticsearch
+
+const IDX := "eslive_items"
+const IDX2 := "eslive_items_copy"
+const MAPPING := `{"settings":{"number_of_shards":1,"number_of_replicas":0},"mappings":{"properties":{"title":{"type":"text"},"tag":{"type":"keyword"},"n":{"type":"integer"},"w":{"type":"double"}}}}`
+
+func doc(i: int): str:
+    tags := "abcd"
+    ret `{"title":"item number ` + str.FromInt(i as i64) + `","tag":"` + tags.substr(i % 4, 1) + `","n":` + str.FromInt(i as i64) + `,"w":` + str.FromInt((i % 10) as i64) + `.5}`
+end
+
+func strs(a: str, b: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push(a)
+    if b.len() > 0: v.push(b) end
+    ret v
+end
+
+func documents(c: elasticsearch.Client):
+    w := elasticsearch.IndexWith(c, IDX, "fa-1", `{"title":"سلام دنیا، این یک آزمایش است","tag":"fa","n":-1,"w":0.25}`, elasticsearch.Options { refresh = elasticsearch.REFRESH_WAIT_FOR })
+    println "index:", w.ok, w.result, w.id, w.version
+    d := elasticsearch.Get(c, IDX, "fa-1")
+    println "get:", d.found, d.source
+    println "source:", elasticsearch.GetSource(c, IDX, "fa-1")
+    println "exists:", elasticsearch.Exists(c, IDX, "fa-1"), elasticsearch.Exists(c, IDX, "nope")
+    miss := elasticsearch.Get(c, IDX, "nope")
+    println "missing:", miss.found, miss.error.len()
+    dup := elasticsearch.Create(c, IDX, "fa-1", `{"title":"x"}`)
+    println "create twice:", dup.ok, dup.status, elasticsearch.ErrorType(c)
+    u := elasticsearch.UpdateWith(c, IDX, "fa-1", `{"n":-2}`, elasticsearch.Options { if_seq_no = d.seq_no, if_primary_term = d.primary_term })
+    println "cas update:", u.ok, u.result, u.version
+    stale := elasticsearch.UpdateWith(c, IDX, "fa-1", `{"n":-3}`, elasticsearch.Options { if_seq_no = d.seq_no, if_primary_term = d.primary_term })
+    println "stale update:", stale.ok, stale.status, elasticsearch.ErrorType(c)
+    sc := elasticsearch.UpdateScript(c, IDX, "fa-1", "ctx._source.n += params.k", `{"k": 10}`)
+    println "script:", sc.ok, sc.result
+    up := elasticsearch.Upsert(c, IDX, "fa-2", `{"title":"upserted","tag":"fa","n":0,"w":0.0}`)
+    println "upsert:", up.ok, up.result
+    println "after script:", elasticsearch.Get(c, IDX, "fa-1").source
+    dl := elasticsearch.DeleteWith(c, IDX, "fa-2", elasticsearch.Options { refresh = elasticsearch.REFRESH_TRUE })
+    println "delete:", dl.ok, dl.result
+    gone := elasticsearch.Delete(c, IDX, "fa-2")
+    println "delete again:", gone.ok, gone.status, gone.result
+end
+
+func bulk(c: elasticsearch.Client):
+    mut b := elasticsearch.NewBulk()
+    repeat 2000 in i:
+        elasticsearch.BulkIndex(b, IDX, "d" + str.FromInt(i as i64), doc(i))
+    end
+    elasticsearch.BulkCreate(b, IDX, "d0", doc(0))
+    br := elasticsearch.RunBulkWith(c, "", b, elasticsearch.Options { refresh = elasticsearch.REFRESH_TRUE })
+    println "bulk:", br.ok, br.errors, br.succeeded, br.failed, br.items.len()
+    println "bulk error:", br.error
+    println "count:", elasticsearch.Count(c, IDX, "")
+    println "count tag a:", elasticsearch.Count(c, IDX, elasticsearch.Term("tag", "a"))
+    docs := elasticsearch.MGet(c, IDX, strs("d7", "missing"))
+    each d in docs:
+        println "mget:", d.id, d.found, d.source
+    end
+end
+
+func search(c: elasticsearch.Client):
+    mut aggs := elasticsearch.AddAgg("", "tags", elasticsearch.SubAggs(elasticsearch.TermsAgg("tag", 10), elasticsearch.AddAgg("", "avg_w", elasticsearch.AvgAgg("w"))))
+    aggs = elasticsearch.AddAgg(aggs, "max_n", elasticsearch.MaxAgg("n"))
+    aggs = elasticsearch.AddAgg(aggs, "users", elasticsearch.CardinalityAgg("tag"))
+    mut sort := Vector {} as Vector<str>
+    sort.push(elasticsearch.SortDesc("n"))
+    res := elasticsearch.Search(c, IDX, elasticsearch.SearchRequest {
+        query = elasticsearch.Filtered(elasticsearch.Match("title", "item"), strs(elasticsearch.Range("n", "100", "1999"), "")), size = 3, sort = sort, aggs = aggs, source = strs("n", ""), track_total_hits = "true"
+    })
+    println "search:", res.ok, res.total, res.total_relation, res.hits.len()
+    each h in res.hits:
+        println "  hit", h.id, h.source, h.sort
+    end
+    println "max n:", elasticsearch.AggValue(res, "max_n"), "distinct tags:", elasticsearch.AggValue(res, "users")
+    each b in elasticsearch.AggBuckets(res, "tags"):
+        println "  bucket", b.key, b.doc_count, elasticsearch.AggValueIn(b.raw, "avg_w")
+    end
+    hl := elasticsearch.Search(c, IDX, elasticsearch.SearchRequest { query = elasticsearch.Match("title", "سلام"), highlight = elasticsearch.Highlight(strs("title", "")) })
+    println "highlight:", hl.total, hl.hits.get(0).highlight
+    bad := elasticsearch.SearchRaw(c, IDX, `{"query":{"no_such_query":{}}}`)
+    println "bad query:", bad.ok, bad.status, elasticsearch.ErrorType(c)
+end
+
+func paging(c: elasticsearch.Client):
+    mut sort := Vector {} as Vector<str>
+    sort.push(elasticsearch.SortAsc("n"))
+    mut res := elasticsearch.SearchScroll(c, IDX, elasticsearch.SearchRequest { query = elasticsearch.Term("tag", "b"), size = 200, sort = sort }, "1m")
+    mut seen := 0
+    mut pages := 0
+    until res.ok and res.hits.len() > 0:
+        seen += res.hits.len()
+        pages += 1
+        res = elasticsearch.Scroll(c, res.scroll_id, "1m")
+    end
+    println "scroll:", seen, pages, elasticsearch.ClearScroll(c, res.scroll_id)
+    pit := elasticsearch.OpenPit(c, IDX, "1m")
+    println "pit opened:", pit.len() > 0
+    mut after := ""
+    mut total := 0
+    mut more := true
+    mut psort := Vector {} as Vector<str>
+    psort.push(elasticsearch.SortAsc("n"))
+    until more:
+        page := elasticsearch.Search(c, "", elasticsearch.SearchRequest { query = elasticsearch.Term("tag", "c"), size = 300, sort = psort, pit_id = pit, pit_keep_alive = "1m", search_after = after })
+        if not page.ok or page.hits.len() == 0:
+            more = false
+        else:
+            total += page.hits.len()
+            after = page.hits.get(page.hits.len() - 1).sort
+        end
+    end
+    println "pit pages:", total, elasticsearch.ClosePit(c, pit)
+    mut bodies := Vector {} as Vector<str>
+    bodies.push(elasticsearch.SearchBody(elasticsearch.SearchRequest { query = elasticsearch.Term("tag", "a"), size = 0 }))
+    bodies.push(elasticsearch.SearchBody(elasticsearch.SearchRequest { query = elasticsearch.Term("tag", "d"), size = 0 }))
+    each r in elasticsearch.MSearch(c, IDX, bodies):
+        println "msearch:", r.ok, r.status, r.total
+    end
+end
+
+func sql(c: elasticsearch.Client):
+    mut params := Vector {} as Vector<str>
+    params.push("1995")
+    mut rows := elasticsearch.SqlWith(c, "SELECT n, tag, w FROM " + IDX + " WHERE n >= ? ORDER BY n", params, 2)
+    println "sql:", rows.Ok(), rows.ColumnCount(), rows.ColumnName(1), rows.ColumnTypeName(0), rows.ColumnType(2)
+    until rows.Next():
+        println "  row", rows.Int(0), rows.Text(1), rows.Float(2)
+    end
+    rows.Close()
+    conn := elasticsearch.Conn(c)
+    println "conn:", conn.Kind(), conn.Ok(), conn.Ping()
+    q := conn.Query("SELECT tag, COUNT(*) AS n FROM " + IDX + " WHERE tag <> 'fa' GROUP BY tag ORDER BY tag")
+    until q.Next(): println "  group", q.Text(0), q.Int(1) end
+    q.Close()
+    println "exec:", conn.Exec("DELETE FROM x"), conn.Begin().Ok()
+    println "translate:", str.Contains(elasticsearch.SqlTranslate(c, "SELECT n FROM " + IDX + " WHERE tag = 'a'"), "term")
+end
+
+func admin(c: elasticsearch.Client):
+    println "alias:", elasticsearch.PutAlias(c, IDX, "eslive_alias"), elasticsearch.AliasExists(c, "eslive_alias")
+    println "alias targets:", elasticsearch.GetAlias(c, "eslive_alias")
+    println "count via alias:", elasticsearch.Count(c, "eslive_alias", "")
+    elasticsearch.DeleteIndex(c, IDX2)
+    println "reindex:", elasticsearch.Reindex(c, IDX, IDX2)
+    println "swap alias:", elasticsearch.SwapAlias(c, "eslive_alias", IDX, IDX2), elasticsearch.GetAlias(c, "eslive_alias")
+    println "update by query:", elasticsearch.UpdateByQueryWith(c, IDX, elasticsearch.Term("tag", "d"), elasticsearch.Script("ctx._source.w = 0", ""), elasticsearch.Options { refresh = elasticsearch.REFRESH_TRUE })
+    println "delete by query:", elasticsearch.DeleteByQueryWith(c, IDX, elasticsearch.Range("n", "1000", ""), elasticsearch.Options { refresh = elasticsearch.REFRESH_TRUE })
+    println "count after:", elasticsearch.Count(c, IDX, "")
+    println "mapping:", str.Contains(elasticsearch.GetMapping(c, IDX), `"tag":{"type":"keyword"}`)
+    println "put mapping:", elasticsearch.PutMapping(c, IDX, `{"properties":{"extra":{"type":"keyword"}}}`)
+    println "settings:", elasticsearch.PutSettings(c, IDX, `{"index":{"refresh_interval":"2s"}}`), str.Contains(elasticsearch.GetSettings(c, IDX), `"refresh_interval":"2s"`)
+    println "close/open:", elasticsearch.CloseIndex(c, IDX), elasticsearch.OpenIndex(c, IDX)
+    println "health:", elasticsearch.WaitForStatus(c, "yellow", "30s").ok
+    println "refresh/flush/merge:", elasticsearch.Refresh(c, IDX), elasticsearch.Flush(c, IDX), elasticsearch.ForceMerge(c, IDX, 1)
+    println "analyze:", elasticsearch.Analyze(c, "", "standard", "Hello Salam World")
+    tpl := `{"index_patterns":["eslive_tpl_*"],"template":{"settings":{"number_of_replicas":0}}}`
+    println "template:", elasticsearch.PutIndexTemplate(c, "eslive_tpl", tpl), elasticsearch.IndexTemplateExists(c, "eslive_tpl"), elasticsearch.DeleteIndexTemplate(c, "eslive_tpl")
+    each ix in elasticsearch.CatIndices(c, "eslive_*"):
+        println "cat:", ix.index, ix.status, ix.docs_count
+    end
+end
+
+func main:
+    mut c := elasticsearch.Connect(os.Env("SALAM_TEST_ES"))
+    println "ok:", elasticsearch.Ok(c), elasticsearch.Ping(c)
+    info := elasticsearch.GetInfo(c)
+    println "info:", info.ok, info.version.len() > 0, info.cluster_name.len() > 0
+    println "health:", elasticsearch.ClusterHealth(c).ok
+    elasticsearch.DeleteIndex(c, IDX)
+    println "create:", elasticsearch.CreateIndex(c, IDX, MAPPING), elasticsearch.IndexExists(c, IDX)
+    println "create again:", elasticsearch.CreateIndex(c, IDX, MAPPING), elasticsearch.ErrorType(c)
+    documents(c)
+    bulk(c)
+    search(c)
+    paging(c)
+    sql(c)
+    admin(c)
+    println "drop:", elasticsearch.DeleteIndex(c, IDX), elasticsearch.DeleteIndex(c, IDX2), elasticsearch.IndexExists(c, IDX)
+    elasticsearch.Close(c)
+end

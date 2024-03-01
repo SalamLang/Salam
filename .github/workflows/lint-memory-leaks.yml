@@ -1,0 +1,93 @@
+---
+name: 🧪 Memory Leaks - ASan/LSan over the full test suite
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: memory-leaks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    uses: ./.github/workflows/_changes.yml # zizmor: ignore[self-repository]
+    with:
+      paths: |
+        c/*
+        compiler/*
+        std/*
+        tests/*
+        .github/workflows/lint-memory-leaks.yml
+        .github/actions/setup-*
+        .github/workflows/_changes.yml
+  self-hosted:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    name: Self-hosted compiler - leak ratchet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+          gcc --version | head -1
+
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Build the reference compiler
+        run: sh tools/bash/build-selfhost.sh
+
+      - name: Build the self-hosted compiler with AddressSanitizer
+        run: |
+          set -eu
+          SALAM_STD="$GITHUB_WORKSPACE/std" ./salam build compiler/main.salam \
+            --output=salam-selfhost-asan --cc=gcc --asan --log-level=error
+          ./salam-selfhost-asan version | head -1
+
+      - name: Check the self-hosted leak budget
+        run: |
+          set -eu
+          sh compiler/tools/bash/leakcheck-selfhost.sh ./salam-selfhost-asan
+
+  programs:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    name: Compiled programs - leak ratchet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+          gcc --version | head -1
+
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Build the reference compiler
+        run: sh tools/bash/build-selfhost.sh
+
+      - name: Check the program leak budget
+        run: sh tools/bash/leakcheck-programs.sh ./salam

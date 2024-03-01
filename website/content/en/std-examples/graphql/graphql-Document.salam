@@ -1,0 +1,63 @@
+import graphql
+import encoding.value
+
+func main:
+    source := `query Books($limit: Int = 5) { books(limit: $limit, tags: ["a", "b"]) @include(if: true) { ...Info alias: title } }
+fragment Info on Book { id year }`
+    println graphql.ParseOk(source), graphql.ParseOk("{ a "), graphql.LexOk("{ a }")
+    mut err := graphql.NewError(graphql.ERR_SYNTAX, "")
+    mut doc := graphql.Parse(source, err)
+    println doc.ops.len(), doc.frags.len()
+    print graphql.Print(doc)
+    i := graphql.FindOperation(doc, "Books")
+    op := doc.ops.get(i)
+    println op.name, graphql.OperationTypeName(op.optype), op.shorthand, op.varDefs.len(), op.line
+    sel := graphql.SelectionAt(doc, op.selections.get(0))
+    println sel.kind == graphql.SEL_FIELD, sel.name, graphql.ResponseKey(sel), sel.args.len(), sel.directives.len(), sel.selections.len(), sel.line, sel.col
+    arg := sel.args.get(1)
+    println arg.name, graphql.PrintValue(doc, arg.value), graphql.ValueAt(doc, arg.value).kind == graphql.VAL_LIST
+    vdef := op.varDefs.get(0)
+    println vdef.name, graphql.PrintTypeRef(doc, vdef.typeRef), graphql.TypeRefName(doc, vdef.typeRef)
+    println graphql.TypeRefIsNonNull(doc, vdef.typeRef), graphql.TypeRefIsList(doc, vdef.typeRef), graphql.TypeRefAt(doc, vdef.typeRef).name
+    frag := doc.frags.get(graphql.FindFragment(doc, "Info"))
+    println frag.name, frag.typeCondition, frag.selections.len()
+    println graphql.PrintStringValue("hello \"world\"")
+    graphql.FreeDocument(doc)
+
+    mut ok := false
+    stream := graphql.Tokenize(`{ a(x: 1.5, y: "s") }`, ok)
+    println ok, stream.toks.len()
+    tok := stream.toks.get(5)
+    println graphql.TokenKindName(tok.kind), tok.lexeme, tok.fval, tok.line, tok.col
+    println graphql.IsStringToken(graphql.TOK_STRING), graphql.TokenKindName(graphql.TOK_LBRACE)
+
+    _ := graphql.Parse("{ a(", err)
+    println err.category == graphql.ERR_SYNTAX, err.line, err.col, err.hasLocation
+    println graphql.ErrorString(err)
+
+    mut e := graphql.NewError(graphql.ERR_EXECUTION, "failed")
+    graphql.PathPushKey(e, "books")
+    graphql.PathPushIndex(e, 2)
+    graphql.PathPushKey(e, "title")
+    println graphql.PathLen(e), graphql.PathString(e)
+    mut errs := graphql.GqlErrorList {}
+    graphql.AddError(errs, e)
+    graphql.AddError(errs, graphql.NewErrorAt(graphql.ERR_VALIDATION, "bad", 3, 7))
+    graphql.AddError(errs, graphql.SyntaxError("unclosed parenthesis", 1, 4))
+    println graphql.HasErrors(errs), graphql.ErrorCount(errs), graphql.ErrorAt(errs, 1).line
+    println value.ArrayLen(graphql.ErrorsToValue(errs)), value.IsObject(graphql.ErrorToValue(e))
+    graphql.FreeError(err)
+    graphql.FreeErrorList(errs)
+    println graphql.ERR_REQUEST, graphql.SpecEdition
+
+    mut s := graphql.ParseSchema("type Query { n(x: Int!): Int e: Color } enum Color { RED }", err)
+    println graphql.ValidateSource(s, "{ n(x: \"a\") }").items.len() > 0
+    mut doc2 := graphql.Parse("{ n(x: 1) e }", err)
+    println graphql.ValidateOk(s, doc2), graphql.Validate(s, doc2).items.len()
+    c := graphql.CoerceLeafResult(s, "Color", value.ValueString("RED"))
+    println c.ok, value.AsString(c.value)
+    c2 := graphql.CoerceLeafResult(s, "Int", value.ValueString("x"))
+    println c2.ok, c2.message.len() > 0
+    graphql.FreeDocument(doc2)
+    graphql.FreeSchema(s)
+end

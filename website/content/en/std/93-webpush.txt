@@ -1,0 +1,97 @@
+pkg.en = webpush
+pkg.name = webpush
+pkg.group = Web and browser
+pkg.summary = Sending notifications to browsers from a server, with VAPID keys and the standard encryption.
+pkg.title = The webpush package in Salam | Web Push and VAPID
+pkg.description = The webpush package in Salam: making a VAPID key pair, encrypting a message under RFC 8291, and sending a notification to Chrome and Firefox without a middleman service, with examples.
+pkg.import = webpush
+pkg.intro <<
+<p>A web push notification is a message a server sends to a user's browser even when the site is not open: a new chat message, a shipped order, a breaking news alert. This package is the server side. It makes the VAPID keys that identify your server, encrypts each message for one browser under RFC 8291 (<code>aes128gcm</code>) so the push service in between never sees its contents, signs the request, and posts it with <a href="/std/net/http/#guide-raw">net/http</a>. The page side is plain JavaScript: a service worker and <code>pushManager.subscribe</code>.</p>
+<p>The flow:</p>
+<ol>
+<li>Make a key pair once with <code>GenerateKeys</code> and keep it; load it later with <code>KeysFrom</code>.</li>
+<li>The page subscribes with the public key and sends you the subscription JSON; store it with the user as a <code>Subscription</code>.</li>
+<li>Send messages with <code>Send</code>, and delete a subscription when the result says <code>gone</code>.</li>
+</ol>
+<p>Things that catch people out:</p>
+<ul>
+<li><strong>New keys break every subscription.</strong> Each subscription is tied to the public key it was made with.</li>
+<li><strong>A <code>ttl</code> of 0 is replaced by the 28 day default</strong>, so "deliver now or drop it" cannot be expressed; use a short value such as 60 instead.</li>
+<li><strong>The payload size is not checked.</strong> More than 3993 bytes of text is still encrypted and sent, and the push service rejects it, usually with 413.</li>
+<li><strong><code>Send</code> waits as long as the push service takes</strong>; it has no time limit, so sending to thousands of users one after another can be slow. <code>KeysFrom</code> only checks that both keys are non-empty.</li>
+</ul>
+
+<h2 id="guide-keys">Make the VAPID keys once</h2>
+<p>The VAPID key pair identifies your server to the push services, and every browser subscription is tied to its public key. If you make new keys at every start, all existing subscriptions stop working. So make them once, keep them somewhere safe, and load them with <code>KeysFrom</code> afterwards. The program keeps them in a file; a real server would more likely read them from its configuration or environment.</p>
+{{example.webpush-keys-file}}
+<p>The public key is the 87 character text that the page passes as <code>applicationServerKey</code> to <code>pushManager.subscribe</code>. The private key never leaves the server.</p>
+
+<h2 id="guide-subscription">Read the subscription the browser sends</h2>
+<p>After the user allows notifications, <code>pushManager.subscribe()</code> in the page returns a subscription. Its <code>toJSON()</code> form has an <code>endpoint</code> and two keys, <code>p256dh</code> and <code>auth</code>. Send that JSON to your server, read it into a <code>Subscription</code> with <a href="/std/encoding/json/">encoding/json</a> and store it with the user. <code>Encrypt</code> reports through its <code>ok</code> argument whether the keys are usable, which is a cheap way to reject a broken subscription before you store it.</p>
+{{example.webpush-subscription}}
+
+<h2 id="guide-payload">Keep the payload small</h2>
+<p>A push message carries at most 4096 bytes after encryption, which leaves 3993 bytes for your text. Most services also deliver small messages faster. Send a title, a short body and a link, and let the page fetch anything bigger when the user opens the notification. The program shows how the size grows: the encrypted body adds a fixed header and the padding, and base64url makes it a third longer again.</p>
+{{example.webpush-payload-size}}
+
+<h2 id="guide-broadcast">Send to many users and clean up</h2>
+<p>To notify everyone, loop over the stored subscriptions and call <code>Send</code> for each one. Look at the <code>Result</code>: <code>ok</code> means the push service accepted the message, <code>gone</code> (HTTP 404 or 410) means the user unsubscribed or the browser dropped the subscription, so delete it; anything else is worth trying again later. <code>ttl</code> says how long the service may hold the message for an offline device, <code>urgency</code> lets a phone save battery on low priority messages, and a message with the same <code>topic</code> replaces an older one that is still waiting.</p>
+{{example.webpush-broadcast}}
+<p>This program needs real subscriptions from a browser and network access, so it is only checked here. To try it, replace the sample endpoints with subscriptions taken from your own page.</p>
+>>
+
+doc.DEFAULT_TTL = How long the push service keeps a message by default: 28 days, in seconds.
+doc.Keys = The VAPID keys of the server.
+doc.Keys.public_key = The public key as url safe base64; this is what you give to <code>applicationServerKey</code> in the page JavaScript.
+doc.Keys.private_key = The private key; keep it secret.
+doc.Keys.ok = The keys are valid.
+doc.Subscription = The subscription the browser makes with <code>pushManager.subscribe</code> and sends to your server.
+doc.Subscription.endpoint = The address of the browser push service.
+doc.Subscription.p256dh = The public key of the browser, from the <code>keys</code> part of the subscription.
+doc.Subscription.auth = The authentication secret, from the same part.
+doc.Options = The send options.
+doc.Options.subject = Your contact address, as a <code>mailto:</code> or a web address; the services require it.
+doc.Options.ttl = How many seconds the service should hold the message for a browser that is off. 0 or less sends the 28 day default.
+doc.Options.urgency = The urgency: <code>very-low</code>, <code>low</code>, <code>normal</code> or <code>high</code>; empty sends no header, which services treat as normal. The value is not checked.
+doc.Options.topic = The topic; a new message with the same topic replaces an earlier undelivered one.
+doc.Result = The result of the send.
+doc.Result.ok = The service accepted the message.
+doc.Result.status = The HTTP status code of the service.
+doc.Result.gone = The subscription is no longer valid (404 or 410); delete it from your database.
+doc.Result.error = Why the send failed: a network error, or the body of the service's answer when it is short.
+doc.GenerateKeys = Makes a fresh VAPID key pair; make it once and keep it, because the subscriptions are tied to the public key.
+doc.KeysFrom = Returns stored keys; <code>ok</code> is false when either one is empty. The keys themselves are not checked until the first <code>Send</code>.
+doc.VapidHeaderAt = The <code>Authorization</code> header for the service at the given address, at the given time in Unix seconds. The signature is deterministic, so the same input gives the same output.
+doc.VapidHeader = The same, at the current time.
+doc.EncryptWith = Encrypts the message with the given key and salt under RFC 8291; for testing against the standard vectors. In real work use <code>Encrypt</code>.
+doc.Encrypt = Encrypts the message for this subscription; with a fresh key and salt every time, so two outputs are never the same.
+doc.Send = Encrypts the message and sends it to the browser push service with the VAPID header, which is valid for 12 hours. An empty message is a push with no body. There is no time limit and no check of the payload size.
+doc.NewOptions = The default options with a contact address.
+
+ex.DEFAULT_TTL = webpush-Keys
+ex.Keys = webpush-Keys
+ex.Keys.public_key = webpush-Keys
+ex.Keys.private_key = webpush-Keys
+ex.Keys.ok = webpush-Keys
+ex.Options = webpush-Keys
+ex.Options.subject = webpush-Keys
+ex.Options.ttl = webpush-Keys
+ex.Options.urgency = webpush-Keys
+ex.Options.topic = webpush-Keys
+ex.Result.ok = webpush-Keys
+ex.GenerateKeys = webpush-Keys
+ex.KeysFrom = webpush-Keys
+ex.VapidHeaderAt = webpush-Keys
+ex.VapidHeader = webpush-Keys
+ex.NewOptions = webpush-Keys
+ex.Subscription = webpush-Encrypt
+ex.Subscription.endpoint = webpush-Encrypt
+ex.Subscription.p256dh = webpush-Encrypt
+ex.Subscription.auth = webpush-Encrypt
+ex.EncryptWith = webpush-Encrypt
+ex.Encrypt = webpush-Encrypt
+ex.Result = webpush-Send
+ex.Result.status = webpush-Send
+ex.Result.gone = webpush-Send
+ex.Result.error = webpush-Send
+ex.Send = webpush-Send

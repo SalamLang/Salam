@@ -1,0 +1,632 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "mcpapi"
+@fa "رابط‌ام‌سی‌پی"
+package mcpapi
+
+import mem
+import str
+import sort
+import fs.dir
+import fs.file
+import fs.path
+
+include mcptxt "mcp_text.salam"
+include mcpexec "mcp_exec.salam"
+include mcpdecl "mcp_decl.salam"
+
+mut g_ready := false
+mut g_root := ""
+mut g_pkgs := Vector {} as Vector<str>
+mut g_decls := Vector {} as Vector<mcpdecl.Decl>
+
+func _lead(ln: str): int:
+    mut i := 0
+    until i < ln.len() and (ln[i] == ' ' or ln[i] == '\t'):
+        i += 1
+    end
+    ret i
+end
+
+func _indent(ln: str): int:
+    mut n := 0
+    mut i := 0
+    until i < ln.len():
+        c := ln[i]
+        if c == ' ':
+            n += 1
+        else c == '\t':
+            n += 4
+        else:
+            ret n
+        end
+        i += 1
+    end
+    ret n
+end
+
+func _strip_word(t: str, word: str, ok &: bool): str:
+    ok = false
+    w := word.concat(" ")
+    if str.StartsWith(t, w):
+        ok = true
+        ret t.substr(w.len(), t.len() - w.len()).trim()
+    end
+    ret t
+end
+
+func _modifier(t: str, rest &: str): bool:
+    mut ok := false
+    mods := Vector {} as Vector<str>
+    mods.push("inline")
+    mods.push("pure")
+    mods.push("noinline")
+    mods.push("noret")
+    mods.push("deprecated")
+    mut i := 0
+    until i < mods.len():
+        r := _strip_word(t, mods.get(i), ok)
+        if ok:
+            rest = r
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func _decl_head(line: str, public_only: bool, kind &: str): str:
+    kind = ""
+    if public_only and str.IndexFrom(line, "pub ", 0) != _lead(line):
+        ret ""
+    end
+    mut t := line.trim()
+    mut ok := false
+    t = _strip_word(t, "pub", ok)
+    if public_only and not ok: ret "" end
+    mut rest := ""
+    until _modifier(t, rest):
+        t = rest
+    end
+    each k in ["func", "struct", "enum", "const", "interface", "type"]:
+        r := _strip_word(t, k, ok)
+        if ok:
+            kind = k
+            ret r
+        end
+    end
+    ret ""
+end
+
+func _ident_end(s: str, from: int, stops: str): int:
+    mut i := from
+    until i < s.len():
+        if stops.find(s.substr(i, 1)) >= 0: ret i end
+        i += 1
+    end
+    ret s.len()
+end
+
+func _name_of(kind: str, rest: str): str:
+    if kind == "func": ret rest.substr(0, _ident_end(rest, 0, "(<: ")).trim() end
+    if kind == "const":
+        walrus := rest.find(":=")
+        colon := rest.find(":")
+        mut stop := rest.len()
+        if colon >= 0: stop = colon end
+        if walrus >= 0 and walrus <= stop: stop = walrus end
+        assign := rest.find("=")
+        if assign >= 0 and assign < stop: stop = assign end
+        ret rest.substr(0, stop).trim()
+    end
+    ret rest.substr(0, _ident_end(rest, 0, "<:= ")).trim()
+end
+
+func _paren_depth(s: str): int:
+    mut d := 0
+    mut in_str := false
+    mut i := 0
+    until i < s.len():
+        c := s[i]
+        if in_str:
+            if c == '\\':
+                i += 1
+            else c == '"':
+                in_str = false
+            end
+        else c == '"':
+            in_str = true
+        else c == '(':
+            d += 1
+        else c == ')':
+            d -= 1
+        end
+        i += 1
+    end
+    ret d
+end
+
+func _join_header(lines: Vector<str>, at: int, used &: int): str:
+    mut h := lines.get(at).trim()
+    used = 1
+    mut depth := _paren_depth(h)
+    mut j := at + 1
+    until depth > 0 and j < lines.len() and used < 40:
+        part := lines.get(j).trim()
+        if str.EndsWith(h, "(") or str.StartsWith(part, ")"):
+            h = h.concat(part)
+        else:
+            h = h.concat(" ").concat(part)
+        end
+        depth += _paren_depth(part)
+        used += 1
+        j += 1
+    end
+    ret str.Replace(h, ",)", ")")
+end
+
+func _body_word(s: str): bool:
+    words := Vector {} as Vector<str>
+    words.push("ret")
+    words.push("if")
+    words.push("until")
+    words.push("repeat")
+    words.push("each")
+    words.push("mut")
+    words.push("print")
+    words.push("println")
+    words.push("defer")
+    words.push("match")
+    words.push("switch")
+    mut i := 0
+    until i < words.len():
+        w := words.get(i)
+        if s == w or str.StartsWith(s, w.concat(" ")) or str.StartsWith(s, w.concat("(")): ret true end
+        i += 1
+    end
+    ret false
+end
+
+func _top_colon(s: str): int:
+    mut depth := 0
+    mut in_str := false
+    mut i := 0
+    until i < s.len():
+        c := s[i]
+        if in_str:
+            if c == '\\':
+                i += 1
+            else c == '"':
+                in_str = false
+            end
+        else c == '"':
+            in_str = true
+        else c == '(' or c == '[' or c == '<':
+            depth += 1
+        else c == ')' or c == ']' or c == '>':
+            depth -= 1
+        else c == ':' and depth <= 0:
+            ret i
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func _func_signature(h: str): str:
+    open_p := h.find("(")
+    if open_p < 0: ret h end
+    mut depth := 0
+    mut close_p := 0 - 1
+    mut i := open_p
+    until i < h.len() and close_p < 0:
+        c := h[i]
+        if c == '(': depth += 1 end
+        if c == ')':
+            depth -= 1
+            if depth == 0: close_p = i end
+        end
+        i += 1
+    end
+    if close_p < 0: ret h end
+    head := h.substr(0, close_p + 1)
+    mut rest := h.substr(close_p + 1, h.len() - close_p - 1).trim()
+    if not str.StartsWith(rest, ":"): ret head end
+    rest = rest.substr(1, rest.len() - 1).trim()
+    p := _top_colon(rest)
+    if p < 0: ret head end
+    ret_type := rest.substr(0, p).trim()
+    if ret_type.len() == 0 or _body_word(ret_type): ret head end
+    ret head.concat(": ").concat(ret_type)
+end
+
+func _signature(kind: str, h: str, at_kw: str): str:
+    kw := h.find(at_kw.concat(" "))
+    mut s := h
+    if kw >= 0: s = h.substr(kw, h.len() - kw) end
+    if kind == "func": ret _func_signature(s) end
+    if kind == "const": ret s end
+    p := _top_colon(s)
+    if p > 0: ret s.substr(0, p).trim() end
+    ret s
+end
+
+func _fa_alias(lines: Vector<str>, at: int): str:
+    mut j := at - 1
+    until j >= 0 and j >= at - 4:
+        ln := lines.get(j).trim()
+        if str.StartsWith(ln, "@fa \"") and str.EndsWith(ln, "\""):
+            ret ln.substr(5, ln.len() - 6)
+        end
+        if not str.StartsWith(ln, "@"): ret "" end
+        j -= 1
+    end
+    ret ""
+end
+
+func _block_end(lines: Vector<str>, at: int, ind: int): int:
+    mut j := at + 1
+    until j < lines.len():
+        ln := lines.get(j)
+        if ln.trim() == "end" and _indent(ln) == ind: ret j end
+        if ln.trim().len() > 0 and _indent(ln) < ind: ret j end
+        j += 1
+    end
+    ret lines.len()
+end
+
+func _member_indent(lines: Vector<str>, from: int, stop: int): int:
+    mut j := from
+    until j < stop:
+        if lines.get(j).trim().len() > 0: ret _indent(lines.get(j)) end
+        j += 1
+    end
+    ret 0 - 1
+end
+
+func _field_text(t: str): str:
+    mut ok := false
+    f := _strip_word(t, "pub", ok)
+    eq_at := f.find(" = ")
+    if eq_at > 0:
+        dflt := f.substr(eq_at + 3, f.len() - eq_at - 3).trim()
+        if str.EndsWith(dflt, "[") or str.EndsWith(dflt, "{") or str.EndsWith(dflt, "(") or str.EndsWith(dflt, ","):
+            ret f.substr(0, eq_at).trim()
+        end
+    end
+    ret f
+end
+
+func _new_decl(kind: str, name: str, sig: str, pkg: str, rel: str, line: int, fa: str): mcpdecl.Decl:
+    mut d := mcpdecl.Decl {}
+    d.kind = kind
+    d.name = name
+    d.signature = sig
+    d.pkg = pkg
+    d.file = rel
+    d.line = line
+    d.fa = fa
+    ret d
+end
+
+func _scan_members(out &: Vector<mcpdecl.Decl>, lines: Vector<str>, at: int, owner: str, kind: str, pkg: str, rel: str): str:
+    ind := _indent(lines.get(at))
+    stop := _block_end(lines, at, ind)
+    mind := _member_indent(lines, at + 1, stop)
+    mut fields := Vector {} as Vector<str>
+    mut j := at + 1
+    until j < stop:
+        ln := lines.get(j)
+        t := ln.trim()
+        if t.len() > 0 and _indent(ln) == mind and t != "end" and not str.StartsWith(t, "@") and not str.StartsWith(t, "//"):
+            mut mk := ""
+            rest := _decl_head(t, kind == "struct", mk)
+            if mk == "func":
+                mut used := 0
+                h := _join_header(lines, j, used)
+                mut m := _new_decl("method", _name_of("func", rest), _signature("func", h, "func"), pkg, rel, j + 1, _fa_alias(lines, j))
+                m.receiver = owner
+                out.push(m)
+            else str.StartsWith(t, "pub ") and t.find(":") > 0:
+                fields.push(_field_text(t))
+            end
+        end
+        j += 1
+    end
+    ret mcptxt.Join(fields, "\n")
+end
+
+func _enum_members(lines: Vector<str>, at: int): str:
+    h := lines.get(at).trim()
+    colon := _top_colon(h)
+    mut body := ""
+    if colon >= 0: body = h.substr(colon + 1, h.len() - colon - 1).trim() end
+    if str.EndsWith(body, " end"): ret body.substr(0, body.len() - 4).trim() end
+    if body == "end": ret "" end
+    ind := _indent(lines.get(at))
+    stop := _block_end(lines, at, ind)
+    mut parts := Vector {} as Vector<str>
+    if body.len() > 0: parts.push(body) end
+    mut j := at + 1
+    until j < stop:
+        t := lines.get(j).trim()
+        if t.len() > 0 and not str.StartsWith(t, "@") and not str.StartsWith(t, "//"): parts.push(t) end
+        j += 1
+    end
+    ret str.Replace(mcptxt.Join(parts, " "), ", ", ", ")
+end
+
+func _one_line(t: str): bool:
+    ret str.EndsWith(t, " end") or t.find(": end") > 0
+end
+
+func _scan_file(out &: Vector<mcpdecl.Decl>, full: str, pkg: str, rel: str):
+    text := file.ReadText(full)
+    mut lines := mcptxt.Lines(text)
+    mem.Free(text as void*)
+    defer mcptxt.FreeLines(lines)
+    mut i := 0
+    until i < lines.len():
+        ln := lines.get(i)
+        mut kind := ""
+        rest := _decl_head(ln, true, kind)
+        if kind.len() > 0 and _indent(ln) <= 4:
+            name := _name_of(kind, rest)
+            mut used := 1
+            mut h := ln.trim()
+            if kind == "func": h = _join_header(lines, i, used) end
+            mut d := _new_decl(kind, name, _signature(kind, h, kind), pkg, rel, i + 1, _fa_alias(lines, i))
+            if (kind == "struct" or kind == "interface") and not _one_line(ln.trim()):
+                d.members = _scan_members(out, lines, i, name, kind, pkg, rel)
+            end
+            if kind == "enum": d.members = _enum_members(lines, i) end
+            out.push(d)
+            if (kind == "struct" or kind == "interface" or kind == "enum") and not _one_line(ln.trim()):
+                used = _block_end(lines, i, _indent(ln)) - i + 1
+            end
+            i += used
+        else:
+            i += 1
+        end
+    end
+end
+
+func _is_package(root: str, name: str): bool:
+    ret file.Exists(path.Join(path.Join(root, name), name.concat(".salam")))
+end
+
+func _collect(pkgs &: Vector<str>, decls &: Vector<mcpdecl.Decl>, dir_path: str, prefix: str):
+    names := mcptxt.Sorted(dir.ListDirs(dir_path))
+    mut i := 0
+    until i < names.len():
+        n := names.get(i)
+        if not str.StartsWith(n, ".") and _is_package(dir_path, n):
+            mut full := n
+            if prefix.len() > 0: full = prefix.concat(".").concat(n) end
+            pkgs.push(full)
+            sub := path.Join(dir_path, n)
+            files := mcptxt.Sorted(dir.List(sub))
+            mut j := 0
+            until j < files.len():
+                f := files.get(j)
+                if str.EndsWith(f, ".salam"):
+                    rel := "std/".concat(str.Replace(full, ".", "/")).concat("/").concat(f)
+                    _scan_file(decls, path.Join(sub, f), full, rel)
+                end
+                j += 1
+            end
+            _collect(pkgs, decls, sub, full)
+        end
+        i += 1
+    end
+end
+
+func _ensure():
+    root := mcpexec.StdRoot()
+    if g_ready and g_root == root: ret end
+    mut pkgs := Vector {} as Vector<str>
+    mut decls := Vector {} as Vector<mcpdecl.Decl>
+    if dir.Exists(root): _collect(pkgs, decls, root, "") end
+    g_pkgs = pkgs
+    g_decls = decls
+    g_root = root
+    g_ready = true
+end
+
+func _score(d: mcpdecl.Decl, terms: Vector<str>): int:
+    mut total := 0
+    mut in_name := 0
+    lname := d.name.lower()
+    mut leaf := d.pkg.lower()
+    mut dot := leaf.find(".")
+    mut k := 0
+    until k < 4 and dot >= 0:
+        leaf = leaf.substr(dot + 1, leaf.len() - dot - 1)
+        dot = leaf.find(".")
+        k += 1
+    end
+    mut i := 0
+    until i < terms.len():
+        alts := mcptxt.Split(terms.get(i), " ")
+        mut s := 0
+        mut a := 0
+        until a < alts.len():
+            mut v := _term_score(d, lname, leaf, alts.get(a))
+            if a > 0: v = v * 9 / 10 end
+            if v > s: s = v end
+            a += 1
+        end
+        if s == 0: ret 0 end
+        if s >= 40: in_name += 1 end
+        total += s
+        i += 1
+    end
+    if terms.len() > 1 and in_name == terms.len(): total += 60 end
+    if d.kind == "const": total = total / 2 end
+    ret total
+end
+
+func _term_score(d: mcpdecl.Decl, lname: str, leaf: str, t: str): int:
+    if t.len() == 0: ret 0 end
+    mut s := 0
+    if lname == t:
+        s = 100
+    else str.StartsWith(lname, t):
+        s = 60
+    else lname.find(t) >= 0:
+        s = 40
+    else leaf == t:
+        s = 45
+    else d.fa.find(t) >= 0:
+        s = 35
+    else d.receiver.lower().find(t) >= 0:
+        s = 25
+    else d.pkg.lower().find(t) >= 0:
+        s = 20
+    else d.signature.lower().find(t) >= 0:
+        s = 10
+    else d.members.lower().find(t) >= 0:
+        s = 5
+    end
+    ret s
+end
+
+func _synonyms(w: str): str:
+    switch w:
+        "random": ret "rand" end
+        "regexp", "re", "pattern": ret "regex" end
+        "string", "text": ret "str" end
+        "folder", "directory", "mkdir": ret "dir" end
+        "date", "datetime", "clock": ret "time calendar" end
+        "wait", "delay": ret "sleep" end
+        "hash", "digest": ret "sha md5 hash crypto" end
+        "encrypt", "decrypt", "cipher": ret "aes crypto encrypt decrypt" end
+        "environment", "getenv": ret "env" end
+        "args", "argv", "arguments", "flags": ret "args flag cli" end
+        "subprocess", "command", "exec", "spawn": ret "process shell run exec" end
+        "socket": ret "tcp udp socket" end
+        "mutex", "lock": ret "mutex sync lock" end
+        "channel", "channels": ret "chan" end
+        "database", "sql", "sqlite", "postgres", "mysql": ret "db sqlite postgres mysql" end
+        "logging", "logger": ret "log" end
+        "printf", "sprintf", "format": ret "fmt format sprintf" end
+        "uppercase": ret "upper" end
+        "lowercase": ret "lower" end
+        "contains": ret "contains includes" end
+        "length", "size", "count": ret "len size count" end
+        "atoi", "parseint", "parse_int": ret "toint parseint to_int conv" end
+        "dict", "dictionary", "hashmap": ret "map hashmap" end
+        "list", "array": ret "vector array list" end
+        "download", "fetch", "request": ret "get http fetch request" end
+        "upload": ret "post put upload" end
+    end
+    ret ""
+end
+
+func _terms(query: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    words := mcptxt.Split(query.lower().trim(), " ")
+    mut i := 0
+    until i < words.len():
+        w := words.get(i).trim()
+        if w.len() > 0:
+            syn := _synonyms(w)
+            if syn.len() > 0:
+                out.push(w.concat(" ").concat(syn))
+            else:
+                out.push(w)
+            end
+        end
+        i += 1
+    end
+    ret out
+end
+
+@en "Packages"
+@fa "بسته‌ها"
+pub func Packages(): Vector<str>:
+    _ensure()
+    ret g_pkgs
+end
+
+@en "HasPackage"
+@fa "بسته دارد"
+pub func HasPackage(name: str): bool:
+    _ensure()
+    mut i := 0
+    until i < g_pkgs.len():
+        if g_pkgs.get(i) == name: ret true end
+        i += 1
+    end
+    ret false
+end
+
+@en "Of"
+@fa "از بسته"
+pub func Of(pkg: str): Vector<mcpdecl.Decl>:
+    _ensure()
+    mut out := Vector {} as Vector<mcpdecl.Decl>
+    mut i := 0
+    until i < g_decls.len():
+        d := g_decls.get(i)
+        if d.pkg == pkg: out.push(d) end
+        i += 1
+    end
+    ret out
+end
+
+@en "Search"
+@fa "جستجو"
+pub func Search(query: str, pkg: str, limit: int): Vector<mcpdecl.Decl>:
+    _ensure()
+    terms := _terms(query)
+    mut picked := Vector {} as Vector<mcpdecl.Decl>
+    mut keys := Vector {} as Vector<f64>
+    mut i := 0
+    until i < g_decls.len():
+        d := g_decls.get(i)
+        if pkg.len() == 0 or d.pkg == pkg or str.StartsWith(d.pkg, pkg.concat(".")):
+            s := _score(d, terms)
+            if s > 0:
+                picked.push(d)
+                keys.push((s * 1000 - d.name.len() * 3 - d.pkg.len()) as f64)
+            end
+        end
+        i += 1
+    end
+    mut idx := Vector {} as Vector<int>
+    mut k := 0
+    until k < picked.len():
+        idx.push(k)
+        k += 1
+    end
+    sort.SortIndexDesc(idx, keys)
+    mut out := Vector {} as Vector<mcpdecl.Decl>
+    mut cap := limit
+    if cap <= 0: cap = 25 end
+    mut j := 0
+    until j < idx.len() and out.len() < cap:
+        out.push(picked.get(idx.get(j)))
+        j += 1
+    end
+    ret out
+end
+
+@en "Total"
+@fa "شمار"
+pub func Total(): int:
+    _ensure()
+    ret g_decls.len()
+end

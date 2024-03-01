@@ -1,0 +1,58 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import db.elasticsearch
+
+include fake "_fake.salam"
+
+const PORT := 19863
+
+func main:
+    body := `{"took":3,"hits":{"total":{"value":120,"relation":"eq"},"hits":[]},"aggregations":{"by_author":{"buckets":[{"key":"ferdowsi","doc_count":70,"avg_year":{"value":1010.0}},{"key":"saadi","doc_count":50,"avg_year":{"value":1258.5}}]},"oldest":{"value":940.0},"authors":{"value":2},"per_century":{"buckets":[{"key_as_string":"1000-01-01","key":-30610224000000,"doc_count":70}]}}}`
+    fake.On("POST", "/books/_search", 200, body)
+    if not fake.Start(PORT):
+        println "fake server did not start"
+        ret
+    end
+    mut c := elasticsearch.Connect("http://127.0.0.1:" + str.FromInt(PORT as i64))
+
+    by_author := elasticsearch.SubAggs(elasticsearch.TermsAgg("author", 10), elasticsearch.AddAgg("", "avg_year", elasticsearch.AvgAgg("year")))
+    mut aggs := elasticsearch.AddAgg("", "by_author", by_author)
+    aggs = elasticsearch.AddAgg(aggs, "oldest", elasticsearch.MinAgg("year"))
+    aggs = elasticsearch.AddAgg(aggs, "newest", elasticsearch.MaxAgg("year"))
+    aggs = elasticsearch.AddAgg(aggs, "pages", elasticsearch.SumAgg("pages"))
+    aggs = elasticsearch.AddAgg(aggs, "authors", elasticsearch.CardinalityAgg("author"))
+    aggs = elasticsearch.AddAgg(aggs, "with_isbn", elasticsearch.ValueCountAgg("isbn"))
+    aggs = elasticsearch.AddAgg(aggs, "price_stats", elasticsearch.StatsAgg("price"))
+    aggs = elasticsearch.AddAgg(aggs, "price_steps", elasticsearch.HistogramAgg("price", 5.0))
+    aggs = elasticsearch.AddAgg(aggs, "per_century", elasticsearch.DateHistogramAgg("published", "year"))
+    aggs = elasticsearch.AddAgg(aggs, "epics", elasticsearch.FilterAgg(elasticsearch.Term("tags", "epic")))
+    aggs = elasticsearch.AddAgg(aggs, "best", elasticsearch.TopHitsAgg(1))
+    println "aggs:", aggs
+
+    res := elasticsearch.Search(c, "books", elasticsearch.SearchRequest { size = 0, aggs = aggs })
+    println "sent:", fake.Last()
+    println "total:", res.total
+    println "oldest:", elasticsearch.AggValue(res, "oldest"), "authors:", elasticsearch.AggValue(res, "authors")
+    each b in elasticsearch.AggBuckets(res, "by_author"):
+        println "  author", b.key, b.doc_count, elasticsearch.AggValueIn(b.raw, "avg_year")
+    end
+    each b in elasticsearch.AggBuckets(res, "per_century"):
+        println "  century", b.key, b.doc_count
+    end
+    println "raw:", elasticsearch.AggRaw(res, "oldest")
+    println "in raw:", elasticsearch.AggBucketsIn(res.aggregations, "by_author").len()
+    elasticsearch.Close(c)
+end

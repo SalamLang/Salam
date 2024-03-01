@@ -1,0 +1,713 @@
+package jsgen
+
+import str
+
+include tok "../token.salam"
+include at "../ast.salam"
+include sm "../semantic/semantic.salam"
+include co "../sal_core.salam"
+
+inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
+
+func jsg_utf8_ok(s: str): bool:
+    n := str.Len(s)
+    mut i := 0
+    until i < n:
+        c := byte_at(s, i)
+        mut need := 0
+        if c < 128:
+            need = 0
+        else c >= 194 and c <= 223:
+            need = 1
+        else c >= 224 and c <= 239:
+            need = 2
+        else c >= 240 and c <= 244:
+            need = 3
+        else:
+            ret false
+        end
+        if i + need >= n:
+            ret false
+        end
+        repeat need in k:
+            cc := byte_at(s, i + 1 + k)
+            if cc < 128 or cc >= 192:
+                ret false
+            end
+        end
+        if need == 2:
+            c1 := byte_at(s, i + 1)
+            if c == 224 and c1 < 160:
+                ret false
+            end
+            if c == 237 and c1 >= 160:
+                ret false
+            end
+        end
+        if need == 3:
+            c2 := byte_at(s, i + 1)
+            if c == 240 and c2 < 144:
+                ret false
+            end
+            if c == 244 and c2 >= 144:
+                ret false
+            end
+        end
+        i += need + 1
+    end
+    ret true
+end
+
+func jsg_lit_len(a &: at.Ast, id: int): i64:
+    if at.StrLitLen(a, id) < (0 as i64):
+        ret 0 - 1
+    end
+    ret str.Len(at.Get(a, id).value_str)
+end
+
+func is_digit(c: int): bool:
+    ret c >= 48 and c <= 57
+end
+
+func is_alpha(c: int): bool:
+    ret (c >= 97 and c <= 122) or (c >= 65 and c <= 90)
+end
+
+func is_alnum(c: int): bool:
+    ret is_alpha(c) or is_digit(c)
+end
+
+func to_upper(c: int): int:
+    if c >= 97 and c <= 122:
+        ret c - 32
+    end
+    ret c
+end
+
+func name_in_strvec(v: Vector<str>, name: str): bool:
+    n := v.len()
+    mut i := 0
+    until i < n:
+        if str.Equals(v.get(i), name):
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func cg_indent(g &: Jg):
+    if g.compact:
+        ret
+    end
+    repeat g.indent:
+        str.BufAppend(g.out, "    ")
+    end
+end
+
+func cg_line(g &: Jg, txt: str):
+    cg_indent(g)
+    str.BufAppend(g.out, txt)
+    str.BufAppendChar(g.out, g.compact ? 32 : 10)
+end
+
+func local_known(g &: Jg, name: str): bool:
+    ret name_in_strvec(g.locals, name)
+end
+
+func local_add(g &: Jg, name: str):
+    g.locals.push(name)
+end
+
+func jsg_emit_taken(g &: Jg, emitted: str): bool:
+    ret name_in_strvec(g.local_emit, emitted)
+end
+
+func put_ident_byte(b &: str.StringBuilder, c: int):
+    hex := "0123456789abcdef"
+    if is_alnum(c):
+        str.BufAppendChar(b, c)
+    else c == 95:
+        str.BufAppend(b, "__")
+    else:
+        str.BufAppendChar(b, 95)
+        str.BufAppendChar(b, byte_at(hex, (c >> 4) & 15))
+        str.BufAppendChar(b, byte_at(hex, c & 15))
+    end
+end
+
+func is_c_keyword(s: str): bool:
+    each w in k_js_ckw:
+        if str.Equals(s, w):
+            ret true
+        end
+    end
+    ret false
+end
+
+func cg_cident(name: str): str:
+    n := str.Len(name)
+    if n == 0:
+        ret "_"
+    end
+    mut ok := not is_digit(byte_at(name, 0))
+    mut i := 0
+    until ok and i < n:
+        if not is_alnum(byte_at(name, i)):
+            ok = false
+        end
+        i += 1
+    end
+    if ok:
+        if is_c_keyword(name):
+            ret name + "_"
+        end
+        ret name
+    end
+    mut b := str.NewBuilder()
+    if is_digit(byte_at(name, 0)):
+        str.BufAppendChar(b, 95)
+    end
+    mut j := 0
+    until j < n:
+        put_ident_byte(b, byte_at(name, j))
+        j += 1
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func ts_base(ts: str): str:
+    mut n := str.Len(ts)
+    if n > 0 and byte_at(ts, n - 1) == 42:
+        n -= 1
+    end
+    mut cut := n
+    mut i := 0
+    until i < n:
+        if byte_at(ts, i) == 91:
+            cut = i
+            break
+        end
+        i += 1
+    end
+    ret ts.substr(0, cut)
+end
+
+func cg_is_int_typestr(ts: str): bool:
+    ret str.Equals(ts, "i8") or str.Equals(ts, "i16") or str.Equals(ts, "i32") or str.Equals(ts, "i64") or str.Equals(ts, "u8") or str.Equals(ts, "u16") or str.Equals(ts, "u32") or str.Equals(ts, "u64") or str.Equals(ts, "usize") or str.Equals(ts, "size")
+end
+
+func cg_is_unsigned_typestr(ts: str): bool:
+    ret str.Equals(ts, "u8") or str.Equals(ts, "u16") or str.Equals(ts, "u32") or str.Equals(ts, "u64") or str.Equals(ts, "usize")
+end
+
+func cg_common_int_typestr(x: str, y: str): str:
+    if not cg_is_int_typestr(x) or not cg_is_int_typestr(y):
+        ret ""
+    end
+    if str.Equals(x, y):
+        ret x
+    end
+    if cg_is_unsigned_typestr(x) != cg_is_unsigned_typestr(y):
+        ret ""
+    end
+    ret jsg_int_ts_bits(x) >= jsg_int_ts_bits(y) ? x : y
+end
+
+func cg_is_slice_ts(ts: str): bool:
+    ret str.StartsWith(ts, "slice<")
+end
+
+func jsg_is_byte_ptr_ts(ts: str): bool:
+    ret str.Equals(ts, "void*") or str.Equals(ts, "i8*") or str.Equals(
+        ts, "u8*"
+    ) or str.Equals(ts, "char*")
+end
+
+func jsg_ptr_struct(s &: sm.Sema, ts: str): int:
+    if not str.EndsWith(ts, "*") or str.EndsWith(ts, "**"):
+        ret 0
+    end
+    ret struct_by_name(s, str.Substr(ts, 0, str.Len(ts) - 1))
+end
+
+func jsg_prim_size(ts: str): int:
+    if str.EndsWith(ts, "*") or str.Equals(ts, "str") or str.StartsWith(ts, "func("):
+        ret 8
+    end
+    if str.Equals(ts, "i8") or str.Equals(ts, "u8") or str.Equals(ts, "bool") or str.Equals(ts, "char"):
+        ret 1
+    end
+    if str.Equals(ts, "i16") or str.Equals(ts, "u16"):
+        ret 2
+    end
+    if str.Equals(ts, "i32") or str.Equals(ts, "u32") or str.Equals(ts, "int") or str.Equals(ts, "uint") or str.Equals(ts, "f32") or str.Equals(ts, "float") or str.Equals(ts, "uchar"):
+        ret 4
+    end
+    if str.Equals(ts, "i64") or str.Equals(ts, "u64") or str.Equals(ts, "f64") or str.Equals(ts, "size") or str.Equals(ts, "usize") or str.Equals(ts, "isize"):
+        ret 8
+    end
+    ret 0
+end
+
+func jsg_view_kind(ts: str): int:
+    if str.Equals(ts, "i16"):
+        ret 1
+    end
+    if str.Equals(ts, "u16"):
+        ret 2
+    end
+    if str.Equals(ts, "i32") or str.Equals(ts, "int"):
+        ret 3
+    end
+    if str.Equals(ts, "u32") or str.Equals(ts, "uint") or str.Equals(ts, "uchar"):
+        ret 4
+    end
+    if str.Equals(ts, "f32") or str.Equals(ts, "float"):
+        ret 5
+    end
+    if str.Equals(ts, "f64"):
+        ret 6
+    end
+    ret 0
+end
+
+func jsg_layout(s &: sm.Sema, ts: str, size &: int, align &: int, depth: int):
+    p := jsg_prim_size(ts)
+    if p > 0:
+        size = p
+        align = p
+        ret
+    end
+    ssym := depth < 16 ? struct_by_name(s, ts) : 0
+    if ssym == 0 or sm.SymAt(s, ssym).kind == sm.SYM_ENUM:
+        size = 4
+        align = 4
+        ret
+    end
+    mems := sm.SymAt(s, ssym).members
+    mut off := 0
+    mut maxal := 1
+    if mems != 0:
+        msc := sm.ScopeAt(s, mems)
+        repeat msc.symbols.len() in i:
+            f := sm.SymAt(s, msc.symbols.get(i))
+            if f.kind == sm.SYM_FIELD:
+                mut fs := 0
+                mut fa := 1
+                jsg_layout(s, sm.ToString(s, f.ty), fs, fa, depth + 1)
+                if fa > maxal:
+                    maxal = fa
+                end
+                off = (off + fa - 1) / fa * fa + fs
+            end
+        end
+    end
+    size = off == 0 ? 0 : (off + maxal - 1) / maxal * maxal
+    align = maxal
+end
+
+func jsg_sizeof(s &: sm.Sema, ts: str): int:
+    mut sz := 0
+    mut al := 1
+    jsg_layout(s, ts, sz, al, 0)
+    ret sz
+end
+
+func jsg_ptr_operand(a &: at.Ast, id: int): int:
+    if id == 0 or at.KindOf(a, id) != at.AST_CAST:
+        ret 0
+    end
+    inner := at.Get(a, id).a
+    if inner == 0:
+        ret 0
+    end
+    ret jsg_is_byte_ptr_ts(at.Get(a, inner).type_str) ? inner : 0
+end
+
+func jsg_array_elem_ts(ts: str): str:
+    lb := str.IndexOf(ts, "[")
+    if lb < 0:
+        ret ts
+    end
+    rb := str.IndexOf(str.Substr(ts, lb, str.Len(ts) - lb), "]")
+    if rb < 0:
+        ret ts
+    end
+    ret str.Substr(ts, 0, lb) + str.Substr(ts, lb + rb + 1, str.Len(ts) - lb - rb - 1)
+end
+
+func jsg_is_fixed_array_ts(ts: str): bool:
+    ret has_bracket(ts) and not cg_is_slice_ts(ts) and not str.EndsWith(ts, "*") and not str.StartsWith(ts, "dyn ")
+end
+
+func jsg_is_value_struct_ts(s &: sm.Sema, ts: str): bool:
+    if str.Len(ts) == 0 or has_bracket(ts) or str.EndsWith(ts, "*") or str.StartsWith(ts, "dyn ") or str.StartsWith(ts, "Variant<") or str.StartsWith(ts, "func("):
+        ret false
+    end
+    if cg_is_vector_ts(s, ts) or cg_is_hashmap_ts(s, ts) or cg_is_mapiter_ts(s, ts) or str.Equals(ts, "str"):
+        ret false
+    end
+    if str.EndsWith(ts, "StringBuilder"):
+        ret false
+    end
+    mut sname := ""
+    ret cg_struct_of(s, ts, sname) != 0
+end
+
+func jsg_needs_copy(s &: sm.Sema, ts: str): bool:
+    ret jsg_is_fixed_array_ts(ts) or jsg_is_value_struct_ts(s, ts)
+end
+
+func jsg_copy_expr(g &: Jg, s &: sm.Sema, ts: str, expr: str, depth: int): str:
+    if depth > 64:
+        ret jsg_unsupported(g, "value type nested too deeply to copy")
+    end
+    if jsg_is_fixed_array_ts(ts):
+        ets := jsg_array_elem_ts(ts)
+        if not jsg_needs_copy(s, ets):
+            ret "(" + expr + ").slice()"
+        end
+        ev := jsg_fresh(g, "__e")
+        ret "(" + expr + ").map((" + ev + ") => " + jsg_copy_expr(g, s, ets, ev, depth + 1) + ")"
+    end
+    if not jsg_is_value_struct_ts(s, ts):
+        ret expr
+    end
+    mut sname := ""
+    ssym := cg_struct_of(s, ts, sname)
+    ov := jsg_fresh(g, "__o")
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "((" + ov + ") => ({ ")
+    msc := sm.ScopeAt(s, sm.SymAt(s, ssym).members)
+    mut first := true
+    repeat msc.symbols.len() in i:
+        f := sm.SymAt(s, msc.symbols.get(i))
+        if f.kind != sm.SYM_FIELD:
+            continue
+        end
+        if not first:
+            str.BufAppend(b, ", ")
+        end
+        first = false
+        fname := cg_cident(f.name)
+        fts := sm.ToString(s, f.ty)
+        str.BufAppend(b, fname + ": " + jsg_copy_expr(g, s, fts, ov + "." + fname, depth + 1))
+    end
+    str.BufAppend(b, " }))(" + expr + ")")
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func jsg_is_fresh_value(a &: at.Ast, id: int): bool:
+    k := at.KindOf(a, id)
+    if k == at.AST_CAST:
+        inner := at.Get(a, id).a
+        ret inner != 0 and jsg_is_fresh_value(a, inner)
+    end
+    ret k == at.AST_STRUCT_LIT or k == at.AST_ARRAY_LIT or k == at.AST_LITERAL
+end
+
+func cg_is_vector_ts(s &: sm.Sema, ts: str): bool:
+    ret cg_generic_is(s, ts, "Vector")
+end
+
+func cg_is_hashmap_ts(s &: sm.Sema, ts: str): bool:
+    ret cg_generic_is(s, ts, "HashMap")
+end
+
+func cg_is_mapiter_ts(s &: sm.Sema, ts: str): bool:
+    ret cg_generic_is(s, ts, "MapIter")
+end
+
+func cg_generic_is(s &: sm.Sema, ts: str, base: str): bool:
+    if not str.StartsWith(ts, base + "_"):
+        ret false
+    end
+    mut sname := ""
+    ssym := cg_struct_of(s, ts, sname)
+    if ssym == 0:
+        ret false
+    end
+    ret str.Equals(sm.SymAt(s, ssym).generic_base, base)
+end
+
+func has_bracket(ts: str): bool:
+    n := str.Len(ts)
+    mut i := 0
+    until i < n:
+        if byte_at(ts, i) == 91:
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func cg_encode_typestr(b &: str.StringBuilder, s: str, skip_spaces: bool):
+    n := str.Len(s)
+    mut i := 0
+    until i < n:
+        c := byte_at(s, i)
+        if c == 42:
+            str.BufAppend(b, "_ptr")
+        else c == 91:
+            str.BufAppend(b, "_arr")
+        else not (c == 93 or (c == 32 and skip_spaces)):
+            put_ident_byte(b, c)
+        end
+        i += 1
+    end
+end
+
+func type_code(s &: sm.Sema, t: int): str:
+    mut b := str.NewBuilder()
+    cg_encode_typestr(b, sm.ToString(s, t), false)
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func cg_mangle_in(
+    s &: sm.Sema, pkg: str, struct_name: str, fn: str, params: Vector<int>
+): str:
+    mut out := "_Salam_" + cg_cident(str.Len(pkg) > 0 ? pkg : "main")
+    if str.Len(struct_name) > 0:
+        out = out + "_S_" + cg_cident(struct_name)
+    end
+    out = out + "_" + cg_cident(fn)
+    n := params.len()
+    mut i := 0
+    until i < n:
+        out = out + "_" + type_code(s, params.get(i))
+        i += 1
+    end
+    ret out
+end
+
+func cg_mangle_ti(
+    s &: sm.Sema, typestr: str, fn: str, params: Vector<int>
+): str:
+    ret cg_mangle_in(s, "ti", typestr, fn, params)
+end
+
+func array_size_of(ts: str): i64:
+    n := str.Len(ts)
+    mut i := 0
+    mut lb := 0 - 1
+    until i < n:
+        if byte_at(ts, i) == 91:
+            lb = i
+            break
+        end
+        i += 1
+    end
+    if lb < 0:
+        ret 0
+    end
+    mut v := 0 as i64
+    mut p := lb + 1
+    until p < n and byte_at(ts, p) != 93:
+        c := byte_at(ts, p)
+        if c >= 48 and c <= 57:
+            v = v * 10 + ((c - 48) as i64)
+        end
+        p += 1
+    end
+    ret v
+end
+
+func sig_of_decl(s &: sm.Sema, fsym: int, decl: int): int:
+    if fsym == 0:
+        ret 0
+    end
+    fv := sm.SymAt(s, fsym)
+    n := fv.overloads.len()
+    mut i := 0
+    until i < n:
+        sg := fv.overloads.get(i)
+        if sm.SigAt(s, sg).decl == decl:
+            ret sg
+        end
+        i += 1
+    end
+    ret 0
+end
+
+func pick_overload(s &: sm.Sema, a &: at.Ast, fsym: int, call: int): int:
+    fv := sm.SymAt(s, fsym)
+    cv := at.Get(a, call)
+    nargs := cv.list.len()
+    mut fallback := 0
+    n := fv.overloads.len()
+    mut i := 0
+    until i < n:
+        sg := fv.overloads.get(i)
+        sv := sm.SigAt(s, sg)
+        if fallback == 0:
+            fallback = sg
+        end
+        if nargs < sv.required:
+            i += 1
+            continue
+        end
+        if not sv.variadic and nargs > sv.params.len():
+            i += 1
+            continue
+        end
+        nfix := nargs < sv.params.len() ? nargs : sv.params.len()
+        mut ok := true
+        mut j := 0
+        until j < nfix:
+            arg := at.Get(a, cv.list.get(j))
+            pt := sm.ToString(s, sv.params.get(j))
+            if str.Len(arg.type_str) == 0 or not str.Equals(arg.type_str, pt):
+                ok = false
+                break
+            end
+            j += 1
+        end
+        if ok:
+            ret sg
+        end
+        i += 1
+    end
+    ret fallback
+end
+
+func struct_by_name(s &: sm.Sema, name: str): int:
+    sid := sm.Lookup(s, s.global, name)
+    if sid != 0 and sm.SymAt(s, sid).kind == sm.SYM_STRUCT:
+        ret sid
+    end
+    gsc := sm.ScopeAt(s, s.global)
+    n := gsc.symbols.len()
+    mut i := 0
+    until i < n:
+        sy := gsc.symbols.get(i)
+        sv := sm.SymAt(s, sy)
+        if sv.kind == sm.SYM_STRUCT and sv.ty != sm.TYPE_NONE:
+            tn := sm.TypeAt(s, sv.ty).name
+            if str.Len(tn) > 0 and str.Equals(tn, name):
+                ret sy
+            end
+        end
+        i += 1
+    end
+    mut i2 := 0
+    until i2 < n:
+        pk := gsc.symbols.get(i2)
+        pv := sm.SymAt(s, pk)
+        if pv.kind != sm.SYM_PACKAGE or pv.members == 0:
+            i2 += 1
+            continue
+        end
+        msc := sm.ScopeAt(s, pv.members)
+        m := msc.symbols.len()
+        mut j := 0
+        until j < m:
+            sy2 := msc.symbols.get(j)
+            sv2 := sm.SymAt(s, sy2)
+            if sv2.kind == sm.SYM_STRUCT:
+                if str.Equals(sv2.name, name):
+                    ret sy2
+                end
+                if sv2.ty != sm.TYPE_NONE:
+                    tn2 := sm.TypeAt(s, sv2.ty).name
+                    if str.Len(tn2) > 0 and str.Equals(tn2, name):
+                        ret sy2
+                    end
+                end
+            end
+            j += 1
+        end
+        i2 += 1
+    end
+    ret 0
+end
+
+func cg_struct_of(s &: sm.Sema, ts: str, sname &: str): int:
+    sname = ts_base(ts)
+    ret struct_by_name(s, sname)
+end
+
+func cg_op_method(k: int): str:
+    if k == tok.TK_PLUS:
+        ret "operator_add"
+    else k == tok.TK_MINUS:
+        ret "operator_sub"
+    else k == tok.TK_STAR:
+        ret "operator_mul"
+    else k == tok.TK_SLASH:
+        ret "operator_div"
+    else k == tok.TK_PERCENT:
+        ret "operator_mod"
+    else k == tok.TK_POWER:
+        ret "operator_pow"
+    else k == tok.TK_EQ:
+        ret "operator_eq"
+    else k == tok.TK_NE:
+        ret "operator_ne"
+    else k == tok.TK_LT:
+        ret "operator_lt"
+    else k == tok.TK_GT:
+        ret "operator_gt"
+    else k == tok.TK_LE:
+        ret "operator_le"
+    else k == tok.TK_GE:
+        ret "operator_ge"
+    end
+    ret ""
+end
+
+func cg_compound_base(k: int): int:
+    if k == tok.TK_PLUS_EQ:
+        ret tok.TK_PLUS
+    else k == tok.TK_MINUS_EQ:
+        ret tok.TK_MINUS
+    else k == tok.TK_STAR_EQ:
+        ret tok.TK_STAR
+    else k == tok.TK_SLASH_EQ:
+        ret tok.TK_SLASH
+    else k == tok.TK_PERCENT_EQ:
+        ret tok.TK_PERCENT
+    else k == tok.TK_POWER_EQ:
+        ret tok.TK_POWER
+    end
+    ret tok.TK_EOF
+end
+
+func jsg_compound_int_base(k: int): int:
+    if k == tok.TK_AMP_EQ:
+        ret tok.TK_AMP
+    else k == tok.TK_PIPE_EQ:
+        ret tok.TK_PIPE
+    else k == tok.TK_CARET_EQ:
+        ret tok.TK_CARET
+    else k == tok.TK_SHL_EQ:
+        ret tok.TK_SHL
+    else k == tok.TK_SHR_EQ:
+        ret tok.TK_SHR
+    end
+    ret cg_compound_base(k)
+end
+
+func pick_op_overload(s &: sm.Sema, msym: int, want_nparams: int): int:
+    mv := sm.SymAt(s, msym)
+    n := mv.overloads.len()
+    mut fallback := 0
+    mut i := 0
+    until i < n:
+        sg := mv.overloads.get(i)
+        if sm.SigAt(s, sg).params.len() == want_nparams:
+            if fallback == 0:
+                fallback = sg
+            end
+        end
+        i += 1
+    end
+    ret fallback
+end

@@ -1,0 +1,225 @@
+pkg.en = tls
+pkg.name = tls
+pkg.group = Security and cryptography
+pkg.summary = Secure TLS 1.3 and 1.2 connections and public key cryptography tools, with no OpenSSL needed.
+pkg.title = The tls package in Salam | TLS, AES-GCM and ECDH
+pkg.description = The tls package in Salam: a secure HTTPS connection to a server, a TLS server with a certificate, certificate verification, AES-GCM encryption, ECDH key exchange, HKDF and P-256 signatures, with examples.
+pkg.import = tls
+pkg.intro <<
+<p>The tls package is a complete implementation of TLS 1.2 and 1.3 written in Salam, with no outside library. A client connects with <code>Dial</code> and checks the server certificate against the system roots; a server reads its certificate and key with <code>NewServerConfig</code> and secures each accepted socket with <code>WrapServer</code>. Most programs never call it directly: <a href="/std/net/http/">net/http</a>, <a href="/std/net/email/">net/email</a> and <a href="/std/net/websocket/">net/websocket</a> use it for <code>https</code>, SMTPS and <code>wss</code>. For code written in the OpenSSL style (a context, <code>SSL_connect</code>, <code>SSL_read</code>), <a href="/std/ssl/">ssl</a> offers that interface on top of this package.</p>
+<p>The cryptography tools here are also useful for protocols and storage of your own: the two sides make a shared secret with ECDH, derive a key from it with HKDF, and encrypt and seal the message with AES-GCM; P-256 signs and verifies. Keys and data are passed around as base64 text, which keeps binary bytes safe inside a <code>str</code>.</p>
+<p>Things to know:</p>
+<ul>
+<li><strong>Check <code>ConnOk</code> after <code>Dial</code>.</strong> A failed handshake or a bad certificate gives a closed connection, and <code>ConnError</code> says why.</li>
+<li><strong><code>Read</code> returns a <code>str</code>, which stops at a zero byte.</strong> For binary data use <code>ReadBytes</code> and <code>WriteBytes</code> with your own buffer.</li>
+<li><strong>Clients cannot present a certificate</strong> (no mutual TLS), and a <code>Conn</code> is passed by reference and belongs to one thread at a time.</li>
+<li><strong>Never repeat an AES-GCM nonce under one key</strong>; the sealing section shows a counter that avoids it.</li>
+</ul>
+
+<h2 id="guide-https">Connect to a server and handle a bad certificate</h2>
+<p><code>Dial</code> does the whole handshake and checks the certificate chain against the system roots and the name in <code>NewConfig</code>. When something is wrong, the connection is not open and <code>ConnError</code> says why: the certificate expired, it was issued for another name, or it does not chain to a trusted root. Always check <code>ConnOk</code> before you write. The program below tries a working site and three of the deliberately broken hosts at badssl.com.</p>
+{{example.tls-https-check}}
+<p>It needs network access, so it is only checked here. When it was run, it printed the lines below; the cipher and the number of certificates depend on the server.</p>
+<pre class="code" dir="ltr"><code>www.salamlang.ir TLS1.3 TLS_CHACHA20_POLY1305_SHA256 3 certificates
+expired.badssl.com refused: certificate verification failed: certificate expired
+wrong.host.badssl.com refused: certificate verification failed: hostname does not match certificate
+self-signed.badssl.com refused: certificate verification failed: no trusted issuer found</code></pre>
+<p>For a private server with its own certificate authority, set <code>ca_file</code> in the config to that CA's PEM file. <code>insecure_skip_verify</code> turns the check off; use it only for a quick local test, never in a program others rely on.</p>
+
+<h2 id="guide-seal">Encrypt records with AES-GCM</h2>
+<p><code>AesGcmSeal</code> encrypts a text and adds a tag, so that <code>AesGcmOpen</code> notices any change: a wrong key, a wrong nonce or a changed byte all make <code>ok</code> false instead of returning garbage. The key is 32 random bytes as base64; make it once with <code>RandomSalt(32)</code> and keep it secret. The nonce must never repeat under one key. The simple rule is a counter: <code>GcmNonce(0)</code> for the first message, <code>GcmNonce(1)</code> for the next, and the counter is stored next to the record so that it can be opened later.</p>
+{{example.tls-sealed-records}}
+<p>With a fixed key and nonce the output is always the same, which is why the program can print it. That is also the danger: the same nonce for two different texts lets an attacker learn about both, so never reset the counter while the key stays the same.</p>
+
+<h2 id="guide-channel">A shared key from public keys</h2>
+<p>Two programs that have never met can agree on a key without sending it. Each makes an ECDH key pair with <code>EcdhP256Generate</code> and sends the other only its public key. <code>EcdhP256Shared</code> then gives both the same secret, and <code>HkdfSha256</code> turns it into a key for AES-GCM. Someone who saw both public keys still cannot compute the secret. The <code>info</code> text names what the key is for, so one secret can safely give separate keys for separate uses.</p>
+{{example.tls-secure-channel}}
+<p>ECDH alone does not tell you <em>who</em> is on the other side. In a real protocol, sign the public key, or check it against one you already know, or someone in the middle can make a key with each side.</p>
+
+<h2 id="guide-sign">Sign and verify with P-256</h2>
+<p><code>P256Sign</code> signs a SHA-256 digest with a private key, and anyone with the public point can check it with <code>P256Verify</code>. It suits licence files, update manifests and messages that must be checked by many readers but written by one. The signature follows RFC 6979, so the same key and digest always give the same signature and no random number generator is involved.</p>
+{{example.tls-signed-license}}
+<p>The private key in the program is there so that the output stays the same. Keep a real one out of the source code: read it from a file or the environment, and ship only the public point with the program that checks.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>An HTTPS or other TLS client</td><td><code>NewConfig</code>, <code>Dial</code>, <code>Write</code>, <code>Read</code>, <code>Close</code>; for plain web requests, <a href="/std/net/http/">net/http</a> does this for you</td></tr>
+<tr><td>A TLS server</td><td><code>NewServerConfig</code>, then <code>WrapServer</code> on each accepted socket</td></tr>
+<tr><td>Upgrade a socket that is already open (STARTTLS)</td><td><code>WrapClient</code></td></tr>
+<tr><td>Encrypt data at rest</td><td><code>AesGcmSeal</code>, <code>AesGcmOpen</code>, <code>GcmNonce</code></td></tr>
+<tr><td>Agree on a key</td><td><code>EcdhP256Generate</code>, <code>EcdhP256Shared</code>, <code>HkdfSha256</code></td></tr>
+<tr><td>Sign and verify</td><td><code>P256Sign</code>, <code>P256Verify</code></td></tr>
+<tr><td>Check a certificate yourself</td><td><code>LoadRoots</code>, <code>VerifyCert</code>, <code>VerifyError</code></td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.ServerConfig = The server configuration: the certificate chain and the private key.
+doc.ServerConfig.chain = The certificate chain.
+doc.ServerConfig.key = The private key.
+doc.ServerConfig.ok = Both were read.
+doc.Config = The client configuration.
+doc.Config.server_name = The hostname for SNI and for certificate verification.
+doc.Config.ca_file = The file of root certificates; empty means the system roots.
+doc.Config.insecure_skip_verify = Do not verify the certificate; for testing only, since it leaves the connection open to eavesdropping.
+doc.Config.alpn = The protocol for ALPN, such as <code>h2</code>.
+doc.Config.aes_only = Offer AES ciphers only.
+doc.Conn = One TLS connection.
+doc.Conn.h = The handshake state.
+doc.Conn.host = The host.
+doc.Conn.open = The connection is open.
+doc.Conn.insecure = Without certificate verification.
+doc.Conn.pending = Data that has been read but not taken yet.
+doc.Conn.err = The error message.
+doc.NewConfig = A client configuration for one host.
+doc.Dial = Connects to the host and does the TLS 1.3 or 1.2 handshake.
+doc.WrapClient = Does the client handshake over an open TCP socket.
+doc.NewServerConfig = Reads the server certificate and key from PEM files.
+doc.WrapServer = Does the server handshake over a socket you accepted.
+doc.ConnOk = The connection is healthy.
+doc.ConnError = The error message of the connection.
+doc.Write = Sends data and returns the number of bytes.
+doc.WriteBytes = Sends bytes from memory.
+doc.Read = Reads up to this many bytes as a string; an empty string means the connection closed or a time limit ran out. The text stops at a zero byte, so use <code>ReadBytes</code> for binary data.
+doc.ReadBytes = Reads up to <code>max</code> bytes into the given memory and returns how many; 0 when the connection closed.
+doc.Pending = The bytes that are decrypted and ready to read.
+doc.Readable = There is something to read without waiting.
+doc.Fd = The descriptor of the socket underneath.
+doc.Detach = Sends the close alert and frees the TLS state, but leaves the socket open.
+doc.Close = Sends the close alert and closes the socket.
+doc.Version = The agreed version, such as <code>TLS1.3</code>.
+doc.CipherName = The name of the agreed cipher.
+doc.PeerCertCount = The number of certificates the other side sent.
+doc.FreePrivateKey = Wipes the private key from memory and frees it.
+doc.ParsePrivateKeyPEM = Reads an RSA or EC key from PEM text.
+doc.LoadPrivateKeyFile = Reads the key from a PEM file.
+doc.LoadCertChainFile = Reads the certificate chain from a PEM file.
+doc.TLS10 = The version number of TLS 1.0; not supported.
+doc.TLS11 = TLS 1.1; not supported.
+doc.TLS12 = TLS 1.2.
+doc.TLS13 = TLS 1.3.
+doc.HexEncodeBuf = Turns a buffer into hex.
+doc.HexDecodeBuf = Turns hex back into a buffer.
+doc.NewBuf = An empty buffer with this capacity.
+doc.NewZeroBuf = A buffer of n zero bytes.
+doc.FreeBuf = Frees the buffer.
+doc.WipeBuf = Zeroes the contents of the buffer; for secrets, before freeing.
+doc.BufLen = The length of the buffer.
+doc.BufAppendStr = Adds a string to the buffer.
+doc.LoadRoots = Reads the root certificates from a PEM file.
+doc.RootCount = The number of certificates.
+doc.FreeRoots = Frees the certificates.
+doc.VerifyError = The explanation of a certificate verification error code.
+doc.VerifyCert = Verifies a DER certificate against the roots and the hostname; zero means valid.
+doc.CertIsValid = The DER certificate parses correctly.
+doc.CertSubjectCN = The common name (CN) of the certificate.
+doc.HashDigest = The SHA-256 digest, or SHA-384 when the first parameter is true, into a buffer.
+doc.SignRSAPKCS1 = An RSA signature with PKCS#1 v1.5.
+doc.SignRSAPSS = An RSA-PSS signature.
+doc.SignECDSA = An ECDSA signature with r and s apart.
+doc.ECDSADerEncode = Turns r and s into the DER signature format.
+doc.VerifyRSAPSSWithKey = Verifies an RSA-PSS signature against a key.
+doc.VerifyECDSADERWithKey = Verifies an ECDSA signature in DER format.
+doc.EcdhP256Generate = An ECDH key pair on the P-256 curve: the private key as base64 and the SPKI public key as base64.
+doc.EcdhP256Shared = The shared secret from your own private key and the public key of the other side.
+doc.HkdfSha256 = Derives a key of any length from a secret with a salt and an info string; give every use its own info string.
+doc.HkdfSha256Raw = The same, with the info string as base64.
+doc.AesGcmSeal = Encrypts and seals the text with AES-GCM; the output is base64. Never use one nonce twice with the same key.
+doc.AesGcmOpen = Opens sealed text; when it was tampered with, or the key or nonce is wrong, ok becomes false.
+doc.AesGcmSealBytes = Like seal, with base64 input for binary data.
+doc.AesGcmOpenBytes = Like open, with base64 output.
+doc.GcmNonce = A 12 byte nonce from a counter; raise the counter by one for every message.
+doc.RandomSalt = n random bytes as base64.
+doc.EcdhP256PublicPoint = The raw public point of a private key, 65 bytes as base64.
+doc.EcdhP256SharedPoint = The shared secret from the raw public point of the other side.
+doc.P256Sign = A deterministic ECDSA signature under RFC 6979 over a digest; 64 bytes of r and s as base64.
+doc.P256Verify = Verifies the signature against a public point.
+doc.RsaSignPkcs1Sha256 = Signs a digest with an RSA key given as PEM text.
+doc.RsaKeyBits = The length of the RSA key in bits.
+doc.RsaEncryptOaepSha1 = Encrypts a small piece of data with an RSA public key, given as PEM, and OAEP padding with SHA-1; input and output are base64.
+doc.SelfTest = Runs the internal tests of the package and reports them; returns the number of failures.
+
+ex.HexEncodeBuf = tls-Crypto
+ex.HexDecodeBuf = tls-Crypto
+ex.NewBuf = tls-Crypto
+ex.NewZeroBuf = tls-Crypto
+ex.FreeBuf = tls-Crypto
+ex.WipeBuf = tls-Crypto
+ex.BufLen = tls-Crypto
+ex.BufAppendStr = tls-Crypto
+ex.HashDigest = tls-Crypto
+ex.EcdhP256Generate = tls-Crypto
+ex.EcdhP256Shared = tls-Crypto
+ex.HkdfSha256 = tls-Crypto
+ex.HkdfSha256Raw = tls-Crypto
+ex.AesGcmSeal = tls-Crypto
+ex.AesGcmOpen = tls-Crypto
+ex.AesGcmSealBytes = tls-Crypto
+ex.AesGcmOpenBytes = tls-Crypto
+ex.GcmNonce = tls-Crypto
+ex.RandomSalt = tls-Crypto
+ex.EcdhP256PublicPoint = tls-Crypto
+ex.EcdhP256SharedPoint = tls-Crypto
+ex.P256Sign = tls-Crypto
+ex.P256Verify = tls-Crypto
+ex.Config = tls-Client
+ex.Config.server_name = tls-Client
+ex.Config.insecure_skip_verify = tls-Client
+ex.Config.alpn = tls-Client
+ex.Conn = tls-Client
+ex.Conn.h = tls-Client
+ex.Conn.host = tls-Client
+ex.Conn.open = tls-Client
+ex.Conn.insecure = tls-Client
+ex.Conn.pending = tls-Client
+ex.Conn.err = tls-Client
+ex.NewConfig = tls-Client
+ex.Dial = tls-Client
+ex.ConnOk = tls-Client
+ex.ConnError = tls-Client
+ex.Write = tls-Client
+ex.Read = tls-Client
+ex.Close = tls-Client
+ex.Version = tls-Client
+ex.CipherName = tls-Client
+ex.PeerCertCount = tls-Client
+ex.ServerConfig = tls-Server
+ex.ServerConfig.chain = tls-Server
+ex.ServerConfig.key = tls-Server
+ex.ServerConfig.ok = tls-Server
+ex.NewServerConfig = tls-Server
+ex.WrapServer = tls-Server
+ex.WriteBytes = tls-Server
+ex.ReadBytes = tls-Server
+ex.Pending = tls-Server
+ex.Readable = tls-Server
+ex.Fd = tls-Server
+ex.Config.ca_file = tls-Certs
+ex.Config.aes_only = tls-Certs
+ex.WrapClient = tls-Certs
+ex.FreePrivateKey = tls-Certs
+ex.ParsePrivateKeyPEM = tls-Certs
+ex.LoadPrivateKeyFile = tls-Certs
+ex.LoadCertChainFile = tls-Certs
+ex.TLS10 = tls-Certs
+ex.TLS11 = tls-Certs
+ex.TLS12 = tls-Certs
+ex.TLS13 = tls-Certs
+ex.LoadRoots = tls-Certs
+ex.RootCount = tls-Certs
+ex.FreeRoots = tls-Certs
+ex.VerifyError = tls-Certs
+ex.VerifyCert = tls-Certs
+ex.CertIsValid = tls-Certs
+ex.CertSubjectCN = tls-Certs
+ex.SignRSAPKCS1 = tls-Certs
+ex.SignRSAPSS = tls-Certs
+ex.SignECDSA = tls-Certs
+ex.ECDSADerEncode = tls-Certs
+ex.VerifyRSAPSSWithKey = tls-Certs
+ex.VerifyECDSADERWithKey = tls-Certs
+ex.RsaSignPkcs1Sha256 = tls-Certs
+ex.RsaKeyBits = tls-Certs
+ex.SelfTest = tls-Certs

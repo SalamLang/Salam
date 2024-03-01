@@ -1,0 +1,788 @@
+package codegen
+
+import str
+
+include tok "../token.salam"
+include at "../ast.salam"
+include sm "../semantic/semantic.salam"
+
+func cg_emit_defers_from(g &: Cg, s &: sm.Sema, a &: at.Ast, mark: int):
+    mut i := g.fn_defers.len()
+    until i > mark:
+        cg_stmt(g, s, a, g.fn_defers.get(i - 1))
+        i -= 1
+    end
+end
+
+func cg_emit_defers(g &: Cg, s &: sm.Sema, a &: at.Ast):
+    cg_emit_defers_from(g, s, a, 0)
+end
+
+func defers_trunc(g &: Cg, mark: int):
+    until g.fn_defers.len() > mark:
+        _dropped := g.fn_defers.pop()
+    end
+end
+
+func cg_list_terminates(a &: at.Ast, blockid: int): bool:
+    bn := at.Get(a, blockid)
+    n := bn.list.len()
+    if n == 0:
+        ret false
+    end
+    k := at.KindOf(a, bn.list.get(n - 1))
+    ret k == at.AST_RETURN or k == at.AST_BREAK or k == at.AST_CONTINUE
+end
+
+func cg_scoped_stmts(g &: Cg, s &: sm.Sema, a &: at.Ast, blockid: int):
+    lmark := g.locals.len()
+    dmark := g.fn_defers.len()
+    bn := at.Get(a, blockid)
+    repeat bn.list.len() in i:
+        cg_stmt(g, s, a, bn.list.get(i))
+    end
+    if cg_list_terminates(a, blockid) == false:
+        cg_emit_defers_from(g, s, a, dmark)
+    end
+    defers_trunc(g, dmark)
+    locals_trunc(g, lmark)
+end
+
+func cg_loop_push(g &: Cg):
+    g.tmpn += 1
+    g.loop_dmark.push(g.fn_defers.len())
+    g.brk_goto.push("!__lpend" + str.FromInt(g.tmpn as i64))
+end
+
+func cg_break_pop(g &: Cg): str:
+    if g.loop_dmark.len() > 0:
+        _dropped := g.loop_dmark.pop()
+    end
+    if g.brk_goto.len() > 0:
+        ret g.brk_goto.pop()
+    end
+    ret ""
+end
+
+func cg_loop_pop(g &: Cg):
+    lbl := cg_break_pop(g)
+    g.loop_end.push(str.StartsWith(lbl, "!") ? str.Substr(lbl, 1, str.Len(lbl) - 1) : "")
+end
+
+func cg_loop_close(g &: Cg):
+    if g.loop_end.len() == 0:
+        ret
+    end
+    lbl := g.loop_end.pop()
+    repeat g.loop_end_used.len() in i:
+        if str.Equals(g.loop_end_used.get(i), lbl):
+            cg_line(g, lbl + ": ;")
+            ret
+        end
+    end
+end
+
+func cg_enum_plain(s &: sm.Sema, a &: at.Ast, name: str): bool:
+    sid := sm.Lookup(s, s.global, name)
+    if sid == 0:
+        ret false
+    end
+    dn := sm.SymAt(s, sid).decl
+    if dn == 0 or at.KindOf(a, dn) != at.AST_ENUM_DEF:
+        ret false
+    end
+    repeat at.ChildCount(a, dn) in i:
+        if at.At(a, at.Child(a, dn, i)).a != 0:
+            ret false
+        end
+    end
+    ret true
+end
+
+func cg_switch_native(s &: sm.Sema, a &: at.Ast, n: int): bool:
+    nn := at.At(a, n)
+    subj_int := cg_is_int_typestr(at.At(a, nn.a).type_str)
+    mut enum_ok := false
+    mut seen := Vector {} as Vector<u64>
+    defer seen.free()
+    cnt := nn.list.len()
+    repeat cnt in i:
+        cs := at.At(a, nn.list.get(i))
+        if cs.op == tok.TK_KW_ELSE:
+            if i != cnt - 1:
+                ret false
+            end
+            continue
+        end
+        repeat cs.list.len() in j:
+            it := at.At(a, cs.list.get(j))
+            if it.op != 0:
+                ret false
+            end
+            ln := at.At(a, it.a)
+            if ln.kind == at.AST_LITERAL and subj_int and (ln.op == tok.TK_INT or ln.op == tok.TK_CHAR):
+                repeat seen.len() in k:
+                    if seen.get(k) == ln.value_int:
+                        ret false
+                    end
+                end
+                seen.push(ln.value_int)
+            else not subj_int and ln.kind == at.AST_MEMBER and ln.a != 0 and at.KindOf(a, ln.a) == at.AST_IDENTIFIER:
+                if not enum_ok:
+                    if not cg_enum_plain(s, a, at.At(a, ln.a).name):
+                        ret false
+                    end
+                    enum_ok = true
+                end
+            else:
+                ret false
+            end
+        end
+    end
+    ret true
+end
+
+func cg_switch_push(g &: Cg, label: str):
+    g.loop_dmark.push(g.fn_defers.len())
+    g.brk_goto.push(label)
+end
+
+func cg_switch_pop(g &: Cg):
+    _lbl := cg_break_pop(g)
+end
+
+func cg_emit_loop_exit_defers(g &: Cg, s &: sm.Sema, a &: at.Ast):
+    n := g.loop_dmark.len()
+    if n > 0:
+        cg_emit_defers_from(g, s, a, g.loop_dmark.get(n - 1))
+    end
+end
+
+func cg_unparen(e: str): str:
+    n := e.len()
+    if n < 2 or byte_at(e, 0) != 40 or byte_at(e, n - 1) != 41 or byte_at(e, 1) == 123:
+        ret e
+    end
+    mut depth := 0
+    mut i := 0
+    until i < n:
+        c := byte_at(e, i)
+        if c == 34 or c == 39:
+            i += 1
+            until i < n and byte_at(e, i) != c:
+                if byte_at(e, i) == 92:
+                    i += 1
+                end
+                i += 1
+            end
+        else c == 40:
+            depth += 1
+        else c == 41:
+            depth -= 1
+            if depth == 0 and i + 1 != n:
+                ret e
+            end
+        end
+        i += 1
+    end
+    if depth != 0:
+        ret e
+    end
+    ret e.substr(1, n - 2)
+end
+
+func cg_cond(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    ret cg_unparen(cg_expr(g, s, a, n))
+end
+
+func cg_is_array_place(a &: at.Ast, n: int): bool:
+    k := at.KindOf(a, n)
+    if k == at.AST_CAST:
+        inner := at.Get(a, n).a
+        ret inner != 0 and at.KindOf(a, inner) != at.AST_ARRAY_LIT and cg_is_array_place(a, inner)
+    end
+    ret k == at.AST_IDENTIFIER or k == at.AST_MEMBER or k == at.AST_INDEX or k == at.AST_THIS or k == at.AST_CALL or k == at.AST_BINARY or k == at.AST_UNARY
+end
+
+func cg_str_fill_code(s &: sm.Sema, lv: str, ts: str, depth: int): str:
+    if depth > 8 or str.Len(ts) == 0:
+        ret ""
+    end
+    mut base := ""
+    mut ptr := false
+    mut eptr := 0
+    mut pdepth := 0
+    mut dims := Vector {} as Vector<int>
+    defer dims.free()
+    parse_typestr_ex(ts, 96, base, ptr, dims, eptr, pdepth)
+    if ptr or eptr > 0 or cg_is_slice_ts(ts) or str.Len(base) == 0:
+        ret ""
+    end
+    mut inner := ""
+    mut idx := ""
+    repeat dims.len() in di:
+        idx = idx + "[__zf" + depth + "_" + di + "]"
+    end
+    if str.Equals(base, "str"):
+        inner = lv + idx + " = \"\";"
+    else cg_is_int_typestr(base) or str.Equals(base, "bool") or str.Equals(base, "char") or str.Equals(base, "f32") or str.Equals(base, "f64") or str.Equals(base, "int") or str.Equals(base, "float"):
+        ret ""
+    else:
+        ssym := struct_by_name(s, base)
+        if ssym == 0:
+            ret ""
+        end
+        mut sb := co.SbNew()
+        msc := sm.ScopeAt(s, sm.SymAt(s, ssym).members)
+        repeat msc.symbols.len() in j:
+            f := sm.SymAt(s, msc.symbols.get(j))
+            if f.kind != sm.SYM_FIELD or f.ty == sm.TYPE_NONE:
+                continue
+            end
+            fc := cg_str_fill_code(s, lv + idx + "." + cg_cident(f.name), sm.ToString(s, f.ty), depth + 1)
+            if str.Len(fc) > 0:
+                co.SbPuts(sb, fc + " ")
+            end
+        end
+        inner = co.SbCstr(sb)
+        co.SbFree(sb)
+        if str.Len(inner) == 0:
+            ret ""
+        end
+        inner = "{ " + inner + "}"
+    end
+    mut code := inner
+    mut k := dims.len()
+    until k > 0:
+        k -= 1
+        iv := "__zf" + depth + "_" + k
+        code = "for (int64_t " + iv + " = 0; " + iv + " < " + dims.get(k) + "; " + iv + "++) { " + code + " }"
+    end
+    ret code
+end
+
+func cg_vardecl_inline(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    nn := at.Get(a, n)
+    ts := str.Len(nn.type_str) > 0 ? nn.type_str : "int32_t"
+    decl := cg_decl(ts, nn.name)
+    local_add(g, nn.name)
+    is_ref := str.IndexOf(ts, "[") >= 0 or str.EndsWith(ts, "*") or struct_by_name(s, ts) != 0
+    already_const := str.StartsWith(cg_ctype(ts), "const ")
+    prefix := (nn.is_mut or is_ref or already_const or type_is_callable(ts)) ? "" : "const "
+    if nn.a != 0:
+        if g.in_derive and str.Equals(ts, "str") and not cg_dv_owned(s, a, nn.a):
+            ret prefix + decl + " = salam_strcat(" + cg_expr(g, s, a, nn.a) + ", \"\")"
+        end
+        ret prefix + decl + " = " + cg_expr(g, s, a, nn.a)
+    end
+    ret prefix + decl + " = {0}"
+end
+
+func cg_simple_inline(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    nn := at.Get(a, n)
+    if nn.kind == at.AST_VAR_DECL:
+        ret cg_vardecl_inline(g, s, a, n)
+    end
+    if nn.kind == at.AST_ASSIGN:
+        if nn.op == tok.TK_POWER_EQ:
+            e1 := cg_expr(g, s, a, nn.a)
+            e2 := cg_expr(g, s, a, nn.a)
+            e3 := cg_expr(g, s, a, nn.b)
+            ret e1 + " = pow(SALAM_FPARG_D((double)(" + e2 + ")), (double)(" + e3 + "))"
+        end
+        ea := cg_expr(g, s, a, nn.a)
+        eb := cg_div_guard(g, a, nn.op, at.Get(a, nn.a).type_str, nn.b, cg_expr(g, s, a, nn.b))
+        ret ea + " " + cg_op(nn.op) + " " + eb
+    end
+    if nn.kind == at.AST_EXPR_STMT:
+        ret cg_expr(g, s, a, nn.a)
+    end
+    ret cg_expr(g, s, a, n)
+end
+
+func repeat_ctl_ctype(idx_ts: str): str:
+    if str.Equals(idx_ts, "u64") or str.Equals(idx_ts, "usize"):
+        ret "uint64_t"
+    end
+    ret "int64_t"
+end
+
+func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
+    if n == 0:
+        ret
+    end
+    cg_source_line(g, span_of(a, n))
+    nn := at.Get(a, n)
+    k := nn.kind
+    if k == at.AST_BLOCK:
+        cg_block(g, s, a, n)
+        ret
+    end
+    if k == at.AST_VAR_DECL:
+        if str.StartsWith(nn.type_str, "dyn ") and str.IndexOf(nn.type_str, "[") >= 0 and nn.a != 0 and at.KindOf(a, nn.a) == at.AST_ARRAY_LIT:
+            local_add(g, nn.name)
+            cg_line(g, cg_decl(nn.type_str, nn.name) + ";")
+            an := at.Get(a, nn.a)
+            repeat an.list.len() in i:
+                cg_line(
+                    g, cg_cident(nn.name) + "[" + i + "] = " + cg_expr(g, s, a, an.list.get(i)) + ";"
+                )
+            end
+            ret
+        end
+        if str.Equals(nn.name, "_") and nn.a != 0:
+            cg_line(g, "(void)(" + cg_expr_value(g, s, a, nn.a) + ");")
+            ret
+        end
+        if nn.stack_env and nn.a != 0 and at.KindOf(a, nn.a) == at.AST_LAMBDA and at.Get(a, nn.a).captures.len() > 0:
+            cg_emit_lambda(g, s, a, nn.a)
+            ln := at.Get(a, nn.a).name
+            envv := cg_cident(nn.name) + "__env"
+            cg_line(g, ln + "_env " + envv + ";")
+            cg_line(g, envv + ".fn = (void*)&" + ln + ";")
+            lcaps := at.Get(a, nn.a).captures
+            repeat lcaps.len() in li:
+                cap := at.Get(a, lcaps.get(li))
+                cg_line(g, envv + "." + cg_cident(cap.name) + " = " + cg_expr(g, s, a, lcaps.get(li)) + ";")
+            end
+            local_add(g, nn.name)
+            cg_line(g, cg_decl(nn.type_str, nn.name) + " = (void*)&" + envv + ";")
+            ret
+        end
+        act := cg_array_ctype(nn.type_str)
+        if str.Len(act) > 0 and nn.a != 0 and cg_is_array_place(a, nn.a):
+            local_add(g, nn.name)
+            cg_line(g, cg_decl(nn.type_str, nn.name) + ";")
+            cg_line(
+                g, "salam_arrcpy(" + cg_cident(nn.name) + ", " + cg_expr(g, s, a, nn.a) + ", sizeof(" + act + "));"
+            )
+            ret
+        end
+        cg_line(g, cg_vardecl_inline(g, s, a, n) + ";")
+        if nn.a == 0 and str.Len(nn.name) > 0:
+            zf := cg_str_fill_code(s, cg_cident(nn.name), nn.type_str, 0)
+            if str.Len(zf) > 0:
+                cg_line(g, zf)
+            end
+        end
+        if str.Len(nn.name) > 0:
+            cg_line(g, "(void)" + cg_cident(nn.name) + ";")
+        end
+        ret
+    end
+    if k == at.AST_CONST_DECL:
+        cts := str.Len(nn.type_str) > 0 ? nn.type_str : "int32_t"
+        decl := cg_decl(cts, nn.name)
+        local_add(g, nn.name)
+        cpfx := (str.StartsWith(cg_ctype(cts), "const ") or type_is_callable(cts)) ? "" : "const "
+        cg_line(g, cpfx + decl + " = " + cg_expr(g, s, a, nn.a) + ";")
+        cg_line(g, "(void)" + cg_cident(nn.name) + ";")
+        ret
+    end
+    if k == at.AST_ASSIGN:
+        if nn.op == tok.TK_ASSIGN and nn.a != 0 and nn.b != 0:
+            lact := cg_array_ctype(at.Get(a, nn.a).type_str)
+            if str.Len(lact) > 0 and not cg_is_slice_ts(at.Get(a, nn.b).type_str):
+                mut src := cg_expr(g, s, a, nn.b)
+                if str.StartsWith(src, "{"):
+                    src = "(" + lact + ")" + src
+                end
+                cg_line(
+                    g, "salam_arrcpy(" + cg_expr(g, s, a, nn.a) + ", " + src + ", sizeof(" + lact + "));"
+                )
+                ret
+            end
+        end
+        if nn.op == tok.TK_ASSIGN and nn.a != 0 and at.KindOf(a, nn.a) == at.AST_INDEX:
+            ixn := at.Get(a, nn.a)
+            container_ts := at.Get(a, ixn.a).type_str
+            if ixn.a != 0 and str.Len(container_ts) > 0 and not cg_is_ptr_ts(container_ts):
+                mut sname := ""
+                ssym := cg_struct_of(s, container_ts, sname)
+                if ssym != 0:
+                    m := sm.LookupLocal(
+                        s, sm.SymAt(s, ssym).members, "operator_index_set"
+                    )
+                    if m != 0 and sm.SymAt(s, m).kind == sm.SYM_METHOD:
+                        sig := pick_op_overload(s, m, 2)
+                        if sig != 0:
+                            mangled := cg_mangle_method(
+                                g, s, sname, ssym, "operator_index_set", sm.SigAt(s, sig).params
+                            )
+                            container := ixn.a
+                            idx_c := cg_expr(g, s, a, ixn.b)
+                            val_c := cg_expr(g, s, a, nn.b)
+                            ck := at.KindOf(a, container)
+                            addressable := ck == at.AST_IDENTIFIER or ck == at.AST_MEMBER or ck == at.AST_INDEX or ck == at.AST_THIS
+                            if addressable:
+                                recv := "&(" + cg_expr(g, s, a, container) + ")"
+                                cg_line(
+                                    g, mangled + "(" + recv + ", " + idx_c + ", " + val_c + ");"
+                                )
+                            else:
+                                g.tmpn += 1
+                                t := g.tmpn
+                                cts2 := at.Get(a, container).type_str
+                                ct := cg_ctype(str.Len(cts2) > 0 ? cts2 : sname)
+                                lc := cg_expr(g, s, a, container)
+                                cg_line(
+                                    g, "{ " + ct + " __t" + t + " = (" + lc + "); " + mangled + "(&__t" + t + ", " + idx_c + ", " + val_c + "); }"
+                                )
+                            end
+                            ret
+                        end
+                    end
+                end
+            end
+        end
+        if nn.op != tok.TK_ASSIGN and nn.a != 0 and str.Len(at.Get(a, nn.a).type_str) > 0:
+            base_op := cg_compound_base(nn.op)
+            if base_op != tok.TK_EOF:
+                mut sname2 := ""
+                ssym2 := cg_struct_of(s, at.Get(a, nn.a).type_str, sname2)
+                if ssym2 != 0:
+                    mname := cg_op_method(base_op)
+                    if str.Len(mname) > 0:
+                        callv := cg_emit_op_call(
+                            g, s, a, nn.a, ssym2, sname2, mname, nn.b
+                        )
+                        if str.Len(callv) > 0:
+                            cg_line(
+                                g, cg_expr(g, s, a, nn.a) + " = " + callv + ";"
+                            )
+                            ret
+                        end
+                    end
+                end
+            end
+        end
+        if nn.op == tok.TK_PLUS_EQ and str.Equals(at.Get(a, nn.a).type_str, "str"):
+            e1 := cg_expr(g, s, a, nn.a)
+            e2 := cg_expr(g, s, a, nn.a)
+            ob := cg_str_operand(g, s, a, nn.b)
+            cg_line(g, e1 + " = salam_strcat(" + e2 + ", " + ob + ");")
+            ret
+        end
+        if nn.op == tok.TK_POWER_EQ:
+            a_ts := at.Get(a, nn.a).type_str
+            ct2 := cg_ctype(str.Len(a_ts) > 0 ? a_ts : "double")
+            g.tmpn += 1
+            t2 := g.tmpn
+            lhs := cg_expr(g, s, a, nn.a)
+            rhs := cg_expr(g, s, a, nn.b)
+            cg_line(
+                g, "{ " + ct2 + " *__pw" + t2 + " = &(" + lhs + "); " + "*__pw" + t2 + " = (" + ct2 + ")pow(SALAM_FPARG_D((double)(*__pw" + t2 + ")), (double)(" + rhs + ")); }"
+            )
+            ret
+        end
+        ea := cg_expr(g, s, a, nn.a)
+        eb := cg_div_guard(g, a, nn.op, at.Get(a, nn.a).type_str, nn.b, cg_expr(g, s, a, nn.b))
+        cg_line(g, ea + " " + cg_op(nn.op) + " " + eb + ";")
+        ret
+    end
+    if k == at.AST_EXPR_STMT and nn.synthetic and str.Equals(nn.name, sm.SF_MARK):
+        cg_line(g, CG_MEM_FREE + "((void*)(" + cg_expr(g, s, a, nn.a) + "));")
+        ret
+    end
+    if k == at.AST_EXPR_STMT and nn.synthetic and str.Equals(nn.name, sm.SF_MARK_LAM):
+        ret
+    end
+    if k == at.AST_EXPR_STMT and nn.synthetic and str.Equals(nn.name, sm.SF_MARK_VEC):
+        cg_line(g, CG_MEM_FREE + "((void*)(" + cg_expr(g, s, a, nn.a) + ").data);")
+        ret
+    end
+    if k == at.AST_EXPR_STMT and nn.synthetic and str.Equals(nn.name, sm.SF_MARK_MAP):
+        mv := cg_expr(g, s, a, nn.a)
+        cg_line(g, CG_MEM_FREE + "((void*)(" + mv + ").keys); " + CG_MEM_FREE + "((void*)(" + mv + ").vals); " + CG_MEM_FREE + "((void*)(" + mv + ").state);")
+        ret
+    end
+    if k == at.AST_EXPR_STMT:
+        e := cg_expr(g, s, a, nn.a)
+        mut pfx := ""
+        if byte_at(e, 0) == 40 and byte_at(e, 1) == 123:
+            pfx = "(void)"
+        end
+        cg_line(g, pfx + e + ";")
+        ret
+    end
+    if k == at.AST_DEFER:
+        g.fn_defers.push(nn.a)
+        ret
+    end
+    if k == at.AST_RETURN:
+        if str.Len(g.match_result_tmp) > 0:
+            if nn.a != 0:
+                cg_line(
+                    g, g.match_result_tmp + " = (" + g.match_result_ctype + ")(" + cg_expr_value(g, s, a, nn.a) + "); goto " + g.match_end_label + ";"
+                )
+            else:
+                cg_line(g, "goto " + g.match_end_label + ";")
+            end
+            ret
+        end
+        if nn.a != 0 and g.fn_defers.len() > 0:
+            expr := cg_expr_value(g, s, a, nn.a)
+            r_ts := at.Get(a, nn.a).type_str
+            r_act := cg_array_ctype(r_ts)
+            g.tmpn += 1
+            t := g.tmpn
+            tmp := "__retv" + t
+            if str.Len(r_act) > 0:
+                cg_line(g, cg_decl_cn(r_ts, tmp) + ";")
+                cg_line(g, "salam_arrcpy(" + tmp + ", " + expr + ", sizeof(" + r_act + "));")
+            else:
+                cg_line(
+                    g, cg_ctype(str.Len(r_ts) > 0 ? r_ts : "int32_t") + " " + tmp + " = (" + expr + ");"
+                )
+            end
+            cg_emit_defers(g, s, a)
+            if g.cur_sret and str.Len(r_act) > 0:
+                cg_line(g, "salam_arrcpy(*__ret, " + tmp + ", sizeof(" + r_act + ")); return;")
+            else g.cur_sret:
+                cg_line(g, "*__ret = " + tmp + "; return;")
+            else:
+                cg_line(g, "return " + tmp + ";")
+            end
+        else nn.a != 0 and g.cur_sret:
+            cg_emit_defers(g, s, a)
+            ret_act := cg_array_ctype(at.Get(a, nn.a).type_str)
+            if str.Len(ret_act) > 0:
+                cg_line(g, "salam_arrcpy(*__ret, " + cg_expr_value(g, s, a, nn.a) + ", sizeof(" + ret_act + ")); return;")
+            else:
+                cg_line(g, "*__ret = (" + cg_expr_value(g, s, a, nn.a) + "); return;")
+            end
+        else nn.a != 0:
+            cg_emit_defers(g, s, a)
+            cg_line(g, "return " + cg_expr_value(g, s, a, nn.a) + ";")
+        else:
+            cg_emit_defers(g, s, a)
+            if g.cur_is_main:
+                cg_line(g, "return 0;")
+            else:
+                cg_line(g, "return;")
+            end
+        end
+        ret
+    end
+    if k == at.AST_MATCH:
+        subj_ts := at.Get(a, nn.a).type_str
+        g.tmpn += 1
+        t := g.tmpn
+        subj_var := "__msubj" + t
+        cg_line(g, "{")
+        g.indent += 1
+        cg_line(
+            g, cg_ctype(str.Len(subj_ts) > 0 ? subj_ts : "int32_t") + " " + subj_var + " = (" + cg_expr(g, s, a, nn.a) + ");"
+        )
+        g.match_subj.push(subj_var)
+        repeat nn.list.len() in i:
+            armid := nn.list.get(i)
+            cond := cg_unparen(cg_match_arm_cond(g, s, a, armid, subj_var, subj_ts))
+            cg_line(g, (i > 0 ? "} else " : "") + "if (" + cond + ") {")
+            g.indent += 1
+            cg_scoped_stmts(g, s, a, at.Get(a, armid).b)
+            g.indent -= 1
+        end
+        _ms := g.match_subj.pop()
+        if nn.list.len() > 0:
+            cg_line(g, "}")
+        end
+        g.indent -= 1
+        cg_line(g, "}")
+        ret
+    end
+    if k == at.AST_SWITCH:
+        subj_ts2 := at.Get(a, nn.a).type_str
+        g.tmpn += 1
+        t2 := g.tmpn
+        subj_var2 := "__swsubj" + t2
+        matched_var := "__swmatched" + t2
+        end_lbl := "__swend" + t2
+        cg_line(g, "{")
+        g.indent += 1
+        cg_line(
+            g, cg_ctype(str.Len(subj_ts2) > 0 ? subj_ts2 : "int32_t") + " " + subj_var2 + " = (" + cg_expr(g, s, a, nn.a) + ");"
+        )
+        if cg_switch_native(s, a, n):
+            cg_switch_push(g, end_lbl)
+            cg_line(g, "switch (" + subj_var2 + ") {")
+            repeat nn.list.len() in i3:
+                csid3 := nn.list.get(i3)
+                cs3 := at.At(a, csid3)
+                if cs3.op == tok.TK_KW_ELSE:
+                    cg_line(g, "default: {")
+                else:
+                    mut labels := ""
+                    repeat cs3.list.len() in j3:
+                        labels = labels + "case " + cg_expr(g, s, a, at.At(a, cs3.list.get(j3)).a) + ": "
+                    end
+                    cg_line(g, labels + "{")
+                end
+                g.indent += 1
+                cg_scoped_stmts(g, s, a, cs3.b)
+                g.indent -= 1
+                cg_line(g, "}")
+            end
+            cg_line(g, "}")
+            cg_switch_pop(g)
+            cg_line(g, "goto " + end_lbl + "; " + end_lbl + ": ;")
+            g.indent -= 1
+            cg_line(g, "}")
+            ret
+        end
+        cg_line(g, cg_ctype("bool") + " " + matched_var + " = false;")
+        cg_switch_push(g, end_lbl)
+        repeat nn.list.len() in i2:
+            csid := nn.list.get(i2)
+            cond2 := cg_case_cond(g, s, a, csid, subj_var2, subj_ts2)
+            cg_line(
+                g, "if (!" + matched_var + " && (" + cond2 + ")) { " + matched_var + " = true; }"
+            )
+            cg_line(g, "if (" + matched_var + ") {")
+            g.indent += 1
+            cg_scoped_stmts(g, s, a, at.Get(a, csid).b)
+            g.indent -= 1
+            cg_line(g, "}")
+        end
+        cg_switch_pop(g)
+        cg_line(g, "goto " + end_lbl + "; " + end_lbl + ": ;")
+        g.indent -= 1
+        cg_line(g, "}")
+        ret
+    end
+    if k == at.AST_BREAK:
+        bgn := g.brk_goto.len()
+        levels := at.BreakLevels(a, n)
+        if levels > 1 and levels <= bgn:
+            cg_emit_defers_from(g, s, a, g.loop_dmark.get(bgn - levels))
+            mut target := g.brk_goto.get(bgn - levels)
+            if str.StartsWith(target, "!"):
+                target = str.Substr(target, 1, str.Len(target) - 1)
+                g.loop_end_used.push(target)
+            end
+            cg_line(g, "goto " + target + ";")
+            ret
+        end
+        cg_emit_loop_exit_defers(g, s, a)
+        if bgn > 0 and str.Len(g.brk_goto.get(bgn - 1)) > 0 and not str.StartsWith(g.brk_goto.get(bgn - 1), "!"):
+            cg_line(g, "goto " + g.brk_goto.get(bgn - 1) + ";")
+        else:
+            cg_line(g, "break;")
+        end
+        ret
+    end
+    if k == at.AST_CONTINUE:
+        cg_emit_loop_exit_defers(g, s, a)
+        cg_line(g, "continue;")
+        ret
+    end
+    if k == at.AST_IF:
+        cg_line(g, "if (" + cg_cond(g, s, a, nn.a) + ") {")
+        g.indent += 1
+        cg_scoped_stmts(g, s, a, nn.b)
+        g.indent -= 1
+        if nn.c != 0 and at.KindOf(a, nn.c) == at.AST_IF:
+            cg_indent(g)
+            out(g, "} else ")
+            en := at.Get(a, nn.c)
+            out(g, "if (" + cg_cond(g, s, a, en.a) + ") {\n")
+            g.indent += 1
+            cg_scoped_stmts(g, s, a, en.b)
+            g.indent -= 1
+            if en.c != 0:
+                cg_line(g, "} else {")
+                g.indent += 1
+                cg_stmt(g, s, a, en.c)
+                g.indent -= 1
+            end
+            cg_line(g, "}")
+        else nn.c != 0:
+            cg_line(g, "} else {")
+            g.indent += 1
+            cg_scoped_stmts(g, s, a, nn.c)
+            g.indent -= 1
+            cg_line(g, "}")
+        else:
+            cg_line(g, "}")
+        end
+        ret
+    end
+    if k == at.AST_UNTIL:
+        cg_line(g, "while (" + cg_cond(g, s, a, nn.a) + ") {")
+        g.indent += 1
+        cg_loop_push(g)
+        cg_scoped_stmts(g, s, a, nn.b)
+        cg_loop_pop(g)
+        g.indent -= 1
+        cg_line(g, "}")
+        cg_loop_close(g)
+        ret
+    end
+    if k == at.AST_REPEAT:
+        g.tmpn += 1
+        t := g.tmpn
+        if nn.c != 0:
+            from_c := cg_expr(g, s, a, nn.a)
+            to_c := cg_expr(g, s, a, nn.c)
+            mut step := "1"
+            if nn.d != 0:
+                step = cg_expr(g, s, a, nn.d)
+            end
+            cg_line(
+                g, "for (int64_t __rep" + t + " = (int64_t)(" + from_c + "), __repe" + t + " = (int64_t)(" + to_c + "), __repa" + t + " = (int64_t)(" + step + "), __reps" + t + " = (__rep" + t + " <= __repe" + t + ") ? __repa" + t + " : -__repa" + t + "; (__reps" + t + " > 0) ? (__rep" + t + " <= __repe" + t + ") : (__rep" + t + " >= __repe" + t + "); __rep" + t + " += __reps" + t + ") {"
+            )
+        else:
+            ctl := repeat_ctl_ctype(nn.type_str)
+            cg_line(
+                g, "for (" + ctl + " __rep" + t + " = 0, __repn" + t + " = (" + ctl + ")(" + cg_expr(g, s, a, nn.a) + "); __rep" + t + " < __repn" + t + "; __rep" + t + "++) {"
+            )
+        end
+        g.indent += 1
+        cg_loop_push(g)
+        mark := g.locals.len()
+        if str.Len(nn.name) > 0:
+            ivct := cg_ctype(str.Len(nn.type_str) > 0 ? nn.type_str : "i32")
+            cg_line(
+                g, "const " + ivct + " " + cg_cident(nn.name) + " = (" + ivct + ")__rep" + t + ";"
+            )
+            cg_line(g, "(void)" + cg_cident(nn.name) + ";")
+            local_add(g, nn.name)
+        end
+        cg_scoped_stmts(g, s, a, nn.b)
+        locals_trunc(g, mark)
+        cg_loop_pop(g)
+        g.indent -= 1
+        cg_line(g, "}")
+        cg_loop_close(g)
+        ret
+    end
+    if k == at.AST_FOR:
+        mark := g.locals.len()
+        mut init := ""
+        if nn.a != 0:
+            init = cg_simple_inline(g, s, a, nn.a)
+        end
+        mut cond := ""
+        if nn.b != 0:
+            cond = cg_expr(g, s, a, nn.b)
+        end
+        mut post := ""
+        if nn.c != 0:
+            post = cg_simple_inline(g, s, a, nn.c)
+        end
+        cg_line(g, "for (" + init + "; " + cond + "; " + post + ") {")
+        g.indent += 1
+        cg_loop_push(g)
+        cg_scoped_stmts(g, s, a, nn.d)
+        cg_loop_pop(g)
+        g.indent -= 1
+        cg_line(g, "}")
+        cg_loop_close(g)
+        locals_trunc(g, mark)
+        ret
+    end
+end
+
+func cg_block(g &: Cg, s &: sm.Sema, a &: at.Ast, block: int):
+    cg_scoped_stmts(g, s, a, block)
+end

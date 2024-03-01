@@ -1,0 +1,103 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.http
+import net.router
+import net.internal.rawsock
+import os.temp
+import os
+import io
+import filepath
+import time
+
+mut _dir := ""
+
+func run_server():
+    dir := _dir
+    io.WriteFile(filepath.Join(dir, "a.txt"), "first")
+    io.WriteFile(filepath.Join(dir, "b.txt"), "other")
+    mut r := router.NewRouter()
+    router.Static(r, "/s", dir)
+    s := http.NewServer(19212)
+    http.Use(s, r)
+    http.Run(s)
+end
+
+func content_length(head: str): int:
+    at := head.find("Content-Length: ")
+    if at < 0: ret 0 - 1 end
+    rest := head.substr(at + 16, head.len() - at - 16)
+    end_at := rest.find("\r\n")
+    ret rest.substr(0, end_at).to_int()
+end
+
+func fetch(sock: rawsock.Socket, path: str, pending &: str): str:
+    rawsock.Send(sock, "GET " + path + " HTTP/1.1\r\nHost: localhost\r\n\r\n")
+    mut buf := pending
+    mut head_end := buf.find("\r\n\r\n")
+    until head_end < 0:
+        chunk := rawsock.Recv(sock, 8192)
+        if chunk.len() == 0: ret "" end
+        buf += chunk
+        head_end = buf.find("\r\n\r\n")
+    end
+    head := buf.substr(0, head_end)
+    n := content_length(head)
+    mut body := buf.substr(head_end + 4, buf.len() - head_end - 4)
+    until body.len() < n:
+        chunk := rawsock.Recv(sock, 8192)
+        if chunk.len() == 0: break end
+        body += chunk
+    end
+    pending = body.substr(n, body.len() - n)
+    status := head.substr(9, 3)
+    ret status + " " + body.substr(0, n)
+end
+
+func main:
+    dir := filepath.Join(temp.Directory(), "salam_net_http_static_cache_test")
+    _dir = dir
+    os.Mkdir(dir)
+    _t := spawn(run_server)
+
+    mut sock := rawsock.Connect("127.0.0.1", 19212)
+    mut tries := 0
+    until not rawsock.Ok(sock) and tries < 300:
+        time.Sleep(10)
+        sock = rawsock.Connect("127.0.0.1", 19212)
+        tries = tries + 1
+    end
+
+    mut pending := ""
+    println fetch(sock, "/s/a.txt", pending)
+    println fetch(sock, "/s/a.txt", pending)
+    println fetch(sock, "/s/b.txt", pending)
+
+    time.Sleep(1100)
+    io.WriteFile(filepath.Join(dir, "a.txt"), "second, longer")
+    println fetch(sock, "/s/a.txt", pending)
+    println fetch(sock, "/s/a.txt", pending)
+    println fetch(sock, "/s/b.txt", pending)
+
+    os.Remove(filepath.Join(dir, "a.txt"))
+    println fetch(sock, "/s/a.txt", pending)
+
+    io.WriteFile(filepath.Join(dir, "a.txt"), "back")
+    println fetch(sock, "/s/a.txt", pending)
+    println fetch(sock, "/s/a.txt", pending)
+
+    println fetch(sock, "/s/../s/b.txt", pending)
+    println fetch(sock, "/s/%2e%2e/%2e%2e/etc/passwd", pending).substr(0, 3) != "200"
+    rawsock.Close(sock)
+end

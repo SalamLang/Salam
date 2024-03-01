@@ -1,0 +1,430 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package opensearch
+
+import str
+import encoding.json
+
+@en "TaskInfo"
+@fa "اطلاعات کار"
+pub struct TaskInfo:
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+    @en "id"
+    @fa "شناسه"
+    pub id: str = ""
+    @en "completed"
+    @fa "تمام‌شده"
+    pub completed: bool = false
+    @en "action"
+    @fa "عملیات"
+    pub action: str = ""
+    @en "description"
+    @fa "توضیح"
+    pub description: str = ""
+    @en "status"
+    @fa "وضعیت"
+    pub status: str = ""
+    @en "response"
+    @fa "پاسخ"
+    pub response: str = ""
+    @en "error"
+    @fa "خطا"
+    pub error: str = ""
+end
+
+func _os_health(r: Response): Health:
+    if r.body.len() == 0: ret Health {} end
+    b := r.body
+    ret Health {
+        ok = r.ok, cluster_name = _os_jstr(b, "cluster_name"), status = _os_jstr(b, "status"),
+        timed_out = _os_jbool(b, "timed_out"), nodes = _os_int(_os_jraw(b, "number_of_nodes")),
+        data_nodes = _os_int(_os_jraw(b, "number_of_data_nodes")), active_primary_shards = _os_int(_os_jraw(b, "active_primary_shards")),
+        active_shards = _os_int(_os_jraw(b, "active_shards")), relocating_shards = _os_int(_os_jraw(b, "relocating_shards")),
+        initializing_shards = _os_int(_os_jraw(b, "initializing_shards")), unassigned_shards = _os_int(_os_jraw(b, "unassigned_shards")),
+        pending_tasks = _os_int(_os_jraw(b, "number_of_pending_tasks")), active_shards_percent = _os_f64(_os_jraw(b, "active_shards_percent_as_number"))
+    }
+end
+
+func _os_task_seg(id: str): str:
+    ret str.Replace(_os_seg(id), "%3A", ":")
+end
+
+func _os_task(r: Response, id: str): TaskInfo:
+    mut t := TaskInfo { ok = r.ok, id = id, error = r.error }
+    if r.body.len() == 0: ret t end
+    task := _os_jraw(r.body, "task")
+    t.completed = _os_jbool(r.body, "completed")
+    t.action = _os_jstr(task, "action")
+    t.description = _os_jstr(task, "description")
+    t.status = _os_jraw(task, "status")
+    t.response = _os_jraw(r.body, "response")
+    err := _os_jraw(r.body, "error")
+    if err.len() > 0:
+        t.error = _os_jstr(err, "type") + ": " + _os_jstr(err, "reason")
+        t.ok = false
+    end
+    ret t
+end
+
+@en "GetInfo"
+@fa "دریافت اطلاعات"
+pub func GetInfo(c: Client): Info:
+    r := Perform(c, "GET", "/", "")
+    if not r.ok: ret Info {} end
+    v := _os_jraw(r.body, "version")
+    ret Info {
+        ok = true, name = _os_jstr(r.body, "name"), cluster_name = _os_jstr(r.body, "cluster_name"),
+        cluster_uuid = _os_jstr(r.body, "cluster_uuid"), version = _os_jstr(v, "number"),
+        distribution = _os_jstr(v, "distribution"), build_type = _os_jstr(v, "build_type"),
+        lucene_version = _os_jstr(v, "lucene_version"), minimum_wire_compatibility_version = _os_jstr(v, "minimum_wire_compatibility_version"),
+        tagline = _os_jstr(r.body, "tagline")
+    }
+end
+
+@en "Ping"
+@fa "پینگ"
+pub func Ping(c: Client): bool:
+    ret Perform(c, "HEAD", "/", "").status == 200
+end
+
+@en "ClusterHealth"
+@fa "سلامت خوشه"
+pub func ClusterHealth(c: Client): Health:
+    ret _os_health(Perform(c, "GET", "/_cluster/health", ""))
+end
+
+@en "WaitForStatus"
+@fa "انتظار وضعیت"
+pub func WaitForStatus(c: Client, index: str, status: str, timeout: str): Health:
+    mut q := Vector {} as Vector<str>
+    _os_qadd(q, "wait_for_status", status)
+    _os_qadd(q, "timeout", timeout)
+    mut path := "/_cluster/health"
+    if index.len() > 0: path = path + "/" + _os_idx(index) end
+    ret _os_health(Perform(c, "GET", path + _os_qs(q), ""))
+end
+
+@en "ClusterStats"
+@fa "آمار خوشه"
+pub func ClusterStats(c: Client): str:
+    r := Perform(c, "GET", "/_cluster/stats", "")
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "ClusterState"
+@fa "حالت خوشه"
+pub func ClusterState(c: Client, metrics: str): str:
+    mut path := "/_cluster/state"
+    if metrics.len() > 0: path = path + "/" + metrics end
+    r := Perform(c, "GET", path, "")
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "GetClusterSettings"
+@fa "دریافت تنظیمات خوشه"
+pub func GetClusterSettings(c: Client): str:
+    r := Perform(c, "GET", "/_cluster/settings?flat_settings=true", "")
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "PutClusterSettings"
+@fa "تنظیم تنظیمات خوشه"
+pub func PutClusterSettings(c: Client, persistent: str, transient: str): bool:
+    mut m := Vector {} as Vector<str>
+    if persistent.len() > 0: m.push(_os_m("persistent", persistent)) end
+    if transient.len() > 0: m.push(_os_m("transient", transient)) end
+    ret _os_ack(Perform(c, "PUT", "/_cluster/settings", _os_obj(m)))
+end
+
+@en "AllocationExplain"
+@fa "توضیح تخصیص"
+pub func AllocationExplain(c: Client, body: str): str:
+    r := Perform(c, "POST", "/_cluster/allocation/explain", body)
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "NodesInfo"
+@fa "اطلاعات گره‌ها"
+pub func NodesInfo(c: Client, metrics: str): str:
+    mut path := "/_nodes"
+    if metrics.len() > 0: path = path + "/" + metrics end
+    r := Perform(c, "GET", path, "")
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "NodesStats"
+@fa "آمار گره‌ها"
+pub func NodesStats(c: Client, metrics: str): str:
+    mut path := "/_nodes/stats"
+    if metrics.len() > 0: path = path + "/" + metrics end
+    r := Perform(c, "GET", path, "")
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "HotThreads"
+@fa "نخ‌های پرکار"
+pub func HotThreads(c: Client): str:
+    r := Perform(c, "GET", "/_nodes/hot_threads", "")
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "Cat"
+@fa "فهرست"
+pub func Cat(c: Client, what: str): Vector<str>:
+    mut path := "/_cat/" + what
+    path = path + (path.find("?") >= 0 ? "&" : "?") + "format=json"
+    r := Perform(c, "GET", path, "")
+    if not r.ok: ret Vector {} end
+    ret _os_items(r.body)
+end
+
+@en "CatText"
+@fa "فهرست متنی"
+pub func CatText(c: Client, what: str): str:
+    mut path := "/_cat/" + what
+    path = path + (path.find("?") >= 0 ? "&" : "?") + "v=true&format=text"
+    r := Perform(c, "GET", path, "")
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "Plugins"
+@fa "افزونه‌ها"
+pub func Plugins(c: Client): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each row in Cat(c, "plugins"):
+        comp := _os_jstr(row, "component")
+        if comp.len() == 0: continue end
+        mut seen := false
+        each s in out:
+            if s == comp:
+                seen = true
+                break
+            end
+        end
+        if not seen: out.push(comp) end
+    end
+    ret out
+end
+
+@en "HasPlugin"
+@fa "دارای افزونه"
+pub func HasPlugin(c: Client, name: str): bool:
+    each p in Plugins(c):
+        if p == name: ret true end
+    end
+    ret false
+end
+
+@en "GetTask"
+@fa "دریافت کار"
+pub func GetTask(c: Client, task_id: str): TaskInfo:
+    ret _os_task(Perform(c, "GET", "/_tasks/" + _os_task_seg(task_id), ""), task_id)
+end
+
+@en "WaitTask"
+@fa "انتظار کار"
+pub func WaitTask(c: Client, task_id: str, timeout: str): TaskInfo:
+    mut q := Vector {} as Vector<str>
+    _os_qadd(q, "wait_for_completion", "true")
+    _os_qadd(q, "timeout", timeout)
+    ret _os_task(Perform(c, "GET", "/_tasks/" + _os_task_seg(task_id) + _os_qs(q), ""), task_id)
+end
+
+@en "CancelTask"
+@fa "لغو کار"
+pub func CancelTask(c: Client, task_id: str): bool:
+    ret Perform(c, "POST", "/_tasks/" + _os_task_seg(task_id) + "/_cancel", "").ok
+end
+
+@en "ListTasks"
+@fa "فهرست کارها"
+pub func ListTasks(c: Client, actions: str): str:
+    mut q := Vector {} as Vector<str>
+    _os_qadd(q, "actions", actions)
+    _os_qadd(q, "detailed", "true")
+    r := Perform(c, "GET", "/_tasks" + _os_qs(q), "")
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "PutRepository"
+@fa "تنظیم مخزن"
+pub func PutRepository(c: Client, name: str, kind: str, settings: str): bool:
+    body := _os_two("type", json.Str(kind), "settings", _os_body_or_empty(settings))
+    ret _os_ack(Perform(c, "PUT", "/_snapshot/" + _os_seg(name), body))
+end
+
+@en "GetRepository"
+@fa "دریافت مخزن"
+pub func GetRepository(c: Client, name: str): str:
+    r := Perform(c, "GET", "/_snapshot/" + _os_seg(name), "")
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "VerifyRepository"
+@fa "وارسی مخزن"
+pub func VerifyRepository(c: Client, name: str): bool:
+    ret Perform(c, "POST", "/_snapshot/" + _os_seg(name) + "/_verify", "").ok
+end
+
+@en "DeleteRepository"
+@fa "حذف مخزن"
+pub func DeleteRepository(c: Client, name: str): bool:
+    ret _os_ack(Perform(c, "DELETE", "/_snapshot/" + _os_seg(name), ""))
+end
+
+@en "CreateSnapshot"
+@fa "ایجاد تصویر لحظه‌ای"
+pub func CreateSnapshot(c: Client, repo: str, snapshot: str, indices: str, wait: bool): bool:
+    mut q := Vector {} as Vector<str>
+    if wait: _os_qadd(q, "wait_for_completion", "true") end
+    mut m := Vector {} as Vector<str>
+    if indices.len() > 0: m.push(_os_m("indices", json.Str(indices))) end
+    m.push(_os_m("include_global_state", "false"))
+    r := Perform(c, "PUT", "/_snapshot/" + _os_seg(repo) + "/" + _os_seg(snapshot) + _os_qs(q), _os_obj(m))
+    if not r.ok: ret false end
+    if not wait: ret true end
+    ret _os_path(r.body, "snapshot.state") == "SUCCESS"
+end
+
+@en "GetSnapshot"
+@fa "دریافت تصویر لحظه‌ای"
+pub func GetSnapshot(c: Client, repo: str, snapshot: str): str:
+    r := Perform(c, "GET", "/_snapshot/" + _os_seg(repo) + "/" + _os_idx(snapshot), "")
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "Snapshots"
+@fa "تصویرهای لحظه‌ای"
+pub func Snapshots(c: Client, repo: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    r := Perform(c, "GET", "/_snapshot/" + _os_seg(repo) + "/_all", "")
+    if not r.ok: ret out end
+    each s in _os_items(_os_jraw(r.body, "snapshots")):
+        out.push(_os_jstr(s, "snapshot"))
+    end
+    ret out
+end
+
+@en "SnapshotStatus"
+@fa "وضعیت تصویر لحظه‌ای"
+pub func SnapshotStatus(c: Client, repo: str, snapshot: str): str:
+    r := Perform(c, "GET", "/_snapshot/" + _os_seg(repo) + "/" + _os_seg(snapshot) + "/_status", "")
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "DeleteSnapshot"
+@fa "حذف تصویر لحظه‌ای"
+pub func DeleteSnapshot(c: Client, repo: str, snapshot: str): bool:
+    ret _os_ack(Perform(c, "DELETE", "/_snapshot/" + _os_seg(repo) + "/" + _os_seg(snapshot), ""))
+end
+
+@en "RestoreSnapshot"
+@fa "بازیابی تصویر لحظه‌ای"
+pub func RestoreSnapshot(c: Client, repo: str, snapshot: str, body: str, wait: bool): bool:
+    mut q := Vector {} as Vector<str>
+    if wait: _os_qadd(q, "wait_for_completion", "true") end
+    r := Perform(c, "POST", "/_snapshot/" + _os_seg(repo) + "/" + _os_seg(snapshot) + "/_restore" + _os_qs(q), body)
+    ret r.ok
+end
+
+@en "PutPipeline"
+@fa "تنظیم خط لوله"
+pub func PutPipeline(c: Client, id: str, body: str): bool:
+    ret _os_ack(Perform(c, "PUT", "/_ingest/pipeline/" + _os_seg(id), body))
+end
+
+@en "Pipeline"
+@fa "خط لوله"
+pub func Pipeline(description: str, processors: Vector<str>): str:
+    ret _os_two("description", json.Str(description), "processors", _os_arr(processors))
+end
+
+@en "Processor"
+@fa "پردازنده"
+pub func Processor(kind: str, config: str): str:
+    ret _os_one(kind, _os_body_or_empty(config))
+end
+
+@en "GetPipeline"
+@fa "دریافت خط لوله"
+pub func GetPipeline(c: Client, id: str): str:
+    r := Perform(c, "GET", "/_ingest/pipeline/" + _os_seg(id), "")
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "DeletePipeline"
+@fa "حذف خط لوله"
+pub func DeletePipeline(c: Client, id: str): bool:
+    ret _os_ack(Perform(c, "DELETE", "/_ingest/pipeline/" + _os_seg(id), ""))
+end
+
+@en "SimulatePipeline"
+@fa "شبیه‌سازی خط لوله"
+pub func SimulatePipeline(c: Client, id: str, docs: Vector<str>): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut wrapped := Vector {} as Vector<str>
+    each d in docs:
+        wrapped.push(_os_one("_source", d))
+    end
+    r := Perform(c, "POST", "/_ingest/pipeline/" + _os_seg(id) + "/_simulate", _os_one("docs", _os_arr(wrapped)))
+    if not r.ok: ret out end
+    each d in _os_items(_os_jraw(r.body, "docs")):
+        out.push(_os_path_raw(d, "doc._source"))
+    end
+    ret out
+end
+
+@en "PutScript"
+@fa "تنظیم اسکریپت"
+pub func PutScript(c: Client, id: str, source: str): bool:
+    body := _os_one("script", _os_two("lang", `"painless"`, "source", json.Str(source)))
+    ret _os_ack(Perform(c, "PUT", "/_scripts/" + _os_seg(id), body))
+end
+
+@en "PutSearchTemplate"
+@fa "تنظیم الگوی جستجو"
+pub func PutSearchTemplate(c: Client, id: str, source: str): bool:
+    body := _os_one("script", _os_two("lang", `"mustache"`, "source", source))
+    ret _os_ack(Perform(c, "PUT", "/_scripts/" + _os_seg(id), body))
+end
+
+@en "GetScript"
+@fa "دریافت اسکریپت"
+pub func GetScript(c: Client, id: str): str:
+    r := Perform(c, "GET", "/_scripts/" + _os_seg(id), "")
+    if not r.ok: ret str.Clone("") end
+    ret _os_path(r.body, "script.source")
+end
+
+@en "DeleteScript"
+@fa "حذف اسکریپت"
+pub func DeleteScript(c: Client, id: str): bool:
+    ret _os_ack(Perform(c, "DELETE", "/_scripts/" + _os_seg(id), ""))
+end

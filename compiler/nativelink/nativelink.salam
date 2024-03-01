@@ -1,0 +1,539 @@
+package nativelink
+
+import str
+
+extern:
+    func fopen(path: str, mode: str): void*
+    func fread(p: void*, sz: u64, n: u64, f: void*): u64
+    func fwrite(p: void*, sz: u64, n: u64, f: void*): u64
+    func fseek(f: void*, off: i64, whence: int): int
+    func ftell(f: void*): i64
+    func fclose(f: void*): int
+    func malloc(n: u64): void*
+    func free(p: void*)
+    func chmod(path: str, mode: int): int
+end
+
+const NL_BASE := 0x400000
+const NL_PAGE := 0x1000
+
+const OC_NONE := 0 - 1
+const EM_386 := 3
+const EM_ARM := 40
+const EM_X86_64 := 62
+const EM_AARCH64 := 183
+const EM_RISCV := 243
+const OC_RODATA := 0
+const OC_EHFRAME := 1
+const OC_INIT := 2
+const OC_TEXT := 3
+const OC_FINI := 4
+const OC_INITARR := 5
+const OC_FINIARR := 6
+const OC_DATA := 7
+const OC_GOT := 8
+const OC_BSS := 9
+const OC_PLT := 10
+const OC_DATAREL := 11
+const OC_EHHDR := 12
+const OC_EXIDX := 13
+const OC_TDATA := 14
+const OC_TBSS := 15
+const OC_PREINITARR := 16
+const OC_COUNT := 17
+
+const SY_UNDEF := 0
+const SY_DEF := 1
+const SY_ABS := 2
+const SY_SHARED := 3
+
+pub struct NlTab:
+    pub slots: Vector<int> = Vector {}
+    pub off: Vector<int> = Vector {}
+    pub len: Vector<int> = Vector {}
+    pub hash: Vector<int> = Vector {}
+    pub bytes: Vector<u8> = Vector {}
+    pub n: int = 0
+    pub mask: int = 0
+end
+
+pub struct Nl:
+    pub ok: bool = true
+    pub err: str = ""
+    pub names: NlTab = NlTab {}
+    pub f_ptr: Vector<i64> = Vector {}
+    pub f_size: Vector<i64> = Vector {}
+    pub f_name: Vector<str> = Vector {}
+    pub f_arch: Vector<bool> = Vector {}
+    pub f_long: Vector<i64> = Vector {}
+    pub ar_name: Vector<int> = Vector {}
+    pub ar_file: Vector<int> = Vector {}
+    pub ar_moff: Vector<i64> = Vector {}
+    pub ar_loaded: Vector<bool> = Vector {}
+    pub ar_first: Vector<int> = Vector {}
+    pub o_file: Vector<int> = Vector {}
+    pub o_base: Vector<i64> = Vector {}
+    pub o_label: Vector<str> = Vector {}
+    pub o_sec0: Vector<int> = Vector {}
+    pub o_nsec: Vector<int> = Vector {}
+    pub o_sym0: Vector<int> = Vector {}
+    pub o_nsym: Vector<int> = Vector {}
+    pub o_coff: Vector<bool> = Vector {}
+    pub s_comdat: Vector<bool> = Vector {}
+    pub s_sel: Vector<int> = Vector {}
+    pub s_assoc: Vector<int> = Vector {}
+    pub s_drop: Vector<bool> = Vector {}
+    pub s_link: Vector<int> = Vector {}
+    pub grp_seen: Vector<bool> = Vector {}
+    pub imp_keys: Vector<str> = Vector {}
+    pub g_alias: Vector<int> = Vector {}
+    pub g_common: Vector<i64> = Vector {}
+    pub pe: bool = false
+    pub mach: int = 0
+    pub pe_base: i64 = 0x140000000
+    pub elf32: bool = false
+    pub macho: bool = false
+    pub s_maddr: Vector<i64> = Vector {}
+    pub r_sub: Vector<int> = Vector {}
+    pub dic_obj: Vector<int> = Vector {}
+    pub dy_name: Vector<str> = Vector {}
+    pub dy_sym: HashMap<int, int> = HashMap {}
+    pub dic_addr: Vector<i64> = Vector {}
+    pub dic_len: Vector<int> = Vector {}
+    pub dic_kind: Vector<int> = Vector {}
+    pub eflags: i64 = 0
+    pub got_loc: HashMap<int, int> = HashMap {}
+    pub s_obj: Vector<int> = Vector {}
+    pub s_name: Vector<int> = Vector {}
+    pub s_type: Vector<int> = Vector {}
+    pub s_flags: Vector<i64> = Vector {}
+    pub s_off: Vector<i64> = Vector {}
+    pub s_size: Vector<i64> = Vector {}
+    pub s_align: Vector<i64> = Vector {}
+    pub s_rel0: Vector<int> = Vector {}
+    pub s_nrel: Vector<int> = Vector {}
+    pub s_oc: Vector<int> = Vector {}
+    pub s_live: Vector<bool> = Vector {}
+    pub s_addr: Vector<i64> = Vector {}
+    pub s_fpos: Vector<i64> = Vector {}
+    pub s_dbg: Vector<int> = Vector {}
+    pub dg_name: Vector<int> = Vector {}
+    pub dg_size: Vector<i64> = Vector {}
+    pub dg_base: Vector<i64> = Vector {}
+    pub dg_bytes: Vector<u8> = Vector {}
+    pub tls_lo: i64 = 0
+    pub tls_hi: i64 = 0
+    pub tls_align: i64 = 1
+    pub tls_got: HashMap<str, int> = HashMap {}
+    pub got_tlsk: HashMap<int, int> = HashMap {}
+    pub dg_mobj: Vector<int> = Vector {}
+    pub dg_va: Vector<i64> = Vector {}
+    pub dg_raw: Vector<i64> = Vector {}
+    pub pe_str: Vector<u8> = Vector {}
+    pub pe_stroff: Vector<int> = Vector {}
+    pub pe_strpos: i64 = 0
+    pub r_off: Vector<i64> = Vector {}
+    pub r_type: Vector<int> = Vector {}
+    pub r_sym: Vector<int> = Vector {}
+    pub r_add: Vector<i64> = Vector {}
+    pub os_sec: Vector<int> = Vector {}
+    pub os_val: Vector<i64> = Vector {}
+    pub os_glob: Vector<int> = Vector {}
+    pub os_name: Vector<int> = Vector {}
+    pub os_type: Vector<int> = Vector {}
+    pub os_size: Vector<i64> = Vector {}
+    pub strip: bool = false
+    pub dynamic: bool = false
+    pub interp: str = "/lib64/ld-linux-x86-64.so.2"
+    pub sysroot: str = ""
+    pub pie: bool = false
+    pub dyn_rel: bool = false
+    pub dyn_hash0: int = 1
+    pub cp_g: Vector<int> = Vector {}
+    pub cp_of: HashMap<int, int> = HashMap {}
+    pub cp_addr: Vector<i64> = Vector {}
+    pub canon: HashMap<int, bool> = HashMap {}
+    pub sd_size: Vector<i64> = Vector {}
+    pub sl_file: Vector<int> = Vector {}
+    pub sl_soname: Vector<str> = Vector {}
+    pub sl_asneeded: Vector<bool> = Vector {}
+    pub sl_used: Vector<bool> = Vector {}
+    pub sd_lib: Vector<int> = Vector {}
+    pub sd_ver: Vector<int> = Vector {}
+    pub sd_type: Vector<int> = Vector {}
+    pub sl_undef: Vector<int> = Vector {}
+    pub g_lib: Vector<int> = Vector {}
+    pub g_ver: Vector<int> = Vector {}
+    pub g_stype: Vector<int> = Vector {}
+    pub g_plt: Vector<int> = Vector {}
+    pub g_dyn: Vector<int> = Vector {}
+    pub plt_sym: Vector<int> = Vector {}
+    pub dyn_sym: Vector<int> = Vector {}
+    pub dyn_nimport: int = 0
+    pub rd_off: Vector<i64> = Vector {}
+    pub rd_type: Vector<int> = Vector {}
+    pub rd_sym: Vector<int> = Vector {}
+    pub rd_add: Vector<i64> = Vector {}
+    pub dsec: Vector<u8> = Vector {}
+    pub ds_off: Vector<i64> = Vector {}
+    pub ds_size: Vector<i64> = Vector {}
+    pub ds_addr: Vector<i64> = Vector {}
+    pub relro_lo: i64 = 0
+    pub relro_hi: i64 = 0
+    pub nphdr: int = 4
+    pub ehh_n: int = 0
+    pub base: i64 = 0x400000
+    pub stat_dynrel: int = 0
+    pub vn_count: int = 0
+    pub dstr_keep: Dyn = Dyn {}
+    pub g_name: Vector<int> = Vector {}
+    pub g_state: Vector<int> = Vector {}
+    pub g_weak: Vector<bool> = Vector {}
+    pub g_sec: Vector<int> = Vector {}
+    pub g_val: Vector<i64> = Vector {}
+    pub g_obj: Vector<int> = Vector {}
+    pub g_strongref: Vector<bool> = Vector {}
+    pub g_firstref: Vector<int> = Vector {}
+    pub g_got: Vector<int> = Vector {}
+    pub g_of_name: Vector<int> = Vector {}
+    pub got_sym: Vector<int> = Vector {}
+    pub oc_addr: Vector<i64> = Vector {}
+    pub oc_size: Vector<i64> = Vector {}
+    pub oc_fpos: Vector<i64> = Vector {}
+    pub oc_align: Vector<i64> = Vector {}
+    pub seg_vaddr: Vector<i64> = Vector {}
+    pub seg_fpos: Vector<i64> = Vector {}
+    pub seg_fsz: Vector<i64> = Vector {}
+    pub seg_msz: Vector<i64> = Vector {}
+    pub entry: i64 = 0
+    pub image_end: i64 = 0
+    pub file_size: i64 = 0
+    pub stat_relax: int = 0
+    pub out_ptr: i64 = 0
+    pub th_sec: Vector<int> = Vector {}
+    pub th_at: Vector<i64> = Vector {}
+    pub th_os: Vector<int> = Vector {}
+    pub th_add: Vector<i64> = Vector {}
+    pub th_kind: Vector<int> = Vector {}
+    pub th_count: HashMap<int, int> = HashMap {}
+    pub th_key: HashMap<str, int> = HashMap {}
+    pub th_of_rel: HashMap<int, int> = HashMap {}
+end
+
+func nl_fail(l &: Nl, msg: str):
+    if l.ok:
+        l.ok = false
+        l.err = msg
+    end
+end
+
+func rd8(p: u8*, o: i64): int:
+    ret p[o] as int
+end
+
+func rd16(p: u8*, o: i64): int:
+    ret (p[o] as int) | ((p[o + (1 as i64)] as int) << 8)
+end
+
+func rd32(p: u8*, o: i64): i64:
+    mut v := 0 as i64
+    repeat 4 in k:
+        v = v | ((p[o + (k as i64)] as i64) << ((8 * k) as i64))
+    end
+    ret v
+end
+
+func rd64(p: u8*, o: i64): i64:
+    mut v := 0 as i64
+    repeat 8 in k:
+        v = v | ((p[o + (k as i64)] as i64) << ((8 * k) as i64))
+    end
+    ret v
+end
+
+func rd32be(p: u8*, o: i64): i64:
+    mut v := 0 as i64
+    repeat 4 in k:
+        v = (v << (8 as i64)) | (p[o + (k as i64)] as i64)
+    end
+    ret v
+end
+
+func wr32(p: u8*, o: i64, v: i64):
+    repeat 4 in k:
+        p[o + (k as i64)] = ((v >> ((8 * k) as i64)) & (255 as i64)) as u8
+    end
+end
+
+func wr64(p: u8*, o: i64, v: i64):
+    repeat 8 in k:
+        p[o + (k as i64)] = ((v >> ((8 * k) as i64)) & (255 as i64)) as u8
+    end
+end
+
+func fptr(l &: Nl, f: int): u8*:
+    ret l.f_ptr[f] as void* as u8*
+end
+
+func nl_hash(p: u8*, s: i64, n: int): int:
+    mut h := 2166136261 as u32
+    repeat n in i:
+        h = (h ^ (p[s + (i as i64)] as u32)) * (16777619 as u32)
+    end
+    ret (h & (0x7FFFFFFF as u32)) as int
+end
+
+func nt_init(t &: NlTab, cap: int):
+    t.slots.clear()
+    repeat cap:
+        t.slots.push(0 - 1)
+    end
+    t.mask = cap - 1
+    t.n = 0
+end
+
+func nt_eq(t &: NlTab, id: int, p: u8*, s: i64, n: int): bool:
+    if t.len[id] != n:
+        ret false
+    end
+    o := t.off[id]
+    repeat n in i:
+        if t.bytes[o + i] != p[s + (i as i64)]:
+            ret false
+        end
+    end
+    ret true
+end
+
+func nt_grow(t &: NlTab):
+    cap := (t.mask + 1) * 2
+    t.slots.clear()
+    repeat cap:
+        t.slots.push(0 - 1)
+    end
+    t.mask = cap - 1
+    repeat t.n in id:
+        mut j := t.hash[id] & t.mask
+        until t.slots[j] >= 0:
+            j = (j + 1) & t.mask
+        end
+        t.slots[j] = id
+    end
+end
+
+func nt_find(t &: NlTab, p: u8*, s: i64, n: int, add: bool): int:
+    h := nl_hash(p, s, n)
+    mut j := h & t.mask
+    until true:
+        id := t.slots[j]
+        if id < 0:
+            break
+        end
+        if t.hash[id] == h and nt_eq(t, id, p, s, n):
+            ret id
+        end
+        j = (j + 1) & t.mask
+    end
+    if not add:
+        ret 0 - 1
+    end
+    nid := t.n
+    t.off.push(t.bytes.len())
+    t.len.push(n)
+    t.hash.push(h)
+    repeat n in i:
+        t.bytes.push(p[s + (i as i64)])
+    end
+    t.slots[j] = nid
+    t.n += 1
+    if t.n * 2 > t.mask:
+        nt_grow(t)
+    end
+    ret nid
+end
+
+func cstr_len(p: u8*, s: i64, lim: i64): int:
+    mut n := 0
+    until s + (n as i64) < lim and p[s + (n as i64)] != (0 as u8):
+        n += 1
+    end
+    ret n
+end
+
+func name_of(l &: Nl, id: int): str:
+    mut b := str.NewBuilder()
+    o := l.names.off[id]
+    repeat l.names.len[id] in i:
+        str.BufAppendChar(b, l.names.bytes[o + i] as int)
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func name_id(l &: Nl, s: str): int:
+    ret nt_find(l.names, (s as void*) as u8*, 0 as i64, str.Len(s), true)
+end
+
+func name_is(l &: Nl, id: int, s: str): bool:
+    n := str.Len(s)
+    if l.names.len[id] != n:
+        ret false
+    end
+    p := (s as void*) as u8*
+    o := l.names.off[id]
+    repeat n in i:
+        if l.names.bytes[o + i] != p[i]:
+            ret false
+        end
+    end
+    ret true
+end
+
+func name_starts(l &: Nl, id: int, s: str): bool:
+    n := str.Len(s)
+    if l.names.len[id] < n:
+        ret false
+    end
+    p := (s as void*) as u8*
+    o := l.names.off[id]
+    repeat n in i:
+        if l.names.bytes[o + i] != p[i]:
+            ret false
+        end
+    end
+    ret true
+end
+
+func align_to(x: i64, a: i64): i64:
+    if a <= (1 as i64):
+        ret x
+    end
+    ret (x + a - (1 as i64)) / a * a
+end
+
+func read_file(l &: Nl, path: str): int:
+    f := fopen(path, "rb")
+    if f == null:
+        nl_fail(l, "cannot open " + path)
+        ret 0 - 1
+    end
+    _s := fseek(f, 0 as i64, 2)
+    n := ftell(f)
+    _r := fseek(f, 0 as i64, 0)
+    buf := malloc((n + (1 as i64)) as u64)
+    got := fread(buf, 1 as u64, n as u64, f)
+    _c := fclose(f)
+    if (got as i64) != n:
+        nl_fail(l, "cannot read " + path)
+        ret 0 - 1
+    end
+    id := l.f_ptr.len()
+    l.f_ptr.push(buf as i64)
+    l.f_size.push(n)
+    l.f_name.push(path)
+    l.f_arch.push(false)
+    l.f_long.push(0 - 1 as i64)
+    ret id
+end
+
+pub func New(): Nl:
+    mut l := Nl {}
+    nt_init(l.names, 4096)
+    ret l
+end
+
+pub func Error(l &: Nl): str:
+    ret l.err
+end
+
+pub func AddInput(l &: Nl, path: str):
+    add_input_as(l, path, false)
+end
+
+pub func AddInputAsNeeded(l &: Nl, path: str):
+    add_input_as(l, path, true)
+end
+
+pub func SetWindows(l &: Nl):
+    l.pe = true
+end
+
+pub func SetSysroot(l &: Nl, path: str):
+    l.sysroot = path
+end
+
+pub func SetDynamic(l &: Nl, interp: str):
+    l.dynamic = true
+    if str.Len(interp) > 0:
+        l.interp = interp
+    end
+end
+
+pub func Link(l &: Nl, out: str): bool:
+    if not l.ok:
+        ret false
+    end
+    resolve(l)
+    if not l.ok:
+        ret false
+    end
+    if l.pe:
+        pe_link(l, out)
+        ret l.ok
+    end
+    if l.macho:
+        macho_link(l, out)
+        ret l.ok
+    end
+    l.pie = l.dynamic and (l.mach == EM_X86_64 or l.mach == EM_AARCH64)
+    l.dyn_rel = l.dynamic and (l.mach == EM_386 or l.mach == EM_ARM)
+    mark_live(l)
+    if l.mach == EM_386 and not l.dynamic:
+        l.base = 0x08048000 as i64
+    end
+    if not l.strip:
+        dbg_collect(l)
+    end
+    if l.dynamic:
+        dyn_interp(l)
+        dyn_prepare(l)
+        if not l.ok:
+            ret false
+        end
+        place_dyn(l)
+    else:
+        place_all(l)
+        until l.ok and th_plan(l):
+            place_reset(l)
+            place_all(l)
+        end
+    end
+    if not l.ok:
+        ret false
+    end
+    if l.dynamic:
+        apply_dyn(l)
+    else:
+        apply_relocs(l)
+    end
+    if not l.ok:
+        ret false
+    end
+    ehh_build(l, l.out_ptr as void* as u8*)
+    if not l.strip:
+        dbg_build(l)
+    end
+    write_exe(l, out)
+    ret l.ok
+end
+
+pub func Stats(l &: Nl): str:
+    mut live := 0
+    repeat l.s_live.len() in i:
+        if l.s_live[i]:
+            live += 1
+        end
+    end
+    ret str.FromInt(l.o_file.len() as i64) + " objects, " + str.FromInt(live as i64) + " live sections, " + str.FromInt(l.g_name.len() as i64) + " symbols, " + str.FromInt(l.stat_relax as i64) + " GOT loads relaxed, " + str.FromInt(l.file_size) + " bytes"
+end

@@ -1,0 +1,333 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package grpc
+
+import compress
+import conv
+import net.http2
+import net.internal.rawsock
+import tls
+
+@en "Channel"
+@fa "کانال"
+pub struct Channel:
+    @en "conn"
+    @fa "اتصال"
+    pub conn: http2.Conn = http2.Conn {}
+    @en "authority"
+    @fa "نشانی سرور"
+    pub authority: str = ""
+    @en "scheme"
+    @fa "طرح"
+    pub scheme: str = "http"
+    @en "user_agent"
+    @fa "شناسه کارخواه"
+    pub user_agent: str = "salam-grpc/1.0"
+    @en "timeout_ms"
+    @fa "مهلت"
+    pub timeout_ms: int = 0
+    @en "use_gzip"
+    @fa "فشرده‌سازی"
+    pub use_gzip: bool = false
+    @en "cursors"
+    @fa "مکان‌نماها"
+    pub cursors: CursorTable = CursorTable {}
+    @en "ok"
+    @fa "سالم"
+    pub ok: bool = false
+    @en "last_error"
+    @fa "آخرین خطا"
+    pub last_error: str = ""
+end
+
+func _cursor_index(ch &: Channel, sid: int): int:
+    mut i := 0
+    until i < ch.cursors.items.len():
+        if ch.cursors.items.get(i).stream_id == sid: ret i end
+        i += 1
+    end
+    mut c := Cursor {}
+    c.stream_id = sid
+    c.pos = 0
+    ch.cursors.items.push(c)
+    ret ch.cursors.items.len() - 1
+end
+
+func _cursor_pos(ch &: Channel, sid: int): int:
+    ret ch.cursors.items.get(_cursor_index(ch, sid)).pos
+end
+
+func _cursor_set(ch &: Channel, sid: int, pos: int):
+    idx := _cursor_index(ch, sid)
+    mut c := ch.cursors.items.get(idx)
+    c.pos = pos
+    ch.cursors.items.set(idx, c)
+end
+
+func _timeout_header(ms: int): str:
+    ret conv.FormatInt(ms as i64) + "m"
+end
+
+func _finish_channel(ch &: Channel): bool:
+    if not http2.ClientHandshake(ch.conn):
+        ch.last_error = "HTTP/2 handshake failed"
+        ret false
+    end
+    if http2.Poll(ch.conn) == http2.H2_POLL_ERROR:
+        ch.last_error = "no SETTINGS from server"
+        ret false
+    end
+    ch.ok = true
+    ret true
+end
+
+@en "Dial"
+@fa "اتصال"
+pub func Dial(host: str, port: int): Channel:
+    mut ch := Channel {}
+    ch.authority = host + ":" + conv.FormatInt(port as i64)
+    ch.scheme = "http"
+    sock := rawsock.Connect(host, port)
+    if not rawsock.Ok(sock):
+        ch.last_error = "connect failed"
+        ret ch
+    end
+    ch.conn = http2.NewConn(http2.PlainTransport(sock.fd), false)
+    _finish_channel(ch)
+    ret ch
+end
+
+@en "DialTLS"
+@fa "اتصال امن"
+pub func DialTLS(host: str, port: int): Channel:
+    mut ch := Channel {}
+    ch.authority = host + ":" + conv.FormatInt(port as i64)
+    ch.scheme = "https"
+    cfg := tls.NewConfig(host)
+    sec := tls.Dial(host, port, cfg)
+    if not tls.ConnOk(sec):
+        ch.last_error = tls.ConnError(sec)
+        ret ch
+    end
+    ch.conn = http2.NewConn(http2.TLSTransport(sec), false)
+    _finish_channel(ch)
+    ret ch
+end
+
+@en "ChannelOk"
+@fa "کانال معتبر"
+pub func ChannelOk(ch: Channel): bool:
+    ret ch.ok
+end
+
+@en "ChannelError"
+@fa "خطای کانال"
+pub func ChannelError(ch: Channel): str:
+    ret ch.last_error
+end
+
+@en "SetTimeout"
+@fa "تنظیم مهلت"
+pub func SetTimeout(ch &: Channel, ms: int):
+    ch.timeout_ms = ms
+end
+
+@en "SetGzip"
+@fa "فعال‌سازی فشرده‌سازی"
+pub func SetGzip(ch &: Channel, enable: bool):
+    ch.use_gzip = enable
+end
+
+@en "CloseChannel"
+@fa "بستن کانال"
+pub func CloseChannel(ch &: Channel):
+    if ch.ok:
+        http2.SendGoAway(ch.conn, http2.H2_NO_ERROR, "")
+        http2.CloseConn(ch.conn)
+    end
+    ch.ok = false
+end
+
+@en "StartCall"
+@fa "شروع فراخوان"
+pub func StartCall(ch &: Channel, path: str, md: Metadata): int:
+    if not ch.ok: ret 0 end
+    sid := http2.NextStreamId(ch.conn)
+    mut hl := http2.HeaderList {}
+    http2.HeadersAdd(hl, ":method", "POST")
+    http2.HeadersAdd(hl, ":scheme", ch.scheme)
+    http2.HeadersAdd(hl, ":path", path)
+    http2.HeadersAdd(hl, ":authority", ch.authority)
+    http2.HeadersAdd(hl, "content-type", GRPC_CONTENT_TYPE_PROTO)
+    http2.HeadersAdd(hl, "user-agent", ch.user_agent)
+    http2.HeadersAdd(hl, "te", "trailers")
+    if ch.timeout_ms > 0:
+        http2.HeadersAdd(hl, "grpc-timeout", _timeout_header(ch.timeout_ms))
+    end
+    if ch.use_gzip:
+        http2.HeadersAdd(hl, "grpc-encoding", "gzip")
+    end
+    http2.HeadersAdd(hl, "grpc-accept-encoding", "identity,gzip")
+    MDToHeaders(md, hl)
+    if not http2.SendHeaders(ch.conn, sid, hl, false):
+        ch.last_error = "failed to send headers"
+        ret 0
+    end
+    ret sid
+end
+
+@en "SendMessage"
+@fa "ارسال پیام"
+pub func SendMessage(ch &: Channel, sid: int, msg: compress.ByteBuf, last: bool): bool:
+    if not ch.ok or sid == 0: ret false end
+    mut framed := FrameMessageGzip(msg, ch.use_gzip)
+    ok := http2.SendData(ch.conn, sid, framed, last)
+    compress.BufFree(framed)
+    if not ok: ch.last_error = "failed to send message" end
+    ret ok
+end
+
+@en "CloseSend"
+@fa "بستن ارسال"
+pub func CloseSend(ch &: Channel, sid: int): bool:
+    if not ch.ok or sid == 0: ret false end
+    empty := compress.NewByteBuf()
+    ok := http2.SendData(ch.conn, sid, empty, true)
+    compress.BufFree(empty)
+    ret ok
+end
+
+@en "RecvMessage"
+@fa "دریافت پیام"
+pub func RecvMessage(ch &: Channel, sid: int, ok &: bool): compress.ByteBuf:
+    if not ch.ok or sid == 0:
+        ok = false
+        ret compress.NewByteBuf()
+    end
+    mut guard := 0
+    until guard < GRPC_MAX_FRAMES:
+        s := http2.StreamAt(ch.conn, sid)
+        mut pos := _cursor_pos(ch, sid)
+        if HasMessage(s.data, pos):
+            mut mok := false
+            msg := NextMessage(s.data, pos, mok)
+            _cursor_set(ch, sid, pos)
+            ok = mok
+            ret msg
+        end
+        if s.end_stream or s.reset:
+            ok = false
+            ret compress.NewByteBuf()
+        end
+        if http2.Poll(ch.conn) == http2.H2_POLL_ERROR:
+            ch.last_error = "connection closed while awaiting a message"
+            ok = false
+            ret compress.NewByteBuf()
+        end
+        guard += 1
+    end
+    ok = false
+    ret compress.NewByteBuf()
+end
+
+@en "FinishCall"
+@fa "پایان فراخوان"
+pub func FinishCall(ch &: Channel, sid: int): Status:
+    mut st := Status {}
+    if not ch.ok or sid == 0:
+        st.code = GRPC_UNAVAILABLE
+        st.message = ch.last_error
+        ret st
+    end
+    if not http2.AwaitStreamEnd(ch.conn, sid, GRPC_MAX_FRAMES):
+        s := http2.StreamAt(ch.conn, sid)
+        if s.reset:
+            st.code = GRPC_CANCELLED
+            st.message = "stream reset: " + http2.ErrorName(s.error_code)
+            ret st
+        end
+        st.code = GRPC_UNAVAILABLE
+        st.message = "connection closed before the call completed"
+        ret st
+    end
+    s := http2.StreamAt(ch.conn, sid)
+    mut code_text := http2.HeadersGet(s.trailers, "grpc-status")
+    mut msg_text := http2.HeadersGet(s.trailers, "grpc-message")
+    if code_text == "":
+        code_text = http2.HeadersGet(s.headers, "grpc-status")
+        msg_text = http2.HeadersGet(s.headers, "grpc-message")
+    end
+    if code_text == "":
+        status_text := http2.HeadersGet(s.headers, ":status")
+        if status_text != "" and status_text != "200":
+            st.code = GRPC_UNKNOWN
+            st.message = "HTTP status " + status_text
+            ret st
+        end
+        st.code = GRPC_UNKNOWN
+        st.message = "server sent no grpc-status"
+        ret st
+    end
+    st.code = ParseStatusCode(code_text)
+    st.message = DecodeStatusMessage(msg_text)
+    ret st
+end
+
+@en "CallHeaders"
+@fa "سرآیندهای فراخوان"
+pub func CallHeaders(ch: Channel, sid: int): Metadata:
+    s := http2.StreamAt(ch.conn, sid)
+    ret MDFromHeaders(s.headers)
+end
+
+@en "CallTrailers"
+@fa "دنباله‌های فراخوان"
+pub func CallTrailers(ch: Channel, sid: int): Metadata:
+    s := http2.StreamAt(ch.conn, sid)
+    ret MDFromHeaders(s.trailers)
+end
+
+@en "UnaryCall"
+@fa "فراخوان یگانه"
+pub func UnaryCall(ch &: Channel, path: str, req: compress.ByteBuf, md: Metadata, st &: Status): compress.ByteBuf:
+    sid := StartCall(ch, path, md)
+    if sid == 0:
+        st = NewStatus(GRPC_UNAVAILABLE, ch.last_error)
+        ret compress.NewByteBuf()
+    end
+    if not SendMessage(ch, sid, req, true):
+        st = NewStatus(GRPC_UNAVAILABLE, ch.last_error)
+        ret compress.NewByteBuf()
+    end
+    mut ok := false
+    reply := RecvMessage(ch, sid, ok)
+    st = FinishCall(ch, sid)
+    if not ok and st.code == GRPC_OK:
+        st = NewStatus(GRPC_INTERNAL, "server returned no message")
+    end
+    ret reply
+end
+
+@en "UnaryCallStr"
+@fa "فراخوان یگانه متنی"
+pub func UnaryCallStr(ch &: Channel, path: str, req: str, st &: Status): str:
+    mut body := compress.BufFromStr(req)
+    md := NewMetadata()
+    mut reply := UnaryCall(ch, path, body, md, st)
+    compress.BufFree(body)
+    out := compress.BufToStrUnsafe(reply)
+    compress.BufFree(reply)
+    ret out
+end

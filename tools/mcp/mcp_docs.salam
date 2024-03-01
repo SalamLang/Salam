@@ -1,0 +1,757 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "mcpdoc"
+@fa "مستندات‌ام‌سی‌پی"
+package mcpdoc
+
+import str
+import fs.dir
+import fs.file
+import fs.path
+import encoding.value
+
+include mcptxt "mcp_text.salam"
+include mcpexec "mcp_exec.salam"
+include mcpout "mcp_result.salam"
+include mcpapi "mcp_api.salam"
+include mcpdecl "mcp_decl.salam"
+include mcpguide "mcp_guide.salam"
+
+mut g_tests := Vector {} as Vector<str>
+
+func _std_root(): str:
+    ret mcpexec.StdRoot()
+end
+
+func _is_salam(p: str): bool:
+    ret str.EndsWith(p, ".salam")
+end
+
+func _is_package(root: str, name: str): bool:
+    ret file.Exists(path.Join(path.Join(root, name), name.concat(".salam")))
+end
+
+func _collect_pkgs(out &: Vector<str>, dir_path: str, prefix: str):
+    names := mcptxt.Sorted(dir.ListDirs(dir_path))
+    mut i := 0
+    until i < names.len():
+        n := names.get(i)
+        if not str.StartsWith(n, ".") and _is_package(dir_path, n):
+            mut full := n
+            if prefix.len() > 0: full = prefix.concat(".").concat(n) end
+            out.push(full)
+            _collect_pkgs(out, path.Join(dir_path, n), full)
+        end
+        i += 1
+    end
+end
+
+func _pkg_dir(root: str, pkg: str): str:
+    parts := str.Split(pkg, ".")
+    mut p := root
+    mut i := 0
+    until i < parts.len():
+        p = path.Join(p, parts.get(i))
+        i += 1
+    end
+    ret p
+end
+
+func _last_dot(s: str): int:
+    mut at := 0 - 1
+    mut i := 0
+    until i < s.len():
+        if s.substr(i, 1) == ".": at = i end
+        i += 1
+    end
+    ret at
+end
+
+func _fa_name(root: str, pkg: str): str:
+    mut leaf := pkg
+    dot := _last_dot(pkg)
+    if dot >= 0: leaf = pkg.substr(dot + 1, pkg.len() - dot - 1) end
+    lines := mcptxt.Lines(file.ReadText(path.Join(_pkg_dir(root, pkg), leaf.concat(".salam"))))
+    mut i := 0
+    until i < lines.len():
+        if lines.get(i).trim() == "package ".concat(leaf):
+            mut j := i - 1
+            until j >= 0 and j >= i - 3:
+                ln := lines.get(j).trim()
+                if str.StartsWith(ln, "@fa \"") and str.EndsWith(ln, "\""):
+                    ret ln.substr(5, ln.len() - 6)
+                end
+                j -= 1
+            end
+            ret ""
+        end
+        i += 1
+    end
+    ret ""
+end
+
+func _loose(name: str): str:
+    mut zwnj := Vector {} as Vector<int>
+    zwnj.push(8204)
+    ret str.Replace(str.Replace(name.trim(), " ", ""), str.FromCodePoints(zwnj), "")
+end
+
+func _english_name(root: str, name: str): str:
+    want := _loose(name)
+    if want.len() == 0: ret "" end
+    mut all := Vector {} as Vector<str>
+    _collect_pkgs(all, root, "")
+    mut i := 0
+    until i < all.len():
+        if _loose(_fa_name(root, all.get(i))) == want: ret all.get(i) end
+        i += 1
+    end
+    ret ""
+end
+
+func _kw_table(src: str, array_name: str): Vector<str>:
+    out := Vector {} as Vector<str>
+    start := src.find(array_name)
+    if start < 0: ret out end
+    rest := src.substr(start, src.len() - start)
+    open_b := rest.find("[")
+    if open_b < 0: ret out end
+    stop := rest.find("]")
+    if stop < 0: ret out end
+    body := rest.substr(open_b + 1, stop - open_b - 1)
+    mut i := 0
+    mut cur := ""
+    mut inside := false
+    until i < body.len():
+        c := body.substr(i, 1)
+        if str.Equals(c, "\""):
+            if inside:
+                if cur.len() > 0: out.push(cur) end
+                cur = ""
+                inside = false
+            else:
+                inside = true
+            end
+        else inside:
+            cur = cur.concat(c)
+        end
+        i += 1
+    end
+    ret out
+end
+
+func _kw_pair(ln: str): str:
+    comma := ln.find(",")
+    tok := ln.substr(1, comma - 1)
+    q1 := ln.find("\"")
+    rest := ln.substr(q1 + 1, ln.len() - q1 - 1)
+    q2 := rest.find("\"")
+    word := rest.substr(0, q2)
+    ret str.TrimPrefix(tok, "TK_KW_").concat("\t").concat(word)
+end
+
+func _langpack_src(): str:
+    p := path.Join(mcpexec.Root(), "compiler/langpack.salam")
+    ret file.ReadText(p)
+end
+
+func _word(pair: str): str:
+    tab := pair.find("\t")
+    if tab < 0: ret pair end
+    ret pair.substr(tab + 1, pair.len() - tab - 1)
+end
+
+func _kind_table(src: str, array_name: str): Vector<int>:
+    out := Vector {} as Vector<int>
+    start := src.find(array_name)
+    if start < 0: ret out end
+    rest := src.substr(start, src.len() - start)
+    open_b := rest.find("[")
+    stop := rest.find("]")
+    if open_b < 0 or stop < open_b: ret out end
+    body := rest.substr(open_b + 1, stop - open_b - 1)
+    mut cur := ""
+    mut i := 0
+    until i <= body.len():
+        mut c := ","
+        if i < body.len(): c = body.substr(i, 1) end
+        if str.Equals(c, ","):
+            if cur.trim().len() > 0: out.push(cur.trim().to_int()) end
+            cur = ""
+        else:
+            cur = cur.concat(c)
+        end
+        i += 1
+    end
+    ret out
+end
+
+func _row(word: str, kind: int, fa: Vector<str>, fa_kind: Vector<int>): str:
+    mut line := word
+    mut sep := "\t"
+    mut j := 0
+    until j < fa.len() and j < fa_kind.len():
+        if fa_kind.get(j) == kind:
+            line = line.concat(sep).concat(fa.get(j))
+            sep = " / "
+        end
+        j += 1
+    end
+    ret line
+end
+
+func _alias(pkg: str): str:
+    dot := _last_dot(pkg)
+    if dot < 0: ret pkg end
+    ret pkg.substr(dot + 1, pkg.len() - dot - 1)
+end
+
+func _by_leaf(p: str): str:
+    all := mcpapi.Packages()
+    mut found := ""
+    mut n := 0
+    mut i := 0
+    until i < all.len():
+        if _alias(all.get(i)) == p:
+            found = all.get(i)
+            n += 1
+        end
+        i += 1
+    end
+    if n == 1: ret found end
+    ret ""
+end
+
+func _edit_distance(a: str, b: str): int:
+    mut prev := Vector {} as Vector<int>
+    mut j := 0
+    until j <= b.len():
+        prev.push(j)
+        j += 1
+    end
+    mut i := 1
+    until i <= a.len():
+        mut cur := Vector {} as Vector<int>
+        cur.push(i)
+        mut k := 1
+        until k <= b.len():
+            mut cost := 1
+            if a[i - 1] == b[k - 1]: cost = 0 end
+            mut best := prev.get(k) + 1
+            if cur.get(k - 1) + 1 < best: best = cur.get(k - 1) + 1 end
+            if prev.get(k - 1) + cost < best: best = prev.get(k - 1) + cost end
+            cur.push(best)
+            k += 1
+        end
+        prev = cur
+        i += 1
+    end
+    ret prev.get(b.len())
+end
+
+func _near_packages(p: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    all := mcpapi.Packages()
+    q := p.lower()
+    mut limit := 1
+    until limit <= 2 and out.len() == 0:
+        mut i := 0
+        until i < all.len() and out.len() < 6:
+            name := all.get(i)
+            leaf := _alias(name)
+            close := q.len() >= 3 and leaf.len() >= 3 and _edit_distance(leaf, q) <= limit
+            if name.find(q) >= 0 or close: out.push(name) end
+            i += 1
+        end
+        limit += 1
+    end
+    ret out
+end
+
+func _resolve_pkg(pkg: str): str:
+    p := pkg.trim()
+    if mcpapi.HasPackage(p): ret p end
+    if mcpapi.HasPackage(str.Replace(p, "/", ".")): ret str.Replace(p, "/", ".") end
+    if str.StartsWith(p, "std."): ret _resolve_pkg(p.substr(4, p.len() - 4)) end
+    leaf := _by_leaf(p)
+    if leaf.len() > 0: ret leaf end
+    ret _english_name(_std_root(), p)
+end
+
+func _loc(d: mcpdecl.Decl): str:
+    ret d.file.concat(":").concat(str.FromInt(d.line))
+end
+
+func _decl_value(d: mcpdecl.Decl): value.Value:
+    mut o := value.NewValueObject()
+    value.ObjectSet(o, "kind", value.ValueString(d.kind))
+    value.ObjectSet(o, "name", value.ValueString(d.name))
+    value.ObjectSet(o, "signature", value.ValueString(d.signature))
+    value.ObjectSet(o, "package", value.ValueString(d.pkg))
+    if d.receiver.len() > 0: value.ObjectSet(o, "receiver", value.ValueString(d.receiver)) end
+    value.ObjectSet(o, "file", value.ValueString(d.file))
+    value.ObjectSet(o, "line", value.ValueInt(d.line as i64))
+    if d.fa.len() > 0: value.ObjectSet(o, "persian", value.ValueString(d.fa)) end
+    if d.members.len() > 0:
+        mut key := "fields"
+        if d.kind == "enum": key = "members" end
+        if d.kind == "interface": key = "methods" end
+        value.ObjectSet(o, key, value.ValueString(d.members))
+    end
+    ret o
+end
+
+func _matches(d: mcpdecl.Decl, query: str): bool:
+    if query.trim().len() == 0: ret true end
+    ret mcptxt.ContainsFold(d.name, query) or mcptxt.ContainsFold(d.signature, query) or mcptxt.ContainsFold(d.receiver, query) or mcptxt.ContainsFold(d.fa, query)
+end
+
+func _indent_lines(s: str, pad: str): str:
+    lines := mcptxt.Lines(s)
+    mut out := Vector {} as Vector<str>
+    mut i := 0
+    until i < lines.len():
+        if lines.get(i).trim().len() > 0: out.push(pad.concat(lines.get(i).trim())) end
+        i += 1
+    end
+    ret mcptxt.Join(out, "\n")
+end
+
+func _type_block(sb &: str.StringBuilder, d: mcpdecl.Decl, all: Vector<mcpdecl.Decl>):
+    str.BufAppend(sb, "- ")
+    str.BufAppend(sb, d.signature)
+    str.BufAppend(sb, "  [")
+    str.BufAppend(sb, _loc(d))
+    str.BufAppend(sb, "]\n")
+    if d.members.len() > 0:
+        if d.kind == "enum":
+            str.BufAppend(sb, "    members: ")
+            str.BufAppend(sb, d.members)
+            str.BufAppend(sb, "\n")
+        else:
+            str.BufAppend(sb, _indent_lines(d.members, "    "))
+            str.BufAppend(sb, "\n")
+        end
+    end
+    mut i := 0
+    until i < all.len():
+        m := all.get(i)
+        if m.kind == "method" and m.receiver == d.name:
+            str.BufAppend(sb, "    method ")
+            str.BufAppend(sb, str.TrimPrefix(m.signature, "func "))
+            str.BufAppend(sb, "\n")
+        end
+        i += 1
+    end
+end
+
+func _sources(root: str): Vector<str>:
+    out := Vector {} as Vector<str>
+    if not dir.Exists(root): ret out end
+    all := mcptxt.Sorted(dir.Walk(root))
+    mut i := 0
+    until i < all.len():
+        p := all.get(i)
+        if _is_salam(p): out.push(p) end
+        i += 1
+    end
+    ret out
+end
+
+func _corpus(root: str, prefer: str): Vector<str>:
+    all := _sources(root)
+    mut first := Vector {} as Vector<str>
+    mut rest := Vector {} as Vector<str>
+    mut i := 0
+    until i < all.len():
+        p := all.get(i)
+        if prefer.len() > 0 and p.find(prefer) >= 0:
+            first.push(p)
+        else:
+            rest.push(p)
+        end
+        i += 1
+    end
+    mut j := 0
+    until j < rest.len():
+        first.push(rest.get(j))
+        j += 1
+    end
+    ret first
+end
+
+func _ensure_corpus():
+    if g_tests.len() > 0: ret end
+    g_tests = _corpus(path.Join(mcpexec.Root(), "tests"), "/tests/en/")
+end
+
+func _snippet(lines: Vector<str>, at: int, context: int): str:
+    mut from := at - context
+    if from < 0: from = 0 end
+    mut last := at + context
+    if last >= lines.len(): last = lines.len() - 1 end
+    mut out := Vector {} as Vector<str>
+    mut i := from
+    until i <= last:
+        mut mark := "  "
+        if i == at: mark = "> " end
+        out.push(mark.concat(str.FromInt(i + 1)).concat(": ").concat(lines.get(i)))
+        i += 1
+    end
+    ret mcptxt.Join(out, "\n")
+end
+
+func _search_files(files: Vector<str>, query: str, cap: int, context: int, items &: Vector<str>, arr &: value.Value):
+    mut i := 0
+    until i < files.len() and items.len() < cap:
+        f := files.get(i)
+        lines := mcptxt.Lines(file.ReadText(f))
+        mut hits := 0
+        mut parts := Vector {} as Vector<str>
+        mut j := 0
+        until j < lines.len() and hits < 2:
+            if mcptxt.ContainsFold(lines.get(j), query):
+                snip := _snippet(lines, j, context)
+                parts.push(snip)
+                mut o := value.NewValueObject()
+                value.ObjectSet(o, "file", value.ValueString(mcpexec.Relative(f)))
+                value.ObjectSet(o, "line", value.ValueInt((j + 1) as i64))
+                value.ObjectSet(o, "snippet", value.ValueString(snip))
+                value.ArrayPush(arr, o)
+                hits += 1
+                j += context + 1
+            else:
+                j += 1
+            end
+        end
+        if hits > 0:
+            items.push(mcpexec.Relative(f).concat("\n").concat(mcptxt.Join(parts, "\n    ...\n")))
+        end
+        i += 1
+    end
+end
+
+@en "Packages"
+@fa "بسته‌ها"
+pub func Packages(): mcpout.ToolResult:
+    root := _std_root()
+    if not dir.Exists(root):
+        ret mcpout.Failure("stdlib not found at ".concat(root).concat(" - set SALAM_STD or SALAM_MCP_ROOT."))
+    end
+    items := mcpapi.Packages()
+    mut shown := Vector {} as Vector<str>
+    mut arr := value.NewValueArray()
+    mut i := 0
+    until i < items.len():
+        name := items.get(i)
+        fa := _fa_name(root, name)
+        mut o := value.NewValueObject()
+        value.ObjectSet(o, "name", value.ValueString(name))
+        if fa.len() > 0:
+            shown.push(name.concat(" (").concat(fa).concat(")"))
+            value.ObjectSet(o, "persian", value.ValueString(fa))
+        else:
+            shown.push(name)
+        end
+        value.ArrayPush(arr, o)
+        i += 1
+    end
+    body := "Importable std packages (".concat(str.FromInt(items.len())).concat("), with the Persian name in parentheses; both spellings work in imports. salam_stdlib_symbols shows one package's API; salam_stdlib_search finds a function when you do not know its package.\n\n").concat(mcpout.Bullets(shown))
+    mut data := value.NewValueObject()
+    value.ObjectSet(data, "packages", arr)
+    ret mcpout.Rich(body, data, false)
+end
+
+@en "Symbols"
+@fa "نمادها"
+pub func Symbols(pkg: str, query: str): mcpout.ToolResult:
+    if pkg.trim().len() == 0: ret mcpout.Failure("package must not be empty, e.g. 'str' or 'encoding.json'.") end
+    if not mcpexec.SafePath(pkg): ret mcpout.Failure("unsupported package name: ".concat(pkg)) end
+    name := _resolve_pkg(pkg)
+    if name.len() == 0:
+        mut msg := "no such std package: ".concat(pkg).concat(".")
+        near := _near_packages(pkg)
+        if near.len() > 0:
+            msg = msg.concat(" Did you mean: ").concat(mcptxt.Join(near, ", ")).concat("?")
+        end
+        ret mcpout.Failure(msg.concat(" salam_stdlib_packages lists them all (English or Persian names)."))
+    end
+    all := mcpapi.Of(name)
+    mut picked := Vector {} as Vector<mcpdecl.Decl>
+    mut i := 0
+    until i < all.len():
+        d := all.get(i)
+        if _matches(d, query): picked.push(d) end
+        i += 1
+    end
+    alias := _alias(name)
+    if picked.len() == 0:
+        ret mcpout.Text("No public declarations in std/".concat(str.Replace(name, ".", "/")).concat(" matched '").concat(query).concat("'. Try salam_stdlib_search to look across every package."))
+    end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "std/")
+    str.BufAppend(sb, str.Replace(name, ".", "/"))
+    str.BufAppend(sb, ": write `import ")
+    str.BufAppend(sb, name)
+    str.BufAppend(sb, "`, then call its functions as `")
+    str.BufAppend(sb, alias)
+    str.BufAppend(sb, ".Name(...)` and name its types as `")
+    str.BufAppend(sb, alias)
+    str.BufAppend(sb, ".Type`. Methods are called on a value: `v.Method(...)`.\n")
+    mut has_types := false
+    mut j := 0
+    until j < picked.len():
+        d := picked.get(j)
+        if d.kind == "struct" or d.kind == "enum" or d.kind == "interface" or d.kind == "type":
+            if not has_types: str.BufAppend(sb, "\n## Types\n") end
+            has_types = true
+            _type_block(sb, d, all)
+        end
+        j += 1
+    end
+    mut has_funcs := false
+    j = 0
+    until j < picked.len():
+        d := picked.get(j)
+        if d.kind == "func":
+            if not has_funcs: str.BufAppend(sb, "\n## Functions\n") end
+            has_funcs = true
+            str.BufAppend(sb, "- ")
+            str.BufAppend(sb, d.signature)
+            str.BufAppend(sb, "  [")
+            str.BufAppend(sb, _loc(d))
+            str.BufAppend(sb, "]\n")
+        end
+        j += 1
+    end
+    mut methods_only := Vector {} as Vector<str>
+    j = 0
+    until j < picked.len():
+        d := picked.get(j)
+        if d.kind == "method" and query.trim().len() > 0:
+            methods_only.push(d.receiver.concat(".").concat(str.TrimPrefix(d.signature, "func ")).concat("  [").concat(_loc(d)).concat("]"))
+        end
+        j += 1
+    end
+    if methods_only.len() > 0:
+        str.BufAppend(sb, "\n## Methods\n")
+        str.BufAppend(sb, mcpout.Bullets(methods_only))
+    end
+    mut consts := Vector {} as Vector<str>
+    j = 0
+    until j < picked.len():
+        d := picked.get(j)
+        if d.kind == "const": consts.push(d.signature) end
+        j += 1
+    end
+    if consts.len() > 0:
+        str.BufAppend(sb, "\n## Constants (")
+        str.BufAppend(sb, str.FromInt(consts.len()))
+        str.BufAppend(sb, ")\n")
+        mut shown := Vector {} as Vector<str>
+        mut k := 0
+        until k < consts.len() and k < 120:
+            shown.push(consts.get(k))
+            k += 1
+        end
+        str.BufAppend(sb, mcpout.Bullets(shown))
+        if consts.len() > 120:
+            str.BufAppend(sb, "... ")
+            str.BufAppend(sb, str.FromInt(consts.len() - 120))
+            str.BufAppend(sb, " more; pass a query to narrow them down.\n")
+        end
+    end
+    text := str.BufStr(sb)
+    mut arr := value.NewValueArray()
+    j = 0
+    until j < picked.len():
+        value.ArrayPush(arr, _decl_value(picked.get(j)))
+        j += 1
+    end
+    mut data := value.NewValueObject()
+    value.ObjectSet(data, "package", value.ValueString(name))
+    value.ObjectSet(data, "import", value.ValueString("import ".concat(name)))
+    value.ObjectSet(data, "alias", value.ValueString(alias))
+    value.ObjectSet(data, "declarations", arr)
+    ret mcpout.Rich(text, data, false)
+end
+
+@en "Search"
+@fa "جستجوی رابط"
+pub func Search(query: str, pkg: str, limit: int): mcpout.ToolResult:
+    if query.trim().len() == 0: ret mcpout.Failure("query must not be empty: describe the function, e.g. 'read file', 'sha256', 'http post', 'sort by'.") end
+    mut scope := ""
+    if pkg.trim().len() > 0:
+        scope = _resolve_pkg(pkg)
+        if scope.len() == 0:
+            near := _near_packages(pkg)
+            mut msg := "no such std package: ".concat(pkg).concat(".")
+            if near.len() > 0: msg = msg.concat(" Did you mean: ").concat(mcptxt.Join(near, ", ")).concat("?") end
+            ret mcpout.Failure(msg)
+        end
+    end
+    mut cap := limit
+    if cap <= 0: cap = 25 end
+    if cap > 100: cap = 100 end
+    found := mcpapi.Search(query, scope, cap)
+    if found.len() == 0:
+        ret mcpout.Text("No std declaration matched '".concat(query).concat("'. Try one distinctive word (a verb or noun such as 'base64', 'sleep', 'mkdir'), or salam_find_examples to search code that uses it."))
+    end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "Std declarations matching '")
+    str.BufAppend(sb, query)
+    str.BufAppend(sb, "', best first. Import the package, then call `alias.Name(...)`:\n\n")
+    mut arr := value.NewValueArray()
+    mut i := 0
+    until i < found.len():
+        d := found.get(i)
+        str.BufAppend(sb, "- ")
+        str.BufAppend(sb, d.pkg)
+        str.BufAppend(sb, ": ")
+        if d.kind == "method":
+            str.BufAppend(sb, "method ")
+            str.BufAppend(sb, d.receiver)
+            str.BufAppend(sb, ".")
+            str.BufAppend(sb, str.TrimPrefix(d.signature, "func "))
+        else:
+            str.BufAppend(sb, d.signature)
+        end
+        str.BufAppend(sb, "  [")
+        str.BufAppend(sb, _loc(d))
+        str.BufAppend(sb, "]")
+        if d.fa.len() > 0:
+            str.BufAppend(sb, "  fa: ")
+            str.BufAppend(sb, d.fa)
+        end
+        str.BufAppend(sb, "\n")
+        if d.members.len() > 0 and d.kind != "method":
+            if d.kind == "enum":
+                str.BufAppend(sb, "    members: ")
+                str.BufAppend(sb, d.members)
+                str.BufAppend(sb, "\n")
+            else:
+                str.BufAppend(sb, _indent_lines(d.members, "    "))
+                str.BufAppend(sb, "\n")
+            end
+        end
+        value.ArrayPush(arr, _decl_value(d))
+        i += 1
+    end
+    text := str.BufStr(sb)
+    mut data := value.NewValueObject()
+    value.ObjectSet(data, "results", arr)
+    ret mcpout.Rich(text, data, false)
+end
+
+@en "FindExamples"
+@fa "یافتن نمونه‌ها"
+pub func FindExamples(query: str, limit: int, context: int, scope: str): mcpout.ToolResult:
+    if query.trim().len() == 0: ret mcpout.Failure("query must not be empty") end
+    if scope.len() > 0 and scope != "tests" and scope != "std" and scope != "all":
+        ret mcpout.Failure("unknown scope '".concat(scope).concat("': use tests, std or all."))
+    end
+    mut cap := limit
+    if cap <= 0: cap = 10 end
+    if cap > 50: cap = 50 end
+    mut ctx := context
+    if ctx < 0: ctx = 2 end
+    if ctx > 12: ctx = 12 end
+    mut items := Vector {} as Vector<str>
+    mut arr := value.NewValueArray()
+    if scope != "std":
+        _ensure_corpus()
+        _search_files(g_tests, query, cap, ctx, items, arr)
+    end
+    if (scope == "std" or scope == "all" or items.len() == 0) and items.len() < cap:
+        _search_files(_sources(_std_root()), query, cap, ctx, items, arr)
+    end
+    if items.len() == 0:
+        ret mcpout.Text("No examples matched '".concat(query).concat("'. Search for a shorter, exact piece of code (a function name such as 'json.Marshal' or a keyword such as 'match'); salam_docs answers questions about syntax."))
+    end
+    body := "Working code matching '".concat(query).concat("' (tests/en first, then other tests, then std):\n\n").concat(mcptxt.Join(items, "\n\n"))
+    mut data := value.NewValueObject()
+    value.ObjectSet(data, "examples", arr)
+    ret mcpout.Rich(body, data, false)
+end
+
+@en "Docs"
+@fa "راهنما"
+pub func Docs(query: str, max_chars: int): mcpout.ToolResult:
+    q := query.trim()
+    if q.len() == 0: ret mcpout.Text(mcpguide.Topics()) end
+    if mcpguide.IsCode(q): ret mcpout.Text(mcpguide.Explain(q)) end
+    ret mcpout.Text(mcpguide.Lookup(q, max_chars))
+end
+
+@en "ReadSource"
+@fa "خواندن منبع"
+pub func ReadSource(rel: str, start: int, count: int): mcpout.ToolResult:
+    full := mcpexec.Resolve(rel)
+    if full.len() == 0: ret mcpout.Failure("unsupported path: ".concat(rel)) end
+    if not file.Exists(full): ret mcpout.Failure("no such file: ".concat(rel)) end
+    lines := mcptxt.Lines(file.ReadText(full))
+    mut from := start
+    if from < 1: from = 1 end
+    mut n := count
+    if n <= 0: n = 200 end
+    mut picked := Vector {} as Vector<str>
+    mut i := from - 1
+    until i < lines.len() and picked.len() < n:
+        picked.push(str.FromInt(i + 1).concat("\t").concat(lines.get(i)))
+        i += 1
+    end
+    ret mcpout.Text(rel.concat("\n\n").concat(mcptxt.Join(picked, "\n")))
+end
+
+@en "Keywords"
+@fa "کلیدواژه‌ها"
+pub func Keywords(): mcpout.ToolResult:
+    src := _langpack_src()
+    if src.len() == 0:
+        ret mcpout.Failure("langpack source not readable; set SALAM_MCP_ROOT to the Salam checkout.")
+    end
+    en := _kw_table(src, "k_kw_spell_en :=")
+    fa := _kw_table(src, "k_kw_spell_fa :=")
+    en_kind := _kind_table(src, "k_kw_kind_en :=")
+    fa_kind := _kind_table(src, "k_kw_kind_fa :=")
+    mut rows := Vector {} as Vector<str>
+    rows.push("english\tpersian")
+    mut i := 0
+    until i < en.len() and i < en_kind.len():
+        rows.push(_row(en.get(i), en_kind.get(i), fa, fa_kind))
+        i += 1
+    end
+    body := "Salam is written in English or Persian; these are the same keywords in each. A keyword can never be used as a name.\n\n".concat(mcptxt.Join(rows, "\n"))
+    mut arr := value.NewValueArray()
+    mut r := 1
+    until r < rows.len():
+        row := rows.get(r)
+        tab := row.find("\t")
+        mut o := value.NewValueObject()
+        if tab >= 0:
+            value.ObjectSet(o, "english", value.ValueString(row.substr(0, tab)))
+            value.ObjectSet(o, "persian", value.ValueString(row.substr(tab + 1, row.len() - tab - 1)))
+        else:
+            value.ObjectSet(o, "english", value.ValueString(row))
+        end
+        value.ArrayPush(arr, o)
+        r += 1
+    end
+    mut data := value.NewValueObject()
+    value.ObjectSet(data, "keywords", arr)
+    ret mcpout.Rich(body, data, false)
+end

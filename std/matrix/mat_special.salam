@@ -1,0 +1,321 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+const _RNG_MULT := 2685821657736338717 as u64
+const _RNG_ODD := 1442695040888963407 as u64
+
+@en "Rng"
+@fa "مولد تصادفی"
+pub struct Rng:
+    @en "s"
+    @fa "حالت"
+    pub s: u64 = 0
+
+    @en "next_bits"
+    @fa "بیت بعدی"
+    pub func next_bits(): u64:
+        mut x := this.s
+        x = x ^ (x >> 12)
+        x = x ^ (x << 25)
+        x = x ^ (x >> 27)
+        this.s = x
+        ret x * _RNG_MULT
+    end
+
+    @en "next_float"
+    @fa "اعشاری بعدی"
+    pub func next_float(): f64:
+        v := this.next_bits() >> 11
+        ret (v as f64) / 9007199254740992.0
+    end
+
+    @en "next_normal"
+    @fa "نرمال بعدی"
+    pub func next_normal(): f64:
+        mut u := this.next_float()
+        if u <= 0.0: u = 1.0e-15 end
+        v := this.next_float()
+        ret math.Sqrt(0.0 - 2.0 * math.Log(u)) * math.Cos(6.283185307179586 * v)
+    end
+end
+
+func _fill_random(m &: Matrix, g &: Rng, lo: f64, hi: f64):
+    repeat m.count() in k: m.a.set(k, lo + (hi - lo) * g.next_float()) end
+end
+
+func _fill_normal(m &: Matrix, g &: Rng):
+    repeat m.count() in k: m.a.set(k, g.next_normal()) end
+end
+
+func _hilb_inv_entry(i: int, j: int, n: int): f64:
+    mut v := ((i + j + 1) as f64) * _binom(n + i, n - j - 1) * _binom(n + j, n - i - 1)
+    v = v * _binom(i + j, i) * _binom(i + j, i)
+    if (i + j) % 2 == 1: ret 0.0 - v end
+    ret v
+end
+
+func _binom(n: int, k: int): f64:
+    if k < 0 or k > n: ret 0.0 end
+    mut r := 1.0
+    mut i := 0
+    until i < k:
+        r = r * ((n - i) as f64) / ((i + 1) as f64)
+        i += 1
+    end
+    ret r
+end
+
+func _hankel_at(fc &: Matrix, lr &: Matrix, i: int, j: int, n: int): f64:
+    k := i + j
+    if k < n: ret fc.a.get(k) end
+    ret lr.a.get(k - n + 1)
+end
+
+func _rot_fill(m &: Matrix, p: int, q: int, c: f64, s: f64):
+    m.set(p, p, c)
+    m.set(p, q, 0.0 - s)
+    m.set(q, p, s)
+    m.set(q, q, c)
+end
+
+@en "NewRng"
+@fa "مولد جدید"
+pub func NewRng(seed: i64): Rng:
+    mut g := Rng {}
+    g.s = (seed as u64) + _RNG_ODD
+    if g.s == 0: g.s = _RNG_ODD end
+    ret g
+end
+
+@en "Hilbert"
+@fa "هیلبرت"
+pub func Hilbert(n: int): Matrix:
+    mut m := Zeros(n, n)
+    repeat n in i:
+        repeat n in j: m.set(i, j, 1.0 / ((i + j + 1) as f64)) end
+    end
+    ret m
+end
+
+@en "HilbertInverse"
+@fa "وارون هیلبرت"
+pub func HilbertInverse(n: int): Matrix:
+    mut m := Zeros(n, n)
+    repeat n in i:
+        repeat n in j: m.set(i, j, _hilb_inv_entry(i, j, n)) end
+    end
+    ret m
+end
+@en "Vandermonde"
+@fa "واندرموند"
+pub func Vandermonde(x &: Matrix, cols: int): Matrix:
+    n := x.count()
+    mut m := Zeros(n, cols)
+    repeat n in i:
+        mut p := 1.0
+        repeat cols in j:
+            m.set(i, j, p)
+            p = p * x.a.get(i)
+        end
+    end
+    ret m
+end
+
+@en "Toeplitz"
+@fa "توپلیتز"
+pub func Toeplitz(first_col &: Matrix, first_row &: Matrix): Matrix:
+    n := first_col.count()
+    m := first_row.count()
+    mut r := Zeros(n, m)
+    repeat n in i:
+        repeat m in j:
+            if j >= i: r.set(i, j, first_row.a.get(j - i))
+            else:
+                r.set(i, j, first_col.a.get(i - j))
+            end
+        end
+    end
+    ret r
+end
+
+@en "Hankel"
+@fa "هنکل"
+pub func Hankel(first_col &: Matrix, last_row &: Matrix): Matrix:
+    n := first_col.count()
+    m := last_row.count()
+    mut r := Zeros(n, m)
+    repeat n in i:
+        repeat m in j: r.set(i, j, _hankel_at(first_col, last_row, i, j, n)) end
+    end
+    ret r
+end
+
+@en "Circulant"
+@fa "دورانی"
+pub func Circulant(c &: Matrix): Matrix:
+    n := c.count()
+    mut r := Zeros(n, n)
+    repeat n in i:
+        repeat n in j: r.set(i, j, c.a.get(((j - i) % n + n) % n)) end
+    end
+    ret r
+end
+
+@en "Companion"
+@fa "همراه"
+pub func Companion(coeffs &: Matrix): Matrix:
+    n := coeffs.count() - 1
+    if n < 1: ret Zeros(0, 0) end
+    lead := coeffs.a.get(n)
+    if lead == 0.0: ret Zeros(0, 0) end
+    mut m := Zeros(n, n)
+    repeat n in i: m.set(i, n - 1, 0.0 - coeffs.a.get(i) / lead) end
+    mut i := 1
+    until i < n:
+        m.set(i, i - 1, 1.0)
+        i += 1
+    end
+    ret m
+end
+
+@en "Pascal"
+@fa "پاسکال"
+pub func Pascal(n: int): Matrix:
+    mut m := Zeros(n, n)
+    repeat n in i: m.set(i, 0, 1.0) end
+    repeat n in j: m.set(0, j, 1.0) end
+    mut i := 1
+    until i < n:
+        mut j := 1
+        until j < n:
+            m.set(i, j, m.at(i - 1, j) + m.at(i, j - 1))
+            j += 1
+        end
+        i += 1
+    end
+    ret m
+end
+
+@en "Rotation2D"
+@fa "دوران دوبعدی"
+pub func Rotation2D(theta: f64): Matrix:
+    c := math.Cos(theta)
+    s := math.Sin(theta)
+    mut m := Zeros(2, 2)
+    m.set(0, 0, c)
+    m.set(0, 1, 0.0 - s)
+    m.set(1, 0, s)
+    m.set(1, 1, c)
+    ret m
+end
+
+@en "Rotation3D"
+@fa "دوران سه‌بعدی"
+pub func Rotation3D(axis: int, theta: f64): Matrix:
+    c := math.Cos(theta)
+    s := math.Sin(theta)
+    mut m := Eye(3)
+    if axis == 0: _rot_fill(m, 1, 2, c, s) end
+    if axis == 1: _rot_fill(m, 2, 0, c, s) end
+    if axis == 2: _rot_fill(m, 0, 1, c, s) end
+    ret m
+end
+
+@en "Householder"
+@fa "هاوس‌هولدر"
+pub func Householder(v &: Matrix): Matrix:
+    n := v.count()
+    mut d := 0.0
+    repeat n in k: d += v.a.get(k) * v.a.get(k) end
+    mut m := Eye(n)
+    if d == 0.0: ret m end
+    f := 2.0 / d
+    repeat n in i:
+        repeat n in j: m.add_at(i, j, 0.0 - f * v.a.get(i) * v.a.get(j)) end
+    end
+    ret m
+end
+
+@en "Givens"
+@fa "گیونز"
+pub func Givens(n: int, p: int, q: int, theta: f64): Matrix:
+    mut m := Eye(n)
+    if p < 0 or q < 0 or p >= n or q >= n or p == q: ret m end
+    _rot_fill(m, p, q, math.Cos(theta), math.Sin(theta))
+    ret m
+end
+
+@en "Permutation"
+@fa "جایگشت"
+pub func Permutation(perm &: Matrix): Matrix:
+    n := perm.count()
+    mut m := Zeros(n, n)
+    repeat n in i:
+        j := perm.a.get(i) as int
+        if j >= 0 and j < n: m.set(i, j, 1.0) end
+    end
+    ret m
+end
+
+@en "Random"
+@fa "تصادفی"
+pub func Random(rows: int, cols: int, lo: f64, hi: f64, seed: i64): Matrix:
+    mut g := NewRng(seed)
+    mut m := Zeros(rows, cols)
+    _fill_random(m, g, lo, hi)
+    ret m
+end
+
+@en "RandomNormal"
+@fa "تصادفی نرمال"
+pub func RandomNormal(rows: int, cols: int, seed: i64): Matrix:
+    mut g := NewRng(seed)
+    mut m := Zeros(rows, cols)
+    _fill_normal(m, g)
+    ret m
+end
+
+@en "RandomSymmetric"
+@fa "تصادفی متقارن"
+pub func RandomSymmetric(n: int, seed: i64): Matrix:
+    mut a := RandomNormal(n, n, seed)
+    m := SymPart(a)
+    defer a.free()
+    ret m
+end
+
+@en "RandomSPD"
+@fa "تصادفی معین مثبت"
+pub func RandomSPD(n: int, seed: i64): Matrix:
+    mut a := RandomNormal(n, n, seed)
+    mut m := Gram(a)
+    ShiftDiagonal(m, n as f64)
+    defer a.free()
+    ret m
+end
+
+@en "RandomOrthogonal"
+@fa "تصادفی متعامد"
+pub func RandomOrthogonal(n: int, seed: i64): Matrix:
+    mut a := RandomNormal(n, n, seed)
+    mut f := QRDecompose(a)
+    q := QRGetQ(f)
+    defer f.free()
+    defer a.free()
+    ret q
+end

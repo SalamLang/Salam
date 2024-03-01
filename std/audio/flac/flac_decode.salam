@@ -1,0 +1,464 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package flac
+
+import audio
+import mem
+
+const _RATE_TABLE := [0, 88200, 176400, 192000, 8000, 16000, 22050, 24000, 32000, 44100, 48000, 96000, 0, 0, 0, 0]
+const _BPS_TABLE := [0, 8, 12, 0, 16, 20, 24, 32]
+const _FIXED_BLOCK := [0, 192, 576, 1152, 2304, 4608, 0, 0, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
+
+@en "FrameInfo"
+@fa "آگاهی فریم"
+pub struct FrameInfo:
+    @en "block_size"
+    @fa "اندازه بلوک"
+    pub block_size: int = 0
+    @en "rate"
+    @fa "نرخ"
+    pub rate: int = 0
+    @en "channels"
+    @fa "کانال ها"
+    pub channels: int = 0
+    @en "bits"
+    @fa "بیت ها"
+    pub bits: int = 0
+    @en "assignment"
+    @fa "واگذاری"
+    pub assignment: int = 0
+    @en "variable"
+    @fa "ناپایدار"
+    pub variable: bool = false
+    @en "number"
+    @fa "شماره"
+    pub number: i64 = 0
+end
+
+func _zigzag(u: i64): i64:
+    ret (u >> 1) ^ (0 - (u & (1 as i64)))
+end
+
+func _read_utf8(r &: audio.MsbReader): i64:
+    first := audio.MsbRead(r, 8)
+    if first < 128:
+        ret first
+    end
+    mut extra := 0
+    mut value := 0 as i64
+    if (first & 224) == 192:
+        extra = 1
+        value = (first & 31) as i64
+    else (first & 240) == 224:
+        extra = 2
+        value = (first & 15) as i64
+    else (first & 248) == 240:
+        extra = 3
+        value = (first & 7) as i64
+    else (first & 252) == 248:
+        extra = 4
+        value = (first & 3) as i64
+    else (first & 254) == 252:
+        extra = 5
+        value = (first & 1) as i64
+    else:
+        extra = 6
+        value = 0 as i64
+    end
+    mut i := 0
+    until i < extra:
+        b := audio.MsbRead(r, 8)
+        value = (value << 6) | ((b & 63) as i64)
+        i += 1
+    end
+    ret value
+end
+
+func _residual(r &: audio.MsbReader, out: i64*, base: int, block: int, order: int): bool:
+    method := audio.MsbRead(r, 2)
+    if method > 1:
+        ret false
+    end
+    param_bits := method == 0 ? 4 : 5
+    escape := method == 0 ? 15 : 31
+    porder := audio.MsbRead(r, 4)
+    parts := 1 << porder
+    if (block % parts) != 0:
+        ret false
+    end
+    psize := block / parts
+    mut at := order
+    mut part := 0
+    until part < parts:
+        mut count := psize
+        if part == 0:
+            count = psize - order
+        end
+        if count < 0:
+            ret false
+        end
+        param := audio.MsbRead(r, param_bits)
+        if param == escape:
+            raw := audio.MsbRead(r, 5)
+            mut i := 0
+            until i < count:
+                if raw == 0:
+                    out[base + at] = 0 as i64
+                else:
+                    out[base + at] = audio.MsbReadSigned(r, raw) as i64
+                end
+                at += 1
+                i += 1
+            end
+        else:
+            mut i := 0
+            until i < count:
+                q := audio.MsbUnary(r)
+                mut v := (q as i64) << param
+                if param > 0:
+                    v = v | (audio.MsbReadI64(r, param))
+                end
+                out[base + at] = _zigzag(v)
+                at += 1
+                i += 1
+            end
+        end
+        if audio.MsbBad(r):
+            ret false
+        end
+        part += 1
+    end
+    ret true
+end
+
+func _fixed_restore(out: i64*, base: int, block: int, order: int):
+    if order == 0:
+        ret
+    end
+    mut i := order
+    until i < block:
+        at := base + i
+        if order == 1:
+            out[at] = out[at] + out[at - 1]
+        else order == 2:
+            out[at] = out[at] + (2 as i64) * out[at - 1] - out[at - 2]
+        else order == 3:
+            out[at] = out[at] + (3 as i64) * out[at - 1] - (3 as i64) * out[at - 2] + out[at - 3]
+        else:
+            out[at] = out[at] + (4 as i64) * out[at - 1] - (6 as i64) * out[at - 2] + (4 as i64) * out[at - 3] - out[at - 4]
+        end
+        i += 1
+    end
+end
+
+func _lpc_restore(out: i64*, base: int, block: int, order: int, coefs: i64*, shift: int):
+    mut i := order
+    until i < block:
+        mut sum := 0 as i64
+        mut k := 0
+        until k < order:
+            sum += coefs[k] * out[base + i - 1 - k]
+            k += 1
+        end
+        out[base + i] = out[base + i] + (sum >> shift)
+        i += 1
+    end
+end
+
+func _subframe(r &: audio.MsbReader, out: i64*, base: int, block: int, bps: int): bool:
+    if audio.MsbRead(r, 1) != 0:
+        ret false
+    end
+    kind := audio.MsbRead(r, 6)
+    wasted_flag := audio.MsbRead(r, 1)
+    mut wasted := 0
+    if wasted_flag != 0:
+        wasted = audio.MsbUnary(r) + 1
+    end
+    bits := bps - wasted
+    if bits <= 0 or bits > 32:
+        ret false
+    end
+    mut good := false
+    if kind == 0:
+        v := audio.MsbReadSigned(r, bits) as i64
+        mut i := 0
+        until i < block:
+            out[base + i] = v
+            i += 1
+        end
+        good = true
+    else kind == 1:
+        mut i := 0
+        until i < block:
+            out[base + i] = audio.MsbReadSigned(r, bits) as i64
+            i += 1
+        end
+        good = true
+    else (kind & 56) == 8:
+        order := kind & 7
+        if order > 4 or order > block:
+            ret false
+        end
+        mut i := 0
+        until i < order:
+            out[base + i] = audio.MsbReadSigned(r, bits) as i64
+            i += 1
+        end
+        if not _residual(r, out, base, block, order):
+            ret false
+        end
+        _fixed_restore(out, base, block, order)
+        good = true
+    else (kind & 32) != 0:
+        order := (kind & 31) + 1
+        if order > block:
+            ret false
+        end
+        mut i := 0
+        until i < order:
+            out[base + i] = audio.MsbReadSigned(r, bits) as i64
+            i += 1
+        end
+        precision := audio.MsbRead(r, 4) + 1
+        if precision > 15:
+            ret false
+        end
+        shift := audio.MsbReadSigned(r, 5)
+        if shift < 0:
+            ret false
+        end
+        coefs := mem.Allocate((order * 8) as u64) as i64*
+        if coefs == null:
+            ret false
+        end
+        mut k := 0
+        until k < order:
+            coefs[k] = audio.MsbReadSigned(r, precision) as i64
+            k += 1
+        end
+        if _residual(r, out, base, block, order):
+            _lpc_restore(out, base, block, order, coefs, shift)
+            good = true
+        end
+        mem.Free(coefs as void*)
+        if not good:
+            ret false
+        end
+    else:
+        ret false
+    end
+    if wasted > 0 and good:
+        mut i := 0
+        until i < block:
+            out[base + i] = out[base + i] << wasted
+            i += 1
+        end
+    end
+    ret good and not audio.MsbBad(r)
+end
+
+func _decorrelate(buf: i64*, block: int, assignment: int):
+    if assignment == 8:
+        mut i := 0
+        until i < block:
+            buf[block + i] = buf[i] - buf[block + i]
+            i += 1
+        end
+    else assignment == 9:
+        mut i := 0
+        until i < block:
+            buf[i] = buf[i] + buf[block + i]
+            i += 1
+        end
+    else assignment == 10:
+        mut i := 0
+        until i < block:
+            side := buf[block + i]
+            mut mid := buf[i] << 1
+            mid = mid | (side & (1 as i64))
+            buf[i] = (mid + side) >> 1
+            buf[block + i] = (mid - side) >> 1
+            i += 1
+        end
+    end
+end
+
+@en "ReadFrameHeader"
+@fa "خواندن سرآیند فریم"
+pub func ReadFrameHeader(p: void*, n: int, at: int, si: StreamInfo, out &: FrameInfo): int:
+    if at + 5 > n:
+        ret -1
+    end
+    mut r := audio.NewMsbReader(((p as i64) + (at as i64)) as void*, n - at)
+    sync := audio.MsbRead(r, 14)
+    if sync != 16382:
+        ret -1
+    end
+    if audio.MsbRead(r, 1) != 0:
+        ret -1
+    end
+    mut fi := FrameInfo {}
+    fi.variable = audio.MsbRead(r, 1) != 0
+    bs_code := audio.MsbRead(r, 4)
+    sr_code := audio.MsbRead(r, 4)
+    fi.assignment = audio.MsbRead(r, 4)
+    bps_code := audio.MsbRead(r, 3)
+    if audio.MsbRead(r, 1) != 0:
+        ret -1
+    end
+    fi.number = _read_utf8(r)
+    if bs_code == 6:
+        fi.block_size = audio.MsbRead(r, 8) + 1
+    else bs_code == 7:
+        fi.block_size = audio.MsbRead(r, 16) + 1
+    else:
+        fi.block_size = _FIXED_BLOCK[bs_code]
+    end
+    if sr_code == 12:
+        fi.rate = audio.MsbRead(r, 8) * 1000
+    else sr_code == 13:
+        fi.rate = audio.MsbRead(r, 16)
+    else sr_code == 14:
+        fi.rate = audio.MsbRead(r, 16) * 10
+    else:
+        fi.rate = _RATE_TABLE[sr_code]
+    end
+    if fi.rate == 0:
+        fi.rate = si.rate
+    end
+    if bps_code == 0:
+        fi.bits = si.bits
+    else:
+        fi.bits = _BPS_TABLE[bps_code]
+    end
+    if fi.assignment < 8:
+        fi.channels = fi.assignment + 1
+    else fi.assignment < 11:
+        fi.channels = 2
+    else:
+        ret -1
+    end
+    if fi.block_size <= 0 or fi.block_size > MaxBlockSize or fi.bits <= 0:
+        ret -1
+    end
+    if audio.MsbBad(r):
+        ret -1
+    end
+    audio.MsbAlign(r)
+    head_len := audio.MsbTell(r) / 8
+    if at + head_len + 1 > n:
+        ret -1
+    end
+    if CRC8(p, at, head_len) != (((p as u8*)[at + head_len]) as int):
+        ret -1
+    end
+    out = fi
+    ret head_len + 1
+end
+
+@en "DecodeFLAC"
+@fa "کدگشایی فلاک"
+pub func DecodeFLAC(p: void*, n: int, ok &: bool): audio.Clip:
+    ok = false
+    mut si := StreamInfo {}
+    if not ReadStreamInfo(p, n, si):
+        ret audio.Clip {}
+    end
+    total := si.total as int
+    mut out := audio.New(si.rate, si.channels, total > 0 ? total : 0)
+    if total > 0 and out.samples == null:
+        FreeStreamInfo(si)
+        ret out
+    end
+    scale := 1.0 / ((1 as i64) << (si.bits - 1)) as f64
+    cap_block := si.max_block > 0 ? si.max_block : MaxBlockSize
+    buf := mem.Allocate((cap_block * si.channels * 8) as u64) as i64*
+    if buf == null:
+        FreeStreamInfo(si)
+        audio.Free(out)
+        ret audio.Clip {}
+    end
+    dst := audio.Data(out)
+    mut at := si.audio_offset
+    mut written := 0
+    mut frames_seen := 0
+    until at < n:
+        mut fi := FrameInfo {}
+        head := ReadFrameHeader(p, n, at, si, fi)
+        if head < 0:
+            break
+        end
+        if fi.block_size > cap_block or fi.channels != si.channels:
+            break
+        end
+        mut r := audio.NewMsbReader(((p as i64) + ((at + head) as i64)) as void*, n - at - head)
+        mut good := true
+        mut ch := 0
+        until ch < fi.channels:
+            mut bps := fi.bits
+            if fi.assignment == 8 and ch == 1:
+                bps += 1
+            end
+            if fi.assignment == 9 and ch == 0:
+                bps += 1
+            end
+            if fi.assignment == 10 and ch == 1:
+                bps += 1
+            end
+            if not _subframe(r, buf, ch * fi.block_size, fi.block_size, bps):
+                good = false
+                break
+            end
+            ch += 1
+        end
+        if not good:
+            break
+        end
+        audio.MsbAlign(r)
+        used := audio.MsbTell(r) / 8
+        _decorrelate(buf, fi.block_size, fi.assignment)
+        mut i := 0
+        until i < fi.block_size:
+            if written + i < out.frames:
+                mut c2 := 0
+                until c2 < fi.channels:
+                    v := (buf[c2 * fi.block_size + i] as f64) * scale
+                    dst[(written + i) * out.channels + c2] = v as f32
+                    c2 += 1
+                end
+            end
+            i += 1
+        end
+        written += fi.block_size
+        frames_seen += 1
+        at = at + head + used + 2
+        if written >= out.frames and out.frames > 0:
+            break
+        end
+    end
+    mem.Free(buf as void*)
+    out.bits = si.bits
+    FreeStreamInfo(si)
+    if frames_seen == 0:
+        audio.Free(out)
+        ret audio.Clip {}
+    end
+    if written < out.frames:
+        out.frames = written
+    end
+    ok = true
+    ret out
+end

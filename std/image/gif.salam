@@ -1,0 +1,685 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+import compress
+import archive
+
+struct _GifLzw:
+    pub w: compress.BitWriter = compress.BitWriter {}
+    pub min: int = 2
+    pub dsize: int = 3
+    pub dnext: int = 6
+    pub dprev: bool = false
+end
+
+func _gif_u16(bp: u8*, at: int): int:
+    ret (bp[at] as int) | ((bp[at + 1] as int) << 8)
+end
+
+func _gif_lzw(data: compress.ByteBuf, min: int, total: int, out &: Vector<int>): bool:
+    if min < 2 or min > 8:
+        ret false
+    end
+    clear := 1 << min
+    eoi := clear + 1
+    mut prefix := Vector {} as Vector<int>
+    mut suffix := Vector {} as Vector<int>
+    mut length := Vector {} as Vector<int>
+    repeat 4096 in i:
+        prefix.push(0 - 1)
+        suffix.push(i < clear ? i : 0)
+        length.push(i < clear ? 1 : 0)
+    end
+    mut r := compress.NewBitReader(data.data, compress.BufLen(data))
+    mut size := min + 1
+    mut next := eoi + 1
+    mut prev := 0 - 1
+    mut good := true
+    mut done := false
+    until not done and out.len() < total:
+        code := compress.BitReadBits(r, size)
+        if r.bad:
+            done = true
+        else code == clear:
+            size = min + 1
+            next = eoi + 1
+            prev = 0 - 1
+        else code == eoi:
+            done = true
+        else:
+            cur := code
+            mut first := 0
+            if code < next and length.get(code) > 0:
+                mut c := code
+                until prefix.get(c) >= 0:
+                    c = prefix.get(c)
+                end
+                first = suffix.get(c)
+            else code == next and prev >= 0:
+                mut c := prev
+                until prefix.get(c) >= 0:
+                    c = prefix.get(c)
+                end
+                first = suffix.get(c)
+            else:
+                good = false
+                done = true
+            end
+            if not done:
+                if prev >= 0 and next < 4096:
+                    prefix.set(next, prev)
+                    suffix.set(next, first)
+                    length.set(next, length.get(prev) + 1)
+                    next += 1
+                    if next == (1 << size) and size < 12:
+                        size += 1
+                    end
+                end
+                n := length.get(cur)
+                base := out.len()
+                repeat n:
+                    out.push(0)
+                end
+                mut k := base + n - 1
+                mut c := cur
+                until c >= 0:
+                    if k < total:
+                        out.set(k, suffix.get(c))
+                    end
+                    k -= 1
+                    c = prefix.get(c)
+                end
+                prev = code
+            end
+        end
+    end
+    prefix.free()
+    suffix.free()
+    length.free()
+    until out.len() > total:
+        out.pop()
+    end
+    ret good
+end
+
+func _gif_find(keys: Vector<int>, key: int): int:
+    mask := keys.len() - 1
+    mut h := ((((key as i64) * (40503 as i64)) >> 4) & (mask as i64)) as int
+    until keys.get(h) != 0 - 1 and keys.get(h) != key:
+        h = (h + 1) & mask
+    end
+    ret h
+end
+
+func _gif_exact(bp: u8*, total: int, limit: int, pal &: Vector<int>, keys &: Vector<int>, vals &: Vector<int>): bool:
+    repeat 1024:
+        keys.push(0 - 1)
+        vals.push(0)
+    end
+    repeat total in i:
+        if (bp[i * 4 + 3] as int) >= 128:
+            rgb := ((bp[i * 4] as int) << 16) | ((bp[i * 4 + 1] as int) << 8) | (bp[i * 4 + 2] as int)
+            h := _gif_find(keys, rgb)
+            if keys.get(h) != rgb:
+                if pal.len() >= limit:
+                    ret false
+                end
+                keys.set(h, rgb)
+                vals.set(h, pal.len())
+                pal.push(rgb)
+            end
+        end
+    end
+    ret true
+end
+
+func _gif_bin(r: int, g: int, b: int): int:
+    ret ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3)
+end
+
+func _gif_median(bp: u8*, total: int, limit: int, pal &: Vector<int>):
+    mut cnt := Vector {} as Vector<int>
+    mut sr := Vector {} as Vector<int>
+    mut sg := Vector {} as Vector<int>
+    mut sb := Vector {} as Vector<int>
+    repeat 32768:
+        cnt.push(0)
+        sr.push(0)
+        sg.push(0)
+        sb.push(0)
+    end
+    repeat total in i:
+        if (bp[i * 4 + 3] as int) >= 128:
+            r := bp[i * 4] as int
+            g := bp[i * 4 + 1] as int
+            b := bp[i * 4 + 2] as int
+            k := _gif_bin(r, g, b)
+            cnt.set(k, cnt.get(k) + 1)
+            sr.set(k, sr.get(k) + r)
+            sg.set(k, sg.get(k) + g)
+            sb.set(k, sb.get(k) + b)
+        end
+    end
+    mut bins := Vector {} as Vector<int>
+    repeat 32768 in k:
+        if cnt.get(k) > 0:
+            bins.push(k)
+        end
+    end
+    mut lo := Vector {} as Vector<int>
+    mut hi := Vector {} as Vector<int>
+    lo.push(0)
+    hi.push(bins.len())
+    mut tmp := Vector {} as Vector<int>
+    repeat bins.len():
+        tmp.push(0)
+    end
+    mut more := bins.len() > 0
+    until more and lo.len() < limit:
+        mut pick := 0 - 1
+        mut pick_score := 0
+        mut pick_ch := 0
+        repeat lo.len() in bi:
+            if hi.get(bi) - lo.get(bi) > 1:
+                mut mins := [31, 31, 31]
+                mut maxs := [0, 0, 0]
+                mut pixels := 0
+                mut j := lo.get(bi)
+                until j < hi.get(bi):
+                    k := bins.get(j)
+                    repeat 3 in c:
+                        v := (k >> (10 - 5 * c)) & 31
+                        if v < mins[c]:
+                            mins[c] = v
+                        end
+                        if v > maxs[c]:
+                            maxs[c] = v
+                        end
+                    end
+                    pixels += cnt.get(k)
+                    j += 1
+                end
+                mut ch := 0
+                repeat 3 in c:
+                    if maxs[c] - mins[c] > maxs[ch] - mins[ch]:
+                        ch = c
+                    end
+                end
+                score := (maxs[ch] - mins[ch] + 1) * pixels
+                if maxs[ch] > mins[ch] and score > pick_score:
+                    pick = bi
+                    pick_score = score
+                    pick_ch = ch
+                end
+            end
+        end
+        if pick < 0:
+            more = false
+        else:
+            a := lo.get(pick)
+            z := hi.get(pick)
+            shift := 10 - 5 * pick_ch
+            mut buckets := Vector {} as Vector<int>
+            repeat 33:
+                buckets.push(0)
+            end
+            mut j := a
+            until j < z:
+                v := (bins.get(j) >> shift) & 31
+                buckets.set(v + 1, buckets.get(v + 1) + 1)
+                j += 1
+            end
+            repeat 32 in v:
+                buckets.set(v + 1, buckets.get(v + 1) + buckets.get(v))
+            end
+            j = a
+            until j < z:
+                k := bins.get(j)
+                v := (k >> shift) & 31
+                tmp.set(a + buckets.get(v), k)
+                buckets.set(v, buckets.get(v) + 1)
+                j += 1
+            end
+            j = a
+            mut total_px := 0
+            until j < z:
+                bins.set(j, tmp.get(j))
+                total_px += cnt.get(bins.get(j))
+                j += 1
+            end
+            mut half := 0
+            mut cut := a + 1
+            j = a
+            until j < z - 1 and half + cnt.get(bins.get(j)) <= total_px / 2:
+                half += cnt.get(bins.get(j))
+                j += 1
+            end
+            cut = j > a ? j : a + 1
+            if cut >= z:
+                cut = z - 1
+            end
+            hi.set(pick, cut)
+            lo.push(cut)
+            hi.push(z)
+            buckets.free()
+        end
+    end
+    repeat lo.len() in bi:
+        mut tr := 0
+        mut tg := 0
+        mut tb := 0
+        mut tc := 0
+        mut j := lo.get(bi)
+        until j < hi.get(bi):
+            k := bins.get(j)
+            tr += sr.get(k)
+            tg += sg.get(k)
+            tb += sb.get(k)
+            tc += cnt.get(k)
+            j += 1
+        end
+        if tc > 0:
+            pal.push((((tr + tc / 2) / tc) << 16) | (((tg + tc / 2) / tc) << 8) | ((tb + tc / 2) / tc))
+        end
+    end
+    cnt.free()
+    sr.free()
+    sg.free()
+    sb.free()
+    bins.free()
+    lo.free()
+    hi.free()
+    tmp.free()
+end
+
+func _gif_nearest(pal: Vector<int>, r: int, g: int, b: int): int:
+    mut best := 0
+    mut best_d := 0 - 1
+    repeat pal.len() in i:
+        c := pal.get(i)
+        dr := ((c >> 16) & 255) - r
+        dg := ((c >> 8) & 255) - g
+        db := (c & 255) - b
+        d := dr * dr * 2 + dg * dg * 4 + db * db * 3
+        if best_d < 0 or d < best_d:
+            best_d = d
+            best = i
+        end
+    end
+    ret best
+end
+
+func _gif_clamp(v: int): int:
+    ret v < 0 ? 0 : (v > 255 ? 255 : v)
+end
+
+func _gif_emit(z &: _GifLzw, code: int):
+    compress.BitWriteBits(z.w, code, z.dsize)
+    clear := 1 << z.min
+    if code == clear:
+        z.dsize = z.min + 1
+        z.dnext = clear + 2
+        z.dprev = false
+        ret
+    end
+    if z.dprev and z.dnext < 4096:
+        z.dnext += 1
+        if z.dnext == (1 << z.dsize) and z.dsize < 12:
+            z.dsize += 1
+        end
+    end
+    z.dprev = true
+end
+
+func _gif_lzw_encode(idx: Vector<int>, min: int): compress.ByteBuf:
+    clear := 1 << min
+    mut z := _GifLzw { w = compress.NewBitWriter(), min = min, dsize = min + 1, dnext = clear + 2 }
+    mut keys := Vector {} as Vector<int>
+    mut codes := Vector {} as Vector<int>
+    repeat 8192:
+        keys.push(0 - 1)
+        codes.push(0)
+    end
+    _gif_emit(z, clear)
+    mut next := clear + 2
+    mut cur := 0 - 1
+    repeat idx.len() in i:
+        c := idx.get(i)
+        if cur < 0:
+            cur = c
+        else:
+            key := (cur << 8) | c
+            h := _gif_find(keys, key)
+            if keys.get(h) == key:
+                cur = codes.get(h)
+            else:
+                _gif_emit(z, cur)
+                if next < 4096:
+                    keys.set(h, key)
+                    codes.set(h, next)
+                    next += 1
+                end
+                if next == 4096:
+                    _gif_emit(z, clear)
+                    next = clear + 2
+                    repeat 8192 in k:
+                        keys.set(k, 0 - 1)
+                    end
+                end
+                cur = c
+            end
+        end
+    end
+    if cur >= 0:
+        _gif_emit(z, cur)
+    end
+    _gif_emit(z, clear + 1)
+    compress.BitFlush(z.w)
+    keys.free()
+    codes.free()
+    ret z.w.buf
+end
+
+@en "IsGIF"
+@fa "گیف است"
+pub func IsGIF(p: void*, n: int): bool:
+    if n < 6:
+        ret false
+    end
+    bp := p as u8*
+    ret (bp[0] as int) == 71 and (bp[1] as int) == 73 and (bp[2] as int) == 70 and (bp[3] as int) == 56 and ((bp[4] as int) == 55 or (bp[4] as int) == 57) and (bp[5] as int) == 97
+end
+
+@en "DecodeGIF"
+@fa "کدگشایی گیف"
+pub func DecodeGIF(p: void*, n: int, ok &: bool): Image:
+    ok = false
+    if not IsGIF(p, n) or n < 13:
+        ret New(0, 0)
+    end
+    bp := p as u8*
+    width := _gif_u16(bp, 6)
+    height := _gif_u16(bp, 8)
+    flags := bp[10] as int
+    mut at := 13
+    mut gct := 0
+    mut gct_at := 0
+    if (flags & 128) != 0:
+        gct = 1 << ((flags & 7) + 1)
+        gct_at = at
+        at += gct * 3
+    end
+    mut transparent := 0 - 1
+    until at < n:
+        b := bp[at] as int
+        if b == 33:
+            if at + 2 > n:
+                ret New(0, 0)
+            end
+            label := bp[at + 1] as int
+            at += 2
+            if label == 249 and at + 5 <= n and (bp[at] as int) >= 4:
+                transparent = ((bp[at + 1] as int) & 1) == 1 ? bp[at + 4] as int : 0 - 1
+            end
+            until at < n and (bp[at] as int) != 0:
+                at += (bp[at] as int) + 1
+            end
+            at += 1
+        else b == 44:
+            if at + 11 > n:
+                ret New(0, 0)
+            end
+            fx := _gif_u16(bp, at + 1)
+            fy := _gif_u16(bp, at + 3)
+            fw := _gif_u16(bp, at + 5)
+            fh := _gif_u16(bp, at + 7)
+            iflags := bp[at + 9] as int
+            at += 10
+            mut ct := gct
+            mut ct_at := gct_at
+            if (iflags & 128) != 0:
+                ct = 1 << ((iflags & 7) + 1)
+                ct_at = at
+                at += ct * 3
+            end
+            if ct == 0 or at >= n or fw == 0 or fh == 0 or width == 0 or height == 0 or (width as i64) * (height as i64) > (268435456 as i64):
+                ret New(0, 0)
+            end
+            min := bp[at] as int
+            at += 1
+            mut data := compress.NewByteBuf()
+            until at < n and (bp[at] as int) != 0:
+                len := bp[at] as int
+                if at + 1 + len > n:
+                    compress.BufFree(data)
+                    ret New(0, 0)
+                end
+                compress.BufPushBytes(data, ((p as i64) + ((at + 1) as i64)) as void*, len)
+                at += len + 1
+            end
+            mut idx := Vector {} as Vector<int>
+            good := _gif_lzw(data, min, fw * fh, idx)
+            compress.BufFree(data)
+            if not good or idx.len() == 0:
+                idx.free()
+                ret New(0, 0)
+            end
+            img := New(width, height)
+            dst := img.pixels as u8*
+            interlaced := (iflags & 64) != 0
+            mut row := 0
+            mut pass := 0
+            mut step := 8
+            repeat fh in j:
+                mut y := j
+                if interlaced:
+                    if j > 0:
+                        row += step
+                        until row >= fh and pass < 3:
+                            pass += 1
+                            row = pass == 1 ? 4 : (pass == 2 ? 2 : 1)
+                            step = pass == 1 ? 8 : (pass == 2 ? 4 : 2)
+                        end
+                    end
+                    y = row
+                end
+                repeat fw in x:
+                    k := j * fw + x
+                    if k < idx.len() and fy + y < height and fx + x < width:
+                        c := idx.get(k)
+                        if c != transparent and c < ct:
+                            o := ((fy + y) * width + fx + x) * 4
+                            dst[o] = bp[ct_at + c * 3]
+                            dst[o + 1] = bp[ct_at + c * 3 + 1]
+                            dst[o + 2] = bp[ct_at + c * 3 + 2]
+                            dst[o + 3] = 255 as u8
+                        end
+                    end
+                end
+            end
+            idx.free()
+            ok = true
+            ret img
+        else:
+            ret New(0, 0)
+        end
+    end
+    ret New(0, 0)
+end
+
+@en "OpenGIF"
+@fa "بازکردن گیف"
+pub func OpenGIF(path: str, ok &: bool): Image:
+    mut read_ok := false
+    mut buf := archive.ReadBinaryFile(path, read_ok)
+    ok = false
+    if not read_ok:
+        ret New(0, 0)
+    end
+    img := DecodeGIF(buf.data, compress.BufLen(buf), ok)
+    compress.BufFree(buf)
+    ret img
+end
+
+@en "EncodeGIF"
+@fa "کدگذاری گیف"
+pub func EncodeGIF(img: Image): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    if IsEmpty(img) or img.width > 65535 or img.height > 65535:
+        ret out
+    end
+    bp := img.pixels as u8*
+    w := img.width
+    h := img.height
+    total := w * h
+    mut has_clear := false
+    repeat total in i:
+        if (bp[i * 4 + 3] as int) < 128:
+            has_clear = true
+        end
+    end
+    limit := has_clear ? 255 : 256
+    mut pal := Vector {} as Vector<int>
+    mut keys := Vector {} as Vector<int>
+    mut vals := Vector {} as Vector<int>
+    exact := _gif_exact(bp, total, limit, pal, keys, vals)
+    mut idx := Vector {} as Vector<int>
+    if exact:
+        repeat total in i:
+            if (bp[i * 4 + 3] as int) < 128:
+                idx.push(pal.len())
+            else:
+                rgb := ((bp[i * 4] as int) << 16) | ((bp[i * 4 + 1] as int) << 8) | (bp[i * 4 + 2] as int)
+                idx.push(vals.get(_gif_find(keys, rgb)))
+            end
+        end
+    else:
+        pal.clear()
+        _gif_median(bp, total, limit, pal)
+        mut cache := Vector {} as Vector<int>
+        repeat 32768:
+            cache.push(0 - 1)
+        end
+        mut err := Vector {} as Vector<int>
+        repeat (w + 2) * 6:
+            err.push(0)
+        end
+        repeat h in y:
+            cur := (y % 2) * (w + 2) * 3
+            nxt := ((y + 1) % 2) * (w + 2) * 3
+            repeat (w + 2) * 3 in k:
+                err.set(nxt + k, 0)
+            end
+            repeat w in x:
+                i := y * w + x
+                if (bp[i * 4 + 3] as int) < 128:
+                    idx.push(pal.len())
+                else:
+                    e := cur + (x + 1) * 3
+                    r := _gif_clamp((bp[i * 4] as int) + err.get(e) / 16)
+                    g := _gif_clamp((bp[i * 4 + 1] as int) + err.get(e + 1) / 16)
+                    b := _gif_clamp((bp[i * 4 + 2] as int) + err.get(e + 2) / 16)
+                    k := _gif_bin(r, g, b)
+                    if cache.get(k) < 0:
+                        cache.set(k, _gif_nearest(pal, (r & 248) | 4, (g & 248) | 4, (b & 248) | 4))
+                    end
+                    pi := cache.get(k)
+                    idx.push(pi)
+                    c := pal.get(pi)
+                    dr := r - ((c >> 16) & 255)
+                    dg := g - ((c >> 8) & 255)
+                    db := b - (c & 255)
+                    ds := [dr, dg, db]
+                    repeat 3 in ch:
+                        d := ds[ch]
+                        err.set(e + 3 + ch, err.get(e + 3 + ch) + d * 7)
+                        err.set(nxt + x * 3 + ch, err.get(nxt + x * 3 + ch) + d * 3)
+                        err.set(nxt + (x + 1) * 3 + ch, err.get(nxt + (x + 1) * 3 + ch) + d * 5)
+                        err.set(nxt + (x + 2) * 3 + ch, err.get(nxt + (x + 2) * 3 + ch) + d)
+                    end
+                end
+            end
+        end
+        cache.free()
+        err.free()
+    end
+    used := pal.len() + (has_clear ? 1 : 0)
+    mut bits := 1
+    until (1 << bits) < used:
+        bits += 1
+    end
+    compress.BufPushBytes(out, "GIF89a" as void*, 6)
+    compress.BufPush(out, w & 255)
+    compress.BufPush(out, w >> 8)
+    compress.BufPush(out, h & 255)
+    compress.BufPush(out, h >> 8)
+    compress.BufPush(out, 240 | (bits - 1))
+    compress.BufPush(out, 0)
+    compress.BufPush(out, 0)
+    repeat 1 << bits in i:
+        c := i < pal.len() ? pal.get(i) : 0
+        compress.BufPush(out, (c >> 16) & 255)
+        compress.BufPush(out, (c >> 8) & 255)
+        compress.BufPush(out, c & 255)
+    end
+    if has_clear:
+        each b in [33, 249, 4, 1, 0, 0]:
+            compress.BufPush(out, b)
+        end
+        compress.BufPush(out, pal.len())
+        compress.BufPush(out, 0)
+    end
+    each b in [44, 0, 0, 0, 0]:
+        compress.BufPush(out, b)
+    end
+    compress.BufPush(out, w & 255)
+    compress.BufPush(out, w >> 8)
+    compress.BufPush(out, h & 255)
+    compress.BufPush(out, h >> 8)
+    compress.BufPush(out, 0)
+    min := bits < 2 ? 2 : bits
+    compress.BufPush(out, min)
+    mut data := _gif_lzw_encode(idx, min)
+    dlen := compress.BufLen(data)
+    mut at := 0
+    until at < dlen:
+        len := dlen - at > 255 ? 255 : dlen - at
+        compress.BufPush(out, len)
+        compress.BufPushBytes(out, ((data.data as i64) + (at as i64)) as void*, len)
+        at += len
+    end
+    compress.BufPush(out, 0)
+    compress.BufPush(out, 59)
+    compress.BufFree(data)
+    pal.free()
+    keys.free()
+    vals.free()
+    idx.free()
+    ret out
+end
+
+@en "SaveGIF"
+@fa "ذخیره گیف"
+pub func SaveGIF(img: Image, path: str): bool:
+    mut buf := EncodeGIF(img)
+    if compress.BufLen(buf) == 0:
+        compress.BufFree(buf)
+        ret false
+    end
+    ok := archive.WriteBinaryFileBuf(path, buf)
+    compress.BufFree(buf)
+    ret ok
+end

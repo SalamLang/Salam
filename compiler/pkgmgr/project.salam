@@ -1,0 +1,370 @@
+package pkgmgr
+
+import os
+import str
+import os.shell
+import encoding.toml
+import encoding.value
+
+include pth "../sal_path.salam"
+include co "../sal_core.salam"
+
+const INSTALLED_FILE := "installed.txt"
+
+const SUMS_FILE := "sums.txt"
+
+mut g_pm_pin_mods := Vector {} as Vector<str>
+mut g_pm_pin_vers := Vector {} as Vector<str>
+
+pub struct PkgInfo:
+    pub name: str = ""
+    pub version: str = ""
+    pub salam: str = ""
+    pub kind: str = ""
+    pub export_pub: bool = false
+end
+
+func version_major(v: str): int:
+    ret version_part(v, 0)
+end
+
+func installed_path(): str:
+    ret pth.PathJoin(PkgRoot(), INSTALLED_FILE)
+end
+
+func with_v(v: str): str:
+    t := str.Trim(v)
+    if str.StartsWith(t, "v"):
+        ret t
+    end
+    ret "v" + t
+end
+
+func full_version(v: str): str:
+    parts := str.Split(str.TrimPrefix(v, "v"), ".")
+    defer parts.free()
+    mut out := "v"
+    repeat 3 in i:
+        if i > 0:
+            out = out + "."
+        end
+        if i < parts.len() and str.Len(parts.get(i)) > 0:
+            out = out + parts.get(i)
+        else:
+            out = out + "0"
+        end
+    end
+    ret out
+end
+
+func sums_path(): str:
+    ret pth.PathJoin(PkgRoot(), SUMS_FILE)
+end
+
+pub func ReadPackageInfo(dir: str, out &: PkgInfo): bool:
+    path := pth.PathJoin(dir, MANIFEST_FILE)
+    if not os.Exists(path):
+        ret false
+    end
+    mut ok := false
+    doc := toml.DecodeStrict(os.ReadFile(path), ok)
+    if not ok:
+        ret false
+    end
+    pkg := value.ObjectGetOk(doc, "package", ok)
+    if not ok or not value.IsObject(pkg):
+        ret true
+    end
+    out.name = toml_str(pkg, "name")
+    out.version = toml_str(pkg, "version")
+    out.salam = toml_str(pkg, "salam")
+    out.kind = toml_str(pkg, "kind")
+    lib := value.ObjectGetOk(doc, "lib", ok)
+    if ok and value.IsObject(lib):
+        mut f := false
+        ep := value.ObjectGetOk(lib, "export_pub", f)
+        if f and value.IsBool(ep):
+            out.export_pub = value.AsBool(ep)
+        end
+    end
+    ret true
+end
+
+pub func IsConstraint(c: str): bool:
+    t := str.Trim(c)
+    ret str.StartsWith(t, "^") or str.StartsWith(t, "~") or str.StartsWith(t, ">=")
+end
+
+pub func ConstraintMin(c: str): str:
+    t := str.Trim(c)
+    if str.StartsWith(t, ">="):
+        ret full_version(with_v(str.Substr(t, 2, str.Len(t) - 2)))
+    end
+    if str.StartsWith(t, "^") or str.StartsWith(t, "~"):
+        ret full_version(with_v(str.Substr(t, 1, str.Len(t) - 1)))
+    end
+    ret t
+end
+
+pub func ConstraintAllows(c: str, v: str): bool:
+    t := str.Trim(c)
+    if not IsConstraint(t):
+        ret true
+    end
+    lo := ConstraintMin(t)
+    if CompareVersions(v, lo) < 0:
+        ret false
+    end
+    if str.StartsWith(t, ">="):
+        ret true
+    end
+    if str.StartsWith(t, "^"):
+        if version_part(lo, 0) == 0:
+            ret version_part(v, 0) == 0 and version_part(v, 1) == version_part(lo, 1)
+        end
+        ret version_part(v, 0) == version_part(lo, 0)
+    end
+    ret version_part(v, 0) == version_part(lo, 0) and version_part(v, 1) == version_part(lo, 1)
+end
+
+pub func NewestAllowed(mod: str, c: str, why &: str): str:
+    mut tags := Vector {} as Vector<str>
+    defer tags.free()
+    if not ListVersions(mod, tags, why):
+        ret ""
+    end
+    mut best := ""
+    repeat tags.len() in i:
+        t := tags.get(i)
+        if ConstraintAllows(c, t) and (str.Len(best) == 0 or CompareVersions(t, best) > 0):
+            best = t
+        end
+    end
+    if str.Len(best) == 0:
+        why = "no release of " + mod + " matches " + c
+    end
+    ret best
+end
+
+pub func Pin(mod: str, version: str):
+    repeat g_pm_pin_mods.len() in i:
+        if str.Equals(g_pm_pin_mods.get(i), mod):
+            g_pm_pin_vers.set(i, version)
+            ret
+        end
+    end
+    g_pm_pin_mods.push(mod)
+    g_pm_pin_vers.push(version)
+end
+
+pub func PinnedVersion(mod: str): str:
+    repeat g_pm_pin_mods.len() in i:
+        if str.Equals(g_pm_pin_mods.get(i), mod):
+            ret g_pm_pin_vers.get(i)
+        end
+    end
+    ret ""
+end
+
+pub func KnownSum(mod: str, version: str): str:
+    p := sums_path()
+    if not os.Exists(p):
+        ret ""
+    end
+    key := mod + "@" + version + " "
+    lines := str.Split(os.ReadFile(p), "\n")
+    defer lines.free()
+    repeat lines.len() in i:
+        l := lines.get(i)
+        if str.StartsWith(l, key):
+            ret str.Trim(str.Substr(l, str.Len(key), str.Len(l) - str.Len(key)))
+        end
+    end
+    ret ""
+end
+
+pub func CheckAndRecordSum(mod: str, version: str, sum: str, why &: str): bool:
+    published := PublishedSum(mod, version)
+    if str.Len(published) > 0 and not str.Equals(published, sum):
+        why = mod + " " + version + " does not match the checksum published in the Salam registry (" + published + ", the download has " + sum + "); do not use this copy"
+        ret false
+    end
+    known := KnownSum(mod, version)
+    if str.Len(known) > 0:
+        if not str.Equals(known, sum):
+            why = mod + " " + version + " does not match the copy this machine downloaded first (" + known + ", now " + sum + "); the tag may have been moved. If the new copy is right, delete its line from " + sums_path()
+            ret false
+        end
+        ret true
+    end
+    _mk := os.MkdirAll(PkgRoot())
+    mut text := ""
+    if os.Exists(sums_path()):
+        text = os.ReadFile(sums_path())
+    end
+    _w := os.WriteFile(sums_path(), text + mod + "@" + version + " " + sum + "\n")
+    ret true
+end
+
+pub func SalamVersion(): str:
+    v := co.VERSION
+    if str.StartsWith(v, "v"):
+        ret v
+    end
+    ret "v" + v
+end
+
+pub func CheckSalamVersion(dir: str, why &: str): bool:
+    mut info := PkgInfo {}
+    if not ReadPackageInfo(dir, info) or str.Len(info.salam) == 0:
+        ret true
+    end
+    mut need := str.Trim(info.salam)
+    need = str.Trim(str.TrimPrefix(need, ">="))
+    if not str.StartsWith(need, "v"):
+        need = "v" + need
+    end
+    have := SalamVersion()
+    if CompareVersions(need, have) > 0:
+        mut who := info.name
+        if str.Len(who) == 0:
+            who = dir
+        end
+        why = who + " needs Salam " + str.TrimPrefix(need, "v") + " or newer, and this is " + str.TrimPrefix(have, "v") + "; run: salam upgrade"
+        ret false
+    end
+    ret true
+end
+
+pub func LatestInMajor(mod: str, current: str, commit &: str, why &: str): str:
+    if IsPseudoVersion(current) or not IsRelease(current):
+        ret LatestVersion(mod, commit, why)
+    end
+    mut tags := Vector {} as Vector<str>
+    defer tags.free()
+    if not ListVersions(mod, tags, why):
+        ret ""
+    end
+    major := version_major(current)
+    mut best := current
+    repeat tags.len() in i:
+        t := tags.get(i)
+        if version_major(t) == major and CompareVersions(t, best) > 0:
+            best = t
+        end
+    end
+    ret best
+end
+
+pub func NewestMajor(mod: str, why &: str): str:
+    mut tags := Vector {} as Vector<str>
+    defer tags.free()
+    if not ListVersions(mod, tags, why):
+        ret ""
+    end
+    mut best := ""
+    repeat tags.len() in i:
+        t := tags.get(i)
+        if str.Len(best) == 0 or CompareVersions(t, best) > 0:
+            best = t
+        end
+    end
+    ret best
+end
+
+pub func RecordInstall(name: str, mod: str, version: str, path: str):
+    mut lines := Vector {} as Vector<str>
+    defer lines.free()
+    ListInstalled(lines)
+    mut text := ""
+    repeat lines.len() in i:
+        l := lines.get(i)
+        if not str.StartsWith(l, name + "\t"):
+            text = text + l + "\n"
+        end
+    end
+    text = text + name + "\t" + mod + "\t" + version + "\t" + path + "\n"
+    _mk := os.MkdirAll(PkgRoot())
+    _w := os.WriteFile(installed_path(), text)
+end
+
+pub func ListInstalled(out &: Vector<str>):
+    p := installed_path()
+    if not os.Exists(p):
+        ret
+    end
+    lines := str.Split(os.ReadFile(p), "\n")
+    defer lines.free()
+    repeat lines.len() in i:
+        l := str.Trim(lines.get(i))
+        if str.Len(l) > 0:
+            out.push(l)
+        end
+    end
+end
+
+pub func ForgetInstall(name: str): str:
+    mut lines := Vector {} as Vector<str>
+    defer lines.free()
+    ListInstalled(lines)
+    mut text := ""
+    mut found := ""
+    repeat lines.len() in i:
+        l := lines.get(i)
+        if str.StartsWith(l, name + "\t"):
+            parts := str.Split(l, "\t")
+            defer parts.free()
+            if parts.len() >= 4:
+                found = parts.get(3)
+            end
+        else:
+            text = text + l + "\n"
+        end
+    end
+    if str.Len(found) > 0:
+        _w := os.WriteFile(installed_path(), text)
+    end
+    ret found
+end
+
+pub func CleanCache(): int:
+    root := PkgRoot()
+    if not os.IsDir(root):
+        ret 0
+    end
+    entries := os.ListDir(root)
+    defer entries.free()
+    mut removed := 0
+    repeat entries.len() in i:
+        e := entries.get(i)
+        if str.Equals(e, ".") or str.Equals(e, "..") or str.Equals(e, INSTALLED_FILE) or str.Equals(e, SUMS_FILE):
+            continue
+        end
+        if os.RemoveAll(pth.PathJoin(root, e)) == 0:
+            removed += 1
+        end
+    end
+    ret removed
+end
+
+pub func SystemLinkArgs(n: Native, out &: Vector<str>):
+    if str.Len(n.pkg_config) == 0 or str.Equals(NativeMode(), "system"):
+        ret
+    end
+    mut a := Vector {} as Vector<str>
+    defer a.free()
+    a.push("--libs")
+    a.push(n.pkg_config)
+    r := shell.Run("pkg-config", a)
+    if r.code != 0:
+        ret
+    end
+    parts := str.Split(str.Trim(r.out), " ")
+    defer parts.free()
+    repeat parts.len() in i:
+        p := str.Trim(parts.get(i))
+        if str.Len(p) > 0:
+            out.push(p)
+        end
+    end
+end

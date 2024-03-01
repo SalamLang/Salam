@@ -1,0 +1,435 @@
+package pkgmgr
+
+import os
+import str
+import encoding.toml
+import encoding.value
+
+include pth "../sal_path.salam"
+
+pub const MANIFEST_FILE := "salam.toml"
+
+pub const LOCK_FILE := "salam.lock"
+
+pub const RES_OK := 0
+
+pub const RES_NO_PROJECT := 1
+
+pub const RES_NOT_DEPENDENCY := 2
+
+pub const RES_NOT_FETCHED := 3
+
+pub const RES_NO_ENTRY := 4
+
+pub const RES_BAD_MANIFEST := 5
+
+mut g_pm_root := ""
+mut g_pm_loaded := false
+mut g_pm_bad := false
+mut g_pm_mods := Vector {} as Vector<str>
+mut g_pm_vers := Vector {} as Vector<str>
+mut g_pm_locals := Vector {} as Vector<str>
+
+pub struct Dep:
+    pub path: str = ""
+    pub version: str = ""
+    pub local: str = ""
+    pub commit: str = ""
+    pub sum: str = ""
+end
+
+func home_dir(): str:
+    mut h := os.Env("HOME")
+    if str.Len(h) == 0 and SALAM_OS_WINDOWS:
+        h = os.Env("USERPROFILE")
+    end
+    ret h
+end
+
+func segments(spec: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    parts := str.Split(pth.PathToSlash(spec), "/")
+    defer parts.free()
+    repeat parts.len() in i:
+        p := parts.get(i)
+        if str.Len(p) > 0:
+            out.push(p)
+        end
+    end
+    ret out
+end
+
+func join_segments(segs &: Vector<str>, from: int, upto: int): str:
+    mut out := ""
+    mut i := from
+    until i < upto:
+        if str.Len(out) > 0:
+            out = out + "/"
+        end
+        out = out + segs.get(i)
+        i += 1
+    end
+    ret out
+end
+
+func under(path: str, root: str): bool:
+    if str.Len(root) == 0:
+        ret false
+    end
+    p := pth.PathToSlash(pth.PathNormalize(path))
+    r := pth.PathToSlash(pth.PathNormalize(root))
+    ret str.Equals(p, r) or str.StartsWith(p, r + "/")
+end
+
+func dep_from_value(key: str, v: value.Value, out &: Dep): bool:
+    out.path = key
+    if value.IsString(v):
+        out.version = value.AsString(v)
+        ret true
+    end
+    if not value.IsObject(v):
+        ret false
+    end
+    mut ok := false
+    ver := value.ObjectGetOk(v, "version", ok)
+    if ok and value.IsString(ver):
+        out.version = value.AsString(ver)
+    end
+    loc := value.ObjectGetOk(v, "path", ok)
+    if ok and value.IsString(loc):
+        out.local = value.AsString(loc)
+    end
+    ret true
+end
+
+func remember(mod: str, ver: str, local: str):
+    repeat g_pm_mods.len() in i:
+        if str.Equals(g_pm_mods.get(i), mod):
+            if str.Len(ver) > 0:
+                g_pm_vers.set(i, ver)
+            end
+            if str.Len(local) > 0:
+                g_pm_locals.set(i, local)
+            end
+            ret
+        end
+    end
+    g_pm_mods.push(mod)
+    g_pm_vers.push(ver)
+    g_pm_locals.push(local)
+end
+
+func is_builtin_dep(d: Dep): bool:
+    ret str.Len(d.local) == 0 and not IsPathImport(d.path)
+end
+
+func load_project(root: str):
+    g_pm_loaded = true
+    g_pm_root = root
+    mut deps := Vector {} as Vector<Dep>
+    defer deps.free()
+    if not ReadManifest(root, deps):
+        g_pm_bad = true
+        ret
+    end
+    repeat deps.len() in i:
+        d := deps.get(i)
+        mut local := ""
+        if str.Len(d.local) > 0:
+            local = d.local
+            if not pth.PathIsAbs(local):
+                local = pth.PathNormalize(pth.PathJoin(root, local))
+            end
+        end
+        if is_builtin_dep(d):
+            continue
+        end
+        remember(d.path, "", local)
+    end
+    mut locked := Vector {} as Vector<Dep>
+    defer locked.free()
+    if ReadLock(root, locked):
+        repeat locked.len() in j:
+            l := locked.get(j)
+            if IsPathImport(l.path):
+                remember(l.path, l.version, "")
+            end
+        end
+    end
+end
+
+func ensure_project(importer_dir: str): int:
+    if g_pm_loaded:
+        if g_pm_bad:
+            ret RES_BAD_MANIFEST
+        end
+        if str.Len(g_pm_root) == 0:
+            ret RES_NO_PROJECT
+        end
+        ret RES_OK
+    end
+    if under(importer_dir, PkgRoot()):
+        ret RES_NO_PROJECT
+    end
+    root := FindProjectRoot(importer_dir)
+    if str.Len(root) == 0:
+        ret RES_NO_PROJECT
+    end
+    load_project(root)
+    if g_pm_bad:
+        ret RES_BAD_MANIFEST
+    end
+    ret RES_OK
+end
+
+func is_major_seg(seg: str): int:
+    n := str.Len(seg)
+    if n < 2 or not str.StartsWith(seg, "v"):
+        ret 0
+    end
+    mut v := 0
+    mut i := 1
+    until i < n:
+        c := str.Substr(seg, i, 1)
+        d := str.IndexOf("0123456789", c)
+        if d < 0:
+            ret 0
+        end
+        v = v * 10 + d
+        i += 1
+    end
+    if v < 2:
+        ret 0
+    end
+    ret v
+end
+
+pub func PkgRoot(): str:
+    e := os.Env("SALAM_PKG")
+    if str.Len(e) > 0:
+        ret e
+    end
+    h := home_dir()
+    if str.Len(h) == 0:
+        ret ".salam-pkg"
+    end
+    ret pth.PathJoin(pth.PathJoin(h, ".salam"), "pkg")
+end
+
+pub func FindProjectRoot(dir: str): str:
+    mut cur := dir
+    if str.Len(cur) == 0 or str.Equals(cur, "."):
+        cur = os.Cwd()
+    else not pth.PathIsAbs(cur):
+        cur = pth.PathJoin(os.Cwd(), cur)
+    end
+    cur = pth.PathNormalize(cur)
+    mut guard := 0
+    until guard < 256:
+        if os.Exists(pth.PathJoin(cur, MANIFEST_FILE)):
+            ret cur
+        end
+        up := pth.PathDir(cur)
+        if str.Len(up) == 0 or str.Equals(up, cur):
+            ret ""
+        end
+        cur = up
+        guard += 1
+    end
+    ret ""
+end
+
+pub func SetProjectRoot(root: str):
+    g_pm_root = ""
+    g_pm_loaded = false
+    g_pm_bad = false
+    g_pm_mods.clear()
+    g_pm_vers.clear()
+    g_pm_locals.clear()
+    if str.Len(root) > 0:
+        load_project(root)
+    end
+end
+
+pub func ProjectRoot(): str:
+    ret g_pm_root
+end
+
+pub func IsPathImport(spec: str): bool:
+    slash := str.IndexOf(spec, "/")
+    if slash <= 0:
+        ret false
+    end
+    head := str.Substr(spec, 0, slash)
+    ret str.Contains(head, ".") and not str.StartsWith(head, ".")
+end
+
+pub func MajorSuffix(mod: str): int:
+    mut segs := segments(mod)
+    defer segs.free()
+    if segs.len() < 4:
+        ret 0
+    end
+    ret is_major_seg(segs.get(segs.len() - 1))
+end
+
+pub func RepoOf(mod: str): str:
+    if MajorSuffix(mod) == 0:
+        ret mod
+    end
+    ret str.Substr(mod, 0, str.LastIndex(mod, "/"))
+end
+
+pub func PackageNameOf(spec: str): str:
+    mut segs := segments(spec)
+    defer segs.free()
+    n := segs.len()
+    if n == 0:
+        ret ""
+    end
+    if n >= 4 and is_major_seg(segs.get(n - 1)) > 0:
+        ret segs.get(n - 2)
+    end
+    ret segs.get(n - 1)
+end
+
+pub func ModuleOf(spec: str): str:
+    mut segs := segments(spec)
+    defer segs.free()
+    n := segs.len()
+    if n <= 3:
+        ret join_segments(segs, 0, n)
+    end
+    if is_major_seg(segs.get(3)) > 0:
+        ret join_segments(segs, 0, 4)
+    end
+    ret join_segments(segs, 0, 3)
+end
+
+pub func VersionDir(mod: str, version: str): str:
+    ret pth.PathJoin(PkgRoot(), mod + "@" + version)
+end
+
+pub func ReadManifest(root: str, out &: Vector<Dep>): bool:
+    path := pth.PathJoin(root, MANIFEST_FILE)
+    text := os.ReadFile(path)
+    mut ok := false
+    doc := toml.DecodeStrict(text, ok)
+    if not ok:
+        ret false
+    end
+    deps := value.ObjectGetOk(doc, "dependencies", ok)
+    if not ok:
+        ret true
+    end
+    if not value.IsObject(deps):
+        ret false
+    end
+    keys := value.ObjectKeys(deps)
+    defer keys.free()
+    repeat keys.len() in i:
+        k := keys.get(i)
+        mut d := Dep {}
+        if not dep_from_value(k, value.ObjectGet(deps, k), d):
+            ret false
+        end
+        out.push(d)
+    end
+    ret true
+end
+
+pub func ReadLock(root: str, out &: Vector<Dep>): bool:
+    path := pth.PathJoin(root, LOCK_FILE)
+    if not os.Exists(path):
+        ret false
+    end
+    mut ok := false
+    doc := toml.DecodeStrict(os.ReadFile(path), ok)
+    if not ok:
+        ret false
+    end
+    pkgs := value.ObjectGetOk(doc, "package", ok)
+    if not ok or not value.IsArray(pkgs):
+        ret true
+    end
+    repeat value.ArrayLen(pkgs) in i:
+        e := value.ArrayGet(pkgs, i)
+        mut d := Dep {}
+        mut f := false
+        pv := value.ObjectGetOk(e, "path", f)
+        if f: d.path = value.AsString(pv) end
+        vv := value.ObjectGetOk(e, "version", f)
+        if f: d.version = value.AsString(vv) end
+        cv := value.ObjectGetOk(e, "commit", f)
+        if f: d.commit = value.AsString(cv) end
+        sv := value.ObjectGetOk(e, "sum", f)
+        if f: d.sum = value.AsString(sv) end
+        if str.Len(d.path) > 0:
+            out.push(d)
+        end
+    end
+    ret true
+end
+
+pub func ResolveImport(importer_dir: str, spec: str, code &: int): str:
+    code = ensure_project(importer_dir)
+    if code != RES_OK:
+        ret ""
+    end
+    mut best := -1
+    mut best_len := 0
+    repeat g_pm_mods.len() in i:
+        m := g_pm_mods.get(i)
+        if (str.Equals(spec, m) or str.StartsWith(spec, m + "/")) and str.Len(m) > best_len:
+            best = i
+            best_len = str.Len(m)
+        end
+    end
+    if best < 0:
+        code = RES_NOT_DEPENDENCY
+        ret ""
+    end
+    mut base := g_pm_locals.get(best)
+    if str.Len(base) == 0:
+        ver := g_pm_vers.get(best)
+        if str.Len(ver) == 0:
+            code = RES_NOT_FETCHED
+            ret ""
+        end
+        base = VersionDir(g_pm_mods.get(best), ver)
+    end
+    if not os.IsDir(base):
+        code = RES_NOT_FETCHED
+        ret ""
+    end
+    mut segs := segments(spec)
+    defer segs.free()
+    mut modsegs := segments(g_pm_mods.get(best))
+    defer modsegs.free()
+    sub := join_segments(segs, modsegs.len(), segs.len())
+    modname := g_pm_mods.get(best)
+    major := MajorSuffix(modname)
+    if major > 0:
+        majdir := pth.PathJoin(base, "v" + str.FromInt(major as i64))
+        if os.IsDir(majdir):
+            base = majdir
+        end
+    end
+    mut dir := base
+    if str.Len(sub) > 0:
+        dir = pth.PathJoin(base, sub)
+    end
+    mut entry := pth.PathNormalize(pth.PathJoin(dir, PackageNameOf(spec) + ".salam"))
+    if major > 0 and str.Len(sub) == 0:
+        numbered := pth.PathNormalize(pth.PathJoin(dir, PackageNameOf(spec) + str.FromInt(major as i64) + ".salam"))
+        if os.Exists(numbered):
+            entry = numbered
+        end
+    end
+    if not os.Exists(entry):
+        code = RES_NO_ENTRY
+        ret entry
+    end
+    code = RES_OK
+    ret entry
+end

@@ -1,0 +1,673 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package calendar
+
+import mem
+import str
+
+extern:
+    func fopen(path: str, mode: str): void*
+    func fread(ptr: void*, size: u64, count: u64, stream: void*): u64
+    func fclose(stream: void*): int
+    func fseek(stream: void*, offset: i64, whence: int): int
+    func ftell(stream: void*): i64
+    func getenv(name: str): void*
+end
+
+const _TZ_MAX_FILE := 2000000
+
+struct PosixRule:
+    pub kind: int = 0
+    pub mon: int = 0
+    pub week: int = 0
+    pub day: int = 0
+    pub at_seconds: int = 7200
+end
+
+struct PosixTZ:
+    pub ok: bool = false
+    pub has_dst: bool = false
+    pub std_abbrev: str = ""
+    pub dst_abbrev: str = ""
+    pub std_offset: int = 0
+    pub dst_offset: int = 0
+    pub dst_from: PosixRule = PosixRule {}
+    pub dst_to: PosixRule = PosixRule {}
+end
+
+struct _Bytes:
+    pub data: u8* = null
+    pub len: int = 0
+end
+
+struct _TZHead:
+    pub ok: bool = false
+    pub version: int = 0
+    pub isutcnt: int = 0
+    pub isstdcnt: int = 0
+    pub leapcnt: int = 0
+    pub timecnt: int = 0
+    pub typecnt: int = 0
+    pub charcnt: int = 0
+end
+
+@en "Zone"
+@fa "منطقه"
+pub struct Zone:
+    @en "name"
+    @fa "نام"
+    pub name: str = "UTC"
+    @en "ok"
+    @fa "بارگذاری شد"
+    pub ok: bool = false
+    @en "type_offset"
+    @fa "اختلاف نوع‌ها"
+    pub type_offset: Vector<int> = Vector {}
+    @en "type_isdst"
+    @fa "تابستانی نوع‌ها"
+    pub type_isdst: Vector<bool> = Vector {}
+    @en "type_abbrev"
+    @fa "نماد نوع‌ها"
+    pub type_abbrev: Vector<str> = Vector {}
+    @en "times"
+    @fa "لحظه‌های تغییر"
+    pub times: Vector<i64> = Vector {}
+    @en "type_at"
+    @fa "نوع پس از تغییر"
+    pub type_at: Vector<int> = Vector {}
+    @en "base_type"
+    @fa "نوع پایه"
+    pub base_type: int = 0
+    @en "rule"
+    @fa "قاعده"
+    pub rule: PosixTZ = PosixTZ {}
+end
+
+func _readFile(path: str): _Bytes:
+    empty := _Bytes { data = null, len = 0 }
+    f := fopen(path, "rb")
+    if f == null: ret empty end
+    if fseek(f, 0 as i64, 2) != 0:
+        fclose(f)
+        ret empty
+    end
+    n := ftell(f)
+    if n <= 0 or n > (_TZ_MAX_FILE as i64):
+        fclose(f)
+        ret empty
+    end
+    if fseek(f, 0 as i64, 0) != 0:
+        fclose(f)
+        ret empty
+    end
+    p := mem.Allocate(n as u64)
+    if p == null:
+        fclose(f)
+        ret empty
+    end
+    got := fread(p, 1 as u64, n as u64, f)
+    fclose(f)
+    if (got as i64) != n:
+        mem.Free(p)
+        ret empty
+    end
+    ret _Bytes { data = p as u8*, len = n as int }
+end
+
+pure func _be32u(p: u8*, off: int): i64:
+    ret ((p[off] as i64) << 24) | ((p[off + 1] as i64) << 16) | ((p[off + 2] as i64) << 8) | (p[off + 3] as i64)
+end
+
+pure func _be32s(p: u8*, off: int): i64:
+    v := _be32u(p, off)
+    if v >= 2147483648 as i64: ret v - 4294967296 end
+    ret v
+end
+
+pure func _be64s(p: u8*, off: int): i64:
+    mut v := 0 as i64
+    repeat 8 in k:
+        v = (v << 8) | (p[off + k] as i64)
+    end
+    ret v
+end
+
+func _cstrAt(p: u8*, start: int, limit: int): str:
+    mut b := str.NewBuilder()
+    mut i := start
+    until i < limit and p[i] as int != 0:
+        str.BufAppendChar(b, p[i] as int)
+        i += 1
+    end
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+pure func _isAlphaByte(c: int): bool:
+    ret (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+end
+
+pure func _isDigitByte(c: int): bool: ret c >= 48 and c <= 57 end
+
+func _byteAt(s: str, i: int): int:
+    bp := (s as void*) as i8*
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+func _parseAbbrev(s: str, i &: int, out &: str): bool:
+    n := s.len()
+    if i >= n: ret false end
+    if _byteAt(s, i) == 60:
+        i += 1
+        start := i
+        until i < n and _byteAt(s, i) != 62:
+            i += 1
+        end
+        if i >= n: ret false end
+        out = s.substr(start, i - start)
+        i += 1
+        ret out.len() > 0
+    end
+    start := i
+    until i < n and _isAlphaByte(_byteAt(s, i)):
+        i += 1
+    end
+    if i == start: ret false end
+    out = s.substr(start, i - start)
+    ret true
+end
+
+func _parseHMS(s: str, i &: int, out &: int): bool:
+    n := s.len()
+    if i >= n: ret false end
+    mut sign := 1
+    if _byteAt(s, i) == 45:
+        sign = 0 - 1
+        i += 1
+    else _byteAt(s, i) == 43:
+        i += 1
+    end
+    mut parts := [0, 0, 0]
+    mut got := 0
+    until got < 3:
+        if got > 0:
+            if i >= n or _byteAt(s, i) != 58: break end
+            i += 1
+        end
+        start := i
+        mut v := 0
+        until i < n and _isDigitByte(_byteAt(s, i)):
+            if v > 100000000: ret false end
+            v = v * 10 + (_byteAt(s, i) - 48)
+            i += 1
+        end
+        if i == start: ret false end
+        parts[got] = v
+        got += 1
+    end
+    if got == 0: ret false end
+    out = sign * (parts[0] * 3600 + parts[1] * 60 + parts[2])
+    ret true
+end
+
+func _parseRule(s: str, i &: int, out &: PosixRule): bool:
+    n := s.len()
+    if i >= n: ret false end
+    mut r := PosixRule { kind = 0, mon = 0, week = 0, day = 0, at_seconds = 7200 }
+    c := _byteAt(s, i)
+    if c == 77:
+        i += 1
+        mut vals := [0, 0, 0]
+        repeat 3 in k:
+            if k > 0:
+                if i >= n or _byteAt(s, i) != 46: ret false end
+                i += 1
+            end
+            start := i
+            mut v := 0
+            until i < n and _isDigitByte(_byteAt(s, i)):
+                if v > 100000000: ret false end
+                v = v * 10 + (_byteAt(s, i) - 48)
+                i += 1
+            end
+            if i == start: ret false end
+            vals[k] = v
+        end
+        if vals[0] < 1 or vals[0] > 12: ret false end
+        if vals[1] < 1 or vals[1] > 5: ret false end
+        if vals[2] < 0 or vals[2] > 6: ret false end
+        r.kind = 1
+        r.mon = vals[0]
+        r.week = vals[1]
+        r.day = vals[2]
+    else c == 74:
+        i += 1
+        start := i
+        mut v := 0
+        until i < n and _isDigitByte(_byteAt(s, i)):
+            if v > 100000000: ret false end
+            v = v * 10 + (_byteAt(s, i) - 48)
+            i += 1
+        end
+        if i == start: ret false end
+        r.kind = 2
+        r.day = v
+    else _isDigitByte(c):
+        mut v := 0
+        until i < n and _isDigitByte(_byteAt(s, i)):
+            if v > 100000000: ret false end
+            v = v * 10 + (_byteAt(s, i) - 48)
+            i += 1
+        end
+        r.kind = 3
+        r.day = v
+    else:
+        ret false
+    end
+    if i < n and _byteAt(s, i) == 47:
+        i += 1
+        mut t := 0
+        if not _parseHMS(s, i, t): ret false end
+        r.at_seconds = t
+    end
+    out = r
+    ret true
+end
+
+func _parsePosixTZ(s: str): PosixTZ:
+    mut out := PosixTZ { ok = false }
+    n := s.len()
+    if n == 0: ret out end
+    mut i := 0
+    mut abbrev := ""
+    if not _parseAbbrev(s, i, abbrev): ret out end
+    mut off := 0
+    if not _parseHMS(s, i, off): ret out end
+    out.std_abbrev = abbrev
+    out.std_offset = 0 - off
+    out.dst_abbrev = abbrev
+    out.dst_offset = out.std_offset
+    out.ok = true
+    if i >= n: ret out end
+    mut dabbrev := ""
+    if _byteAt(s, i) != 44:
+        if not _parseAbbrev(s, i, dabbrev): ret out end
+        out.dst_abbrev = dabbrev
+        out.has_dst = true
+        out.dst_offset = out.std_offset + 3600
+        if i < n and _byteAt(s, i) != 44:
+            mut doff := 0
+            if not _parseHMS(s, i, doff): ret out end
+            out.dst_offset = 0 - doff
+        end
+    end
+    if not out.has_dst: ret out end
+    if i >= n or _byteAt(s, i) != 44: ret out end
+    i += 1
+    mut r1 := PosixRule {}
+    if not _parseRule(s, i, r1): ret out end
+    if i >= n or _byteAt(s, i) != 44: ret out end
+    i += 1
+    mut r2 := PosixRule {}
+    if not _parseRule(s, i, r2): ret out end
+    out.dst_from = r1
+    out.dst_to = r2
+    ret out
+end
+
+func _ruleInstant(r: PosixRule, year: int, offsetBefore: int): i64:
+    mut d := GregorianDate { year = year, month = 1, day = 1 }
+    if r.kind == 1:
+        first := GregorianDate { year = year, month = r.mon, day = 1 }
+        firstMatch := NextWeekdayOnOrAfter(first, r.day)
+        cand := AddDaysGregorian(firstMatch, (r.week - 1) * 7)
+        if cand.month != r.mon:
+            d = AddDaysGregorian(cand, 0 - 7)
+        else:
+            d = cand
+        end
+    else r.kind == 2:
+        mut n := r.day
+        if n < 1: n = 1 end
+        if n > 59 and IsLeapGregorian(year): n += 1 end
+        d = AddDaysGregorian(GregorianDate { year = year, month = 1, day = 1 }, n - 1)
+    else:
+        d = AddDaysGregorian(GregorianDate { year = year, month = 1, day = 1 }, r.day)
+    end
+    local := _pseudoEpoch(d.year, d.month, d.day, 0, 0, 0) + (r.at_seconds as i64)
+    ret local - (offsetBefore as i64)
+end
+
+func _posixIsDST(p: PosixTZ, epoch: i64): bool:
+    if not p.has_dst: ret false end
+    if p.dst_from.kind == 0 or p.dst_to.kind == 0: ret true end
+    approx := _epochParts(epoch + (p.std_offset as i64))
+    year := JDNToGregorian(approx.jdn).year
+    startAt := _ruleInstant(p.dst_from, year, p.std_offset)
+    stopAt := _ruleInstant(p.dst_to, year, p.dst_offset)
+    if startAt < stopAt:
+        ret epoch >= startAt and epoch < stopAt
+    end
+    ret epoch >= startAt or epoch < stopAt
+end
+
+func _parseHead(b: _Bytes, off: int): _TZHead:
+    bad := _TZHead { ok = false }
+    if off < 0 or b.len < 44 or off > b.len - 44: ret bad end
+    p := b.data
+    if p[off] as int != 84 or p[off + 1] as int != 90 or p[off + 2] as int != 105 or p[off + 3] as int != 102:
+        ret bad
+    end
+    lim := b.len as i64
+    isutcnt := _be32u(p, off + 20)
+    isstdcnt := _be32u(p, off + 24)
+    leapcnt := _be32u(p, off + 28)
+    timecnt := _be32u(p, off + 32)
+    typecnt := _be32u(p, off + 36)
+    charcnt := _be32u(p, off + 40)
+    if isutcnt > lim or isstdcnt > lim or leapcnt > lim: ret bad end
+    if timecnt > lim or typecnt > lim or charcnt > lim: ret bad end
+    ret _TZHead {
+        ok = true, version = p[off + 4] as int, isutcnt = isutcnt as int, isstdcnt = isstdcnt as int, leapcnt = leapcnt as int, timecnt = timecnt as int, typecnt = typecnt as int, charcnt = charcnt as int
+    }
+end
+
+func _blockSize(h: _TZHead, tsize: int): i64:
+    tc := h.timecnt as i64
+    ret tc * (tsize as i64) + tc + (h.typecnt as i64) * 6 + (h.charcnt as i64) + (h.leapcnt as i64) * ((tsize + 4) as i64) + (h.isstdcnt as i64) + (h.isutcnt as i64)
+end
+
+func _readBlock(b: _Bytes, off: int, h: _TZHead, tsize: int, z &: Zone): bool:
+    if off < 0 or h.typecnt <= 0 or h.charcnt <= 0 or h.timecnt < 0: ret false end
+    if (off as i64) + _blockSize(h, tsize) > (b.len as i64): ret false end
+    p := b.data
+    mut c := off
+    timesAt := c
+    c = c + h.timecnt * tsize
+    idxAt := c
+    c = c + h.timecnt
+    typesAt := c
+    c = c + h.typecnt * 6
+    charsAt := c
+
+    repeat h.typecnt in k:
+        base := typesAt + k * 6
+        z.type_offset.push(_be32s(p, base) as int)
+        z.type_isdst.push(p[base + 4] as int != 0)
+        di := p[base + 5] as int
+        if charsAt + di >= b.len: ret false end
+        z.type_abbrev.push(_cstrAt(p, charsAt + di, charsAt + h.charcnt))
+    end
+
+    repeat h.timecnt in k:
+        mut t := 0 as i64
+        if tsize == 8:
+            t = _be64s(p, timesAt + k * 8)
+        else:
+            t = _be32s(p, timesAt + k * 4)
+        end
+        ti := p[idxAt + k] as int
+        if ti >= h.typecnt: ret false end
+        z.times.push(t)
+        z.type_at.push(ti)
+    end
+
+    mut base := 0
+    mut found := false
+    repeat h.typecnt in k:
+        if not found and not z.type_isdst.get(k):
+            base = k
+            found = true
+        end
+    end
+    z.base_type = base
+    ret true
+end
+
+func _readFooter(b: _Bytes, off: int): str:
+    if off < 0 or off >= b.len: ret "" end
+    p := b.data
+    if p[off] as int != 10: ret "" end
+    mut i := off + 1
+    start := i
+    until i < b.len and p[i] as int != 10:
+        i += 1
+    end
+    if i <= start: ret "" end
+    ret _cstrAt(p, start, i)
+end
+
+func _parseTZif(b: _Bytes, z &: Zone): bool:
+    h1 := _parseHead(b, 0)
+    if not h1.ok: ret false end
+    if h1.version == 0:
+        ret _readBlock(b, 44, h1, 4, z)
+    end
+    second64 := 44 + _blockSize(h1, 4)
+    if second64 < 0 or second64 > (b.len as i64): ret _readBlock(b, 44, h1, 4, z) end
+    second := second64 as int
+    h2 := _parseHead(b, second)
+    if not h2.ok: ret _readBlock(b, 44, h1, 4, z) end
+    dataAt64 := (second as i64) + 44
+    if dataAt64 > (b.len as i64): ret false end
+    dataAt := dataAt64 as int
+    if not _readBlock(b, dataAt, h2, 8, z): ret false end
+    footer64 := dataAt64 + _blockSize(h2, 8)
+    if footer64 < 0 or footer64 > (b.len as i64): ret true end
+    z.rule = _parsePosixTZ(_readFooter(b, footer64 as int))
+    ret true
+end
+
+func _env(name: str): str:
+    p := getenv(name)
+    if p == null: ret "" end
+    ret p as str
+end
+
+func _safeZoneName(name: str): bool:
+    n := name.len()
+    if n == 0 or n > 128: ret false end
+    if _byteAt(name, 0) == 47: ret false end
+    repeat n in i:
+        c := _byteAt(name, i)
+        alnum := _isAlphaByte(c) or _isDigitByte(c)
+        if not alnum and c != 47 and c != 95 and c != 45 and c != 43 and c != 46: ret false end
+        if c == 46 and i + 1 < n and _byteAt(name, i + 1) == 46: ret false end
+    end
+    ret true
+end
+
+func _zoneDirs(): Vector<str>:
+    mut dirs := Vector {} as Vector<str>
+    tzdir := _env("TZDIR")
+    if tzdir.len() > 0: dirs.push(tzdir) end
+    dirs.push("/usr/share/zoneinfo")
+    dirs.push("/usr/lib/zoneinfo")
+    dirs.push("/usr/share/lib/zoneinfo")
+    dirs.push("/etc/zoneinfo")
+    dirs.push("/var/db/timezone/zoneinfo")
+    ret dirs
+end
+
+func _loadFromPath(path: str, name: str): Zone:
+    mut z := Zone { name = name, ok = false }
+    b := _readFile(path)
+    if b.data == null: ret z end
+    good := _parseTZif(b, z)
+    mem.Free(b.data as void*)
+    if not good:
+        FreeZone(z)
+        ret Zone { name = name, ok = false }
+    end
+    z.ok = true
+    ret z
+end
+
+func _findTransition(z: Zone, epoch: i64): int:
+    n := z.times.len()
+    if n == 0: ret 0 - 1 end
+    if epoch < z.times.get(0): ret 0 - 1 end
+    mut lo := 0
+    mut hi := n - 1
+    until lo < hi:
+        mid := (lo + hi + 1) / 2
+        if z.times.get(mid) <= epoch:
+            lo = mid
+        else:
+            hi = mid - 1
+        end
+    end
+    ret lo
+end
+
+func _posixTypeFor(z: Zone, epoch: i64): int:
+    if not z.rule.ok: ret 0 - 1 end
+    dst := _posixIsDST(z.rule, epoch)
+    mut want := z.rule.std_offset
+    mut wantAbbrev := z.rule.std_abbrev
+    if dst:
+        want = z.rule.dst_offset
+        wantAbbrev = z.rule.dst_abbrev
+    end
+    n := z.type_offset.len()
+    repeat n in k:
+        if z.type_offset.get(k) == want and z.type_isdst.get(k) == dst and z.type_abbrev.get(k) == wantAbbrev:
+            ret k
+        end
+    end
+    repeat n in k:
+        if z.type_offset.get(k) == want and z.type_isdst.get(k) == dst: ret k end
+    end
+    ret 0 - 1
+end
+
+@en "LoadZone"
+@fa "بارگذاری منطقه"
+pub func LoadZone(name: str): Zone:
+    if not _safeZoneName(name): ret Zone { name = name, ok = false } end
+    mut dirs := _zoneDirs()
+    defer dirs.free()
+    n := dirs.len()
+    repeat n in i:
+        z := _loadFromPath(dirs.get(i) + "/" + name, name)
+        if z.ok: ret z end
+    end
+    ret Zone { name = name, ok = false }
+end
+
+@en "LocalZone"
+@fa "منطقه محلی"
+pub func LocalZone(): Zone:
+    mut tz := _env("TZ")
+    if tz.len() > 1 and _byteAt(tz, 0) == 58:
+        tz = tz.substr(1, tz.len() - 1)
+    end
+    if tz.len() > 0:
+        z := LoadZone(tz)
+        if z.ok: ret z end
+    end
+    z2 := _loadFromPath("/etc/localtime", "Local")
+    if z2.ok: ret z2 end
+    ret Zone { name = "Local", ok = false }
+end
+
+@en "FreeZone"
+@fa "آزادسازی منطقه"
+pub func FreeZone(z &: Zone):
+    z.type_offset.free()
+    z.type_isdst.free()
+    z.type_abbrev.free()
+    z.times.free()
+    z.type_at.free()
+    z.ok = false
+end
+
+@en "ZoneOffsetSeconds"
+@fa "اختلاف ثانیه منطقه"
+pub func ZoneOffsetSeconds(z: Zone, epoch: i64): int:
+    if not z.ok: ret 0 end
+    if z.type_offset.len() == 0: ret 0 end
+    idx := _findTransition(z, epoch)
+    if idx < 0: ret z.type_offset.get(z.base_type) end
+    if idx == z.times.len() - 1:
+        pt := _posixTypeFor(z, epoch)
+        if pt >= 0: ret z.type_offset.get(pt) end
+    end
+    ret z.type_offset.get(z.type_at.get(idx))
+end
+
+@en "ZoneOffsetMinutes"
+@fa "اختلاف دقیقه منطقه"
+pub func ZoneOffsetMinutes(z: Zone, epoch: i64): int:
+    ret ZoneOffsetSeconds(z, epoch) / 60
+end
+
+@en "ZoneIsDST"
+@fa "ساعت تابستانی منطقه"
+pub func ZoneIsDST(z: Zone, epoch: i64): bool:
+    if not z.ok: ret false end
+    if z.type_isdst.len() == 0: ret false end
+    idx := _findTransition(z, epoch)
+    if idx < 0: ret z.type_isdst.get(z.base_type) end
+    if idx == z.times.len() - 1:
+        pt := _posixTypeFor(z, epoch)
+        if pt >= 0: ret z.type_isdst.get(pt) end
+    end
+    ret z.type_isdst.get(z.type_at.get(idx))
+end
+
+@en "ZoneAbbrevAt"
+@fa "نماد منطقه"
+pub func ZoneAbbrevAt(z: Zone, epoch: i64): str:
+    if not z.ok: ret "UTC" end
+    if z.type_abbrev.len() == 0: ret "UTC" end
+    idx := _findTransition(z, epoch)
+    if idx < 0: ret z.type_abbrev.get(z.base_type) end
+    if idx == z.times.len() - 1:
+        pt := _posixTypeFor(z, epoch)
+        if pt >= 0: ret z.type_abbrev.get(pt) end
+    end
+    ret z.type_abbrev.get(z.type_at.get(idx))
+end
+
+@en "TimeZoneAt"
+@fa "منطقه زمانی در"
+pub func TimeZoneAt(z: Zone, epoch: i64): TimeZone:
+    if not z.ok: ret _fallbackZone(z.name) end
+    ret TimeZone { name = ZoneAbbrevAt(z, epoch), offset_minutes = ZoneOffsetMinutes(z, epoch) }
+end
+
+@en "ZoneAt"
+@fa "منطقه در"
+pub func ZoneAt(name: str, epoch: i64): TimeZone:
+    mut z := LoadZone(name)
+    defer FreeZone(z)
+    ret TimeZoneAt(z, epoch)
+end
+
+@en "ZonedToEpoch"
+@fa "محلی به زمان مطلق"
+pub func ZonedToEpoch(d: GregorianDate, t: ClockTime, z: Zone): i64:
+    local := _pseudoEpoch(d.year, d.month, d.day, t.hour, t.minute, t.second)
+    mut guess := local - (ZoneOffsetSeconds(z, local) as i64)
+    off2 := ZoneOffsetSeconds(z, guess)
+    if local - (off2 as i64) != guess:
+        guess = local - (off2 as i64)
+    end
+    ret guess
+end

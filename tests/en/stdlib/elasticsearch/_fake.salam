@@ -1,0 +1,91 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package fake
+
+import str
+import net.http
+import net.router
+
+mut _keys := Vector {} as Vector<str>
+mut _codes := Vector {} as Vector<int>
+mut _bodies := Vector {} as Vector<str>
+mut _used := Vector {} as Vector<bool>
+mut _last := ""
+mut _count := 0
+
+func _handle(h: i64):
+    ctx := http.Ctx(h)
+    method := http.Method(ctx)
+    path := http.Path(ctx)
+    query := http.RawQuery(ctx)
+    mut target := path
+    if query.len() > 0: target = path + "?" + query end
+    _count += 1
+    _last = method + " " + target
+    auth := http.Header(ctx, "Authorization")
+    if auth.len() > 0: _last = _last + "\n  auth: " + auth end
+    ctype := http.Header(ctx, "Content-Type")
+    if ctype.len() > 0 and ctype != "application/json": _last = _last + "\n  type: " + ctype end
+    body := http.Body(ctx)
+    if body.len() > 0: _last = _last + "\n  body: " + str.TrimRight(body) end
+    key := method + " " + path
+    mut pick := -1
+    repeat _keys.len() in i:
+        if pick < 0 and _keys.get(i) == key and not _used.get(i):
+            pick = i
+        end
+    end
+    if pick < 0:
+        repeat _keys.len() in i:
+            if _keys.get(i) == key: pick = i end
+        end
+    else:
+        _used.set(pick, true)
+    end
+    if pick < 0:
+        http.SetStatus(ctx, 404)
+        http.Json(ctx, `{"error":{"root_cause":[{"type":"resource_not_found_exception","reason":"no route for ` + key + `"}],"type":"resource_not_found_exception","reason":"no route for ` + key + `"},"status":404}`)
+        ret
+    end
+    http.SetStatus(ctx, _codes.get(pick))
+    http.Json(ctx, _bodies.get(pick))
+end
+
+pub func On(method: str, path: str, code: int, body: str):
+    _keys.push(method + " " + path)
+    _codes.push(code)
+    _bodies.push(body)
+    _used.push(false)
+end
+
+pub func Last(): str:
+    ret _last
+end
+
+pub func Count(): int:
+    ret _count
+end
+
+pub func Start(port: int): bool:
+    mut r := router.NewRouter()
+    router.Get(r, "/*", _handle)
+    router.Head(r, "/*", _handle)
+    router.Post(r, "/*", _handle)
+    router.Put(r, "/*", _handle)
+    router.Delete(r, "/*", _handle)
+    s := http.NewServer(port)
+    http.Use(s, r)
+    ret http.RunBackground(s)
+end

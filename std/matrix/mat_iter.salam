@@ -1,0 +1,219 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+@en "IterResult"
+@fa "نتیجه تکرار"
+pub struct IterResult:
+    @en "x"
+    @fa "جواب"
+    pub x: Matrix = Matrix {}
+    @en "iterations"
+    @fa "شمار تکرارها"
+    pub iterations: int = 0
+    @en "residual"
+    @fa "باقیمانده"
+    pub residual: f64 = 0.0
+    @en "converged"
+    @fa "همگرا"
+    pub converged: bool = false
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free(): this.x.free() end
+end
+
+func _resid_norm(a &: Matrix, x &: Matrix, b &: Matrix): f64:
+    mut ax := MatVec(a, x)
+    mut r := Sub(b, ax)
+    v := NormFrobenius(r)
+    defer ax.free()
+    defer r.free()
+    ret v
+end
+
+func _sweep(a &: Matrix, x &: Matrix, xo &: Matrix, b &: Matrix, omega: f64, in_place: bool):
+    n := a.rows
+    repeat n in i:
+        d := a.at(i, i)
+        if d != 0.0:
+            mut s := b.at(i, 0)
+            repeat n in j:
+                if j != i: s -= a.at(i, j) * _pick(x, xo, j, in_place) end
+            end
+            _relax(x, i, s / d, omega)
+        end
+    end
+end
+
+func _pick(x &: Matrix, xo &: Matrix, j: int, in_place: bool): f64:
+    if in_place: ret x.at(j, 0) end
+    ret xo.at(j, 0)
+end
+
+func _relax(x &: Matrix, i: int, candidate: f64, omega: f64):
+    if omega == 1.0:
+        x.set(i, 0, candidate)
+        ret
+    end
+    x.set(i, 0, (1.0 - omega) * x.at(i, 0) + omega * candidate)
+end
+
+func _stationary(a &: Matrix, b &: Matrix, omega: f64, in_place: bool, iters: int, tol: f64): IterResult:
+    mut r := IterResult {}
+    if a.is_square() == false or a.rows != b.rows or b.cols != 1: ret r end
+    r.x = Zeros(a.rows, 1)
+    mut prev := Zeros(a.rows, 1)
+    mut k := 0
+    until k < iters:
+        CopyInto(prev, r.x)
+        _sweep(a, r.x, prev, b, omega, in_place)
+        k += 1
+        if _resid_norm(a, r.x, b) <= tol: break end
+    end
+    defer prev.free()
+    r.iterations = k
+    r.residual = _resid_norm(a, r.x, b)
+    r.converged = r.residual <= tol
+    ret r
+end
+
+func _cg_loop(a &: Matrix, out &: IterResult, r &: Matrix, p &: Matrix, iters: int, tol: f64):
+    mut rs := Dot(r, r)
+    mut k := 0
+    until k < iters:
+        if math.Sqrt(rs) <= tol: break end
+        rs = _cg_step(a, out.x, r, p, rs)
+        k += 1
+    end
+    out.iterations = k
+end
+
+func _cg_step(a &: Matrix, x &: Matrix, r &: Matrix, p &: Matrix, rs: f64): f64:
+    mut ap := MatVec(a, p)
+    denom := Dot(p, ap)
+    if denom == 0.0:
+        ap.free()
+        ret 0.0
+    end
+    alpha := rs / denom
+    AddScaled(x, p, alpha)
+    AddScaled(r, ap, 0.0 - alpha)
+    rs_new := Dot(r, r)
+    _cg_direction(p, r, rs_new / rs)
+    defer ap.free()
+    ret rs_new
+end
+
+func _cg_direction(p &: Matrix, r &: Matrix, beta: f64):
+    repeat p.count() in k: p.a.set(k, r.a.get(k) + beta * p.a.get(k)) end
+end
+
+func _power_step(a &: Matrix, v &: Matrix):
+    mut w := MatVec(a, v)
+    nrm := NormFrobenius(w)
+    if nrm > 0.0:
+        ScaleInPlace(w, 1.0 / nrm)
+        CopyInto(v, w)
+    end
+    defer w.free()
+end
+
+func _rayleigh(a &: Matrix, x &: Matrix): f64:
+    d := Dot(x, x)
+    if d == 0.0: ret 0.0 end
+    mut ax := MatVec(a, x)
+    v := Dot(x, ax) / d
+    defer ax.free()
+    ret v
+end
+
+@en "IsDiagonallyDominant"
+@fa "غالب قطری است"
+pub func IsDiagonallyDominant(a &: Matrix): bool:
+    if a.is_square() == false: ret false end
+    repeat a.rows in i:
+        mut off := 0.0
+        repeat a.cols in j:
+            if j != i: off += math.Abs(a.at(i, j)) end
+        end
+        if math.Abs(a.at(i, i)) <= off: ret false end
+    end
+    ret true
+end
+
+@en "SolveJacobi"
+@fa "حل ژاکوبی"
+pub func SolveJacobi(a &: Matrix, b &: Matrix, iters: int, tol: f64): IterResult:
+    ret _stationary(a, b, 1.0, false, iters, tol)
+end
+
+@en "SolveGaussSeidel"
+@fa "حل گاوس زایدل"
+pub func SolveGaussSeidel(a &: Matrix, b &: Matrix, iters: int, tol: f64): IterResult:
+    ret _stationary(a, b, 1.0, true, iters, tol)
+end
+
+@en "SolveSOR"
+@fa "حل فوق‌آسایش"
+pub func SolveSOR(a &: Matrix, b &: Matrix, omega: f64, iters: int, tol: f64): IterResult:
+    ret _stationary(a, b, omega, true, iters, tol)
+end
+
+@en "SolveCG"
+@fa "حل گرادیان مزدوج"
+pub func SolveCG(a &: Matrix, b &: Matrix, iters: int, tol: f64): IterResult:
+    mut out := IterResult {}
+    if a.is_square() == false or a.rows != b.rows or b.cols != 1: ret out end
+    out.x = Zeros(a.rows, 1)
+    mut r := Clone(b)
+    mut p := Clone(b)
+    _cg_loop(a, out, r, p, iters, tol)
+    out.residual = NormFrobenius(r)
+    out.converged = out.residual <= tol
+    defer r.free()
+    defer p.free()
+    ret out
+end
+@en "PowerIteration"
+@fa "تکرار توانی"
+pub func PowerIteration(a &: Matrix, iters: int): Matrix:
+    if a.is_square() == false: ret Zeros(0, 0) end
+    n := a.rows
+    mut v := Full(n, 1, 1.0 / math.Sqrt(n as f64))
+    repeat iters: _power_step(a, v) end
+    lambda := _rayleigh(a, v)
+    mut r := Zeros(n + 1, 1)
+    repeat n in i: r.set(i, 0, v.at(i, 0)) end
+    r.set(n, 0, lambda)
+    defer v.free()
+    ret r
+end
+
+@en "Rayleigh"
+@fa "خارج‌قسمت ریلی"
+pub func Rayleigh(a &: Matrix, x &: Matrix): f64: ret _rayleigh(a, x) end
+
+@en "ShiftedInverseIteration"
+@fa "تکرار وارون شیفت‌دار"
+pub func ShiftedInverseIteration(a &: Matrix, shift: f64, iters: int): f64:
+    mut v := EigVecFor(a, shift, iters)
+    if v.is_empty(): ret shift end
+    lambda := _rayleigh(a, v)
+    defer v.free()
+    ret lambda
+end

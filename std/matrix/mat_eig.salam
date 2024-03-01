@@ -1,0 +1,377 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+const _QR_MAX_ITER := 120
+const _QR_EXCEPTIONAL := 10
+
+@en "Eigen"
+@fa "ویژه"
+pub struct Eigen:
+    @en "n"
+    @fa "اندازه"
+    pub n: int = 0
+    @en "re"
+    @fa "جزء حقیقی"
+    pub re: Matrix = Matrix {}
+    @en "im"
+    @fa "جزء موهومی"
+    pub im: Matrix = Matrix {}
+    @en "iterations"
+    @fa "شمار تکرارها"
+    pub iterations: int = 0
+    @en "ok"
+    @fa "همگرا"
+    pub ok: bool = false
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        this.re.free()
+        this.im.free()
+    end
+end
+
+func _hess_step(a &: Matrix, k: int, n: int):
+    mut scale := 0.0
+    mut i := k + 1
+    until i < n:
+        scale += math.Abs(a.at(i, k))
+        i += 1
+    end
+    if scale == 0.0: ret end
+    mut h := 0.0
+    mut v := Zeros(n, 1)
+    mut p := k + 1
+    until p < n:
+        val := a.at(p, k) / scale
+        v.set(p, 0, val)
+        h += val * val
+        p += 1
+    end
+    _hess_reflect(a, v, k, n, h, scale)
+    defer v.free()
+end
+
+func _hess_reflect(a &: Matrix, v &: Matrix, k: int, n: int, h0: f64, scale: f64):
+    mut g := math.Sqrt(h0)
+    if v.at(k + 1, 0) > 0.0: g = 0.0 - g end
+    h := h0 - v.at(k + 1, 0) * g
+    v.set(k + 1, 0, v.at(k + 1, 0) - g)
+    _hess_rows(a, v, k, n, h)
+    _hess_cols(a, v, k, n, h)
+    a.set(k + 1, k, scale * g)
+    mut i := k + 2
+    until i < n:
+        a.set(i, k, 0.0)
+        i += 1
+    end
+end
+
+func _hess_rows(a &: Matrix, v &: Matrix, k: int, n: int, h: f64):
+    mut j := k
+    until j < n:
+        mut f := 0.0
+        mut i := k + 1
+        until i < n:
+            f += v.at(i, 0) * a.at(i, j)
+            i += 1
+        end
+        f = f / h
+        mut p := k + 1
+        until p < n:
+            a.add_at(p, j, 0.0 - f * v.at(p, 0))
+            p += 1
+        end
+        j += 1
+    end
+end
+
+func _hess_cols(a &: Matrix, v &: Matrix, k: int, n: int, h: f64):
+    repeat n in i:
+        mut f := 0.0
+        mut j := k + 1
+        until j < n:
+            f += v.at(j, 0) * a.at(i, j)
+            j += 1
+        end
+        f = f / h
+        mut q := k + 1
+        until q < n:
+            a.add_at(i, q, 0.0 - f * v.at(q, 0))
+            q += 1
+        end
+    end
+end
+
+func _find_split(h &: Matrix, lo: int, hi: int): int:
+    mut l := hi
+    until l > lo:
+        s := math.Abs(h.at(l - 1, l - 1)) + math.Abs(h.at(l, l))
+        mut ref := s
+        if ref == 0.0: ref = 1.0 end
+        if math.Abs(h.at(l, l - 1)) <= MAT_EPS * ref:
+            h.set(l, l - 1, 0.0)
+            ret l
+        end
+        l -= 1
+    end
+    ret lo
+end
+
+func _wilkinson(h &: Matrix, hi: int): f64:
+    a := h.at(hi - 1, hi - 1)
+    b := h.at(hi - 1, hi)
+    c := h.at(hi, hi - 1)
+    d := h.at(hi, hi)
+    tr := a + d
+    disc := (a - d) * (a - d) * 0.25 + b * c
+    if disc < 0.0: ret tr * 0.5 end
+    root := math.Sqrt(disc)
+    up := tr * 0.5 + root
+    down := tr * 0.5 - root
+    if math.Abs(up - d) < math.Abs(down - d): ret up end
+    ret down
+end
+
+func _qr_step(h &: Matrix, lo: int, hi: int, mu: f64):
+    mut cs := Zeros(1, hi + 1)
+    mut sn := Zeros(1, hi + 1)
+    mut k := lo
+    until k <= hi:
+        h.add_at(k, k, 0.0 - mu)
+        k += 1
+    end
+    _qr_left(h, lo, hi, cs, sn)
+    _qr_right(h, lo, hi, cs, sn)
+    mut j := lo
+    until j <= hi:
+        h.add_at(j, j, mu)
+        j += 1
+    end
+    defer cs.free()
+    defer sn.free()
+end
+
+func _qr_left(h &: Matrix, lo: int, hi: int, cs &: Matrix, sn &: Matrix):
+    n := h.cols
+    mut k := lo
+    until k < hi:
+        a := h.at(k, k)
+        b := h.at(k + 1, k)
+        r := math.Hypot(a, b)
+        mut c := 1.0
+        mut s := 0.0
+        if r != 0.0:
+            c = a / r
+            s = b / r
+        end
+        cs.set(0, k, c)
+        sn.set(0, k, s)
+        _rot_rows(h, k, c, s, k, n)
+        k += 1
+    end
+end
+
+func _rot_rows(h &: Matrix, k: int, c: f64, s: f64, lo: int, hi: int):
+    mut j := lo
+    until j < hi:
+        u := h.at(k, j)
+        w := h.at(k + 1, j)
+        h.set(k, j, c * u + s * w)
+        h.set(k + 1, j, c * w - s * u)
+        j += 1
+    end
+end
+
+func _qr_right(h &: Matrix, lo: int, hi: int, cs &: Matrix, sn &: Matrix):
+    mut k := lo
+    until k < hi:
+        c := cs.at(0, k)
+        s := sn.at(0, k)
+        mut top := k + 2
+        if top > hi: top = hi end
+        mut i := lo
+        until i <= top:
+            u := h.at(i, k)
+            w := h.at(i, k + 1)
+            h.set(i, k, c * u + s * w)
+            h.set(i, k + 1, c * w - s * u)
+            i += 1
+        end
+        k += 1
+    end
+end
+
+func _emit_pair(h &: Matrix, r &: Eigen, hi: int):
+    a := h.at(hi - 1, hi - 1)
+    b := h.at(hi - 1, hi)
+    c := h.at(hi, hi - 1)
+    d := h.at(hi, hi)
+    half := (a + d) * 0.5
+    disc := (a - d) * (a - d) * 0.25 + b * c
+    if disc >= 0.0:
+        root := math.Sqrt(disc)
+        _emit(r, hi - 1, half + root, 0.0)
+        _emit(r, hi, half - root, 0.0)
+        ret
+    end
+    root := math.Sqrt(0.0 - disc)
+    _emit(r, hi - 1, half, root)
+    _emit(r, hi, half, 0.0 - root)
+end
+
+func _emit(r &: Eigen, k: int, re: f64, im: f64):
+    r.re.set(0, k, re)
+    r.im.set(0, k, im)
+end
+
+func _exceptional(h &: Matrix, hi: int): f64:
+    s := math.Abs(h.at(hi, hi - 1)) + math.Abs(h.at(hi - 1, hi - 2))
+    ret h.at(hi, hi) + 0.75 * s
+end
+
+func _choose_shift(h &: Matrix, hi: int, its: int): f64:
+    if its > 0 and its % _QR_EXCEPTIONAL == 0:
+        if hi >= 2: ret _exceptional(h, hi) end
+    end
+    ret _wilkinson(h, hi)
+end
+
+func _qr_iterate(h &: Matrix, r &: Eigen, n: int): bool:
+    mut hi := n - 1
+    mut its := 0
+    mut total := 0
+    until hi >= 0:
+        l := _find_split(h, 0, hi)
+        if l == hi:
+            _emit(r, hi, h.at(hi, hi), 0.0)
+            hi -= 1
+            its = 0
+        else l == hi - 1:
+            _emit_pair(h, r, hi)
+            hi -= 2
+            its = 0
+        else:
+            if its >= _QR_MAX_ITER: ret false end
+            _qr_step(h, l, hi, _choose_shift(h, hi, its))
+            its += 1
+            total += 1
+        end
+    end
+    r.iterations = total
+    ret true
+end
+
+func _faddeev(a &: Matrix, m &: Matrix, c &: Matrix, k: int, n: int):
+    mut t := MatMul(a, m)
+    ShiftDiagonal(t, c.at(0, n - k + 1))
+    CopyInto(m, t)
+    defer t.free()
+    mut am := MatMul(a, m)
+    c.set(0, n - k, 0.0 - Trace(am) / (k as f64))
+    defer am.free()
+end
+
+func _inverse_step(f &: LU, v &: Matrix):
+    mut w := LUSolve(f, v)
+    if w.is_empty(): ret end
+    nrm := NormFrobenius(w)
+    if nrm > 0.0: ScaleInPlace(w, 1.0 / nrm) end
+    CopyInto(v, w)
+    defer w.free()
+end
+
+@en "Hessenberg"
+@fa "هسنبرگ"
+pub func Hessenberg(x &: Matrix): Matrix:
+    if x.is_square() == false: ret Zeros(0, 0) end
+    mut h := Clone(x)
+    n := x.rows
+    mut k := 0
+    until k < n - 2:
+        _hess_step(h, k, n)
+        k += 1
+    end
+    ret h
+end
+
+@en "EigVals"
+@fa "مقادیر ویژه"
+pub func EigVals(x &: Matrix): Eigen:
+    mut r := Eigen {}
+    if x.is_square() == false: ret r end
+    n := x.rows
+    r.n = n
+    r.re = Zeros(1, n)
+    r.im = Zeros(1, n)
+    mut h := Hessenberg(x)
+    r.ok = _qr_iterate(h, r, n)
+    defer h.free()
+    ret r
+end
+@en "EigValsAuto"
+@fa "مقادیر ویژه خودکار"
+pub func EigValsAuto(x &: Matrix): Eigen:
+    if IsSymmetric(x, MAT_TOL) == false: ret EigVals(x) end
+    mut r := Eigen {}
+    r.n = x.rows
+    r.re = EigValsSym(x)
+    r.im = Zeros(1, x.rows)
+    r.ok = true
+    ret r
+end
+
+@en "SpectralRadius"
+@fa "شعاع طیفی"
+pub func SpectralRadius(x &: Matrix): f64:
+    mut e := EigValsAuto(x)
+    mut m := 0.0
+    repeat e.n in k:
+        v := math.Hypot(e.re.a.get(k), e.im.a.get(k))
+        if v > m: m = v end
+    end
+    defer e.free()
+    ret m
+end
+
+@en "CharPoly"
+@fa "چندجمله‌ای مشخصه"
+pub func CharPoly(x &: Matrix): Matrix:
+    if x.is_square() == false: ret Zeros(0, 0) end
+    n := x.rows
+    mut c := Zeros(1, n + 1)
+    c.set(0, n, 1.0)
+    mut m := Zeros(n, n)
+    repeat n in step: _faddeev(x, m, c, step + 1, n) end
+    defer m.free()
+    ret c
+end
+@en "EigVecFor"
+@fa "بردار ویژه برای"
+pub func EigVecFor(x &: Matrix, lambda: f64, iters: int): Matrix:
+    if x.is_square() == false: ret Zeros(0, 0) end
+    n := x.rows
+    mut shifted := Clone(x)
+    ShiftDiagonal(shifted, 0.0 - lambda - MAT_EPS * (1.0 + math.Abs(lambda)))
+    mut f := Decompose(shifted)
+    mut v := Full(n, 1, 1.0 / math.Sqrt(n as f64))
+    repeat iters: _inverse_step(f, v) end
+    defer shifted.free()
+    defer f.free()
+    ret v
+end

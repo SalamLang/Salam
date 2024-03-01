@@ -1,0 +1,284 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+const _SVD_MAX_SWEEPS := 60
+
+@en "SVD"
+@fa "تجزیه مقادیر تکین"
+pub struct SVD:
+    @en "u"
+    @fa "بردارهای چپ"
+    pub u: Matrix = Matrix {}
+    @en "s"
+    @fa "مقادیر تکین"
+    pub s: Matrix = Matrix {}
+    @en "v"
+    @fa "بردارهای راست"
+    pub v: Matrix = Matrix {}
+    @en "ok"
+    @fa "همگرا"
+    pub ok: bool = false
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        this.u.free()
+        this.s.free()
+        this.v.free()
+    end
+end
+
+func _col_dot(w &: Matrix, p: int, q: int): f64:
+    mut s := 0.0
+    repeat w.rows in i: s += w.at(i, p) * w.at(i, q) end
+    ret s
+end
+
+func _col_norm2(w &: Matrix, p: int): f64: ret _col_dot(w, p, p) end
+
+func _rot_cols(w &: Matrix, p: int, q: int, c: f64, s: f64):
+    repeat w.rows in i:
+        wp := w.at(i, p)
+        wq := w.at(i, q)
+        w.set(i, p, c * wp - s * wq)
+        w.set(i, q, s * wp + c * wq)
+    end
+end
+
+func _jacobi_rot(w &: Matrix, v &: Matrix, p: int, q: int): bool:
+    g := _col_dot(w, p, q)
+    if g == 0.0: ret false end
+    alpha := _col_norm2(w, p)
+    beta := _col_norm2(w, q)
+    if math.Abs(g) <= MAT_EPS * math.Sqrt(alpha * beta): ret false end
+    zeta := (beta - alpha) / (2.0 * g)
+    mut t := 1.0 / (math.Abs(zeta) + math.Sqrt(1.0 + zeta * zeta))
+    if zeta < 0.0: t = 0.0 - t end
+    c := 1.0 / math.Sqrt(1.0 + t * t)
+    s := c * t
+    _rot_cols(w, p, q, c, s)
+    _rot_cols(v, p, q, c, s)
+    ret true
+end
+
+func _svd_sweep(w &: Matrix, v &: Matrix): bool:
+    mut moved := false
+    n := w.cols
+    mut p := 0
+    until p < n - 1:
+        mut q := p + 1
+        until q < n:
+            if _jacobi_rot(w, v, p, q): moved = true end
+            q += 1
+        end
+        p += 1
+    end
+    ret moved
+end
+
+func _svd_extract(w &: Matrix, s &: Matrix):
+    repeat w.cols in j:
+        sigma := math.Sqrt(_col_norm2(w, j))
+        s.set(0, j, sigma)
+        if sigma > 0.0:
+            inv := 1.0 / sigma
+            repeat w.rows in i: w.mul_at(i, j, inv) end
+        end
+    end
+end
+
+func _svd_sort(u &: Matrix, s &: Matrix, v &: Matrix):
+    n := s.cols
+    repeat n in i:
+        mut best := i
+        mut j := i + 1
+        until j < n:
+            if s.at(0, j) > s.at(0, best): best = j end
+            j += 1
+        end
+        if best != i: _svd_swap(u, s, v, i, best) end
+    end
+end
+
+func _svd_swap(u &: Matrix, s &: Matrix, v &: Matrix, i: int, j: int):
+    t := s.at(0, i)
+    s.set(0, i, s.at(0, j))
+    s.set(0, j, t)
+    SwapCols(u, i, j)
+    SwapCols(v, i, j)
+end
+
+func _svd_tall(x &: Matrix): SVD:
+    mut r := SVD {}
+    r.u = Clone(x)
+    r.v = Eye(x.cols)
+    r.s = Zeros(1, x.cols)
+    mut sweeps := 0
+    mut moved := true
+    until moved and sweeps < _SVD_MAX_SWEEPS:
+        moved = _svd_sweep(r.u, r.v)
+        sweeps += 1
+    end
+    _svd_extract(r.u, r.s)
+    _svd_sort(r.u, r.s, r.v)
+    r.ok = sweeps < _SVD_MAX_SWEEPS
+    ret r
+end
+
+func _svd_wide(x &: Matrix): SVD:
+    mut t := Transpose(x)
+    inner := _svd_tall(t)
+    mut r := SVD {}
+    r.u = inner.v
+    r.v = inner.u
+    r.s = inner.s
+    r.ok = inner.ok
+    defer t.free()
+    ret r
+end
+
+func _rank_tol(x &: Matrix, s &: Matrix): f64:
+    if s.count() == 0: ret 0.0 end
+    mut d := x.rows
+    if x.cols > d: d = x.cols end
+    ret s.a.get(0) * (d as f64) * MAT_EPS
+end
+
+func _null_pick(f &: SVD, keep &: Vector<int>, k: int, cut: f64):
+    if k >= f.s.count():
+        keep.push(k)
+        ret
+    end
+    if f.s.a.get(k) <= cut: keep.push(k) end
+end
+
+func _gather_cols(src &: Matrix, idx &: Vector<int>): Matrix:
+    mut r := Zeros(src.rows, idx.len())
+    repeat idx.len() in c:
+        j := idx.get(c)
+        repeat src.rows in i: r.set(i, c, src.at(i, j)) end
+    end
+    ret r
+end
+
+func _pinv_add(f &: SVD, out &: Matrix, k: int, w: f64):
+    repeat out.rows in i:
+        vi := w * f.v.at(i, k)
+        repeat out.cols in j: out.add_at(i, j, vi * f.u.at(j, k)) end
+    end
+end
+
+func _pinv_build(f &: SVD, out &: Matrix, cut: f64):
+    repeat f.s.count() in k:
+        sigma := f.s.a.get(k)
+        if sigma > cut: _pinv_add(f, out, k, 1.0 / sigma) end
+    end
+end
+
+func _rank1_add(f &: SVD, out &: Matrix, t: int):
+    sigma := f.s.a.get(t)
+    repeat out.rows in i:
+        ui := sigma * f.u.at(i, t)
+        repeat out.cols in j: out.add_at(i, j, ui * f.v.at(j, t)) end
+    end
+end
+
+@en "SVDecompose"
+@fa "تجزیه تکین"
+pub func SVDecompose(x &: Matrix): SVD:
+    if x.is_empty(): ret SVD {} end
+    if x.rows >= x.cols: ret _svd_tall(x) end
+    ret _svd_wide(x)
+end
+
+@en "SingularValues"
+@fa "مقادیر تکین"
+pub func SingularValues(x &: Matrix): Matrix:
+    mut f := SVDecompose(x)
+    s := Clone(f.s)
+    defer f.free()
+    ret s
+end
+
+@en "MatrixRank"
+@fa "رتبه"
+pub func MatrixRank(x &: Matrix, tol: f64): int:
+    mut s := SingularValues(x)
+    mut cut := tol
+    if cut <= 0.0: cut = _rank_tol(x, s) end
+    mut n := 0
+    repeat s.count() in k:
+        if s.a.get(k) > cut: n += 1 end
+    end
+    defer s.free()
+    ret n
+end
+
+@en "PseudoInverse"
+@fa "شبه‌وارون"
+pub func PseudoInverse(x &: Matrix, tol: f64): Matrix:
+    mut f := SVDecompose(x)
+    mut cut := tol
+    if cut <= 0.0: cut = _rank_tol(x, f.s) end
+    mut sv := Zeros(f.v.rows, f.u.rows)
+    _pinv_build(f, sv, cut)
+    defer f.free()
+    ret sv
+end
+
+@en "NullSpace"
+@fa "فضای تهی"
+pub func NullSpace(x &: Matrix, tol: f64): Matrix:
+    mut f := SVDecompose(x)
+    mut cut := tol
+    if cut <= 0.0: cut = _rank_tol(x, f.s) end
+    mut keep := Vector {} as Vector<int>
+    repeat f.v.cols in k: _null_pick(f, keep, k, cut) end
+    r := _gather_cols(f.v, keep)
+    defer keep.free()
+    defer f.free()
+    ret r
+end
+
+@en "ColumnSpace"
+@fa "فضای ستونی"
+pub func ColumnSpace(x &: Matrix, tol: f64): Matrix:
+    mut f := SVDecompose(x)
+    mut cut := tol
+    if cut <= 0.0: cut = _rank_tol(x, f.s) end
+    mut keep := Vector {} as Vector<int>
+    repeat f.s.count() in k:
+        if f.s.a.get(k) > cut: keep.push(k) end
+    end
+    r := _gather_cols(f.u, keep)
+    defer keep.free()
+    defer f.free()
+    ret r
+end
+
+@en "LowRankApprox"
+@fa "تقریب رتبه پایین"
+pub func LowRankApprox(x &: Matrix, k: int): Matrix:
+    mut f := SVDecompose(x)
+    mut r := Zeros(x.rows, x.cols)
+    mut n := k
+    if n > f.s.count(): n = f.s.count() end
+    repeat n in t: _rank1_add(f, r, t) end
+    defer f.free()
+    ret r
+end

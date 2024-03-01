@@ -1,0 +1,720 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "bidi"
+@fa "دوسویه"
+package bidi
+
+import str
+import unicode
+
+@en "DirAuto"
+@fa "جهت خودکار"
+pub const DirAuto := 0
+@en "DirLTR"
+@fa "جهت چپ به راست"
+pub const DirLTR := 1
+@en "DirRTL"
+@fa "جهت راست به چپ"
+pub const DirRTL := 2
+
+const _MAX_DEPTH := 125
+
+const _OVR_NEUTRAL := 0
+const _OVR_LTR := 1
+const _OVR_RTL := 2
+
+inline pure func _is_isolate_init(t: int): bool:
+    ret t == unicode.BcLRI or t == unicode.BcRLI or t == unicode.BcFSI
+end
+
+inline pure func _is_removed(t: int): bool:
+    if t == unicode.BcRLE or t == unicode.BcLRE: ret true end
+    if t == unicode.BcRLO or t == unicode.BcLRO: ret true end
+    ret t == unicode.BcPDF or t == unicode.BcBN
+end
+
+inline pure func _is_ni(t: int): bool:
+    if t == unicode.BcB or t == unicode.BcS: ret true end
+    if t == unicode.BcWS or t == unicode.BcON: ret true end
+    ret _is_isolate_init(t) or t == unicode.BcPDI
+end
+
+inline pure func _level_dir(level: int): int:
+    if level % 2 == 1: ret unicode.BcR end
+    ret unicode.BcL
+end
+
+inline pure func _n_dir(t: int): int:
+    if t == unicode.BcR or t == unicode.BcEN or t == unicode.BcAN: ret unicode.BcR end
+    if t == unicode.BcL: ret unicode.BcL end
+    ret 0 - 1
+end
+
+func _new_ints(n: int, fill: int): Vector<int>:
+    out := Vector {} as Vector<int>
+    repeat n in _: out.push(fill) end
+    ret out
+end
+
+func _auto_level(types: Vector<int>, from: int, stop: int): int:
+    mut depth := 0
+    mut i := from
+    until i < stop:
+        t := types.get(i)
+        if _is_isolate_init(t):
+            depth += 1
+        else t == unicode.BcPDI:
+            if depth > 0: depth -= 1 end
+        else depth == 0:
+            if t == unicode.BcL: ret 0 end
+            if t == unicode.BcR or t == unicode.BcAL: ret 1 end
+        end
+        i += 1
+    end
+    ret 0
+end
+
+func _match_isolates(types: Vector<int>, pdi_of &: Vector<int>, init_of &: Vector<int>):
+    n := types.len()
+    stack := Vector {} as Vector<int>
+    defer stack.free()
+    repeat n in i:
+        t := types.get(i)
+        if _is_isolate_init(t):
+            stack.push(i)
+        else t == unicode.BcPDI:
+            if stack.len() > 0:
+                j := stack.pop()
+                pdi_of.set(j, i)
+                init_of.set(i, j)
+            end
+        end
+    end
+end
+
+func _explicit_levels(types &: Vector<int>, pdi_of: Vector<int>, para: int, levels &: Vector<int>):
+    n := types.len()
+    st_level := Vector {} as Vector<int>
+    defer st_level.free()
+    st_over := Vector {} as Vector<int>
+    defer st_over.free()
+    st_iso := Vector {} as Vector<int>
+    defer st_iso.free()
+
+    st_level.push(para)
+    st_over.push(_OVR_NEUTRAL)
+    st_iso.push(0)
+
+    mut overflow_iso := 0
+    mut overflow_emb := 0
+    mut valid_iso := 0
+
+    mut i := 0
+    until i < n:
+        t := types.get(i)
+        top := st_level.len() - 1
+        cur := st_level.get(top)
+
+        if t == unicode.BcRLE or t == unicode.BcLRE or t == unicode.BcRLO or t == unicode.BcLRO:
+            levels.set(i, cur)
+            mut next := cur + 1
+            if t == unicode.BcRLE or t == unicode.BcRLO:
+                if next % 2 == 0: next += 1 end
+            else:
+                if next % 2 == 1: next += 1 end
+            end
+            if next <= _MAX_DEPTH and overflow_iso == 0 and overflow_emb == 0:
+                st_level.push(next)
+                if t == unicode.BcRLO: st_over.push(_OVR_RTL)
+                else t == unicode.BcLRO: st_over.push(_OVR_LTR)
+                else:
+                    st_over.push(_OVR_NEUTRAL)
+                end
+                st_iso.push(0)
+            else:
+                if overflow_iso == 0: overflow_emb += 1 end
+            end
+        else _is_isolate_init(t):
+            levels.set(i, cur)
+            if st_over.get(top) == _OVR_LTR: types.set(i, unicode.BcL)
+            else st_over.get(top) == _OVR_RTL: types.set(i, unicode.BcR) end
+
+            mut rtl := t == unicode.BcRLI
+            if t == unicode.BcFSI:
+                mut stop := pdi_of.get(i)
+                if stop < 0: stop = n end
+                rtl = _auto_level(types, i + 1, stop) == 1
+            end
+            mut next := cur + 1
+            if rtl:
+                if next % 2 == 0: next += 1 end
+            else:
+                if next % 2 == 1: next += 1 end
+            end
+            if next <= _MAX_DEPTH and overflow_iso == 0 and overflow_emb == 0:
+                valid_iso += 1
+                st_level.push(next)
+                st_over.push(_OVR_NEUTRAL)
+                st_iso.push(1)
+            else:
+                overflow_iso += 1
+            end
+        else t == unicode.BcPDI:
+            if overflow_iso > 0:
+                overflow_iso -= 1
+            else valid_iso > 0:
+                overflow_emb = 0
+                until st_iso.get(st_level.len() - 1) == 0:
+                    st_level.pop()
+                    st_over.pop()
+                    st_iso.pop()
+                end
+                st_level.pop()
+                st_over.pop()
+                st_iso.pop()
+                valid_iso -= 1
+            end
+            ntop := st_level.len() - 1
+            levels.set(i, st_level.get(ntop))
+            if st_over.get(ntop) == _OVR_LTR: types.set(i, unicode.BcL)
+            else st_over.get(ntop) == _OVR_RTL: types.set(i, unicode.BcR) end
+        else t == unicode.BcPDF:
+            levels.set(i, cur)
+            if overflow_iso > 0:
+                overflow_iso += 0
+            else overflow_emb > 0:
+                overflow_emb -= 1
+            else st_iso.get(top) == 0 and st_level.len() >= 2:
+                st_level.pop()
+                st_over.pop()
+                st_iso.pop()
+            end
+            levels.set(i, st_level.get(st_level.len() - 1))
+        else t == unicode.BcB:
+            levels.set(i, para)
+        else:
+            levels.set(i, cur)
+            if st_over.get(top) == _OVR_LTR: types.set(i, unicode.BcL)
+            else st_over.get(top) == _OVR_RTL: types.set(i, unicode.BcR) end
+        end
+        i += 1
+    end
+end
+
+func _resolve_weak(types &: Vector<int>, seq: Vector<int>, sos: int):
+    m := seq.len()
+
+    mut prev := sos
+    repeat m in k:
+        p := seq.get(k)
+        t := types.get(p)
+        if t == unicode.BcNSM:
+            if _is_isolate_init(prev) or prev == unicode.BcPDI:
+                types.set(p, unicode.BcON)
+            else:
+                types.set(p, prev)
+            end
+        end
+        prev = types.get(p)
+    end
+
+    mut strong := sos
+    repeat m in k:
+        p := seq.get(k)
+        t := types.get(p)
+        if t == unicode.BcL or t == unicode.BcR or t == unicode.BcAL: strong = t end
+        if t == unicode.BcEN and strong == unicode.BcAL:
+            types.set(p, unicode.BcAN)
+        end
+    end
+
+    repeat m in k:
+        p := seq.get(k)
+        if types.get(p) == unicode.BcAL: types.set(p, unicode.BcR) end
+    end
+
+    repeat m in k:
+        if k == 0: continue end
+        if k + 1 >= m: continue end
+        p := seq.get(k)
+        t := types.get(p)
+        before := types.get(seq.get(k - 1))
+        after := types.get(seq.get(k + 1))
+        if t == unicode.BcES and before == unicode.BcEN and after == unicode.BcEN:
+            types.set(p, unicode.BcEN)
+        else t == unicode.BcCS and before == unicode.BcEN and after == unicode.BcEN:
+            types.set(p, unicode.BcEN)
+        else t == unicode.BcCS and before == unicode.BcAN and after == unicode.BcAN:
+            types.set(p, unicode.BcAN)
+        end
+    end
+
+    mut k := 0
+    until k < m:
+        if types.get(seq.get(k)) != unicode.BcET:
+            k += 1
+            continue
+        end
+        mut e := k
+        until e < m and types.get(seq.get(e)) == unicode.BcET:
+            e += 1
+        end
+        mut adjacent := false
+        if k > 0 and types.get(seq.get(k - 1)) == unicode.BcEN: adjacent = true end
+        if e < m and types.get(seq.get(e)) == unicode.BcEN: adjacent = true end
+        if adjacent:
+            mut j := k
+            until j < e:
+                types.set(seq.get(j), unicode.BcEN)
+                j += 1
+            end
+        end
+        k = e
+    end
+
+    repeat m in q:
+        p := seq.get(q)
+        t := types.get(p)
+        if t == unicode.BcET or t == unicode.BcES or t == unicode.BcCS:
+            types.set(p, unicode.BcON)
+        end
+    end
+
+    strong = sos
+    repeat m in q:
+        p := seq.get(q)
+        t := types.get(p)
+        if t == unicode.BcL or t == unicode.BcR: strong = t end
+        if t == unicode.BcEN and strong == unicode.BcL:
+            types.set(p, unicode.BcL)
+        end
+    end
+end
+
+inline pure func _canon_bracket(cp: int): int:
+    if cp == 0x3008: ret 0x2329 end
+    if cp == 0x3009: ret 0x232A end
+    ret cp
+end
+
+func _resolve_brackets(cps: Vector<int>, types &: Vector<int>, seq: Vector<int>, level: int, sos: int):
+    m := seq.len()
+    e := _level_dir(level)
+    mut o := unicode.BcL
+    if e == unicode.BcL: o = unicode.BcR end
+
+    stack_pos := Vector {} as Vector<int>
+    defer stack_pos.free()
+    stack_cp := Vector {} as Vector<int>
+    defer stack_cp.free()
+    open_at := Vector {} as Vector<int>
+    defer open_at.free()
+    close_at := Vector {} as Vector<int>
+    defer close_at.free()
+
+    mut k := 0
+    until k < m:
+        p := seq.get(k)
+        if types.get(p) == unicode.BcON:
+            cp := cps.get(p)
+            bt := unicode.PairedBracketType(cp)
+            if bt == unicode.PbtOpen:
+                if stack_cp.len() >= 63: break end
+                stack_pos.push(k)
+                stack_cp.push(_canon_bracket(unicode.PairedBracket(cp)))
+            else bt == unicode.PbtClose:
+                mut d := stack_cp.len() - 1
+                until d >= 0:
+                    if stack_cp.get(d) == _canon_bracket(cp):
+                        open_at.push(stack_pos.get(d))
+                        close_at.push(k)
+                        until stack_cp.len() > d:
+                            stack_cp.pop()
+                            stack_pos.pop()
+                        end
+                        break
+                    end
+                    d -= 1
+                end
+            end
+        end
+        k += 1
+    end
+
+    mut a := 0
+    until a < open_at.len():
+        mut b := a + 1
+        until b < open_at.len():
+            if open_at.get(b) < open_at.get(a):
+                t1 := open_at.get(a)
+                open_at.set(a, open_at.get(b))
+                open_at.set(b, t1)
+                t2 := close_at.get(a)
+                close_at.set(a, close_at.get(b))
+                close_at.set(b, t2)
+            end
+            b += 1
+        end
+        a += 1
+    end
+
+    mut pair := 0
+    until pair < open_at.len():
+        ko := open_at.get(pair)
+        kc := close_at.get(pair)
+
+        mut found_e := false
+        mut found_o := false
+        mut q := ko + 1
+        until q < kc:
+            d := _n_dir(types.get(seq.get(q)))
+            if d == e: found_e = true end
+            if d == o: found_o = true end
+            q += 1
+        end
+
+        mut chosen := 0 - 1
+        if found_e:
+            chosen = e
+        else found_o:
+            mut ctx := sos
+            mut r := ko - 1
+            until r >= 0:
+                d := _n_dir(types.get(seq.get(r)))
+                if d >= 0:
+                    ctx = d
+                    break
+                end
+                r -= 1
+            end
+            if ctx == o: chosen = o
+            else:
+                chosen = e
+            end
+        end
+
+        if chosen >= 0:
+            types.set(seq.get(ko), chosen)
+            types.set(seq.get(kc), chosen)
+            mut z := ko + 1
+            until z < m and _orig_nsm(cps, seq, z):
+                types.set(seq.get(z), chosen)
+                z += 1
+            end
+            z = kc + 1
+            until z < m and _orig_nsm(cps, seq, z):
+                types.set(seq.get(z), chosen)
+                z += 1
+            end
+        end
+        pair += 1
+    end
+end
+
+inline func _orig_nsm(cps: Vector<int>, seq: Vector<int>, k: int): bool:
+    ret unicode.BidiClass(cps.get(seq.get(k))) == unicode.BcNSM
+end
+
+func _resolve_neutrals(types &: Vector<int>, seq: Vector<int>, level: int, sos: int, eos: int):
+    m := seq.len()
+    e := _level_dir(level)
+    mut k := 0
+    until k < m:
+        if _is_ni(types.get(seq.get(k))) == false:
+            k += 1
+            continue
+        end
+        mut end_k := k
+        until end_k < m and _is_ni(types.get(seq.get(end_k))):
+            end_k += 1
+        end
+        mut before := sos
+        if k > 0: before = _n_dir(types.get(seq.get(k - 1))) end
+        mut after := eos
+        if end_k < m: after = _n_dir(types.get(seq.get(end_k))) end
+        mut fill := e
+        if before == after and before >= 0: fill = before end
+        mut j := k
+        until j < end_k:
+            types.set(seq.get(j), fill)
+            j += 1
+        end
+        k = end_k
+    end
+end
+
+func _resolve_implicit(types: Vector<int>, seq: Vector<int>, levels &: Vector<int>):
+    m := seq.len()
+    repeat m in k:
+        p := seq.get(k)
+        t := types.get(p)
+        lv := levels.get(p)
+        if lv % 2 == 0:
+            if t == unicode.BcR: levels.set(p, lv + 1)
+            else t == unicode.BcAN or t == unicode.BcEN: levels.set(p, lv + 2) end
+        else:
+            if t == unicode.BcL or t == unicode.BcAN or t == unicode.BcEN:
+                levels.set(p, lv + 1)
+            end
+        end
+    end
+end
+
+func _code_points(s: str): Vector<int>:
+    out := Vector {} as Vector<int>
+    n := s.len()
+    mut i := 0
+    mut cp := 0
+    until i < n:
+        i = str.CodePointAt(s, i, cp)
+        if cp < 0: cp = 0xFFFD end
+        out.push(cp)
+    end
+    ret out
+end
+
+func _resolve(cps: Vector<int>, dir: int, levels &: Vector<int>): int:
+    n := cps.len()
+
+    orig := Vector {} as Vector<int>
+    defer orig.free()
+    types := Vector {} as Vector<int>
+    defer types.free()
+    repeat n in i:
+        c := unicode.BidiClass(cps.get(i))
+        orig.push(c)
+        types.push(c)
+    end
+
+    pdi_of := _new_ints(n, 0 - 1)
+    defer pdi_of.free()
+    init_of := _new_ints(n, 0 - 1)
+    defer init_of.free()
+    _match_isolates(types, pdi_of, init_of)
+
+    mut para := 0
+    if dir == DirRTL: para = 1
+    else dir == DirLTR: para = 0
+    else:
+        para = _auto_level(types, 0, n)
+    end
+
+    repeat n in i: levels.set(i, para) end
+    _explicit_levels(types, pdi_of, para, levels)
+
+    explicit := _new_ints(n, 0)
+    defer explicit.free()
+    repeat n in i: explicit.set(i, levels.get(i)) end
+
+    retained := Vector {} as Vector<int>
+    defer retained.free()
+    repeat n in i:
+        if _is_removed(orig.get(i)) == false: retained.push(i) end
+    end
+    rn := retained.len()
+
+    run_start := Vector {} as Vector<int>
+    defer run_start.free()
+    run_end := Vector {} as Vector<int>
+    defer run_end.free()
+    run_of := _new_ints(n, 0 - 1)
+    defer run_of.free()
+    mut k := 0
+    until k < rn:
+        mut e := k
+        lv := explicit.get(retained.get(k))
+        until e < rn and explicit.get(retained.get(e)) == lv:
+            run_of.set(retained.get(e), run_start.len())
+            e += 1
+        end
+        run_start.push(k)
+        run_end.push(e - 1)
+        k = e
+    end
+
+    used := _new_ints(run_start.len(), 0)
+    defer used.free()
+    mut r := 0
+    until r < run_start.len():
+        if used.get(r) == 1:
+            r += 1
+            continue
+        end
+        first := retained.get(run_start.get(r))
+        if orig.get(first) == unicode.BcPDI and init_of.get(first) >= 0:
+            r += 1
+            continue
+        end
+
+        seq := Vector {} as Vector<int>
+        defer seq.free()
+        mut cur := r
+        until true:
+            used.set(cur, 1)
+            mut q := run_start.get(cur)
+            until q <= run_end.get(cur):
+                seq.push(retained.get(q))
+                q += 1
+            end
+            last := retained.get(run_end.get(cur))
+            if _is_isolate_init(orig.get(last)) == false: break end
+            nxt := pdi_of.get(last)
+            if nxt < 0: break end
+            nr := run_of.get(nxt)
+            if nr < 0 or used.get(nr) == 1: break end
+            cur = nr
+        end
+
+        level := explicit.get(seq.get(0))
+        mut prev_level := para
+        pi := run_start.get(r) - 1
+        if pi >= 0: prev_level = explicit.get(retained.get(pi)) end
+        mut hi := level
+        if prev_level > hi: hi = prev_level end
+        sos := _level_dir(hi)
+
+        seq_last := seq.get(seq.len() - 1)
+        mut next_level := para
+        if _is_isolate_init(orig.get(seq_last)) and pdi_of.get(seq_last) < 0:
+            next_level = para
+        else:
+            ni := run_end.get(cur) + 1
+            if ni < rn: next_level = explicit.get(retained.get(ni)) end
+        end
+        hi = level
+        if next_level > hi: hi = next_level end
+        eos := _level_dir(hi)
+
+        _resolve_weak(types, seq, sos)
+        _resolve_brackets(cps, types, seq, level, sos)
+        _resolve_neutrals(types, seq, level, sos, eos)
+        _resolve_implicit(types, seq, levels)
+        r += 1
+    end
+
+    mut trailing := true
+    mut q := rn - 1
+    until q >= 0:
+        p := retained.get(q)
+        t := orig.get(p)
+        if t == unicode.BcB or t == unicode.BcS:
+            levels.set(p, para)
+            trailing = true
+        else t == unicode.BcWS or _is_isolate_init(t) or t == unicode.BcPDI:
+            if trailing: levels.set(p, para) end
+        else:
+            trailing = false
+        end
+        q -= 1
+    end
+
+    repeat n in i:
+        if _is_removed(orig.get(i)): levels.set(i, 0 - 1) end
+    end
+    ret para
+end
+
+@en "ParagraphLevel"
+@fa "تراز بند"
+pub func ParagraphLevel(s: str, dir: int): int:
+    cps := _code_points(s)
+    defer cps.free()
+    levels := _new_ints(cps.len(), 0)
+    defer levels.free()
+    ret _resolve(cps, dir, levels)
+end
+
+@en "Levels"
+@fa "ترازها"
+pub func Levels(s: str, dir: int): Vector<int>:
+    cps := _code_points(s)
+    defer cps.free()
+    levels := _new_ints(cps.len(), 0)
+    _resolve(cps, dir, levels)
+    ret levels
+end
+
+@en "VisualOrder"
+@fa "ترتیب دیداری"
+pub func VisualOrder(s: str, dir: int): Vector<int>:
+    cps := _code_points(s)
+    defer cps.free()
+    n := cps.len()
+    levels := _new_ints(n, 0)
+    defer levels.free()
+    _resolve(cps, dir, levels)
+
+    order := Vector {} as Vector<int>
+    keep := Vector {} as Vector<int>
+    defer keep.free()
+    repeat n in i:
+        if levels.get(i) >= 0:
+            order.push(i)
+            keep.push(levels.get(i))
+        end
+    end
+    m := order.len()
+    if m == 0: ret order end
+
+    mut highest := 0
+    mut lowest_odd := _MAX_DEPTH + 2
+    repeat m in i:
+        lv := keep.get(i)
+        if lv > highest: highest = lv end
+        if lv % 2 == 1 and lv < lowest_odd: lowest_odd = lv end
+    end
+
+    mut lv := highest
+    until lv >= lowest_odd:
+        mut i := 0
+        until i < m:
+            if keep.get(i) < lv:
+                i += 1
+                continue
+            end
+            mut e := i
+            until e < m and keep.get(e) >= lv:
+                e += 1
+            end
+            mut a := i
+            mut b := e - 1
+            until a < b:
+                t := order.get(a)
+                order.set(a, order.get(b))
+                order.set(b, t)
+                a += 1
+                b -= 1
+            end
+            i = e
+        end
+        lv -= 1
+    end
+    ret order
+end
+
+@en "Reorder"
+@fa "بازچینش"
+pub func Reorder(s: str, dir: int): str:
+    cps := _code_points(s)
+    defer cps.free()
+    order := VisualOrder(s, dir)
+    defer order.free()
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat order.len() in i:
+        str.BufAppendCp(sb, cps.get(order.get(i)))
+    end
+    ret str.BufStr(sb)
+end

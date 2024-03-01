@@ -1,0 +1,63 @@
+pkg.en = encoding/msgpack
+pkg.name = encoding/msgpack
+pkg.group = Encoding and data
+pkg.summary = The compact binary MessagePack format for dynamic values.
+pkg.title = The encoding/msgpack package in Salam | MessagePack
+pkg.description = The encoding/msgpack package in Salam: serialising and deserialising data in the binary MessagePack format, with an example.
+pkg.import = encoding.msgpack
+pkg.intro <<
+<p>MessagePack holds the same data as JSON in a shorter binary form that is quicker to read, which suits messages between services, cache entries and RPC. This package turns a <a href="/std/encoding/value/">Value</a> into a <code>compress.ByteBuf</code> with <code>Marshal</code> and reads one back with <code>Unmarshal</code> (or <code>UnmarshalBytes</code> for raw memory). Errors arrive in an <a href="/std/encoding/encerr/">EncodingError</a>.</p>
+<p>Pick it over <a href="/std/encoding/json/">encoding/json</a> when both ends are programs and size or speed matters; keep JSON when people read the data or a browser consumes it. For a fixed binary layout of your own, such as a file header, write the fields directly with <a href="/std/encoding/binary/">encoding/binary</a>; for schemas shared across languages, <a href="/std/encoding/protobuf/">encoding/protobuf</a>.</p>
+<h3 id="mapping">How values are written</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Value</th><th>MessagePack</th></tr></thead>
+<tbody>
+<tr><td>null, bool</td><td><code>nil</code>, <code>true</code>/<code>false</code></td></tr>
+<tr><td>int</td><td>the smallest int format that fits, from one byte up to 8</td></tr>
+<tr><td>float</td><td>always <code>float64</code> (9 bytes); <code>float32</code> is read but never written</td></tr>
+<tr><td>string</td><td><code>fixstr</code>, <code>str8</code>, <code>str16</code> or <code>str32</code> by length</td></tr>
+<tr><td>array, object</td><td><code>fixarray</code>/<code>array16</code>/<code>array32</code>, <code>fixmap</code>/<code>map16</code>/<code>map32</code> with string keys</td></tr>
+</tbody>
+</table></div>
+<h3 id="pitfalls">What trips people up</h3>
+<ul>
+<li><strong>No <code>bin</code> or <code>ext</code> types.</strong> Data from another library that stores bytes as <code>bin</code>, or timestamps as <code>ext</code>, fails with <code>KindCustom</code>. Strings stop at the first zero byte, so binary data cannot ride in a string either; Base64 it first.</li>
+<li><strong>Map keys must be strings.</strong> A map with integer keys, as some other libraries write, is read with every key turned into <code>""</code>, so the entries overwrite each other.</li>
+<li><strong>Trailing bytes are ignored.</strong> <code>Unmarshal</code> reads one value and does not report what follows it or how many bytes it used, so you cannot read several messages from one buffer. Frame each message yourself, for example with a 4-byte length in front.</li>
+<li><strong>Reset the error between calls.</strong> <code>Unmarshal</code> returns null at once if the <code>EncodingError</code> you pass already holds an error.</li>
+<li><strong>Integers above <code>i64</code></strong> (a <code>uint64</code> over 9223372036854775807) wrap around to negative numbers.</li>
+</ul>
+
+<h2 id="guide-size">Guide: how much smaller is it?</h2>
+<p>MessagePack drops the quotes, colons and commas of JSON, and stores numbers and lengths in as few bytes as it can. For records with short keys and small numbers it usually comes to a half or two thirds of compact JSON. Decode JSON into a <a href="/std/encoding/value/">Value</a> once, and <code>Marshal</code> writes it as MessagePack.</p>
+{{example.encoding-msgpack-guide-size}}
+<p>The keys are still written in full in every record, so long key names cost as much as in JSON. If size matters more than that, compress the buffer as well with <a href="/std/compress/">compress</a>.</p>
+
+<h2 id="guide-bytes">Guide: what the bytes look like</h2>
+<p>Each value starts with a type byte. Small integers from 0 to 127 are a single byte, larger ones get a marker such as <code>cc</code> (one byte follows) or <code>ce</code> (four bytes follow). Short strings, arrays and maps carry their length in the first byte: <code>a2</code> is a string of 2 bytes, <code>92</code> an array of 2 items, <code>81</code> a map with one pair.</p>
+{{example.encoding-msgpack-guide-bytes}}
+<p>The program reads the buffer byte by byte with <code>compress.BufGet</code>. Turning the buffer into a <code>str</code> first would not work: <code>70000</code> contains a zero byte, and a <code>str</code> ends at the first zero. Keep MessagePack data in its <code>ByteBuf</code>, or use <code>BufToBase64</code> when you need text.</p>
+
+<h2 id="guide-cache">Guide: structs in a cache</h2>
+<p>A cache such as Redis stores bytes, and MessagePack bytes are quicker to read back than JSON. For a struct, go through JSON on the way in and out: <code>json.Marshal</code> and <code>json.Decode</code> give a Value to pack, and <code>json.Unmarshal</code> fills the struct from the unpacked Value. Here a <code>HashMap</code> stands in for the cache.</p>
+{{example.encoding-msgpack-guide-cache}}
+<p>For a real cache, send <code>b.data</code> and <code>b.len</code> to the client library as a binary value, and decode what comes back with <code>UnmarshalBytes</code>.</p>
+
+<h2 id="guide-errors">Guide: broken, cut and foreign buffers</h2>
+<p>Network reads can stop halfway, and other programs may use parts of MessagePack this package does not read. Both <code>Unmarshal</code> and <code>UnmarshalBytes</code> report a buffer that ends in the middle of a value as <code>KindUnexpectedEOF</code>, so you can tell "wait for more bytes" apart from data that is simply wrong.</p>
+{{example.encoding-msgpack-guide-errors}}
+<p>The third case is a <code>bin</code> value, type byte <code>c4</code>, as written by libraries that keep bytes apart from strings; it fails with <code>KindCustom</code>. Ask the sender to use strings, or Base64 the bytes, when it has to talk to Salam. The last case shows that one stray byte after a complete value is not noticed, which is why a stream of messages needs its own framing.</p>
+>>
+
+doc.MsgpackOptions = The serialising options.
+doc.MsgpackOptions.use_str8 = Use the <code>str8</code> format for strings of 32 to 255 bytes; true by default. Set it false for very old readers that predate <code>str8</code>; those strings are then written as <code>str16</code>.
+doc.MarshalWith = Turns a value into MessagePack bytes with the given options.
+doc.Marshal = Turns a value into MessagePack bytes. Free the buffer with <code>compress.BufFree</code> when you are done.
+doc.UnmarshalBytes = Reads one MessagePack value from <code>n</code> bytes at <code>p</code>, for data that is not in a <code>ByteBuf</code>, such as a reply from a cache client. Bytes after the value are ignored.
+doc.Unmarshal = Turns a MessagePack buffer into a value; <code>err</code> is filled in when the data is cut short or uses <code>bin</code> or <code>ext</code>. Pass a fresh <code>NoError()</code> each time.
+
+ex.MsgpackOptions = encoding-msgpack-Marshal
+ex.MarshalWith = encoding-msgpack-Marshal
+ex.Marshal = encoding-msgpack-Marshal
+ex.UnmarshalBytes = encoding-msgpack-Marshal
+ex.Unmarshal = encoding-msgpack-Marshal

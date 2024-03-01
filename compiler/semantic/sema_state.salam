@@ -1,0 +1,216 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include dg "../diag.salam"
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include pth "../sal_path.salam"
+
+inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
+
+func ty_at(s &: Sema, t: int): Type:
+    if t < 0 or t >= s.types.len():
+        ret s.types.get(TY_ERROR)
+    end
+    ret s.types.get(t)
+end
+
+func ty_put(s &: Sema, t: int, v: Type):
+    s.types.set(t, v)
+end
+
+func scope_at(s &: Sema, sc: int): Scope:
+    ret s.scopes.get(sc)
+end
+
+func scope_put(s &: Sema, sc: int, v: Scope):
+    s.scopes.set(sc, v)
+end
+
+func sym_at(s &: Sema, id: int): Symbol:
+    ret s.syms.get(id)
+end
+
+func sym_put(s &: Sema, id: int, v: Symbol):
+    s.syms.set(id, v)
+end
+
+func sig_at(s &: Sema, id: int): Sig:
+    ret s.sigs.get(id)
+end
+
+func sig_put(s &: Sema, id: int, v: Sig):
+    s.sigs.set(id, v)
+end
+
+func span_of(a &: at.Ast, id: int): co.SrcSpan:
+    n := at.Get(a, id)
+    ret co.MakeSpan(
+        co.MakePos(n.begin_line, n.begin_col, n.begin_index), co.MakePos(n.end_line, n.end_col, n.end_index), n.length
+    )
+end
+
+func lang0(lang: str): int:
+    if str.Len(lang) == 0:
+        ret 0
+    end
+    ret byte_at(lang, 0)
+end
+
+func dir_of(path: str): str:
+    ret pth.PathDir(path)
+end
+
+func serr(s &: Sema, code: int, sp: co.SrcSpan, msg: str):
+    stage_fixes(sp, msg)
+    mut e := s.diag
+    dg.Report(e, dg.SEV_ERROR, code, s.file, sp, distinct_display_names(msg))
+    s.diag = e
+end
+
+func serr_help(s &: Sema, code: int, sp: co.SrcSpan, msg: str, help: str):
+    stage_fixes(sp, msg + "\n" + help)
+    mut e := s.diag
+    dg.ReportHelp(e, dg.SEV_ERROR, code, s.file, sp, distinct_display_names(msg), help)
+    s.diag = e
+end
+
+func method_alias(recv: str, m: str): str:
+    if str.Equals(recv, "HashMap"):
+        if str.Equals(m, "set") or str.Equals(m, "insert") or str.Equals(m, "add") or str.Equals(m, "store"):
+            ret "put"
+        end
+        if str.Equals(m, "contains") or str.Equals(m, "containsKey") or str.Equals(m, "contains_key") or str.Equals(m, "has_key") or str.Equals(m, "exists"):
+            ret "has"
+        end
+        if str.Equals(m, "delete") or str.Equals(m, "erase") or str.Equals(m, "del"):
+            ret "remove"
+        end
+        if str.Equals(m, "len") or str.Equals(m, "length") or str.Equals(m, "count"):
+            ret "size"
+        end
+        ret ""
+    end
+    if str.Equals(recv, "Vector"):
+        if str.Equals(m, "append") or str.Equals(m, "add") or str.Equals(m, "push_back") or str.Equals(m, "emplace_back"):
+            ret "push"
+        end
+        if str.Equals(m, "length") or str.Equals(m, "size") or str.Equals(m, "count"):
+            ret "len"
+        end
+        if str.Equals(m, "at") or str.Equals(m, "index"):
+            ret "get"
+        end
+        if str.Equals(m, "pop_back"):
+            ret "pop"
+        end
+        ret ""
+    end
+    if str.Equals(recv, "str"):
+        if str.Equals(m, "length") or str.Equals(m, "size") or str.Equals(m, "count"):
+            ret "len"
+        end
+        if str.Equals(m, "toUpperCase") or str.Equals(m, "to_upper") or str.Equals(m, "uppercase") or str.Equals(m, "toUpper"):
+            ret "upper"
+        end
+        if str.Equals(m, "toLowerCase") or str.Equals(m, "to_lower") or str.Equals(m, "lowercase") or str.Equals(m, "toLower"):
+            ret "lower"
+        end
+        if str.Equals(m, "strip") or str.Equals(m, "trimSpace") or str.Equals(m, "trim_space"):
+            ret "trim"
+        end
+        if str.Equals(m, "contains"):
+            ret "includes"
+        end
+        if str.Equals(m, "startsWith") or str.Equals(m, "startswith") or str.Equals(m, "hasPrefix"):
+            ret "starts_with"
+        end
+        if str.Equals(m, "endsWith") or str.Equals(m, "endswith") or str.Equals(m, "hasSuffix"):
+            ret "ends_with"
+        end
+        if str.Equals(m, "indexOf") or str.Equals(m, "index") or str.Equals(m, "index_of"):
+            ret "find"
+        end
+        if str.Equals(m, "toInt") or str.Equals(m, "parseInt") or str.Equals(m, "parse_int") or str.Equals(m, "atoi"):
+            ret "to_int"
+        end
+        if str.Equals(m, "toFloat") or str.Equals(m, "parseFloat") or str.Equals(m, "parse_float"):
+            ret "to_float"
+        end
+        if str.Equals(m, "substring") or str.Equals(m, "slice"):
+            ret "substr"
+        end
+        ret ""
+    end
+    ret ""
+end
+
+func method_alias_help(recv: str, m: str): str:
+    alt := method_alias(recv, m)
+    if str.Len(alt) > 0:
+        hint := co.Format1(i18.Tr("did you mean '.%s(...)'?"), co.ArgStr(alt))
+        mut one := Vector {} as Vector<str>
+        one.push(alt)
+        sug_remember(m, one, 1, hint)
+        one.free()
+        ret hint
+    end
+    if str.Equals(recv, "str") and (str.Equals(m, "replace") or str.Equals(m, "replaceAll") or str.Equals(m, "replace_all")):
+        ret i18.Tr("use 'str.Replace(s, old, new)' from the str package")
+    end
+    if str.Equals(recv, "str") and (str.Equals(m, "join")):
+        ret i18.Tr("use 'str.Join(parts, sep)' from the str package")
+    end
+    ret ""
+end
+
+func undefined_function_help(nm: str): str:
+    if str.Equals(nm, "str") or str.Equals(nm, "string") or str.Equals(nm, "String") or str.Equals(nm, "toString") or str.Equals(nm, "to_string"):
+        ret i18.Tr("convert with 'str.FromInt(n)' or 'str.FromFloat(x)' (import str)")
+    end
+    if str.Equals(nm, "int") or str.Equals(nm, "parseInt") or str.Equals(nm, "atoi") or str.Equals(nm, "Int"):
+        ret i18.Tr("parse text with 's.to_int()', or cast a number with 'x as int'")
+    end
+    if str.Equals(nm, "float") or str.Equals(nm, "parseFloat") or str.Equals(nm, "atof") or str.Equals(nm, "Float"):
+        ret i18.Tr("parse text with 's.to_float()', or cast a number with 'x as f64'")
+    end
+    if str.Equals(nm, "len") or str.Equals(nm, "length") or str.Equals(nm, "size") or str.Equals(nm, "count"):
+        ret i18.Tr("sizes are methods: 'x.len()' on str, Vector and arrays, 'm.size()' on a HashMap")
+    end
+    if str.Equals(nm, "printf") or str.Equals(nm, "puts") or str.Equals(nm, "echo") or str.Equals(nm, "Println") or str.Equals(nm, "print_line"):
+        ret i18.Tr("print with the statement 'println a, b' (no parentheses)")
+    end
+    if str.Equals(nm, "range"):
+        ret i18.Tr("count with 'repeat a to b in i:' or 'repeat n in i:'")
+    end
+    if str.Equals(nm, "abs") or str.Equals(nm, "sqrt") or str.Equals(nm, "pow") or str.Equals(nm, "floor") or str.Equals(nm, "min") or str.Equals(nm, "max"):
+        ret i18.Tr("math functions live in the math package: 'math.Abs', 'math.Sqrt', 'math.Pow', 'math.Floor', 'math.Min', 'math.Max' (import math)")
+    end
+    if str.Equals(nm, "exit"):
+        ret i18.Tr("return the exit code from main with 'ret code'")
+    end
+    ret ""
+end
+
+func swarn_help(s &: Sema, code: int, sp: co.SrcSpan, msg: str, help: str):
+    if s.requal:
+        ret
+    end
+    stage_fixes(sp, msg + "\n" + help)
+    mut e := s.diag
+    dg.ReportHelp(e, dg.SEV_WARNING, code, s.file, sp, distinct_display_names(msg), help)
+    s.diag = e
+end
+
+func swarn(s &: Sema, code: int, sp: co.SrcSpan, msg: str):
+    if s.requal:
+        ret
+    end
+    stage_fixes(sp, msg)
+    mut e := s.diag
+    dg.Report(e, dg.SEV_WARNING, code, s.file, sp, distinct_display_names(msg))
+    s.diag = e
+end

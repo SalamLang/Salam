@@ -1,0 +1,89 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import os
+import io
+
+include tok "../token.salam"
+include src "../source.salam"
+include lg "../logger.salam"
+include lp "../langpack.salam"
+include lx "../lexer/lexer.salam"
+include at "../ast.salam"
+include ps "../parser/parser.salam"
+include cc "../condcomp.salam"
+include sm "../semantic/semantic.salam"
+include lv "../llvmgen/llvmgen.salam"
+
+func main:
+    args := os.Args()
+    defer args.free()
+    if args.len() < 5:
+        io.EPrintln("usage: llvm_native_run <file.salam> <module> <tmp_ll> <tmp_exe>")
+        ret 2
+    end
+    path := args[1]
+    module := args[2]
+    ll_path := args[3]
+    exe_path := args[4]
+
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut sf := src.New()
+    if not src.Load(path, sf):
+        io.EPrintln("cannot read " + path)
+        ret 2
+    end
+    pack := lx.Detect(sf, lp.Load("en"))
+    mut toks := tok.StreamNew(path)
+    _lok := lx.Run(quiet, pack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    _pok := ps.Run(quiet, toks, a, prog)
+    tok.StreamFree(toks)
+    mut s := sm.New(quiet, path, lp.Code(pack))
+    sm.SetCc(s, cc.TableBuild("", Vector {} as Vector<str>))
+    _ck := cc.PruneProgram(a, quiet, path, s.cctab, prog)
+    sok := sm.Run(s, a, prog)
+    if not sok:
+        io.EPrintln("sema failed for " + path)
+        ret 1
+    end
+
+    o := lv.RunOpts(
+        quiet, s, a, prog, module, lp.Entry(pack), lv.OptionsDefault(), path
+    )
+    if not o.ok:
+        io.EPrintln("LLVM backend: " + o.error)
+        ret 1
+    end
+    _w := os.WriteFile(ll_path, o.ll_src)
+
+    mut nopts := lv.OptionsDefault()
+    nopts.output_mode = lv.LV_OUT_EXEC
+    nopts.output_file = exe_path
+    rc := lv.NativeRun(quiet, ll_path, nopts)
+    if rc != 0:
+        io.EPrintln("native link failed, rc=" + rc)
+        ret 3
+    end
+    if not os.Exists(exe_path):
+        io.EPrintln("native link reported success but no binary at " + exe_path)
+        ret 3
+    end
+
+    run_rc := os.Run(`"` + exe_path + `"`)
+    ret run_rc
+end

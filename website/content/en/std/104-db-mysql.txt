@@ -1,0 +1,264 @@
+pkg.en = db/mysql
+pkg.name = db/mysql
+pkg.group = Database
+pkg.summary = Connecting to MySQL and MariaDB.
+pkg.title = The db/mysql package in Salam | MySQL and MariaDB
+pkg.description = The db/mysql package in Salam: a native MySQL and MariaDB client with TLS and utf8mb4, queries into structs, safe quoting, NULLs, transactions, error codes, pooling and migrations, with a step by step tutorial.
+pkg.import = db.mysql
+pkg.intro <<
+<p>This package speaks the MySQL and MariaDB client protocol itself and needs no outside library: there is no <code>libmysqlclient</code> to install and nothing to link. It logs in with <code>mysql_native_password</code> or <code>caching_sha2_password</code>, encrypts the connection with TLS whenever the server offers it, and asks for <code>utf8mb4</code> during the handshake, so Persian text and emoji work from the first query. The functions follow the shape of the C API (<code>Open</code>, <code>Exec</code>, <code>Query</code>, <code>Next</code>, <code>Finish</code>), and <code>Conn</code> turns a connection into the shared <code>Connection</code> of <a href="/std/db/">db</a>, so code written against that interface also runs on SQLite and PostgreSQL. This page starts with a tutorial; the reference of every function comes after it.</p>
+
+<h2 id="tutorial">Tutorial: a small bookshop in eleven steps</h2>
+<p>The steps below build the database of a small bookshop: a table of books, a table of orders, and the code to sell, restock and report on them. Each step is a complete program, and the output under it is what it printed against a real MariaDB 11.8 server. Run them in order, because each step uses the rows the earlier ones left behind.</p>
+<p>First start a server. With Docker that is one command, and it also creates the database and the user the programs log in with:</p>
+<pre class="code" dir="ltr"><code>docker run -d --name shop-db -p 3306:3306 -e MARIADB_ROOT_PASSWORD=rootpw -e MARIADB_DATABASE=shop -e MARIADB_USER=salam -e MARIADB_PASSWORD=secret mariadb:11.8</code></pre>
+<p>The programs connect to <code>127.0.0.1</code> on port 3306 as <code>salam</code> with the password <code>secret</code> and use the database <code>shop</code>. The outputs come from MariaDB. MySQL 8 speaks the same protocol and the package works with it too, but a few statements here use MariaDB names: on MySQL the status table of step 1 is <code>performance_schema.session_status</code>.</p>
+
+<h2 id="connect">1. Connect</h2>
+<p><code>Open</code> takes the host, user, password, database name and port, and always returns a <code>Database</code>. Check it with <code>Ok</code> before anything else: when the login fails the handle is empty and <code>Error</code> says why. A database name of <code>""</code> connects without choosing one, and <code>SelectDB</code> picks it later. <code>Close</code> sends the server a polite goodbye and frees the connection, so <code>defer</code> it right after the check.</p>
+{{example.db-mysql-connect}}
+<p>The <code>tls</code> line shows that the session is encrypted even though the program asked for nothing: MariaDB 11.8 has TLS on by default and the client uses it when it is there. <a href="#guide-tls">Encryption and TLS modes</a> below shows how to require it or turn it off. Note that <code>Errno</code> only works on a connection that exists; for a failed <code>Open</code> there is just the message.</p>
+
+<h2 id="schema">2. Create the tables</h2>
+<p><code>Exec</code> runs one statement and returns 0 when it worked and -1 when it did not. SQL that spans several lines is easiest to write as a backtick string, which keeps newlines and quotes exactly as typed. One <code>Exec</code> runs one statement; to run several, call it once for each.</p>
+{{example.db-mysql-schema}}
+<p>The <code>books</code> table has a nullable <code>isbn</code> and a <code>JSON</code> column for details that differ from book to book. <code>InnoDB</code> is the engine that gives transactions and foreign keys, and <code>utf8mb4</code> is the real four byte UTF-8; the older <code>utf8</code> of MySQL cannot store every character.</p>
+
+<h2 id="insert">3. Insert rows</h2>
+<p>After an <code>INSERT</code>, <code>LastInsertId</code> gives the <code>AUTO_INCREMENT</code> id the server chose and <code>AffectedRows</code> (or its other name <code>Changes</code>) how many rows went in. One <code>INSERT</code> with several value lists is much faster than many single ones, and for it <code>LastInsertId</code> is the id of the <em>first</em> new row.</p>
+{{example.db-mysql-insert}}
+<p>Inside SQL a single quote is written twice (<code>O''Brian</code>). That is fine for text you typed yourself; text that comes from a user goes through <code>Quote</code> or <code>Escape</code>, as step 5 shows.</p>
+
+<h2 id="structs">4. Read rows into your own structs</h2>
+<p><code>Query</code> returns a <code>Result</code> with every row already read from the server. Keep it in a <code>mut</code> variable, because <code>Next</code> moves it to the next row and returns false when none is left. <code>Text</code>, <code>Int</code>, <code>Int64</code> and <code>Float</code> read a column of the current row by its position, starting at 0, and <code>Finish</code> frees the result. Wrapping that loop in a function that returns a <code>Vector</code> of your own struct keeps the SQL in one place.</p>
+{{example.db-mysql-structs}}
+<p>The server sends every value as text and the column functions convert it, so a <code>DECIMAL</code> read with <code>Text</code> stays exact (<code>14.50</code>), while <code>Float</code> would turn it into a binary fraction. Keep money as text or as whole cents, and let SQL do the sums. <code>ColumnCount</code> and <code>ColumnName</code> describe the columns, which is handy for printing a header or a CSV file; <code>LIMIT 0</code> gets the columns without any rows.</p>
+
+<h2 id="safe">5. Values from users, safely</h2>
+<p>This package has no prepared statements, so a value is put into the SQL text. Never paste user text in directly. <code>Quote</code> (a method of <code>Database</code>) escapes the text and adds the quotes around it; <code>Escape</code> only escapes, for when you write the quotes yourself. Both escape quotes, backslashes, newlines and NUL bytes the way the server reads them.</p>
+{{example.db-mysql-safe}}
+<p>The pasted query counts every book, because the attacker's quote ended the string and <code>OR '1'='1'</code> became part of the condition. The quoted one looks for an author whose name is literally that text and finds nothing. <code>LIKE</code> needs one more step: <code>%</code> and <code>_</code> are wildcards there and <code>Escape</code> leaves them alone, so <code>like_pattern</code> puts a backslash before each. Numbers are safest as real numbers: convert the input to <code>int</code> first and write it back with <code>str.FromInt</code>.</p>
+
+<h2 id="nulls">6. NULL values</h2>
+<p><code>IsNull</code> tells a NULL apart from an empty string. The other column functions give a neutral value for NULL (<code>""</code>, 0 or 0.0), which is convenient but means you cannot tell <em>no value</em> from <em>zero</em> without asking. JSON fields come back through <code>JSON_VALUE</code> as ordinary text, and NULL when the document or the key is missing.</p>
+{{example.db-mysql-null}}
+<p>In SQL nothing is equal to NULL, not even NULL, so <code>isbn = NULL</code> finds no rows; write <code>IS NULL</code>. <code>COALESCE</code> replaces a NULL with a default inside the query, which saves a check in the program.</p>
+
+<h2 id="update">7. Update and delete</h2>
+<p><code>UPDATE</code> and <code>DELETE</code> are run with <code>Exec</code> as well, and <code>AffectedRows</code> says how many rows they changed. Arithmetic belongs in the SQL (<code>stock = stock + 10</code>), so two programs restocking at the same time cannot overwrite each other.</p>
+{{example.db-mysql-update}}
+<p>MySQL and MariaDB count rows that actually <em>changed</em>, not rows that matched the <code>WHERE</code>: setting <code>stock</code> to the value it already has reports 0. Keep that in mind before you treat 0 as <em>not found</em>; check with a <code>SELECT</code> when the difference matters.</p>
+
+<h2 id="transactions">8. Transactions</h2>
+<p>An order takes two writes: lower the stock and add the order row. Either both happen or neither. <code>Begin</code> starts a transaction, <code>Commit</code> keeps its writes and <code>Rollback</code> throws them away. The <code>UPDATE</code> only lowers the stock when there is enough of it, and <code>AffectedRows</code> tells the program whether it did.</p>
+{{example.db-mysql-tx}}
+<p>Ali wanted more copies than the shop had and the order for book 99 found no book, so both rolled back and left no trace. Inside a transaction InnoDB locks the rows it changes until <code>Commit</code>, so two orders for the last copy cannot both succeed. <code>Autocommit(d, false)</code> is the other way to work: every statement then waits for an explicit <code>Commit</code>. A <code>CREATE</code>, <code>ALTER</code> or <code>DROP</code> commits on its own in MySQL, so do not put schema changes in the middle of a transaction you might roll back.</p>
+
+<h2 id="errors">9. Errors</h2>
+<p>When <code>Exec</code> returns -1 or <code>QueryOk</code> is false, <code>Errno</code> gives the server's error number and <code>Error</code> its message. The number is what a program should branch on: 1062 is a duplicate key, 1452 a missing parent row, 1364 a required column with no value, 1064 a syntax error and 1146 a missing table.</p>
+{{example.db-mysql-errors}}
+<p>An error in one statement does not break the connection; the next statement runs normally, as the last two lines show. A lost connection is different: <code>Ping</code> returns false and the only cure is a new <code>Open</code>. The 1062 error is also the clean way to find out that a row exists: insert it and handle the duplicate, instead of checking first and racing another program.</p>
+
+<h2 id="pool">10. The shared interface and a pool</h2>
+<p><code>Conn</code> wraps a connection as a <code>dyn db.Connection</code>. Through it the helpers of <a href="/std/db/">db</a> work on MySQL: <code>db.QueryInt</code>, <code>db.Run</code>, <code>db.InTx</code> and the rest. <code>db.Pool</code> keeps several open connections and lends them out by number with <code>Acquire</code> and <code>Release</code>, so a server does not log in again for every request.</p>
+{{example.db-mysql-pool}}
+<p>Each connection is its own session with its own <code>CONNECTION_ID()</code>, its own transaction and its own last insert id. A connection is not safe to use from two threads at once: give each thread its own, or one leased from a pool. When <code>Acquire</code> returns <code>db.NO_LEASE</code> every connection is busy; wait and try again, or open another one. <code>DropDead</code> pings the idle connections and removes the ones the server has closed.</p>
+
+<h2 id="report">11. A sales report</h2>
+<p>The point of keeping orders in SQL is that the questions become one query each. <code>JOIN</code> and <code>GROUP BY</code> sum the sales per book, <code>GROUP_CONCAT</code> folds a list into one text value, and the JSON functions search inside the <code>details</code> column. <code>RowCount</code> says how many rows a result holds before you loop over it.</p>
+{{example.db-mysql-report}}
+<p>The bookshop is done: its schema, writes that cannot half happen, reads into structs and reports. The sections below cover jobs that did not fit the story.</p>
+
+<h2 id="guide-upsert">Bulk import and upsert</h2>
+<p>A delivery of books, some new and some already on the shelf, is one statement: a multi-row <code>INSERT</code> with <code>ON DUPLICATE KEY UPDATE</code>. A row whose <code>UNIQUE</code> title already exists updates that row instead of failing with 1062. Each value still goes through <code>Quote</code>, and <code>str.Join</code> puts the rows together.</p>
+{{example.db-mysql-guide-upsert}}
+<p>For an upsert, <code>AffectedRows</code> counts 1 for each new row and 2 for each updated one, so 4 here means two new books and one restock. The server limits the size of one statement (<code>max_allowed_packet</code>, 16 MB by default in MariaDB), so split a large import into chunks of a few thousand rows, and wrap the chunks in a transaction when the import must go in whole or not at all.</p>
+
+<h2 id="guide-migrate">Schema migrations</h2>
+<p>A real application changes its schema over time. <code>db.Migrator</code> from <a href="/std/db/">db</a> keeps numbered steps, each with an <code>up</code> and a <code>down</code> SQL text, and records the applied ones in a <code>schema_migrations</code> table. Run <code>MigrateUp</code> when the program starts and it applies only the new steps.</p>
+{{example.db-mysql-guide-migrate}}
+<p>The migrator runs each step in a transaction, but MySQL commits every <code>CREATE</code> and <code>ALTER</code> on its own, so a step that fails halfway can leave part of its work behind. Keep each step to one schema change, or write steps that are safe to run again, such as <code>CREATE TABLE IF NOT EXISTS</code>.</p>
+
+<h2 id="guide-tls">Encryption and TLS modes</h2>
+<p>The client encrypts whenever the server offers TLS, with no setting in the program. Two environment variables change that. <code>SALAM_MYSQL_SSL_MODE</code> is <code>DISABLED</code> (never encrypt), <code>REQUIRED</code> (refuse a server without TLS) or <code>VERIFY_IDENTITY</code> (also check the certificate and the host name); left unset, it encrypts when it can without checking the certificate. <code>SALAM_MYSQL_SSL_CA</code> names the CA file to check against.</p>
+{{example.db-mysql-guide-tls}}
+<p>The same program with encryption turned off:</p>
+<pre class="code" dir="ltr"><code>SALAM_MYSQL_SSL_MODE=DISABLED ./guide-tls
+SALAM_MYSQL_SSL_MODE: DISABLED
+this connection is not encrypted</code></pre>
+<p>Use <code>VERIFY_IDENTITY</code> with a CA file whenever the database is on another machine. Without a certificate check, TLS still hides the traffic from someone listening, but not from someone who can pretend to be the server.</p>
+
+<h2 id="guide-functions">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Connect and check</td><td><code>Open</code>, then <code>Ok</code> and <code>Error</code>; <code>Close</code> at the end</td></tr>
+<tr><td>Run a statement with no rows</td><td><code>Exec</code>, then <code>AffectedRows</code> and <code>LastInsertId</code></td></tr>
+<tr><td>One number or one text value</td><td><code>QueryInt</code>, <code>QueryText</code></td></tr>
+<tr><td>Many rows</td><td><code>Query</code>, <code>QueryOk</code>, a loop on <code>Next</code>, then <code>Finish</code></td></tr>
+<tr><td>A value from a user</td><td><code>d.Quote</code>, or <code>Escape</code> inside quotes you write</td></tr>
+<tr><td>Tell NULL from empty</td><td><code>IsNull</code></td></tr>
+<tr><td>Several writes together</td><td><code>Begin</code>, <code>Commit</code>, <code>Rollback</code>, or <code>db.InTx</code></td></tr>
+<tr><td>Why a statement failed</td><td><code>Errno</code> and <code>Error</code></td></tr>
+<tr><td>Code that works on any database</td><td><code>Conn</code> and the functions of <a href="/std/db/">db</a></td></tr>
+<tr><td>Is the server still there</td><td><code>Ping</code></td></tr>
+</tbody>
+</table></div>
+<p><code>LibraryInit</code>, <code>LibraryEnd</code>, <code>ThreadInit</code> and <code>ThreadEnd</code> exist so that code ported from the C API compiles; this client needs none of them. <code>OpenFull</code> takes extra client flags, but its socket argument must be empty, because connections are over TCP only.</p>
+>>
+
+doc.Database = One MySQL connection.
+doc.Database.handle = The pointer to the connection state.
+doc.Database.Kind = The name of the database engine.
+doc.Database.Ok = It is healthy.
+doc.Database.Ping = The connection is alive.
+doc.Database.Exec = Runs one statement; zero means success.
+doc.Database.Query = Runs a query and returns the rows.
+doc.Database.Begin = Starts a transaction.
+doc.Database.LastInsertId = The id of the last inserted row.
+doc.Database.Changes = The number of rows the last statement changed.
+doc.Database.Error = The last error message.
+doc.Database.Quote = Returns the string quoted and escaped, safe for SQL.
+doc.Database.Close = Closes and frees it.
+doc.Result = The result of one query.
+doc.Result.handle = The result pointer.
+doc.Result.row = The current row.
+doc.Result.Ok = It is healthy.
+doc.Result.Next = Moves to the next row; false when no row is left.
+doc.Result.ColumnCount = The number of columns.
+doc.Result.ColumnName = The column name.
+doc.Result.ColumnType = <code>TYPE_NULL</code> when the value in the current row is NULL, otherwise <code>TYPE_TEXT</code>, because the server sends every value as text; see <a href="/std/db/">db</a>.
+doc.Result.IsNull = The column value is null.
+doc.Result.Text = The column value as text.
+doc.Result.Int = The column value as an integer.
+doc.Result.Int64 = The column value as a 64 bit integer.
+doc.Result.Float = The column value as a float.
+doc.Result.Close = Closes and frees it.
+doc.Txn = One transaction.
+doc.Txn.handle = The connection pointer.
+doc.Txn.Ok = It is healthy.
+doc.Txn.Exec = Runs one statement; zero means success.
+doc.Txn.Query = Runs a query and returns the rows.
+doc.Txn.Commit = Commits the transaction.
+doc.Txn.Rollback = Rolls the transaction back.
+doc.Available = The MySQL client is available; since it is inside Salam itself, this is always true.
+doc.ClientVersion = The name and version of the client.
+doc.ServerVersion = The server version.
+doc.Open = Connects to the server.
+doc.OpenFull = Connects with extra client flags. Pass an empty socket: Unix sockets are not supported, and a socket path makes the call fail.
+doc.Ok = The connection is up.
+doc.Close = Closes the connection.
+doc.Ping = The connection is alive.
+doc.SelectDB = Changes the current database.
+doc.SetCharset = Runs <code>SET NAMES</code> with the given character set; the connection already starts in <code>utf8mb4</code>, so this is only for a different one.
+doc.Error = The last error message; after a failed <code>Open</code>, why it failed.
+doc.Errno = The server's code for the last error, such as 1062 for a duplicate key; -1 when there is no connection.
+doc.Exec = Runs one statement; 0 means success and -1 failure.
+doc.AffectedRows = The number of rows changed.
+doc.Changes = The same as <code>AffectedRows</code>.
+doc.LastInsertId = The id of the last inserted row.
+doc.Begin = Starts a transaction with <code>START TRANSACTION</code>.
+doc.Commit = Commits it.
+doc.Rollback = Rolls it back.
+doc.Autocommit = Turns committing every statement by itself on or off.
+doc.Query = Runs a query and reads every row of the result; check it with <code>QueryOk</code>.
+doc.QueryOk = The query gave a result.
+doc.Next = Moves to the next row.
+doc.Finish = Frees the result.
+doc.ColumnCount = The number of columns.
+doc.RowCount = The number of rows in the result.
+doc.ColumnName = The column name.
+doc.FieldType = The MySQL type code of the column, such as 3 for <code>INT</code>, 8 for <code>BIGINT</code>, 5 for <code>DOUBLE</code>, 246 for <code>DECIMAL</code> and 253 for <code>VARCHAR</code>; 0 when the query gave no result.
+doc.FieldKind = The kind of the column from its declared type: <code>TYPE_INT</code> for the integer types, <code>TYPE_FLOAT</code> for <code>FLOAT</code> and <code>DOUBLE</code>, and <code>TYPE_TEXT</code> for everything else, <code>DECIMAL</code> included; see <a href="/std/db/">db</a>. It does not look at the current row, so a NULL cell still gives the column's kind.
+doc.ColumnKind = The same as <code>FieldKind</code>, except that it gives <code>TYPE_NULL</code> when the value in the current row is NULL.
+doc.Text = The column value as text.
+doc.Int = As an integer.
+doc.Int64 = As a 64 bit integer.
+doc.Float = As a float.
+doc.IsNull = It is null.
+doc.Escape = Escapes the special characters of a string for SQL; put the quotes around it yourself. <code>%</code> and <code>_</code> are left as they are.
+doc.QueryInt = The first column of the first row as an integer; 0 when there is no row or the query fails.
+doc.QueryText = The first column of the first row as text; empty when there is no row or the query fails.
+doc.LibraryInit = Readies the client; kept for compatibility and nothing else is needed.
+doc.LibraryEnd = Ends the client; kept for compatibility.
+doc.ThreadInit = Kept for compatibility with the C API; a thread needs no setup. It returns false, which the C API uses for success.
+doc.ThreadEnd = Kept for compatibility; there is nothing to free.
+doc.Conn = Returns the connection as a shared <code>Connection</code>.
+
+ex.Database = db-mysql-Client
+ex.Database.handle = db-mysql-Client
+ex.Database.Kind = db-mysql-Client
+ex.Database.Ok = db-mysql-Client
+ex.Database.Ping = db-mysql-Client
+ex.Database.Exec = db-mysql-Client
+ex.Database.Query = db-mysql-Client
+ex.Database.Begin = db-mysql-Client
+ex.Database.LastInsertId = db-mysql-Client
+ex.Database.Changes = db-mysql-Client
+ex.Database.Error = db-mysql-Client
+ex.Database.Quote = db-mysql-Client
+ex.Database.Close = db-mysql-Client
+ex.Result = db-mysql-Client
+ex.Result.handle = db-mysql-Client
+ex.Result.row = db-mysql-Client
+ex.Result.Ok = db-mysql-Client
+ex.Result.Next = db-mysql-Client
+ex.Result.ColumnCount = db-mysql-Client
+ex.Result.ColumnName = db-mysql-Client
+ex.Result.ColumnType = db-mysql-Client
+ex.Result.IsNull = db-mysql-Client
+ex.Result.Text = db-mysql-Client
+ex.Result.Int = db-mysql-Client
+ex.Result.Int64 = db-mysql-Client
+ex.Result.Float = db-mysql-Client
+ex.Result.Close = db-mysql-Client
+ex.Txn = db-mysql-Client
+ex.Txn.handle = db-mysql-Client
+ex.Txn.Ok = db-mysql-Client
+ex.Txn.Exec = db-mysql-Client
+ex.Txn.Query = db-mysql-Client
+ex.Txn.Commit = db-mysql-Client
+ex.Txn.Rollback = db-mysql-Client
+ex.Available = db-mysql-Client
+ex.ClientVersion = db-mysql-Client
+ex.ServerVersion = db-mysql-Client
+ex.Open = db-mysql-Client
+ex.OpenFull = db-mysql-Client
+ex.Ok = db-mysql-Client
+ex.Close = db-mysql-Client
+ex.Ping = db-mysql-Client
+ex.SelectDB = db-mysql-Client
+ex.SetCharset = db-mysql-Client
+ex.Error = db-mysql-Client
+ex.Errno = db-mysql-Client
+ex.Exec = db-mysql-Client
+ex.AffectedRows = db-mysql-Client
+ex.Changes = db-mysql-Client
+ex.LastInsertId = db-mysql-Client
+ex.Begin = db-mysql-Client
+ex.Commit = db-mysql-Client
+ex.Rollback = db-mysql-Client
+ex.Autocommit = db-mysql-Client
+ex.Query = db-mysql-Client
+ex.QueryOk = db-mysql-Client
+ex.Next = db-mysql-Client
+ex.Finish = db-mysql-Client
+ex.ColumnCount = db-mysql-Client
+ex.RowCount = db-mysql-Client
+ex.ColumnName = db-mysql-Client
+ex.FieldType = db-mysql-Client
+ex.FieldKind = db-mysql-Client
+ex.ColumnKind = db-mysql-Client
+ex.Text = db-mysql-Client
+ex.Int = db-mysql-Client
+ex.Int64 = db-mysql-Client
+ex.Float = db-mysql-Client
+ex.IsNull = db-mysql-Client
+ex.Escape = db-mysql-Client
+ex.QueryInt = db-mysql-Client
+ex.QueryText = db-mysql-Client
+ex.LibraryInit = db-mysql-Client
+ex.LibraryEnd = db-mysql-Client
+ex.ThreadInit = db-mysql-Client
+ex.ThreadEnd = db-mysql-Client
+ex.Conn = db-mysql-Client

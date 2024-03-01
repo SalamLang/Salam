@@ -1,0 +1,172 @@
+package pkgmgr
+
+import os
+import str
+import fs
+import time
+import net.http
+import encoding.toml
+import encoding.value
+
+include pth "../sal_path.salam"
+
+const REGISTRY_URL := "https://raw.githubusercontent.com/SalamLang/Salam/main/registry/index.toml"
+
+const REGISTRY_MAX_AGE := 86400
+
+const SUMDB_URL := "https://raw.githubusercontent.com/SalamLang/Salam/main/registry/sums.txt"
+
+pub struct RegEntry:
+    pub name: str = ""
+    pub description: str = ""
+    pub tags: Vector<str> = Vector {}
+end
+
+func registry_text(why &: str): str:
+    mut src := os.Env("SALAM_REGISTRY")
+    if str.Len(src) == 0:
+        src = REGISTRY_URL
+    end
+    if not str.StartsWith(src, "http://") and not str.StartsWith(src, "https://"):
+        if not os.Exists(src):
+            why = "the registry file " + src + " does not exist"
+            ret ""
+        end
+        ret os.ReadFile(src)
+    end
+    cache := pth.PathJoin(PkgRoot(), "registry.toml")
+    if os.Exists(cache) and time.Now() - fs.ModTime(cache) < REGISTRY_MAX_AGE:
+        ret os.ReadFile(cache)
+    end
+    r := http.GetWith(src, api_headers())
+    if r.status == 200 and str.Len(r.body) > 0:
+        _mk := os.MkdirAll(PkgRoot())
+        _w := os.WriteFile(cache, r.body)
+        ret r.body
+    end
+    if os.Exists(cache):
+        ret os.ReadFile(cache)
+    end
+    why = "cannot download the package registry from " + src
+    ret ""
+end
+
+func lower_contains(hay: str, q: str): bool:
+    ret str.Contains(str.Lower(hay), str.Lower(q))
+end
+
+func scan_std(base: str, prefix: str, depth: int, q: str, out &: Vector<str>):
+    entries := os.ListDir(base)
+    defer entries.free()
+    repeat entries.len() in i:
+        name := entries.get(i)
+        if str.StartsWith(name, ".") or str.Equals(name, "native") or str.Equals(name, "examples"):
+            continue
+        end
+        dir := pth.PathJoin(base, name)
+        if not os.IsDir(dir):
+            continue
+        end
+        mut dotted := name
+        if str.Len(prefix) > 0:
+            dotted = prefix + "." + name
+        end
+        if os.Exists(pth.PathJoin(dir, name + ".salam")) and lower_contains(dotted, q):
+            out.push(dotted)
+        end
+        if depth < 3:
+            scan_std(dir, dotted, depth + 1, q, out)
+        end
+    end
+end
+
+
+func sumdb_text(): str:
+    mut src := os.Env("SALAM_SUMDB")
+    if str.Equals(src, "off"):
+        ret ""
+    end
+    if str.Len(src) == 0:
+        src = SUMDB_URL
+    end
+    if not str.StartsWith(src, "http://") and not str.StartsWith(src, "https://"):
+        if os.Exists(src):
+            ret os.ReadFile(src)
+        end
+        ret ""
+    end
+    cache := pth.PathJoin(PkgRoot(), "sumdb.txt")
+    if os.Exists(cache) and time.Now() - fs.ModTime(cache) < REGISTRY_MAX_AGE:
+        ret os.ReadFile(cache)
+    end
+    r := http.GetWith(src, api_headers())
+    if r.status == 200:
+        _mk := os.MkdirAll(PkgRoot())
+        _w := os.WriteFile(cache, r.body)
+        ret r.body
+    end
+    if os.Exists(cache):
+        ret os.ReadFile(cache)
+    end
+    ret ""
+end
+pub func LoadRegistry(out &: Vector<RegEntry>, why &: str): bool:
+    text := registry_text(why)
+    if str.Len(text) == 0:
+        ret false
+    end
+    mut ok := false
+    doc := toml.DecodeStrict(text, ok)
+    if not ok:
+        why = "the package registry is not valid TOML"
+        ret false
+    end
+    pkgs := value.ObjectGetOk(doc, "package", ok)
+    if not ok or not value.IsArray(pkgs):
+        ret true
+    end
+    repeat value.ArrayLen(pkgs) in i:
+        e := value.ArrayGet(pkgs, i)
+        mut r := RegEntry {}
+        r.name = toml_str(e, "name")
+        r.description = toml_str(e, "description")
+        toml_strs(e, "tags", r.tags)
+        if str.Len(r.name) > 0:
+            out.push(r)
+        end
+    end
+    ret true
+end
+
+pub func SearchStd(std_root: str, q: str, out &: Vector<str>):
+    scan_std(pth.PathJoin(std_root, "std"), "", 1, q, out)
+end
+
+pub func Matches(e: RegEntry, q: str): bool:
+    if lower_contains(e.name, q) or lower_contains(e.description, q):
+        ret true
+    end
+    repeat e.tags.len() in i:
+        if lower_contains(e.tags.get(i), q):
+            ret true
+        end
+    end
+    ret false
+end
+
+pub func PublishedSum(mod: str, version: str): str:
+    text := sumdb_text()
+    if str.Len(text) == 0:
+        ret ""
+    end
+    key := mod + "@" + version + " "
+    lines := str.Split(text, "\n")
+    defer lines.free()
+    repeat lines.len() in i:
+        l := str.Trim(lines.get(i))
+        if str.StartsWith(l, key):
+            ret str.Trim(str.Substr(l, str.Len(key), str.Len(l) - str.Len(key)))
+        end
+    end
+    ret ""
+end

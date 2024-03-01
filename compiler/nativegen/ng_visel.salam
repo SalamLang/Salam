@@ -1,0 +1,427 @@
+package nativegen
+
+const IF_W8 := 16384
+const VOP_MUL32 := 0x1F4
+const VOP_CMPEQ64 := 0x1E0
+const VOP_CMPGT64 := 0x1E1
+const VOP_CMPHI64 := 0x1E2
+const VOP_CMPHI32 := 0x1E3
+
+func vop(g &: Ng, opc: int, dst: int, src: int):
+    m := e_rr(g, M_VOP_RR, 8, dst, src)
+    g.mc.cc[m] = opc
+end
+
+func vcopy(g &: Ng, v: int): int:
+    r := wide_reg(g)
+    _c := e_copy(g, r, use_reg(g, v))
+    ret r
+end
+
+func rcopy(g &: Ng, src: int): int:
+    r := wide_reg(g)
+    _c := e_copy(g, r, src)
+    ret r
+end
+
+func vbyte_opc(op: int): int:
+    switch op:
+        OP_ADD: ret 0xFC end
+        OP_SUB: ret 0xF8 end
+        OP_AND: ret 0xDB end
+        OP_OR: ret 0xEB end
+        OP_XOR: ret 0xEF end
+    end
+    ret 0 - 1
+end
+
+func isel_vbyte_bin(g &: Ng, i: int):
+    r := vcopy(g, g.i_a[i])
+    vop(g, vbyte_opc(g.i_op[i]), r, use_reg(g, g.i_b[i]))
+    set_res(g, i, r)
+end
+
+func vbyte_ge(g &: Ng, x: int, y: int): int:
+    r := vcopy(g, x)
+    vop(g, 0xDE, r, use_reg(g, y))
+    vop(g, 0x74, r, use_reg(g, x))
+    ret r
+end
+
+func isel_vbyte_cmp(g &: Ng, i: int):
+    p := g.i_x[i]
+    a := g.i_a[i]
+    b := g.i_b[i]
+    mut r := 0 - 1
+    mut neg := false
+    switch p:
+        CC_EQ, CC_NE:
+            r = vcopy(g, a)
+            vop(g, 0x74, r, use_reg(g, b))
+            neg = p == CC_NE
+            break
+        end
+        CC_SGT, CC_SLE:
+            r = vcopy(g, a)
+            vop(g, 0x64, r, use_reg(g, b))
+            neg = p == CC_SLE
+            break
+        end
+        CC_SLT, CC_SGE:
+            r = vcopy(g, b)
+            vop(g, 0x64, r, use_reg(g, a))
+            neg = p == CC_SGE
+            break
+        end
+        CC_UGE, CC_ULT:
+            r = vbyte_ge(g, a, b)
+            neg = p == CC_ULT
+            break
+        end
+        CC_ULE, CC_UGT:
+            r = vbyte_ge(g, b, a)
+            neg = p == CC_UGT
+            break
+        end
+    end
+    if neg:
+        vnot(g, r)
+    end
+    set_res(g, i, r)
+end
+
+func isel_vbcast_byte(g &: Ng, i: int):
+    w := g.t_elem[g.i_ty[i]] == T_I16
+    k := gpr(g)
+    zx := e_rr(g, M_MOVZX_RR, 4, k, use_reg(g, g.i_a[i]))
+    g.mc.sz2[zx] = w ? 2 : 1
+    m := e_rr(g, M_IMUL_RRI, 4, k, k)
+    g.mc.imm[m] = (w ? 0x00010001 : 0x01010101) as i64
+    rb := wide_reg(g)
+    _x := e_rr(g, M_MOVQ_XG, 4, rb, k)
+    s := e_rr(g, M_PSHUFD, 16, rb, rb)
+    g.mc.imm[s] = 0 as i64
+    set_res(g, i, rb)
+end
+
+func vint_opc_e(op: int, e: int): int:
+    if e == T_I16:
+        switch op:
+            OP_ADD: ret 0xFD end
+            OP_SUB: ret 0xF9 end
+            OP_MUL: ret 0xD5 end
+        end
+    end
+    ret vint_opc(op, e == T_I64)
+end
+
+func vint_opc(op: int, q: bool): int:
+    switch op:
+        OP_ADD: ret q ? 0xD4 : 0xFE end
+        OP_SUB: ret q ? 0xFB : 0xFA end
+        OP_AND: ret 0xDB end
+        OP_OR: ret 0xEB end
+        OP_XOR: ret 0xEF end
+    end
+    ret 0 - 1
+end
+
+func vshi(g &: Ng, r: int, opc: int, ext: int, k: i64):
+    s := mi_new(g, M_VSHI, 16)
+    g.mc.r0[s] = r
+    g.mc.cc[s] = opc
+    g.mc.sz2[s] = ext
+    g.mc.imm[s] = k
+end
+
+func isel_vshift(g &: Ng, i: int):
+    op := g.i_op[i]
+    e := g.t_elem[g.i_ty[i]]
+    cb := g.i_b[i]
+    r := vcopy(g, g.i_a[i])
+    if g.v_kind[cb] == VK_INT:
+        vshi(g, r, e == T_I64 ? 0x73 : (e == T_I16 ? 0x71 : 0x72), op == OP_SHL ? 6 : (op == OP_LSHR ? 2 : 4), g.v_i[cb])
+        set_res(g, i, r)
+        ret
+    end
+    lo := e == T_I64 ? 3 : (e == T_I16 ? 1 : 2)
+    base := op == OP_SHL ? 0xF0 : (op == OP_LSHR ? 0xD0 : 0xE0)
+    vop(g, base + lo, r, use_reg(g, cb))
+    set_res(g, i, r)
+end
+
+func isel_vint_bin(g &: Ng, i: int):
+    op := g.i_op[i]
+    t := g.i_ty[i]
+    if op == OP_SHL or op == OP_LSHR or op == OP_ASHR:
+        isel_vshift(g, i)
+        ret
+    end
+    mut a := g.i_a[i]
+    mut b := g.i_b[i]
+    if op != OP_SUB and dies_here(g, b, i) and not dies_here(g, a, i) and not (g.v_kind[a] == VK_INS and g.i_op[g.v_def[a]] == OP_PHI):
+        tmp := a
+        a = b
+        b = tmp
+    end
+    r2 := vcopy(g, a)
+    vop(g, vint_opc_e(op, g.t_elem[t]), r2, use_reg(g, b))
+    set_res(g, i, r2)
+end
+
+func vshr64(g &: Ng, r: int, k: int):
+    s := mi_new(g, M_VSHI, 16)
+    g.mc.r0[s] = r
+    g.mc.cc[s] = 0x73
+    g.mc.sz2[s] = 2
+    g.mc.imm[s] = k as i64
+end
+
+func isel_vmul32(g &: Ng, i: int):
+    b := use_reg(g, g.i_b[i])
+    lo := vcopy(g, g.i_a[i])
+    if g.arch == NG_ARCH_A64:
+        vop(g, VOP_MUL32, lo, b)
+        set_res(g, i, lo)
+        ret
+    end
+    vop(g, 0xF4, lo, b)
+    hi := vcopy(g, g.i_a[i])
+    vshr64(g, hi, 32)
+    bh := wide_reg(g)
+    _c := e_copy(g, bh, b)
+    vshr64(g, bh, 32)
+    vop(g, 0xF4, hi, bh)
+    s1 := e_rr(g, M_PSHUFD, 16, lo, lo)
+    g.mc.imm[s1] = 8 as i64
+    s2 := e_rr(g, M_PSHUFD, 16, hi, hi)
+    g.mc.imm[s2] = 8 as i64
+    vop(g, 0x62, lo, hi)
+    set_res(g, i, lo)
+end
+
+func vnot(g &: Ng, r: int):
+    ones := wide_reg(g)
+    _c := e_copy(g, ones, r)
+    vop(g, 0x76, ones, ones)
+    vop(g, 0xEF, r, ones)
+end
+
+func vsplat32(g &: Ng, v: i64): int:
+    k := gpr(g)
+    _m := e_movi(g, k, v)
+    r := wide_reg(g)
+    _x := e_rr(g, M_MOVQ_XG, 4, r, k)
+    s := e_rr(g, M_PSHUFD, 16, r, r)
+    g.mc.imm[s] = 0 as i64
+    ret r
+end
+
+func vxor_bias(g &: Ng, src: int): int:
+    r := rcopy(g, src)
+    vop(g, 0xEF, r, vsplat32(g, 0x80000000 as i64))
+    ret r
+end
+
+func vcmp_eq(g &: Ng, e: int, a: int, b: int): int:
+    r := vcopy(g, a)
+    if e == T_I16:
+        vop(g, 0x75, r, use_reg(g, b))
+        ret r
+    end
+    if e == T_I64 and g.arch == NG_ARCH_A64:
+        vop(g, VOP_CMPEQ64, r, use_reg(g, b))
+        ret r
+    end
+    vop(g, 0x76, r, use_reg(g, b))
+    if e == T_I64:
+        t := wide_reg(g)
+        s := e_rr(g, M_PSHUFD, 16, t, r)
+        g.mc.imm[s] = 0xB1 as i64
+        vop(g, 0xDB, r, t)
+    end
+    ret r
+end
+
+func vcmp_gt(g &: Ng, e: int, a: int, b: int, uns: bool): int:
+    if e == T_I16:
+        if not uns:
+            r := vcopy(g, a)
+            vop(g, 0x65, r, use_reg(g, b))
+            ret r
+        end
+        t := vcopy(g, a)
+        vop(g, 0xD9, t, use_reg(g, b))
+        z := wide_reg(g)
+        _z := e_rr(g, M_XORPS, 16, z, z)
+        vop(g, 0x75, t, z)
+        vnot(g, t)
+        ret t
+    end
+    if g.arch == NG_ARCH_A64 and (e == T_I64 or uns):
+        r2 := vcopy(g, a)
+        vop(g, e == T_I64 ? (uns ? VOP_CMPHI64 : VOP_CMPGT64) : VOP_CMPHI32, r2, use_reg(g, b))
+        ret r2
+    end
+    if not uns:
+        r3 := vcopy(g, a)
+        vop(g, 0x66, r3, use_reg(g, b))
+        ret r3
+    end
+    ba := vxor_bias(g, use_reg(g, a))
+    vop(g, 0x66, ba, vxor_bias(g, use_reg(g, b)))
+    ret ba
+end
+
+func vgt_regs(g &: Ng, e: int, ra: int, rb: int, uns: bool): int:
+    if g.arch == NG_ARCH_A64 and (e == T_I64 or uns):
+        r := rcopy(g, ra)
+        vop(g, e == T_I64 ? (uns ? VOP_CMPHI64 : VOP_CMPGT64) : VOP_CMPHI32, r, rb)
+        ret r
+    end
+    if not uns:
+        r2 := rcopy(g, ra)
+        vop(g, 0x66, r2, rb)
+        ret r2
+    end
+    ba := vxor_bias(g, ra)
+    vop(g, 0x66, ba, vxor_bias(g, rb))
+    ret ba
+end
+
+func vpick(g &: Ng, m: int, a: int, b: int): int:
+    x := rcopy(g, m)
+    vop(g, 0xDB, x, a)
+    y := rcopy(g, m)
+    vop(g, 0xDF, y, b)
+    vop(g, 0xEB, x, y)
+    ret x
+end
+
+func isel_vredmm(g &: Ng, i: int):
+    a := g.i_a[i]
+    e := g.t_elem[g.v_ty[a]]
+    kind := g.i_x[i]
+    uns := kind >= 3
+    mx := kind == 1 or kind == 3
+    mut acc := use_reg(g, a)
+    repeat (e == T_I64 ? 1 : 2) in st:
+        sh := wide_reg(g)
+        s := e_rr(g, M_PSHUFD, 16, sh, acc)
+        g.mc.imm[s] = (st == 0 ? 0x4E : 0xB1) as i64
+        m := mx ? vgt_regs(g, e, acc, sh, uns) : vgt_regs(g, e, sh, acc, uns)
+        acc = vpick(g, m, acc, sh)
+    end
+    r := gpr(g)
+    _m := e_rr(g, M_MOVQ_GX, e == T_I64 ? 8 : 4, r, acc)
+    set_res(g, i, r)
+end
+
+func isel_vcmp(g &: Ng, i: int):
+    p := g.i_x[i]
+    a := g.i_a[i]
+    b := g.i_b[i]
+    e := g.t_elem[g.v_ty[a]]
+    mut r := 0 - 1
+    switch p:
+        CC_EQ, CC_NE:
+            r = vcmp_eq(g, e, a, b)
+            break
+        end
+        CC_SGT, CC_SLE:
+            r = vcmp_gt(g, e, a, b, false)
+            break
+        end
+        CC_SLT, CC_SGE:
+            r = vcmp_gt(g, e, b, a, false)
+            break
+        end
+        CC_UGT, CC_ULE:
+            r = vcmp_gt(g, e, a, b, true)
+            break
+        end
+        CC_ULT, CC_UGE:
+            r = vcmp_gt(g, e, b, a, true)
+            break
+        end
+    end
+    if p == CC_NE or p == CC_SLE or p == CC_SGE or p == CC_ULE or p == CC_UGE:
+        vnot(g, r)
+    end
+    set_res(g, i, r)
+end
+
+func isel_vsel(g &: Ng, i: int):
+    m := g.i_a[i]
+    bv := g.i_b[i]
+    mut r := 0 - 1
+    if dies_here(g, bv, i) and bv != m:
+        r = vcopy(g, bv)
+        vop(g, 0xDB, r, use_reg(g, m))
+    else:
+        r = vcopy(g, m)
+        vop(g, 0xDB, r, use_reg(g, bv))
+    end
+    t := vcopy(g, m)
+    vop(g, 0xDF, t, use_reg(g, g.i_c[i]))
+    vop(g, 0xEB, r, t)
+    set_res(g, i, r)
+end
+
+func isel_vbcast_int(g &: Ng, i: int):
+    q := g.i_ty[i] == T_V2I64
+    rb := wide_reg(g)
+    _m := e_rr(g, M_MOVQ_XG, q ? 8 : 4, rb, use_reg(g, g.i_a[i]))
+    if q:
+        vop(g, 0x6C, rb, rb)
+    else:
+        s := e_rr(g, M_PSHUFD, 16, rb, rb)
+        g.mc.imm[s] = 0 as i64
+    end
+    set_res(g, i, rb)
+end
+
+func isel_vstore_w8(g &: Ng, i: int):
+    r := vcopy(g, g.i_a[i])
+    k := gpr(g)
+    _m := e_movi(g, k, 255 as i64)
+    mk := wide_reg(g)
+    _x := e_rr(g, M_MOVQ_XG, 4, mk, k)
+    s := e_rr(g, M_PSHUFD, 16, mk, mk)
+    g.mc.imm[s] = 0 as i64
+    vop(g, 0xDB, r, mk)
+    vop(g, 0x6B, r, r)
+    vop(g, 0x67, r, r)
+    _st := e_mr(g, M_VST32, 4, mem_of(g, g.i_b[i], 0 as i64), r)
+end
+
+func isel_vload_w8(g &: Ng, i: int, m: Mem):
+    w := (g.i_x[i] & 3) == 2 ? 2 : 1
+    sgn := (g.i_x[i] & 4) != 0
+    r := wide_reg(g)
+    if w == 2:
+        _l2 := e_rm(g, M_FLD, 8, r, m)
+    else:
+        _l := e_rm(g, M_VLD32, 4, r, m)
+    end
+    if sgn:
+        if w == 1:
+            vop(g, 0x60, r, r)
+        end
+        vop(g, 0x61, r, r)
+        s := mi_new(g, M_VSHI, 16)
+        g.mc.r0[s] = r
+        g.mc.cc[s] = 0x72
+        g.mc.sz2[s] = 4
+        g.mc.imm[s] = (w == 1 ? 24 : 16) as i64
+        set_res(g, i, r)
+        ret
+    end
+    z := wide_reg(g)
+    _x := e_rr(g, M_XORPS, 8, z, z)
+    if w == 1:
+        vop(g, 0x60, r, z)
+    end
+    vop(g, 0x61, r, z)
+    set_res(g, i, r)
+end

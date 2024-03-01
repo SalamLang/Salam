@@ -1,0 +1,251 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package audio
+
+import math
+
+func _lerp(a: f64, b: f64, t: f64): f64:
+    ret a + (b - a) * t
+end
+
+@en "Channel"
+@fa "کانال"
+pub func Channel(c: Clip, ch: int): Clip:
+    if IsEmpty(c) or ch < 0 or ch >= c.channels:
+        ret Clip {}
+    end
+    mut out := New(c.rate, 1, c.frames)
+    if out.samples == null:
+        ret out
+    end
+    out.bits = c.bits
+    src := Data(c)
+    dst := Data(out)
+    mut f := 0
+    until f < c.frames:
+        dst[f] = src[f * c.channels + ch]
+        f += 1
+    end
+    ret out
+end
+
+@en "Deinterleave"
+@fa "جداسازی کانال‌ها"
+pub func Deinterleave(c: Clip): Vector<Clip>:
+    mut out := Vector {} as Vector<Clip>
+    if IsEmpty(c):
+        ret out
+    end
+    mut ch := 0
+    until ch < c.channels:
+        out.push(Channel(c, ch))
+        ch += 1
+    end
+    ret out
+end
+
+@en "Interleave"
+@fa "درهم‌بافی کانال‌ها"
+pub func Interleave(parts: Vector<Clip>): Clip:
+    if parts.len() == 0:
+        ret Clip {}
+    end
+    first := parts.get(0)
+    if IsEmpty(first):
+        ret Clip {}
+    end
+    channels := parts.len()
+    mut frames := first.frames
+    mut i := 1
+    until i < channels:
+        p := parts.get(i)
+        if p.rate != first.rate:
+            ret Clip {}
+        end
+        if p.frames < frames:
+            frames = p.frames
+        end
+        i += 1
+    end
+    mut out := New(first.rate, channels, frames)
+    if out.samples == null:
+        ret out
+    end
+    out.bits = first.bits
+    dst := Data(out)
+    mut ch := 0
+    until ch < channels:
+        part := parts.get(ch)
+        src := Data(part)
+        mut f := 0
+        until f < frames:
+            dst[f * channels + ch] = src[f * part.channels]
+            f += 1
+        end
+        ch += 1
+    end
+    ret out
+end
+
+@en "ToMono"
+@fa "به یک‌کاناله"
+pub func ToMono(c: Clip): Clip:
+    if IsEmpty(c):
+        ret Clip {}
+    end
+    if c.channels == 1:
+        ret Clone(c)
+    end
+    mut out := New(c.rate, 1, c.frames)
+    if out.samples == null:
+        ret out
+    end
+    out.bits = c.bits
+    src := Data(c)
+    dst := Data(out)
+    inv := 1.0 / (c.channels as f64)
+    mut f := 0
+    until f < c.frames:
+        mut sum := 0.0
+        mut ch := 0
+        until ch < c.channels:
+            sum += src[f * c.channels + ch] as f64
+            ch += 1
+        end
+        dst[f] = (sum * inv) as f32
+        f += 1
+    end
+    ret out
+end
+
+@en "ToStereo"
+@fa "به دوکاناله"
+pub func ToStereo(c: Clip): Clip:
+    ret ToChannels(c, 2)
+end
+
+@en "ToChannels"
+@fa "به کانال‌ها"
+pub func ToChannels(c: Clip, channels: int): Clip:
+    if IsEmpty(c) or channels <= 0:
+        ret Clip {}
+    end
+    if channels == c.channels:
+        ret Clone(c)
+    end
+    if channels == 1:
+        ret ToMono(c)
+    end
+    mut out := New(c.rate, channels, c.frames)
+    if out.samples == null:
+        ret out
+    end
+    out.bits = c.bits
+    src := Data(c)
+    dst := Data(out)
+    mut f := 0
+    until f < c.frames:
+        mut ch := 0
+        until ch < channels:
+            mut from := ch
+            if from >= c.channels:
+                from = c.channels - 1
+            end
+            dst[f * channels + ch] = src[f * c.channels + from]
+            ch += 1
+        end
+        f += 1
+    end
+    ret out
+end
+
+@en "ToRate"
+@fa "به نرخ"
+pub func ToRate(c: Clip, rate: int): Clip:
+    if IsEmpty(c) or rate <= 0:
+        ret Clip {}
+    end
+    if rate == c.rate:
+        ret Clone(c)
+    end
+    ratio := (rate as f64) / (c.rate as f64)
+    frames := ((c.frames as f64) * ratio) as int
+    if frames <= 0:
+        ret Clip {}
+    end
+    mut out := New(rate, c.channels, frames)
+    if out.samples == null:
+        ret out
+    end
+    out.bits = c.bits
+    src := Data(c)
+    dst := Data(out)
+    step := (c.rate as f64) / (rate as f64)
+    mut f := 0
+    until f < frames:
+        pos := (f as f64) * step
+        mut i0 := pos as int
+        if i0 < 0:
+            i0 = 0
+        end
+        if i0 > c.frames - 1:
+            i0 = c.frames - 1
+        end
+        mut i1 := i0 + 1
+        if i1 > c.frames - 1:
+            i1 = c.frames - 1
+        end
+        t := pos - (i0 as f64)
+        mut ch := 0
+        until ch < c.channels:
+            a := src[i0 * c.channels + ch] as f64
+            b := src[i1 * c.channels + ch] as f64
+            dst[f * c.channels + ch] = _lerp(a, b, t) as f32
+            ch += 1
+        end
+        f += 1
+    end
+    ret out
+end
+
+@en "ToBits"
+@fa "به بیت"
+pub func ToBits(c: Clip, bits: int): Clip:
+    if IsEmpty(c) or bits <= 1 or bits > 32:
+        ret Clip {}
+    end
+    mut out := Clone(c)
+    if out.samples == null:
+        ret out
+    end
+    out.bits = bits
+    steps := math.Pow(2.0, (bits - 1) as f64)
+    p := Data(out)
+    n := SampleCount(out)
+    mut i := 0
+    until i < n:
+        v := (p[i] as f64) * steps
+        mut q := math.Floor(v + 0.5)
+        if q > steps - 1.0:
+            q = steps - 1.0
+        end
+        if q < 0.0 - steps:
+            q = 0.0 - steps
+        end
+        p[i] = (q / steps) as f32
+        i += 1
+    end
+    ret out
+end

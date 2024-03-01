@@ -1,0 +1,176 @@
+package docgen
+
+import str
+
+include at "../ast.salam"
+
+func walk_member(db &: DocDb, a: at.Ast, mid: int, file_idx: int, parent: int, blocks: Vector<CommentBlock>):
+    mn := at.Get(a, mid)
+    if is_placeholder(mn.name):
+        ret
+    end
+    mut mkind := 0 - 1
+    mut msig := ""
+    if mn.kind == at.AST_FIELD:
+        mkind = DOC_FIELD
+        msig = field_sig(a, mid)
+    else mn.kind == at.AST_FUNC_DEF:
+        mkind = DOC_FUNC
+        msig = func_signature(a, mid)
+    else:
+        ret
+    end
+    midx := db_add_decl(
+        db, mkind, mn.name, msig, mn.is_pub, mn.is_deprecated, file_idx, mn.begin_line as int, parent
+    )
+    attach_aliases(db, a, mid, midx)
+    attach_doc(db, blocks, midx, mn.begin_line as int)
+end
+
+func static_owner(name: str): str:
+    if not str.StartsWith(name, "__"):
+        ret ""
+    end
+    rest := name.substr(2, name.len() - 2)
+    cut := rest.find("__")
+    if cut <= 0:
+        ret ""
+    end
+    ret rest.substr(0, cut)
+end
+
+func find_struct(db: DocDb, name: str): int:
+    mut i := 0
+    until i < db.decls.len():
+        d := db.decls.get(i)
+        if d.kind == DOC_STRUCT and d.parent < 0 and d.name == name:
+            ret i
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func walk_static(db &: DocDb, a: at.Ast, id: int, file_idx: int, owner_idx: int, owner: str, blocks: Vector<CommentBlock>):
+    n := at.Get(a, id)
+    prefix := "__" + owner + "__"
+    short := n.name.substr(prefix.len(), n.name.len() - prefix.len())
+    sig := str.Replace(func_signature(a, id), "func " + n.name, "static func " + short)
+    midx := db_add_decl(db, DOC_FUNC, short, sig, n.is_pub, n.is_deprecated, file_idx, n.begin_line as int, owner_idx)
+    cnt := at.AliasCount(a, id)
+    mut i := 0
+    until i + 1 < cnt:
+        val := at.Alias(a, id, i + 1)
+        db_add_alias(db, midx, at.Alias(a, id, i), str.StartsWith(val, prefix) ? val.substr(prefix.len(), val.len() - prefix.len()) : val)
+        i += 2
+    end
+    attach_doc(db, blocks, midx, n.begin_line as int)
+end
+
+func walk_top(db &: DocDb, a: at.Ast, id: int, file_idx: int, blocks: Vector<CommentBlock>):
+    n := at.Get(a, id)
+    if is_placeholder(n.name) or n.synthetic:
+        ret
+    end
+    mut kind := 0 - 1
+    mut sig := ""
+    if n.kind == at.AST_CONST_DECL:
+        kind = DOC_CONST
+        sig = const_sig(a, id)
+    else n.kind == at.AST_VAR_DECL:
+        kind = DOC_VAR
+        sig = var_decl_sig(a, id)
+    else n.kind == at.AST_TYPE_ALIAS:
+        kind = DOC_TYPE
+        sig = "type " + n.name
+        alias_ty := type_str_or_blank(a, n.ty)
+        if alias_ty.len() != 0:
+            sig = sig + " = " + alias_ty
+        end
+    else n.kind == at.AST_FUNC_DEF:
+        kind = DOC_FUNC
+        sig = func_signature(a, id)
+    else n.kind == at.AST_STRUCT_DEF:
+        kind = DOC_STRUCT
+        sig = "struct " + n.name + typarams_str(a, id)
+    else n.kind == at.AST_INTERFACE_DEF:
+        kind = DOC_INTERFACE
+        sig = "interface " + n.name + typarams_str(a, id)
+    else n.kind == at.AST_ENUM_DEF:
+        kind = DOC_ENUM
+        sig = "enum " + n.name
+    else n.kind == at.AST_IMPL_DEF:
+        kind = DOC_IMPL
+        sig = "impl " + n.name
+        impl_ty := type_str_or_blank(a, n.ty)
+        if impl_ty.len() != 0:
+            sig = sig + " on " + impl_ty
+        end
+    else:
+        ret
+    end
+    if n.kind == at.AST_FUNC_DEF and n.is_static:
+        owner := static_owner(n.name)
+        owner_idx := owner.len() > 0 ? find_struct(db, owner) : 0 - 1
+        if owner_idx >= 0:
+            walk_static(db, a, id, file_idx, owner_idx, owner, blocks)
+            ret
+        end
+    end
+    idx := db_add_decl(db, kind, n.name, sig, n.is_pub, n.is_deprecated, file_idx, n.begin_line as int, 0 - 1)
+    attach_aliases(db, a, id, idx)
+    attach_doc(db, blocks, idx, n.begin_line as int)
+
+    if n.kind == at.AST_STRUCT_DEF or n.kind == at.AST_INTERFACE_DEF or n.kind == at.AST_IMPL_DEF:
+        mcount := at.ChildCount(a, id)
+        mut i := 0
+        until i < mcount:
+            walk_member(db, a, at.Child(a, id, i), file_idx, idx, blocks)
+            i += 1
+        end
+    else n.kind == at.AST_ENUM_DEF:
+        mcount := at.ChildCount(a, id)
+        mut i2 := 0
+        until i2 < mcount:
+            mid := at.Child(a, id, i2)
+            mn := at.Get(a, mid)
+            midx := db_add_decl(
+                db, DOC_ENUM_MEMBER, mn.name, enum_member_sig(a, mid), true, false, file_idx, mn.begin_line as int, idx
+            )
+            attach_aliases(db, a, mid, midx)
+            attach_doc(db, blocks, midx, mn.begin_line as int)
+            i2 += 1
+        end
+    end
+end
+
+func kind_name(k: int): str:
+    if k == DOC_CONST:
+        ret "const"
+    end
+    if k == DOC_VAR:
+        ret "var"
+    end
+    if k == DOC_TYPE:
+        ret "type"
+    end
+    if k == DOC_STRUCT:
+        ret "struct"
+    end
+    if k == DOC_INTERFACE:
+        ret "interface"
+    end
+    if k == DOC_ENUM:
+        ret "enum"
+    end
+    if k == DOC_IMPL:
+        ret "impl"
+    end
+    if k == DOC_FUNC:
+        ret "func"
+    end
+    if k == DOC_FIELD:
+        ret "field"
+    end
+    ret "member"
+end

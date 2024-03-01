@@ -1,0 +1,271 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package db
+
+import conv
+
+@en "MIGRATION_TABLE"
+@fa "جدول مهاجرت"
+pub const MIGRATION_TABLE := "schema_migrations"
+
+@en "Migration"
+@fa "مهاجرت"
+pub struct Migration:
+    @en "version"
+    @fa "نسخه"
+    pub version: int = 0
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "up"
+    @fa "اعمال"
+    pub up: str = ""
+    @en "down"
+    @fa "برگرداندن"
+    pub down: str = ""
+end
+
+@en "Migrator"
+@fa "مهاجرت گر"
+pub struct Migrator:
+    @en "items"
+    @fa "مهاجرت‌ها"
+    pub items: Vector<Migration>
+    @en "table"
+    @fa "جدول"
+    pub table: str = ""
+end
+
+func _TrimSpace(s: str): str:
+    mut start := 0
+    mut stop := len(s)
+    until start < stop and _IsSpace(s[start]):
+        start = start + 1
+    end
+    until stop > start and _IsSpace(s[stop - 1]):
+        stop = stop - 1
+    end
+    mut out := ""
+    mut i := start
+    until i < stop:
+        out = out + s[i]
+        i = i + 1
+    end
+    ret out
+end
+
+func _IsSpace(c: char): bool:
+    ret c == ' ' or c == '\t' or c == '\n' or c == '\r'
+end
+
+func _ApplyUp(m: Migrator, c: dyn Connection, step: Migration): bool:
+    stmts := SplitStatements(step.up)
+    defer stmts.free()
+    stmts.push(
+        "INSERT INTO " + m.table + " (version, name, applied_at) VALUES (" + conv.FormatInt(step.version as i64) + ", " + QuoteLiteral(step.name) + ", CURRENT_TIMESTAMP)"
+    )
+    ret InTx(c, stmts)
+end
+
+func _ApplyDown(m: Migrator, c: dyn Connection, step: Migration): bool:
+    if step.down == "":
+        ret false
+    end
+    stmts := SplitStatements(step.down)
+    defer stmts.free()
+    stmts.push("DELETE FROM " + m.table + " WHERE version = " + conv.FormatInt(step.version as i64))
+    ret InTx(c, stmts)
+end
+
+@en "NewMigrator"
+@fa "مهاجرت گر جدید"
+pub func NewMigrator(): Migrator:
+    ret Migrator { items = Vector {} as Vector<Migration>, table = MIGRATION_TABLE }
+end
+
+@en "NewMigratorIn"
+@fa "مهاجرت گر در"
+pub func NewMigratorIn(table: str): Migrator:
+    ret Migrator { items = Vector {} as Vector<Migration>, table = table }
+end
+
+@en "FreeMigrator"
+@fa "آزادکردن مهاجرت گر"
+pub func FreeMigrator(m &: Migrator):
+    m.items.free()
+end
+
+@en "AddMigration"
+@fa "افزودن مهاجرت"
+pub func AddMigration(m &: Migrator, version: int, name: str, up: str, down: str):
+    step := Migration { version = version, name = name, up = up, down = down }
+    mut i := 0
+    until i < m.items.len():
+        if m.items.get(i).version > version:
+            m.items.insert(i, step)
+            ret
+        end
+        i = i + 1
+    end
+    m.items.push(step)
+end
+
+@en "MigrationCount"
+@fa "تعداد مهاجرت"
+pub func MigrationCount(m: Migrator): int: ret m.items.len() end
+
+@en "SplitStatements"
+@fa "جداکردن دستورها"
+pub func SplitStatements(sql: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut cur := ""
+    mut inquote := false
+    mut i := 0
+    until i < len(sql):
+        ch := sql[i]
+        if ch == '\'':
+            inquote = not inquote
+            cur = cur + ch
+        else:
+            if ch == ';' and not inquote:
+                trimmed := _TrimSpace(cur)
+                if trimmed != "":
+                    out.push(trimmed)
+                end
+                cur = ""
+            else:
+                cur = cur + ch
+            end
+        end
+        i = i + 1
+    end
+    last := _TrimSpace(cur)
+    if last != "":
+        out.push(last)
+    end
+    ret out
+end
+
+@en "EnsureTable"
+@fa "ساخت جدول"
+pub func EnsureTable(m: Migrator, c: dyn Connection): int:
+    ret c.Exec(
+        "CREATE TABLE IF NOT EXISTS " + m.table + " (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)"
+    )
+end
+
+@en "SchemaVersion"
+@fa "نسخه طرح‌واره"
+pub func SchemaVersion(m: Migrator, c: dyn Connection): int:
+    EnsureTable(m, c)
+    ret QueryInt(c, "SELECT COALESCE(MAX(version), 0) FROM " + m.table)
+end
+
+@en "IsApplied"
+@fa "اعمال شده"
+pub func IsApplied(m: Migrator, c: dyn Connection, version: int): bool:
+    EnsureTable(m, c)
+    ret QueryInt(
+        c, "SELECT COUNT(*) FROM " + m.table + " WHERE version = " + conv.FormatInt(version as i64)
+    ) > 0
+end
+
+@en "PendingCount"
+@fa "تعداد در انتظار"
+pub func PendingCount(m: Migrator, c: dyn Connection): int:
+    at := SchemaVersion(m, c)
+    mut n := 0
+    mut i := 0
+    until i < m.items.len():
+        if m.items.get(i).version > at:
+            n = n + 1
+        end
+        i = i + 1
+    end
+    ret n
+end
+
+@en "MigrateUp"
+@fa "مهاجرت به بالا"
+pub func MigrateUp(m: Migrator, c: dyn Connection): int:
+    at := SchemaVersion(m, c)
+    mut done := 0
+    mut i := 0
+    until i < m.items.len():
+        step := m.items.get(i)
+        if step.version > at:
+            if not _ApplyUp(m, c, step):
+                ret done
+            end
+            done = done + 1
+        end
+        i = i + 1
+    end
+    ret done
+end
+
+@en "Rollback"
+@fa "بازگردانی"
+pub func Rollback(m: Migrator, c: dyn Connection): bool:
+    at := SchemaVersion(m, c)
+    if at == 0:
+        ret false
+    end
+    mut i := m.items.len() - 1
+    until i >= 0:
+        step := m.items.get(i)
+        if step.version == at:
+            ret _ApplyDown(m, c, step)
+        end
+        i = i - 1
+    end
+    ret false
+end
+
+@en "MigrateTo"
+@fa "مهاجرت به"
+pub func MigrateTo(m: Migrator, c: dyn Connection, target: int): int:
+    mut moved := 0
+    mut at := SchemaVersion(m, c)
+    until at < target:
+        mut i := 0
+        mut ran := false
+        until i < m.items.len():
+            step := m.items.get(i)
+            if step.version > at and step.version <= target:
+                if not _ApplyUp(m, c, step):
+                    ret moved
+                end
+                moved = moved + 1
+                ran = true
+                i = m.items.len()
+            else:
+                i = i + 1
+            end
+        end
+        if not ran:
+            ret moved
+        end
+        at = SchemaVersion(m, c)
+    end
+    until at > target:
+        if not Rollback(m, c):
+            ret moved
+        end
+        moved = moved + 1
+        at = SchemaVersion(m, c)
+    end
+    ret moved
+end

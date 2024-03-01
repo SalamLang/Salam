@@ -1,0 +1,143 @@
+pkg.en = archive
+pkg.name = archive
+pkg.group = Encoding and data
+pkg.summary = Making and opening zip and tar archives, reading RAR, and gzipping a file.
+pkg.title = The archive package in Salam | zip and tar
+pkg.description = The archive package in Salam: making, listing and extracting zip and tar, reading RAR and gzipping a file, with examples.
+pkg.intro <<
+<p>An archive gathers several files into one. <strong>Zip</strong> compresses each file on its own; <strong>tar</strong> only puts the files one after another and is usually gzipped afterwards (<code>.tar.gz</code>).</p>
+<p>The functions work both in memory and on files. They take the archive data as an address and a length, such as <code>b.data</code> and <code>b.len</code> of a byte buffer.</p>
+
+<p>The compression itself comes from <a href="/std/compress/">compress</a>; use that package directly to gzip a single file or stream. For reading and writing the files on disk around an archive, see <a href="/std/fs/file/">fs/file</a>.</p>
+<h3 id="limits">Limits to know about</h3>
+<ul>
+<li><strong>Zip:</strong> no zip64, so archives and entries must stay under 2 GB; only methods 0 (stored) and 8 (DEFLATE) are read, so entries packed with bzip2, LZMA or zstd fail to extract; encrypted entries are refused; the CRC-32 is not checked on extract.</li>
+<li><strong>Zip names and dates:</strong> new zips do not set the UTF-8 flag, so tools that assume the old DOS code page, such as Windows Explorer, may show Persian file names garbled, and every entry is dated 1 January 1980. <code>Entry.mtime</code> is always 0 for zip entries.</li>
+<li><strong>Tar:</strong> names longer than 100 bytes are cut, both when writing and reading, and the ustar prefix field and GNU or PAX long names are not used. Links and other special entries are listed as ordinary files of size 0. New entries get mode 644 and a time of 0.</li>
+<li><strong>RAR:</strong> listing works for RAR 4 and 5, but only entries stored without compression can be extracted.</li>
+</ul>
+
+<p>The guide below shows the usual jobs: zipping a set of files, making and reading a <code>.tar.gz</code>, telling formats apart by their first bytes, and extracting without letting an archive write outside the target folder.</p>
+
+<h2 id="guide-zip">Zip a set of files</h2>
+<p>Each file you put into a zip is a <code>ZipFileInput</code>: its path inside the archive, the address and length of its bytes, and the method, 8 for DEFLATE or 0 to store it as it is. A name that ends with <code>/</code> is a folder. <code>ZipCreateFile</code> writes the archive to disk and returns false when it cannot; <code>ZipCreate</code> keeps it in memory, for example to send it as an HTTP response.</p>
+{{example.archive-guide-bundle}}
+<p>Text shrinks well. The logo is already compressed, so it uses method 0: running DEFLATE on it again would only cost time and could even make it bigger. The same rule holds for JPEG, PNG, MP4 and other zips.</p>
+
+<h2 id="guide-targz">Make and read a .tar.gz</h2>
+<p>Tar does not compress. It puts each file after a 512 byte header and pads its contents to a multiple of 512 bytes, so three small files already take 3.5 KB. The usual answer is to gzip the whole tar, and all that padding then nearly disappears. In memory that is <code>TarCreate</code> followed by <code>compress.GzipCompressBuf</code>; for a tar that is already on disk, <code>GzipCompressFile</code> and <code>GzipDecompressFile</code> do it file to file.</p>
+{{example.archive-guide-targz}}
+<p>Reading goes the other way: gunzip with <code>compress.GzipDecompressBuf</code>, check <code>ok</code>, then <code>TarList</code> and <code>TarExtractByName</code> on the plain tar. Directory entries in a tar have size 0 and <code>is_dir</code> set.</p>
+
+<h2 id="guide-detect">Tell the format from the first bytes</h2>
+<p>A file name can lie, the bytes cannot. Every format starts with a fixed signature, so a program that accepts uploads should look at the bytes before it picks a reader:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Format</th><th>Signature</th><th>Check</th></tr></thead>
+<tbody>
+<tr><td>zip</td><td><code>50 4b 03 04</code> (<code>PK</code>) at the start</td><td>compare the first four bytes</td></tr>
+<tr><td>gzip</td><td><code>1f 8b</code> at the start</td><td>compare the first two bytes</td></tr>
+<tr><td>RAR</td><td><code>Rar!</code> at the start</td><td><code>IsRar</code></td></tr>
+<tr><td>tar</td><td><code>ustar</code> at byte 257</td><td>compare five bytes from offset 257</td></tr>
+</tbody>
+</table></div>
+{{example.archive-guide-detect}}
+<p>The gzip sample is the tar from the line above it, gzipped, so the program opens it and counts the entries of the tar inside. A plain text file matches nothing.</p>
+
+<h2 id="guide-extract">Extract safely</h2>
+<p><code>ZipExtractAll</code> and <code>TarExtractAll</code> create the folders they need under the target directory. An archive from someone else can hold names like <code>../escape.txt</code> or <code>/etc/passwd</code> that would land outside it; both functions skip such entries, write the rest, and return false so you know something was left out. <code>ZipExtractByName</code> and <code>TarExtractByName</code> set <code>ok</code> to false when the name is not in the archive.</p>
+{{example.archive-guide-extract}}
+<p>A false result from an extract call is therefore not always a disk error: check the entry names with <code>ZipList</code> or <code>TarList</code> when you need to tell the two apart.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Files for Windows users or a browser download</td><td><code>ZipCreate</code>, <code>ZipCreateFile</code></td></tr>
+<tr><td>A backup or a release bundle on Unix</td><td><code>TarCreate</code>, then <code>compress.GzipCompressBuf</code></td></tr>
+<tr><td>See what is inside</td><td><code>ZipList</code>, <code>TarList</code>, <code>RarList</code>, then <code>FreeEntries</code></td></tr>
+<tr><td>One file out of an archive</td><td><code>ZipExtractByName</code>, <code>TarExtractByName</code></td></tr>
+<tr><td>Everything into a folder</td><td><code>ZipExtractAll</code>, <code>TarExtractAll</code></td></tr>
+<tr><td>A RAR file</td><td><code>RarList</code>; <code>RarExtractByName</code> only for entries stored without compression</td></tr>
+<tr><td>Bytes from and to disk</td><td><code>ReadBinaryFile</code>, <code>WriteBinaryFileBuf</code></td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.Entry = One archive entry.
+doc.Entry.name = The name and path inside the archive.
+doc.Entry.size = The original size in bytes.
+doc.Entry.compressed_size = The compressed size.
+doc.Entry.is_dir = The entry is a directory.
+doc.Entry.method = The compression method: zero for plain storage, 8 for DEFLATE.
+doc.Entry.crc32 = The checksum of the contents.
+doc.Entry.mtime = The modification time in seconds since the Unix epoch, as stored in a tar header; always 0 for zip entries.
+doc.FreeEntries = Frees the memory of the entry list.
+doc.ZipFileInput = One file to put in a zip.
+doc.ZipFileInput.name = The name inside the archive; a directory name ends with <code>/</code>. Use <code>/</code> between folders, never <code>\</code>.
+doc.ZipFileInput.data_ptr = The address of the contents.
+doc.ZipFileInput.data_len = The length of the contents.
+doc.ZipFileInput.method = Zero for plain storage, 8 for DEFLATE.
+doc.MakeZipFileInput = Makes one zip input.
+doc.ZipCreate = Builds a zip archive in memory.
+doc.ZipCreateFile = Writes a zip archive to a file.
+doc.ZipList = The entries of a zip in memory.
+doc.ZipExtractByName = Pulls out the contents of one entry; <code>ok</code> becomes false when the name is not found, the entry is encrypted, or its method is not 0 or 8. The CRC is not checked.
+doc.ZipExtractByNameMax = Same as <code>ZipExtractByName</code>, but <code>ok</code> becomes false when the entry would be larger than <code>max</code> bytes, checked while it is inflated. Use it on archives from other people, where a few kilobytes can claim to hold gigabytes.
+doc.ZipExtractAll = Writes every entry into the target directory. When the data is not a zip it has no entries and nothing is written.
+doc.TarFileInput = One file to put in a tar.
+doc.TarFileInput.name = The name inside the archive, at most 100 bytes; a longer name is cut.
+doc.TarFileInput.data_ptr = The address of the contents.
+doc.TarFileInput.data_len = The length of the contents.
+doc.TarFileInput.is_dir = The input is a directory.
+doc.MakeTarFileInput = Makes one tar input.
+doc.TarCreate = Builds a tar archive in memory, in the ustar format; tar does not compress, so gzip the result for that.
+doc.TarCreateFile = Writes a tar archive to a file.
+doc.TarList = The entries of a tar in memory.
+doc.TarExtractByName = The contents of one tar entry.
+doc.TarExtractAll = Writes every tar entry into the target directory.
+doc.IsRar = True when the data starts with the RAR signature.
+doc.RarList = The entries of a RAR archive.
+doc.RarExtractByName = The contents of a RAR entry that was stored without compression.
+doc.RarExtractAll = Pulls out every RAR entry.
+doc.GzipCompressFile = Gzips a file.
+doc.GzipDecompressFile = Decompresses a gzip file.
+doc.ReadBinaryFile = Reads every byte of a file into a buffer.
+doc.WriteBinaryFile = Writes <code>n</code> bytes to a file.
+doc.WriteBinaryFileBuf = Writes a buffer to a file.
+doc.EnsureDir = Makes the directory and the ones above it, when they are not there.
+doc.LEGet16 = Reads a 16 bit little-endian integer from the given place in memory.
+doc.LEGet32 = Reads a 32 bit little-endian integer.
+doc.LEPut16 = Adds a 16 bit integer to a buffer, little-endian.
+doc.LEPut32 = Adds a 32 bit integer, little-endian.
+
+ex.Entry = archive-Zip
+ex.FreeEntries = archive-Zip
+ex.ZipFileInput = archive-Zip
+ex.MakeZipFileInput = archive-Zip
+ex.ZipCreate = archive-Zip
+ex.ZipCreateFile = archive-Zip
+ex.ZipList = archive-Zip
+ex.ZipExtractByName = archive-Zip
+ex.ZipExtractByNameMax = archive-Zip
+ex.ZipExtractAll = archive-Zip
+ex.IsRar = archive-Zip
+ex.RarList = archive-Zip
+ex.RarExtractByName = archive-Zip
+ex.RarExtractAll = archive-Zip
+ex.ReadBinaryFile = archive-Zip
+ex.TarFileInput = archive-Tar
+ex.MakeTarFileInput = archive-Tar
+ex.TarCreate = archive-Tar
+ex.TarCreateFile = archive-Tar
+ex.TarList = archive-Tar
+ex.TarExtractByName = archive-Tar
+ex.TarExtractAll = archive-Tar
+ex.GzipCompressFile = archive-Tar
+ex.GzipDecompressFile = archive-Tar
+ex.WriteBinaryFile = archive-Tar
+ex.WriteBinaryFileBuf = archive-Tar
+ex.EnsureDir = archive-Tar
+ex.LEGet16 = archive-Tar
+ex.LEGet32 = archive-Tar
+ex.LEPut16 = archive-Tar
+ex.LEPut32 = archive-Tar

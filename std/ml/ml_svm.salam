@@ -1,0 +1,461 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ml
+
+import math
+import matrix
+
+@en "KERNEL_LINEAR"
+@fa "هسته خطی"
+pub const KERNEL_LINEAR := 0
+
+@en "KERNEL_RBF"
+@fa "هسته شعاعی"
+pub const KERNEL_RBF := 1
+
+@en "KERNEL_POLY"
+@fa "هسته چندجمله‌ای"
+pub const KERNEL_POLY := 2
+
+@en "LinearSVM"
+@fa "ماشین بردار پشتیبان خطی"
+pub struct LinearSVM:
+    @en "c"
+    @fa "جریمه"
+    pub c: f64 = 1.0
+    @en "max_iter"
+    @fa "بیشترین دور"
+    pub max_iter: int = 1000
+    @en "tol"
+    @fa "رواداری"
+    pub tol: f64 = 0.0001
+    @en "seed"
+    @fa "بذر"
+    pub seed: i64 = 42
+    @en "coef"
+    @fa "ضریب‌ها"
+    pub coef: matrix.Matrix = matrix.Matrix {}
+    @en "intercept"
+    @fa "عرض از مبدأ"
+    pub intercept: matrix.Matrix = matrix.Matrix {}
+    @en "n_classes"
+    @fa "شمار رده‌ها"
+    pub n_classes: int = 0
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    pub func fit(x &: matrix.Matrix, y &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty() or y.rows != x.rows or y.cols != 1: ret false end
+        k := CountClasses(y)
+        if k < 2: ret false end
+        p := x.cols
+        mut ncol := k
+        if k == 2: ncol = 1 end
+        matrix.Free(this.coef)
+        matrix.Free(this.intercept)
+        this.coef = matrix.Zeros(p, ncol)
+        this.intercept = matrix.Zeros(1, ncol)
+        repeat ncol in c:
+            mut target := c
+            if k == 2: target = 1 end
+            mut w := matrix.Zeros(p + 1, 1)
+            _dual_cd(x, y, target, this.c, this.max_iter, this.tol, this.seed + (c as i64), w)
+            repeat p in j: this.coef.set(j, c, w.at(j, 0)) end
+            this.intercept.set(0, c, w.at(p, 0))
+            matrix.Free(w)
+        end
+        this.n_classes = k
+        this.ok = true
+        ret true
+    end
+
+    @en "decision"
+    @fa "تصمیم"
+    pub func decision(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false or x.cols != this.coef.rows: ret matrix.Matrix {} end
+        mut d := matrix.MatMul(x, this.coef)
+        repeat d.rows in i:
+            repeat d.cols in c: d.add_at(i, c, this.intercept.at(0, c)) end
+        end
+        ret d
+    end
+
+    @en "predict"
+    @fa "پیش‌بینی"
+    pub func predict(x &: matrix.Matrix): matrix.Matrix:
+        mut d := this.decision(x)
+        if d.is_empty(): ret d end
+        mut out := matrix.Zeros(x.rows, 1)
+        repeat x.rows in i:
+            if this.n_classes == 2:
+                if d.at(i, 0) > 0.0: out.set(i, 0, 1.0) end
+            else:
+                mut best := 0
+                repeat d.cols in c:
+                    if d.at(i, c) > d.at(i, best): best = c end
+                end
+                out.set(i, 0, best as f64)
+            end
+        end
+        matrix.Free(d)
+        ret out
+    end
+
+    @en "score"
+    @fa "امتیاز"
+    pub func score(x &: matrix.Matrix, y &: matrix.Matrix): f64:
+        mut p := this.predict(x)
+        if p.is_empty(): ret 0.0 end
+        r := Accuracy(y, p)
+        matrix.Free(p)
+        ret r
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        matrix.Free(this.coef)
+        matrix.Free(this.intercept)
+    end
+end
+
+@en "SVC"
+@fa "دسته‌بند بردار پشتیبان"
+pub struct SVC:
+    @en "c"
+    @fa "جریمه"
+    pub c: f64 = 1.0
+    @en "kernel"
+    @fa "هسته"
+    pub kernel: int = KERNEL_RBF
+    @en "gamma"
+    @fa "گاما"
+    pub gamma: f64 = 0.0
+    @en "degree"
+    @fa "درجه"
+    pub degree: int = 3
+    @en "coef0"
+    @fa "ضریب صفر"
+    pub coef0: f64 = 1.0
+    @en "max_passes"
+    @fa "بیشترین دور"
+    pub max_passes: int = 20
+    @en "tol"
+    @fa "رواداری"
+    pub tol: f64 = 0.001
+    @en "seed"
+    @fa "بذر"
+    pub seed: i64 = 42
+    @en "support"
+    @fa "بردارهای پشتیبان"
+    pub support: matrix.Matrix = matrix.Matrix {}
+    @en "dual"
+    @fa "ضریب‌های دوگان"
+    pub dual: matrix.Matrix = matrix.Matrix {}
+    @en "bias"
+    @fa "سوگیری"
+    pub bias: matrix.Matrix = matrix.Matrix {}
+    @en "n_classes"
+    @fa "شمار رده‌ها"
+    pub n_classes: int = 0
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    pub func fit(x &: matrix.Matrix, y &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty() or y.rows != x.rows or y.cols != 1: ret false end
+        k := CountClasses(y)
+        if k < 2: ret false end
+        n := x.rows
+        p := x.cols
+        mut gm := this.gamma
+        if gm <= 0.0: gm = 1.0 / (p as f64) end
+        mut ncol := k
+        if k == 2: ncol = 1 end
+        matrix.Free(this.support)
+        matrix.Free(this.dual)
+        matrix.Free(this.bias)
+        this.support = matrix.Clone(x)
+        this.dual = matrix.Zeros(n, ncol)
+        this.bias = matrix.Zeros(1, ncol)
+        mut km := matrix.Zeros(n, n)
+        repeat n in i:
+            repeat n in j:
+                if j >= i:
+                    v := _kernel(x, i, x, j, this.kernel, gm, this.degree, this.coef0)
+                    km.set(i, j, v)
+                    km.set(j, i, v)
+                end
+            end
+        end
+        repeat ncol in c:
+            mut target := c
+            if k == 2: target = 1 end
+            mut yv := Vector {} as Vector<f64>
+            repeat n in i:
+                if (y.at(i, 0) as int) == target: yv.push(1.0) else:
+                    yv.push(0.0 - 1.0)
+                end
+            end
+            mut alpha := Vector {} as Vector<f64>
+            alpha.zeros(n)
+            mut b := 0.0
+            _smo(km, yv, this.c, this.tol, this.max_passes, this.seed + (c as i64), alpha, b)
+            repeat n in i: this.dual.set(i, c, alpha.get(i) * yv.get(i)) end
+            this.bias.set(0, c, b)
+            yv.free()
+            alpha.free()
+        end
+        matrix.Free(km)
+        this.gamma = gm
+        this.n_classes = k
+        this.ok = true
+        ret true
+    end
+
+    @en "decision"
+    @fa "تصمیم"
+    pub func decision(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false or x.cols != this.support.cols: ret matrix.Matrix {} end
+        ncol := this.dual.cols
+        mut d := matrix.Zeros(x.rows, ncol)
+        repeat x.rows in i:
+            repeat this.support.rows in s:
+                mut any := false
+                repeat ncol in c:
+                    if this.dual.at(s, c) != 0.0: any = true end
+                end
+                if any:
+                    kv := _kernel(x, i, this.support, s, this.kernel, this.gamma, this.degree, this.coef0)
+                    repeat ncol in c: d.add_at(i, c, this.dual.at(s, c) * kv) end
+                end
+            end
+            repeat ncol in c: d.add_at(i, c, this.bias.at(0, c)) end
+        end
+        ret d
+    end
+
+    @en "predict"
+    @fa "پیش‌بینی"
+    pub func predict(x &: matrix.Matrix): matrix.Matrix:
+        mut d := this.decision(x)
+        if d.is_empty(): ret d end
+        mut out := matrix.Zeros(x.rows, 1)
+        repeat x.rows in i:
+            if this.n_classes == 2:
+                if d.at(i, 0) > 0.0: out.set(i, 0, 1.0) end
+            else:
+                mut best := 0
+                repeat d.cols in c:
+                    if d.at(i, c) > d.at(i, best): best = c end
+                end
+                out.set(i, 0, best as f64)
+            end
+        end
+        matrix.Free(d)
+        ret out
+    end
+
+    @en "n_support"
+    @fa "شمار بردار پشتیبان"
+    pub func n_support(): int:
+        mut cnt := 0
+        repeat this.dual.rows in s:
+            mut any := false
+            repeat this.dual.cols in c:
+                if this.dual.at(s, c) != 0.0: any = true end
+            end
+            if any: cnt += 1 end
+        end
+        ret cnt
+    end
+
+    @en "score"
+    @fa "امتیاز"
+    pub func score(x &: matrix.Matrix, y &: matrix.Matrix): f64:
+        mut p := this.predict(x)
+        if p.is_empty(): ret 0.0 end
+        r := Accuracy(y, p)
+        matrix.Free(p)
+        ret r
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        matrix.Free(this.support)
+        matrix.Free(this.dual)
+        matrix.Free(this.bias)
+    end
+end
+
+func _kernel(a &: matrix.Matrix, i: int, b &: matrix.Matrix, j: int, kind: int, gamma: f64, degree: int, coef0: f64): f64:
+    mut dot := 0.0
+    mut sq := 0.0
+    repeat a.cols in t:
+        u := a.at(i, t)
+        v := b.at(j, t)
+        dot += u * v
+        d := u - v
+        sq += d * d
+    end
+    if kind == KERNEL_RBF: ret math.Exp(0.0 - gamma * sq) end
+    if kind == KERNEL_POLY: ret math.Pow(gamma * dot + coef0, degree as f64) end
+    ret dot
+end
+
+func _dual_cd(x &: matrix.Matrix, y &: matrix.Matrix, target: int, c: f64, max_iter: int, tol: f64, seed: i64, w &: matrix.Matrix):
+    n := x.rows
+    p := x.cols
+    mut alpha := Vector {} as Vector<f64>
+    alpha.zeros(n)
+    mut q := Vector {} as Vector<f64>
+    repeat n in i:
+        mut s := 1.0
+        repeat p in j: s += x.at(i, j) * x.at(i, j) end
+        q.push(s)
+    end
+    mut lab := Vector {} as Vector<f64>
+    repeat n in i:
+        if (y.at(i, 0) as int) == target: lab.push(1.0) else:
+            lab.push(0.0 - 1.0)
+        end
+    end
+    mut order := Vector {} as Vector<int>
+    repeat n in i: order.push(i) end
+    mut g := matrix.NewRng(seed)
+    mut it := 0
+    mut done := false
+    until it < max_iter and done == false:
+        mut k := n - 1
+        until k > 0:
+            r := (g.next_float() * ((k + 1) as f64)) as int
+            t := order.get(k)
+            order.set(k, order.get(r))
+            order.set(r, t)
+            k -= 1
+        end
+        mut max_change := 0.0
+        repeat n in oi:
+            i := order.get(oi)
+            yi := lab.get(i)
+            mut margin := w.at(p, 0)
+            repeat p in j: margin += w.at(j, 0) * x.at(i, j) end
+            grad := yi * margin - 1.0
+            a := alpha.get(i)
+            mut pg := grad
+            if a == 0.0 and grad > 0.0: pg = 0.0 end
+            if a == c and grad < 0.0: pg = 0.0 end
+            if pg != 0.0:
+                mut na := a - grad / q.get(i)
+                if na < 0.0: na = 0.0 end
+                if na > c: na = c end
+                d := (na - a) * yi
+                if d != 0.0:
+                    repeat p in j: w.add_at(j, 0, d * x.at(i, j)) end
+                    w.add_at(p, 0, d)
+                    alpha.set(i, na)
+                end
+                mut ad := na - a
+                if ad < 0.0: ad = 0.0 - ad end
+                if ad > max_change: max_change = ad end
+            end
+        end
+        it += 1
+        if max_change < tol: done = true end
+    end
+    alpha.free()
+    q.free()
+    lab.free()
+    order.free()
+end
+
+func _smo(km &: matrix.Matrix, yv &: Vector<f64>, c: f64, tol: f64, max_passes: int, seed: i64, alpha &: Vector<f64>, b &: f64):
+    n := km.rows
+    mut g := matrix.NewRng(seed)
+    mut passes := 0
+    mut total_iter := 0
+    until passes < max_passes and total_iter < 200:
+        mut changed := 0
+        repeat n in i:
+            ei := _smo_f(km, yv, alpha, b, i) - yv.get(i)
+            ai := alpha.get(i)
+            yi := yv.get(i)
+            if (yi * ei < 0.0 - tol and ai < c) or (yi * ei > tol and ai > 0.0):
+                mut j := (g.next_float() * (n as f64)) as int
+                if j == i: j = (j + 1) % n end
+                ej := _smo_f(km, yv, alpha, b, j) - yv.get(j)
+                aj := alpha.get(j)
+                yj := yv.get(j)
+                mut lo := 0.0
+                mut hi := c
+                if yi != yj:
+                    lo = aj - ai
+                    if lo < 0.0: lo = 0.0 end
+                    hi = c + aj - ai
+                    if hi > c: hi = c end
+                else:
+                    lo = ai + aj - c
+                    if lo < 0.0: lo = 0.0 end
+                    hi = ai + aj
+                    if hi > c: hi = c end
+                end
+                if lo < hi:
+                    eta := 2.0 * km.at(i, j) - km.at(i, i) - km.at(j, j)
+                    if eta < 0.0:
+                        mut naj := aj - yj * (ei - ej) / eta
+                        if naj > hi: naj = hi end
+                        if naj < lo: naj = lo end
+                        mut daj := naj - aj
+                        if daj < 0.0: daj = 0.0 - daj end
+                        if daj > 1.0e-6:
+                            nai := ai + yi * yj * (aj - naj)
+                            b1 := b - ei - yi * (nai - ai) * km.at(i, i) - yj * (naj - aj) * km.at(i, j)
+                            b2 := b - ej - yi * (nai - ai) * km.at(i, j) - yj * (naj - aj) * km.at(j, j)
+                            if nai > 0.0 and nai < c: b = b1
+                            else naj > 0.0 and naj < c: b = b2
+                            else:
+                                b = (b1 + b2) / 2.0
+                            end
+                            alpha.set(i, nai)
+                            alpha.set(j, naj)
+                            changed += 1
+                        end
+                    end
+                end
+            end
+        end
+        if changed == 0: passes += 1 else:
+            passes = 0
+        end
+        total_iter += 1
+    end
+end
+
+func _smo_f(km &: matrix.Matrix, yv &: Vector<f64>, alpha &: Vector<f64>, b: f64, i: int): f64:
+    mut s := b
+    repeat km.rows in t:
+        a := alpha.get(t)
+        if a != 0.0: s += a * yv.get(t) * km.at(t, i) end
+    end
+    ret s
+end

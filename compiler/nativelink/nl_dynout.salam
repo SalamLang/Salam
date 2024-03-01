@@ -1,0 +1,1053 @@
+package nativelink
+
+const DS_INTERP := 0
+const DS_GHASH := 1
+const DS_DYNSYM := 2
+const DS_DYNSTR := 3
+const DS_VERSYM := 4
+const DS_VERNEED := 5
+const DS_RELA := 6
+const DS_PLT := 7
+const DS_DYNAMIC := 8
+const DS_GOT := 9
+const DS_COUNT := 10
+const DK_NONE := 0
+const DK_CALL := 1
+const DK_GOT := 2
+const DK_ABSW := 3
+const DK_ABS32 := 4
+const DK_ADDR := 5
+
+pub struct Dyn:
+    pub str: Vector<u8> = Vector {}
+    pub sym_str: Vector<i64> = Vector {}
+    pub lib_str: Vector<i64> = Vector {}
+    pub vn_lib: Vector<int> = Vector {}
+    pub vn_name: Vector<int> = Vector {}
+    pub vn_str: Vector<i64> = Vector {}
+    pub nrela: int = 0
+    pub ndynent: int = 0
+end
+
+func shared_g(l &: Nl, os: int): int:
+    g := l.os_glob[os]
+    if g >= 0 and l.g_state[g] == SY_SHARED:
+        ret g
+    end
+    ret 0 - 1
+end
+
+func is_addr_sym(l &: Nl, os: int): bool:
+    g := l.os_glob[os]
+    if g >= 0:
+        st := l.g_state[g]
+        if st == SY_DEF:
+            ret true
+        end
+        if st == SY_ABS:
+            k := l.g_sec[g]
+            ret k <= SYN_INIT_START and k != SYN_ZERO
+        end
+        ret false
+    end
+    ret l.os_sec[os] >= 0
+end
+
+func is_addr_g(l &: Nl, g: int): bool:
+    st := l.g_state[g]
+    if st == SY_DEF:
+        ret true
+    end
+    if st == SY_ABS:
+        k := l.g_sec[g]
+        ret k <= SYN_INIT_START and k != SYN_ZERO
+    end
+    ret false
+end
+
+func need_dyn(l &: Nl, g: int):
+    if l.g_dyn[g] < 0:
+        l.g_dyn[g] = l.dyn_sym.len() + 1
+        l.dyn_sym.push(g)
+    end
+end
+
+func need_got(l &: Nl, g: int):
+    if l.g_got[g] < 0:
+        l.g_got[g] = l.got_sym.len()
+        l.got_sym.push(g)
+    end
+    if l.g_state[g] == SY_SHARED:
+        need_dyn(l, g)
+    end
+end
+
+func need_plt(l &: Nl, g: int):
+    if l.g_plt[g] < 0:
+        l.g_plt[g] = l.plt_sym.len()
+        l.plt_sym.push(g)
+    end
+    need_got(l, g)
+end
+
+func got_relaxable(l &: Nl, s: int, r: int): bool:
+    ty := l.r_type[r]
+    if ty == 9:
+        ret false
+    end
+    os := l.r_sym[r]
+    if shared_g(l, os) >= 0 or sym_sec(l, os) < 0:
+        ret false
+    end
+    p := fptr(l, l.o_file[l.s_obj[s]])
+    off := l.s_off[s] + l.r_off[r]
+    ret off >= (2 as i64) and p[off - (2 as i64)] == (0x8b as u8)
+end
+
+func ver_index(d &: Dyn, lib: int, ver: int): int:
+    if ver < 0:
+        ret 1
+    end
+    repeat d.vn_lib.len() in k:
+        if d.vn_lib[k] == lib and d.vn_name[k] == ver:
+            ret k + 2
+        end
+    end
+    d.vn_lib.push(lib)
+    d.vn_name.push(ver)
+    d.vn_str.push(0 as i64)
+    ret d.vn_lib.len() + 1
+end
+
+func ds_put_name(d &: Dyn, l &: Nl, id: int): i64:
+    at := d.str.len() as i64
+    o := l.names.off[id]
+    repeat l.names.len[id] in i:
+        d.str.push(l.names.bytes[o + i])
+    end
+    d.str.push(0 as u8)
+    ret at
+end
+
+func ds_put_str(d &: Dyn, s: str): i64:
+    at := d.str.len() as i64
+    p := (s as void*) as u8*
+    repeat str.Len(s) in i:
+        d.str.push(p[i])
+    end
+    d.str.push(0 as u8)
+    ret at
+end
+
+func elf_hash(l &: Nl, id: int): i64:
+    mut h := 0 as i64
+    o := l.names.off[id]
+    repeat l.names.len[id] in i:
+        h = (h << (4 as i64)) + (l.names.bytes[o + i] as i64)
+        gg := h & (0xf0000000 as i64)
+        if gg != (0 as i64):
+            h = h ^ (gg >> (24 as i64))
+        end
+        h = h & ((0 - 1 as i64) ^ gg)
+    end
+    ret h & (0xffffffff as i64)
+end
+
+func dr_relative(l &: Nl): int:
+    switch l.mach:
+        EM_AARCH64: ret 1027 end
+        EM_ARM: ret 23 end
+        EM_RISCV: ret 3 end
+    end
+    ret 8
+end
+
+func dr_globdat(l &: Nl): int:
+    switch l.mach:
+        EM_AARCH64: ret 1025 end
+        EM_ARM: ret 21 end
+        EM_RISCV: ret 2 end
+    end
+    ret 6
+end
+
+func dr_jslot(l &: Nl): int:
+    switch l.mach:
+        EM_AARCH64: ret 1026 end
+        EM_ARM: ret 22 end
+        EM_RISCV: ret 5 end
+    end
+    ret 7
+end
+
+func dr_abs(l &: Nl): int:
+    switch l.mach:
+        EM_AARCH64: ret 257 end
+        EM_ARM: ret 2 end
+        EM_RISCV: ret 2 end
+    end
+    ret 1
+end
+
+func dr_copy(l &: Nl): int:
+    switch l.mach:
+        EM_AARCH64: ret 1024 end
+        EM_ARM: ret 20 end
+        EM_RISCV: ret 4 end
+    end
+    ret 5
+end
+
+func dr_tls(l &: Nl, kind: int): int:
+    m := l.mach
+    if kind == TG_TP:
+        switch m:
+            EM_AARCH64: ret 1030 end
+            EM_ARM: ret 19 end
+            EM_RISCV: ret 11 end
+            EM_386: ret 14 end
+        end
+        ret 18
+    end
+    if kind == TG_MOD:
+        switch m:
+            EM_AARCH64: ret 1028 end
+            EM_ARM: ret 17 end
+            EM_RISCV: ret 7 end
+            EM_386: ret 35 end
+        end
+        ret 16
+    end
+    switch m:
+        EM_AARCH64: ret 1029 end
+        EM_ARM: ret 18 end
+        EM_RISCV: ret 9 end
+        EM_386: ret 36 end
+    end
+    ret 17
+end
+
+func dy_ws(l &: Nl): int:
+    ret l.elf32 ? 4 : 8
+end
+
+func dy_symsz(l &: Nl): int:
+    ret l.elf32 ? 16 : 24
+end
+
+func dy_relsz(l &: Nl): int:
+    if l.dyn_rel:
+        ret 8
+    end
+    ret l.elf32 ? 12 : 24
+end
+
+func dy_dynsz(l &: Nl): int:
+    ret l.elf32 ? 8 : 16
+end
+
+func dyn_kind(l &: Nl, ty: int): int:
+    if l.mach == EM_AARCH64:
+        switch ty:
+            282, 283: ret DK_CALL end
+            311, 312: ret DK_GOT end
+            257: ret DK_ABSW end
+            258, 259: ret DK_ABS32 end
+            274, 275, 276, 277, 278, 284, 285, 286, 299: ret DK_ADDR end
+        end
+        ret DK_NONE
+    end
+    if l.mach == EM_386:
+        switch ty:
+            2, 4: ret DK_CALL end
+            3, 43: ret DK_GOT end
+            1: ret DK_ABSW end
+            9: ret DK_ADDR end
+        end
+        ret DK_NONE
+    end
+    if l.mach == EM_ARM:
+        switch ty:
+            1, 10, 27, 28, 29, 30: ret DK_CALL end
+            26, 96: ret DK_GOT end
+            2, 38: ret DK_ABSW end
+            3, 24, 43, 44, 47, 48: ret DK_ADDR end
+        end
+        ret DK_NONE
+    end
+    if l.mach == EM_RISCV:
+        switch ty:
+            16, 17, 18, 19: ret DK_CALL end
+            20: ret DK_GOT end
+            2: ret DK_ABSW end
+            1, 23, 26, 27, 28: ret DK_ADDR end
+        end
+        ret DK_NONE
+    end
+    switch ty:
+        2, 4: ret DK_CALL end
+        9, 41, 42: ret DK_GOT end
+        1: ret DK_ABSW end
+        10, 11: ret DK_ABS32 end
+        24: ret DK_ADDR end
+    end
+    ret DK_NONE
+end
+
+func dyn_got_relaxable(l &: Nl, s: int, r: int): bool:
+    if l.mach != EM_X86_64:
+        ret false
+    end
+    ret got_relaxable(l, s, r)
+end
+
+func sec_writable(l &: Nl, s: int): bool:
+    ret (l.s_flags[s] & (1 as i64)) != (0 as i64) or l.s_oc[s] == OC_DATAREL
+end
+
+func has_absw(l &: Nl, s: int): bool:
+    r0 := l.s_rel0[s]
+    repeat l.s_nrel[s] in k:
+        if dyn_kind(l, l.r_type[r0 + k]) == DK_ABSW:
+            ret true
+        end
+    end
+    ret false
+end
+
+func need_copy(l &: Nl, g: int):
+    if not l.cp_of.has(g):
+        l.cp_of.put(g, l.cp_g.len())
+        l.cp_g.push(g)
+        l.stat_dynrel += 1
+    end
+    need_dyn(l, g)
+end
+
+func need_canon(l &: Nl, g: int):
+    need_plt(l, g)
+    l.canon.put(g, true)
+end
+
+func sd_size_of(l &: Nl, g: int): i64:
+    nm := l.g_name[g]
+    if nm >= 0 and nm < l.sd_size.len():
+        ret l.sd_size[nm]
+    end
+    ret 0
+end
+
+func dyn_shared_addr(l &: Nl, g: int): i64:
+    if l.ds_addr.len() == 0:
+        ret 0
+    end
+    if l.cp_of.has(g):
+        ret l.cp_addr[l.cp_of.get(g)]
+    end
+    if g < l.g_plt.len() and l.g_plt[g] >= 0:
+        ret l.ds_addr[DS_PLT] + ((16 * l.g_plt[g]) as i64) + ((l.mach == EM_ARM ? 4 : 0) as i64)
+    end
+    ret 0
+end
+
+func dyn_hashed(l &: Nl, g: int): bool:
+    ret l.cp_of.has(g) or l.canon.has(g)
+end
+
+func dyn_prepare(l &: Nl):
+    repeat l.s_obj.len() in s:
+        if not l.s_live[s] or l.s_oc[s] == OC_NONE:
+            continue
+        end
+        r0 := l.s_rel0[s]
+        repeat l.s_nrel[s] in k:
+            r := r0 + k
+            ty := l.r_type[r]
+            os := l.r_sym[r]
+            g := shared_g(l, os)
+            tk := tls_got_kind(l, ty)
+            if tk > 0:
+                _ts := tls_slot(l, os, tk)
+                if g >= 0:
+                    need_dyn(l, g)
+                end
+                continue
+            end
+            if g >= 0 and l.mach == EM_AARCH64 and (ty == 562 or ty == 563 or ty == 564 or ty == 569):
+                _td := tls_slot(l, os, TG_TP)
+                need_dyn(l, g)
+                continue
+            end
+            dk := dyn_kind(l, ty)
+            if g >= 0:
+                obj := l.g_stype[g] == 1
+                if l.g_stype[g] == 6:
+                    nl_fail(l, "thread-local symbol '" + name_of(l, l.g_name[g]) + "' from a shared library needs initial-exec or general-dynamic access at " + reloc_where(l, s, r))
+                    ret
+                end
+                if dk == DK_CALL:
+                    if obj:
+                        need_copy(l, g)
+                    else:
+                        need_plt(l, g)
+                    end
+                else dk == DK_GOT:
+                    need_got(l, g)
+                else dk == DK_ABSW:
+                    if sec_writable(l, s):
+                        need_dyn(l, g)
+                        l.stat_dynrel += 1
+                    else obj:
+                        need_copy(l, g)
+                    else:
+                        need_canon(l, g)
+                    end
+                else dk == DK_ADDR or (dk == DK_ABS32 and not l.pie):
+                    if obj:
+                        need_copy(l, g)
+                    else:
+                        need_canon(l, g)
+                    end
+                else:
+                    nl_fail(l, "unsupported relocation type " + str.FromInt(ty as i64) + " against a shared library symbol at " + reloc_where(l, s, r))
+                    ret
+                end
+            else:
+                if dk == DK_ABSW:
+                    if l.pie and is_addr_sym(l, os):
+                        l.stat_dynrel += 1
+                    end
+                else dk == DK_ABS32:
+                    if l.pie and is_addr_sym(l, os):
+                        nl_fail(l, "a 32-bit absolute address cannot be used in a position-independent executable at " + reloc_where(l, s, r))
+                        ret
+                    end
+                else dk == DK_GOT:
+                    if not dyn_got_relaxable(l, s, r):
+                        g2 := l.os_glob[os]
+                        if g2 >= 0:
+                            need_got(l, g2)
+                        else:
+                            got_add(l, os)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    repeat l.got_sym.len() in q:
+        gs := l.got_sym[q]
+        if l.got_tlsk.has(q):
+            if gs >= 0 and l.g_state[gs] == SY_SHARED and l.got_tlsk.get(q) != TG_ZERO:
+                l.stat_dynrel += 1
+            end
+            continue
+        end
+        if gs >= 0:
+            if l.g_state[gs] == SY_SHARED or (l.pie and is_addr_g(l, gs)):
+                l.stat_dynrel += 1
+            end
+        else l.pie and is_addr_sym(l, 0 - 1 - gs):
+            l.stat_dynrel += 1
+        end
+    end
+    mut plain := Vector {} as Vector<int>
+    mut hashed := Vector {} as Vector<int>
+    each dg in l.dyn_sym:
+        if dyn_hashed(l, dg):
+            hashed.push(dg)
+        else:
+            plain.push(dg)
+        end
+    end
+    l.dyn_sym.clear()
+    each pg in plain:
+        l.g_dyn[pg] = l.dyn_sym.len() + 1
+        l.dyn_sym.push(pg)
+    end
+    l.dyn_hash0 = l.dyn_sym.len() + 1
+    each hg in hashed:
+        l.g_dyn[hg] = l.dyn_sym.len() + 1
+        l.dyn_sym.push(hg)
+    end
+    plain.free()
+    hashed.free()
+end
+
+func place_ds(l &: Nl, k: int, size: i64, al: i64, fpos &: i64):
+    fpos = align_to(fpos, al)
+    l.ds_off[k] = fpos
+    l.ds_addr[k] = l.base + fpos
+    l.ds_size[k] = size
+    fpos = fpos + size
+end
+
+func dyn_tables(l &: Nl, d &: Dyn):
+    d.str.push(0 as u8)
+    repeat l.sl_file.len() in lb:
+        d.lib_str.push(l.sl_used[lb] ? ds_put_str(d, l.sl_soname[lb]) : (0 as i64))
+    end
+    each g in l.dyn_sym:
+        d.sym_str.push(ds_put_name(d, l, l.g_name[g]))
+        _v := ver_index(d, l.g_lib[g], l.g_ver[g])
+    end
+    repeat d.vn_lib.len() in k:
+        d.vn_str[k] = ds_put_name(d, l, d.vn_name[k])
+    end
+    mut nd := 0
+    repeat l.sl_file.len() in lb2:
+        if l.sl_used[lb2]:
+            nd += 1
+        end
+    end
+    d.ndynent = nd + 24
+end
+
+func dyn_interp(l &: Nl):
+    if not str.Equals(l.interp, "/lib64/ld-linux-x86-64.so.2"):
+        ret
+    end
+    switch l.mach:
+        EM_AARCH64: l.interp = "/lib/ld-linux-aarch64.so.1" break end
+        EM_386: l.interp = "/lib/ld-linux.so.2" break end
+        EM_ARM: l.interp = "/lib/ld-linux-armhf.so.3" break end
+        EM_RISCV: l.interp = "/lib/ld-linux-riscv64-lp64d.so.1" break end
+    end
+end
+
+func place_dyn(l &: Nl):
+    l.base = 0 as i64
+    if not l.pie:
+        l.base = l.mach == EM_386 ? (0x08048000 as i64) : (0x10000 as i64)
+    end
+    l.nphdr = 8
+    if has_tls(l):
+        l.nphdr += 1
+    end
+    if has_exidx(l):
+        l.nphdr += 1
+    end
+    ehh_reserve(l)
+    mut d := Dyn {}
+    dyn_tables(l, d)
+    l.dstr_keep = d
+    repeat OC_COUNT:
+        l.oc_addr.push(0 as i64)
+        l.oc_size.push(0 as i64)
+        l.oc_fpos.push(0 as i64)
+        l.oc_align.push(1 as i64)
+    end
+    repeat DS_COUNT:
+        l.ds_off.push(0 as i64)
+        l.ds_size.push(0 as i64)
+        l.ds_addr.push(0 as i64)
+    end
+    repeat 3:
+        l.seg_vaddr.push(0 as i64)
+        l.seg_fpos.push(0 as i64)
+        l.seg_fsz.push(0 as i64)
+        l.seg_msz.push(0 as i64)
+    end
+    nsym := l.dyn_sym.len() + 1
+    nhash := nsym - l.dyn_hash0
+    mut nvl := 0
+    repeat l.sl_file.len() in lb:
+        mut has := false
+        each lv in d.vn_lib:
+            if lv == lb:
+                has = true
+            end
+        end
+        if has:
+            nvl += 1
+        end
+    end
+    ws := dy_ws(l) as i64
+    mut fpos := ehdr_size(l)
+    place_ds(l, DS_INTERP, (str.Len(l.interp) + 1) as i64, 1 as i64, fpos)
+    place_ds(l, DS_GHASH, (20 as i64) + ws + ((4 * nhash) as i64), ws, fpos)
+    place_ds(l, DS_DYNSYM, (dy_symsz(l) * nsym) as i64, ws, fpos)
+    place_ds(l, DS_DYNSTR, d.str.len() as i64, 1 as i64, fpos)
+    place_ds(l, DS_VERSYM, (2 * nsym) as i64, 2 as i64, fpos)
+    place_ds(l, DS_VERNEED, (16 * nvl + 16 * d.vn_lib.len()) as i64, ws, fpos)
+    place_ds(l, DS_RELA, (dy_relsz(l) * l.stat_dynrel) as i64, ws, fpos)
+    place_class(l, OC_RODATA, fpos, false)
+    place_class(l, OC_EHFRAME, fpos, false)
+    ehh_place(l, fpos)
+    place_class(l, OC_EXIDX, fpos, false)
+    l.seg_vaddr[0] = l.base
+    l.seg_fsz[0] = fpos
+    l.seg_msz[0] = fpos
+    fpos = align_to(fpos, nl_page(l) as i64)
+    rx := fpos
+    place_class(l, OC_INIT, fpos, false)
+    place_ds(l, DS_PLT, (16 * l.plt_sym.len()) as i64, 16 as i64, fpos)
+    place_class(l, OC_TEXT, fpos, false)
+    place_class(l, OC_FINI, fpos, false)
+    l.seg_vaddr[1] = l.base + rx
+    l.seg_fpos[1] = rx
+    l.seg_fsz[1] = fpos - rx
+    l.seg_msz[1] = fpos - rx
+    fpos = align_to(fpos, nl_page(l) as i64)
+    rw := fpos
+    l.relro_lo = l.base + fpos
+    place_class(l, OC_PREINITARR, fpos, false)
+    place_class(l, OC_INITARR, fpos, false)
+    place_class(l, OC_FINIARR, fpos, false)
+    place_class(l, OC_DATAREL, fpos, false)
+    place_ds(l, DS_DYNAMIC, (dy_dynsz(l) * d.ndynent) as i64, ws, fpos)
+    place_ds(l, DS_GOT, ws * (l.got_sym.len() as i64), ws, fpos)
+    l.oc_addr[OC_GOT] = l.ds_addr[DS_GOT]
+    l.oc_fpos[OC_GOT] = l.ds_off[DS_GOT]
+    l.oc_size[OC_GOT] = l.ds_size[DS_GOT]
+    l.relro_hi = l.base + fpos
+    place_class(l, OC_DATA, fpos, false)
+    tls_place(l, fpos)
+    file_end := fpos
+    mut mem := fpos
+    place_class(l, OC_BSS, mem, true)
+    l.cp_addr.clear()
+    each cg in l.cp_g:
+        sz := sd_size_of(l, cg)
+        mem = align_to(mem, sz >= (16 as i64) ? (16 as i64) : (8 as i64))
+        l.cp_addr.push(l.base + mem)
+        mem = mem + (sz > (0 as i64) ? sz : (8 as i64))
+    end
+    if l.cp_g.len() > 0:
+        if l.oc_size[OC_BSS] == (0 as i64):
+            l.oc_addr[OC_BSS] = l.cp_addr[0]
+            l.oc_fpos[OC_BSS] = l.cp_addr[0] - l.base
+        end
+        l.oc_size[OC_BSS] = l.base + mem - l.oc_addr[OC_BSS]
+    end
+    l.seg_vaddr[2] = l.base + rw
+    l.seg_fpos[2] = rw
+    l.seg_fsz[2] = file_end - rw
+    l.seg_msz[2] = mem - rw
+    l.file_size = file_end
+    l.image_end = l.base + mem
+    st := glob_find(l, "_start")
+    l.entry = sym_addr_g(l, st)
+end
+
+func rela_add(l &: Nl, off: i64, ty: int, sym: int, add: i64):
+    l.rd_off.push(off)
+    l.rd_type.push(ty)
+    l.rd_sym.push(sym)
+    l.rd_add.push(add)
+end
+
+func target_addr(l &: Nl, os: int): i64:
+    ret sym_addr(l, os)
+end
+
+func dyn_word(l &: Nl, buf: u8*, at: i64, v: i64):
+    if l.elf32:
+        wr32(buf, at, v)
+    else:
+        wr64(buf, at, v)
+    end
+end
+
+func dyn_apply_one(l &: Nl, buf: u8*, s2: int, r: int, ty: int, place: i64, pc: i64, a: i64, sv: i64, os: int): bool:
+    if l.mach == EM_386:
+        ret reloc_i386(l, buf, s2, r, ty, place, pc, a, sv, os)
+    end
+    if l.mach == EM_AARCH64:
+        ret reloc_a64(l, buf, s2, r, ty, place, pc, a, sv, os)
+    end
+    if l.mach == EM_ARM:
+        ret reloc_arm(l, buf, s2, r, ty, place, pc, a, sv, os)
+    end
+    if l.mach == EM_RISCV:
+        ret reloc_riscv(l, buf, s2, r, ty, place, pc, a, sv, os)
+    end
+    ret reloc_x64(l, buf, s2, r, ty, place, pc, a, sv, os)
+end
+
+func plt_stub(l &: Nl, buf: u8*, at: i64, pa: i64, slot: i64):
+    if l.mach == EM_AARCH64:
+        a64_plt(buf, at, pa, slot)
+        ret
+    end
+    if l.mach == EM_386:
+        buf[at] = 0xff as u8
+        buf[at + (1 as i64)] = 0x25 as u8
+        wr32(buf, at + (2 as i64), slot)
+        repeat 10 in z:
+            buf[at + ((6 + z) as i64)] = 0x90 as u8
+        end
+        ret
+    end
+    if l.mach == EM_ARM:
+        wr32(buf, at, 0x46C04778 as i64)
+        wr32(buf, at + (4 as i64), 0xE59FC000 as i64)
+        wr32(buf, at + (8 as i64), 0xE59CF000 as i64)
+        wr32(buf, at + (12 as i64), slot)
+        ret
+    end
+    if l.mach == EM_RISCV:
+        d := slot - pa
+        hi := (d + (0x800 as i64)) >> (12 as i64)
+        lo := d - (hi << (12 as i64))
+        wr32(buf, at, (0x00000E17 as i64) | ((hi & (0xFFFFF as i64)) << (12 as i64)))
+        wr32(buf, at + (4 as i64), (0x000E3E03 as i64) | ((lo & (0xFFF as i64)) << (20 as i64)))
+        wr32(buf, at + (8 as i64), 0x000E0367 as i64)
+        wr32(buf, at + (12 as i64), 0x00000013 as i64)
+        ret
+    end
+    buf[at] = 0xff as u8
+    buf[at + (1 as i64)] = 0x25 as u8
+    wr32(buf, at + (2 as i64), slot - (pa + (6 as i64)))
+    repeat 10 in z2:
+        buf[at + ((6 + z2) as i64)] = 0xcc as u8
+    end
+end
+
+func apply_dyn(l &: Nl):
+    buf := malloc(l.file_size as u64) as u8*
+    l.out_ptr = buf as i64
+    repeat l.file_size in z:
+        buf[z] = 0 as u8
+    end
+    if l.mach == EM_X86_64:
+        repeat l.seg_fsz[1] in zz:
+            buf[l.seg_fpos[1] + zz] = 0x90 as u8
+        end
+    end
+    repeat l.s_obj.len() in s:
+        if not l.s_live[s] or l.s_fpos[s] < (0 as i64):
+            continue
+        end
+        p := fptr(l, l.o_file[l.s_obj[s]])
+        src := l.s_off[s]
+        dst := l.s_fpos[s]
+        repeat l.s_size[s] in k:
+            buf[dst + k] = p[src + k]
+        end
+    end
+    repeat l.s_obj.len() in s2:
+        if not l.s_live[s2] or l.s_fpos[s2] < (0 as i64):
+            continue
+        end
+        r0 := l.s_rel0[s2]
+        repeat l.s_nrel[s2] in k2:
+            r := r0 + k2
+            ty := l.r_type[r]
+            os := l.r_sym[r]
+            place := l.s_fpos[s2] + l.r_off[r]
+            pc := l.s_addr[s2] + l.r_off[r]
+            a := l.r_add[r]
+            g := shared_g(l, os)
+            mut sv := sym_addr(l, os)
+            if ty == 0:
+                continue
+            end
+            if l.mach == EM_ARM and g >= 0 and (ty == 10 or ty == 30) and not l.cp_of.has(g):
+                sv = (sv - (4 as i64)) | (1 as i64)
+            end
+            tk := reloc_tls(l, buf, s2, r, ty, place, pc, a, sv, os)
+            if tk < 0:
+                ret
+            end
+            if tk > 0:
+                continue
+            end
+            if dyn_kind(l, ty) == DK_ABSW:
+                if g >= 0 and not dyn_hashed(l, g):
+                    rela_add(l, pc, dr_abs(l), l.g_dyn[g], a)
+                    dyn_word(l, buf, place, l.dyn_rel ? a : (0 as i64))
+                    continue
+                end
+                if l.pie and is_addr_sym(l, os):
+                    rela_add(l, pc, dr_relative(l), 0, sv + a)
+                    dyn_word(l, buf, place, sv + a)
+                    continue
+                end
+            end
+            if not dyn_apply_one(l, buf, s2, r, ty, place, pc, a, sv, os):
+                ret
+            end
+        end
+    end
+    ws := dy_ws(l)
+    repeat l.got_sym.len() in q:
+        gs := l.got_sym[q]
+        slot := l.ds_addr[DS_GOT] + ((ws * q) as i64)
+        sf := l.ds_off[DS_GOT] + ((ws * q) as i64)
+        shared := gs >= 0 and l.g_state[gs] == SY_SHARED
+        if l.got_tlsk.has(q):
+            kk := l.got_tlsk.get(q)
+            if shared and kk != TG_ZERO:
+                rela_add(l, slot, dr_tls(l, kk), l.g_dyn[gs], 0 as i64)
+                dyn_word(l, buf, sf, 0 as i64)
+            else:
+                v0 := gs >= 0 ? sym_addr_g(l, gs) : sym_addr(l, 0 - 1 - gs)
+                dyn_word(l, buf, sf, tls_got_value(l, q, v0))
+            end
+            continue
+        end
+        if shared:
+            plt_slot := gs < l.g_plt.len() and l.g_plt[gs] >= 0
+            rela_add(l, slot, plt_slot and (l.canon.has(gs) or not l.pie) ? dr_jslot(l) : dr_globdat(l), l.g_dyn[gs], 0 as i64)
+            dyn_word(l, buf, sf, 0 as i64)
+            continue
+        end
+        v3 := gs >= 0 ? sym_addr_g(l, gs) : sym_addr(l, 0 - 1 - gs)
+        if l.pie and (gs >= 0 ? is_addr_g(l, gs) : is_addr_sym(l, 0 - 1 - gs)):
+            rela_add(l, slot, dr_relative(l), 0, v3)
+        end
+        dyn_word(l, buf, sf, v3)
+    end
+    repeat l.cp_g.len() in c:
+        rela_add(l, l.cp_addr[c], dr_copy(l), l.g_dyn[l.cp_g[c]], 0 as i64)
+    end
+    repeat l.plt_sym.len() in q2:
+        g4 := l.plt_sym[q2]
+        at := l.ds_off[DS_PLT] + ((16 * q2) as i64)
+        pa := l.ds_addr[DS_PLT] + ((16 * q2) as i64)
+        slot2 := l.ds_addr[DS_GOT] + ((ws * l.g_got[g4]) as i64)
+        plt_stub(l, buf, at, pa, slot2)
+    end
+    if l.rd_off.len() != l.stat_dynrel:
+        nl_fail(l, "internal error: " + str.FromInt(l.rd_off.len() as i64) + " dynamic relocations written, " + str.FromInt(l.stat_dynrel as i64) + " reserved")
+        ret
+    end
+    if l.oc_size[OC_EXIDX] > (0 as i64):
+        sort_exidx(l, buf)
+    end
+    write_dyn_tables(l, buf)
+end
+
+func gnu_hash(l &: Nl, id: int): i64:
+    mut h := 5381 as i64
+    o := l.names.off[id]
+    repeat l.names.len[id] in i:
+        h = (h * (33 as i64) + (l.names.bytes[o + i] as i64)) & (0xffffffff as i64)
+    end
+    ret h
+end
+
+func bss_shndx(l &: Nl): int:
+    mut n := 1
+    repeat OC_COUNT in c:
+        if l.oc_size[c] <= (0 as i64):
+            continue
+        end
+        if c == OC_BSS:
+            ret n
+        end
+        n += 1
+    end
+    ret 0xfff1
+end
+
+func write_dyn_tables(l &: Nl, buf: u8*):
+    d := l.dstr_keep
+    ip := (l.interp as void*) as u8*
+    repeat str.Len(l.interp) in k:
+        buf[l.ds_off[DS_INTERP] + (k as i64)] = ip[k]
+    end
+    nsym := l.dyn_sym.len() + 1
+    ws := dy_ws(l)
+    gh := l.ds_off[DS_GHASH]
+    wr32(buf, gh, 1 as i64)
+    wr32(buf, gh + (4 as i64), l.dyn_hash0 as i64)
+    wr32(buf, gh + (8 as i64), 1 as i64)
+    wr32(buf, gh + (12 as i64), 6 as i64)
+    nhash := nsym - l.dyn_hash0
+    if l.elf32:
+        wr32(buf, gh + (16 as i64), nhash > 0 ? (0xffffffff as i64) : (0 as i64))
+    else:
+        wr64(buf, gh + (16 as i64), nhash > 0 ? (0 - 1 as i64) : (0 as i64))
+    end
+    bk := gh + (16 as i64) + (ws as i64)
+    wr32(buf, bk, nhash > 0 ? (l.dyn_hash0 as i64) : (0 as i64))
+    repeat nhash in hq:
+        hg := l.dyn_sym[l.dyn_hash0 - 1 + hq]
+        mut hv := gnu_hash(l, l.g_name[hg]) & (0xfffffffe as i64)
+        if hq == nhash - 1:
+            hv = hv | (1 as i64)
+        end
+        wr32(buf, bk + ((4 + 4 * hq) as i64), hv)
+    end
+    ds := l.ds_off[DS_DYNSYM]
+    vs := l.ds_off[DS_VERSYM]
+    bx := bss_shndx(l)
+    repeat l.dyn_sym.len() in k2:
+        g := l.dyn_sym[k2]
+        e := ds + ((dy_symsz(l) * (k2 + 1)) as i64)
+        mut ty := l.g_stype[g]
+        if ty == 0 or ty == 10:
+            ty = 2
+        end
+        bind := l.g_strongref[g] ? 1 : 2
+        mut val := 0 as i64
+        mut size := 0 as i64
+        mut shndx := 0
+        if l.cp_of.has(g):
+            val = l.cp_addr[l.cp_of.get(g)]
+            size = sd_size_of(l, g)
+            shndx = bx
+            ty = 1
+        else l.canon.has(g):
+            val = dyn_shared_addr(l, g)
+            ty = 2
+        end
+        info := ((bind << 4) | ty) as u8
+        if l.elf32:
+            wr32(buf, e, d.sym_str[k2])
+            wr32(buf, e + (4 as i64), val)
+            wr32(buf, e + (8 as i64), size)
+            buf[e + (12 as i64)] = info
+            buf[e + (14 as i64)] = (shndx & 255) as u8
+            buf[e + (15 as i64)] = ((shndx >> 8) & 255) as u8
+        else:
+            wr32(buf, e, d.sym_str[k2])
+            buf[e + (4 as i64)] = info
+            buf[e + (6 as i64)] = (shndx & 255) as u8
+            buf[e + (7 as i64)] = ((shndx >> 8) & 255) as u8
+            wr64(buf, e + (8 as i64), val)
+            wr64(buf, e + (16 as i64), size)
+        end
+        vi := l.g_ver[g] < 0 ? 1 : 0
+        mut ix := vi
+        if vi == 0:
+            repeat d.vn_lib.len() in q:
+                if d.vn_lib[q] == l.g_lib[g] and d.vn_name[q] == l.g_ver[g]:
+                    ix = q + 2
+                end
+            end
+        end
+        buf[vs + ((2 * (k2 + 1)) as i64)] = (ix & 255) as u8
+        buf[vs + ((2 * (k2 + 1)) as i64) + (1 as i64)] = ((ix >> 8) & 255) as u8
+    end
+    dst := l.ds_off[DS_DYNSTR]
+    repeat d.str.len() in k3:
+        buf[dst + (k3 as i64)] = d.str[k3]
+    end
+    mut vo := l.ds_off[DS_VERNEED]
+    mut libs := Vector {} as Vector<int>
+    repeat l.sl_file.len() in lb:
+        mut cnt := 0
+        each lv in d.vn_lib:
+            if lv == lb:
+                cnt += 1
+            end
+        end
+        if cnt > 0:
+            libs.push(lb)
+        end
+    end
+    repeat libs.len() in li:
+        lb2 := libs[li]
+        mut cnt2 := 0
+        each lv2 in d.vn_lib:
+            if lv2 == lb2:
+                cnt2 += 1
+            end
+        end
+        wr32(buf, vo, (1 | (cnt2 << 16)) as i64)
+        wr32(buf, vo + (4 as i64), d.lib_str[lb2])
+        wr32(buf, vo + (8 as i64), 16 as i64)
+        nxt := li + 1 < libs.len() ? (16 + 16 * cnt2) : 0
+        wr32(buf, vo + (12 as i64), nxt as i64)
+        mut ao := vo + (16 as i64)
+        mut seen := 0
+        repeat d.vn_lib.len() in q2:
+            if d.vn_lib[q2] != lb2:
+                continue
+            end
+            seen += 1
+            wr32(buf, ao, elf_hash(l, d.vn_name[q2]))
+            wr32(buf, ao + (4 as i64), ((q2 + 2) << 16) as i64)
+            wr32(buf, ao + (8 as i64), d.vn_str[q2])
+            wr32(buf, ao + (12 as i64), (seen < cnt2 ? 16 : 0) as i64)
+            ao = ao + (16 as i64)
+        end
+        vo = ao
+    end
+    nvn := libs.len()
+    l.vn_count = nvn
+    libs.free()
+    ro := l.ds_off[DS_RELA]
+    rsz := dy_relsz(l)
+    mut ri := 0
+    repeat 2 in pass:
+        repeat l.rd_off.len() in k4:
+            rel := l.rd_type[k4] == dr_relative(l)
+            if (pass == 0) != rel:
+                continue
+            end
+            e2 := ro + ((rsz * ri) as i64)
+            if l.elf32:
+                wr32(buf, e2, l.rd_off[k4])
+                wr32(buf, e2 + (4 as i64), ((l.rd_sym[k4] as i64) << (8 as i64)) | (l.rd_type[k4] as i64))
+                if not l.dyn_rel:
+                    wr32(buf, e2 + (8 as i64), l.rd_add[k4])
+                end
+            else:
+                wr64(buf, e2, l.rd_off[k4])
+                wr64(buf, e2 + (8 as i64), ((l.rd_sym[k4] as i64) << (32 as i64)) | (l.rd_type[k4] as i64))
+                wr64(buf, e2 + (16 as i64), l.rd_add[k4])
+            end
+            ri += 1
+        end
+    end
+    mut nrel := 0
+    repeat l.rd_type.len() in k5:
+        if l.rd_type[k5] == dr_relative(l):
+            nrel += 1
+        end
+    end
+    mut dp := l.ds_off[DS_DYNAMIC]
+    repeat l.sl_file.len() in lb3:
+        if l.sl_used[lb3]:
+            dyn_ent(l, buf, dp, 1, d.lib_str[lb3])
+        end
+    end
+    dyn_ent(l, buf, dp, 0x6ffffef5, l.ds_addr[DS_GHASH])
+    dyn_ent(l, buf, dp, 5, l.ds_addr[DS_DYNSTR])
+    dyn_ent(l, buf, dp, 6, l.ds_addr[DS_DYNSYM])
+    dyn_ent(l, buf, dp, 10, l.ds_size[DS_DYNSTR])
+    dyn_ent(l, buf, dp, 11, dy_symsz(l) as i64)
+    dyn_ent(l, buf, dp, 21, 0 as i64)
+    dyn_ent(l, buf, dp, l.dyn_rel ? 17 : 7, l.ds_addr[DS_RELA])
+    dyn_ent(l, buf, dp, l.dyn_rel ? 18 : 8, l.ds_size[DS_RELA])
+    dyn_ent(l, buf, dp, l.dyn_rel ? 19 : 9, rsz as i64)
+    dyn_ent(l, buf, dp, l.dyn_rel ? 0x6ffffffa : 0x6ffffff9, nrel as i64)
+    if l.oc_size[OC_PREINITARR] > (0 as i64):
+        dyn_ent(l, buf, dp, 32, l.oc_addr[OC_PREINITARR])
+        dyn_ent(l, buf, dp, 33, l.oc_size[OC_PREINITARR])
+    end
+    dyn_ent(l, buf, dp, 25, l.oc_addr[OC_INITARR])
+    dyn_ent(l, buf, dp, 27, l.oc_size[OC_INITARR])
+    dyn_ent(l, buf, dp, 26, l.oc_addr[OC_FINIARR])
+    dyn_ent(l, buf, dp, 28, l.oc_size[OC_FINIARR])
+    dyn_ent(l, buf, dp, 0x6ffffff0, l.ds_addr[DS_VERSYM])
+    dyn_ent(l, buf, dp, 0x6ffffffe, l.ds_addr[DS_VERNEED])
+    dyn_ent(l, buf, dp, 0x6fffffff, nvn as i64)
+    dyn_ent(l, buf, dp, 30, 8 as i64)
+    dyn_ent(l, buf, dp, 0x6ffffffb, (l.pie ? (1 | 0x08000000) : 1) as i64)
+    dyn_ent(l, buf, dp, 0, 0 as i64)
+end
+
+func dyn_ent(l &: Nl, buf: u8*, dp &: i64, tag: int, val: i64):
+    if l.elf32:
+        wr32(buf, dp, tag as i64)
+        wr32(buf, dp + (4 as i64), val)
+        dp = dp + (8 as i64)
+        ret
+    end
+    wr64(buf, dp, tag as i64)
+    wr64(buf, dp + (8 as i64), val)
+    dp = dp + (16 as i64)
+end
+
+func a64_plt(buf: u8*, at: i64, pa: i64, slot: i64):
+    pg := (page4k(slot) - page4k(pa)) >> (12 as i64)
+    wr32(buf, at, (0x90000010 as i64) | ((pg & (3 as i64)) << (29 as i64)) | (((pg >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64)))
+    wr32(buf, at + (4 as i64), (0xF9400211 as i64) | (((slot & (0xFFF as i64)) >> (3 as i64)) << (10 as i64)))
+    wr32(buf, at + (8 as i64), (0x91000210 as i64) | ((slot & (0xFFF as i64)) << (10 as i64)))
+    wr32(buf, at + (12 as i64), 0xD61F0220 as i64)
+end

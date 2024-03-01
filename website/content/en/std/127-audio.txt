@@ -1,0 +1,286 @@
+pkg.en = audio
+pkg.name = audio
+pkg.group = Encoding and data
+pkg.summary = Sound as a clip of samples: cutting, mixing, measuring and converting it.
+pkg.title = The audio package in Salam | sound, clips and bitstreams
+pkg.description = The audio package in Salam: a clip of 32 bit float samples, cutting and mixing, loudness in decibels, mono and stereo, sample rates and a most significant bit first bitstream reader, with examples.
+pkg.import = audio
+pkg.flat = true
+group.Format.title = Format numbers
+group.Format = The formats this family knows by name. DetectFormat and FormatFromExt answer with one of these; whether this build can actually read one is a separate question for CanDecode in audio/codec.
+pkg.intro <<
+<p>This package is the middle of everything to do with sound in Salam. A <code>Clip</code> holds the sound itself: plain 32 bit floating point samples between -1 and 1, one frame after another, with the channels side by side. Reading and writing files is the job of the format packages, <a href="/std/audio/wav/">audio/wav</a> today, and <a href="/std/audio/codec/">audio/codec</a> opens any of them without being told which. Filters, a Fourier transform and careful resampling live in <a href="/std/audio/dsp/">audio/dsp</a>.</p>
+<p>What is here is the clip and everything that does not need to know a file format: cutting, joining, mixing, fading, measuring how loud something is, moving between mono and stereo and between sample rates, and the most significant bit first bitstream reader that every audio codec is written on top of.</p>
+<h3>Things to know</h3>
+<ul>
+<li>Samples are 32 bit floats. Every clip owns that memory; release it with <code>Free</code>.</li>
+<li>Because a float carries 24 bits of mantissa, 8, 16 and 24 bit sound makes the round trip through a clip <strong>exactly</strong>. Only a true 32 bit integer source loses its lowest 8 bits.</li>
+<li>A three minute stereo song at 44100 is about 63 MB as a clip, so decode a long file in pieces rather than all at once.</li>
+<li><code>bits</code> remembers the depth a clip was read at, so writing it again keeps that depth. A clip made with <code>New</code> has no depth, and an encoder then picks 16 bit.</li>
+<li>Anything that fails returns an empty clip rather than stopping the program, so check with <code>IsEmpty</code>.</li>
+<li><code>MsbReader</code> reads the most significant bit first. The <code>BitReader</code> in <a href="/std/compress/">compress</a> reads the other way round, for DEFLATE, and is not interchangeable with it.</li>
+</ul>
+
+<h2 id="guide-clip">A clip of sound</h2>
+<p>A clip is a rate, a channel count, a frame count and the samples. <code>New</code> gives you silence to fill in; <code>SetSample</code> and <code>Sample</code> reach one sample at a time by frame and channel. A frame is one sample for every channel, so a stereo clip of 100 frames holds 200 samples.</p>
+<p>Every clip holds memory of its own, so release each one with <code>Free</code>. Reading or writing outside the clip is not an error: <code>Sample</code> gives 0 and <code>SetSample</code> does nothing, which keeps loops at the edges simple.</p>
+
+<h2 id="guide-measure">How loud is it</h2>
+<p><code>Peak</code> is the furthest any single sample gets from zero and <code>RMS</code> follows loudness as an ear hears it. Both have a decibel form, where 0 dB is as loud as a sample can be and everything quieter is negative. <code>GainToDb</code> and <code>DbToGain</code> move between a plain multiplier and decibels.</p>
+<p>Silence has no decibel value, so <code>GainToDb(0.0)</code> returns <code>SilenceFloorDb</code> instead of running off to minus infinity. <code>FirstSound</code> and <code>LastSound</code> find where the sound really starts and stops, which is what <code>TrimSilence</code> is built from.</p>
+
+<h2 id="guide-edit">Cutting and joining</h2>
+<p><code>Slice</code> and <code>Trim</code> take a piece out, by frame or by time; <code>Concat</code> puts one clip after another and <code>Mix</code> lays them on top of each other. <code>Normalize</code> scales a clip so its peak lands exactly where you ask, and the two fades shape the ends so a cut does not click.</p>
+<p>Joining and mixing need both clips to agree on the sample rate and the channel count, and return an empty clip when they do not. Use <code>ToRate</code> and <code>ToChannels</code> first to bring them into line.</p>
+
+<h2 id="guide-convert">Rates, channels and depths</h2>
+<p><code>ToMono</code> averages the channels together and <code>ToStereo</code> spreads one channel across two. <code>ToRate</code> changes the sample rate by interpolating between samples, which is quick and good enough for speech; for music use <code>ResampleSinc</code> from <a href="/std/audio/dsp/">audio/dsp</a>. <code>ToBits</code> does not write a file, it rounds the samples to the steps of a depth so you can hear what that depth will cost.</p>
+<p><code>Deinterleave</code> hands back one clip per channel, each of which you must free, and <code>Interleave</code> weaves them back together.</p>
+
+<h2 id="guide-formats">Which format is this</h2>
+<p><code>DetectFormat</code> looks at the first few bytes and <code>FormatFromExt</code> at the file name. Both answer with a <code>Format</code> number, which <code>FormatName</code> turns into a short name. Knowing the format does not mean this build can decode it: ask <code>CanDecode</code> in <a href="/std/audio/codec/">audio/codec</a> for that.</p>
+<p>An <code>Info</code> is what a file says about itself, which the format packages fill in by reading a header rather than the whole file. It is the cheap way to show a length or a bit rate in a listing.</p>
+
+<h2 id="guide-msb">Reading a bitstream</h2>
+<p>Compressed audio is not laid out in bytes, it is laid out in bits, and every format from MP3 to FLAC counts those bits from the most significant end. <code>MsbReader</code> does that, with <code>MsbReadSigned</code> for two's complement fields and <code>MsbUnary</code> for the run of zeros that Rice and Golomb codes are built from. <code>MsbWriter</code> is the same thing in reverse.</p>
+<p>A read past the end does not stop the program: it hands back zeros and sets <code>bad</code>, which stays set, so one check after a group of reads is enough. Note again that <code>compress</code> has a bit reader of its own that runs the other way round, for DEFLATE; do not use it for audio.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Make and free a clip</td><td><code>New</code>, <code>NewSilence</code>, <code>Clone</code>, <code>Free</code></td></tr>
+<tr><td>Reach the samples</td><td><code>Sample</code>, <code>SetSample</code>, <code>AddSample</code>, <code>Data</code></td></tr>
+<tr><td>Cut and join</td><td><code>Slice</code>, <code>Trim</code>, <code>Concat</code>, <code>Mix</code>, <code>Split</code>, <code>Repeat</code></td></tr>
+<tr><td>Shape the sound</td><td><code>Gain</code>, <code>Normalize</code>, <code>FadeIn</code>, <code>FadeOut</code>, <code>Clamp</code></td></tr>
+<tr><td>Measure it</td><td><code>Peak</code>, <code>RMS</code>, <code>PeakDb</code>, <code>DcOffset</code>, <code>IsSilent</code></td></tr>
+<tr><td>Change its shape</td><td><code>ToMono</code>, <code>ToStereo</code>, <code>ToRate</code>, <code>ToBits</code></td></tr>
+<tr><td>Work out a format</td><td><code>DetectFormat</code>, <code>FormatFromExt</code>, <code>FormatName</code></td></tr>
+<tr><td>Write a codec</td><td><code>MsbReader</code>, <code>MsbWriter</code></td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.FormatAAC = AAC, on its own or in an MP4 file.
+doc.FormatAIFF = AIFF and AIFF-C.
+doc.FormatAU = The Sun and NeXT au format.
+doc.FormatFLAC = FLAC, lossless.
+doc.FormatMIDI = A standard MIDI file, which is notes rather than sound.
+doc.FormatMP3 = MPEG audio.
+doc.FormatOGG = Ogg, usually holding Vorbis.
+doc.FormatOpus = Opus in an Ogg stream.
+doc.FormatUnknown = Not a sound file this package knows.
+doc.FormatWAV = RIFF WAVE, read and written by audio/wav.
+doc.MaxSamples = The largest number of samples one clip may hold, so that a broken header cannot ask for all the memory.
+doc.SilenceFloorDb = The decibel value used for silence, because true silence has no decibel value.
+doc.ALawToPcm = One A-law byte back to a 16 bit sample, following G.711.
+doc.AddSample = Adds to one sample instead of replacing it.
+doc.Channel = One channel of the clip on its own, as a clip with one channel.
+doc.Clamp = Holds every sample inside -1 and 1.
+doc.Clone = A separate copy with its own samples.
+doc.Concat = One clip after the other. They must share a rate and a channel count.
+doc.CountClipped = How many samples reach the limit.
+doc.Data = The samples as a pointer, for code that walks them itself.
+doc.DbToGain = Turns decibels into a multiplier.
+doc.DcOffset = The average of every sample. Anything far from zero means the waveform is not centred.
+doc.DecodeFloatPcm = Fills a clip from raw IEEE floating point samples, 32 or 64 bit, either byte order.
+doc.DecodeLawPcm = Fills a clip from A-law or mu-law bytes, one byte per sample.
+doc.DecodePcm = Fills a clip from raw integer PCM at an offset, at any of the four depths, either byte order. 8 bit is unsigned in WAVE and signed in AIFF and au, which is what the last argument picks.
+doc.Deinterleave = Every channel as its own clip. Free each of them.
+doc.DetectFormat = Which format these bytes are, read from the few bytes at the front.
+doc.Duration = How many seconds long the clip is.
+doc.EncodeFloatPcm = Writes a clip as raw IEEE floating point samples, which keeps them exactly.
+doc.EncodeLawPcm = Writes a clip as A-law or mu-law bytes.
+doc.EncodePcm = Writes a clip as raw integer PCM at a depth and byte order, rounding and clamping as it goes.
+doc.FadeIn = Fades up from silence over this many seconds.
+doc.FadeOut = Fades down to silence over the last seconds.
+doc.FirstSound = The first frame above this many decibels, or -1 when there is none.
+doc.FormatFromExt = Which format this file name claims, from its extension.
+doc.FormatIsLossless = True when the format gives back exactly what was encoded.
+doc.FormatName = The short name of a format, such as wav.
+doc.FrameAt = The frame at this many seconds, held inside the clip.
+doc.Free = Releases the samples and leaves the clip empty.
+doc.Gain = Makes the clip louder or quieter by this many decibels.
+doc.GainToDb = Turns a multiplier into decibels. Zero gives SilenceFloorDb.
+doc.InBounds = True when this frame and channel are inside the clip.
+doc.Interleave = Several one channel clips woven into one clip with that many channels.
+doc.IsClipped = True when a sample reaches the limit, where it would have been cut off.
+doc.IsEmpty = True when the clip holds no sound, which is also what a failed call returns.
+doc.IsSilent = True when nothing in the clip rises above this many decibels.
+doc.LastSound = The last frame above this many decibels, or -1 when there is none.
+doc.Mix = Two clips added together, each at its own gain, as long as a clip.
+doc.MixAt = Adds one clip into another at a frame, at a gain, in place.
+doc.MsbAlign = Moves on to the next whole byte.
+doc.MsbBad = True once a read ran past the end.
+doc.MsbFinish = Pads the last byte and hands back the bytes.
+doc.MsbFree = Releases the writer's buffer.
+doc.MsbLeft = How many bits are still unread.
+doc.MsbLen = How many whole bytes the writer has finished.
+doc.MsbPad = Fills the last byte out with zeros.
+doc.MsbRead = The next bits as a number, up to 32 of them, most significant first.
+doc.MsbReadBit = The next single bit.
+doc.MsbReadI64 = The next bits as a long number, up to 56 of them.
+doc.MsbReadSigned = The next bits read as a signed number in two's complement.
+doc.MsbReaderFromBuf = A reader over a byte buffer.
+doc.MsbSeek = Moves the reader to this bit.
+doc.MsbSkip = Steps over this many bits.
+doc.MsbTell = Which bit the reader is on.
+doc.MsbUnary = Counts the zeros before the next one, the shape Rice and Golomb codes use.
+doc.MsbWrite = Writes the low bits of a number, most significant first.
+doc.MsbWriteBit = Writes one bit.
+doc.MsbWriteUnary = Writes this many zeros and then a one.
+doc.MuLawToPcm = One mu-law byte back to a 16 bit sample, following G.711.
+doc.New = A new clip of silence with this rate, channel count and frame count. The samples belong to the clip; release them with Free.
+doc.NewMsbReader = A reader over these bytes.
+doc.NewMsbWriter = A new writer with an empty buffer.
+doc.NewSilence = A new clip of silence this many seconds long.
+doc.Normalize = Scales the clip so its peak lands on this many decibels.
+doc.Pad = A new clip with silence added before and after.
+doc.PcmDepthValid = True for the four integer depths the PCM helpers accept: 8, 16, 24 and 32.
+doc.PcmToALaw = One 16 bit sample as one A-law byte. Telephony in Europe.
+doc.PcmToMuLaw = One 16 bit sample as one mu-law byte. Telephony in North America and Japan.
+doc.Peak = The largest distance from zero any sample reaches.
+doc.PeakChannel = The peak of one channel on its own.
+doc.PeakDb = The peak in decibels, where 0 is as loud as a sample can be.
+doc.RMS = The root mean square of every sample, which follows loudness better than the peak does.
+doc.RMSDb = The root mean square in decibels.
+doc.RMSRange = The root mean square of a stretch of frames.
+doc.Repeat = The clip laid end to end this many times.
+doc.Reverse = Turns the clip back to front.
+doc.Sample = One sample, between -1 and 1. Outside the clip it is 0.
+doc.SampleCount = Frames times channels, the number of samples in all.
+doc.Scale = Multiplies every sample by this number.
+doc.SecondsAt = How many seconds in this frame is.
+doc.SetSample = Writes one sample. Outside the clip it does nothing.
+doc.Silence = Sets every sample to zero without changing the shape.
+doc.Slice = A new clip holding these frames.
+doc.Split = Cuts the clip in two at a time, into head and tail.
+doc.ToBits = The clip rounded to the steps of this bit depth, which is how it will sound once written at that depth.
+doc.ToChannels = The clip with this many channels, copying or averaging as needed.
+doc.ToMono = Every channel averaged down to one.
+doc.ToRate = The clip at a new sample rate, interpolating between samples. For a cleaner result use ResampleSinc in audio/dsp.
+doc.ToStereo = The clip as two channels.
+doc.Trim = A new clip holding the sound between these two times.
+doc.TrimSilence = A new clip with the silence at each end removed.
+doc.Clip = A piece of sound: interleaved f32 samples with a sample rate, a channel count and a frame count.
+doc.Clip.rate = Frames per second, such as 44100.
+doc.Clip.channels = How many channels each frame holds; 1 is mono, 2 is stereo.
+doc.Clip.frames = How many frames the clip holds. One frame is one sample per channel.
+doc.Clip.bits = The bit depth the samples came from, or 0 when they were made in memory. An encoder with no depth of its own writes 16 bit.
+doc.Clip.samples = The samples themselves, 32 bit floats, one frame after another with the channels side by side.
+doc.Info = What a file says about itself, read without decoding the sound.
+doc.Info.format = Which format it is, one of the Format numbers.
+doc.Info.rate = Frames per second.
+doc.Info.channels = How many channels.
+doc.Info.frames = How many frames, so how long it is.
+doc.Info.bits = Bits per sample.
+doc.Info.bitrate = Bits per second of audio.
+doc.Info.vbr = True when the bit rate changes through the file.
+doc.Info.duration = How many seconds long it is.
+doc.Info.lossless = True when decoding gives back exactly what was encoded.
+doc.MsbReader = Reads a bit at a time, most significant bit first, the order every audio codec uses.
+doc.MsbReader.data = The bytes being read.
+doc.MsbReader.len = How many bytes there are.
+doc.MsbReader.pos = Which byte comes next.
+doc.MsbReader.acc = Bits already pulled out of the bytes but not yet handed back.
+doc.MsbReader.nbits = How many bits are waiting in the accumulator.
+doc.MsbReader.bad = True once a read ran past the end. It stays true.
+doc.MsbWriter = Writes a bit at a time, most significant bit first.
+doc.MsbWriter.buf = The bytes written so far.
+doc.MsbWriter.acc = Bits not yet complete enough to make a byte.
+doc.MsbWriter.nbits = How many bits are waiting in the accumulator.
+
+ex.MaxSamples = audio-Clip
+ex.SilenceFloorDb = audio-Measure
+ex.ALawToPcm = audio-Pcm
+ex.AddSample = audio-Clip
+ex.Channel = audio-Convert
+ex.Clamp = audio-Edit
+ex.Clone = audio-Clip
+ex.Concat = audio-Edit
+ex.CountClipped = audio-Measure
+ex.Data = audio-Clip
+ex.DbToGain = audio-Measure
+ex.DcOffset = audio-Measure
+ex.DecodeFloatPcm = audio-Pcm
+ex.DecodeLawPcm = audio-Pcm
+ex.DecodePcm = audio-Pcm
+ex.Deinterleave = audio-Convert
+ex.DetectFormat = audio-Formats
+ex.Duration = audio-Clip
+ex.EncodeFloatPcm = audio-Pcm
+ex.EncodeLawPcm = audio-Pcm
+ex.EncodePcm = audio-Pcm
+ex.FadeIn = audio-Edit
+ex.FadeOut = audio-Edit
+ex.FirstSound = audio-Measure
+ex.FormatFromExt = audio-Formats
+ex.FormatIsLossless = audio-Formats
+ex.FormatName = audio-Formats
+ex.FrameAt = audio-Clip
+ex.Free = audio-Clip
+ex.Gain = audio-Edit
+ex.GainToDb = audio-Measure
+ex.InBounds = audio-Clip
+ex.Interleave = audio-Convert
+ex.IsClipped = audio-Measure
+ex.IsEmpty = audio-Clip
+ex.IsSilent = audio-Measure
+ex.LastSound = audio-Measure
+ex.Mix = audio-Edit
+ex.MixAt = audio-Edit
+ex.MsbAlign = audio-Msb
+ex.MsbBad = audio-Msb
+ex.MsbFinish = audio-Msb
+ex.MsbFree = audio-Msb
+ex.MsbLeft = audio-Msb
+ex.MsbLen = audio-Msb
+ex.MsbPad = audio-Msb
+ex.MsbRead = audio-Msb
+ex.MsbReadBit = audio-Msb
+ex.MsbReadI64 = audio-Msb
+ex.MsbReadSigned = audio-Msb
+ex.MsbReaderFromBuf = audio-Msb
+ex.MsbSeek = audio-Msb
+ex.MsbSkip = audio-Msb
+ex.MsbTell = audio-Msb
+ex.MsbUnary = audio-Msb
+ex.MsbWrite = audio-Msb
+ex.MsbWriteBit = audio-Msb
+ex.MsbWriteUnary = audio-Msb
+ex.MuLawToPcm = audio-Pcm
+ex.New = audio-Clip
+ex.NewMsbReader = audio-Msb
+ex.NewMsbWriter = audio-Msb
+ex.NewSilence = audio-Clip
+ex.Normalize = audio-Edit
+ex.Pad = audio-Edit
+ex.PcmDepthValid = audio-Pcm
+ex.PcmToALaw = audio-Pcm
+ex.PcmToMuLaw = audio-Pcm
+ex.Peak = audio-Measure
+ex.PeakChannel = audio-Measure
+ex.PeakDb = audio-Measure
+ex.RMS = audio-Measure
+ex.RMSDb = audio-Measure
+ex.RMSRange = audio-Measure
+ex.Repeat = audio-Edit
+ex.Reverse = audio-Edit
+ex.Sample = audio-Clip
+ex.SampleCount = audio-Clip
+ex.Scale = audio-Edit
+ex.SecondsAt = audio-Clip
+ex.SetSample = audio-Clip
+ex.Silence = audio-Clip
+ex.Slice = audio-Edit
+ex.Split = audio-Edit
+ex.ToBits = audio-Convert
+ex.ToChannels = audio-Convert
+ex.ToMono = audio-Convert
+ex.ToRate = audio-Convert
+ex.ToStereo = audio-Convert
+ex.Trim = audio-Edit
+ex.TrimSilence = audio-Edit
+ex.Clip = audio-Clip
+ex.Info = audio-Formats
+ex.MsbReader = audio-Msb
+ex.MsbWriter = audio-Msb
+ex.group.Format = audio-Formats

@@ -1,0 +1,426 @@
+package nativelink
+
+func classify(l &: Nl, s: int): int:
+    fl := l.s_flags[s]
+    if (fl & (2 as i64)) == (0 as i64):
+        ret OC_NONE
+    end
+    ty := l.s_type[s]
+    nm := l.s_name[s]
+    if ty == 7:
+        ret OC_NONE
+    end
+    if (fl & (0x400 as i64)) != (0 as i64):
+        ret ty == 8 ? OC_TBSS : OC_TDATA
+    end
+    if ty == 8:
+        ret OC_BSS
+    end
+    if name_is(l, nm, ".init"):
+        ret OC_INIT
+    end
+    if name_is(l, nm, ".fini"):
+        ret OC_FINI
+    end
+    if ty == 14 or name_starts(l, nm, ".init_array"):
+        ret OC_INITARR
+    end
+    if ty == 15 or name_starts(l, nm, ".fini_array"):
+        ret OC_FINIARR
+    end
+    if ty == 16 or name_starts(l, nm, ".preinit_array"):
+        ret OC_PREINITARR
+    end
+    if name_is(l, nm, ".eh_frame"):
+        ret OC_EHFRAME
+    end
+    if ty == 0x70000001:
+        ret OC_EXIDX
+    end
+    if (fl & (4 as i64)) != (0 as i64):
+        ret OC_TEXT
+    end
+    if (fl & (1 as i64)) != (0 as i64):
+        ret OC_DATA
+    end
+    if l.dynamic and l.pie and has_absw(l, s):
+        ret OC_DATAREL
+    end
+    ret OC_RODATA
+end
+
+func sym_sec(l &: Nl, os: int): int:
+    g := l.os_glob[os]
+    if g >= 0:
+        if l.g_state[g] == SY_DEF:
+            ret l.g_sec[g]
+        end
+        ret 0 - 1
+    end
+    ret l.os_sec[os]
+end
+
+func mark_live(l &: Nl):
+    repeat l.s_obj.len() in s:
+        l.s_oc[s] = classify(l, s)
+    end
+    mut wl := Vector {} as Vector<int>
+    st := glob_find(l, "_start")
+    if st >= 0 and l.g_sec[st] >= 0:
+        wl.push(l.g_sec[st])
+    end
+    repeat l.s_obj.len() in s2:
+        c := l.s_oc[s2]
+        if c == OC_INIT or c == OC_FINI or c == OC_INITARR or c == OC_FINIARR or c == OC_EHFRAME:
+            wl.push(s2)
+        end
+    end
+    mut more := true
+    until more:
+        live_drain(l, wl)
+        more = false
+        repeat l.s_obj.len() in s4:
+            k4 := l.s_link[s4]
+            if l.s_oc[s4] == OC_EXIDX and not l.s_live[s4] and not l.s_drop[s4] and k4 >= 0 and l.s_live[k4]:
+                wl.push(s4)
+                more = true
+            end
+        end
+    end
+    wl.free()
+end
+
+func live_drain(l &: Nl, wl &: Vector<int>):
+    until wl.len() > 0:
+        s3 := wl.pop()
+        if s3 < 0 or l.s_live[s3]:
+            continue
+        end
+        if l.s_oc[s3] == OC_NONE or l.s_drop[s3]:
+            continue
+        end
+        l.s_live[s3] = true
+        r0 := l.s_rel0[s3]
+        repeat l.s_nrel[s3] in k:
+            t := sym_sec(l, l.r_sym[r0 + k])
+            if t >= 0 and l.s_drop[t] and l.s_oc[s3] != OC_EHFRAME and l.s_oc[s3] != OC_EXIDX and not l.o_coff[l.s_obj[s3]]:
+                nl_fail(l, l.o_label[l.s_obj[s3]] + ": refers to a section of a COMDAT group that another object already provides")
+                ret
+            end
+            if t >= 0 and not l.s_live[t]:
+                wl.push(t)
+            end
+        end
+    end
+end
+
+func got_add(l &: Nl, os: int):
+    g := l.os_glob[os]
+    if g >= 0:
+        if l.g_got[g] < 0:
+            l.g_got[g] = l.got_sym.len()
+            l.got_sym.push(g)
+        end
+        ret
+    end
+    if not l.got_loc.has(os):
+        l.got_loc.put(os, l.got_sym.len())
+        l.got_sym.push(0 - 1 - os)
+    end
+end
+
+func got_needed(l &: Nl):
+    repeat l.s_obj.len() in s:
+        if not l.s_live[s]:
+            continue
+        end
+        p := fptr(l, l.o_file[l.s_obj[s]])
+        r0 := l.s_rel0[s]
+        repeat l.s_nrel[s] in k:
+            ty := l.r_type[r0 + k]
+            tk := tls_got_kind(l, ty)
+            if tk > 0:
+                _ts := tls_slot(l, l.r_sym[r0 + k], tk)
+                continue
+            end
+            if l.mach == EM_386:
+                if ty == 3 or ty == 43:
+                    got_add(l, l.r_sym[r0 + k])
+                end
+                continue
+            end
+            if l.mach == EM_AARCH64:
+                if ty == 311 or ty == 312:
+                    got_add(l, l.r_sym[r0 + k])
+                end
+                continue
+            end
+            if l.mach == EM_RISCV:
+                if ty == 20:
+                    got_add(l, l.r_sym[r0 + k])
+                end
+                continue
+            end
+            if l.mach == EM_ARM:
+                if ty == 26 or ty == 96 or ty == 41:
+                    got_add(l, l.r_sym[r0 + k])
+                end
+                continue
+            end
+            if ty == 9 or ty == 41 or ty == 42:
+                os := l.r_sym[r0 + k]
+                off := l.s_off[s] + l.r_off[r0 + k]
+                relax := off >= (2 as i64) and p[off - (2 as i64)] == (0x8b as u8) and sym_sec(l, os) >= 0 and ty != 9
+                if not relax:
+                    g := l.os_glob[os]
+                    if g < 0:
+                        nl_fail(l, l.o_label[l.s_obj[s]] + ": GOT reference to a local symbol is not supported")
+                        ret
+                    end
+                    if l.g_got[g] < 0:
+                        l.g_got[g] = l.got_sym.len()
+                        l.got_sym.push(g)
+                    end
+                end
+            end
+        end
+    end
+end
+
+func has_exidx(l &: Nl): bool:
+    repeat l.s_obj.len() in s:
+        if l.s_live[s] and l.s_oc[s] == OC_EXIDX:
+            ret true
+        end
+    end
+    ret false
+end
+
+func sort_exidx(l &: Nl, buf: u8*):
+    n := (l.oc_size[OC_EXIDX] / (8 as i64)) as int
+    if n < 2:
+        ret
+    end
+    base := l.oc_fpos[OC_EXIDX]
+    va := l.oc_addr[OC_EXIDX]
+    mut fn := Vector {} as Vector<i64>
+    mut w1 := Vector {} as Vector<i64>
+    mut ext := Vector {} as Vector<bool>
+    repeat n in i:
+        at := base + ((8 * i) as i64)
+        a := va + ((8 * i) as i64)
+        fn.push(a + sext(rd32(buf, at) & (0x7FFFFFFF as i64), 31))
+        v := rd32(buf, at + (4 as i64))
+        pr := (v & (0x80000000 as i64)) == (0 as i64) and v != (1 as i64)
+        ext.push(pr)
+        w1.push(pr ? a + (4 as i64) + sext(v & (0x7FFFFFFF as i64), 31) : v)
+    end
+    mut i2 := 1
+    until i2 < n:
+        mut j := i2
+        until j > 0 and fn[j] < fn[j - 1]:
+            t0 := fn[j]
+            fn[j] = fn[j - 1]
+            fn[j - 1] = t0
+            t1 := w1[j]
+            w1[j] = w1[j - 1]
+            w1[j - 1] = t1
+            t2 := ext[j]
+            ext[j] = ext[j - 1]
+            ext[j - 1] = t2
+            j -= 1
+        end
+        i2 += 1
+    end
+    repeat n in k:
+        at2 := base + ((8 * k) as i64)
+        a2 := va + ((8 * k) as i64)
+        wr32(buf, at2, (fn[k] - a2) & (0x7FFFFFFF as i64))
+        if ext[k]:
+            wr32(buf, at2 + (4 as i64), (w1[k] - a2 - (4 as i64)) & (0x7FFFFFFF as i64))
+        else:
+            wr32(buf, at2 + (4 as i64), w1[k])
+        end
+    end
+    fn.free()
+    w1.free()
+    ext.free()
+end
+
+func place_class(l &: Nl, c: int, fpos &: i64, bss: bool):
+    mut start := fpos
+    mut first := true
+    repeat l.s_obj.len() in s:
+        if not l.s_live[s] or l.s_oc[s] != c:
+            continue
+        end
+        a := l.s_align[s]
+        fpos = align_to(fpos, a)
+        if first:
+            start = fpos
+            first = false
+            l.oc_align[c] = a
+        end
+        l.s_fpos[s] = bss ? (0 - 1 as i64) : fpos
+        l.s_addr[s] = l.base + fpos
+        fpos = fpos + l.s_size[s] + th_pad(l, s)
+    end
+    l.oc_addr[c] = l.base + start
+    l.oc_fpos[c] = start
+    l.oc_size[c] = fpos - start
+end
+
+func place_reset(l &: Nl):
+    l.oc_addr.clear()
+    l.oc_size.clear()
+    l.oc_fpos.clear()
+    l.oc_align.clear()
+    l.seg_vaddr.clear()
+    l.seg_fpos.clear()
+    l.seg_fsz.clear()
+    l.seg_msz.clear()
+end
+
+func place_all(l &: Nl):
+    got_needed(l)
+    if not l.ok:
+        ret
+    end
+    repeat OC_COUNT:
+        l.oc_addr.push(0 as i64)
+        l.oc_size.push(0 as i64)
+        l.oc_fpos.push(0 as i64)
+        l.oc_align.push(1 as i64)
+    end
+    repeat 3:
+        l.seg_vaddr.push(0 as i64)
+        l.seg_fpos.push(0 as i64)
+        l.seg_fsz.push(0 as i64)
+        l.seg_msz.push(0 as i64)
+    end
+    l.nphdr = 4
+    ehh_reserve(l)
+    if has_exidx(l):
+        l.nphdr += 1
+    end
+    if has_tls(l):
+        l.nphdr += 1
+    end
+    mut fpos := ehdr_size(l)
+    place_class(l, OC_RODATA, fpos, false)
+    place_class(l, OC_EHFRAME, fpos, false)
+    ehh_place(l, fpos)
+    place_class(l, OC_EXIDX, fpos, false)
+    if l.oc_size[OC_EXIDX] > (0 as i64):
+        extra := (8 * th_exidx_secs(l).len()) as i64
+        fpos = fpos + extra
+        l.oc_size[OC_EXIDX] = l.oc_size[OC_EXIDX] + extra
+    end
+    l.seg_vaddr[0] = l.base
+    l.seg_fpos[0] = 0 as i64
+    l.seg_fsz[0] = fpos
+    l.seg_msz[0] = fpos
+    fpos = align_to(fpos, nl_page(l) as i64)
+    rx := fpos
+    place_class(l, OC_INIT, fpos, false)
+    place_class(l, OC_TEXT, fpos, false)
+    place_class(l, OC_FINI, fpos, false)
+    l.seg_vaddr[1] = l.base + rx
+    l.seg_fpos[1] = rx
+    l.seg_fsz[1] = fpos - rx
+    l.seg_msz[1] = fpos - rx
+    fpos = align_to(fpos, nl_page(l) as i64)
+    rw := fpos
+    place_class(l, OC_PREINITARR, fpos, false)
+    place_class(l, OC_INITARR, fpos, false)
+    place_class(l, OC_FINIARR, fpos, false)
+    place_class(l, OC_DATA, fpos, false)
+    tls_place(l, fpos)
+    fpos = align_to(fpos, 8 as i64)
+    l.oc_addr[OC_GOT] = l.base + fpos
+    l.oc_fpos[OC_GOT] = fpos
+    l.oc_size[OC_GOT] = (got_esz(l) * l.got_sym.len()) as i64
+    fpos = fpos + l.oc_size[OC_GOT]
+    file_end := fpos
+    mut mem := fpos
+    place_class(l, OC_BSS, mem, true)
+    place_commons(l, mem)
+    l.seg_vaddr[2] = l.base + rw
+    l.seg_fpos[2] = rw
+    l.seg_fsz[2] = file_end - rw
+    l.seg_msz[2] = mem - rw
+    l.file_size = file_end
+    l.image_end = l.base + mem
+    st := glob_find(l, "_start")
+    l.entry = sym_addr_g(l, st)
+end
+
+func sym_addr_g(l &: Nl, g: int): i64:
+    st := l.g_state[g]
+    if st == SY_SHARED:
+        ret dyn_shared_addr(l, g)
+    end
+    if st == SY_DEF:
+        ret l.s_addr[l.g_sec[g]] + l.g_val[g]
+    end
+    k := l.g_sec[g]
+    if k == SYN_PREINIT_START: ret l.oc_addr[OC_PREINITARR] end
+    if k == SYN_PREINIT_END: ret l.oc_addr[OC_PREINITARR] + l.oc_size[OC_PREINITARR] end
+    if k == SYN_INIT_START: ret l.oc_addr[OC_INITARR] end
+    if k == SYN_INIT_END: ret l.oc_addr[OC_INITARR] + l.oc_size[OC_INITARR] end
+    if k == SYN_FINI_START: ret l.oc_addr[OC_FINIARR] end
+    if k == SYN_FINI_END: ret l.oc_addr[OC_FINIARR] + l.oc_size[OC_FINIARR] end
+    if k == SYN_GOT: ret l.oc_addr[OC_GOT] end
+    if k == SYN_BSS: ret l.oc_addr[OC_BSS] end
+    if k == SYN_END: ret l.image_end end
+    if k == SYN_EHDR: ret l.base end
+    if k == SYN_ZERO: ret 0 end
+    if k == SYN_DYNAMIC: ret l.ds_addr[DS_DYNAMIC] end
+    if k == SYN_GP: ret l.oc_addr[OC_DATA] + (0x800 as i64) end
+    if k == SYN_EXIDX_START: ret l.oc_addr[OC_EXIDX] end
+    if k == SYN_EXIDX_END: ret l.oc_addr[OC_EXIDX] + l.oc_size[OC_EXIDX] end
+    ret l.g_val[g]
+end
+
+func sym_addr(l &: Nl, os: int): i64:
+    g := l.os_glob[os]
+    if g >= 0:
+        ret sym_addr_g(l, g)
+    end
+    s := l.os_sec[os]
+    if s >= 0:
+        ret l.s_addr[s] + l.os_val[os]
+    end
+    ret l.os_val[os]
+end
+
+func ehdr_size(l &: Nl): i64:
+    if l.elf32:
+        ret 52 + l.nphdr * 32
+    end
+    ret 64 + l.nphdr * 56
+end
+
+func place_commons(l &: Nl, mem &: i64):
+    repeat l.g_name.len() in g:
+        sz := l.g_common[g]
+        relaid := l.g_state[g] == SY_ABS and l.g_sec[g] == SYN_COMMON
+        if (l.g_state[g] != SY_UNDEF and not relaid) or sz <= (0 as i64):
+            continue
+        end
+        mut al := 1 as i64
+        until al < sz and al < (16 as i64):
+            al = al * (2 as i64)
+        end
+        mem = align_to(mem, al)
+        l.g_state[g] = SY_ABS
+        l.g_sec[g] = SYN_COMMON
+        l.g_val[g] = l.base + mem
+        mem = mem + sz
+        if l.oc_size[OC_BSS] == (0 as i64):
+            l.oc_addr[OC_BSS] = l.base + mem - sz
+            l.oc_fpos[OC_BSS] = mem - sz
+        end
+        l.oc_size[OC_BSS] = l.base + mem - l.oc_addr[OC_BSS]
+    end
+end

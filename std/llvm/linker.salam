@@ -1,0 +1,601 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package llvm
+
+@en "LinkResult"
+@fa "نتیجه پیوند"
+pub struct LinkResult:
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+end
+
+func argv_of(items: Vector<str>): void*:
+    mut buf := mem.Allocate((items.len() as u64) * (sizeof(str) as u64)) as str*
+    repeat items.len() in i:
+        buf[i] = items.get(i)
+    end
+    ret buf as void*
+end
+
+func elf_arch_of(t: str): str:
+    if str.Contains(t, "aarch64") or str.Contains(t, "arm64"): ret "aarch64" end
+    if str.Contains(t, "i686") or str.Contains(t, "i386") or str.Contains(t, "i586"): ret "i386" end
+    if str.Contains(t, "arm"): ret "arm" end
+    ret "x86_64"
+end
+
+func elf_emul_of(t: str): str:
+    if str.Contains(t, "aarch64") or str.Contains(t, "arm64"): ret "aarch64linux" end
+    if str.Contains(t, "i686") or str.Contains(t, "i386") or str.Contains(t, "i586"): ret "elf_i386" end
+    if str.Contains(t, "arm"): ret "armelf_linux_eabi" end
+    ret "elf_x86_64"
+end
+
+func mingw_arch(t: str): str:
+    if str.Contains(t, "aarch64") or str.Contains(t, "arm64"): ret "aarch64" end
+    if str.Contains(t, "i686") or str.Contains(t, "i386") or str.Contains(t, "i586"): ret "i686" end
+    ret "x86_64"
+end
+
+func mingw_emul(t: str): str:
+    if str.Contains(t, "aarch64") or str.Contains(t, "arm64"): ret "arm64pe" end
+    if str.Contains(t, "i686") or str.Contains(t, "i386") or str.Contains(t, "i586"): ret "i386pe" end
+    ret "i386pep"
+end
+
+func find_compiler_rt(rtarch: str): str:
+    mut bases := Vector {} as Vector<str>
+    defer bases.free()
+    bases.push("/usr/lib/llvm-22/lib/clang")
+    bases.push("/usr/lib/llvm/lib/clang")
+    bases.push("/usr/lib/clang")
+    repeat bases.len() in bi:
+        base := bases.get(bi)
+        if not os.IsDir(base):
+            continue
+        end
+        entries := os.ListDir(base)
+        mut hit := ""
+        repeat entries.len() in i:
+            name := entries.get(i)
+            candidate := filepath.Join(filepath.Join(filepath.Join(base, name), "lib"), "linux")
+            path := filepath.Join(candidate, "libclang_rt.builtins-" + rtarch + ".a")
+            if os.Exists(path) and str.Len(hit) == 0:
+                hit = path
+            end
+        end
+        entries.free()
+        if str.Len(hit) > 0:
+            ret hit
+        end
+    end
+    ret ""
+end
+
+func find_mingw_gccdir(arch: str): str:
+    base := "/usr/lib/gcc/" + arch + "-w64-mingw32"
+    if not os.IsDir(base):
+        ret ""
+    end
+    entries := os.ListDir(base)
+    defer entries.free()
+    mut found := ""
+    repeat entries.len() in i:
+        name := entries.get(i)
+        if str.Len(name) > 0 and str.StartsWith(name, "."):
+            continue
+        end
+        dir := filepath.Join(base, name)
+        if os.Exists(filepath.Join(dir, "crtbegin.o")):
+            found = dir
+            if str.Contains(name, "win32"):
+                ret found
+            end
+        end
+    end
+    ret found
+end
+
+func musl_sysroot(explicit: str, arch: str): str:
+    if str.Len(explicit) > 0:
+        ret explicit
+    end
+    env := os.Env("SALAM_SYSROOTS")
+    if str.Len(env) > 0:
+        candidate := filepath.Join(env, arch + "-linux-musl")
+        if os.Exists(filepath.Join(candidate, "crt1.o")):
+            ret candidate
+        end
+    end
+    ret "/usr/lib/" + arch + "-linux-musl"
+end
+
+func mingw_sysroot(explicit: str, arch: str): str:
+    if str.Len(explicit) > 0:
+        ret explicit
+    end
+    env := os.Env("SALAM_SYSROOTS")
+    if str.Len(env) > 0:
+        candidate := filepath.Join(env, arch + "-w64-mingw32")
+        if os.Exists(filepath.Join(candidate, "lib/crt2.o")):
+            ret candidate
+        end
+    end
+    ret "/usr/" + arch + "-w64-mingw32"
+end
+
+func musl_folds_into_libc(flag: str): bool:
+    mut names := Vector {} as Vector<str>
+    names.push("pthread")
+    names.push("dl")
+    names.push("rt")
+    names.push("util")
+    names.push("anl")
+    names.push("resolv")
+    names.push("crypt")
+    names.push("m")
+    defer names.free()
+    repeat names.len() in i:
+        n := names.get(i)
+        if str.Equals(flag, "-l" + n) or str.Equals(flag, "-l:lib" + n + ".a"):
+            ret true
+        end
+    end
+    ret false
+end
+
+func user_libs_of(opts: Options): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    repeat opts.link_libs.len() in i:
+        s := opts.link_libs.get(i)
+        if str.Len(s) == 0:
+            continue
+        end
+        if str.StartsWith(s, "-") or str.Contains(s, "/") or str.Contains(s, "\\") or str.Contains(s, "."):
+            out.push(s)
+            continue
+        end
+        mut kind := ""
+        if i < opts.link_kinds.len():
+            kind = opts.link_kinds.get(i)
+        end
+        if str.Equals(kind, "static"):
+            out.push("-l:lib" + s + ".a")
+        else:
+            out.push("-l" + s)
+        end
+    end
+    ret out
+end
+
+if SALAM_OS_WINDOWS:
+    func resolve_linker(): str:
+        ret "gcc"
+    end
+else:
+    func resolve_linker(): str:
+        ret "cc"
+    end
+end
+
+func _on_path(name: str): bool:
+    mut sep := ":"
+    if SALAM_OS_WINDOWS:
+        sep = ";"
+    end
+    dirs := str.Split(os.Env("PATH"), sep)
+    defer dirs.free()
+    repeat dirs.len() in i:
+        d := dirs.get(i)
+        if str.Len(d) > 0 and os.Exists(d + "/" + name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func _cross_linker(opts: Options): str:
+    t := opts.target_triple
+    host := resolve_linker()
+    if str.Len(t) == 0:
+        ret host
+    end
+    win := str.Contains(t, "windows") or str.Contains(t, "mingw") or str.Contains(t, "win32")
+    if SALAM_OS_WINDOWS:
+        if win:
+            ret host
+        end
+    else:
+        if SALAM_OS_LINUX:
+            if str.Contains(t, "linux") and str.Contains(t, "gnu") and str.StartsWith(t, _host_arch()):
+                ret host
+            end
+        else:
+            if str.Contains(t, "apple") or str.Contains(t, "darwin"):
+                ret host
+            end
+        end
+    end
+    if win and (str.Contains(t, "gnu") or str.Contains(t, "mingw")):
+        mut arch := "x86_64"
+        if str.StartsWith(t, "i686") or str.StartsWith(t, "i386"):
+            arch = "i686"
+        else str.StartsWith(t, "aarch64"):
+            arch = "aarch64"
+        end
+        mingw := arch + "-w64-mingw32-gcc"
+        if _on_path(mingw):
+            ret mingw
+        end
+    end
+    if _on_path("clang"):
+        mut c := "clang --target=" + t
+        if _on_path("ld.lld"):
+            c = c + " -fuse-ld=lld"
+        end
+        if str.Len(opts.sysroot) > 0:
+            c = c + ` --sysroot="` + opts.sysroot + `"`
+        end
+        ret c
+    end
+    ret host
+end
+
+func _host_arch(): str:
+    if SALAM_ARCH_ARM64:
+        ret "aarch64"
+    else:
+        if SALAM_ARCH_X86:
+            ret "i686"
+        else:
+            ret "x86_64"
+        end
+    end
+end
+
+func _target_is_darwin(opts: Options): bool:
+    t := opts.target_triple
+    if str.Len(t) == 0:
+        if SALAM_OS_MAC:
+            ret true
+        else:
+            ret false
+        end
+    end
+    ret str.Contains(t, "darwin") or str.Contains(t, "apple") or str.Contains(t, "macos")
+end
+
+@en "CanLinkTriple"
+@fa "می‌توان سه‌تایی را پیوند داد"
+pub func CanLinkTriple(t: str): bool:
+    if str.Len(t) == 0 or not LldAvailable():
+        ret false
+    end
+    win := str.Contains(t, "windows") or str.Contains(t, "mingw") or str.Contains(t, "win32")
+    gnu := str.Contains(t, "gnu") or str.Contains(t, "mingw")
+    musl := str.Contains(t, "linux") and str.Contains(t, "musl")
+    wasi := str.Contains(t, "wasm32") and str.Contains(t, "wasi")
+    ret (win and gnu) or musl or wasi
+end
+
+@en "LinkExternal"
+@fa "پیوند خارجی"
+pub func LinkExternal(obj: str, out_path: str, opts: Options): LinkResult:
+    linker := _cross_linker(opts)
+    mut cmd := ""
+    if str.Contains(linker, " "):
+        cmd = linker + ` "` + obj + `"`
+    else:
+        cmd = `"` + linker + `" "` + obj + `"`
+    end
+    repeat opts.extra_objects.len() in xo:
+        cmd += ` "` + opts.extra_objects.get(xo) + `"`
+    end
+    cmd += ` -o "` + out_path + `"`
+    repeat opts.lib_paths.len() in i:
+        cmd += ` -L"` + opts.lib_paths.get(i) + `"`
+    end
+    darwin := _target_is_darwin(opts)
+    repeat opts.link_libs.len() in i:
+        spec := opts.link_libs.get(i)
+        if str.Len(spec) == 0:
+            continue
+        end
+        if str.StartsWith(spec, "-") or str.Contains(spec, "/") or str.Contains(spec, "\\") or str.Contains(spec, "."):
+            cmd += ` "` + spec + `"`
+            continue
+        end
+        mut kind := ""
+        if i < opts.link_kinds.len():
+            kind = opts.link_kinds.get(i)
+        end
+        if str.Equals(kind, "framework"):
+            if darwin:
+                cmd += " -framework " + spec
+            end
+            continue
+        end
+        if str.Equals(kind, "static") and not darwin:
+            cmd += " -Wl,-Bstatic -l" + spec + " -Wl,-Bdynamic"
+            continue
+        end
+        cmd += " -l" + spec
+    end
+    cmd += " -lm"
+    if os.Run(cmd) == 0:
+        ret LinkResult { ok = true }
+    end
+    ret LinkResult { ok = false, err = "external link failed: " + cmd }
+end
+
+@en "HostLinkTriple"
+@fa "سه‌تایی پیوند میزبان"
+pub func HostLinkTriple(): str:
+    host := DefaultTriple()
+    if str.Len(host) == 0:
+        ret ""
+    end
+    if str.Contains(host, "windows") or str.Contains(host, "mingw") or str.Contains(host, "win32"):
+        if str.Contains(host, "msvc"):
+            ret ""
+        end
+        ret host
+    end
+    if not str.Contains(host, "linux"):
+        ret ""
+    end
+    mut arch := "x86_64"
+    if str.Contains(host, "aarch64") or str.Contains(host, "arm64"):
+        arch = "aarch64"
+    else str.Contains(host, "i686") or str.Contains(host, "i386") or str.Contains(host, "i586"):
+        arch = "i386"
+    else str.Contains(host, "arm"):
+        arch = "arm"
+    end
+    env := os.Env("SALAM_SYSROOTS")
+    if str.Len(env) == 0:
+        ret ""
+    end
+    if not os.Exists(filepath.Join(filepath.Join(env, arch + "-linux-musl"), "crt1.o")):
+        ret ""
+    end
+    ret (str.Equals(arch, "i386") ? "i686" : arch) + "-linux-musl"
+end
+
+@en "LinkElf"
+@fa "پیوند ای ال اف"
+pub func LinkElf(obj: str, out_path: str, opts: Options): LinkResult:
+    t := opts.target_triple
+    arch := elf_arch_of(t)
+    emul := elf_emul_of(t)
+    sr := musl_sysroot(opts.sysroot, arch)
+
+    crt1 := filepath.Join(sr, "crt1.o")
+    if not os.Exists(crt1):
+        ret LinkResult {
+            ok = false, err = "no musl sysroot for '" + t + "' (looked in " + sr + "): install musl-dev or bundle a sysroot ($SALAM_SYSROOTS)"
+        }
+    end
+    crti := filepath.Join(sr, "crti.o")
+    crtn := filepath.Join(sr, "crtn.o")
+
+    mut rt := filepath.Join(sr, "libclang_rt.builtins-" + arch + ".a")
+    if not os.Exists(rt):
+        rt = find_compiler_rt(arch)
+    end
+    have_gcc := os.Exists(filepath.Join(sr, "libgcc.a"))
+
+    mut argv := Vector {} as Vector<str>
+    defer argv.free()
+    argv.push("ld.lld")
+    argv.push("-m")
+    argv.push(emul)
+    argv.push("-static")
+    if not opts.debug_info:
+        argv.push("-s")
+    end
+    argv.push("-o")
+    argv.push(out_path)
+    argv.push(crt1)
+    argv.push(crti)
+    argv.push("-L" + sr)
+    repeat opts.lib_paths.len() in lpi:
+        argv.push("-L" + opts.lib_paths.get(lpi))
+    end
+    argv.push(obj)
+    repeat opts.extra_objects.len() in xo:
+        argv.push(opts.extra_objects.get(xo))
+    end
+    libs := user_libs_of(opts)
+    defer libs.free()
+    repeat libs.len() in i:
+        l := libs.get(i)
+        if musl_folds_into_libc(l):
+            continue
+        end
+        argv.push(l)
+    end
+    argv.push("--start-group")
+    argv.push("-lc")
+    if str.Len(rt) > 0:
+        argv.push(rt)
+    end
+    if have_gcc:
+        argv.push("-lgcc")
+    end
+    argv.push("--end-group")
+    argv.push(crtn)
+
+    if Link(LLD_ELF, argv_of(argv), argv.len()):
+        ret LinkResult { ok = true }
+    end
+    ret LinkResult { ok = false, err = "in-process lld link failed" }
+end
+
+@en "LinkWasi"
+@fa "پیوند وازی"
+pub func LinkWasi(obj: str, out_path: str, opts: Options): LinkResult:
+    lib := filepath.Join(opts.sysroot, "lib")
+    crt1 := filepath.Join(lib, "crt1-command.o")
+    if str.Len(opts.sysroot) == 0 or not os.Exists(crt1):
+        ret LinkResult {
+            ok = false, err = "no WASI sysroot (looked in '" + opts.sysroot + "'): use a salam build that embeds one, set $SALAM_SYSROOTS, or install wasi-sdk"
+        }
+    end
+    mut argv := Vector {} as Vector<str>
+    defer argv.free()
+    argv.push("wasm-ld")
+    argv.push("-m")
+    argv.push("wasm32")
+    argv.push("-L" + lib)
+    repeat opts.lib_paths.len() in lpi:
+        argv.push("-L" + opts.lib_paths.get(lpi))
+    end
+    argv.push(crt1)
+    argv.push(obj)
+    repeat opts.extra_objects.len() in xo:
+        argv.push(opts.extra_objects.get(xo))
+    end
+    libs := user_libs_of(opts)
+    defer libs.free()
+    repeat libs.len() in i:
+        l := libs.get(i)
+        if not str.Equals(l, "-lm") and not str.Equals(l, "-lc"):
+            argv.push(l)
+        end
+    end
+    argv.push("-lwasi-emulated-signal")
+    if not opts.debug_info:
+        argv.push("--strip-all")
+    end
+    argv.push("-lc")
+    rt := filepath.Join(lib, "libclang_rt.builtins.a")
+    if os.Exists(rt):
+        argv.push(rt)
+    end
+    argv.push("-o")
+    argv.push(out_path)
+    if Link(LLD_WASM, argv_of(argv), argv.len()):
+        ret LinkResult { ok = true }
+    end
+    ret LinkResult { ok = false, err = "in-process lld wasm link failed" }
+end
+
+@en "LinkMingw"
+@fa "پیوند مینگو"
+pub func LinkMingw(obj: str, out_path: str, opts: Options): LinkResult:
+    t := opts.target_triple
+    if not CanLinkTriple(t):
+        ret LinkResult { ok = false, err = "'" + t + "' is not a mingw target" }
+    end
+    arch := mingw_arch(t)
+    emul := mingw_emul(t)
+    sr := mingw_sysroot(opts.sysroot, arch)
+
+    crt2 := filepath.Join(sr, "lib/crt2.o")
+    if not os.Exists(crt2):
+        ret LinkResult {
+            ok = false, err = "no mingw sysroot for '" + t + "' (looked in " + sr + "): install mingw-w64 or bundle a sysroot ($SALAM_SYSROOTS)"
+        }
+    end
+
+    mut gccdir := filepath.Join(sr, "lib")
+    mut have_gcc := os.Exists(filepath.Join(gccdir, "libgcc.a"))
+    if not have_gcc:
+        found := find_mingw_gccdir(arch)
+        if str.Len(found) > 0:
+            gccdir = found
+            have_gcc = true
+        end
+    end
+
+    mut argv := Vector {} as Vector<str>
+    defer argv.free()
+    argv.push("ld.lld")
+    argv.push("-m")
+    argv.push(emul)
+    argv.push("-Bdynamic")
+    argv.push("--stack")
+    argv.push("8388608")
+    if not opts.debug_info:
+        argv.push("-s")
+    end
+    argv.push("-o")
+    argv.push(out_path)
+    argv.push(crt2)
+    if have_gcc:
+        argv.push(filepath.Join(gccdir, "crtbegin.o"))
+        argv.push("-L" + gccdir)
+    end
+    argv.push("-L" + filepath.Join(sr, "lib"))
+    argv.push("-L" + filepath.Join(sr, "mingw/lib"))
+    repeat opts.lib_paths.len() in lpi:
+        argv.push("-L" + opts.lib_paths.get(lpi))
+    end
+    argv.push(obj)
+    repeat opts.extra_objects.len() in xo:
+        argv.push(opts.extra_objects.get(xo))
+    end
+    libs := user_libs_of(opts)
+    defer libs.free()
+    repeat libs.len() in i:
+        argv.push(libs.get(i))
+    end
+    argv.push("--start-group")
+    argv.push("-lmingw32")
+    argv.push("-lgcc")
+    argv.push("-lgcc_eh")
+    argv.push("-lmoldname")
+    argv.push("-lmingwex")
+    argv.push("-lmsvcrt")
+    argv.push("-ladvapi32")
+    argv.push("-lshell32")
+    argv.push("-luser32")
+    argv.push("-lkernel32")
+    argv.push("--end-group")
+    if have_gcc:
+        argv.push(filepath.Join(gccdir, "crtend.o"))
+    end
+
+    if Link(LLD_MINGW, argv_of(argv), argv.len()):
+        ret LinkResult { ok = true }
+    end
+    ret LinkResult { ok = false, err = "in-process lld link failed" }
+end
+
+@en "LinkAuto"
+@fa "پیوند خودکار"
+pub func LinkAuto(obj: str, out_path: str, opts: Options): LinkResult:
+    t := opts.target_triple
+    if str.Len(t) == 0:
+        ret LinkResult { ok = false, err = "no target triple set" }
+    end
+    win := str.Contains(t, "windows") or str.Contains(t, "mingw") or str.Contains(t, "win32")
+    gnu := str.Contains(t, "gnu") or str.Contains(t, "mingw")
+    if win and gnu:
+        ret LinkMingw(obj, out_path, opts)
+    end
+    if str.Contains(t, "linux") and str.Contains(t, "musl"):
+        ret LinkElf(obj, out_path, opts)
+    end
+    if str.Contains(t, "wasm32") and str.Contains(t, "wasi"):
+        ret LinkWasi(obj, out_path, opts)
+    end
+    ret LinkResult { ok = false, err = "no in-process linker for triple '" + t + "'" }
+end

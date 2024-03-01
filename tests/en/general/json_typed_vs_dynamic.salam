@@ -1,0 +1,157 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import encoding.json
+import encoding.value
+import encoding.encerr
+import sort
+
+struct Point:
+    pub x: int = 0
+    pub y: int = 0
+end
+
+func known_shape():
+    p := Point { x = 3, y = 4 }
+    println json.Marshal(p)
+
+    mut back := Point {}
+    mut e := encerr.NoError()
+    println json.Unmarshal("{\"x\":3,\"y\":4}", back, e)
+    println back.x + back.y
+
+    mut obj := value.NewValueObject()
+    value.ObjectSet(obj, "x", value.ValueInt(3 as i64))
+    value.ObjectSet(obj, "y", value.ValueInt(4 as i64))
+    dyn := json.Encode(obj, json.JSONOptions { sort_keys = true })
+    println dyn
+    println json.Minify(dyn) == json.Marshal(p)
+    value.ValueFree(obj)
+end
+
+func unknown_keys():
+    text := `{"retries":3,"region":"eu","debug":true}`
+    mut e := encerr.NoError()
+    v := json.Decode(text, e)
+    println encerr.IsError(e)
+
+    keys := value.ObjectKeys(v)
+    sort.Sort(keys)
+    repeat keys.len() in i:
+        k := keys.get(i)
+        print k
+        print "="
+        println value.ToDebugString(value.ObjectGet(v, k))
+    end
+    value.ValueFree(v)
+end
+
+func heterogeneous():
+    mut e := encerr.NoError()
+    v := json.Decode(`[1,"two",true,null,{"k":1}]`, e)
+    println value.ArrayLen(v)
+    repeat value.ArrayLen(v) in i:
+        item := value.ArrayGet(v, i)
+        if value.IsInt(item):
+            println "int"
+        else value.IsString(item):
+            println "str"
+        else value.IsBool(item):
+            println "bool"
+        else value.IsNull(item):
+            println "null"
+        else:
+            println "object"
+        end
+    end
+    value.ValueFree(v)
+end
+
+func redact(v &: value.Value):
+    if value.IsObject(v):
+        keys := value.ObjectKeys(v)
+        repeat keys.len() in i:
+            k := keys.get(i)
+            if k == "password":
+                value.ObjectSet(v, k, value.ValueString("***"))
+            else:
+                mut child := value.ObjectGet(v, k)
+                redact(child)
+                value.ObjectSet(v, k, child)
+            end
+        end
+    else value.IsArray(v):
+        repeat value.ArrayLen(v) in i:
+            mut item := value.ArrayGet(v, i)
+            redact(item)
+            value.ArraySet(v, i, item)
+        end
+    end
+end
+
+func generic_walk():
+    mut e := encerr.NoError()
+    mut v := json.Decode(`{"user":{"name":"ali","password":"s3cret"},"hosts":[{"password":"pw"}]}`, e)
+    redact(v)
+    println json.Encode(v, json.JSONOptions { sort_keys = true })
+    value.ValueFree(v)
+end
+
+func passthrough():
+    text := `{"x":1,"y":2,"note":"keep me"}`
+    mut p := Point {}
+    mut e := encerr.NoError()
+    println json.Unmarshal(text, p, e)
+    println e.message
+    mut e2 := encerr.NoError()
+    println json.UnmarshalLenient(text, p, e2)
+    println json.Marshal(p)
+
+    mut e3 := encerr.NoError()
+    mut v := json.Decode(text, e3)
+    value.ObjectSet(v, "x", value.ValueInt(10 as i64))
+    println json.Encode(v, json.JSONOptions { sort_keys = true })
+    value.ValueFree(v)
+end
+
+func bridge():
+    text := `{"kind":"point","payload":{"x":7,"y":8}}`
+    mut e := encerr.NoError()
+    v := json.Decode(text, e)
+    kind := value.AsString(value.ObjectGet(v, "kind"))
+    println kind
+    if kind == "point":
+        inner := json.EncodeDefault(value.ObjectGet(v, "payload"))
+        mut p := Point {}
+        mut pe := encerr.NoError()
+        println json.Unmarshal(inner, p, pe)
+        println p.x * p.y
+    end
+    value.ValueFree(v)
+end
+
+func main:
+    println "-- known shape --"
+    known_shape()
+    println "-- unknown keys --"
+    unknown_keys()
+    println "-- heterogeneous --"
+    heterogeneous()
+    println "-- generic walk --"
+    generic_walk()
+    println "-- passthrough --"
+    passthrough()
+    println "-- bridge --"
+    bridge()
+end

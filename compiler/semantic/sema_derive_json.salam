@@ -1,0 +1,240 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include dg "../diag.salam"
+
+pub const JV_PARAM := "_v"
+pub const JV_BUF := "_sb"
+pub const JD_TEXT := "_s"
+pub const JD_POS := "_p"
+pub const JD_START := "_i"
+pub const JD_OUT := "_o"
+pub const JD_ERR := "_e"
+pub const JD_ERRP := "_ep"
+pub const JD_STRICT := "_st"
+pub const JIND := "    "
+
+pub struct JsonAttr:
+    pub name: str = ""
+    pub skip: bool = false
+    pub omitempty: bool = false
+    pub optional: bool = false
+    pub as_string: bool = false
+    pub ok: bool = true
+end
+
+func jd_attr_option(s &: Sema, out &: JsonAttr, opt: str, sp: co.SrcSpan):
+    if str.Equals(opt, "omitempty"):
+        out.omitempty = true
+        out.optional = true
+        ret
+    end
+    if str.Equals(opt, "optional"):
+        out.optional = true
+        ret
+    end
+    if str.Equals(opt, "string"):
+        out.as_string = true
+        ret
+    end
+    out.ok = false
+    serr(
+        s, 12, sp, co.Format1(
+            i18.Tr("unknown '@json' option '%s'; expected 'omitempty', 'optional' or 'string'"), co.ArgStr(opt)
+        )
+    )
+end
+
+func jd_attr_of(s &: Sema, a &: at.Ast, field: int, sp: co.SrcSpan): JsonAttr:
+    mut out := JsonAttr {}
+    fv := sym_at(s, field)
+    out.name = fv.name
+    if fv.decl == 0:
+        ret out
+    end
+    al := at.Get(a, fv.decl).aliases
+    mut i := 0
+    mut first := true
+    until i + 1 < al.len():
+        lang := al.get(i)
+        val := al.get(i + 1)
+        i += 2
+        if not str.Equals(lang, "json"):
+            continue
+        end
+        if first:
+            first = false
+            if str.Equals(val, "-"):
+                out.skip = true
+                ret out
+            end
+            if str.Len(val) > 0:
+                out.name = val
+            end
+            continue
+        end
+        jd_attr_option(s, out, val, sp)
+    end
+    ret out
+end
+
+func jd_field_err(s &: Sema, a &: at.Ast, f: int, t: int, sp: co.SrcSpan):
+    fv := sym_at(s, f)
+    mut at_sp := sp
+    if fv.decl != 0:
+        at_sp = span_of(a, fv.decl)
+    end
+    serr(
+        s, 2, at_sp, co.Format2(
+            i18.Tr("field '%s' of type '%s' has no JSON form; mark it '@json \"-\"' to leave it out"), co.ArgStr(fv.name), co.ArgStr(type_disp(s, t))
+        )
+    )
+end
+
+func jd_quote(text: str): str:
+    mut out := "\""
+    repeat str.Len(text) in i:
+        c := text.substr(i, 1)
+        if str.Equals(c, "\"") or str.Equals(c, "\\"):
+            out = out + "\\"
+        end
+        out = out + c
+    end
+    ret out + "\""
+end
+
+func jd_is_scalar(s &: Sema, t: int): bool:
+    if t < 0:
+        ret false
+    end
+    ret derive_is_plain(s, t) or ty_at(s, t).kind == TY_STR
+end
+
+func jd_is_unsigned(s &: Sema, t: int): bool:
+    k := ty_at(s, t).kind
+    ret k == TY_U8 or k == TY_U16 or k == TY_U32 or k == TY_U64 or k == TY_USIZE
+end
+
+func derive_json_name(s &: Sema, prefix: str, t: int): str:
+    ret prefix + derive_key(type_to_string(s, t))
+end
+
+func derive_json_one(
+    s &: Sema, a &: at.Ast, t: int, prefix: str, enc: bool, home: int, sp: co.SrcSpan
+): str:
+    if t < 0 or s.program == 0:
+        ret ""
+    end
+    fname := derive_json_name(s, prefix, t)
+    if derive_registry_find(s, fname) != 0:
+        ret fname
+    end
+    if scope_lookup_local(s, s.global, fname) != 0:
+        ret ""
+    end
+    derive_registry_claim(s, fname)
+    mut text := ""
+    if enc:
+        text = jd_enc_source(s, a, t, fname, home, sp)
+    else:
+        text = jd_dec_source(s, a, t, fname, home, sp)
+    end
+    ret derive_json_finish(s, a, text, fname, home)
+end
+
+func derive_json_finish(s &: Sema, a &: at.Ast, text: str, fname: str, home: int): str:
+    if str.Len(text) == 0:
+        derive_registry_drop(s, derive_registry_find(s, fname))
+        ret ""
+    end
+    prog := derive_parse(s, a, text, "<derived>")
+    mut fn := 0
+    if prog != 0:
+        fn = derive_install_all(s, a, prog, fname, home)
+    end
+    if fn == 0:
+        derive_registry_drop(s, derive_registry_find(s, fname))
+        ret ""
+    end
+    slot := derive_registry_find(s, fname)
+    s.derived_decls.set(slot - 1, fn)
+    ret fname
+end
+
+func check_json_builtin(s &: Sema, a &: at.Ast, n: int, enc: bool, sp: co.SrcSpan): int:
+    want := enc ? 1 : 6
+    fallback := sema_ty(s, enc ? TY_STR : TY_I32)
+    if at.ChildCount(a, n) != want:
+        serr(s, 12, sp, "'" + (enc ? "jsonenc" : "jsondec") + "' takes " + want + " arguments")
+        ret sema_decorate(s, a, n, fallback)
+    end
+    ti := enc ? 0 : 2
+    mut argt := TYPE_NONE
+    repeat at.ChildCount(a, n) in i:
+        t := sema_check_expr(s, a, at.Child(a, n, i))
+        if i == ti:
+            argt = t
+        end
+    end
+    ret check_json_rewrite(s, a, n, enc, argt, sp)
+end
+
+func check_json_rewrite(
+    s &: Sema, a &: at.Ast, n: int, enc: bool, argt: int, sp: co.SrcSpan
+): int:
+    fallback := sema_ty(s, enc ? TY_STR : TY_I32)
+    home := derive_home_of(s, s.cur, enc ? "__jdqs" : "__jdgstr")
+    if home == 0:
+        serr(
+            s, 12, sp, "'" + (enc ? "jsonenc" : "jsondec") + "' is internal to std/encoding/json; use json." + (enc ? "Marshal" : "Unmarshal") + " instead"
+        )
+        ret sema_decorate(s, a, n, fallback)
+    end
+    before := dg.ErrorCount(s.diag)
+    fname := enc ? derive_json_enc(s, a, argt, home, sp) : derive_json_dec(s, a, argt, home, sp)
+    if str.Len(fname) == 0:
+        if dg.ErrorCount(s.diag) == before:
+            serr(
+                s, 2, sp, co.Format1(
+                    enc ? i18.Tr("cannot encode a value of type '%s' as JSON") : i18.Tr("cannot decode a value of type '%s' as JSON"), co.ArgStr(type_disp(s, argt))
+                )
+            )
+        end
+        ret sema_decorate(s, a, n, fallback)
+    end
+    ret check_json_bind(s, a, n, fname, fallback)
+end
+
+func check_json_bind(s &: Sema, a &: at.Ast, n: int, fname: str, fallback: int): int:
+    callee := at.Get(a, n).a
+    at.SetName(a, callee, fname)
+    mut cv := at.Get(a, callee)
+    cv.synthetic = true
+    at.Put(a, callee, cv)
+    _d := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
+    fsym := scope_lookup_local(s, s.global, fname)
+    mut sigid := 0
+    if fsym != 0:
+        mut fv := sym_at(s, fsym)
+        fv.used = true
+        sym_put(s, fsym, fv)
+        if fv.overloads.len() > 0:
+            sigid = fv.overloads.get(0)
+        end
+    end
+    dce_mark_root(s.pkg, fname)
+    mark_ref_args(s, a, n, sigid)
+    rt := sigid != 0 ? sig_at(s, sigid).ret_type : fallback
+    ret sema_decorate(s, a, n, rt >= 0 ? rt : fallback)
+end
+
+func derive_json_enc(s &: Sema, a &: at.Ast, t: int, home: int, sp: co.SrcSpan): str:
+    ret derive_json_one(s, a, t, "_jsonenc_", true, home, sp)
+end
+
+func derive_json_dec(s &: Sema, a &: at.Ast, t: int, home: int, sp: co.SrcSpan): str:
+    ret derive_json_one(s, a, t, "_jsondec_", false, home, sp)
+end

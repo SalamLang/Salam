@@ -1,0 +1,161 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package optim
+
+import nn
+import tensor
+
+extern:
+    pure func sqrtf(x: f32): f32
+end
+
+@en "Adam"
+@fa "آدام"
+pub struct Adam:
+    @en "lr"
+    @fa "نرخ یادگیری"
+    pub lr: f64 = 0.001
+    @en "beta1"
+    @fa "بتای یک"
+    pub beta1: f64 = 0.9
+    @en "beta2"
+    @fa "بتای دو"
+    pub beta2: f64 = 0.999
+    @en "eps"
+    @fa "اپسیلون"
+    pub eps: f64 = 0.00000001
+    @en "weight_decay"
+    @fa "کاهش وزن"
+    pub weight_decay: f64 = 0.0
+    @en "decoupled"
+    @fa "کاهش وزن جدا"
+    pub decoupled: bool = false
+    t: i64 = 0
+    m: Vector<tensor.Tensor> = Vector {}
+    v: Vector<tensor.Tensor> = Vector {}
+
+    @en "step"
+    @fa "گام"
+    pub func step(ps &: nn.ParamStore):
+        _ensure_state(this.m, ps)
+        _ensure_state(this.v, ps)
+        this.t += 1
+        mut p1 := 1.0
+        mut p2 := 1.0
+        mut i := 0 as i64
+        until i < this.t:
+            p1 = p1 * this.beta1
+            p2 = p2 * this.beta2
+            i += 1
+        end
+        c1 := (1.0 / (1.0 - p1)) as f32
+        c2 := (1.0 / (1.0 - p2)) as f32
+        lr := this.lr as f32
+        b1 := this.beta1 as f32
+        b2 := this.beta2 as f32
+        one := 1.0 as f32
+        ef := this.eps as f32
+        wd := this.weight_decay as f32
+        zero := 0.0 as f32
+        repeat ps.count() in pi:
+            mut p := ps.items.get(pi)
+            n := p.value.numel()
+            pw := p.value.data.data
+            pg := p.grad.data.data
+            mt := this.m.get(pi)
+            vt := this.v.get(pi)
+            pm := mt.data.data
+            pv := vt.data.data
+            if this.decoupled and wd != zero:
+                repeat n in k: pw[k] = pw[k] - lr * wd * pw[k] end
+            end
+            repeat n in k:
+                mut g := pg[k]
+                if this.decoupled == false and wd != zero: g = g + wd * pw[k] end
+                nm := b1 * pm[k] + (one - b1) * g
+                nv := b2 * pv[k] + (one - b2) * g * g
+                pm[k] = nm
+                pv[k] = nv
+                pw[k] = pw[k] - lr * (nm * c1) / (sqrtf(nv * c2) + ef)
+            end
+        end
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        _free_state(this.m)
+        _free_state(this.v)
+    end
+end
+
+@en "RMSProp"
+@fa "آر ام اس پراپ"
+pub struct RMSProp:
+    @en "lr"
+    @fa "نرخ یادگیری"
+    pub lr: f64 = 0.01
+    @en "alpha"
+    @fa "ضریب میانگین"
+    pub alpha: f64 = 0.99
+    @en "eps"
+    @fa "اپسیلون"
+    pub eps: f64 = 0.00000001
+    @en "weight_decay"
+    @fa "کاهش وزن"
+    pub weight_decay: f64 = 0.0
+    sq: Vector<tensor.Tensor> = Vector {}
+
+    @en "step"
+    @fa "گام"
+    pub func step(ps &: nn.ParamStore):
+        _ensure_state(this.sq, ps)
+        lr := this.lr as f32
+        al := this.alpha as f32
+        one := 1.0 as f32
+        ef := this.eps as f32
+        wd := this.weight_decay as f32
+        zero := 0.0 as f32
+        repeat ps.count() in pi:
+            mut p := ps.items.get(pi)
+            n := p.value.numel()
+            pw := p.value.data.data
+            pg := p.grad.data.data
+            st := this.sq.get(pi)
+            pv := st.data.data
+            repeat n in k:
+                mut g := pg[k]
+                if wd != zero: g = g + wd * pw[k] end
+                nv := al * pv[k] + (one - al) * g * g
+                pv[k] = nv
+                pw[k] = pw[k] - lr * g / (sqrtf(nv) + ef)
+            end
+        end
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free(): _free_state(this.sq) end
+end
+
+@en "NewAdamW"
+@fa "آدام دابلیو جدید"
+pub func NewAdamW(lr: f64, weight_decay: f64): Adam:
+    mut a := Adam {}
+    a.lr = lr
+    a.weight_decay = weight_decay
+    a.decoupled = true
+    ret a
+end

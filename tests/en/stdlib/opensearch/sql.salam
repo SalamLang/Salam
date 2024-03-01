@@ -1,0 +1,96 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import db
+import db.opensearch
+
+include fake "_fake.salam"
+
+const PORT := 19878
+
+func count_rows(c: dyn db.Connection, sql: str): int:
+    ret db.QueryInt(c, sql)
+end
+
+func main:
+    fake.On("POST", "/_plugins/_sql", 200, `{"schema":[{"name":"COUNT(*)","type":"long"}],"datarows":[[42]],"total":1,"size":1,"status":200}`)
+    fake.On("POST", "/_plugins/_sql", 200, `{"schema":[{"name":"title","type":"text"},{"name":"year","type":"integer"},{"name":"price","type":"double"},{"name":"in_print","type":"boolean"}],"datarows":[["Shahnameh",1010,24.5,true],["Masnavi",1258,null,false]],"total":2,"size":2,"status":200}`)
+    fake.On("POST", "/_plugins/_sql", 200, `{"schema":[{"name":"author","type":"keyword"},{"name":"COUNT(*)","alias":"books","type":"long"}],"datarows":[["Ferdowsi",1],["Rumi",3]],"total":2,"size":2,"cursor":"d:CURSOR1","status":200}`)
+    fake.On("POST", "/_plugins/_sql", 200, `{"datarows":[["Saadi",2]],"cursor":"d:CURSOR2","status":200}`)
+    fake.On("POST", "/_plugins/_sql", 200, `{"datarows":[["Hafez",4]],"status":200}`)
+    fake.On("POST", "/_plugins/_sql", 200, `{"schema":[{"name":"title","type":"text"}],"datarows":[["Golestan"]],"total":1,"size":1,"cursor":"d:CURSOR9","status":200}`)
+    fake.On("POST", "/_plugins/_sql/close", 200, `{"succeeded":true}`)
+    fake.On("POST", "/_plugins/_sql", 404, `{"error":{"reason":"Error occurred in OpenSearch engine: no such index [nowhere]","details":"[nowhere] IndexNotFoundException","type":"IndexNotFoundException"},"status":404}`)
+    fake.On("POST", "/_plugins/_sql", 200, `{"schema":[{"name":"deleted_rows","type":"long"}],"datarows":[[5]],"total":1,"size":1,"status":200}`)
+    fake.On("POST", "/_plugins/_sql/_explain", 200, `{"root":{"name":"ProjectOperator","children":[{"name":"OpenSearchIndexScan"}]}}`)
+    fake.On("POST", "/_plugins/_ppl", 200, `{"schema":[{"name":"count()","type":"integer"},{"name":"genre","type":"string"}],"datarows":[[3,"epic"],[5,"lyric"]],"total":2,"size":2}`)
+    fake.On("POST", "/_plugins/_ppl/_explain", 200, `{"root":{"name":"ProjectOperator"}}`)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    c := opensearch.Connect("http://127.0.0.1:19878")
+    conn := opensearch.Conn(c)
+    println "kind:", conn.Kind(), conn.Kind() == db.OPENSEARCH, conn.Ok()
+    println "count:", count_rows(conn, "SELECT COUNT(*) FROM books")
+    println "  sent:", fake.Last()
+
+    rows := conn.Query("SELECT title, year, price, in_print FROM books ORDER BY year")
+    println "columns:", rows.ColumnCount(), rows.ColumnName(0), rows.ColumnName(1), rows.ColumnName(2), rows.ColumnName(3)
+    until rows.Next():
+        println "  row:", rows.Text(0), rows.Int(1), rows.Int64(1), rows.Float(2), rows.IsNull(2), rows.Int(3)
+        println "    types:", rows.ColumnType(0), rows.ColumnType(1), rows.ColumnType(2), rows.ColumnType(3)
+    end
+    rows.Close()
+    println "type constants:", db.TYPE_NULL, db.TYPE_INT, db.TYPE_FLOAT, db.TYPE_TEXT
+
+    mut paged := opensearch.SqlWith(c, "SELECT author, COUNT(*) AS books FROM books GROUP BY author", Vector {} as Vector<str>, 2)
+    println "paged sent:", fake.Last()
+    println "paged:", paged.Ok(), paged.Total(), paged.ColumnName(1), paged.ColumnTypeName(1)
+    until paged.Next():
+        println "  author:", paged.Text(0), paged.Int(1), paged.Raw(0)
+    end
+    println "  next page asked with:", fake.Last()
+    paged.Close()
+
+    mut params := Vector {} as Vector<str>
+    params.push(opensearch.SqlParam("integer", "1200"))
+    params.push(opensearch.SqlParam("string", "Saadi"))
+    mut early := opensearch.SqlWith(c, "SELECT title FROM books WHERE year > ? AND author = ?", params, 1)
+    println "parameters sent:", fake.Last()
+    early.Next()
+    println "  first:", early.Text(0)
+    early.Close()
+    println "  closed the cursor:", fake.Last()
+
+    bad := conn.Query("SELECT nope FROM nowhere")
+    println "bad query:", bad.Ok(), conn.Error()
+    bad.Close()
+    println "delete:", conn.Exec("DELETE FROM books WHERE stock = 0"), conn.Changes()
+    println "update refused:", conn.Exec("UPDATE books SET stock = 1"), conn.Error()
+    tx := conn.Begin()
+    println "transactions:", tx.Ok(), tx.Exec("SELECT 1"), tx.Commit(), tx.Rollback(), tx.Query("SELECT 1").Ok(), conn.Error()
+    println "quote:", conn.Quote("Kalila o Dimna's"), "last id:", conn.LastInsertId()
+    println "explain:", opensearch.SqlExplain(c, "SELECT title FROM books")
+
+    p := opensearch.Ppl(c, "source=books | where year > 1000 | stats count() by genre")
+    println "ppl sent:", fake.Last()
+    until p.Next():
+        println "  ppl:", p.Int(0), p.Text(1)
+    end
+    p.Close()
+    println "ppl explain:", opensearch.PplExplain(c, "source=books | fields title")
+    ret 0
+end

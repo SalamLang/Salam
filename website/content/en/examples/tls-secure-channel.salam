@@ -1,0 +1,38 @@
+import tls
+
+struct Party:
+    pub private_key: str = ""
+    pub public_key: str = ""
+end
+
+func new_party(): Party:
+    mut p := Party {}
+    _ := tls.EcdhP256Generate(p.private_key, p.public_key)
+    ret p
+end
+
+func session_key(me: Party, peer_public: str, salt: str): str:
+    mut ok := false
+    shared := tls.EcdhP256Shared(me.private_key, peer_public, ok)
+    ret tls.HkdfSha256(shared, salt, "notes app v1 session", 32, ok)
+end
+
+func main:
+    alice := new_party()
+    bob := new_party()
+    salt := tls.RandomSalt(16)
+
+    alice_key := session_key(alice, bob.public_key, salt)
+    bob_key := session_key(bob, alice.public_key, salt)
+    println "both sides derived the same key:", alice_key == bob_key
+
+    mut ok := false
+    wire := tls.AesGcmSeal(alice_key, tls.GcmNonce(0), "meet at the station at nine", ok)
+    println "alice sent", wire.len(), "base64 characters"
+    println "bob reads:", tls.AesGcmOpen(bob_key, tls.GcmNonce(0), wire, ok)
+
+    eve := new_party()
+    eve_key := session_key(eve, alice.public_key, salt)
+    _ := tls.AesGcmOpen(eve_key, tls.GcmNonce(0), wire, ok)
+    println "eve, with only the public keys, can read it:", ok
+end

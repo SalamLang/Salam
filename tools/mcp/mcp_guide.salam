@@ -1,0 +1,561 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "mcpguide"
+@fa "راهنمای‌ام‌سی‌پی"
+package mcpguide
+
+import str
+import sort
+import fs.dir
+import fs.file
+import fs.path
+
+include mcptxt "mcp_text.salam"
+include mcpexec "mcp_exec.salam"
+include mcpdecl "mcp_decl.salam"
+
+mut g_ready := false
+mut g_sections := Vector {} as Vector<mcpdecl.Section>
+mut g_texts := HashMap {} as HashMap<str, Vector<str>>
+mut g_codes_ready := false
+mut g_code_files := HashMap {} as HashMap<str, Vector<str>>
+
+func _sources(): Vector<str>:
+    out := Vector {} as Vector<str>
+    out.push("SKILL.md")
+    out.push("docs/ai/AGENTS.md")
+    ret out
+end
+
+func _heading_level(ln: str): int:
+    mut n := 0
+    until n < ln.len() and ln[n] == '#':
+        n += 1
+    end
+    if n == 0 or n > 4 or n >= ln.len(): ret 0 end
+    if ln[n] != ' ': ret 0 end
+    ret n
+end
+
+func _fence_run(t: str): int:
+    mut n := 0
+    until n < t.len() and t[n] == '`':
+        n += 1
+    end
+    if n < 3: ret 0 end
+    ret n
+end
+
+func _trail(stack: Vector<str>, level: int): str:
+    mut parts := Vector {} as Vector<str>
+    mut i := 1
+    until i < level and i < stack.len():
+        if stack.get(i).len() > 0: parts.push(stack.get(i)) end
+        i += 1
+    end
+    ret mcptxt.Join(parts, " > ")
+end
+
+func _index_file(rel: str):
+    full := path.Join(mcpexec.Root(), rel)
+    if not file.Exists(full): ret end
+    lines := mcptxt.Lines(file.ReadText(full))
+    g_texts.put(rel, lines)
+    mut stack := Vector {} as Vector<str>
+    repeat 6:
+        stack.push("")
+    end
+    mut fence := 0
+    first := g_sections.len()
+    mut i := 0
+    until i < lines.len():
+        ln := lines.get(i)
+        t := ln.trim()
+        run := _fence_run(t)
+        if fence == 0 and run > 0:
+            fence = run
+        else fence > 0 and run >= fence and t.len() == run:
+            fence = 0
+        else fence == 0:
+            lvl := _heading_level(ln)
+            if lvl > 0:
+                title := ln.substr(lvl + 1, ln.len() - lvl - 1).trim()
+                stack.set(lvl, title)
+                mut k := lvl + 1
+                until k < stack.len():
+                    stack.set(k, "")
+                    k += 1
+                end
+                mut s := mcpdecl.Section {}
+                s.title = title
+                s.trail = _trail(stack, lvl)
+                s.source = rel
+                s.level = lvl
+                s.start = i
+                g_sections.push(s)
+            end
+        end
+        i += 1
+    end
+    mut j := first
+    until j < g_sections.len():
+        mut s := g_sections.get(j)
+        s.own_end = lines.len()
+        s.tree_end = lines.len()
+        if j + 1 < g_sections.len(): s.own_end = g_sections.get(j + 1).start end
+        mut k := j + 1
+        until k < g_sections.len():
+            if g_sections.get(k).level <= s.level:
+                s.tree_end = g_sections.get(k).start
+                break
+            end
+            k += 1
+        end
+        g_sections.set(j, s)
+        j += 1
+    end
+end
+
+func _ensure():
+    if g_ready: ret end
+    srcs := _sources()
+    mut i := 0
+    until i < srcs.len():
+        _index_file(srcs.get(i))
+        i += 1
+    end
+    g_ready = true
+end
+
+func _lines_of(rel: str): Vector<str>:
+    if g_texts.has(rel): ret g_texts.get(rel) end
+    ret Vector {}
+end
+
+func _text(s: mcpdecl.Section, tree: bool, max_chars: int): str:
+    lines := _lines_of(s.source)
+    mut stop := s.own_end
+    if tree: stop = s.tree_end end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := s.start
+    mut cut := false
+    until i < stop and i < lines.len():
+        ln := lines.get(i)
+        if (str.BufLen(sb) as int) + ln.len() > max_chars:
+            cut = true
+            break
+        end
+        str.BufAppend(sb, ln)
+        str.BufAppend(sb, "\n")
+        i += 1
+    end
+    if cut:
+        str.BufAppend(sb, "\n[cut at ")
+        str.BufAppend(sb, str.FromInt(max_chars))
+        str.BufAppend(sb, " characters; ask salam_docs for one of the subsections below for the rest]\n")
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _plain(s: str): str:
+    mut t := s.lower()
+    t = str.Replace(t, "`", "")
+    t = str.Replace(t, "*", "")
+    t = str.Replace(t, "&", "and")
+    ret t
+end
+
+func _bare_title(t: str): str:
+    mut i := 0
+    until i < t.len() and (t[i] == '.' or t[i] == ' ' or (t[i] >= '0' and t[i] <= '9')):
+        i += 1
+    end
+    ret _plain(t.substr(i, t.len() - i).trim())
+end
+
+func _stopword(w: str): bool:
+    stops := " the a an to of in on how do does i is are it with and or what which use using can my me write make get "
+    ret stops.find(" ".concat(w).concat(" ")) >= 0
+end
+
+func _synonyms(w: str): str:
+    switch w:
+        "while", "loop", "loops": ret "until repeat each" end
+        "for", "foreach", "iterate": ret "each repeat" end
+        "lambda", "lambdas", "closure", "closures", "anonymous": ret "lambda closure" end
+        "dict", "dictionary", "map", "maps", "object": ret "hashmap" end
+        "list", "array", "arrays", "slice": ret "vector array" end
+        "class", "classes", "record": ret "struct" end
+        "trait", "traits", "protocol": ret "interface" end
+        "exception", "exceptions", "throw", "try", "catch", "errors": ret "error result option" end
+        "string", "strings", "text": ret "str string" end
+        "return", "returns": ret "ret return" end
+        "null", "nil", "none", "optional": ret "null option" end
+        "elif", "elseif": ret "else" end
+        "print", "printf", "output", "console": ret "println print" end
+        "thread", "threads", "async", "goroutine", "concurrency": ret "spawn thread chan concurrency" end
+        "import", "module", "modules", "package", "packages": ret "import include package" end
+        "persian", "farsi": ret "persian" end
+    end
+    ret ""
+end
+
+func _terms(query: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    words := mcptxt.Split(str.Replace(_plain(query).trim(), "-", " "), " ")
+    mut i := 0
+    until i < words.len():
+        w := words.get(i).trim()
+        if w.len() > 1 and not _stopword(w):
+            syn := _synonyms(w)
+            if syn.len() > 0:
+                out.push(w.concat(" ").concat(syn))
+            else:
+                out.push(w)
+            end
+        end
+        i += 1
+    end
+    ret out
+end
+
+func _alnum(c: char): bool:
+    ret (c >= 'a' and c <= 'z') or (c >= '0' and c <= '9') or c == '_' or (c as int) >= 128
+end
+
+func _has_word(text: str, w: str): bool:
+    whole := w.len() <= 3
+    mut from := 0
+    until from < text.len():
+        rest := text.substr(from, text.len() - from)
+        at := rest.find(w)
+        if at < 0: ret false end
+        pos := from + at
+        before_ok := pos == 0 or not _alnum(text[pos - 1])
+        end_at := pos + w.len()
+        after_ok := not whole or end_at >= text.len() or not _alnum(text[end_at])
+        if before_ok and after_ok: ret true end
+        from = pos + 1
+    end
+    ret false
+end
+
+func _group_hit(text: str, group: str): bool:
+    alts := mcptxt.Split(group, " ")
+    mut i := 0
+    until i < alts.len():
+        if alts.get(i).len() > 0 and _has_word(text, alts.get(i)): ret true end
+        i += 1
+    end
+    ret false
+end
+
+func _section_score(s: mcpdecl.Section, q: str, terms: Vector<str>): int:
+    title := _bare_title(s.title)
+    mut score := 0
+    if title == q: score += 5000 end
+    if q.len() > 2 and title.find(q) >= 0: score += 2000 end
+    mut in_title := 0
+    mut i := 0
+    until i < terms.len():
+        if _group_hit(title, terms.get(i)): in_title += 1 end
+        i += 1
+    end
+    if terms.len() > 0 and in_title == terms.len(): score += 1000 end
+    score += in_title * 150
+    lines := _lines_of(s.source)
+    mut hits := 0
+    mut seen := Vector {} as Vector<bool>
+    repeat terms.len():
+        seen.push(false)
+    end
+    mut j := s.start + 1
+    until j < s.own_end and j < lines.len():
+        ln := _plain(lines.get(j))
+        mut m := 0
+        mut k := 0
+        until k < terms.len():
+            if _group_hit(ln, terms.get(k)):
+                m += 1
+                seen.set(k, true)
+            end
+            k += 1
+        end
+        hits += m * m
+        j += 1
+    end
+    if hits > 60: hits = 60 end
+    mut covered := 0
+    mut c := 0
+    until c < seen.len():
+        if seen.get(c) or _group_hit(title, terms.get(c)): covered += 1 end
+        c += 1
+    end
+    if terms.len() > 1 and covered < terms.len(): hits = hits / 3 end
+    score += hits * 12
+    if score > 0 and s.source == "SKILL.md": score += 5 end
+    ret score
+end
+
+func _children(s: mcpdecl.Section): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut i := 0
+    until i < g_sections.len():
+        c := g_sections.get(i)
+        if c.source == s.source and c.start > s.start and c.start < s.tree_end and c.level == s.level + 1:
+            out.push(c.title)
+        end
+        i += 1
+    end
+    ret out
+end
+
+func _where(s: mcpdecl.Section): str:
+    mut w := s.source.concat(":").concat(str.FromInt(s.start + 1))
+    if s.trail.len() > 0: w = s.trail.concat(" (").concat(w).concat(")") end
+    ret w
+end
+
+func _expect_code(lines: Vector<str>): str:
+    mut i := 0
+    until i < lines.len() and i < 40:
+        t := lines.get(i).trim()
+        if str.StartsWith(t, "// EXPECT:"):
+            ret t.substr(10, t.len() - 10).trim()
+        end
+        i += 1
+    end
+    ret ""
+end
+
+func _ensure_codes():
+    if g_codes_ready: ret end
+    g_codes_ready = true
+    root := path.Join(mcpexec.Root(), "tests/en/errors")
+    if not dir.Exists(root): ret end
+    names := mcptxt.Sorted(dir.List(root))
+    mut i := 0
+    until i < names.len():
+        n := names.get(i)
+        if str.EndsWith(n, ".salam") and not str.StartsWith(n, "_"):
+            rel := "tests/en/errors/".concat(n)
+            code := _expect_code(mcptxt.Lines(file.ReadText(path.Join(root, n))))
+            if code.len() == 4:
+                mut list := Vector {} as Vector<str>
+                if g_code_files.has(code): list = g_code_files.get(code) end
+                list.push(rel)
+                g_code_files.put(code, list)
+            end
+        end
+        i += 1
+    end
+end
+
+func _program_body(rel: str): str:
+    lines := mcptxt.Lines(file.ReadText(path.Join(mcpexec.Root(), rel)))
+    mut keep := Vector {} as Vector<str>
+    mut in_banner := false
+    mut i := 0
+    until i < lines.len():
+        t := lines.get(i).trim()
+        if str.StartsWith(t, "/*") and keep.len() == 0:
+            in_banner = true
+        end
+        if not in_banner and not (keep.len() == 0 and t.len() == 0):
+            keep.push(lines.get(i))
+        end
+        if in_banner and str.EndsWith(t, "*/"): in_banner = false end
+        i += 1
+    end
+    ret mcptxt.Join(keep, "\n").trim()
+end
+
+@en "Topics"
+@fa "سرفصل‌ها"
+pub func Topics(): str:
+    _ensure()
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "Salam reference topics. Pass any title (or a few words from it) back to salam_docs as the query.\n")
+    mut last := ""
+    mut i := 0
+    until i < g_sections.len():
+        s := g_sections.get(i)
+        if s.source != last:
+            str.BufAppend(sb, "\n## ")
+            str.BufAppend(sb, s.source)
+            str.BufAppend(sb, "\n")
+            last = s.source
+        end
+        if s.level >= 2 and s.level <= 3:
+            if s.level == 3: str.BufAppend(sb, "  ") end
+            str.BufAppend(sb, "- ")
+            str.BufAppend(sb, s.title)
+            str.BufAppend(sb, "\n")
+        end
+        i += 1
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+@en "Lookup"
+@fa "جستجوی راهنما"
+pub func Lookup(query: str, max_chars: int): str:
+    _ensure()
+    if g_sections.len() == 0:
+        ret "The Salam reference (SKILL.md, docs/ai/AGENTS.md) is not available on this server; set SALAM_MCP_ROOT to a Salam checkout."
+    end
+    q := _plain(query).trim()
+    terms := _terms(query)
+    mut picked := Vector {} as Vector<int>
+    mut keys := Vector {} as Vector<f64>
+    mut i := 0
+    until i < g_sections.len():
+        sc := _section_score(g_sections.get(i), q, terms)
+        if sc > 0:
+            picked.push(i)
+            keys.push(sc as f64)
+        end
+        i += 1
+    end
+    if picked.len() == 0:
+        ret "Nothing in the Salam reference matched '".concat(query).concat("'. Try fewer or different words, salam_docs with no query for the topic list, salam_stdlib_search for library functions, or salam_find_examples for code.")
+    end
+    mut order := Vector {} as Vector<int>
+    mut k := 0
+    until k < picked.len():
+        order.push(k)
+        k += 1
+    end
+    sort.SortIndexDesc(order, keys)
+    best := g_sections.get(picked.get(order.get(0)))
+    mut budget := max_chars
+    if budget <= 0: budget = 16000 end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "From ")
+    str.BufAppend(sb, _where(best))
+    str.BufAppend(sb, ":\n\n")
+    str.BufAppend(sb, _text(best, true, budget))
+    kids := _children(best)
+    if kids.len() > 0 and best.tree_end - best.start > 120:
+        str.BufAppend(sb, "\nSubsections: ")
+        str.BufAppend(sb, mcptxt.Join(kids, " | "))
+        str.BufAppend(sb, "\n")
+    end
+    mut shown := 0
+    mut j := 1
+    until j < order.len() and shown < 6:
+        s := g_sections.get(picked.get(order.get(j)))
+        if not (s.source == best.source and s.start > best.start and s.start < best.tree_end):
+            if shown == 0: str.BufAppend(sb, "\nAlso relevant (query salam_docs with the title):\n") end
+            str.BufAppend(sb, "- ")
+            str.BufAppend(sb, s.title)
+            str.BufAppend(sb, "  [")
+            str.BufAppend(sb, _where(s))
+            str.BufAppend(sb, "]\n")
+            shown += 1
+        end
+        j += 1
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+@en "IsCode"
+@fa "کد خطاست"
+pub func IsCode(q: str): bool:
+    t := q.trim().upper()
+    if t.len() != 4: ret false end
+    if t[0] != 'E' and t[0] != 'W': ret false end
+    mut i := 1
+    until i < 4:
+        if t[i] < '0' or t[i] > '9': ret false end
+        i += 1
+    end
+    ret true
+end
+
+@en "ExampleFor"
+@fa "نمونه برای کد"
+pub func ExampleFor(code: str): str:
+    _ensure_codes()
+    c := code.trim().upper()
+    if not g_code_files.has(c): ret "" end
+    ret g_code_files.get(c).get(0)
+end
+
+@en "Explain"
+@fa "توضیح کد"
+pub func Explain(code: str): str:
+    _ensure()
+    _ensure_codes()
+    c := code.trim().upper()
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "Salam diagnostic ")
+    str.BufAppend(sb, c)
+    str.BufAppend(sb, "\n")
+    mut found := false
+    mut i := 0
+    until i < g_sections.len():
+        s := g_sections.get(i)
+        lines := _lines_of(s.source)
+        mut j := s.start + 1
+        until j < s.own_end and j < lines.len():
+            if lines.get(j).find(c) >= 0:
+                if not found: str.BufAppend(sb, "\nWhat the reference says:\n") end
+                found = true
+                str.BufAppend(sb, "- ")
+                str.BufAppend(sb, lines.get(j).trim())
+                str.BufAppend(sb, "  [")
+                str.BufAppend(sb, _where(s))
+                str.BufAppend(sb, "]\n")
+            end
+            j += 1
+        end
+        i += 1
+    end
+    if g_code_files.has(c):
+        files := g_code_files.get(c)
+        str.BufAppend(sb, "\nA minimal program the compiler rejects with ")
+        str.BufAppend(sb, c)
+        str.BufAppend(sb, " (")
+        str.BufAppend(sb, files.get(0))
+        str.BufAppend(sb, "):\n\n```salam\n")
+        str.BufAppend(sb, mcptxt.Truncate(_program_body(files.get(0)), 3000))
+        str.BufAppend(sb, "\n```\n")
+        if files.len() > 1:
+            mut more := Vector {} as Vector<str>
+            mut k := 1
+            until k < files.len() and k < 8:
+                more.push(files.get(k))
+                k += 1
+            end
+            str.BufAppend(sb, "\nMore programs that trigger it: ")
+            str.BufAppend(sb, mcptxt.Join(more, ", "))
+            str.BufAppend(sb, "\n")
+        end
+        found = true
+    end
+    if not found:
+        str.BufAppend(sb, "\nNo notes or example program for this code in this checkout. The compiler's message and its help line are the best guide; salam_find_examples can search the corpus for working code.\n")
+    end
+    out := str.BufStr(sb)
+    ret out
+end

@@ -1,0 +1,129 @@
+pkg.en = mem
+pkg.name = mem
+pkg.group = System and tools
+pkg.summary = Working with memory directly: allocating and freeing, copying, arenas and pools, and leak checking.
+pkg.title = The mem package in Salam | Allocation, arenas and pools
+pkg.description = The mem package in Salam: allocating and freeing memory, copying and moving it, arenas, block pools, and counting allocations to find a leak, with examples.
+pkg.intro <<
+<p>Most programs never need this package: vectors, maps and strings look after their own memory. The <code>mem</code> package is for low-level work, such as talking to a C library, filling a byte buffer by hand or building a data structure of your own. Its functions are thin wrappers over the C allocator (<code>malloc</code>, <code>realloc</code>, <code>free</code>, <code>memcpy</code>), plus two allocators of its own and leak counters.</p>
+<ul>
+<li><code>Allocate</code>, <code>Reallocate</code> and <code>Free</code>: one block at a time, freed by you.</li>
+<li>An <strong>arena</strong> is one large block you take pieces off the front of and then release all at once; it is very fast for many small objects that share a lifetime.</li>
+<li>A <strong>pool</strong> hands out and takes back blocks of one fixed size, in any order.</li>
+</ul>
+<p>For a growing list of values, <code>Vector</code> is the safer choice; for bytes and binary formats, see <a href="/std/encoding/binary/">encoding/binary</a>. To watch memory from outside a function, <a href="/std/debug/">debug</a> has <code>MemStats</code> and <a href="/std/runtime/">runtime</a> reports the machine's memory.</p>
+<p>The things people get wrong:</p>
+<ul>
+<li>Nothing is checked. Writing past the end of a block, freeing it twice or using it after <code>Free</code>, <code>ArenaReset</code> or <code>PoolFree</code> corrupts memory without an error message. <code>salam memcheck</code> finds these for blocks from <code>Allocate</code>, but not inside an arena or a pool, which are one block to it.</li>
+<li>Give memory back the way it was taken: <code>mem.Free</code> for <code>Allocate</code>, the C library's own function for what a C library returns. In a <code>-DSALAM_MEM_DEBUG</code> build every block from <code>Allocate</code> has a hidden 8 byte header, so mixing the two crashes there even when a normal build seems fine.</li>
+<li>Check for <code>null</code>. <code>Allocate</code>, <code>ArenaAlloc</code> and <code>PoolAlloc</code> all return it when there is no memory or no room.</li>
+<li>The arena and the pool hand out memory aligned to 8 bytes, which suits every Salam type but not data that needs 16 byte alignment.</li>
+</ul>
+
+<h2 id="guide-buffer">A buffer that grows</h2>
+<p>The classic use of <code>Reallocate</code> is a buffer that does not know its final size. Keep the length and the capacity next to the pointer, and when the buffer is full ask for twice as much. <code>Reallocate</code> keeps the old contents, may move them to a new address, and works on a <code>null</code> pointer as well, so the first growth needs no special case.</p>
+{{example.mem-guide-buffer}}
+<p>Doubling means 22 bytes cost only four reallocations, and a million bytes about twenty. Always store the pointer that <code>Reallocate</code> returns: the old one may no longer be valid. For most programs a <code>Vector&lt;u8&gt;</code> does exactly this for you.</p>
+
+<h2 id="guide-arena">An arena per request</h2>
+<p>An arena shines when many small objects live and die together, such as everything made while handling one request or parsing one line. Allocate from the arena while you work, then call <code>ArenaReset</code> once at the end instead of freeing each object. The memory is reused for the next round, so the program never asks the system for more.</p>
+{{example.mem-guide-arena}}
+<p>Each allocation is rounded up to a multiple of 8 bytes, which is why one <code>Token</code> of two <code>int</code>s takes 8. <code>ArenaAlloc</code> returns <code>null</code> when the arena is full, so check the result or make the arena big enough for the largest round. After <code>ArenaReset</code> every pointer from the arena is stale; do not keep them across rounds.</p>
+
+<h2 id="guide-pool">A pool of fixed size blocks</h2>
+<p>A pool suits objects of one size that come and go in any order, such as the nodes of a list or a tree. <code>PoolFree</code> puts a block back on the pool's free list and the next <code>PoolAlloc</code> hands it out again, with no call to the system allocator either way. A pool has a fixed number of blocks; <code>PoolAlloc</code> returns <code>null</code> when they are all in use. <code>PoolFree</code> does not check its argument: a block freed twice goes on the free list twice and is later handed out to two owners.</p>
+{{example.mem-guide-pool}}
+
+<h2 id="guide-leaks">Finding leaks</h2>
+<p>Build with <code>-DSALAM_MEM_DEBUG</code> and <code>Allocate</code> and <code>Free</code> start counting. <code>CheckLeaks</code> then prints the totals to standard error and warns if any bytes are still allocated. A normal build skips the counting and costs nothing.</p>
+{{example.mem-guide-leaks}}
+<p>With the flag, the same program reports the one buffer that was still allocated when <code>CheckLeaks</code> ran:</p>
+<pre class="code" dir="ltr"><code>$ salam run -DSALAM_MEM_DEBUG mem-guide-leaks.salam
+allocations: 2 frees: 1
+bytes still allocated: 7
+[salam memcheck] allocs=2 frees=1 live=7 peak=13
+[WARNING] leak bytes=7</code></pre>
+<p>The counters see memory taken through this package, and also vector storage and many string operations, but not memory a C library takes with its own <code>malloc</code>. For that, <code>salam memcheck file.salam</code> builds with AddressSanitizer and reports each leak with the place it was allocated.</p>
+
+<h2 id="guide-which">Which allocator for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Situation</th><th>Use</th><th>Free with</th></tr></thead>
+<tbody>
+<tr><td>One block of any size</td><td><code>Allocate</code>, <code>AllocateZeroed</code></td><td><code>Free</code></td></tr>
+<tr><td>An array of N items</td><td><code>AllocateArray(n, sizeof(T))</code></td><td><code>Free</code></td></tr>
+<tr><td>A block that has to grow</td><td><code>Reallocate</code></td><td><code>Free</code></td></tr>
+<tr><td>Many small objects with one lifetime</td><td><code>NewArena</code> and <code>ArenaAlloc</code></td><td><code>ArenaReset</code>, then <code>ArenaFree</code></td></tr>
+<tr><td>Many objects of one size, freed in any order</td><td><code>NewPool</code> and <code>PoolAlloc</code></td><td><code>PoolFree</code>, then <code>PoolDestroy</code></td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.Arena = A memory arena.
+doc.Arena.buf = The address of the arena's memory.
+doc.Arena.cap = The capacity in bytes.
+doc.Arena.used = How much has been taken.
+doc.NewArena = Builds an arena of the given capacity in bytes. If the memory cannot be had, every <code>ArenaAlloc</code> returns null.
+doc.ArenaAlloc = Takes memory off the arena; the size is rounded up to a multiple of eight. It returns null when there is no room, or when the size is zero.
+doc.ArenaAllocZeroed = Like <code>ArenaAlloc</code>, with the memory zeroed.
+doc.ArenaReset = Takes back everything at once so the arena can be used again; every pointer it handed out is now stale.
+doc.ArenaFree = Releases the arena's memory.
+doc.ArenaUsed = The bytes taken so far.
+doc.ArenaCapacity = The arena's capacity.
+doc.ArenaRemaining = The bytes left.
+doc.Pool = A pool of equally sized blocks.
+doc.Pool.block_size = The size of each block.
+doc.Pool.block_count = The number of blocks.
+doc.Pool.blocks = The address of the blocks' memory.
+doc.Pool.free_list = The list of free blocks.
+doc.NewPool = Builds a pool of <code>block_count</code> blocks of <code>block_size</code> bytes, rounded up to a multiple of 8 and at least 8. If the memory cannot be had, the pool has no blocks.
+doc.PoolAlloc = Hands out a free block, or null when none is left.
+doc.PoolFree = Gives a block back to the pool; the next allocation hands out the same one. It does not check that the block came from this pool or is not already free.
+doc.PoolBlockSize = The block size.
+doc.PoolCapacity = The total number of blocks.
+doc.PoolDestroy = Releases the pool's memory.
+doc.Allocate = Takes a block of the given size in bytes, or returns null when there is no memory. Its contents are undefined.
+doc.Reallocate = Changes the size of a block and keeps its contents; it may return a new address, and on a null pointer it allocates. Store the result: the old pointer may be invalid, and on failure it returns null and the old block stays yours to free.
+doc.Free = Gives back a block from <code>Allocate</code>, <code>Reallocate</code> or the zeroed forms. Null is ignored.
+doc.Set = Fills <code>n</code> bytes with the given value.
+doc.Copy = Copies <code>n</code> bytes from <code>src</code> to <code>dst</code>; the two ranges must not overlap.
+doc.MemMove = Like <code>Copy</code>, but correct even when the ranges overlap.
+doc.AllocateZeroed = Takes zeroed memory.
+doc.AllocateArray = Takes zeroed memory for <code>count</code> elements of <code>size</code> bytes each. Returns null when either is zero or the product does not fit in 64 bits.
+doc.AllocCount = The number of allocations; zero unless the program was built with memory debugging.
+doc.FreeCount = The number of frees; only with memory debugging.
+doc.LiveBytes = The bytes taken and not yet given back; zero unless the program was built with memory debugging.
+doc.PeakBytes = The most memory held at one moment; only with memory debugging.
+doc.IsMemDebug = True when the program was built with allocation counting.
+doc.IsAsanActive = True when the program was built with the ASan checker.
+doc.MemDebugActive = True when either memory checker is on.
+doc.CheckLeaks = Prints the counters to standard error and warns about bytes never given back; call it at the end of the program. Without memory debugging it prints nothing, and under ASan the report comes at exit.
+
+ex.Reallocate = mem-Allocate
+ex.Free = mem-Allocate
+ex.Set = mem-Allocate
+ex.Copy = mem-Allocate
+ex.MemMove = mem-Allocate
+ex.AllocateZeroed = mem-Allocate
+ex.AllocateArray = mem-Allocate
+ex.NewArena = mem-Arena
+ex.ArenaAlloc = mem-Arena
+ex.ArenaAllocZeroed = mem-Arena
+ex.ArenaReset = mem-Arena
+ex.ArenaFree = mem-Arena
+ex.ArenaUsed = mem-Arena
+ex.ArenaCapacity = mem-Arena
+ex.ArenaRemaining = mem-Arena
+ex.NewPool = mem-Pool
+ex.PoolAlloc = mem-Pool
+ex.PoolFree = mem-Pool
+ex.PoolBlockSize = mem-Pool
+ex.PoolCapacity = mem-Pool
+ex.PoolDestroy = mem-Pool
+ex.AllocCount = mem-Debug
+ex.FreeCount = mem-Debug
+ex.LiveBytes = mem-Debug
+ex.PeakBytes = mem-Debug
+ex.IsMemDebug = mem-Debug
+ex.IsAsanActive = mem-Debug
+ex.MemDebugActive = mem-Debug
+ex.CheckLeaks = mem-Debug

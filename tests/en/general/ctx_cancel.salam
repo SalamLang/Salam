@@ -1,0 +1,78 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import ctx
+import sync
+
+mut root := ctx.Background()
+mut job := ctx.WithCancel(root)
+mut wg := sync.NewWaitGroup()
+mut loops := 0 as i64
+mut saw_done := false
+mut mu := sync.NewMutex()
+
+func worker():
+    until ctx.IsDone(job):
+        _ := ctx.Wait(job, 50 as i64)
+        sync.Lock(mu)
+        loops = loops + 1
+        sync.Unlock(mu)
+    end
+    sync.Lock(mu)
+    saw_done = true
+    sync.Unlock(mu)
+    sync.Done(wg)
+end
+
+func main:
+    println "live:", ctx.IsDone(job), ctx.Err(job)
+
+    sync.Add(wg, 1 as i64)
+    t := spawn(worker)
+    sync.SleepMs(60)
+    ctx.Cancel(job)
+    sync.Wait(wg)
+    join(t)
+
+    println "cancelled:", saw_done, ctx.Err(job)
+    println "did not spin:", loops < 100
+
+    dl := ctx.WithTimeout(root, 80 as i64)
+    t0 := sync.NowMs()
+    fin := ctx.Wait(dl, 5000 as i64)
+    waited := sync.NowMs() - t0
+    println "deadline fired:", fin, ctx.Err(dl)
+    println "woke on time:", waited >= 70, waited < 2000
+
+    mid := ctx.WithCancel(root)
+    leaf := ctx.WithCancel(mid)
+    println "leaf live:", ctx.IsDone(leaf)
+    ctx.Cancel(mid)
+    println "leaf done:", ctx.IsDone(leaf), ctx.Err(leaf)
+
+    short := ctx.WithTimeout(root, 40 as i64)
+    long := ctx.WithTimeout(short, 100000 as i64)
+    _ := ctx.Wait(long, 5000 as i64)
+    println "child bounded:", ctx.IsDone(long), ctx.Err(long)
+
+    sync.DestroyWaitGroup(wg)
+    sync.Destroy(mu)
+    ctx.Free(long)
+    ctx.Free(short)
+    ctx.Free(leaf)
+    ctx.Free(mid)
+    ctx.Free(dl)
+    ctx.Free(job)
+    ctx.Free(root)
+end

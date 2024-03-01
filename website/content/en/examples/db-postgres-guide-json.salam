@@ -1,0 +1,42 @@
+import db.postgres
+import encoding.json
+import encoding.encerr
+
+struct Order:
+    pub customer: str = ""
+    pub qty: int = 0
+end
+
+struct Book:
+    pub title: str = ""
+    pub price: f64 = 0.0
+    pub orders: Vector<Order> = Vector {}
+end
+
+struct Shelf:
+    pub books: Vector<Book> = Vector {}
+end
+
+func main:
+    d := postgres.Open("host=127.0.0.1 user=postgres password=secret dbname=bookshop")
+    defer postgres.Close(d)
+
+    text := postgres.QueryText(d, `SELECT json_build_object('books', coalesce(json_agg(b ORDER BY b.title), '[]'))
+        FROM (SELECT bk.title, bk.price,
+                     coalesce((SELECT json_agg(json_build_object('customer', o.customer, 'qty', o.qty) ORDER BY o.id)
+                               FROM orders o WHERE o.book_id = bk.id), '[]') AS orders
+              FROM books bk WHERE bk.id IN (SELECT book_id FROM orders)) b`)
+
+    mut shelf := Shelf {}
+    mut e := encerr.NoError()
+    if not json.UnmarshalLenient(text, shelf, e):
+        println "bad json:", e.message
+        ret 1
+    end
+    each b in shelf.books:
+        println b.title, b.price, "orders:", b.orders.len()
+        each o in b.orders:
+            println "  " + o.customer, "x", o.qty
+        end
+    end
+end

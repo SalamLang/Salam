@@ -1,0 +1,290 @@
+package driver
+
+import os
+import io
+import str
+
+include pth "../sal_path.salam"
+include lg "../logger.salam"
+include co "../sal_core.salam"
+include i18 "../i18n.salam"
+include pm "../pkgmgr/pkgmgr.salam"
+
+mut g_native_keys := Vector {} as Vector<str>
+mut g_native_vals := Vector {} as Vector<str>
+mut g_native_failed := false
+mut g_native_skip := false
+mut g_native_target := ""
+mut g_native_cc := ""
+mut g_native_extra := Vector {} as Vector<str>
+
+func abort_message(base: str, failed: Vector<str>): str:
+    if failed.len() == 0:
+        ret base
+    end
+    ret base + " (" + str.Join(failed, ", ") + ")"
+end
+
+func link_spec_is_path(spec: str): bool:
+    if str.Contains(spec, "/") or str.Contains(spec, "\\"):
+        ret true
+    end
+    exts := [".a", ".so", ".dll", ".lib", ".dylib"]
+    repeat 5 in i:
+        ext := exts[i]
+        if str.Len(spec) > str.Len(ext) and str.EndsWith(spec, ext):
+            ret true
+        end
+    end
+    ret false
+end
+
+func shell_arg(s: str): str:
+    mut b := str.NewBuilder()
+    if SALAM_OS_WINDOWS:
+        str.BufAppendChar(b, 34)
+        n := str.Len(s)
+        repeat n in i:
+            c := byte_at(s, i)
+            if c == 34:
+                str.BufAppend(b, `\"`)
+            else:
+                str.BufAppendChar(b, c)
+            end
+        end
+        str.BufAppendChar(b, 34)
+    else:
+        str.BufAppendChar(b, 39)
+        n := str.Len(s)
+        repeat n in i:
+            c := byte_at(s, i)
+            if c == 39:
+                str.BufAppend(b, "'\\''")
+            else:
+                str.BufAppendChar(b, c)
+            end
+        end
+        str.BufAppendChar(b, 39)
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func sanitize_ident(lib: str): str:
+    mut b := str.NewBuilder()
+    n := str.Len(lib)
+    repeat n in i:
+        code := byte_at(lib, i)
+        mut c := code
+        if c >= 97 and c <= 122:
+            c = c - 32
+        else (c >= 65 and c <= 90) or (c >= 48 and c <= 57):
+            c = c
+        else:
+            c = 95
+        end
+        str.BufAppendChar(b, c)
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func native_lookup(spec: str): str:
+    repeat g_native_keys.len() in i:
+        if str.Equals(g_native_keys.get(i), spec):
+            ret g_native_vals.get(i)
+        end
+    end
+    ret ""
+end
+
+func native_prepare(lgr: lg.Logger, dir: str, spec: str, kind: str, cc: str): bool:
+    if str.Equals(kind, "framework") or str.Len(spec) == 0 or byte_at(spec, 0) == 45 or link_spec_is_path(spec):
+        ret true
+    end
+    if g_native_skip or str.Len(native_lookup(spec)) > 0:
+        ret true
+    end
+    mut n := pm.Native {}
+    if not pm.ReadNative(dir, spec, n):
+        ret true
+    end
+    cross := str.Len(g_native_target) > 0
+    mut use_cc := cc
+    if str.Len(g_native_cc) > 0:
+        use_cc = g_native_cc
+    end
+    if not cross and pm.SystemHas(n, cc):
+        mut sys := Vector {} as Vector<str>
+        defer sys.free()
+        pm.SystemLinkArgs(n, sys)
+        if sys.len() > 0:
+            mut sj := ""
+            repeat sys.len() in si:
+                sj = sj + sys.get(si) + "\n"
+            end
+            g_native_keys.push(spec)
+            g_native_vals.push(sj)
+        end
+        ret true
+    end
+    if str.Len(n.pre_url) > 0 and not str.Equals(pm.NativeMode(), "source"):
+        mut pobjs := Vector {} as Vector<str>
+        defer pobjs.free()
+        mut pwhy := ""
+        if pm.NativePrebuilt(n, pobjs, pwhy):
+            mut pj := ""
+            repeat pobjs.len() in pk:
+                pj = pj + pobjs.get(pk) + "\n"
+            end
+            repeat n.libs.len() in pl:
+                pj = pj + "-l" + n.libs.get(pl) + "\n"
+            end
+            g_native_keys.push(spec)
+            g_native_vals.push(pj)
+            ret true
+        end
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_WARN, pwhy)
+    end
+    if n.sources.len() > 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("building the native library '%s' from source (only the first build does this)"), co.ArgStr(spec)))
+        mut objs := Vector {} as Vector<str>
+        defer objs.free()
+        mut why := ""
+        if not pm.NativeObjects(n, dir, use_cc, g_native_extra, objs, why):
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, why)
+            ret false
+        end
+        mut joined := ""
+        repeat objs.len() in i:
+            joined = joined + objs.get(i) + "\n"
+        end
+        repeat n.libs.len() in j:
+            joined = joined + "-l" + n.libs.get(j) + "\n"
+        end
+        g_native_keys.push(spec)
+        g_native_vals.push(joined)
+        ret true
+    end
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("the native library '%s' is not installed on this system"), co.ArgStr(spec)))
+    hint := pm.NativeHint(n)
+    if str.Len(hint) > 0:
+        io.EPrintln("  install it with: " + hint)
+    end
+    g_native_failed = true
+    ret false
+end
+
+func native_expand(links &: Vector<str>, kinds &: Vector<str>):
+    mut nl := Vector {} as Vector<str>
+    mut nk := Vector {} as Vector<str>
+    defer nl.free()
+    defer nk.free()
+    repeat links.len() in i:
+        mut mapped := Vector {} as Vector<str>
+        defer mapped.free()
+        if native_args(links.get(i), mapped):
+            repeat mapped.len() in j:
+                nl.push(mapped.get(j))
+                nk.push("")
+            end
+        else:
+            nl.push(links.get(i))
+            nk.push(kinds.get(i))
+        end
+    end
+    links.clear()
+    kinds.clear()
+    repeat nl.len() in k:
+        links.push(nl.get(k))
+        kinds.push(nk.get(k))
+    end
+end
+
+func native_args(spec: str, out &: Vector<str>): bool:
+    v := native_lookup(spec)
+    if str.Len(v) == 0:
+        ret false
+    end
+    parts := str.Split(v, "\n")
+    defer parts.free()
+    repeat parts.len() in i:
+        if str.Len(parts.get(i)) > 0:
+            out.push(parts.get(i))
+        end
+    end
+    ret true
+end
+
+func link_define(lib: str): str:
+    ret "SALAM_LINK_" + sanitize_ident(lib)
+end
+
+func emit_link(
+    cmdb &: str.StringBuilder, lgr: lg.Logger, spec: str, kind: str, use_tcc: bool
+):
+    framework := str.Equals(kind, "framework")
+    is_static := str.Equals(kind, "static")
+    if framework:
+        if SALAM_OS_MAC:
+            str.BufAppend(cmdb, " -framework ")
+            str.BufAppend(cmdb, spec)
+        else:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_WARN, co.Format1(i18.Tr("ignoring framework link '%s' (frameworks are macOS-only)"), co.ArgStr(spec))
+            )
+        end
+        ret
+    end
+    if (str.Len(spec) > 0 and byte_at(spec, 0) == 45) or link_spec_is_path(spec):
+        str.BufAppendChar(cmdb, 32)
+        str.BufAppend(cmdb, shell_arg(spec))
+        ret
+    end
+    mut mapped := Vector {} as Vector<str>
+    defer mapped.free()
+    if native_args(spec, mapped):
+        repeat mapped.len() in mi:
+            str.BufAppendChar(cmdb, 32)
+            str.BufAppend(cmdb, shell_arg(mapped.get(mi)))
+        end
+        ret
+    end
+    if is_static and not use_tcc:
+        if SALAM_OS_MAC:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_WARN, co.Format1(i18.Tr("static link of bare name '%s' is unsupported by the macOS linker; pass an explicit .a path. Linking it normally."), co.ArgStr(spec))
+            )
+            str.BufAppend(cmdb, " -l")
+            str.BufAppend(cmdb, shell_arg(spec))
+        else:
+            str.BufAppend(cmdb, " -Wl,-Bstatic -l")
+            str.BufAppend(cmdb, shell_arg(spec))
+            str.BufAppend(cmdb, " -Wl,-Bdynamic")
+        end
+        ret
+    end
+    str.BufAppend(cmdb, " -l")
+    str.BufAppend(cmdb, shell_arg(spec))
+end
+
+func detect_bundled_musl_tcc(cc_path: str): MuslTcc:
+    mut r := MuslTcc {}
+    if not str.Contains(cc_path, "tcc"):
+        ret r
+    end
+    d := pth.PathDir(cc_path)
+    if str.Len(d) == 0:
+        ret r
+    end
+    r.tcc_dir = d
+    probe := pth.PathJoin(r.tcc_dir, "musl/lib/crt1.o")
+    if not os.Exists(probe):
+        ret r
+    end
+    r.musl_dir = pth.PathJoin(r.tcc_dir, "musl")
+    r.active = true
+    ret r
+end

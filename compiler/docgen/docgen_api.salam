@@ -1,0 +1,95 @@
+package docgen
+
+import str
+
+include at "../ast.salam"
+include tok "../token.salam"
+include ps "../parser/parser.salam"
+include lx "../lexer/lexer.salam"
+include cc "../condcomp.salam"
+include sm "../semantic/semantic.salam"
+include src "../source.salam"
+include lg "../logger.salam"
+include lp "../langpack.salam"
+
+pub func NewDb(): DocDb:
+    ret DocDb {}
+end
+
+pub func ParseFile(db &: DocDb, lgr: lg.Logger, pack: int, path: str, rel: str, defines: Vector<str>): bool:
+    mut sf := src.New()
+    if not src.Load(path, sf):
+        ret false
+    end
+    file_idx := db_add_file(db, rel)
+    modpack := lx.Detect(sf, pack)
+
+    mut toks := tok.StreamNew(path)
+    lok := lx.Run(lgr, modpack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    pok := ps.Run(lgr, toks, a, prog)
+    tok.StreamFree(toks)
+
+    table := cc.TableBuild("", defines)
+    cc.TableSetPack(table, modpack)
+    cc.PruneProgram(a, lgr, path, table, prog)
+
+    mut s := sm.New(lgr, path, lp.Code(modpack))
+    sm.SetCc(s, table)
+    sm.Run(s, a, prog)
+    sm.Free(s)
+
+    mut toks2 := tok.StreamNew(path)
+    lx.RunEx(lgr, modpack, sf, true, toks2)
+    blocks := collect_comment_blocks(toks2)
+    tok.StreamFree(toks2)
+
+    cnt := at.ChildCount(a, prog)
+    mut i := 0
+    until i < cnt:
+        walk_top(db, a, at.Child(a, prog, i), file_idx, blocks)
+        i += 1
+    end
+
+    repeat blocks.len() in bi:
+        cb := blocks.get(bi)
+        cb.texts.free()
+    end
+    defer blocks.free()
+    at.FreeAst(a)
+    ret lok and pok
+end
+
+pub func RenderJson(db: DocDb): str:
+    mut b := str.NewBuilder()
+    emit_db_json(b, db)
+    str.BufAppendChar(b, 10)
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+pub func Render(db: DocDb, title: str): str:
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "<!doctype html>\n<html lang=\"en\">\n<head>\n")
+    str.BufAppend(b, "<meta charset=\"utf-8\">\n")
+    str.BufAppend(b, "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n")
+    str.BufAppend(b, "<title>")
+    str.BufAppend(b, title)
+    str.BufAppend(b, " - API Documentation</title>\n")
+    str.BufAppend(b, "<style>")
+    str.BufAppend(b, css_text)
+    str.BufAppend(b, "</style>\n</head>\n<body>\n")
+    str.BufAppend(b, body_text)
+    str.BufAppend(b, "\n<script>\nvar DOC_TITLE = ")
+    str.BufAppend(b, js_str(title))
+    str.BufAppend(b, ";\nvar DOC = ")
+    emit_db_json(b, db)
+    str.BufAppend(b, ";\n")
+    str.BufAppend(b, js_text)
+    str.BufAppend(b, "\n</script>\n</body>\n</html>\n")
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end

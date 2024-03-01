@@ -1,0 +1,138 @@
+-- counting the placeholders
+2 [? ?] SELECT a FROM t WHERE b = ? AND c = ?
+1 [?] SELECT a FROM t WHERE b = '?' AND c = ?
+0 [] SELECT a FROM t
+3 [?1 :name @other] SELECT a FROM t WHERE b = ?1 AND c = :name AND d = @other
+2 [$1 $2] SELECT a FROM t WHERE b = $1 AND c = $2
+0 [] SELECT a FROM t WHERE data ? 'k'
+
+-- what a statement takes and returns
+query SELECT id, name FROM users WHERE email = ? AND age > ?
+  select on users
+  param 1 ? users.email str
+  param 2 ? users.age option.Option<i64>
+  out 0 id i64
+  out 1 name option.Option<str>
+query SELECT COUNT(*) AS n FROM users
+  select on users
+  out 0 n i64
+query INSERT INTO users (email, name) VALUES (?, ?)
+  insert on users
+  param 1 ? users.email str
+  param 2 ? users.name option.Option<str>
+query INSERT INTO users (email) VALUES (?) RETURNING id, email
+  insert on users
+  param 1 ? users.email str
+  out 0 id i64
+  out 1 email str
+query UPDATE users SET name = ?, age = ? WHERE id = ?
+  update on users
+  param 1 ? users.name option.Option<str>
+  param 2 ? users.age option.Option<i64>
+  param 3 ? users.id i64
+query DELETE FROM users WHERE id = ? RETURNING email
+  delete on users
+  param 1 ? users.id i64
+query CREATE TABLE later (a INT)
+  ddl on -
+query SELECT id FROM users WHERE id IN (?, ?, ?)
+  select on users
+  param 1 ? users.id i64
+  param 2 ? users.id i64
+  param 3 ? users.id i64
+  out 0 id i64
+query SELECT id FROM users WHERE age BETWEEN ? AND ?
+  select on users
+  param 1 ? users.age option.Option<i64>
+  param 2 ? users.age option.Option<i64>
+  out 0 id i64
+query SELECT id FROM users WHERE ? = email
+  select on users
+  param 1 ? users.email str
+  out 0 id i64
+query SELECT id FROM users u JOIN orders o ON o.user_id = u.id WHERE o.total > ?
+  select on u
+  param 1 ? o.total f64
+  out 0 id i64
+  SQL312 1:8 column "id" is in more than one table here
+query VALUES (1, 'a')
+  select on -
+  out 0 (expr) i64
+  out 1 (expr) str
+query SELECT id, body FROM notes WHERE id = $1 AND body = $2
+  select on notes
+  param 1 $1 notes.id i64
+  param 2 $2 notes.body str
+  out 0 id i64
+  out 1 body str
+query SELECT id FROM notes WHERE id = $2 AND hits = $1
+  select on notes
+  param 2 $2 notes.id i64
+  param 1 $1 notes.hits option.Option<i64>
+  out 0 id i64
+
+-- placeholder numbering has to be complete
+query SELECT id FROM notes WHERE id = $1 AND body = $3
+  select on notes
+  param 1 $1 notes.id i64
+  param 3 $3 notes.body str
+  out 0 id i64
+  SQL319 1:1 this statement uses $3 but never $2
+query SELECT id FROM notes WHERE id = $2
+  select on notes
+  param 2 $2 notes.id i64
+  out 0 id i64
+  SQL319 1:1 this statement uses $2 but never $1
+
+-- ordinals in ORDER BY and GROUP BY
+ok   SELECT id, email FROM users ORDER BY 1
+ok   SELECT id, email FROM users ORDER BY 2 DESC
+bad  SELECT id, email FROM users ORDER BY 3
+     SQL326 1:38 ORDER BY names column 3 but the statement returns 2 columns
+       help: count the result columns from 1, or name the column instead
+bad  SELECT id, email FROM users ORDER BY 0
+     SQL326 1:38 ORDER BY names column 0 but the statement returns 2 columns
+       help: count the result columns from 1, or name the column instead
+ok   SELECT email, COUNT(*) FROM users GROUP BY 1
+bad  SELECT email, COUNT(*) FROM users GROUP BY 7
+     SQL326 1:44 GROUP BY names column 7 but the statement returns 2 columns
+       help: count the result columns from 1, or name the column instead
+ok   SELECT id FROM users ORDER BY email
+
+-- limits take numbers
+ok   SELECT id FROM users LIMIT 10
+ok   SELECT id FROM users LIMIT ?
+bad  SELECT id FROM users LIMIT 'ten'
+     SQL327 1:28 LIMIT takes a number
+       help: write the count without quotes, or bind it as a placeholder
+bad  SELECT id FROM users LIMIT 10 OFFSET 'two'
+     SQL327 1:38 OFFSET takes a number
+       help: write the count without quotes, or bind it as a placeholder
+
+-- subqueries have to be the right width
+ok   SELECT id FROM users WHERE id IN (SELECT user_id FROM orders)
+bad  SELECT id FROM users WHERE id IN (SELECT id, total FROM orders)
+     SQL324 1:31 this subquery returns 2 columns but one value is expected
+       help: select just the column the comparison needs
+ok   SELECT id FROM users WHERE id = (SELECT MAX(id) FROM orders)
+bad  SELECT id FROM users WHERE id = (SELECT id, total FROM orders)
+     SQL324 1:31 this subquery returns 2 columns but one value is expected
+       help: select just the column the comparison needs
+ok   SELECT id FROM users WHERE (id, email) IN (SELECT id, total FROM orders)
+ok   SELECT id FROM users u WHERE EXISTS (SELECT id, total FROM orders)
+
+-- one column, one name
+ok   SELECT id AS x, email AS y FROM users
+bad  SELECT id AS x, email AS x FROM users
+     SQL325 1:26 two result columns are both called "x"
+       help: give one of them a different alias
+bad  SELECT id, email AS id FROM users
+     SQL325 1:21 two result columns are both called "id"
+       help: give one of them a different alias
+ok   SELECT u.id, o.id FROM users u JOIN orders o ON o.user_id = u.id
+
+-- a column cannot be set twice
+ok   UPDATE users SET name = ?, age = ? WHERE id = ?
+bad  UPDATE users SET name = ?, name = ? WHERE id = ?
+     SQL329 1:28 "name" is assigned twice in this SET
+       help: keep one assignment per column

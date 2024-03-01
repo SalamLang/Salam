@@ -1,0 +1,1732 @@
+package nativegen
+
+k_x86_rmw8_lo := [0x8B, 0x03, 0x2B, 0x23, 0x0B, 0x33]
+k_x86_rmw8_hi := [0x8B, 0x13, 0x1B, 0x23, 0x0B, 0x33]
+k_x86_rmw8_nm := ["xchg", "add", "sub", "and", "or", "xor"]
+k_x86_rmw8_pre := [0x53, 0x56, 0x8B, 0x74, 0x24, 0x0C, 0x8B, 0x06, 0x8B, 0x56, 0x04, 0x89, 0xC3, 0x89, 0xD1]
+k_x86_rmw8_post := [0xF0, 0x0F, 0xC7, 0x0E, 0x75, 0xEE, 0x5E, 0x5B, 0xC3]
+k_arm_rmw8_lo := [0xE1A06001, 0xE0946001, 0xE0546001, 0xE0046001, 0xE1846001, 0xE0246001]
+k_arm_rmw8_hi := [0xE1A07002, 0xE0A57002, 0xE0C57002, 0xE0057002, 0xE1857002, 0xE0257002]
+k_arm_rmw8_pre := [0xE92D40F0, 0xF57FF05B, 0xE1B04F9F]
+k_arm_rmw8_post := [0xE1A03F96, 0xE3530000, 0x1AFFFFF9, 0xF57FF05B, 0xE1A00004, 0xE1A01005, 0xE8BD80F0]
+k_arm_cas8 := [0xE92D40F0, 0xE59D7014, 0xE1A06003, 0xF57FF05B, 0xE1B04F9F, 0xE1540001, 0x01550002, 0x1A000002, 0xE1A03F96, 0xE3530000, 0x1AFFFFF8, 0xF57FF05B, 0xE1A00004, 0xE1A01005, 0xE8BD80F0]
+k_x86_cas8 := [0x53, 0x56, 0x8B, 0x74, 0x24, 0x0C, 0x8B, 0x44, 0x24, 0x10, 0x8B, 0x54, 0x24, 0x14, 0x8B, 0x5C, 0x24, 0x18, 0x8B, 0x4C, 0x24, 0x1C, 0xF0, 0x0F, 0xC7, 0x0E, 0x5E, 0x5B, 0xC3]
+
+pub struct Lg:
+    pub lo: Vector<int> = Vector {}
+    pub hi: Vector<int> = Vector {}
+    pub ph_old: Vector<int> = Vector {}
+    pub ph_lo: Vector<int> = Vector {}
+    pub ph_hi: Vector<int> = Vector {}
+    pub dm_a: Vector<int> = Vector {}
+    pub dm_b: Vector<int> = Vector {}
+    pub dm_sg: Vector<bool> = Vector {}
+    pub dm_blk: Vector<int> = Vector {}
+    pub dm_ql: Vector<int> = Vector {}
+    pub dm_qh: Vector<int> = Vector {}
+    pub dm_rl: Vector<int> = Vector {}
+    pub dm_rh: Vector<int> = Vector {}
+    pub slot: int = 0 - 1
+end
+
+func lg_grow(g &: Ng, l &: Lg):
+    until l.lo.len() < g.v_kind.len():
+        l.lo.push(0 - 1)
+        l.hi.push(0 - 1)
+    end
+end
+
+func is_w64(t: int): bool:
+    ret t == T_I64
+end
+
+func lg_set(g &: Ng, l &: Lg, v: int, lo: int, hi: int):
+    lg_grow(g, l)
+    l.lo[v] = lo
+    l.hi[v] = hi
+end
+
+func lg_c32(g &: Ng, v: i64): int:
+    ret const_int(g, T_I32, (v << (32 as i64)) >> (32 as i64))
+end
+
+func lg_pair(g &: Ng, l &: Lg, v: int, lo &: int, hi &: int):
+    lg_grow(g, l)
+    if v < 0:
+        lo = lg_c32(g, 0 as i64)
+        hi = lo
+        ret
+    end
+    if l.lo[v] >= 0:
+        lo = l.lo[v]
+        hi = l.hi[v]
+        ret
+    end
+    k := g.v_kind[v]
+    if k == VK_INT:
+        lo = lg_c32(g, g.v_i[v])
+        hi = lg_c32(g, g.v_i[v] >> (32 as i64))
+        lg_set(g, l, v, lo, hi)
+        ret
+    end
+    lo = lg_c32(g, 0 as i64)
+    hi = lo
+    if k == VK_UNDEF:
+        lo = new_val(g, VK_UNDEF, T_I32, 0 as i64)
+        hi = lo
+    else k != VK_ZERO:
+        fail(g, "native backend: 64-bit value without halves in " + tab_str(g.syms, g.f_sym) + " k" + str_of_int(k) + " op" + str_of_int(k == VK_INS ? g.i_op[g.v_def[v]] : 0 - 1))
+    end
+    lg_set(g, l, v, lo, hi)
+end
+
+func lg_ins(g &: Ng, at: int, op: int, ty: int, a: int, b: int): int:
+    i := ins_new(g, op, ty)
+    g.i_a[i] = a
+    g.i_b[i] = b
+    g.i_dbg[i] = g.i_dbg[at]
+    ins_before(g, at, i)
+    ret new_res(g, i)
+end
+
+func lg_cast(g &: Ng, at: int, op: int, ty: int, a: int, from: int): int:
+    r := lg_ins(g, at, op, ty, a, 0 - 1)
+    g.i_x[g.v_def[r]] = from
+    ret r
+end
+
+func lg_icmp(g &: Ng, at: int, pred: int, a: int, b: int): int:
+    r := lg_ins(g, at, OP_ICMP, T_I1, a, b)
+    g.i_x[g.v_def[r]] = pred
+    ret r
+end
+
+func lg_sel(g &: Ng, at: int, c: int, x: int, y: int): int:
+    r := lg_ins(g, at, OP_SELECT, g.v_ty[x], c, x)
+    g.i_c[g.v_def[r]] = y
+    ret r
+end
+
+func lg_call(g &: Ng, at: int, name: str, args: Vector<int>, rty: int, hi &: int): int:
+    s := sym_named(g, name)
+    if g.sy_kind[s] == SY_UNKNOWN:
+        g.sy_kind[s] = SY_FUNC
+    end
+    g.sy_used[s] = true
+    fv := new_val(g, VK_GLB, T_PTR, 0 as i64)
+    g.v_def[fv] = s
+    c := ins_new(g, OP_CALL, rty == T_I64 ? T_I32 : rty)
+    g.i_a[c] = fv
+    g.i_x[c] = 0 - 1
+    g.i_ps[c] = g.pool.len()
+    g.i_pcount[c] = args.len()
+    g.i_dbg[c] = g.i_dbg[at]
+    each av in args:
+        g.pool.push(av)
+        g.pool.push(0)
+        g.pool.push(0 - 1)
+    end
+    ins_before(g, at, c)
+    mut r := 0 - 1
+    if rty != T_VOID:
+        r = new_res(g, c)
+    end
+    hi = 0 - 1
+    if rty == T_I64:
+        hi = lg_ins(g, at, OP_RETHI, T_I32, 0 - 1, 0 - 1)
+    end
+    ret r
+end
+
+func lg_libcall2(g &: Ng, l &: Lg, at: int, name: str, a: int, b: int, lo &: int, hi &: int):
+    mut al := 0
+    mut ah := 0
+    mut bl := 0
+    mut bh := 0
+    lg_pair(g, l, a, al, ah)
+    lg_pair(g, l, b, bl, bh)
+    mut args := Vector {} as Vector<int>
+    args.push(al)
+    args.push(ah)
+    args.push(bl)
+    args.push(bh)
+    mut h := 0
+    lo = lg_call(g, at, name, args, T_I64, h)
+    hi = h
+    args.free()
+end
+
+func lg_divmod_arm(g &: Ng, l &: Lg, at: int, op: int, a: int, b: int, lo &: int, hi &: int):
+    sg := op == OP_SDIV or op == OP_SREM
+    rem := op == OP_SREM or op == OP_UREM
+    blk := g.i_blk[at]
+    mut k := 0 - 1
+    repeat l.dm_a.len() in q:
+        if l.dm_a[q] == a and l.dm_b[q] == b and l.dm_sg[q] == sg and dominates(g, l.dm_blk[q], blk):
+            k = q
+            break
+        end
+    end
+    if k < 0:
+        mut al := 0
+        mut ah := 0
+        mut bl := 0
+        mut bh := 0
+        lg_pair(g, l, a, al, ah)
+        lg_pair(g, l, b, bl, bh)
+        mut args := Vector {} as Vector<int>
+        args.push(al)
+        args.push(ah)
+        args.push(bl)
+        args.push(bh)
+        mut h := 0
+        ql := lg_call(g, at, sg ? "__aeabi_ldivmod" : "__aeabi_uldivmod", args, T_I64, h)
+        args.free()
+        rl := lg_ins(g, at, OP_RETHI, T_I32, 0 - 1, 0 - 1)
+        g.i_x[g.v_def[rl]] = 1
+        rh := lg_ins(g, at, OP_RETHI, T_I32, 0 - 1, 0 - 1)
+        g.i_x[g.v_def[rh]] = 2
+        l.dm_a.push(a)
+        l.dm_b.push(b)
+        l.dm_sg.push(sg)
+        l.dm_blk.push(blk)
+        l.dm_ql.push(ql)
+        l.dm_qh.push(h)
+        l.dm_rl.push(rl)
+        l.dm_rh.push(rh)
+        k = l.dm_a.len() - 1
+    end
+    lo = rem ? l.dm_rl[k] : l.dm_ql[k]
+    hi = rem ? l.dm_rh[k] : l.dm_qh[k]
+end
+
+func lg_div_twin(g &: Ng, at: int, op: int, a: int, b: int): bool:
+    sg := op == OP_SDIV or op == OP_SREM
+    rem := op == OP_SREM or op == OP_UREM
+    each bb in g.b_rpo:
+        mut j := g.b_first[bb]
+        until j >= 0:
+            o := g.i_op[j]
+            if j != at and o >= OP_SDIV and o <= OP_UREM and (o == OP_SDIV or o == OP_SREM) == sg and (o == OP_SREM or o == OP_UREM) != rem and resolve(g, g.i_a[j]) == a and resolve(g, g.i_b[j]) == b:
+                ret true
+            end
+            j = g.i_next[j]
+        end
+    end
+    ret false
+end
+
+func lg_divmod(g &: Ng, l &: Lg, at: int, op: int, a: int, b: int, lo &: int, hi &: int):
+    if g.arch == NG_ARCH_ARM:
+        lg_divmod_arm(g, l, at, op, a, b, lo, hi)
+        ret
+    end
+    sg := op == OP_SDIV or op == OP_SREM
+    rem := op == OP_SREM or op == OP_UREM
+    blk := g.i_blk[at]
+    mut k := 0 - 1
+    repeat l.dm_a.len() in q:
+        if l.dm_a[q] == a and l.dm_b[q] == b and l.dm_sg[q] == sg and dominates(g, l.dm_blk[q], blk) and (l.dm_ql[q] >= 0 or rem):
+            k = q
+            break
+        end
+    end
+    if k < 0:
+        mut cl := 0
+        mut ch := 0
+        mod_only := rem and not lg_div_twin(g, at, op, a, b)
+        mut nm := sg ? "__divdi3" : "__udivdi3"
+        if mod_only:
+            nm = sg ? "__moddi3" : "__umoddi3"
+        end
+        lg_libcall2(g, l, at, nm, a, b, cl, ch)
+        l.dm_a.push(a)
+        l.dm_b.push(b)
+        l.dm_sg.push(sg)
+        l.dm_blk.push(blk)
+        l.dm_ql.push(mod_only ? 0 - 1 : cl)
+        l.dm_qh.push(mod_only ? 0 - 1 : ch)
+        l.dm_rl.push(mod_only ? cl : 0 - 1)
+        l.dm_rh.push(mod_only ? ch : 0 - 1)
+        k = l.dm_a.len() - 1
+    end
+    if rem and l.dm_rl[k] < 0:
+        mut al := 0
+        mut ah := 0
+        mut bl := 0
+        mut bh := 0
+        lg_pair(g, l, a, al, ah)
+        lg_pair(g, l, b, bl, bh)
+        mut ml := 0
+        mut mh := 0
+        lg_mul64(g, at, l.dm_ql[k], l.dm_qh[k], bl, bh, ml, mh)
+        mut rl := 0
+        mut rh := 0
+        lg_add64(g, at, al, ah, ml, mh, true, rl, rh)
+        if dominates(g, l.dm_blk[k], blk) and l.dm_blk[k] == blk:
+            l.dm_rl[k] = rl
+            l.dm_rh[k] = rh
+        end
+        lo = rl
+        hi = rh
+        ret
+    end
+    lo = rem ? l.dm_rl[k] : l.dm_ql[k]
+    hi = rem ? l.dm_rh[k] : l.dm_qh[k]
+end
+
+func lg_shift_const(g &: Ng, at: int, op: int, al: int, ah: int, c: int, lo &: int, hi &: int):
+    n := c & 63
+    if n == 0:
+        lo = al
+        hi = ah
+        ret
+    end
+    if op == OP_SHL:
+        if n >= 32:
+            lo = lg_c32(g, 0 as i64)
+            hi = n == 32 ? al : lg_ins(g, at, OP_SHL, T_I32, al, lg_c32(g, (n - 32) as i64))
+            ret
+        end
+        lo = lg_ins(g, at, OP_SHL, T_I32, al, lg_c32(g, n as i64))
+        t1 := lg_ins(g, at, OP_SHL, T_I32, ah, lg_c32(g, n as i64))
+        t2 := lg_ins(g, at, OP_LSHR, T_I32, al, lg_c32(g, (32 - n) as i64))
+        hi = lg_ins(g, at, OP_OR, T_I32, t1, t2)
+        ret
+    end
+    if n >= 32:
+        if op == OP_LSHR:
+            hi = lg_c32(g, 0 as i64)
+        else:
+            hi = lg_ins(g, at, OP_ASHR, T_I32, ah, lg_c32(g, 31 as i64))
+        end
+        lo = n == 32 ? ah : lg_ins(g, at, op, T_I32, ah, lg_c32(g, (n - 32) as i64))
+        ret
+    end
+    hi = lg_ins(g, at, op, T_I32, ah, lg_c32(g, n as i64))
+    u1 := lg_ins(g, at, OP_LSHR, T_I32, al, lg_c32(g, n as i64))
+    u2 := lg_ins(g, at, OP_SHL, T_I32, ah, lg_c32(g, (32 - n) as i64))
+    lo = lg_ins(g, at, OP_OR, T_I32, u1, u2)
+end
+
+func lg_strict(p: int): int:
+    switch p:
+        CC_SLE: ret CC_SLT end
+        CC_SGE: ret CC_SGT end
+        CC_ULE: ret CC_ULT end
+        CC_UGE: ret CC_UGT end
+    end
+    ret p
+end
+
+func lg_unsigned(p: int): int:
+    switch p:
+        CC_SLT: ret CC_ULT end
+        CC_SLE: ret CC_ULE end
+        CC_SGT: ret CC_UGT end
+        CC_SGE: ret CC_UGE end
+    end
+    ret p
+end
+
+func lg_cmp64(g &: Ng, l &: Lg, at: int, pred: int, a: int, b: int): int:
+    mut al := 0
+    mut ah := 0
+    mut bl := 0
+    mut bh := 0
+    lg_pair(g, l, a, al, ah)
+    lg_pair(g, l, b, bl, bh)
+    if pred == CC_EQ or pred == CC_NE:
+        x1 := lg_ins(g, at, OP_XOR, T_I32, al, bl)
+        x2 := lg_ins(g, at, OP_XOR, T_I32, ah, bh)
+        o := lg_ins(g, at, OP_OR, T_I32, x1, x2)
+        ret lg_icmp(g, at, pred, o, lg_c32(g, 0 as i64))
+    end
+    eqh := lg_icmp(g, at, CC_EQ, ah, bh)
+    lc := lg_icmp(g, at, lg_unsigned(pred), al, bl)
+    hc := lg_icmp(g, at, lg_strict(pred), ah, bh)
+    ret lg_sel(g, at, eqh, lc, hc)
+end
+
+func lg_ext_to32(g &: Ng, at: int, v: int, signed: bool): int:
+    t := g.v_ty[v]
+    if t == T_I32:
+        ret v
+    end
+    ret lg_cast(g, at, signed ? OP_SEXT : OP_ZEXT, T_I32, v, t)
+end
+
+func lg_entry_slot(g &: Ng, l &: Lg): int:
+    if l.slot >= 0:
+        ret l.slot
+    end
+    b0 := g.b_rpo[0]
+    a := ins_new(g, OP_ALLOCA, T_PTR)
+    g.i_x[a] = T_F64
+    g.i_d[a] = 1 as i64
+    first := g.b_first[b0]
+    ins_before(g, first, a)
+    l.slot = new_res(g, a)
+    ret l.slot
+end
+
+func lg_addr4(g &: Ng, at: int, base: int): int:
+    r := lg_ins(g, at, OP_ADDR, T_PTR, base, 0 - 1)
+    d := g.v_def[r]
+    g.i_x[d] = 1
+    g.i_d[d] = 4 as i64
+    ret r
+end
+
+func lg_load(g &: Ng, at: int, addr: int, ty: int, model: int): int:
+    r := lg_ins(g, at, OP_LOAD, ty, addr, 0 - 1)
+    d := g.v_def[r]
+    g.i_c[d] = g.i_c[model]
+    g.i_f[d] = g.i_f[model]
+    ret r
+end
+
+func lg_store(g &: Ng, at: int, val: int, addr: int, model: int):
+    s := ins_new(g, OP_STORE, T_VOID)
+    g.i_a[s] = val
+    g.i_b[s] = addr
+    g.i_c[s] = g.i_c[model]
+    g.i_f[s] = g.i_f[model]
+    g.i_x[s] = g.v_ty[val]
+    g.i_dbg[s] = g.i_dbg[at]
+    ins_before(g, at, s)
+end
+
+func lg_split_args(g &: Ng, l &: Lg):
+    mut na := Vector {} as Vector<int>
+    mut nf := Vector {} as Vector<int>
+    mut pos := 0
+    repeat g.f_args.len() in k:
+        v := g.f_args[k]
+        fl := k < g.f_argf.len() ? g.f_argf[k] : 0
+        if v >= 0 and is_w64(g.v_ty[v]):
+            lo := new_val(g, VK_ARG, T_I32, pos as i64)
+            hi := new_val(g, VK_ARG, T_I32, (pos + 1) as i64)
+            lg_set(g, l, v, lo, hi)
+            na.push(lo)
+            na.push(hi)
+            nf.push(IF_PAIR)
+            nf.push(0)
+            pos += 2
+        else:
+            if v >= 0:
+                g.v_i[v] = pos as i64
+            end
+            na.push(v)
+            nf.push(fl)
+            pos += 1
+        end
+    end
+    g.f_args.clear()
+    g.f_argf.clear()
+    each a in na:
+        g.f_args.push(a)
+    end
+    each f in nf:
+        g.f_argf.push(f)
+    end
+    na.free()
+    nf.free()
+end
+
+func lg_fix_call(g &: Ng, l &: Lg, i: int):
+    ps := g.i_ps[i]
+    n := g.i_pcount[i]
+    mut any := false
+    repeat n in k:
+        v := g.pool[ps + 3 * k]
+        if v >= 0 and is_w64(g.v_ty[v]):
+            any = true
+        end
+    end
+    if any:
+        mut vals := Vector {} as Vector<int>
+        mut fls := Vector {} as Vector<int>
+        mut aux := Vector {} as Vector<int>
+        repeat n in k2:
+            v2 := g.pool[ps + 3 * k2]
+            if v2 >= 0 and is_w64(g.v_ty[v2]):
+                mut lo := 0
+                mut hi := 0
+                lg_pair(g, l, v2, lo, hi)
+                vals.push(lo)
+                vals.push(hi)
+                fls.push(IF_PAIR)
+                fls.push(0)
+                aux.push(0 - 1)
+                aux.push(0 - 1)
+            else:
+                vals.push(v2)
+                fls.push(g.pool[ps + 3 * k2 + 1])
+                aux.push(g.pool[ps + 3 * k2 + 2])
+            end
+        end
+        g.i_ps[i] = g.pool.len()
+        g.i_pcount[i] = vals.len()
+        repeat vals.len() in k3:
+            g.pool.push(vals[k3])
+            g.pool.push(fls[k3])
+            g.pool.push(aux[k3])
+        end
+        if g.i_x[i] >= 0:
+            mut nfx := 0
+            repeat n in k4:
+                if k4 < g.i_x[i]:
+                    v4 := g.pool[ps + 3 * k4]
+                    nfx += v4 >= 0 and is_w64(g.v_ty[v4]) ? 2 : 1
+                end
+            end
+            g.i_x[i] = nfx
+        end
+        vals.free()
+        fls.free()
+        aux.free()
+    end
+    r := g.i_res[i]
+    if r >= 0 and is_w64(g.i_ty[i]):
+        g.i_ty[i] = T_I32
+        nx := g.i_next[i]
+        hi2 := lg_ins(g, nx, OP_RETHI, T_I32, 0 - 1, 0 - 1)
+        nr := new_val(g, VK_INS, T_I32, 0 as i64)
+        g.v_def[nr] = i
+        g.i_res[i] = nr
+        lg_set(g, l, r, nr, hi2)
+    end
+end
+
+func lg_intrinsic_len(g &: Ng, l &: Lg, i: int):
+    ps := g.i_ps[i]
+    repeat g.i_pcount[i] in k:
+        v := g.pool[ps + 3 * k]
+        if v >= 0 and is_w64(g.v_ty[v]):
+            mut lo := 0
+            mut hi := 0
+            lg_pair(g, l, v, lo, hi)
+            g.pool[ps + 3 * k] = lo
+        end
+    end
+end
+
+func lg_is_intrinsic(g &: Ng, i: int): bool:
+    fv := g.i_a[i]
+    if fv < 0 or g.v_kind[fv] != VK_GLB:
+        ret false
+    end
+    s := g.v_def[fv]
+    ret s == g.sym_i_memcpy or s == g.sym_i_memmove or s == g.sym_i_memset
+end
+
+func lg_atomic_call(g &: Ng, at: int, name: str, ptr: int, vals: Vector<int>, lo &: int, hi &: int):
+    mut args := Vector {} as Vector<int>
+    args.push(ptr)
+    each v in vals:
+        args.push(v)
+    end
+    mut h := 0
+    lo = lg_call(g, at, name, args, T_I64, h)
+    hi = h
+    args.free()
+end
+
+func lg_atomic(g &: Ng, l &: Lg, i: int): bool:
+    op := g.i_op[i]
+    ty := g.i_ty[i]
+    r := g.i_res[i]
+    a := g.i_a[i]
+    b := g.i_b[i]
+    mut vals := Vector {} as Vector<int>
+    defer vals.free()
+    mut lo := 0
+    mut hi := 0
+    if op == OP_RMW and is_w64(ty):
+        mut bl := 0
+        mut bh := 0
+        lg_pair(g, l, b, bl, bh)
+        vals.push(bl)
+        vals.push(bh)
+        lg_atomic_call(g, i, "__salam_rmw8_" + k_x86_rmw8_nm[g.i_x[i]], a, vals, lo, hi)
+        if r >= 0:
+            lg_set(g, l, r, lo, hi)
+        end
+        ins_unlink(g, i)
+        ret true
+    end
+    if op == OP_CMPXCHG and is_w64(field_ty(g, ty, 0)):
+        mut el := 0
+        mut eh := 0
+        mut nl := 0
+        mut nh := 0
+        lg_pair(g, l, b, el, eh)
+        lg_pair(g, l, g.i_c[i], nl, nh)
+        vals.push(el)
+        vals.push(eh)
+        vals.push(nl)
+        vals.push(nh)
+        lg_atomic_call(g, i, "__salam_cas8", a, vals, lo, hi)
+        x1 := lg_ins(g, i, OP_XOR, T_I32, lo, el)
+        x2 := lg_ins(g, i, OP_XOR, T_I32, hi, eh)
+        o := lg_ins(g, i, OP_OR, T_I32, x1, x2)
+        ok := lg_icmp(g, i, CC_EQ, o, lg_c32(g, 0 as i64))
+        u := new_val(g, VK_UNDEF, ty, 0 as i64)
+        v1 := lg_ins(g, i, OP_INSV, ty, u, lo)
+        g.i_x[g.v_def[v1]] = T_I32
+        g.i_d[g.v_def[v1]] = 0 as i64
+        v2 := lg_ins(g, i, OP_INSV, ty, v1, hi)
+        g.i_x[g.v_def[v2]] = T_I32
+        g.i_d[g.v_def[v2]] = 4 as i64
+        v3 := lg_ins(g, i, OP_INSV, ty, v2, ok)
+        g.i_x[g.v_def[v3]] = T_I1
+        g.i_d[g.v_def[v3]] = field_off(g, ty, 1) as i64
+        replace_res(g, i, v3)
+        ret true
+    end
+    if (g.i_f[i] & IF_ATOMIC) == 0:
+        ret false
+    end
+    if op == OP_LOAD and is_w64(ty):
+        z := lg_c32(g, 0 as i64)
+        repeat 4:
+            vals.push(z)
+        end
+        lg_atomic_call(g, i, "__salam_cas8", a, vals, lo, hi)
+        if r >= 0:
+            lg_set(g, l, r, lo, hi)
+        end
+        ins_unlink(g, i)
+        ret true
+    end
+    if op == OP_STORE and a >= 0 and is_w64(g.v_ty[a]):
+        mut sl := 0
+        mut sh := 0
+        lg_pair(g, l, a, sl, sh)
+        vals.push(sl)
+        vals.push(sh)
+        lg_atomic_call(g, i, "__salam_rmw8_xchg", b, vals, lo, hi)
+        ins_unlink(g, i)
+        ret true
+    end
+    ret false
+end
+
+func arm_helper(g &: Ng, name: str, words: Vector<i64>):
+    s := sym_named(g, name)
+    if not g.sy_used[s] or g.sy_def[s]:
+        ret
+    end
+    sec_align_to(g, SEC_TEXT, 16)
+    g.sy_def[s] = true
+    g.sy_local[s] = true
+    g.sy_kind[s] = SY_FUNC
+    g.sy_sec[s] = SEC_TEXT
+    g.sy_off[s] = g.s_text.len()
+    each v in words:
+        repeat 4 in k:
+            g.s_text.push(((v >> ((8 * k) as i64)) & (255 as i64)) as u8)
+        end
+    end
+    g.sy_size[s] = 4 * words.len()
+    if g.os == NG_OS_LINUX:
+        arm_exidx_inline(g, s, 0x80840FB0)
+    end
+end
+
+func emit_arm_helpers(g &: Ng):
+    repeat 6 in k:
+        mut code := Vector {} as Vector<i64>
+        each p in k_arm_rmw8_pre:
+            code.push(p)
+        end
+        code.push(k_arm_rmw8_lo[k])
+        code.push(k_arm_rmw8_hi[k])
+        each q in k_arm_rmw8_post:
+            code.push(q)
+        end
+        arm_helper(g, "__salam_rmw8_" + k_x86_rmw8_nm[k], code)
+        code.free()
+    end
+    mut cas := Vector {} as Vector<i64>
+    each c in k_arm_cas8:
+        cas.push(c)
+    end
+    arm_helper(g, "__salam_cas8", cas)
+    cas.free()
+end
+
+func lg_soft_ret(g &: Ng, l &: Lg, at: int, ty: int, lo: int, hi: int): int:
+    if ty == T_F32:
+        ret lg_cast(g, at, OP_BITCAST, T_F32, lo, T_I32)
+    end
+    sl := lg_entry_slot(g, l)
+    lg_store(g, at, lo, sl, at)
+    lg_store(g, at, hi, lg_addr4(g, at, sl), at)
+    ret lg_load(g, at, sl, T_F64, at)
+end
+
+func lg_soft_arg(g &: Ng, l &: Lg, at: int, v: int, args &: Vector<int>):
+    if g.v_ty[v] == T_F32:
+        args.push(lg_cast(g, at, OP_BITCAST, T_I32, v, T_F32))
+        ret
+    end
+    sl := lg_entry_slot(g, l)
+    st := ins_new(g, OP_STORE, T_VOID)
+    g.i_a[st] = v
+    g.i_b[st] = sl
+    g.i_x[st] = T_F64
+    g.i_dbg[st] = g.i_dbg[at]
+    ins_before(g, at, st)
+    args.push(lg_load(g, at, sl, T_I32, at))
+    args.push(lg_load(g, at, lg_addr4(g, at, sl), T_I32, at))
+end
+
+func lg_zero(g &: Ng, v: int): bool:
+    ret v >= 0 and ((g.v_kind[v] == VK_INT and g.v_i[v] == (0 as i64)) or g.v_kind[v] == VK_ZERO)
+end
+
+func lg_sext_pair(g &: Ng, lo: int, hi: int): bool:
+    if lo < 0 or hi < 0:
+        ret false
+    end
+    if is_cint(g, lo) and is_cint(g, hi):
+        lv := norm_int(g, T_I32, g.v_i[lo])
+        hv := norm_int(g, T_I32, g.v_i[hi])
+        ret hv == (lv < (0 as i64) ? (0 - 1 as i64) : (0 as i64))
+    end
+    if g.v_kind[hi] != VK_INS:
+        ret false
+    end
+    d := g.v_def[hi]
+    ret g.i_op[d] == OP_ASHR and g.i_a[d] == lo and is_cint(g, g.i_b[d]) and g.v_i[g.i_b[d]] == (31 as i64)
+end
+
+func lg_add64(g &: Ng, at: int, al: int, ah: int, bl: int, bh: int, sub: bool, lo &: int, hi &: int):
+    op := sub ? OP_SUB : OP_ADD
+    lo = lg_ins(g, at, op, T_I32, al, bl)
+    mut cy := 0
+    if sub:
+        cy = lg_icmp(g, at, CC_ULT, al, bl)
+    else:
+        cy = lg_icmp(g, at, CC_ULT, lo, al)
+    end
+    cz := lg_cast(g, at, OP_ZEXT, T_I32, cy, T_I1)
+    h0 := lg_ins(g, at, op, T_I32, ah, bh)
+    hi = lg_ins(g, at, op, T_I32, h0, cz)
+end
+
+func lg_mul64(g &: Ng, at: int, al: int, ah: int, bl: int, bh: int, lo &: int, hi &: int):
+    lo = lg_ins(g, at, OP_MUL, T_I32, al, bl)
+    mut h := lg_ins(g, at, OP_MULHU, T_I32, al, bl)
+    if not lg_zero(g, bh) and not lg_zero(g, al):
+        h = lg_ins(g, at, OP_ADD, T_I32, h, lg_ins(g, at, OP_MUL, T_I32, al, bh))
+    end
+    if not lg_zero(g, ah) and not lg_zero(g, bl):
+        h = lg_ins(g, at, OP_ADD, T_I32, h, lg_ins(g, at, OP_MUL, T_I32, ah, bl))
+    end
+    hi = h
+end
+
+func lg_mulhu64(g &: Ng, at: int, xl: int, xh: int, ml: int, mh: int, lo &: int, hi &: int):
+    z := lg_c32(g, 0 as i64)
+    p0h := lg_ins(g, at, OP_MULHU, T_I32, xl, ml)
+    p1l := lg_ins(g, at, OP_MUL, T_I32, xl, mh)
+    p1h := lg_ins(g, at, OP_MULHU, T_I32, xl, mh)
+    p2l := lg_ins(g, at, OP_MUL, T_I32, xh, ml)
+    p2h := lg_ins(g, at, OP_MULHU, T_I32, xh, ml)
+    p3l := lg_ins(g, at, OP_MUL, T_I32, xh, mh)
+    p3h := lg_ins(g, at, OP_MULHU, T_I32, xh, mh)
+    mut s1 := 0
+    mut c1 := 0
+    lg_add64(g, at, p0h, z, p1l, z, false, s1, c1)
+    mut s2 := 0
+    mut c2 := 0
+    lg_add64(g, at, s1, c1, p2l, z, false, s2, c2)
+    mut rl := 0
+    mut rh := 0
+    lg_add64(g, at, p3l, p3h, p1h, z, false, rl, rh)
+    mut ql := 0
+    mut qh := 0
+    lg_add64(g, at, rl, rh, p2h, z, false, ql, qh)
+    lg_add64(g, at, ql, qh, c2, z, false, lo, hi)
+end
+
+func lg_k64(g &: Ng, v: i64, lo &: int, hi &: int):
+    lo = lg_c32(g, v)
+    hi = lg_c32(g, v >> (32 as i64))
+end
+
+func lg_d6432(g &: Ng, at: int, xl: int, xh: int, k: int, part: int): int:
+    r := lg_ins(g, at, OP_DIV6432, T_I32, xl, xh)
+    g.i_c[g.v_def[r]] = k
+    g.i_x[g.v_def[r]] = part
+    ret r
+end
+
+func lg_udiv32k(g &: Ng, at: int, xl: int, xh: int, d: i64, rem: bool, lo &: int, hi &: int):
+    k := lg_c32(g, d)
+    if rem:
+        lo = lg_d6432(g, at, xl, xh, k, 1)
+        hi = lg_c32(g, 0 as i64)
+        ret
+    end
+    lo = lg_d6432(g, at, xl, xh, k, 0)
+    hi = lg_d6432(g, at, xl, xh, k, 2)
+end
+
+func lg_divconst(g &: Ng, l &: Lg, at: int, op: int, a: int, b: int, lo &: int, hi &: int): bool:
+    if b < 0 or g.v_kind[b] != VK_INT:
+        ret false
+    end
+    d := g.v_i[b]
+    signed := op == OP_SDIV or op == OP_SREM
+    rem := op == OP_SREM or op == OP_UREM
+    if d == (0 as i64) or d == (1 as i64) or d == (0 - 1 as i64):
+        ret false
+    end
+    mut xl := 0
+    mut xh := 0
+    lg_pair(g, l, a, xl, xh)
+    mut ql := 0
+    mut qh := 0
+    if not signed:
+        du := d as u64
+        k := log2_exact(du)
+        if k >= 0:
+            if rem:
+                mut ml := 0
+                mut mh := 0
+                lg_k64(g, d - (1 as i64), ml, mh)
+                lo = lg_ins(g, at, OP_AND, T_I32, xl, ml)
+                hi = lg_ins(g, at, OP_AND, T_I32, xh, mh)
+                ret true
+            end
+            lg_shift_const(g, at, OP_LSHR, xl, xh, k, lo, hi)
+            ret true
+        end
+        if g.arch == NG_ARCH_X86 and du < (1 as u64) << (32 as u64):
+            lg_udiv32k(g, at, xl, xh, d, rem, lo, hi)
+            ret true
+        end
+        mut pm := 0 as u64
+        mut pp := 0
+        if umagic_find(du, 64, false, pm, pp):
+            mut fml := 0
+            mut fmh := 0
+            lg_k64(g, pm as i64, fml, fmh)
+            mut ftl := 0
+            mut fth := 0
+            lg_mulhu64(g, at, xl, xh, fml, fmh, ftl, fth)
+            lg_shift_const(g, at, OP_LSHR, ftl, fth, pp - 64, ql, qh)
+        else:
+            mut mm := 0 as u64
+            mut ll := 0
+            umagic(du, mm, ll)
+            mut mml := 0
+            mut mmh := 0
+            lg_k64(g, mm as i64, mml, mmh)
+            mut tl := 0
+            mut th := 0
+            lg_mulhu64(g, at, xl, xh, mml, mmh, tl, th)
+            mut dl := 0
+            mut dh := 0
+            lg_add64(g, at, xl, xh, tl, th, true, dl, dh)
+            mut sl := 0
+            mut sh := 0
+            lg_shift_const(g, at, OP_LSHR, dl, dh, 1, sl, sh)
+            mut ul := 0
+            mut uh := 0
+            lg_add64(g, at, sl, sh, tl, th, false, ul, uh)
+            lg_shift_const(g, at, OP_LSHR, ul, uh, ll - 1, ql, qh)
+        end
+    else:
+        mut ad := d
+        if ad < (0 as i64):
+            ad = 0 - ad
+        end
+        k2 := log2_exact(ad as u64)
+        if k2 >= 0:
+            s := lg_ins(g, at, OP_ASHR, T_I32, xh, lg_c32(g, 31 as i64))
+            mut bl := 0
+            mut bh := 0
+            lg_shift_const(g, at, OP_LSHR, s, s, 64 - k2, bl, bh)
+            mut nl := 0
+            mut nh := 0
+            lg_add64(g, at, xl, xh, bl, bh, false, nl, nh)
+            lg_shift_const(g, at, OP_ASHR, nl, nh, k2, ql, qh)
+            if d < (0 as i64):
+                z := lg_c32(g, 0 as i64)
+                mut gl := 0
+                mut gh := 0
+                lg_add64(g, at, z, z, ql, qh, true, gl, gh)
+                ql = gl
+                qh = gh
+            end
+        else g.arch == NG_ARCH_X86 and ad < (1 as i64) << (32 as i64):
+            sx0 := lg_ins(g, at, OP_ASHR, T_I32, xh, lg_c32(g, 31 as i64))
+            mut ul := 0
+            mut uh := 0
+            lg_add64(g, at, lg_ins(g, at, OP_XOR, T_I32, xl, sx0), lg_ins(g, at, OP_XOR, T_I32, xh, sx0), sx0, sx0, true, ul, uh)
+            mut rl0 := 0
+            mut rh0 := 0
+            lg_udiv32k(g, at, ul, uh, ad, rem, rl0, rh0)
+            mut sq := sx0
+            if not rem and d < (0 as i64):
+                sq = lg_ins(g, at, OP_XOR, T_I32, sx0, lg_c32(g, 0 - 1 as i64))
+            end
+            lg_add64(g, at, lg_ins(g, at, OP_XOR, T_I32, rl0, sq), lg_ins(g, at, OP_XOR, T_I32, rh0, sq), sq, sq, true, lo, hi)
+            ret true
+        else:
+            mut m := 0 as i64
+            mut sh2 := 0
+            smagic(d, m, sh2)
+            mut mml2 := 0
+            mut mmh2 := 0
+            lg_k64(g, m, mml2, mmh2)
+            mut tl2 := 0
+            mut th2 := 0
+            lg_mulhu64(g, at, xl, xh, mml2, mmh2, tl2, th2)
+            if m < (0 as i64):
+                mut al := 0
+                mut ah := 0
+                lg_add64(g, at, tl2, th2, xl, xh, true, al, ah)
+                tl2 = al
+                th2 = ah
+            end
+            sx := lg_ins(g, at, OP_ASHR, T_I32, xh, lg_c32(g, 31 as i64))
+            mkl := lg_ins(g, at, OP_AND, T_I32, mml2, sx)
+            mkh := lg_ins(g, at, OP_AND, T_I32, mmh2, sx)
+            mut cl := 0
+            mut ch := 0
+            lg_add64(g, at, tl2, th2, mkl, mkh, true, cl, ch)
+            if d > (0 as i64) and m < (0 as i64):
+                mut el := 0
+                mut eh := 0
+                lg_add64(g, at, cl, ch, xl, xh, false, el, eh)
+                cl = el
+                ch = eh
+            else d < (0 as i64) and m > (0 as i64):
+                mut fl := 0
+                mut fh := 0
+                lg_add64(g, at, cl, ch, xl, xh, true, fl, fh)
+                cl = fl
+                ch = fh
+            end
+            mut vl := 0
+            mut vh := 0
+            lg_shift_const(g, at, OP_ASHR, cl, ch, sh2, vl, vh)
+            sg := lg_ins(g, at, OP_LSHR, T_I32, vh, lg_c32(g, 31 as i64))
+            lg_add64(g, at, vl, vh, sg, lg_c32(g, 0 as i64), false, ql, qh)
+        end
+    end
+    if not rem:
+        lo = ql
+        hi = qh
+        ret true
+    end
+    mut dl2 := 0
+    mut dh2 := 0
+    lg_k64(g, d, dl2, dh2)
+    mut pl := 0
+    mut ph := 0
+    lg_mul64(g, at, ql, qh, dl2, dh2, pl, ph)
+    lg_add64(g, at, xl, xh, pl, ph, true, lo, hi)
+    ret true
+end
+
+func lg_divcall(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    ty := g.i_ty[i]
+    r := g.i_res[i]
+    if g.arch != NG_ARCH_ARM or r < 0 or is_w64(ty):
+        ret false
+    end
+    if not (op == OP_SDIV or op == OP_UDIV or op == OP_SREM or op == OP_UREM):
+        ret false
+    end
+    b := g.i_b[i]
+    if b >= 0 and g.v_kind[b] == VK_INT:
+        d := g.v_i[b]
+        if d >= (2 as i64) or d <= (0 - 2 as i64):
+            ret false
+        end
+    end
+    signed := op == OP_SDIV or op == OP_SREM
+    rem := op == OP_SREM or op == OP_UREM
+    mut args := Vector {} as Vector<int>
+    args.push(lg_ext_to32(g, i, g.i_a[i], signed))
+    args.push(lg_ext_to32(g, i, b, signed))
+    mut nm := signed ? "__aeabi_idiv" : "__aeabi_uidiv"
+    if rem:
+        nm = nm + "mod"
+    end
+    mut h := 0
+    q := lg_call(g, i, nm, args, rem ? T_I64 : T_I32, h)
+    args.free()
+    mut v := rem ? h : q
+    if ty != T_I32:
+        v = lg_cast(g, i, OP_TRUNC, ty, v, T_I32)
+    end
+    replace_res(g, i, v)
+    ret true
+end
+
+func x86_helper(g &: Ng, name: str, code: Vector<int>):
+    s := sym_named(g, name)
+    if not g.sy_used[s] or g.sy_def[s]:
+        ret
+    end
+    sec_align_to(g, SEC_TEXT, 16)
+    g.sy_def[s] = true
+    g.sy_local[s] = true
+    g.sy_kind[s] = SY_FUNC
+    g.sy_sec[s] = SEC_TEXT
+    g.sy_off[s] = g.s_text.len()
+    each c in code:
+        g.s_text.push(c as u8)
+    end
+    g.sy_size[s] = code.len()
+end
+
+func emit_x86_helpers(g &: Ng):
+    repeat 6 in k:
+        mut code := Vector {} as Vector<int>
+        each p in k_x86_rmw8_pre:
+            code.push(p)
+        end
+        code.push(k_x86_rmw8_lo[k])
+        code.push(0x5C)
+        code.push(0x24)
+        code.push(0x10)
+        code.push(k_x86_rmw8_hi[k])
+        code.push(0x4C)
+        code.push(0x24)
+        code.push(0x14)
+        each q in k_x86_rmw8_post:
+            code.push(q)
+        end
+        x86_helper(g, "__salam_rmw8_" + k_x86_rmw8_nm[k], code)
+        code.free()
+    end
+    mut cas := Vector {} as Vector<int>
+    each c in k_x86_cas8:
+        cas.push(c)
+    end
+    x86_helper(g, "__salam_cas8", cas)
+    cas.free()
+end
+
+func lg_one(g &: Ng, l &: Lg, i: int):
+    op := g.i_op[i]
+    ty := g.i_ty[i]
+    r := g.i_res[i]
+    a := g.i_a[i]
+    b := g.i_b[i]
+    w := is_w64(ty)
+    if lg_atomic(g, l, i):
+        ret
+    end
+    if lg_divcall(g, i):
+        ret
+    end
+    if op == OP_CALL:
+        if lg_is_intrinsic(g, i):
+            lg_intrinsic_len(g, l, i)
+        else:
+            lg_fix_call(g, l, i)
+        end
+        ret
+    end
+    if op == OP_RET:
+        if a >= 0 and is_w64(g.v_ty[a]):
+            mut rl := 0
+            mut rh := 0
+            lg_pair(g, l, a, rl, rh)
+            g.i_a[i] = rl
+            g.i_b[i] = rh
+        end
+        ret
+    end
+    if op == OP_STORE:
+        if a >= 0 and is_w64(g.v_ty[a]):
+            mut sl := 0
+            mut sh := 0
+            lg_pair(g, l, a, sl, sh)
+            lg_store(g, i, sl, b, i)
+            lg_store(g, i, sh, lg_addr4(g, i, b), i)
+            ins_unlink(g, i)
+        end
+        ret
+    end
+    if op == OP_ADDR:
+        if b >= 0 and is_w64(g.v_ty[b]):
+            mut il := 0
+            mut ih := 0
+            lg_pair(g, l, b, il, ih)
+            g.i_b[i] = il
+        end
+        ret
+    end
+    if op == OP_ICMP:
+        if a >= 0 and is_w64(g.v_ty[a]):
+            c := lg_cmp64(g, l, i, g.i_x[i], a, b)
+            replace_res(g, i, c)
+        end
+        ret
+    end
+    if op == OP_INSV:
+        if b >= 0 and is_w64(g.v_ty[b]):
+            mut vl := 0
+            mut vh := 0
+            lg_pair(g, l, b, vl, vh)
+            i1 := lg_ins(g, i, OP_INSV, ty, a, vl)
+            g.i_x[g.v_def[i1]] = T_I32
+            g.i_d[g.v_def[i1]] = g.i_d[i]
+            i2 := lg_ins(g, i, OP_INSV, ty, i1, vh)
+            g.i_x[g.v_def[i2]] = T_I32
+            g.i_d[g.v_def[i2]] = g.i_d[i] + (4 as i64)
+            replace_res(g, i, i2)
+        end
+        ret
+    end
+    if op == OP_TRUNC and a >= 0 and is_w64(g.v_ty[a]):
+        mut tl := 0
+        mut th := 0
+        lg_pair(g, l, a, tl, th)
+        if ty == T_I32:
+            replace_res(g, i, tl)
+        else:
+            replace_res(g, i, lg_cast(g, i, OP_TRUNC, ty, tl, T_I32))
+        end
+        ret
+    end
+    if op == OP_INTTOPTR and a >= 0 and is_w64(g.v_ty[a]):
+        mut pl := 0
+        mut ph := 0
+        lg_pair(g, l, a, pl, ph)
+        replace_res(g, i, lg_cast(g, i, OP_INTTOPTR, T_PTR, pl, T_I32))
+        ret
+    end
+    if (op == OP_SITOFP or op == OP_UITOFP) and a >= 0 and is_w64(g.v_ty[a]):
+        mut fl := 0
+        mut fh := 0
+        lg_pair(g, l, a, fl, fh)
+        mut args := Vector {} as Vector<int>
+        args.push(fl)
+        args.push(fh)
+        dbl := ty == T_F64
+        mut nm := op == OP_SITOFP ? "__floatdisf" : "__floatundisf"
+        if dbl:
+            nm = op == OP_SITOFP ? "__floatdidf" : "__floatundidf"
+        end
+        mut hz := 0
+        if g.arch == NG_ARCH_X86 and op == OP_SITOFP:
+            args.free()
+            replace_res(g, i, lg_ins(g, i, OP_I64TOF, ty, fl, fh))
+            ret
+        end
+        if g.arch == NG_ARCH_ARM:
+            rlo := lg_call(g, i, nm, args, dbl ? T_I64 : T_I32, hz)
+            args.free()
+            replace_res(g, i, lg_soft_ret(g, l, i, ty, rlo, hz))
+            ret
+        end
+        res := lg_call(g, i, nm, args, ty, hz)
+        args.free()
+        replace_res(g, i, res)
+        ret
+    end
+    if op == OP_BITCAST and a >= 0 and is_w64(g.v_ty[a]):
+        mut bl := 0
+        mut bh := 0
+        lg_pair(g, l, a, bl, bh)
+        if w:
+            lg_set(g, l, r, bl, bh)
+            ins_unlink(g, i)
+            ret
+        end
+        sl := lg_entry_slot(g, l)
+        lg_store(g, i, bl, sl, i)
+        lg_store(g, i, bh, lg_addr4(g, i, sl), i)
+        replace_res(g, i, lg_load(g, i, sl, ty, i))
+        ret
+    end
+    if not w or r < 0:
+        ret
+    end
+    mut lo := 0 - 1
+    mut hi := 0 - 1
+    switch op:
+        OP_ADD, OP_SUB:
+            mut al := 0
+            mut ah := 0
+            mut bl2 := 0
+            mut bh2 := 0
+            lg_pair(g, l, a, al, ah)
+            lg_pair(g, l, b, bl2, bh2)
+            lo = lg_ins(g, i, op, T_I32, al, bl2)
+            h0 := lg_ins(g, i, op, T_I32, ah, bh2)
+            mut cy := 0
+            if op == OP_ADD:
+                cy = lg_icmp(g, i, CC_ULT, lo, al)
+            else:
+                cy = lg_icmp(g, i, CC_ULT, al, bl2)
+            end
+            cz := lg_cast(g, i, OP_ZEXT, T_I32, cy, T_I1)
+            hi = lg_ins(g, i, op, T_I32, h0, cz)
+            break
+        end
+        OP_AND, OP_OR, OP_XOR:
+            mut al3 := 0
+            mut ah3 := 0
+            mut bl3 := 0
+            mut bh3 := 0
+            lg_pair(g, l, a, al3, ah3)
+            lg_pair(g, l, b, bl3, bh3)
+            lo = lg_ins(g, i, op, T_I32, al3, bl3)
+            hi = lg_ins(g, i, op, T_I32, ah3, bh3)
+            break
+        end
+        OP_SHL, OP_LSHR, OP_ASHR:
+            mut al4 := 0
+            mut ah4 := 0
+            lg_pair(g, l, a, al4, ah4)
+            if b >= 0 and g.v_kind[b] == VK_INT:
+                lg_shift_const(g, i, op, al4, ah4, g.v_i[b] as int, lo, hi)
+            else:
+                mut bl4 := 0
+                mut bh4 := 0
+                lg_pair(g, l, b, bl4, bh4)
+                mut args2 := Vector {} as Vector<int>
+                args2.push(al4)
+                args2.push(ah4)
+                args2.push(bl4)
+                nm2 := op == OP_SHL ? "__ashldi3" : (op == OP_LSHR ? "__lshrdi3" : "__ashrdi3")
+                mut h2 := 0
+                lo = lg_call(g, i, nm2, args2, T_I64, h2)
+                hi = h2
+                args2.free()
+            end
+            break
+        end
+        OP_MUL:
+            mut ml := 0
+            mut mh := 0
+            mut nl := 0
+            mut nh := 0
+            lg_pair(g, l, a, ml, mh)
+            lg_pair(g, l, b, nl, nh)
+            if lg_sext_pair(g, ml, mh) and lg_sext_pair(g, nl, nh) and not (is_cint(g, mh) and is_cint(g, nh)):
+                lo = lg_ins(g, i, OP_MUL, T_I32, ml, nl)
+                hi = lg_ins(g, i, OP_MULHU, T_I32, ml, nl)
+                g.i_x[g.v_def[hi]] = 1
+                break
+            end
+            lg_mul64(g, i, ml, mh, nl, nh, lo, hi)
+            break
+        end
+        OP_SDIV, OP_UDIV, OP_SREM, OP_UREM:
+            if lg_divconst(g, l, i, op, a, b, lo, hi):
+                break
+            end
+            lg_divmod(g, l, i, op, a, b, lo, hi)
+            break
+        end
+        OP_SEXT, OP_ZEXT:
+            if a >= 0 and g.v_ty[a] == T_I1:
+                lo = lg_cast(g, i, OP_ZEXT, T_I32, a, T_I1)
+                if op == OP_SEXT:
+                    lo = lg_ins(g, i, OP_SUB, T_I32, lg_c32(g, 0 as i64), lo)
+                    hi = lo
+                else:
+                    hi = lg_c32(g, 0 as i64)
+                end
+                break
+            end
+            lo = lg_ext_to32(g, i, a, op == OP_SEXT)
+            if op == OP_SEXT:
+                hi = lg_ins(g, i, OP_ASHR, T_I32, lo, lg_c32(g, 31 as i64))
+            else:
+                hi = lg_c32(g, 0 as i64)
+            end
+            break
+        end
+        OP_PTRTOINT:
+            lo = lg_cast(g, i, OP_PTRTOINT, T_I32, a, T_PTR)
+            hi = lg_c32(g, 0 as i64)
+            break
+        end
+        OP_LOAD:
+            lo = lg_load(g, i, a, T_I32, i)
+            hi = lg_load(g, i, lg_addr4(g, i, a), T_I32, i)
+            break
+        end
+        OP_SELECT:
+            mut xl := 0
+            mut xh := 0
+            mut yl := 0
+            mut yh := 0
+            lg_pair(g, l, b, xl, xh)
+            lg_pair(g, l, g.i_c[i], yl, yh)
+            lo = lg_sel(g, i, a, xl, yl)
+            hi = lg_sel(g, i, a, xh, yh)
+            break
+        end
+        OP_COPY:
+            lg_pair(g, l, a, lo, hi)
+            break
+        end
+        OP_EXTV:
+            lo = lg_ins(g, i, OP_EXTV, T_I32, a, 0 - 1)
+            g.i_d[g.v_def[lo]] = g.i_d[i]
+            hi = lg_ins(g, i, OP_EXTV, T_I32, a, 0 - 1)
+            g.i_d[g.v_def[hi]] = g.i_d[i] + (4 as i64)
+            break
+        end
+        OP_FPTOSI, OP_FPTOUI:
+            mut args3 := Vector {} as Vector<int>
+            src := g.v_ty[a]
+            if g.arch == NG_ARCH_ARM:
+                lg_soft_arg(g, l, i, a, args3)
+            else:
+                args3.push(a)
+            end
+            mut nm3 := op == OP_FPTOSI ? "__fixsfdi" : "__fixunssfdi"
+            if src == T_F64:
+                nm3 = op == OP_FPTOSI ? "__fixdfdi" : "__fixunsdfdi"
+            end
+            mut h3 := 0
+            lo = lg_call(g, i, nm3, args3, T_I64, h3)
+            hi = h3
+            args3.free()
+            break
+        end
+        OP_BITCAST:
+            sl2 := lg_entry_slot(g, l)
+            st := ins_new(g, OP_STORE, T_VOID)
+            g.i_a[st] = a
+            g.i_b[st] = sl2
+            g.i_x[st] = g.v_ty[a]
+            ins_before(g, i, st)
+            lo = lg_load(g, i, sl2, T_I32, i)
+            hi = lg_load(g, i, lg_addr4(g, i, sl2), T_I32, i)
+            break
+        end
+        OP_PHI:
+            np1 := ins_new(g, OP_PHI, T_I32)
+            np2 := ins_new(g, OP_PHI, T_I32)
+            g.i_pcount[np1] = g.i_pcount[i]
+            g.i_pcount[np2] = g.i_pcount[i]
+            ins_before(g, i, np1)
+            ins_before(g, i, np2)
+            lo = new_res(g, np1)
+            hi = new_res(g, np2)
+            l.ph_old.push(i)
+            l.ph_lo.push(np1)
+            l.ph_hi.push(np2)
+            lg_set(g, l, r, lo, hi)
+            ret
+        end
+        OP_VREDADD:
+            lo = lg_ins(g, i, OP_VREDH, T_I32, a, 0 - 1)
+            hi = lg_ins(g, i, OP_VREDH, T_I32, a, 0 - 1)
+            g.i_x[g.v_def[hi]] = 1
+            break
+        end
+        else:
+            fail(g, "native backend: cannot split 64-bit " + tab_str(g.syms, g.f_sym) + " op " + str_of_int(op))
+            ret
+        end
+    end
+    lg_set(g, l, r, lo, hi)
+    ins_unlink(g, i)
+end
+
+func legalize64(g &: Ng):
+    if dump_wanted(g):
+        dump_ir(g, "prelegal")
+    end
+    mut l := Lg {}
+    lg_grow(g, l)
+    build_dom(g)
+    lg_split_args(g, l)
+    mut order := Vector {} as Vector<int>
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            order.push(i)
+            i = g.i_next[i]
+        end
+    end
+    repl_grow(g)
+    each i2 in order:
+        if g.i_op[i2] == OP_NOP:
+            continue
+        end
+        remap_ins(g, i2)
+        lg_one(g, l, i2)
+        repl_grow(g)
+        if not g.ok:
+            break
+        end
+    end
+    repeat l.ph_old.len() in k:
+        old := l.ph_old[k]
+        ps := g.i_ps[old]
+        n := g.i_pcount[old]
+        p1 := l.ph_lo[k]
+        p2 := l.ph_hi[k]
+        g.i_ps[p1] = g.pool.len()
+        repeat n in q:
+            mut lo := 0
+            mut hi := 0
+            lg_pair(g, l, resolve(g, g.pool[ps + 2 * q]), lo, hi)
+            g.pool.push(lo)
+            g.pool.push(g.pool[ps + 2 * q + 1])
+        end
+        g.i_ps[p2] = g.pool.len()
+        repeat n in q2:
+            mut lo2 := 0
+            mut hi2 := 0
+            lg_pair(g, l, resolve(g, g.pool[ps + 2 * q2]), lo2, hi2)
+            g.pool.push(hi2)
+            g.pool.push(g.pool[ps + 2 * q2 + 1])
+        end
+        ins_unlink(g, old)
+    end
+    remap_all(g)
+    order.free()
+    l.lo.free()
+    l.hi.free()
+    l.ph_old.free()
+    l.ph_lo.free()
+    l.ph_hi.free()
+    l.dm_a.free()
+    l.dm_b.free()
+    l.dm_sg.free()
+    l.dm_blk.free()
+    l.dm_ql.free()
+    l.dm_qh.free()
+    l.dm_rl.free()
+    l.dm_rh.free()
+end
+
+func fc_icmp(g &: Ng, v: int): int:
+    if v < 0 or g.v_kind[v] != VK_INS or g.v_uses[v] != 1:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    if g.i_op[d] != OP_ICMP or g.v_ty[g.i_a[d]] != T_I32 or g.v_ty[g.i_b[d]] != T_I32:
+        ret 0 - 1
+    end
+    ret d
+end
+
+func fuse_cmp64(g &: Ng):
+    count_uses(g)
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            if g.i_op[i] == OP_SELECT and g.i_ty[i] == T_I1:
+                e := fc_icmp(g, g.i_a[i])
+                l := fc_icmp(g, g.i_b[i])
+                h := fc_icmp(g, g.i_c[i])
+                if e >= 0 and l >= 0 and h >= 0 and g.i_x[e] == CC_EQ:
+                    mut hx := g.i_a[h]
+                    mut hy := g.i_b[h]
+                    mut ph := g.i_x[h]
+                    if ph == CC_SGT or ph == CC_UGT:
+                        hx = g.i_b[h]
+                        hy = g.i_a[h]
+                        ph = ph == CC_SGT ? CC_SLT : CC_ULT
+                    end
+                    mut lx := g.i_a[l]
+                    mut ly := g.i_b[l]
+                    mut q := g.i_x[l]
+                    if q == CC_UGT or q == CC_UGE:
+                        lx = g.i_b[l]
+                        ly = g.i_a[l]
+                        q = q == CC_UGT ? CC_ULT : CC_ULE
+                    end
+                    e_a := g.i_a[e]
+                    e_b := g.i_b[e]
+                    same := (e_a == hx and e_b == hy) or (e_a == hy and e_b == hx)
+                    if same and (ph == CC_SLT or ph == CC_ULT) and (q == CC_ULT or q == CC_ULE):
+                        g.i_op[i] = OP_CMP64
+                        if q == CC_ULT:
+                            g.i_a[i] = lx
+                            g.i_b[i] = ly
+                            g.i_c[i] = hx
+                            g.i_d[i] = hy as i64
+                            g.i_x[i] = ph
+                        else:
+                            g.i_a[i] = ly
+                            g.i_b[i] = lx
+                            g.i_c[i] = hy
+                            g.i_d[i] = hx as i64
+                            g.i_x[i] = ph == CC_SLT ? CC_SGE : CC_UGE
+                        end
+                        ins_unlink(g, e)
+                        ins_unlink(g, l)
+                        ins_unlink(g, h)
+                    end
+                end
+            end
+            i = nx
+        end
+    end
+end
+
+func fc_def(g &: Ng, v: int, op: int): int:
+    if v < 0 or g.v_kind[v] != VK_INS or g.v_uses[v] != 1:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    ret g.i_op[d] == op ? d : 0 - 1
+end
+
+func fc_carry(g &: Ng, z: int, sb: bool, ca &: int, cb &: int): int:
+    zd := fc_def(g, z, OP_ZEXT)
+    if zd < 0 or g.i_ty[zd] != T_I32:
+        ret 0 - 1
+    end
+    c := fc_def(g, g.i_a[zd], OP_ICMP)
+    if c < 0 or g.v_ty[g.i_a[c]] != T_I32:
+        ret 0 - 1
+    end
+    mut x := g.i_a[c]
+    mut y := g.i_b[c]
+    p := g.i_x[c]
+    if p == CC_UGT:
+        x = g.i_b[c]
+        y = g.i_a[c]
+    else p != CC_ULT:
+        ret 0 - 1
+    end
+    if sb:
+        ca = x
+        cb = y
+        ret zd
+    end
+    if x < 0 or g.v_kind[x] != VK_INS:
+        ret 0 - 1
+    end
+    l := g.v_def[x]
+    if g.i_op[l] != OP_ADD or g.i_ty[l] != T_I32:
+        ret 0 - 1
+    end
+    if g.i_a[l] == y:
+        ca = y
+        cb = g.i_b[l]
+        ret zd
+    end
+    if g.i_b[l] == y:
+        ca = y
+        cb = g.i_a[l]
+        ret zd
+    end
+    ret 0 - 1
+end
+
+func fuse_adc64(g &: Ng):
+    count_uses(g)
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            op := g.i_op[i]
+            if (op == OP_ADD or op == OP_SUB) and g.i_ty[i] == T_I32 and g.i_res[i] >= 0:
+                sb := op == OP_SUB
+                mut ca := 0 - 1
+                mut cb := 0 - 1
+                mut p := g.i_a[i]
+                mut zd := fc_carry(g, g.i_b[i], sb, ca, cb)
+                if zd < 0 and not sb:
+                    p = g.i_b[i]
+                    zd = fc_carry(g, g.i_a[i], sb, ca, cb)
+                end
+                if zd >= 0:
+                    cd := g.v_def[g.i_a[zd]]
+                    mut x := p
+                    mut y := const_int(g, T_I32, 0 as i64)
+                    pd := fc_def(g, p, op)
+                    if pd >= 0:
+                        x = g.i_a[pd]
+                        y = g.i_b[pd]
+                    end
+                    g.i_op[i] = OP_ADC64
+                    g.i_a[i] = x
+                    g.i_b[i] = y
+                    g.i_c[i] = ca
+                    g.i_d[i] = cb as i64
+                    g.i_x[i] = sb ? 1 : 0
+                    ins_unlink(g, zd)
+                    ins_unlink(g, cd)
+                    if pd >= 0:
+                        ins_unlink(g, pd)
+                    end
+                end
+            end
+            i = nx
+        end
+    end
+end
+
+func niv_src(g &: Ng, v: int): int:
+    if v < 0:
+        ret 0 - 1
+    end
+    if is_cint(g, v):
+        c := norm_int(g, T_I64, g.v_i[v])
+        if c >= (0 - 2147483648 as i64) and c <= (2147483647 as i64):
+            ret const_int(g, T_I32, c)
+        end
+        ret 0 - 1
+    end
+    if g.v_kind[v] != VK_INS:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    if g.i_op[d] == OP_SEXT and g.i_x[d] == T_I32:
+        ret g.i_a[d]
+    end
+    ret 0 - 1
+end
+
+func niv_fold(g &: Ng):
+    repl_grow(g)
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            op := g.i_op[i]
+            if op == OP_ICMP and g.v_ty[g.i_a[i]] == T_I64 and not (is_cint(g, g.i_a[i]) and is_cint(g, g.i_b[i])):
+                xa := niv_src(g, g.i_a[i])
+                xb := niv_src(g, g.i_b[i])
+                if xa >= 0 and xb >= 0:
+                    g.i_a[i] = xa
+                    g.i_b[i] = xb
+                end
+            else op == OP_TRUNC and g.i_ty[i] == T_I32 and g.i_res[i] >= 0 and not is_cint(g, g.i_a[i]):
+                s := niv_src(g, g.i_a[i])
+                if s >= 0:
+                    g.v_repl[g.i_res[i]] = s
+                    ins_unlink(g, i)
+                end
+            end
+            i = nx
+        end
+    end
+    remap_all(g)
+end
+
+func niv_one(g &: Ng, h: int, ph: int): bool:
+    pv := g.i_res[ph]
+    mut init := 0 - 1
+    mut pre := 0 - 1
+    mut nx := 0 - 1
+    mut latch := 0 - 1
+    repeat 2 in k:
+        iv := g.pool[g.i_ps[ph] + 2 * k]
+        pb := g.pool[g.i_ps[ph] + 2 * k + 1]
+        if dominates(g, h, pb):
+            nx = iv
+            latch = pb
+        else:
+            init = iv
+            pre = pb
+        end
+    end
+    if init < 0 or nx < 0 or not is_cint(g, init) or g.v_kind[nx] != VK_INS:
+        ret false
+    end
+    nd := g.v_def[nx]
+    if g.i_op[nd] != OP_ADD or g.i_ty[nd] != T_I64:
+        ret false
+    end
+    mut sv := g.i_b[nd]
+    if g.i_a[nd] != pv:
+        if g.i_b[nd] != pv:
+            ret false
+        end
+        sv = g.i_a[nd]
+    end
+    if not is_cint(g, sv):
+        ret false
+    end
+    st := norm_int(g, T_I64, g.v_i[sv])
+    if st <= (0 as i64) or st >= (1048576 as i64):
+        ret false
+    end
+    t := g.b_last[h]
+    if t < 0 or g.i_op[t] != OP_CBR:
+        ret false
+    end
+    mut lo := 0 as i64
+    mut hi := 0 as i64
+    if not iv_bounds(g, pv, g.i_b[t], 3, lo, hi):
+        ret false
+    end
+    if lo < (0 - 2147483648 as i64) or hi + st > (2147483647 as i64):
+        ret false
+    end
+    p32 := ins_new(g, OP_PHI, T_I32)
+    g.i_ps[p32] = g.pool.len()
+    g.i_pcount[p32] = 2
+    p32v := new_res(g, p32)
+    ins_before(g, g.b_first[h], p32)
+    n32 := ins_new(g, OP_ADD, T_I32)
+    g.i_a[n32] = p32v
+    g.i_b[n32] = const_int(g, T_I32, st)
+    g.i_f[n32] = IF_NSW
+    n32v := new_res(g, n32)
+    ins_before(g, nd, n32)
+    g.pool.push(const_int(g, T_I32, norm_int(g, T_I64, g.v_i[init])))
+    g.pool.push(pre)
+    g.pool.push(n32v)
+    g.pool.push(latch)
+    mut fp := g.b_first[h]
+    until fp >= 0 and g.i_op[fp] == OP_PHI:
+        fp = g.i_next[fp]
+    end
+    sx := ins_new(g, OP_SEXT, T_I64)
+    g.i_a[sx] = p32v
+    g.i_x[sx] = T_I32
+    spv := new_res(g, sx)
+    ins_before(g, fp, sx)
+    sn := ins_new(g, OP_SEXT, T_I64)
+    g.i_a[sn] = n32v
+    g.i_x[sn] = T_I32
+    snv := new_res(g, sn)
+    ins_before(g, nd, sn)
+    repl_grow(g)
+    g.v_repl[pv] = spv
+    g.v_repl[nx] = snv
+    ins_unlink(g, ph)
+    ins_unlink(g, nd)
+    ret true
+end
+
+func narrow_iv64(g &: Ng): bool:
+    count_uses(g)
+    build_dom(g)
+    mut changed := false
+    each h in g.b_rpo:
+        mut p := g.b_first[h]
+        until p >= 0 and g.i_op[p] == OP_PHI:
+            np := g.i_next[p]
+            if g.i_ty[p] == T_I64 and g.i_pcount[p] == 2 and g.i_res[p] >= 0 and niv_one(g, h, p):
+                changed = true
+            end
+            p = np
+        end
+    end
+    if changed:
+        remap_all(g)
+        niv_fold(g)
+    end
+    ret changed
+end

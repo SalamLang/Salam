@@ -1,0 +1,234 @@
+pkg.en = db/redis
+pkg.name = db/redis
+pkg.group = Database
+pkg.summary = A Redis client: keys and values, hashes, lists, sets and publishing.
+pkg.title = The db/redis package in Salam | Redis
+pkg.description = The db/redis package in Salam: key and value storage with expiry, counters, hashes, lists and queues, sets, transactions, publishing messages and any command, with a twelve step tutorial and examples.
+pkg.import = db.redis
+pkg.intro <<
+<p>Redis is an in memory database for caches, sessions, counters, queues and leaderboards. This package speaks the Redis protocol directly over a socket, with no outside library: one function per common command for strings, hashes, lists and sets, plus <code>Command</code>, which sends any other command with its arguments and hands back the raw reply. This page starts with a tutorial; the full reference of every function and type comes after it.</p>
+
+<h2 id="tutorial">Tutorial: a link shortener in twelve steps</h2>
+<p>The steps below build the storage of a small link shortener: link records, click counters, a list of recent links, unique visitors and a leaderboard. Each step is a complete program, and the output under it is what it printed against a real Redis 7.4. Run them in order, because each step uses the keys the earlier ones left behind. The last step deletes everything again.</p>
+<p>First start a server with a password. With Docker that is one command:</p>
+<pre class="code" dir="ltr"><code>docker run -p 6379:6379 redis:7.4 redis-server --requirepass s3cret</code></pre>
+<p>The programs connect to <code>127.0.0.1:6379</code> and log in with <code>s3cret</code>. To start over at any point, run <code>docker exec</code> on the container with <code>redis-cli -a s3cret flushall</code>, then begin again at step 1.</p>
+
+<h2 id="connect">1. Connect and log in</h2>
+<p><code>Connect</code> opens one TCP connection and returns a <code>Client</code>. <code>Ok</code> tells you whether that worked and <code>Error</code> says why not. A server with a password refuses every command until <code>Auth</code> succeeds, which is why the first <code>Ping</code> is false. <code>Select</code> switches to another numbered database; a default server has 16, numbered 0 to 15.</p>
+{{example.db-redis-connect}}
+<p>Every function in this package returns a plain value (a bool, a number, a string or a vector) instead of an error object. When something goes wrong you get the empty value: <code>false</code>, 0 or an empty string. Step 10 shows how to tell the cases apart when that matters. Always <code>Close</code> a client: it closes the socket and frees the buffer.</p>
+
+<h2 id="strings">2. Strings and missing keys</h2>
+<p>The simplest Redis value is a string under a key. <code>Set</code> stores it, <code>Get</code> reads it back and <code>Append</code> adds to the end. Redis has no NULL: a key is either there or not. <code>Get</code> returns an empty string in both cases, so when an empty value is meaningful, ask <code>Exists</code>, or send <code>GET</code> through <code>Command</code> and test the reply with <code>ReplyIsNil</code>.</p>
+{{example.db-redis-strings}}
+<p>There is no injection to worry about. Each argument travels as a length followed by its bytes, so a value with spaces, quotes or line breaks is stored exactly as it is and can never be read as a second command. The one limit is the NUL byte: Salam strings end at the first one, so keep binary data out of these functions or encode it first, with <code>Base64EncodeBytes</code> from <a href="/std/encoding/">encoding</a> for instance.</p>
+
+<h2 id="hashes">3. Records in hashes</h2>
+<p>A hash holds named fields under one key, which is the natural place for a record. <code>Incr</code> on a counter key hands out ids that never repeat, even with many programs adding links at once. <code>HSet</code> writes one field, <code>HGetAll</code> reads them all into a <code>HashMap</code>, and from there it is one line to fill your own struct. Every value comes back as a string, so convert numbers yourself.</p>
+{{example.db-redis-hashes}}
+<p><code>HGetAll</code> returns an empty map for a key that does not exist, which is how <code>load</code> tells a missing link apart. To write several fields in one round trip, send <code>HSET key f1 v1 f2 v2</code> with <code>Command</code>, as step 9 does.</p>
+
+<h2 id="counters">4. Counters</h2>
+<p><code>Incr</code>, <code>IncrBy</code> and <code>Decr</code> change a number stored as a string and return the new value. Redis runs each command alone, so two programs counting the same key never lose an update. A key that does not exist counts as 0, so there is nothing to set up first. The value is still a string: <code>Get</code> returns its digits and <code>conv.ParseInt</code> turns them into a number.</p>
+{{example.db-redis-counters}}
+
+<h2 id="lists">5. Lists</h2>
+<p>A list keeps strings in order. <code>LPush</code> adds to the front and <code>RPush</code> to the end; <code>LPop</code> and <code>RPop</code> take one off. <code>LRange</code> reads a slice by position, both ends included, and negative positions count from the end, so <code>0, -1</code> is the whole list. Pushing new ids to the front gives a newest first feed.</p>
+{{example.db-redis-lists}}
+<p>A list that becomes empty is deleted, and popping from it returns an empty string. To keep a feed at a fixed length, follow each push with <code>LTRIM links:recent 0 99</code> through <code>Command</code>.</p>
+
+<h2 id="sets">6. Sets</h2>
+<p>A set holds each member once. <code>SAdd</code> returns 1 for a new member and 0 for one that was already there, which makes it a one step "have I seen this?" check. <code>SCard</code> counts the members, <code>SIsMember</code> tests one and <code>SMembers</code> returns them all.</p>
+{{example.db-redis-sets}}
+<p>Redis does not keep sets in any order, so sort what <code>SMembers</code> returns before you show it. On a set with millions of members, use <code>SSCAN</code> through <code>Command</code> instead.</p>
+
+<h2 id="expire">7. Expiry</h2>
+<p>Any key can be given a lifetime. <code>SetEx</code> stores a string and its lifetime in one command; <code>Expire</code> adds one to a key that already exists. <code>TTL</code> returns the seconds left, -1 for a key that never expires and -2 for one that is not there. When the time is up Redis deletes the key by itself.</p>
+{{example.db-redis-expire}}
+<p>Watch the last line: a plain <code>Set</code> on a key removes its lifetime. Use <code>SetEx</code> again when you replace a value that should keep expiring.</p>
+
+<h2 id="command">8. Any command: a leaderboard</h2>
+<p>Redis has about two hundred commands and this package has a function for the most common ones. <code>Command</code> sends any of them: put the command name and its arguments in a <code>Vector&lt;str&gt;</code>. The <code>Reply</code> you get back has a type (<code>REPLY_STRING</code>, <code>REPLY_INTEGER</code>, <code>REPLY_ARRAY</code>, <code>REPLY_NIL</code>, <code>REPLY_STATUS</code> or <code>REPLY_ERROR</code>), and you read it with <code>ReplyStr</code>, <code>ReplyInt</code>, <code>ReplyArrayLen</code> and <code>ReplyArrayGet</code>. This step uses a sorted set, which has no function of its own, to rank the links by clicks.</p>
+{{example.db-redis-command}}
+<p>Free every reply from <code>Command</code> with <code>FreeReply</code>. The elements from <code>ReplyArrayGet</code> belong to their array and are freed with it, so never free them on their own. A field that is missing comes back as a nil element, as <code>color</code> does above.</p>
+
+<h2 id="tx">9. Transactions</h2>
+<p><code>MULTI</code> starts a transaction: the commands after it answer <code>QUEUED</code>, and <code>EXEC</code> runs them all at once, with nothing from other clients in between. <code>DISCARD</code> throws the queue away. Redis does not roll back: if one queued command fails, the others still run, so check each element of the <code>EXEC</code> reply when that matters.</p>
+{{example.db-redis-tx}}
+<p><code>WATCH</code> adds optimistic locking. If another client changes a watched key before <code>EXEC</code>, the transaction does not run and <code>EXEC</code> answers nil; read the key again and retry. The second client here plays that other user. A transaction lives on its connection, so keep <code>MULTI</code> through <code>EXEC</code> on one client and one thread.</p>
+
+<h2 id="errors">10. Errors</h2>
+<p>There are two kinds of failure. The server can refuse a command, for a wrong type or a bad argument; the connection stays fine and the reply has type <code>REPLY_ERROR</code> with the message in <code>ReplyStr</code>. The shortcut functions do not show that message: <code>Get</code> on a hash returns an empty string and <code>Incr</code> on text returns 0. When you need to know, send the command with <code>Command</code>. The other kind is a lost connection, which this step causes on purpose with <code>CLIENT KILL</code> from a second client.</p>
+{{example.db-redis-errors}}
+<p>After the connection is gone <code>Ok</code> still says true, because it only reports whether <code>Connect</code> worked. <code>Error</code> now holds the reason, every call returns its empty value and <code>Command</code> returns a reply that is not <code>ReplyOk</code>. The client does not reconnect by itself: close it and call <code>Connect</code> again.</p>
+
+<h2 id="threads">11. Several threads</h2>
+<p>A <code>Client</code> is one connection with one read buffer, so two threads must never use the same client at once. Give each thread its own, as below. There is no built in pool; for a server that handles many requests, open one client per worker thread and keep it for the life of the thread. The counter comes out exact because Redis applies each <code>INCR</code> alone.</p>
+{{example.db-redis-threads}}
+
+<h2 id="cleanup">12. Look around and clean up</h2>
+<p><code>Keys</code> lists the keys matching a pattern and <code>Type</code> says what each one holds. <code>Keys</code> walks the whole database in one go and blocks the server meanwhile, which is fine here and a problem on a production server with millions of keys. <code>SCAN</code> walks it a page at a time with a cursor; the loop below runs it through <code>Command</code>. <code>FlushDB</code> deletes every key in the current database.</p>
+{{example.db-redis-cleanup}}
+
+<h2 id="more">More</h2>
+<ul>
+<li><code>Publish</code> sends a message to every client subscribed to a channel and returns how many got it. This package can publish but cannot subscribe: <code>Command</code> reads one reply per command, and a subscriber needs to wait for messages that arrive on their own. For work that must not be lost, use a list as a queue (see below).</li>
+<li>For an ACL user with a name, send <code>AUTH name password</code> with <code>Command</code>; <code>Auth</code> sends only the password.</li>
+<li>Commands such as <code>HINCRBY</code>, <code>SETNX</code>, <code>MGET</code>, <code>LTRIM</code>, <code>ZADD</code> and <code>XADD</code> all go through <code>Command</code> in the same way as step 8.</li>
+<li>The connection waits as long as the server takes. Commands that block on purpose, such as <code>BLPOP</code>, take their own timeout argument.</li>
+</ul>
+
+<h2 id="guide-cache">Guide: cache a slow page</h2>
+<p>The most common use of Redis is a cache in front of something slow. Look for the key first; on a miss, build the value and store it with <code>SetEx</code>, so a stale copy disappears by itself. When the source changes, delete the key and the next request rebuilds it. <code>Exists</code> rather than an empty <code>Get</code> decides the hit, so an empty page can be cached too.</p>
+{{example.db-redis-cache}}
+
+<h2 id="guide-rate-limit">Guide: limit requests per user</h2>
+<p>A fixed window rate limiter needs one counter per user. <code>Incr</code> returns the count, and the first request of a window sets the lifetime, so the counter resets by itself when the window ends. Because <code>Incr</code> is atomic, the limit holds even when many server processes check the same user.</p>
+{{example.db-redis-ratelimit}}
+
+<h2 id="guide-queue">Guide: a job queue with a worker</h2>
+<p>A list makes a simple job queue: producers <code>RPush</code> jobs and a worker takes them from the front. <code>LPop</code> returns at once, so a worker that polls it wastes time. <code>BLPOP</code>, sent through <code>Command</code>, waits until a job arrives or the timeout in seconds runs out, and answers nil on a timeout. The worker runs in its own thread with its own client, as step 11 requires.</p>
+{{example.db-redis-queue}}
+<p>A job popped by a worker that then crashes is lost. When that matters, move each job to a processing list with <code>LMOVE</code> and remove it only after the work is done.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Cache a value for a while</td><td><code>SetEx</code>, then <code>Get</code> or <code>Exists</code></td></tr>
+<tr><td>Count views, hand out ids</td><td><code>Incr</code>, <code>IncrBy</code>, <code>Decr</code></td></tr>
+<tr><td>Store a record or a session</td><td><code>HSet</code>, <code>HGetAll</code>, then <code>Expire</code></td></tr>
+<tr><td>Recent items, a job queue</td><td><code>LPush</code>, <code>LRange</code>, <code>RPush</code>, <code>LPop</code>, <code>BLPOP</code> through <code>Command</code></td></tr>
+<tr><td>Unique visitors, tags, who is online</td><td><code>SAdd</code>, <code>SCard</code>, <code>SIsMember</code></td></tr>
+<tr><td>Rankings, scores</td><td><code>ZADD</code>, <code>ZREVRANGE</code>, <code>ZINCRBY</code> through <code>Command</code></td></tr>
+<tr><td>Several writes together</td><td><code>MULTI</code> and <code>EXEC</code> through <code>Command</code></td></tr>
+<tr><td>Tell another service something happened</td><td><code>Publish</code></td></tr>
+<tr><td>Find keys on a big server</td><td><code>SCAN</code> through <code>Command</code>, not <code>Keys</code></td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.REPLY_STRING = Reply type: a string.
+doc.REPLY_ARRAY = Reply type: an array.
+doc.REPLY_INTEGER = Reply type: a whole number.
+doc.REPLY_NIL = Reply type: nil, a key that is not there for instance.
+doc.REPLY_STATUS = Reply type: a status, such as <code>OK</code>.
+doc.REPLY_ERROR = Reply type: an error.
+doc.REPLY_DOUBLE = Reply type: a float, read with <code>ReplyStr</code>. Only a server switched to RESP3 sends it; over the default protocol floats arrive as strings.
+doc.Client = A connection to Redis.
+doc.Client.handle = The connection pointer; null when <code>Connect</code> failed.
+doc.Reply = The reply to one command.
+doc.Reply.handle = The reply pointer.
+doc.Command = Sends any command with its arguments, each sent exactly as it is, and returns the raw reply. Free it with <code>FreeReply</code>; the reply is not <code>ReplyOk</code> when the connection is down.
+doc.ReplyOk = A reply arrived; false when the connection is down or was never made.
+doc.ReplyType = The reply type.
+doc.ReplyIsError = The server refused the command; <code>ReplyStr</code> holds its message.
+doc.ReplyIsNil = The reply is nil, such as <code>GET</code> on a key that is not there.
+doc.ReplyInt = The reply as a number, for an integer reply; 0 for any other type.
+doc.ReplyStr = The reply as text, for a string, status, error or float reply; empty for nil, numbers and arrays.
+doc.ReplyArrayLen = The number of elements in an array reply.
+doc.ReplyArrayGet = One element of an array reply, counting from 0. It belongs to the array: free only the outer reply.
+doc.FreeReply = Frees a reply from <code>Command</code>, with all its elements.
+doc.Set = Sets the value of a key, replacing any value and expiry it had.
+doc.SetEx = The same, with an expiry in seconds.
+doc.Get = The value of a key; an empty string when there is none or it does not hold a string.
+doc.Exists = The key is there.
+doc.Del = Deletes the key; true when it was there.
+doc.Expire = Gives the key a lifetime in seconds; false when there is no such key.
+doc.TTL = The seconds left until the expiry; -1 means no expiry and -2 means no such key.
+doc.Incr = Raises the number of a key by one and returns the new value; a missing key counts as 0. Returns 0 when the value is not a number.
+doc.IncrBy = Raises it by the given amount, which may be negative.
+doc.Decr = Lowers it by one.
+doc.Append = Adds text to the value and returns the new length.
+doc.StrLen = The length of the value.
+doc.Type = The type of the value of a key, such as <code>string</code> or <code>hash</code>; <code>none</code> when there is no such key.
+doc.Keys = The keys that match a pattern such as <code>user:*</code>. It blocks the server while it walks every key, so use <code>SCAN</code> through <code>Command</code> on a large database.
+doc.SAdd = Adds a member to a set; returns 1 when it is new and 0 when it was already there.
+doc.SRem = Removes a member; returns 1 when it was there.
+doc.SIsMember = It is a member.
+doc.SCard = The number of members.
+doc.SMembers = Every member, in no particular order.
+doc.Connect = Connects to the Redis server at a host and port; check the result with <code>Ok</code>.
+doc.Ok = <code>Connect</code> worked. It stays true after the connection is lost later; <code>Error</code> or <code>Ping</code> tell you that.
+doc.Error = Why the connection failed: <code>no connection</code> when <code>Connect</code> failed, or a message such as <code>Server closed the connection</code> once it broke; empty while it works. Errors the server sends back for one command are not kept here.
+doc.Close = Closes the connection and frees the client.
+doc.Ping = The server answered; false when the connection is down or it still needs a password.
+doc.Select = Picks the numbered database, 0 to 15 on a default server.
+doc.Auth = Logs in with the server password. For a named ACL user send <code>AUTH name password</code> with <code>Command</code>.
+doc.FlushDB = Clears every key of the current database.
+doc.HSet = Sets a field of a hash. It returns false when no reply came or the server refused the command, such as on a key that is not a hash.
+doc.HGet = One field of a hash; an empty string when it is missing.
+doc.HDel = Deletes a field; true when it was there.
+doc.HExists = The field is there.
+doc.HLen = The number of fields.
+doc.HGetAll = Every field as a map; an empty map when the key is missing.
+doc.LPush = Adds to the front of a list and returns the new length.
+doc.RPush = Adds to the end of a list.
+doc.LPop = Takes one off the front of a list; an empty string when the list is empty.
+doc.RPop = Takes one off the end; an empty string when the list is empty.
+doc.LLen = The length of the list.
+doc.LRange = The elements from <code>start</code> to <code>stop</code>, both included. Negative positions count from the end, so <code>0, -1</code> is the whole list.
+doc.Publish = Publishes a message to a channel and returns the number of receivers.
+
+ex.REPLY_STRING = db-redis-Client
+ex.REPLY_ARRAY = db-redis-Client
+ex.REPLY_INTEGER = db-redis-Client
+ex.REPLY_NIL = db-redis-Client
+ex.REPLY_STATUS = db-redis-Client
+ex.REPLY_ERROR = db-redis-Client
+ex.REPLY_DOUBLE = db-redis-Client
+ex.Client = db-redis-Client
+ex.Client.handle = db-redis-Client
+ex.Reply = db-redis-Client
+ex.Reply.handle = db-redis-Client
+ex.Command = db-redis-Client
+ex.ReplyOk = db-redis-Client
+ex.ReplyType = db-redis-Client
+ex.ReplyIsError = db-redis-Client
+ex.ReplyIsNil = db-redis-Client
+ex.ReplyInt = db-redis-Client
+ex.ReplyStr = db-redis-Client
+ex.ReplyArrayLen = db-redis-Client
+ex.ReplyArrayGet = db-redis-Client
+ex.FreeReply = db-redis-Client
+ex.Set = db-redis-Client
+ex.SetEx = db-redis-Client
+ex.Get = db-redis-Client
+ex.Exists = db-redis-Client
+ex.Del = db-redis-Client
+ex.Expire = db-redis-Client
+ex.TTL = db-redis-Client
+ex.Incr = db-redis-Client
+ex.IncrBy = db-redis-Client
+ex.Decr = db-redis-Client
+ex.Append = db-redis-Client
+ex.StrLen = db-redis-Client
+ex.Type = db-redis-Client
+ex.Keys = db-redis-Client
+ex.SAdd = db-redis-Client
+ex.SRem = db-redis-Client
+ex.SIsMember = db-redis-Client
+ex.SCard = db-redis-Client
+ex.SMembers = db-redis-Client
+ex.Connect = db-redis-Client
+ex.Ok = db-redis-Client
+ex.Error = db-redis-Client
+ex.Close = db-redis-Client
+ex.Ping = db-redis-Client
+ex.Select = db-redis-Client
+ex.Auth = db-redis-Client
+ex.FlushDB = db-redis-Client
+ex.HSet = db-redis-Client
+ex.HGet = db-redis-Client
+ex.HDel = db-redis-Client
+ex.HExists = db-redis-Client
+ex.HLen = db-redis-Client
+ex.HGetAll = db-redis-Client
+ex.LPush = db-redis-Client
+ex.RPush = db-redis-Client
+ex.LPop = db-redis-Client
+ex.RPop = db-redis-Client
+ex.LLen = db-redis-Client
+ex.LRange = db-redis-Client
+ex.Publish = db-redis-Client

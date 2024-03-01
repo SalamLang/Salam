@@ -1,0 +1,229 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import testing
+import calendar
+
+func expect_zone(name: str, epoch: i64, wantOffsetMinutes: int, wantAbbrev: str):
+    mut z := calendar.LoadZone(name)
+    defer calendar.FreeZone(z)
+    mut off := wantOffsetMinutes
+    mut ab := wantAbbrev
+    if z.ok:
+        off = calendar.ZoneOffsetMinutes(z, epoch)
+        ab = calendar.ZoneAbbrevAt(z, epoch)
+    end
+    testing.AssertEqInt(off, wantOffsetMinutes)
+    testing.AssertEqStr(ab, wantAbbrev)
+end
+
+func expect_dst(name: str, epoch: i64, wantDST: bool):
+    mut z := calendar.LoadZone(name)
+    defer calendar.FreeZone(z)
+    mut got := wantDST
+    if z.ok: got = calendar.ZoneIsDST(z, epoch) end
+    testing.AssertEqBool(got, wantDST)
+end
+
+func jan(): i64: ret calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2024, month = 1, day = 15 }, 12, 0, 0) end
+
+func jul(): i64: ret calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2024, month = 7, day = 15 }, 12, 0, 0) end
+
+func test_northern_dst():
+    expect_zone("Europe/London", jan(), 0, "GMT")
+    expect_zone("Europe/London", jul(), 60, "BST")
+    expect_zone("America/New_York", jan(), 0 - 300, "EST")
+    expect_zone("America/New_York", jul(), 0 - 240, "EDT")
+    expect_zone("Europe/Berlin", jan(), 60, "CET")
+    expect_zone("Europe/Berlin", jul(), 120, "CEST")
+    expect_dst("Europe/London", jan(), false)
+    expect_dst("Europe/London", jul(), true)
+    expect_dst("America/New_York", jul(), true)
+end
+
+func test_southern_dst_is_inverted():
+    expect_zone("Australia/Sydney", jan(), 660, "AEDT")
+    expect_zone("Australia/Sydney", jul(), 600, "AEST")
+    expect_dst("Australia/Sydney", jan(), true)
+    expect_dst("Australia/Sydney", jul(), false)
+end
+
+func test_zones_without_dst():
+    expect_zone("Asia/Tokyo", jan(), 540, "JST")
+    expect_zone("Asia/Tokyo", jul(), 540, "JST")
+    expect_zone("Asia/Kolkata", jan(), 330, "IST")
+    expect_zone("Asia/Kolkata", jul(), 330, "IST")
+    expect_dst("Asia/Tokyo", jul(), false)
+    expect_zone("Asia/Tehran", jan(), 210, "+0330")
+    expect_zone("Asia/Tehran", jul(), 210, "+0330")
+    t2021 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2021, month = 7, day = 15 }, 12, 0, 0)
+    expect_zone("Asia/Tehran", t2021, 270, "+0430")
+    expect_dst("Asia/Tehran", t2021, true)
+end
+
+func test_dst_flag_is_not_decided_by_offset_alone():
+    ba := "America/Argentina/Buenos_Aires"
+    jun2009 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2009, month = 6, day = 1 }, 0, 0, 0)
+    jan2009 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2009, month = 1, day = 1 }, 0, 0, 0)
+    jan2025 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2025, month = 1, day = 1 }, 0, 0, 0)
+    jan2040 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2040, month = 1, day = 1 }, 0, 0, 0)
+    expect_zone(ba, jan2009, 0 - 120, "-02")
+    expect_dst(ba, jan2009, true)
+    expect_zone(ba, jun2009, 0 - 180, "-03")
+    expect_dst(ba, jun2009, false)
+    expect_zone(ba, jan2025, 0 - 180, "-03")
+    expect_dst(ba, jan2025, false)
+    expect_zone(ba, jan2040, 0 - 180, "-03")
+    expect_dst(ba, jan2040, false)
+end
+
+func test_malformed_files_are_refused():
+    mut dir := calendar.LoadZone("America")
+    testing.AssertFalse(dir.ok)
+    calendar.FreeZone(dir)
+    mut dir2 := calendar.LoadZone("Etc")
+    testing.AssertFalse(dir2.ok)
+    calendar.FreeZone(dir2)
+    mut bad := calendar.LoadZone("zzz.not.a.zone")
+    testing.AssertFalse(bad.ok)
+    calendar.FreeZone(bad)
+end
+
+func test_posix_footer_rule_covers_the_far_future():
+    j2040 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2040, month = 7, day = 15 }, 12, 0, 0)
+    w2040 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2040, month = 1, day = 15 }, 12, 0, 0)
+    expect_zone("Europe/London", j2040, 60, "BST")
+    expect_zone("Europe/London", w2040, 0, "GMT")
+    expect_zone("America/New_York", j2040, 0 - 240, "EDT")
+    expect_zone("America/New_York", w2040, 0 - 300, "EST")
+    expect_zone("Australia/Sydney", j2040, 600, "AEST")
+    expect_zone("Australia/Sydney", w2040, 660, "AEDT")
+end
+
+func test_historical_transitions():
+    h1970 := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 1970, month = 6, day = 15 }, 12, 0, 0)
+    expect_zone("Europe/London", h1970, 60, "BST")
+    expect_dst("Europe/London", h1970, false)
+end
+
+func test_timezone_at_bridges_to_the_fixed_api():
+    mut z := calendar.LoadZone("America/New_York")
+    defer calendar.FreeZone(z)
+    e := jul()
+    tz := calendar.TimeZoneAt(z, e)
+    mut wantHour := 8
+    mut wantName := "EDT"
+    if not z.ok:
+        wantHour = 7
+        wantName = "America/New_York"
+    end
+    t := calendar.WallClockTime(e, tz)
+    testing.AssertEqInt(t.hour, wantHour)
+    testing.AssertEqStr(tz.name, wantName)
+    d := calendar.WallClockGregorian(e, tz)
+    testing.AssertEqStr(calendar.FormatGregorian(d), "2024-07-15")
+end
+
+func test_zoned_to_epoch_is_the_inverse():
+    mut z := calendar.LoadZone("Europe/London")
+    defer calendar.FreeZone(z)
+    e := jul()
+    tz := calendar.TimeZoneAt(z, e)
+    d := calendar.WallClockGregorian(e, tz)
+    t := calendar.WallClockTime(e, tz)
+    testing.AssertEqInt64(calendar.ZonedToEpoch(d, t, z), e)
+    e2 := jan()
+    tz2 := calendar.TimeZoneAt(z, e2)
+    d2 := calendar.WallClockGregorian(e2, tz2)
+    t2 := calendar.WallClockTime(e2, tz2)
+    testing.AssertEqInt64(calendar.ZonedToEpoch(d2, t2, z), e2)
+end
+
+func test_roundtrip_across_a_whole_year():
+    mut z := calendar.LoadZone("Europe/London")
+    defer calendar.FreeZone(z)
+    mut epoch := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2024, month = 1, day = 1 }, 0, 0, 0)
+    stop := calendar.GregorianToUnixUTC(calendar.GregorianDate { year = 2025, month = 1, day = 1 }, 0, 0, 0)
+    mut mismatches := 0
+    until epoch < stop:
+        tz := calendar.TimeZoneAt(z, epoch)
+        d := calendar.WallClockGregorian(epoch, tz)
+        t := calendar.WallClockTime(epoch, tz)
+        if calendar.ZonedToEpoch(d, t, z) != epoch: mismatches += 1 end
+        epoch = epoch + 21600
+    end
+    testing.AssertTrue(mismatches <= 1)
+end
+
+func test_unknown_and_unsafe_names():
+    mut bad := calendar.LoadZone("Not/AZone")
+    testing.AssertFalse(bad.ok)
+    testing.AssertEqInt(calendar.ZoneOffsetMinutes(bad, jan()), 0)
+    testing.AssertEqStr(calendar.ZoneAbbrevAt(bad, jan()), "UTC")
+    testing.AssertFalse(calendar.ZoneIsDST(bad, jan()))
+    calendar.FreeZone(bad)
+    mut esc := calendar.LoadZone("../../../etc/passwd")
+    testing.AssertFalse(esc.ok)
+    calendar.FreeZone(esc)
+    mut abs := calendar.LoadZone("/etc/passwd")
+    testing.AssertFalse(abs.ok)
+    calendar.FreeZone(abs)
+    mut empty := calendar.LoadZone("")
+    testing.AssertFalse(empty.ok)
+    calendar.FreeZone(empty)
+end
+
+func test_local_zone_and_one_shot():
+    mut lz := calendar.LocalZone()
+    defer calendar.FreeZone(lz)
+    off := calendar.ZoneOffsetMinutes(lz, jan())
+    testing.AssertTrue(off >= 0 - 720)
+    testing.AssertTrue(off <= 840)
+    mut z := calendar.LoadZone("Asia/Tokyo")
+    defer calendar.FreeZone(z)
+    testing.AssertEqInt(calendar.ZoneAt("Asia/Tokyo", jan()).offset_minutes, calendar.TimeZoneAt(z, jan()).offset_minutes)
+end
+
+func test_fallback_for_hosts_without_tzdata():
+    london := calendar.TimeZoneAt(calendar.Zone { name = "Europe/London", ok = false }, jul())
+    testing.AssertEqInt(london.offset_minutes, 0)
+    testing.AssertEqStr(london.name, "Europe/London")
+    ny := calendar.TimeZoneAt(calendar.Zone { name = "America/New_York", ok = false }, jul())
+    testing.AssertEqInt(ny.offset_minutes, 0 - 300)
+    tokyo := calendar.TimeZoneAt(calendar.Zone { name = "Asia/Tokyo", ok = false }, jul())
+    testing.AssertEqInt(tokyo.offset_minutes, 540)
+    unknown := calendar.TimeZoneAt(calendar.Zone { name = "Mars/Olympus", ok = false }, jul())
+    testing.AssertEqInt(unknown.offset_minutes, 0)
+    testing.AssertEqStr(unknown.name, "Mars/Olympus")
+end
+
+func main:
+    test_northern_dst()
+    test_southern_dst_is_inverted()
+    test_zones_without_dst()
+    test_dst_flag_is_not_decided_by_offset_alone()
+    test_malformed_files_are_refused()
+    test_posix_footer_rule_covers_the_far_future()
+    test_historical_transitions()
+    test_timezone_at_bridges_to_the_fixed_api()
+    test_zoned_to_epoch_is_the_inverse()
+    test_roundtrip_across_a_whole_year()
+    test_unknown_and_unsafe_names()
+    test_local_zone_and_one_shot()
+    test_fallback_for_hosts_without_tzdata()
+    testing.Summary()
+    ret 0
+end

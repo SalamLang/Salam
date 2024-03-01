@@ -1,0 +1,85 @@
+pkg.en = os/process
+pkg.name = os/process
+pkg.group = System and tools
+pkg.summary = Running other programs, capturing their output, waiting for them and stopping them.
+pkg.title = The os/process package in Salam | Running another program and capturing its output
+pkg.description = The os/process package in Salam: running another program, capturing its output and errors, waiting for it to finish, killing it and forking, with examples.
+pkg.import = os.process
+pkg.intro <<
+<p>The <code>os.process</code> package runs another program directly, with no shell in between. The program's path and its arguments are given separately, so nothing has to be quoted and spaces or special characters in an argument cause no trouble. Use it to call tools such as <code>git</code>, <code>ffmpeg</code> or a compiler with file names that came from a user. For a quick one-line shell command use <a href="/std/os/">os</a> (<code>Run</code>, <code>RunCapture</code>) or <a href="/std/os/shell/">os.shell</a>; when a program cannot start at all, the reason is recorded in <a href="/std/os/error/">os.error</a>.</p>
+<p>A run has up to four steps: <code>Start</code> or <code>StartCaptured</code> launches the program and returns at once, <code>Wait</code> blocks until it exits and returns the exit code, <code>ReadStdout</code> and <code>ReadStderr</code> read what a captured run printed, and <code>Cleanup</code> deletes the two temporary files that held it. A captured program gets an empty standard input.</p>
+<p>What people get wrong:</p>
+<ul>
+<li>Treating <code>IsRunning</code> as a live check. It reports a flag that <code>Start</code> sets and only <code>Wait</code>, <code>Kill</code> or <code>Terminate</code> clear; it stays true after the program has exited on its own.</li>
+<li>Killing without waiting. <code>Kill</code> and <code>Terminate</code> only send the signal. Call <code>Wait</code> afterwards, or the finished process stays in the process table as a zombie.</li>
+<li>Expecting a timeout. <code>Wait</code> waits as long as the program runs. To give up after a while, wait in a <a href="/std/thread/">thread</a> and <code>Kill</code> from the main one.</li>
+<li>Forgetting <code>Cleanup</code>. Each captured run leaves two files in the temporary folder until you call it.</li>
+</ul>
+<div class="note"><p>On Windows the arguments are joined into one command line with quotes around those that contain spaces, and the ANSI <code>CreateProcessA</code> starts the program. An argument that itself contains a <code>"</code>, or text outside the system code page such as Persian, does not arrive intact there; <code>Fork</code> and <code>WaitPid</code> return -1.</p></div>
+<h2 id="guide-args">Pass arguments exactly as they are</h2>
+<p>Each element of the argument vector reaches the program as one argument, byte for byte. Spaces, quotes, a <code>$</code> or a <code>;</code> mean nothing special, because no shell reads them. That makes this package the safe way to pass file names and other text that came from a user.</p>
+{{example.os-process-guide-args}}
+<p>The program name is looked up on the <code>PATH</code> like in a terminal, so <code>printf</code> works without a full path. The vector does not include the program name itself; the package adds it. This exactness holds on Linux and macOS; see the note above for Windows.</p>
+
+<h2 id="guide-exitcode">Exit code, output and error output</h2>
+<p>A program reports success with exit code zero and anything else on failure, and it writes its complaints to the error output. After <code>Wait</code>, read both: <code>ReadStdout</code> for the results and <code>ReadStderr</code> for the reason it failed. Call <code>Cleanup</code> after reading, because the captured output is kept in temporary files until then.</p>
+{{example.os-process-guide-exitcode}}
+
+<h2 id="guide-parallel">Run several programs at once</h2>
+<p><code>StartCaptured</code> returns as soon as the program has started, so you can start several and wait for them afterwards. The total time is about that of the slowest one rather than the sum of all. Waiting in the order you started them keeps the output in a fixed order, even when a later job finished first.</p>
+{{example.os-process-guide-parallel}}
+<p>Keep the number of programs you run at once reasonable; <a href="/std/os/platform/">os.platform</a>'s <code>CpuCount</code> is a good limit for work that keeps the processor busy.</p>
+
+<h2 id="guide-helper">A helper that runs a program and returns its output</h2>
+<p>Most programs need the same few lines every time: start, check that it started, wait, read, clean up. Put them in one function. A <code>defer</code> right after the start makes sure <code>Cleanup</code> runs on every way out of the function, and an out-parameter tells the caller whether the program succeeded.</p>
+{{example.os-process-guide-helper}}
+
+<h2 id="guide-stop">Stop a program</h2>
+<p><code>Terminate</code> sends <code>SIGTERM</code>, which a well-behaved program catches to save its work and exit; <code>Kill</code> sends <code>SIGKILL</code>, which cannot be caught. Either way, <code>Wait</code> collects the program afterwards. A program ended by a signal reports 128 plus the signal number as its exit code, so 143 means <code>SIGTERM</code> and 137 means <code>SIGKILL</code>, the same numbers a shell shows.</p>
+{{example.os-process-guide-stop}}
+<div class="table-wrap"><table>
+<thead><tr><th>Need</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Run a program and see its output on the screen</td><td><code>Start</code>, then <code>Wait</code></td></tr>
+<tr><td>Run a program and use its output</td><td><code>StartCaptured</code>, <code>Wait</code>, <code>ReadStdout</code>, <code>Cleanup</code></td></tr>
+<tr><td>Stop a program politely, or at once</td><td><code>Terminate</code>, <code>Kill</code></td></tr>
+<tr><td>Pipes or redirection</td><td>run <code>sh</code> with <code>-c</code> and a script, as in the examples above</td></tr>
+<tr><td>A one-line command and its result</td><td><a href="/std/os/shell/">os.shell</a></td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.Process = A process, running or finished.
+doc.Process.pid = The process id.
+doc.Process.handle = The process handle on Windows.
+doc.Process.running = Set by <code>Start</code> and cleared by <code>Wait</code>, <code>Kill</code> and <code>Terminate</code>; it is not updated when the program exits on its own.
+doc.Process.exit_code = The exit code, once <code>Wait</code> has returned; 128 plus the signal number when a signal ended it.
+doc.Process.stdout_path = The temporary file holding the captured output.
+doc.Process.stderr_path = The temporary file holding the captured error output.
+doc.Start = Runs a program with its arguments and does not wait; its output goes straight to your own program's output. The name is searched on <code>PATH</code>. When it cannot start, <code>pid</code> is 0 and <code>os.error</code> holds <code>ProcessFailed</code>.
+doc.StartCaptured = Like <code>Start</code>, but sends the program's output and error output to two temporary files for you to read after <code>Wait</code>, and gives it an empty standard input.
+doc.WaitPid = Waits for the process with this id to finish and returns its exit code, or -1. Unix only; on Windows it returns -1.
+doc.Wait = Waits for the process to finish and returns its exit code: 128 plus the signal number when a signal ended it, -1 when it never started. There is no timeout.
+doc.Fork = Splits the current process in two: it returns zero in the child and the child's id in the parent. On Unix systems only; its example is not run here.
+doc.ExitNow = Ends the process immediately with no cleanup at all, for finishing a child after <code>Fork</code>.
+doc.Kill = Kills the process at once (SIGKILL); 0 when the signal was sent. Call <code>Wait</code> afterwards to collect it.
+doc.Terminate = Asks the process to finish gracefully (SIGTERM) so it has a chance to clean up; call <code>Wait</code> afterwards. On Windows it is the same as <code>Kill</code>.
+doc.ReadStdout = Reads the captured output once the process has finished; empty for a process started with <code>Start</code>. The text stops at the first zero byte.
+doc.ReadStderr = Reads the captured error output; empty for a process started with <code>Start</code>.
+doc.Cleanup = Removes the temporary capture files. Read the output first; call it once per <code>StartCaptured</code>.
+doc.ExitCode = The process's exit code.
+doc.Pid = The process id.
+doc.IsRunning = The <code>running</code> flag: true from <code>Start</code> until <code>Wait</code>, <code>Kill</code> or <code>Terminate</code>. It does not ask the system, so it stays true after the program exits by itself.
+
+ex.Process = os-process-Start
+ex.StartCaptured = os-process-Start
+ex.Wait = os-process-Start
+ex.ReadStdout = os-process-Start
+ex.ReadStderr = os-process-Start
+ex.Cleanup = os-process-Start
+ex.ExitCode = os-process-Start
+ex.Pid = os-process-Start
+ex.IsRunning = os-process-Start
+ex.Terminate = os-process-Kill
+ex.WaitPid = os-process-Kill
+ex.ExitNow = os-process-Fork

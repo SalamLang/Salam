@@ -1,0 +1,192 @@
+pkg.en = ftp
+pkg.name = ftp
+pkg.group = Network
+pkg.summary = An FTP and FTPS client: listing a directory, uploading and downloading files.
+pkg.title = The ftp package in Salam | FTP and FTPS
+pkg.description = The ftp package in Salam: connecting to an FTP and FTPS server, logging in, listing a directory, reading and writing, and uploading and downloading files and directories, with an example.
+pkg.import = ftp
+pkg.intro <<
+<p>This package connects to FTP servers, for uploading a site to shared hosting or pulling files off old equipment and suppliers' servers. Plain FTP sends the password and the data unencrypted; wherever the server supports it, use <code>DialTLS</code>, which encrypts both the commands and the data with AUTH TLS. When the server also speaks SSH, SFTP through <a href="/std/ssh/">ssh</a> is the better choice: one encrypted connection, no separate data channel.</p>
+<p>Transfers go in passive mode (EPSV, or PASV when the server lacks it), which works from behind a firewall; active mode (<code>PORT</code>) is not offered. The parsing functions, such as <code>ParseListLine</code>, are available for writing tools of your own too.</p>
+<p>Things to know:</p>
+<ul>
+<li><strong>Call <code>Binary</code> before transfers</strong>, or a server in ASCII mode may change line endings inside images and archives.</li>
+<li><strong><code>Upload</code> and <code>Download</code> hold the whole file in memory</strong>, and an interrupted transfer starts again from the beginning; there is no resume. Fine for site files and reports, not for multi-gigabyte backups.</li>
+<li><strong><code>Read</code>, <code>Write</code> and <code>Append</code> carry a <code>str</code></strong>, so they are for text: binary content stops at the first zero byte. Use <code>Upload</code> and <code>Download</code> for anything else.</li>
+<li>Servers that require TLS session reuse on the data connection refuse every transfer; see the last section.</li>
+</ul>
+
+<h2 id="guide-publish">Publish a site to shared hosting</h2>
+<p>The usual job: connect with <code>DialTLS</code>, refuse to go on unless both the commands and the data are encrypted, log in, and upload a build directory with <code>UploadDir</code>. Switch to binary mode with <code>Binary</code> before any transfer, or some servers will change the line endings inside images and archives. Keeping the old <code>index.html</code> under another name with <code>Rename</code> gives you something to go back to.</p>
+{{example.ftp-publish-site}}
+<p>This needs a real server, so it is only checked here. Every function that talks to the server leaves the reply in <code>LastCode</code> and <code>LastReply</code>, so after a <code>false</code> you can always print what the server said.</p>
+
+<h2 id="guide-sync">Fetch only the new files</h2>
+<p><code>List</code> returns one <code>FileInfo</code> per entry with the name, the size and whether it is a directory or a link. Comparing that with what is already on disk turns a full download into a cheap sync, which suits a nightly job that collects reports from a supplier.</p>
+{{example.ftp-sync-down}}
+<p>For a stricter check than "the file exists", compare <code>f.size</code> with the local size, or <code>ModTime</code> with the time you stored after the last run.</p>
+
+<h2 id="guide-listing">Read a directory listing yourself</h2>
+<p>FTP has no fixed format for listings; most servers send the same columns as <code>ls -l</code>. <code>ParseListLine</code> reads such a line into a <code>FileInfo</code>, which is useful when you get listings from somewhere else, such as a log or a <code>ListRaw</code> call, and want to work with them without a connection.</p>
+{{example.ftp-listing-report}}
+
+<h2 id="guide-tls-reuse">Servers that require TLS session reuse</h2>
+<p>Some FTPS servers insist that the data connection resumes the TLS session of the command connection. vsftpd does this with its default <code>require_ssl_reuse=YES</code>, and so do FileZilla Server and the Rebex test server. This package does not resume sessions yet, so on those servers logging in works but every listing and transfer is refused with reply 425:</p>
+{{example.ftp-public-demo}}
+<p>Run against <code>test.rebex.net</code>, it printed:</p>
+<pre class="code" dir="ltr"><code>encrypted: true true
+system: 215 UNIX Type: L8
+listing refused: 425 Cannot secure data connection - TLS session resumption required.</code></pre>
+<p>If you run the server, set <code>require_ssl_reuse=NO</code> in vsftpd. If you do not, and the server offers SFTP, use <a href="/std/ssh/">ssh</a> instead; fall back to plain <code>Dial</code> only on a network you trust, since it sends the password in the clear.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Connect securely</td><td><code>DialTLS</code>, or <code>DialTLSWith</code> for a private CA; <code>Dial</code> then <code>AuthTLS</code> does the same in two steps</td></tr>
+<tr><td>Check that encryption is on</td><td><code>Secure</code> for the commands, <code>SecureData</code> for the files</td></tr>
+<tr><td>Small text files</td><td><code>Read</code>, <code>Write</code>, <code>Append</code></td></tr>
+<tr><td>Files on disk</td><td><code>Upload</code>, <code>Download</code>, <code>UploadDir</code>, <code>DownloadDir</code></td></tr>
+<tr><td>Look before you act</td><td><code>Exists</code>, <code>IsDir</code>, <code>Size</code>, <code>ModTime</code>, <code>List</code></td></tr>
+<tr><td>A command with no function of its own</td><td><code>Command</code>, which returns the reply code</td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.FileInfo = The information about one file from the server listing.
+doc.FileInfo.name = The name.
+doc.FileInfo.size = The size.
+doc.FileInfo.is_dir = It is a directory.
+doc.FileInfo.is_link = It is a link.
+doc.FileInfo.mode = The permissions, such as <code>rw-r--r--</code>.
+doc.FileInfo.raw_date = The date exactly as the server wrote it.
+doc.Client = One FTP connection.
+doc.Client.conn = The TCP connection of the commands.
+doc.Client.ok = The connection is healthy.
+doc.Client.host = The host.
+doc.Client.port = The port.
+doc.Client.rxbuf = The data that was read.
+doc.Client.last_reply = The last reply of the server.
+doc.Client.last_code = The code of the last reply.
+doc.Client.secure = The command channel is encrypted.
+doc.Client.tls_idx = The index of the TLS connection.
+doc.Client.prot_p = The data channel is encrypted too.
+doc.Client.tls_cfg = The TLS configuration.
+doc.Dial = Connects to an FTP server; not logged in yet.
+doc.AuthTLSWith = Secures the connection with AUTH TLS and the given configuration.
+doc.AuthTLS = Secures the connection with AUTH TLS.
+doc.DialTLS = Connects and secures it at once with AUTH TLS; explicit FTPS.
+doc.DialTLSWith = The same, with a TLS configuration.
+doc.Secure = The command channel is encrypted.
+doc.SecureData = The data channel is encrypted too.
+doc.Login = Logs in.
+doc.Quit = Logs out with QUIT.
+doc.Close = Closes the connection.
+doc.Ok = The connection is healthy.
+doc.LastReply = The text of the last reply.
+doc.LastCode = The code of the last reply, such as 230.
+doc.Command = Sends a raw command and returns the reply code.
+doc.Noop = The NOOP command, for keeping the connection alive.
+doc.System = The system type of the server.
+doc.Features = The features the server announces with FEAT.
+doc.Binary = Binary transfer mode; for everything but plain text.
+doc.Ascii = Text transfer mode.
+doc.Pwd = The current directory.
+doc.Cwd = Changes directory.
+doc.CdUp = Goes to the directory above.
+doc.Mkdir = Makes a directory.
+doc.Rmdir = Deletes an empty directory.
+doc.MkdirAll = Makes the directory and the ones above it.
+doc.ListRaw = The directory listing exactly as the server sends it.
+doc.List = The directory listing, parsed.
+doc.NameList = The names in the directory only.
+doc.Size = The size of a file; -1 when it could not be had.
+doc.ModTime = The modification time in <code>YYYYMMDDHHMMSS</code> form.
+doc.IsDir = It is a directory.
+doc.IsLink = It is a link.
+doc.Exists = The file or directory is there.
+doc.Read = Reads a remote file as text; binary content stops at the first zero byte, so use <code>Download</code> for it.
+doc.Write = Writes text to a file on the server.
+doc.Append = Adds text to the end of a file.
+doc.Download = Downloads a remote file into a local file, byte for byte; the whole file is held in memory first.
+doc.Upload = Sends a local file, byte for byte; it is read into memory in full before the transfer.
+doc.Delete = Deletes a file.
+doc.Rename = Renames it.
+doc.Move = Moves it; the target directory is made when it is not there.
+doc.RemoveAll = Deletes the directory and everything in it.
+doc.DownloadDir = Downloads a directory with everything in it.
+doc.UploadDir = Sends a local directory with everything in it.
+doc.ReplyCode = The three digit code of a reply line; zero when there is none.
+doc.IsFinalLine = It is the closing line of a multi line reply; the closing line has a space after the code, not a dash.
+doc.ParsePasv = Pulls the data address and port out of a PASV reply.
+doc.ParseEpsv = Pulls the data port out of an EPSV reply.
+doc.ParseListLine = Parses one Unix style listing line.
+
+ex.FileInfo = ftp-Parse
+ex.FileInfo.name = ftp-Parse
+ex.FileInfo.size = ftp-Parse
+ex.FileInfo.is_dir = ftp-Parse
+ex.FileInfo.is_link = ftp-Parse
+ex.FileInfo.mode = ftp-Parse
+ex.FileInfo.raw_date = ftp-Parse
+ex.List = ftp-Parse
+ex.ReplyCode = ftp-Parse
+ex.IsFinalLine = ftp-Parse
+ex.ParsePasv = ftp-Parse
+ex.ParseEpsv = ftp-Parse
+ex.ParseListLine = ftp-Parse
+ex.Client = ftp-Client
+ex.Client.conn = ftp-Client
+ex.Client.ok = ftp-Client
+ex.Client.host = ftp-Client
+ex.Client.port = ftp-Client
+ex.Client.rxbuf = ftp-Client
+ex.Client.last_reply = ftp-Client
+ex.Client.last_code = ftp-Client
+ex.Client.secure = ftp-Client
+ex.Client.tls_idx = ftp-Client
+ex.Client.prot_p = ftp-Client
+ex.Client.tls_cfg = ftp-Client
+ex.Dial = ftp-Client
+ex.AuthTLSWith = ftp-Client
+ex.AuthTLS = ftp-Client
+ex.DialTLS = ftp-Client
+ex.DialTLSWith = ftp-Client
+ex.Secure = ftp-Client
+ex.SecureData = ftp-Client
+ex.Login = ftp-Client
+ex.Quit = ftp-Client
+ex.Close = ftp-Client
+ex.Ok = ftp-Client
+ex.LastReply = ftp-Client
+ex.LastCode = ftp-Client
+ex.Command = ftp-Client
+ex.Noop = ftp-Client
+ex.System = ftp-Client
+ex.Features = ftp-Client
+ex.Binary = ftp-Client
+ex.Ascii = ftp-Client
+ex.Pwd = ftp-Client
+ex.Cwd = ftp-Client
+ex.CdUp = ftp-Client
+ex.Mkdir = ftp-Client
+ex.Rmdir = ftp-Client
+ex.MkdirAll = ftp-Client
+ex.ListRaw = ftp-Client
+ex.NameList = ftp-Client
+ex.Size = ftp-Client
+ex.ModTime = ftp-Client
+ex.IsDir = ftp-Client
+ex.IsLink = ftp-Client
+ex.Exists = ftp-Client
+ex.Read = ftp-Client
+ex.Write = ftp-Client
+ex.Append = ftp-Client
+ex.Download = ftp-Client
+ex.Upload = ftp-Client
+ex.Delete = ftp-Client
+ex.Rename = ftp-Client
+ex.Move = ftp-Client
+ex.RemoveAll = ftp-Client
+ex.DownloadDir = ftp-Client
+ex.UploadDir = ftp-Client

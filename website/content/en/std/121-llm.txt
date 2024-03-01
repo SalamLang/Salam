@@ -1,0 +1,211 @@
+pkg.en = llm
+pkg.name = llm
+pkg.group = Machine learning
+pkg.summary = Running Llama and Qwen language models from a GGUF file.
+pkg.title = The llm package in Salam | Running a language model
+pkg.description = The llm package in Salam: loading GGUF models such as Llama and Qwen, BPE and SentencePiece tokenizers, the key value cache, sampling with temperature and top-p, and generating text, with examples.
+pkg.import = llm
+pkg.intro <<
+<p>This package runs large language models of the Llama family on the processor, in pure Salam with no outside library. Download a model in <a href="/std/gguf/">GGUF</a> form, read it with <code>LoadGgufModel</code> and make text with <code>Generate</code>, or drive the loop yourself with <code>Forward</code> and a <code>Sampler</code> (temperature, top-k, top-p and a repetition penalty).</p>
+<p>It is meant for small models running inside your own program: classifying or rewriting short texts offline, a local assistant in a tool, or learning how a transformer works step by step. For large models or high speed, call a server such as llama.cpp or an API over <a href="/std/net/http/#guide-raw">net/http</a> instead.</p>
+<h3>What runs, and what it costs</h3>
+<ul>
+<li>The layer layout is Llama's: RMSNorm, rotary positions, grouped-query attention and a SwiGLU feed forward block, with the optional attention biases that Qwen2 uses. Qwen2.5 Instruct is tested; Llama and Mistral use the same layout. Architectures with other layouts, such as Phi, fail to load or produce nonsense.</li>
+<li>The file limits of <a href="/std/gguf/">gguf</a> apply: under 2 GB, and only <code>F32</code>, <code>F16</code>, <code>Q8_0</code>, <code>Q4_0</code> and <code>Q4_1</code> weights, not the K-quants.</li>
+<li>Every weight is expanded to <code>f32</code> when the model loads, so Qwen2.5 0.5B, a 0.7 GB file, needs about 3 GB of memory. The key/value cache is sized for <code>cfg.ctx</code>, which starts as the model's full context (32768 for Qwen); lower it before <code>NewKVCache</code> to save memory.</li>
+<li><code>encode</code> does not recognise special tokens such as <code>&lt;|im_start|&gt;</code> in text: it splits them into ordinary pieces, which the model does not understand. Look their ids up in <code>tok.index</code> and insert them yourself, as the chat example does.</li>
+</ul>
+<p>The tokenizer, sampling and generation also work on a small random model built with <code>RandomModel</code>, which is how the reference example at the bottom of this page runs without a download.</p>
+<h2 id="guide-chat">A chat answer, streamed</h2>
+<p>Instruction tuned models expect the conversation in the exact format they were trained on. Qwen uses <code>&lt;|im_start|&gt;</code> and <code>&lt;|im_end|&gt;</code> around each turn, and the prompt ends by opening the assistant's turn so the model writes the reply. The format of any model is in its GGUF file under <code>tokenizer.chat_template</code>; see <a href="/std/gguf/"><code>gguf</code></a> for reading it. Those markers are single special tokens, so <code>add_turn</code> pushes their ids from <code>tok.index</code> and only encodes the text between them.</p>
+<p>Instead of <code>Generate</code>, which returns the whole text at the end, this program runs the loop itself so every token is printed as soon as it is chosen. The first <code>Forward</code> call reads the whole prompt; after that each call feeds only the newest token, because the <code>KVCache</code> remembers everything before it. The loop stops at the end of turn token, after 80 tokens, or when the context is full. <code>cfg.ctx</code> is lowered to 4096 first, which keeps the cache at about 100 MB instead of 800.</p>
+<pre class="code" dir="ltr"><code>mkdir -p models
+curl -L -o models/qwen2.5-0.5b-instruct-q8_0.gguf \
+  https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q8_0.gguf
+salam run llm-guide-chat.salam</code></pre>
+{{example.llm-guide-chat}}
+<pre class="code" dir="ltr"><code>The sky appears blue because of the scattering of sunlight by tiny water droplets in the atmosphere, which causes them to bounce off each other and scatter into our eyes.
+tokens in prompt: 30 answer: 33</code></pre>
+<p>A half billion weight model writes fluent sentences but gets facts wrong, as here: the real cause is scattering by air molecules, not water droplets. Use such a model for form, not for knowledge. Build with <code>salam build --release</code> for real use: the model runs on the processor, and a release build drops the bounds checks from the inner loops. Even so, expect a few seconds per token on an ordinary machine.</p>
+
+<h2 id="guide-tokens">How text becomes tokens</h2>
+<p>A model never sees letters, only token ids. A BPE tokenizer starts from single characters and applies its list of merges in order, so frequent pieces such as <code>lower</code> become one token while rare words fall apart into many. Byte level BPE, the kind GPT 2, Llama 3 and Qwen use, writes a space as <code>&#288;</code>, so the space before a word is part of a token. This tokenizer is built by hand with five merges to make the steps visible.</p>
+{{example.llm-guide-tokens}}
+<p><code>tower</code> is not merged into <code>ow</code> pieces because the merges only know <code>lo</code> and <code>low</code>. Counting tokens this way is also how you check that a prompt fits in the model's context before sending it.</p>
+
+<h2 id="guide-sampling">Temperature and top-k</h2>
+<p>The model gives a score, a logit, for every token in the vocabulary, and the sampler turns the scores into a choice. <code>Greedy</code> always takes the highest. A <code>Sampler</code> draws at random in proportion to the probabilities: a temperature below one sharpens them toward the favourite, above one flattens them, and <code>top_k</code> drops all but the best <code>k</code> before drawing. The program draws 1000 times from four fixed scores with each setting and counts how often each token wins.</p>
+{{example.llm-guide-sampling}}
+<p>The seed passed to <code>NewSampler</code> makes the draws repeatable, which is why this output never changes. For factual answers use a low temperature; for varied writing, around 0.7 to 1.0 with <code>top_p</code> 0.9. <code>repeat_penalty</code> above 1 lowers the scores of recently used tokens and stops small models from looping.</p>
+>>
+
+doc.Config = The architecture configuration of a model, of the Llama kind.
+doc.Config.vocab = The vocabulary size.
+doc.Config.dim = The embedding size.
+doc.Config.layers = The number of layers.
+doc.Config.heads = The number of attention heads.
+doc.Config.kv_heads = The number of key and value heads; fewer than heads means grouped attention.
+doc.Config.ff = The size of the feed forward layer.
+doc.Config.ctx = The greatest text length.
+doc.Config.eps = The small number for normalisation.
+doc.Config.rope_theta = The base of the rotary embedding.
+doc.Config.rope_kind = The kind of rotary embedding, one of the <code>ROPE_</code> constants.
+doc.Config.head_dim = The size of each attention head.
+doc.ROPE_NORMAL = The Llama rotary embedding.
+doc.ROPE_NEOX = The GPT-NeoX rotary embedding, for Qwen and the like.
+doc.Layer = The weights of one transformer layer.
+doc.Layer.attn_norm = The normalisation before the attention.
+doc.Layer.wq = The query weight.
+doc.Layer.wk = The key weight.
+doc.Layer.wv = The value weight.
+doc.Layer.wo = The attention output weight.
+doc.Layer.bq = The query bias; empty for models without one. Qwen2 models have it.
+doc.Layer.bk = The key bias; empty when the model has none.
+doc.Layer.bv = The value bias; empty when the model has none.
+doc.Layer.ffn_norm = The normalisation before the feed forward layer.
+doc.Layer.w_gate = The SwiGLU gate weight.
+doc.Layer.w_up = The up weight.
+doc.Layer.w_down = The down weight.
+doc.Layer.free = Frees the weights.
+doc.Model = A language model.
+doc.Model.cfg = The configuration.
+doc.Model.tok_embed = The token embedding table.
+doc.Model.layers = The layers.
+doc.Model.out_norm = The final normalisation.
+doc.Model.out_head = The output weight back to the vocabulary.
+doc.Model.ok = It was built or loaded correctly.
+doc.Model.free = Frees the model.
+doc.KVCache = The key value cache: it keeps the keys and values of the earlier tokens so each new token is worked out only once.
+doc.KVCache.k = The keys, one set per layer.
+doc.KVCache.v = The values.
+doc.KVCache.len = The number of tokens processed.
+doc.KVCache.ctx = The capacity.
+doc.KVCache.reset = Empties it for a fresh text.
+doc.KVCache.free = Frees it.
+doc.NewKVCache = A cache for a configuration.
+doc.RandomModel = A model with random weights; for testing without a download.
+doc.TOK_SPM = The SentencePiece tokenizer, as Llama 2 uses.
+doc.TOK_BPE = The byte level BPE tokenizer, as GPT-2, Llama 3 and Qwen use.
+doc.Tokenizer = The tokenizer: it turns text into indices and back.
+doc.Tokenizer.kind = The kind.
+doc.Tokenizer.tokens = The text of the tokens.
+doc.Tokenizer.scores = The scores, for SentencePiece.
+doc.Tokenizer.index = The index of each token.
+doc.Tokenizer.merges = The ranks of the BPE merges.
+doc.Tokenizer.merge_keys = The merge keys.
+doc.Tokenizer.bos = The index of the beginning token; -1 means there is none.
+doc.Tokenizer.eos = The index of the end token.
+doc.Tokenizer.unk = The index of the unknown token.
+doc.Tokenizer.add_bos = Add the beginning token when encoding.
+doc.Tokenizer.byte_ids = The token index of each byte.
+doc.Tokenizer.b2u = The byte to character map of byte level BPE.
+doc.Tokenizer.add_token = Adds a token and returns its index.
+doc.Tokenizer.add_merge = A BPE merge rule, in rank order.
+doc.Tokenizer.finish = Call it once the tokens are added, to ready the tables.
+doc.Tokenizer.size = The number of tokens.
+doc.Tokenizer.token_text = The text of one token.
+doc.Tokenizer.encode = Text into indices.
+doc.Tokenizer.decode = Indices into text.
+doc.Tokenizer.free = Frees it.
+doc.NewTokenizer = An empty tokenizer of one kind.
+doc.Forward = Passes the tokens through the model and returns the logits of each position; the cache is updated.
+doc.LogitsRow = The logits of one position.
+doc.Sampler = The sampler: it picks the next token from the logits.
+doc.Sampler.temperature = The temperature; lower means a more certain answer.
+doc.Sampler.top_k = Out of the k likeliest tokens only; zero means no limit.
+doc.Sampler.top_p = Out of the tokens whose probabilities add up to p only.
+doc.Sampler.repeat_penalty = The penalty for repeating a recent token.
+doc.Sampler.rng = The random generator.
+doc.Sampler.sample = Picks the next token, with the recent tokens taken into account.
+doc.NewSampler = A sampler from a seed.
+doc.Greedy = The likeliest token.
+doc.GenerateIds = Generates up to n new tokens after the starting indices; it stops at the end token.
+doc.Generate = Carries on from the starting text and returns the new text.
+doc.ConfigFromGguf = The configuration from GGUF metadata.
+doc.ModelFromGguf = Loads the weights from a GGUF file.
+doc.TokenizerFromGguf = Builds the tokenizer from the vocabulary in the file.
+doc.LoadGgufModel = Loads the model and the tokenizer from a <code>.gguf</code> file.
+
+ex.Config = llm-Generate
+ex.Config.layers = llm-Generate
+ex.Config.ctx = llm-Generate
+ex.Config.head_dim = llm-Generate
+ex.ROPE_NORMAL = llm-Generate
+ex.ROPE_NEOX = llm-Generate
+ex.Layer = llm-Generate
+ex.Layer.attn_norm = llm-Generate
+ex.Layer.wq = llm-Generate
+ex.Layer.wk = llm-Generate
+ex.Layer.wv = llm-Generate
+ex.Layer.wo = llm-Generate
+ex.Layer.ffn_norm = llm-Generate
+ex.Layer.w_gate = llm-Generate
+ex.Layer.w_up = llm-Generate
+ex.Layer.w_down = llm-Generate
+ex.Layer.free = llm-Generate
+ex.Model = llm-Generate
+ex.Model.tok_embed = llm-Generate
+ex.Model.layers = llm-Generate
+ex.Model.out_norm = llm-Generate
+ex.Model.out_head = llm-Generate
+ex.Model.ok = llm-Generate
+ex.Model.free = llm-Generate
+ex.KVCache = llm-Generate
+ex.KVCache.len = llm-Generate
+ex.KVCache.ctx = llm-Generate
+ex.KVCache.reset = llm-Generate
+ex.KVCache.free = llm-Generate
+ex.NewKVCache = llm-Generate
+ex.RandomModel = llm-Generate
+ex.TOK_SPM = llm-Generate
+ex.TOK_BPE = llm-Generate
+ex.Tokenizer = llm-Generate
+ex.Tokenizer.kind = llm-Generate
+ex.Tokenizer.tokens = llm-Generate
+ex.Tokenizer.scores = llm-Generate
+ex.Tokenizer.index = llm-Generate
+ex.Tokenizer.merges = llm-Generate
+ex.Tokenizer.merge_keys = llm-Generate
+ex.Tokenizer.add_bos = llm-Generate
+ex.Tokenizer.byte_ids = llm-Generate
+ex.Tokenizer.b2u = llm-Generate
+ex.Tokenizer.add_token = llm-Generate
+ex.Tokenizer.add_merge = llm-Generate
+ex.Tokenizer.finish = llm-Generate
+ex.Tokenizer.size = llm-Generate
+ex.Tokenizer.token_text = llm-Generate
+ex.Tokenizer.encode = llm-Generate
+ex.Tokenizer.decode = llm-Generate
+ex.Tokenizer.free = llm-Generate
+ex.NewTokenizer = llm-Generate
+ex.Forward = llm-Generate
+ex.LogitsRow = llm-Generate
+ex.Sampler = llm-Generate
+ex.Sampler.temperature = llm-Generate
+ex.Sampler.top_k = llm-Generate
+ex.Sampler.top_p = llm-Generate
+ex.Sampler.repeat_penalty = llm-Generate
+ex.Sampler.rng = llm-Generate
+ex.Sampler.sample = llm-Generate
+ex.NewSampler = llm-Generate
+ex.Greedy = llm-Generate
+ex.GenerateIds = llm-Generate
+ex.Generate = llm-Generate
+ex.Config.vocab = llm-Load
+ex.Config.dim = llm-Load
+ex.Config.heads = llm-Load
+ex.Config.kv_heads = llm-Load
+ex.Config.ff = llm-Load
+ex.Config.eps = llm-Load
+ex.Config.rope_theta = llm-Load
+ex.Config.rope_kind = llm-Load
+ex.Model.cfg = llm-Load
+ex.KVCache.k = llm-Load
+ex.KVCache.v = llm-Load
+ex.Tokenizer.bos = llm-Load
+ex.Tokenizer.eos = llm-Load
+ex.Tokenizer.unk = llm-Load
+ex.ConfigFromGguf = llm-Load
+ex.ModelFromGguf = llm-Load
+ex.TokenizerFromGguf = llm-Load
+ex.LoadGgufModel = llm-Load

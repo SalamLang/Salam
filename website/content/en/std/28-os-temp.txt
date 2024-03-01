@@ -1,0 +1,43 @@
+pkg.en = os/temp
+pkg.name = os/temp
+pkg.group = System and tools
+pkg.summary = Making a temporary file or directory under a unique name.
+pkg.title = The os/temp package in Salam | Temporary files and directories
+pkg.description = The os/temp package in Salam: making a temporary file or directory under a unique name and removing it again, with an example.
+pkg.import = os.temp
+pkg.intro <<
+<p>For data that is only needed while the program runs, make a temporary file or directory: an unpacked archive, a file being built before it is published, the output of a tool. <code>File</code> and <code>Directory</code> create an empty one in the system temporary folder under a random name (<code>salam-</code> and 16 hex digits from <a href="/std/crypto/">crypto</a>), so several copies of the program running at once do not collide, and return its path. Removing it is up to you: nothing is cleaned up when the program exits.</p>
+<p>Read and write the files with <a href="/std/fs/file/">fs.file</a>, and build paths inside a temporary directory with <a href="/std/fs/path/">fs.path</a>. For replacing a real file safely, <code>fs.file.AtomicWrite</code> is often the better tool.</p>
+<p>What people get wrong:</p>
+<ul>
+<li>Not checking <code>Directory</code>. It returns empty text when it fails, and a later <code>path.Join("", name)</code> then writes into the current folder.</li>
+<li>Trusting <code>File</code> blindly. It always returns a path, even when the file could not be created, and it creates the file first and narrows its permissions right after, so for a moment it has the default permissions. For secrets, make a <code>Directory</code> (only you can enter it) and create the files inside it.</li>
+<li>Moving a finished file out with a rename. The temporary folder is often on another disk, where a rename fails; copy it instead.</li>
+</ul>
+<h2 id="guide-scratch">A scratch directory for one job</h2>
+<p>The usual pattern is three lines: make a directory with <code>Directory</code>, put <code>defer temp.RemoveDir(work)</code> right under it, and build every path inside it with <a href="/std/fs/path/">path.Join</a>. The deferred call runs on every way out of the function, an early <code>ret</code> included, so the directory is gone however the job ends. <code>Directory</code> returns an empty string when it cannot make the directory, so check for that before you use it.</p>
+{{example.os-temp-scratch}}
+
+<h2 id="guide-staging">Build a file in steps, then publish it</h2>
+<p>When a file is written in several steps, write it to a temporary file first and copy it to its real name only when it is complete. Whoever reads <code>people.csv</code> then never sees half of it. Use <code>file.Copy</code> here, not <code>file.Move</code>: the temporary directory is often on another disk (a <code>tmpfs</code> in memory on many Linux systems), and a rename cannot cross disks.</p>
+{{example.os-temp-staging}}
+<p>When the whole content is ready in one string, <a href="/std/fs/file/">fs.file.AtomicWrite</a> is simpler: it writes the temporary copy next to the target, on the same disk, and renames it in one step.</p>
+
+<h2 id="guide-permissions">Who can read a temporary file</h2>
+<p>The system temporary directory is shared by every account on the machine. That is why <code>File</code> makes its file readable and writable by you alone (<code>600</code>) and <code>Directory</code> makes its directory open to you alone (<code>700</code>). A token or a downloaded document you put there stays out of reach of other users. Leave it like that, and widen the permissions with <a href="/std/fs/">fs.Chmod</a> only when another account really has to read the file.</p>
+{{example.os-temp-permissions}}
+
+<h2 id="guide-errors">Errors, and where the files go</h2>
+<p><code>Remove</code> and <code>RemoveDir</code> return <code>0</code> on success and <code>-1</code> on failure, and they record an <code>IOError</code> in <a href="/std/os/error/">os.error</a>. The usual failure is removing the same file twice. <code>RemoveDir</code> on a directory that is already gone counts as success.</p>
+{{example.os-temp-errors}}
+<p>The files go into the directory that <a href="/std/os/">os.TempDir</a> names: the <code>TEMP</code>, <code>TMP</code> or <code>TMPDIR</code> environment variable, checked in that order, and <code>/tmp</code> when none is set. Nothing removes them when the program exits, and a program that crashes leaves them behind, so a long running service should give each job its own directory and remove it when the job is done. The names are random (<code>salam-</code> and hex digits), so never compare them or show them in output that someone reads later.</p>
+>>
+
+doc.File = Makes an empty file named <code>salam-</code> plus 16 random hex digits and <code>.tmp</code> in the system temporary directory, sets its permissions to <code>600</code> and returns its path. It returns the path even when creation failed.
+doc.Directory = Makes an empty directory under a unique name with permissions <code>700</code> and returns its path, or empty text (with an <code>os.error</code> record) when it cannot.
+doc.Remove = Removes a temporary file; 0 on success, -1 with an <code>os.error</code> record on failure.
+doc.RemoveDir = Removes a temporary directory with everything in it, using <code>os.RemoveAll</code>; 0 on success or when it is already gone, -1 on failure. Like <code>os.RemoveAll</code>, it follows symbolic links to folders.
+
+ex.Directory = os-temp-File
+ex.Remove = os-temp-File
+ex.RemoveDir = os-temp-File

@@ -1,0 +1,224 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+import str
+import os
+import math
+
+@en "TextStyle"
+@fa "سبک متن"
+pub struct TextStyle:
+    @en "size"
+    @fa "اندازه"
+    pub size: f64 = 16.0
+    @en "rotate"
+    @fa "چرخش"
+    pub rotate: f64 = 0.0
+    @en "skew"
+    @fa "کجی"
+    pub skew: f64 = 0.0
+    @en "tracking"
+    @fa "فاصله نویسه‌ها"
+    pub tracking: f64 = 0.0
+    @en "kern"
+    @fa "فاصله جفت‌ها"
+    pub kern: bool = true
+    @en "dir"
+    @fa "جهت"
+    pub dir: int = 0
+    @en "shape"
+    @fa "شکل‌دهی"
+    pub shape: bool = true
+end
+
+func _style_matrix(f: Font, st: TextStyle, a &: f64, b &: f64, c &: f64, d &: f64):
+    s := ScaleFactor(f, st.size)
+    co := math.Cos(st.rotate)
+    si := math.Sin(st.rotate)
+    a = s * co
+    b = 0.0 - s * si
+    c = s * (co * st.skew - si)
+    d = 0.0 - s * (si * st.skew + co)
+end
+
+func _text_to_visual(text: str, st: TextStyle, out &: Vector<int>):
+    if not st.shape:
+        _utf8_decode_all(text, out)
+        _text_drop_invisible(out)
+        ret
+    end
+    mut logical := Vector {} as Vector<int>
+    _utf8_decode_all(text, logical)
+    _shape_arabic(logical, out)
+    _bidi_visual(out, st.dir)
+    _text_drop_invisible(out)
+    logical.free()
+end
+
+func _draw_visual(img &: Image, x: f64, y: f64, cps &: Vector<int>, col: Color, f: Font, st: TextStyle, draw: bool): f64:
+    scale := ScaleFactor(f, st.size)
+    mut a := 0.0
+    mut b := 0.0
+    mut c := 0.0
+    mut d := 0.0
+    _style_matrix(f, st, a, b, c, d)
+    mut pen := x
+    mut prev := 0
+    mut i := 0
+    until i < cps.len():
+        glyph := GlyphIndex(f, cps.get(i))
+        if st.kern and prev != 0:
+            pen += (KernAdvance(f, prev, glyph) as f64) * scale
+        end
+        if draw:
+            _draw_glyph_xform(img, f, glyph, a, b, c, d, pen, y, col)
+        end
+        pen += (GlyphAdvance(f, glyph) as f64) * scale + st.tracking
+        prev = glyph
+        i += 1
+    end
+    ret pen - x
+end
+
+func _try_font_path(cur: str, candidate: str): str:
+    if str.Len(cur) > 0:
+        ret cur
+    end
+    if str.Len(candidate) > 0 and os.Exists(candidate):
+        ret candidate
+    end
+    ret cur
+end
+
+@en "DrawGlyphStyled"
+@fa "رسم نویسه با سبک"
+pub func DrawGlyphStyled(img &: Image, glyph: int, x: f64, y: f64, col: Color, f: Font, st: TextStyle):
+    mut a := 0.0
+    mut b := 0.0
+    mut c := 0.0
+    mut d := 0.0
+    _style_matrix(f, st, a, b, c, d)
+    _draw_glyph_xform(img, f, glyph, a, b, c, d, x, y, col)
+end
+
+@en "DrawCodepointStyled"
+@fa "رسم کدنقطه با سبک"
+pub func DrawCodepointStyled(img &: Image, codepoint: int, x: f64, y: f64, col: Color, f: Font, st: TextStyle): f64:
+    if not FontValid(f):
+        ret 0.0
+    end
+    glyph := GlyphIndex(f, codepoint)
+    DrawGlyphStyled(img, glyph, x, y, col, f, st)
+    ret (GlyphAdvance(f, glyph) as f64) * ScaleFactor(f, st.size) + st.tracking
+end
+
+@en "DrawTextStyled"
+@fa "نوشتن متن با سبک"
+pub func DrawTextStyled(img &: Image, x: f64, y: f64, text: str, col: Color, f: Font, st: TextStyle): f64:
+    if not FontValid(f):
+        ret 0.0
+    end
+    mut cps := Vector {} as Vector<int>
+    _text_to_visual(text, st, cps)
+    w := _draw_visual(img, x, y, cps, col, f, st, true)
+    cps.free()
+    ret w
+end
+
+@en "DrawTextTTF"
+@fa "نوشتن متن قلم"
+pub func DrawTextTTF(img &: Image, x: f64, y: f64, text: str, col: Color, f: Font, size: f64): f64:
+    ret DrawTextStyled(img, x, y, text, col, f, TextStyle { size = size })
+end
+
+@en "TextWidthStyled"
+@fa "عرض متن با سبک"
+pub func TextWidthStyled(f: Font, text: str, st: TextStyle): f64:
+    if not FontValid(f):
+        ret 0.0
+    end
+    mut cps := Vector {} as Vector<int>
+    _text_to_visual(text, st, cps)
+    mut scratch := New(0, 0)
+    w := _draw_visual(scratch, 0.0, 0.0, cps, RGB(0, 0, 0), f, st, false)
+    cps.free()
+    ret w
+end
+
+@en "TextWidthTTF"
+@fa "عرض متن قلم"
+pub func TextWidthTTF(f: Font, text: str, size: f64): f64:
+    ret TextWidthStyled(f, text, TextStyle { size = size })
+end
+
+@en "FindSystemFont"
+@fa "یافتن قلم سیستم"
+pub func FindSystemFont(): str:
+    mut p := _try_font_path("", os.Env("SALAM_FONT"))
+    p = _try_font_path(p, "C:/Windows/Fonts/arial.ttf")
+    p = _try_font_path(p, "C:/Windows/Fonts/segoeui.ttf")
+    p = _try_font_path(p, "C:/Windows/Fonts/tahoma.ttf")
+    p = _try_font_path(p, "C:/Windows/Fonts/verdana.ttf")
+    p = _try_font_path(p, "C:/Windows/Fonts/consola.ttf")
+    p = _try_font_path(p, "/System/Library/Fonts/Supplemental/Arial.ttf")
+    p = _try_font_path(p, "/System/Library/Fonts/Supplemental/Verdana.ttf")
+    p = _try_font_path(p, "/Library/Fonts/Arial.ttf")
+    p = _try_font_path(p, "/System/Library/Fonts/Helvetica.ttc")
+    p = _try_font_path(p, "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+    p = _try_font_path(p, "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf")
+    p = _try_font_path(p, "/usr/share/fonts/truetype/freefont/FreeSans.ttf")
+    p = _try_font_path(p, "/usr/share/fonts/TTF/DejaVuSans.ttf")
+    p = _try_font_path(p, "/usr/share/fonts/dejavu/DejaVuSans.ttf")
+    p = _try_font_path(p, "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf")
+    p = _try_font_path(p, "/mnt/c/Windows/Fonts/arial.ttf")
+    p = _try_font_path(p, "/mnt/c/Windows/Fonts/segoeui.ttf")
+    ret p
+end
+
+@en "FindArabicFont"
+@fa "یافتن قلم عربی"
+pub func FindArabicFont(): str:
+    mut p := _try_font_path("", os.Env("SALAM_FONT_ARABIC"))
+    p = _try_font_path(p, os.Env("SALAM_FONT"))
+    p = _try_font_path(p, "C:/Windows/Fonts/tahoma.ttf")
+    p = _try_font_path(p, "C:/Windows/Fonts/segoeui.ttf")
+    p = _try_font_path(p, "C:/Windows/Fonts/arial.ttf")
+    p = _try_font_path(p, "/System/Library/Fonts/Supplemental/Arial.ttf")
+    p = _try_font_path(p, "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+    p = _try_font_path(p, "/mnt/c/Windows/Fonts/tahoma.ttf")
+    if str.Len(p) == 0:
+        ret ""
+    end
+    mut ok := false
+    probe := LoadFont(p, ok)
+    covers := ok and GlyphIndex(probe, 0x0628) != 0 and GlyphIndex(probe, 0xFE91) != 0
+    FreeFont(probe)
+    if not covers:
+        ret ""
+    end
+    ret p
+end
+
+@en "LoadSystemFont"
+@fa "بارگذاری قلم سیستم"
+pub func LoadSystemFont(ok &: bool): Font:
+    path := FindSystemFont()
+    if str.Len(path) == 0:
+        ok = false
+        ret Font {}
+    end
+    ret LoadFont(path, ok)
+end

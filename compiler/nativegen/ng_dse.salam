@@ -1,0 +1,158 @@
+package nativegen
+
+pub struct Dse:
+    pub ra: Vector<int> = Vector {}
+    pub lo: Vector<i64> = Vector {}
+    pub hi: Vector<i64> = Vector {}
+    pub rd: Vector<int> = Vector {}
+    pub alld: bool = false
+end
+
+func dse_kill(t &: Dse, a: int):
+    mut k := t.ra.len() - 1
+    until k >= 0:
+        if t.ra[k] == a:
+            last := t.ra.len() - 1
+            t.ra[k] = t.ra[last]
+            t.lo[k] = t.lo[last]
+            t.hi[k] = t.hi[last]
+            _x := t.ra.pop()
+            _y := t.lo.pop()
+            _z := t.hi.pop()
+        end
+        k -= 1
+    end
+    if t.alld:
+        each r in t.rd:
+            if r == a:
+                ret
+            end
+        end
+        t.rd.push(a)
+    end
+end
+
+func dse_covered(t &: Dse, a: int, lo: i64, hi: i64): bool:
+    if t.alld:
+        mut read := false
+        each r in t.rd:
+            if r == a:
+                read = true
+            end
+        end
+        if not read:
+            ret true
+        end
+    end
+    mut pos := lo
+    repeat t.ra.len() + 1:
+        if pos >= hi:
+            ret true
+        end
+        mut found := false
+        repeat t.ra.len() in k:
+            if not found and t.ra[k] == a and t.lo[k] <= pos and pos < t.hi[k]:
+                pos = t.hi[k]
+                found = true
+            end
+        end
+        if not found:
+            ret false
+        end
+    end
+    ret pos >= hi
+end
+
+func dse_add(t &: Dse, a: int, lo: i64, hi: i64):
+    if t.ra.len() >= 64:
+        ret
+    end
+    t.ra.push(a)
+    t.lo.push(lo)
+    t.hi.push(hi)
+end
+
+func dse_const_root(g &: Ng, p: int, disp &: i64): int:
+    r := addr_root(g, p, disp)
+    a := local_root(g, r)
+    if a < 0 or a != r:
+        ret 0 - 1
+    end
+    ret a
+end
+
+func dse_block(g &: Ng, t &: Dse, b: int): bool:
+    t.ra.clear()
+    t.lo.clear()
+    t.hi.clear()
+    t.rd.clear()
+    lt0 := g.b_last[b]
+    t.alld = lt0 >= 0 and (g.i_op[lt0] == OP_RET or g.i_op[lt0] == OP_UNREACH)
+    mut changed := false
+    mut i := g.b_last[b]
+    until i >= 0:
+        pv := g.i_prev[i]
+        op := g.i_op[i]
+        if op == OP_STORE:
+            mut disp := 0 as i64
+            a := (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0 ? dse_const_root(g, g.i_b[i], disp) : 0 - 1
+            if a >= 0:
+                sz := tsize(g, g.v_ty[g.i_a[i]]) as i64
+                if dse_covered(t, a, disp, disp + sz):
+                    ins_unlink(g, i)
+                    changed = true
+                else:
+                    dse_add(t, a, disp, disp + sz)
+                end
+            end
+        else op == OP_LOAD:
+            la := local_root(g, g.i_a[i])
+            if la >= 0:
+                dse_kill(t, la)
+            end
+        else op == OP_CALL:
+            mut handled := false
+            if g.i_pcount[i] == 4 and g.i_a[i] >= 0 and g.v_kind[g.i_a[i]] == VK_GLB and g.v_def[g.i_a[i]] == g.sym_i_memset:
+                ps := g.i_ps[i]
+                n := g.pool[ps + 6]
+                mut md := 0 as i64
+                ma := dse_const_root(g, g.pool[ps], md)
+                if ma >= 0 and is_cint(g, n):
+                    handled = true
+                    if dse_covered(t, ma, md, md + g.v_i[n]):
+                        ins_unlink(g, i)
+                        changed = true
+                    else:
+                        dse_add(t, ma, md, md + g.v_i[n])
+                    end
+                end
+            end
+            if not handled:
+                repeat g.i_pcount[i] in q:
+                    ca := local_root(g, g.pool[g.i_ps[i] + 3 * q])
+                    if ca >= 0:
+                        dse_kill(t, ca)
+                    end
+                end
+            end
+        end
+        i = pv
+    end
+    ret changed
+end
+
+func dead_stores(g &: Ng): bool:
+    compute_escape(g)
+    mut t := Dse {}
+    mut changed := false
+    each b in g.b_rpo:
+        if dse_block(g, t, b):
+            changed = true
+        end
+    end
+    t.ra.free()
+    t.lo.free()
+    t.hi.free()
+    t.rd.free()
+    ret changed
+end

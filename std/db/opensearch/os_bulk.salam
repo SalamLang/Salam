@@ -1,0 +1,166 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package opensearch
+
+import str
+import encoding.json
+
+func _os_bulk_meta(action: str, index: str, id: str, routing: str): str:
+    mut m := Vector {} as Vector<str>
+    if index.len() > 0: m.push(_os_m("_index", json.Str(index))) end
+    if id.len() > 0: m.push(_os_m("_id", json.Str(id))) end
+    if routing.len() > 0: m.push(_os_m("routing", json.Str(routing))) end
+    ret _os_one(action, _os_obj(m))
+end
+
+func _os_bulk_add(b &: Bulk, meta: str, doc: str):
+    b.lines.push(meta)
+    if doc.len() > 0: b.lines.push(json.Minify(doc)) end
+    b.count += 1
+end
+
+func _os_bulk_item(raw: str): BulkItem:
+    keys := json.Keys(raw)
+    if keys.len() == 0: ret BulkItem {} end
+    action := keys.get(0)
+    inner := _os_jraw(raw, action)
+    status := _os_int(_os_jraw(inner, "status"))
+    mut it := BulkItem {
+        action = action, index = _os_jstr(inner, "_index"), id = _os_jstr(inner, "_id"), status = status,
+        ok = status >= 200 and status < 300, result = _os_jstr(inner, "result"), version = _os_ji64(inner, "_version", 0)
+    }
+    err := _os_jraw(inner, "error")
+    if err.len() > 0:
+        it.error_type = _os_jstr(err, "type")
+        it.error_reason = _os_jstr(err, "reason")
+        it.ok = false
+    else status == 404 and action == "delete":
+        it.ok = true
+    end
+    ret it
+end
+
+@en "NewBulk"
+@fa "دسته‌ای تازه"
+pub func NewBulk(): Bulk:
+    ret Bulk {}
+end
+
+@en "BulkIndex"
+@fa "نمایه‌سازی دسته‌ای"
+pub func BulkIndex(b &: Bulk, index: str, id: str, doc: str):
+    _os_bulk_add(b, _os_bulk_meta("index", index, id, ""), doc)
+end
+
+@en "BulkIndexRouted"
+@fa "نمایه‌سازی دسته‌ای مسیردار"
+pub func BulkIndexRouted(b &: Bulk, index: str, id: str, routing: str, doc: str):
+    _os_bulk_add(b, _os_bulk_meta("index", index, id, routing), doc)
+end
+
+@en "BulkCreate"
+@fa "ایجاد دسته‌ای"
+pub func BulkCreate(b &: Bulk, index: str, id: str, doc: str):
+    _os_bulk_add(b, _os_bulk_meta("create", index, id, ""), doc)
+end
+
+@en "BulkUpdate"
+@fa "به‌روزرسانی دسته‌ای"
+pub func BulkUpdate(b &: Bulk, index: str, id: str, partial: str):
+    _os_bulk_add(b, _os_bulk_meta("update", index, id, ""), _os_one("doc", json.Minify(partial)))
+end
+
+@en "BulkUpsert"
+@fa "به‌روزرسانی درجی دسته‌ای"
+pub func BulkUpsert(b &: Bulk, index: str, id: str, doc: str):
+    _os_bulk_add(b, _os_bulk_meta("update", index, id, ""), _os_two("doc", json.Minify(doc), "doc_as_upsert", "true"))
+end
+
+@en "BulkDelete"
+@fa "حذف دسته‌ای"
+pub func BulkDelete(b &: Bulk, index: str, id: str):
+    _os_bulk_add(b, _os_bulk_meta("delete", index, id, ""), "")
+end
+
+@en "BulkLen"
+@fa "اندازه دسته‌ای"
+pub func BulkLen(b: Bulk): int:
+    ret b.count
+end
+
+@en "BulkBody"
+@fa "بدنه دسته‌ای"
+pub func BulkBody(b: Bulk): str:
+    if b.lines.len() == 0: ret str.Clone("") end
+    ret str.Join(b.lines, "\n") + "\n"
+end
+
+@en "BulkReset"
+@fa "بازنشانی دسته‌ای"
+pub func BulkReset(b &: Bulk):
+    b.lines.free()
+    b.lines = Vector {} as Vector<str>
+    b.count = 0
+end
+
+@en "BulkFree"
+@fa "آزادسازی دسته‌ای"
+pub func BulkFree(b &: Bulk):
+    b.lines.free()
+    b.count = 0
+end
+
+@en "ParseBulk"
+@fa "تجزیه دسته‌ای"
+pub func ParseBulk(body: str): BulkResult:
+    mut out := BulkResult { ok = true, status = 200 }
+    out.took = _os_ji64(body, "took", 0)
+    out.errors = _os_jbool(body, "errors")
+    mut items := Vector {} as Vector<BulkItem>
+    each raw in _os_items(_os_jraw(body, "items")):
+        it := _os_bulk_item(raw)
+        if it.ok:
+            out.succeeded += 1
+        else:
+            out.failed += 1
+        end
+        items.push(it)
+    end
+    out.items = items
+    if out.failed > 0:
+        out.ok = false
+        out.error = str.FromInt(out.failed as i64) + " of " + str.FromInt(items.len() as i64) + " bulk actions failed"
+    end
+    ret out
+end
+
+@en "BulkSend"
+@fa "ارسال دسته‌ای"
+pub func BulkSend(c: Client, b: Bulk): BulkResult:
+    ret BulkSendWith(c, b, "")
+end
+
+@en "BulkSendWith"
+@fa "ارسال دسته‌ای با تازه‌سازی"
+pub func BulkSendWith(c: Client, b: Bulk, refresh: str): BulkResult:
+    if b.count == 0: ret BulkResult { ok = true, status = 200 } end
+    mut q := Vector {} as Vector<str>
+    _os_qadd(q, "refresh", refresh)
+    r := PerformNdjson(c, "POST", "/_bulk" + _os_qs(q), BulkBody(b))
+    if not r.ok: ret BulkResult { status = r.status, error = r.error } end
+    mut out := ParseBulk(r.body)
+    out.status = r.status
+    ret out
+end

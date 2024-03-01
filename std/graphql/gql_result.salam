@@ -1,0 +1,242 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import encoding.value
+import encoding.json
+import conv
+
+@en "ExecutionResult"
+@fa "نتیجه اجرا"
+pub struct ExecutionResult:
+    @en "data"
+    @fa "داده"
+    pub data: value.Value = value.Value {}
+    @en "hasData"
+    @fa "دارای داده"
+    pub hasData: bool = false
+    @en "errors"
+    @fa "خطاها"
+    pub errors: GqlErrorList = GqlErrorList {}
+    @en "extensions"
+    @fa "افزونه‌ها"
+    pub extensions: value.Value = value.Value {}
+    @en "hasExtensions"
+    @fa "دارای افزونه"
+    pub hasExtensions: bool = false
+end
+
+func _gql_arg_msg(name: str, detail: str): str:
+    ret "argument " + _gql_quote(name) + " is invalid: " + detail
+end
+
+func _gql_var_msg(name: str, detail: str): str:
+    ret "variable " + _gql_quote("$" + name) + " is invalid: " + detail
+end
+
+func _gql_required_arg_msg(name: str): str:
+    ret "argument " + _gql_quote(name) + " of required type was not provided"
+end
+
+func _gql_required_var_msg(name: str): str:
+    ret "variable " + _gql_quote("$" + name) + " of required type was not provided"
+end
+
+func _gql_bad_var_type_msg(name: str): str:
+    ret "variable " + _gql_quote("$" + name) + " has a type that is not defined in the schema"
+end
+
+func _gql_unknown_field_msg(fieldName: str, typeName: str): str:
+    ret "cannot query field " + _gql_quote(fieldName) + " on type " + _gql_quote(typeName)
+end
+
+func _gql_null_nonnull_msg(): str:
+    ret "cannot return null for a non-nullable field"
+end
+
+func _gql_expected_list_msg(): str:
+    ret "expected a list value for a list type"
+end
+
+func _gql_bad_typename_msg(name: str, abstractName: str): str:
+    ret "__typename " + _gql_quote(name) + " is not a possible type of " + _gql_quote(abstractName)
+end
+
+func _gql_no_typename_msg(abstractName: str): str:
+    ret "cannot determine the concrete type for abstract type " + _gql_quote(abstractName) + ": the resolved object has no __typename"
+end
+
+func _gql_depth_msg(maxDepth: int): str:
+    ret "selection set exceeded the maximum depth of " + conv.FormatInt(maxDepth as i64)
+end
+
+func _gql_no_operation_msg(name: str): str:
+    if name == "":
+        ret "the document contains more than one operation, so an operation name is required"
+    end
+    ret "no operation named " + _gql_quote(name) + " in the document"
+end
+
+func _gql_no_root_msg(opName: str): str:
+    ret "the schema does not define a root type for a " + opName + " operation"
+end
+
+func _res_request_error(message: str): ExecutionResult:
+    r := ExecutionResult {}
+    e := NewError(ERR_REQUEST, message)
+    AddError(r.errors, e)
+    ret r
+end
+
+func _res_from_ex(ex &: Ex, data: value.Value, nulled: bool): ExecutionResult:
+    mut r := ExecutionResult {}
+    r.hasData = true
+    if nulled: r.data = value.ValueNull()
+    else:
+        r.data = data
+    end
+    r.errors = ex.errors
+    ret r
+end
+
+func _res_new_ex(sch: Schema, doc: Document, ctx: value.Value): Ex:
+    mut ex := Ex {}
+    ex.sch = sch
+    ex.doc = doc
+    ex.ctx = ctx
+    ret ex
+end
+
+func _res_run(ex &: Ex, op: AstOperation, rootValue: value.Value): ExecutionResult:
+    rootType := RootTypeName(ex.sch, op.optype)
+    if rootType == "" or not HasType(ex.sch, rootType):
+        r := _res_request_error(_gql_no_root_msg(OperationTypeName(op.optype)))
+        ret r
+    end
+    mut varsOk := true
+    ex.vars = _ex_coerce_variables(ex, op, ex.vars, varsOk)
+    if not varsOk:
+        mut r := ExecutionResult {}
+        r.errors = ex.errors
+        ret r
+    end
+    mut bubble := false
+    data := _ex_selection_set(ex, rootType, op.selections, rootValue, bubble)
+    ret _res_from_ex(ex, data, bubble)
+end
+
+@en "Execute"
+@fa "اجرا"
+pub func Execute(sch: Schema, doc: Document, operationName: str, variables: value.Value, rootValue: value.Value, ctx: value.Value): ExecutionResult:
+    opIdx := FindOperation(doc, operationName)
+    if opIdx < 0: ret _res_request_error(_gql_no_operation_msg(operationName)) end
+    mut ex := _res_new_ex(sch, doc, ctx)
+    ex.vars = variables
+    op := doc.ops.get(opIdx)
+    r := _res_run(ex, op, rootValue)
+    defer ex.pathKeys.free()
+    defer ex.pathIdx.free()
+    ret r
+end
+
+@en "ExecuteSource"
+@fa "اجرای منبع"
+pub func ExecuteSource(sch: Schema, source: str, operationName: str, variables: value.Value, rootValue: value.Value, ctx: value.Value): ExecutionResult:
+    mut err := GqlError {}
+    mut doc := Parse(source, err)
+    if err.message != "":
+        FreeDocument(doc)
+        r := ExecutionResult {}
+        AddError(r.errors, err)
+        ret r
+    end
+    mut verrs := Validate(sch, doc)
+    if HasErrors(verrs):
+        FreeDocument(doc)
+        mut r := ExecutionResult {}
+        r.errors = verrs
+        ret r
+    end
+    FreeErrorList(verrs)
+    r := Execute(sch, doc, operationName, variables, rootValue, ctx)
+    FreeDocument(doc)
+    ret r
+end
+
+@en "Run"
+@fa "اجرای ساده"
+pub func Run(sch: Schema, source: str): ExecutionResult:
+    ret ExecuteSource(sch, source, "", value.NewValueObject(), value.NewValueObject(), value.NewValueObject())
+end
+
+@en "SetExtensions"
+@fa "تعیین افزونه‌ها"
+pub func SetExtensions(r &: ExecutionResult, ext: value.Value):
+    r.extensions = ext
+    r.hasExtensions = true
+end
+
+@en "ResultToValue"
+@fa "نتیجه به مقدار"
+pub func ResultToValue(r: ExecutionResult): value.Value:
+    mut o := value.NewValueObject()
+    if HasErrors(r.errors):
+        value.ObjectSet(o, "errors", ErrorsToValue(r.errors))
+    end
+    if r.hasData:
+        value.ObjectSet(o, "data", r.data)
+    end
+    if r.hasExtensions:
+        value.ObjectSet(o, "extensions", r.extensions)
+    end
+    ret o
+end
+
+@en "ResultToJSON"
+@fa "نتیجه به جیسون"
+pub func ResultToJSON(r: ExecutionResult): str:
+    ret json.EncodeDefault(ResultToValue(r))
+end
+
+@en "ResultToJSONIndent"
+@fa "نتیجه به جیسون با تورفتگی"
+pub func ResultToJSONIndent(r: ExecutionResult): str:
+    ret json.Indent(json.EncodeDefault(ResultToValue(r)))
+end
+
+@en "ResultToJSONStable"
+@fa "نتیجه به جیسون قطعی"
+pub func ResultToJSONStable(r: ExecutionResult): str:
+    mut opts := json.JSONOptions {}
+    opts.sort_keys = true
+    ret json.Encode(ResultToValue(r), opts)
+end
+
+@en "ResultOk"
+@fa "نتیجه موفق"
+pub func ResultOk(r: ExecutionResult): bool: ret not HasErrors(r.errors) end
+
+@en "ResultErrorMessage"
+@fa "پیام خطای نتیجه"
+pub func ResultErrorMessage(r: ExecutionResult): str:
+    if not HasErrors(r.errors): ret "" end
+    ret ErrorString(ErrorAt(r.errors, 0))
+end
+
+@en "FreeResult"
+@fa "آزادسازی نتیجه"
+pub func FreeResult(r &: ExecutionResult):
+    FreeErrorList(r.errors)
+end

@@ -1,0 +1,131 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.websocket
+import net.tcp
+import sync
+import str
+import mem
+import time
+
+const PORT := 19420
+mut ready := sync.NewWaitGroup()
+mut answered ping := false
+
+func frame(c: tcp.Conn, b0: int, data: void*, n: int):
+    buf := mem.Allocate((n + 2) as u64)
+    bp := buf as i8*
+    bp[0] = b0 as i8
+    bp[1] = n as i8
+    if n > 0:
+        mem.Copy(((buf as i64) + 2) as void*, data, n as u64)
+    end
+    tcp.WriteBytes(c, buf, n + 2)
+    mem.Free(buf)
+end
+
+func text frame(c: tcp.Conn, b0: int, s: str):
+    frame(c, b0, s as void*, s.len())
+end
+
+func ws server():
+    srv := tcp.Bind(PORT)
+    sync.Done(ready)
+    if not tcp.Ok(srv):
+        ret
+    end
+    c := tcp.Accept(srv)
+    tcp.SetReadDeadline(c, 3000)
+    mut req := ""
+    until not str.Contains(req, "\r\n\r\n"):
+        chunk := tcp.Read(c, 4096)
+        if chunk.len() == 0:
+            tcp.Close(c)
+            tcp.CloseServer(srv)
+            ret
+        end
+        req += chunk
+    end
+    tcp.Write(c, websocket.HandshakeResponse(req))
+
+    text frame(c, 1, "hello ")
+    text frame(c, 0, "frag")
+    text frame(c, 128, "mented")
+
+    text frame(c, 1, "slow ")
+    time.Sleep(400)
+    text frame(c, 9 + 128, "beat")
+    text frame(c, 0, "and ")
+    text frame(c, 128, "split")
+
+    raw := mem.Allocate(4 as u64)
+    bp := raw as i8*
+    bp[0] = 0 as i8
+    bp[1] = 1 as i8
+    bp[2] = 0 as i8
+    bp[3] = 255 as i8
+    frame(c, 2, raw, 4)
+    bp[0] = 7 as i8
+    bp[1] = 0 as i8
+    frame(c, 128, raw, 2)
+    mem.Free(raw)
+
+    mut waiting := 0
+    until waiting < 12 and not answered ping:
+        got := tcp.Read(c, 64)
+        if got.len() > 0:
+            answered ping = true
+        end
+        waiting += 1
+    end
+    tcp.Close(c)
+    tcp.CloseServer(srv)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(ws server)
+    sync.Wait(ready)
+
+    mut c := websocket.Dial("127.0.0.1", PORT, "/")
+    println "connected:", websocket.IsOpen(c)
+
+    m1 := websocket.Poll(c, 3000)
+    println "three frames became one message:", m1.kind == websocket.TEXT, m1.text
+
+    m2 := websocket.Poll(c, 120)
+    println "gave up mid-message:", m2.kind == websocket.TIMEOUT
+    println "and did not report half a message:", m2.text == ""
+
+    m3 := websocket.Poll(c, 3000)
+    println "resumed rather than restarted:", m3.kind == websocket.TEXT, m3.text
+
+    m4 := websocket.Poll(c, 3000)
+    println "binary in two frames:", m4.kind == websocket.BINARY, "bytes:", m4.len
+    bp := m4.data as i8*
+    mut shown := ""
+    repeat m4.len in i:
+        mut v := bp[i] as int
+        if v < 0:
+            v += 256
+        end
+        shown += "" + v + " "
+    end
+    println "  " + shown
+    println "  as text it stops at the first NUL:", m4.text.len()
+
+    websocket.Close(c)
+    join(t)
+    println "the ping was answered mid-message:", answered ping
+end

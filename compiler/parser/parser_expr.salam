@@ -1,0 +1,390 @@
+package parser
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+
+func bp_pack(l: int, r: int): int:
+    ret (l << 16) | r
+end
+
+func bp_left(w: int): int:
+    ret w >> 16
+end
+
+func bp_right(w: int): int:
+    ret w & 0xFFFF
+end
+
+func bp_of(k: int): int:
+    if k == tok.TK_ASSIGN or k == tok.TK_PLUS_EQ or k == tok.TK_MINUS_EQ or k == tok.TK_STAR_EQ or k == tok.TK_SLASH_EQ or k == tok.TK_PERCENT_EQ or k == tok.TK_POWER_EQ or k == tok.TK_AMP_EQ or k == tok.TK_PIPE_EQ or k == tok.TK_CARET_EQ or k == tok.TK_SHL_EQ or k == tok.TK_SHR_EQ:
+        ret bp_pack(10, 10)
+    end
+    if k == tok.TK_QUESTION:
+        ret bp_pack(15, 14)
+    end
+    if k == tok.TK_OR:
+        ret bp_pack(20, 21)
+    end
+    if k == tok.TK_AND:
+        ret bp_pack(30, 31)
+    end
+    if k == tok.TK_PIPE:
+        ret bp_pack(32, 33)
+    end
+    if k == tok.TK_CARET:
+        ret bp_pack(34, 35)
+    end
+    if k == tok.TK_AMP:
+        ret bp_pack(36, 37)
+    end
+    if k == tok.TK_EQ or k == tok.TK_NE:
+        ret bp_pack(40, 41)
+    end
+    if k == tok.TK_LT or k == tok.TK_GT or k == tok.TK_LE or k == tok.TK_GE:
+        ret bp_pack(50, 51)
+    end
+    if k == tok.TK_SHL or k == tok.TK_SHR:
+        ret bp_pack(56, 57)
+    end
+    if k == tok.TK_PLUS or k == tok.TK_MINUS:
+        ret bp_pack(60, 61)
+    end
+    if k == tok.TK_STAR or k == tok.TK_SLASH or k == tok.TK_PERCENT:
+        ret bp_pack(70, 71)
+    end
+    if k == tok.TK_KW_AS:
+        ret bp_pack(80, 81)
+    end
+    if k == tok.TK_POWER:
+        ret bp_pack(100, 100)
+    end
+    if k == tok.TK_PLUS_PLUS or k == tok.TK_MINUS_MINUS:
+        ret bp_pack(105, 105)
+    end
+    if k == tok.TK_LPAREN or k == tok.TK_LBRACKET or k == tok.TK_DOT:
+        ret bp_pack(110, 111)
+    end
+    ret 0
+end
+
+func make_incdec(p &: Ps, a &: at.Ast, op: int, operand: int, prefix: bool): int:
+    mut n := 0
+    if operand != 0:
+        n = mk_from_node(a, at.AST_INCDEC, operand)
+    else:
+        n = p_mk(p, a, at.AST_INCDEC)
+    end
+    mut nn := at.Get(a, n)
+    nn.op = op
+    nn.a = operand
+    nn.is_prefix = prefix
+    at.Put(a, n, nn)
+    ret n
+end
+
+func make_binary(a &: at.Ast, op: int, l: int, r: int): int:
+    n := mk_from_node(a, at.AST_BINARY, l)
+    mut nn := at.Get(a, n)
+    nn.op = op
+    nn.a = l
+    nn.b = r
+    at.Put(a, n, nn)
+    if r != 0:
+        ps_end_from_node(a, n, r)
+    end
+    ret n
+end
+
+func tk_is_sign(k: int): bool:
+    ret k == tok.TK_PLUS or k == tok.TK_MINUS or k == tok.TK_PLUS_PLUS or k == tok.TK_MINUS_MINUS
+end
+
+func p_check_sign_run(p &: Ps, unary: bool):
+    nx := p_peek(p)
+    if not tk_is_sign(nx.kind):
+        ret
+    end
+    pv := p_prev(p)
+    incdec := pv.kind == tok.TK_PLUS_PLUS or pv.kind == tok.TK_MINUS_MINUS or nx.kind == tok.TK_PLUS_PLUS or nx.kind == tok.TK_MINUS_MINUS
+    if incdec and pv.end_index == nx.begin_index:
+        p_error_verbatim(
+            p, i18.Tr("'++' and '--' add or subtract one; '+' and '-' add, subtract or negate. Separate them with parentheses."), co.Format1(i18.Tr("'%s' is not a Salam operator"), co.ArgStr(pv.lexeme + nx.lexeme))
+        )
+        ret
+    end
+    if incdec:
+        p_error_verbatim(
+            p, i18.Tr("write the increment or decrement on its own line, or wrap it in parentheses: '(n++) + 1'"), co.Format1(i18.Tr("'%s' mixes '++'/'--' with another sign"), co.ArgStr(pv.lexeme + " " + nx.lexeme))
+        )
+        ret
+    end
+    if nx.kind == tok.TK_PLUS:
+        p_error(p, "Salam has no unary '+': remove this '+'")
+        ret
+    end
+    if unary:
+        p_error(p, "'- -' negates twice, and the two signs cancel out, so they do nothing: remove both '-' signs and write just the value")
+    else pv.kind == tok.TK_MINUS:
+        p_error(p, "'- -' subtracts a negative number, which is the same as adding: write 'a + b' (or 'a - (-b)' if the sign must stay visible)")
+    else:
+        p_error(p, "'+ -' adds a negative number, which is the same as subtracting: write 'a - b' (or 'a + (-b)' if the sign must stay visible)")
+    end
+end
+
+func parse_nud(p &: Ps, a &: at.Ast): int:
+    k := p_peek(p).kind
+
+    if k == tok.TK_NOT or k == tok.TK_MINUS or k == tok.TK_TILDE:
+        n := p_mk(p, a, at.AST_UNARY)
+        at.SetOp(a, n, k)
+        p_advance(p)
+        if k == tok.TK_MINUS:
+            p_check_sign_run(p, true)
+        end
+        ps_set_a(a, n, parse_expr_bp(p, a, 90))
+        p_fin(p, a, n)
+        ret n
+    end
+    if k == tok.TK_KW_TRY:
+        n := p_mk(p, a, at.AST_TRY_PREFIX)
+        p_advance(p)
+        ps_set_a(a, n, parse_expr_bp(p, a, 11))
+        if p_match(p, tok.TK_KW_CATCH):
+            ps_set_b(a, n, parse_expr_bp(p, a, 11))
+        end
+        p_fin(p, a, n)
+        ret n
+    end
+    if k == tok.TK_PLUS_PLUS or k == tok.TK_MINUS_MINUS:
+        start := p_peek(p)
+        p_advance(p)
+        p_check_sign_run(p, true)
+        operand := parse_expr_bp(p, a, 105)
+        n := make_incdec(p, a, k, operand, true)
+        mut nn := at.Get(a, n)
+        nn.begin_line = start.begin_line
+        nn.begin_col = start.begin_col
+        nn.begin_index = start.begin_index
+        at.Put(a, n, nn)
+        ret n
+    end
+    ret parse_primary(p, a)
+end
+
+func led_call(p &: Ps, a &: at.Ast, lhs: int): int:
+    call := mk_from_node(a, at.AST_CALL, lhs)
+    ps_set_a(a, call, lhs)
+    p_advance(p)
+
+    lnode := at.Get(a, lhs)
+    if lnode.kind == at.AST_IDENTIFIER and lp.IsSizeofSpelling(lnode.name):
+        at.AddChild(a, call, parse_type(p, a))
+        p_expect(p, tok.TK_RPAREN, "')' after sizeof type")
+        p_fin(p, a, call)
+        ret call
+    end
+    if not p_at(p, tok.TK_RPAREN):
+        mut go := true
+        until go:
+            at.AddChild(a, call, parse_expr(p, a))
+            go = p_list_next(p, tok.TK_RPAREN)
+        end
+    end
+    p_expect(p, tok.TK_RPAREN, "')' after arguments")
+    p_fin(p, a, call)
+    ret call
+end
+
+func led_index(p &: Ps, a &: at.Ast, lhs: int): int:
+    p_advance(p)
+    p_skip_terminators(p)
+
+    mut lo := 0
+    if not p_at(p, tok.TK_COLON):
+        lo = parse_expr_bp(p, a, 0)
+    end
+    p_skip_terminators(p)
+
+    if p_at(p, tok.TK_COLON):
+        p_advance(p)
+        p_skip_terminators(p)
+        mut hi := 0
+        if not p_at(p, tok.TK_RBRACKET):
+            hi = parse_expr_bp(p, a, 0)
+        end
+        p_skip_terminators(p)
+        p_expect(p, tok.TK_RBRACKET, "']' to close slice range 'a[lo:hi]'")
+        sl := mk_from_node(a, at.AST_SLICE, lhs)
+        mut sn := at.Get(a, sl)
+        sn.a = lhs
+        sn.b = lo
+        sn.c = hi
+        at.Put(a, sl, sn)
+        p_fin(p, a, sl)
+        ret sl
+    end
+
+    idx := mk_from_node(a, at.AST_INDEX, lhs)
+    mut ix := at.Get(a, idx)
+    ix.a = lhs
+    ix.b = lo
+    at.Put(a, idx, ix)
+    p_expect(p, tok.TK_RBRACKET, "']' after index")
+    p_fin(p, a, idx)
+    ret idx
+end
+
+func led_member(p &: Ps, a &: at.Ast, lhs: int): int:
+    m := mk_from_node(a, at.AST_MEMBER, lhs)
+    ps_set_a(a, m, lhs)
+    p_advance(p)
+
+    at.SetName(a, m, p_munch_member_name(p, "expected member name after '.'"))
+    p_fin(p, a, m)
+    ret m
+end
+
+func led_cast(p &: Ps, a &: at.Ast, lhs: int): int:
+    p_advance(p)
+    cast := mk_from_node(a, at.AST_CAST, lhs)
+    ps_set_a(a, cast, lhs)
+    at.SetTypeNode(a, cast, parse_type(p, a))
+    p_fin(p, a, cast)
+    ret cast
+end
+
+func led_ternary(p &: Ps, a &: at.Ast, lhs: int, w: int): int:
+    p_advance(p)
+    mut n := 0
+    if lhs != 0:
+        n = mk_from_node(a, at.AST_TERNARY, lhs)
+    else:
+        n = p_mk(p, a, at.AST_TERNARY)
+    end
+    ps_set_a(a, n, lhs)
+    ps_set_b(a, n, parse_expr_bp(p, a, 0))
+    p_expect(p, tok.TK_COLON, "':' in conditional expression 'cond ? a : b'")
+    ps_set_c(a, n, parse_expr_bp(p, a, bp_right(w)))
+    p_fin(p, a, n)
+    ret n
+end
+
+func led_assign(p &: Ps, a &: at.Ast, lhs: int, op: int, w: int): int:
+    p_advance(p)
+    mut n := 0
+    if lhs != 0:
+        n = mk_from_node(a, at.AST_ASSIGN, lhs)
+    else:
+        n = p_mk(p, a, at.AST_ASSIGN)
+    end
+    at.SetOp(a, n, op)
+    ps_set_a(a, n, lhs)
+    ps_set_b(a, n, parse_expr_bp(p, a, bp_right(w)))
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_led(p &: Ps, a &: at.Ast, lhs: int, op: int, w: int): int:
+    if op == tok.TK_LPAREN:
+        ret led_call(p, a, lhs)
+    end
+    if op == tok.TK_LBRACKET:
+        ret led_index(p, a, lhs)
+    end
+    if op == tok.TK_DOT:
+        ret led_member(p, a, lhs)
+    end
+    if op == tok.TK_KW_AS:
+        ret led_cast(p, a, lhs)
+    end
+    if op == tok.TK_QUESTION:
+        ret led_ternary(p, a, lhs, w)
+    end
+    if op == tok.TK_ASSIGN or op == tok.TK_PLUS_EQ or op == tok.TK_MINUS_EQ or op == tok.TK_STAR_EQ or op == tok.TK_SLASH_EQ or op == tok.TK_PERCENT_EQ or op == tok.TK_POWER_EQ or op == tok.TK_AMP_EQ or op == tok.TK_PIPE_EQ or op == tok.TK_CARET_EQ or op == tok.TK_SHL_EQ or op == tok.TK_SHR_EQ:
+        ret led_assign(p, a, lhs, op, w)
+    end
+    if op == tok.TK_PLUS_PLUS or op == tok.TK_MINUS_MINUS:
+        n := make_incdec(p, a, op, lhs, false)
+        t := p_peek(p)
+        mut nn := at.Get(a, n)
+        nn.end_line = t.end_line
+        nn.end_col = t.end_col
+        nn.end_index = t.end_index
+        at.Put(a, n, nn)
+        p_advance(p)
+        p_check_sign_run(p, false)
+        ret n
+    end
+    p_advance(p)
+    if op == tok.TK_PLUS or op == tok.TK_MINUS:
+        p_check_sign_run(p, false)
+    end
+    rhs := parse_expr_bp(p, a, bp_right(w))
+    ret make_binary(a, op, lhs, rhs)
+end
+
+func p_question_is_postfix(p &: Ps): bool:
+    k := p_peek2(p).kind
+    if k == tok.TK_STMT_END or k == tok.TK_EOF or k == tok.TK_RPAREN or k == tok.TK_COMMA or k == tok.TK_RBRACKET or k == tok.TK_RBRACE or k == tok.TK_DOT or k == tok.TK_KW_END or k == tok.TK_FAT_ARROW or k == tok.TK_QUESTION:
+        ret true
+    end
+    mut depth := 0
+    mut i := 1
+    until true:
+        t := p_peekn(p, i).kind
+        if t == tok.TK_STMT_END or t == tok.TK_EOF:
+            ret true
+        end
+        if t == tok.TK_LPAREN or t == tok.TK_LBRACKET or t == tok.TK_LBRACE:
+            depth += 1
+        else t == tok.TK_RPAREN or t == tok.TK_RBRACKET or t == tok.TK_RBRACE:
+            if depth == 0:
+                ret true
+            end
+            depth -= 1
+        else t == tok.TK_COLON and depth == 0:
+            ret false
+        end
+        i += 1
+    end
+end
+
+func parse_expr_bp(p &: Ps, a &: at.Ast, min_bp: int): int:
+    if not p_recurse_enter(p, "expression nested too deeply"):
+        ret p_error_node(p, a)
+    end
+    mut lhs := parse_nud(p, a)
+    until true:
+        if p.panic:
+            break
+        end
+        op := p_star_pair_kind(p)
+        if op == tok.TK_QUESTION and p_question_is_postfix(p):
+            t := mk_from_node(a, at.AST_TRY, lhs)
+            ps_set_a(a, t, lhs)
+            p_advance(p)
+            p_fin(p, a, t)
+            lhs = t
+            continue
+        end
+        w := bp_of(op)
+        if bp_left(w) == 0 or bp_left(w) < min_bp:
+            break
+        end
+        if op != p_peek(p).kind:
+            p_advance(p)
+        end
+        lhs = parse_led(p, a, lhs, op, w)
+    end
+    p_recurse_leave(p)
+    ret lhs
+end
+
+func parse_expr(p &: Ps, a &: at.Ast): int:
+    ret parse_expr_bp(p, a, 0)
+end

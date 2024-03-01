@@ -1,0 +1,58 @@
+lesson.part = Larger programs
+lesson.title = Values, references and memory
+lesson.summary = Copies and sharing, copy and deep_copy, freeing memory, who frees a string, pointers and memcheck
+lesson.seo_title = Values, references and memory management in Salam | Lesson 20
+lesson.description = How memory works in Salam: structs and arrays are copied, a Vector or HashMap shares its storage, copy() and deep_copy(), reference parameters with &:, freeing with free and defer, who frees a returned string, pointers with mem.Allocate, and finding leaks with salam memcheck.
+lesson.lead = Salam runs without a garbage collector. Nothing is freed behind your back, and nothing is shared unless you can see why. This lesson shows when a value is copied, when it is shared, and who is responsible for giving memory back.
+lesson.body <<
+<h2 id="copy">Structs are copied</h2>
+<p>When you put a struct into another variable, or pass it to a function, a copy is made, and changing the copy leaves the original alone. If a function has to change the caller's value, declare the parameter as a reference with <code>&amp;:</code>. A reference also saves copying a large struct; the <a href="/learn/functions/">functions lesson</a> has more on it.</p>
+{{example.mem-copy}}
+
+<h2 id="arrays">Arrays are copied, slices are views</h2>
+<p>A fixed array such as <code>int[3]</code> is a value too: assigning it or passing it as <code>int[3]</code> copies every element. A slice parameter, <code>int[]</code>, is a view of the caller's array, so writing through it changes the original. Choose the parameter type by what the function is allowed to do.</p>
+{{example.mem-array}}
+
+<h2 id="share">A Vector shares its storage</h2>
+<p>A Vector or a HashMap is a small header (where the items are, how many there are, how much room is left) that points at storage on the heap. Assigning one copies only the header. Both names then see the same items, so <code>cart.set(0, "rice")</code> shows through <code>view</code>, but each name keeps its own length, so the <code>"tea"</code> pushed through <code>cart</code> is not counted by <code>view</code>. Do not rely on that half-shared state. When you need an independent value, ask for one with <code>copy()</code>, and free it like any other Vector.</p>
+{{example.mem-share}}
+<p>A HashMap behaves the same way, and so does a Vector inside a struct: copying the struct copies the header of its Vector, not the items.</p>
+
+<h2 id="deep">copy and deep_copy</h2>
+<p><code>copy()</code> gives new storage only for the outer container. When the items are containers themselves, as in a Vector of rows, the copy still shares every row. <code>deep_copy()</code> goes all the way down and copies the rows too. Change one seat in the original below: the shallow copy sees it, the deep copy does not.</p>
+{{example.mem-deep}}
+<p>Each copy has to be freed, and so does every container a deep copy made: that is why <code>free_grid</code> frees each row before the outer Vector, while the shallow copy, whose rows belong to the original, only frees its own storage. A struct gets <code>copy()</code> and <code>deep_copy()</code> too, built by the compiler from its fields.</p>
+
+<h2 id="free">Freeing: free and defer</h2>
+<p>Numbers, booleans, plain structs and fixed arrays need no freeing. Anything that holds heap storage does: a Vector, a HashMap, a <code>dyn</code> box, and the strings described in the next section. The habit worth forming is to write <code>defer x.free()</code> on the line right after <code>x</code> is created, so it is freed when the function ends, whatever path it takes.</p>
+<p>A function that builds and returns a container hands it over: from then on the caller owns it and frees it. Freeing a container frees its own storage, not what the items own, so a map of Vectors frees each Vector first.</p>
+{{example.mem-free}}
+<p>Look at how <code>by_class</code> adds a name. <code>groups.get(c)</code> returns a copy of the Vector's header, so pushing onto it and doing nothing else could leave the map holding the old length. Taking the Vector out, pushing, and putting it back with <code>put</code> keeps the map up to date.</p>
+
+<h2 id="strings">Who frees a string</h2>
+<p>A string literal such as <code>"hello"</code> is part of the program and is never freed. A string that is built while the program runs lives on the heap. The rule in the standard library is simple: a function that returns a <code>str</code> returns a new string that the caller owns, on every path, so you free it with <code>mem.Free(s as void*)</code> when you are done. Follow the same rule in your own functions.</p>
+{{example.mem-str}}
+<ul>
+<li><code>tag</code> frees the result of <code>slug</code> after using it. Writing <code>ret "#" + slug(title)</code> instead would leave that string with no owner, and it would never be freed.</li>
+<li>Every <code>+</code> on strings makes a new heap string, so a chain like <code>a + b + c</code> leaves the middle result behind. Short-lived programs do not mind; a loop or a server that runs for days does. For text built in pieces, use a <code>str.NewBuilder()</code>, take the result with <code>BufStr</code> and release the builder with <code>BufFree</code>.</li>
+</ul>
+
+<h2 id="pointers">Pointers and mem</h2>
+<p>For raw memory and for C libraries, Salam has pointers: <code>i64*</code> points at an <code>i64</code>, <code>void*</code> is an untyped pointer and <code>null</code> is the empty one. <code>mem.Allocate(bytes)</code> returns a block of memory, <code>p[i]</code> reads and writes the i-th element, and <code>mem.Free</code> gives the block back. <code>sizeof(T)</code> tells you how many bytes one element takes.</p>
+{{example.mem-pointer}}
+<p>Nothing checks a pointer for you: reading past the end of the block, or using it after <code>mem.Free</code>, is a bug that may not show up right away. Ordinary Salam code rarely needs pointers; reach for a Vector first. The <a href="/learn/c-interop/">C interop lesson</a> shows where pointers are needed.</p>
+
+<h2 id="memcheck">Finding leaks with memcheck</h2>
+<p><code>salam memcheck app.salam</code> builds the program with debug information and runs it under a memory checker: Valgrind when it is installed, AddressSanitizer otherwise. When the program ends it reports memory that was never freed and any read or write outside a block, each with the line of Salam code that allocated it. <code>salam build app.salam --asan</code> builds the same AddressSanitizer check into an ordinary executable.</p>
+<p>The string and pointer examples above run under <code>salam memcheck</code> with no errors. Run it now and then on your own programs, and always on anything meant to run for a long time.</p>
+
+<h2 id="rules">Rules of thumb</h2>
+<ul>
+<li>Structs and fixed arrays are values: assigning copies them. Use <code>&amp;:</code> when a function must change the caller's value.</li>
+<li>Assigning a Vector or a HashMap shares its items. Use <code>copy()</code> or <code>deep_copy()</code> when you need an independent value.</li>
+<li>Whoever creates heap memory frees it, or hands it to someone who will. Write <code>defer x.free()</code> right after creating <code>x</code>.</li>
+<li>A <code>str</code> returned by a function belongs to the caller; free it with <code>mem.Free</code>. Never free a literal.</li>
+<li>Free what is inside a container before the container itself.</li>
+<li>Check long-running programs with <code>salam memcheck</code>.</li>
+</ul>
+>>

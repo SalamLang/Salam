@@ -1,0 +1,118 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import audio
+import audio.codec
+import audio.dsp
+import audio.wav
+import compress
+import math
+import mem
+import filepath
+import os
+import testing
+
+func chord(rate: int, seconds: f64): audio.Clip:
+    frames := ((rate as f64) * seconds) as int
+    mut c := audio.New(rate, 2, frames)
+    mut f := 0
+    until f < frames:
+        t := (f as f64) / (rate as f64)
+        mut v := 0.3 * math.Sin(2.0 * math.PI * 220.0 * t)
+        v += 0.2 * math.Sin(2.0 * math.PI * 277.18 * t)
+        v += 0.2 * math.Sin(2.0 * math.PI * 329.63 * t)
+        audio.SetSample(c, f, 0, v)
+        audio.SetSample(c, f, 1, v * 0.8)
+        f += 1
+    end
+    ret c
+end
+
+func main:
+    println "build a three note chord"
+    mut song := chord(44100, 0.25)
+    testing.AssertEqInt(song.frames, 11025)
+    testing.AssertEqInt(song.channels, 2)
+    testing.AssertMsg(audio.Peak(song) > 0.1, "the chord should make sound")
+
+    println "shape it"
+    audio.Normalize(song, -1.0)
+    testing.AssertEqFloat(audio.Peak(song), audio.DbToGain(-1.0), 0.000001)
+    audio.FadeIn(song, 0.02)
+    audio.FadeOut(song, 0.05)
+    testing.AssertEqFloat(audio.Sample(song, 0, 0), 0.0, 0.0)
+    lp := dsp.LowPass(2000.0, 0.707, 44100)
+    dsp.BiquadProcessAll(lp, song)
+    testing.AssertFalse(audio.IsClipped(song))
+
+    println "find the lowest note in the spectrum"
+    mono := audio.ToMono(song)
+    n := 8192
+    mut re := Vector {} as Vector<f64>
+    mut im := Vector {} as Vector<f64>
+    mut i := 0
+    until i < n:
+        w := dsp.WindowValue(dsp.WindowHann, i, n, 0.0)
+        re.push(audio.Sample(mono, i + 1024, 0) * w)
+        im.push(0.0)
+        i += 1
+    end
+    testing.AssertTrue(dsp.FFTVec(re, im))
+    mags := dsp.Magnitude(re.ref(0), im.ref(0), n / 2)
+    peak := dsp.PeakBin(mags)
+    freq := dsp.BinFrequency(peak, n, 44100)
+    testing.AssertMsg(math.Abs(freq - 220.0) < 10.0, "the strongest partial should be the root")
+
+    println "write it, read it back and check it survived"
+    path := filepath.Join(os.TempDir(), "salam_audio_demo.wav")
+    defer mem.Free(path as void*)
+    testing.AssertTrue(codec.Save(song, path))
+    mut ok := false
+    mut back := codec.Open(path, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(back.frames, song.frames)
+    testing.AssertEqInt(back.bits, 16)
+    testing.AssertMsg(dsp.Correlation(song, back) > 0.9999, "the file should match what was written")
+
+    println "resample it for a smaller file"
+    small := dsp.ResampleSinc(back, 22050, 16)
+    testing.AssertEqInt(small.rate, 22050)
+    testing.AssertEqInt(small.frames, 5512)
+    quiet := wav.EncodeMuLaw(small)
+    testing.AssertEqInt(compress.BufLen(quiet), 44 + 5512 * 2)
+    full := wav.EncodeWAVBits(small, 16)
+    testing.AssertMsg((compress.BufLen(quiet) - 44) * 2 == compress.BufLen(full) - 44, "mu-law should halve the data")
+
+    println "report"
+    mut pok := false
+    info := codec.ProbeFile(path, pok)
+    testing.AssertTrue(pok)
+    testing.AssertEqStr(audio.FormatName(info.format), "wav")
+    testing.AssertEqInt(info.channels, 2)
+    testing.AssertTrue(info.lossless)
+    testing.AssertMsg(math.Abs(info.duration - 0.25) < 0.001, "a quarter of a second")
+
+    compress.BufFree(quiet)
+    compress.BufFree(full)
+    re.free()
+    im.free()
+    mags.free()
+    audio.Free(song)
+    audio.Free(mono)
+    audio.Free(back)
+    audio.Free(small)
+    ret testing.Summary()
+end

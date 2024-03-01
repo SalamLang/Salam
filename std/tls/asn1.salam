@@ -1,0 +1,252 @@
+package tls
+
+const ASN1_BOOLEAN := 0x01
+const ASN1_INTEGER := 0x02
+const ASN1_BITSTRING := 0x03
+const ASN1_OCTETSTRING := 0x04
+const ASN1_NULL := 0x05
+const ASN1_OID := 0x06
+const ASN1_UTF8STRING := 0x0C
+const ASN1_PRINTABLESTRING := 0x13
+const ASN1_T61STRING := 0x14
+const ASN1_IA5STRING := 0x16
+const ASN1_UTCTIME := 0x17
+const ASN1_GENERALIZEDTIME := 0x18
+const ASN1_SEQUENCE := 0x30
+const ASN1_SET := 0x31
+
+const ASN1_CTX0 := 0xA0
+const ASN1_CTX1 := 0xA1
+const ASN1_CTX2 := 0xA2
+const ASN1_CTX3 := 0xA3
+
+struct Tlv:
+    pub tag: int = 0
+    pub body: Reader = Reader {}
+    pub full: Reader = Reader {}
+    pub ok: bool = false
+end
+
+func _der(r &: Reader): Tlv:
+    mut t := Tlv {}
+    if r.bad:
+        ret t
+    end
+    start := r.pos
+    tag := _rd8(r)
+    if r.bad:
+        ret t
+    end
+    if (tag & 0x1F) == 0x1F:
+        r.bad = true
+        ret t
+    end
+    first := _rd8(r)
+    if r.bad:
+        ret t
+    end
+    mut length := 0
+    if first < 0x80:
+        length = first
+    else:
+        nbytes := first & 0x7F
+        if nbytes == 0:
+            r.bad = true
+            ret t
+        end
+        if nbytes > 4:
+            r.bad = true
+            ret t
+        end
+        mut v := 0
+        repeat nbytes:
+            v = (v << 8) | _rd8(r)
+        end
+        if r.bad:
+            ret t
+        end
+        if v < 0x80:
+            r.bad = true
+            ret t
+        end
+        if nbytes > 1 and v < (1 << (8 * (nbytes - 1))):
+            r.bad = true
+            ret t
+        end
+        if v < 0:
+            r.bad = true
+            ret t
+        end
+        length = v
+    end
+    body := _rdbytes(r, length)
+    if r.bad:
+        ret t
+    end
+    t.tag = tag
+    t.body = body
+    t.full = _subreader(r, start, r.pos - start)
+    t.ok = true
+    ret t
+end
+
+func _der_tag(r &: Reader, want: int): Tlv:
+    mut t := _der(r)
+    if not t.ok:
+        ret t
+    end
+    if t.tag != want:
+        r.bad = true
+        t.ok = false
+    end
+    ret t
+end
+
+func _der_peek(r: Reader): int:
+    if r.bad or r.pos >= r.len:
+        ret 0 - 1
+    end
+    ret _rdat(r, r.pos)
+end
+
+func _der_is(r: Reader, tag: int): bool:
+    ret _der_peek(r) == tag
+end
+
+func _der_seq(r &: Reader): Reader:
+    t := _der_tag(r, ASN1_SEQUENCE)
+    if not t.ok:
+        ret _newreader(null, 0)
+    end
+    ret t.body
+end
+
+func _der_int_raw(r &: Reader): Reader:
+    t := _der_tag(r, ASN1_INTEGER)
+    if not t.ok:
+        ret _newreader(null, 0)
+    end
+    b := t.body
+    if b.len == 0:
+        r.bad = true
+        ret _newreader(null, 0)
+    end
+    if b.len > 1:
+        f := _rdat(b, 0)
+        s := _rdat(b, 1)
+        if f == 0x00 and s < 0x80:
+            r.bad = true
+            ret _newreader(null, 0)
+        end
+        if f == 0xFF and s >= 0x80:
+            r.bad = true
+            ret _newreader(null, 0)
+        end
+    end
+    ret b
+end
+
+func _der_strip_sign(b: Reader): Reader:
+    if b.len > 1 and _rdat(b, 0) == 0x00:
+        ret _subreader(b, 1, b.len - 1)
+    end
+    ret b
+end
+
+func _der_int(r &: Reader): Reader:
+    b := _der_int_raw(r)
+    if r.bad:
+        ret b
+    end
+    ret _der_strip_sign(b)
+end
+
+func _der_uint(r &: Reader): Reader:
+    b := _der_int_raw(r)
+    if r.bad:
+        ret b
+    end
+    if b.len > 0 and _rdat(b, 0) >= 0x80:
+        r.bad = true
+        ret _newreader(null, 0)
+    end
+    ret _der_strip_sign(b)
+end
+
+func _der_bitstring(r &: Reader, allow_unused: bool): Reader:
+    t := _der_tag(r, ASN1_BITSTRING)
+    if not t.ok:
+        ret _newreader(null, 0)
+    end
+    b := t.body
+    if b.len < 1:
+        r.bad = true
+        ret _newreader(null, 0)
+    end
+    unused := _rdat(b, 0)
+    if unused > 7:
+        r.bad = true
+        ret _newreader(null, 0)
+    end
+    if unused != 0 and not allow_unused:
+        r.bad = true
+        ret _newreader(null, 0)
+    end
+    ret _subreader(b, 1, b.len - 1)
+end
+
+func _der_oid(r &: Reader): Reader:
+    t := _der_tag(r, ASN1_OID)
+    if not t.ok:
+        ret _newreader(null, 0)
+    end
+    ret t.body
+end
+
+func _oid_is(o: Reader, hexoid: str): bool:
+    mut want := _hexbuf(hexoid)
+    defer _buf_free(want)
+    if o.len != want.len:
+        ret false
+    end
+    repeat o.len in i:
+        if _rdat(o, i) != _bufat(want, i):
+            ret false
+        end
+    end
+    ret true
+end
+
+func _der_algid(r &: Reader, params &: Reader): Reader:
+    mut s := _der_seq(r)
+    if r.bad:
+        ret _newreader(null, 0)
+    end
+    o := _der_oid(s)
+    if s.bad:
+        r.bad = true
+        ret _newreader(null, 0)
+    end
+    params = _rdrest(s)
+    ret o
+end
+
+func _der_skip(r &: Reader):
+    t := _der(r)
+    if not t.ok:
+        r.bad = true
+    end
+end
+
+func _rd_to_str(r: Reader): str:
+    mut b := _newbuf(r.len + 1)
+    defer _buf_free(b)
+    repeat r.len in i:
+        c := _rdat(r, i)
+        if c == 0:
+            ret ""
+        end
+        _put8(b, c)
+    end
+    ret _bufstr(b)
+end

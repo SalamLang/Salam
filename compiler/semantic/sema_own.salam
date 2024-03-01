@@ -1,0 +1,2317 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include tok "../token.salam"
+include i18 "../i18n.salam"
+
+const OW_IT_STMT := 0
+const OW_IT_EXPR := 1
+const OW_IT_DEFER := 2
+const OW_IT_RET := 3
+
+const OW_TK_INIT := 0
+const OW_TK_FRESH := 1
+const OW_TK_FIELD := 2
+const OW_TK_NULL := 3
+const OW_TK_OLD := 4
+
+const OW_FREED := 1
+const OW_MOVED := 2
+const OW_MAYBE := 3
+const OW_WEAK := 4
+
+const OW_ENTRY := 0
+const OW_EXIT := 1
+const OW_SINK := 2
+
+pub struct OwSt:
+    pub live: bool = false
+    pub pk: Vector<int> = Vector {}
+    pub pt: Vector<int> = Vector {}
+    pub pf: Vector<int> = Vector {}
+    pub fr: Vector<int> = Vector {}
+    pub fm: Vector<int> = Vector {}
+    pub rt: Vector<int> = Vector {}
+    pub sl: Vector<int> = Vector {}
+    pub sn: Vector<int> = Vector {}
+    pub sq: Vector<int> = Vector {}
+end
+
+pub struct OwBlk:
+    pub items: Vector<int> = Vector {}
+    pub succ: Vector<int> = Vector {}
+end
+
+pub struct OwCfg:
+    pub blocks: Vector<OwBlk> = Vector {}
+    pub cur: int = 0
+    pub ret_to: int = 1
+    pub brk: Vector<int> = Vector {}
+    pub cont: Vector<int> = Vector {}
+    pub lmark: Vector<int> = Vector {}
+    pub defers: Vector<int> = Vector {}
+    pub hloop: Vector<int> = Vector {}
+end
+
+pub struct Ow:
+    pub kpar: Vector<int> = Vector {}
+    pub kname: Vector<str> = Vector {}
+    pub tkind: Vector<int> = Vector {}
+    pub targ: Vector<int> = Vector {}
+    pub tname: Vector<str> = Vector {}
+    pub tsite: Vector<int> = Vector {}
+    pub tsk: Vector<int> = Vector {}
+    pub tsumm: Vector<bool> = Vector {}
+    pub tstrong: Vector<bool> = Vector {}
+    pub rep: Vector<int> = Vector {}
+    pub locals: Vector<str> = Vector {}
+    pub krel: Vector<int> = Vector {}
+    pub rel: Vector<str> = Vector {}
+    pub report: bool = false
+    pub mode: int = 1
+end
+
+func ow_has(v: Vector<int>, x: int): bool:
+    repeat v.len() in i:
+        if v.get(i) == x:
+            ret true
+        end
+    end
+    ret false
+end
+
+func ow_add(v &: Vector<int>, x: int): bool:
+    if ow_has(v, x):
+        ret false
+    end
+    v.push(x)
+    ret true
+end
+
+func ow_del(v &: Vector<int>, x: int):
+    mut i := 0
+    until i < v.len():
+        if v.get(i) == x:
+            _gone := v.remove_at(i)
+        else:
+            i += 1
+        end
+    end
+end
+
+func ow_vclone(v: Vector<int>): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    repeat v.len() in i:
+        out.push(v.get(i))
+    end
+    ret out
+end
+
+func ow_st_free(st &: OwSt):
+    st.pk.free()
+    st.pt.free()
+    st.pf.free()
+    st.fr.free()
+    st.fm.free()
+    st.rt.free()
+    st.sl.free()
+    st.sn.free()
+    st.sq.free()
+    st.live = false
+end
+
+func ow_st_clone(st: OwSt): OwSt:
+    mut out := OwSt {}
+    out.live = st.live
+    out.pk = ow_vclone(st.pk)
+    out.pt = ow_vclone(st.pt)
+    out.pf = ow_vclone(st.pf)
+    out.fr = ow_vclone(st.fr)
+    out.fm = ow_vclone(st.fm)
+    out.rt = ow_vclone(st.rt)
+    out.sl = ow_vclone(st.sl)
+    out.sn = ow_vclone(st.sn)
+    out.sq = ow_vclone(st.sq)
+    ret out
+end
+
+func ow_lb(st &: OwSt, k: int): int:
+    mut lo := 0
+    mut hi := st.pk.len()
+    until lo < hi:
+        mid := (lo + hi) / 2
+        if st.pk.get(mid) < k:
+            lo = mid + 1
+        else:
+            hi = mid
+        end
+    end
+    ret lo
+end
+
+func ow_pair_has(st &: OwSt, k: int, t: int, f: int): bool:
+    mut i := ow_lb(st, k)
+    n := st.pk.len()
+    until i < n and st.pk.get(i) == k:
+        if st.pt.get(i) == t and st.pf.get(i) == f:
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func ow_pair_add(st &: OwSt, k: int, t: int, f: int): bool:
+    if ow_pair_has(st, k, t, f):
+        ret false
+    end
+    pos := ow_lb(st, k + 1)
+    if pos >= st.pk.len():
+        st.pk.push(k)
+        st.pt.push(t)
+        st.pf.push(f)
+    else:
+        st.pk.insert(pos, k)
+        st.pt.insert(pos, t)
+        st.pf.insert(pos, f)
+    end
+    ret true
+end
+
+func ow_key_explicit(st &: OwSt, k: int): bool:
+    i := ow_lb(st, k)
+    ret i < st.pk.len() and st.pk.get(i) == k
+end
+
+func ow_same(a: Vector<int>, b: Vector<int>): bool:
+    if a.len() != b.len():
+        ret false
+    end
+    repeat a.len() in i:
+        if a.get(i) != b.get(i):
+            ret false
+        end
+    end
+    ret true
+end
+
+func ow_key(o &: Ow, par: int, name: str): int:
+    repeat o.kpar.len() in i:
+        if o.kpar.get(i) == par and str.Equals(o.kname.get(i), name):
+            ret i
+        end
+    end
+    o.kpar.push(par)
+    o.kname.push(name)
+    o.krel.push(0 - 1)
+    ret o.kpar.len() - 1
+end
+
+func ow_under(o &: Ow, k: int, base: int): bool:
+    mut p := o.kpar.get(k)
+    until p >= 0:
+        if p == base:
+            ret true
+        end
+        p = o.kpar.get(p)
+    end
+    ret false
+end
+
+func ow_root_name(o &: Ow, key: int): str:
+    mut r := key
+    until o.kpar.get(r) >= 0:
+        r = o.kpar.get(r)
+    end
+    ret o.kname.get(r)
+end
+
+func ow_str_in(v: Vector<str>, x: str): bool:
+    repeat v.len() in i:
+        if str.Equals(v.get(i), x):
+            ret true
+        end
+    end
+    ret false
+end
+
+func ow_rel(o &: Ow, key: int): bool:
+    c := o.krel.get(key)
+    if c >= 0:
+        ret c == 1
+    end
+    r := ow_str_in(o.rel, ow_root_name(o, key))
+    o.krel.set(key, r ? 1 : 0)
+    ret r
+end
+
+func ow_key_local(o &: Ow, key: int): bool:
+    name := ow_root_name(o, key)
+    if str.Equals(name, "this"):
+        ret true
+    end
+    repeat o.locals.len() in i:
+        if str.Equals(o.locals.get(i), name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func ow_key_str(o &: Ow, key: int): str:
+    par := o.kpar.get(key)
+    name := o.kname.get(key)
+    if par < 0:
+        ret name
+    end
+    if str.Equals(name, "*"):
+        ret ow_key_str(o, par)
+    end
+    ret ow_key_str(o, par) + "." + name
+end
+
+func ow_rebase(o &: Ow, k: int, orig: int, dest: int): int:
+    if k == orig:
+        ret dest
+    end
+    ret ow_key(o, ow_rebase(o, o.kpar.get(k), orig, dest), o.kname.get(k))
+end
+
+func ow_tok(o &: Ow, kind: int, arg: int, name: str): int:
+    repeat o.tkind.len() in i:
+        if o.tkind.get(i) == kind and o.targ.get(i) == arg and str.Equals(o.tname.get(i), name):
+            ret i
+        end
+    end
+    o.tkind.push(kind)
+    o.targ.push(arg)
+    o.tname.push(name)
+    o.tsite.push(0)
+    o.tsk.push(0)
+    o.tsumm.push(false)
+    o.tstrong.push(false)
+    ret o.tkind.len() - 1
+end
+
+func ow_tok_under(o &: Ow, t: int, base: int): bool:
+    mut p := t
+    until o.tkind.get(p) == OW_TK_FIELD:
+        p = o.targ.get(p)
+        if p == base:
+            ret true
+        end
+    end
+    ret false
+end
+
+func ow_tok_summary(o &: Ow, t: int): bool:
+    mut p := t
+    until true:
+        if o.tsumm.get(p) or o.tkind.get(p) == OW_TK_OLD:
+            ret true
+        end
+        if o.tkind.get(p) != OW_TK_FIELD:
+            ret false
+        end
+        p = o.targ.get(p)
+    end
+end
+
+func ow_field_tok(o &: Ow, par: int, name: str): int:
+    mut depth := 0
+    mut p := par
+    until o.tkind.get(p) == OW_TK_FIELD:
+        if str.Equals(o.tname.get(p), name):
+            o.tsumm.set(p, true)
+            ret p
+        end
+        depth += 1
+        if depth >= 6:
+            o.tsumm.set(par, true)
+            ret par
+        end
+        p = o.targ.get(p)
+    end
+    ret ow_tok(o, OW_TK_FIELD, par, name)
+end
+
+func ow_rank(f: int): int:
+    if f == OW_WEAK:
+        ret 1
+    end
+    if f == OW_MOVED:
+        ret 2
+    end
+    if f == OW_MAYBE:
+        ret 3
+    end
+    if f == OW_FREED:
+        ret 4
+    end
+    ret 0
+end
+
+func ow_site_set(o &: Ow, st &: OwSt, t: int, nid: int, kind: int):
+    o.tsite.set(t, nid)
+    o.tsk.set(t, kind)
+    repeat st.sl.len() in i:
+        if st.sl.get(i) == t:
+            st.sn.set(i, nid)
+            st.sq.set(i, kind)
+            ret
+        end
+    end
+    st.sl.push(t)
+    st.sn.push(nid)
+    st.sq.push(kind)
+end
+
+func ow_site_nid(o &: Ow, st &: OwSt, t: int): int:
+    repeat st.sl.len() in i:
+        if st.sl.get(i) == t:
+            ret st.sn.get(i)
+        end
+    end
+    ret o.tsite.get(t)
+end
+
+func ow_site_kind(o &: Ow, st &: OwSt, t: int): int:
+    repeat st.sl.len() in i:
+        if st.sl.get(i) == t:
+            ret st.sq.get(i)
+        end
+    end
+    ret o.tsk.get(t)
+end
+
+func ow_tflag(o &: Ow, st &: OwSt, t: int): int:
+    if not ow_has(st.fr, t):
+        ret 0
+    end
+    if ow_site_kind(o, st, t) == OW_MOVED:
+        ret OW_MOVED
+    end
+    if ow_has(st.fm, t):
+        ret OW_FREED
+    end
+    if o.tstrong.get(t):
+        ret OW_MAYBE
+    end
+    ret OW_WEAK
+end
+
+func ow_retire(o &: Ow, st &: OwSt, t: int, old: int):
+    t_fr := ow_has(st.fr, t)
+    t_fm := ow_has(st.fm, t)
+    old_fr := ow_has(st.fr, old)
+    old_fm := ow_has(st.fm, old)
+    mut t_ref := false
+    mut old_ref := old_fr
+    repeat st.pk.len() in r:
+        if st.pt.get(r) == t:
+            t_ref = true
+        end
+        if st.pt.get(r) == old:
+            old_ref = true
+        end
+    end
+    if t_ref or t_fr:
+        mut dup := Vector {} as Vector<int>
+        repeat st.pk.len() in i:
+            if st.pt.get(i) == t:
+                if ow_pair_has(st, st.pk.get(i), old, st.pf.get(i)):
+                    dup.push(i)
+                else:
+                    st.pt.set(i, old)
+                end
+            end
+        end
+        mut di := dup.len()
+        until di > 0:
+            di -= 1
+            idx := dup.get(di)
+            _dk := st.pk.remove_at(idx)
+            _dt := st.pt.remove_at(idx)
+            _df := st.pf.remove_at(idx)
+        end
+        dup.free()
+        if t_fr:
+            _of := ow_add(st.fr, old)
+            ow_site_set(o, st, old, ow_site_nid(o, st, t), ow_site_kind(o, st, t))
+        end
+        mut keep_fm := t_fm
+        if old_ref:
+            keep_fm = t_fm and old_fm
+        end
+        if keep_fm:
+            _om := ow_add(st.fm, old)
+        else:
+            ow_del(st.fm, old)
+        end
+        if ow_has(st.rt, t):
+            _or := ow_add(st.rt, old)
+            ow_del(st.rt, t)
+        end
+    end
+    mut i2 := 0
+    until i2 < st.fr.len():
+        ft := st.fr.get(i2)
+        if ft != t and ow_tok_under(o, ft, t):
+            _gone := st.fr.remove_at(i2)
+            ow_del(st.fm, ft)
+        else:
+            i2 += 1
+        end
+    end
+    ow_del(st.fr, t)
+    ow_del(st.fm, t)
+end
+
+func ow_fresh(o &: Ow, st &: OwSt, nid: int): int:
+    t := ow_tok(o, OW_TK_FRESH, nid, "")
+    old := ow_tok(o, OW_TK_OLD, nid, "")
+    ow_retire(o, st, t, old)
+    ret t
+end
+
+func ow_toks(o &: Ow, st &: OwSt, key: int, out &: Vector<int>):
+    mut found := false
+    mut i := ow_lb(st, key)
+    n := st.pk.len()
+    until i < n and st.pk.get(i) == key:
+        _added := ow_add(out, st.pt.get(i))
+        found = true
+        i += 1
+    end
+    if found:
+        ret
+    end
+    par := o.kpar.get(key)
+    if par < 0:
+        _root := ow_add(out, ow_tok(o, OW_TK_INIT, key, ""))
+        ret
+    end
+    mut pts := Vector {} as Vector<int>
+    ow_toks(o, st, par, pts)
+    nm := o.kname.get(key)
+    repeat pts.len() in j:
+        _field := ow_add(out, ow_field_tok(o, pts.get(j), nm))
+    end
+    pts.free()
+end
+
+func ow_materialize(o &: Ow, st &: OwSt, key: int):
+    if not ow_rel(o, key) or ow_key_explicit(st, key):
+        ret
+    end
+    mut ts := Vector {} as Vector<int>
+    ow_toks(o, st, key, ts)
+    repeat ts.len() in i:
+        _m := ow_pair_add(st, key, ts.get(i), ow_tflag(o, st, ts.get(i)))
+    end
+    ts.free()
+end
+
+func ow_tok_root(o &: Ow, t: int): int:
+    mut p := t
+    until o.tkind.get(p) == OW_TK_FIELD:
+        p = o.targ.get(p)
+    end
+    ret p
+end
+
+func ow_gc(o &: Ow, st &: OwSt):
+    mut roots := Vector {} as Vector<int>
+    repeat st.pt.len() in i:
+        _r := ow_add(roots, ow_tok_root(o, st.pt.get(i)))
+    end
+    repeat st.rt.len() in j:
+        _r2 := ow_add(roots, ow_tok_root(o, st.rt.get(j)))
+    end
+    mut k := 0
+    until k < st.fr.len():
+        t := st.fr.get(k)
+        r := ow_tok_root(o, t)
+        rk := o.tkind.get(r)
+        mut dead := (rk == OW_TK_FRESH or rk == OW_TK_OLD) and not ow_has(roots, r)
+        if rk == OW_TK_INIT and not ow_has(roots, r) and ow_key_explicit(st, o.targ.get(r)):
+            dead = true
+        end
+        if dead:
+            _gone := st.fr.remove_at(k)
+            ow_del(st.fm, t)
+        else:
+            k += 1
+        end
+    end
+    roots.free()
+end
+
+func ow_st_join(o &: Ow, dst &: OwSt, src &: OwSt): bool:
+    if not src.live:
+        ret false
+    end
+    if not dst.live:
+        ow_st_free(dst)
+        dst.live = true
+        dst.pk = ow_vclone(src.pk)
+        dst.pt = ow_vclone(src.pt)
+        dst.pf = ow_vclone(src.pf)
+        dst.fr = ow_vclone(src.fr)
+        dst.fm = ow_vclone(src.fm)
+        dst.rt = ow_vclone(src.rt)
+        dst.sl = ow_vclone(src.sl)
+        dst.sn = ow_vclone(src.sn)
+        dst.sq = ow_vclone(src.sq)
+        ret true
+    end
+    if ow_same(dst.pk, src.pk) and ow_same(dst.pt, src.pt) and ow_same(dst.pf, src.pf) and ow_same(dst.fr, src.fr) and ow_same(dst.fm, src.fm) and ow_same(dst.rt, src.rt):
+        ret false
+    end
+    ow_gc(o, src)
+    mut changed := false
+    mut only_dst := Vector {} as Vector<int>
+    repeat dst.pk.len() in d:
+        dk := dst.pk.get(d)
+        if not ow_key_explicit(src, dk):
+            _od := ow_add(only_dst, dk)
+        end
+    end
+    mut lastk := 0 - 1
+    repeat src.pk.len() in sk:
+        kk := src.pk.get(sk)
+        if kk != lastk:
+            ow_materialize(o, dst, kk)
+            lastk = kk
+        end
+    end
+    repeat only_dst.len() in q:
+        k2 := only_dst.get(q)
+        mut ts := Vector {} as Vector<int>
+        ow_toks(o, src, k2, ts)
+        repeat ts.len() in ti:
+            if ow_pair_add(dst, k2, ts.get(ti), ow_tflag(o, src, ts.get(ti))):
+                changed = true
+            end
+        end
+        ts.free()
+    end
+    only_dst.free()
+    repeat src.pk.len() in i:
+        if ow_pair_add(dst, src.pk.get(i), src.pt.get(i), src.pf.get(i)):
+            changed = true
+        end
+    end
+    repeat src.fr.len() in j:
+        if ow_add(dst.fr, src.fr.get(j)):
+            changed = true
+        end
+    end
+    mut m := 0
+    until m < dst.fm.len():
+        if not ow_has(src.fm, dst.fm.get(m)):
+            _gone := dst.fm.remove_at(m)
+            changed = true
+        else:
+            m += 1
+        end
+    end
+    repeat src.rt.len() in r:
+        if ow_add(dst.rt, src.rt.get(r)):
+            changed = true
+        end
+    end
+    repeat src.sl.len() in q2:
+        if not ow_has(dst.sl, src.sl.get(q2)):
+            dst.sl.push(src.sl.get(q2))
+            dst.sn.push(src.sn.get(q2))
+            dst.sq.push(src.sq.get(q2))
+        end
+    end
+    ret changed
+end
+
+func ow_write(o &: Ow, st &: OwSt, key: int, toks: Vector<int>):
+    if not ow_rel(o, key):
+        ret
+    end
+    mut i := 0
+    until i < st.pk.len():
+        k := st.pk.get(i)
+        if k == key or ow_under(o, k, key):
+            _ka := st.pk.remove_at(i)
+            _ta := st.pt.remove_at(i)
+            _fa := st.pf.remove_at(i)
+        else:
+            i += 1
+        end
+    end
+    repeat toks.len() in j:
+        _w := ow_pair_add(st, key, toks.get(j), ow_tflag(o, st, toks.get(j)))
+    end
+end
+
+func ow_write_from(o &: Ow, st &: OwSt, key: int, src: int):
+    if not ow_rel(o, key):
+        ret
+    end
+    ow_materialize(o, st, src)
+    mut ts := Vector {} as Vector<int>
+    mut fs := Vector {} as Vector<int>
+    repeat st.pk.len() in i:
+        if st.pk.get(i) == src:
+            ts.push(st.pt.get(i))
+            fs.push(st.pf.get(i))
+        end
+    end
+    mut j := 0
+    until j < st.pk.len():
+        k := st.pk.get(j)
+        if k == key or ow_under(o, k, key):
+            _ka := st.pk.remove_at(j)
+            _ta := st.pt.remove_at(j)
+            _fa := st.pf.remove_at(j)
+        else:
+            j += 1
+        end
+    end
+    repeat ts.len() in q:
+        _w := ow_pair_add(st, key, ts.get(q), fs.get(q))
+    end
+    ts.free()
+    fs.free()
+end
+
+func ow_write_fresh(o &: Ow, st &: OwSt, key: int, nid: int):
+    mut one := Vector {} as Vector<int>
+    one.push(ow_fresh(o, st, nid))
+    ow_write(o, st, key, one)
+    one.free()
+end
+
+func ow_mark(st &: OwSt, t: int, f: int, only_live: bool):
+    repeat st.pk.len() in i:
+        if st.pt.get(i) == t:
+            cur := st.pf.get(i)
+            if (only_live and (cur == 0 or cur == OW_WEAK)) or (not only_live and (f == 0 or ow_rank(f) > ow_rank(cur))):
+                st.pf.set(i, f)
+            end
+        end
+    end
+end
+
+func ow_unfree_under(o &: Ow, st &: OwSt, key: int):
+    mut base := Vector {} as Vector<int>
+    ow_toks(o, st, key, base)
+    mut i := 0
+    until i < st.fr.len():
+        t := st.fr.get(i)
+        mut hit := false
+        repeat base.len() in j:
+            if ow_tok_under(o, t, base.get(j)):
+                hit = true
+                break
+            end
+        end
+        if hit:
+            _gone := st.fr.remove_at(i)
+            ow_del(st.fm, t)
+            ow_mark(st, t, 0, false)
+        else:
+            i += 1
+        end
+    end
+    base.free()
+end
+
+func ow_path(o &: Ow, a &: at.Ast, nid: int): int:
+    if nid == 0:
+        ret 0 - 1
+    end
+    n := at.At(a, nid)
+    k := n.kind
+    if k == at.AST_IDENTIFIER:
+        if str.Len(n.name) == 0:
+            ret 0 - 1
+        end
+        ret ow_key(o, 0 - 1, n.name)
+    end
+    if k == at.AST_THIS:
+        ret ow_key(o, 0 - 1, "this")
+    end
+    if k == at.AST_CAST:
+        ret ow_path(o, a, n.a)
+    end
+    if k == at.AST_MEMBER:
+        if n.a == 0 or str.Len(n.name) == 0:
+            ret 0 - 1
+        end
+        p := ow_path(o, a, n.a)
+        if p < 0:
+            ret 0 - 1
+        end
+        ret ow_key(o, p, n.name)
+    end
+    ret 0 - 1
+end
+
+func ow_strip_cast(a &: at.Ast, nid: int): int:
+    mut cur := nid
+    until cur != 0 and at.KindOf(a, cur) == at.AST_CAST:
+        cur = at.At(a, cur).a
+    end
+    ret cur
+end
+
+func ow_is_null(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.At(a, nid)
+    ret n.kind == at.AST_LITERAL and (n.op == tok.TK_KW_NULL or str.Equals(n.type_str, "null"))
+end
+
+func ow_is_vec(ts: str): bool:
+    ret str.StartsWith(ts, "Vector_") or str.StartsWith(ts, "Vector<")
+end
+
+func ow_is_map(ts: str): bool:
+    ret str.StartsWith(ts, "HashMap_") or str.StartsWith(ts, "HashMap<")
+end
+
+func ow_is_container(ts: str): bool:
+    ret ow_is_vec(ts) or ow_is_map(ts)
+end
+
+func ow_is_grow(name: str, ts: str): bool:
+    if ow_is_vec(ts):
+        ret str.Equals(name, "push") or str.Equals(name, "reserve") or str.Equals(name, "insert") or str.Equals(name, "resize_set") or str.Equals(name, "zeros") or str.Equals(name, "alloc")
+    end
+    if ow_is_map(ts):
+        ret str.Equals(name, "put") or str.Equals(name, "insert") or str.Equals(name, "_resize")
+    end
+    ret false
+end
+
+func ow_line(a &: at.Ast, nid: int): u64:
+    if nid == 0:
+        ret 0
+    end
+    ret at.At(a, nid).begin_line
+end
+
+func ow_diag(s &: Sema, o &: Ow, err: bool, code: int, nid: int, a &: at.Ast, msg: str, help: str):
+    if err or o.mode >= 3:
+        serr_help(s, code, span_of(a, nid), msg, help)
+    else:
+        if o.mode >= 2:
+            swarn(s, code, span_of(a, nid), msg)
+        end
+    end
+end
+
+func ow_report_use(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int, key: int, t: int, flag: int):
+    if not o.report or ow_has(o.rep, t):
+        ret
+    end
+    if flag != OW_FREED and o.mode < 2:
+        ret
+    end
+    o.rep.push(t)
+    name := ow_key_str(o, key)
+    site := ow_site_nid(o, st, t)
+    if flag == OW_MOVED:
+        ow_diag(
+            s, o, false, 144, nid, a, co.Format2(
+                i18.Tr("'%s' points into storage that the call on line %u may have moved; growing a Vector or HashMap reallocates its buffer"), co.ArgStr(name), co.ArgUint(ow_line(a, site))
+            ), i18.Tr("take the pointer or copy again after the call, or keep an index instead of a pointer")
+        )
+        ret
+    end
+    if flag == OW_FREED:
+        ow_diag(
+            s, o, true, 139, nid, a, co.Format2(
+                i18.Tr("'%s' is used after its storage was freed on line %u"), co.ArgStr(name), co.ArgUint(ow_line(a, site))
+            ), i18.Tr("a copy of a Vector, HashMap, str or pointer shares the same heap storage; free it only after the last use of every copy")
+        )
+        ret
+    end
+    ow_diag(
+        s, o, false, 142, nid, a, co.Format2(
+            i18.Tr("'%s' may be used after its storage was freed on line %u (on some paths)"), co.ArgStr(name), co.ArgUint(ow_line(a, site))
+        ), i18.Tr("a copy of a Vector, HashMap, str or pointer shares the same heap storage; free it only after the last use of every copy")
+    )
+end
+
+func ow_key_verdict(o &: Ow, st &: OwSt, key: int, tok_out &: int): int:
+    mut flags := Vector {} as Vector<int>
+    mut toks := Vector {} as Vector<int>
+    if ow_key_explicit(st, key):
+        repeat st.pk.len() in i:
+            if st.pk.get(i) == key:
+                flags.push(st.pf.get(i))
+                toks.push(st.pt.get(i))
+            end
+        end
+    else:
+        ow_toks(o, st, key, toks)
+        repeat toks.len() in j:
+            flags.push(ow_tflag(o, st, toks.get(j)))
+        end
+    end
+    mut n_freed := 0
+    mut t_freed := 0 - 1
+    mut t_maybe := 0 - 1
+    mut t_moved := 0 - 1
+    repeat flags.len() in k:
+        f := flags.get(k)
+        if f == OW_FREED:
+            n_freed += 1
+            t_freed = toks.get(k)
+        else f == OW_MAYBE:
+            t_maybe = toks.get(k)
+        else f == OW_MOVED:
+            t_moved = toks.get(k)
+        end
+    end
+    total := flags.len()
+    flags.free()
+    toks.free()
+    if n_freed > 0 and n_freed == total:
+        tok_out = t_freed
+        ret OW_FREED
+    end
+    if t_freed >= 0:
+        tok_out = t_freed
+        ret OW_MAYBE
+    end
+    if t_maybe >= 0:
+        tok_out = t_maybe
+        ret OW_MAYBE
+    end
+    if t_moved >= 0:
+        tok_out = t_moved
+        ret OW_MOVED
+    end
+    tok_out = 0 - 1
+    ret 0
+end
+
+func ow_check_key(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int, key: int):
+    mut t := 0 - 1
+    v := ow_key_verdict(o, st, key, t)
+    if v != 0 and t >= 0:
+        ow_report_use(s, o, a, st, nid, key, t, v)
+    end
+end
+
+func ow_use(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int, key: int):
+    if not ow_rel(o, key):
+        ret
+    end
+    mut k := key
+    until k >= 0:
+        ow_check_key(s, o, a, st, nid, k)
+        k = o.kpar.get(k)
+    end
+end
+
+func ow_use_prefix(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int, key: int):
+    if not ow_rel(o, key):
+        ret
+    end
+    mut k := o.kpar.get(key)
+    until k >= 0:
+        ow_check_key(s, o, a, st, nid, k)
+        k = o.kpar.get(k)
+    end
+end
+
+func ow_free(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int, key: int, reset: bool, weak: bool):
+    ow_materialize(o, st, key)
+    mut dt := 0 - 1
+    dv := ow_key_verdict(o, st, key, dt)
+    mut ts := Vector {} as Vector<int>
+    ow_toks(o, st, key, ts)
+    must_ok := ow_key_local(o, key)
+    if o.report:
+        mut ret_hit := 0 - 1
+        repeat ts.len() in r:
+            if ow_has(st.rt, ts.get(r)) and o.tkind.get(ts.get(r)) != OW_TK_NULL:
+                ret_hit = ts.get(r)
+            end
+        end
+        if ret_hit >= 0 and not ow_has(o.rep, ret_hit):
+            o.rep.push(ret_hit)
+            ow_diag(
+                s, o, true, 141, nid, a, co.Format2(
+                    i18.Tr("'%s' is returned, but the deferred free on line %u releases its storage before the caller can use it"), co.ArgStr(ow_key_str(o, key)), co.ArgUint(ow_line(a, nid))
+                ), i18.Tr("return a copy with .copy(), or drop the 'defer' and let the caller free it")
+            )
+        else dt >= 0 and dv != OW_MOVED and not ow_has(o.rep, dt) and (dv == OW_FREED or o.mode >= 2):
+            o.rep.push(dt)
+            if dv == OW_FREED:
+                ow_diag(
+                    s, o, true, 140, nid, a, co.Format2(
+                        i18.Tr("'%s' is freed twice: its storage was already freed on line %u"), co.ArgStr(ow_key_str(o, key)), co.ArgUint(ow_line(a, ow_site_nid(o, st, dt)))
+                    ), i18.Tr("remove one of the frees, or give it a new value in between")
+                )
+            else:
+                ow_diag(
+                    s, o, false, 143, nid, a, co.Format2(
+                        i18.Tr("'%s' may be freed twice: its storage may already be freed on line %u"), co.ArgStr(ow_key_str(o, key)), co.ArgUint(ow_line(a, ow_site_nid(o, st, dt)))
+                    ), i18.Tr("remove one of the frees, or give it a new value in between")
+                )
+            end
+        end
+    end
+    mut live_n := 0
+    mut summary := false
+    repeat ts.len() in c:
+        if o.tkind.get(ts.get(c)) != OW_TK_NULL:
+            live_n += 1
+            if ow_tok_summary(o, ts.get(c)):
+                summary = true
+            end
+        end
+    end
+    strong := must_ok and live_n == 1 and not summary and not weak
+    mut flag := OW_WEAK
+    if strong:
+        flag = OW_FREED
+    else live_n == 1 and not summary:
+        flag = OW_MAYBE
+    end
+    repeat ts.len() in i:
+        t := ts.get(i)
+        if o.tkind.get(t) == OW_TK_NULL:
+            continue
+        end
+        _f := ow_add(st.fr, t)
+        if strong:
+            _m := ow_add(st.fm, t)
+        end
+        ow_mark(st, t, flag, false)
+        el := ow_tok(o, OW_TK_FIELD, t, "[]")
+        o.tsumm.set(el, true)
+        ow_mark(st, el, flag, false)
+        _fe := ow_add(st.fr, el)
+        ow_site_set(o, st, el, nid, OW_FREED)
+        ow_site_set(o, st, t, nid, OW_FREED)
+        if flag != OW_WEAK:
+            o.tstrong.set(t, true)
+            o.tstrong.set(el, true)
+        end
+    end
+    ts.free()
+    if reset:
+        mut one := Vector {} as Vector<int>
+        one.push(ow_tok(o, OW_TK_NULL, 0, ""))
+        ow_write(o, st, key, one)
+        one.free()
+    end
+end
+
+func ow_move(o &: Ow, st &: OwSt, nid: int, key: int):
+    ow_materialize(o, st, key)
+    mut ts := Vector {} as Vector<int>
+    ow_toks(o, st, key, ts)
+    repeat ts.len() in i:
+        t := ts.get(i)
+        if o.tkind.get(t) == OW_TK_NULL:
+            continue
+        end
+        el := ow_tok(o, OW_TK_FIELD, t, "[]")
+        o.tsumm.set(el, true)
+        if ow_tok_summary(o, t):
+            ow_mark(st, t, OW_WEAK, true)
+            ow_mark(st, el, OW_WEAK, true)
+            continue
+        end
+        ow_mark(st, t, OW_MOVED, true)
+        if not ow_has(st.fr, t):
+            st.fr.push(t)
+            ow_site_set(o, st, t, nid, OW_MOVED)
+        end
+        ow_mark(st, el, OW_MOVED, true)
+        if not ow_has(st.fr, el):
+            st.fr.push(el)
+            ow_site_set(o, st, el, nid, OW_MOVED)
+        end
+    end
+    ts.free()
+    ow_write_fresh(o, st, key, nid)
+end
+
+func ow_peek(o &: Ow, st &: OwSt, a &: at.Ast, nid: int): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    key := ow_path(o, a, nid)
+    if key >= 0:
+        ow_toks(o, st, key, out)
+    end
+    ret out
+end
+
+func ow_copy_sub(o &: Ow, st &: OwSt, a &: at.Ast, rhs: int, key: int):
+    if rhs == 0 or not ow_rel(o, key):
+        ret
+    end
+    r := ow_path(o, a, rhs)
+    if r >= 0:
+        if r == key:
+            ret
+        end
+        mut nk := Vector {} as Vector<int>
+        mut nt := Vector {} as Vector<int>
+        mut nf := Vector {} as Vector<int>
+        repeat st.pk.len() in i:
+            if ow_under(o, st.pk.get(i), r):
+                nk.push(st.pk.get(i))
+                nt.push(st.pt.get(i))
+                nf.push(st.pf.get(i))
+            end
+        end
+        repeat nk.len() in j:
+            _c := ow_pair_add(st, ow_rebase(o, nk.get(j), r, key), nt.get(j), nf.get(j))
+        end
+        nk.free()
+        nt.free()
+        nf.free()
+        ret
+    end
+    if at.KindOf(a, rhs) != at.AST_STRUCT_LIT:
+        ret
+    end
+    repeat at.ChildCount(a, rhs) in f:
+        fi := at.Child(a, rhs, f)
+        if fi != 0 and at.KindOf(a, fi) == at.AST_FIELD_INIT:
+            fv := at.At(a, fi).a
+            fname := at.At(a, fi).name
+            mut vk := ow_peek(o, st, a, fv)
+            if vk.len() > 0 and str.Len(fname) > 0:
+                ow_write(o, st, ow_key(o, key, fname), vk)
+            end
+            vk.free()
+        end
+    end
+end
+
+func ow_is_mem_pkg(s &: Sema, a &: at.Ast, nid: int): bool:
+    if nid == 0 or at.KindOf(a, nid) != at.AST_IDENTIFIER:
+        ret false
+    end
+    name := at.At(a, nid).name
+    if str.Equals(name, "mem"):
+        ret true
+    end
+    pk := scope_lookup(s, s.global, name)
+    if pk == 0:
+        ret false
+    end
+    pv := sym_at(s, pk)
+    ret pv.kind == SYM_PACKAGE and str.Equals(pv.pkgname, "mem")
+end
+
+func ow_move_deep(o &: Ow, st &: OwSt, nid: int, key: int, self_too: bool):
+    ow_materialize(o, st, key)
+    mut base := Vector {} as Vector<int>
+    ow_toks(o, st, key, base)
+    mut hit := Vector {} as Vector<int>
+    mut weak := Vector {} as Vector<bool>
+    repeat st.pt.len() in i:
+        t := st.pt.get(i)
+        pk := st.pk.get(i)
+        if o.tkind.get(t) == OW_TK_NULL or ow_has(hit, t):
+            continue
+        end
+        if not self_too and (pk == key or ow_under(o, pk, key)):
+            continue
+        end
+        repeat base.len() in j:
+            b := base.get(j)
+            if t == b or ow_tok_under(o, t, b):
+                hit.push(t)
+                weak.push(ow_tok_summary(o, b) or base.len() > 1)
+                break
+            end
+        end
+    end
+    repeat hit.len() in k:
+        t2 := hit.get(k)
+        f2 := weak.get(k) ? OW_WEAK : OW_MOVED
+        repeat st.pk.len() in m:
+            mk := st.pk.get(m)
+            if st.pt.get(m) == t2 and (self_too or (mk != key and not ow_under(o, mk, key))):
+                cur := st.pf.get(m)
+                if cur == 0 or cur == OW_WEAK:
+                    st.pf.set(m, f2)
+                end
+            end
+        end
+        if f2 == OW_MOVED:
+            ow_site_set(o, st, t2, nid, OW_MOVED)
+        end
+    end
+    if not self_too:
+        mut q := 0
+        until q < st.pk.len():
+            qk := st.pk.get(q)
+            if ow_under(o, qk, key):
+                _a := st.pk.remove_at(q)
+                _b := st.pt.remove_at(q)
+                _c := st.pf.remove_at(q)
+            else:
+                q += 1
+            end
+        end
+    end
+    hit.free()
+    weak.free()
+    base.free()
+end
+
+func ow_is_pkg_obj(s &: Sema, a &: at.Ast, nid: int): bool:
+    if nid == 0 or at.KindOf(a, nid) != at.AST_IDENTIFIER:
+        ret false
+    end
+    pk := scope_lookup(s, s.global, at.At(a, nid).name)
+    ret pk != 0 and sym_at(s, pk).kind == SYM_PACKAGE
+end
+
+func ow_effect(s &: Sema, call: int, slot: int): int:
+    if not s.sum_ready:
+        ret SU_READ
+    end
+    fi := su_fn_idx(s, su_call_decl(s, call))
+    if fi < 0 or slot < 0 or slot >= su_np(s, fi):
+        ret SU_READ
+    end
+    if su_flag(s.sp_free, s, fi, slot):
+        if SuArgMustFree(s, call, slot):
+            ret SU_FREE + 100
+        end
+        ret SU_FREE
+    end
+    if su_flag(s.sp_grow, s, fi, slot):
+        ret SU_GROW
+    end
+    ret SU_READ
+end
+
+func ow_arg_kept(s &: Sema, call: int, slot: int): bool:
+    if not s.sum_ready:
+        ret true
+    end
+    fi := su_fn_idx(s, su_call_decl(s, call))
+    if fi < 0 or slot < 0 or slot >= su_np(s, fi):
+        ret true
+    end
+    ret su_flag(s.sp_keep, s, fi, slot)
+end
+
+func ow_apply(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, call: int, key: int, eff: int, byval: bool, slot: int):
+    if key < 0 or not ow_rel(o, key):
+        ret
+    end
+    if eff == SU_FREE:
+        ow_free(s, o, a, st, call, key, false, true)
+    else eff == SU_FREE + 100:
+        ow_free(s, o, a, st, call, key, false, false)
+    else eff == SU_GROW:
+        gf := SuGrowFields(s, call, slot)
+        if byval or str.Equals(gf, "*"):
+            ow_move_deep(o, st, call, key, byval)
+        else:
+            mut parts := str.Split(gf, ",")
+            repeat parts.len() in i:
+                if str.Len(parts.get(i)) > 0:
+                    ow_move_deep(o, st, call, ow_key(o, key, parts.get(i)), false)
+                end
+            end
+            parts.free()
+        end
+    end
+end
+
+func ow_alias_result(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, call: int, rkey: int, out &: Vector<int>):
+    if not s.sum_ready:
+        ret
+    end
+    fi := su_fn_idx(s, su_call_decl(s, call))
+    if fi < 0:
+        ret
+    end
+    slot := s.sum_ralias.get(fi)
+    if slot < 0:
+        ret
+    end
+    mut key := 0 - 1
+    if slot == 0:
+        key = rkey
+    else slot - 1 < at.ChildCount(a, call):
+        key = ow_path(o, a, at.Child(a, call, slot - 1))
+    end
+    if key < 0 or not ow_rel(o, key):
+        ret
+    end
+    mut cur := Vector {} as Vector<int>
+    ow_toks(o, st, key, cur)
+    chain := s.sum_rchain.get(fi)
+    if str.Len(chain) > 0:
+        mut names := str.Split(chain, ".")
+        repeat names.len() in i:
+            mut nx := Vector {} as Vector<int>
+            repeat cur.len() in j:
+                _f := ow_add(nx, ow_field_tok(o, cur.get(j), names.get(i)))
+            end
+            cur.free()
+            cur = nx
+        end
+        names.free()
+    end
+    repeat cur.len() in k:
+        mut t := cur.get(k)
+        if s.sum_rref.get(fi):
+            t = ow_field_tok(o, t, "[]")
+            o.tsumm.set(t, true)
+        end
+        _a := ow_add(out, t)
+    end
+    cur.free()
+end
+
+func ow_args(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
+    n := at.ChildCount(a, nid)
+    repeat n in i:
+        arg := at.Child(a, nid, i)
+        if arg == 0:
+            continue
+        end
+        if at.At(a, arg).ref_arg:
+            key := ow_path(o, a, arg)
+            if key >= 0:
+                ow_use_prefix(s, o, a, st, arg, key)
+                continue
+            end
+        end
+        mut t := ow_expr(s, o, a, st, arg)
+        t.free()
+    end
+    repeat n in j:
+        arg2 := at.Child(a, nid, j)
+        if arg2 == 0:
+            continue
+        end
+        eff := ow_effect(s, nid, j + 1)
+        key2 := ow_path(o, a, arg2)
+        if at.At(a, arg2).ref_arg and key2 >= 0:
+            ow_apply(s, o, a, st, nid, key2, eff, false, j + 1)
+            freed := eff == SU_FREE or eff == SU_FREE + 100
+            if not freed or ow_arg_kept(s, nid, j + 1):
+                ow_write_fresh(o, st, key2, arg2)
+            end
+            continue
+        end
+        if eff != SU_READ:
+            ow_apply(s, o, a, st, nid, key2, eff, ow_is_container(at.At(a, arg2).type_str), j + 1)
+        end
+        if str.EndsWith(at.At(a, arg2).type_str, "*") and key2 >= 0:
+            ow_unfree_under(o, st, key2)
+        end
+    end
+end
+
+func ow_call(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    callee := at.At(a, nid).a
+    if callee == 0 or at.KindOf(a, callee) != at.AST_MEMBER or ow_is_pkg_obj(s, a, at.At(a, callee).a):
+        if callee != 0 and at.KindOf(a, callee) == at.AST_MEMBER and str.Equals(at.At(a, callee).name, "Free") and at.ChildCount(a, nid) == 1 and ow_is_mem_pkg(s, a, at.At(a, callee).a):
+            farg := ow_strip_cast(a, at.Child(a, nid, 0))
+            fk := ow_path(o, a, farg)
+            if fk >= 0:
+                ow_use_prefix(s, o, a, st, nid, fk)
+                ow_free(s, o, a, st, nid, fk, false, false)
+                ret out
+            end
+        end
+        ow_args(s, o, a, st, nid)
+        ow_alias_result(s, o, a, st, nid, 0 - 1, out)
+        ret out
+    end
+    mname := at.At(a, callee).name
+    obj := at.At(a, callee).a
+    argc := at.ChildCount(a, nid)
+    if str.Equals(mname, "Free") and argc == 1 and obj != 0 and ow_is_mem_pkg(s, a, obj):
+        arg := ow_strip_cast(a, at.Child(a, nid, 0))
+        fkey := ow_path(o, a, arg)
+        if fkey >= 0:
+            ow_use_prefix(s, o, a, st, nid, fkey)
+            ow_free(s, o, a, st, nid, fkey, false, false)
+            ret out
+        end
+    end
+    rkey := ow_path(o, a, obj)
+    if rkey < 0:
+        mut ro := ow_expr(s, o, a, st, obj)
+        ro.free()
+        ow_args(s, o, a, st, nid)
+        ret out
+    end
+    rts := at.At(a, obj).type_str
+    mut eff := rkey
+    if str.EndsWith(rts, "*"):
+        eff = ow_key(o, rkey, "*")
+    end
+    cont := ow_is_container(rts)
+    if str.Equals(mname, "free") and argc == 0 and (cont or str.StartsWith(rts, "dyn ")):
+        ow_use_prefix(s, o, a, st, nid, eff)
+        ow_free(s, o, a, st, nid, eff, cont, false)
+        ret out
+    end
+    ow_use(s, o, a, st, obj, rkey)
+    ow_args(s, o, a, st, nid)
+    if cont:
+        if ow_is_grow(mname, rts):
+            ow_move(o, st, nid, eff)
+        else str.Equals(mname, "iter"):
+            ow_toks(o, st, eff, out)
+        else str.Equals(mname, "ref"):
+            mut bufs := Vector {} as Vector<int>
+            ow_toks(o, st, eff, bufs)
+            repeat bufs.len() in bi:
+                el := ow_field_tok(o, bufs.get(bi), "[]")
+                o.tsumm.set(el, true)
+                _ae := ow_add(out, el)
+            end
+            bufs.free()
+        end
+    else:
+        ow_unfree_under(o, st, rkey)
+        ow_apply(s, o, a, st, nid, rkey, ow_effect(s, nid, 0), false, 0)
+        ow_alias_result(s, o, a, st, nid, rkey, out)
+    end
+    ret out
+end
+
+func ow_branch(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int, out &: Vector<int>):
+    mut br := ow_st_clone(st)
+    mut t := ow_expr(s, o, a, br, nid)
+    repeat t.len() in i:
+        _x := ow_add(out, t.get(i))
+    end
+    t.free()
+    _j := ow_st_join(o, st, br)
+    ow_st_free(br)
+end
+
+func ow_match_expr(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
+    mut t0 := ow_expr(s, o, a, st, at.At(a, nid).a)
+    t0.free()
+    mut acc := OwSt {}
+    mut has_else := false
+    repeat at.ChildCount(a, nid) in j:
+        arm := at.Child(a, nid, j)
+        if arm == 0:
+            continue
+        end
+        if at.At(a, arm).op == tok.TK_KW_ELSE:
+            has_else = true
+        end
+        mut br := ow_st_clone(st)
+        mut tg := ow_expr(s, o, a, br, at.At(a, arm).c)
+        tg.free()
+        ow_region(s, o, a, br, at.At(a, arm).b)
+        _c := ow_st_join(o, acc, br)
+        ow_st_free(br)
+    end
+    if not has_else:
+        _e := ow_st_join(o, acc, st)
+    end
+    ow_st_free(st)
+    st = acc
+end
+
+func ow_expr(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    if nid == 0 or not st.live:
+        ret out
+    end
+    k := at.KindOf(a, nid)
+    if k == at.AST_IDENTIFIER or k == at.AST_THIS or k == at.AST_MEMBER:
+        key := ow_path(o, a, nid)
+        if key >= 0:
+            ow_use(s, o, a, st, nid, key)
+            ow_toks(o, st, key, out)
+            ret out
+        end
+        mut tm := ow_expr(s, o, a, st, at.At(a, nid).a)
+        tm.free()
+        ret out
+    end
+    if k == at.AST_CAST:
+        out.free()
+        ret ow_expr(s, o, a, st, at.At(a, nid).a)
+    end
+    if k == at.AST_CALL:
+        out.free()
+        ret ow_call(s, o, a, st, nid)
+    end
+    if k == at.AST_FUNC_ADDR or k == at.AST_LITERAL or k == at.AST_TYPE:
+        ret out
+    end
+    if k == at.AST_LAMBDA:
+        caps := at.At(a, nid).captures
+        repeat caps.len() in ci:
+            ck := ow_path(o, a, caps.get(ci))
+            if ck >= 0:
+                ow_use(s, o, a, st, nid, ck)
+            end
+        end
+        ret out
+    end
+    if k == at.AST_BINARY:
+        op := at.At(a, nid).op
+        lhs := at.At(a, nid).a
+        rhs := at.At(a, nid).b
+        if (op == tok.TK_EQ or op == tok.TK_NE) and (ow_is_null(a, lhs) or ow_is_null(a, rhs)):
+            ret out
+        end
+        mut tl := ow_expr(s, o, a, st, lhs)
+        tl.free()
+        if op == tok.TK_AND or op == tok.TK_OR:
+            ow_branch(s, o, a, st, rhs, out)
+            out.clear()
+            ret out
+        end
+        mut tr := ow_expr(s, o, a, st, rhs)
+        tr.free()
+        ret out
+    end
+    if k == at.AST_TERNARY:
+        mut tc := ow_expr(s, o, a, st, at.At(a, nid).a)
+        tc.free()
+        mut other := ow_st_clone(st)
+        mut t1 := ow_expr(s, o, a, st, at.At(a, nid).b)
+        mut t2 := ow_expr(s, o, a, other, at.At(a, nid).c)
+        _j := ow_st_join(o, st, other)
+        ow_st_free(other)
+        repeat t1.len() in i1:
+            _a1 := ow_add(out, t1.get(i1))
+        end
+        repeat t2.len() in i2:
+            _a2 := ow_add(out, t2.get(i2))
+        end
+        t1.free()
+        t2.free()
+        ret out
+    end
+    if k == at.AST_MATCH:
+        ow_match_expr(s, o, a, st, nid)
+        ret out
+    end
+    if k == at.AST_BLOCK:
+        ow_region(s, o, a, st, nid)
+        ret out
+    end
+    n := at.At(a, nid)
+    na := n.a
+    nb := n.b
+    nc := n.c
+    nd := n.d
+    mut ta := ow_expr(s, o, a, st, na)
+    ta.free()
+    mut tb := ow_expr(s, o, a, st, nb)
+    tb.free()
+    mut tcc := ow_expr(s, o, a, st, nc)
+    tcc.free()
+    mut td := ow_expr(s, o, a, st, nd)
+    td.free()
+    repeat at.ChildCount(a, nid) in i:
+        mut tx := ow_expr(s, o, a, st, at.Child(a, nid, i))
+        tx.free()
+    end
+    ret out
+end
+
+func ow_scalar_ts(ts: str): bool:
+    ret str.Equals(ts, "int") or str.Equals(ts, "i64") or str.Equals(ts, "i32") or str.Equals(ts, "bool") or str.Equals(ts, "u8") or str.Equals(ts, "u64") or str.Equals(ts, "u32") or str.Equals(ts, "f64") or str.Equals(ts, "f32") or str.Equals(ts, "char") or str.Equals(ts, "i8") or str.Equals(ts, "i16") or str.Equals(ts, "u16") or str.Equals(ts, "usize")
+end
+
+func ow_decl(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
+    name := at.At(a, nid).name
+    init := at.At(a, nid).a
+    if str.Len(name) == 0:
+        mut tz := ow_expr(s, o, a, st, init)
+        tz.free()
+        ret
+    end
+    o.locals.push(name)
+    key := ow_key(o, 0 - 1, name)
+    mut ts := ow_expr(s, o, a, st, init)
+    src := ow_path(o, a, init)
+    if init != 0 and ow_scalar_ts(at.At(a, init).type_str):
+        ts.clear()
+    end
+    if src >= 0 and src != key and ts.len() > 0 and not ow_scalar_ts(at.At(a, init).type_str):
+        ow_write_from(o, st, key, src)
+    else:
+        if ts.len() == 0:
+            ts.push(ow_fresh(o, st, nid))
+        end
+        ow_write(o, st, key, ts)
+    end
+    ts.free()
+    ow_copy_sub(o, st, a, init, key)
+end
+
+func ow_assign(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
+    lhs := at.At(a, nid).a
+    rhs := at.At(a, nid).b
+    op := at.At(a, nid).op
+    mut ts := ow_expr(s, o, a, st, rhs)
+    key := ow_path(o, a, lhs)
+    if key < 0 or at.KindOf(a, lhs) == at.AST_CAST:
+        mut tl := ow_expr(s, o, a, st, lhs)
+        tl.free()
+        ts.free()
+        ret
+    end
+    ow_use_prefix(s, o, a, st, lhs, key)
+    if op != tok.TK_ASSIGN:
+        ow_check_key(s, o, a, st, lhs, key)
+        ts.clear()
+    end
+    src := ow_path(o, a, rhs)
+    if rhs != 0 and ow_scalar_ts(at.At(a, rhs).type_str):
+        ts.clear()
+    end
+    if op == tok.TK_ASSIGN and src >= 0 and src != key and ts.len() > 0 and not ow_scalar_ts(at.At(a, rhs).type_str):
+        ow_write_from(o, st, key, src)
+    else:
+        if ts.len() == 0:
+            ts.push(ow_fresh(o, st, nid))
+        end
+        ow_write(o, st, key, ts)
+    end
+    ts.free()
+    if op == tok.TK_ASSIGN:
+        ow_copy_sub(o, st, a, rhs, key)
+    end
+end
+
+func ow_stmt(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
+    if nid == 0 or not st.live:
+        ret
+    end
+    k := at.KindOf(a, nid)
+    if k == at.AST_VAR_DECL or k == at.AST_CONST_DECL:
+        ow_decl(s, o, a, st, nid)
+    else k == at.AST_ASSIGN:
+        ow_assign(s, o, a, st, nid)
+    else k == at.AST_EXPR_STMT:
+        mut te := ow_expr(s, o, a, st, at.At(a, nid).a)
+        te.free()
+    else k == at.AST_BLOCK or k == at.AST_IF or k == at.AST_SWITCH or k == at.AST_UNTIL or k == at.AST_FOR or k == at.AST_REPEAT or k == at.AST_EACH:
+        ow_region(s, o, a, st, nid)
+    else:
+        mut tx := ow_expr(s, o, a, st, nid)
+        tx.free()
+    end
+end
+
+func ow_ret(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
+    ts := ow_expr(s, o, a, st, at.At(a, nid).a)
+    st.rt.free()
+    st.rt = ts
+end
+
+func ow_blk_new(g &: OwCfg): int:
+    g.blocks.push(OwBlk {})
+    g.hloop.push(0)
+    ret g.blocks.len() - 1
+end
+
+func ow_emit(g &: OwCfg, kind: int, nid: int):
+    if nid == 0:
+        ret
+    end
+    mut b := g.blocks.get(g.cur)
+    b.items.push(nid * 8 + kind)
+    g.blocks.set(g.cur, b)
+end
+
+func ow_edge(g &: OwCfg, orig: int, dest: int):
+    mut b := g.blocks.get(orig)
+    if not ow_has(b.succ, dest):
+        b.succ.push(dest)
+    end
+    g.blocks.set(orig, b)
+end
+
+func ow_goto(g &: OwCfg, dest: int):
+    ow_edge(g, g.cur, dest)
+    g.cur = ow_blk_new(g)
+end
+
+func ow_run_defers(g &: OwCfg, mark: int):
+    mut i := g.defers.len()
+    until i > mark:
+        i -= 1
+        ow_emit(g, OW_IT_DEFER, g.defers.get(i))
+    end
+end
+
+func ow_b_loop(g &: OwCfg, a &: at.Ast, lnid: int, cond: int, body: int, post: int):
+    head := ow_blk_new(g)
+    g.hloop.set(head, lnid)
+    ow_edge(g, g.cur, head)
+    g.cur = head
+    ow_emit(g, OW_IT_EXPR, cond)
+    bodyb := ow_blk_new(g)
+    exitb := ow_blk_new(g)
+    postb := ow_blk_new(g)
+    ow_edge(g, g.cur, bodyb)
+    ow_edge(g, g.cur, exitb)
+    g.brk.push(exitb)
+    g.cont.push(postb)
+    g.lmark.push(g.defers.len())
+    g.cur = bodyb
+    ow_b_stmt(g, a, body)
+    ow_edge(g, g.cur, postb)
+    _b := g.brk.pop()
+    _c := g.cont.pop()
+    _m := g.lmark.pop()
+    g.cur = postb
+    ow_b_stmt(g, a, post)
+    ow_edge(g, g.cur, head)
+    g.cur = exitb
+end
+
+func ow_b_if(g &: OwCfg, a &: at.Ast, nid: int):
+    cond := at.At(a, nid).a
+    then_b := at.At(a, nid).b
+    els := at.At(a, nid).c
+    ow_emit(g, OW_IT_EXPR, cond)
+    head := g.cur
+    tb := ow_blk_new(g)
+    eb := ow_blk_new(g)
+    jn := ow_blk_new(g)
+    ow_edge(g, head, tb)
+    ow_edge(g, head, eb)
+    g.cur = tb
+    ow_b_stmt(g, a, then_b)
+    ow_edge(g, g.cur, jn)
+    g.cur = eb
+    ow_b_stmt(g, a, els)
+    ow_edge(g, g.cur, jn)
+    g.cur = jn
+end
+
+func ow_b_switch(g &: OwCfg, a &: at.Ast, nid: int):
+    ow_emit(g, OW_IT_EXPR, at.At(a, nid).a)
+    head := g.cur
+    exitb := ow_blk_new(g)
+    cnt := at.ChildCount(a, nid)
+    mut entries := Vector {} as Vector<int>
+    mut has_else := false
+    repeat cnt in j:
+        eb := ow_blk_new(g)
+        entries.push(eb)
+        ow_edge(g, head, eb)
+        cs := at.Child(a, nid, j)
+        if cs != 0 and at.At(a, cs).op == tok.TK_KW_ELSE:
+            has_else = true
+        end
+    end
+    if not has_else:
+        ow_edge(g, head, exitb)
+    end
+    g.brk.push(exitb)
+    g.cont.push(0 - 1)
+    g.lmark.push(g.defers.len())
+    repeat cnt in k:
+        g.cur = entries.get(k)
+        cs2 := at.Child(a, nid, k)
+        if cs2 != 0:
+            ow_b_stmt(g, a, at.At(a, cs2).b)
+        end
+        if k + 1 < cnt:
+            ow_edge(g, g.cur, entries.get(k + 1))
+        else:
+            ow_edge(g, g.cur, exitb)
+        end
+    end
+    _b := g.brk.pop()
+    _c := g.cont.pop()
+    _m := g.lmark.pop()
+    entries.free()
+    g.cur = exitb
+end
+
+func ow_b_match(g &: OwCfg, a &: at.Ast, nid: int):
+    ow_emit(g, OW_IT_EXPR, at.At(a, nid).a)
+    head := g.cur
+    exitb := ow_blk_new(g)
+    mut has_else := false
+    repeat at.ChildCount(a, nid) in j:
+        arm := at.Child(a, nid, j)
+        if arm == 0:
+            continue
+        end
+        if at.At(a, arm).op == tok.TK_KW_ELSE:
+            has_else = true
+        end
+        ab := ow_blk_new(g)
+        ow_edge(g, head, ab)
+        g.cur = ab
+        ow_emit(g, OW_IT_EXPR, at.At(a, arm).c)
+        ow_b_stmt(g, a, at.At(a, arm).b)
+        ow_edge(g, g.cur, exitb)
+    end
+    if not has_else:
+        ow_edge(g, head, exitb)
+    end
+    g.cur = exitb
+end
+
+func ow_b_jump(g &: OwCfg, want_cont: bool):
+    mut j := g.brk.len()
+    until j > 0:
+        j -= 1
+        if not want_cont or g.cont.get(j) >= 0:
+            ow_run_defers(g, g.lmark.get(j))
+            if want_cont:
+                ow_goto(g, g.cont.get(j))
+            else:
+                ow_goto(g, g.brk.get(j))
+            end
+            ret
+        end
+    end
+    ow_goto(g, OW_SINK)
+end
+
+func ow_b_block(g &: OwCfg, a &: at.Ast, nid: int):
+    mark := g.defers.len()
+    repeat at.ChildCount(a, nid) in i:
+        ow_b_stmt(g, a, at.Child(a, nid, i))
+    end
+    ow_run_defers(g, mark)
+    until g.defers.len() > mark:
+        _d := g.defers.pop()
+    end
+end
+
+func ow_b_stmt(g &: OwCfg, a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    k := at.KindOf(a, nid)
+    if k == at.AST_BLOCK:
+        ow_b_block(g, a, nid)
+    else k == at.AST_IF:
+        ow_b_if(g, a, nid)
+    else k == at.AST_UNTIL:
+        ow_b_loop(g, a, nid, at.At(a, nid).a, at.At(a, nid).b, 0)
+    else k == at.AST_FOR:
+        ow_b_stmt(g, a, at.At(a, nid).a)
+        ow_b_loop(g, a, nid, at.At(a, nid).b, at.At(a, nid).d, at.At(a, nid).c)
+    else k == at.AST_REPEAT:
+        ow_emit(g, OW_IT_EXPR, at.At(a, nid).a)
+        ow_emit(g, OW_IT_EXPR, at.At(a, nid).c)
+        ow_emit(g, OW_IT_EXPR, at.At(a, nid).d)
+        ow_b_loop(g, a, nid, 0, at.At(a, nid).b, 0)
+    else k == at.AST_EACH:
+        ow_emit(g, OW_IT_EXPR, at.At(a, nid).a)
+        ow_b_loop(g, a, nid, 0, at.At(a, nid).b, 0)
+    else k == at.AST_SWITCH:
+        ow_b_switch(g, a, nid)
+    else k == at.AST_MATCH:
+        ow_b_match(g, a, nid)
+    else k == at.AST_EXPR_STMT and at.At(a, nid).a != 0 and at.KindOf(a, at.At(a, nid).a) == at.AST_MATCH:
+        ow_b_match(g, a, at.At(a, nid).a)
+    else k == at.AST_RETURN:
+        ow_emit(g, OW_IT_RET, nid)
+        ow_run_defers(g, 0)
+        ow_goto(g, g.ret_to)
+    else k == at.AST_BREAK:
+        ow_b_jump(g, false)
+    else k == at.AST_CONTINUE:
+        ow_b_jump(g, true)
+    else k == at.AST_DEFER:
+        g.defers.push(nid)
+    else:
+        ow_emit(g, OW_IT_STMT, nid)
+    end
+end
+
+func ow_build(g &: OwCfg, a &: at.Ast, body: int):
+    _entry := ow_blk_new(g)
+    _exit := ow_blk_new(g)
+    _sink := ow_blk_new(g)
+    g.cur = OW_ENTRY
+    ow_b_stmt(g, a, body)
+    ow_edge(g, g.cur, OW_EXIT)
+end
+
+func ow_cfg_free(g &: OwCfg):
+    repeat g.blocks.len() in i:
+        mut b := g.blocks.get(i)
+        b.items.free()
+        b.succ.free()
+    end
+    g.blocks.free()
+    g.brk.free()
+    g.cont.free()
+    g.lmark.free()
+    g.defers.free()
+    g.hloop.free()
+end
+
+func ow_run_block(s &: Sema, o &: Ow, g &: OwCfg, a &: at.Ast, bi: int, st &: OwSt):
+    items := g.blocks.get(bi).items
+    repeat items.len() in i:
+        if not st.live:
+            ret
+        end
+        code := items.get(i)
+        kind := code % 8
+        nid := code / 8
+        if kind == OW_IT_STMT:
+            ow_stmt(s, o, a, st, nid)
+        else kind == OW_IT_EXPR:
+            mut te := ow_expr(s, o, a, st, nid)
+            te.free()
+        else kind == OW_IT_DEFER:
+            ow_stmt(s, o, a, st, at.At(a, nid).a)
+        else kind == OW_IT_RET:
+            ow_ret(s, o, a, st, nid)
+        end
+    end
+end
+
+func ow_in_span(a &: at.Ast, nid: int, lo: u32, hi: u32): bool:
+    if nid == 0:
+        ret false
+    end
+    bi := at.At(a, nid).begin_index
+    ret bi >= lo and bi <= hi
+end
+
+func ow_retire_loop(o &: Ow, a &: at.Ast, st &: OwSt, lnid: int):
+    lo := at.At(a, lnid).begin_index
+    hi := at.At(a, lnid).end_index
+    mut cand := Vector {} as Vector<int>
+    repeat st.pt.len() in i:
+        t := st.pt.get(i)
+        if o.tkind.get(t) == OW_TK_FRESH and ow_in_span(a, o.targ.get(t), lo, hi):
+            _c1 := ow_add(cand, t)
+        end
+    end
+    repeat st.fr.len() in j:
+        r := ow_tok_root(o, st.fr.get(j))
+        if o.tkind.get(r) == OW_TK_FRESH and ow_in_span(a, o.targ.get(r), lo, hi):
+            _c2 := ow_add(cand, r)
+        end
+    end
+    repeat cand.len() in k:
+        t2 := cand.get(k)
+        ow_retire(o, st, t2, ow_tok(o, OW_TK_OLD, o.targ.get(t2), ""))
+    end
+    cand.free()
+end
+
+func ow_flow(s &: Sema, o &: Ow, g &: OwCfg, a &: at.Ast, ins &: Vector<OwSt>, bi: int, wl &: Vector<int>, inq &: Vector<bool>):
+    if not ins.get(bi).live:
+        ret
+    end
+    mut st := ow_st_clone(ins.get(bi))
+    ow_run_block(s, o, g, a, bi, st)
+    succ := g.blocks.get(bi).succ
+    repeat succ.len() in si:
+        dest := succ.get(si)
+        mut tgt := ins.get(dest)
+        lnid := g.hloop.get(dest)
+        if lnid != 0:
+            mut lst := ow_st_clone(st)
+            ow_retire_loop(o, a, lst, lnid)
+            if ow_st_join(o, tgt, lst) and not inq.get(dest):
+                wl.push(dest)
+                inq.set(dest, true)
+            end
+            ow_st_free(lst)
+        else:
+            if ow_st_join(o, tgt, st) and not inq.get(dest):
+                wl.push(dest)
+                inq.set(dest, true)
+            end
+        end
+        ins.set(dest, tgt)
+    end
+    ow_st_free(st)
+end
+
+func ow_solve(s &: Sema, o &: Ow, g &: OwCfg, a &: at.Ast, init &: OwSt): OwSt:
+    n := g.blocks.len()
+    mut ins := Vector {} as Vector<OwSt>
+    repeat n:
+        ins.push(OwSt {})
+    end
+    mut e0 := ins.get(OW_ENTRY)
+    _j := ow_st_join(o, e0, init)
+    ins.set(OW_ENTRY, e0)
+    saved := o.report
+    o.report = false
+    mut wl := Vector {} as Vector<int>
+    mut inq := Vector {} as Vector<bool>
+    repeat n:
+        inq.push(false)
+    end
+    wl.push(OW_ENTRY)
+    inq.set(OW_ENTRY, true)
+    mut head := 0
+    budget := n * 64
+    until head < wl.len() and head < budget:
+        bi := wl.get(head)
+        head += 1
+        inq.set(bi, false)
+        ow_flow(s, o, g, a, ins, bi, wl, inq)
+    end
+    converged := head >= wl.len()
+    wl.free()
+    inq.free()
+    o.report = saved
+    if saved and converged:
+        repeat n in fi:
+            if ins.get(fi).live:
+                mut fst := ow_st_clone(ins.get(fi))
+                ow_run_block(s, o, g, a, fi, fst)
+                ow_st_free(fst)
+            end
+        end
+    end
+    mut out := ow_st_clone(ins.get(OW_EXIT))
+    if not converged:
+        out.fm.clear()
+        repeat out.pf.len() in pi:
+            if out.pf.get(pi) == OW_FREED:
+                out.pf.set(pi, OW_MAYBE)
+            end
+        end
+    end
+    repeat n in di:
+        mut dv := ins.get(di)
+        ow_st_free(dv)
+    end
+    ins.free()
+    ret out
+end
+
+func ow_region(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, body: int):
+    if body == 0 or not st.live:
+        ret
+    end
+    mut g := OwCfg {}
+    g.ret_to = OW_SINK
+    ow_build(g, a, body)
+    out := ow_solve(s, o, g, a, st)
+    ow_cfg_free(g)
+    ow_st_free(st)
+    st = out
+end
+
+func ow_scan(s &: Sema, a &: at.Ast, nid: int, in_defer: bool, warn: bool, flags &: Vector<int>):
+    if nid == 0:
+        ret
+    end
+    n := at.At(a, nid)
+    k := n.kind
+    if k == at.AST_LAMBDA:
+        ret
+    end
+    mut dfr := in_defer
+    if k == at.AST_DEFER:
+        dfr = true
+    end
+    if k == at.AST_RETURN and n.a != 0:
+        rk := at.KindOf(a, n.a)
+        if rk == at.AST_IDENTIFIER or rk == at.AST_MEMBER or rk == at.AST_CALL:
+            flags.set(2, 1)
+        end
+    end
+    if k == at.AST_CALL and not dfr:
+        repeat at.ChildCount(a, nid) in mi:
+            if SuArgMustFree(s, nid, mi + 1):
+                flags.set(0, 1)
+            end
+        end
+        if SuArgMustFree(s, nid, 0):
+            flags.set(0, 1)
+        end
+    end
+    if k == at.AST_CALL and n.a != 0 and at.KindOf(a, n.a) == at.AST_MEMBER:
+        mn := at.At(a, n.a).name
+        if str.Equals(mn, "free") or str.Equals(mn, "Free"):
+            if dfr:
+                flags.set(1, 1)
+            else:
+                flags.set(0, 1)
+            end
+        else warn and (str.Equals(mn, "ref") or str.Equals(mn, "iter")):
+            flags.set(0, 1)
+        end
+    end
+    na := n.a
+    nb := n.b
+    nc := n.c
+    nd := n.d
+    ow_scan(s, a, na, dfr, warn, flags)
+    ow_scan(s, a, nb, dfr, warn, flags)
+    ow_scan(s, a, nc, dfr, warn, flags)
+    ow_scan(s, a, nd, dfr, warn, flags)
+    repeat at.ChildCount(a, nid) in i:
+        ow_scan(s, a, at.Child(a, nid, i), dfr, warn, flags)
+    end
+end
+
+func ow_worth(s &: Sema, a &: at.Ast, body: int, warn: bool): bool:
+    mut flags := Vector {} as Vector<int>
+    flags.push(0)
+    flags.push(0)
+    flags.push(0)
+    ow_scan(s, a, body, false, warn, flags)
+    hit := flags.get(0) != 0 or (flags.get(1) != 0 and flags.get(2) != 0)
+    flags.free()
+    ret hit
+end
+
+func ow_path_root(a &: at.Ast, nid: int): str:
+    mut cur := nid
+    until cur != 0:
+        k := at.KindOf(a, cur)
+        if k == at.AST_IDENTIFIER:
+            ret at.At(a, cur).name
+        end
+        if k == at.AST_THIS:
+            ret "this"
+        end
+        if k != at.AST_MEMBER and k != at.AST_CAST:
+            ret ""
+        end
+        cur = at.At(a, cur).a
+    end
+    ret ""
+end
+
+func ow_rhs_roots(s &: Sema, a &: at.Ast, nid: int, out &: Vector<str>):
+    if nid == 0:
+        ret
+    end
+    k := at.KindOf(a, nid)
+    r := ow_path_root(a, nid)
+    if str.Len(r) > 0:
+        out.push(r)
+        ret
+    end
+    if k == at.AST_CALL:
+        cal := at.At(a, nid).a
+        if cal != 0 and at.KindOf(a, cal) == at.AST_MEMBER:
+            mn := at.At(a, cal).name
+            if str.Equals(mn, "ref") or str.Equals(mn, "iter"):
+                rr := ow_path_root(a, at.At(a, cal).a)
+                if str.Len(rr) > 0:
+                    out.push(rr)
+                end
+            end
+        end
+        if s.sum_ready:
+            fi := su_fn_idx(s, su_call_decl(s, nid))
+            if fi >= 0 and s.sum_ralias.get(fi) >= 0:
+                sl := s.sum_ralias.get(fi)
+                mut src := 0
+                if sl == 0 and cal != 0 and at.KindOf(a, cal) == at.AST_MEMBER:
+                    src = at.At(a, cal).a
+                else sl > 0 and sl - 1 < at.ChildCount(a, nid):
+                    src = at.Child(a, nid, sl - 1)
+                end
+                ar := ow_path_root(a, src)
+                if src != 0 and str.Len(ar) > 0:
+                    out.push(ar)
+                end
+            end
+        end
+        ret
+    end
+    if k == at.AST_TERNARY:
+        ow_rhs_roots(s, a, at.At(a, nid).b, out)
+        ow_rhs_roots(s, a, at.At(a, nid).c, out)
+        ret
+    end
+    if k == at.AST_STRUCT_LIT:
+        repeat at.ChildCount(a, nid) in i:
+            fi := at.Child(a, nid, i)
+            if fi != 0 and at.KindOf(a, fi) == at.AST_FIELD_INIT:
+                ow_rhs_roots(s, a, at.At(a, fi).a, out)
+            end
+        end
+    end
+end
+
+func ow_rel_walk(s &: Sema, o &: Ow, a &: at.Ast, nid: int, warn: bool, el &: Vector<str>, er &: Vector<str>):
+    if nid == 0:
+        ret
+    end
+    n := at.At(a, nid)
+    k := n.kind
+    if k == at.AST_LAMBDA:
+        ret
+    end
+    if k == at.AST_CALL and n.a != 0 and at.KindOf(a, n.a) == at.AST_MEMBER:
+        mn := at.At(a, n.a).name
+        recv := at.At(a, n.a).a
+        if str.Equals(mn, "Free") and at.ChildCount(a, nid) == 1:
+            fr := ow_path_root(a, at.Child(a, nid, 0))
+            if str.Len(fr) > 0 and not ow_str_in(o.rel, fr):
+                o.rel.push(fr)
+            end
+        end
+        if str.Equals(mn, "free") or (warn and (str.Equals(mn, "ref") or str.Equals(mn, "iter") or ow_is_grow(mn, at.At(a, recv).type_str))):
+            rv := ow_path_root(a, recv)
+            if str.Len(rv) > 0 and not ow_str_in(o.rel, rv):
+                o.rel.push(rv)
+            end
+        end
+    end
+    if k == at.AST_CALL and s.sum_ready:
+        repeat at.ChildCount(a, nid) in ci:
+            ce := su_arg_effect(s, a, nid, ci + 1)
+            if (warn and (ce == SU_GROW or ce == SU_FREE)) or SuArgMustFree(s, nid, ci + 1):
+                cr := ow_path_root(a, at.Child(a, nid, ci))
+                if str.Len(cr) > 0 and not ow_str_in(o.rel, cr):
+                    o.rel.push(cr)
+                end
+            end
+        end
+        if n.a != 0 and at.KindOf(a, n.a) == at.AST_MEMBER and not ow_is_pkg_obj(s, a, at.At(a, n.a).a):
+            te := su_arg_effect(s, a, nid, 0)
+            if (warn and (te == SU_GROW or te == SU_FREE)) or SuArgMustFree(s, nid, 0):
+                tr := ow_path_root(a, at.At(a, n.a).a)
+                if str.Len(tr) > 0 and not ow_str_in(o.rel, tr):
+                    o.rel.push(tr)
+                end
+            end
+        end
+    end
+    if k == at.AST_VAR_DECL or k == at.AST_CONST_DECL or k == at.AST_ASSIGN:
+        mut lroot := n.name
+        mut rhs := n.a
+        if k == at.AST_ASSIGN:
+            lroot = ow_path_root(a, n.a)
+            rhs = n.b
+        end
+        if str.Len(lroot) > 0 and rhs != 0:
+            mut rs := Vector {} as Vector<str>
+            ow_rhs_roots(s, a, rhs, rs)
+            repeat rs.len() in i:
+                el.push(lroot)
+                er.push(rs.get(i))
+            end
+            rs.free()
+        end
+    end
+    if k == at.AST_RETURN and n.a != 0:
+        rt := ow_path_root(a, n.a)
+        if str.Len(rt) > 0:
+            el.push("")
+            er.push(rt)
+        end
+    end
+    na := n.a
+    nb := n.b
+    nc := n.c
+    nd := n.d
+    ow_rel_walk(s, o, a, na, warn, el, er)
+    ow_rel_walk(s, o, a, nb, warn, el, er)
+    ow_rel_walk(s, o, a, nc, warn, el, er)
+    ow_rel_walk(s, o, a, nd, warn, el, er)
+    repeat at.ChildCount(a, nid) in j:
+        ow_rel_walk(s, o, a, at.Child(a, nid, j), warn, el, er)
+    end
+end
+
+func ow_relevance(s &: Sema, o &: Ow, a &: at.Ast, body: int, warn: bool):
+    mut el := Vector {} as Vector<str>
+    mut er := Vector {} as Vector<str>
+    ow_rel_walk(s, o, a, body, warn, el, er)
+    mut grew := true
+    until grew:
+        grew = false
+        repeat el.len() in i:
+            l := el.get(i)
+            r := er.get(i)
+            l_in := str.Len(l) > 0 and ow_str_in(o.rel, l)
+            r_in := ow_str_in(o.rel, r)
+            if l_in and not r_in:
+                o.rel.push(r)
+                grew = true
+            else r_in and not l_in and str.Len(l) > 0:
+                o.rel.push(l)
+                grew = true
+            end
+        end
+    end
+    el.free()
+    er.free()
+end
+
+func ow_free_ctx(o &: Ow):
+    o.kpar.free()
+    o.kname.free()
+    o.tkind.free()
+    o.targ.free()
+    o.tname.free()
+    o.tsite.free()
+    o.tsk.free()
+    o.tsumm.free()
+    o.tstrong.free()
+    o.rep.free()
+    o.locals.free()
+    o.krel.free()
+    o.rel.free()
+end
+
+pub func SemaCheckOwnership(s &: Sema, a &: at.Ast, fnid: int):
+    if g_sm_ownership == 0 or fnid == 0 or s.requal:
+        ret
+    end
+    body := at.At(a, fnid).a
+    if body == 0:
+        ret
+    end
+    if g_sm_ownership < 2 and not ow_worth(s, a, body, false):
+        ret
+    end
+    mut o := Ow {}
+    o.mode = g_sm_ownership
+    o.report = true
+    ow_relevance(s, o, a, body, g_sm_ownership >= 2)
+    repeat at.ChildCount(a, fnid) in i:
+        c := at.Child(a, fnid, i)
+        if c != 0 and at.KindOf(a, c) == at.AST_PARAM:
+            o.locals.push(at.At(a, c).name)
+        end
+    end
+    mut g := OwCfg {}
+    g.ret_to = OW_EXIT
+    ow_build(g, a, body)
+    mut init := OwSt {}
+    init.live = true
+    mut out := ow_solve(s, o, g, a, init)
+    ow_st_free(out)
+    ow_st_free(init)
+    ow_cfg_free(g)
+    ow_free_ctx(o)
+end

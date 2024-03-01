@@ -1,0 +1,273 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import audio
+import audio.wav
+import compress
+import encoding.binary
+import math
+import mem
+import filepath
+import os
+import testing
+
+func make_clip(rate: int, channels: int, frames: int, denom: f64, step: int): audio.Clip:
+    mut c := audio.New(rate, channels, frames)
+    mut f := 0
+    until f < frames:
+        mut ch := 0
+        until ch < channels:
+            k := ((f * channels + ch) * step) - (frames * channels * step) / 2
+            audio.SetSample(c, f, ch, (k as f64) / denom)
+            ch += 1
+        end
+        f += 1
+    end
+    ret c
+end
+
+func worst_diff(a: audio.Clip, b: audio.Clip): f64:
+    mut worst := 0.0
+    mut f := 0
+    until f < a.frames:
+        mut ch := 0
+        until ch < a.channels:
+            d := math.Abs(audio.Sample(b, f, ch) - audio.Sample(a, f, ch))
+            if d > worst:
+                worst = d
+            end
+            ch += 1
+        end
+        f += 1
+    end
+    ret worst
+end
+
+func roundtrip(c: audio.Clip, bits: int): f64:
+    enc := wav.EncodeWAVBits(c, bits)
+    mut ok := false
+    mut back := wav.DecodeWAV(enc.data, enc.len, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(back.frames, c.frames)
+    testing.AssertEqInt(back.channels, c.channels)
+    testing.AssertEqInt(back.rate, c.rate)
+    testing.AssertEqInt(back.bits, bits)
+    d := worst_diff(c, back)
+    compress.BufFree(enc)
+    audio.Free(back)
+    ret d
+end
+
+func build_pcm32(rate: int, vals: Vector<int>): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    data_bytes := vals.len() * 4
+    compress.BufPush(b, 82)
+    compress.BufPush(b, 73)
+    compress.BufPush(b, 70)
+    compress.BufPush(b, 70)
+    binary.WriteU32LE(b, 36 + data_bytes)
+    compress.BufPush(b, 87)
+    compress.BufPush(b, 65)
+    compress.BufPush(b, 86)
+    compress.BufPush(b, 69)
+    compress.BufPush(b, 102)
+    compress.BufPush(b, 109)
+    compress.BufPush(b, 116)
+    compress.BufPush(b, 32)
+    binary.WriteU32LE(b, 16)
+    binary.WriteU16LE(b, 1)
+    binary.WriteU16LE(b, 1)
+    binary.WriteU32LE(b, rate)
+    binary.WriteU32LE(b, rate * 4)
+    binary.WriteU16LE(b, 4)
+    binary.WriteU16LE(b, 32)
+    compress.BufPush(b, 100)
+    compress.BufPush(b, 97)
+    compress.BufPush(b, 116)
+    compress.BufPush(b, 97)
+    binary.WriteU32LE(b, data_bytes)
+    each v in vals:
+        binary.WriteI32LE(b, v)
+    end
+    ret b
+end
+
+func main:
+    println "detection and headers"
+    c16 := make_clip(44100, 2, 64, 32768.0, 501)
+    enc := wav.EncodeWAV(c16)
+    testing.AssertTrue(wav.IsWAV(enc.data, enc.len))
+    testing.AssertEqInt(audio.DetectFormat(enc.data, enc.len), audio.FormatWAV)
+    testing.AssertEqInt(compress.BufLen(enc), 44 + 64 * 2 * 2)
+    mut fmt := wav.Format {}
+    testing.AssertTrue(wav.ReadFormat(enc.data, enc.len, fmt))
+    testing.AssertEqInt(fmt.codec, wav.CodecPCM)
+    testing.AssertEqInt(fmt.channels, 2)
+    testing.AssertEqInt(fmt.rate, 44100)
+    testing.AssertEqInt(fmt.bits, 16)
+    testing.AssertEqInt(fmt.block_align, 4)
+    testing.AssertEqInt(fmt.byte_rate, 44100 * 4)
+    testing.AssertFalse(wav.IsWAV(enc.data, 4))
+
+    println "chunk walking"
+    chunks := wav.Chunks(enc.data, enc.len)
+    testing.AssertEqInt(chunks.len(), 2)
+    mut data_chunk := wav.Chunk {}
+    testing.AssertTrue(wav.FindChunk(enc.data, enc.len, wav.Tag("data"), data_chunk))
+    testing.AssertEqInt(data_chunk.offset, 44)
+    testing.AssertEqInt(data_chunk.size, 64 * 2 * 2)
+    mut missing := wav.Chunk {}
+    testing.AssertFalse(wav.FindChunk(enc.data, enc.len, wav.Tag("cue "), missing))
+
+    println "probe"
+    mut pok := false
+    info := wav.ProbeWAV(enc.data, enc.len, pok)
+    testing.AssertTrue(pok)
+    testing.AssertEqInt(info.format, audio.FormatWAV)
+    testing.AssertEqInt(info.frames, 64)
+    testing.AssertEqInt(info.channels, 2)
+    testing.AssertEqInt(info.bits, 16)
+    testing.AssertTrue(info.lossless)
+    testing.AssertEqInt(info.bitrate, 44100 * 2 * 16)
+
+    println "8, 16 and 24 bit pcm round-trip bit for bit"
+    c8 := make_clip(8000, 1, 64, 128.0, 1)
+    testing.AssertEqFloat(roundtrip(c8, 8), 0.0, 0.0)
+    testing.AssertEqFloat(roundtrip(c16, 16), 0.0, 0.0)
+    c24 := make_clip(48000, 2, 64, 8388608.0, 131071)
+    testing.AssertEqFloat(roundtrip(c24, 24), 0.0, 0.0)
+
+    println "ieee float round-trips bit for bit"
+    fenc := wav.EncodeWAVFloat(c16)
+    mut fok := false
+    mut fback := wav.DecodeWAV(fenc.data, fenc.len, fok)
+    testing.AssertTrue(fok)
+    testing.AssertEqInt(fback.bits, 32)
+    testing.AssertEqFloat(worst_diff(c16, fback), 0.0, 0.0)
+
+    println "a real 32 bit source loses its low bits in an f32 clip"
+    mut vals := Vector {} as Vector<int>
+    vals.push(0x12345678)
+    vals.push(0x7FFFFFFF)
+    vals.push(-0x12345679)
+    vals.push(0x00FFFFFF)
+    src32 := build_pcm32(48000, vals)
+    mut ok32 := false
+    mut got32 := wav.DecodeWAV(src32.data, src32.len, ok32)
+    testing.AssertTrue(ok32)
+    testing.AssertEqInt(got32.bits, 32)
+    re32 := wav.EncodeWAVBits(got32, 32)
+    mut differs := false
+    mut last_survived := true
+    mut bi := 44
+    until bi < compress.BufLen(src32):
+        if compress.BufGet(src32, bi) != compress.BufGet(re32, bi):
+            differs = true
+            if bi >= 56:
+                last_survived = false
+            end
+        end
+        bi += 1
+    end
+    testing.AssertMsg(differs, "a 32 bit source should not survive an f32 clip")
+    testing.AssertMsg(last_survived, "a 24 bit value in the same file should survive")
+
+    println "g711 companding"
+    testing.AssertEqInt(audio.MuLawToPcm(audio.PcmToMuLaw(0)), 0)
+    testing.AssertEqInt(audio.PcmToMuLaw(0), 255)
+    testing.AssertEqInt(audio.PcmToMuLaw(16000), 144)
+    testing.AssertEqInt(audio.MuLawToPcm(144), 15996)
+    testing.AssertEqInt(audio.PcmToALaw(16000), 186)
+    testing.AssertEqInt(audio.ALawToPcm(186), 16128)
+    mut mu := 0
+    mut al := 0
+    mut near_mu := 0
+    mut near_al := 0
+    mut v := -32768
+    until v < 32768:
+        dm := math.AbsI(audio.MuLawToPcm(audio.PcmToMuLaw(v)) - v)
+        da := math.AbsI(audio.ALawToPcm(audio.PcmToALaw(v)) - v)
+        if dm > mu:
+            mu = dm
+        end
+        if da > al:
+            al = da
+        end
+        if math.AbsI(v) <= 256:
+            if dm > near_mu:
+                near_mu = dm
+            end
+            if da > near_al:
+                near_al = da
+            end
+        end
+        v += 7
+    end
+    testing.AssertMsg(mu <= 820, "mu-law error should stay under 2.5 percent of full scale")
+    testing.AssertMsg(al <= 820, "a-law error should stay under 2.5 percent of full scale")
+    testing.AssertMsg(near_mu <= 12, "mu-law should be fine grained near silence")
+    testing.AssertMsg(near_al <= 8, "a-law should be fine grained near silence")
+
+    println "companded files decode through the normal path"
+    menc := wav.EncodeMuLaw(c16)
+    testing.AssertEqInt(compress.BufLen(menc), 44 + 64 * 2)
+    mut mok := false
+    mut mback := wav.DecodeWAV(menc.data, menc.len, mok)
+    testing.AssertTrue(mok)
+    testing.AssertEqInt(mback.frames, 64)
+    testing.AssertMsg(worst_diff(c16, mback) < 0.05, "mu-law should stay close")
+    aenc := wav.EncodeALaw(c16)
+    mut aok := false
+    mut aback := wav.DecodeWAV(aenc.data, aenc.len, aok)
+    testing.AssertTrue(aok)
+    testing.AssertMsg(worst_diff(c16, aback) < 0.05, "a-law should stay close")
+
+    println "files on disk"
+    path := filepath.Join(os.TempDir(), "salam_audio_wav_test.wav")
+    defer mem.Free(path as void*)
+    testing.AssertTrue(wav.SaveWAVBits(c24, path, 24))
+    mut dok := false
+    mut disk := wav.OpenWAV(path, dok)
+    testing.AssertTrue(dok)
+    testing.AssertEqInt(disk.bits, 24)
+    testing.AssertEqFloat(worst_diff(c24, disk), 0.0, 0.0)
+    mut iok := false
+    disk_info := wav.ProbeFileWAV(path, iok)
+    testing.AssertTrue(iok)
+    testing.AssertEqInt(disk_info.frames, 64)
+    mut bad := false
+    gone := filepath.Join(os.TempDir(), "salam_audio_missing.wav")
+    defer mem.Free(gone as void*)
+    wav.OpenWAV(gone, bad)
+    testing.AssertFalse(bad)
+
+    println "refusals"
+    testing.AssertEqInt(compress.BufLen(wav.EncodeWAVBits(c16, 12)), 0)
+    testing.AssertEqInt(compress.BufLen(wav.EncodeWAV(audio.Clip {})), 0)
+
+    compress.BufFree(enc)
+    compress.BufFree(fenc)
+    compress.BufFree(src32)
+    compress.BufFree(re32)
+    compress.BufFree(menc)
+    compress.BufFree(aenc)
+    audio.Free(fback)
+    audio.Free(got32)
+    audio.Free(mback)
+    audio.Free(aback)
+    audio.Free(disk)
+    ret testing.Summary()
+end

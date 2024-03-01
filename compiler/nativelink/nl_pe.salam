@@ -1,0 +1,1045 @@
+package nativelink
+
+const PS_TEXT := 0
+const PS_DATA := 1
+const PS_RDATA := 2
+const PS_PDATA := 3
+const PS_XDATA := 4
+const PS_BSS := 5
+const PS_IDATA := 6
+const PS_TLS := 7
+const PS_RELOC := 8
+const PS_COUNT := 9
+
+const IT_SEC := 0
+const IT_BYTES := 1
+const IT_MARK := 2
+const IT_ALIGN := 3
+
+const SYN_PEMARK := 0 - 30
+const SYN_ALIAS := 0 - 31
+
+pub struct Pe:
+    pub it_ps: Vector<int> = Vector {}
+    pub it_kind: Vector<int> = Vector {}
+    pub it_key: Vector<str> = Vector {}
+    pub it_ord: Vector<int> = Vector {}
+    pub it_val: Vector<i64> = Vector {}
+    pub it_addr: Vector<i64> = Vector {}
+    pub bytes: Vector<u8> = Vector {}
+    pub ps_va: Vector<i64> = Vector {}
+    pub ps_vsize: Vector<i64> = Vector {}
+    pub ps_raw: Vector<i64> = Vector {}
+    pub ps_rawsize: Vector<i64> = Vector {}
+    pub breloc: Vector<i64> = Vector {}
+    pub nsec: int = 0
+    pub hdr_size: i64 = 0
+    pub image_size: i64 = 0
+    pub entry: i64 = 0
+    pub btype: int = 10
+    pub imp_va: i64 = 0
+    pub imp_size: i64 = 0
+    pub dbg_rva: i64 = 0
+end
+
+func ps_name(k: int): str:
+    switch k:
+        PS_TEXT: ret ".text" end
+        PS_DATA: ret ".data" end
+        PS_RDATA: ret ".rdata" end
+        PS_PDATA: ret ".pdata" end
+        PS_XDATA: ret ".xdata" end
+        PS_BSS: ret ".bss" end
+        PS_IDATA: ret ".idata" end
+        PS_TLS: ret ".tls" end
+        PS_RELOC: ret ".reloc" end
+    end
+    ret ".unknown"
+end
+
+func ps_flags(k: int): i64:
+    switch k:
+        PS_TEXT: ret 0x60000020 end
+        PS_DATA: ret 0xC0000040 end
+        PS_BSS: ret 0xC0000080 end
+        PS_IDATA: ret 0xC0000040 end
+        PS_TLS: ret 0xC0000040 end
+        PS_RELOC: ret 0x42000040 end
+    end
+    ret 0x40000040
+end
+
+func sec_after(l &: Nl, s: int, pre: str): str:
+    nm := name_of(l, l.s_name[s])
+    ret str.Substr(nm, str.Len(pre), str.Len(nm) - str.Len(pre))
+end
+
+func pe_item(t &: Pe, ps: int, kind: int, key: str, ord: int, val: i64):
+    t.it_ps.push(ps)
+    t.it_kind.push(kind)
+    t.it_key.push(key)
+    t.it_ord.push(ord)
+    t.it_val.push(val)
+    t.it_addr.push(0 as i64)
+end
+
+func pe_bytes(t &: Pe, ps: int, key: str, n: int, fill: int):
+    at := t.bytes.len()
+    repeat n:
+        t.bytes.push((fill & 255) as u8)
+    end
+    pe_item(t, ps, IT_BYTES, key, 0, ((at as i64) << (32 as i64)) | (n as i64))
+end
+
+func pe_mark(l &: Nl, t &: Pe, ps: int, key: str, sym: str):
+    pe_mark1(l, t, ps, key, sym)
+    if l.mach == EM_386:
+        pe_mark1(l, t, ps, key, "_" + sym)
+    end
+end
+
+func pe_psz(l &: Nl): int:
+    ret l.mach == EM_386 ? 4 : 8
+end
+
+func pe_mark1(l &: Nl, t &: Pe, ps: int, key: str, sym: str):
+    g := glob_find(l, sym)
+    if g < 0:
+        ret
+    end
+    if l.g_state[g] == SY_UNDEF or (l.g_state[g] == SY_ABS and l.g_sec[g] == SYN_PEMARK):
+        l.g_state[g] = SY_ABS
+        l.g_sec[g] = SYN_PEMARK
+        pe_item(t, ps, IT_MARK, key, 0, g as i64)
+    end
+end
+
+func pe_classify(l &: Nl, t &: Pe, s: int):
+    fl := l.s_flags[s]
+    if l.s_drop[s] or (fl & (0x800 as i64)) != (0 as i64) or (fl & (0x02000000 as i64)) != (0 as i64):
+        ret
+    end
+    nm := name_of(l, l.s_name[s])
+    if str.Len(nm) == 0 or str.StartsWith(nm, ".debug") or str.StartsWith(nm, ".drectve") or str.StartsWith(nm, ".note") or str.StartsWith(nm, ".gnu") or str.StartsWith(nm, ".stab") or str.StartsWith(nm, ".comment") or str.StartsWith(nm, ".eh_frame"):
+        ret
+    end
+    mut ps := 0 - 1
+    mut key := ""
+    if str.Equals(nm, ".text"):
+        ps = PS_TEXT
+        key = "1"
+    else str.StartsWith(nm, ".text$"):
+        ps = PS_TEXT
+        key = "2" + nm
+    else str.StartsWith(nm, ".text."):
+        ps = PS_TEXT
+        key = "3"
+    else str.Equals(nm, ".data") or str.Equals(nm, ".data2"):
+        ps = PS_DATA
+        key = "1"
+    else str.StartsWith(nm, ".data$"):
+        ps = PS_DATA
+        key = "2" + nm
+    else str.StartsWith(nm, ".data.") or str.Equals(nm, ".jcr"):
+        ps = PS_DATA
+        key = "3"
+    else str.Equals(nm, ".rdata"):
+        ps = PS_RDATA
+        key = "10"
+    else str.StartsWith(nm, ".rdata$"):
+        ps = PS_RDATA
+        key = "11" + nm
+    else str.StartsWith(nm, ".rodata"):
+        ps = PS_RDATA
+        key = "12"
+    else str.Equals(nm, ".rdata_runtime_pseudo_reloc"):
+        ps = PS_RDATA
+        key = "21"
+    else str.Equals(nm, ".ctors") or str.Equals(nm, ".ctor"):
+        ps = PS_RDATA
+        key = "31"
+    else str.StartsWith(nm, ".ctors."):
+        ps = PS_RDATA
+        key = "32" + nm
+    else str.Equals(nm, ".dtors") or str.Equals(nm, ".dtor"):
+        ps = PS_RDATA
+        key = "41"
+    else str.StartsWith(nm, ".dtors."):
+        ps = PS_RDATA
+        key = "42" + nm
+    else str.StartsWith(nm, ".CRT$X"):
+        ps = PS_RDATA
+        g2 := str.Substr(nm, 6, 1)
+        mut base := "50"
+        if str.Equals(g2, "C"): base = "51" end
+        if str.Equals(g2, "I"): base = "53" end
+        if str.Equals(g2, "L"): base = "55" end
+        if str.Equals(g2, "P"): base = "57" end
+        if str.Equals(g2, "T"): base = "59" end
+        if str.Equals(g2, "D"): base = "61" end
+        key = base + nm
+    else str.StartsWith(nm, ".pdata"):
+        ps = PS_PDATA
+        key = "1"
+    else str.StartsWith(nm, ".xdata"):
+        ps = PS_XDATA
+        key = "1"
+    else str.StartsWith(nm, ".bss") or (fl & (0x80 as i64)) != (0 as i64) and not str.StartsWith(nm, ".tls"):
+        ps = PS_BSS
+        key = "1"
+    else str.StartsWith(nm, ".idata$"):
+        ps = PS_IDATA
+        n := str.Substr(nm, 7, 1)
+        lab := l.o_label[l.s_obj[s]]
+        if str.Equals(n, "2"): key = "12" + lab end
+        if str.Equals(n, "3"): key = "13" + lab end
+        if str.Equals(n, "4"): key = "34" + lab end
+        if str.Equals(n, "5"): key = "51" + lab end
+        if str.Equals(n, "6"): key = "56" + lab end
+        if str.Equals(n, "7"): key = "57" + lab end
+    else str.StartsWith(nm, ".tls"):
+        ps = PS_TLS
+        if str.Equals(nm, ".tls$AAA"):
+            key = "1"
+        else str.Equals(nm, ".tls$ZZZ"):
+            key = "9"
+        else str.Equals(nm, ".tls"):
+            key = "2"
+        else str.Equals(nm, ".tls$"):
+            key = "25"
+        else:
+            key = "3" + nm
+        end
+    else (fl & (0x20000000 as i64)) != (0 as i64):
+        ps = PS_TEXT
+        key = "3"
+    else (fl & (0x80000000 as i64)) != (0 as i64):
+        ps = PS_DATA
+        key = "3"
+    else:
+        ps = PS_RDATA
+        key = "12"
+    end
+    l.s_live[s] = true
+    l.s_oc[s] = ps
+    pe_item(t, ps, IT_SEC, key, s, 0 as i64)
+end
+
+func pe_frame(l &: Nl, t &: Pe):
+    pe_mark(l, t, PS_DATA, "0", "__data_start__")
+    pe_mark(l, t, PS_DATA, "4", "__data_end__")
+    pe_mark(l, t, PS_RDATA, "200", "__rt_psrelocs_start")
+    pe_mark(l, t, PS_RDATA, "200", "__RUNTIME_PSEUDO_RELOC_LIST__")
+    pe_mark(l, t, PS_RDATA, "200", "___RUNTIME_PSEUDO_RELOC_LIST__")
+    pe_mark(l, t, PS_RDATA, "22", "__rt_psrelocs_end")
+    pe_mark(l, t, PS_RDATA, "22", "__RUNTIME_PSEUDO_RELOC_LIST_END__")
+    pe_mark(l, t, PS_RDATA, "22", "___RUNTIME_PSEUDO_RELOC_LIST_END__")
+    pe_item(t, PS_RDATA, IT_ALIGN, "29", 0, 8 as i64)
+    pe_mark(l, t, PS_RDATA, "300", "___CTOR_LIST__")
+    pe_mark(l, t, PS_RDATA, "300", "__CTOR_LIST__")
+    pe_bytes(t, PS_RDATA, "301", pe_psz(l), 255)
+    pe_bytes(t, PS_RDATA, "39", pe_psz(l), 0)
+    pe_mark(l, t, PS_RDATA, "400", "___DTOR_LIST__")
+    pe_mark(l, t, PS_RDATA, "400", "__DTOR_LIST__")
+    pe_bytes(t, PS_RDATA, "401", pe_psz(l), 255)
+    pe_bytes(t, PS_RDATA, "49", pe_psz(l), 0)
+    each pr in ["C51", "I53", "L55", "P57", "T59", "D61"]:
+        c := str.Substr(pr, 0, 1)
+        k := str.Substr(pr, 1, 2)
+        pe_mark(l, t, PS_RDATA, k + "0", "___crt_x" + str.Lower(c) + "_start__")
+        if not str.Equals(c, "L"):
+            pe_mark(l, t, PS_RDATA, k + "~", "___crt_x" + str.Lower(c) + "_end__")
+        end
+    end
+    pe_mark(l, t, PS_RDATA, "70", "__DELAY_IMPORT_DIRECTORY_start__")
+    pe_mark(l, t, PS_RDATA, "70", "__DELAY_IMPORT_DIRECTORY_end__")
+    pe_mark(l, t, PS_BSS, "0", "__bss_start__")
+    pe_mark(l, t, PS_BSS, "9", "__bss_end__")
+    pe_bytes(t, PS_IDATA, "19", 20, 0)
+    pe_item(t, PS_IDATA, IT_ALIGN, "20", 0, 8 as i64)
+    pe_mark(l, t, PS_IDATA, "50", "__IAT_start__")
+    pe_mark(l, t, PS_IDATA, "55", "__IAT_end__")
+    pe_mark(l, t, PS_TLS, "0", "___tls_start__")
+    pe_mark(l, t, PS_TLS, "9~", "___tls_end__")
+    pe_mark(l, t, PS_BSS, "99", "__end__")
+    pe_mark(l, t, PS_BSS, "99", "_end")
+    pe_mark(l, t, PS_BSS, "99", "end")
+    pe_mark(l, t, PS_TEXT, "9", "etext")
+end
+
+func pe_sort(t &: Pe):
+    n := t.it_ps.len()
+    mut i := 1
+    until i < n:
+        mut j := i
+        until j > 0 and pe_less(t, j, j - 1):
+            pe_swap(t, j, j - 1)
+            j -= 1
+        end
+        i += 1
+    end
+end
+
+func pe_less(t &: Pe, a: int, b: int): bool:
+    if t.it_ps[a] != t.it_ps[b]:
+        ret t.it_ps[a] < t.it_ps[b]
+    end
+    c := str.Compare(t.it_key[a], t.it_key[b])
+    ret c < 0
+end
+
+func pe_swap(t &: Pe, a: int, b: int):
+    p := t.it_ps[a]
+    t.it_ps[a] = t.it_ps[b]
+    t.it_ps[b] = p
+    k := t.it_kind[a]
+    t.it_kind[a] = t.it_kind[b]
+    t.it_kind[b] = k
+    ky := t.it_key[a]
+    t.it_key[a] = t.it_key[b]
+    t.it_key[b] = ky
+    o := t.it_ord[a]
+    t.it_ord[a] = t.it_ord[b]
+    t.it_ord[b] = o
+    v := t.it_val[a]
+    t.it_val[a] = t.it_val[b]
+    t.it_val[b] = v
+end
+
+func pe_commons(l &: Nl, t &: Pe):
+    repeat l.g_name.len() in g:
+        if l.g_state[g] == SY_UNDEF and l.g_common[g] > (0 as i64):
+            l.g_state[g] = SY_ABS
+            l.g_sec[g] = SYN_PEMARK
+            pe_item(t, PS_BSS, IT_ALIGN, "5", 0, 16 as i64)
+            pe_item(t, PS_BSS, IT_MARK, "5", 0, g as i64)
+            pe_bytes(t, PS_BSS, "5", l.g_common[g] as int, 0)
+        end
+    end
+end
+
+func pe_aliases(l &: Nl):
+    repeat l.g_name.len() in g:
+        if l.g_state[g] == SY_UNDEF and l.g_alias[g] >= 0:
+            l.g_state[g] = SY_ABS
+            l.g_sec[g] = SYN_ALIAS
+            l.g_val[g] = l.g_alias[g] as i64
+        end
+    end
+end
+
+func pe_place(l &: Nl, t &: Pe):
+    nps := PS_COUNT
+    repeat nps:
+        t.ps_va.push(0 as i64)
+        t.ps_vsize.push(0 as i64)
+        t.ps_raw.push(0 as i64)
+        t.ps_rawsize.push(0 as i64)
+    end
+    mut used := 0
+    repeat nps in k0:
+        mut any := false
+        repeat t.it_ps.len() in i0:
+            if t.it_ps[i0] == k0 and t.it_kind[i0] != IT_MARK and t.it_kind[i0] != IT_ALIGN:
+                any = true
+            end
+        end
+        if any or k0 == PS_RELOC:
+            used += 1
+        end
+    end
+    t.nsec = used + l.dg_name.len()
+    t.hdr_size = align_to((0x80 + 4 + 20 + (l.mach == EM_386 ? 224 : 240) + 40 * t.nsec) as i64, 0x200 as i64)
+    mut va := 0x1000 as i64
+    repeat nps in k:
+        if k == PS_RELOC:
+            continue
+        end
+        t.ps_va[k] = va
+        mut pos := va
+        repeat t.it_ps.len() in i:
+            if t.it_ps[i] != k:
+                continue
+            end
+            kind := t.it_kind[i]
+            if kind == IT_SEC:
+                s := t.it_ord[i]
+                pos = align_to(pos, l.s_align[s])
+                l.s_addr[s] = l.pe_base + pos
+                t.it_addr[i] = pos
+                pos = pos + l.s_size[s] + th_pad(l, s)
+            else kind == IT_BYTES:
+                t.it_addr[i] = pos
+                pos = pos + (t.it_val[i] & (0xFFFFFFFF as i64))
+            else kind == IT_ALIGN:
+                pos = align_to(pos, t.it_val[i])
+                t.it_addr[i] = pos
+            else:
+                t.it_addr[i] = pos
+                l.g_val[t.it_val[i] as int] = l.pe_base + pos
+            end
+        end
+        t.ps_vsize[k] = pos - va
+        if pos > va:
+            va = align_to(pos, 0x1000 as i64)
+        end
+    end
+    t.ps_va[PS_RELOC] = va
+    t.image_size = va
+end
+
+func pe_secidx(t &: Pe, k: int): int:
+    mut n := 0
+    repeat k + 1 in i:
+        if t.ps_vsize[i] > (0 as i64):
+            n += 1
+        end
+    end
+    ret n
+end
+
+func pe_sym(l &: Nl, os: int): i64:
+    g := l.os_glob[os]
+    if g >= 0:
+        st := l.g_state[g]
+        if st == SY_ABS and l.g_sec[g] == SYN_ALIAS:
+            ret pe_sym(l, l.g_val[g] as int)
+        end
+        if st == SY_ABS and l.g_sec[g] == SYN_PEMARK:
+            ret l.g_val[g]
+        end
+        if st == SY_ABS and l.g_sec[g] == SYN_EHDR:
+            ret l.pe_base
+        end
+        if st == SY_ABS and l.g_sec[g] == SYN_ZERO:
+            ret 0
+        end
+        if st == SY_DEF:
+            ret l.s_addr[l.g_sec[g]] + l.g_val[g]
+        end
+        ret l.g_val[g]
+    end
+    s := l.os_sec[os]
+    if s >= 0:
+        ret l.s_addr[s] + l.os_val[os]
+    end
+    ret l.os_val[os]
+end
+
+func rd32s(p: u8*, o: i64): i64:
+    v := rd32(p, o)
+    if v >= (0x80000000 as i64):
+        ret v - (0x100000000 as i64)
+    end
+    ret v
+end
+
+func pe_relocs(l &: Nl, t &: Pe, buf: u8*, fpos_of &: Vector<i64>):
+    repeat t.it_ps.len() in i:
+        if t.it_kind[i] != IT_SEC:
+            continue
+        end
+        s := t.it_ord[i]
+        if l.s_type[s] == 8:
+            continue
+        end
+        k := t.it_ps[i]
+        place0 := fpos_of[k] + (t.it_addr[i] - t.ps_va[k])
+        r0 := l.s_rel0[s]
+        repeat l.s_nrel[s] in q:
+            r := r0 + q
+            ty := pe_rtype(l, l.r_type[r] - CR_BASE)
+            os := l.r_sym[r]
+            place := place0 + l.r_off[r]
+            pva := l.pe_base + t.it_addr[i] + l.r_off[r]
+            mut sv := pe_sym(l, os)
+            if l.th_sec.len() > 0 and l.th_of_rel.has(r):
+                sv = th_addr(l, l.th_of_rel.get(r))
+                wr32(buf, place, rd32(buf, place) & (0xFC000000 as i64))
+            end
+            if ty == 1:
+                wr64(buf, place, sv + rd64(buf, place))
+                t.breloc.push(pva - l.pe_base)
+            else ty == 3:
+                wr32(buf, place, sv + rd32s(buf, place) - l.pe_base)
+            else ty >= 4 and ty <= 9:
+                v := sv + rd32s(buf, place) - (pva + ((4 + ty - 4) as i64))
+                if not fits32s(v):
+                    nl_fail(l, "relocation out of range at " + reloc_where(l, s, r))
+                    ret
+                end
+                wr32(buf, place, v)
+            else ty == 102:
+                wr32(buf, place, sv + rd32s(buf, place))
+                t.breloc.push(pva - l.pe_base)
+            else ty == 2:
+                v2 := sv + rd32s(buf, place)
+                if not fits32u(v2):
+                    nl_fail(l, "32-bit absolute address does not fit at " + reloc_where(l, s, r))
+                    ret
+                end
+                wr32(buf, place, v2)
+            else ty == 11:
+                ts := sym_sec_of(l, os)
+                mut base := 0 as i64
+                if ts >= 0:
+                    base = l.pe_base + t.ps_va[l.s_oc[ts]]
+                end
+                wr32(buf, place, sv + rd32s(buf, place) - base)
+            else ty == 10:
+                ts2 := sym_sec_of(l, os)
+                ix := ts2 >= 0 ? pe_secidx(t, l.s_oc[ts2]) : 0
+                buf[place] = (ix & 255) as u8
+                buf[place + (1 as i64)] = ((ix >> 8) & 255) as u8
+            else ty == 0:
+                _z := 0
+            else ty >= 203 and ty <= 216:
+                mut sva := sv
+                if ty == 209 or ty == 210 or ty == 211:
+                    ts3 := sym_sec_of(l, os)
+                    if ts3 >= 0:
+                        sva = sv - (l.pe_base + t.ps_va[l.s_oc[ts3]])
+                    end
+                end
+                if not pe_a64_reloc(buf, place, ty == 211 ? 207 : ty, sva, pva):
+                    nl_fail(l, "ARM64 relocation out of range at " + reloc_where(l, s, r))
+                    ret
+                end
+            else:
+                nl_fail(l, "unsupported COFF relocation type " + str.FromInt(ty as i64) + " at " + reloc_where(l, s, r))
+                ret
+            end
+        end
+    end
+end
+
+func a64_adr_imm(w: i64): i64:
+    ret sext(((w >> (29 as i64)) & (3 as i64)) | (((w >> (5 as i64)) & (0x7FFFF as i64)) << (2 as i64)), 21)
+end
+
+func a64_put_adr(w: i64, imm: i64): i64:
+    ret (w & (0x9F00001F as i64)) | ((imm & (3 as i64)) << (29 as i64)) | (((imm >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64))
+end
+
+func pe_a64_reloc(buf: u8*, place: i64, ty: int, sv: i64, pva: i64): bool:
+    w := rd32(buf, place)
+    mut nw := w
+    if ty == 203:
+        v := sv + (sext(w & (0x3FFFFFF as i64), 26) << (2 as i64)) - pva
+        if v < (0 - 0x8000000 as i64) or v >= (0x8000000 as i64):
+            ret false
+        end
+        nw = (w & (0xFC000000 as i64)) | ((v >> (2 as i64)) & (0x3FFFFFF as i64))
+    else ty == 204:
+        tgt := sv + a64_adr_imm(w)
+        d := (tgt >> (12 as i64)) - (pva >> (12 as i64))
+        if d < (0 - 0x100000 as i64) or d >= (0x100000 as i64):
+            ret false
+        end
+        nw = a64_put_adr(w, d)
+    else ty == 205:
+        d2 := sv + a64_adr_imm(w) - pva
+        if d2 < (0 - 0x100000 as i64) or d2 >= (0x100000 as i64):
+            ret false
+        end
+        nw = a64_put_adr(w, d2)
+    else ty == 206:
+        v6 := (sv + ((w >> (10 as i64)) & (0xFFF as i64))) & (0xFFF as i64)
+        nw = (w & (0xFFC003FF as i64)) | (v6 << (10 as i64))
+    else ty == 207:
+        mut size := (w >> (30 as i64)) & (3 as i64)
+        if (w & (0x04800000 as i64)) == (0x04800000 as i64):
+            size = size + (4 as i64)
+        end
+        v7 := (sv + (((w >> (10 as i64)) & (0xFFF as i64)) << size)) & (0xFFF as i64)
+        if (v7 & (((1 as i64) << size) - (1 as i64))) != (0 as i64):
+            ret false
+        end
+        nw = (w & (0xFFC003FF as i64)) | ((v7 >> size) << (10 as i64))
+    else ty == 209:
+        nw = (w & (0xFFC003FF as i64)) | (((sv + ((w >> (10 as i64)) & (0xFFF as i64))) & (0xFFF as i64)) << (10 as i64))
+    else ty == 210:
+        nw = (w & (0xFFC003FF as i64)) | ((((sv >> (12 as i64)) + ((w >> (10 as i64)) & (0xFFF as i64))) & (0xFFF as i64)) << (10 as i64))
+    else ty == 215:
+        v9 := sv + (sext((w >> (5 as i64)) & (0x7FFFF as i64), 19) << (2 as i64)) - pva
+        if v9 < (0 - 0x100000 as i64) or v9 >= (0x100000 as i64):
+            ret false
+        end
+        nw = (w & (0xFF00001F as i64)) | (((v9 >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64))
+    else ty == 216:
+        v4 := sv + (sext((w >> (5 as i64)) & (0x3FFF as i64), 14) << (2 as i64)) - pva
+        if v4 < (0 - 0x8000 as i64) or v4 >= (0x8000 as i64):
+            ret false
+        end
+        nw = (w & (0xFFF8001F as i64)) | (((v4 >> (2 as i64)) & (0x3FFF as i64)) << (5 as i64))
+    end
+    wr32(buf, place, nw)
+    ret true
+end
+
+func sym_sec_of(l &: Nl, os: int): int:
+    g := l.os_glob[os]
+    if g >= 0:
+        if l.g_state[g] == SY_DEF:
+            ret l.g_sec[g]
+        end
+        if l.g_state[g] == SY_ABS and l.g_sec[g] == SYN_ALIAS:
+            ret sym_sec_of(l, l.g_val[g] as int)
+        end
+        ret 0 - 1
+    end
+    ret l.os_sec[os]
+end
+
+func pe_breloc_build(t &: Pe, out &: Vector<u8>):
+    n := t.breloc.len()
+    mut i := 1
+    until i < n:
+        mut j := i
+        until j > 0 and t.breloc[j] < t.breloc[j - 1]:
+            tmp := t.breloc[j]
+            t.breloc[j] = t.breloc[j - 1]
+            t.breloc[j - 1] = tmp
+            j -= 1
+        end
+        i += 1
+    end
+    mut k := 0
+    until k < n:
+        page := t.breloc[k] & (0 - 4096 as i64)
+        mut e := k
+        until e < n and (t.breloc[e] & (0 - 4096 as i64)) == page:
+            e += 1
+        end
+        cnt := e - k
+        mut bsz := 8 + 2 * cnt
+        if (bsz % 4) != 0:
+            bsz += 2
+        end
+        tb_le(out, page, 4)
+        tb_le(out, bsz as i64, 4)
+        repeat cnt in q:
+            tb_le(out, ((t.btype << 12) as i64) | (t.breloc[k + q] & (4095 as i64)), 2)
+        end
+        if (cnt % 2) == 1:
+            tb_le(out, 0 as i64, 2)
+        end
+        k = e
+    end
+end
+
+func pe_link(l &: Nl, out: str):
+    mut t := Pe {}
+    repeat l.s_obj.len() in s:
+        if l.o_coff[l.s_obj[s]]:
+            pe_classify(l, t, s)
+        end
+    end
+    if l.mach == EM_386:
+        l.pe_base = 0x400000 as i64
+    end
+    mut cvs := Vector {} as Vector<int>
+    mut pdb := ""
+    if not l.strip:
+        cvs = pdb_cv_secs(l)
+    end
+    if cvs.len() > 0:
+        pdb = pdb_path_of(out)
+        pe_bytes(t, PS_RDATA, "zpdb", PDB_RSDS + 25 + str.Len(pdb), 0)
+    end
+    synth(l, "__ImageBase", SYN_EHDR)
+    synth(l, "__image_base__", SYN_EHDR)
+    synth(l, "___ImageBase", SYN_EHDR)
+    synth(l, "___image_base__", SYN_EHDR)
+    pe_frame(l, t)
+    pe_commons(l, t)
+    pe_aliases(l)
+    check_undefined(l)
+    if not l.ok:
+        ret
+    end
+    if not l.strip:
+        dbg_collect_pe(l)
+    end
+    pe_sort(t)
+    pe_place(l, t)
+    until l.ok and pe_th_plan(l, t):
+        t.ps_va.clear()
+        t.ps_vsize.clear()
+        t.ps_raw.clear()
+        t.ps_rawsize.clear()
+        pe_place(l, t)
+    end
+    mut ent := glob_find(l, "mainCRTStartup")
+    if l.mach == EM_386:
+        ent = glob_find(l, "_mainCRTStartup")
+    end
+    if ent < 0 or l.g_state[ent] != SY_DEF:
+        nl_fail(l, "cannot link: no entry point 'mainCRTStartup' (is crt2.o missing?)")
+        ret
+    end
+    t.entry = l.s_addr[l.g_sec[ent]] + l.g_val[ent] - l.pe_base
+    mut fpos_of := Vector {} as Vector<i64>
+    mut fp := t.hdr_size
+    repeat PS_COUNT in k:
+        fpos_of.push(fp)
+        if k != PS_BSS and k != PS_RELOC and t.ps_vsize[k] > (0 as i64):
+            t.ps_raw[k] = fp
+            t.ps_rawsize[k] = align_to(t.ps_vsize[k], 0x200 as i64)
+            fp = fp + t.ps_rawsize[k]
+        end
+    end
+    total := fp
+    buf := malloc((total + (0x200 as i64)) as u64) as u8*
+    repeat total in z:
+        buf[z] = 0 as u8
+    end
+    repeat t.it_ps.len() in i:
+        k2 := t.it_ps[i]
+        if k2 == PS_BSS:
+            continue
+        end
+        dst := fpos_of[k2] + (t.it_addr[i] - t.ps_va[k2])
+        if t.it_kind[i] == IT_SEC:
+            s2 := t.it_ord[i]
+            if l.s_type[s2] != 8 and l.s_off[s2] > (0 as i64):
+                p := fptr(l, l.o_file[l.s_obj[s2]])
+                repeat l.s_size[s2] in b:
+                    buf[dst + b] = p[l.s_off[s2] + b]
+                end
+            end
+            if l.th_count.has(s2):
+                pe_th_write(l, buf, s2, dst)
+            end
+        else t.it_kind[i] == IT_BYTES:
+            at := t.it_val[i] >> (32 as i64)
+            n := t.it_val[i] & (0xFFFFFFFF as i64)
+            repeat n in b2:
+                buf[dst + b2] = t.bytes[(at + b2) as int]
+            end
+        end
+    end
+    pe_relocs(l, t, buf, fpos_of)
+    if not l.ok:
+        ret
+    end
+    if l.dg_name.len() > 0:
+        dbg_build_pe(l)
+    end
+    mut rel := Vector {} as Vector<u8>
+    if l.mach == EM_386:
+        t.btype = 3
+    end
+    pe_breloc_build(t, rel)
+    t.ps_vsize[PS_RELOC] = rel.len() as i64
+    t.ps_raw[PS_RELOC] = fp
+    t.ps_rawsize[PS_RELOC] = align_to(rel.len() as i64, 0x200 as i64)
+    t.image_size = align_to(t.ps_va[PS_RELOC] + (rel.len() as i64), 0x1000 as i64)
+    if l.dg_name.len() > 0:
+        t.image_size = dbg_layout_pe(l, t.image_size, fp + t.ps_rawsize[PS_RELOC])
+    end
+    mut g0 := 0 as i64
+    mut g1 := 0 as i64
+    if cvs.len() > 0:
+        g0 = pdb_guid(buf, total, 0)
+        g1 = pdb_guid(buf, total, 1)
+        pe_rsds(t, buf, fpos_of, g0, g1, pdb)
+    end
+    pe_write(l, t, buf, total, rel, out)
+    if cvs.len() > 0 and l.ok:
+        mut sh := pe_sechdrs(l, t)
+        if not pdb_write(l, t, cvs, sh, g0, g1, pdb):
+            nl_fail(l, "cannot write " + pdb)
+        end
+        sh.free()
+    end
+    cvs.free()
+    rel.free()
+    fpos_of.free()
+end
+
+func pdb_path_of(out: str): str:
+    n := str.Len(out)
+    if n > 4 and (str.EndsWith(out, ".exe") or str.EndsWith(out, ".EXE") or str.EndsWith(out, ".dll") or str.EndsWith(out, ".DLL")):
+        ret str.Substr(out, 0, n - 4) + ".pdb"
+    end
+    ret out + ".pdb"
+end
+
+func pe_rsds(t &: Pe, buf: u8*, fpos_of &: Vector<i64>, g0: i64, g1: i64, pdb: str):
+    repeat t.it_ps.len() in i:
+        if t.it_kind[i] != IT_BYTES or not str.Equals(t.it_key[i], "zpdb"):
+            continue
+        end
+        rva := t.it_addr[i]
+        at := fpos_of[PS_RDATA] + (rva - t.ps_va[PS_RDATA])
+        mut v := Vector {} as Vector<u8>
+        tb_le(v, 0 as i64, 12)
+        tb_le(v, 2 as i64, 4)
+        tb_le(v, (25 + str.Len(pdb)) as i64, 4)
+        tb_le(v, rva + (PDB_RSDS as i64), 4)
+        tb_le(v, at + (PDB_RSDS as i64), 4)
+        tb_le(v, 0x53445352 as i64, 4)
+        tb_le(v, g0, 8)
+        tb_le(v, g1, 8)
+        tb_le(v, 1 as i64, 4)
+        pp := (pdb as void*) as u8*
+        repeat str.Len(pdb) in c:
+            v.push(pp[c])
+        end
+        v.push(0 as u8)
+        repeat v.len() in b:
+            buf[at + (b as i64)] = v[b]
+        end
+        v.free()
+        t.dbg_rva = rva
+        ret
+    end
+end
+
+func pe_sechdrs(l &: Nl, t &: Pe): Vector<u8>:
+    mut h := Vector {} as Vector<u8>
+    repeat PS_COUNT in k2:
+        if t.ps_vsize[k2] <= (0 as i64):
+            continue
+        end
+        nm := ps_name(k2)
+        np := (nm as void*) as u8*
+        repeat 8 in c:
+            h.push(c < str.Len(nm) ? np[c] : (0 as u8))
+        end
+        w32(h, t.ps_vsize[k2])
+        w32(h, t.ps_va[k2])
+        w32(h, k2 == PS_BSS ? (0 as i64) : t.ps_rawsize[k2])
+        w32(h, k2 == PS_BSS ? (0 as i64) : t.ps_raw[k2])
+        w32(h, 0 as i64)
+        w32(h, 0 as i64)
+        w16(h, 0 as i64)
+        w16(h, 0 as i64)
+        w32(h, ps_flags(k2))
+    end
+    repeat l.dg_name.len() in dk:
+        mut dn := name_of(l, l.dg_name[dk])
+        if l.pe_stroff[dk] >= 0:
+            dn = "/" + str.FromInt(l.pe_stroff[dk] as i64)
+        end
+        dp := (dn as void*) as u8*
+        repeat 8 in c2:
+            h.push(c2 < str.Len(dn) ? dp[c2] : (0 as u8))
+        end
+        w32(h, l.dg_size[dk])
+        w32(h, l.dg_va[dk])
+        w32(h, align_to(l.dg_size[dk], 0x200 as i64))
+        w32(h, l.dg_raw[dk])
+        w32(h, 0 as i64)
+        w32(h, 0 as i64)
+        w16(h, 0 as i64)
+        w16(h, 0 as i64)
+        w32(h, 0x42100040 as i64)
+    end
+    ret h
+end
+
+func w16(o &: Vector<u8>, v: i64):
+    tb_le(o, v, 2)
+end
+
+func w32(o &: Vector<u8>, v: i64):
+    tb_le(o, v, 4)
+end
+
+func w64(o &: Vector<u8>, v: i64):
+    tb_le(o, v, 8)
+end
+
+func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: str):
+    mut h := Vector {} as Vector<u8>
+    w16(h, 0x5A4D as i64)
+    repeat 0x3a:
+        h.push(0 as u8)
+    end
+    w32(h, 0x80 as i64)
+    until h.len() < 0x80:
+        h.push(0 as u8)
+    end
+    p32 := l.mach == EM_386
+    w32(h, 0x4550 as i64)
+    w16(h, (p32 ? 0x14c : (l.mach == EM_AARCH64 ? 0xAA64 : 0x8664)) as i64)
+    w16(h, t.nsec as i64)
+    w32(h, 0 as i64)
+    w32(h, l.dg_name.len() > 0 ? l.pe_strpos : (0 as i64))
+    w32(h, 0 as i64)
+    w16(h, (p32 ? 224 : 240) as i64)
+    w16(h, (p32 ? 0x0122 : 0x22) as i64)
+    w16(h, (p32 ? 0x10b : 0x20b) as i64)
+    h.push(2 as u8)
+    h.push(41 as u8)
+    w32(h, t.ps_rawsize[PS_TEXT])
+    mut idata := 0 as i64
+    repeat PS_COUNT in k:
+        if k != PS_TEXT and k != PS_BSS:
+            idata = idata + t.ps_rawsize[k]
+        end
+    end
+    w32(h, idata)
+    w32(h, align_to(t.ps_vsize[PS_BSS], 0x200 as i64))
+    w32(h, t.entry)
+    w32(h, t.ps_va[PS_TEXT])
+    if p32:
+        w32(h, t.ps_va[PS_DATA] > (0 as i64) ? t.ps_va[PS_DATA] : t.ps_va[PS_RDATA])
+        w32(h, l.pe_base)
+    else:
+        w64(h, l.pe_base)
+    end
+    a64 := l.mach == EM_AARCH64
+    w32(h, 0x1000 as i64)
+    w32(h, 0x200 as i64)
+    w16(h, (a64 ? 6 : 4) as i64)
+    w16(h, 0 as i64)
+    w16(h, 0 as i64)
+    w16(h, 0 as i64)
+    w16(h, (a64 ? 6 : 5) as i64)
+    w16(h, (a64 ? 0 : 2) as i64)
+    w32(h, 0 as i64)
+    w32(h, t.image_size)
+    w32(h, t.hdr_size)
+    w32(h, 0 as i64)
+    w16(h, 3 as i64)
+    w16(h, (p32 ? 0x140 : (a64 ? 0x8160 : 0x160)) as i64)
+    if p32:
+        w32(h, 0x200000 as i64)
+        w32(h, 0x1000 as i64)
+        w32(h, 0x100000 as i64)
+        w32(h, 0x1000 as i64)
+    else:
+        w64(h, 0x200000 as i64)
+        w64(h, 0x1000 as i64)
+        w64(h, 0x100000 as i64)
+        w64(h, 0x1000 as i64)
+    end
+    w32(h, 0 as i64)
+    w32(h, 16 as i64)
+    mut iat0 := 0 as i64
+    mut iat1 := 0 as i64
+    mut imp0 := 0 as i64
+    mut imp1 := 0 as i64
+    mut tls := 0 as i64
+    mut gi0 := glob_find(l, "__IAT_start__")
+    mut gi1 := glob_find(l, "__IAT_end__")
+    if p32 and gi0 < 0:
+        gi0 = glob_find(l, "___IAT_start__")
+        gi1 = glob_find(l, "___IAT_end__")
+    end
+    if gi0 >= 0 and gi1 >= 0:
+        iat0 = l.g_val[gi0] - l.pe_base
+        iat1 = l.g_val[gi1] - l.pe_base
+    end
+    repeat t.it_ps.len() in i:
+        if t.it_ps[i] == PS_IDATA and t.it_kind[i] == IT_SEC and str.StartsWith(t.it_key[i], "12"):
+            if imp0 == (0 as i64):
+                imp0 = t.it_addr[i]
+            end
+            imp1 = t.it_addr[i] + l.s_size[t.it_ord[i]]
+        end
+    end
+    tg := glob_find(l, l.mach == EM_386 ? "__tls_used" : "_tls_used")
+    if tg >= 0 and l.g_state[tg] == SY_DEF:
+        tls = l.s_addr[l.g_sec[tg]] + l.g_val[tg] - l.pe_base
+    end
+    repeat 16 in d:
+        if d == 1 and imp0 > (0 as i64):
+            w32(h, imp0)
+            w32(h, imp1 - imp0 + (20 as i64))
+        else d == 3 and t.ps_vsize[PS_PDATA] > (0 as i64):
+            w32(h, t.ps_va[PS_PDATA])
+            w32(h, t.ps_vsize[PS_PDATA])
+        else d == 5 and rel.len() > 0:
+            w32(h, t.ps_va[PS_RELOC])
+            w32(h, rel.len() as i64)
+        else d == 6 and t.dbg_rva > (0 as i64):
+            w32(h, t.dbg_rva)
+            w32(h, PDB_RSDS as i64)
+        else d == 9 and tls > (0 as i64):
+            w32(h, tls)
+            w32(h, (p32 ? 24 : 40) as i64)
+        else d == 12 and iat1 > iat0:
+            w32(h, iat0)
+            w32(h, iat1 - iat0)
+        else:
+            w32(h, 0 as i64)
+            w32(h, 0 as i64)
+        end
+    end
+    mut shd := pe_sechdrs(l, t)
+    each sb0 in shd:
+        h.push(sb0)
+    end
+    shd.free()
+    repeat h.len() in b:
+        buf[b] = h[b]
+    end
+    h.free()
+    f := fopen(out, "wb")
+    if f == null:
+        nl_fail(l, "cannot write " + out)
+        ret
+    end
+    w := fwrite(buf as void*, 1 as u64, total as u64, f)
+    mut w2 := 0 as u64
+    if rel.len() > 0:
+        pad := t.ps_rawsize[PS_RELOC] - (rel.len() as i64)
+        repeat pad:
+            rel.push(0 as u8)
+        end
+        w2 = fwrite(rel.data as void*, 1 as u64, rel.len() as u64, f)
+    end
+    if l.dg_name.len() > 0:
+        mut tail := Vector {} as Vector<u8>
+        repeat l.dg_name.len() in dk2:
+            repeat l.dg_size[dk2] in q:
+                tail.push(l.dg_bytes[(l.dg_base[dk2] + q) as int])
+            end
+            until (tail.len() % 0x200) != 0:
+                tail.push(0 as u8)
+            end
+        end
+        tb_le(tail, (l.pe_str.len() + 4) as i64, 4)
+        each sb in l.pe_str:
+            tail.push(sb)
+        end
+        w3 := fwrite(tail.data as void*, 1 as u64, tail.len() as u64, f)
+        w2 = w2 + w3
+        tail.free()
+    end
+    _c := fclose(f)
+    l.file_size = total + (w2 as i64)
+    if (w as i64) != total:
+        nl_fail(l, "cannot write " + out)
+    end
+end
+
+func pe_rtype(l &: Nl, ty: int): int:
+    if l.mach == EM_AARCH64:
+        switch ty:
+            0: ret 0 end
+            0xE: ret 1 end
+            1: ret 2 end
+            2: ret 3 end
+            0x11: ret 4 end
+            8: ret 11 end
+            0xD: ret 10 end
+            3, 4, 5, 6, 7, 9, 0xA, 0xB, 0xF, 0x10: ret 200 + ty end
+        end
+        ret 1000 + ty
+    end
+    if l.mach != EM_386:
+        ret ty
+    end
+    if ty == 6: ret 102 end
+    if ty == 7: ret 3 end
+    if ty == 0x14: ret 4 end
+    if ty == 0xB: ret 11 end
+    if ty == 0xA: ret 10 end
+    if ty == 0: ret 0 end
+    ret 1000 + ty
+end

@@ -1,0 +1,427 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "bigint"
+@fa "عدد بزرگ"
+package bigint
+
+const _LIMB_BITS := 32
+
+const _LOW_MASK := 0xFFFFFFFF as u64
+
+@en "Int"
+@fa "صحیح"
+pub struct Int:
+    @en "neg"
+    @fa "منفی"
+    pub neg: bool = false
+
+    @en "mag"
+    @fa "قدرمطلق"
+    pub mag: Vector<u32> = Vector {}
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free(): this.mag.free() end
+
+    @en "is_zero"
+    @fa "صفر است"
+    pub func is_zero(): bool: ret this.mag.len() == 0 end
+
+    @en "sign"
+    @fa "علامت"
+    pub func sign(): int:
+        if this.mag.len() == 0: ret 0 end
+        if this.neg: ret 0 - 1 end
+        ret 1
+    end
+
+    @en "is_odd"
+    @fa "فرد است"
+    pub func is_odd(): bool:
+        if this.mag.len() == 0: ret false end
+        ret (this.mag.get(0) & (1 as u32)) != 0 as u32
+    end
+
+    @en "is_even"
+    @fa "زوج است"
+    pub func is_even(): bool: ret not this.is_odd() end
+
+    @en "bit_len"
+    @fa "طول بیت"
+    pub func bit_len(): int:
+        n := this.mag.len()
+        if n == 0: ret 0 end
+        ret (n - 1) * _LIMB_BITS + _bit_width(this.mag.get(n - 1))
+    end
+
+    @en "limb_count"
+    @fa "شمار لخت"
+    pub func limb_count(): int: ret this.mag.len() end
+
+    @en "clone"
+    @fa "همانند"
+    pub func clone(): Int:
+        mut r := Int {}
+        r.neg = this.neg
+        n := this.mag.len()
+        r.mag.reserve(n)
+        repeat n in i: r.mag.push(this.mag.get(i)) end
+        ret r
+    end
+
+    @en "to_str"
+    @fa "به رشته"
+    pub func to_str(): str: ret ToStrBase(this[0], 10) end
+end
+
+func _bit_width(v: u32): int:
+    mut x := v
+    mut n := 0
+    until x != 0 as u32:
+        n += 1
+        x = x >> 1
+    end
+    ret n
+end
+
+func _norm(x &: Int):
+    mut n := x.mag.len()
+    until n > 0 and x.mag.get(n - 1) == 0 as u32:
+        n -= 1
+    end
+    until x.mag.len() > n:
+        _dropped := x.mag.pop()
+    end
+    if n == 0: x.neg = false end
+end
+
+func _blank(n: int): Int:
+    mut r := Int {}
+    if n > 0: r.mag.zeros(n) end
+    ret r
+end
+
+func _at(x: Int, i: int): u32:
+    if i >= x.mag.len(): ret 0 end
+    ret x.mag.get(i)
+end
+
+func _ucmp(a: Int, b: Int): int:
+    na := a.mag.len()
+    nb := b.mag.len()
+    if na != nb:
+        if na < nb: ret 0 - 1 end
+        ret 1
+    end
+    mut i := na - 1
+    until i >= 0:
+        av := a.mag.get(i)
+        bv := b.mag.get(i)
+        if av != bv:
+            if av < bv: ret 0 - 1 end
+            ret 1
+        end
+        i -= 1
+    end
+    ret 0
+end
+
+func _uadd(a: Int, b: Int): Int:
+    na := a.mag.len()
+    nb := b.mag.len()
+    mut n := na
+    if nb > n: n = nb end
+    mut r := _blank(n + 1)
+    mut carry := 0 as u64
+    repeat n in i:
+        s := (_at(a, i) as u64) + (_at(b, i) as u64) + carry
+        r.mag.set(i, (s & _LOW_MASK) as u32)
+        carry = s >> 32
+    end
+    r.mag.set(n, carry as u32)
+    _norm(r)
+    ret r
+end
+
+func _usub(a: Int, b: Int): Int:
+    na := a.mag.len()
+    mut r := _blank(na)
+    mut borrow := 0 as u64
+    repeat na in i:
+        av := a.mag.get(i) as u64
+        bv := (_at(b, i) as u64) + borrow
+        if av >= bv:
+            r.mag.set(i, (av - bv) as u32)
+            borrow = 0 as u64
+        else:
+            r.mag.set(i, ((av + 0x100000000 as u64) - bv) as u32)
+            borrow = 1 as u64
+        end
+    end
+    _norm(r)
+    ret r
+end
+
+func _umul(a: Int, b: Int): Int:
+    na := a.mag.len()
+    nb := b.mag.len()
+    if na == 0 or nb == 0: ret Int {} end
+    mut r := _blank(na + nb)
+    repeat na in i:
+        av := a.mag.get(i) as u64
+        if av != 0 as u64:
+            mut carry := 0 as u64
+            repeat nb in j:
+                cur := (r.mag.get(i + j) as u64) + av * (b.mag.get(j) as u64) + carry
+                r.mag.set(i + j, (cur & _LOW_MASK) as u32)
+                carry = cur >> 32
+            end
+            r.mag.set(i + nb, carry as u32)
+        end
+    end
+    _norm(r)
+    ret r
+end
+
+func _umul_add_small(x: Int, m: u32, add: u32): Int:
+    n := x.mag.len()
+    mut r := _blank(n + 1)
+    mut carry := add as u64
+    repeat n in i:
+        cur := (x.mag.get(i) as u64) * (m as u64) + carry
+        r.mag.set(i, (cur & _LOW_MASK) as u32)
+        carry = cur >> 32
+    end
+    r.mag.set(n, carry as u32)
+    _norm(r)
+    ret r
+end
+
+func _udivmod_small(x: Int, d: u32, rem &: u32): Int:
+    n := x.mag.len()
+    mut q := _blank(n)
+    mut r := 0 as u64
+    mut i := n - 1
+    dv := d as u64
+    until i >= 0:
+        cur := (r << 32) | (x.mag.get(i) as u64)
+        q.mag.set(i, (cur / dv) as u32)
+        r = cur % dv
+        i -= 1
+    end
+    rem = r as u32
+    _norm(q)
+    ret q
+end
+
+func _ushl(x: Int, k: int): Int:
+    n := x.mag.len()
+    if n == 0 or k <= 0:
+        mut c := x.clone()
+        c.neg = false
+        ret c
+    end
+    limbs := k / _LIMB_BITS
+    bits := k % _LIMB_BITS
+    mut r := _blank(n + limbs + 1)
+    if bits == 0:
+        repeat n in i: r.mag.set(i + limbs, x.mag.get(i)) end
+    else:
+        mut carry := 0 as u32
+        repeat n in i:
+            v := x.mag.get(i)
+            r.mag.set(i + limbs, (v << bits) | carry)
+            carry = v >> (_LIMB_BITS - bits)
+        end
+        r.mag.set(n + limbs, carry)
+    end
+    _norm(r)
+    ret r
+end
+
+func _ushr(x: Int, k: int): Int:
+    n := x.mag.len()
+    limbs := k / _LIMB_BITS
+    if n == 0 or k <= 0:
+        mut c := x.clone()
+        c.neg = false
+        ret c
+    end
+    if limbs >= n: ret Int {} end
+    bits := k % _LIMB_BITS
+    keep := n - limbs
+    mut r := _blank(keep)
+    if bits == 0:
+        repeat keep in i: r.mag.set(i, x.mag.get(i + limbs)) end
+    else:
+        repeat keep in i:
+            mut v := x.mag.get(i + limbs) >> bits
+            if i + limbs + 1 < n:
+                v = v | (x.mag.get(i + limbs + 1) << (_LIMB_BITS - bits))
+            end
+            r.mag.set(i, v)
+        end
+    end
+    _norm(r)
+    ret r
+end
+
+func _has_low_bits(x: Int, k: int): bool:
+    if k <= 0: ret false end
+    limbs := k / _LIMB_BITS
+    bits := k % _LIMB_BITS
+    n := x.mag.len()
+    mut i := 0
+    until i < limbs and i < n:
+        if x.mag.get(i) != 0 as u32: ret true end
+        i += 1
+    end
+    if bits > 0 and limbs < n:
+        mask := ((1 as u32) << bits) - (1 as u32)
+        if (x.mag.get(limbs) & mask) != 0 as u32: ret true end
+    end
+    ret false
+end
+
+func _replace(x &: Int, src: Int):
+    x.mag.free()
+    x.neg = src.neg
+    x.mag = src.mag
+end
+
+@en "Zero"
+@fa "صفر"
+pub func Zero(): Int: ret Int {} end
+
+@en "One"
+@fa "یک"
+pub func One(): Int: ret FromInt(1 as i64) end
+
+@en "FromInt"
+@fa "از صحیح"
+pub func FromInt(v: i64): Int:
+    mut r := Int {}
+    if v == 0 as i64: ret r end
+    mut u := v as u64
+    if v < 0 as i64:
+        r.neg = true
+        u = (0 as u64) - (v as u64)
+    end
+    lo := (u & _LOW_MASK) as u32
+    hi := (u >> 32) as u32
+    r.mag.push(lo)
+    if hi != 0 as u32: r.mag.push(hi) end
+    _norm(r)
+    ret r
+end
+
+@en "FromUint"
+@fa "از صحیح بی‌علامت"
+pub func FromUint(v: u64): Int:
+    mut r := Int {}
+    if v == 0 as u64: ret r end
+    r.mag.push((v & _LOW_MASK) as u32)
+    hi := (v >> 32) as u32
+    if hi != 0 as u32: r.mag.push(hi) end
+    _norm(r)
+    ret r
+end
+
+@en "Clone"
+@fa "همانند"
+pub func Clone(x: Int): Int: ret x.clone() end
+
+@en "Free"
+@fa "آزادسازی"
+pub func Free(x &: Int): x.mag.free() end
+
+@en "IsZero"
+@fa "صفر است"
+pub func IsZero(x: Int): bool: ret x.is_zero() end
+
+@en "Sign"
+@fa "علامت"
+pub func Sign(x: Int): int: ret x.sign() end
+
+@en "BitLen"
+@fa "طول بیت"
+pub func BitLen(x: Int): int: ret x.bit_len() end
+
+@en "Bit"
+@fa "بیت"
+pub func Bit(x: Int, i: int): int:
+    if i < 0: ret 0 end
+    limb := i / _LIMB_BITS
+    if limb >= x.mag.len(): ret 0 end
+    ret ((x.mag.get(limb) >> (i % _LIMB_BITS)) & (1 as u32)) as int
+end
+
+@en "IsOdd"
+@fa "فرد است"
+pub func IsOdd(x: Int): bool: ret x.is_odd() end
+
+@en "IsEven"
+@fa "زوج است"
+pub func IsEven(x: Int): bool: ret x.is_even() end
+
+@en "Cmp"
+@fa "مقایسه"
+pub func Cmp(a: Int, b: Int): int:
+    if a.neg != b.neg:
+        if a.neg: ret 0 - 1 end
+        ret 1
+    end
+    c := _ucmp(a, b)
+    if a.neg: ret 0 - c end
+    ret c
+end
+
+@en "CmpAbs"
+@fa "مقایسه قدرمطلق"
+pub func CmpAbs(a: Int, b: Int): int: ret _ucmp(a, b) end
+
+@en "Equals"
+@fa "یکسان است"
+pub func Equals(a: Int, b: Int): bool: ret Cmp(a, b) == 0 end
+
+@en "Less"
+@fa "کمتر است"
+pub func Less(a: Int, b: Int): bool: ret Cmp(a, b) < 0 end
+
+@en "Greater"
+@fa "بیشتر است"
+pub func Greater(a: Int, b: Int): bool: ret Cmp(a, b) > 0 end
+
+@en "Min"
+@fa "کمینه"
+pub func Min(a: Int, b: Int): Int:
+    if Cmp(a, b) <= 0: ret a.clone() end
+    ret b.clone()
+end
+
+@en "Max"
+@fa "بیشینه"
+pub func Max(a: Int, b: Int): Int:
+    if Cmp(a, b) >= 0: ret a.clone() end
+    ret b.clone()
+end
+
+@en "EqualsInt"
+@fa "یکسان با صحیح است"
+pub func EqualsInt(a: Int, v: i64): bool:
+    mut b := FromInt(v)
+    defer b.free()
+    ret Cmp(a, b) == 0
+end

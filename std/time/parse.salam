@@ -1,0 +1,574 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package time
+
+import mem
+import conv
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _mktime64(tp: void*): i64
+    end
+else:
+    if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
+        extern:
+            func mktime(tp: void*): i64
+        end
+    else:
+        if SALAM_OS_LINUX:
+            extern:
+                func __mktime64(tp: void*): i64
+            end
+        else:
+            extern:
+                func mktime(tp: void*): i64
+            end
+        end
+    end
+end
+
+struct _Parts:
+    pub year: int = 1970
+    pub month: int = 1
+    pub day: int = 1
+    pub hour: int = 0
+    pub minute: int = 0
+    pub second: int = 0
+    pub nanos: int = 0
+    pub has_offset: bool = false
+    pub offset_minutes: int = 0
+end
+
+@en "TimeResult"
+@fa "نتیجه زمان"
+pub struct TimeResult:
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "epoch"
+    @fa "ثانیه مبدا"
+    pub epoch: i64 = 0
+    @en "nanos"
+    @fa "نانوثانیه"
+    pub nanos: int = 0
+end
+
+inline pure func _pbp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _pub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+pure func _pIsDigit(c: int): bool: ret c >= 48 and c <= 57 end
+
+pure func _pIsAlpha(c: int): bool:
+    ret (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+end
+
+func _fixedDigits(bp: i8*, n: int, i &: int, count: int, out &: int): bool:
+    if i + count > n: ret false end
+    mut v := 0
+    repeat count in k:
+        c := _pub(bp, i + k)
+        if not _pIsDigit(c): ret false end
+        v = v * 10 + (c - 48)
+    end
+    i = i + count
+    out = v
+    ret true
+end
+
+func _someDigits(bp: i8*, n: int, i &: int, maxd: int, out &: int): bool:
+    mut v := 0
+    mut got := 0
+    until i < n and got < maxd and _pIsDigit(_pub(bp, i)):
+        v = v * 10 + (_pub(bp, i) - 48)
+        got += 1
+        i += 1
+    end
+    if got == 0: ret false end
+    out = v
+    ret true
+end
+
+pure func _pfloordiv(a: i64, b: i64): i64:
+    q := a / b
+    r := a - q * b
+    if r != 0 and (r < 0) != (b < 0): ret q - 1 end
+    ret q
+end
+
+pure func _daysFromCivil(y0: int, m: int, d: int): i64:
+    mut y := y0 as i64
+    mm := m as i64
+    if mm <= 2: y = y - 1 end
+    era := _pfloordiv(y, 400)
+    yoe := y - era * 400
+    mp := (mm + 9) % 12
+    doy := (153 * mp + 2) / 5 + (d as i64) - 1
+    doe := yoe * 365 + yoe / 4 - yoe / 100 + doy
+    ret era * 146097 + doe - 719468
+end
+
+pure func _utcEpoch(y: int, mo: int, d: int, h: int, mi: int, s: int): i64:
+    ret _daysFromCivil(y, mo, d) * 86400 + (h as i64) * 3600 + (mi as i64) * 60 + (s as i64)
+end
+
+pure func _pfloormod(a: i64, b: i64): i64:
+    ret a - _pfloordiv(a, b) * b
+end
+
+pure func _gmFieldPure(epoch: i64, idx: int): int:
+    days := _pfloordiv(epoch, 86400)
+    secs := epoch - days * 86400
+    if idx == 0: ret (secs % 60) as int end
+    if idx == 1: ret ((secs / 60) % 60) as int end
+    if idx == 2: ret (secs / 3600) as int end
+    if idx == 6: ret _pfloormod(days + 4, 7) as int end
+
+    z := days + 719468
+    era := _pfloordiv(z, 146097)
+    doe := z - era * 146097
+    yoe := (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    doy := doe - (365 * yoe + yoe / 4 - yoe / 100)
+    mp := (5 * doy + 2) / 153
+    d := doy - (153 * mp + 2) / 5 + 1
+    mut m := mp + 3
+    if mp >= 10: m = mp - 9 end
+    mut y := yoe + era * 400
+    if m <= 2: y = y + 1 end
+
+    if idx == 3: ret d as int end
+    if idx == 4: ret (m - 1) as int end
+    if idx == 5: ret (y - 1900) as int end
+    if idx == 7: ret (days - _daysFromCivil(y as int, 1, 1)) as int end
+    ret 0
+end
+
+if SALAM_OS_WINDOWS:
+    func _c_mktime(tp: void*): i64: ret _mktime64(tp) end
+else:
+    if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
+        func _c_mktime(tp: void*): i64: ret mktime(tp) end
+    else:
+        if SALAM_OS_LINUX:
+            func _c_mktime(tp: void*): i64: ret __mktime64(tp) end
+        else:
+            func _c_mktime(tp: void*): i64: ret mktime(tp) end
+        end
+    end
+end
+
+func _localEpoch(y: int, mo: int, d: int, h: int, mi: int, s: int): i64:
+    buf := mem.AllocateZeroed(128 as u64)
+    if buf == null: ret _utcEpoch(y, mo, d, h, mi, s) end
+    p := buf as int*
+    p[0] = s
+    p[1] = mi
+    p[2] = h
+    p[3] = d
+    p[4] = mo - 1
+    p[5] = y - 1900
+    p[8] = 0 - 1
+    out := _c_mktime(buf)
+    mem.Free(buf)
+    if out == (0 - 1) as i64: ret _utcEpoch(y, mo, d, h, mi, s) end
+    ret out
+end
+
+func _daysInMonth(y: int, m: int): int:
+    if m == 2:
+        if (y % 4 == 0 and y % 100 != 0) or y % 400 == 0: ret 29 end
+        ret 28
+    end
+    if m == 4 or m == 6 or m == 9 or m == 11: ret 30 end
+    ret 31
+end
+
+func _resolve(p: _Parts): TimeResult:
+    if p.month < 1 or p.month > 12: ret TimeResult { ok = false } end
+    if p.day < 1 or p.day > _daysInMonth(p.year, p.month): ret TimeResult { ok = false } end
+    if p.hour < 0 or p.hour > 24: ret TimeResult { ok = false } end
+    if p.minute < 0 or p.minute > 59: ret TimeResult { ok = false } end
+    if p.second < 0 or p.second > 60: ret TimeResult { ok = false } end
+    mut sec := p.second
+    if sec == 60: sec = 59 end
+    if p.has_offset:
+        e := _utcEpoch(p.year, p.month, p.day, p.hour, p.minute, sec) - (p.offset_minutes as i64) * 60
+        ret TimeResult { ok = true, epoch = e, nanos = p.nanos }
+    end
+    ret TimeResult { ok = true, epoch = _localEpoch(p.year, p.month, p.day, p.hour, p.minute, sec), nanos = p.nanos }
+end
+
+func _monthFromName(name: str): int:
+    if name.len() < 3: ret 0 end
+    k := name.substr(0, 3).lower()
+    if k == "jan": ret 1 end
+    if k == "feb": ret 2 end
+    if k == "mar": ret 3 end
+    if k == "apr": ret 4 end
+    if k == "may": ret 5 end
+    if k == "jun": ret 6 end
+    if k == "jul": ret 7 end
+    if k == "aug": ret 8 end
+    if k == "sep": ret 9 end
+    if k == "oct": ret 10 end
+    if k == "nov": ret 11 end
+    if k == "dec": ret 12 end
+    ret 0
+end
+
+func _parseZone(bp: i8*, n: int, i &: int, p &: _Parts): bool:
+    if i >= n: ret true end
+    c := _pub(bp, i)
+    if c == 90 or c == 122:
+        i += 1
+        p.has_offset = true
+        p.offset_minutes = 0
+        ret true
+    end
+    if c == 43 or c == 45:
+        sign := 1 - 2 * ((c == 45) ? 1 : 0)
+        i += 1
+        mut hh := 0
+        if not _fixedDigits(bp, n, i, 2, hh): ret false end
+        mut mm := 0
+        if i < n and _pub(bp, i) == 58:
+            i += 1
+            if not _fixedDigits(bp, n, i, 2, mm): ret false end
+        else i < n and _pIsDigit(_pub(bp, i)):
+            if not _fixedDigits(bp, n, i, 2, mm): ret false end
+        end
+        if hh > 23 or mm > 59: ret false end
+        p.has_offset = true
+        p.offset_minutes = sign * (hh * 60 + mm)
+        ret true
+    end
+    ret true
+end
+
+func _skipSpaces(bp: i8*, n: int, i &: int):
+    until i < n and (_pub(bp, i) == 32 or _pub(bp, i) == 9):
+        i += 1
+    end
+end
+
+func _parseClock(bp: i8*, n: int, i &: int, p &: _Parts): bool:
+    mut hh := 0
+    if not _fixedDigits(bp, n, i, 2, hh): ret false end
+    if i >= n or _pub(bp, i) != 58: ret false end
+    i += 1
+    mut mi := 0
+    if not _fixedDigits(bp, n, i, 2, mi): ret false end
+    p.hour = hh
+    p.minute = mi
+    if i < n and _pub(bp, i) == 58:
+        i += 1
+        mut ss := 0
+        if not _fixedDigits(bp, n, i, 2, ss): ret false end
+        p.second = ss
+    end
+    ret true
+end
+
+func _parseFraction(bp: i8*, n: int, i &: int, out &: int): bool:
+    mut scale := 100000000
+    mut acc := 0
+    mut got := 0
+    until i < n and _pIsDigit(_pub(bp, i)):
+        if scale >= 1:
+            acc = acc + (_pub(bp, i) - 48) * scale
+            scale = scale / 10
+        end
+        got += 1
+        i += 1
+    end
+    if got == 0: ret false end
+    out = acc
+    ret true
+end
+
+func _scanISO(s: str, p &: _Parts): bool:
+    n := s.len()
+    if n < 8: ret false end
+    bp := _pbp(s)
+    mut i := 0
+    mut y := 0
+    if not _fixedDigits(bp, n, i, 4, y): ret false end
+    if i >= n or _pub(bp, i) != 45: ret false end
+    i += 1
+    mut mo := 0
+    if not _fixedDigits(bp, n, i, 2, mo): ret false end
+    if i >= n or _pub(bp, i) != 45: ret false end
+    i += 1
+    mut d := 0
+    if not _fixedDigits(bp, n, i, 2, d): ret false end
+    p.year = y
+    p.month = mo
+    p.day = d
+    if i >= n: ret true end
+    sep := _pub(bp, i)
+    if sep != 84 and sep != 116 and sep != 32: ret false end
+    i += 1
+    if not _parseClock(bp, n, i, p): ret false end
+    if i < n and (_pub(bp, i) == 46 or _pub(bp, i) == 44):
+        i += 1
+        mut frac := 0
+        if not _parseFraction(bp, n, i, frac): ret false end
+        p.nanos = frac
+    end
+    if not _parseZone(bp, n, i, p): ret false end
+    ret i == n
+end
+
+@en "ParseISO"
+@fa "تجزیه ایزو"
+pub func ParseISO(s: str): TimeResult:
+    mut p := _Parts {}
+    if not _scanISO(s.trim(), p): ret TimeResult { ok = false } end
+    ret _resolve(p)
+end
+
+@en "ParseISOIn"
+@fa "تجزیه ایزو در"
+pub func ParseISOIn(s: str, offsetMinutes: int): TimeResult:
+    mut p := _Parts {}
+    if not _scanISO(s.trim(), p): ret TimeResult { ok = false } end
+    if not p.has_offset:
+        p.has_offset = true
+        p.offset_minutes = offsetMinutes
+    end
+    ret _resolve(p)
+end
+
+@en "ParseHTTPDate"
+@fa "تجزیه تاریخ اچ‌تی‌تی‌پی"
+pub func ParseHTTPDate(s: str): TimeResult:
+    bad := TimeResult { ok = false }
+    t := s.trim()
+    n := t.len()
+    if n < 10: ret bad end
+    bp := _pbp(t)
+    mut i := 0
+    until i < n and _pIsAlpha(_pub(bp, i)):
+        i += 1
+    end
+    if i == 0: ret bad end
+    mut isAsctime := true
+    if i < n and _pub(bp, i) == 44:
+        i += 1
+        isAsctime = false
+    end
+    _skipSpaces(bp, n, i)
+    mut p := _Parts { has_offset = true, offset_minutes = 0 }
+    if isAsctime:
+        ms := i
+        until i < n and _pIsAlpha(_pub(bp, i)):
+            i += 1
+        end
+        mo := _monthFromName(t.substr(ms, i - ms))
+        if mo == 0: ret bad end
+        p.month = mo
+        _skipSpaces(bp, n, i)
+        mut d := 0
+        if not _someDigits(bp, n, i, 2, d): ret bad end
+        p.day = d
+        _skipSpaces(bp, n, i)
+        if not _parseClock(bp, n, i, p): ret bad end
+        _skipSpaces(bp, n, i)
+        mut y := 0
+        if not _fixedDigits(bp, n, i, 4, y): ret bad end
+        p.year = y
+        ret _resolve(p)
+    end
+    mut d2 := 0
+    if not _someDigits(bp, n, i, 2, d2): ret bad end
+    p.day = d2
+    if i < n and (_pub(bp, i) == 45 or _pub(bp, i) == 32): i += 1 end
+    ms2 := i
+    until i < n and _pIsAlpha(_pub(bp, i)):
+        i += 1
+    end
+    mo2 := _monthFromName(t.substr(ms2, i - ms2))
+    if mo2 == 0: ret bad end
+    p.month = mo2
+    if i < n and (_pub(bp, i) == 45 or _pub(bp, i) == 32): i += 1 end
+    mut y2 := 0
+    if not _someDigits(bp, n, i, 4, y2): ret bad end
+    if y2 < 100:
+        if y2 < 69: y2 = y2 + 2000
+        else:
+            y2 = y2 + 1900
+        end
+    end
+    p.year = y2
+    _skipSpaces(bp, n, i)
+    if not _parseClock(bp, n, i, p): ret bad end
+    ret _resolve(p)
+end
+
+@en "ParseFormat"
+@fa "تجزیه با قالب"
+pub func ParseFormat(pattern: str, s: str): TimeResult:
+    bad := TimeResult { ok = false }
+    pn := pattern.len()
+    n := s.len()
+    pbpv := _pbp(pattern)
+    bp := _pbp(s)
+    mut pi := 0
+    mut i := 0
+    mut p := _Parts {}
+    until pi < pn:
+        pc := _pub(pbpv, pi)
+        if pc != 37:
+            if pc == 32:
+                pi += 1
+                _skipSpaces(bp, n, i)
+                continue
+            end
+            if i >= n or _pub(bp, i) != pc: ret bad end
+            pi += 1
+            i += 1
+            continue
+        end
+        pi += 1
+        if pi >= pn: ret bad end
+        d := _pub(pbpv, pi)
+        pi += 1
+        if d == 37:
+            if i >= n or _pub(bp, i) != 37: ret bad end
+            i += 1
+        else d == 89:
+            mut v := 0
+            if not _fixedDigits(bp, n, i, 4, v): ret bad end
+            p.year = v
+        else d == 121:
+            mut v := 0
+            if not _fixedDigits(bp, n, i, 2, v): ret bad end
+            if v < 69: p.year = v + 2000 else:
+                p.year = v + 1900
+            end
+        else d == 109:
+            mut v := 0
+            if not _someDigits(bp, n, i, 2, v): ret bad end
+            p.month = v
+        else d == 100:
+            mut v := 0
+            if not _someDigits(bp, n, i, 2, v): ret bad end
+            p.day = v
+        else d == 72:
+            mut v := 0
+            if not _someDigits(bp, n, i, 2, v): ret bad end
+            p.hour = v
+        else d == 77:
+            mut v := 0
+            if not _someDigits(bp, n, i, 2, v): ret bad end
+            p.minute = v
+        else d == 83:
+            mut v := 0
+            if not _someDigits(bp, n, i, 2, v): ret bad end
+            p.second = v
+        else d == 102:
+            mut frac := 0
+            if not _parseFraction(bp, n, i, frac): ret bad end
+            p.nanos = frac
+        else d == 98 or d == 66:
+            ms := i
+            until i < n and _pIsAlpha(_pub(bp, i)):
+                i += 1
+            end
+            mo := _monthFromName(s.substr(ms, i - ms))
+            if mo == 0: ret bad end
+            p.month = mo
+        else d == 97 or d == 65:
+            mut got := 0
+            until i < n and _pIsAlpha(_pub(bp, i)):
+                i += 1
+                got += 1
+            end
+            if got == 0: ret bad end
+        else d == 122:
+            if not _parseZone(bp, n, i, p): ret bad end
+        else d == 90:
+            ms := i
+            until i < n and _pIsAlpha(_pub(bp, i)):
+                i += 1
+            end
+            if i == ms: ret bad end
+            nm := s.substr(ms, i - ms).upper()
+            if nm == "GMT" or nm == "UTC" or nm == "Z":
+                p.has_offset = true
+                p.offset_minutes = 0
+            end
+        else:
+            ret bad
+        end
+    end
+    if i != n: ret bad end
+    ret _resolve(p)
+end
+
+@en "ParseISOOr"
+@fa "تجزیه ایزو با پیش فرض"
+pub func ParseISOOr(s: str, fallback: i64): i64:
+    r := ParseISO(s)
+    if r.ok: ret r.epoch end
+    ret fallback
+end
+
+@en "FormatISOUTC"
+@fa "قالب ایزو جهانی"
+pub func FormatISOUTC(epoch: i64): str:
+    y := _gm_field(epoch, 5) + 1900
+    mo := _gm_field(epoch, 4) + 1
+    d := _gm_field(epoch, 3)
+    ret conv.FormatInt(y as i64) + "-" + pad2(mo) + "-" + pad2(d) + "T" + pad2(_gm_field(epoch, 2)) + ":" + pad2(_gm_field(epoch, 1)) + ":" + pad2(_gm_field(epoch, 0)) + "Z"
+end
+
+@en "FormatRFC3339"
+@fa "قالب آر‌اف‌سی۳۳۳۹"
+pub func FormatRFC3339(epoch: i64): str:
+    body := FormatDate(epoch) + "T" + FormatTime(epoch)
+    off := LocalOffsetMinutesAt(epoch)
+    if off == 0: ret body + "Z" end
+    mut sign := "+"
+    mut v := off
+    if v < 0:
+        sign = "-"
+        v = 0 - v
+    end
+    ret body + sign + pad2(v / 60) + ":" + pad2(v % 60)
+end
+
+@en "LocalOffsetMinutesAt"
+@fa "اختلاف محلی در"
+pub func LocalOffsetMinutesAt(epoch: i64): int:
+    local := _utcEpoch(time_year(epoch), time_month(epoch), time_day(epoch), time_hour(epoch), time_minute(epoch), time_second(epoch))
+    ret ((local - epoch) / 60) as int
+end
+
+@en "FromLocalParts"
+@fa "از اجزای محلی"
+pub func FromLocalParts(year: int, month: int, day: int, hour: int, minute: int, second: int): i64:
+    ret _localEpoch(year, month, day, hour, minute, second)
+end
+
+@en "FromUTCParts"
+@fa "از اجزای جهانی"
+pub func FromUTCParts(year: int, month: int, day: int, hour: int, minute: int, second: int): i64:
+    ret _utcEpoch(year, month, day, hour, minute, second)
+end

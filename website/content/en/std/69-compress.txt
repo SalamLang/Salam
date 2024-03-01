@@ -1,0 +1,235 @@
+pkg.en = compress
+pkg.name = compress
+pkg.group = Encoding and data
+pkg.summary = Byte buffers, compression methods from RLE through DEFLATE, gzip and checksums.
+pkg.title = The compress package in Salam | gzip and deflate
+pkg.description = The compress package in Salam: byte buffers, RLE, Huffman, LZ77, LZW, Burrows Wheeler and DEFLATE compression, gzip, CRC-32 and Adler-32, and reading and writing bits, with examples.
+group.Method.title = Method numbers
+group.Method = The same <code>Method</code> enum cases as plain numbers, for <code>Compress</code> and <code>Decompress</code>.
+pkg.intro <<
+<p>This package is the base of all binary data work in Salam. <code>ByteBuf</code>, a growable byte buffer, and <code>ByteReader</code>, a cursor over bytes, are what packages such as <a href="/std/encoding/binary/">encoding/binary</a>, <a href="/std/archive/">archive</a> and <a href="/std/encoding/msgpack/">encoding/msgpack</a> pass around. On top of them it has gzip, raw DEFLATE, a few teaching compressors (RLE, LZ77, LZW, Huffman, BWT), bit-level reading and writing, and the CRC-32 and Adler-32 checksums.</p>
+<p>To pack several files into one <code>.zip</code> or <code>.tar</code>, use <a href="/std/archive/">archive</a>, which calls this package for the compression. To write numbers in a fixed byte order, use <a href="/std/encoding/binary/">encoding/binary</a> on the same buffers.</p>
+<p>For compression, reach for <strong>gzip</strong> when the data has to be read by other programs. The other methods are mostly there to learn from and experiment with, and their output format belongs to this package alone. The examples show that for small data the overhead of Huffman and DEFLATE comes to more than the data itself.</p>
+
+<h3 id="pitfalls">What trips people up</h3>
+<ul>
+<li><strong>Gzip does not verify its checksum.</strong> <code>GzipDecompress</code> checks the header and that the data inflates, but not the CRC-32 in the trailer. The checksum guide shows how to add the check.</li>
+<li><strong>The method is not stored.</strong> <code>Compress</code> output does not say which method made it; keep the method number next to the data.</li>
+<li><strong>A <code>str</code> stops at the first zero byte.</strong> Keep binary data in a <code>ByteBuf</code>; <code>BufToStrUnsafe</code> is for bytes that are really text.</li>
+<li><strong>Buffers are not freed for you.</strong> Call <code>BufFree</code> on buffers you are done with, especially in loops and servers.</li>
+</ul>
+
+<p>The guide below covers the jobs this package is used for day to day: gzipping text, laying out your own binary records in a <code>ByteBuf</code>, checking data with CRC-32, and choosing a compression method. Each section has a complete program with its output.</p>
+
+<h2 id="guide-gzip">Gzip text for storage or transport</h2>
+<p><code>GzipCompressStr</code> turns a string into a gzip stream that <code>gzip -d</code>, browsers and every other gzip reader understand, and <code>GzipDecompressBuf</code> turns it back. Gzip output is binary, so when it has to travel inside JSON, a URL or an environment variable, wrap it in Base64 with <code>BufToBase64</code>. On the receiving side <code>encoding.Base64DecodeBytes</code> writes the bytes into a buffer you have made big enough; set the buffer's <code>len</code> to the count it returns.</p>
+{{example.compress-guide-gzip}}
+<p>A log with the same line twenty times shrinks to a tenth of its size. Base64 costs a third back (64 characters for 48 bytes), which is still far smaller than the original. <code>BufToStrUnsafe</code> copies the bytes into a string, so use it only for data that is really text: a <code>str</code> ends at the first zero byte.</p>
+
+<h2 id="guide-record">Your own binary format with ByteBuf</h2>
+<p>A <code>ByteBuf</code> grows as you push into it, and a <code>ByteReader</code> walks over the bytes from the start. That is all you need for a small file format: a few magic bytes so that a wrong file is rejected, a count, and then each record as a length and its bytes. <code>BufPushU32</code> and <code>RdU32</code> write and read a 32 bit number in big-endian order; for little-endian or 64 bit numbers use <a href="/std/encoding/binary/">encoding/binary</a>, which works on the same buffers.</p>
+{{example.compress-guide-record}}
+<p>The reader never reads past the end. When a read asks for more bytes than are left, the reader sets <code>bad</code>, returns zeros or an empty buffer, and stays bad, so it is enough to check <code>r.bad</code> once after a group of reads. The last call reads a copy cut to 20 bytes: the first name still fits, the second does not.</p>
+
+<h2 id="guide-checksum">Checking data with CRC-32</h2>
+<p>A checksum tells you whether bytes arrived unchanged. <code>CRC32Str</code> and <code>CRC32Buf</code> compute the same CRC-32 that zip, gzip and PNG use; <code>Adler32Str</code> and <code>Adler32Buf</code> are faster and weaker, the one zlib uses. The program seals a message by appending its CRC, then shows that changing a single byte is caught.</p>
+{{example.compress-guide-checksum}}
+<p>Note the second half: <code>GzipDecompress</code> and <code>GzipDecompressBuf</code> check the header and that the DEFLATE data decodes, but they do not compare the CRC-32 stored in the last eight bytes of the stream. A flipped bit in that trailer, or a corruption that still decodes, is not reported. When integrity matters, compare the CRC yourself as <code>gunzip_checked</code> does; the trailer holds the CRC of the original data in little-endian order, followed by its length.</p>
+
+<h2 id="guide-choose">Choosing a method</h2>
+<p><code>Compress</code>, <code>CompressBuf</code> and <code>CompressStr</code> take a method number, and <code>CompressBest</code> tries each one and keeps the smallest result. The best method depends on the shape of the data, as these output sizes show:</p>
+{{example.compress-guide-choose}}
+<p>RLE wins on long runs of one byte and makes ordinary text bigger. LZ77 does well on repeated phrases. <code>MethodDeflate</code> is left out of the list because it is this package's own container, which stores its Huffman tables in full and so starts at almost 300 bytes; gzip uses real DEFLATE with compact tables and is the better choice whenever the data leaves your program. Two rules follow: the output of <code>Compress</code> does not say which method made it, so store the method number next to the data (the value <code>CompressBest</code> wrote into its last argument), and very short inputs are best stored as they are (method 0, which <code>CompressBest</code> reports as none for the short line above).</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Data that other programs will read</td><td><code>GzipCompressStr</code>, <code>GzipCompressBuf</code>, <code>GzipDecompressBuf</code></td></tr>
+<tr><td>Standard DEFLATE with no header, as zip entries and zlib streams hold it</td><td><code>RawDeflate</code>, and <code>RawInflate</code> with the original size</td></tr>
+<tr><td>Smallest result for data only you read</td><td><code>CompressBest</code>, then <code>Decompress</code> with the method it chose</td></tr>
+<tr><td>Build bytes, then read them back</td><td><code>NewByteBuf</code>, <code>BufPush...</code>, <code>ReaderFromBuf</code>, <code>Rd...</code></td></tr>
+<tr><td>Fields narrower than a byte</td><td><code>NewBitWriter</code>, <code>BitWriteBits</code>, <code>BitReadBits</code></td></tr>
+<tr><td>Detect damaged data</td><td><code>CRC32Buf</code>, or <code>Adler32Buf</code> when speed matters more</td></tr>
+<tr><td>Binary into text</td><td><code>BufToBase64</code>, and <code>encoding.Base64DecodeBytes</code> back</td></tr>
+</tbody>
+</table></div>
+<p>Buffers are not freed for you. Call <code>BufFree</code> on a buffer you no longer need when a program makes many of them, for example in a loop or a long running server.</p>
+
+>>
+
+doc.ByteBuf = A byte buffer: an array of bytes that grows by itself. Most packages in this group take and give binary data in one.
+doc.ByteBuf.data = The memory address of the bytes.
+doc.ByteBuf.len = The number of bytes.
+doc.ByteBuf.cap = The capacity.
+doc.ByteReader = A sequential reader of bytes over one piece of memory.
+doc.ByteReader.data = The address of the data.
+doc.ByteReader.len = The length of the data.
+doc.ByteReader.pos = The current position.
+doc.ByteReader.bad = A read went past the end of the data.
+doc.NewByteBuf = An empty buffer.
+doc.NewByteBufCap = An empty buffer with an initial capacity.
+doc.BufPush = Adds one byte.
+doc.BufPushBytes = Adds <code>n</code> bytes from memory.
+doc.BufPushBuf = Adds the bytes of another buffer.
+doc.BufPushU32 = Adds a 32 bit integer as 4 little-endian bytes.
+doc.BufGet = Byte number <code>i</code>.
+doc.BufSet = Sets byte number <code>i</code>.
+doc.BufLen = The number of bytes.
+doc.BufFree = Frees the memory of the buffer.
+doc.BufReset = Empties the buffer and keeps the memory.
+doc.BufClone = An independent copy of the buffer.
+doc.BufEquals = True when two buffers hold the same bytes.
+doc.BufFromStr = Puts the bytes of a string into a new buffer.
+doc.BufToStrUnsafe = Takes the buffer to be a string; when the buffer holds a zero byte, the string ends right there.
+doc.BufToBase64 = Turns the buffer into base64, for showing binary data.
+doc.NewByteReader = A reader over <code>n</code> bytes of memory.
+doc.ReaderFromBuf = A reader over the bytes of a buffer.
+doc.RdLeft = The number of bytes not yet read.
+doc.RdByte = Reads one byte; past the end <code>bad</code> becomes true.
+doc.RdU32 = Reads a 4 byte little-endian integer.
+doc.RdBytes = Reads <code>n</code> bytes into a new buffer.
+doc.Method = The compression method, as an enum.
+doc.Method.None = No compression.
+doc.Method.RLE = Run length encoding.
+doc.Method.Huffman = Huffman.
+doc.Method.LZ77 = LZ77.
+doc.Method.LZW = LZW.
+doc.Method.Deflate = LZ77 and Huffman.
+doc.Method.BWT = Burrows Wheeler.
+doc.Compress = Compresses the data with the given method. The output does not carry the method number, so you have to know it to decompress.
+doc.Decompress = Decompresses data that was compressed with the given method.
+doc.CompressStr = Compresses a string.
+doc.CompressBuf = Compresses a buffer.
+doc.DecompressBuf = Decompresses a compressed buffer.
+doc.CompressBest = Tries every method, returns the shortest output and puts its method in <code>method_out</code>.
+doc.Ratio = The ratio of the compressed size to the original; under 1 means it got smaller.
+doc.RLECompress = Run length encoding: shortens runs of the same byte; for data that repeats a lot.
+doc.RLEDecompress = Decompresses RLE data.
+doc.HuffmanCompress = Huffman coding: the more frequent bytes get shorter codes. The code table is stored with the data, so for small data the output gets bigger.
+doc.HuffmanDecompress = Decompresses Huffman data.
+doc.LZ77Compress = LZ77 compression: repeated pieces are replaced by a reference to where they were before.
+doc.LZ77Decompress = Decompresses LZ77 data.
+doc.LZWCompress = LZW compression, with a dictionary built as it goes.
+doc.LZWDecompress = Decompresses LZW data.
+doc.BWTTransform = The Burrows Wheeler transform: moves the bytes so that similar bytes end up next to each other; the index of the original row comes back in <code>primary_out</code>.
+doc.BWTInverse = Undoes the Burrows Wheeler transform, given the index of the original row.
+doc.BWTCompress = Burrows Wheeler, then move to front, then compression.
+doc.BWTDecompress = Decompresses data compressed with Burrows Wheeler.
+doc.MTFEncode = Move to front encoding: every byte is replaced by its place in a list of the recent bytes.
+doc.MTFDecode = Undoes move to front.
+doc.DeflateCompress = LZ77 and Huffman in a format of Salam's own. This is not standard zlib DEFLATE; for the standard format use <code>RawDeflate</code> or gzip.
+doc.DeflateDecompress = Decompresses the output of <code>DeflateCompress</code>.
+doc.RawDeflate = Standard DEFLATE (RFC 1951) with no header; what sits inside ZIP and gzip.
+doc.RawInflate = Decompresses raw DEFLATE; <code>expected_size</code> is the rough size of the output.
+doc.RawInflateMax = Same as <code>RawInflate</code>, but stops with <code>ok</code> false once the output would pass <code>max</code> bytes, so a small hostile stream cannot expand without bound. <code>max</code> of 0 means no limit.
+doc.GzipCompress = Compresses the data into the gzip format, the one in <code>.gz</code> files.
+doc.GzipDecompress = Decompresses gzip data; <code>ok</code> becomes false when the data is not gzip. The checksum inside the file is not checked.
+doc.GzipCompressBuf = Gzips a buffer.
+doc.GzipCompressStr = Gzips a string.
+doc.GzipDecompressMax = Like <code>GzipDecompress</code>, but stops with <code>ok</code> false when the unpacked data would pass <code>max</code> bytes (0 means no limit); use it on data from outside so a small file cannot fill memory.
+doc.GzipDecompressBuf = Decompresses a gzip buffer.
+doc.CRC32 = The CRC-32 checksum, the one in ZIP and gzip, for checking that data is intact.
+doc.CRC32Str = The CRC-32 of a string.
+doc.CRC32Buf = The CRC-32 of a buffer.
+doc.Adler32 = The Adler-32 checksum, the one in zlib; faster than CRC-32 but a little weaker.
+doc.Adler32Str = The Adler-32 of a string.
+doc.Adler32Buf = The Adler-32 of a buffer.
+doc.BitWriter = A writer of bits; it fills each byte from the least significant bit.
+doc.BitWriter.buf = The bytes written.
+doc.BitWriter.acc = The bits waiting.
+doc.BitWriter.nbits = The number of bits waiting.
+doc.BitReader = A reader of bits in the same order.
+doc.BitReader.data = The data.
+doc.BitReader.len = The length of the data.
+doc.BitReader.pos = The current byte position.
+doc.BitReader.acc = The bits read.
+doc.BitReader.nbits = The number of bits ready.
+doc.BitReader.bad = A read went past the end of the data.
+doc.NewBitWriter = A new bit writer.
+doc.BitWriteBit = Writes one bit.
+doc.BitWriteBits = Writes the low <code>count</code> bits of <code>value</code>.
+doc.BitFlush = Sends the remaining bits to the last byte, padded with zeros.
+doc.BitWriterLen = The number of bytes written.
+doc.BitWriterFree = Frees the memory.
+doc.NewBitReader = A bit reader over memory.
+doc.BitReaderFromBuf = A bit reader over a buffer.
+doc.BitReadBit = Reads one bit.
+doc.BitReadBits = Reads <code>count</code> bits.
+
+ex.ByteBuf = compress-Buffer
+ex.ByteReader = compress-Buffer
+ex.NewByteBuf = compress-Buffer
+ex.NewByteBufCap = compress-Buffer
+ex.BufPush = compress-Buffer
+ex.BufPushBytes = compress-Buffer
+ex.BufPushBuf = compress-Buffer
+ex.BufPushU32 = compress-Buffer
+ex.BufGet = compress-Buffer
+ex.BufSet = compress-Buffer
+ex.BufLen = compress-Buffer
+ex.BufFree = compress-Buffer
+ex.BufReset = compress-Buffer
+ex.BufClone = compress-Buffer
+ex.BufEquals = compress-Buffer
+ex.BufFromStr = compress-Buffer
+ex.BufToStrUnsafe = compress-Buffer
+ex.BufToBase64 = compress-Buffer
+ex.NewByteReader = compress-Buffer
+ex.ReaderFromBuf = compress-Buffer
+ex.RdLeft = compress-Buffer
+ex.RdByte = compress-Buffer
+ex.RdU32 = compress-Buffer
+ex.RdBytes = compress-Buffer
+ex.Method = compress-Methods
+ex.Compress = compress-Methods
+ex.Decompress = compress-Methods
+ex.CompressStr = compress-Methods
+ex.CompressBuf = compress-Methods
+ex.DecompressBuf = compress-Methods
+ex.CompressBest = compress-Methods
+ex.Ratio = compress-Methods
+ex.RLECompress = compress-Methods
+ex.RLEDecompress = compress-Methods
+ex.HuffmanCompress = compress-Methods
+ex.HuffmanDecompress = compress-Methods
+ex.LZ77Compress = compress-Methods
+ex.LZ77Decompress = compress-Methods
+ex.LZWCompress = compress-Methods
+ex.LZWDecompress = compress-Methods
+ex.BWTTransform = compress-Methods
+ex.BWTInverse = compress-Methods
+ex.BWTCompress = compress-Methods
+ex.BWTDecompress = compress-Methods
+ex.MTFEncode = compress-Methods
+ex.MTFDecode = compress-Methods
+ex.group.Method = compress-Methods
+ex.GzipCompress = compress-Gzip
+ex.GzipDecompress = compress-Gzip
+ex.GzipCompressBuf = compress-Gzip
+ex.GzipCompressStr = compress-Gzip
+ex.GzipDecompressMax = compress-Gzip
+ex.GzipDecompressBuf = compress-Gzip
+ex.DeflateCompress = compress-Gzip
+ex.DeflateDecompress = compress-Gzip
+ex.RawDeflate = compress-Gzip
+ex.RawInflate = compress-Gzip
+ex.RawInflateMax = compress-Gzip
+ex.CRC32 = compress-Checksum
+ex.CRC32Str = compress-Checksum
+ex.CRC32Buf = compress-Checksum
+ex.Adler32 = compress-Checksum
+ex.Adler32Str = compress-Checksum
+ex.Adler32Buf = compress-Checksum
+ex.BitWriter = compress-Bits
+ex.BitReader = compress-Bits
+ex.NewBitWriter = compress-Bits
+ex.BitWriteBit = compress-Bits
+ex.BitWriteBits = compress-Bits
+ex.BitFlush = compress-Bits
+ex.BitWriterLen = compress-Bits
+ex.BitWriterFree = compress-Bits
+ex.NewBitReader = compress-Bits
+ex.BitReaderFromBuf = compress-Bits
+ex.BitReadBit = compress-Bits
+ex.BitReadBits = compress-Bits

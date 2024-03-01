@@ -1,0 +1,91 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import mem
+import str
+import conv
+import crypto
+import compress
+import net.http
+import net.mime
+import net.router
+
+func hex_of(p: void*, n: int): str:
+    digits := "0123456789abcdef" as void*
+    bp := p as u8*
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat n in i:
+        b := bp[i] as int
+        str.BufAppendChar(sb, (digits as u8*)[b / 16] as int)
+        str.BufAppendChar(sb, (digits as u8*)[b % 16] as int)
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+func sha_hex(p: void*, n: int): str:
+    out := mem.Allocate(32 as u64)
+    defer mem.Free(out)
+    crypto.Sha256Bytes(p, n, out)
+    ret hex_of(out, 32)
+end
+
+// POST /raw: hashes the request body as sent.
+func raw(ctx: i64):
+    http.Text(ctx, "len=".concat(conv.FormatInt(http.BodyLen(ctx) as i64)).concat(" sha=").concat(sha_hex(http.BodyBytes(ctx), http.BodyLen(ctx))))
+end
+
+// POST /echo: sends the body back as it came (binary).
+func echo(ctx: i64):
+    http.Bytes(ctx, "application/octet-stream", http.BodyBytes(ctx), http.BodyLen(ctx))
+end
+
+// POST /upload: multipart with a text field "note" and a file "photo".
+func upload(ctx: i64):
+    mut parts := http.Multipart(ctx)
+    defer mime.FreeMultipart(parts)
+    i := mime.PartIndex(parts, "photo")
+    if i < 0:
+        http.SetStatus(ctx, 400)
+        http.Text(ctx, "missing photo")
+        ret
+    end
+    f := parts.items.get(i)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "note=")
+    str.BufAppend(sb, mime.PartValue(parts, "note"))
+    str.BufAppend(sb, " file=")
+    str.BufAppend(sb, f.filename)
+    str.BufAppend(sb, " type=")
+    str.BufAppend(sb, f.content_type)
+    str.BufAppend(sb, " len=")
+    str.BufAppendInt(sb, compress.BufLen(f.body) as i64)
+    str.BufAppend(sb, " sha=")
+    str.BufAppend(sb, sha_hex(f.body.data, f.body.len))
+    http.Text(ctx, str.BufStr(sb))
+end
+
+func main:
+    mut r := router.NewRouter()
+    router.Post(r, "/raw", raw)
+    router.Post(r, "/upload", upload)
+    router.Post(r, "/echo", echo)
+    mut s := http.NewServer(18089)
+    http.Use(s, r)
+    http.Run(s)
+end

@@ -1,0 +1,50 @@
+import rpc
+import encoding.value
+import sync
+
+mut server := rpc.NewServer(0, rpc.RPC_CODEC_JSON)
+mut ready := sync.NewWaitGroup()
+
+func convert(c: i64):
+    amount := rpc.CallParamFloat(c, "amount", 0)
+    currency := rpc.CallParamStr(c, "to", 1)
+    if currency == "EUR":
+        rpc.ReplyFloat(c, amount * 0.5)
+        ret
+    end
+    rpc.Fail(c, -32010, "unknown currency " + currency)
+end
+
+func run_server():
+    _ := rpc.Listen(server)
+    sync.Done(ready)
+    _ := rpc.ServeCount(server, 1)
+end
+
+func main:
+    rpc.Register("convert", convert)
+    sync.Add(ready, 1)
+    t := spawn(run_server)
+    sync.Wait(ready)
+
+    mut client := rpc.DialClient("127.0.0.1", rpc.Port(server), rpc.RPC_CODEC_JSON)
+    if not rpc.ClientOk(client):
+        println "cannot connect:", rpc.ClientError(client)
+        ret 1
+    end
+    mut params := value.NewValueObject()
+    value.ObjectSet(params, "amount", value.ValueFloat(40.0))
+    value.ObjectSet(params, "to", value.ValueString("EUR"))
+    ok := rpc.Call(client, "convert", params)
+    println "40 is", rpc.ResultFloat(ok), "EUR"
+
+    value.ObjectSet(params, "to", value.ValueString("XYZ"))
+    bad := rpc.Call(client, "convert", params)
+    if rpc.IsErrorResponse(bad):
+        println "error", rpc.ErrorCode(bad), rpc.ErrorMessage(bad)
+    end
+    rpc.CloseClient(client)
+    join(t)
+    rpc.StopServer(server)
+    ret 0
+end

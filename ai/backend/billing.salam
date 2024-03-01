@@ -1,0 +1,1029 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aibilling
+
+import net.http
+import net.router
+import net.tcp
+import tls
+import encoding.json
+import encoding.value
+import encoding.encerr
+import str
+import sync
+
+include aistore "store.salam"
+include aiweb "web.salam"
+
+const CALL_MS := 20000
+const DAY := 86400
+const SWEEP_LIMIT := 50
+const PAGE := 50
+const MAX_NOTE := 200
+
+mut ZARINPAL_MERCHANT := ""
+mut ZIBAL_MERCHANT := ""
+mut ZARINPAL_BASE := "https://payment.zarinpal.com"
+mut ZARINPAL_START := "https://payment.zarinpal.com/pg/StartPay/"
+mut ZIBAL_BASE := "https://gateway.zibal.ir"
+mut ZIBAL_START := "https://gateway.zibal.ir/start/"
+mut CALLBACK_BASE := "https://ai-api.salamlang.ir"
+mut APP_URL := "https://ai.salamlang.ir"
+mut SWEEP_MS := 600000
+mut STALE_SECONDS := 600 as i64
+mut FREE_API_HOURLY := 100
+mut FREE_CHAT_HOURLY := 60
+
+pub struct Plan:
+    pub id: str = "free"
+    pub name: str = ""
+    pub note: str = ""
+    pub price: i64 = 0
+    pub days: int = 0
+    pub api_hourly: int = 0
+    pub chat_hourly: int = 0
+    pub parallel: int = 0
+end
+
+pub struct Limits:
+    pub plan: str = "free"
+    pub name: str = ""
+    pub api_hourly: int = 0
+    pub chat_hourly: int = 0
+    pub parallel: int = 0
+    pub expires: i64 = 0
+end
+
+func n(v: i64): str:
+    ret aiweb.I64s(v)
+end
+
+func one(v: str): Vector<str>:
+    mut a := Vector {} as Vector<str>
+    a.push(v)
+    ret a
+end
+
+func two(v: str, w: str): Vector<str>:
+    mut a := one(v)
+    a.push(w)
+    ret a
+end
+
+func plans(): Vector<Plan>:
+    mut all := Vector {} as Vector<Plan>
+    all.push(Plan { id = "free", name = "رایگان", note = "برای آشنایی با دستیار سلام و کارهای کوچک", price = 0, days = 0, api_hourly = FREE_API_HOURLY, chat_hourly = FREE_CHAT_HOURLY, parallel = 4 })
+    all.push(Plan { id = "plus", name = "پلاس", note = "برای کار روزمره با دستیار و کلید API", price = 1000000, days = 30, api_hourly = 500, chat_hourly = 300, parallel = 8 })
+    all.push(Plan { id = "pro", name = "حرفه‌ای", note = "برای کار سنگین‌تر و ایجنت‌هایی مثل Cline", price = 2000000, days = 30, api_hourly = 2000, chat_hourly = 1000, parallel = 16 })
+    all.push(Plan { id = "unlimited", name = "نامحدود", note = "بدون هیچ محدودیتی، بدون انقضا", price = 10000000, days = 0, api_hourly = 0, chat_hourly = 0, parallel = 0 })
+    ret all
+end
+
+func known(id: str): bool:
+    each p in plans():
+        if p.id == id:
+            ret true
+        end
+    end
+    ret false
+end
+
+func plan_of(id: str): Plan:
+    mut all := plans()
+    each p in all:
+        if p.id == id:
+            ret p
+        end
+    end
+    ret all.get(0)
+end
+
+func plan_json(p: Plan): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("id", p.id))
+    m.push(json.Member("name", p.name))
+    m.push(json.Member("note", p.note))
+    m.push(json.MemberInt("price", p.price))
+    m.push(json.MemberInt("days", p.days as i64))
+    m.push(json.MemberInt("api_hourly", p.api_hourly as i64))
+    m.push(json.MemberInt("chat_hourly", p.chat_hourly as i64))
+    m.push(json.MemberInt("parallel", p.parallel as i64))
+    ret json.Object(m)
+end
+
+func gateway_ok(name: str): bool:
+    if name == "zarinpal":
+        ret ZARINPAL_MERCHANT.len() > 0
+    end
+    if name == "zibal":
+        ret ZIBAL_MERCHANT.len() > 0
+    end
+    ret false
+end
+
+func parse_base(base: str, host &: str, port &: int, secure &: bool, prefix &: str):
+    mut rest := base
+    secure = true
+    port = 443
+    if str.StartsWith(rest, "http://"):
+        secure = false
+        port = 80
+        rest = rest.substr(7, rest.len() - 7)
+    else str.StartsWith(rest, "https://"):
+        rest = rest.substr(8, rest.len() - 8)
+    end
+    slash := rest.find("/")
+    prefix = ""
+    if slash >= 0:
+        prefix = str.TrimSuffix(rest.substr(slash, rest.len() - slash), "/")
+        rest = rest.substr(0, slash)
+    end
+    colon := rest.find(":")
+    if colon > 0:
+        port = rest.substr(colon + 1, rest.len() - colon - 1).to_int()
+        rest = rest.substr(0, colon)
+    end
+    host = rest
+end
+
+func hex_value(s: str): int:
+    mut v := 0
+    mut i := 0
+    digits := "0123456789abcdef"
+    lower := str.Lower(str.Trim(s))
+    until i < lower.len():
+        c := lower.substr(i, 1)
+        if c == ";":
+            break
+        end
+        d := digits.find(c)
+        if d < 0:
+            ret -1
+        end
+        v = v * 16 + d
+        i += 1
+    end
+    if i == 0:
+        ret -1
+    end
+    ret v
+end
+
+func dechunk(raw: str): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut pos := 0
+    until pos < raw.len():
+        rest := raw.substr(pos, raw.len() - pos)
+        le := rest.find("\r\n")
+        if le < 0:
+            break
+        end
+        size := hex_value(rest.substr(0, le))
+        if size <= 0:
+            break
+        end
+        if rest.len() < le + 2 + size:
+            break
+        end
+        str.BufAppend(b, rest.substr(le + 2, size))
+        pos = pos + le + 2 + size + 2
+    end
+    ret str.BufStr(b)
+end
+
+func fetch_tls(host: str, port: int, req: str, fail &: str): str:
+    cfg := tls.NewConfig(host)
+    mut c := tls.Dial(host, port, cfg)
+    if not tls.ConnOk(c):
+        fail = "اتصال امن به درگاه برقرار نشد: " + tls.ConnError(c)
+        tls.Close(c)
+        ret ""
+    end
+    tcp.SetDeadline(tcp.ConnFromFd(tls.Fd(c)), CALL_MS)
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    if tls.Write(c, req) <= 0:
+        fail = "درخواست به درگاه فرستاده نشد."
+        tls.Close(c)
+        ret ""
+    end
+    until true:
+        got := tls.Read(c, 65536)
+        if got.len() == 0:
+            break
+        end
+        str.BufAppend(b, got)
+    end
+    tls.Close(c)
+    ret str.BufStr(b)
+end
+
+func fetch_tcp(host: str, port: int, req: str, fail &: str): str:
+    c := tcp.Dial(host, port)
+    if not tcp.ConnOk(c):
+        fail = "اتصال به درگاه برقرار نشد."
+        tcp.Close(c)
+        ret ""
+    end
+    tcp.SetDeadline(c, CALL_MS)
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    if tcp.Write(c, req) <= 0:
+        fail = "درخواست به درگاه فرستاده نشد."
+        tcp.Close(c)
+        ret ""
+    end
+    until true:
+        got := tcp.Read(c, 65536)
+        if got.len() == 0:
+            break
+        end
+        str.BufAppend(b, got)
+    end
+    tcp.Close(c)
+    ret str.BufStr(b)
+end
+
+func post_json(base: str, path: str, body: str, fail &: str): str:
+    mut host := ""
+    mut port := 443
+    mut secure := true
+    mut prefix := ""
+    parse_base(base, host, port, secure, prefix)
+    if host.len() == 0:
+        fail = "نشانی درگاه درست نیست."
+        ret ""
+    end
+    req := "POST " + prefix + path + " HTTP/1.1\r\nHost: " + host + "\r\nUser-Agent: salam-ai\r\nAccept: application/json\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: " + body.len() + "\r\n\r\n" + body
+    mut raw := ""
+    if secure:
+        raw = fetch_tls(host, port, req, fail)
+    else:
+        raw = fetch_tcp(host, port, req, fail)
+    end
+    if raw.len() == 0:
+        if fail.len() == 0:
+            fail = "درگاه پاسخی نداد."
+        end
+        ret ""
+    end
+    he := raw.find("\r\n\r\n")
+    if he < 0:
+        fail = "پاسخ درگاه خوانده نشد."
+        ret ""
+    end
+    head := str.Lower(raw.substr(0, he))
+    mut rest := raw.substr(he + 4, raw.len() - he - 4)
+    if head.find("transfer-encoding: chunked") >= 0:
+        rest = dechunk(rest)
+    end
+    ret rest
+end
+
+func field(v: value.Value, key: str): value.Value:
+    if not value.IsObject(v) or not value.ObjectHas(v, key):
+        ret value.ValueNull()
+    end
+    ret value.ObjectGet(v, key)
+end
+
+func text_of(v: value.Value, key: str): str:
+    f := field(v, key)
+    if value.IsString(f):
+        ret value.AsString(f)
+    end
+    if value.IsNumber(f):
+        ret n(value.AsInt(f))
+    end
+    ret ""
+end
+
+func int_of(v: value.Value, key: str): i64:
+    f := field(v, key)
+    if value.IsNumber(f):
+        ret value.AsInt(f)
+    end
+    ret 0
+end
+
+func gateway_error(root: value.Value, fallback: str): str:
+    errs := field(root, "errors")
+    if value.IsObject(errs):
+        m := text_of(errs, "message")
+        if m.len() > 0:
+            ret m
+        end
+    end
+    m2 := text_of(root, "message")
+    if m2.len() > 0:
+        ret m2
+    end
+    ret fallback
+end
+
+func zarinpal_request(amount: i64, back: str, about: str, token &: str, fail &: str): bool:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("merchant_id", ZARINPAL_MERCHANT))
+    m.push(json.MemberInt("amount", amount))
+    m.push(json.Member("callback_url", back))
+    m.push(json.Member("description", about))
+    body := post_json(ZARINPAL_BASE, "/pg/v4/payment/request.json", json.Object(m), fail)
+    if body.len() == 0:
+        ret false
+    end
+    mut err := encerr.EncodingError {}
+    root := json.Decode(body, err)
+    if encerr.IsError(err):
+        value.ValueFree(root)
+        fail = "پاسخ زرین‌پال خوانده نشد."
+        ret false
+    end
+    data := field(root, "data")
+    code := int_of(data, "code")
+    got := text_of(data, "authority")
+    if code != 100 or got.len() == 0:
+        fail = gateway_error(root, "زرین‌پال درخواست را نپذیرفت.")
+        value.ValueFree(root)
+        ret false
+    end
+    token = got
+    value.ValueFree(root)
+    ret true
+end
+
+func zarinpal_verify(amount: i64, token: str, ref &: str, card &: str, fail &: str): bool:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("merchant_id", ZARINPAL_MERCHANT))
+    m.push(json.MemberInt("amount", amount))
+    m.push(json.Member("authority", token))
+    body := post_json(ZARINPAL_BASE, "/pg/v4/payment/verify.json", json.Object(m), fail)
+    if body.len() == 0:
+        ret false
+    end
+    mut err := encerr.EncodingError {}
+    root := json.Decode(body, err)
+    if encerr.IsError(err):
+        value.ValueFree(root)
+        fail = "پاسخ زرین‌پال خوانده نشد."
+        ret false
+    end
+    data := field(root, "data")
+    code := int_of(data, "code")
+    if code != 100 and code != 101:
+        fail = gateway_error(root, "پرداخت تایید نشد.")
+        value.ValueFree(root)
+        ret false
+    end
+    ref = text_of(data, "ref_id")
+    card = text_of(data, "card_pan")
+    value.ValueFree(root)
+    ret true
+end
+
+func zibal_request(amount: i64, back: str, about: str, token &: str, fail &: str): bool:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("merchant", ZIBAL_MERCHANT))
+    m.push(json.MemberInt("amount", amount))
+    m.push(json.Member("callbackUrl", back))
+    m.push(json.Member("description", about))
+    body := post_json(ZIBAL_BASE, "/v1/request", json.Object(m), fail)
+    if body.len() == 0:
+        ret false
+    end
+    mut err := encerr.EncodingError {}
+    root := json.Decode(body, err)
+    if encerr.IsError(err):
+        value.ValueFree(root)
+        fail = "پاسخ زیبال خوانده نشد."
+        ret false
+    end
+    if int_of(root, "result") != 100:
+        fail = gateway_error(root, "زیبال درخواست را نپذیرفت.")
+        value.ValueFree(root)
+        ret false
+    end
+    got := text_of(root, "trackId")
+    value.ValueFree(root)
+    if got.len() == 0:
+        fail = "زیبال شناسه پرداخت نداد."
+        ret false
+    end
+    token = got
+    ret true
+end
+
+func zibal_verify(amount: i64, token: str, ref &: str, card &: str, fail &: str): bool:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("merchant", ZIBAL_MERCHANT))
+    m.push(json.MemberInt("trackId", token.to_int() as i64))
+    body := post_json(ZIBAL_BASE, "/v1/verify", json.Object(m), fail)
+    if body.len() == 0:
+        ret false
+    end
+    mut err := encerr.EncodingError {}
+    root := json.Decode(body, err)
+    if encerr.IsError(err):
+        value.ValueFree(root)
+        fail = "پاسخ زیبال خوانده نشد."
+        ret false
+    end
+    result := int_of(root, "result")
+    if result != 100 and result != 201:
+        fail = gateway_error(root, "پرداخت تایید نشد.")
+        value.ValueFree(root)
+        ret false
+    end
+    paid := int_of(root, "amount")
+    if paid > 0 and paid != amount:
+        fail = "مبلغ پرداخت با مبلغ پلن یکی نیست."
+        value.ValueFree(root)
+        ret false
+    end
+    ref = text_of(root, "refNumber")
+    card = text_of(root, "cardNumber")
+    value.ValueFree(root)
+    ret true
+end
+
+func active_of(uid: str, plan &: str, expires &: i64, started &: i64, source &: str): bool:
+    mut rows := aistore.Stmt("SELECT plan, expires, started, source FROM subscriptions WHERE user_id = ?1 AND status = 'active' AND (expires = 0 OR expires > ?2) ORDER BY id DESC LIMIT 1", two(uid, n(aistore.Now())))
+    mut found := false
+    if aistore.Next(rows):
+        found = true
+        plan = aistore.Text(rows, 0)
+        expires = aistore.Int64(rows, 1)
+        started = aistore.Int64(rows, 2)
+        source = aistore.Text(rows, 3)
+    end
+    aistore.Finish(rows)
+    ret found
+end
+
+func activate(uid: str, plan_id: str, source: str, payment_id: str, granted_by: str, days: int, note: str): str:
+    p := plan_of(plan_id)
+    now := aistore.Now()
+    mut span := p.days
+    if days > 0:
+        span = days
+    end
+    aistore.Lock()
+    mut old_plan := ""
+    mut old_expires := 0 as i64
+    mut old_started := 0 as i64
+    mut old_source := ""
+    had := active_of(uid, old_plan, old_expires, old_started, old_source)
+    mut base := now
+    if had and old_plan == p.id and old_expires > now:
+        base = old_expires
+    end
+    mut ends := 0 as i64
+    if span > 0:
+        ends = base + (span as i64) * DAY
+    end
+    _r := aistore.Run("UPDATE subscriptions SET status = 'replaced' WHERE user_id = ?1 AND status = 'active'", one(uid))
+    mut a := two(uid, p.id)
+    a.push(source)
+    a.push(payment_id)
+    a.push(granted_by)
+    a.push(str.Trim(note))
+    a.push(n(now))
+    a.push(n(ends))
+    a.push(n(p.price))
+    _i := aistore.Run("INSERT INTO subscriptions (user_id, plan, status, source, payment_id, granted_by, note, started, expires, price, created) VALUES (?1, ?2, 'active', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?7)", a)
+    id := aistore.LastId()
+    aistore.Unlock()
+    ret id
+end
+
+func sub_json(id: str, uid: str, plan: str, status: str, source: str, started: str, expires: str, price: str, note: str, payment: str, name: str, email: str): str:
+    p := plan_of(plan)
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("id", id))
+    m.push(json.MemberRaw("user_id", uid))
+    m.push(json.Member("plan", plan))
+    m.push(json.Member("plan_name", p.name))
+    m.push(json.Member("status", status))
+    m.push(json.Member("source", source))
+    m.push(json.MemberRaw("started", started))
+    m.push(json.MemberRaw("expires", expires))
+    m.push(json.MemberRaw("price", price.len() > 0 ? price : "0"))
+    m.push(json.Member("note", note))
+    m.push(json.MemberRaw("payment_id", payment))
+    if email.len() > 0:
+        mut u := Vector {} as Vector<str>
+        u.push(json.MemberRaw("id", uid))
+        u.push(json.Member("name", name))
+        u.push(json.Member("email", email))
+        m.push(json.MemberRaw("user", json.Object(u)))
+    end
+    ret json.Object(m)
+end
+
+func pay_json(id: str, uid: str, plan: str, gateway: str, amount: str, status: str, token: str, ref: str, card: str, message: str, created: str, paid: str, name: str, email: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("id", id))
+    m.push(json.MemberRaw("user_id", uid))
+    m.push(json.Member("plan", plan))
+    m.push(json.Member("plan_name", plan_of(plan).name))
+    m.push(json.Member("gateway", gateway))
+    m.push(json.MemberRaw("amount", amount))
+    m.push(json.Member("status", status))
+    m.push(json.Member("token", token))
+    m.push(json.Member("ref", ref))
+    m.push(json.Member("card", card))
+    m.push(json.Member("message", message))
+    m.push(json.MemberRaw("created", created))
+    m.push(json.MemberRaw("paid", paid))
+    if email.len() > 0:
+        mut u := Vector {} as Vector<str>
+        u.push(json.MemberRaw("id", uid))
+        u.push(json.Member("name", name))
+        u.push(json.Member("email", email))
+        m.push(json.MemberRaw("user", json.Object(u)))
+    end
+    ret json.Object(m)
+end
+
+func finish_payment(id: str, status: str, ref: str, card: str, message: str):
+    mut a := one(status)
+    a.push(ref)
+    a.push(card)
+    a.push(message.len() > MAX_NOTE ? message.substr(0, MAX_NOTE) : message)
+    a.push(n(aistore.Now()))
+    a.push(id)
+    aistore.Lock()
+    _u := aistore.Run("UPDATE payments SET status = ?1, ref = ?2, card = ?3, message = ?4, paid = ?5 WHERE id = ?6", a)
+    aistore.Unlock()
+end
+
+func claim_stale(pid: str): bool:
+    aistore.Lock()
+    now := aistore.OneText("SELECT status FROM payments WHERE id = ?1", one(pid))
+    mut ok := false
+    if now == "pending" or now == "verifying":
+        ok = aistore.Run("UPDATE payments SET status = 'verifying' WHERE id = ?1", one(pid))
+    end
+    aistore.Unlock()
+    ret ok
+end
+
+func claim(pid: str): bool:
+    aistore.Lock()
+    now := aistore.OneText("SELECT status FROM payments WHERE id = ?1", one(pid))
+    mut ok := false
+    if now == "pending":
+        ok = aistore.Run("UPDATE payments SET status = 'verifying' WHERE id = ?1", one(pid))
+    end
+    aistore.Unlock()
+    ret ok
+end
+
+func redirect(ctx: i64, url: str):
+    aiweb.Cors(ctx)
+    http.SetHeader(ctx, "Location", url)
+    http.SetStatus(ctx, 302)
+    http.Text(ctx, "")
+end
+
+func list_plans(ctx: i64):
+    mut items := Vector {} as Vector<str>
+    each p in plans():
+        items.push(plan_json(p))
+    end
+    mut ways := Vector {} as Vector<str>
+    each name in ["zarinpal", "zibal"]:
+        if gateway_ok(name):
+            ways.push(json.Str(name))
+        end
+    end
+    aiweb.Reply(ctx, 200, `{"plans": ` + json.Array(items) + `, "gateways": ` + json.Array(ways) + "}")
+end
+
+func my_subscription(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    who := n(uid)
+    aistore.Lock()
+    mut plan := "free"
+    mut expires := 0 as i64
+    mut started := 0 as i64
+    mut source := "free"
+    _h := active_of(who, plan, expires, started, source)
+    hour := n(aistore.Now() - 3600)
+    api_used := aistore.OneText("SELECT COUNT(*) FROM api_requests WHERE user_id = ?1 AND created > ?2", two(who, hour))
+    chat_used := aistore.OneText("SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?1 AND m.role = 'user' AND m.created > ?2", two(who, hour))
+    aistore.Unlock()
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("plan", plan_json(plan_of(plan))))
+    m.push(json.Member("status", "active"))
+    m.push(json.Member("source", source))
+    m.push(json.MemberInt("started", started))
+    m.push(json.MemberInt("expires", expires))
+    m.push(json.MemberRaw("api_used", api_used.len() > 0 ? api_used : "0"))
+    m.push(json.MemberRaw("chat_used", chat_used.len() > 0 ? chat_used : "0"))
+    aiweb.Reply(ctx, 200, `{"subscription": ` + json.Object(m) + "}")
+end
+
+func my_payments(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, user_id, plan, gateway, amount, status, token, ref, card, message, created, paid FROM payments WHERE user_id = ?1 ORDER BY id DESC LIMIT 50", one(n(uid)))
+    until aistore.Next(rows):
+        items.push(pay_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6), aistore.Text(rows, 7), aistore.Text(rows, 8), aistore.Text(rows, 9), aistore.Text(rows, 10), aistore.Text(rows, 11), "", ""))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"payments": ` + json.Array(items) + "}")
+end
+
+func checkout(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    body := http.Body(ctx)
+    plan_id := str.Trim(json.Get(body, "plan"))
+    gateway := str.Lower(str.Trim(json.Get(body, "gateway")))
+    if not known(plan_id) or plan_id == "free":
+        aiweb.Fail(ctx, 400, "plan", "این پلن برای خرید نیست.")
+        ret
+    end
+    if not gateway_ok(gateway):
+        aiweb.Fail(ctx, 400, "gateway", "این درگاه پرداخت الان فعال نیست.")
+        ret
+    end
+    p := plan_of(plan_id)
+    who := n(uid)
+    aistore.Lock()
+    mut now_plan := "free"
+    mut now_expires := 0 as i64
+    mut now_started := 0 as i64
+    mut now_source := ""
+    _h := active_of(who, now_plan, now_expires, now_started, now_source)
+    aistore.Unlock()
+    if now_plan == "unlimited":
+        aiweb.Fail(ctx, 409, "already", "اشتراک شما نامحدود است و به خرید تازه نیازی ندارد.")
+        ret
+    end
+    amount := p.price * 10
+    mut a := two(who, p.id)
+    a.push(gateway)
+    a.push(n(p.price))
+    a.push(aiweb.ClientIp(ctx))
+    a.push(n(aistore.Now()))
+    aistore.Lock()
+    ok := aistore.Run("INSERT INTO payments (user_id, plan, gateway, amount, status, ip, created) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6)", a)
+    pid := aistore.LastId()
+    aistore.Unlock()
+    if not ok:
+        aiweb.Fail(ctx, 500, "server", "ثبت پرداخت انجام نشد. دوباره تلاش کنید.")
+        ret
+    end
+    back := CALLBACK_BASE + "/billing/callback/" + gateway
+    about := "اشتراک " + p.name + " دستیار سلام"
+    mut token := ""
+    mut fail := ""
+    mut started := false
+    if gateway == "zarinpal":
+        started = zarinpal_request(amount, back, about, token, fail)
+    else:
+        started = zibal_request(amount, back, about, token, fail)
+    end
+    if not started:
+        finish_payment(pid, "failed", "", "", fail)
+        aiweb.Fail(ctx, 502, "gateway", fail.len() > 0 ? fail : "درگاه پرداخت پاسخ نداد.")
+        ret
+    end
+    aistore.Lock()
+    _u := aistore.Run("UPDATE payments SET token = ?1 WHERE id = ?2", two(token, pid))
+    aistore.Unlock()
+    url := gateway == "zarinpal" ? ZARINPAL_START + token : ZIBAL_START + token
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("payment_id", pid))
+    m.push(json.Member("gateway", gateway))
+    m.push(json.MemberInt("amount", p.price))
+    m.push(json.Member("url", url))
+    aiweb.Reply(ctx, 200, json.Object(m))
+end
+
+func done_url(result: str, plan: str): str:
+    ret APP_URL + "/plans?payment=" + result + (plan.len() > 0 ? "&plan=" + plan : "")
+end
+
+func gateway_return(ctx: i64):
+    gateway := str.Lower(http.Param(ctx, "gateway"))
+    mut token := str.Trim(http.Query(ctx, "Authority"))
+    mut canceled := str.Lower(str.Trim(http.Query(ctx, "Status"))) != "ok"
+    if gateway == "zibal":
+        token = str.Trim(http.Query(ctx, "trackId"))
+        canceled = str.Trim(http.Query(ctx, "success")) != "1"
+    end
+    if not gateway_ok(gateway) or token.len() == 0:
+        redirect(ctx, done_url("failed", ""))
+        ret
+    end
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, user_id, plan, amount, status FROM payments WHERE gateway = ?1 AND token = ?2 ORDER BY id DESC LIMIT 1", two(gateway, token))
+    mut pid := ""
+    mut uid := ""
+    mut plan := ""
+    mut amount := 0 as i64
+    mut status := ""
+    if aistore.Next(rows):
+        pid = aistore.Text(rows, 0)
+        uid = aistore.Text(rows, 1)
+        plan = aistore.Text(rows, 2)
+        amount = aistore.Int64(rows, 3)
+        status = aistore.Text(rows, 4)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    if pid.len() == 0:
+        redirect(ctx, done_url("failed", ""))
+        ret
+    end
+    if status == "paid":
+        redirect(ctx, done_url("ok", plan))
+        ret
+    end
+    if canceled:
+        finish_payment(pid, "canceled", "", "", "پرداخت از سوی کاربر لغو شد.")
+        redirect(ctx, done_url("canceled", plan))
+        ret
+    end
+    if not claim(pid):
+        aistore.Lock()
+        now := aistore.OneText("SELECT status FROM payments WHERE id = ?1", one(pid))
+        aistore.Unlock()
+        redirect(ctx, done_url(now == "paid" ? "ok" : (now == "verifying" ? "pending" : "failed"), plan))
+        ret
+    end
+    mut ref := ""
+    mut card := ""
+    mut fail := ""
+    mut paid := false
+    if gateway == "zarinpal":
+        paid = zarinpal_verify(amount * 10, token, ref, card, fail)
+    else:
+        paid = zibal_verify(amount * 10, token, ref, card, fail)
+    end
+    if not paid:
+        finish_payment(pid, "failed", "", "", fail)
+        redirect(ctx, done_url("failed", plan))
+        ret
+    end
+    finish_payment(pid, "paid", ref, card, "")
+    _s := activate(uid, plan, "payment", pid, "0", 0, "")
+    redirect(ctx, done_url("ok", plan))
+end
+
+func admin_subscriptions(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    latest := http.Query(ctx, "latest") == "1"
+    user := http.Query(ctx, "user").to_int()
+    mut where := "1 = 1"
+    mut args := Vector {} as Vector<str>
+    if latest:
+        where = "s.id IN (SELECT MAX(id) FROM subscriptions GROUP BY user_id)"
+    else:
+        where = "s.status = 'active' AND (s.expires = 0 OR s.expires > " + n(aistore.Now()) + ")"
+    end
+    if user > 0:
+        args.push(n(user as i64))
+        where = where + " AND s.user_id = ?" + args.len()
+    end
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT s.id, s.user_id, s.plan, s.status, s.source, s.started, s.expires, s.price, s.note, s.payment_id, u.name, u.email FROM subscriptions s JOIN users u ON u.id = s.user_id WHERE " + where + " ORDER BY s.id DESC LIMIT 200", args)
+    until aistore.Next(rows):
+        items.push(sub_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6), aistore.Text(rows, 7), aistore.Text(rows, 8), aistore.Text(rows, 9), aistore.Text(rows, 10), aistore.Text(rows, 11)))
+    end
+    aistore.Finish(rows)
+    active := aistore.OneText("SELECT COUNT(*) FROM subscriptions WHERE status = 'active' AND (expires = 0 OR expires > ?1)", one(n(aistore.Now())))
+    income := aistore.OneText("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'paid'", Vector {} as Vector<str>)
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"subscriptions": ` + json.Array(items) + `, "active": ` + (active.len() > 0 ? active : "0") + `, "income": ` + (income.len() > 0 ? income : "0") + "}")
+end
+
+func admin_grant(ctx: i64):
+    admin := aiweb.NeedAdmin(ctx)
+    if admin == 0:
+        ret
+    end
+    body := http.Body(ctx)
+    plan_id := str.Trim(json.Get(body, "plan"))
+    email := str.Lower(str.Trim(json.Get(body, "email")))
+    note := str.Trim(json.Get(body, "note"))
+    days := str.Trim(json.Get(body, "days")).to_int()
+    mut uid := str.Trim(json.Get(body, "user_id"))
+    if not known(plan_id):
+        aiweb.Fail(ctx, 400, "plan", "این پلن را نمی‌شناسیم.")
+        ret
+    end
+    aistore.Lock()
+    if uid.len() == 0 and email.len() > 0:
+        uid = aistore.OneText("SELECT id FROM users WHERE LOWER(email) = ?1", one(email))
+    else uid.len() > 0:
+        uid = aistore.OneText("SELECT id FROM users WHERE id = ?1", one(uid))
+    end
+    aistore.Unlock()
+    if uid.len() == 0:
+        aiweb.Fail(ctx, 404, "user", "این کاربر پیدا نشد.")
+        ret
+    end
+    id := activate(uid, plan_id, "admin", "0", n(admin), days, note.len() > MAX_NOTE ? note.substr(0, MAX_NOTE) : note)
+    aiweb.Reply(ctx, 201, `{"subscription_id": ` + id + `, "plan": ` + json.Str(plan_id) + "}")
+end
+
+func admin_cancel(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    aistore.Lock()
+    found := aistore.OneText("SELECT id FROM subscriptions WHERE id = ?1 AND status = 'active'", one(id))
+    if found.len() > 0:
+        _u := aistore.Run("UPDATE subscriptions SET status = 'canceled' WHERE id = ?1", one(id))
+    end
+    aistore.Unlock()
+    if found.len() == 0:
+        aiweb.Fail(ctx, 404, "not_found", "این اشتراک فعال پیدا نشد.")
+        ret
+    end
+    aiweb.Reply(ctx, 200, `{"ok": true}`)
+end
+
+func admin_payments(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    mut before := http.Query(ctx, "before").to_int() as i64
+    if before <= 0:
+        before = 9223372036854775807
+    end
+    status := str.Lower(str.Trim(http.Query(ctx, "status")))
+    user := http.Query(ctx, "user").to_int()
+    mut args := one(n(before))
+    mut where := "p.id < ?1"
+    if status.len() > 0:
+        args.push(status)
+        where = where + " AND p.status = ?" + args.len()
+    end
+    if user > 0:
+        args.push(n(user as i64))
+        where = where + " AND p.user_id = ?" + args.len()
+    end
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT p.id, p.user_id, p.plan, p.gateway, p.amount, p.status, p.token, p.ref, p.card, p.message, p.created, p.paid, u.name, u.email FROM payments p JOIN users u ON u.id = p.user_id WHERE " + where + " ORDER BY p.id DESC LIMIT " + PAGE, args)
+    until aistore.Next(rows):
+        items.push(pay_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6), aistore.Text(rows, 7), aistore.Text(rows, 8), aistore.Text(rows, 9), aistore.Text(rows, 10), aistore.Text(rows, 11), aistore.Text(rows, 12), aistore.Text(rows, 13)))
+    end
+    aistore.Finish(rows)
+    paid := aistore.OneText("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'paid'", Vector {} as Vector<str>)
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"payments": ` + json.Array(items) + `, "income": ` + (paid.len() > 0 ? paid : "0") + "}")
+end
+
+func settle_one(pid: str):
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT user_id, plan, gateway, amount, token FROM payments WHERE id = ?1", one(pid))
+    mut uid := ""
+    mut plan := ""
+    mut gateway := ""
+    mut amount := 0 as i64
+    mut token := ""
+    if aistore.Next(rows):
+        uid = aistore.Text(rows, 0)
+        plan = aistore.Text(rows, 1)
+        gateway = aistore.Text(rows, 2)
+        amount = aistore.Int64(rows, 3)
+        token = aistore.Text(rows, 4)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    if token.len() == 0 or not gateway_ok(gateway):
+        finish_payment(pid, "failed", "", "", "پرداخت نیمه‌کاره ماند و به درگاه نرسید.")
+        ret
+    end
+    if not claim_stale(pid):
+        ret
+    end
+    mut ref := ""
+    mut card := ""
+    mut fail := ""
+    mut paid := false
+    if gateway == "zarinpal":
+        paid = zarinpal_verify(amount * 10, token, ref, card, fail)
+    else:
+        paid = zibal_verify(amount * 10, token, ref, card, fail)
+    end
+    if not paid:
+        finish_payment(pid, "failed", "", "", fail)
+        ret
+    end
+    finish_payment(pid, "paid", ref, card, "پرداخت پس از بازگشت نیمه‌کاره تایید شد.")
+    _s := activate(uid, plan, "payment", pid, "0", 0, "")
+end
+
+func sweep():
+    mut ids := Vector {} as Vector<str>
+    cut := n(aistore.Now() - STALE_SECONDS)
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id FROM payments WHERE status IN ('pending', 'verifying') AND created < ?1 ORDER BY id DESC LIMIT " + SWEEP_LIMIT, one(cut))
+    until aistore.Next(rows):
+        ids.push(aistore.Text(rows, 0))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    each pid in ids:
+        settle_one(pid)
+    end
+end
+
+func sweeper():
+    until true:
+        sweep()
+        sync.SleepMs(SWEEP_MS)
+    end
+end
+
+pub func Configure(zarinpal: str, zibal: str, zarinpal_base: str, zibal_base: str, callback_base: str, app_url: str, free_api: int, free_chat: int, sweep_seconds: int):
+    ZARINPAL_MERCHANT = str.Trim(zarinpal)
+    ZIBAL_MERCHANT = str.Trim(zibal)
+    if zarinpal_base.len() > 0:
+        ZARINPAL_BASE = str.TrimSuffix(zarinpal_base, "/")
+        ZARINPAL_START = ZARINPAL_BASE + "/pg/StartPay/"
+    end
+    if zibal_base.len() > 0:
+        ZIBAL_BASE = str.TrimSuffix(zibal_base, "/")
+        ZIBAL_START = ZIBAL_BASE + "/start/"
+    end
+    if callback_base.len() > 0:
+        CALLBACK_BASE = str.TrimSuffix(callback_base, "/")
+    end
+    if app_url.len() > 0:
+        APP_URL = str.TrimSuffix(app_url, "/")
+    end
+    if free_api > 0:
+        FREE_API_HOURLY = free_api
+    end
+    if sweep_seconds > 0:
+        SWEEP_MS = sweep_seconds * 1000
+        STALE_SECONDS = sweep_seconds as i64
+    end
+    if free_chat > 0:
+        FREE_CHAT_HOURLY = free_chat
+    end
+    if ZARINPAL_MERCHANT.len() > 0 or ZIBAL_MERCHANT.len() > 0:
+        _t := spawn(sweeper)
+    end
+end
+
+pub func LimitsOf(uid: str): Limits:
+    mut plan := "free"
+    mut expires := 0 as i64
+    mut started := 0 as i64
+    mut source := ""
+    aistore.Lock()
+    _h := active_of(uid, plan, expires, started, source)
+    aistore.Unlock()
+    p := plan_of(plan)
+    ret Limits { plan = p.id, name = p.name, api_hourly = p.api_hourly, chat_hourly = p.chat_hourly, parallel = p.parallel, expires = expires }
+end
+
+pub func Routes(r &: router.Router):
+    router.Get(r, "/plans", list_plans)
+    router.Get(r, "/billing/subscription", my_subscription)
+    router.Get(r, "/billing/payments", my_payments)
+    router.Post(r, "/billing/checkout", checkout)
+    router.Get(r, "/billing/callback/:gateway", gateway_return)
+    router.Get(r, "/admin/subscriptions", admin_subscriptions)
+    router.Post(r, "/admin/subscriptions", admin_grant)
+    router.Delete(r, "/admin/subscriptions/:id", admin_cancel)
+    router.Get(r, "/admin/payments", admin_payments)
+    each path in ["/plans", "/billing/subscription", "/billing/payments", "/billing/checkout", "/admin/subscriptions", "/admin/subscriptions/:id", "/admin/payments"]:
+        router.Options(r, path, aiweb.Preflight)
+    end
+end

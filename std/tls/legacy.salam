@@ -1,0 +1,106 @@
+package tls
+
+const LEG_MD5_LEN := 16
+const LEG_SHA1_LEN := 20
+
+func _legacy_hmac(use_sha1: bool, key: void*, klen: int, msg: void*, mlen: int, out: void*):
+    mut hlen := LEG_MD5_LEN
+    if use_sha1:
+        hlen = LEG_SHA1_LEN
+    end
+    mut k0 := _newbuf(64)
+    defer _buf_wipe(k0)
+    if klen > 64:
+        _putzeros(k0, hlen)
+        if use_sha1:
+            crypto.Sha1Bytes(key, klen, k0.p)
+        else:
+            crypto.Md5Bytes(key, klen, k0.p)
+        end
+    else:
+        _putraw(k0, key, klen)
+    end
+    until k0.len < 64:
+        _put8(k0, 0)
+    end
+
+    mut inner := _newbuf(64 + mlen)
+    defer _buf_wipe(inner)
+    repeat 64 in i:
+        _put8(inner, _bufat(k0, i) ^ 0x36)
+    end
+    _putraw(inner, msg, mlen)
+    mut ih := _newbuf(hlen)
+    defer _buf_wipe(ih)
+    _putzeros(ih, hlen)
+    if use_sha1:
+        crypto.Sha1Bytes(inner.p, inner.len, ih.p)
+    else:
+        crypto.Md5Bytes(inner.p, inner.len, ih.p)
+    end
+
+    mut outer := _newbuf(64 + hlen)
+    defer _buf_wipe(outer)
+    repeat 64 in i:
+        _put8(outer, _bufat(k0, i) ^ 0x5C)
+    end
+    _putbuf(outer, ih)
+    if use_sha1:
+        crypto.Sha1Bytes(outer.p, outer.len, out)
+    else:
+        crypto.Md5Bytes(outer.p, outer.len, out)
+    end
+end
+
+func _legacy_p_hash(use_sha1: bool, secret: void*, slen: int, seed: Buf, out: void*, olen: int):
+    mut hlen := LEG_MD5_LEN
+    if use_sha1:
+        hlen = LEG_SHA1_LEN
+    end
+    mut a := _newbuf(hlen)
+    defer _buf_wipe(a)
+    _putzeros(a, hlen)
+    _legacy_hmac(use_sha1, secret, slen, seed.p, seed.len, a.p)
+    mut blk := _newbuf(hlen)
+    defer _buf_wipe(blk)
+    _putzeros(blk, hlen)
+    mut msg := _newbuf(hlen + seed.len)
+    defer _buf_free(msg)
+    mut done := 0
+    until done < olen:
+        _bufreset(msg)
+        _putbuf(msg, a)
+        _putbuf(msg, seed)
+        _legacy_hmac(use_sha1, secret, slen, msg.p, msg.len, blk.p)
+        mut take := olen - done
+        if take > hlen:
+            take = hlen
+        end
+        repeat take in i:
+            _bput(out, done + i, _bufat(blk, i))
+        end
+        done += take
+        _legacy_hmac(use_sha1, secret, slen, a.p, hlen, a.p)
+    end
+end
+
+func _legacy_prf(secret: void*, slen: int, label: str, seed: Buf, out: void*, olen: int):
+    half := (slen + 1) / 2
+    s1 := secret
+    s2 := ((secret as i64) + ((slen - half) as i64)) as void*
+
+    mut ls := _newbuf(label.len() + seed.len)
+    defer _buf_free(ls)
+    _putstr(ls, label)
+    _putbuf(ls, seed)
+
+    _legacy_p_hash(false, s1, half, ls, out, olen)
+
+    mut tmp := _newbuf(olen)
+    defer _buf_wipe(tmp)
+    _putzeros(tmp, olen)
+    _legacy_p_hash(true, s2, half, ls, tmp.p, olen)
+    repeat olen in i:
+        _bput(out, i, _bget(out, i) ^ _bufat(tmp, i))
+    end
+end

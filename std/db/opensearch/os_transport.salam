@@ -1,0 +1,407 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package opensearch
+
+import str
+import conv
+import tls
+import time
+import encoding
+import encoding.url
+import net.tcp
+
+const _READ_CHUNK := 65536
+const _MAX_RESPONSE := 268435456
+
+func _os_st(c: Client): _OsState*:
+    ret c.handle as _OsState*
+end
+
+func _os_parse_node(raw: str, user &: str, pass &: str): _OsNode:
+    mut text := str.Trim(raw)
+    if not str.Contains(text, "://"): text = "http://" + text end
+    u := url.Parse(text)
+    scheme := u.scheme.lower()
+    if scheme != "http" and scheme != "https": ret _OsNode { url = text } end
+    if u.host.len() == 0: ret _OsNode { url = text } end
+    secure := scheme == "https"
+    port := u.port > 0 ? u.port : DEFAULT_PORT
+    if u.userinfo.len() > 0 and user.len() == 0:
+        info := url.DecodedUserinfo(u)
+        colon := info.find(":")
+        if colon >= 0:
+            user = info.substr(0, colon)
+            pass = info.substr(colon + 1, info.len() - colon - 1)
+        else:
+            user = info
+        end
+    end
+    mut prefix := u.path
+    until str.EndsWith(prefix, "/"):
+        prefix = prefix.substr(0, prefix.len() - 1)
+    end
+    mut host_header := u.host
+    if u.host.find(":") >= 0: host_header = "[" + u.host + "]" end
+    default_port := secure ? 443 : 80
+    if port != default_port: host_header = host_header + ":" + str.FromInt(port as i64) end
+    shown := scheme + "://" + host_header + prefix
+    ret _OsNode {
+        host = u.host, port = port, secure = secure, ok = true, prefix = prefix, host_header = host_header,
+        url = shown
+    }
+end
+
+func _os_auth_header(user: str, pass: str, bearer: str): str:
+    if bearer.len() > 0: ret "Bearer " + bearer end
+    if user.len() > 0: ret "Basic " + encoding.Base64Encode(user + ":" + pass) end
+    ret str.Clone("")
+end
+
+func _os_split_target(path: str, p &: str, q &: str):
+    mut full := path
+    if not str.StartsWith(full, "/"): full = "/" + full end
+    at := full.find("?")
+    if at < 0:
+        p = full
+        q = ""
+        ret
+    end
+    p = full.substr(0, at)
+    q = full.substr(at + 1, full.len() - at - 1)
+end
+
+func _os_head(st: _OsState*, node: _OsNode, method: str, path: str, ctype: str, body: str): str:
+    blen := str.ByteLen(body)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut rel := ""
+    mut query := ""
+    _os_split_target(path, rel, query)
+    full_path := node.prefix + rel
+    str.BufAppend(sb, method)
+    str.BufAppend(sb, " ")
+    str.BufAppend(sb, full_path)
+    if query.len() > 0:
+        str.BufAppend(sb, "?")
+        str.BufAppend(sb, query)
+    end
+    str.BufAppend(sb, " HTTP/1.1\r\nHost: ")
+    str.BufAppend(sb, node.host_header)
+    str.BufAppend(sb, "\r\nUser-Agent: salam-opensearch/")
+    str.BufAppend(sb, VERSION)
+    str.BufAppend(sb, "\r\nAccept: application/json\r\n")
+    has_body := blen > 0 or method == "POST" or method == "PUT" or method == "PATCH"
+    if has_body:
+        str.BufAppend(sb, "Content-Type: ")
+        str.BufAppend(sb, ctype)
+        str.BufAppend(sb, "\r\nContent-Length: ")
+        str.BufAppendInt(sb, blen as i64)
+        str.BufAppend(sb, "\r\n")
+    end
+    if st[0].aws_region.len() > 0:
+        now := st[0].aws_time > 0 ? st[0].aws_time : time.Now()
+        signed := _os_sigv4_headers(
+            method, node.host_header, full_path, query, body, st[0].aws_region, st[0].aws_service,
+            st[0].aws_access_key, st[0].aws_secret_key, st[0].aws_session_token, now
+        )
+        str.BufAppend(sb, signed)
+    else st[0].auth.len() > 0:
+        str.BufAppend(sb, "Authorization: ")
+        str.BufAppend(sb, st[0].auth)
+        str.BufAppend(sb, "\r\n")
+    end
+    str.BufAppend(sb, st[0].extra_headers)
+    str.BufAppend(sb, "Connection: close\r\n\r\n")
+    ret str.BufStr(sb)
+end
+
+func _os_hdr(head: str, name: str): str:
+    lower := head.lower()
+    needle := "\r\n" + name.lower() + ":"
+    a := lower.find(needle)
+    if a < 0: ret "" end
+    start := a + needle.len()
+    mut stop := str.IndexFrom(head, "\r\n", start)
+    if stop < 0: stop = head.len() end
+    ret str.Trim(head.substr(start, stop - start))
+end
+
+func _os_hexval(code: int): int:
+    if code >= 48 and code <= 57: ret code - 48 end
+    if code >= 97 and code <= 102: ret code - 87 end
+    if code >= 65 and code <= 70: ret code - 55 end
+    ret -1
+end
+
+func _os_dechunk(body: str, ok &: bool): str:
+    ok = false
+    n := str.ByteLen(body)
+    bp := _os_bp(body)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut p := 0
+    until p < n:
+        mut size := 0
+        mut digits := 0
+        until p < n:
+            v := _os_hexval(_os_ub(bp, p))
+            if v < 0: break end
+            size = size * 16 + v
+            digits += 1
+            p += 1
+        end
+        if digits == 0: ret str.BufStr(sb) end
+        nl := str.IndexFrom(body, "\r\n", p)
+        if nl < 0: ret str.BufStr(sb) end
+        p = nl + 2
+        if size == 0:
+            ok = true
+            ret str.BufStr(sb)
+        end
+        if p + size > n: ret str.BufStr(sb) end
+        str.BufAppend(sb, str.ByteSub(body, p, size))
+        p += size
+        if p + 1 < n and _os_ub(bp, p) == 13: p += 2 end
+    end
+    ret str.BufStr(sb)
+end
+
+func _os_finish(raw: str): Response:
+    if raw.len() == 0: ret Response { error = "the server closed without answering" } end
+    sep := raw.find("\r\n\r\n")
+    if sep < 0: ret Response { error = "the response head never ended" } end
+    head := raw.substr(0, sep + 2)
+    mut body := str.ByteSub(raw, sep + 4, str.ByteLen(raw) - sep - 4)
+    sp := head.find(" ")
+    status := sp < 0 ? 0 : head.substr(sp + 1, 3).to_int()
+    if str.Contains(_os_hdr(head, "Transfer-Encoding").lower(), "chunked"):
+        mut ok := false
+        body = _os_dechunk(body, ok)
+        if not ok: ret Response { status = status, error = "the chunked response body could not be decoded" } end
+    else:
+        cl := _os_hdr(head, "Content-Length")
+        if cl.len() > 0:
+            want := cl.to_int()
+            if want < str.ByteLen(body): body = str.ByteSub(body, 0, want) end
+        end
+    end
+    ret Response { status = status, ok = status >= 200 and status < 300, body = body }
+end
+
+func _os_read_plain(c: tcp.Conn): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut total := 0
+    mut chunk := tcp.Read(c, _READ_CHUNK)
+    until chunk.len() > 0 and total < _MAX_RESPONSE:
+        str.BufAppend(sb, chunk)
+        total += str.ByteLen(chunk)
+        chunk = tcp.Read(c, _READ_CHUNK)
+    end
+    ret str.BufStr(sb)
+end
+
+func _os_read_tls(c &: tls.Conn): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut total := 0
+    mut chunk := tls.Read(c, _READ_CHUNK)
+    until chunk.len() > 0 and total < _MAX_RESPONSE:
+        str.BufAppend(sb, chunk)
+        total += str.ByteLen(chunk)
+        chunk = tls.Read(c, _READ_CHUNK)
+    end
+    ret str.BufStr(sb)
+end
+
+func _os_send(st: _OsState*, node: _OsNode, head: str, body: str): Response:
+    c := tcp.Dial(node.host, node.port)
+    if not tcp.ConnOk(c):
+        ret Response { error = "could not connect to " + node.host + ":" + str.FromInt(node.port as i64) }
+    end
+    if st[0].timeout_ms > 0: tcp.SetDeadline(c, st[0].timeout_ms) end
+    blen := str.ByteLen(body)
+    if not node.secure:
+        if tcp.Write(c, head) < 0:
+            tcp.Close(c)
+            ret Response { error = "could not send the request" }
+        end
+        if blen > 0 and tcp.WriteBytes(c, body as void*, blen) < 0:
+            tcp.Close(c)
+            ret Response { error = "could not send the body" }
+        end
+        raw := _os_read_plain(c)
+        tcp.Close(c)
+        ret _os_finish(raw)
+    end
+    mut cfg := tls.NewConfig(node.host)
+    cfg.ca_file = st[0].ca_file
+    cfg.insecure_skip_verify = st[0].insecure
+    mut t := tcp.UpgradeTLS(c, cfg)
+    if not tls.ConnOk(t):
+        e := tls.ConnError(t)
+        tls.Close(t)
+        ret Response { error = "TLS: " + e }
+    end
+    if tls.Write(t, head) < 0:
+        tls.Close(t)
+        ret Response { error = "could not send the request" }
+    end
+    if blen > 0 and tls.WriteBytes(t, body as void*, blen) < 0:
+        tls.Close(t)
+        ret Response { error = "could not send the body" }
+    end
+    raw := _os_read_tls(t)
+    tls.Close(t)
+    ret _os_finish(raw)
+end
+
+func _os_parse_error(r &: Response):
+    if r.ok: ret end
+    body := r.body
+    et := _os_path(body, "error.type")
+    if et.len() > 0:
+        r.error_type = et
+        r.error_reason = _os_path(body, "error.reason")
+        cause := _os_path(body, "error.root_cause.0.reason")
+        if cause.len() > 0 and cause != r.error_reason:
+            r.error = et + ": " + r.error_reason + " (" + cause + ")"
+        else:
+            r.error = et + ": " + r.error_reason
+        end
+        ret
+    end
+    plain := _os_jstr(body, "error")
+    if plain.len() > 0 and not str.StartsWith(plain, "{"):
+        r.error_reason = plain
+        r.error = "HTTP " + str.FromInt(r.status as i64) + ": " + plain
+        ret
+    end
+    msg := _os_jstr(body, "message")
+    if msg.len() > 0:
+        r.error_reason = msg
+        r.error = "HTTP " + str.FromInt(r.status as i64) + ": " + msg
+        ret
+    end
+    if r.status == 401:
+        r.error = "HTTP 401: unauthorized"
+        ret
+    end
+    r.error = "HTTP " + str.FromInt(r.status as i64)
+end
+
+func _os_record(st: _OsState*, r: Response):
+    st[0].status = r.status
+    st[0].err = r.error
+    st[0].err_type = r.error_type
+    st[0].err_reason = r.error_reason
+end
+
+func _os_retryable(status: int): bool:
+    ret status == 502 or status == 503 or status == 504
+end
+
+func _os_pick(st: _OsState*): int:
+    n := st[0].nodes.len()
+    now := time.MonoMillis()
+    start := st[0].cursor % n
+    repeat n in k:
+        i := (start + k) % n
+        if st[0].dead_until.get(i) <= now:
+            st[0].cursor = (i + 1) % n
+            ret i
+        end
+    end
+    mut best := start
+    repeat n in k:
+        if st[0].dead_until.get(k) < st[0].dead_until.get(best): best = k end
+    end
+    st[0].cursor = (best + 1) % n
+    ret best
+end
+
+func _os_do(c: Client, method: str, path: str, body: str, ctype: str): Response:
+    if c.handle == null: ret Response { error = "no client" } end
+    st := _os_st(c)
+    if st[0].config_err.len() > 0:
+        r := Response { error = st[0].config_err }
+        _os_record(st, r)
+        ret r
+    end
+    n := st[0].nodes.len()
+    if n == 0:
+        r := Response { error = "no nodes configured" }
+        _os_record(st, r)
+        ret r
+    end
+    tries := st[0].max_retries + 1
+    mut last := Response {}
+    repeat tries in attempt:
+        ni := _os_pick(st)
+        node := st[0].nodes.get(ni)
+        head := _os_head(st, node, method, path, ctype, body)
+        sent := _os_send(st, node, head, body)
+        if sent.error.len() > 0 and sent.status == 0:
+            if str.StartsWith(sent.error, "could not connect") or str.StartsWith(sent.error, "TLS"):
+                st[0].dead_until.set(ni, time.MonoMillis() + DEAD_NODE_MS)
+            end
+            last = Response { error = node.url + ": " + sent.error }
+            continue
+        end
+        st[0].dead_until.set(ni, 0 as i64)
+        mut r := sent
+        _os_parse_error(r)
+        if _os_retryable(r.status) and attempt + 1 < tries:
+            last = r
+            continue
+        end
+        _os_record(st, r)
+        ret r
+    end
+    _os_record(st, last)
+    ret last
+end
+
+func _os_seg(s: str): str:
+    ret encoding.URLEncode(s)
+end
+
+func _os_idx(s: str): str:
+    e := encoding.URLEncode(s)
+    ret str.Replace(str.Replace(str.Replace(e, "%2C", ","), "%2A", "*"), "%2a", "*")
+end
+
+func _os_qadd(q &: Vector<str>, key: str, val: str):
+    if val.len() == 0: ret end
+    q.push(key + "=" + encoding.URLEncode(val))
+end
+
+func _os_qs(q: Vector<str>): str:
+    if q.len() == 0: ret str.Clone("") end
+    ret "?" + str.Join(q, "&")
+end
+
+func _os_opts_query(q &: Vector<str>, o: Options):
+    _os_qadd(q, "refresh", o.refresh)
+    _os_qadd(q, "routing", o.routing)
+    _os_qadd(q, "pipeline", o.pipeline)
+    _os_qadd(q, "timeout", o.timeout)
+    _os_qadd(q, "wait_for_active_shards", o.wait_for_active_shards)
+    _os_qadd(q, "version_type", o.version_type)
+    if o.if_seq_no >= 0: _os_qadd(q, "if_seq_no", conv.FormatInt(o.if_seq_no)) end
+    if o.if_primary_term >= 0: _os_qadd(q, "if_primary_term", conv.FormatInt(o.if_primary_term)) end
+    if o.version >= 0: _os_qadd(q, "version", conv.FormatInt(o.version)) end
+    if o.require_alias: _os_qadd(q, "require_alias", "true") end
+end

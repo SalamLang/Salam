@@ -1,0 +1,262 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+func sw_types_comparable(s &: Sema, ta: int, tb: int): bool:
+    if type_is_error(s, ta) or type_is_error(s, tb):
+        ret true
+    end
+    if type_equiv(s, ta, tb) or types_text_pair(s, ta, tb):
+        ret true
+    end
+    ret type_is_numeric(s, ta) and type_is_numeric(s, tb) and type_common_arith(s, ta, tb) >= 0
+end
+
+func sw_check_label(s &: Sema, a &: at.Ast, nid: int, subj: int): int:
+    if is_int_lit(a, nid) and type_is_integer(s, subj):
+        s.expected = subj
+    end
+    lt_at := sema_check_expr(s, a, nid)
+    s.expected = TYPE_NONE
+    ret lt_at
+end
+
+func sw_item_is_ordered(op: int): bool:
+    ret op == tok.TK_KW_TO or op == tok.TK_GT or op == tok.TK_GE or op == tok.TK_LT or op == tok.TK_LE
+end
+
+func sw_lit_equal(a &: at.Ast, x: int, y: int): bool:
+    xv := at.Get(a, x)
+    yv := at.Get(a, y)
+    if xv.value_kind != yv.value_kind:
+        ret false
+    end
+    if xv.value_kind == tok.TV_INT:
+        ret xv.value_int == yv.value_int
+    end
+    if xv.value_kind == tok.TV_STRING:
+        ret str.Equals(xv.value_str, yv.value_str)
+    end
+    if xv.value_kind == tok.TV_BOOL:
+        ret xv.value_bool == yv.value_bool
+    end
+    if xv.value_kind == tok.TV_CHAR:
+        ret xv.value_int == yv.value_int
+    end
+    ret false
+end
+
+func check_switch_item(
+    s &: Sema, a &: at.Ast, item: int, subj: int, subj_is_enum: bool, ordered_ok: bool, seen_members &: Vector<int>, seen_lits &: Vector<int>
+):
+    itn := at.Get(a, item)
+    isp := span_of(a, item)
+    ordered := sw_item_is_ordered(itn.op)
+    if ordered and not ordered_ok:
+        serr(
+            s, 102, isp, i18.Tr("a relational or range case label requires a numeric or string switch subject")
+        )
+    end
+    ak := at.KindOf(a, itn.a)
+    if itn.op == 0 and subj_is_enum and (ak == at.AST_IDENTIFIER or ak == at.AST_MEMBER):
+        syd := ty_at(s, subj).decl
+        pname := ak == at.AST_IDENTIFIER ? at.Get(a, itn.a).name : at.Get(a, itn.a).name
+        mut m := 0
+        if syd != 0 and sym_at(s, syd).members != 0:
+            m = enum_member_find(s, a, sym_at(s, syd).members, itn.a)
+        end
+        if m == 0:
+            serr(
+                s, 16, span_of(a, itn.a), co.Format2(
+                    i18.Tr("enum '%s' has no member '%s'"), co.ArgStr(syd != 0 ? sym_at(s, syd).name : "?"), co.ArgStr(pname)
+                ) + (syd != 0 ? sema_suggest(s, a, sym_at(s, syd).members, pname, SUGGEST_ANY, false) : "")
+            )
+            ret
+        end
+        mut dup := false
+        repeat seen_members.len() in k:
+            if seen_members.get(k) == m:
+                dup = true
+                break
+            end
+        end
+        if dup:
+            serr(
+                s, 101, isp, co.Format1(i18.Tr("duplicate case value '%s'"), co.ArgStr(pname))
+            )
+        else:
+            seen_members.push(m)
+        end
+        if ak == at.AST_IDENTIFIER:
+            mem := new_node_at(a, at.AST_MEMBER, span_of(a, itn.a))
+            idn := new_node_at(a, at.AST_IDENTIFIER, span_of(a, itn.a))
+            mut iv := at.Get(a, idn)
+            iv.synthetic = true
+            iv.name = sym_at(s, syd).name
+            at.Put(a, idn, iv)
+            mut mv := at.Get(a, mem)
+            mv.synthetic = true
+            mv.a = idn
+            mv.name = pname
+            at.Put(a, mem, mv)
+            mut iv2 := at.Get(a, item)
+            iv2.a = mem
+            at.Put(a, item, iv2)
+        end
+        _mt := sema_check_expr(s, a, at.Get(a, item).a)
+        ret
+    end
+    vt := sw_check_label(s, a, itn.a, subj)
+    if itn.op == 0 and not subj_is_enum and ak == at.AST_IDENTIFIER and type_is_integer(s, subj):
+        mut cv := 0 as i64
+        if fold_operand_int(s, a, itn.a, cv):
+            fold_int(a, itn.a, cv)
+        end
+    end
+    if not sw_types_comparable(s, subj, vt):
+        serr(
+            s, 21, isp, co.Format2(
+                i18.Tr("cannot compare '%s' and '%s'"), co.ArgStr(type_disp(s, subj)), co.ArgStr(type_disp(s, vt))
+            )
+        )
+    end
+    if itn.op == 0 and not subj_is_enum and ak == at.AST_LITERAL:
+        mut dup2 := false
+        repeat seen_lits.len() in k2:
+            if sw_lit_equal(a, seen_lits.get(k2), itn.a):
+                dup2 = true
+                break
+            end
+        end
+        if dup2:
+            serr(
+                s, 101, isp, i18.Tr("duplicate case value")
+            )
+        else:
+            seen_lits.push(itn.a)
+        end
+    end
+    if itn.op == tok.TK_KW_TO:
+        ht := sw_check_label(s, a, at.Get(a, item).c, subj)
+        if not sw_types_comparable(s, subj, ht):
+            serr(
+                s, 21, span_of(a, at.Get(a, item).c), co.Format2(
+                    i18.Tr("cannot compare '%s' and '%s'"), co.ArgStr(type_disp(s, subj)), co.ArgStr(type_disp(s, ht))
+                )
+            )
+        end
+    end
+end
+
+func sw_check_enum_exhaustive(s &: Sema, a &: at.Ast, nid: int, subj: int, seen_members: Vector<int>):
+    syid := ty_at(s, subj).decl
+    if syid == 0 or sym_at(s, syid).members == 0:
+        ret
+    end
+    msyms := scope_at(s, sym_at(s, syid).members).symbols
+    mut missing := ""
+    mut nmissing := 0
+    repeat msyms.len() in mi:
+        mid := msyms.get(mi)
+        if sym_at(s, mid).kind != SYM_ENUM_MEMBER:
+            continue
+        end
+        mut covered := false
+        repeat seen_members.len() in k:
+            if seen_members.get(k) == mid:
+                covered = true
+                break
+            end
+        end
+        if not covered:
+            if nmissing > 0:
+                missing = missing + ", "
+            end
+            missing = missing + sym_at(s, mid).name
+            nmissing += 1
+        end
+    end
+    if nmissing == 0:
+        ret
+    end
+    serr(
+        s, 103, span_of(a, nid), co.Format2(
+            i18.Tr("switch on enum '%s' does not cover: %s; add the missing cases or an 'else'"), co.ArgStr(sym_at(s, syid).name), co.ArgStr(missing)
+        )
+    )
+end
+
+func sema_check_switch(s &: Sema, a &: at.Ast, nid: int):
+    s.expected = TYPE_NONE
+    subj := sema_check_expr(s, a, at.Get(a, nid).a)
+    subj_is_enum := subj >= 0 and ty_at(s, subj).kind == TY_ENUM
+    subj_is_variant := subj >= 0 and ty_at(s, subj).kind == TY_VARIANT
+    ordered_ok := type_is_numeric(s, subj) or ty_at(s, subj).kind == TY_STR
+    if subj_is_variant:
+        serr(
+            s, 21, span_of(a, at.Get(a, nid).a), i18.Tr("'switch' cannot dispatch on a Variant value; use 'match' instead")
+        )
+    end
+
+    mut seen_members := Vector {} as Vector<int>
+    defer seen_members.free()
+    mut seen_lits := Vector {} as Vector<int>
+    defer seen_lits.free()
+
+    mut has_else := false
+    mut only_members := true
+    errs_before := s.diag.errors
+    s.switch_depth += 1
+    mut ci := 0
+    until ci < at.ChildCount(a, nid):
+        cs := at.Child(a, nid, ci)
+        ci += 1
+        if at.Get(a, cs).op == tok.TK_KW_ELSE:
+            has_else = true
+        else:
+            mut ii := 0
+            until ii < at.ChildCount(a, cs):
+                item := at.Child(a, cs, ii)
+                ii += 1
+                itk := at.KindOf(a, at.Get(a, item).a)
+                if at.Get(a, item).op != 0 or (itk != at.AST_IDENTIFIER and itk != at.AST_MEMBER):
+                    only_members = false
+                end
+                check_switch_item(
+                    s, a, item, subj, subj_is_enum, ordered_ok, seen_members, seen_lits
+                )
+            end
+        end
+        sema_check_block(s, a, at.Get(a, cs).b)
+    end
+    s.switch_depth -= 1
+    if subj_is_enum and not has_else and only_members and s.diag.errors == errs_before:
+        sw_check_enum_exhaustive(s, a, nid, subj, seen_members)
+        if s.diag.errors == errs_before:
+            node_flag_set(s.covers_all, nid)
+        end
+    end
+    if has_else:
+        node_flag_set(s.exhaustive, nid)
+    end
+    _dt := sema_decorate(s, a, nid, sema_ty(s, TY_VOID))
+end

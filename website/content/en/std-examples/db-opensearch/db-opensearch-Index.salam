@@ -1,0 +1,68 @@
+import db.opensearch
+
+func main:
+    c := opensearch.Connect("http://localhost:9200")
+    w := opensearch.Index(c, "books", "1", `{"title":"The Book of Kings","year":1010,"stock":3}`)
+    println w.ok, w.status, w.index, w.id, w.result, w.version, w.seq_no, w.primary_term
+    println w.shards_total, w.shards_successful, w.error
+    auto := opensearch.IndexWith(c, "books", "", `{"title":"Masnavi"}`, opensearch.Options { refresh = opensearch.REFRESH_WAIT_FOR, routing = "poetry" })
+    println auto.id
+    dup := opensearch.Create(c, "books", "1", `{"title":"again"}`)
+    println dup.ok, dup.status
+    piped := opensearch.CreateWith(c, "books", "2", `{"title":"Golestan"}`, opensearch.Options { pipeline = "clean", timeout = "5s", wait_for_active_shards = "1" })
+    println piped.result
+
+    d := opensearch.Get(c, "books", "1")
+    println d.found, d.index, d.id, d.version, d.seq_no, d.primary_term, d.routing, d.source, d.fields, d.error
+    mut only := Vector {} as Vector<str>
+    only.push("title")
+    println opensearch.GetFields(c, "books", "1", only, "").source
+    println opensearch.GetSource(c, "books", "1"), opensearch.Exists(c, "books", "1")
+
+    println opensearch.Update(c, "books", "1", `{"stock":2}`).result
+    cas := opensearch.UpdateWith(c, "books", "1", `{"doc":{"stock":1}}`, opensearch.Options { if_seq_no = d.seq_no, if_primary_term = d.primary_term, retry_on_conflict = -1 })
+    println cas.ok, opensearch.ErrorType(c)
+    println opensearch.Upsert(c, "books", "9", `{"title":"Shahnameh","stock":1}`).result
+    println opensearch.UpdateScript(c, "books", "1", opensearch.Script("ctx._source.stock += params.n", `{"n":5}`), `{"stock":5}`).result
+    println opensearch.DeleteWith(c, "books", "9", opensearch.Options { refresh = opensearch.REFRESH_TRUE, version = 3, version_type = "external" }).result
+    println opensearch.Delete(c, "books", "2").result
+
+    mut ids := Vector {} as Vector<str>
+    ids.push("1")
+    ids.push("404")
+    each doc in opensearch.MGet(c, "books", ids):
+        println doc.id, doc.found
+    end
+    println opensearch.Count(c, "books", ""), opensearch.Count(c, "books", opensearch.Range("year", "1000", ""))
+
+    mut b := opensearch.NewBulk()
+    opensearch.BulkIndex(b, "books", "10", `{"title":"Divan"}`)
+    opensearch.BulkIndexRouted(b, "books", "11", "poetry", `{"title":"Rubaiyat"}`)
+    opensearch.BulkCreate(b, "books", "", `{"title":"Bustan"}`)
+    opensearch.BulkUpdate(b, "books", "10", `{"stock":4}`)
+    opensearch.BulkUpsert(b, "books", "12", `{"title":"Kalila"}`)
+    opensearch.BulkDelete(b, "books", "3")
+    println opensearch.BulkLen(b), b.count, b.lines.len()
+    print opensearch.BulkBody(b)
+    br := opensearch.BulkSendWith(c, b, opensearch.REFRESH_FALSE)
+    println br.ok, br.status, br.took, br.errors, br.succeeded, br.failed, br.error
+    each it in br.items:
+        println it.action, it.index, it.id, it.status, it.ok, it.result, it.version, it.error_type, it.error_reason
+    end
+    opensearch.BulkReset(b)
+    opensearch.BulkIndex(b, "books", "13", `{"title":"Makhzan"}`)
+    println opensearch.BulkSend(c, b).ok
+    opensearch.BulkFree(b)
+    println opensearch.ParseBulk(`{"took":1,"errors":false,"items":[]}`).ok
+
+    ub := opensearch.UpdateByQuery(c, "books", opensearch.Term("stock", "0"), opensearch.Script("ctx._source.out = true", ""))
+    println ub.ok, ub.status, ub.took, ub.timed_out, ub.total, ub.updated, ub.batches, ub.version_conflicts, ub.noops, ub.failures
+    ub2 := opensearch.UpdateByQueryWith(c, "books", "", "", opensearch.Options { conflicts = "proceed", pipeline = "clean" })
+    println ub2.updated
+    dq := opensearch.DeleteByQuery(c, "books", opensearch.Term("out", "true"))
+    println dq.deleted, opensearch.DeleteByQueryWith(c, "books", opensearch.MatchAll(), opensearch.Options { refresh = "true", conflicts = "proceed" }).deleted
+    rx := opensearch.Reindex(c, "books", "books_v2")
+    println rx.created, rx.error
+    task := opensearch.ReindexBody(c, `{"source":{"index":"books"},"dest":{"index":"books_v3"}}`, false)
+    println task.task
+end

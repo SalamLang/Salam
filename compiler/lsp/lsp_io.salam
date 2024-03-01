@@ -1,0 +1,196 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package lsp
+
+import str
+import mem
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _read(fd: int, buf: void*, n: u32): int
+        func _write(fd: int, buf: void*, n: u32): int
+        func _setmode(fd: int, mode: int): int
+    end
+else:
+    extern:
+        func read(fd: int, buf: void*, n: u64): i64
+        func write(fd: int, buf: void*, n: u64): i64
+        func poll(fds: void*, nfds: usize, timeout: int): int
+        func waitpid(pid: int, status: void*, options: int): int
+    end
+end
+
+const IO_CHUNK := 65536
+
+mut g_in := ""
+mut g_in_eof := false
+
+func raw_read(buf: void*, n: int): int:
+    if SALAM_OS_WINDOWS:
+        ret _read(0, buf, n as u32)
+    else:
+        ret read(0, buf, n as u64) as int
+    end
+end
+
+func raw_write(s: str): bool:
+    mut rest := s
+    mut left := str.Len(s)
+    mut guard := 0
+    until left > 0 and guard < 100000:
+        mut w := 0
+        if SALAM_OS_WINDOWS:
+            w = _write(1, rest as void*, left as u32)
+        else:
+            w = write(1, rest as void*, left as u64) as int
+        end
+        if w <= 0:
+            ret false
+        end
+        left -= w
+        if left > 0:
+            rest = str.Substr(rest, w, left)
+        end
+        guard += 1
+    end
+    ret true
+end
+
+func io_init():
+    g_in_eof = false
+    if SALAM_OS_WINDOWS:
+        _a := _setmode(0, 32768)
+        _b := _setmode(1, 32768)
+    end
+end
+
+func fill(): bool:
+    if g_in_eof:
+        ret false
+    end
+    buf := mem.Allocate(IO_CHUNK as u64)
+    n := raw_read(buf, IO_CHUNK)
+    if n <= 0:
+        mem.Free(buf)
+        g_in_eof = true
+        ret false
+    end
+    chunk := bytes_to_str(buf, n)
+    mem.Free(buf)
+    g_in = g_in + chunk
+    ret true
+end
+
+func header_length(head: str): int:
+    lower := str.Lower(head)
+    cl := str.IndexOf(lower, "content-length:")
+    if cl < 0:
+        ret 0 - 1
+    end
+    mut i := cl + 15
+    n := str.Len(head)
+    until i < n and (byte_at(head, i) == 32 or byte_at(head, i) == 9):
+        i += 1
+    end
+    mut v := 0
+    mut any := false
+    until i < n and byte_at(head, i) >= 48 and byte_at(head, i) <= 57:
+        v = v * 10 + (byte_at(head, i) - 48)
+        any = true
+        i += 1
+    end
+    ret any ? v : 0 - 1
+end
+
+func frame_ready(): bool:
+    sep := str.IndexOf(g_in, "\r\n\r\n")
+    if sep < 0:
+        ret false
+    end
+    n := header_length(str.Substr(g_in, 0, sep))
+    ret n >= 0 and str.Len(g_in) >= sep + 4 + n
+end
+
+func read_message(ok &: bool): str:
+    until true:
+        sep := str.IndexOf(g_in, "\r\n\r\n")
+        if sep >= 0:
+            n := header_length(str.Substr(g_in, 0, sep))
+            if n < 0:
+                g_in = str.Substr(g_in, sep + 4, str.Len(g_in) - sep - 4)
+                continue
+            end
+            if str.Len(g_in) >= sep + 4 + n:
+                body := str.Substr(g_in, sep + 4, n)
+                rest := str.Len(g_in) - sep - 4 - n
+                g_in = rest > 0 ? str.Substr(g_in, sep + 4 + n, rest) : ""
+                ok = true
+                ret body
+            end
+        end
+        if not fill():
+            ok = false
+            ret ""
+        end
+    end
+end
+
+func input_ready(timeout_ms: int): bool:
+    if frame_ready():
+        ret true
+    end
+    if g_in_eof:
+        ret true
+    end
+    if SALAM_OS_WINDOWS:
+        ret false
+    else:
+        fds := mem.AllocateZeroed(8 as u64)
+        ip := fds as i32*
+        ip[0] = 0 as i32
+        sp := fds as i16*
+        sp[2] = 1 as i16
+        rc := poll(fds, 1 as usize, timeout_ms)
+        mem.Free(fds)
+        ret rc > 0
+    end
+end
+
+func send_message(body: str): bool:
+    ret raw_write("Content-Length: " + str.FromInt(str.Len(body) as i64) + "\r\n\r\n" + body)
+end
+
+func child_done(pid: int, blocking: bool, code &: int): bool:
+    if SALAM_OS_WINDOWS:
+        ret true
+    else:
+        buf := mem.AllocateZeroed(8 as u64)
+        rc := waitpid(pid, buf, blocking ? 0 : 1)
+        st := (buf as i32*)[0]
+        mem.Free(buf)
+        if rc == pid:
+            code = (st >> 8) & 255
+            if (st & 127) != 0:
+                code = 128 + (st & 127)
+            end
+            ret true
+        end
+        if rc < 0:
+            code = 0 - 1
+            ret true
+        end
+        ret false
+    end
+end

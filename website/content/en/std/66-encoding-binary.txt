@@ -1,0 +1,103 @@
+pkg.en = encoding/binary
+pkg.name = encoding/binary
+pkg.group = Encoding and data
+pkg.summary = Writing and reading numbers as bytes, big-endian or little-endian.
+pkg.title = The encoding/binary package in Salam | Endianness
+pkg.description = The encoding/binary package in Salam: writing and reading 8 to 64 bit integers and floats in a byte buffer, big-endian and little-endian, with an example.
+pkg.import = encoding.binary
+pkg.intro <<
+<p>Binary file formats and network protocols store each number as a fixed number of bytes in a fixed order. This package writes and reads such fields: 8, 16, 32 and 64 bit integers, signed or unsigned, and 32 or 64 bit IEEE 754 floats. <strong>Big-endian</strong> (<code>BE</code>) puts the most significant byte first and is the usual order on the network and in PNG; <strong>little-endian</strong> (<code>LE</code>) is the other way round and is what x86 and ARM processors use, and formats such as ZIP and WAV.</p>
+<p>Writers append to a <code>ByteBuf</code> and readers advance a <code>ByteReader</code>, both from <a href="/std/compress/">compress</a>; that package also has <code>BufPushBytes</code> and <code>RdBytes</code> for raw byte runs such as magic numbers. Use this package when the layout is fixed by a specification or by you. For self-describing data use <a href="/std/encoding/msgpack/">encoding/msgpack</a> or <a href="/std/encoding/protobuf/">encoding/protobuf</a>; for hex or Base64 text, <a href="/std/encoding/">encoding</a>.</p>
+<h3 id="pitfalls">What trips people up</h3>
+<ul>
+<li><strong>Reading past the end does not stop the program.</strong> The missing bytes read as 0 and the reader's <code>bad</code> field turns true and stays true. Read a whole record, then check <code>r.bad</code> once, as the first guide does; or check <code>compress.RdLeft</code> before reading.</li>
+<li><strong>32-bit unsigned values come back in an <code>int</code></strong>, which is signed, so values from 2,147,483,648 up look negative. <code>ReadU32BE</code> and <code>ReadI32BE</code> return the same bits. Widen with <code>(v as i64) &amp; 4294967295</code>.</li>
+<li><strong>64-bit unsigned is an <code>i64</code></strong> too, so values above 9,223,372,036,854,775,807 are negative.</li>
+<li><strong>Writers do not range check.</strong> <code>WriteU8(b, 300)</code> writes 44, the low 8 bits.</li>
+<li><strong><code>BinaryOptions</code> is not used</strong> by any function yet; the float functions take a <code>big_endian</code> bool instead, and the integer functions carry the order in their names.</li>
+</ul>
+
+<h2 id="guide-header">Guide: your own file format</h2>
+<p>A binary format usually starts with a few magic bytes that identify it, then a version number and a count, then the records. Write each field with the function for its size and byte order, and read them back in exactly the same order. <code>compress.BufPushBytes</code> writes a fixed text such as the magic, and <code>compress.RdBytes</code> reads it back.</p>
+{{example.encoding-binary-guide-header}}
+<p><code>read_file</code> checks the magic and the version before trusting the rest, and refuses a count that is too large to be real, so a damaged file cannot make it loop for a long time. It then reads every record and checks <code>r.bad</code> once at the end: the 18-byte copy has room for only two of the three scores, and the reader says so. Changing byte 4 turns the version into 9, which is refused. Keep one byte order for the whole format and write it down in its description.</p>
+
+<h2 id="guide-png">Guide: read a header of a real format</h2>
+<p>PNG is a good example of a big-endian format. A file starts with an 8 byte signature, then chunks, each with a 4 byte length, a 4 letter type and the data. The first chunk, <code>IHDR</code>, holds the width and height as big-endian 32 bit numbers. The program builds those first bytes itself so it runs without a file; with a real image, read the file into a buffer first and the parsing is the same.</p>
+{{example.encoding-binary-guide-png}}
+
+<h2 id="guide-frames">Guide: length-prefixed messages</h2>
+<p>A TCP connection delivers a stream of bytes, not separate messages. The usual fix is to send each message with its length in front, here as a 16 bit big-endian number. The reader takes the length, checks that the whole message has arrived with <code>RdLeft</code>, and only then reads it.</p>
+{{example.encoding-binary-guide-frames}}
+<p>The length counts bytes, so <code>سلام</code> is 8, not 4. The last frame says 10 bytes but only 3 have arrived; a real server keeps those bytes and tries again when more data comes in.</p>
+
+<h2 id="guide-endian">Guide: byte order and sign mistakes</h2>
+<p>Reading with the wrong byte order does not fail, it just gives a wrong number, so these bugs are easy to miss. Unsigned 32 bit values are another trap: they come back in an <code>int</code>, so anything at or above 2,147,483,648 looks negative. Widen it to <code>i64</code> and mask it to get the unsigned value.</p>
+{{example.encoding-binary-guide-endian}}
+<p>Reading past the end does not stop the program either: the missing bytes read as zero and <code>r.bad</code> turns true. When the input comes from outside, check <code>r.bad</code> after each record, or <code>compress.RdLeft</code> before it, as the framing example does.</p>
+>>
+
+doc.BinaryOptions = Byte order options. No function in the package takes this struct yet.
+doc.BinaryOptions.big_endian = Big-endian when true; false by default.
+doc.WriteU8 = Writes one byte: the low 8 bits of <code>v</code>.
+doc.WriteU16BE = Writes an unsigned 16 bit integer big-endian, most significant byte first.
+doc.WriteI16BE = Writes a signed 16 bit integer big-endian, most significant byte first.
+doc.WriteU16LE = Writes an unsigned 16 bit integer little-endian, least significant byte first.
+doc.WriteI16LE = Writes a signed 16 bit integer little-endian, least significant byte first.
+doc.WriteU32BE = Writes an unsigned 32 bit integer big-endian, most significant byte first.
+doc.WriteI32BE = Writes a signed 32 bit integer big-endian, most significant byte first.
+doc.WriteU32LE = Writes an unsigned 32 bit integer little-endian, least significant byte first.
+doc.WriteI32LE = Writes a signed 32 bit integer little-endian, least significant byte first.
+doc.WriteU64BE = Writes an unsigned 64 bit integer big-endian, most significant byte first.
+doc.WriteI64BE = Writes a signed 64 bit integer big-endian, most significant byte first.
+doc.WriteU64LE = Writes an unsigned 64 bit integer little-endian, least significant byte first.
+doc.WriteI64LE = Writes a signed 64 bit integer little-endian, least significant byte first.
+doc.WriteF64 = Writes a 64 bit IEEE 754 float; <code>big_endian</code> picks the byte order.
+doc.WriteF32 = Writes a 32 bit float; the value loses precision down to 32 bits as it is written.
+doc.ReadU8 = Reads one byte, 0 to 255; past the end it gives 0 and sets <code>r.bad</code>.
+doc.ReadU16BE = Reads an unsigned 16 bit integer big-endian, most significant byte first.
+doc.ReadI16BE = Reads a signed 16 bit integer big-endian, most significant byte first.
+doc.ReadU16LE = Reads an unsigned 16 bit integer little-endian, least significant byte first.
+doc.ReadI16LE = Reads a signed 16 bit integer little-endian, least significant byte first.
+doc.ReadU32BE = Reads a 32 bit integer big-endian, most significant byte first. The result is an <code>int</code>, so values from 2<sup>31</sup> up come back negative; mask with <code>(v as i64) &amp; 4294967295</code>.
+doc.ReadI32BE = Reads a signed 32 bit integer big-endian, most significant byte first.
+doc.ReadU32LE = Reads a 32 bit integer little-endian, least significant byte first. Values from 2<sup>31</sup> up come back negative, as with <code>ReadU32BE</code>.
+doc.ReadI32LE = Reads a signed 32 bit integer little-endian, least significant byte first.
+doc.ReadU64BE = Reads an unsigned 64 bit integer big-endian, most significant byte first.
+doc.ReadI64BE = Reads a signed 64 bit integer big-endian, most significant byte first.
+doc.ReadU64LE = Reads an unsigned 64 bit integer little-endian, least significant byte first.
+doc.ReadI64LE = Reads a signed 64 bit integer little-endian, least significant byte first.
+doc.ReadF64 = Reads a 64 bit IEEE 754 float; <code>big_endian</code> picks the byte order.
+doc.ReadF32 = Reads a 32 bit float and returns it as a 64 bit float; <code>big_endian</code> picks the byte order.
+
+ex.BinaryOptions = encoding-binary-ReadWrite
+ex.WriteU8 = encoding-binary-ReadWrite
+ex.WriteU16BE = encoding-binary-ReadWrite
+ex.WriteI16BE = encoding-binary-ReadWrite
+ex.WriteU16LE = encoding-binary-ReadWrite
+ex.WriteI16LE = encoding-binary-ReadWrite
+ex.WriteU32BE = encoding-binary-ReadWrite
+ex.WriteI32BE = encoding-binary-ReadWrite
+ex.WriteU32LE = encoding-binary-ReadWrite
+ex.WriteI32LE = encoding-binary-ReadWrite
+ex.WriteU64BE = encoding-binary-ReadWrite
+ex.WriteI64BE = encoding-binary-ReadWrite
+ex.WriteU64LE = encoding-binary-ReadWrite
+ex.WriteI64LE = encoding-binary-ReadWrite
+ex.WriteF64 = encoding-binary-ReadWrite
+ex.WriteF32 = encoding-binary-ReadWrite
+ex.ReadU8 = encoding-binary-ReadWrite
+ex.ReadU16BE = encoding-binary-ReadWrite
+ex.ReadI16BE = encoding-binary-ReadWrite
+ex.ReadU16LE = encoding-binary-ReadWrite
+ex.ReadI16LE = encoding-binary-ReadWrite
+ex.ReadU32BE = encoding-binary-ReadWrite
+ex.ReadI32BE = encoding-binary-ReadWrite
+ex.ReadU32LE = encoding-binary-ReadWrite
+ex.ReadI32LE = encoding-binary-ReadWrite
+ex.ReadU64BE = encoding-binary-ReadWrite
+ex.ReadI64BE = encoding-binary-ReadWrite
+ex.ReadU64LE = encoding-binary-ReadWrite
+ex.ReadI64LE = encoding-binary-ReadWrite
+ex.ReadF64 = encoding-binary-ReadWrite
+ex.ReadF32 = encoding-binary-ReadWrite

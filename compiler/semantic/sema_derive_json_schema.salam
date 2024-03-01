@@ -1,0 +1,436 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include dg "../diag.salam"
+
+const JS_SKIP := "-"
+
+struct SchemaDefs:
+    pub names: Vector<str> = Vector {}
+    pub bodies: Vector<str> = Vector {}
+    pub types: Vector<int> = Vector {}
+end
+
+func js_defs_free(d &: SchemaDefs):
+    d.names.free()
+    d.bodies.free()
+    d.types.free()
+end
+
+func js_defs_find(d &: SchemaDefs, t: int): int:
+    repeat d.types.len() in i:
+        if d.types.get(i) == t:
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func js_defs_name_for(s &: Sema, t: int): str:
+    ret derive_key(type_to_string(s, t))
+end
+
+func js_title_of(s &: Sema, t: int): str:
+    sym := ty_at(s, t).decl
+    if sym == 0:
+        ret type_to_string(s, t)
+    end
+    ret sym_at(s, sym).name
+end
+
+func js_doc_of(s &: Sema, a &: at.Ast, sym: int): str:
+    if sym == 0:
+        ret ""
+    end
+    decl := sym_at(s, sym).decl
+    if decl == 0:
+        ret ""
+    end
+    al := at.Get(a, decl).aliases
+    mut out := ""
+    mut i := 0
+    until i + 1 < al.len():
+        key := al.get(i)
+        val := al.get(i + 1)
+        i += 2
+        if not str.Equals(key, "doc") or str.Len(val) == 0:
+            continue
+        end
+        if str.Len(out) > 0:
+            out = out + " "
+        end
+        out = out + val
+    end
+    ret out
+end
+
+func js_doc_member(s &: Sema, a &: at.Ast, sym: int): str:
+    text := js_doc_of(s, a, sym)
+    if str.Len(text) == 0:
+        ret ""
+    end
+    ret ",\"description\":" + js_qs(text)
+end
+
+func js_with_doc(body: str, doc_member: str): str:
+    if str.Len(doc_member) == 0 or str.Len(body) < 2:
+        ret body
+    end
+    if str.Len(body) > 8 and str.Equals(body.substr(1, 6), "\"$ref\""):
+        ret "{\"allOf\":[" + body + "]" + doc_member + "}"
+    end
+    ret body.substr(0, str.Len(body) - 1) + doc_member + "}"
+end
+
+func js_hex(n: int): str:
+    digits := "0123456789abcdef"
+    ret digits.substr(n, 1)
+end
+
+func js_qs(text: str): str:
+    mut out := "\""
+    repeat str.Len(text) in i:
+        b := byte_at(text, i)
+        if b == 34:
+            out = out + "\\\""
+        else b == 92:
+            out = out + "\\\\"
+        else b == 10:
+            out = out + "\\n"
+        else b == 13:
+            out = out + "\\r"
+        else b == 9:
+            out = out + "\\t"
+        else b < 32:
+            out = out + "\\u00" + js_hex(b / 16) + js_hex(b % 16)
+        else:
+            out = out + text.substr(i, 1)
+        end
+    end
+    ret out + "\""
+end
+
+func js_member(key: str, raw: str): str:
+    ret js_qs(key) + ":" + raw
+end
+
+func js_number(s &: Sema, t: int): str:
+    k := ty_at(s, t).kind
+    if k == TY_F32:
+        ret "{\"type\":\"number\",\"format\":\"float\"}"
+    end
+    if k == TY_F64:
+        ret "{\"type\":\"number\",\"format\":\"double\"}"
+    end
+    wide := k == TY_I64 or k == TY_U64 or k == TY_USIZE or k == TY_SIZE
+    mut out := "{\"type\":\"integer\",\"format\":" + (wide ? "\"int64\"" : "\"int32\"")
+    if jd_is_unsigned(s, t):
+        out = out + ",\"minimum\":0"
+    end
+    ret out + "}"
+end
+
+func js_scalar(s &: Sema, t: int): str:
+    k := ty_at(s, t).kind
+    if k == TY_STR or k == TY_UCHAR:
+        ret "{\"type\":\"string\"}"
+    end
+    if k == TY_BOOL:
+        ret "{\"type\":\"boolean\"}"
+    end
+    if k == TY_CHAR:
+        ret "{\"type\":\"string\",\"minLength\":1,\"maxLength\":1}"
+    end
+    if type_is_numeric(s, t):
+        ret js_number(s, t)
+    end
+    ret ""
+end
+
+func js_enum(s &: Sema, a &: at.Ast, t: int, d &: SchemaDefs): str:
+    sym := ty_at(s, t).decl
+    if sym == 0 or sym_at(s, sym).members == 0:
+        ret ""
+    end
+    hit := js_defs_find(d, t)
+    if hit >= 0:
+        ret "{\"$ref\":\"#/$defs/" + d.names.get(hit) + "\"}"
+    end
+    mems := scope_at(s, sym_at(s, sym).members).symbols
+    mut names := ""
+    mut n := 0
+    repeat mems.len() in i:
+        m := sym_at(s, mems.get(i))
+        if m.kind == SYM_ENUM_MEMBER:
+            if n > 0:
+                names = names + ","
+            end
+            names = names + js_qs(m.name)
+            n += 1
+        end
+    end
+    if n == 0:
+        ret ""
+    end
+    name := js_defs_name_for(s, t)
+    d.names.push(name)
+    d.types.push(t)
+    d.bodies.push(
+        "{\"title\":" + js_qs(js_title_of(s, t)) + js_doc_member(s, a, sym) + ",\"enum\":[" + names + "]}"
+    )
+    ret "{\"$ref\":\"#/$defs/" + name + "\"}"
+end
+
+func js_array(item: str, exact: str): str:
+    mut out := "{\"type\":\"array\",\"items\":" + item
+    if str.Len(exact) > 0:
+        out = out + ",\"minItems\":" + exact + ",\"maxItems\":" + exact
+    end
+    ret out + "}"
+end
+
+func js_map(s &: Sema, a &: at.Ast, key: int, val: int, d &: SchemaDefs, sp: co.SrcSpan): str:
+    kk := ty_at(s, key).kind
+    if kk != TY_STR and kk != TY_UCHAR and not type_is_integer(s, key):
+        ret ""
+    end
+    body := js_schema(s, a, val, d, sp)
+    if str.Len(body) == 0:
+        ret ""
+    end
+    mut out := "{\"type\":\"object\",\"additionalProperties\":" + body
+    if type_is_integer(s, key):
+        out = out + ",\"propertyNames\":{\"pattern\":\"^-?[0-9]+$\"}"
+    end
+    ret out + "}"
+end
+
+func js_ptr(s &: Sema, a &: at.Ast, t: int, d &: SchemaDefs, sp: co.SrcSpan): str:
+    inner := js_schema(s, a, ty_at(s, t).pointee, d, sp)
+    if str.Len(inner) == 0:
+        ret ""
+    end
+    ret "{\"anyOf\":[" + inner + ",{\"type\":\"null\"}]}"
+end
+
+func js_field(
+    s &: Sema, a &: at.Ast, f: int, d &: SchemaDefs, required &: Vector<str>, sp: co.SrcSpan
+): str:
+    fa := jd_attr_of(s, a, f, sp)
+    if not fa.ok:
+        ret ""
+    end
+    if fa.skip:
+        ret JS_SKIP
+    end
+    fv := sym_at(s, f)
+    mut body := ""
+    if fa.as_string:
+        if not jd_is_scalar(s, fv.ty):
+            jd_field_err(s, a, f, fv.ty, sp)
+            ret ""
+        end
+        body = "{\"type\":\"string\"}"
+    else:
+        body = js_schema(s, a, fv.ty, d, sp)
+    end
+    if str.Len(body) == 0:
+        jd_field_err(s, a, f, fv.ty, sp)
+        ret ""
+    end
+    body = js_with_doc(body, js_doc_member(s, a, f))
+    if not fa.optional:
+        required.push(fa.name)
+    end
+    ret js_member(fa.name, body)
+end
+
+func js_struct_body(
+    s &: Sema, a &: at.Ast, t: int, title: str, d &: SchemaDefs, sp: co.SrcSpan
+): str:
+    sym := ty_at(s, t).decl
+    mems := sym_at(s, sym).members == 0 ? Vector {} as Vector<int>
+    : scope_at(s, sym_at(s, sym).members).symbols
+        mut required := Vector {} as Vector<str>
+        defer required.free()
+        mut props := ""
+        mut n := 0
+        repeat mems.len() in i:
+            f := mems.get(i)
+            if sym_at(s, f).kind == SYM_FIELD:
+                part := js_field(s, a, f, d, required, sp)
+                if str.Len(part) == 0:
+                    ret ""
+                end
+                if not str.Equals(part, JS_SKIP):
+                    if n > 0:
+                        props = props + ","
+                    end
+                    props = props + part
+                    n += 1
+                end
+            end
+        end
+        mut out := "{\"title\":" + js_qs(title)
+        out = out + js_doc_member(s, a, sym)
+        out = out + ",\"type\":\"object\",\"properties\":{" + props + "}"
+        if required.len() > 0:
+            out = out + ",\"required\":["
+            repeat required.len() in j:
+                if j > 0:
+                    out = out + ","
+                end
+                out = out + js_qs(required.get(j))
+            end
+            out = out + "]"
+        end
+        ret out + ",\"additionalProperties\":false}"
+    end
+
+    func js_struct(s &: Sema, a &: at.Ast, t: int, d &: SchemaDefs, sp: co.SrcSpan): str:
+        hit := js_defs_find(d, t)
+        if hit >= 0:
+            ret "{\"$ref\":\"#/$defs/" + d.names.get(hit) + "\"}"
+        end
+        name := js_defs_name_for(s, t)
+        slot := d.names.len()
+        d.names.push(name)
+        d.types.push(t)
+        d.bodies.push("")
+        body := js_struct_body(s, a, t, js_title_of(s, t), d, sp)
+        if str.Len(body) == 0:
+            ret ""
+        end
+        d.bodies.set(slot, body)
+        ret "{\"$ref\":\"#/$defs/" + name + "\"}"
+    end
+
+    func js_of_struct(s &: Sema, a &: at.Ast, t: int, d &: SchemaDefs, sp: co.SrcSpan): str:
+        sym := ty_at(s, t).decl
+        sid := derive_method_sig(s, sym, "to_json", 0)
+        if sid != 0 and ty_at(s, sig_at(s, sid).ret_type).kind == TY_STR:
+            ret "{\"title\":" + js_qs(sym_at(s, sym).name) + "}"
+        end
+        cur := derive_map_cursor(s, sym)
+        if cur != 0:
+            kt := sig_at(s, derive_method_sig(s, cur, "key", 0)).ret_type
+            vt := sig_at(s, derive_method_sig(s, cur, "value", 0)).ret_type
+            ret js_map(s, a, kt, vt, d, sp)
+        end
+        count := derive_seq_count(s, sym)
+        elem := derive_seq_elem(s, sym)
+        if str.Len(count) > 0 and elem >= 0:
+            item := js_schema(s, a, elem, d, sp)
+            ret str.Len(item) == 0 ? "" : js_array(item, "")
+        end
+        ret js_struct(s, a, t, d, sp)
+    end
+
+    func js_schema(s &: Sema, a &: at.Ast, t: int, d &: SchemaDefs, sp: co.SrcSpan): str:
+        if t < 0:
+            ret ""
+        end
+        plain := js_scalar(s, t)
+        if str.Len(plain) > 0:
+            ret plain
+        end
+        v := ty_at(s, t)
+        if v.kind == TY_ENUM:
+            ret js_enum(s, a, t, d)
+        end
+        if v.kind == TY_PTR:
+            ret js_ptr(s, a, t, d, sp)
+        end
+        if v.kind == TY_STRUCT:
+            ret js_of_struct(s, a, t, d, sp)
+        end
+        if v.kind == TY_VEC or v.kind == TY_SLICE:
+            item := js_schema(s, a, v.elem, d, sp)
+            ret str.Len(item) == 0 ? "" : js_array(item, "")
+        end
+        if v.kind == TY_ARRAY:
+            item2 := js_schema(s, a, v.elem, d, sp)
+            ret str.Len(item2) == 0 ? "" : js_array(item2, "" + v.length)
+        end
+        if v.kind == TY_MAP:
+            ret js_map(s, a, v.key, v.elem, d, sp)
+        end
+        ret ""
+    end
+
+    func js_document(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): str:
+        mut d := SchemaDefs {}
+        defer js_defs_free(d)
+        root := js_schema(s, a, t, d, sp)
+        if str.Len(root) == 0:
+            ret ""
+        end
+        mut defs := ""
+        repeat d.names.len() in i:
+            if i > 0:
+                defs = defs + ","
+            end
+            defs = defs + js_member(d.names.get(i), d.bodies.get(i))
+        end
+        ret "{\"defs\":{" + defs + "},\"schema\":" + root + "}"
+    end
+
+    func js_source(s &: Sema, a &: at.Ast, t: int, fname: str, sp: co.SrcSpan): str:
+        spelling := derive_type_spelling(s, t)
+        if str.Len(spelling) == 0:
+            ret ""
+        end
+        doc := js_document(s, a, t, sp)
+        if str.Len(doc) == 0:
+            ret ""
+        end
+        out := "func " + fname + "(" + JV_PARAM + ": " + spelling + "): str:\n"
+        ret out + JIND + "ret " + jd_quote(doc) + "\nend\n"
+    end
+
+    func derive_json_schema(s &: Sema, a &: at.Ast, t: int, home: int, sp: co.SrcSpan): str:
+        if t < 0 or s.program == 0:
+            ret ""
+        end
+        fname := derive_json_name(s, "_jsonschema_", t)
+        if derive_registry_find(s, fname) != 0:
+            ret fname
+        end
+        if scope_lookup_local(s, s.global, fname) != 0:
+            ret ""
+        end
+        derive_registry_claim(s, fname)
+        ret derive_json_finish(s, a, js_source(s, a, t, fname, sp), fname, home)
+    end
+
+    func check_json_schema_builtin(s &: Sema, a &: at.Ast, n: int, sp: co.SrcSpan): int:
+        fallback := sema_ty(s, TY_STR)
+        if at.ChildCount(a, n) != 1:
+            serr(s, 12, sp, "'jsonschema' takes 1 arguments")
+            ret sema_decorate(s, a, n, fallback)
+        end
+        argt := sema_check_expr(s, a, at.Child(a, n, 0))
+        home := derive_home_of(s, s.cur, "__jdqs")
+        if home == 0:
+            serr(
+                s, 12, sp, "'jsonschema' is internal to std/encoding/json; use json.Schema instead"
+            )
+            ret sema_decorate(s, a, n, fallback)
+        end
+        before := dg.ErrorCount(s.diag)
+        fname := derive_json_schema(s, a, argt, home, sp)
+        if str.Len(fname) == 0:
+            if dg.ErrorCount(s.diag) == before:
+                serr(
+                    s, 2, sp, co.Format1(
+                        i18.Tr("cannot describe a value of type '%s' as JSON"), co.ArgStr(type_disp(s, argt))
+                    )
+                )
+            end
+            ret sema_decorate(s, a, n, fallback)
+        end
+        ret check_json_bind(s, a, n, fname, fallback)
+    end

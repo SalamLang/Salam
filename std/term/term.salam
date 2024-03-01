@@ -1,0 +1,439 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "term"
+@fa "پایانه"
+package term
+
+import str
+import mem
+
+extern:
+    func printf(fmt: str, ...): int
+    func fflush(stream: void*): int
+    func getenv(name: str): void*
+    func memset(ptr: void*, val: int, n: u64): void*
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _isatty(fd: int): int
+        func GetStdHandle(which: int): void*
+        func GetConsoleMode(h: void*, mode: void*): int
+        func SetConsoleMode(h: void*, mode: int): int
+        func GetConsoleScreenBufferInfo(h: void*, info: void*): int
+    end
+else:
+    extern:
+        func isatty(fd: int): int
+        func ioctl(fd: int, req: u64, ...): int
+        func tcgetattr(fd: int, t: void*): int
+        func tcsetattr(fd: int, act: int, t: void*): int
+        func cfmakeraw(t: void*)
+    end
+end
+
+@en "StdinFd"
+@fa "شناسه ورودی"
+pub const StdinFd := 0
+
+@en "StdoutFd"
+@fa "شناسه خروجی"
+pub const StdoutFd := 1
+
+@en "StderrFd"
+@fa "شناسه خطا"
+pub const StderrFd := 2
+
+@en "Esc"
+@fa "گریز"
+pub const Esc := "\x1b"
+
+@en "Csi"
+@fa "آغازگر دنباله"
+pub const Csi := "\x1b["
+
+@en "ColorAuto"
+@fa "رنگ خودکار"
+pub const ColorAuto := 0
+
+@en "ColorAlways"
+@fa "رنگ همیشه"
+pub const ColorAlways := 1
+
+@en "ColorNever"
+@fa "بدون رنگ"
+pub const ColorNever := 2
+
+const _TCSAFLUSH := 2
+
+const _TERMIOS_CAP := 128
+
+const _TIOCGWINSZ_LINUX := 0x5413
+const _TIOCGWINSZ_BSD := 0x40087468
+
+const _ECHO := 0x8
+
+mut _color_mode := 0
+mut _color_auto := 0
+
+@en "TermState"
+@fa "وضعیت پایانه"
+pub struct TermState:
+    @en "fd"
+    @fa "شناسه پرونده"
+    pub fd: int = 0
+    @en "saved"
+    @fa "تنظیمات قبلی"
+    pub saved: void* = null
+    @en "mode_in"
+    @fa "حالت قبلی‌ورودی"
+    pub mode_in: int = 0
+    @en "mode_out"
+    @fa "حالت قبلی خروجی"
+    pub mode_out: int = 0
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+end
+
+@en "WinSize"
+@fa "اندازه پنجره"
+pub struct WinSize:
+    @en "cols"
+    @fa "ستون‌ها"
+    pub cols: int = 80
+    @en "rows"
+    @fa "سطرها"
+    pub rows: int = 24
+end
+
+func _env(name: str): str:
+    v := getenv(name)
+    if v == null: ret "" end
+    ret str.Clone(v as str)
+end
+
+func _lflag_off(): int:
+    if SALAM_OS_MAC: ret 24 else:
+        ret 12
+    end
+end
+
+func _vmin_off(): int:
+    if SALAM_OS_MAC: ret 48
+    else SALAM_OS_BSD: ret 32
+    else:
+        ret 23
+    end
+end
+
+func _vtime_off(): int:
+    if SALAM_OS_MAC: ret 49
+    else SALAM_OS_BSD: ret 33
+    else:
+        ret 22
+    end
+end
+
+func _icanon_bit(): int:
+    if SALAM_OS_MAC or SALAM_OS_BSD: ret 0x100 else:
+        ret 0x2
+    end
+end
+
+func _winsz_req(): u64:
+    if SALAM_OS_MAC or SALAM_OS_BSD: ret _TIOCGWINSZ_BSD
+    else:
+        ret _TIOCGWINSZ_LINUX
+    end
+end
+
+func _win_handle(_fd: int): void*:
+    if SALAM_OS_WINDOWS:
+        if _fd == StdinFd: ret GetStdHandle(0 - 10) end
+        if _fd == StderrFd: ret GetStdHandle(0 - 12) end
+        ret GetStdHandle(0 - 11)
+    else:
+        ret null
+    end
+end
+
+func _win_mode(_fd: int): int:
+    if SALAM_OS_WINDOWS:
+        h := _win_handle(_fd)
+        if h == null: ret 0 end
+        buf := mem.Allocate(8 as u64)
+        defer mem.Free(buf)
+        memset(buf, 0, 8 as u64)
+        if GetConsoleMode(h, buf) == 0: ret 0 end
+        p := buf as int*
+        ret p[0]
+    else:
+        ret 0
+    end
+end
+
+func _detect_color(): bool:
+    if getenv("NO_COLOR") != null: ret false end
+    force := _env("CLICOLOR_FORCE")
+    if force.len() > 0 and force != "0": ret true end
+    if _env("TERM") == "dumb": ret false end
+    ret IsTTY(StdoutFd)
+end
+
+func _set_mode(fd: int, full: bool): TermState:
+    mut st := TermState { fd = fd }
+    if SALAM_OS_WINDOWS:
+        h := _win_handle(fd)
+        if h == null: ret st end
+        st.mode_in = _win_mode(fd)
+        st.mode_out = _win_mode(StdoutFd)
+        mut m := st.mode_in & ~(0x2 | 0x4)
+        if full: m = m & ~0x1 end
+        m = m | 0x200
+        if SetConsoleMode(h, m) == 0: ret st end
+        _vt := EnableAnsi()
+        st.ok = true
+        ret st
+    else:
+        saved := mem.Allocate(_TERMIOS_CAP as u64)
+        memset(saved, 0, _TERMIOS_CAP as u64)
+        if tcgetattr(fd, saved) != 0:
+            mem.Free(saved)
+            ret st
+        end
+        work := mem.Allocate(_TERMIOS_CAP as u64)
+        defer mem.Free(work)
+        mem.Copy(work, saved, _TERMIOS_CAP as u64)
+        if full:
+            cfmakeraw(work)
+        else:
+            lf := ((work as i64) + _lflag_off()) as int*
+            lf[0] = lf[0] & ~(_ECHO | _icanon_bit())
+        end
+        vmin := ((work as i64) + _vmin_off()) as i8*
+        vtime := ((work as i64) + _vtime_off()) as i8*
+        vmin[0] = 1 as i8
+        vtime[0] = 0 as i8
+        if tcsetattr(fd, _TCSAFLUSH, work) != 0:
+            mem.Free(saved)
+            ret st
+        end
+        st.saved = saved
+        st.ok = true
+        ret st
+    end
+end
+
+@en "Write"
+@fa "نوشتن"
+pub func Write(s: str):
+    _n := printf("%s", s)
+end
+
+@en "WriteErr"
+@fa "نوشتن خطا"
+pub func WriteErr(s: str):
+    printerr s
+end
+
+@en "Flush"
+@fa "تخلیه"
+pub func Flush():
+    _r := fflush(null as void*)
+end
+
+@en "Emit"
+@fa "فرستادن"
+pub func Emit(s: str):
+    Write(s)
+    Flush()
+end
+
+@en "IsTTY"
+@fa "پایانه است"
+pub func IsTTY(fd: int): bool:
+    if SALAM_OS_WINDOWS:
+        ret _isatty(fd) != 0
+    else:
+        ret isatty(fd) != 0
+    end
+end
+
+@en "IsTerminal"
+@fa "پایانه دارد"
+pub func IsTerminal(): bool: ret IsTTY(StdoutFd) end
+
+@en "Size"
+@fa "اندازه"
+pub func Size(): WinSize:
+    mut out := WinSize {}
+    if SALAM_OS_WINDOWS:
+        h := _win_handle(StdoutFd)
+        if h != null:
+            info := mem.Allocate(32 as u64)
+            defer mem.Free(info)
+            memset(info, 0, 32 as u64)
+            if GetConsoleScreenBufferInfo(h, info) != 0:
+                base := info as i64
+                left := ((base + 10) as i16*)[0] as int
+                top := ((base + 12) as i16*)[0] as int
+                right := ((base + 14) as i16*)[0] as int
+                bottom := ((base + 16) as i16*)[0] as int
+                c := right - left + 1
+                r := bottom - top + 1
+                if c > 0 and r > 0:
+                    out.cols = c
+                    out.rows = r
+                    ret out
+                end
+            end
+        end
+    else:
+        ws := mem.Allocate(16 as u64)
+        defer mem.Free(ws)
+        req := _winsz_req()
+        mut fd := StdoutFd
+        until fd <= StderrFd:
+            memset(ws, 0, 16 as u64)
+            if ioctl(fd, req, ws) == 0:
+                p := ws as u16*
+                r := p[0] as int
+                c := p[1] as int
+                if c > 0 and r > 0:
+                    out.cols = c
+                    out.rows = r
+                    ret out
+                end
+            end
+            fd += 1
+        end
+    end
+    envc := str.ToInt(_env("COLUMNS"))
+    envr := str.ToInt(_env("LINES"))
+    if envc > 0: out.cols = envc end
+    if envr > 0: out.rows = envr end
+    ret out
+end
+
+@en "Cols"
+@fa "ستون ها"
+pub func Cols(): int:
+    s := Size()
+    ret s.cols
+end
+
+@en "Rows"
+@fa "سطرها"
+pub func Rows(): int:
+    s := Size()
+    ret s.rows
+end
+
+@en "SetColorMode"
+@fa "تنظیم حالت رنگ"
+pub func SetColorMode(mode: int):
+    _color_mode = mode
+end
+
+@en "ColorMode"
+@fa "حالت رنگ"
+pub func ColorMode(): int: ret _color_mode end
+
+@en "SupportsColor"
+@fa "رنگ پشتیبانی می‌شود"
+pub func SupportsColor(): bool:
+    if _color_mode == ColorAlways: ret true end
+    if _color_mode == ColorNever: ret false end
+    if _color_auto == 0:
+        if _detect_color():
+            _color_auto = 1
+        else:
+            _color_auto = 2
+        end
+    end
+    ret _color_auto == 1
+end
+
+@en "Supports256Color"
+@fa "رنگ۲۵۶ پشتیبانی می‌شود"
+pub func Supports256Color(): bool:
+    if str.Contains(_env("TERM"), "256color"): ret true end
+    if _env("COLORTERM").len() > 0: ret true end
+    ret false
+end
+
+@en "SupportsTrueColor"
+@fa "رنگ کامل پشتیبانی می‌شود"
+pub func SupportsTrueColor(): bool:
+    ct := _env("COLORTERM")
+    ret ct == "truecolor" or ct == "24bit"
+end
+
+@en "EnableAnsi"
+@fa "فعال‌سازی انسی"
+pub func EnableAnsi(): bool:
+    if SALAM_OS_WINDOWS:
+        h := _win_handle(StdoutFd)
+        if h == null: ret false end
+        buf := mem.Allocate(8 as u64)
+        defer mem.Free(buf)
+        memset(buf, 0, 8 as u64)
+        if GetConsoleMode(h, buf) == 0: ret true end
+        p := buf as int*
+        ret SetConsoleMode(h, p[0] | 0x4) != 0
+    else:
+        ret true
+    end
+end
+
+@en "MakeRaw"
+@fa "حالت خام"
+pub func MakeRaw(fd: int): TermState: ret _set_mode(fd, true) end
+
+@en "MakeCbreak"
+@fa "حالت نیمه‌خام"
+pub func MakeCbreak(fd: int): TermState: ret _set_mode(fd, false) end
+
+@en "Restore"
+@fa "بازگردانی"
+pub func Restore(st &: TermState): bool:
+    if not st.ok: ret false end
+    mut done := false
+    if SALAM_OS_WINDOWS:
+        h := _win_handle(st.fd)
+        if h != null: done = SetConsoleMode(h, st.mode_in) != 0 end
+    else:
+        if st.saved != null:
+            done = tcsetattr(st.fd, _TCSAFLUSH, st.saved) == 0
+            mem.Free(st.saved)
+            st.saved = null
+        end
+    end
+    st.ok = false
+    ret done
+end
+
+@en "Bell"
+@fa "زنگ"
+pub func Bell(): Emit("\x07") end
+
+@en "SeqTitle"
+@fa "دنباله عنوان"
+pub func SeqTitle(title: str): str: ret Esc + "]0;" + title + "\x07" end
+
+@en "SetTitle"
+@fa "تنظیم عنوان"
+pub func SetTitle(title: str): Emit(SeqTitle(title)) end

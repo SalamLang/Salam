@@ -1,0 +1,59 @@
+import llm
+import tensor
+
+func add_turn(tok &: llm.Tokenizer, ids &: Vector<int>, role: str, text: str):
+    ids.push(tok.index.get("<|im_start|>"))
+    piece := tok.encode(role + "\n" + text)
+    each id in piece:
+        ids.push(id)
+    end
+    if text.len() > 0:
+        ids.push(tok.index.get("<|im_end|>"))
+        newline := tok.encode("\n")
+        each id in newline:
+            ids.push(id)
+        end
+    end
+end
+
+func main:
+    path := "models/qwen2.5-0.5b-instruct-q8_0.gguf"
+    mut model := llm.Model {}
+    mut tok := llm.NewTokenizer(llm.TOK_BPE)
+    if not llm.LoadGgufModel(path, model, tok):
+        println "could not load", path
+        ret 1
+    end
+    tok.add_bos = false
+    end_of_turn := tok.index.get("<|im_end|>")
+    model.cfg.ctx = 4096
+    mut cache := llm.NewKVCache(model.cfg)
+    mut sampler := llm.NewSampler(42)
+    sampler.temperature = 0.7
+    sampler.top_p = 0.9
+    sampler.repeat_penalty = 1.1
+    mut ids := Vector {} as Vector<int>
+    add_turn(tok, ids, "system", "You are a helpful assistant. Answer in one sentence.")
+    add_turn(tok, ids, "user", "Why is the sky blue?")
+    add_turn(tok, ids, "assistant", "")
+    mut logits := llm.Forward(model, cache, ids)
+    mut said := Vector {} as Vector<int>
+    mut step := Vector {} as Vector<int>
+    step.push(0)
+    until said.len() < 80 and cache.len < cache.ctx:
+        next := sampler.sample(logits, logits.dim(0) - 1, said)
+        tensor.Free(logits)
+        if next == end_of_turn or next == tok.eos:
+            break
+        end
+        said.push(next)
+        step.set(0, next)
+        print tok.decode(step)
+        logits = llm.Forward(model, cache, step)
+    end
+    println ""
+    println "tokens in prompt:", ids.len(), "answer:", said.len()
+    cache.free()
+    model.free()
+    tok.free()
+end

@@ -1,0 +1,107 @@
+pkg.en = encoding/envfile
+pkg.name = encoding/envfile
+pkg.group = Encoding and data
+pkg.summary = Reading and writing <code>.env</code> files, with variable substitution.
+pkg.title = The encoding/envfile package in Salam | .env files
+pkg.description = The encoding/envfile package in Salam: reading a .env file, quoted values, export, ${VAR} substitution, merging and writing it back out, with an example.
+pkg.import = encoding.envfile
+pkg.intro <<
+<p>A <code>.env</code> file holds a program's settings and secrets as one <code>KEY=value</code> per line, the format used by Docker Compose, most twelve-factor apps and tools such as dotenv. This package reads such a file into a <code>Doc</code>, an ordered list of keys and string values, substitutes <code>${NAME}</code> references, and writes a <code>Doc</code> back as text.</p>
+<p>It works on text and never touches the process environment. If you only want a <code>.env</code> file's variables available to the program, <code>env.Load(path)</code> in <a href="/std/env/">env</a> puts them into the environment in one call (and <code>env.Overload</code> lets the file win over variables already set). <code>config.LoadEnv</code> in <a href="/std/config/">config</a> reads one into a <code>Config</code> with typed getters such as <code>GetInt</code> and <code>GetBool</code>. Use this package when you need the file itself: its order, its references, a strict check, or to write it back. For nested settings with numbers and lists, <a href="/std/encoding/toml/">encoding/toml</a> or <a href="/std/encoding/yaml/">encoding/yaml</a> fit better.</p>
+<h3 id="syntax">What a line may contain</h3>
+<ul>
+<li>Blank lines and lines starting with <code>#</code> are skipped, and a UTF-8 byte order mark at the start is ignored. <code>export </code> before a key is allowed, so a file a shell can <code>source</code> also parses.</li>
+<li>Keys are letters, digits, <code>_</code>, <code>.</code> and <code>-</code>. Spaces around the <code>=</code> are allowed.</li>
+<li>An unquoted value runs to the end of the line, minus trailing spaces. A <code>#</code> starts a comment only after a space, so <code>https://x/#top</code> keeps its <code>#</code>.</li>
+<li>A double-quoted value understands <code>\n</code>, <code>\t</code>, <code>\"</code> and <code>\\</code>, may span several lines, and takes <code>${NAME}</code> substitution. A single-quoted value is taken literally, with no escapes and no substitution.</li>
+<li>A key that appears twice keeps its first position and its last value.</li>
+</ul>
+<h3 id="pitfalls">What trips people up</h3>
+<ul>
+<li><strong>Every value is a string.</strong> <code>PORT=8080</code> gives <code>"8080"</code>; convert it yourself, and remember that <code>"abc".to_int()</code> is 0, not an error.</li>
+<li><strong>References only look upward.</strong> <code>${NAME}</code> is resolved from lines above it (then from the <code>base</code> document, if you pass one). A name defined further down, or not at all, silently becomes an empty string. Use <code>RefNames</code> on a <code>ParseRaw</code> result to see what a file expects.</li>
+<li><strong><code>Parse</code> skips bad lines without a word.</strong> A line like <code>SECRET KEY 8f2c</code> just disappears. Load files with <code>ParseStrict</code> at startup.</li>
+<li><strong><code>Format</code> drops comments</strong> and blank lines; it writes only keys and values.</li>
+</ul>
+
+<h2 id="guide-layers">Guide: shared defaults and local overrides</h2>
+<p>Most projects commit a <code>.env</code> with safe defaults and let each developer keep a <code>.env.local</code> with their own ports and passwords. Parse both and <code>MergeInto</code> the local one: its keys replace the shared ones, and keys that only exist in the shared file stay. <code>GetOr</code> covers settings neither file has.</p>
+{{example.encoding-envfile-guide-layers}}
+<p>Every value is a string; convert numbers with <code>to_int()</code>. A merged key keeps its original place, so <code>Keys</code> still lists them in the order of the shared file. In a real program the two texts come from <code>file.ReadAll</code> in <a href="/std/fs/file/">fs/file</a>.</p>
+
+<h2 id="guide-syntax">Guide: comments, quotes and multi-line values</h2>
+<p>Real <code>.env</code> files mix comments, URLs with <code>#</code> in them, PEM keys pasted over several lines and prices with a <code>$</code> in them. The program below reads one of each, so you can see where each rule from the list above applies.</p>
+{{example.encoding-envfile-guide-syntax}}
+<p>The trailing comment after <code>shop</code> is dropped because a space comes before the <code>#</code>; the one in <code>HOME_URL</code> stays. The double-quoted <code>MOTD</code> turns <code>\n</code> into a real line break, and <code>TLS_KEY</code> keeps its three lines. <code>EARLY</code> is empty because <code>LATER</code> is defined after it, and <code>PORT</code> holds the second value but is counted once.</p>
+
+<h2 id="guide-expand">Guide: references between variables</h2>
+<p>Values can refer to other keys with <code>${NAME}</code> or <code>$NAME</code>, and <code>${NAME:-default}</code> falls back when the key is not set. <code>Parse</code> resolves references within the file. To fill some of them from elsewhere, for example secrets that only the server knows, read the file with <code>ParseRaw</code> and resolve it with <code>ExpandDoc</code> and a second <code>Doc</code> of base values.</p>
+{{example.encoding-envfile-guide-expand}}
+<p>Single quotes turn expansion off, as in a shell, so <code>$5</code> stays as written; in a double-quoted or bare value write <code>\$</code> for a literal dollar sign. <code>${NAME:-x}</code> uses <code>x</code> when the name is missing or empty, <code>${NAME-x}</code> only when it is missing. <code>RefNames</code> lists every name a file refers to, which is a quick way to tell an operator which variables a deployment needs. To use the process's own environment as the base, copy the variables you need into it with <code>env.Get</code> from <a href="/std/env/">env</a>.</p>
+
+<h2 id="guide-validate">Guide: fail early on a broken file</h2>
+<p><code>Parse</code> is forgiving and skips lines it cannot read. At startup it is better to stop with a clear message: <code>ParseStrict</code> fills an <code>EncodingError</code> with the reason and the byte where the bad line starts. After that, check the keys the program cannot run without.</p>
+{{example.encoding-envfile-guide-validate}}
+<p>Treat an empty value like a missing one for required keys, because <code>SECRET_KEY=</code> is a common leftover from a template.</p>
+
+<h2 id="guide-write">Guide: change a file and write it back</h2>
+<p>Tools that edit settings, such as an installer, change a <code>Doc</code> with <code>Set</code> and <code>Remove</code> and write it with <code>Format</code>. Values are quoted only when they need it, and quotes inside are escaped, so <code>Parse</code> reads the text back to the same values. <code>FormatExport</code> puts <code>export</code> before each line, for a file a shell can <code>source</code>.</p>
+{{example.encoding-envfile-guide-write}}
+<p><code>Format</code> writes keys in order and drops comments, so use it for files your program owns. For a file people maintain by hand, prefer telling them which line to change.</p>
+>>
+
+doc.Doc = The contents of an env file.
+doc.Doc.m = The keys and values, in order.
+doc.Doc.flags = For each key, whether its value takes substitution; single quotes turn it off.
+doc.New = An empty document.
+doc.Len = The number of keys.
+doc.Has = True when the key is there.
+doc.Get = A key's value, or an empty string when it is absent.
+doc.GetOr = A key's value, or the default.
+doc.Set = Sets a key's value; a new key goes on the end. The value is stored literally and is never expanded.
+doc.Remove = Removes a key and says whether it was there.
+doc.KeyAt = Key number <code>i</code>.
+doc.ValueAt = Value number <code>i</code>.
+doc.Keys = The keys, in order.
+doc.MergeInto = Pours the keys of <code>src</code> into <code>dst</code>, replacing any that are already there.
+doc.Free = Releases the document's memory.
+doc.ExpandDoc = Builds a new document with the references substituted. A name is looked up among the keys above it in the document, then in <code>base</code>; a name found in neither becomes an empty string. The result is fully expanded, so <code>RefNames</code> finds nothing in it.
+doc.Expand = Substitutes the references in a string from the document and <code>base</code>.
+doc.RefNames = The names of the variables the document's values refer to, in order of first use. Call it on a <code>ParseRaw</code> result; after <code>Parse</code> the references are already gone.
+doc.RefNamesIn = The names of the variables referred to in a string, in both the <code>$A</code> and the <code>${A}</code> form.
+doc.Quote = Puts a value in double quotes when it needs them.
+doc.Format = Turns the document back into env file text, one <code>KEY=value</code> per line, quoting and escaping values that need it. Comments are not kept.
+doc.FormatExport = Like <code>Format</code>, with <code>export</code> before each line, for a shell.
+doc.ParseRaw = Reads a file without substituting the references.
+doc.Parse = Reads a file and substitutes the references. Lines it cannot read are skipped silently.
+doc.ParseStrict = Like <code>Parse</code>, but the first malformed line or unclosed quote stops reading and fills <code>err</code>, with <code>position</code> at the start of that line. The keys read before it are returned.
+doc.Valid = True when every line is well formed.
+doc.ParseScalar = Reads a single value, as on the right of an <code>=</code>: it strips the quotes and the escapes.
+doc.ParseScalarEx = Like <code>ParseScalar</code>; when <code>semi</code> is true, <code>;</code> starts a comment as well as <code>#</code>.
+
+ex.Doc = encoding-envfile-Parse
+ex.New = encoding-envfile-Parse
+ex.Len = encoding-envfile-Parse
+ex.Has = encoding-envfile-Parse
+ex.Get = encoding-envfile-Parse
+ex.GetOr = encoding-envfile-Parse
+ex.Set = encoding-envfile-Parse
+ex.Remove = encoding-envfile-Parse
+ex.KeyAt = encoding-envfile-Parse
+ex.ValueAt = encoding-envfile-Parse
+ex.Keys = encoding-envfile-Parse
+ex.MergeInto = encoding-envfile-Parse
+ex.Free = encoding-envfile-Parse
+ex.ExpandDoc = encoding-envfile-Parse
+ex.Expand = encoding-envfile-Parse
+ex.RefNames = encoding-envfile-Parse
+ex.RefNamesIn = encoding-envfile-Parse
+ex.Quote = encoding-envfile-Parse
+ex.Format = encoding-envfile-Parse
+ex.FormatExport = encoding-envfile-Parse
+ex.ParseRaw = encoding-envfile-Parse
+ex.Parse = encoding-envfile-Parse
+ex.ParseStrict = encoding-envfile-Parse
+ex.Valid = encoding-envfile-Parse
+ex.ParseScalar = encoding-envfile-Parse
+ex.ParseScalarEx = encoding-envfile-Parse

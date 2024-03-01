@@ -1,0 +1,141 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package codegen
+
+include "model.salam"
+
+mut out := ""
+
+declaredNames: str[64]
+mut declaredCount := 0
+
+func wasDeclared(name: str): bool:
+    mut i := 0
+    until i < declaredCount:
+        if declaredNames[i] == name: ret true end
+        i += 1
+    end
+    ret false
+end
+
+func markDeclared(name: str):
+    if declaredCount < 64:
+        declaredNames[declaredCount] = name
+        declaredCount += 1
+    end
+end
+
+func indent(depth: int): str:
+    mut s := ""
+    mut i := 0
+    until i < depth:
+        s = s.concat("    ")
+        i += 1
+    end
+    ret s
+end
+
+func emit(depth: int, line: str):
+    out = out.concat(indent(depth)).concat(line).concat("\n")
+end
+
+func condExpr(textA: str, textB: str, op: int): str:
+    if op == model.OP_EQ:
+        ret textA.concat(` == "`).concat(textB).concat(`"`)
+    else op == model.OP_GT:
+        ret "str.ToFloat(".concat(textA).concat(") > ").concat(model.formatNumber(model.parseNumber(textB)))
+    else:
+        ret "str.ToFloat(".concat(textA).concat(") < ").concat(model.formatNumber(model.parseNumber(textB)))
+    end
+end
+
+func emitList(headId: int, depth: int):
+    mut cur := headId
+    until cur != -1:
+        emitBlock(cur, depth)
+        cur = model.blocks[cur].next
+    end
+end
+
+func emitBlock(id: int, depth: int):
+    b := model.blocks[id]
+    kind := b.kind
+    if kind == model.KIND_SAY:
+        if b.textB == "":
+            emit(depth, `println "`.concat(b.textA).concat(`"`))
+        else:
+            emit(depth, `println "`.concat(b.textA).concat(`".concat(`).concat(b.textB).concat(")"))
+        end
+    else kind == model.KIND_ASK:
+        promptExpr := `dom.Prompt("`.concat(b.textA).concat(`")`)
+        if wasDeclared(b.textB):
+            emit(depth, b.textB.concat(" = ").concat(promptExpr))
+        else:
+            emit(depth, "mut ".concat(b.textB).concat(" := ").concat(promptExpr))
+            markDeclared(b.textB)
+        end
+    else kind == model.KIND_MAKE_BOX:
+        valExpr := `"`.concat(b.textB).concat(`"`)
+        if wasDeclared(b.textA):
+            emit(depth, b.textA.concat(" = ").concat(valExpr))
+        else:
+            emit(depth, "mut ".concat(b.textA).concat(" := ").concat(valExpr))
+            markDeclared(b.textA)
+        end
+    else kind == model.KIND_ADD_TO_BOX:
+        if model.isNumeric(b.textB):
+            expr := "str.FromFloat(str.ToFloat(".concat(b.textA).concat(") + ").concat(model.formatNumber(model.parseNumber(b.textB))).concat(")")
+            emit(depth, b.textA.concat(" = ").concat(expr))
+        else:
+            emit(depth, b.textA.concat(" = ").concat(b.textA).concat(`.concat("`).concat(b.textB).concat(`")`))
+        end
+    else kind == model.KIND_SUBTRACT_FROM_BOX:
+        expr := "str.FromFloat(str.ToFloat(".concat(b.textA).concat(") - ").concat(model.formatNumber(model.parseNumber(b.textB))).concat(")")
+        emit(depth, b.textA.concat(" = ").concat(expr))
+    else kind == model.KIND_IF:
+        emit(depth, "if ".concat(condExpr(b.textA, b.textB, b.op)).concat(":"))
+        emitList(b.child, depth + 1)
+        emit(depth, "end")
+    else kind == model.KIND_REPEAT_N:
+        emit(depth, "repeat ".concat(model.formatNumber(b.numA)).concat(":"))
+        emitList(b.child, depth + 1)
+        emit(depth, "end")
+    else kind == model.KIND_REPEAT_UNTIL:
+        emit(depth, "until !(".concat(condExpr(b.textA, b.textB, b.op)).concat("):"))
+        emitList(b.child, depth + 1)
+        emit(depth, "end")
+    else kind == model.KIND_MOVE:
+        emit(depth, "turtle.forward(".concat(model.formatNumber(b.numA)).concat(")"))
+    else kind == model.KIND_TURN:
+        emit(depth, "turtle.turn(".concat(model.formatNumber(b.numA)).concat(")"))
+    else kind == model.KIND_PEN_UP:
+        emit(depth, "turtle.lift()")
+    else kind == model.KIND_PEN_DOWN:
+        emit(depth, "turtle.lower()")
+    end
+end
+
+pub func generate(mode: int): str:
+    out = ""
+    declaredCount = 0
+    emit(0, "import dom")
+    emit(0, "import str")
+    if mode == model.MODE_DRAW: emit(0, `import "turtle.salam"`) end
+    emit(0, "")
+    emit(0, "func main:")
+    emitList(model.blocks[model.startId].next, 1)
+    emit(0, "end")
+    ret out
+end

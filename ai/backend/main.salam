@@ -1,0 +1,1421 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.http
+import net.router
+import encoding
+import os
+import io
+import str
+import encoding.json
+import conv
+import crypto
+import net.tcp
+import chan
+import sync
+import time
+
+include aistore "store.salam"
+include aiweb "web.salam"
+include aioauth "oauth.salam"
+include aiadmin "admin.salam"
+include aiengine "engine.salam"
+include ailive "live.salam"
+include aiturn "turn.salam"
+include aicheck "check.salam"
+include aiopenai "openai.salam"
+include aibridge "bridge.salam"
+include aibilling "billing.salam"
+include aifiles "files.salam"
+include aiguest "guest.salam"
+include aipolicy "policy.salam"
+include aimemory "memory.salam"
+include aitelegram "telegram.salam"
+include aicloud "cloud.salam"
+include ailogin "login.salam"
+
+const SESSION_DAYS := 30
+const PASS_ROUNDS := 120000
+const DEFAULT_TITLE := "گفت‌وگوی تازه"
+const MAX_MESSAGE := 12000
+const PENDING_SECONDS := 600
+const TIMED_OUT := "این نوبت بیش از حد طول کشید و متوقف شد. بنویسید «ادامه بده» تا از همین‌جا ادامه دهد."
+const STREAM_WORKERS := 128
+const BRIDGE_SLOTS := 48
+const STREAM_SECONDS := 900
+const STREAMS_PER_USER := 4
+const BEAT_MS := 10000
+const TICK_MS := 150
+const MAX_BODY := 8388608
+const BODY_MS := 30000
+const WATCH_MS := 20000
+const WATCH_GRACE_MS := 300000
+
+mut STREAM_JOBS := chan.Chan {} as chan.Chan<i64>
+mut STREAM_SRV := tcp.Server {}
+mut STREAM_LOCK := sync.Mutex {}
+mut STREAM_COUNT := HashMap {} as HashMap<str, str>
+mut MEM_SOFT_MB := 1200
+mut MEM_HARD_MB := 2600
+mut AGENT_TURN_SECONDS := 3600 as i64
+mut CONTEXT_LOCK := sync.Mutex {}
+mut CONTEXT_SENT := HashMap {} as HashMap<str, str>
+
+func env_or(name: str, fallback: str): str:
+    v := os.Env(name)
+    if v.len() == 0:
+        ret fallback
+    end
+    ret v
+end
+
+func health(ctx: i64):
+    reply(ctx, 200, `{"ok": true, "name": "salam-ai"}`)
+end
+
+func main:
+    args := os.Args()
+    if args.len() > 1 and args.get(1) == "--health":
+        r := http.Get("http://127.0.0.1:" + env_or("AI_PORT", "8080") + "/health")
+        if http.Status(r) == 200:
+            ret 0
+        end
+        ret 1
+    end
+    aiweb.Configure(env_or("AI_ALLOWED_ORIGINS", "https://ai.salamlang.ir,http://localhost:3000"), os.Env("AI_ADMIN_EMAILS"), os.Env("AI_ADMIN_IDS"), os.Env("AI_RESOURCE_SECRET"))
+    aioauth.Configure(env_or("AI_OAUTH_ISSUER", "https://ai-api.salamlang.ir"), env_or("AI_APP_URL", "https://ai.salamlang.ir"), env_or("AI_OAUTH_RESOURCES", "https://mcp.salamlang.ir/mcp"))
+    engine_pass := os.Env("AI_ENGINE_PASSWORD")
+    mut engine_auth := ""
+    if engine_pass.len() > 0:
+        engine_auth = "Basic " + encoding.Base64Encode(env_or("AI_ENGINE_USER", "salam") + ":" + engine_pass)
+    end
+    engine_url := str.TrimSuffix(env_or("AI_ENGINE_URL", "http://127.0.0.1:4096"), "/")
+    aiengine.Configure(engine_url, engine_auth, env_or("AI_ENGINE_AGENT", "salam"), env_or("AI_ENGINE_AGENT_DESKTOP", "salam-agent"))
+    aiengine.SetFallbacks(os.Env("AI_ENGINE_FALLBACK_MODELS"))
+    aiengine.SetPolicy(aipolicy.System(), env_or("AI_ENGINE_AGENT_RAW", "raw"))
+    aifiles.Configure(env_or("AI_UPLOAD_DIR", "/data/uploads"))
+    aiguest.Configure(env_or("AI_GUEST_ORIGINS", "https://www.salamlang.ir,https://salamlang.ir,https://salamlang.github.io"), env_or("AI_GUEST_LIMIT", "15").to_int(), env_or("AI_GUEST_PER_IP", "6").to_int(), env_or("AI_GUEST_MESSAGES_PER_IP", "60").to_int())
+    if aiengine.Fallbacks() > 0:
+        println "salam-ai has", aiengine.Fallbacks(), "fallback models for failed turns"
+    end
+    aibridge.Configure(os.Env("AI_BRIDGE_SECRET"), BRIDGE_SLOTS, env_or("AI_BRIDGE_HOLD_SECONDS", "40").to_int())
+    AGENT_TURN_SECONDS = env_or("AI_AGENT_TURN_SECONDS", "3600").to_int() as i64
+    if not aistore.Open(env_or("AI_DB_HOST", "127.0.0.1"), env_or("AI_DB_USER", "salam_ai"), os.Env("AI_DB_PASSWORD"), env_or("AI_DB_NAME", "salam_ai"), env_or("AI_DB_PORT", "3306").to_int()):
+        println "cannot open the database:", aistore.Error()
+        ret 1
+    end
+    aiturn.Init()
+    aicheck.Configure(env_or("AI_SALAM_BIN", "/srv/salam/salam"))
+    if aicheck.Enabled():
+        println "salam-ai checks code blocks with", env_or("AI_SALAM_BIN", "/srv/salam/salam")
+    end
+    STREAM_LOCK = sync.NewMutex()
+    CONTEXT_LOCK = sync.NewMutex()
+    aimemory.Configure(env_or("AI_CHAT_MEMORY", "on") != "off", env_or("AI_CHAT_MEMORY_IDLE_SECONDS", "60").to_int(), env_or("AI_CHAT_MEMORY_DAYS", "30").to_int(), env_or("AI_CHAT_MEMORY_PAUSE_SECONDS", "10").to_int())
+    aimemory.Start()
+    mut secret_key := os.Env("AI_SECRET_KEY")
+    if secret_key.len() < 16:
+        secret_key = os.Env("AI_BRIDGE_SECRET")
+    end
+    aicloud.Configure(os.Env("AI_SANDBOX_URL"), os.Env("AI_SANDBOX_SECRET"), secret_key, env_or("AI_APP_URL", "https://ai.salamlang.ir"), env_or("AI_OAUTH_ISSUER", "https://ai-api.salamlang.ir"), os.Env("AI_GITHUB_CLIENT_ID"), os.Env("AI_GITHUB_CLIENT_SECRET"), os.Env("AI_FIGMA_CLIENT_ID"), os.Env("AI_FIGMA_CLIENT_SECRET"), os.Env("AI_FIGMA_SCOPES"))
+    aicloud.SetApis(os.Env("AI_GITHUB_API"), os.Env("AI_GITHUB_WEB"), os.Env("AI_FIGMA_API"), os.Env("AI_FIGMA_WEB"))
+    aicloud.SetGithubScopes(os.Env("AI_GITHUB_SCOPES"))
+    aicloud.Start()
+    ailogin.Configure(env_or("AI_APP_URL", "https://ai.salamlang.ir"))
+    aitelegram.Configure(os.Env("AI_TELEGRAM_TOKEN"), os.Env("AI_TELEGRAM_API"), env_or("AI_APP_URL", "https://ai.salamlang.ir"), env_or("AI_TELEGRAM_GUEST_LIMIT", "15").to_int())
+    aitelegram.Start()
+    aiopenai.Configure(env_or("AI_API_ANSWER_SECONDS", "3600").to_int(), env_or("AI_API_START_SECONDS", "180").to_int())
+    aibilling.Configure(os.Env("AI_ZARINPAL_MERCHANT"), os.Env("AI_ZIBAL_MERCHANT"), os.Env("AI_ZARINPAL_BASE"), os.Env("AI_ZIBAL_BASE"), env_or("AI_BILLING_CALLBACK", env_or("AI_OAUTH_ISSUER", "https://ai-api.salamlang.ir")), env_or("AI_APP_URL", "https://ai.salamlang.ir"), env_or("AI_API_HOURLY", "100").to_int(), env_or("AI_CHAT_HOURLY", "60").to_int(), env_or("AI_BILLING_SWEEP_SECONDS", "600").to_int())
+    mut engine_host := str.TrimPrefix(str.TrimPrefix(engine_url, "http://"), "https://")
+    mut engine_port := 80
+    colon := engine_host.find(":")
+    if colon > 0:
+        engine_port = engine_host.substr(colon + 1, engine_host.len() - colon - 1).to_int()
+        engine_host = engine_host.substr(0, colon)
+    end
+    ailive.Start(engine_host, engine_port, engine_auth)
+    ailive.SetRedactions(os.Env("AI_REDACT_WORDS"))
+    aiengine.SetRedactions(os.Env("AI_REDACT_WORDS"))
+    stream_port := env_or("AI_STREAM_PORT", "8081").to_int()
+    STREAM_SRV = tcp.Bind(stream_port)
+    if tcp.Ok(STREAM_SRV):
+        STREAM_JOBS.init(256)
+        repeat STREAM_WORKERS:
+            _w := spawn(stream_worker)
+        end
+        _a := spawn(stream_acceptor)
+        println "salam-ai streaming on port", stream_port
+    else:
+        println "cannot listen for streams on port", stream_port
+    end
+    MEM_SOFT_MB = env_or("AI_MEMORY_SOFT_MB", "1200").to_int()
+    MEM_HARD_MB = env_or("AI_MEMORY_HARD_MB", "2600").to_int()
+    if MEM_SOFT_MB > 0:
+        _m := spawn(watchdog)
+    end
+    port := env_or("AI_PORT", "8080").to_int()
+    mut r := router.NewRouter()
+    router.Get(r, "/health", health)
+    router.Post(r, "/auth/register", register_user)
+    router.Post(r, "/auth/login", login)
+    router.Post(r, "/auth/logout", logout)
+    router.Get(r, "/me", me)
+    router.Get(r, "/chats", list_chats)
+    router.Post(r, "/chats", create_chat)
+    router.Get(r, "/chats/:id", get_chat)
+    router.Get(r, "/capabilities", capabilities)
+    router.Get(r, "/chats/:id/files/:fid", get_file)
+    router.Patch(r, "/chats/:id", rename_chat)
+    router.Delete(r, "/chats/:id", delete_chat)
+    router.Post(r, "/chats/:id/messages", send_message)
+    router.Get(r, "/chats/:id/messages/:mid", poll_message)
+    router.Post(r, "/chats/:id/stop", stop_message)
+    aioauth.Routes(r)
+    aiadmin.Routes(r)
+    aiopenai.Routes(r)
+    aibridge.Routes(r)
+    aibilling.Routes(r)
+    aiguest.Routes(r)
+    aimemory.Routes(r)
+    aitelegram.Routes(r)
+    aicloud.Routes(r)
+    ailogin.Routes(r)
+    each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/chats", "/chats/:id", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop", "/capabilities", "/chats/:id/files/:fid"]:
+        router.Options(r, path, preflight)
+    end
+    mut s := http.NewServer(port)
+    http.SetHost(s, env_or("AI_HOST", "0.0.0.0"))
+    http.HideTokens(s)
+    http.Use(s, r)
+    println "salam-ai listening on port", port
+    http.Run(s)
+end
+
+func allowed_origin(origin: str): bool:
+    ret aiweb.AllowedOrigin(origin)
+end
+
+func reply(ctx: i64, status: int, body: str):
+    aiweb.Reply(ctx, status, body)
+end
+
+func fail(ctx: i64, status: int, code: str, message: str):
+    aiweb.Fail(ctx, status, code, message)
+end
+
+func preflight(ctx: i64):
+    aiweb.Preflight(ctx)
+end
+
+func clip(s: str, max: int): str:
+    if s.len() <= max:
+        ret s
+    end
+    ret s.substr(0, max)
+end
+
+func i64s(n: i64): str:
+    ret conv.FormatInt(n)
+end
+
+func one(v: str): Vector<str>:
+    mut a := Vector {} as Vector<str>
+    a.push(v)
+    ret a
+end
+
+func two(v: str, w: str): Vector<str>:
+    mut a := one(v)
+    a.push(w)
+    ret a
+end
+
+func three(v: str, w: str, x: str): Vector<str>:
+    mut a := two(v, w)
+    a.push(x)
+    ret a
+end
+
+func bearer(ctx: i64): str:
+    ret aiweb.Bearer(ctx)
+end
+
+func user_from_token(token: str): i64:
+    ret aiweb.UserFromToken(token)
+end
+
+func need_user(ctx: i64): i64:
+    ret aiweb.NeedUser(ctx)
+end
+
+func four(v: str, w: str, x: str, y: str): Vector<str>:
+    mut a := three(v, w, x)
+    a.push(y)
+    ret a
+end
+
+func token_hash(token: str): str:
+    ret aiweb.Hash(token)
+end
+
+func hash_password(pass: str): str:
+    salt := crypto.RandomHex(16)
+    ret "pbkdf2-sha256$" + PASS_ROUNDS + "$" + salt + "$" + crypto.Pbkdf2HmacSha256Hex(pass, salt, PASS_ROUNDS, 32)
+end
+
+func valid_email(email: str): bool:
+    at := email.find("@")
+    if email.len() < 5 or email.len() > 200 or at <= 0 or email.find(" ") >= 0:
+        ret false
+    end
+    ret email.substr(at + 1, email.len() - at - 1).find(".") > 0
+end
+
+func user_json(id: str, name: str, email: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("id", id))
+    m.push(json.Member("name", name))
+    m.push(json.Member("email", email))
+    m.push(json.MemberBool("admin", aiweb.IsAdmin(id, email)))
+    ret json.Object(m)
+end
+
+func start_session(ctx: i64, status: int, id: str, name: str, email: str):
+    token := crypto.RandomToken(32)
+    aistore.Lock()
+    ip := clip(aiweb.ClientIp(ctx), 64)
+    agent := clip(http.Header(ctx, "User-Agent"), 255)
+    mut a := three(token_hash(token), id, i64s(aistore.Now() + SESSION_DAYS * 86400))
+    a.push(i64s(aistore.Now()))
+    a.push(ip)
+    a.push(agent)
+    a.push(aiweb.ClientKind(ctx))
+    a.push(aiweb.ClientVersion(ctx))
+    a.push(aiweb.ClientOs(ctx))
+    a.push(aiweb.ClientOsVersion(ctx))
+    a.push(aiweb.ClientArch(ctx))
+    _ok := aistore.Run("INSERT INTO sessions (token, user_id, expires, created, ip, agent, client, client_version, os, os_version, arch, last_used) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?4)", a)
+    _lg := aistore.Run("UPDATE users SET last_login = ?1, logins = logins + 1, last_ip = ?2 WHERE id = ?3", three(i64s(aistore.Now()), ip, id))
+    _gc := aistore.Run("DELETE FROM sessions WHERE expires < ?1", one(i64s(aistore.Now())))
+    aistore.Unlock()
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("token", token))
+    m.push(json.MemberRaw("user", user_json(id, name, email)))
+    reply(ctx, status, json.Object(m))
+end
+
+func register_user(ctx: i64):
+    body := http.Body(ctx)
+    name := str.Trim(json.Get(body, "name"))
+    email := str.Lower(str.Trim(json.Get(body, "email")))
+    pass := json.Get(body, "password")
+    if name.len() < 2 or name.len() > 80:
+        fail(ctx, 400, "name", "نام باید بین ۲ تا ۸۰ نویسه باشد.")
+        ret
+    end
+    if not valid_email(email):
+        fail(ctx, 400, "email", "نشانی ایمیل درست نیست.")
+        ret
+    end
+    if aiweb.ReservedEmail(email):
+        fail(ctx, 403, "reserved", "با این ایمیل نمی‌توان حساب تازه ساخت.")
+        ret
+    end
+    if pass.len() < 8 or pass.len() > 200:
+        fail(ctx, 400, "password", "گذرواژه باید دست‌کم ۸ نویسه باشد.")
+        ret
+    end
+    hashed := hash_password(pass)
+    aistore.Lock()
+    exists := aistore.OneText("SELECT id FROM users WHERE email = ?1", one(email))
+    mut id := ""
+    if exists.len() == 0:
+        _ins := aistore.Run("INSERT INTO users (name, email, pass, created) VALUES (?1, ?2, ?3, ?4)", four(name, email, hashed, i64s(aistore.Now())))
+        id = aistore.OneText("SELECT id FROM users WHERE email = ?1", one(email))
+    end
+    aistore.Unlock()
+    if exists.len() > 0:
+        fail(ctx, 409, "exists", "با این ایمیل قبلا حساب ساخته شده است. وارد شوید.")
+        ret
+    end
+    if id.len() == 0:
+        fail(ctx, 500, "server", "ساخت حساب ناموفق بود. دوباره تلاش کنید.")
+        ret
+    end
+    start_session(ctx, 201, id, name, email)
+end
+
+func login(ctx: i64):
+    body := http.Body(ctx)
+    email := str.Lower(str.Trim(json.Get(body, "email")))
+    pass := json.Get(body, "password")
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, name, pass FROM users WHERE email = ?1", one(email))
+    mut id := ""
+    mut name := ""
+    mut stored := ""
+    if aistore.Next(rows):
+        id = aistore.Text(rows, 0)
+        name = aistore.Text(rows, 1)
+        stored = aistore.Text(rows, 2)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    if id.len() == 0 or not crypto.VerifyPassword(pass, stored):
+        fail(ctx, 401, "credentials", "ایمیل یا گذرواژه درست نیست.")
+        ret
+    end
+    start_session(ctx, 200, id, name, email)
+end
+
+func logout(ctx: i64):
+    token := bearer(ctx)
+    if token.len() > 0:
+        aistore.Lock()
+        _d := aistore.Run("DELETE FROM sessions WHERE token = ?1", one(token_hash(token)))
+        aistore.Unlock()
+    end
+    reply(ctx, 200, `{"ok": true}`)
+end
+
+func me(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, name, email FROM users WHERE id = ?1", one(i64s(uid)))
+    mut out := ""
+    if aistore.Next(rows):
+        out = user_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    reply(ctx, 200, `{"user": ` + out + "}")
+end
+
+func chat_json(id: str, title: str, updated: str, device: str, workspace: str, cloud: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("id", id))
+    m.push(json.Member("title", title))
+    m.push(json.MemberRaw("updated", updated))
+    if cloud == "1":
+        m.push(json.MemberBool("cloud", true))
+    end
+    if device != "0" and device.len() > 0:
+        m.push(json.MemberBool("agent", true))
+        m.push(json.MemberRaw("device_id", device))
+        m.push(json.Member("workspace", workspace))
+    end
+    ret json.Object(m)
+end
+
+func activity_raw(s: str): str:
+    t := str.Trim(s)
+    if str.StartsWith(t, "[") and str.EndsWith(t, "]"):
+        ret t
+    end
+    ret "[]"
+end
+
+func message_json(id: str, role: str, body: str, status: str, created: str, activity: str, ms: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("id", id))
+    m.push(json.Member("role", role))
+    m.push(json.Member("body", role == "assistant" ? aiturn.Plain(body) : body))
+    m.push(json.Member("status", status))
+    m.push(json.MemberRaw("created", created))
+    m.push(json.MemberRaw("activity", activity_raw(activity)))
+    m.push(json.MemberRaw("ms", ms.len() > 0 ? ms : "0"))
+    ret json.Object(m)
+end
+
+func with_files(obj: str, files: str): str:
+    if files.len() == 0 or not str.EndsWith(obj, "}"):
+        ret obj
+    end
+    ret obj.substr(0, obj.len() - 1) + `, "files": ` + files + "}"
+end
+
+func own_chat(uid: i64, id: str): str:
+    aistore.Lock()
+    sid := aistore.OneText("SELECT CONCAT(engine_sid, '|') FROM chats WHERE id = ?1 AND user_id = ?2", two(id, i64s(uid)))
+    aistore.Unlock()
+    ret sid
+end
+
+func short_title(text: str): str:
+    mut t := str.Trim(str.Replace(str.Replace(text, "\r", " "), "\n", " "))
+    cps := str.CodePoints(t)
+    if cps.len() > 48:
+        mut b := str.NewBuilder()
+        defer str.BufFree(b)
+        repeat 48 in i:
+            str.BufAppendCp(b, cps.get(i))
+        end
+        t = str.Trim(str.BufStr(b)) + "…"
+    end
+    if t.len() == 0:
+        ret DEFAULT_TITLE
+    end
+    ret t
+end
+
+func list_chats(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, title, updated, device_id, workspace, cloud FROM chats WHERE user_id = ?1 ORDER BY updated DESC LIMIT 200", one(i64s(uid)))
+    until aistore.Next(rows):
+        items.push(chat_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5)))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    reply(ctx, 200, `{"chats": ` + json.Array(items) + "}")
+end
+
+func create_chat(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    body := http.Body(ctx)
+    mut device := json.Get(body, "device_id")
+    workspace := str.Trim(json.Get(body, "workspace"))
+    mut token := ""
+    if device.len() > 0 and device != "0":
+        if aibridge.DeviceOs(uid, device).len() == 0:
+            fail(ctx, 404, "device", "این دستگاه پیدا نشد. برنامه‌ی دسکتاپ را دوباره وصل کنید.")
+            ret
+        end
+        if workspace.len() == 0 or workspace.len() > 1000:
+            fail(ctx, 400, "workspace", "یک پوشه‌ی کاری انتخاب کنید.")
+            ret
+        end
+        token = crypto.RandomHex(16)
+    else:
+        device = "0"
+    end
+    mut cloud := "0"
+    if device == "0" and json.Get(body, "cloud") == "true":
+        if not aicloud.Enabled():
+            fail(ctx, 503, "cloud", "محیط اجرای ابری روی این سرور فعال نیست.")
+            ret
+        end
+        cloud = "1"
+        token = crypto.RandomHex(16)
+    end
+    id := crypto.RandomHex(12)
+    t := i64s(aistore.Now())
+    mut a := four(id, i64s(uid), DEFAULT_TITLE, t)
+    a.push(device)
+    a.push(device == "0" ? "" : workspace)
+    a.push(token)
+    a.push(cloud)
+    aistore.Lock()
+    ok := aistore.Run("INSERT INTO chats (id, user_id, title, created, updated, device_id, workspace, bridge_token, cloud) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8)", a)
+    aistore.Unlock()
+    if not ok:
+        fail(ctx, 500, "server", "ساخت گفت‌وگو ناموفق بود.")
+        ret
+    end
+    reply(ctx, 201, `{"chat": ` + chat_json(id, DEFAULT_TITLE, t, device, device == "0" ? "" : workspace, cloud) + "}")
+end
+
+func sync_pending(id: str, sid: str):
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, created FROM messages WHERE chat_id = ?1 AND status = 'pending' ORDER BY id DESC LIMIT 1", one(id))
+    mut mid := ""
+    mut created := 0 as i64
+    if aistore.Next(rows):
+        mid = aistore.Text(rows, 0)
+        created = aistore.Int64(rows, 1)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    if mid.len() == 0:
+        ret
+    end
+    aistore.Lock()
+    _o := aistore.Run("UPDATE messages SET status = 'error', body = ?1 WHERE chat_id = ?2 AND status = 'pending' AND id < ?3", three("دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید.", id, mid))
+    aistore.Unlock()
+    _r := settle(mid, sid, created, turn_seconds(id))
+end
+
+func turn_seconds(id: str): i64:
+    aistore.Lock()
+    device := aistore.OneText("SELECT device_id FROM chats WHERE id = ?1", one(id))
+    aistore.Unlock()
+    if device.len() > 0 and device != "0":
+        ret AGENT_TURN_SECONDS
+    end
+    ret PENDING_SECONDS
+end
+
+func settle(mid: str, sid: str, created: i64, limit: i64): aiengine.Reply:
+    mut r := aiturn.Progress(sid, created, limit)
+    if r.done:
+        mut status := "done"
+        mut body := r.text
+        if r.failed and body.len() == 0:
+            status = "error"
+            body = r.timed_out ? TIMED_OUT : "دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید."
+        end
+        aistore.Lock()
+        _u := aistore.Run("UPDATE messages SET body = ?1, status = ?2, activity = ?4 WHERE id = ?3 AND status = 'pending'", four(body, status, mid, activity_raw(r.activity)))
+        aistore.Unlock()
+        r.text = body
+        r.failed = status == "error"
+        if sid.len() > 0:
+            mut usage := aiengine.UsageOf(sid)
+            if usage.ms <= 0:
+                usage.ms = time.NowMillis() - created * 1000
+            end
+            aiturn.SaveUsage("messages", mid, usage)
+            ailive.End(sid)
+            forget_check(sid)
+            aiengine.Forget(sid)
+        end
+    end
+    ret r
+end
+
+func forget_check(sid: str):
+    aiturn.Forget(sid)
+end
+
+func get_chat(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    owned := own_chat(uid, id)
+    if owned.len() == 0:
+        fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    sync_pending(id, str.TrimSuffix(owned, "|"))
+    attached := aifiles.ForChat(id)
+    mut items := Vector {} as Vector<str>
+    mut head := ""
+    aistore.Lock()
+    mut crow := aistore.Stmt("SELECT id, title, updated, device_id, workspace, cloud FROM chats WHERE id = ?1", one(id))
+    if aistore.Next(crow):
+        head = chat_json(aistore.Text(crow, 0), aistore.Text(crow, 1), aistore.Text(crow, 2), aistore.Text(crow, 3), aistore.Text(crow, 4), aistore.Text(crow, 5))
+    end
+    aistore.Finish(crow)
+    mut rows := aistore.Stmt("SELECT id, role, body, status, created, COALESCE(activity, ''), ms FROM messages WHERE chat_id = ?1 ORDER BY id", one(id))
+    until aistore.Next(rows):
+        mid := aistore.Text(rows, 0)
+        items.push(with_files(message_json(mid, aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6)), attached.has(mid) ? attached.get(mid) : ""))
+    end
+    aistore.Finish(rows)
+    mut calls := Vector {} as Vector<str>
+    mut crows := aistore.Stmt("SELECT id, message_id, tool, kind, summary, detail, lang, outside, cwd, output, state, created, finished FROM bridge_calls WHERE chat_id = ?1 ORDER BY seq", one(id))
+    until aistore.Next(crows):
+        mut cm := Vector {} as Vector<str>
+        cm.push(json.Member("call_id", aistore.Text(crows, 0)))
+        cm.push(json.Member("chat", id))
+        cm.push(json.MemberRaw("mid", aistore.Text(crows, 1)))
+        cm.push(json.Member("tool", aistore.Text(crows, 2)))
+        cm.push(json.Member("kind", aistore.Text(crows, 3)))
+        cm.push(json.Member("summary", aistore.Text(crows, 4)))
+        cm.push(json.Member("detail", aistore.Text(crows, 5)))
+        cm.push(json.Member("lang", aistore.Text(crows, 6)))
+        cm.push(json.MemberBool("outside", aistore.Text(crows, 7) == "1"))
+        cm.push(json.Member("cwd", aistore.Text(crows, 8)))
+        cm.push(json.Member("output", aistore.Text(crows, 9)))
+        cm.push(json.Member("state", aistore.Text(crows, 10)))
+        cm.push(json.MemberRaw("created", aistore.Text(crows, 11)))
+        cm.push(json.MemberRaw("finished", aistore.Text(crows, 12)))
+        calls.push(json.Object(cm))
+    end
+    aistore.Finish(crows)
+    aistore.Unlock()
+    reply(ctx, 200, `{"chat": ` + head + `, "messages": ` + json.Array(items) + `, "calls": ` + json.Array(calls) + "}")
+end
+
+func rename_chat(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    title := short_title(json.Get(http.Body(ctx), "title"))
+    aistore.Lock()
+    _u := aistore.Run("UPDATE chats SET title = ?1 WHERE id = ?2 AND user_id = ?3", three(title, id, i64s(uid)))
+    aistore.Unlock()
+    reply(ctx, 200, `{"ok": true, "title": ` + json.Str(title) + "}")
+end
+
+func delete_chat(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    owned := own_chat(uid, id)
+    if owned.len() == 0:
+        fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    aistore.Lock()
+    cloud_token := aistore.OneText("SELECT bridge_token FROM chats WHERE id = ?1 AND cloud = 1", one(id))
+    _m := aistore.Run("DELETE FROM messages WHERE chat_id = ?1", one(id))
+    _c := aistore.Run("DELETE FROM chats WHERE id = ?1", one(id))
+    aistore.Unlock()
+    sid := str.TrimSuffix(owned, "|")
+    if sid.len() > 0:
+        aiengine.Abort(sid)
+        aiengine.Delete(sid)
+    end
+    if cloud_token.len() > 0:
+        aicloud.Destroy(cloud_token)
+    end
+    reply(ctx, 200, `{"ok": true}`)
+end
+
+func send_message(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    body := http.Body(ctx)
+    text := str.Trim(json.Get(body, "text"))
+    mut files := Vector {} as Vector<aifiles.Upload>
+    if body.find(`"files"`) >= 0:
+        mut image_ok := false
+        mut pdf_ok := false
+        aiengine.Accepts(image_ok, pdf_ok)
+        mut problem := ""
+        if not aifiles.Parse(body, image_ok, pdf_ok, files, problem, aiweb.English(ctx)):
+            fail(ctx, 400, "file", problem)
+            ret
+        end
+    end
+    if text.len() == 0 and files.len() == 0:
+        fail(ctx, 400, "empty", "پیام خالی است.")
+        ret
+    end
+    if text.len() > MAX_MESSAGE:
+        fail(ctx, 400, "too_long", "پیام خیلی بلند است. آن را کوتاه‌تر کنید.")
+        ret
+    end
+    owned := own_chat(uid, id)
+    if owned.len() == 0:
+        fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    mut sid := str.TrimSuffix(owned, "|")
+    sync_pending(id, sid)
+    t := i64s(aistore.Now())
+    aistore.Lock()
+    pending := aistore.OneText("SELECT COUNT(*) FROM messages WHERE chat_id = ?1 AND status = 'pending'", one(id))
+    recent := aistore.OneText("SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?1 AND m.role = 'user' AND m.created > ?2", two(i64s(uid), i64s(aistore.Now() - 3600)))
+    title := aistore.OneText("SELECT title FROM chats WHERE id = ?1", one(id))
+    mut rows := aistore.Stmt("SELECT device_id, workspace, bridge_token, cloud FROM chats WHERE id = ?1", one(id))
+    mut device := "0"
+    mut workspace := ""
+    mut token := ""
+    mut cloud := false
+    if aistore.Next(rows):
+        device = aistore.Text(rows, 0)
+        workspace = aistore.Text(rows, 1)
+        token = aistore.Text(rows, 2)
+        cloud = aistore.Text(rows, 3) == "1"
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    if pending != "0":
+        fail(ctx, 409, "busy", "هنوز پاسخ پیام قبلی کامل نشده است.")
+        ret
+    end
+    limits := aibilling.LimitsOf(i64s(uid))
+    if limits.chat_hourly > 0 and recent.to_int() >= limits.chat_hourly:
+        fail(ctx, 429, "rate", "پیام‌های این ساعت پلن «" + limits.name + "» تمام شد. کمی بعد دوباره تلاش کنید یا پلن را ارتقا دهید.")
+        ret
+    end
+    mut fresh := false
+    if sid.len() == 0:
+        fresh = true
+        sid = aiengine.NewSession("chat " + id)
+        if sid.len() == 0:
+            fail(ctx, 503, "engine", "دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.")
+            ret
+        end
+        aistore.Lock()
+        _s := aistore.Run("UPDATE chats SET engine_sid = ?1 WHERE id = ?2", two(sid, id))
+        aistore.Unlock()
+    end
+    mut new_title := title
+    if title == DEFAULT_TITLE:
+        new_title = short_title(text.len() > 0 ? text : files.get(0).name)
+    end
+    if files.len() > 0 and not aifiles.Store(files, aistore.Now()):
+        fail(ctx, 500, "file", "ذخیره‌ی فایل‌ها ناموفق بود. دوباره تلاش کنید.")
+        ret
+    end
+    aistore.Lock()
+    _a := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created) VALUES (?1, 'user', ?2, 'done', ?3)", three(id, text, t))
+    umid := aistore.LastId()
+    _b := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created) VALUES (?1, 'assistant', '', 'pending', ?2)", two(id, t))
+    amid := aistore.LastId()
+    _c := aistore.Run("UPDATE chats SET title = ?1, updated = ?2 WHERE id = ?3", three(new_title, t, id))
+    aistore.Unlock()
+    if not aifiles.Record(id, umid, i64s(uid), files, t):
+        aistore.Lock()
+        _x := aistore.Run("DELETE FROM message_files WHERE message_id = ?1", one(umid))
+        _y := aistore.Run("DELETE FROM messages WHERE id = ?1 OR id = ?2", two(umid, amid))
+        aistore.Unlock()
+        fail(ctx, 500, "file", "ذخیره‌ی فایل‌ها ناموفق بود. دوباره تلاش کنید.")
+        ret
+    end
+    recall := fresh ? aimemory.Recall(i64s(uid), id) : ""
+    mut free_system := ""
+    free := aiweb.PolicyOf(i64s(uid), free_system)
+    prompt := aiweb.UiLangNote(ctx) + aifiles.PromptText(aipolicy.Defang(text), files) + recall
+    parts := aifiles.Parts(files)
+    ailive.Begin(sid)
+    forget_check(sid)
+    aiturn.Relax(sid, free)
+    mut sent := false
+    if device != "0" and token.len() > 0:
+        preamble := desktop_preamble(uid, device, workspace, token) + project_block(id, body, fresh) + prompt
+        sent = free ? aiengine.SendDesktopFree(sid, preamble, parts, free_system) : aiengine.SendDesktop(sid, preamble, parts)
+    else cloud and token.len() > 0:
+        preamble := aicloud.Prelude(token, i64s(uid)) + prompt
+        sent = free ? aiengine.SendDesktopFree(sid, preamble, parts, free_system) : aiengine.SendDesktop(sid, preamble, parts)
+    else:
+        sent = free ? aiengine.SendFree(sid, prompt, parts, free_system) : aiengine.Send(sid, prompt, parts)
+    end
+    if not sent:
+        ailive.End(sid)
+        aistore.Lock()
+        _e := aistore.Run("UPDATE messages SET status = 'error', body = ?1 WHERE id = ?2", two("دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.", amid))
+        aistore.Unlock()
+        fail(ctx, 503, "engine", "دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.")
+        ret
+    end
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("user", with_files(message_json(umid, "user", text, "done", t, "[]", "0"), files.len() > 0 ? aifiles.Metas(files) : "")))
+    m.push(json.MemberRaw("assistant", message_json(amid, "assistant", "", "pending", t, "[]", "0")))
+    m.push(json.Member("title", new_title))
+    reply(ctx, 201, json.Object(m))
+end
+
+func capabilities(ctx: i64):
+    mut image_ok := false
+    mut pdf_ok := false
+    aiengine.Accepts(image_ok, pdf_ok)
+    reply(ctx, 200, aifiles.Limits(image_ok, pdf_ok))
+end
+
+func get_file(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    if own_chat(uid, id).len() == 0:
+        fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    found := aifiles.Read(id, http.Param(ctx, "fid"))
+    if found.len() == 0:
+        fail(ctx, 404, "not_found", "این فایل پیدا نشد.")
+        ret
+    end
+    reply(ctx, 200, found)
+end
+
+func desktop_preamble(uid: i64, device: str, workspace: str, token: str): str:
+    os_name := aibridge.DeviceOs(uid, device)
+    mut state := "connected"
+    if not aibridge.Online(device):
+        state = "not connected right now"
+    end
+    ret "<desktop_session>\nsession: " + token + "\nworkspace: " + workspace + "\nos: " + os_name + "\napp: " + state + "\nYou are working on this user's computer through Salam Agent, the desktop app on their computer. Use the desktop tools (shell, read_file, write_file, edit_file, list_dir, glob, grep, docker, wsl, run_tests) and pass the session value above in every call. Paths are relative to the workspace. Look before you change things, keep edits small, run the tests after changing code, and tell the user what you did.\nThe project's own instructions, from its AGENTS.md or AGENT.md, come in a project_instructions block: follow them unless they conflict with the Salam policy. The project's memory lives in .salam-agent/ in the workspace: .salam-agent/index.md lists every memory with a link to its file under .salam-agent/memory/, and it comes in a project_memory block. Read a memory file with read_file when its title looks relevant. Save what will help in a later session, such as how to build and test, the layout, decisions, the user's preferences and the traps you hit, with save_memory (reuse a slug to update a memory), and use forget_memory for what turned out wrong. If neither block has appeared in this conversation, read AGENTS.md or AGENT.md and .salam-agent/index.md yourself when they exist.\n</desktop_session>\n\n"
+end
+
+func project_block(chat: str, body: str, fresh: bool): str:
+    project := json.Get(body, "project")
+    if not str.StartsWith(project, "{"):
+        ret ""
+    end
+    file := json.Get(project, "instructions_file")
+    rules := str.Trim(json.Get(project, "instructions"))
+    index := str.Trim(json.Get(project, "memory_index"))
+    digest := aiweb.Hash(file + "\n" + rules + "\n" + index)
+    key := "chat " + chat
+    _l := sync.Lock(CONTEXT_LOCK)
+    if CONTEXT_SENT.size() > 5000:
+        CONTEXT_SENT = HashMap {} as HashMap<str, str>
+    end
+    same := not fresh and CONTEXT_SENT.has(key) and CONTEXT_SENT.get(key) == digest
+    CONTEXT_SENT.put(key, digest)
+    _u := sync.Unlock(CONTEXT_LOCK)
+    if same:
+        ret ""
+    end
+    mut out := ""
+    if rules.len() > 0:
+        name := file == "AGENT.md" ? "AGENT.md" : "AGENTS.md"
+        out = out + "<project_instructions file=\"" + name + "\">\n" + aipolicy.Defang(clip_bytes(rules, 32768)) + "\n</project_instructions>\n\n"
+    end
+    if index.len() > 0:
+        out = out + "<project_memory>\n" + aipolicy.Defang(clip_bytes(index, 16384)) + "\n</project_memory>\n\n"
+    end
+    ret out
+end
+
+func clip_bytes(s: str, max: int): str:
+    if s.len() <= max:
+        ret s
+    end
+    mut cut := max
+    until cut > 0:
+        b := s[cut] as int
+        if b < 128 or b >= 192:
+            break
+        end
+        cut -= 1
+    end
+    ret s.substr(0, cut) + "\n[... cut, read the file for the rest ...]"
+end
+
+func poll_message(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    mid := http.Param(ctx, "mid")
+    owned := own_chat(uid, id)
+    if owned.len() == 0:
+        fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT body, status, created FROM messages WHERE id = ?1 AND chat_id = ?2", two(mid, id))
+    mut found := false
+    mut body := ""
+    mut status := ""
+    mut created := 0 as i64
+    if aistore.Next(rows):
+        found = true
+        body = aistore.Text(rows, 0)
+        status = aistore.Text(rows, 1)
+        created = aistore.Int64(rows, 2)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    if not found:
+        fail(ctx, 404, "not_found", "این پیام پیدا نشد.")
+        ret
+    end
+    mut phase := "done"
+    mut activity := "[]"
+    body = aiturn.Plain(body)
+    if status == "pending":
+        r := settle(mid, str.TrimSuffix(owned, "|"), created, turn_seconds(id))
+        body = r.text
+        activity = activity_raw(r.activity)
+        if r.done:
+            status = r.failed ? "error" : "done"
+        else:
+            phase = r.phase
+        end
+    end
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("id", mid))
+    m.push(json.Member("body", body))
+    m.push(json.Member("status", status))
+    m.push(json.Member("phase", phase))
+    m.push(json.MemberRaw("activity", activity))
+    reply(ctx, 200, json.Object(m))
+end
+
+func stop_message(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    owned := own_chat(uid, id)
+    if owned.len() == 0:
+        fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    sid := str.TrimSuffix(owned, "|")
+    if sid.len() > 0:
+        aiengine.Abort(sid)
+    end
+    r := aiengine.Poll(sid)
+    mut body := r.text
+    if body.len() == 0:
+        body = "پاسخ متوقف شد."
+    end
+    stopped_activity := sid.len() > 0 ? activity_raw(ailive.Activity(sid, true)) : "[]"
+    aistore.Lock()
+    _u := aistore.Run("UPDATE messages SET body = ?1, status = 'done', activity = ?3 WHERE chat_id = ?2 AND status = 'pending'", three(body, id, stopped_activity))
+    aistore.Unlock()
+    if sid.len() > 0:
+        ailive.End(sid)
+        forget_check(sid)
+    end
+    reply(ctx, 200, `{"ok": true, "body": ` + json.Str(body) + "}")
+end
+
+func cors_lines(origin: str): str:
+    mut h := "Vary: Origin\r\n"
+    if allowed_origin(origin):
+        h = h + "Access-Control-Allow-Origin: " + origin + "\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nAccess-Control-Allow-Methods: GET, OPTIONS\r\nAccess-Control-Max-Age: 86400\r\n"
+    end
+    ret h
+end
+
+func wr_all(c: tcp.Conn, data: str): bool:
+    mut off := 0
+    mut tries := 0
+    until off < data.len():
+        got := tcp.Write(c, data.substr(off, data.len() - off))
+        if got > 0:
+            off += got
+            tries = 0
+        else:
+            tries += 1
+            if tries >= 4:
+                ret false
+            end
+            sync.SleepMs(50)
+        end
+    end
+    ret true
+end
+
+func stream_plain(c: tcp.Conn, status: str, origin: str, body: str):
+    _w := wr_all(c, "HTTP/1.1 " + status + "\r\nContent-Type: application/json\r\nContent-Length: " + body.len() + "\r\nCache-Control: no-store\r\nConnection: close\r\n" + cors_lines(origin) + "\r\n" + body)
+end
+
+func stream_error(c: tcp.Conn, status: str, origin: str, code: str, message: str):
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("error", code))
+    m.push(json.Member("message", message))
+    stream_plain(c, status, origin, json.Object(m))
+end
+
+func send_event(c: tcp.Conn, name: str, data: str): bool:
+    ret wr_all(c, "event: " + name + "\ndata: " + data + "\n\n")
+end
+
+func text_event(t: str): str:
+    ret "{" + json.Member("t", t) + "}"
+end
+
+func stream_slot(uid: i64, delta: int): bool:
+    key := i64s(uid)
+    _l := sync.Lock(STREAM_LOCK)
+    mut have := 0
+    if STREAM_COUNT.has(key):
+        have = STREAM_COUNT.get(key).to_int()
+    end
+    mut ok := true
+    if delta > 0 and have >= STREAMS_PER_USER:
+        ok = false
+    else:
+        have = have + delta
+        if have <= 0:
+            _r := STREAM_COUNT.remove(key)
+        else:
+            STREAM_COUNT.put(key, "" + have)
+        end
+    end
+    _u := sync.Unlock(STREAM_LOCK)
+    ret ok
+end
+
+func read_body(c: tcp.Conn, head: str, want: int, whole &: bool): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut have := head.len()
+    str.BufAppend(b, head)
+    until have < want:
+        more := tcp.Read(c, 65536)
+        if more.len() == 0:
+            whole = false
+            ret ""
+        end
+        str.BufAppend(b, more)
+        have += more.len()
+    end
+    whole = true
+    ret str.BufStr(b)
+end
+
+func rss_mb(): int:
+    data := io.ReadFile("/proc/self/status")
+    at := data.find("VmRSS:")
+    if at < 0:
+        ret 0
+    end
+    rest := data.substr(at + 6, data.len() - at - 6)
+    nl := rest.find("\n")
+    line := str.Trim(nl >= 0 ? rest.substr(0, nl) : rest)
+    ret str.Trim(str.TrimSuffix(line, "kB")).to_int() / 1024
+end
+
+func watchdog():
+    start := time.NowMillis()
+    until true:
+        sync.SleepMs(WATCH_MS)
+        mb := rss_mb()
+        if mb > 0 and time.NowMillis() - start > WATCH_GRACE_MS:
+            live := aiweb.Live()
+            if mb >= MEM_HARD_MB or (mb >= MEM_SOFT_MB and live == 0):
+                println "salam-ai: restarting to give memory back at", mb, "MB with", live, "requests in flight"
+                os.Exit(0)
+            end
+        end
+    end
+end
+
+func serve_stream(c: tcp.Conn):
+    tcp.SetReadDeadline(c, 5000)
+    mut req := ""
+    until req.find("\r\n\r\n") < 0:
+        got := tcp.Read(c, 8192)
+        if got.len() == 0 or req.len() > 32768:
+            ret
+        end
+        req = req + got
+    end
+    lines := req.substr(0, req.find("\r\n\r\n")).split("\n")
+    first := str.Trim(lines.get(0)).split(" ")
+    if first.len() < 2:
+        ret
+    end
+    method := first.get(0)
+    mut path := first.get(1)
+    mut origin := ""
+    mut auth := ""
+    mut headers := HashMap {} as HashMap<str, str>
+    each line in lines:
+        l := str.Trim(line)
+        colon := l.find(":")
+        if colon > 0:
+            headers.put(str.Lower(str.Trim(l.substr(0, colon))), str.Trim(l.substr(colon + 1, l.len() - colon - 1)))
+        end
+        lower := str.Lower(l)
+        if str.StartsWith(lower, "origin:"):
+            origin = str.Trim(l.substr(7, l.len() - 7))
+        else str.StartsWith(lower, "authorization:"):
+            auth = str.Trim(l.substr(14, l.len() - 14))
+        end
+    end
+    mut bare := path
+    cut := bare.find("?")
+    if cut >= 0:
+        bare = bare.substr(0, cut)
+    end
+    if aiopenai.Handles(bare) or aibridge.Handles(bare):
+        head_end := req.find("\r\n\r\n") + 4
+        mut want := 0
+        if headers.has("content-length"):
+            want = headers.get("content-length").to_int()
+        end
+        if want > MAX_BODY:
+            stream_error(c, "413 Payload Too Large", origin, "too_large", "request body is larger than 8 MB")
+            ret
+        end
+        mut whole := false
+        tcp.SetReadDeadline(c, BODY_MS)
+        if str.Lower(headers.has("expect") ? headers.get("expect") : "") == "100-continue":
+            if not wr_all(c, "HTTP/1.1 100 Continue\r\n\r\n"):
+                ret
+            end
+        end
+        body := read_body(c, req.substr(head_end, req.len() - head_end), want, whole)
+        if not whole:
+            stream_error(c, "400 Bad Request", origin, "short_body", "the request body stopped before Content-Length")
+            ret
+        end
+        if aibridge.Handles(bare):
+            aiweb.Enter()
+            aibridge.Serve(c, method, bare, headers, body)
+            aiweb.Leave()
+        else:
+            aiopenai.Serve(c, method, bare, headers, body)
+        end
+        ret
+    end
+    if method == "OPTIONS":
+        _w := wr_all(c, "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n" + cors_lines(origin) + "\r\n")
+        ret
+    end
+    q := path.find("?")
+    mut query := ""
+    if q >= 0:
+        query = path.substr(q + 1, path.len() - q - 1)
+        path = path.substr(0, q)
+    end
+    seg := path.split("/")
+    if method == "GET" and seg.len() == 5 and seg.get(1) == "guest" and seg.get(2) == "messages" and seg.get(4) == "stream":
+        aiweb.Enter()
+        guest_stream(c, origin, seg.get(3), query_value(query, "guest"), query_value(query, "lang") == "en")
+        aiweb.Leave()
+        ret
+    end
+    if method != "GET" or seg.len() != 6 or seg.get(1) != "chats" or seg.get(3) != "messages" or seg.get(5) != "stream":
+        stream_error(c, "404 Not Found", origin, "not_found", "این مسیر وجود ندارد.")
+        ret
+    end
+    id := seg.get(2)
+    mid := seg.get(4)
+    mut token := ""
+    if str.StartsWith(auth, "Bearer "):
+        token = str.Trim(auth.substr(7, auth.len() - 7))
+    end
+    uid := user_from_token(token)
+    if uid == 0:
+        stream_error(c, "401 Unauthorized", origin, "unauthorized", "لطفا دوباره وارد شوید.")
+        ret
+    end
+    owned := own_chat(uid, id)
+    if owned.len() == 0:
+        stream_error(c, "404 Not Found", origin, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    if not stream_slot(uid, 1):
+        stream_error(c, "429 Too Many Requests", origin, "streams", "پاسخ‌های زیادی را هم‌زمان دنبال می‌کنید. چند لحظه بعد دوباره تلاش کنید.")
+        ret
+    end
+    aiweb.Enter()
+    stream_answer(c, origin, id, mid, owned)
+    aiweb.Leave()
+    _s := stream_slot(uid, 0 - 1)
+end
+
+func stream_answer(c: tcp.Conn, origin: str, id: str, mid: str, owned: str):
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT body, status, created, COALESCE(activity, ''), ms FROM messages WHERE id = ?1 AND chat_id = ?2 AND role = 'assistant'", two(mid, id))
+    mut found := false
+    mut body := ""
+    mut status := ""
+    mut created := 0 as i64
+    mut stored_activity := ""
+    mut stored_ms := "0"
+    if aistore.Next(rows):
+        found = true
+        body = aistore.Text(rows, 0)
+        status = aistore.Text(rows, 1)
+        created = aistore.Int64(rows, 2)
+        stored_activity = aistore.Text(rows, 3)
+        stored_ms = aistore.Text(rows, 4)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    if not found:
+        stream_error(c, "404 Not Found", origin, "not_found", "این پیام پیدا نشد.")
+        ret
+    end
+    tcp.SetReadDeadline(c, 0)
+    head := "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache, no-transform\r\nX-Accel-Buffering: no\r\nConnection: close\r\n" + cors_lines(origin) + "\r\n"
+    if not wr_all(c, head + ": stream\n\n"):
+        ret
+    end
+    sid := str.TrimSuffix(owned, "|")
+    if status != "pending":
+        _d := send_event(c, "done", "{" + json.Member("body", aiturn.Plain(body)) + ", " + json.Member("status", status) + ", " + json.MemberRaw("activity", activity_raw(stored_activity)) + ", " + json.MemberRaw("ms", stored_ms.len() > 0 ? stored_ms : "0") + "}")
+        ret
+    end
+    limit := turn_seconds(id)
+    mut sent := ""
+    mut phase_sent := ""
+    mut activity_sent := "[]"
+    mut activity_steps := 0
+    mut activity_at := 0 as i64
+    mut gen := ailive.Gen()
+    mut beat := time.NowMillis()
+    start := aistore.Now()
+    tcp.SetWriteDeadline(c, 30000)
+    until true:
+        r := settle(mid, sid, created, limit)
+        if r.done:
+            final := r.failed ? "error" : "done"
+            took := time.NowMillis() - created * 1000
+            _d := send_event(c, "done", "{" + json.Member("body", r.text) + ", " + json.Member("status", final) + ", " + json.MemberRaw("activity", activity_raw(r.activity)) + ", " + json.MemberRaw("ms", i64s(took)) + "}")
+            ret
+        end
+        sent_before := sent
+        phase_before := phase_sent
+        activity_before := activity_sent
+        if r.activity != activity_sent:
+            steps_now := r.activity.split("\"kind\"").len()
+            now_ms := time.NowMillis()
+            if steps_now != activity_steps or now_ms - activity_at >= 300:
+                if not send_event(c, "activity", "{" + json.MemberRaw("steps", activity_raw(r.activity)) + "}"):
+                    ret
+                end
+                activity_sent = r.activity
+                activity_steps = steps_now
+                activity_at = now_ms
+            end
+        end
+        if r.text != sent:
+            if str.StartsWith(r.text, sent):
+                if not send_event(c, "delta", text_event(r.text.substr(sent.len(), r.text.len() - sent.len()))):
+                    ret
+                end
+            else:
+                if not send_event(c, "reset", text_event(r.text)):
+                    ret
+                end
+            end
+            sent = r.text
+        end
+        if r.phase != phase_sent:
+            if not send_event(c, "phase", "{" + json.Member("phase", r.phase) + "}"):
+                ret
+            end
+            phase_sent = r.phase
+        end
+        if aistore.Now() - start > STREAM_SECONDS:
+            ret
+        end
+        if activity_sent != activity_before or sent != sent_before or phase_sent != phase_before:
+            beat = time.NowMillis()
+        else time.NowMillis() - beat >= BEAT_MS:
+            if not wr_all(c, ": ping\n\n"):
+                ret
+            end
+            beat = time.NowMillis()
+        end
+        if ailive.Connected():
+            gen = ailive.Wait(gen, BEAT_MS / 2)
+            sync.SleepMs(TICK_MS)
+        else:
+            sync.SleepMs(700)
+        end
+    end
+end
+
+func query_value(query: str, key: str): str:
+    each pair in query.split("&"):
+        at := pair.find("=")
+        if at > 0 and pair.substr(0, at) == key:
+            ret pair.substr(at + 1, pair.len() - at - 1)
+        end
+    end
+    ret ""
+end
+
+func guest_stream(c: tcp.Conn, origin: str, mid: str, token: str, en: bool):
+    cors := aiguest.CorsLines(origin)
+    mut gid := ""
+    mut sid := ""
+    mut status := ""
+    mut body := ""
+    mut created := 0 as i64
+    if token.len() < 20 or not aiguest.Find(mid, token, gid, sid, status, body, created):
+        _n := wr_all(c, "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: 21\r\nConnection: close\r\n" + cors + "\r\n{\"error\": \"not_found\"}")
+        ret
+    end
+    slot := 0 - (gid.to_int() as i64)
+    if not stream_slot(slot, 1):
+        _b := wr_all(c, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: 17\r\nConnection: close\r\n" + cors + "\r\n{\"error\": \"busy\"}")
+        ret
+    end
+    tcp.SetReadDeadline(c, 0)
+    tcp.SetWriteDeadline(c, 30000)
+    head := "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache, no-transform\r\nX-Accel-Buffering: no\r\nConnection: close\r\n" + cors + "\r\n"
+    if wr_all(c, head + ": stream\n\n"):
+        mut sent := ""
+        mut phase_sent := ""
+        mut beat := time.NowMillis()
+        mut gen := ailive.Gen()
+        start := aistore.Now()
+        mut going := true
+        until going:
+            mut phase := "done"
+            if status == "pending":
+                phase = aiguest.Step(mid, sid, created, en, status, body)
+            end
+            if status != "pending":
+                _d := send_event(c, "done", "{" + json.Member("body", body) + ", " + json.Member("status", status) + "}")
+                going = false
+            else:
+                changed := body != sent or phase != phase_sent
+                if body != sent:
+                    if str.StartsWith(body, sent):
+                        going = send_event(c, "delta", text_event(body.substr(sent.len(), body.len() - sent.len())))
+                    else:
+                        going = send_event(c, "reset", text_event(body))
+                    end
+                    sent = body
+                end
+                if going and phase != phase_sent:
+                    going = send_event(c, "phase", "{" + json.Member("phase", phase) + "}")
+                    phase_sent = phase
+                end
+                if changed:
+                    beat = time.NowMillis()
+                else going and time.NowMillis() - beat >= BEAT_MS:
+                    going = wr_all(c, ": ping\n\n")
+                    beat = time.NowMillis()
+                end
+                if going and aistore.Now() - start > STREAM_SECONDS:
+                    going = false
+                end
+                if going:
+                    if ailive.Connected():
+                        gen = ailive.Wait(gen, BEAT_MS / 2)
+                        sync.SleepMs(TICK_MS)
+                    else:
+                        sync.SleepMs(700)
+                    end
+                end
+            end
+        end
+    end
+    _s := stream_slot(slot, 0 - 1)
+end
+
+func stream_worker():
+    mut open := true
+    until true:
+        fd := STREAM_JOBS.recv(open)
+        if not open:
+            break
+        end
+        c := tcp.ConnFromFd(fd)
+        serve_stream(c)
+        tcp.Close(c)
+    end
+end
+
+func stream_acceptor():
+    until true:
+        c := tcp.Accept(STREAM_SRV)
+        if tcp.ConnOk(c):
+            STREAM_JOBS.send(c.fd)
+        end
+    end
+end

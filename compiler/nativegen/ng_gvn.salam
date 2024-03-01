@@ -1,0 +1,777 @@
+package nativegen
+
+import str
+
+pub struct Gvn:
+    pub slots: Vector<int> = Vector {}
+    pub mask: int = 0
+    pub added: Vector<int> = Vector {}
+    pub marks: Vector<int> = Vector {}
+    pub wb: Vector<int> = Vector {}
+    pub wm: Vector<int> = Vector {}
+    pub ep_out: Vector<int> = Vector {}
+    pub ep_out_p: Vector<int> = Vector {}
+    pub ep_out_d: Vector<int> = Vector {}
+    pub ep_out_s: Vector<int> = Vector {}
+    pub ld_addr: Vector<int> = Vector {}
+    pub ld_disp: Vector<i64> = Vector {}
+    pub ld_ep2: Vector<int> = Vector {}
+    pub ld_site: Vector<int> = Vector {}
+    pub ld_sep: Vector<int> = Vector {}
+    pub ld_uep: Vector<int> = Vector {}
+    pub site_ep: Vector<int> = Vector {}
+    pub site_memo: Vector<int> = Vector {}
+    pub ep_out_u: Vector<int> = Vector {}
+    pub glb_first: Vector<int> = Vector {}
+    pub epu: int = 0
+    pub ld_ty: Vector<int> = Vector {}
+    pub ld_ep: Vector<int> = Vector {}
+    pub ld_val: Vector<int> = Vector {}
+    pub ld_mark: Vector<int> = Vector {}
+    pub pa_ep: Vector<int> = Vector {}
+    pub pb_out: Vector<int> = Vector {}
+    pub pbase: int = 0
+end
+
+func mem_write(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    if op == OP_CALL and call_no_write(g, i):
+        ret false
+    end
+    if op == OP_STORE or op == OP_CALL or op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE:
+        ret true
+    end
+    ret op == OP_LOAD and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0
+end
+
+func mem_cls(g &: Ng, i: int): int:
+    c := g.i_c[i]
+    if c == 1 or c == 2:
+        ret c
+    end
+    ret 0
+end
+
+func addr_root(g &: Ng, a: int, disp &: i64): int:
+    disp = 0 as i64
+    mut r := a
+    repeat 8:
+        if r < 0 or g.v_kind[r] != VK_INS:
+            ret r
+        end
+        d := g.v_def[r]
+        if d < 0 or g.i_op[d] != OP_ADDR or g.i_b[d] >= 0:
+            ret r
+        end
+        disp += g.i_d[d]
+        r = g.i_a[d]
+    end
+    ret r
+end
+
+func addr_base(g &: Ng, a: int): int:
+    mut r := a
+    repeat 8:
+        if r < 0 or g.v_kind[r] != VK_INS:
+            ret r
+        end
+        d := g.v_def[r]
+        if d < 0 or g.i_op[d] != OP_ADDR:
+            ret r
+        end
+        r = g.i_a[d]
+    end
+    ret r
+end
+
+func root_kind(g &: Ng, r0: int): int:
+    r := addr_base(g, r0)
+    if r < 0 or g.v_kind[r] != VK_INS:
+        ret 0
+    end
+    d := g.v_def[r]
+    if d < 0:
+        ret 0
+    end
+    if g.i_op[d] == OP_ALLOCA:
+        ret 1
+    end
+    if g.i_op[d] == OP_CALL:
+        fv := g.i_a[d]
+        if fv >= 0 and g.v_kind[fv] == VK_GLB and g.v_def[fv] >= 0:
+            nm := tab_str(g.syms, g.v_def[fv])
+            if nm == "malloc" or nm == "calloc" or nm == "realloc":
+                ret 2
+            end
+        end
+    end
+    ret 0
+end
+
+func alloc_call(g &: Ng, d: int): bool:
+    if g.i_op[d] != OP_CALL:
+        ret false
+    end
+    fv := g.i_a[d]
+    if fv < 0 or g.v_kind[fv] != VK_GLB or g.v_def[fv] < 0:
+        ret false
+    end
+    nm := tab_str(g.syms, g.v_def[fv])
+    ret nm == "malloc" or nm == "calloc" or nm == "realloc"
+end
+
+func site_of(g &: Ng, t &: Gvn, v0: int): int:
+    r0 := addr_base(g, v0)
+    if r0 < 0 or r0 >= t.site_memo.len():
+        ret 0 - 1
+    end
+    if t.site_memo[r0] != 0 - 3:
+        ret t.site_memo[r0]
+    end
+    mut site := 0 - 1
+    mut bad := false
+    mut seen := Vector {} as Vector<int>
+    mut stk := Vector {} as Vector<int>
+    stk.push(r0)
+    until stk.len() > 0 and not bad:
+        v := addr_base(g, stk.pop())
+        if v < 0:
+            bad = true
+            break
+        end
+        k := g.v_kind[v]
+        if k == VK_ZERO or (k == VK_INT and g.v_i[v] == (0 as i64)):
+            continue
+        end
+        if k != VK_INS:
+            bad = true
+            break
+        end
+        mut dup := false
+        each sv in seen:
+            if sv == v:
+                dup = true
+            end
+        end
+        if dup:
+            continue
+        end
+        if seen.len() >= 16:
+            bad = true
+            break
+        end
+        seen.push(v)
+        d := g.v_def[v]
+        if alloc_call(g, d):
+            if site >= 0 and site != d:
+                bad = true
+            end
+            site = d
+        else g.i_op[d] == OP_PHI:
+            ps := g.i_ps[d]
+            repeat g.i_pcount[d] in q:
+                stk.push(g.pool[ps + 2 * q])
+            end
+        else g.i_op[d] == OP_SELECT:
+            stk.push(g.i_b[d])
+            stk.push(g.i_c[d])
+        else:
+            bad = true
+        end
+    end
+    seen.free()
+    stk.free()
+    res := bad ? 0 - 1 : site
+    t.site_memo[r0] = res
+    ret res
+end
+
+func gvn_root(g &: Ng, t &: Gvn, a: int, disp &: i64): int:
+    r := addr_root(g, a, disp)
+    if r < 0 or g.v_kind[r] != VK_GLB:
+        ret r
+    end
+    sy := g.v_def[r]
+    if sy < 0:
+        ret r
+    end
+    disp = disp + g.v_i[r]
+    until t.glb_first.len() <= sy:
+        t.glb_first.push(0 - 1)
+    end
+    if t.glb_first[sy] < 0:
+        t.glb_first[sy] = r
+    end
+    ret t.glb_first[sy]
+end
+
+func site_ok(t &: Gvn, k: int, site: int): bool:
+    ret site >= 0 and t.ld_site[k] == site and t.site_ep[site] == t.ld_sep[k] and t.epu == t.ld_uep[k]
+end
+
+func ld_find(t &: Gvn, a: int, disp: i64, ty: int, ep: int, ep2: int, site: int, epg: int): int:
+    mut k := t.ld_addr.len() - 1
+    mut n := 0
+    until k >= 0 and n < 64:
+        if (t.ld_ep[k] == ep or t.ld_ep[k] == epg or (ep2 >= 0 and t.ld_ep2[k] == ep2) or site_ok(t, k, site)) and t.ld_addr[k] == a and t.ld_disp[k] == disp and t.ld_ty[k] == ty:
+            ret t.ld_val[k]
+        end
+        k -= 1
+        n += 1
+    end
+    ret 0 - 1
+end
+
+func ld_find_agg(g &: Ng, t &: Gvn, a: int, disp: i64, ty: int, ep: int, ep2: int, site: int, epg: int, off &: i64): int:
+    sz := tsize(g, ty) as i64
+    mut k := t.ld_addr.len() - 1
+    mut n := 0
+    until k >= 0 and n < 64:
+        if (t.ld_ep[k] == ep or t.ld_ep[k] == epg or (ep2 >= 0 and t.ld_ep2[k] == ep2) or site_ok(t, k, site)) and t.ld_addr[k] == a and is_agg(g, t.ld_ty[k]):
+            d0 := t.ld_disp[k]
+            if d0 <= disp and disp + sz <= d0 + (tsize(g, t.ld_ty[k]) as i64):
+                off = disp - d0
+                ret t.ld_val[k]
+            end
+        end
+        k -= 1
+        n += 1
+    end
+    ret 0 - 1
+end
+
+func extv_resolve(g &: Ng, agg: int, off0: i64, t: int): int:
+    mut a := agg
+    mut off := off0
+    sz := tsize(g, t) as i64
+    repeat 64:
+        if a < 0 or g.v_kind[a] != VK_INS:
+            ret 0 - 1
+        end
+        d := g.v_def[a]
+        if d < 0 or g.i_op[d] != OP_INSV:
+            ret 0 - 1
+        end
+        doff := g.i_d[d]
+        dt := g.i_x[d]
+        dsz := tsize(g, dt) as i64
+        if doff == off and dt == t:
+            v := g.i_b[d]
+            if v >= 0 and g.v_ty[v] == t:
+                ret v
+            end
+            ret 0 - 1
+        end
+        if doff + dsz <= off or off + sz <= doff:
+            a = g.i_a[d]
+        else doff <= off and off + sz <= doff + dsz and is_agg(g, dt):
+            a = g.i_b[d]
+            off = off - doff
+        else:
+            ret 0 - 1
+        end
+    end
+    ret 0 - 1
+end
+
+func ld_add(t &: Gvn, a: int, disp: i64, ty: int, ep: int, ep2: int, site: int, v: int):
+    t.ld_ep2.push(ep2)
+    t.ld_site.push(site)
+    t.ld_sep.push(site >= 0 ? t.site_ep[site] : 0)
+    t.ld_uep.push(t.epu)
+    t.ld_addr.push(a)
+    t.ld_disp.push(disp)
+    t.ld_ty.push(ty)
+    t.ld_ep.push(ep)
+    t.ld_val.push(v)
+end
+
+func gvn_pure(op: int): bool:
+    if op >= OP_ADD and op <= OP_ASHR:
+        ret op != OP_SDIV and op != OP_UDIV and op != OP_SREM and op != OP_UREM
+    end
+    if op >= OP_FADD and op <= OP_FNEG:
+        ret op != OP_FREM
+    end
+    if op == OP_ICMP or op == OP_FCMP or op == OP_ADDR or op == OP_SELECT or op == OP_EXTV or op == OP_VBCAST or op == OP_MULHU or op == OP_I64TOF or op == OP_DIV6432 or op == OP_VREDH:
+        ret true
+    end
+    ret op >= OP_SEXT and op <= OP_FPTRUNC
+end
+
+func gvn_excluded(g &: Ng, op: int): bool:
+    x := g.gvn_x
+    if x.len() == 0:
+        ret false
+    end
+    if op == OP_ADDR: ret str.Contains(x, "addr") end
+    if op == OP_EXTV: ret str.Contains(x, "extv") end
+    if op == OP_ICMP: ret str.Contains(x, "icmp") end
+    if op >= OP_SEXT and op <= OP_FPTRUNC: ret str.Contains(x, "cast") end
+    ret str.Contains(x, "arith")
+end
+
+func gvn_budget(g &: Ng): bool:
+    if g.gvn_max < 0:
+        ret true
+    end
+    g.gvn_count += 1
+    if g.gvn_count == g.gvn_max:
+        printerrln "gvn merge in " + tab_str(g.syms, g.f_sym)
+    end
+    ret g.gvn_count <= g.gvn_max
+end
+
+func vkey(g &: Ng, v: int): i64:
+    if v < 0:
+        ret v
+    end
+    k := g.v_kind[v]
+    if k == VK_INT or k == VK_FLT:
+        ret g.v_i[v] * (1000003 as i64) + (g.v_ty[v] as i64) * (31 as i64) + (k as i64) + (7777777 as i64)
+    end
+    if k == VK_GLB:
+        ret g.v_i[v] * (7 as i64) + (g.v_def[v] as i64) * (1000033 as i64) + (5555555 as i64)
+    end
+    ret v
+end
+
+func veq(g &: Ng, a: int, b: int): bool:
+    if a == b:
+        ret true
+    end
+    if a < 0 or b < 0:
+        ret false
+    end
+    ka := g.v_kind[a]
+    if ka != g.v_kind[b] or g.v_ty[a] != g.v_ty[b]:
+        ret false
+    end
+    if ka == VK_INT or ka == VK_FLT:
+        ret g.v_i[a] == g.v_i[b]
+    end
+    if ka == VK_GLB:
+        ret g.v_i[a] == g.v_i[b] and g.v_def[a] == g.v_def[b]
+    end
+    ret false
+end
+
+func ins_hash(g &: Ng, i: int): int:
+    mut h := (g.i_op[i] as i64) * (73856093 as i64)
+    h = h ^ ((g.i_ty[i] as i64) * (19349663 as i64))
+    h = h * (31 as i64) + vkey(g, g.i_a[i])
+    h = h * (31 as i64) + vkey(g, g.i_b[i])
+    h = h * (31 as i64) + vkey(g, g.i_c[i])
+    h = h * (31 as i64) + (g.i_x[i] as i64)
+    h = h * (31 as i64) + g.i_d[i]
+    ret ((h ^ (h >> (29 as i64))) & (0x7FFFFFFF as i64)) as int
+end
+
+func ins_same(g &: Ng, i: int, j: int): bool:
+    if g.i_op[i] != g.i_op[j] or g.i_ty[i] != g.i_ty[j] or g.i_x[i] != g.i_x[j] or g.i_d[i] != g.i_d[j]:
+        ret false
+    end
+    m := val_mask(g.i_op[i])
+    if (m & 1) != 0 and not veq(g, g.i_a[i], g.i_a[j]): ret false end
+    if (m & 2) != 0 and not veq(g, g.i_b[i], g.i_b[j]): ret false end
+    if (m & 4) != 0 and not veq(g, g.i_c[i], g.i_c[j]): ret false end
+    if g.i_op[i] == OP_ADDR and (g.i_b[i] < 0) != (g.i_b[j] < 0):
+        ret false
+    end
+    ret true
+end
+
+func canon(g &: Ng, i: int):
+    op := g.i_op[i]
+    comm := op == OP_ADD or op == OP_MUL or op == OP_AND or op == OP_OR or op == OP_XOR or op == OP_FADD or op == OP_FMUL
+    if comm and vkey(g, g.i_a[i]) > vkey(g, g.i_b[i]):
+        t := g.i_a[i]
+        g.i_a[i] = g.i_b[i]
+        g.i_b[i] = t
+    end
+end
+
+func gvn_find(g &: Ng, t &: Gvn, i: int): int:
+    mut j := ins_hash(g, i) & t.mask
+    until true:
+        e := t.slots[j]
+        if e == 0 - 1:
+            ret 0 - 1
+        end
+        if e >= 0 and ins_same(g, e, i):
+            ret e
+        end
+        j = (j + 1) & t.mask
+    end
+end
+
+func gvn_insert(g &: Ng, t &: Gvn, i: int):
+    mut j := ins_hash(g, i) & t.mask
+    until t.slots[j] >= 0:
+        j = (j + 1) & t.mask
+    end
+    t.slots[j] = i
+    t.added.push(j)
+end
+
+func pa_root(g &: Ng, t &: Gvn, r: int): int:
+    if g.off_pae or t.pa_ep.len() == 0:
+        ret 0 - 1
+    end
+    a := local_root(g, r)
+    if a < 0 or a >= t.pa_ep.len():
+        ret 0 - 1
+    end
+    ret a
+end
+
+func pa_cur(t &: Gvn, a: int): int:
+    ret t.pa_ep[a] > t.pbase ? t.pa_ep[a] : t.pbase
+end
+
+func call_key(g &: Ng, t &: Gvn, i: int, key &: i64): int:
+    fv := g.i_a[i]
+    n := g.i_pcount[i]
+    if fv < 0 or g.v_kind[fv] != VK_GLB or g.v_def[fv] < 0 or n < 1 or n > 2 or (g.i_f[i] & IF_VARARG) != 0:
+        ret 0 - 1
+    end
+    if not call_no_write(g, i) or alloc_call(g, i) or is_agg(g, g.i_ty[i]):
+        ret 0 - 1
+    end
+    mut k := 0 as i64
+    repeat n in q:
+        av := g.pool[g.i_ps[i] + 3 * q]
+        if av < 0 or av >= (1 << 30) or (g.pool[g.i_ps[i] + 3 * q + 1] & (IF_BYVAL | IF_SRET)) != 0 or pa_root(g, t, av) >= 0:
+            ret 0 - 1
+        end
+        k = (k << (31 as i64)) | (av as i64)
+    end
+    key = k
+    ret 0 - 10 - 2 * g.v_def[fv] - (n - 1)
+end
+
+func clean_join(g &: Ng, b: int, d: int, bwr: Vector<bool>, seen &: Vector<int>, stk &: Vector<int>): bool:
+    seen.clear()
+    stk.clear()
+    repeat g.b_npred[b] in k:
+        stk.push(g.b_pred[g.b_ps[b] + k])
+    end
+    until stk.len() > 0:
+        x := stk.pop()
+        if x == d:
+            continue
+        end
+        mut dup := false
+        each s0 in seen:
+            if s0 == x:
+                dup = true
+            end
+        end
+        if dup:
+            continue
+        end
+        if seen.len() >= 32 or bwr[x]:
+            ret false
+        end
+        seen.push(x)
+        repeat g.b_npred[x] in k2:
+            px := g.b_pred[g.b_ps[x] + k2]
+            if g.b_order[px] >= g.b_order[x]:
+                ret false
+            end
+            stk.push(px)
+        end
+    end
+    ret true
+end
+
+func gvn(g &: Ng): bool:
+    mut t := Gvn {}
+    mut cap := 64
+    until cap < 4 * g.i_op.len():
+        cap = cap * 2
+    end
+    repeat cap:
+        t.slots.push(0 - 1)
+    end
+    t.mask = cap - 1
+    build_dom(g)
+    repl_grow(g)
+    mut changed := false
+    repeat g.b_first.len():
+        t.ep_out.push(0 - 1)
+        t.ep_out_p.push(0 - 1)
+        t.ep_out_d.push(0 - 1)
+        t.ep_out_s.push(0 - 1)
+        t.ep_out_u.push(0 - 1)
+        t.pb_out.push(0)
+    end
+    repeat g.i_op.len():
+        t.site_ep.push(0)
+    end
+    repeat g.v_kind.len():
+        t.site_memo.push(0 - 3)
+    end
+    if not g.off_pae:
+        compute_escape(g)
+        repeat g.v_kind.len():
+            t.pa_ep.push(0)
+        end
+    end
+    mut nowr := not g.off_nowr
+    mut bwr := Vector {} as Vector<bool>
+    repeat g.b_first.len():
+        bwr.push(false)
+    end
+    each b9 in g.b_rpo:
+        mut i9 := g.b_first[b9]
+        until i9 >= 0:
+            if mem_write(g, i9):
+                nowr = false
+                bwr[b9] = true
+            end
+            i9 = g.i_next[i9]
+        end
+    end
+    mut seenb := Vector {} as Vector<int>
+    mut stkb := Vector {} as Vector<int>
+    mut next_ep := 1
+    t.wb.push(0)
+    t.wm.push(0 - 1)
+    t.ld_mark.push(0)
+    until t.wb.len() > 0:
+        b := t.wb.pop()
+        mark := t.wm.pop()
+        lmark := t.ld_mark.pop()
+        if mark >= 0:
+            until t.added.len() > mark:
+                sj := t.added.pop()
+                t.slots[sj] = 0 - 2
+            end
+            until t.ld_addr.len() > lmark:
+                _a1 := t.ld_addr.pop()
+                _a5 := t.ld_disp.pop()
+                _a6 := t.ld_ep2.pop()
+                _a7 := t.ld_site.pop()
+                _a8 := t.ld_sep.pop()
+                _a9 := t.ld_uep.pop()
+                _a2 := t.ld_ty.pop()
+                _a3 := t.ld_ep.pop()
+                _a4 := t.ld_val.pop()
+            end
+            continue
+        end
+        h := t.added.len()
+        hl := t.ld_addr.len()
+        mut ep := 0
+        mut epp := 0
+        mut epd := 0
+        mut eps := 0
+        idm := b > 0 ? g.b_idom[b] : 0 - 1
+        if idm >= 0 and t.ep_out[idm] >= 0 and (nowr or (g.b_npred[b] == 1 and g.b_pred[g.b_ps[b]] == idm) or (not g.off_nowr and clean_join(g, b, idm, bwr, seenb, stkb))):
+            ep = t.ep_out[idm]
+            epp = t.ep_out_p[idm]
+            epd = t.ep_out_d[idm]
+            eps = t.ep_out_s[idm]
+            t.epu = t.ep_out_u[idm]
+            t.pbase = t.pb_out[idm]
+        else:
+            ep = next_ep
+            epp = next_ep + 1
+            epd = next_ep + 2
+            eps = next_ep + 3
+            t.epu = next_ep + 4
+            t.pbase = next_ep + 5
+            next_ep += 6
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            remap_ins(g, i)
+            iop := g.i_op[i]
+            if iop == OP_LOAD and g.i_res[i] >= 0 and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0 and not is_agg(g, g.i_ty[i]) and not g.off_lcse:
+                lc := mem_cls(g, i)
+                mut ldisp := 0 as i64
+                lroot := gvn_root(g, t, g.i_a[i], ldisp)
+                lep := lc == 1 ? epp : (lc == 2 ? epd : ep)
+                lpa := pa_root(g, t, lroot)
+                lep2 := lpa >= 0 ? pa_cur(t, lpa) : (root_kind(g, lroot) == 1 ? eps : 0 - 1)
+                lsite := site_of(g, t, lroot)
+                lg := lpa >= 0 ? 0 - 7 : ep
+                lv := ld_find(t, lroot, ldisp, g.i_ty[i], lpa >= 0 ? lg : lep, lep2, lsite, lg)
+                if lv >= 0 and g.v_ty[lv] == g.i_ty[i]:
+                    g.v_repl[g.i_res[i]] = lv
+                    ins_unlink(g, i)
+                    changed = true
+                    i = nx
+                    continue
+                end
+                mut aoff := 0 as i64
+                av := is_vec(g, g.i_ty[i]) ? 0 - 1 : ld_find_agg(g, t, lroot, ldisp, g.i_ty[i], lpa >= 0 ? lg : lep, lep2, lsite, lg, aoff)
+                rv := av >= 0 ? extv_resolve(g, av, aoff, g.i_ty[i]) : 0 - 1
+                if rv >= 0:
+                    g.v_repl[g.i_res[i]] = rv
+                    ins_unlink(g, i)
+                    changed = true
+                    i = nx
+                    continue
+                end
+                if av >= 0:
+                    xi := ins_new(g, OP_EXTV, g.i_ty[i])
+                    g.i_a[xi] = av
+                    g.i_d[xi] = aoff
+                    xv := new_res(g, xi)
+                    ins_before(g, i, xi)
+                    repl_grow(g)
+                    g.v_repl[g.i_res[i]] = xv
+                    ins_unlink(g, i)
+                    changed = true
+                    i = nx
+                    continue
+                end
+                ld_add(t, lroot, ldisp, g.i_ty[i], lpa >= 0 ? 0 - 9 : lep, lep2, lsite, g.i_res[i])
+                i = nx
+                continue
+            end
+            if iop == OP_CALL and not g.off_ccse and g.i_res[i] >= 0:
+                mut ck := 0 as i64
+                ca := call_key(g, t, i, ck)
+                if ca < 0 - 1:
+                    cv := ld_find(t, ca, ck, g.i_ty[i], ep, 0 - 1, 0 - 1, ep)
+                    if cv >= 0 and g.v_ty[cv] == g.i_ty[i]:
+                        g.v_repl[g.i_res[i]] = cv
+                        ins_unlink(g, i)
+                        changed = true
+                        i = nx
+                        continue
+                    end
+                    ld_add(t, ca, ck, g.i_ty[i], ep, 0 - 1, 0 - 1, g.i_res[i])
+                    i = nx
+                    continue
+                end
+            end
+            if mem_write(g, i):
+                sc := iop == OP_STORE ? mem_cls(g, i) : 0
+                mut sdisp := 0 as i64
+                sroot := iop == OP_STORE ? gvn_root(g, t, g.i_b[i], sdisp) : 0 - 1
+                sk := iop == OP_STORE ? root_kind(g, sroot) : 0
+                ssite := iop == OP_STORE and sroot >= 0 ? site_of(g, t, sroot) : 0 - 1
+                spa := iop == OP_STORE ? pa_root(g, t, sroot) : 0 - 1
+                if iop == OP_CALL and t.pa_ep.len() > 0:
+                    repeat g.i_pcount[i] in q:
+                        ca := pa_root(g, t, g.pool[g.i_ps[i] + 3 * q])
+                        if ca >= 0:
+                            t.pa_ep[ca] = next_ep
+                            next_ep += 1
+                        end
+                    end
+                end
+                if spa >= 0 and iop == OP_STORE and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0 and not g.off_pst:
+                    t.pa_ep[spa] = next_ep
+                    next_ep += 1
+                    if not g.off_lcse:
+                        pv := g.i_a[i]
+                        if pv >= 0 and g.v_kind[pv] == VK_INS:
+                            ld_add(t, sroot, sdisp, g.v_ty[pv], 0 - 9, pa_cur(t, spa), ssite, pv)
+                        end
+                    end
+                    i = nx
+                    continue
+                end
+                if spa >= 0:
+                    t.pa_ep[spa] = next_ep
+                    next_ep += 1
+                else sk != 2:
+                    eps = next_ep
+                    next_ep += 1
+                end
+                if spa >= 0:
+                    _z := 0
+                else ssite >= 0:
+                    t.site_ep[ssite] = next_ep
+                    next_ep += 1
+                else:
+                    t.epu = next_ep
+                    next_ep += 1
+                end
+                ep = next_ep
+                next_ep += 1
+                if sc != 2:
+                    epp = next_ep
+                    next_ep += 1
+                end
+                if sc != 1:
+                    epd = next_ep
+                    next_ep += 1
+                end
+                if iop == OP_STORE and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0 and not g.off_lcse:
+                    sv := g.i_a[i]
+                    if sv >= 0 and g.v_kind[sv] == VK_INS:
+                        ld_add(t, sroot, sdisp, g.v_ty[sv], sc == 1 ? epp : (sc == 2 ? epd : ep), spa >= 0 ? pa_cur(t, spa) : (sk == 1 ? eps : 0 - 1), ssite, sv)
+                    end
+                end
+                i = nx
+                continue
+            end
+            if (gvn_pure(g.i_op[i]) or (iop >= OP_SDIV and iop <= OP_UREM and not g.off_dcse)) and g.i_res[i] >= 0 and not gvn_excluded(g, g.i_op[i]):
+                canon(g, i)
+                e := gvn_find(g, t, i)
+                if e >= 0 and gvn_budget(g):
+                    g.i_f[e] = g.i_f[e] & g.i_f[i]
+                    g.v_repl[g.i_res[i]] = g.i_res[e]
+                    ins_unlink(g, i)
+                    changed = true
+                else:
+                    gvn_insert(g, t, i)
+                end
+            end
+            i = nx
+        end
+        t.ep_out[b] = ep
+        t.ep_out_p[b] = epp
+        t.ep_out_d[b] = epd
+        t.ep_out_s[b] = eps
+        t.ep_out_u[b] = t.epu
+        t.pb_out[b] = t.pbase
+        t.wb.push(b)
+        t.wm.push(h)
+        t.ld_mark.push(hl)
+        repeat g.b_kn[b] in c:
+            t.wb.push(g.b_kids[g.b_ks[b] + c])
+            t.wm.push(0 - 1)
+            t.ld_mark.push(0)
+        end
+    end
+    if changed:
+        remap_all(g)
+    end
+    t.slots.free()
+    t.added.free()
+    t.marks.free()
+    t.wb.free()
+    t.wm.free()
+    t.ep_out.free()
+    t.ep_out_p.free()
+    t.ep_out_d.free()
+    t.ep_out_s.free()
+    t.ld_disp.free()
+    t.ld_ep2.free()
+    t.ld_site.free()
+    t.ld_sep.free()
+    t.ld_uep.free()
+    t.site_ep.free()
+    t.site_memo.free()
+    t.ep_out_u.free()
+    t.glb_first.free()
+    t.ld_addr.free()
+    t.ld_ty.free()
+    t.ld_ep.free()
+    t.ld_val.free()
+    t.ld_mark.free()
+    t.pa_ep.free()
+    t.pb_out.free()
+    bwr.free()
+    seenb.free()
+    stkb.free()
+    ret changed
+end

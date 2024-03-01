@@ -1,0 +1,85 @@
+pkg.en = net/http/session
+pkg.name = net/http/session
+pkg.group = Network
+pkg.summary = User sessions over a cookie: keeping data between requests, and a CSRF token.
+pkg.title = The net/http/session package in Salam | Sessions
+pkg.description = The net/http/session package in Salam: user sessions over a cookie, storing data between requests, logging in and out, regenerating the id and CSRF protection, with an example.
+pkg.import = net.http.session
+pkg.intro <<
+<p>A session keeps each visitor's data on the server and gives the browser nothing but a random id in an <code>HttpOnly</code> cookie. Use it for logins, carts and form tokens on a site built with <a href="/std/net/http/">net/http</a>. When the client is not a browser, or several servers must accept the same login without sharing memory, a signed token from <a href="/std/jwt/">jwt</a> is usually the better fit.</p>
+<p>The flow in a handler: <code>Start</code> finds the visitor's session from the cookie or makes a new one (and sets the cookie), you read and change values with <code>Value</code> and <code>SetValue</code>, and <code>Save</code> writes the session back. Values are strings. A session expires after <code>max_age</code> seconds without a request; every request that finds it starts the clock again.</p>
+<p>Things people get wrong:</p>
+<ul>
+<li><strong>Forgetting <code>Save</code>.</strong> <code>Start</code> returns a copy; changes reach the store only when you save it.</li>
+<li><strong>Keeping request strings.</strong> <code>Param</code>, <code>Form</code> and the like are freed when the handler returns, so copy them with <code>str.Clone</code> before you store them (see the cart).</li>
+<li><strong>Not calling <code>Regenerate</code> after login</strong>, which leaves an id an attacker may have planted in the browser valid.</li>
+<li><strong>Expecting the sessions to survive.</strong> They live in this process's memory: a restart logs everyone out and two server processes do not share them. Two requests from one visitor at the same moment each save their own copy, and the later <code>Save</code> wins.</li>
+</ul>
+<h2 id="guide-login">Log in and log out</h2>
+<p>The usual shape: the login handler checks the password, calls <code>Regenerate</code> so the user gets a fresh id, stores who they are with <code>SetValue</code> and redirects. Every protected page calls <code>Start</code> and checks <code>HasValue</code>. Logging out calls <code>End</code>, which deletes the session on the server and clears the cookie.</p>
+{{example.net-http-session-login}}
+<p><code>http.NewClient</code> keeps cookies between requests the way a browser does, which is why the second <code>/me</code> sees the login. A plain <code>http.Get</code> sends no cookies and always looks like a new visitor.</p>
+
+<h2 id="guide-csrf">Protect forms with a CSRF token</h2>
+<p>The browser sends the session cookie with every request to your site, even one started by a form on another site. A CSRF token stops that: <code>CSRFToken</code> stores a random token in the session, you put it in a hidden field, and the handler that receives the form checks it with <code>CSRFVerify</code>. A forged form does not know the token and is refused.</p>
+{{example.net-http-session-csrf}}
+<p>Call <code>Save</code> after <code>CSRFToken</code>, because the first call creates the token in your copy of the session.</p>
+
+<h2 id="guide-cart">Keep data across requests: a shopping cart</h2>
+<p>Values are strings, so numbers go through <code>conv.Atoi</code> and back. Each visitor has a separate session, so two clients filling carts at the same time never see each other's items. <code>ClearValues</code> empties a session but keeps the user's id.</p>
+{{example.net-http-session-cart}}
+<p>Note the <code>str.Clone</code> around <code>Param</code>. Values read from the request are freed when the handler returns, and a session outlives the request, so copy anything from the request before you use it as a key or value. Without the copy the cart keys point at freed memory and the cart looks empty.</p>
+
+<h2 id="guide-config">Cookie settings and lifetime</h2>
+<p><code>Configure</code> sets the cookie name, how long a session lives without activity, whether the cookie is sent over HTTPS only, and its <code>SameSite</code> mode. Call it once, before the server starts. On a site served over HTTPS, pass <code>true</code> for <code>secure</code>; <code>Strict</code> keeps the cookie off every request that starts on another site, and <code>Lax</code>, the default, still sends it when the user follows a link.</p>
+{{example.net-http-session-config}}
+<p>The cookie is always <code>HttpOnly</code>, so scripts in the page cannot read the id. Expired sessions are removed every hundred calls to <code>New</code> or <code>Get</code>; <code>CleanupExpired</code> does it at once and returns how many it removed. Sessions live in the memory of one process, so a restart logs everyone out, and two copies of the server behind a load balancer do not share them. For that, keep the data in a database such as <a href="/std/db/redis/">db/redis</a>.</p>
+>>
+
+doc.Session = One user's session.
+doc.Session.id = The random id that sits in the cookie.
+doc.Session.data = The session data.
+doc.Session.created_at = When it was made.
+doc.Session.last_seen = When it was last used.
+doc.Session.max_age = How many seconds the session lives without a request; 0 or less never expires.
+doc.SessionData = The keys and values of the session.
+doc.SessionData.items = The values.
+doc.DefaultCookieName = The default name of the session cookie.
+doc.DefaultMaxAge = The default lifetime: one day.
+doc.Configure = Sets the cookie name, the idle lifetime in seconds, whether the cookie is HTTPS only, and its SameSite mode, for the whole program. Sessions made earlier keep their old lifetime, so call it before the server starts.
+doc.CleanupExpired = Deletes the expired sessions and returns how many.
+doc.New = A new session with a random id.
+doc.Get = Finds a session by id and marks it as used now; <code>ok</code> is false when there is none or it has expired.
+doc.Save = Writes the session back to the store, replacing what was there.
+doc.Destroy = Deletes the session with this id.
+doc.Value = The value of one key; an empty string when there is none.
+doc.HasValue = True when the key is there.
+doc.SetValue = Sets the value of a key.
+doc.DeleteValue = Takes the key away and says whether it was there.
+doc.ClearValues = Clears every value.
+doc.Start = Finds the session of this request from the cookie or makes a new one, and sets the cookie.
+doc.End = Deletes the session and expires the cookie in the browser; for logging out.
+doc.Regenerate = Gives the session a fresh id, deletes the earlier one and sets the new cookie; the values stay. Call it after logging in.
+doc.CSRFToken = Returns the CSRF token of the session, making one when there is none; put it in your forms.
+doc.CSRFVerify = True when the token matches the session token, compared in constant time; false when either is empty.
+
+ex.Session = net-http-session-Session
+ex.SessionData = net-http-session-Session
+ex.DefaultCookieName = net-http-session-Session
+ex.DefaultMaxAge = net-http-session-Session
+ex.Configure = net-http-session-Session
+ex.CleanupExpired = net-http-session-Session
+ex.New = net-http-session-Session
+ex.Get = net-http-session-Session
+ex.Save = net-http-session-Session
+ex.Destroy = net-http-session-Session
+ex.Value = net-http-session-Session
+ex.HasValue = net-http-session-Session
+ex.SetValue = net-http-session-Session
+ex.DeleteValue = net-http-session-Session
+ex.ClearValues = net-http-session-Session
+ex.Start = net-http-session-Session
+ex.End = net-http-session-Session
+ex.Regenerate = net-http-session-Session
+ex.CSRFToken = net-http-session-Session
+ex.CSRFVerify = net-http-session-Session

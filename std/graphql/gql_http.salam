@@ -1,0 +1,219 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import encoding.value
+import encoding.json
+import encoding.query
+import encoding.encerr
+import str
+
+@en "HttpRequest"
+@fa "درخواست وب"
+pub struct GqlHttpRequest:
+    @en "query"
+    @fa "پرسمان"
+    pub query: str = ""
+    @en "operationName"
+    @fa "نام عملیات"
+    pub operationName: str = ""
+    @en "variables"
+    @fa "متغیرها"
+    pub variables: value.Value = value.Value {}
+    @en "extensions"
+    @fa "افزونه‌ها"
+    pub extensions: value.Value = value.Value {}
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = true
+    @en "error"
+    @fa "خطا"
+    pub error: str = ""
+end
+
+@en "HttpResponse"
+@fa "پاسخ وب"
+pub struct GqlHttpResponse:
+    @en "status"
+    @fa "وضعیت"
+    pub status: int = 200
+    @en "contentType"
+    @fa "نوع محتوا"
+    pub contentType: str = "application/json"
+    @en "body"
+    @fa "بدنه"
+    pub body: str = ""
+end
+
+func _ht_bad(message: str): GqlHttpRequest:
+    mut r := GqlHttpRequest {}
+    r.ok = false
+    r.error = message
+    r.variables = value.NewValueObject()
+    r.extensions = value.NewValueObject()
+    ret r
+end
+
+func _ht_empty(): GqlHttpRequest:
+    mut r := GqlHttpRequest {}
+    r.variables = value.NewValueObject()
+    r.extensions = value.NewValueObject()
+    ret r
+end
+
+func _ht_object_param(v: value.Value): value.Value:
+    if value.IsObject(v): ret v end
+    if value.IsString(v):
+        mut err := encerr.NoError()
+        parsed := json.Decode(value.AsString(v), err)
+        if not encerr.IsError(err) and value.IsObject(parsed): ret parsed end
+    end
+    ret value.NewValueObject()
+end
+
+func _ht_str_param(v: value.Value): str:
+    if value.IsString(v): ret value.AsString(v) end
+    ret ""
+end
+
+func _ht_media_type(contentType: str): str:
+    mut out := ""
+    bp := _gbp(contentType)
+    mut i := 0
+    until i < contentType.len():
+        c := _gub(bp, i)
+        if c == 59 or c == 32: break end
+        out = out + contentType.substr(i, 1)
+        i += 1
+    end
+    ret str.Lower(out)
+end
+
+func _ht_from_json(body: str): GqlHttpRequest:
+    mut err := encerr.NoError()
+    parsed := json.Decode(body, err)
+    if encerr.IsError(err): ret _ht_bad("request body is not valid JSON") end
+    if not value.IsObject(parsed): ret _ht_bad("request body must be a JSON object") end
+    mut r := _ht_empty()
+    r.query = _ht_str_param(value.ObjectGet(parsed, "query"))
+    r.operationName = _ht_str_param(value.ObjectGet(parsed, "operationName"))
+    if value.ObjectHas(parsed, "variables"):
+        r.variables = _ht_object_param(value.ObjectGet(parsed, "variables"))
+    end
+    if value.ObjectHas(parsed, "extensions"):
+        r.extensions = _ht_object_param(value.ObjectGet(parsed, "extensions"))
+    end
+    if r.query == "": ret _ht_bad("the request is missing a query") end
+    ret r
+end
+
+func _ht_from_query_string(qs: str): GqlHttpRequest:
+    mut r := _ht_empty()
+    r.query = query.Get(qs, "query")
+    r.operationName = query.Get(qs, "operationName")
+    if query.Has(qs, "variables"):
+        r.variables = _ht_object_param(value.ValueString(query.Get(qs, "variables")))
+    end
+    if query.Has(qs, "extensions"):
+        r.extensions = _ht_object_param(value.ValueString(query.Get(qs, "extensions")))
+    end
+    if r.query == "": ret _ht_bad("the request is missing a query") end
+    ret r
+end
+
+func _ht_is_query_only(source: str): bool:
+    mut err := GqlError {}
+    mut doc := Parse(source, err)
+    defer FreeDocument(doc)
+    if err.message != "": ret true end
+    mut i := 0
+    until i < doc.ops.len():
+        if doc.ops.get(i).optype != OP_QUERY: ret false end
+        i += 1
+    end
+    ret true
+end
+
+func _ht_response(status: int, body: str): GqlHttpResponse:
+    mut r := GqlHttpResponse {}
+    r.status = status
+    r.body = body
+    ret r
+end
+
+func _ht_error_body(message: str): str:
+    mut errs := GqlErrorList {}
+    AddError(errs, NewError(ERR_REQUEST, message))
+    mut o := value.NewValueObject()
+    value.ObjectSet(o, "errors", ErrorsToValue(errs))
+    out := json.EncodeDefault(o)
+    FreeErrorList(errs)
+    ret out
+end
+
+@en "ParseHttpRequest"
+@fa "تجزیه درخواست وب"
+pub func ParseHttpRequest(method: str, contentType: str, body: str, queryString: str): GqlHttpRequest:
+    m := str.Upper(method)
+    if m == "GET": ret _ht_from_query_string(queryString) end
+    if m != "POST": ret _ht_bad("only GET and POST are supported") end
+    media := _ht_media_type(contentType)
+    if media == "application/graphql":
+        mut r := _ht_empty()
+        r.query = body
+        if r.query == "": ret _ht_bad("the request is missing a query") end
+        ret r
+    end
+    ret _ht_from_json(body)
+end
+
+@en "ParseHttpRequestJSON"
+@fa "تجزیه درخواست جیسون"
+pub func ParseHttpRequestJSON(body: str): GqlHttpRequest: ret _ht_from_json(body) end
+
+@en "HandleRequest"
+@fa "رسیدگی به درخواست"
+pub func HandleRequest(sch: Schema, req: GqlHttpRequest, rootValue: value.Value, ctx: value.Value): ExecutionResult:
+    ret ExecuteSource(sch, req.query, req.operationName, req.variables, rootValue, ctx)
+end
+
+@en "HandleHttp"
+@fa "رسیدگی به وب"
+pub func HandleHttp(sch: Schema, method: str, contentType: str, body: str, queryString: str, rootValue: value.Value, ctx: value.Value): GqlHttpResponse:
+    req := ParseHttpRequest(method, contentType, body, queryString)
+    if not req.ok: ret _ht_response(400, _ht_error_body(req.error)) end
+    if str.Upper(method) == "GET" and not _ht_is_query_only(req.query):
+        ret _ht_response(405, _ht_error_body("only query operations are allowed over GET"))
+    end
+    mut result := HandleRequest(sch, req, rootValue, ctx)
+    out := ResultToJSON(result)
+    mut status := 200
+    if not result.hasData: status = 400 end
+    FreeResult(result)
+    ret _ht_response(status, out)
+end
+
+@en "HandleHttpSimple"
+@fa "رسیدگی ساده به وب"
+pub func HandleHttpSimple(sch: Schema, method: str, contentType: str, body: str, queryString: str): GqlHttpResponse:
+    ret HandleHttp(sch, method, contentType, body, queryString, value.NewValueObject(), value.NewValueObject())
+end
+
+@en "FreeHttpRequest"
+@fa "آزادسازی درخواست وب"
+pub func FreeHttpRequest(req &: GqlHttpRequest):
+    value.ValueFree(req.variables)
+    value.ValueFree(req.extensions)
+end

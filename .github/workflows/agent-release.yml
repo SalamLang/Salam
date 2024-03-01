@@ -1,0 +1,347 @@
+---
+name: 🤖 Salam Agent - Build & Release
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - agent/**
+      - .github/workflows/agent-release.yml
+  push:
+    branches:
+      - main
+    paths:
+      - agent/**
+      - .github/workflows/agent-release.yml
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  TAURI_CLI_VERSION: 2.12.3
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read and cross-check the version
+        id: v
+        run: |
+          set -euo pipefail
+          conf=$(jq -r .version agent/src-tauri/tauri.conf.json)
+          cargo=$(sed -n 's/^version = "\(.*\)"$/\1/p' agent/src-tauri/Cargo.toml | head -n1)
+          if [ "$conf" != "$cargo" ]; then
+            echo "::error::tauri.conf.json says $conf but Cargo.toml says $cargo"
+            exit 1
+          fi
+          echo "version=$conf" >> "$GITHUB_OUTPUT"
+          echo "version=$conf"
+
+  check:
+    name: Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+        working-directory: agent/src-tauri
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            build-essential pkg-config \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev
+      - name: Set up Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add rustfmt clippy
+      - name: Format
+        if: runner.os == 'Linux'
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Test
+        if: runner.os == 'Linux'
+        run: cargo test --locked
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    needs: [version, check]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ARCH: ${{ matrix.arch }}
+      TARGET: ${{ matrix.target }}
+      APPIMAGE_EXTRACT_AND_RUN: '1'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install system libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            build-essential curl file pkg-config patchelf \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev
+      - name: Set up Rust
+        run: |
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl -fsSL --proto '=https' --tlsv1.2 https://sh.rustup.rs | sh -s -- -y --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add "$TARGET"
+      - name: Build
+        working-directory: agent
+        run: npx --yes "@tauri-apps/cli@${TAURI_CLI_VERSION}" build --ci --target "$TARGET" --bundles deb,rpm,appimage
+      - name: Package
+        run: bash agent/scripts/package.sh linux "$ARCH" "$TARGET" "$VERSION" dist-out
+      - name: Upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: agent-linux-${{ matrix.arch }}
+          path: dist-out/*
+          if-no-files-found: error
+          retention-days: 14
+
+  linux-i686:
+    name: Linux i686
+    needs: [version, check]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build in an i386 Debian container
+        run: |
+          docker run --rm --platform linux/386 -v "$PWD:/src" -w /src \
+            -e TAURI_CLI_VERSION -e CARGO_TERM_COLOR -e CARGO_INCREMENTAL \
+            -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+            i386/debian:bookworm linux32 bash agent/scripts/build-linux-i686.sh
+      - name: Package
+        run: bash agent/scripts/package.sh linux i686 i686-unknown-linux-gnu "$VERSION" dist-out
+      - name: Upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: agent-linux-i686
+          path: dist-out/*
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: Windows ${{ matrix.arch }}
+    needs: [version, check]
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-pc-windows-msvc
+            msi: true
+          - arch: i686
+            target: i686-pc-windows-msvc
+            msi: true
+          - arch: aarch64
+            target: aarch64-pc-windows-msvc
+            msi: false
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ARCH: ${{ matrix.arch }}
+      TARGET: ${{ matrix.target }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add "$TARGET"
+      - name: Build
+        working-directory: agent
+        run: npx --yes "@tauri-apps/cli@${TAURI_CLI_VERSION}" build --ci --target "$TARGET" --bundles nsis
+      - name: Bundle the MSI with Latin metadata
+        if: matrix.msi
+        working-directory: agent
+        run: |
+          npx --yes "@tauri-apps/cli@${TAURI_CLI_VERSION}" bundle --ci --target "$TARGET" --bundles msi \
+            --config '{"bundle":{"publisher":"Salam Team","copyright":"Salam Team","shortDescription":"Salam AI desktop agent","longDescription":"The Salam assistant with access to your files, shell, Docker and WSL, after your approval."}}'
+      - name: Package
+        run: bash agent/scripts/package.sh windows "$ARCH" "$TARGET" "$VERSION" dist-out
+      - name: Upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: agent-windows-${{ matrix.arch }}
+          path: dist-out/*
+          if-no-files-found: error
+          retention-days: 14
+
+  macos:
+    name: macOS ${{ matrix.arch }}
+    needs: [version, check]
+    runs-on: macos-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+            rust-targets: aarch64-apple-darwin
+          - arch: x86_64
+            target: x86_64-apple-darwin
+            rust-targets: x86_64-apple-darwin
+          - arch: universal
+            target: universal-apple-darwin
+            rust-targets: aarch64-apple-darwin x86_64-apple-darwin
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ARCH: ${{ matrix.arch }}
+      TARGET: ${{ matrix.target }}
+      RUST_TARGETS: ${{ matrix.rust-targets }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        run: |
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl -fsSL --proto '=https' --tlsv1.2 https://sh.rustup.rs | sh -s -- -y --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup update stable --no-self-update
+          rustup default stable
+          read -r -a targets <<< "$RUST_TARGETS"
+          rustup target add "${targets[@]}"
+      - name: Build
+        working-directory: agent
+        run: |
+          npx --yes "@tauri-apps/cli@${TAURI_CLI_VERSION}" build --ci --target "$TARGET" --bundles app,dmg \
+            --config '{"bundle":{"macOS":{"signingIdentity":"-"}}}'
+      - name: Package
+        run: bash agent/scripts/package.sh macos "$ARCH" "$TARGET" "$VERSION" dist-out
+      - name: Upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: agent-macos-${{ matrix.arch }}
+          path: dist-out/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Checksums & release
+    needs: [version, linux, linux-i686, windows, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Download every build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: agent-*
+          path: release
+          merge-multiple: true
+      - name: Check the asset list and write checksums
+        run: |
+          set -euo pipefail
+          cd release
+          p="salam-agent-$VERSION"
+          expected=()
+          for a in x86_64 aarch64; do
+            expected+=("$p-linux-$a.deb" "$p-linux-$a.rpm" "$p-linux-$a.AppImage" "$p-linux-$a.tar.gz" "$p-linux-$a.zip")
+          done
+          expected+=("$p-linux-i686.deb" "$p-linux-i686.rpm" "$p-linux-i686.tar.gz" "$p-linux-i686.zip")
+          for a in x86_64 i686; do
+            expected+=("$p-windows-$a-setup.exe" "$p-windows-$a.msi" "$p-windows-$a.exe" "$p-windows-$a.zip" "$p-windows-$a.tar.gz")
+          done
+          expected+=("$p-windows-aarch64-setup.exe" "$p-windows-aarch64.exe" "$p-windows-aarch64.zip" "$p-windows-aarch64.tar.gz")
+          for a in arm64 x86_64 universal; do
+            expected+=("$p-macos-$a.dmg" "$p-macos-$a.zip" "$p-macos-$a.tar.gz")
+          done
+          missing=0
+          for f in "${expected[@]}"; do
+            [ -s "$f" ] || { echo "::error::missing release asset $f"; missing=1; }
+          done
+          [ "$missing" -eq 0 ]
+          extra=$(comm -13 <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort) <(find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort))
+          [ -z "$extra" ] || { echo "::error::unexpected files: $extra"; exit 1; }
+
+          : > SHA256SUMS
+          : > SHA512SUMS
+          for f in "${expected[@]}"; do
+            sha256sum "$f" > "$f.sha256"
+            cat "$f.sha256" >> SHA256SUMS
+            sha512sum "$f" >> SHA512SUMS
+          done
+          sha256sum -c SHA256SUMS
+          sha512sum -c SHA512SUMS
+          {
+            echo "### Salam Agent $VERSION checksums (SHA-256)"
+            echo ""
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the release set
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-agent-${{ needs.version.outputs.version }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14

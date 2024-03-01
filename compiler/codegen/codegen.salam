@@ -1,0 +1,186 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package codegen
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include lg "../logger.salam"
+
+pub const CG_MOD_PREFIX := "salam_mod_"
+pub const CG_MEM_ALLOC := "_Salam_mem_Allocate_u64"
+pub const CG_MEM_ALLOC_ZEROED := "_Salam_mem_AllocateZeroed_u64"
+pub const CG_MEM_REALLOC := "_Salam_mem_Reallocate_void_ptr_u64"
+pub const CG_MEM_FREE := "_Salam_mem_Free_void_ptr"
+
+pub const PF_LIT := 0
+pub const PF_STR := 1
+pub const PF_I32 := 2
+pub const PF_U32 := 3
+pub const PF_I64 := 4
+pub const PF_U64 := 5
+pub const PF_SIZE := 6
+pub const PF_F64 := 7
+pub const PF_BOOL := 8
+pub const PF_CHAR := 9
+
+pub const CG_OUT_C := 0
+pub const CG_OUT_H := 1
+pub const CG_OUT_LAMD := 2
+pub const CG_OUT_LAMF := 3
+
+const K_CG_CKW_COUNT := 48
+
+k_cg_ckw := [
+    "auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while", "asm", "bool", "true", "false", "_Bool", "_Complex", "_Imaginary", "_Alignas", "_Alignof", "_Atomic", "_Generic", "_Noreturn", "_Static_assert", "_Thread_local"
+]
+
+k_cg_base_s := [
+    "void", "bool", "char", "str", "uchar", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize", "size", "f32", "f64", "File"
+]
+
+k_cg_base_c := [
+    "void", "bool", "unsigned char", "const char*", "const char*", "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t", "size_t", "intptr_t", "float", "double", "salam_file"
+]
+
+mut g_cg_export_pkg := Vector {} as Vector<str>
+mut g_cg_export_from := Vector {} as Vector<str>
+mut g_cg_export_to := Vector {} as Vector<str>
+mut g_cg_root_pkg := ""
+
+pub struct Output:
+    pub module_name: str = ""
+    pub h_src: str = ""
+    pub c_src: str = ""
+end
+
+pub struct PfSeg:
+    pub kind: int = 0
+    pub text: str = ""
+    pub expr: int = 0
+end
+
+pub struct Cg:
+    pub log: lg.Logger = lg.New(2, false)
+    pub module: str = ""
+    pub bh: str.StringBuilder = str.NewBuilder()
+    pub bc: str.StringBuilder = str.NewBuilder()
+    pub blamd: str.StringBuilder = str.NewBuilder()
+    pub blamf: str.StringBuilder = str.NewBuilder()
+    pub cur: int = 0
+    pub indent: int = 0
+    pub locals: Vector<str> = Vector {}
+    pub cur_struct: int = 0
+    pub cur_fn_home: int = 0
+    pub cur_lit_home: int = 0
+    pub safe: bool = false
+    pub debug_info: bool = false
+    pub single_threaded: bool = false
+    pub out_locked: bool = true
+    pub atomic_guard: bool = false
+    pub src_path: str = ""
+    pub tmpn: int = 0
+    pub cur_sret: bool = false
+    pub cur_is_main: bool = false
+    pub hoist: str = ""
+    pub hoist_pos: i64 = 0
+    pub hoist_active: bool = false
+    pub arg_ovr: HashMap<int, str> = HashMap {}
+    pub vec_types: Vector<str> = Vector {}
+    pub variant_types: Vector<str> = Vector {}
+    pub dyn_ifaces: Vector<str> = Vector {}
+    pub dyn_impls: Vector<str> = Vector {}
+    pub pkg: str = ""
+    pub entry: str = ""
+    pub deferred: Vector<str> = Vector {}
+    pub deferred_globals: Vector<int> = Vector {}
+    pub fn_defers: Vector<int> = Vector {}
+    pub loop_dmark: Vector<int> = Vector {}
+    pub brk_goto: Vector<str> = Vector {}
+    pub loop_end: Vector<str> = Vector {}
+    pub loop_end_used: Vector<str> = Vector {}
+    pub lam_n: int = 0
+    pub clos_n: int = 0
+    pub cur_lambda: int = 0
+    pub is_gui_mode: bool = false
+    pub freestanding: bool = false
+    pub kernel: bool = false
+    pub target_triple: str = ""
+    pub match_result_tmp: str = ""
+    pub match_subj: Vector<str> = Vector {}
+    pub match_end_label: str = ""
+    pub match_result_ctype: str = ""
+    pub compact: bool = false
+    pub in_derive: bool = false
+end
+
+func cg_is_entry_pkg(pkg: str): bool:
+    ret str.Equals(pkg, "main") or (str.Len(g_cg_root_pkg) > 0 and str.Equals(pkg, g_cg_root_pkg))
+end
+
+func cg_export_override(pkg: str, fname: str): str:
+    repeat g_cg_export_from.len() in i:
+        if str.Equals(g_cg_export_pkg.get(i), pkg) and str.Equals(g_cg_export_from.get(i), fname):
+            ret g_cg_export_to.get(i)
+        end
+    end
+    ret ""
+end
+
+inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
+
+func is_digit_b(c: int): bool:
+    ret c >= 48 and c <= 57
+end
+
+func is_alnum_b(c: int): bool:
+    ret (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+end
+
+func span_of(a &: at.Ast, id: int): co.SrcSpan:
+    n := at.Get(a, id)
+    ret co.MakeSpan(
+        co.MakePos(n.begin_line, n.begin_col, n.begin_index), co.MakePos(n.end_line, n.end_col, n.end_index), n.length
+    )
+end
+
+func out(g &: Cg, s: str):
+    if g.cur == CG_OUT_H:
+        str.BufAppend(g.bh, s)
+    else g.cur == CG_OUT_LAMD:
+        str.BufAppend(g.blamd, s)
+    else g.cur == CG_OUT_LAMF:
+        str.BufAppend(g.blamf, s)
+    else:
+        str.BufAppend(g.bc, s)
+    end
+end
+
+func outc(g &: Cg, code: int):
+    if g.cur == CG_OUT_H:
+        str.BufAppendChar(g.bh, code)
+    else g.cur == CG_OUT_LAMD:
+        str.BufAppendChar(g.blamd, code)
+    else g.cur == CG_OUT_LAMF:
+        str.BufAppendChar(g.blamf, code)
+    else:
+        str.BufAppendChar(g.bc, code)
+    end
+end
+
+func outh(g &: Cg, s: str):
+    str.BufAppend(g.bh, s)
+end

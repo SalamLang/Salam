@@ -1,0 +1,131 @@
+#!/bin/sh
+# Builds the self-hosted compiler: compiler/main.salam, compiled by a seed
+# salam, producing a salam binary.
+#
+# This is what replaced `make -C c`. The seed is an already-built compiler -
+# in CI, the released binary .github/actions/setup-salam installs; locally,
+# whatever `salam` is on PATH. It has to be SEED_MIN (0.3.1) or newer, since
+# older releases cannot resolve compiler/'s `../` imports.
+#
+# For a three-stage bootstrap with a fixpoint check, use
+# compiler/tools/bash/bootstrap.sh instead. This is the one-stage version, for
+# jobs that just need a working compiler.
+#
+# Usage:
+#   tools/bash/build-selfhost.sh [--output FILE] [--seed PROG] [--llvm DIR]
+#                                [--embed DIR] [-- <extra salam build args>]
+#
+# Env:
+#   SALAM_SEED   same as --seed
+
+set -eu
+
+OUT=$(pwd)/salam
+SEED=${SALAM_SEED:-}
+LLVM_DIR=
+EMBED_DIR=
+EXTRA=
+
+while [ $# -gt 0 ]; do
+    case $1 in
+    --output=*)
+        OUT=${1#*=}
+        shift
+        ;;
+    --seed=*)
+        SEED=${1#*=}
+        shift
+        ;;
+    --llvm=*)
+        LLVM_DIR=${1#*=}
+        shift
+        ;;
+    --embed=*)
+        EMBED_DIR=${1#*=}
+        shift
+        ;;
+    --output)
+        OUT=$2
+        shift 2
+        ;;
+    --seed)
+        SEED=$2
+        shift 2
+        ;;
+    --llvm)
+        LLVM_DIR=$2
+        shift 2
+        ;;
+    --embed)
+        EMBED_DIR=$2
+        shift 2
+        ;;
+    --)
+        shift
+        EXTRA="$*"
+        break
+        ;;
+    -h | --help)
+        sed -n '2,19p' "$0"
+        exit 0
+        ;;
+    *)
+        echo "unknown argument: $1" >&2
+        exit 2
+        ;;
+    esac
+done
+
+if [ -z "$SEED" ]; then
+    SEED=$(command -v salam 2>/dev/null || true)
+fi
+[ -n "$SEED" ] || {
+    echo "error: no seed compiler on PATH." >&2
+    echo "  The compiler is written in Salam, so building it needs a Salam." >&2
+    echo "  Install a released one:  sh install.sh" >&2
+    echo "  Or point at one:         --seed /path/to/salam  (or \$SALAM_SEED)" >&2
+    echo "  In CI:                   uses: ./.github/actions/setup-salam" >&2
+    exit 1
+}
+
+ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+
+export SALAM_STD="$ROOT/std"
+
+set --
+
+[ -n "$LLVM_DIR" ] && set -- "$@" -DSALAM_HAVE_LLVM "--libpath=$LLVM_DIR"
+[ -n "$EMBED_DIR" ] && set -- "$@" -DSALAM_HAVE_EMBED "--libpath=$EMBED_DIR"
+
+STAMP_VERSION="$(cat "$ROOT/VERSION" 2>/dev/null || echo 0.0.0-dev)"
+STAMP_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+STAMP_DATE="$(git -C "$ROOT" show -s --format=%cI HEAD 2>/dev/null || echo unknown)"
+STAMP_DIRTY=
+if [ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]; then
+    STAMP_DIRTY=-dirty
+fi
+set -- "$@" "-dSALAM_VERSION=\"$STAMP_VERSION\"" "-dSALAM_GIT_COMMIT=\"$STAMP_COMMIT\""
+set -- "$@" "-dSALAM_GIT_DATE=\"$STAMP_DATE\"" "-dSALAM_GIT_DIRTY=\"$STAMP_DIRTY\""
+
+# shellcheck disable=SC2086 # a caller-supplied flag list; splitting is wanted
+[ -n "$EXTRA" ] && set -- "$@" $EXTRA
+
+echo "seed   : $SEED ($("$SEED" version 2>/dev/null | head -1))"
+echo "output : $OUT"
+
+if [ -n "$EMBED_DIR" ]; then
+    echo "stage 1: a plain compiler, to build the embedded one with"
+    "$SEED" build --backend=c "$ROOT/compiler/main.salam" --output="$OUT.stage1"
+    BUILDER=$OUT.stage1
+else
+    BUILDER=$SEED
+fi
+
+"$BUILDER" build "$ROOT/compiler/main.salam" --output="$OUT" "$@"
+rm -f "$OUT.stage1"
+
+[ -x "$OUT" ] || {
+    echo "error: no binary at $OUT after the build" >&2
+    exit 1
+}
+"$OUT" version | head -1

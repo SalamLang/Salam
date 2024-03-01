@@ -1,0 +1,56 @@
+import encoding.protobuf
+import compress
+
+func writeItem(order &: compress.ByteBuf, name: str, qty: int):
+    mut item := compress.NewByteBuf()
+    protobuf.WriteTag(item, 1, protobuf.WT_LEN)
+    protobuf.WriteLenPrefixedStr(item, name)
+    protobuf.WriteTag(item, 2, protobuf.WT_VARINT)
+    protobuf.WriteVarint(item, qty as u64)
+    protobuf.WriteTag(order, 2, protobuf.WT_LEN)
+    protobuf.WriteLenPrefixedBytes(order, item.data, item.len)
+    compress.BufFree(item)
+end
+
+func printItem(b: compress.ByteBuf):
+    mut r := compress.ReaderFromBuf(b)
+    mut ok := true
+    mut name := ""
+    mut qty := 0
+    until compress.RdLeft(r) > 0 and ok:
+        mut number := 0
+        mut wire := 0
+        protobuf.ReadTag(r, number, wire, ok)
+        if number == 1: name = protobuf.ReadLenPrefixedStr(r, ok)
+        else number == 2: qty = protobuf.ReadVarint(r, ok) as int
+        else: protobuf.SkipField(r, wire, ok) end
+    end
+    println "  item", name, "x", qty
+end
+
+func main:
+    mut order := compress.NewByteBuf()
+    protobuf.WriteTag(order, 1, protobuf.WT_VARINT)
+    protobuf.WriteVarint(order, 1001 as u64)
+    writeItem(order, "pen", 3)
+    writeItem(order, "notebook", 1)
+    println "order bytes:", compress.BufLen(order)
+
+    mut r := compress.ReaderFromBuf(order)
+    mut ok := true
+    until compress.RdLeft(r) > 0 and ok:
+        mut number := 0
+        mut wire := 0
+        protobuf.ReadTag(r, number, wire, ok)
+        if number == 1:
+            println "order", protobuf.ReadVarint(r, ok)
+        else number == 2:
+            mut sub := protobuf.ReadLenPrefixedBuf(r, ok)
+            printItem(sub)
+            compress.BufFree(sub)
+        else:
+            protobuf.SkipField(r, wire, ok)
+        end
+    end
+    compress.BufFree(order)
+end

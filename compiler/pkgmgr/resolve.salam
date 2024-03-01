@@ -1,0 +1,352 @@
+package pkgmgr
+
+import os
+import str
+import sort
+
+include pth "../sal_path.salam"
+
+mut g_rs_cons_mod := Vector {} as Vector<str>
+mut g_rs_cons_rule := Vector {} as Vector<str>
+mut g_rs_cons_from := Vector {} as Vector<str>
+
+func strip_quotes(s: str): str:
+    t := str.Trim(s)
+    n := str.Len(t)
+    if n >= 2 and str.StartsWith(t, "\"") and str.EndsWith(t, "\""):
+        ret str.Substr(t, 1, n - 2)
+    end
+    ret t
+end
+
+func line_key(line: str): str:
+    eq_pos := str.IndexOf(line, "=")
+    if eq_pos <= 0:
+        ret ""
+    end
+    ret strip_quotes(str.Substr(line, 0, eq_pos))
+end
+
+func is_header(line: str): bool:
+    ret str.StartsWith(str.Trim(line), "[")
+end
+
+func dep_line(mod: str, version: str): str:
+    ret "\"" + mod + "\" = \"" + version + "\""
+end
+
+func read_lines(path: str): Vector<str>:
+    text := os.ReadFile(path)
+    mut lines := str.Split(text, "\n")
+    if lines.len() > 0 and str.Len(lines.get(lines.len() - 1)) == 0:
+        _last := lines.pop()
+    end
+    ret lines
+end
+
+func write_lines(path: str, lines &: Vector<str>): bool:
+    mut sb := str.NewBuilder()
+    repeat lines.len() in i:
+        str.BufAppend(sb, lines.get(i))
+        str.BufAppend(sb, "\n")
+    end
+    text := str.BufStr(sb)
+    str.BufFree(sb)
+    ret os.WriteFile(path, text) >= 0
+end
+
+func deps_section(lines &: Vector<str>, start &: int, stop &: int):
+    start = 0 - 1
+    stop = lines.len()
+    repeat lines.len() in i:
+        t := str.Trim(lines.get(i))
+        if start < 0:
+            if str.Equals(t, "[dependencies]"):
+                start = i
+            end
+        else is_header(t):
+            stop = i
+            ret
+        end
+    end
+end
+
+func sel_index(mods &: Vector<str>, mod: str): int:
+    repeat mods.len() in i:
+        if str.Equals(mods.get(i), mod):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func require(mods &: Vector<str>, vers &: Vector<str>, todo &: Vector<str>, mod: str, ver: str):
+    k := sel_index(mods, mod)
+    if k >= 0:
+        if CompareVersions(ver, vers.get(k)) <= 0:
+            ret
+        end
+        vers.set(k, ver)
+    else:
+        mods.push(mod)
+        vers.push(ver)
+    end
+    todo.push(mod)
+end
+
+func require_from(dir: str, mods &: Vector<str>, vers &: Vector<str>, todo &: Vector<str>, why &: str): bool:
+    if not os.Exists(pth.PathJoin(dir, MANIFEST_FILE)):
+        ret true
+    end
+    if not CheckSalamVersion(dir, why):
+        ret false
+    end
+    mut deps := Vector {} as Vector<Dep>
+    defer deps.free()
+    if not ReadManifest(dir, deps):
+        why = "cannot read " + pth.PathJoin(dir, MANIFEST_FILE)
+        ret false
+    end
+    repeat deps.len() in i:
+        d := deps.get(i)
+        if str.Len(d.local) > 0 or not IsPathImport(d.path) or str.Len(d.version) == 0:
+            continue
+        end
+        mut need := d.version
+        if IsConstraint(need):
+            g_rs_cons_mod.push(ModuleOf(d.path))
+            g_rs_cons_rule.push(need)
+            g_rs_cons_from.push(dir)
+            need = ConstraintMin(need)
+        end
+        require(mods, vers, todo, ModuleOf(d.path), need)
+    end
+    ret true
+end
+
+func write_lock(root: str, mods &: Vector<str>, vers &: Vector<str>, commits &: Vector<str>, sums &: Vector<str>): bool:
+    mut order := Vector {} as Vector<str>
+    defer order.free()
+    repeat mods.len() in i:
+        order.push(mods.get(i))
+    end
+    sort.Sort(order)
+    mut lines := Vector {} as Vector<str>
+    defer lines.free()
+    lines.push("# Written by salam add, remove and update. Do not edit by hand.")
+    repeat order.len() in j:
+        k := sel_index(mods, order.get(j))
+        lines.push("")
+        lines.push("[[package]]")
+        lines.push("path = \"" + mods.get(k) + "\"")
+        lines.push("version = \"" + vers.get(k) + "\"")
+        if str.Len(commits.get(k)) > 0:
+            lines.push("commit = \"" + commits.get(k) + "\"")
+        end
+        lines.push("sum = \"" + sums.get(k) + "\"")
+    end
+    ret write_lines(pth.PathJoin(root, LOCK_FILE), lines)
+end
+
+pub func SetDependency(root: str, mod: str, version: str): bool:
+    path := pth.PathJoin(root, MANIFEST_FILE)
+    mut lines := read_lines(path)
+    defer lines.free()
+    mut start := 0
+    mut stop := 0
+    deps_section(lines, start, stop)
+    if start < 0:
+        if lines.len() > 0 and str.Len(str.Trim(lines.get(lines.len() - 1))) > 0:
+            lines.push("")
+        end
+        lines.push("[dependencies]")
+        lines.push(dep_line(mod, version))
+        ret write_lines(path, lines)
+    end
+    mut i := start + 1
+    until i < stop:
+        if str.Equals(line_key(lines.get(i)), mod):
+            if str.Contains(lines.get(i), "{"):
+                ret true
+            end
+            lines.set(i, dep_line(mod, version))
+            ret write_lines(path, lines)
+        end
+        i += 1
+    end
+    mut at_line := stop
+    until at_line > start + 1 and str.Len(str.Trim(lines.get(at_line - 1))) == 0:
+        at_line -= 1
+    end
+    lines.insert(at_line, dep_line(mod, version))
+    ret write_lines(path, lines)
+end
+
+pub func RemoveDependency(root: str, mod: str): bool:
+    path := pth.PathJoin(root, MANIFEST_FILE)
+    mut lines := read_lines(path)
+    defer lines.free()
+    mut start := 0
+    mut stop := 0
+    deps_section(lines, start, stop)
+    if start < 0:
+        ret false
+    end
+    mut i := start + 1
+    until i < stop:
+        if str.Equals(line_key(lines.get(i)), mod):
+            _gone := lines.remove_at(i)
+            ret write_lines(path, lines)
+        end
+        i += 1
+    end
+    ret false
+end
+
+pub func Resolve(root: str, why &: str): bool:
+    mut old := Vector {} as Vector<Dep>
+    defer old.free()
+    _had := ReadLock(root, old)
+    repeat old.len() in oi:
+        RememberCommit(old.get(oi).path, old.get(oi).version, old.get(oi).commit)
+    end
+    mut mods := Vector {} as Vector<str>
+    mut vers := Vector {} as Vector<str>
+    mut todo := Vector {} as Vector<str>
+    defer mods.free()
+    defer vers.free()
+    defer todo.free()
+    g_rs_cons_mod.clear()
+    g_rs_cons_rule.clear()
+    g_rs_cons_from.clear()
+    if not require_from(root, mods, vers, todo, why):
+        ret false
+    end
+    mut deps := Vector {} as Vector<Dep>
+    defer deps.free()
+    _ok := ReadManifest(root, deps)
+    repeat deps.len() in pi:
+        pd := deps.get(pi)
+        if str.Len(pd.local) > 0 or not IsPathImport(pd.path):
+            continue
+        end
+        pmod := ModuleOf(pd.path)
+        pinned := PinnedVersion(pmod)
+        if str.Len(pinned) > 0:
+            require(mods, vers, todo, pmod, pinned)
+            continue
+        end
+        if IsConstraint(pd.version):
+            repeat old.len() in lj:
+                lo := old.get(lj)
+                if str.Equals(lo.path, pmod) and ConstraintAllows(pd.version, lo.version):
+                    require(mods, vers, todo, pmod, lo.version)
+                end
+            end
+        end
+    end
+    repeat deps.len() in i:
+        d := deps.get(i)
+        if str.Len(d.local) > 0:
+            mut ldir := d.local
+            if not pth.PathIsAbs(ldir):
+                ldir = pth.PathNormalize(pth.PathJoin(root, ldir))
+            end
+            if not require_from(ldir, mods, vers, todo, why):
+                ret false
+            end
+        end
+    end
+    mut commits := Vector {} as Vector<str>
+    defer commits.free()
+    mut guard := 0
+    until todo.len() > 0 and guard < 10000:
+        guard += 1
+        mod := todo.pop()
+        k := sel_index(mods, mod)
+        ver := vers.get(k)
+        mut commit := ""
+        repeat old.len() in j:
+            o := old.get(j)
+            if str.Equals(o.path, mod) and str.Equals(o.version, ver):
+                commit = o.commit
+            end
+        end
+        if not Fetch(mod, ver, commit, why):
+            ret false
+        end
+        if not require_from(VersionDir(mod, ver), mods, vers, todo, why):
+            ret false
+        end
+    end
+    repeat g_rs_cons_mod.len() in ci:
+        cm := g_rs_cons_mod.get(ci)
+        ck := sel_index(mods, cm)
+        if ck >= 0 and not ConstraintAllows(g_rs_cons_rule.get(ci), vers.get(ck)):
+            why = g_rs_cons_from.get(ci) + " needs " + cm + " " + g_rs_cons_rule.get(ci) + ", but " + vers.get(ck) + " is required elsewhere in the build"
+            ret false
+        end
+    end
+    mut sums := Vector {} as Vector<str>
+    defer sums.free()
+    repeat mods.len() in m:
+        mod := mods.get(m)
+        ver := vers.get(m)
+        mut commit := ""
+        repeat old.len() in j:
+            o := old.get(j)
+            if str.Equals(o.path, mod) and str.Equals(o.version, ver):
+                commit = o.commit
+            end
+        end
+        if str.Len(commit) == 0:
+            commit = KnownCommit(mod, ver)
+        end
+        commits.push(commit)
+        dsum := DirSum(VersionDir(mod, ver))
+        if not CheckAndRecordSum(mod, ver, dsum, why):
+            ret false
+        end
+        sums.push(dsum)
+    end
+    if not write_lock(root, mods, vers, commits, sums):
+        why = "cannot write " + pth.PathJoin(root, LOCK_FILE)
+        ret false
+    end
+    SetProjectRoot(root)
+    ret true
+end
+
+pub func Sync(root: str, fetched &: int, why &: str): bool:
+    mut locked := Vector {} as Vector<Dep>
+    defer locked.free()
+    _have := ReadLock(root, locked)
+    repeat locked.len() in i:
+        d := locked.get(i)
+        if not IsPathImport(d.path):
+            continue
+        end
+        dir := VersionDir(d.path, d.version)
+        if not os.IsDir(dir):
+            mut commit := d.commit
+            if not Fetch(d.path, d.version, commit, why):
+                ret false
+            end
+            fetched += 1
+        end
+        if not CheckSalamVersion(dir, why):
+            ret false
+        end
+        if str.Len(d.sum) > 0:
+            got := DirSum(dir)
+            if not str.Equals(got, d.sum):
+                why = "checksum mismatch for " + d.path + " " + d.version + ": salam.lock has " + d.sum + ", the download has " + got
+                ret false
+            end
+            if not CheckAndRecordSum(d.path, d.version, got, why):
+                ret false
+            end
+        end
+    end
+    ret true
+end

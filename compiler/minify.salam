@@ -1,0 +1,422 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package minify
+
+import str
+
+include co "sal_core.salam"
+
+g_mn_pairs := "++--+=-=*=/=%===!=<=>=&&||**=><<>>???..."
+g_mn_css_drop_prev := "{}:;,>+~("
+g_mn_css_drop_next := "{}:;,>+~)"
+
+func byte_at(s: str, i: int): int:
+    bp := (s as void*) as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+func is_space(c: int): bool:
+    ret c == 32 or c == 9 or c == 10 or c == 11 or c == 12 or c == 13
+end
+
+func is_digit(c: int): bool:
+    ret c >= 48 and c <= 57
+end
+
+func is_alpha(c: int): bool:
+    ret (c >= 97 and c <= 122) or (c >= 65 and c <= 90)
+end
+
+func is_alnum(c: int): bool:
+    ret is_alpha(c) or is_digit(c)
+end
+
+func js_word_char(c: int): bool:
+    ret is_alnum(c) or c == 95 or c == 36
+end
+
+func sb_len(out &: str.StringBuilder): int:
+    ret str.BufLen(out) as int
+end
+
+func sb_byte(out &: str.StringBuilder, i: int): int:
+    p := out.data as i8*
+    mut v := p[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+func sb_last(out &: str.StringBuilder): int:
+    n := sb_len(out)
+    if n == 0:
+        ret 0
+    end
+    ret sb_byte(out, n - 1)
+end
+
+func sb_drop(out &: str.StringBuilder):
+    if out.len > 0:
+        out.len = out.len - 1
+    end
+end
+
+func sb_trim_ws(out &: str.StringBuilder):
+    until sb_len(out) > 0 and is_space(sb_last(out)):
+        sb_drop(out)
+    end
+end
+
+func in_set(set: str, c: int): bool:
+    m := set.len()
+    mut k := 0
+    until k < m:
+        if byte_at(set, k) == c:
+            ret true
+        end
+        k += 1
+    end
+    ret false
+end
+
+func comment_end(s: str, from: int, n: int): int:
+    mut j := from
+    until j + 1 < n:
+        if byte_at(s, j) == 42 and byte_at(s, j + 1) == 47:
+            ret j + 2
+        end
+        j += 1
+    end
+    ret n
+end
+
+func js_copy_string(out &: str.StringBuilder, s: str, i0: int, n: int): int:
+    mut i := i0
+    q := byte_at(s, i)
+    co.SbPutc(out, q)
+    i += 1
+    until i < n:
+        c := byte_at(s, i)
+        if c == 92 and i + 1 < n:
+            co.SbPutc(out, c)
+            co.SbPutc(out, byte_at(s, i + 1))
+            i += 2
+            continue
+        end
+        co.SbPutc(out, c)
+        i += 1
+        if c == q:
+            break
+        end
+    end
+    ret i
+end
+
+func js_copy_expr_hole(out &: str.StringBuilder, s: str, i0: int, n: int): int:
+    mut i := i0
+    mut depth := 1
+    co.SbPutc(out, byte_at(s, i))
+    co.SbPutc(out, byte_at(s, i + 1))
+    i += 2
+    until i < n and depth > 0:
+        c := byte_at(s, i)
+        if c == 123:
+            depth += 1
+            co.SbPutc(out, c)
+            i += 1
+            continue
+        end
+        if c == 125:
+            depth -= 1
+            co.SbPutc(out, c)
+            i += 1
+            continue
+        end
+        if c == 34 or c == 39:
+            i = js_copy_string(out, s, i, n)
+            continue
+        end
+        if c == 96:
+            i = js_copy_template(out, s, i, n)
+            continue
+        end
+        co.SbPutc(out, c)
+        i += 1
+    end
+    ret i
+end
+
+func js_copy_template(out &: str.StringBuilder, s: str, i0: int, n: int): int:
+    mut i := i0
+    co.SbPutc(out, byte_at(s, i))
+    i += 1
+    until i < n:
+        c := byte_at(s, i)
+        if c == 92 and i + 1 < n:
+            co.SbPutc(out, c)
+            co.SbPutc(out, byte_at(s, i + 1))
+            i += 2
+            continue
+        end
+        if c == 96:
+            co.SbPutc(out, c)
+            i += 1
+            break
+        end
+        if c == 36 and i + 1 < n and byte_at(s, i + 1) == 123:
+            i = js_copy_expr_hole(out, s, i, n)
+            continue
+        end
+        co.SbPutc(out, c)
+        i += 1
+    end
+    ret i
+end
+
+func js_copy_regex(out &: str.StringBuilder, s: str, i0: int, n: int): int:
+    start := i0
+    mut in_class := false
+    mut i := i0 + 1
+    until i < n:
+        c := byte_at(s, i)
+        if c == 92 and i + 1 < n:
+            i += 2
+            continue
+        end
+        if c == 91:
+            in_class = true
+            i += 1
+            continue
+        end
+        if c == 93:
+            in_class = false
+            i += 1
+            continue
+        end
+        if c == 47 and not in_class:
+            i += 1
+            break
+        end
+        if c == 10:
+            break
+        end
+        i += 1
+    end
+    until i < n and is_alpha(byte_at(s, i)):
+        i += 1
+    end
+    mut k := start
+    until k < i:
+        co.SbPutc(out, byte_at(s, k))
+        k += 1
+    end
+    ret i
+end
+
+func js_ends_with_word(out &: str.StringBuilder, jlen: int, word: str): bool:
+    wl := word.len()
+    if jlen < wl:
+        ret false
+    end
+    mut t := 0
+    until t < wl:
+        if sb_byte(out, jlen - wl + t) != byte_at(word, t):
+            ret false
+        end
+        t += 1
+    end
+    if jlen > wl:
+        before := sb_byte(out, jlen - wl - 1)
+        if js_word_char(before):
+            ret false
+        end
+    end
+    ret true
+end
+
+func js_regex_allowed(out &: str.StringBuilder): bool:
+    mut j := sb_len(out)
+    until j > 0 and is_space(sb_byte(out, j - 1)):
+        j -= 1
+    end
+    if j == 0:
+        ret true
+    end
+    c := sb_byte(out, j - 1)
+    if js_word_char(c):
+        kw := [
+            "return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await", "if", "while"
+        ]
+        each w in kw:
+            if js_ends_with_word(out, j, w):
+                ret true
+            end
+        end
+        ret false
+    end
+    if c == 41 or c == 93:
+        ret false
+    end
+    ret true
+end
+
+func js_needs_space(prevc: int, nextc: int): bool:
+    if prevc == 0 or nextc == 0:
+        ret false
+    end
+    if js_word_char(prevc) and js_word_char(nextc):
+        ret true
+    end
+    if is_digit(prevc) and nextc == 46:
+        ret true
+    end
+    if prevc == 46 and is_digit(nextc):
+        ret true
+    end
+    m := g_mn_pairs.len()
+    mut k := 0
+    until k < m:
+        if byte_at(g_mn_pairs, k) == prevc and byte_at(g_mn_pairs, k + 1) == nextc:
+            ret true
+        end
+        k += 2
+    end
+    if prevc == 47 and (nextc == 47 or nextc == 42):
+        ret true
+    end
+    if prevc == 42 and nextc == 47:
+        ret true
+    end
+    ret false
+end
+
+pub func Js(src: str): str:
+    mut out := co.SbNew()
+    n := src.len()
+    mut i := 0
+    until i < n:
+        c := byte_at(src, i)
+        if c == 47 and i + 1 < n and byte_at(src, i + 1) == 47:
+            i += 2
+            until i < n and byte_at(src, i) != 10:
+                i += 1
+            end
+            continue
+        end
+        if c == 47 and i + 1 < n and byte_at(src, i + 1) == 42:
+            i = comment_end(src, i + 2, n)
+            continue
+        end
+        if c == 34 or c == 39:
+            i = js_copy_string(out, src, i, n)
+            continue
+        end
+        if c == 96:
+            i = js_copy_template(out, src, i, n)
+            continue
+        end
+        if c == 47 and js_regex_allowed(out):
+            i = js_copy_regex(out, src, i, n)
+            continue
+        end
+        if is_space(c):
+            mut j := i
+            until j < n and is_space(byte_at(src, j)):
+                j += 1
+            end
+            prevc := sb_last(out)
+            nextc := j < n ? byte_at(src, j) : 0
+            if js_needs_space(prevc, nextc):
+                co.SbPutc(out, 32)
+            end
+            i = j
+            continue
+        end
+        co.SbPutc(out, c)
+        i += 1
+    end
+    sb_trim_ws(out)
+    res := co.Strdup(co.SbCstr(out))
+    co.SbFree(out)
+    ret res
+end
+
+pub func Css(src: str): str:
+    mut out := co.SbNew()
+    n := src.len()
+    mut i := 0
+    mut paren_depth := 0
+    until i < n:
+        c := byte_at(src, i)
+        if c == 47 and i + 1 < n and byte_at(src, i + 1) == 42:
+            i = comment_end(src, i + 2, n)
+            continue
+        end
+        if c == 39 or c == 34:
+            i = js_copy_string(out, src, i, n)
+            continue
+        end
+        if c == 40:
+            paren_depth += 1
+        end
+        if c == 41 and paren_depth > 0:
+            paren_depth -= 1
+        end
+        if is_space(c):
+            mut j := i
+            until j < n and is_space(byte_at(src, j)):
+                j += 1
+            end
+            prevc := sb_last(out)
+            nextc := j < n ? byte_at(src, j) : 0
+            mut drop := false
+            if paren_depth > 0:
+                drop = prevc == 0 or prevc == 40 or nextc == 41
+            else:
+                drop = prevc == 0 or nextc == 0 or in_set(g_mn_css_drop_prev, prevc) or in_set(g_mn_css_drop_next, nextc)
+            end
+            if not drop:
+                co.SbPutc(out, 32)
+            end
+            i = j
+            continue
+        end
+        if c == 125:
+            if sb_last(out) == 59:
+                sb_drop(out)
+            end
+            if sb_last(out) == 32:
+                sb_drop(out)
+            end
+        else (
+            c == 123 or c == 58 or c == 59 or c == 44 or c == 62 or c == 43 or c == 126
+        ) and paren_depth == 0:
+            if sb_last(out) == 32:
+                sb_drop(out)
+            end
+        end
+        co.SbPutc(out, c)
+        i += 1
+    end
+    sb_trim_ws(out)
+    res := co.Strdup(co.SbCstr(out))
+    co.SbFree(out)
+    ret res
+end

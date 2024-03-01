@@ -1,0 +1,181 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package excel
+
+import encoding.json
+import str
+
+func _json_ws(s: str, i: int): int:
+    n := s.len()
+    bp := _bp(s)
+    mut p := i
+    until p < n:
+        c := _ub(bp, p)
+        if c != 32 and c != 9 and c != 10 and c != 13: ret p end
+        p += 1
+    end
+    ret p
+end
+
+func _json_parse_string(s: str, i: int, out_val &: str): int:
+    n := s.len()
+    bp := _bp(s)
+    if i >= n or _ub(bp, i) != 34: ret -1 end
+    mut p := i + 1
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    until p < n:
+        c := _ub(bp, p)
+        if c == 34:
+            out_val = str.BufStr(sb)
+            ret p + 1
+        end
+        if c == 92 and p + 1 < n:
+            nc := _ub(bp, p + 1)
+            if nc == 34: str.BufAppendChar(sb, 34)
+            else nc == 92: str.BufAppendChar(sb, 92)
+            else nc == 110: str.BufAppendChar(sb, 10)
+            else nc == 116: str.BufAppendChar(sb, 9)
+            else nc == 114: str.BufAppendChar(sb, 13)
+            else:
+                str.BufAppendChar(sb, nc)
+            end
+            p += 2
+        else:
+            str.BufAppendChar(sb, c)
+            p += 1
+        end
+    end
+    ret -1
+end
+
+func _json_parse_token(s: str, i: int, out_val &: str): int:
+    n := s.len()
+    bp := _bp(s)
+    mut p := i
+    until p < n:
+        c := _ub(bp, p)
+        if c == 44 or c == 93 or c == 32 or c == 9 or c == 10 or c == 13: break end
+        p += 1
+    end
+    out_val = s.substr(i, p - i)
+    ret p
+end
+
+func _json_parse_value(s: str, i: int, out_val &: str): int:
+    p := _json_ws(s, i)
+    n := s.len()
+    if p >= n: ret -1 end
+    bp := _bp(s)
+    if _ub(bp, p) == 34: ret _json_parse_string(s, p, out_val) end
+    ret _json_parse_token(s, p, out_val)
+end
+
+func _json_parse_row_array(s: str, i: int, out &: Vector<str>): int:
+    mut p := _json_ws(s, i)
+    n := s.len()
+    if p >= n: ret -1 end
+    bp := _bp(s)
+    if _ub(bp, p) != 91: ret -1 end
+    p += 1
+    p = _json_ws(s, p)
+    if p < n and _ub(bp, p) == 93: ret p + 1 end
+    until true:
+        mut val := ""
+        p = _json_parse_value(s, p, val)
+        if p < 0: ret -1 end
+        out.push(val)
+        p = _json_ws(s, p)
+        if p >= n: ret -1 end
+        c := _ub(bp, p)
+        if c == 44:
+            p += 1
+            p = _json_ws(s, p)
+        else c == 93:
+            ret p + 1
+        else:
+            ret -1
+        end
+    end
+end
+
+@en "SheetToJSON"
+@fa "برگه به جیسون"
+pub func SheetToJSON(sheet: Sheet): str:
+    mut rows := Vector {} as Vector<str>
+    defer rows.free()
+    nr := sheet.row_count()
+    nc := sheet.col_count()
+    mut r := 0
+    until r < nr:
+        mut cells := Vector {} as Vector<str>
+        mut c := 0
+        until c < nc:
+            cells.push(json.Str(sheet.get_string(r, c)))
+            c += 1
+        end
+        rows.push(json.Array(cells))
+        cells.free()
+        r += 1
+    end
+    out := json.Array(rows)
+    ret out
+end
+
+@en "JSONToSheet"
+@fa "جیسون به برگه"
+pub func JSONToSheet(text: str, sheet_name: str): Sheet:
+    mut sh := NewSheet(sheet_name)
+    n := text.len()
+    p := _json_ws(text, 0)
+    if p >= n: ret sh end
+    bp := _bp(text)
+    if _ub(bp, p) != 91: ret sh end
+    mut pos := p + 1
+    pos = _json_ws(text, pos)
+    if pos < n and _ub(bp, pos) == 93: ret sh end
+
+    mut row := 0
+    mut go := true
+    until go:
+        mut fields := Vector {} as Vector<str>
+        np := _json_parse_row_array(text, pos, fields)
+        if np < 0:
+            fields.free()
+            go = false
+        else:
+            mut c := 0
+            until c < fields.len():
+                sh.set_string(row, c, fields.get(c))
+                c += 1
+            end
+            fields.free()
+            pos = _json_ws(text, np)
+            if pos >= n:
+                go = false
+            else:
+                cc := _ub(bp, pos)
+                if cc == 44:
+                    pos += 1
+                    pos = _json_ws(text, pos)
+                    row += 1
+                else:
+                    go = false
+                end
+            end
+        end
+    end
+    ret sh
+end

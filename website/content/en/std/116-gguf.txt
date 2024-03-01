@@ -1,0 +1,129 @@
+pkg.en = gguf
+pkg.name = gguf
+pkg.group = Machine learning
+pkg.summary = Reading GGUF model files, the llama.cpp format.
+pkg.title = The gguf package in Salam | llama.cpp models
+pkg.description = The gguf package in Salam: reading the metadata and tensors of GGUF language models such as Llama and Qwen, and unpacking F16 and quantised weights, with an example.
+pkg.import = gguf
+pkg.intro <<
+<p>GGUF is the file format of llama.cpp for large language models. One file holds the metadata (the architecture, the sizes, the tokenizer vocabulary, the chat template) and every weight, usually quantized to 8 or 4 bits. This package reads such a file: <code>LoadGguf</code> parses the header and the tensor list, <code>meta_int</code> and <code>meta_str</code> read the metadata, and <code>LoadTensorF32</code> turns one weight into a <a href="/std/tensor/">tensor</a> of 32 bit floats when you need it.</p>
+<p>It is a file reader, not an inference engine. To generate text from a model, use <a href="/std/llm/">llm</a>, which builds on it. Models exported from PyTorch as ONNX go through <a href="/std/onnx/">onnx</a> instead.</p>
+<h3>Limits to know before you download a model</h3>
+<ul>
+<li><code>LoadGguf</code> reads the <em>whole file</em> into memory first, and a buffer holds at most 2 GB. Pick files under 2 GB: TinyLlama 1.1B, Qwen 0.5B or 1.5B and other small models.</li>
+<li>Only five weight types can be read: <code>F32</code>, <code>F16</code>, <code>Q8_0</code>, <code>Q4_0</code> and <code>Q4_1</code>. The K-quants that most downloads use, such as <code>Q4_K_M</code> or <code>Q5_K_S</code>, and BF16 are not supported: <code>TensorBytes</code> returns -1 for them and <code>LoadTensorF32</code> fails. Download the <code>Q8_0</code> or <code>Q4_0</code> file of a model.</li>
+<li>Dimensions are stored fastest first, the order llama.cpp uses. <code>LoadTensorF32</code> reverses them, so a weight listed as <code>4096 x 32000</code> becomes a tensor of 32000 rows of 4096.</li>
+<li><code>ParseGguf</code> takes ownership of the buffer you give it; the model's <code>free</code> releases it.</li>
+</ul>
+<p>The examples build small files in memory, so they run without a download.</p>
+<h2 id="guide-inspect">What is in a model file</h2>
+<p>Everything llama.cpp needs to know about a model is in the metadata, under keys named after the architecture: <code>llama.block_count</code> is the number of layers, <code>llama.context_length</code> the longest prompt it was trained for. Read <code>general.architecture</code> first and build the other keys from it, so the same tool works for Qwen, Gemma or Phi files. <code>meta_int</code> and <code>meta_str</code> take a default or return an empty string for a missing key, so a key a file lacks never stops the program.</p>
+<p>Download a small quantized model, for example a TinyLlama or Qwen <code>Q4_0</code> or <code>Q8_0</code> file from Hugging Face, and run:</p>
+<pre class="code" dir="ltr"><code>salam build gguf-guide-inspect.salam
+./gguf-guide-inspect tinyllama-1.1b-chat.Q8_0.gguf</code></pre>
+{{example.gguf-guide-inspect}}
+<p>No weight is converted here, but <code>LoadGguf</code> still reads the whole file into memory, so just opening a 1 GB model takes 1 GB of memory. The vocabulary is a string array in <code>tokenizer.ggml.tokens</code>, and <code>tokenizer.chat_template</code> holds the Jinja template that turns a conversation into the model's prompt format.</p>
+
+<h2 id="guide-sizes">How much space a weight takes</h2>
+<p>Quantization stores weights in fewer bits. <code>Q8_0</code> keeps blocks of 32 weights as 8 bit integers plus one 16 bit scale, which is 34 bytes per block, or 8.5 bits per weight; <code>Q4_0</code> packs the same block into 18 bytes, 4.5 bits per weight. <code>TensorBytes</code> gives the stored size of any tensor. The program below writes a file with one 64 weight tensor of each readable kind except <code>Q4_1</code>, which keeps a minimum next to the scale and takes 20 bytes per block.</p>
+{{example.gguf-guide-sizes}}
+<p>These numbers predict the memory a model needs: a seven billion weight model takes about 28 GB in <code>F32</code>, 14 GB in <code>F16</code>, 7.4 GB in <code>Q8_0</code> and 3.9 GB in <code>Q4_0</code>, before the cache for the context. <code>LoadTensorF32</code> expands any of these kinds back to 32 bit floats when you need the values. Those sizes are for the file; this package needs the whole file in memory and, for every tensor you load, four bytes per weight on top.</p>
+
+<h2 id="guide-weights">Reading a weight</h2>
+<p><code>tensor_index</code> finds a tensor by name and <code>LoadTensorF32</code> expands it. The program writes a <code>Q8_0</code> token embedding table for two tokens of 32 values each: every block is one 16 bit scale (about 0.1 here) followed by 32 signed bytes, and each weight is the scale times its byte. Row 1 of the table is the embedding of token 1.</p>
+{{example.gguf-guide-weights}}
+<p>The file lists the dimensions as <code>32 x 2</code>, fastest first, and the loaded tensor has the shape <code>2 x 32</code>, one row per token, so <code>at2(token, j)</code> reads one value. The values come out as 3.599 rather than 3.6 because the scale itself is stored as a 16 bit float: quantization error is part of the format. A real model's table has one row per vocabulary entry; look the token text up in the <code>tokenizer.ggml.tokens</code> array to find its row.</p>
+
+<h2 id="guide-errors">Bad files and missing keys</h2>
+<p>Parsing reports failure through its <code>ok</code> argument and a short message in <code>error</code>. A model with nothing in it is still valid; looking up a key or a tensor it does not have gives an empty string, your default, or <code>-1</code> for an index. Check the index before you use it with <code>values</code> or <code>tensors</code>.</p>
+{{example.gguf-guide-errors}}
+<p><code>ParseGguf</code> takes ownership of the buffer you give it, and the model's <code>free</code> releases it. Do not also call <code>BufFree</code> on it: freeing it twice crashes the program.</p>
+>>
+
+doc.GGML_F32 = Weight type: 32 bit float.
+doc.GGML_F16 = Weight type: 16 bit float.
+doc.GGML_Q4_0 = Weight type: 4 bit quantised with a scale.
+doc.GGML_Q4_1 = Weight type: 4 bit quantised with a scale and a minimum.
+doc.GGML_Q8_0 = Weight type: 8 bit quantised.
+doc.META_STRING = Metadata type: a string.
+doc.META_ARRAY = Metadata type: an array.
+doc.MetaValue = One metadata value.
+doc.MetaValue.kind = The type.
+doc.MetaValue.elem_kind = The type of the elements, for an array.
+doc.MetaValue.i = The integer value.
+doc.MetaValue.f = The float value.
+doc.MetaValue.s = The string.
+doc.MetaValue.ints = The integer array.
+doc.MetaValue.floats = The float array.
+doc.MetaValue.strs = The string array, such as the tokenizer vocabulary.
+doc.MetaValue.free = Frees the value.
+doc.TensorInfo = The information about one tensor in the file.
+doc.TensorInfo.name = The name, such as <code>blk.0.attn_q.weight</code>.
+doc.TensorInfo.dims = The dimensions.
+doc.TensorInfo.ggml_type = The weight type, one of the constants above.
+doc.TensorInfo.offset = Where the data sits, from the start of the data section.
+doc.TensorInfo.count = The number of elements.
+doc.TensorInfo.free = Frees it.
+doc.Gguf = A parsed GGUF file.
+doc.Gguf.version = The format version.
+doc.Gguf.keys = The metadata keys.
+doc.Gguf.values = The values, in the same order as the keys.
+doc.Gguf.tensors = The tensors.
+doc.Gguf.alignment = The data alignment.
+doc.Gguf.data_offset = Where the data section starts in the file.
+doc.Gguf.raw = The bytes of the whole file, kept in memory.
+doc.Gguf.error = The error message.
+doc.Gguf.ok = It was read correctly.
+doc.Gguf.meta_index = The index of a metadata key; -1 when there is none.
+doc.Gguf.meta_int = An integer metadata value, or the default value.
+doc.Gguf.meta_str = A string metadata value.
+doc.Gguf.tensor_index = The index of the tensor with this name.
+doc.Gguf.free = Frees all of it.
+doc.ParseGguf = Reads the file from a buffer; the buffer belongs to the result from then on.
+doc.LoadGguf = Reads a <code>.gguf</code> file. The whole file is loaded into memory, so it must be smaller than 2 GB.
+doc.TensorBytes = The size of the tensor data in bytes; -1 for a weight type this package cannot read, such as the K-quants.
+doc.LoadTensorF32 = Converts the tensor to 32 bit floats, unpacking F16, Q8_0, Q4_0 and Q4_1, with the dimensions reversed so the last one stored becomes the first. <code>ok</code> is false for any other weight type.
+
+ex.GGML_F32 = gguf-Read
+ex.GGML_F16 = gguf-Read
+ex.GGML_Q4_0 = gguf-Read
+ex.GGML_Q4_1 = gguf-Read
+ex.GGML_Q8_0 = gguf-Read
+ex.META_STRING = gguf-Read
+ex.META_ARRAY = gguf-Read
+ex.MetaValue = gguf-Read
+ex.MetaValue.kind = gguf-Read
+ex.MetaValue.elem_kind = gguf-Read
+ex.MetaValue.i = gguf-Read
+ex.MetaValue.f = gguf-Read
+ex.MetaValue.s = gguf-Read
+ex.MetaValue.ints = gguf-Read
+ex.MetaValue.floats = gguf-Read
+ex.MetaValue.strs = gguf-Read
+ex.MetaValue.free = gguf-Read
+ex.TensorInfo = gguf-Read
+ex.TensorInfo.name = gguf-Read
+ex.TensorInfo.dims = gguf-Read
+ex.TensorInfo.ggml_type = gguf-Read
+ex.TensorInfo.offset = gguf-Read
+ex.TensorInfo.count = gguf-Read
+ex.TensorInfo.free = gguf-Read
+ex.Gguf = gguf-Read
+ex.Gguf.version = gguf-Read
+ex.Gguf.keys = gguf-Read
+ex.Gguf.values = gguf-Read
+ex.Gguf.tensors = gguf-Read
+ex.Gguf.alignment = gguf-Read
+ex.Gguf.data_offset = gguf-Read
+ex.Gguf.raw = gguf-Read
+ex.Gguf.error = gguf-Read
+ex.Gguf.ok = gguf-Read
+ex.Gguf.meta_index = gguf-Read
+ex.Gguf.meta_int = gguf-Read
+ex.Gguf.meta_str = gguf-Read
+ex.Gguf.tensor_index = gguf-Read
+ex.Gguf.free = gguf-Read
+ex.ParseGguf = gguf-Read
+ex.LoadGguf = gguf-Read
+ex.TensorBytes = gguf-Read
+ex.LoadTensorF32 = gguf-Read

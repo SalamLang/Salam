@@ -1,0 +1,226 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "onnx"
+@fa "اونیکس"
+package onnx
+
+import archive
+import compress
+import mem
+import str
+import tensor
+
+@en "Attr"
+@fa "ویژگی"
+pub struct Attr:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "kind"
+    @fa "گونه"
+    pub kind: int = 0
+    @en "f"
+    @fa "مقدار اعشاری"
+    pub f: f64 = 0.0
+    @en "i"
+    @fa "مقدار صحیح"
+    pub i: i64 = 0
+    @en "s"
+    @fa "مقدار رشته"
+    pub s: str = ""
+    @en "t"
+    @fa "مقدار تانسور"
+    pub t: tensor.Tensor = tensor.Tensor {}
+    @en "floats"
+    @fa "فهرست اعشاری"
+    pub floats: Vector<f64> = Vector {}
+    @en "ints"
+    @fa "فهرست صحیح"
+    pub ints: Vector<i64> = Vector {}
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        this.t.free()
+        this.floats.free()
+        this.ints.free()
+        _free_wire_str(this.name)
+        _free_wire_str(this.s)
+    end
+end
+
+@en "Node"
+@fa "گره"
+pub struct Node:
+    @en "op"
+    @fa "عملگر"
+    pub op: str = ""
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "inputs"
+    @fa "ورودی‌ها"
+    pub inputs: Vector<str> = Vector {}
+    @en "outputs"
+    @fa "خروجی‌ها"
+    pub outputs: Vector<str> = Vector {}
+    @en "attrs"
+    @fa "ویژگی‌ها"
+    pub attrs: Vector<Attr> = Vector {}
+
+    @en "attr_index"
+    @fa "نمایه ویژگی"
+    pub func attr_index(name: str): int:
+        repeat this.attrs.len() in i:
+            a := this.attrs.get(i)
+            if str.Equals(a.name, name): ret i end
+        end
+        ret 0 - 1
+    end
+
+    @en "attr_int"
+    @fa "ویژگی صحیح"
+    pub func attr_int(name: str, dflt: i64): i64:
+        k := this.attr_index(name)
+        if k < 0: ret dflt end
+        ret this.attrs.get(k).i
+    end
+
+    @en "attr_float"
+    @fa "ویژگی اعشاری"
+    pub func attr_float(name: str, dflt: f64): f64:
+        k := this.attr_index(name)
+        if k < 0: ret dflt end
+        ret this.attrs.get(k).f
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        _free_wire_strs(this.inputs)
+        _free_wire_strs(this.outputs)
+        _free_wire_str(this.op)
+        _free_wire_str(this.name)
+        repeat this.attrs.len() in i:
+            mut a := this.attrs.get(i)
+            a.free()
+        end
+        this.attrs.free()
+    end
+end
+
+@en "Model"
+@fa "مدل"
+pub struct Model:
+    @en "inputs"
+    @fa "ورودی‌ها"
+    pub inputs: Vector<str> = Vector {}
+    @en "outputs"
+    @fa "خروجی‌ها"
+    pub outputs: Vector<str> = Vector {}
+    @en "nodes"
+    @fa "گره‌ها"
+    pub nodes: Vector<Node> = Vector {}
+    @en "init_names"
+    @fa "نام وزن‌های ثابت"
+    pub init_names: Vector<str> = Vector {}
+    @en "inits"
+    @fa "وزن‌های ثابت"
+    pub inits: Vector<tensor.Tensor> = Vector {}
+    @en "ir_version"
+    @fa "نسخه آی آر"
+    pub ir_version: i64 = 0
+    @en "error"
+    @fa "خطا"
+    pub error: str = ""
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+
+    @en "feed_names"
+    @fa "نام ورودی‌ها"
+    pub func feed_names(): Vector<str>:
+        mut out := Vector {} as Vector<str>
+        repeat this.inputs.len() in i:
+            nm := this.inputs.get(i)
+            mut is_init := false
+            repeat this.init_names.len() in j:
+                if str.Equals(this.init_names.get(j), nm): is_init = true end
+            end
+            if is_init == false: out.push(nm) end
+        end
+        ret out
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        _free_wire_str(this.error)
+        _free_wire_strs(this.inputs)
+        _free_wire_strs(this.outputs)
+        repeat this.nodes.len() in i:
+            mut n := this.nodes.get(i)
+            n.free()
+        end
+        this.nodes.free()
+        _free_wire_strs(this.init_names)
+        repeat this.inits.len() in i:
+            mut t := this.inits.get(i)
+            t.free()
+        end
+        this.inits.free()
+    end
+end
+
+func _free_wire_str(s: str):
+    if str.Len(s) > 0: mem.Free(s as void*) end
+end
+
+func _free_wire_strs(v &: Vector<str>):
+    repeat v.len() in i: _free_wire_str(v.get(i)) end
+    v.free()
+end
+
+@en "ParseOnnx"
+@fa "تجزیه اونیکس"
+pub func ParseOnnx(p: void*, n: int, ok &: bool): Model:
+    mut m := Model {}
+    ok = _decode_model(p, n, m)
+    m.ok = ok
+    ret m
+end
+
+@en "LoadOnnx"
+@fa "بارگذاری اونیکس"
+pub func LoadOnnx(path: str, ok &: bool): Model:
+    ok = false
+    mut fok := false
+    mut raw := archive.ReadBinaryFile(path, fok)
+    if fok == false:
+        compress.BufFree(raw)
+        mut m := Model {}
+        m.error = "cannot read " + path
+        ret m
+    end
+    m := ParseOnnx(raw.data, compress.BufLen(raw), ok)
+    compress.BufFree(raw)
+    ret m
+end
+
+@en "Run"
+@fa "اجرا"
+pub func Run(model &: Model, inputs &: Vector<tensor.Tensor>, ok &: bool): Vector<tensor.Tensor>:
+    ret _run_graph(model, inputs, ok)
+end

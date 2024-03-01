@@ -1,0 +1,106 @@
+pkg.en = net/mime
+pkg.name = net/mime
+pkg.group = Network
+pkg.summary = The media type of a file, the Content-Type header, and multipart form bodies.
+pkg.title = The net/mime package in Salam | MIME and multipart
+pkg.description = The net/mime package in Salam: the MIME type from a file extension, parsing Content-Type, and building and reading a multipart/form-data body, with examples.
+pkg.import = net.mime
+pkg.intro <<
+<p>A media type (MIME) tells the browser and other programs what the content is, such as <code>image/png</code>. This package finds the type from a file extension and reads the <code>Content-Type</code> header.</p>
+<p>Forms that upload a file send a <code>multipart/form-data</code> body: several parts with a boundary between them. <code>ParseMultipart</code> reads one and <code>MultipartWriter</code> builds one.</p>
+<p>The package also has <code>StatusText</code>, the standard reason phrase of an HTTP status code. It is used by <a href="/std/net/http/">net/http</a>, which is where you will usually meet these functions.</p>
+<h3 id="pitfalls">What trips people up</h3>
+<ul>
+<li><strong>The type table is short.</strong> <code>MimeExt</code> knows about 25 extensions: <code>html htm css js mjs json map png jpg jpeg gif svg ico webp txt md pdf xml wasm zip mp4 webm mp3 wav woff woff2</code>. Everything else, <code>csv</code>, <code>avif</code>, <code>ttf</code> and <code>docx</code> included, becomes <code>application/octet-stream</code>, so handle the extra types your site serves before calling it.</li>
+<li><strong>Lookups and comparisons are case sensitive.</strong> <code>MimeType</code> does not lower the extension, <code>ParseContentType</code> keeps the case of the media type and the parameter names, and <code>ParamGet</code> matches the name exactly, so <code>Charset=UTF-8</code> is not found by <code>"charset"</code>. Lower both sides before comparing.</li>
+<li><strong>Only three types get a charset:</strong> <code>text/html</code>, <code>text/plain</code> and <code>text/markdown</code> come with <code>charset=utf-8</code>; CSS and JavaScript do not.</li>
+<li><strong>Binary uploads need the bytes.</strong> <code>ParseMultipart</code> works on raw memory and keeps each body in a <code>ByteBuf</code>, but if the request body has passed through a <code>str</code> on the way, it is already cut at the first zero byte.</li>
+</ul>
+
+<p>The guide below shows the places a web program meets media types: serving files with the right <code>Content-Type</code>, deciding how to read a request body, and handling file uploads on both sides.</p>
+
+<h2 id="guide-static">The right Content-Type for a file</h2>
+<p>A browser decides what to do with a response from its <code>Content-Type</code>, not from the file name, so a stylesheet served as <code>application/octet-stream</code> is ignored. <code>MimeType</code> maps a file name to its type by extension, with <code>charset=utf-8</code> added to HTML, plain text and Markdown, and falls back to <code>application/octet-stream</code> for names it does not know. <code>MimeExt</code> does the same for a bare extension without the dot, such as <code>png</code>, when you have no file name.</p>
+{{example.net-mime-guide-static}}
+<p>The lookup is case sensitive: <code>photo.JPG</code> is only recognised after <code>lower()</code>. Files from cameras and Windows often have upper case extensions, so lower the name before the lookup, as <code>header_for</code> does.</p>
+
+<h2 id="guide-content-type">Reading the Content-Type of a request</h2>
+<p>A server has to look at the <code>Content-Type</code> header before it reads the body: JSON, a URL encoded form and a multipart upload are all read differently. <code>ParseContentType</code> splits the header into <code>media_type</code> and its parameters, and <code>ParamGet</code> returns one parameter, such as <code>charset</code> or <code>boundary</code>, with any quotes removed, or an empty string when it is absent.</p>
+{{example.net-mime-guide-content-type}}
+<p>Media types are case insensitive by the standard, but <code>media_type</code> keeps the case it was sent in. Compare <code>ct.media_type.lower()</code>, otherwise a client that sends <code>Application/JSON</code> falls through to the unknown branch.</p>
+
+<h2 id="guide-upload">Building and reading a file upload</h2>
+<p>An HTML form with a file field sends <code>multipart/form-data</code>: each field becomes a part with its own headers, separated by a boundary string. <code>NewMultipartWriter</code> starts one, <code>WriteField</code> adds a text field, <code>WriteFileStr</code> and <code>WriteFileBytes</code> add a file, and <code>CloseWriter</code> returns the finished body. <code>ContentTypeHeader</code> gives the matching header with the boundary in it. On the receiving side, <code>ParseMultipart</code> takes the body and the boundary and returns the parts; a part with a non-empty <code>filename</code> is a file.</p>
+{{example.net-mime-guide-upload}}
+<p>When you pass an empty content type for a file part, the writer fills it in from the file name with <code>MimeType</code>, which is why <code>notes.txt</code> and <code>eram.jpg</code> got their types. A body that is not <code>multipart/form-data</code> should be refused with status 415 before any parsing.</p>
+
+<h2 id="guide-roundtrip">An upload endpoint with net/http</h2>
+<p>The same two halves work over a real connection. The program below starts a <a href="/std/net/http/">net/http</a> server on 127.0.0.1 with a <a href="/std/net/router/">router</a>, posts a form with a text file to it and prints what the handler found. In the handler, <code>Header</code> gives the request's <code>Content-Type</code> and <code>Body</code> the raw body.</p>
+{{example.net-mime-guide-roundtrip}}
+<p>Two limits to know. <code>Body</code> is a <code>str</code>, and a <code>str</code> ends at the first zero byte, so binary files such as images arrive cut short through this path; text uploads are fine. And <code>ParseMultipart</code> matches part headers such as <code>Content-Disposition</code> with their exact case, which is what browsers and this package's writer send.</p>
+>>
+
+doc.MimeExt = The media type for a file extension, without the dot and in lower case, such as <code>png</code>; <code>application/octet-stream</code> for an unknown extension. About 25 common web extensions are known.
+doc.MimeType = The media type from a file path, by its extension, which must already be lower case; <code>application/octet-stream</code> when there is none or it is unknown.
+doc.StatusText = The standard text of an HTTP status code, such as <code>Not Found</code> for 404.
+doc.ContentType = A parsed <code>Content-Type</code> header.
+doc.ContentType.media_type = The media type, trimmed but in the case it was sent.
+doc.ContentType.params = The parameters, such as <code>charset</code>.
+doc.ContentTypeParam = One parameter.
+doc.ContentTypeParam.key = The name, in the case it was sent.
+doc.ContentTypeParam.value = The value.
+doc.ContentTypeParams = A list of parameters.
+doc.ContentTypeParams.items = The parameters.
+doc.ParseContentType = Parses a <code>Content-Type</code> header.
+doc.ParamGet = The value of one parameter, quotes removed; an empty string when there is none. The name must match exactly, case included.
+doc.MultipartPart = One part of a multipart body.
+doc.MultipartPart.name = The name of the form field.
+doc.MultipartPart.filename = The file name, when the part is a file.
+doc.MultipartPart.content_type = The content type of the part.
+doc.MultipartPart.headers = Every header of the part.
+doc.MultipartPart.body = The contents of the part.
+doc.MultipartParts = A list of parts.
+doc.MultipartParts.items = The parts.
+doc.MultipartHeader = One header of a part.
+doc.MultipartHeader.key = The name.
+doc.MultipartHeader.value = The value.
+doc.MultipartHeaders = A list of headers.
+doc.MultipartHeaders.items = The headers.
+doc.ParseMultipart = Splits a <code>multipart/form-data</code> body in memory into parts at the given boundary; for taking in uploaded files. Binary bodies are kept whole in each part's <code>ByteBuf</code>.
+doc.PartIndex = The position of the first part with the given field name in <code>parts.items</code>, or -1 when there is none.
+doc.PartValue = The body of the first part with the given field name as text, for an ordinary form field; empty when there is no such part.
+doc.FreeMultipart = Frees the body of every part and the list itself; call it once you are done with the parts from <code>ParseMultipart</code>.
+doc.MultipartWriter = A builder of a multipart body.
+doc.MultipartWriter.boundary = The random boundary between the parts.
+doc.MultipartWriter.buf = The body built so far.
+doc.MultipartWriter.closed = Whether it has been closed.
+doc.NewMultipartWriter = A new builder with a random boundary.
+doc.ContentTypeHeader = The <code>Content-Type</code> header value to send with this body.
+doc.WriteField = Adds one text form field.
+doc.WriteFileBytes = Adds one file from memory.
+doc.WriteFileStr = Adds one text file.
+doc.CloseWriter = Writes the closing boundary and returns the complete body.
+
+ex.MimeExt = net-mime-Types
+ex.MimeType = net-mime-Types
+ex.StatusText = net-mime-Types
+ex.ContentType = net-mime-Types
+ex.ContentTypeParam = net-mime-Types
+ex.ContentTypeParams = net-mime-Types
+ex.ParseContentType = net-mime-Types
+ex.ParamGet = net-mime-Types
+ex.MultipartPart = net-mime-Multipart
+ex.MultipartParts = net-mime-Multipart
+ex.MultipartHeader = net-mime-Multipart
+ex.MultipartHeaders = net-mime-Multipart
+ex.ParseMultipart = net-mime-Multipart
+ex.PartIndex = net-mime-Multipart
+ex.PartValue = net-mime-Multipart
+ex.FreeMultipart = net-mime-Multipart
+ex.MultipartWriter = net-mime-Multipart
+ex.NewMultipartWriter = net-mime-Multipart
+ex.ContentTypeHeader = net-mime-Multipart
+ex.WriteField = net-mime-Multipart
+ex.WriteFileBytes = net-mime-Multipart
+ex.WriteFileStr = net-mime-Multipart
+ex.CloseWriter = net-mime-Multipart

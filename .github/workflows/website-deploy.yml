@@ -1,0 +1,180 @@
+---
+name: 🌐 Website - Build & Deploy
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: website-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  changes:
+    uses: ./.github/workflows/_changes.yml # zizmor: ignore[self-repository]
+    with:
+      paths: |
+        website/*
+        VERSION
+        .github/actions/deploy-ssh/*
+        .github/actions/publish-gh-pages/*
+        .github/workflows/website-deploy.yml
+        .github/actions/setup-*
+        .github/workflows/_changes.yml
+  build:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    name: Build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install a seed compiler
+        id: seed
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Set up pinned tcc
+        uses: ./.github/actions/setup-tcc # zizmor: ignore[self-repository]
+
+      - name: Find the release that ships the Salam Agent
+        id: agent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          name=$(gh api "repos/$GH_REPO/releases?per_page=50" --jq '
+            [.[] | select(.draft == false and .prerelease == false)
+                 | {tag: .tag_name, file: ([.assets[].name | select(test("^salam-agent-.+-windows-x86_64-setup[.]exe$"))][0])}
+                 | select(.file != null)][0] | "\(.tag) \(.file)"' 2>/dev/null || true)
+          tag=${name%% *}
+          file=${name#* }
+          version=${file#salam-agent-}
+          version=${version%-windows-x86_64-setup.exe}
+          if [ -z "$tag" ] || [ "$tag" = null ] || [ -z "$version" ]; then
+            echo "no published release carries the agent yet; the site links to v<VERSION>"
+            exit 0
+          fi
+          echo "the agent downloads come from $tag (version $version)"
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build the compiler and generate both sites
+        run: sh website/build.sh
+        env:
+          WEBSITE_EXAMPLES: skip
+          SITE_RELEASE_VERSION: ${{ steps.seed.outputs.version }}
+          SITE_AGENT_TAG: ${{ steps.agent.outputs.tag }}
+          SITE_AGENT_VERSION: ${{ steps.agent.outputs.version }}
+
+      - name: Upload the Persian site
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: website-fa
+          path: website/dist/fa
+          retention-days: 7
+
+      - name: Upload the English site
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: website-en
+          path: website/dist/en
+          retention-days: 7
+
+  examples:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    name: Check the examples
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Set up pinned tcc
+        uses: ./.github/actions/setup-tcc # zizmor: ignore[self-repository]
+
+      - name: Install SQLite for the database examples
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+
+      - name: Build the compiler and run every example
+        run: sh website/build.sh
+        env:
+          WEBSITE_EXAMPLES: only
+
+  deploy-fa:
+    name: Deploy the Persian site to salamlang.ir
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: deploy-website-server
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions
+
+      - name: Download the site
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: website-fa
+          path: site
+
+      - name: Upload to the server
+        uses: ./.github/actions/deploy-ssh # zizmor: ignore[self-repository]
+        with:
+          source: site
+          target: ${{ secrets.SSH_PATH_SITE }}
+          host: ${{ secrets.SSH_HOST }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          username: ${{ secrets.SSH_USERNAME }}
+          private-key: ${{ secrets.SSH_PRIVATEKEY }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          known-hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
+          allowed-root: /hosts/
+
+  deploy-en:
+    name: Deploy the English site to GitHub Pages
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-gh-pages
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions
+
+      - name: Download the English site
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: website-en
+          path: site-en
+
+      - name: Publish to the gh-pages branch
+        uses: ./.github/actions/publish-gh-pages # zizmor: ignore[self-repository]
+        with:
+          source: site-en
+          token: ${{ secrets.GITHUB_TOKEN }}
+          message: 'Publish the English website'

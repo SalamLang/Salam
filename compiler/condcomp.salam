@@ -1,0 +1,763 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package condcomp
+
+import str
+
+include tok "token.salam"
+include lg "logger.salam"
+include i18 "i18n.salam"
+include at "ast.salam"
+include lp "langpack.salam"
+
+pub const CC_BOOL := 0
+
+pub const CC_STR := 1
+
+const K_CC_NUM_BOOL_FLAGS := 25
+
+const K_CC_NUM_NAMES := 34
+
+k_cc_all_bool_flags := [
+    "SALAM_OS_WINDOWS", "SALAM_OS_WIN64", "SALAM_OS_WIN32", "SALAM_OS_WASM", "SALAM_OS_ANDROID", "SALAM_OS_LINUX", "SALAM_OS_MAC", "SALAM_OS_BSD", "SALAM_OS_FREEBSD", "SALAM_OS_OPENBSD", "SALAM_OS_NETBSD", "SALAM_OS_UNIX", "SALAM_ARCH_X64", "SALAM_ARCH_X86", "SALAM_ARCH_ARM64", "SALAM_ARCH_ARM", "SALAM_ARCH_RISCV64", "SALAM_ARCH_WASM", "SALAM_MEM_DEBUG", "SALAM_ASAN", "SALAM_SAFE", "SALAM_OS_UEFI", "SALAM_FREESTANDING", "SALAM_KERNEL", "SALAM_OS_SALAMOS"
+]
+
+k_cc_canon_name := [
+    "SALAM_OS_WINDOWS", "SALAM_OS_WIN64", "SALAM_OS_WIN32", "SALAM_OS_WASM", "SALAM_OS_ANDROID", "SALAM_OS_LINUX", "SALAM_OS_MAC", "SALAM_OS_BSD", "SALAM_OS_FREEBSD", "SALAM_OS_OPENBSD", "SALAM_OS_NETBSD", "SALAM_OS_UNIX", "SALAM_OS_UEFI", "SALAM_OS_SALAMOS", "SALAM_ARCH_X64", "SALAM_ARCH_X86", "SALAM_ARCH_ARM64", "SALAM_ARCH_ARM", "SALAM_ARCH_RISCV64", "SALAM_ARCH_WASM", "SALAM_MEM_DEBUG", "SALAM_ASAN", "SALAM_SAFE", "SALAM_FREESTANDING", "SALAM_KERNEL", "SALAM_JS", "SALAM_OS", "SALAM_ARCH", "SALAM_VERSION", "SALAM_VERSION_CODE", "SALAM_GIT_COMMIT", "SALAM_GIT_DATE", "SALAM_GIT_DIRTY", "SALAM_BUILD_DATE"
+]
+
+k_cc_fa_name := [
+    "سلام سیستم ویندوز", "سلام سیستم ویندوز۶۴", "سلام سیستم ویندوز۳۲", "سلام سیستم وب‌اسمبلی", "سلام سیستم اندروید", "سلام سیستم لینوکس", "سلام سیستم مک", "سلام سیستم بی‌اس‌دی", "سلام سیستم فری‌بی‌اس‌دی", "سلام سیستم اوپن‌بی‌اس‌دی", "سلام سیستم نت‌بی‌اس‌دی", "سلام سیستم یونیکس", "سلام سیستم یوئی‌اف‌آی", "سلام سیستم سلام", "سلام معماری ایکس۶۴", "سلام معماری ایکس۸۶", "سلام معماری آرم۶۴", "سلام معماری آرم", "سلام معماری ریسک‌وی۶۴", "سلام معماری وب‌اسمبلی", "سلام اشکال‌زدایی حافظه", "سلام پاک‌ساز نشانی", "سلام ایمن", "سلام خودایستا", "سلام هسته", "سلام جاوااسکریپت", "سلام سیستم", "سلام معماری", "سلام نگارش", "سلام کد نگارش", "سلام کامیت گیت", "سلام تاریخ گیت", "سلام گیت ناپاک", "سلام تاریخ ساخت"
+]
+
+struct Bres:
+    pub ok: bool = false
+    pub bval: bool = false
+end
+
+struct Scalar:
+    pub ok: bool = false
+    pub is_str: bool = false
+    pub bval: bool = false
+    pub sval: str = ""
+end
+
+pub struct Entry:
+    pub name: str = ""
+    pub kind: int = 0
+    pub bval: bool = false
+    pub sval: str = ""
+end
+
+pub struct Table:
+    pub entries: Vector<Entry> = Vector {}
+    pub pack: int = 0
+end
+
+func cc_fa_mode(t: Table): bool:
+    ret t.pack == 2
+end
+
+func cc_is_defined_name(t: Table, name: str): bool:
+    if cc_fa_mode(t):
+        ret lp.IdentEqual(name, "تعریف‌شده")
+    end
+    ret str.Equals(name, "defined")
+end
+
+func cc_canon_name(t: Table, name: str): str:
+    if not cc_fa_mode(t):
+        ret name
+    end
+    repeat K_CC_NUM_NAMES in i:
+        if lp.IdentEqual(k_cc_fa_name[i], name):
+            ret k_cc_canon_name[i]
+        end
+    end
+    repeat K_CC_NUM_NAMES in j:
+        if str.Equals(k_cc_canon_name[j], name):
+            ret ""
+        end
+    end
+    ret name
+end
+
+func cc_push_bool(t &: Table, name: str, val: bool):
+    t.entries.push(Entry { name = name, kind = CC_BOOL, bval = val, sval = "" })
+end
+
+func cc_push_str(t &: Table, name: str, val: str):
+    t.entries.push(Entry { name = name, kind = CC_STR, bval = false, sval = val })
+end
+
+func cc_push_host_defs(t &: Table):
+    if SALAM_OS_WINDOWS:
+        cc_push_bool(t, "SALAM_OS_WINDOWS", true)
+        cc_push_str(t, "SALAM_OS", "windows")
+        if SALAM_OS_WIN64:
+            cc_push_bool(t, "SALAM_OS_WIN64", true)
+        else:
+            cc_push_bool(t, "SALAM_OS_WIN32", true)
+        end
+    else SALAM_OS_WASM:
+        cc_push_bool(t, "SALAM_OS_WASM", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "wasm")
+    else SALAM_OS_ANDROID:
+        cc_push_bool(t, "SALAM_OS_ANDROID", true)
+        cc_push_bool(t, "SALAM_OS_LINUX", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "android")
+    else SALAM_OS_LINUX:
+        cc_push_bool(t, "SALAM_OS_LINUX", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "linux")
+    else SALAM_OS_MAC:
+        cc_push_bool(t, "SALAM_OS_MAC", true)
+        cc_push_bool(t, "SALAM_OS_BSD", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "mac")
+    else SALAM_OS_FREEBSD:
+        cc_push_bool(t, "SALAM_OS_FREEBSD", true)
+        cc_push_bool(t, "SALAM_OS_BSD", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "freebsd")
+    else SALAM_OS_OPENBSD:
+        cc_push_bool(t, "SALAM_OS_OPENBSD", true)
+        cc_push_bool(t, "SALAM_OS_BSD", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "openbsd")
+    else SALAM_OS_NETBSD:
+        cc_push_bool(t, "SALAM_OS_NETBSD", true)
+        cc_push_bool(t, "SALAM_OS_BSD", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "netbsd")
+    else:
+        cc_push_str(t, "SALAM_OS", "unknown")
+    end
+
+    if SALAM_ARCH_X64:
+        cc_push_bool(t, "SALAM_ARCH_X64", true)
+        cc_push_str(t, "SALAM_ARCH", "x64")
+    else SALAM_ARCH_X86:
+        cc_push_bool(t, "SALAM_ARCH_X86", true)
+        cc_push_str(t, "SALAM_ARCH", "x86")
+    else SALAM_ARCH_ARM64:
+        cc_push_bool(t, "SALAM_ARCH_ARM64", true)
+        cc_push_str(t, "SALAM_ARCH", "arm64")
+    else SALAM_ARCH_ARM:
+        cc_push_bool(t, "SALAM_ARCH_ARM", true)
+        cc_push_str(t, "SALAM_ARCH", "arm")
+    else SALAM_ARCH_WASM:
+        cc_push_bool(t, "SALAM_ARCH_WASM", true)
+        cc_push_str(t, "SALAM_ARCH", "wasm")
+    end
+end
+
+func trip_has(hay: str, needle: str): bool:
+    ret str.Contains(hay, needle)
+end
+
+func cc_push_target_defs(t &: Table, trip: str):
+    mut bits64 := false
+    if trip_has(trip, "x86_64") or trip_has(trip, "amd64"):
+        bits64 = true
+        cc_push_bool(t, "SALAM_ARCH_X64", true)
+        cc_push_str(t, "SALAM_ARCH", "x64")
+    else trip_has(trip, "aarch64") or trip_has(trip, "arm64"):
+        bits64 = true
+        cc_push_bool(t, "SALAM_ARCH_ARM64", true)
+        cc_push_str(t, "SALAM_ARCH", "arm64")
+    else trip_has(trip, "i386") or trip_has(trip, "i486") or trip_has(trip, "i586") or trip_has(trip, "i686") or trip_has(trip, "x86"):
+        cc_push_bool(t, "SALAM_ARCH_X86", true)
+        cc_push_str(t, "SALAM_ARCH", "x86")
+    else trip_has(trip, "riscv64"):
+        bits64 = true
+        cc_push_bool(t, "SALAM_ARCH_RISCV64", true)
+        cc_push_str(t, "SALAM_ARCH", "riscv64")
+    else trip_has(trip, "wasm64"):
+        bits64 = true
+        cc_push_bool(t, "SALAM_ARCH_WASM", true)
+        cc_push_str(t, "SALAM_ARCH", "wasm")
+    else trip_has(trip, "wasm") or trip_has(trip, "wasm32"):
+        cc_push_bool(t, "SALAM_ARCH_WASM", true)
+        cc_push_str(t, "SALAM_ARCH", "wasm")
+    else trip_has(trip, "arm"):
+        cc_push_bool(t, "SALAM_ARCH_ARM", true)
+        cc_push_str(t, "SALAM_ARCH", "arm")
+    end
+
+    if trip_has(trip, "salamos"):
+        cc_push_bool(t, "SALAM_OS_SALAMOS", true)
+        cc_push_str(t, "SALAM_OS", "salamos")
+        cc_push_bool(t, "SALAM_FREESTANDING", true)
+        if trip_has(trip, "kernel"):
+            cc_push_bool(t, "SALAM_KERNEL", true)
+        end
+    else trip_has(trip, "uefi"):
+        cc_push_bool(t, "SALAM_OS_UEFI", true)
+        cc_push_bool(t, "SALAM_FREESTANDING", true)
+        cc_push_str(t, "SALAM_OS", "uefi")
+    else trip_has(trip, "windows") or trip_has(trip, "mingw") or trip_has(trip, "win32"):
+        cc_push_bool(t, "SALAM_OS_WINDOWS", true)
+        cc_push_str(t, "SALAM_OS", "windows")
+        cc_push_bool(t, bits64 ? "SALAM_OS_WIN64" : "SALAM_OS_WIN32", true)
+    else trip_has(trip, "darwin") or trip_has(trip, "macos") or trip_has(trip, "macosx") or trip_has(trip, "apple") or trip_has(trip, "ios"):
+        cc_push_bool(t, "SALAM_OS_MAC", true)
+        cc_push_bool(t, "SALAM_OS_BSD", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "mac")
+    else trip_has(trip, "android"):
+        cc_push_bool(t, "SALAM_OS_ANDROID", true)
+        cc_push_bool(t, "SALAM_OS_LINUX", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "android")
+    else trip_has(trip, "linux"):
+        cc_push_bool(t, "SALAM_OS_LINUX", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "linux")
+    else trip_has(trip, "freebsd"):
+        cc_push_bool(t, "SALAM_OS_FREEBSD", true)
+        cc_push_bool(t, "SALAM_OS_BSD", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "freebsd")
+    else trip_has(trip, "openbsd"):
+        cc_push_bool(t, "SALAM_OS_OPENBSD", true)
+        cc_push_bool(t, "SALAM_OS_BSD", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "openbsd")
+    else trip_has(trip, "netbsd"):
+        cc_push_bool(t, "SALAM_OS_NETBSD", true)
+        cc_push_bool(t, "SALAM_OS_BSD", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "netbsd")
+    else trip_has(trip, "wasi") or trip_has(trip, "emscripten") or trip_has(trip, "wasm"):
+        cc_push_bool(t, "SALAM_OS_WASM", true)
+        cc_push_bool(t, "SALAM_OS_UNIX", true)
+        cc_push_str(t, "SALAM_OS", "wasm")
+    else:
+        cc_push_str(t, "SALAM_OS", "unknown")
+    end
+end
+
+func cc_push_missing_bool_defaults(t &: Table):
+    repeat K_CC_NUM_BOOL_FLAGS in i:
+        if Lookup(t, k_cc_all_bool_flags[i]) < 0:
+            cc_push_bool(t, k_cc_all_bool_flags[i], false)
+        end
+    end
+end
+
+func cc_push_define(t &: Table, def: str):
+    eq_at := str.IndexOf(def, "=")
+    if eq_at < 0:
+        cc_push_bool(t, def, true)
+        ret
+    end
+    cc_push_str(
+        t, str.Substr(def, 0, eq_at), str.Substr(def, eq_at + 1, str.Len(def) - eq_at - 1)
+    )
+end
+
+func cc_fold_defined_call(a: at.Ast, t: Table, id: int): Bres:
+    n := at.Get(a, id)
+    if n.a == 0:
+        ret Bres {}
+    end
+    callee := at.Get(a, n.a)
+    if callee.kind != at.AST_IDENTIFIER or str.Len(callee.name) == 0 or not cc_is_defined_name(
+        t, callee.name
+    ):
+        ret Bres {}
+    end
+    if n.list.len() != 1:
+        ret Bres {}
+    end
+    argid := n.list.get(0)
+    if argid == 0:
+        ret Bres {}
+    end
+    arg := at.Get(a, argid)
+    if arg.kind != at.AST_IDENTIFIER or str.Len(arg.name) == 0:
+        ret Bres {}
+    end
+    dn := cc_canon_name(t, arg.name)
+    ret Bres { ok = true, bval = str.Len(dn) > 0 and Lookup(t, dn) >= 0 }
+end
+
+func cc_fold_scalar(a: at.Ast, t: Table, id: int, lenient: bool): Scalar:
+    if id == 0:
+        ret Scalar {}
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_LITERAL:
+        if n.value_kind == tok.TV_BOOL:
+            ret Scalar { ok = true, is_str = false, bval = n.value_bool, sval = "" }
+        end
+        if n.value_kind == tok.TV_STRING:
+            ret Scalar { ok = true, is_str = true, bval = false, sval = n.value_str }
+        end
+        ret Scalar {}
+    end
+    if n.kind == at.AST_IDENTIFIER:
+        cn := cc_canon_name(t, n.name)
+        ci := str.Len(cn) > 0 ? Lookup(t, cn) : (0 - 1)
+        if ci < 0:
+            if lenient:
+                ret Scalar { ok = true, is_str = false, bval = false, sval = "" }
+            end
+            ret Scalar {}
+        end
+        e := t.entries.get(ci)
+        if e.kind == CC_BOOL:
+            ret Scalar { ok = true, is_str = false, bval = e.bval, sval = "" }
+        end
+        ret Scalar { ok = true, is_str = true, bval = false, sval = e.sval }
+    end
+    if (n.kind == at.AST_UNARY and n.op == tok.TK_NOT) or (
+        n.kind == at.AST_BINARY and (
+            n.op == tok.TK_AND or n.op == tok.TK_OR or n.op == tok.TK_EQ or n.op == tok.TK_NE
+        )
+    ) or n.kind == at.AST_CALL:
+        r := cc_fold_bool(a, t, id, lenient)
+        if not r.ok:
+            ret Scalar {}
+        end
+        ret Scalar { ok = true, is_str = false, bval = r.bval, sval = "" }
+    end
+    ret Scalar {}
+end
+
+func cc_fold_bool(a: at.Ast, t: Table, id: int, lenient: bool): Bres:
+    if id == 0:
+        ret Bres {}
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_UNARY and n.op == tok.TK_NOT:
+        r := cc_fold_bool(a, t, n.a, lenient)
+        if not r.ok:
+            ret Bres {}
+        end
+        ret Bres { ok = true, bval = not r.bval }
+    end
+    if n.kind == at.AST_BINARY and (n.op == tok.TK_AND or n.op == tok.TK_OR):
+        l := cc_fold_bool(a, t, n.a, lenient)
+        if l.ok:
+            if n.op == tok.TK_AND and not l.bval:
+                ret Bres { ok = true, bval = false }
+            end
+            if n.op == tok.TK_OR and l.bval:
+                ret Bres { ok = true, bval = true }
+            end
+        end
+        if not l.ok:
+            ret Bres {}
+        end
+        r := cc_fold_bool(a, t, n.b, lenient)
+        if not r.ok:
+            ret Bres {}
+        end
+        v := n.op == tok.TK_AND ? (l.bval and r.bval) : (l.bval or r.bval)
+        ret Bres { ok = true, bval = v }
+    end
+    if n.kind == at.AST_BINARY and (n.op == tok.TK_EQ or n.op == tok.TK_NE):
+        l := cc_fold_scalar(a, t, n.a, lenient)
+        r := cc_fold_scalar(a, t, n.b, lenient)
+        if not l.ok or not r.ok or l.is_str != r.is_str:
+            ret Bres {}
+        end
+        eq_at := l.is_str ? str.Equals(l.sval, r.sval) : l.bval == r.bval
+        ret Bres { ok = true, bval = n.op == tok.TK_EQ ? eq_at : not eq_at }
+    end
+    if n.kind == at.AST_CALL:
+        ret cc_fold_defined_call(a, t, id)
+    end
+    s := cc_fold_scalar(a, t, id, lenient)
+    if not s.ok or s.is_str:
+        ret Bres {}
+    end
+    ret Bres { ok = true, bval = s.bval }
+end
+
+func cc_cond_has_ref(a: at.Ast, id: int): bool:
+    if id == 0:
+        ret false
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_IDENTIFIER or n.kind == at.AST_CALL:
+        ret true
+    end
+    if n.kind == at.AST_UNARY and n.op == tok.TK_NOT:
+        ret cc_cond_has_ref(a, n.a)
+    end
+    if n.kind == at.AST_BINARY and (
+        n.op == tok.TK_AND or n.op == tok.TK_OR or n.op == tok.TK_EQ or n.op == tok.TK_NE
+    ):
+        ret cc_cond_has_ref(a, n.a) or cc_cond_has_ref(a, n.b)
+    end
+    ret false
+end
+
+func cc_lvalue_root(a &: at.Ast, id: int): int:
+    mut cur := id
+    until cur != 0:
+        k := at.KindOf(a, cur)
+        if k == at.AST_IDENTIFIER:
+            ret cur
+        end
+        if k != at.AST_MEMBER and k != at.AST_INDEX and k != at.AST_SLICE:
+            ret 0
+        end
+        cur = at.Get(a, cur).a
+    end
+    ret 0
+end
+
+func cc_note_write(a &: at.Ast, file: str, target: int):
+    r := cc_lvalue_root(a, target)
+    if r != 0:
+        at.NotePruned(a, file, at.Get(a, r).name, true)
+    end
+end
+
+func cc_note_pruned(a &: at.Ast, file: str, id: int):
+    if id == 0:
+        ret
+    end
+    n := at.Get(a, id)
+    at.NotePruned(a, file, n.name, false)
+    if n.kind == at.AST_ASSIGN or n.kind == at.AST_INCDEC:
+        cc_note_write(a, file, n.a)
+    end
+    if n.kind == at.AST_CALL:
+        if at.KindOf(a, n.a) == at.AST_MEMBER:
+            cc_note_write(a, file, at.Get(a, n.a).a)
+        end
+        repeat at.ChildCount(a, id) in ai:
+            arg := at.Child(a, id, ai)
+            if arg != 0 and at.KindOf(a, arg) == at.AST_IDENTIFIER:
+                at.NotePruned(a, file, at.Get(a, arg).name, true)
+            end
+        end
+    end
+    cc_note_pruned(a, file, n.ty)
+    cc_note_pruned(a, file, n.a)
+    cc_note_pruned(a, file, n.b)
+    cc_note_pruned(a, file, n.c)
+    cc_note_pruned(a, file, n.d)
+    repeat at.ChildCount(a, id) in i0:
+        cc_note_pruned(a, file, at.Child(a, id, i0))
+    end
+    repeat at.DimCount(a, id) in i1:
+        cc_note_pruned(a, file, at.Dim(a, id, i1))
+    end
+    repeat at.CaptureCount(a, id) in i2:
+        cc_note_pruned(a, file, at.Capture(a, id, i2))
+    end
+end
+
+func cc_is_defined_call(t: Table, a &: at.Ast, n: at.Node): bool:
+    if n.kind != at.AST_CALL or n.a == 0:
+        ret false
+    end
+    callee := at.Get(a, n.a)
+    ret callee.kind == at.AST_IDENTIFIER and cc_is_defined_name(t, callee.name)
+end
+
+func cc_has_salam_prefix(name: str): bool:
+    if str.StartsWith(name, "SALAM_") or str.StartsWith(name, "سلام "):
+        ret true
+    end
+    ret str.StartsWith(name, "سلام‌")
+end
+
+func cc_literalize(a &: at.Ast, t: Table, id: int):
+    mut n := at.Get(a, id)
+    if not cc_has_salam_prefix(n.name):
+        ret
+    end
+    cn := cc_canon_name(t, n.name)
+    if str.Len(cn) == 0:
+        ret
+    end
+    ci := Lookup(t, cn)
+    if ci < 0:
+        ret
+    end
+    e := t.entries.get(ci)
+    n.kind = at.AST_LITERAL
+    if e.kind == CC_BOOL:
+        n.op = e.bval ? tok.TK_KW_TRUE : tok.TK_KW_FALSE
+        n.value_kind = tok.TV_BOOL
+        n.value_bool = e.bval
+        n.name = e.bval ? "true" : "false"
+    else:
+        n.op = tok.TK_STRING
+        n.value_kind = tok.TV_STRING
+        n.value_str = e.sval
+        n.name = "\"" + e.sval + "\""
+    end
+    at.Put(a, id, n)
+end
+
+func cc_empty_block(a &: at.Ast, id: int): bool:
+    ret id != 0 and at.KindOf(a, id) == at.AST_BLOCK and at.ChildCount(a, id) == 0
+end
+
+func cc_check_empty_branches(a &: at.Ast, log: lg.Logger, file: str, n: at.Node, ok &: bool):
+    if cc_empty_block(a, n.b):
+        cond := at.Get(a, n.a)
+        lg.LogAtHelp(
+            log, lg.PH_PARSER, lg.LOG_ERROR, file, cond.begin_line as int, cond.begin_col as int, i18.Tr("negate the condition and move the 'else' body into the 'if': write 'if not X:'"), i18.Tr("the 'if' branch is empty: add a statement to it, or remove the 'if'")
+        )
+        ok = false
+    end
+    if cc_empty_block(a, n.c):
+        eb := at.Get(a, n.c)
+        lg.LogAt(
+            log, lg.PH_PARSER, lg.LOG_ERROR, file, eb.begin_line as int, eb.begin_col as int, i18.Tr("the 'else' branch is empty: add a statement to it, or remove the 'else'")
+        )
+        ok = false
+    end
+end
+
+func cc_resolve_if(
+    a &: at.Ast, log: lg.Logger, file: str, t: Table, id: int, top_level: bool, ok &: bool
+): int:
+    n := at.Get(a, id)
+    mut r := Bres {}
+    if top_level or cc_cond_has_ref(a, n.a):
+        r = cc_fold_bool(a, t, n.a, top_level)
+    end
+    if top_level or r.ok:
+        cc_check_empty_branches(a, log, file, n, ok)
+    end
+    if r.ok:
+        taken := r.bval ? n.b : n.c
+        cc_note_pruned(a, file, n.a)
+        cc_note_pruned(a, file, r.bval ? n.c : n.b)
+        if taken == 0:
+            ret 0
+        end
+        if at.KindOf(a, taken) == at.AST_IF:
+            ret cc_resolve_if(a, log, file, t, taken, top_level, ok)
+        end
+        cc_process_list(a, log, file, t, taken, top_level, ok)
+        ret taken
+    end
+    if top_level:
+        cond := at.Get(a, n.a)
+        lg.LogAt(
+            log, lg.PH_PARSER, lg.LOG_ERROR, file, cond.begin_line as int, cond.begin_col as int, "top-level if condition must be a compile-time constant"
+        )
+        ok = false
+        ret 0
+    end
+    cc_resolve_slot(a, log, file, t, n.a, ok)
+    cc_process_list(a, log, file, t, n.b, false, ok)
+    if n.c != 0:
+        if at.KindOf(a, n.c) == at.AST_IF:
+            newc := cc_resolve_if(a, log, file, t, n.c, false, ok)
+            mut n2 := at.Get(a, id)
+            n2.c = newc
+            at.Put(a, id, n2)
+        else:
+            cc_process_list(a, log, file, t, n.c, false, ok)
+        end
+    end
+    ret id
+end
+
+func cc_resolve_slot(
+    a &: at.Ast, log: lg.Logger, file: str, t: Table, id: int, ok &: bool
+): int:
+    if id == 0:
+        ret 0
+    end
+    k := at.KindOf(a, id)
+    if k == at.AST_IF:
+        ret cc_resolve_if(a, log, file, t, id, false, ok)
+    end
+    if k == at.AST_BLOCK or k == at.AST_PROGRAM:
+        cc_process_list(a, log, file, t, id, false, ok)
+        ret id
+    end
+    if k == at.AST_IDENTIFIER:
+        cc_literalize(a, t, id)
+        ret id
+    end
+    n := at.Get(a, id)
+    if cc_is_defined_call(t, a, n):
+        ret id
+    end
+    nty := cc_resolve_slot(a, log, file, t, n.ty, ok)
+    na := cc_resolve_slot(a, log, file, t, n.a, ok)
+    nb := cc_resolve_slot(a, log, file, t, n.b, ok)
+    nc := cc_resolve_slot(a, log, file, t, n.c, ok)
+    new_d := cc_resolve_slot(a, log, file, t, n.d, ok)
+    mut n2 := at.Get(a, id)
+    n2.ty = nty
+    n2.a = na
+    n2.b = nb
+    n2.c = nc
+    n2.d = new_d
+    at.Put(a, id, n2)
+    repeat at.ChildCount(a, id) in i0:
+        cid := at.Child(a, id, i0)
+        nid := cc_resolve_slot(a, log, file, t, cid, ok)
+        if nid != cid:
+            mut n3 := at.Get(a, id)
+            n3.list.set(i0, nid)
+            at.Put(a, id, n3)
+        end
+    end
+    repeat at.DimCount(a, id) in i1:
+        did := at.Dim(a, id, i1)
+        ndid := cc_resolve_slot(a, log, file, t, did, ok)
+        if ndid != did:
+            mut n4 := at.Get(a, id)
+            n4.dims.set(i1, ndid)
+            at.Put(a, id, n4)
+        end
+    end
+    repeat at.CaptureCount(a, id) in i2:
+        capid := at.Capture(a, id, i2)
+        ncap := cc_resolve_slot(a, log, file, t, capid, ok)
+        if ncap != capid:
+            mut n5 := at.Get(a, id)
+            n5.captures.set(i2, ncap)
+            at.Put(a, id, n5)
+        end
+    end
+    ret id
+end
+
+func cc_process_list(
+    a &: at.Ast, log: lg.Logger, file: str, t: Table, owner: int, top_level: bool, ok &: bool
+):
+    mut orig := Vector {} as Vector<int>
+    defer orig.free()
+    n0 := at.Get(a, owner)
+    repeat n0.list.len() in i0:
+        orig.push(n0.list.get(i0))
+    end
+    mut out := Vector {} as Vector<int>
+    repeat orig.len() in i1:
+        it := orig.get(i1)
+        if it != 0 and at.KindOf(a, it) == at.AST_IF:
+            resolved := cc_resolve_if(a, log, file, t, it, top_level, ok)
+            if resolved != 0:
+                if at.KindOf(a, resolved) == at.AST_BLOCK:
+                    rn := at.Get(a, resolved)
+                    repeat rn.list.len() in j:
+                        out.push(rn.list.get(j))
+                    end
+                else:
+                    out.push(resolved)
+                end
+            end
+        else:
+            out.push(cc_resolve_slot(a, log, file, t, it, ok))
+        end
+    end
+    mut n1 := at.Get(a, owner)
+    n1.list.free()
+    n1.list = out
+    at.Put(a, owner, n1)
+end
+
+pub func TableBuild(target_triple: str, defines: Vector<str>): Table:
+    mut t := Table {}
+    if str.Len(target_triple) != 0:
+        cc_push_target_defs(t, target_triple)
+    else:
+        cc_push_host_defs(t)
+    end
+    repeat defines.len() in i:
+        cc_push_define(t, defines.get(i))
+    end
+    cc_push_missing_bool_defaults(t)
+    ret t
+end
+
+pub func OtherLangName(name: str, want_fa: bool): str:
+    repeat K_CC_NUM_NAMES in i:
+        if want_fa and str.Equals(k_cc_canon_name[i], name):
+            ret k_cc_fa_name[i]
+        end
+        if not want_fa and lp.IdentEqual(k_cc_fa_name[i], name):
+            ret k_cc_canon_name[i]
+        end
+    end
+    ret ""
+end
+
+pub func TableSetPack(t &: Table, pack: int):
+    t.pack = pack
+end
+
+pub func TableFree(t &: Table):
+    t.entries.free()
+end
+
+pub func Lookup(t: Table, name: str): int:
+    repeat t.entries.len() in i:
+        e := t.entries.get(i)
+        if str.Equals(e.name, name):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+pub func EntryCount(t: Table): int:
+    ret t.entries.len()
+end
+
+pub func EntryName(t: Table, i: int): str:
+    e := t.entries.get(i)
+    ret e.name
+end
+
+pub func EntryKind(t: Table, i: int): int:
+    e := t.entries.get(i)
+    ret e.kind
+end
+
+pub func EntryBool(t: Table, i: int): bool:
+    e := t.entries.get(i)
+    ret e.bval
+end
+
+pub func EntryStr(t: Table, i: int): str:
+    e := t.entries.get(i)
+    ret e.sval
+end
+
+pub func EvalBool(a &: at.Ast, t: Table, expr: int, lenient: bool, bval &: bool): bool:
+    r := cc_fold_bool(a, t, expr, lenient)
+    if r.ok:
+        bval = r.bval
+    end
+    ret r.ok
+end
+
+pub func PruneProgram(
+    a &: at.Ast, log: lg.Logger, file: str, t: Table, program: int
+): bool:
+    mut ok := true
+    cc_process_list(a, log, file, t, program, true, ok)
+    ret ok
+end

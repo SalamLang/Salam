@@ -1,0 +1,156 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import str
+import db.typesense
+
+include fake "_fake.salam"
+
+const PORT := 19855
+
+const RESULT := `{"facet_counts":[{"counts":[{"count":2,"highlighted":"scifi","value":"scifi"},{"count":1,"highlighted":"novel","value":"novel"}],"field_name":"genre","sampled":false,"stats":{"total_values":2}}],"found":2,"hits":[{"document":{"genre":"scifi","id":"2","title":"Dune Messiah","year":1969},"highlight":{"title":{"matched_tokens":["Dune"],"snippet":"<mark>Dune</mark> Messiah"},"tags":[{"matched_tokens":["a"],"snippet":"<mark>a</mark>"},{"matched_tokens":["b"],"snippet":"<mark>b</mark>"}]},"highlights":[],"text_match":578730123373578361,"text_match_info":{"best_field_score":"1108091342849"},"geo_distance_meters":{"location":1020},"vector_distance":0.25},{"curated":true,"document":{"genre":"scifi","id":"1","title":"Dune","year":1965},"highlight":{},"highlights":[],"text_match":100}],"out_of":4,"page":1,"request_params":{"collection_name":"lib","per_page":10,"q":"dune"},"search_cutoff":false,"search_time_ms":3}`
+
+const GROUPED := `{"facet_counts":[],"found":2,"found_docs":4,"grouped_hits":[{"found":1,"group_key":["novel"],"hits":[{"document":{"id":"3","title":"Emma"}}]},{"found":3,"group_key":[1965,"x"],"hits":[{"document":{"id":"1","title":"Dune"}},{"document":{"id":"4","title":"Foundation"}}]}],"hits":[],"out_of":4,"page":1,"search_time_ms":0}`
+
+struct Book:
+    pub id: str = ""
+    pub title: str = ""
+    pub year: int = 0
+end
+
+func show(label: str, err: typesense.Error):
+    println label + ": " + fake.Last()
+    if not typesense.Ok(err):
+        println "  error: " + typesense.ErrorString(err)
+    end
+end
+
+func main:
+    fake.On("GET", "/collections/lib/documents/search", 200, RESULT)
+    fake.On("GET", "/collections/lib/documents/search", 200, GROUPED)
+    fake.On("GET", "/collections/lib/documents/search", 404, `{"message": "Could not find a field named ` + "`nope`" + ` in the schema."}`)
+    fake.On("POST", "/multi_search", 200, `{"results":[{"found":1,"hits":[{"document":{"id":"7"}}],"out_of":4,"page":1}]}`)
+    fake.On("POST", "/multi_search", 200, `{"results":[{"code":404,"error":"Could not find a field named ` + "`nope`" + ` in the schema."}]}`)
+    fake.On("POST", "/multi_search", 200, `{"results":[` + RESULT + `,{"code":404,"error":"Collection not found"}]}`)
+    fake.On("POST", "/multi_search", 200, `{"found":2,"hits":[{"collection":"lib","document":{"id":"1"},"search_index":0},{"collection":"films","document":{"id":"9"},"search_index":1}],"out_of":9,"page":1,"search_time_ms":1}`)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    mut c := typesense.New("127.0.0.1:" + PORT, "k")
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+
+    mut p := typesense.NewSearch("dune & co", "title,genre")
+    p.query_by_weights = "2,1"
+    p.filter_by = "year:>1900 && genre:=[scifi]"
+    p.sort_by = "year:desc,_text_match:desc"
+    p.facet_by = "genre"
+    p.max_facet_values = 5
+    p.facet_query = "genre:sci"
+    p.include_fields = "id,title"
+    p.exclude_fields = "embedding"
+    p.highlight_fields = "title"
+    p.highlight_start_tag = "<b>"
+    p.highlight_end_tag = "</b>"
+    p.num_typos = "2,1"
+    p.page = 2
+    p.per_page = 10
+    p.pinned_hits = "1:1"
+    p.hidden_hits = "3"
+    p.prefix = "true,false"
+    p.infix = "off"
+    p.text_match_type = "max_score"
+    p.vector_query = "embedding:([], k: 10)"
+    p.exhaustive_search = true
+    p.search_cutoff_ms = 50
+    p.use_cache = true
+    p.cache_ttl = 30
+    p.drop_tokens_threshold = 1
+    p.typo_tokens_threshold = 2
+    p.snippet_threshold = 20
+    p.preset = "listing"
+    p.stopwords = "common"
+    p.override_tags = "spring"
+    typesense.Set(p, "prioritize_exact_match", "false")
+    typesense.Set(p, "split_join_tokens", "fallback")
+    typesense.Set(p, "split_join_tokens", "always")
+    println "query: " + typesense.SearchQuery(p)
+    println "json: " + typesense.SearchParamsJSON(p)
+    mut rag := typesense.NewSearch("what is dune", "title")
+    rag.conversation = true
+    rag.conversation_model_id = "m1"
+    rag.conversation_id = "c1"
+    rag.nl_query = true
+    rag.nl_model_id = "n1"
+    rag.group_by = "genre"
+    rag.group_limit = 3
+    rag.offset = 5
+    rag.limit = 7
+    println "rag: " + typesense.SearchQuery(rag)
+
+    r := typesense.Search(c, "lib", typesense.NewSearch("dune", "title"), err)
+    show("search", err)
+    println "  found=" + r.found + " out_of=" + r.out_of + " page=" + r.page + " took=" + r.search_time_ms + " cutoff=" + r.search_cutoff + " params=" + r.request_params
+    each h in r.hits:
+        println "  hit " + h.document + " match=" + h.text_match + " curated=" + h.curated + " vd=" + h.vector_distance + " geo=" + h.geo_distance_meters
+        println "    title=" + typesense.Highlight(h, "title") + " tags=" + typesense.Highlight(h, "tags") + " none=[" + typesense.Highlight(h, "genre") + "]"
+    end
+    each f in r.facets:
+        println "  facet " + f.field_name + " sampled=" + f.sampled + " stats=" + f.stats
+        each fc in f.counts:
+            println "    " + fc.value + " " + fc.count + " " + fc.highlighted
+        end
+    end
+    mut books := Vector {} as Vector<Book>
+    println "  typed: " + typesense.HitsAs(r, books, err) + " " + books.len() + " " + books.get(0).title + " " + books.get(1).year
+
+    g := typesense.Search(c, "lib", typesense.NewSearch("*", ""), err)
+    println "grouped: found=" + g.found + " docs=" + g.found_docs + " groups=" + g.groups.len()
+    each grp in g.groups:
+        println "  [" + str.Join(grp.key, "|") + "] found=" + grp.found + " hits=" + grp.hits.len() + " first=" + grp.hits.get(0).document
+    end
+    _ := typesense.Search(c, "lib", typesense.NewSearch("x", "nope"), err)
+    println "bad field: " + typesense.ErrorString(err)
+
+    mut long := typesense.NewSearch("*", "")
+    long.filter_by = "id:[" + str.Repeat("abcdefghij,", 400) + "z]"
+    lr := typesense.Search(c, "lib", long, err)
+    println "long query: found=" + lr.found + " via=" + str.Substr(fake.Last(), 0, 18) + " [" + typesense.ErrorString(err) + "]"
+    _ := typesense.Search(c, "lib", long, err)
+    println "long query error: " + typesense.ErrorString(err)
+
+    mut reqs := Vector {} as Vector<typesense.SearchRequest>
+    reqs.push(typesense.SearchRequest { collection = "lib", params = typesense.NewSearch("dune", "") })
+    mut second := typesense.NewSearch("emma", "")
+    second.per_page = 3
+    reqs.push(typesense.SearchRequest { collection = "missing", params = second, api_key = "scoped" })
+    mut common := typesense.NewSearch("", "title")
+    common.per_page = 5
+    ms := typesense.MultiSearch(c, reqs, common, err)
+    show("multi", err)
+    each m in ms:
+        println "  found=" + m.found + " hits=" + m.hits.len() + " code=" + m.code + " error=" + m.error
+    end
+    u := typesense.UnionSearch(c, reqs, common, err)
+    show("union", err)
+    println "  found=" + u.found + " out_of=" + u.out_of
+    each h in u.hits:
+        println "  " + h.collection + "#" + h.search_index + " " + h.document
+    end
+    mut rr := r
+    typesense.FreeResult(rr)
+    println "freed: " + rr.hits.len() + " " + rr.facets.len()
+end

@@ -1,0 +1,266 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ailogin
+
+import net.http
+import net.router
+import encoding.json
+import crypto
+import str
+import conv
+
+include aistore "store.salam"
+include aiweb "web.salam"
+include aicloud "cloud.salam"
+
+const STATE_SECONDS := 900
+const SESSION_DAYS := 30
+
+mut APP_URL := "https://ai.salamlang.ir"
+
+func one(v: str): Vector<str>:
+    mut a := Vector {} as Vector<str>
+    a.push(v)
+    ret a
+end
+
+func two(v: str, w: str): Vector<str>:
+    mut a := one(v)
+    a.push(w)
+    ret a
+end
+
+func three(v: str, w: str, x: str): Vector<str>:
+    mut a := two(v, w)
+    a.push(x)
+    ret a
+end
+
+func four(v: str, w: str, x: str, y: str): Vector<str>:
+    mut a := three(v, w, x)
+    a.push(y)
+    ret a
+end
+
+func i64s(n: i64): str:
+    ret conv.FormatInt(n)
+end
+
+func clip(s: str, max: int): str:
+    if s.len() <= max:
+        ret s
+    end
+    mut cut := max
+    until cut > 0 and ((s[cut] as int) >= 128 and (s[cut] as int) < 192):
+        cut -= 1
+    end
+    ret s.substr(0, cut)
+end
+
+func provider_ok(p: str): bool:
+    ret p == "github" or p == "figma"
+end
+
+func safe_next(next: str): str:
+    if next.len() == 0 or next.len() > 300 or not str.StartsWith(next, "/") or str.StartsWith(next, "//") or next.find("\\") >= 0 or next.find("\n") >= 0 or next.find("\r") >= 0:
+        ret ""
+    end
+    ret next
+end
+
+func refuse(ctx: i64, code: str):
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("error", code))
+    aiweb.Reply(ctx, 400, json.Object(m))
+end
+
+func valid_email(email: str): bool:
+    at := email.find("@")
+    if email.len() < 5 or email.len() > 200 or at <= 0 or email.find(" ") >= 0:
+        ret false
+    end
+    ret email.substr(at + 1, email.len() - at - 1).find(".") > 0
+end
+
+func providers(ctx: i64):
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberBool("github", aicloud.OauthReady("github")))
+    m.push(json.MemberBool("figma", aicloud.OauthReady("figma")))
+    aiweb.Reply(ctx, 200, json.Object(m))
+end
+
+func start(ctx: i64):
+    provider := http.Param(ctx, "provider")
+    next := safe_next(json.Get(http.Body(ctx), "next"))
+    if not provider_ok(provider) or not aicloud.OauthReady(provider):
+        refuse(ctx, "unavailable")
+        ret
+    end
+    state := crypto.RandomHex(24)
+    now := aistore.Now()
+    mut a := four(aiweb.Hash(state), "0", provider, i64s(now + STATE_SECONDS))
+    a.push(next)
+    aistore.Lock()
+    _d := aistore.Run("DELETE FROM integration_states WHERE expires < ?1", one(i64s(now)))
+    ok := aistore.Run("INSERT INTO integration_states (state, user_id, provider, expires, purpose, next_path) VALUES (?1, ?2, ?3, ?4, 'login', ?5)", a)
+    aistore.Unlock()
+    if not ok:
+        refuse(ctx, "server")
+        ret
+    end
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("url", aicloud.AuthorizeUrl(provider, state, true)))
+    m.push(json.Member("state", state))
+    aiweb.Reply(ctx, 200, json.Object(m))
+end
+
+func session_for(ctx: i64, uid: str): str:
+    token := crypto.RandomToken(32)
+    now := aistore.Now()
+    ip := clip(aiweb.ClientIp(ctx), 64)
+    mut a := three(aiweb.Hash(token), uid, i64s(now + SESSION_DAYS * 86400))
+    a.push(i64s(now))
+    a.push(ip)
+    a.push(clip(http.Header(ctx, "User-Agent"), 255))
+    a.push(aiweb.ClientKind(ctx))
+    a.push(aiweb.ClientVersion(ctx))
+    a.push(aiweb.ClientOs(ctx))
+    a.push(aiweb.ClientOsVersion(ctx))
+    a.push(aiweb.ClientArch(ctx))
+    aistore.Lock()
+    _s := aistore.Run("INSERT INTO sessions (token, user_id, expires, created, ip, agent, client, client_version, os, os_version, arch, last_used) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?4)", a)
+    _l := aistore.Run("UPDATE users SET last_login = ?1, logins = logins + 1, last_ip = ?2 WHERE id = ?3", three(i64s(now), ip, uid))
+    _g := aistore.Run("DELETE FROM sessions WHERE expires < ?1", one(i64s(now)))
+    aistore.Unlock()
+    ret token
+end
+
+func finish_login(ctx: i64, provider: str, code: str, next: str):
+    mut subject := ""
+    mut login := ""
+    mut name := ""
+    mut email := ""
+    mut verified := false
+    if not aicloud.Identity(provider, code, subject, login, name, email, verified):
+        refuse(ctx, "failed")
+        ret
+    end
+    email = str.Lower(str.Trim(email))
+    now := i64s(aistore.Now())
+    aistore.Lock()
+    mut uid := aistore.OneText("SELECT user_id FROM identities WHERE provider = ?1 AND subject = ?2", two(provider, subject))
+    mut problem := ""
+    if uid.len() == 0:
+        existing := email.len() > 0 ? aistore.OneText("SELECT id FROM users WHERE email = ?1", one(email)) : ""
+        if existing.len() > 0:
+            if not verified or aiweb.IsAdmin(existing, email):
+                problem = "email_exists"
+            else:
+                uid = existing
+            end
+        else:
+            if not valid_email(email) or aiweb.ReservedEmail(email):
+                problem = "no_email"
+            else:
+                mut shown := str.Trim(name)
+                if str.CodePoints(shown).len() < 2:
+                    shown = str.Trim(login)
+                end
+                if str.CodePoints(shown).len() < 2:
+                    shown = provider + " " + subject
+                end
+                shown = clip(shown, 80)
+                _u := aistore.Run("INSERT INTO users (name, email, pass, created) VALUES (?1, ?2, ?3, ?4)", four(shown, email, "oauth$" + crypto.RandomHex(16), now))
+                uid = aistore.OneText("SELECT id FROM users WHERE email = ?1", one(email))
+                if uid.len() == 0:
+                    problem = "server"
+                end
+            end
+        end
+        if problem.len() == 0 and uid.len() > 0:
+            mut a := four(provider, subject, uid, clip(login, 120))
+            a.push(clip(email, 200))
+            a.push(now)
+            _i := aistore.Run("INSERT INTO identities (provider, subject, user_id, login, email, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", a)
+        end
+    end
+    aistore.Unlock()
+    if problem.len() > 0 or uid.len() == 0:
+        refuse(ctx, problem.len() > 0 ? problem : "server")
+        ret
+    end
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("purpose", "login"))
+    m.push(json.Member("token", session_for(ctx, uid)))
+    m.push(json.Member("next", next))
+    aiweb.Reply(ctx, 200, json.Object(m))
+end
+
+func complete(ctx: i64):
+    provider := http.Param(ctx, "provider")
+    body := http.Body(ctx)
+    code := json.Get(body, "code")
+    state := json.Get(body, "state")
+    if not provider_ok(provider) or state.len() == 0:
+        refuse(ctx, "denied")
+        ret
+    end
+    aistore.Lock()
+    mut q := aistore.Stmt("SELECT user_id, purpose, next_path FROM integration_states WHERE state = ?1 AND provider = ?2 AND expires > ?3", three(aiweb.Hash(state), provider, i64s(aistore.Now())))
+    mut found := false
+    mut uid := ""
+    mut purpose := ""
+    mut next := ""
+    if aistore.Next(q):
+        found = true
+        uid = aistore.Text(q, 0)
+        purpose = aistore.Text(q, 1)
+        next = aistore.Text(q, 2)
+    end
+    aistore.Finish(q)
+    _d := aistore.Run("DELETE FROM integration_states WHERE state = ?1", one(aiweb.Hash(state)))
+    aistore.Unlock()
+    if not found:
+        refuse(ctx, "expired")
+        ret
+    end
+    if code.len() == 0 or json.Get(body, "error").len() > 0:
+        refuse(ctx, "denied")
+        ret
+    end
+    if purpose == "connect":
+        mut m := Vector {} as Vector<str>
+        m.push(json.Member("purpose", "connect"))
+        m.push(json.MemberBool("ok", aicloud.FinishConnect(uid, provider, code)))
+        aiweb.Reply(ctx, 200, json.Object(m))
+        ret
+    end
+    finish_login(ctx, provider, code, next)
+end
+
+pub func Configure(app_url: str):
+    if app_url.len() > 0:
+        APP_URL = str.TrimSuffix(app_url, "/")
+    end
+end
+
+pub func Routes(r &: router.Router):
+    router.Get(r, "/auth/providers", providers)
+    router.Post(r, "/auth/provider/:provider/start", start)
+    router.Post(r, "/auth/provider/:provider/complete", complete)
+    router.Options(r, "/auth/providers", aiweb.Preflight)
+    router.Options(r, "/auth/provider/:provider/start", aiweb.Preflight)
+    router.Options(r, "/auth/provider/:provider/complete", aiweb.Preflight)
+end

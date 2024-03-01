@@ -1,0 +1,582 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "midi"
+@fa "میدی"
+package midi
+
+import audio
+import audio.synth
+import compress
+import archive
+
+@en "NoteOff"
+@fa "نت خاموش"
+pub const NoteOff := 128
+
+@en "NoteOn"
+@fa "نت روشن"
+pub const NoteOn := 144
+
+@en "ControlChange"
+@fa "تغییر واپایش"
+pub const ControlChange := 176
+
+@en "ProgramChange"
+@fa "تغییر برنامه"
+pub const ProgramChange := 192
+
+@en "MetaEvent"
+@fa "رویداد فرا"
+pub const MetaEvent := 255
+
+@en "MetaTempo"
+@fa "فرا ضرباهنگ"
+pub const MetaTempo := 81
+
+@en "MetaTrackName"
+@fa "فرا نام ترک"
+pub const MetaTrackName := 3
+
+@en "MetaEndOfTrack"
+@fa "پایان ترک"
+pub const MetaEndOfTrack := 47
+
+@en "MetaTimeSignature"
+@fa "فرا کسر میزان"
+pub const MetaTimeSignature := 88
+
+@en "DefaultDivision"
+@fa "تقسیم پیش‌فرض"
+pub const DefaultDivision := 480
+
+@en "Event"
+@fa "رویداد"
+pub struct Event:
+    @en "tick"
+    @fa "تیک"
+    pub tick: int = 0
+    @en "status"
+    @fa "وضعیت"
+    pub status: int = 0
+    @en "channel"
+    @fa "کانال"
+    pub channel: int = 0
+    @en "data1"
+    @fa "داده۱"
+    pub data1: int = 0
+    @en "data2"
+    @fa "داده۲"
+    pub data2: int = 0
+    @en "meta"
+    @fa "فرا"
+    pub meta: int = 0
+    @en "value"
+    @fa "مقدار"
+    pub value: i64 = 0
+end
+
+@en "Track"
+@fa "ترک"
+pub struct Track:
+    @en "events"
+    @fa "رویدادها"
+    pub events: Vector<Event> = Vector {}
+end
+
+@en "Song"
+@fa "آهنگ"
+pub struct Song:
+    @en "format"
+    @fa "قالب"
+    pub format: int = 0
+    @en "division"
+    @fa "تقسیم"
+    pub division: int = 0
+    @en "tempo"
+    @fa "ضرباهنگ"
+    pub tempo: i64 = 500000
+    @en "tracks"
+    @fa "ترک‌ها"
+    pub tracks: Vector<Track> = Vector {}
+end
+
+func _byte(p: void*, off: int): int:
+    bp := p as u8*
+    ret bp[off] as int
+end
+
+func _be16(p: void*, off: int): int:
+    ret (_byte(p, off) << 8) | _byte(p, off + 1)
+end
+
+func _be32(p: void*, off: int): int:
+    ret (_byte(p, off) << 24) | (_byte(p, off + 1) << 16) | (_byte(p, off + 2) << 8) | _byte(p, off + 3)
+end
+
+func _varlen(p: void*, at &: int, stop: int): int:
+    mut v := 0
+    mut n := 0
+    until n < 4:
+        if at >= stop:
+            ret v
+        end
+        b := _byte(p, at)
+        at += 1
+        v = (v << 7) | (b & 127)
+        if (b & 128) == 0:
+            ret v
+        end
+        n += 1
+    end
+    ret v
+end
+
+func _put_varlen(b &: compress.ByteBuf, v: int):
+    if v < 128:
+        compress.BufPush(b, v)
+        ret
+    end
+    mut stack: int[5]
+    mut n := 0
+    mut x := v
+    until x > 0:
+        stack[n] = x & 127
+        n += 1
+        x = x >> 7
+        if n >= 5:
+            break
+        end
+    end
+    mut i := n - 1
+    until i >= 0:
+        mut byte := stack[i]
+        if i > 0:
+            byte = byte | 128
+        end
+        compress.BufPush(b, byte)
+        i -= 1
+    end
+end
+
+func _put_be16(b &: compress.ByteBuf, v: int):
+    compress.BufPush(b, (v >> 8) & 255)
+    compress.BufPush(b, v & 255)
+end
+
+func _put_be32(b &: compress.ByteBuf, v: int):
+    compress.BufPush(b, (v >> 24) & 255)
+    compress.BufPush(b, (v >> 16) & 255)
+    compress.BufPush(b, (v >> 8) & 255)
+    compress.BufPush(b, v & 255)
+end
+
+@en "IsMIDI"
+@fa "میدی است"
+pub func IsMIDI(p: void*, n: int): bool:
+    if n < 14:
+        ret false
+    end
+    ret _byte(p, 0) == 77 and _byte(p, 1) == 84 and _byte(p, 2) == 104 and _byte(p, 3) == 100
+end
+
+@en "NewSong"
+@fa "آهنگ جدید"
+pub func NewSong(division: int): Song:
+    mut f := Song {}
+    f.format = 1
+    f.division = division > 0 ? division : DefaultDivision
+    f.tempo = 500000
+    f.tracks = Vector {} as Vector<Track>
+    ret f
+end
+
+@en "NewTrack"
+@fa "ترک جدید"
+pub func NewTrack(): Track:
+    mut t := Track {}
+    t.events = Vector {} as Vector<Event>
+    ret t
+end
+
+@en "AddTrack"
+@fa "افزودن ترک"
+pub func AddTrack(f &: Song, t: Track):
+    f.tracks.push(t)
+end
+
+@en "AddNote"
+@fa "افزودن نت"
+pub func AddNote(t &: Track, tick: int, length: int, note: int, velocity: int, channel: int):
+    t.events.push(Event { tick = tick, status = NoteOn, channel = channel, data1 = note, data2 = velocity })
+    t.events.push(Event { tick = tick + length, status = NoteOff, channel = channel, data1 = note, data2 = 0 })
+end
+
+@en "AddTempo"
+@fa "افزودن ضرباهنگ"
+pub func AddTempo(t &: Track, tick: int, bpm: f64):
+    if bpm <= 0.0:
+        ret
+    end
+    us := (60000000.0 / bpm) as i64
+    t.events.push(Event { tick = tick, status = MetaEvent, meta = MetaTempo, value = us })
+end
+
+@en "AddProgram"
+@fa "افزودن برنامه"
+pub func AddProgram(t &: Track, tick: int, program: int, channel: int):
+    t.events.push(Event { tick = tick, status = ProgramChange, channel = channel, data1 = program })
+end
+
+@en "AddControl"
+@fa "افزودن واپایش"
+pub func AddControl(t &: Track, tick: int, controller: int, value: int, channel: int):
+    t.events.push(Event { tick = tick, status = ControlChange, channel = channel, data1 = controller, data2 = value })
+end
+
+@en "FreeSong"
+@fa "آزادسازی آهنگ"
+pub func FreeSong(f &: Song):
+    mut i := 0
+    until i < f.tracks.len():
+        mut t := f.tracks.get(i)
+        t.events.free()
+        i += 1
+    end
+    f.tracks.free()
+end
+
+@en "TicksToSeconds"
+@fa "تیک به ثانیه"
+pub func TicksToSeconds(f: Song, ticks: int): f64:
+    if f.division <= 0:
+        ret 0.0
+    end
+    ret (ticks as f64) * ((f.tempo as f64) / 1000000.0) / (f.division as f64)
+end
+
+@en "SecondsToTicks"
+@fa "ثانیه به تیک"
+pub func SecondsToTicks(f: Song, seconds: f64): int:
+    if f.tempo <= (0 as i64):
+        ret 0
+    end
+    ret (seconds * (f.division as f64) / ((f.tempo as f64) / 1000000.0)) as int
+end
+
+@en "Bpm"
+@fa "ضربان"
+pub func Bpm(f: Song): f64:
+    if f.tempo <= (0 as i64):
+        ret 0.0
+    end
+    ret 60000000.0 / (f.tempo as f64)
+end
+
+@en "TotalTicks"
+@fa "تیک کل"
+pub func TotalTicks(f: Song): int:
+    mut last := 0
+    mut i := 0
+    until i < f.tracks.len():
+        t := f.tracks.get(i)
+        mut k := 0
+        until k < t.events.len():
+            e := t.events.get(k)
+            if e.tick > last:
+                last = e.tick
+            end
+            k += 1
+        end
+        i += 1
+    end
+    ret last
+end
+
+@en "DecodeMIDI"
+@fa "کدگشایی میدی"
+pub func DecodeMIDI(p: void*, n: int, ok &: bool): Song:
+    ok = false
+    mut f := NewSong(DefaultDivision)
+    if not IsMIDI(p, n):
+        ret f
+    end
+    head_len := _be32(p, 4)
+    if head_len < 6 or 8 + head_len > n:
+        ret f
+    end
+    f.format = _be16(p, 8)
+    count := _be16(p, 10)
+    div := _be16(p, 12)
+    if div == 0:
+        ret f
+    end
+    f.division = div
+    mut at := 8 + head_len
+    mut seen := 0
+    until seen < count:
+        if at + 8 > n:
+            break
+        end
+        if _byte(p, at) != 77 or _byte(p, at + 1) != 84 or _byte(p, at + 2) != 114 or _byte(p, at + 3) != 107:
+            break
+        end
+        size := _be32(p, at + 4)
+        body := at + 8
+        mut stop := body + size
+        if stop > n:
+            stop = n
+        end
+        mut t := NewTrack()
+        mut cur := body
+        mut tick := 0
+        mut running := 0
+        until cur < stop:
+            delta := _varlen(p, cur, stop)
+            tick += delta
+            if cur >= stop:
+                break
+            end
+            mut status := _byte(p, cur)
+            if status < 128:
+                status = running
+            else:
+                cur += 1
+                if status < 240:
+                    running = status
+                end
+            end
+            kind := status & 240
+            if status == MetaEvent:
+                if cur >= stop:
+                    break
+                end
+                meta := _byte(p, cur)
+                cur += 1
+                len := _varlen(p, cur, stop)
+                mut ev := Event { tick = tick, status = MetaEvent, meta = meta }
+                if meta == MetaTempo and len >= 3 and cur + 3 <= stop:
+                    ev.value = ((_byte(p, cur) << 16) | (_byte(p, cur + 1) << 8) | _byte(p, cur + 2)) as i64
+                    if f.tempo == (500000 as i64):
+                        f.tempo = ev.value
+                    end
+                end
+                t.events.push(ev)
+                cur += len
+                if meta == MetaEndOfTrack:
+                    break
+                end
+            else status == 240 or status == 247:
+                len := _varlen(p, cur, stop)
+                cur += len
+            else kind == NoteOff or kind == NoteOn or kind == ControlChange or kind == 160 or kind == 224:
+                if cur + 2 > stop:
+                    break
+                end
+                d1 := _byte(p, cur)
+                d2 := _byte(p, cur + 1)
+                cur += 2
+                mut st := kind
+                if kind == NoteOn and d2 == 0:
+                    st = NoteOff
+                end
+                t.events.push(Event { tick = tick, status = st, channel = status & 15, data1 = d1, data2 = d2 })
+            else kind == ProgramChange or kind == 208:
+                if cur + 1 > stop:
+                    break
+                end
+                d1 := _byte(p, cur)
+                cur += 1
+                t.events.push(Event { tick = tick, status = kind, channel = status & 15, data1 = d1 })
+            else:
+                break
+            end
+        end
+        f.tracks.push(t)
+        at = body + size
+        seen += 1
+    end
+    ok = f.tracks.len() > 0
+    ret f
+end
+
+@en "EncodeMIDI"
+@fa "کدگذاری میدی"
+pub func EncodeMIDI(f: Song): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    if f.tracks.len() == 0 or f.division <= 0:
+        ret out
+    end
+    compress.BufPush(out, 77)
+    compress.BufPush(out, 84)
+    compress.BufPush(out, 104)
+    compress.BufPush(out, 100)
+    _put_be32(out, 6)
+    _put_be16(out, f.tracks.len() > 1 ? 1 : 0)
+    _put_be16(out, f.tracks.len())
+    _put_be16(out, f.division)
+    mut ti := 0
+    until ti < f.tracks.len():
+        t := f.tracks.get(ti)
+        mut body := compress.NewByteBuf()
+        mut last := 0
+        mut i := 0
+        until i < t.events.len():
+            e := t.events.get(i)
+            mut delta := e.tick - last
+            if delta < 0:
+                delta = 0
+            end
+            _put_varlen(body, delta)
+            last = e.tick
+            if e.status == MetaEvent:
+                compress.BufPush(body, 255)
+                compress.BufPush(body, e.meta)
+                if e.meta == MetaTempo:
+                    compress.BufPush(body, 3)
+                    compress.BufPush(body, ((e.value >> 16) & (255 as i64)) as int)
+                    compress.BufPush(body, ((e.value >> 8) & (255 as i64)) as int)
+                    compress.BufPush(body, (e.value & (255 as i64)) as int)
+                else:
+                    compress.BufPush(body, 0)
+                end
+            else e.status == ProgramChange:
+                compress.BufPush(body, ProgramChange | (e.channel & 15))
+                compress.BufPush(body, e.data1 & 127)
+            else:
+                compress.BufPush(body, e.status | (e.channel & 15))
+                compress.BufPush(body, e.data1 & 127)
+                compress.BufPush(body, e.data2 & 127)
+            end
+            i += 1
+        end
+        _put_varlen(body, 0)
+        compress.BufPush(body, 255)
+        compress.BufPush(body, MetaEndOfTrack)
+        compress.BufPush(body, 0)
+        compress.BufPush(out, 77)
+        compress.BufPush(out, 84)
+        compress.BufPush(out, 114)
+        compress.BufPush(out, 107)
+        _put_be32(out, compress.BufLen(body))
+        compress.BufPushBuf(out, body)
+        compress.BufFree(body)
+        ti += 1
+    end
+    ret out
+end
+
+@en "OpenMIDI"
+@fa "بازکردن میدی"
+pub func OpenMIDI(path: str, ok &: bool): Song:
+    mut read_ok := false
+    buf := archive.ReadBinaryFile(path, read_ok)
+    if not read_ok:
+        ok = false
+        ret NewSong(DefaultDivision)
+    end
+    out := DecodeMIDI(buf.data, buf.len, ok)
+    compress.BufFree(buf)
+    ret out
+end
+
+@en "SaveMIDI"
+@fa "ذخیره میدی"
+pub func SaveMIDI(f: Song, path: str): bool:
+    buf := EncodeMIDI(f)
+    if compress.BufLen(buf) == 0:
+        compress.BufFree(buf)
+        ret false
+    end
+    ok := archive.WriteBinaryFileBuf(path, buf)
+    compress.BufFree(buf)
+    ret ok
+end
+
+@en "Notes"
+@fa "نت‌ها"
+pub func Notes(f: Song): Vector<synth.Note>:
+    mut out := Vector {} as Vector<synth.Note>
+    mut ti := 0
+    until ti < f.tracks.len():
+        t := f.tracks.get(ti)
+        mut i := 0
+        until i < t.events.len():
+            e := t.events.get(i)
+            if e.status == NoteOn and e.data2 > 0:
+                mut length := 0
+                mut k := i + 1
+                until k < t.events.len():
+                    o := t.events.get(k)
+                    if o.status == NoteOff and o.data1 == e.data1 and o.channel == e.channel:
+                        length = o.tick - e.tick
+                        break
+                    end
+                    k += 1
+                end
+                if length <= 0:
+                    length = f.division
+                end
+                out.push(synth.Note {
+                    note = e.data1,
+                    start = TicksToSeconds(f, e.tick),
+                    length = TicksToSeconds(f, length),
+                    gain = (e.data2 as f64) / 127.0 * 0.5,
+                    wave = synth.WaveSine
+                })
+            end
+            i += 1
+        end
+        ti += 1
+    end
+    ret out
+end
+
+@en "Render"
+@fa "ساختن"
+pub func Render(f: Song, rate: int, channels: int): audio.Clip:
+    mut notes := Notes(f)
+    if notes.len() == 0:
+        notes.free()
+        ret audio.Clip {}
+    end
+    e := synth.ADSR { attack = 0.01, decay = 0.04, sustain = 0.6, release = 0.08 }
+    out := synth.RenderNotes(notes, rate, channels, e)
+    notes.free()
+    ret out
+end
+
+@en "ProgramName"
+@fa "نام برنامه"
+pub func ProgramName(program: int): str:
+    if program == 0:
+        ret "Acoustic Grand Piano"
+    end
+    if program == 24:
+        ret "Acoustic Guitar"
+    end
+    if program == 40:
+        ret "Violin"
+    end
+    if program == 56:
+        ret "Trumpet"
+    end
+    if program == 73:
+        ret "Flute"
+    end
+    if program == 104:
+        ret "Sitar"
+    end
+    ret ""
+end

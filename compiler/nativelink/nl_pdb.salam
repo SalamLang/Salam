@@ -1,0 +1,1146 @@
+package nativelink
+
+import os
+import str
+
+const PDB_BS := 4096
+const PDB_NBUCKET := 4096
+const PDB_RSDS := 28
+
+pub struct Pdb:
+    pub sdata: Vector<u8> = Vector {}
+    pub soff: Vector<int> = Vector {}
+    pub slen: Vector<int> = Vector {}
+    pub nm_id: Vector<int> = Vector {}
+    pub nm_off: HashMap<int, int> = HashMap {}
+    pub nm_bytes: Vector<u8> = Vector {}
+    pub mod_name: Vector<str> = Vector {}
+    pub mod_stream: Vector<int> = Vector {}
+    pub mod_symsz: Vector<int> = Vector {}
+    pub mod_c13sz: Vector<int> = Vector {}
+    pub mod_file0: Vector<int> = Vector {}
+    pub mod_nfile: Vector<int> = Vector {}
+    pub mod_obj: Vector<int> = Vector {}
+    pub files: Vector<int> = Vector {}
+    pub ref_name: Vector<int> = Vector {}
+    pub ref_mod: Vector<int> = Vector {}
+    pub ref_off: Vector<int> = Vector {}
+    pub ref_kind: Vector<int> = Vector {}
+    pub sc_sec: Vector<int> = Vector {}
+    pub sc_off: Vector<i64> = Vector {}
+    pub sc_size: Vector<i64> = Vector {}
+    pub sc_flags: Vector<i64> = Vector {}
+    pub sc_mod: Vector<int> = Vector {}
+    pub tpi: Vector<u8> = Vector {}
+    pub tcount: int = 0
+    pub tbase: int = 0
+    pub ipi: Vector<u8> = Vector {}
+    pub icount: int = 0
+    pub tmap: Vector<int> = Vector {}
+end
+
+func pdb_hash_bytes(p: Vector<u8>, s: int, n: int): i64:
+    mut r := 0 as i64
+    mut i := s
+    e := s + n
+    until i + 4 <= e:
+        r = r ^ ((p[i] as i64) | ((p[i + 1] as i64) << (8 as i64)) | ((p[i + 2] as i64) << (16 as i64)) | ((p[i + 3] as i64) << (24 as i64)))
+        i += 4
+    end
+    if e - i >= 2:
+        r = r ^ ((p[i] as i64) | ((p[i + 1] as i64) << (8 as i64)))
+        i += 2
+    end
+    if e - i == 1:
+        r = r ^ (p[i] as i64)
+    end
+    r = r | (0x20202020 as i64)
+    r = r ^ (r >> (11 as i64))
+    ret (r ^ (r >> (16 as i64))) & (0xFFFFFFFF as i64)
+end
+
+func pdb_hash_name(l &: Nl, id: int): i64:
+    ret pdb_hash_bytes(l.names.bytes, l.names.off[id], l.names.len[id])
+end
+
+func pdb_put_name(l &: Nl, o &: Vector<u8>, id: int):
+    p := l.names.off[id]
+    repeat l.names.len[id] in i:
+        o.push(l.names.bytes[p + i])
+    end
+    o.push(0 as u8)
+end
+
+func pdb_pad4(o &: Vector<u8>):
+    until o.len() % 4 != 0:
+        o.push(0 as u8)
+    end
+end
+
+func pdb_put16(o &: Vector<u8>, at: int, v: int):
+    o[at] = (v & 255) as u8
+    o[at + 1] = ((v >> 8) & 255) as u8
+end
+
+func pdb_put32(o &: Vector<u8>, at: int, v: i64):
+    repeat 4 in k:
+        o[at + k] = ((v >> ((8 * k) as i64)) & (255 as i64)) as u8
+    end
+end
+
+func pdb_get32(o &: Vector<u8>, at: int): i64:
+    ret (o[at] as i64) | ((o[at + 1] as i64) << (8 as i64)) | ((o[at + 2] as i64) << (16 as i64)) | ((o[at + 3] as i64) << (24 as i64))
+end
+
+func pdb_stream(m &: Pdb, v &: Vector<u8>): int:
+    m.soff.push(m.sdata.len())
+    m.slen.push(v.len())
+    each b in v:
+        m.sdata.push(b)
+    end
+    ret m.soff.len() - 1
+end
+
+func pdb_stream_set(m &: Pdb, ix: int, v &: Vector<u8>):
+    m.soff[ix] = m.sdata.len()
+    m.slen[ix] = v.len()
+    each b in v:
+        m.sdata.push(b)
+    end
+end
+
+func pdb_name_off(l &: Nl, m &: Pdb, id: int): int:
+    if m.nm_off.has(id):
+        ret m.nm_off.get(id)
+    end
+    if m.nm_bytes.len() == 0:
+        m.nm_bytes.push(0 as u8)
+    end
+    at := m.nm_bytes.len()
+    pdb_put_name(l, m.nm_bytes, id)
+    m.nm_off.put(id, at)
+    m.nm_id.push(id)
+    ret at
+end
+
+func pdb_strtab(l &: Nl, ids: Vector<int>, offs: HashMap<int, int>, data: Vector<u8>): Vector<u8>:
+    mut o := Vector {} as Vector<u8>
+    tb_le(o, 0xEFFEEFFE as i64, 4)
+    tb_le(o, 1 as i64, 4)
+    mut body := Vector {} as Vector<u8>
+    each b in data:
+        body.push(b)
+    end
+    if body.len() == 0:
+        body.push(0 as u8)
+    end
+    pdb_pad4(body)
+    tb_le(o, body.len() as i64, 4)
+    each b2 in body:
+        o.push(b2)
+    end
+    nb := ids.len() * 2 + 1
+    mut bk := Vector {} as Vector<int>
+    repeat nb:
+        bk.push(0)
+    end
+    each id in ids:
+        mut j := (pdb_hash_name(l, id) % (nb as i64)) as int
+        until bk[j] != 0:
+            j = (j + 1) % nb
+        end
+        bk[j] = offs.get(id)
+    end
+    tb_le(o, nb as i64, 4)
+    each x in bk:
+        tb_le(o, x as i64, 4)
+    end
+    tb_le(o, ids.len() as i64, 4)
+    body.free()
+    bk.free()
+    ret o
+end
+
+func pdb_cv_bytes(l &: Nl, t &: Pe, s: int): Vector<u8>:
+    mut v := Vector {} as Vector<u8>
+    p := fptr(l, l.o_file[l.s_obj[s]])
+    repeat l.s_size[s] in b:
+        v.push(p[l.s_off[s] + b])
+    end
+    r0 := l.s_rel0[s]
+    repeat l.s_nrel[s] in q:
+        r := r0 + q
+        ty := pe_rtype(l, l.r_type[r] - CR_BASE)
+        os := l.r_sym[r]
+        at := l.r_off[r] as int
+        ts := sym_sec_of(l, os)
+        if ts < 0 or l.s_oc[ts] < 0 or l.s_oc[ts] >= PS_COUNT:
+            continue
+        end
+        if ty == 11:
+            pdb_put32(v, at, pe_sym(l, os) + pdb_get32(v, at) - (l.pe_base + t.ps_va[l.s_oc[ts]]))
+        else ty == 10:
+            pdb_put16(v, at, pe_secidx(t, l.s_oc[ts]))
+        end
+    end
+    ret v
+end
+
+func pdb_opens(k: int): bool:
+    ret k == 0x1110 or k == 0x110F or k == 0x1147 or k == 0x1146 or k == 0x1103 or k == 0x1102 or k == 0x114D or k == 0x1132 or k == 0x1155 or k == 0x1156
+end
+
+func pdb_closes(k: int): bool:
+    ret k == 0x0006 or k == 0x114F or k == 0x114E
+end
+
+func pdb_syms(l &: Nl, m &: Pdb, cv &: Vector<u8>, at0: int, n: int, ms &: Vector<u8>, stack &: Vector<int>, modix: int):
+    mut at := at0
+    stop := at0 + n
+    until at + 4 <= stop:
+        rl := (cv[at] as int) | ((cv[at + 1] as int) << 8)
+        k := (cv[at + 2] as int) | ((cv[at + 3] as int) << 8)
+        if rl < 2 or at + 2 + rl > stop:
+            ret
+        end
+        rec := ms.len()
+        tb_le(ms, 0 as i64, 2)
+        repeat rl in b:
+            ms.push(cv[at + 2 + b])
+        end
+        pdb_pad4(ms)
+        pdb_put16(ms, rec, ms.len() - rec - 2)
+        if m.tbase > 0:
+            if (k == 0x113E or k == 0x1107 or k == 0x110C or k == 0x110D) and rl >= 6:
+                pdb_remap_at(m, ms, rec + 4)
+            else (k == 0x1110 or k == 0x110F) and rl >= 30:
+                pdb_remap_at(m, ms, rec + 28)
+            else k == 0x114D and rl >= 14:
+                pdb_remap_at(m, ms, rec + 12)
+            end
+        end
+        off := rec + 4
+        if pdb_opens(k) and rl >= 10:
+            pdb_put32(ms, rec + 4, (stack.len() > 0 ? stack[stack.len() - 1] : 0) as i64)
+            stack.push(off)
+            if (k == 0x1110 or k == 0x110F or k == 0x1147 or k == 0x1146) and rl > 37:
+                np := rec + 4 + 35
+                mut e := np
+                until e < ms.len() and ms[e] != (0 as u8):
+                    e += 1
+                end
+                m.ref_name.push(nt_find(l.names, ms.data, np as i64, e - np, true))
+                m.ref_mod.push(modix)
+                m.ref_off.push(off)
+                m.ref_kind.push(k == 0x1110 or k == 0x1147 ? 0x1125 : 0x1127)
+            end
+        else pdb_closes(k) and stack.len() > 0:
+            op := stack.pop()
+            pdb_put32(ms, op - 4 + 8, off as i64)
+        end
+        at = at + 2 + rl
+    end
+end
+
+func pdb_abs_name(l &: Nl, id: int): int:
+    n := l.names.len[id]
+    o := l.names.off[id]
+    b := l.names.bytes
+    if n == 0 or b[o] == (47 as u8) or b[o] == (92 as u8) or (n > 1 and b[o + 1] == (58 as u8)):
+        ret id
+    end
+    mut nm := name_of(l, id)
+    if str.StartsWith(nm, "./") or str.StartsWith(nm, ".\\"):
+        nm = str.Substr(nm, 2, n - 2)
+    end
+    cwd := os.Cwd()
+    if str.Len(cwd) == 0:
+        ret id
+    end
+    sep := str.Contains(cwd, "\\") ? "\\" : "/"
+    ret name_id(l, str.EndsWith(cwd, sep) ? cwd + nm : cwd + sep + nm)
+end
+
+func pdb_checksums(l &: Nl, m &: Pdb, cv &: Vector<u8>, at0: int, n: int, strs: int, out &: Vector<u8>):
+    mut at := at0
+    stop := at0 + n
+    until at + 6 <= stop:
+        so := pdb_get32(cv, at) as int
+        cs := cv[at + 4] as int
+        ent := out.len()
+        repeat 6 + cs in b:
+            out.push(cv[at + b])
+        end
+        pdb_pad4(out)
+        if strs >= 0:
+            np := strs + so
+            mut e := np
+            until e < cv.len() and cv[e] != (0 as u8):
+                e += 1
+            end
+            id := pdb_abs_name(l, nt_find(l.names, cv.data, np as i64, e - np, true))
+            pdb_put32(out, ent, pdb_name_off(l, m, id) as i64)
+            m.files.push(id)
+        end
+        at = at + ((6 + cs + 3) / 4) * 4
+    end
+end
+
+func pdb_module(l &: Nl, m &: Pdb, t &: Pe, obj: int, secs: Vector<int>):
+    modix := m.mod_name.len()
+    mut ms := Vector {} as Vector<u8>
+    mut c13 := Vector {} as Vector<u8>
+    mut stack := Vector {} as Vector<int>
+    file0 := m.files.len()
+    each s in secs:
+        mut cv := pdb_cv_bytes(l, t, s)
+        if cv.len() < 4 or pdb_get32(cv, 0) != (4 as i64):
+            cv.free()
+            continue
+        end
+        mut strs := 0 - 1
+        mut at := 4
+        until at + 8 <= cv.len():
+            k := pdb_get32(cv, at) as int
+            n := pdb_get32(cv, at + 4) as int
+            if k == 0xF3:
+                strs = at + 8
+            end
+            at = at + 8 + ((n + 3) / 4) * 4
+        end
+        at = 4
+        until at + 8 <= cv.len():
+            k2 := pdb_get32(cv, at) as int
+            n2 := pdb_get32(cv, at + 4) as int
+            if at + 8 + n2 > cv.len():
+                break
+            end
+            if k2 == 0xF1:
+                pdb_syms(l, m, cv, at + 8, n2, ms, stack, modix)
+            else k2 == 0xF4:
+                tb_le(c13, k2 as i64, 4)
+                hl := c13.len()
+                tb_le(c13, 0 as i64, 4)
+                pdb_checksums(l, m, cv, at + 8, n2, strs, c13)
+                pdb_put32(c13, hl, (c13.len() - hl - 4) as i64)
+            else k2 == 0xF2 or k2 == 0xF6 or k2 == 0xF5:
+                st0 := c13.len()
+                repeat 8 + n2 in b:
+                    c13.push(cv[at + b])
+                end
+                pdb_pad4(c13)
+                if k2 == 0xF6 and n2 >= 4 and m.tbase > 0 and pdb_get32(c13, st0 + 8) == (0 as i64):
+                    mut e6 := st0 + 12
+                    until e6 + 12 <= st0 + 8 + n2:
+                        pdb_remap_at(m, c13, e6)
+                        e6 = e6 + 12
+                    end
+                end
+            end
+            at = at + 8 + ((n2 + 3) / 4) * 4
+        end
+        cv.free()
+    end
+    mut st := Vector {} as Vector<u8>
+    tb_le(st, 4 as i64, 4)
+    each b1 in ms:
+        st.push(b1)
+    end
+    each b2 in c13:
+        st.push(b2)
+    end
+    tb_le(st, 0 as i64, 4)
+    m.mod_stream.push(pdb_stream(m, st))
+    m.mod_symsz.push(ms.len() + 4)
+    m.mod_c13sz.push(c13.len())
+    m.mod_file0.push(file0)
+    m.mod_nfile.push(m.files.len() - file0)
+    m.mod_name.push(l.o_label[obj])
+    m.mod_obj.push(obj)
+    repeat t.it_ps.len() in i:
+        if t.it_kind[i] == IT_SEC and l.s_obj[t.it_ord[i]] == obj and t.it_ps[i] != PS_BSS:
+            k3 := t.it_ps[i]
+            m.sc_sec.push(pe_secidx(t, k3))
+            m.sc_off.push(t.it_addr[i] - t.ps_va[k3])
+            m.sc_size.push(l.s_size[t.it_ord[i]])
+            m.sc_flags.push(l.s_flags[t.it_ord[i]])
+            m.sc_mod.push(modix)
+        end
+    end
+    st.free()
+    ms.free()
+    c13.free()
+    stack.free()
+end
+
+func pdb_sort(keys: Vector<i64>): Vector<int>:
+    mut ix := Vector {} as Vector<int>
+    repeat keys.len() in i:
+        ix.push(i)
+    end
+    mut tmp := Vector {} as Vector<int>
+    repeat keys.len():
+        tmp.push(0)
+    end
+    mut w := 1
+    n := keys.len()
+    until w < n:
+        mut lo := 0
+        until lo < n:
+            mid := lo + w < n ? lo + w : n
+            hi := lo + 2 * w < n ? lo + 2 * w : n
+            mut a := lo
+            mut b := mid
+            mut k := lo
+            until k < hi:
+                if a < mid and (b >= hi or keys[ix[a]] <= keys[ix[b]]):
+                    tmp[k] = ix[a]
+                    a += 1
+                else:
+                    tmp[k] = ix[b]
+                    b += 1
+                end
+                k += 1
+            end
+            lo = hi
+        end
+        repeat n in c:
+            ix[c] = tmp[c]
+        end
+        w = w * 2
+    end
+    tmp.free()
+    ret ix
+end
+
+func pdb_gsi(l &: Nl, names: Vector<int>, offs: Vector<int>): Vector<u8>:
+    mut keys := Vector {} as Vector<i64>
+    repeat names.len() in i:
+        keys.push(((pdb_hash_name(l, names[i]) % (PDB_NBUCKET as i64)) << (32 as i64)) | (i as i64))
+    end
+    ord := pdb_sort(keys)
+    mut o := Vector {} as Vector<u8>
+    tb_le(o, 0xFFFFFFFF as i64, 4)
+    tb_le(o, (0xEFFE0000 + 19990810) as i64, 4)
+    tb_le(o, (names.len() * 8) as i64, 4)
+    nwords := (PDB_NBUCKET + 32) / 32
+    mut bm := Vector {} as Vector<i64>
+    repeat nwords:
+        bm.push(0 as i64)
+    end
+    mut starts := Vector {} as Vector<i64>
+    mut last := 0 - 1
+    repeat ord.len() in j:
+        bkt := (keys[ord[j]] >> (32 as i64)) as int
+        if bkt != last:
+            bm[bkt / 32] = bm[bkt / 32] | ((1 as i64) << ((bkt % 32) as i64))
+            starts.push((j * 12) as i64)
+            last = bkt
+        end
+    end
+    tb_le(o, (nwords * 4 + starts.len() * 4) as i64, 4)
+    each q in ord:
+        tb_le(o, (offs[q] + 1) as i64, 4)
+        tb_le(o, 1 as i64, 4)
+    end
+    each wd in bm:
+        tb_le(o, wd, 4)
+    end
+    each st in starts:
+        tb_le(o, st, 4)
+    end
+    keys.free()
+    bm.free()
+    starts.free()
+    ret o
+end
+
+func pdb_guid(buf: u8*, total: i64, k: int): i64:
+    mut h := (0xCBF29CE484222325 as u64) + (k as u64)
+    mut i := 0 as i64
+    until i < total:
+        h = (h ^ (buf[i] as u64)) * (0x100000001B3 as u64)
+        i = i + (1 as i64)
+    end
+    ret h as i64
+end
+
+func pdb_secflags(fl: i64): int:
+    mut f := 0x108
+    if (fl & (0x40000000 as i64)) != (0 as i64): f = f | 1 end
+    if (fl & (0x80000000 as i64)) != (0 as i64): f = f | 2 end
+    if (fl & (0x20000000 as i64)) != (0 as i64): f = f | 4 end
+    ret f
+end
+
+func pdb_msf(m &: Pdb, path: str): bool:
+    mut blk := Vector {} as Vector<int>
+    mut nblk := 3
+    nst := m.soff.len()
+    mut sblk0 := Vector {} as Vector<int>
+    repeat nst in s:
+        sblk0.push(blk.len())
+        nb := (m.slen[s] + PDB_BS - 1) / PDB_BS
+        repeat nb:
+            until nblk % PDB_BS == 1 or nblk % PDB_BS == 2:
+                nblk += 1
+            end
+            blk.push(nblk)
+            nblk += 1
+        end
+    end
+    sblk0.push(blk.len())
+    mut dir := Vector {} as Vector<u8>
+    tb_le(dir, nst as i64, 4)
+    repeat nst in s2:
+        tb_le(dir, m.slen[s2] as i64, 4)
+    end
+    each b in blk:
+        tb_le(dir, b as i64, 4)
+    end
+    mut dblk := Vector {} as Vector<int>
+    repeat (dir.len() + PDB_BS - 1) / PDB_BS:
+        until nblk % PDB_BS == 1 or nblk % PDB_BS == 2:
+            nblk += 1
+        end
+        dblk.push(nblk)
+        nblk += 1
+    end
+    until nblk % PDB_BS == 1 or nblk % PDB_BS == 2:
+        nblk += 1
+    end
+    mapblk := nblk
+    nblk += 1
+    total := (nblk as i64) * (PDB_BS as i64)
+    out := malloc(total as u64) as u8*
+    repeat total in z:
+        out[z] = 0 as u8
+    end
+    magic := "Microsoft C/C++ MSF 7.00\r\n"
+    mp := (magic as void*) as u8*
+    repeat str.Len(magic) in c:
+        out[c] = mp[c]
+    end
+    out[26] = 0x1A as u8
+    out[27] = 0x44 as u8
+    out[28] = 0x53 as u8
+    wr32(out, 32 as i64, PDB_BS as i64)
+    wr32(out, 36 as i64, 1 as i64)
+    wr32(out, 40 as i64, nblk as i64)
+    wr32(out, 44 as i64, dir.len() as i64)
+    wr32(out, 52 as i64, mapblk as i64)
+    mut fb := 1
+    until fb < nblk:
+        repeat 2 in f:
+            base := ((fb + f) as i64) * (PDB_BS as i64)
+            repeat PDB_BS in q:
+                out[base + (q as i64)] = 0xFF as u8
+            end
+        end
+        fb += PDB_BS
+    end
+    repeat nblk in u:
+        fi := u / (PDB_BS * 8)
+        fpm := ((1 + fi * PDB_BS) as i64) * (PDB_BS as i64)
+        bit := u % (PDB_BS * 8)
+        p := fpm + ((bit / 8) as i64)
+        out[p] = ((out[p] as int) & (255 - (1 << (bit % 8)))) as u8
+    end
+    repeat nst in s3:
+        repeat m.slen[s3] in bb:
+            b3 := blk[sblk0[s3] + bb / PDB_BS]
+            out[(b3 as i64) * (PDB_BS as i64) + ((bb % PDB_BS) as i64)] = m.sdata[m.soff[s3] + bb]
+        end
+    end
+    repeat dir.len() in d:
+        b4 := dblk[d / PDB_BS]
+        out[(b4 as i64) * (PDB_BS as i64) + ((d % PDB_BS) as i64)] = dir[d]
+    end
+    repeat dblk.len() in e:
+        wr32(out, (mapblk as i64) * (PDB_BS as i64) + ((4 * e) as i64), dblk[e] as i64)
+    end
+    f2 := fopen(path, "wb")
+    if f2 == null:
+        free(out as void*)
+        ret false
+    end
+    w := fwrite(out as void*, 1 as u64, total as u64, f2)
+    _c := fclose(f2)
+    free(out as void*)
+    blk.free()
+    sblk0.free()
+    dir.free()
+    dblk.free()
+    ret (w as i64) == total
+end
+
+func pdb_rec_begin(o &: Vector<u8>, kind: int): int:
+    at := o.len()
+    tb_le(o, 0 as i64, 2)
+    tb_le(o, kind as i64, 2)
+    ret at
+end
+
+func pdb_rec_end(o &: Vector<u8>, at: int):
+    pdb_pad4(o)
+    pdb_put16(o, at, o.len() - at - 2)
+end
+
+func pdb_remap(m &: Pdb, ti: i64): i64:
+    if ti >= (0x1000 as i64):
+        k := (ti - (0x1000 as i64)) as int
+        if k < m.tmap.len():
+            ret m.tmap[k]
+        end
+        ret 0
+    end
+    ret ti
+end
+
+func pdb_remap_at(m &: Pdb, v &: Vector<u8>, at: int):
+    pdb_put32(v, at, pdb_remap(m, pdb_get32(v, at)))
+end
+
+func pdb_numeric_len(v &: Vector<u8>, at: int): int:
+    x := (v[at] as int) | ((v[at + 1] as int) << 8)
+    if x < 0x8000:
+        ret 2
+    end
+    switch x:
+        0x8000: ret 3 end
+        0x8001, 0x8002: ret 4 end
+        0x8003, 0x8004, 0x8005: ret 6 end
+        0x8009, 0x800A, 0x8006: ret 10 end
+    end
+    ret 0 - 1
+end
+
+func pdb_type_known(k: int): bool:
+    ret k == 0x1002 or k == 0x1203 or k == 0x1505 or k == 0x1503 or k == 0x1507 or k == 0x1008 or k == 0x1201 or k == 0x1601
+end
+
+func pdb_types_ok(l &: Nl, s: int): bool:
+    p := fptr(l, l.o_file[l.s_obj[s]])
+    base := l.s_off[s]
+    n := l.s_size[s] as int
+    if n < 4 or rd32(p, base) != (4 as i64):
+        ret false
+    end
+    mut at := 4
+    until at + 4 <= n:
+        rl := rd16(p, base + (at as i64))
+        k := rd16(p, base + ((at + 2) as i64))
+        if rl < 2 or at + 2 + rl > n or not pdb_type_known(k):
+            ret false
+        end
+        at = at + 2 + rl
+    end
+    ret at == n
+end
+
+func pdb_fieldlist_remap(m &: Pdb, v &: Vector<u8>, at0: int, stop: int):
+    mut at := at0
+    until at + 2 <= stop:
+        b := v[at] as int
+        if b >= 0xF0:
+            at = at + (b & 0x0F)
+            if (b & 0x0F) == 0:
+                at += 1
+            end
+            continue
+        end
+        k := (v[at] as int) | ((v[at + 1] as int) << 8)
+        if k == 0x150D:
+            pdb_remap_at(m, v, at + 4)
+            nl := pdb_numeric_len(v, at + 8)
+            if nl < 0:
+                ret
+            end
+            mut e := at + 8 + nl
+            until e < stop and v[e] != (0 as u8):
+                e += 1
+            end
+            at = e + 1
+        else k == 0x1502:
+            nl2 := pdb_numeric_len(v, at + 4)
+            if nl2 < 0:
+                ret
+            end
+            mut e2 := at + 4 + nl2
+            until e2 < stop and v[e2] != (0 as u8):
+                e2 += 1
+            end
+            at = e2 + 1
+        else:
+            ret
+        end
+    end
+end
+
+func pdb_add_types(l &: Nl, m &: Pdb, s: int):
+    p := fptr(l, l.o_file[l.s_obj[s]])
+    base := l.s_off[s]
+    n := l.s_size[s] as int
+    m.tmap.clear()
+    m.tbase = 1
+    mut rec_buf := Vector {} as Vector<u8>
+    mut at := 4
+    until at + 4 <= n:
+        rl := rd16(p, base + (at as i64))
+        k := rd16(p, base + ((at + 2) as i64))
+        rec_buf.clear()
+        repeat rl + 2 in b:
+            rec_buf.push(p[base + ((at + b) as i64)])
+        end
+        if k == 0x1002 or k == 0x1503:
+            pdb_remap_at(m, rec_buf, 4)
+        else k == 0x1505:
+            pdb_remap_at(m, rec_buf, 8)
+            pdb_remap_at(m, rec_buf, 12)
+            pdb_remap_at(m, rec_buf, 16)
+        else k == 0x1507:
+            pdb_remap_at(m, rec_buf, 8)
+            pdb_remap_at(m, rec_buf, 12)
+        else k == 0x1203:
+            pdb_fieldlist_remap(m, rec_buf, 4, 2 + rl)
+        else k == 0x1008:
+            pdb_remap_at(m, rec_buf, 4)
+            pdb_remap_at(m, rec_buf, 12)
+        else k == 0x1201:
+            cnt := pdb_get32(rec_buf, 4) as int
+            repeat cnt in q:
+                if 8 + 4 * q + 4 <= rec_buf.len():
+                    pdb_remap_at(m, rec_buf, 8 + 4 * q)
+                end
+            end
+        else k == 0x1601:
+            pdb_remap_at(m, rec_buf, 4)
+            pdb_remap_at(m, rec_buf, 8)
+        end
+        if k == 0x1601:
+            each b2 in rec_buf:
+                m.ipi.push(b2)
+            end
+            m.tmap.push(0x1000 + m.icount)
+            m.icount += 1
+        else:
+            each b3 in rec_buf:
+                m.tpi.push(b3)
+            end
+            m.tmap.push(0x1000 + m.tcount)
+            m.tcount += 1
+        end
+        at = at + 2 + rl
+    end
+    rec_buf.free()
+end
+
+func pdb_jamcrc(v &: Vector<u8>, at: int, n: int): i64:
+    mut c := 0xFFFFFFFF as i64
+    repeat n in i:
+        c = c ^ (v[at + i] as i64)
+        repeat 8:
+            if (c & (1 as i64)) != (0 as i64):
+                c = (c >> (1 as i64)) ^ (0xEDB88320 as i64)
+            else:
+                c = c >> (1 as i64)
+            end
+        end
+    end
+    ret c & (0xFFFFFFFF as i64)
+end
+
+func pdb_type_hash(v &: Vector<u8>, at: int): i64:
+    rl := (v[at] as int) | ((v[at + 1] as int) << 8)
+    k := (v[at + 2] as int) | ((v[at + 3] as int) << 8)
+    if k == 0x1505 or k == 0x1507:
+        prop := (v[at + 6] as int) | ((v[at + 7] as int) << 8)
+        mut np := 0
+        if k == 0x1505:
+            nl := pdb_numeric_len(v, at + 20)
+            np = nl < 0 ? 0 - 1 : at + 20 + nl
+        else:
+            np = at + 16
+        end
+        if np >= 0 and (prop & 0x80) == 0 and (prop & 0x100) == 0:
+            mut e := np
+            until e < at + 2 + rl and v[e] != (0 as u8):
+                e += 1
+            end
+            ret pdb_hash_bytes(v, np, e - np)
+        end
+    end
+    ret pdb_jamcrc(v, at, rl + 2)
+end
+
+func pdb_tpi_full(recs &: Vector<u8>, count: int, hash_ix: int): Vector<u8>:
+    mut v := Vector {} as Vector<u8>
+    tb_le(v, 20040203 as i64, 4)
+    tb_le(v, 56 as i64, 4)
+    tb_le(v, 0x1000 as i64, 4)
+    tb_le(v, (0x1000 + count) as i64, 4)
+    tb_le(v, recs.len() as i64, 4)
+    tb_le(v, hash_ix as i64, 2)
+    tb_le(v, 0xFFFF as i64, 2)
+    tb_le(v, 4 as i64, 4)
+    tb_le(v, 0x3FFFF as i64, 4)
+    tb_le(v, 0 as i64, 4)
+    tb_le(v, (4 * count) as i64, 4)
+    tb_le(v, (4 * count) as i64, 4)
+    mut nio := 0
+    mut at := 0
+    mut next := 0
+    until at < recs.len():
+        rl := (recs[at] as int) | ((recs[at + 1] as int) << 8)
+        if at >= next:
+            nio += 1
+            next = next + 8192
+        end
+        at = at + 2 + rl
+    end
+    tb_le(v, (8 * nio) as i64, 4)
+    tb_le(v, (4 * count + 8 * nio) as i64, 4)
+    tb_le(v, 0 as i64, 4)
+    each b in recs:
+        v.push(b)
+    end
+    ret v
+end
+
+func pdb_tpi_hash(recs &: Vector<u8>): Vector<u8>:
+    mut v := Vector {} as Vector<u8>
+    mut at := 0
+    until at < recs.len():
+        rl := (recs[at] as int) | ((recs[at + 1] as int) << 8)
+        tb_le(v, pdb_type_hash(recs, at) % (0x3FFFF as i64), 4)
+        at = at + 2 + rl
+    end
+    at = 0
+    mut ti := 0x1000
+    mut next := 0
+    until at < recs.len():
+        rl2 := (recs[at] as int) | ((recs[at + 1] as int) << 8)
+        if at >= next:
+            tb_le(v, ti as i64, 4)
+            tb_le(v, at as i64, 4)
+            next = next + 8192
+        end
+        ti += 1
+        at = at + 2 + rl2
+    end
+    ret v
+end
+
+func pdb_info(names_ix: int, g0: i64, g1: i64): Vector<u8>:
+    mut v := Vector {} as Vector<u8>
+    tb_le(v, 20000404 as i64, 4)
+    tb_le(v, g0 & (0xFFFFFFFF as i64), 4)
+    tb_le(v, 1 as i64, 4)
+    tb_le(v, g0, 8)
+    tb_le(v, g1, 8)
+    tb_le(v, 7 as i64, 4)
+    each c in [47, 110, 97, 109, 101, 115, 0]:
+        v.push(c as u8)
+    end
+    tb_le(v, 1 as i64, 4)
+    tb_le(v, 1 as i64, 4)
+    tb_le(v, 1 as i64, 4)
+    tb_le(v, 1 as i64, 4)
+    tb_le(v, 0 as i64, 4)
+    tb_le(v, 0 as i64, 4)
+    tb_le(v, names_ix as i64, 4)
+    tb_le(v, 0 as i64, 4)
+    tb_le(v, 20140508 as i64, 4)
+    ret v
+end
+
+func pdb_publics(l &: Nl, t &: Pe, ids &: Vector<int>, segs &: Vector<int>, offs &: Vector<i64>, fl &: Vector<int>):
+    mut seen := HashMap {} as HashMap<int, int>
+    repeat l.g_name.len() in g:
+        if l.g_state[g] != SY_DEF:
+            continue
+        end
+        sc := l.g_sec[g]
+        if sc < 0 or not l.s_live[sc] or l.s_oc[sc] < 0 or l.s_oc[sc] >= PS_COUNT or l.s_oc[sc] == PS_RELOC:
+            continue
+        end
+        nid := l.g_name[g]
+        if l.names.len[nid] == 0 or l.names.bytes[l.names.off[nid]] == (46 as u8) or seen.has(nid):
+            continue
+        end
+        seen.put(nid, 1)
+        k := l.s_oc[sc]
+        ids.push(nid)
+        segs.push(pe_secidx(t, k))
+        offs.push(l.s_addr[sc] + l.g_val[g] - l.pe_base - t.ps_va[k])
+        fl.push((l.s_flags[sc] & (0x20000000 as i64)) != (0 as i64) ? 2 : 0)
+    end
+    seen.free()
+end
+
+func pdb_dbi(l &: Nl, m &: Pdb, sechdr &: Vector<u8>, gl: int, pu: int, sr: int, sh: int): Vector<u8>:
+    mut mi := Vector {} as Vector<u8>
+    repeat m.mod_name.len() in k:
+        tb_le(mi, 0 as i64, 4)
+        mut c := 0 - 1
+        repeat m.sc_mod.len() in q:
+            if c < 0 and m.sc_mod[q] == k:
+                c = q
+            end
+        end
+        tb_le(mi, (c >= 0 ? m.sc_sec[c] : 0xFFFF) as i64, 2)
+        tb_le(mi, 0 as i64, 2)
+        tb_le(mi, c >= 0 ? m.sc_off[c] : (0 as i64), 4)
+        tb_le(mi, c >= 0 ? m.sc_size[c] : (0 as i64), 4)
+        tb_le(mi, c >= 0 ? m.sc_flags[c] : (0 as i64), 4)
+        tb_le(mi, k as i64, 2)
+        tb_le(mi, 0 as i64, 2)
+        tb_le(mi, 0 as i64, 8)
+        tb_le(mi, 0 as i64, 2)
+        tb_le(mi, m.mod_stream[k] as i64, 2)
+        tb_le(mi, m.mod_symsz[k] as i64, 4)
+        tb_le(mi, 0 as i64, 4)
+        tb_le(mi, m.mod_c13sz[k] as i64, 4)
+        tb_le(mi, m.mod_nfile[k] as i64, 2)
+        tb_le(mi, 0 as i64, 2)
+        tb_le(mi, 0 as i64, 12)
+        repeat 2:
+            nm := m.mod_name[k]
+            np := (nm as void*) as u8*
+            repeat str.Len(nm) in b:
+                mi.push(np[b])
+            end
+            mi.push(0 as u8)
+        end
+        pdb_pad4(mi)
+    end
+    mut keys := Vector {} as Vector<i64>
+    repeat m.sc_sec.len() in q2:
+        keys.push(((m.sc_sec[q2] as i64) << (40 as i64)) | m.sc_off[q2])
+    end
+    ord := pdb_sort(keys)
+    mut sc := Vector {} as Vector<u8>
+    tb_le(sc, (0xEFFE0000 + 19970605) as i64, 4)
+    each q3 in ord:
+        tb_le(sc, m.sc_sec[q3] as i64, 2)
+        tb_le(sc, 0 as i64, 2)
+        tb_le(sc, m.sc_off[q3], 4)
+        tb_le(sc, m.sc_size[q3], 4)
+        tb_le(sc, m.sc_flags[q3], 4)
+        tb_le(sc, m.sc_mod[q3] as i64, 2)
+        tb_le(sc, 0 as i64, 2)
+        tb_le(sc, 0 as i64, 8)
+    end
+    nsec := sechdr.len() / 40
+    mut sm := Vector {} as Vector<u8>
+    tb_le(sm, (nsec + 1) as i64, 2)
+    tb_le(sm, (nsec + 1) as i64, 2)
+    repeat nsec in e:
+        tb_le(sm, pdb_secflags(pdb_get32(sechdr, 40 * e + 36)) as i64, 2)
+        tb_le(sm, 0 as i64, 2)
+        tb_le(sm, 0 as i64, 2)
+        tb_le(sm, (e + 1) as i64, 2)
+        tb_le(sm, 0xFFFF as i64, 2)
+        tb_le(sm, 0xFFFF as i64, 2)
+        tb_le(sm, 0 as i64, 4)
+        tb_le(sm, pdb_get32(sechdr, 40 * e + 8), 4)
+    end
+    tb_le(sm, 0x208 as i64, 2)
+    tb_le(sm, 0 as i64, 2)
+    tb_le(sm, 0 as i64, 2)
+    tb_le(sm, (nsec + 1) as i64, 2)
+    tb_le(sm, 0xFFFF as i64, 2)
+    tb_le(sm, 0xFFFF as i64, 2)
+    tb_le(sm, 0 as i64, 4)
+    tb_le(sm, 0xFFFFFFFF as i64, 4)
+    mut fi := Vector {} as Vector<u8>
+    nmod := m.mod_name.len()
+    tb_le(fi, nmod as i64, 2)
+    tb_le(fi, (m.files.len() < 0xFFFF ? m.files.len() : 0xFFFF) as i64, 2)
+    repeat nmod in k2:
+        tb_le(fi, (m.mod_file0[k2] & 0xFFFF) as i64, 2)
+    end
+    repeat nmod in k3:
+        tb_le(fi, m.mod_nfile[k3] as i64, 2)
+    end
+    mut fnames := Vector {} as Vector<u8>
+    mut fat := HashMap {} as HashMap<int, int>
+    each fid in m.files:
+        if not fat.has(fid):
+            fat.put(fid, fnames.len())
+            pdb_put_name(l, fnames, fid)
+        end
+        tb_le(fi, fat.get(fid) as i64, 4)
+    end
+    each fb in fnames:
+        fi.push(fb)
+    end
+    pdb_pad4(fi)
+    no_ids := Vector {} as Vector<int>
+    no_offs := HashMap {} as HashMap<int, int>
+    no_data := Vector {} as Vector<u8>
+    ec := pdb_strtab(l, no_ids, no_offs, no_data)
+    mut od := Vector {} as Vector<u8>
+    repeat 11 in x:
+        tb_le(od, (x == 5 ? sh : 0xFFFF) as i64, 2)
+    end
+    mut v := Vector {} as Vector<u8>
+    tb_le(v, 0xFFFFFFFF as i64, 4)
+    tb_le(v, 19990903 as i64, 4)
+    tb_le(v, 1 as i64, 4)
+    tb_le(v, gl as i64, 2)
+    tb_le(v, 0x8E00 as i64, 2)
+    tb_le(v, pu as i64, 2)
+    tb_le(v, 0 as i64, 2)
+    tb_le(v, sr as i64, 2)
+    tb_le(v, 0 as i64, 2)
+    tb_le(v, mi.len() as i64, 4)
+    tb_le(v, sc.len() as i64, 4)
+    tb_le(v, sm.len() as i64, 4)
+    tb_le(v, fi.len() as i64, 4)
+    tb_le(v, 0 as i64, 4)
+    tb_le(v, 0 as i64, 4)
+    tb_le(v, od.len() as i64, 4)
+    tb_le(v, ec.len() as i64, 4)
+    tb_le(v, 0 as i64, 2)
+    tb_le(v, (l.mach == EM_386 ? 0x14C : (l.mach == EM_AARCH64 ? 0xAA64 : 0x8664)) as i64, 2)
+    tb_le(v, 0 as i64, 4)
+    each b1 in mi:
+        v.push(b1)
+    end
+    each b2 in sc:
+        v.push(b2)
+    end
+    each b3 in sm:
+        v.push(b3)
+    end
+    each b4 in fi:
+        v.push(b4)
+    end
+    each b5 in ec:
+        v.push(b5)
+    end
+    each b6 in od:
+        v.push(b6)
+    end
+    mi.free()
+    keys.free()
+    sc.free()
+    sm.free()
+    fi.free()
+    fnames.free()
+    fat.free()
+    od.free()
+    ret v
+end
+
+func pdb_cv_secs(l &: Nl): Vector<int>:
+    mut v := Vector {} as Vector<int>
+    mut typed := HashMap {} as HashMap<int, int>
+    repeat l.s_obj.len() in s:
+        if l.o_coff[l.s_obj[s]] and str.Equals(name_of(l, l.s_name[s]), ".debug$T") and not pdb_types_ok(l, s):
+            typed.put(l.s_obj[s], 1)
+        end
+    end
+    repeat l.s_obj.len() in s2:
+        if l.o_coff[l.s_obj[s2]] and l.s_size[s2] > (4 as i64) and not typed.has(l.s_obj[s2]) and str.Equals(name_of(l, l.s_name[s2]), ".debug$S"):
+            v.push(s2)
+        end
+    end
+    typed.free()
+    ret v
+end
+
+func pdb_write(l &: Nl, t &: Pe, cvs: Vector<int>, sechdr &: Vector<u8>, g0: i64, g1: i64, path: str): bool:
+    mut m := Pdb {}
+    mut empty := Vector {} as Vector<u8>
+    repeat 5:
+        _e := pdb_stream(m, empty)
+    end
+    mut i := 0
+    until i < cvs.len():
+        obj := l.s_obj[cvs[i]]
+        mut secs := Vector {} as Vector<int>
+        until i < cvs.len() and l.s_obj[cvs[i]] == obj:
+            secs.push(cvs[i])
+            i += 1
+        end
+        m.tbase = 0
+        m.tmap.clear()
+        repeat l.s_obj.len() in ts:
+            if l.s_obj[ts] == obj and m.tbase == 0 and l.o_coff[obj] and str.Equals(name_of(l, l.s_name[ts]), ".debug$T"):
+                pdb_add_types(l, m, ts)
+            end
+        end
+        pdb_module(l, m, t, obj, secs)
+        secs.free()
+    end
+    nms := pdb_strtab(l, m.nm_id, m.nm_off, m.nm_bytes)
+    names_ix := pdb_stream(m, nms)
+    mut sr := Vector {} as Vector<u8>
+    mut gname := Vector {} as Vector<int>
+    mut goff := Vector {} as Vector<int>
+    repeat m.ref_name.len() in r:
+        at := pdb_rec_begin(sr, m.ref_kind[r])
+        tb_le(sr, 0 as i64, 4)
+        tb_le(sr, m.ref_off[r] as i64, 4)
+        tb_le(sr, (m.ref_mod[r] + 1) as i64, 2)
+        pdb_put_name(l, sr, m.ref_name[r])
+        pdb_rec_end(sr, at)
+        gname.push(m.ref_name[r])
+        goff.push(at)
+    end
+    mut pid := Vector {} as Vector<int>
+    mut pseg := Vector {} as Vector<int>
+    mut poff := Vector {} as Vector<i64>
+    mut pfl := Vector {} as Vector<int>
+    pdb_publics(l, t, pid, pseg, poff, pfl)
+    mut prec := Vector {} as Vector<int>
+    repeat pid.len() in q:
+        at2 := pdb_rec_begin(sr, 0x110E)
+        tb_le(sr, pfl[q] as i64, 4)
+        tb_le(sr, poff[q], 4)
+        tb_le(sr, pseg[q] as i64, 2)
+        pdb_put_name(l, sr, pid[q])
+        pdb_rec_end(sr, at2)
+        prec.push(at2)
+    end
+    gsi := pdb_gsi(l, gname, goff)
+    glob_ix := pdb_stream(m, gsi)
+    pgsi := pdb_gsi(l, pid, prec)
+    mut keys := Vector {} as Vector<i64>
+    repeat pid.len() in q2:
+        keys.push(((pseg[q2] as i64) << (40 as i64)) | poff[q2])
+    end
+    ord := pdb_sort(keys)
+    mut pubs := Vector {} as Vector<u8>
+    tb_le(pubs, pgsi.len() as i64, 4)
+    tb_le(pubs, (pid.len() * 4) as i64, 4)
+    repeat 5:
+        tb_le(pubs, 0 as i64, 4)
+    end
+    each b in pgsi:
+        pubs.push(b)
+    end
+    each q3 in ord:
+        tb_le(pubs, prec[q3] as i64, 4)
+    end
+    pub_ix := pdb_stream(m, pubs)
+    sr_ix := pdb_stream(m, sr)
+    sh_ix := pdb_stream(m, sechdr)
+    mut info := pdb_info(names_ix, g0, g1)
+    pdb_stream_set(m, 1, info)
+    mut tph := pdb_tpi_hash(m.tpi)
+    tph_ix := pdb_stream(m, tph)
+    mut tpi := pdb_tpi_full(m.tpi, m.tcount, tph_ix)
+    pdb_stream_set(m, 2, tpi)
+    mut iph := pdb_tpi_hash(m.ipi)
+    iph_ix := pdb_stream(m, iph)
+    mut dbi := pdb_dbi(l, m, sechdr, glob_ix, pub_ix, sr_ix, sh_ix)
+    pdb_stream_set(m, 3, dbi)
+    mut ipi := pdb_tpi_full(m.ipi, m.icount, iph_ix)
+    pdb_stream_set(m, 4, ipi)
+    ok := pdb_msf(m, path)
+    m.sdata.free()
+    ret ok
+end

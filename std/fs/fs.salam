@@ -1,0 +1,535 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "fs"
+@fa "سیستم پرونده"
+package fs
+
+import mem
+import str
+import conv
+
+extern:
+    func fopen(path: str, mode: str): void*
+    func fclose(fp: void*): int
+    func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fgetc(stream: void*): int
+    func fseek(fp: void*, off: int, whence: int): int
+    noret func abort()
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _fseeki64(fp: void*, off: i64, whence: int): int
+    end
+else:
+    extern:
+        func fseeko(fp: void*, off: i64, whence: int): int
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func FindFirstFileA(pat: str, data: void*): void*
+        func FindNextFileA(h: void*, data: void*): int
+        func FindClose(h: void*): int
+        func _wopen(path: void*, flags: int, mode: int): int
+        func _fdopen(fd: int, mode: str): void*
+        func MultiByteToWideChar(codepage: u32, flags: u32, src: str, srclen: i32, dst: void*, dstlen: i32): i32
+    end
+else:
+    extern:
+        func opendir(path: str): void*
+        func readdir(d: void*): void*
+        func closedir(d: void*): int
+    end
+    if SALAM_OS_LINUX or SALAM_OS_ANDROID:
+        extern:
+            func dirfd(d: void*): int
+        end
+        if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
+            extern:
+                func syscall(nr: i64, a: i64, b: i64, c: i64): i64
+            end
+        else:
+            extern:
+                func syscall(nr: int, a: int, b: int, c: int): int
+            end
+        end
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func GetFileAttributesExA(path: str, level: int, data: void*): int
+        func _chmod(path: str, mode: int): int
+    end
+else:
+    extern:
+        func chmod(path: str, mode: int): int
+        func popen(cmd: str, mode: str): void*
+        func pclose(fp: void*): int
+    end
+end
+
+func _byte_at(base: void*, off: i64): int:
+    p := ((base as i64) + off) as u8*
+    ret p[0] as int
+end
+
+func _strptr(s: str): i64:
+    v := s as void*
+    ret v as i64
+end
+
+noret func _fs_oom():
+    printerrln "salam: out of memory while reading a file"
+    abort()
+end
+
+func _fs_alloc(n: u64): void*:
+    p := mem.AllocateZeroed(n)
+    if p == null:
+        _fs_oom()
+    end
+    ret p
+end
+
+if SALAM_OS_WINDOWS:
+    func _str_to_wide(s: str): void*:
+        n := MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, null, 0)
+        if n <= 0:
+            ret mem.Allocate(2 as u64)
+        end
+        w := mem.Allocate((n * 2) as u64)
+        MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, w, n)
+        ret w
+    end
+
+    func _wopen_flags(mode: str): int:
+        O_RDONLY := 0
+        O_WRONLY := 1
+        O_APPEND := 8
+        O_CREAT := 256
+        O_TRUNC := 512
+        O_BINARY := 32768
+        if mode.len() == 0:
+            ret O_RDONLY | O_BINARY
+        end
+        c := mode.substr(0, 1)
+        if c == "w":
+            ret O_WRONLY | O_CREAT | O_TRUNC | O_BINARY
+        end
+        if c == "a":
+            ret O_WRONLY | O_CREAT | O_APPEND | O_BINARY
+        end
+        ret O_RDONLY | O_BINARY
+    end
+end
+
+export:
+    func salam_open(path: str, mode: str): File*:
+        if SALAM_OS_WINDOWS:
+            S_IREAD_IWRITE := 384
+            wpath := _str_to_wide(path)
+            fd := _wopen(wpath, _wopen_flags(mode), S_IREAD_IWRITE)
+            mem.Free(wpath)
+            if fd < 0: ret null end
+            fp := _fdopen(fd, mode)
+            if fp == null: ret null end
+            ret fp as File*
+        else:
+            fp := fopen(path, mode)
+            if fp == null: ret null end
+            ret fp as File*
+        end
+    end
+    func salam_file_read(f: File*, size: u64): str:
+        if f == null: ret "" end
+        fp := f as void*
+        buf := _fs_alloc(size + (1 as u64))
+        got := fread(buf, 1 as u64, size, fp)
+        mem.Set(((buf as i64) + (got as i64)) as void*, 0, 1 as u64)
+        ret buf as str
+    end
+    func salam_file_readline(f: File*): str:
+        if f == null: ret "" end
+        fp := f as void*
+        mut sb := str.NewBuilder()
+        defer str.BufFree(sb)
+        mut c := fgetc(fp)
+        until c != -1 and c != 10:
+            str.BufAppendChar(sb, c)
+            c = fgetc(fp)
+        end
+        out := str.BufStr(sb)
+        ret out
+    end
+    func salam_file_write(f: File*, data: str): int:
+        if f == null: ret 0 - 1 end
+        fp := f as void*
+        n := data.len() as u64
+        w := fwrite(data as void*, 1 as u64, n, fp)
+        ret w as int
+    end
+    func salam_file_close(f: File*):
+        if f == null: ret end
+        fclose(f as void*)
+    end
+    func salam_file_seek(f: File*, off: i64, whence: int): int:
+        if f == null: ret 0 - 1 end
+        fp := f as void*
+        mut w := 0
+
+        if whence == 1: w = 1
+        else whence == 2: w = 2
+        end
+
+        if _fs_seek64(fp, off, w) == 0: ret 0 end
+        ret 0 - 1
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    func _fs_seek64(fp: void*, off: i64, w: int): int: ret _fseeki64(fp, off, w) end
+else:
+    func _fs_seek64(fp: void*, off: i64, w: int): int: ret fseeko(fp, off, w) end
+end
+
+func _ld_push(arr: void*, n: int, cap_box: void*, name: str): void*:
+    cap := cap_box as int*
+    mut a := arr
+    if n >= cap[0]:
+        if cap[0] == 0: cap[0] = 8 else:
+            cap[0] = cap[0] * 2
+        end
+        a = mem.Reallocate(a, (cap[0] as u64) * (sizeof(str) as u64))
+    end
+    slots := a as str*
+    slots[n] = name.substr(0, name.len())
+    ret a
+end
+
+func _ld_skip(name: str): bool:
+    if name == ".": ret true
+    else name == "..": ret true
+    else:
+        ret false
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    export:
+        func salam_os_listdir(path: str, out_count: void*): void*:
+            mut oc := out_count as int*
+            fd := mem.Allocate(320 as u64)
+            h := FindFirstFileA(path.concat("/*"), fd)
+            mut arr := null as void*
+            mut n := 0
+            cap_box := mem.AllocateZeroed(4 as u64)
+            if (h as i64) != (0 - 1):
+                mut more := 1
+                until more != 0:
+                    np := ((fd as i64) + 44) as void*
+                    nm := np as str
+                    if _ld_skip(nm) == false:
+                        arr = _ld_push(arr, n, cap_box, nm)
+                        n += 1
+                    end
+                    more = FindNextFileA(h, fd)
+                end
+                FindClose(h)
+            end
+            mem.Free(fd)
+            mem.Free(cap_box)
+            if arr == null: arr = mem.Allocate(8 as u64) end
+            oc[0] = n
+            ret arr
+        end
+    end
+else:
+    if SALAM_OS_LINUX or SALAM_OS_ANDROID:
+        if SALAM_ARCH_X86:
+            func _gd_nr(): i64: ret 220 end
+        else SALAM_ARCH_X64 or SALAM_ARCH_ARM:
+            func _gd_nr(): i64: ret 217 end
+        else:
+            func _gd_nr(): i64: ret 61 end
+        end
+
+        if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
+            func _getdents(fd: int, buf: void*, cap: int): i64:
+                ret syscall(_gd_nr(), fd as i64, buf as i64, cap as i64)
+            end
+        else:
+            func _getdents(fd: int, buf: void*, cap: int): i64:
+                ret syscall(_gd_nr() as int, fd, (buf as i64) as int, cap)
+            end
+        end
+
+        export:
+            func salam_os_listdir(path: str, out_count: void*): void*:
+                oc := out_count as int*
+                mut arr := null as void*
+                mut n := 0
+                cap_box := mem.AllocateZeroed(4 as u64)
+                dp := opendir(path)
+                if dp != null:
+                    fd := dirfd(dp)
+                    bcap := 32768
+                    buf := mem.Allocate(bcap as u64)
+                    mut got := _getdents(fd, buf, bcap)
+                    until got > (0 as i64):
+                        mut p := 0 as i64
+                        until p < got:
+                            rl := (_byte_at(buf, p + (16 as i64)) + _byte_at(buf, p + (17 as i64)) * 256) as i64
+                            if rl < (1 as i64):
+                                break
+                            end
+                            nm := (((buf as i64) + p + (19 as i64)) as void*) as str
+                            if _ld_skip(nm) == false:
+                                arr = _ld_push(arr, n, cap_box, nm)
+                                n += 1
+                            end
+                            p += rl
+                        end
+                        got = _getdents(fd, buf, bcap)
+                    end
+                    mem.Free(buf)
+                    closedir(dp)
+                end
+                mem.Free(cap_box)
+                if arr == null: arr = mem.Allocate(sizeof(str) as u64) end
+                oc[0] = n
+                ret arr
+            end
+        end
+    else:
+        if SALAM_OS_MAC:
+            func _dname_off(): i64: ret 21 end
+        else SALAM_OS_BSD:
+            func _dname_off(): i64: ret 24 end
+        else:
+            func _dname_off(): i64: ret 19 end
+        end
+        export:
+            func salam_os_listdir(path: str, out_count: void*): void*:
+                oc := out_count as int*
+                mut arr := null as void*
+                mut n := 0
+                cap_box := mem.AllocateZeroed(4 as u64)
+                off := _dname_off()
+                d := opendir(path)
+                if d != null:
+                    mut e := readdir(d)
+                    until e != null:
+                        np := ((e as i64) + off) as void*
+                        nm := np as str
+                        if _ld_skip(nm) == false:
+                            arr = _ld_push(arr, n, cap_box, nm)
+                            n += 1
+                        end
+                        e = readdir(d)
+                    end
+                    closedir(d)
+                end
+                mem.Free(cap_box)
+                if arr == null: arr = mem.Allocate(sizeof(str) as u64) end
+                oc[0] = n
+                ret arr
+            end
+        end
+    end
+end
+
+func _u32_at(base: void*, off: i64): u32:
+    p := ((base as i64) + off) as u32*
+    ret p[0]
+end
+
+func _filetime_to_unix(low: u32, high: u32): i64:
+    combined := (high as u64) * (4294967296 as u64) + (low as u64)
+    epoch := 116444736000000000 as u64
+    if combined < epoch: ret 0 end
+    ret ((combined - epoch) / (10000000 as u64)) as i64
+end
+
+if SALAM_OS_WINDOWS:
+    func _fs_times(path: str): i64*:
+        buf := mem.AllocateZeroed(40 as u64)
+        out := mem.Allocate(24 as u64) as i64*
+        ok := GetFileAttributesExA(path, 0, buf)
+        if ok == 0:
+            out[0] = 0 - 1
+            out[1] = 0 - 1
+            out[2] = 0 - 1
+            mem.Free(buf)
+            ret out
+        end
+        ctime := _filetime_to_unix(_u32_at(buf, 4), _u32_at(buf, 8))
+        atime := _filetime_to_unix(_u32_at(buf, 12), _u32_at(buf, 16))
+        mtime := _filetime_to_unix(_u32_at(buf, 20), _u32_at(buf, 24))
+        out[0] = mtime
+        out[1] = atime
+        out[2] = ctime
+        mem.Free(buf)
+        ret out
+    end
+else:
+    func _fs_shell_quote(path: str): str:
+        mut sb := str.NewBuilder()
+        str.BufAppendChar(sb, 39)
+        pp := path as void*
+        repeat path.len() in i:
+            c := _byte_at(pp, i as i64)
+            if c == 39:
+                str.BufAppend(sb, "'\\''")
+            else:
+                str.BufAppendChar(sb, c)
+            end
+        end
+        str.BufAppendChar(sb, 39)
+        out := str.BufStr(sb)
+        str.BufFree(sb)
+        ret out
+    end
+
+    func _fs_stat_field(path: str, fmt: str): i64:
+        mut cmd := ""
+        quoted := _fs_shell_quote(path)
+        if SALAM_OS_MAC or SALAM_OS_BSD:
+            cmd = "stat -f ".concat(fmt).concat(" ").concat(quoted).concat(" 2>/dev/null")
+        else:
+            cmd = "stat -c ".concat(fmt).concat(" ").concat(quoted).concat(" 2>/dev/null")
+        end
+        mem.Free(quoted as void*)
+        fp := popen(cmd, "r")
+        if fp == null: ret 0 - 1 end
+        buf := mem.Allocate(256 as u64)
+        mut sb := str.NewBuilder()
+        mut c := fgetc(fp)
+        until c != -1 and c != 10:
+            str.BufAppendChar(sb, c)
+            c = fgetc(fp)
+        end
+        mem.Free(buf)
+        line := str.BufStr(sb)
+        str.BufFree(sb)
+        pclose(fp)
+        if line.len() == 0: ret 0 - 1 end
+        lp := line as void*
+        mut k := 0
+        if _byte_at(lp, 0 as i64) == 45: k = 1 end
+        if k >= line.len(): ret 0 - 1 end
+        until k < line.len():
+            c := _byte_at(lp, k as i64)
+            if c < 48 or c > 57: ret 0 - 1 end
+            k += 1
+        end
+        ret conv.ParseInt(line)
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    @en "ModTime"
+    @fa "زمان تغییر"
+    pub func ModTime(path: str): i64:
+        t := _fs_times(path)
+        ret t[0]
+    end
+
+    @en "AccessedTime"
+    @fa "زمان دسترسی"
+    pub func AccessedTime(path: str): i64:
+        t := _fs_times(path)
+        ret t[1]
+    end
+
+    @en "CreatedTime"
+    @fa "زمان ایجاد"
+    pub func CreatedTime(path: str): i64:
+        t := _fs_times(path)
+        ret t[2]
+    end
+
+    @en "Chmod"
+    @fa "تغییر مجوز"
+    pub func Chmod(path: str, mode: int): int:
+        if _chmod(path, mode) == 0: ret 0 end
+        ret 0 - 1
+    end
+
+    @en "Permissions"
+    @fa "مجوزها"
+    pub func Permissions(path: str): int:
+        buf := mem.AllocateZeroed(40 as u64)
+        ok := GetFileAttributesExA(path, 0, buf)
+        if ok == 0:
+            mem.Free(buf)
+            ret 0 - 1
+        end
+        attrs := _u32_at(buf, 0)
+        mem.Free(buf)
+        if (attrs as int) % 2 == 1: ret 292 end
+        ret 438
+    end
+else:
+    @en "ModTime"
+    @fa "زمان تغییر"
+    pub func ModTime(path: str): i64:
+        if SALAM_OS_MAC or SALAM_OS_BSD:
+            ret _fs_stat_field(path, "%m")
+        else:
+            ret _fs_stat_field(path, "%Y")
+        end
+    end
+
+    @en "AccessedTime"
+    @fa "زمان دسترسی"
+    pub func AccessedTime(path: str): i64:
+        if SALAM_OS_MAC or SALAM_OS_BSD:
+            ret _fs_stat_field(path, "%a")
+        else:
+            ret _fs_stat_field(path, "%X")
+        end
+    end
+
+    @en "CreatedTime"
+    @fa "زمان ایجاد"
+    pub func CreatedTime(path: str): i64:
+        if SALAM_OS_MAC or SALAM_OS_BSD:
+            ret _fs_stat_field(path, "%B")
+        else:
+            ret _fs_stat_field(path, "%W")
+        end
+    end
+
+    @en "Chmod"
+    @fa "تغییر مجوز"
+    pub func Chmod(path: str, mode: int): int:
+        if chmod(path, mode) == 0: ret 0 end
+        ret 0 - 1
+    end
+
+    @en "Permissions"
+    @fa "مجوزها"
+    pub func Permissions(path: str): int:
+        if SALAM_OS_MAC or SALAM_OS_BSD:
+            ret _fs_stat_field(path, "%Lp") as int
+        else:
+            ret _fs_stat_field(path, "%a") as int
+        end
+    end
+end

@@ -1,0 +1,256 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import encoding.value
+import conv
+
+@en "CoerceResult"
+@fa "نتیجه تبدیل"
+pub struct CoerceResult:
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = true
+    @en "message"
+    @fa "پیام"
+    pub message: str = ""
+    @en "value"
+    @fa "مقدار"
+    pub value: value.Value = value.Value {}
+end
+
+func _co_fail(message: str): CoerceResult:
+    mut r := CoerceResult { ok = false }
+    r.message = message
+    ret r
+end
+
+func _co_ok(v: value.Value): CoerceResult:
+    mut r := CoerceResult { ok = true }
+    r.value = v
+    ret r
+end
+
+func _co_int_str(n: i64): str: ret conv.FormatInt(n) end
+
+func _co_type_msg(prefix: str, typeName: str, suffix: str): str:
+    ret prefix + typeName + suffix
+end
+
+func _co_var_missing(vars: value.Value, name: str): bool:
+    ret not value.ObjectHas(vars, name)
+end
+
+func _co_literal_list(sch: Schema, doc: Document, v: AstValue, vars: value.Value): CoerceResult:
+    mut out := value.NewValueArray()
+    mut i := 0
+    until i < v.items.len():
+        r := LiteralToValue(sch, doc, v.items.get(i), vars)
+        if not r.ok: ret r end
+        value.ArrayPush(out, r.value)
+        i += 1
+    end
+    ret _co_ok(out)
+end
+
+func _co_literal_object(sch: Schema, doc: Document, v: AstValue, vars: value.Value): CoerceResult:
+    mut out := value.NewValueObject()
+    mut i := 0
+    until i < v.items.len():
+        childId := v.items.get(i)
+        child := ValueAt(doc, childId)
+        if child.kind == VAL_VARIABLE and _co_var_missing(vars, child.s):
+            i += 1
+            continue
+        end
+        r := LiteralToValue(sch, doc, childId, vars)
+        if not r.ok: ret r end
+        value.ObjectSet(out, v.keys.get(i), r.value)
+        i += 1
+    end
+    ret _co_ok(out)
+end
+
+func _co_int(v: value.Value): CoerceResult:
+    if value.IsInt(v):
+        n := value.AsInt(v)
+        if n > 2147483647 or n < 0 - 2147483648:
+            ret _co_fail("Int cannot represent value outside 32-bit range: " + _co_int_str(n))
+        end
+        ret _co_ok(value.ValueInt(n))
+    end
+    if value.IsFloat(v):
+        f := value.AsFloat(v)
+        n := f as i64
+        if (n as f64) != f:
+            ret _co_fail("Int cannot represent non-integer value")
+        end
+        ret _co_ok(value.ValueInt(n))
+    end
+    ret _co_fail("Int cannot represent a non-numeric value")
+end
+
+func _co_float(v: value.Value): CoerceResult:
+    if value.IsInt(v): ret _co_ok(value.ValueFloat(value.AsInt(v) as f64)) end
+    if value.IsFloat(v): ret _co_ok(v) end
+    ret _co_fail("Float cannot represent a non-numeric value")
+end
+
+func _co_string(v: value.Value): CoerceResult:
+    if value.IsString(v): ret _co_ok(v) end
+    ret _co_fail("String cannot represent a non-string value")
+end
+
+func _co_boolean(v: value.Value): CoerceResult:
+    if value.IsBool(v): ret _co_ok(v) end
+    ret _co_fail("Boolean cannot represent a non-boolean value")
+end
+
+func _co_id(v: value.Value): CoerceResult:
+    if value.IsString(v): ret _co_ok(v) end
+    if value.IsInt(v): ret _co_ok(value.ValueString(_co_int_str(value.AsInt(v)))) end
+    ret _co_fail("ID cannot represent a value that is neither a string nor an integer")
+end
+
+func _co_enum(t: TypeDef, v: value.Value): CoerceResult:
+    if not value.IsString(v):
+        ret _co_fail(_co_type_msg("Enum ", t.name, " cannot represent a non-string value"))
+    end
+    name := value.AsString(v)
+    if not HasEnumValue(t, name):
+        ret _co_fail(_co_type_msg("Enum ", t.name, " has no value named " + _gql_quote(name)))
+    end
+    ret _co_ok(v)
+end
+
+func _co_scalar(t: TypeDef, v: value.Value): CoerceResult:
+    if t.name == "Int": ret _co_int(v) end
+    if t.name == "Float": ret _co_float(v) end
+    if t.name == "String": ret _co_string(v) end
+    if t.name == "Boolean": ret _co_boolean(v) end
+    if t.name == "ID": ret _co_id(v) end
+    ret _co_ok(v)
+end
+
+func _co_input_object_field(sch: Schema, iv: InputValueDef, provided: value.Value, has: bool, out &: value.Value, name: str): str:
+    if has:
+        r := CoerceInput(sch, sch.doc, iv.typeRef, provided)
+        if not r.ok: ret "field " + _gql_quote(name) + ": " + r.message end
+        value.ObjectSet(out, name, r.value)
+        ret ""
+    end
+    if iv.hasDefault:
+        d := LiteralToValue(sch, sch.doc, iv.defaultValue, value.NewValueObject())
+        if d.ok: value.ObjectSet(out, name, d.value) end
+        ret ""
+    end
+    if TypeRefIsNonNull(sch.doc, iv.typeRef):
+        ret "field " + _gql_quote(name) + " of required type is missing"
+    end
+    ret ""
+end
+
+func _co_input_object(sch: Schema, t: TypeDef, v: value.Value): CoerceResult:
+    if not value.IsObject(v):
+        ret _co_fail(_co_type_msg("Input type ", t.name, " expects an object"))
+    end
+    mut out := value.NewValueObject()
+    mut i := 0
+    until i < t.inputFields.len():
+        iv := t.inputFields.get(i)
+        has := value.ObjectHas(v, iv.name)
+        msg := _co_input_object_field(sch, iv, value.ObjectGet(v, iv.name), has, out, iv.name)
+        if msg != "": ret _co_fail(msg) end
+        i += 1
+    end
+    mut keys := value.ObjectKeys(v)
+    defer keys.free()
+    mut j := 0
+    until j < keys.len():
+        k := keys.get(j)
+        if FindInputField(t, k).name == "":
+            ret _co_fail(_co_type_msg("Input type ", t.name, " has no field " + _gql_quote(k)))
+        end
+        j += 1
+    end
+    ret _co_ok(out)
+end
+
+func _co_list(sch: Schema, refDoc: Document, elemRef: int, v: value.Value): CoerceResult:
+    if not value.IsArray(v):
+        r := CoerceInput(sch, refDoc, elemRef, v)
+        if not r.ok: ret r end
+        mut single := value.NewValueArray()
+        value.ArrayPush(single, r.value)
+        ret _co_ok(single)
+    end
+    mut out := value.NewValueArray()
+    mut i := 0
+    until i < value.ArrayLen(v):
+        r := CoerceInput(sch, refDoc, elemRef, value.ArrayGet(v, i))
+        if not r.ok: ret _co_fail("at index " + _co_int_str(i as i64) + ": " + r.message) end
+        value.ArrayPush(out, r.value)
+        i += 1
+    end
+    ret _co_ok(out)
+end
+
+@en "LiteralToValue"
+@fa "تبدیل لفظ به مقدار"
+pub func LiteralToValue(sch: Schema, doc: Document, valueId: int, vars: value.Value): CoerceResult:
+    v := ValueAt(doc, valueId)
+    if v.kind == VAL_NULL: ret _co_ok(value.ValueNull()) end
+    if v.kind == VAL_BOOL: ret _co_ok(value.ValueBool(v.b)) end
+    if v.kind == VAL_INT: ret _co_ok(value.ValueInt(v.i)) end
+    if v.kind == VAL_FLOAT: ret _co_ok(value.ValueFloat(v.f)) end
+    if v.kind == VAL_STRING: ret _co_ok(value.ValueString(v.s)) end
+    if v.kind == VAL_ENUM: ret _co_ok(value.ValueString(v.s)) end
+    if v.kind == VAL_LIST: ret _co_literal_list(sch, doc, v, vars) end
+    if v.kind == VAL_OBJECT: ret _co_literal_object(sch, doc, v, vars) end
+    if v.kind == VAL_VARIABLE:
+        if _co_var_missing(vars, v.s): ret _co_ok(value.ValueNull()) end
+        ret _co_ok(value.ObjectGet(vars, v.s))
+    end
+    ret _co_fail("unsupported literal")
+end
+
+@en "CoerceInput"
+@fa "تبدیل ورودی"
+pub func CoerceInput(sch: Schema, refDoc: Document, typeRef: int, v: value.Value): CoerceResult:
+    t := TypeRefAt(refDoc, typeRef)
+    if value.IsNull(v):
+        if t.nonNull: ret _co_fail("expected a non-null value, found null") end
+        ret _co_ok(value.ValueNull())
+    end
+    if t.kind == TREF_LIST: ret _co_list(sch, refDoc, t.inner, v) end
+    def := FindType(sch, t.name)
+    if def.kind < 0: ret _co_fail("unknown type " + _gql_quote(t.name)) end
+    if def.kind == TYPE_SCALAR: ret _co_scalar(def, v) end
+    if def.kind == TYPE_ENUM: ret _co_enum(def, v) end
+    if def.kind == TYPE_INPUT_OBJECT: ret _co_input_object(sch, def, v) end
+    ret _co_fail(_co_type_msg("Type ", t.name, " is not an input type"))
+end
+
+@en "CoerceLeafResult"
+@fa "تبدیل نتیجه برگ"
+pub func CoerceLeafResult(sch: Schema, typeName: str, v: value.Value): CoerceResult:
+    def := FindType(sch, typeName)
+    if def.kind == TYPE_ENUM:
+        if value.IsString(v): ret _co_enum(def, v) end
+        ret _co_fail(_co_type_msg("Enum ", typeName, " cannot represent a non-string value"))
+    end
+    if def.kind == TYPE_SCALAR: ret _co_scalar(def, v) end
+    ret _co_fail(_co_type_msg("Type ", typeName, " is not a leaf type"))
+end

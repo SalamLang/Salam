@@ -1,0 +1,406 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aws
+
+import str
+import time
+import encoding
+import net.http
+
+const _S3_MAX_EXPIRES := 604800
+
+@en "PresignOptions"
+@fa "گزینه‌های پیش‌امضا"
+pub struct PresignOptions:
+    @en "expires"
+    @fa "مدت اعتبار"
+    pub expires: int = 0
+    @en "version_id"
+    @fa "شناسه نسخه"
+    pub version_id: str = ""
+    @en "content_type"
+    @fa "نوع محتوا"
+    pub content_type: str = ""
+    @en "acl"
+    @fa "دسترسی آماده"
+    pub acl: str = ""
+    @en "storage_class"
+    @fa "رده ذخیره‌سازی"
+    pub storage_class: str = ""
+    @en "response_content_type"
+    @fa "نوع محتوای پاسخ"
+    pub response_content_type: str = ""
+    @en "response_content_disposition"
+    @fa "نحوه نمایش محتوای پاسخ"
+    pub response_content_disposition: str = ""
+    @en "response_cache_control"
+    @fa "کنترل حافظه‌نهان پاسخ"
+    pub response_cache_control: str = ""
+end
+
+@en "PostOptions"
+@fa "گزینه‌های فرم"
+pub struct PostOptions:
+    @en "expires"
+    @fa "مدت اعتبار"
+    pub expires: int = 0
+    @en "key_is_prefix"
+    @fa "کلید پیشوند است"
+    pub key_is_prefix: bool = false
+    @en "content_type"
+    @fa "نوع محتوا"
+    pub content_type: str = ""
+    @en "content_type_is_prefix"
+    @fa "نوع محتوا پیشوند است"
+    pub content_type_is_prefix: bool = false
+    @en "acl"
+    @fa "دسترسی آماده"
+    pub acl: str = ""
+    @en "cache_control"
+    @fa "کنترل حافظه‌نهان"
+    pub cache_control: str = ""
+    @en "storage_class"
+    @fa "رده ذخیره‌سازی"
+    pub storage_class: str = ""
+    @en "min_bytes"
+    @fa "کمترین بایت"
+    pub min_bytes: i64 = 0
+    @en "max_bytes"
+    @fa "بیشترین بایت"
+    pub max_bytes: i64 = 0
+    @en "success_status"
+    @fa "وضعیت موفقیت"
+    pub success_status: str = ""
+    @en "success_redirect"
+    @fa "بازگشت پس از موفقیت"
+    pub success_redirect: str = ""
+    @en "meta"
+    @fa "فراداده"
+    pub meta: Headers = Headers {}
+end
+
+@en "PostForm"
+@fa "فرم ارسال"
+pub struct PostForm:
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+    @en "url"
+    @fa "نشانی"
+    pub url: str = ""
+    @en "fields"
+    @fa "فیلدها"
+    pub fields: Headers = Headers {}
+    @en "policy"
+    @fa "سیاست"
+    pub policy: str = ""
+    @en "error"
+    @fa "خطا"
+    pub error: str = ""
+end
+
+func _origin(ep: http.Endpoint, host: str): str:
+    if ep.secure: ret "https://" + host end
+    ret "http://" + host
+end
+
+func _expiry_of(cfg: Config, want: int): int:
+    mut secs := want
+    if secs <= 0: secs = cfg.expires end
+    if secs <= 0: secs = 900 end
+    if secs > _S3_MAX_EXPIRES: secs = _S3_MAX_EXPIRES end
+    ret secs
+end
+
+func _presign_query(
+    cfg: Config, amz_date: str, expires: int, signed: str, o: PresignOptions
+): Headers:
+    mut q := Headers {}
+    HeaderSet(q, "X-Amz-Algorithm", ALGORITHM)
+    HeaderSet(
+        q, "X-Amz-Credential", cfg.access_key + "/" + Scope(DateStamp(amz_date), cfg.region, cfg.service)
+    )
+    HeaderSet(q, "X-Amz-Date", amz_date)
+    HeaderSet(q, "X-Amz-Expires", "" + expires)
+    HeaderSet(q, "X-Amz-SignedHeaders", signed)
+    if cfg.session_token.len() > 0:
+        HeaderSet(q, "X-Amz-Security-Token", cfg.session_token)
+    end
+    if o.version_id.len() > 0: HeaderSet(q, "versionId", o.version_id) end
+    if o.response_content_type.len() > 0:
+        HeaderSet(q, "response-content-type", o.response_content_type)
+    end
+    if o.response_content_disposition.len() > 0:
+        HeaderSet(q, "response-content-disposition", o.response_content_disposition)
+    end
+    if o.response_cache_control.len() > 0:
+        HeaderSet(q, "response-cache-control", o.response_cache_control)
+    end
+    ret q
+end
+
+func _presign_headers(host: str, o: PresignOptions): Headers:
+    mut h := Headers {}
+    HeaderSet(h, "host", host)
+    if o.content_type.len() > 0: HeaderSet(h, "content-type", o.content_type) end
+    if o.acl.len() > 0: HeaderSet(h, "x-amz-acl", o.acl) end
+    if o.storage_class.len() > 0:
+        HeaderSet(h, "x-amz-storage-class", o.storage_class)
+    end
+    ret h
+end
+
+func _json_escape(s: str): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat s.len() in i:
+        c := s[i] as int
+        if c == 34: str.BufAppend(sb, "\\\"")
+        else c == 92: str.BufAppend(sb, "\\\\")
+        else c == 10: str.BufAppend(sb, "\\n")
+        else c == 13: str.BufAppend(sb, "\\r")
+        else c == 9: str.BufAppend(sb, "\\t")
+        else c < 32: str.BufAppend(sb, " ")
+        else:
+            str.BufAppendChar(sb, c)
+        end
+    end
+    ret str.BufStr(sb)
+end
+
+func _attr_escape(s: str): str:
+    mut out := str.Replace(s, "&", "&amp;")
+    out = str.Replace(out, "\"", "&quot;")
+    out = str.Replace(out, "<", "&lt;")
+    ret str.Replace(out, ">", "&gt;")
+end
+
+func _cond_exact(name: str, value: str): str:
+    ret "{\"" + _json_escape(name) + "\":\"" + _json_escape(value) + "\"}"
+end
+
+func _cond_starts(name: str, value: str): str:
+    ret "[\"starts-with\",\"$" + _json_escape(name) + "\",\"" + _json_escape(value) + "\"]"
+end
+
+func _post_fields(cfg: Config, key: str, amz_date: str, o: PostOptions): Headers:
+    mut f := Headers {}
+    HeaderSet(f, "key", key)
+    HeaderSet(f, "x-amz-algorithm", ALGORITHM)
+    HeaderSet(
+        f, "x-amz-credential", cfg.access_key + "/" + Scope(DateStamp(amz_date), cfg.region, cfg.service)
+    )
+    HeaderSet(f, "x-amz-date", amz_date)
+    if cfg.session_token.len() > 0:
+        HeaderSet(f, "x-amz-security-token", cfg.session_token)
+    end
+    if o.acl.len() > 0: HeaderSet(f, "acl", o.acl) end
+    if o.cache_control.len() > 0: HeaderSet(f, "Cache-Control", o.cache_control) end
+    if o.storage_class.len() > 0:
+        HeaderSet(f, "x-amz-storage-class", o.storage_class)
+    end
+    if o.content_type.len() > 0 and not o.content_type_is_prefix:
+        HeaderSet(f, "Content-Type", o.content_type)
+    end
+    if o.success_status.len() > 0:
+        HeaderSet(f, "success_action_status", o.success_status)
+    end
+    if o.success_redirect.len() > 0:
+        HeaderSet(f, "success_action_redirect", o.success_redirect)
+    end
+    mut i := 0
+    until i < o.meta.names.len():
+        HeaderSet(
+            f, "x-amz-meta-" + o.meta.names.get(i).lower(), o.meta.values.get(i)
+        )
+        i += 1
+    end
+    ret f
+end
+
+func _post_policy(
+    cfg: Config, expiry_iso: str, fields: Headers, o: PostOptions
+): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "{\"expiration\":\"")
+    str.BufAppend(sb, expiry_iso)
+    str.BufAppend(sb, "\",\"conditions\":[")
+    str.BufAppend(sb, _cond_exact("bucket", cfg.bucket))
+    mut i := 0
+    until i < fields.names.len():
+        name := fields.names.get(i)
+        value := fields.values.get(i)
+        str.BufAppend(sb, ",")
+        if name == "key" and o.key_is_prefix:
+            str.BufAppend(sb, _cond_starts("key", value))
+        else:
+            str.BufAppend(sb, _cond_exact(name, value))
+        end
+        i += 1
+    end
+    if o.content_type.len() > 0 and o.content_type_is_prefix:
+        str.BufAppend(sb, ",")
+        str.BufAppend(sb, _cond_starts("Content-Type", o.content_type))
+    end
+    if o.max_bytes > 0:
+        str.BufAppend(sb, ",[\"content-length-range\",")
+        str.BufAppendInt(sb, o.min_bytes)
+        str.BufAppend(sb, ",")
+        str.BufAppendInt(sb, o.max_bytes)
+        str.BufAppend(sb, "]")
+    end
+    str.BufAppend(sb, "]}")
+    ret str.BufStr(sb)
+end
+
+@en "S3Url"
+@fa "اس۳ نشانی"
+pub func S3Url(cfg: Config, key: str): str:
+    ep := http.ParseEndpoint(cfg.endpoint)
+    if not ep.ok: ret "" end
+    ret _origin(ep, _wire_host(cfg, ep, cfg.bucket)) + _wire_path(cfg, cfg.bucket, key)
+end
+
+@en "S3Presign"
+@fa "اس۳ پیش‌امضا"
+pub func S3Presign(cfg: Config, method: str, key: str, expires: int): str:
+    ret S3PresignAt(cfg, method, key, expires, time.Now())
+end
+
+@en "S3PresignAt"
+@fa "اس۳ پیش‌امضا با زمان"
+pub func S3PresignAt(
+    cfg: Config, method: str, key: str, expires: int, epoch_seconds: i64
+): str:
+    ret S3PresignWith(
+        cfg, method, key, PresignOptions { expires = expires }, epoch_seconds
+    )
+end
+
+@en "S3PresignWith"
+@fa "اس۳ پیش‌امضا با گزینه"
+pub func S3PresignWith(
+    cfg: Config, method: str, key: str, o: PresignOptions, epoch_seconds: i64
+): str:
+    if not Configured(cfg): ret "" end
+    ep := http.ParseEndpoint(cfg.endpoint)
+    if not ep.ok: ret "" end
+    host := _wire_host(cfg, ep, cfg.bucket)
+    path := _wire_path(cfg, cfg.bucket, key)
+    amz_date := AmzDate(epoch_seconds)
+    headers := _presign_headers(host, o)
+    mut signed_names := ""
+    canonical := _canon_headers(headers, signed_names)
+    query := _canon_query(
+        _presign_query(
+            cfg, amz_date, _expiry_of(cfg, o.expires), signed_names, o
+        )
+    )
+    signature := SignQueryHeaders(
+        cfg, method, path, query, canonical, signed_names, epoch_seconds
+    )
+    if signature.len() == 0: ret "" end
+    ret _origin(ep, host) + path + "?" + query + "&X-Amz-Signature=" + signature
+end
+
+@en "S3PresignGet"
+@fa "اس۳ پیش‌امضای خواندن"
+pub func S3PresignGet(cfg: Config, key: str, expires: int): str:
+    ret S3PresignAt(cfg, "GET", key, expires, time.Now())
+end
+
+@en "S3PresignPut"
+@fa "اس۳ پیش‌امضای نوشتن"
+pub func S3PresignPut(
+    cfg: Config, key: str, content_type: str, expires: int
+): str:
+    ret S3PresignWith(
+        cfg, "PUT", key, PresignOptions { expires = expires, content_type = content_type }, time.Now()
+    )
+end
+
+@en "S3PresignDownload"
+@fa "اس۳ پیش‌امضای دانلود"
+pub func S3PresignDownload(
+    cfg: Config, key: str, filename: str, expires: int
+): str:
+    ret S3PresignWith(
+        cfg, "GET", key, PresignOptions {
+            expires = expires, response_content_disposition = "attachment; filename=\"" + filename + "\""
+        }, time.Now()
+    )
+end
+
+@en "S3PresignPost"
+@fa "اس۳ پیش‌امضای فرم"
+pub func S3PresignPost(cfg: Config, key: str, o: PostOptions): PostForm:
+    ret S3PresignPostAt(cfg, key, o, time.Now())
+end
+
+@en "S3PresignPostAt"
+@fa "اس۳ پیش‌امضای فرم با زمان"
+pub func S3PresignPostAt(
+    cfg: Config, key: str, o: PostOptions, epoch_seconds: i64
+): PostForm:
+    if not Configured(cfg):
+        ret PostForm { error = "the object store is not configured" }
+    end
+    ep := http.ParseEndpoint(cfg.endpoint)
+    if not ep.ok:
+        ret PostForm { error = "the endpoint could not be parsed: " + cfg.endpoint }
+    end
+    amz_date := AmzDate(epoch_seconds)
+    expiry := epoch_seconds + (_expiry_of(cfg, o.expires) as i64)
+    mut fields := _post_fields(cfg, key, amz_date, o)
+    policy := _post_policy(cfg, time.FormatISOUTC(expiry), fields, o)
+    encoded := encoding.Base64Encode(policy)
+    signature := SignString(cfg, DateStamp(amz_date), encoded)
+    if signature.len() == 0:
+        ret PostForm { error = "the policy could not be signed" }
+    end
+    HeaderSet(fields, "policy", encoded)
+    HeaderSet(fields, "x-amz-signature", signature)
+    host := _wire_host(cfg, ep, cfg.bucket)
+    mut url := _origin(ep, host)
+    if cfg.path_style: url = url + "/" + cfg.bucket end
+    ret PostForm { ok = true, url = url, fields = fields, policy = policy }
+end
+
+@en "PostFormHtml"
+@fa "اچ تی ام ال فرم ارسال"
+pub func PostFormHtml(f: PostForm, file_field: str): str:
+    if not f.ok: ret "" end
+    mut name := file_field
+    if name.len() == 0: name = "file" end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "<form action=\"")
+    str.BufAppend(sb, f.url)
+    str.BufAppend(sb, "\" method=\"post\" enctype=\"multipart/form-data\">\n")
+    mut i := 0
+    until i < f.fields.names.len():
+        str.BufAppend(sb, "  <input type=\"hidden\" name=\"")
+        str.BufAppend(sb, f.fields.names.get(i))
+        str.BufAppend(sb, "\" value=\"")
+        str.BufAppend(sb, _attr_escape(f.fields.values.get(i)))
+        str.BufAppend(sb, "\">\n")
+        i += 1
+    end
+    str.BufAppend(sb, "  <input type=\"file\" name=\"")
+    str.BufAppend(sb, name)
+    str.BufAppend(sb, "\">\n  <button type=\"submit\">Upload</button>\n</form>")
+    ret str.BufStr(sb)
+end

@@ -1,0 +1,48 @@
+pkg.en = pool
+pkg.name = pool
+pkg.group = Time and concurrency
+pkg.summary = Running one loop in parallel across several processor cores.
+pkg.title = The pool package in Salam | Parallel loops
+pkg.description = The pool package in Salam: running a loop in parallel across several worker threads, and counting the processor cores, with an example.
+pkg.intro <<
+<p>If each turn of a loop is independent of the others, such as processing each slot of an array on its own, <code>ParallelFor</code> spreads the turns across several worker threads and waits for all of them. The loop body is a function taking an <code>i64</code>, the turn's number.</p>
+<p>Despite the name there is no pool that lives on: each call to <code>ParallelFor</code> starts its worker threads, hands out the turn numbers one at a time to whichever worker is free, and joins every worker before it returns. That makes it the shortest way to use every core for one loop. For work that arrives over time, use your own threads from <a href="/std/thread/">thread</a> fed by a <a href="/std/chan/">chan</a>; for shared state, <a href="/std/sync/">sync</a> and <a href="/std/atomic/">atomic</a>.</p>
+<p>The things people get wrong:</p>
+<ul>
+<li>Relying on the order of the turns, or changing shared data from them without a lock. Each turn writing to its own slot is safe; anything else needs <a href="/std/atomic/">atomic</a> or a mutex.</li>
+<li>Making the turns too small. Taking the next turn number costs a lock, and every call starts and joins threads, so a turn should do a fair amount of work (see <a href="#guide-chunks">chunks</a>).</li>
+<li>Calling <code>ParallelFor</code> in a hot loop. Each call pays for creating threads; parallelize the outer loop instead of the inner one.</li>
+</ul>
+
+<h2 id="guide-rows">One turn per row</h2>
+<p>The natural fit for <code>ParallelFor</code> is data laid out in rows, such as the pixels of an image or the lines of a table. Make each turn handle one row: the turns touch different memory, so they need no lock, and the result is the same whatever order they ran in.</p>
+{{example.pool-guide-pixels}}
+<p>The loop body here is a short lambda that calls a named function. Keeping the real work in a named function makes it easy to test on its own, without any threads.</p>
+
+<h2 id="guide-chunks">Chunks, not single items</h2>
+<p>Each turn has a small cost of its own, so a million turns that each add one number spend more time on bookkeeping than on adding. Cut the work into a few large chunks instead, let each turn handle one chunk and write its partial result to its own slot, and combine the slots on the main thread at the end.</p>
+{{example.pool-guide-chunks}}
+<p><code>ParallelForAuto</code> picks the number of workers from the processor count. A few chunks per worker is a good size: enough for the work to even out when some chunks are slower, few enough that the overhead stays small.</p>
+
+<h2 id="guide-shared">Combine results with an atomic counter</h2>
+<p>When the turns produce something that has to be added into one place, such as a count of matches, the simplest safe choice is an <a href="/std/atomic/">atomic</a>.<code>I64</code>. Here every number below 100000 is one turn, and each turn that finds a prime adds one to the shared counter.</p>
+{{example.pool-guide-primes}}
+<p>An atomic add per match is fine when matches are rare compared with the work of each turn. If every turn would update the counter, use partial results per chunk as in the previous section instead.</p>
+
+<h2 id="guide-rules">Rules for the loop body</h2>
+<ul>
+<li>Never rely on the order of the turns. Turn 5 can finish before turn 0.</li>
+<li>A turn may write to its own slot freely. Anything shared needs a <a href="/std/sync/">sync</a>.<code>Mutex</code> or an atomic.</li>
+<li>Do not print from the loop body; the lines come out mixed up. Store the results and print after <code>ParallelFor</code> returns.</li>
+<li><code>ParallelFor</code> waits for every turn, so as soon as it returns all results are ready and no join is needed.</li>
+<li>Small loops are faster without threads. Parallelize only when one run of the loop takes noticeable time.</li>
+</ul>
+>>
+
+doc.CPUCount = The number of processor cores that are online, at least one.
+doc.ParallelFor = Runs the body for the numbers zero to <code>n - 1</code> on <code>workers</code> new threads, at most <code>n</code> of them, and returns when every turn is done. Nothing happens when <code>n</code> is zero or less.
+doc.ParallelForAuto = Like <code>ParallelFor</code>, with one thread per core from <code>CPUCount</code>.
+
+ex.CPUCount = pool-ParallelFor
+ex.ParallelFor = pool-ParallelFor
+ex.ParallelForAuto = pool-ParallelFor

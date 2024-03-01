@@ -1,0 +1,111 @@
+pkg.en = config
+pkg.name = config
+pkg.group = System and tools
+pkg.summary = Reading and writing INI, env and YAML settings files with dotted keys.
+pkg.title = The config package in Salam | INI and YAML settings files
+pkg.description = The config package in Salam: reading INI, YAML and env files, sectioned keys, merging settings and writing them back out, with examples.
+pkg.intro <<
+<p>The <code>config</code> package reads a program's settings from INI, YAML or env files and keeps them as one ordered list of keys and text values. Keys in sections are dotted: the key <code>host</code> in the <code>[db]</code> section of an INI file, or under <code>db:</code> in YAML, becomes <code>db.host</code>. Whatever the file format, the rest of the program reads settings the same way.</p>
+<p>Use it for flat settings files that people edit by hand. For neighbouring jobs:</p>
+<ul>
+<li>A single environment variable of the running process: <a href="/std/env/">env</a> or <a href="/std/os/">os</a>.</li>
+<li>A <code>.env</code> file with full control over quoting, <code>export</code> lines and errors: <a href="/std/encoding/envfile/">encoding/envfile</a>, which this package uses underneath.</li>
+<li>YAML with lists or nested data you want to walk: <a href="/std/encoding/yaml/">encoding/yaml</a>. JSON or TOML: <a href="/std/encoding/json/">encoding/json</a>, <a href="/std/encoding/toml/">encoding/toml</a>.</li>
+<li>Command line options: <a href="/std/flag/">flag</a>.</li>
+</ul>
+<p>The usual pattern is to read the default settings, <code>Merge</code> the current environment's settings on top, and then read the values with the right type. Every value is stored as text; <code>GetInt</code>, <code>GetFloat</code> and <code>GetBool</code> convert it when you read it, and their last argument is the value to use when the key is not there at all.</p>
+<p>The things people get wrong:</p>
+<ul>
+<li>Nothing here reports an error. A missing or unreadable file gives an empty config, a line without <code>=</code> is skipped, and a value that is not a number reads as 0. Check the file and the important keys yourself, as the guides below show.</li>
+<li><code>GetBool</code> is true only for <code>true</code>, <code>1</code>, <code>yes</code> and <code>on</code>, written in lower case. <code>TRUE</code> and <code>Yes</code> are false.</li>
+<li>In INI and env files a <code>#</code> after a space starts a comment (in INI a <code>;</code> does too). Put quotes around values that contain them, such as passwords.</li>
+<li>A <code>Config</code> owns its memory: free each one you make, including the new ones that <code>Merge</code> and <code>Section</code> return, and free the vector <code>Keys</code> returns.</li>
+</ul>
+
+<h2 id="guide-layers">Layered settings: defaults, then overrides</h2>
+<p>Most programs read settings from more than one place: defaults shipped with the program, a file for the server it runs on, and a few values given on the command line. <code>Merge</code> takes two configs and returns a third in which the second one wins. Chain it to stack as many layers as you need. Keys keep the order of the base, and keys that only the override has are added at the end.</p>
+{{example.config-layers}}
+<p>The production file only names what differs (<code>workers</code>, <code>db.host</code> and a new <code>db.pool</code>), so the defaults stay the single place that lists every setting. <code>db.port</code> was never overridden and keeps its default.</p>
+
+<h2 id="guide-sections">Sections and your own settings struct</h2>
+<p>Passing one big config around means every part of the program sees every key. <code>Section</code> cuts out the keys under one name and drops the prefix, so a function that sets up the database only gets <code>host</code>, <code>port</code> and <code>pool</code>. Reading those into a struct once, at startup, keeps the rest of the code free of key names and string conversions.</p>
+{{example.config-sections}}
+<p>A YAML map such as <code>server:</code> is flattened into dotted keys, so the config holds only the leaf values: <code>Has(c, "server")</code> is false, while <code>Has(c, "server.port")</code> is true. <code>Keys</code> lists the keys in file order.</p>
+
+<h2 id="guide-files">Reading files: comments, quotes and missing files</h2>
+<p><code>LoadINI</code>, <code>LoadYAML</code> and <code>LoadEnv</code> read the whole file and parse it. If the file is not there they return an empty config without a word, so a typo in the path quietly leaves every setting at its default. Check the path first with <a href="/std/fs/file/">fs/file</a> and decide what a missing file means for your program.</p>
+{{example.config-files}}
+<p>Three details show up in the output. The comment after <code>9000</code> was cut off, and the spaces before it with it. The quoted password kept its <code>#</code>. The line <code>tags: fast</code> has no <code>=</code>, so it was dropped without a warning, and <code>mode = TRUE</code> was read but is not true for <code>GetBool</code>.</p>
+
+<h2 id="guide-validate">Check the settings at startup</h2>
+<p>The typed getters never fail. The default is used only when the key is missing; a key that is present but holds bad text is still converted. <code>GetInt</code> turns <code>eighty</code> into 0, not into your default, and <code>GetBool</code> is true only for <code>true</code>, <code>1</code>, <code>yes</code> and <code>on</code>, so <code>enabled</code> reads as false. It is worth checking the important keys once, when the program starts, and refusing to run with a clear list of problems.</p>
+{{example.config-validate}}
+<p>The check for a number compares the text with the number written back out with <code>str.FromInt</code>. If they differ, the text was not a plain whole number.</p>
+
+<h2 id="guide-save">Change a file and write it back</h2>
+<p><code>Set</code> adds or replaces a key and <code>Remove</code> deletes one, returning false when the key was not there. <code>FormatINI</code> writes the keys without a section first, then one <code>[section]</code> block for each prefix, and puts quotes around values that need them. Write the text with <a href="/std/io/">io</a> and the next <code>LoadINI</code> reads back the same settings.</p>
+{{example.config-save}}
+<p>Comments and blank lines from the original file are not kept: <code>ParseINI</code> skips them, so a file the program rewrites loses them. Keep hand written notes in a separate defaults file that the program only reads.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>You want</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Read a file from disk</td><td><code>LoadINI</code>, <code>LoadYAML</code>, <code>LoadEnv</code></td></tr>
+<tr><td>Read text you already have</td><td><code>ParseINI</code>, <code>ParseYAML</code>, <code>ParseEnv</code></td></tr>
+<tr><td>A value as text, with a fallback</td><td><code>GetOr</code></td></tr>
+<tr><td>A number or a flag</td><td><code>GetInt</code>, <code>GetFloat</code>, <code>GetBool</code></td></tr>
+<tr><td>Overrides on top of defaults</td><td><code>Merge</code></td></tr>
+<tr><td>Only the keys of one section</td><td><code>Section</code></td></tr>
+<tr><td>Write settings out again</td><td><code>FormatINI</code>, <code>FormatEnv</code>, <code>FormatEnvExport</code></td></tr>
+</tbody>
+</table></div>
+<p><code>ParseYAML</code> keeps only maps as dotted keys. A list becomes one value holding its text, so <code>tags: [a, b]</code> or a block list reads as <code>["a", "b"]</code>; parse that with <a href="/std/encoding/yaml/">encoding/yaml</a> when you need the items.</p>
+>>
+
+doc.Config = A set of settings: dotted keys with text values, in the order they were first set.
+doc.Config.m = The ordered map that keeps the keys and values in order.
+doc.New = Empty settings.
+doc.Len = The number of keys.
+doc.Has = True when the key is there.
+doc.Set = Sets a key's value. A new key goes at the end; an existing one keeps its place.
+doc.Get = A key's value, or an empty string when the key is missing. Use <code>Has</code> to tell a missing key from an empty value.
+doc.GetOr = A key's value, or the default.
+doc.GetInt = A key's value as a whole number, or the default when the key is missing. Text that is not a number gives 0, not the default.
+doc.GetFloat = A key's value as a decimal, or the default when the key is missing. Text that is not a number gives 0.
+doc.GetBool = A key's value as a boolean, or the default when the key is missing. Only <code>true</code>, <code>1</code>, <code>yes</code> and <code>on</code> in lower case are true; anything else is false.
+doc.Remove = Removes a key, returning false when it was not there.
+doc.Keys = A new vector with every key, in order. Free it.
+doc.Section = New settings with only the keys that start with <code>name.</code>, and that prefix removed. Free the result.
+doc.Merge = New settings with every key of <code>base</code> and then of <code>override</code>; where both have a key, <code>override</code> wins and the key keeps its place from <code>base</code>. Free the result.
+doc.Free = Releases the settings' memory.
+doc.ParseINI = Reads INI text. <code>[name]</code> starts a section, <code>#</code> and <code>;</code> start comment lines, values may be quoted, and lines without <code>=</code> are skipped. A key that appears twice keeps the last value.
+doc.ParseEnv = Reads <code>KEY=VALUE</code> text, as in a <code>.env</code> file, with <code>export</code> prefixes, quotes and <code>#</code> comments. Keys are kept as written, with no sections.
+doc.ParseYAML = Reads YAML text, flattening nested maps into dotted keys. A list is stored as one value holding its text.
+doc.LoadINI = Reads an INI file. A missing file gives an empty config, not an error.
+doc.LoadEnv = Reads an env file. A missing file gives an empty config, not an error.
+doc.LoadYAML = Reads a YAML file. A missing file gives an empty config, not an error.
+doc.FormatINI = Turns the settings into INI text: keys without a dot first, then one <code>[section]</code> per prefix. Values that need it are quoted. Comments are not kept.
+doc.FormatEnv = Turns the settings into <code>KEY=VALUE</code> text.
+doc.FormatEnvExport = Like the env form, with <code>export</code> before each line, to be run in a shell.
+
+ex.Config = config-Get
+ex.New = config-Get
+ex.Len = config-Get
+ex.Has = config-Get
+ex.Set = config-Get
+ex.GetOr = config-Get
+ex.GetInt = config-Get
+ex.GetFloat = config-Get
+ex.GetBool = config-Get
+ex.Remove = config-Get
+ex.Keys = config-Get
+ex.Free = config-Get
+ex.Section = config-ParseINI
+ex.LoadINI = config-ParseINI
+ex.FormatINI = config-ParseINI
+ex.Merge = config-ParseEnv
+ex.LoadEnv = config-ParseEnv
+ex.FormatEnv = config-ParseEnv
+ex.FormatEnvExport = config-ParseEnv
+ex.LoadYAML = config-ParseYAML

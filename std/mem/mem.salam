@@ -1,0 +1,265 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "mem"
+@fa "حافظه"
+package mem
+
+import conv
+
+extern:
+    func malloc(size: u64): void*
+    func calloc(count: u64, size: u64): void*
+    func realloc(ptr: void*, size: u64): void*
+    func free(ptr: void*)
+    func memset(ptr: void*, value: int, n: u64): void*
+    func memcpy(dst: void*, src: void*, n: u64): void*
+    func memmove(dst: void*, src: void*, n: u64): void*
+end
+
+const HDR_SIZE := 8 as u64
+
+mut _md_allocs := 0 as i64
+mut _md_frees := 0 as i64
+mut _md_live := 0 as i64
+mut _md_peak := 0 as i64
+
+@en "Allocate"
+@fa "تخصیص"
+pub func Allocate(size: u64): void*:
+    if SALAM_MEM_DEBUG:
+        total := size + HDR_SIZE
+        if total < size: ret null end
+        p := malloc(total)
+        if p == null: ret null end
+
+        mut hdr := p as i64*
+        hdr[0] = size as i64
+
+        _md_allocs += 1
+        _md_live += (size as i64)
+
+        if _md_live > _md_peak:
+            _md_peak = _md_live
+        end
+
+        ret ((p as u64) + HDR_SIZE) as void*
+    else:
+        ret malloc(size)
+    end
+end
+
+@en "Reallocate"
+@fa "بازتخصیص"
+pub func Reallocate(ptr: void*, size: u64): void*:
+    if SALAM_MEM_DEBUG:
+        if ptr == null:
+            ret Allocate(size)
+        end
+
+        orig := ((ptr as u64) - HDR_SIZE) as void*
+        old_hdr := orig as i64*
+        old_size := old_hdr[0]
+
+        total := size + HDR_SIZE
+        if total < size: ret null end
+
+        p := realloc(orig, total)
+        if p == null: ret null end
+
+        mut hdr := p as i64*
+        hdr[0] = size as i64
+
+        _md_live = _md_live - old_size + (size as i64)
+
+        if _md_live > _md_peak:
+            _md_peak = _md_live
+        end
+
+        ret ((p as u64) + HDR_SIZE) as void*
+    else:
+        ret realloc(ptr, size)
+    end
+end
+
+@en "Free"
+@fa "آزادسازی"
+pub func Free(ptr: void*):
+    if ptr == null:
+        ret
+    end
+
+    if SALAM_MEM_DEBUG:
+        orig := ((ptr as u64) - HDR_SIZE) as void*
+        hdr := orig as i64*
+        size := hdr[0]
+
+        if _md_live >= size:
+            _md_live -= size
+        else:
+            _md_live = 0
+        end
+
+        _md_frees += 1
+        free(orig)
+    else:
+        free(ptr)
+    end
+end
+
+@en "Set"
+@fa "تنظیم"
+pub func Set(ptr: void*, value: int, n: u64):
+    if ptr == null or n == 0:
+        ret
+    end
+    memset(ptr, value, n)
+end
+
+@en "Copy"
+@fa "کپی"
+pub func Copy(dst: void*, src: void*, n: u64):
+    if dst == src or n == 0:
+        ret
+    end
+    memcpy(dst, src, n)
+end
+
+@en "MemMove"
+@fa "جابجایی حافظه"
+pub func MemMove(dst: void*, src: void*, n: u64): void*:
+    if dst == src or n == 0:
+        ret dst
+    end
+    ret memmove(dst, src, n)
+end
+
+@en "AllocateZeroed"
+@fa "تخصیص صفرشده"
+pub func AllocateZeroed(size: u64): void*:
+    if SALAM_MEM_DEBUG:
+        p := Allocate(size)
+        if p != null:
+            Set(p, 0, size)
+        end
+
+        ret p
+    else:
+        ret calloc(size, 1 as u64)
+    end
+end
+
+@en "AllocateArray"
+@fa "تخصیص آرایه"
+pub func AllocateArray(count: u64, size: u64): void*:
+    if count == 0 or size == 0:
+        ret null
+    end
+
+    total := count * size
+
+    if total / count != size:
+        ret null
+    end
+
+    ret AllocateZeroed(total)
+end
+
+@en "AllocCount"
+@fa "شمار تخصیص"
+pub func AllocCount(): i64:
+    if SALAM_MEM_DEBUG:
+        ret _md_allocs
+    else:
+        ret 0
+    end
+end
+
+@en "FreeCount"
+@fa "شمار آزادسازی"
+pub func FreeCount(): i64:
+    if SALAM_MEM_DEBUG:
+        ret _md_frees
+    else:
+        ret 0
+    end
+end
+
+@en "LiveBytes"
+@fa "بایت های زنده"
+pub func LiveBytes(): i64:
+    if SALAM_MEM_DEBUG:
+        ret _md_live
+    else:
+        ret 0
+    end
+end
+
+@en "PeakBytes"
+@fa "بیشترین بایت ها"
+pub func PeakBytes(): i64:
+    if SALAM_MEM_DEBUG:
+        ret _md_peak
+    else:
+        ret 0
+    end
+end
+
+@en "IsMemDebug"
+@fa "اشکال زدایی حافظه فعال است"
+pub func IsMemDebug(): bool:
+    if SALAM_MEM_DEBUG:
+        ret true
+    else:
+        ret false
+    end
+end
+
+@en "IsAsanActive"
+@fa "ای سن فعال است"
+pub func IsAsanActive(): bool:
+    if SALAM_ASAN:
+        ret true
+    else:
+        ret false
+    end
+end
+
+@en "MemDebugActive"
+@fa "بررسی حافظه فعال است"
+pub func MemDebugActive(): bool:
+    ret IsMemDebug() or IsAsanActive()
+end
+
+@en "CheckLeaks"
+@fa "بررسی نشتی"
+pub func CheckLeaks():
+    if IsAsanActive():
+        printerrln "[salam memcheck] ASAN active - report at exit"
+    else IsMemDebug():
+        printerr "[salam memcheck] allocs="
+        printerr conv.FormatInt(AllocCount())
+        printerr " frees="
+        printerr conv.FormatInt(FreeCount())
+        printerr " live="
+        printerr conv.FormatInt(LiveBytes())
+        printerr " peak="
+        printerrln conv.FormatInt(PeakBytes())
+
+        if LiveBytes() > 0:
+            printerr "[WARNING] leak bytes="
+            printerrln conv.FormatInt(LiveBytes())
+        end
+    end
+end

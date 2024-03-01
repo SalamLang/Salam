@@ -1,0 +1,737 @@
+package cli
+
+import os
+import io
+import str
+
+include pth "../sal_path.salam"
+include dr "../driver/driver.salam"
+include lg "../logger.salam"
+include dg "../diag.salam"
+include i18 "../i18n.salam"
+include co "../sal_core.salam"
+include pf "../prof_self.salam"
+
+func plural_suffix(n: int): str:
+    ret i18.Plural(n)
+end
+
+inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
+
+func opt_value(arg: str, key: str, val &: str): bool:
+    n := str.Len(key)
+    if str.Len(arg) <= n or byte_at(arg, n) != 61 or not str.StartsWith(arg, key):
+        ret false
+    end
+    val = str.Substr(arg, n + 1, str.Len(arg) - n - 1)
+    ret true
+end
+
+func parse_indent_width(val: str, out &: int): bool:
+    n := str.Len(val)
+    if n == 0:
+        ret false
+    end
+    mut num := 0
+    mut i := 0
+    until i < n:
+        code := byte_at(val, i)
+        if not str.IsAsciiDigit(code):
+            ret false
+        end
+        num = num * 10 + (code - 48)
+        i += 1
+    end
+    if num < 1 or num > 16:
+        ret false
+    end
+    out = num
+    ret true
+end
+
+func parse_switch_min(val: str, out &: int): bool:
+    n := str.Len(val)
+    if n == 0 or n > 2:
+        ret false
+    end
+    mut num := 0
+    mut i := 0
+    until i < n:
+        code := byte_at(val, i)
+        if not str.IsAsciiDigit(code):
+            ret false
+        end
+        num = num * 10 + (code - 48)
+        i += 1
+    end
+    if num < 2:
+        ret false
+    end
+    out = num
+    ret true
+end
+
+func parse_timeout_ms(val: str, out &: int): bool:
+    n := str.Len(val)
+    if n == 0 or n > 9:
+        ret false
+    end
+    mut num := 0
+    mut i := 0
+    until i < n:
+        code := byte_at(val, i)
+        if not str.IsAsciiDigit(code):
+            ret false
+        end
+        num = num * 10 + (code - 48)
+        i += 1
+    end
+    if num < 1:
+        ret false
+    end
+    out = num
+    ret true
+end
+
+func parse_port(val: str, out &: int): bool:
+    n := str.Len(val)
+    if n == 0 or n > 5:
+        ret false
+    end
+    mut num := 0
+    mut i := 0
+    until i < n:
+        code := byte_at(val, i)
+        if not str.IsAsciiDigit(code):
+            ret false
+        end
+        num = num * 10 + (code - 48)
+        i += 1
+    end
+    if num < 1 or num > 65535:
+        ret false
+    end
+    out = num
+    ret true
+end
+
+func check_const_name(def: str): bool:
+    total := str.Len(def)
+    mut n := 0
+    until n < total and byte_at(def, n) != 61:
+        n += 1
+    end
+    if n == 0:
+        io.EPrintln(i18.Tr("salam: -d needs a constant name (-dNAME=VALUE)"))
+        ret false
+    end
+    name := str.Substr(def, 0, n)
+    mut i := 0
+    until i < n:
+        code := byte_at(def, i)
+        upper := code >= 65 and code <= 90
+        digit := code >= 48 and code <= 57
+        if not upper and code != 95 and not (digit and i > 0):
+            if code == 45:
+                io.EPrintln(
+                    co.Format1(
+                        i18.Tr("salam: '-' is not allowed in a -d constant name ('%s'); use '_'"), co.ArgStr(name)
+                    )
+                )
+            else:
+                io.EPrintln(
+                    co.Format1(
+                        i18.Tr("salam: -d constant name '%s' must be upper case (A-Z, 0-9 and '_', not starting with a digit)"), co.ArgStr(name)
+                    )
+                )
+            end
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+func add_const(def: str, out &: dr.Dr): bool:
+    if not check_const_name(def):
+        ret false
+    end
+    out.consts.push(def)
+    ret true
+end
+
+func shell_arg(s: str): str:
+    if SALAM_OS_WINDOWS:
+        mut out := `"`
+        out = out + str.Replace(s, `"`, `\"`)
+        out = out + `"`
+        ret out
+    else:
+        mut sb := str.NewBuilder()
+        str.BufAppendChar(sb, 39)
+        n := str.Len(s)
+        mut i := 0
+        until i < n:
+            code := byte_at(s, i)
+            if code == 39:
+                str.BufAppend(sb, "'\\''")
+            else:
+                str.BufAppendChar(sb, code)
+            end
+            i += 1
+        end
+        str.BufAppendChar(sb, 39)
+        out := str.BufStr(sb)
+        str.BufFree(sb)
+        ret out
+    end
+end
+
+func path_stem(path: str): str:
+    ret pth.PathStem(path)
+end
+
+func positional(arg: str, out &: dr.Dr): bool:
+    if out.command == dr.CMD_NEW or out.command == dr.CMD_INIT:
+        if str.Len(out.new_name) > 0:
+            io.EPrintln(
+                co.Format2(
+                    i18.Tr("salam: 'new' takes a single project name ('%s' after '%s')"), co.ArgStr(arg), co.ArgStr(out.new_name)
+                )
+            )
+            ret false
+        end
+        out.new_name = arg
+    else out.command == dr.CMD_UPDATE:
+        if str.Len(out.update_version) > 0:
+            io.EPrintln(
+                co.Format2(
+                    i18.Tr("salam: 'upgrade' takes a single version ('%s' after '%s')"), co.ArgStr(arg), co.ArgStr(out.update_version)
+                )
+            )
+            ret false
+        end
+        out.update_version = arg
+    else out.command == dr.CMD_SERVE:
+        if str.Len(out.input) > 0:
+            io.EPrintln(
+                co.Format2(
+                    i18.Tr("salam: 'serve' takes a single directory argument ('%s' after '%s')"), co.ArgStr(arg), co.ArgStr(out.input)
+                )
+            )
+            ret false
+        end
+        out.input = arg
+    else out.command == dr.CMD_RUN:
+        if str.Len(out.input) == 0:
+            out.inputs.push(arg)
+            out.input = arg
+        else:
+            out.run_args.push(arg)
+        end
+    else out.command == dr.CMD_REPL or out.command == dr.CMD_REPL_LAYOUT:
+        if str.Equals(arg, "page"):
+            io.EPrintln(
+                i18.Tr("salam: the page REPL is 'salam page', not 'salam cli page'")
+            )
+        else:
+            io.EPrintln(
+                co.Format2(
+                    i18.Tr("salam: the REPL takes no input files ('%s'); run a file with 'salam run %s'"), co.ArgStr(arg), co.ArgStr(arg)
+                )
+            )
+        end
+        ret false
+    else out.command == dr.CMD_TRANSLATE:
+        if str.Len(out.translate_lang) == 0:
+            out.translate_lang = arg
+        else:
+            out.inputs.push(arg)
+            if str.Len(out.input) == 0:
+                out.input = arg
+            end
+        end
+    else out.command == dr.CMD_BUILD or out.command == dr.CMD_TEST or out.command == dr.CMD_OBJ or out.command == dr.CMD_LLVM or out.command == dr.CMD_JS or out.command == dr.CMD_LAYOUT_BUILD or out.command == dr.CMD_WEB or out.command == dr.CMD_DEBUG or out.command == dr.CMD_MEMCHECK or out.command == dr.CMD_FMT or out.command == dr.CMD_DOC or out.command == dr.CMD_SQL or out.command == dr.CMD_ADD or out.command == dr.CMD_REMOVE or out.command == dr.CMD_DEPS_UPDATE or out.command == dr.CMD_INSTALL or out.command == dr.CMD_SEARCH or out.command == dr.CMD_UNINSTALL:
+        out.inputs.push(arg)
+        if str.Len(out.input) == 0:
+            out.input = arg
+        end
+    else:
+        if str.Len(out.input) > 0:
+            io.EPrintln(
+                co.Format2(
+                    i18.Tr(
+                        "salam: multiple input files require the 'build' command ('%s' after '%s')"
+                    ), co.ArgStr(arg), co.ArgStr(out.input)
+                )
+            )
+            ret false
+        end
+        out.input = arg
+    end
+    ret true
+end
+
+func dispatch_command(args: Vector<str>, out &: dr.Dr): int:
+    mut start := 1
+    n := args.len()
+    mut cmd := ""
+    if n > 1:
+        cmd = args.get(1)
+    end
+    if str.Len(cmd) == 0:
+        out.command = dr.CMD_HELP
+    else str.Equals(cmd, "build"):
+        out.command = dr.CMD_BUILD
+        start = 2
+    else str.Equals(cmd, "obj"):
+        out.command = dr.CMD_OBJ
+        start = 2
+    else str.Equals(cmd, "llvm") or str.Equals(cmd, "emit-llvm"):
+        out.command = dr.CMD_LLVM
+        start = 2
+    else str.Equals(cmd, "js") or str.Equals(cmd, "emit-js"):
+        out.command = dr.CMD_JS
+        start = 2
+    else str.Equals(cmd, "run"):
+        out.command = dr.CMD_RUN
+        start = 2
+    else str.Equals(cmd, "exec") or str.Equals(cmd, "jit"):
+        out.command = dr.CMD_RUN
+        out.interp = true
+        start = 2
+    else str.Equals(cmd, "debug"):
+        out.command = dr.CMD_DEBUG
+        out.debug_info = true
+        start = 2
+    else str.Equals(cmd, "memcheck"):
+        out.command = dr.CMD_MEMCHECK
+        out.debug_info = true
+        out.asan = true
+        start = 2
+    else str.Equals(cmd, "new"):
+        out.command = dr.CMD_NEW
+        start = 2
+    else str.Equals(cmd, "init"):
+        out.command = dr.CMD_INIT
+        start = 2
+    else str.Equals(cmd, "add"):
+        out.command = dr.CMD_ADD
+        start = 2
+    else str.Equals(cmd, "remove"):
+        out.command = dr.CMD_REMOVE
+        start = 2
+    else str.Equals(cmd, "update"):
+        out.command = dr.CMD_DEPS_UPDATE
+        start = 2
+    else str.Equals(cmd, "deps"):
+        out.command = dr.CMD_DEPS
+        start = 2
+    else str.Equals(cmd, "install"):
+        out.command = dr.CMD_INSTALL
+        start = 2
+    else str.Equals(cmd, "search"):
+        out.command = dr.CMD_SEARCH
+        start = 2
+    else str.Equals(cmd, "uninstall"):
+        out.command = dr.CMD_UNINSTALL
+        start = 2
+    else str.Equals(cmd, "format"):
+        out.command = dr.CMD_FMT
+        start = 2
+    else str.Equals(cmd, "help"):
+        out.command = dr.CMD_HELP
+        start = 2
+    else str.Equals(cmd, "version"):
+        out.command = dr.CMD_VERSION
+        start = 2
+    else str.Equals(cmd, "inspect"):
+        out.command = dr.CMD_INSPECT
+        start = 2
+    else str.Equals(cmd, "test"):
+        out.command = dr.CMD_TEST
+        start = 2
+    else str.Equals(cmd, "check"):
+        out.command = dr.CMD_INSPECT
+        out.check_only = true
+        start = 2
+    else str.Equals(cmd, "doc"):
+        out.command = dr.CMD_DOC
+        start = 2
+    else str.Equals(cmd, "translate"):
+        out.command = dr.CMD_TRANSLATE
+        start = 2
+    else str.Equals(cmd, "sql"):
+        out.command = dr.CMD_SQL
+        start = 2
+    else str.Equals(cmd, "web"):
+        out.command = dr.CMD_WEB
+        start = 2
+    else str.Equals(cmd, "serve"):
+        out.command = dr.CMD_SERVE
+        start = 2
+    else str.Equals(cmd, "upgrade") or str.Equals(cmd, "self-update"):
+        out.command = dr.CMD_UPDATE
+        start = 2
+    else str.Equals(cmd, "page"):
+        if n > 2 and str.Equals(args.get(2), "build"):
+            out.command = dr.CMD_LAYOUT_BUILD
+            start = 3
+        else:
+            out.command = dr.CMD_REPL_LAYOUT
+            start = 2
+        end
+    else str.Equals(cmd, "cli"):
+        if n > 2 and str.Equals(args.get(2), "build"):
+            out.command = dr.CMD_BUILD
+            start = 3
+        else n > 2 and str.Equals(args.get(2), "obj"):
+            out.command = dr.CMD_OBJ
+            start = 3
+        else:
+            out.command = dr.CMD_REPL
+            start = 2
+        end
+    else:
+        out.command = dr.CMD_UNKNOWN
+    end
+    ret start
+end
+
+func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
+    n := args.len()
+    mut i := start
+    until i < n:
+        arg := args.get(i)
+        mut val := ""
+        if str.Equals(arg, "--") and (out.command == dr.CMD_RUN or out.command == dr.CMD_LLVM):
+            i += 1
+            until i < n:
+                out.run_args.push(args.get(i))
+                i += 1
+            end
+            break
+        end
+        if str.Equals(arg, "--emit-c"):
+            out.emit_c = true
+            out.keep_temp = true
+            if str.Equals(out.backend, "auto"):
+                out.backend = "c"
+            end
+        else str.Equals(arg, "--keep-temp"):
+            out.keep_temp = true
+        else str.Equals(arg, "--time-report"):
+            out.time_report = true
+        else opt_value(arg, "--time-report", val):
+            out.time_report = true
+            if str.Equals(val, "json"):
+                out.time_report_fmt = pf.PROF_FMT_JSON
+            else str.Equals(val, "table"):
+                out.time_report_fmt = pf.PROF_FMT_TABLE
+            else:
+                io.EPrint(
+                    co.Format1(
+                        i18.Tr("salam: unknown --time-report format '%s' (expected 'table' or 'json')\n"), co.ArgStr(val)
+                    )
+                )
+                ret false
+            end
+        else str.Equals(arg, "--time-trace"):
+            out.time_trace = "salam-trace.json"
+        else opt_value(arg, "--time-trace", val):
+            out.time_trace = val
+        else str.Equals(arg, "--force") or str.Equals(arg, "-B"):
+            out.force = true
+        else str.Equals(arg, "--rewrite"):
+            out.translate_rewrite = true
+        else str.Equals(arg, "--short") and out.command == dr.CMD_VERSION:
+            out.version_short = true
+        else str.Equals(arg, "-O0"):
+            out.llvm_opt_level = 0
+            out.llvm_opt_set = true
+        else str.Equals(arg, "-O1"):
+            out.llvm_opt_level = 1
+            out.llvm_opt_set = true
+        else str.Equals(arg, "-O2"):
+            out.llvm_opt_level = 2
+            out.llvm_opt_set = true
+        else str.Equals(arg, "-O3"):
+            out.llvm_opt_level = 3
+            out.llvm_opt_set = true
+        else str.Equals(arg, "-Os"):
+            out.llvm_opt_level = 4
+            out.llvm_opt_set = true
+        else str.Equals(arg, "-Oz"):
+            out.llvm_opt_level = 5
+            out.llvm_opt_set = true
+        else str.Equals(arg, "--emit-llvm"):
+            out.llvm_emit = 0
+        else str.Equals(arg, "--emit-asm"):
+            out.llvm_emit = 1
+            out.native_asm = true
+        else str.Equals(arg, "--emit-obj") or str.Equals(arg, "-c"):
+            out.llvm_emit = 2
+        else str.Equals(arg, "--emit-bitcode") or str.Equals(arg, "-flto"):
+            out.llvm_emit = 3
+        else str.Equals(arg, "--exec") or str.Equals(arg, "--emit-exec"):
+            out.llvm_emit = 4
+        else str.Equals(arg, "--jit") and out.command == dr.CMD_LLVM:
+            out.llvm_emit = 5
+        else str.Equals(arg, "--verify-ir"):
+            out.llvm_verify = true
+        else str.Equals(arg, "--native-cpu") or str.Equals(arg, "-march=native"):
+            out.llvm_native_cpu = true
+        else str.Equals(arg, "--fp-contract"):
+            out.llvm_fp_contract = true
+        else str.Equals(arg, "--fast-math"):
+            out.fast_math = true
+        else opt_value(arg, "--target", val):
+            out.llvm_target = val
+        else str.Equals(arg, "--release"):
+            out.safe = false
+        else opt_value(arg, "--ownership", val):
+            if str.Equals(val, "off"):
+                out.ownership = 0
+            else str.Equals(val, "warn"):
+                out.ownership = 2
+            else str.Equals(val, "error"):
+                out.ownership = 3
+            else str.Equals(val, "on"):
+                out.ownership = 1
+            else:
+                io.EPrint(
+                    co.Format1(
+                        i18.Tr("salam: unknown --ownership mode '%s' (expected 'off', 'on', 'warn' or 'error')\n"), co.ArgStr(val)
+                    )
+                )
+                ret false
+            end
+        else opt_value(arg, "--switch-lint", val):
+            if str.Equals(val, "off"):
+                out.switch_lint = 0
+            else str.Equals(val, "warn"):
+                out.switch_lint = 1
+            else str.Equals(val, "error"):
+                out.switch_lint = 2
+            else str.Equals(val, "fix"):
+                out.switch_lint = 3
+            else:
+                io.EPrint(
+                    co.Format1(
+                        i18.Tr("salam: unknown --switch-lint mode '%s' (expected 'off', 'warn', 'error' or 'fix')\n"), co.ArgStr(val)
+                    )
+                )
+                ret false
+            end
+        else opt_value(arg, "--switch-lint-min", val):
+            mut smin := 0
+            if not parse_switch_min(val, smin):
+                io.EPrint(
+                    co.Format1(
+                        i18.Tr("salam: invalid --switch-lint-min value '%s' (a number of at least 2)\n"), co.ArgStr(val)
+                    )
+                )
+                ret false
+            end
+            out.switch_lint_min = smin
+        else str.Equals(arg, "--check") and out.command == dr.CMD_UPDATE:
+            out.update_check = true
+        else opt_value(arg, "--version", val) and out.command == dr.CMD_UPDATE:
+            out.update_version = val
+        else str.Equals(arg, "--check"):
+            out.fmt_check = true
+        else str.Equals(arg, "--fix"):
+            out.check_fix = true
+        else str.Equals(arg, "--one") and out.command == dr.CMD_TEST:
+            out.test_one = true
+        else opt_value(arg, "--format", val) and out.command == dr.CMD_TEST:
+            out.test_format = val
+        else opt_value(arg, "--run", val) and out.command == dr.CMD_TEST:
+            out.test_run = val
+        else opt_value(arg, "--report", val) and out.command == dr.CMD_TEST:
+            out.test_report = val
+        else str.Equals(arg, "--fix-order"):
+            out.fmt_fix_order = true
+        else str.Equals(arg, "--no-fix-order"):
+            out.fmt_fix_order = false
+        else str.Equals(arg, "--minify"):
+            out.fmt_minify = true
+        else opt_value(arg, "--exclude", val):
+            out.fmt_exclude.push(val)
+        else opt_value(arg, "--include", val):
+            out.fmt_include.push(val)
+        else opt_value(arg, "--exclude-from", val):
+            out.fmt_exclude_from.push(val)
+        else str.Equals(arg, "-r") or str.Equals(arg, "--recursive"):
+            out.fmt_recursive = true
+        else str.Equals(arg, "--tabs"):
+            out.fmt_tabs = true
+        else str.Equals(arg, "--spaces"):
+            out.fmt_tabs = false
+        else opt_value(arg, "--indent", val):
+            if str.Equals(val, "tab") or str.Equals(val, "tabs"):
+                out.fmt_tabs = true
+            else:
+                mut width := 0
+                if not parse_indent_width(val, width):
+                    io.EPrintln(
+                        co.Format1(
+                            i18.Tr(
+                                "salam: invalid --indent value '%s' (use 'tab' or a width 1-16)"
+                            ), co.ArgStr(val)
+                        )
+                    )
+                    ret false
+                end
+                out.fmt_tabs = false
+                out.fmt_indent_width = width
+            end
+        else str.Equals(arg, "-g") or str.Equals(arg, "--debug-info"):
+            out.debug_info = true
+        else str.Equals(arg, "--asan"):
+            out.asan = true
+        else str.Equals(arg, "--lto"):
+            out.lto = true
+        else str.Equals(arg, "--interp") or str.Equals(arg, "--jit"):
+            out.interp = true
+        else str.Equals(arg, "--inline"):
+            out.inline_mode = true
+        else str.Equals(arg, "--split"):
+            out.split = true
+        else str.Equals(arg, "--no-js-minify-names"):
+            out.no_js_minify_names = true
+        else str.Equals(arg, "--no-minify"):
+            out.no_minify = true
+        else opt_value(arg, "--output", val):
+            out.output = val
+        else str.Equals(arg, "-o"):
+            if i + 1 >= n:
+                io.EPrintln(i18.Tr("salam: -o requires a file argument"))
+                ret false
+            end
+            i += 1
+            out.output = args.get(i)
+        else opt_value(arg, "--backend", val):
+            out.backend = val
+        else opt_value(arg, "--linker", val):
+            out.linker = val
+        else str.Equals(arg, "--lib"):
+            out.lib_kind = "shared"
+        else opt_value(arg, "--lib", val):
+            if not str.Equals(val, "shared") and not str.Equals(val, "static"):
+                io.EPrintln(co.Format1(i18.Tr("salam: --lib takes 'shared' or 'static' (got '%s')"), co.ArgStr(val)))
+                ret false
+            end
+            out.lib_kind = val
+        else opt_value(arg, "--libpath", val):
+            out.lib_paths.push(val)
+        else opt_value(arg, "--cc", val):
+            out.cc = val
+            out.cc_explicit = true
+            if str.Equals(out.backend, "auto"):
+                out.backend = "c"
+            end
+        else opt_value(arg, "--stdlib-path", val):
+            out.stdlib_path = val
+        else opt_value(arg, "--define", val):
+            out.defines.push(val)
+        else str.StartsWith(arg, "-D") and str.Len(arg) > 2:
+            out.defines.push(str.Substr(arg, 2, str.Len(arg) - 2))
+        else opt_value(arg, "--const", val):
+            if not add_const(val, out):
+                ret false
+            end
+        else str.StartsWith(arg, "-d") and str.Len(arg) > 2:
+            if not add_const(str.Substr(arg, 2, str.Len(arg) - 2), out):
+                ret false
+            end
+        else opt_value(arg, "--export", val):
+            out.exports.push(val)
+        else str.Equals(arg, "--emit-tokens"):
+            out.emit_tokens_xml = true
+        else str.Equals(arg, "--emit-ast"):
+            out.emit_ast_xml = true
+        else str.Equals(arg, "--emit-symbol") or str.Equals(arg, "--emit-symbols"):
+            out.emit_symbol_xml = true
+        else str.Equals(arg, "--color"):
+            out.color = 1
+        else str.Equals(arg, "--no-color"):
+            out.color = 0
+        else opt_value(arg, "--error-style", val):
+            mut st := 0
+            if not dg.StyleFromString(val, st):
+                io.EPrintln(
+                    co.Format1(
+                        i18.Tr("salam: invalid error style '%s' (rust|gcc|clang)"), co.ArgStr(val)
+                    )
+                )
+                ret false
+            end
+            out.diag_style = st
+        else opt_value(arg, "--dialect", val):
+            out.sql_dialect = val
+        else opt_value(arg, "--schema", val):
+            out.sql_schema = val
+        else opt_value(arg, "--package", val):
+            out.sql_package = val
+        else opt_value(arg, "--error-format", val):
+            mut efmt := 0
+            if not dg.FormatFromString(val, efmt):
+                io.EPrintln(
+                    co.Format1(
+                        i18.Tr("salam: invalid error format '%s' (human|json|xml)"), co.ArgStr(val)
+                    )
+                )
+                ret false
+            end
+            out.diag_format = efmt
+        else opt_value(arg, "--log-level", val):
+            mut lvl := 0
+            if not lg.LevelFromString(val, lvl):
+                io.EPrintln(co.Format1(i18.Tr("salam: invalid log level '%s'"), co.ArgStr(val)))
+                ret false
+            end
+            out.log_level = lvl
+        else opt_value(arg, "--lang", val):
+            out.lang = val
+            out.lang_set = true
+        else opt_value(arg, "--xml-out", val):
+            out.xml_out = val
+        else opt_value(arg, "--host", val):
+            out.serve_host = val
+        else opt_value(arg, "--config", val):
+            out.serve_config = val
+        else str.Equals(arg, "--test"):
+            out.serve_test = true
+        else opt_value(arg, "--port", val):
+            mut prt := 0
+            if not parse_port(val, prt):
+                io.EPrintln(
+                    co.Format1(i18.Tr("salam: invalid --port value '%s' (use 1-65535)"), co.ArgStr(val))
+                )
+                ret false
+            end
+            out.serve_port = prt
+        else opt_value(arg, "--timeout", val):
+            mut ms := 0
+            if not parse_timeout_ms(val, ms):
+                io.EPrintln(
+                    co.Format1(
+                        i18.Tr("salam: invalid --timeout value '%s' (milliseconds, > 0)"), co.ArgStr(val)
+                    )
+                )
+                ret false
+            end
+            out.timeout_ms = ms
+        else str.StartsWith(arg, "-") and str.Len(arg) > 1:
+            io.EPrintln(co.Format1(i18.Tr("salam: unknown option '%s'"), co.ArgStr(arg)))
+            ret false
+        else:
+            if not positional(arg, out):
+                ret false
+            end
+        end
+        i += 1
+    end
+    ret true
+end

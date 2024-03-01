@@ -1,0 +1,980 @@
+package nativegen
+
+pub struct Lsr:
+    pub iv: int = 0 - 1
+    pub init: int = 0 - 1
+    pub step: i64 = 0 as i64
+    pub iv_nsw: bool = false
+    pub mark: int = 0
+    pub pre: int = 0 - 1
+    pub latch: int = 0 - 1
+    pub head: int = 0 - 1
+end
+
+pub struct Lin:
+    pub c0: i64 = 0 as i64
+    pub iv: i64 = 0 as i64
+    pub lv: Vector<int> = Vector {}
+    pub lc: Vector<i64> = Vector {}
+end
+
+pub struct LGrp:
+    pub base: Vector<int> = Vector {}
+    pub phi: Vector<int> = Vector {}
+    pub scale: Vector<int> = Vector {}
+    pub iv: Vector<i64> = Vector {}
+    pub c0: Vector<i64> = Vector {}
+    pub disp: Vector<i64> = Vector {}
+    pub ptr: Vector<int> = Vector {}
+    pub ls: Vector<int> = Vector {}
+    pub ln: Vector<int> = Vector {}
+    pub lv: Vector<int> = Vector {}
+    pub lc: Vector<i64> = Vector {}
+end
+
+func lin_add_leaf(f &: Lin, key: int, c: i64): bool:
+    repeat f.lv.len() in k:
+        if f.lv[k] == key:
+            f.lc[k] = f.lc[k] + c
+            ret true
+        end
+    end
+    if f.lv.len() >= 6:
+        ret false
+    end
+    f.lv.push(key)
+    f.lc.push(c)
+    ret true
+end
+
+func lin_merge(f &: Lin, o &: Lin, sign: i64): bool:
+    f.c0 = f.c0 + sign * o.c0
+    f.iv = f.iv + sign * o.iv
+    repeat o.lv.len() in k:
+        if not lin_add_leaf(f, o.lv[k], sign * o.lc[k]):
+            ret false
+        end
+    end
+    ret true
+end
+
+func lin_scale(f &: Lin, k: i64):
+    f.c0 = f.c0 * k
+    f.iv = f.iv * k
+    repeat f.lc.len() in q:
+        f.lc[q] = f.lc[q] * k
+    end
+end
+
+func lsr_lin(g &: Ng, l &: Lp, s &: Lsr, v: int, narrow: bool, depth: int, f &: Lin): bool:
+    f.c0 = 0 as i64
+    f.iv = 0 as i64
+    f.lv.clear()
+    f.lc.clear()
+    if v == s.iv:
+        f.iv = 1 as i64
+        ret true
+    end
+    if is_cint(g, v):
+        f.c0 = norm_int(g, g.v_ty[v], g.v_i[v])
+        ret true
+    end
+    if depth > 8 or g.v_kind[v] != VK_INS or lin_atom(g, v, narrow):
+        if lsr_inv(g, l, s, v):
+            ret lin_add_leaf(f, v * 2 + (narrow ? 1 : 0), 1 as i64)
+        end
+        ret false
+    end
+    d := g.v_def[v]
+    op := g.i_op[d]
+    if op == OP_SEXT:
+        ret lsr_lin(g, l, s, g.i_a[d], true, depth + 1, f)
+    end
+    if op == OP_ADD or op == OP_SUB:
+        mut o := Lin {}
+        if not lsr_lin(g, l, s, g.i_a[d], narrow, depth + 1, f) or not lsr_lin(g, l, s, g.i_b[d], narrow, depth + 1, o):
+            o.lv.free()
+            o.lc.free()
+            ret false
+        end
+        ok := lin_merge(f, o, op == OP_ADD ? (1 as i64) : (0 - 1 as i64))
+        o.lv.free()
+        o.lc.free()
+        ret ok
+    end
+    if op == OP_MUL or op == OP_SHL:
+        b := g.i_b[d]
+        if not is_cint(g, b):
+            ret false
+        end
+        mut k := g.v_i[b]
+        if op == OP_SHL:
+            k = (1 as i64) << k
+        end
+        if not lsr_lin(g, l, s, g.i_a[d], narrow, depth + 1, f):
+            ret false
+        end
+        lin_scale(f, k)
+        ret true
+    end
+    ret false
+end
+
+func lin_atom(g &: Ng, v: int, narrow: bool): bool:
+    d := g.v_def[v]
+    op := g.i_op[d]
+    if op == OP_SEXT:
+        ret false
+    end
+    if op == OP_ADD or op == OP_SUB or op == OP_MUL or op == OP_SHL:
+        if (op == OP_MUL or op == OP_SHL) and not is_cint(g, g.i_b[d]):
+            ret true
+        end
+        if op == OP_SHL and (g.v_i[g.i_b[d]] < (0 as i64) or g.v_i[g.i_b[d]] > (16 as i64)):
+            ret true
+        end
+        ret narrow and (g.i_f[d] & IF_NSW) == 0
+    end
+    ret true
+end
+
+func lin_same(gr &: LGrp, q: int, f &: Lin): bool:
+    n := gr.ln[q]
+    mut cnt := 0
+    repeat f.lv.len() in k:
+        if f.lc[k] != (0 as i64):
+            cnt += 1
+        end
+    end
+    if cnt != n:
+        ret false
+    end
+    repeat f.lv.len() in k2:
+        if f.lc[k2] == (0 as i64):
+            continue
+        end
+        mut found := false
+        repeat n in j:
+            if gr.lv[gr.ls[q] + j] == f.lv[k2] and gr.lc[gr.ls[q] + j] == f.lc[k2]:
+                found = true
+            end
+        end
+        if not found:
+            ret false
+        end
+    end
+    ret true
+end
+
+func lsr_inv(g &: Ng, l &: Lp, s &: Lsr, v: int): bool:
+    if v < 0:
+        ret false
+    end
+    if g.v_kind[v] != VK_INS:
+        ret true
+    end
+    b := g.i_blk[g.v_def[v]]
+    ret b >= 0 and l.inl[b] != s.mark
+end
+
+func lsr_aff(g &: Ng, l &: Lp, s &: Lsr, v: int, narrow: bool, depth: int, coef &: i64, sym &: int, cost &: int): bool:
+    sym = 0 - 1
+    if v == s.iv:
+        if narrow and not s.iv_nsw:
+            ret false
+        end
+        coef = 1 as i64
+        ret true
+    end
+    if lsr_inv(g, l, s, v):
+        coef = 0 as i64
+        ret true
+    end
+    if depth > 8 or g.v_kind[v] != VK_INS:
+        ret false
+    end
+    d := g.v_def[v]
+    op := g.i_op[d]
+    t := g.i_ty[d]
+    if is_agg(g, t) or is_flt(g, t) or is_vec(g, t):
+        ret false
+    end
+    if op == OP_SEXT:
+        mut c0 := 0 as i64
+        mut s0 := 0 - 1
+        if not lsr_aff(g, l, s, g.i_a[d], true, depth + 1, c0, s0, cost):
+            ret false
+        end
+        coef = c0
+        sym = s0
+        cost += 1
+        ret true
+    end
+    nsw := (g.i_f[d] & IF_NSW) != 0
+    if narrow and not nsw:
+        ret false
+    end
+    if op == OP_ADD or op == OP_SUB:
+        mut ca := 0 as i64
+        mut cb := 0 as i64
+        mut sa := 0 - 1
+        mut sb := 0 - 1
+        if not lsr_aff(g, l, s, g.i_a[d], narrow, depth + 1, ca, sa, cost) or not lsr_aff(g, l, s, g.i_b[d], narrow, depth + 1, cb, sb, cost):
+            ret false
+        end
+        if ca != (0 as i64) and cb != (0 as i64) and sa != sb:
+            ret false
+        end
+        coef = op == OP_ADD ? ca + cb : ca - cb
+        sym = ca != (0 as i64) ? sa : sb
+        if not is_cint(g, g.i_b[d]) and not (op == OP_ADD and is_cint(g, g.i_a[d])):
+            cost += 1
+        end
+        ret true
+    end
+    if op == OP_MUL or op == OP_SHL:
+        mut x := g.i_a[d]
+        mut b := g.i_b[d]
+        if op == OP_MUL and is_cint(g, x):
+            x = g.i_b[d]
+            b = g.i_a[d]
+        end
+        if not is_cint(g, b):
+            if op != OP_MUL or g.v_ty[b] != T_I32 and g.v_ty[b] != T_I64:
+                ret false
+            end
+            mut cx := 0 as i64
+            mut sx := 0 - 1
+            mut cy := 0 as i64
+            mut sy := 0 - 1
+            if not lsr_aff(g, l, s, x, narrow, depth + 1, cx, sx, cost) or not lsr_aff(g, l, s, b, narrow, depth + 1, cy, sy, cost):
+                ret false
+            end
+            if cx != (0 as i64) and cy != (0 as i64):
+                ret false
+            end
+            if cx == (0 as i64) and cy == (0 as i64):
+                coef = 0 as i64
+                ret true
+            end
+            if cx != (0 as i64):
+                if sx >= 0 or not lsr_inv(g, l, s, b):
+                    ret false
+                end
+                coef = cx
+                sym = b
+            else:
+                if sy >= 0 or not lsr_inv(g, l, s, x):
+                    ret false
+                end
+                coef = cy
+                sym = x
+            end
+            cost += 1
+            ret true
+        end
+        mut k := g.v_i[b]
+        if op == OP_SHL:
+            if k < (0 as i64) or k > (16 as i64):
+                ret false
+            end
+            k = (1 as i64) << k
+        end
+        mut ca2 := 0 as i64
+        mut sa2 := 0 - 1
+        if not lsr_aff(g, l, s, x, narrow, depth + 1, ca2, sa2, cost):
+            ret false
+        end
+        coef = ca2 * k
+        sym = sa2
+        cost += 1
+        ret true
+    end
+    ret false
+end
+
+func lsr_clone(g &: Ng, l &: Lp, s &: Lsr, v: int, before: int, depth: int): int:
+    if v == s.iv:
+        ret s.init
+    end
+    if lsr_inv(g, l, s, v) or depth > 10:
+        ret v
+    end
+    d := g.v_def[v]
+    ni := ins_new(g, g.i_op[d], g.i_ty[d])
+    dv_taint(g, d)
+    g.i_a[ni] = lsr_clone(g, l, s, g.i_a[d], before, depth + 1)
+    m := val_mask(g.i_op[d])
+    if (m & 2) != 0:
+        g.i_b[ni] = lsr_clone(g, l, s, g.i_b[d], before, depth + 1)
+    else:
+        g.i_b[ni] = g.i_b[d]
+    end
+    g.i_c[ni] = g.i_c[d]
+    g.i_x[ni] = g.i_x[d]
+    g.i_d[ni] = g.i_d[d]
+    g.i_f[ni] = g.i_f[d]
+    nv := new_res(g, ni)
+    ins_before(g, before, ni)
+    ret nv
+end
+
+func lsr_iv(g &: Ng, s &: Lsr, phi: int): bool:
+    if g.i_pcount[phi] != 2:
+        ret false
+    end
+    t := g.i_ty[phi]
+    if is_agg(g, t) or is_flt(g, t) or is_vec(g, t) or int_bits(g, t) < 32:
+        ret false
+    end
+    init := phi_val_for(g, phi, s.pre)
+    nx := phi_val_for(g, phi, s.latch)
+    if init < 0 or nx < 0 or g.v_kind[nx] != VK_INS:
+        ret false
+    end
+    d := g.v_def[nx]
+    op := g.i_op[d]
+    if (op != OP_ADD and op != OP_SUB) or g.i_a[d] != g.i_res[phi] or not is_cint(g, g.i_b[d]):
+        ret false
+    end
+    mut st := g.v_i[g.i_b[d]]
+    if op == OP_SUB:
+        st = 0 - st
+    end
+    s.iv = g.i_res[phi]
+    s.init = init
+    s.step = st
+    s.iv_nsw = (g.i_f[d] & IF_NSW) != 0
+    ret true
+end
+
+func lsr_loop(g &: Ng, l &: Lp, s &: Lsr): bool:
+    h := s.head
+    mut changed := false
+    mut gr := LGrp {}
+    mut f := Lin {}
+    mut ph := g.b_first[h]
+    until ph >= 0 and g.i_op[ph] == OP_PHI:
+        nph := g.i_next[ph]
+        if lsr_iv(g, s, ph):
+            mut pc := LGrp {}
+            mut pcn := Vector {} as Vector<int>
+            each b0 in g.b_rpo:
+                if l.inl[b0] != s.mark:
+                    continue
+                end
+                mut i0 := g.b_first[b0]
+                until i0 >= 0:
+                    if g.i_op[i0] == OP_ADDR and g.i_b[i0] >= 0 and g.i_res[i0] >= 0 and lsr_inv(g, l, s, g.i_a[i0]):
+                        mut coef0 := 0 as i64
+                        mut cost0 := 0
+                        mut sym0 := 0 - 1
+                        if lsr_aff(g, l, s, g.i_b[i0], false, 0, coef0, sym0, cost0) and coef0 != (0 as i64) and cost0 == 1 and sym0 < 0 and lsr_lin(g, l, s, g.i_b[i0], false, 0, f):
+                            mut hit0 := 0 - 1
+                            repeat pc.base.len() in q0:
+                                if hit0 < 0 and pc.base[q0] == g.i_a[i0] and pc.scale[q0] == g.i_x[i0] and pc.iv[q0] == f.iv and lin_same(pc, q0, f):
+                                    hit0 = q0
+                                end
+                            end
+                            if hit0 >= 0:
+                                pcn[hit0] = pcn[hit0] + 1
+                            else:
+                                pc.base.push(g.i_a[i0])
+                                pc.scale.push(g.i_x[i0])
+                                pc.iv.push(f.iv)
+                                pc.ls.push(pc.lv.len())
+                                mut nn0 := 0
+                                repeat f.lv.len() in k0:
+                                    if f.lc[k0] != (0 as i64):
+                                        pc.lv.push(f.lv[k0])
+                                        pc.lc.push(f.lc[k0])
+                                        nn0 += 1
+                                    end
+                                end
+                                pc.ln.push(nn0)
+                                pcn.push(1)
+                            end
+                        end
+                    end
+                    i0 = g.i_next[i0]
+                end
+            end
+            each b in g.b_rpo:
+                if l.inl[b] != s.mark:
+                    continue
+                end
+                mut i := g.b_first[b]
+                until i >= 0:
+                    nx := g.i_next[i]
+                    if g.i_op[i] == OP_ADDR and g.i_b[i] >= 0 and g.i_res[i] >= 0 and lsr_inv(g, l, s, g.i_a[i]):
+                        mut coef := 0 as i64
+                        mut cost := 0
+                        mut sym := 0 - 1
+                        mut cheap_ok := false
+                        mut c1 := 0 as i64
+                        mut k1 := 0
+                        mut s1 := 0 - 1
+                        if lsr_aff(g, l, s, g.i_b[i], false, 0, c1, s1, k1) and k1 == 1 and s1 < 0 and lsr_lin(g, l, s, g.i_b[i], false, 0, f):
+                            repeat pc.base.len() in q1:
+                                if pc.base[q1] == g.i_a[i] and pc.scale[q1] == g.i_x[i] and pc.iv[q1] == f.iv and lin_same(pc, q1, f) and pcn[q1] >= 2:
+                                    cheap_ok = true
+                                end
+                            end
+                        end
+                        if lsr_aff(g, l, s, g.i_b[i], false, 0, coef, sym, cost) and coef != (0 as i64) and (cost >= 2 or cheap_ok):
+                            haslin := sym < 0 and lsr_lin(g, l, s, g.i_b[i], false, 0, f)
+                            mut hit := 0 - 1
+                            if haslin:
+                                repeat gr.ptr.len() in q:
+                                    if hit < 0 and gr.phi[q] == s.iv and gr.base[q] == g.i_a[i] and gr.scale[q] == g.i_x[i] and gr.iv[q] == f.iv and lin_same(gr, q, f):
+                                        hit = q
+                                    end
+                                end
+                            end
+                            if hit >= 0:
+                                g.i_a[i] = gr.ptr[hit]
+                                g.i_b[i] = 0 - 1
+                                g.i_d[i] = (f.c0 - gr.c0[hit]) * (g.i_x[i] as i64) + g.i_d[i] - gr.disp[hit]
+                                g.i_x[i] = 1
+                                changed = true
+                                i = nx
+                                continue
+                            end
+                            if gr.ptr.len() >= 6:
+                                i = nx
+                                continue
+                            end
+                            pt := g.b_last[s.pre]
+                            ia := ins_new(g, OP_ADDR, T_PTR)
+                            g.i_a[ia] = g.i_a[i]
+                            g.i_b[ia] = lsr_clone(g, l, s, g.i_b[i], pt, 0)
+                            g.i_x[ia] = g.i_x[i]
+                            g.i_d[ia] = g.i_d[i]
+                            p0 := new_res(g, ia)
+                            ins_before(g, pt, ia)
+                            pp := ins_new(g, OP_PHI, T_PTR)
+                            g.i_ps[pp] = g.pool.len()
+                            g.i_pcount[pp] = 2
+                            pv := new_res(g, pp)
+                            ins_before(g, g.b_first[h], pp)
+                            ltm := g.b_last[s.latch]
+                            inc := ins_new(g, OP_ADDR, T_PTR)
+                            g.i_a[inc] = pv
+                            g.i_b[inc] = 0 - 1
+                            g.i_x[inc] = 1
+                            g.i_d[inc] = coef * (g.i_x[i] as i64) * s.step
+                            if sym >= 0:
+                                mut sw := sym
+                                if g.v_ty[sym] != T_I64:
+                                    sxi := ins_new(g, OP_SEXT, T_I64)
+                                    g.i_a[sxi] = sym
+                                    g.i_x[sxi] = g.v_ty[sym]
+                                    sw = new_res(g, sxi)
+                                    ins_before(g, pt, sxi)
+                                end
+                                smi := ins_new(g, OP_MUL, T_I64)
+                                g.i_a[smi] = sw
+                                g.i_b[smi] = const_int(g, T_I64, g.i_d[inc])
+                                stv := new_res(g, smi)
+                                ins_before(g, pt, smi)
+                                g.i_b[inc] = stv
+                                g.i_d[inc] = 0 as i64
+                            end
+                            pn := new_res(g, inc)
+                            ins_before(g, ltm, inc)
+                            g.pool.push(p0)
+                            g.pool.push(s.pre)
+                            g.pool.push(pn)
+                            g.pool.push(s.latch)
+                            repl_grow(g)
+                            g.v_repl[g.i_res[i]] = pv
+                            if haslin:
+                                gr.base.push(g.i_a[i])
+                                gr.phi.push(s.iv)
+                                gr.scale.push(g.i_x[i])
+                                gr.iv.push(f.iv)
+                                gr.c0.push(f.c0)
+                                gr.disp.push(g.i_d[i])
+                                gr.ptr.push(pv)
+                                gr.ls.push(gr.lv.len())
+                                mut nn := 0
+                                repeat f.lv.len() in k3:
+                                    if f.lc[k3] != (0 as i64):
+                                        gr.lv.push(f.lv[k3])
+                                        gr.lc.push(f.lc[k3])
+                                        nn += 1
+                                    end
+                                end
+                                gr.ln.push(nn)
+                            end
+                            ins_unlink(g, i)
+                            changed = true
+                        end
+                    end
+                    i = nx
+                end
+            end
+            pc.base.free()
+            pc.phi.free()
+            pc.scale.free()
+            pc.iv.free()
+            pc.c0.free()
+            pc.disp.free()
+            pc.ptr.free()
+            pc.ls.free()
+            pc.ln.free()
+            pc.lv.free()
+            pc.lc.free()
+            pcn.free()
+        end
+        ph = nph
+    end
+    gr.base.free()
+    gr.phi.free()
+    gr.scale.free()
+    gr.iv.free()
+    gr.c0.free()
+    gr.disp.free()
+    gr.ptr.free()
+    gr.ls.free()
+    gr.ln.free()
+    gr.lv.free()
+    gr.lc.free()
+    f.lv.free()
+    f.lc.free()
+    ret changed
+end
+
+func lsr(g &: Ng): bool:
+    build_dom(g)
+    mut l := Lp {}
+    repeat g.b_first.len():
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    if l.head.len() > 0 and make_preheaders(g, l):
+        build_cfg(g)
+        build_dom(g)
+        l.inl.clear()
+        repeat g.b_first.len():
+            l.inl.push(0)
+        end
+        lp_find(g, l)
+    end
+    mut s := Lsr {}
+    mut changed := false
+    mut mark := 3000000
+    each h in l.head:
+        mark += 1
+        _n := lp_body(g, l, h, mark)
+        p := lp_outside_pred(g, l, h, mark)
+        if p < 0:
+            continue
+        end
+        pt := g.b_last[p]
+        if pt < 0 or g.i_op[pt] != OP_BR:
+            continue
+        end
+        mut latch := 0 - 1
+        mut nl := 0
+        repeat g.b_npred[h] in q:
+            pb := g.b_pred[g.b_ps[h] + q]
+            if l.inl[pb] == mark:
+                latch = pb
+                nl += 1
+            end
+        end
+        if nl != 1:
+            continue
+        end
+        ltm := g.b_last[latch]
+        if ltm < 0 or g.i_op[ltm] != OP_BR:
+            continue
+        end
+        s.mark = mark
+        s.pre = p
+        s.latch = latch
+        s.head = h
+        if lsr_loop(g, l, s):
+            changed = true
+        end
+    end
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+    if changed:
+        remap_all(g)
+    end
+    ret changed
+end
+
+func wide_ok(g &: Ng, l &: Lp, mark: int, pre: int, pv: int, nx: int, nd: int, ub: int, v: int, depth: int): int:
+    if v == pv:
+        ret 2
+    end
+    if v == nx:
+        ret dominates(g, g.i_blk[nd], ub) ? 2 : 0
+    end
+    if v < 0 or g.v_ty[v] != T_I32:
+        ret 0
+    end
+    if is_cint(g, v) or g.v_kind[v] == VK_ARG:
+        ret 1
+    end
+    if g.v_kind[v] != VK_INS:
+        ret 0
+    end
+    d := g.v_def[v]
+    if lsr_inv_m(g, l, mark, v) and dominates(g, g.i_blk[d], pre):
+        ret 1
+    end
+    op := g.i_op[d]
+    if depth > 4 or (g.i_f[d] & IF_NSW) == 0:
+        ret 0
+    end
+    if (op == OP_MUL or op == OP_SHL) and is_cint(g, g.i_b[d]):
+        if op == OP_SHL and (g.v_i[g.i_b[d]] < (0 as i64) or g.v_i[g.i_b[d]] > (16 as i64)):
+            ret 0
+        end
+        ret wide_ok(g, l, mark, pre, pv, nx, nd, ub, g.i_a[d], depth + 1)
+    end
+    if op != OP_ADD and op != OP_SUB:
+        ret 0
+    end
+    ka := wide_ok(g, l, mark, pre, pv, nx, nd, ub, g.i_a[d], depth + 1)
+    if ka == 0:
+        ret 0
+    end
+    kb := wide_ok(g, l, mark, pre, pv, nx, nd, ub, g.i_b[d], depth + 1)
+    if kb == 0:
+        ret 0
+    end
+    ret ka > kb ? ka : kb
+end
+
+func wide_flat(g &: Ng, pre: int, pv: int, nx: int, v: int, sign: i64, tv &: Vector<int>, ts &: Vector<i64>, c &: i64):
+    if v != pv and v != nx:
+        if is_cint(g, v):
+            c = c + sign * norm_int(g, T_I32, g.v_i[v])
+            ret
+        end
+        if g.v_kind[v] == VK_INS:
+            d := g.v_def[v]
+            op := g.i_op[d]
+            if (op == OP_ADD or op == OP_SUB) and (g.i_f[d] & IF_NSW) != 0 and (wide_has_iv(g, pv, nx, v, 0) or not dominates(g, g.i_blk[d], pre)):
+                wide_flat(g, pre, pv, nx, g.i_a[d], sign, tv, ts, c)
+                wide_flat(g, pre, pv, nx, g.i_b[d], op == OP_ADD ? sign : 0 - sign, tv, ts, c)
+                ret
+            end
+            if (op == OP_MUL or op == OP_SHL) and (g.i_f[d] & IF_NSW) != 0 and is_cint(g, g.i_b[d]) and (wide_has_iv(g, pv, nx, v, 0) or not dominates(g, g.i_blk[d], pre)):
+                k := g.v_i[g.i_b[d]]
+                wide_flat(g, pre, pv, nx, g.i_a[d], op == OP_MUL ? sign * k : sign * ((1 as i64) << k), tv, ts, c)
+                ret
+            end
+        end
+    end
+    tv.push(v)
+    ts.push(sign)
+end
+
+func wide_has_iv(g &: Ng, pv: int, nx: int, v: int, depth: int): bool:
+    if v == pv or v == nx:
+        ret true
+    end
+    if depth > 4 or v < 0 or g.v_kind[v] != VK_INS:
+        ret false
+    end
+    d := g.v_def[v]
+    op := g.i_op[d]
+    if (op == OP_MUL or op == OP_SHL) and is_cint(g, g.i_b[d]):
+        ret wide_has_iv(g, pv, nx, g.i_a[d], depth + 1)
+    end
+    if op != OP_ADD and op != OP_SUB:
+        ret false
+    end
+    ret wide_has_iv(g, pv, nx, g.i_a[d], depth + 1) or wide_has_iv(g, pv, nx, g.i_b[d], depth + 1)
+end
+
+func wide_add(g &: Ng, at: int, before: bool, a: int, b: int, sign: i64): int:
+    ni := ins_new(g, sign > (0 as i64) ? OP_ADD : OP_SUB, T_I64)
+    g.i_a[ni] = a
+    g.i_b[ni] = b
+    g.i_f[ni] = IF_NSW
+    nv := new_res(g, ni)
+    if before:
+        ins_before(g, at, ni)
+    end
+    ret nv
+end
+
+func wide_scale(g &: Ng, at: int, v: int, k: i64): int:
+    if k == (1 as i64) or k == (0 - 1 as i64):
+        ret v
+    end
+    mag := k < (0 as i64) ? 0 - k : k
+    ni := ins_new(g, OP_MUL, T_I64)
+    g.i_a[ni] = v
+    g.i_b[ni] = const_int(g, T_I64, mag)
+    g.i_f[ni] = IF_NSW
+    nv := new_res(g, ni)
+    ins_before(g, at, ni)
+    ret nv
+end
+
+func wide_build(g &: Ng, pt: int, at: int, pv: int, nx: int, wpv: int, wnv: int, v: int): int:
+    mut tv := Vector {} as Vector<int>
+    mut ts := Vector {} as Vector<i64>
+    mut c := 0 as i64
+    wide_flat(g, g.i_blk[pt], pv, nx, v, 1 as i64, tv, ts, c)
+    mut inv := 0 - 1
+    repeat tv.len() in k:
+        t := tv[k]
+        if t == pv or t == nx or ts[k] == (0 as i64):
+            continue
+        end
+        si := ins_new(g, OP_SEXT, T_I64)
+        g.i_a[si] = t
+        g.i_x[si] = T_I32
+        sv0 := new_res(g, si)
+        ins_before(g, pt, si)
+        sv := wide_scale(g, pt, sv0, ts[k])
+        if inv >= 0:
+            inv = wide_add(g, pt, true, inv, sv, ts[k])
+        else ts[k] > (0 as i64):
+            inv = sv
+        else:
+            inv = wide_add(g, pt, true, const_int(g, T_I64, 0 as i64), sv, ts[k])
+        end
+    end
+    mut r := 0 - 1
+    repeat tv.len() in k2:
+        t2 := tv[k2]
+        if (t2 != pv and t2 != nx) or ts[k2] == (0 as i64):
+            continue
+        end
+        w := wide_scale(g, at, t2 == pv ? wpv : wnv, ts[k2])
+        if r >= 0:
+            r = wide_add(g, at, true, r, w, ts[k2])
+        else ts[k2] > (0 as i64):
+            r = w
+        else inv >= 0:
+            r = wide_add(g, at, true, inv, w, ts[k2])
+            inv = 0 - 1
+        else:
+            r = wide_add(g, at, true, const_int(g, T_I64, 0 as i64), w, ts[k2])
+        end
+    end
+    if r < 0:
+        r = const_int(g, T_I64, 0 as i64)
+    end
+    if inv >= 0:
+        r = wide_add(g, at, true, r, inv, 1 as i64)
+    end
+    if c != (0 as i64):
+        r = wide_add(g, at, true, r, const_int(g, T_I64, c), 1 as i64)
+    end
+    tv.free()
+    ts.free()
+    ret r
+end
+
+func widen_iv(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: int): bool:
+    if g.i_ty[ph] != T_I32 or g.i_pcount[ph] != 2:
+        ret false
+    end
+    pv := g.i_res[ph]
+    init := phi_val_for(g, ph, pre)
+    nx := phi_val_for(g, ph, latch)
+    if init < 0 or nx < 0 or g.v_kind[nx] != VK_INS:
+        ret false
+    end
+    nd := g.v_def[nx]
+    nop := g.i_op[nd]
+    if nop == OP_ADD and g.i_b[nd] == pv and g.i_a[nd] != pv:
+        g.i_b[nd] = g.i_a[nd]
+        g.i_a[nd] = pv
+    end
+    if (nop != OP_ADD and nop != OP_SUB) or g.i_a[nd] != pv or (g.i_f[nd] & IF_NSW) == 0:
+        ret false
+    end
+    stp := g.i_b[nd]
+    if not lsr_inv_m(g, l, mark, stp):
+        ret false
+    end
+    mut nsext := 0
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            if g.i_op[i] == OP_SEXT and g.i_ty[i] == T_I64 and dominates(g, h, b):
+                if g.i_a[i] == pv or g.i_a[i] == nx:
+                    nsext += 1
+                else g.i_x[i] == T_I32 and l.inl[b] == mark and wide_ok(g, l, mark, pre, pv, nx, nd, b, g.i_a[i], 0) == 2:
+                    nsext += 1
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    if nsext == 0:
+        ret false
+    end
+    pt := g.b_last[pre]
+    mut wi := init
+    if is_cint(g, init):
+        wi = const_int(g, T_I64, norm_int(g, T_I32, g.v_i[init]))
+    else:
+        si := ins_new(g, OP_SEXT, T_I64)
+        g.i_a[si] = init
+        g.i_x[si] = T_I32
+        wi = new_res(g, si)
+        ins_before(g, pt, si)
+    end
+    mut ws := stp
+    if is_cint(g, stp):
+        ws = const_int(g, T_I64, norm_int(g, T_I32, g.v_i[stp]))
+    else:
+        ss := ins_new(g, OP_SEXT, T_I64)
+        g.i_a[ss] = stp
+        g.i_x[ss] = T_I32
+        ws = new_res(g, ss)
+        ins_before(g, pt, ss)
+    end
+    wp := ins_new(g, OP_PHI, T_I64)
+    g.i_ps[wp] = g.pool.len()
+    g.i_pcount[wp] = 2
+    wpv := new_res(g, wp)
+    ins_before(g, g.b_first[h], wp)
+    wn := ins_new(g, nop, T_I64)
+    g.i_a[wn] = wpv
+    g.i_b[wn] = ws
+    g.i_f[wn] = IF_NSW
+    wnv := new_res(g, wn)
+    ins_before(g, g.i_next[nd], wn)
+    g.pool.push(wi)
+    g.pool.push(pre)
+    g.pool.push(wnv)
+    g.pool.push(latch)
+    repl_grow(g)
+    each b2 in g.b_rpo:
+        mut j := g.b_first[b2]
+        until j >= 0:
+            nxj := g.i_next[j]
+            if g.i_op[j] == OP_SEXT and g.i_ty[j] == T_I64 and dominates(g, h, b2) and g.i_res[j] >= 0:
+                if g.i_a[j] == pv:
+                    g.v_repl[g.i_res[j]] = wpv
+                    ins_unlink(g, j)
+                else g.i_a[j] == nx and dominates(g, g.i_blk[nd], b2):
+                    g.v_repl[g.i_res[j]] = wnv
+                    ins_unlink(g, j)
+                else g.i_x[j] == T_I32 and wide_ok(g, l, mark, pre, pv, nx, nd, b2, g.i_a[j], 0) == 2:
+                    wv := wide_build(g, pt, j, pv, nx, wpv, wnv, g.i_a[j])
+                    repl_grow(g)
+                    g.v_repl[g.i_res[j]] = wv
+                    ins_unlink(g, j)
+                end
+            end
+            if g.i_op[j] == OP_ICMP and dominates(g, h, b2):
+                pr := g.i_x[j]
+                if pr != CC_ULT and pr != CC_ULE and pr != CC_UGT and pr != CC_UGE:
+                    ca := g.i_a[j]
+                    cb := g.i_b[j]
+                    mut wa := 0 - 1
+                    if ca == pv: wa = wpv end
+                    if ca == nx and dominates(g, g.i_blk[nd], b2): wa = wnv end
+                    if wa >= 0 and lsr_inv_m(g, l, mark, cb) and g.v_ty[cb] == T_I32 and (g.v_kind[cb] != VK_INS or dominates(g, g.i_blk[g.v_def[cb]], pre)):
+                        mut wb := cb
+                        if is_cint(g, cb):
+                            wb = const_int(g, T_I64, norm_int(g, T_I32, g.v_i[cb]))
+                        else:
+                            sb := ins_new(g, OP_SEXT, T_I64)
+                            g.i_a[sb] = cb
+                            g.i_x[sb] = T_I32
+                            wb = new_res(g, sb)
+                            ins_before(g, pt, sb)
+                        end
+                        g.i_a[j] = wa
+                        g.i_b[j] = wb
+                    end
+                end
+            end
+            j = nxj
+        end
+    end
+    mut fp := g.b_first[h]
+    until fp >= 0 and g.i_op[fp] == OP_PHI:
+        fp = g.i_next[fp]
+    end
+    tp := ins_new(g, OP_TRUNC, T_I32)
+    g.i_a[tp] = wpv
+    g.i_x[tp] = T_I64
+    tpv := new_res(g, tp)
+    ins_before(g, fp, tp)
+    tn := ins_new(g, OP_TRUNC, T_I32)
+    g.i_a[tn] = wnv
+    g.i_x[tn] = T_I64
+    tnv := new_res(g, tn)
+    ins_before(g, g.i_next[wn], tn)
+    repl_grow(g)
+    g.v_repl[pv] = tpv
+    g.v_repl[nx] = tnv
+    ret true
+end
+
+func widen_ivs(g &: Ng): bool:
+    ensure_preheaders(g)
+    build_dom(g)
+    mut l := Lp {}
+    repeat g.b_first.len():
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut changed := false
+    mut mark := 5000000
+    each h in l.head:
+        mark += 1
+        _n := lp_body(g, l, h, mark)
+        p := lp_outside_pred(g, l, h, mark)
+        if p < 0:
+            continue
+        end
+        pt := g.b_last[p]
+        if pt < 0 or g.i_op[pt] != OP_BR:
+            continue
+        end
+        mut latch := 0 - 1
+        mut nl := 0
+        repeat g.b_npred[h] in q:
+            pb := g.b_pred[g.b_ps[h] + q]
+            if l.inl[pb] == mark:
+                latch = pb
+                nl += 1
+            end
+        end
+        if nl != 1:
+            continue
+        end
+        mut phs := Vector {} as Vector<int>
+        mut i := g.b_first[h]
+        until i >= 0 and g.i_op[i] == OP_PHI:
+            phs.push(i)
+            i = g.i_next[i]
+        end
+        each ph in phs:
+            if widen_iv(g, l, mark, h, p, latch, ph):
+                changed = true
+            end
+        end
+        phs.free()
+    end
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+    if changed:
+        remap_all(g)
+    end
+    ret changed
+end

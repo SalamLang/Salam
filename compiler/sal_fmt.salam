@@ -1,0 +1,1298 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package fmt
+
+import str
+
+include co "sal_core.salam"
+include src "source.salam"
+include tok "token.salam"
+include lg "logger.salam"
+include lx "lexer/lexer.salam"
+include ps "parser/parser.salam"
+include at "ast.salam"
+
+pub const FMT_INDENT_WIDTH := 4
+
+const FMT_MAX_BRACKET := 256
+
+const FMT_MAX_BLOCK := 256
+
+const FMT_WRAP_WIDTH := 100
+
+struct OrdItem:
+    pub node: int = 0
+    pub phase: int = 0
+    pub ustart: int = 0
+    pub uend: int = 0
+end
+
+struct FmtCtx:
+    pub st: FmtStyle = FmtStyle {}
+    pub indent: int = 0
+    pub bracket: int = 0
+    pub angle: int = 0
+    pub bracket_indent: int = 0
+    pub ml_stack: Vector<int> = Vector {}
+    pub paren_is_lambda: Vector<int> = Vector {}
+    pub prev_close_was_lambda: bool = false
+    pub ml_top: int = 0
+    pub block_line: Vector<int> = Vector {}
+    pub in_match_arms: Vector<int> = Vector {}
+    pub block_top: int = 0
+    pub line_has_content: bool = false
+    pub force_break: bool = false
+    pub no_space_next: bool = false
+    pub prev_gt_generic: bool = false
+    pub prev_cmp: bool = false
+    pub q_open: Vector<int> = Vector {}
+    pub stmt_head: int = 0
+    pub match_pending: bool = false
+    pub open_colon_line: int = 0
+    pub has_prev: bool = false
+    pub prev_kind: int = 0
+    pub prev_end_index: int = 0
+    pub prev_unary: bool = false
+    pub prev_after_dot: bool = false
+    pub prev_end_line: int = 0
+    pub hdr_prev: int = 0
+end
+
+pub struct FmtStyle:
+    pub tabs: bool = false
+    pub width: int = 0
+    pub minify: bool = false
+end
+
+inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
+
+func is_value_end(k: int): bool:
+    ret k == tok.TK_IDENT or k == tok.TK_INT or k == tok.TK_FLOAT or k == tok.TK_STRING or k == tok.TK_TRIPLE_STRING or k == tok.TK_RAW_STRING or k == tok.TK_CHAR or k == tok.TK_UTF8_CHAR or k == tok.TK_RPAREN or k == tok.TK_RBRACKET or k == tok.TK_RBRACE or k == tok.TK_KW_TRUE or k == tok.TK_KW_FALSE or k == tok.TK_KW_NULL or k == tok.TK_KW_THIS
+end
+
+func is_value_start(k: int): bool:
+    ret k == tok.TK_IDENT or k == tok.TK_INT or k == tok.TK_FLOAT or k == tok.TK_STRING or k == tok.TK_TRIPLE_STRING or k == tok.TK_RAW_STRING or k == tok.TK_CHAR or k == tok.TK_UTF8_CHAR or k == tok.TK_KW_TRUE or k == tok.TK_KW_FALSE or k == tok.TK_KW_NULL or k == tok.TK_KW_THIS
+end
+
+func is_open(k: int): bool:
+    ret k == tok.TK_LPAREN or k == tok.TK_LBRACKET or k == tok.TK_LBRACE
+end
+
+func is_close(k: int): bool:
+    ret k == tok.TK_RPAREN or k == tok.TK_RBRACKET or k == tok.TK_RBRACE
+end
+
+func gap_in_source(a_end_index: int, b_begin_index: int): bool:
+    ret b_begin_index > a_end_index
+end
+
+func need_space(pk: int, p_end: int, ck: int, c_begin: int, prev_unary: bool): bool:
+    if (pk == tok.TK_MINUS or pk == tok.TK_PLUS or pk == tok.TK_MINUS_MINUS or pk == tok.TK_PLUS_PLUS) and (ck == tok.TK_MINUS or ck == tok.TK_PLUS or ck == tok.TK_MINUS_MINUS or ck == tok.TK_PLUS_PLUS):
+        ret gap_in_source(p_end, c_begin)
+    end
+    if pk == tok.TK_DOT or ck == tok.TK_DOT:
+        ret false
+    end
+    if ck == tok.TK_COMMA or ck == tok.TK_COLON or ck == tok.TK_SEMICOLON:
+        ret false
+    end
+    if ck == tok.TK_RPAREN or ck == tok.TK_RBRACKET:
+        ret false
+    end
+    if (ck == tok.TK_PLUS_PLUS or ck == tok.TK_MINUS_MINUS) and is_value_end(pk):
+        ret false
+    end
+    if pk == tok.TK_LPAREN or pk == tok.TK_LBRACKET:
+        ret false
+    end
+    if pk == tok.TK_LBRACE and ck == tok.TK_RBRACE:
+        ret false
+    end
+    if prev_unary:
+        ret false
+    end
+    if ck == tok.TK_LPAREN:
+        ret not is_value_end(pk)
+    end
+    if ck == tok.TK_LBRACKET:
+        ret not is_value_end(pk)
+    end
+    if pk == tok.TK_LT or pk == tok.TK_GT or ck == tok.TK_LT or ck == tok.TK_GT or pk == tok.TK_SHL or pk == tok.TK_SHR or ck == tok.TK_SHL or ck == tok.TK_SHR:
+        ret gap_in_source(p_end, c_begin)
+    end
+    if pk == tok.TK_STAR or ck == tok.TK_STAR:
+        ret gap_in_source(p_end, c_begin)
+    end
+    ret true
+end
+
+func is_prefix(k: int, has_prev: bool, prev_kind: int, prev_was_unary: bool): bool:
+    if k == tok.TK_TILDE:
+        ret true
+    end
+    if k == tok.TK_STAR and prev_kind == tok.TK_STAR:
+        ret prev_was_unary
+    end
+    if k == tok.TK_MINUS or k == tok.TK_STAR or k == tok.TK_AMP:
+        ret not has_prev or not is_value_end(prev_kind)
+    end
+    if k == tok.TK_PLUS_PLUS or k == tok.TK_MINUS_MINUS:
+        ret not has_prev or not is_value_end(prev_kind)
+    end
+    ret false
+end
+
+func emit_indent(out &: str.StringBuilder, style: FmtStyle, indent0: int):
+    mut indent := indent0
+    if indent < 0:
+        indent = 0
+    end
+    if style.minify:
+        ret
+    end
+    if style.tabs:
+        mut s := 0
+        until s < indent:
+            co.SbPutc(out, 9)
+            s += 1
+        end
+    else:
+        mut s := 0
+        until s < indent * style.width:
+            co.SbPutc(out, 32)
+            s += 1
+        end
+    end
+end
+
+func bracket_multiline(ts: tok.TokenStream, open_idx: int): bool:
+    o := tok.StreamAt(ts, open_idx)
+    n := tok.StreamCount(ts)
+    mut depth := 0
+    mut i := open_idx
+    until i < n:
+        t := tok.StreamAt(ts, i)
+        if t.kind == tok.TK_EOF:
+            break
+        end
+        if is_open(t.kind):
+            depth += 1
+        else is_close(t.kind):
+            depth -= 1
+            if depth == 0:
+                ret (t.end_line as int) > (o.begin_line as int)
+            end
+        end
+        i += 1
+    end
+    ret false
+end
+
+func angle_is_generic(ts: tok.TokenStream, lt_idx: int): bool:
+    n := tok.StreamCount(ts)
+    mut depth := 0
+    mut steps := 0
+    mut i := lt_idx
+    mut seen_colon := false
+    until i < n and steps < 256:
+        k := tok.StreamAt(ts, i).kind
+        if k == tok.TK_LT:
+            depth += 1
+        else k == tok.TK_GT:
+            depth -= 1
+            if depth == 0:
+                ret true
+            end
+        else k == tok.TK_SHR:
+            depth -= 2
+            if depth <= 0:
+                ret true
+            end
+        else k == tok.TK_COLON:
+            seen_colon = true
+        else k == tok.TK_PLUS and seen_colon:
+            steps += 1
+        else k != tok.TK_IDENT and k != tok.TK_COMMA and k != tok.TK_DOT and k != tok.TK_STAR and k != tok.TK_AMP and k != tok.TK_LBRACKET and k != tok.TK_RBRACKET and k != tok.TK_INT and k != tok.TK_KW_FUNC and k != tok.TK_LPAREN and k != tok.TK_RPAREN:
+            ret false
+        end
+        i += 1
+        steps += 1
+    end
+    ret false
+end
+
+func lambda_header_at(ts: tok.TokenStream, open_idx: int): bool:
+    n := tok.StreamCount(ts)
+    mut i := open_idx + 1
+    if i < n and tok.StreamAt(ts, i).kind == tok.TK_RPAREN:
+        ret true
+    end
+    until true:
+        if i >= n or tok.StreamAt(ts, i).kind != tok.TK_IDENT:
+            ret false
+        end
+        i += 1
+        if i >= n or tok.StreamAt(ts, i).kind != tok.TK_COLON:
+            ret false
+        end
+        i += 1
+        mut depth := 0
+        until true:
+            if i >= n:
+                ret false
+            end
+            k := tok.StreamAt(ts, i).kind
+            if k == tok.TK_EOF:
+                ret false
+            end
+            if k == tok.TK_LT and angle_is_generic(ts, i):
+                depth += 1
+            else k == tok.TK_GT and depth > 0:
+                depth -= 1
+            else k == tok.TK_SHR and depth > 0:
+                depth -= 2
+                if depth < 0:
+                    depth = 0
+                end
+            else is_open(k):
+                depth += 1
+            else is_close(k):
+                if depth == 0:
+                    ret k == tok.TK_RPAREN
+                end
+                depth -= 1
+            else k == tok.TK_COMMA and depth == 0:
+                i += 1
+                break
+            end
+            i += 1
+        end
+    end
+end
+
+func head_modifier(k: int): bool:
+    ret k == tok.TK_KW_PUB or k == tok.TK_KW_INLINE or k == tok.TK_KW_NOINLINE or k == tok.TK_KW_PURE or k == tok.TK_KW_NORET or k == tok.TK_KW_DEPRECATED
+end
+
+func static_word(ts: tok.TokenStream, i: int): bool:
+    t := tok.StreamAt(ts, i)
+    if t.kind != tok.TK_IDENT or i + 1 >= tok.StreamCount(ts):
+        ret false
+    end
+    if not str.Equals(t.lexeme, "static") and not str.Equals(t.lexeme, "ایستا"):
+        ret false
+    end
+    ret tok.StreamAt(ts, i + 1).kind == tok.TK_KW_FUNC
+end
+
+func is_overload_symbol(k: int): bool:
+    ret k == tok.TK_GT or k == tok.TK_PLUS or k == tok.TK_MINUS or k == tok.TK_STAR or k == tok.TK_SLASH or k == tok.TK_PERCENT or k == tok.TK_POWER or k == tok.TK_EQ or k == tok.TK_NE or k == tok.TK_LT or k == tok.TK_LE or k == tok.TK_GE or k == tok.TK_NOT
+end
+
+func head_annotates(k: int): bool:
+    ret k == tok.TK_IDENT or k == tok.TK_KW_MUT or k == tok.TK_KW_CONST or k == tok.TK_KW_THIS
+end
+
+func type_token(k: int): bool:
+    ret k == tok.TK_IDENT or k == tok.TK_DOT or k == tok.TK_STAR or k == tok.TK_AMP or k == tok.TK_LT or k == tok.TK_GT or k == tok.TK_SHR or k == tok.TK_LBRACKET or k == tok.TK_RBRACKET or k == tok.TK_LPAREN or k == tok.TK_RPAREN or k == tok.TK_COMMA or k == tok.TK_INT or k == tok.TK_KW_FUNC
+end
+
+func colon_is_annotation(ts: tok.TokenStream, colon_idx: int): bool:
+    n := tok.StreamCount(ts)
+    line := tok.StreamAt(ts, colon_idx).end_line as int
+    mut saw_type := false
+    mut is_func_type := false
+    mut steps := 0
+    mut j := colon_idx + 1
+    until j < n and steps < 64:
+        t := tok.StreamAt(ts, j)
+        if (t.begin_line as int) > line:
+            ret saw_type
+        end
+        if t.kind == tok.TK_COLON or t.kind == tok.TK_STMT_END or t.kind == tok.TK_EOF:
+            ret saw_type
+        end
+        if t.kind == tok.TK_KW_FUNC and not saw_type:
+            is_func_type = true
+        end
+        if t.kind == tok.TK_LPAREN and not is_func_type:
+            ret false
+        end
+        if not type_token(t.kind):
+            ret false
+        end
+        saw_type = true
+        j += 1
+        steps += 1
+    end
+    ret false
+end
+
+func step_stmt_end(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, cur_ml: bool):
+    if c.bracket > 0:
+        if cur_ml:
+            c.force_break = true
+        end
+        ret
+    end
+    if c.line_has_content and str.StartsWith(t.lexeme, ";"):
+        co.SbPuts(out, "; ")
+        c.no_space_next = true
+        c.has_prev = true
+        c.prev_kind = t.kind
+        c.prev_end_index = t.end_index as int
+        c.prev_end_line = t.end_line as int
+        c.stmt_head = tok.TK_EOF
+        ret
+    end
+    if c.line_has_content:
+        co.SbPutc(out, 10)
+        c.line_has_content = false
+    end
+    c.force_break = false
+    c.open_colon_line = 0
+    c.q_open[0] = 0
+    c.stmt_head = tok.TK_EOF
+    c.match_pending = false
+end
+
+func step_break_before(
+    c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int, cur_ml: bool
+):
+    if c.bracket > 0 and is_close(k) and cur_ml:
+        if c.bracket_indent > 0:
+            c.bracket_indent -= 1
+        end
+        if c.line_has_content:
+            co.SbPutc(out, 10)
+            c.line_has_content = false
+        end
+        c.force_break = false
+    end
+    if c.force_break and c.line_has_content:
+        co.SbPutc(out, 10)
+        c.line_has_content = false
+        c.force_break = false
+    end
+    if cur_ml and c.line_has_content and c.has_prev and is_value_end(c.prev_kind) and is_value_start(k) and (t.begin_line as int) > c.prev_end_line:
+        co.SbPutc(out, 10)
+        c.line_has_content = false
+    end
+    if c.open_colon_line != 0 and c.line_has_content and (t.begin_line as int) > c.open_colon_line:
+        co.SbPutc(out, 10)
+        c.line_has_content = false
+    end
+    c.open_colon_line = 0
+    if c.bracket == 0 and c.prev_gt_generic and c.line_has_content and (t.begin_line as int) > c.prev_end_line:
+        co.SbPutc(out, 10)
+        c.line_has_content = false
+        c.force_break = false
+        c.q_open[0] = 0
+        c.stmt_head = tok.TK_EOF
+        c.match_pending = false
+    end
+end
+
+func in_match_arms_now(c &: FmtCtx): bool:
+    ret c.block_top > 0 and c.block_top <= FMT_MAX_BLOCK and c.in_match_arms[c.block_top - 1] != 0
+end
+
+func step_dedent(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int):
+    if k == tok.TK_KW_ELSE and in_match_arms_now(c):
+        ret
+    end
+    if c.bracket == 0 and c.angle == 0 and (k == tok.TK_KW_END or k == tok.TK_KW_ELSE):
+        if c.block_top > 0 and c.block_top <= FMT_MAX_BLOCK and c.line_has_content and (t.begin_line as int) > c.block_line[c.block_top - 1]:
+            co.SbPutc(out, 10)
+            c.line_has_content = false
+            c.force_break = false
+        end
+        if c.block_top > 0:
+            c.block_top -= 1
+        end
+        if c.indent > 0:
+            c.indent -= 1
+        end
+    end
+end
+
+func link_group(lexeme: str): int:
+    if str.Equals(lexeme, "static") or str.Equals(lexeme, "ایستا"):
+        ret 4
+    end
+    if str.Equals(lexeme, "dynamic") or str.Equals(lexeme, "پویا"):
+        ret 5
+    end
+    ret 6
+end
+
+func decl_group(ts: tok.TokenStream, i: int): int:
+    n := tok.StreamCount(ts)
+    mut j := i
+    until j < n:
+        t := tok.StreamAt(ts, j)
+        if t.kind == tok.TK_META:
+            j += 1
+            until j < n and tok.StreamAt(ts, j).begin_line == t.begin_line and tok.StreamAt(ts, j).kind != tok.TK_STMT_END:
+                j += 1
+            end
+            continue
+        end
+        if t.kind != tok.TK_COMMENT_LINE and t.kind != tok.TK_COMMENT_BLOCK and t.kind != tok.TK_STMT_END:
+            break
+        end
+        j += 1
+    end
+    mut is_pub := false
+    until j < n and head_modifier(tok.StreamAt(ts, j).kind):
+        if tok.StreamAt(ts, j).kind == tok.TK_KW_PUB:
+            is_pub = true
+        end
+        j += 1
+    end
+    if j >= n:
+        ret 0
+    end
+    t := tok.StreamAt(ts, j)
+    k := t.kind
+    nk := j + 1 < n ? tok.StreamAt(ts, j + 1).kind : tok.TK_EOF
+    priv := is_pub ? 0 : 1
+    if k == tok.TK_KW_PACKAGE:
+        ret 1
+    end
+    if k == tok.TK_KW_IMPORT:
+        ret 2
+    end
+    if k == tok.TK_KW_INCLUDE:
+        ret 3
+    end
+    if k == tok.TK_IDENT and str.Equals(t.lexeme, "link") and (nk == tok.TK_IDENT or nk == tok.TK_STRING):
+        ret link_group(tok.StreamAt(ts, j + 1).lexeme)
+    end
+    if k == tok.TK_KW_EXTERN:
+        ret 7
+    end
+    if k == tok.TK_KW_CONST:
+        ret 8 + priv
+    end
+    if k == tok.TK_KW_MUT or (k == tok.TK_IDENT and (nk == tok.TK_COLON_ASSIGN or nk == tok.TK_COLON)):
+        ret 10 + priv
+    end
+    if k == tok.TK_KW_STRUCT or k == tok.TK_KW_ENUM or k == tok.TK_KW_INTERFACE or k == tok.TK_KW_IMPL or k == tok.TK_KW_TYPE:
+        ret 12 + priv
+    end
+    if k == tok.TK_KW_FUNC:
+        ret 14 + priv
+    end
+    ret 0
+end
+
+func is_comparison_here(c &: FmtCtx, t: tok.Token, k: int, ts: tok.TokenStream, i: int): bool:
+    if c.angle != 0 or not c.has_prev or not is_value_end(c.prev_kind):
+        ret false
+    end
+    if k == tok.TK_GT:
+        ret true
+    end
+    if k == tok.TK_LT:
+        generic := not gap_in_source(c.prev_end_index, t.begin_index as int) and angle_is_generic(ts, i)
+        ret not generic
+    end
+    ret false
+end
+
+func step_leading(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int, ts: tok.TokenStream, i: int):
+    if not c.line_has_content:
+        mut blank := not c.st.minify and c.bracket == 0 and c.has_prev and (t.begin_line as int) > c.prev_end_line + 1
+        if c.indent == 0 and c.bracket == 0 and c.block_top == 0 and c.stmt_head == tok.TK_EOF and k != tok.TK_KW_END and k != tok.TK_KW_ELSE:
+            g := decl_group(ts, i)
+            if not c.st.minify and c.has_prev:
+                if c.hdr_prev >= 1 and c.hdr_prev <= 3:
+                    blank = g != c.hdr_prev
+                else c.hdr_prev != 0 and g != 0 and g != c.hdr_prev:
+                    blank = true
+                end
+            end
+            lead := k == tok.TK_COMMENT_LINE or k == tok.TK_COMMENT_BLOCK or k == tok.TK_META
+            c.hdr_prev = lead ? 0 : g
+        end
+        if blank:
+            co.SbPutc(out, 10)
+        end
+        emit_indent(out, c.st, c.indent + c.bracket_indent)
+    else not c.no_space_next:
+        mut need := need_space(
+            c.prev_kind, c.prev_end_index, k, t.begin_index as int, c.prev_unary
+        )
+        if c.prev_gt_generic and (k == tok.TK_LPAREN or k == tok.TK_LBRACKET):
+            need = false
+        end
+        if k == tok.TK_LPAREN and c.prev_after_dot:
+            need = false
+        end
+        if k == tok.TK_COLON and c.bracket <= FMT_MAX_BRACKET and c.q_open[c.bracket] > 0:
+            need = true
+        end
+        if is_comparison_here(c, t, k, ts, i) or (c.prev_cmp and not is_close(k) and k != tok.TK_COMMA):
+            need = true
+        end
+        if need:
+            co.SbPutc(out, 32)
+        end
+    end
+    c.prev_cmp = c.line_has_content and is_comparison_here(c, t, k, ts, i)
+    c.no_space_next = false
+    c.prev_gt_generic = false
+end
+
+func current_column(out &: str.StringBuilder): int:
+    n := co.SbLen(out) as int
+    if n == 0:
+        ret 0
+    end
+    p := out.data as u8*
+    mut i := n
+    mut col := 0
+    until i > 0 and p[i - 1] != 10:
+        if (p[i - 1] & 192) != 128:
+            col += 1
+        end
+        i -= 1
+    end
+    ret col
+end
+
+func text_width(s: str): int:
+    mut w := 0
+    repeat str.Len(s) in j:
+        if (byte_at(s, j) & 192) != 128:
+            w += 1
+        end
+    end
+    ret w
+end
+
+func next_fits(out &: str.StringBuilder, ts: tok.TokenStream, i: int): bool:
+    if i + 1 >= tok.StreamCount(ts):
+        ret true
+    end
+    nt := tok.StreamAt(ts, i + 1)
+    if nt.kind == tok.TK_STMT_END or nt.kind == tok.TK_EOF or is_close(nt.kind):
+        ret true
+    end
+    ret current_column(out) + 1 + text_width(nt.lexeme) + 1 <= FMT_WRAP_WIDTH
+end
+
+func step_state_after(
+    c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int, ts: tok.TokenStream, i: int
+):
+    if c.bracket == 0 and k == tok.TK_KW_END:
+        c.stmt_head = tok.TK_EOF
+    else c.bracket == 0 and k == tok.TK_KW_ELSE:
+        c.stmt_head = tok.TK_KW_ELSE
+    end
+    if c.stmt_head == tok.TK_EOF and c.bracket == 0 and k != tok.TK_KW_END and k != tok.TK_COLON and k != tok.TK_COMMENT_LINE and k != tok.TK_COMMENT_BLOCK and not head_modifier(k) and not static_word(ts, i):
+        c.stmt_head = k
+    end
+
+    if (k == tok.TK_KW_MATCH or k == tok.TK_KW_SWITCH) and c.bracket == 0:
+        c.match_pending = true
+    end
+
+    if k == tok.TK_COMMA and c.ml_top > 0 and c.ml_top <= FMT_MAX_BRACKET and c.ml_stack[c.ml_top - 1] != 0 and not next_fits(out, ts, i):
+        c.force_break = true
+    end
+
+    if k == tok.TK_QUESTION and c.bracket <= FMT_MAX_BRACKET:
+        c.q_open[c.bracket] = c.q_open[c.bracket] + 1
+    end
+    if k == tok.TK_COLON and c.bracket <= FMT_MAX_BRACKET and c.q_open[c.bracket] > 0:
+        c.q_open[c.bracket] = c.q_open[c.bracket] - 1
+    else c.bracket == 0 and c.angle == 0 and k == tok.TK_COLON:
+        mut opener := false
+        was_match_subject := c.match_pending
+        was_in_match_arms := in_match_arms_now(c)
+        if c.has_prev and c.prev_kind == tok.TK_RPAREN and c.prev_close_was_lambda:
+            opener = true
+        else was_match_subject:
+            opener = true
+        else was_in_match_arms:
+            opener = true
+        else c.stmt_head == tok.TK_KW_TYPE and c.has_prev and c.prev_kind != tok.TK_KW_TYPE:
+            opener = true
+        else c.has_prev and c.prev_kind == c.stmt_head and tok.IsKeyword(c.stmt_head) and c.stmt_head != tok.TK_KW_ELSE and c.stmt_head != tok.TK_KW_EXTERN and c.stmt_head != tok.TK_KW_EXPORT and c.stmt_head != tok.TK_KW_LAYOUT:
+            opener = false
+        else head_annotates(c.stmt_head):
+            opener = false
+        else:
+            opener = not colon_is_annotation(ts, i)
+        end
+        if opener:
+            c.indent += 1
+            c.open_colon_line = t.end_line as int
+            if c.block_top < FMT_MAX_BLOCK:
+                c.block_line[c.block_top] = t.begin_line as int
+                c.in_match_arms[c.block_top] = was_match_subject ? 1 : 0
+            end
+            c.block_top += 1
+            if c.has_prev and c.prev_kind == tok.TK_KW_ELSE and not was_in_match_arms:
+                c.force_break = true
+            end
+            c.stmt_head = tok.TK_EOF
+            c.match_pending = false
+        end
+    end
+
+    if k == tok.TK_LT and c.has_prev and is_value_end(c.prev_kind) and not gap_in_source(c.prev_end_index, t.begin_index as int) and angle_is_generic(ts, i):
+        c.angle += 1
+    else k == tok.TK_GT and c.angle > 0:
+        c.angle -= 1
+        c.prev_gt_generic = true
+    else k == tok.TK_SHR and c.angle > 0:
+        c.angle -= 2
+        if c.angle < 0:
+            c.angle = 0
+        end
+        c.prev_gt_generic = true
+    end
+
+    if is_open(k):
+        ml := bracket_multiline(ts, i)
+        prev_is_value := c.has_prev and (is_value_end(c.prev_kind) or is_overload_symbol(c.prev_kind))
+        is_lambda := k == tok.TK_LPAREN and not prev_is_value and lambda_header_at(ts, i)
+        if c.ml_top < FMT_MAX_BRACKET:
+            c.ml_stack[c.ml_top] = ml ? 1 : 0
+            c.paren_is_lambda[c.ml_top] = is_lambda ? 1 : 0
+        end
+        c.ml_top += 1
+        c.bracket += 1
+        if c.bracket <= FMT_MAX_BRACKET:
+            c.q_open[c.bracket] = 0
+        end
+        if ml:
+            c.bracket_indent += 1
+            c.force_break = true
+        end
+    else is_close(k):
+        c.prev_close_was_lambda = k == tok.TK_RPAREN and c.ml_top > 0 and c.ml_top <= FMT_MAX_BRACKET and c.paren_is_lambda[c.ml_top - 1] != 0
+        if c.ml_top > 0:
+            c.ml_top -= 1
+        end
+        if c.bracket > 0:
+            if c.bracket <= FMT_MAX_BRACKET:
+                c.q_open[c.bracket] = 0
+            end
+            c.bracket -= 1
+        end
+    end
+
+    c.prev_unary = is_prefix(k, c.has_prev, c.prev_kind, c.prev_unary)
+    if k == tok.TK_COMMENT_LINE:
+        c.force_break = true
+    end
+end
+
+func ord_is_modifier_kind(k: int): bool:
+    ret k == tok.TK_KW_PUB or k == tok.TK_KW_DEPRECATED or k == tok.TK_KW_INLINE or k == tok.TK_KW_NOINLINE or k == tok.TK_KW_PURE or k == tok.TK_KW_NORET
+end
+
+func ord_rtrim_end(text: str, start: int, end0: int): int:
+    mut e := end0
+    until e > start:
+        c := byte_at(text, e - 1)
+        if c != 32 and c != 9 and c != 13 and c != 10:
+            break
+        end
+        e -= 1
+    end
+    ret e
+end
+
+func ord_line_is_blank(text: str, a: int, b: int): bool:
+    mut i := a
+    until i < b:
+        c := byte_at(text, i)
+        if c != 32 and c != 9 and c != 13:
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+func ord_line_is_comment_or_meta(text: str, a: int, b: int, maybe_block &: bool): bool:
+    mut i := a
+    until i < b and (byte_at(text, i) == 32 or byte_at(text, i) == 9):
+        i += 1
+    end
+    if i + 1 < b and byte_at(text, i) == 47 and byte_at(text, i + 1) == 47:
+        ret true
+    end
+    if i < b and byte_at(text, i) == 64:
+        ret true
+    end
+    mut j := a
+    until j + 1 < b:
+        if (byte_at(text, j) == 47 and byte_at(text, j + 1) == 42) or (byte_at(text, j) == 42 and byte_at(text, j + 1) == 47):
+            maybe_block = true
+            ret false
+        end
+        j += 1
+    end
+    ret false
+end
+
+func ord_prev_line_start(text: str, pos: int): int:
+    if pos < 2:
+        ret 0
+    end
+    mut i := pos - 1
+    if byte_at(text, i) != 10:
+        ret pos
+    end
+    if i == 0:
+        ret 0
+    end
+    i -= 1
+    until i > 0 and byte_at(text, i - 1) != 10:
+        i -= 1
+    end
+    ret i
+end
+
+func ord_scan_leading_trivia(text: str, begin: int, bail &: bool): int:
+    mut cur := begin
+    until true:
+        if cur == 0:
+            break
+        end
+        pstart := ord_prev_line_start(text, cur)
+        pend := cur - 1
+        if ord_line_is_blank(text, pstart, pend):
+            break
+        end
+        if str.Len(lx.MarkerCode(str.Substr(text, pstart, pend - pstart), pend - pstart)) > 0:
+            break
+        end
+        mut maybe_block := false
+        if not ord_line_is_comment_or_meta(text, pstart, pend, maybe_block):
+            if maybe_block:
+                bail = true
+            end
+            break
+        end
+        if pstart == cur:
+            break
+        end
+        cur = pstart
+    end
+    ret cur
+end
+
+func ord_blank_before(text: str, pos: int): bool:
+    mut i := pos - 1
+    mut lines := 0
+    until i >= 0:
+        b := byte_at(text, i)
+        if b == 10:
+            lines += 1
+        else b != 32 and b != 9 and b != 13:
+            break
+        end
+        i -= 1
+    end
+    ret lines >= 2
+end
+
+func ord_extend_trailing_comment(text: str, len0: int, end0: int): int:
+    mut i := end0
+    until i < len0 and (byte_at(text, i) == 32 or byte_at(text, i) == 9):
+        i += 1
+    end
+    if i + 1 < len0 and byte_at(text, i) == 47 and byte_at(text, i + 1) == 47:
+        until i < len0 and byte_at(text, i) != 10:
+            i += 1
+        end
+        ret i
+    end
+    ret end0
+end
+
+func ord_is_entry_point(a &: at.Ast, d: int, entry: str): bool:
+    n := at.Get(a, d)
+    if d == 0 or n.kind != at.AST_FUNC_DEF or str.Len(n.name) == 0:
+        ret false
+    end
+    if str.Equals(n.name, "main"):
+        ret true
+    end
+    ret str.Len(entry) > 0 and str.Equals(n.name, entry)
+end
+
+func ord_is_movable(a &: at.Ast, d: int, entry: str): bool:
+    if d == 0:
+        ret false
+    end
+    n := at.Get(a, d)
+    if n.synthetic:
+        ret false
+    end
+    if n.is_extern:
+        ret false
+    end
+    if ord_is_entry_point(a, d, entry):
+        ret false
+    end
+    ret at.ToplevelOrderPhase(a, d) != at.AST_ORDER_NONE
+end
+
+func ord_adjusted_begin(toks: tok.TokenStream, tok_idx: int): int:
+    mut i := tok_idx
+    until i > 0 and ord_is_modifier_kind(tok.StreamAt(toks, i - 1).kind):
+        i -= 1
+    end
+    ret tok.StreamAt(toks, i).begin_index as int
+end
+
+func ord_import_starts_statement(toks: tok.TokenStream, tok_idx: int): bool:
+    if tok_idx == 0:
+        ret false
+    end
+    k := tok.StreamAt(toks, tok_idx - 1).kind
+    ret k == tok.TK_KW_IMPORT or k == tok.TK_KW_INCLUDE
+end
+
+func ord_find_token_for_begin(toks: tok.TokenStream, cursor &: int, begin_index: int): int:
+    n := tok.StreamCount(toks)
+    mut i := cursor
+    until i < n:
+        if (tok.StreamAt(toks, i).begin_index as int) == begin_index:
+            cursor = i
+            ret i
+        end
+        i += 1
+    end
+    ret n
+end
+
+func ord_sort_key(a &: at.Ast, it: OrdItem): int:
+    n := at.Get(a, it.node)
+    splits := it.phase == at.AST_ORDER_FUNC or it.phase == at.AST_ORDER_TYPEDEF
+    mut secondary := 0
+    if splits and n.is_pub:
+        secondary = 1
+    end
+    if it.phase == at.AST_ORDER_IMPORT:
+        if n.kind != at.AST_IMPORT:
+            secondary = 2
+        else n.value_kind == tok.TV_STRING:
+            secondary = 1
+        end
+    end
+    ret it.phase * 3 + secondary
+end
+
+func ord_stable_sort(a &: at.Ast, items &: Vector<OrdItem>):
+    n := items.len()
+    mut i := 1
+    until i < n:
+        key := items.get(i)
+        kkey := ord_sort_key(a, key)
+        mut j := i
+        until j > 0 and ord_sort_key(a, items.get(j - 1)) > kkey:
+            items.set(j, items.get(j - 1))
+            j -= 1
+        end
+        items.set(j, key)
+        i += 1
+    end
+end
+
+func ord_hoist_package(text: str, len0: int, toks: tok.TokenStream, out &: str.StringBuilder): bool:
+    n := tok.StreamCount(toks)
+    mut kw := n
+    mut i := 0
+    until i < n:
+        k := tok.StreamAt(toks, i).kind
+        if k == tok.TK_KW_PACKAGE:
+            kw = i
+            break
+        end
+        if k != tok.TK_META and k != tok.TK_STMT_END and k != tok.TK_EOF:
+            mut j := i
+            until j < n:
+                if tok.StreamAt(toks, j).kind == tok.TK_KW_PACKAGE:
+                    kw = j
+                    break
+                end
+                j += 1
+            end
+            break
+        end
+        i += 1
+    end
+    if kw >= n:
+        ret false
+    end
+    mut only_meta := true
+    mut m := 0
+    until m < kw:
+        k2 := tok.StreamAt(toks, m).kind
+        if k2 != tok.TK_META and k2 != tok.TK_STMT_END:
+            only_meta = false
+            break
+        end
+        m += 1
+    end
+    if only_meta:
+        ret false
+    end
+    if kw + 1 >= n:
+        ret false
+    end
+    mut bail := false
+    ustart := ord_scan_leading_trivia(text, tok.StreamAt(toks, kw).begin_index as int, bail)
+    if bail:
+        ret false
+    end
+    mut uend := tok.StreamAt(toks, kw + 1).end_index as int
+    uend = ord_rtrim_end(text, ustart, uend)
+    uend = ord_extend_trailing_comment(text, len0, uend)
+    if uend <= ustart:
+        ret false
+    end
+    mut ins := 0
+    mut p := 0
+    until p < len0 and (byte_at(text, p) == 32 or byte_at(text, p) == 9 or byte_at(text, p) == 13 or byte_at(text, p) == 10):
+        p += 1
+    end
+    if p + 1 < len0 and byte_at(text, p) == 47 and byte_at(text, p + 1) == 42:
+        mut q := p + 2
+        until q + 1 < len0 and not (byte_at(text, q) == 42 and byte_at(text, q + 1) == 47):
+            q += 1
+        end
+        if q + 1 < len0:
+            q += 2
+            until q < len0 and byte_at(text, q) != 10:
+                q += 1
+            end
+            if q < len0:
+                q += 1
+            end
+            until q < len0 and (byte_at(text, q) == 13 or byte_at(text, q) == 10):
+                q += 1
+            end
+            if q < ustart:
+                ins = q
+            end
+        end
+    end
+    co.SbPuts(out, str.Substr(text, 0, ins))
+    co.SbPuts(out, str.Substr(text, ustart, uend - ustart))
+    co.SbPuts(out, "\n\n")
+    co.SbPuts(out, str.Substr(text, ins, ustart - ins))
+    mut after := uend
+    until after < len0 and (byte_at(text, after) == 32 or byte_at(text, after) == 9 or byte_at(text, after) == 13):
+        after += 1
+    end
+    if after < len0 and byte_at(text, after) == 10:
+        after += 1
+    end
+    co.SbPuts(out, str.Substr(text, after, len0 - after))
+    ret true
+end
+
+func ord_push(items &: Vector<OrdItem>, node: int, phase: int, ustart: int, uend: int):
+    items.push(OrdItem { node = node, phase = phase, ustart = ustart, uend = uend })
+end
+
+func member_word(t: tok.Token): bool:
+    k := t.kind
+    if k == tok.TK_NOT:
+        ret not str.Equals(t.lexeme, "!")
+    end
+    ret k == tok.TK_IDENT or k == tok.TK_KW_PACKAGE or k == tok.TK_KW_IN or k == tok.TK_KW_INPUT or k == tok.TK_KW_REPEAT or k == tok.TK_KW_COMPONENT
+end
+
+func as_ident(ts &: tok.TokenStream, i: int):
+    mut t := ts.toks[i]
+    t.kind = tok.TK_IDENT
+    ts.toks[i] = t
+end
+
+// The parser reads x.پایان زمان as one member name; keep keyword words in it.
+func mark_member_names(ts &: tok.TokenStream):
+    n := tok.StreamCount(ts)
+    mut i := 0
+    until i + 1 < n:
+        if ts.toks[i].kind != tok.TK_DOT:
+            i += 1
+            continue
+        end
+        first := ts.toks[i + 1]
+        if not member_word(first) and not tok.IsKeyword(first.kind):
+            i += 1
+            continue
+        end
+        as_ident(ts, i + 1)
+        mut j := i + 2
+        until j < n and ts.toks[j].begin_line == first.begin_line and member_word(ts.toks[j]):
+            as_ident(ts, j)
+            j += 1
+        end
+        i = j
+    end
+end
+
+pub func StyleDefault(): FmtStyle:
+    ret FmtStyle { tabs = false, width = FMT_INDENT_WIDTH }
+end
+
+pub func NewStyle(tabs: bool, width: int, minify: bool): FmtStyle:
+    ret FmtStyle { tabs = tabs, width = width, minify = minify }
+end
+
+pub func Tokens(ts: tok.TokenStream, style: FmtStyle, out &: str.StringBuilder):
+    mut c := FmtCtx {}
+    c.st = style
+    defer c.ml_stack.free()
+    defer c.paren_is_lambda.free()
+    defer c.block_line.free()
+    defer c.in_match_arms.free()
+    defer c.q_open.free()
+    mut z := 0
+    until z < FMT_MAX_BRACKET:
+        c.ml_stack.push(0)
+        c.paren_is_lambda.push(0)
+        c.block_line.push(0)
+        c.in_match_arms.push(0)
+        c.q_open.push(0)
+        z += 1
+    end
+    c.q_open.push(0)
+
+    n := tok.StreamCount(ts)
+    mut i := 0
+    until i < n:
+        t := tok.StreamAt(ts, i)
+        k := t.kind
+        cur_ml := c.ml_top > 0 and c.ml_top <= FMT_MAX_BRACKET and c.ml_stack[c.ml_top - 1] != 0
+        if k == tok.TK_EOF:
+            break
+        end
+        if k == tok.TK_STMT_END:
+            step_stmt_end(c, out, t, cur_ml)
+            i += 1
+            continue
+        end
+        if c.st.minify and (k == tok.TK_COMMENT_LINE or k == tok.TK_COMMENT_BLOCK):
+            i += 1
+            continue
+        end
+
+        step_break_before(c, out, t, k, cur_ml)
+        step_dedent(c, out, t, k)
+        step_leading(c, out, t, k, ts, i)
+
+        if k == tok.TK_META:
+            co.SbPutc(out, 64)
+        end
+        co.SbPuts(out, t.lexeme)
+        c.line_has_content = true
+
+        step_state_after(c, out, t, k, ts, i)
+        c.prev_after_dot = c.has_prev and c.prev_kind == tok.TK_DOT
+        c.has_prev = true
+        c.prev_kind = k
+        c.prev_end_index = t.end_index as int
+        c.prev_end_line = t.end_line as int
+        i += 1
+    end
+    if c.line_has_content:
+        co.SbPutc(out, 10)
+    end
+end
+
+pub func Source(
+    lgr: lg.Logger, pack: int, sfile: src.SourceFile, style: FmtStyle, out &: str.StringBuilder
+): bool:
+    mut toks := tok.StreamNew(sfile.path)
+    ok := lx.RunEx(lgr, pack, sfile, true, toks)
+    if not ok:
+        tok.StreamFree(toks)
+        ret false
+    end
+    mark_member_names(toks)
+    Tokens(toks, style, out)
+    tok.StreamFree(toks)
+    ret true
+end
+
+pub func ReorderToplevel(
+    lgr: lg.Logger, pack: int, sfile: src.SourceFile, entry: str, out &: str.StringBuilder
+): bool:
+    mut text := sfile.text
+    mut len0 := sfile.len
+
+    mut toks := tok.StreamNew(sfile.path)
+    if not lx.Run(lgr, pack, sfile, toks):
+        co.SbPuts(out, text)
+        tok.StreamFree(toks)
+        ret false
+    end
+
+    mut hoisted := co.SbNew()
+    if ord_hoist_package(text, len0, toks, hoisted):
+        htext := co.SbCstr(hoisted)
+        mut hfile := src.New()
+        hfile.path = sfile.path
+        hfile.text = htext
+        hfile.len = str.Len(htext)
+        mut htoks := tok.StreamNew(sfile.path)
+        if lx.Run(lgr, pack, hfile, htoks):
+            tok.StreamFree(toks)
+            toks = htoks
+            text = htext
+            len0 = str.Len(htext)
+        else:
+            tok.StreamFree(htoks)
+        end
+    end
+    co.SbFree(hoisted)
+
+    mut a := at.NewAst()
+    mut program := 0
+    if not ps.Run(lgr, toks, a, program) or program == 0:
+        co.SbPuts(out, text)
+        tok.StreamFree(toks)
+        at.FreeAst(a)
+        ret false
+    end
+
+    mut items := Vector {} as Vector<OrdItem>
+    prog := at.Get(a, program)
+    mut tok_cursor := 0
+    mut seen_end := 0
+    repeat prog.list.len() in li:
+        d := prog.list.get(li)
+        if d == 0 or at.Get(a, d).synthetic:
+            continue
+        end
+        dbegin := at.Get(a, d).begin_index as int
+        if dbegin > 0 and dbegin < seen_end:
+            continue
+        end
+        if (at.Get(a, d).end_index as int) > seen_end:
+            seen_end = at.Get(a, d).end_index as int
+        end
+        if not ord_is_movable(a, d, entry):
+            ord_push(items, d, at.AST_ORDER_NONE, 0, 0)
+            continue
+        end
+        tok_idx := ord_find_token_for_begin(toks, tok_cursor, at.Get(a, d).begin_index as int)
+        if tok_idx >= tok.StreamCount(toks):
+            ord_push(items, d, at.AST_ORDER_NONE, 0, 0)
+            continue
+        end
+        if at.Get(a, d).kind == at.AST_IMPORT and not ord_import_starts_statement(toks, tok_idx):
+            if items.len() > 0 and items.get(items.len() - 1).phase == at.AST_ORDER_IMPORT:
+                mut prev := items.get(items.len() - 1)
+                mut e := ord_rtrim_end(text, prev.ustart, at.Get(a, d).end_index as int)
+                e = ord_extend_trailing_comment(text, len0, e)
+                if e > prev.uend:
+                    prev.uend = e
+                    items.set(items.len() - 1, prev)
+                end
+                continue
+            end
+            ord_push(items, d, at.AST_ORDER_NONE, 0, 0)
+            continue
+        end
+        mut adj_begin := ord_adjusted_begin(toks, tok_idx)
+        if at.Get(a, d).kind == at.AST_IMPORT:
+            adj_begin = tok.StreamAt(toks, tok_idx - 1).begin_index as int
+        end
+        mut bail := false
+        ustart := ord_scan_leading_trivia(text, adj_begin, bail)
+        if bail:
+            ord_push(items, d, at.AST_ORDER_NONE, 0, 0)
+            continue
+        end
+        mut uend := ord_rtrim_end(text, ustart, at.Get(a, d).end_index as int)
+        uend = ord_extend_trailing_comment(text, len0, uend)
+        ord_push(items, d, at.ToplevelOrderPhase(a, d), ustart, uend)
+    end
+
+    mut result := co.SbNew()
+    mut cursor := 0
+    mut r := 0
+    until r < items.len():
+        if items.get(r).phase == at.AST_ORDER_NONE:
+            r += 1
+            continue
+        end
+        run_start := r
+        mut run_end := r
+        until run_end + 1 < items.len() and items.get(run_end + 1).phase != at.AST_ORDER_NONE:
+            run_end += 1
+        end
+        run_len := run_end - run_start + 1
+
+        mut sorted := Vector {} as Vector<OrdItem>
+        mut k := 0
+        until k < run_len:
+            sorted.push(items.get(run_start + k))
+            k += 1
+        end
+        ord_stable_sort(a, sorted)
+
+        mut changed := false
+        mut c2 := 0
+        until c2 < run_len:
+            if sorted.get(c2).node != items.get(run_start + c2).node:
+                changed = true
+                break
+            end
+            c2 += 1
+        end
+
+        if changed:
+            region_start := items.get(run_start).ustart
+            region_end := items.get(run_end).uend
+            co.SbPuts(result, str.Substr(text, cursor, region_start - cursor))
+            mut w := 0
+            until w < run_len:
+                pstart := sorted.get(w).ustart
+                pend := ord_rtrim_end(text, pstart, sorted.get(w).uend)
+                co.SbPuts(result, str.Substr(text, pstart, pend - pstart))
+                if w + 1 < run_len:
+                    co.SbPuts(result, ord_blank_before(text, sorted.get(w + 1).ustart) ? "\n\n" : "\n")
+                end
+                w += 1
+            end
+            cursor = region_end
+        end
+        sorted.free()
+        r = run_end + 1
+    end
+    co.SbPuts(result, str.Substr(text, cursor, len0 - cursor))
+
+    co.SbPuts(out, co.SbCstr(result))
+    co.SbFree(result)
+    items.free()
+    tok.StreamFree(toks)
+    at.FreeAst(a)
+    ret true
+end

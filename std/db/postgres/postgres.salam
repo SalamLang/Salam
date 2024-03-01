@@ -1,0 +1,567 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "postgres"
+@fa "پستگرس"
+package postgres
+
+import str
+import conv
+import db
+
+const CONNECTION_OK := 0
+
+const PGRES_EMPTY_QUERY := 0
+const PGRES_COMMAND_OK := 1
+const PGRES_TUPLES_OK := 2
+
+const OID_BOOL := 16
+const OID_BYTEA := 17
+const OID_INT8 := 20
+const OID_INT2 := 21
+const OID_INT4 := 23
+const OID_FLOAT4 := 700
+const OID_FLOAT8 := 701
+const OID_NUMERIC := 1700
+
+@en "Database"
+@fa "پایگاه داده"
+pub struct Database:
+    @en "handle"
+    @fa "دسته"
+    pub handle: void* = null
+    @en "affected"
+    @fa "تاثیرپذیرفته"
+    pub affected: i64 = 0
+
+    @en "Kind"
+    @fa "نوع"
+    pub func Kind(): str: ret db.POSTGRES end
+
+    @en "Ok"
+    @fa "معتبر"
+    pub func Ok(): bool:
+        if this.handle == null:
+            ret false
+        end
+        ret _pq_status(this.handle) == CONNECTION_OK
+    end
+
+    @en "Ping"
+    @fa "پینگ"
+    pub func Ping(): bool:
+        if this.handle == null:
+            ret false
+        end
+        if _pq_status(this.handle) != CONNECTION_OK:
+            ret false
+        end
+        res := _pq_exec(this.handle, "SELECT 1")
+        if res == null:
+            ret false
+        end
+        good := _pq_result_status(res) == PGRES_TUPLES_OK
+        _pq_clear(res)
+        ret good
+    end
+
+    @en "Exec"
+    @fa "اجرا"
+    pub func Exec(sql: str): int:
+        this.affected = 0
+        if this.handle == null:
+            ret -1
+        end
+        res := _pq_exec(this.handle, sql)
+        if res == null:
+            ret -1
+        end
+        st := _pq_result_status(res)
+        if st == PGRES_COMMAND_OK or st == PGRES_TUPLES_OK:
+            n := str.Clone(_pq_cmd_tuples(res))
+            if n != "":
+                this.affected = conv.ParseInt(n)
+            end
+        end
+        _pq_clear(res)
+        if st == PGRES_COMMAND_OK or st == PGRES_TUPLES_OK or st == PGRES_EMPTY_QUERY:
+            ret 0
+        end
+        ret -1
+    end
+
+    @en "Query"
+    @fa "پرسمان"
+    pub func Query(sql: str): dyn db.Rows:
+        if this.handle == null:
+            ret Rows { handle = null }
+        end
+        res := _pq_exec(this.handle, sql)
+        if res == null:
+            ret Rows { handle = null }
+        end
+        if _pq_result_status(res) != PGRES_TUPLES_OK:
+            _pq_clear(res)
+            ret Rows { handle = null }
+        end
+        ret Rows { handle = res, row = -1, count = _pq_ntuples(res) }
+    end
+
+    @en "Begin"
+    @fa "شروع تراکنش"
+    pub func Begin(): dyn db.Tx:
+        if this.Exec("BEGIN") != 0:
+            ret Txn { handle = null }
+        end
+        ret Txn { handle = this.handle }
+    end
+
+    @en "LastInsertId"
+    @fa "شناسه آخرین درج"
+    pub func LastInsertId(): i64:
+        if this.handle == null:
+            ret 0
+        end
+        res := _pq_exec(this.handle, "SELECT lastval()")
+        if res == null:
+            ret 0
+        end
+        mut out := 0 as i64
+        if _pq_result_status(res) == PGRES_TUPLES_OK and _pq_ntuples(res) > 0:
+            p := _pq_getvalue(res, 0, 0)
+            if p != null:
+                out = conv.ParseInt(p as str)
+            end
+        end
+        _pq_clear(res)
+        ret out
+    end
+
+    @en "Changes"
+    @fa "تعداد تغییرات"
+    pub func Changes(): i64: ret this.affected end
+
+    @en "Error"
+    @fa "خطا"
+    pub func Error(): str:
+        if this.handle == null:
+            ret "no connection"
+        end
+        ret str.Clone(_pq_error_message(this.handle))
+    end
+
+    @en "Quote"
+    @fa "نقل قول"
+    pub func Quote(s: str): str:
+        if this.handle == null:
+            ret db.QuoteLiteral(s)
+        end
+        p := _pq_escape_literal(this.handle, s, len(s) as u64)
+        if p == null:
+            ret db.QuoteLiteral(s)
+        end
+        out := str.Clone(p as str)
+        _pq_freemem(p)
+        ret out
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close(): int:
+        if this.handle == null:
+            ret -1
+        end
+        _pq_finish(this.handle)
+        ret 0
+    end
+end
+
+@en "Rows"
+@fa "ردیف ها"
+pub struct Rows:
+    @en "handle"
+    @fa "دسته"
+    pub handle: void* = null
+    @en "row"
+    @fa "ردیف"
+    pub row: int = -1
+    @en "count"
+    @fa "تعداد"
+    pub count: int = 0
+
+    @en "Ok"
+    @fa "معتبر"
+    pub func Ok(): bool: ret this.handle != null end
+
+    @en "Next"
+    @fa "بعدی"
+    pub func Next(): bool:
+        if this.handle == null:
+            ret false
+        end
+        if this.row + 1 < this.count:
+            this.row = this.row + 1
+            ret true
+        end
+        ret false
+    end
+
+    @en "ColumnCount"
+    @fa "تعداد ستون"
+    pub func ColumnCount(): int:
+        if this.handle == null:
+            ret 0
+        end
+        ret _pq_nfields(this.handle)
+    end
+
+    @en "RowCount"
+    @fa "تعداد ردیف"
+    pub func RowCount(): int: ret this.count end
+
+    @en "ColumnName"
+    @fa "نام ستون"
+    pub func ColumnName(col: int): str:
+        if this.handle == null:
+            ret ""
+        end
+        ret str.Clone(_pq_fname(this.handle, col))
+    end
+
+    @en "ColumnType"
+    @fa "نوع ستون"
+    pub func ColumnType(col: int): int:
+        if this.handle == null or this.row < 0:
+            ret db.TYPE_NULL
+        end
+        if _pq_getisnull(this.handle, this.row, col) != 0:
+            ret db.TYPE_NULL
+        end
+        oid := _pq_ftype(this.handle, col) as int
+        if oid == OID_INT2 or oid == OID_INT4 or oid == OID_INT8 or oid == OID_BOOL:
+            ret db.TYPE_INT
+        end
+        if oid == OID_FLOAT4 or oid == OID_FLOAT8 or oid == OID_NUMERIC:
+            ret db.TYPE_FLOAT
+        end
+        if oid == OID_BYTEA:
+            ret db.TYPE_BLOB
+        end
+        ret db.TYPE_TEXT
+    end
+
+    @en "IsNull"
+    @fa "خالی است"
+    pub func IsNull(col: int): bool:
+        if this.handle == null or this.row < 0:
+            ret true
+        end
+        ret _pq_getisnull(this.handle, this.row, col) != 0
+    end
+
+    @en "Text"
+    @fa "متن"
+    pub func Text(col: int): str:
+        if this.handle == null or this.row < 0:
+            ret ""
+        end
+        if _pq_getisnull(this.handle, this.row, col) != 0:
+            ret ""
+        end
+        p := _pq_getvalue(this.handle, this.row, col)
+        if p == null:
+            ret ""
+        end
+        ret str.Clone(p as str)
+    end
+
+    @en "Int"
+    @fa "عدد صحیح"
+    pub func Int(col: int): int: ret this.Int64(col) as int end
+
+    @en "Int64"
+    @fa "عدد صحیح۶۴"
+    pub func Int64(col: int): i64:
+        s := this.Text(col)
+        if s == "":
+            ret 0
+        end
+        if s == "t":
+            ret 1
+        end
+        if s == "f":
+            ret 0
+        end
+        ret conv.ParseInt(s)
+    end
+
+    @en "Float"
+    @fa "عدد اعشار"
+    pub func Float(col: int): f64:
+        s := this.Text(col)
+        if s == "":
+            ret 0.0
+        end
+        ret conv.ParseFloat(s)
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close(): int:
+        if this.handle == null:
+            ret -1
+        end
+        _pq_clear(this.handle)
+        this.handle = null
+        ret 0
+    end
+end
+
+@en "Txn"
+@fa "تراکنش"
+pub struct Txn:
+    @en "handle"
+    @fa "دسته"
+    pub handle: void* = null
+
+    @en "Ok"
+    @fa "معتبر"
+    pub func Ok(): bool: ret this.handle != null end
+
+    @en "Exec"
+    @fa "اجرا"
+    pub func Exec(sql: str): int:
+        d := Database { handle = this.handle }
+        ret d.Exec(sql)
+    end
+
+    @en "Query"
+    @fa "پرسمان"
+    pub func Query(sql: str): dyn db.Rows:
+        d := Database { handle = this.handle }
+        ret d.Query(sql)
+    end
+
+    @en "Commit"
+    @fa "ثبت تراکنش"
+    pub func Commit(): int:
+        if this.handle == null:
+            ret -1
+        end
+        res := _pq_exec(this.handle, "COMMIT")
+        if res == null:
+            ret -1
+        end
+        ok := _pq_result_status(res) == PGRES_COMMAND_OK and _pq_cmd_status(res) != "ROLLBACK"
+        _pq_clear(res)
+        ret ok ? 0 : -1
+    end
+
+    @en "Rollback"
+    @fa "بازگردانی"
+    pub func Rollback(): int:
+        if this.handle == null:
+            ret -1
+        end
+        d := Database { handle = this.handle }
+        ret d.Exec("ROLLBACK")
+    end
+end
+
+@en "Available"
+@fa "در دسترس"
+pub func Available(): bool: ret true end
+
+@en "ClientVersion"
+@fa "نسخه کلاینت"
+pub func ClientVersion(): int: ret _pq_lib_version() end
+
+@en "ServerVersion"
+@fa "نسخه سرور"
+pub func ServerVersion(d: Database): int:
+    if d.handle == null:
+        ret 0
+    end
+    ret _pq_server_version(d.handle)
+end
+
+@en "Open"
+@fa "بازکردن"
+pub func Open(conninfo: str): Database:
+    ret Database { handle = _pq_connectdb(conninfo) }
+end
+
+@en "OpenFull"
+@fa "بازکردن کامل"
+pub func OpenFull(host: str, port: int, user: str, pass: str, dbname: str): Database:
+    mut ci := ""
+    if host != "":
+        ci = ci + "host=" + host + " "
+    end
+    if port > 0:
+        ci = ci + "port=" + conv.FormatInt(port as i64) + " "
+    end
+    if user != "":
+        ci = ci + "user=" + user + " "
+    end
+    if pass != "":
+        ci = ci + "password=" + pass + " "
+    end
+    if dbname != "":
+        ci = ci + "dbname=" + dbname
+    end
+    ret Open(ci)
+end
+
+@en "Ok"
+@fa "معتبر"
+pub func Ok(d: Database): bool: ret d.Ok() end
+
+@en "Ping"
+@fa "پینگ"
+pub func Ping(d: Database): bool: ret d.Ping() end
+
+@en "Reset"
+@fa "بازنشانی"
+pub func Reset(d: Database):
+    if d.handle != null:
+        _pq_reset(d.handle)
+    end
+end
+
+@en "Close"
+@fa "بستن"
+pub func Close(d: Database): int: ret d.Close() end
+
+@en "Error"
+@fa "خطا"
+pub func Error(d: Database): str: ret d.Error() end
+
+@en "Exec"
+@fa "اجرا"
+pub func Exec(d: Database, sql: str): int: ret d.Exec(sql) end
+
+@en "ExecCount"
+@fa "اجرا با شمارش"
+pub func ExecCount(d: Database, sql: str): i64:
+    if d.handle == null:
+        ret -1
+    end
+    res := _pq_exec(d.handle, sql)
+    if res == null:
+        ret -1
+    end
+    st := _pq_result_status(res)
+    if st != PGRES_COMMAND_OK and st != PGRES_TUPLES_OK:
+        _pq_clear(res)
+        ret -1
+    end
+    n := str.Clone(_pq_cmd_tuples(res))
+    _pq_clear(res)
+    if n == "":
+        ret 0
+    end
+    ret conv.ParseInt(n)
+end
+
+@en "Query"
+@fa "پرسمان"
+pub func Query(d: Database, sql: str): Rows:
+    if d.handle == null:
+        ret Rows { handle = null }
+    end
+    res := _pq_exec(d.handle, sql)
+    if res == null:
+        ret Rows { handle = null }
+    end
+    if _pq_result_status(res) != PGRES_TUPLES_OK:
+        _pq_clear(res)
+        ret Rows { handle = null }
+    end
+    ret Rows { handle = res, row = -1, count = _pq_ntuples(res) }
+end
+
+@en "Quote"
+@fa "نقل قول"
+pub func Quote(d: Database, s: str): str: ret d.Quote(s) end
+
+@en "DatabaseName"
+@fa "نام پایگاه داده"
+pub func DatabaseName(d: Database): str:
+    if d.handle == null:
+        ret ""
+    end
+    ret str.Clone(_pq_db(d.handle))
+end
+
+@en "UserName"
+@fa "نام کاربر"
+pub func UserName(d: Database): str:
+    if d.handle == null:
+        ret ""
+    end
+    ret str.Clone(_pq_user(d.handle))
+end
+
+@en "HostName"
+@fa "نام میزبان"
+pub func HostName(d: Database): str:
+    if d.handle == null:
+        ret ""
+    end
+    ret str.Clone(_pq_host(d.handle))
+end
+
+@en "Port"
+@fa "درگاه"
+pub func Port(d: Database): str:
+    if d.handle == null:
+        ret ""
+    end
+    ret str.Clone(_pq_port(d.handle))
+end
+
+@en "QueryInt"
+@fa "پرسمان عدد"
+pub func QueryInt(d: Database, sql: str): int:
+    r := Query(d, sql)
+    mut out := 0
+    if r.Ok():
+        if r.Next():
+            out = r.Int(0)
+        end
+        r.Close()
+    end
+    ret out
+end
+
+@en "QueryText"
+@fa "پرسمان متن"
+pub func QueryText(d: Database, sql: str): str:
+    r := Query(d, sql)
+    mut out := ""
+    if r.Ok():
+        if r.Next():
+            out = r.Text(0)
+        end
+        r.Close()
+    end
+    ret out
+end
+
+@en "Conn"
+@fa "اتصال"
+pub func Conn(d: Database): dyn db.Connection:
+    ret d
+end

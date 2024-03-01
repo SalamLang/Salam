@@ -1,0 +1,271 @@
+package nativelink
+
+const TH_A64 := 0
+const TH_ARM := 1
+const TH_THUMB := 2
+const TH_SLOT := 16
+
+func th_kind_of(l &: Nl, ty: int): int:
+    if l.mach == EM_AARCH64:
+        if ty == 282 or ty == 283:
+            ret TH_A64
+        end
+        ret 0 - 1
+    end
+    if l.mach == EM_ARM:
+        if ty == 28 or ty == 29 or ty == 1 or ty == 27:
+            ret TH_ARM
+        end
+        if ty == 10 or ty == 30:
+            ret TH_THUMB
+        end
+    end
+    ret 0 - 1
+end
+
+func th_in_range(d: i64, bits: int): bool:
+    lim := (1 as i64) << ((bits - 1) as i64)
+    ret d >= (0 - lim) and d < lim
+end
+
+func th_needed(kind: int, ty: int, pc: i64, a: i64, sv: i64): bool:
+    x := sv + a
+    thumb := (sv & (1 as i64)) != (0 as i64)
+    if kind == TH_A64:
+        ret not th_in_range(x - pc, 28)
+    end
+    if kind == TH_ARM:
+        if thumb and ty != 28:
+            ret true
+        end
+        ret not th_in_range((x & (0 - 2 as i64)) - pc, 26)
+    end
+    if not thumb and ty == 30:
+        ret true
+    end
+    if thumb:
+        ret not th_in_range((x & (0 - 2 as i64)) - pc, 25)
+    end
+    ret not th_in_range((x - (pc & (0 - 4 as i64))) & (0 - 4 as i64), 25)
+end
+
+func th_add(l &: Nl, s: int, r: int, kind: int, add: i64):
+    os := l.r_sym[r]
+    key := str.FromInt(s as i64) + ":" + str.FromInt(os as i64) + ":" + str.FromInt(add) + ":" + str.FromInt(kind as i64)
+    if l.th_key.has(key):
+        l.th_of_rel.put(r, l.th_key.get(key))
+        ret
+    end
+    mut n := 0
+    if l.th_count.has(s):
+        n = l.th_count.get(s)
+    end
+    id := l.th_sec.len()
+    l.th_sec.push(s)
+    l.th_at.push(align_to(l.s_size[s], 8 as i64) + ((TH_SLOT * n) as i64))
+    l.th_os.push(os)
+    l.th_add.push(add)
+    l.th_kind.push(kind)
+    l.th_count.put(s, n + 1)
+    l.th_key.put(key, id)
+    l.th_of_rel.put(r, id)
+    if l.s_align[s] < (8 as i64):
+        l.s_align[s] = 8 as i64
+    end
+end
+
+func th_plan(l &: Nl): bool:
+    if l.mach != EM_AARCH64 and l.mach != EM_ARM:
+        ret false
+    end
+    before := l.th_sec.len()
+    repeat l.s_obj.len() in s:
+        c := l.s_oc[s]
+        if not l.s_live[s] or (c != OC_TEXT and c != OC_INIT and c != OC_FINI):
+            continue
+        end
+        r0 := l.s_rel0[s]
+        repeat l.s_nrel[s] in k:
+            r := r0 + k
+            ty := l.r_type[r]
+            kind := th_kind_of(l, ty)
+            if kind < 0 or l.th_of_rel.has(r):
+                continue
+            end
+            pc := l.s_addr[s] + l.r_off[r]
+            if th_needed(kind, ty, pc, l.r_add[r], sym_addr(l, l.r_sym[r])):
+                th_add(l, s, r, kind, l.r_add[r])
+            end
+        end
+    end
+    ret l.th_sec.len() > before
+end
+
+func th_pad(l &: Nl, s: int): i64:
+    if l.th_sec.len() == 0 or not l.th_count.has(s):
+        ret 0
+    end
+    ret align_to(l.s_size[s], 8 as i64) - l.s_size[s] + ((TH_SLOT * l.th_count.get(s)) as i64)
+end
+
+func th_addr(l &: Nl, id: int): i64:
+    a := l.s_addr[l.th_sec[id]] + l.th_at[id]
+    if l.th_kind[id] == TH_THUMB:
+        ret a | (1 as i64)
+    end
+    ret a
+end
+
+func th_write(l &: Nl, buf: u8*):
+    repeat l.th_sec.len() in id:
+        at := l.s_fpos[l.th_sec[id]] + l.th_at[id]
+        kind := l.th_kind[id]
+        mut t := sym_addr(l, l.th_os[id]) + l.th_add[id]
+        if kind == TH_A64:
+            wr32(buf, at, 0x58000050 as i64)
+            wr32(buf, at + (4 as i64), 0xD61F0200 as i64)
+            wr64(buf, at + (8 as i64), t)
+        else kind == TH_ARM:
+            t = t + (8 as i64)
+            wr32(buf, at, 0xE51FF004 as i64)
+            wr32(buf, at + (4 as i64), t)
+            wr32(buf, at + (8 as i64), 0 as i64)
+            wr32(buf, at + (12 as i64), 0 as i64)
+        else:
+            t = t + (4 as i64)
+            wr32(buf, at, 0xF000F8DF as i64)
+            wr32(buf, at + (4 as i64), t)
+            wr32(buf, at + (8 as i64), 0 as i64)
+            wr32(buf, at + (12 as i64), 0 as i64)
+        end
+    end
+end
+
+func th_exidx_secs(l &: Nl): Vector<int>:
+    mut v := Vector {} as Vector<int>
+    if l.mach != EM_ARM:
+        ret v
+    end
+    repeat l.th_sec.len() in id:
+        s := l.th_sec[id]
+        if l.th_at[id] == align_to(l.s_size[s], 8 as i64):
+            v.push(s)
+        end
+    end
+    ret v
+end
+
+func th_exidx_write(l &: Nl, buf: u8*):
+    secs := th_exidx_secs(l)
+    n := secs.len()
+    tail := l.oc_size[OC_EXIDX] - ((8 * n) as i64)
+    repeat n in k:
+        at := tail + ((8 * k) as i64)
+        va := l.oc_addr[OC_EXIDX] + at
+        s := secs[k]
+        area := l.s_addr[s] + align_to(l.s_size[s], 8 as i64)
+        wr32(buf, l.oc_fpos[OC_EXIDX] + at, (area - va) & (0x7FFFFFFF as i64))
+        wr32(buf, l.oc_fpos[OC_EXIDX] + at + (4 as i64), 0x80B0B0B0 as i64)
+    end
+end
+
+func th_bias(kind: int): i64:
+    if kind == TH_ARM:
+        ret 0 - 8
+    end
+    if kind == TH_THUMB:
+        ret 0 - 4
+    end
+    ret 0
+end
+
+func pe_th_plan(l &: Nl, t &: Pe): bool:
+    if l.mach != EM_AARCH64:
+        ret false
+    end
+    before := l.th_sec.len()
+    repeat t.it_ps.len() in i:
+        if t.it_kind[i] != IT_SEC:
+            continue
+        end
+        s := t.it_ord[i]
+        if l.s_type[s] == 8 or l.s_off[s] <= (0 as i64):
+            continue
+        end
+        p := fptr(l, l.o_file[l.s_obj[s]])
+        r0 := l.s_rel0[s]
+        repeat l.s_nrel[s] in q:
+            r := r0 + q
+            if pe_rtype(l, l.r_type[r] - CR_BASE) != 203 or l.th_of_rel.has(r):
+                continue
+            end
+            add := sext(rd32(p, l.s_off[s] + l.r_off[r]) & (0x3FFFFFF as i64), 26) << (2 as i64)
+            pva := l.pe_base + t.it_addr[i] + l.r_off[r]
+            if not th_in_range(pe_sym(l, l.r_sym[r]) + add - pva, 28):
+                th_add(l, s, r, TH_A64, add)
+            end
+        end
+    end
+    ret l.th_sec.len() > before
+end
+
+func pe_th_write(l &: Nl, buf: u8*, s: int, dst: i64):
+    repeat l.th_sec.len() in id:
+        if l.th_sec[id] != s:
+            continue
+        end
+        at := dst + l.th_at[id]
+        pc := l.s_addr[s] + l.th_at[id]
+        tg := pe_sym(l, l.th_os[id]) + l.th_add[id]
+        pg := (page4k(tg) - page4k(pc)) >> (12 as i64)
+        wr32(buf, at, (0x90000010 as i64) | ((pg & (3 as i64)) << (29 as i64)) | (((pg >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64)))
+        wr32(buf, at + (4 as i64), (0x91000210 as i64) | ((tg & (0xFFF as i64)) << (10 as i64)))
+        wr32(buf, at + (8 as i64), 0xD61F0200 as i64)
+        wr32(buf, at + (12 as i64), 0)
+    end
+end
+
+func mo_branch_target(l &: Nl, t &: Mo, os: int): i64:
+    g := mo_imported(l, os)
+    if g >= 0 and t.stub_of.has(g):
+        ret t.addr[MO_STUBS] + mo_stub_size(l) * (t.stub_of.get(g) as i64)
+    end
+    ret mo_sym(l, os)
+end
+
+func mo_th_plan(l &: Nl, t &: Mo): bool:
+    if l.mach != EM_AARCH64:
+        ret false
+    end
+    before := l.th_sec.len()
+    repeat l.s_obj.len() in s:
+        if t.out_k[s] != MO_TEXT or l.s_type[s] == 8:
+            continue
+        end
+        r0 := l.s_rel0[s]
+        repeat l.s_nrel[s] in k:
+            r := r0 + k
+            if mo_rtype(l.r_type[r]) != 2 or l.th_of_rel.has(r):
+                continue
+            end
+            pc := l.s_addr[s] + l.r_off[r]
+            if not th_in_range(mo_branch_target(l, t, l.r_sym[r]) + l.r_add[r] - pc, 28):
+                th_add(l, s, r, TH_A64, l.r_add[r])
+            end
+        end
+    end
+    ret l.th_sec.len() > before
+end
+
+func mo_th_write(l &: Nl, t &: Mo, buf: u8*):
+    repeat l.th_sec.len() in id:
+        pc := l.s_addr[l.th_sec[id]] + l.th_at[id]
+        at := pc - t.base
+        tg := mo_branch_target(l, t, l.th_os[id]) + l.th_add[id]
+        pg := (page4k(tg) - page4k(pc)) >> (12 as i64)
+        wr32(buf, at, (0x90000010 as i64) | ((pg & (3 as i64)) << (29 as i64)) | (((pg >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64)))
+        wr32(buf, at + (4 as i64), (0x91000210 as i64) | ((tg & (0xFFF as i64)) << (10 as i64)))
+        wr32(buf, at + (8 as i64), 0xD61F0200 as i64)
+        wr32(buf, at + (12 as i64), 0)
+    end
+end

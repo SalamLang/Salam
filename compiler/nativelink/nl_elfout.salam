@@ -1,0 +1,349 @@
+package nativelink
+
+mut g_nl32 := false
+
+func phdr_any(l &: Nl, buf: u8*, at: i64, ty: int, flags: int, off: i64, vaddr: i64, fsz: i64, msz: i64, al: i64):
+    if l.elf32:
+        wr32(buf, at, ty as i64)
+        wr32(buf, at + (4 as i64), off)
+        wr32(buf, at + (8 as i64), vaddr)
+        wr32(buf, at + (12 as i64), vaddr)
+        wr32(buf, at + (16 as i64), fsz)
+        wr32(buf, at + (20 as i64), msz)
+        wr32(buf, at + (24 as i64), flags as i64)
+        wr32(buf, at + (28 as i64), al)
+        ret
+    end
+    phdr(buf, at, ty, flags, off, vaddr, fsz, msz, al)
+end
+
+func phdr(buf: u8*, at: i64, ty: int, flags: int, off: i64, vaddr: i64, fsz: i64, msz: i64, al: i64):
+    wr32(buf, at, ty as i64)
+    wr32(buf, at + (4 as i64), flags as i64)
+    wr64(buf, at + (8 as i64), off)
+    wr64(buf, at + (16 as i64), vaddr)
+    wr64(buf, at + (24 as i64), vaddr)
+    wr64(buf, at + (32 as i64), fsz)
+    wr64(buf, at + (40 as i64), msz)
+    wr64(buf, at + (48 as i64), al)
+end
+
+func tb_le(t &: Vector<u8>, v: i64, n: int):
+    mut x := v
+    repeat n:
+        t.push((x & (255 as i64)) as u8)
+        x = x >> (8 as i64)
+    end
+end
+
+func tb_pad(t &: Vector<u8>, base: i64, a: int):
+    until ((base + (t.len() as i64)) % (a as i64)) != (0 as i64):
+        t.push(0 as u8)
+    end
+end
+
+func tb_name(l &: Nl, t &: Vector<u8>, id: int): i64:
+    at := t.len() as i64
+    o := l.names.off[id]
+    repeat l.names.len[id] in i:
+        t.push(l.names.bytes[o + i])
+    end
+    t.push(0 as u8)
+    ret at
+end
+
+func tb_cstr(t &: Vector<u8>, s: str): i64:
+    at := t.len() as i64
+    p := (s as void*) as u8*
+    repeat str.Len(s) in i:
+        t.push(p[i])
+    end
+    t.push(0 as u8)
+    ret at
+end
+
+func oc_label(c: int): str:
+    switch c:
+        OC_RODATA: ret ".rodata" end
+        OC_EHFRAME: ret ".eh_frame" end
+        OC_INIT: ret ".init" end
+        OC_TEXT: ret ".text" end
+        OC_FINI: ret ".fini" end
+        OC_INITARR: ret ".init_array" end
+        OC_FINIARR: ret ".fini_array" end
+        OC_DATA: ret ".data" end
+        OC_GOT: ret ".got" end
+        OC_BSS: ret ".bss" end
+        OC_DATAREL: ret ".data.rel.ro" end
+        OC_EHHDR: ret ".eh_frame_hdr" end
+        OC_EXIDX: ret ".ARM.exidx" end
+        OC_TDATA: ret ".tdata" end
+        OC_TBSS: ret ".tbss" end
+        OC_PREINITARR: ret ".preinit_array" end
+    end
+    ret ".unknown"
+end
+
+func shdr(t &: Vector<u8>, name: i64, ty: int, flags: int, addr: i64, off: i64, size: i64, link: int, info: int, al: i64, ent: i64):
+    if g_nl32:
+        tb_le(t, name, 4)
+        tb_le(t, ty as i64, 4)
+        tb_le(t, flags as i64, 4)
+        tb_le(t, addr, 4)
+        tb_le(t, off, 4)
+        tb_le(t, size, 4)
+        tb_le(t, link as i64, 4)
+        tb_le(t, info as i64, 4)
+        tb_le(t, al, 4)
+        tb_le(t, ent, 4)
+        ret
+    end
+    tb_le(t, name, 4)
+    tb_le(t, ty as i64, 4)
+    tb_le(t, flags as i64, 8)
+    tb_le(t, addr, 8)
+    tb_le(t, off, 8)
+    tb_le(t, size, 8)
+    tb_le(t, link as i64, 4)
+    tb_le(t, info as i64, 4)
+    tb_le(t, al, 8)
+    tb_le(t, ent, 8)
+end
+
+func sym_entry(l &: Nl, os: int): bool:
+    if l.os_name[os] < 0:
+        ret false
+    end
+    s := l.os_sec[os]
+    if s < 0 or not l.s_live[s] or l.s_oc[s] == OC_NONE:
+        ret false
+    end
+    g := l.os_glob[os]
+    if g >= 0:
+        ret l.g_state[g] == SY_DEF and l.g_sec[g] == s
+    end
+    ret true
+end
+
+func dyn_shdrs(l &: Nl, sh &: Vector<u8>, sh_names &: Vector<u8>, n &: int):
+    ix_dynsym := n + 2
+    ix_dynstr := n + 3
+    ws := dy_ws(l) as i64
+    shdr(sh, tb_cstr(sh_names, ".interp"), 1, 2, l.ds_addr[DS_INTERP], l.ds_off[DS_INTERP], l.ds_size[DS_INTERP], 0, 0, 1 as i64, 0 as i64)
+    shdr(sh, tb_cstr(sh_names, ".gnu.hash"), 0x6ffffff6, 2, l.ds_addr[DS_GHASH], l.ds_off[DS_GHASH], l.ds_size[DS_GHASH], ix_dynsym, 0, ws, 0 as i64)
+    shdr(sh, tb_cstr(sh_names, ".dynsym"), 11, 2, l.ds_addr[DS_DYNSYM], l.ds_off[DS_DYNSYM], l.ds_size[DS_DYNSYM], ix_dynstr, 1, ws, dy_symsz(l) as i64)
+    shdr(sh, tb_cstr(sh_names, ".dynstr"), 3, 2, l.ds_addr[DS_DYNSTR], l.ds_off[DS_DYNSTR], l.ds_size[DS_DYNSTR], 0, 0, 1 as i64, 0 as i64)
+    shdr(sh, tb_cstr(sh_names, ".gnu.version"), 0x6fffffff, 2, l.ds_addr[DS_VERSYM], l.ds_off[DS_VERSYM], l.ds_size[DS_VERSYM], ix_dynsym, 0, 2 as i64, 2 as i64)
+    shdr(sh, tb_cstr(sh_names, ".gnu.version_r"), 0x6ffffffe, 2, l.ds_addr[DS_VERNEED], l.ds_off[DS_VERNEED], l.ds_size[DS_VERNEED], ix_dynstr, l.vn_count, ws, 0 as i64)
+    shdr(sh, tb_cstr(sh_names, l.dyn_rel ? ".rel.dyn" : ".rela.dyn"), l.dyn_rel ? 9 : 4, 2, l.ds_addr[DS_RELA], l.ds_off[DS_RELA], l.ds_size[DS_RELA], ix_dynsym, 0, ws, dy_relsz(l) as i64)
+    shdr(sh, tb_cstr(sh_names, ".plt"), 1, 6, l.ds_addr[DS_PLT], l.ds_off[DS_PLT], l.ds_size[DS_PLT], 0, 0, 16 as i64, 16 as i64)
+    shdr(sh, tb_cstr(sh_names, ".dynamic"), 6, 3, l.ds_addr[DS_DYNAMIC], l.ds_off[DS_DYNAMIC], l.ds_size[DS_DYNAMIC], ix_dynstr, 0, ws, dy_dynsz(l) as i64)
+    n = n + 9
+end
+
+func build_tail(l &: Nl, tail &: Vector<u8>, shoff &: i64, shnum &: int, shstr &: int):
+    g_nl32 = l.elf32
+    psz := l.elf32 ? 4 : 8
+    mut idx := Vector {} as Vector<int>
+    repeat OC_COUNT:
+        idx.push(0)
+    end
+    mut sh := Vector {} as Vector<u8>
+    mut sh_names := Vector {} as Vector<u8>
+    sh_names.push(0 as u8)
+    shdr(sh, 0 as i64, 0, 0, 0 as i64, 0 as i64, 0 as i64, 0, 0, 0 as i64, 0 as i64)
+    mut n := 1
+    repeat OC_COUNT in c:
+        if l.oc_size[c] <= (0 as i64):
+            continue
+        end
+        mut ty := 1
+        mut fl := 2
+        if c == OC_BSS: ty = 8 end
+        if c == OC_INITARR: ty = 14 end
+        if c == OC_PREINITARR: ty = 16 end
+        if c == OC_FINIARR: ty = 15 end
+        if c == OC_INIT or c == OC_TEXT or c == OC_FINI: fl = 6 end
+        if c >= OC_INITARR and c != OC_PLT and c != OC_EHHDR and c != OC_EXIDX: fl = 3 end
+        if c == OC_EXIDX:
+            ty = 0x70000001
+            fl = 0x82
+        end
+        if c == OC_TDATA or c == OC_TBSS:
+            fl = 0x403
+            if c == OC_TBSS:
+                ty = 8
+            end
+        end
+        nm := tb_cstr(sh_names, oc_label(c))
+        shdr(sh, nm, ty, fl, l.oc_addr[c], c == OC_BSS ? l.file_size : l.oc_fpos[c], l.oc_size[c], c == OC_EXIDX ? idx[OC_TEXT] : 0, 0, l.oc_align[c], (c == OC_INITARR or c == OC_FINIARR or c == OC_PREINITARR or c == OC_GOT) ? (psz as i64) : (0 as i64))
+        idx[c] = n
+        n += 1
+    end
+    if l.dynamic:
+        dyn_shdrs(l, sh, sh_names, n)
+    end
+    base := l.file_size
+    repeat l.dg_name.len() in k:
+        doff := base + (tail.len() as i64)
+        repeat l.dg_size[k] in q:
+            tail.push(l.dg_bytes[(l.dg_base[k] + q) as int])
+        end
+        shdr(sh, tb_name(l, sh_names, l.dg_name[k]), 1, 0, 0 as i64, doff, l.dg_size[k], 0, 0, 1 as i64, 0 as i64)
+        n += 1
+    end
+    mut syms := Vector {} as Vector<u8>
+    mut strs := Vector {} as Vector<u8>
+    strs.push(0 as u8)
+    repeat (l.elf32 ? 16 : 24):
+        syms.push(0 as u8)
+    end
+    mut nlocal := 1
+    repeat 2 in pass:
+        repeat l.os_sec.len() in os:
+            if not sym_entry(l, os):
+                continue
+            end
+            bind := l.os_type[os] >> 4
+            if (pass == 0) != (bind == 0):
+                continue
+            end
+            s := l.os_sec[os]
+            tb_le(syms, tb_name(l, strs, l.os_name[os]), 4)
+            if l.elf32:
+                tb_le(syms, sym_addr(l, os), 4)
+                tb_le(syms, l.os_size[os], 4)
+                syms.push(l.os_type[os] as u8)
+                syms.push(0 as u8)
+                tb_le(syms, idx[l.s_oc[s]] as i64, 2)
+            else:
+                syms.push(l.os_type[os] as u8)
+                syms.push(0 as u8)
+                tb_le(syms, idx[l.s_oc[s]] as i64, 2)
+                tb_le(syms, sym_addr(l, os), 8)
+                tb_le(syms, l.os_size[os], 8)
+            end
+            if pass == 0:
+                nlocal += 1
+            end
+        end
+    end
+    tb_pad(tail, base, 8)
+    symoff := base + (tail.len() as i64)
+    each b in syms:
+        tail.push(b)
+    end
+    stroff := base + (tail.len() as i64)
+    each b2 in strs:
+        tail.push(b2)
+    end
+    shdr(sh, tb_cstr(sh_names, ".symtab"), 2, 0, 0 as i64, symoff, syms.len() as i64, n + 1, nlocal, psz as i64, (l.elf32 ? 16 : 24) as i64)
+    shdr(sh, tb_cstr(sh_names, ".strtab"), 3, 0, 0 as i64, stroff, strs.len() as i64, 0, 0, 1 as i64, 0 as i64)
+    shstr_nm := tb_cstr(sh_names, ".shstrtab")
+    shsoff := base + (tail.len() as i64)
+    each b3 in sh_names:
+        tail.push(b3)
+    end
+    shdr(sh, shstr_nm, 3, 0, 0 as i64, shsoff, sh_names.len() as i64, 0, 0, 1 as i64, 0 as i64)
+    tb_pad(tail, base, 8)
+    shoff = base + (tail.len() as i64)
+    each b4 in sh:
+        tail.push(b4)
+    end
+    shnum = n + 3
+    shstr = n + 2
+    idx.free()
+    sh.free()
+    sh_names.free()
+    syms.free()
+    strs.free()
+end
+
+func write_exe(l &: Nl, out: str):
+    buf := l.out_ptr as void* as u8*
+    buf[0] = 0x7f as u8
+    buf[1] = 69 as u8
+    buf[2] = 76 as u8
+    buf[3] = 70 as u8
+    buf[4] = (l.elf32 ? 1 : 2) as u8
+    buf[5] = 1 as u8
+    buf[6] = 1 as u8
+    mach := l.mach == 0 ? EM_X86_64 : l.mach
+    wr32(buf, 16 as i64, ((l.dynamic and l.pie ? 3 : 2) | (mach << 16)) as i64)
+    wr32(buf, 20 as i64, 1 as i64)
+    mut tail := Vector {} as Vector<u8>
+    mut shoff := 0 as i64
+    mut shnum := 0
+    mut shstr := 0
+    if not l.strip:
+        build_tail(l, tail, shoff, shnum, shstr)
+    end
+    ehs := l.elf32 ? 52 : 64
+    phs := l.elf32 ? 32 : 56
+    if l.elf32:
+        wr32(buf, 24 as i64, l.entry)
+        wr32(buf, 28 as i64, 52 as i64)
+        wr32(buf, 32 as i64, shoff)
+        wr32(buf, 36 as i64, l.eflags)
+        wr32(buf, 40 as i64, (52 | (32 << 16)) as i64)
+        wr32(buf, 44 as i64, (l.nphdr | (40 << 16)) as i64)
+        wr32(buf, 48 as i64, (shnum | (shstr << 16)) as i64)
+    else:
+        wr64(buf, 24 as i64, l.entry)
+        wr64(buf, 32 as i64, 64 as i64)
+        wr64(buf, 40 as i64, shoff)
+        wr32(buf, 48 as i64, l.eflags)
+        wr32(buf, 52 as i64, (64 | (56 << 16)) as i64)
+        wr32(buf, 56 as i64, (l.nphdr | (64 << 16)) as i64)
+        wr32(buf, 60 as i64, (shnum | (shstr << 16)) as i64)
+    end
+    pg := nl_page(l) as i64
+    mut ph := ehs as i64
+    if l.dynamic:
+        phdr_any(l, buf, ph, 6, 4, ehs as i64, l.base + (ehs as i64), (phs * l.nphdr) as i64, (phs * l.nphdr) as i64, (l.elf32 ? 4 : 8) as i64)
+        ph = ph + (phs as i64)
+        phdr_any(l, buf, ph, 3, 4, l.ds_off[DS_INTERP], l.ds_addr[DS_INTERP], l.ds_size[DS_INTERP], l.ds_size[DS_INTERP], 1 as i64)
+        ph = ph + (phs as i64)
+    end
+    phdr_any(l, buf, ph, 1, 4, l.seg_fpos[0], l.seg_vaddr[0], l.seg_fsz[0], l.seg_msz[0], pg)
+    phdr_any(l, buf, ph + (phs as i64), 1, 5, l.seg_fpos[1], l.seg_vaddr[1], l.seg_fsz[1], l.seg_msz[1], pg)
+    phdr_any(l, buf, ph + ((2 * phs) as i64), 1, 6, l.seg_fpos[2], l.seg_vaddr[2], l.seg_fsz[2], l.seg_msz[2], pg)
+    ph = ph + ((3 * phs) as i64)
+    if l.dynamic:
+        phdr_any(l, buf, ph, 2, 6, l.ds_off[DS_DYNAMIC], l.ds_addr[DS_DYNAMIC], l.ds_size[DS_DYNAMIC], l.ds_size[DS_DYNAMIC], (l.elf32 ? 4 : 8) as i64)
+        ph = ph + (phs as i64)
+        phdr_any(l, buf, ph, 0x6474e552, 4, l.relro_lo - l.base, l.relro_lo, l.relro_hi - l.relro_lo, l.relro_hi - l.relro_lo, 1 as i64)
+        ph = ph + (phs as i64)
+    end
+    if l.oc_size[OC_EHHDR] > (0 as i64):
+        phdr_any(l, buf, ph, 0x6474e550, 4, l.oc_fpos[OC_EHHDR], l.oc_addr[OC_EHHDR], l.oc_size[OC_EHHDR], l.oc_size[OC_EHHDR], 4 as i64)
+        ph = ph + (phs as i64)
+    end
+    if l.oc_size[OC_EXIDX] > (0 as i64):
+        phdr_any(l, buf, ph, 0x70000001, 4, l.oc_fpos[OC_EXIDX], l.oc_addr[OC_EXIDX], l.oc_size[OC_EXIDX], l.oc_size[OC_EXIDX], 4 as i64)
+        ph = ph + (phs as i64)
+    end
+    if l.tls_hi > l.tls_lo:
+        phdr_any(l, buf, ph, 7, 4, l.tls_lo - l.base, l.tls_lo, l.oc_size[OC_TDATA], l.tls_hi - l.tls_lo, l.tls_align)
+        ph = ph + (phs as i64)
+    end
+    phdr_any(l, buf, ph, 0x6474e551, 6, 0 as i64, 0 as i64, 0 as i64, 0 as i64, 16 as i64)
+    f := fopen(out, "wb")
+    if f == null:
+        nl_fail(l, "cannot write " + out)
+        ret
+    end
+    w := fwrite(buf as void*, 1 as u64, l.file_size as u64, f)
+    mut w2 := 0 as u64
+    if tail.len() > 0:
+        w2 = fwrite(tail.data as void*, 1 as u64, tail.len() as u64, f)
+    end
+    _c := fclose(f)
+    l.file_size = l.file_size + (tail.len() as i64)
+    tail.free()
+    if (w as i64) + (w2 as i64) != l.file_size:
+        nl_fail(l, "cannot write " + out)
+        ret
+    end
+    _m := chmod(out, 493)
+end

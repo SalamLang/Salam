@@ -1,0 +1,291 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "chan"
+@fa "کانال"
+package chan
+
+import mem
+import sync
+
+@en "Chan"
+@fa "کانال"
+pub struct Chan<T>:
+    @en "buf"
+    @fa "بافر"
+    pub buf: T* = null
+    @en "ctl"
+    @fa "وضعیت درونی"
+    pub ctl: i64* = null
+    @en "cap"
+    @fa "اندازه بافر"
+    pub cap: i64 = 0
+    @en "zidx"
+    @fa "خانه صفر"
+    pub zidx: i64 = 0
+    @en "mu"
+    @fa "قفل"
+    pub mu: sync.Mutex = sync.Mutex {}
+    @en "not_empty"
+    @fa "شرط ناخالی"
+    pub not_empty: sync.CondVar = sync.CondVar {}
+    @en "not_full"
+    @fa "شرط ناپر"
+    pub not_full: sync.CondVar = sync.CondVar {}
+    @en "taken"
+    @fa "شرط برداشت"
+    pub taken: sync.CondVar = sync.CondVar {}
+
+    @en "init"
+    @fa "مقداردهی"
+    pub func init(capacity: i64):
+        mut n := capacity
+        if n < 0: n = 0 end
+        this.cap = n
+        mut slots := n + 1
+        if n == 0: slots = 2 end
+        this.zidx = slots - 1
+        this.buf = mem.AllocateZeroed((slots * (sizeof(T) as i64)) as u64) as T*
+        this.ctl = mem.AllocateZeroed(64 as u64) as i64*
+        this.mu = sync.NewMutex()
+        this.not_empty = sync.NewCondVar()
+        this.not_full = sync.NewCondVar()
+        this.taken = sync.NewCondVar()
+    end
+
+    @en "send"
+    @fa "فرستادن"
+    pub func send(v: T): bool:
+        ret this.send_deadline(v, 0 as i64, false)
+    end
+
+    @en "send_timeout"
+    @fa "فرستادن با مهلت"
+    pub func send_timeout(v: T, ms: i64): bool:
+        ret this.send_deadline(v, ms, true)
+    end
+
+    @en "send_deadline"
+    @fa "فرستادن با موعد"
+    pub func send_deadline(v: T, ms: i64, timed: bool): bool:
+        c := this.ctl
+        b := this.buf
+        sync.Lock(this.mu)
+        deadline := sync.NowMs() + ms
+        mut expired := false
+
+        mut room := this.cap
+        if this.cap == 0: room = 1 end
+        until c[3] == 0 and c[2] >= room and not expired:
+            if timed:
+                left := deadline - sync.NowMs()
+                if left <= 0:
+                    expired = true
+                else:
+                    _ := sync.WaitCondTimeout(this.not_full, this.mu, left)
+                end
+            else:
+                sync.WaitCond(this.not_full, this.mu)
+            end
+        end
+        if c[3] != 0 or expired:
+            sync.Unlock(this.mu)
+            ret false
+        end
+
+        if this.cap == 0:
+            b[0] = v
+            c[2] = 1
+            mine := c[4] + 1
+            c[4] = mine
+            sync.Signal(this.not_empty)
+            until c[3] == 0 and c[5] < mine and not expired:
+                if timed:
+                    left := deadline - sync.NowMs()
+                    if left <= 0:
+                        expired = true
+                    else:
+                        _ := sync.WaitCondTimeout(this.taken, this.mu, left)
+                    end
+                else:
+                    sync.WaitCond(this.taken, this.mu)
+                end
+            end
+            if c[5] < mine:
+                c[2] = 0
+                sync.Signal(this.not_full)
+                sync.Unlock(this.mu)
+                ret false
+            end
+            sync.Unlock(this.mu)
+            ret true
+        end
+
+        b[c[1]] = v
+        c[1] = (c[1] + 1) % this.cap
+        c[2] = c[2] + 1
+        sync.Signal(this.not_empty)
+        sync.Unlock(this.mu)
+        ret true
+    end
+
+    @en "recv"
+    @fa "دریافت"
+    pub func recv(ok &: bool): T:
+        ret this.recv_deadline(ok, 0 as i64, false)
+    end
+
+    @en "recv_timeout"
+    @fa "دریافت با مهلت"
+    pub func recv_timeout(ok &: bool, ms: i64): T:
+        ret this.recv_deadline(ok, ms, true)
+    end
+
+    @en "recv_deadline"
+    @fa "دریافت با موعد"
+    pub func recv_deadline(ok &: bool, ms: i64, timed: bool): T:
+        c := this.ctl
+        b := this.buf
+        sync.Lock(this.mu)
+        deadline := sync.NowMs() + ms
+        mut expired := false
+        until c[3] == 0 and c[2] <= 0 and not expired:
+            if timed:
+                left := deadline - sync.NowMs()
+                if left <= 0:
+                    expired = true
+                else:
+                    _ := sync.WaitCondTimeout(this.not_empty, this.mu, left)
+                end
+            else:
+                sync.WaitCond(this.not_empty, this.mu)
+            end
+        end
+        if c[2] <= 0:
+            ok = false
+            sync.Unlock(this.mu)
+            ret b[this.zidx]
+        end
+
+        mut v := b[c[0]]
+        if this.cap == 0:
+            v = b[0]
+            c[2] = 0
+            c[5] = c[5] + 1
+            sync.Broadcast(this.taken)
+        else:
+            c[0] = (c[0] + 1) % this.cap
+            c[2] = c[2] - 1
+        end
+        ok = true
+        sync.Signal(this.not_full)
+        sync.Unlock(this.mu)
+        ret v
+    end
+
+    @en "try_send"
+    @fa "کوشش برای فرستادن"
+    pub func try_send(v: T): bool:
+        if this.cap == 0:
+            ret false
+        end
+        c := this.ctl
+        b := this.buf
+        sync.Lock(this.mu)
+        if c[3] != 0 or c[2] >= this.cap:
+            sync.Unlock(this.mu)
+            ret false
+        end
+        b[c[1]] = v
+        c[1] = (c[1] + 1) % this.cap
+        c[2] = c[2] + 1
+        sync.Signal(this.not_empty)
+        sync.Unlock(this.mu)
+        ret true
+    end
+
+    @en "try_recv"
+    @fa "کوشش برای دریافت"
+    pub func try_recv(ok &: bool): T:
+        c := this.ctl
+        b := this.buf
+        sync.Lock(this.mu)
+        if c[2] <= 0:
+            ok = false
+            sync.Unlock(this.mu)
+            ret b[this.zidx]
+        end
+        mut v := b[c[0]]
+        if this.cap == 0:
+            v = b[0]
+            c[2] = 0
+            c[5] = c[5] + 1
+            sync.Broadcast(this.taken)
+        else:
+            c[0] = (c[0] + 1) % this.cap
+            c[2] = c[2] - 1
+        end
+        ok = true
+        sync.Signal(this.not_full)
+        sync.Unlock(this.mu)
+        ret v
+    end
+
+    @en "close"
+    @fa "بستن"
+    pub func close():
+        c := this.ctl
+        sync.Lock(this.mu)
+        c[3] = 1
+        sync.Broadcast(this.not_empty)
+        sync.Broadcast(this.not_full)
+        sync.Broadcast(this.taken)
+        sync.Unlock(this.mu)
+    end
+
+    @en "is_closed"
+    @fa "بسته است"
+    pub func is_closed(): bool:
+        c := this.ctl
+        sync.Lock(this.mu)
+        v := c[3] != 0
+        sync.Unlock(this.mu)
+        ret v
+    end
+
+    @en "len"
+    @fa "طول"
+    pub func len(): i64:
+        c := this.ctl
+        sync.Lock(this.mu)
+        v := c[2]
+        sync.Unlock(this.mu)
+        ret v
+    end
+
+    @en "capacity"
+    @fa "ظرفیت"
+    pub func capacity(): i64: ret this.cap end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        sync.DestroyCondVar(this.taken)
+        sync.DestroyCondVar(this.not_full)
+        sync.DestroyCondVar(this.not_empty)
+        sync.Destroy(this.mu)
+        mem.Free(this.ctl as void*)
+        mem.Free(this.buf as void*)
+    end
+end

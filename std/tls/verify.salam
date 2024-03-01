@@ -1,0 +1,277 @@
+package tls
+
+const MAX_CHAIN_DEPTH := 8
+
+const VERR_NONE := 0
+const VERR_PARSE := 1
+const VERR_EXPIRED := 2
+const VERR_NOT_YET_VALID := 3
+const VERR_HOSTNAME := 4
+const VERR_UNTRUSTED := 5
+const VERR_BAD_SIGNATURE := 6
+const VERR_NOT_CA := 7
+const VERR_PATHLEN := 8
+const VERR_DEPTH := 9
+const VERR_USAGE := 10
+
+struct Roots:
+    pub der: Buf = Buf {}
+    pub off: Buf = Buf {}
+    pub count: int = 0
+end
+
+func _verr_str(e: int): str:
+    if e == VERR_PARSE: ret "certificate parse failed" end
+    if e == VERR_EXPIRED: ret "certificate expired" end
+    if e == VERR_NOT_YET_VALID: ret "certificate not yet valid" end
+    if e == VERR_HOSTNAME: ret "hostname does not match certificate" end
+    if e == VERR_UNTRUSTED: ret "no trusted issuer found" end
+    if e == VERR_BAD_SIGNATURE: ret "certificate signature invalid" end
+    if e == VERR_NOT_CA: ret "issuer is not a CA" end
+    if e == VERR_PATHLEN: ret "path length constraint exceeded" end
+    if e == VERR_DEPTH: ret "certificate chain too long" end
+    if e == VERR_USAGE: ret "certificate key usage forbids this" end
+    ret "ok"
+end
+
+func _now_stamp(): i64:
+    e := time.Now()
+    mut v := time.Year(e) as i64
+    v = v * 100 + (time.Month(e) as i64)
+    v = v * 100 + (time.Day(e) as i64)
+    v = v * 100 + (time.Hour(e) as i64)
+    v = v * 100 + (time.Minute(e) as i64)
+    v = v * 100 + (time.Second(e) as i64)
+    ret v
+end
+
+func _cert_time_ok(c: Cert, now: i64): int:
+    if now < c.not_before:
+        ret VERR_NOT_YET_VALID
+    end
+    if now > c.not_after:
+        ret VERR_EXPIRED
+    end
+    ret VERR_NONE
+end
+
+func _ecdsa_split(sig: Reader, rout &: Buf, sout &: Buf, width: int): bool:
+    mut s := sig
+    mut seq := _der_seq(s)
+    if s.bad:
+        ret false
+    end
+    r := _der_uint(seq)
+    v := _der_uint(seq)
+    if seq.bad or _rdleft(seq) != 0:
+        ret false
+    end
+    if r.len == 0 or v.len == 0 or r.len > width or v.len > width:
+        ret false
+    end
+    _bufreset(rout)
+    _putzeros(rout, width - r.len)
+    repeat r.len in i:
+        _put8(rout, _rdat(r, i))
+    end
+    _bufreset(sout)
+    _putzeros(sout, width - v.len)
+    repeat v.len in i:
+        _put8(sout, _rdat(v, i))
+    end
+    ret true
+end
+
+func _cert_signed_by(child: Cert, parent: Cert): bool:
+    kind := _sig_hash(child.sig_alg)
+    hlen := _hash_size(kind)
+    mut digest := _newbuf(hlen)
+    defer _buf_free(digest)
+    mut rb := _newbuf(48)
+    defer _buf_free(rb)
+    mut sb := _newbuf(48)
+    defer _buf_free(sb)
+    _putzeros(digest, hlen)
+    _hash_oneshot(kind, child.tbs.p, child.tbs.len, digest.p)
+
+    if child.sig_alg == SIG_ECDSA_SHA256 or child.sig_alg == SIG_ECDSA_SHA384:
+        if parent.pk_alg == PK_EC_P256:
+            if not _ecdsa_split(child.sig, rb, sb, 32):
+                ret false
+            end
+            ret _ecdsa_p256_verify(digest.p, hlen, rb.p, sb.p, parent.ec_point.p, parent.ec_point.len)
+        end
+        if parent.pk_alg == PK_EC_P384:
+            if not _ecdsa_split(child.sig, rb, sb, 48):
+                ret false
+            end
+            ret _ecdsa_p384_verify(digest.p, hlen, rb.p, sb.p, parent.ec_point.p, parent.ec_point.len)
+        end
+        ret false
+    end
+
+    if parent.pk_alg != PK_RSA:
+        ret false
+    end
+    mut n := _newbuf(parent.rsa_n.len)
+    defer _buf_free(n)
+    repeat parent.rsa_n.len in i:
+        _put8(n, _rdat(parent.rsa_n, i))
+    end
+    mut e := _newbuf(parent.rsa_e.len)
+    defer _buf_free(e)
+    repeat parent.rsa_e.len in i:
+        _put8(e, _rdat(parent.rsa_e, i))
+    end
+    mut sg := _newbuf(child.sig.len)
+    defer _buf_free(sg)
+    repeat child.sig.len in i:
+        _put8(sg, _rdat(child.sig, i))
+    end
+
+    if child.sig_alg == SIG_RSA_PSS_SHA256 or child.sig_alg == SIG_RSA_PSS_SHA384:
+        ret _rsa_verify_pss(kind, digest.p, n.p, n.len, e.p, e.len, sg.p, sg.len, hlen)
+    end
+    if child.sig_alg == SIG_RSA_PKCS1_SHA256 or child.sig_alg == SIG_RSA_PKCS1_SHA384 or child.sig_alg == SIG_RSA_PKCS1_SHA512:
+        ret _rsa_verify_pkcs1(kind, digest.p, n.p, n.len, e.p, e.len, sg.p, sg.len)
+    end
+    ret false
+end
+
+func _cert_can_issue(parent: Cert, depth: int): int:
+    if not parent.has_basic_constraints or not parent.is_ca:
+        ret VERR_NOT_CA
+    end
+    if parent.has_key_usage and (parent.key_usage & KU_KEY_CERT_SIGN) == 0:
+        ret VERR_USAGE
+    end
+    if parent.has_path_len and depth > parent.path_len:
+        ret VERR_PATHLEN
+    end
+    ret VERR_NONE
+end
+
+func _roots_new(): Roots:
+    mut r := Roots {}
+    r.der = _newbuf(65536)
+    r.off = _newbuf(1024)
+    r.count = 0
+    ret r
+end
+
+func _roots_free(r &: Roots):
+    _buf_free(r.der)
+    _buf_free(r.off)
+    r.count = 0
+end
+
+func _roots_add(r &: Roots, p: void*, n: int):
+    start := r.der.len
+    _putraw(r.der, p, n)
+    _put32(r.off, start as i64)
+    _put32(r.off, n as i64)
+    r.count += 1
+end
+
+func _roots_get(r: Roots, i: int): Reader:
+    if i < 0 or i >= r.count:
+        ret _newreader(null, 0)
+    end
+    mut o := 0
+    mut l := 0
+    repeat 4 in k:
+        o = (o << 8) | _bufat(r.off, i * 8 + k)
+    end
+    repeat 4 in k:
+        l = (l << 8) | _bufat(r.off, i * 8 + 4 + k)
+    end
+    ret _newreader(_bufptr(r.der, o), l)
+end
+
+func _verify_chain(chain: Reader[8], nchain: int, roots: Roots, host: str, now: i64): int:
+    if nchain < 1:
+        ret VERR_PARSE
+    end
+    if nchain > MAX_CHAIN_DEPTH:
+        ret VERR_DEPTH
+    end
+
+    mut certs: Cert[8]
+    repeat nchain in i:
+        certs[i] = _cert_parse(chain[i].p, chain[i].len)
+        if not certs[i].ok:
+            ret VERR_PARSE
+        end
+    end
+
+    leaf := certs[0]
+    terr := _cert_time_ok(leaf, now)
+    if terr != VERR_NONE:
+        ret terr
+    end
+    if not _cert_match_host(leaf, host):
+        ret VERR_HOSTNAME
+    end
+    if leaf.has_eku and not leaf.eku_server_auth:
+        ret VERR_USAGE
+    end
+
+    mut used: bool[8]
+    repeat 8 in i:
+        used[i] = false
+    end
+    used[0] = true
+    mut cur := 0
+    mut depth := 0
+    until depth < nchain:
+        child := certs[cur]
+
+        mut ri := 0
+        until ri < roots.count:
+            rd := _roots_get(roots, ri)
+            rc := _cert_parse(rd.p, rd.len)
+            if rc.ok:
+                if _cteqrd(child.issuer, rc.subject):
+                    ce := _cert_can_issue(rc, depth)
+                    if ce == VERR_NONE:
+                        rt := _cert_time_ok(rc, now)
+                        if rt == VERR_NONE:
+                            if _cert_signed_by(child, rc):
+                                ret VERR_NONE
+                            end
+                        end
+                    end
+                end
+            end
+            ri += 1
+        end
+
+        mut nxt := 0 - 1
+        repeat nchain in j:
+            if not used[j] and nxt < 0:
+                if _cteqrd(child.issuer, certs[j].subject):
+                    nxt = j
+                end
+            end
+        end
+        if nxt < 0:
+            ret VERR_UNTRUSTED
+        end
+        parent := certs[nxt]
+        pe := _cert_can_issue(parent, depth)
+        if pe != VERR_NONE:
+            ret pe
+        end
+        pt := _cert_time_ok(parent, now)
+        if pt != VERR_NONE:
+            ret pt
+        end
+        if not _cert_signed_by(child, parent):
+            ret VERR_BAD_SIGNATURE
+        end
+        used[nxt] = true
+        cur = nxt
+        depth += 1
+    end
+    ret VERR_UNTRUSTED
+end

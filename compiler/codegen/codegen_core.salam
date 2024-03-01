@@ -1,0 +1,846 @@
+package codegen
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include lg "../logger.salam"
+include sm "../semantic/semantic.salam"
+
+func detect_gui_imports(a &: at.Ast, program: int): bool:
+    prog := at.Get(a, program)
+    repeat prog.list.len() in i:
+        d := at.Get(a, prog.list.get(i))
+        if d.kind != at.AST_IMPORT:
+            continue
+        end
+        if str.Len(d.name) == 0:
+            continue
+        end
+        if str.Equals(d.name, "webview") or str.Equals(d.name, "layout"):
+            ret true
+        end
+    end
+    ret false
+end
+
+func emit_private_protos(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
+    prog := at.Get(a, program)
+    repeat prog.list.len() in i:
+        did := prog.list.get(i)
+        d := at.Get(a, did)
+        if d.typarams.len() > 0:
+            continue
+        end
+        if d.synthetic:
+            continue
+        end
+        is_entry := str.Equals(d.name, g.entry) and cg_is_entry_pkg(g.pkg)
+        if d.kind == at.AST_FUNC_DEF and not d.is_extern and not is_entry and not d.is_pub:
+            fsym := sm.LookupLocal(s, s.global, d.name)
+            sig := sig_of_decl(s, fsym, did)
+            if sig != 0:
+                out(g, func_signature(g, s, a, did, 0, sig, false) + ";\n")
+            end
+        end
+    end
+    out(g, "\n")
+end
+
+func emit_deferred_globals(g &: Cg, s &: sm.Sema, a &: at.Ast):
+    repeat g.deferred_globals.len() in i:
+        did := g.deferred_globals.get(i)
+        d := at.Get(a, did)
+        ts := str.Len(d.type_str) > 0 ? d.type_str : "int32_t"
+        gname := cg_global_cname(g.pkg, d.name)
+        if d.a == 0:
+            zf := cg_str_fill_code(s, gname, ts, 0)
+            if str.Len(zf) > 0:
+                out(g, "    " + zf + "\n")
+            end
+            continue
+        end
+        is_array := str.IndexOf(ts, "[") >= 0
+        array_copy := is_array and d.a != 0 and cg_is_array_place(a, d.a)
+        act := array_copy ? cg_array_ctype(ts) : ""
+        if array_copy and str.Len(act) > 0:
+            out(g, "    salam_arrcpy(" + gname + ", " + cg_expr(g, s, a, d.a) + ", sizeof(" + act + "));\n")
+        else:
+            out(g, "    " + gname + " = " + cg_expr(g, s, a, d.a) + ";\n")
+        end
+    end
+    g.deferred_globals.clear()
+end
+
+func emit_module_init(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
+    out(g, "void " + cg_module_init_name(g.module) + "(void) {\n")
+    out(g, "    static int __salam_init_done = 0;\n")
+    out(g, "    if (__salam_init_done) return;\n")
+    out(g, "    __salam_init_done = 1;\n")
+    if str.Equals(g.module, "core"):
+        out(g, "    salam_tune_allocator();\n")
+        if g.single_threaded and not g.freestanding:
+            out(g, "    salam_out_sig_init();\n")
+        end
+    end
+    if not str.Equals(g.module, "core"):
+        out(g, "    " + cg_module_init_name("core") + "();\n")
+    end
+    prog := at.Get(a, program)
+    repeat prog.list.len() in i:
+        did := prog.list.get(i)
+        if at.KindOf(a, did) != at.AST_IMPORT:
+            continue
+        end
+        basev := cg_import_module(a, did)
+        if str.Len(basev) == 0:
+            continue
+        end
+        out(g, "    " + cg_module_init_name(basev) + "();\n")
+    end
+    saved_hoist := g.hoist
+    saved_hpos := g.hoist_pos
+    saved_hactive := g.hoist_active
+    cg_hoist_begin(g)
+    emit_deferred_globals(g, s, a)
+    cg_hoist_end(g)
+    g.hoist = saved_hoist
+    g.hoist_pos = saved_hpos
+    g.hoist_active = saved_hactive
+    out(g, "}\n\n")
+end
+
+func emit_globals(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
+    prog := at.Get(a, program)
+    repeat prog.list.len() in i:
+        did := prog.list.get(i)
+        d := at.Get(a, did)
+        if d.kind != at.AST_CONST_DECL and d.kind != at.AST_VAR_DECL:
+            continue
+        end
+        if d.is_extern:
+            continue
+        end
+        ts := str.Len(d.type_str) > 0 ? d.type_str : "int32_t"
+        gname := cg_global_cname(g.pkg, d.name)
+        decl := cg_decl_cn(ts, gname)
+        is_array := str.IndexOf(ts, "[") >= 0
+        array_copy := is_array and d.a != 0 and cg_is_array_place(a, d.a)
+        act := array_copy ? cg_array_ctype(ts) : ""
+        can_defer := (d.kind == at.AST_VAR_DECL and d.a != 0 and at.KindOf(a, d.a) != at.AST_LITERAL and not is_array) or (array_copy and str.Len(act) > 0)
+        if can_defer:
+            out(g, decl + ";\n")
+            g.deferred_globals.push(did)
+        else:
+            want_const := d.kind == at.AST_CONST_DECL and not is_array and not type_is_callable(ts)
+            gct_const := want_const and str.StartsWith(cg_ctype(ts), "const ")
+            pfx := (want_const and not gct_const) ? "const " : ""
+            if d.a != 0:
+                out(g, pfx + decl + " = " + cg_expr(g, s, a, d.a) + ";\n")
+            else:
+                out(g, pfx + decl + ";\n")
+                if d.kind == at.AST_VAR_DECL and str.Len(cg_str_fill_code(s, gname, ts, 0)) > 0:
+                    g.deferred_globals.push(did)
+                end
+            end
+        end
+    end
+    out(g, "\n")
+end
+
+func emit_impl_protos(g &: Cg, s &: sm.Sema, a &: at.Ast):
+    gsc := sm.ScopeAt(s, s.global)
+    repeat gsc.symbols.len() in i:
+        oid := gsc.symbols.get(i)
+        owner := sm.SymAt(s, oid)
+        if owner.kind != sm.SYM_TYPEIMPL or owner.members == 0:
+            continue
+        end
+        msc := sm.ScopeAt(s, owner.members)
+        repeat msc.symbols.len() in j:
+            m := sm.SymAt(s, msc.symbols.get(j))
+            if m.kind != sm.SYM_METHOD:
+                continue
+            end
+            repeat m.overloads.len() in k:
+                sig := m.overloads.get(k)
+                if sig != 0 and sm.SigAt(s, sig).decl != 0:
+                    out(
+                        g, func_signature(
+                            g, s, a, sm.SigAt(s, sig).decl, oid, sig, false
+                        ) + ";\n"
+                    )
+                end
+            end
+        end
+    end
+end
+
+func emit_impl_bodies(g &: Cg, s &: sm.Sema, a &: at.Ast):
+    gsc := sm.ScopeAt(s, s.global)
+    repeat gsc.symbols.len() in i:
+        oid := gsc.symbols.get(i)
+        owner := sm.SymAt(s, oid)
+        if owner.kind != sm.SYM_TYPEIMPL or owner.members == 0:
+            continue
+        end
+        msc := sm.ScopeAt(s, owner.members)
+        repeat msc.symbols.len() in j:
+            m := sm.SymAt(s, msc.symbols.get(j))
+            if m.kind != sm.SYM_METHOD:
+                continue
+            end
+            repeat m.overloads.len() in k:
+                sig := m.overloads.get(k)
+                if sig != 0 and sm.SigAt(s, sig).decl != 0:
+                    cg_function(g, s, a, sm.SigAt(s, sig).decl, oid)
+                end
+            end
+        end
+    end
+end
+
+func inl_name_in(names: Vector<str>, name: str): bool:
+    repeat names.len() in i:
+        if str.Equals(names.get(i), name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func inl_collect_locals(a &: at.Ast, names &: Vector<str>, id: int):
+    if id == 0:
+        ret
+    end
+    n := at.Get(a, id)
+    if str.Len(n.name) > 0 and (
+        n.kind == at.AST_PARAM or n.kind == at.AST_VAR_DECL or n.kind == at.AST_FOR or n.kind == at.AST_REPEAT
+    ):
+        names.push(n.name)
+    end
+    inl_collect_locals(a, names, n.a)
+    inl_collect_locals(a, names, n.b)
+    inl_collect_locals(a, names, n.c)
+    inl_collect_locals(a, names, n.d)
+    repeat n.list.len() in i:
+        inl_collect_locals(a, names, n.list.get(i))
+    end
+end
+
+func inl_sym_decl(s &: sm.Sema, symid: int): int:
+    sv := sm.SymAt(s, symid)
+    if sv.decl != 0:
+        ret sv.decl
+    end
+    if sv.overloads.len() > 0:
+        sig := sv.overloads.get(0)
+        if sig != 0:
+            ret sm.SigAt(s, sig).decl
+        end
+    end
+    ret 0
+end
+
+func inl_body_exportable(
+    s &: sm.Sema, a &: at.Ast, names: Vector<str>, id: int
+): bool:
+    if id == 0:
+        ret true
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_LAMBDA:
+        ret false
+    end
+    if n.kind == at.AST_IDENTIFIER and str.Len(n.name) > 0 and not inl_name_in(names, n.name):
+        symid := sm.LookupLocal(s, s.global, n.name)
+        if symid != 0:
+            sk := sm.SymAt(s, symid).kind
+            if sk == sm.SYM_FUNC or sk == sm.SYM_VAR or sk == sm.SYM_CONST:
+                decl := inl_sym_decl(s, symid)
+                if decl != 0:
+                    dn := at.Get(a, decl)
+                    if not dn.is_pub and not dn.is_extern:
+                        ret false
+                    end
+                end
+            end
+        end
+    end
+    if not inl_body_exportable(s, a, names, n.a):
+        ret false
+    end
+    if not inl_body_exportable(s, a, names, n.b):
+        ret false
+    end
+    if not inl_body_exportable(s, a, names, n.c):
+        ret false
+    end
+    if not inl_body_exportable(s, a, names, n.d):
+        ret false
+    end
+    repeat n.list.len() in i:
+        if not inl_body_exportable(s, a, names, n.list.get(i)):
+            ret false
+        end
+    end
+    ret true
+end
+
+func demote_if_nonexportable(g &: Cg, s &: sm.Sema, a &: at.Ast, fid: int):
+    f := at.Get(a, fid)
+    mut names := Vector {} as Vector<str>
+    inl_collect_locals(a, names, fid)
+    if not inl_body_exportable(s, a, names, f.a):
+        mut fn2 := at.Get(a, fid)
+        fn2.is_inline = false
+        at.Put(a, fid, fn2)
+        lg.Log(
+            g.log, lg.PH_CODEGEN, lg.LOG_INFO, "inline '" + f.name + "' uses module-private symbols; " + "emitting it as a regular function"
+        )
+    end
+    names.free()
+end
+
+func demote_struct_inlines(g &: Cg, s &: sm.Sema, a &: at.Ast, did: int):
+    d := at.Get(a, did)
+    if d.typarams.len() > 0 or d.synthetic:
+        ret
+    end
+    repeat d.list.len() in j:
+        mid := d.list.get(j)
+        m := at.Get(a, mid)
+        if m.kind == at.AST_FUNC_DEF and m.is_inline and m.is_pub and not m.is_extern:
+            demote_if_nonexportable(g, s, a, mid)
+        end
+    end
+end
+
+func demote_nonexportable_inlines(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, program: int
+):
+    prog := at.Get(a, program)
+    repeat prog.list.len() in i:
+        did := prog.list.get(i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_STRUCT_DEF:
+            demote_struct_inlines(g, s, a, did)
+            continue
+        end
+        if d.kind != at.AST_FUNC_DEF or not d.is_inline:
+            continue
+        end
+        if d.typarams.len() > 0 or d.synthetic or d.is_extern:
+            continue
+        end
+        if str.Equals(d.name, g.entry) and cg_is_entry_pkg(g.pkg):
+            mut dn := at.Get(a, did)
+            dn.is_inline = false
+            at.Put(a, did, dn)
+            continue
+        end
+        if not d.is_pub:
+            continue
+        end
+        demote_if_nonexportable(g, s, a, did)
+    end
+end
+
+func is_header_inline(a &: at.Ast, fid: int): bool:
+    f := at.Get(a, fid)
+    ret f.kind == at.AST_FUNC_DEF and f.is_inline and f.is_pub and not f.is_extern and f.typarams.len() == 0 and not f.synthetic and f.a != 0
+end
+
+func emit_struct_inline_bodies(g &: Cg, s &: sm.Sema, a &: at.Ast, did: int):
+    d := at.Get(a, did)
+    if d.typarams.len() > 0 or d.synthetic:
+        ret
+    end
+    ssym := sm.LookupLocal(s, s.global, d.name)
+    if ssym == 0:
+        ret
+    end
+    repeat d.list.len() in j:
+        mid := d.list.get(j)
+        if is_header_inline(a, mid):
+            cg_function(g, s, a, mid, ssym)
+        end
+    end
+end
+
+func emit_inline_header(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
+    save := g.cur
+    g.cur = CG_OUT_H
+    prog := at.Get(a, program)
+    repeat prog.list.len() in i:
+        did := prog.list.get(i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_STRUCT_DEF:
+            emit_struct_inline_bodies(g, s, a, did)
+            continue
+        end
+        if is_header_inline(a, did):
+            cg_function(g, s, a, did, 0)
+        end
+    end
+    g.cur = save
+end
+
+func emit_function_bodies(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
+    prog := at.Get(a, program)
+    repeat prog.list.len() in i:
+        did := prog.list.get(i)
+        d := at.Get(a, did)
+        if d.typarams.len() > 0:
+            continue
+        end
+        if d.synthetic:
+            continue
+        end
+        if d.kind == at.AST_FUNC_DEF:
+            if d.is_extern and d.a == 0:
+                continue
+            end
+            if d.is_inline and d.is_pub:
+                continue
+            end
+            cg_function(g, s, a, did, 0)
+        else d.kind == at.AST_STRUCT_DEF:
+            ssym := sm.LookupLocal(s, s.global, d.name)
+            repeat d.list.len() in j:
+                mid := d.list.get(j)
+                m := at.Get(a, mid)
+                if m.kind == at.AST_FUNC_DEF and not (m.is_inline and m.is_pub):
+                    cg_function(g, s, a, mid, ssym)
+                end
+            end
+        else d.kind == at.AST_LAYOUT_BLOCK:
+            out(g, "/* layout block omitted in general (C) mode */\n\n")
+        end
+    end
+end
+
+func inst_fn_name(s &: sm.Sema, owner: int, fname: str, sig: int): str:
+    ret cg_mangle_in(
+        s, "g", owner != 0 ? sm.SymAt(s, owner).name : "", fname, sm.SigAt(s, sig).params
+    )
+end
+
+func inst_pkg_protos(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
+    if n == 0:
+        ret
+    end
+    nn := at.Get(a, n)
+    if nn.kind == at.AST_CALL and nn.a != 0 and at.KindOf(a, nn.a) == at.AST_MEMBER:
+        mem_node := at.Get(a, nn.a)
+        if mem_node.a != 0 and at.KindOf(a, mem_node.a) == at.AST_IDENTIFIER and str.Len(mem_node.name) > 0:
+            mut pk := cg_home_sym(g, s, at.Get(a, mem_node.a).name, sm.SYM_PACKAGE)
+            if pk == 0:
+                pk = sm.Lookup(s, s.global, at.Get(a, mem_node.a).name)
+            end
+            if pk != 0 and sm.SymAt(s, pk).kind == sm.SYM_PACKAGE and sm.SymAt(s, pk).members != 0:
+                pkname := sm.SymAt(s, pk).pkgname
+                if str.Len(pkname) > 0 and not str.Equals(pkname, g.pkg):
+                    fn := sm.LookupLocal(s, sm.SymAt(s, pk).members, mem_node.name)
+                    if fn != 0 and sm.SymAt(s, fn).kind == sm.SYM_FUNC:
+                        save := g.pkg
+                        g.pkg = pkname
+                        repeat sm.SymAt(s, fn).overloads.len() in k:
+                            sig := sm.SymAt(s, fn).overloads.get(k)
+                            if sig != 0 and sm.SigAt(s, sig).decl != 0:
+                                dd := at.Get(a, sm.SigAt(s, sig).decl)
+                                if not dd.is_extern and not dd.synthetic and dd.typarams.len() == 0:
+                                    pnm := cg_mangle_in(
+                                        s, pkname, "", dd.name, sm.SigAt(s, sig).params
+                                    )
+                                    outh(
+                                        g, "#ifndef SALAM_PP_" + pnm + "\n#define SALAM_PP_" + pnm + "\n" + func_signature(g, s, a, sm.SigAt(s, sig).decl, 0, sig, false) + ";\n#endif\n"
+                                    )
+                                end
+                            end
+                        end
+                        g.pkg = save
+                    end
+                end
+            end
+        end
+    end
+    inst_pkg_protos(g, s, a, nn.ty)
+    inst_pkg_protos(g, s, a, nn.a)
+    inst_pkg_protos(g, s, a, nn.b)
+    inst_pkg_protos(g, s, a, nn.c)
+    inst_pkg_protos(g, s, a, nn.d)
+    repeat nn.list.len() in li:
+        inst_pkg_protos(g, s, a, nn.list.get(li))
+    end
+    repeat nn.dims.len() in di:
+        inst_pkg_protos(g, s, a, nn.dims.get(di))
+    end
+end
+
+func emit_instances_header(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, program: int
+):
+    prog := at.Get(a, program)
+    repeat prog.list.len() in pi:
+        pd := prog.list.get(pi)
+        if at.Get(a, pd).synthetic:
+            saved_home := g.cur_fn_home
+            hsym := sm.LookupLocal(s, s.global, at.Get(a, pd).name)
+            g.cur_fn_home = hsym != 0 ? sm.SymAt(s, hsym).home : 0
+            inst_pkg_protos(g, s, a, pd)
+            g.cur_fn_home = saved_home
+        end
+    end
+    repeat prog.list.len() in i:
+        did := prog.list.get(i)
+        d := at.Get(a, did)
+        if not d.synthetic:
+            continue
+        end
+        if d.kind == at.AST_FUNC_DEF and not d.is_extern:
+            fsym := sm.LookupLocal(s, s.global, d.name)
+            sig := sig_of_decl(s, fsym, did)
+            if sig == 0:
+                continue
+            end
+            nm := inst_fn_name(s, 0, d.name, sig)
+            outh(
+                g, "#ifndef SALAM_IP_" + nm + "\n#define SALAM_IP_" + nm + "\n" + func_signature(g, s, a, did, 0, sig, false) + ";\n#endif\n"
+            )
+        else d.kind == at.AST_STRUCT_DEF:
+            ssym := sm.LookupLocal(s, s.global, d.name)
+            if ssym == 0:
+                continue
+            end
+            repeat d.list.len() in j:
+                mid := d.list.get(j)
+                m := at.Get(a, mid)
+                if m.kind != at.AST_FUNC_DEF:
+                    continue
+                end
+                msym := sm.LookupLocal(s, sm.SymAt(s, ssym).members, m.name)
+                sig2 := sig_of_decl(s, msym, mid)
+                if sig2 == 0:
+                    continue
+                end
+                nm2 := inst_fn_name(s, ssym, m.name, sig2)
+                outh(
+                    g, "#ifndef SALAM_IP_" + nm2 + "\n#define SALAM_IP_" + nm2 + "\n" + func_signature(g, s, a, mid, ssym, sig2, false) + ";\n#endif\n"
+                )
+            end
+        end
+    end
+    save := g.cur
+    g.cur = CG_OUT_H
+    repeat prog.list.len() in i2:
+        did := prog.list.get(i2)
+        d := at.Get(a, did)
+        if not d.synthetic:
+            continue
+        end
+        if d.kind == at.AST_FUNC_DEF and not d.is_extern and d.a != 0:
+            fsym := sm.LookupLocal(s, s.global, d.name)
+            sig := sig_of_decl(s, fsym, did)
+            if sig == 0:
+                continue
+            end
+            nm := inst_fn_name(s, 0, d.name, sig)
+            outh(
+                g, "#ifndef SALAM_IB_" + nm + "\n#define SALAM_IB_" + nm + "\n"
+            )
+            cg_function(g, s, a, did, 0)
+            outh(g, "#endif\n")
+        else d.kind == at.AST_STRUCT_DEF:
+            ssym := sm.LookupLocal(s, s.global, d.name)
+            if ssym == 0:
+                continue
+            end
+            repeat d.list.len() in j:
+                mid := d.list.get(j)
+                m := at.Get(a, mid)
+                if m.kind != at.AST_FUNC_DEF:
+                    continue
+                end
+                msym := sm.LookupLocal(s, sm.SymAt(s, ssym).members, m.name)
+                sig2 := sig_of_decl(s, msym, mid)
+                if sig2 == 0:
+                    continue
+                end
+                nm2 := inst_fn_name(s, ssym, m.name, sig2)
+                outh(
+                    g, "#ifndef SALAM_IB_" + nm2 + "\n#define SALAM_IB_" + nm2 + "\n"
+                )
+                cg_function(g, s, a, mid, ssym)
+                outh(g, "#endif\n")
+            end
+        end
+    end
+    g.cur = save
+end
+
+func cg_tidy(sn: str): str:
+    mut b := co.SbNew()
+    mut emitted := false
+    mut pending := false
+    n := str.Len(sn)
+    mut i := 0
+    until i < n:
+        mut nl := 0 - 1
+        mut j := i
+        until j < n:
+            if byte_at(sn, j) == 10:
+                nl = j
+                break
+            end
+            j += 1
+        end
+        linelen := nl >= 0 ? nl - i : n - i
+        mut endw := linelen
+        until endw > 0:
+            c := byte_at(sn, i + endw - 1)
+            if c == 13 or c == 32 or c == 9:
+                endw -= 1
+            else:
+                break
+            end
+        end
+        if endw == 0:
+            if emitted:
+                pending = true
+            end
+        else:
+            if pending:
+                co.SbPutc(b, 10)
+                pending = false
+            end
+            mut k := 0
+            until k < endw:
+                co.SbPutc(b, byte_at(sn, i + k))
+                k += 1
+            end
+            co.SbPutc(b, 10)
+            emitted = true
+        end
+        if nl < 0:
+            break
+        end
+        i = nl + 1
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+func is_thread_spawn_extern(nm: str): bool:
+    ret str.Equals(nm, "pthread_create") or str.Equals(nm, "thrd_create") or str.Equals(nm, "_beginthread") or str.Equals(nm, "_beginthreadex") or str.Equals(nm, "CreateThread") or str.Equals(nm, "clone")
+end
+
+func node_uses_spawn(a &: at.Ast, id: int): bool:
+    if id == 0:
+        ret false
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_CALL and n.a != 0:
+        an := at.Get(a, n.a)
+        if an.kind == at.AST_IDENTIFIER and str.Equals(an.name, "spawn"):
+            ret true
+        end
+    end
+    if node_uses_spawn(a, n.a) or node_uses_spawn(a, n.b) or node_uses_spawn(a, n.c) or node_uses_spawn(a, n.d):
+        ret true
+    end
+    repeat n.list.len() in i:
+        if node_uses_spawn(a, n.list.get(i)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func cg_target_is_windows(triple: str): bool:
+    if str.Len(triple) > 0:
+        ret str.Contains(triple, "windows") or str.Contains(triple, "mingw") or str.Contains(triple, "win32")
+    end
+    if SALAM_OS_WINDOWS:
+        ret true
+    else:
+        ret false
+    end
+end
+
+func cg_target_is_freestanding(triple: str): bool:
+    if str.Len(triple) == 0:
+        ret false
+    end
+    ret str.Contains(triple, "uefi") or str.Contains(triple, "salamos") or str.Contains(triple, "-none-")
+end
+
+func cg_target_is_kernel(triple: str): bool:
+    if str.Len(triple) == 0:
+        ret false
+    end
+    ret str.Contains(triple, "kernel") and str.Contains(triple, "salamos")
+end
+
+func node_may_thread(a &: at.Ast, id: int, imports: bool): bool:
+    if id == 0:
+        ret false
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_FUNC_DEF and n.is_extern and is_thread_spawn_extern(n.name):
+        ret true
+    end
+    if imports and n.kind == at.AST_IMPORT and str.Equals(n.name, "thread"):
+        ret true
+    end
+    if n.kind == at.AST_CALL and n.a != 0:
+        an := at.Get(a, n.a)
+        if an.kind == at.AST_IDENTIFIER and str.Equals(an.name, "spawn"):
+            ret true
+        end
+    end
+    if node_may_thread(a, n.a, imports) or node_may_thread(a, n.b, imports) or node_may_thread(a, n.c, imports) or node_may_thread(a, n.d, imports):
+        ret true
+    end
+    repeat n.list.len() in i:
+        if node_may_thread(a, n.list.get(i), imports):
+            ret true
+        end
+    end
+    ret false
+end
+
+func program_may_thread_impl(s &: sm.Sema, a &: at.Ast, program: int): bool:
+    if node_may_thread(a, program, true):
+        ret true
+    end
+    repeat sm.PackageCount(s) in i:
+        p := sm.PackagePathAt(s, i)
+        if not str.EndsWith(p, "std/thread/thread.salam"):
+            if node_may_thread(a, sm.PackageDeclAt(s, i), not str.EndsWith(p, "std/core/core.salam")):
+                ret true
+            end
+        end
+    end
+    ret false
+end
+
+func module_single_threaded_impl(a &: at.Ast, program: int): bool:
+    prog := at.Get(a, program)
+    repeat prog.list.len() in i:
+        did := prog.list.get(i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_IMPORT:
+            mut p := d.name
+            if d.value_kind == tok.TV_STRING and str.Len(d.value_str) > 0:
+                p = d.value_str
+            end
+            if str.Len(p) > 0 and str.Contains(p, "thread"):
+                ret false
+            end
+        end
+        if node_uses_spawn(a, did):
+            ret false
+        end
+    end
+    ret true
+end
+
+func cg_free(g &: Cg):
+    str.BufFree(g.bh)
+    str.BufFree(g.bc)
+    str.BufFree(g.blamd)
+    str.BufFree(g.blamf)
+    g.locals.free()
+    g.vec_types.free()
+    g.variant_types.free()
+    g.dyn_ifaces.free()
+    g.dyn_impls.free()
+    g.deferred.free()
+    g.deferred_globals.free()
+    g.fn_defers.free()
+    g.loop_dmark.free()
+    g.brk_goto.free()
+    g.loop_end.free()
+    g.loop_end_used.free()
+end
+
+func outd(g &: Cg, s2: str):
+    str.BufAppend(g.blamd, s2)
+end
+
+func cur_sink_len(g &: Cg): i64:
+    if g.cur == CG_OUT_H:
+        ret str.BufLen(g.bh)
+    else g.cur == CG_OUT_LAMD:
+        ret str.BufLen(g.blamd)
+    else g.cur == CG_OUT_LAMF:
+        ret str.BufLen(g.blamf)
+    end
+    ret str.BufLen(g.bc)
+end
+
+func cur_sink_mark(g &: Cg): i64:
+    if g.cur == CG_OUT_H:
+        ret str.BufLen(g.bh)
+    else g.cur == CG_OUT_LAMD:
+        ret str.BufLen(g.blamd)
+    else g.cur == CG_OUT_LAMF:
+        ret str.BufLen(g.blamf)
+    end
+    ret str.BufLen(g.bc)
+end
+
+func cg_hoist_begin(g &: Cg):
+    g.hoist = ""
+    g.hoist_pos = cur_sink_mark(g)
+    g.hoist_active = true
+end
+
+func cg_hoist_end(g &: Cg):
+    if str.Len(g.hoist) > 0:
+        body := cur_sink_take(g, g.hoist_pos)
+        out(g, g.hoist)
+        out(g, body)
+    end
+    g.hoist = ""
+    g.hoist_active = false
+end
+
+func sb_take(b &: str.StringBuilder, mark: i64): str:
+    total := str.BufLen(b)
+    if total <= mark:
+        ret ""
+    end
+    full := str.BufStr(b)
+    r := str.Substr(full, mark as int, (total - mark) as int)
+    b.len = mark
+    ret r
+end
+
+func cur_sink_take(g &: Cg, mark: i64): str:
+    if g.cur == CG_OUT_H:
+        ret sb_take(g.bh, mark)
+    else g.cur == CG_OUT_LAMD:
+        ret sb_take(g.blamd, mark)
+    else g.cur == CG_OUT_LAMF:
+        ret sb_take(g.blamf, mark)
+    end
+    ret sb_take(g.bc, mark)
+end
+
+func locals_trunc(g &: Cg, mark: int):
+    until g.locals.len() > mark:
+        _dropped := g.locals.pop()
+    end
+end
+
+pub func IsFreestandingTarget(triple: str): bool:
+    ret cg_target_is_freestanding(triple)
+end
+
+pub func IsKernelTarget(triple: str): bool:
+    ret cg_target_is_kernel(triple)
+end

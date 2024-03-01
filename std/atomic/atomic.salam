@@ -1,0 +1,185 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "atomic"
+@fa "اتمی"
+package atomic
+
+import mem
+import sync
+
+@en "I64"
+@fa "صحیح۶۴"
+pub struct I64:
+    @en "cell"
+    @fa "سلول"
+    pub cell: i64* = null
+    @en "mu"
+    @fa "قفل"
+    pub mu: sync.Mutex = sync.Mutex {}
+end
+
+@en "Flag"
+@fa "پرچم"
+pub struct Flag:
+    @en "cell"
+    @fa "سلول"
+    pub cell: i64* = null
+    @en "mu"
+    @fa "قفل"
+    pub mu: sync.Mutex = sync.Mutex {}
+end
+
+if defined(SALAM_CC_TCC):
+    func cell_new(v: i64): I64:
+        c := mem.AllocateZeroed(8 as u64) as i64*
+        c[0] = v
+        ret I64 { cell = c, mu = sync.NewMutex() }
+    end
+
+    func cell_load(a: I64): i64:
+        c := a.cell
+        sync.Lock(a.mu)
+        v := c[0]
+        sync.Unlock(a.mu)
+        ret v
+    end
+
+    func cell_store(a: I64, v: i64):
+        c := a.cell
+        sync.Lock(a.mu)
+        c[0] = v
+        sync.Unlock(a.mu)
+    end
+
+    func cell_add(a: I64, delta: i64): i64:
+        c := a.cell
+        sync.Lock(a.mu)
+        c[0] = c[0] + delta
+        v := c[0]
+        sync.Unlock(a.mu)
+        ret v
+    end
+
+    func cell_swap(a: I64, v: i64): i64:
+        c := a.cell
+        sync.Lock(a.mu)
+        old := c[0]
+        c[0] = v
+        sync.Unlock(a.mu)
+        ret old
+    end
+
+    func cell_cas(a: I64, expected: i64, next: i64): bool:
+        c := a.cell
+        sync.Lock(a.mu)
+        mut won := false
+        if c[0] == expected:
+            c[0] = next
+            won = true
+        end
+        sync.Unlock(a.mu)
+        ret won
+    end
+
+    func cell_free(a: I64):
+        mem.Free(a.cell as void*)
+        sync.Destroy(a.mu)
+    end
+else:
+    func cell_new(v: i64): I64:
+        c := mem.AllocateZeroed(8 as u64) as i64*
+        atomic_store(c, v)
+        ret I64 { cell = c, mu = sync.Mutex {} }
+    end
+
+    func cell_load(a: I64): i64: ret atomic_load(a.cell) end
+
+    func cell_store(a: I64, v: i64): atomic_store(a.cell, v) end
+
+    func cell_add(a: I64, delta: i64): i64: ret atomic_add(a.cell, delta) end
+
+    func cell_swap(a: I64, v: i64): i64: ret atomic_swap(a.cell, v) end
+
+    func cell_cas(a: I64, expected: i64, next: i64): bool:
+        ret atomic_cas(a.cell, expected, next)
+    end
+
+    func cell_free(a: I64): mem.Free(a.cell as void*) end
+end
+
+@en "NewI64"
+@fa "صحیح۶۴ جدید"
+pub func NewI64(v: i64): I64: ret cell_new(v) end
+
+@en "Load"
+@fa "بارگذاری"
+pub func Load(a: I64): i64: ret cell_load(a) end
+
+@en "Store"
+@fa "ذخیره"
+pub func Store(a: I64, v: i64): cell_store(a, v) end
+
+@en "Add"
+@fa "افزودن"
+pub func Add(a: I64, delta: i64): i64: ret cell_add(a, delta) end
+
+@en "Swap"
+@fa "تعویض"
+pub func Swap(a: I64, v: i64): i64: ret cell_swap(a, v) end
+
+@en "CompareAndSwap"
+@fa "مقایسه سپس تعویض"
+pub func CompareAndSwap(a: I64, expected: i64, next: i64): bool:
+    ret cell_cas(a, expected, next)
+end
+
+@en "DestroyI64"
+@fa "نابودسازی صحیح۶۴"
+pub func DestroyI64(a: I64): cell_free(a) end
+
+@en "NewFlag"
+@fa "پرچم جدید"
+pub func NewFlag(v: bool): Flag:
+    mut n := 0 as i64
+    if v: n = 1 end
+    c := cell_new(n)
+    ret Flag { cell = c.cell, mu = c.mu }
+end
+
+@en "Get"
+@fa "گرفتن"
+pub func Get(f: Flag): bool:
+    ret cell_load(I64 { cell = f.cell, mu = f.mu }) != 0
+end
+
+@en "Set"
+@fa "تنظیم"
+pub func Set(f: Flag, v: bool):
+    mut n := 0 as i64
+    if v: n = 1 end
+    cell_store(I64 { cell = f.cell, mu = f.mu }, n)
+end
+
+@en "TestAndSet"
+@fa "آزمون سپس تنظیم"
+pub func TestAndSet(f: Flag): bool:
+    ret cell_cas(I64 { cell = f.cell, mu = f.mu }, 0 as i64, 1 as i64)
+end
+
+@en "DestroyFlag"
+@fa "نابودسازی پرچم"
+pub func DestroyFlag(f: Flag):
+    cell_free(I64 { cell = f.cell, mu = f.mu })
+end

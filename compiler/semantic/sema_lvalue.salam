@@ -1,0 +1,134 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+func analyze_lvalue(
+    s &: Sema, a &: at.Ast, nid: int, is_lv &: bool, is_proj &: bool, root &: int
+):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        symid := scope_lookup(s, s.cur, n.name)
+        if symid == 0:
+            ret
+        end
+        is_lv = true
+        root = symid
+        ret
+    end
+    if n.kind == at.AST_THIS:
+        is_lv = true
+        ret
+    end
+    if n.kind == at.AST_MEMBER or n.kind == at.AST_INDEX:
+        analyze_lvalue(s, a, n.a, is_lv, is_proj, root)
+        if is_lv:
+            is_proj = true
+        end
+        if not is_lv and n.kind == at.AST_INDEX and n.a != 0 and str.EndsWith(at.Get(a, n.a).type_str, "*"):
+            is_lv = true
+            is_proj = true
+        end
+    end
+end
+
+func sema_classify_write(s &: Sema, a &: at.Ast, nid: int, root_out &: int): int:
+    mut is_lv := false
+    mut is_proj := false
+    mut root := 0
+    analyze_lvalue(s, a, nid, is_lv, is_proj, root)
+    root_out = root
+    if not is_lv:
+        ret LV_NOT_LVALUE
+    end
+    if root != 0 and sym_at(s, root).kind == SYM_CONST:
+        ret LV_CONST
+    end
+    if is_proj:
+        if root != 0:
+            mut rv := sym_at(s, root)
+            if rv.is_mut or rv.is_ref:
+                rv.mutated = true
+                sym_put(s, root, rv)
+            end
+        end
+        ret LV_OK
+    end
+    if root == 0:
+        ret LV_OK
+    end
+    mut rv2 := sym_at(s, root)
+    if rv2.is_mut or rv2.is_ref:
+        rv2.mutated = true
+        sym_put(s, root, rv2)
+        ret LV_OK
+    end
+    ret LV_IMMUTABLE
+end
+
+func pure_param_escapes(s &: Sema, t: int): bool:
+    if t < 0:
+        ret false
+    end
+    k := ty_at(s, t).kind
+    ret k == TY_PTR or k == TY_VEC or k == TY_MAP or k == TY_SLICE
+end
+
+func sema_check_pure_write(s &: Sema, a &: at.Ast, target: int, sp: co.SrcSpan):
+    fn := sema_pure_fn(s, a)
+    if fn == 0:
+        ret
+    end
+    mut root := target
+    mut below := 0
+    until root != 0 and (
+        at.KindOf(a, root) == at.AST_MEMBER or at.KindOf(a, root) == at.AST_INDEX
+    ):
+        below = root
+        root = at.Get(a, root).a
+    end
+    if root == 0 or at.KindOf(a, root) != at.AST_IDENTIFIER:
+        ret
+    end
+    rname := at.Get(a, root).name
+    if str.Len(rname) == 0:
+        ret
+    end
+    mut where := 0
+    symid := scope_lookup_where(s, s.cur, rname, where)
+    if symid == 0:
+        ret
+    end
+    sv := sym_at(s, symid)
+    fname := at.Get(a, fn).name
+    if sv.kind == SYM_PACKAGE and below != 0 and at.KindOf(a, below) == at.AST_MEMBER:
+        bname := at.Get(a, below).name
+        serr(
+            s, 13, sp, co.Format2(
+                i18.Tr("'pure' function '%s' cannot assign to global '%s': writing a global variable is a side effect"), co.ArgStr(fname), co.ArgStr(str.Len(bname) > 0 ? bname : rname)
+            )
+        )
+        ret
+    end
+    if sv.kind == SYM_VAR and where != 0 and scope_at(s, where).kind == SCOPE_GLOBAL:
+        serr(
+            s, 13, sp, co.Format2(
+                i18.Tr("'pure' function '%s' cannot assign to global '%s': writing a global variable is a side effect"), co.ArgStr(fname), co.ArgStr(rname)
+            )
+        )
+        ret
+    end
+    if sv.kind == SYM_PARAM and target != root and pure_param_escapes(s, sv.ty):
+        serr(
+            s, 13, sp, co.Format2(
+                i18.Tr("'pure' function '%s' cannot write through parameter '%s': the write is visible to the caller"), co.ArgStr(fname), co.ArgStr(rname)
+            )
+        )
+    end
+end

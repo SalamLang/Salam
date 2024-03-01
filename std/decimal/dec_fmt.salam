@@ -1,0 +1,222 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package decimal
+
+import bigint
+import str
+
+func _emit_digits(b &: str.StringBuilder, digits: str, scale: int):
+    n := str.Len(digits)
+    if scale <= 0:
+        str.BufAppend(b, digits)
+        ret
+    end
+    if n <= scale:
+        str.BufAppendChar(b, 48)
+        str.BufAppendChar(b, 46)
+        repeat scale - n: str.BufAppendChar(b, 48) end
+        str.BufAppend(b, digits)
+        ret
+    end
+    cut := n - scale
+    repeat cut in i: str.BufAppendChar(b, digits[i] as int) end
+    str.BufAppendChar(b, 46)
+    mut i := cut
+    until i < n:
+        str.BufAppendChar(b, digits[i] as int)
+        i += 1
+    end
+end
+
+@en "ToStr"
+@fa "به رشته"
+pub func ToStr(d: Dec): str:
+    if d.scale <= 0: ret bigint.ToStr(d.unscaled) end
+    mut a := bigint.Abs(d.unscaled)
+    digits := bigint.ToStr(a)
+    a.free()
+    mut b := str.NewBuilder()
+    if d.unscaled.sign() < 0: str.BufAppendChar(b, 45) end
+    _emit_digits(b, digits, d.scale)
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+@en "ToStrFixed"
+@fa "به رشته ثابت"
+pub func ToStrFixed(d: Dec, scale: int): str:
+    mut r := Round(d, scale)
+    s := ToStr(r)
+    r.free()
+    ret s
+end
+
+@en "FormatGrouped"
+@fa "قالب گروهی"
+pub func FormatGrouped(d: Dec, scale: int, group: str, point: str): str:
+    mut r := Round(d, scale)
+    mut a := bigint.Abs(r.unscaled)
+    digits := bigint.ToStr(a)
+    a.free()
+    neg := r.unscaled.sign() < 0
+    sc := r.scale
+    r.free()
+
+    n := str.Len(digits)
+    wn := n - sc
+
+    mut b := str.NewBuilder()
+    if neg: str.BufAppendChar(b, 45) end
+    if wn <= 0:
+        str.BufAppendChar(b, 48)
+    else:
+        repeat wn in i:
+            rem := wn - i
+            if i > 0 and rem % 3 == 0: str.BufAppend(b, group) end
+            str.BufAppendChar(b, digits[i] as int)
+        end
+    end
+    if sc > 0:
+        str.BufAppend(b, point)
+        if wn < 0: repeat 0 - wn: str.BufAppendChar(b, 48) end end
+        mut i := wn
+        if i < 0: i = 0 end
+        until i < n:
+            str.BufAppendChar(b, digits[i] as int)
+            i += 1
+        end
+    end
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+@en "Parse"
+@fa "تجزیه"
+pub func Parse(s: str, ok &: bool): Dec:
+    ok = false
+    mut norm := s
+    if str.HasPersianDigits(s) or str.HasArabicDigits(s):
+        norm = str.ToEnglishDigits(s)
+    end
+    n := str.Len(norm)
+    mut i := 0
+    until i < n and (norm[i] as int) == 32: i += 1 end
+
+    mut neg := false
+    if i < n:
+        c := norm[i] as int
+        if c == 45: neg = true i += 1
+        else c == 43: i += 1
+        end
+    end
+
+    mut digits := str.NewBuilder()
+    mut seen := 0
+    mut frac := 0
+    mut dot := false
+    mut bad := false
+    until i < n:
+        c := norm[i] as int
+        if c == 95:
+            if seen == 0: bad = true break end
+            i += 1
+            continue
+        end
+        if c == 46:
+            if dot: bad = true break end
+            dot = true
+            i += 1
+            continue
+        end
+        if c < 48 or c > 57: break end
+        str.BufAppendChar(digits, c)
+        seen += 1
+        if dot: frac += 1 end
+        i += 1
+    end
+
+    mut ex := 0
+    if not bad and i < n:
+        c := norm[i] as int
+        if c == 101 or c == 69:
+            i += 1
+            mut eneg := false
+            if i < n:
+                sc := norm[i] as int
+                if sc == 45: eneg = true i += 1
+                else sc == 43: i += 1
+                end
+            end
+            mut edig := 0
+            until i < n:
+                c2 := norm[i] as int
+                if c2 < 48 or c2 > 57: break end
+                if ex < 1000000: ex = ex * 10 + (c2 - 48) end
+                edig += 1
+                i += 1
+            end
+            if edig == 0: bad = true end
+            if eneg: ex = 0 - ex end
+        end
+    end
+
+    until i < n and (norm[i] as int) == 32: i += 1 end
+    if i < n: bad = true end
+
+    body := str.BufStr(digits)
+    str.BufFree(digits)
+    if bad or seen == 0: ret Dec {} end
+
+    mut pok := false
+    mut u := bigint.Parse(body, pok)
+    if not pok:
+        u.free()
+        ret Dec {}
+    end
+    if neg: bigint.NegateIn(u) end
+    ok = true
+    ret _adopt(u, frac - ex)
+end
+
+@en "ParseOr"
+@fa "تجزیه با پیش فرض"
+pub func ParseOr(s: str): Dec:
+    mut ok := false
+    mut v := Parse(s, ok)
+    if not ok:
+        v.free()
+        ret Dec {}
+    end
+    ret v
+end
+
+@en "ToInt"
+@fa "به صحیح"
+pub func ToInt(d: Dec, ok &: bool): i64:
+    mut t := Truncate(d, 0)
+    v := bigint.ToInt(t.unscaled, ok)
+    t.free()
+    ret v
+end
+
+@en "ToFloat"
+@fa "به اعشاری ماشین"
+pub func ToFloat(d: Dec): f64:
+    mut f := bigint.ToFloat(d.unscaled)
+    repeat d.scale: f = f / 10.0 end
+    ret f
+end

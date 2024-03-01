@@ -1,0 +1,281 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+import mem
+import compress
+import archive
+
+const _TTF_TAG_HEAD := (0x68 << 24) | (0x65 << 16) | (0x61 << 8) | 0x64
+const _TTF_TAG_MAXP := (0x6D << 24) | (0x61 << 16) | (0x78 << 8) | 0x70
+const _TTF_TAG_LOCA := (0x6C << 24) | (0x6F << 16) | (0x63 << 8) | 0x61
+const _TTF_TAG_GLYF := (0x67 << 24) | (0x6C << 16) | (0x79 << 8) | 0x66
+const _TTF_TAG_CMAP := (0x63 << 24) | (0x6D << 16) | (0x61 << 8) | 0x70
+const _TTF_TAG_HHEA := (0x68 << 24) | (0x68 << 16) | (0x65 << 8) | 0x61
+const _TTF_TAG_HMTX := (0x68 << 24) | (0x6D << 16) | (0x74 << 8) | 0x78
+const _TTF_TAG_KERN := (0x6B << 24) | (0x65 << 16) | (0x72 << 8) | 0x6E
+const _TTF_TAG_CFF := (0x43 << 24) | (0x46 << 16) | (0x46 << 8) | 0x20
+
+const _TTF_SFNT_10 := 0x00010000
+const _TTF_SFNT_TRUE := (0x74 << 24) | (0x72 << 16) | (0x75 << 8) | 0x65
+const _TTF_SFNT_OTTO := (0x4F << 24) | (0x54 << 16) | (0x54 << 8) | 0x4F
+const _TTF_SFNT_TTCF := (0x74 << 24) | (0x74 << 16) | (0x63 << 8) | 0x66
+
+@en "Font"
+@fa "قلم"
+pub struct Font:
+    @en "data"
+    @fa "داده"
+    pub data: void* = null
+    @en "size"
+    @fa "اندازه"
+    pub size: int = 0
+    @en "units_per_em"
+    @fa "واحد ام"
+    pub units_per_em: int = 0
+    @en "num_glyphs"
+    @fa "شمار گلیف‌ها"
+    pub num_glyphs: int = 0
+    @en "ascent"
+    @fa "صعود"
+    pub ascent: int = 0
+    @en "descent"
+    @fa "نزول"
+    pub descent: int = 0
+    @en "line_gap"
+    @fa "فاصله سطرها"
+    pub line_gap: int = 0
+    @en "glyf"
+    @fa "جدول گلیف"
+    pub glyf: int = 0
+    @en "glyf_len"
+    @fa "طول جدول گلیف"
+    pub glyf_len: int = 0
+    @en "loca"
+    @fa "جدول مکان"
+    pub loca: int = 0
+    @en "loca_len"
+    @fa "طول جدول مکان"
+    pub loca_len: int = 0
+    @en "hmtx"
+    @fa "جدول متریک افقی"
+    pub hmtx: int = 0
+    @en "kern"
+    @fa "جدول فاصله جفت‌ها"
+    pub kern: int = 0
+    @en "cmap_sub"
+    @fa "زیرجدول نگاشت نویسه"
+    pub cmap_sub: int = 0
+    @en "cmap_symbol"
+    @fa "نگاشت نمادین"
+    pub cmap_symbol: bool = false
+    @en "num_hmetrics"
+    @fa "شمار متریک‌های افقی"
+    pub num_hmetrics: int = 0
+    @en "loca_long"
+    @fa "مکان بلند"
+    pub loca_long: bool = false
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+end
+
+func _ttf_u8(p: void*, n: int, off: int): int:
+    if off < 0 or off >= n:
+        ret 0
+    end
+    bp := p as u8*
+    ret bp[off] as int
+end
+
+func _ttf_u16(p: void*, n: int, off: int): int:
+    ret (_ttf_u8(p, n, off) << 8) | _ttf_u8(p, n, off + 1)
+end
+
+func _ttf_i16(p: void*, n: int, off: int): int:
+    v := _ttf_u16(p, n, off)
+    if v >= 32768:
+        ret v - 65536
+    end
+    ret v
+end
+
+func _ttf_u32(p: void*, n: int, off: int): int:
+    ret (_ttf_u16(p, n, off) << 16) | _ttf_u16(p, n, off + 2)
+end
+
+func _ttf_find_table(p: void*, n: int, dir_off: int, tag: int, len_out &: int): int:
+    num_tables := _ttf_u16(p, n, dir_off + 4)
+    mut i := 0
+    until i < num_tables:
+        rec := dir_off + 12 + i * 16
+        if _ttf_u32(p, n, rec) == tag:
+            len_out = _ttf_u32(p, n, rec + 12)
+            ret _ttf_u32(p, n, rec + 8)
+        end
+        i += 1
+    end
+    len_out = 0
+    ret 0
+end
+
+func _ttf_init(f &: Font, dir_off: int): bool:
+    ver := _ttf_u32(f.data, f.size, dir_off)
+    if ver != _TTF_SFNT_10 and ver != _TTF_SFNT_TRUE:
+        ret false
+    end
+    mut tlen := 0
+    head := _ttf_find_table(f.data, f.size, dir_off, _TTF_TAG_HEAD, tlen)
+    maxp := _ttf_find_table(f.data, f.size, dir_off, _TTF_TAG_MAXP, tlen)
+    hhea := _ttf_find_table(f.data, f.size, dir_off, _TTF_TAG_HHEA, tlen)
+    if head == 0 or maxp == 0:
+        ret false
+    end
+    f.glyf = _ttf_find_table(f.data, f.size, dir_off, _TTF_TAG_GLYF, tlen)
+    f.glyf_len = tlen
+    f.loca = _ttf_find_table(f.data, f.size, dir_off, _TTF_TAG_LOCA, tlen)
+    f.loca_len = tlen
+    f.hmtx = _ttf_find_table(f.data, f.size, dir_off, _TTF_TAG_HMTX, tlen)
+    f.kern = _ttf_find_table(f.data, f.size, dir_off, _TTF_TAG_KERN, tlen)
+    if f.glyf == 0 or f.loca == 0:
+        ret false
+    end
+    f.units_per_em = _ttf_u16(f.data, f.size, head + 18)
+    f.loca_long = _ttf_i16(f.data, f.size, head + 50) != 0
+    f.num_glyphs = _ttf_u16(f.data, f.size, maxp + 4)
+    if f.units_per_em <= 0 or f.num_glyphs <= 0:
+        ret false
+    end
+    if hhea != 0:
+        f.ascent = _ttf_i16(f.data, f.size, hhea + 4)
+        f.descent = _ttf_i16(f.data, f.size, hhea + 6)
+        f.line_gap = _ttf_i16(f.data, f.size, hhea + 8)
+        f.num_hmetrics = _ttf_u16(f.data, f.size, hhea + 34)
+    end
+    if f.ascent == 0 and f.descent == 0:
+        f.ascent = (f.units_per_em * 4) / 5
+        f.descent = 0 - f.units_per_em / 5
+    end
+    _ttf_pick_cmap(f, _ttf_find_table(f.data, f.size, dir_off, _TTF_TAG_CMAP, tlen))
+    ret true
+end
+
+@en "ParseFontIndex"
+@fa "خواندن قلم با اندیس"
+pub func ParseFontIndex(p: void*, n: int, index: int, ok &: bool): Font:
+    mut f := Font {}
+    ok = false
+    if p == null or n < 12:
+        ret f
+    end
+    f.data = mem.Allocate(n as u64)
+    if f.data == null:
+        ret f
+    end
+    mem.Copy(f.data, p, n as u64)
+    f.size = n
+    mut dir := 0
+    if _ttf_u32(f.data, f.size, 0) == _TTF_SFNT_TTCF:
+        count := _ttf_u32(f.data, f.size, 8)
+        if index < 0 or index >= count:
+            FreeFont(f)
+            ret f
+        end
+        dir = _ttf_u32(f.data, f.size, 12 + index * 4)
+    else:
+        if index != 0:
+            FreeFont(f)
+            ret f
+        end
+    end
+    if not _ttf_init(f, dir):
+        FreeFont(f)
+        ret f
+    end
+    f.ok = true
+    ok = true
+    ret f
+end
+
+@en "ParseFont"
+@fa "خواندن قلم"
+pub func ParseFont(p: void*, n: int, ok &: bool): Font:
+    ret ParseFontIndex(p, n, 0, ok)
+end
+
+@en "LoadFont"
+@fa "بارگذاری قلم"
+pub func LoadFont(path: str, ok &: bool): Font:
+    ret LoadFontIndex(path, 0, ok)
+end
+
+@en "LoadFontIndex"
+@fa "بارگذاری قلم با اندیس"
+pub func LoadFontIndex(path: str, index: int, ok &: bool): Font:
+    ok = false
+    mut read_ok := false
+    buf := archive.ReadBinaryFile(path, read_ok)
+    if not read_ok:
+        compress.BufFree(buf)
+        ret Font {}
+    end
+    out := ParseFontIndex(buf.data, buf.len, index, ok)
+    compress.BufFree(buf)
+    ret out
+end
+
+@en "FreeFont"
+@fa "آزادسازی قلم"
+pub func FreeFont(f &: Font):
+    if f.data != null:
+        mem.Free(f.data)
+    end
+    f.data = null
+    f.size = 0
+    f.ok = false
+    f.num_glyphs = 0
+    f.units_per_em = 0
+end
+
+@en "FontValid"
+@fa "قلم معتبر"
+pub func FontValid(f: Font): bool:
+    ret f.ok and f.data != null and f.units_per_em > 0
+end
+
+@en "IsCFFFont"
+@fa "قلم سی‌اف‌اف است"
+pub func IsCFFFont(p: void*, n: int): bool:
+    if p == null or n < 12:
+        ret false
+    end
+    mut tlen := 0
+    if _ttf_u32(p, n, 0) == _TTF_SFNT_OTTO:
+        ret true
+    end
+    ret _ttf_find_table(p, n, 0, _TTF_TAG_CFF, tlen) != 0
+end
+
+@en "UnitsPerEm"
+@fa "واحد در ام"
+pub func UnitsPerEm(f: Font): int:
+    ret f.units_per_em
+end
+
+@en "NumGlyphs"
+@fa "تعداد نویسه‌ها"
+pub func NumGlyphs(f: Font): int:
+    ret f.num_glyphs
+end

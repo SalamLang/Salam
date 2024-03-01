@@ -1,0 +1,116 @@
+package nativegen
+
+const CF_OFF := 1
+const CF_DEF := 2
+const CF_REG := 3
+const CF_REMEMBER := 4
+const CF_RESTORE_STATE := 5
+const CF_SAME := 6
+
+func cf_on(g &: Ng): bool:
+    ret (g.os == NG_OS_LINUX or g.os == NG_OS_MACOS) and (g.arch == NG_ARCH_A64 or g.arch == NG_ARCH_RV64)
+end
+
+func cf_begin(g &: Ng):
+    g.cf_open = cf_on(g)
+    if not g.cf_open:
+        ret
+    end
+    g.cf_sym.push(g.f_sym)
+    g.cf_e0.push(g.cfe_at.len())
+    g.cf_en.push(0)
+end
+
+func cf_ev(g &: Ng, at: int, k: int, a: int, b: int):
+    if not g.cf_open:
+        ret
+    end
+    g.cfe_at.push(at)
+    g.cfe_k.push(k)
+    g.cfe_a.push(a)
+    g.cfe_b.push(b)
+    n := g.cf_en.len() - 1
+    g.cf_en[n] = g.cf_en[n] + 1
+end
+
+func eh_sleb(g &: Ng, v: int):
+    mut x := v
+    until true:
+        b := x & 127
+        x = x >> 7
+        if (x == 0 and (b & 64) == 0) or (x == 0 - 1 and (b & 64) != 0):
+            eh_u8(g, b)
+            ret
+        end
+        eh_u8(g, b | 128)
+    end
+end
+
+func build_eh_cf(g &: Ng):
+    g.s_eh.clear()
+    if g.cf_sym.len() == 0:
+        ret
+    end
+    rv := g.arch == NG_ARCH_RV64
+    eh_le(g, 0 as i64, 4)
+    eh_le(g, 0 as i64, 4)
+    eh_u8(g, 1)
+    eh_u8(g, 0x7A)
+    eh_u8(g, 0x52)
+    eh_u8(g, 0)
+    eh_uleb(g, rv ? 1 : 4)
+    eh_sleb(g, 0 - 8)
+    eh_uleb(g, rv ? 1 : 30)
+    eh_uleb(g, 1)
+    eh_u8(g, 0x1B)
+    eh_u8(g, 0x0C)
+    eh_uleb(g, rv ? 2 : 31)
+    eh_uleb(g, 0)
+    until (g.s_eh.len() % 8) != 0:
+        eh_u8(g, 0)
+    end
+    eh_put32(g, 0, g.s_eh.len() - 4)
+    repeat g.cf_sym.len() in f:
+        fs := g.cf_sym[f]
+        if g.sy_live.len() > 0 and (fs >= g.sy_live.len() or not g.sy_live[fs]):
+            continue
+        end
+        if not g.sy_def[fs] or g.sy_sec[fs] != SEC_TEXT:
+            continue
+        end
+        start := g.s_eh.len()
+        eh_le(g, 0 as i64, 4)
+        eh_le(g, (start + 4) as i64, 4)
+        add_reloc(g, SEC_EHFRAME, g.s_eh.len(), fs, R_PC32, 0 as i64)
+        eh_le(g, 0 as i64, 4)
+        eh_le(g, g.sy_size[fs] as i64, 4)
+        eh_uleb(g, 0)
+        mut loc := 0
+        repeat g.cf_en[f] in q:
+            e := g.cf_e0[f] + q
+            eh_advance(g, loc, g.cfe_at[e])
+            k := g.cfe_k[e]
+            a := g.cfe_a[e]
+            if k == CF_OFF:
+                eh_cfa(g, a)
+            else k == CF_DEF:
+                eh_u8(g, 0x0C)
+                eh_uleb(g, a)
+                eh_uleb(g, g.cfe_b[e])
+            else k == CF_REG:
+                eh_u8(g, 0x80 | a)
+                eh_uleb(g, g.cfe_b[e] / 8)
+            else k == CF_REMEMBER:
+                eh_u8(g, 0x0A)
+            else k == CF_RESTORE_STATE:
+                eh_u8(g, 0x0B)
+            else k == CF_SAME:
+                eh_u8(g, 0xC0 | a)
+            end
+        end
+        until (g.s_eh.len() % 8) != 0:
+            eh_u8(g, 0)
+        end
+        eh_put32(g, start, g.s_eh.len() - start - 4)
+    end
+end

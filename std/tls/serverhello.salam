@@ -1,0 +1,399 @@
+package tls
+
+func _pick_suite13(chi: ClientHelloInfo): int:
+    mut prefs: int[3]
+    prefs[0] = TLS_CHACHA20_POLY1305_SHA256
+    prefs[1] = TLS_AES_128_GCM_SHA256
+    prefs[2] = TLS_AES_256_GCM_SHA384
+    mut p := 0
+    until p < 3:
+        mut j := 0
+        until j < chi.nsuites:
+            if _chi_suite_at(chi, j) == prefs[p]:
+                ret prefs[p]
+            end
+            j += 1
+        end
+        p += 1
+    end
+    ret 0
+end
+
+func _pick_suite12(chi: ClientHelloInfo, k: PrivateKey): int:
+    mut prefs: int[3]
+    if k.pk_alg == PK_RSA:
+        prefs[0] = TLS12_ECDHE_RSA_CHACHA20_SHA256
+        prefs[1] = TLS12_ECDHE_RSA_AES128_GCM_SHA256
+        prefs[2] = TLS12_ECDHE_RSA_AES256_GCM_SHA384
+    else:
+        prefs[0] = TLS12_ECDHE_ECDSA_CHACHA20_SHA256
+        prefs[1] = TLS12_ECDHE_ECDSA_AES128_GCM_SHA256
+        prefs[2] = TLS12_ECDHE_ECDSA_AES256_GCM_SHA384
+    end
+    mut p := 0
+    until p < 3:
+        mut j := 0
+        until j < chi.nsuites:
+            if _chi_suite_at(chi, j) == prefs[p]:
+                ret prefs[p]
+            end
+            j += 1
+        end
+        p += 1
+    end
+    ret 0
+end
+
+func _pick_sig_scheme(chi: ClientHelloInfo, k: PrivateKey): int:
+    mut want1 := 0
+    mut want2 := 0
+    if k.pk_alg == PK_RSA:
+        want1 = SA_RSA_PSS_RSAE_SHA256
+        want2 = SA_RSA_PSS_RSAE_SHA384
+    else if k.pk_alg == PK_EC_P256:
+        want1 = SA_ECDSA_P256_SHA256
+    else if k.pk_alg == PK_EC_P384:
+        want1 = SA_ECDSA_P384_SHA384
+    end
+    if want1 == 0:
+        ret 0
+    end
+    mut j := 0
+    until j < chi.nsigalgos:
+        v := _chi_sigalgo_at(chi, j)
+        if v == want1:
+            ret want1
+        end
+        if want2 != 0 and v == want2:
+            ret want2
+        end
+        j += 1
+    end
+    ret want1
+end
+
+func _hs_server_kx_gen(h &: Handshake, group: int): bool:
+    h.group = group
+    if group == GROUP_X25519:
+        _bufreset(h.priv)
+        _putzeros(h.priv, 32)
+        crypto.RandomBytes(h.priv.p, 32)
+        _bufreset(h.pub_key)
+        _putzeros(h.pub_key, 32)
+        _x25519_base(h.priv.p, h.pub_key.p)
+        ret true
+    end
+    if group != GROUP_SECP256R1 and group != GROUP_SECP384R1:
+        ret false
+    end
+    mut cv := _curve_p256()
+    mut is384 := false
+    if group == GROUP_SECP384R1:
+        cv = _curve_p384()
+        is384 = true
+    end
+    _bufreset(h.ecpriv)
+    _putzeros(h.ecpriv, cv.nb)
+    crypto.RandomBytes(h.ecpriv.p, cv.nb)
+    mut ecx := _newbuf(cv.nb)
+    defer _buf_free(ecx)
+    _putzeros(ecx, cv.nb)
+    mut ecy := _newbuf(cv.nb)
+    defer _buf_free(ecy)
+    _putzeros(ecy, cv.nb)
+    mut basemul_ok := false
+    if is384:
+        basemul_ok = _p384_base_mul(h.ecpriv.p, ecx.p, ecy.p)
+    else:
+        basemul_ok = _p256_base_mul(h.ecpriv.p, ecx.p, ecy.p)
+    end
+    if not basemul_ok:
+        ret false
+    end
+    _bufreset(h.ecpub)
+    _put8(h.ecpub, 4)
+    _putbuf(h.ecpub, ecx)
+    _putbuf(h.ecpub, ecy)
+    ret true
+end
+
+func _hs_server_kx_finish(h &: Handshake, peer_pub: Buf): bool:
+    if h.group == GROUP_X25519:
+        _bufreset(h.shared)
+        _putzeros(h.shared, 32)
+        ret _x25519_shared(h.priv.p, peer_pub.p, h.shared.p)
+    end
+    mut cv := _curve_p256()
+    if h.group == GROUP_SECP384R1:
+        cv = _curve_p384()
+    end
+    _bufreset(h.shared)
+    _putzeros(h.shared, cv.nb)
+    ret _ec_ecdh(cv, h.ecpriv.p, peer_pub.p, peer_pub.len, h.shared.p)
+end
+
+func _hs_server_kx(h &: Handshake, group: int, peer_pub: Buf): bool:
+    if not _hs_server_kx_gen(h, group):
+        ret false
+    end
+    ret _hs_server_kx_finish(h, peer_pub)
+end
+
+func _hs_build_server_hello(h &: Handshake, chi: ClientHelloInfo, suite: int, tls13: bool, out &: Buf): bool:
+    _bufreset(out)
+    _put8(out, HS_SERVER_HELLO)
+    lenmark := out.len
+    _put24(out, 0)
+    body := out.len
+
+    _put16(out, TLS12)
+    mut rnd := _newbuf(32)
+    defer _buf_free(rnd)
+    _putzeros(rnd, 32)
+    crypto.RandomBytes(rnd.p, 32)
+    _putbuf(out, rnd)
+    _bufreset(h.srand)
+    _putbuf(h.srand, rnd)
+
+    _put8(out, chi.session_id.len)
+    _putbuf(out, chi.session_id)
+
+    _put16(out, suite)
+    _put8(out, 0)
+
+    extmark := out.len
+    _put16(out, 0)
+    extstart := out.len
+
+    if tls13:
+        m1 := _ext_open(out, EXT_SUPPORTED_VERSIONS)
+        _put16(out, TLS13)
+        _ext_close(out, m1)
+
+        m2 := _ext_open(out, EXT_KEY_SHARE)
+        _put16(out, chi.kx_group)
+        if chi.kx_group == GROUP_X25519:
+            _put16(out, h.pub_key.len)
+            _putbuf(out, h.pub_key)
+        else:
+            _put16(out, h.ecpub.len)
+            _putbuf(out, h.ecpub)
+        end
+        _ext_close(out, m2)
+    else:
+        if chi.ext_ems:
+            m3 := _ext_open(out, EXT_EXTENDED_MASTER_SECRET)
+            _ext_close(out, m3)
+            h.ems = true
+        end
+        m4 := _ext_open(out, EXT_RENEGOTIATION_INFO)
+        _put8(out, 0)
+        _ext_close(out, m4)
+    end
+
+    _patch16(out, extmark, out.len - extstart)
+    _patch24(out, lenmark, out.len - body)
+    ret true
+end
+
+func _hs_build_encrypted_extensions(out &: Buf):
+    _bufreset(out)
+    _put8(out, HS_ENCRYPTED_EXTENSIONS)
+    lenmark := out.len
+    _put24(out, 0)
+    body := out.len
+    _put16(out, 0)
+    _patch24(out, lenmark, out.len - body)
+end
+
+func _hs_build_certificate_msg(chain: Roots, tls13: bool, out &: Buf):
+    _bufreset(out)
+    _put8(out, HS_CERTIFICATE)
+    lenmark := out.len
+    _put24(out, 0)
+    body := out.len
+    if tls13:
+        _put8(out, 0)
+    end
+    listmark := out.len
+    _put24(out, 0)
+    listbody := out.len
+    mut i := 0
+    until i < chain.count:
+        cr := _roots_get(chain, i)
+        _put24(out, cr.len)
+        repeat cr.len in j:
+            _put8(out, _rdat(cr, j))
+        end
+        if tls13:
+            _put16(out, 0)
+        end
+        i += 1
+    end
+    _patch24(out, listmark, out.len - listbody)
+    _patch24(out, lenmark, out.len - body)
+end
+
+func _hs_build_certificate_verify(h: Handshake, k: PrivateKey, scheme: int, th: Buf, out &: Buf): bool:
+    mut content := _newbuf(128)
+    defer _buf_free(content)
+    _hs_cv_content(h, th, content)
+
+    mut kind := 0
+    if scheme == SA_ECDSA_P384_SHA384 or scheme == SA_RSA_PSS_RSAE_SHA384:
+        kind = 1
+    end
+    hlen := _hash_size(kind)
+    mut digest := _newbuf(hlen)
+    defer _buf_free(digest)
+    _putzeros(digest, hlen)
+    _hash_oneshot(kind, content.p, content.len, digest.p)
+
+    mut cv := _curve_p256()
+    if scheme == SA_ECDSA_P384_SHA384:
+        cv = _curve_p384()
+    end
+    mut sig := _newbuf(512)
+    defer _buf_free(sig)
+    mut rb := _newbuf(cv.nb)
+    defer _buf_free(rb)
+    mut sb := _newbuf(cv.nb)
+    defer _buf_free(sb)
+    mut der := _newbuf(2 * cv.nb + 8)
+    defer _buf_free(der)
+    mut siglen := 0
+    mut sign_ok := false
+
+    if scheme == SA_RSA_PSS_RSAE_SHA256 or scheme == SA_RSA_PSS_RSAE_SHA384:
+        _putzeros(sig, k.rsa_n.len)
+        sign_ok = _rsa_sign_pss(kind, digest.p, k.rsa_n, k.rsa_e, k.rsa_d, k.rsa_phi, hlen, sig.p)
+        siglen = k.rsa_n.len
+    else if scheme == SA_ECDSA_P256_SHA256 or scheme == SA_ECDSA_P384_SHA384:
+        _putzeros(rb, cv.nb)
+        _putzeros(sb, cv.nb)
+        if _ecdsa_sign(cv, kind, k.ec_scalar.p, digest.p, hlen, rb.p, sb.p):
+            _ecdsa_der_encode(rb.p, sb.p, cv.nb, der)
+            _putbuf(sig, der)
+            siglen = der.len
+            sign_ok = true
+        end
+    end
+    if not sign_ok:
+        ret false
+    end
+
+    _bufreset(out)
+    _put8(out, HS_CERTIFICATE_VERIFY)
+    lenmark := out.len
+    _put24(out, 0)
+    mbody := out.len
+    _put16(out, scheme)
+    _put16(out, siglen)
+    repeat siglen in i:
+        _put8(out, _bufat(sig, i))
+    end
+    _patch24(out, lenmark, out.len - mbody)
+    ret true
+end
+
+func _pick_sig_scheme12(k: PrivateKey): int:
+    if k.pk_alg == PK_RSA:
+        ret SA_RSA_PKCS1_SHA256
+    end
+    if k.pk_alg == PK_EC_P384:
+        ret SA_ECDSA_P384_SHA384
+    end
+    ret SA_ECDSA_P256_SHA256
+end
+
+func _hs_build_ske(h: Handshake, k: PrivateKey, scheme: int, out &: Buf): bool:
+    mut params := _newbuf(256)
+    defer _buf_free(params)
+    _put8(params, 3)
+    _put16(params, h.group)
+    if h.group == GROUP_X25519:
+        _put8(params, h.pub_key.len)
+        _putbuf(params, h.pub_key)
+    else:
+        _put8(params, h.ecpub.len)
+        _putbuf(params, h.ecpub)
+    end
+
+    mut signed := _newbuf(128 + params.len)
+    defer _buf_free(signed)
+    _putbuf(signed, h.crand)
+    _putbuf(signed, h.srand)
+    _putbuf(signed, params)
+
+    mut kind := 0
+    if scheme == SA_ECDSA_P384_SHA384 or scheme == SA_RSA_PKCS1_SHA384:
+        kind = 1
+    end
+    hlen := _hash_size(kind)
+    mut digest := _newbuf(hlen)
+    defer _buf_free(digest)
+    _putzeros(digest, hlen)
+    _hash_oneshot(kind, signed.p, signed.len, digest.p)
+
+    mut cv := _curve_p256()
+    if scheme == SA_ECDSA_P384_SHA384:
+        cv = _curve_p384()
+    end
+    mut sig := _newbuf(512)
+    defer _buf_free(sig)
+    mut rb := _newbuf(cv.nb)
+    defer _buf_free(rb)
+    mut sb := _newbuf(cv.nb)
+    defer _buf_free(sb)
+    mut der := _newbuf(2 * cv.nb + 8)
+    defer _buf_free(der)
+    mut siglen := 0
+    mut sign_ok := false
+    if scheme == SA_RSA_PKCS1_SHA256 or scheme == SA_RSA_PKCS1_SHA384:
+        _putzeros(sig, k.rsa_n.len)
+        sign_ok = _rsa_sign_pkcs1(kind, digest.p, k.rsa_n, k.rsa_e, k.rsa_d, k.rsa_phi, sig.p)
+        siglen = k.rsa_n.len
+    else if scheme == SA_ECDSA_P256_SHA256 or scheme == SA_ECDSA_P384_SHA384:
+        _putzeros(rb, cv.nb)
+        _putzeros(sb, cv.nb)
+        if _ecdsa_sign(cv, kind, k.ec_scalar.p, digest.p, hlen, rb.p, sb.p):
+            _ecdsa_der_encode(rb.p, sb.p, cv.nb, der)
+            _putbuf(sig, der)
+            siglen = der.len
+            sign_ok = true
+        end
+    end
+    if not sign_ok:
+        ret false
+    end
+
+    _bufreset(out)
+    _put8(out, HS_SERVER_KEY_EXCHANGE)
+    lenmark := out.len
+    _put24(out, 0)
+    mbody := out.len
+    _putbuf(out, params)
+    _put16(out, scheme)
+    _put16(out, siglen)
+    repeat siglen in i:
+        _put8(out, _bufat(sig, i))
+    end
+    _patch24(out, lenmark, out.len - mbody)
+    ret true
+end
+
+func _tls12_install_keys_server(h &: Handshake): bool:
+    klen := _cipher_keylen(h.cipher)
+    ivlen := _tk12_ivlen(h.cipher)
+    total := 2 * klen + 2 * ivlen
+    mut kb := _newbuf(total)
+    defer _buf_wipe(kb)
+    _putzeros(kb, total)
+    _tls12_key_block(h.hash, h.master.p, h.master.len, h.srand, h.crand, kb.p, total)
+
+    _tk_free(h.rec.rxk)
+    _tk_free(h.rec.txk)
+    h.rec.rxk = _tk_from_block(kb, 0, klen, 2 * klen, ivlen, h.cipher)
+    h.rec.txk = _tk_from_block(kb, klen, klen, 2 * klen + ivlen, ivlen, h.cipher)
+    ret h.rec.txk.live and h.rec.rxk.live
+end

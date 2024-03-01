@@ -1,0 +1,155 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+package main
+
+import image
+import compress
+import testing
+
+// A small gradient picture (odd sizes, so padding and dummy blocks are used).
+func make_picture(w: int, h: int): image.Image:
+    mut img := image.New(w, h)
+    repeat h in y:
+        repeat w in x:
+            image.SetPixel(img, x, y, image.RGB((x * 9) % 256, (y * 11) % 256, ((x + y) * 5) % 256))
+        end
+    end
+    ret img
+end
+
+func byte_at(b: compress.ByteBuf, i: int): int:
+    ret compress.BufGet(b, i)
+end
+
+func check_encode(subsample: bool, quality: int):
+    mut img := make_picture(37, 21)
+    opts := image.JPEGOptions { quality = quality, subsample = subsample, density_unit = 1, x_density = 150, y_density = 300, comment = "hi" }
+    mut whole := image.EncodeJPEGOptions(img, opts)
+    // SOI, then JFIF with the density
+    testing.AssertEqInt(byte_at(whole, 0), 0xFF)
+    testing.AssertEqInt(byte_at(whole, 1), 0xD8)
+    testing.AssertEqInt(byte_at(whole, 13), 1)
+    testing.AssertEqInt(byte_at(whole, 14) * 256 + byte_at(whole, 15), 150)
+    testing.AssertEqInt(byte_at(whole, 16) * 256 + byte_at(whole, 17), 300)
+    // the comment marker follows
+    testing.AssertEqInt(byte_at(whole, 20), 0xFF)
+    testing.AssertEqInt(byte_at(whole, 21), 0xFE)
+    testing.AssertEqInt(byte_at(whole, whole.len - 1), 0xD9)
+
+    // the same picture fed row by row gives the same file
+    mut s := image.NewJPEGStream(37, 21, opts)
+    testing.AssertTrue(s.ok)
+    bp := img.pixels as u8*
+    repeat 21 in y:
+        image.JPEGStreamWriteRow(s, ((bp as i64) + (y as i64) * 37 * 4) as u8*, 4)
+    end
+    testing.AssertTrue(image.JPEGStreamFinish(s))
+    mut streamed := s.out
+    testing.AssertTrue(compress.BufEquals(whole, streamed))
+    compress.BufFree(streamed)
+
+    // it decodes back to the picture
+    mut ok := false
+    mut back := image.DecodeJPEG(whole.data, whole.len, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(back.width, 37)
+    testing.AssertEqInt(back.height, 21)
+    mut worst := 0
+    repeat 21 in y:
+        repeat 37 in x:
+            a := image.GetPixel(img, x, y)
+            b := image.GetPixel(back, x, y)
+            d := math_abs((a.g as int) - (b.g as int))
+            if d > worst: worst = d end
+        end
+    end
+    println "subsample", subsample, "quality", quality, "max green error small:", worst <= (quality >= 100 ? 3 : 40)
+    image.Free(back)
+    compress.BufFree(whole)
+    image.Free(img)
+end
+
+func math_abs(v: int): int:
+    if v < 0: ret 0 - v end
+    ret v
+end
+
+func check_unfinished:
+    mut s := image.NewJPEGStream(8, 8, image.JPEGOptions {})
+    testing.AssertTrue(s.ok)
+    mut strip := image.New(8, 3)
+    image.JPEGStreamWrite(s, strip)
+    image.Free(strip)
+    testing.AssertFalse(image.JPEGStreamFinish(s))
+    compress.BufFree(s.out)
+    bad := image.NewJPEGStream(0, 5, image.JPEGOptions {})
+    testing.AssertFalse(bad.ok)
+end
+
+func check_resample:
+    // 4x2 -> 2x1: each output pixel is the mean of a 2x2 square
+    mut img := image.New(4, 2)
+    image.SetPixel(img, 0, 0, image.RGB(0, 0, 0))
+    image.SetPixel(img, 1, 0, image.RGB(100, 0, 0))
+    image.SetPixel(img, 0, 1, image.RGB(100, 0, 0))
+    image.SetPixel(img, 1, 1, image.RGB(200, 0, 0))
+    image.SetPixel(img, 2, 0, image.RGB(10, 20, 30))
+    image.SetPixel(img, 3, 0, image.RGB(10, 20, 30))
+    image.SetPixel(img, 2, 1, image.RGB(10, 20, 30))
+    image.SetPixel(img, 3, 1, image.RGB(10, 20, 31))
+    mut small := image.ResizeArea(img, 2, 1)
+    testing.AssertEqInt(small.width, 2)
+    testing.AssertEqInt(small.height, 1)
+    p0 := image.GetPixel(small, 0, 0)
+    p1 := image.GetPixel(small, 1, 0)
+    println "area means:", p0.r as int, p1.r as int, p1.g as int, p1.b as int, p0.a as int
+    image.Free(small)
+
+    // a bigger picture: row by row equals all at once
+    mut pic := make_picture(37, 21)
+    mut once := image.ResizeArea(pic, 10, 7)
+    mut r := image.NewAreaResampler(37, 21, 10, 7)
+    bp := pic.pixels as u8*
+    repeat 21 in y:
+        image.AreaResamplerPushRow(r, ((bp as i64) + (y as i64) * 37 * 4) as u8*, 4)
+    end
+    image.AreaResamplerFree(r)
+    mut rows := r.out
+    mut same := true
+    repeat 7 in y:
+        repeat 10 in x:
+            if not image.Equals(image.GetPixel(once, x, y), image.GetPixel(rows, x, y)): same = false end
+        end
+    end
+    println "row by row == whole:", same
+    // growing works too
+    mut big := image.ResizeArea(img, 8, 4)
+    println "grown:", big.width, big.height, image.GetPixel(big, 0, 0).r as int
+    image.Free(big)
+    image.Free(rows)
+    image.Free(once)
+    image.Free(pic)
+    image.Free(img)
+end
+
+func main:
+    check_encode(true, 75)
+    check_encode(false, 100)
+    check_encode(false, 90)
+    check_unfinished()
+    check_resample()
+    ret testing.Summary()
+end

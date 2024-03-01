@@ -1,0 +1,148 @@
+package driver
+
+import str
+
+include tok "../token.salam"
+include src "../source.salam"
+include lg "../logger.salam"
+include at "../ast.salam"
+include lp "../langpack.salam"
+include lx "../lexer/lexer.salam"
+include ps "../parser/parser.salam"
+include cc "../condcomp.salam"
+include sm "../semantic/semantic.salam"
+include lv "../llvmgen/llvmgen.salam"
+
+func default_llvm_output(module: str, mode: int, triple: str): str:
+    win := triple_is_windows(triple)
+    msvc := str.Contains(triple, "msvc")
+    mut ext := ".ll"
+    if mode == lv.LV_OUT_ASM:
+        ext = ".s"
+    else mode == lv.LV_OUT_OBJ:
+        ext = msvc ? ".obj" : ".o"
+    else mode == lv.LV_OUT_BITCODE:
+        ext = ".bc"
+    else mode == lv.LV_OUT_EXEC:
+        ext = win ? ".exe" : ""
+    else:
+        ext = ".ll"
+    end
+    ret module + ext
+end
+
+func ll_add_link(links &: Vector<str>, kinds &: Vector<str>, lib: str, kind: str):
+    if str.Len(lib) == 0:
+        ret
+    end
+    mut seen := false
+    repeat links.len() in i:
+        if str.Equals(links.get(i), lib):
+            seen = true
+        end
+    end
+    if not seen:
+        links.push(lib)
+        kinds.push(kind)
+    end
+end
+
+func resolve_host_cc(): str:
+    if SALAM_OS_WINDOWS:
+        ret "gcc"
+    else:
+        ret "cc"
+    end
+end
+
+func ll_scan_links(lgr: lg.Logger, dir: str, a &: at.Ast, prog: int, links &: Vector<str>, kinds &: Vector<str>):
+    pn := at.Get(a, prog)
+    repeat pn.list.len() in i:
+        d := at.Get(a, pn.list.get(i))
+        if d.kind == at.AST_LINK:
+            mut lib := ""
+            if d.value_kind == tok.TV_STRING:
+                lib = d.value_str
+            end
+            _np := native_prepare(lgr, dir, lib, d.name, resolve_host_cc())
+            ll_add_link(links, kinds, lib, d.name)
+        end
+    end
+end
+
+func ll_enqueue_imports(a &: at.Ast, prog: int, dir: str, lang: str, work &: Vector<str>):
+    pn := at.Get(a, prog)
+    repeat pn.list.len() in i:
+        d := at.Get(a, pn.list.get(i))
+        if d.kind != at.AST_IMPORT:
+            continue
+        end
+        mut ipath := d.type_str
+        if str.Len(ipath) == 0:
+            ipath = sm.ResolveImportNode(a, dir, pn.list.get(i), lang)
+        end
+        if str.Len(ipath) == 0:
+            continue
+        end
+        mut known := false
+        repeat work.len() in j:
+            if str.Equals(work.get(j), ipath):
+                known = true
+            end
+        end
+        if not known:
+            work.push(ipath)
+            ll_enqueue_pkg_siblings(ipath, work)
+        end
+    end
+end
+
+func ll_enqueue_pkg_siblings(path: str, work &: Vector<str>):
+    pfiles := sm.PackageFiles(path)
+    mut pi := 1
+    until pi < pfiles.len():
+        ppath := pfiles.get(pi)
+        mut dup := false
+        repeat work.len() in pj:
+            if str.Equals(work.get(pj), ppath):
+                dup = true
+            end
+        end
+        if not dup:
+            work.push(ppath)
+        end
+        pi += 1
+    end
+end
+
+func ll_gather_links(
+    lgr: lg.Logger, pack: lp.Langpack, main_path: str, a &: at.Ast, main_prog: int, main_lang: str, table: cc.Table, links &: Vector<str>, kinds &: Vector<str>
+):
+    ll_scan_links(lgr, dir_of(main_path), a, main_prog, links, kinds)
+    mut work := Vector {} as Vector<str>
+    defer work.free()
+    ll_enqueue_imports(a, main_prog, dir_of(main_path), main_lang, work)
+    ll_enqueue_pkg_siblings(main_path, work)
+    mut wi := 0
+    until wi < work.len():
+        path := work.get(wi)
+        mut sf := src.New()
+        if not src.Load(path, sf):
+            wi += 1
+            continue
+        end
+        lg.AddDiagSource(lgr, path, sf.text, sf.len)
+        mp := lx.Detect(sf, pack)
+        mut toks := tok.StreamNew(path)
+        _lok := lx.Run(lgr, mp, sf, toks)
+        mut aa := at.NewAst()
+        mut prog2 := 0
+        _pok := ps.Run(lgr, toks, aa, prog2)
+        tok.StreamFree(toks)
+        _ck := cc.PruneProgram(aa, lgr, path, table, prog2)
+        ll_scan_links(lgr, dir_of(path), aa, prog2, links, kinds)
+        ll_enqueue_imports(aa, prog2, dir_of(path), lp.Code(mp), work)
+        at.FreeAst(aa)
+        wi += 1
+    end
+end

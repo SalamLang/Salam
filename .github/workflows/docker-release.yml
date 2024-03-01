@@ -1,0 +1,101 @@
+---
+name: 🐳 Docker - Build & Publish Salam Runtime Image
+# checkov:skip=CKV_GHA_7:inputs are only ever read via env: indirection, never interpolated into a run: script
+
+on: # zizmor: ignore[dangerous-triggers]
+  workflow_run:
+    workflows: ['🚀 Compiler - Build & Release Binaries']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Salam version to publish (e.g. 0.2.9); leave blank to resolve the latest GitHub release'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    name: Build multi-arch image and push to Docker Hub
+    runs-on: ubuntu-24.04
+    if: |
+      github.repository == 'SalamLang/Salam' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        startsWith(github.event.workflow_run.head_commit.message, 'release:')))
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Resolve Salam version to publish
+        id: resolve
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          set -eu
+          if [ -n "${VERSION_INPUT:-}" ]; then
+            VERSION="$VERSION_INPUT"
+          else
+            TAG=$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+                    "https://github.com/SalamLang/Salam/releases/latest")
+            VERSION="${TAG##*/v}"
+          fi
+          echo "Publishing Salam ${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Check Docker Hub credentials are configured
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -eu
+          missing=''
+          [ -n "${DOCKERHUB_USERNAME:-}" ] || missing="${missing} DOCKERHUB_USERNAME"
+          [ -n "${DOCKERHUB_TOKEN:-}" ] || missing="${missing} DOCKERHUB_TOKEN"
+          if [ -n "${missing}" ]; then
+            echo "::error::Missing repository secret(s):${missing}."
+            echo "::error::Add them under Settings > Secrets and variables > Actions."
+            echo "::error::See docker/README.md for how to mint the Docker Hub access token."
+            exit 1
+          fi
+          echo "Docker Hub credentials present."
+
+      - name: Set up QEMU (for cross-arch emulated builds)
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Compute image tags/labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: basemax/salam
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ steps.resolve.outputs.version }}
+
+      - name: Build and push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: docker
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/386
+          push: true
+          build-args: |
+            SALAM_VERSION=${{ steps.resolve.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

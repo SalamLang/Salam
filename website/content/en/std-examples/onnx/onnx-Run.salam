@@ -1,0 +1,95 @@
+import onnx
+import tensor
+import compress
+import encoding.protobuf
+import archive
+import os
+
+func submessage(b &: compress.ByteBuf, field: int, message: compress.ByteBuf):
+    protobuf.WriteTag(b, field, protobuf.WT_LEN)
+    protobuf.WriteLenPrefixedBytes(b, message.data, compress.BufLen(message))
+end
+
+func text(b &: compress.ByteBuf, field: int, value: str):
+    protobuf.WriteTag(b, field, protobuf.WT_LEN)
+    protobuf.WriteLenPrefixedStr(b, value)
+end
+
+func number(b &: compress.ByteBuf, field: int, value: i64):
+    protobuf.WriteTag(b, field, protobuf.WT_VARINT)
+    protobuf.WriteVarint(b, value as u64)
+end
+
+func node(b &: compress.ByteBuf, op: str, input1: str, input2: str, output: str):
+    text(b, 1, input1)
+    if input2 != "":
+        text(b, 1, input2)
+    end
+    text(b, 2, output)
+    text(b, 4, op)
+end
+
+func model(m &: compress.ByteBuf):
+    mut graph := compress.NewByteBuf()
+    mut mul := compress.NewByteBuf()
+    node(mul, "Mul", "x", "w", "h")
+    submessage(graph, 1, mul)
+    mut relu := compress.NewByteBuf()
+    node(relu, "LeakyRelu", "h", "", "y")
+    mut alpha := compress.NewByteBuf()
+    text(alpha, 1, "alpha")
+    number(alpha, 20, 1)
+    protobuf.WriteTag(alpha, 2, protobuf.WT_FIXED32)
+    protobuf.WriteFloat(alpha, 0.1)
+    submessage(relu, 5, alpha)
+    submessage(graph, 1, relu)
+    mut weight := compress.NewByteBuf()
+    number(weight, 1, 3)
+    number(weight, 2, 1)
+    mut payload := compress.NewByteBuf()
+    each factor in [2.0, 2.0, 2.0]:
+        protobuf.WriteFloat(payload, factor)
+    end
+    submessage(weight, 4, payload)
+    text(weight, 8, "w")
+    submessage(graph, 5, weight)
+    mut input_x := compress.NewByteBuf()
+    text(input_x, 1, "x")
+    submessage(graph, 11, input_x)
+    mut output_y := compress.NewByteBuf()
+    text(output_y, 1, "y")
+    submessage(graph, 12, output_y)
+    number(m, 1, 8)
+    submessage(m, 7, graph)
+end
+
+func main:
+    mut buffer := compress.NewByteBuf()
+    model(buffer)
+    mut good := false
+    mut m := onnx.ParseOnnx(buffer.data, compress.BufLen(buffer), good)
+    println good, m.ok, m.ir_version, m.nodes.len(), m.inits.len(), m.init_names.get(0)
+    mut relu := m.nodes.get(1)
+    println relu.op, relu.inputs.get(0), relu.outputs.get(0), relu.attr_index("alpha")
+    println (relu.attr_float("alpha", 0.0) * 100.0 + 0.5) as int, relu.attr_int("axis", -1)
+    attr := relu.attrs.get(0)
+    println attr.name, attr.kind
+    println m.feed_names().len(), m.inputs.get(0), m.outputs.get(0)
+
+    mut shape := tensor.Shape2(1, 3)
+    mut x := tensor.Full(shape, -1.5)
+    x.set_at(2, 4.0)
+    mut inputs := Vector {} as Vector<tensor.Tensor>
+    inputs.push(x)
+    mut outputs := onnx.Run(m, inputs, good)
+    mut y := outputs.get(0)
+    println good, (y.at(0) * 100.0 - 0.5) as int, y.at(2)
+
+    path := os.TempDir() + "/salam_tiny_en.onnx"
+    _ := archive.WriteBinaryFileBuf(path, buffer)
+    mut m2 := onnx.LoadOnnx(path, good)
+    println good, m2.nodes.len()
+    m2.free()
+    m.free()
+    compress.BufFree(buffer)
+end

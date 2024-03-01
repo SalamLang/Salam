@@ -1,0 +1,713 @@
+@en "toml"
+@fa "تامل"
+package toml
+
+import encoding.value
+import str
+import conv
+import mem
+
+inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
+
+func _tsub(s: str, start: int, cnt: int): str:
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    mut k := 0
+    until k < cnt:
+        str.BufAppendChar(sb, bp[start + k] as int)
+        k += 1
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _tat(bp: i8*, at: int, lit: str): bool:
+    lp := _bp(lit)
+    mut k := 0
+    until lp[k] != (0 as i8):
+        if bp[at + k] != lp[k]: ret false end
+        k += 1
+    end
+    ret true
+end
+
+inline pure func _ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+func _is_digit(c: int): bool: ret c >= 48 and c <= 57 end
+
+func _is_bare_key_char(c: int): bool:
+    ret _is_digit(c) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 45 or c == 95
+end
+
+func _skip_inline_ws(s: str, n: int, i: int): int:
+    bp := _bp(s)
+    mut p := i
+    until p < n:
+        c := _ub(bp, p)
+        if c != 32 and c != 9: ret p end
+        p += 1
+    end
+    ret p
+end
+
+func _skip_loose(s: str, n: int, i: int): int:
+    bp := _bp(s)
+    mut p := i
+    until p < n:
+        c := _ub(bp, p)
+        if c == 32 or c == 9 or c == 10 or c == 13:
+            p += 1
+        else c == 35:
+            until p < n and _ub(bp, p) != 10:
+                p += 1
+            end
+        else:
+            ret p
+        end
+    end
+    ret p
+end
+
+func _parse_bare_key(s: str, n: int, i: int, endpos &: int): str:
+    bp := _bp(s)
+    mut p := i
+    until p < n and _is_bare_key_char(_ub(bp, p)):
+        p += 1
+    end
+    endpos = p
+    ret _tsub(s, i, p - i)
+end
+
+func _digit_val(c: int): int:
+    if c >= 48 and c <= 57: ret c - 48 end
+    if c >= 97 and c <= 102: ret c - 97 + 10 end
+    if c >= 65 and c <= 70: ret c - 65 + 10 end
+    ret 0 - 1
+end
+
+func _hex4(s: str, i: int): int:
+    bp := _bp(s)
+    h0 := _digit_val(_ub(bp, i))
+    h1 := _digit_val(_ub(bp, i + 1))
+    h2 := _digit_val(_ub(bp, i + 2))
+    h3 := _digit_val(_ub(bp, i + 3))
+    ret h0 * 4096 + h1 * 256 + h2 * 16 + h3
+end
+
+func _parse_int_base(s: str, base: int): i64:
+    n := s.len()
+    bp := _bp(s)
+    mut out := 0 as i64
+    mut i := 0
+    until i < n:
+        d := _digit_val(_ub(bp, i))
+        if d >= 0 and d < base:
+            out = out * (base as i64) + (d as i64)
+        end
+        i += 1
+    end
+    ret out
+end
+
+func _bits_to_f64(bits: i64): f64:
+    buf := mem.Allocate(8 as u64)
+    p := buf as i64*
+    p[0] = bits
+    q := buf as f64*
+    v := q[0]
+    mem.Free(buf)
+    ret v
+end
+
+func _pos_inf(): f64: ret _bits_to_f64((0x7FF0000000000000 as u64) as i64) end
+func _neg_inf(): f64: ret _bits_to_f64((0xFFF0000000000000 as u64) as i64) end
+func _nan_val(): f64: ret _bits_to_f64((0x7FF8000000000000 as u64) as i64) end
+
+func _parse_basic_string(s: str, n: int, i: int, endpos &: int, ok &: bool): str:
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut p := i + 1
+    until p < n:
+        c := _ub(bp, p)
+        if c == 34:
+            endpos = p + 1
+            ok = true
+            ret str.BufStr(sb)
+        end
+        if c == 92:
+            p += 1
+            if p >= n: break end
+            e := _ub(bp, p)
+            if e == 34: str.BufAppendChar(sb, 34)
+            else e == 92: str.BufAppendChar(sb, 92)
+            else e == 110: str.BufAppendChar(sb, 10)
+            else e == 116: str.BufAppendChar(sb, 9)
+            else e == 114: str.BufAppendChar(sb, 13)
+            else e == 98: str.BufAppendChar(sb, 8)
+            else e == 102: str.BufAppendChar(sb, 12)
+            else e == 117:
+                if p + 4 < n:
+                    str.BufAppendCp(sb, _hex4(s, p + 1))
+                    p += 4
+                end
+            else:
+                str.BufAppendChar(sb, e)
+            end
+            p += 1
+        else:
+            str.BufAppendChar(sb, c)
+            p += 1
+        end
+    end
+    endpos = p
+    ok = false
+    ret str.BufStr(sb)
+end
+
+func _parse_literal_string(s: str, n: int, i: int, endpos &: int, ok &: bool): str:
+    bp := _bp(s)
+    mut p := i + 1
+    start := p
+    until p < n and _ub(bp, p) != 39:
+        p += 1
+    end
+    if p >= n:
+        endpos = p
+        ok = false
+        ret ""
+    end
+    endpos = p + 1
+    ok = true
+    ret _tsub(s, start, p - start)
+end
+
+func _parse_quoted_key(s: str, n: int, i: int, endpos &: int): str:
+    bp := _bp(s)
+    c := _ub(bp, i)
+    mut ok := false
+    if c == 34: ret _parse_basic_string(s, n, i, endpos, ok) end
+    ret _parse_literal_string(s, n, i, endpos, ok)
+end
+
+func _parse_key(s: str, n: int, i: int, endpos &: int): str:
+    bp := _bp(s)
+    if i >= n:
+        endpos = i
+        ret ""
+    end
+    c := _ub(bp, i)
+    if c == 34 or c == 39: ret _parse_quoted_key(s, n, i, endpos) end
+    ret _parse_bare_key(s, n, i, endpos)
+end
+
+func _parse_key_path(s: str, n: int, i: int, endpos &: int): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut p := i
+    until true:
+        p = _skip_inline_ws(s, n, p)
+        mut kend := p
+        k := _parse_key(s, n, p, kend)
+        out.push(k)
+        p = _skip_inline_ws(s, n, kend)
+        bp := _bp(s)
+        if p < n and _ub(bp, p) == 46:
+            p += 1
+        else:
+            endpos = p
+            ret out
+        end
+    end
+end
+
+func _is_number_start(c: int): bool:
+    ret _is_digit(c) or c == 45 or c == 43
+end
+
+func _scan_bare_token(s: str, n: int, i: int, endpos &: int): str:
+    bp := _bp(s)
+    mut p := i
+    until p < n:
+        c := _ub(bp, p)
+        if c == 44 or c == 93 or c == 125 or c == 32 or c == 9 or c == 10 or c == 13 or c == 35:
+            break
+        end
+        p += 1
+    end
+    endpos = p
+    ret _tsub(s, i, p - i)
+end
+
+func _parse_number(tok: str): value.Value:
+    mut clean := str.Replace(tok, "_", "")
+    if clean == "inf" or clean == "+inf": ret value.ValueFloat(_pos_inf()) end
+    if clean == "-inf": ret value.ValueFloat(_neg_inf()) end
+    if clean == "nan" or clean == "+nan" or clean == "-nan": ret value.ValueFloat(_nan_val()) end
+    if str.Contains(clean, ".") or str.Contains(clean, "e") or str.Contains(clean, "E"):
+        ret value.ValueFloat(clean.to_float())
+    end
+    if str.Contains(clean, "0x") or str.Contains(clean, "0X"):
+        ret value.ValueInt(_parse_int_base(str.Replace(str.Replace(clean, "0x", ""), "0X", ""), 16))
+    end
+    if str.Contains(clean, "0o"):
+        ret value.ValueInt(_parse_int_base(str.Replace(clean, "0o", ""), 8))
+    end
+    if str.Contains(clean, "0b"):
+        ret value.ValueInt(_parse_int_base(str.Replace(clean, "0b", ""), 2))
+    end
+    mut body := clean
+    mut neg := false
+    if body.len() > 0 and (str.CharAt(body, 0) == "+" or str.CharAt(body, 0) == "-"):
+        neg = str.CharAt(body, 0) == "-"
+        body = body.substr(1, body.len() - 1)
+    end
+    mag := _parse_int_base(body, 10)
+    if neg: ret value.ValueInt(0 - mag) end
+    ret value.ValueInt(mag)
+end
+
+func _parse_value(s: str, n: int, i: int, endpos &: int, err &: bool): value.Value:
+    ret _parse_value_d(s, n, i, endpos, err, 0)
+end
+
+func _parse_value_d(s: str, n: int, i: int, endpos &: int, err &: bool, depth: int): value.Value:
+    p0 := _skip_inline_ws(s, n, i)
+    if depth > 512:
+        endpos = n
+        err = true
+        ret value.ValueNull()
+    end
+    if p0 >= n:
+        endpos = p0
+        err = true
+        ret value.ValueNull()
+    end
+    bp := _bp(s)
+    c := _ub(bp, p0)
+    if c == 34:
+        mut ok := false
+        mut ep := p0
+        text := _parse_basic_string(s, n, p0, ep, ok)
+        endpos = ep
+        if not ok: err = true end
+        ret value.ValueString(text)
+    end
+    if c == 39:
+        mut ok := false
+        mut ep := p0
+        text := _parse_literal_string(s, n, p0, ep, ok)
+        endpos = ep
+        if not ok: err = true end
+        ret value.ValueString(text)
+    end
+    if c == 91: ret _parse_array(s, n, p0, endpos, err, depth) end
+    if c == 123: ret _parse_inline_table(s, n, p0, endpos, err, depth) end
+    if p0 + 4 <= n and _tat(_bp(s), p0, "true"):
+        endpos = p0 + 4
+        ret value.ValueBool(true)
+    end
+    if p0 + 5 <= n and _tat(_bp(s), p0, "false"):
+        endpos = p0 + 5
+        ret value.ValueBool(false)
+    end
+    mut ep2 := p0
+    tok := _scan_bare_token(s, n, p0, ep2)
+    endpos = ep2
+    if tok.len() == 0:
+        err = true
+        ret value.ValueNull()
+    end
+    mut looksNumeric := _is_number_start(_ub(_bp(tok), 0))
+    if looksNumeric and tok.len() > 1:
+        rest := tok.substr(1, tok.len() - 1)
+        if str.Contains(tok, ":") or (str.Contains(rest, "-") and not str.Contains(tok, "e-") and not str.Contains(tok, "E-")):
+            looksNumeric = false
+        end
+    end
+    if looksNumeric or tok == "inf" or tok == "nan": ret _parse_number(tok) end
+    ret value.ValueString(tok)
+end
+
+func _parse_array(s: str, n: int, i: int, endpos &: int, err &: bool, depth: int): value.Value:
+    mut out := value.NewValueArray()
+    bp := _bp(s)
+    mut p := _skip_loose(s, n, i + 1)
+    if p < n and _ub(bp, p) == 93:
+        endpos = p + 1
+        ret out
+    end
+    until true:
+        mut vend := p
+        item := _parse_value_d(s, n, p, vend, err, depth + 1)
+        if err:
+            endpos = vend
+            ret out
+        end
+        value.ArrayPush(out, item)
+        p = _skip_loose(s, n, vend)
+        if p < n and _ub(bp, p) == 44:
+            p = _skip_loose(s, n, p + 1)
+        end
+        if p < n and _ub(bp, p) == 93:
+            endpos = p + 1
+            ret out
+        end
+        if p >= n:
+            err = true
+            endpos = p
+            ret out
+        end
+    end
+end
+
+func _parse_inline_table(s: str, n: int, i: int, endpos &: int, err &: bool, depth: int): value.Value:
+    mut out := value.NewValueObject()
+    bp := _bp(s)
+    mut p := _skip_inline_ws(s, n, i + 1)
+    if p < n and _ub(bp, p) == 125:
+        endpos = p + 1
+        ret out
+    end
+    until true:
+        p = _skip_inline_ws(s, n, p)
+        mut kend := p
+        key := _parse_key(s, n, p, kend)
+        p = _skip_inline_ws(s, n, kend)
+        if p >= n or _ub(bp, p) != 61:
+            err = true
+            endpos = p
+            ret out
+        end
+        p += 1
+        mut vend := p
+        v := _parse_value_d(s, n, p, vend, err, depth + 1)
+        if err:
+            endpos = vend
+            ret out
+        end
+        value.ObjectSet(out, key, v)
+        p = _skip_inline_ws(s, n, vend)
+        if p < n and _ub(bp, p) == 44:
+            p = _skip_inline_ws(s, n, p + 1)
+            continue
+        end
+        if p < n and _ub(bp, p) == 125:
+            endpos = p + 1
+            ret out
+        end
+        err = true
+        endpos = p
+        ret out
+    end
+end
+
+func _set_path(root &: value.Value, path: Vector<str>, leaf: value.Value):
+    if path.len() == 1:
+        value.ObjectSet(root, path.get(0), leaf)
+        ret
+    end
+    head := path.get(0)
+    mut child := value.NewValueObject()
+    if value.ObjectHas(root, head): child = value.ObjectGet(root, head) end
+    mut rest := Vector {} as Vector<str>
+    mut i := 1
+    until i < path.len():
+        rest.push(path.get(i))
+        i += 1
+    end
+    _set_path(child, rest, leaf)
+    value.ObjectSet(root, head, child)
+end
+
+func _get_table(root: value.Value, path: Vector<str>): value.Value:
+    mut cur := root
+    mut i := 0
+    until i < path.len():
+        seg := path.get(i)
+        if value.ObjectHas(cur, seg):
+            cur = value.ObjectGet(cur, seg)
+        else:
+            cur = value.NewValueObject()
+        end
+        i += 1
+    end
+    ret cur
+end
+
+func _write_table_back(root &: value.Value, path: Vector<str>, table: value.Value):
+    if path.len() == 0: ret end
+    _set_path(root, path, table)
+end
+
+func _needs_quote_key(k: str): bool:
+    n := k.len()
+    if n == 0: ret true end
+    bp := _bp(k)
+    mut i := 0
+    until i < n:
+        if not _is_bare_key_char(_ub(bp, i)): ret true end
+        i += 1
+    end
+    ret false
+end
+
+func _escape_toml_string(s: str): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    n := s.len()
+    bp := _bp(s)
+    mut i := 0
+    until i < n:
+        c := _ub(bp, i)
+        if c == 34: str.BufAppend(sb, `\"`)
+        else c == 92: str.BufAppend(sb, "\\\\")
+        else c == 10: str.BufAppend(sb, "\\n")
+        else c == 9: str.BufAppend(sb, "\\t")
+        else c == 13: str.BufAppend(sb, "\\r")
+        else:
+            str.BufAppendChar(sb, c)
+        end
+        i += 1
+    end
+    ret str.BufStr(sb)
+end
+
+func _encode_key(k: str): str:
+    if _needs_quote_key(k): ret `"`.concat(_escape_toml_string(k)).concat(`"`) end
+    ret k
+end
+
+func _encode_inline_value(v: value.Value, ok &: bool): str:
+    if value.IsNull(v):
+        ok = false
+        ret ""
+    end
+    if value.IsBool(v):
+        if value.AsBool(v): ret "true" end
+        ret "false"
+    end
+    if value.IsInt(v): ret conv.FormatInt(value.AsInt(v)) end
+    if value.IsFloat(v):
+        f := conv.FormatFloat(value.AsFloat(v))
+        if str.Contains(f, ".") or str.Contains(f, "e") or str.Contains(f, "n"): ret f end
+        ret f.concat(".0")
+    end
+    if value.IsString(v): ret `"`.concat(_escape_toml_string(value.AsString(v))).concat(`"`) end
+    if value.IsArray(v):
+        mut sb := str.NewBuilder()
+        str.BufAppendChar(sb, 91)
+        n := value.ArrayLen(v)
+        mut i := 0
+        until i < n:
+            if i > 0: str.BufAppend(sb, ", ") end
+            mut itemOk := true
+            str.BufAppend(sb, _encode_inline_value(value.ArrayGet(v, i), itemOk))
+            if not itemOk: ok = false end
+            i += 1
+        end
+        str.BufAppendChar(sb, 93)
+        arrOut := str.BufStr(sb)
+        str.BufFree(sb)
+        ret arrOut
+    end
+    if value.IsObject(v):
+        mut sb := str.NewBuilder()
+        str.BufAppendChar(sb, 123)
+        keys := value.ObjectKeys(v)
+        mut i := 0
+        until i < keys.len():
+            if i > 0: str.BufAppend(sb, ", ") end
+            k := keys.get(i)
+            str.BufAppend(sb, _encode_key(k))
+            str.BufAppend(sb, " = ")
+            mut itemOk := true
+            str.BufAppend(sb, _encode_inline_value(value.ObjectGet(v, k), itemOk))
+            if not itemOk: ok = false end
+            i += 1
+        end
+        str.BufAppendChar(sb, 125)
+        objOut := str.BufStr(sb)
+        str.BufFree(sb)
+        ret objOut
+    end
+    ok = false
+    ret ""
+end
+
+func _encode_table(sb &: str.StringBuilder, v: value.Value, prefix: Vector<str>, ok &: bool):
+    keys := value.ObjectKeys(v)
+    mut subKeys := Vector {} as Vector<str>
+    mut i := 0
+    until i < keys.len():
+        k := keys.get(i)
+        fv := value.ObjectGet(v, k)
+        if value.IsObject(fv):
+            subKeys.push(k)
+        else:
+            if value.IsNull(fv):
+                i += 1
+                continue
+            end
+            str.BufAppend(sb, _encode_key(k))
+            str.BufAppend(sb, " = ")
+            mut lineOk := true
+            str.BufAppend(sb, _encode_inline_value(fv, lineOk))
+            if not lineOk: ok = false end
+            str.BufAppendChar(sb, 10)
+        end
+        i += 1
+    end
+    mut si := 0
+    until si < subKeys.len():
+        k := subKeys.get(si)
+        mut path := Vector {} as Vector<str>
+        mut pi := 0
+        until pi < prefix.len():
+            path.push(prefix.get(pi))
+            pi += 1
+        end
+        path.push(k)
+        str.BufAppendChar(sb, 91)
+        mut j := 0
+        until j < path.len():
+            if j > 0: str.BufAppendChar(sb, 46) end
+            str.BufAppend(sb, _encode_key(path.get(j)))
+            j += 1
+        end
+        str.BufAppendChar(sb, 93)
+        str.BufAppendChar(sb, 10)
+        _encode_table(sb, value.ObjectGet(v, k), path, ok)
+        si += 1
+    end
+end
+
+@en "DecodeStrict"
+@fa "کدگشایی سخت گیرانه"
+pub func DecodeStrict(text: str, ok &: bool): value.Value:
+    mut root := value.NewValueObject()
+    n := text.len()
+    bp := _bp(text)
+    mut p := _skip_loose(text, n, 0)
+    mut curPath := Vector {} as Vector<str>
+    ok = true
+    until p < n:
+        c := _ub(bp, p)
+        if c == 91:
+            mut isArrayTable := false
+            mut hstart := p + 1
+            if hstart < n and _ub(bp, hstart) == 91:
+                isArrayTable = true
+                hstart += 1
+            end
+            mut hend := hstart
+            path := _parse_key_path(text, n, hstart, hend)
+            mut q := _skip_inline_ws(text, n, hend)
+            if isArrayTable:
+                if q + 1 < n and _ub(bp, q) == 93 and _ub(bp, q + 1) == 93:
+                    q += 2
+                else:
+                    ok = false
+                    ret root
+                end
+                mut arr := _get_table(root, path)
+                if not value.IsArray(arr): arr = value.NewValueArray() end
+                value.ArrayPush(arr, value.NewValueObject())
+                _write_table_back(root, path, arr)
+                curPath = path
+            else:
+                if q < n and _ub(bp, q) == 93:
+                    q += 1
+                else:
+                    ok = false
+                    ret root
+                end
+                mut existing := _get_table(root, path)
+                if not value.IsObject(existing): existing = value.NewValueObject() end
+                _write_table_back(root, path, existing)
+                curPath = path
+            end
+            p = _skip_loose(text, n, q)
+            continue
+        end
+        mut kend := p
+        keypath := _parse_key_path(text, n, p, kend)
+        mut q := _skip_inline_ws(text, n, kend)
+        if q >= n or _ub(bp, q) != 61:
+            ok = false
+            ret root
+        end
+        q += 1
+        mut vend := q
+        mut verr := false
+        v := _parse_value(text, n, q, vend, verr)
+        if verr:
+            ok = false
+            ret root
+        end
+        if curPath.len() > 0 and value.IsArray(_get_table(root, curPath)):
+            mut arr := _get_table(root, curPath)
+            lastIdx := value.ArrayLen(arr) - 1
+            mut item := value.ArrayGet(arr, lastIdx)
+            _set_path(item, keypath, v)
+            value.ArraySet(arr, lastIdx, item)
+            _write_table_back(root, curPath, arr)
+        else:
+            mut fullPath := Vector {} as Vector<str>
+            mut k := 0
+            until k < curPath.len():
+                fullPath.push(curPath.get(k))
+                k += 1
+            end
+            mut ki := 0
+            until ki < keypath.len():
+                fullPath.push(keypath.get(ki))
+                ki += 1
+            end
+            _set_path(root, fullPath, v)
+        end
+        p = _skip_loose(text, n, vend)
+    end
+    ret root
+end
+
+@en "Decode"
+@fa "کدگشایی"
+pub func Decode(text: str): value.Value:
+    mut ok := false
+    ret DecodeStrict(text, ok)
+end
+
+@en "Valid"
+@fa "معتبر"
+pub func Valid(text: str): bool:
+    mut ok := false
+    DecodeStrict(text, ok)
+    ret ok
+end
+
+@en "EncodeStrict"
+@fa "کدگذاری سخت گیرانه"
+pub func EncodeStrict(v: value.Value, ok &: bool): str:
+    ok = true
+    if not value.IsObject(v):
+        ok = false
+        ret ""
+    end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    prefix := Vector {} as Vector<str>
+    _encode_table(sb, v, prefix, ok)
+    ret str.BufStr(sb)
+end
+
+@en "Encode"
+@fa "کدگذاری"
+pub func Encode(v: value.Value): str:
+    mut ok := true
+    ret EncodeStrict(v, ok)
+end

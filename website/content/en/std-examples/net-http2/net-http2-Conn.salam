@@ -1,0 +1,53 @@
+import net.http2
+import net.tcp
+import compress
+
+mut server := tcp.Server {}
+
+func answer():
+    conn := tcp.Accept(server)
+    mut c := http2.NewConn(http2.PlainTransport(conn.fd), true)
+    if not http2.ServerHandshake(c):
+        ret
+    end
+    id := http2.AwaitAnyHeaders(c, 20)
+    stream := http2.StreamAt(c, id)
+    mut headers := http2.HeaderList {}
+    http2.HeadersAdd(headers, ":status", "200")
+    http2.HeadersAdd(headers, "content-type", "text/plain")
+    _ := http2.SendHeaders(c, id, headers, false)
+    _ := http2.SendData(c, id, compress.BufFromStr("hello " + http2.HeadersGet(stream.headers, ":path")), false)
+    mut trailers := http2.HeaderList {}
+    http2.HeadersAdd(trailers, "x-done", "1")
+    _ := http2.SendTrailers(c, id, trailers)
+    _ := http2.AwaitStreamEnd(c, 0, 5)
+    http2.CloseConn(c)
+end
+
+func main:
+    server = tcp.Bind(0)
+    t := spawn(answer)
+    conn := tcp.Dial("127.0.0.1", tcp.Port(server))
+    tx := http2.PlainTransport(conn.fd)
+    println tx.ok, tx.kind == http2.H2_TRANSPORT_PLAIN
+    mut c := http2.NewConn(tx, false)
+    println http2.ClientHandshake(c), http2.ConnOk(c)
+    id := http2.NextStreamId(c)
+    mut headers := http2.HeaderList {}
+    http2.HeadersAdd(headers, ":method", "GET")
+    http2.HeadersAdd(headers, ":scheme", "http")
+    http2.HeadersAdd(headers, ":path", "/books")
+    http2.HeadersAdd(headers, ":authority", "127.0.0.1")
+    println id, http2.SendHeaders(c, id, headers, true)
+    println http2.AwaitStreamEnd(c, id, 20)
+    stream := http2.StreamAt(c, id)
+    println http2.HeadersGet(stream.headers, ":status"), compress.BufToStrUnsafe(stream.data), stream.got_trailers, http2.HeadersGet(stream.trailers, "x-done"), stream.end_stream
+    println http2.StreamCount(c) >= 1, c.remote.max_frame_size
+    _ := http2.SendPing(c, compress.BufFromStr("abcdefgh"))
+    println http2.Poll(c) >= http2.H2_POLL_CONNECTION
+    _ := http2.SendRstStream(c, http2.NextStreamId(c), http2.H2_CANCEL)
+    println http2.SendGoAway(c, http2.H2_NO_ERROR, "")
+    http2.CloseConn(c)
+    join(t)
+    tcp.CloseServer(server)
+end

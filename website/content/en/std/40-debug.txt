@@ -1,0 +1,77 @@
+pkg.en = debug
+pkg.name = debug
+pkg.group = System and tools
+pkg.summary = Tools for finding a bug: assertions, a hand-kept call stack, tracing and timing.
+pkg.title = The debug package in Salam | Assertions, tracing and timers
+pkg.description = The debug package in Salam: assertions, a call stack, trace messages, timing parts of the code and memory statistics, with an example.
+pkg.intro <<
+<p>The <code>debug</code> package holds a few small tools for when the program is not doing the right thing. <code>Assert</code> checks a condition that should always hold. <code>Enter</code> and <code>Exit</code> keep a call stack by hand, so an error message can say where in the program it happened. <code>Trace</code> prints what the program is doing, the timers show which part is slow, and <code>MemStats</code> counts allocations to find a leak.</p>
+<p>It is meant for development. For messages a running service keeps, use <a href="/std/log/">log</a>; for exact timing and allocation counters in your own code, <a href="/std/runtime/">runtime</a> and <a href="/std/mem/">mem</a>; for benchmarks inside tests, <a href="/std/testing/">testing</a>.</p>
+<p>The things people get wrong:</p>
+<ul>
+<li><code>Assert</code> is an ordinary function: it runs in release builds too, and its message is built even when the condition holds. Keep expensive work out of the message.</li>
+<li>The stack, the trace switch and the timers are globals with no lock, shared by every thread. In a program with threads the stack mixes frames from all of them.</li>
+<li>The stack is only as good as its <code>Enter</code> and <code>Exit</code> calls. Always pair them with <code>defer debug.Exit()</code>.</li>
+<li><code>MemStats</code> only has numbers in a build with memory counting on; a normal run gets a line saying so.</li>
+</ul>
+<p>Trace lines and failed assertions go to standard error, so they do not mix with the program's normal output.</p>
+
+<h2 id="guide-stack">Say where an error happened</h2>
+<p>An error message like <em>empty price</em> is hard to act on in a big program: which item, and who asked for it? Call <code>Enter</code> at the start of the functions you care about and <code>defer debug.Exit()</code> right after it, so the frame is removed on every return path. <code>Stack</code> then gives the path from the outermost frame to the current one, joined with <code>&gt;</code>. The frame is just text, so it can carry the item being worked on.</p>
+{{example.debug-stack-errors}}
+<p>After the outer function returns, <code>Depth</code> is back at 0. If it is not, some function called <code>Enter</code> without a matching <code>Exit</code>, which is exactly the bug that <code>defer</code> prevents.</p>
+
+<h2 id="guide-trace">Trace the calls of a recursive function</h2>
+<p><code>EnableTrace(true)</code> switches tracing on: from then on <code>Enter</code> and <code>Exit</code> print an <code>enter</code> and an <code>exit</code> line, and <code>Trace</code> prints its message after the current stack. With tracing off, <code>Trace</code> prints nothing, so trace calls can stay in the code and be switched on with a flag, for instance from a setting or a command line option.</p>
+{{example.debug-trace-calls}}
+<p>Reading the lines from top to bottom shows the order of the calls; the indentation you would draw by hand is the length of each stack. All of it goes to standard error, like the last line, which this example prints with <code>printerrln</code>.</p>
+
+<h2 id="guide-timers">Time parts of a program</h2>
+<p><code>StartTimer</code> starts a named timer and <code>StopTimer</code> returns the milliseconds since it started, measured with the monotonic clock, so a change of the system time does not disturb it. Starting a timer that already exists restarts it. <code>StopTimer</code> does not remove the timer: calling it again later gives a larger number, which is handy for lap times. A name that was never started gives 0.</p>
+{{example.debug-timers}}
+<p>Times differ from run to run and from machine to machine, so the example only prints comparisons. In your own program print the numbers themselves, for instance with <a href="/std/log/">log</a> at the debug level. Measure a part several times, or over many iterations, before deciding it is slow; the first run often includes one time costs.</p>
+
+<h2 id="guide-assert">Assertions guard your own promises</h2>
+<p><code>Assert</code> is for conditions that must hold if the code is correct, such as a balance that never goes below zero after a checked withdrawal. It is not for bad input from users or files: those are expected, and the program should answer them with an error value, as <code>withdraw</code> does with <code>false</code> when the balance is too small.</p>
+{{example.debug-assert}}
+<p>When an assertion fails, the program prints the message to standard error and stops at once with <code>abort</code>, so the exit status is 134 on Linux and no deferred code runs. With the first assertion broken, the run ends like this:</p>
+<pre class="code" dir="ltr"><code>assertion failed: withdraw needs a positive amount
+Aborted (core dumped)</code></pre>
+<p>Under a debugger (<code>salam debug file.salam</code>) the abort stops in the failing function, so you can look at its variables. <code>Break</code> stops there on purpose, without a failed condition. Do not leave it in code that runs without a debugger: with nothing attached, the program is stopped by the signal.</p>
+
+<h2 id="guide-memory">Find a leak with MemStats</h2>
+<p><code>MemStats</code> returns one line with the number of allocations and frees, the bytes still in use (<code>live</code>) and the most that was ever in use (<code>peak</code>). The counting is compiled in only when you ask for it, so build or run with <code>-DSALAM_MEM_DEBUG</code> (or <code>--asan</code>). Print the line before and after a piece of work that should leave nothing behind: if <code>live</code> keeps growing every time it runs, that work leaks.</p>
+{{example.debug-memstats}}
+<p>The example is not run on this page because it needs the flag. With <code>salam run -DSALAM_MEM_DEBUG leak.salam</code> it prints:</p>
+<pre class="code" dir="ltr"><code>start:  allocs=1 frees=0 live=64 peak=64
+freed:  allocs=103 frees=101 live=97 peak=2081
+leaked: allocs=205 frees=102 live=204936 peak=204936</code></pre>
+<p>After the first loop <code>live</code> is back near where it started; after the second it has grown by about 2 KB per call, the 500 numbers each forgotten vector held. <code>salam memcheck file.salam</code> goes further and runs the program under AddressSanitizer, which reports where each leaked block was allocated.</p>
+>>
+
+doc.Assert = If the condition is false, prints <code>assertion failed: </code> and the message to standard error and stops the program with <code>abort</code>. It also runs in release builds.
+doc.AssertNotNil = If the pointer is null, stops the program like a failed <code>Assert</code>.
+doc.Enter = Adds a frame to the hand-kept stack, usually at the start of a function, and prints an <code>enter</code> line when tracing is on. Pair it with <code>defer debug.Exit()</code>.
+doc.Exit = Takes the last frame off the stack, printing an <code>exit</code> line when tracing is on. On an empty stack it does nothing.
+doc.Stack = The current stack from the outermost frame in, as <code>root &gt; child</code>; an empty string when it is empty.
+doc.Depth = The depth of the hand-kept stack.
+doc.EnableTrace = Turns trace messages on or off.
+doc.TraceEnabled = True when tracing is on.
+doc.Trace = When tracing is on, prints <code>[TRACE]</code>, the stack and the message to standard error. When it is off it does nothing, though the message is still built.
+doc.StartTimer = Starts a timer under the given name on the monotonic clock; a name that is already running starts again from zero.
+doc.StopTimer = The milliseconds since the timer started, with fractions. The timer keeps running, so a later call gives a larger number; an unknown name gives 0.
+doc.Break = Stops in the debugger at this line (it raises <code>SIGTRAP</code>, or calls <code>DebugBreak</code> on Windows). Without a debugger attached the signal ends the program.
+doc.MemStats = One line with <code>allocs</code>, <code>frees</code>, <code>live</code> and <code>peak</code> bytes. Only in a build with <code>-DSALAM_MEM_DEBUG</code> or <code>--asan</code>; otherwise a line saying the numbers are unavailable.
+
+ex.Assert = debug-Enter
+ex.AssertNotNil = debug-Enter
+ex.Exit = debug-Enter
+ex.Stack = debug-Enter
+ex.Depth = debug-Enter
+ex.EnableTrace = debug-Enter
+ex.TraceEnabled = debug-Enter
+ex.Trace = debug-Enter
+ex.StartTimer = debug-Enter
+ex.StopTimer = debug-Enter
+ex.Break = debug-Enter
+ex.MemStats = debug-Enter

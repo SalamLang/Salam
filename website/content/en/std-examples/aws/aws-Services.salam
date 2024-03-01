@@ -1,0 +1,76 @@
+import aws
+
+func main:
+    chain := aws.DefaultChain()
+    creds := aws.Resolve(chain)
+    if not creds.ok:
+        println "no credentials were found:", creds.error
+        ret
+    end
+    println aws.DescribeCredentials(creds)
+    cfg := aws.ResolveConfig("photos", "eu-central-1", chain)
+    println aws.FromEnvironmentCredentials().ok, aws.FromProfileCredentials("default", chain).ok
+    println aws.FromWebIdentityCredentials(chain).ok, aws.FromContainerCredentials(1000).ok
+    println aws.FromInstanceCredentials(1000).ok, aws.InstanceRegion(1000)
+
+    who := aws.GetCallerIdentity(cfg)
+    println who.ok, who.account, who.arn, who.user_id
+    role := aws.AssumeRole(cfg, "arn:aws:iam::123456789012:role/deploy", "salam", 900)
+    if role.ok:
+        cfg2 := aws.Apply(cfg, role)
+        println aws.Describe(cfg2)
+    end
+    _ := aws.AssumeRoleWith(cfg, "arn:aws:iam::123456789012:role/partner", "salam", 3600, "ext-42", "")
+    _ := aws.AssumeRoleWithWebIdentity(cfg, "arn:aws:iam::123456789012:role/ci", "ci", "token", 900)
+    _ := aws.GetSessionToken(cfg, 3600, "arn:aws:iam::123456789012:mfa/ali", "123456")
+    _ := aws.GetFederationToken(cfg, "guest", "", 900)
+
+    created := aws.SqsCreateQueue(cfg, "jobs", aws.NewHeaders())
+    queue := aws.SqsQueueUrl(cfg, "jobs")
+    println created == queue, aws.SqsQueueArn(cfg, queue)
+    mut queues := aws.SqsListQueues(cfg, "")
+    repeat aws.QueueCount(queues) in i:
+        println aws.QueueAt(queues, i)
+    end
+    aws.QueueListFree(queues)
+
+    sent := aws.SqsSend(cfg, queue, "invoice 42")
+    println sent.ok, sent.id, sent.md5, sent.sequence
+    _ := aws.SqsSendWith(cfg, queue, aws.OutMessage { body = "later", delay = 60 })
+    mut messages := aws.SqsReceive(cfg, queue, aws.ReceiveOptions { max_messages = 5, wait_seconds = 10 })
+    each msg in messages.items:
+        println msg.body
+        _ := aws.SqsDelete(cfg, queue, msg.receipt)
+    end
+    aws.MessageListFree(messages)
+    mut batch := aws.SqsReceiveBatch(cfg, queue, 10)
+    _ := aws.SqsDeleteBatch(cfg, queue, batch)
+    aws.MessageListFree(batch)
+    mut waiting := aws.SqsPoll(cfg, queue)
+    if aws.MessageCount(waiting) > 0:
+        receipt := aws.MessageAt(waiting, 0).receipt
+        _ := aws.SqsChangeVisibility(cfg, queue, receipt, 120)
+        _ := aws.SqsRelease(cfg, queue, receipt)
+    end
+    aws.MessageListFree(waiting)
+    println aws.SqsDepth(cfg, queue)
+    mut attrs := aws.NewHeaders()
+    aws.HeaderSet(attrs, "RedrivePolicy", aws.SqsRedrivePolicy("arn:aws:sqs:eu-central-1:123456789012:dead", 5))
+    _ := aws.SqsSetAttributes(cfg, queue, attrs)
+    aws.HeaderFree(attrs)
+    mut current := aws.SqsAttributes(cfg, queue)
+    println aws.HeaderGet(current, "VisibilityTimeout")
+    aws.HeaderFree(current)
+    _ := aws.SqsPurge(cfg, queue)
+    _ := aws.SqsDeleteQueue(cfg, queue)
+
+    mut call := aws.NewJsonCall("dynamodb", "DynamoDB_20120810.ListTables", "{}")
+    result := aws.Invoke(cfg, call)
+    println result.status, result.body
+    aws.CallFree(call)
+
+    req := aws.NewRequest("GET", "notes/hello.txt")
+    println aws.Do(cfg, req).status
+    mut raw := aws.DoBytes(cfg, req)
+    aws.FreeBytes(raw)
+end

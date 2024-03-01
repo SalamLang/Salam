@@ -1,0 +1,399 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package llvmgen
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include lg "../logger.salam"
+include sm "../semantic/semantic.salam"
+
+pub const LV_OPT_O0 := 0
+pub const LV_OPT_O1 := 1
+pub const LV_OPT_O2 := 2
+pub const LV_OPT_O3 := 3
+pub const LV_OPT_OS := 4
+pub const LV_OPT_OZ := 5
+
+pub const LV_OUT_IR := 0
+pub const LV_OUT_ASM := 1
+pub const LV_OUT_OBJ := 2
+pub const LV_OUT_BITCODE := 3
+pub const LV_OUT_EXEC := 4
+pub const LV_OUT_JIT := 5
+
+pub const LV_H_SUBSTR := 0
+pub const LV_H_STRCAT := 1
+pub const LV_H_ISWS := 2
+pub const LV_H_TRIM := 3
+pub const LV_H_STRHASH := 4
+pub const LV_H_INTHASH := 5
+pub const LV_H_I64STR := 6
+pub const LV_H_U64STR := 7
+pub const LV_H_F64STR := 8
+pub const LV_H_CHARSTR := 9
+pub const LV_H_OUTBUF := 10
+pub const LV_H_REPEAT := 11
+pub const LV_H_UPPER := 12
+pub const LV_H_LOWER := 13
+pub const LV_H_U8STEP := 14
+pub const LV_H_U8ADV := 15
+pub const LV_H_U8CNT := 16
+pub const LV_H_U8SUBSTR := 17
+pub const LV_H_U8FIND := 18
+pub const LV_H_ASCIIDIG := 19
+pub const LV_H_PIECE := 20
+pub const LV_H_STDIO := 21
+pub const LV_H_COUNT := 22
+
+k_lv_ints := [
+    "bool", "char", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize", "size"
+]
+
+k_lv_uns := ["u8", "u16", "u32", "u64", "usize"]
+
+k_lv_win32_stdcall := [
+    "CertCloseStore", "CertEnumCertificatesInStore", "CertOpenSystemStoreA", "CloseHandle", "CreateCoreWebView2EnvironmentWithOptions", "CreateFileA", "CreateProcessA", "CreateWindowExA", "DebugBreak", "DeleteCriticalSection", "DeleteFileW", "DestroyWindow", "DispatchMessageA", "EnterCriticalSection", "FindClose", "FindFirstFileA", "FindNextFileA", "GetConsoleMode", "GetConsoleScreenBufferInfo", "GetCurrentDirectoryA", "GetCurrentDirectoryW", "GetCurrentProcess", "GetExitCodeProcess", "GetFileAttributesA", "GetFileAttributesExA", "GetFileAttributesW", "GetFileType", "GetLastError", "GetModuleHandleA", "GetProcAddress", "GetProcessTimes", "GetStdHandle", "GetSystemInfo", "GetSystemTimeAsFileTime", "GetTickCount", "GetTickCount64", "InitializeConditionVariable", "InitializeCriticalSection", "IsWindow", "LeaveCriticalSection", "MoveFileExA", "MoveFileExW", "MultiByteToWideChar", "PeekMessageA", "QueryPerformanceCounter", "QueryPerformanceFrequency", "ReadConsoleInputA", "SetConsoleMode", "SetConsoleOutputCP", "SetWindowPos", "SetWindowTextA", "Sleep", "SleepConditionVariableCS", "SleepEx", "TerminateProcess", "TranslateMessage", "WSAPoll", "WSAStartup", "WaitForSingleObject", "WakeAllConditionVariable", "WakeConditionVariable", "WideCharToMultiByte", "WinHttpAddRequestHeaders", "WinHttpCloseHandle", "WinHttpConnect", "WinHttpOpen", "WinHttpOpenRequest", "WinHttpQueryHeaders", "WinHttpReadData", "WinHttpReceiveResponse", "WinHttpSendRequest", "WinHttpSetOption", "WinHttpSetTimeouts", "accept", "bind", "closesocket", "connect", "freeaddrinfo", "getaddrinfo", "gethostbyname", "getsockname", "htons", "inet_ntoa", "ioctlsocket", "listen", "ntohs", "poll", "recv", "recvfrom", "send", "sendto", "setsockopt", "shutdown", "socket"
+]
+
+k_lv_prologue_externs := [
+    "printf", "dprintf", "strlen", "strcmp", "malloc", "calloc", "memcpy", "realloc", "free", "memmove", "memset", "abort", "exit", "atexit", "fflush", "signal", "raise", "snprintf", "strtol", "strtod", "strstr", "write", "isatty", "_isatty", "sched_yield"
+]
+
+k_lv_rt_essentials := ["salam_panic", "salam_idx", "salam_div0"]
+
+pub struct Options:
+    pub opt_level: int = 0
+    pub debug_info: bool = false
+    pub verify_module: bool = false
+    pub native_cpu: bool = false
+    pub release: bool = false
+    pub fp_contract: bool = false
+    pub fast_math: bool = false
+    pub output_mode: int = 0
+    pub output_file: str = ""
+    pub target_triple: str = ""
+    pub link_libs: Vector<str> = Vector {}
+    pub link_kinds: Vector<str> = Vector {}
+    pub nlink: int = 0
+    pub sysroot: str = ""
+    pub lib_paths: Vector<str> = Vector {}
+    pub run_args: Vector<str> = Vector {}
+    pub lib_mode: bool = false
+end
+
+pub struct Output:
+    pub module_name: str = ""
+    pub ll_src: str = ""
+    pub ok: bool = false
+    pub error: str = ""
+end
+
+pub struct Llv:
+    pub ref: str = ""
+    pub ts: str = ""
+end
+
+pub struct LvAddr:
+    pub ptr: str = ""
+    pub ts: str = ""
+    pub tbaa: str = ""
+end
+
+pub struct LvVar:
+    pub name: str = ""
+    pub ptr: str = ""
+    pub ts: str = ""
+    pub pkg: str = ""
+    pub init: int = 0
+end
+
+pub struct LvStr:
+    pub bytes: str = ""
+    pub len: int = 0
+    pub hash: u64 = 0 as u64
+    pub gref: str = ""
+end
+
+pub struct Lv:
+    pub in_derive: bool = false
+    pub log: lg.Logger = lg.New(2, false)
+    pub module: str = ""
+    pub entry: str = ""
+    pub bg: str.StringBuilder = str.NewBuilder()
+    pub bb: str.StringBuilder = str.NewBuilder()
+    pub ba: str.StringBuilder = str.NewBuilder()
+    pub bhg: str.StringBuilder = str.NewBuilder()
+    pub bmeta: str.StringBuilder = str.NewBuilder()
+    pub in_fn: bool = false
+    pub safe: bool = false
+    pub div_check: bool = false
+    pub tmp: int = 0
+    pub lbl: int = 0
+    pub term: bool = false
+    pub locals: Vector<LvVar> = Vector {}
+    pub strings: Vector<LvStr> = Vector {}
+    pub ret_ts: str = ""
+    pub is_main: bool = false
+    pub brk: Vector<str> = Vector {}
+    pub cont: Vector<str> = Vector {}
+    pub loop_dmark: Vector<int> = Vector {}
+    pub nloop: int = 0
+    pub defers: Vector<int> = Vector {}
+    pub self_ts: str = ""
+    pub this_ref: str = ""
+    pub self_byval: bool = false
+    pub globals: Vector<LvVar> = Vector {}
+    pub gdefer: Vector<int> = Vector {}
+    pub extern_names: Vector<str> = Vector {}
+    pub pkg_scope: int = 0
+    pub sig_ix: Vector<int> = Vector {}
+    pub emitted: Vector<str> = Vector {}
+    pub pkg_touched: Vector<int> = Vector {}
+    pub cur_lambda: int = 0
+    pub env_ref: str = ""
+    pub env_ty: str = ""
+    pub lam_n: int = 0
+    pub ok: bool = false
+    pub first_error: str = ""
+    pub debug: bool = false
+    pub meta_n: int = 0
+    pub tbaa_char: str = ""
+    pub tbaa_data_sfx: str = ""
+    pub tbaa_ptr_sfx: str = ""
+    pub di_file: str = ""
+    pub di_paths: Vector<str> = Vector {}
+    pub di_tnames: Vector<str> = Vector {}
+    pub di_tids: Vector<str> = Vector {}
+    pub di_cur_file: str = ""
+    pub di_globals: Vector<str> = Vector {}
+    pub di_ids: Vector<str> = Vector {}
+    pub di_cu: str = ""
+    pub di_subty: str = ""
+    pub cur_sp: str = ""
+    pub cur_scope: str = ""
+    pub cur_dbg: str = ""
+    pub di_flag_dwarf: str = ""
+    pub di_flag_debug: str = ""
+    pub src_file: str = ""
+    pub src_dir: str = ""
+    pub triple: str = ""
+    pub libc_glibc: bool = false
+    pub freestanding: bool = false
+    pub lib_mode: bool = false
+    pub usize: str = ""
+    pub ptr_bits: int = 0
+    pub optsize: bool = false
+    pub minsize: bool = false
+    pub nowrap: bool = false
+    pub fp_contract: bool = false
+    pub fast_math: bool = false
+    pub single_threaded: bool = false
+    pub out_locked: bool = true
+    pub jit: bool = false
+    pub hneed: Vector<bool> = Vector {}
+    pub stdthunks: Vector<str> = Vector {}
+    pub match_result_ptr: str = ""
+    pub match_subj_ref: Vector<str> = Vector {}
+    pub match_subj_ts: Vector<str> = Vector {}
+    pub match_result_ts: str = ""
+    pub match_merge_block: str = ""
+end
+
+inline func byte_at(sx: str, i: int): int: ret co.ByteAt(sx, i) end
+
+func is_digit_b(c: int): bool:
+    ret c >= 48 and c <= 57
+end
+
+func is_alnum_b(c: int): bool:
+    ret (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+end
+
+func is_alpha_b(c: int): bool:
+    ret (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+end
+
+func hex2_lower(c: int): str:
+    d := "0123456789abcdef"
+    ret str.Substr(d, (c / 16) % 16, 1) + str.Substr(d, c % 16, 1)
+end
+
+func hex2_upper(c: int): str:
+    d := "0123456789ABCDEF"
+    ret str.Substr(d, (c / 16) % 16, 1) + str.Substr(d, c % 16, 1)
+end
+
+func idx_byte(sx: str, want: int): int:
+    n := str.Len(sx)
+    mut i := 0
+    until i < n:
+        if byte_at(sx, i) == want:
+            ret i
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func last_byte(sx: str, want: int): int:
+    mut i := str.Len(sx) - 1
+    until i >= 0:
+        if byte_at(sx, i) == want:
+            ret i
+        end
+        i -= 1
+    end
+    ret 0 - 1
+end
+
+func clamp255(msg: str): str:
+    if str.Len(msg) > 255:
+        ret str.Substr(msg, 0, 255)
+    end
+    ret msg
+end
+
+func out_g(v &: Lv, sx: str):
+    co.SbPuts(v.bg, sx)
+end
+
+func out_b(v &: Lv, sx: str):
+    if v.in_fn:
+        co.SbPuts(v.bb, sx)
+    else:
+        co.SbPuts(v.bg, sx)
+    end
+end
+
+func out_hg(v &: Lv, sx: str):
+    co.SbPuts(v.bhg, sx)
+end
+
+func out_meta(v &: Lv, sx: str):
+    co.SbPuts(v.bmeta, sx)
+end
+
+func out_al(v &: Lv, sx: str):
+    if v.in_fn:
+        co.SbPuts(v.ba, sx)
+    else:
+        out_b(v, sx)
+    end
+end
+
+func new_lv0(): Lv:
+    mut v := Lv {}
+    v.locals = Vector {} as Vector<LvVar>
+    v.strings = Vector {} as Vector<LvStr>
+    v.brk = Vector {} as Vector<str>
+    v.cont = Vector {} as Vector<str>
+    v.loop_dmark = Vector {} as Vector<int>
+    v.defers = Vector {} as Vector<int>
+    v.globals = Vector {} as Vector<LvVar>
+    v.gdefer = Vector {} as Vector<int>
+    v.extern_names = Vector {} as Vector<str>
+    v.emitted = Vector {} as Vector<str>
+    v.pkg_touched = Vector {} as Vector<int>
+    v.hneed = Vector {} as Vector<bool>
+    repeat LV_H_COUNT in hi:
+        _hi := hi
+        v.hneed.push(false)
+    end
+    ret v
+end
+
+func free_lv(v &: Lv):
+    str.BufFree(v.bg)
+    str.BufFree(v.bb)
+    str.BufFree(v.ba)
+    str.BufFree(v.bhg)
+    str.BufFree(v.bmeta)
+    v.locals.free()
+    v.strings.free()
+    v.brk.free()
+    v.cont.free()
+    v.loop_dmark.free()
+    v.defers.free()
+    v.globals.free()
+    v.gdefer.free()
+    v.extern_names.free()
+    v.emitted.free()
+    v.pkg_touched.free()
+    v.sig_ix.free()
+    v.hneed.free()
+    v.stdthunks.free()
+end
+
+func ts_is_string_enum(s &: sm.Sema, ts: str): bool:
+    if str.Len(ts) == 0:
+        ret false
+    end
+    mut esym := sm.LookupLocal(s, s.global, ts)
+    mut p := 0
+    until esym == 0 and p < sm.PackageCount(s):
+        pk := sm.PackageAt(s, p)
+        if pk != 0 and sm.SymAt(s, pk).kind == sm.SYM_PACKAGE and sm.SymAt(s, pk).members != 0:
+            pn := str.Len(sm.SymAt(s, pk).pkgname) > 0 ? sm.SymAt(s, pk).pkgname : sm.SymAt(s, pk).name
+            if str.StartsWith(ts, pn + "_"):
+                rest := str.Substr(ts, str.Len(pn) + 1, str.Len(ts) - str.Len(pn) - 1)
+                esym = sm.LookupLocal(s, sm.SymAt(s, pk).members, rest)
+            end
+        end
+        p += 1
+    end
+    ret esym != 0 and sm.SymAt(s, esym).kind == sm.SYM_ENUM and sm.SymAt(s, esym).enum_val_kind == tok.TV_STRING
+end
+
+func is_str(s &: sm.Sema, ts: str): bool:
+    ret str.Equals(ts, "str") or str.Equals(ts, "uchar") or ts_is_string_enum(s, ts)
+end
+
+func is_bool(ts: str): bool:
+    ret str.Equals(ts, "bool")
+end
+
+func is_float(ts: str): bool:
+    ret str.Equals(ts, "f32") or str.Equals(ts, "f64")
+end
+
+func is_ptr_ts(ts: str): bool:
+    n := str.Len(ts)
+    ret n > 0 and byte_at(ts, n - 1) == 42
+end
+
+func is_array_ts(ts: str): bool:
+    n := str.Len(ts)
+    if n == 0 or byte_at(ts, n - 1) != 93:
+        ret false
+    end
+    ret str.StartsWith(ts, "slice<") == false
+end
+
+func poison(ts: str): Llv:
+    mut r := Llv {}
+    r.ref = "0"
+    r.ts = str.Len(ts) > 0 ? ts : "i32"
+    ret r
+end
+
+func make_llv(ref2: str, ts: str): Llv:
+    mut r := Llv {}
+    r.ref = ref2
+    r.ts = ts
+    ret r
+end

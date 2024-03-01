@@ -1,0 +1,133 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package nn
+
+import archive
+import compress
+import encoding.binary
+import mem
+import str
+import tensor
+
+const _CKPT_VERSION := 1
+
+func _find_param(ps &: ParamStore, name: str): int:
+    repeat ps.count() in i:
+        p := ps.items.get(i)
+        if str.Equals(p.name, name): ret i end
+    end
+    ret 0 - 1
+end
+
+@en "SaveCheckpointBuf"
+@fa "ذخیره نقطه بازرسی در بافر"
+pub func SaveCheckpointBuf(ps &: ParamStore): compress.ByteBuf:
+    mut buf := compress.NewByteBuf()
+    compress.BufPushBytes(buf, "SLMT" as void*, 4)
+    binary.WriteU32LE(buf, _CKPT_VERSION)
+    binary.WriteU32LE(buf, 0)
+    binary.WriteU32LE(buf, ps.count())
+    repeat ps.count() in i:
+        mut p := ps.items.get(i)
+        tensor.WriteTensor(buf, p.name, p.value)
+    end
+    crc := compress.CRC32Buf(buf)
+    binary.WriteU32LE(buf, crc as int)
+    ret buf
+end
+
+@en "LoadCheckpointBuf"
+@fa "بارگذاری نقطه بازرسی از بافر"
+pub func LoadCheckpointBuf(buf: compress.ByteBuf, ps &: ParamStore): bool:
+    n := compress.BufLen(buf)
+    if n < 20: ret false end
+    stored := compress.BufGet(buf, n - 4) | (compress.BufGet(buf, n - 3) << 8) | (compress.BufGet(buf, n - 2) << 16) | (compress.BufGet(buf, n - 1) << 24)
+    computed := compress.CRC32(buf.data, n - 4)
+    if (stored as u32) != computed: ret false end
+    mut rd := compress.NewByteReader(buf.data, n - 4)
+    if binary.ReadU8(rd) != 83 or binary.ReadU8(rd) != 76 or binary.ReadU8(rd) != 77 or binary.ReadU8(rd) != 84: ret false end
+    if binary.ReadU32LE(rd) != _CKPT_VERSION: ret false end
+    binary.ReadU32LE(rd)
+    count := binary.ReadU32LE(rd)
+    if rd.bad or count < 0: ret false end
+    mut all_ok := count == ps.count()
+    mut seen := Vector {} as Vector<bool>
+    seen.zeros(ps.count())
+    repeat count:
+        mut name := ""
+        mut t := tensor.Empty()
+        if tensor.ReadTensor(rd, name, t) == false:
+            all_ok = false
+        else:
+            idx := _find_param(ps, name)
+            if idx < 0:
+                all_ok = false
+            else:
+                mut p := ps.items.get(idx)
+                if p.value.same_shape(t):
+                    tensor.CopyInto(p.value, t)
+                    seen.set(idx, true)
+                else:
+                    all_ok = false
+                end
+            end
+            t.free()
+        end
+        if str.Len(name) > 0: mem.Free(name as void*) end
+    end
+    repeat ps.count() in i:
+        if seen.get(i) == false: all_ok = false end
+    end
+    seen.free()
+    ret all_ok
+end
+
+@en "SaveCheckpoint"
+@fa "ذخیره نقطه بازرسی"
+pub func SaveCheckpoint(path: str, ps &: ParamStore): bool:
+    mut buf := SaveCheckpointBuf(ps)
+    mut ok := false
+    if str.EndsWith(path, ".gz"):
+        mut z := compress.GzipCompressBuf(buf)
+        ok = archive.WriteBinaryFileBuf(path, z)
+        compress.BufFree(z)
+    else:
+        ok = archive.WriteBinaryFileBuf(path, buf)
+    end
+    compress.BufFree(buf)
+    ret ok
+end
+
+@en "LoadCheckpoint"
+@fa "بارگذاری نقطه بازرسی"
+pub func LoadCheckpoint(path: str, ps &: ParamStore): bool:
+    mut fok := false
+    mut raw := archive.ReadBinaryFile(path, fok)
+    if fok == false:
+        compress.BufFree(raw)
+        ret false
+    end
+    mut ok := false
+    if str.EndsWith(path, ".gz"):
+        mut zok := false
+        mut plain := compress.GzipDecompressBuf(raw, zok)
+        if zok: ok = LoadCheckpointBuf(plain, ps) end
+        compress.BufFree(plain)
+    else:
+        ok = LoadCheckpointBuf(raw, ps)
+    end
+    compress.BufFree(raw)
+    ret ok
+end

@@ -1,0 +1,154 @@
+pkg.en = encoding/value
+pkg.name = encoding/value
+pkg.group = Encoding and data
+pkg.summary = A dynamic value for data whose shape you do not know in advance; the shared language of every format in this group.
+pkg.title = The encoding/value package in Salam | Dynamic values
+pkg.description = The encoding/value package in Salam: dynamic null, boolean, number, string, array and object values for working with JSON, YAML, TOML and the other formats, with an example.
+pkg.import = encoding.value
+pkg.intro <<
+<p><code>Value</code> is the dynamic data type shared by the encoding packages. One <code>Value</code> is a null, a bool, a 64-bit int, a float, a string, an array of values or an object mapping strings to values, and its <code>kind</code> field says which. <a href="/std/encoding/json/">encoding/json</a>, <a href="/std/encoding/yaml/">encoding/yaml</a>, <a href="/std/encoding/toml/">encoding/toml</a>, <a href="/std/encoding/msgpack/">encoding/msgpack</a> and others decode into it and encode from it, and <a href="/std/encoding/serde/">encoding/serde</a> converts between formats through it.</p>
+<p>Reach for a <code>Value</code> when the shape of the data is not known when you write the program: a webhook payload, a config with optional sections, a document you only pass along. When the shape is fixed, decoding straight into a struct (for example with <code>json.Unmarshal</code>) is shorter and checks the types for you.</p>
+<h3 id="api">The functions in four groups</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Functions</th></tr></thead>
+<tbody>
+<tr><td>Make a value</td><td><code>ValueNull</code>, <code>ValueBool</code>, <code>ValueInt</code>, <code>ValueFloat</code>, <code>ValueString</code>, <code>NewValueArray</code>, <code>NewValueObject</code></td></tr>
+<tr><td>Ask the kind</td><td><code>IsNull</code>, <code>IsBool</code>, <code>IsInt</code>, <code>IsFloat</code>, <code>IsNumber</code>, <code>IsString</code>, <code>IsArray</code>, <code>IsObject</code></td></tr>
+<tr><td>Read</td><td><code>AsBool</code>, <code>AsInt</code>, <code>AsFloat</code>, <code>AsString</code>, <code>ArrayLen</code>, <code>ArrayGet</code>, <code>ObjectGet</code>, <code>ObjectGetOk</code>, <code>ObjectHas</code>, <code>ObjectKeys</code></td></tr>
+<tr><td>Change</td><td><code>ArrayPush</code>, <code>ArraySet</code>, <code>ObjectSet</code>, <code>ObjectDelete</code>, <code>ValueClone</code>, <code>ValueFree</code></td></tr>
+</tbody>
+</table></div>
+<h3 id="pitfalls">What trips people up</h3>
+<ul>
+<li><strong>Reading never checks the kind.</strong> <code>AsString</code> of a number is <code>""</code> and <code>AsInt</code> of a string is 0. Ask <code>IsString</code> or <code>IsNumber</code> first when the data comes from outside.</li>
+<li><strong>Missing is null, all the way down.</strong> <code>ObjectGet</code> on a missing key, or on something that is not an object, returns null, so a chain like <code>ObjectGet(ObjectGet(doc, "a"), "b")</code> is safe. <code>ArrayGet</code> is not: an index past <code>ArrayLen</code> stops the program.</li>
+<li><strong>Copies share parts.</strong> A copy of an object shares its map, so <code>ObjectSet</code> through the copy changes the original. A copy of an array shares its elements but not its length, so <code>ArrayPush</code> on an array you got from <code>ObjectGet</code> is lost until you <code>ObjectSet</code> it back. Use <code>ValueClone</code> for a real copy.</li>
+<li><strong>Key order depends on how the object was built.</strong> <code>ObjectKeys</code> returns keys in the order they were added with <code>ObjectSet</code>, and a decoded JSON document in the order of its text. An object made from a map by <code>ValueObject</code> follows that map's own order. Sort the keys, or encode with <code>sort_keys</code>, when output must be alphabetical.</li>
+</ul>
+
+<h2 id="guide-walk">Guide: walk a whole document</h2>
+<p>A recursive function over <code>Value</code> handles any shape: for an object, visit each key; for an array, each index; anything else is a leaf. This one prints the path of every leaf, which is handy for logging a webhook payload or comparing two documents line by line.</p>
+{{example.encoding-value-guide-walk}}
+<p><code>ObjectKeys</code> gives the keys in the order they were added, so a decoded document keeps the order of its text. This program sorts them with <code>sort.QuickSort</code> to print them alphabetically whatever order the input had. <code>ToDebugString</code> shows each leaf together with its kind.</p>
+
+<h2 id="guide-build">Guide: build a payload with optional fields</h2>
+<p>A struct always writes all its fields. When some fields should only appear when they have a value, as many HTTP APIs expect, build a <code>Value</code> object instead and set only what you have. <code>json.Encode</code> with <code>sort_keys</code> prints it in a stable order.</p>
+{{example.encoding-value-guide-build}}
+
+<h2 id="guide-edit">Guide: change a nested field</h2>
+<p>To change something deep in a decoded document, take the inner part with <code>ObjectGet</code>, change it, and store it back with <code>ObjectSet</code>. For objects the store is not strictly needed, because the map is shared, but for arrays it is: the program below shows the new order line missing until the array is set back.</p>
+{{example.encoding-value-guide-edit}}
+<p>Always writing the changed part back with <code>ObjectSet</code> makes the code correct for both kinds, and keeps working if the representation changes. The last line reads a field of a <code>shipping</code> object that does not exist: the chain of <code>ObjectGet</code> calls returns null and <code>AsString</code> gives an empty string, with no crash.</p>
+
+<h2 id="guide-merge">Guide: deep merge of settings</h2>
+<p>Settings often come in layers: built-in defaults, then a file per site. A deep merge keeps every default the site file does not mention and replaces only what it does, one level at a time. Arrays and plain values in the override win as a whole.</p>
+{{example.encoding-value-guide-merge}}
+<p>The function clones what it keeps, so <code>defaults</code> is the same afterwards. Without the clones, the result would share its objects with the inputs, as the next section shows.</p>
+
+<h2 id="guide-pitfalls">Guide: copies, conversions and missing keys</h2>
+<p>Assigning a <code>Value</code> to a new variable does not copy its contents: an object's fields live in a shared map, so a change through the copy shows up in the original. Call <code>ValueClone</code> when you need an independent copy, and <code>ValueFree</code> when you are done with it. Free only values nothing else shares, since freeing a plain copy also frees the original's map.</p>
+{{example.encoding-value-guide-pitfalls}}
+<ul>
+<li><code>AsInt</code> cuts a float toward zero and <code>AsFloat</code> widens an int, but neither parses text: a string gives 0. Check the kind first with <code>IsInt</code>, <code>IsNumber</code> or <code>IsString</code>.</li>
+<li><code>Equal</code> compares kinds too, so the integer 1 and the float 1.0 are different values.</li>
+<li><code>ObjectGet</code> on a missing key gives a null value; <code>ObjectGetOk</code> also tells you whether the key was there.</li>
+</ul>
+>>
+
+doc.Value = A dynamic value: null, boolean, whole number, decimal, string, array or object.
+doc.Value.kind = The kind of the value; one of the Kind constants.
+doc.Value.b = The boolean value.
+doc.Value.i = The whole number value.
+doc.Value.n = The decimal value.
+doc.Value.s = The string value.
+doc.Value.arr = The elements of an array.
+doc.Value.obj = The keys and values of an object.
+doc.Value.order = An internal handle to the list that records the order in which keys were added to an object with <code>ObjectSet</code>. <code>ObjectDelete</code> keeps it up to date. Do not use it directly; <code>ObjectKeys</code> reads it.
+doc.KindNull = Null.
+doc.KindBool = Boolean.
+doc.KindInt = Whole number.
+doc.KindFloat = Decimal.
+doc.KindString = String.
+doc.KindArray = Array.
+doc.KindObject = Object.
+doc.ValueNull = A null value.
+doc.ValueBool = A boolean value.
+doc.ValueInt = A whole number value.
+doc.ValueFloat = A decimal value.
+doc.ValueString = A string value.
+doc.ValueArray = An array from a vector.
+doc.ValueObject = An object from a map.
+doc.NewValueArray = An empty array.
+doc.NewValueObject = An empty object.
+doc.IsNull = True when the value is null.
+doc.IsBool = True when it is a boolean.
+doc.IsInt = True when it is a whole number.
+doc.IsFloat = True when it is a decimal.
+doc.IsNumber = True when it is a whole number or a decimal.
+doc.IsString = True when it is a string.
+doc.IsArray = True when it is an array.
+doc.IsObject = True when it is an object.
+doc.AsBool = The boolean value; false for any other kind.
+doc.AsInt = The whole number value; a decimal is truncated toward zero, and any other kind gives 0.
+doc.AsFloat = The decimal value; a whole number is converted, and any other kind gives 0.
+doc.AsString = The string value; an empty string for any other kind.
+doc.ArrayLen = The number of elements in an array; 0 for any other kind.
+doc.ArrayGet = Element number <code>i</code>; an index outside <code>0</code> to <code>ArrayLen - 1</code> stops the program.
+doc.ArraySet = Replaces element number <code>i</code>.
+doc.ArrayPush = Adds an element at the end of an array. If the array came from <code>ObjectGet</code> or <code>ArrayGet</code>, store it back for the parent to see the new length.
+doc.ObjectLen = The number of keys in an object.
+doc.ObjectHas = True when the key is there.
+doc.ObjectGet = The value for a key, or null when it is absent or <code>v</code> is not an object.
+doc.ObjectGetOk = The value for a key, with <code>ok</code> saying whether the key was there; for telling "absent" apart from "null".
+doc.ObjectSet = Sets a key.
+doc.ObjectDelete = Removes a key and says whether it was there.
+doc.ObjectKeys = The keys of an object. Keys added with <code>ObjectSet</code> come in the order they were added; the keys of an object made from a map by <code>ValueObject</code> come in that map's own order.
+doc.Equal = True when two values, with all their nested elements, are equal.
+doc.ValueClone = A complete, independent copy of a value.
+doc.ValueFree = Releases the memory of a value and its elements.
+doc.ToDebugString = A readable form with the kind of every element, such as <code>object{name: string(Ali)}</code>, for debugging.
+
+ex.Value = encoding-value-Value
+ex.KindNull = encoding-value-Value
+ex.KindBool = encoding-value-Value
+ex.KindInt = encoding-value-Value
+ex.KindFloat = encoding-value-Value
+ex.KindString = encoding-value-Value
+ex.KindArray = encoding-value-Value
+ex.KindObject = encoding-value-Value
+ex.ValueNull = encoding-value-Value
+ex.ValueBool = encoding-value-Value
+ex.ValueInt = encoding-value-Value
+ex.ValueFloat = encoding-value-Value
+ex.ValueString = encoding-value-Value
+ex.ValueArray = encoding-value-Value
+ex.ValueObject = encoding-value-Value
+ex.NewValueArray = encoding-value-Value
+ex.NewValueObject = encoding-value-Value
+ex.IsNull = encoding-value-Value
+ex.IsBool = encoding-value-Value
+ex.IsInt = encoding-value-Value
+ex.IsFloat = encoding-value-Value
+ex.IsNumber = encoding-value-Value
+ex.IsString = encoding-value-Value
+ex.IsArray = encoding-value-Value
+ex.IsObject = encoding-value-Value
+ex.AsBool = encoding-value-Value
+ex.AsInt = encoding-value-Value
+ex.AsFloat = encoding-value-Value
+ex.AsString = encoding-value-Value
+ex.ArrayLen = encoding-value-Value
+ex.ArrayGet = encoding-value-Value
+ex.ArraySet = encoding-value-Value
+ex.ArrayPush = encoding-value-Value
+ex.ObjectLen = encoding-value-Value
+ex.ObjectHas = encoding-value-Value
+ex.ObjectGet = encoding-value-Value
+ex.ObjectGetOk = encoding-value-Value
+ex.ObjectSet = encoding-value-Value
+ex.ObjectDelete = encoding-value-Value
+ex.ObjectKeys = encoding-value-Value
+ex.Equal = encoding-value-Value
+ex.ValueClone = encoding-value-Value
+ex.ValueFree = encoding-value-Value
+ex.ToDebugString = encoding-value-Value

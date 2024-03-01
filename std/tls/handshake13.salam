@@ -1,0 +1,237 @@
+package tls
+
+const HS_CLIENT_HELLO := 1
+const HS_SERVER_HELLO := 2
+const HS_NEW_SESSION_TICKET := 4
+const HS_ENCRYPTED_EXTENSIONS := 8
+const HS_CERTIFICATE := 11
+const HS_CERTIFICATE_REQUEST := 13
+const HS_CERTIFICATE_VERIFY := 15
+const HS_FINISHED := 20
+const HS_KEY_UPDATE := 24
+const HS_MESSAGE_HASH := 254
+
+struct Handshake:
+    pub rec: RecordLayer = RecordLayer {}
+    pub cipher: int = 0
+    pub hash: int = 0
+    pub hlen: int = 0
+    pub tr: Hash = Hash {}
+    pub priv: Buf = Buf {}
+    pub pub_key: Buf = Buf {}
+    pub shared: Buf = Buf {}
+    pub hs_secret: Buf = Buf {}
+    pub master: Buf = Buf {}
+    pub c_hs_secret: Buf = Buf {}
+    pub s_hs_secret: Buf = Buf {}
+    pub c_ap_secret: Buf = Buf {}
+    pub s_ap_secret: Buf = Buf {}
+    pub certs: Buf = Buf {}
+    pub cert_off: Buf = Buf {}
+    pub ncerts: int = 0
+    pub suite: int = 0
+    pub ver: int = 0
+    pub crand: Buf = Buf {}
+    pub srand: Buf = Buf {}
+    pub ems: bool = false
+    pub group: int = 0
+    pub ecpriv: Buf = Buf {}
+    pub ecpub: Buf = Buf {}
+    pub hrr: bool = false
+    pub share_group: int = 0
+    pub cookie: Buf = Buf {}
+    pub sid: Buf = Buf {}
+    pub ok: bool = false
+    pub err: str = ""
+end
+
+func _hs_free(h &: Handshake):
+    _buf_wipe(h.priv)
+    _buf_free(h.pub_key)
+    _buf_wipe(h.shared)
+    _buf_wipe(h.hs_secret)
+    _buf_wipe(h.master)
+    _buf_wipe(h.c_hs_secret)
+    _buf_wipe(h.s_hs_secret)
+    _buf_wipe(h.c_ap_secret)
+    _buf_wipe(h.s_ap_secret)
+    _buf_free(h.certs)
+    _buf_free(h.cert_off)
+    _buf_free(h.crand)
+    _buf_free(h.srand)
+    _buf_wipe(h.ecpriv)
+    _buf_free(h.ecpub)
+    _buf_free(h.cookie)
+    _buf_free(h.sid)
+end
+
+func _hs_fail(h &: Handshake, msg: str): bool:
+    if h.err.len() == 0:
+        h.err = msg
+    end
+    ret false
+end
+
+func _hs_transcript(h: Handshake, out &: Buf):
+    _bufreset(out)
+    _putzeros(out, h.hlen)
+    _hash_final(h.tr, out.p)
+end
+
+func _hs_derive(h: Handshake, secret: Buf, label: str, th: Buf, out &: Buf): bool:
+    _bufreset(out)
+    _putzeros(out, h.hlen)
+    ret _derive_secret(h.hash, secret.p, secret.len, label, th.p, th.len, out.p)
+end
+
+func _hs_key_schedule(h &: Handshake): bool:
+    mut zeros := _newbuf(h.hlen)
+    defer _buf_wipe(zeros)
+    _putzeros(zeros, h.hlen)
+
+    mut early := _newbuf(h.hlen)
+    defer _buf_wipe(early)
+    _putzeros(early, h.hlen)
+    _hkdf_extract(h.hash, zeros.p, 0, zeros.p, h.hlen, early.p)
+
+    mut emptyhash := _newbuf(h.hlen)
+    defer _buf_free(emptyhash)
+    _putzeros(emptyhash, h.hlen)
+    _hash_oneshot(h.hash, zeros.p, 0, emptyhash.p)
+
+    mut derived := _newbuf(h.hlen)
+    defer _buf_wipe(derived)
+    if not _hs_derive(h, early, "derived", emptyhash, derived):
+        ret false
+    end
+
+    _bufreset(h.hs_secret)
+    _putzeros(h.hs_secret, h.hlen)
+    _hkdf_extract(h.hash, derived.p, h.hlen, h.shared.p, h.shared.len, h.hs_secret.p)
+
+    mut th := _newbuf(h.hlen)
+    defer _buf_free(th)
+    _hs_transcript(h, th)
+    if not _hs_derive(h, h.hs_secret, "c hs traffic", th, h.c_hs_secret):
+        ret false
+    end
+    if not _hs_derive(h, h.hs_secret, "s hs traffic", th, h.s_hs_secret):
+        ret false
+    end
+
+    mut derived2 := _newbuf(h.hlen)
+    defer _buf_wipe(derived2)
+    if not _hs_derive(h, h.hs_secret, "derived", emptyhash, derived2):
+        ret false
+    end
+    _bufreset(h.master)
+    _putzeros(h.master, h.hlen)
+    _hkdf_extract(h.hash, derived2.p, h.hlen, zeros.p, h.hlen, h.master.p)
+    ret true
+end
+
+func _hs_finished_mac(h: Handshake, secret: Buf, th: Buf, out &: Buf): bool:
+    mut fk := _newbuf(h.hlen)
+    defer _buf_wipe(fk)
+    _putzeros(fk, h.hlen)
+    if not _hkdf_expand_label(h.hash, secret.p, secret.len, "finished", null, 0, fk.p, h.hlen):
+        ret false
+    end
+    _bufreset(out)
+    _putzeros(out, h.hlen)
+    _hmac(h.hash, fk.p, h.hlen, th.p, th.len, out.p)
+    ret true
+end
+
+func _hs_read_cert_list(h &: Handshake, msg: Reader, tls13: bool): bool:
+    mut r := msg
+    if tls13:
+        ctx := _rdvec8(r)
+        if r.bad or ctx.len != 0:
+            ret _hs_fail(h, "unexpected certificate context")
+        end
+    end
+    mut list := _rdvec24(r)
+    if r.bad:
+        ret _hs_fail(h, "malformed Certificate message")
+    end
+    _bufreset(h.certs)
+    _bufreset(h.cert_off)
+    h.ncerts = 0
+    until _rdleft(list) > 0 and not list.bad:
+        cert := _rdvec24(list)
+        if tls13:
+            exts := _rdvec16(list)
+            _rdskip(exts, exts.len)
+        end
+        if list.bad:
+            ret _hs_fail(h, "malformed certificate entry")
+        end
+        if h.ncerts < MAX_CHAIN_DEPTH:
+            begin := h.certs.len
+            repeat cert.len in i:
+                _put8(h.certs, _rdat(cert, i))
+            end
+            _put32(h.cert_off, begin as i64)
+            _put32(h.cert_off, cert.len as i64)
+            h.ncerts += 1
+        end
+    end
+    if h.ncerts == 0:
+        ret _hs_fail(h, "server sent no certificates")
+    end
+    ret true
+end
+
+func _hs_parse_certificate(h &: Handshake, msg: Reader): bool:
+    ret _hs_read_cert_list(h, msg, true)
+end
+
+func _hs_cv_content(_h: Handshake, th: Buf, out &: Buf):
+    _bufreset(out)
+    repeat 64:
+        _put8(out, 0x20)
+    end
+    _putstr(out, "TLS 1.3, server CertificateVerify")
+    _put8(out, 0)
+    _putbuf(out, th)
+end
+
+func _hs_verify_cert_verify(h &: Handshake, msg: Reader, th: Buf): bool:
+    mut r := msg
+    scheme := _rd16(r)
+    sig := _rdvec16(r)
+    if r.bad or _rdleft(r) != 0:
+        ret _hs_fail(h, "malformed CertificateVerify")
+    end
+
+    mut content := _newbuf(128)
+    defer _buf_free(content)
+    _hs_cv_content(h, th, content)
+
+    leaf := _cert_parse(_bufptr(h.certs, 0), _cert_len(h, 0))
+    if not leaf.ok:
+        ret _hs_fail(h, "server leaf certificate did not parse")
+    end
+
+    if not _tls_verify_leaf_sig(leaf, scheme, content, sig, false):
+        ret _hs_fail(h, "CertificateVerify signature invalid")
+    end
+    ret true
+end
+
+func _cert_len(h: Handshake, i: int): int:
+    mut l := 0
+    repeat 4 in k:
+        l = (l << 8) | _bufat(h.cert_off, i * 8 + 4 + k)
+    end
+    ret l
+end
+
+func _cert_start(h: Handshake, i: int): int:
+    mut o := 0
+    repeat 4 in k:
+        o = (o << 8) | _bufat(h.cert_off, i * 8 + k)
+    end
+    ret o
+end

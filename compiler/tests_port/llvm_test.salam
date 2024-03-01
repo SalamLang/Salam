@@ -1,0 +1,629 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import str
+import os
+import testing
+
+include tok "../token.salam"
+include src "../source.salam"
+include lg "../logger.salam"
+include lp "../langpack.salam"
+include lx "../lexer/lexer.salam"
+include at "../ast.salam"
+include ps "../parser/parser.salam"
+include cc "../condcomp.salam"
+include sm "../semantic/semantic.salam"
+include lv "../llvmgen/llvmgen.salam"
+include co "../sal_core.salam"
+
+func run_fixture(quiet: lg.Logger, stem: str, src_text: str): lv.Output:
+    fixture := "compiler/tests_port/tmp_lv/" + stem + ".salam"
+    _w := os.WriteFile(fixture, src_text)
+    mut sf := src.New()
+    testing.AssertMsg(src.Load(fixture, sf), "src.Load failed for " + stem)
+    pack := lx.Detect(sf, lp.Load("en"))
+    mut toks := tok.StreamNew(fixture)
+    _lok := lx.Run(quiet, pack, sf, toks)
+    mut a2 := at.NewAst()
+    mut prog := 0
+    _pok := ps.Run(quiet, toks, a2, prog)
+    tok.StreamFree(toks)
+    mut s2 := sm.New(quiet, fixture, lp.Code(pack))
+    sm.SetCc(s2, cc.TableBuild("", Vector {} as Vector<str>))
+    _ck := cc.PruneProgram(a2, quiet, fixture, s2.cctab, prog)
+    sok := sm.Run(s2, a2, prog)
+    testing.AssertMsg(sok, "sema failed for " + stem)
+    o := lv.RunOpts(
+        quiet, s2, a2, prog, stem, lp.Entry(pack), lv.OptionsDefault(), fixture
+    )
+    _rm := os.Remove(fixture)
+    ret o
+end
+
+func run_fixture_for(
+    quiet: lg.Logger, stem: str, src_text: str, triple: str
+): lv.Output:
+    fixture := "compiler/tests_port/tmp_lv/" + stem + ".salam"
+    _w := os.WriteFile(fixture, src_text)
+    mut sf := src.New()
+    testing.AssertMsg(src.Load(fixture, sf), "src.Load failed for " + stem)
+    pack := lx.Detect(sf, lp.Load("en"))
+    mut toks := tok.StreamNew(fixture)
+    _lok := lx.Run(quiet, pack, sf, toks)
+    mut a2 := at.NewAst()
+    mut prog := 0
+    _pok := ps.Run(quiet, toks, a2, prog)
+    tok.StreamFree(toks)
+    mut s2 := sm.New(quiet, fixture, lp.Code(pack))
+    sm.SetCc(s2, cc.TableBuild(triple, Vector {} as Vector<str>))
+    _ck := cc.PruneProgram(a2, quiet, fixture, s2.cctab, prog)
+    sok := sm.Run(s2, a2, prog)
+    testing.AssertMsg(sok, "sema failed for " + stem)
+    mut opts := lv.OptionsDefault()
+    opts.target_triple = triple
+    o := lv.RunOpts(quiet, s2, a2, prog, stem, lp.Entry(pack), opts, fixture)
+    _rm := os.Remove(fixture)
+    ret o
+end
+
+func q(s: str): str:
+    mut b := co.SbNew()
+    co.SbPutShellArg(b, s)
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+func main:
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut a := at.NewAst()
+    defer at.FreeAst(a)
+    mut s := sm.New(quiet, "t.salam", "en")
+    defer sm.Free(s)
+
+    testing.AssertEqInt(lv.TargetPtrBits("x86_64-pc-linux-gnu"), 64)
+    testing.AssertEqInt(lv.TargetPtrBits("i686-pc-windows-gnu"), 32)
+    testing.AssertEqInt(lv.TargetPtrBits("aarch64-apple-darwin"), 64)
+    testing.AssertEqInt(lv.TargetPtrBits("wasm32-wasi"), 32)
+    testing.AssertEqInt(lv.TargetPtrBits("riscv64-unknown-linux"), 64)
+
+    testing.AssertFalse(lv.TargetIsFreestanding(""))
+    testing.AssertFalse(lv.TargetIsFreestanding("x86_64-pc-linux-gnu"))
+    testing.AssertTrue(lv.TargetIsFreestanding("x86_64-unknown-salamos"))
+    testing.AssertTrue(lv.TargetIsFreestanding("x86_64-unknown-uefi"))
+
+    testing.AssertTrue(lv.TargetIsWindows("x86_64-pc-windows-msvc"))
+    testing.AssertTrue(lv.TargetIsWindows("x86_64-w64-mingw32"))
+    testing.AssertFalse(lv.TargetIsWindows("x86_64-unknown-linux-gnu"))
+
+    testing.AssertEqStr(
+        lv.DatalayoutOf("x86_64-pc-linux-gnu"), "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-" + "i128:128-f80:128-n8:16:32:64-S128"
+    )
+    testing.AssertEqStr(
+        lv.DatalayoutOf("x86_64-w64-windows-gnu"), "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-" + "i128:128-f80:128-n8:16:32:64-S128"
+    )
+    testing.AssertEqStr(
+        lv.DatalayoutOf("aarch64-apple-darwin"), "e-m:o-i64:64-i128:128-n32:64-S128"
+    )
+    testing.AssertEqStr(
+        lv.DatalayoutOf("riscv64-unknown-linux-gnu"), "e-m:e-p:64:64-i64:64-i128:128-n32:64-S128"
+    )
+    testing.AssertEqStr(
+        lv.DatalayoutOf("i686-pc-linux-gnu"), "e-m:e-p:32:32-p270:32:32-p271:32:32-p272:64:64-" + "i128:128-f64:32:64-f80:32-n8:16:32-S128"
+    )
+    testing.AssertEqStr(
+        lv.DatalayoutOf("thumbv7-unknown-unknown"), "e-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64"
+    )
+    testing.AssertEqStr(
+        lv.DatalayoutOf("thumbebv4t-none-eabi"), "E-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64"
+    )
+
+    testing.AssertEqStr(lv.SafeNameOf("plain_Name.42"), "plain_Name.42")
+    testing.AssertEqStr(lv.SafeNameOf("a b"), "a_20b")
+    testing.AssertEqStr(lv.SafeNameOf(""), "_")
+    testing.AssertEqStr(lv.SafeNameOf("سلام"), "_d8_b3_d9_84_d8_a7_d9_85")
+
+    testing.AssertEqStr(lv.StructLtypeOf("Point"), "%struct.Point")
+    testing.AssertEqStr(lv.StructLtypeOf("A_B"), "%struct.A__B")
+    testing.AssertEqStr(lv.StructLtypeOf("9x"), "%struct._9x")
+
+    testing.AssertEqInt(lv.ArrayDimOf("i32[3]") as i32, 3)
+    testing.AssertEqInt(lv.ArrayDimOf("f64") as i32, 0)
+    testing.AssertEqStr(lv.ArrayElemOf("i32[3]"), "i32")
+    testing.AssertEqStr(lv.ArrayElemOf("i32[2][3]"), "i32[3]")
+
+    testing.AssertTrue(lv.IsSliceTs("slice<i32>"))
+    testing.AssertFalse(lv.IsSliceTs("i32[3]"))
+    testing.AssertEqStr(lv.SliceElemOf("slice<i32>"), "i32")
+    testing.AssertEqStr(lv.SliceElemOf("slice<Vector<int>>"), "Vector<int>")
+
+    testing.AssertEqStr(lv.FuncRetOf("func(i32, f64) bool"), "bool")
+    testing.AssertEqStr(lv.FuncRetOf("func() void"), "void")
+    testing.AssertEqStr(lv.FuncRetOf("i32"), "void")
+    mut fp := lv.FuncParamsOf("func(i32, f64) bool")
+    defer fp.free()
+    testing.AssertEqInt(fp.len(), 2)
+    testing.AssertEqStr(fp.get(0), "i32")
+    testing.AssertEqStr(fp.get(1), "f64")
+    mut fp0 := lv.FuncParamsOf("func() void")
+    defer fp0.free()
+    testing.AssertEqInt(fp0.len(), 0)
+
+    testing.AssertEqStr(lv.ZeroOf(s, "str"), "null")
+    testing.AssertEqStr(lv.ZeroOf(s, "i32*"), "null")
+    testing.AssertEqStr(lv.ZeroOf(s, "bool"), "false")
+    testing.AssertEqStr(lv.ZeroOf(s, "f64"), "0.0")
+    testing.AssertEqStr(lv.ZeroOf(s, "i32"), "0")
+    testing.AssertEqStr(lv.ZeroOf(s, "SomeStruct"), "zeroinitializer")
+
+    testing.AssertTrue(lv.IsIntTs("u64"))
+    testing.AssertFalse(lv.IsIntTs("f64"))
+    testing.AssertTrue(lv.IsSignedTs("i32"))
+    testing.AssertFalse(lv.IsSignedTs("u32"))
+    testing.AssertFalse(lv.IsSignedTs("bool"))
+    testing.AssertFalse(lv.IsSignedTs("char"))
+
+    mut vm := lv.VariantMembersOf("Variant<i32, f64, str>")
+    defer vm.free()
+    testing.AssertEqInt(vm.len(), 3)
+    testing.AssertEqStr(vm.get(0), "i32")
+    testing.AssertEqStr(vm.get(1), "f64")
+    testing.AssertEqStr(vm.get(2), "str")
+    testing.AssertEqStr(
+        lv.VariantCnameOf("Variant<i32, f64, str>"), "%_Salam_variant_i32_f64_str"
+    )
+    testing.AssertEqInt(lv.VariantTagOf("Variant<i32, f64, str>", "f64"), 1)
+    testing.AssertEqInt(
+        lv.VariantTagOf("Variant<i32, f64, str>", "bool"), 0 - 1
+    )
+
+    mut v := lv.NewLv(quiet, "t", "main", "")
+    testing.AssertEqInt(v.ptr_bits, 64)
+    testing.AssertEqStr(v.usize, "i64")
+    testing.AssertTrue(v.ok)
+
+    testing.AssertEqStr(lv.NewTmp(v), "%t0")
+    testing.AssertEqStr(lv.NewTmp(v), "%t1")
+    testing.AssertEqStr(lv.NewLbl(v, "then"), "L0_then")
+    testing.AssertEqStr(lv.NewLbl(v, "else"), "L1_else")
+
+    r1 := lv.StrConst(v, "hi")
+    r2 := lv.StrConst(v, "hi")
+    r3 := lv.StrConst(v, "bye")
+    testing.AssertEqStr(r1, "@.str.0")
+    testing.AssertEqStr(r2, "@.str.0")
+    testing.AssertEqStr(r3, "@.str.1")
+
+    lv.LocalAddV(v, "x", "%p.x", "i32")
+    xi := lv.LocalFind(v, "x")
+    testing.AssertTrue(xi >= 0)
+    testing.AssertEqStr(lv.LocalAt(v, xi).ptr, "%p.x")
+    testing.AssertEqInt(lv.LocalFind(v, "nope"), 0 - 1)
+
+    testing.AssertEqStr(lv.TyOf(v, s, a, "void"), "void")
+    testing.AssertEqStr(lv.TyOf(v, s, a, "bool"), "i1")
+    testing.AssertEqStr(lv.TyOf(v, s, a, "char"), "i8")
+    testing.AssertEqStr(lv.TyOf(v, s, a, "i8"), "i8")
+    testing.AssertEqStr(lv.TyOf(v, s, a, "i16"), "i16")
+    testing.AssertEqStr(lv.TyOf(v, s, a, "i32"), "i32")
+    testing.AssertEqStr(lv.TyOf(v, s, a, "i64"), "i64")
+    testing.AssertEqStr(lv.TyOf(v, s, a, "u8"), "i8")
+    testing.AssertEqStr(lv.TyOf(v, s, a, "u64"), "i64")
+    testing.AssertEqStr(lv.TyOf(v, s, a, "usize"), "i64")
+    testing.AssertEqStr(lv.TyOf(v, s, a, "size"), "i64")
+    testing.AssertEqStr(lv.TyOf(v, s, a, "f32"), "float")
+    testing.AssertEqStr(lv.TyOf(v, s, a, "f64"), "double")
+    testing.AssertEqStr(lv.TyOf(v, s, a, "str"), "ptr")
+    testing.AssertEqStr(lv.TyOf(v, s, a, "uchar"), "ptr")
+    testing.AssertEqStr(lv.TyOf(v, s, a, "i32*"), "ptr")
+    testing.AssertEqStr(lv.TyOf(v, s, a, "i32[3]"), "[3 x i32]")
+    testing.AssertEqStr(lv.TyOf(v, s, a, "slice<i32>"), "{ ptr, i64 }")
+    testing.AssertEqStr(lv.TyOf(v, s, a, "dyn Shape"), "%dyn")
+    testing.AssertEqStr(
+        lv.TyOf(v, s, a, "Variant<i32, f64>"), "%_Salam_variant_i32_f64"
+    )
+    testing.AssertEqStr(lv.TyOf(v, s, a, "Unknown"), "ptr")
+
+    testing.AssertEqStr(lv.ConvRef(v, s, a, "%t9", "i32", "i32"), "%t9")
+    tconv := lv.ConvRef(v, s, a, "5", "i32", "i64")
+    testing.AssertTrue(str.StartsWith(tconv, "%t"))
+
+    testing.AssertEqStr(lv.CommonTs(v, "i32", "f64"), "f64")
+    testing.AssertEqStr(lv.CommonTs(v, "i32", "i64"), "i64")
+    testing.AssertEqStr(lv.CommonTs(v, "u32", "i32"), "u32")
+
+    testing.AssertEqStr(lv.MangleOf(v, s, "", "main", 0), "main")
+    testing.AssertEqStr(lv.MangleOf(v, s, "", "helper", 0), "salam_helper")
+
+    testing.AssertEqStr(lv.ZeroOf(s, lv.ArrayElemOf("i32[3]")), "0")
+
+    lv.FreeLv(v)
+
+    os.Mkdir("compiler/tests_port/tmp_lv")
+    fixture := "compiler/tests_port/tmp_lv/t1.salam"
+    _w := os.WriteFile(fixture, "func main:\n    println \"x\"\nend\n")
+
+    mut sf := src.New()
+    testing.AssertTrue(src.Load(fixture, sf))
+    pack := lx.Detect(sf, lp.Load("en"))
+    mut toks := tok.StreamNew(fixture)
+    _lok := lx.Run(quiet, pack, sf, toks)
+    mut a2 := at.NewAst()
+    defer at.FreeAst(a2)
+    mut prog := 0
+    _pok := ps.Run(quiet, toks, a2, prog)
+    tok.StreamFree(toks)
+    mut s2 := sm.New(quiet, fixture, lp.Code(pack))
+    sm.SetCc(s2, cc.TableBuild("", Vector {} as Vector<str>))
+    _ck := cc.PruneProgram(a2, quiet, fixture, s2.cctab, prog)
+    sok := sm.Run(s2, a2, prog)
+    testing.AssertTrue(sok)
+
+    o := lv.RunOpts(
+        quiet, s2, a2, prog, "t1", lp.Entry(pack), lv.OptionsDefault(), fixture
+    )
+    testing.AssertTrue(o.ok)
+    testing.AssertEqStr(o.module_name, "t1")
+    testing.AssertContains(o.ll_src, "; ModuleID = 't1'\n")
+    testing.AssertContains(o.ll_src, "source_filename = \"t1.salam\"\n")
+    testing.AssertContains(
+        o.ll_src, "; Salam -> LLVM IR (textual). usize = i64 (64-bit target).\n"
+    )
+    testing.AssertContains(
+        o.ll_src, "declare i32 @printf(ptr, ...) nounwind\n"
+    )
+    testing.AssertContains(
+        o.ll_src, "declare double @llvm.pow.f64(double, double)\n"
+    )
+    testing.AssertContains(o.ll_src, "%dyn = type { ptr, ptr }\n")
+    testing.AssertContains(
+        o.ll_src, "define void @salam_panic(ptr %arg0) noreturn nounwind {"
+    )
+    testing.AssertContains(o.ll_src, "define i32 @main(i32 %argc, ptr %argv) nounwind {")
+    testing.AssertContains(o.ll_src, "ret i32 0")
+
+    sm.Free(s2)
+    _rm := os.Remove(fixture)
+
+    src1 := "func main:\n" + "    a := 6\n" + "    b := a + 2\n" + "    c := a - 2\n" + "    d := a * 2\n" + "    e := a / 2\n" + "    f := a % 4\n" + "    g := a & 3\n" + "    h := a | 8\n" + "    ii := a ^ 1\n" + "    j := a << 2\n" + "    k := a >> 1\n" + "    l := ~a\n" + "    println b, c, d, e, f, g, h, ii, j, k, l\n" + "end\n"
+    o1 := run_fixture(quiet, "b_bit1", src1)
+    testing.AssertMsg(o1.ok, "b_bit1.ok false: " + o1.error)
+    testing.AssertContains(o1.ll_src, "= add i32 ")
+    testing.AssertContains(o1.ll_src, "= sub i32 ")
+    testing.AssertContains(o1.ll_src, "= mul i32 ")
+    testing.AssertMsg(str.IndexOf(o1.ll_src, " nsw ") < 0, "b_bit1 emitted nsw")
+    testing.AssertMsg(str.IndexOf(o1.ll_src, " nuw ") < 0, "b_bit1 emitted nuw")
+    testing.AssertContains(o1.ll_src, "= sdiv i32 ")
+    testing.AssertContains(o1.ll_src, "= srem i32 ")
+    testing.AssertContains(o1.ll_src, "= and i32 ")
+    testing.AssertContains(o1.ll_src, "= or i32 ")
+    testing.AssertContains(o1.ll_src, "= xor i32 ")
+    testing.AssertContains(o1.ll_src, "= shl i32 ")
+    testing.AssertContains(o1.ll_src, "= ashr i32 ")
+
+    src2 := "func main:\n" + "    x := 3\n" + "    y := 5\n" + "    println x == y, x != y, x < y, x > y, x <= y, x >= y\n" + "end\n"
+    o2 := run_fixture(quiet, "b_cmp1", src2)
+    testing.AssertMsg(o2.ok, "b_cmp1.ok false: " + o2.error)
+    testing.AssertContains(o2.ll_src, "icmp eq i32 ")
+    testing.AssertContains(o2.ll_src, "icmp ne i32 ")
+    testing.AssertContains(o2.ll_src, "icmp slt i32 ")
+    testing.AssertContains(o2.ll_src, "icmp sgt i32 ")
+    testing.AssertContains(o2.ll_src, "icmp sle i32 ")
+    testing.AssertContains(o2.ll_src, "icmp sge i32 ")
+
+    src2b := "func main:\n" + "    x := 1.5\n" + "    y := 2.5\n" + "    println x < y, x == y\n" + "end\n"
+    o2b := run_fixture(quiet, "b_cmpf1", src2b)
+    testing.AssertMsg(o2b.ok, "b_cmpf1.ok false: " + o2b.error)
+    testing.AssertContains(o2b.ll_src, "fcmp olt double ")
+    testing.AssertContains(o2b.ll_src, "fcmp oeq double ")
+
+    src3 := "func classify(n: int): str:\n" + "    if n < 0:\n" + "        ret \"neg\"\n" + "    else n == 0:\n" + "        ret \"zero\"\n" + "    else:\n" + "        ret \"pos\"\n" + "    end\n" + "end\n" + "func main:\n" + "    println classify(5)\n" + "end\n"
+    o3 := run_fixture(quiet, "b_if1", src3)
+    testing.AssertMsg(o3.ok, "b_if1.ok false: " + o3.error)
+    testing.AssertContains(o3.ll_src, "L0_then:")
+    testing.AssertContains(o3.ll_src, "L1_endif:")
+    testing.AssertContains(o3.ll_src, "L2_else:")
+    testing.AssertContains(o3.ll_src, "br i1 ")
+
+    src4 := "func main:\n" + "    mut i := 0\n" + "    mut t := 0\n" + "    until i < 10:\n" + "        if i == 3:\n" + "            i += 1\n" + "            continue\n" + "        end\n" + "        if i == 8:\n" + "            break\n" + "        end\n" + "        t += i\n" + "        i += 1\n" + "    end\n" + "    println t\n" + "end\n"
+    o4 := run_fixture(quiet, "b_while1", src4)
+    testing.AssertMsg(o4.ok, "b_while1.ok false: " + o4.error)
+    testing.AssertContains(o4.ll_src, "wcond:")
+    testing.AssertContains(o4.ll_src, "wbody:")
+    testing.AssertContains(o4.ll_src, "wend:")
+
+    src5 := "func main:\n" + "    mut s := 0\n" + "    repeat 5 in i:\n" + "        s += i\n" + "    end\n" + "    println s\n" + "end\n"
+    o5 := run_fixture(quiet, "b_rep1", src5)
+    testing.AssertMsg(o5.ok, "b_rep1.ok false: " + o5.error)
+    testing.AssertContains(o5.ll_src, "rcond:")
+    testing.AssertContains(o5.ll_src, "rbody:")
+    testing.AssertContains(o5.ll_src, "rstep:")
+    testing.AssertContains(o5.ll_src, "rend:")
+    testing.AssertContains(o5.ll_src, "alloca i64")
+
+    src6 := "struct Point:\n" + "    pub x: int = 0\n" + "    pub y: int = 0\n" + "end\n" + "func main:\n" + "    mut p := Point { x = 3, y = 4 }\n" + "    p.x = p.x + 1\n" + "    println p.x + p.y\n" + "    arr := [1, 2, 3]\n" + "    println arr[1]\n" + "end\n"
+    o6 := run_fixture(quiet, "b_struct1", src6)
+    testing.AssertMsg(o6.ok, "b_struct1.ok false: " + o6.error)
+    testing.AssertContains(o6.ll_src, "%struct.Point = type { i32, i32 }")
+    testing.AssertContains(
+        o6.ll_src, "getelementptr inbounds %struct.Point, ptr"
+    )
+    testing.AssertContains(o6.ll_src, "getelementptr inbounds [3 x i32], ptr")
+
+    src7 := "func add(a: int, b: int): int:\n" + "    ret a + b\n" + "end\n" + "func main:\n" + "    println add(2, 3)\n" + "end\n"
+    o7 := run_fixture(quiet, "b_call1", src7)
+    testing.AssertMsg(o7.ok, "b_call1.ok false: " + o7.error)
+    testing.AssertContains(
+        o7.ll_src, "define internal i32 @salam_add_i32_i32(i32 %arg0, i32 %arg1)"
+    )
+    testing.AssertContains(o7.ll_src, "call i32 @salam_add_i32_i32(i32 ")
+
+    src8 := "func main:\n" + "    n := 2\n" + "    grade := match n:\n" + "        1: \"a\" end\n" + "        2: \"b\" end\n" + "        else: \"c\" end\n" + "    end\n" + "    println grade\n" + "end\n"
+    o8 := run_fixture(quiet, "b_match1", src8)
+    testing.AssertMsg(o8.ok, "b_match1.ok false: " + o8.error)
+    testing.AssertContains(o8.ll_src, "marm:")
+    testing.AssertContains(o8.ll_src, "mtrap:")
+    testing.AssertContains(o8.ll_src, "mend:")
+    testing.AssertContains(o8.ll_src, "call void @llvm.trap()")
+    testing.AssertContains(o8.ll_src, "unreachable")
+
+    src9 := "func main:\n" + "    a := \"foo\"\n" + "    b := \"bar\"\n" + "    c := a + b\n" + "    println c\n" + "end\n"
+    o9 := run_fixture(quiet, "b_str1", src9)
+    testing.AssertMsg(o9.ok, "b_str1.ok false: " + o9.error)
+    testing.AssertContains(o9.ll_src, "call ptr @salam_ll_strcat(ptr ")
+    testing.AssertContains(
+        o9.ll_src, "define internal noalias ptr @salam_ll_strcat"
+    )
+
+    src10 := "func three(): int:\n" + "    ret 3\n" + "end\n\n" + "func main:\n" + "    a := 250 as int as u8\n" + "    b := three() as f64\n" + "    fv := 3.9\n" + "    c := fv as int\n" + "    println a, b, c\n" + "end\n"
+    o10 := run_fixture(quiet, "b_cast1", src10)
+    testing.AssertMsg(o10.ok, "b_cast1.ok false: " + o10.error)
+    testing.AssertContains(o10.ll_src, "trunc i32 ")
+    testing.AssertContains(o10.ll_src, "sitofp i32 ")
+    testing.AssertContains(o10.ll_src, "fptosi double ")
+
+    src11 := "func main:\n" + "    a := true\n" + "    b := false\n" + "    x := a and b\n" + "    y := a or b\n" + "    z := x ? 10 : 20\n" + "    println x, y, z\n" + "end\n"
+    o11 := run_fixture(quiet, "b_tern1", src11)
+    testing.AssertMsg(o11.ok, "b_tern1.ok false: " + o11.error)
+    testing.AssertContains(o11.ll_src, "sc_rhs")
+    testing.AssertContains(o11.ll_src, "sc_short")
+    testing.AssertContains(o11.ll_src, "tern_then")
+    testing.AssertContains(o11.ll_src, "tern_else")
+    testing.AssertContains(o11.ll_src, "= phi i1 [ false, %")
+    testing.AssertContains(o11.ll_src, "= phi i1 [ true, %")
+
+    src12 := "func f(): int:\n" + "    mut n := 0\n" + "    defer n++\n" + "    n = 5\n" + "    ret n\n" + "end\n" + "func main:\n" + "    println f()\n" + "end\n"
+    o12 := run_fixture(quiet, "b_defer1", src12)
+    testing.AssertMsg(o12.ok, "b_defer1.ok false: " + o12.error)
+    testing.AssertContains(o12.ll_src, "= add i32 ")
+
+    src13 := "func main:\n" + "    mut map := Vector {} as Vector<int>\n" + "    map.push(7)\n" + "    println map.len()\n" + "    map.free()\n" + "end\n"
+    o13 := run_fixture(quiet, "b_shadow1", src13)
+    testing.AssertMsg(o13.ok, "b_shadow1.ok false: " + o13.error)
+    testing.AssertContains(
+        o13.ll_src, "call void @salam_Vector__i32_push_i32(ptr "
+    )
+    testing.AssertContains(o13.ll_src, "= call i32 @salam_Vector__i32_len(ptr ")
+
+    mut optsA := lv.OptionsDefault()
+    optsA.output_mode = lv.LV_OUT_EXEC
+    optsA.output_file = "a.out"
+    scriptA := lv.NativeBuildScript("a.ll", optsA)
+    testing.AssertContains(scriptA, "IN=" + q("a.ll") + "\n")
+    testing.AssertContains(scriptA, "OUT=" + q("a.out") + "\n")
+    testing.AssertContains(scriptA, "-O0 \"$IN\" -lm -o \"$OUT\"\n")
+    testing.AssertFalse(str.Contains(scriptA, "--target="))
+    testing.AssertFalse(str.Contains(scriptA, "-fuse-ld=lld"))
+    testing.AssertFalse(str.Contains(scriptA, "SYSROOT="))
+
+    mut optsW := lv.OptionsDefault()
+    optsW.output_mode = lv.LV_OUT_EXEC
+    optsW.output_file = "a.exe"
+    optsW.target_triple = "x86_64-w64-windows-gnu"
+    scriptW := lv.NativeBuildScript("a.ll", optsW)
+    testing.AssertContains(scriptW, "--target=x86_64-w64-windows-gnu")
+    testing.AssertContains(scriptW, "-fuse-ld=lld")
+    testing.AssertFalse(str.Contains(scriptW, "-lm"))
+
+    mut optsWasm := lv.OptionsDefault()
+    optsWasm.output_mode = lv.LV_OUT_EXEC
+    optsWasm.output_file = "a.wasm"
+    optsWasm.target_triple = "wasm32-wasi"
+    scriptWasm := lv.NativeBuildScript("a.ll", optsWasm)
+    testing.AssertContains(scriptWasm, "--target=wasm32-wasi")
+    testing.AssertFalse(str.Contains(scriptWasm, "-fuse-ld=lld"))
+    testing.AssertFalse(str.Contains(scriptWasm, "-lm"))
+
+    mut optsO := lv.OptionsDefault()
+    optsO.output_mode = lv.LV_OUT_EXEC
+    optsO.output_file = "a.out"
+    optsO.opt_level = lv.LV_OPT_O2
+    optsO.debug_info = true
+    optsO.sysroot = "/opt/sysroot"
+    optsO.verify_module = true
+    scriptO := lv.NativeBuildScript("a.ll", optsO)
+    testing.AssertContains(scriptO, "-passes=verify -disable-output \"$IN\"\n")
+    testing.AssertContains(scriptO, "-O2")
+    testing.AssertContains(scriptO, " -g")
+    testing.AssertContains(scriptO, "SYSROOT=" + q("/opt/sysroot") + "\n")
+    testing.AssertContains(scriptO, `--sysroot="$SYSROOT"`)
+
+    mut optsL := lv.OptionsDefault()
+    optsL.output_mode = lv.LV_OUT_EXEC
+    optsL.output_file = "a.out"
+    optsL.link_libs.push("sqlite3")
+    optsL.link_kinds.push("")
+    optsL.link_libs.push("Cocoa")
+    optsL.link_kinds.push("framework")
+    optsL.link_libs.push("m")
+    optsL.link_kinds.push("static")
+    optsL.link_libs.push("./vendor/libfoo.a")
+    optsL.link_kinds.push("")
+    scriptL := lv.NativeBuildScript("a.ll", optsL)
+    testing.AssertContains(scriptL, " -l" + q("sqlite3"))
+    testing.AssertContains(scriptL, " -framework " + q("Cocoa"))
+    testing.AssertContains(scriptL, " -l:lib" + q("m") + ".a")
+    testing.AssertContains(scriptL, " " + q("./vendor/libfoo.a"))
+
+    mut optsLW := lv.OptionsDefault()
+    optsLW.output_mode = lv.LV_OUT_EXEC
+    optsLW.output_file = "a.exe"
+    optsLW.target_triple = "x86_64-w64-windows-gnu"
+    optsLW.link_libs.push("m")
+    optsLW.link_kinds.push("static")
+    scriptLW := lv.NativeBuildScript("a.ll", optsLW)
+    testing.AssertFalse(str.Contains(scriptLW, "-Wl,-Bstatic"))
+    testing.AssertContains(scriptLW, " -l:lib" + q("m") + ".a")
+
+    mut optsAsm := lv.OptionsDefault()
+    optsAsm.output_mode = lv.LV_OUT_ASM
+    optsAsm.output_file = "a.s"
+    scriptAsm := lv.NativeBuildScript("a.ll", optsAsm)
+    testing.AssertContains(scriptAsm, "-S \"$IN\" -o \"$OUT\"\n")
+
+    mut optsObj := lv.OptionsDefault()
+    optsObj.output_mode = lv.LV_OUT_OBJ
+    optsObj.output_file = "a.o"
+    scriptObj := lv.NativeBuildScript("a.ll", optsObj)
+    testing.AssertContains(scriptObj, "-c \"$IN\" -o \"$OUT\"\n")
+
+    mut optsBc := lv.OptionsDefault()
+    optsBc.output_mode = lv.LV_OUT_BITCODE
+    optsBc.output_file = "a.bc"
+    scriptBc := lv.NativeBuildScript("a.ll", optsBc)
+    testing.AssertContains(scriptBc, "opt")
+    testing.AssertContains(scriptBc, "\"$IN\" -o \"$OUT\"\n")
+
+    mut optsJit0 := lv.OptionsDefault()
+    optsJit0.output_mode = lv.LV_OUT_JIT
+    scriptJit0 := lv.NativeBuildScript("a.ll", optsJit0)
+    testing.AssertContains(scriptJit0, "lli")
+    testing.AssertContains(scriptJit0, "\"$IN\"\n")
+    testing.AssertFalse(str.Contains(scriptJit0, "OUT="))
+
+    mut optsJit2 := lv.OptionsDefault()
+    optsJit2.output_mode = lv.LV_OUT_JIT
+    optsJit2.opt_level = lv.LV_OPT_O2
+    scriptJit2 := lv.NativeBuildScript("a.ll", optsJit2)
+    testing.AssertContains(scriptJit2, "-o - | ")
+    testing.AssertContains(scriptJit2, "lli")
+
+    mut optsIr0 := lv.OptionsDefault()
+    optsIr0.output_mode = lv.LV_OUT_IR
+    scriptIr0 := lv.NativeBuildScript("a.ll", optsIr0)
+    testing.AssertContains(scriptIr0, "true\n")
+    testing.AssertFalse(str.Contains(scriptIr0, "OUT="))
+
+    mut optsIr2 := lv.OptionsDefault()
+    optsIr2.output_mode = lv.LV_OUT_IR
+    optsIr2.opt_level = lv.LV_OPT_O3
+    scriptIr2 := lv.NativeBuildScript("a.ll", optsIr2)
+    testing.AssertContains(scriptIr2, "-O3 -S \"$IN\" -o \"$IN\"\n")
+
+    batchIr0 := lv.NativeBatchScript("a.ll", optsIr0)
+    testing.AssertContains(batchIr0, "rem\nif errorlevel 1 exit /b 1\n")
+    testing.AssertFalse(str.Contains(batchIr0, "true\n"))
+
+    batchO := lv.NativeBatchScript("a.ll", optsO)
+    testing.AssertContains(
+        batchO, "-passes=verify -disable-output \"a.ll\"\nif errorlevel 1 exit /b 1\n"
+    )
+    testing.AssertEqInt(str.Count(batchO, "if errorlevel 1 exit /b 1\n"), 2)
+
+    batchPct := lv.NativeBatchScript("a%b.ll", optsA)
+    testing.AssertContains(batchPct, "\"a%%b.ll\"")
+    testing.AssertFalse(str.Contains(batchPct, "\"a%b.ll\""))
+
+    ll_ok_src := "; ModuleID = 'nrun_ok'\n" + "@.str.0 = private unnamed_addr constant [5 x i8] c\"hi!\\0A\\00\"\n" + "declare i32 @printf(ptr, ...)\n" + "define i32 @main() {\n" + "entry:\n" + "  %r = call i32 (ptr, ...) @printf(ptr @.str.0)\n" + "  ret i32 0\n" + "}\n"
+    if lv.ToolchainAvailable():
+        ll_ok_path := "compiler/tests_port/tmp_lv/nrun_ok.ll"
+        mut exe_ok_path := "compiler/tests_port/tmp_lv/nrun_ok_exe"
+        if SALAM_OS_WINDOWS:
+            exe_ok_path = exe_ok_path + ".exe"
+        end
+        _wok := os.WriteFile(ll_ok_path, ll_ok_src)
+        mut optsRun := lv.OptionsDefault()
+        optsRun.output_mode = lv.LV_OUT_EXEC
+        optsRun.output_file = exe_ok_path
+        rc_ok := lv.NativeRun(quiet, ll_ok_path, optsRun)
+        testing.AssertEqInt(rc_ok, 0)
+        testing.AssertFalse(os.Exists(ll_ok_path + ".run.sh"))
+        mut run_path := exe_ok_path
+        if SALAM_OS_WINDOWS:
+            run_path = str.Replace(run_path, "/", "\\")
+        end
+        testing.AssertEqStr(os.Output(run_path), "hi!\n")
+        _rmok1 := os.Remove(ll_ok_path)
+        _rmok2 := os.Remove(exe_ok_path)
+    end
+
+    ll_bad_path := "compiler/tests_port/tmp_lv/nrun_bad.ll"
+    exe_bad_path := "compiler/tests_port/tmp_lv/nrun_bad_exe"
+    _wbad := os.WriteFile(ll_bad_path, "this is not valid llvm ir\n")
+    mut optsBad := lv.OptionsDefault()
+    optsBad.output_mode = lv.LV_OUT_EXEC
+    optsBad.output_file = exe_bad_path
+    rc_bad := lv.NativeRun(quiet, ll_bad_path, optsBad)
+    testing.AssertTrue(rc_bad != 0)
+    testing.AssertFalse(os.Exists(exe_bad_path))
+    _rmbad := os.Remove(ll_bad_path)
+
+    srcf := "func main:\n" + "    n := 7\n" + "    println \"n is \", n\n" + "end\n"
+    of := run_fixture_for(quiet, "b_free1", srcf, "x86_64-unknown-salamos")
+    testing.AssertMsg(of.ok, "b_free1.ok false: " + of.error)
+    testing.AssertContains(of.ll_src, "\"no-builtins\"")
+    testing.AssertContains(of.ll_src, "@salam_out_write(ptr ")
+    testing.AssertMsg(
+        str.IndexOf(of.ll_src, "call i32 (ptr, ...) @printf") < 0, "b_free1 printed through printf"
+    )
+    testing.AssertMsg(
+        str.IndexOf(of.ll_src, "@fflush(ptr null)") < 0, "b_free1 flushed a stdio stream"
+    )
+
+    oh := run_fixture_for(quiet, "b_host1", srcf, "x86_64-pc-linux-gnu")
+    testing.AssertMsg(oh.ok, "b_host1.ok false: " + oh.error)
+    testing.AssertContains(oh.ll_src, "call void @salam_out_i64(i64 ")
+    testing.AssertContains(oh.ll_src, "call i32 @isatty(i32 1)")
+    testing.AssertContains(oh.ll_src, "atomicrmw xchg ptr @salam_ob_lk, i32 1 acquire, align 4")
+    testing.AssertContains(oh.ll_src, "store atomic i32 0, ptr @salam_ob_lk release, align 4")
+    testing.AssertContains(oh.ll_src, "call void @salam_out_lock()")
+    testing.AssertMsg(
+        str.IndexOf(oh.ll_src, "atomicrmw xchg ptr @salam_obn") < 0,
+        "b_host1 used a 64-bit atomic on the out buffer length"
+    )
+    testing.AssertMsg(
+        str.IndexOf(oh.ll_src, "call i32 (ptr, ...) @printf") < 0, "b_host1 printed through printf"
+    )
+    testing.AssertMsg(
+        str.IndexOf(oh.ll_src, "\"no-builtins\"") < 0, "b_host1 refused the host libc"
+    )
+
+    oa := run_fixture_for(quiet, "b_armv4", srcf, "arm-linux-musleabihf")
+    testing.AssertMsg(oa.ok, "b_armv4.ok false: " + oa.error)
+    testing.AssertContains(oa.ll_src, "inttoptr i32 -61504 to ptr")
+    testing.AssertContains(oa.ll_src, "inttoptr i32 -61536 to ptr")
+    testing.AssertMsg(
+        str.IndexOf(oa.ll_src, "atomicrmw") < 0 and str.IndexOf(oa.ll_src, "store atomic") < 0,
+        "b_armv4 used an atomic that ARMv4 has to lower to a libatomic call"
+    )
+
+    oarm7 := run_fixture_for(quiet, "b_armv7", srcf, "armv7-linux-musleabihf")
+    testing.AssertMsg(oarm7.ok, "b_armv7.ok false: " + oarm7.error)
+    testing.AssertContains(oarm7.ll_src, "atomicrmw xchg ptr @salam_ob_lk, i32 1 acquire, align 4")
+
+    ret testing.Summary()
+end

@@ -1,0 +1,721 @@
+package interp
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+func interp_case_item_matches(
+    ip &: Interp, a &: at.Ast, env: int, item: int, subj: Value
+): bool:
+    itn := at.At(a, item)
+    if itn.op == tok.TK_KW_TO:
+        lo := eval(ip, a, env, itn.a)
+        if ip.failed:
+            ret false
+        end
+        hi := eval(ip, a, env, itn.c)
+        if ip.failed:
+            ret false
+        end
+        ret value_cmp(subj, lo) >= 0 and value_cmp(subj, hi) <= 0
+    end
+    val := eval(ip, a, env, itn.a)
+    if ip.failed:
+        ret false
+    end
+    if itn.op == 0 or itn.op == tok.TK_EQ:
+        ret value_eq(subj, val)
+    end
+    if itn.op == tok.TK_NE:
+        ret not value_eq(subj, val)
+    end
+    c := value_cmp(subj, val)
+    if itn.op == tok.TK_GT:
+        ret c > 0
+    end
+    if itn.op == tok.TK_GE:
+        ret c >= 0
+    end
+    if itn.op == tok.TK_LT:
+        ret c < 0
+    end
+    ret c <= 0
+end
+
+func interp_case_matches(ip &: Interp, a &: at.Ast, env: int, cs: int, subj: Value): bool:
+    csn := at.At(a, cs)
+    if csn.op == tok.TK_KW_ELSE:
+        ret true
+    end
+    repeat at.ChildCount(a, cs) in i:
+        item := at.Child(a, cs, i)
+        if interp_case_item_matches(ip, a, env, item, subj):
+            ret true
+        end
+        if ip.failed:
+            ret false
+        end
+    end
+    ret false
+end
+
+func interp_match_arm(
+    ip &: Interp, a &: at.Ast, env: int, arm: int, subj: Value
+): bool:
+    an := at.At(a, arm)
+    if an.op == tok.TK_KW_ELSE:
+        ret true
+    end
+    repeat at.ChildCount(a, arm) in pi:
+        pat := at.Child(a, arm, pi)
+        if subj.kind == VAL_VARIANT:
+            if subj.id != 0:
+                pn := at.At(a, pat)
+                vv := ip.variants.get(subj.id)
+                if (pn.value_int as i64) == (vv.tag as i64):
+                    ret true
+                end
+            end
+        else:
+            pv := eval(ip, a, env, at.At(a, pat).a)
+            if ip.failed:
+                ret false
+            end
+            if value_eq(pv, subj):
+                ret true
+            end
+        end
+    end
+    ret false
+end
+
+func interp_find_match_arm(
+    ip &: Interp, a &: at.Ast, env: int, n: int, subj: Value
+): int:
+    repeat at.ChildCount(a, n) in i:
+        arm := at.Child(a, n, i)
+        if interp_match_arm(ip, a, env, arm, subj):
+            guard := at.At(a, arm).c
+            if guard == 0:
+                ret arm
+            end
+            ip.match_subj.push(subj)
+            gv := eval(ip, a, env, guard)
+            _gp := ip.match_subj.pop()
+            if ip.failed:
+                ret 0
+            end
+            if to_bool(gv):
+                ret arm
+            end
+        end
+        if ip.failed:
+            ret 0
+        end
+    end
+    ret 0
+end
+
+func member_chain_root(a &: at.Ast, n: int): int:
+    mut cur := n
+    until at.KindOf(a, cur) == at.AST_MEMBER:
+        cur = at.At(a, cur).a
+    end
+    ret cur
+end
+
+func loc_ptr_value(loc &: Loc): Value:
+    mut pv := val_ptr(loc.pa, loc.pe)
+    pv.s = loc.pts
+    ret pv
+end
+
+func interp_resolve_loc(ip &: Interp, a &: at.Ast, env: int, target: int): Loc:
+    mut loc := Loc {}
+    loc.target = target
+    tn := at.At(a, target)
+
+    if tn.kind == at.AST_IDENTIFIER:
+        mut w := 0
+        slot := env_find(ip, env, tn.name, w)
+        if slot >= 0:
+            loc.kind = ILOC_VAR
+            loc.env = w
+            loc.slot = slot
+            ret loc
+        end
+        mut tw := 0
+        tslot := env_find(ip, env, "this", tw)
+        if tslot >= 0:
+            tv := env_slot_val(ip, tw, tslot)
+            if tv.kind == VAL_STRUCT:
+                fi := st_find_field(ip, tv.id, tn.name)
+                if fi >= 0:
+                    loc.kind = ILOC_FIELD
+                    loc.obj = tv
+                    loc.field_idx = fi
+                    ret loc
+                end
+            end
+        end
+        rt_error(
+            ip, a, target, co.Format1(
+                i18.Tr("assignment to undeclared variable '%s'"), co.ArgStr(tn.name)
+            )
+        )
+        ret loc
+    end
+
+    if tn.kind == at.AST_MEMBER:
+        if at.KindOf(a, member_chain_root(a, target)) == at.AST_INDEX:
+            mut maddr := 0 as i64
+            mut mts := ""
+            if interp_mem_lvalue(ip, a, env, target, maddr, mts):
+                loc.kind = ILOC_MEM
+                loc.mem = maddr
+                loc.mem_ts = mts
+                ret loc
+            end
+            if ip.failed:
+                ret loc
+            end
+        end
+        obj := eval(ip, a, env, tn.a)
+        if ip.failed:
+            ret loc
+        end
+        if obj.kind == VAL_PTR:
+            mut paddr := 0 as i64
+            mut pts := ""
+            if interp_mem_ptr_field(ip, a, obj, tn.name, paddr, pts):
+                loc.kind = ILOC_MEM
+                loc.mem = paddr
+                loc.mem_ts = pts
+                ret loc
+            end
+        end
+        if obj.kind != VAL_STRUCT:
+            rt_error(ip, a, target, i18.Tr("cannot assign to member of non-struct"))
+            ret loc
+        end
+        fi2 := st_find_field(ip, obj.id, tn.name)
+        if fi2 >= 0:
+            loc.kind = ILOC_FIELD
+            loc.obj = obj
+            loc.field_idx = fi2
+            ret loc
+        end
+        stv := ip.sts.get(obj.id)
+        rt_error(
+            ip, a, target, co.Format2(
+                i18.Tr("struct '%s' has no field '%s'"), co.ArgStr(stv.type_name), co.ArgStr(tn.name)
+            )
+        )
+        ret loc
+    end
+
+    if tn.kind == at.AST_INDEX:
+        av := eval(ip, a, env, tn.a)
+        if ip.failed:
+            ret loc
+        end
+        if av.kind == VAL_STRUCT:
+            stv2 := ip.sts.get(av.id)
+            set_m := struct_method(a, stv2.def, "operator_index_set")
+            if set_m != 0:
+                loc.kind = ILOC_OPIDX
+                loc.obj = av
+                loc.key = eval(ip, a, env, tn.b)
+                loc.set_m = set_m
+                loc.get_m = struct_method(a, stv2.def, "operator_index")
+                ret loc
+            end
+            rt_error(ip, a, target, i18.Tr("value is not index-assignable"))
+            ret loc
+        end
+        if av.kind == VAL_ARRAY:
+            iv := to_int(eval(ip, a, env, tn.b))
+            if ip.failed:
+                ret loc
+            end
+            if iv < (0 as i64) or iv >= (arr_len(ip, av.id) as i64):
+                rt_error(ip, a, target, i18.Tr("index out of range in assignment"))
+                ret loc
+            end
+            loc.kind = ILOC_ARR
+            loc.arr = av.id
+            loc.idx = iv
+            ret loc
+        end
+        if av.kind == VAL_PTR:
+            if av.pa == (0 as i64):
+                rt_error(ip, a, target, i18.Tr("write through a null pointer"))
+                ret loc
+            end
+            loc.kind = ILOC_PTR
+            loc.pa = av.pa
+            loc.pe = av.pe
+            loc.pts = av.s
+            loc.idx = to_int(eval(ip, a, env, tn.b))
+            ret loc
+        end
+        rt_error(ip, a, target, i18.Tr("value is not index-assignable"))
+        ret loc
+    end
+
+    rt_error(ip, a, target, i18.Tr("invalid assignment target"))
+    ret loc
+end
+
+func interp_loc_get(ip &: Interp, a &: at.Ast, loc &: Loc): Value:
+    if loc.kind == ILOC_VAR:
+        ret env_slot_val(ip, loc.env, loc.slot)
+    end
+    if loc.kind == ILOC_FIELD:
+        s := ip.sts.get(loc.obj.id)
+        ret s.fvals.get(loc.field_idx)
+    end
+    if loc.kind == ILOC_ARR:
+        ret arr_get(ip, loc.arr, loc.idx as int)
+    end
+    if loc.kind == ILOC_PTR:
+        ret mem_ptr_load(ip, a, loc_ptr_value(loc), loc.idx)
+    end
+    if loc.kind == ILOC_MEM:
+        ret interp_mem_load(ip, a, loc.mem, loc.mem_ts)
+    end
+    if loc.get_m != 0:
+        denv := find_def_env(ip, loc.get_m)
+        mut ka := Vector {} as Vector<Value>
+        ka.push(loc.key)
+        r := call_func(
+            ip, a, loc.get_m, denv != 0 ? denv : ip.globals, true, loc.obj, ka
+        )
+        ka.free()
+        ret r
+    end
+    rt_error(ip, a, loc.target, i18.Tr("value is not index-readable"))
+    ret val_null()
+end
+
+func interp_loc_set(ip &: Interp, a &: at.Ast, loc &: Loc, v: Value):
+    if loc.kind == ILOC_VAR:
+        env_slot_set(ip, loc.env, loc.slot, v)
+        ret
+    end
+    if loc.kind == ILOC_FIELD:
+        st_field_set_val(ip, loc.obj.id, loc.field_idx, v)
+        ret
+    end
+    if loc.kind == ILOC_ARR:
+        arr_set(ip, loc.arr, loc.idx as int, v)
+        ret
+    end
+    if loc.kind == ILOC_PTR:
+        mem_ptr_store(ip, a, loc_ptr_value(loc), loc.idx, v)
+        ret
+    end
+    if loc.kind == ILOC_MEM:
+        interp_mem_store(ip, a, loc.mem, loc.mem_ts, v)
+        ret
+    end
+    mut sargs := Vector {} as Vector<Value>
+    defer sargs.free()
+    sargs.push(loc.key)
+    sargs.push(v)
+    denv := find_def_env(ip, loc.set_m)
+    _r := call_func(
+        ip, a, loc.set_m, denv != 0 ? denv : ip.globals, true, loc.obj, sargs
+    )
+end
+
+func interp_assign_to(ip &: Interp, a &: at.Ast, env: int, target: int, v: Value):
+    mut loc := interp_resolve_loc(ip, a, env, target)
+    if ip.failed:
+        ret
+    end
+    interp_loc_set(ip, a, loc, v)
+end
+
+func take_pending_flow(ip &: Interp, out &: int): bool:
+    if ip.pending_flow == FLOW_NORMAL:
+        ret false
+    end
+    out = ip.pending_flow
+    ip.pending_flow = FLOW_NORMAL
+    ret true
+end
+
+func rep_more(kk: i64, endv: i64, step: i64, uns: bool): bool:
+    if uns:
+        ret (kk as u64) <= (endv as u64)
+    end
+    if step > (0 as i64):
+        ret kk <= endv
+    end
+    ret kk >= endv
+end
+
+func rep_num(
+    ip &: Interp, a &: at.Ast, env: int, node: int, msg: str, out &: i64
+): bool:
+    v := eval(ip, a, env, node)
+    if v.kind == VAL_INT:
+        out = v.i
+        ret true
+    end
+    if v.kind == VAL_FLOAT:
+        out = v.f as i64
+        ret true
+    end
+    rt_error(ip, a, node, msg)
+    ret false
+end
+
+func exec_scoped(
+    ip &: Interp, a &: at.Ast, env: int, fr &: Frame, owner: int, retv &: Value
+): int:
+    mk := env_mark(ip)
+    c := env_new(ip, env)
+    dmark := fr.defer_stmts.len()
+    f := exec_list(ip, a, c, fr, owner, retv)
+    run_defers_from(ip, a, fr, dmark)
+    env_release(ip, mk)
+    ret f
+end
+
+func exec_stmt(
+    ip &: Interp, a &: at.Ast, env: int, fr &: Frame, n: int, retv &: Value
+): int:
+    tick(ip)
+    if ip.failed:
+        ret FLOW_NORMAL
+    end
+    node := at.At(a, n)
+    k := node.kind
+
+    if k == at.AST_BLOCK:
+        ret exec_scoped(ip, a, env, fr, n, retv)
+    end
+    if k == at.AST_VAR_DECL or k == at.AST_CONST_DECL:
+        mut v := val_null()
+        if node.a != 0:
+            v = eval(ip, a, env, node.a)
+            if ip.failed:
+                ret FLOW_NORMAL
+            end
+            mut pf := FLOW_NORMAL
+            if take_pending_flow(ip, pf):
+                ret pf
+            end
+        else:
+            v = default_for_type(ip, node.type_str)
+        end
+        env_define(ip, env, node.name, val_copy_deep(ip, v))
+        ret FLOW_NORMAL
+    end
+    if k == at.AST_EXPR_STMT:
+        _v := eval(ip, a, env, node.a)
+        mut pf1 := FLOW_NORMAL
+        if take_pending_flow(ip, pf1):
+            ret pf1
+        end
+        ret FLOW_NORMAL
+    end
+    if k == at.AST_ASSIGN:
+        if node.op == tok.TK_ASSIGN:
+            rhs := eval(ip, a, env, node.b)
+            if ip.failed:
+                ret FLOW_NORMAL
+            end
+            mut pf2 := FLOW_NORMAL
+            if take_pending_flow(ip, pf2):
+                ret pf2
+            end
+            interp_assign_to(ip, a, env, node.a, val_copy_deep(ip, rhs))
+            ret FLOW_NORMAL
+        end
+        base := compound_base(node.op)
+        mut loc := interp_resolve_loc(ip, a, env, node.a)
+        if ip.failed:
+            ret FLOW_NORMAL
+        end
+        cur := interp_loc_get(ip, a, loc)
+        if ip.failed:
+            ret FLOW_NORMAL
+        end
+        r := eval(ip, a, env, node.b)
+        if ip.failed:
+            ret FLOW_NORMAL
+        end
+        mut pf3 := FLOW_NORMAL
+        if take_pending_flow(ip, pf3):
+            ret pf3
+        end
+        mut found := false
+        sr := try_struct_op(ip, a, base, cur, r, true, found)
+        rhs2 := found ? sr : arith(ip, a, n, base, cur, r)
+        if ip.failed:
+            ret FLOW_NORMAL
+        end
+        interp_loc_set(ip, a, loc, rhs2)
+        ret FLOW_NORMAL
+    end
+    if k == at.AST_IF:
+        cv := eval(ip, a, env, node.a)
+        if ip.failed:
+            ret FLOW_NORMAL
+        end
+        cond := to_bool(cv)
+        mut pf4 := FLOW_NORMAL
+        if take_pending_flow(ip, pf4):
+            ret pf4
+        end
+        if cond:
+            ret exec_scoped(ip, a, env, fr, node.b, retv)
+        end
+        if node.c != 0:
+            if at.KindOf(a, node.c) == at.AST_IF:
+                ret exec_stmt(ip, a, env, fr, node.c, retv)
+            end
+            ret exec_scoped(ip, a, env, fr, node.c, retv)
+        end
+        ret FLOW_NORMAL
+    end
+    if k == at.AST_UNTIL:
+        until true:
+            tick(ip)
+            if ip.failed:
+                ret FLOW_NORMAL
+            end
+            ucv := eval(ip, a, env, node.a)
+            if ip.failed:
+                ret FLOW_NORMAL
+            end
+            cond := to_bool(ucv)
+            mut pf5 := FLOW_NORMAL
+            if take_pending_flow(ip, pf5):
+                ret pf5
+            end
+            if not cond:
+                break
+            end
+            f := exec_scoped(ip, a, env, fr, node.b, retv)
+            if f == FLOW_RETURN:
+                ret f
+            end
+            if f == FLOW_BREAK:
+                if ip.break_levels > 1:
+                    ip.break_levels -= 1
+                    ret f
+                end
+                ip.break_levels = 0
+                break
+            end
+            if ip.failed:
+                ret FLOW_NORMAL
+            end
+        end
+        ret FLOW_NORMAL
+    end
+    if k == at.AST_REPEAT:
+        mut start := 0 as i64
+        mut endv := 0 as i64
+        mut step := 1 as i64
+        mut uns := false
+        if node.c != 0:
+            if not rep_num(
+                ip, a, env, node.a, i18.Tr("repeat range start must be a number"), start
+            ):
+                ret FLOW_NORMAL
+            end
+            if not rep_num(
+                ip, a, env, node.c, i18.Tr("repeat range bound must be a number"), endv
+            ):
+                ret FLOW_NORMAL
+            end
+            if node.d != 0:
+                if not rep_num(
+                    ip, a, env, node.d, i18.Tr("repeat step must be a number"), step
+                ):
+                    ret FLOW_NORMAL
+                end
+            else:
+                step = 1 as i64
+            end
+            if step <= (0 as i64):
+                rt_error(
+                    ip, a, node.d != 0 ? node.d : n, i18.Tr("repeat step must be positive")
+                )
+                ret FLOW_NORMAL
+            end
+            if start > endv:
+                step = (0 as i64) - step
+            end
+        else:
+            if not rep_num(
+                ip, a, env, node.a, i18.Tr("repeat count must be a number"), endv
+            ):
+                ret FLOW_NORMAL
+            end
+            uns = str.Equals(node.type_str, "u64") or str.Equals(node.type_str, "usize")
+            if uns and endv == (0 as i64):
+                ret FLOW_NORMAL
+            end
+            start = 0 as i64
+            endv -= 1 as i64
+            step = 1 as i64
+        end
+        mut kk := start
+        until rep_more(kk, endv, step, uns):
+            tick(ip)
+            if ip.failed:
+                ret FLOW_NORMAL
+            end
+            mk := env_mark(ip)
+            c := env_new(ip, env)
+            if str.Len(node.name) != 0:
+                env_define(ip, c, node.name, val_int(kk))
+            end
+            dmark := fr.defer_stmts.len()
+            f := exec_list(ip, a, c, fr, node.b, retv)
+            run_defers_from(ip, a, fr, dmark)
+            env_release(ip, mk)
+            if f == FLOW_RETURN:
+                ret f
+            end
+            if f == FLOW_BREAK:
+                if ip.break_levels > 1:
+                    ip.break_levels -= 1
+                    ret f
+                end
+                ip.break_levels = 0
+                break
+            end
+            if ip.failed:
+                ret FLOW_NORMAL
+            end
+            kk += step
+        end
+        ret FLOW_NORMAL
+    end
+    if k == at.AST_FOR:
+        loop := env_new(ip, env)
+        if node.a != 0:
+            _fi := exec_stmt(ip, a, loop, fr, node.a, retv)
+        end
+        until true:
+            tick(ip)
+            if ip.failed:
+                ret FLOW_NORMAL
+            end
+            mut cond := true
+            if node.b != 0:
+                fcv := eval(ip, a, loop, node.b)
+                if ip.failed:
+                    ret FLOW_NORMAL
+                end
+                cond = to_bool(fcv)
+            end
+            mut pf6 := FLOW_NORMAL
+            if take_pending_flow(ip, pf6):
+                ret pf6
+            end
+            if not cond:
+                break
+            end
+            f := exec_scoped(ip, a, loop, fr, node.d, retv)
+            if f == FLOW_RETURN:
+                ret f
+            end
+            if f == FLOW_BREAK:
+                if ip.break_levels > 1:
+                    ip.break_levels -= 1
+                    ret f
+                end
+                ip.break_levels = 0
+                break
+            end
+            if ip.failed:
+                ret FLOW_NORMAL
+            end
+            if node.c != 0:
+                _fc := exec_stmt(ip, a, loop, fr, node.c, retv)
+            end
+        end
+        ret FLOW_NORMAL
+    end
+    if k == at.AST_MATCH:
+        subj := eval(ip, a, env, node.a)
+        if ip.failed:
+            ret FLOW_NORMAL
+        end
+        arm := interp_find_match_arm(ip, a, env, n, subj)
+        if arm == 0 or ip.failed:
+            ret FLOW_NORMAL
+        end
+        ip.match_subj.push(subj)
+        mf := exec_scoped(ip, a, env, fr, at.At(a, arm).b, retv)
+        _ms := ip.match_subj.pop()
+        ret mf
+    end
+    if k == at.AST_SWITCH:
+        subj2 := eval(ip, a, env, node.a)
+        if ip.failed:
+            ret FLOW_NORMAL
+        end
+        mut matched := false
+        mut ci := 0
+        cc := at.ChildCount(a, n)
+        until ci < cc:
+            cs := at.Child(a, n, ci)
+            ci += 1
+            if not matched:
+                matched = interp_case_matches(ip, a, env, cs, subj2)
+                if ip.failed:
+                    ret FLOW_NORMAL
+                end
+            end
+            if matched:
+                f := exec_scoped(ip, a, env, fr, at.At(a, cs).b, retv)
+                if f == FLOW_BREAK:
+                    if ip.break_levels > 1:
+                        ip.break_levels -= 1
+                        ret f
+                    end
+                    ip.break_levels = 0
+                    ret FLOW_NORMAL
+                end
+                if f != FLOW_NORMAL:
+                    ret f
+                end
+            end
+        end
+        ret FLOW_NORMAL
+    end
+    if k == at.AST_RETURN:
+        if node.a != 0:
+            retv = eval(ip, a, env, node.a)
+        else:
+            retv = val_null()
+        end
+        ret ip.match_expr_depth > 0 ? FLOW_MATCH_RET : FLOW_RETURN
+    end
+    if k == at.AST_BREAK:
+        ip.break_levels = at.BreakLevels(a, n)
+        ret FLOW_BREAK
+    end
+    if k == at.AST_CONTINUE:
+        ret FLOW_CONTINUE
+    end
+    if k == at.AST_DEFER:
+        fr.defer_stmts.push(node.a)
+        fr.defer_envs.push(env)
+        ret FLOW_NORMAL
+    end
+    _dv := eval(ip, a, env, n)
+    ret FLOW_NORMAL
+end

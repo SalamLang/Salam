@@ -1,0 +1,39 @@
+import rpc
+import net.tcp
+import compress
+
+func echo(c: i64):
+    rpc.Reply(c, rpc.CallParams(c))
+end
+
+func main:
+    rpc.Register("echo", echo)
+    if rpc.HandleText("").len() == 0:
+        _ := rpc.ServeStdio(rpc.RPC_FRAME_HEADER)
+        ret
+    end
+
+    mut s := rpc.NewServer(4000, rpc.RPC_CODEC_MSGPACK)
+    rpc.SetFraming(s, rpc.RPC_FRAME_LENGTH)
+    if rpc.Listen(s):
+        println "on port", rpc.Port(s), s.running
+        rpc.Serve(s)
+    end
+
+    conn := tcp.Dial("127.0.0.1", 4001)
+    _ := rpc.ServeConn(conn.fd, rpc.RPC_CODEC_JSON, rpc.RPC_FRAME_LINE)
+
+    c := tcp.Dial("127.0.0.1", 4002)
+    mut client := rpc.ClientFromFd(c.fd, rpc.RPC_CODEC_JSON)
+    println rpc.ResultStr(rpc.CallNoParams(client, "version"))
+
+    mut stream := rpc.NewStream(c.fd)
+    _ := rpc.WriteFrameStr(c.fd, rpc.RPC_FRAME_LINE, `{"jsonrpc":"2.0","method":"echo","params":[1],"id":1}`)
+    _ := rpc.WriteFrame(c.fd, rpc.RPC_FRAME_LINE, compress.BufFromStr(`{"jsonrpc":"2.0","method":"echo","id":2}`))
+    mut ok := false
+    println rpc.ReadFrameStr(stream, rpc.RPC_FRAME_LINE, ok)
+    answer := rpc.HandlePayload(rpc.RPC_CODEC_JSON, compress.BufFromStr(`{"jsonrpc":"2.0","method":"echo","params":[3],"id":3}`))
+    println compress.BufToStrUnsafe(answer)
+    rpc.FreeStream(stream)
+    rpc.StopServer(s)
+end

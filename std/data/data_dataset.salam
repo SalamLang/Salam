@@ -1,0 +1,165 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package data
+
+import matrix
+import tensor
+
+@en "BatchIter"
+@fa "پیمایشگر دسته"
+pub struct BatchIter:
+    @en "x"
+    @fa "ویژگی‌ها"
+    pub x: matrix.Matrix = matrix.Matrix {}
+    @en "y"
+    @fa "برچسب‌ها"
+    pub y: matrix.Matrix = matrix.Matrix {}
+    @en "batch"
+    @fa "اندازه دسته"
+    pub batch: int = 32
+    @en "shuffle"
+    @fa "درهم‌ریزی"
+    pub shuffle: bool = true
+    @en "seed"
+    @fa "بذر"
+    pub seed: i64 = 0
+    @en "order"
+    @fa "ترتیب"
+    pub order: Vector<int> = Vector {}
+    @en "pos"
+    @fa "جایگاه"
+    pub pos: int = 0
+
+    @en "reset"
+    @fa "بازنشانی"
+    pub func reset(epoch: i64):
+        n := this.x.rows
+        this.order.clear()
+        repeat n in i: this.order.push(i) end
+        if this.shuffle:
+            mut g := matrix.NewRng(this.seed + epoch)
+            mut i := n - 1
+            until i > 0:
+                j := (g.next_float() * ((i + 1) as f64)) as int
+                t := this.order.get(i)
+                this.order.set(i, this.order.get(j))
+                this.order.set(j, t)
+                i -= 1
+            end
+        end
+        this.pos = 0
+    end
+
+    @en "next"
+    @fa "بعدی"
+    pub func next(x_out &: matrix.Matrix, y_out &: matrix.Matrix): bool:
+        n := this.order.len()
+        if this.pos >= n: ret false end
+        mut cnt := this.batch
+        if this.pos + cnt > n: cnt = n - this.pos end
+        matrix.Free(x_out)
+        matrix.Free(y_out)
+        x_out = matrix.Zeros(cnt, this.x.cols)
+        y_out = matrix.Zeros(cnt, this.y.cols)
+        repeat cnt in i:
+            src := this.order.get(this.pos + i)
+            repeat this.x.cols in j: x_out.set(i, j, this.x.at(src, j)) end
+            repeat this.y.cols in j: y_out.set(i, j, this.y.at(src, j)) end
+        end
+        this.pos += cnt
+        ret true
+    end
+
+    @en "next_tensor"
+    @fa "بعدی تانسور"
+    pub func next_tensor(x_out &: tensor.Tensor, labels_out &: Vector<int>): bool:
+        n := this.order.len()
+        if this.pos >= n: ret false end
+        mut cnt := this.batch
+        if this.pos + cnt > n: cnt = n - this.pos end
+        x_out.free()
+        x_out = tensor.Zeros2(cnt, this.x.cols)
+        labels_out.clear()
+        p := x_out.data.data
+        repeat cnt in i:
+            src := this.order.get(this.pos + i)
+            repeat this.x.cols in j: p[i * this.x.cols + j] = this.x.at(src, j) as f32 end
+            labels_out.push(this.y.at(src, 0) as int)
+        end
+        this.pos += cnt
+        ret true
+    end
+
+    @en "batches_per_epoch"
+    @fa "شمار دسته در دور"
+    pub func batches_per_epoch(): int:
+        n := this.x.rows
+        if this.batch <= 0: ret 0 end
+        ret (n + this.batch - 1) / this.batch
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free(): this.order.free() end
+end
+
+@en "MatrixDataset"
+@fa "مجموعه‌داده ماتریسی"
+pub struct MatrixDataset:
+    @en "x"
+    @fa "ویژگی‌ها"
+    pub x: matrix.Matrix = matrix.Matrix {}
+    @en "y"
+    @fa "برچسب‌ها"
+    pub y: matrix.Matrix = matrix.Matrix {}
+
+    @en "len"
+    @fa "طول"
+    pub func len(): int: ret this.x.rows end
+
+    @en "batches"
+    @fa "دسته‌ها"
+    pub func batches(batch: int, shuffle: bool, seed: i64): BatchIter:
+        mut it := BatchIter {}
+        it.x = this.x
+        it.y = this.y
+        it.batch = batch
+        it.shuffle = shuffle
+        it.seed = seed
+        it.reset(0)
+        ret it
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        matrix.Free(this.x)
+        matrix.Free(this.y)
+    end
+end
+
+@en "XTensor"
+@fa "تانسور ویژگی"
+pub func XTensor(x &: matrix.Matrix): tensor.Tensor:
+    ret tensor.FromMatrix(x)
+end
+
+@en "YLabels"
+@fa "برچسب‌ها"
+pub func YLabels(y &: matrix.Matrix): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    repeat y.rows in i: out.push(y.at(i, 0) as int) end
+    ret out
+end

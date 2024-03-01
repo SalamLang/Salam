@@ -1,0 +1,86 @@
+pkg.en = atomic
+pkg.name = atomic
+pkg.group = Time and concurrency
+pkg.summary = A counter and a flag that several threads can change safely without taking a lock by hand.
+pkg.title = The atomic package in Salam | A counter that is safe across threads
+pkg.description = The atomic package in Salam: a 64-bit whole number and a flag shared between threads, with add, swap and compare-and-swap, with an example.
+pkg.intro <<
+<p>For a simple counter that several threads increment, you do not have to build a lock yourself: <code>I64</code> in this package does each operation in one indivisible step. <code>CompareAndSwap</code> is the base of most lock-free algorithms: it changes the value only if it is still the one you expected.</p>
+<p>With gcc, clang and the LLVM backend each operation is one of the processor's atomic instructions. Under tcc, which lacks them, each cell is protected by a small lock instead; the results are the same, only slower.</p>
+
+<p>There are two types: <code>I64</code>, a shared 64-bit whole number, and <code>Flag</code>, a shared true or false. Both are small handles to a cell on the heap, so passing one to a function or a thread by value shares the same cell. For anything bigger than one value, use <a href="/std/sync/">sync</a>; to pass values between threads, <a href="/std/chan/">chan</a>.</p>
+<p>The things people get wrong:</p>
+<ul>
+<li>Using a cell that was never created. <code>atomic.I64 {}</code> has no cell and crashes on the first <code>Add</code>; make it with <code>NewI64</code> or <code>NewFlag</code>, for a global at the top of <code>main</code>.</li>
+<li>Combining two operations. <code>if Load(a) &lt; 10: Add(a, 1) end</code> is two steps, and another thread can act in between; that is what <code>CompareAndSwap</code> in a loop is for.</li>
+<li>Destroying too early. <code>DestroyI64</code> frees the cell for every copy of the handle; call it once, after every thread that uses it has been joined.</li>
+</ul>
+<p>There is no subtract: <code>Add(a, -1)</code> counts down.</p>
+
+<h2 id="guide-ids">Hand out unique numbers</h2>
+<p><code>Add</code> returns the value after the addition, and no two callers can get the same one. That makes it a ready made source of unique ids, ticket numbers or slot indexes, shared by any number of threads with no lock in sight.</p>
+{{example.atomic-guide-ids}}
+<p>Four threads took 100 ids each, and every id from 1 to 400 was given out exactly once. Each thread then writes only to the slot its own id names, which is why the vector needs no lock either.</p>
+
+<h2 id="guide-cas">Update with CompareAndSwap</h2>
+<p>Some updates are not a plain addition: "keep the largest value seen so far" has to read the value, decide, and write. Doing that in two steps would let another thread slip in between. The answer is a loop: read the value, compute the new one, and ask <code>CompareAndSwap</code> to store it only if the value has not changed meanwhile. If it has, read again and retry.</p>
+{{example.atomic-guide-max}}
+<p>The loop also stops as soon as the stored value is already at least as large, so most calls do not write at all.</p>
+
+<h2 id="guide-stop">A stop signal for a worker</h2>
+<p>A <code>Flag</code> is the simplest way to tell a long running thread to finish: the worker checks it each round, and the main thread sets it when it is time. A plain <code>bool</code> global is not enough, because nothing guarantees the worker ever sees the change.</p>
+{{example.atomic-guide-stop}}
+
+<h2 id="guide-first">Only the first one wins</h2>
+<p><code>TestAndSet</code> turns the flag on and tells you whether you were the one who did it. When several threads race for one job, such as sending a single alert or doing a one time cleanup, exactly one of them gets <code>true</code>.</p>
+{{example.atomic-guide-first}}
+
+<h2 id="guide-when">Atomic or a lock?</h2>
+<p>An atomic value is right when the shared state is one number or one flag. As soon as two values must change together, such as a balance and a history, use a <a href="/std/sync/">sync</a>.<code>Mutex</code>: two atomic operations in a row are not atomic together. For setup that must run once, <code>sync.Once</code> is clearer than a hand made flag.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Function</th></tr></thead>
+<tbody>
+<tr><td>Count events from many threads</td><td><code>Add(a, 1)</code></td></tr>
+<tr><td>Take the next free number</td><td><code>Add</code>, using its result</td></tr>
+<tr><td>Read the latest value for a report</td><td><code>Load</code></td></tr>
+<tr><td>Reset and get the old total</td><td><code>Swap(a, 0)</code></td></tr>
+<tr><td>Any read, compute, write update</td><td><code>CompareAndSwap</code> in a loop</td></tr>
+<tr><td>Tell a thread to stop</td><td><code>Flag</code> with <code>Set</code> and <code>Get</code></td></tr>
+<tr><td>Let exactly one thread do something</td><td><code>TestAndSet</code></td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.I64 = A 64-bit whole number shared between threads.
+doc.I64.cell = The address of the value.
+doc.I64.mu = The internal lock.
+doc.Flag = A true or false flag shared between threads.
+doc.Flag.cell = The address of the value.
+doc.Flag.mu = The internal lock.
+doc.NewI64 = A new cell with an initial value.
+doc.Load = Reads the current value.
+doc.Store = Writes a new value.
+doc.Add = Adds <code>delta</code> and returns the new value.
+doc.Swap = Writes a new value and returns the old one.
+doc.CompareAndSwap = If the current value equals <code>expected</code>, sets it to <code>next</code> and returns true; otherwise it leaves it alone.
+doc.DestroyI64 = Releases the cell.
+doc.NewFlag = A new flag with an initial value.
+doc.Get = The flag's value.
+doc.Set = Sets the flag's value.
+doc.TestAndSet = If the flag is off, turns it on and returns true; if it was already on, returns false. Only one thread wins.
+doc.DestroyFlag = Releases the flag.
+
+ex.I64 = atomic-I64
+ex.Flag = atomic-I64
+ex.NewI64 = atomic-I64
+ex.Load = atomic-I64
+ex.Store = atomic-I64
+ex.Add = atomic-I64
+ex.Swap = atomic-I64
+ex.CompareAndSwap = atomic-I64
+ex.DestroyI64 = atomic-I64
+ex.NewFlag = atomic-I64
+ex.Get = atomic-I64
+ex.Set = atomic-I64
+ex.TestAndSet = atomic-I64
+ex.DestroyFlag = atomic-I64

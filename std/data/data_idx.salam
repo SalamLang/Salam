@@ -1,0 +1,124 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package data
+
+import archive
+import compress
+import encoding.binary
+import matrix
+
+const _IDX_U8 := 8
+const _IDX_I8 := 9
+const _IDX_I16 := 11
+const _IDX_I32 := 12
+const _IDX_F32 := 13
+const _IDX_F64 := 14
+
+func _idx_elem(rd &: compress.ByteReader, kind: int): f64:
+    if kind == _IDX_U8: ret binary.ReadU8(rd) as f64 end
+    if kind == _IDX_I8:
+        mut v := binary.ReadU8(rd)
+        if v >= 128: v = v - 256 end
+        ret v as f64
+    end
+    if kind == _IDX_I16:
+        mut v := binary.ReadU16BE(rd)
+        if v >= 32768: v = v - 65536 end
+        ret v as f64
+    end
+    if kind == _IDX_I32: ret binary.ReadU32BE(rd) as f64 end
+    if kind == _IDX_F32: ret binary.ReadF32(rd, true) end
+    ret binary.ReadF64(rd, true)
+end
+
+func _idx_size(kind: int): int:
+    if kind == _IDX_U8 or kind == _IDX_I8: ret 1 end
+    if kind == _IDX_I16: ret 2 end
+    if kind == _IDX_I32 or kind == _IDX_F32: ret 4 end
+    ret 8
+end
+
+@en "ParseIdx"
+@fa "تجزیه آی‌دی‌ایکس"
+pub func ParseIdx(p: void*, n: int, ok &: bool): matrix.Matrix:
+    ok = false
+    if n < 8: ret matrix.Matrix {} end
+    mut rd := compress.NewByteReader(p, n)
+    if binary.ReadU8(rd) != 0 or binary.ReadU8(rd) != 0: ret matrix.Matrix {} end
+    kind := binary.ReadU8(rd)
+    ndim := binary.ReadU8(rd)
+    if ndim < 1 or ndim > 4: ret matrix.Matrix {} end
+    if kind != _IDX_U8 and kind != _IDX_I8 and kind != _IDX_I16 and kind != _IDX_I32 and kind != _IDX_F32 and kind != _IDX_F64:
+        ret matrix.Matrix {}
+    end
+    if compress.RdLeft(rd) < 4 * ndim: ret matrix.Matrix {} end
+    rows := binary.ReadU32BE(rd)
+    mut inner := 1
+    repeat ndim - 1: inner = inner * binary.ReadU32BE(rd) end
+    if rows < 0 or inner < 0: ret matrix.Matrix {} end
+    if compress.RdLeft(rd) < rows * inner * _idx_size(kind): ret matrix.Matrix {} end
+    mut m := matrix.Zeros(rows, inner)
+    repeat rows * inner in k: m.a.set(k, _idx_elem(rd, kind)) end
+    ok = true
+    ret m
+end
+
+@en "LoadIdx"
+@fa "بارگذاری آی‌دی‌ایکس"
+pub func LoadIdx(path: str, ok &: bool): matrix.Matrix:
+    ok = false
+    mut fok := false
+    mut raw := archive.ReadBinaryFile(path, fok)
+    if fok == false:
+        compress.BufFree(raw)
+        ret matrix.Matrix {}
+    end
+    n := compress.BufLen(raw)
+    mut m := matrix.Matrix {}
+    if n >= 2 and compress.BufGet(raw, 0) == 31 and compress.BufGet(raw, 1) == 139:
+        mut zok := false
+        mut plain := compress.GzipDecompressBuf(raw, zok)
+        if zok: m = ParseIdx(plain.data, compress.BufLen(plain), ok) end
+        compress.BufFree(plain)
+    else:
+        m = ParseIdx(raw.data, n, ok)
+    end
+    compress.BufFree(raw)
+    ret m
+end
+
+@en "LoadMnist"
+@fa "بارگذاری ام‌نیست"
+pub func LoadMnist(images_path: str, labels_path: str, x &: matrix.Matrix, y &: matrix.Matrix): bool:
+    mut iok := false
+    mut xi := LoadIdx(images_path, iok)
+    if iok == false:
+        matrix.Free(xi)
+        ret false
+    end
+    mut lok := false
+    mut yl := LoadIdx(labels_path, lok)
+    if lok == false or yl.rows != xi.rows:
+        matrix.Free(xi)
+        matrix.Free(yl)
+        ret false
+    end
+    matrix.ScaleInPlace(xi, 1.0 / 255.0)
+    matrix.Free(x)
+    matrix.Free(y)
+    x = xi
+    y = yl
+    ret true
+end

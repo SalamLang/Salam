@@ -1,0 +1,190 @@
+package lexer
+
+include tok "../token.salam"
+include lg "../logger.salam"
+
+func semicolon_in_for(L &: Lx, at: int): bool:
+    mut i := at
+    until i > 0 and byte_at(L.s, i - 1) != 10:
+        i -= 1
+    end
+    until i < L.n and (byte_at(L.s, i) == 32 or byte_at(L.s, i) == 9):
+        i += 1
+    end
+    if i + 3 >= L.n:
+        ret false
+    end
+    after := byte_at(L.s, i + 3)
+    ret byte_at(L.s, i) == 102 and byte_at(L.s, i + 1) == 111 and byte_at(L.s, i + 2) == 114 and (after == 32 or after == 40)
+end
+
+func scan_unicode_op(L &: Lx): bool:
+    rem := L.n - L.pos
+    s0 := peek(L)
+    s1 := peek2(L, 1)
+    s2 := peek2(L, 2)
+    mut k := 0
+    mut len := 0
+    if rem >= 3 and s0 == 239 and s1 == 188 and (s2 == 139 or s2 == 141):
+        k = s2 == 139 ? tok.TK_PLUS : tok.TK_MINUS
+        len = 3
+    else rem >= 3 and s0 == 226 and s1 == 136 and s2 == 146:
+        k = tok.TK_MINUS
+        len = 3
+    else rem >= 2 and s0 == 216 and s1 == 159:
+        k = tok.TK_QUESTION
+        len = 2
+    else rem >= 2 and s0 == 216 and s1 == 140:
+        k = tok.TK_COMMA
+        len = 2
+    else:
+        ret false
+    end
+    b := lx_pos(L)
+    start := L.pos
+    repeat len:
+        adv(L)
+    end
+    emit(L, k, b, lex_intern(L, start))
+    ret true
+end
+
+func scan_op(L &: Lx):
+    prev := L.last
+    start := L.pos
+    b := lx_pos(L)
+    c := advc(L)
+    mut k := tok.TK_EOF
+    if c == 40:
+        L.group_depth += 1
+        k = tok.TK_LPAREN
+    else c == 41:
+        if L.group_depth > 0:
+            L.group_depth -= 1
+        end
+        k = tok.TK_RPAREN
+    else c == 91:
+        k = tok.TK_LBRACKET
+    else c == 93:
+        k = tok.TK_RBRACKET
+    else c == 123:
+        k = tok.TK_LBRACE
+    else c == 125:
+        k = tok.TK_RBRACE
+    else c == 44:
+        k = tok.TK_COMMA
+    else c == 58:
+        k = match_ch(L, 61) ? tok.TK_COLON_ASSIGN : tok.TK_COLON
+    else c == 63:
+        k = tok.TK_QUESTION
+    else c == 46:
+        if peek(L) == 46 and peek2(L, 1) == 46:
+            adv(L)
+            adv(L)
+            k = tok.TK_ELLIPSIS
+        else:
+            k = tok.TK_DOT
+        end
+    else c == 43:
+        if match_ch(L, 43):
+            k = tok.TK_PLUS_PLUS
+        else:
+            k = match_ch(L, 61) ? tok.TK_PLUS_EQ : tok.TK_PLUS
+        end
+    else c == 45:
+        if match_ch(L, 45):
+            k = tok.TK_MINUS_MINUS
+        else:
+            k = match_ch(L, 61) ? tok.TK_MINUS_EQ : tok.TK_MINUS
+        end
+    else c == 42:
+        k = match_ch(L, 61) ? tok.TK_STAR_EQ : tok.TK_STAR
+    else c == 47:
+        k = match_ch(L, 61) ? tok.TK_SLASH_EQ : tok.TK_SLASH
+    else c == 37:
+        k = match_ch(L, 61) ? tok.TK_PERCENT_EQ : tok.TK_PERCENT
+    else c == 61:
+        if match_ch(L, 61):
+            k = tok.TK_EQ
+        else match_ch(L, 62):
+            k = tok.TK_FAT_ARROW
+        else:
+            k = tok.TK_ASSIGN
+        end
+    else c == 33:
+        if match_ch(L, 61):
+            k = tok.TK_NE
+        else:
+            error_at(L, b, "'!' is not a Salam operator; write 'not'")
+            k = tok.TK_NOT
+        end
+    else c == 60:
+        if match_ch(L, 60):
+            k = match_ch(L, 61) ? tok.TK_SHL_EQ : tok.TK_SHL
+        else:
+            k = match_ch(L, 61) ? tok.TK_LE : tok.TK_LT
+        end
+    else c == 62:
+        if match_ch(L, 62):
+            k = match_ch(L, 61) ? tok.TK_SHR_EQ : tok.TK_SHR
+        else:
+            k = match_ch(L, 61) ? tok.TK_GE : tok.TK_GT
+        end
+    else c == 38:
+        if match_ch(L, 38):
+            error_at(L, b, "'&&' is not a Salam operator; write 'and'")
+            k = tok.TK_AND
+        else:
+            k = match_ch(L, 61) ? tok.TK_AMP_EQ : tok.TK_AMP
+        end
+    else c == 124:
+        if match_ch(L, 124):
+            error_at(L, b, "'||' is not a Salam operator; write 'or'")
+            k = tok.TK_OR
+        else:
+            k = match_ch(L, 61) ? tok.TK_PIPE_EQ : tok.TK_PIPE
+        end
+    else c == 94:
+        if match_ch(L, 94):
+            if match_ch(L, 61):
+                error_at(L, b, "'^^=' is not a Salam operator; write '**='")
+                k = tok.TK_POWER_EQ
+            else:
+                error_at(L, b, "'^^' is not a Salam operator; power is '**'")
+                k = tok.TK_POWER
+            end
+        else:
+            k = match_ch(L, 61) ? tok.TK_CARET_EQ : tok.TK_CARET
+        end
+    else c == 126:
+        k = tok.TK_TILDE
+    else c == 59:
+        if L.semi_line != b.line as int:
+            L.semi_line = b.line as int
+            if semicolon_in_for(L, b.index as int):
+                error_at(L, b, "Salam has no C-style 'for' loop: count with 'repeat n in i:' or 'repeat a to b in i:', or loop on a condition with 'until cond:'")
+            else:
+                error_at(L, b, "unexpected ';': Salam statements end at a newline, so remove it")
+            end
+        else:
+            L.had_error = true
+        end
+        ret
+    else:
+        error_at(L, b, "unexpected character")
+        ret
+    end
+    emit(L, k, b, lex_intern(L, start))
+
+    if k == tok.TK_COLON and (prev == tok.TK_KW_LAYOUT or (L.comp_header and L.group_depth == 0)):
+        L.layout_mode = true
+        L.layout_depth = 1
+        L.layout_sub = LX_SUB_NAME
+        L.comp_header = false
+        lg.Log(L.lgr, lg.PH_LEXER, lg.LOG_DEBUG, "entering layout mode")
+    end
+
+    if k == tok.TK_STMT_END and L.group_depth == 0:
+        L.comp_header = false
+    end
+end

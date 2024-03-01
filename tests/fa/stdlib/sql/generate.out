@@ -1,0 +1,111 @@
+-- خواندن سرآیندها
+خوانده شد: 4
+  GetUser kind=0 sql=SELECT id, email FROM users WHERE id = ?
+  ListUsers kind=1 sql=SELECT id FROM users
+  AddUser kind=2 sql=INSERT INTO users (email) VALUES (?)
+  DropOld kind=3 sql=DELETE FROM users WHERE age < ?
+ok   (headers)
+
+-- سرآیندهایی که پذیرفته نمی شوند
+خوانده شد: 0
+bad  (headers)
+     SQL500 1:1 a query header needs a name and a kind
+       help: write '-- name: GetUser :one'
+خوانده شد: 1
+  GetUser kind=-1 sql=SELECT 1
+bad  (headers)
+     SQL502 1:1 ':maybe' is not a query kind
+       help: one of :one, :many, :exec or :execrows
+خوانده شد: 1
+  switch kind=0 sql=SELECT 1
+bad  (headers)
+     SQL501 1:1 'switch' cannot be a Salam function name
+       help: use letters, digits and underscore, and not a keyword
+خوانده شد: 1
+  9lives kind=0 sql=SELECT 1
+bad  (headers)
+     SQL501 1:1 '9lives' cannot be a Salam function name
+       help: use letters, digits and underscore, and not a keyword
+
+-- کد تولیدشده
+package store
+
+import db
+import db.sql
+import mem
+import option
+
+struct GetUserRow:
+    pub id: i64 = 0 as i64
+    pub email: str = ""
+    pub name: option.Option<str> = option.None() as option.Option<str>
+    pub age: option.Option<i64> = option.None() as option.Option<i64>
+end
+
+func fill_query(c: dyn db.Connection, raw: str, a: sql.Args): str:
+    mut rep := sql.Report {}
+    out := sql.Fill(raw, a, sql.DialectNamed(c.Kind()), rep)
+    sql.FreeReport(rep)
+    ret out
+end
+
+pub func GetUser(c: dyn db.Connection, email: str, ok &: bool): GetUserRow:
+    mut a := sql.NewArgs()
+    sql.AddText(a, email)
+    q := fill_query(c, "SELECT id, email, name, age FROM users WHERE email = ?", a)
+    sql.FreeArgs(a)
+    mut out := GetUserRow {}
+    ok = false
+    r := c.Query(q)
+    if r.Ok():
+        if r.Next():
+            out.id = r.Int64(0)
+            out.email = r.Text(1)
+            if r.IsNull(2):
+                out.name = option.None() as option.Option<str>
+            else:
+                out.name = option.Some(r.Text(2))
+            end
+            if r.IsNull(3):
+                out.age = option.None() as option.Option<i64>
+            else:
+                out.age = option.Some(r.Int64(3))
+            end
+            ok = true
+        end
+        r.Close()
+    end
+    mem.Free(q as void*)
+    ret out
+end
+
+pub func AddUser(c: dyn db.Connection, email: str, name: str): bool:
+    mut a := sql.NewArgs()
+    sql.AddText(a, email)
+    sql.AddText(a, name)
+    q := fill_query(c, "INSERT INTO users (email, name) VALUES (?, ?)", a)
+    sql.FreeArgs(a)
+    done := c.Exec(q) == 0
+    mem.Free(q as void*)
+    ret done
+end
+
+pub func TouchUser(c: dyn db.Connection, name: str, id: i64): i64:
+    mut a := sql.NewArgs()
+    sql.AddText(a, name)
+    sql.AddInt(a, id)
+    q := fill_query(c, "UPDATE users SET name = ? WHERE id = ?", a)
+    sql.FreeArgs(a)
+    rc := c.Exec(q)
+    mut n := 0 as i64
+    if rc == 0:
+        n = c.Changes()
+    end
+    mem.Free(q as void*)
+    ret n
+end
+
+-- پرسمانی که طرح نمی پذیرد
+bad  (generate)
+     SQL311 3:12 Broken: no column named "nope" in this statement
+       help: did you mean "name"?

@@ -1,0 +1,628 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include lg "../logger.salam"
+include dg "../diag.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+
+func body_is_bare_return(a &: at.Ast, stmt: int, header_line: u32): bool:
+    if stmt == 0 or at.KindOf(a, stmt) != at.AST_RETURN or at.Get(a, stmt).a != 0:
+        ret false
+    end
+    ret at.Get(a, stmt).begin_line <= header_line + (1 as u32)
+end
+
+func find_sig(s &: Sema, fsym: int, decl: int): int:
+    if fsym == 0:
+        ret 0
+    end
+    fv := sym_at(s, fsym)
+    repeat fv.overloads.len() in i:
+        sgid := fv.overloads.get(i)
+        if sig_at(s, sgid).decl == decl:
+            ret sgid
+        end
+    end
+    ret 0
+end
+
+func op_method_symbol(name: str): str:
+    names := ["operator_add", "+", "operator_sub", "-", "operator_mul", "*", "operator_div", "/", "operator_mod", "%", "operator_pow", "**", "operator_eq", "==", "operator_ne", "!=", "operator_lt", "<", "operator_gt", ">", "operator_le", "<=", "operator_ge", ">="]
+    repeat len(names) / 2 in i:
+        if str.Equals(names[i * 2], name):
+            ret names[i * 2 + 1]
+        end
+    end
+    ret ""
+end
+
+func check_operator_arity(s &: Sema, a &: at.Ast, fnid: int, fsp: co.SrcSpan):
+    fn := at.Get(a, fnid)
+    mut np := 0
+    repeat fn.list.len() in i:
+        if at.KindOf(a, fn.list.get(i)) == at.AST_PARAM:
+            np += 1
+        end
+    end
+    if str.Equals(fn.name, "operator_sub"):
+        if np > 1:
+            serr(s, 12, fsp, i18.Tr("operator '-' takes no parameters (negation, '-x') or one parameter (subtraction, 'x - y')"))
+        end
+        ret
+    end
+    if str.Equals(fn.name, "operator_not"):
+        if np != 0:
+            serr(s, 12, fsp, i18.Tr("operator 'not' takes no parameters: it applies to 'this' alone"))
+        end
+        ret
+    end
+    if str.Equals(fn.name, "operator_index"):
+        if np != 1:
+            serr(s, 12, fsp, i18.Tr("operator '[]' takes one parameter (the index) and 'operator []=' takes two (the index and the value)"))
+        end
+        ret
+    end
+    if str.Equals(fn.name, "operator_index_set"):
+        if np != 2:
+            serr(s, 12, fsp, i18.Tr("operator '[]' takes one parameter (the index) and 'operator []=' takes two (the index and the value)"))
+        end
+        ret
+    end
+    sym := op_method_symbol(fn.name)
+    if str.Len(sym) > 0 and np != 1:
+        serr(s, 12, fsp, co.Format1(i18.Tr("operator '%s' takes exactly one parameter: the right-hand operand"), co.ArgStr(sym)))
+    end
+end
+
+func check_function(s &: Sema, a &: at.Ast, fnid: int, owner: int, sigid: int):
+    if sigid != 0:
+        mut sg0 := sig_at(s, sigid)
+        if sg0.checked:
+            ret
+        end
+        sg0.checked = true
+        sg0.in_check = true
+        sig_put(s, sigid, sg0)
+    end
+    fn := at.Get(a, fnid)
+    fsp := span_of(a, fnid)
+    if owner != 0 and str.StartsWith(fn.name, "operator_"):
+        check_operator_arity(s, a, fnid, fsp)
+    end
+    if owner == 0 and str.StartsWith(fn.name, "operator_"):
+        serr(s, 12, fsp, i18.Tr("an operator must be declared inside a struct or a distinct type ('type Name: int'), where it applies to 'this'"))
+    end
+    if fn.is_noret and sigid != 0:
+        sgn := sig_at(s, sigid)
+        if not sgn.infer_ret and sgn.ret_type >= 0 and ty_at(s, sgn.ret_type).kind != TY_VOID:
+            serr(
+                s, 12, fsp, co.Format1(
+                    i18.Tr("'noret' function '%s' cannot declare a return type: it never returns"), co.ArgStr(fn.name)
+                )
+            )
+        end
+    end
+    if fn.is_noret and fn.is_pure:
+        serr(
+            s, 12, fsp, co.Format1(
+                i18.Tr("'%s' cannot be both 'pure' and 'noret': a pure function must return"), co.ArgStr(fn.name)
+            )
+        )
+    end
+    if fn.is_pure and sigid != 0:
+        sgp := sig_at(s, sigid)
+        if not sgp.infer_ret and sgp.ret_type >= 0 and ty_at(s, sgp.ret_type).kind == TY_VOID:
+            serr(
+                s, 12, fsp, co.Format1(
+                    i18.Tr("'pure' function '%s' must return a value: a pure function without a result has no effect"), co.ArgStr(fn.name)
+                )
+            )
+        end
+    end
+    if fn.is_pure:
+        repeat fn.list.len() in pi:
+            prm := at.Get(a, fn.list.get(pi))
+            if prm.kind == at.AST_PARAM and prm.is_ref:
+                serr(
+                    s, 12, fsp, co.Format2(
+                        i18.Tr("'pure' function '%s' cannot take reference parameter '%s': writing through it would be a side effect"), co.ArgStr(fn.name), co.ArgStr(prm.name)
+                    )
+                )
+                break
+            end
+        end
+    end
+    mut home := 0
+    if owner == 0:
+        fs := scope_lookup_local(s, s.global, fn.name)
+        if fs != 0:
+            home = sym_at(s, fs).home
+        end
+    end
+    mut owner_home := 0
+    if owner != 0 and sym_at(s, owner).kind == SYM_STRUCT:
+        owner_home = sym_at(s, owner).home
+    end
+    mut parent := s.global
+    if owner != 0:
+        parent = sym_at(s, owner).members
+    else home != 0:
+        parent = home
+    end
+    sc := scope_new(s, SCOPE_FUNC, parent)
+    mut scv := scope_at(s, sc)
+    scv.label = fn.name
+    scv.fn = sigid
+    scope_put(s, sc, scv)
+    saved_cur := s.cur
+    saved_self := s.self_type
+    saved_owner := s.static_owner
+    saved_func := s.cur_func
+    saved_gp := s.gen_pkg
+    saved_loop := s.loop_depth
+    s.loop_depth = 0
+    saved_switch := s.switch_depth
+    s.switch_depth = 0
+    s.cur = sc
+    s.cur_func = sigid
+    s.static_owner = owner != 0 ? 0 : static_owner_of(s, fn.name)
+    if home != 0:
+        s.gen_pkg = home
+    else owner_home != 0:
+        s.gen_pkg = owner_home
+    end
+    mut seen_default := false
+    repeat fn.list.len() in di:
+        pid := fn.list.get(di)
+        param := at.Get(a, pid)
+        if param.a == 0:
+            if seen_default:
+                serr(
+                    s, 64, span_of(a, pid), co.Format1(
+                        i18.Tr("parameter '%s' without a default value cannot follow a parameter with one"), co.ArgStr(param.name)
+                    )
+                )
+            end
+            continue
+        end
+        seen_default = true
+        if fn.is_extern:
+            serr(
+                s, 64, span_of(a, pid), co.Format1(
+                    i18.Tr("extern parameter '%s' cannot have a default value"), co.ArgStr(param.name)
+                )
+            )
+        end
+        mut pt := TYPE_NONE
+        mut have_sig_pt := false
+        if sigid != 0:
+            sgd := sig_at(s, sigid)
+            if di < sgd.params.len():
+                pt = sgd.params.get(di)
+                have_sig_pt = true
+            end
+        end
+        if not have_sig_pt:
+            pt = sema_resolve_type(s, a, param.ty)
+        end
+        pak := at.KindOf(a, param.a)
+        if pak == at.AST_STRUCT_LIT and pt >= 0 and ty_at(s, pt).kind == TY_STRUCT:
+            s.expected = pt
+        else pak == at.AST_LITERAL and pt >= 0:
+            s.expected = pt
+        end
+        dt := sema_check_expr(s, a, param.a)
+        if pt >= 0 and dt >= 0 and not type_assignable(s, pt, dt):
+            serr(
+                s, 2, span_of(a, pid), co.Format3(
+                    i18.Tr("default for parameter '%s': cannot assign '%s' to '%s'"), co.ArgStr(param.name), co.ArgStr(type_disp(s, dt)), co.ArgStr(type_disp(s, pt))
+                )
+            )
+        end
+    end
+    if owner != 0:
+        ow := sym_at(s, owner)
+        if ow.kind == SYM_TYPEIMPL:
+            s.self_type = ow.ty
+        else:
+            s.self_type = type_ptr(s, ow.ty)
+        end
+        mut scv2 := scope_at(s, sc)
+        scv2.self_type = s.self_type
+        scope_put(s, sc, scv2)
+        th := symbol_new(s, SYM_PARAM, "this")
+        mut thv := sym_at(s, th)
+        thv.ty = s.self_type
+        sym_put(s, th, thv)
+        _td := scope_define(s, sc, th)
+    else:
+        s.self_type = TYPE_NONE
+    end
+    repeat fn.list.len() in pi2:
+        pid2 := fn.list.get(pi2)
+        param2 := at.Get(a, pid2)
+        psym := symbol_new(s, SYM_PARAM, param2.name)
+        mut pv2 := TYPE_NONE
+        mut have2 := false
+        if sigid != 0:
+            sge := sig_at(s, sigid)
+            if pi2 < sge.params.len():
+                pv2 = sge.params.get(pi2)
+                have2 = true
+            end
+        end
+        if not have2:
+            pv2 = sema_resolve_type(s, a, param2.ty)
+        end
+        mut pvv := sym_at(s, psym)
+        pvv.ty = pv2
+        pvv.is_mut = false
+        pvv.is_ref = param2.is_ref
+        pvv.decl = pid2
+        sym_put(s, psym, pvv)
+        sema_check_shadows_func(s, param2.name, span_of(a, pid2))
+        if scope_define(s, sc, psym) != 0:
+            serr(
+                s, 1, span_of(a, pid2), co.Format1(
+                    i18.Tr("duplicate parameter '%s'"), co.ArgStr(param2.name)
+                )
+            )
+        end
+    end
+    lg.Log(
+        s.log, lg.PH_SEMANTIC, lg.LOG_DEBUG, "enter function '" + fn.name + "'" + (owner != 0 ? i18.Tr(" (method)") : "")
+    )
+    if fn.a != 0 and at.KindOf(a, fn.a) == at.AST_BLOCK and at.ChildCount(a, fn.a) == 0:
+        serr(
+            s, 61, fsp, co.Format1(
+                i18.Tr("empty function '%s' (its body must contain at least one statement)"), co.ArgStr(fn.name)
+            )
+        )
+    else fn.a != 0 and at.KindOf(a, fn.a) == at.AST_BLOCK and at.ChildCount(a, fn.a) == 1 and body_is_bare_return(a, at.Child(a, fn.a, 0), fn.begin_line):
+        serr(
+            s, 61, fsp, co.Format1(
+                i18.Tr("empty function '%s' (a bare 'ret' does nothing; its body must contain at least one statement)"), co.ArgStr(fn.name)
+            )
+        )
+    end
+    errs0 := dg.ErrorCount(s.diag)
+    if fn.a != 0 and fn.is_throws:
+        th_add_final_ret(a, fn.a, fn.ty)
+    end
+    if fn.a != 0:
+        sema_check_block(s, a, fn.a)
+    end
+    if fn.a != 0 and sigid != 0:
+        sgw := sig_at(s, sigid)
+        if sgw.ret_widened:
+            if dg.ErrorCount(s.diag) == errs0:
+                saved_rq := s.requal
+                mut rounds := 0
+                s.requal = true
+                mut sgl := sig_at(s, sigid)
+                until sgl.ret_widened and rounds < 3:
+                    sgl.ret_widened = false
+                    sig_put(s, sigid, sgl)
+                    rounds += 1
+                    lg.Log(
+                        s.log, lg.PH_SEMANTIC, lg.LOG_DEBUG, "re-check '" + fn.name + "' with widened return type '" + type_to_string(s, sig_at(s, sigid).ret_type) + "'"
+                    )
+                    sema_check_block(s, a, fn.a)
+                    sgl = sig_at(s, sigid)
+                end
+                s.requal = saved_rq
+            else:
+                mut sgc := sig_at(s, sigid)
+                sgc.ret_widened = false
+                sig_put(s, sigid, sgc)
+            end
+        end
+    end
+    if fn.a != 0:
+        SemaCheckDefiniteInit(s, a, fnid)
+        if dg.ErrorCount(s.diag) == errs0:
+            SemaOwnRegister(s, fnid)
+        end
+    end
+    if fn.a != 0 and sigid != 0 and fn.ty != 0:
+        sgf := sig_at(s, sigid)
+        if type_is_float(s, sgf.ret_type) and sgf.ret_int_seen and not sgf.ret_float_seen:
+            rstr := type_to_string(s, sgf.ret_type)
+            serr(
+                s, 67, sgf.ret_int_span, co.Format3(
+                    i18.Tr("function '%s' declares return type '%s' but every 'ret' returns an integer; return a '%s' value or declare an integer return type"), co.ArgStr(fn.name), co.ArgStr(rstr), co.ArgStr(rstr)
+                )
+            )
+        end
+    end
+    if fn.a != 0 and sigid != 0:
+        sgt := sig_at(s, sigid)
+        if sgt.ret_type >= 0 and ty_at(s, sgt.ret_type).kind != TY_VOID and not type_is_error(s, sgt.ret_type) and not fn.is_noret and not sig_is_entry(s, a, sigid) and not fn_body_terminates(s, a, fn.a):
+            serr(
+                s, 71, fsp, co.Format2(
+                    i18.Tr("function '%s' can fall off its end without returning a '%s' value; add a final 'ret'"), co.ArgStr(fn.name), co.ArgStr(type_disp(s, sgt.ret_type))
+                )
+            )
+        end
+    end
+    if fn.a != 0 and fn.is_noret and not fn_body_terminates(s, a, fn.a):
+        serr(
+            s, 71, fsp, co.Format1(
+                i18.Tr("'noret' function '%s' can reach the end of its body and return; end every path with a call to another 'noret' function, such as 'os.Exit' or 'Panic', or with an endless loop"), co.ArgStr(fn.name)
+            )
+        )
+    end
+    lg.Log(
+        s.log, lg.PH_SEMANTIC, lg.LOG_DEBUG, "exit function '" + fn.name + "'"
+    )
+    if fn.a != 0:
+        check_unused_params(s, a, sc, fnid)
+    end
+    s.cur = saved_cur
+    s.self_type = saved_self
+    s.static_owner = saved_owner
+    s.cur_func = saved_func
+    s.gen_pkg = saved_gp
+    s.loop_depth = saved_loop
+    s.switch_depth = saved_switch
+    if sigid != 0:
+        mut sgz := sig_at(s, sigid)
+        sgz.in_check = false
+        sgz.infer_ret = false
+        sig_put(s, sigid, sgz)
+    end
+end
+
+func sema_check_function_now(s &: Sema, a &: at.Ast, sigid: int):
+    if sigid == 0:
+        ret
+    end
+    sg := sig_at(s, sigid)
+    if sg.decl == 0:
+        ret
+    end
+    check_function(s, a, sg.decl, sg.owner, sigid)
+end
+
+func sema_check_unused_funcs(s &: Sema, a &: at.Ast):
+    entry := lp.EntryFor(s.lang)
+    gsc := scope_at(s, s.global)
+    mut has_entry := false
+    repeat gsc.symbols.len() in i:
+        f := sym_at(s, gsc.symbols.get(i))
+        if f.kind == SYM_FUNC and str.Len(f.name) > 0 and (str.Equals(f.name, "main") or str.Equals(f.name, entry)):
+            has_entry = true
+            break
+        end
+    end
+    if not has_entry:
+        ret
+    end
+    save_file := s.file
+    repeat gsc.symbols.len() in i2:
+        f2 := sym_at(s, gsc.symbols.get(i2))
+        if f2.kind != SYM_FUNC or f2.used or f2.is_pub:
+            continue
+        end
+        if f2.decl == 0:
+            continue
+        end
+        dn := at.Get(a, f2.decl)
+        if dn.synthetic or dn.is_extern:
+            continue
+        end
+        if str.Len(f2.name) == 0 or byte_at(f2.name, 0) == 95 or at.NameIsErr(f2.name):
+            continue
+        end
+        if str.Equals(f2.name, "main") or str.Equals(f2.name, entry):
+            continue
+        end
+        if at.WasPrunedAnywhere(a, f2.name):
+            continue
+        end
+        _sfu := sema_use_decl_file(s, a, f2.decl)
+        serr(
+            s, 66, span_of(a, f2.decl), co.Format1(
+                i18.Tr("unused function '%s': it is private and nothing calls it; call it where it is needed, or remove it; mark it 'pub' only if other packages should import it as part of this package's API, not to silence this error; starting the name with '_' also hides the error but is not advised"), co.ArgStr(f2.name)
+            )
+        )
+    end
+    s.file = save_file
+end
+
+func check_toplevel(s &: Sema, a &: at.Ast, did: int):
+    save_file := sema_use_decl_file(s, a, did)
+    check_toplevel_body(s, a, did)
+    s.file = save_file
+end
+
+func check_toplevel_body(s &: Sema, a &: at.Ast, did: int):
+    d := at.Get(a, did)
+    if d.kind == at.AST_FUNC_DEF:
+        fsym := scope_lookup_local(s, s.global, d.name)
+        check_function(s, a, did, 0, find_sig(s, fsym, did))
+    else d.kind == at.AST_STRUCT_DEF:
+        ssym := scope_lookup_local(s, s.global, d.name)
+        if ssym == 0:
+            ret
+        end
+        repeat d.list.len() in j:
+            mid := d.list.get(j)
+            m := at.Get(a, mid)
+            if m.kind == at.AST_FUNC_DEF:
+                msym := scope_lookup_local(s, sym_at(s, ssym).members, m.name)
+                check_function(s, a, mid, ssym, find_sig(s, msym, mid))
+            else m.kind == at.AST_FIELD and m.a != 0:
+                f := scope_lookup_local(s, sym_at(s, ssym).members, m.name)
+                mut ftv := TYPE_NONE
+                if f != 0:
+                    ftv = sym_at(s, f).ty
+                end
+                mut vt := TYPE_NONE
+                if f != 0 and stamp_empty_intrinsic(s, a, m.a, ftv):
+                    vt = ftv
+                else:
+                    mak := at.KindOf(a, m.a)
+                    if f != 0 and mak == at.AST_STRUCT_LIT and ftv >= 0 and ty_at(s, ftv).kind == TY_STRUCT:
+                        s.expected = ftv
+                    else f != 0 and (mak == at.AST_LITERAL or mak == at.AST_ARRAY_LIT):
+                        s.expected = ftv
+                    end
+                    save_cur := s.cur
+                    save_gp := s.gen_pkg
+                    if str.Len(sym_at(s, ssym).generic_base) > 0:
+                        s.cur = sym_at(s, ssym).members
+                        if sym_at(s, ssym).home != 0:
+                            s.gen_pkg = sym_at(s, ssym).home
+                        end
+                    end
+                    vt = sema_check_expr(s, a, m.a)
+                    s.cur = save_cur
+                    s.gen_pkg = save_gp
+                end
+                if f != 0 and not type_assignable(s, ftv, vt):
+                    serr(
+                        s, 2, span_of(a, mid), co.Format3(
+                            i18.Tr("default for field '%s': cannot assign '%s' to '%s'"), co.ArgStr(m.name), co.ArgStr(type_disp(s, vt)), co.ArgStr(type_disp(s, ftv))
+                        )
+                    )
+                else f != 0 and ftv >= 0 and ty_at(s, ftv).kind == TY_DYN and vt >= 0 and ty_at(s, vt).kind != TY_DYN:
+                    mut mvd := at.Get(a, mid)
+                    mvd.a = coerce_to_dyn(s, a, ftv, m.a, vt)
+                    at.Put(a, mid, mvd)
+                else f != 0 and ftv >= 0 and ty_at(s, ftv).kind == TY_VARIANT and vt >= 0 and ty_at(s, vt).kind != TY_VARIANT:
+                    tag := type_variant_tag(s, ftv, vt)
+                    if tag >= 0:
+                        mut mv2 := at.Get(a, mid)
+                        mv2.a = coerce_to_variant(s, a, ftv, m.a, tag)
+                        at.Put(a, mid, mv2)
+                    end
+                end
+            end
+        end
+    else d.kind == at.AST_IMPL_DEF:
+        tt := sema_resolve_type(s, a, d.ty)
+        if tt < 0:
+            ret
+        end
+        owner := scope_lookup_local(
+            s, s.global, impl_owner_key(type_to_string(s, tt))
+        )
+        if owner == 0:
+            ret
+        end
+        repeat d.list.len() in j2:
+            mid2 := d.list.get(j2)
+            if at.KindOf(a, mid2) != at.AST_FUNC_DEF:
+                continue
+            end
+            m2 := at.Get(a, mid2)
+            msym2 := scope_lookup_local(s, sym_at(s, owner).members, m2.name)
+            check_function(s, a, mid2, owner, find_sig(s, msym2, mid2))
+        end
+    else d.kind == at.AST_VAR_DECL or d.kind == at.AST_CONST_DECL:
+        g := scope_lookup_local(s, s.global, d.name)
+        t := sema_check_var_decl(s, a, did)
+        if g != 0 and sym_at(s, g).ty == TYPE_NONE:
+            mut gv := sym_at(s, g)
+            gv.ty = t
+            sym_put(s, g, gv)
+        end
+    else d.kind == at.AST_LAYOUT_BLOCK:
+        sema_check_layout(s, a, did, "")
+    else d.kind == at.AST_LAYOUT_COMPONENT:
+        sema_check_layout_component(s, a, did)
+    end
+end
+
+func lint_lang_types(s &: Sema, a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_TYPE and not n.synthetic and str.Len(n.name) > 0 and type_prim_kind_from_name(n.name, "") >= 0 and type_prim_kind_from_name(n.name, s.lang) < 0:
+        fa := lang0(s.lang) == 102
+        mut msg := "type name '%s' must be English in an English file"
+        if fa:
+            msg = "type name '%s' must be Persian in a Persian file"
+        end
+        serr(s, 1, span_of(a, nid), co.Format1(i18.Tr(msg), co.ArgStr(n.name)))
+    end
+    lint_lang_types(s, a, n.ty)
+    lint_lang_types(s, a, n.a)
+    lint_lang_types(s, a, n.b)
+    lint_lang_types(s, a, n.c)
+    lint_lang_types(s, a, n.d)
+    repeat n.list.len() in i:
+        lint_lang_types(s, a, n.list.get(i))
+    end
+    repeat n.dims.len() in i2:
+        lint_lang_types(s, a, n.dims.get(i2))
+    end
+end
+
+func sema_check_pass(s &: Sema, a &: at.Ast, program: int):
+    save_file := s.file
+    mut i := 0
+    until i < at.ChildCount(a, program):
+        did := at.Child(a, program, i)
+        i += 1
+        mut d := at.Get(a, did)
+        if str.Len(d.origin_lang) == 0:
+            d.origin_lang = s.lang
+            at.Put(a, did, d)
+        end
+        if d.synthetic:
+            continue
+        end
+        _sfl := sema_use_decl_file(s, a, did)
+        lint_lang_types(s, a, did)
+    end
+    s.file = save_file
+    mut ic := 0
+    until ic < at.ChildCount(a, program):
+        didc := at.Child(a, program, ic)
+        ic += 1
+        dc := at.Get(a, didc)
+        if dc.synthetic or dc.typarams.len() > 0:
+            continue
+        end
+        if dc.kind == at.AST_CONST_DECL or dc.kind == at.AST_VAR_DECL:
+            check_toplevel(s, a, didc)
+        end
+    end
+    mut i2 := 0
+    until i2 < at.ChildCount(a, program):
+        did2 := at.Child(a, program, i2)
+        i2 += 1
+        d2 := at.Get(a, did2)
+        if d2.synthetic or d2.typarams.len() > 0:
+            continue
+        end
+        if d2.kind == at.AST_CONST_DECL or d2.kind == at.AST_VAR_DECL:
+            continue
+        end
+        check_toplevel(s, a, did2)
+    end
+    mut pi := 0
+    save_gi := s.in_generic_inst
+    s.in_generic_inst = true
+    until pi < s.pending.len():
+        did3 := s.pending.get(pi)
+        save_lang := s.lang
+        ol := at.Get(a, did3).origin_lang
+        if str.Len(ol) > 0:
+            s.lang = ol
+        end
+        s.in_derive = derive_is_decl(s, did3)
+        check_toplevel(s, a, did3)
+        s.in_derive = false
+        s.lang = save_lang
+        pi += 1
+    end
+    s.in_generic_inst = save_gi
+end

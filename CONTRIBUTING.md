@@ -1,0 +1,514 @@
+# 🤝 Contributing Guide for SalamLang/Salam
+
+Welcome to Salam! We're glad you're interested in contributing to our open-source project. This guide will help you understand the contribution process and ensure your contributions are valuable and well-received.
+
+## 🌟 Ways to Contribute
+
+1. **Code Contributions**: Fix bugs, add new features, or improve existing code. Please follow our coding conventions and guidelines when submitting code contributions.
+
+2. **Documentation**: Help write or improve documentation, including readme files, code comments, and user guides, to ensure others can understand and use Salam effectively.
+
+3. **Testing**: Contribute to the quality and stability of Salam by writing and running tests, identifying bugs, and preventing regressions.
+
+4. **Bug Reports**: Report bugs or unexpected behavior you encounter, providing steps to reproduce the issue and details about your environment.
+
+5. **Feature Requests**: Share your ideas for new features or improvements and discuss them with the community and maintainers.
+
+6. **Community Support**: Assist others by answering questions, providing support, and sharing your expertise on mailing lists, forums, or chat channels.
+
+## 📋 Opening Issues
+
+Before opening an issue, search the [existing issues](https://github.com/SalamLang/Salam/issues) to avoid duplicates.
+
+We provide three issue templates to keep reports clear and actionable:
+
+- **Bug report** - use this when something is broken or behaves unexpectedly. Include steps to reproduce the problem, what you expected to happen, and details about your environment (OS, compiler version, etc.).
+- **Feature request** - use this to propose a new capability or improvement. Describe the problem you are trying to solve and why it would benefit others.
+- **Custom issue template** - use this when your topic does not fit the standard bug-report or feature-request flow.
+
+All three templates are available when you click **New issue** on GitHub. Fill
+in all the relevant sections so maintainers can triage your report quickly.
+
+## 🚀 Getting Started
+
+1. **Fork the Repository**: Visit [SalamLang/Salam](https://github.com/SalamLang/Salam) on GitHub and click **Fork** to create your own copy under your account.
+
+2. **Clone Your Fork**: Clone your fork to your local machine, replacing `your-user-name` with your GitHub username:
+
+   ```bash
+   git clone https://github.com/your-user-name/Salam.git
+   cd Salam
+   ```
+
+3. **Add the Upstream Remote**: Connect your local clone to the original repository so you can keep your fork in sync:
+
+   ```bash
+   git remote add upstream https://github.com/SalamLang/Salam.git
+   ```
+
+4. **Sync Your Fork**: Before starting any new work, always pull the latest changes from upstream into your local `main` branch and push them to your fork:
+
+   ```bash
+   git checkout main
+   git fetch upstream
+   git merge upstream/main
+   git push origin main
+   ```
+
+5. **Create a Clean Feature Branch**: Create a new branch from a freshly synced `main` for **every pull request**. Use a short, descriptive name:
+
+   ```bash
+   git checkout -b feature/my-new-feature
+   ```
+
+   > **Important**: Always use a fresh branch per PR. Never reuse a branch that was already merged or submitted as a PR; start from a clean, up-to-date `main` each time.
+
+6. **Make Changes**: Implement your changes to the code, documentation, or tests as necessary.
+
+7. **Test Your Changes**: Ensure your changes work as expected by testing them thoroughly. For documentation work, install the workspace dependencies with `bun install`, preview the docs locally with `bun run docs:myst`, and build the static site with `bun run build:myst`.
+
+8. **Commit Your Changes**: Commit your changes with a clear and descriptive message.
+
+   ```bash
+   git commit -am 'Add new feature'
+   ```
+
+9. **Push Your Branch**: Push your feature branch to your fork on GitHub.
+
+   ```bash
+   git push origin feature/my-new-feature
+   ```
+
+10. **Submit a Pull Request**: On GitHub, open a pull request from your feature branch to `SalamLang/Salam:main`, follow the pull-request template, link any related issues, and explain how you validated the change.
+
+## 🏁 Basic Usage
+
+After building the compiler (see the [Build section in the readme](README.md#build)), you can run Salam programs right away.
+
+**Build the compiler** from the `compiler/` directory:
+
+```bash
+cd compiler
+sh tools/bash/build-selfhost.sh   # quick build -> ./salam
+```
+
+Or with CMake:
+
+```bash
+cmake -B build && cmake --build build
+```
+
+**Hello, World** - save the following as `hello.salam`:
+
+```salam
+func main:
+    println "Hello, World!"
+end
+```
+
+Then compile and run it:
+
+```bash
+salam build hello.salam --output=hello
+./hello
+```
+
+**Layout DSL** - compile a `.salam` layout page to HTML/CSS/JS:
+
+```bash
+salam page build page.salam --inline
+```
+
+For a full list of commands and flags, see the [Usage section in the readme](README.md#usage) or run:
+
+```bash
+salam --help
+```
+
+## 🔄 Git Daily Workflow
+
+This is the typical day-to-day cycle for working on a contribution from start to finish.
+
+### 1. Sync your fork
+
+Always start from an up-to-date `main`:
+
+```bash
+git checkout main
+git fetch upstream
+git merge upstream/main
+git push origin main
+```
+
+### 2. Create a fresh feature branch
+
+```bash
+git checkout -b fix/describe-the-fix
+```
+
+Use a prefix that matches your change: `feature/`, `fix/`, `docs/`, `test/`, etc.
+
+### 3. Make your changes
+
+Edit files, add tests, update documentation as needed.
+
+### 4. Stage and commit
+
+```bash
+git add .
+git commit -m "fix: describe what and why in plain terms"
+```
+
+Write commit messages in the imperative mood: _"Add feature"_, _"Fix crash"_, _"Update docs"_.
+
+### 5. Keep your branch up to date (optional but recommended)
+
+If `main` has moved on while you were working, merge the latest upstream changes into your branch:
+
+```bash
+git fetch upstream
+git merge upstream/main
+```
+
+Resolve any conflicts, commit the merge, then push normally. Merging keeps a clear history and makes it easy to see exactly what changed on GitHub.
+
+### 6. Push your branch
+
+```bash
+git push origin fix/describe-the-fix
+```
+
+### 7. Open a Pull Request
+
+On GitHub, navigate to your fork and click **Compare & pull request**. Fill in the pull-request template, link any related issues, mark the checklist items you completed, and then submit. A maintainer will review your PR and may request changes.
+
+### 8. Address review feedback
+
+Make the requested changes locally, commit them, and push to the same branch; the PR updates automatically:
+
+```bash
+git add .
+git commit -m "address review: clarify error message"
+git push origin fix/describe-the-fix
+```
+
+### 9. After the PR is merged
+
+Delete your feature branch locally and remotely to keep things tidy:
+
+```bash
+git checkout main
+git branch -d fix/describe-the-fix
+git push origin --delete fix/describe-the-fix
+```
+
+Then sync your fork so it is ready for your next contribution:
+
+```bash
+git fetch upstream
+git merge upstream/main
+git push origin main
+```
+
+## ↩️ Keeping Your Branch Up to Date with Rebase (Alternative)
+
+Some contributors prefer to rebase instead of merge when bringing in upstream changes. Rebasing replays your commits on top of the latest `main`, resulting in a linear history with no merge commits.
+
+> **Note**: Rebasing rewrites commit history. Avoid it on branches that other people are also working on, and never rebase commits that have already been pushed to a shared branch without coordinating with your team.
+
+### Rebase your branch onto upstream
+
+```bash
+git fetch upstream
+git rebase upstream/main
+```
+
+If there are conflicts, Git will pause and let you resolve them file by file:
+
+```bash
+# After resolving each conflict:
+git add <resolved-file>
+git rebase --continue
+```
+
+To abort and return to the state before the rebase started:
+
+```bash
+git rebase --abort
+```
+
+### Force-push after rebasing
+
+Because rebase rewrites history, you need to force-push after rebasing a branch that you have already pushed:
+
+```bash
+git push --force-with-lease origin fix/describe-the-fix
+```
+
+Use `--force-with-lease` rather than `--force`; it refuses to overwrite if someone else has pushed to the branch since your last fetch, protecting against accidental data loss.
+
+## 📝 Code Style and Guidelines
+
+To maintain consistency and readability, please follow these coding conventions when contributing code:
+
+- Use clear and descriptive variable names, function names, and comments.
+- Write meaningful commit messages that explain the purpose of each commit.
+- Keep your changes focused and atomic. Avoid mixing unrelated changes in the same pull request.
+- Test your code thoroughly to ensure its functionality and prevent regressions.
+
+### 🎨 C Code Formatting (clang-format)
+
+All C code under `compiler/` is formatted with [`clang-format`](https://clang.llvm.org/docs/ClangFormat.html) using the style defined in the repo-root [`.clang-format`](.clang-format). CI enforces this through the `clang-format` prek hook (which pins clang-format from **LLVM 22**), so please format your C changes before pushing.
+
+Use **clang-format 22** to match CI exactly (any `22.1.x` is fine; `clang-format --version` should print `22`). If you do not have it, install a pinned copy with pip:
+
+```bash
+python3 -m venv .venv-cf && .venv-cf/bin/pip install "clang-format==22.1.5"
+# then use .venv-cf/bin/clang-format below
+```
+
+Format **all** C code at once:
+
+```bash
+# via prek (recommended: uses the pinned hook version, see below)
+prek run clang-format --all-files
+
+# or directly, over every tracked C/H file
+git ls-files 'compiler/*.c' 'compiler/*.h' | xargs clang-format -i
+```
+
+Check formatting **without** modifying files (this is what CI runs):
+
+```bash
+git ls-files 'compiler/*.c' 'compiler/*.h' | xargs clang-format --dry-run --Werror
+```
+
+The formatter runs automatically on staged C files via the `clang-format` prek hook (see below), so a normal `git commit` keeps your changes formatted. A few style choices are intentional and must not be dropped from `.clang-format`: include order is never reordered (`SortIncludes: Never`), string literals are not auto-split (`BreakStringLiterals: false`, needed for the Persian/RTL messages), and the `IN1F`/`IN2F` math X-macros are declared as `StatementMacros`.
+
+### 🪝 Commit Hooks
+
+We use [`prek`](https://prek.j178.dev) for repository hooks. Salam currently has four hook modes:
+
+- **Standard hooks**: the default checks in `prek.toml` that run for installed Git hook stages (currently `pre-commit` and `pre-push`).
+- **Manual hooks**: hooks in `prek.toml` that are marked for the `manual` stage and run only when requested.
+- **Audit hooks**: security-focused hooks in `prek-audit.toml` that run separately from the standard set.
+- **Infra hooks**: infrastructure and package audit checks in `prek-infra.toml` that run separately from the standard set.
+
+#### Install `prek`
+
+Choose any of these supported installation methods:
+
+- **Homebrew**
+
+  ```bash
+  brew install prek
+  ```
+
+- **uv**
+
+  ```bash
+  uv tool install prek
+  ```
+
+- **pipx**
+
+  ```bash
+  pipx install prek
+  ```
+
+- **pip**
+
+  ```bash
+  python -m pip install prek
+  ```
+
+#### Set up and run hooks
+
+1. Install the standard Git hooks and prepare hook environments:
+
+   ```bash
+   prek install --prepare-hooks
+   ```
+
+2. Run the standard hooks across the repository:
+
+   ```bash
+   prek run --all-files
+   ```
+
+3. Run the manual hooks:
+
+   ```bash
+   prek run --all-files --stage manual
+   ```
+
+4. Run the audit hooks:
+
+   ```bash
+   prek run --all-files --config prek-audit.toml
+   ```
+
+5. Run the infra hooks:
+
+   ```bash
+   prek run --all-files --config prek-infra.toml
+   ```
+
+Manual hooks include cleanup and platform-specific tasks such as `chmod` and `shfmt`. If you are on Windows, run the manual stage only for hooks that apply to your environment.
+
+#### Useful hook commands
+
+Run just one hook:
+
+```bash
+prek run markdownlint --files CONTRIBUTING.md
+```
+
+Skip one or more hooks for a single `prek` run:
+
+```bash
+SKIP=markdownlint,codespell prek run --files CONTRIBUTING.md
+```
+
+Skip installed Git hooks for one commit:
+
+```bash
+git commit --no-verify -m "docs: update contributing guide"
+```
+
+Use `git commit --no-verify` only when you intentionally need to bypass the installed Git hooks. If you skip hooks locally, make sure you run the relevant `prek` command yourself before opening or updating a pull request.
+
+Check `prek run` help and output controls:
+
+```bash
+prek run -h
+```
+
+A few useful output flags from `prek run -h` are:
+
+- `--no-progress`: hides the live progress display, such as spinners and in-place progress updates, while still showing the normal hook results.
+- `-q`, `--quiet`: suppresses normal hook output so you can focus on failures or just rely on the exit status. Environment variable: `PREK_QUIET`.
+- `-v`, `--verbose`: increases output verbosity so you can inspect extra hook execution detail when troubleshooting.
+
+Clean cached hook environments:
+
+```bash
+prek clean
+```
+
+`prek clean` removes cached hook data so the next run recreates hook environments. This is useful after upgrading `prek`, changing hook definitions, or recovering from a broken local hook cache.
+
+#### Hook priority in this repository
+
+Hooks run from the lowest `priority` value to the highest value, within the active config and stage.
+
+Current priorities in this repository are:
+
+- `10`: repository meta checks (`identity`, `check-hooks-apply`)
+- `20`: early cleanup (`fix-byte-order-marker`)
+- `30`: whitespace cleanup (`trailing-whitespace`)
+- `35`: manual permission normalization (`chmod`, manual stage)
+- `40`: formatters and generated files (`prettier`, `file-contents-sorter`, `stdlib-index`, `shfmt` in manual stage)
+- `45`: `biome-check`
+- `50`: validation and security checks (`codespell`, `markdownlint`, `yamllint`, `detect-private-key`, `gitleaks`, and other safety checks)
+
+Because the `manual` stage, `prek-audit.toml`, and `prek-infra.toml` run separately, only hooks in the command you execute are considered for ordering.
+
+## ⚙️ Continuous Integration
+
+Every pull request triggers a suite of automated checks. Understanding what runs helps you resolve failures quickly.
+
+| Workflow                          | What it checks                                                                                                                                                           |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Compiler - Build & Test**       | Builds the compiler inside an Alpine + LLVM Docker image and runs the test suite.                                                                                        |
+| **Compiler - Clone & Build**      | Verifies that a fresh clone can build on Windows, macOS, and Linux.                                                                                                      |
+| **Compiler - Build & Release**    | Compiles release binaries for the supported distribution targets.                                                                                                        |
+| **Memory Leaks**                  | Runs the whole test corpus through AddressSanitizer/LeakSanitizer builds of both compilers. See [Memory leak checks](#-memory-leak-checks) below.                        |
+| **Editor - Build Playground**     | Builds the WebAssembly playground bundle on pull requests to catch editor or compiler integration regressions before merge.                                              |
+| **Books - Build & Validate PDFs** | Builds the language books and verifies the generated PDFs.                                                                                                               |
+| **Prek Standard Hooks**           | Runs `prek run --all-files` on Ubuntu, macOS, and Windows to verify formatting, spelling, linting, and security checks defined in `prek.toml`.                           |
+| **Prek Manual Hooks**             | Runs the `manual`-stage hooks (e.g. `shfmt`, `chmod`) across the same platform matrix.                                                                                   |
+| **Prek Audit Hooks**              | Runs `prek run --all-files --config prek-audit.toml` across the same platform matrix to perform security-focused audit checks defined in `prek-audit.toml`.              |
+| **Prek Infra Hooks**              | Runs `prek run --all-files --config prek-infra.toml` across the same platform matrix to perform infrastructure and dependency audit checks defined in `prek-infra.toml`. |
+| **Super-Linter**                  | Runs a broad set of language-specific linters across the repository.                                                                                                     |
+| **PR - Auto-Labeler**             | Applies labels automatically based on the files changed in the pull request.                                                                                             |
+| **PR - Salam AI Review**          | Posts an automated summary and merge verdict on every pull request. See [AI pull request review](#-ai-pull-request-review) below.                                        |
+
+All checks must pass before a pull request can be merged. If a check fails:
+
+1. Open the **Checks** tab on your PR and click the failing workflow name.
+2. Expand the failing step to read the log output.
+3. Fix the issue locally, commit, and push; the checks re-run automatically.
+
+If you are unsure why a check failed, leave a comment on the PR and a maintainer will help you.
+
+We are currently triaging issues with the **Super-Linter** workflow and the team will be fixing each individual linter check mostly via separate pull requests. Please do not try to fix all or multiple Super-Linter checks in the same pull request. If you would like to fix a basic check please submit a small self contained and focused pull request. We like to combine and match local prek hooks with the Super-Linter so always research prek, hooks and the Super-Linter before submitting an issue or pull request.
+
+### 🧪 Memory leak checks
+
+The **Memory Leaks** workflow runs the entire test corpus through AddressSanitizer/LeakSanitizer builds of the compiler.
+
+`tools/bash/leakcheck.sh` builds an ASan compiler and runs the corpus plus the subcommand sweep under LeakSanitizer. LeakSanitizer only works on Linux - on macOS every run aborts with "detect_leaks is not supported on this platform", and the script now stops with `LEAKCHECK: INCONCLUSIVE` rather than reporting a misleading clean result:
+
+```sh
+sh tools/bash/leakcheck.sh --build          # build an ASan salam, then run everything
+sh tools/bash/leakcheck.sh --build exec     # one section, while iterating
+```
+
+That runs `run-tests.sh` plus `leakcheck-sweep.sh`, which covers the subcommands the corpus never reaches (`version`, `help`, `new`, `run`, `obj`, `doc`, both REPLs, and the argument error paths). Any leaking invocation fails the run and the report says which allocation site is responsible. Reports are also uploaded as a CI artifact.
+
+The self-hosted compiler in `compiler/` is written in Salam, which is manually memory-managed and has no arena behind its string temporaries, so zero is not reachable without changing how the compiler allocates. It is a ratchet instead, measured against `compiler/tools/selfhost-leak-budget.txt`:
+
+```sh
+sh install.sh                                 # a released salam to bootstrap with
+./salam build compiler/main.salam --output=salam-selfhost-asan --cc=gcc --asan
+sh compiler/tools/bash/leakcheck-selfhost.sh ./salam-selfhost-asan
+```
+
+The counts are exactly reproducible, so the check fails on a regression and tells you to lower the number when you improve one. Lower it in the same pull request that earned it. To find out _where_ a leak came from, rebuild with `--asan -g` as well: the stacks then name the `.salam` file and line that allocated.
+
+Add a line to `tools/lsan.supp` only when an allocation genuinely is not the compiler's to free, and say why in the file. A suppression hides a finding forever.
+
+### 🔀 Cross-backend sweeps
+
+`run-tests.sh` gives nearly every section a C build, and only runs the
+interpreter for `exec/` and the JS backend for `js/`. Roughly 1400 tests
+therefore never execute anywhere but the C backend, and that gap is where
+backend bugs hide. `tools/bash/backend-sweep.sh` runs them somewhere else and
+compares against the same `.out` files:
+
+```sh
+sh tools/bash/backend-sweep.sh ./salam exec           # the interpreter
+sh tools/bash/backend-sweep.sh ./salam llvm types     # one section
+sh tools/bash/backend-sweep.sh ./salam js
+```
+
+It honours the `// DEFINE:` and `// CONST:` comments the corpus uses, resolves
+the platform-specific `.out` with the runner's own spellings (`mac`, `x64`, not
+uname's), compares output exactly the way the runner does, and exits non-zero
+if anything diverged. A test that did not finish is reported as
+`DIVERGE-TIMEOUT` rather than as wrong output.
+
+A `DIVERGE` is a lead, not a verdict. The JS backend has no 64-bit integers
+(`18446744073709551615` prints as `...552000`), no sockets, sqlite or FFI; the
+interpreter refuses variadic externs and is slow enough that crypto-heavy or
+ML tests hit the timeout. Read the actual diff before filing anything.
+
+## 🤖 AI pull request review
+
+Every pull request gets one automated review comment from Salam AI, the assistant behind [ai.salamlang.ir](https://ai.salamlang.ir). It reads the diff, writes a short summary of what changed, lists problems with the files to fix, and ends with a verdict: good to merge, changes needed, or not worth continuing.
+
+The comment is a **helper, not a decision**. It is written by a machine and can be wrong: verify its claims before you merge or close something. A maintainer always has the last word, and the comment is kept up to date on every push instead of being repeated.
+
+- Add the `ai-review:skip` label to a pull request to switch the bot off for it. Draft pull requests are skipped until they are marked ready for review.
+- The workflow is `.github/workflows/ai-pr-review.yml` and the reviewer is `.github/scripts/ai_pr_review.py`. It needs the `SALAM_AI_API_KEY` repository secret and never runs code from the pull request: it only reads the diff through the GitHub API.
+- To try it locally, set `GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `PR_NUMBER`, `SALAM_AI_API_KEY` and `DRY_RUN=1`, then run `python3 .github/scripts/ai_pr_review.py` to print the review without posting it.
+
+## 💬 Feedback and Support
+
+If you have any questions or need assistance, feel free to reach out to the project maintainers or the community. We're here to support each other in making Salam the best it can be.
+
+- **Discord**: <https://discord.gg/HfY3QHDPdv>
+- **Telegram**: <https://t.me/SalamProgrammingLanguage>
+
+Thank you for your interest in contributing to Salam! We appreciate your help in making this project a success. Happy coding!

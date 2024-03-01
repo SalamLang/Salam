@@ -1,0 +1,201 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "ctx"
+@fa "زمینه"
+package ctx
+
+import mem
+import sync
+
+@en "Context"
+@fa "زمینه"
+pub struct Context:
+    @en "state"
+    @fa "وضعیت"
+    pub state: i64* = null
+    @en "parent"
+    @fa "والد"
+    pub parent: Context* = null
+    @en "mu"
+    @fa "قفل"
+    pub mu: sync.Mutex = sync.Mutex {}
+    @en "cv"
+    @fa "متغیر شرطی"
+    pub cv: sync.CondVar = sync.CondVar {}
+    @en "is_root"
+    @fa "ریشه است"
+    pub is_root: bool = false
+end
+
+func done_chain(c: Context, reason &: int): bool:
+    mut cur := c
+    until true:
+        s := cur.state
+        if s[0] != 0:
+            reason = 1
+            ret true
+        end
+        if s[2] != 0 and sync.NowMs() >= s[1]:
+            reason = 2
+            ret true
+        end
+        if cur.parent == null:
+            break
+        end
+        cur = cur.parent[0]
+    end
+    reason = 0
+    ret false
+end
+
+func nearest_deadline(c: Context): i64:
+    mut cur := c
+    mut best := 0 as i64
+    until true:
+        s := cur.state
+        if s[2] != 0:
+            if best == 0 or s[1] < best:
+                best = s[1]
+            end
+        end
+        if cur.parent == null:
+            break
+        end
+        cur = cur.parent[0]
+    end
+    ret best
+end
+
+func child_of(parent: Context, deadline: i64, has_deadline: bool): Context:
+    p := mem.AllocateZeroed(sizeof(Context) as u64) as Context*
+    p[0] = parent
+    st := mem.AllocateZeroed(24 as u64) as i64*
+    if has_deadline:
+        st[1] = deadline
+        st[2] = 1
+    end
+    ret Context { state = st, parent = p, mu = parent.mu, cv = parent.cv, is_root = false }
+end
+
+@en "Background"
+@fa "پس زمینه"
+pub func Background(): Context:
+    st := mem.AllocateZeroed(24 as u64) as i64*
+    ret Context {
+        state = st, parent = null, mu = sync.NewMutex(), cv = sync.NewCondVar(), is_root = true
+    }
+end
+
+@en "WithCancel"
+@fa "با لغو"
+pub func WithCancel(parent: Context): Context:
+    ret child_of(parent, 0 as i64, false)
+end
+
+@en "WithTimeout"
+@fa "با مهلت"
+pub func WithTimeout(parent: Context, ms: i64): Context:
+    ret child_of(parent, sync.NowMs() + ms, true)
+end
+
+@en "WithDeadline"
+@fa "با موعد"
+pub func WithDeadline(parent: Context, at_ms: i64): Context:
+    ret child_of(parent, at_ms, true)
+end
+
+@en "Cancel"
+@fa "لغو"
+pub func Cancel(c: Context):
+    s := c.state
+    sync.Lock(c.mu)
+    s[0] = 1
+    sync.Broadcast(c.cv)
+    sync.Unlock(c.mu)
+end
+
+@en "IsDone"
+@fa "تمام شده"
+pub func IsDone(c: Context): bool:
+    mut why := 0
+    sync.Lock(c.mu)
+    r := done_chain(c, why)
+    sync.Unlock(c.mu)
+    ret r
+end
+
+@en "Err"
+@fa "خطا"
+pub func Err(c: Context): str:
+    mut why := 0
+    sync.Lock(c.mu)
+    _ := done_chain(c, why)
+    sync.Unlock(c.mu)
+    if why == 1:
+        ret "cancelled"
+    end
+    if why == 2:
+        ret "deadline exceeded"
+    end
+    ret ""
+end
+
+@en "Deadline"
+@fa "موعد"
+pub func Deadline(c: Context): i64:
+    sync.Lock(c.mu)
+    d := nearest_deadline(c)
+    sync.Unlock(c.mu)
+    ret d
+end
+
+@en "Wait"
+@fa "انتظار"
+pub func Wait(c: Context, ms: i64): bool:
+    mut why := 0
+    sync.Lock(c.mu)
+    until_ms := sync.NowMs() + ms
+    mut fin := done_chain(c, why)
+    until not fin:
+        mut left := until_ms - sync.NowMs()
+        dl := nearest_deadline(c)
+        if dl > 0:
+            dleft := dl - sync.NowMs()
+            if dleft < left:
+                left = dleft
+            end
+        end
+        if left <= 0:
+            break
+        end
+        _ := sync.WaitCondTimeout(c.cv, c.mu, left)
+        fin = done_chain(c, why)
+    end
+    sync.Unlock(c.mu)
+    ret fin
+end
+
+@en "Free"
+@fa "آزادسازی"
+pub func Free(c: Context):
+    mem.Free(c.state as void*)
+    if c.parent != null:
+        mem.Free(c.parent as void*)
+    end
+    if c.is_root:
+        sync.DestroyCondVar(c.cv)
+        sync.Destroy(c.mu)
+    end
+end

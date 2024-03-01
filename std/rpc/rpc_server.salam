@@ -1,0 +1,248 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package rpc
+
+import compress
+import conv
+import net.internal.rawsock
+import encoding.value
+import io
+
+@en "Server"
+@fa "سرور فراخوان"
+pub struct Server:
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "codec"
+    @fa "کدک"
+    pub codec: int = 0
+    @en "framing"
+    @fa "قاب‌بندی"
+    pub framing: int = 0
+    @en "listen_fd"
+    @fa "سوکت گوش‌دهنده"
+    pub listen_fd: i64 = 0 - 1
+    @en "running"
+    @fa "فعال"
+    pub running: bool = false
+    @en "served"
+    @fa "شمار اتصال پاسخ‌داده"
+    pub served: int = 0
+end
+
+func _builtin(req: Request, resp &: Response): bool:
+    if req.method == "rpc.listMethods":
+        names := ListMethods()
+        mut arr := value.NewValueArray()
+        mut i := 0
+        until i < names.len():
+            value.ArrayPush(arr, value.ValueString(names.get(i)))
+            i += 1
+        end
+        resp.result = arr
+        ret true
+    end
+    if req.method == "rpc.describe":
+        names := ListMethods()
+        mut obj := value.NewValueObject()
+        mut i := 0
+        until i < names.len():
+            nm := names.get(i)
+            value.ObjectSet(obj, nm, value.ValueString(MethodDoc(nm)))
+            i += 1
+        end
+        resp.result = obj
+        ret true
+    end
+    ret false
+end
+
+@en "NewServer"
+@fa "سرور جدید"
+pub func NewServer(port: int, codec: int): Server:
+    mut s := Server {}
+    s.port = port
+    s.codec = codec
+    s.framing = CodecDefaultFraming(codec)
+    ret s
+end
+
+@en "SetFraming"
+@fa "تنظیم قاب‌بندی"
+pub func SetFraming(s &: Server, framing: int):
+    s.framing = framing
+end
+
+@en "InvokeBatch"
+@fa "اجرای دسته"
+pub func InvokeBatch(b: Batch): Responses:
+    mut out := Responses {}
+    out.is_batch = b.is_batch
+    n := b.items.len()
+    mut i := 0
+    until i < n:
+        req := b.items.get(i)
+        mut resp := Response {}
+        resp.id = req.id
+        resp.has_id = req.has_id
+        resp.msgid = req.msgid
+        if req.err_code == 0 and _builtin(req, resp):
+            if req.has_id: out.items.push(resp) end
+            i += 1
+            continue
+        end
+        answered := Invoke(req)
+        if req.has_id: out.items.push(answered) end
+        i += 1
+    end
+    ret out
+end
+
+@en "HandlePayload"
+@fa "پردازش بار"
+pub func HandlePayload(codec: int, payload: compress.ByteBuf): compress.ByteBuf:
+    b := DecodeBatch(codec, payload)
+    if not b.ok:
+        ret EncodeTopLevelError(codec, b.err)
+    end
+    rs := InvokeBatch(b)
+    if rs.items.len() == 0 and not rs.is_batch:
+        ret compress.NewByteBuf()
+    end
+    ret EncodeResponses(codec, rs)
+end
+
+@en "HandleText"
+@fa "پردازش متن"
+pub func HandleText(text: str): str:
+    mut inbuf := compress.BufFromStr(text)
+    mut out := HandlePayload(RPC_CODEC_JSON, inbuf)
+    compress.BufFree(inbuf)
+    s := compress.BufToStrUnsafe(out)
+    compress.BufFree(out)
+    ret s
+end
+
+@en "ServeConn"
+@fa "خدمت به اتصال"
+pub func ServeConn(fd: i64, codec: int, framing: int): int:
+    mut st := NewStream(fd)
+    mut count := 0
+    until true:
+        mut ok := false
+        mut payload := ReadFrame(st, framing, ok)
+        if not ok:
+            compress.BufFree(payload)
+            break
+        end
+        mut reply := HandlePayload(codec, payload)
+        compress.BufFree(payload)
+        if compress.BufLen(reply) > 0:
+            WriteFrame(fd, framing, reply)
+        end
+        compress.BufFree(reply)
+        count += 1
+    end
+    FreeStream(st)
+    ret count
+end
+
+@en "Listen"
+@fa "گوش دادن"
+pub func Listen(s &: Server): bool:
+    sock := rawsock.Listen(s.port)
+    if not rawsock.Ok(sock): ret false end
+    s.listen_fd = sock.fd
+    s.port = rawsock.LocalPort(sock)
+    s.running = true
+    ret true
+end
+
+@en "Port"
+@fa "درگاه سرور"
+pub func Port(s: Server): int:
+    ret s.port
+end
+
+@en "ServeCount"
+@fa "خدمت به تعداد"
+pub func ServeCount(s &: Server, n: int): int:
+    if not s.running:
+        if not Listen(s): ret 0 end
+    end
+    mut i := 0
+    until i < n:
+        c := rawsock.Accept(rawsock.FromFd(s.listen_fd))
+        if not rawsock.Ok(c): break end
+        ServeConn(c.fd, s.codec, s.framing)
+        rawsock.Close(c)
+        s.served += 1
+        i += 1
+    end
+    ret s.served
+end
+
+@en "Serve"
+@fa "خدمت"
+pub func Serve(s &: Server):
+    if not s.running:
+        if not Listen(s): ret end
+    end
+    until s.running:
+        c := rawsock.Accept(rawsock.FromFd(s.listen_fd))
+        if not rawsock.Ok(c): continue end
+        ServeConn(c.fd, s.codec, s.framing)
+        rawsock.Close(c)
+        s.served += 1
+    end
+end
+
+@en "StopServer"
+@fa "توقف سرور"
+pub func StopServer(s &: Server):
+    s.running = false
+    if s.listen_fd >= 0:
+        rawsock.Close(rawsock.FromFd(s.listen_fd))
+        s.listen_fd = 0 - 1
+    end
+end
+
+@en "ServeStdio"
+@fa "خدمت ورودی خروجی"
+pub func ServeStdio(framing: int): int:
+    mut count := 0
+    mut running := true
+    until running:
+        line := io.Input()
+        if line == "":
+            if framing != RPC_FRAME_HEADER: running = false end
+            continue
+        end
+        if framing == RPC_FRAME_HEADER and line.len() > 8 and line.substr(0, 8).lower() == "content-":
+            continue
+        end
+        reply := HandleText(line)
+        if reply != "":
+            if framing == RPC_FRAME_HEADER:
+                print "Content-Length: " + conv.FormatInt(reply.len() as i64) + "\r\n\r\n" + reply
+            else:
+                println reply
+            end
+        end
+        count += 1
+    end
+    ret count
+end

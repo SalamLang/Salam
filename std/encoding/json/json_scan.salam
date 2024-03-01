@@ -1,0 +1,387 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package json
+
+import str
+import mem
+
+func __jderr(e &: str, ep &: int, msg: str, pos: int): int:
+    if e == "":
+        e = msg
+        ep = pos
+    end
+    ret -1
+end
+
+func __jdbyte(s: str, i: int): int:
+    if i < 0: ret -1 end
+    v := _ub(_bp(s), i)
+    if v == 0: ret -1 end
+    ret v
+end
+
+func __jdat(s: str, i: int, word: str): bool:
+    if i < 0: ret false end
+    n := str.ByteLen(word)
+    bp := _bp(s)
+    wp := _bp(word)
+    repeat n in k:
+        if _ub(bp, i + k) != _ub(wp, k): ret false end
+    end
+    ret true
+end
+
+func __jdws(s: str, i: int): int:
+    mut p := i
+    if p < 0: p = 0 end
+    bp := _bp(s)
+    until true:
+        c := _ub(bp, p)
+        if c != 32 and c != 9 and c != 10 and c != 13: ret p end
+        p += 1
+    end
+end
+
+func __jdnum(s: str, i: int): int:
+    bp := _bp(s)
+    mut p := i
+    if _ub(bp, p) == 45: p += 1 end
+    start := p
+    p = __jddigits(bp, p)
+    if p == start: ret -1 end
+    if _ub(bp, p) == 46:
+        p = __jddigits(bp, p + 1)
+    end
+    if _ub(bp, p) == 101 or _ub(bp, p) == 69:
+        p += 1
+        if _ub(bp, p) == 43 or _ub(bp, p) == 45: p += 1 end
+        p = __jddigits(bp, p)
+    end
+    ret p
+end
+
+func __jddigits(bp: i8*, i: int): int:
+    mut p := i
+    until true:
+        c := _ub(bp, p)
+        if c < 48 or c > 57: ret p end
+        p += 1
+    end
+end
+
+func __jdstrend(s: str, i: int): int:
+    bp := _bp(s)
+    if _ub(bp, i) != 34: ret -1 end
+    mut p := i + 1
+    until true:
+        c := _ub(bp, p)
+        if c == 0: ret -1 end
+        if c == 34: ret p + 1 end
+        if c == 92:
+            p += 1
+            if _ub(bp, p) == 0: ret -1 end
+        end
+        p += 1
+    end
+end
+
+func __jdnullat(s: str, i: int): int:
+    if __jdat(s, i, "null"): ret i + 4 end
+    ret -1
+end
+
+func __jdalloc(n: u64): void*:
+    ret mem.AllocateZeroed(n)
+end
+
+func __jdgstr(s: str, i: int, endpos &: int): str:
+    bp := _bp(s)
+    if i < 0 or _ub(bp, i) != 34:
+        endpos = -1
+        ret ""
+    end
+    mut sb := str.NewBuilder()
+    mut p := i + 1
+    until true:
+        c := _ub(bp, p)
+        if c == 0: break end
+        if c == 34:
+            endpos = p + 1
+            out := str.BufStr(sb)
+            str.BufFree(sb)
+            ret out
+        end
+        if c == 92:
+            p += 1
+            e := _ub(bp, p)
+            if e == 0: break end
+            if e == 34: str.BufAppendChar(sb, 34)
+            else e == 92: str.BufAppendChar(sb, 92)
+            else e == 47: str.BufAppendChar(sb, 47)
+            else e == 98: str.BufAppendChar(sb, 8)
+            else e == 102: str.BufAppendChar(sb, 12)
+            else e == 110: str.BufAppendChar(sb, 10)
+            else e == 114: str.BufAppendChar(sb, 13)
+            else e == 116: str.BufAppendChar(sb, 9)
+            else e == 117:
+                q := __jdcp(s, p, sb)
+                if q < 0: break end
+                p = q
+            else:
+                str.BufFree(sb)
+                endpos = -1
+                ret ""
+            end
+            p += 1
+        else:
+            str.BufAppendChar(sb, c)
+            p += 1
+        end
+    end
+    str.BufFree(sb)
+    endpos = -1
+    ret ""
+end
+
+func __jdslice(s: str, i: int, e: int): str:
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    mut p := i
+    until p < e:
+        str.BufAppendChar(sb, _ub(bp, p))
+        p += 1
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func __jdhex4(s: str, i: int): int:
+    mut v := 0
+    repeat 4 in k:
+        d := __jdhexval(__jdbyte(s, i + k))
+        if d < 0: ret -1 end
+        v = v * 16 + d
+    end
+    ret v
+end
+
+func __jdhexval(c: int): int:
+    if c >= 48 and c <= 57: ret c - 48 end
+    if c >= 97 and c <= 102: ret c - 87 end
+    if c >= 65 and c <= 70: ret c - 55 end
+    ret -1
+end
+
+func __jdcp(s: str, p: int, sb &: str.StringBuilder): int:
+    hi := __jdhex4(s, p + 1)
+    if hi < 0: ret -1 end
+    mut q := p + 4
+    mut cp := hi
+    if hi >= 0xD800 and hi <= 0xDBFF and __jdbyte(s, q + 1) == 92 and __jdbyte(s, q + 2) == 117:
+        lo := __jdhex4(s, q + 3)
+        if lo >= 0xDC00 and lo <= 0xDFFF:
+            cp = 0x10000 + ((hi - 0xD800) * 0x400) + (lo - 0xDC00)
+            q = q + 6
+        end
+    end
+    if cp >= 0xD800 and cp <= 0xDFFF: cp = 0xFFFD end
+    str.BufAppendCp(sb, cp)
+    ret q
+end
+
+func __jdpint(s: str, beg: int, stop: int, neg: bool, ok &: bool): i64:
+    mut v := 0 as u64
+    mut p := beg
+    ok = true
+    if p >= stop:
+        ok = false
+        ret 0
+    end
+    mut limit := 9223372036854775807 as u64
+    if neg:
+        limit = 9223372036854775808 as u64
+    end
+    until p < stop:
+        d := (__jdbyte(s, p) - 48) as u64
+        if v > 922337203685477580 as u64:
+            ok = false
+            ret 0
+        end
+        v = v * (10 as u64)
+        if v > limit - d:
+            ok = false
+            ret 0
+        end
+        v = v + d
+        p += 1
+    end
+    if neg: ret (0 as u64 - v) as i64 end
+    ret v as i64
+end
+
+func __jdpuint(s: str, beg: int, stop: int, ok &: bool): u64:
+    mut v := 0 as u64
+    mut p := beg
+    ok = true
+    if p >= stop:
+        ok = false
+        ret 0
+    end
+    until p < stop:
+        d := (__jdbyte(s, p) - 48) as u64
+        if v > 1844674407370955161 as u64:
+            ok = false
+            ret 0
+        end
+        v = v * (10 as u64)
+        if v > (18446744073709551615 as u64) - d:
+            ok = false
+            ret 0
+        end
+        v = v + d
+        p += 1
+    end
+    ret v
+end
+
+func __jdgint(s: str, i: int, endpos &: int): i64:
+    e := __jdnum(s, i)
+    if e < 0 or e == i or __jdfractional(s, i, e):
+        endpos = -1
+        ret 0
+    end
+    neg := __jdbyte(s, i) == 45
+    mut ok := false
+    mut start := i
+    if neg: start = i + 1 end
+    v := __jdpint(s, start, e, neg, ok)
+    if ok == false:
+        endpos = -1
+        ret 0
+    end
+    endpos = e
+    ret v
+end
+
+func __jdfractional(s: str, i: int, e: int): bool:
+    bp := _bp(s)
+    mut p := i
+    until p < e:
+        c := _ub(bp, p)
+        if c == 46 or c == 101 or c == 69: ret true end
+        p += 1
+    end
+    ret false
+end
+
+func __jdguint(s: str, i: int, endpos &: int): u64:
+    e := __jdnum(s, i)
+    if e < 0 or e == i or __jdfractional(s, i, e):
+        endpos = -1
+        ret 0
+    end
+    if __jdbyte(s, i) == 45:
+        endpos = -1
+        ret 0
+    end
+    mut ok := false
+    v := __jdpuint(s, i, e, ok)
+    if ok == false:
+        endpos = -1
+        ret 0
+    end
+    endpos = e
+    ret v
+end
+
+if not SALAM_KERNEL:
+    func __jdgflt(s: str, i: int, endpos &: int): f64:
+        e := __jdnum(s, i)
+        if e < 0 or e == i:
+            endpos = -1
+            ret 0.0
+        end
+        endpos = e
+        ret __jdslice(s, i, e).to_float()
+    end
+end
+
+func __jdgbool(s: str, i: int, endpos &: int): bool:
+    if __jdat(s, i, "true"):
+        endpos = i + 4
+        ret true
+    end
+    if __jdat(s, i, "false"):
+        endpos = i + 5
+        ret false
+    end
+    endpos = -1
+    ret false
+end
+
+func __jdgch(s: str, i: int, endpos &: int): int:
+    text := __jdgstr(s, i, endpos)
+    if endpos < 0: ret 0 end
+    if str.ByteLen(text) != 1:
+        endpos = -1
+        ret 0
+    end
+    ret __jdbyte(text, 0)
+end
+
+func __jdrange(v: i64, lo: i64, hi: i64, endpos &: int): i64:
+    if endpos < 0: ret 0 end
+    if v < lo or v > hi:
+        endpos = -1
+        ret 0
+    end
+    ret v
+end
+
+func __jdskip(s: str, i: int): int:
+    p := __jdws(s, i)
+    c := __jdbyte(s, p)
+    if c == 34:
+        ret __jdstrend(s, p)
+    end
+    if c == 123: ret __jdskip_pair(s, p, 123, 125) end
+    if c == 91: ret __jdskip_pair(s, p, 91, 93) end
+    if __jdat(s, p, "true"): ret p + 4 end
+    if __jdat(s, p, "false"): ret p + 5 end
+    if __jdat(s, p, "null"): ret p + 4 end
+    ret __jdnum(s, p)
+end
+
+func __jdskip_pair(s: str, i: int, open: int, close: int): int:
+    mut depth := 0
+    mut p := i
+    until true:
+        c := __jdbyte(s, p)
+        if c < 0: ret -1 end
+        if c == 34:
+            q := __jdstrend(s, p)
+            if q < 0: ret -1 end
+            p = q
+            continue
+        end
+        if c == open: depth += 1 end
+        if c == close:
+            depth -= 1
+            if depth == 0: ret p + 1 end
+        end
+        p += 1
+    end
+end

@@ -1,0 +1,305 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ml
+
+import matrix
+import pool
+
+@en "Split"
+@fa "تقسیم"
+pub struct Split:
+    @en "x_train"
+    @fa "ویژگی‌های آموزش"
+    pub x_train: matrix.Matrix = matrix.Matrix {}
+    @en "x_test"
+    @fa "ویژگی‌های آزمون"
+    pub x_test: matrix.Matrix = matrix.Matrix {}
+    @en "y_train"
+    @fa "برچسب‌های آموزش"
+    pub y_train: matrix.Matrix = matrix.Matrix {}
+    @en "y_test"
+    @fa "برچسب‌های آزمون"
+    pub y_test: matrix.Matrix = matrix.Matrix {}
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        matrix.Free(this.x_train)
+        matrix.Free(this.x_test)
+        matrix.Free(this.y_train)
+        matrix.Free(this.y_test)
+    end
+end
+
+@en "Folds"
+@fa "برش‌ها"
+pub struct Folds:
+    @en "train"
+    @fa "آموزش"
+    pub train: Vector<Vector<int>> = Vector {}
+    @en "test"
+    @fa "آزمون"
+    pub test: Vector<Vector<int>> = Vector {}
+
+    @en "count"
+    @fa "شمار"
+    pub func count(): int: ret this.test.len() end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        repeat this.train.len() in i:
+            mut t := this.train.get(i)
+            t.free()
+        end
+        repeat this.test.len() in i:
+            mut t := this.test.get(i)
+            t.free()
+        end
+        this.train.free()
+        this.test.free()
+    end
+end
+
+@en "GridResult"
+@fa "نتیجه جستجوی شبکه‌ای"
+pub struct GridResult:
+    @en "scores"
+    @fa "امتیازها"
+    pub scores: Vector<f64> = Vector {}
+    @en "best"
+    @fa "بهترین"
+    pub best: int = 0 - 1
+    @en "best_score"
+    @fa "بهترین امتیاز"
+    pub best_score: f64 = 0.0
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free(): this.scores.free() end
+end
+
+@en "Candidate"
+@fa "نامزد"
+pub struct Candidate:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "fit"
+    @fa "کارکرد برازش"
+    pub fit: func (matrix.Matrix, matrix.Matrix, matrix.Matrix) matrix.Matrix = (a: matrix.Matrix, b: matrix.Matrix, c: matrix.Matrix): ret matrix.Matrix {} end
+end
+
+func _permutation(n: int, seed: i64): Vector<int>:
+    mut p := Vector {} as Vector<int>
+    repeat n in i: p.push(i) end
+    mut g := matrix.NewRng(seed)
+    mut i := n - 1
+    until i > 0:
+        j := (g.next_float() * ((i + 1) as f64)) as int
+        t := p.get(i)
+        p.set(i, p.get(j))
+        p.set(j, t)
+        i -= 1
+    end
+    ret p
+end
+
+func _take_rows(x &: matrix.Matrix, idx &: Vector<int>): matrix.Matrix:
+    mut r := matrix.Zeros(idx.len(), x.cols)
+    repeat idx.len() in i:
+        src := idx.get(i)
+        repeat x.cols in j: r.set(i, j, x.at(src, j)) end
+    end
+    ret r
+end
+
+func _complete_folds(n: int, f &: Folds):
+    repeat f.test.len() in k:
+        mut mask := Vector {} as Vector<bool>
+        mask.zeros(n)
+        tv := f.test.get(k)
+        repeat tv.len() in i: mask.set(tv.get(i), true) end
+        mut tr := Vector {} as Vector<int>
+        repeat n in i:
+            if mask.get(i) == false: tr.push(i) end
+        end
+        mask.free()
+        f.train.push(tr)
+    end
+end
+
+@en "TrainTestSplit"
+@fa "تقسیم آموزش‌آزمون"
+pub func TrainTestSplit(x &: matrix.Matrix, y &: matrix.Matrix, test_frac: f64, seed: i64): Split:
+    mut s := Split {}
+    n := x.rows
+    if n == 0 or y.rows != n: ret s end
+    mut ntest := (test_frac * (n as f64) + 0.5) as int
+    if ntest < 1: ntest = 1 end
+    if ntest >= n: ntest = n - 1 end
+    mut perm := _permutation(n, seed)
+    mut te := Vector {} as Vector<int>
+    mut tr := Vector {} as Vector<int>
+    repeat n in i:
+        if i < ntest: te.push(perm.get(i))
+        else:
+            tr.push(perm.get(i))
+        end
+    end
+    s.x_train = _take_rows(x, tr)
+    s.y_train = _take_rows(y, tr)
+    s.x_test = _take_rows(x, te)
+    s.y_test = _take_rows(y, te)
+    perm.free()
+    te.free()
+    tr.free()
+    ret s
+end
+
+@en "KFold"
+@fa "کی برش"
+pub func KFold(n: int, k: int, shuffle: bool, seed: i64): Folds:
+    mut f := Folds {}
+    if k < 2 or n < k: ret f end
+    mut order := Vector {} as Vector<int>
+    if shuffle:
+        order = _permutation(n, seed)
+    else:
+        repeat n in i: order.push(i) end
+    end
+    mut start := 0
+    repeat k in fold:
+        mut size := n / k
+        if fold < n % k: size += 1 end
+        mut te := Vector {} as Vector<int>
+        repeat size in i: te.push(order.get(start + i)) end
+        f.test.push(te)
+        start += size
+    end
+    order.free()
+    _complete_folds(n, f)
+    ret f
+end
+
+@en "StratifiedKFold"
+@fa "کی برش طبقه‌ای"
+pub func StratifiedKFold(y &: matrix.Matrix, k: int, seed: i64): Folds:
+    mut f := Folds {}
+    n := y.rows
+    if k < 2 or n < k: ret f end
+    repeat k: f.test.push(Vector {} as Vector<int>) end
+    nc := CountClasses(y)
+    mut perm := _permutation(n, seed)
+    repeat nc in c:
+        mut dealt := 0
+        repeat n in i:
+            row := perm.get(i)
+            if (y.at(row, 0) as int) == c:
+                mut te := f.test.get(dealt % k)
+                te.push(row)
+                f.test.set(dealt % k, te)
+                dealt += 1
+            end
+        end
+    end
+    perm.free()
+    _complete_folds(n, f)
+    ret f
+end
+
+@en "CrossValScore"
+@fa "امتیاز اعتبارسنجی متقاطع"
+pub func CrossValScore(fitpred: func (matrix.Matrix, matrix.Matrix, matrix.Matrix) matrix.Matrix, metric: func (matrix.Matrix, matrix.Matrix) f64, x &: matrix.Matrix, y &: matrix.Matrix, folds &: Folds): Vector<f64>:
+    mut scores := Vector {} as Vector<f64>
+    repeat folds.count() in k:
+        tr := folds.train.get(k)
+        te := folds.test.get(k)
+        mut xtr := _take_rows(x, tr)
+        mut ytr := _take_rows(y, tr)
+        mut xte := _take_rows(x, te)
+        mut yte := _take_rows(y, te)
+        mut pred := fitpred(xtr, ytr, xte)
+        mut sc := 0.0
+        if pred.is_empty() == false: sc = metric(yte, pred) end
+        scores.push(sc)
+        matrix.Free(xtr)
+        matrix.Free(ytr)
+        matrix.Free(xte)
+        matrix.Free(yte)
+        matrix.Free(pred)
+    end
+    ret scores
+end
+
+@en "MeanScore"
+@fa "میانگین امتیاز"
+pub func MeanScore(scores &: Vector<f64>): f64:
+    if scores.len() == 0: ret 0.0 end
+    mut s := 0.0
+    repeat scores.len() in i: s += scores.get(i) end
+    ret s / (scores.len() as f64)
+end
+
+@en "CrossValScoreParallel"
+@fa "امتیاز اعتبارسنجی متقاطع موازی"
+pub func CrossValScoreParallel(fitpred: func (matrix.Matrix, matrix.Matrix, matrix.Matrix) matrix.Matrix, metric: func (matrix.Matrix, matrix.Matrix) f64, x &: matrix.Matrix, y &: matrix.Matrix, folds &: Folds, workers: int): Vector<f64>:
+    mut w := workers
+    if w < 0: w = pool.CPUCount() as int end
+    if w <= 1: ret CrossValScore(fitpred, metric, x, y, folds) end
+    k := folds.count()
+    mut scores := Vector {} as Vector<f64>
+    repeat k: scores.push(0.0) end
+    xs := x
+    ys := y
+    fs := folds
+    pool.ParallelFor(
+        k as i64, w as i64, (i: i64): f := i as int tr := fs.train.get(f) te := fs.test.get(f) mut xtr := _take_rows(xs, tr) mut ytr := _take_rows(ys, tr) mut xte := _take_rows(xs, te) mut yte := _take_rows(ys, te) mut pred := fitpred(xtr, ytr, xte) mut sc := 0.0 if pred.is_empty() == false: sc = metric(yte, pred) end scores.set(f, sc) matrix.Free(xtr) matrix.Free(ytr) matrix.Free(xte) matrix.Free(yte) matrix.Free(pred) end
+    )
+    ret scores
+end
+
+@en "GridSearch"
+@fa "جستجوی شبکه‌ای"
+pub func GridSearch(candidates &: Vector<Candidate>, metric: func (matrix.Matrix, matrix.Matrix) f64, x &: matrix.Matrix, y &: matrix.Matrix, folds &: Folds, workers: int): GridResult:
+    mut r := GridResult {}
+    n := candidates.len()
+    repeat n: r.scores.push(0.0) end
+    mut w := workers
+    if w < 0: w = pool.CPUCount() as int end
+    if w <= 1 or n <= 1:
+        repeat n in c:
+            mut sc := CrossValScore(candidates.get(c).fit, metric, x, y, folds)
+            r.scores.set(c, MeanScore(sc))
+            sc.free()
+        end
+    else:
+        xs := x
+        ys := y
+        fs := folds
+        cs := candidates
+        out := r.scores
+        pool.ParallelFor(
+            n as i64, w as i64, (i: i64): c := i as int mut sc := CrossValScore(cs.get(c).fit, metric, xs, ys, fs) out.set(c, MeanScore(sc)) sc.free() end
+        )
+    end
+    repeat n in c:
+        if r.best < 0 or r.scores.get(c) > r.best_score:
+            r.best = c
+            r.best_score = r.scores.get(c)
+        end
+    end
+    ret r
+end

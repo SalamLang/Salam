@@ -1,0 +1,120 @@
+# syntax=docker/dockerfile:1
+# checkov:skip=CKV_DOCKER_2:One-shot CLI benchmark runner, not a long-running service; no process to healthcheck.
+
+ARG ALPINE_VERSION=3.24
+ARG LLVM_VERSION=22
+
+FROM alpine:${ALPINE_VERSION} AS toolchain
+ARG LLVM_VERSION
+SHELL ["/bin/ash", "-o", "pipefail", "-c"]
+
+# trivy:ignore:AVD-DS-0025
+RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
+    for i in 1 2 3 4 5; do \
+        apk add -U --cache-dir=/var/cache/apk \
+            build-base \
+            g++ \
+            make \
+            musl-dev \
+            tcc \
+            tcc-libs-static \
+            clang${LLVM_VERSION} \
+            llvm${LLVM_VERSION} \
+            rust \
+            cargo \
+            go \
+            python3 \
+            py3-numpy \
+            bash \
+            git \
+            curl \
+            unzip \
+            coreutils \
+            sqlite-dev \
+            sqlite-static \
+            mariadb-connector-c-dev \
+        && break; \
+        echo "apk add attempt $i failed; retrying in 5s..." >&2; sleep 5; \
+    done
+
+# trivy:ignore:AVD-DS-0025
+RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
+    set -eux; \
+    ok=0; \
+    for i in 1 2 3 4 5; do \
+        if apk add -U --cache-dir=/var/cache/apk php php-cli 2>/dev/null; then ok=1; break; fi; \
+        pkg="$(apk search -e --cache-dir=/var/cache/apk 'php*-cli' 2>/dev/null | sort -V | tail -1)"; \
+        if [ -n "$pkg" ] && apk add -U --cache-dir=/var/cache/apk "$pkg" 2>/dev/null; then ok=1; break; fi; \
+        echo "apk add php attempt $i failed; retrying in 5s..." >&2; sleep 5; \
+    done; \
+    [ "$ok" = 1 ]; \
+    command -v php
+
+RUN set -eux; \
+    LLVM_BIN="/usr/lib/llvm${LLVM_VERSION}/bin"; \
+    for t in clang llc opt lli; do \
+        if   [ -x "$LLVM_BIN/$t" ]; then src="$LLVM_BIN/$t"; \
+        elif command -v "$t-${LLVM_VERSION}" >/dev/null 2>&1; then src="$(command -v "$t-${LLVM_VERSION}")"; \
+        elif command -v "$t" >/dev/null 2>&1; then src="$(command -v "$t")"; \
+        else echo "missing LLVM tool: $t" >&2; exit 1; fi; \
+        ln -sf "$src" "/usr/local/bin/$t-${LLVM_VERSION}"; \
+    done
+
+RUN { gcc --version; g++ --version; rustc --version; go version; \
+      python3 --version; python3 -c 'import numpy; print("numpy", numpy.__version__)'; \
+      php --version; tcc -v || true; \
+      clang-${LLVM_VERSION} --version; } | tee /etc/bench-toolchain-versions.txt
+
+ARG SALAM_UID=1000
+ARG SALAM_GID=1000
+RUN addgroup -g "${SALAM_GID}" salam \
+    && adduser -D -u "${SALAM_UID}" -G salam salam
+
+ENV GOCACHE=/tmp/go-cache GOPATH=/tmp/go CARGO_HOME=/tmp/cargo
+WORKDIR /repo
+
+FROM debian:stable-slim AS salam-builder
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl unzip gcc libc6-dev git \
+    && rm -rf /var/lib/apt/lists/*
+ARG SALAM_SEED_SLUG=linux-x86_64
+COPY tools /repo/tools
+COPY compiler /repo/compiler
+COPY std /repo/std
+COPY VERSION /repo/VERSION
+WORKDIR /repo
+RUN sh tools/bash/fetch-seed.sh --slug "${SALAM_SEED_SLUG}" --out /repo/seed \
+    && sh tools/bash/build-selfhost.sh --seed=/repo/seed/salam \
+    --output=/repo/salam -- --target=x86_64-linux-musl
+RUN /repo/salam version
+
+FROM toolchain AS bench
+COPY --from=salam-builder /repo/salam /repo/salam
+COPY std /repo/std
+COPY benchmark /repo/benchmark
+
+ENV SALAM_BIN=/repo/salam \
+    SALAM_STD=/repo/std \
+    BENCH_WORK=/tmp/salam_bench_work
+
+HEALTHCHECK NONE
+
+# hadolint ignore=SC2016
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'set -e' \
+    'cd /repo/benchmark' \
+    '"$SALAM_BIN" build runner.salam --output=/tmp/bench_runner' \
+    'exec /tmp/bench_runner "$@"' \
+    > /repo/entrypoint.sh \
+    && chmod +x /repo/entrypoint.sh \
+    && chown -R salam:salam /repo/benchmark \
+    && chmod -R a+rwX /repo/benchmark
+
+USER salam
+WORKDIR /repo/benchmark
+ENTRYPOINT ["/repo/entrypoint.sh"]
+
+FROM toolchain AS shell
+ENTRYPOINT ["bash"]

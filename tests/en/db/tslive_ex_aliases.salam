@@ -1,0 +1,70 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import db.typesense
+
+func make(c: typesense.Client, name: str, titles: Vector<str>, err &: typesense.Error):
+    mut s := typesense.Schema { name = name }
+    s.fields.push(typesense.NewField("title", typesense.TYPE_STRING))
+    _ := typesense.CreateCollection(c, s, err)
+    mut docs := Vector {} as Vector<str>
+    each t in titles:
+        docs.push(`{"title": "` + t + `"}`)
+    end
+    _ := typesense.ImportDocuments(c, name, docs, typesense.WriteOptions {}, err)
+end
+
+func count(c: typesense.Client, name: str, err &: typesense.Error): i64:
+    ret typesense.Search(c, name, typesense.NewSearch("*", ""), err).found
+end
+
+func main:
+    parts := os.Env("SALAM_TEST_TYPESENSE").split(" ")
+    mut c := typesense.New(parts.get(0), parts.get(1))
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+    _ := typesense.DeleteAlias(c, "ex_alias_books", err)
+    _ := typesense.DeleteCollection(c, "ex_alias_books_v1", err)
+    _ := typesense.DeleteCollection(c, "ex_alias_books_v2", err)
+
+    mut v1 := Vector {} as Vector<str>
+    v1.push("Dune")
+    v1.push("Emma")
+    make(c, "ex_alias_books_v1", v1, err)
+    a := typesense.UpsertAlias(c, "ex_alias_books", "ex_alias_books_v1", err)
+    println "alias:", a.name, "->", a.collection_name
+    println "books through the alias:", count(c, "ex_alias_books", err)
+
+    mut v2 := Vector {} as Vector<str>
+    v2.push("Dune")
+    v2.push("Emma")
+    v2.push("Ulysses")
+    make(c, "ex_alias_books_v2", v2, err)
+    _ := typesense.UpsertAlias(c, "ex_alias_books", "ex_alias_books_v2", err)
+    println "after the switch:", typesense.GetAlias(c, "ex_alias_books", err).collection_name
+    println "books through the alias:", count(c, "ex_alias_books", err)
+    _ := typesense.DeleteCollection(c, "ex_alias_books_v1", err)
+    println "old version deleted, alias still works:", count(c, "ex_alias_books", err)
+
+    mut listed := false
+    each al in typesense.ListAliases(c, err):
+        if al.name == "ex_alias_books": listed = true end
+    end
+    println "listed:", listed
+    println "deleted alias:", typesense.DeleteAlias(c, "ex_alias_books", err).name
+    _ := typesense.GetAlias(c, "ex_alias_books", err)
+    println "alias gone:", typesense.IsNotFound(err), "collection kept:", typesense.CollectionExists(c, "ex_alias_books_v2", err)
+    _ := typesense.DeleteCollection(c, "ex_alias_books_v2", err)
+end

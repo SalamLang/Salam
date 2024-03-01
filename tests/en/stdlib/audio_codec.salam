@@ -1,0 +1,143 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import audio
+import audio.codec
+import compress
+import filepath
+import mem
+import os
+import testing
+
+func main:
+    println "format names and extensions"
+    testing.AssertEqInt(audio.FormatFromExt("song.wav"), audio.FormatWAV)
+    testing.AssertEqInt(audio.FormatFromExt("SONG.WAVE"), audio.FormatWAV)
+    testing.AssertEqInt(audio.FormatFromExt("song.mp3"), audio.FormatMP3)
+    testing.AssertEqInt(audio.FormatFromExt("song.flac"), audio.FormatFLAC)
+    testing.AssertEqInt(audio.FormatFromExt("song.ogg"), audio.FormatOGG)
+    testing.AssertEqInt(audio.FormatFromExt("song.opus"), audio.FormatOpus)
+    testing.AssertEqInt(audio.FormatFromExt("song.aiff"), audio.FormatAIFF)
+    testing.AssertEqInt(audio.FormatFromExt("song.m4a"), audio.FormatAAC)
+    testing.AssertEqInt(audio.FormatFromExt("song.mid"), audio.FormatMIDI)
+    testing.AssertEqInt(audio.FormatFromExt("song.txt"), audio.FormatUnknown)
+    testing.AssertEqStr(audio.FormatName(audio.FormatWAV), "wav")
+    testing.AssertEqStr(audio.FormatName(audio.FormatFLAC), "flac")
+    testing.AssertEqStr(audio.FormatName(999), "unknown")
+    testing.AssertTrue(audio.FormatIsLossless(audio.FormatFLAC))
+    testing.AssertFalse(audio.FormatIsLossless(audio.FormatMP3))
+
+    println "sniffing magic bytes"
+    mut flac := compress.NewByteBuf()
+    each b in [102, 76, 97, 67, 0, 0, 0, 34, 0, 0, 0, 0]:
+        compress.BufPush(flac, b)
+    end
+    testing.AssertEqInt(audio.DetectFormat(flac.data, flac.len), audio.FormatFLAC)
+    mut ogg := compress.NewByteBuf()
+    each b in [79, 103, 103, 83, 0, 2, 0, 0, 0, 0, 0, 0]:
+        compress.BufPush(ogg, b)
+    end
+    testing.AssertEqInt(audio.DetectFormat(ogg.data, ogg.len), audio.FormatOGG)
+    mut midi := compress.NewByteBuf()
+    each b in [77, 84, 104, 100, 0, 0, 0, 6, 0, 0, 0, 1]:
+        compress.BufPush(midi, b)
+    end
+    testing.AssertEqInt(audio.DetectFormat(midi.data, midi.len), audio.FormatMIDI)
+    mut id3 := compress.NewByteBuf()
+    each b in [73, 68, 51, 3, 0, 0, 0, 0, 0, 0, 0, 0]:
+        compress.BufPush(id3, b)
+    end
+    testing.AssertEqInt(audio.DetectFormat(id3.data, id3.len), audio.FormatMP3)
+    mut junk := compress.NewByteBuf()
+    each b in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]:
+        compress.BufPush(junk, b)
+    end
+    testing.AssertEqInt(audio.DetectFormat(junk.data, junk.len), audio.FormatUnknown)
+    testing.AssertEqInt(audio.DetectFormat(junk.data, 4), audio.FormatUnknown)
+
+    println "what the dispatcher carries today"
+    testing.AssertTrue(codec.CanDecode(audio.FormatWAV))
+    testing.AssertTrue(codec.CanEncode(audio.FormatWAV))
+    testing.AssertFalse(codec.CanDecode(audio.FormatMP3))
+    testing.AssertTrue(codec.CanDecode(audio.FormatFLAC))
+    mut fmts := codec.Formats()
+    testing.AssertEqInt(fmts.len(), 4)
+    fmts.free()
+    testing.AssertTrue(codec.CanDecode(audio.FormatAIFF))
+    testing.AssertTrue(codec.CanDecode(audio.FormatAU))
+
+    println "save and open through the generic entry points"
+    mut c := audio.New(22050, 2, 32)
+    mut i := 0
+    until i < 32:
+        audio.SetSample(c, i, 0, (i as f64) / 64.0)
+        audio.SetSample(c, i, 1, 0.0 - (i as f64) / 64.0)
+        i += 1
+    end
+    path := filepath.Join(os.TempDir(), "salam_audio_codec_test.wav")
+    defer mem.Free(path as void*)
+    testing.AssertTrue(codec.Save(c, path))
+    mut ok := false
+    mut back := codec.Open(path, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(back.frames, 32)
+    testing.AssertEqInt(back.channels, 2)
+    testing.AssertEqInt(back.rate, 22050)
+    testing.AssertEqFloat(audio.Sample(back, 8, 0), 8.0 / 64.0, 0.0)
+    testing.AssertEqFloat(audio.Sample(back, 8, 1), -8.0 / 64.0, 0.0)
+
+    println "probing a file"
+    mut pok := false
+    info := codec.ProbeFile(path, pok)
+    testing.AssertTrue(pok)
+    testing.AssertEqInt(info.format, audio.FormatWAV)
+    testing.AssertEqInt(info.bits, 16)
+    testing.AssertEqInt(info.frames, 32)
+    testing.AssertTrue(info.lossless)
+
+    println "decoding straight from memory"
+    buf := codec.Encode(c, audio.FormatWAV)
+    testing.AssertMsg(compress.BufLen(buf) > 44, "the encoder should produce a file")
+    mut mok := false
+    mut mem_back := codec.Decode(buf.data, buf.len, mok)
+    testing.AssertTrue(mok)
+    testing.AssertEqInt(mem_back.frames, 32)
+
+    println "refusals"
+    mp3path := filepath.Join(os.TempDir(), "salam_audio.mp3")
+    defer mem.Free(mp3path as void*)
+    testing.AssertFalse(codec.Save(c, mp3path))
+    testing.AssertEqInt(compress.BufLen(codec.Encode(c, audio.FormatMP3)), 0)
+    mut bad := false
+    codec.Decode(junk.data, junk.len, bad)
+    testing.AssertFalse(bad)
+    mut missing := false
+    nopath := filepath.Join(os.TempDir(), "salam_audio_nope.wav")
+    defer mem.Free(nopath as void*)
+    codec.Open(nopath, missing)
+    testing.AssertFalse(missing)
+
+    compress.BufFree(flac)
+    compress.BufFree(ogg)
+    compress.BufFree(midi)
+    compress.BufFree(id3)
+    compress.BufFree(junk)
+    compress.BufFree(buf)
+    audio.Free(c)
+    audio.Free(back)
+    audio.Free(mem_back)
+    ret testing.Summary()
+end

@@ -1,0 +1,2134 @@
+package nativegen
+
+pub struct Enc:
+    pub code: Vector<u8> = Vector {}
+    pub ioff: Vector<int> = Vector {}
+    pub ilen: Vector<int> = Vector {}
+    pub lbl_ins: Vector<int> = Vector {}
+    pub br_ins: Vector<int> = Vector {}
+    pub br_long: Vector<bool> = Vector {}
+    pub pos: Vector<int> = Vector {}
+    pub rel_off: Vector<int> = Vector {}
+    pub rel_sym: Vector<int> = Vector {}
+    pub rel_type: Vector<int> = Vector {}
+    pub rel_add: Vector<i64> = Vector {}
+    pub rel_ins: Vector<int> = Vector {}
+    pub pad: Vector<int> = Vector {}
+    pub cur_ins: int = 0
+end
+
+pub struct RM:
+    pub mem: bool = false
+    pub reg: int = 0
+    pub k: int = 0
+    pub b: int = 0 - 1
+    pub i: int = 0 - 1
+    pub s: int = 1
+    pub d: i64 = 0 as i64
+    pub sym: int = 0 - 1
+end
+
+func eb(e &: Enc, b: int):
+    e.code.push((b & 255) as u8)
+end
+
+func e32(e &: Enc, v: i64):
+    mut x := v
+    repeat 4:
+        eb(e, (x & (255 as i64)) as int)
+        x = x >> (8 as i64)
+    end
+end
+
+func e64(e &: Enc, v: i64):
+    mut x := v as u64
+    repeat 8:
+        eb(e, (x & (255 as u64)) as int)
+        x = x >> (8 as u64)
+    end
+end
+
+func erel(e &: Enc, sym: int, rtype: int, addend: i64):
+    e.rel_off.push(e.code.len())
+    e.rel_sym.push(sym)
+    e.rel_type.push(rtype)
+    e.rel_add.push(addend)
+    e.rel_ins.push(e.cur_ins)
+end
+
+func hw(r: int): int:
+    if r >= 16:
+        ret r - 16
+    end
+    ret r
+end
+
+func fits8(v: i64): bool:
+    ret v >= (0 - 128 as i64) and v <= (127 as i64)
+end
+
+func rm_reg(r: int): RM:
+    ret RM { mem = false, reg = r }
+end
+
+func win_adj(g &: Ng): i64:
+    if g.os != NG_OS_WINDOWS:
+        ret 0
+    end
+    ret (g.arch == NG_ARCH_X86 ? 4 : 8) * ngp_count(g) + g.mc.frame_size - g.mc.win_fp
+end
+
+func fpo_base(g &: Ng): i64:
+    ws := g.arch == NG_ARCH_X86 ? 4 : 8
+    ret ws * ngp_count(g) + g.mc.fpo_pad - ws
+end
+
+func rm_of(g &: Ng, i: int): RM:
+    k := g.mc.mk[i]
+    if k == MK_FRAME:
+        if g.mc.fpo:
+            ret RM { mem = true, k = MK_BI, b = RSP, i = g.mc.mi[i], s = g.mc.ms[i], d = g.mc.md[i] - (g.mc.fs_off[g.mc.mb[i]] as i64) + fpo_base(g) }
+        end
+        ret RM { mem = true, k = MK_BI, b = RBP, i = g.mc.mi[i], s = g.mc.ms[i], d = g.mc.md[i] - (g.mc.fs_off[g.mc.mb[i]] as i64) + win_adj(g) }
+    end
+    if k == MK_ARG:
+        if g.mc.fpo:
+            ret RM { mem = true, k = MK_BI, b = RSP, d = g.mc.md[i] + fpo_base(g) }
+        end
+        ret RM { mem = true, k = MK_BI, b = RBP, d = g.mc.md[i] + win_adj(g) }
+    end
+    if k == MK_RIP or k == MK_GOT:
+        ret RM { mem = true, k = k, sym = g.mc.msym[i], d = g.mc.md[i] }
+    end
+    ret RM { mem = true, k = MK_BI, b = g.mc.mb[i], i = g.mc.mi[i], s = g.mc.ms[i], d = g.mc.md[i] }
+end
+
+func scale_bits(s: int): int:
+    if s == 2: ret 1 end
+    if s == 4: ret 2 end
+    if s == 8: ret 3 end
+    ret 0
+end
+
+func enc(g &: Ng, e &: Enc, pfx: int, w: bool, opc: int, nopc: int, regf: int, rm: RM, byteop: int, immsz: int):
+    if pfx == 0x66 or pfx == 0xF2 or pfx == 0xF3 or pfx == 0xF0:
+        eb(e, pfx)
+    else pfx == 0x66F0:
+        eb(e, 0xF0)
+        eb(e, 0x66)
+    end
+    rf := hw(regf)
+    x32 := g.arch == NG_ARCH_X86
+    mut rex := 0
+    if w and not x32:
+        rex = rex | 8
+    end
+    if rf >= 8:
+        rex = rex | 4
+    end
+    if rm.mem:
+        if rm.k == MK_BI:
+            if rm.i >= 0 and hw(rm.i) >= 8:
+                rex = rex | 2
+            end
+            if rm.b >= 0 and hw(rm.b) >= 8:
+                rex = rex | 1
+            end
+        end
+    else:
+        if hw(rm.reg) >= 8:
+            rex = rex | 1
+        end
+        if (byteop & 1) != 0 and rm.reg >= 4 and rm.reg <= 7:
+            rex = rex | 64
+        end
+    end
+    if (byteop & 2) != 0 and regf >= 4 and regf <= 7:
+        rex = rex | 64
+    end
+    if rex != 0 and not x32:
+        eb(e, 0x40 | (rex & 15))
+    end
+    if nopc >= 3:
+        eb(e, (opc >> 16) & 255)
+    end
+    if nopc >= 2:
+        eb(e, (opc >> 8) & 255)
+    end
+    eb(e, opc & 255)
+    r3 := rf & 7
+    if not rm.mem:
+        eb(e, 0xC0 | (r3 << 3) | (hw(rm.reg) & 7))
+        ret
+    end
+    if (rm.k == MK_RIP or rm.k == MK_GOT) and x32:
+        eb(e, (r3 << 3) | 5)
+        erel(e, rm.sym, R_ABS32, rm.d)
+        e32(e, 0 as i64)
+        ret
+    end
+    if rm.k == MK_RIP or rm.k == MK_GOT:
+        eb(e, (r3 << 3) | 5)
+        if rm.k == MK_GOT:
+            if g.os == NG_OS_WINDOWS:
+                erel(e, rm.sym, R_PC32, rm.d - ((4 + immsz) as i64))
+            else:
+                erel(e, rm.sym, R_GOTPCRELX, rm.d - ((4 + immsz) as i64))
+            end
+        else:
+            erel(e, rm.sym, R_PC32, rm.d - ((4 + immsz) as i64))
+        end
+        e32(e, 0 as i64)
+        ret
+    end
+    b := rm.b
+    d := rm.d
+    if b < 0:
+        mut ix := 4
+        if rm.i >= 0:
+            ix = hw(rm.i) & 7
+        end
+        eb(e, (r3 << 3) | 4)
+        eb(e, (scale_bits(rm.s) << 6) | (ix << 3) | 5)
+        e32(e, d)
+        ret
+    end
+    hb := hw(b) & 7
+    mut mode := 2
+    if d == (0 as i64) and hb != 5:
+        mode = 0
+    else fits8(d):
+        mode = 1
+    end
+    if rm.i >= 0 or hb == 4:
+        mut ix2 := 4
+        if rm.i >= 0:
+            ix2 = hw(rm.i) & 7
+        end
+        eb(e, (mode << 6) | (r3 << 3) | 4)
+        eb(e, (scale_bits(rm.s) << 6) | (ix2 << 3) | hb)
+    else:
+        eb(e, (mode << 6) | (r3 << 3) | hb)
+    end
+    if mode == 1:
+        eb(e, (d & (255 as i64)) as int)
+    else mode == 2:
+        e32(e, d)
+    end
+end
+
+func sse_pfx(sz: int): int:
+    if sz == 4:
+        ret 0xF3
+    end
+    ret 0xF2
+end
+
+func x86_map(r: int): int:
+    if r == 10: ret 6 end
+    if r == 11: ret 7 end
+    if r == 30: ret 22 end
+    if r == 31: ret 23 end
+    ret r
+end
+
+func x86_prepass(g &: Ng):
+    n := g.mc.op.len()
+    repeat n in i:
+        g.mc.r0[i] = x86_map(g.mc.r0[i])
+        g.mc.r1[i] = x86_map(g.mc.r1[i])
+        if g.mc.mk[i] == MK_BI:
+            g.mc.mb[i] = x86_map(g.mc.mb[i])
+        end
+        g.mc.mi[i] = x86_map(g.mc.mi[i])
+        op := g.mc.op[i]
+        gp := op <= M_CMOV or (op >= M_XCHG and op <= M_LCMPXCHG) or op == M_ALU_MI or op == M_ALU_MR or op == M_LDGOT or op == M_MULHI or op == M_MOVQ_XG or op == M_MOVQ_GX
+        if g.mc.sz[i] == 8 and gp:
+            g.mc.sz[i] = 4
+        end
+        if (op == M_CVTSI2F or op == M_CVTF2SI) and g.mc.sz2[i] == 8:
+            g.mc.sz2[i] = 4
+        end
+        if op == M_MOVSX_RR and g.mc.sz2[i] == 4:
+            g.mc.op[i] = M_MOV_RR
+        else op == M_LDSX and g.mc.sz2[i] == 4:
+            g.mc.op[i] = M_LD
+        end
+    end
+    mut k := 0
+    until k < g.mc.callee_used.len():
+        g.mc.callee_used[k] = x86_map(g.mc.callee_used[k])
+        k += 1
+    end
+end
+
+func x86_byte_regs(g &: Ng, i: int, bad &: Vector<int>):
+    bad.clear()
+    op := g.mc.op[i]
+    sz := g.mc.sz[i]
+    r0 := g.mc.r0[i]
+    r1 := g.mc.r1[i]
+    mut rr := Vector {} as Vector<int>
+    defer rr.free()
+    if op == M_SETCC:
+        rr.push(r0)
+    else (op == M_MOVZX_RR or op == M_MOVSX_RR) and g.mc.sz2[i] == 1:
+        rr.push(r1)
+    else sz == 1 and (op == M_MOV_RR or op == M_ALU_RR or op == M_TEST_RR or op == M_XCHG or op == M_LXADD or op == M_LCMPXCHG):
+        rr.push(r0)
+        rr.push(r1)
+    else sz == 1 and (op == M_ALU_RI or op == M_TEST_RI or op == M_ALU_RM or op == M_LD):
+        rr.push(r0)
+    else sz == 1 and (op == M_ST or op == M_ALU_MR):
+        rr.push(r1)
+    end
+    each r in rr:
+        if r >= 4 and r <= 7 and (bad.len() == 0 or bad[0] != r):
+            bad.push(r)
+        end
+    end
+end
+
+func x86_swap(r: int, a: int, b: int): int:
+    if r == a: ret b end
+    if r == b: ret a end
+    ret r
+end
+
+func x86_free_tmp(g &: Ng, i: int, bad: Vector<int>, taken: Vector<int>): int:
+    mut t := g.mc.op[i] == M_LCMPXCHG ? 1 : 0
+    until t < 4:
+        mut used := t == g.mc.r0[i] or t == g.mc.r1[i] or t == g.mc.mb[i] or t == g.mc.mi[i]
+        each b in bad:
+            if b == t:
+                used = true
+            end
+        end
+        each k in taken:
+            if k == t:
+                used = true
+            end
+        end
+        if not used:
+            ret t
+        end
+        t += 1
+    end
+    ret 0 - 1
+end
+
+func enc_ins_x86(g &: Ng, e &: Enc, i: int):
+    mut bad := Vector {} as Vector<int>
+    defer bad.free()
+    x86_byte_regs(g, i, bad)
+    if bad.len() == 0:
+        enc_ins(g, e, i)
+        ret
+    end
+    mut tmp := Vector {} as Vector<int>
+    defer tmp.free()
+    repeat bad.len():
+        tmp.push(x86_free_tmp(g, i, bad, tmp))
+    end
+    o0 := g.mc.r0[i]
+    o1 := g.mc.r1[i]
+    ob := g.mc.mb[i]
+    oi := g.mc.mi[i]
+    bi := g.mc.mk[i] == MK_BI
+    repeat bad.len() in k:
+        enc(g, e, 0, false, 0x87, 1, tmp[k], rm_reg(bad[k]), 0, 0)
+        g.mc.r0[i] = x86_swap(g.mc.r0[i], tmp[k], bad[k])
+        g.mc.r1[i] = x86_swap(g.mc.r1[i], tmp[k], bad[k])
+        if bi:
+            g.mc.mb[i] = x86_swap(g.mc.mb[i], tmp[k], bad[k])
+            g.mc.mi[i] = x86_swap(g.mc.mi[i], tmp[k], bad[k])
+        end
+    end
+    enc_ins(g, e, i)
+    g.mc.r0[i] = o0
+    g.mc.r1[i] = o1
+    g.mc.mb[i] = ob
+    g.mc.mi[i] = oi
+    mut k2 := bad.len() - 1
+    until k2 >= 0:
+        enc(g, e, 0, false, 0x87, 1, tmp[k2], rm_reg(bad[k2]), 0, 0)
+        k2 -= 1
+    end
+end
+
+func enc_ins(g &: Ng, e &: Enc, i: int):
+    op := g.mc.op[i]
+    sz := g.mc.sz[i]
+    r0 := g.mc.r0[i]
+    r1 := g.mc.r1[i]
+    imm := g.mc.imm[i]
+    w := sz == 8
+    p16 := sz == 2 ? 0x66 : 0
+    b8 := sz == 1
+    switch op:
+        M_NOP, M_LABEL, M_COPY: ret end
+        M_MOV_RR:
+            if b8:
+                enc(g, e, 0, false, 0x88, 1, r1, rm_reg(r0), 3, 0)
+            else:
+                enc(g, e, p16, w, 0x89, 1, r1, rm_reg(r0), 0, 0)
+            end
+            ret
+        end
+        M_MOV_RI:
+            if sz == 8 and not is_imm32(imm):
+                h := hw(r0)
+                eb(e, 0x48 | (h >= 8 ? 1 : 0))
+                eb(e, 0xB8 + (h & 7))
+                e64(e, imm)
+            else sz == 8 and imm < (0 as i64):
+                enc(g, e, 0, true, 0xC7, 1, 0, rm_reg(r0), 0, 4)
+                e32(e, imm)
+            else:
+                h2 := hw(r0)
+                if h2 >= 8:
+                    eb(e, 0x41)
+                end
+                eb(e, 0xB8 + (h2 & 7))
+                e32(e, imm)
+            end
+            ret
+        end
+        M_LD:
+            enc(g, e, p16, w, 0x8B, 1, r0, rm_of(g, i), 0, 0)
+            ret
+        end
+        M_LDGOT:
+            if g.arch == NG_ARCH_X86:
+                eb(e, 0xB8 + (hw(r0) & 7))
+                erel(e, g.mc.msym[i], R_ABS32, g.mc.md[i])
+                e32(e, 0 as i64)
+                ret
+            end
+            enc(g, e, 0, true, g.os == NG_OS_WINDOWS ? 0x8D : 0x8B, 1, r0, rm_of(g, i), 0, 0)
+            ret
+        end
+        M_X87:
+            if g.mc.cc[i] == 2:
+                enc(g, e, 0, false, 0xDF, 1, 5, rm_of(g, i), 0, 0)
+                ret
+            end
+            enc(g, e, 0, false, sz == 8 ? 0xDD : 0xD9, 1, g.mc.cc[i] == 1 ? 3 : 0, rm_of(g, i), 0, 0)
+            ret
+        end
+        M_LDZX:
+            if g.mc.sz2[i] == 1:
+                enc(g, e, 0, false, 0x0FB6, 2, r0, rm_of(g, i), 0, 0)
+            else:
+                enc(g, e, 0, false, 0x0FB7, 2, r0, rm_of(g, i), 0, 0)
+            end
+            ret
+        end
+        M_LDSX:
+            s2 := g.mc.sz2[i]
+            if s2 == 4:
+                enc(g, e, 0, true, 0x63, 1, r0, rm_of(g, i), 0, 0)
+            else s2 == 1:
+                enc(g, e, 0, w, 0x0FBE, 2, r0, rm_of(g, i), 0, 0)
+            else:
+                enc(g, e, 0, w, 0x0FBF, 2, r0, rm_of(g, i), 0, 0)
+            end
+            ret
+        end
+        M_ST:
+            if b8:
+                enc(g, e, 0, false, 0x88, 1, r1, rm_of(g, i), 3, 0)
+            else:
+                enc(g, e, p16, w, 0x89, 1, r1, rm_of(g, i), 0, 0)
+            end
+            ret
+        end
+        M_STI:
+            if b8:
+                enc(g, e, 0, false, 0xC6, 1, 0, rm_of(g, i), 0, 1)
+                eb(e, (imm & (255 as i64)) as int)
+            else sz == 2:
+                enc(g, e, 0x66, false, 0xC7, 1, 0, rm_of(g, i), 0, 2)
+                eb(e, (imm & (255 as i64)) as int)
+                eb(e, ((imm >> (8 as i64)) & (255 as i64)) as int)
+            else:
+                enc(g, e, 0, w, 0xC7, 1, 0, rm_of(g, i), 0, 4)
+                e32(e, imm)
+            end
+            ret
+        end
+        M_LEA:
+            enc(g, e, 0, true, 0x8D, 1, r0, rm_of(g, i), 0, 0)
+            ret
+        end
+        M_ALU_RR:
+            sub := g.mc.cc[i]
+            if b8:
+                enc(g, e, 0, false, sub << 3, 1, r1, rm_reg(r0), 3, 0)
+            else:
+                enc(g, e, p16, w, (sub << 3) | 1, 1, r1, rm_reg(r0), 0, 0)
+            end
+            ret
+        end
+        M_ALU_RI:
+            sub2 := g.mc.cc[i]
+            if b8:
+                enc(g, e, 0, false, 0x80, 1, sub2, rm_reg(r0), 1, 1)
+                eb(e, (imm & (255 as i64)) as int)
+            else fits8(imm):
+                enc(g, e, p16, w, 0x83, 1, sub2, rm_reg(r0), 0, 1)
+                eb(e, (imm & (255 as i64)) as int)
+            else sz == 2:
+                enc(g, e, 0x66, false, 0x81, 1, sub2, rm_reg(r0), 0, 2)
+                eb(e, (imm & (255 as i64)) as int)
+                eb(e, ((imm >> (8 as i64)) & (255 as i64)) as int)
+            else hw(r0) == 0:
+                if w:
+                    eb(e, 0x48)
+                end
+                eb(e, (sub2 << 3) | 5)
+                e32(e, imm)
+            else:
+                enc(g, e, 0, w, 0x81, 1, sub2, rm_reg(r0), 0, 4)
+                e32(e, imm)
+            end
+            ret
+        end
+        M_ALU_RM:
+            sub3 := g.mc.cc[i]
+            if b8:
+                enc(g, e, 0, false, (sub3 << 3) | 2, 1, r0, rm_of(g, i), 3, 0)
+            else:
+                enc(g, e, p16, w, (sub3 << 3) | 3, 1, r0, rm_of(g, i), 0, 0)
+            end
+            ret
+        end
+        M_ALU_MR:
+            sub4 := g.mc.cc[i]
+            if b8:
+                enc(g, e, 0, false, sub4 << 3, 1, r1, rm_of(g, i), 3, 0)
+            else:
+                enc(g, e, p16, w, (sub4 << 3) | 1, 1, r1, rm_of(g, i), 0, 0)
+            end
+            ret
+        end
+        M_ALU_MI:
+            sub5 := g.mc.cc[i]
+            if b8:
+                enc(g, e, 0, false, 0x80, 1, sub5, rm_of(g, i), 0, 1)
+                eb(e, (imm & (255 as i64)) as int)
+            else fits8(imm):
+                enc(g, e, p16, w, 0x83, 1, sub5, rm_of(g, i), 0, 1)
+                eb(e, (imm & (255 as i64)) as int)
+            else:
+                enc(g, e, p16, w, 0x81, 1, sub5, rm_of(g, i), 0, 4)
+                e32(e, imm)
+            end
+            ret
+        end
+        M_TEST_RR:
+            if b8:
+                enc(g, e, 0, false, 0x84, 1, r1, rm_reg(r0), 3, 0)
+            else:
+                enc(g, e, p16, w, 0x85, 1, r1, rm_reg(r0), 0, 0)
+            end
+            ret
+        end
+        M_TEST_RI:
+            if b8:
+                enc(g, e, 0, false, 0xF6, 1, 0, rm_reg(r0), 1, 1)
+                eb(e, (imm & (255 as i64)) as int)
+            else:
+                enc(g, e, p16, w, 0xF7, 1, 0, rm_reg(r0), 0, 4)
+                e32(e, imm)
+            end
+            ret
+        end
+        M_IMUL_RR:
+            enc(g, e, p16, w, 0x0FAF, 2, r0, rm_reg(r1), 0, 0)
+            ret
+        end
+        M_IMUL_RRI:
+            if fits8(imm):
+                enc(g, e, p16, w, 0x6B, 1, r0, rm_reg(r1), 0, 1)
+                eb(e, (imm & (255 as i64)) as int)
+            else:
+                enc(g, e, p16, w, 0x69, 1, r0, rm_reg(r1), 0, 4)
+                e32(e, imm)
+            end
+            ret
+        end
+        M_SHIFT_RI:
+            sh := g.mc.cc[i]
+            if imm == (1 as i64):
+                enc(g, e, p16, w, b8 ? 0xD0 : 0xD1, 1, sh, rm_reg(r0), (b8 ? 1 : 0), 0)
+            else:
+                enc(g, e, p16, w, b8 ? 0xC0 : 0xC1, 1, sh, rm_reg(r0), (b8 ? 1 : 0), 1)
+                eb(e, (imm & (255 as i64)) as int)
+            end
+            ret
+        end
+        M_SHIFT_RC:
+            enc(g, e, p16, w, b8 ? 0xD2 : 0xD3, 1, g.mc.cc[i], rm_reg(r0), (b8 ? 1 : 0), 0)
+            ret
+        end
+        M_UNARY:
+            enc(g, e, p16, w, b8 ? 0xF6 : 0xF7, 1, g.mc.cc[i], rm_reg(r0), (b8 ? 1 : 0), 0)
+            ret
+        end
+        M_CQO:
+            if w:
+                eb(e, 0x48)
+            end
+            eb(e, 0x99)
+            ret
+        end
+        M_DIV:
+            enc(g, e, p16, w, 0xF7, 1, (g.mc.cc[i] & 1) == 1 ? 7 : 6, rm_reg(r1), 0, 0)
+            ret
+        end
+        M_MULHI:
+            enc(g, e, 0, true, 0xF7, 1, g.mc.cc[i] == 1 ? 5 : 4, rm_reg(r1), 0, 0)
+            ret
+        end
+        M_SETCC:
+            enc(g, e, 0, false, 0x0F90 + g.mc.cc[i], 2, 0, rm_reg(r0), 1, 0)
+            ret
+        end
+        M_MOVZX_RR:
+            if g.mc.sz2[i] == 1:
+                enc(g, e, 0, false, 0x0FB6, 2, r0, rm_reg(r1), 1, 0)
+            else:
+                enc(g, e, 0, false, 0x0FB7, 2, r0, rm_reg(r1), 0, 0)
+            end
+            ret
+        end
+        M_MOVSX_RR:
+            s3 := g.mc.sz2[i]
+            if s3 == 4:
+                enc(g, e, 0, true, 0x63, 1, r0, rm_reg(r1), 0, 0)
+            else s3 == 1:
+                enc(g, e, 0, w, 0x0FBE, 2, r0, rm_reg(r1), 1, 0)
+            else:
+                enc(g, e, 0, w, 0x0FBF, 2, r0, rm_reg(r1), 0, 0)
+            end
+            ret
+        end
+        M_CMOV:
+            enc(g, e, 0, w, 0x0F40 + g.mc.cc[i], 2, r0, rm_reg(r1), 0, 0)
+            ret
+        end
+        M_CALL:
+            eb(e, 0xE8)
+            erel(e, g.mc.msym[i], R_PLT32, 0 - 4 as i64)
+            e32(e, 0 as i64)
+            if g.arch == NG_ARCH_X86 and g.mc.sz2[i] > 0:
+                eb(e, 0x83)
+                eb(e, 0xEC)
+                eb(e, g.mc.sz2[i])
+            end
+            ret
+        end
+        M_CALLR:
+            enc(g, e, 0, false, 0xFF, 1, 2, rm_reg(r1), 0, 0)
+            ret
+        end
+        M_RET:
+            enc_epilogue(g, e)
+            ret
+        end
+        M_UD2:
+            eb(e, 0x0F)
+            eb(e, 0x0B)
+            ret
+        end
+        M_XCHG:
+            enc(g, e, p16, w, b8 ? 0x86 : 0x87, 1, r0, rm_of(g, i), (b8 ? 3 : 0), 0)
+            ret
+        end
+        M_LXADD:
+            enc(g, e, sz == 2 ? 0x66F0 : 0xF0, w, b8 ? 0x0FC0 : 0x0FC1, 2, r0, rm_of(g, i), (b8 ? 3 : 0), 0)
+            ret
+        end
+        M_LCMPXCHG:
+            enc(g, e, sz == 2 ? 0x66F0 : 0xF0, w, b8 ? 0x0FB0 : 0x0FB1, 2, r1, rm_of(g, i), (b8 ? 3 : 0), 0)
+            ret
+        end
+        M_MFENCE:
+            eb(e, 0x0F)
+            eb(e, 0xAE)
+            eb(e, 0xF0)
+            ret
+        end
+        M_FMOV_RR:
+            enc(g, e, 0, false, 0x0F28, 2, r0, rm_reg(r1), 0, 0)
+            ret
+        end
+        M_FLD:
+            enc(g, e, sse_pfx(sz), false, 0x0F10, 2, r0, rm_of(g, i), 0, 0)
+            ret
+        end
+        M_FST:
+            enc(g, e, sse_pfx(sz), false, 0x0F11, 2, r1, rm_of(g, i), 0, 0)
+            ret
+        end
+        M_FOP_RR:
+            enc(g, e, sse_pfx(sz), false, 0x0F00 + g.mc.cc[i], 2, r0, rm_reg(r1), 0, 0)
+            ret
+        end
+        M_SQRT:
+            enc(g, e, sse_pfx(sz), false, 0x0F51, 2, r0, rm_reg(r1), 0, 0)
+            ret
+        end
+        M_FOP_RM:
+            enc(g, e, sse_pfx(sz), false, 0x0F00 + g.mc.cc[i], 2, r0, rm_of(g, i), 0, 0)
+            ret
+        end
+        M_UCOMI:
+            enc(g, e, sz == 8 ? 0x66 : 0, false, 0x0F2E, 2, r0, rm_reg(r1), 0, 0)
+            ret
+        end
+        M_CVTSI2F:
+            enc(g, e, sse_pfx(sz), g.mc.sz2[i] == 8, 0x0F2A, 2, r0, rm_reg(r1), 0, 0)
+            ret
+        end
+        M_CVTF2SI:
+            enc(g, e, sse_pfx(sz), g.mc.sz2[i] == 8, 0x0F2C, 2, r0, rm_reg(r1), 0, 0)
+            ret
+        end
+        M_CVTF2F:
+            enc(g, e, sz == 8 ? 0xF3 : 0xF2, false, 0x0F5A, 2, r0, rm_reg(r1), 0, 0)
+            ret
+        end
+        M_MOVQ_XG:
+            enc(g, e, 0x66, sz == 8, 0x0F6E, 2, r0, rm_reg(r1), 0, 0)
+            ret
+        end
+        M_MOVQ_GX:
+            enc(g, e, 0x66, sz == 8, 0x0F7E, 2, r1, rm_reg(r0), 0, 0)
+            ret
+        end
+        M_XORPS:
+            enc(g, e, 0, false, 0x0F57, 2, r0, rm_reg(r1), 0, 0)
+            ret
+        end
+        M_VLD:
+            enc(g, e, 0, false, 0x0F10, 2, r0, rm_of(g, i), 0, 0)
+            ret
+        end
+        M_VST:
+            enc(g, e, 0, false, 0x0F11, 2, r1, rm_of(g, i), 0, 0)
+            ret
+        end
+        M_VOP_RR:
+            enc(g, e, sz == 8 ? 0x66 : 0, false, 0x0F00 + g.mc.cc[i], 2, r0, rm_reg(r1), 0, 0)
+            ret
+        end
+        M_SHUFPS:
+            enc(g, e, 0, false, 0x0FC6, 2, r0, rm_reg(r1), 0, 1)
+            eb(e, (imm & (255 as i64)) as int)
+            ret
+        end
+        M_UNPCKLPD:
+            enc(g, e, 0x66, false, 0x0F14, 2, r0, rm_reg(r1), 0, 0)
+            ret
+        end
+        M_PSHUFD:
+            enc(g, e, 0x66, false, 0x0F70, 2, r0, rm_reg(r1), 0, 1)
+            eb(e, (imm & (255 as i64)) as int)
+            ret
+        end
+        M_VSHI:
+            enc(g, e, 0x66, false, 0x0F00 + g.mc.cc[i], 2, g.mc.sz2[i], rm_reg(r0), 0, 1)
+            eb(e, (imm & (255 as i64)) as int)
+            ret
+        end
+        M_VLD32:
+            enc(g, e, 0x66, false, 0x0F6E, 2, r0, rm_of(g, i), 0, 0)
+            ret
+        end
+        M_VST32:
+            enc(g, e, 0x66, false, 0x0F7E, 2, r1, rm_of(g, i), 0, 0)
+            ret
+        end
+        M_ANDPS:
+            enc(g, e, 0, false, 0x0F54, 2, r0, rm_reg(r1), 0, 0)
+            ret
+        end
+    end
+    fail(g, "native backend: cannot encode machine op " + str_of_int(op))
+end
+
+func str_of_int(v: int): str:
+    ret "" + v
+end
+
+func ngp_count(g &: Ng): int:
+    mut n := 0
+    each r in g.mc.callee_used:
+        if r < 16:
+            n += 1
+        else:
+            ret n
+        end
+    end
+    ret n
+end
+
+func enc_ret(g &: Ng, e &: Enc):
+    if g.f_popn > 0:
+        eb(e, 0xC2)
+        eb(e, g.f_popn & 255)
+        eb(e, g.f_popn >> 8)
+        ret
+    end
+    eb(e, 0xC3)
+end
+
+func push_reg(e &: Enc, r: int):
+    if r >= 8:
+        eb(e, 0x41)
+    end
+    eb(e, 0x50 + (r & 7))
+end
+
+func pop_reg(e &: Enc, r: int):
+    if r >= 8:
+        eb(e, 0x41)
+    end
+    eb(e, 0x58 + (r & 7))
+end
+
+func enc_alloc(g &: Ng, e &: Enc, fsize: int):
+    if g.os == NG_OS_WINDOWS and fsize >= 4096:
+        eb(e, 0xB8)
+        e32(e, fsize as i64)
+        eb(e, 0xE8)
+        erel(e, g.sym_chkstk, R_PLT32, 0 - 4 as i64)
+        g.sy_used[g.sym_chkstk] = true
+        e32(e, 0 as i64)
+        if g.arch != NG_ARCH_X86:
+            eb(e, 0x48)
+        end
+        eb(e, 0x29)
+        eb(e, 0xC4)
+    else fits8(fsize as i64):
+        if g.arch != NG_ARCH_X86:
+            eb(e, 0x48)
+        end
+        eb(e, 0x83)
+        eb(e, 0xEC)
+        eb(e, fsize)
+    else:
+        if g.arch != NG_ARCH_X86:
+            eb(e, 0x48)
+        end
+        eb(e, 0x81)
+        eb(e, 0xEC)
+        e32(e, fsize as i64)
+    end
+end
+
+func enc_prologue(g &: Ng, e &: Enc):
+    ngp := ngp_count(g)
+    fsize := g.mc.frame_size
+    g.mc.pro_push.clear()
+    g.mc.pro_xmm.clear()
+    if g.os == NG_OS_WINDOWS and g.arch == NG_ARCH_X64:
+        mut fp := fsize - (fsize % 16)
+        if fp > 240:
+            fp = 240
+        end
+        g.mc.win_fp = fp
+        eb(e, 0x55)
+        g.mc.pro_push.push(e.code.len())
+        repeat ngp in k0:
+            push_reg(e, g.mc.callee_used[k0])
+            g.mc.pro_push.push(e.code.len())
+        end
+        if fsize > 0:
+            enc_alloc(g, e, fsize)
+        end
+        g.mc.pro_alloc = e.code.len()
+        enc(g, e, 0, true, 0x8D, 1, RBP, RM { mem = true, k = MK_BI, b = RSP, d = fp as i64 }, 0, 0)
+        g.mc.pro_fp = e.code.len()
+        mut k3 := ngp
+        until k3 + 1 < g.mc.callee_used.len():
+            xr := g.mc.callee_used[k3]
+            off := g.mc.callee_used[k3 + 1]
+            enc(g, e, 0, false, 0x0F29, 2, xr, RM { mem = true, k = MK_BI, b = RBP, d = (0 - off as i64) + win_adj(g) }, 0, 0)
+            g.mc.pro_xmm.push(e.code.len())
+            k3 += 2
+        end
+        g.mc.pro_len = e.code.len()
+        ret
+    end
+    if g.mc.fpo:
+        repeat ngp in kf:
+            push_reg(e, g.mc.callee_used[kf])
+        end
+        if g.mc.fpo_pad > 0:
+            enc_alloc(g, e, g.mc.fpo_pad)
+        end
+        ret
+    end
+    eb(e, 0x55)
+    if g.arch != NG_ARCH_X86:
+        eb(e, 0x48)
+    end
+    eb(e, 0x89)
+    eb(e, 0xE5)
+    repeat ngp in k:
+        push_reg(e, g.mc.callee_used[k])
+    end
+    if fsize > 0:
+        enc_alloc(g, e, fsize)
+    end
+    mut k2 := ngp
+    until k2 + 1 < g.mc.callee_used.len():
+        xr2 := g.mc.callee_used[k2]
+        off2 := g.mc.callee_used[k2 + 1]
+        enc(g, e, 0, false, 0x0F29, 2, xr2, RM { mem = true, k = MK_BI, b = RBP, d = 0 - off2 as i64 }, 0, 0)
+        k2 += 2
+    end
+end
+
+func enc_epilogue(g &: Ng, e &: Enc):
+    ngp := ngp_count(g)
+    if g.mc.fpo:
+        if g.mc.fpo_pad > 0:
+            if g.arch != NG_ARCH_X86:
+                eb(e, 0x48)
+            end
+            if fits8(g.mc.fpo_pad as i64):
+                eb(e, 0x83)
+                eb(e, 0xC4)
+                eb(e, g.mc.fpo_pad)
+            else:
+                eb(e, 0x81)
+                eb(e, 0xC4)
+                e32(e, g.mc.fpo_pad as i64)
+            end
+        end
+        mut kf := ngp - 1
+        until kf >= 0:
+            pop_reg(e, g.mc.callee_used[kf])
+            kf -= 1
+        end
+        enc_ret(g, e)
+        ret
+    end
+    mut k2 := ngp
+    until k2 + 1 < g.mc.callee_used.len():
+        xr := g.mc.callee_used[k2]
+        off := g.mc.callee_used[k2 + 1]
+        enc(g, e, 0, false, 0x0F28, 2, xr, RM { mem = true, k = MK_BI, b = RBP, d = (0 - off as i64) + win_adj(g) }, 0, 0)
+        k2 += 2
+    end
+    if g.os == NG_OS_WINDOWS:
+        enc(g, e, 0, true, 0x8D, 1, RSP, RM { mem = true, k = MK_BI, b = RBP, d = (g.mc.frame_size - g.mc.win_fp) as i64 }, 0, 0)
+        mut kw := ngp - 1
+        until kw >= 0:
+            pop_reg(e, g.mc.callee_used[kw])
+            kw -= 1
+        end
+        eb(e, 0x5D)
+        enc_ret(g, e)
+        ret
+    end
+    if ngp > 0:
+        enc(g, e, 0, true, 0x8D, 1, RSP, RM { mem = true, k = MK_BI, b = RBP, d = 0 - (8 * ngp) as i64 }, 0, 0)
+        mut k := ngp - 1
+        until k >= 0:
+            pop_reg(e, g.mc.callee_used[k])
+            k -= 1
+        end
+        eb(e, 0x5D)
+    else:
+        eb(e, 0xC9)
+    end
+    enc_ret(g, e)
+end
+
+func xd16(g &: Ng, v: int):
+    sec_put(g, SEC_XDATA, v & 255)
+    sec_put(g, SEC_XDATA, (v >> 8) & 255)
+end
+
+func emit_unwind(g &: Ng, fsym: int, fsize_bytes: int):
+    ngp := ngp_count(g)
+    mut nxmm := 0
+    mut k := ngp
+    until k + 1 < g.mc.callee_used.len():
+        nxmm += 1
+        k += 2
+    end
+    n := g.mc.frame_size
+    mut alloc_slots := 0
+    if n > 0:
+        if n <= 128:
+            alloc_slots = 1
+        else n <= 524280:
+            alloc_slots = 2
+        else:
+            alloc_slots = 3
+        end
+    end
+    nslots := 2 * nxmm + 1 + alloc_slots + ngp + 1
+    sec_align_to(g, SEC_XDATA, 4)
+    xoff := g.s_xdata.len()
+    sec_put(g, SEC_XDATA, 1)
+    sec_put(g, SEC_XDATA, g.mc.pro_len)
+    sec_put(g, SEC_XDATA, nslots)
+    sec_put(g, SEC_XDATA, 5 | ((g.mc.win_fp / 16) << 4))
+    mut xi := nxmm - 1
+    until xi >= 0:
+        xr := g.mc.callee_used[ngp + 2 * xi] - 16
+        xoffs := 8 * ngp + n - g.mc.callee_used[ngp + 2 * xi + 1]
+        sec_put(g, SEC_XDATA, g.mc.pro_xmm[xi])
+        sec_put(g, SEC_XDATA, 8 | (xr << 4))
+        xd16(g, xoffs / 16)
+        xi -= 1
+    end
+    sec_put(g, SEC_XDATA, g.mc.pro_fp)
+    sec_put(g, SEC_XDATA, 3)
+    if n > 0:
+        sec_put(g, SEC_XDATA, g.mc.pro_alloc)
+        if n <= 128:
+            sec_put(g, SEC_XDATA, 2 | (((n - 8) / 8) << 4))
+        else n <= 524280:
+            sec_put(g, SEC_XDATA, 1)
+            xd16(g, n / 8)
+        else:
+            sec_put(g, SEC_XDATA, 1 | (1 << 4))
+            xd16(g, n & 65535)
+            xd16(g, (n >> 16) & 65535)
+        end
+    end
+    mut pi := ngp - 1
+    until pi >= 0:
+        sec_put(g, SEC_XDATA, g.mc.pro_push[pi + 1])
+        sec_put(g, SEC_XDATA, (g.mc.callee_used[pi]) << 4)
+        pi -= 1
+    end
+    sec_put(g, SEC_XDATA, g.mc.pro_push[0])
+    sec_put(g, SEC_XDATA, 5 << 4)
+    if (nslots % 2) != 0:
+        xd16(g, 0)
+    end
+    sec_align_to(g, SEC_PDATA, 4)
+    po := g.s_pdata.len()
+    add_reloc(g, SEC_PDATA, po, fsym, R_ADDR32NB, 0 as i64)
+    add_reloc(g, SEC_PDATA, po + 4, fsym, R_ADDR32NB, fsize_bytes as i64)
+    add_reloc(g, SEC_PDATA, po + 8, g.sym_xdata, R_ADDR32NB, xoff as i64)
+    sec_pad(g, SEC_PDATA, 12)
+end
+
+func next_real(g &: Ng, i: int): int:
+    mut j := i + 1
+    n := g.mc.op.len()
+    until j < n and (g.mc.op[j] == M_LABEL or g.mc.op[j] == M_NOP or g.mc.op[j] == M_COPY):
+        j += 1
+    end
+    ret j
+end
+
+func label_between(g &: Ng, from: int, upto: int, lbl: int): bool:
+    mut j := from + 1
+    until j < upto:
+        if g.mc.op[j] == M_LABEL and g.mc.tgt[j] == lbl:
+            ret true
+        end
+        j += 1
+    end
+    ret false
+end
+
+func live_label_between(g &: Ng, refs &: Vector<int>, from: int, upto: int): bool:
+    mut j := from + 1
+    until j < upto:
+        if g.mc.op[j] == M_LABEL and refs[g.mc.tgt[j]] > 0:
+            ret true
+        end
+        j += 1
+    end
+    ret false
+end
+
+func jump_refs(g &: Ng, refs &: Vector<int>, lpos &: Vector<int>):
+    refs.clear()
+    lpos.clear()
+    repeat g.mc.nlabels:
+        refs.push(0)
+        lpos.push(0 - 1)
+    end
+    repeat g.mc.op.len() in i:
+        op := g.mc.op[i]
+        if op == M_LABEL:
+            lpos[g.mc.tgt[i]] = i
+        else op == M_JMP or op == M_JCC:
+            refs[g.mc.tgt[i]] = refs[g.mc.tgt[i]] + 1
+        end
+    end
+end
+
+func peephole_round(g &: Ng, refs &: Vector<int>, lpos &: Vector<int>): bool:
+    n := g.mc.op.len()
+    mut changed := false
+    jump_refs(g, refs, lpos)
+    repeat n in i0:
+        op0 := g.mc.op[i0]
+        if op0 == M_JMP or op0 == M_JCC:
+            repeat 8:
+                t := g.mc.tgt[i0]
+                pl := lpos[t]
+                if pl < 0:
+                    break
+                end
+                q := next_real(g, pl)
+                if q >= n or q == i0 or g.mc.op[q] != M_JMP or g.mc.tgt[q] == t:
+                    break
+                end
+                g.mc.tgt[i0] = g.mc.tgt[q]
+                changed = true
+            end
+        end
+    end
+    jump_refs(g, refs, lpos)
+    mut dead := false
+    repeat n in i1:
+        op1 := g.mc.op[i1]
+        if op1 == M_LABEL:
+            if refs[g.mc.tgt[i1]] > 0:
+                dead = false
+            end
+        else dead and op1 != M_NOP:
+            if op1 == M_JMP or op1 == M_JCC:
+                refs[g.mc.tgt[i1]] = refs[g.mc.tgt[i1]] - 1
+            end
+            g.mc.op[i1] = M_NOP
+            changed = true
+        else op1 == M_JMP:
+            dead = true
+        end
+    end
+    jump_refs(g, refs, lpos)
+    repeat n in i:
+        op := g.mc.op[i]
+        if op == M_JMP:
+            nx := next_real(g, i)
+            if label_between(g, i, nx, g.mc.tgt[i]):
+                refs[g.mc.tgt[i]] = refs[g.mc.tgt[i]] - 1
+                g.mc.op[i] = M_NOP
+                changed = true
+            end
+        else op == M_JCC:
+            j := next_real(g, i)
+            if j < n and g.mc.op[j] == M_JMP and not live_label_between(g, refs, i, j):
+                k := next_real(g, j)
+                if label_between(g, j, k, g.mc.tgt[i]):
+                    refs[g.mc.tgt[i]] = refs[g.mc.tgt[i]] - 1
+                    g.mc.cc[i] = inv_cc(g.mc.cc[i])
+                    g.mc.tgt[i] = g.mc.tgt[j]
+                    g.mc.op[j] = M_NOP
+                    changed = true
+                end
+            end
+        end
+    end
+    ret changed
+end
+
+func tf_next(g &: Ng, i: int): int:
+    mut j := i + 1
+    until j < g.mc.op.len() and (g.mc.op[j] == M_NOP or g.mc.op[j] == M_COPY):
+        j += 1
+    end
+    ret j < g.mc.op.len() ? j : 0 - 1
+end
+
+func test_fold(g &: Ng):
+    n := g.mc.op.len()
+    repeat n in i:
+        op := g.mc.op[i]
+        r := g.mc.r0[i]
+        if r < 0 or r >= 16:
+            continue
+        end
+        lea := op == M_LEA and g.mc.sz[i] == 8 and g.mc.mk[i] == MK_BI and g.mc.mb[i] == r and g.mc.mi[i] < 0 and g.mc.md[i] >= (0 - 2147483647 as i64) and g.mc.md[i] <= (2147483647 as i64)
+        alu := (op == M_ALU_RI or op == M_ALU_RR) and g.mc.mk[i] == MK_NONE and (g.mc.cc[i] == ALU_ADD or g.mc.cc[i] == ALU_SUB or g.mc.cc[i] == ALU_AND or g.mc.cc[i] == ALU_OR or g.mc.cc[i] == ALU_XOR)
+        if not lea and not alu:
+            continue
+        end
+        j := tf_next(g, i)
+        if j < 0 or g.mc.op[j] != M_TEST_RR or g.mc.mk[j] != MK_NONE or g.mc.r0[j] != r or g.mc.r1[j] != r:
+            continue
+        end
+        tsz := g.mc.sz[j]
+        if (tsz != 4 and tsz != 8) or (alu and g.mc.sz[i] != tsz):
+            continue
+        end
+        k := tf_next(g, j)
+        if k < 0 or g.mc.op[k] != M_JCC:
+            continue
+        end
+        cc := g.mc.cc[k]
+        logic := alu and g.mc.cc[i] != ALU_ADD and g.mc.cc[i] != ALU_SUB
+        if not logic and cc != X_E and cc != X_NE and cc != X_S and cc != X_NS:
+            continue
+        end
+        if not flags_dead_after(g, k):
+            continue
+        end
+        if lea:
+            g.mc.op[i] = M_ALU_RI
+            g.mc.cc[i] = ALU_ADD
+            g.mc.sz[i] = tsz
+            g.mc.imm[i] = g.mc.md[i]
+            g.mc.mk[i] = MK_NONE
+            g.mc.mb[i] = 0 - 1
+            g.mc.md[i] = 0 as i64
+        end
+        g.mc.op[j] = M_NOP
+    end
+end
+
+func reg_dead_after(g &: Ng, i0: int, r: int, lpos &: Vector<int>, uses &: Vector<int>, defs &: Vector<int>): bool:
+    n := g.mc.op.len()
+    mut work := Vector {} as Vector<int>
+    defer work.free()
+    mut seen := Vector {} as Vector<bool>
+    defer seen.free()
+    repeat g.mc.nlabels:
+        seen.push(false)
+    end
+    work.push(i0 + 1)
+    mut steps := 0
+    until work.len() > 0:
+        mut j := work.pop()
+        mut walking := true
+        until walking:
+            if j < 0 or j >= n or steps > 400:
+                ret false
+            end
+            steps += 1
+            op := g.mc.op[j]
+            if op == M_NOP or op == M_COPY:
+                j += 1
+                continue
+            end
+            if op == M_LABEL:
+                if seen[g.mc.tgt[j]]:
+                    walking = false
+                    continue
+                end
+                seen[g.mc.tgt[j]] = true
+                j += 1
+                continue
+            end
+            mi_regs(g, j, uses, defs)
+            each u in uses:
+                if u == r:
+                    ret false
+                end
+            end
+            if op == M_CALL or op == M_CALLR:
+                if is_caller_saved(g, r):
+                    walking = false
+                    continue
+                end
+                j += 1
+                continue
+            end
+            if op == M_RET or op == M_UD2:
+                walking = false
+                continue
+            end
+            mut killed := false
+            each d in defs:
+                if d == r and g.mc.sz[j] >= 4:
+                    killed = true
+                end
+            end
+            if killed:
+                walking = false
+                continue
+            end
+            if op == M_JMP:
+                t := g.mc.tgt[j]
+                if t < 0 or t >= lpos.len() or lpos[t] < 0:
+                    ret false
+                end
+                j = lpos[t]
+                continue
+            end
+            if op == M_JCC:
+                t2 := g.mc.tgt[j]
+                if t2 < 0 or t2 >= lpos.len() or lpos[t2] < 0:
+                    ret false
+                end
+                work.push(lpos[t2])
+            end
+            j += 1
+        end
+    end
+    ret true
+end
+
+func load_test_fold(g &: Ng):
+    mut refs := Vector {} as Vector<int>
+    mut lpos := Vector {} as Vector<int>
+    mut uses := Vector {} as Vector<int>
+    mut defs := Vector {} as Vector<int>
+    jump_refs(g, refs, lpos)
+    n := g.mc.op.len()
+    repeat n in i:
+        if g.mc.op[i] != M_LD or g.mc.mk[i] == MK_NONE or g.mc.mk[i] == MK_GOT:
+            continue
+        end
+        r := g.mc.r0[i]
+        sz := g.mc.sz[i]
+        if r < 0 or r >= 16 or (sz != 4 and sz != 8) or g.mc.mb[i] == r or g.mc.mi[i] == r:
+            continue
+        end
+        j := tf_next(g, i)
+        if j < 0 or g.mc.op[j] != M_TEST_RR or g.mc.mk[j] != MK_NONE or g.mc.r0[j] != r or g.mc.r1[j] != r or g.mc.sz[j] != sz:
+            continue
+        end
+        if not reg_dead_after(g, j, r, lpos, uses, defs):
+            continue
+        end
+        g.mc.op[i] = M_ALU_MI
+        g.mc.cc[i] = ALU_CMP
+        g.mc.imm[i] = 0 as i64
+        g.mc.r0[i] = 0 - 1
+        g.mc.op[j] = M_NOP
+    end
+    refs.free()
+    lpos.free()
+    uses.free()
+    defs.free()
+end
+
+func flags_dead_after(g &: Ng, i: int): bool:
+    n := g.mc.op.len()
+    mut j := i + 1
+    until j < n and j < i + 64:
+        op := g.mc.op[j]
+        if op == M_JCC or op == M_CMOV or op == M_SETCC or ((op == M_ALU_RR or op == M_ALU_RI) and (g.mc.cc[j] == ALU_SBB or g.mc.cc[j] == ALU_ADC)):
+            ret false
+        end
+        if op == M_ALU_RR or op == M_ALU_RI or op == M_ALU_RM or op == M_ALU_MR or op == M_ALU_MI or op == M_TEST_RR or op == M_TEST_RI or op == M_UCOMI or op == M_DIV or op == M_IMUL_RR or op == M_IMUL_RRI:
+            ret true
+        end
+        if op == M_CALL or op == M_CALLR or op == M_RET or op == M_JMP or op == M_LABEL:
+            ret true
+        end
+        if not (op == M_NOP or op == M_COPY or op == M_CQO or op == M_MOV_RR or op == M_MOV_RI or op == M_LD or op == M_LDZX or op == M_LDSX or op == M_ST or op == M_STI or op == M_LEA or op == M_FMOV_RR or op == M_FLD or op == M_FST or op == M_VLD or op == M_VST or op == M_MOVZX_RR or op == M_MOVSX_RR):
+            ret false
+        end
+        j += 1
+    end
+    ret false
+end
+
+func cc_eval(cc: int, zf: bool, sf: bool): bool:
+    switch cc:
+        X_E: ret zf end
+        X_NE: ret not zf end
+        X_S, X_L: ret sf end
+        X_NS, X_GE: ret not sf end
+        X_LE: ret zf or sf end
+        X_G: ret not zf and not sf end
+        X_B, X_O: ret false end
+        X_AE, X_NO: ret true end
+        X_BE: ret zf end
+        X_A: ret not zf end
+    end
+    ret false
+end
+
+func kb_next(g &: Ng, i: int): int:
+    mut j := i + 1
+    until j < g.mc.op.len() and (g.mc.op[j] == M_NOP or g.mc.op[j] == M_COPY):
+        j += 1
+    end
+    if j >= g.mc.op.len():
+        ret 0 - 1
+    end
+    ret j
+end
+
+func kb_test_of(g &: Ng, j: int, r: int): bool:
+    ret j >= 0 and g.mc.op[j] == M_TEST_RR and g.mc.mk[j] == MK_NONE and g.mc.r0[j] == r and g.mc.r1[j] == r
+end
+
+func const_branches(g &: Ng): bool:
+    mut changed := false
+    repeat g.mc.op.len() in i:
+        if g.mc.op[i] != M_MOV_RI or g.mc.mk[i] != MK_NONE:
+            continue
+        end
+        r := g.mc.r0[i]
+        if r < 0 or r >= 16:
+            continue
+        end
+        t := kb_next(g, i)
+        if not kb_test_of(g, t, r):
+            continue
+        end
+        sz := g.mc.sz[t]
+        bits := (sz * 8) as i64
+        mut k := g.mc.imm[i]
+        if bits < (64 as i64):
+            k = k & (((1 as i64) << bits) - (1 as i64))
+        end
+        mut zf := k == (0 as i64)
+        mut sf := ((k >> (bits - (1 as i64))) & (1 as i64)) != (0 as i64)
+        mut j := kb_next(g, t)
+        if j >= 0 and (g.mc.op[j] == M_SETCC or g.mc.op[j] == M_JCC) and (g.mc.cc[j] == X_P or g.mc.cc[j] == X_NP):
+            continue
+        end
+        if j >= 0 and g.mc.op[j] == M_SETCC and g.mc.mk[j] == MK_NONE:
+            v := cc_eval(g.mc.cc[j], zf, sf)
+            r2 := g.mc.r0[j]
+            j2 := kb_next(g, j)
+            if not kb_test_of(g, j2, r2) or g.mc.sz[j2] != 1:
+                continue
+            end
+            zf = not v
+            sf = false
+            j = kb_next(g, j2)
+        end
+        if j < 0 or g.mc.op[j] != M_JCC or g.mc.cc[j] == X_P or g.mc.cc[j] == X_NP:
+            continue
+        end
+        if cc_eval(g.mc.cc[j], zf, sf):
+            g.mc.op[j] = M_JMP
+        else:
+            g.mc.op[j] = M_NOP
+        end
+        changed = true
+    end
+    ret changed
+end
+
+func xor_zero(g &: Ng):
+    repeat g.mc.op.len() in i:
+        if g.mc.op[i] == M_MOV_RI and g.mc.imm[i] == (0 as i64) and (g.mc.sz[i] == 4 or g.mc.sz[i] == 8) and g.mc.r0[i] >= 0 and g.mc.r0[i] < 16 and flags_dead_after(g, i):
+            g.mc.op[i] = M_ALU_RR
+            g.mc.cc[i] = ALU_XOR
+            g.mc.sz[i] = 4
+            g.mc.r1[i] = g.mc.r0[i]
+            g.mc.mk[i] = MK_NONE
+        end
+    end
+end
+
+func dup_test(g &: Ng):
+    mut refs := Vector {} as Vector<int>
+    mut lpos := Vector {} as Vector<int>
+    jump_refs(g, refs, lpos)
+    mut tr := 0 - 1
+    mut ts := 0
+    repeat g.mc.op.len() in i:
+        op := g.mc.op[i]
+        if op == M_NOP or op == M_COPY or op == M_JCC:
+            continue
+        end
+        if op == M_LABEL:
+            if refs[g.mc.tgt[i]] > 0:
+                tr = 0 - 1
+            end
+            continue
+        end
+        if op == M_TEST_RR and g.mc.mk[i] == MK_NONE and g.mc.r0[i] == g.mc.r1[i] and g.mc.r0[i] >= 0 and g.mc.r0[i] < 16:
+            if tr == g.mc.r0[i] and ts == g.mc.sz[i]:
+                g.mc.op[i] = M_NOP
+            else:
+                tr = g.mc.r0[i]
+                ts = g.mc.sz[i]
+            end
+            continue
+        end
+        tr = 0 - 1
+    end
+    refs.free()
+    lpos.free()
+end
+
+func share_epilogue(g &: Ng):
+    if g.os == NG_OS_WINDOWS and g.arch == NG_ARCH_X64:
+        ret
+    end
+    if g.mc.fpo and ngp_count(g) == 0 and g.mc.fpo_pad == 0:
+        ret
+    end
+    n := g.mc.op.len()
+    mut last := 0 - 1
+    mut cnt := 0
+    repeat n in i:
+        if g.mc.op[i] == M_RET:
+            last = i
+            cnt += 1
+        end
+    end
+    if cnt < 2:
+        ret
+    end
+    lbl := new_label(g)
+    li := e_label(g, lbl)
+    repeat n in i2:
+        if g.mc.op[i2] == M_RET and i2 != last:
+            g.mc.op[i2] = M_JMP
+            g.mc.tgt[i2] = lbl
+        end
+    end
+    mut ord := Vector {} as Vector<int>
+    repeat n in i3:
+        if i3 == last:
+            ord.push(li)
+        end
+        ord.push(i3)
+    end
+    perm_int(g.mc.op, ord)
+    perm_int(g.mc.sz, ord)
+    perm_int(g.mc.sz2, ord)
+    perm_int(g.mc.r0, ord)
+    perm_int(g.mc.r1, ord)
+    perm_i64(g.mc.imm, ord)
+    perm_int(g.mc.mk, ord)
+    perm_int(g.mc.mb, ord)
+    perm_int(g.mc.mi, ord)
+    perm_int(g.mc.ms, ord)
+    perm_i64(g.mc.md, ord)
+    perm_int(g.mc.msym, ord)
+    perm_int(g.mc.cc, ord)
+    perm_int(g.mc.tgt, ord)
+    perm_int(g.mc.loc, ord)
+    perm_int(g.mc.dv, ord)
+    ord.free()
+end
+
+func peephole_jumps(g &: Ng):
+    mut refs := Vector {} as Vector<int>
+    mut lpos := Vector {} as Vector<int>
+    repeat 4:
+        if not peephole_round(g, refs, lpos):
+            break
+        end
+    end
+    refs.free()
+    lpos.free()
+end
+
+func mi_dup(g &: Ng, src: int): int:
+    i := mi_new(g, g.mc.op[src], g.mc.sz[src])
+    g.mc.sz2[i] = g.mc.sz2[src]
+    g.mc.r0[i] = g.mc.r0[src]
+    g.mc.r1[i] = g.mc.r1[src]
+    g.mc.imm[i] = g.mc.imm[src]
+    g.mc.mk[i] = g.mc.mk[src]
+    g.mc.mb[i] = g.mc.mb[src]
+    g.mc.mi[i] = g.mc.mi[src]
+    g.mc.ms[i] = g.mc.ms[src]
+    g.mc.md[i] = g.mc.md[src]
+    g.mc.msym[i] = g.mc.msym[src]
+    g.mc.cc[i] = g.mc.cc[src]
+    g.mc.tgt[i] = g.mc.tgt[src]
+    g.mc.loc[i] = g.mc.loc[src]
+    g.mc.dv[i] = g.mc.dv[src]
+    ret i
+end
+
+func perm_int(v &: Vector<int>, ord: Vector<int>):
+    mut t := Vector {} as Vector<int>
+    each k in ord:
+        t.push(v[k])
+    end
+    v.clear()
+    each x in t:
+        v.push(x)
+    end
+    t.free()
+end
+
+func perm_i64(v &: Vector<i64>, ord: Vector<int>):
+    mut t := Vector {} as Vector<i64>
+    each k in ord:
+        t.push(v[k])
+    end
+    v.clear()
+    each x in t:
+        v.push(x)
+    end
+    t.free()
+end
+
+func dup_ok(op: int): bool:
+    ret op != M_LABEL and op != M_JMP and op != M_JCC and op != M_CALL and op != M_CALLR and op != M_RET and op != M_UD2 and op != M_DIV and op != M_LCMPXCHG and op != M_XCHG and op != M_LXADD
+end
+
+func rotate_head(g &: Ng, li: int, body &: Vector<int>, jc &: int, fy &: int): bool:
+    n := g.mc.op.len()
+    body.clear()
+    mut j := li + 1
+    mut mid := 0
+    until j < n:
+        op := g.mc.op[j]
+        if op == M_NOP or op == M_COPY:
+            j += 1
+            continue
+        end
+        if op == M_JCC:
+            if g.off_mexit or mid > 0:
+                break
+            end
+            mut k2 := j + 1
+            until k2 < n and (g.mc.op[k2] == M_NOP or g.mc.op[k2] == M_COPY):
+                k2 += 1
+            end
+            if k2 >= n or g.mc.op[k2] == M_LABEL or g.mc.op[k2] == M_JMP or g.mc.op[k2] == M_JCC:
+                break
+            end
+            mid += 1
+            body.push(j)
+            j += 1
+            continue
+        end
+        if not dup_ok(op) or body.len() >= (g.off_mexit ? 4 : 10):
+            ret false
+        end
+        body.push(j)
+        j += 1
+    end
+    if j >= n or g.mc.op[j] != M_JCC:
+        ret false
+    end
+    jc = j
+    k := next_real(g, j)
+    if k < n and g.mc.op[k] == M_JMP:
+        fy = g.mc.tgt[k]
+        ret true
+    end
+    mut q := j + 1
+    until q < n and (g.mc.op[q] == M_NOP or g.mc.op[q] == M_COPY):
+        q += 1
+    end
+    if q < n and g.mc.op[q] == M_LABEL:
+        fy = g.mc.tgt[q]
+        ret true
+    end
+    ret false
+end
+
+func fwd_head(g &: Ng, li: int, body &: Vector<int>, jc &: int): bool:
+    n := g.mc.op.len()
+    body.clear()
+    mut j := li + 1
+    until j < n:
+        op := g.mc.op[j]
+        if op == M_NOP or op == M_COPY:
+            j += 1
+            continue
+        end
+        if op == M_JCC:
+            break
+        end
+        if not dup_ok(op) or body.len() >= (g.off_tdup ? 4 : 12):
+            ret false
+        end
+        body.push(j)
+        j += 1
+    end
+    if j >= n or g.mc.op[j] != M_JCC:
+        ret false
+    end
+    jc = j
+    ret true
+end
+
+func in_loop_of(g &: Ng, t: int, h: int): bool:
+    if t < 0 or t >= g.b_lp.len():
+        ret false
+    end
+    mut lp := g.b_lp[t]
+    until lp >= 0:
+        if g.lp_head[lp] == h:
+            ret true
+        end
+        lp = g.lp_par[lp]
+    end
+    ret false
+end
+
+func rotate_loops(g &: Ng):
+    n := g.mc.op.len()
+    mut lpos := Vector {} as Vector<int>
+    repeat g.mc.nlabels:
+        lpos.push(0 - 1)
+    end
+    repeat n in i:
+        if g.mc.op[i] == M_LABEL and g.mc.tgt[i] < lpos.len():
+            lpos[g.mc.tgt[i]] = i
+        end
+    end
+    mut ord := Vector {} as Vector<int>
+    mut body := Vector {} as Vector<int>
+    mut pend_at := Vector {} as Vector<int>
+    mut pend_ins := Vector {} as Vector<int>
+    mut any := false
+    repeat n in i2:
+        repeat pend_at.len() in pq:
+            if pend_at[pq] == i2:
+                ord.push(pend_ins[pq])
+                pend_at[pq] = 0 - 1
+            end
+        end
+        op := g.mc.op[i2]
+        if op == M_JMP and g.mc.tgt[i2] < lpos.len():
+            li := lpos[g.mc.tgt[i2]]
+            mut jc := 0 - 1
+            mut fy := 0 - 1
+            if li > i2 and fwd_head(g, li, body, jc) and (body.len() <= 3 or (not g.off_tdup and body.len() <= 11 and g.mc.tgt[jc] < lpos.len() and lpos[g.mc.tgt[jc]] >= 0 and lpos[g.mc.tgt[jc]] < i2)) and g.mc.tgt[jc] != g.mc.tgt[i2]:
+                k := next_real(g, jc)
+                mut fl := 0 - 1
+                mut q := jc + 1
+                until q < k:
+                    if g.mc.op[q] == M_LABEL:
+                        fl = g.mc.tgt[q]
+                    end
+                    q += 1
+                end
+                if fl < 0 and k < n:
+                    fl = new_label(g)
+                    pend_at.push(k)
+                    pend_ins.push(e_label(g, fl))
+                end
+                if fl >= 0 and fl != g.mc.tgt[i2]:
+                    each bf in body:
+                        ord.push(bf)
+                    end
+                    ord.push(jc)
+                    ord.push(mi_dup(g, i2))
+                    g.mc.tgt[ord[ord.len() - 1]] = fl
+                    any = true
+                    continue
+                end
+            end
+            if li >= 0 and li < i2 and rotate_head(g, li, body, jc, fy) and g.mc.tgt[jc] != g.mc.tgt[i2] and fy != g.mc.tgt[i2]:
+                each b in body:
+                    ord.push(b)
+                end
+                jt := g.mc.tgt[jc]
+                hl := g.mc.tgt[i2]
+                jin := in_loop_of(g, jt, hl)
+                fin := in_loop_of(g, fy, hl)
+                if fin and not jin:
+                    nj := mi_dup(g, jc)
+                    g.mc.cc[nj] = inv_cc(g.mc.cc[jc])
+                    g.mc.tgt[nj] = fy
+                    ord.push(nj)
+                    ord.push(mi_dup(g, i2))
+                    g.mc.tgt[ord[ord.len() - 1]] = jt
+                else:
+                    ord.push(jc)
+                    ord.push(mi_dup(g, i2))
+                    g.mc.tgt[ord[ord.len() - 1]] = fy
+                end
+                any = true
+                continue
+            end
+        end
+        ord.push(i2)
+    end
+    if any:
+        perm_int(g.mc.op, ord)
+        perm_int(g.mc.sz, ord)
+        perm_int(g.mc.sz2, ord)
+        perm_int(g.mc.r0, ord)
+        perm_int(g.mc.r1, ord)
+        perm_i64(g.mc.imm, ord)
+        perm_int(g.mc.mk, ord)
+        perm_int(g.mc.mb, ord)
+        perm_int(g.mc.mi, ord)
+        perm_int(g.mc.ms, ord)
+        perm_i64(g.mc.md, ord)
+        perm_int(g.mc.msym, ord)
+        perm_int(g.mc.cc, ord)
+        perm_int(g.mc.tgt, ord)
+        perm_int(g.mc.loc, ord)
+        perm_int(g.mc.dv, ord)
+    end
+    lpos.free()
+    ord.free()
+    body.free()
+    pend_at.free()
+    pend_ins.free()
+end
+
+func emit_nops(g &: Ng, n: int):
+    if n > 15 and n < 128 and not g.off_padjmp:
+        g.s_text.push(0xEB as u8)
+        g.s_text.push((n - 2) as u8)
+        repeat n - 2:
+            g.s_text.push(0xCC as u8)
+        end
+        ret
+    end
+    mut left := n
+    until left > 0:
+        mut k := left
+        if k > 15:
+            k = 15
+        end
+        if k >= 10:
+            repeat k - 10:
+                g.s_text.push(0x66 as u8)
+            end
+            g.s_text.push(0x2E as u8)
+            each bl in [0x66, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00]: g.s_text.push(bl as u8) end
+            left -= k
+            continue
+        end
+        switch k:
+            1: g.s_text.push(0x90 as u8) break end
+            2:
+                g.s_text.push(0x66 as u8)
+                g.s_text.push(0x90 as u8)
+                break
+            end
+            3:
+                each b3 in [0x0F, 0x1F, 0x00]: g.s_text.push(b3 as u8) end
+                break
+            end
+            4:
+                each b4 in [0x0F, 0x1F, 0x40, 0x00]: g.s_text.push(b4 as u8) end
+                break
+            end
+            5:
+                each b5 in [0x0F, 0x1F, 0x44, 0x00, 0x00]: g.s_text.push(b5 as u8) end
+                break
+            end
+            6:
+                each b6 in [0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00]: g.s_text.push(b6 as u8) end
+                break
+            end
+            7:
+                each b7 in [0x0F, 0x1F, 0x80, 0x00, 0x00, 0x00, 0x00]: g.s_text.push(b7 as u8) end
+                break
+            end
+            8:
+                each b8 in [0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00]: g.s_text.push(b8 as u8) end
+                break
+            end
+            else:
+                each b9 in [0x66, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00]: g.s_text.push(b9 as u8) end
+                break
+            end
+        end
+        left -= k
+    end
+end
+
+func encode_function(g &: Ng):
+    if g.opt:
+        share_epilogue(g)
+        rotate_loops(g)
+    end
+    peephole_jumps(g)
+    if g.opt:
+        rotate_loops(g)
+        peephole_jumps(g)
+        if not g.off_kbr and const_branches(g):
+            peephole_jumps(g)
+        end
+        if not g.off_stfwd:
+            store_forward(g)
+        end
+        if not g.off_cpelim:
+            copy_elim(g)
+        end
+        xor_zero(g)
+        if not g.off_dtest:
+            dup_test(g)
+            if not g.off_tfold:
+                test_fold(g)
+            end
+            if not g.off_ldcmp:
+                load_test_fold(g)
+            end
+        end
+    end
+    if g.arch == NG_ARCH_X86:
+        x86_prepass(g)
+    end
+    mut e := Enc {}
+    n := g.mc.op.len()
+    repeat g.mc.nlabels:
+        e.lbl_ins.push(0 - 1)
+    end
+    e.cur_ins = 0 - 1
+    if g.fx_on:
+        enc_fast_exit(g, e)
+    end
+    pre := e.code.len()
+    enc_prologue(g, e)
+    prolen := e.code.len()
+    repeat n in i:
+        e.cur_ins = i
+        e.ioff.push(e.code.len())
+        op := g.mc.op[i]
+        if op == M_LABEL:
+            e.lbl_ins[g.mc.tgt[i]] = i
+        else op == M_JMP or op == M_JCC:
+            e.br_ins.push(i)
+            e.br_long.push(false)
+        else g.arch == NG_ARCH_X86:
+            enc_ins_x86(g, e, i)
+        else:
+            enc_ins(g, e, i)
+        end
+        e.ilen.push(e.code.len() - e.ioff[i])
+    end
+    nb := e.br_ins.len()
+    mut alg := Vector {} as Vector<bool>
+    repeat n:
+        e.pos.push(0)
+        e.pad.push(0)
+        alg.push(false)
+    end
+    mut inner := Vector {} as Vector<bool>
+    mut lend := Vector {} as Vector<int>
+    repeat n:
+        inner.push(false)
+        lend.push(0 - 1)
+    end
+    if g.opt:
+        each bx in e.br_ins:
+            lx := e.lbl_ins[g.mc.tgt[bx]]
+            if lx >= 0 and lx < bx:
+                alg[lx] = true
+                inner[lx] = true
+                if bx > lend[lx]:
+                    lend[lx] = bx
+                end
+            end
+        end
+        each bx2 in e.br_ins:
+            lx2 := e.lbl_ins[g.mc.tgt[bx2]]
+            if lx2 >= 0 and lx2 < bx2:
+                each bz in e.br_ins:
+                    ly := e.lbl_ins[g.mc.tgt[bz]]
+                    if ly > lx2 and ly < bz and bz <= bx2 and ly != lx2:
+                        inner[lx2] = false
+                    end
+                end
+            end
+        end
+    end
+    g.mc.lalign.clear()
+    each av in alg:
+        g.mc.lalign.push(av)
+    end
+    if g.sec_align[SEC_TEXT] < 64:
+        g.sec_align[SEC_TEXT] = 64
+    end
+    tbase := align_up(g.s_text.len(), 16)
+    mut changed := true
+    until changed:
+        changed = false
+        mut p := prolen
+        mut bi := 0
+        repeat n in i2:
+            if alg[i2]:
+                mut pd := (16 - p % 16) % 16
+                mut fit := false
+                if inner[i2] and lend[i2] > i2:
+                    mut ext := 0
+                    mut bj := 0
+                    until bj < nb and e.br_ins[bj] < i2:
+                        bj += 1
+                    end
+                    mut q := i2
+                    until q <= lend[i2]:
+                        if bj < nb and e.br_ins[bj] == q:
+                            ext += e.br_long[bj] ? (g.mc.op[q] == M_JMP ? 5 : 6) : 2
+                            bj += 1
+                        else:
+                            ext += e.ilen[q]
+                        end
+                        q += 1
+                    end
+                    if ext <= 64:
+                        mut c := pd
+                        until c <= 40 and not fit:
+                            if (tbase + p + c) % 64 + ext <= 64:
+                                pd = c
+                                fit = true
+                            else:
+                                c += 16
+                            end
+                        end
+                    end
+                end
+                if not fit:
+                    if inner[i2] and (32 - p % 32) % 32 <= 20:
+                        pd = (32 - p % 32) % 32
+                    else pd > 10:
+                        pd = (8 - p % 8) % 8
+                    end
+                end
+                e.pad[i2] = pd
+                p += pd
+            end
+            e.pos[i2] = p
+            if bi < nb and e.br_ins[bi] == i2:
+                if e.br_long[bi]:
+                    p += g.mc.op[i2] == M_JMP ? 5 : 6
+                else:
+                    p += 2
+                end
+                bi += 1
+            else:
+                p += e.ilen[i2]
+            end
+        end
+        repeat nb in k:
+            if not e.br_long[k]:
+                bix := e.br_ins[k]
+                li := e.lbl_ins[g.mc.tgt[bix]]
+                if li < 0:
+                    fail(g, "native backend: branch to undefined label")
+                    ret
+                end
+                disp := e.pos[li] - (e.pos[bix] + 2)
+                if disp < 0 - 128 or disp > 127:
+                    e.br_long[k] = true
+                    changed = true
+                end
+            end
+        end
+    end
+    sec_align_to(g, SEC_TEXT, 16)
+    base := g.s_text.len()
+    g.sy_sec[g.f_sym] = SEC_TEXT
+    g.sy_off[g.f_sym] = base
+    repeat prolen in q:
+        g.s_text.push(e.code[q])
+    end
+    if g.dbg_on and g.f_sp >= 0:
+        dbg_row_md(g, base, g.f_sp)
+        dbg_range(g, base, 0 - 1)
+        g.dbg_pe = base
+    end
+    if g.dbg_on and g.fv_val.len() > 0:
+        dv_enc_begin(g)
+    end
+    mut bj := 0
+    mut ri := 0
+    nr := e.rel_off.len()
+    until ri < nr and e.rel_ins[ri] < 0:
+        add_reloc(g, SEC_TEXT, base + e.rel_off[ri], e.rel_sym[ri], e.rel_type[ri], e.rel_add[ri])
+        ri += 1
+    end
+    rec_eh := (g.os != NG_OS_WINDOWS or (g.arch == NG_ARCH_X86 and g.dbg_on)) and g.mc.fpo
+    if rec_eh:
+        g.eh_sym.push(g.f_sym)
+        g.eh_alloc.push(g.mc.fpo_pad)
+        g.eh_pre.push(pre)
+        g.eh_rl.push(g.f_popn > 0 ? 3 : 1)
+        g.eh_rs.push(g.eh_regs.len())
+        ngp0 := ngp_count(g)
+        g.eh_rn.push(ngp0)
+        repeat ngp0 in kr:
+            g.eh_regs.push(g.mc.callee_used[kr])
+        end
+        g.eh_es.push(g.eh_ep.len())
+    end
+    mut nep := 0
+    repeat n in i3:
+        if e.pad[i3] > 0:
+            emit_nops(g, e.pad[i3])
+        end
+        if g.dbg_on and g.mc.dv[i3] >= 0:
+            dv_enc_at(g, base + e.pos[i3], g.mc.dv[i3])
+        end
+        if rec_eh and g.mc.op[i3] == M_RET:
+            g.eh_ep.push(e.pos[i3])
+            nep += 1
+        end
+        if bj < nb and e.br_ins[bj] == i3:
+            li2 := e.lbl_ins[g.mc.tgt[i3]]
+            tgt_pos := e.pos[li2]
+            if e.br_long[bj]:
+                if g.mc.op[i3] == M_JMP:
+                    g.s_text.push(0xE9 as u8)
+                    put32(g, tgt_pos - (e.pos[i3] + 5))
+                else:
+                    g.s_text.push(0x0F as u8)
+                    g.s_text.push((0x80 + g.mc.cc[i3]) as u8)
+                    put32(g, tgt_pos - (e.pos[i3] + 6))
+                end
+            else:
+                if g.mc.op[i3] == M_JMP:
+                    g.s_text.push(0xEB as u8)
+                else:
+                    g.s_text.push((0x70 + g.mc.cc[i3]) as u8)
+                end
+                g.s_text.push(((tgt_pos - (e.pos[i3] + 2)) & 255) as u8)
+            end
+            bj += 1
+            continue
+        end
+        if g.dbg_on:
+            dbg_row(g, base + e.pos[i3], g.mc.loc[i3])
+        end
+        st := e.ioff[i3]
+        delta := base + e.pos[i3] - st
+        until ri < nr and e.rel_ins[ri] == i3:
+            add_reloc(g, SEC_TEXT, delta + e.rel_off[ri], e.rel_sym[ri], e.rel_type[ri], e.rel_add[ri])
+            ri += 1
+        end
+        repeat e.ilen[i3] in q2:
+            g.s_text.push(e.code[st + q2])
+        end
+    end
+    if rec_eh:
+        g.eh_en.push(nep)
+    end
+    g.sy_size[g.f_sym] = g.s_text.len() - base
+    g.sy_align[g.f_sym] = 16
+    ndf := g.df_sym.len()
+    dbg_func(g, base, g.s_text.len() - base)
+    if g.dbg_on and g.fv_val.len() > 0:
+        dv_enc_end(g, g.s_text.len(), g.df_sym.len() > ndf)
+    end
+    if g.os == NG_OS_WINDOWS and g.arch == NG_ARCH_X64:
+        emit_unwind(g, g.f_sym, g.sy_size[g.f_sym])
+    end
+    e.code.free()
+    e.ioff.free()
+    e.ilen.free()
+    e.lbl_ins.free()
+    e.br_ins.free()
+    e.br_long.free()
+    e.pos.free()
+    e.rel_off.free()
+    e.rel_sym.free()
+    e.rel_type.free()
+    e.rel_add.free()
+    e.rel_ins.free()
+    e.pad.free()
+    alg.free()
+    inner.free()
+    lend.free()
+end
+
+func put32(g &: Ng, v: int):
+    mut x := v
+    repeat 4:
+        g.s_text.push((x & 255) as u8)
+        x = x >> 8
+    end
+end

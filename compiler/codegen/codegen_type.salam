@@ -1,0 +1,947 @@
+package codegen
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include sm "../semantic/semantic.salam"
+
+func cg_enum_tname(s &: sm.Sema, esym: int, fallback: str): str:
+    if esym != 0:
+        esv := sm.SymAt(s, esym)
+        if esv.ty != sm.TYPE_NONE:
+            etn := sm.TypeAt(s, esv.ty).name
+            if str.Len(etn) > 0:
+                ret etn
+            end
+        end
+    end
+    ret fallback
+end
+
+func cg_kv(ts: str, kbuf &: str, vbuf &: str, cap: int):
+    kbuf = ""
+    vbuf = ""
+    lt_at := str.IndexOf(ts, "<")
+    if lt_at < 0:
+        ret
+    end
+    comma := str.IndexFrom(ts, ",", lt_at)
+    gt_at := str.LastIndex(ts, ">")
+    if comma < 0 or gt_at < 0:
+        ret
+    end
+    mut ks := lt_at + 1
+    until ks < str.Len(ts) and byte_at(ts, ks) == 32:
+        ks += 1
+    end
+    mut ke := comma
+    until ke > ks and byte_at(ts, ke - 1) == 32:
+        ke -= 1
+    end
+    mut vs := comma + 1
+    until vs < str.Len(ts) and byte_at(ts, vs) == 32:
+        vs += 1
+    end
+    mut ve := gt_at
+    until ve > vs and byte_at(ts, ve - 1) == 32:
+        ve -= 1
+    end
+    mut kl := ke - ks
+    if kl >= cap:
+        kl = cap - 1
+    end
+    kbuf = str.Substr(ts, ks, kl)
+    mut vl := ve - vs
+    if vl >= cap:
+        vl = cap - 1
+    end
+    vbuf = str.Substr(ts, vs, vl)
+end
+
+func cg_put_ident_byte(b &: str.StringBuilder, c: int):
+    if is_alnum_b(c):
+        co.SbPutc(b, c)
+    else c == 95:
+        co.SbPuts(b, "__")
+    else:
+        co.SbPutc(b, 95)
+        hi := (c >> 4) & 15
+        lo := c & 15
+        co.SbPutc(b, hi < 10 ? 48 + hi : 87 + hi)
+        co.SbPutc(b, lo < 10 ? 48 + lo : 87 + lo)
+    end
+end
+
+func cg_is_c_keyword(s: str): bool:
+    repeat K_CG_CKW_COUNT in i:
+        if str.Equals(s, k_cg_ckw[i]):
+            ret true
+        end
+    end
+    ret false
+end
+
+func cg_cident(name: str): str:
+    if str.Len(name) == 0:
+        ret "_"
+    end
+    n := str.Len(name)
+    mut ok := not is_digit_b(byte_at(name, 0))
+    mut i := 0
+    until ok and i < n:
+        if not is_alnum_b(byte_at(name, i)):
+            ok = false
+        end
+        i += 1
+    end
+    if ok:
+        if cg_is_c_keyword(name) or cg_is_c_reserved(name):
+            ret name + "_"
+        end
+        ret name
+    end
+    mut b := co.SbNew()
+    if is_digit_b(byte_at(name, 0)):
+        co.SbPutc(b, 95)
+    end
+    if n >= 2 and byte_at(name, 0) == 95 and (byte_at(name, 1) == 95 or (byte_at(name, 1) >= 65 and byte_at(name, 1) <= 90)):
+        co.SbPuts(b, "_u_")
+        mut jr := 1
+        until jr < n:
+            cg_put_ident_byte(b, byte_at(name, jr))
+            jr += 1
+        end
+        r0 := co.SbCstr(b)
+        co.SbFree(b)
+        ret r0
+    end
+    mut j := 0
+    if byte_at(name, 0) == 95:
+        co.SbPutc(b, 95)
+        j = 1
+    end
+    until j < n:
+        cg_put_ident_byte(b, byte_at(name, j))
+        j += 1
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    if cg_is_c_keyword(r):
+        ret r + "_"
+    end
+    ret r
+end
+
+func base_ctype(base: str, found &: bool): str:
+    repeat len(k_cg_base_s) in i:
+        if str.Equals(base, k_cg_base_s[i]):
+            found = true
+            ret k_cg_base_c[i]
+        end
+    end
+    found = false
+    ret base
+end
+
+func plain_char_ptr(base: str, bc: str, depth: int): str:
+    if depth > 0 and str.Equals(base, "char"):
+        ret "char"
+    end
+    ret bc
+end
+
+func type_is_callable(ts: str): bool:
+    ret str.StartsWith(ts, "func(") or str.StartsWith(ts, "externfunc(")
+end
+
+func cg_fnptr_ctype(ts: str): str:
+    if not str.StartsWith(ts, "(func(") and not str.StartsWith(ts, "(externfunc("):
+        ret ""
+    end
+    mut n := str.Len(ts)
+    mut stars := 0
+    until n > 0 and byte_at(ts, n - 1) == 42:
+        stars += 1
+        n -= 1
+    end
+    if stars == 0 or byte_at(ts, n - 1) != 41:
+        ret ""
+    end
+    mut spelled := "void*"
+    until stars > 0:
+        spelled = spelled + "*"
+        stars -= 1
+    end
+    ret spelled
+end
+
+func parse_typestr_ex(
+    ts: str, cap: int, base &: str, ptr &: bool, dims &: Vector<int>, eptr &: int, pdepth &: int
+):
+    ptr = false
+    eptr = 0
+    pdepth = 0
+    dims.clear()
+    tslen := str.Len(ts)
+    mut n := tslen
+    until n > 0 and byte_at(ts, n - 1) == 42:
+        ptr = true
+        pdepth += 1
+        n -= 1
+    end
+    mut lb := 0 - 1
+    mut i := 0
+    until i < n:
+        if byte_at(ts, i) == 91:
+            lb = i
+            break
+        end
+        i += 1
+    end
+    mut blen := n
+    if lb >= 0:
+        blen = lb
+    end
+    until blen > 0 and byte_at(ts, blen - 1) == 42:
+        blen -= 1
+        eptr += 1
+    end
+    if lb >= 0:
+        mut p := lb
+        until p < n and byte_at(ts, p) == 91:
+            mut rb := 0 - 1
+            mut q := p + 1
+            until q < tslen:
+                if byte_at(ts, q) == 93:
+                    rb = q
+                    break
+                end
+                q += 1
+            end
+            if rb < 0:
+                break
+            end
+            mut d := 0
+            mut q2 := p + 1
+            until q2 < rb:
+                c := byte_at(ts, q2)
+                if c >= 48 and c <= 57:
+                    d = d * 10 + (c - 48)
+                end
+                q2 += 1
+            end
+            dims.push(d)
+            p = rb + 1
+        end
+    end
+    _cap := cap
+    base = str.Substr(ts, 0, blen)
+end
+
+func parse_typestr(
+    ts: str, cap: int, base &: str, ptr &: bool, dims &: Vector<int>
+):
+    mut eptr := 0
+    mut pdepth := 0
+    parse_typestr_ex(ts, cap, base, ptr, dims, eptr, pdepth)
+end
+
+func cg_is_int_typestr(ts: str): bool:
+    ret str.Equals(ts, "i8") or str.Equals(ts, "i16") or str.Equals(ts, "i32") or str.Equals(ts, "i64") or str.Equals(ts, "u8") or str.Equals(ts, "u16") or str.Equals(ts, "u32") or str.Equals(ts, "u64") or str.Equals(ts, "usize") or str.Equals(ts, "size")
+end
+
+func cg_is_unsigned_typestr(ts: str): bool:
+    ret str.Equals(ts, "u8") or str.Equals(ts, "u16") or str.Equals(ts, "u32") or str.Equals(ts, "u64") or str.Equals(ts, "usize")
+end
+
+func cg_unsigned_twin(ts: str): str:
+    if str.Equals(ts, "i8"):
+        ret "u8"
+    end
+    if str.Equals(ts, "i16"):
+        ret "u16"
+    end
+    if str.Equals(ts, "i32"):
+        ret "u32"
+    end
+    if str.Equals(ts, "i64"):
+        ret "u64"
+    end
+    if str.Equals(ts, "size"):
+        ret "usize"
+    end
+    ret ts
+end
+
+func cg_int_ts_bits(ts: str): int:
+    if str.Equals(ts, "i8") or str.Equals(ts, "u8"):
+        ret 8
+    end
+    if str.Equals(ts, "i16") or str.Equals(ts, "u16"):
+        ret 16
+    end
+    if str.Equals(ts, "i32") or str.Equals(ts, "u32"):
+        ret 32
+    end
+    ret 64
+end
+
+func cg_common_int_typestr(x: str, y: str): str:
+    if not cg_is_int_typestr(x) or not cg_is_int_typestr(y):
+        ret ""
+    end
+    if str.Equals(x, y):
+        ret x
+    end
+    if cg_is_unsigned_typestr(x) != cg_is_unsigned_typestr(y):
+        ret ""
+    end
+    ret cg_int_ts_bits(x) >= cg_int_ts_bits(y) ? x : y
+end
+
+func cg_op_is_cmp(k: int): bool:
+    ret k == tok.TK_EQ or k == tok.TK_NE or k == tok.TK_LT or k == tok.TK_GT or k == tok.TK_LE or k == tok.TK_GE
+end
+
+func cg_vec_elem(ts: str, cap: int): str:
+    lt_at := str.IndexOf(ts, "<")
+    gt_at := str.LastIndex(ts, ">")
+    if lt_at < 0 or gt_at < 0 or gt_at <= lt_at:
+        ret ""
+    end
+    mut es := lt_at + 1
+    until es < str.Len(ts) and byte_at(ts, es) == 32:
+        es += 1
+    end
+    mut ee := gt_at
+    until ee > es and byte_at(ts, ee - 1) == 32:
+        ee -= 1
+    end
+    _cap := cap
+    ret str.Substr(ts, es, ee - es)
+end
+
+func cg_encode_typestr(b &: str.StringBuilder, s: str, skip_spaces: bool):
+    n := str.Len(s)
+    mut i := 0
+    until i < n:
+        c := byte_at(s, i)
+        if c == 42:
+            co.SbPuts(b, "_ptr")
+        else c == 91:
+            co.SbPuts(b, "_arr")
+        else:
+            if c != 93 and not (c == 32 and skip_spaces):
+                cg_put_ident_byte(b, c)
+            end
+        end
+        i += 1
+    end
+end
+
+func cg_vec_code_str(elem: str): str:
+    mut b := co.SbNew()
+    cg_encode_typestr(b, elem, true)
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+func cg_vec_cname(ts: str): str:
+    ret "Vector_" + cg_vec_code_str(cg_vec_elem(ts, 96))
+end
+
+func variant_push_trimmed(ts: str, s0: int, e0: int, out2 &: Vector<str>):
+    mut s := s0
+    mut e := e0
+    until s < e and byte_at(ts, s) == 32:
+        s += 1
+    end
+    until e > s and byte_at(ts, e - 1) == 32:
+        e -= 1
+    end
+    out2.push(str.Substr(ts, s, e - s))
+end
+
+func cg_variant_members(ts: str): Vector<str>:
+    mut mv := Vector {} as Vector<str>
+    lt_at := str.IndexOf(ts, "<")
+    gt_at := str.LastIndex(ts, ">")
+    if lt_at < 0 or gt_at < 0 or gt_at <= lt_at:
+        ret mv
+    end
+    mut start := lt_at + 1
+    mut depth := 0
+    mut p := start
+    until p < gt_at:
+        c := byte_at(ts, p)
+        if c == 60:
+            depth += 1
+        else c == 62:
+            depth -= 1
+        else c == 44 and depth == 0:
+            variant_push_trimmed(ts, start, p, mv)
+            start = p + 1
+        end
+        p += 1
+    end
+    variant_push_trimmed(ts, start, gt_at, mv)
+    ret mv
+end
+
+func cg_variant_end(ts: str): int:
+    mut depth := 0
+    n := str.Len(ts)
+    repeat n in i:
+        c := byte_at(ts, i)
+        if c == 60:
+            depth += 1
+        else c == 62:
+            depth -= 1
+            if depth == 0:
+                ret i + 1
+            end
+        end
+    end
+    ret n
+end
+
+func cg_variant_cname(ts: str): str:
+    mut members := cg_variant_members(ts)
+    defer members.free()
+    mut b := co.SbNew()
+    co.SbPuts(b, "_Salam_variant")
+    repeat members.len() in i:
+        co.SbPutc(b, 95)
+        co.SbPuts(b, cg_vec_code_str(members.get(i)))
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+func cg_variant_tag_of(variant_ts: str, member_ts: str): int:
+    mut members := cg_variant_members(variant_ts)
+    defer members.free()
+    mut r := 0 - 1
+    repeat members.len() in i:
+        if r < 0 and str.Equals(members.get(i), member_ts):
+            r = i
+        end
+    end
+    ret r
+end
+
+func cg_is_ptr_ts(ts: str): bool:
+    ret str.EndsWith(ts, "*")
+end
+
+func cg_is_slice_ts(ts: str): bool:
+    ret str.StartsWith(ts, "slice<")
+end
+
+func cg_slice_elem(ts: str, cap: int): str:
+    ret cg_vec_elem(ts, cap)
+end
+
+func pbrk_arr_star(s: str, from: int): int:
+    n := str.Len(s)
+    mut i := from
+    until i < n:
+        c := byte_at(s, i)
+        if c == 91 or c == 42:
+            ret i
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func cg_ctype(ts: str): str:
+    if str.Len(ts) == 0:
+        ret "void"
+    end
+    if cg_is_slice_ts(ts):
+        ret "salam_slice"
+    end
+    if str.StartsWith(ts, "Variant<"):
+        ve := cg_variant_end(ts)
+        if ve < str.Len(ts):
+            vsuf := str.Substr(ts, ve, str.Len(ts) - ve)
+            if str.StartsWith(vsuf, "*"):
+                ret cg_variant_cname(str.Substr(ts, 0, ve)) + vsuf
+            end
+        end
+        ret cg_variant_cname(ts)
+    end
+    if str.StartsWith(ts, "dyn "):
+        suf := pbrk_arr_star(ts, 4)
+        il := (suf >= 0 ? suf : str.Len(ts)) - 4
+        iface := str.Substr(ts, 4, il)
+        ret "_Salam_dyn_" + cg_cident(iface) + (suf >= 0 ? "*" : "")
+    end
+    if type_is_callable(ts):
+        ret "void*"
+    end
+    fp := cg_fnptr_ctype(ts)
+    if str.Len(fp) > 0:
+        ret fp
+    end
+    mut base := ""
+    mut ptr := false
+    mut dims := Vector {} as Vector<int>
+    defer dims.free()
+    mut eptr := 0
+    mut pdepth := 0
+    parse_typestr_ex(ts, 96, base, ptr, dims, eptr, pdepth)
+    mut found := false
+    mut bc := base_ctype(base, found)
+    if not found:
+        bc = cg_cident(base)
+    end
+    bc = plain_char_ptr(base, bc, eptr + pdepth)
+    until eptr > 0:
+        bc = bc + "*"
+        eptr -= 1
+    end
+    if dims.len() > 0:
+        ret bc + "*"
+    end
+    until pdepth > 0:
+        bc = bc + "*"
+        pdepth -= 1
+    end
+    ret bc
+end
+
+func cg_array_ctype(ts: str): str:
+    if str.Len(ts) == 0 or cg_is_slice_ts(ts) or str.StartsWith(ts, "Variant<") or str.StartsWith(ts, "dyn ") or str.StartsWith(ts, "func(") or str.StartsWith(ts, "("):
+        ret ""
+    end
+    mut base := ""
+    mut ptr := false
+    mut dims := Vector {} as Vector<int>
+    defer dims.free()
+    mut eptr := 0
+    mut pdepth := 0
+    parse_typestr_ex(ts, 96, base, ptr, dims, eptr, pdepth)
+    if dims.len() == 0 or ptr:
+        ret ""
+    end
+    mut found := false
+    mut bc := base_ctype(base, found)
+    if not found:
+        bc = cg_cident(base)
+    end
+    bc = plain_char_ptr(base, bc, eptr + pdepth)
+    until eptr > 0:
+        bc = bc + "*"
+        eptr -= 1
+    end
+    mut b := co.SbNew()
+    co.SbPuts(b, bc)
+    mut zero := false
+    repeat dims.len() in di:
+        d := dims.get(di)
+        if d == 0:
+            zero = true
+        end
+        co.SbPuts(b, "[" + d + "]")
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    if zero:
+        ret ""
+    end
+    ret r
+end
+
+func cg_global_cname(pkg: str, name: str): str:
+    ret "_Salam_g_" + cg_cident(str.Len(pkg) > 0 ? pkg : "main") + "_" + cg_cident(name)
+end
+
+func cg_decl(ts: str, name: str): str:
+    ret cg_decl_cn(ts, cg_cident(name))
+end
+
+func cg_decl_cn(ts: str, name: str): str:
+    if cg_is_slice_ts(ts):
+        ret "salam_slice " + name
+    end
+    if str.StartsWith(ts, "Variant<"):
+        ve2 := cg_variant_end(ts)
+        if ve2 < str.Len(ts):
+            vsuf2 := str.Substr(ts, ve2, str.Len(ts) - ve2)
+            vbase := cg_variant_cname(str.Substr(ts, 0, ve2))
+            if str.StartsWith(vsuf2, "*"):
+                ret vbase + vsuf2 + " " + name
+            end
+            ret vbase + " " + name + vsuf2
+        end
+        ret cg_variant_cname(ts) + " " + name
+    end
+    if str.StartsWith(ts, "dyn "):
+        suf := pbrk_arr_star(ts, 4)
+        il := (suf >= 0 ? suf : str.Len(ts)) - 4
+        iface := str.Substr(ts, 4, il)
+        mut star := ""
+        mut dstr := ""
+        if suf >= 0 and byte_at(ts, suf) == 42:
+            star = "*"
+        end
+        if suf >= 0 and byte_at(ts, suf) == 91:
+            dstr = str.Substr(ts, suf, str.Len(ts) - suf)
+        end
+        ret "_Salam_dyn_" + cg_cident(iface) + star + " " + name + dstr
+    end
+    if str.StartsWith(ts, "func(") or str.StartsWith(ts, "externfunc("):
+        ret "void* " + name
+    end
+    fp := cg_fnptr_ctype(ts)
+    if str.Len(fp) > 0:
+        ret fp + " " + name
+    end
+    mut base := ""
+    mut ptr := false
+    mut dims := Vector {} as Vector<int>
+    defer dims.free()
+    mut eptr := 0
+    mut pdepth := 0
+    parse_typestr_ex(ts, 96, base, ptr, dims, eptr, pdepth)
+    mut found := false
+    mut bc := base_ctype(base, found)
+    if not found:
+        bc = cg_cident(base)
+    end
+    bc = plain_char_ptr(base, bc, eptr + pdepth)
+    until eptr > 0:
+        bc = bc + "*"
+        eptr -= 1
+    end
+    cname := name
+    if dims.len() > 0:
+        mut b := co.SbNew()
+        co.SbPuts(b, bc)
+        co.SbPutc(b, 32)
+        co.SbPuts(b, cname)
+        repeat dims.len() in i:
+            co.SbPuts(b, "[" + dims.get(i) + "]")
+        end
+        r := co.SbCstr(b)
+        co.SbFree(b)
+        ret r
+    end
+    until pdepth > 0:
+        bc = bc + "*"
+        pdepth -= 1
+    end
+    ret bc + " " + cname
+end
+
+func type_code(s &: sm.Sema, t: int): str:
+    ts := sm.ToString(s, t)
+    mut b := co.SbNew()
+    cg_encode_typestr(b, ts, false)
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+func cg_mangle_in(
+    s &: sm.Sema, pkg: str, sname: str, fname: str, params: Vector<int>
+): str:
+    if str.Len(sname) == 0:
+        override := cg_export_override(pkg, fname)
+        if str.Len(override) > 0:
+            ret override
+        end
+    end
+    mut b := co.SbNew()
+    co.SbPuts(b, "_Salam_")
+    co.SbPuts(b, cg_cident(str.Len(pkg) > 0 ? pkg : "main"))
+    if str.Len(sname) > 0:
+        co.SbPuts(b, "_S_")
+        co.SbPuts(b, cg_cident(sname))
+    end
+    co.SbPutc(b, 95)
+    co.SbPuts(b, cg_cident(fname))
+    repeat params.len() in i:
+        co.SbPutc(b, 95)
+        co.SbPuts(b, type_code(s, params.get(i)))
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+func cg_mangle(
+    g &: Cg, s &: sm.Sema, sname: str, fname: str, params: Vector<int>
+): str:
+    ret cg_mangle_in(s, g.pkg, sname, fname, params)
+end
+
+func cg_mangle_method(
+    g &: Cg, s &: sm.Sema, sname: str, owner: int, fname: str, params: Vector<int>
+): str:
+    osym := sm.SymAt(s, owner)
+    inst := (owner != 0 and str.Len(osym.generic_base) > 0) or (owner == 0 and str.Len(sname) > 0)
+    if inst:
+        sn := str.Len(sname) > 0 ? sname : (owner != 0 ? osym.name : "")
+        ret cg_mangle_in(s, "g", sn, fname, params)
+    end
+    sn2 := owner != 0 ? osym.name : sname
+    pkg := (owner != 0 and str.Len(osym.pkgname) > 0) ? osym.pkgname : g.pkg
+    ret cg_mangle_in(s, pkg, sn2, fname, params)
+end
+
+func cg_mangle_ti(
+    s &: sm.Sema, typestr: str, fname: str, params: Vector<int>
+): str:
+    ret cg_mangle_in(s, "ti", typestr, fname, params)
+end
+
+func func_ret_of(ts: str): str:
+    if not str.StartsWith(ts, "func("):
+        ret "void"
+    end
+    n := str.Len(ts)
+    mut p := 4
+    mut d := 0
+    until p < n:
+        c := byte_at(ts, p)
+        if c == 40:
+            d += 1
+        else c == 41:
+            d -= 1
+            if d == 0:
+                p += 1
+                break
+            end
+        end
+        p += 1
+    end
+    until p < n and byte_at(ts, p) == 32:
+        p += 1
+    end
+    if p < n:
+        ret str.Substr(ts, p, n - p)
+    end
+    ret "void"
+end
+
+func raw_ret_of(ts: str): str:
+    if not str.StartsWith(ts, "externfunc("):
+        ret "void"
+    end
+    n := str.Len(ts)
+    mut p := 10
+    mut d := 0
+    until p < n:
+        c := byte_at(ts, p)
+        if c == 40:
+            d += 1
+        else c == 41:
+            d -= 1
+            if d == 0:
+                p += 1
+                break
+            end
+        end
+        p += 1
+    end
+    until p < n and byte_at(ts, p) == 32:
+        p += 1
+    end
+    if p < n:
+        ret str.Substr(ts, p, n - p)
+    end
+    ret "void"
+end
+
+func cast_params_from(ts: str, s0: int): str:
+    mut b := co.SbNew()
+    co.SbPutc(b, 40)
+    n := str.Len(ts)
+    mut depth := 0
+    mut start := s0
+    mut any := false
+    mut p := s0
+    until true:
+        c := p < n ? byte_at(ts, p) : 0
+        if c == 60 or c == 40:
+            depth += 1
+        else c == 62:
+            depth -= 1
+        else c == 41 and depth > 0:
+            depth -= 1
+            p += 1
+            continue
+        end
+        if (c == 44 and depth == 0) or (c == 41 and depth == 0) or c == 0:
+            mut ss := start
+            mut l := p - start
+            until l > 0 and byte_at(ts, ss) == 32:
+                ss += 1
+                l -= 1
+            end
+            until l > 0 and byte_at(ts, ss + l - 1) == 32:
+                l -= 1
+            end
+            if l > 0:
+                if any:
+                    co.SbPuts(b, ", ")
+                end
+                co.SbPuts(b, cg_ctype(str.Substr(ts, ss, l)))
+                any = true
+            end
+            if c == 41 or c == 0:
+                break
+            end
+            start = p + 1
+        end
+        p += 1
+    end
+    if not any:
+        co.SbPuts(b, "void")
+    end
+    co.SbPutc(b, 41)
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+func raw_cast_params(ts: str): str:
+    if not str.StartsWith(ts, "externfunc("):
+        ret "(void)"
+    end
+    ret cast_params_from(ts, 11)
+end
+
+func func_cast_params(ts: str): str:
+    if not str.StartsWith(ts, "func("):
+        ret "(void)"
+    end
+    ret cast_params_from(ts, 5)
+end
+
+func func_cast_params_env(ts: str): str:
+    base := func_cast_params(ts)
+    if str.Equals(base, "(void)"):
+        ret "(void*)"
+    end
+    ret "(void*, " + str.Substr(base, 1, str.Len(base) - 1)
+end
+
+func type_is_byval_agg(s &: sm.Sema, t: int): bool:
+    if t == sm.TYPE_NONE:
+        ret false
+    end
+    k := sm.TypeAt(s, t).kind
+    ret k == sm.TY_STRUCT or k == sm.TY_VEC or k == sm.TY_DYN or k == sm.TY_SLICE or k == sm.TY_VARIANT or k == sm.TY_ARRAY
+end
+
+func cg_array_ret_decl(ts: str, name: str): str:
+    mut base := ""
+    mut ptr := false
+    mut dims := Vector {} as Vector<int>
+    defer dims.free()
+    mut eptr := 0
+    mut pdepth := 0
+    parse_typestr_ex(ts, 96, base, ptr, dims, eptr, pdepth)
+    mut found := false
+    mut bc := base_ctype(base, found)
+    if not found:
+        bc = cg_cident(base)
+    end
+    bc = plain_char_ptr(base, bc, eptr + pdepth)
+    until eptr > 0:
+        bc = bc + "*"
+        eptr -= 1
+    end
+    mut b := co.SbNew()
+    co.SbPuts(b, bc + " (*" + name + ")")
+    repeat dims.len() in i:
+        co.SbPuts(b, "[" + dims.get(i) + "]")
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+func array_size_of(ts: str): i64:
+    if str.Len(ts) == 0:
+        ret 0
+    end
+    lb := str.IndexOf(ts, "[")
+    if lb < 0:
+        ret 0
+    end
+    mut n := 0 as i64
+    mut p := lb + 1
+    tslen := str.Len(ts)
+    until p < tslen:
+        c := byte_at(ts, p)
+        if c == 93:
+            break
+        end
+        if c >= 48 and c <= 57:
+            n = n * (10 as i64) + ((c - 48) as i64)
+        end
+        p += 1
+    end
+    ret n
+end
+
+func print_tag(ts: str): int:
+    if str.Len(ts) == 0:
+        ret 7
+    end
+    if str.Equals(ts, "str"):
+        ret 7
+    end
+    if str.Equals(ts, "uchar"):
+        ret 7
+    end
+    if str.Equals(ts, "bool"):
+        ret 5
+    end
+    if str.Equals(ts, "char"):
+        ret 6
+    end
+    if str.Equals(ts, "f32") or str.Equals(ts, "f64"):
+        ret 4
+    end
+    if str.Equals(ts, "i64") or str.Equals(ts, "size"):
+        ret 1
+    end
+    if str.Equals(ts, "u32"):
+        ret 2
+    end
+    if str.Equals(ts, "u64") or str.Equals(ts, "usize"):
+        ret 3
+    end
+    ret 0
+end
+
+func prim_suffix(tag: int): str:
+    if tag == 1:
+        ret "i64"
+    end
+    if tag == 2:
+        ret "u32"
+    end
+    if tag == 3:
+        ret "u64"
+    end
+    if tag == 4:
+        ret "f64"
+    end
+    if tag == 5:
+        ret "bool"
+    end
+    if tag == 6:
+        ret "char"
+    end
+    ret "i32"
+end

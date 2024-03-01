@@ -1,0 +1,64 @@
+lesson.part = Larger programs
+lesson.title = Concurrency
+lesson.summary = Threads with spawn and join, sharing data safely, channels and parallel loops
+lesson.seo_title = Threads and concurrency in Salam | Lesson 23 of the Salam course
+lesson.description = Concurrency in Salam: starting threads with spawn and join, passing data to a thread, protecting shared data with a mutex or an atomic counter, wait groups, channels and parallel loops with pool.
+lesson.lead = A Salam program can do several things at once, across the cores of the processor. This lesson starts a thread, hands it data, and then shows the tools that keep threads from stepping on each other.
+lesson.body <<
+<h2 id="spawn">spawn and join</h2>
+<p><code>spawn(function)</code> starts the function on a new thread and gives back its handle, a number. <code>join(handle)</code> waits for that thread to finish. Until you join it, the thread and <code>main</code> run side by side, and <code>main</code> should not read what the thread is still writing.</p>
+{{example.threads}}
+<p>Every thread you start should be joined exactly once. If <code>main</code> returns while a thread is still running, that thread is stopped in the middle of its work.</p>
+
+<h2 id="data">Giving a thread its own data</h2>
+<p>A thread function may take no parameters, or exactly one pointer: <code>spawn(function, data)</code>. The pointer is how each thread gets its own piece of the work, and it is also where the thread leaves its result. The data has to stay alive while the thread runs, so it lives on the heap: allocate it with <code>mem.Allocate</code> and free it after <code>join</code>.</p>
+{{example.threads-arg}}
+<p>The two threads each sum half of the numbers from 1 to 1000. They never touch the same memory, so they need no coordination at all. That is the easiest kind of concurrent program to get right.</p>
+
+<h2 id="mutex">Shared data and the mutex</h2>
+<p>When two threads change the same variable, their updates can collide. <code>count += 1</code> is really three steps (read, add, write), and if two threads read the same old value, one of the additions is lost. Take the lock out of the next example and the total comes out below 200000, and different on every run.</p>
+<p>A mutex from the <code>sync</code> package fixes this: between <code>sync.Lock</code> and <code>sync.Unlock</code> only one thread at a time can be inside. Keep that stretch short, and release the mutex with <code>sync.Destroy</code> when the program no longer needs it.</p>
+{{example.threads-mutex}}
+
+<h2 id="atomic">Atomic counters</h2>
+<p>For a single number that many threads bump, the <code>atomic</code> package is lighter than a mutex. <code>atomic.Add</code> does the read, the add and the write as one step that nothing can interrupt. <code>atomic.Load</code> reads the value, and <code>Store</code>, <code>Swap</code> and <code>CompareAndSwap</code> cover the other usual needs.</p>
+{{example.threads-atomic}}
+
+<h2 id="waitgroup">Waiting for a group</h2>
+<p>With many threads, one variable per handle gets awkward. Put the handles in a <code>Vector&lt;i64&gt;</code> and join them in a loop. A <code>sync.WaitGroup</code> answers a related question, "have all of them finished their part?": <code>sync.Add</code> sets how many to wait for, each worker calls <code>sync.Done</code> when it is finished, and <code>sync.Wait</code> blocks until the count reaches zero.</p>
+{{example.threads-waitgroup}}
+
+<h2 id="chan">Channels</h2>
+<p>A channel from the <code>chan</code> package carries values from one thread to another, so the threads share nothing but the channel itself. <code>init(n)</code> gives it room for <code>n</code> values; <code>send</code> waits while it is full and <code>recv</code> waits while it is empty. After <code>close()</code> nothing more can be sent, and once the remaining values are taken, <code>recv</code> sets its <code>ok</code> argument to <code>false</code>. That is the signal for a worker to stop.</p>
+{{example.threads-chan}}
+<p>The two workers take jobs in whatever order they happen to get them, but the sum does not depend on that order, so the output is the same on every run. With <code>init(0)</code> the channel holds nothing: <code>send</code> waits until a receiver takes the value, so the two threads meet. <code>recv_timeout</code> and <code>send_timeout</code> give up after a number of milliseconds.</p>
+
+<h2 id="pool">Parallel loops</h2>
+<p>Often all you want is to run the same loop body over many indexes on all the cores. <code>pool.ParallelFor(n, workers, body)</code> calls <code>body(i)</code> for every <code>i</code> from 0 to <code>n - 1</code> on <code>workers</code> threads and returns when all of them are done. <code>pool.ParallelForAuto</code> uses one worker per core, and <code>pool.CPUCount()</code> tells you how many cores there are.</p>
+{{example.threads-pool}}
+<p>A lambda captures the variables around it by value, so the body cannot add to a local <code>total</code>. Instead each call writes its own slot of shared memory, and <code>main</code> adds the slots up after the loop.</p>
+
+<h2 id="more">More tools</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Need</th><th>Reach for</th></tr></thead>
+<tbody>
+<tr><td>Many readers, an occasional writer</td><td><code>sync.RWMutex</code> with <code>RLock</code> and <code>WLock</code></td></tr>
+<tr><td>Sleeping until a condition holds</td><td><code>sync.CondVar</code> with <code>WaitCond</code>, <code>Signal</code> and <code>Broadcast</code></td></tr>
+<tr><td>At most N threads at once</td><td><code>sync.Semaphore</code> with <code>Acquire</code> and <code>Release</code></td></tr>
+<tr><td>Setup that must run only once</td><td><code>sync.Once</code> with <code>sync.Do</code></td></tr>
+<tr><td>A one-time stop signal</td><td><code>atomic.Flag</code> with <code>TestAndSet</code></td></tr>
+<tr><td>Cancelling work, or giving it a deadline</td><td><code>ctx.WithCancel</code>, <code>ctx.WithTimeout</code> and <code>ctx.IsDone</code></td></tr>
+<tr><td>A thread with deep recursion</td><td><code>thread.SpawnStack</code>, which sets the stack size</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="rules">Rules of thumb</h2>
+<ul>
+<li>Join every thread you spawn, and read its results only after the join.</li>
+<li>Data that two threads both change needs a mutex, an atomic or a channel. Data that only one thread touches needs nothing.</li>
+<li>Threads reach shared state through globals or through the pointer given to <code>spawn</code>. A lambda's captured variables are copies.</li>
+<li>Free what you create: <code>sync.Destroy</code>, <code>sync.DestroyWaitGroup</code>, <code>atomic.DestroyI64</code> and a channel's <code>free()</code>.</li>
+<li>If the output must be the same on every run, print from <code>main</code> after the joins, not from inside the workers.</li>
+</ul>
+<div class="note"><p>Each of these packages has a full page in the library reference: <a href="/std/thread/">thread</a>, <a href="/std/sync/">sync</a>, <a href="/std/atomic/">atomic</a>, <a href="/std/chan/">chan</a>, <a href="/std/pool/">pool</a> and <a href="/std/ctx/">ctx</a>.</p></div>
+>>

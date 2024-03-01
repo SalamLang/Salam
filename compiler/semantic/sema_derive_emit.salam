@@ -1,0 +1,364 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+
+const DV_PARAM := "_v"
+const DV_BUF := "_sb"
+const DV_IND := "    "
+const DV_ZWNJ := "\xE2\x80\x8C"
+
+func derive_ident(name: str): str:
+    if not str.Contains(name, " "):
+        ret name
+    end
+    ret str.Replace(name, " ", DV_ZWNJ)
+end
+
+func derive_is_plain(s &: Sema, t: int): bool:
+    k := ty_at(s, t).kind
+    if k == TY_BOOL or k == TY_CHAR or k == TY_UCHAR:
+        ret true
+    end
+    ret type_is_numeric(s, t)
+end
+
+func derive_method_sig(s &: Sema, sym: int, name: str, nparams: int): int:
+    members := sym_at(s, sym).members
+    if members == 0:
+        ret 0
+    end
+    m := scope_lookup_local(s, members, name)
+    if m == 0 or sym_at(s, m).kind != SYM_METHOD:
+        ret 0
+    end
+    ov := sym_at(s, m).overloads
+    repeat ov.len() in i:
+        sid := ov.get(i)
+        if sig_at(s, sid).params.len() == nparams:
+            ret sid
+        end
+    end
+    ret 0
+end
+
+func derive_user_to_str(s &: Sema, sym: int): bool:
+    sid := derive_method_sig(s, sym, "to_str", 0)
+    if sid == 0:
+        ret false
+    end
+    rt := sig_at(s, sid).ret_type
+    ret rt >= 0 and ty_at(s, rt).kind == TY_STR
+end
+
+func derive_seq_count(s &: Sema, sym: int): str:
+    names := ["len", "size"]
+    repeat 2 in i:
+        sid := derive_method_sig(s, sym, names[i], 0)
+        if sid != 0:
+            rt := sig_at(s, sid).ret_type
+            if rt >= 0 and type_is_integer(s, rt):
+                ret names[i]
+            end
+        end
+    end
+    ret ""
+end
+
+func derive_seq_elem(s &: Sema, sym: int): int:
+    sid := derive_method_sig(s, sym, "get", 1)
+    if sid == 0:
+        ret TYPE_NONE
+    end
+    g := sig_at(s, sid)
+    if not type_is_integer(s, g.params.get(0)):
+        ret TYPE_NONE
+    end
+    ret g.ret_type
+end
+
+func derive_map_cursor(s &: Sema, sym: int): int:
+    it := derive_method_sig(s, sym, "iter", 0)
+    if it == 0:
+        ret 0
+    end
+    cur := struct_sym_of(s, sig_at(s, it).ret_type)
+    if cur == 0:
+        ret 0
+    end
+    hn := derive_method_sig(s, cur, "has_next", 0)
+    if hn == 0 or ty_at(s, sig_at(s, hn).ret_type).kind != TY_BOOL:
+        ret 0
+    end
+    if derive_method_sig(s, cur, "key", 0) == 0 or derive_method_sig(s, cur, "value", 0) == 0:
+        ret 0
+    end
+    if derive_method_sig(s, cur, "next", 0) == 0:
+        ret 0
+    end
+    ret cur
+end
+
+func derive_pkg_qualified(s &: Sema, sym: int): str:
+    name := sym_at(s, sym).name
+    syms := scope_at(s, s.global).symbols
+    repeat syms.len() in i:
+        pk := syms.get(i)
+        pkv := sym_at(s, pk)
+        if pkv.kind == SYM_PACKAGE and pkv.members != 0 and str.Len(pkv.name) > 0:
+            if scope_lookup_local(s, pkv.members, name) == sym:
+                if not sym_at(s, sym).is_pub:
+                    ret ""
+                end
+                ret derive_ident(pkv.name) + "." + derive_ident(name)
+            end
+        end
+    end
+    ret ""
+end
+
+func derive_template_visible(s &: Sema, base: str): bool:
+    if scope_lookup(s, s.cur, base) != 0:
+        ret true
+    end
+    ret s.prelude != 0 and scope_lookup_local(s, s.prelude, base) != 0
+end
+
+func derive_generic_spelling(s &: Sema, sym: int): str:
+    v := sym_at(s, sym)
+    if str.Len(v.generic_base) == 0 or v.generic_args.len() == 0:
+        ret ""
+    end
+    if not derive_template_visible(s, v.generic_base):
+        ret ""
+    end
+    mut out := derive_ident(v.generic_base) + "<"
+    repeat v.generic_args.len() in i:
+        arg := derive_type_spelling(s, v.generic_args.get(i))
+        if str.Len(arg) == 0:
+            ret ""
+        end
+        if i > 0:
+            out = out + ", "
+        end
+        out = out + arg
+    end
+    ret out + ">"
+end
+
+func derive_struct_spelling(s &: Sema, sym: int): str:
+    if sym == 0:
+        ret ""
+    end
+    name := sym_at(s, sym).name
+    if str.Len(name) == 0:
+        ret ""
+    end
+    if scope_lookup(s, s.global, name) == sym:
+        ret derive_ident(name)
+    end
+    q := derive_pkg_qualified(s, sym)
+    if str.Len(q) > 0:
+        ret q
+    end
+    ret derive_generic_spelling(s, sym)
+end
+
+func derive_array_spelling(s &: Sema, t: int): str:
+    mut dims := ""
+    mut cur := t
+    until ty_at(s, cur).kind == TY_ARRAY:
+        dims = dims + "[" + ty_at(s, cur).length + "]"
+        cur = ty_at(s, cur).elem
+    end
+    base := derive_type_spelling(s, cur)
+    if str.Len(base) == 0:
+        ret ""
+    end
+    ret base + dims
+end
+
+func derive_type_spelling(s &: Sema, t: int): str:
+    if t < 0:
+        ret ""
+    end
+    v := ty_at(s, t)
+    if derive_is_plain(s, t) or v.kind == TY_STR:
+        ret type_to_string(s, t)
+    end
+    if v.kind == TY_ENUM or v.kind == TY_STRUCT:
+        ret derive_struct_spelling(s, v.decl)
+    end
+    if v.kind == TY_VARIANT and enum_data_sym(s, t) != 0:
+        ret enum_data_spelling(s, t)
+    end
+    if v.kind == TY_PTR:
+        inner := derive_type_spelling(s, v.pointee)
+        ret str.Len(inner) == 0 ? "" : inner + "*"
+    end
+    if v.kind == TY_ARRAY:
+        ret derive_array_spelling(s, t)
+    end
+    if v.kind == TY_SLICE:
+        e := derive_type_spelling(s, v.elem)
+        ret str.Len(e) == 0 ? "" : e + "[:]"
+    end
+    if v.kind == TY_VEC:
+        e2 := derive_type_spelling(s, v.elem)
+        ret str.Len(e2) == 0 ? "" : "Vector<" + e2 + ">"
+    end
+    if v.kind == TY_MAP:
+        k := derive_type_spelling(s, v.key)
+        val := derive_type_spelling(s, v.elem)
+        if str.Len(k) == 0 or str.Len(val) == 0:
+            ret ""
+        end
+        ret "HashMap<" + k + ", " + val + ">"
+    end
+    ret ""
+end
+
+func derive_append(s &: Sema, a &: at.Ast, t: int, expr: str, sp: co.SrcSpan): str:
+    if t < 0:
+        ret ""
+    end
+    lead := DV_IND + DV_BUF + " = " + DV_BUF + " + "
+    if derive_is_plain(s, t):
+        ret lead + "(" + expr + ")\n"
+    end
+    k := ty_at(s, t).kind
+    if k == TY_STR:
+        ret lead + "\"\\\"\" + (" + expr + ") + \"\\\"\"\n"
+    end
+    if k == TY_ENUM:
+        ret lead + "((" + expr + ") as i64)\n"
+    end
+    if k == TY_PTR:
+        ret DV_IND + "if (" + expr + ") == null: " + DV_BUF + " = " + DV_BUF + " + \"null\"\n" + DV_IND + "else: " + DV_BUF + " = " + DV_BUF + " + \"<ptr>\" end\n"
+    end
+    fn := derive_stringify(s, a, t, sp)
+    if str.Len(fn) == 0:
+        ret lead + "\"<" + type_to_string(s, t) + ">\"\n"
+    end
+    ret lead + fn + "(" + expr + ")\n"
+end
+
+func derive_display_name(s &: Sema, sym: int): str:
+    v := sym_at(s, sym)
+    if str.Len(v.generic_base) == 0 or v.generic_args.len() == 0:
+        ret v.name
+    end
+    mut out := v.generic_base + "<"
+    repeat v.generic_args.len() in i:
+        if i > 0:
+            out = out + ", "
+        end
+        out = out + type_plain_disp(s, v.generic_args.get(i))
+    end
+    out = out + ">"
+    if str.Equals(s.lang, "fa"):
+        ret i18.LocalizeTypeText(out, true)
+    end
+    ret out
+end
+
+func derive_body_struct(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): str:
+    sym := ty_at(s, t).decl
+    mut out := DV_IND + "mut " + DV_BUF + " := \"" + derive_display_name(s, sym) + " {\"\n"
+    mut first := true
+    fields := scope_at(s, sym_at(s, sym).members).symbols
+    repeat fields.len() in i:
+        f := fields.get(i)
+        fv := sym_at(s, f)
+        if fv.kind == SYM_FIELD:
+            sep := first ? "" : ", "
+            out = out + DV_IND + DV_BUF + " = " + DV_BUF + " + \"" + sep + fv.name + " = \"\n"
+            out = out + derive_append(s, a, fv.ty, DV_PARAM + "." + derive_ident(fv.name), sp)
+            first = false
+        end
+    end
+    ret out + DV_IND + DV_BUF + " = " + DV_BUF + " + \"}\"\n"
+end
+
+func derive_body_seq(s &: Sema, a &: at.Ast, elem: int, count: str, item: str, sp: co.SrcSpan): str:
+    mut out := DV_IND + "mut " + DV_BUF + " := \"[\"\n"
+    out = out + DV_IND + "mut _i := 0\n"
+    out = out + DV_IND + "until _i < " + count + ":\n"
+    out = out + DV_IND + DV_IND + "if _i > 0: " + DV_BUF + " = " + DV_BUF + " + \", \" end\n"
+    out = out + DV_IND + derive_append(s, a, elem, item, sp)
+    out = out + DV_IND + DV_IND + "_i = _i + 1\n"
+    out = out + DV_IND + "end\n"
+    ret out + DV_IND + DV_BUF + " = " + DV_BUF + " + \"]\"\n"
+end
+
+func derive_body_map(s &: Sema, a &: at.Ast, key: int, val: int, sp: co.SrcSpan): str:
+    mut out := DV_IND + "mut " + DV_BUF + " := \"{\"\n"
+    out = out + DV_IND + "mut _n := 0\n"
+    out = out + DV_IND + "mut _it := " + DV_PARAM + ".iter()\n"
+    out = out + DV_IND + "until _it.has_next():\n"
+    out = out + DV_IND + DV_IND + "if _n > 0: " + DV_BUF + " = " + DV_BUF + " + \", \" end\n"
+    out = out + DV_IND + derive_append(s, a, key, "_it.key()", sp)
+    out = out + DV_IND + DV_IND + DV_BUF + " = " + DV_BUF + " + \": \"\n"
+    out = out + DV_IND + derive_append(s, a, val, "_it.value()", sp)
+    out = out + DV_IND + DV_IND + "_n = _n + 1\n"
+    out = out + DV_IND + DV_IND + "_it.next()\n"
+    out = out + DV_IND + "end\n"
+    ret out + DV_IND + DV_BUF + " = " + DV_BUF + " + \"}\"\n"
+end
+
+func derive_body_of_struct(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): str:
+    sym := ty_at(s, t).decl
+    if derive_user_to_str(s, sym):
+        ret DV_IND + "mut " + DV_BUF + " := " + DV_PARAM + ".to_str()\n"
+    end
+    cur := derive_map_cursor(s, sym)
+    if cur != 0:
+        k := sig_at(s, derive_method_sig(s, cur, "key", 0)).ret_type
+        v := sig_at(s, derive_method_sig(s, cur, "value", 0)).ret_type
+        ret derive_body_map(s, a, k, v, sp)
+    end
+    count := derive_seq_count(s, sym)
+    elem := derive_seq_elem(s, sym)
+    if str.Len(count) > 0 and elem != TYPE_NONE:
+        ret derive_body_seq(s, a, elem, DV_PARAM + "." + count + "()", DV_PARAM + ".get(_i)", sp)
+    end
+    ret derive_body_struct(s, a, t, sp)
+end
+
+func derive_body_of(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): str:
+    k := ty_at(s, t).kind
+    if k == TY_STRUCT:
+        ret derive_body_of_struct(s, a, t, sp)
+    end
+    if k == TY_VEC:
+        ret derive_body_seq(
+            s, a, ty_at(s, t).elem, DV_PARAM + ".len()", DV_PARAM + ".get(_i)", sp
+        )
+    end
+    if k == TY_ARRAY or k == TY_SLICE:
+        ret derive_body_seq(
+            s, a, ty_at(s, t).elem, "len(" + DV_PARAM + ")", DV_PARAM + "[_i]", sp
+        )
+    end
+    if k == TY_MAP:
+        ret derive_body_map(s, a, ty_at(s, t).key, ty_at(s, t).elem, sp)
+    end
+    if k == TY_VARIANT and enum_data_sym(s, t) != 0:
+        ret enum_data_body(s, a, t, sp)
+    end
+    ret ""
+end
+
+func derive_fn_source(s &: Sema, a &: at.Ast, t: int, fname: str, sp: co.SrcSpan): str:
+    spelling := derive_type_spelling(s, t)
+    if str.Len(spelling) == 0:
+        ret ""
+    end
+    body := derive_body_of(s, a, t, sp)
+    if str.Len(body) == 0:
+        ret ""
+    end
+    ret "func " + fname + "(" + DV_PARAM + ": " + spelling + "): str:\n" + body + DV_IND + "ret " + DV_BUF + "\nend\n"
+end

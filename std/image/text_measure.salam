@@ -1,0 +1,177 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+func _bounds_point(px: f64, a: f64, b: f64, c: f64, d: f64, gx: int, gy: int, x0 &: f64, y0 &: f64, x1 &: f64, y1 &: f64):
+    fx := gx as f64
+    fy := gy as f64
+    vx := a * fx + c * fy + px
+    vy := b * fx + d * fy
+    if vx < x0: x0 = vx end
+    if vx > x1: x1 = vx end
+    if vy < y0: y0 = vy end
+    if vy > y1: y1 = vy end
+end
+
+func _bounds_visual(f: Font, cps &: Vector<int>, st: TextStyle, x0 &: f64, y0 &: f64, x1 &: f64, y1 &: f64): bool:
+    scale := ScaleFactor(f, st.size)
+    mut a := 0.0
+    mut b := 0.0
+    mut c := 0.0
+    mut d := 0.0
+    _style_matrix(f, st, a, b, c, d)
+    mut pen := 0.0
+    mut prev := 0
+    mut any := false
+    mut i := 0
+    until i < cps.len():
+        glyph := GlyphIndex(f, cps.get(i))
+        if st.kern and prev != 0:
+            pen += (KernAdvance(f, prev, glyph) as f64) * scale
+        end
+        mut gx0 := 0
+        mut gy0 := 0
+        mut gx1 := 0
+        mut gy1 := 0
+        if GlyphBox(f, glyph, gx0, gy0, gx1, gy1):
+            _bounds_point(pen, a, b, c, d, gx0, gy0, x0, y0, x1, y1)
+            _bounds_point(pen, a, b, c, d, gx1, gy0, x0, y0, x1, y1)
+            _bounds_point(pen, a, b, c, d, gx0, gy1, x0, y0, x1, y1)
+            _bounds_point(pen, a, b, c, d, gx1, gy1, x0, y0, x1, y1)
+            any = true
+        end
+        pen += (GlyphAdvance(f, glyph) as f64) * scale + st.tracking
+        prev = glyph
+        i += 1
+    end
+    ret any
+end
+
+@en "TextBounds"
+@fa "کادر متن"
+pub func TextBounds(f: Font, text: str, st: TextStyle, x0 &: f64, y0 &: f64, x1 &: f64, y1 &: f64): bool:
+    x0 = 0.0
+    y0 = 0.0
+    x1 = 0.0
+    y1 = 0.0
+    if not FontValid(f):
+        ret false
+    end
+    mut cps := Vector {} as Vector<int>
+    _text_to_visual(text, st, cps)
+    mut bx0 := 1.0e30
+    mut by0 := 1.0e30
+    mut bx1 := 0.0 - 1.0e30
+    mut by1 := 0.0 - 1.0e30
+    any := _bounds_visual(f, cps, st, bx0, by0, bx1, by1)
+    cps.free()
+    if not any:
+        ret false
+    end
+    x0 = bx0
+    y0 = by0
+    x1 = bx1
+    y1 = by1
+    ret true
+end
+
+@en "TextInkWidth"
+@fa "عرض جوهر متن"
+pub func TextInkWidth(f: Font, text: str, st: TextStyle): f64:
+    mut x0 := 0.0
+    mut y0 := 0.0
+    mut x1 := 0.0
+    mut y1 := 0.0
+    if not TextBounds(f, text, st, x0, y0, x1, y1):
+        ret 0.0
+    end
+    ret x1 - x0
+end
+
+@en "TextInkHeight"
+@fa "ارتفاع جوهر متن"
+pub func TextInkHeight(f: Font, text: str, st: TextStyle): f64:
+    mut x0 := 0.0
+    mut y0 := 0.0
+    mut x1 := 0.0
+    mut y1 := 0.0
+    if not TextBounds(f, text, st, x0, y0, x1, y1):
+        ret 0.0
+    end
+    ret y1 - y0
+end
+
+@en "TextInkSize"
+@fa "اندازه جوهر متن"
+pub func TextInkSize(f: Font, text: str, st: TextStyle, w &: f64, h &: f64): bool:
+    mut x0 := 0.0
+    mut y0 := 0.0
+    mut x1 := 0.0
+    mut y1 := 0.0
+    ok := TextBounds(f, text, st, x0, y0, x1, y1)
+    w = x1 - x0
+    h = y1 - y0
+    ret ok
+end
+
+@en "FitSizeToWidth"
+@fa "اندازه متناسب با عرض"
+pub func FitSizeToWidth(f: Font, text: str, st: TextStyle, target_w: f64, max_size: f64): f64:
+    ret FitSizeToBox(f, text, st, target_w, 0.0, max_size)
+end
+
+@en "FitSizeToBox"
+@fa "اندازه متناسب با کادر"
+pub func FitSizeToBox(f: Font, text: str, st: TextStyle, target_w: f64, target_h: f64, max_size: f64): f64:
+    if not FontValid(f) or max_size <= 0.0:
+        ret 0.0
+    end
+    if target_w <= 0.0 and target_h <= 0.0:
+        ret 0.0
+    end
+    mut probe := st
+    mut size := max_size
+    mut pass := 0
+    until pass < 5:
+        probe.size = size
+        mut w := 0.0
+        mut h := 0.0
+        if not TextInkSize(f, text, probe, w, h):
+            ret size
+        end
+        mut ratio := 1.0e30
+        if target_w > 0.0 and w > 0.0:
+            ratio = target_w / w
+        end
+        if target_h > 0.0 and h > 0.0:
+            hr := target_h / h
+            if hr < ratio:
+                ratio = hr
+            end
+        end
+        if ratio > 1.0e29:
+            ret size
+        end
+        size = size * ratio
+        if size > max_size:
+            size = max_size
+        end
+        if size < 0.5:
+            size = 0.5
+        end
+        pass += 1
+    end
+    ret size
+end

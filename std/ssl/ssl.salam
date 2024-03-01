@@ -1,0 +1,132 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+@en "ssl"
+@fa "اس اس ال"
+package ssl
+
+import mem
+import tls
+
+@en "VERIFY_NONE"
+@fa "بدون تایید"
+pub const VERIFY_NONE := 0
+
+@en "VERIFY_PEER"
+@fa "تایید طرف مقابل"
+pub const VERIFY_PEER := 1
+
+@en "FILETYPE_PEM"
+@fa "نوع فایل پم"
+pub const FILETYPE_PEM := 1
+
+@en "TLS1_2"
+@fa "تی ال اس۱۲"
+pub const TLS1_2 := 771
+
+@en "TLS1_3"
+@fa "تی ال اس۱۳"
+pub const TLS1_3 := 772
+
+@en "CERT_OK"
+@fa "گواهی معتبر"
+pub const CERT_OK := 0 as i64
+
+const _VERIFY_FAILED := 1 as i64
+const _VERIFY_SKIPPED := 50 as i64
+
+const _ERROR_NONE := 0
+const _ERROR_SSL := 1
+const _ERROR_SYSCALL := 5
+const _ERROR_ZERO_RETURN := 6
+
+mut _last_error := ""
+
+@en "Context"
+@fa "زمینه"
+pub struct Context:
+    @en "handle"
+    @fa "دسته"
+    pub handle: void* = null
+end
+
+@en "Conn"
+@fa "اتصال"
+pub struct Conn:
+    @en "handle"
+    @fa "دسته"
+    pub handle: void* = null
+end
+
+struct _Ctx:
+    pub server: bool = false
+    pub verify: int = VERIFY_PEER
+    pub ca_file: str = ""
+    pub min_version: i64 = TLS1_2
+    pub scfg: tls.ServerConfig = tls.ServerConfig {}
+end
+
+struct _Session:
+    pub ctx: void* = null
+    pub fd: i64 = 0 - 1
+    pub host: str = ""
+    pub conn: tls.Conn = tls.Conn {}
+    pub attached: bool = false
+    pub live: bool = false
+    pub closed: bool = false
+    pub verify_result: i64 = 0 - 1
+    pub err: str = ""
+end
+
+func _ctx_of(ctx: Context): _Ctx*:
+    ret ctx.handle as _Ctx*
+end
+
+func _session_of(c: Conn): _Session*:
+    ret c.handle as _Session*
+end
+
+func _fail(s: _Session*, msg: str): bool:
+    s[0].err = msg
+    _last_error = msg
+    ret false
+end
+
+func _release(s: _Session*):
+    if s[0].attached:
+        tls.Detach(s[0].conn)
+        s[0].attached = false
+    end
+    s[0].live = false
+end
+
+func _finish(s: _Session*): bool:
+    s[0].attached = true
+    if not tls.ConnOk(s[0].conn):
+        msg := tls.ConnError(s[0].conn)
+        if msg.find("certificate verification failed") >= 0:
+            s[0].verify_result = _VERIFY_FAILED
+        end
+        _release(s)
+        ret _fail(s, msg)
+    end
+    cx := s[0].ctx as _Ctx*
+    if cx[0].min_version >= TLS1_3 and tls.Version(s[0].conn) != "TLS1.3":
+        _release(s)
+        ret _fail(s, "the peer does not support the minimum TLS version")
+    end
+    s[0].live = true
+    ret true
+end

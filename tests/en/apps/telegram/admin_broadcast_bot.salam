@@ -1,0 +1,136 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import telegram.bot
+import os
+import str
+import conv
+import collections
+
+mut known_chats := Vector {} as Vector<i64>
+
+func remember_chat(chat_id: i64):
+    if not collections.contains(known_chats, chat_id):
+        known_chats.push(chat_id)
+    end
+end
+
+func on_update(b: bot.Bot, u: bot.Update, owner_id: i64):
+    if not u.has_message: ret end
+    m := u.message
+    chat_id := m.chat.id
+    remember_chat(chat_id)
+    if not bot.IsCommand(m.text): ret end
+
+    cmd := bot.CommandName(m.text)
+    args := bot.CommandArgs(m.text)
+    is_owner := m.from_user.id == owner_id
+
+    switch cmd:
+        "start":
+            bot.SendMessage(b, chat_id, "Admin bot ready. This chat is now registered for broadcasts.")
+            break
+        end
+        "stats":
+            mut note := ""
+            count_resp := bot.GetChatMemberCount(b, chat_id)
+            if count_resp.ok: note = " (" + count_resp.result + " members in this chat)" end
+            bot.SendMessage(b, chat_id, "Registered chats: " + str.FromInt(known_chats.len() as i64) + note)
+            break
+        end
+        "ban":
+            if not is_owner:
+                bot.SendMessage(b, chat_id, "Only the bot owner can do that.")
+            else m.reply_to.user_id == 0:
+                bot.SendMessage(b, chat_id, "Reply to a user's message with /ban to ban them.")
+            else:
+                resp := bot.BanChatMember(b, chat_id, m.reply_to.user_id)
+                if resp.ok:
+                    bot.SendMessage(b, chat_id, "Banned " + m.reply_to.user_name + ".")
+                else:
+                    bot.SendMessage(b, chat_id, "Could not ban: " + resp.description)
+                end
+            end
+            break
+        end
+        "unban":
+            if not is_owner:
+                bot.SendMessage(b, chat_id, "Only the bot owner can do that.")
+            else args.len() == 0:
+                bot.SendMessage(b, chat_id, "Usage: /unban <user_id>")
+            else:
+                resp := bot.UnbanChatMember(b, chat_id, conv.ParseInt(args))
+                if resp.ok:
+                    bot.SendMessage(b, chat_id, "Unbanned.")
+                else:
+                    bot.SendMessage(b, chat_id, "Could not unban: " + resp.description)
+                end
+            end
+            break
+        end
+        "pin":
+            if not is_owner:
+                bot.SendMessage(b, chat_id, "Only the bot owner can do that.")
+            else m.reply_to.message_id == 0:
+                bot.SendMessage(b, chat_id, "Reply to a message with /pin to pin it.")
+            else:
+                resp := bot.PinChatMessage(b, chat_id, m.reply_to.message_id)
+                if resp.ok:
+                    bot.SendMessage(b, chat_id, "Pinned.")
+                else:
+                    bot.SendMessage(b, chat_id, "Could not pin: " + resp.description)
+                end
+            end
+            break
+        end
+        "broadcast":
+            if not is_owner:
+                bot.SendMessage(b, chat_id, "Only the bot owner can do that.")
+            else args.len() == 0:
+                bot.SendMessage(b, chat_id, "Usage: /broadcast <message>")
+            else:
+                mut sent := 0
+                repeat known_chats.len() in i:
+                    target := known_chats.get(i)
+                    resp := bot.SendMessage(b, target, args)
+                    if resp.ok: sent += 1 end
+                end
+                bot.SendMessage(b, chat_id, "Broadcast delivered to " + str.FromInt(sent as i64) + "/" + str.FromInt(known_chats.len() as i64) + " chats.")
+            end
+            break
+        end
+    end
+end
+
+func main:
+    token := os.Env("BOT_TOKEN")
+    owner_raw := os.Env("OWNER_ID")
+    if token.len() == 0 or owner_raw.len() == 0:
+        println "Set BOT_TOKEN (from @BotFather) and OWNER_ID (your numeric Telegram user id) before running this example."
+        ret
+    end
+    owner_id := conv.ParseInt(owner_raw)
+
+    b := bot.NewBot(token)
+    me := bot.GetMe(b)
+    if not me.ok:
+        println "could not reach Telegram with this token: " + me.description
+        ret
+    end
+    println "admin_broadcast_bot is running as @" + bot.ParseUser(me.result).username
+
+    bot.Poll(b, 30, (u: bot.Update): on_update(b, u, owner_id) end)
+end

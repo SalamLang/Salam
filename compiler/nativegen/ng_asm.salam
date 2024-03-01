@@ -1,0 +1,589 @@
+package nativegen
+
+import str
+
+k_r64 := ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"]
+k_r32 := ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi", "r8d", "r9d", "r10d", "r11d", "r12d", "r13d", "r14d", "r15d"]
+k_r16 := ["ax", "cx", "dx", "bx", "sp", "bp", "si", "di", "r8w", "r9w", "r10w", "r11w", "r12w", "r13w", "r14w", "r15w"]
+k_r8 := ["al", "cl", "dl", "bl", "spl", "bpl", "sil", "dil", "r8b", "r9b", "r10b", "r11b", "r12b", "r13b", "r14b", "r15b"]
+k_ccn := ["o", "no", "b", "ae", "e", "ne", "be", "a", "s", "ns", "p", "np", "l", "ge", "le", "g"]
+k_alun := ["add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"]
+k_shn := ["rol", "ror", "rcl", "rcr", "shl", "shr", "sal", "sar"]
+
+func regname(r: int, sz: int): str:
+    if r >= 16:
+        ret "xmm" + (r - 16)
+    end
+    if r < 0:
+        ret "?"
+    end
+    if sz == 8:
+        ret k_r64[r]
+    end
+    if sz == 4:
+        ret k_r32[r]
+    end
+    if sz == 2:
+        ret k_r16[r]
+    end
+    ret k_r8[r]
+end
+
+func ptr_kw(sz: int): str:
+    if sz == 1: ret "BYTE PTR " end
+    if sz == 2: ret "WORD PTR " end
+    if sz == 4: ret "DWORD PTR " end
+    if sz == 16: ret "XMMWORD PTR " end
+    ret "QWORD PTR "
+end
+
+func disp_str(d: i64): str:
+    if d == (0 as i64):
+        ret ""
+    end
+    if d > (0 as i64):
+        ret "+" + str.FromInt(d)
+    end
+    ret str.FromInt(d)
+end
+
+func asm_mem(g &: Ng, rm: RM, sz: int): str:
+    mut p := ""
+    if sz > 0:
+        p = ptr_kw(sz)
+    end
+    if rm.k == MK_RIP:
+        ret p + "[rip+" + tab_str(g.syms, rm.sym) + disp_str(rm.d) + "]"
+    end
+    if rm.k == MK_GOT and g.os == NG_OS_WINDOWS:
+        ret p + "[rip+" + tab_str(g.syms, rm.sym) + "]"
+    end
+    if rm.k == MK_GOT:
+        ret p + "[rip+" + tab_str(g.syms, rm.sym) + "@GOTPCREL]"
+    end
+    mut s := p + "["
+    mut first := true
+    if rm.b >= 0:
+        s = s + k_r64[rm.b]
+        first = false
+    end
+    if rm.i >= 0:
+        if not first:
+            s = s + "+"
+        end
+        s = s + k_r64[rm.i]
+        if rm.s > 1:
+            s = s + "*" + rm.s
+        end
+        first = false
+    end
+    if first:
+        s = s + str.FromInt(rm.d)
+    else:
+        s = s + disp_str(rm.d)
+    end
+    ret s + "]"
+end
+
+func asl(g &: Ng, line: str):
+    str.BufAppend(g.asm, "    " + line + "\n")
+end
+
+func asm_label_name(g &: Ng, lbl: int): str:
+    ret ".L" + str.FromInt(g.nfuncs as i64) + "_" + str.FromInt(lbl as i64)
+end
+
+func asm_sse(sz: int, base: str): str:
+    ret base + (sz == 4 ? "ss" : "sd")
+end
+
+func asm_epilogue(g &: Ng):
+    ngp := ngp_count(g)
+    if g.mc.fpo:
+        if g.mc.fpo_pad > 0:
+            asl(g, "add rsp, " + g.mc.fpo_pad)
+        end
+        mut kf := ngp - 1
+        until kf >= 0:
+            asl(g, "pop " + k_r64[g.mc.callee_used[kf]])
+            kf -= 1
+        end
+        asl(g, "ret")
+        ret
+    end
+    mut k2 := ngp
+    until k2 + 1 < g.mc.callee_used.len():
+        asl(g, "movaps " + regname(g.mc.callee_used[k2], 16) + ", XMMWORD PTR [rbp-" + g.mc.callee_used[k2 + 1] + "]")
+        k2 += 2
+    end
+    if ngp > 0:
+        asl(g, "lea rsp, [rbp-" + (8 * ngp) + "]")
+        mut k := ngp - 1
+        until k >= 0:
+            asl(g, "pop " + k_r64[g.mc.callee_used[k]])
+            k -= 1
+        end
+        asl(g, "pop rbp")
+    else:
+        asl(g, "leave")
+    end
+    asl(g, "ret")
+end
+
+func asm_ins(g &: Ng, i: int):
+    op := g.mc.op[i]
+    sz := g.mc.sz[i]
+    r0 := g.mc.r0[i]
+    r1 := g.mc.r1[i]
+    imm := g.mc.imm[i]
+    sz2 := g.mc.sz2[i]
+    switch op:
+        M_NOP, M_COPY: ret end
+        M_LABEL:
+            if i < g.mc.lalign.len() and g.mc.lalign[i]:
+                str.BufAppend(g.asm, "    .p2align 4,,10\n    .p2align 3\n")
+            end
+            str.BufAppend(g.asm, asm_label_name(g, g.mc.tgt[i]) + ":\n")
+            ret
+        end
+        M_MOV_RR: asl(g, "mov " + regname(r0, sz) + ", " + regname(r1, sz)) ret end
+        M_MOV_RI:
+            if sz == 8 and not is_imm32(imm):
+                asl(g, "movabs " + regname(r0, 8) + ", " + str.FromInt(imm))
+            else sz == 8 and imm < (0 as i64):
+                asl(g, "mov " + regname(r0, 8) + ", " + str.FromInt(imm))
+            else:
+                asl(g, "mov " + regname(r0, 4) + ", " + str.FromInt(imm & (0xFFFFFFFF as i64)))
+            end
+            ret
+        end
+        M_LD, M_LDGOT:
+            if op == M_LDGOT and g.os == NG_OS_WINDOWS:
+                asl(g, "lea " + regname(r0, 8) + ", " + asm_mem(g, rm_of(g, i), 0))
+                ret
+            end
+            asl(g, "mov " + regname(r0, op == M_LDGOT ? 8 : sz) + ", " + asm_mem(g, rm_of(g, i), op == M_LDGOT ? 8 : sz))
+            ret
+        end
+        M_LDZX: asl(g, "movzx " + regname(r0, 4) + ", " + asm_mem(g, rm_of(g, i), sz2)) ret end
+        M_LDSX:
+            if sz2 == 4:
+                asl(g, "movsxd " + regname(r0, 8) + ", " + asm_mem(g, rm_of(g, i), 4))
+            else:
+                asl(g, "movsx " + regname(r0, sz) + ", " + asm_mem(g, rm_of(g, i), sz2))
+            end
+            ret
+        end
+        M_ST: asl(g, "mov " + asm_mem(g, rm_of(g, i), sz) + ", " + regname(r1, sz)) ret end
+        M_STI: asl(g, "mov " + asm_mem(g, rm_of(g, i), sz) + ", " + str.FromInt(imm)) ret end
+        M_LEA: asl(g, "lea " + regname(r0, 8) + ", " + asm_mem(g, rm_of(g, i), 0)) ret end
+        M_ALU_RR: asl(g, k_alun[g.mc.cc[i]] + " " + regname(r0, sz) + ", " + regname(r1, sz)) ret end
+        M_ALU_RI: asl(g, k_alun[g.mc.cc[i]] + " " + regname(r0, sz) + ", " + str.FromInt(imm)) ret end
+        M_ALU_RM: asl(g, k_alun[g.mc.cc[i]] + " " + regname(r0, sz) + ", " + asm_mem(g, rm_of(g, i), sz)) ret end
+        M_ALU_MR: asl(g, k_alun[g.mc.cc[i]] + " " + asm_mem(g, rm_of(g, i), sz) + ", " + regname(r1, sz)) ret end
+        M_ALU_MI: asl(g, k_alun[g.mc.cc[i]] + " " + asm_mem(g, rm_of(g, i), sz) + ", " + str.FromInt(imm)) ret end
+        M_TEST_RR: asl(g, "test " + regname(r0, sz) + ", " + regname(r1, sz)) ret end
+        M_TEST_RI: asl(g, "test " + regname(r0, sz) + ", " + str.FromInt(imm)) ret end
+        M_IMUL_RR: asl(g, "imul " + regname(r0, sz) + ", " + regname(r1, sz)) ret end
+        M_IMUL_RRI: asl(g, "imul " + regname(r0, sz) + ", " + regname(r1, sz) + ", " + str.FromInt(imm)) ret end
+        M_SHIFT_RI: asl(g, k_shn[g.mc.cc[i]] + " " + regname(r0, sz) + ", " + str.FromInt(imm)) ret end
+        M_SHIFT_RC: asl(g, k_shn[g.mc.cc[i]] + " " + regname(r0, sz) + ", cl") ret end
+        M_UNARY: asl(g, (g.mc.cc[i] == UN_NEG ? "neg " : "not ") + regname(r0, sz)) ret end
+        M_CQO: asl(g, sz == 8 ? "cqo" : "cdq") ret end
+        M_DIV: asl(g, ((g.mc.cc[i] & 1) == 1 ? "idiv " : "div ") + regname(r1, sz)) ret end
+        M_MULHI: asl(g, (g.mc.cc[i] == 1 ? "imul " : "mul ") + regname(r1, 8)) ret end
+        M_SETCC: asl(g, "set" + k_ccn[g.mc.cc[i]] + " " + regname(r0, 1)) ret end
+        M_MOVZX_RR: asl(g, "movzx " + regname(r0, 4) + ", " + regname(r1, sz2)) ret end
+        M_MOVSX_RR:
+            if sz2 == 4:
+                asl(g, "movsxd " + regname(r0, 8) + ", " + regname(r1, 4))
+            else:
+                asl(g, "movsx " + regname(r0, sz) + ", " + regname(r1, sz2))
+            end
+            ret
+        end
+        M_CMOV: asl(g, "cmov" + k_ccn[g.mc.cc[i]] + " " + regname(r0, sz) + ", " + regname(r1, sz)) ret end
+        M_JMP: asl(g, "jmp " + asm_label_name(g, g.mc.tgt[i])) ret end
+        M_JCC: asl(g, "j" + k_ccn[g.mc.cc[i]] + " " + asm_label_name(g, g.mc.tgt[i])) ret end
+        M_CALL: asl(g, "call " + tab_str(g.syms, g.mc.msym[i])) ret end
+        M_CALLR: asl(g, "call " + regname(r1, 8)) ret end
+        M_RET: asm_epilogue(g) ret end
+        M_UD2: asl(g, "ud2") ret end
+        M_XCHG: asl(g, "xchg " + asm_mem(g, rm_of(g, i), sz) + ", " + regname(r0, sz)) ret end
+        M_LXADD: asl(g, "lock xadd " + asm_mem(g, rm_of(g, i), sz) + ", " + regname(r0, sz)) ret end
+        M_LCMPXCHG: asl(g, "lock cmpxchg " + asm_mem(g, rm_of(g, i), sz) + ", " + regname(r1, sz)) ret end
+        M_MFENCE: asl(g, "mfence") ret end
+        M_FMOV_RR: asl(g, "movaps " + regname(r0, 16) + ", " + regname(r1, 16)) ret end
+        M_FLD: asl(g, asm_sse(sz, "mov") + " " + regname(r0, 16) + ", " + asm_mem(g, rm_of(g, i), sz)) ret end
+        M_FST: asl(g, asm_sse(sz, "mov") + " " + asm_mem(g, rm_of(g, i), sz) + ", " + regname(r1, 16)) ret end
+        M_FOP_RR, M_FOP_RM:
+            mut nm := "add"
+            c := g.mc.cc[i]
+            if c == FO_MUL: nm = "mul" end
+            if c == FO_SUB: nm = "sub" end
+            if c == FO_DIV: nm = "div" end
+            if op == M_FOP_RR:
+                asl(g, asm_sse(sz, nm) + " " + regname(r0, 16) + ", " + regname(r1, 16))
+            else:
+                asl(g, asm_sse(sz, nm) + " " + regname(r0, 16) + ", " + asm_mem(g, rm_of(g, i), sz))
+            end
+            ret
+        end
+        M_SQRT: asl(g, asm_sse(sz, "sqrt") + " " + regname(r0, 16) + ", " + regname(r1, 16)) ret end
+        M_UCOMI: asl(g, asm_sse(sz, "ucomi") + " " + regname(r0, 16) + ", " + regname(r1, 16)) ret end
+        M_CVTSI2F: asl(g, "cvtsi2" + (sz == 4 ? "ss " : "sd ") + regname(r0, 16) + ", " + regname(r1, sz2)) ret end
+        M_CVTF2SI: asl(g, "cvtt" + (sz == 4 ? "ss" : "sd") + "2si " + regname(r0, sz2) + ", " + regname(r1, 16)) ret end
+        M_CVTF2F: asl(g, (sz == 8 ? "cvtss2sd " : "cvtsd2ss ") + regname(r0, 16) + ", " + regname(r1, 16)) ret end
+        M_MOVQ_XG: asl(g, (sz == 8 ? "movq " : "movd ") + regname(r0, 16) + ", " + regname(r1, sz)) ret end
+        M_MOVQ_GX: asl(g, (sz == 8 ? "movq " : "movd ") + regname(r0, sz) + ", " + regname(r1, 16)) ret end
+        M_VLD: asl(g, "movups " + regname(r0, 16) + ", " + asm_mem(g, rm_of(g, i), 16)) ret end
+        M_VST: asl(g, "movups " + asm_mem(g, rm_of(g, i), 16) + ", " + regname(r1, 16)) ret end
+        M_VOP_RR:
+            mut vn := "add"
+            vc := g.mc.cc[i]
+            if vc == FO_MUL: vn = "mul" end
+            if vc == FO_SUB: vn = "sub" end
+            if vc == FO_DIV: vn = "div" end
+            if vc == 0xD4:
+                asl(g, "paddq " + regname(r0, 16) + ", " + regname(r1, 16))
+                ret
+            end
+            if vc == 0xFE:
+                asl(g, "paddd " + regname(r0, 16) + ", " + regname(r1, 16))
+                ret
+            end
+            pn := vint_name(vc)
+            if pn != "":
+                asl(g, pn + " " + regname(r0, 16) + ", " + regname(r1, 16))
+                ret
+            end
+            asl(g, vn + (sz == 8 ? "pd " : "ps ") + regname(r0, 16) + ", " + regname(r1, 16))
+            ret
+        end
+        M_SHUFPS: asl(g, "shufps " + regname(r0, 16) + ", " + regname(r1, 16) + ", " + str.FromInt(imm)) ret end
+        M_UNPCKLPD: asl(g, "unpcklpd " + regname(r0, 16) + ", " + regname(r1, 16)) ret end
+        M_PSHUFD: asl(g, "pshufd " + regname(r0, 16) + ", " + regname(r1, 16) + ", " + str.FromInt(imm)) ret end
+        M_VSHI: asl(g, vshift_name(g.mc.cc[i], g.mc.sz2[i]) + " " + regname(r0, 16) + ", " + str.FromInt(imm)) ret end
+        M_VLD32: asl(g, "movd " + regname(r0, 16) + ", " + asm_mem(g, rm_of(g, i), 4)) ret end
+        M_VST32: asl(g, "movd " + asm_mem(g, rm_of(g, i), 4) + ", " + regname(r1, 16)) ret end
+        M_XORPS: asl(g, "xorps " + regname(r0, 16) + ", " + regname(r1, 16)) ret end
+        M_ANDPS: asl(g, "andps " + regname(r0, 16) + ", " + regname(r1, 16)) ret end
+    end
+    asl(g, "# op " + op)
+end
+
+func asm_fast_exit(g &: Ng, name: str):
+    sz := g.fx_w ? 8 : 4
+    rn := regname(g.fx_reg, sz)
+    if g.fx_imm == (0 as i64):
+        asl(g, "test " + rn + ", " + rn)
+    else:
+        asl(g, "cmp " + rn + ", " + str.FromInt(g.fx_imm))
+    end
+    lbl := ".Lfx_" + name
+    asl(g, "j" + k_ccn[inv_cc(g.fx_cc)] + " " + lbl)
+    if g.fx_kind == 1:
+        if g.fx_rimm == (0 as i64):
+            asl(g, "xor eax, eax")
+        else g.fx_rw and g.fx_rimm < (0 as i64):
+            asl(g, "mov rax, " + str.FromInt(g.fx_rimm))
+        else:
+            asl(g, "mov eax, " + str.FromInt(g.fx_rimm))
+        end
+    else g.fx_kind == 2:
+        asl(g, "mov rax, " + regname(g.fx_rreg, 8))
+    end
+    asl(g, "ret")
+    str.BufAppend(g.asm, lbl + ":\n")
+end
+
+func asm_function(g &: Ng):
+    g.asm_fsym.push(g.f_sym)
+    g.asm_fpos.push(str.BufLen(g.asm) as int)
+    name := tab_str(g.syms, g.f_sym)
+    str.BufAppend(g.asm, "\n    .text\n    .p2align 4\n")
+    if not g.sy_local[g.f_sym]:
+        str.BufAppend(g.asm, "    .globl " + name + "\n")
+    end
+    str.BufAppend(g.asm, "    .type " + name + ", @function\n" + name + ":\n")
+    if g.fx_on:
+        asm_fast_exit(g, name)
+    end
+    ngp := ngp_count(g)
+    if g.mc.fpo:
+        repeat ngp in kf:
+            asl(g, "push " + k_r64[g.mc.callee_used[kf]])
+        end
+        if g.mc.fpo_pad > 0:
+            asl(g, "sub rsp, " + g.mc.fpo_pad)
+        end
+    else:
+        asl(g, "push rbp")
+        asl(g, "mov rbp, rsp")
+        repeat ngp in k:
+            asl(g, "push " + k_r64[g.mc.callee_used[k]])
+        end
+    end
+    if g.mc.frame_size > 0 and not g.mc.fpo:
+        if g.os == NG_OS_WINDOWS and g.mc.frame_size >= 4096:
+            asl(g, "mov eax, " + g.mc.frame_size)
+            asl(g, "call ___chkstk_ms")
+            asl(g, "sub rsp, rax")
+        else:
+            asl(g, "sub rsp, " + g.mc.frame_size)
+        end
+    end
+    mut k2 := ngp
+    until k2 + 1 < g.mc.callee_used.len():
+        asl(g, "movaps XMMWORD PTR [rbp-" + g.mc.callee_used[k2 + 1] + "], " + regname(g.mc.callee_used[k2], 16))
+        k2 += 2
+    end
+    repeat g.mc.op.len() in i:
+        asm_ins(g, i)
+    end
+    str.BufAppend(g.asm, "    .size " + name + ", .-" + name + "\n")
+end
+
+func asm_section_name(sec: int): str:
+    switch sec:
+        SEC_RODATA: ret "    .section .rodata" end
+        SEC_CONST: ret "    .section .rodata.salam,\"a\"" end
+        SEC_DATA: ret "    .data" end
+        SEC_BSS: ret "    .bss" end
+        SEC_INIT: ret "    .section .init_array,\"aw\"" end
+        SEC_FINI: ret "    .section .fini_array,\"aw\"" end
+    end
+    ret "    .text"
+end
+
+func sort_pairs(keys &: Vector<int>, vals &: Vector<int>):
+    n := keys.len()
+    mut tk := Vector {} as Vector<int>
+    mut tv := Vector {} as Vector<int>
+    repeat n:
+        tk.push(0)
+        tv.push(0)
+    end
+    mut w := 1
+    until w < n:
+        mut lo := 0
+        until lo < n:
+            mid := lo + w < n ? lo + w : n
+            hi := lo + 2 * w < n ? lo + 2 * w : n
+            mut a := lo
+            mut b := mid
+            mut k := lo
+            until k < hi:
+                if a < mid and (b >= hi or keys[a] <= keys[b]):
+                    tk[k] = keys[a]
+                    tv[k] = vals[a]
+                    a += 1
+                else:
+                    tk[k] = keys[b]
+                    tv[k] = vals[b]
+                    b += 1
+                end
+                k += 1
+            end
+            lo += 2 * w
+        end
+        repeat n in j:
+            keys[j] = tk[j]
+            vals[j] = tv[j]
+        end
+        w = w * 2
+    end
+    tk.free()
+    tv.free()
+end
+
+func asm_data(g &: Ng, sec: int):
+    n := sec_len(g, sec)
+    if n == 0:
+        ret
+    end
+    str.BufAppend(g.asm, "\n" + asm_section_name(sec) + "\n    .p2align " + str.FromInt(log2i(g.sec_align[sec]) as i64) + "\n")
+    mut soff := Vector {} as Vector<int>
+    mut ssym := Vector {} as Vector<int>
+    repeat g.sy_kind.len() in s:
+        if g.sy_def[s] and g.sy_sec[s] == sec:
+            soff.push(g.sy_off[s])
+            ssym.push(s)
+        end
+    end
+    sort_pairs(soff, ssym)
+    mut roff := Vector {} as Vector<int>
+    mut rid := Vector {} as Vector<int>
+    repeat g.r_sec.len() in r:
+        if g.r_sec[r] == sec:
+            roff.push(g.r_off[r])
+            rid.push(r)
+        end
+    end
+    sort_pairs(roff, rid)
+    mut pos := 0
+    mut si := 0
+    mut ri := 0
+    until pos < n:
+        until si < soff.len() and soff[si] <= pos:
+            s2 := ssym[si]
+            nm := tab_str(g.syms, s2)
+            if not g.sy_local[s2]:
+                str.BufAppend(g.asm, "    .globl " + nm + "\n")
+            end
+            str.BufAppend(g.asm, nm + ":\n")
+            si += 1
+        end
+        if ri < roff.len() and roff[ri] == pos:
+            r2 := rid[ri]
+            asl(g, ".quad " + tab_str(g.syms, g.r_sym[r2]) + disp_str(g.r_add[r2]))
+            pos += 8
+            ri += 1
+            continue
+        end
+        mut stop := n
+        if si < soff.len() and soff[si] < stop:
+            stop = soff[si]
+        end
+        if ri < roff.len() and roff[ri] < stop:
+            stop = roff[ri]
+        end
+        if sec == SEC_BSS:
+            asl(g, ".zero " + (stop - pos))
+            pos = stop
+            continue
+        end
+        if stop > pos + 16:
+            stop = pos + 16
+        end
+        mut line := ".byte "
+        mut q := pos
+        until q < stop:
+            if q > pos:
+                line = line + ","
+            end
+            line = line + sec_byte(g, sec, q)
+            q += 1
+        end
+        asl(g, line)
+        pos = stop
+    end
+    soff.free()
+    ssym.free()
+    roff.free()
+    rid.free()
+end
+
+func log2i(v: int): int:
+    mut n := 0
+    until (1 << n) < v:
+        n += 1
+    end
+    ret n
+end
+
+func write_text(path: str, text: str): bool:
+    mut o := Ob {}
+    p := sp(text)
+    n := str_len_of(text)
+    repeat n in i:
+        o.b.push(p[i])
+    end
+    ok := write_file(path, o)
+    o.b.free()
+    ret ok
+end
+
+func asm_live_text(g &: Ng, b &: str.StringBuilder):
+    full := str.BufStr(g.asm)
+    total := str.BufLen(g.asm) as int
+    nf := g.asm_fsym.len()
+    if nf == 0:
+        str.BufAppend(b, full)
+        ret
+    end
+    if g.asm_fpos[0] > 0:
+        str.BufAppend(b, str.SubstrIn(full, 0, g.asm_fpos[0]))
+    end
+    repeat nf in k:
+        st := g.asm_fpos[k]
+        en := k + 1 < nf ? g.asm_fpos[k + 1] : total
+        fs := g.asm_fsym[k]
+        if g.sy_live.len() == 0 or (fs < g.sy_live.len() and g.sy_live[fs]):
+            str.BufAppend(b, str.SubstrIn(full, st, en - st))
+        end
+    end
+end
+
+func vint_name(vc: int): str:
+    switch vc:
+        0xFA: ret "psubd" end
+        0xFB: ret "psubq" end
+        0xDB: ret "pand" end
+        0xDF: ret "pandn" end
+        0xEB: ret "por" end
+        0xEF: ret "pxor" end
+        0x66: ret "pcmpgtd" end
+        0x76: ret "pcmpeqd" end
+        0x60: ret "punpcklbw" end
+        0x61: ret "punpcklwd" end
+        0x6C: ret "punpcklqdq" end
+        0x6B: ret "packssdw" end
+        0xF4: ret "pmuludq" end
+        0xFC: ret "paddb" end
+        0xFD: ret "paddw" end
+        0xF6: ret "psadbw" end
+        0xF9: ret "psubw" end
+        0xD5: ret "pmullw" end
+        0x75: ret "pcmpeqw" end
+        0x65: ret "pcmpgtw" end
+        0xD9: ret "psubusw" end
+        0xF8: ret "psubb" end
+        0x74: ret "pcmpeqb" end
+        0x64: ret "pcmpgtb" end
+        0xDE: ret "pmaxub" end
+        0xDA: ret "pminub" end
+        0x62: ret "punpckldq" end
+        0x67: ret "packuswb" end
+    end
+    ret ""
+end
+
+func vshift_name(opc: int, ext: int): str:
+    if opc == 0x71:
+        if ext == 2: ret "psrlw" end
+        if ext == 4: ret "psraw" end
+        ret "psllw"
+    end
+    if opc == 0x72:
+        if ext == 2: ret "psrld" end
+        if ext == 4: ret "psrad" end
+        ret "pslld"
+    end
+    if ext == 2: ret "psrlq" end
+    ret "psllq"
+end
+
+pub func WriteAsm(g &: Ng, path: str): bool:
+    if g.opt and not g.dce_done:
+        gdce(g)
+        g.dce_done = true
+    end
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "    .intel_syntax noprefix\n")
+    asm_live_text(g, b)
+    hold := g.asm
+    g.asm = b
+    asm_data(g, SEC_RODATA)
+    asm_data(g, SEC_CONST)
+    asm_data(g, SEC_DATA)
+    asm_data(g, SEC_BSS)
+    asm_data(g, SEC_INIT)
+    asm_data(g, SEC_FINI)
+    str.BufAppend(g.asm, "\n    .section .note.GNU-stack,\"\",@progbits\n")
+    ok := write_text(path, str.BufStr(g.asm))
+    mut done := g.asm
+    g.asm = hold
+    str.BufFree(done)
+    ret ok
+end

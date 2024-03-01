@@ -1,0 +1,265 @@
+package nativegen
+
+func full_mask(g &: Ng, t: int): u64:
+    bits := int_bits(g, t)
+    if bits >= 64:
+        ret 0 - 1 as u64
+    end
+    if bits <= 0:
+        ret 0
+    end
+    ret ((1 as u64) << (bits as u64)) - (1 as u64)
+end
+
+func low_upto(d: u64): u64:
+    if d == (0 as u64):
+        ret 0
+    end
+    mut m := d
+    m = m | (m >> (1 as u64))
+    m = m | (m >> (2 as u64))
+    m = m | (m >> (4 as u64))
+    m = m | (m >> (8 as u64))
+    m = m | (m >> (16 as u64))
+    m = m | (m >> (32 as u64))
+    ret m
+end
+
+func db_int(g &: Ng, v: int): bool:
+    if v < 0 or (g.v_kind[v] != VK_INS and g.v_kind[v] != VK_ARG):
+        ret false
+    end
+    t := g.v_ty[v]
+    ret g.t_kind[t] == TK_INT and int_bits(g, t) >= 8
+end
+
+func db_need(g &: Ng, dem &: Vector<u64>, v: int, m: u64, changed &: bool):
+    if not db_int(g, v):
+        ret
+    end
+    nm := (dem[v] | m) & full_mask(g, g.v_ty[v])
+    if nm != dem[v]:
+        dem[v] = nm
+        changed = true
+    end
+end
+
+func db_all(g &: Ng, dem &: Vector<u64>, v: int, changed &: bool):
+    if v >= 0 and db_int(g, v):
+        db_need(g, dem, v, full_mask(g, g.v_ty[v]), changed)
+    end
+end
+
+func db_ins(g &: Ng, dem &: Vector<u64>, i: int, changed &: bool):
+    op := g.i_op[i]
+    r := g.i_res[i]
+    mut d := 0 as u64
+    if r >= 0 and r < dem.len():
+        d = dem[r]
+    end
+    a := g.i_a[i]
+    b := g.i_b[i]
+    switch op:
+        OP_ADD, OP_SUB, OP_MUL:
+            lo := low_upto(d)
+            db_need(g, dem, a, lo, changed)
+            db_need(g, dem, b, lo, changed)
+            ret
+        end
+        OP_AND:
+            if is_cint(g, b):
+                db_need(g, dem, a, d & uval(g, g.v_ty[b], g.v_i[b]), changed)
+                ret
+            end
+            db_need(g, dem, a, d, changed)
+            db_need(g, dem, b, d, changed)
+            ret
+        end
+        OP_OR, OP_XOR:
+            db_need(g, dem, a, d, changed)
+            db_need(g, dem, b, d, changed)
+            ret
+        end
+        OP_SHL:
+            if is_cint(g, b) and g.v_i[b] >= (0 as i64) and g.v_i[b] < (64 as i64):
+                db_need(g, dem, a, d >> (g.v_i[b] as u64), changed)
+            else:
+                db_need(g, dem, a, low_upto(d), changed)
+                db_all(g, dem, b, changed)
+            end
+            ret
+        end
+        OP_TRUNC:
+            db_need(g, dem, a, d & full_mask(g, g.i_ty[i]), changed)
+            ret
+        end
+        OP_ZEXT:
+            if db_int(g, a):
+                db_need(g, dem, a, d & full_mask(g, g.v_ty[a]), changed)
+            end
+            ret
+        end
+        OP_SELECT:
+            db_all(g, dem, a, changed)
+            db_need(g, dem, b, d, changed)
+            db_need(g, dem, g.i_c[i], d, changed)
+            ret
+        end
+        OP_PHI:
+            ps := g.i_ps[i]
+            repeat g.i_pcount[i] in k:
+                db_need(g, dem, g.pool[ps + 2 * k], d, changed)
+            end
+            ret
+        end
+    end
+    m := val_mask(op)
+    if (m & 1) != 0: db_all(g, dem, a, changed) end
+    if (m & 2) != 0: db_all(g, dem, b, changed) end
+    if (m & 4) != 0: db_all(g, dem, g.i_c[i], changed) end
+    if op == OP_CALL:
+        repeat g.i_pcount[i] in k2:
+            db_all(g, dem, g.pool[g.i_ps[i] + 3 * k2], changed)
+        end
+    end
+end
+
+func op_demand(g &: Ng, dem &: Vector<u64>, u: int, v: int, slot: int): u64:
+    op := g.i_op[u]
+    r := g.i_res[u]
+    mut d := full_mask(g, g.v_ty[v])
+    if r >= 0 and r < dem.len():
+        d = dem[r]
+    end
+    switch op:
+        OP_ADD, OP_SUB, OP_MUL: ret low_upto(d) end
+        OP_OR, OP_XOR, OP_PHI: ret d end
+        OP_AND:
+            b := g.i_b[u]
+            if slot == 0 and is_cint(g, b):
+                ret d & uval(g, g.v_ty[b], g.v_i[b])
+            end
+            ret d
+        end
+        OP_SHL:
+            b2 := g.i_b[u]
+            if slot == 0 and is_cint(g, b2) and g.v_i[b2] >= (0 as i64) and g.v_i[b2] < (64 as i64):
+                ret d >> (g.v_i[b2] as u64)
+            end
+            if slot == 0:
+                ret low_upto(d)
+            end
+            ret full_mask(g, g.v_ty[v])
+        end
+        OP_TRUNC: ret d & full_mask(g, g.i_ty[u]) end
+        OP_SELECT:
+            if slot != 0:
+                ret d
+            end
+        end
+    end
+    ret full_mask(g, g.v_ty[v])
+end
+
+func mask_src(g &: Ng, v: int, c &: u64): int:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    if g.i_op[d] != OP_AND or not is_cint(g, g.i_b[d]):
+        ret 0 - 1
+    end
+    c = uval(g, g.v_ty[g.i_b[d]], g.v_i[g.i_b[d]])
+    ret g.i_a[d]
+end
+
+func db_rewrite(g &: Ng, dem &: Vector<u64>, u: int): bool:
+    op := g.i_op[u]
+    if not (op == OP_ADD or op == OP_SUB or op == OP_MUL or op == OP_OR or op == OP_XOR or op == OP_AND or op == OP_SHL or op == OP_TRUNC or op == OP_SELECT or op == OP_PHI):
+        ret false
+    end
+    mut any := false
+    if op == OP_PHI:
+        ps := g.i_ps[u]
+        repeat g.i_pcount[u] in k:
+            v := g.pool[ps + 2 * k]
+            mut c := 0 as u64
+            x := mask_src(g, v, c)
+            if x >= 0 and (op_demand(g, dem, u, v, 0) & ~c) == (0 as u64):
+                g.pool[ps + 2 * k] = x
+                any = true
+            end
+        end
+        ret any
+    end
+    repeat 3 in slot:
+        mut v2 := 0 - 1
+        if slot == 0: v2 = g.i_a[u] end
+        if slot == 1: v2 = g.i_b[u] end
+        if slot == 2: v2 = g.i_c[u] end
+        if slot == 2 and op != OP_SELECT:
+            continue
+        end
+        if slot == 1 and op == OP_TRUNC:
+            continue
+        end
+        mut c2 := 0 as u64
+        x2 := mask_src(g, v2, c2)
+        if x2 >= 0 and (op_demand(g, dem, u, v2, slot) & ~c2) == (0 as u64):
+            if slot == 0: g.i_a[u] = x2 end
+            if slot == 1: g.i_b[u] = x2 end
+            if slot == 2: g.i_c[u] = x2 end
+            any = true
+        end
+    end
+    ret any
+end
+
+func demanded_bits(g &: Ng): bool:
+    nv := g.v_kind.len()
+    mut dem := Vector {} as Vector<u64>
+    repeat nv:
+        dem.push(0 as u64)
+    end
+    mut changed := true
+    mut rounds := 0
+    until changed and rounds < 20:
+        changed = false
+        rounds += 1
+        mut r := g.b_rpo.len() - 1
+        until r >= 0:
+            b := g.b_rpo[r]
+            mut i := g.b_last[b]
+            until i >= 0:
+                db_ins(g, dem, i, changed)
+                i = g.i_prev[i]
+            end
+            r -= 1
+        end
+    end
+    mut any := false
+    each b2 in g.b_rpo:
+        mut j := g.b_first[b2]
+        until j >= 0:
+            if db_rewrite(g, dem, j):
+                any = true
+            end
+            j = g.i_next[j]
+        end
+    end
+    if any:
+        each b3 in g.b_rpo:
+            mut k := g.b_first[b3]
+            until k >= 0:
+                op := g.i_op[k]
+                rr := g.i_res[k]
+                if (op == OP_ADD or op == OP_SUB or op == OP_MUL or op == OP_SHL) and rr >= 0 and dem[rr] != full_mask(g, g.v_ty[rr]):
+                    g.i_f[k] = g.i_f[k] & (0 - 1 - IF_NSW)
+                end
+                k = g.i_next[k]
+            end
+        end
+    end
+    dem.free()
+    ret any
+end

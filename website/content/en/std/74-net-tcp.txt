@@ -1,0 +1,137 @@
+pkg.en = net/tcp
+pkg.name = net/tcp
+pkg.group = Network
+pkg.summary = TCP servers and clients: listening, connecting, reading and writing, TLS and a connection pool.
+pkg.title = The net/tcp package in Salam | TCP sockets
+pkg.description = The net/tcp package in Salam: building a TCP server, connecting to one, reading and writing, deadlines, TLS and a connection pool, with examples.
+pkg.import = net.tcp
+pkg.intro <<
+<p>TCP is the base of most internet protocols: a reliable, ordered stream of bytes between two programs. A server listens on a port with <code>Bind</code> and takes each new client with <code>Accept</code>; a client connects with <code>Dial</code>.</p>
+<p><code>Accept</code> and <code>Read</code> wait until something arrives, so a server that talks to several clients hands each connection to a thread, as the worker guide shows. Every example runs on <code>127.0.0.1</code> and needs no network.</p>
+<p>Use this package for your own protocols and for talking to servers that have no client in the standard library. For HTTP use <a href="/std/net/http/">net/http</a>; for messages that must not be split or ordered, <a href="/std/net/udp/">net/udp</a>; for live two-way traffic with browsers, <a href="/std/net/websocket/">net/websocket</a>. <a href="/std/tls/">tls</a> adds encryption on top of a connection from here.</p>
+<h3 id="pitfalls">What trips people up</h3>
+<ul>
+<li><strong>An empty <code>Read</code> means three things.</strong> The peer closed the connection, the read deadline passed, or an error happened; all return <code>""</code>. A message that starts with a zero byte also comes back empty, and text after a zero byte is lost, so use <code>ReadBytes</code> for binary data.</li>
+<li><strong><code>Write</code> may send only part of the text.</strong> It makes one system call and returns how many bytes went out. For large data, compare the result with the length, or use <code>WriteBytes</code>, which loops until everything is sent.</li>
+<li><strong>Messages are not kept apart.</strong> TCP is a byte stream; frame your messages with a delimiter or a length, as the framing guide does.</li>
+<li><strong><code>Bind</code> listens on every IPv4 interface</strong>, not only on <code>127.0.0.1</code>, so a test server is reachable from the network unless a firewall stops it. IPv6 clients cannot reach it; <code>Dial</code> itself tries every address a name resolves to, IPv6 included.</li>
+<li><strong>Nothing stops the program on failure.</strong> <code>Bind</code>, <code>Accept</code> and <code>Dial</code> return a value with fd -1; check <code>Ok</code> or <code>ConnOk</code>.</li>
+</ul>
+<h2 id="guide-request-reply">A request and reply protocol</h2>
+<p>Most small protocols take turns: the client sends one request, the server sends one reply, and so on until the client hangs up. The server below reads in a loop and stops when <code>Read</code> returns an empty string, which is how TCP tells you the other side closed the connection. The client waits for each reply before it sends the next request, so every <code>Read</code> sees exactly one message.</p>
+{{example.net-tcp-guide-commands}}
+<p>The server runs in its own thread with <code>spawn</code> and the main program waits for it with <code>join</code>. A real server would call <code>Accept</code> in a loop and hand each connection to a worker; while one client is served, the others wait in the queue of the listening socket.</p>
+
+<h2 id="guide-workers">Serving several clients with worker threads</h2>
+<p>A server that reads from one client at a time stalls everyone behind a slow client. The usual shape is one thread that only accepts, a <a href="/std/chan/">chan</a> that carries the new connections, and a few worker threads that serve them. A thread receives the connection as its socket number, <code>conn.fd</code>, and turns it back into a <code>Conn</code> with <code>ConnFromFd</code>.</p>
+{{example.net-tcp-guide-workers}}
+<p>The three clients connect before any of them sends a word, and only two workers exist, so the third connection waits in the channel until a worker is free; it is still answered. Closing the channel after the last <code>Accept</code> makes <code>recv</code> report <code>ok</code> false, which ends the worker loops so <code>join</code> returns. In a long-running server the acceptor loops forever, and the number of workers caps how many clients are served at the same time.</p>
+
+<h2 id="guide-framing">Messages in a byte stream</h2>
+<p>TCP moves bytes, not messages. Two writes can arrive as one read, and one write can arrive split over several reads. The lock step in the previous section hides that, but as soon as the other side sends several messages in a row you need a frame: a delimiter such as a newline, or a length in front of each message. The program below sends four lines in three uneven writes and puts them back together by keeping the unfinished part of the last read in <code>pending</code>.</p>
+{{example.net-tcp-guide-framing}}
+<p>For binary data, send a fixed size header with the length and read until you have that many bytes. <code>ReadBytes</code> and <code>WriteBytes</code> work on raw memory for that, and they do not stop at a zero byte the way a <code>str</code> does.</p>
+
+<h2 id="guide-timeouts">Timeouts and failed connections</h2>
+<p>Without a deadline, <code>Read</code> waits forever for a peer that never answers. <code>SetReadDeadline</code> limits how long one read may wait, <code>SetWriteDeadline</code> does the same for writes, and <code>SetDeadline</code> sets both. When the time runs out the read returns an empty string, the same as a closed connection, so treat both as the end of the conversation. <code>Dial</code> does not stop the program when nothing listens on the port: it returns a connection for which <code>ConnOk</code> is false.</p>
+{{example.net-tcp-guide-timeouts}}
+
+<h2 id="guide-http">A tiny HTTP server</h2>
+<p>HTTP/1.1 is text over TCP, so a few lines are enough for a status page or a health check. The request starts with a line such as <code>GET /hello HTTP/1.1</code>; <code>WriteHTTP</code> writes the status line, <code>Content-Type</code>, <code>Content-Length</code> and <code>Connection: close</code> for you. The client side shows the other half: it reads until the server closes the connection and splits the head from the body at the first empty line.</p>
+{{example.net-tcp-guide-http}}
+<p>This is fine for a debug endpoint. For a real web service use <a href="/std/net/http/">net/http</a>, which handles keep alive, chunked bodies, headers and routing.</p>
+
+<h2 id="guide-tls">Encrypted connections</h2>
+<p><code>DialTLS</code> connects and runs the TLS handshake in one call and returns a <code>tls.Conn</code>. From then on you read and write with the functions of the <a href="/std/tls/">tls</a> package, not with <code>tcp.Read</code>, because the bytes on the socket are encrypted. This example needs the internet; it prints the TLS version and the first line of the answer, which is <code>HTTP/1.1 200 OK</code> for example.com.</p>
+{{example.net-tcp-guide-https}}
+<p>Protocols such as SMTP and IMAP start in plain text and switch to TLS later with a STARTTLS command. For those, <code>Dial</code> first, talk until the server agrees, then call <code>UpgradeTLS</code> on the same connection.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Listen for clients</td><td><code>Bind</code>, then <code>Accept</code> in a loop; <code>Port</code> when you bound port 0</td></tr>
+<tr><td>Connect to a server</td><td><code>Dial</code>, then check <code>ConnOk</code></td></tr>
+<tr><td>Send and receive text</td><td><code>Write</code> and <code>Read</code></td></tr>
+<tr><td>Send and receive binary data</td><td><code>WriteBytes</code> and <code>ReadBytes</code></td></tr>
+<tr><td>Never hang on a silent peer</td><td><code>SetReadDeadline</code>, <code>SetWriteDeadline</code> or <code>SetDeadline</code></td></tr>
+<tr><td>Interactive traffic with small packets</td><td><code>SetNoDelay</code></td></tr>
+<tr><td>Notice dead idle connections</td><td><code>SetKeepAlive</code></td></tr>
+<tr><td>HTTPS and other TLS protocols</td><td><code>DialTLS</code>, or <code>UpgradeTLS</code> for STARTTLS</td></tr>
+<tr><td>Reuse connections to the same host</td><td><code>NewPool</code>, <code>Get</code> and <code>Put</code></td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.Server = A TCP server listening on one port.
+doc.Server.fd = The socket descriptor; -1 means invalid.
+doc.Server.port = The port the server listens on.
+doc.Conn = One TCP connection.
+doc.Conn.fd = The socket descriptor; -1 means invalid.
+doc.Bind = Listens on the given port on every IPv4 interface; port zero lets the system pick a free one. Check <code>Ok</code> afterwards: a port already in use gives an invalid server.
+doc.Ok = True when the server was created properly.
+doc.Port = The actual port of the server; for when you passed zero.
+doc.Accept = Waits for a client to connect and returns its connection.
+doc.CloseServer = Closes the server.
+doc.Dial = Connects to a host and port; when it fails, <code>ConnOk</code> is false.
+doc.ConnOk = True when the connection is up.
+doc.Read = Reads at most <code>max</code> bytes (4096 when <code>max</code> is 0 or less) as text; an empty string when the other side has closed the connection, the deadline passed or an error happened. The text stops at the first zero byte.
+doc.Write = Sends the text in one system call and returns the number of bytes sent, which can be fewer than the length for large data, or -1 on error.
+doc.ReadBytes = Reads at most <code>max</code> bytes into memory and returns how many; zero or less means the end or an error.
+doc.WriteBytes = Sends <code>n</code> bytes from memory, looping until all are sent; returns how many went out.
+doc.Close = Closes the connection.
+doc.DialTimeout = Like <code>Dial</code>, with a time limit in milliseconds for the connect. On Linux it gives up after that limit when the host does not answer; other systems use their own default wait for the connect.
+doc.DialTLS = Makes an encrypted TLS connection; for HTTPS and the like.
+doc.UpgradeTLS = Upgrades an existing plain connection to TLS with the given configuration; as STARTTLS does.
+doc.ConnFromFd = Builds a connection from a socket descriptor, such as <code>conn.fd</code> passed to another thread through a channel.
+doc.WriteHTTP = Sends a complete HTTP/1.1 response with the status line, the content type, <code>Content-Length</code> and <code>Connection: close</code>; for very simple servers.
+doc.SetReadDeadline = How many milliseconds a read may wait at most.
+doc.SetWriteDeadline = How many milliseconds a write may wait at most.
+doc.SetDeadline = Sets the read and write deadlines together.
+doc.SetKeepAlive = Turns TCP keepalive packets on or off, so a dropped idle connection is noticed.
+doc.SetNoDelay = Turns off Nagle's algorithm so small packets are sent at once; for interactive programs.
+doc.Pool = A pool of idle connections to reuse.
+doc.Pool.entries = The idle connections.
+doc.Pool.idle_ttl_ms = The longest an idle connection is kept; 30 seconds by default.
+doc.PoolEntry = One idle connection in the pool.
+doc.PoolEntry.key = The host and port.
+doc.PoolEntry.conn = The connection.
+doc.PoolEntry.put_at_ms = When it was returned to the pool.
+doc.PoolEntries = A list of idle connections.
+doc.PoolEntries.items = The connections.
+doc.NewPool = An empty pool.
+doc.Get = When the pool holds a fresh idle connection to this host it returns that one, otherwise it makes a new one. <code>now_ms</code> is the current time.
+doc.Put = Returns a connection to the pool after use.
+doc.PoolLen = The number of idle connections in the pool.
+
+ex.Server = net-tcp-Echo
+ex.Conn = net-tcp-Echo
+ex.Bind = net-tcp-Echo
+ex.Ok = net-tcp-Echo
+ex.Port = net-tcp-Echo
+ex.Accept = net-tcp-Echo
+ex.CloseServer = net-tcp-Echo
+ex.Dial = net-tcp-Echo
+ex.ConnOk = net-tcp-Echo
+ex.Read = net-tcp-Echo
+ex.Write = net-tcp-Echo
+ex.Close = net-tcp-Echo
+ex.SetDeadline = net-tcp-Echo
+ex.SetKeepAlive = net-tcp-Echo
+ex.SetNoDelay = net-tcp-Echo
+ex.ReadBytes = net-tcp-Bytes
+ex.WriteBytes = net-tcp-Bytes
+ex.ConnFromFd = net-tcp-Bytes
+ex.WriteHTTP = net-tcp-Bytes
+ex.SetReadDeadline = net-tcp-Bytes
+ex.SetWriteDeadline = net-tcp-Bytes
+ex.Pool = net-tcp-Pool
+ex.PoolEntry = net-tcp-Pool
+ex.PoolEntries = net-tcp-Pool
+ex.NewPool = net-tcp-Pool
+ex.Get = net-tcp-Pool
+ex.Put = net-tcp-Pool
+ex.PoolLen = net-tcp-Pool
+ex.DialTimeout = net-tcp-Echo
+ex.DialTLS = net-tcp-TLS
+ex.UpgradeTLS = net-tcp-TLS

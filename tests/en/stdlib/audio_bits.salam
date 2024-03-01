@@ -1,0 +1,121 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import audio
+import compress
+import testing
+
+func two_bytes(a: int, b: int): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    compress.BufPush(out, a)
+    compress.BufPush(out, b)
+    ret out
+end
+
+func main:
+    println "most significant bit first"
+    src := two_bytes(0xA5, 0x3C)
+    mut r := audio.MsbReaderFromBuf(src)
+    testing.AssertEqInt(audio.MsbRead(r, 4), 10)
+    testing.AssertEqInt(audio.MsbRead(r, 4), 5)
+    testing.AssertEqInt(audio.MsbRead(r, 8), 60)
+    testing.AssertFalse(audio.MsbBad(r))
+
+    println "single bits"
+    mut r2 := audio.MsbReaderFromBuf(src)
+    testing.AssertEqInt(audio.MsbReadBit(r2), 1)
+    testing.AssertEqInt(audio.MsbReadBit(r2), 0)
+    testing.AssertEqInt(audio.MsbReadBit(r2), 1)
+    testing.AssertEqInt(audio.MsbReadBit(r2), 0)
+    testing.AssertEqInt(audio.MsbTell(r2), 4)
+
+    println "wide and signed reads"
+    mut r3 := audio.MsbReaderFromBuf(src)
+    testing.AssertEqInt(audio.MsbRead(r3, 16), 0xA53C)
+    mut r4 := audio.MsbReaderFromBuf(src)
+    testing.AssertEqInt(audio.MsbReadSigned(r4, 4), -6)
+    mut r5 := audio.MsbReaderFromBuf(src)
+    testing.AssertEqInt64(audio.MsbReadI64(r5, 16), 0xA53C as i64)
+    mut r6 := audio.MsbReaderFromBuf(src)
+    testing.AssertEqInt(audio.MsbRead(r6, 0), 0)
+    testing.AssertEqInt(audio.MsbRead(r6, 33), 0)
+
+    println "unary codes"
+    mut uw := audio.NewMsbWriter()
+    audio.MsbWriteUnary(uw, 0)
+    audio.MsbWriteUnary(uw, 3)
+    audio.MsbWriteUnary(uw, 5)
+    ubuf := audio.MsbFinish(uw)
+    mut ur := audio.MsbReaderFromBuf(ubuf)
+    testing.AssertEqInt(audio.MsbUnary(ur), 0)
+    testing.AssertEqInt(audio.MsbUnary(ur), 3)
+    testing.AssertEqInt(audio.MsbUnary(ur), 5)
+
+    println "skip, align and seek"
+    mut r7 := audio.MsbReaderFromBuf(src)
+    audio.MsbSkip(r7, 8)
+    testing.AssertEqInt(audio.MsbRead(r7, 8), 60)
+    mut r8 := audio.MsbReaderFromBuf(src)
+    audio.MsbRead(r8, 3)
+    audio.MsbAlign(r8)
+    testing.AssertEqInt(audio.MsbRead(r8, 8), 60)
+    mut r9 := audio.MsbReaderFromBuf(src)
+    audio.MsbSeek(r9, 8)
+    testing.AssertEqInt(audio.MsbRead(r9, 8), 60)
+    audio.MsbSeek(r9, 4)
+    testing.AssertEqInt(audio.MsbRead(r9, 4), 5)
+    mut r10 := audio.MsbReaderFromBuf(src)
+    testing.AssertEqInt(audio.MsbLeft(r10), 16)
+    audio.MsbRead(r10, 5)
+    testing.AssertEqInt(audio.MsbLeft(r10), 11)
+
+    println "reading past the end sets the bad flag"
+    mut short := audio.NewMsbReader(src.data, 1)
+    audio.MsbRead(short, 16)
+    testing.AssertTrue(audio.MsbBad(short))
+
+    println "writer round-trip"
+    mut w := audio.NewMsbWriter()
+    audio.MsbWrite(w, 10, 4)
+    audio.MsbWrite(w, 5, 4)
+    audio.MsbWrite(w, 60, 8)
+    out := audio.MsbFinish(w)
+    testing.AssertEqInt(compress.BufLen(out), 2)
+    testing.AssertEqInt(compress.BufGet(out, 0), 0xA5)
+    testing.AssertEqInt(compress.BufGet(out, 1), 0x3C)
+
+    println "writer pads the last byte"
+    mut w2 := audio.NewMsbWriter()
+    audio.MsbWrite(w2, 1, 1)
+    testing.AssertEqInt(audio.MsbLen(w2), 0)
+    out2 := audio.MsbFinish(w2)
+    testing.AssertEqInt(compress.BufLen(out2), 1)
+    testing.AssertEqInt(compress.BufGet(out2, 0), 128)
+
+    println "a long value survives the full width"
+    mut w3 := audio.NewMsbWriter()
+    audio.MsbWrite(w3, 0x123456 as i64, 24)
+    out3 := audio.MsbFinish(w3)
+    mut r11 := audio.MsbReaderFromBuf(out3)
+    testing.AssertEqInt(audio.MsbRead(r11, 24), 0x123456)
+
+    audio.MsbFree(w)
+    audio.MsbFree(w2)
+    audio.MsbFree(w3)
+    audio.MsbFree(uw)
+    compress.BufFree(src)
+    ret testing.Summary()
+end

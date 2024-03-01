@@ -1,0 +1,497 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+import encoding
+import crypto
+
+const SPKI_P256_PREFIX := "3059301306072a8648ce3d020106082a8648ce3d030107034200"
+const SPKI_P256_LEN := 91
+const P256_POINT_LEN := 65
+const P256_SCALAR_LEN := 32
+const GCM_TAG_LEN := 16
+const GCM_NONCE_LEN := 12
+const AES128_KEY_LEN := 16
+const AES256_KEY_LEN := 32
+
+func _hexval(c: int): int:
+    if c >= 48 and c <= 57: ret c - 48 end
+    if c >= 97 and c <= 102: ret c - 87 end
+    if c >= 65 and c <= 70: ret c - 55 end
+    ret 0 - 1
+end
+
+func _hex_into(hex: str, dst: void*, off: int): int:
+    n := hex.len()
+    if n % 2 != 0: ret 0 - 1 end
+    mut i := 0
+    until i < n:
+        hi := _hexval(hex[i] as int)
+        lo := _hexval(hex[i + 1] as int)
+        if hi < 0 or lo < 0: ret 0 - 1 end
+        _bput(dst, off + i / 2, hi * 16 + lo)
+        i += 2
+    end
+    ret n / 2
+end
+
+func _decode(b64: str, want: int): Buf:
+    mut out := _newbuf(want + 16)
+    if out.bad: ret out end
+    _putzeros(out, want + 16)
+    mut ok := true
+    n := encoding.Base64DecodeBytes(b64, out.p, want + 16, ok)
+    if not ok or n != want:
+        out.bad = true
+        ret out
+    end
+    out.len = want
+    ret out
+end
+
+func _decode_any(b64: str): Buf:
+    cap := b64.len() + 16
+    mut out := _newbuf(cap)
+    if out.bad: ret out end
+    _putzeros(out, cap)
+    mut ok := true
+    n := encoding.Base64DecodeBytes(b64, out.p, cap, ok)
+    if not ok or n < 0:
+        out.bad = true
+        ret out
+    end
+    out.len = n
+    ret out
+end
+
+func _spki_wrap(point: void*): str:
+    mut der := _newbuf(SPKI_P256_LEN)
+    defer _buf_free(der)
+    _putzeros(der, SPKI_P256_LEN)
+    if _hex_into(SPKI_P256_PREFIX, der.p, 0) < 0: ret "" end
+    mem.Copy(_bufptr(der, SPKI_P256_LEN - P256_POINT_LEN), point, P256_POINT_LEN as u64)
+    ret encoding.Base64EncodeBytes(der.p, SPKI_P256_LEN)
+end
+
+func _spki_point(spki_b64: str, out &: Buf): bool:
+    mut der := _decode(spki_b64, SPKI_P256_LEN)
+    defer _buf_free(der)
+    if der.bad: ret false end
+    mut want := _newbuf(SPKI_P256_LEN)
+    defer _buf_free(want)
+    _putzeros(want, SPKI_P256_LEN)
+    if _hex_into(SPKI_P256_PREFIX, want.p, 0) < 0: ret false end
+    if not _cteq(der.p, want.p, SPKI_P256_LEN - P256_POINT_LEN): ret false end
+    if _bget(der.p, SPKI_P256_LEN - P256_POINT_LEN) != 4: ret false end
+    _putraw(out, _bufptr(der, SPKI_P256_LEN - P256_POINT_LEN), P256_POINT_LEN)
+    ret true
+end
+
+func _aes_from(key_b64: str, ok &: bool): Aes:
+    mut key := _decode_any(key_b64)
+    defer _buf_wipe(key)
+    if key.bad or (key.len != AES128_KEY_LEN and key.len != AES256_KEY_LEN):
+        ok = false
+        ret Aes {}
+    end
+    ok = true
+    ret _aes_init(key.p, key.len)
+end
+
+func _public_of(cv: Curve, scalar: void*): str:
+    mut point := _newbuf(P256_POINT_LEN)
+    defer _buf_free(point)
+    _putzeros(point, P256_POINT_LEN)
+    _bput(point.p, 0, 4)
+    if not _ec_base_mul(cv, scalar, _bufptr(point, 1), _bufptr(point, 1 + P256_SCALAR_LEN)):
+        ret ""
+    end
+    ret _spki_wrap(point.p)
+end
+
+func _mgf1_xor(seed: void*, slen: int, dst: void*, dlen: int):
+    mut blk := _newbuf(slen + 4)
+    defer _buf_free(blk)
+    mut h := _newbuf(20)
+    defer _buf_free(h)
+    _putzeros(h, 20)
+    hp := h.p as u8*
+    dp := dst as u8*
+    mut done := 0
+    mut cnt := 0 as i64
+    until done < dlen:
+        _bufreset(blk)
+        _putraw(blk, seed, slen)
+        _put32(blk, cnt)
+        crypto.Sha1Bytes(blk.p, blk.len, h.p)
+        repeat 20 in i:
+            if done + i < dlen:
+                dp[done + i] = ((dp[done + i] as int) ^ (hp[i] as int)) as u8
+            end
+        end
+        done += 20
+        cnt += 1
+    end
+end
+
+@en "EcdhP256Generate"
+@fa "تولید کلید ای سی دی اچ"
+pub func EcdhP256Generate(priv &: str, pub_spki &: str): bool:
+    cv := _curve_p256()
+    mut attempt := 0
+    until attempt < 8:
+        candidate := crypto.RandomHex(P256_SCALAR_LEN)
+        mut scalar := _newbuf(P256_SCALAR_LEN)
+        _putzeros(scalar, P256_SCALAR_LEN)
+        if _hex_into(candidate, scalar.p, 0) == P256_SCALAR_LEN:
+            spki := _public_of(cv, scalar.p)
+            if spki.len() > 0:
+                priv = encoding.Base64EncodeBytes(scalar.p, P256_SCALAR_LEN)
+                pub_spki = spki
+                _buf_wipe(scalar)
+                ret true
+            end
+        end
+        _buf_wipe(scalar)
+        attempt += 1
+    end
+    ret false
+end
+
+@en "EcdhP256Shared"
+@fa "راز مشترک ای سی دی اچ"
+pub func EcdhP256Shared(priv_b64: str, peer_spki_b64: str, ok &: bool): str:
+    ok = false
+    mut scalar := _decode(priv_b64, P256_SCALAR_LEN)
+    defer _buf_wipe(scalar)
+    if scalar.bad: ret "" end
+    mut point := _newbuf(P256_POINT_LEN)
+    defer _buf_free(point)
+    if not _spki_point(peer_spki_b64, point): ret "" end
+    mut secret := _newbuf(P256_SCALAR_LEN)
+    defer _buf_wipe(secret)
+    _putzeros(secret, P256_SCALAR_LEN)
+    if not _ec_ecdh(_curve_p256(), scalar.p, point.p, P256_POINT_LEN, secret.p): ret "" end
+    ok = true
+    ret encoding.Base64EncodeBytes(secret.p, P256_SCALAR_LEN)
+end
+
+@en "HkdfSha256"
+@fa "اچ کی دی اف شا۲۵۶"
+pub func HkdfSha256(ikm_b64: str, salt_b64: str, info: str, out_len: int, ok &: bool): str:
+    ok = false
+    mut ikm := _decode_any(ikm_b64)
+    defer _buf_wipe(ikm)
+    mut salt := _decode_any(salt_b64)
+    defer _buf_free(salt)
+    if ikm.bad or salt.bad or out_len <= 0: ret "" end
+    mut prk := _newbuf(32)
+    defer _buf_wipe(prk)
+    _putzeros(prk, 32)
+    _hkdf_extract(HASH_SHA256, salt.p, salt.len, ikm.p, ikm.len, prk.p)
+    mut out := _newbuf(out_len)
+    defer _buf_wipe(out)
+    _putzeros(out, out_len)
+    mut label := _newbuf(info.len() + 1)
+    defer _buf_free(label)
+    _putstr(label, info)
+    if not _hkdf_expand(HASH_SHA256, prk.p, 32, label.p, info.len(), out.p, out_len): ret "" end
+    ok = true
+    ret encoding.Base64EncodeBytes(out.p, out_len)
+end
+
+@en "AesGcmSeal"
+@fa "مهر ای ای اس جی سی ام"
+pub func AesGcmSeal(key_b64: str, nonce_b64: str, plaintext: str, ok &: bool): str:
+    ok = false
+    mut aes_ok := false
+    a := _aes_from(key_b64, aes_ok)
+    mut nonce := _decode(nonce_b64, GCM_NONCE_LEN)
+    defer _buf_free(nonce)
+    if not aes_ok or nonce.bad: ret "" end
+    n := plaintext.len()
+    mut pt := _newbuf(n + 1)
+    defer _buf_wipe(pt)
+    _putstr(pt, plaintext)
+    mut out := _newbuf(n + GCM_TAG_LEN)
+    defer _buf_free(out)
+    _putzeros(out, n + GCM_TAG_LEN)
+    _gcm_seal(a, nonce.p, null, 0, pt.p, out.p, n, _bufptr(out, n))
+    ok = true
+    ret encoding.Base64EncodeBytes(out.p, n + GCM_TAG_LEN)
+end
+
+@en "AesGcmOpen"
+@fa "گشودن ای ای اس جی سی ام"
+pub func AesGcmOpen(key_b64: str, nonce_b64: str, sealed_b64: str, ok &: bool): str:
+    ok = false
+    mut aes_ok := false
+    a := _aes_from(key_b64, aes_ok)
+    mut nonce := _decode(nonce_b64, GCM_NONCE_LEN)
+    defer _buf_free(nonce)
+    mut sealed := _decode_any(sealed_b64)
+    defer _buf_free(sealed)
+    if not aes_ok or nonce.bad or sealed.bad or sealed.len <= GCM_TAG_LEN: ret "" end
+    n := sealed.len - GCM_TAG_LEN
+    mut pt := _newbuf(n + 1)
+    defer _buf_wipe(pt)
+    _putzeros(pt, n + 1)
+    if not _gcm_open(a, nonce.p, null, 0, sealed.p, n, _bufptr(sealed, n), pt.p): ret "" end
+    ok = true
+    ret _bufstr(pt)
+end
+
+@en "GcmNonce"
+@fa "نانس جی سی ام"
+pub func GcmNonce(counter: i64): str:
+    mut n := _newbuf(GCM_NONCE_LEN)
+    defer _buf_free(n)
+    _putzeros(n, 4)
+    _put64(n, counter as u64)
+    ret encoding.Base64EncodeBytes(n.p, GCM_NONCE_LEN)
+end
+
+@en "RandomSalt"
+@fa "نمک تصادفی"
+pub func RandomSalt(n: int): str:
+    mut b := _newbuf(n)
+    defer _buf_free(b)
+    _putzeros(b, n)
+    hex := crypto.RandomHex(n)
+    if _hex_into(hex, b.p, 0) != n: ret "" end
+    ret encoding.Base64EncodeBytes(b.p, n)
+end
+
+@en "EcdhP256PublicPoint"
+@fa "نقطه عمومی ای سی دی اچ"
+pub func EcdhP256PublicPoint(priv_b64: str): str:
+    mut scalar := _decode(priv_b64, P256_SCALAR_LEN)
+    defer _buf_wipe(scalar)
+    if scalar.bad: ret "" end
+    mut point := _newbuf(P256_POINT_LEN)
+    defer _buf_free(point)
+    _putzeros(point, P256_POINT_LEN)
+    _bput(point.p, 0, 4)
+    if not _ec_base_mul(
+        _curve_p256(), scalar.p, _bufptr(point, 1), _bufptr(point, 1 + P256_SCALAR_LEN)
+    ):
+        ret ""
+    end
+    ret encoding.Base64EncodeBytes(point.p, P256_POINT_LEN)
+end
+
+@en "EcdhP256SharedPoint"
+@fa "نقطه مشترک ای سی دی اچ"
+pub func EcdhP256SharedPoint(priv_b64: str, peer_point_b64: str, ok &: bool): str:
+    ok = false
+    mut scalar := _decode(priv_b64, P256_SCALAR_LEN)
+    defer _buf_wipe(scalar)
+    mut point := _decode(peer_point_b64, P256_POINT_LEN)
+    defer _buf_free(point)
+    if scalar.bad or point.bad or _bget(point.p, 0) != 4: ret "" end
+    mut secret := _newbuf(P256_SCALAR_LEN)
+    defer _buf_wipe(secret)
+    _putzeros(secret, P256_SCALAR_LEN)
+    if not _ec_ecdh(_curve_p256(), scalar.p, point.p, P256_POINT_LEN, secret.p): ret "" end
+    ok = true
+    ret encoding.Base64EncodeBytes(secret.p, P256_SCALAR_LEN)
+end
+
+@en "HkdfSha256Raw"
+@fa "اچ کی دی اف شا۲۵۶ خام"
+pub func HkdfSha256Raw(
+    ikm_b64: str, salt_b64: str, info_b64: str, out_len: int, ok &: bool
+): str:
+    ok = false
+    mut ikm := _decode_any(ikm_b64)
+    defer _buf_wipe(ikm)
+    mut salt := _decode_any(salt_b64)
+    defer _buf_free(salt)
+    mut info := _decode_any(info_b64)
+    defer _buf_free(info)
+    if ikm.bad or salt.bad or info.bad or out_len <= 0: ret "" end
+    mut prk := _newbuf(32)
+    defer _buf_wipe(prk)
+    _putzeros(prk, 32)
+    _hkdf_extract(HASH_SHA256, salt.p, salt.len, ikm.p, ikm.len, prk.p)
+    mut out := _newbuf(out_len)
+    defer _buf_wipe(out)
+    _putzeros(out, out_len)
+    if not _hkdf_expand(HASH_SHA256, prk.p, 32, info.p, info.len, out.p, out_len): ret "" end
+    ok = true
+    ret encoding.Base64EncodeBytes(out.p, out_len)
+end
+
+@en "AesGcmSealBytes"
+@fa "مهر بایت ای ای اس جی سی ام"
+pub func AesGcmSealBytes(
+    key_b64: str, nonce_b64: str, plaintext_b64: str, ok &: bool
+): str:
+    ok = false
+    mut aes_ok := false
+    a := _aes_from(key_b64, aes_ok)
+    mut nonce := _decode(nonce_b64, GCM_NONCE_LEN)
+    defer _buf_free(nonce)
+    mut pt := _decode_any(plaintext_b64)
+    defer _buf_wipe(pt)
+    if not aes_ok or nonce.bad or pt.bad: ret "" end
+    mut out := _newbuf(pt.len + GCM_TAG_LEN)
+    defer _buf_free(out)
+    _putzeros(out, pt.len + GCM_TAG_LEN)
+    _gcm_seal(a, nonce.p, null, 0, pt.p, out.p, pt.len, _bufptr(out, pt.len))
+    ok = true
+    ret encoding.Base64EncodeBytes(out.p, pt.len + GCM_TAG_LEN)
+end
+
+@en "AesGcmOpenBytes"
+@fa "گشودن بایت ای ای اس جی سی ام"
+pub func AesGcmOpenBytes(key_b64: str, nonce_b64: str, sealed_b64: str, ok &: bool): str:
+    ok = false
+    mut aes_ok := false
+    a := _aes_from(key_b64, aes_ok)
+    mut nonce := _decode(nonce_b64, GCM_NONCE_LEN)
+    defer _buf_free(nonce)
+    mut sealed := _decode_any(sealed_b64)
+    defer _buf_free(sealed)
+    if not aes_ok or nonce.bad or sealed.bad or sealed.len <= GCM_TAG_LEN: ret "" end
+    n := sealed.len - GCM_TAG_LEN
+    mut pt := _newbuf(n)
+    defer _buf_wipe(pt)
+    _putzeros(pt, n)
+    if not _gcm_open(a, nonce.p, null, 0, sealed.p, n, _bufptr(sealed, n), pt.p): ret "" end
+    ok = true
+    ret encoding.Base64EncodeBytes(pt.p, n)
+end
+
+@en "P256Sign"
+@fa "امضای پی۲۵۶"
+pub func P256Sign(priv_b64: str, digest_b64: str, ok &: bool): str:
+    ok = false
+    mut scalar := _decode(priv_b64, P256_SCALAR_LEN)
+    defer _buf_wipe(scalar)
+    mut digest := _decode_any(digest_b64)
+    defer _buf_free(digest)
+    if scalar.bad or digest.bad: ret "" end
+    mut sig := _newbuf(64)
+    defer _buf_free(sig)
+    _putzeros(sig, 64)
+    if not _ecdsa_p256_sign(scalar.p, digest.p, digest.len, sig.p, _bufptr(sig, 32)):
+        ret ""
+    end
+    ok = true
+    ret encoding.Base64EncodeBytes(sig.p, 64)
+end
+
+@en "P256Verify"
+@fa "تایید امضای پی۲۵۶"
+pub func P256Verify(pub_point_b64: str, digest_b64: str, sig_b64: str): bool:
+    mut point := _decode(pub_point_b64, P256_POINT_LEN)
+    defer _buf_free(point)
+    mut digest := _decode_any(digest_b64)
+    defer _buf_free(digest)
+    mut sig := _decode(sig_b64, 64)
+    defer _buf_free(sig)
+    if point.bad or digest.bad or sig.bad: ret false end
+    ret _ecdsa_p256_verify(
+        digest.p, digest.len, sig.p, _bufptr(sig, 32), point.p, P256_POINT_LEN
+    )
+end
+
+@en "RsaSignPkcs1Sha256"
+@fa "امضای آر اس ای شا۲۵۶"
+pub func RsaSignPkcs1Sha256(pem: str, digest_b64: str, ok &: bool): str:
+    ok = false
+    mut key := ParsePrivateKeyPEM(pem)
+    defer FreePrivateKey(key)
+    if not key.ok or key.rsa_n.len == 0: ret "" end
+    mut digest := _decode(digest_b64, 32)
+    defer _buf_free(digest)
+    if digest.bad: ret "" end
+    mut sig := _newbuf(key.rsa_n.len)
+    defer _buf_free(sig)
+    _putzeros(sig, key.rsa_n.len)
+    if not _rsa_sign_pkcs1(
+        HASH_SHA256, digest.p, key.rsa_n, key.rsa_e, key.rsa_d, key.rsa_phi, sig.p
+    ):
+        ret ""
+    end
+    ok = true
+    ret encoding.Base64EncodeBytes(sig.p, key.rsa_n.len)
+end
+
+@en "RsaKeyBits"
+@fa "طول کلید آر اس ای"
+pub func RsaKeyBits(pem: str): int:
+    mut key := ParsePrivateKeyPEM(pem)
+    defer FreePrivateKey(key)
+    if not key.ok: ret 0 end
+    ret key.rsa_n.len * 8
+end
+
+@en "RsaEncryptOaepSha1"
+@fa "رمزگذاری آر اس ای اوئپ"
+pub func RsaEncryptOaepSha1(pem: str, plain_b64: str, ok &: bool): str:
+    ok = false
+    begintag := "-----BEGIN PUBLIC KEY-----"
+    endtag := "-----END PUBLIC KEY-----"
+    b := pem.find(begintag)
+    if b < 0: ret "" end
+    bodystart := b + begintag.len()
+    e := str.IndexFrom(pem, endtag, bodystart)
+    if e < 0: ret "" end
+    room := (e - bodystart) / 4 * 3 + 8
+    mut der := _newbuf(room)
+    defer _buf_free(der)
+    mut good := false
+    got := encoding.Base64DecodeBytes(pem.substr(bodystart, e - bodystart), der.p, room, good)
+    if not good or got <= 0: ret "" end
+    mut c := Cert {}
+    if not _parse_spki(_newreader(der.p, got), c) or c.pk_alg != PK_RSA: ret "" end
+    mut msg := _decode_any(plain_b64)
+    defer _buf_free(msg)
+    if msg.bad: ret "" end
+    k := c.rsa_n.len
+    hl := 20
+    if msg.len > k - 2 * hl - 2: ret "" end
+    mut em := _newbuf(k)
+    defer _buf_free(em)
+    _putzeros(em, k)
+    dblen := k - hl - 1
+    crypto.Sha1Bytes(em.p, 0, _bufptr(em, 1 + hl))
+    ep := em.p as u8*
+    ep[k - msg.len - 1] = 1 as u8
+    if msg.len > 0:
+        mem.Copy(_bufptr(em, k - msg.len), msg.p, msg.len as u64)
+    end
+    crypto.RandomBytes(_bufptr(em, 1), hl)
+    _mgf1_xor(_bufptr(em, 1), hl, _bufptr(em, 1 + hl), dblen)
+    _mgf1_xor(_bufptr(em, 1 + hl), dblen, _bufptr(em, 1), hl)
+    mut n := _newbuf(k)
+    defer _buf_free(n)
+    repeat k in i:
+        _put8(n, _rdat(c.rsa_n, i))
+    end
+    mut ex := _newbuf(c.rsa_e.len)
+    defer _buf_free(ex)
+    repeat c.rsa_e.len in i:
+        _put8(ex, _rdat(c.rsa_e, i))
+    end
+    mut out := _newbuf(k)
+    defer _buf_free(out)
+    _putzeros(out, k)
+    if not _rsa_public_op(em.p, k, n.p, n.len, ex.p, ex.len, out.p, k): ret "" end
+    ok = true
+    ret encoding.Base64EncodeBytes(out.p, k)
+end

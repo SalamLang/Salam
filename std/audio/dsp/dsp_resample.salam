@@ -1,0 +1,212 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package dsp
+
+import audio
+import math
+
+@en "QualityLinear"
+@fa "کیفیت خطی"
+pub const QualityLinear := 0
+
+@en "QualityCubic"
+@fa "کیفیت مکعبی"
+pub const QualityCubic := 1
+
+@en "QualitySinc"
+@fa "کیفیت سینک"
+pub const QualitySinc := 2
+
+@en "KaiserBeta"
+@fa "بتای کایزر"
+pub const KaiserBeta := 8.6
+
+func _sinc(x: f64): f64:
+    if math.Abs(x) < 0.000000001:
+        ret 1.0
+    end
+    a := math.PI * x
+    ret math.Sin(a) / a
+end
+
+func _kwin(x: f64): f64:
+    ax := math.Abs(x)
+    if ax >= 1.0:
+        ret 0.0
+    end
+    ret BesselI0(KaiserBeta * math.Sqrt(1.0 - ax * ax)) / BesselI0(KaiserBeta)
+end
+
+func _at(c: audio.Clip, frame: int, ch: int): f64:
+    mut f := frame
+    if f < 0:
+        f = 0
+    end
+    if f > c.frames - 1:
+        f = c.frames - 1
+    end
+    p := audio.Data(c)
+    ret p[f * c.channels + ch] as f64
+end
+
+@en "ResampleCubic"
+@fa "بازنمونه مکعبی"
+pub func ResampleCubic(c: audio.Clip, rate: int): audio.Clip:
+    if audio.IsEmpty(c) or rate <= 0:
+        ret audio.Clip {}
+    end
+    if rate == c.rate:
+        ret audio.Clone(c)
+    end
+    frames := ((c.frames as f64) * (rate as f64) / (c.rate as f64)) as int
+    if frames <= 0:
+        ret audio.Clip {}
+    end
+    mut out := audio.New(rate, c.channels, frames)
+    if out.samples == null:
+        ret out
+    end
+    out.bits = c.bits
+    dst := audio.Data(out)
+    step := (c.rate as f64) / (rate as f64)
+    mut o := 0
+    until o < frames:
+        pos := (o as f64) * step
+        i1 := pos as int
+        t := pos - (i1 as f64)
+        mut ch := 0
+        until ch < c.channels:
+            p0 := _at(c, i1 - 1, ch)
+            p1 := _at(c, i1, ch)
+            p2 := _at(c, i1 + 1, ch)
+            p3 := _at(c, i1 + 2, ch)
+            a := 0.5 * (0.0 - p0 + 3.0 * p1 - 3.0 * p2 + p3)
+            b := 0.5 * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3)
+            d := 0.5 * (0.0 - p0 + p2)
+            v := ((a * t + b) * t + d) * t + p1
+            dst[o * c.channels + ch] = v as f32
+            ch += 1
+        end
+        o += 1
+    end
+    ret out
+end
+
+@en "ResampleSinc"
+@fa "بازنمونه سینک"
+pub func ResampleSinc(c: audio.Clip, rate: int, taps: int): audio.Clip:
+    if audio.IsEmpty(c) or rate <= 0:
+        ret audio.Clip {}
+    end
+    if rate == c.rate:
+        ret audio.Clone(c)
+    end
+    mut half := taps
+    if half < 2:
+        half = 2
+    end
+    if half > 64:
+        half = 64
+    end
+    frames := ((c.frames as f64) * (rate as f64) / (c.rate as f64)) as int
+    if frames <= 0:
+        ret audio.Clip {}
+    end
+    mut out := audio.New(rate, c.channels, frames)
+    if out.samples == null:
+        ret out
+    end
+    out.bits = c.bits
+    dst := audio.Data(out)
+    step := (c.rate as f64) / (rate as f64)
+    mut cutoff := 1.0
+    if rate < c.rate:
+        cutoff = (rate as f64) / (c.rate as f64)
+    end
+    mut o := 0
+    until o < frames:
+        pos := (o as f64) * step
+        center := math.Floor(pos) as int
+        mut ch := 0
+        until ch < c.channels:
+            mut acc := 0.0
+            mut wsum := 0.0
+            mut k := 0 - half + 1
+            until k < half + 1:
+                idx := center + k
+                t := pos - (idx as f64)
+                w := _kwin(t / (half as f64)) * cutoff * _sinc(cutoff * t)
+                acc += _at(c, idx, ch) * w
+                wsum += w
+                k += 1
+            end
+            if wsum != 0.0:
+                acc = acc / wsum
+            end
+            dst[o * c.channels + ch] = acc as f32
+            ch += 1
+        end
+        o += 1
+    end
+    ret out
+end
+
+@en "ResampleTo"
+@fa "بازنمونه به"
+pub func ResampleTo(c: audio.Clip, rate: int, quality: int): audio.Clip:
+    if quality <= QualityLinear:
+        ret audio.ToRate(c, rate)
+    end
+    if quality == QualityCubic:
+        ret ResampleCubic(c, rate)
+    end
+    ret ResampleSinc(c, rate, 16)
+end
+
+@en "Correlation"
+@fa "همبستگی"
+pub func Correlation(a: audio.Clip, b: audio.Clip): f64:
+    if audio.IsEmpty(a) or audio.IsEmpty(b):
+        ret 0.0
+    end
+    mut n := a.frames
+    if b.frames < n:
+        n = b.frames
+    end
+    if n <= 0 or a.channels != b.channels:
+        ret 0.0
+    end
+    mut sab := 0.0
+    mut saa := 0.0
+    mut sbb := 0.0
+    mut f := 0
+    until f < n:
+        mut ch := 0
+        until ch < a.channels:
+            x := audio.Sample(a, f, ch)
+            y := audio.Sample(b, f, ch)
+            sab += x * y
+            saa += x * x
+            sbb += y * y
+            ch += 1
+        end
+        f += 1
+    end
+    den := math.Sqrt(saa * sbb)
+    if den == 0.0:
+        ret 0.0
+    end
+    ret sab / den
+end

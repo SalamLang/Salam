@@ -1,0 +1,202 @@
+package nativelink
+
+func ehh_count(l &: Nl): int:
+    mut n := 0
+    repeat l.s_obj.len() in s:
+        if not l.s_live[s] or l.s_oc[s] != OC_EHFRAME or l.s_off[s] <= (0 as i64):
+            continue
+        end
+        p := fptr(l, l.o_file[l.s_obj[s]])
+        mut at := l.s_off[s]
+        lim := l.s_off[s] + l.s_size[s]
+        until at + (8 as i64) <= lim:
+            len := rd32(p, at)
+            if len == (0 as i64) or len == (0xffffffff as i64):
+                break
+            end
+            if rd32(p, at + (4 as i64)) != (0 as i64):
+                n += 1
+            end
+            at = at + (4 as i64) + len
+        end
+    end
+    ret n
+end
+
+func ehh_reserve(l &: Nl):
+    l.ehh_n = ehh_count(l)
+    if l.ehh_n > 0:
+        l.nphdr += 1
+    end
+end
+
+func ehh_place(l &: Nl, fpos &: i64):
+    if l.ehh_n <= 0 or l.oc_size[OC_EHFRAME] <= (0 as i64):
+        ret
+    end
+    fpos = align_to(fpos, 4 as i64)
+    l.oc_addr[OC_EHHDR] = l.base + fpos
+    l.oc_fpos[OC_EHHDR] = fpos
+    l.oc_size[OC_EHHDR] = (12 + 8 * l.ehh_n) as i64
+    l.oc_align[OC_EHHDR] = 4 as i64
+    fpos = fpos + l.oc_size[OC_EHHDR]
+end
+
+func ehh_uleb(p: u8*, at &: i64): i64:
+    mut v := 0 as i64
+    mut sh := 0 as i64
+    until true:
+        b := p[at] as i64
+        at = at + (1 as i64)
+        v = v | ((b & (127 as i64)) << sh)
+        sh = sh + (7 as i64)
+        if (b & (128 as i64)) == (0 as i64):
+            break
+        end
+    end
+    ret v
+end
+
+func ehh_read(p: u8*, at: i64, enc: int, addr: i64, ok &: bool): i64:
+    mut v := 0 as i64
+    low := enc & 15
+    if low == 0 or low == 4 or low == 12:
+        v = rd64(p, at)
+    else low == 3:
+        v = rd32(p, at)
+    else low == 11:
+        v = rd32s(p, at)
+    else:
+        ok = false
+        ret 0
+    end
+    hi := enc & 0x70
+    if hi == 0x10:
+        v = v + addr
+    else hi != 0:
+        ok = false
+    end
+    ret v
+end
+
+func ehh_cie_enc(p: u8*, cie: i64, ok &: bool): int:
+    mut at := cie + (8 as i64)
+    ver := p[at] as int
+    at = at + (1 as i64)
+    aug := at
+    until p[at] != (0 as u8):
+        at = at + (1 as i64)
+    end
+    at = at + (1 as i64)
+    _ca := ehh_uleb(p, at)
+    _da := ehh_uleb(p, at)
+    if ver == 1:
+        at = at + (1 as i64)
+    else:
+        _ra := ehh_uleb(p, at)
+    end
+    if p[aug] != (122 as u8):
+        ret 0
+    end
+    _al := ehh_uleb(p, at)
+    mut q := aug + (1 as i64)
+    until p[q] != (0 as u8):
+        c := p[q] as int
+        if c == 82:
+            ret p[at] as int
+        else c == 80:
+            pe := p[at] as int
+            at = at + (1 as i64)
+            low := pe & 15
+            if low == 0 or low == 4 or low == 12:
+                at = at + (8 as i64)
+            else low == 3 or low == 11:
+                at = at + (4 as i64)
+            else:
+                ok = false
+                ret 0
+            end
+        else c == 76:
+            at = at + (1 as i64)
+        else c != 83 and c != 66:
+            ok = false
+            ret 0
+        end
+        q = q + (1 as i64)
+    end
+    ret 0
+end
+
+func ehh_build(l &: Nl, buf: u8*):
+    if l.oc_size[OC_EHHDR] <= (0 as i64):
+        ret
+    end
+    hdr := l.oc_fpos[OC_EHHDR]
+    haddr := l.oc_addr[OC_EHHDR]
+    ef := l.oc_fpos[OC_EHFRAME]
+    eaddr := l.oc_addr[OC_EHFRAME]
+    mut pcs := Vector {} as Vector<i64>
+    mut fdes := Vector {} as Vector<i64>
+    mut ok := true
+    mut at := ef
+    lim := ef + l.oc_size[OC_EHFRAME]
+    until ok and at + (8 as i64) <= lim:
+        len := rd32(buf, at)
+        if len == (0 as i64):
+            at = at + (4 as i64)
+            continue
+        end
+        if len == (0xffffffff as i64):
+            ok = false
+            break
+        end
+        id := rd32(buf, at + (4 as i64))
+        if id != (0 as i64):
+            cie := at + (4 as i64) - id
+            enc := ehh_cie_enc(buf, cie, ok)
+            fa := eaddr + (at - ef)
+            pc := ehh_read(buf, at + (8 as i64), enc, fa + (8 as i64), ok)
+            pcs.push(pc)
+            fdes.push(fa)
+        end
+        at = at + (4 as i64) + len
+    end
+    if pcs.len() > l.ehh_n:
+        ok = false
+    end
+    buf[hdr] = 1 as u8
+    buf[hdr + (1 as i64)] = 0x1b as u8
+    wr32(buf, hdr + (4 as i64), eaddr - (haddr + (4 as i64)))
+    if not ok:
+        buf[hdr + (2 as i64)] = 0xff as u8
+        buf[hdr + (3 as i64)] = 0xff as u8
+        wr32(buf, hdr + (8 as i64), 0 as i64)
+        pcs.free()
+        fdes.free()
+        ret
+    end
+    buf[hdr + (2 as i64)] = 0x03 as u8
+    buf[hdr + (3 as i64)] = 0x3b as u8
+    n := pcs.len()
+    mut i := 1
+    until i < n:
+        kp := pcs[i]
+        kf := fdes[i]
+        mut j := i - 1
+        until j >= 0 and pcs[j] > kp:
+            pcs[j + 1] = pcs[j]
+            fdes[j + 1] = fdes[j]
+            j -= 1
+        end
+        pcs[j + 1] = kp
+        fdes[j + 1] = kf
+        i += 1
+    end
+    wr32(buf, hdr + (8 as i64), n as i64)
+    repeat n in k:
+        wr32(buf, hdr + ((12 + 8 * k) as i64), pcs[k] - haddr)
+        wr32(buf, hdr + ((16 + 8 * k) as i64), fdes[k] - haddr)
+    end
+    pcs.free()
+    fdes.free()
+end

@@ -1,0 +1,231 @@
+package tls
+
+const TLS12_ECDHE_ECDSA_AES128_GCM_SHA256 := 0xC02B
+const TLS12_ECDHE_RSA_AES128_GCM_SHA256 := 0xC02F
+const TLS12_ECDHE_ECDSA_AES256_GCM_SHA384 := 0xC02C
+const TLS12_ECDHE_RSA_AES256_GCM_SHA384 := 0xC030
+const TLS12_ECDHE_RSA_CHACHA20_SHA256 := 0xCCA8
+const TLS12_ECDHE_ECDSA_CHACHA20_SHA256 := 0xCCA9
+
+const HS_SERVER_KEY_EXCHANGE := 12
+const HS_SERVER_HELLO_DONE := 14
+const HS_CLIENT_KEY_EXCHANGE := 16
+
+const EXT_EC_POINT_FORMATS := 11
+const EXT_EXTENDED_MASTER_SECRET := 23
+const EXT_RENEGOTIATION_INFO := 0xFF01
+
+func _tls12_cipher(w: int): int:
+    if w == TLS12_ECDHE_ECDSA_AES128_GCM_SHA256 or w == TLS12_ECDHE_RSA_AES128_GCM_SHA256:
+        ret CIPHER_AES128_GCM_SHA256
+    end
+    if w == TLS12_ECDHE_ECDSA_AES256_GCM_SHA384 or w == TLS12_ECDHE_RSA_AES256_GCM_SHA384:
+        ret CIPHER_AES256_GCM_SHA384
+    end
+    if w == TLS12_ECDHE_RSA_CHACHA20_SHA256 or w == TLS12_ECDHE_ECDSA_CHACHA20_SHA256:
+        ret CIPHER_CHACHA20_SHA256
+    end
+    ret CIPHER_NONE
+end
+
+func _tls_verify_leaf_sig(leaf: Cert, scheme: int, content: Buf, sig: Reader, allow_pkcs1: bool): bool:
+    mut kind := HASH_SHA256
+    if scheme == SA_ECDSA_P384_SHA384 or scheme == SA_RSA_PSS_RSAE_SHA384 or scheme == SA_RSA_PKCS1_SHA384:
+        kind = HASH_SHA384
+    end
+    hlen := _hash_size(kind)
+    mut digest := _newbuf(hlen)
+    defer _buf_free(digest)
+    _putzeros(digest, hlen)
+    _hash_oneshot(kind, content.p, content.len, digest.p)
+
+    mut rb := _newbuf(48)
+    defer _buf_free(rb)
+    mut sb := _newbuf(48)
+    defer _buf_free(sb)
+    mut n := _newbuf(512)
+    defer _buf_free(n)
+    mut e := _newbuf(16)
+    defer _buf_free(e)
+    mut sg := _newbuf(512)
+    defer _buf_free(sg)
+
+    if scheme == SA_ECDSA_P256_SHA256 or scheme == SA_ECDSA_P384_SHA384:
+        if leaf.pk_alg == PK_EC_P256:
+            if not _ecdsa_split(sig, rb, sb, 32):
+                ret false
+            end
+            ret _ecdsa_p256_verify(digest.p, hlen, rb.p, sb.p, leaf.ec_point.p, leaf.ec_point.len)
+        end
+        if leaf.pk_alg == PK_EC_P384:
+            if not _ecdsa_split(sig, rb, sb, 48):
+                ret false
+            end
+            ret _ecdsa_p384_verify(digest.p, hlen, rb.p, sb.p, leaf.ec_point.p, leaf.ec_point.len)
+        end
+        ret false
+    end
+
+    if leaf.pk_alg != PK_RSA:
+        ret false
+    end
+    repeat leaf.rsa_n.len in i:
+        _put8(n, _rdat(leaf.rsa_n, i))
+    end
+    repeat leaf.rsa_e.len in i:
+        _put8(e, _rdat(leaf.rsa_e, i))
+    end
+    repeat sig.len in i:
+        _put8(sg, _rdat(sig, i))
+    end
+    if scheme == SA_RSA_PSS_RSAE_SHA256 or scheme == SA_RSA_PSS_RSAE_SHA384 or scheme == SA_RSA_PSS_PSS_SHA256:
+        ret _rsa_verify_pss(kind, digest.p, n.p, n.len, e.p, e.len, sg.p, sg.len, hlen)
+    end
+    if scheme == SA_RSA_PKCS1_SHA256 or scheme == SA_RSA_PKCS1_SHA384:
+        if not allow_pkcs1:
+            ret false
+        end
+        ret _rsa_verify_pkcs1(kind, digest.p, n.p, n.len, e.p, e.len, sg.p, sg.len)
+    end
+    ret false
+end
+
+func _tls12_gen_ec_key(h &: Handshake, cv: Curve): bool:
+    mut x := _newbuf(cv.nb)
+    defer _buf_free(x)
+    mut y := _newbuf(cv.nb)
+    defer _buf_free(y)
+    mut tries := 0
+    until tries < 8:
+        tries += 1
+        _bufreset(x)
+        _bufreset(y)
+        _putzeros(x, cv.nb)
+        _putzeros(y, cv.nb)
+        _bufreset(h.ecpriv)
+        _putzeros(h.ecpriv, cv.nb)
+        crypto.RandomBytes(h.ecpriv.p, cv.nb)
+        if _ec_base_mul(cv, h.ecpriv.p, x.p, y.p):
+            _bufreset(h.ecpub)
+            _put8(h.ecpub, 4)
+            _putbuf(h.ecpub, x)
+            _putbuf(h.ecpub, y)
+            ret not h.ecpub.bad and not h.ecpriv.bad
+        end
+    end
+    ret false
+end
+
+func _tls12_parse_ske(h &: Handshake, msg: Reader): bool:
+    mut r := msg
+    ctype := _rd8(r)
+    if r.bad or ctype != 3:
+        ret _hs_fail(h, "ServerKeyExchange did not use a named curve")
+    end
+    group := _rd16(r)
+    plen := _rd8(r)
+    point := _rdbytes(r, plen)
+    if r.bad:
+        ret _hs_fail(h, "malformed ServerKeyExchange")
+    end
+    params := _subreader(msg, 0, 4 + plen)
+
+    scheme := _rd16(r)
+    sig := _rdvec16(r)
+    if r.bad or _rdleft(r) != 0:
+        ret _hs_fail(h, "malformed ServerKeyExchange signature")
+    end
+
+    mut signed := _newbuf(128 + plen)
+    defer _buf_free(signed)
+    mut peer := _newbuf(point.len + 1)
+    defer _buf_free(peer)
+    _putbuf(signed, h.crand)
+    _putbuf(signed, h.srand)
+    repeat params.len in i:
+        _put8(signed, _rdat(params, i))
+    end
+
+    leaf := _cert_parse(_bufptr(h.certs, 0), _cert_len(h, 0))
+    if not leaf.ok:
+        ret _hs_fail(h, "server leaf certificate did not parse")
+    end
+    if not _tls_verify_leaf_sig(leaf, scheme, signed, sig, true):
+        ret _hs_fail(h, "ServerKeyExchange signature invalid")
+    end
+
+    h.group = group
+
+    _bufreset(h.shared)
+    if group == GROUP_X25519:
+        if point.len != 32:
+            ret _hs_fail(h, "bad X25519 server key share")
+        end
+        _putzeros(h.shared, 32)
+        if not _x25519_shared(h.priv.p, point.p, h.shared.p):
+            ret _hs_fail(h, "degenerate X25519 shared secret")
+        end
+        ret true
+    end
+    if group == GROUP_SECP256R1 or group == GROUP_SECP384R1:
+        mut cv := _curve_p256()
+        if group == GROUP_SECP384R1:
+            cv = _curve_p384()
+        end
+        if not _tls12_gen_ec_key(h, cv):
+            ret _hs_fail(h, "could not generate a key on the server's curve")
+        end
+        repeat point.len in i:
+            _put8(peer, _rdat(point, i))
+        end
+        _putzeros(h.shared, cv.nb)
+        if not _ec_ecdh(cv, h.ecpriv.p, peer.p, peer.len, h.shared.p):
+            ret _hs_fail(h, "invalid EC server key share")
+        end
+        ret true
+    end
+    ret _hs_fail(h, "server chose an unsupported group")
+end
+
+func _tls12_client_key_exchange(h: Handshake, group: int, out &: Buf):
+    _bufreset(out)
+    _put8(out, HS_CLIENT_KEY_EXCHANGE)
+    lenmark := out.len
+    _put24(out, 0)
+    body := out.len
+    if group == GROUP_X25519:
+        _put8(out, 32)
+        _putbuf(out, h.pub_key)
+    else:
+        _put8(out, h.ecpub.len)
+        _putbuf(out, h.ecpub)
+    end
+    _patch24(out, lenmark, out.len - body)
+end
+
+func _tls12_install_keys(h &: Handshake): bool:
+    klen := _cipher_keylen(h.cipher)
+    ivlen := _tk12_ivlen(h.cipher)
+    total := 2 * klen + 2 * ivlen
+    mut kb := _newbuf(total)
+    defer _buf_wipe(kb)
+    _putzeros(kb, total)
+    _tls12_key_block(h.hash, h.master.p, h.master.len, h.srand, h.crand, kb.p, total)
+
+    _tk_free(h.rec.rxk)
+    _tk_free(h.rec.txk)
+    h.rec.txk = _tk_from_block(kb, 0, klen, 2 * klen, ivlen, h.cipher)
+    h.rec.rxk = _tk_from_block(kb, klen, klen, 2 * klen + ivlen, ivlen, h.cipher)
+    ret h.rec.txk.live and h.rec.rxk.live
+end
+
+func _tls12_finished_msg(h: Handshake, label: str, th: Buf, out &: Buf):
+    mut vd := _newbuf(VERIFY_DATA_LEN)
+    defer _buf_free(vd)
+    _putzeros(vd, VERIFY_DATA_LEN)
+    _tls12_verify_data(h.hash, h.master.p, h.master.len, label, th, vd.p)
+    _bufreset(out)
+    _put8(out, HS_FINISHED)
+    _put24(out, VERIFY_DATA_LEN)
+    _putbuf(out, vd)
+end

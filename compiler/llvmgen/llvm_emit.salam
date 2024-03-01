@@ -1,0 +1,205 @@
+package llvmgen
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include lg "../logger.salam"
+
+func safe_name(raw: str): str:
+    if str.Len(raw) == 0:
+        ret "_"
+    end
+    n := str.Len(raw)
+    mut needs_fix := false
+    mut i := 0
+    until i < n and not needs_fix:
+        c := byte_at(raw, i)
+        okc := is_alnum_b(c) or c == 95 or c == 46 or c == 36
+        if not okc:
+            needs_fix = true
+        end
+        i += 1
+    end
+    if not needs_fix:
+        ret raw
+    end
+    mut b := co.SbNew()
+    mut j := 0
+    until j < n:
+        c2 := byte_at(raw, j)
+        okc2 := is_alnum_b(c2) or c2 == 46 or c2 == 36
+        if okc2:
+            co.SbPutc(b, c2)
+        else c2 == 95:
+            co.SbPuts(b, "__")
+        else:
+            co.SbPuts(b, "_" + hex2_lower(c2))
+        end
+        j += 1
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+func dbg_suffix(v &: Lv): str:
+    if v.debug and str.Len(v.cur_dbg) > 0:
+        ret ", !dbg " + v.cur_dbg
+    end
+    ret ""
+end
+
+func emit(v &: Lv, text: str):
+    if v.term:
+        ret
+    end
+    out_b(v, "  " + text + dbg_suffix(v) + "\n")
+end
+
+func emit_alloca(v &: Lv, text: str):
+    out_al(v, "  " + text + "\n")
+end
+
+func emit_label(v &: Lv, label: str):
+    out_b(v, label + ":\n")
+    v.term = false
+end
+
+func emit_term(v &: Lv, text: str):
+    if v.term:
+        ret
+    end
+    out_b(v, "  " + text + dbg_suffix(v) + "\n")
+    v.term = true
+end
+
+func new_tmp(v &: Lv): str:
+    r := "%t" + co.I64Toa(v.tmp as i64)
+    v.tmp += 1
+    ret r
+end
+
+func new_lbl(v &: Lv, tag: str): str:
+    r := "L" + co.I64Toa(v.lbl as i64) + "_" + tag
+    v.lbl += 1
+    ret r
+end
+
+func lv_error(v &: Lv, a &: at.Ast, n: int, msg: str):
+    v.ok = false
+    body := clamp255(msg)
+    mut full := "LLVM backend: " + body
+    if n != 0:
+        node := at.Get(a, n)
+        if node.begin_line != (0 as u32):
+            full = "LLVM backend (line " + co.U64Toa(node.begin_line as u64) + "): " + body
+        end
+    end
+    if str.Len(v.first_error) == 0:
+        v.first_error = full
+    end
+    lg.Log(v.log, lg.PH_CODEGEN, lg.LOG_ERROR, full)
+end
+
+func escape_bytes(sx: str, arr_len &: int):
+    arr_len = str.Len(sx) + 1
+end
+
+func escape_text(sx: str): str:
+    n := str.Len(sx)
+    mut b := co.SbNew()
+    mut i := 0
+    until i < n:
+        c := byte_at(sx, i)
+        if c == 34 or c == 92 or c < 32 or c > 126:
+            co.SbPuts(b, "\\" + hex2_upper(c))
+        else:
+            co.SbPutc(b, c)
+        end
+        i += 1
+    end
+    co.SbPuts(b, "\\00")
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+func str_hash(sx: str): u64:
+    mut h := 0xCBF29CE484222325 as u64
+    n := str.Len(sx)
+    mut i := 0
+    until i < n:
+        h ^= byte_at(sx, i) as u64
+        h *= 0x100000001B3 as u64
+        i += 1
+    end
+    ret h
+end
+
+func strconst(v &: Lv, sx: str): str:
+    n := str.Len(sx)
+    h := str_hash(sx)
+    repeat v.strings.len() in i:
+        e := v.strings.get(i)
+        if e.hash == h and e.len == n and str.Equals(e.bytes, sx):
+            ret e.gref
+        end
+    end
+    mut arr := 0
+    escape_bytes(sx, arr)
+    esc := escape_text(sx)
+    gref := "@.str." + co.I64Toa(v.strings.len() as i64)
+    out_g(
+        v, gref + " = private unnamed_addr constant [" + co.I64Toa(arr as i64) + ` x i8] c"` + esc + "\"\n"
+    )
+    mut e2 := LvStr {}
+    e2.bytes = sx
+    e2.len = n
+    e2.hash = h
+    e2.gref = gref
+    v.strings.push(e2)
+    ret gref
+end
+
+func local_add(v &: Lv, name: str, ptr2: str, ts: str):
+    mut lvv := LvVar {}
+    lvv.name = name
+    lvv.ptr = ptr2
+    lvv.ts = ts
+    v.locals.push(lvv)
+end
+
+func local_find(v &: Lv, name: str): int:
+    mut i := v.locals.len()
+    until i > 0:
+        if str.Equals(v.locals.get(i - 1).name, name):
+            ret i - 1
+        end
+        i -= 1
+    end
+    ret 0 - 1
+end
+
+func global_find(v &: Lv, name: str): int:
+    repeat v.globals.len() in i:
+        if str.Equals(v.globals.get(i).name, name):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func global_find_in(v &: Lv, pkg: str, name: str): int:
+    repeat v.globals.len() in i:
+        gv := v.globals.get(i)
+        if not str.Equals(gv.name, name):
+            continue
+        end
+        if str.Len(pkg) > 0 and str.Len(gv.pkg) > 0 and not str.Equals(pkg, gv.pkg):
+            continue
+        end
+        ret i
+    end
+    ret 0 - 1
+end

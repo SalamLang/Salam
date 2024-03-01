@@ -1,0 +1,277 @@
+package nativegen
+
+const ISS_MAX_SIZE := 360
+
+pub struct IssCond:
+    pub cmp: int = 0 - 1
+    pub k: i64 = 0
+    pub rhs: int = 0 - 1
+    pub cc: int = 0
+end
+
+func iss_term(g &: Ng, ivv: int, v: int, k &: i64): bool:
+    if v == ivv:
+        k = 0 as i64
+        ret true
+    end
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret false
+    end
+    d := g.v_def[v]
+    if g.i_op[d] != OP_ADD or g.i_a[d] != ivv or not is_cint(g, g.i_b[d]) or (g.i_f[d] & IF_NSW) == 0:
+        ret false
+    end
+    c := g.v_i[g.i_b[d]]
+    if c < (0 - 4096 as i64) or c > (4096 as i64):
+        ret false
+    end
+    k = c
+    ret true
+end
+
+func iss_collect(g &: Ng, l &: Lp, mark: int, h: int, ivv: int, conds &: Vector<IssCond>):
+    each b in g.b_rpo:
+        if l.inl[b] != mark or b == h:
+            continue
+        end
+        mut j := g.b_first[b]
+        until j >= 0:
+            if g.i_op[j] == OP_ICMP and g.v_ty[g.i_a[j]] == T_I32:
+                cc := g.i_x[j]
+                mut k := 0 as i64
+                if (cc == CC_ULT or cc == CC_SLT) and iss_term(g, ivv, g.i_a[j], k) and lsr_inv_m(g, l, mark, g.i_b[j]):
+                    conds.push(IssCond {cmp = j, k = k, rhs = g.i_b[j], cc = cc})
+                else (cc == CC_SGE or cc == CC_SGT) and iss_term(g, ivv, g.i_a[j], k) and is_cint(g, g.i_b[j]):
+                    conds.push(IssCond {cmp = j, k = k, rhs = g.i_b[j], cc = cc})
+                end
+            end
+            j = g.i_next[j]
+        end
+    end
+end
+
+func iss_ins(g &: Ng, b: int, op: int, ty: int, a: int, bb: int, x: int): int:
+    i := ins_new(g, op, ty)
+    g.i_a[i] = a
+    g.i_b[i] = bb
+    g.i_x[i] = x
+    v := new_res(g, i)
+    ins_append(g, b, i)
+    ret v
+end
+
+func iss_min(g &: Ng, b: int, a: int, c: int): int:
+    lt0 := iss_ins(g, b, OP_ICMP, T_I1, a, c, CC_SLT)
+    s := ins_new(g, OP_SELECT, T_I64)
+    g.i_a[s] = lt0
+    g.i_b[s] = a
+    g.i_c[s] = c
+    v := new_res(g, s)
+    ins_append(g, b, s)
+    ret v
+end
+
+func iss_split(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: int, lim: int, conds &: Vector<IssCond>):
+    t := g.b_last[h]
+    g.i_f[t] = g.i_f[t] | IF_NOISS
+    body0 := g.i_b[t]
+    mut lo := (0 - 2147483647 - 1) as i64
+    each c0 in conds:
+        mut cand := lo
+        if c0.cc == CC_ULT:
+            cand = 0 - c0.k
+        else c0.cc == CC_SGE:
+            cand = norm_int(g, T_I32, g.v_i[c0.rhs]) - c0.k
+        else c0.cc == CC_SGT:
+            cand = norm_int(g, T_I32, g.v_i[c0.rhs]) - c0.k + 1
+        end
+        if cand > lo:
+            lo = cand
+        end
+    end
+    pb := new_blk(g)
+    replace_succ(g, g.b_last[pre], h, pb)
+    mut hm := rv_wide(g, pb, lim, T_I32)
+    each c1 in conds:
+        if c1.cc == CC_ULT or c1.cc == CC_SLT:
+            n64 := rv_wide(g, pb, c1.rhs, T_I32)
+            e := iss_ins(g, pb, OP_ADD, T_I64, n64, const_int(g, T_I64, 0 - c1.k), 0)
+            hm = iss_min(g, pb, hm, e)
+        end
+    end
+    low64 := const_int(g, T_I64, lo)
+    lt1 := iss_ins(g, pb, OP_ICMP, T_I1, hm, low64, CC_SLT)
+    s1 := ins_new(g, OP_SELECT, T_I64)
+    g.i_a[s1] = lt1
+    g.i_b[s1] = low64
+    g.i_c[s1] = hm
+    hmc := new_res(g, s1)
+    ins_append(g, pb, s1)
+    hm32 := iss_ins(g, pb, OP_TRUNC, T_I32, hmc, 0 - 1, T_I64)
+    bp := ins_new(g, OP_BR, T_VOID)
+    g.i_b[bp] = h
+    ins_append(g, pb, bp)
+    mut hphis := Vector {} as Vector<int>
+    mut i := g.b_first[h]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        hphis.push(i)
+        ps := g.i_ps[i]
+        repeat g.i_pcount[i] in q:
+            if g.pool[ps + 2 * q + 1] == pre:
+                g.pool[ps + 2 * q + 1] = pb
+            end
+        end
+        i = g.i_next[i]
+    end
+    mut order := Vector {} as Vector<int>
+    each b in g.b_rpo:
+        if l.inl[b] == mark and b != h:
+            order.push(b)
+        end
+    end
+    db := new_blk(g)
+    fh := new_blk(g)
+    fl := new_blk(g)
+    xb := new_blk(g)
+    g.i_b[t] = db
+    ivv := g.i_res[ph]
+    lo32 := const_int(g, T_I32, lo)
+    d1 := iss_ins(g, db, OP_ICMP, T_I1, ivv, lo32, CC_SGE)
+    d2 := iss_ins(g, db, OP_ICMP, T_I1, ivv, hm32, CC_SLT)
+    dv := iss_ins(g, db, OP_AND, T_I1, d1, d2, 0)
+    cd := ins_new(g, OP_CBR, T_VOID)
+    g.i_a[cd] = dv
+    g.i_b[cd] = fh
+    g.i_c[cd] = body0
+    ins_append(g, db, cd)
+    mut u := Usw {}
+    repeat g.v_kind.len():
+        u.vmap.push(0 - 1)
+    end
+    repeat g.b_first.len():
+        u.bmap.push(0 - 1)
+    end
+    mut fphis := Vector {} as Vector<int>
+    each hp in hphis:
+        fp := ins_new(g, OP_PHI, g.i_ty[hp])
+        g.i_ps[fp] = g.pool.len()
+        g.i_pcount[fp] = 2
+        g.pool.push(g.i_res[hp])
+        g.pool.push(db)
+        g.pool.push(0 - 1)
+        g.pool.push(fl)
+        _r := new_res(g, fp)
+        ins_append(g, fh, fp)
+        fphis.push(fp)
+        u.vmap[g.i_res[hp]] = g.i_res[fp]
+    end
+    tv := const_int(g, T_I1, 1 as i64)
+    mut over := Vector {} as Vector<int>
+    each c2 in conds:
+        over.push(g.i_res[c2.cmp])
+        over.push(tv)
+    end
+    run_clone_body(g, u, h, order, fl, over)
+    bf := ins_new(g, OP_BR, T_VOID)
+    g.i_b[bf] = u.bmap[body0]
+    ins_append(g, fh, bf)
+    nxt := usw_val(u, phi_val_for(g, ph, latch))
+    fc := iss_ins(g, fl, OP_ICMP, T_I1, nxt, hm32, CC_SLT)
+    cf := ins_new(g, OP_CBR, T_VOID)
+    g.i_a[cf] = fc
+    g.i_b[cf] = fh
+    g.i_c[cf] = xb
+    g.i_f[cf] = IF_NORUN | IF_NOISS
+    ins_append(g, fl, cf)
+    bx := ins_new(g, OP_BR, T_VOID)
+    g.i_b[bx] = h
+    ins_append(g, xb, bx)
+    repeat hphis.len() in k:
+        hp2 := hphis[k]
+        lv := usw_val(u, phi_val_for(g, hp2, latch))
+        g.pool[g.i_ps[fphis[k]] + 2] = lv
+        ops := g.i_ps[hp2]
+        n := g.i_pcount[hp2]
+        g.i_ps[hp2] = g.pool.len()
+        repeat n in q2:
+            g.pool.push(g.pool[ops + 2 * q2])
+            g.pool.push(g.pool[ops + 2 * q2 + 1])
+        end
+        g.pool.push(lv)
+        g.pool.push(xb)
+        g.i_pcount[hp2] = n + 1
+    end
+    hphis.free()
+    fphis.free()
+    order.free()
+    over.free()
+    u.vmap.free()
+    u.bmap.free()
+    u.blocks.free()
+end
+
+func index_split(g &: Ng): bool:
+    ensure_preheaders(g)
+    count_uses(g)
+    build_dom(g)
+    mut l := Lp {}
+    repeat g.b_first.len():
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut heads := Vector {} as Vector<int>
+    each hh in l.head:
+        heads.push(hh)
+    end
+    mut changed := false
+    mut mark := 9000000
+    mut conds := Vector {} as Vector<IssCond>
+    each h in heads:
+        if changed:
+            break
+        end
+        mark += 1
+        _n := lp_body(g, l, h, mark)
+        p := lp_outside_pred(g, l, h, mark)
+        if p < 0 or g.b_last[p] < 0 or g.i_op[g.b_last[p]] != OP_BR:
+            continue
+        end
+        mut latch := 0 - 1
+        mut nl := 0
+        repeat g.b_npred[h] in q:
+            pb := g.b_pred[g.b_ps[h] + q]
+            if l.inl[pb] == mark:
+                latch = pb
+                nl += 1
+            end
+        end
+        if nl != 1:
+            continue
+        end
+        mut iv := 0 - 1
+        mut step := 0 as i64
+        mut lim := 0 - 1
+        mut cc := 0
+        if not run_match(g, l, mark, h, latch, iv, step, lim, cc, IF_NOISS, ISS_MAX_SIZE) or g.i_ty[iv] != T_I32 or cc != CC_SLT:
+            continue
+        end
+        conds.clear()
+        iss_collect(g, l, mark, h, g.i_res[iv], conds)
+        if conds.len() > 0:
+            iss_split(g, l, mark, h, p, latch, iv, lim, conds)
+            changed = true
+        end
+    end
+    conds.free()
+    heads.free()
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+    if changed:
+        ensure_terms(g)
+        build_cfg(g)
+    end
+    ret changed
+end

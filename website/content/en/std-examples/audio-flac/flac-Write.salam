@@ -1,0 +1,65 @@
+import audio
+import audio.flac
+import audio.synth
+import compress
+import filepath
+import mem
+import os
+
+func main:
+    src := synth.Tone(440.0, 0.2, 44100, synth.WaveSine)
+    mut tone := audio.ToBits(src, 16)
+    tone.bits = 16
+    raw := tone.frames * tone.channels * 2
+    println tone.frames, raw
+
+    enc := flac.EncodeFLAC(tone)
+    println compress.BufLen(enc) < raw / 2
+    println flac.VerifyFLAC(enc.data, enc.len)
+    println flac.DefaultBlock
+
+    mut ok := false
+    back := flac.DecodeFLAC(enc.data, enc.len, ok)
+    mut worst := 0.0
+    mut i := 0
+    until i < tone.frames:
+        d := audio.Sample(back, i, 0) - audio.Sample(tone, i, 0)
+        if d > worst:
+            worst = d
+        end
+        if 0.0 - d > worst:
+            worst = 0.0 - d
+        end
+        i += 1
+    end
+    println worst
+
+    each lv in [0, 5, 8]:
+        one := flac.EncodeFLACLevel(tone, lv)
+        println lv, compress.BufLen(one) > 42, flac.VerifyFLAC(one.data, one.len)
+        compress.BufFree(one)
+    end
+    println compress.BufLen(flac.EncodeFLAC(audio.Clip {}))
+
+    path := filepath.Join(os.TempDir(), "salam_flac_example.flac")
+    defer mem.Free(path as void*)
+    println flac.SaveFLAC(tone, path)
+    mut dok := false
+    disk := flac.OpenFLAC(path, dok)
+    println dok, disk.frames == tone.frames, disk.bits
+    println flac.SaveFLACLevel(tone, path, 8)
+    mut iok := false
+    info := flac.ProbeFileFLAC(path, iok)
+    println iok, info.frames
+    mut gone := false
+    missing := filepath.Join(os.TempDir(), "salam_flac_none.flac")
+    defer mem.Free(missing as void*)
+    flac.OpenFLAC(missing, gone)
+    println gone
+
+    compress.BufFree(enc)
+    audio.Free(src)
+    audio.Free(tone)
+    audio.Free(back)
+    audio.Free(disk)
+end

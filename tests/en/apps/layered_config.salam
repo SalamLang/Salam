@@ -1,0 +1,124 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import config
+import env
+import os
+import io
+import fs.path
+import str
+
+func write_project(dir: str):
+    mut y := "app:\n"
+    y = y.concat("  name: myservice\n")
+    y = y.concat("  port: 3000\n")
+    y = y.concat("  debug: true\n")
+    y = y.concat("db:\n")
+    y = y.concat("  host: localhost\n")
+    y = y.concat("  port: 5432\n")
+    io.WriteFile(path.Join(dir, "defaults.yaml"), y)
+
+    mut i := "; deployment overrides, committed\n"
+    i = i.concat("[app]\n")
+    i = i.concat("debug = false\n")
+    i = i.concat("[db]\n")
+    i = i.concat("host = db.internal ; the private network name\n")
+    io.WriteFile(path.Join(dir, "config.ini"), i)
+
+    mut e := "# not committed\n"
+    e = e.concat("APP_PORT=9090\n")
+    e = e.concat("DB_USER=service\n")
+    io.WriteFile(path.Join(dir, ".env"), e)
+
+    mut p := "API_TOKEN=AKIA1234567890ABCD\n"
+    p = p.concat("DB_DSN=postgres://${DB_USER}@db.internal:5432\n")
+    io.WriteFile(path.Join(dir, ".env.production"), p)
+end
+
+func file_layers(dir: str): config.Config:
+    mut defaults := config.LoadYAML(path.Join(dir, "defaults.yaml"))
+    defer config.Free(defaults)
+    mut overrides := config.LoadINI(path.Join(dir, "config.ini"))
+    defer config.Free(overrides)
+    ret config.Merge(defaults, overrides)
+end
+
+func setting(c &: config.Config, key: str, envname: str): str:
+    if env.Has(envname): ret env.Get(envname) end
+    ret config.Get(c, key)
+end
+
+func report(c &: config.Config):
+    print "profile:  "
+    println env.Profile()
+    print "app.name: "
+    println setting(c, "app.name", "APP_NAME")
+    print "app.port: "
+    println setting(c, "app.port", "APP_PORT")
+    print "debug:    "
+    println setting(c, "app.debug", "APP_DEBUG")
+    print "db.host:  "
+    println setting(c, "db.host", "DB_HOST")
+    print "db.port:  "
+    println setting(c, "db.port", "DB_PORT")
+    print "db.user:  "
+    println setting(c, "db.user", "DB_USER")
+    print "db.dsn:   "
+    println setting(c, "db.dsn", "DB_DSN")
+    print "token:    "
+    println env.GetMasked("API_TOKEN")
+end
+
+func cleanup(dir: str):
+    env.Unset("APP_PORT")
+    env.Unset("DB_USER")
+    env.Unset("DB_DSN")
+    env.Unset("API_TOKEN")
+    env.Unset("SALAM_ENV")
+    os.RemoveAll(dir)
+end
+
+func main:
+    dir := path.Join(os.TempDir(), "salam_layered_config_demo")
+    os.RemoveAll(dir)
+    os.Mkdir(dir)
+    write_project(dir)
+
+    env.Set("SALAM_ENV", "production")
+    env.Unset("APP_PORT")
+    env.Unset("DB_USER")
+    env.Unset("DB_DSN")
+    env.Unset("API_TOKEN")
+
+    applied := env.LoadProfile(dir)
+    print "loaded from .env files: "
+    println applied
+
+    mut cfg := file_layers(dir)
+    defer config.Free(cfg)
+    report(cfg)
+
+    println "--"
+    print "yaml default kept: "
+    println str.Equals(config.Get(cfg, "db.port"), "5432")
+    print "ini override won:  "
+    println str.Equals(config.Get(cfg, "db.host"), "db.internal")
+    print "env override won:  "
+    println str.Equals(setting(cfg, "app.port", "APP_PORT"), "9090")
+
+    cleanup(dir)
+    ret 0
+end

@@ -1,0 +1,45 @@
+import db.redis
+
+func take(c: redis.Client, queue: str, seconds: str): str:
+    mut args := Vector {} as Vector<str>
+    args.push("BLPOP")
+    args.push(queue)
+    args.push(seconds)
+    r := redis.Command(c, args)
+    mut job := ""
+    if redis.ReplyType(r) == redis.REPLY_ARRAY:
+        job = redis.ReplyStr(redis.ReplyArrayGet(r, 1))
+    end
+    redis.FreeReply(r)
+    ret job
+end
+
+func worker():
+    c := redis.Connect("127.0.0.1", 6379)
+    defer redis.Close(c)
+    redis.Auth(c, "s3cret")
+    mut job := take(c, "queue:email", "1")
+    until job.len() > 0:
+        redis.RPush(c, "done:email", "sent " + job)
+        job = take(c, "queue:email", "1")
+    end
+end
+
+func main:
+    c := redis.Connect("127.0.0.1", 6379)
+    defer redis.Close(c)
+    redis.Auth(c, "s3cret")
+
+    t := spawn(worker)
+    redis.RPush(c, "queue:email", "welcome:sara")
+    redis.RPush(c, "queue:email", "welcome:omid")
+    redis.RPush(c, "queue:email", "digest:all")
+    println "queued 3 jobs"
+    join(t)
+
+    each line in redis.LRange(c, "done:email", 0, -1):
+        println line
+    end
+    println "left in queue:", redis.LLen(c, "queue:email")
+    redis.Del(c, "done:email")
+end

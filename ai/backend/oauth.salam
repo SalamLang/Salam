@@ -1,0 +1,1396 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aioauth
+
+import net.http
+import net.router
+import encoding
+import encoding.json
+import encoding.value
+import encoding.encerr
+import crypto
+import mem
+import str
+import tls
+import net.dns
+
+include aistore "store.salam"
+include aiweb "web.salam"
+
+const REQUEST_SECONDS := 600
+const CODE_SECONDS := 300
+const ACCESS_SECONDS := 3600
+const REFRESH_SECONDS := 2592000
+const CIMD_SECONDS := 3600
+const MAX_CIMD_BYTES := 16384
+const FETCH_TIMEOUT_MS := 5000
+const MAX_ARGS := 16384
+const SCOPE := "mcp"
+
+mut ISSUER := ""
+mut APP := ""
+mut RESOURCES := Vector {} as Vector<str>
+
+struct Client:
+    pub ok: bool = false
+    pub id: str = ""
+    pub kind: str = ""
+    pub name: str = ""
+    pub uri: str = ""
+    pub logo: str = ""
+    pub redirects: Vector<str> = Vector {}
+end
+
+struct Pending:
+    pub found: bool = false
+    pub answered: bool = false
+    pub client_id: str = ""
+    pub redirect: str = ""
+    pub state: str = ""
+    pub challenge: str = ""
+    pub scope: str = ""
+    pub resource: str = ""
+    pub created: i64 = 0
+    pub redirect_given: bool = true
+end
+
+func one(v: str): Vector<str>:
+    mut a := Vector {} as Vector<str>
+    a.push(v)
+    ret a
+end
+
+func two(v: str, w: str): Vector<str>:
+    mut a := one(v)
+    a.push(w)
+    ret a
+end
+
+func three(v: str, w: str, x: str): Vector<str>:
+    mut a := two(v, w)
+    a.push(x)
+    ret a
+end
+
+func clip(s: str, max: int): str:
+    if s.len() <= max:
+        ret s
+    end
+    ret s.substr(0, max)
+end
+
+func now(): i64:
+    ret aistore.Now()
+end
+
+func n(v: i64): str:
+    ret aiweb.I64s(v)
+end
+
+func enc(v: str): str:
+    ret encoding.URLEncode(v)
+end
+
+func normal_resource(r: str): str:
+    mut v := str.Trim(r)
+    if str.EndsWith(v, "/") and v.len() > 8:
+        v = v.substr(0, v.len() - 1)
+    end
+    slash := v.find("://")
+    if slash < 0:
+        ret v
+    end
+    rest := v.substr(slash + 3, v.len() - slash - 3)
+    cut := rest.find("/")
+    mut host := rest
+    mut path := ""
+    if cut >= 0:
+        host = rest.substr(0, cut)
+        path = rest.substr(cut, rest.len() - cut)
+    end
+    ret str.Lower(v.substr(0, slash)) + "://" + str.Lower(host) + path
+end
+
+func resource_ok(r: str): bool:
+    want := normal_resource(r)
+    each have in RESOURCES:
+        if have == want:
+            ret true
+        end
+    end
+    ret false
+end
+
+func host_of(u: str): str:
+    slash := u.find("://")
+    if slash < 0:
+        ret ""
+    end
+    rest := u.substr(slash + 3, u.len() - slash - 3)
+    mut cut := rest.len()
+    each stop in ["/", "?", "#"]:
+        at := rest.find(stop)
+        if at >= 0 and at < cut:
+            cut = at
+        end
+    end
+    mut host := rest.substr(0, cut)
+    at := host.find("@")
+    if at >= 0:
+        host = host.substr(at + 1, host.len() - at - 1)
+    end
+    ret str.Lower(host)
+end
+
+func bare_host(hostport: str): str:
+    if str.StartsWith(hostport, "["):
+        close := hostport.find("]")
+        if close > 0:
+            ret hostport.substr(0, close + 1)
+        end
+        ret hostport
+    end
+    colon := hostport.find(":")
+    if colon >= 0:
+        ret hostport.substr(0, colon)
+    end
+    ret hostport
+end
+
+func path_of(u: str): str:
+    slash := u.find("://")
+    if slash < 0:
+        ret u
+    end
+    rest := u.substr(slash + 3, u.len() - slash - 3)
+    cut := rest.find("/")
+    if cut < 0:
+        ret "/"
+    end
+    ret rest.substr(cut, rest.len() - cut)
+end
+
+func loopback(u: str): bool:
+    if not str.StartsWith(str.Lower(u), "http://"):
+        ret false
+    end
+    h := bare_host(host_of(u))
+    ret h == "127.0.0.1" or h == "localhost" or h == "[::1]"
+end
+
+func redirect_allowed(u: str): bool:
+    if u.len() == 0 or u.len() > 500 or u.find("#") >= 0 or u.find(" ") >= 0:
+        ret false
+    end
+    lower := str.Lower(u)
+    if str.StartsWith(lower, "https://"):
+        ret host_of(u).len() > 0
+    end
+    if str.StartsWith(lower, "http://"):
+        ret loopback(u)
+    end
+    colon := u.find(":")
+    if colon < 2:
+        ret false
+    end
+    scheme := lower.substr(0, colon)
+    switch scheme:
+        "javascript", "data", "file", "vbscript", "about", "blob", "http", "https", "ws", "wss", "ftp":
+            ret false
+        end
+    end
+    mut i := 0
+    until i < scheme.len():
+        c := scheme.substr(i, 1)
+        letter := c >= "a" and c <= "z"
+        digit := c >= "0" and c <= "9"
+        if not letter and not (i > 0 and (digit or c == "+" or c == "-" or c == ".")):
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+func redirect_matches(registered: str, given: str): bool:
+    if registered == given:
+        ret true
+    end
+    if loopback(registered) and loopback(given):
+        same_host := bare_host(host_of(registered)) == bare_host(host_of(given))
+        ret same_host and path_of(registered) == path_of(given)
+    end
+    ret false
+end
+
+func ip_literal(host: str): bool:
+    h := bare_host(host)
+    if str.StartsWith(h, "["):
+        ret true
+    end
+    mut i := 0
+    until i < h.len():
+        c := h.substr(i, 1)
+        if not ((c >= "0" and c <= "9") or c == "."):
+            ret false
+        end
+        i += 1
+    end
+    ret h.len() > 0
+end
+
+func cimd_url_ok(id: str): bool:
+    if not str.StartsWith(id, "https://") or id.len() > 500 or id.find("#") >= 0:
+        ret false
+    end
+    host := host_of(id)
+    if host.len() == 0 or host.find("@") >= 0 or ip_literal(host):
+        ret false
+    end
+    bh := bare_host(host)
+    if bh == "localhost" or str.EndsWith(bh, ".localhost") or str.EndsWith(bh, ".local") or str.EndsWith(bh, ".internal") or bh.find(".") < 0:
+        ret false
+    end
+    ret path_of(id).len() > 1
+end
+
+func octets(ip: str): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    each part in ip.split("."):
+        if part.len() == 0 or part.len() > 3:
+            ret Vector {}
+        end
+        out.push(part.to_int())
+    end
+    ret out
+end
+
+func public_ipv4(ip: str): bool:
+    o := octets(ip)
+    if o.len() != 4:
+        ret false
+    end
+    a := o.get(0)
+    b := o.get(1)
+    if a == 0 or a == 10 or a == 127 or a >= 224:
+        ret false
+    end
+    if a == 100 and b >= 64 and b <= 127:
+        ret false
+    end
+    if a == 169 and b == 254:
+        ret false
+    end
+    if a == 172 and b >= 16 and b <= 31:
+        ret false
+    end
+    if a == 192 and (b == 168 or (b == 0 and o.get(2) == 0)):
+        ret false
+    end
+    if a == 198 and (b == 18 or b == 19):
+        ret false
+    end
+    ret true
+end
+
+func public_ip(ip: str): bool:
+    v := str.Lower(ip)
+    if v.find(":") < 0:
+        ret public_ipv4(v)
+    end
+    if v == "::" or v == "::1" or str.StartsWith(v, "fe8") or str.StartsWith(v, "fe9") or str.StartsWith(v, "fea") or str.StartsWith(v, "feb") or str.StartsWith(v, "fc") or str.StartsWith(v, "fd") or str.StartsWith(v, "ff"):
+        ret false
+    end
+    if str.StartsWith(v, "::ffff:"):
+        ret public_ipv4(v.substr(7, v.len() - 7))
+    end
+    ret true
+end
+
+func hex_int(h: str): int:
+    mut total := 0
+    mut i := 0
+    until i < h.len():
+        c := str.Lower(h.substr(i, 1))
+        mut d := 0 - 1
+        if c >= "0" and c <= "9":
+            d = c.to_int()
+        else c >= "a" and c <= "f":
+            d = "abcdef".find(c) + 10
+        end
+        if d < 0:
+            ret total
+        end
+        total = total * 16 + d
+        i += 1
+    end
+    ret total
+end
+
+func dechunk(body: str): str:
+    mut out := ""
+    mut rest := body
+    until true:
+        line_end := rest.find("\r\n")
+        if line_end < 0:
+            ret ""
+        end
+        size := hex_int(str.Trim(rest.substr(0, line_end)))
+        if size == 0:
+            ret out
+        end
+        start := line_end + 2
+        if start + size > rest.len():
+            ret ""
+        end
+        out = out + rest.substr(start, size)
+        rest = rest.substr(start + size + 2, rest.len() - start - size - 2)
+    end
+end
+
+func fetch_capped(url: str): str:
+    hostport := host_of(url)
+    host := bare_host(hostport)
+    mut port := 443
+    colon := hostport.find(":")
+    if colon > 0 and not str.StartsWith(hostport, "["):
+        port = hostport.substr(colon + 1, hostport.len() - colon - 1).to_int()
+    end
+    if port <= 0 or port > 65535:
+        ret ""
+    end
+    ip := dns.Lookup(host)
+    if ip.len() == 0 or not public_ip(ip):
+        ret ""
+    end
+    mut c := tls.Dial(ip, port, tls.NewConfig(host))
+    if not c.open:
+        tls.Close(c)
+        ret ""
+    end
+    c.h.rec.read_deadline_ms = FETCH_TIMEOUT_MS
+    request := "GET " + path_of(url) + " HTTP/1.1\r\nHost: " + hostport + "\r\nAccept: application/json\r\nUser-Agent: salam-ai-oauth\r\nConnection: close\r\n\r\n"
+    if tls.Write(c, request) <= 0:
+        tls.Close(c)
+        ret ""
+    end
+    mut raw := ""
+    until true:
+        got := tls.Read(c, 4096)
+        if got.len() == 0:
+            break
+        end
+        raw = raw + got
+        if raw.len() > MAX_CIMD_BYTES + 8192:
+            tls.Close(c)
+            ret ""
+        end
+    end
+    tls.Close(c)
+    head_end := raw.find("\r\n\r\n")
+    if head_end < 0 or not (str.StartsWith(raw, "HTTP/1.1 200") or str.StartsWith(raw, "HTTP/1.0 200")):
+        ret ""
+    end
+    head := str.Lower(raw.substr(0, head_end))
+    body := raw.substr(head_end + 4, raw.len() - head_end - 4)
+    if head.find("transfer-encoding: chunked") >= 0:
+        ret dechunk(body)
+    end
+    ret body
+end
+
+func strings_of(v: value.Value): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    if not value.IsArray(v):
+        ret out
+    end
+    mut i := 0
+    until i < value.ArrayLen(v):
+        item := value.ArrayGet(v, i)
+        if value.IsString(item):
+            out.push(value.AsString(item))
+        end
+        i += 1
+    end
+    ret out
+end
+
+func str_field(v: value.Value, key: str): str:
+    if not value.IsObject(v) or not value.ObjectHas(v, key):
+        ret ""
+    end
+    f := value.ObjectGet(v, key)
+    if not value.IsString(f):
+        ret ""
+    end
+    ret value.AsString(f)
+end
+
+func json_strings(items: Vector<str>): str:
+    mut quoted := Vector {} as Vector<str>
+    each s in items:
+        quoted.push(json.Str(s))
+    end
+    ret json.Array(quoted)
+end
+
+func parse_strings(text: str): Vector<str>:
+    mut err := encerr.EncodingError {}
+    v := json.Decode(text, err)
+    if encerr.IsError(err):
+        ret Vector {}
+    end
+    ret strings_of(v)
+end
+
+func load_client(id: str): Client:
+    mut c := Client {}
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, kind, name, uri, logo, redirects, fetched FROM oauth_clients WHERE id = ?1", one(id))
+    mut fetched := 0 as i64
+    if aistore.Next(rows):
+        c.ok = true
+        c.id = aistore.Text(rows, 0)
+        c.kind = aistore.Text(rows, 1)
+        c.name = aistore.Text(rows, 2)
+        c.uri = aistore.Text(rows, 3)
+        c.logo = aistore.Text(rows, 4)
+        c.redirects = parse_strings(aistore.Text(rows, 5))
+        fetched = aistore.Int64(rows, 6)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    if c.ok and c.kind == "cimd" and now() - fetched > CIMD_SECONDS:
+        fresh := fetch_cimd(id)
+        if fresh.ok:
+            ret fresh
+        end
+    end
+    ret c
+end
+
+func fetch_cimd(id: str): Client:
+    mut c := Client {}
+    if not cimd_url_ok(id):
+        ret c
+    end
+    body := fetch_capped(id)
+    if body.len() == 0 or body.len() > MAX_CIMD_BYTES:
+        ret c
+    end
+    mut err := encerr.EncodingError {}
+    doc := json.Decode(body, err)
+    if encerr.IsError(err) or not value.IsObject(doc):
+        ret c
+    end
+    if str_field(doc, "client_id") != id:
+        ret c
+    end
+    if not value.ObjectHas(doc, "redirect_uris"):
+        ret c
+    end
+    redirects := strings_of(value.ObjectGet(doc, "redirect_uris"))
+    if redirects.len() == 0 or redirects.len() > 20:
+        ret c
+    end
+    each u in redirects:
+        if not redirect_allowed(u):
+            ret c
+        end
+    end
+    mut name := str.Trim(str_field(doc, "client_name"))
+    if name.len() == 0 or name.len() > 200:
+        name = bare_host(host_of(id))
+    end
+    mut uri := str_field(doc, "client_uri")
+    if not str.StartsWith(uri, "https://") or uri.len() > 500:
+        uri = ""
+    end
+    mut logo := str_field(doc, "logo_uri")
+    if not str.StartsWith(logo, "https://") or logo.len() > 500:
+        logo = ""
+    end
+    c.ok = true
+    c.id = id
+    c.kind = "cimd"
+    c.name = name
+    c.uri = uri
+    c.logo = logo
+    c.redirects = redirects
+    t := n(now())
+    mut args := three(id, name, uri)
+    args.push(logo)
+    args.push(json_strings(redirects))
+    args.push(t)
+    aistore.Lock()
+    _s := aistore.Run("INSERT INTO oauth_clients (id, kind, name, uri, logo, redirects, created, fetched) VALUES (?1, 'cimd', ?2, ?3, ?4, ?5, ?6, ?6) ON DUPLICATE KEY UPDATE name = ?2, uri = ?3, logo = ?4, redirects = ?5, fetched = ?6", args)
+    aistore.Unlock()
+    ret c
+end
+
+func find_client(id: str): Client:
+    if id.len() == 0 or id.len() > 500:
+        ret Client {}
+    end
+    c := load_client(id)
+    if c.ok:
+        ret c
+    end
+    if str.StartsWith(id, "https://"):
+        ret fetch_cimd(id)
+    end
+    ret c
+end
+
+func client_host(c: Client): str:
+    if c.kind == "cimd":
+        ret bare_host(host_of(c.id))
+    end
+    if c.uri.len() > 0:
+        ret bare_host(host_of(c.uri))
+    end
+    if c.redirects.len() > 0:
+        h := bare_host(host_of(c.redirects.get(0)))
+        if h.len() > 0:
+            ret h
+        end
+    end
+    ret ""
+end
+
+func with_params(base: str, params: Vector<str>): str:
+    mut out := base
+    mut sep := "?"
+    if base.find("?") >= 0:
+        sep = "&"
+    end
+    mut i := 0
+    until i + 1 < params.len():
+        if params.get(i + 1).len() > 0:
+            out = out + sep + params.get(i) + "=" + enc(params.get(i + 1))
+            sep = "&"
+        end
+        i += 2
+    end
+    ret out
+end
+
+func error_page(ctx: i64, code: str, description: str):
+    http.SetHeader(ctx, "Cache-Control", "no-store")
+    mut p := two("error", code)
+    p.push("error_description")
+    p.push(description)
+    http.Redirect(ctx, with_params(APP + "/connect", p))
+end
+
+func error_redirect(ctx: i64, redirect: str, state: str, code: str, description: str):
+    mut p := two("error", code)
+    p.push("error_description")
+    p.push(description)
+    p.push("state")
+    p.push(state)
+    p.push("iss")
+    p.push(ISSUER)
+    http.SetHeader(ctx, "Cache-Control", "no-store")
+    http.Redirect(ctx, with_params(redirect, p))
+end
+
+func clean_scope(requested: str, ok &: bool): str:
+    ok = true
+    mut granted := ""
+    each part in str.Trim(requested).split(" "):
+        p := str.Trim(part)
+        switch p:
+            "", "offline_access":
+                continue
+            end
+            "mcp":
+                granted = SCOPE
+                continue
+            end
+        end
+        ok = false
+    end
+    if granted.len() == 0:
+        granted = SCOPE
+    end
+    ret granted
+end
+
+func s256(verifier: str): str:
+    buf := mem.Allocate(32 as u64)
+    defer mem.Free(buf)
+    crypto.Sha256Bytes(verifier as void*, verifier.len(), buf)
+    b64 := encoding.Base64EncodeBytes(buf, 32)
+    ret str.Replace(str.Replace(str.Replace(b64, "+", "-"), "/", "_"), "=", "")
+end
+
+func verifier_ok(v: str): bool:
+    if v.len() < 43 or v.len() > 128:
+        ret false
+    end
+    mut i := 0
+    until i < v.len():
+        c := v.substr(i, 1)
+        alnum := (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9")
+        if not alnum and c != "-" and c != "." and c != "_" and c != "~":
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+func token_error(ctx: i64, status: int, code: str, description: str):
+    aiweb.OpenCors(ctx)
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("error", code))
+    m.push(json.Member("error_description", description))
+    http.SetStatus(ctx, status)
+    http.Json(ctx, json.Object(m))
+end
+
+func client_json(id: str, kind: str, name: str, uri: str, logo: str, host: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("id", id))
+    m.push(json.Member("name", name))
+    m.push(json.Member("uri", uri))
+    m.push(json.Member("logo", logo))
+    m.push(json.Member("host", host))
+    m.push(json.Member("kind", kind))
+    ret json.Object(m)
+end
+
+func scope_json(scope: str): str:
+    mut items := Vector {} as Vector<str>
+    each part in scope.split(" "):
+        if part == SCOPE:
+            mut m := Vector {} as Vector<str>
+            m.push(json.Member("name", SCOPE))
+            m.push(json.Member("title", "استفاده از ابزارهای سلام (MCP)"))
+            m.push(json.Member("description", "بررسی و کامپایل کد سلام، جست‌وجو در کتابخانه‌ی استاندارد و نمونه‌ها، با نام حساب شما"))
+            items.push(json.Object(m))
+        end
+    end
+    ret json.Array(items)
+end
+
+func metadata(ctx: i64):
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("issuer", ISSUER))
+    m.push(json.Member("authorization_endpoint", ISSUER + "/oauth/authorize"))
+    m.push(json.Member("token_endpoint", ISSUER + "/oauth/token"))
+    m.push(json.Member("registration_endpoint", ISSUER + "/oauth/register"))
+    m.push(json.Member("revocation_endpoint", ISSUER + "/oauth/revoke"))
+    m.push(json.MemberRaw("response_types_supported", `["code"]`))
+    m.push(json.MemberRaw("response_modes_supported", `["query"]`))
+    m.push(json.MemberRaw("grant_types_supported", `["authorization_code", "refresh_token"]`))
+    m.push(json.MemberRaw("code_challenge_methods_supported", `["S256"]`))
+    m.push(json.MemberRaw("token_endpoint_auth_methods_supported", `["none"]`))
+    m.push(json.MemberRaw("revocation_endpoint_auth_methods_supported", `["none"]`))
+    m.push(json.MemberRaw("scopes_supported", `["mcp"]`))
+    m.push(json.MemberBool("client_id_metadata_document_supported", true))
+    m.push(json.MemberBool("authorization_response_iss_parameter_supported", true))
+    m.push(json.Member("service_documentation", "https://mcp.salamlang.ir/"))
+    aiweb.OpenCors(ctx)
+    http.SetHeader(ctx, "Cache-Control", "public, max-age=3600")
+    http.SetStatus(ctx, 200)
+    http.Json(ctx, json.Object(m))
+end
+
+func register_client(ctx: i64):
+    mut err := encerr.EncodingError {}
+    doc := json.Decode(http.Body(ctx), err)
+    if encerr.IsError(err) or not value.IsObject(doc):
+        token_error(ctx, 400, "invalid_client_metadata", "the body must be a JSON object")
+        ret
+    end
+    mut redirects := Vector {} as Vector<str>
+    if value.ObjectHas(doc, "redirect_uris"):
+        redirects = strings_of(value.ObjectGet(doc, "redirect_uris"))
+    end
+    if redirects.len() == 0 or redirects.len() > 10:
+        token_error(ctx, 400, "invalid_redirect_uri", "redirect_uris must list between 1 and 10 URIs")
+        ret
+    end
+    each u in redirects:
+        if not redirect_allowed(u):
+            token_error(ctx, 400, "invalid_redirect_uri", "redirect URIs must be https, http on a loopback address, or a private app scheme: " + u)
+            ret
+        end
+    end
+    mut name := str.Trim(str_field(doc, "client_name"))
+    if name.len() == 0:
+        name = "Unnamed app"
+    end
+    if name.len() > 200:
+        name = name.substr(0, 200)
+    end
+    mut uri := str_field(doc, "client_uri")
+    if not str.StartsWith(uri, "https://") or uri.len() > 500:
+        uri = ""
+    end
+    id := "sc_" + crypto.RandomHex(16)
+    t := now()
+    mut args := three(id, name, uri)
+    args.push(json_strings(redirects))
+    args.push(n(t))
+    aistore.Lock()
+    ok := aistore.Run("INSERT INTO oauth_clients (id, kind, name, uri, logo, redirects, created) VALUES (?1, 'dcr', ?2, ?3, '', ?4, ?5)", args)
+    aistore.Unlock()
+    if not ok:
+        token_error(ctx, 500, "server_error", "could not store the client")
+        ret
+    end
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("client_id", id))
+    m.push(json.MemberInt("client_id_issued_at", t))
+    m.push(json.Member("client_name", name))
+    if uri.len() > 0:
+        m.push(json.Member("client_uri", uri))
+    end
+    m.push(json.MemberRaw("redirect_uris", json_strings(redirects)))
+    m.push(json.MemberRaw("grant_types", `["authorization_code", "refresh_token"]`))
+    m.push(json.MemberRaw("response_types", `["code"]`))
+    m.push(json.Member("token_endpoint_auth_method", "none"))
+    m.push(json.Member("scope", SCOPE))
+    aiweb.OpenCors(ctx)
+    http.SetStatus(ctx, 201)
+    http.Json(ctx, json.Object(m))
+end
+
+func authorize(ctx: i64):
+    client_id := http.Query(ctx, "client_id")
+    mut redirect := http.Query(ctx, "redirect_uri")
+    given := redirect.len() > 0
+    state := http.Query(ctx, "state")
+    c := find_client(client_id)
+    if not c.ok:
+        error_page(ctx, "invalid_client", "این برنامه شناخته نشد. اتصال را از خود برنامه دوباره شروع کنید.")
+        ret
+    end
+    if redirect.len() == 0 and c.redirects.len() == 1:
+        redirect = c.redirects.get(0)
+    end
+    mut matched := false
+    each u in c.redirects:
+        if redirect_matches(u, redirect):
+            matched = true
+        end
+    end
+    if not matched:
+        error_page(ctx, "invalid_request", "نشانی بازگشت این برنامه با نشانی ثبت‌شده‌ی آن یکی نیست.")
+        ret
+    end
+    if http.Query(ctx, "response_type") != "code":
+        error_redirect(ctx, redirect, state, "unsupported_response_type", "only response_type=code is supported")
+        ret
+    end
+    challenge := http.Query(ctx, "code_challenge")
+    if challenge.len() < 43 or challenge.len() > 128 or http.Query(ctx, "code_challenge_method") != "S256":
+        error_redirect(ctx, redirect, state, "invalid_request", "PKCE with code_challenge_method=S256 is required")
+        ret
+    end
+    mut resource := http.Query(ctx, "resource")
+    if resource.len() == 0:
+        resource = RESOURCES.get(0)
+    end
+    if not resource_ok(resource):
+        error_redirect(ctx, redirect, state, "invalid_target", "unknown resource: " + resource)
+        ret
+    end
+    mut scope_ok := true
+    scope := clean_scope(http.Query(ctx, "scope"), scope_ok)
+    if not scope_ok:
+        error_redirect(ctx, redirect, state, "invalid_scope", "the only scope is mcp")
+        ret
+    end
+    id := crypto.RandomHex(16)
+    mut args := three(id, c.id, redirect)
+    args.push(state)
+    args.push(challenge)
+    args.push(scope)
+    args.push(normal_resource(resource))
+    args.push(n(now()))
+    args.push(given ? "1" : "0")
+    aistore.Lock()
+    _gc := aistore.Run("DELETE FROM oauth_requests WHERE created < ?1", one(n(now() - 86400)))
+    ok := aistore.Run("INSERT INTO oauth_requests (id, client_id, redirect_uri, state, challenge, scope, resource, created, redirect_given) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)", args)
+    aistore.Unlock()
+    if not ok:
+        error_redirect(ctx, redirect, state, "server_error", "could not start the authorization")
+        ret
+    end
+    http.SetHeader(ctx, "Cache-Control", "no-store")
+    http.Redirect(ctx, APP + "/connect?request=" + id)
+end
+
+func load_request(id: str): Pending:
+    mut p := Pending {}
+    if id.len() != 32:
+        ret p
+    end
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT client_id, redirect_uri, state, challenge, scope, resource, created, answered, redirect_given FROM oauth_requests WHERE id = ?1 AND created > ?2", two(id, n(now() - REQUEST_SECONDS)))
+    if aistore.Next(rows):
+        p.found = true
+        p.client_id = aistore.Text(rows, 0)
+        p.redirect = aistore.Text(rows, 1)
+        p.state = aistore.Text(rows, 2)
+        p.challenge = aistore.Text(rows, 3)
+        p.scope = aistore.Text(rows, 4)
+        p.resource = aistore.Text(rows, 5)
+        p.created = aistore.Int64(rows, 6)
+        p.answered = aistore.Text(rows, 7) != "0"
+        p.redirect_given = aistore.Text(rows, 8) != "0"
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret p
+end
+
+func pending_or_fail(ctx: i64, id: str): Pending:
+    p := load_request(id)
+    if not p.found:
+        aiweb.Fail(ctx, 404, "not_found", "این درخواست اتصال پیدا نشد یا منقضی شده است. اتصال را از خود برنامه دوباره شروع کنید.")
+    else p.answered:
+        aiweb.Fail(ctx, 410, "used", "به این درخواست اتصال قبلا پاسخ داده شده است.")
+    end
+    ret p
+end
+
+func get_request(ctx: i64):
+    id := http.Param(ctx, "id")
+    p := pending_or_fail(ctx, id)
+    if not p.found or p.answered:
+        ret
+    end
+    c := load_client(p.client_id)
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("id", id))
+    m.push(json.MemberRaw("client", client_json(c.id, c.kind, c.name, c.uri, c.logo, client_host(c))))
+    m.push(json.Member("redirect_host", bare_host(host_of(p.redirect))))
+    m.push(json.MemberRaw("scopes", scope_json(p.scope)))
+    m.push(json.Member("resource", p.resource))
+    m.push(json.MemberInt("expires", p.created + REQUEST_SECONDS))
+    aiweb.Reply(ctx, 200, `{"request": ` + json.Object(m) + "}")
+end
+
+func mark_answered(id: str): bool:
+    aistore.Lock()
+    _u := aistore.Run("UPDATE oauth_requests SET answered = 1 WHERE id = ?1 AND answered = 0", one(id))
+    left := aistore.OneText("SELECT answered FROM oauth_requests WHERE id = ?1", one(id))
+    aistore.Unlock()
+    ret left == "1"
+end
+
+func approve(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    p := pending_or_fail(ctx, id)
+    if not p.found or p.answered:
+        ret
+    end
+    if not mark_answered(id):
+        aiweb.Fail(ctx, 410, "used", "به این درخواست اتصال قبلا پاسخ داده شده است.")
+        ret
+    end
+    code := crypto.RandomToken(32)
+    mut args := three(aiweb.Hash(code), n(uid), p.client_id)
+    args.push(p.redirect)
+    args.push(p.challenge)
+    args.push(p.scope)
+    args.push(p.resource)
+    args.push(n(now() + CODE_SECONDS))
+    args.push(p.redirect_given ? "1" : "0")
+    aistore.Lock()
+    ok := aistore.Run("INSERT INTO oauth_codes (code, user_id, client_id, redirect_uri, challenge, scope, resource, expires, redirect_given) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)", args)
+    aistore.Unlock()
+    if not ok:
+        aiweb.Fail(ctx, 500, "server", "ساخت اتصال ناموفق بود. دوباره تلاش کنید.")
+        ret
+    end
+    mut q := two("code", code)
+    q.push("state")
+    q.push(p.state)
+    q.push("iss")
+    q.push(ISSUER)
+    aiweb.Reply(ctx, 200, "{" + json.Member("redirect", with_params(p.redirect, q)) + "}")
+end
+
+func deny(ctx: i64):
+    id := http.Param(ctx, "id")
+    p := pending_or_fail(ctx, id)
+    if not p.found or p.answered:
+        ret
+    end
+    _m := mark_answered(id)
+    mut q := two("error", "access_denied")
+    q.push("error_description")
+    q.push("the user declined the connection")
+    q.push("state")
+    q.push(p.state)
+    q.push("iss")
+    q.push(ISSUER)
+    aiweb.Reply(ctx, 200, "{" + json.Member("redirect", with_params(p.redirect, q)) + "}")
+end
+
+func revoke_grant(gid: str):
+    aistore.Lock()
+    _r := aistore.Run("UPDATE oauth_grants SET revoked = 1 WHERE id = ?1", one(gid))
+    _t := aistore.Run("DELETE FROM oauth_tokens WHERE grant_id = ?1", one(gid))
+    aistore.Unlock()
+end
+
+func issue(ctx: i64, gid: str, scope: str):
+    access := "sa_" + crypto.RandomToken(32)
+    refresh := "sr_" + crypto.RandomToken(32)
+    t := now()
+    aistore.Lock()
+    _gc := aistore.Run("DELETE FROM oauth_tokens WHERE expires < ?1", one(n(t)))
+    _a := aistore.Run("INSERT INTO oauth_tokens (token, grant_id, kind, expires) VALUES (?1, ?2, 'access', ?3)", three(aiweb.Hash(access), gid, n(t + ACCESS_SECONDS)))
+    _r := aistore.Run("INSERT INTO oauth_tokens (token, grant_id, kind, expires) VALUES (?1, ?2, 'refresh', ?3)", three(aiweb.Hash(refresh), gid, n(t + REFRESH_SECONDS)))
+    aistore.Unlock()
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("access_token", access))
+    m.push(json.Member("token_type", "Bearer"))
+    m.push(json.MemberInt("expires_in", ACCESS_SECONDS))
+    m.push(json.Member("refresh_token", refresh))
+    m.push(json.Member("scope", scope))
+    aiweb.OpenCors(ctx)
+    http.SetStatus(ctx, 200)
+    http.Json(ctx, json.Object(m))
+end
+
+func grant_for(uid: str, client_id: str, scope: str, resource: str): str:
+    aistore.Lock()
+    mut gid := aistore.OneText("SELECT id FROM oauth_grants WHERE user_id = ?1 AND client_id = ?2 AND resource = ?3 AND revoked = 0 ORDER BY id DESC LIMIT 1", three(uid, client_id, resource))
+    if gid.len() == 0:
+        mut args := three(uid, client_id, scope)
+        args.push(resource)
+        args.push(n(now()))
+        if aistore.Run("INSERT INTO oauth_grants (user_id, client_id, scope, resource, created) VALUES (?1, ?2, ?3, ?4, ?5)", args):
+            gid = aistore.LastId()
+        end
+    else:
+        _u := aistore.Run("UPDATE oauth_grants SET scope = ?1 WHERE id = ?2", two(scope, gid))
+    end
+    aistore.Unlock()
+    ret gid
+end
+
+func exchange_code(ctx: i64):
+    code := http.Form(ctx, "code")
+    client_id := http.Form(ctx, "client_id")
+    verifier := http.Form(ctx, "code_verifier")
+    redirect := http.Form(ctx, "redirect_uri")
+    resource := http.Form(ctx, "resource")
+    if code.len() == 0 or client_id.len() == 0:
+        token_error(ctx, 400, "invalid_request", "code and client_id are required")
+        ret
+    end
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT user_id, client_id, redirect_uri, challenge, scope, resource, expires, used, grant_id, redirect_given FROM oauth_codes WHERE code = ?1", one(aiweb.Hash(code)))
+    mut found := false
+    mut uid := ""
+    mut owner := ""
+    mut want_redirect := ""
+    mut challenge := ""
+    mut scope := ""
+    mut want_resource := ""
+    mut expires := 0 as i64
+    mut used := false
+    mut old_grant := ""
+    mut redirect_given := true
+    if aistore.Next(rows):
+        found = true
+        uid = aistore.Text(rows, 0)
+        owner = aistore.Text(rows, 1)
+        want_redirect = aistore.Text(rows, 2)
+        challenge = aistore.Text(rows, 3)
+        scope = aistore.Text(rows, 4)
+        want_resource = aistore.Text(rows, 5)
+        expires = aistore.Int64(rows, 6)
+        used = aistore.Text(rows, 7) != "0"
+        old_grant = aistore.Text(rows, 8)
+        redirect_given = aistore.Text(rows, 9) != "0"
+    end
+    aistore.Finish(rows)
+    if found and not used:
+        _u := aistore.Run("UPDATE oauth_codes SET used = 1 WHERE code = ?1", one(aiweb.Hash(code)))
+    end
+    _gc := aistore.Run("DELETE FROM oauth_codes WHERE expires < ?1", one(n(now() - 86400)))
+    aistore.Unlock()
+    if not found:
+        token_error(ctx, 400, "invalid_grant", "unknown authorization code")
+        ret
+    end
+    if used:
+        if old_grant != "0" and old_grant.len() > 0:
+            revoke_grant(old_grant)
+        end
+        token_error(ctx, 400, "invalid_grant", "authorization code was already used")
+        ret
+    end
+    if expires < now():
+        token_error(ctx, 400, "invalid_grant", "authorization code expired")
+        ret
+    end
+    if owner != client_id:
+        token_error(ctx, 400, "invalid_grant", "authorization code was issued to another client")
+        ret
+    end
+    if (redirect_given or redirect.len() > 0) and redirect != want_redirect:
+        token_error(ctx, 400, "invalid_grant", "redirect_uri does not match the authorization request")
+        ret
+    end
+    if not verifier_ok(verifier) or not crypto.SecretEquals(s256(verifier), challenge):
+        token_error(ctx, 400, "invalid_grant", "PKCE verification failed")
+        ret
+    end
+    if resource.len() > 0 and normal_resource(resource) != want_resource:
+        token_error(ctx, 400, "invalid_target", "resource does not match the authorization request")
+        ret
+    end
+    gid := grant_for(uid, client_id, scope, want_resource)
+    if gid.len() == 0:
+        token_error(ctx, 500, "server_error", "could not store the grant")
+        ret
+    end
+    aistore.Lock()
+    _g := aistore.Run("UPDATE oauth_codes SET grant_id = ?1 WHERE code = ?2", two(gid, aiweb.Hash(code)))
+    aistore.Unlock()
+    issue(ctx, gid, scope)
+end
+
+func refresh_grant(ctx: i64):
+    token := http.Form(ctx, "refresh_token")
+    client_id := http.Form(ctx, "client_id")
+    if token.len() == 0:
+        token_error(ctx, 400, "invalid_request", "refresh_token is required")
+        ret
+    end
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT t.grant_id, t.expires, t.used, g.client_id, g.scope, g.revoked FROM oauth_tokens t JOIN oauth_grants g ON g.id = t.grant_id WHERE t.token = ?1 AND t.kind = 'refresh'", one(aiweb.Hash(token)))
+    mut found := false
+    mut gid := ""
+    mut expires := 0 as i64
+    mut used := false
+    mut owner := ""
+    mut scope := ""
+    mut revoked := false
+    if aistore.Next(rows):
+        found = true
+        gid = aistore.Text(rows, 0)
+        expires = aistore.Int64(rows, 1)
+        used = aistore.Text(rows, 2) != "0"
+        owner = aistore.Text(rows, 3)
+        scope = aistore.Text(rows, 4)
+        revoked = aistore.Text(rows, 5) != "0"
+    end
+    aistore.Finish(rows)
+    if found and not used:
+        _u := aistore.Run("UPDATE oauth_tokens SET used = 1 WHERE token = ?1", one(aiweb.Hash(token)))
+    end
+    aistore.Unlock()
+    if not found or revoked:
+        token_error(ctx, 400, "invalid_grant", "unknown or revoked refresh token")
+        ret
+    end
+    if used:
+        revoke_grant(gid)
+        token_error(ctx, 400, "invalid_grant", "refresh token was already used; the connection has been revoked")
+        ret
+    end
+    if expires < now():
+        token_error(ctx, 400, "invalid_grant", "refresh token expired")
+        ret
+    end
+    if client_id.len() > 0 and client_id != owner:
+        token_error(ctx, 400, "invalid_grant", "refresh token was issued to another client")
+        ret
+    end
+    issue(ctx, gid, scope)
+end
+
+func token_endpoint(ctx: i64):
+    grant := http.Form(ctx, "grant_type")
+    switch grant:
+        "authorization_code":
+            exchange_code(ctx)
+            ret
+        end
+        "refresh_token":
+            refresh_grant(ctx)
+            ret
+        end
+    end
+    token_error(ctx, 400, "unsupported_grant_type", "use authorization_code or refresh_token")
+end
+
+func revoke(ctx: i64):
+    raw := http.Form(ctx, "token")
+    if raw.len() > 0:
+        aistore.Lock()
+        mut rows := aistore.Stmt("SELECT grant_id, kind FROM oauth_tokens WHERE token = ?1", one(aiweb.Hash(raw)))
+        mut gid := ""
+        mut kind := ""
+        if aistore.Next(rows):
+            gid = aistore.Text(rows, 0)
+            kind = aistore.Text(rows, 1)
+        end
+        aistore.Finish(rows)
+        if kind == "access":
+            _d := aistore.Run("DELETE FROM oauth_tokens WHERE token = ?1", one(aiweb.Hash(raw)))
+        end
+        aistore.Unlock()
+        if kind == "refresh":
+            revoke_grant(gid)
+        end
+    end
+    aiweb.OpenCors(ctx)
+    http.SetStatus(ctx, 200)
+    http.Json(ctx, "{}")
+end
+
+func introspect(ctx: i64):
+    if not aiweb.ServiceCaller(ctx):
+        http.SetHeader(ctx, "WWW-Authenticate", `Basic realm="salam"`)
+        http.SetStatus(ctx, 401)
+        http.Json(ctx, `{"error": "invalid_client"}`)
+        ret
+    end
+    raw := http.Form(ctx, "token")
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT g.id, g.user_id, g.client_id, g.scope, g.resource, t.expires, u.email, u.name, COALESCE(c.name, '') FROM oauth_tokens t JOIN oauth_grants g ON g.id = t.grant_id JOIN users u ON u.id = g.user_id LEFT JOIN oauth_clients c ON c.id = g.client_id WHERE t.token = ?1 AND t.kind = 'access' AND t.expires > ?2 AND g.revoked = 0", two(aiweb.Hash(raw), n(now())))
+    mut out := `{"active": false}`
+    if raw.len() > 0 and aistore.Next(rows):
+        mut m := Vector {} as Vector<str>
+        m.push(json.MemberBool("active", true))
+        m.push(json.Member("grant_id", aistore.Text(rows, 0)))
+        m.push(json.Member("sub", aistore.Text(rows, 1)))
+        m.push(json.Member("client_id", aistore.Text(rows, 2)))
+        m.push(json.Member("scope", aistore.Text(rows, 3)))
+        m.push(json.Member("aud", aistore.Text(rows, 4)))
+        m.push(json.MemberInt("exp", aistore.Int64(rows, 5)))
+        m.push(json.Member("username", aistore.Text(rows, 6)))
+        m.push(json.Member("name", aistore.Text(rows, 7)))
+        m.push(json.Member("client_name", aistore.Text(rows, 8)))
+        m.push(json.Member("token_type", "Bearer"))
+        m.push(json.Member("iss", ISSUER))
+        out = json.Object(m)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    http.SetHeader(ctx, "Cache-Control", "no-store")
+    http.SetStatus(ctx, 200)
+    http.Json(ctx, out)
+end
+
+func ingest(ctx: i64):
+    if not aiweb.ServiceCaller(ctx):
+        http.SetStatus(ctx, 401)
+        http.Json(ctx, `{"error": "invalid_client"}`)
+        ret
+    end
+    body := http.Body(ctx)
+    gid := json.Get(body, "grant_id")
+    method := json.Get(body, "method")
+    tool := json.Get(body, "tool")
+    args := clip(json.Get(body, "args"), MAX_ARGS)
+    ip := clip(json.Get(body, "ip"), 64)
+    agent := clip(json.Get(body, "agent"), 255)
+    ok := json.Get(body, "ok") == "true"
+    ms := json.GetInt(body, "ms")
+    aistore.Lock()
+    if gid == "service":
+        mut s := one("salam-ai")
+        s.push(clip(method, 64))
+        s.push(clip(tool, 100))
+        s.push(ok ? "1" : "0")
+        s.push(n(ms as i64))
+        s.push(args)
+        s.push(ip)
+        s.push(agent)
+        s.push(n(now()))
+        _v := aistore.Run("INSERT INTO mcp_events (user_id, grant_id, client_id, method, tool, ok, ms, args, ip, agent, created) VALUES (NULL, 0, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)", s)
+    end
+    mut rows := aistore.Stmt("SELECT user_id, client_id FROM oauth_grants WHERE id = ?1", one(gid))
+    mut uid := ""
+    mut client_id := ""
+    if aistore.Next(rows):
+        uid = aistore.Text(rows, 0)
+        client_id = aistore.Text(rows, 1)
+    end
+    aistore.Finish(rows)
+    if uid.len() > 0:
+        mut a := three(uid, gid, client_id)
+        a.push(clip(method, 64))
+        a.push(clip(tool, 100))
+        a.push(ok ? "1" : "0")
+        a.push(n(ms as i64))
+        a.push(args)
+        a.push(ip)
+        a.push(agent)
+        a.push(n(now()))
+        _i := aistore.Run("INSERT INTO mcp_events (user_id, grant_id, client_id, method, tool, ok, ms, args, ip, agent, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)", a)
+        _g := aistore.Run("UPDATE oauth_grants SET last_used = ?1, calls = calls + 1 WHERE id = ?2", two(n(now()), gid))
+    end
+    aistore.Unlock()
+    http.SetStatus(ctx, 204)
+    http.Text(ctx, "")
+end
+
+func list_connected_apps(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT g.id, g.client_id, COALESCE(c.kind, ''), COALESCE(c.name, g.client_id), COALESCE(c.uri, ''), COALESCE(c.logo, ''), g.scope, g.resource, g.created, g.last_used, g.calls, COALESCE(c.redirects, '[]') FROM oauth_grants g LEFT JOIN oauth_clients c ON c.id = g.client_id WHERE g.user_id = ?1 AND g.revoked = 0 ORDER BY g.last_used DESC, g.id DESC", one(n(uid)))
+    until aistore.Next(rows):
+        mut c := Client { ok = true, id = aistore.Text(rows, 1), kind = aistore.Text(rows, 2), name = aistore.Text(rows, 3), uri = aistore.Text(rows, 4), logo = aistore.Text(rows, 5) }
+        c.redirects = parse_strings(aistore.Text(rows, 11))
+        mut m := Vector {} as Vector<str>
+        m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
+        m.push(json.MemberRaw("client", client_json(c.id, c.kind, c.name, c.uri, c.logo, client_host(c))))
+        m.push(json.Member("scope", aistore.Text(rows, 6)))
+        m.push(json.Member("resource", aistore.Text(rows, 7)))
+        m.push(json.MemberRaw("created", aistore.Text(rows, 8)))
+        m.push(json.MemberRaw("last_used", aistore.Text(rows, 9)))
+        m.push(json.MemberRaw("calls", aistore.Text(rows, 10)))
+        items.push(json.Object(m))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"apps": ` + json.Array(items) + "}")
+end
+
+func owns_grant(uid: i64, gid: str): bool:
+    aistore.Lock()
+    found := aistore.OneText("SELECT id FROM oauth_grants WHERE id = ?1 AND user_id = ?2", two(gid, n(uid)))
+    aistore.Unlock()
+    ret found.len() > 0
+end
+
+func delete_app(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    gid := http.Param(ctx, "id")
+    if not owns_grant(uid, gid):
+        aiweb.Fail(ctx, 404, "not_found", "این اتصال پیدا نشد.")
+        ret
+    end
+    revoke_grant(gid)
+    aiweb.Reply(ctx, 200, `{"ok": true}`)
+end
+
+func app_events(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    gid := http.Param(ctx, "id")
+    if not owns_grant(uid, gid):
+        aiweb.Fail(ctx, 404, "not_found", "این اتصال پیدا نشد.")
+        ret
+    end
+    mut before := http.Query(ctx, "before").to_int() as i64
+    if before <= 0:
+        before = 9223372036854775807
+    end
+    aiweb.Reply(ctx, 200, `{"events": ` + Events("e.grant_id = ?1 AND e.user_id = ?2 AND e.id < ?3", three(gid, n(uid), n(before)), false) + "}")
+end
+
+pub func Configure(issuer: str, app: str, resources: str):
+    ISSUER = str.TrimSuffix(issuer, "/")
+    APP = str.TrimSuffix(app, "/")
+    RESOURCES = Vector {} as Vector<str>
+    each r in resources.split(","):
+        v := normal_resource(r)
+        if v.len() > 0:
+            RESOURCES.push(v)
+        end
+    end
+end
+
+pub func ClientJson(id: str, kind: str, name: str, uri: str, logo: str, redirects: str): str:
+    mut c := Client { ok = true, id = id, kind = kind, name = name, uri = uri, logo = logo }
+    c.redirects = parse_strings(redirects)
+    ret client_json(id, kind, name, uri, logo, client_host(c))
+end
+
+pub func RevokeGrant(gid: str):
+    revoke_grant(gid)
+end
+
+pub func Events(where: str, args: Vector<str>, with_user: bool): str:
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT e.id, e.created, e.method, e.tool, e.ok, e.ms, e.args, e.ip, e.agent, COALESCE(u.id, 0), COALESCE(u.name, 'دستیار سلام'), COALESCE(u.email, ''), e.client_id, COALESCE(c.kind, ''), COALESCE(c.name, e.client_id), COALESCE(c.uri, ''), COALESCE(c.logo, ''), COALESCE(c.redirects, '[]') FROM mcp_events e LEFT JOIN users u ON u.id = e.user_id LEFT JOIN oauth_clients c ON c.id = e.client_id WHERE " + where + " ORDER BY e.id DESC LIMIT 50", args)
+    until aistore.Next(rows):
+        mut m := Vector {} as Vector<str>
+        m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
+        m.push(json.MemberRaw("created", aistore.Text(rows, 1)))
+        m.push(json.Member("method", aistore.Text(rows, 2)))
+        m.push(json.Member("tool", aistore.Text(rows, 3)))
+        m.push(json.MemberBool("ok", aistore.Text(rows, 4) != "0"))
+        m.push(json.MemberRaw("ms", aistore.Text(rows, 5)))
+        m.push(json.Member("args", aistore.Text(rows, 6)))
+        m.push(json.Member("ip", aistore.Text(rows, 7)))
+        m.push(json.Member("agent", aistore.Text(rows, 8)))
+        if with_user:
+            mut u := Vector {} as Vector<str>
+            u.push(json.MemberRaw("id", aistore.Text(rows, 9)))
+            u.push(json.Member("name", aistore.Text(rows, 10)))
+            u.push(json.Member("email", aistore.Text(rows, 11)))
+            m.push(json.MemberRaw("user", json.Object(u)))
+        end
+        m.push(json.MemberRaw("client", ClientJson(aistore.Text(rows, 12), aistore.Text(rows, 13), aistore.Text(rows, 14), aistore.Text(rows, 15), aistore.Text(rows, 16), aistore.Text(rows, 17))))
+        items.push(json.Object(m))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret json.Array(items)
+end
+
+pub func Routes(r &: router.Router):
+    router.Get(r, "/.well-known/oauth-authorization-server", metadata)
+    router.Options(r, "/.well-known/oauth-authorization-server", aiweb.OpenPreflight)
+    router.Post(r, "/oauth/register", register_client)
+    router.Options(r, "/oauth/register", aiweb.OpenPreflight)
+    router.Get(r, "/oauth/authorize", authorize)
+    router.Post(r, "/oauth/token", token_endpoint)
+    router.Options(r, "/oauth/token", aiweb.OpenPreflight)
+    router.Post(r, "/oauth/revoke", revoke)
+    router.Options(r, "/oauth/revoke", aiweb.OpenPreflight)
+    router.Post(r, "/oauth/introspect", introspect)
+    router.Post(r, "/internal/mcp/events", ingest)
+    router.Get(r, "/oauth/requests/:id", get_request)
+    router.Post(r, "/oauth/requests/:id/approve", approve)
+    router.Post(r, "/oauth/requests/:id/deny", deny)
+    router.Get(r, "/apps", list_connected_apps)
+    router.Delete(r, "/apps/:id", delete_app)
+    router.Get(r, "/apps/:id/events", app_events)
+    each path in ["/oauth/requests/:id", "/oauth/requests/:id/approve", "/oauth/requests/:id/deny", "/apps", "/apps/:id", "/apps/:id/events"]:
+        router.Options(r, path, aiweb.Preflight)
+    end
+end

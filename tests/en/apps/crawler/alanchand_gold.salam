@@ -1,0 +1,165 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import str
+import fmt
+
+include ac "_alanchand.salam"
+include acjson "_alanchand_json.salam"
+
+const NAME_W := 28
+
+const PRICE_W := 20
+
+const CHANGE_W := 10
+
+const BUBBLE_W := 22
+
+const OUT_FILE := "alanchand-gold.json"
+
+const ROW_MARK := `class="clickable-row"`
+
+const PRICE_MARK := `data-label="Price (IRR) + Change"`
+
+const REAL_MARK := `data-label="Real Price"`
+
+const BUBBLE_MARK := `data-label="Bubble Amount(%)"`
+
+struct Item:
+    pub name: str = ""
+    pub price: str = ""
+    pub direction: str = "flat"
+    pub change: str = ""
+    pub real: str = ""
+    pub bubble: str = ""
+    pub bubble_pct: str = ""
+end
+
+func change_of(cell: str): str:
+    whole := ac.Clean(cell)
+    ret str.Trim(str.TrimPrefix(whole, ac.Lead(cell)))
+end
+
+func inside_parens(text: str): str:
+    open := str.Find(text, "(")
+    close := str.Find(text, ")")
+    if open < 0 or close < open:
+        ret ""
+    end
+    ret text.substr(open + 1, close - open - 1)
+end
+
+func item_at(html: str, at: int): Item:
+    mut cursor := 0
+    price_cell := ac.Inner(html, PRICE_MARK, at, "</td>", cursor)
+    bubble_cell := ac.Clean(ac.Inner(html, BUBBLE_MARK, at, "</td>", cursor))
+    mut it := Item {}
+    it.name = ac.Text(html, "<td>", at, "</td>", cursor)
+    it.price = ac.Lead(price_cell)
+    it.direction = ac.Direction(price_cell)
+    it.change = change_of(price_cell)
+    it.real = ac.CellText(html, REAL_MARK, at)
+    it.bubble = bubble_cell
+    it.bubble_pct = inside_parens(bubble_cell)
+    ret it
+end
+
+func collect(html: str): Vector<Item>:
+    mut items := Vector {} as Vector<Item>
+    mut pos := 0
+    until true:
+        at := str.IndexFrom(html, ROW_MARK, pos)
+        if at < 0:
+            break
+        end
+        items.push(item_at(html, at))
+        pos = at + ROW_MARK.len()
+    end
+    ret items
+end
+
+func show_row(name: str, price: str, change: str, real: str, bubble: str):
+    mut line := fmt.PadRight(name, NAME_W)
+    line = line + " " + fmt.PadLeft(price, PRICE_W)
+    line = line + " " + fmt.PadLeft(change, CHANGE_W)
+    line = line + " " + fmt.PadLeft(real, PRICE_W)
+    line = line + " " + fmt.PadLeft(bubble, BUBBLE_W)
+    println line
+end
+
+func show_table(items: Vector<Item>):
+    show_row("Item", "Price", "Change", "Real price", "Bubble")
+    println str.Repeat("-", NAME_W + PRICE_W + CHANGE_W + PRICE_W + BUBBLE_W + 4)
+    each it in items:
+        mut change := it.change
+        if it.direction != "flat":
+            change = it.direction + " " + change
+        end
+        show_row(it.name, it.price, change, it.real, it.bubble)
+    end
+end
+
+func unit_of(it: Item): str:
+    if str.Contains(it.price, "$"):
+        ret "USD"
+    end
+    ret "IRR"
+end
+
+func encode(it: Item): str:
+    mut members := Vector {} as Vector<str>
+    defer members.free()
+    members.push(acjson.TextMember("name", it.name))
+    members.push(acjson.TextMember("unit", unit_of(it)))
+    members.push(acjson.NumberMember("price", it.price))
+    members.push(acjson.TextMember("direction", it.direction))
+    members.push(acjson.NumberMember("change_percent", it.change))
+    members.push(acjson.NumberMember("real_price", it.real))
+    members.push(acjson.NumberMember("bubble", it.bubble))
+    members.push(acjson.NumberMember("bubble_percent", it.bubble_pct))
+    ret acjson.Object(members)
+end
+
+func save(items: Vector<Item>, last_update: str):
+    mut rows := Vector {} as Vector<str>
+    defer rows.free()
+    each it in items:
+        rows.push(encode(it))
+    end
+    _ok := acjson.Write(OUT_FILE, acjson.Document(ac.GOLD_URL, last_update, "gold", rows))
+end
+
+func main:
+    mut session := ac.NewSession()
+    println "Fetching " + ac.GOLD_URL
+    html := ac.Fetch(session, ac.GOLD_URL)
+    if html.len() == 0:
+        println "no gold data"
+        ret 1
+    end
+    _saved := ac.SaveCookies(session)
+
+    println ""
+    ac.Banner("Alanchand - live gold and coin prices (Iranian Rial)", ac.GOLD_URL, html)
+
+    items := collect(html)
+    defer items.free()
+    show_table(items)
+    println ""
+    println str.FromInt(items.len() as i64) + " items"
+    save(items, ac.LastUpdate(html))
+    ret 0
+end

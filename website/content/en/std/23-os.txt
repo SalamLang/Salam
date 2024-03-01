@@ -1,0 +1,125 @@
+pkg.en = os
+pkg.name = os
+pkg.group = System and tools
+pkg.summary = Files, directories, system commands, program arguments and environment variables.
+pkg.title = The os package in Salam | Files, directories and running commands
+pkg.description = The os package in Salam: reading and writing files, creating and walking directories, running system commands, command line arguments and environment variables, with examples.
+pkg.flat = true
+pkg.intro <<
+<p>The <code>os</code> package is the simplest way to talk to the system: whole-file reads and writes, folders, shell commands, the program's arguments and its environment. Each function does one thing and takes paths as plain strings. Reach for it in scripts, build tools and small servers. When you need to know <em>why</em> something failed, or to read a big file piece by piece, the <a href="/std/fs/">fs</a> family (<a href="/std/fs/file/">fs.file</a>, <a href="/std/fs/dir/">fs.dir</a>, <a href="/std/fs/path/">fs.path</a>) does more; for building paths use <a href="/std/filepath/">filepath</a>, and for configuration from the environment <a href="/std/env/">env</a>.</p>
+<p>Results follow two conventions. Functions that change something (<code>Remove</code>, <code>Mkdir</code>, <code>Move</code>, <code>Copy</code>, <code>MkdirAll</code>, <code>RemoveAll</code>) return 0 on success and -1 on failure, with no reason attached. <code>WriteFile</code> and <code>AppendFile</code> return the number of bytes written, or -1. Functions that read return an empty value when they fail: <code>ReadFile</code> gives empty text and <code>ListDir</code> an empty vector for a missing folder.</p>
+<p>There are sub-packages for more specialised work: <a href="/std/os/process/">os.process</a> for running other programs with exact arguments, <a href="/std/os/shell/">os.shell</a> for capturing command output and errors, <a href="/std/os/platform/">os.platform</a> for identifying the system, <a href="/std/os/temp/">os.temp</a> for temporary files, <a href="/std/os/user/">os.user</a> for the current user and <a href="/std/os/error/">os.error</a> for error codes.</p>
+<p>What people get wrong:</p>
+<ul>
+<li>Building a shell command from user input. <code>Run</code>, <code>RunCapture</code> and <code>Output</code> hand the whole string to <code>/bin/sh</code>, so a name such as <code>x; rm -rf ~</code> runs the second command too.</li>
+<li>Expecting <code>RunCapture</code> to capture errors. It captures standard output only; the command's standard error still goes to the terminal. Add <code>2&gt;&amp;1</code> to the command when you want both.</li>
+<li>Running <code>RemoveAll</code> or <code>Walk</code> on a tree with symbolic links. Both follow a link to a folder as if it were a real folder: <code>Walk</code> lists what is behind it (and never ends on a link loop), and <code>RemoveAll</code> deletes the <em>contents of the link's target</em>, even outside the tree. Do not point them at folders that may contain links to elsewhere.</li>
+<li>Using <code>Move</code> across disks. It is a rename, and a rename between file systems fails with -1; copy and remove instead.</li>
+</ul>
+<p>The sections below walk through the jobs this package is used for most, each with a complete program and the output it printed. The programs work in the current directory and remove what they create.</p>
+
+<h2 id="guide-config">Read a settings file with defaults</h2>
+<p>A small program usually keeps its settings in a text file next to it. <code>Exists</code> tells you whether the file is there yet, <code>WriteFile</code> creates it with sensible values the first time, and <code>ReadFile</code> gives you the whole text to pick apart. Every setting that is missing falls back to a default, so an old file keeps working after you add a new option.</p>
+{{example.os-guide-config}}
+<p><code>ReadFile</code> returns an empty string both for an empty file and for one it cannot read. When the difference matters, ask <code>Exists</code> first, as here. For a real format, read the text with <a href="/std/encoding/json/">encoding.json</a> or a similar package instead of splitting lines by hand.</p>
+
+<h2 id="guide-log">Keep a log and rotate it</h2>
+<p><code>AppendFile</code> adds to the end of a file and creates it when it is missing, which is all a log needs. <code>FileSize</code> says how big the log has become; once it passes a limit, <code>Move</code> renames it out of the way and the next <code>AppendFile</code> starts a fresh one.</p>
+{{example.os-guide-log}}
+<p>Each call opens and closes the file, which is fine for a few lines a second. For a busy log, open it once with <code>Open(path, "ab")</code> and write to the handle.</p>
+
+<h2 id="guide-tree">Create, walk and remove a directory tree</h2>
+<p><code>MkdirAll</code> creates a path with every parent it needs, so the order you create folders in does not matter. <code>Walk</code> lists every file below a directory, at any depth, and <code>ListDirs</code> only the folders directly inside it. <code>RemoveAll</code> deletes the whole tree at the end.</p>
+{{example.os-guide-tree}}
+<p><code>Walk</code> returns full paths that start with the folder you gave it, while <code>ListDir</code> and <code>ListDirs</code> return bare names, hidden ones included and <code>.</code> and <code>..</code> left out. The system returns directory entries in no particular order, and the order changes between file systems. Sort the names, as the program does with <a href="/std/sort/">sort</a>, before you print them or compare them with something.</p>
+
+<h2 id="guide-commands">Run shell commands and check them</h2>
+<p><code>Run</code>, <code>RunCapture</code> and <code>Output</code> pass the command to the system shell, so pipes, redirection and quoting work just as they do in a terminal. <code>Run</code> only gives back the exit code, and the command prints straight to the program's own output; that is enough to ask whether a tool is installed. <code>RunCapture</code> gives the code and the standard output together, and <code>Output</code> only the text, final newline included, so <code>trim</code> it.</p>
+{{example.os-guide-commands}}
+<p>Because a shell reads the command, never build one from text a user typed: a name such as <code>x; rm -rf ~</code> would run the second command too. To pass untrusted values, use <a href="/std/os/process/">os.process</a>, which hands each argument to the program untouched.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Function</th></tr></thead>
+<tbody>
+<tr><td>Read or replace a whole small file</td><td><code>ReadFile</code>, <code>WriteFile</code></td></tr>
+<tr><td>Add lines to a log</td><td><code>AppendFile</code></td></tr>
+<tr><td>Read a big file piece by piece</td><td><code>Open</code>, then the handle's <code>readline</code> and <code>close</code></td></tr>
+<tr><td>Know if a path is there, and what it is</td><td><code>Exists</code>, <code>IsDir</code>, or <code>Stat</code> for everything at once</td></tr>
+<tr><td>Make or delete folders</td><td><code>MkdirAll</code>, <code>RemoveAll</code> (<code>Mkdir</code> and <code>Rmdir</code> for one level)</td></tr>
+<tr><td>Find files below a folder</td><td><code>Walk</code>; <code>ListDir</code> for one level</td></tr>
+<tr><td>Run a shell command</td><td><code>Run</code>, <code>RunCapture</code>, <code>Output</code></td></tr>
+<tr><td>Run a program with exact arguments</td><td><a href="/std/os/process/">os.process</a> or <a href="/std/os/shell/">os.shell</a></td></tr>
+<tr><td>Find out why a file operation failed</td><td><a href="/std/fs/file/">fs.file</a> together with <a href="/std/os/error/">os.error</a></td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.Run = Runs a command in the system shell (<code>/bin/sh</code>, or <code>cmd</code> on Windows) and returns its exit code; the command's output goes straight to the program's own output.
+doc.RunCapture = Runs a command and returns its exit code and its standard output together in a <code>CmdResult</code>. Standard error is not captured; append <code>2&gt;&amp;1</code> for it. When the shell cannot be started, <code>code</code> is -1.
+doc.Output = Runs a command and returns only its standard output text, including the final newline. The exit code is lost, so use <code>RunCapture</code> when failure matters.
+doc.Pid = The process id of the running program.
+doc.FileInfo = What <code>Stat</code> returns.
+doc.FileInfo.size = The size of the file in bytes.
+doc.FileInfo.is_dir = True when the path is a directory.
+doc.FileInfo.exists = True when the path exists.
+doc.CmdResult = The result of running a command with <code>RunCapture</code>.
+doc.CmdResult.code = The command's exit code; zero means success.
+doc.CmdResult.out = The command's output.
+doc.Open = Opens a file in the given mode: <code>"rb"</code> to read, <code>"wb"</code> to rewrite and <code>"ab"</code> to append. It returns null when it cannot.
+doc.Exit = Ends the program immediately with the given code. Inside <code>main</code> write <code>ret</code> instead, because exiting does not run the <code>defer</code> statements (error E109).
+doc.Abort = Stops the program abruptly with an error, for a situation with no way to carry on.
+doc.Args = The program's command line arguments; element zero is the program's own name.
+doc.Env = The value of an environment variable, or an empty string when it is not set (so an empty and a missing variable look the same). The <a href="/std/env/">env</a> package does more.
+doc.Remove = Deletes a file; 0 on success, -1 on failure. Use <code>Rmdir</code> or <code>RemoveAll</code> for a folder.
+doc.Mkdir = Creates a directory; the parent has to exist already, and an existing directory counts as a failure (-1).
+doc.Rmdir = Deletes an empty directory.
+doc.Copy = Copies a file's bytes, replacing the destination. Permissions such as the executable bit are not copied. 0 on success, -1 on failure.
+doc.Move = Moves or renames a file or a directory. It is a rename, so it fails (-1) between two file systems.
+doc.ListDir = The names of everything inside a directory, hidden entries included, without <code>.</code> and <code>..</code> and without descending into subdirectories. A missing directory gives an empty vector.
+doc.IsDir = True when the path is a directory the program can open, or a symbolic link to one.
+doc.Walk = The paths of every file inside a directory and its subdirectories, each starting with <code>root</code>; the directories themselves are not in the list. It follows symbolic links to directories, so a link loop never ends.
+doc.Exists = True when the path, file or directory, exists.
+doc.Cwd = The program's current directory.
+doc.Chdir = Changes the current directory; later relative paths are resolved from there.
+doc.TempDir = The system's temporary directory: <code>TEMP</code>, <code>TMP</code> or <code>TMPDIR</code> from the environment, in that order, or <code>/tmp</code>.
+doc.ReadFile = Reads the whole content of a file, or an empty string when it cannot. The text stops at the first zero byte, so it is for text, not binary files.
+doc.WriteFile = Creates or replaces a file with <code>data</code> and returns the number of bytes written, or -1 when the file cannot be opened (for example when its folder does not exist).
+doc.AppendFile = Adds to the end of a file, creating it when it is missing; returns the number of bytes written, or -1.
+doc.FileSize = The size of a file in bytes, or minus one when it is not there or is a directory.
+doc.Stat = Returns everything about a path at once; when the path is absent, <code>exists</code> is false.
+doc.MkdirAll = Creates a directory along with every parent it needs, and does nothing when it already exists. It splits the path on <code>/</code>.
+doc.RemoveAll = Deletes a file or a directory with everything inside it; a missing path counts as success. Take care: it cannot be undone, and it follows symbolic links to directories, deleting what is inside their targets.
+doc.CopyTree = Copies a directory with all its subdirectories and files.
+doc.ListDirs = Only the names of a directory's subdirectories.
+
+ex.RunCapture = os-Run
+ex.Output = os-Run
+ex.Pid = os-Run
+ex.CmdResult = os-Run
+ex.Open = os-Files
+ex.Remove = os-Files
+ex.Copy = os-Files
+ex.Move = os-Files
+ex.Exists = os-Files
+ex.ReadFile = os-Files
+ex.WriteFile = os-Files
+ex.AppendFile = os-Files
+ex.FileSize = os-Files
+ex.Stat = os-Files
+ex.FileInfo = os-Files
+ex.Mkdir = os-Dirs
+ex.Rmdir = os-Dirs
+ex.ListDir = os-Dirs
+ex.IsDir = os-Dirs
+ex.Walk = os-Dirs
+ex.Cwd = os-Dirs
+ex.Chdir = os-Dirs
+ex.TempDir = os-Dirs
+ex.MkdirAll = os-Dirs
+ex.RemoveAll = os-Dirs
+ex.CopyTree = os-Dirs
+ex.ListDirs = os-Dirs
+ex.Env = os-Args
+ex.Exit = os-Args
+ex.Abort = os-Args

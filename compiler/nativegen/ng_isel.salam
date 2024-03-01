@@ -1,0 +1,5061 @@
+package nativegen
+
+import str
+
+const NG_COPY_MAX := 256
+
+const AK_NONE := 0
+const AK_FRAME := 1
+const AK_PTR := 2
+const AK_ALLOCA := 3
+
+k_sysv_gp := [7, 6, 2, 1, 8, 9]
+k_win_gp := [1, 2, 8, 9]
+k_a64_gp := [0, 1, 2, 3, 5, 6, 7, 8]
+
+func vcls_ty(g &: Ng, t: int): int:
+    if is_flt(g, t) or is_vec(g, t):
+        ret 1
+    end
+    ret 0
+end
+
+func asz(g &: Ng, t: int): int:
+    if int_bits(g, t) > 32:
+        ret 8
+    end
+    ret 4
+end
+
+func msz(g &: Ng, t: int): int:
+    if t == T_I1:
+        ret 1
+    end
+    ret tsize(g, t)
+end
+
+func fsz(t: int): int:
+    if t == T_F32 or t == T_V4F32:
+        ret 4
+    end
+    ret 8
+end
+
+func new_reg_ty(g &: Ng, t: int): int:
+    r := vnew(g, vcls_ty(g, t))
+    if is_vec(g, t):
+        g.mc.vwide[r] = true
+    end
+    ret r
+end
+
+func wide_reg(g &: Ng): int:
+    r := xmm(g)
+    g.mc.vwide[r] = true
+    ret r
+end
+
+func isel_init(g &: Ng):
+    nv := g.v_kind.len()
+    g.vv.clear()
+    g.vsc.clear()
+    g.vak.clear()
+    g.var_.clear()
+    g.vao.clear()
+    g.v_mem.clear()
+    g.vown.clear()
+    g.v_cu.clear()
+    g.lfold.clear()
+    repeat nv:
+        g.lfold.push(0 - 1)
+        g.v_cu.push(0)
+        g.vown.push(false)
+        g.vv.push(0 - 1)
+        g.vsc.push(1)
+        g.vak.push(AK_NONE)
+        g.var_.push(0 - 1)
+        g.vao.push(0)
+        g.v_mem.push(0)
+    end
+    g.phit.clear()
+    g.skipi.clear()
+    g.sret_to.clear()
+    g.rmw_of.clear()
+    g.rmw_v.clear()
+    g.izero.clear()
+    repeat g.i_op.len():
+        g.izero.push(false)
+        g.rmw_v.push(0 - 1)
+        g.phit.push(0 - 1)
+        g.skipi.push(false)
+        g.rmw_of.push(0 - 1)
+        g.sret_to.push(0 - 1)
+    end
+    count_uses(g)
+    compute_escape(g)
+    build_dom(g)
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            if op == OP_CBR or (op == OP_SELECT and sel_scalar(g, g.i_ty[i])):
+                cu := g.i_a[i]
+                if cu >= 0:
+                    g.v_cu[cu] = g.v_cu[cu] + 1
+                end
+            end
+            if op == OP_LOAD:
+                a := g.i_a[i]
+                if a >= 0:
+                    g.v_mem[a] = g.v_mem[a] + 1
+                end
+            else op == OP_STORE:
+                p := g.i_b[i]
+                if p >= 0 and p != g.i_a[i]:
+                    g.v_mem[p] = g.v_mem[p] + 1
+                end
+            else op == OP_CALL and not g.off_memaddr:
+                count_inline_mem(g, i)
+            end
+            i = g.i_next[i]
+        end
+    end
+    if g.opt and not g.off_selinc and (g.arch == NG_ARCH_X64 or g.arch == NG_ARCH_X86):
+        each b2 in g.b_rpo:
+            mut i2 := g.b_first[b2]
+            until i2 >= 0:
+                if g.i_op[i2] == OP_SELECT and sel_scalar(g, g.i_ty[i2]):
+                    sel_inc_plan(g, i2)
+                end
+                i2 = g.i_next[i2]
+            end
+        end
+    end
+end
+
+func count_inline_mem(g &: Ng, i: int):
+    callee := g.i_a[i]
+    if callee < 0 or g.v_kind[callee] != VK_GLB or g.v_i[callee] != (0 as i64) or g.i_pcount[i] < 3:
+        ret
+    end
+    sy := g.v_def[callee]
+    ln := call_arg(g, i, 2)
+    if g.v_kind[ln] != VK_INT or g.v_i[ln] > (256 as i64):
+        ret
+    end
+    d0 := call_arg(g, i, 0)
+    s0 := call_arg(g, i, 1)
+    if sy == g.sym_i_memset and g.v_kind[s0] == VK_INT and d0 >= 0:
+        g.v_mem[d0] = g.v_mem[d0] + 1
+    else sy == g.sym_i_memcpy and d0 >= 0 and s0 >= 0 and d0 != s0:
+        g.v_mem[d0] = g.v_mem[d0] + 1
+        g.v_mem[s0] = g.v_mem[s0] + 1
+    end
+end
+
+func sel_scalar(g &: Ng, t: int): bool:
+    ret not is_agg(g, t) and not is_flt(g, t) and not is_vec(g, t)
+end
+
+func cond_only(g &: Ng, v: int): bool:
+    ret v >= 0 and v < g.v_cu.len() and g.v_kind[v] == VK_INS and g.v_cu[v] == g.v_uses[v] and (g.i_op[g.v_def[v]] == OP_ICMP or g.i_op[g.v_def[v]] == OP_CMP64)
+end
+
+func def_op(g &: Ng, v: int): int:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    if d < 0:
+        ret 0 - 1
+    end
+    ret g.i_op[d]
+end
+
+func addr_only(g &: Ng, v: int): bool:
+    ret def_op(g, v) == OP_ADDR and g.v_mem[v] == g.v_uses[v]
+end
+
+func fp_const(g &: Ng, bits: i64, sz: int): Mem:
+    mut off := 0
+    if sz == 4:
+        fb := f32_bits_of(bits_f64(bits))
+        if g.fpc4.has(fb):
+            off = g.fpc4.get(fb)
+        else:
+            sec_align_to(g, SEC_CONST, 4)
+            off = g.s_cst.len()
+            sec_le(g, SEC_CONST, fb, 4)
+            g.fpc4.put(fb, off)
+        end
+    else:
+        if g.fpc.has(bits):
+            off = g.fpc.get(bits)
+        else:
+            sec_align_to(g, SEC_CONST, 8)
+            off = g.s_cst.len()
+            sec_le(g, SEC_CONST, bits, 8)
+            g.fpc.put(bits, off)
+        end
+    end
+    ret Mem { k = MK_RIP, sym = g.sym_ro, d = off as i64 }
+end
+
+func raw_const(g &: Ng, bits: i64, sz: int): Mem:
+    mut off := 0
+    if g.fpcr.has(bits):
+        off = g.fpcr.get(bits)
+    else:
+        sec_align_to(g, SEC_CONST, 16)
+        off = g.s_cst.len()
+        sec_le(g, SEC_CONST, bits, sz)
+        sec_pad(g, SEC_CONST, 16 - sz)
+        g.fpcr.put(bits, off)
+    end
+    ret Mem { k = MK_RIP, sym = g.sym_ro, d = off as i64 }
+end
+
+func vec_const(g &: Ng, lo: i64, hi: i64): Mem:
+    key := "v" + str.FromInt(lo) + ":" + str.FromInt(hi)
+    if g.vconst.has(key):
+        ret Mem { k = MK_RIP, sym = g.sym_ro, d = g.vconst.get(key) as i64 }
+    end
+    sec_align_to(g, SEC_CONST, 16)
+    off := g.s_cst.len()
+    sec_le(g, SEC_CONST, lo, 8)
+    sec_le(g, SEC_CONST, hi, 8)
+    g.vconst.put(key, off)
+    ret Mem { k = MK_RIP, sym = g.sym_ro, d = off as i64 }
+end
+
+func frame_mem(slot: int, d: i64): Mem:
+    ret Mem { k = MK_FRAME, b = slot, d = d }
+end
+
+func use_reg(g &: Ng, v: int): int:
+    k := g.v_kind[v]
+    if k == VK_INS or k == VK_ARG:
+        ak := g.vak[v]
+        if ak == AK_ALLOCA:
+            r := gpr(g)
+            _l := e_rm(g, M_LEA, 8, r, frame_mem(g.var_[v], 0 as i64))
+            ret r
+        end
+        if ak == AK_FRAME or ak == AK_PTR:
+            r2 := gpr(g)
+            _l2 := e_rm(g, M_LEA, 8, r2, agg_mem(g, v))
+            ret r2
+        end
+        if addr_only(g, v):
+            r3 := gpr(g)
+            _l3 := e_rm(g, M_LEA, 8, r3, mem_of(g, v, 0 as i64))
+            ret r3
+        end
+        lfx := lf_mem(g, v)
+        if lfx >= 0:
+            g.lfold[v] = 0 - 1
+            rlx := gpr(g)
+            _ll := e_rm(g, M_LD, msz(g, g.v_ty[v]), rlx, mem_of(g, g.i_a[lfx], 0 as i64))
+            g.vv[v] = rlx
+            ret rlx
+        end
+        r4 := g.vv[v]
+        if r4 >= 0:
+            sr := split_lookup(g, v)
+            if sr >= 0:
+                ret sr
+            end
+        end
+        if r4 < 0:
+            fail(g, "native backend: value used before its definition in " + tab_str(g.syms, g.f_sym))
+            ret gpr(g)
+        end
+        ret r4
+    end
+    if k == VK_INT:
+        if is_flt(g, g.v_ty[v]):
+            ret float_reg(g, g.v_i[v], g.v_ty[v])
+        end
+        r5 := gpr(g)
+        _m := e_movi(g, r5, g.v_i[v])
+        ret r5
+    end
+    if k == VK_FLT:
+        ret float_reg(g, g.v_i[v], g.v_ty[v])
+    end
+    if k == VK_GLB:
+        r6 := gpr(g)
+        s := g.v_def[v]
+        if g.sy_def[s]:
+            _l4 := e_rm(g, M_LEA, 8, r6, Mem { k = MK_RIP, sym = s, d = g.v_i[v] })
+        else:
+            _l5 := e_rm(g, M_LDGOT, 8, r6, Mem { k = MK_GOT, sym = s })
+            if g.v_i[v] != (0 as i64):
+                _a := e_alui(g, ALU_ADD, 8, r6, g.v_i[v])
+            end
+        end
+        ret r6
+    end
+    if vcls_ty(g, g.v_ty[v]) == 1:
+        r7 := new_reg_ty(g, g.v_ty[v])
+        _x := e_rr(g, M_XORPS, zero_sz(g, g.v_ty[v]), r7, r7)
+        ret r7
+    end
+    r8 := gpr(g)
+    _z := e_movi(g, r8, 0 as i64)
+    ret r8
+end
+
+func zero_sz(g &: Ng, t: int): int:
+    if g.arch == NG_ARCH_RV64 and is_flt(g, t):
+        ret fsz(t)
+    end
+    ret 8
+end
+
+func float_reg(g &: Ng, bits: i64, t: int): int:
+    r := xmm(g)
+    if bits == (0 as i64):
+        _x := e_rr(g, M_XORPS, zero_sz(g, t), r, r)
+        ret r
+    end
+    sz := fsz(t)
+    _l := e_rm(g, M_FLD, sz, r, fp_const(g, bits, sz))
+    ret r
+end
+
+func move_into(g &: Ng, dst: int, v: int):
+    k := g.v_kind[v]
+    if k == VK_INT and not is_flt(g, g.v_ty[v]) and g.mc.vcls[dst] == 0:
+        _m := e_movi(g, dst, g.v_i[v])
+        ret
+    end
+    r := use_reg(g, v)
+    _c := e_copy(g, dst, r)
+end
+
+func idx_reg(g &: Ng, v: int, t: int): int:
+    if g.v_kind[v] == VK_INT:
+        r := gpr(g)
+        _m := e_ri(g, M_MOV_RI, 8, r, g.v_i[v])
+        ret r
+    end
+    r2 := use_reg(g, v)
+    bits := int_bits(g, t)
+    if bits >= 64:
+        ret r2
+    end
+    r3 := gpr(g)
+    if bits == 1:
+        i := e_rr(g, M_MOVZX_RR, 4, r3, r2)
+        g.mc.sz2[i] = 1
+        ret r3
+    end
+    i2 := e_rr(g, M_MOVSX_RR, 8, r3, r2)
+    g.mc.sz2[i2] = bits / 8
+    ret r3
+end
+
+func mem_of(g &: Ng, v: int, extra: i64): Mem:
+    k := g.v_kind[v]
+    if (k == VK_INS or k == VK_ARG) and g.vak[v] == AK_ALLOCA:
+        ret frame_mem(g.var_[v], extra)
+    end
+    if k == VK_GLB:
+        s := g.v_def[v]
+        if g.sy_def[s]:
+            ret Mem { k = MK_RIP, sym = s, d = g.v_i[v] + extra }
+        end
+        ret mem_bi(use_reg(g, v), extra)
+    end
+    if addr_only(g, v):
+        d := g.v_def[v]
+        mut m := mem_of(g, g.i_a[d], extra + g.i_d[d])
+        if g.i_b[d] >= 0:
+            ir := g.vv[v]
+            sc := g.vsc[v]
+            if (m.k == MK_BI or m.k == MK_FRAME) and m.i < 0:
+                m.i = ir
+                m.s = sc
+            else:
+                base := gpr(g)
+                _l := e_rm(g, M_LEA, 8, base, m)
+                m = Mem { k = MK_BI, b = base, i = ir, s = sc, d = 0 as i64 }
+            end
+        end
+        if not is_imm32(m.d):
+            fail(g, "native backend: address displacement too large")
+        end
+        ret m
+    end
+    ret mem_bi(use_reg(g, v), extra)
+end
+
+func agg_mem(g &: Ng, v: int): Mem:
+    ak := g.vak[v]
+    if ak == AK_FRAME:
+        ret frame_mem(g.var_[v], g.vao[v] as i64)
+    end
+    if ak == AK_PTR:
+        ret mem_bi(g.var_[v], g.vao[v] as i64)
+    end
+    t := g.v_ty[v]
+    slot := new_slot(g, tsize(g, t), talign(g, t))
+    m := frame_mem(slot, 0 as i64)
+    if g.v_kind[v] == VK_ZERO:
+        zero_fill(g, m, tsize(g, t))
+    end
+    ret m
+end
+
+func mem_add(m: Mem, k: int): Mem:
+    mut r := m
+    r.d = r.d + (k as i64)
+    ret r
+end
+
+func lea_reg(g &: Ng, m: Mem): int:
+    r := gpr(g)
+    _l := e_rm(g, M_LEA, 8, r, m)
+    ret r
+end
+
+func ro_copy(g &: Ng, dst: int, src: int, n: int): bool:
+    mut off := 0 as i64
+    sy := ro_global(g, src, off)
+    if sy < 0 or sy >= g.sy_ro.len() or not g.sy_ro[sy] or g.sy_sec[sy] == SEC_BSS or not ro_clean(g, sy):
+        ret false
+    end
+    if off < (0 as i64) or off + (n as i64) > (g.sy_size[sy] as i64):
+        ret false
+    end
+    base := g.sy_off[sy] + (off as int)
+    dm := mem_of(g, dst, 0 as i64)
+    mut p := 0
+    until p < n:
+        rem := n - p
+        ch := rem >= 4 ? 4 : (rem >= 2 ? 2 : 1)
+        mut v := 0 as i64
+        mut k := ch - 1
+        until k >= 0:
+            v = (v << (8 as i64)) | (sec_byte(g, g.sy_sec[sy], base + p + k) as i64)
+            k -= 1
+        end
+        if ch == 4 and v >= (2147483648 as i64):
+            v = v - (4294967296 as i64)
+        end
+        si := mi_new(g, M_STI, ch)
+        set_mem(g, si, mem_add(dm, p))
+        g.mc.imm[si] = v
+        p += ch
+    end
+    ret true
+end
+
+func emit_copy(g &: Ng, dst: Mem, src: Mem, size: int):
+    if size > NG_COPY_MAX:
+        mut args := Vector {} as Vector<int>
+        args.push(lea_reg(g, dst))
+        args.push(lea_reg(g, src))
+        cr := gpr(g)
+        _m := e_movi(g, cr, size as i64)
+        args.push(cr)
+        _r := call_lib(g, g.sym_memcpy, args, 0 - 1)
+        args.free()
+        ret
+    end
+    mut off := 0
+    if size >= 32 and (g.arch == NG_ARCH_X64 or g.arch == NG_ARCH_A64):
+        until size - off >= 16:
+            x := wide_reg(g)
+            _vl := e_rm(g, M_VLD, 16, x, mem_add(src, off))
+            _vs := e_mr(g, M_VST, 16, mem_add(dst, off), x)
+            off += 16
+        end
+    end
+    until off < size:
+        rem := size - off
+        mut ch := g.wsz
+        if rem < g.wsz:
+            if rem >= 4:
+                ch = 4
+            else rem >= 2:
+                ch = 2
+            else:
+                ch = 1
+            end
+        end
+        t := gpr(g)
+        if ch >= 4:
+            _l := e_rm(g, M_LD, ch, t, mem_add(src, off))
+        else:
+            li := e_rm(g, M_LDZX, 4, t, mem_add(src, off))
+            g.mc.sz2[li] = ch
+        end
+        _s := e_mr(g, M_ST, ch, mem_add(dst, off), t)
+        off += ch
+    end
+end
+
+func zero_fill(g &: Ng, dst: Mem, size: int):
+    if size > NG_COPY_MAX:
+        mut args := Vector {} as Vector<int>
+        args.push(lea_reg(g, dst))
+        zr := gpr(g)
+        _z := e_movi(g, zr, 0 as i64)
+        args.push(zr)
+        cr := gpr(g)
+        _m := e_movi(g, cr, size as i64)
+        args.push(cr)
+        _r := call_lib(g, g.sym_memset, args, 0 - 1)
+        args.free()
+        ret
+    end
+    mut off := 0
+    if size >= 48 and (g.arch == NG_ARCH_X64 or g.arch == NG_ARCH_A64):
+        z := wide_reg(g)
+        _zx := e_rr(g, M_XORPS, 16, z, z)
+        until size - off >= 16:
+            _zs := e_mr(g, M_VST, 16, mem_add(dst, off), z)
+            off += 16
+        end
+    end
+    until off < size:
+        rem := size - off
+        mut ch := g.wsz
+        if rem < g.wsz:
+            if rem >= 4:
+                ch = 4
+            else rem >= 2:
+                ch = 2
+            else:
+                ch = 1
+            end
+        end
+        i := mi_new(g, M_STI, ch)
+        set_mem(g, i, mem_add(dst, off))
+        off += ch
+    end
+end
+
+func fill_bytes(g &: Ng, dst: Mem, size: int, byte: int):
+    mut pat := 0 as i64
+    repeat 8:
+        pat = (pat << (8 as i64)) | ((byte & 255) as i64)
+    end
+    mut off := 0
+    mut pr := 0 - 1
+    until off < size:
+        rem := size - off
+        mut ch := g.wsz
+        if rem < g.wsz:
+            if rem >= 4:
+                ch = 4
+            else rem >= 2:
+                ch = 2
+            else:
+                ch = 1
+            end
+        end
+        if ch == 8:
+            if pr < 0:
+                pr = gpr(g)
+                _m := e_ri(g, M_MOV_RI, 8, pr, pat)
+            end
+            _s := e_mr(g, M_ST, 8, mem_add(dst, off), pr)
+        else:
+            i := mi_new(g, M_STI, ch)
+            set_mem(g, i, mem_add(dst, off))
+            g.mc.imm[i] = pat & ((1 as i64 << ((ch * 8) as i64)) - (1 as i64))
+        end
+        off += ch
+    end
+end
+
+func x87_to_xmm(g &: Ng, sz: int): int:
+    slot := new_slot(g, 8, 8)
+    st := mi_new(g, M_X87, sz)
+    set_mem(g, st, frame_mem(slot, 0 as i64))
+    g.mc.cc[st] = 1
+    r := xmm(g)
+    _l := e_rm(g, M_FLD, sz, r, frame_mem(slot, 0 as i64))
+    ret r
+end
+
+func xmm_to_x87(g &: Ng, r: int, sz: int):
+    slot := new_slot(g, 8, 8)
+    _s := e_mr(g, M_FST, sz, frame_mem(slot, 0 as i64), r)
+    ld := mi_new(g, M_X87, sz)
+    set_mem(g, ld, frame_mem(slot, 0 as i64))
+    g.mc.cc[ld] = 0
+end
+
+func call_lib(g &: Ng, sym: int, args: Vector<int>, ret_cls: int): int:
+    mut cls := Vector {} as Vector<int>
+    each r in args:
+        cls.push(g.mc.vcls[r])
+    end
+    mask := place_args(g, args, cls, false, 0 - 1)
+    i := mi_new(g, M_CALL, 8)
+    g.mc.msym[i] = sym
+    g.mc.imm[i] = mask
+    g.mc.has_call = true
+    g.sy_used[sym] = true
+    cls.free()
+    if ret_cls < 0:
+        ret 0 - 1
+    end
+    if ret_cls == 1 and g.arch == NG_ARCH_X86:
+        ret x87_to_xmm(g, 8)
+    end
+    r2 := vnew(g, ret_cls)
+    if ret_cls == 1:
+        _c := e_copy(g, r2, XMM0)
+    else:
+        _c2 := e_copy(g, r2, RAX)
+    end
+    ret r2
+end
+
+func place_args(g &: Ng, args: Vector<int>, cls: Vector<int>, vararg: bool, nfixed: int): i64:
+    if g.arch == NG_ARCH_ARM:
+        ret place_args_arm(g, args, cls, vararg, nfixed)
+    end
+    mut mask := 0 as i64
+    n := args.len()
+    if g.os == NG_OS_WINDOWS and g.arch == NG_ARCH_X64:
+        mut stk := 32
+        repeat n in p:
+            if p >= 4:
+                r := args[p]
+                if cls[p] == 1:
+                    _s := e_mr(g, M_FST, 8, mem_bi(RSP, stk as i64), r)
+                else:
+                    _s2 := e_mr(g, M_ST, 8, mem_bi(RSP, stk as i64), r)
+                end
+                stk += 8
+            end
+        end
+        if stk > g.mc.out_args:
+            g.mc.out_args = stk
+        end
+        repeat n in p2:
+            if p2 < 4:
+                r2 := args[p2]
+                if cls[p2] == 1:
+                    _c := e_copy(g, XMM0 + p2, r2)
+                    mask = mask | ((1 as i64) << ((XMM0 + p2) as i64))
+                    if vararg:
+                        gr := k_win_gp[p2]
+                        _q := e_rr(g, M_MOVQ_GX, 8, gr, r2)
+                        mask = mask | ((1 as i64) << (gr as i64))
+                    end
+                else:
+                    gr2 := k_win_gp[p2]
+                    _c2 := e_copy(g, gr2, r2)
+                    mask = mask | ((1 as i64) << (gr2 as i64))
+                end
+            end
+        end
+        ret mask
+    end
+    if g.arch == NG_ARCH_X86:
+        mut so := 0
+        repeat n in px:
+            r := args[px]
+            if cls[px] == 1 or cls[px] == 3:
+                fs := cls[px] == 3 ? 4 : 8
+                _sf := e_mr(g, M_FST, fs, mem_bi(RSP, so as i64), r)
+                so += fs
+            else:
+                _sg := e_mr(g, M_ST, 4, mem_bi(RSP, so as i64), r)
+                so += 4
+            end
+        end
+        g.last_argsz = so
+        so = align_up(so, 16)
+        if so > g.mc.out_args:
+            g.mc.out_args = so
+        end
+        ret mask
+    end
+    mut gi := 0
+    mut fi := 0
+    mut stk2 := 0
+    a64 := g.arch == NG_ARCH_A64 or g.arch == NG_ARCH_RV64
+    apple_va := g.arch == NG_ARCH_A64 and vararg and g.os == NG_OS_MACOS and nfixed >= 0
+    win_va := g.arch == NG_ARCH_A64 and vararg and g.os == NG_OS_WINDOWS
+    ngp_args := a64 ? 8 : 6
+    mut ord := 0
+    mut where := Vector {} as Vector<int>
+    repeat n in p3:
+        if cls[p3] != 2:
+            ord += 1
+        end
+        if apple_va and cls[p3] != 2 and ord > nfixed:
+            where.push(0 - 1 - stk2)
+            stk2 += 8
+        else cls[p3] == 1 and not win_va:
+            if fi < 8:
+                where.push(XMM0 + fi)
+                fi += 1
+            else:
+                where.push(0 - 1 - stk2)
+                stk2 += 8
+            end
+        else cls[p3] == 2 and g.arch == NG_ARCH_A64:
+            where.push(A64_SRET)
+        else:
+            if gi < ngp_args:
+                where.push(a64 ? k_a64_gp[gi] : k_sysv_gp[gi])
+                gi += 1
+            else:
+                where.push(0 - 1 - stk2)
+                stk2 += 8
+            end
+        end
+    end
+    repeat n in p4:
+        w := where[p4]
+        if w < 0:
+            off := 0 - 1 - w
+            if cls[p4] == 1:
+                _s3 := e_mr(g, M_FST, 8, mem_bi(RSP, off as i64), args[p4])
+            else:
+                _s4 := e_mr(g, M_ST, 8, mem_bi(RSP, off as i64), args[p4])
+            end
+        end
+    end
+    if stk2 > g.mc.out_args:
+        g.mc.out_args = stk2
+    end
+    repeat n in p5:
+        w2 := where[p5]
+        if w2 >= 0 and win_va and cls[p5] == 1:
+            _q2 := e_rr(g, M_MOVQ_GX, 8, w2, args[p5])
+            mask = mask | ((1 as i64) << (w2 as i64))
+        else w2 >= 0:
+            _c3 := e_copy(g, w2, args[p5])
+            mask = mask | ((1 as i64) << (w2 as i64))
+        end
+    end
+    if vararg and g.arch == NG_ARCH_X64:
+        _m := e_movi(g, RAX, fi as i64)
+        mask = mask | (1 as i64)
+    end
+    where.free()
+    ret mask
+end
+
+func ext_arg(g &: Ng, r: int, t: int, sign: bool): int:
+    bits := int_bits(g, t)
+    if bits >= 32:
+        ret r
+    end
+    r2 := gpr(g)
+    mut op := M_MOVZX_RR
+    if sign and bits > 1:
+        op = M_MOVSX_RR
+    end
+    i := e_rr(g, op, 4, r2, r)
+    g.mc.sz2[i] = bits <= 8 ? 1 : 2
+    ret r2
+end
+
+func entry_args_x86(g &: Ng):
+    mut stk := 8
+    if is_agg(g, g.f_ret):
+        g.retp = gpr(g)
+        _lr := e_rm(g, M_LD, 4, g.retp, Mem { k = MK_ARG, d = stk as i64 })
+        stk += 4
+    end
+    repeat g.f_args.len() in k:
+        v := g.f_args[k]
+        t := g.v_ty[v]
+        agg := is_agg(g, t)
+        if is_flt(g, t) and not agg:
+            r := vnew(g, 1)
+            fs := fsz(t)
+            _lf := e_rm(g, M_FLD, fs, r, Mem { k = MK_ARG, d = stk as i64 })
+            stk += fs == 4 ? 4 : 8
+            g.vv[v] = r
+        else:
+            r2 := vnew(g, 0)
+            _lg := e_rm(g, M_LD, 4, r2, Mem { k = MK_ARG, d = stk as i64 })
+            stk += 4
+            if agg:
+                g.vak[v] = AK_PTR
+                g.var_[v] = r2
+                g.vao[v] = 0
+            end
+            g.vv[v] = r2
+        end
+    end
+end
+
+func hi_reg(g &: Ng): int:
+    ret g.arch == NG_ARCH_ARM ? RCX : RDX
+end
+
+func arm_vfp_slot(used &: Vector<bool>, dbl: bool): int:
+    if dbl:
+        repeat 8 in k:
+            if not used[2 * k] and not used[2 * k + 1]:
+                used[2 * k] = true
+                used[2 * k + 1] = true
+                ret 2 * k
+            end
+        end
+        ret 0 - 1
+    end
+    repeat 16 in s:
+        if not used[s]:
+            used[s] = true
+            ret s
+        end
+    end
+    ret 0 - 1
+end
+
+func arm_gp_arg(g &: Ng, r: int, ncrn &: int, nsaa &: int, mask &: i64):
+    if ncrn < 4:
+        _c := e_copy(g, ncrn, r)
+        mask = mask | ((1 as i64) << (ncrn as i64))
+        ncrn += 1
+        ret
+    end
+    _s := e_mr(g, M_ST, 4, mem_bi(RSP, nsaa as i64), r)
+    nsaa += 4
+end
+
+func arm_pair_align(ncrn &: int, nsaa &: int):
+    if (ncrn & 1) == 1:
+        ncrn += 1
+    end
+    if ncrn > 2:
+        ncrn = 4
+        nsaa = align_up(nsaa, 8)
+    end
+end
+
+func place_args_arm(g &: Ng, args: Vector<int>, cls: Vector<int>, vararg: bool, nfixed: int): i64:
+    mut mask := 0 as i64
+    n := args.len()
+    mut used := Vector {} as Vector<bool>
+    defer used.free()
+    repeat 16:
+        used.push(false)
+    end
+    mut odd_r := Vector {} as Vector<int>
+    defer odd_r.free()
+    mut odd_k := Vector {} as Vector<int>
+    defer odd_k.free()
+    mut vstk := false
+    mut ncrn := 0
+    mut nsaa := 0
+    mut p := 0
+    until p < n:
+        r := args[p]
+        c := cls[p]
+        va := vararg and nfixed >= 0 and p >= nfixed
+        if (c == 1 or c == 3) and va:
+            lo := gpr(g)
+            m0 := e_rr(g, M_MOVQ_GX, 4, lo, r)
+            g.mc.sz2[m0] = 0
+            hi := gpr(g)
+            m1 := e_rr(g, M_MOVQ_GX, 4, hi, r)
+            g.mc.sz2[m1] = 1
+            arm_pair_align(ncrn, nsaa)
+            arm_gp_arg(g, lo, ncrn, nsaa, mask)
+            arm_gp_arg(g, hi, ncrn, nsaa, mask)
+        else c == 1 or c == 3:
+            mut sl := 0 - 1
+            if not vstk:
+                sl = arm_vfp_slot(used, c == 1)
+            end
+            if sl < 0:
+                vstk = true
+                if c == 1:
+                    nsaa = align_up(nsaa, 8)
+                end
+                _sf := e_mr(g, M_FST, c == 1 ? 8 : 4, mem_bi(RSP, nsaa as i64), r)
+                nsaa += c == 1 ? 8 : 4
+            else (sl & 1) == 1:
+                odd_r.push(r)
+                odd_k.push(sl >> 1)
+            else:
+                _cf := e_copy(g, XMM0 + (sl >> 1), r)
+                mask = mask | ((1 as i64) << ((XMM0 + (sl >> 1)) as i64))
+            end
+        else c == 4 and p + 1 < n:
+            arm_pair_align(ncrn, nsaa)
+            arm_gp_arg(g, r, ncrn, nsaa, mask)
+            arm_gp_arg(g, args[p + 1], ncrn, nsaa, mask)
+            p += 1
+        else:
+            arm_gp_arg(g, r, ncrn, nsaa, mask)
+        end
+        p += 1
+    end
+    repeat odd_r.len() in q:
+        so := e_rr(g, M_ARM_SODD, 4, XMM0 + odd_k[q], odd_r[q])
+        g.mc.cc[so] = 0
+        mask = mask | ((1 as i64) << ((XMM0 + odd_k[q]) as i64))
+    end
+    g.last_argsz = nsaa
+    al := align_up(nsaa, 16)
+    if al > g.mc.out_args:
+        g.mc.out_args = al
+    end
+    ret mask
+end
+
+func entry_args_arm(g &: Ng):
+    mut used := Vector {} as Vector<bool>
+    defer used.free()
+    repeat 16:
+        used.push(false)
+    end
+    mut vstk := false
+    mut ncrn := 0
+    mut nsaa := 0
+    if is_agg(g, g.f_ret):
+        g.retp = gpr(g)
+        _c := e_copy(g, g.retp, RAX)
+        ncrn = 1
+    end
+    repeat g.f_args.len() in k:
+        v := g.f_args[k]
+        t := g.v_ty[v]
+        fl := k < g.f_argf.len() ? g.f_argf[k] : 0
+        agg := is_agg(g, t)
+        if is_flt(g, t) and not agg:
+            dbl := fsz(t) == 8
+            r := vnew(g, 1)
+            mut sl := 0 - 1
+            if not vstk:
+                sl = arm_vfp_slot(used, dbl)
+            end
+            if sl < 0:
+                vstk = true
+                if dbl:
+                    nsaa = align_up(nsaa, 8)
+                end
+                _lf := e_rm(g, M_FLD, fsz(t), r, Mem { k = MK_ARG, d = (8 + nsaa) as i64 })
+                nsaa += dbl ? 8 : 4
+            else (sl & 1) == 1:
+                so := e_rr(g, M_ARM_SODD, 4, r, XMM0 + (sl >> 1))
+                g.mc.cc[so] = 1
+            else:
+                _cf := e_copy(g, r, XMM0 + (sl >> 1))
+            end
+            g.vv[v] = r
+        else:
+            if (fl & IF_PAIR) != 0:
+                arm_pair_align(ncrn, nsaa)
+            end
+            r2 := vnew(g, 0)
+            if ncrn < 4:
+                _cg := e_copy(g, r2, ncrn)
+                ncrn += 1
+            else:
+                _lg := e_rm(g, M_LD, 4, r2, Mem { k = MK_ARG, d = (8 + nsaa) as i64 })
+                nsaa += 4
+            end
+            if agg:
+                g.vak[v] = AK_PTR
+                g.var_[v] = r2
+                g.vao[v] = 0
+            end
+            g.vv[v] = r2
+        end
+    end
+end
+
+func entry_args(g &: Ng):
+    if g.arch == NG_ARCH_ARM:
+        entry_args_arm(g)
+        ret
+    end
+    if g.arch == NG_ARCH_X86:
+        entry_args_x86(g)
+        win_main_init(g)
+        ret
+    end
+    mut gi := 0
+    mut fi := 0
+    mut pos := 0
+    w64 := g.os == NG_OS_WINDOWS and g.arch == NG_ARCH_X64
+    if is_agg(g, g.f_ret):
+        g.retp = gpr(g)
+        if w64:
+            _c := e_copy(g, g.retp, RCX)
+            pos = 1
+        else g.arch == NG_ARCH_A64:
+            _c2a := e_copy(g, g.retp, A64_SRET)
+        else g.arch == NG_ARCH_RV64:
+            _c2r := e_copy(g, g.retp, k_a64_gp[0])
+            gi = 1
+        else:
+            _c2 := e_copy(g, g.retp, RDI)
+            gi = 1
+        end
+    end
+    mut stk := 16
+    if w64:
+        stk = 16 + 8 * pos
+    end
+    repeat g.f_args.len() in k:
+        v := g.f_args[k]
+        t := g.v_ty[v]
+        mut cls := vcls_ty(g, t)
+        agg := is_agg(g, t)
+        if agg:
+            cls = 0
+        end
+        r := vnew(g, cls)
+        if w64:
+            if pos < 4:
+                if cls == 1:
+                    _c3 := e_copy(g, r, XMM0 + pos)
+                else:
+                    _c4 := e_copy(g, r, k_win_gp[pos])
+                end
+            else:
+                if cls == 1:
+                    _l := e_rm(g, M_FLD, 8, r, Mem { k = MK_ARG, d = stk as i64 })
+                else:
+                    _l2 := e_rm(g, M_LD, 8, r, Mem { k = MK_ARG, d = stk as i64 })
+                end
+            end
+            stk += 8
+            pos += 1
+        else:
+            if cls == 1 and fi < 8:
+                _c5 := e_copy(g, r, XMM0 + fi)
+                fi += 1
+            else cls == 0 and gi < (g.arch == NG_ARCH_A64 or g.arch == NG_ARCH_RV64 ? 8 : 6):
+                _c6 := e_copy(g, r, g.arch == NG_ARCH_A64 or g.arch == NG_ARCH_RV64 ? k_a64_gp[gi] : k_sysv_gp[gi])
+                gi += 1
+            else:
+                if cls == 1:
+                    _l3 := e_rm(g, M_FLD, 8, r, Mem { k = MK_ARG, d = stk as i64 })
+                else:
+                    _l4 := e_rm(g, M_LD, 8, r, Mem { k = MK_ARG, d = stk as i64 })
+                end
+                stk += 8
+            end
+        end
+        if agg:
+            g.vak[v] = AK_PTR
+            g.var_[v] = r
+            g.vao[v] = 0
+        end
+        g.vv[v] = r
+    end
+    win_main_init(g)
+end
+
+func win_main_init(g &: Ng):
+    if g.os == NG_OS_WINDOWS and str.Equals(tab_str(g.syms, g.f_sym), "main"):
+        ci := mi_new(g, M_CALL, 8)
+        g.mc.msym[ci] = g.sym_main_init
+        g.mc.imm[ci] = 0 as i64
+        g.mc.has_call = true
+        g.sy_used[g.sym_main_init] = true
+        if g.mc.out_args < 32:
+            g.mc.out_args = 32
+        end
+    end
+end
+
+func setup_phis(g &: Ng):
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0 and g.i_op[i] == OP_PHI:
+            r := g.i_res[i]
+            t := g.i_ty[i]
+            if is_agg(g, t):
+                g.phit[i] = new_slot(g, tsize(g, t), talign(g, t))
+                if r >= 0:
+                    g.vak[r] = AK_FRAME
+                    g.var_[r] = new_slot(g, tsize(g, t), talign(g, t))
+                    g.vao[r] = 0
+                end
+            else r >= 0:
+                g.vv[r] = new_reg_ty(g, t)
+            end
+            i = g.i_next[i]
+        end
+    end
+end
+
+func split_copies(g &: Ng, b: int):
+    repeat g.lp_pre.len() in lp:
+        if g.lp_pre[lp] != b:
+            continue
+        end
+        repeat g.lpv_val.len() in k:
+            if g.lpv_loop[k] != lp:
+                continue
+            end
+            v := g.lpv_val[k]
+            if g.vak[v] != AK_NONE or addr_only(g, v) or g.vv[v] < 0:
+                continue
+            end
+            src := use_reg(g, v)
+            nr := vnew(g, g.mc.vcls[src])
+            g.mc.vwide[nr] = g.mc.vwide[src]
+            _c := e_copy(g, nr, src)
+            g.sp_loop.push(lp)
+            g.sp_val.push(v)
+            g.sp_reg.push(nr)
+        end
+    end
+end
+
+func par_copy(g &: Ng, dsts: Vector<int>, srcs: Vector<int>):
+    mut rd := Vector {} as Vector<int>
+    mut rs := Vector {} as Vector<int>
+    mut cd := Vector {} as Vector<int>
+    mut cv := Vector {} as Vector<int>
+    repeat dsts.len() in k:
+        v := srcs[k]
+        kv := g.v_kind[v]
+        if kv == VK_UNDEF:
+            continue
+        end
+        if kv == VK_INT or kv == VK_FLT or kv == VK_GLB or kv == VK_ZERO:
+            cd.push(dsts[k])
+            cv.push(v)
+            continue
+        end
+        r := use_reg(g, v)
+        if r != dsts[k]:
+            rd.push(dsts[k])
+            rs.push(r)
+        end
+    end
+    until rd.len() > 0:
+        mut pick := 0 - 1
+        repeat rd.len() in k2:
+            if pick < 0:
+                mut busy := false
+                repeat rs.len() in j:
+                    if j != k2 and rs[j] == rd[k2]:
+                        busy = true
+                    end
+                end
+                if not busy:
+                    pick = k2
+                end
+            end
+        end
+        if pick >= 0:
+            _c := e_copy(g, rd[pick], rs[pick])
+            last := rd.len() - 1
+            rd[pick] = rd[last]
+            rs[pick] = rs[last]
+            _p := rd.pop()
+            _q := rs.pop()
+        else:
+            d0 := rd[0]
+            tmp := vnew(g, g.mc.vcls[d0])
+            g.mc.vwide[tmp] = g.mc.vwide[d0]
+            _c2 := e_copy(g, tmp, d0)
+            repeat rs.len() in j2:
+                if rs[j2] == d0:
+                    rs[j2] = tmp
+                end
+            end
+        end
+    end
+    repeat cd.len() in k3:
+        move_into(g, cd[k3], cv[k3])
+    end
+    rd.free()
+    rs.free()
+    cd.free()
+    cv.free()
+end
+
+func phi_copies(g &: Ng, b: int):
+    repeat g.b_sn[b] in k:
+        s := g.b_succ[g.b_ss[b] + k]
+        mut dsts := Vector {} as Vector<int>
+        mut srcs := Vector {} as Vector<int>
+        mut i := g.b_first[s]
+        until i >= 0 and g.i_op[i] == OP_PHI:
+            ps := g.i_ps[i]
+            repeat g.i_pcount[i] in q:
+                if g.pool[ps + 2 * q + 1] == b:
+                    v := g.pool[ps + 2 * q]
+                    t := g.i_ty[i]
+                    if is_agg(g, t):
+                        if g.v_kind[v] != VK_UNDEF:
+                            emit_copy(g, frame_mem(g.phit[i], 0 as i64), agg_mem(g, v), tsize(g, t))
+                        end
+                    else g.i_res[i] >= 0:
+                        dsts.push(g.vv[g.i_res[i]])
+                        srcs.push(v)
+                    end
+                    break
+                end
+            end
+            i = g.i_next[i]
+        end
+        if dsts.len() > 0:
+            par_copy(g, dsts, srcs)
+        end
+        dsts.free()
+        srcs.free()
+    end
+end
+
+func icmp_cc(p: int): int:
+    switch p:
+        CC_EQ: ret X_E end
+        CC_NE: ret X_NE end
+        CC_SLT: ret X_L end
+        CC_SLE: ret X_LE end
+        CC_SGT: ret X_G end
+        CC_SGE: ret X_GE end
+        CC_ULT: ret X_B end
+        CC_ULE: ret X_BE end
+        CC_UGT: ret X_A end
+        CC_UGE: ret X_AE end
+    end
+    ret X_E
+end
+
+func swap_pred(p: int): int:
+    switch p:
+        CC_SLT: ret CC_SGT end
+        CC_SLE: ret CC_SGE end
+        CC_SGT: ret CC_SLT end
+        CC_SGE: ret CC_SLE end
+        CC_ULT: ret CC_UGT end
+        CC_ULE: ret CC_UGE end
+        CC_UGT: ret CC_ULT end
+        CC_UGE: ret CC_ULE end
+    end
+    ret p
+end
+
+func and_test_ok(g &: Ng, i: int): bool:
+    r := g.i_res[i]
+    if r < 0 or g.v_uses[r] != 1 or g.i_op[i] != OP_AND:
+        ret false
+    end
+    m := g.i_b[i]
+    if m < 0 or g.v_kind[m] != VK_INT or not is_imm32(g.v_i[m]):
+        ret false
+    end
+    mut j := g.i_next[i]
+    repeat 8:
+        if j < 0:
+            ret false
+        end
+        if g.i_op[j] == OP_ICMP and g.i_a[j] == r:
+            p := g.i_x[j]
+            z := g.i_b[j]
+            ret (p == CC_EQ or p == CC_NE) and z >= 0 and g.v_kind[z] == VK_INT and g.v_i[z] == (0 as i64)
+        end
+        if uses_val(g, j, r):
+            ret false
+        end
+        j = g.i_next[j]
+    end
+    ret false
+end
+
+func emit_cmp64(g &: Ng, i: int): int:
+    rl := use_reg(g, g.i_a[i])
+    rl2 := use_reg(g, g.i_b[i])
+    rh2 := use_reg(g, g.i_d[i] as int)
+    if g.arch == NG_ARCH_ARM:
+        rh := use_reg(g, g.i_c[i])
+        _p2 := e_alu(g, ALU_CMP, 4, rl, rl2)
+        _s2 := e_alu(g, ALU_SBBCMP, 4, rh, rh2)
+        ret icmp_cc(g.i_x[i])
+    end
+    t := gpr(g)
+    _c := e_copy(g, t, use_reg(g, g.i_c[i]))
+    _p := e_alu(g, ALU_CMP, 4, rl, rl2)
+    _s := e_alu(g, ALU_SBB, 4, t, rh2)
+    ret icmp_cc(g.i_x[i])
+end
+
+func isel_div6432(g &: Ng, i: int):
+    ra := use_reg(g, g.i_a[i])
+    rb := use_reg(g, g.i_b[i])
+    rc := use_reg(g, g.i_c[i])
+    mut tw := Vector {} as Vector<int>
+    mut j := g.i_next[i]
+    until j >= 0:
+        if g.i_op[j] == OP_DIV6432 and g.i_a[j] == g.i_a[i] and g.i_b[j] == g.i_b[i] and g.i_c[j] == g.i_c[i] and g.i_res[j] >= 0:
+            tw.push(j)
+        end
+        j = g.i_next[j]
+    end
+    mut needh := g.i_x[i] == 2
+    mut needq := g.i_x[i] == 0
+    mut needr := g.i_x[i] == 1
+    each t in tw:
+        if g.i_x[t] == 2:
+            needh = true
+        else g.i_x[t] == 0:
+            needq = true
+        else:
+            needr = true
+        end
+    end
+    rq := gpr(g)
+    rr := gpr(g)
+    rh := gpr(g)
+    slow := new_label(g)
+    done := new_label(g)
+    _cm := e_alu(g, ALU_CMP, 4, rb, rc)
+    _js := e_jcc(g, X_AE, slow)
+    _f1 := e_copy(g, RAX, ra)
+    _f2 := e_copy(g, RDX, rb)
+    d0 := e_rr(g, M_DIV, 4, 0 - 1, rc)
+    g.mc.cc[d0] = 0
+    if needq:
+        _f3 := e_copy(g, rq, RAX)
+    end
+    if needr:
+        _f4 := e_copy(g, rr, RDX)
+    end
+    if needh:
+        _f5 := e_movi(g, rh, 0 as i64)
+    end
+    _jd := e_jmp(g, done)
+    _ls := e_label(g, slow)
+    _s1 := e_copy(g, RAX, rb)
+    _s2 := e_ri(g, M_MOV_RI, 4, RDX, 0 as i64)
+    d1 := e_rr(g, M_DIV, 4, 0 - 1, rc)
+    g.mc.cc[d1] = 0
+    if needh:
+        _s3 := e_copy(g, rh, RAX)
+    end
+    _s4 := e_copy(g, RAX, ra)
+    d2 := e_rr(g, M_DIV, 4, 0 - 1, rc)
+    g.mc.cc[d2] = 0
+    if needq:
+        _s5 := e_copy(g, rq, RAX)
+    end
+    if needr:
+        _s6 := e_copy(g, rr, RDX)
+    end
+    _ld := e_label(g, done)
+    x := g.i_x[i]
+    set_res(g, i, x == 1 ? rr : (x == 2 ? rh : rq))
+    each t2 in tw:
+        xt := g.i_x[t2]
+        g.vv[g.i_res[t2]] = xt == 1 ? rr : (xt == 2 ? rh : rq)
+        g.skipi[t2] = true
+    end
+    tw.free()
+end
+
+func isel_adc64(g &: Ng, i: int):
+    y := g.i_b[i]
+    yimm := g.v_kind[y] == VK_INT and is_imm32(g.v_i[y])
+    rx := use_reg(g, g.i_a[i])
+    mut ry := 0 - 1
+    if not yimm:
+        ry = use_reg(g, y)
+    end
+    ra := use_reg(g, g.i_c[i])
+    dv := g.i_d[i] as int
+    dimm := g.v_kind[dv] == VK_INT and is_imm32(g.v_i[dv])
+    mut rb := 0 - 1
+    if not dimm:
+        rb = use_reg(g, dv)
+    end
+    r := gpr(g)
+    _c := e_copy(g, r, rx)
+    sb := g.i_x[i] != 0
+    mut cop := ALU_ADD
+    mut cr := ra
+    if sb:
+        cop = ALU_CMP
+    else g.arch == NG_ARCH_ARM:
+        cop = ALU_ADDCMP
+    else:
+        cr = gpr(g)
+        _c2 := e_copy(g, cr, ra)
+    end
+    if dimm:
+        _p := e_alui(g, cop, 4, cr, g.v_i[dv])
+    else:
+        _p2 := e_alu(g, cop, 4, cr, rb)
+    end
+    if yimm:
+        _s := e_alui(g, sb ? ALU_SBB : ALU_ADC, 4, r, g.v_i[y])
+    else:
+        _s2 := e_alu(g, sb ? ALU_SBB : ALU_ADC, 4, r, ry)
+    end
+    set_res(g, i, r)
+end
+
+func emit_icmp(g &: Ng, i: int): int:
+    if g.i_op[i] == OP_CMP64:
+        ret emit_cmp64(g, i)
+    end
+    mut a := g.i_a[i]
+    mut b := g.i_b[i]
+    mut p := g.i_x[i]
+    if (p == CC_EQ or p == CC_NE) and g.v_kind[b] == VK_INT and g.v_i[b] == (0 as i64) and def_op(g, a) == OP_AND:
+        d := g.v_def[a]
+        if g.skipi[d]:
+            sz0 := msz(g, g.v_ty[a])
+            bits0 := int_bits(g, g.v_ty[a])
+            ra0 := use_reg(g, g.i_a[d])
+            mut mimm := g.v_i[g.i_b[d]]
+            if bits0 < 32:
+                mimm = mimm & (((1 as i64) << (bits0 as i64)) - (1 as i64))
+            end
+            _t := e_ri(g, M_TEST_RI, sz0 < 4 ? 4 : sz0, ra0, mimm)
+            ret icmp_cc(p)
+        end
+    end
+    if g.v_kind[a] == VK_INT and g.v_kind[b] != VK_INT:
+        tmp := a
+        a = b
+        b = tmp
+        p = swap_pred(p)
+    end
+    lfa := lf_mem(g, a)
+    if lfa >= 0 and g.v_kind[b] == VK_INT and is_imm32(g.v_i[b]):
+        cmem := mem_of(g, g.i_a[lfa], 0 as i64)
+        cm := mi_new(g, M_ALU_MI, msz(g, g.v_ty[a]))
+        set_mem(g, cm, cmem)
+        g.mc.imm[cm] = g.v_i[b]
+        g.mc.cc[cm] = ALU_CMP
+        ret icmp_cc(p)
+    end
+    if lf_mem(g, a) >= 0 and lf_mem(g, b) < 0:
+        tmp2 := a
+        a = b
+        b = tmp2
+        p = swap_pred(p)
+    end
+    lfi := lf_mem(g, b)
+    if lfi >= 0:
+        rl := use_reg(g, a)
+        mc := e_rm(g, M_ALU_RM, msz(g, g.v_ty[a]), rl, mem_of(g, g.i_a[lfi], 0 as i64))
+        g.mc.cc[mc] = ALU_CMP
+        ret icmp_cc(p)
+    end
+    sz := msz(g, g.v_ty[a])
+    ra := use_reg(g, a)
+    if g.v_kind[b] == VK_INT and is_imm32(g.v_i[b]):
+        if g.v_i[b] == (0 as i64):
+            _t := e_rr(g, M_TEST_RR, sz, ra, ra)
+        else:
+            mut imm := g.v_i[b]
+            if sz == 1:
+                imm = imm & (255 as i64)
+            else sz == 2:
+                imm = imm & (65535 as i64)
+            end
+            _c := e_alui(g, ALU_CMP, sz, ra, imm)
+        end
+    else:
+        rb := use_reg(g, b)
+        _c2 := e_alu(g, ALU_CMP, sz, ra, rb)
+    end
+    ret icmp_cc(p)
+end
+
+func fcmp_setup(g &: Ng, i: int): int:
+    p := g.i_x[i]
+    mut a := g.i_a[i]
+    mut b := g.i_b[i]
+    mut np := p
+    if p == FC_OLT or p == FC_OLE or p == FC_UGT or p == FC_UGE:
+        tmp := a
+        a = b
+        b = tmp
+        if p == FC_OLT: np = FC_OGT end
+        if p == FC_OLE: np = FC_OGE end
+        if p == FC_UGT: np = FC_ULT end
+        if p == FC_UGE: np = FC_ULE end
+    end
+    ra := use_reg(g, a)
+    rb := use_reg(g, b)
+    _u := e_rr(g, M_UCOMI, fsz(g.v_ty[a]), ra, rb)
+    ret np
+end
+
+func fcmp_cc(np: int): int:
+    switch np:
+        FC_OGT: ret X_A end
+        FC_OGE: ret X_AE end
+        FC_ULT: ret X_B end
+        FC_ULE: ret X_BE end
+        FC_UEQ: ret X_E end
+        FC_ONE: ret X_NE end
+        FC_ORD: ret X_NP end
+        FC_UNO: ret X_P end
+    end
+    ret 0 - 1
+end
+
+func cond_user(g &: Ng, d: int): int:
+    v := g.i_res[d]
+    if v < 0 or g.v_uses[v] != 1:
+        ret 0 - 1
+    end
+    mut j := g.i_next[d]
+    mut k := 0
+    until j >= 0 and k < 64:
+        op := g.i_op[j]
+        if g.i_a[j] == v and (op == OP_CBR or op == OP_SELECT):
+            ret j
+        end
+        if g.i_b[j] == v or g.i_c[j] == v:
+            ret 0 - 1
+        end
+        j = g.i_next[j]
+        k += 1
+    end
+    ret 0 - 1
+end
+
+func fused_cond(g &: Ng, br: int): int:
+    c := g.i_a[br]
+    if cond_only(g, c) and (g.i_op[br] == OP_CBR or sel_scalar(g, g.i_ty[br])):
+        ret g.v_def[c]
+    end
+    if c < 0 or g.v_kind[c] != VK_INS or g.v_uses[c] != 1:
+        ret 0 - 1
+    end
+    d := g.v_def[c]
+    if cond_user(g, d) != br:
+        ret 0 - 1
+    end
+    op := g.i_op[d]
+    if g.i_op[br] == OP_SELECT:
+        t := g.i_ty[br]
+        if (op == OP_ICMP or op == OP_CMP64) and sel_scalar(g, t):
+            ret d
+        end
+        if op == OP_FCMP and sel_scalar(g, t):
+            fp := g.i_x[d]
+            if fp != FC_OEQ and fp != FC_UNE and fp != FC_FALSE and fp != FC_TRUE:
+                ret d
+            end
+        end
+        ret 0 - 1
+    end
+    if op == OP_ICMP or op == OP_CMP64:
+        ret d
+    end
+    if op == OP_FCMP:
+        p := g.i_x[d]
+        if p != FC_FALSE and p != FC_TRUE:
+            ret d
+        end
+    end
+    ret 0 - 1
+end
+
+func isel_cbr(g &: Ng, i: int, b: int):
+    tb := g.i_b[i]
+    fb := g.i_c[i]
+    phi_copies(g, b)
+    c := g.i_a[i]
+    if g.v_kind[c] == VK_INT:
+        if (g.v_i[c] & (1 as i64)) != (0 as i64):
+            _j := e_jmp(g, tb)
+        else:
+            _j2 := e_jmp(g, fb)
+        end
+        ret
+    end
+    d := fused_cond(g, i)
+    if d >= 0 and (g.i_op[d] == OP_ICMP or g.i_op[d] == OP_CMP64):
+        cc := emit_icmp(g, d)
+        _j3 := e_jcc(g, cc, tb)
+        _j4 := e_jmp(g, fb)
+        ret
+    end
+    if d >= 0:
+        np := fcmp_setup(g, d)
+        if np == FC_OEQ:
+            _j5 := e_jcc(g, X_P, fb)
+            _j6 := e_jcc(g, X_E, tb)
+            _j7 := e_jmp(g, fb)
+            ret
+        end
+        if np == FC_UNE:
+            _j8 := e_jcc(g, X_P, tb)
+            _j9 := e_jcc(g, X_NE, tb)
+            _ja := e_jmp(g, fb)
+            ret
+        end
+        _jb := e_jcc(g, fcmp_cc(np), tb)
+        _jc := e_jmp(g, fb)
+        ret
+    end
+    rc := use_reg(g, c)
+    _t := e_rr(g, M_TEST_RR, 1, rc, rc)
+    _jd := e_jcc(g, X_NE, tb)
+    _je := e_jmp(g, fb)
+end
+
+func set_res(g &: Ng, i: int, r: int):
+    v := g.i_res[i]
+    if v >= 0:
+        g.vv[v] = r
+    end
+end
+
+func res_used(g &: Ng, i: int): bool:
+    v := g.i_res[i]
+    ret v >= 0 and g.v_uses[v] > 0
+end
+
+func isel_vec_ins(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    t := g.i_ty[i]
+    vint := g.t_elem[t] == T_I32 or g.t_elem[t] == T_I64 or g.t_elem[t] == T_I16
+    if not res_used(g, i):
+        ret op != OP_LOAD and op != OP_PHI and op != OP_STORE
+    end
+    if g.t_elem[t] == T_I8:
+        if op == OP_ADD or op == OP_SUB or op == OP_AND or op == OP_OR or op == OP_XOR:
+            isel_vbyte_bin(g, i)
+            ret true
+        end
+        if op == OP_VBCAST:
+            isel_vbcast_byte(g, i)
+            ret true
+        end
+    end
+    if g.t_elem[t] == T_I16:
+        if op == OP_MUL:
+            isel_vint_bin(g, i)
+            ret true
+        end
+        if op == OP_VBCAST:
+            isel_vbcast_byte(g, i)
+            ret true
+        end
+    end
+    if op == OP_ICMP and g.t_elem[g.v_ty[g.i_a[i]]] == T_I8:
+        isel_vbyte_cmp(g, i)
+        ret true
+    end
+    if vint and (op == OP_ADD or op == OP_SUB or op == OP_AND or op == OP_OR or op == OP_XOR or op == OP_SHL or op == OP_LSHR or op == OP_ASHR):
+        isel_vint_bin(g, i)
+        ret true
+    end
+    if op == OP_MUL and g.t_elem[t] == T_I32:
+        isel_vmul32(g, i)
+        ret true
+    end
+    if op == OP_ICMP:
+        isel_vcmp(g, i)
+        ret true
+    end
+    if op == OP_SELECT and is_vec(g, g.v_ty[g.i_a[i]]):
+        isel_vsel(g, i)
+        ret true
+    end
+    if op == OP_VBCAST and vint:
+        isel_vbcast_int(g, i)
+        ret true
+    end
+    if op == OP_LOAD and (g.i_f[i] & IF_W8) != 0:
+        isel_vload_w8(g, i, mem_of(g, g.i_a[i], 0 as i64))
+        ret true
+    end
+    ret false
+end
+
+func isel_vint_add(g &: Ng, i: int):
+    t := g.i_ty[i]
+    ra := use_reg(g, g.i_a[i])
+    rv := wide_reg(g)
+    _c := e_copy(g, rv, ra)
+    rb := use_reg(g, g.i_b[i])
+    m := e_rr(g, M_VOP_RR, 8, rv, rb)
+    g.mc.cc[m] = g.t_elem[t] == T_I64 ? 0xD4 : 0xFE
+    set_res(g, i, rv)
+end
+
+func isel_vredadd_flt(g &: Ng, i: int):
+    v := use_reg(g, g.i_a[i])
+    d := g.t_elem[g.v_ty[g.i_a[i]]] == T_F64
+    t1 := wide_reg(g)
+    s1 := e_rr(g, M_PSHUFD, 16, t1, v)
+    g.mc.imm[s1] = 0xEE as i64
+    a1 := e_rr(g, M_VOP_RR, d ? 8 : 4, t1, v)
+    g.mc.cc[a1] = FO_ADD
+    mut fin := t1
+    if not d:
+        t2 := wide_reg(g)
+        s2 := e_rr(g, M_PSHUFD, 16, t2, t1)
+        g.mc.imm[s2] = 0x55 as i64
+        a2 := e_rr(g, M_VOP_RR, 4, t2, t1)
+        g.mc.cc[a2] = FO_ADD
+        fin = t2
+    end
+    r := xmm(g)
+    _c := e_copy(g, r, fin)
+    set_res(g, i, r)
+end
+
+func isel_vredadd(g &: Ng, i: int):
+    if is_flt(g, g.i_ty[i]):
+        isel_vredadd_flt(g, i)
+        ret
+    end
+    v := use_reg(g, g.i_a[i])
+    vt := g.v_ty[g.i_a[i]]
+    q := g.t_elem[vt] == T_I64
+    addop := q ? 0xD4 : 0xFE
+    t1 := wide_reg(g)
+    _c1 := e_copy(g, t1, v)
+    s1 := e_rr(g, M_SHUFPS, 4, t1, t1)
+    g.mc.imm[s1] = 0xEE as i64
+    a1 := e_rr(g, M_VOP_RR, 8, t1, v)
+    g.mc.cc[a1] = addop
+    mut fin := t1
+    if not q:
+        t2 := wide_reg(g)
+        _c2 := e_copy(g, t2, t1)
+        s2 := e_rr(g, M_SHUFPS, 4, t2, t2)
+        g.mc.imm[s2] = 0x55 as i64
+        a2 := e_rr(g, M_VOP_RR, 8, t2, t1)
+        g.mc.cc[a2] = addop
+        fin = t2
+    end
+    r := gpr(g)
+    _m := e_rr(g, M_MOVQ_GX, q ? 8 : 4, r, fin)
+    set_res(g, i, r)
+end
+
+func isel_vredh(g &: Ng, i: int):
+    v := use_reg(g, g.i_a[i])
+    mut tw := 0 - 1
+    mut j := g.i_next[i]
+    until j >= 0 and tw < 0:
+        if g.i_op[j] == OP_VREDH and g.i_a[j] == g.i_a[i] and g.i_x[j] != g.i_x[i] and g.i_res[j] >= 0:
+            tw = j
+        end
+        j = g.i_next[j]
+    end
+    t1 := wide_reg(g)
+    _c1 := e_copy(g, t1, v)
+    s1 := e_rr(g, M_SHUFPS, 4, t1, t1)
+    g.mc.imm[s1] = 0xEE as i64
+    a1 := e_rr(g, M_VOP_RR, 8, t1, v)
+    g.mc.cc[a1] = 0xD4
+    rl := gpr(g)
+    _ml := e_rr(g, M_MOVQ_GX, 4, rl, t1)
+    t2 := wide_reg(g)
+    _c2 := e_copy(g, t2, t1)
+    s2 := e_rr(g, M_SHUFPS, 4, t2, t2)
+    g.mc.imm[s2] = 0x55 as i64
+    rh := gpr(g)
+    _mh := e_rr(g, M_MOVQ_GX, 4, rh, t2)
+    set_res(g, i, g.i_x[i] == 1 ? rh : rl)
+    if tw >= 0:
+        g.vv[g.i_res[tw]] = g.i_x[tw] == 1 ? rh : rl
+        g.skipi[tw] = true
+    end
+end
+
+func isel_bin(g &: Ng, i: int):
+    op := g.i_op[i]
+    t := g.i_ty[i]
+    if is_vec(g, t):
+        isel_vint_add(g, i)
+        ret
+    end
+    mut a := g.i_a[i]
+    mut b := g.i_b[i]
+    sz := asz(g, t)
+    mut rx := 0 - 1
+    mut rc := 0
+    mut rcv := 0 - 1
+    mut rleft := false
+    if not g.off_rot and rot_parts(g, i, rx, rc, rcv, rleft) and g.skipi[g.v_def[g.i_a[i]]] and g.skipi[g.v_def[g.i_b[i]]]:
+        rr := gpr(g)
+        move_into(g, rr, rx)
+        if rcv < 0:
+            e_shift(g, SH_ROR, sz, rr, rc)
+        else:
+            _rcc := e_copy(g, RCX, use_reg(g, rcv))
+            rs := e_rr(g, M_SHIFT_RC, sz, rr, 0 - 1)
+            g.mc.cc[rs] = rleft ? 0 : SH_ROR
+        end
+        set_res(g, i, rr)
+        ret
+    end
+    comm := op == OP_ADD or op == OP_MUL or op == OP_AND or op == OP_OR or op == OP_XOR
+    if comm and g.v_kind[a] == VK_INT and g.v_kind[b] != VK_INT:
+        tmp := a
+        a = b
+        b = tmp
+    end
+    if comm and lf_mem(g, a) >= 0 and lf_mem(g, b) < 0:
+        tmp2 := a
+        a = b
+        b = tmp2
+    end
+    lfb := lf_mem(g, b)
+    a_deferred := g.v_kind[a] == VK_INS and g.skipi[g.v_def[a]]
+    if lfb >= 0 and not a_deferred and (op == OP_ADD or op == OP_SUB or op == OP_AND or op == OP_OR or op == OP_XOR):
+        mut subf := ALU_ADD
+        if op == OP_SUB: subf = ALU_SUB end
+        if op == OP_AND: subf = ALU_AND end
+        if op == OP_OR: subf = ALU_OR end
+        if op == OP_XOR: subf = ALU_XOR end
+        rf := gpr(g)
+        move_into(g, rf, a)
+        mf := e_rm(g, M_ALU_RM, asz(g, t), rf, mem_of(g, g.i_a[lfb], 0 as i64))
+        g.mc.cc[mf] = subf
+        set_res(g, i, rf)
+        ret
+    end
+    bimm := g.v_kind[b] == VK_INT and is_imm32(g.v_i[b])
+    if op == OP_ADD and bimm and g.v_kind[a] == VK_INS and g.skipi[g.v_def[a]] and lea_mul_k(g, g.v_def[a]) > 0:
+        md := g.v_def[a]
+        x := use_reg(g, g.i_a[md])
+        rl := gpr(g)
+        _l := e_rm(g, M_LEA, 8, rl, Mem { k = MK_BI, b = x, i = x, s = lea_mul_k(g, md) - 1, d = g.v_i[b] })
+        set_res(g, i, rl)
+        ret
+    end
+    if op == OP_ADD and not bimm:
+        mut mo := 0 - 1
+        mut other := 0 - 1
+        if g.v_kind[a] == VK_INS and g.skipi[g.v_def[a]] and lea_mul_k(g, g.v_def[a]) > 0:
+            mo = g.v_def[a]
+            other = b
+        else g.v_kind[b] == VK_INS and g.skipi[g.v_def[b]] and lea_mul_k(g, g.v_def[b]) > 0:
+            mo = g.v_def[b]
+            other = a
+        end
+        if mo >= 0:
+            mut c := 0
+            mut sc := 0
+            lea_split(lea_mul_k(g, mo), c, sc)
+            x2 := use_reg(g, g.i_a[mo])
+            mut tr := x2
+            if c > 1:
+                tr = gpr(g)
+                _lt := e_rm(g, M_LEA, 8, tr, Mem { k = MK_BI, b = x2, i = x2, s = c - 1, d = 0 as i64 })
+            end
+            ro := use_reg(g, other)
+            rl2 := gpr(g)
+            _l2 := e_rm(g, M_LEA, 8, rl2, Mem { k = MK_BI, b = ro, i = tr, s = sc, d = 0 as i64 })
+            set_res(g, i, rl2)
+            ret
+        end
+    end
+    if op == OP_MUL:
+        r := gpr(g)
+        if bimm and mul_small(g, r, use_reg(g, a), g.v_i[b]):
+            set_res(g, i, r)
+            ret
+        end
+        if bimm and g.v_i[b] == (2 as i64):
+            ra2 := use_reg(g, a)
+            _l2 := e_rm(g, M_LEA, 8, r, Mem { k = MK_BI, b = ra2, i = ra2, s = 1, d = 0 as i64 })
+            set_res(g, i, r)
+            ret
+        end
+        if bimm:
+            ra := use_reg(g, a)
+            mi := e_rr(g, M_IMUL_RRI, sz, r, ra)
+            g.mc.imm[mi] = g.v_i[b]
+        else:
+            mut ma := a
+            mut mb := b
+            if not g.off_mtie and dies_here(g, b, i) and not dies_here(g, a, i) and g.i_op[g.v_def[b]] == OP_LOAD:
+                ma = b
+                mb = a
+            end
+            move_into(g, r, ma)
+            rb := ma == mb and not g.off_sqself ? r : use_reg(g, mb)
+            _m := e_rr(g, M_IMUL_RR, sz, r, rb)
+        end
+        set_res(g, i, r)
+        ret
+    end
+    if op == OP_SUB and g.v_kind[a] == VK_INT and g.v_i[a] == (0 as i64):
+        r2 := gpr(g)
+        move_into(g, r2, b)
+        _n := e_rr(g, M_UNARY, sz, r2, 0 - 1)
+        g.mc.cc[g.mc.op.len() - 1] = UN_NEG
+        set_res(g, i, r2)
+        ret
+    end
+    if op == OP_ADD or op == OP_SUB:
+        if bimm and not (op == OP_SUB and g.v_i[b] == (0 - 2147483647 as i64) - (1 as i64)):
+            ra0 := use_reg(g, a)
+            rl := gpr(g)
+            mut dd := g.v_i[b]
+            if op == OP_SUB:
+                dd = 0 - dd
+            end
+            _l := e_rm(g, M_LEA, 8, rl, mem_bi(ra0, dd))
+            set_res(g, i, rl)
+            ret
+        end
+        if op == OP_ADD and g.v_kind[b] != VK_INT:
+            ra1 := use_reg(g, a)
+            rb1 := use_reg(g, b)
+            rl2 := gpr(g)
+            _l2 := e_rm(g, M_LEA, 8, rl2, Mem { k = MK_BI, b = ra1, i = rb1, s = 1, d = 0 as i64 })
+            set_res(g, i, rl2)
+            ret
+        end
+    end
+    if op == OP_AND and sz == 8 and g.v_kind[b] == VK_INT and g.v_i[b] == (4294967295 as i64):
+        rz := gpr(g)
+        _z := e_rr(g, M_MOV_RR, 4, rz, use_reg(g, a))
+        set_res(g, i, rz)
+        ret
+    end
+    mut sub := ALU_ADD
+    if op == OP_SUB: sub = ALU_SUB end
+    if op == OP_AND: sub = ALU_AND end
+    if op == OP_OR: sub = ALU_OR end
+    if op == OP_XOR: sub = ALU_XOR end
+    r3 := gpr(g)
+    move_into(g, r3, a)
+    if bimm:
+        _x := e_alui(g, sub, sz, r3, g.v_i[b])
+    else:
+        rb2 := use_reg(g, b)
+        _y := e_alu(g, sub, sz, r3, rb2)
+    end
+    set_res(g, i, r3)
+end
+
+func ext_to32(g &: Ng, v: int, t: int, sign: bool): int:
+    r := use_reg(g, v)
+    bits := int_bits(g, t)
+    if bits >= 32:
+        ret r
+    end
+    r2 := gpr(g)
+    mut op := M_MOVZX_RR
+    if sign and bits > 1:
+        op = M_MOVSX_RR
+    end
+    i := e_rr(g, op, 4, r2, r)
+    g.mc.sz2[i] = bits <= 8 ? 1 : 2
+    if bits == 1 and sign:
+        n := e_rr(g, M_UNARY, 4, r2, 0 - 1)
+        g.mc.cc[n] = UN_NEG
+    end
+    ret r2
+end
+
+func e_shift(g &: Ng, sub: int, sz: int, r: int, n: int):
+    if n == 0:
+        ret
+    end
+    s := e_ri(g, M_SHIFT_RI, sz, r, n as i64)
+    g.mc.cc[s] = sub
+end
+
+func rot_unmask(g &: Ng, s: int, bits: int): int:
+    if s < 0 or g.v_kind[s] != VK_INS:
+        ret s
+    end
+    d := g.v_def[s]
+    if g.i_op[d] == OP_AND and is_cint(g, g.i_b[d]) and g.v_i[g.i_b[d]] == ((bits - 1) as i64):
+        ret g.i_a[d]
+    end
+    ret s
+end
+
+func rot_sub_of(g &: Ng, s0: int, bits: int): int:
+    s := rot_unmask(g, s0, bits)
+    if s < 0 or g.v_kind[s] != VK_INS:
+        ret 0 - 1
+    end
+    d := g.v_def[s]
+    if g.i_op[d] == OP_SUB and is_cint(g, g.i_a[d]) and g.v_i[g.i_a[d]] == (bits as i64):
+        ret g.i_b[d]
+    end
+    ret 0 - 1
+end
+
+func rot_parts(g &: Ng, i: int, x &: int, c &: int, cv &: int, left &: bool): bool:
+    op := g.i_op[i]
+    if op != OP_OR and op != OP_XOR and op != OP_ADD:
+        ret false
+    end
+    bits := int_bits(g, g.i_ty[i])
+    if bits != 32 and bits != 64:
+        ret false
+    end
+    repeat 2 in k:
+        p := k == 0 ? g.i_a[i] : g.i_b[i]
+        q := k == 0 ? g.i_b[i] : g.i_a[i]
+        if p >= 0 and q >= 0 and g.v_kind[p] == VK_INS and g.v_kind[q] == VK_INS and g.v_uses[p] == 1 and g.v_uses[q] == 1:
+            dp := g.v_def[p]
+            dq := g.v_def[q]
+            if g.i_op[dp] == OP_LSHR and g.i_op[dq] == OP_SHL and g.i_a[dp] == g.i_a[dq]:
+                s1 := g.i_b[dp]
+                s2 := g.i_b[dq]
+                if is_cint(g, s1) and is_cint(g, s2):
+                    c1 := g.v_i[s1]
+                    c2 := g.v_i[s2]
+                    if c1 > (0 as i64) and c2 > (0 as i64) and c1 + c2 == (bits as i64):
+                        x = g.i_a[dp]
+                        c = c1 as int
+                        cv = 0 - 1
+                        ret true
+                    end
+                else op == OP_OR and rot_sub_of(g, s2, bits) >= 0 and rot_sub_of(g, s2, bits) == rot_unmask(g, s1, bits):
+                    x = g.i_a[dp]
+                    c = 0 - 1
+                    cv = rot_unmask(g, s1, bits)
+                    left = false
+                    ret true
+                else op == OP_OR and rot_sub_of(g, s1, bits) >= 0 and rot_sub_of(g, s1, bits) == rot_unmask(g, s2, bits):
+                    x = g.i_a[dp]
+                    c = 0 - 1
+                    cv = rot_unmask(g, s2, bits)
+                    left = true
+                    ret true
+                end
+            end
+        end
+    end
+    ret false
+end
+
+func rot_user(g &: Ng, i: int): bool:
+    r := g.i_res[i]
+    if g.off_rot or r < 0 or g.v_uses[r] != 1:
+        ret false
+    end
+    mut j := g.i_next[i]
+    repeat 16:
+        if j < 0:
+            ret false
+        end
+        if uses_val(g, j, r):
+            mut x := 0 - 1
+            mut c := 0
+            mut cv := 0 - 1
+            mut left := false
+            ret rot_parts(g, j, x, c, cv, left)
+        end
+        j = g.i_next[j]
+    end
+    ret false
+end
+
+func rot_cnt_user(g &: Ng, i: int): bool:
+    r := g.i_res[i]
+    if g.off_rot or r < 0 or g.v_uses[r] != 1:
+        ret false
+    end
+    op := g.i_op[i]
+    if not (op == OP_SUB and is_cint(g, g.i_a[i])) and not (op == OP_AND and is_cint(g, g.i_b[i])):
+        ret false
+    end
+    mut j := g.i_next[i]
+    repeat 16:
+        if j < 0:
+            ret false
+        end
+        if uses_val(g, j, r):
+            jop := g.i_op[j]
+            if (jop == OP_SHL or jop == OP_LSHR) and g.i_b[j] == r:
+                ret rot_user(g, j)
+            end
+            if jop == OP_AND and g.i_a[j] == r:
+                ret rot_cnt_user(g, j)
+            end
+            ret false
+        end
+        j = g.i_next[j]
+    end
+    ret false
+end
+
+func log2_exact(v: u64): int:
+    if v == (0 as u64) or (v & (v - (1 as u64))) != (0 as u64):
+        ret 0 - 1
+    end
+    mut k := 0
+    until ((1 as u64) << (k as u64)) < v:
+        k += 1
+    end
+    ret k
+end
+
+func umagic(d: u64, mm &: u64, ll &: int):
+    mut l := 0
+    until l < 64 and ((1 as u64) << (l as u64)) < d:
+        l += 1
+    end
+    mut hi := (0 as u64) - d
+    if l < 64:
+        hi = ((1 as u64) << (l as u64)) - d
+    end
+    mut rem := hi
+    mut q := 0 as u64
+    mut bit := 63
+    until bit >= 0:
+        carry := rem >> (63 as u64)
+        rem = rem << (1 as u64)
+        q = q << (1 as u64)
+        if carry != (0 as u64) or rem >= d:
+            rem = rem - d
+            q = q | (1 as u64)
+        end
+        bit -= 1
+    end
+    mm = q + (1 as u64)
+    ll = l
+end
+
+func bitlen64(x: u64): int:
+    mut n := 0
+    mut y := x
+    until y != (0 as u64):
+        n += 1
+        y = y >> (1 as u64)
+    end
+    ret n
+end
+
+func known_lz(g &: Ng, v: int, depth: int): int:
+    t := g.v_ty[v]
+    bits := int_bits(g, t)
+    if is_cint(g, v):
+        ret bits - bitlen64(uval(g, t, g.v_i[v]))
+    end
+    if v < 0 or g.v_kind[v] != VK_INS or depth > 4:
+        ret 0
+    end
+    d := g.v_def[v]
+    op := g.i_op[d]
+    b := g.i_b[d]
+    mut r := 0
+    if op == OP_ZEXT:
+        r = bits - int_bits(g, g.i_x[d])
+    else op == OP_UDIV and is_cint(g, b):
+        r = known_lz(g, g.i_a[d], depth + 1) + bitlen64(uval(g, t, g.v_i[b])) - 1
+    else op == OP_LSHR and is_cint(g, b):
+        r = known_lz(g, g.i_a[d], depth + 1) + (g.v_i[b] as int)
+    else op == OP_UREM and is_cint(g, b) and uval(g, t, g.v_i[b]) > (0 as u64):
+        r = bits - bitlen64(uval(g, t, g.v_i[b]) - (1 as u64))
+    else op == OP_AND:
+        la := known_lz(g, g.i_a[d], depth + 1)
+        lb := known_lz(g, b, depth + 1)
+        r = la > lb ? la : lb
+    end
+    if r < bits and g.cur_b >= 0 and not g.off_range:
+        mut lo := 0 as i64
+        mut hi := 0 as i64
+        if val_range(g, v, g.cur_b, 0, lo, hi) and lo >= (0 as i64):
+            rr := bits - bitlen64(hi as u64)
+            if rr > r:
+                r = rr
+            end
+        end
+    end
+    if r > bits:
+        ret bits
+    end
+    if r < 0:
+        ret 0
+    end
+    ret r
+end
+
+func umagic_find(d: u64, nb: int, use_imul: bool, mm &: u64, pp &: int): bool:
+    mut p := nb
+    if not use_imul and p < 64:
+        p = 64
+    end
+    mut lim := nb + 64
+    if use_imul and lim > 63:
+        lim = 63
+    end
+    if lim > 127:
+        lim = 127
+    end
+    until p <= lim:
+        mut rem := 0 as u64
+        mut q := 0 as u64
+        mut big := false
+        repeat p + 1 in bi:
+            carry := rem >> (63 as u64)
+            rem = rem << (1 as u64)
+            if bi == 0:
+                rem = rem | (1 as u64)
+            end
+            if (q >> (63 as u64)) != (0 as u64):
+                big = true
+            end
+            q = q << (1 as u64)
+            if carry != (0 as u64) or rem >= d:
+                rem = rem - d
+                q = q | (1 as u64)
+            end
+        end
+        if not big and q != (0 - 1 as u64) and rem != (0 as u64):
+            m := q + (1 as u64)
+            e := d - rem
+            mut exact := p - nb >= 64
+            if not exact:
+                exact = e <= ((1 as u64) << ((p - nb) as u64))
+            end
+            if exact and (not use_imul or bitlen64(m) + nb <= 64):
+                mm = m
+                pp = p
+                ret true
+            end
+        end
+        p += 1
+    end
+    ret false
+end
+
+func emit_umagic(g &: Ng, n: int, m: u64, p: int, use_imul: bool): int:
+    if use_imul:
+        q := gpr(g)
+        if is_imm32(m as i64) and (m as i64) >= (0 as i64):
+            mi := e_rr(g, M_IMUL_RRI, 8, q, n)
+            g.mc.imm[mi] = m as i64
+        else:
+            _mr := e_movi(g, q, m as i64)
+            _mx := e_rr(g, M_IMUL_RR, 8, q, n)
+        end
+        e_shift(g, SH_SHR, 8, q, p)
+        ret q
+    end
+    q2 := mulhi(g, n, m as i64, false)
+    e_shift(g, SH_SHR, 8, q2, p - 64)
+    ret q2
+end
+
+func smagic(d: i64, mm &: i64, ss &: int):
+    two63 := (1 as u64) << (63 as u64)
+    mut ad := d as u64
+    if d < (0 as i64):
+        ad = (0 as u64) - (d as u64)
+    end
+    t := two63 + ((d as u64) >> (63 as u64))
+    nc_abs := t - (1 as u64) - t % ad
+    mut p := 63
+    mut q1 := two63 / nc_abs
+    mut r1 := two63 - q1 * nc_abs
+    mut q2 := two63 / ad
+    mut r2 := two63 - q2 * ad
+    mut delta := 0 as u64
+    until true:
+        p += 1
+        q1 = q1 * (2 as u64)
+        r1 = r1 * (2 as u64)
+        if r1 >= nc_abs:
+            q1 = q1 + (1 as u64)
+            r1 = r1 - nc_abs
+        end
+        q2 = q2 * (2 as u64)
+        r2 = r2 * (2 as u64)
+        if r2 >= ad:
+            q2 = q2 + (1 as u64)
+            r2 = r2 - ad
+        end
+        delta = ad - r2
+        if not (q1 < delta or (q1 == delta and r1 == (0 as u64))):
+            break
+        end
+    end
+    mut m := (q2 + (1 as u64)) as i64
+    if d < (0 as i64):
+        m = 0 - m
+    end
+    mm = m
+    ss = p - 64
+end
+
+func smagic32(d: i64, mm &: i64, ss &: int):
+    two31 := (1 as u64) << (31 as u64)
+    mut ad := d as u64
+    if d < (0 as i64):
+        ad = (0 as u64) - (d as u64)
+    end
+    mut dsign := 0 as u64
+    if d < (0 as i64):
+        dsign = 1 as u64
+    end
+    t := two31 + dsign
+    nc_abs := t - (1 as u64) - t % ad
+    mut p := 31
+    mut q1 := two31 / nc_abs
+    mut r1 := two31 - q1 * nc_abs
+    mut q2 := two31 / ad
+    mut r2 := two31 - q2 * ad
+    mut delta := 0 as u64
+    until true:
+        p += 1
+        q1 = q1 * (2 as u64)
+        r1 = r1 * (2 as u64)
+        if r1 >= nc_abs:
+            q1 = q1 + (1 as u64)
+            r1 = r1 - nc_abs
+        end
+        q2 = q2 * (2 as u64)
+        r2 = r2 * (2 as u64)
+        if r2 >= ad:
+            q2 = q2 + (1 as u64)
+            r2 = r2 - ad
+        end
+        delta = ad - r2
+        if not (q1 < delta or (q1 == delta and r1 == (0 as u64))):
+            break
+        end
+    end
+    mut m := ((q2 + (1 as u64)) & (0xFFFFFFFF as u64)) as i64
+    if m >= ((1 as i64) << (31 as i64)):
+        m = m - ((1 as i64) << (32 as i64))
+    end
+    if d < (0 as i64):
+        m = 0 - m
+    end
+    mm = m
+    ss = p - 32
+end
+
+func ext64(g &: Ng, v: int, t: int, sign: bool): int:
+    r := use_reg(g, v)
+    bits := int_bits(g, t)
+    if bits >= 64:
+        ret r
+    end
+    r2 := gpr(g)
+    if bits == 32 and not sign:
+        _m := e_rr(g, M_MOV_RR, 4, r2, r)
+        ret r2
+    end
+    mut op := M_MOVZX_RR
+    mut sz2 := bits <= 8 ? 1 : 2
+    if sign:
+        op = M_MOVSX_RR
+        if bits == 32:
+            sz2 = 4
+        end
+    end
+    if bits == 1:
+        sz2 = 1
+        op = M_MOVZX_RR
+    end
+    mi := e_rr(g, op, op == M_MOVSX_RR ? 8 : 4, r2, r)
+    g.mc.sz2[mi] = sz2
+    ret r2
+end
+
+func mulhi(g &: Ng, n: int, m: i64, signed: bool): int:
+    _l := e_ri(g, M_MOV_RI, 8, RAX, m)
+    mh := e_rr(g, M_MULHI, 8, 0 - 1, n)
+    g.mc.cc[mh] = signed ? 1 : 0
+    t := gpr(g)
+    _c := e_copy(g, t, RDX)
+    ret t
+end
+
+func lea_mul_k(g &: Ng, i: int): int:
+    op := g.i_op[i]
+    b := g.i_b[i]
+    if not is_cint(g, b):
+        ret 0 - 1
+    end
+    if op == OP_SHL:
+        sh := g.v_i[b]
+        if sh >= (1 as i64) and sh <= (3 as i64):
+            ret 1 << (sh as int)
+        end
+        ret 0 - 1
+    end
+    if op != OP_MUL:
+        ret 0 - 1
+    end
+    k := g.v_i[b]
+    each c in [2, 3, 4, 5, 6, 8, 9, 10, 12, 18, 20, 24, 36, 40, 72]:
+        if k == (c as i64):
+            ret c
+        end
+    end
+    ret 0 - 1
+end
+
+func lea_split(k: int, c &: int, sc &: int):
+    each s0 in [8, 4, 2, 1]:
+        if k % s0 == 0:
+            q := k / s0
+            if q == 1 or q == 3 or q == 5 or q == 9:
+                c = q
+                sc = s0
+                ret
+            end
+        end
+    end
+    c = 0
+    sc = 0
+end
+
+func mul_add_user(g &: Ng, i: int): bool:
+    r := g.i_res[i]
+    k := lea_mul_k(g, i)
+    if r < 0 or g.v_uses[r] != 1 or k < 0:
+        ret false
+    end
+    mut j := g.i_next[i]
+    mut seen := Vector {} as Vector<int>
+    repeat 8:
+        if j < 0:
+            seen.free()
+            ret false
+        end
+        if g.i_op[j] == OP_ADD and g.i_ty[j] == g.i_ty[i] and (g.i_a[j] == r or g.i_b[j] == r) and g.i_a[j] != g.i_b[j]:
+            o := g.i_a[j] == r ? g.i_b[j] : g.i_a[j]
+            if is_cint(g, o):
+                seen.free()
+                ret is_imm32(g.v_i[o]) and (k == 2 or k == 3 or k == 5 or k == 9)
+            end
+            mut later := false
+            each sj in seen:
+                if g.i_res[sj] == o and lea_mul_k(g, sj) > 0 and g.v_uses[o] == 1:
+                    later = true
+                end
+            end
+            seen.free()
+            ret not later
+        end
+        seen.push(j)
+        j = g.i_next[j]
+    end
+    seen.free()
+    ret false
+end
+
+func mul_small(g &: Ng, r: int, a: int, k: i64): bool:
+    mut base := 0
+    mut post := 0
+    if k == (3 as i64) or k == (5 as i64) or k == (9 as i64):
+        base = (k as int) - 1
+    else k == (6 as i64) or k == (10 as i64) or k == (18 as i64):
+        base = (k as int) / 2 - 1
+        post = 1
+    else k == (12 as i64) or k == (20 as i64) or k == (36 as i64):
+        base = (k as int) / 4 - 1
+        post = 2
+    else:
+        ret false
+    end
+    _l := e_rm(g, M_LEA, 8, r, Mem { k = MK_BI, b = a, i = a, s = base, d = 0 as i64 })
+    if post > 0:
+        e_shift(g, SH_SHL, 8, r, post)
+    end
+    ret true
+end
+
+func rem_from_quot(g &: Ng, n: int, q: int, d: i64, sz: int): int:
+    r := gpr(g)
+    if mul_small(g, r, q, d):
+        out0 := gpr(g)
+        _c0 := e_copy(g, out0, n)
+        _s0 := e_alu(g, ALU_SUB, sz, out0, r)
+        ret out0
+    end
+    if is_imm32(d):
+        mi := e_rr(g, M_IMUL_RRI, sz, r, q)
+        g.mc.imm[mi] = d
+    else:
+        _m := e_ri(g, M_MOV_RI, 8, r, d)
+        _x := e_rr(g, M_IMUL_RR, sz, r, q)
+    end
+    out := gpr(g)
+    _c := e_copy(g, out, n)
+    _s := e_alu(g, ALU_SUB, sz, out, r)
+    ret out
+end
+
+func div_partner(g &: Ng, i: int): int:
+    want := g.i_op[i] == OP_SREM ? OP_SDIV : OP_UDIV
+    b := g.i_b[i]
+    mut j := g.i_next[i]
+    until j >= 0:
+        if g.i_op[j] == want and g.i_a[j] == g.i_a[i] and not g.skipi[j]:
+            bj := g.i_b[j]
+            if bj == b or (bj >= 0 and b >= 0 and g.v_kind[bj] == VK_INT and g.v_kind[b] == VK_INT and g.v_i[bj] == g.v_i[b] and g.v_ty[bj] == g.v_ty[b]):
+                ret j
+            end
+        end
+        j = g.i_next[j]
+    end
+    ret 0 - 1
+end
+
+func share_quot(g &: Ng, i: int, q: int):
+    if g.i_op[i] != OP_SREM and g.i_op[i] != OP_UREM:
+        ret
+    end
+    pj := div_partner(g, i)
+    if pj >= 0 and g.i_res[pj] >= 0:
+        g.vv[g.i_res[pj]] = q
+        g.skipi[pj] = true
+    end
+end
+
+func div_const(g &: Ng, i: int, d: i64): bool:
+    op := g.i_op[i]
+    t := g.i_ty[i]
+    bits := int_bits(g, t)
+    sz := asz(g, t)
+    sign := op == OP_SDIV or op == OP_SREM
+    isrem := op == OP_SREM or op == OP_UREM
+    wbits := sz * 8
+    if sign:
+        dn := norm_int(g, t, d)
+        if dn == (0 as i64) or dn == (1 as i64) or dn == (0 - 1 as i64):
+            ret false
+        end
+        if bits == 64 and dn == (0 - 9223372036854775807 as i64) - (1 as i64):
+            ret false
+        end
+        mut ad := dn
+        if ad < (0 as i64):
+            ad = 0 - ad
+        end
+        k := log2_exact(ad as u64)
+        if k > 0:
+            n := ext_to32(g, g.i_a[i], t, true)
+            bias := gpr(g)
+            _c := e_copy(g, bias, n)
+            e_shift(g, SH_SAR, sz, bias, wbits - 1)
+            e_shift(g, SH_SHR, sz, bias, wbits - k)
+            u := gpr(g)
+            _c2 := e_copy(g, u, n)
+            _a := e_alu(g, ALU_ADD, sz, u, bias)
+            if isrem:
+                mask := (0 as i64) - ((1 as i64) << (k as i64))
+                if is_imm32(mask):
+                    _m := e_alui(g, ALU_AND, sz, u, mask)
+                else:
+                    mr := gpr(g)
+                    _mm := e_ri(g, M_MOV_RI, 8, mr, mask)
+                    _am := e_alu(g, ALU_AND, sz, u, mr)
+                end
+                out := gpr(g)
+                _c3 := e_copy(g, out, n)
+                _s := e_alu(g, ALU_SUB, sz, out, u)
+                set_res(g, i, out)
+                ret true
+            end
+            e_shift(g, SH_SAR, sz, u, k)
+            if dn < (0 as i64):
+                ng := e_rr(g, M_UNARY, sz, u, 0 - 1)
+                g.mc.cc[ng] = UN_NEG
+            end
+            set_res(g, i, u)
+            ret true
+        end
+        if g.wsz == 4:
+            mut mx := 0 as i64
+            mut shx := 0
+            smagic32(dn, mx, shx)
+            nx := ext64(g, g.i_a[i], t, true)
+            qx := mulhi(g, nx, mx, true)
+            if dn > (0 as i64) and mx < (0 as i64):
+                _ax := e_alu(g, ALU_ADD, 4, qx, nx)
+            else dn < (0 as i64) and mx > (0 as i64):
+                _sx := e_alu(g, ALU_SUB, 4, qx, nx)
+            end
+            e_shift(g, SH_SAR, 4, qx, shx)
+            sgx := gpr(g)
+            _cx := e_copy(g, sgx, qx)
+            e_shift(g, SH_SHR, 4, sgx, 31)
+            _fx := e_alu(g, ALU_ADD, 4, qx, sgx)
+            share_quot(g, i, qx)
+            if isrem:
+                set_res(g, i, rem_from_quot(g, nx, qx, dn, 4))
+            else:
+                set_res(g, i, qx)
+            end
+            ret true
+        end
+        if bits <= 32:
+            mut m32 := 0 as i64
+            mut sh32 := 0
+            smagic32(dn, m32, sh32)
+            n32 := ext64(g, g.i_a[i], t, true)
+            q32 := gpr(g)
+            mi32 := e_rr(g, M_IMUL_RRI, 8, q32, n32)
+            g.mc.imm[mi32] = m32
+            if dn > (0 as i64) and m32 < (0 as i64):
+                e_shift(g, SH_SAR, 8, q32, 32)
+                _a32 := e_alu(g, ALU_ADD, 4, q32, n32)
+                e_shift(g, SH_SAR, 4, q32, sh32)
+            else dn < (0 as i64) and m32 > (0 as i64):
+                e_shift(g, SH_SAR, 8, q32, 32)
+                _s32 := e_alu(g, ALU_SUB, 4, q32, n32)
+                e_shift(g, SH_SAR, 4, q32, sh32)
+            else:
+                e_shift(g, SH_SAR, 8, q32, 32 + sh32)
+            end
+            sg32 := gpr(g)
+            _c32 := e_copy(g, sg32, q32)
+            e_shift(g, SH_SHR, 4, sg32, 31)
+            _f32 := e_alu(g, ALU_ADD, 4, q32, sg32)
+            share_quot(g, i, q32)
+            if isrem:
+                set_res(g, i, rem_from_quot(g, n32, q32, dn, 4))
+            else:
+                set_res(g, i, q32)
+            end
+            ret true
+        end
+        mut m := 0 as i64
+        mut sh := 0
+        smagic(dn, m, sh)
+        n2 := ext64(g, g.i_a[i], t, true)
+        q := mulhi(g, n2, m, true)
+        if dn > (0 as i64) and m < (0 as i64):
+            _a2 := e_alu(g, ALU_ADD, 8, q, n2)
+        else dn < (0 as i64) and m > (0 as i64):
+            _s2 := e_alu(g, ALU_SUB, 8, q, n2)
+        end
+        e_shift(g, SH_SAR, 8, q, sh)
+        sg := gpr(g)
+        _c4 := e_copy(g, sg, q)
+        e_shift(g, SH_SHR, 8, sg, 63)
+        _a3 := e_alu(g, ALU_ADD, 8, q, sg)
+        share_quot(g, i, q)
+        if isrem:
+            set_res(g, i, rem_from_quot(g, n2, q, dn, 8))
+        else:
+            set_res(g, i, q)
+        end
+        ret true
+    end
+    du := uval(g, t, d)
+    if du <= (1 as u64):
+        ret false
+    end
+    k2 := log2_exact(du)
+    if k2 >= 0:
+        ra := ext_to32(g, g.i_a[i], t, false)
+        r := gpr(g)
+        _c5 := e_copy(g, r, ra)
+        if isrem:
+            mk := (du - (1 as u64)) as i64
+            if is_imm32(mk):
+                _a4 := e_alui(g, ALU_AND, sz, r, mk)
+            else:
+                m2 := gpr(g)
+                _mm2 := e_ri(g, M_MOV_RI, 8, m2, mk)
+                _aa := e_alu(g, ALU_AND, sz, r, m2)
+            end
+        else:
+            e_shift(g, SH_SHR, sz, r, k2)
+        end
+        set_res(g, i, r)
+        ret true
+    end
+    if g.wsz == 4:
+        mut nb4 := bits - known_lz(g, g.i_a[i], 0)
+        if nb4 > 32:
+            nb4 = 32
+        end
+        if nb4 < 1:
+            nb4 = 1
+        end
+        mut p4 := 32
+        until p4 <= 32 + nb4 and p4 < 64:
+            m4 := (((1 as u64) << (p4 as u64)) + du - (1 as u64)) / du
+            if m4 < ((1 as u64) << (32 as u64)) and m4 * du - ((1 as u64) << (p4 as u64)) <= ((1 as u64) << ((p4 - nb4) as u64)):
+                nu4 := ext64(g, g.i_a[i], t, false)
+                q4 := mulhi(g, nu4, m4 as i64, false)
+                if p4 > 32:
+                    e_shift(g, SH_SHR, 4, q4, p4 - 32)
+                end
+                share_quot(g, i, q4)
+                if isrem:
+                    set_res(g, i, rem_from_quot(g, nu4, q4, du as i64, 4))
+                else:
+                    set_res(g, i, q4)
+                end
+                ret true
+            end
+            p4 += 1
+        end
+        mut lx := 0
+        until ((1 as u64) << (lx as u64)) < du:
+            lx += 1
+        end
+        umx := ((((1 as u64) << (lx as u64)) - du) << (32 as u64)) / du + (1 as u64)
+        nux := ext64(g, g.i_a[i], t, false)
+        tx := mulhi(g, nux, (umx & (0xFFFFFFFF as u64)) as i64, false)
+        qux := gpr(g)
+        _cux := e_copy(g, qux, nux)
+        _sux := e_alu(g, ALU_SUB, 4, qux, tx)
+        e_shift(g, SH_SHR, 4, qux, 1)
+        _aux := e_alu(g, ALU_ADD, 4, qux, tx)
+        e_shift(g, SH_SHR, 4, qux, lx - 1)
+        share_quot(g, i, qux)
+        if isrem:
+            set_res(g, i, rem_from_quot(g, nux, qux, du as i64, 4))
+        else:
+            set_res(g, i, qux)
+        end
+        ret true
+    end
+    mut nb := bits <= 32 ? 32 : 64
+    lz := known_lz(g, g.i_a[i], 0)
+    if bits - lz < nb:
+        nb = bits - lz
+    end
+    if nb < 1:
+        nb = 1
+    end
+    mut pm := 0 as u64
+    mut pp := 0
+    mut use_imul := umagic_find(du, nb, true, pm, pp)
+    mut found := use_imul
+    if not found:
+        found = umagic_find(du, nb, false, pm, pp)
+    end
+    mut tz := 0
+    if not found:
+        until ((du >> (tz as u64)) & (1 as u64)) == (0 as u64):
+            tz += 1
+        end
+        if tz > 0 and nb - tz >= 1:
+            use_imul = umagic_find(du >> (tz as u64), nb - tz, true, pm, pp)
+            found = use_imul
+            if not found:
+                found = umagic_find(du >> (tz as u64), nb - tz, false, pm, pp)
+            end
+        end
+        if not found:
+            tz = 0
+        end
+    end
+    if found:
+        np := ext64(g, g.i_a[i], t, false)
+        mut src := np
+        if tz > 0:
+            src = gpr(g)
+            _cs := e_copy(g, src, np)
+            e_shift(g, SH_SHR, 8, src, tz)
+        end
+        qp := emit_umagic(g, src, pm, pp, use_imul)
+        share_quot(g, i, qp)
+        if isrem:
+            set_res(g, i, rem_from_quot(g, np, qp, du as i64, bits <= 32 ? 4 : 8))
+        else:
+            set_res(g, i, qp)
+        end
+        ret true
+    end
+    mut um := 0 as u64
+    mut l := 0
+    umagic(du, um, l)
+    n3 := ext64(g, g.i_a[i], t, false)
+    t1 := mulhi(g, n3, um as i64, false)
+    q2 := gpr(g)
+    _c6 := e_copy(g, q2, n3)
+    _s3 := e_alu(g, ALU_SUB, 8, q2, t1)
+    e_shift(g, SH_SHR, 8, q2, 1)
+    _a5 := e_alu(g, ALU_ADD, 8, q2, t1)
+    e_shift(g, SH_SHR, 8, q2, l - 1)
+    share_quot(g, i, q2)
+    if isrem:
+        set_res(g, i, rem_from_quot(g, n3, q2, du as i64, 8))
+    else:
+        set_res(g, i, q2)
+    end
+    ret true
+end
+
+func dq_find(g &: Ng, a: int, b: int, sign: bool, want_q: bool): int:
+    mut k := g.dq_a.len() - 1
+    until k >= 0:
+        if g.dq_a[k] == a and g.dq_b[k] == b and g.dq_s[k] == sign and dominates(g, g.dq_blk[k], g.cur_b):
+            ret want_q ? g.dq_q[k] : g.dq_r[k]
+        end
+        k -= 1
+    end
+    ret 0 - 1
+end
+
+func div_has_twin(g &: Ng, i: int): bool:
+    a := g.i_a[i]
+    b := g.i_b[i]
+    signed := g.i_op[i] == OP_SDIV or g.i_op[i] == OP_SREM
+    each bb in g.b_rpo:
+        mut j := g.b_first[bb]
+        until j >= 0:
+            op := g.i_op[j]
+            if j != i and op >= OP_SDIV and op <= OP_UREM and g.i_a[j] == a and g.i_b[j] == b and (op == OP_SDIV or op == OP_SREM) == signed:
+                ret true
+            end
+            j = g.i_next[j]
+        end
+    end
+    ret false
+end
+
+func isel_div(g &: Ng, i: int):
+    op := g.i_op[i]
+    t := g.i_ty[i]
+    sz := asz(g, t)
+    sign := op == OP_SDIV or op == OP_SREM
+    b := g.i_b[i]
+    if g.v_kind[b] == VK_INT and div_const(g, i, g.v_i[b]):
+        ret
+    end
+    want_q := op == OP_SDIV or op == OP_UDIV
+    a := g.i_a[i]
+    if g.opt:
+        prev := dq_find(g, a, b, sign, want_q)
+        if prev >= 0:
+            set_res(g, i, prev)
+            ret
+        end
+    end
+    ra2 := ext_to32(g, a, t, sign)
+    rb := ext_to32(g, b, t, sign)
+    twin := g.opt and div_has_twin(g, i)
+    need_q := want_q or twin
+    need_r := not want_q or twin
+    rq := gpr(g)
+    rr := gpr(g)
+    mut done := 0 - 1
+    if g.opt and sz == 8 and g.arch == NG_ARCH_X64:
+        tor := gpr(g)
+        _co := e_copy(g, tor, ra2)
+        _or := e_alu(g, ALU_OR, 8, tor, rb)
+        e_shift(g, SH_SHR, 8, tor, 32)
+        slow := new_label(g)
+        done = new_label(g)
+        _jz := e_jcc(g, X_NE, slow)
+        _c0 := e_copy(g, RAX, ra2)
+        _z0 := e_ri(g, M_MOV_RI, 4, RDX, 0 as i64)
+        d0 := e_rr(g, M_DIV, 4, 0 - 1, rb)
+        g.mc.cc[d0] = 0
+        _jd := e_jmp(g, done)
+        _ls := e_label(g, slow)
+    end
+    _c2 := e_copy(g, RAX, ra2)
+    if sign:
+        _q := mi_new(g, M_CQO, sz)
+    else:
+        _z := e_ri(g, M_MOV_RI, 4, RDX, 0 as i64)
+    end
+    d := e_rr(g, M_DIV, sz, 0 - 1, rb)
+    g.mc.cc[d] = (sign ? 1 : 0) | (need_q ? 0 : 2) | (need_r ? 0 : 4)
+    if done >= 0:
+        _ld := e_label(g, done)
+    end
+    if need_q:
+        _c3 := e_copy(g, rq, RAX)
+    end
+    if need_r:
+        _c4 := e_copy(g, rr, RDX)
+    end
+    if g.opt and twin:
+        g.dq_a.push(a)
+        g.dq_b.push(b)
+        g.dq_s.push(sign)
+        g.dq_q.push(rq)
+        g.dq_r.push(rr)
+        g.dq_blk.push(g.cur_b)
+    end
+    set_res(g, i, want_q ? rq : rr)
+end
+
+func isel_shift(g &: Ng, i: int):
+    op := g.i_op[i]
+    t := g.i_ty[i]
+    sz := asz(g, t)
+    bits := int_bits(g, t)
+    mut sub := SH_SHL
+    mut ra := 0 - 1
+    if op == OP_LSHR:
+        sub = SH_SHR
+        ra = ext_to32(g, g.i_a[i], t, false)
+    else op == OP_ASHR:
+        sub = SH_SAR
+        ra = ext_to32(g, g.i_a[i], t, true)
+    else:
+        ra = use_reg(g, g.i_a[i])
+    end
+    r := gpr(g)
+    _c := e_copy(g, r, ra)
+    b := g.i_b[i]
+    if g.v_kind[b] == VK_INT:
+        n := (g.v_i[b] as int) & (bits - 1)
+        if n != 0:
+            s := e_ri(g, M_SHIFT_RI, sz, r, n as i64)
+            g.mc.cc[s] = sub
+        end
+    else:
+        rb := use_reg(g, b)
+        _c2 := e_copy(g, RCX, rb)
+        s2 := e_rr(g, M_SHIFT_RC, sz, r, 0 - 1)
+        g.mc.cc[s2] = sub
+    end
+    set_res(g, i, r)
+end
+
+func isel_fbin(g &: Ng, i: int):
+    op := g.i_op[i]
+    t := g.i_ty[i]
+    sz := fsz(t)
+    if op == OP_FREM:
+        mut args := Vector {} as Vector<int>
+        args.push(use_reg(g, g.i_a[i]))
+        args.push(use_reg(g, g.i_b[i]))
+        mut nm := "fmod"
+        if sz == 4:
+            nm = "fmodf"
+        end
+        rr := call_lib(g, sym_named(g, nm), args, 1)
+        g.sy_kind[sym_named(g, nm)] = SY_FUNC
+        args.free()
+        set_res(g, i, rr)
+        ret
+    end
+    mut sub := FO_ADD
+    if op == OP_FSUB: sub = FO_SUB end
+    if op == OP_FMUL: sub = FO_MUL end
+    if op == OP_FDIV: sub = FO_DIV end
+    if is_vec(g, t):
+        rva := use_reg(g, g.i_a[i])
+        rv := wide_reg(g)
+        _cv := e_copy(g, rv, rva)
+        rvb := use_reg(g, g.i_b[i])
+        fv := e_rr(g, M_VOP_RR, sz, rv, rvb)
+        g.mc.cc[fv] = sub
+        set_res(g, i, rv)
+        ret
+    end
+    mut a := g.i_a[i]
+    mut b := g.i_b[i]
+    if (op == OP_FADD or op == OP_FMUL) and g.v_kind[a] == VK_FLT and g.v_kind[b] != VK_FLT:
+        tmp := a
+        a = b
+        b = tmp
+    else (op == OP_FADD or op == OP_FMUL) and a != b and g.v_kind[a] == VK_INS and g.v_kind[b] == VK_INS and g.v_uses[b] == 1 and g.i_op[g.v_def[a]] != OP_PHI and (g.v_uses[a] > 1 or g.i_blk[g.v_def[a]] != g.i_blk[i]) and g.i_blk[g.v_def[b]] == g.i_blk[i]:
+        tmp2 := a
+        a = b
+        b = tmp2
+    end
+    ra := use_reg(g, a)
+    r := xmm(g)
+    _c := e_copy(g, r, ra)
+    if g.v_kind[b] == VK_FLT and g.v_i[b] != (0 as i64):
+        f2 := e_rm(g, M_FOP_RM, sz, r, fp_const(g, g.v_i[b], sz))
+        g.mc.cc[f2] = sub
+        set_res(g, i, r)
+        ret
+    end
+    mut rb := r
+    if b != a:
+        rb = use_reg(g, b)
+    end
+    f := e_rr(g, M_FOP_RR, sz, r, rb)
+    g.mc.cc[f] = sub
+    set_res(g, i, r)
+end
+
+func zx32_def(g &: Ng, a: int): bool:
+    if a < 0 or g.v_kind[a] != VK_INS:
+        ret false
+    end
+    d := g.v_def[a]
+    op := g.i_op[d]
+    b := g.i_b[d]
+    if op == OP_LSHR and is_cint(g, b):
+        k := g.v_i[b]
+        ret k >= (1 as i64) and k < (32 as i64)
+    end
+    if op == OP_AND and is_cint(g, b):
+        ret g.v_i[b] >= (0 as i64) and g.v_i[b] < (2147483648 as i64)
+    end
+    if op == OP_ZEXT:
+        ret int_bits(g, g.i_x[d]) <= 16
+    end
+    ret false
+end
+
+func isel_cast(g &: Ng, i: int):
+    op := g.i_op[i]
+    st := g.i_x[i]
+    dt := g.i_ty[i]
+    a := g.i_a[i]
+    if op == OP_BITCAST and (g.i_f[i] & IF_SPLITC) != 0:
+        ra := use_reg(g, a)
+        rs := vcls_ty(g, dt) == 1 ? xmm(g) : gpr(g)
+        _cs := e_copy(g, rs, ra)
+        set_res(g, i, rs)
+        ret
+    end
+    if op == OP_PTRTOINT or op == OP_INTTOPTR or (op == OP_BITCAST and vcls_ty(g, st) == vcls_ty(g, dt)):
+        set_res(g, i, use_reg(g, a))
+        ret
+    end
+    if op == OP_BITCAST:
+        ra := use_reg(g, a)
+        if vcls_ty(g, dt) == 1:
+            r := xmm(g)
+            _q := e_rr(g, M_MOVQ_XG, fsz(dt), r, ra)
+            set_res(g, i, r)
+        else:
+            r2 := gpr(g)
+            _q2 := e_rr(g, M_MOVQ_GX, fsz(st), r2, ra)
+            set_res(g, i, r2)
+        end
+        ret
+    end
+    if op == OP_TRUNC:
+        ra2 := use_reg(g, a)
+        if dt == T_I1:
+            r3 := gpr(g)
+            _c := e_copy(g, r3, ra2)
+            _x := e_alui(g, ALU_AND, 4, r3, 1 as i64)
+            set_res(g, i, r3)
+        else:
+            set_res(g, i, ra2)
+        end
+        ret
+    end
+    if (op == OP_ZEXT or op == OP_SEXT) and int_bits(g, st) == 32 and int_bits(g, dt) == 64 and zx32_def(g, a):
+        set_res(g, i, use_reg(g, a))
+        ret
+    end
+    if op == OP_ZEXT or op == OP_SEXT:
+        sb := int_bits(g, st)
+        db := int_bits(g, dt)
+        ra3 := use_reg(g, a)
+        r4 := gpr(g)
+        if op == OP_ZEXT:
+            if sb >= 32:
+                _m := e_rr(g, M_MOV_RR, 4, r4, ra3)
+            else:
+                z := e_rr(g, M_MOVZX_RR, 4, r4, ra3)
+                g.mc.sz2[z] = sb <= 8 ? 1 : 2
+            end
+        else:
+            dsz := db > 32 ? 8 : 4
+            if sb == 1:
+                z2 := e_rr(g, M_MOVZX_RR, 4, r4, ra3)
+                g.mc.sz2[z2] = 1
+                n := e_rr(g, M_UNARY, dsz, r4, 0 - 1)
+                g.mc.cc[n] = UN_NEG
+            else:
+                s := e_rr(g, M_MOVSX_RR, dsz, r4, ra3)
+                g.mc.sz2[s] = sb / 8
+            end
+        end
+        set_res(g, i, r4)
+        ret
+    end
+    if g.arch == NG_ARCH_ARM and (op == OP_SITOFP or op == OP_UITOFP):
+        ra8 := ext_to32(g, a, st, op == OP_SITOFP)
+        r8 := xmm(g)
+        cv8 := e_rr(g, M_CVTSI2F, fsz(dt), r8, ra8)
+        g.mc.sz2[cv8] = 4
+        g.mc.cc[cv8] = op == OP_UITOFP ? 1 : 0
+        set_res(g, i, r8)
+        ret
+    end
+    if g.arch == NG_ARCH_ARM and (op == OP_FPTOSI or op == OP_FPTOUI):
+        r9 := gpr(g)
+        cv9 := e_rr(g, M_CVTF2SI, fsz(st), r9, use_reg(g, a))
+        g.mc.sz2[cv9] = 4
+        g.mc.cc[cv9] = op == OP_FPTOUI ? 1 : 0
+        set_res(g, i, r9)
+        ret
+    end
+    if op == OP_UITOFP and g.arch == NG_ARCH_X86:
+        mut ua := Vector {} as Vector<int>
+        ua.push(ext_to32(g, a, st, false))
+        uz := gpr(g)
+        _uz := e_movi(g, uz, 0 as i64)
+        ua.push(uz)
+        us := sym_named(g, "__floatundidf")
+        g.sy_kind[us] = SY_FUNC
+        mut ru := call_lib(g, us, ua, 1)
+        ua.free()
+        if fsz(dt) == 4:
+            rn := xmm(g)
+            _nc := e_rr(g, M_CVTF2F, 4, rn, ru)
+            ru = rn
+        end
+        set_res(g, i, ru)
+        ret
+    end
+    if op == OP_FPTOUI and g.arch == NG_ARCH_X86:
+        mut fa := Vector {} as Vector<int>
+        mut fsrc := use_reg(g, a)
+        if fsz(st) == 4:
+            fw := xmm(g)
+            _fc := e_rr(g, M_CVTF2F, 8, fw, fsrc)
+            fsrc = fw
+        end
+        fa.push(fsrc)
+        fu := sym_named(g, "__fixunsdfsi")
+        g.sy_kind[fu] = SY_FUNC
+        rf := call_lib(g, fu, fa, 0)
+        fa.free()
+        set_res(g, i, rf)
+        ret
+    end
+    if op == OP_SITOFP or op == OP_UITOFP:
+        sb2 := int_bits(g, st)
+        mut ri := 0 - 1
+        mut isz := 4
+        if op == OP_SITOFP:
+            ri = ext_to32(g, a, st, true)
+            if sb2 > 32:
+                isz = 8
+            end
+        else:
+            if sb2 < 64:
+                rz := ext_to32(g, a, st, false)
+                ri = gpr(g)
+                _m2 := e_rr(g, M_MOV_RR, 4, ri, rz)
+                isz = 8
+            else:
+                set_res(g, i, u64_to_f(g, use_reg(g, a), dt))
+                ret
+            end
+        end
+        r5 := xmm(g)
+        _xz := e_rr(g, M_XORPS, 8, r5, r5)
+        cv := e_rr(g, M_CVTSI2F, fsz(dt), r5, ri)
+        g.mc.sz2[cv] = isz
+        set_res(g, i, r5)
+        ret
+    end
+    if op == OP_FPTOSI or op == OP_FPTOUI:
+        db2 := int_bits(g, dt)
+        ra4 := use_reg(g, a)
+        if op == OP_FPTOUI and db2 >= 64:
+            set_res(g, i, f_to_u64(g, ra4, st))
+            ret
+        end
+        r6 := gpr(g)
+        cv2 := e_rr(g, M_CVTF2SI, fsz(st), r6, ra4)
+        g.mc.sz2[cv2] = (db2 > 32 or op == OP_FPTOUI) ? 8 : 4
+        set_res(g, i, r6)
+        ret
+    end
+    if op == OP_FPEXT or op == OP_FPTRUNC:
+        ra5 := use_reg(g, a)
+        r7 := xmm(g)
+        _cv := e_rr(g, M_CVTF2F, fsz(dt), r7, ra5)
+        set_res(g, i, r7)
+        ret
+    end
+    fail(g, "native backend: unsupported cast")
+end
+
+func u64_to_f(g &: Ng, ra: int, dt: int): int:
+    r := xmm(g)
+    big := new_label(g)
+    done := new_label(g)
+    _t := e_rr(g, M_TEST_RR, 8, ra, ra)
+    _j := e_jcc(g, X_S, big)
+    c := e_rr(g, M_CVTSI2F, fsz(dt), r, ra)
+    g.mc.sz2[c] = 8
+    _j2 := e_jmp(g, done)
+    _l := e_label(g, big)
+    h := gpr(g)
+    _c1 := e_copy(g, h, ra)
+    s := e_ri(g, M_SHIFT_RI, 8, h, 1 as i64)
+    g.mc.cc[s] = SH_SHR
+    lo := gpr(g)
+    _c2 := e_copy(g, lo, ra)
+    _a := e_alui(g, ALU_AND, 8, lo, 1 as i64)
+    _o := e_alu(g, ALU_OR, 8, h, lo)
+    c2 := e_rr(g, M_CVTSI2F, fsz(dt), r, h)
+    g.mc.sz2[c2] = 8
+    f := e_rr(g, M_FOP_RR, fsz(dt), r, r)
+    g.mc.cc[f] = FO_ADD
+    _l2 := e_label(g, done)
+    ret r
+end
+
+func f_to_u64(g &: Ng, ra: int, st: int): int:
+    sz := fsz(st)
+    r := gpr(g)
+    lim := xmm(g)
+    mut bits := 0x43E0000000000000 as i64
+    _l := e_rm(g, M_FLD, sz, lim, fp_const(g, bits, sz))
+    big := new_label(g)
+    done := new_label(g)
+    _u := e_rr(g, M_UCOMI, sz, ra, lim)
+    _j := e_jcc(g, X_AE, big)
+    c := e_rr(g, M_CVTF2SI, sz, r, ra)
+    g.mc.sz2[c] = 8
+    _j2 := e_jmp(g, done)
+    _lb := e_label(g, big)
+    y := xmm(g)
+    _cy := e_copy(g, y, ra)
+    f := e_rr(g, M_FOP_RR, sz, y, lim)
+    g.mc.cc[f] = FO_SUB
+    c2 := e_rr(g, M_CVTF2SI, sz, r, y)
+    g.mc.sz2[c2] = 8
+    m := gpr(g)
+    bits = 0 - 9223372036854775807 as i64
+    bits = bits - (1 as i64)
+    _mm := e_ri(g, M_MOV_RI, 8, m, bits)
+    _x := e_alu(g, ALU_XOR, 8, r, m)
+    _ld := e_label(g, done)
+    ret r
+end
+
+func clobbers_mem(op: int): bool:
+    ret op == OP_STORE or op == OP_CALL or op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE
+end
+
+func uses_val(g &: Ng, i: int, v: int): bool:
+    m := val_mask(g.i_op[i])
+    if (m & 1) != 0 and g.i_a[i] == v: ret true end
+    if (m & 2) != 0 and g.i_b[i] == v: ret true end
+    if (m & 4) != 0 and g.i_c[i] == v: ret true end
+    op := g.i_op[i]
+    if (op == OP_CMP64 or op == OP_ADC64) and g.i_d[i] == v as i64:
+        ret true
+    end
+    if op == OP_CALL:
+        repeat g.i_pcount[i] in k:
+            if g.pool[g.i_ps[i] + 3 * k] == v:
+                ret true
+            end
+        end
+    else op == OP_PHI:
+        repeat g.i_pcount[i] in k2:
+            if g.pool[g.i_ps[i] + 2 * k2] == v:
+                ret true
+            end
+        end
+    end
+    ret false
+end
+
+func agg_load_defer(g &: Ng, i: int): bool:
+    r := g.i_res[i]
+    if r < 0:
+        ret true
+    end
+    need := g.v_uses[r]
+    if need == 0:
+        ret true
+    end
+    if (g.i_f[i] & IF_VOLATILE) != 0:
+        ret false
+    end
+    mut seen := 0
+    mut j := g.i_next[i]
+    until j >= 0:
+        op := g.i_op[j]
+        if uses_val(g, j, r):
+            okuse := (op == OP_STORE and g.i_a[j] == r and g.i_b[j] != r) or op == OP_EXTV or op == OP_RET or (op == OP_INSV and g.i_a[j] == r and g.i_b[j] != r)
+            if not okuse:
+                ret false
+            end
+            seen += 1
+            if seen == need:
+                ret true
+            end
+        end
+        if clobbers_mem(op):
+            ret false
+        end
+        j = g.i_next[j]
+    end
+    ret false
+end
+
+func set_loc(g &: Ng, r: int, m: Mem):
+    if m.k == MK_FRAME and m.i < 0:
+        g.vak[r] = AK_FRAME
+        g.var_[r] = m.b
+        g.vao[r] = m.d as int
+        ret
+    end
+    if m.k == MK_BI and m.i < 0 and m.b >= 0:
+        g.vak[r] = AK_PTR
+        g.var_[r] = m.b
+        g.vao[r] = m.d as int
+        ret
+    end
+    g.vak[r] = AK_PTR
+    g.var_[r] = lea_reg(g, m)
+    g.vao[r] = 0
+end
+
+func mark_esc(g &: Ng, v: int):
+    if v >= 0:
+        g.v_esc[v] = true
+    end
+end
+
+func call_is_mem_intrinsic(g &: Ng, i: int): bool:
+    cv := g.i_a[i]
+    if cv < 0 or g.v_kind[cv] != VK_GLB:
+        ret false
+    end
+    s := g.v_def[cv]
+    ret s == g.sym_i_memcpy or s == g.sym_i_memmove or s == g.sym_i_memset
+end
+
+func compute_escape(g &: Ng):
+    g.v_esc.clear()
+    repeat g.v_kind.len():
+        g.v_esc.push(false)
+    end
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            if op == OP_LOAD:
+                _x := 0
+            else op == OP_STORE:
+                mark_esc(g, g.i_a[i])
+            else op == OP_ADDR:
+                mark_esc(g, g.i_b[i])
+            else:
+                m := val_mask(op)
+                if (m & 1) != 0: mark_esc(g, g.i_a[i]) end
+                if (m & 2) != 0: mark_esc(g, g.i_b[i]) end
+                if (m & 4) != 0: mark_esc(g, g.i_c[i]) end
+                if op == OP_CALL:
+                    nocap := call_is_mem_intrinsic(g, i)
+                    repeat g.i_pcount[i] in k:
+                        fl := g.pool[g.i_ps[i] + 3 * k + 1]
+                        if not nocap and (fl & (IF_BYVAL | IF_SRET)) == 0:
+                            mark_esc(g, g.pool[g.i_ps[i] + 3 * k])
+                        end
+                    end
+                else op == OP_PHI:
+                    repeat g.i_pcount[i] in k2:
+                        mark_esc(g, g.pool[g.i_ps[i] + 2 * k2])
+                    end
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    mut changed := true
+    until changed:
+        changed = false
+        each b2 in g.b_rpo:
+            mut j := g.b_first[b2]
+            until j >= 0:
+                if g.i_op[j] == OP_ADDR:
+                    r := g.i_res[j]
+                    base := g.i_a[j]
+                    if r >= 0 and g.v_esc[r] and base >= 0 and not g.v_esc[base]:
+                        g.v_esc[base] = true
+                        changed = true
+                    end
+                end
+                j = g.i_next[j]
+            end
+        end
+    end
+end
+
+func local_root(g &: Ng, v: int): int:
+    mut x := v
+    repeat 16:
+        if x < 0 or g.v_kind[x] != VK_INS:
+            ret 0 - 1
+        end
+        d := g.v_def[x]
+        if g.i_op[d] == OP_ALLOCA:
+            if g.v_esc[x]:
+                ret 0 - 1
+            end
+            ret x
+        end
+        if g.i_op[d] != OP_ADDR:
+            ret 0 - 1
+        end
+        x = g.i_a[d]
+    end
+    ret 0 - 1
+end
+
+func sret_forward(g &: Ng, i: int): int:
+    r := g.i_res[i]
+    if r < 0 or g.v_uses[r] != 1:
+        ret 0 - 1
+    end
+    j := g.i_next[i]
+    if j < 0 or g.i_op[j] != OP_STORE or g.i_a[j] != r:
+        ret 0 - 1
+    end
+    q := g.i_b[j]
+    root := local_root(g, q)
+    if root < 0:
+        ret 0 - 1
+    end
+    repeat g.i_pcount[i] in k:
+        av := g.pool[g.i_ps[i] + 3 * k]
+        if av == q or av == root or local_root(g, av) == root:
+            ret 0 - 1
+        end
+    end
+    ret j
+end
+
+func writes_mem(op: int): bool:
+    ret op == OP_STORE or op == OP_CALL or op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE
+end
+
+func lf_mem(g &: Ng, v: int): int:
+    if v < 0 or v >= g.lfold.len():
+        ret 0 - 1
+    end
+    ret g.lfold[v]
+end
+
+func lf_other_ok(g &: Ng, v: int): bool:
+    ret v >= 0 and (g.v_kind[v] == VK_INS or g.v_kind[v] == VK_ARG)
+end
+
+func rmw_other_ok(g &: Ng, o: int): bool:
+    if o < 0:
+        ret false
+    end
+    if g.v_kind[o] == VK_INT:
+        ret is_imm32(g.v_i[o])
+    end
+    if not lf_other_ok(g, o) or lf_mem(g, o) >= 0:
+        ret false
+    end
+    if g.v_kind[o] == VK_INS:
+        d := g.v_def[o]
+        if g.skipi[d]:
+            ret false
+        end
+        if (g.i_op[d] == OP_MUL or g.i_op[d] == OP_SHL) and lea_mul_k(g, d) >= 0:
+            ret false
+        end
+    end
+    ret true
+end
+
+func rmw_store(g &: Ng, i: int, opi &: int, ov &: int): int:
+    r := g.i_res[i]
+    t := g.i_ty[i]
+    if g.off_rmw or r < 0 or g.v_uses[r] != 1 or is_agg(g, t) or is_flt(g, t) or is_vec(g, t):
+        ret 0 - 1
+    end
+    if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+        ret 0 - 1
+    end
+    sz := msz(g, t)
+    if sz != 4 and sz != 8:
+        ret 0 - 1
+    end
+    mut j := g.i_next[i]
+    mut o := 0 - 1
+    repeat 16:
+        if j < 0:
+            ret 0 - 1
+        end
+        if g.i_a[j] == r or g.i_b[j] == r:
+            break
+        end
+        if writes_mem(g.i_op[j]):
+            ret 0 - 1
+        end
+        j = g.i_next[j]
+    end
+    if j < 0 or g.i_a[j] == g.i_b[j]:
+        ret 0 - 1
+    end
+    op := g.i_op[j]
+    jr := g.i_res[j]
+    if g.i_ty[j] != t or jr < 0 or g.v_uses[jr] != 1:
+        ret 0 - 1
+    end
+    if op == OP_SUB:
+        if g.i_a[j] != r:
+            ret 0 - 1
+        end
+        o = g.i_b[j]
+    else op == OP_ADD or op == OP_AND or op == OP_OR or op == OP_XOR:
+        o = g.i_a[j] == r ? g.i_b[j] : g.i_a[j]
+    else:
+        ret 0 - 1
+    end
+    if not rmw_other_ok(g, o):
+        ret 0 - 1
+    end
+    mut k := g.i_next[j]
+    repeat 16:
+        if k < 0:
+            ret 0 - 1
+        end
+        if g.i_op[k] == OP_STORE and g.i_a[k] == jr:
+            if g.i_b[k] != g.i_a[i] or (g.i_f[k] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+                ret 0 - 1
+            end
+            opi = j
+            ov = o
+            ret k
+        end
+        if writes_mem(g.i_op[k]):
+            ret 0 - 1
+        end
+        k = g.i_next[k]
+    end
+    ret 0 - 1
+end
+
+func load_fold_user(g &: Ng, i: int): int:
+    r := g.i_res[i]
+    t := g.i_ty[i]
+    if r < 0 or g.v_uses[r] != 1 or is_agg(g, t) or is_flt(g, t) or is_vec(g, t):
+        ret 0 - 1
+    end
+    if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+        ret 0 - 1
+    end
+    sz := msz(g, t)
+    small := sz == 1 and t != T_I1 and not g.off_bcmp
+    if sz != 4 and sz != 8 and not small:
+        ret 0 - 1
+    end
+    mut j := g.i_next[i]
+    repeat 12:
+        if j < 0:
+            ret 0 - 1
+        end
+        op := g.i_op[j]
+        if g.i_a[j] == r or g.i_b[j] == r:
+            if g.skipi[j]:
+                ret 0 - 1
+            end
+            if small and not (op == OP_ICMP and g.i_a[j] == r and g.i_b[j] >= 0 and g.v_kind[g.i_b[j]] == VK_INT):
+                ret 0 - 1
+            end
+            if g.i_ty[j] == t and (op == OP_ADD or op == OP_AND or op == OP_OR or op == OP_XOR):
+                o := g.i_a[j] == r ? g.i_b[j] : g.i_a[j]
+                if o != r and lf_other_ok(g, o) and g.i_res[j] >= 0:
+                    ret j
+                end
+                ret 0 - 1
+            end
+            if op == OP_SUB and g.i_b[j] == r and g.i_a[j] != r and lf_other_ok(g, g.i_a[j]):
+                ret j
+            end
+            if op == OP_ICMP and g.i_a[j] != g.i_b[j]:
+                o2 := g.i_a[j] == r ? g.i_b[j] : g.i_a[j]
+                if not lf_other_ok(g, o2) and not (o2 >= 0 and g.v_kind[o2] == VK_INT and is_imm32(g.v_i[o2])):
+                    ret 0 - 1
+                end
+                cr := g.i_res[j]
+                if cr < 0 or g.v_uses[cr] != 1:
+                    ret 0 - 1
+                end
+                mut k := g.i_next[j]
+                repeat 12:
+                    if k < 0:
+                        ret 0 - 1
+                    end
+                    if g.i_a[k] == cr and (g.i_op[k] == OP_CBR or g.i_op[k] == OP_SELECT):
+                        ret j
+                    end
+                    if writes_mem(g.i_op[k]):
+                        ret 0 - 1
+                    end
+                    k = g.i_next[k]
+                end
+                ret 0 - 1
+            end
+            ret 0 - 1
+        end
+        if writes_mem(op):
+            ret 0 - 1
+        end
+        j = g.i_next[j]
+    end
+    ret 0 - 1
+end
+
+func load_ext_user(g &: Ng, i: int): int:
+    r := g.i_res[i]
+    t := g.i_ty[i]
+    if r < 0 or g.v_uses[r] != 1 or t == T_I1:
+        ret 0 - 1
+    end
+    sz := msz(g, t)
+    if sz != 1 and sz != 2 and sz != 4:
+        ret 0 - 1
+    end
+    mut j := g.i_next[i]
+    repeat 16:
+        if j < 0:
+            ret 0 - 1
+        end
+        op := g.i_op[j]
+        if (op == OP_SEXT or op == OP_ZEXT) and g.i_a[j] == r:
+            if op == OP_SEXT and sz == 4 and asz(g, g.i_ty[j]) != 8:
+                ret 0 - 1
+            end
+            ret j
+        end
+        j = g.i_next[j]
+    end
+    ret 0 - 1
+end
+
+func load_sext_shared(g &: Ng, i: int): int:
+    r := g.i_res[i]
+    if r < 0 or g.v_uses[r] < 2 or msz(g, g.i_ty[i]) != 4 or g.i_ty[i] == T_I1:
+        ret 0 - 1
+    end
+    mut j := g.i_next[i]
+    repeat 8:
+        if j < 0:
+            ret 0 - 1
+        end
+        if g.i_op[j] == OP_SEXT and g.i_a[j] == r and asz(g, g.i_ty[j]) == 8:
+            ret j
+        end
+        j = g.i_next[j]
+    end
+    ret 0 - 1
+end
+
+func isel_load(g &: Ng, i: int):
+    t := g.i_ty[i]
+    a := g.i_a[i]
+    if is_agg(g, t):
+        r := g.i_res[i]
+        if agg_load_defer(g, i):
+            if r >= 0 and g.v_uses[r] > 0:
+                set_loc(g, r, mem_of(g, a, 0 as i64))
+            end
+            ret
+        end
+        slot := new_slot(g, tsize(g, t), talign(g, t))
+        emit_copy(g, frame_mem(slot, 0 as i64), mem_of(g, a, 0 as i64), tsize(g, t))
+        if r >= 0:
+            g.vak[r] = AK_FRAME
+            g.var_[r] = slot
+            g.vao[r] = 0
+            g.vown[r] = true
+        end
+        ret
+    end
+    if not res_used(g, i) and (g.i_f[i] & IF_VOLATILE) == 0:
+        ret
+    end
+    mut rop := 0 - 1
+    mut rov := 0 - 1
+    rst := rmw_store(g, i, rop, rov)
+    if rst >= 0:
+        g.skipi[rop] = true
+        g.rmw_of[rst] = rop
+        g.rmw_v[rst] = rov
+        ret
+    end
+    if not is_vec(g, t) and not is_flt(g, t) and load_fold_user(g, i) >= 0:
+        g.lfold[g.i_res[i]] = i
+        ret
+    end
+    m := mem_of(g, a, 0 as i64)
+    if is_vec(g, t):
+        rv := wide_reg(g)
+        _lv := e_rm(g, M_VLD, 16, rv, m)
+        set_res(g, i, rv)
+        ret
+    end
+    if is_flt(g, t):
+        r2 := xmm(g)
+        _l := e_rm(g, M_FLD, fsz(t), r2, m)
+        set_res(g, i, r2)
+        ret
+    end
+    r3 := gpr(g)
+    sz := msz(g, t)
+    ext := load_ext_user(g, i)
+    if ext >= 0:
+        dsz := asz(g, g.i_ty[ext])
+        if g.i_op[ext] == OP_SEXT:
+            ls := e_rm(g, M_LDSX, dsz, r3, m)
+            g.mc.sz2[ls] = sz
+        else sz == 4:
+            _lz := e_rm(g, M_LD, 4, r3, m)
+        else:
+            lz := e_rm(g, M_LDZX, 4, r3, m)
+            g.mc.sz2[lz] = sz
+        end
+        g.skipi[ext] = true
+        set_res(g, ext, r3)
+        ret
+    end
+    sx := load_sext_shared(g, i)
+    if sx >= 0:
+        lx := e_rm(g, M_LDSX, 8, r3, m)
+        g.mc.sz2[lx] = 4
+        g.skipi[sx] = true
+        set_res(g, sx, r3)
+        set_res(g, i, r3)
+        ret
+    end
+    if sz >= 4:
+        _l2 := e_rm(g, M_LD, sz, r3, m)
+    else:
+        l := e_rm(g, M_LDZX, 4, r3, m)
+        g.mc.sz2[l] = sz
+    end
+    set_res(g, i, r3)
+end
+
+func isel_store(g &: Ng, i: int):
+    v := g.i_a[i]
+    p := g.i_b[i]
+    t := g.v_ty[v]
+    if is_agg(g, t):
+        k := g.v_kind[v]
+        if k == VK_UNDEF:
+            ret
+        end
+        m := mem_of(g, p, 0 as i64)
+        if k == VK_ZERO:
+            zero_fill(g, m, tsize(g, t))
+            ret
+        end
+        emit_copy(g, m, agg_mem(g, v), tsize(g, t))
+        ret
+    end
+    if g.rmw_of[i] >= 0:
+        j := g.rmw_of[i]
+        o := g.rmw_v[i]
+        mut cc := ALU_ADD
+        if g.i_op[j] == OP_SUB: cc = ALU_SUB end
+        if g.i_op[j] == OP_AND: cc = ALU_AND end
+        if g.i_op[j] == OP_OR: cc = ALU_OR end
+        if g.i_op[j] == OP_XOR: cc = ALU_XOR end
+        mm := mem_of(g, p, 0 as i64)
+        if g.v_kind[o] == VK_INT:
+            ai := mi_new(g, M_ALU_MI, msz(g, t))
+            set_mem(g, ai, mm)
+            g.mc.imm[ai] = g.v_i[o]
+            g.mc.cc[ai] = cc
+        else:
+            ro := use_reg(g, o)
+            ar := e_mr(g, M_ALU_MR, msz(g, t), mm, ro)
+            g.mc.cc[ar] = cc
+        end
+        ret
+    end
+    if is_vec(g, t) and (g.i_f[i] & IF_W8) != 0:
+        isel_vstore_w8(g, i)
+        ret
+    end
+    atomic := (g.i_f[i] & IF_ATOMIC) != 0
+    if g.v_kind[v] == VK_INT and not is_flt(g, t) and is_imm32(g.v_i[v]) and (not atomic or (g.i_f[i] & IF_SEQ) == 0):
+        m2 := mem_of(g, p, 0 as i64)
+        si := mi_new(g, M_STI, msz(g, t))
+        set_mem(g, si, m2)
+        g.mc.imm[si] = g.v_i[v]
+        ret
+    end
+    r := use_reg(g, v)
+    m3 := mem_of(g, p, 0 as i64)
+    if is_vec(g, t):
+        _sv := e_mr(g, M_VST, 16, m3, r)
+        ret
+    end
+    if is_flt(g, t):
+        _s := e_mr(g, M_FST, fsz(t), m3, r)
+        ret
+    end
+    if atomic and (g.i_f[i] & IF_SEQ) != 0:
+        t2 := gpr(g)
+        _c := e_copy(g, t2, r)
+        _x := e_rm(g, M_XCHG, msz(g, t), t2, m3)
+        ret
+    end
+    _s2 := e_mr(g, M_ST, msz(g, t), m3, r)
+end
+
+func isel_addr(g &: Ng, i: int):
+    v := g.i_res[i]
+    if v < 0 or g.v_uses[v] == 0:
+        ret
+    end
+    idx := g.i_b[i]
+    if addr_only(g, v):
+        if idx >= 0:
+            ir := idx_reg(g, idx, g.v_ty[idx])
+            sc := g.i_x[i]
+            if sc == 1 or sc == 2 or sc == 4 or sc == 8:
+                g.vv[v] = ir
+                g.vsc[v] = sc
+            else:
+                r := gpr(g)
+                mi := e_rr(g, M_IMUL_RRI, 8, r, ir)
+                g.mc.imm[mi] = sc as i64
+                g.vv[v] = r
+                g.vsc[v] = 1
+            end
+        end
+        ret
+    end
+    mut m := mem_of(g, g.i_a[i], g.i_d[i])
+    if idx >= 0:
+        ir2 := idx_reg(g, idx, g.v_ty[idx])
+        mut sc2 := g.i_x[i]
+        mut irr := ir2
+        if not (sc2 == 1 or sc2 == 2 or sc2 == 4 or sc2 == 8):
+            irr = gpr(g)
+            mi2 := e_rr(g, M_IMUL_RRI, 8, irr, ir2)
+            g.mc.imm[mi2] = sc2 as i64
+            sc2 = 1
+        end
+        if (m.k == MK_BI or m.k == MK_FRAME) and m.i < 0:
+            m.i = irr
+            m.s = sc2
+        else:
+            base := lea_reg(g, m)
+            m = Mem { k = MK_BI, b = base, i = irr, s = sc2, d = 0 as i64 }
+        end
+    end
+    r2 := gpr(g)
+    if m.k == MK_BI and m.i < 0 and m.d == (0 as i64):
+        _c := e_copy(g, r2, m.b)
+    else:
+        _l := e_rm(g, M_LEA, 8, r2, m)
+    end
+    g.vv[v] = r2
+end
+
+func isel_select(g &: Ng, i: int):
+    t := g.i_ty[i]
+    c := g.i_a[i]
+    fd := fused_cond(g, i)
+    if fd >= 0:
+        isel_select_fused(g, i, fd)
+        ret
+    end
+    if is_agg(g, t):
+        pa := lea_reg(g, agg_mem(g, g.i_b[i]))
+        pb := lea_reg(g, agg_mem(g, g.i_c[i]))
+        rc := use_reg(g, c)
+        r := gpr(g)
+        _c := e_copy(g, r, pb)
+        _t := e_rr(g, M_TEST_RR, 1, rc, rc)
+        cm := e_rr(g, M_CMOV, 8, r, pa)
+        g.mc.cc[cm] = X_NE
+        v := g.i_res[i]
+        if v >= 0:
+            g.vak[v] = AK_PTR
+            g.var_[v] = r
+            g.vao[v] = 0
+        end
+        ret
+    end
+    rt := use_reg(g, g.i_b[i])
+    rf := use_reg(g, g.i_c[i])
+    rc2 := use_reg(g, c)
+    if is_flt(g, t):
+        r2 := xmm(g)
+        _c2 := e_copy(g, r2, rf)
+        l := new_label(g)
+        _t2 := e_rr(g, M_TEST_RR, 1, rc2, rc2)
+        _j := e_jcc(g, X_E, l)
+        _c3 := e_copy(g, r2, rt)
+        _l := e_label(g, l)
+        set_res(g, i, r2)
+        ret
+    end
+    r3 := gpr(g)
+    tie := tie_true_arm(g, i)
+    _t3 := e_rr(g, M_TEST_RR, 1, rc2, rc2)
+    _c4 := e_copy(g, r3, tie ? rt : rf)
+    cm2 := e_rr(g, M_CMOV, asz(g, t), r3, tie ? rf : rt)
+    g.mc.cc[cm2] = tie ? X_E : X_NE
+    set_res(g, i, r3)
+end
+
+func phi_dead_after(g &: Ng, v: int, b: int): bool:
+    dblk := g.i_blk[g.v_def[v]]
+    mut seen := HashMap {} as HashMap<int, int>
+    mut work := Vector {} as Vector<int>
+    mut succ := Vector {} as Vector<int>
+    work.push(b)
+    mut ok := true
+    mut steps := 0
+    until ok and work.len() > 0:
+        x := work.pop()
+        blk_succs(g, x, succ)
+        each y in succ:
+            if y == dblk or seen.has(y):
+                continue
+            end
+            seen.put(y, 1)
+            steps += 1
+            if steps > 64:
+                ok = false
+                break
+            end
+            mut j := g.b_first[y]
+            until j >= 0:
+                if uses_val(g, j, v):
+                    ok = false
+                    break
+                end
+                j = g.i_next[j]
+            end
+            work.push(y)
+        end
+    end
+    seen.free()
+    work.free()
+    succ.free()
+    ret ok
+end
+
+func last_use_here(g &: Ng, v: int, i: int): bool:
+    if v < 0 or (g.v_kind[v] != VK_INS and g.v_kind[v] != VK_ARG):
+        ret false
+    end
+    b := g.i_blk[i]
+    mut n := 0
+    mut after := false
+    mut j := g.b_first[b]
+    until j >= 0:
+        if j == i:
+            after = true
+            n += 1
+        else uses_val(g, j, v):
+            if after:
+                ret false
+            end
+            n += 1
+        end
+        j = g.i_next[j]
+    end
+    if n == g.v_uses[v]:
+        ret true
+    end
+    ret g.v_kind[v] == VK_INS and g.i_op[g.v_def[v]] == OP_PHI and g.i_blk[g.v_def[v]] != b and phi_dead_after(g, v, b)
+end
+
+func feeds_own_phi(g &: Ng, v: int, i: int): bool:
+    if g.off_seltie or v < 0 or g.v_kind[v] != VK_INS or g.i_op[g.v_def[v]] != OP_PHI or g.i_res[i] < 0:
+        ret false
+    end
+    p := g.v_def[v]
+    mut hit := false
+    repeat g.i_pcount[p] in k:
+        if g.pool[g.i_ps[p] + 2 * k] == g.i_res[i]:
+            hit = true
+        end
+    end
+    ret hit and last_use_here(g, v, i)
+end
+
+func tie_true_arm(g &: Ng, i: int): bool:
+    b := g.i_b[i]
+    c := g.i_c[i]
+    pb := feeds_own_phi(g, b, i)
+    pc := feeds_own_phi(g, c, i)
+    if pb != pc:
+        ret pb
+    end
+    ret dies_here(g, b, i) and not dies_here(g, c, i)
+end
+
+func dies_here(g &: Ng, v: int, i: int): bool:
+    if v < 0 or g.v_kind[v] != VK_INS or g.v_uses[v] != 1:
+        ret false
+    end
+    d := g.v_def[v]
+    ret g.i_op[d] != OP_PHI and g.i_blk[d] == g.i_blk[i]
+end
+
+func sel_inc_add(g &: Ng, i: int): int:
+    t := g.i_ty[i]
+    if t != T_I32 and t != T_I64:
+        ret 0 - 1
+    end
+    repeat 2 in k:
+        v1 := k == 0 ? g.i_b[i] : g.i_c[i]
+        v0 := k == 0 ? g.i_c[i] : g.i_b[i]
+        if v1 >= 0 and g.v_kind[v1] == VK_INS and g.v_uses[v1] == 1:
+            ad := g.v_def[v1]
+            if g.i_op[ad] == OP_ADD and g.i_a[ad] == v0 and is_cint(g, g.i_b[ad]) and g.v_i[g.i_b[ad]] == (1 as i64) and g.i_blk[ad] == g.i_blk[i]:
+                ret ad
+            end
+        end
+    end
+    ret 0 - 1
+end
+
+func sel_inc_plan(g &: Ng, i: int):
+    d := fused_cond(g, i)
+    if d < 0:
+        ret
+    end
+    p := g.i_x[d]
+    ok := (g.i_op[d] == OP_FCMP and (p == FC_OGE or p == FC_OLE)) or (g.i_op[d] == OP_ICMP and (p == CC_ULT or p == CC_ULE or p == CC_UGT or p == CC_UGE))
+    if not ok:
+        ret
+    end
+    ad := sel_inc_add(g, i)
+    if ad >= 0:
+        g.skipi[ad] = true
+    end
+end
+
+func isel_select_fused(g &: Ng, i: int, d: int):
+    t := g.i_ty[i]
+    ad := sel_inc_add(g, i)
+    if ad >= 0 and g.skipi[ad]:
+        inc_true := g.i_b[i] == g.i_res[ad]
+        mut cc0 := 0
+        if g.i_op[d] == OP_FCMP:
+            cc0 = fcmp_cc(fcmp_setup(g, d))
+        else:
+            cc0 = emit_icmp(g, d)
+        end
+        xr := use_reg(g, g.i_a[ad])
+        if cc0 == X_AE or cc0 == X_B:
+            ri := gpr(g)
+            _ci := e_copy(g, ri, xr)
+            add_cf := (cc0 == X_B) == inc_true
+            ai := e_ri(g, M_ALU_RI, asz(g, t), ri, add_cf ? (0 as i64) : (0 - 1 as i64))
+            g.mc.cc[ai] = add_cf ? ALU_ADC : ALU_SBB
+            set_res(g, i, ri)
+            ret
+        end
+        rl := gpr(g)
+        _li := e_rm(g, M_LEA, 8, rl, Mem { k = MK_BI, b = xr, i = 0 - 1, s = 0, d = 1 as i64 })
+        set_res(g, ad, rl)
+        rs := gpr(g)
+        _cs := e_copy(g, rs, use_reg(g, g.i_c[i]))
+        cms := e_rr(g, M_CMOV, asz(g, t), rs, use_reg(g, g.i_b[i]))
+        g.mc.cc[cms] = cc0
+        set_res(g, i, rs)
+        ret
+    end
+    mut bv := g.i_b[i]
+    mut cv := g.i_c[i]
+    swap := g.i_op[d] != OP_FCMP and tie_true_arm(g, i)
+    if swap:
+        bv = g.i_c[i]
+        cv = g.i_b[i]
+    end
+    rt := use_reg(g, bv)
+    rf := use_reg(g, cv)
+    r := gpr(g)
+    mut cc := 0
+    if g.i_op[d] == OP_FCMP:
+        cc = fcmp_cc(fcmp_setup(g, d))
+    else:
+        cc = emit_icmp(g, d)
+        if swap:
+            cc = inv_cc(cc)
+        end
+    end
+    _c := e_copy(g, r, rf)
+    cm := e_rr(g, M_CMOV, asz(g, t), r, rt)
+    g.mc.cc[cm] = cc
+    set_res(g, i, r)
+end
+
+func insv_covers_all(g &: Ng, i: int): bool:
+    t := g.i_ty[i]
+    if g.t_kind[t] != TK_STRUCT:
+        ret false
+    end
+    nf := g.t_nf[t]
+    if nf <= 0 or nf > 64:
+        ret false
+    end
+    mut seen := Vector {} as Vector<i64>
+    mut ssz := Vector {} as Vector<i64>
+    mut j := i
+    repeat 4 * nf + 2:
+        if j < 0 or g.i_op[j] != OP_INSV or g.i_ty[j] != t:
+            break
+        end
+        seen.push(g.i_d[j])
+        ssz.push(tsize(g, g.i_x[j]) as i64)
+        r := g.i_res[j]
+        if r < 0 or g.v_uses[r] != 1:
+            break
+        end
+        mut nj := 0 - 1
+        mut k := g.i_next[j]
+        until k >= 0:
+            if g.i_op[k] == OP_INSV and g.i_a[k] == r:
+                nj = k
+                break
+            end
+            k = g.i_next[k]
+        end
+        j = nj
+    end
+    mut all := true
+    repeat nf in f:
+        fo := g.t_offs[g.t_fs[t] + f] as i64
+        fe := fo + (tsize(g, g.t_pool[g.t_fs[t] + f]) as i64)
+        mut pos := fo
+        mut hit := true
+        until hit and pos < fe:
+            hit = false
+            repeat seen.len() in q:
+                if seen[q] == pos and ssz[q] > (0 as i64):
+                    pos = pos + ssz[q]
+                    hit = true
+                    break
+                end
+            end
+        end
+        if pos < fe:
+            all = false
+        end
+    end
+    seen.free()
+    ssz.free()
+    ret all
+end
+
+func insv_to_ret(g &: Ng, i: int): bool:
+    if g.retp < 0:
+        ret false
+    end
+    t := g.i_ty[i]
+    mut j := i
+    repeat 160:
+        r := g.i_res[j]
+        if r < 0 or g.v_uses[r] != 1:
+            ret false
+        end
+        mut k := g.i_next[j]
+        until k >= 0:
+            if g.i_op[k] == OP_RET and g.i_a[k] == r:
+                ret true
+            end
+            if g.i_op[k] == OP_INSV and g.i_a[k] == r and g.i_ty[k] == t:
+                break
+            end
+            if g.i_op[k] == OP_CALL or g.i_op[k] == OP_STORE or g.i_op[k] == OP_LOAD:
+                ret false
+            end
+            k = g.i_next[k]
+        end
+        if k < 0:
+            ret false
+        end
+        j = k
+    end
+    ret false
+end
+
+func insv_to_store(g &: Ng, i: int): int:
+    if g.off_istore:
+        ret 0 - 1
+    end
+    t := g.i_ty[i]
+    mut j := i
+    repeat 160:
+        r := g.i_res[j]
+        if r < 0 or g.v_uses[r] != 1:
+            ret 0 - 1
+        end
+        mut k := g.i_next[j]
+        until k >= 0:
+            op := g.i_op[k]
+            if op == OP_STORE and g.i_a[k] == r:
+                p := g.i_b[k]
+                if (g.i_f[k] & (IF_VOLATILE | IF_ATOMIC)) != 0 or p == r:
+                    ret 0 - 1
+                end
+                pk := g.v_kind[p]
+                if (pk == VK_INS and g.vak[p] == AK_ALLOCA) or pk == VK_ARG:
+                    ret k
+                end
+                ret 0 - 1
+            end
+            if op == OP_INSV and g.i_a[k] == r and g.i_ty[k] == t:
+                break
+            end
+            if op == OP_CALL or op == OP_STORE or op == OP_LOAD or uses_val(g, k, r):
+                ret 0 - 1
+            end
+            k = g.i_next[k]
+        end
+        if k < 0:
+            ret 0 - 1
+        end
+        j = k
+    end
+    ret 0 - 1
+end
+
+func zero_const(g &: Ng, v: int): bool:
+    if v < 0:
+        ret false
+    end
+    k := g.v_kind[v]
+    ret k == VK_ZERO or (k == VK_INT and g.v_i[v] == (0 as i64))
+end
+
+func insv_zero_chain(g &: Ng, head: int, need: bool): bool:
+    t := g.i_ty[head]
+    mut zs := Vector {} as Vector<int>
+    mut j := head
+    repeat 256:
+        if j < 0 or g.i_op[j] != OP_INSV or g.i_ty[j] != t:
+            break
+        end
+        if zero_const(g, g.i_b[j]) and not is_flt(g, g.i_x[j]):
+            zs.push(j)
+        end
+        r := g.i_res[j]
+        if r < 0 or g.v_uses[r] != 1:
+            break
+        end
+        mut nj := 0 - 1
+        mut k := g.i_next[j]
+        until k >= 0:
+            if g.i_op[k] == OP_INSV and g.i_a[k] == r:
+                nj = k
+                break
+            end
+            if uses_val(g, k, r):
+                break
+            end
+            k = g.i_next[k]
+        end
+        j = nj
+    end
+    ok := not need or zs.len() >= 4
+    if ok:
+        each z in zs:
+            g.izero[z] = true
+        end
+    end
+    zs.free()
+    ret ok
+end
+
+func isel_insv(g &: Ng, i: int):
+    t := g.i_ty[i]
+    a := g.i_a[i]
+    r := g.i_res[i]
+    sz := tsize(g, t)
+    k := g.v_kind[a]
+    mut m := frame_mem(0, 0 as i64)
+    mut ak := AK_FRAME
+    mut base := 0 - 1
+    if k == VK_INS and (g.vak[a] == AK_FRAME or g.vak[a] == AK_PTR) and g.vao[a] == 0 and g.v_uses[a] == 1 and g.vown[a]:
+        ak = g.vak[a]
+        base = g.var_[a]
+        m = agg_mem(g, a)
+    else:
+        sd := insv_to_ret(g, i) ? 0 - 1 : insv_to_store(g, i)
+        if insv_to_ret(g, i):
+            ak = AK_PTR
+            base = g.retp
+            m = mem_bi(base, 0 as i64)
+        else sd >= 0 and g.v_kind[g.i_b[sd]] == VK_ARG:
+            ak = AK_PTR
+            base = use_reg(g, g.i_b[sd])
+            m = mem_bi(base, 0 as i64)
+            g.skipi[sd] = true
+        else sd >= 0:
+            ak = AK_FRAME
+            base = g.var_[g.i_b[sd]]
+            m = frame_mem(base, 0 as i64)
+            g.skipi[sd] = true
+        else:
+            base = new_slot(g, sz, talign(g, t))
+            m = frame_mem(base, 0 as i64)
+        end
+        if k == VK_ZERO:
+            if not insv_covers_all(g, i):
+                zero_fill(g, m, sz)
+                if not g.off_izero:
+                    _zc := insv_zero_chain(g, i, false)
+                end
+            end
+        else k != VK_UNDEF:
+            emit_copy(g, m, agg_mem(g, a), sz)
+        else not g.off_izero and insv_zero_chain(g, i, true):
+            zero_fill(g, m, sz)
+        end
+    end
+    if not g.izero[i]:
+        store_field(g, mem_add(m, g.i_d[i] as int), g.i_b[i], g.i_x[i])
+    end
+    if r >= 0:
+        g.vak[r] = ak
+        g.var_[r] = base
+        g.vao[r] = 0
+        g.vown[r] = true
+    end
+end
+
+func store_field(g &: Ng, m: Mem, v: int, ft: int):
+    if is_agg(g, ft):
+        kv := g.v_kind[v]
+        if kv == VK_ZERO:
+            zero_fill(g, m, tsize(g, ft))
+        else kv != VK_UNDEF:
+            emit_copy(g, m, agg_mem(g, v), tsize(g, ft))
+        end
+        ret
+    end
+    if g.v_kind[v] == VK_UNDEF:
+        ret
+    end
+    if g.v_kind[v] == VK_INT and not is_flt(g, ft) and is_imm32(g.v_i[v]):
+        si := mi_new(g, M_STI, msz(g, ft))
+        set_mem(g, si, m)
+        g.mc.imm[si] = g.v_i[v]
+        ret
+    end
+    rv := use_reg(g, v)
+    if is_flt(g, ft):
+        _s := e_mr(g, M_FST, fsz(ft), m, rv)
+    else:
+        _s2 := e_mr(g, M_ST, msz(g, ft), m, rv)
+    end
+end
+
+func isel_extv(g &: Ng, i: int):
+    t := g.i_ty[i]
+    a := g.i_a[i]
+    r := g.i_res[i]
+    off := g.i_d[i] as int
+    if r < 0 or g.v_uses[r] == 0:
+        ret
+    end
+    if is_agg(g, t):
+        am := agg_mem(g, a)
+        if am.k == MK_FRAME:
+            g.vak[r] = AK_FRAME
+            g.var_[r] = am.b
+            g.vao[r] = (am.d as int) + off
+        else:
+            g.vak[r] = AK_PTR
+            g.var_[r] = am.b
+            g.vao[r] = (am.d as int) + off
+        end
+        ret
+    end
+    k := g.v_kind[a]
+    if k == VK_ZERO or k == VK_UNDEF:
+        if is_flt(g, t):
+            r1 := xmm(g)
+            _x := e_rr(g, M_XORPS, zero_sz(g, t), r1, r1)
+            set_res(g, i, r1)
+        else:
+            r2 := gpr(g)
+            _m := e_movi(g, r2, 0 as i64)
+            set_res(g, i, r2)
+        end
+        ret
+    end
+    m := mem_add(agg_mem(g, a), off)
+    if is_flt(g, t):
+        r3 := xmm(g)
+        _l := e_rm(g, M_FLD, fsz(t), r3, m)
+        set_res(g, i, r3)
+        ret
+    end
+    r4 := gpr(g)
+    sz := msz(g, t)
+    if sz >= 4:
+        _l2 := e_rm(g, M_LD, sz, r4, m)
+    else:
+        l := e_rm(g, M_LDZX, 4, r4, m)
+        g.mc.sz2[l] = sz
+    end
+    set_res(g, i, r4)
+end
+
+func isel_call(g &: Ng, i: int):
+    callee := g.i_a[i]
+    mut sym := 0 - 1
+    if g.v_kind[callee] == VK_GLB and g.v_i[callee] == (0 as i64):
+        sym = g.v_def[callee]
+    end
+    ps := g.i_ps[i]
+    na := g.i_pcount[i]
+    rt := g.i_ty[i]
+    if sym >= 0 and isel_intrinsic(g, i, sym):
+        ret
+    end
+    mut regs := Vector {} as Vector<int>
+    mut cls := Vector {} as Vector<int>
+    mut rslot := 0 - 1
+    mut fwd := 0 - 1
+    if is_agg(g, rt):
+        fwd = sret_forward(g, i)
+        if fwd >= 0:
+            regs.push(lea_reg(g, mem_of(g, g.i_b[fwd], 0 as i64)))
+            g.skipi[fwd] = true
+        else ret_passthru(g, i):
+            regs.push(g.retp)
+            g.skipi[g.i_next[i]] = true
+        else:
+            rslot = new_slot(g, tsize(g, rt), talign(g, rt))
+            regs.push(lea_reg(g, frame_mem(rslot, 0 as i64)))
+        end
+        cls.push(g.arch == NG_ARCH_A64 ? 2 : 0)
+    end
+    repeat na in k:
+        v := g.pool[ps + 3 * k]
+        fl := g.pool[ps + 3 * k + 1]
+        aux := g.pool[ps + 3 * k + 2]
+        t := g.v_ty[v]
+        if (fl & IF_BYVAL) != 0 and aux >= 0:
+            bs := new_slot(g, tsize(g, aux), talign(g, aux))
+            emit_copy(g, frame_mem(bs, 0 as i64), mem_of(g, v, 0 as i64), tsize(g, aux))
+            regs.push(lea_reg(g, frame_mem(bs, 0 as i64)))
+            cls.push(0)
+        else is_agg(g, t):
+            regs.push(lea_reg(g, agg_mem(g, v)))
+            cls.push(0)
+        else is_flt(g, t) and g.arch == NG_ARCH_RV64 and (g.i_f[i] & IF_VARARG) != 0 and g.i_x[i] >= 0 and k >= g.i_x[i]:
+            gf := gpr(g)
+            _mq := e_rr(g, M_MOVQ_GX, 8, gf, use_reg(g, v))
+            regs.push(gf)
+            cls.push(0)
+        else is_flt(g, t):
+            regs.push(use_reg(g, v))
+            cls.push(g.wsz == 4 and fsz(t) == 4 ? 3 : 1)
+        else:
+            r := use_reg(g, v)
+            mut ra := r
+            if int_bits(g, t) < 32:
+                ra = ext_arg(g, r, t, (fl & IF_SEXT) != 0)
+            end
+            if g.arch == NG_ARCH_RV64 and int_bits(g, t) <= 32:
+                rs := gpr(g)
+                sx := e_rr(g, M_MOVSX_RR, 8, rs, ra)
+                g.mc.sz2[sx] = 4
+                ra = rs
+            end
+            regs.push(ra)
+            cls.push(g.arch == NG_ARCH_ARM and (fl & IF_PAIR) != 0 ? 4 : 0)
+        end
+    end
+    mut cr := 0 - 1
+    if sym < 0:
+        cr = use_reg(g, callee)
+    end
+    vararg := (g.i_f[i] & IF_VARARG) != 0
+    mask := place_args(g, regs, cls, vararg, g.i_x[i])
+    mut ci := 0 - 1
+    if sym >= 0:
+        ci = mi_new(g, M_CALL, 8)
+        g.mc.msym[ci] = sym
+        g.sy_used[sym] = true
+        if g.arch == NG_ARCH_X86 and stdcall_bytes(g, sym) >= 0:
+            set_stdcall(g, sym, g.last_argsz)
+            g.mc.sz2[ci] = g.last_argsz
+        end
+        if g.sy_kind[sym] == SY_UNKNOWN:
+            g.sy_kind[sym] = SY_FUNC
+        end
+    else:
+        ci = e_rr(g, M_CALLR, 8, 0 - 1, cr)
+    end
+    g.mc.imm[ci] = mask
+    g.mc.has_call = true
+    regs.free()
+    cls.free()
+    v2 := g.i_res[i]
+    if rslot >= 0:
+        if v2 >= 0:
+            g.vak[v2] = AK_FRAME
+            g.var_[v2] = rslot
+            g.vao[v2] = 0
+            g.vown[v2] = true
+        end
+        ret
+    end
+    if fwd >= 0:
+        ret
+    end
+    if g.arch == NG_ARCH_X86 and is_flt(g, rt):
+        rx := x87_to_xmm(g, fsz(rt))
+        if v2 >= 0:
+            g.vv[v2] = rx
+        end
+        ret
+    end
+    if rt == T_VOID or v2 < 0:
+        ret
+    end
+    if is_flt(g, rt):
+        r2 := xmm(g)
+        _c := e_copy(g, r2, XMM0)
+        g.vv[v2] = r2
+    else:
+        r3 := gpr(g)
+        _c2 := e_copy(g, r3, RAX)
+        g.vv[v2] = r3
+    end
+end
+
+func ret_passthru(g &: Ng, i: int): bool:
+    r := g.i_res[i]
+    if r < 0 or g.v_uses[r] != 1 or g.retp < 0:
+        ret false
+    end
+    j := g.i_next[i]
+    ret j >= 0 and g.i_op[j] == OP_RET and g.i_a[j] == r
+end
+
+func call_arg(g &: Ng, i: int, k: int): int:
+    ret g.pool[g.i_ps[i] + 3 * k]
+end
+
+func isel_intrinsic(g &: Ng, i: int, sym: int): bool:
+    if sym == g.sym_i_trap:
+        _u := mi_new(g, M_UD2, 0)
+        ret true
+    end
+    if sym == g.sym_i_memcpy or sym == g.sym_i_memmove or sym == g.sym_i_memset:
+        dst := call_arg(g, i, 0)
+        src := call_arg(g, i, 1)
+        ln := call_arg(g, i, 2)
+        if g.v_kind[ln] == VK_INT and g.v_i[ln] <= (256 as i64):
+            n := g.v_i[ln] as int
+            if sym == g.sym_i_memset:
+                if g.v_kind[src] == VK_INT:
+                    fill_bytes(g, mem_of(g, dst, 0 as i64), n, g.v_i[src] as int)
+                    ret true
+                end
+            else sym == g.sym_i_memcpy:
+                if n <= 64 and ro_copy(g, dst, src, n):
+                    ret true
+                end
+                emit_copy(g, mem_of(g, dst, 0 as i64), mem_of(g, src, 0 as i64), n)
+                ret true
+            end
+        end
+        mut args := Vector {} as Vector<int>
+        args.push(use_reg(g, dst))
+        if sym == g.sym_i_memset:
+            args.push(ext_arg(g, use_reg(g, src), T_I8, false))
+        else:
+            args.push(use_reg(g, src))
+        end
+        args.push(use_reg(g, ln))
+        mut target := g.sym_memcpy
+        if sym == g.sym_i_memmove:
+            target = g.sym_memmove
+        else sym == g.sym_i_memset:
+            target = g.sym_memset
+        end
+        _r := call_lib(g, target, args, 0 - 1)
+        args.free()
+        ret true
+    end
+    if sym == g.sym_i_pow:
+        mut args2 := Vector {} as Vector<int>
+        args2.push(use_reg(g, call_arg(g, i, 0)))
+        args2.push(use_reg(g, call_arg(g, i, 1)))
+        r := call_lib(g, g.sym_pow, args2, 1)
+        args2.free()
+        set_res(g, i, r)
+        ret true
+    end
+    if g.sy_def[sym] or g.syms.len[sym] < 5:
+        ret false
+    end
+    o := g.syms.off[sym]
+    if g.syms.bytes[o] == (108 as u8) and g.syms.bytes[o + 1] == (108 as u8) and g.syms.bytes[o + 2] == (118 as u8) and g.syms.bytes[o + 3] == (109 as u8) and g.syms.bytes[o + 4] == (46 as u8):
+        fail(g, "native backend: unsupported intrinsic @" + tab_str(g.syms, sym))
+        ret true
+    end
+    ret false
+end
+
+func isel_rmw(g &: Ng, i: int):
+    t := g.i_ty[i]
+    sz := msz(g, t)
+    m := mem_of(g, g.i_a[i], 0 as i64)
+    rv := use_reg(g, g.i_b[i])
+    op := g.i_x[i]
+    r := gpr(g)
+    if op == RMW_XCHG:
+        _c := e_copy(g, r, rv)
+        _x := e_rm(g, M_XCHG, sz, r, m)
+    else op == RMW_ADD or op == RMW_SUB:
+        _c2 := e_copy(g, r, rv)
+        if op == RMW_SUB:
+            n := e_rr(g, M_UNARY, sz < 4 ? 4 : sz, r, 0 - 1)
+            g.mc.cc[n] = UN_NEG
+        end
+        _a := e_rm(g, M_LXADD, sz, r, m)
+    else:
+        loop := new_label(g)
+        _l := e_rm(g, M_LD, sz < 4 ? 4 : sz, RAX, m)
+        _lb := e_label(g, loop)
+        tt := gpr(g)
+        _c3 := e_copy(g, tt, RAX)
+        mut sub := ALU_AND
+        if op == RMW_OR: sub = ALU_OR end
+        if op == RMW_XOR: sub = ALU_XOR end
+        _o := e_alu(g, sub, 8, tt, rv)
+        _cx := e_mr(g, M_LCMPXCHG, sz, m, tt)
+        _j := e_jcc(g, X_NE, loop)
+        _c4 := e_copy(g, r, RAX)
+    end
+    set_res(g, i, r)
+end
+
+func isel_cmpxchg(g &: Ng, i: int):
+    t := g.i_ty[i]
+    vt := field_ty(g, t, 0)
+    sz := msz(g, vt)
+    m := mem_of(g, g.i_a[i], 0 as i64)
+    rc := use_reg(g, g.i_b[i])
+    rn := use_reg(g, g.i_c[i])
+    _c := e_copy(g, RAX, rc)
+    _x := e_mr(g, M_LCMPXCHG, sz, m, rn)
+    ok := gpr(g)
+    _s := e_setcc(g, X_E, ok)
+    slot := new_slot(g, tsize(g, t), talign(g, t))
+    old := gpr(g)
+    _c2 := e_copy(g, old, RAX)
+    _st := e_mr(g, M_ST, sz, frame_mem(slot, 0 as i64), old)
+    _st2 := e_mr(g, M_ST, 1, frame_mem(slot, field_off(g, t, 1) as i64), ok)
+    v := g.i_res[i]
+    if v >= 0:
+        g.vak[v] = AK_FRAME
+        g.var_[v] = slot
+        g.vao[v] = 0
+    end
+end
+
+func isel_ret(g &: Ng, i: int):
+    a := g.i_a[i]
+    mut mask := 0 as i64
+    if a >= 0:
+        t := g.v_ty[a]
+        if is_agg(g, t):
+            in_place := g.v_kind[a] == VK_INS and g.vak[a] == AK_PTR and g.var_[a] == g.retp and g.vao[a] == 0
+            if g.v_kind[a] == VK_ZERO:
+                zero_fill(g, mem_bi(g.retp, 0 as i64), tsize(g, t))
+            else g.v_kind[a] != VK_UNDEF and not in_place:
+                emit_copy(g, mem_bi(g.retp, 0 as i64), agg_mem(g, a), tsize(g, t))
+            end
+            _c := e_copy(g, RAX, g.retp)
+            mask = 1 as i64
+        else is_flt(g, t) and g.arch == NG_ARCH_X86:
+            xmm_to_x87(g, use_reg(g, a), fsz(t))
+        else is_flt(g, t):
+            r := use_reg(g, a)
+            _c2 := e_copy(g, XMM0, r)
+            mask = (1 as i64) << (XMM0 as i64)
+        else:
+            if g.i_b[i] >= 0 and g.wsz == 4:
+                move_into(g, hi_reg(g), g.i_b[i])
+                mask = mask | ((1 as i64) << (hi_reg(g) as i64))
+            end
+            if t == T_I1:
+                r2 := use_reg(g, a)
+                z := e_rr(g, M_MOVZX_RR, 4, RAX, r2)
+                g.mc.sz2[z] = 1
+            else:
+                move_into(g, RAX, a)
+            end
+            if g.arch == NG_ARCH_RV64 and int_bits(g, t) <= 32:
+                rsx := e_rr(g, M_MOVSX_RR, 8, RAX, RAX)
+                g.mc.sz2[rsx] = 4
+            end
+            mask = mask | (1 as i64)
+        end
+    end
+    ri := mi_new(g, M_RET, 0)
+    g.mc.imm[ri] = mask
+end
+
+func isel_ins(g &: Ng, i: int, b: int):
+    op := g.i_op[i]
+    if is_vec(g, g.i_ty[i]) and not g.skipi[i] and isel_vec_ins(g, i):
+        ret
+    end
+    if g.skipi[i]:
+        if op == OP_RET:
+            _c := e_copy(g, RAX, g.retp)
+            ri := mi_new(g, M_RET, 0)
+            g.mc.imm[ri] = 1 as i64
+        end
+        ret
+    end
+    switch op:
+        OP_NOP, OP_PHI: ret end
+        OP_ALLOCA:
+            v := g.i_res[i]
+            t := g.i_x[i]
+            mut n := g.i_d[i] as int
+            if n < 1:
+                n = 1
+            end
+            mut al := talign(g, t)
+            if al < 8 and tsize(g, t) * n >= 16:
+                al = 8
+            end
+            slot := new_slot(g, tsize(g, t) * n, al)
+            g.mc.fs_temp[slot] = v >= 0 and not g.v_esc[v]
+            if v >= 0:
+                g.vak[v] = AK_ALLOCA
+                g.var_[v] = slot
+            end
+            ret
+        end
+        OP_LOAD: isel_load(g, i) ret end
+        OP_STORE: isel_store(g, i) ret end
+        OP_ADDR: isel_addr(g, i) ret end
+        OP_ADD, OP_SUB, OP_MUL, OP_AND, OP_OR, OP_XOR:
+            if (op == OP_SUB or op == OP_AND) and rot_cnt_user(g, i):
+                g.skipi[i] = true
+                ret
+            end
+            if op == OP_AND and and_test_ok(g, i):
+                g.skipi[i] = true
+                ret
+            end
+            if op == OP_MUL and mul_add_user(g, i):
+                g.skipi[i] = true
+                ret
+            end
+            if res_used(g, i):
+                isel_bin(g, i)
+            end
+            ret
+        end
+        OP_SDIV, OP_UDIV, OP_SREM, OP_UREM:
+            if res_used(g, i):
+                isel_div(g, i)
+            end
+            ret
+        end
+        OP_SHL, OP_LSHR, OP_ASHR:
+            if op == OP_SHL and mul_add_user(g, i):
+                g.skipi[i] = true
+                ret
+            end
+            if (op == OP_SHL or op == OP_LSHR) and rot_user(g, i):
+                g.skipi[i] = true
+                ret
+            end
+            if res_used(g, i):
+                isel_shift(g, i)
+            end
+            ret
+        end
+        OP_FADD, OP_FSUB, OP_FMUL, OP_FDIV, OP_FREM:
+            if res_used(g, i):
+                isel_fbin(g, i)
+            end
+            ret
+        end
+        OP_FNEG:
+            if res_used(g, i):
+                t2 := g.i_ty[i]
+                sz := fsz(t2)
+                ra := use_reg(g, g.i_a[i])
+                r := xmm(g)
+                _c := e_copy(g, r, ra)
+                mk := xmm(g)
+                mut bits := 0 - 9223372036854775807 as i64
+                bits = bits - (1 as i64)
+                if sz == 4:
+                    bits = 0x80000000 as i64
+                end
+                _l := e_rm(g, M_FLD, 8, mk, raw_const(g, bits, 8))
+                _x := e_rr(g, M_XORPS, 8, r, mk)
+                set_res(g, i, r)
+            end
+            ret
+        end
+        OP_ICMP, OP_CMP64:
+            if res_used(g, i) and not is_fused(g, i):
+                cc := emit_icmp(g, i)
+                r2 := gpr(g)
+                _s := e_setcc(g, cc, r2)
+                set_res(g, i, r2)
+            end
+            ret
+        end
+        OP_FCMP:
+            if res_used(g, i) and not is_fused(g, i):
+                isel_fcmp_val(g, i)
+            end
+            ret
+        end
+        OP_SEXT, OP_ZEXT, OP_TRUNC, OP_PTRTOINT, OP_INTTOPTR, OP_BITCAST, OP_SITOFP, OP_UITOFP, OP_FPTOSI, OP_FPTOUI, OP_FPEXT, OP_FPTRUNC:
+            if res_used(g, i):
+                isel_cast(g, i)
+            end
+            ret
+        end
+        OP_SELECT:
+            if res_used(g, i):
+                isel_select(g, i)
+            end
+            ret
+        end
+        OP_CALL: isel_call(g, i) ret end
+        OP_BR:
+            split_copies(g, b)
+            phi_copies(g, b)
+            _j := e_jmp(g, g.i_b[i])
+            ret
+        end
+        OP_CBR: isel_cbr(g, i, b) ret end
+        OP_RET: isel_ret(g, i) ret end
+        OP_ADC64:
+            if res_used(g, i):
+                isel_adc64(g, i)
+            end
+            ret
+        end
+        OP_DIV6432:
+            if res_used(g, i):
+                isel_div6432(g, i)
+            end
+            ret
+        end
+        OP_VREDH:
+            if res_used(g, i):
+                isel_vredh(g, i)
+            end
+            ret
+        end
+        OP_I64TOF:
+            if res_used(g, i):
+                fl := use_reg(g, g.i_a[i])
+                fh := use_reg(g, g.i_b[i])
+                fs := new_slot(g, 8, 8)
+                _f1 := e_mr(g, M_ST, 4, frame_mem(fs, 0 as i64), fl)
+                _f2 := e_mr(g, M_ST, 4, frame_mem(fs, 4 as i64), fh)
+                fi := mi_new(g, M_X87, 8)
+                set_mem(g, fi, frame_mem(fs, 0 as i64))
+                g.mc.cc[fi] = 2
+                set_res(g, i, x87_to_xmm(g, g.i_ty[i] == T_F64 ? 8 : 4))
+            end
+            ret
+        end
+        OP_MULHU:
+            mra := use_reg(g, g.i_a[i])
+            mrb := use_reg(g, g.i_b[i])
+            _mc := e_copy(g, RAX, mra)
+            mh := e_rr(g, M_MULHI, 8, 0 - 1, mrb)
+            g.mc.cc[mh] = g.i_x[i] == 1 ? 1 : 0
+            mres := gpr(g)
+            _mr := e_copy(g, mres, RDX)
+            set_res(g, i, mres)
+            ret
+        end
+        OP_RETHI:
+            rh := gpr(g)
+            xr := g.i_x[i]
+            _ch := e_copy(g, rh, xr == 1 ? RDX : (xr == 2 ? RBX : hi_reg(g)))
+            set_res(g, i, rh)
+            ret
+        end
+        OP_UNREACH:
+            _u := mi_new(g, M_UD2, 0)
+            ret
+        end
+        OP_INSV: isel_insv(g, i) ret end
+        OP_EXTV: isel_extv(g, i) ret end
+        OP_RMW: isel_rmw(g, i) ret end
+        OP_CMPXCHG: isel_cmpxchg(g, i) ret end
+        OP_FENCE:
+            _f := mi_new(g, M_MFENCE, 0)
+            ret
+        end
+        OP_COPY:
+            set_res(g, i, use_reg(g, g.i_a[i]))
+            ret
+        end
+        OP_VREDADD:
+            if res_used(g, i):
+                isel_vredadd(g, i)
+            end
+            ret
+        end
+        OP_VREDMM:
+            if res_used(g, i):
+                isel_vredmm(g, i)
+            end
+            ret
+        end
+        OP_VLANES:
+            vt := g.i_ty[i]
+            q := g.t_elem[vt] == T_I64
+            m := q ? vec_const(g, 0 as i64, 1 as i64) : vec_const(g, (1 as i64) << (32 as i64), (3 as i64) << (32 as i64) | (2 as i64))
+            rl := wide_reg(g)
+            _vl := e_rm(g, M_VLD, 16, rl, m)
+            set_res(g, i, rl)
+            ret
+        end
+        OP_VREV:
+            rv := wide_reg(g)
+            sv := e_rr(g, M_PSHUFD, 16, rv, use_reg(g, g.i_a[i]))
+            g.mc.imm[sv] = (g.i_x[i] != 0 ? g.i_x[i] : (tsize(g, g.t_elem[g.i_ty[i]]) == 8 ? 0x4E : 0x1B)) as i64
+            set_res(g, i, rv)
+            ret
+        end
+        OP_VSADB:
+            rs := vcopy(g, g.i_a[i])
+            zs := wide_reg(g)
+            _zz := e_rr(g, M_XORPS, 16, zs, zs)
+            vop(g, 0xF6, rs, zs)
+            set_res(g, i, rs)
+            ret
+        end
+        OP_VBCAST:
+            src := use_reg(g, g.i_a[i])
+            rb := wide_reg(g)
+            _cb := e_copy(g, rb, src)
+            if g.i_ty[i] == T_V4F32:
+                sh := e_rr(g, M_SHUFPS, 4, rb, rb)
+                g.mc.imm[sh] = 0 as i64
+            else:
+                _u := e_rr(g, M_UNPCKLPD, 8, rb, rb)
+            end
+            set_res(g, i, rb)
+            ret
+        end
+    end
+    fail(g, "native backend: cannot select instruction op " + str.FromInt(op as i64))
+end
+
+func is_fused(g &: Ng, i: int): bool:
+    if g.i_res[i] >= 0 and cond_only(g, g.i_res[i]):
+        ret true
+    end
+    u := cond_user(g, i)
+    if u < 0:
+        ret false
+    end
+    ret fused_cond(g, u) == i
+end
+
+func isel_fcmp_val(g &: Ng, i: int):
+    p := g.i_x[i]
+    r := gpr(g)
+    if p == FC_FALSE or p == FC_TRUE:
+        _m := e_movi(g, r, p == FC_TRUE ? (1 as i64) : (0 as i64))
+        set_res(g, i, r)
+        ret
+    end
+    np := fcmp_setup(g, i)
+    if np == FC_OEQ or np == FC_UNE:
+        t := gpr(g)
+        if np == FC_OEQ:
+            _s := e_setcc(g, X_E, r)
+            _s2 := e_setcc(g, X_NP, t)
+            _a := e_alu(g, ALU_AND, 4, r, t)
+        else:
+            _s3 := e_setcc(g, X_NE, r)
+            _s4 := e_setcc(g, X_P, t)
+            _o := e_alu(g, ALU_OR, 4, r, t)
+        end
+    else:
+        _s5 := e_setcc(g, fcmp_cc(np), r)
+    end
+    set_res(g, i, r)
+end
+
+func isel_function(g &: Ng):
+    mc_reset(g)
+    isel_init(g)
+    build_dom(g)
+    g.retp = 0 - 1
+    nb := g.b_first.len()
+    repeat nb:
+        g.mc.bstart.push(0 - 1)
+        g.mc.bend.push(0 - 1)
+    end
+    each b in g.b_rpo:
+        g.mc.lorder.push(b)
+    end
+    setup_phis(g)
+    g.cur_b = 0 - 1
+    g.dq_a.clear()
+    g.dq_b.clear()
+    g.dq_s.clear()
+    g.dq_q.clear()
+    g.dq_r.clear()
+    g.dq_blk.clear()
+    g.sp_val.clear()
+    g.lp_pre.clear()
+    g.b_lp.clear()
+    if g.opt and not g.off_split:
+        split_plan(g)
+    end
+    if g.fv_val.len() > 0:
+        dv_isel_begin(g)
+    end
+    each b2 in g.mc.lorder:
+        g.cur_b = b2
+        g.mc.bstart[b2] = g.mc.op.len()
+        if g.fv_val.len() > 0:
+            dv_isel_block(g, b2)
+        end
+        _l := e_label(g, b2)
+        if b2 == 0:
+            entry_args(g)
+        end
+        mut i := g.b_first[b2]
+        until i >= 0 and g.i_op[i] == OP_PHI:
+            r := g.i_res[i]
+            if r >= 0:
+                t := g.i_ty[i]
+                if is_agg(g, t):
+                    emit_copy(g, frame_mem(g.var_[r], 0 as i64), frame_mem(g.phit[i], 0 as i64), tsize(g, t))
+                end
+            end
+            i = g.i_next[i]
+        end
+        until i >= 0 and g.ok:
+            g.mc_loc = g.i_dbg[i]
+            isel_ins(g, i, b2)
+            if g.fv_val.len() > 0:
+                dv_isel_after(g, i)
+            end
+            i = g.i_next[i]
+        end
+        g.mc.bend[b2] = g.mc.op.len()
+    end
+end

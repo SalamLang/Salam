@@ -1,0 +1,258 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "llm"
+@fa "مدل زبانی بزرگ"
+package llm
+
+import math
+import tensor
+
+@en "ROPE_NORMAL"
+@fa "روپ عادی"
+pub const ROPE_NORMAL := 0
+
+@en "ROPE_NEOX"
+@fa "روپ نئوایکس"
+pub const ROPE_NEOX := 1
+
+@en "Config"
+@fa "پیکربندی"
+pub struct Config:
+    @en "vocab"
+    @fa "واژگان"
+    pub vocab: int = 0
+    @en "dim"
+    @fa "اندازه جاسازی"
+    pub dim: int = 0
+    @en "layers"
+    @fa "لایه‌ها"
+    pub layers: int = 0
+    @en "heads"
+    @fa "سرهای توجه"
+    pub heads: int = 1
+    @en "kv_heads"
+    @fa "سرهای کلید مقدار"
+    pub kv_heads: int = 1
+    @en "ff"
+    @fa "لایه پیشرو"
+    pub ff: int = 0
+    @en "ctx"
+    @fa "بیشینه طول"
+    pub ctx: int = 512
+    @en "eps"
+    @fa "اپسیلون"
+    pub eps: f64 = 0.00001
+    @en "rope_theta"
+    @fa "پایه جاسازی چرخشی"
+    pub rope_theta: f64 = 10000.0
+    @en "rope_kind"
+    @fa "نوع جاسازی چرخشی"
+    pub rope_kind: int = ROPE_NORMAL
+
+    @en "head_dim"
+    @fa "بعد سر"
+    pub func head_dim(): int: ret this.dim / this.heads end
+end
+
+@en "Layer"
+@fa "لایه"
+pub struct Layer:
+    @en "attn_norm"
+    @fa "نرمال‌سازی توجه"
+    pub attn_norm: tensor.Tensor = tensor.Tensor {}
+    @en "wq"
+    @fa "وزن پرسش"
+    pub wq: tensor.Tensor = tensor.Tensor {}
+    @en "wk"
+    @fa "وزن کلید"
+    pub wk: tensor.Tensor = tensor.Tensor {}
+    @en "wv"
+    @fa "وزن مقدار"
+    pub wv: tensor.Tensor = tensor.Tensor {}
+    @en "wo"
+    @fa "وزن خروجی توجه"
+    pub wo: tensor.Tensor = tensor.Tensor {}
+    @en "bq"
+    @fa "بایاس پرسش"
+    pub bq: tensor.Tensor = tensor.Tensor {}
+    @en "bk"
+    @fa "بایاس کلید"
+    pub bk: tensor.Tensor = tensor.Tensor {}
+    @en "bv"
+    @fa "بایاس مقدار"
+    pub bv: tensor.Tensor = tensor.Tensor {}
+    @en "ffn_norm"
+    @fa "نرمال‌سازی پیشرو"
+    pub ffn_norm: tensor.Tensor = tensor.Tensor {}
+    @en "w_gate"
+    @fa "وزن دروازه"
+    pub w_gate: tensor.Tensor = tensor.Tensor {}
+    @en "w_up"
+    @fa "وزن بالا"
+    pub w_up: tensor.Tensor = tensor.Tensor {}
+    @en "w_down"
+    @fa "وزن پایین"
+    pub w_down: tensor.Tensor = tensor.Tensor {}
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        this.attn_norm.free()
+        this.wq.free()
+        this.wk.free()
+        this.wv.free()
+        this.wo.free()
+        this.bq.free()
+        this.bk.free()
+        this.bv.free()
+        this.ffn_norm.free()
+        this.w_gate.free()
+        this.w_up.free()
+        this.w_down.free()
+    end
+end
+
+@en "Model"
+@fa "مدل"
+pub struct Model:
+    @en "cfg"
+    @fa "پیکربندی"
+    pub cfg: Config = Config {}
+    @en "tok_embed"
+    @fa "جاسازی توکن‌ها"
+    pub tok_embed: tensor.Tensor = tensor.Tensor {}
+    @en "layers"
+    @fa "لایه‌ها"
+    pub layers: Vector<Layer> = Vector {}
+    @en "out_norm"
+    @fa "نرمال‌سازی پایانی"
+    pub out_norm: tensor.Tensor = tensor.Tensor {}
+    @en "out_head"
+    @fa "وزن خروجی"
+    pub out_head: tensor.Tensor = tensor.Tensor {}
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        this.tok_embed.free()
+        repeat this.layers.len() in i:
+            mut l := this.layers.get(i)
+            l.free()
+        end
+        this.layers.free()
+        this.out_norm.free()
+        this.out_head.free()
+    end
+end
+
+@en "KVCache"
+@fa "حافظه کلید مقدار"
+pub struct KVCache:
+    @en "k"
+    @fa "کلیدها"
+    pub k: Vector<tensor.Tensor> = Vector {}
+    @en "v"
+    @fa "مقدارها"
+    pub v: Vector<tensor.Tensor> = Vector {}
+    @en "len"
+    @fa "شمار توکن‌ها"
+    pub len: int = 0
+    @en "ctx"
+    @fa "گنجایش"
+    pub ctx: int = 0
+
+    @en "reset"
+    @fa "بازنشانی"
+    pub func reset(): this.len = 0 end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        repeat this.k.len() in i:
+            mut kt := this.k.get(i)
+            kt.free()
+            mut vt := this.v.get(i)
+            vt.free()
+        end
+        this.k.free()
+        this.v.free()
+    end
+end
+
+func _normal(shape &: Vector<int>, std: f64, g &: tensor.Rng): tensor.Tensor:
+    mut t := tensor.Zeros(shape)
+    tensor.FillNormal(t, 0.0, std, g)
+    ret t
+end
+
+func _ones(n: int): tensor.Tensor:
+    mut t := tensor.Zeros1(n)
+    tensor.SetAll(t, 1.0)
+    ret t
+end
+
+@en "NewKVCache"
+@fa "حافظه کلید مقدار جدید"
+pub func NewKVCache(cfg &: Config): KVCache:
+    mut c := KVCache {}
+    c.ctx = cfg.ctx
+    width := cfg.kv_heads * cfg.head_dim()
+    repeat cfg.layers:
+        c.k.push(tensor.Zeros2(cfg.ctx, width))
+        c.v.push(tensor.Zeros2(cfg.ctx, width))
+    end
+    ret c
+end
+
+@en "RandomModel"
+@fa "مدل تصادفی"
+pub func RandomModel(cfg &: Config, seed: i64): Model:
+    mut m := Model {}
+    m.cfg = cfg
+    mut g := tensor.NewRng(seed)
+    hd := cfg.head_dim()
+    sd := 1.0 / math.Sqrt(cfg.dim as f64)
+    sf := 1.0 / math.Sqrt(cfg.ff as f64)
+    mut s := tensor.Shape2(cfg.vocab, cfg.dim)
+    m.tok_embed = _normal(s, 1.0, g)
+    s.free()
+    repeat cfg.layers:
+        mut l := Layer {}
+        l.attn_norm = _ones(cfg.dim)
+        l.ffn_norm = _ones(cfg.dim)
+        mut sq := tensor.Shape2(cfg.heads * hd, cfg.dim)
+        l.wq = _normal(sq, sd, g)
+        l.wo = _normal(sq, sd, g)
+        sq.free()
+        mut sk := tensor.Shape2(cfg.kv_heads * hd, cfg.dim)
+        l.wk = _normal(sk, sd, g)
+        l.wv = _normal(sk, sd, g)
+        sk.free()
+        mut sg := tensor.Shape2(cfg.ff, cfg.dim)
+        l.w_gate = _normal(sg, sd, g)
+        l.w_up = _normal(sg, sd, g)
+        sg.free()
+        mut sdn := tensor.Shape2(cfg.dim, cfg.ff)
+        l.w_down = _normal(sdn, sf, g)
+        sdn.free()
+        m.layers.push(l)
+    end
+    m.out_norm = _ones(cfg.dim)
+    m.ok = true
+    ret m
+end

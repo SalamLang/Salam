@@ -1,0 +1,234 @@
+package nativegen
+
+import str
+
+pub func CompileFunction(g &: Ng):
+    g.nfuncs += 1
+    if g.list_fns:
+        printerrln "fn " + str.FromInt(g.nfuncs as i64) + " " + tab_str(g.syms, g.f_sym)
+    end
+    g.unr_grow = 0
+    if g.off_hi > 0:
+        set_off(g, (g.nfuncs > g.off_lo and g.nfuncs <= g.off_hi ? g.off_str : "") + "," + g.off_base)
+    else g.off_hi < 0:
+        nm := tab_str(g.syms, g.f_sym)
+        hit := str.Contains("," + g.off_fns + ",", "," + nm + ",")
+        set_off(g, (hit ? g.off_str : "") + "," + g.off_base)
+    end
+    g.mc.n += g.i_op.len()
+    ensure_terms(g)
+    build_cfg(g)
+    if g.opt and not g.off_sroa:
+        _s := sroa(g)
+    end
+    mem2reg(g)
+    if not g.ok:
+        ret
+    end
+    simplify_phis(g)
+    if g.opt:
+        if not g.off_ipcp:
+            _ip := ip_apply(g)
+        end
+        if not g.off_inline and inline_calls(g):
+            ensure_terms(g)
+            build_cfg(g)
+            remap_all(g)
+            simplify_phis(g)
+            if not g.off_sroa:
+                _s2 := sroa(g)
+            end
+            mem2reg(g)
+            simplify_phis(g)
+        end
+        mut tailrec_done := false
+        if not g.off_tailrec and tail_recursion(g):
+            simplify_phis(g)
+            tailrec_done = true
+        end
+        optimize(g)
+        if not tailrec_done and not g.off_tailrec and tail_recursion(g):
+            simplify_phis(g)
+            optimize(g)
+        end
+        cache_function(g)
+        if not g.off_selfinl and not g.off_inline and ic_lookup(g, g.f_sym) >= 0 and calls_self(g):
+            g.allow_self = true
+            if inline_calls(g):
+                ensure_terms(g)
+                build_cfg(g)
+                remap_all(g)
+                simplify_phis(g)
+                if not g.off_sroa:
+                    _s3 := sroa(g)
+                end
+                mem2reg(g)
+                simplify_phis(g)
+                optimize(g)
+            end
+            g.allow_self = false
+        end
+    end
+    if g.wsz == 4:
+        if g.opt and not g.off_niv:
+            _ni := narrow_iv64(g)
+        end
+        if g.opt and not g.off_ndiv:
+            _nd := narrow_div64(g)
+        end
+        legalize64(g)
+        if not g.ok:
+            ret
+        end
+        dce(g)
+        if g.opt:
+            if not g.off_gvn and gvn(g):
+                remap_all(g)
+            end
+            opt_rounds(g)
+            dce(g)
+        end
+    end
+    if g.opt:
+        _ss := share_scales(g)
+        _gb := glb_bases(g)
+    end
+    _sc := split_crit_edges(g)
+    if g.verify:
+        verify_ssa(g)
+    end
+    if g.wsz == 4 and g.opt and not g.off_cmp64:
+        fuse_cmp64(g)
+    end
+    if g.wsz == 4 and g.opt and not g.off_adc64:
+        fuse_adc64(g)
+    end
+    if dump_wanted(g):
+        dump_ir(g, "optimized")
+    end
+    if g.opt and not g.off_wweb:
+        _ww := widen_webs(g)
+    end
+    if g.opt and not g.off_cdown:
+        _cd := count_down(g)
+    end
+    if g.opt and not g.off_tord:
+        _to := tied_order(g)
+    end
+    fast_exit_plan(g)
+    isel_function(g)
+    if not g.ok:
+        ret
+    end
+    regalloc(g)
+    if not g.ok:
+        ret
+    end
+    if g.arch == NG_ARCH_A64:
+        encode_function_a64(g)
+        ret
+    end
+    if g.arch == NG_ARCH_ARM:
+        encode_function_arm(g)
+        ret
+    end
+    if g.arch == NG_ARCH_RV64:
+        encode_function_rv64(g)
+        ret
+    end
+    encode_function(g)
+    if g.emit_asm:
+        asm_function(g)
+    end
+end
+
+pub func WriteObject(g &: Ng, path: str): bool:
+    if g.opt and not g.dce_done:
+        gdce(g)
+        g.dce_done = true
+    end
+    if g.dbg_on and g.s_dinfo.len() == 0:
+        dbg_emit(g)
+    end
+    if g.arch == NG_ARCH_X86:
+        emit_x86_helpers(g)
+    end
+    if g.arch == NG_ARCH_ARM:
+        emit_arm_helpers(g)
+    end
+    if g.os == NG_OS_WINDOWS:
+        if g.arch == NG_ARCH_X86 and g.dbg_on and g.eh_sym.len() > 0:
+            build_eh_frame(g)
+        end
+        if not write_coff(g, path):
+            fail(g, "native backend: cannot write " + path)
+            ret false
+        end
+        ret true
+    end
+    if g.os == NG_OS_MACOS:
+        if (g.opt or g.eh_sym.len() > 0) and g.arch == NG_ARCH_X64:
+            build_eh_frame(g)
+        end
+        if cf_on(g):
+            build_eh_cf(g)
+        end
+        if not write_macho(g, path):
+            fail(g, "native backend: cannot write " + path)
+            ret false
+        end
+        ret true
+    end
+    if (g.opt or g.eh_sym.len() > 0) and (g.arch == NG_ARCH_X64 or g.arch == NG_ARCH_X86):
+        build_eh_frame(g)
+    end
+    if cf_on(g):
+        build_eh_cf(g)
+    end
+    if not write_elf(g, path):
+        fail(g, "native backend: cannot write " + path)
+        ret false
+    end
+    ret true
+end
+
+pub func SetArch(g &: Ng, arch: int):
+    g.arch = arch
+    if arch == NG_ARCH_X86 and g.os == NG_OS_WINDOWS:
+        g.sym_chkstk = sym_named(g, "__chkstk_ms")
+    end
+    if arch == NG_ARCH_A64 and g.os == NG_OS_WINDOWS:
+        g.sym_chkstk = sym_named(g, "__chkstk")
+        g.sy_kind[g.sym_chkstk] = SY_FUNC
+    end
+    read_pass_switches(g)
+end
+
+pub func New(os: int): Ng:
+    mut g := Ng {}
+    g.os = os
+    kw_init(g)
+    read_pass_switches(g)
+    types_init(g)
+    syms_init(g)
+    repeat SEC_COUNT:
+        g.sec_align.push(1)
+    end
+    ret g
+end
+
+pub func Run(g &: Ng, text: str): bool:
+    g.src = sp(text)
+    g.sn = str.Len(text)
+    g.p = 0
+    ParseModule(g)
+    ret g.ok
+end
+
+pub func Error(g &: Ng): str:
+    ret g.err
+end
+
+pub func Stats(g &: Ng): str:
+    ret str.FromInt(g.nfuncs as i64) + " functions, " + str.FromInt(g.mc.n as i64) + " instructions, " + str.FromInt(g.s_ro.len() as i64) + " rodata, " + str.FromInt(g.s_data.len() as i64) + " data, " + str.FromInt(g.bss_size as i64) + " bss"
+end

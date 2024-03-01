@@ -1,0 +1,353 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package audio
+
+func _same_shape(a: Clip, b: Clip): bool:
+    ret a.rate == b.rate and a.channels == b.channels
+end
+
+@en "Slice"
+@fa "برش"
+pub func Slice(c: Clip, from_frame: int, count: int): Clip:
+    if IsEmpty(c) or count <= 0:
+        ret Clip {}
+    end
+    mut start := from_frame
+    if start < 0:
+        start = 0
+    end
+    mut stop := start + count
+    if stop > c.frames:
+        stop = c.frames
+    end
+    if stop <= start:
+        ret Clip {}
+    end
+    mut out := New(c.rate, c.channels, stop - start)
+    if out.samples == null:
+        ret out
+    end
+    out.bits = c.bits
+    src := Data(c)
+    dst := Data(out)
+    mut i := 0
+    n := (stop - start) * c.channels
+    base := start * c.channels
+    until i < n:
+        dst[i] = src[base + i]
+        i += 1
+    end
+    ret out
+end
+
+@en "Trim"
+@fa "برش زمانی"
+pub func Trim(c: Clip, from_s: f64, to_s: f64): Clip:
+    a := FrameAt(c, from_s)
+    b := FrameAt(c, to_s)
+    ret Slice(c, a, b - a)
+end
+
+@en "Concat"
+@fa "پیوند"
+pub func Concat(a: Clip, b: Clip): Clip:
+    if IsEmpty(a):
+        ret Clone(b)
+    end
+    if IsEmpty(b):
+        ret Clone(a)
+    end
+    if not _same_shape(a, b):
+        ret Clip {}
+    end
+    mut out := New(a.rate, a.channels, a.frames + b.frames)
+    if out.samples == null:
+        ret out
+    end
+    out.bits = a.bits
+    dst := Data(out)
+    pa := Data(a)
+    pb := Data(b)
+    na := a.frames * a.channels
+    nb := b.frames * b.channels
+    mut i := 0
+    until i < na:
+        dst[i] = pa[i]
+        i += 1
+    end
+    mut j := 0
+    until j < nb:
+        dst[na + j] = pb[j]
+        j += 1
+    end
+    ret out
+end
+
+@en "MixAt"
+@fa "آمیختن در"
+pub func MixAt(dst &: Clip, src: Clip, at_frame: int, gain: f64):
+    if IsEmpty(dst) or IsEmpty(src) or not _same_shape(dst, src):
+        ret
+    end
+    pd := Data(dst)
+    ps := Data(src)
+    mut f := 0
+    until f < src.frames:
+        t := at_frame + f
+        if t >= dst.frames:
+            break
+        end
+        if t >= 0:
+            mut ch := 0
+            until ch < dst.channels:
+                di := t * dst.channels + ch
+                si := f * src.channels + ch
+                pd[di] = ((pd[di] as f64) + (ps[si] as f64) * gain) as f32
+                ch += 1
+            end
+        end
+        f += 1
+    end
+end
+
+@en "Mix"
+@fa "آمیختن"
+pub func Mix(a: Clip, b: Clip, gain_a: f64, gain_b: f64): Clip:
+    if IsEmpty(a) or IsEmpty(b) or not _same_shape(a, b):
+        ret Clip {}
+    end
+    frames := a.frames > b.frames ? a.frames : b.frames
+    mut out := New(a.rate, a.channels, frames)
+    if out.samples == null:
+        ret out
+    end
+    out.bits = a.bits
+    MixAt(out, a, 0, gain_a)
+    MixAt(out, b, 0, gain_b)
+    ret out
+end
+
+@en "Split"
+@fa "شکافتن"
+pub func Split(c: Clip, at_s: f64, head &: Clip, tail &: Clip):
+    at := FrameAt(c, at_s)
+    head = Slice(c, 0, at)
+    tail = Slice(c, at, c.frames - at)
+end
+
+@en "Gain"
+@fa "بهره"
+pub func Gain(c &: Clip, db: f64):
+    if IsEmpty(c):
+        ret
+    end
+    g := DbToGain(db)
+    p := Data(c)
+    n := SampleCount(c)
+    mut i := 0
+    until i < n:
+        p[i] = ((p[i] as f64) * g) as f32
+        i += 1
+    end
+end
+
+@en "Scale"
+@fa "مقیاس"
+pub func Scale(c &: Clip, factor: f64):
+    if IsEmpty(c):
+        ret
+    end
+    p := Data(c)
+    n := SampleCount(c)
+    mut i := 0
+    until i < n:
+        p[i] = ((p[i] as f64) * factor) as f32
+        i += 1
+    end
+end
+
+@en "Clamp"
+@fa "محدود کردن"
+pub func Clamp(c &: Clip):
+    if IsEmpty(c):
+        ret
+    end
+    p := Data(c)
+    n := SampleCount(c)
+    mut i := 0
+    until i < n:
+        v := p[i] as f64
+        if v > 1.0:
+            p[i] = 1.0 as f32
+        else v < -1.0:
+            p[i] = -1.0 as f32
+        end
+        i += 1
+    end
+end
+
+@en "Normalize"
+@fa "هنجارسازی"
+pub func Normalize(c &: Clip, target_db: f64):
+    if IsEmpty(c):
+        ret
+    end
+    hi := Peak(c)
+    if hi <= 0.0:
+        ret
+    end
+    Scale(c, DbToGain(target_db) / hi)
+end
+
+@en "Reverse"
+@fa "وارونه کردن"
+pub func Reverse(c &: Clip):
+    if IsEmpty(c):
+        ret
+    end
+    p := Data(c)
+    mut a := 0
+    mut b := c.frames - 1
+    until a < b:
+        mut ch := 0
+        until ch < c.channels:
+            ia := a * c.channels + ch
+            ib := b * c.channels + ch
+            t := p[ia]
+            p[ia] = p[ib]
+            p[ib] = t
+            ch += 1
+        end
+        a += 1
+        b -= 1
+    end
+end
+
+@en "FadeIn"
+@fa "محو ورودی"
+pub func FadeIn(c &: Clip, seconds: f64):
+    if IsEmpty(c) or seconds <= 0.0:
+        ret
+    end
+    mut n := FrameAt(c, seconds)
+    if n > c.frames:
+        n = c.frames
+    end
+    if n <= 0:
+        ret
+    end
+    p := Data(c)
+    mut f := 0
+    until f < n:
+        g := (f as f64) / (n as f64)
+        mut ch := 0
+        until ch < c.channels:
+            i := f * c.channels + ch
+            p[i] = ((p[i] as f64) * g) as f32
+            ch += 1
+        end
+        f += 1
+    end
+end
+
+@en "FadeOut"
+@fa "محو خروجی"
+pub func FadeOut(c &: Clip, seconds: f64):
+    if IsEmpty(c) or seconds <= 0.0:
+        ret
+    end
+    mut n := FrameAt(c, seconds)
+    if n > c.frames:
+        n = c.frames
+    end
+    if n <= 0:
+        ret
+    end
+    p := Data(c)
+    start := c.frames - n
+    mut f := 0
+    until f < n:
+        g := 1.0 - ((f as f64) / (n as f64))
+        mut ch := 0
+        until ch < c.channels:
+            i := (start + f) * c.channels + ch
+            p[i] = ((p[i] as f64) * g) as f32
+            ch += 1
+        end
+        f += 1
+    end
+end
+
+@en "Pad"
+@fa "لایی گذاری"
+pub func Pad(c: Clip, before_s: f64, after_s: f64): Clip:
+    if IsEmpty(c):
+        ret Clip {}
+    end
+    pre := FrameAt(c, before_s)
+    post := FrameAt(c, after_s)
+    mut out := New(c.rate, c.channels, pre + c.frames + post)
+    if out.samples == null:
+        ret out
+    end
+    out.bits = c.bits
+    src := Data(c)
+    dst := Data(out)
+    n := c.frames * c.channels
+    base := pre * c.channels
+    mut i := 0
+    until i < n:
+        dst[base + i] = src[i]
+        i += 1
+    end
+    ret out
+end
+
+@en "Repeat"
+@fa "تکرار صدا"
+pub func Repeat(c: Clip, times: int): Clip:
+    if IsEmpty(c) or times <= 0:
+        ret Clip {}
+    end
+    mut out := New(c.rate, c.channels, c.frames * times)
+    if out.samples == null:
+        ret out
+    end
+    out.bits = c.bits
+    src := Data(c)
+    dst := Data(out)
+    n := c.frames * c.channels
+    mut t := 0
+    until t < times:
+        mut i := 0
+        until i < n:
+            dst[t * n + i] = src[i]
+            i += 1
+        end
+        t += 1
+    end
+    ret out
+end
+
+@en "TrimSilence"
+@fa "برش سکوت"
+pub func TrimSilence(c: Clip, threshold_db: f64): Clip:
+    a := FirstSound(c, threshold_db)
+    if a < 0:
+        ret Clip {}
+    end
+    b := LastSound(c, threshold_db)
+    ret Slice(c, a, b - a + 1)
+end

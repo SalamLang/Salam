@@ -1,0 +1,678 @@
+@en "xml"
+@fa "اکس‌ام‌ال"
+package xml
+
+import encoding.value
+import str
+import math
+import mem
+
+@en "XMLTokStartElement"
+@fa "نشانه آغاز عنصر"
+pub const XMLTokStartElement := 1
+@en "XMLTokEndElement"
+@fa "نشانه انتهای عنصر"
+pub const XMLTokEndElement := 2
+@en "XMLTokText"
+@fa "نشانه متن"
+pub const XMLTokText := 3
+@en "XMLTokComment"
+@fa "نشانه توضیح"
+pub const XMLTokComment := 4
+@en "XMLTokCData"
+@fa "نشانه سی‌دیتا"
+pub const XMLTokCData := 5
+@en "XMLTokEOF"
+@fa "نشانه اتمام"
+pub const XMLTokEOF := 6
+@en "XMLTokError"
+@fa "نشانه خطا"
+pub const XMLTokError := 7
+
+@en "XMLNode"
+@fa "گره ساده"
+pub struct XMLNode:
+    @en "tag"
+    @fa "نام عنصر"
+    pub tag: str = ""
+    @en "attrs"
+    @fa "ویژگی‌ها"
+    pub attrs: HashMap<str, str> = HashMap {} as HashMap<str, str>
+    @en "children"
+    @fa "فرزندان"
+    pub children: Vector<XMLNode> = Vector {}
+    @en "text"
+    @fa "متن"
+    pub text: str = ""
+end
+
+@en "XMLNodeList"
+@fa "فهرست گره ساده"
+pub struct XMLNodeList:
+    @en "items"
+    @fa "گره‌ها"
+    pub items: Vector<XMLNode> = Vector {}
+end
+
+@en "XMLToken"
+@fa "نشانه اکس‌ام‌ال"
+pub struct XMLToken:
+    @en "kind"
+    @fa "نوع"
+    pub kind: int = 0
+    @en "tag"
+    @fa "نام عنصر"
+    pub tag: str = ""
+    @en "attrs"
+    @fa "ویژگی‌ها"
+    pub attrs: HashMap<str, str> = HashMap {} as HashMap<str, str>
+    @en "text"
+    @fa "متن"
+    pub text: str = ""
+end
+
+@en "XMLTokenizer"
+@fa "نشانه‌خوان اکس‌ام‌ال"
+pub struct XMLTokenizer:
+    @en "text"
+    @fa "متن"
+    pub text: str = ""
+    @en "pos"
+    @fa "جایگاه"
+    pub pos: int = 0
+    @en "bad"
+    @fa "خراب"
+    pub bad: bool = false
+    @en "pendingEnd"
+    @fa "انتهای معلق"
+    pub pendingEnd: str = ""
+end
+
+inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+func _is_ws(c: int): bool: ret c == 32 or c == 9 or c == 10 or c == 13 end
+
+func _is_name_char(c: int): bool:
+    ret (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 45 or c == 95 or c == 46 or c == 58
+end
+
+func _xsub(s: str, start: int, cnt: int): str:
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    mut k := 0
+    until k < cnt:
+        str.BufAppendChar(sb, bp[start + k] as int)
+        k += 1
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _xat(bp: i8*, at: int, lit: str): bool:
+    lp := _bp(lit)
+    mut k := 0
+    until lp[k] != (0 as i8):
+        if bp[at + k] != lp[k]: ret false end
+        k += 1
+    end
+    ret true
+end
+
+func _skip_ws(s: str, n: int, i: int): int:
+    bp := _bp(s)
+    mut p := i
+    until p < n and _is_ws(_ub(bp, p)):
+        p += 1
+    end
+    ret p
+end
+
+func _scan_name(s: str, n: int, i: int, endpos &: int): str:
+    bp := _bp(s)
+    mut p := i
+    until p < n and _is_name_char(_ub(bp, p)):
+        p += 1
+    end
+    endpos = p
+    ret _xsub(s, i, p - i)
+end
+
+func _hex_digit(c: int): int:
+    if c >= 48 and c <= 57: ret c - 48 end
+    if c >= 97 and c <= 102: ret c - 97 + 10 end
+    if c >= 65 and c <= 70: ret c - 65 + 10 end
+    ret 0
+end
+
+func _hex_val(s: str): int:
+    n := s.len()
+    bp := _bp(s)
+    mut out := 0
+    mut i := 0
+    until i < n:
+        out = out * 16 + _hex_digit(_ub(bp, i))
+        i += 1
+    end
+    ret out
+end
+
+func _unescape(s: str): str:
+    mut sb := str.NewBuilder()
+    n := s.len()
+    bp := _bp(s)
+    mut i := 0
+    until i < n:
+        c := _ub(bp, i)
+        if c == 38:
+            semi := str.IndexFrom(s, ";", i)
+            if semi > i and semi - i <= 10:
+                ent := s.substr(i + 1, semi - i - 1)
+                if ent == "amp": str.BufAppendChar(sb, 38)
+                else ent == "lt": str.BufAppendChar(sb, 60)
+                else ent == "gt": str.BufAppendChar(sb, 62)
+                else ent == "quot": str.BufAppendChar(sb, 34)
+                else ent == "apos": str.BufAppendChar(sb, 39)
+                else ent.len() > 1 and str.CharAt(ent, 0) == "#":
+                    mut code := 0
+                    if ent.len() > 2 and (str.CharAt(ent, 1) == "x" or str.CharAt(ent, 1) == "X"):
+                        code = _hex_val(ent.substr(2, ent.len() - 2))
+                    else:
+                        code = ent.substr(1, ent.len() - 1).to_int()
+                    end
+                    encode_cp(sb, code)
+                else:
+                    str.BufAppend(sb, "&")
+                    str.BufAppend(sb, ent)
+                    str.BufAppend(sb, ";")
+                end
+                i = semi + 1
+            else:
+                str.BufAppendChar(sb, c)
+                i += 1
+            end
+        else:
+            str.BufAppendChar(sb, c)
+            i += 1
+        end
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _parse_attrs(s: str, n: int, i: int, endpos &: int, attrs &: HashMap<str, str>, selfClose &: bool):
+    bp := _bp(s)
+    mut p := i
+    selfClose = false
+    until true:
+        p = _skip_ws(s, n, p)
+        if p >= n:
+            endpos = p
+            ret
+        end
+        c := _ub(bp, p)
+        if c == 47:
+            selfClose = true
+            p += 1
+            p = _skip_ws(s, n, p)
+            if p < n and _ub(bp, p) == 62:
+                endpos = p + 1
+                ret
+            end
+            endpos = p
+            ret
+        end
+        if c == 62:
+            endpos = p + 1
+            ret
+        end
+        mut nend := p
+        name := _scan_name(s, n, p, nend)
+        if name.len() == 0:
+            endpos = p
+            ret
+        end
+        p = _skip_ws(s, n, nend)
+        mut avalue := ""
+        if p < n and _ub(bp, p) == 61:
+            p = _skip_ws(s, n, p + 1)
+            if p < n and (_ub(bp, p) == 34 or _ub(bp, p) == 39):
+                q := _ub(bp, p)
+                vstart := p + 1
+                mut vend := vstart
+                until vend < n and _ub(bp, vend) != q:
+                    vend += 1
+                end
+                rawv := _xsub(s, vstart, vend - vstart)
+                avalue = _unescape(rawv)
+                mem.Free(rawv as void *)
+                p = vend + 1
+            end
+        end
+        attrs.put(name, avalue)
+    end
+end
+
+func _next_token(tz &: XMLTokenizer, n: int): XMLToken:
+    if tz.pendingEnd.len() > 0:
+        mut tok := XMLToken { kind = XMLTokEndElement }
+        tok.tag = tz.pendingEnd
+        tz.pendingEnd = ""
+        ret tok
+    end
+    s := tz.text
+    bp := _bp(s)
+    p := tz.pos
+    if p >= n:
+        ret XMLToken { kind = XMLTokEOF }
+    end
+    c := _ub(bp, p)
+    if c == 60:
+        c1 := _ub(bp, p + 1)
+        if c1 == 33 and p + 3 < n and _ub(bp, p + 2) == 45 and _ub(bp, p + 3) == 45:
+            mut e := p + 4
+            until e + 2 < n and not (_ub(bp, e) == 45 and _ub(bp, e + 1) == 45 and _ub(bp, e + 2) == 62):
+                e += 1
+            end
+            mut tok := XMLToken { kind = XMLTokComment }
+            tok.text = _xsub(s, p + 4, e - (p + 4))
+            tz.pos = e + 3
+            ret tok
+        end
+        if c1 == 33 and p + 8 < n and _xat(bp, p + 2, "[CDATA["):
+            start := p + 9
+            mut e := start
+            until e + 2 < n and not (_ub(bp, e) == 93 and _ub(bp, e + 1) == 93 and _ub(bp, e + 2) == 62):
+                e += 1
+            end
+            mut tok := XMLToken { kind = XMLTokCData }
+            tok.text = _xsub(s, start, e - start)
+            tz.pos = e + 3
+            ret tok
+        end
+        if c1 == 33 or c1 == 63:
+            mut e := p + 2
+            until e < n and _ub(bp, e) != 62:
+                e += 1
+            end
+            tz.pos = e + 1
+            ret _next_token(tz, n)
+        end
+        if c1 == 47:
+            mut nend := p + 2
+            name := _scan_name(s, n, p + 2, nend)
+            mut e := nend
+            until e < n and _ub(bp, e) != 62:
+                e += 1
+            end
+            tz.pos = e + 1
+            mut tok := XMLToken { kind = XMLTokEndElement }
+            tok.tag = name
+            ret tok
+        end
+        mut nend := p + 1
+        name := _scan_name(s, n, p + 1, nend)
+        mut attrs := HashMap {} as HashMap<str, str>
+        mut ep := nend
+        mut selfClose := false
+        _parse_attrs(s, n, nend, ep, attrs, selfClose)
+        tz.pos = ep
+        mut tok := XMLToken { kind = XMLTokStartElement }
+        tok.tag = name
+        tok.attrs = attrs
+        if selfClose: tz.pendingEnd = name end
+        ret tok
+    end
+    mut e := p
+    until e < n and _ub(bp, e) != 60:
+        e += 1
+    end
+    raw := _xsub(s, p, e - p)
+    tz.pos = e
+    mut tok := XMLToken { kind = XMLTokText }
+    tok.text = _unescape(raw)
+    mem.Free(raw as void *)
+    ret tok
+end
+
+func _encode_node(sb &: str.StringBuilder, node: XMLNode, unit: str, depth: int):
+    if unit.len() > 0:
+        mut d := 0
+        until d < depth:
+            str.BufAppend(sb, unit)
+            d += 1
+        end
+    end
+    str.BufAppendChar(sb, 60)
+    str.BufAppend(sb, node.tag)
+    mut it := node.attrs.iter()
+    until it.has_next():
+        str.BufAppendChar(sb, 32)
+        str.BufAppend(sb, it.key())
+        str.BufAppend(sb, "=\"")
+        str.BufAppend(sb, _escape_attr(it.value()))
+        str.BufAppendChar(sb, 34)
+        it.next()
+    end
+    if node.children.len() == 0 and node.text.len() == 0:
+        str.BufAppend(sb, "/>")
+        if unit.len() > 0: str.BufAppendChar(sb, 10) end
+        ret
+    end
+    str.BufAppendChar(sb, 62)
+    if node.text.len() > 0:
+        str.BufAppend(sb, _escape_text(node.text))
+    end
+    if node.children.len() > 0:
+        if unit.len() > 0: str.BufAppendChar(sb, 10) end
+        mut i := 0
+        until i < node.children.len():
+            _encode_node(sb, node.children.get(i), unit, depth + 1)
+            i += 1
+        end
+        if unit.len() > 0:
+            mut d := 0
+            until d < depth:
+                str.BufAppend(sb, unit)
+                d += 1
+            end
+        end
+    end
+    str.BufAppend(sb, "</")
+    str.BufAppend(sb, node.tag)
+    str.BufAppendChar(sb, 62)
+    if unit.len() > 0: str.BufAppendChar(sb, 10) end
+end
+
+func _escape_text(s: str): str:
+    mut sb := str.NewBuilder()
+    n := s.len()
+    bp := _bp(s)
+    mut i := 0
+    until i < n:
+        c := _ub(bp, i)
+        if c == 38: str.BufAppend(sb, "&amp;")
+        else c == 60: str.BufAppend(sb, "&lt;")
+        else c == 62: str.BufAppend(sb, "&gt;")
+        else:
+            str.BufAppendChar(sb, c)
+        end
+        i += 1
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _escape_attr(s: str): str:
+    mut sb := str.NewBuilder()
+    n := s.len()
+    bp := _bp(s)
+    mut i := 0
+    until i < n:
+        c := _ub(bp, i)
+        if c == 38: str.BufAppend(sb, "&amp;")
+        else c == 60: str.BufAppend(sb, "&lt;")
+        else c == 34: str.BufAppend(sb, "&quot;")
+        else:
+            str.BufAppendChar(sb, c)
+        end
+        i += 1
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _value_text(v: value.Value): str:
+    if value.IsString(v): ret value.AsString(v) end
+    if value.IsInt(v): ret str.FromInt(value.AsInt(v)) end
+    if value.IsFloat(v): ret str.FromFloat(value.AsFloat(v)) end
+    if value.IsBool(v):
+        if value.AsBool(v): ret "true" end
+        ret "false"
+    end
+    ret ""
+end
+
+@en "UnescapeEntities"
+@fa "بازگردانی موجودیت‌ها"
+pub func UnescapeEntities(s: str): str: ret _unescape(s) end
+@en "EscapeText"
+@fa "اسکیپ متن"
+pub func EscapeText(s: str): str: ret _escape_text(s) end
+@en "EscapeAttr"
+@fa "اسکیپ ویژگی"
+pub func EscapeAttr(s: str): str: ret _escape_attr(s) end
+
+@en "NewXMLTokenizer"
+@fa "نشانه‌خوان جدید"
+pub func NewXMLTokenizer(text: str): XMLTokenizer:
+    ret XMLTokenizer { text = text }
+end
+
+@en "NextToken"
+@fa "نشانه بعدی"
+pub func NextToken(tz &: XMLTokenizer): XMLToken:
+    ret _next_token(tz, tz.text.len())
+end
+
+@en "NewXMLNode"
+@fa "گره ساده جدید"
+pub func NewXMLNode(tag: str): XMLNode:
+    ret XMLNode { tag = tag }
+end
+
+@en "Found"
+@fa "پیدا شد"
+pub func Found(n: XMLNode): bool: ret n.tag != "" end
+
+@en "HasAttr"
+@fa "دارای ویژگی"
+pub func HasAttr(node: XMLNode, name: str): bool: ret node.attrs.has(name) end
+
+@en "Attr"
+@fa "ویژگی گره"
+pub func Attr(node: XMLNode, name: str): str:
+    if node.attrs.has(name): ret node.attrs.get(name) end
+    ret ""
+end
+
+@en "SetAttr"
+@fa "تنظیم ویژگی گره"
+pub func SetAttr(node &: XMLNode, name: str, value: str):
+    node.attrs.put(name, value)
+end
+
+@en "AppendChild"
+@fa "افزودن گره فرزند"
+pub func AppendChild(node &: XMLNode, child: XMLNode):
+    node.children.push(child)
+end
+
+@en "Child"
+@fa "فرزند"
+pub func Child(node: XMLNode, tag: str): XMLNode:
+    mut i := 0
+    until i < node.children.len():
+        c := node.children.get(i)
+        if c.tag == tag: ret c end
+        i += 1
+    end
+    ret XMLNode {}
+end
+
+@en "Children"
+@fa "فرزندان"
+pub func Children(node: XMLNode, tag: str): XMLNodeList:
+    mut out := XMLNodeList {}
+    mut i := 0
+    until i < node.children.len():
+        c := node.children.get(i)
+        if c.tag == tag: out.items.push(c) end
+        i += 1
+    end
+    ret out
+end
+
+@en "DecodeStrict"
+@fa "کدگشایی سخت گیرانه"
+pub func DecodeStrict(text: str, ok &: bool): XMLNode:
+    mut tz := NewXMLTokenizer(text)
+    tn := text.len()
+    mut stack := Vector {} as Vector<XMLNode>
+    mut root := XMLNode {}
+    ok = true
+    until true:
+        tok := _next_token(tz, tn)
+        if tok.kind == XMLTokEOF:
+            if stack.len() > 0: ok = false end
+            ret root
+        end
+        if tok.kind == XMLTokStartElement:
+            mut node := XMLNode { tag = tok.tag }
+            node.attrs = tok.attrs
+            stack.push(node)
+        else tok.kind == XMLTokEndElement:
+            if stack.len() == 0:
+                ok = false
+                ret root
+            end
+            finished := stack.get(stack.len() - 1)
+            stack.pop()
+            if stack.len() > 0:
+                mut parent := stack.get(stack.len() - 1)
+                parent.children.push(finished)
+                stack.set(stack.len() - 1, parent)
+            else:
+                root = finished
+            end
+        else tok.kind == XMLTokText or tok.kind == XMLTokCData:
+            if stack.len() > 0:
+                mut top := stack.get(stack.len() - 1)
+                top.text = top.text.concat(tok.text)
+                stack.set(stack.len() - 1, top)
+            end
+        end
+    end
+end
+
+@en "Decode"
+@fa "کدگشایی"
+pub func Decode(text: str): XMLNode:
+    mut ok := false
+    ret DecodeStrict(text, ok)
+end
+
+@en "Valid"
+@fa "معتبر"
+pub func Valid(text: str): bool:
+    mut ok := false
+    DecodeStrict(text, ok)
+    ret ok
+end
+
+@en "Encode"
+@fa "کدگذاری"
+pub func Encode(node: XMLNode): str:
+    mut sb := str.NewBuilder()
+    _encode_node(sb, node, "", 0)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+@en "EncodeIndent"
+@fa "کدگذاری با تورفتگی"
+pub func EncodeIndent(node: XMLNode, unit: str): str:
+    mut sb := str.NewBuilder()
+    _encode_node(sb, node, unit, 0)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+@en "EncodeDeclaration"
+@fa "کدگذاری با اعلان"
+pub func EncodeDeclaration(node: XMLNode): str:
+    ret "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n".concat(Encode(node))
+end
+
+@en "ToValue"
+@fa "به مقدار"
+pub func ToValue(node: XMLNode): value.Value:
+    mut out := value.NewValueObject()
+    mut it := node.attrs.iter()
+    until it.has_next():
+        value.ObjectSet(out, "@".concat(it.key()), value.ValueString(it.value()))
+        it.next()
+    end
+    if node.children.len() == 0:
+        if value.ObjectLen(out) == 0:
+            ret value.ValueString(node.text)
+        end
+        if node.text.len() > 0:
+            value.ObjectSet(out, "#text", value.ValueString(node.text))
+        end
+        ret out
+    end
+    mut i := 0
+    until i < node.children.len():
+        c := node.children.get(i)
+        childVal := ToValue(c)
+        if value.ObjectHas(out, c.tag):
+            mut existing := value.ObjectGet(out, c.tag)
+            if value.IsArray(existing):
+                value.ArrayPush(existing, childVal)
+            else:
+                mut arr := value.NewValueArray()
+                value.ArrayPush(arr, existing)
+                value.ArrayPush(arr, childVal)
+                existing = arr
+            end
+            value.ObjectSet(out, c.tag, existing)
+        else:
+            value.ObjectSet(out, c.tag, childVal)
+        end
+        i += 1
+    end
+    ret out
+end
+
+@en "FromValue"
+@fa "از مقدار"
+pub func FromValue(v: value.Value, rootTag: str): XMLNode:
+    mut node := XMLNode { tag = rootTag }
+    if not value.IsObject(v):
+        node.text = _value_text(v)
+        ret node
+    end
+    keys := value.ObjectKeys(v)
+    mut i := 0
+    until i < keys.len():
+        k := keys.get(i)
+        fv := value.ObjectGet(v, k)
+        if k.len() > 0 and str.CharAt(k, 0) == "@":
+            node.attrs.put(k.substr(1, k.len() - 1), _value_text(fv))
+        else k == "#text":
+            node.text = _value_text(fv)
+        else value.IsArray(fv):
+            mut j := 0
+            until j < value.ArrayLen(fv):
+                node.children.push(FromValue(value.ArrayGet(fv, j), k))
+                j += 1
+            end
+        else:
+            node.children.push(FromValue(fv, k))
+        end
+        i += 1
+    end
+    ret node
+end

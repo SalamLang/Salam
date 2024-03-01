@@ -1,0 +1,510 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package flac
+
+import audio
+import compress
+import crypto
+import mem
+
+@en "DefaultBlock"
+@fa "بلوک پیش‌فرض"
+pub const DefaultBlock := 4096
+
+func _unzigzag(v: i64): i64:
+    if v < (0 as i64):
+        ret ((0 - v) << 1) - (1 as i64)
+    end
+    ret v << 1
+end
+
+func _abs64(v: i64): i64:
+    if v < (0 as i64):
+        ret 0 - v
+    end
+    ret v
+end
+
+func _rice_cost(res: i64*, from: int, count: int, param: int): i64:
+    mut total := 0 as i64
+    mut i := 0
+    until i < count:
+        u := _unzigzag(res[from + i])
+        total += (u >> param) + 1 + (param as i64)
+        i += 1
+    end
+    ret total
+end
+
+func _best_param(res: i64*, from: int, count: int): int:
+    if count <= 0:
+        ret 0
+    end
+    mut sum := 0 as i64
+    mut i := 0
+    until i < count:
+        sum += _unzigzag(res[from + i])
+        i += 1
+    end
+    mut best := 0
+    mut best_cost := _rice_cost(res, from, count, 0)
+    mut p := 1
+    until p < 15:
+        c := _rice_cost(res, from, count, p)
+        if c < best_cost:
+            best_cost = c
+            best = p
+        end
+        p += 1
+    end
+    ret best
+end
+
+func _fixed_residual(src: i64*, res: i64*, block: int, order: int):
+    mut i := order
+    until i < block:
+        mut v := src[i]
+        if order == 1:
+            v = v - src[i - 1]
+        else order == 2:
+            v = v - (2 as i64) * src[i - 1] + src[i - 2]
+        else order == 3:
+            v = v - (3 as i64) * src[i - 1] + (3 as i64) * src[i - 2] - src[i - 3]
+        else order == 4:
+            v = v - (4 as i64) * src[i - 1] + (6 as i64) * src[i - 2] - (4 as i64) * src[i - 3] + src[i - 4]
+        end
+        res[i] = v
+        i += 1
+    end
+end
+
+func _order_cost(src: i64*, res: i64*, block: int, order: int): i64:
+    if order >= block:
+        ret 9223372036854775807
+    end
+    _fixed_residual(src, res, block, order)
+    param := _best_param(res, order, block - order)
+    ret _rice_cost(res, order, block - order, param)
+end
+
+func _is_constant(src: i64*, block: int): bool:
+    mut i := 1
+    until i < block:
+        if src[i] != src[0]:
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+func _write_subframe(w &: audio.MsbWriter, src: i64*, res: i64*, block: int, bps: int):
+    if _is_constant(src, block):
+        audio.MsbWrite(w, 0, 1)
+        audio.MsbWrite(w, 0, 6)
+        audio.MsbWrite(w, 0, 1)
+        audio.MsbWrite(w, src[0] & _mask(bps), bps)
+        ret
+    end
+    mut best := 0
+    mut best_cost := _order_cost(src, res, block, 0)
+    mut o := 1
+    until o < 5:
+        if o < block:
+            c := _order_cost(src, res, block, o)
+            if c < best_cost:
+                best_cost = c
+                best = o
+            end
+        end
+        o += 1
+    end
+    verbatim := (block as i64) * (bps as i64)
+    if verbatim <= best_cost:
+        audio.MsbWrite(w, 0, 1)
+        audio.MsbWrite(w, 1, 6)
+        audio.MsbWrite(w, 0, 1)
+        mut i := 0
+        until i < block:
+            audio.MsbWrite(w, src[i] & _mask(bps), bps)
+            i += 1
+        end
+        ret
+    end
+    _fixed_residual(src, res, block, best)
+    param := _best_param(res, best, block - best)
+    audio.MsbWrite(w, 0, 1)
+    audio.MsbWrite(w, (8 | best) as i64, 6)
+    audio.MsbWrite(w, 0, 1)
+    mut i := 0
+    until i < best:
+        audio.MsbWrite(w, src[i] & _mask(bps), bps)
+        i += 1
+    end
+    audio.MsbWrite(w, 0, 2)
+    audio.MsbWrite(w, 0, 4)
+    audio.MsbWrite(w, param as i64, 4)
+    mut k := best
+    until k < block:
+        u := _unzigzag(res[k])
+        q := (u >> param) as int
+        audio.MsbWriteUnary(w, q)
+        if param > 0:
+            audio.MsbWrite(w, u & _mask(param), param)
+        end
+        k += 1
+    end
+end
+
+func _mask(bits: int): i64:
+    if bits <= 0:
+        ret 0
+    end
+    if bits >= 63:
+        ret -1
+    end
+    ret ((1 as i64) << bits) - (1 as i64)
+end
+
+func _rate_code(rate: int): int:
+    if rate == 88200:
+        ret 1
+    end
+    if rate == 176400:
+        ret 2
+    end
+    if rate == 192000:
+        ret 3
+    end
+    if rate == 8000:
+        ret 4
+    end
+    if rate == 16000:
+        ret 5
+    end
+    if rate == 22050:
+        ret 6
+    end
+    if rate == 24000:
+        ret 7
+    end
+    if rate == 32000:
+        ret 8
+    end
+    if rate == 44100:
+        ret 9
+    end
+    if rate == 48000:
+        ret 10
+    end
+    if rate == 96000:
+        ret 11
+    end
+    ret 13
+end
+
+func _bps_code(bits: int): int:
+    if bits == 8:
+        ret 1
+    end
+    if bits == 12:
+        ret 2
+    end
+    if bits == 16:
+        ret 4
+    end
+    if bits == 20:
+        ret 5
+    end
+    if bits == 24:
+        ret 6
+    end
+    if bits == 32:
+        ret 7
+    end
+    ret 0
+end
+
+func _put_utf8(w &: audio.MsbWriter, value: i64):
+    if value < (128 as i64):
+        audio.MsbWrite(w, value, 8)
+        ret
+    end
+    if value < (2048 as i64):
+        audio.MsbWrite(w, (192 as i64) | (value >> 6), 8)
+        audio.MsbWrite(w, (128 as i64) | (value & (63 as i64)), 8)
+        ret
+    end
+    if value < (65536 as i64):
+        audio.MsbWrite(w, (224 as i64) | (value >> 12), 8)
+        audio.MsbWrite(w, (128 as i64) | ((value >> 6) & (63 as i64)), 8)
+        audio.MsbWrite(w, (128 as i64) | (value & (63 as i64)), 8)
+        ret
+    end
+    audio.MsbWrite(w, (240 as i64) | (value >> 18), 8)
+    audio.MsbWrite(w, (128 as i64) | ((value >> 12) & (63 as i64)), 8)
+    audio.MsbWrite(w, (128 as i64) | ((value >> 6) & (63 as i64)), 8)
+    audio.MsbWrite(w, (128 as i64) | (value & (63 as i64)), 8)
+end
+
+func _quantize(c: audio.Clip, bits: int, dst: i64*, frame: int, count: int):
+    hi := ((1 as i64) << (bits - 1)) - (1 as i64)
+    lo := 0 - ((1 as i64) << (bits - 1))
+    scale := ((1 as i64) << (bits - 1)) as f64
+    src := audio.Data(c)
+    mut ch := 0
+    until ch < c.channels:
+        mut i := 0
+        until i < count:
+            mut x := (src[(frame + i) * c.channels + ch] as f64) * scale
+            if x >= 0.0:
+                x = x + 0.5
+            else:
+                x = x - 0.5
+            end
+            mut q := x as i64
+            if q > hi:
+                q = hi
+            end
+            if q < lo:
+                q = lo
+            end
+            dst[ch * count + i] = q
+            i += 1
+        end
+        ch += 1
+    end
+end
+
+func _md5_bytes(b &: compress.ByteBuf, src: i64*, count: int, channels: int, bits: int):
+    bytes := bits / 8
+    mut i := 0
+    until i < count:
+        mut ch := 0
+        until ch < channels:
+            v := src[ch * count + i]
+            mut k := 0
+            until k < bytes:
+                compress.BufPush(b, ((v >> (k * 8)) & (255 as i64)) as int)
+                k += 1
+            end
+            ch += 1
+        end
+        i += 1
+    end
+end
+
+func _block_code(block: int): int:
+    if block == 192:
+        ret 1
+    end
+    if block == 576:
+        ret 2
+    end
+    if block == 1152:
+        ret 3
+    end
+    if block == 2304:
+        ret 4
+    end
+    if block == 4608:
+        ret 5
+    end
+    if block == 256:
+        ret 8
+    end
+    if block == 512:
+        ret 9
+    end
+    if block == 1024:
+        ret 10
+    end
+    if block == 2048:
+        ret 11
+    end
+    if block == 4096:
+        ret 12
+    end
+    if block == 8192:
+        ret 13
+    end
+    if block == 16384:
+        ret 14
+    end
+    ret 7
+end
+
+func _put16(b &: compress.ByteBuf, v: int):
+    compress.BufPush(b, (v >> 8) & 255)
+    compress.BufPush(b, v & 255)
+end
+
+func _put24(b &: compress.ByteBuf, v: int):
+    compress.BufPush(b, (v >> 16) & 255)
+    compress.BufPush(b, (v >> 8) & 255)
+    compress.BufPush(b, v & 255)
+end
+
+@en "EncodeFLACLevel"
+@fa "کدگذاری فلاک با سطح"
+pub func EncodeFLACLevel(c: audio.Clip, level: int): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    if audio.IsEmpty(c) or c.channels > MaxChannels:
+        ret out
+    end
+    mut bits := c.bits
+    if bits != 8 and bits != 16 and bits != 24:
+        bits = 16
+    end
+    mut block := DefaultBlock
+    if level <= 2:
+        block = 1152
+    end
+    if level >= 6:
+        block = 4096
+    end
+    if block > c.frames:
+        block = c.frames
+    end
+    if block <= 0:
+        ret out
+    end
+    work := mem.Allocate((block * c.channels * 8) as u64) as i64*
+    res := mem.Allocate((block * 8) as u64) as i64*
+    if work == null or res == null:
+        ret out
+    end
+    mut raw := compress.NewByteBuf()
+    mut frames := compress.NewByteBuf()
+    mut at := 0
+    mut min_frame := 16777215
+    mut max_frame := 0
+    until at < c.frames:
+        mut count := block
+        if at + count > c.frames:
+            count = c.frames - at
+        end
+        _quantize(c, bits, work, at, count)
+        _md5_bytes(raw, work, count, c.channels, bits)
+        mut fw := audio.NewMsbWriter()
+        audio.MsbWrite(fw, 16382, 14)
+        audio.MsbWrite(fw, 0, 1)
+        audio.MsbWrite(fw, 0, 1)
+        bs_code := count == block ? _block_code(block) : 7
+        audio.MsbWrite(fw, bs_code as i64, 4)
+        rate_code := _rate_code(c.rate)
+        audio.MsbWrite(fw, rate_code as i64, 4)
+        audio.MsbWrite(fw, (c.channels - 1) as i64, 4)
+        audio.MsbWrite(fw, _bps_code(bits) as i64, 3)
+        audio.MsbWrite(fw, 0, 1)
+        _put_utf8(fw, (at / block) as i64)
+        if bs_code == 7:
+            audio.MsbWrite(fw, (count - 1) as i64, 16)
+        end
+        if rate_code == 13:
+            audio.MsbWrite(fw, c.rate as i64, 16)
+        end
+        head := audio.MsbFinish(fw)
+        crc8 := CRC8(head.data, 0, compress.BufLen(head))
+        mut body := audio.NewMsbWriter()
+        mut ch := 0
+        until ch < c.channels:
+            _write_subframe(body, ((work as i64) + ((ch * count * 8) as i64)) as i64*, res, count, bits)
+            ch += 1
+        end
+        payload := audio.MsbFinish(body)
+        mut frame := compress.NewByteBuf()
+        compress.BufPushBuf(frame, head)
+        compress.BufPush(frame, crc8)
+        compress.BufPushBuf(frame, payload)
+        crc16 := CRC16(frame.data, 0, compress.BufLen(frame))
+        compress.BufPush(frame, (crc16 >> 8) & 255)
+        compress.BufPush(frame, crc16 & 255)
+        size := compress.BufLen(frame)
+        if size < min_frame:
+            min_frame = size
+        end
+        if size > max_frame:
+            max_frame = size
+        end
+        compress.BufPushBuf(frames, frame)
+        compress.BufFree(frame)
+        audio.MsbFree(body)
+        audio.MsbFree(fw)
+        at += count
+    end
+    mem.Free(work as void*)
+    mem.Free(res as void*)
+    digest := mem.Allocate(16 as u64)
+    crypto.Md5Bytes(raw.data, compress.BufLen(raw), digest)
+    compress.BufFree(raw)
+    compress.BufPush(out, 102)
+    compress.BufPush(out, 76)
+    compress.BufPush(out, 97)
+    compress.BufPush(out, 67)
+    compress.BufPush(out, 128)
+    compress.BufPush(out, 0)
+    compress.BufPush(out, 0)
+    compress.BufPush(out, 34)
+    _put16(out, block)
+    _put16(out, block)
+    _put24(out, min_frame == 16777215 ? 0 : min_frame)
+    _put24(out, max_frame)
+    rate := c.rate
+    compress.BufPush(out, (rate >> 12) & 255)
+    compress.BufPush(out, (rate >> 4) & 255)
+    total := c.frames as i64
+    compress.BufPush(out, ((rate & 15) << 4) | (((c.channels - 1) & 7) << 1) | (((bits - 1) >> 4) & 1))
+    compress.BufPush(out, (((bits - 1) & 15) << 4) | (((total >> 32) & (15 as i64)) as int))
+    compress.BufPush(out, ((total >> 24) & (255 as i64)) as int)
+    compress.BufPush(out, ((total >> 16) & (255 as i64)) as int)
+    compress.BufPush(out, ((total >> 8) & (255 as i64)) as int)
+    compress.BufPush(out, (total & (255 as i64)) as int)
+    dp := digest as u8*
+    mut m := 0
+    until m < 16:
+        compress.BufPush(out, dp[m] as int)
+        m += 1
+    end
+    mem.Free(digest)
+    compress.BufPushBuf(out, frames)
+    compress.BufFree(frames)
+    ret out
+end
+
+@en "EncodeFLAC"
+@fa "کدگذاری فلاک"
+pub func EncodeFLAC(c: audio.Clip): compress.ByteBuf:
+    ret EncodeFLACLevel(c, 5)
+end
+
+@en "VerifyFLAC"
+@fa "بازبینی فلاک"
+pub func VerifyFLAC(p: void*, n: int): bool:
+    mut si := StreamInfo {}
+    if not ReadStreamInfo(p, n, si):
+        ret false
+    end
+    mut ok := false
+    mut back := DecodeFLAC(p, n, ok)
+    if not ok:
+        FreeStreamInfo(si)
+        ret false
+    end
+    good := back.frames == (si.total as int) and back.channels == si.channels and back.rate == si.rate
+    audio.Free(back)
+    FreeStreamInfo(si)
+    ret good
+end

@@ -1,0 +1,205 @@
+pkg.en = encoding/protobuf
+pkg.name = پروتوباف
+pkg.group = کدگذاری و داده
+pkg.summary = خواندن پرونده‌های <code>.proto</code>، کدگذاری سیمی Protocol Buffers و ساختن کد سلام از آن‌ها.
+pkg.title = بسته‌ی پروتوباف (encoding/protobuf) در زبان برنامه‌نویسی سلام | Protocol Buffers
+pkg.description = راهنمای فارسی بسته‌ی پروتوباف در زبان برنامه نویسی سلام: تجزیه پرونده proto، کدگذاری varint و zigzag، نوشتن و خواندن فیلدها و تولید کد پیام و سرویس gRPC با نمونه‌کد.
+pkg.import = کدگذاری.پروتوباف
+group.FK_.title = نوع فیلدها
+group.FK_ = مقدار <code>kind</code> هر فیلد: گونه‌های ساده‌ی پروتوباف، پیام، شمارشی و نگاشت.
+group.WT_.title = نوع سیم
+group.WT_ = شیوه‌ی نوشتن مقدار فیلد در بایت‌ها: عدد متغیر، ۸ بایت ثابت، طول‌دار یا ۴ بایت ثابت.
+group.PTK_.title = نوع نشانه‌ها
+group.PTK_ = مقدار <code>kind</code> نشانه‌های <code>نشانه گذاری</code>.
+pkg.intro <<
+<p>Protocol Buffers قالب دودویی گوگل برای پیام‌های ساختارمند است. شکل پیام‌ها در پرونده‌ی <code>.proto</code> تعریف می‌شود و این بسته آن را می‌خواند، کد سلام برای پیام‌ها و سرویس‌ها می‌سازد و ابزار سطح پایین نوشتن و خواندن فیلدها را هم دارد.</p>
+<p>هر فیلد در بایت‌ها با یک <strong>برچسب</strong> (شماره‌ی فیلد و نوع سیم) و سپس مقدارش می‌آید. عددها معمولاً <strong>varint</strong> نوشته می‌شوند: هر بایت ۷ بیت از عدد را دارد و بیت بالایش می‌گوید بایت دیگری هم هست.</p>
+
+<p>وقتی با سرویسی حرف می‌زنید که از پیش همین قالب را به کار می‌برد، معمولاً از راه <a href="/std/grpc/">جی آر پی سی</a>، یا وقتی چند زبان یک طرح‌واره‌ی مشترک دارند، Protocol Buffers را به کار ببرید. میان برنامه‌های سلام، یا وقتی پرونده‌ی <code>.proto</code>ای در کار نیست، <a href="/std/encoding/msgpack/">مسج‌پک</a> طرح‌واره لازم ندارد و <a href="/std/encoding/json/">جیسون</a> خوانا می‌ماند.</p>
+<h3 id="pitfalls">اشتباه‌های رایج</h3>
+<ul>
+<li><strong>خواننده‌های ساخته‌شده عددهای تکراری فشرده را نمی‌پذیرند.</strong> نویسنده‌های proto3 مثل <code>protoc</code>، Go و Java یک <code>repeated int32</code> را به‌طور پیش‌فرض به شکل یک بلوک طول‌دار می‌فرستند. <code>Unmarshal</code> ساخته‌شده برای هر عضو یک برچسب انتظار دارد و نوع سیم را بررسی نمی‌کند، پس فیلد فشرده یا شکست می‌خورد یا عددهای نادرست می‌دهد. <code>Marshal</code> ساخته‌شده شکل فشرده‌نشده را می‌نویسد که همه‌ی خواننده‌ها می‌پذیرند. فیلدهای فشرده را مثل راهنمای عددهای فشرده با دست بخوانید، یا در طرف دیگر فیلد را <code>[packed = false]</code> کنید.</li>
+<li><strong>تولیدکننده فیلدهای پیام، شمارشی و <code>map</code> را کنار می‌گذارد.</strong> عضوهای یک <code>oneof</code> فیلدهای معمولی می‌شوند، پس چیزی جلوی مقدار گرفتن دو عضو با هم را نمی‌گیرد. این بخش‌ها را با دست بنویسید.</li>
+<li><strong>varintها <code>u64</code> هستند.</strong> <code>خواندن عدد متغیر</code> یک <code>طبیعی۶۴</code> برمی‌گرداند؛ خودتان آن را به <code>صحیح۶۴</code> یا <code>صحیح</code> تبدیل کنید و فیلدهای <code>sint</code> را از <code>کدگشایی زیگزاگ۶۴</code> بگذرانید.</li>
+<li><strong><code>ok</code> را یک بار، در پایان، بررسی کنید.</strong> هر خواننده وقتی داده تمام شود پرچم مشترک <code>ok</code> را نادرست می‌کند؛ هیچ چیز برنامه را متوقف نمی‌کند، پس پیش از به کار بردن نتیجه آن را بیازمایید.</li>
+</ul>
+
+<p>راهنمای زیر کارهایی را که در عمل پیش می‌آید یکی‌یکی جلو می‌برد: نوشتن یک پیام با دست، خواندن دوباره‌ی آن و رد شدن از فیلدهای ناشناخته، پیام‌های تودرتو، عددهای تکراری فشرده، انتخاب میان <code>int64</code> و <code>sint64</code>، و ساختن کد از پرونده‌ی <code>.proto</code> به جای نوشتن آن. همه‌ی بافرهای بایت این‌جا <code>بافر بایت</code> از بسته‌ی <a href="/std/compress/">فشرده سازی</a> هستند، پس برنامه‌ها هر دو بسته را وارد می‌کنند.</p>
+
+<h2 id="guide-encode">نوشتن یک پیام با دست</h2>
+<p>یک پیام چیزی جز فیلدهایش پشت سر هم نیست. برای هر فیلد <code>نوشتن برچسب</code> را با شماره‌ی فیلد در پرونده‌ی <code>.proto</code> و نوع سیم صدا بزنید و بعد نویسنده‌ی مقدار را: <code>نوشتن عدد متغیر</code> برای عدد صحیح، شمارشی و منطقی، <code>نوشتن رشته طول‌دار</code> برای رشته و <code>نوشتن بایت‌های طول‌دار</code> برای بایت‌ها و پیام‌های تودرتو. برنامه‌ی زیر پیام <code>User { id: 42, name: "سارا", admin: true }</code> را می‌نویسد و بایت‌هایش را به شکل شانزده‌شانزدهی چاپ می‌کند.</p>
+{{example.encoding-protobuf-encode-user}}
+<p>خروجی را جفت‌جفت بخوانید: <code>08</code> یعنی فیلد ۱ با نوع سیم ۰ و <code>2a</code> همان ۴۲ است؛ <code>12</code> فیلد ۲ با نوع سیم ۲ است، <code>08</code> طول و پس از آن هشت بایت UTF-8 واژه‌ی «سارا» (هر حرف فارسی دو بایت می‌گیرد)؛ <code>18 01</code> هم فیلد ۳ با مقدار درست است. proto3 فیلدی را که مقدار پیش‌فرض دارد (صفر، رشته‌ی خالی، نادرست) نمی‌نویسد، پس فرستنده معمولا پیش از نوشتن برچسب مقدار را بررسی می‌کند.</p>
+
+<h2 id="guide-decode">خواندن پیام و رد شدن از فیلدهای ناشناخته</h2>
+<p>کدگشایی یک حلقه است: برچسب را بخوانید، به شماره‌ی فیلد نگاه کنید، مقدار را با خواننده‌ی مناسبش بخوانید و تا وقتی خواننده خالی نشده ادامه دهید. از شماره‌ای که نمی‌شناسید هم باید گذشت و <code>رد کردن فیلد</code> همین کار را با نوع سیم انجام می‌دهد. به این ترتیب برنامه‌ی قدیمی پیام‌های نسخه‌ی جدیدتری را که فیلد تازه دارد بی‌دردسر می‌خواند. همه‌ی خواننده‌ها یک پرچم <code>سالم</code> مشترک می‌گیرند، پس یک بررسی پس از حلقه پیامی را که نیمه‌کاره رسیده پیدا می‌کند.</p>
+{{example.encoding-protobuf-decode-loop}}
+<p>فراخوانی دوم همان بایت‌ها را بدون دو بایت آخر می‌خواند: طول رشته قول چهار بایت را داده که وجود ندارد، <code>خواندن رشته طول‌دار</code> پرچم را نادرست می‌کند و حلقه می‌ایستد. پیش از اعتماد به ساختاری که پر کرده‌اید همیشه این پرچم را بررسی کنید.</p>
+
+<h2 id="guide-nested">پیام‌های تودرتو و تکراری</h2>
+<p>فیلدی که نوعش پیام دیگری است به شکل بایت نوشته می‌شود: پیام درونی را در بافر جداگانه‌ای بنویسید و بعد آن را با نوع سیم <code>نوع سیم طول‌دار</code> و <code>نوشتن بایت‌های طول‌دار</code> در پیام بیرونی بگذارید. فیلد <code>repeated</code> هم همان برچسب است که برای هر عضو یک بار نوشته می‌شود. در سمت خواندن، <code>خواندن بافر طول‌دار</code> بایت‌های درونی را در بافر تازه‌ای می‌دهد که با همان حلقه کدگشایی و بعد آزاد می‌شود.</p>
+{{example.encoding-protobuf-nested}}
+
+<h2 id="guide-packed">عددهای تکراری فشرده</h2>
+<p>یک فیلد <code>repeated</code> از عددها به دو شکل جابه‌جا می‌شود. در شکل فشرده‌نشده هر عضو برچسب خودش را دارد. در شکل فشرده، که در proto3 پیش‌فرض است، یک برچسب با نوع سیم <code>WT_LEN</code> می‌آید و varintها پشت سر هم درون آن قرار می‌گیرند. خواننده‌ی درست هر دو را می‌پذیرد، پس به نوع سیم نگاه کنید: برای <code>WT_LEN</code> بلوک را با <code>خواندن بافر طول‌دار</code> بگیرید و تا خالی شدنش varint بخوانید.</p>
+{{example.encoding-protobuf-packed}}
+<p>فشرده‌سازی برای هر عضو یک بایت برچسب صرفه‌جویی می‌کند که در فهرست‌های بلندِ عددهای کوچک به چشم می‌آید. برای فیلدی که از کد ساخته‌شده با <code>protoc</code> در زبانی دیگر می‌آید هم باید همین کد را به جای <code>Unmarshal</code> ساخته‌شده به کار ببرید.</p>
+
+<h2 id="guide-zigzag">عدد منفی: int64 یا sint64</h2>
+<p>فیلد ساده‌ی <code>int32</code> یا <code>int64</code> عدد منفی را به شکل یک عدد بی‌علامت بسیار بزرگ می‌نویسد که همیشه ده بایت می‌شود. گونه‌های <code>sint32</code> و <code>sint64</code> اول عدد را با زیگزاگ جابه‌جا می‌کنند (۰، ‎-۱، ۱، ‎-۲ می‌شوند ۰، ۱، ۲، ۳) تا عددهای منفی کوچک، کوچک بمانند. پیش از <code>نوشتن عدد متغیر</code> از <code>کدگذاری زیگزاگ۶۴</code> و پس از <code>خواندن عدد متغیر</code> از <code>کدگشایی زیگزاگ۶۴</code> استفاده کنید، و برای فیلدهایی مثل جابه‌جایی یا تغییر دما که اغلب زیر صفرند در پرونده‌ی <code>.proto</code> گونه‌ی <code>sint64</code> را بگذارید.</p>
+{{example.encoding-protobuf-zigzag}}
+
+<h2 id="guide-generate">ساختن کد از پرونده‌ی .proto</h2>
+<p>وقتی پیام‌ها بیش از دو سه تا شدند، نوشتن کد را به بسته بسپارید. <code>تولید کد</code> متن <code>.proto</code> را به یک بسته‌ی سلام تبدیل می‌کند که برای هر پیام یک ساختار و یک تابع <code>Marshal</code> و <code>Unmarshal</code> دارد؛ <code>تولید با سرویس‌ها</code> برای سرویس‌ها هم کد کارخواه gRPC می‌سازد (بسته‌ی <a href="/std/grpc/">grpc</a> را ببینید). برنامه‌ی زیر فقط سطرهای تعریف کد ساخته‌شده را چاپ می‌کند.</p>
+{{example.encoding-protobuf-codegen}}
+<p>متن خروجی را در پرونده‌ای مثل <code>point_pb.salam</code> ذخیره کنید، <code>فراخوانی pb "point_pb.salam"</code> را به برنامه بیفزایید و با <code>pb.MarshalPoint(p)</code> یک بافر بایت بگیرید و با <code>pb.UnmarshalPoint(buf.data, buf.len, ok)</code> آن را دوباره بخوانید. کد ساخته‌شده انگلیسی است، چون نام‌ها از پرونده‌ی <code>.proto</code> می‌آیند. تولیدکننده فیلدهای ساده، رشته، بایت و فیلدهای تکراری ساده را پوشش می‌دهد. فیلدهایی را که نوعشان پیام دیگر یا شمارشی است کنار می‌گذارد، برای فیلدهای <code>map</code> کدی نمی‌سازد و عضوهای <code>oneof</code> را فیلد معمولی می‌کند؛ آن چند فیلد را مثل نمونه‌ی تودرتوی بالا با دست بنویسید یا شمارشی را در پرونده‌ی <code>.proto</code> به شکل <code>int32</code> نگه دارید. عددهای تکراری فقط به شکل فشرده‌نشده خوانده می‌شوند؛ راهنمای عددهای فشرده را ببینید.</p>
+
+<h2 id="guide-which">کدام تابع برای کدام گونه‌ی فیلد</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>گونه در .proto</th><th>نوع سیم</th><th>نوشتن</th><th>خواندن</th></tr></thead>
+<tbody>
+<tr><td><code>int32 int64 uint32 uint64 bool enum</code></td><td><code>نوع سیم متغیر</code></td><td><code>نوشتن عدد متغیر</code></td><td><code>خواندن عدد متغیر</code></td></tr>
+<tr><td><code>sint32 sint64</code></td><td><code>نوع سیم متغیر</code></td><td><code>کدگذاری زیگزاگ۶۴</code> و سپس <code>نوشتن عدد متغیر</code></td><td><code>خواندن عدد متغیر</code> و سپس <code>کدگشایی زیگزاگ۶۴</code></td></tr>
+<tr><td><code>fixed32 sfixed32</code></td><td><code>نوع سیم ثابت۳۲</code></td><td><code>نوشتن ثابت۳۲</code></td><td><code>خواندن ثابت۳۲</code></td></tr>
+<tr><td><code>fixed64 sfixed64</code></td><td><code>نوع سیم ثابت۶۴</code></td><td><code>نوشتن ثابت۶۴</code></td><td><code>خواندن ثابت۶۴</code></td></tr>
+<tr><td><code>float</code></td><td><code>نوع سیم ثابت۳۲</code></td><td><code>نوشتن اعشار۳۲</code></td><td><code>خواندن اعشار۳۲</code></td></tr>
+<tr><td><code>double</code></td><td><code>نوع سیم ثابت۶۴</code></td><td><code>نوشتن اعشار۶۴</code></td><td><code>خواندن اعشار۶۴</code></td></tr>
+<tr><td><code>string</code></td><td><code>نوع سیم طول‌دار</code></td><td><code>نوشتن رشته طول‌دار</code></td><td><code>خواندن رشته طول‌دار</code></td></tr>
+<tr><td><code>bytes</code> و پیام تودرتو</td><td><code>نوع سیم طول‌دار</code></td><td><code>نوشتن بایت‌های طول‌دار</code></td><td><code>خواندن بافر طول‌دار</code></td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.PFile = یک پرونده‌ی <code>.proto</code> خوانده‌شده.
+doc.PFile.packageName = نام بسته.
+doc.PFile.messages = پیام‌ها.
+doc.PFile.enums = شمارشی‌های سطح بالا.
+doc.PFile.imports = پرونده‌های واردشده.
+doc.PFile.services = سرویس‌ها.
+doc.PMessage = یک پیام.
+doc.PMessage.name = نام.
+doc.PMessage.fields = فیلدها به ترتیب تعریف.
+doc.PMessage.oneofs = گروه‌های <code>oneof</code>.
+doc.PMessage.nestedMessages = پیام‌های درونی.
+doc.PMessage.nestedEnums = شمارشی‌های درونی.
+doc.PField = یک فیلد پیام.
+doc.PField.name = نام.
+doc.PField.kind = نوع فیلد؛ یکی از ثابت‌های <code>نوع فیلد</code>.
+doc.PField.typeName = نام گونه برای پیام و شمارشی. تجزیه‌گر نام‌ها را حل نمی‌کند، پس شمارشی هم نوع پیام می‌گیرد.
+doc.PField.keyKind = نوع کلید برای <code>map</code>.
+doc.PField.mapValueKind = نوع مقدار برای <code>map</code>.
+doc.PField.mapValueTypeName = نام گونه‌ی مقدار <code>map</code>.
+doc.PField.number = شماره‌ی فیلد.
+doc.PField.repeated = فیلد تکرارشونده است.
+doc.PField.packedOpt = عددهای تکراری فشرده نوشته شوند.
+doc.PField.oneofIndex = شماره‌ی گروه <code>oneof</code>؛ ‎-1 اگر نباشد.
+doc.PField.is_deprecated = فیلد منسوخ علامت خورده.
+doc.POneof = یک گروه <code>oneof</code>: از میان فیلدهایش فقط یکی مقدار دارد.
+doc.POneof.name = نام.
+doc.POneof.fieldIndices = شماره‌ی فیلدهای عضو در پیام.
+doc.PEnum = یک شمارشی.
+doc.PEnum.name = نام.
+doc.PEnum.values = مقدارها.
+doc.PEnumValue = یک مقدار شمارشی.
+doc.PEnumValue.name = نام.
+doc.PEnumValue.number = عدد.
+doc.PService = یک سرویس gRPC.
+doc.PService.name = نام.
+doc.PService.methods = متدها.
+doc.PMethod = یک متد سرویس.
+doc.PMethod.name = نام.
+doc.PMethod.inputType = گونه‌ی ورودی.
+doc.PMethod.outputType = گونه‌ی خروجی.
+doc.PMethod.clientStream = ورودی جریانی است.
+doc.PMethod.serverStream = خروجی جریانی است.
+doc.ParseFile = متن <code>.proto</code> (نحو proto3) را می‌خواند.
+doc.FieldKindName = نام نوع فیلد، مثل <code>int64</code>.
+doc.ScalarKindFromName = نوع فیلد از نام گونه‌ی ساده؛ برای نام پیام، صفر.
+doc.PTokenStream = نشانه‌های یک متن.
+doc.PTokenStream.toks = نشانه‌ها.
+doc.PToken = یک نشانه.
+doc.PToken.kind = نوع نشانه.
+doc.PToken.lexeme = متن نشانه.
+doc.PToken.ival = مقدار عدد صحیح.
+doc.PToken.fval = مقدار عدد اعشاری.
+doc.PToken.sval = مقدار رشته.
+doc.PToken.line = شماره‌ی خط.
+doc.Tokenize = متن را به نشانه‌ها می‌شکند.
+doc.MakeTag = برچسب فیلد: شماره‌ی فیلد و نوع سیم در یک عدد.
+doc.WriteTag = برچسب را به شکل عدد متغیر می‌نویسد.
+doc.ReadTag = برچسب را می‌خواند و شماره‌ی فیلد و نوع سیم را جدا می‌کند.
+doc.WriteVarint = عدد را با کدگذاری متغیر‌طول (varint) می‌نویسد: هر بایت ۷ بیت، عددهای کوچک کوتاه‌تر.
+doc.ReadVarint = یک varint را به شکل <code>طبیعی۶۴</code> می‌خواند؛ اگر بایت‌ها تمام شوند <code>ok</code> نادرست می‌شود.
+doc.ZigZagEncode32 = کدگذاری زیگزاگ: عددهای منفی کوچک را به عددهای مثبت کوچک می‌برد تا varint کوتاهی داشته باشند.
+doc.ZigZagDecode32 = زیگزاگ ۳۲ بیتی را برمی‌گرداند.
+doc.ZigZagEncode64 = کدگذاری زیگزاگ ۶۴ بیتی.
+doc.ZigZagDecode64 = زیگزاگ ۶۴ بیتی را برمی‌گرداند.
+doc.WriteFixed32 = عدد ۳۲ بیتی را به شکل ۴ بایت کوچک‌انتها می‌نویسد.
+doc.ReadFixed32 = ۴ بایت را می‌خواند.
+doc.WriteFixed64 = عدد ۶۴ بیتی را به شکل ۸ بایت می‌نویسد.
+doc.ReadFixed64 = ۸ بایت را می‌خواند.
+doc.WriteFloat = عدد اعشاری ۳۲ بیتی را می‌نویسد.
+doc.ReadFloat = عدد اعشاری ۳۲ بیتی را می‌خواند.
+doc.WriteDouble = عدد اعشاری ۶۴ بیتی را می‌نویسد.
+doc.ReadDouble = عدد اعشاری ۶۴ بیتی را می‌خواند.
+doc.WriteLenPrefixedBytes = طول و سپس بایت‌ها را می‌نویسد؛ برای فیلدهای bytes و پیام‌های درونی.
+doc.WriteLenPrefixedStr = طول و سپس رشته را می‌نویسد.
+doc.ReadLenPrefixedBuf = یک بخش طول‌دار را به بافر می‌خواند.
+doc.ReadLenPrefixedStr = یک بخش طول‌دار را به رشته می‌خواند.
+doc.SkipField = از روی مقدار یک فیلد با نوع سیم داده‌شده رد می‌شود؛ برای فیلدهای ناشناخته.
+doc.GenerateSingle = از متن <code>.proto</code> کد سلام می‌سازد: یک ساختار برای هر پیام، با تابع‌های سریال‌سازی. فیلدهای پیام، شمارشی و map کنار گذاشته می‌شوند و خواننده‌ی ساخته‌شده عددهای تکراری را فشرده‌نشده انتظار دارد.
+doc.ServiceCount = تعداد سرویس‌ها.
+doc.ServiceNameAt = نام سرویس شماره‌ی <code>i</code>.
+doc.ServiceMethodCount = تعداد متدهای یک سرویس.
+doc.ServiceMethodSignature = امضای یک متد، مثل <code>Say(Ping) returns (Ping)</code>.
+doc.GenerateServices = کد رابط سرویس‌ها را می‌سازد.
+doc.GenerateWithServices = کد پیام‌ها و سرویس‌ها را با هم می‌سازد.
+doc.ServiceSummary = خلاصه‌ی خوانای سرویس‌ها و متدها.
+
+ex.PFile = encoding-protobuf-Parse
+ex.PMessage = encoding-protobuf-Parse
+ex.PField = encoding-protobuf-Parse
+ex.POneof = encoding-protobuf-Parse
+ex.PEnum = encoding-protobuf-Parse
+ex.PEnumValue = encoding-protobuf-Parse
+ex.PService = encoding-protobuf-Parse
+ex.PMethod = encoding-protobuf-Parse
+ex.ParseFile = encoding-protobuf-Parse
+ex.FieldKindName = encoding-protobuf-Parse
+ex.ScalarKindFromName = encoding-protobuf-Parse
+ex.PTokenStream = encoding-protobuf-Parse
+ex.PToken = encoding-protobuf-Parse
+ex.Tokenize = encoding-protobuf-Parse
+ex.group.FK_ = encoding-protobuf-Parse
+ex.group.PTK_ = encoding-protobuf-Parse
+ex.MakeTag = encoding-protobuf-Wire
+ex.WriteTag = encoding-protobuf-Wire
+ex.ReadTag = encoding-protobuf-Wire
+ex.WriteVarint = encoding-protobuf-Wire
+ex.ReadVarint = encoding-protobuf-Wire
+ex.ZigZagEncode32 = encoding-protobuf-Wire
+ex.ZigZagDecode32 = encoding-protobuf-Wire
+ex.ZigZagEncode64 = encoding-protobuf-Wire
+ex.ZigZagDecode64 = encoding-protobuf-Wire
+ex.WriteFixed32 = encoding-protobuf-Wire
+ex.ReadFixed32 = encoding-protobuf-Wire
+ex.WriteFixed64 = encoding-protobuf-Wire
+ex.ReadFixed64 = encoding-protobuf-Wire
+ex.WriteFloat = encoding-protobuf-Wire
+ex.ReadFloat = encoding-protobuf-Wire
+ex.WriteDouble = encoding-protobuf-Wire
+ex.ReadDouble = encoding-protobuf-Wire
+ex.WriteLenPrefixedBytes = encoding-protobuf-Wire
+ex.WriteLenPrefixedStr = encoding-protobuf-Wire
+ex.ReadLenPrefixedBuf = encoding-protobuf-Wire
+ex.ReadLenPrefixedStr = encoding-protobuf-Wire
+ex.SkipField = encoding-protobuf-Wire
+ex.group.WT_ = encoding-protobuf-Wire
+ex.GenerateSingle = encoding-protobuf-Generate
+ex.ServiceCount = encoding-protobuf-Generate
+ex.ServiceNameAt = encoding-protobuf-Generate
+ex.ServiceMethodCount = encoding-protobuf-Generate
+ex.ServiceMethodSignature = encoding-protobuf-Generate
+ex.GenerateServices = encoding-protobuf-Generate
+ex.GenerateWithServices = encoding-protobuf-Generate
+ex.ServiceSummary = encoding-protobuf-Generate

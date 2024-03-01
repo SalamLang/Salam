@@ -1,0 +1,69 @@
+import db.meilisearch
+
+struct Movie:
+    pub id: int = 0
+    pub title: str = ""
+    pub year: int = 0
+end
+
+func main:
+    c := meilisearch.New("http://127.0.0.1:7700", "masterKey")
+    mut err := meilisearch.Error {}
+
+    docs := `[{"id": 1, "title": "Carol", "year": 2015}, {"id": 2, "title": "Moana", "year": 2016}]`
+    meilisearch.Wait(c, meilisearch.AddDocuments(c, "movies", docs, "id", err), err)
+    meilisearch.Wait(c, meilisearch.UpdateDocuments(c, "movies", `[{"id": 2, "year": 2017}]`, "", err), err)
+    meilisearch.Wait(c, meilisearch.AddDocumentsNdjson(c, "movies", "{\"id\": 3, \"title\": \"Heat\"}\n", "", err), err)
+    meilisearch.Wait(c, meilisearch.UpdateDocumentsNdjson(c, "movies", "{\"id\": 3, \"year\": 1995}\n", "", err), err)
+    meilisearch.Wait(c, meilisearch.AddDocumentsCsv(c, "movies", "id:number;title\n4;Up\n", "", ";", err), err)
+    meilisearch.Wait(c, meilisearch.UpdateDocumentsCsv(c, "movies", "id:number,year:number\n4,2009\n", "", "", err), err)
+
+    mut typed := Vector {} as Vector<Movie>
+    typed.push(Movie { id = 5, title = "Alien", year = 1979 })
+    meilisearch.Wait(c, meilisearch.AddDocumentsOf(c, "movies", typed, "id", err), err)
+
+    mut many := Vector {} as Vector<str>
+    repeat 2500 in i:
+        many.push(`{"id": ` + (100 + i) + `, "title": "Movie ` + i + `"}`)
+    end
+    tasks := meilisearch.AddDocumentsInBatches(c, "movies", many, 1000, "id", err)
+    each t in tasks:
+        meilisearch.Wait(c, t, err)
+    end
+
+    mut fields := Vector {} as Vector<str>
+    fields.push("title")
+    println meilisearch.GetDocument(c, "movies", "1", fields, err)
+    mut m := Movie {}
+    if meilisearch.GetDocumentAs(c, "movies", "2", m, err):
+        println m.title, m.year
+    end
+
+    mut q := meilisearch.DocumentsQuery { limit = 10, filter = "year > 2000", retrieve_vectors = false }
+    q.fields.push("id")
+    q.fields.push("title")
+    q.sort.push("year:desc")
+    q.ids.push("1")
+    q.ids.push("2")
+    page := meilisearch.GetDocuments(c, "movies", meilisearch.DocumentsQuery { offset = 0, limit = 20 }, err)
+    mut movies := Vector {} as Vector<Movie>
+    if meilisearch.DocumentsAs(page, movies, err):
+        println movies.len(), page.total
+    end
+    println meilisearch.GetDocuments(c, "movies", q, err).results.len()
+
+    meilisearch.Wait(c, meilisearch.UpdateDocumentsByFunction(c, "movies", "doc.title = doc.title.to_upper()", "id < 10", "", err), err)
+    meilisearch.Wait(c, meilisearch.DeleteDocument(c, "movies", "5", err), err)
+    mut ids := Vector {} as Vector<str>
+    ids.push("3")
+    ids.push("4")
+    meilisearch.Wait(c, meilisearch.DeleteDocuments(c, "movies", ids, err), err)
+    meilisearch.Wait(c, meilisearch.DeleteDocumentsByFilter(c, "movies", "id >= 100", err), err)
+    meilisearch.Wait(c, meilisearch.DeleteAllDocuments(c, "movies", err), err)
+    println meilisearch.ErrorString(err)
+
+    tagged := meilisearch.WithMetadata(c, "import-2026-10-16")
+    opts := meilisearch.DocumentOptions { content_type = "application/x-ndjson", update = true, primary_key = "id", csv_delimiter = "", skip_creation = true }
+    meilisearch.Wait(c, meilisearch.AddDocumentsWith(tagged, "movies", "{\"id\": 1, \"year\": 2016}\n", opts, err), err)
+    println meilisearch.GetDocumentWith(c, "movies", "1", meilisearch.DocumentsQuery { retrieve_vectors = true, use_network = false }, err)
+end

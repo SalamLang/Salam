@@ -1,0 +1,120 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import testing
+import net.httpd.conf
+
+func sample(): str:
+    mut t := "server:\n"
+    t = t.concat("    threads = auto\n")
+    t = t.concat("    max connections = 10000\n")
+    t = t.concat("    log: access = \"/var/log/a.log\" end\n")
+    t = t.concat("    upstream api:\n")
+    t = t.concat("        server: address = \"127.0.0.1:9001\" weight = 2 end\n")
+    t = t.concat("    end\n")
+    t = t.concat("    site:\n")
+    t = t.concat("        listen = 443 tls\n")
+    t = t.concat("        names = \"a.com www.a.com\"\n")
+    t = t.concat("        redirect = \"https://a.com$uri\" code = 301\n")
+    t = t.concat("        // a comment\n")
+    t = t.concat("        location \"/api/\": proxy = \"http://api\" timeout = 30s end\n")
+    t = t.concat("        location `~ \\.php$`: index = \"index.php\" end\n")
+    t = t.concat("    end\n")
+    t = t.concat("end\n")
+    ret t
+end
+
+func test_structure():
+    mut d := conf.Parse(sample())
+    defer conf.Free(d)
+    testing.AssertTrue(d.ok)
+    server := conf.Find(d, conf.Root(), "server")
+    testing.AssertTrue(server > 0)
+    testing.AssertEqInt(conf.Count(d, server), 5)
+    mc := conf.Find(d, server, "max connections")
+    testing.AssertEqStr(conf.ValueText(d, mc, 0), "10000")
+    up := conf.Find(d, server, "upstream api")
+    testing.AssertTrue(up > 0)
+    testing.AssertTrue(d.nodes.get(up).block)
+end
+
+func test_values():
+    mut d := conf.Parse(sample())
+    defer conf.Free(d)
+    server := conf.Find(d, conf.Root(), "server")
+    site := conf.Find(d, server, "site")
+    listen := conf.Find(d, site, "listen")
+    testing.AssertEqInt(d.nodes.get(listen).values.len(), 2)
+    testing.AssertEqStr(conf.ValueText(d, listen, 0), "443")
+    testing.AssertEqStr(conf.ValueText(d, listen, 1), "tls")
+    names := conf.Find(d, site, "names")
+    testing.AssertEqStr(conf.ValueText(d, names, 0), "a.com www.a.com")
+    redirect := conf.Find(d, site, "redirect")
+    testing.AssertEqStr(conf.ValueText(d, redirect, 0), "https://a.com$uri")
+    code := conf.Find(d, site, "code")
+    testing.AssertEqStr(conf.ValueText(d, code, 0), "301")
+end
+
+func test_labels():
+    mut d := conf.Parse(sample())
+    defer conf.Free(d)
+    server := conf.Find(d, conf.Root(), "server")
+    site := conf.Find(d, server, "site")
+    mut found := 0
+    repeat conf.Count(d, site) in i:
+        c := conf.ChildAt(d, site, i)
+        n := d.nodes.get(c)
+        if n.block and n.labels.len() == 1:
+            found += 1
+            if found == 1:
+                testing.AssertEqStr(n.labels.get(0), "/api/")
+            else:
+                testing.AssertEqStr(n.labels.get(0), "~ \\.php$")
+            end
+        end
+    end
+    testing.AssertEqInt(found, 2)
+end
+
+func test_errors():
+    mut a := conf.Parse("server:\n    site:\n")
+    testing.AssertFalse(a.ok)
+    testing.AssertContains(conf.ErrorText(a, "web.salam"), "missing 'end'")
+    conf.Free(a)
+    mut b := conf.Parse("server:\nend\nend\n")
+    testing.AssertFalse(b.ok)
+    testing.AssertEqInt(b.line, 3)
+    conf.Free(b)
+    mut c := conf.Parse("listen = \n")
+    testing.AssertFalse(c.ok)
+    conf.Free(c)
+    mut e := conf.Parse("names = \"open\n")
+    testing.AssertFalse(e.ok)
+    testing.AssertContains(e.error, "unterminated string")
+    conf.Free(e)
+    mut f := conf.Parse("listen 80\n")
+    testing.AssertFalse(f.ok)
+    conf.Free(f)
+end
+
+func main:
+    test_structure()
+    test_values()
+    test_labels()
+    test_errors()
+    testing.Summary()
+    ret 0
+end

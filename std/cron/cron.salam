@@ -1,0 +1,397 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "cron"
+@fa "کرون"
+package cron
+
+// Five-field cron expressions (minute hour day-of-month month day-of-week)
+// and a minute-resolution scheduler. Fields accept *, n, a-b, lists, and
+// /step; months and weekdays also accept three-letter names. As in Vixie
+// cron, when both day fields are restricted a time matches either of them.
+
+import str
+import conv
+import mem
+import time
+import calendar
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _beginthreadex(sec: void *, stack: u32, start: void *, arg: void *, flags: u32, thrdaddr: void *): u64
+        func CloseHandle(h: void *): int
+    end
+else:
+    extern:
+        func pthread_create(thread: void *, attr: void *, start: void *, arg: void *): int
+        func pthread_detach(thread: u64): int
+    end
+end
+
+const CRON_KIND_PLAIN := 0
+const CRON_KIND_MONTH := 1
+const CRON_KIND_DOW := 2
+const CRON_MAX_SCAN := 2000000
+
+mut _jobs := Vector {} as Vector<_Job>
+mut _zone_name := "UTC"
+mut _zone_fallback := 0
+mut _stop := null as i64*
+mut _last_minute := 0 as i64
+
+struct _Job:
+    pub name: str = ""
+    pub expr: Expr = Expr {}
+    pub fn: i64 = 0
+    pub busy: i64 = 0
+end
+
+@en "Expr"
+@fa "عبارت زمان‌بندی"
+pub struct Expr:
+    @en "minutes"
+    @fa "دقیقه‌ها"
+    pub minutes: i64 = 0
+    @en "hours"
+    @fa "ساعت‌ها"
+    pub hours: i64 = 0
+    @en "days"
+    @fa "روزها"
+    pub days: i64 = 0
+    @en "months"
+    @fa "ماه‌ها"
+    pub months: i64 = 0
+    @en "weekdays"
+    @fa "روزهای هفته"
+    pub weekdays: i64 = 0
+    @en "dom_star"
+    @fa "همه روزها"
+    pub dom_star: bool = true
+    @en "dow_star"
+    @fa "همه روزهای هفته"
+    pub dow_star: bool = true
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+end
+
+if SALAM_OS_WINDOWS:
+    export:
+        func salam_cron_spawn(fn: i64, arg: i64):
+            h := _beginthreadex(null, 0 as u32, fn as void *, arg as void *, 0 as u32, null)
+            if h != (0 as u64): CloseHandle(h as void *) end
+        end
+    end
+else:
+    export:
+        func salam_cron_spawn(fn: i64, arg: i64):
+            t := mem.Allocate(8 as u64)
+            if pthread_create(t, null, fn as void *, arg as void *) == 0:
+                tp := t as i64 *
+                pthread_detach(tp[0] as u64)
+            end
+            mem.Free(t)
+        end
+    end
+end
+
+func _bit(v: int): i64: ret (1 as i64) << (v as i64) end
+
+func _has(mask: i64, v: int): bool:
+    ret ((mask >> (v as i64)) & (1 as i64)) == (1 as i64)
+end
+
+func _name_value(s: str, kind: int): int:
+    if kind == CRON_KIND_MONTH:
+        names := "janfebmaraprmayjunjulaugsepoctnovdec"
+        repeat 12 in i:
+            if str.EqualFold(s, names.substr(i * 3, 3)): ret i + 1 end
+        end
+    end
+    if kind == CRON_KIND_DOW:
+        names := "sunmontuewedthufrisat"
+        repeat 7 in i:
+            if str.EqualFold(s, names.substr(i * 3, 3)): ret i end
+        end
+    end
+    ret 0 - 1
+end
+
+func _num(s: str, kind: int): int:
+    n := s.len()
+    if n == 0: ret 0 - 1 end
+    mut digits := true
+    repeat n in i:
+        c := s[i]
+        if c < '0' or c > '9': digits = false end
+    end
+    if digits:
+        if n > 4: ret 0 - 1 end
+        ret conv.ParseInt(s) as int
+    end
+    ret _name_value(s, kind)
+end
+
+func _parse_item(item: str, lo: int, hi: int, kind: int, mask &: i64, star &: bool): bool:
+    mut base := item
+    mut step := 1
+    slash := item.find("/")
+    if slash >= 0:
+        base = item.substr(0, slash)
+        step = _num(item.substr(slash + 1, item.len() - slash - 1), CRON_KIND_PLAIN)
+        if step <= 0: ret false end
+    end
+    mut a := lo
+    mut b := hi
+    if base == "*":
+        star = true
+    else:
+        dash := base.find("-")
+        if dash > 0:
+            a = _num(base.substr(0, dash), kind)
+            b = _num(base.substr(dash + 1, base.len() - dash - 1), kind)
+        else:
+            a = _num(base, kind)
+            if slash >= 0:
+                b = hi
+            else:
+                b = a
+            end
+        end
+    end
+    if a < lo or b > hi or a > b: ret false end
+    mut v := a
+    until v <= b:
+        mask = mask | _bit(v)
+        v += step
+    end
+    ret true
+end
+
+func _parse_field(text: str, lo: int, hi: int, kind: int, mask &: i64, star &: bool): bool:
+    items := str.Split(text, ",")
+    defer items.free()
+    if items.len() == 0: ret false end
+    star = false
+    mut i := 0
+    until i < items.len():
+        if not _parse_item(items.get(i), lo, hi, kind, mask, star): ret false end
+        i += 1
+    end
+    ret true
+end
+
+func _expand_macro(spec: str): str:
+    if spec == "@yearly" or spec == "@annually": ret "0 0 1 1 *" end
+    if spec == "@monthly": ret "0 0 1 * *" end
+    if spec == "@weekly": ret "0 0 * * 0" end
+    if spec == "@daily" or spec == "@midnight": ret "0 0 * * *" end
+    if spec == "@hourly": ret "0 * * * *" end
+    ret spec
+end
+
+func _offset(z: calendar.Zone, fallback_minutes: int, epoch: i64): i64:
+    if z.ok: ret calendar.ZoneOffsetSeconds(z, epoch) end
+    ret fallback_minutes * 60
+end
+
+func _cron_entry(id: i64):
+    j := _jobs.get(id as int)
+    callhandler(j.fn, id)
+    atomic_store(j.busy as i64*, 0 as i64)
+end
+
+func _cron_loop(arg: i64):
+    Run()
+end
+
+@en "Parse"
+@fa "تجزیه"
+pub func Parse(spec: str): Expr:
+    mut e := Expr {}
+    fields := str.Fields(_expand_macro(spec))
+    defer fields.free()
+    if fields.len() != 5: ret e end
+    mut star := false
+    if not _parse_field(fields.get(0), 0, 59, CRON_KIND_PLAIN, e.minutes, star): ret e end
+    if not _parse_field(fields.get(1), 0, 23, CRON_KIND_PLAIN, e.hours, star): ret e end
+    if not _parse_field(fields.get(2), 1, 31, CRON_KIND_PLAIN, e.days, star): ret e end
+    e.dom_star = star
+    if not _parse_field(fields.get(3), 1, 12, CRON_KIND_MONTH, e.months, star): ret e end
+    if not _parse_field(fields.get(4), 0, 7, CRON_KIND_DOW, e.weekdays, star): ret e end
+    e.dow_star = star
+    if _has(e.weekdays, 7):
+        e.weekdays = e.weekdays | _bit(0)
+    end
+    e.ok = true
+    ret e
+end
+
+@en "MatchFields"
+@fa "تطبیق فیلدها"
+pub func MatchFields(e: Expr, minute: int, hour: int, day: int, month: int, weekday: int): bool:
+    if not e.ok: ret false end
+    if not _has(e.minutes, minute) or not _has(e.hours, hour) or not _has(e.months, month):
+        ret false
+    end
+    dom := _has(e.days, day)
+    dow := _has(e.weekdays, weekday)
+    if e.dom_star or e.dow_star:
+        ret dom and dow
+    end
+    ret dom or dow
+end
+
+// Matches against a wall-clock instant: seconds since the epoch already
+// shifted by the zone offset.
+@en "MatchesLocal"
+@fa "تطبیق محلی"
+pub func MatchesLocal(e: Expr, local: i64): bool:
+    days := local / (86400 as i64)
+    weekday := ((days + (4 as i64)) % (7 as i64)) as int
+    ret MatchFields(e, time.MinuteUTC(local), time.HourUTC(local), time.DayUTC(local), time.MonthUTC(local), weekday)
+end
+
+// Offset of zone at epoch in seconds; fallback_minutes when the zone
+// database is unavailable.
+@en "OffsetSeconds"
+@fa "اختلاف ثانیه منطقه"
+pub func OffsetSeconds(zone: str, fallback_minutes: int, epoch: i64): i64:
+    mut z := calendar.LoadZone(zone)
+    off := _offset(z, fallback_minutes, epoch)
+    if z.ok: calendar.FreeZone(z) end
+    ret off
+end
+
+// First minute strictly after `after` (UTC seconds) that matches e in the
+// given zone, or 0 when none is found within the scan limit.
+@en "Next"
+@fa "بعدی"
+pub func Next(e: Expr, after: i64, zone: str, fallback_minutes: int): i64:
+    if not e.ok: ret 0 end
+    mut z := calendar.LoadZone(zone)
+    mut found := 0 as i64
+    mut t := (after / (60 as i64) + (1 as i64)) * (60 as i64)
+    mut steps := 0
+    until steps < CRON_MAX_SCAN and found == (0 as i64):
+        local := t + _offset(z, fallback_minutes, t)
+        sod := local % (86400 as i64)
+        if not _has(e.months, time.MonthUTC(local)):
+            t += (86400 as i64) - sod
+        else not _has(e.hours, time.HourUTC(local)):
+            t += (3600 as i64) - (local % (3600 as i64))
+        else MatchesLocal(e, local):
+            found = t
+        else:
+            t += 60 as i64
+        end
+        steps += 1
+    end
+    if z.ok: calendar.FreeZone(z) end
+    ret found
+end
+
+@en "SetZone"
+@fa "تنظیم منطقه"
+pub func SetZone(name: str, fallback_minutes: int):
+    _zone_name = str.Clone(name)
+    _zone_fallback = fallback_minutes
+end
+
+// Registers fn (a func(id: i64)) under spec. Register every job before Run.
+// Returns the job id, or -1 when spec does not parse.
+@en "Add"
+@fa "افزودن"
+pub func Add(name: str, spec: str, fn: i64): int:
+    e := Parse(spec)
+    if not e.ok: ret 0 - 1 end
+    cell := mem.AllocateZeroed(8 as u64) as i64*
+    _jobs.push(_Job { name = str.Clone(name), expr = e, fn = fn, busy = cell as i64 })
+    ret _jobs.len() - 1
+end
+
+@en "Count"
+@fa "تعداد"
+pub func Count(): int: ret _jobs.len() end
+
+@en "Name"
+@fa "نام"
+pub func Name(id: int): str: ret _jobs.get(id).name end
+
+@en "IsBusy"
+@fa "مشغول است"
+pub func IsBusy(id: int): bool:
+    ret atomic_load(_jobs.get(id).busy as i64*) != (0 as i64)
+end
+
+// Starts every job due in the minute containing now (UTC seconds), each on
+// its own thread. A job still running from an earlier firing is skipped.
+// Returns how many jobs were started.
+@en "RunDue"
+@fa "اجرای موعد"
+pub func RunDue(now: i64): int:
+    local := now + OffsetSeconds(_zone_name, _zone_fallback, now)
+    mut started := 0
+    n := _jobs.len()
+    repeat n in i:
+        j := _jobs.get(i)
+        if MatchesLocal(j.expr, local):
+            if atomic_swap(j.busy as i64*, 1 as i64) == (0 as i64):
+                salam_cron_spawn(_cron_entry, i as i64)
+                started += 1
+            end
+        end
+    end
+    ret started
+end
+
+// Blocks, firing due jobs once per minute until Stop is called.
+@en "Run"
+@fa "اجرا"
+pub func Run():
+    if _stop == null:
+        _stop = mem.AllocateZeroed(8 as u64) as i64*
+    end
+    until atomic_load(_stop) == (0 as i64):
+        now := time.Now()
+        minute := now / (60 as i64)
+        if minute != _last_minute:
+            _last_minute = minute
+            RunDue(now)
+        end
+        wait := (60 as i64) - (now % (60 as i64))
+        if wait > (1 as i64):
+            time.Sleep(((wait - (1 as i64)) * (1000 as i64)) as int)
+        else:
+            time.Sleep(200)
+        end
+    end
+end
+
+@en "RunBackground"
+@fa "اجرا در پس‌زمینه"
+pub func RunBackground():
+    if _stop == null:
+        _stop = mem.AllocateZeroed(8 as u64) as i64*
+    end
+    salam_cron_spawn(_cron_loop, 0 as i64)
+end
+
+@en "Stop"
+@fa "توقف"
+pub func Stop():
+    if _stop != null:
+        atomic_store(_stop, 1 as i64)
+    end
+end

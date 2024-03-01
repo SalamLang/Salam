@@ -1,0 +1,214 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graphql
+
+import encoding.value
+
+mut _gql_slots := GqlSlotTable {}
+
+func _rs_at(id: i64): ResolverSlot:
+    i := id as int
+    if i < 0 or i >= _gql_slots.items.len(): ret ResolverSlot {} end
+    ret _gql_slots.items.get(i)
+end
+
+func _rs_store(id: i64, s: ResolverSlot):
+    i := id as int
+    if i < 0 or i >= _gql_slots.items.len(): ret end
+    _gql_slots.items.set(i, s)
+end
+
+func _rs_alloc(): int:
+    mut i := 0
+    until i < _gql_slots.items.len():
+        if not _gql_slots.items.get(i).busy:
+            mut s := ResolverSlot {}
+            s.busy = true
+            _gql_slots.items.set(i, s)
+            ret i
+        end
+        i += 1
+    end
+    mut s := ResolverSlot {}
+    s.busy = true
+    _gql_slots.items.push(s)
+    ret _gql_slots.items.len() - 1
+end
+
+func _rs_release(id: int):
+    if id < 0 or id >= _gql_slots.items.len(): ret end
+    _gql_slots.items.set(id, ResolverSlot {})
+end
+
+func _rs_prepare(id: int, parent: value.Value, args: value.Value, ctx: value.Value, parentType: str, fieldName: str):
+    mut s := _rs_at(id as i64)
+    s.busy = true
+    s.parent = parent
+    s.args = args
+    s.ctx = ctx
+    s.parentType = parentType
+    s.fieldName = fieldName
+    _rs_store(id as i64, s)
+end
+
+func _rs_set_result(slot: i64, v: value.Value):
+    mut s := _rs_at(slot)
+    s.result = v
+    s.resolved = true
+    _rs_store(slot, s)
+end
+
+func _rs_lookup(sch: Schema, typeName: str, fieldName: str): i64:
+    t := FindType(sch, typeName)
+    f := FindField(t, fieldName)
+    if f.resolver != 0: ret f.resolver end
+    mut i := 0
+    until i < t.interfaces.len():
+        it := FindType(sch, t.interfaces.get(i))
+        itf := FindField(it, fieldName)
+        if itf.resolver != 0: ret itf.resolver end
+        i += 1
+    end
+    ret 0
+end
+
+@en "SetResolver"
+@fa "تعیین حل‌کننده"
+pub func SetResolver(sch &: Schema, typeName: str, fieldName: str, fn: i64): bool:
+    idx := TypeIndex(sch, typeName)
+    if idx < 0: ret false end
+    mut t := sch.types.get(idx)
+    mut i := 0
+    until i < t.fields.len():
+        mut f := t.fields.get(i)
+        if f.name == fieldName:
+            f.resolver = fn
+            t.fields.set(i, f)
+            sch.types.set(idx, t)
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+@en "HasResolver"
+@fa "حل‌کننده دارد"
+pub func HasResolver(sch: Schema, typeName: str, fieldName: str): bool:
+    ret _rs_lookup(sch, typeName, fieldName) != 0
+end
+
+@en "Parent"
+@fa "والد"
+pub func Parent(slot: i64): value.Value: ret _rs_at(slot).parent end
+
+@en "Args"
+@fa "آرگومان‌ها"
+pub func Args(slot: i64): value.Value: ret _rs_at(slot).args end
+
+@en "Context"
+@fa "زمینه"
+pub func Context(slot: i64): value.Value: ret _rs_at(slot).ctx end
+
+@en "FieldName"
+@fa "نام فیلد"
+pub func FieldName(slot: i64): str: ret _rs_at(slot).fieldName end
+
+@en "ParentTypeName"
+@fa "نام نوع والد"
+pub func ParentTypeName(slot: i64): str: ret _rs_at(slot).parentType end
+
+@en "HasArg"
+@fa "آرگومان دارد"
+pub func HasArg(slot: i64, name: str): bool:
+    ret value.ObjectHas(_rs_at(slot).args, name)
+end
+
+@en "Arg"
+@fa "آرگومان"
+pub func Arg(slot: i64, name: str): value.Value:
+    ret value.ObjectGet(_rs_at(slot).args, name)
+end
+
+@en "ArgInt"
+@fa "آرگومان عددی"
+pub func ArgInt(slot: i64, name: str): i64:
+    ret value.AsInt(Arg(slot, name))
+end
+
+@en "ArgFloat"
+@fa "آرگومان اعشاری"
+pub func ArgFloat(slot: i64, name: str): f64:
+    ret value.AsFloat(Arg(slot, name))
+end
+
+@en "ArgStr"
+@fa "آرگومان رشته"
+pub func ArgStr(slot: i64, name: str): str:
+    ret value.AsString(Arg(slot, name))
+end
+
+@en "ArgBool"
+@fa "آرگومان بولی"
+pub func ArgBool(slot: i64, name: str): bool:
+    ret value.AsBool(Arg(slot, name))
+end
+
+@en "ParentField"
+@fa "فیلد والد"
+pub func ParentField(slot: i64, name: str): value.Value:
+    ret value.ObjectGet(_rs_at(slot).parent, name)
+end
+
+@en "Resolve"
+@fa "حل"
+pub func Resolve(slot: i64, v: value.Value): _rs_set_result(slot, v) end
+
+@en "ResolveInt"
+@fa "حل عددی"
+pub func ResolveInt(slot: i64, n: i64): _rs_set_result(slot, value.ValueInt(n)) end
+
+@en "ResolveFloat"
+@fa "حل اعشاری"
+pub func ResolveFloat(slot: i64, f: f64): _rs_set_result(slot, value.ValueFloat(f)) end
+
+@en "ResolveStr"
+@fa "حل رشته"
+pub func ResolveStr(slot: i64, s: str): _rs_set_result(slot, value.ValueString(s)) end
+
+@en "ResolveBool"
+@fa "حل بولی"
+pub func ResolveBool(slot: i64, b: bool): _rs_set_result(slot, value.ValueBool(b)) end
+
+@en "ResolveNull"
+@fa "حل تهی"
+pub func ResolveNull(slot: i64): _rs_set_result(slot, value.ValueNull()) end
+
+@en "Fail"
+@fa "شکست"
+pub func Fail(slot: i64, message: str):
+    mut s := _rs_at(slot)
+    s.failed = true
+    s.message = message
+    s.resolved = true
+    _rs_store(slot, s)
+end
+
+@en "ResetSlots"
+@fa "بازنشانی شکاف‌ها"
+pub func ResetSlots():
+    _gql_slots.items.free()
+    _gql_slots = GqlSlotTable {}
+end

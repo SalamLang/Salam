@@ -1,0 +1,82 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.meilisearch
+
+include fake "_fake.salam"
+
+const PORT := 19803
+
+func show_task(label: str, t: meilisearch.TaskInfo, err: meilisearch.Error):
+    println label + ": " + fake.Last()
+    println "  -> task " + t.task_uid + " " + t.kind + " " + t.status + " [" + t.index_uid + "] at " + t.enqueued_at
+    if not meilisearch.Ok(err):
+        println "  error: " + meilisearch.ErrorString(err)
+    end
+end
+
+func main:
+    queued := `{"taskUid":1,"indexUid":"movies","status":"enqueued","type":"indexCreation","enqueuedAt":"2025-01-02T03:04:05Z"}`
+    fake.On("POST", "/indexes", 202, queued)
+    fake.On("POST", "/indexes", 202, `{"taskUid":2,"indexUid":"books","status":"enqueued","type":"indexCreation","enqueuedAt":"2025-01-02T03:04:05Z"}`)
+    fake.On("GET", "/indexes/movies", 200, `{"uid":"movies","createdAt":"2025-01-01T00:00:00Z","updatedAt":"2025-01-02T00:00:00Z","primaryKey":"id"}`)
+    fake.On("GET", "/indexes", 200, `{"results":[{"uid":"books","primaryKey":"isbn","createdAt":"a","updatedAt":"b"},{"uid":"movies","primaryKey":null,"createdAt":"c","updatedAt":"d"}],"offset":1,"limit":2,"total":3}`)
+    fake.On("PATCH", "/indexes/movies", 202, `{"taskUid":3,"indexUid":"movies","status":"enqueued","type":"indexUpdate","enqueuedAt":"2025-01-02T03:04:05Z"}`)
+    fake.On("PATCH", "/indexes/movies", 202, `{"taskUid":4,"indexUid":"movies","status":"enqueued","type":"indexUpdate","enqueuedAt":"2025-01-02T03:04:05Z"}`)
+    fake.On("DELETE", "/indexes/movies", 202, `{"taskUid":5,"indexUid":"movies","status":"enqueued","type":"indexDeletion","enqueuedAt":"2025-01-02T03:04:05Z"}`)
+    fake.On("POST", "/swap-indexes", 202, `{"taskUid":6,"indexUid":null,"status":"enqueued","type":"indexSwap","enqueuedAt":"2025-01-02T03:04:05Z"}`)
+    fake.On("GET", "/indexes/movies/stats", 200, `{"numberOfDocuments":19654,"rawDocumentDbSize":2087936,"avgDocumentSize":106,"isIndexing":true,"numberOfEmbeddings":12,"numberOfEmbeddedDocuments":6,"fieldDistribution":{"id":19654,"title":19654}}`)
+    fake.On("GET", "/indexes/ghost", 404, `{"message":"Index ` + "`ghost`" + ` not found.","code":"index_not_found","type":"invalid_request","link":"https://docs.meilisearch.com/errors#index_not_found"}`)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    c := meilisearch.New("http://127.0.0.1:" + PORT, "masterKey")
+    mut err := meilisearch.Error {}
+
+    show_task("create", meilisearch.CreateIndex(c, "movies", "id", err), err)
+    show_task("create without key", meilisearch.CreateIndex(c, "books", "", err), err)
+
+    i := meilisearch.GetIndex(c, "movies", err)
+    println "index: " + i.uid + " pk=" + i.primary_key + " " + i.created_at + " " + i.updated_at
+
+    ghost := meilisearch.GetIndex(c, "ghost", err)
+    println "ghost: [" + ghost.uid + "] " + err.code + " " + err.status
+
+    page := meilisearch.ListIndexes(c, 1, 2, err)
+    println fake.Last()
+    println "list: offset=" + page.offset + " limit=" + page.limit + " total=" + page.total
+    each idx in page.results:
+        println "  " + idx.uid + " pk=[" + idx.primary_key + "]"
+    end
+    meilisearch.ListIndexes(c, 0, 0, err)
+    println fake.Last()
+
+    show_task("update", meilisearch.UpdateIndex(c, "movies", "movie_id", err), err)
+    show_task("rename", meilisearch.RenameIndex(c, "movies", "films", err), err)
+    show_task("delete", meilisearch.DeleteIndex(c, "movies", err), err)
+
+    mut swaps := Vector {} as Vector<meilisearch.IndexSwap>
+    swaps.push(meilisearch.IndexSwap { first = "movies", second = "movies_new" })
+    swaps.push(meilisearch.IndexSwap { first = "books", second = "books_tmp", rename = true })
+    show_task("swap", meilisearch.SwapIndexes(c, swaps, err), err)
+
+    s := meilisearch.GetIndexStats(c, "movies", err)
+    println "stats: docs=" + s.number_of_documents + " raw=" + s.raw_document_db_size + " avg=" + s.avg_document_size + " indexing=" + s.is_indexing
+    println "  embeddings=" + s.number_of_embeddings + " embedded=" + s.number_of_embedded_documents + " fields=" + s.field_distribution
+
+    meilisearch.GetIndex(c, "a b/c", err)
+    println "escaped: " + fake.Last()
+    ret 0
+end

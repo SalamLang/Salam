@@ -1,0 +1,275 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package rpc
+
+import encoding.value
+import encoding.json
+import encoding.encerr
+
+func _is_valid_id(v: value.Value): bool:
+    ret value.IsString(v) or value.IsInt(v) or value.IsFloat(v) or value.IsNull(v)
+end
+
+func _err_to_value(e: Error): value.Value:
+    mut o := value.NewValueObject()
+    value.ObjectSet(o, "code", value.ValueInt(e.code as i64))
+    value.ObjectSet(o, "message", value.ValueString(e.message))
+    if e.has_data:
+        value.ObjectSet(o, "data", e.data)
+    end
+    ret o
+end
+
+func _value_to_err(v: value.Value): Error:
+    mut e := Error {}
+    e.code = RPC_INTERNAL_ERROR
+    e.message = "Internal error"
+    if not value.IsObject(v): ret e end
+    if value.ObjectHas(v, "code"):
+        c := value.ObjectGet(v, "code")
+        if value.IsInt(c) or value.IsFloat(c): e.code = value.AsInt(c) as int end
+    end
+    if value.ObjectHas(v, "message"):
+        m := value.ObjectGet(v, "message")
+        if value.IsString(m): e.message = value.AsString(m) end
+    end
+    if value.ObjectHas(v, "data"):
+        e.data = value.ObjectGet(v, "data")
+        e.has_data = true
+    end
+    ret e
+end
+
+func _decode_one_request(v: value.Value, out &: Request): Error:
+    mut e := Error {}
+    e.code = 0
+    if not value.IsObject(v):
+        ret StdError(RPC_INVALID_REQUEST)
+    end
+    if not value.ObjectHas(v, "jsonrpc"):
+        ret StdError(RPC_INVALID_REQUEST)
+    end
+    ver := value.ObjectGet(v, "jsonrpc")
+    if not value.IsString(ver) or value.AsString(ver) != "2.0":
+        ret StdError(RPC_INVALID_REQUEST)
+    end
+    if not value.ObjectHas(v, "method"):
+        ret StdError(RPC_INVALID_REQUEST)
+    end
+    m := value.ObjectGet(v, "method")
+    if not value.IsString(m):
+        ret StdError(RPC_INVALID_REQUEST)
+    end
+    out.method = value.AsString(m)
+    if value.ObjectHas(v, "params"):
+        p := value.ObjectGet(v, "params")
+        if not value.IsArray(p) and not value.IsObject(p):
+            ret StdError(RPC_INVALID_PARAMS)
+        end
+        out.params = p
+        out.has_params = true
+    end
+    if value.ObjectHas(v, "id"):
+        idv := value.ObjectGet(v, "id")
+        if not _is_valid_id(idv):
+            ret StdError(RPC_INVALID_REQUEST)
+        end
+        out.id = idv
+        out.has_id = true
+        if value.IsInt(idv): out.msgid = value.AsInt(idv) end
+    end
+    ret e
+end
+
+func _decode_one_response(v: value.Value, out &: Response): bool:
+    if not value.IsObject(v): ret false end
+    if value.ObjectHas(v, "id"):
+        out.id = value.ObjectGet(v, "id")
+        out.has_id = true
+        if value.IsInt(out.id): out.msgid = value.AsInt(out.id) end
+    end
+    if value.ObjectHas(v, "error"):
+        out.is_error = true
+        out.err = _value_to_err(value.ObjectGet(v, "error"))
+        ret true
+    end
+    if value.ObjectHas(v, "result"):
+        out.result = value.ObjectGet(v, "result")
+        ret true
+    end
+    ret false
+end
+
+@en "JsonEncodeRequest"
+@fa "کدگذاری درخواست جیسون"
+pub func JsonEncodeRequest(r: Request): str:
+    mut o := value.NewValueObject()
+    value.ObjectSet(o, "jsonrpc", value.ValueString("2.0"))
+    value.ObjectSet(o, "method", value.ValueString(r.method))
+    if r.has_params:
+        value.ObjectSet(o, "params", r.params)
+    end
+    if r.has_id:
+        value.ObjectSet(o, "id", r.id)
+    end
+    ret json.EncodeDefault(o)
+end
+
+@en "JsonEncodeResponse"
+@fa "کدگذاری پاسخ جیسون"
+pub func JsonEncodeResponse(r: Response): str:
+    mut o := value.NewValueObject()
+    value.ObjectSet(o, "jsonrpc", value.ValueString("2.0"))
+    if r.is_error:
+        value.ObjectSet(o, "error", _err_to_value(r.err))
+    else:
+        value.ObjectSet(o, "result", r.result)
+    end
+    if r.has_id:
+        value.ObjectSet(o, "id", r.id)
+    else:
+        value.ObjectSet(o, "id", value.ValueNull())
+    end
+    ret json.EncodeDefault(o)
+end
+
+@en "JsonEncodeResponses"
+@fa "کدگذاری پاسخ‌های جیسون"
+pub func JsonEncodeResponses(rs: Responses): str:
+    n := rs.items.len()
+    if n == 0: ret "" end
+    if not rs.is_batch:
+        ret JsonEncodeResponse(rs.items.get(0))
+    end
+    mut parts := Vector {} as Vector<str>
+    mut i := 0
+    until i < n:
+        parts.push(JsonEncodeResponse(rs.items.get(i)))
+        i += 1
+    end
+    ret json.Array(parts)
+end
+
+@en "JsonDecodeBatch"
+@fa "کدگشایی دسته جیسون"
+pub func JsonDecodeBatch(text: str): Batch:
+    mut b := Batch {}
+    mut jerr := encerr.NoError()
+    v := json.Decode(text, jerr)
+    if encerr.IsError(jerr):
+        b.ok = false
+        b.err = StdError(RPC_PARSE_ERROR)
+        ret b
+    end
+    if value.IsArray(v):
+        b.is_batch = true
+        n := value.ArrayLen(v)
+        if n == 0:
+            b.ok = false
+            b.err = StdError(RPC_INVALID_REQUEST)
+            ret b
+        end
+        mut i := 0
+        until i < n:
+            mut r := Request {}
+            e := _decode_one_request(value.ArrayGet(v, i), r)
+            if e.code != 0:
+                r.method = ""
+                r.err_code = e.code
+                r.err_message = e.message
+            end
+            b.items.push(r)
+            i += 1
+        end
+        ret b
+    end
+    mut r := Request {}
+    e := _decode_one_request(v, r)
+    if e.code != 0:
+        r.method = ""
+        r.err_code = e.code
+        r.err_message = e.message
+    end
+    b.items.push(r)
+    ret b
+end
+
+@en "JsonDecodeRequest"
+@fa "کدگشایی درخواست جیسون"
+pub func JsonDecodeRequest(text: str, ok &: bool): Request:
+    b := JsonDecodeBatch(text)
+    mut r := Request {}
+    if not b.ok or b.is_batch or b.items.len() != 1:
+        ok = false
+        ret r
+    end
+    r = b.items.get(0)
+    ok = r.err_code == 0
+    ret r
+end
+
+@en "JsonDecodeResponse"
+@fa "کدگشایی پاسخ جیسون"
+pub func JsonDecodeResponse(text: str, ok &: bool): Response:
+    mut r := Response {}
+    mut jerr := encerr.NoError()
+    v := json.Decode(text, jerr)
+    if encerr.IsError(jerr):
+        ok = false
+        ret r
+    end
+    ok = _decode_one_response(v, r)
+    ret r
+end
+
+@en "JsonDecodeResponses"
+@fa "کدگشایی پاسخ‌های جیسون"
+pub func JsonDecodeResponses(text: str, ok &: bool): Responses:
+    mut rs := Responses {}
+    mut jerr := encerr.NoError()
+    v := json.Decode(text, jerr)
+    if encerr.IsError(jerr):
+        ok = false
+        ret rs
+    end
+    if value.IsArray(v):
+        rs.is_batch = true
+        n := value.ArrayLen(v)
+        mut i := 0
+        until i < n:
+            mut one := Response {}
+            if _decode_one_response(value.ArrayGet(v, i), one):
+                rs.items.push(one)
+            end
+            i += 1
+        end
+        ok = true
+        ret rs
+    end
+    mut one := Response {}
+    ok = _decode_one_response(v, one)
+    if ok: rs.items.push(one) end
+    ret rs
+end
+
+@en "JsonTopLevelError"
+@fa "خطای سطح بالای جیسون"
+pub func JsonTopLevelError(e: Error): str:
+    mut r := Response {}
+    r.is_error = true
+    r.err = e
+    r.has_id = false
+    ret JsonEncodeResponse(r)
+end

@@ -1,0 +1,941 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aiengine
+
+import net.tcp
+import encoding.json
+import encoding.value
+import encoding.encerr
+import str
+import conv
+import sync
+import time
+
+include aiact "activity.salam"
+
+const CALL_MS := 20000
+const SEND_MS := 60000
+const TRACE_FIELD_MAX := 200000
+
+mut ENGINE_HOST := "127.0.0.1"
+mut ENGINE_PORT := 4096
+mut ENGINE_BASE := ""
+mut ENGINE_AUTH := ""
+mut ENGINE_AGENT := ""
+mut DESKTOP_AGENT := ""
+mut PLAIN_AGENT := ""
+mut SYSTEM := ""
+mut LOCK := sync.Mutex {}
+mut AGENTS := ""
+mut AGENTS_AT := 0 as i64
+mut SESSION_AGENT := HashMap {} as HashMap<str, str>
+mut SESSION_PROMPT := HashMap {} as HashMap<str, str>
+mut SESSION_PARTS := HashMap {} as HashMap<str, str>
+mut CAPS_AT := 0 as i64
+mut PRICES := HashMap {} as HashMap<str, str>
+mut PRICES_AT := 0 as i64
+mut CAPS_IMAGE := false
+mut CAPS_PDF := false
+mut SESSION_MODEL := HashMap {} as HashMap<str, str>
+mut SESSION_SYSTEM := HashMap {} as HashMap<str, str>
+mut SESSION_TOOLS := HashMap {} as HashMap<str, str>
+mut SESSION_TRY := HashMap {} as HashMap<str, int>
+mut SESSION_RETRY_AT := HashMap {} as HashMap<str, i64>
+mut FALLBACKS := Vector {} as Vector<str>
+
+struct Answer:
+    pub status: int = 0
+    pub body: str = ""
+end
+
+pub struct Reply:
+    pub text: str = ""
+    pub phase: str = "thinking"
+    pub done: bool = false
+    pub failed: bool = false
+    pub activity: str = "[]"
+    pub started: bool = false
+    pub idle: bool = false
+    pub acted: bool = false
+    pub timed_out: bool = false
+    pub interrupted: bool = false
+end
+
+pub struct Usage:
+    pub ok: bool = false
+    pub input: i64 = 0
+    pub output: i64 = 0
+    pub reasoning: i64 = 0
+    pub cache_read: i64 = 0
+    pub cache_write: i64 = 0
+    pub cost: f64 = 0.0
+    pub cost_in: f64 = 0.0
+    pub cost_out: f64 = 0.0
+    pub tools: int = 0
+    pub steps: int = 0
+    pub ms: i64 = 0
+end
+
+func hex_value(s: str): int:
+    mut n := 0
+    mut i := 0
+    digits := "0123456789abcdef"
+    lower := str.Lower(str.Trim(s))
+    until i < lower.len():
+        c := lower.substr(i, 1)
+        if c == ";":
+            break
+        end
+        d := digits.find(c)
+        if d < 0:
+            ret -1
+        end
+        n = n * 16 + d
+        i += 1
+    end
+    if i == 0:
+        ret -1
+    end
+    ret n
+end
+
+func dechunk(raw: str, ok &: bool): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut pos := 0
+    ok = false
+    until pos < raw.len():
+        rest := raw.substr(pos, raw.len() - pos)
+        le := rest.find("\r\n")
+        if le < 0:
+            break
+        end
+        size := hex_value(rest.substr(0, le))
+        if size < 0:
+            break
+        end
+        if size == 0:
+            ok = true
+            break
+        end
+        if rest.len() < le + 2 + size:
+            break
+        end
+        str.BufAppend(b, rest.substr(le + 2, size))
+        pos = pos + le + 2 + size + 2
+    end
+    ret str.BufStr(b)
+end
+
+func call(method: str, path: str, body: str, wait_ms: int): Answer:
+    mut out := Answer {}
+    c := tcp.Dial(ENGINE_HOST, ENGINE_PORT)
+    if not tcp.ConnOk(c):
+        tcp.Close(c)
+        ret out
+    end
+    tcp.SetReadDeadline(c, wait_ms)
+    tcp.SetWriteDeadline(c, wait_ms)
+    mut req := method + " " + ENGINE_BASE + path + " HTTP/1.1\r\nHost: " + ENGINE_HOST + "\r\nUser-Agent: salam-ai\r\nAccept: application/json\r\nConnection: close\r\n"
+    if ENGINE_AUTH.len() > 0:
+        req = req + "Authorization: " + ENGINE_AUTH + "\r\n"
+    end
+    if method != "GET":
+        req = req + "Content-Type: application/json\r\nContent-Length: " + body.len() + "\r\n"
+    end
+    req = req + "\r\n" + body
+    if tcp.Write(c, req) <= 0:
+        tcp.Close(c)
+        ret out
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    until true:
+        got := tcp.Read(c, 65536)
+        if got.len() == 0:
+            break
+        end
+        str.BufAppend(b, got)
+    end
+    tcp.Close(c)
+    raw := str.BufStr(b)
+    he := raw.find("\r\n\r\n")
+    sp := raw.find(" ")
+    if he < 0 or sp < 0 or sp > he:
+        ret out
+    end
+    head := str.Lower(raw.substr(0, he))
+    mut rest := raw.substr(he + 4, raw.len() - he - 4)
+    if head.find("transfer-encoding: chunked") >= 0:
+        mut whole := false
+        rest = dechunk(rest, whole)
+        if not whole:
+            ret out
+        end
+    else:
+        cl := head.find("content-length:")
+        if cl >= 0:
+            tail := head.substr(cl + 15, head.len() - cl - 15)
+            le := tail.find("\r\n")
+            want := str.Trim(le >= 0 ? tail.substr(0, le) : tail).to_int()
+            if rest.len() < want:
+                ret out
+            end
+        end
+    end
+    out.status = raw.substr(sp + 1, 3).to_int()
+    out.body = rest
+    ret out
+end
+
+func ok_status(r: Answer): bool:
+    ret r.status >= 200 and r.status < 300
+end
+
+func busy_now(sid: str, known &: bool): bool:
+    r := call("GET", "/session/status", "", CALL_MS)
+    known = ok_status(r)
+    if not known:
+        ret true
+    end
+    ret json.Has(r.body, sid)
+end
+
+func field(v: value.Value, key: str): value.Value:
+    mut ok := false
+    got := value.ObjectGetOk(v, key, ok)
+    if not ok:
+        ret value.ValueNull()
+    end
+    ret got
+end
+
+func text_of(v: value.Value, key: str): str:
+    f := field(v, key)
+    if value.IsString(f):
+        ret value.AsString(f)
+    end
+    ret ""
+end
+
+func num(v: value.Value, key: str): i64:
+    f := field(v, key)
+    if value.IsNumber(f):
+        ret value.AsInt(f)
+    end
+    ret 0
+end
+
+func flag(v: value.Value, key: str): bool:
+    f := field(v, key)
+    ret value.IsBool(f) and value.AsBool(f)
+end
+
+func agent_exists(name: str): bool:
+    now := time.NowMillis()
+    _l := sync.Lock(LOCK)
+    mut names := AGENTS
+    stale := now - AGENTS_AT > 300000
+    _u := sync.Unlock(LOCK)
+    if stale or names.len() == 0:
+        r := call("GET", "/agent", "", CALL_MS)
+        if not ok_status(r):
+            ret true
+        end
+        mut found := Vector {} as Vector<str>
+        mut err := encerr.EncodingError {}
+        list := json.Decode(r.body, err)
+        if value.IsArray(list):
+            repeat value.ArrayLen(list) in i:
+                found.push(text_of(value.ArrayGet(list, i), "name"))
+            end
+        end
+        value.ValueFree(list)
+        names = "\n" + str.Join(found, "\n") + "\n"
+        _a := sync.Lock(LOCK)
+        AGENTS = names
+        AGENTS_AT = now
+        _b := sync.Unlock(LOCK)
+    end
+    ret names.find("\n" + name + "\n") >= 0
+end
+
+func model_json(model: str): str:
+    slash := model.find("/")
+    if slash <= 0 or slash >= model.len() - 1:
+        ret ""
+    end
+    ret `, "model": {"providerID": ` + json.Str(model.substr(0, slash)) + `, "modelID": ` + json.Str(model.substr(slash + 1, model.len() - slash - 1)) + "}"
+end
+
+func remember(sid: str, agent: str, text: str, model: str, fresh: bool, parts: str, system: str, tools: str):
+    _l := sync.Lock(LOCK)
+    if SESSION_AGENT.size() > 5000:
+        SESSION_AGENT = HashMap {} as HashMap<str, str>
+        SESSION_PROMPT = HashMap {} as HashMap<str, str>
+        SESSION_PARTS = HashMap {} as HashMap<str, str>
+        SESSION_MODEL = HashMap {} as HashMap<str, str>
+        SESSION_SYSTEM = HashMap {} as HashMap<str, str>
+        SESSION_TOOLS = HashMap {} as HashMap<str, str>
+        SESSION_TRY = HashMap {} as HashMap<str, int>
+        SESSION_RETRY_AT = HashMap {} as HashMap<str, i64>
+    end
+    SESSION_AGENT.put(sid, agent)
+    SESSION_MODEL.put(sid, model)
+    SESSION_SYSTEM.put(sid, system)
+    SESSION_TOOLS.put(sid, tools)
+    if fresh:
+        SESSION_PROMPT.put(sid, text)
+        SESSION_PARTS.put(sid, parts)
+        SESSION_TRY.put(sid, 0)
+        _r := SESSION_RETRY_AT.remove(sid)
+    end
+    _u := sync.Unlock(LOCK)
+end
+
+func post_prompt(sid: str, agent: str, text: str, model: str, parts: str, system: str, tools: str): bool:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, `{"agent": `)
+    str.BufAppend(b, json.Str(agent))
+    str.BufAppend(b, model_json(model))
+    if system.len() > 0:
+        str.BufAppend(b, `, "system": `)
+        str.BufAppend(b, json.Str(system))
+    end
+    if tools.len() > 0:
+        str.BufAppend(b, `, "tools": `)
+        str.BufAppend(b, tools)
+    end
+    str.BufAppend(b, `, "parts": [{"type": "text", "text": `)
+    str.BufAppend(b, json.Str(text))
+    str.BufAppend(b, "}")
+    str.BufAppend(b, parts)
+    str.BufAppend(b, "]}")
+    ret ok_status(call("POST", "/session/" + sid + "/prompt_async", str.BufStr(b), SEND_MS))
+end
+
+func send_as(sid: str, agent: str, text: str, parts: str, system: str, tools: str): bool:
+    remember(sid, agent, text, "", true, parts, system, tools)
+    ret post_prompt(sid, agent, text, "", parts, system, tools)
+end
+
+func caps_model(config: value.Value, agent: str): str:
+    own := text_of(field(field(config, "agent"), agent), "model")
+    if own.len() > 0:
+        ret own
+    end
+    ret text_of(config, "model")
+end
+
+func load_caps():
+    mut image := false
+    mut pdf := false
+    mut loaded := false
+    r := call("GET", "/config", "", CALL_MS)
+    if ok_status(r):
+        mut err := encerr.EncodingError {}
+        config := json.Decode(r.body, err)
+        model := caps_model(config, ENGINE_AGENT)
+        value.ValueFree(config)
+        slash := model.find("/")
+        if slash > 0:
+            pid := model.substr(0, slash)
+            mid := model.substr(slash + 1, model.len() - slash - 1)
+            pr := call("GET", "/config/providers", "", CALL_MS)
+            if ok_status(pr):
+                mut perr := encerr.EncodingError {}
+                all := json.Decode(pr.body, perr)
+                list := field(all, "providers")
+                if value.IsArray(list):
+                    repeat value.ArrayLen(list) in i:
+                        prov := value.ArrayGet(list, i)
+                        if text_of(prov, "id") == pid:
+                            accepts := field(field(field(field(prov, "models"), mid), "capabilities"), "input")
+                            image = flag(accepts, "image")
+                            pdf = flag(accepts, "pdf")
+                            loaded = value.IsObject(accepts)
+                        end
+                    end
+                end
+                value.ValueFree(all)
+            end
+        end
+    end
+    _l := sync.Lock(LOCK)
+    if loaded:
+        CAPS_IMAGE = image
+        CAPS_PDF = pdf
+        CAPS_AT = time.NowMillis()
+    else:
+        CAPS_AT = time.NowMillis() - 540000
+    end
+    _u := sync.Unlock(LOCK)
+end
+
+func scrub(s: str, mask: str): str:
+    mut t := s
+    if mask.len() > 0:
+        t = str.Replace(t, mask, "…")
+    end
+    t = aiact.Mask(t)
+    if t.len() > TRACE_FIELD_MAX:
+        t = str.CharSubstr(t, 0, TRACE_FIELD_MAX / 2) + "\n…"
+    end
+    ret t
+end
+
+func millis(v: value.Value, key: str): i64:
+    f := field(v, key)
+    if value.IsNumber(f):
+        ret value.AsInt(f)
+    end
+    ret 0
+end
+
+func trace_part(p: value.Value, mask: str): str:
+    kind := text_of(p, "type")
+    mut m := Vector {} as Vector<str>
+    if kind == "text":
+        t := text_of(p, "text")
+        if str.Trim(t).len() == 0:
+            ret ""
+        end
+        m.push(json.Member("kind", "text"))
+        m.push(json.Member("text", scrub(t, mask)))
+        m.push(json.MemberBool("synthetic", flag(p, "synthetic")))
+        m.push(json.MemberInt("at", millis(field(p, "time"), "start")))
+    else kind == "reasoning":
+        t := text_of(p, "text")
+        if str.Trim(t).len() == 0:
+            ret ""
+        end
+        m.push(json.Member("kind", "think"))
+        m.push(json.Member("text", scrub(t, mask)))
+        m.push(json.MemberInt("at", millis(field(p, "time"), "start")))
+    else kind == "tool":
+        state := field(p, "state")
+        times := field(state, "time")
+        given := field(state, "input")
+        mut args := "{}"
+        if value.IsObject(given):
+            args = json.Encode(given, json.JSONOptions { indent = "  " })
+        end
+        m.push(json.Member("kind", "tool"))
+        m.push(json.Member("tool", text_of(p, "tool")))
+        m.push(json.Member("status", text_of(state, "status")))
+        m.push(json.Member("title", scrub(text_of(state, "title"), mask)))
+        m.push(json.Member("input", scrub(args, mask)))
+        m.push(json.Member("output", scrub(text_of(state, "output"), mask)))
+        m.push(json.Member("error", scrub(text_of(state, "error"), mask)))
+        m.push(json.MemberInt("at", millis(times, "start")))
+        m.push(json.MemberInt("end", millis(times, "end")))
+    else kind == "file":
+        m.push(json.Member("kind", "file"))
+        m.push(json.Member("text", text_of(p, "filename") + " " + text_of(p, "mime")))
+    else:
+        ret ""
+    end
+    ret json.Object(m)
+end
+
+func load_prices():
+    pr := call("GET", "/config/providers", "", CALL_MS)
+    if not ok_status(pr):
+        _l := sync.Lock(LOCK)
+        PRICES_AT = time.NowMillis() - 540000
+        _u := sync.Unlock(LOCK)
+        ret
+    end
+    mut perr := encerr.EncodingError {}
+    all := json.Decode(pr.body, perr)
+    list := field(all, "providers")
+    mut table := HashMap {} as HashMap<str, str>
+    if value.IsArray(list):
+        repeat value.ArrayLen(list) in i:
+            prov := value.ArrayGet(list, i)
+            pid := text_of(prov, "id")
+            models := field(prov, "models")
+            if value.IsObject(models):
+                each mid in value.ObjectKeys(models):
+                    c := field(field(models, mid), "cost")
+                    if value.IsObject(c):
+                        table.put(pid + "/" + mid, price_of(c, "input") + "|" + price_of(c, "output") + "|" + price_of(c, "cache_read") + "|" + price_of(c, "cache_write"))
+                    end
+                end
+            end
+        end
+    end
+    value.ValueFree(all)
+    _a := sync.Lock(LOCK)
+    PRICES = table
+    PRICES_AT = time.NowMillis()
+    _b := sync.Unlock(LOCK)
+end
+
+func price_of(c: value.Value, key: str): str:
+    f := field(c, key)
+    if value.IsNumber(f):
+        ret conv.FormatFloatPrec(value.AsFloat(f), 8)
+    end
+    ret "0"
+end
+
+func prices_for(model_key: str, pin &: f64, pout &: f64, pcr &: f64, pcw &: f64): bool:
+    _l := sync.Lock(LOCK)
+    stale := time.NowMillis() - PRICES_AT > 600000
+    _u := sync.Unlock(LOCK)
+    if stale:
+        load_prices()
+    end
+    _a := sync.Lock(LOCK)
+    have := PRICES.has(model_key)
+    row := have ? PRICES.get(model_key) : ""
+    _b := sync.Unlock(LOCK)
+    if not have:
+        ret false
+    end
+    p := row.split("|")
+    if p.len() != 4:
+        ret false
+    end
+    pin = p.get(0).to_float()
+    pout = p.get(1).to_float()
+    pcr = p.get(2).to_float()
+    pcw = p.get(3).to_float()
+    ret pin > 0.0 or pout > 0.0
+end
+
+func split_cost(model_key: str, total: f64, in_tokens: i64, out_tokens: i64, cache_read: i64, cache_write: i64, cost_in &: f64, cost_out &: f64):
+    if total <= 0.0:
+        ret
+    end
+    mut pin := 0.0
+    mut pout := 0.0
+    mut pcr := 0.0
+    mut pcw := 0.0
+    if not prices_for(model_key, pin, pout, pcr, pcw):
+        pin = 1.0
+        pout = 5.0
+        pcr = 0.1
+        pcw = 1.25
+    end
+    ci := (in_tokens as f64) * pin + (cache_read as f64) * pcr + (cache_write as f64) * pcw
+    co := (out_tokens as f64) * pout
+    sum := ci + co
+    if sum <= 0.0:
+        cost_in += total
+        ret
+    end
+    cost_in += total * ci / sum
+    cost_out += total * co / sum
+end
+
+pub func Configure(url: str, auth: str, agent: str, desktop: str):
+    LOCK = sync.NewMutex()
+    mut rest := str.TrimPrefix(url, "http://")
+    slash := rest.find("/")
+    if slash >= 0:
+        ENGINE_BASE = str.TrimSuffix(rest.substr(slash, rest.len() - slash), "/")
+        rest = rest.substr(0, slash)
+    end
+    colon := rest.find(":")
+    if colon > 0:
+        ENGINE_PORT = rest.substr(colon + 1, rest.len() - colon - 1).to_int()
+        ENGINE_HOST = rest.substr(0, colon)
+    else:
+        ENGINE_PORT = 80
+        ENGINE_HOST = rest
+    end
+    ENGINE_AUTH = auth
+    ENGINE_AGENT = agent
+    DESKTOP_AGENT = desktop
+end
+
+pub func NewSession(title: str): str:
+    r := call("POST", "/session", `{"title": ` + json.Str(title) + "}", SEND_MS)
+    if not ok_status(r):
+        ret ""
+    end
+    ret json.Get(r.body, "id")
+end
+
+pub func SetPolicy(system: str, plain_agent: str):
+    SYSTEM = system
+    PLAIN_AGENT = plain_agent
+end
+
+pub func PlainReady(): bool:
+    ret PLAIN_AGENT.len() > 0 and agent_exists(PLAIN_AGENT)
+end
+
+pub func Send(sid: str, text: str, parts: str): bool:
+    ret send_as(sid, ENGINE_AGENT, text, parts, SYSTEM, "")
+end
+
+pub func SendWith(sid: str, text: str, parts: str, plain: bool, system: str, tools: bool): bool:
+    mut agent := ENGINE_AGENT
+    if plain:
+        if PlainReady():
+            agent = PLAIN_AGENT
+        else:
+            println "engine has no agent", PLAIN_AGENT, "so a custom API key is answered by", ENGINE_AGENT
+        end
+    end
+    ret send_as(sid, agent, text, parts, system, tools ? "" : `{"*": false}`)
+end
+
+pub func SendFree(sid: str, text: str, parts: str, system: str): bool:
+    ret SendWith(sid, text, parts, true, system, true)
+end
+
+pub func SendDesktopFree(sid: str, text: str, parts: str, system: str): bool:
+    mut agent := DESKTOP_AGENT
+    if DESKTOP_AGENT != ENGINE_AGENT and not agent_exists(DESKTOP_AGENT):
+        agent = ENGINE_AGENT
+    end
+    ret send_as(sid, agent, text, parts, system, "")
+end
+
+pub func SendDesktop(sid: str, text: str, parts: str): bool:
+    if DESKTOP_AGENT != ENGINE_AGENT and not agent_exists(DESKTOP_AGENT):
+        println "engine has no agent", DESKTOP_AGENT, "so desktop chats use", ENGINE_AGENT
+        ret send_as(sid, ENGINE_AGENT, text, parts, SYSTEM, "")
+    end
+    ret send_as(sid, DESKTOP_AGENT, text, parts, SYSTEM, "")
+end
+
+pub func Accepts(image &: bool, pdf &: bool):
+    _l := sync.Lock(LOCK)
+    stale := time.NowMillis() - CAPS_AT > 600000
+    _u := sync.Unlock(LOCK)
+    if stale:
+        load_caps()
+    end
+    _a := sync.Lock(LOCK)
+    image = CAPS_IMAGE
+    pdf = CAPS_PDF
+    _b := sync.Unlock(LOCK)
+end
+
+pub func Followup(sid: str, text: str): bool:
+    _l := sync.Lock(LOCK)
+    agent := SESSION_AGENT.has(sid) ? SESSION_AGENT.get(sid) : ENGINE_AGENT
+    model := SESSION_MODEL.has(sid) ? SESSION_MODEL.get(sid) : ""
+    system := SESSION_SYSTEM.has(sid) ? SESSION_SYSTEM.get(sid) : SYSTEM
+    tools := SESSION_TOOLS.has(sid) ? SESSION_TOOLS.get(sid) : ""
+    _u := sync.Unlock(LOCK)
+    remember(sid, agent, text, model, false, "", system, tools)
+    ret post_prompt(sid, agent, text, model, "", system, tools)
+end
+
+pub func SetFallbacks(list: str):
+    mut found := Vector {} as Vector<str>
+    each part in str.Split(list, ","):
+        m := str.Trim(part)
+        if model_json(m).len() > 0:
+            found.push(m)
+        end
+    end
+    FALLBACKS = found
+end
+
+pub func Fallbacks(): int:
+    ret FALLBACKS.len()
+end
+
+pub func Retry(sid: str): bool:
+    now := time.NowMillis()
+    _l := sync.Lock(LOCK)
+    if SESSION_RETRY_AT.has(sid) and now - SESSION_RETRY_AT.get(sid) < 4000:
+        _e := sync.Unlock(LOCK)
+        ret true
+    end
+    tried := SESSION_TRY.has(sid) ? SESSION_TRY.get(sid) : FALLBACKS.len()
+    if tried >= FALLBACKS.len() or not SESSION_PROMPT.has(sid):
+        _f := sync.Unlock(LOCK)
+        ret false
+    end
+    SESSION_TRY.put(sid, tried + 1)
+    SESSION_RETRY_AT.put(sid, now)
+    agent := SESSION_AGENT.has(sid) ? SESSION_AGENT.get(sid) : ENGINE_AGENT
+    text := SESSION_PROMPT.get(sid)
+    parts := SESSION_PARTS.has(sid) ? SESSION_PARTS.get(sid) : ""
+    model := FALLBACKS.get(tried)
+    system := SESSION_SYSTEM.has(sid) ? SESSION_SYSTEM.get(sid) : SYSTEM
+    tools := SESSION_TOOLS.has(sid) ? SESSION_TOOLS.get(sid) : ""
+    _u := sync.Unlock(LOCK)
+    seen := Poll(sid)
+    if seen.acted or seen.text.len() > 0:
+        ret false
+    end
+    _a := call("POST", "/session/" + sid + "/abort", "{}", CALL_MS)
+    println "engine turn failed, retrying with fallback", tried + 1, "of", FALLBACKS.len()
+    remember(sid, agent, text, model, false, "", system, tools)
+    ret post_prompt(sid, agent, text, model, parts, system, tools)
+end
+
+pub func SetRedactions(words: str):
+    aiact.Configure(words)
+end
+
+pub func Transcript(sid: str, from_ms: i64, upto_ms: i64, mask: str, ok &: bool): str:
+    ok = false
+    r := call("GET", "/session/" + sid + "/message", "", SEND_MS)
+    if not ok_status(r):
+        ret "[]"
+    end
+    mut err := encerr.EncodingError {}
+    list := json.Decode(r.body, err)
+    if not value.IsArray(list):
+        value.ValueFree(list)
+        ret "[]"
+    end
+    mut out := Vector {} as Vector<str>
+    repeat value.ArrayLen(list) in i:
+        msg := value.ArrayGet(list, i)
+        info := field(msg, "info")
+        at := millis(field(info, "time"), "created")
+        if at >= from_ms and (upto_ms <= 0 or at < upto_ms):
+            role := text_of(info, "role")
+            parts := field(msg, "parts")
+            if role == "user":
+                mut pieces := Vector {} as Vector<str>
+                if value.IsArray(parts):
+                    repeat value.ArrayLen(parts) in j:
+                        pt := value.ArrayGet(parts, j)
+                        if text_of(pt, "type") == "text":
+                            pieces.push(text_of(pt, "text"))
+                        end
+                    end
+                end
+                mut m := Vector {} as Vector<str>
+                m.push(json.Member("kind", "prompt"))
+                m.push(json.Member("text", scrub(str.Join(pieces, "\n\n"), mask)))
+                m.push(json.MemberInt("at", at))
+                out.push(json.Object(m))
+            else role == "assistant":
+                e := field(info, "error")
+                if value.IsArray(parts):
+                    repeat value.ArrayLen(parts) in j:
+                        piece := trace_part(value.ArrayGet(parts, j), mask)
+                        if piece.len() > 0:
+                            out.push(piece)
+                        end
+                    end
+                end
+                if not value.IsNull(e):
+                    mut m := Vector {} as Vector<str>
+                    m.push(json.Member("kind", "error"))
+                    m.push(json.Member("text", scrub(text_of(field(e, "data"), "message") + " " + text_of(e, "name"), mask)))
+                    m.push(json.MemberInt("at", at))
+                    out.push(json.Object(m))
+                end
+            end
+        end
+    end
+    value.ValueFree(list)
+    ok = true
+    ret json.Array(out)
+end
+
+pub func Forget(sid: str):
+    _l := sync.Lock(LOCK)
+    _p := SESSION_PROMPT.remove(sid)
+    _q := SESSION_PARTS.remove(sid)
+    _u := sync.Unlock(LOCK)
+end
+
+pub func Abort(sid: str):
+    Forget(sid)
+    _r := call("POST", "/session/" + sid + "/abort", "{}", CALL_MS)
+end
+
+pub func Delete(sid: str):
+    Forget(sid)
+    _r := call("DELETE", "/session/" + sid, "", CALL_MS)
+end
+
+pub func UsageOf(sid: str): Usage:
+    mut u := Usage {}
+    if sid.len() == 0:
+        ret u
+    end
+    r := call("GET", "/session/" + sid + "/message", "", SEND_MS)
+    if not ok_status(r):
+        ret u
+    end
+    mut err := encerr.EncodingError {}
+    list := json.Decode(r.body, err)
+    if not value.IsArray(list):
+        ret u
+    end
+    n := value.ArrayLen(list)
+    mut start := 0
+    repeat n in i:
+        if text_of(field(value.ArrayGet(list, i), "info"), "role") == "user":
+            start = i + 1
+        end
+    end
+    mut first := 0 as i64
+    mut last := 0 as i64
+    mut k := start
+    until k < n:
+        m := value.ArrayGet(list, k)
+        info := field(m, "info")
+        if text_of(info, "role") == "assistant":
+            u.ok = true
+            u.steps += 1
+            t := field(info, "tokens")
+            u.input += num(t, "input")
+            u.output += num(t, "output")
+            u.reasoning += num(t, "reasoning")
+            u.cache_read += num(field(t, "cache"), "read")
+            u.cache_write += num(field(t, "cache"), "write")
+            c := field(info, "cost")
+            if value.IsNumber(c):
+                u.cost += value.AsFloat(c)
+                split_cost(text_of(info, "providerID") + "/" + text_of(info, "modelID"), value.AsFloat(c), num(t, "input"), num(t, "output") + num(t, "reasoning"), num(field(t, "cache"), "read"), num(field(t, "cache"), "write"), u.cost_in, u.cost_out)
+            end
+            tm := field(info, "time")
+            created := num(tm, "created")
+            completed := num(tm, "completed")
+            if first == 0 or (created > 0 and created < first):
+                first = created
+            end
+            if completed > last:
+                last = completed
+            end
+            parts := field(m, "parts")
+            if value.IsArray(parts):
+                repeat value.ArrayLen(parts) in j:
+                    if text_of(value.ArrayGet(parts, j), "type") == "tool":
+                        u.tools += 1
+                    end
+                end
+            end
+        end
+        k += 1
+    end
+    value.ValueFree(list)
+    if first > 0 and last >= first:
+        u.ms = last - first
+    end
+    ret u
+end
+
+pub func Retrying(sid: str, note &: str, wait_ms &: i64): bool:
+    r := call("GET", "/session/status", "", CALL_MS)
+    if not ok_status(r):
+        ret false
+    end
+    entry := json.Get(r.body, sid)
+    if entry.len() == 0 or json.Get(entry, "type") != "retry":
+        ret false
+    end
+    note = json.Get(entry, "message")
+    next := json.Get(entry, "next")
+    wait_ms = 0
+    if next.len() > 0:
+        wait_ms = conv.ParseInt(next) - time.NowMillis()
+        if wait_ms < 0:
+            wait_ms = 0
+        end
+    end
+    ret true
+end
+
+pub func Poll(sid: str): Reply:
+    mut out := Reply {}
+    mut known := false
+    busy := busy_now(sid, known)
+    r := call("GET", "/session/" + sid + "/message", "", SEND_MS)
+    if r.status == 0 or not known:
+        ret out
+    end
+    if not ok_status(r):
+        out.failed = not busy
+        out.done = out.failed
+        ret out
+    end
+    mut err := encerr.EncodingError {}
+    list := json.Decode(r.body, err)
+    if not value.IsArray(list):
+        value.ValueFree(list)
+        ret out
+    end
+    n := value.ArrayLen(list)
+    mut start := 0
+    repeat n in i:
+        if text_of(field(value.ArrayGet(list, i), "info"), "role") == "user":
+            start = i + 1
+        end
+    end
+    mut pieces := Vector {} as Vector<str>
+    mut last_finish := ""
+    mut last_done := false
+    mut searching := false
+    mut errored := false
+    mut k := start
+    until k < n:
+        m := value.ArrayGet(list, k)
+        info := field(m, "info")
+        if text_of(info, "role") == "assistant":
+            out.started = true
+            if not value.IsNull(field(info, "error")):
+                errored = true
+            end
+            last_finish = text_of(info, "finish")
+            last_done = not value.IsNull(field(field(info, "time"), "completed"))
+            searching = false
+            parts := field(m, "parts")
+            if value.IsArray(parts):
+                repeat value.ArrayLen(parts) in j:
+                    p := value.ArrayGet(parts, j)
+                    kind := text_of(p, "type")
+                    if kind == "text" and not flag(p, "synthetic"):
+                        t := text_of(p, "text")
+                        if str.Trim(t).len() > 0:
+                            pieces.push(t)
+                        end
+                    else kind == "tool":
+                        out.acted = true
+                        status := text_of(field(p, "state"), "status")
+                        if status == "running" or status == "pending":
+                            searching = true
+                        end
+                    end
+                end
+            end
+        end
+        k += 1
+    end
+    value.ValueFree(list)
+    out.text = str.Join(pieces, "\n\n")
+    if errored and not busy:
+        out.failed = true
+        out.done = true
+        ret out
+    end
+    out.idle = not busy
+    out.done = not busy and last_done and last_finish != "tool-calls"
+    out.interrupted = not busy and out.started and not last_done
+    if searching:
+        out.phase = "searching"
+    else out.text.len() > 0:
+        out.phase = "writing"
+    end
+    ret out
+end

@@ -1,0 +1,435 @@
+\chapter{Error Handling and Deferred Execution}%
+\label{ch:error-defer}
+
+Real programs deal with things that can go wrong: a withdrawal larger than the
+balance, a number that will not parse, a file that is not there. Equally, real
+programs acquire resources (open files, allocated memory) that must be
+released no matter how the work turns out. This chapter covers Salam's
+straightforward approach to both: reporting failure through return values, and
+guaranteeing cleanup with \code{defer}.
+
+\section{Salam's philosophy: errors are values}
+
+Salam has no exceptions, no \code{try}/\code{catch}, no invisible control flow
+that whisks you off to some distant handler. Instead, a function that can fail
+\emph{says so in what it returns}, and the caller checks. This keeps the flow of
+your program on the page: every place that can fail is visible, and every failure
+is handled where it happens. There are a few common patterns, from simplest to
+most expressive.
+
+\section{Pattern 1: a boolean success flag}
+
+The simplest signal is a \code{bool}: \code{true} for success, \code{false} for
+failure. You saw this in Chapter~9 with the bank account, whose \code{withdraw}
+returned whether it succeeded:
+
+\begin{salamen}
+struct Account:
+    pub balance: int = 0
+    pub func withdraw(amount: int): bool:
+        if amount > this.balance:
+            ret false              // failure: not enough funds
+        end
+        this.balance = this.balance - amount
+        ret true                   // success
+    end
+end
+
+func main:
+    mut acc := Account { balance = 100 }
+    if acc.withdraw(30):
+        println "withdrew 30; balance is", acc.balance
+    else:
+        println "withdrawal failed"
+    end
+    if acc.withdraw(1000):
+        println "withdrew 1000"
+    else:
+        println "withdrawal failed: insufficient funds"
+    end
+end
+\end{salamen}
+
+\begin{progout}
+withdrew 30; balance is 70
+withdrawal failed: insufficient funds
+\end{progout}
+
+The caller cannot ignore the outcome by accident: it is right there in the
+\code{if}. This pattern is perfect when the only thing you need to know is
+``did it work?''
+
+\section{Pattern 2: a sentinel return value}
+
+When a function returns a value but might have nothing meaningful to give back, a
+\textbf{sentinel}, a special value that means ``no result'', is a common
+choice. A search that returns the index of an item can return \code{-1} to mean
+``not found,'' since a real index is never negative:
+
+\begin{salamen}
+func index_of(values: int[], target: int): int:
+    each i, x in values:
+        if x == target:
+            ret i
+        end
+    end
+    ret -1                         // sentinel: not found
+end
+
+func main:
+    nums := [10, 20, 30, 40, 50]
+    found := index_of(nums, 30)
+    if found >= 0:
+        println "found at index", found
+    else:
+        println "not found"
+    end
+    println "search for 99:", index_of(nums, 99)
+end
+\end{salamen}
+
+\begin{progout}
+found at index 2
+search for 99: -1
+\end{progout}
+
+The parameter type \code{int[]} is a \emph{slice}: it accepts an \code{int}
+array of any length, so the same \code{index\_of} works for five numbers or five
+hundred.
+
+\begin{warn}
+A sentinel only works when there is a value the real results can never take. For
+an index, \code{-1} is safe. But ``zero means failure'' is dangerous if zero is a
+legitimate result, and ``empty string means error'' fails if the empty string is
+valid data. When no value can be safely reserved, prefer the \code{Option}
+approach below.
+\end{warn}
+
+\section{Pattern 3: \texttt{Option}, a value that may be absent}
+
+The standard library's \code{Option} type makes ``maybe a value, maybe nothing''
+explicit and safe, without stealing a value from the result's range. An
+\code{Option<T>} either holds a \code{T} (it is \emph{some} value) or holds
+nothing (it is \emph{none}). Import it with \code{import option}.
+
+\begin{salamen}
+import option
+
+func safe_divide(a: int, b: int): option.Option<int>:
+    if b == 0:
+        ret option.None()                             // none
+    end
+    ret option.Some(a / b)                            // some result
+end
+
+func main:
+    r1 := safe_divide(10, 2)
+    r2 := safe_divide(10, 0)
+    println "10/2 is some?", option.IsSome(r1)
+    println "10/0 is some?", option.IsSome(r2)
+    println "10/2 =", option.UnwrapOr(r1, -1)
+    println "10/0 =", option.UnwrapOr(r2, -1)    // falls back to -1
+end
+\end{salamen}
+
+\begin{progout}
+10/2 is some? true
+10/0 is some? false
+10/2 = 5
+10/0 = -1
+\end{progout}
+
+The \code{option} module gives you the tools to work with these values safely:
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Function} & \textbf{What it does} \\
+\midrule
+\code{option.Some(x)}        & wrap \code{x} as a present value \\
+\code{option.None()}        & an empty \code{Option} (no value) \\
+\code{option.IsSome(o)}      & \code{true} if \code{o} holds a value \\
+\code{option.IsNone(o)}      & \code{true} if \code{o} holds nothing \\
+\code{option.UnwrapOr(o, d)} & the held value, or \code{d} if none \\
+\code{option.Unwrap(o)}     & the held value; stops the program if none \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\code{UnwrapOr} is especially handy: it gets the value out, supplying a fallback
+for the ``none'' case in one step, so you never accidentally use a value that is
+not there. To build a ``none,'' call \code{option.None()}, as the example shows;
+the function's return type tells it which kind of \code{Option} to make. (Outside
+such a \code{ret}, name the type yourself:
+\code{option.None() as option.Option<int>}.)
+
+\begin{note}
+\code{Option} is the type to reach for whenever ``no answer'' is a legitimate
+outcome: a lookup that may miss, a parse that may fail, the first element of a
+possibly-empty collection. It forces the caller to acknowledge the empty case,
+turning a whole class of ``forgot to check'' bugs into something the type system
+helps you remember.
+\end{note}
+
+\section{Pattern 4: \texttt{Result}, a value or an error}
+
+An \code{Option} says \emph{whether} there is a value, but not \emph{why} there
+is none. When the caller deserves an explanation, return a
+\code{result.Result<T, E>} instead (from \code{import result}). It is an enum
+that carries data, like the shapes of Chapter~\ref{ch:enums-matching}, with
+exactly two members: \code{Ok(value)} holds a successful \code{T}, and
+\code{Err(error)} holds an error of type \code{E}, very often a \code{str}
+message.
+
+\begin{salamen}
+import result
+
+func withdraw(balance: int, amount: int): result.Result<int, str>:
+    if amount <= 0:
+        ret result.Result.Err("amount must be positive")
+    end
+    if amount > balance:
+        ret result.Result.Err("insufficient funds, balance is " + balance)
+    end
+    ret result.Result.Ok(balance - amount)
+end
+
+func report(r: result.Result<int, str>):
+    match r:
+        Ok(left): println "ok, new balance", left end
+        Err(msg): println "error:", msg end
+    end
+end
+
+func main:
+    report(withdraw(100, 30))
+    report(withdraw(100, 500))
+    report(withdraw(100, -5))
+    println result.UnwrapOr(withdraw(100, 500), 100)
+end
+\end{salamen}
+
+\begin{progout}
+ok, new balance 70
+error: insufficient funds, balance is 100
+error: amount must be positive
+100
+\end{progout}
+
+The caller takes the result apart with \code{match}, and since \code{match} is
+exhaustive it cannot forget the error case. When you only need a quick answer,
+the \code{result} package also offers \code{result.IsOk(r)},
+\code{result.IsErr(r)}, \code{result.UnwrapOr(r, fallback)} and
+\code{result.Expect(r, message)} (which stops the program with
+\code{message} on an error).
+
+\subsection{Passing errors up with \texttt{?}}
+
+Often a function that calls a fallible function cannot fix an error itself; it
+just wants to hand the error on to \emph{its} caller. Writing a \code{match} for
+every call would bury the real logic, so Salam has a shortcut: a postfix
+\code{?} after a call that returns a \code{Result}. If the result is
+\code{Ok}, \code{?} unwraps it and the code carries on with the value; if it is
+an \code{Err}, the current function returns that same error immediately.
+
+\begin{salamen}
+import result
+
+func withdraw(balance: int, amount: int): result.Result<int, str>:
+    if amount > balance:
+        ret result.Result.Err("insufficient funds, balance is " + balance)
+    end
+    ret result.Result.Ok(balance - amount)
+end
+
+func withdraw_both(balance: int, a: int, b: int): result.Result<int, str>:
+    after := withdraw(balance, a)?
+    final := withdraw(after, b)?
+    ret result.Result.Ok(final)
+end
+
+func main:
+    each amount in [50, 80]:
+        match withdraw_both(100, 30, amount):
+            Ok(left): println "left:", left end
+            Err(msg): println "error:", msg end
+        end
+    end
+end
+\end{salamen}
+
+\begin{progout}
+left: 20
+error: insufficient funds, balance is 70
+\end{progout}
+
+\code{?} can only be used inside a function that itself returns a
+\code{Result} (so there is somewhere to send the error), and it must make up a
+statement's whole value: \code{x := f()?}, \code{x = f()?}, \code{f()?} or
+\code{ret f()?}.
+
+\section{Deferred execution with \texttt{defer}}
+
+Now to the second half of the chapter: making sure cleanup happens. The
+\code{defer} keyword schedules a statement to run \emph{when the current function
+exits}, no matter how it exits. You write the cleanup right next to the thing it
+cleans up, and Salam guarantees it runs later:
+
+\begin{salamen}
+func main:
+    defer println "cleanup runs last"
+    println "doing work"
+    println "more work"
+end
+\end{salamen}
+
+\begin{progout}
+doing work
+more work
+cleanup runs last
+\end{progout}
+
+The \code{defer}'d line was \emph{written} first but \emph{ran} last, at the
+moment \code{main} finished. The point is that the cleanup is registered the
+instant you set up whatever needs cleaning, so you can never forget it later.
+
+\subsection{Defers run in reverse order}
+
+If you register several defers, they run in \textbf{last-in, first-out} order:
+the most recently deferred runs first. This mirrors how resources nest: the last
+thing you opened is the first thing you should close.
+
+\begin{salamen}
+func main:
+    defer println "cleanup 1"
+    defer println "cleanup 2"
+    println "start"
+    println "end"
+end
+\end{salamen}
+
+\begin{progout}
+start
+end
+cleanup 2
+cleanup 1
+\end{progout}
+
+\subsection{Defer runs even on an early return}
+
+The real power of \code{defer} is that it runs however the function ends,
+including an early \code{ret} from somewhere in the middle. This is what makes it
+reliable: the cleanup cannot be skipped by a code path you forgot about.
+
+\begin{salamen}
+func greet(name: str):
+    defer println "done greeting"
+    println "hello"
+    if name == "":
+        println "no name given"
+        ret                        // early return, defer still runs
+    end
+    println name
+end
+
+func main:
+    greet("Ali")
+    println "---"
+    greet("")
+end
+\end{salamen}
+
+\begin{progout}
+hello
+Ali
+done greeting
+---
+hello
+no name given
+done greeting
+\end{progout}
+
+Both calls print \code{"done greeting"}: the normal path through \code{Ali} and
+the early-return path through the empty name. You write the cleanup once, and it
+fires on every exit.
+
+\section{Putting it together: acquire, defer, use}
+
+The idiomatic pattern is: acquire a resource, immediately \code{defer} its
+release, then use it freely without worrying about the exits. Whether the function
+returns normally, returns early on an error, or falls through, the resource is
+released exactly once. We will see this with real files and memory in Chapters~17
+and~18; the shape is always the same:
+
+\begin{salamen}
+func process(stop_early: bool):
+    // acquire something here
+    defer println "release the resource"
+
+    println "use the resource"
+    if stop_early:
+        println "early exit on some condition"
+        ret               // the defer above still runs
+    end
+    println "this line is skipped"
+end
+
+func main:
+    process(true)
+end
+\end{salamen}
+
+\begin{progout}
+use the resource
+early exit on some condition
+release the resource
+\end{progout}
+
+\begin{tip}
+Pair every acquisition with a \code{defer} on the very next line. Reading top to
+bottom, ``open file; defer close file'' is impossible to get wrong: the close is
+guaranteed and sits right where you can see it. This single habit eliminates the
+most common kind of resource leak.
+\end{tip}
+
+\section{Chapter summary}
+
+\begin{itemize}[leftmargin=1.4em]
+  \item Salam reports errors through \emph{return values}, not exceptions; every
+        failure is visible and handled at the call site.
+  \item Return a \code{bool} when the caller only needs ``did it work?''.
+  \item Return a \textbf{sentinel} (like \code{-1}) when a value's range has room
+        for a ``no result'' marker, but only then.
+  \item Use \code{option.Option<T>} (\code{Some}, \code{IsSome}, \code{IsNone},
+        \code{UnwrapOr}, \code{None}) when ``no value'' must be represented safely.
+  \item Use \code{result.Result<T, E>} (\code{Ok}, \code{Err}) when the caller
+        needs to know \emph{why} it failed; inside a function that returns a
+        \code{Result}, a postfix \code{?} passes an error straight up.
+  \item \code{defer} schedules a statement to run when the function exits, in
+        last-in-first-out order, \emph{including} on early returns.
+  \item The reliable pattern is: acquire, immediately \code{defer} the release,
+        then use.
+\end{itemize}
+
+\section{Exercises}
+
+\exercise Write \code{safe\_sqrt(x: f64): option.Option<f64>} that returns
+\code{option.None()} for negative input and \code{Some} of the square root otherwise (use
+the \code{math} module from the next chapter, or \code{x ** 0.5}).
+
+\exercise Write a function \code{find\_first\_negative(a: int[]): int} that returns
+the index of the first negative element or \code{-1} if there is none.
+
+\exercise Add two \code{defer} statements and a normal statement to a function,
+and predict the output order before running it.
+
+\exercise Write a function with an early \code{ret} guarded by a condition and a
+\code{defer} that prints ``finished''. Verify ``finished'' prints on both paths.
+
+\exercise Rewrite the \code{safe\_divide} example so the caller prints a friendly
+message in the ``none'' case instead of using \code{UnwrapOr}.
+
+\exercise Write \code{parse\_percent(n: int): result.Result<int, str>} that
+returns an \code{Err} with a message when \code{n} is below 0 or above 100, and
+\code{Ok(n)} otherwise. Then write a function that adds two percentages using
+\code{?} on both calls.

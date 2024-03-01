@@ -1,0 +1,1913 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package lsp
+
+import str
+import io
+import os
+import filepath
+import encoding.json
+import encoding.value
+import encoding.encerr
+
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+include src "../source.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include ps "../parser/parser.salam"
+include cc "../condcomp.salam"
+include sm "../semantic/semantic.salam"
+include lx "../lexer/lexer.salam"
+include lo "../sal_layout/sal_layout.salam"
+include pth "../sal_path.salam"
+
+const VIRTUAL_ENTRY := "__salam_lsp_entry__.salam"
+const VIRTUAL_PKG := "__salam_lsp_pkg__"
+
+const ST_NAMESPACE := 0
+const ST_TYPE := 1
+const ST_STRUCT := 2
+const ST_ENUM := 3
+const ST_INTERFACE := 4
+const ST_ENUM_MEMBER := 5
+const ST_FUNCTION := 6
+const ST_METHOD := 7
+const ST_PARAMETER := 8
+const ST_VARIABLE := 9
+const ST_PROPERTY := 10
+const ST_KEYWORD := 11
+const ST_STRING := 12
+const ST_NUMBER := 13
+const ST_COMMENT := 14
+const ST_OPERATOR := 15
+const ST_CLASS := 16
+const ST_DECORATOR := 17
+
+const SM_DECLARATION := 1
+const SM_READONLY := 2
+const SM_DEFAULT_LIBRARY := 4
+const SM_DEPRECATED := 8
+const SM_MUTABLE := 16
+
+struct Req:
+    pub path: str = ""
+    pub text: str = ""
+    pub lang: str = ""
+    pub messages: str = "en"
+    pub switch_lint: int = 0
+    pub switch_lint_min: int = 4
+    pub stdlib: str = ""
+    pub out: str = ""
+    pub overlay_paths: Vector<str> = Vector {}
+    pub overlay_texts: Vector<str> = Vector {}
+    pub defines: Vector<str> = Vector {}
+    pub light: bool = false
+    pub targets: Vector<str> = Vector {}
+end
+
+struct Decl:
+    pub sym: int = 0
+    pub name: str = ""
+    pub kind: int = 0
+    pub file: str = ""
+    pub has_loc: bool = false
+    pub line: int = 0
+    pub ch: int = 0
+    pub eline: int = 0
+    pub ech: int = 0
+    pub nb: int = 0 - 1
+    pub ne: int = 0 - 1
+    pub detail: str = ""
+    pub doc: str = ""
+    pub ty: str = ""
+    pub ret: str = ""
+    pub ty_key: str = ""
+    pub ret_key: str = ""
+    pub container: str = ""
+    pub is_mut: bool = false
+    pub is_pub: bool = false
+    pub std: bool = false
+    pub is_deprecated: bool = false
+end
+
+struct Ref:
+    pub b: int = 0
+    pub e: int = 0
+    pub decl: int = 0
+    pub ty: str = ""
+end
+
+struct OutNode:
+    pub node: int = 0
+    pub kind: int = 0
+    pub b: int = 0
+    pub e: int = 0
+    pub parent: int = 0 - 1
+end
+
+struct An:
+    pub a: at.Ast = at.NewAst()
+    pub s: sm.Sema = sm.New(lg.New(lg.LOG_OFF, false), "", "en")
+    pub target: str = ""
+    pub text: str = ""
+    pub li: LineIndex = LineIndex {}
+    pub toks: Vector<tok.Token> = Vector {}
+    pub decls: Vector<Decl> = Vector {}
+    pub decl_of_sym: HashMap<int, int> = HashMap {}
+    pub refs: Vector<Ref> = Vector {}
+    pub texts: HashMap<str, str> = HashMap {}
+    pub lis: HashMap<str, int> = HashMap {}
+    pub li_list: Vector<LineIndex> = Vector {}
+    pub is_virtual: bool = false
+    pub entry_path: str = ""
+    pub scope: int = 0
+    pub messages: str = "en"
+    pub std_root: str = ""
+    pub records: Vector<lg.Record> = Vector {}
+    pub fixes: Vector<lg.Fix> = Vector {}
+    pub lang: str = "en"
+end
+
+func req_strs(v: value.Value, key: str, out &: Vector<str>):
+    if not value.ObjectHas(v, key):
+        ret
+    end
+    arr := value.ObjectGet(v, key)
+    if not value.IsArray(arr):
+        ret
+    end
+    repeat value.ArrayLen(arr) in i:
+        it := value.ArrayGet(arr, i)
+        if value.IsString(it):
+            out.push(value.AsString(it))
+        end
+    end
+end
+
+func vstr(v: value.Value, key: str): str:
+    if value.IsObject(v) and value.ObjectHas(v, key):
+        x := value.ObjectGet(v, key)
+        if value.IsString(x):
+            ret value.AsString(x)
+        end
+    end
+    ret ""
+end
+
+func vint(v: value.Value, key: str, fallback: int): int:
+    if value.IsObject(v) and value.ObjectHas(v, key):
+        x := value.ObjectGet(v, key)
+        if value.IsInt(x) or value.IsNumber(x):
+            ret value.AsInt(x) as int
+        end
+    end
+    ret fallback
+end
+
+func vbool(v: value.Value, key: str): bool:
+    if value.IsObject(v) and value.ObjectHas(v, key):
+        x := value.ObjectGet(v, key)
+        if value.IsBool(x):
+            ret value.AsBool(x)
+        end
+    end
+    ret false
+end
+
+func read_req(path: str, r &: Req): bool:
+    text := io.ReadFile(path)
+    mut err := encerr.EncodingError {}
+    v := json.Decode(text, err)
+    if encerr.IsError(err) or not value.IsObject(v):
+        ret false
+    end
+    r.path = vstr(v, "path")
+    r.text = vstr(v, "text")
+    r.lang = vstr(v, "lang")
+    r.stdlib = vstr(v, "stdlib")
+    r.out = vstr(v, "out")
+    m := vstr(v, "messages")
+    if str.Len(m) > 0:
+        r.messages = m
+    end
+    req_strs(v, "overlay_paths", r.overlay_paths)
+    req_strs(v, "overlay_texts", r.overlay_texts)
+    req_strs(v, "defines", r.defines)
+    r.light = vbool(v, "light")
+    r.switch_lint = vint(v, "switch_lint", 0)
+    r.switch_lint_min = vint(v, "switch_lint_min", 4)
+    req_strs(v, "targets", r.targets)
+    ret str.Len(r.path) > 0
+end
+
+func package_root_of(path: str): str:
+    dir := pth.PathDir(path)
+    if str.Len(dir) == 0:
+        ret ""
+    end
+    base := pth.PathBase(dir)
+    root := pth.PathJoin(dir, base + ".salam")
+    if src.HasOverlay(root) or (os.Exists(root) and not os.IsDir(root)):
+        ret root
+    end
+    ret ""
+end
+
+func file_text(an &: An, file: str): str:
+    key := filepath.Clean(file)
+    if an.texts.has(key):
+        ret an.texts.get(key)
+    end
+    mut t := ""
+    if os.Exists(key) and not os.IsDir(key):
+        t = io.ReadFile(key)
+    else not pth.PathIsAbs(key):
+        alt := pth.PathJoin(sm.GetStdlibRoot(), key)
+        if os.Exists(alt) and not os.IsDir(alt):
+            t = io.ReadFile(alt)
+        end
+    end
+    an.texts.put(key, t)
+    ret t
+end
+
+func file_li(an &: An, file: str): int:
+    key := filepath.Clean(file)
+    if an.lis.has(key):
+        ret an.lis.get(key)
+    end
+    idx := an.li_list.len()
+    an.li_list.push(line_index(file_text(an, key)))
+    an.lis.put(key, idx)
+    ret idx
+end
+
+func node_file(an: An, n: at.Node): str:
+    if str.Len(n.src_file) == 0:
+        ret an.entry_path
+    end
+    ret filepath.Clean(n.src_file)
+end
+
+func in_target(an: An, n: at.Node): bool:
+    ret str.Equals(node_file(an, n), an.target)
+end
+
+func tok_first_at(an: An, b: int): int:
+    mut lo_ := 0
+    mut hi_ := an.toks.len()
+    until lo_ < hi_:
+        mid := (lo_ + hi_) / 2
+        if (an.toks.get(mid).begin_index as int) < b:
+            lo_ = mid + 1
+        else:
+            hi_ = mid
+        end
+    end
+    ret lo_
+end
+
+func ident_tok_in(an: An, b: int, e: int, name: str, last: bool, out_b &: int, out_e &: int): bool:
+    mut i := tok_first_at(an, b)
+    mut fb := 0 - 1
+    mut fe := 0 - 1
+    mut mb := 0 - 1
+    mut me := 0 - 1
+    until i < an.toks.len():
+        t := an.toks.get(i)
+        tb := t.begin_index as int
+        if tb >= e:
+            break
+        end
+        if t.kind == tok.TK_IDENT or t.kind == tok.TK_LAYOUT_ELEMENT or t.kind == tok.TK_LAYOUT_ATTR_NAME:
+            te := t.end_index as int
+            if fb < 0 or last:
+                fb = tb
+                fe = te
+            end
+            if str.Equals(t.lexeme, name) and (mb < 0 or last):
+                mb = tb
+                me = te
+            end
+        end
+        i += 1
+    end
+    if mb < 0 and str.Contains(name, " "):
+        mut k := tok_first_at(an, b)
+        until k < an.toks.len() and (an.toks.get(k).begin_index as int) < e:
+            if an.toks.get(k).kind == tok.TK_IDENT:
+                mut joined := an.toks.get(k).lexeme
+                mut m := k
+                until str.Len(joined) < str.Len(name) and m + 1 < an.toks.len() and an.toks.get(m + 1).kind == tok.TK_IDENT:
+                    m += 1
+                    joined = joined + " " + an.toks.get(m).lexeme
+                end
+                if lp.IdentEqual(joined, name):
+                    mb = an.toks.get(k).begin_index as int
+                    me = an.toks.get(m).end_index as int
+                    if not last:
+                        break
+                    end
+                end
+            end
+            k += 1
+        end
+    end
+    if mb >= 0:
+        out_b = mb
+        out_e = me
+        ret true
+    end
+    if fb >= 0:
+        out_b = fb
+        out_e = fe
+        ret true
+    end
+    ret false
+end
+
+func text_name_in(text: str, b: int, e: int, name: str, out_b &: int, out_e &: int): bool:
+    n := str.Len(name)
+    if n == 0 or b < 0:
+        ret false
+    end
+    mut from := b
+    until true:
+        idx := str.IndexFrom(text, name, from)
+        if idx < 0 or (e > b and idx >= e):
+            ret false
+        end
+        before_ok := idx == 0 or not is_ident_byte(byte_at(text, idx - 1))
+        after_ok := idx + n >= str.Len(text) or not is_ident_byte(byte_at(text, idx + n))
+        if before_ok and after_ok:
+            out_b = idx
+            out_e = idx + n
+            ret true
+        end
+        from = idx + 1
+    end
+end
+
+func collapse_ws(s: str): str:
+    mut sb := str.NewBuilder()
+    mut sp := false
+    n := str.Len(s)
+    repeat n in i:
+        c := byte_at(s, i)
+        if c == 10 or c == 13 or c == 9 or c == 32:
+            sp = true
+        else:
+            if sp and str.BufLen(sb) > 0:
+                str.BufAppendChar(sb, 32)
+            end
+            sp = false
+            str.BufAppendChar(sb, c)
+        end
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func func_header(text: str, b: int): str:
+    n := str.Len(text)
+    mut i := b
+    mut depth := 0
+    mut end_at := 0 - 1
+    until i < n:
+        c := byte_at(text, i)
+        if c == 40 or c == 91:
+            depth += 1
+        else c == 41 or c == 93:
+            depth -= 1
+            if depth == 0:
+                mut j := i + 1
+                until j < n and byte_at(text, j) == 32:
+                    j += 1
+                end
+                if j < n and byte_at(text, j) == 58:
+                    mut k := j + 1
+                    mut adepth := 0
+                    until k < n:
+                        ck := byte_at(text, k)
+                        if ck == 60 or ck == 40:
+                            adepth += 1
+                        else ck == 62 or ck == 41:
+                            adepth -= 1
+                        else ck == 58 and adepth <= 0:
+                            ret collapse_ws(str.Substr(text, b, k - b))
+                        else ck == 10:
+                            ret collapse_ws(str.Substr(text, b, j - b))
+                        end
+                        k += 1
+                    end
+                end
+                end_at = i + 1
+                break
+            end
+        else c == 58 and depth == 0:
+            end_at = i
+            break
+        else c == 10 and depth == 0:
+            end_at = i
+            break
+        end
+        i += 1
+    end
+    if end_at < 0:
+        end_at = n
+    end
+    ret collapse_ws(str.Substr(text, b, end_at - b))
+end
+
+func trim(s: str): str:
+    ret str.Trim(s)
+end
+
+func pick_lang_section(doc: str, lang: str): str:
+    if not str.Contains(doc, "@en") and not str.Contains(doc, "@fa"):
+        ret doc
+    end
+    lines := str.Split(doc, "\n")
+    defer lines.free()
+    mut cur := ""
+    mut want := ""
+    mut other := ""
+    mut plain := ""
+    each ln in lines:
+        mut body := ln
+        if str.StartsWith(ln, "@en"):
+            cur = "en"
+            body = trim(str.Substr(ln, 3, str.Len(ln) - 3))
+        else str.StartsWith(ln, "@fa"):
+            cur = "fa"
+            body = trim(str.Substr(ln, 3, str.Len(ln) - 3))
+        end
+        if str.Len(cur) == 0:
+            plain = plain + body + "\n"
+        else str.Equals(cur, lang):
+            want = want + body + "\n"
+        else:
+            other = other + body + "\n"
+        end
+    end
+    if str.Len(trim(want)) > 0:
+        ret trim(plain + want)
+    end
+    ret trim(plain + other)
+end
+
+func doc_above(an &: An, file: str, line0: int): str:
+    lidx := file_li(an, file)
+    li := an.li_list.get(lidx)
+    if line0 <= 0 or line0 >= li.starts.len():
+        ret ""
+    end
+    mut l := line0 - 1
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    mut in_block := false
+    until l >= 0:
+        ls := li.starts.get(l)
+        le := li_line_end(li, l)
+        raw := str.Substr(li.text, ls, le - ls)
+        t := trim(raw)
+        if in_block:
+            mut body := t
+            if str.StartsWith(body, "/**"):
+                body = trim(str.Substr(body, 3, str.Len(body) - 3))
+                parts.push(body)
+                break
+            end
+            if str.StartsWith(body, "/*"):
+                body = trim(str.Substr(body, 2, str.Len(body) - 2))
+                parts.push(body)
+                break
+            end
+            if str.StartsWith(body, "*"):
+                body = trim(str.Substr(body, 1, str.Len(body) - 1))
+            end
+            parts.push(body)
+        else str.StartsWith(t, "//"):
+            mut body := str.Substr(t, 2, str.Len(t) - 2)
+            if str.StartsWith(body, "/"):
+                body = str.Substr(body, 1, str.Len(body) - 1)
+            end
+            parts.push(trim(body))
+        else str.EndsWith(t, "*/"):
+            body := trim(str.Substr(t, 0, str.Len(t) - 2))
+            if str.StartsWith(body, "/*"):
+                mut b2 := str.Substr(body, 2, str.Len(body) - 2)
+                if str.StartsWith(b2, "*"):
+                    b2 = str.Substr(b2, 1, str.Len(b2) - 1)
+                end
+                parts.push(trim(b2))
+                break
+            end
+            parts.push(body)
+            in_block = true
+        else str.StartsWith(t, "@en ") or str.StartsWith(t, "@fa ") or str.StartsWith(t, "@deprecated"):
+            l -= 1
+            continue
+        else:
+            break
+        end
+        l -= 1
+    end
+    if parts.len() == 0:
+        ret ""
+    end
+    mut out := ""
+    mut k := parts.len() - 1
+    until k >= 0:
+        out = out + parts.get(k)
+        if k > 0:
+            out = out + "\n"
+        end
+        k -= 1
+    end
+    if str.StartsWith(out, "Salam Programming Language"):
+        ret ""
+    end
+    ret pick_lang_section(trim(out), an.messages)
+end
+
+func aliases_above(an &: An, file: str, line0: int, name: str): str:
+    lidx := file_li(an, file)
+    li := an.li_list.get(lidx)
+    if line0 <= 0 or line0 >= li.starts.len():
+        ret ""
+    end
+    mut l := line0 - 1
+    mut out := ""
+    until l >= 0:
+        ls := li.starts.get(l)
+        le := li_line_end(li, l)
+        t := trim(str.Substr(li.text, ls, le - ls))
+        if str.StartsWith(t, "@fa ") or str.StartsWith(t, "@en "):
+            rest := str.Substr(t, 4, str.Len(t) - 4)
+            mut q1 := str.IndexOf(rest, "\"")
+            mut line_names := ""
+            until q1 >= 0:
+                q2 := str.IndexFrom(rest, "\"", q1 + 1)
+                if q2 < 0:
+                    break
+                end
+                nm := str.Substr(rest, q1 + 1, q2 - q1 - 1)
+                if str.Len(nm) > 0 and not str.Equals(nm, name):
+                    line_names = line_names + (str.Len(line_names) > 0 ? ", " : "") + "`" + nm + "`"
+                end
+                q1 = str.IndexFrom(rest, "\"", q2 + 1)
+            end
+            if str.Len(line_names) > 0:
+                out = line_names + (str.Len(out) > 0 ? ", " + out : "")
+            end
+        else not str.StartsWith(t, "@"):
+            break
+        end
+        l -= 1
+    end
+    ret out
+end
+
+func type_str(an &: An, t: int): str:
+    if t < 0:
+        ret ""
+    end
+    s := sm.ToString(an.s, t)
+    if str.Equals(s, "<null>") or str.Equals(s, "<error>"):
+        ret ""
+    end
+    ret s
+end
+
+func type_disp(an &: An, t: int): str:
+    s := sm.DisplayType(an.s, t)
+    if str.Len(s) == 0 or str.Equals(s, "<null>") or str.Equals(s, "<error>"):
+        ret ""
+    end
+    ret i18.LocalizeTypeText(s, str.Equals(an.messages, "fa"))
+end
+
+func sym_ret_str(an &: An, sv: sm.Symbol): str:
+    if sv.overloads.len() == 0:
+        ret ""
+    end
+    sig := sm.SigAt(an.s, sv.overloads.get(0))
+    ret type_disp(an, sig.ret_type)
+end
+
+func sym_ret_key(an &: An, sv: sm.Symbol): str:
+    if sv.overloads.len() == 0:
+        ret ""
+    end
+    sig := sm.SigAt(an.s, sv.overloads.get(0))
+    ret type_str(an, sig.ret_type)
+end
+
+func kind_word(k: int): str:
+    if k == sm.SYM_STRUCT:
+        ret "struct"
+    else k == sm.SYM_ENUM:
+        ret "enum"
+    else k == sm.SYM_INTERFACE:
+        ret "interface"
+    else k == sm.SYM_ALIAS:
+        ret "type"
+    else k == sm.SYM_PACKAGE:
+        ret "package"
+    end
+    ret ""
+end
+
+func is_std_file(an: An, file: str): bool:
+    if str.Len(an.std_root) > 0:
+        ret str.StartsWith(file, an.std_root)
+    end
+    ret str.Contains(file, "/std/")
+end
+
+func make_decl(an &: An, sym: int): int:
+    if an.decl_of_sym.has(sym):
+        ret an.decl_of_sym.get(sym)
+    end
+    sv := sm.SymAt(an.s, sym)
+    mut d := Decl {}
+    d.sym = sym
+    d.name = sv.name
+    d.kind = sv.kind
+    d.is_mut = sv.is_mut
+    d.is_pub = sv.is_pub
+    d.container = sv.pkgname
+    if sv.kind == sm.SYM_FUNC or sv.kind == sm.SYM_METHOD:
+        d.ret = sym_ret_str(an, sv)
+        d.ret_key = sym_ret_key(an, sv)
+    else sv.kind != sm.SYM_PACKAGE:
+        d.ty = type_disp(an, sv.ty)
+        d.ty_key = type_str(an, sv.ty)
+    end
+    if sv.decl != 0 and sv.decl < at.Count(an.a):
+        n := at.Get(an.a, sv.decl)
+        mut file := node_file(an, n)
+        if not pth.PathIsAbs(file) and not os.Exists(file):
+            alt := filepath.Clean(pth.PathJoin(sm.GetStdlibRoot(), file))
+            if os.Exists(alt):
+                file = alt
+            end
+        end
+        d.file = file
+        d.std = is_std_file(an, file)
+        d.is_deprecated = n.is_deprecated
+        text := file_text(an, file)
+        nb := n.begin_index as int
+        ne := n.end_index as int
+        mut b := nb
+        mut e := nb
+        mut found := false
+        if str.Equals(file, an.target):
+            found = ident_tok_in(an, nb, ne > nb ? ne : nb + 1, sv.name, false, b, e)
+        end
+        if not found and str.Len(text) > 0:
+            found = text_name_in(text, nb, ne, sv.name, b, e)
+        end
+        if not found:
+            b = nb
+            e = nb
+        end
+        lidx := file_li(an, file)
+        li := an.li_list.get(lidx)
+        p1 := li_pos(li, b)
+        p2 := li_pos(li, e)
+        d.has_loc = str.Len(text) > 0 or str.Equals(file, an.target)
+        d.line = p1.line
+        d.ch = p1.ch
+        d.eline = p2.line
+        d.ech = p2.ch
+        if str.Equals(file, an.target):
+            d.nb = b
+            d.ne = e
+        end
+        if sv.kind == sm.SYM_FUNC or sv.kind == sm.SYM_METHOD:
+            if str.Len(text) > 0:
+                d.detail = func_header(text, nb)
+            end
+        else str.Len(kind_word(sv.kind)) > 0:
+            d.detail = kind_word(sv.kind) + " " + sv.name
+        else sv.kind == sm.SYM_ENUM_MEMBER:
+            d.detail = sv.name
+        else:
+            mut pre := ""
+            if sv.kind == sm.SYM_CONST:
+                pre = "const "
+            else sv.is_mut:
+                pre = "mut "
+            end
+            d.detail = pre + sv.name + (str.Len(d.ty) > 0 ? ": " + d.ty : "")
+        end
+        d.doc = doc_above(an, file, (n.begin_line as int) - 1)
+        mut al := aliases_above(an, file, (n.begin_line as int) - 1, sv.name)
+        if sv.kind == sm.SYM_METHOD:
+            repeat sm.IntrinsicMethodCount() in ii:
+                if str.Equals(sm.IntrinsicMethodEn(ii), sv.name):
+                    al = al + (str.Len(al) > 0 ? ", " : "") + "`" + sm.IntrinsicMethodFa(ii) + "`"
+                end
+            end
+        end
+        if str.Len(al) > 0 and sv.kind != sm.SYM_PACKAGE:
+            d.doc = d.doc + (str.Len(d.doc) > 0 ? "\n\n" : "") + "Also named " + al
+        end
+    else:
+        if sv.kind == sm.SYM_PACKAGE:
+            d.detail = "package " + sv.name
+        else:
+            d.detail = sv.name + (str.Len(d.ty) > 0 ? ": " + d.ty : "")
+        end
+    end
+    idx := an.decls.len()
+    an.decls.push(d)
+    an.decl_of_sym.put(sym, idx)
+    ret idx
+end
+
+func spelled_ok(an &: An, sv: sm.Symbol, spelled0: str): bool:
+    spelled := str.Replace(spelled0, "\xe2\x80\x8c", " ")
+    if lp.IdentEqual(spelled, sv.name) or str.Equals(spelled, sv.name):
+        ret true
+    end
+    if str.StartsWith(sv.name, spelled + "_") or str.EndsWith(sv.name, "_" + spelled):
+        ret true
+    end
+    if sv.decl > 0 and sv.decl < at.Count(an.a):
+        dn := at.Get(an.a, sv.decl)
+        mut ai := 1
+        until ai < dn.aliases.len():
+            al := dn.aliases.get(ai)
+            if lp.IdentEqual(spelled, al) or str.Equals(spelled, al):
+                ret true
+            end
+            ai += 2
+        end
+        if not str.Equals(dn.name, sv.name) and lp.IdentEqual(spelled, dn.name):
+            ret true
+        end
+    end
+    repeat sm.IntrinsicMethodCount() in i:
+        if str.Equals(sm.IntrinsicMethodEn(i), sv.name) and lp.IdentEqual(spelled, sm.IntrinsicMethodFa(i)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func add_ref(an &: An, nid: int, sym: int):
+    if nid <= 0 or nid >= at.Count(an.a) or sym <= 0:
+        ret
+    end
+    n := at.Get(an.a, nid)
+    if n.synthetic or not in_target(an, n):
+        ret
+    end
+    nb := n.begin_index as int
+    ne := n.end_index as int
+    if ne < nb:
+        ret
+    end
+    sv := sm.SymAt(an.s, sym)
+    mut b := nb
+    mut e := ne
+    if n.kind == at.AST_IDENTIFIER:
+        if not ident_tok_in(an, nb, ne > nb ? ne : nb + 1, sv.name, true, b, e):
+            ret
+        end
+    else:
+        last := n.kind == at.AST_MEMBER or n.kind == at.AST_FUNC_ADDR
+        if not ident_tok_in(an, nb, ne > nb ? ne : nb + 1, sv.name, last, b, e):
+            ret
+        end
+    end
+    if not spelled_ok(an, sv, collapse_ws(str.Substr(an.text, b, e - b))):
+        ret
+    end
+    d := make_decl(an, sym)
+    mut r := Ref {}
+    r.b = b
+    r.e = e
+    r.decl = d
+    r.ty = type_disp(an, n.sema_type)
+    if n.kind == at.AST_CALL or n.kind == at.AST_MEMBER and sv.kind == sm.SYM_METHOD:
+        r.ty = ""
+    end
+    an.refs.push(r)
+end
+
+func sym_token_type(k: int): int:
+    if k == sm.SYM_VAR or k == sm.SYM_CONST:
+        ret ST_VARIABLE
+    else k == sm.SYM_PARAM:
+        ret ST_PARAMETER
+    else k == sm.SYM_FIELD:
+        ret ST_PROPERTY
+    else k == sm.SYM_FUNC:
+        ret ST_FUNCTION
+    else k == sm.SYM_METHOD:
+        ret ST_METHOD
+    else k == sm.SYM_STRUCT:
+        ret ST_STRUCT
+    else k == sm.SYM_ENUM:
+        ret ST_ENUM
+    else k == sm.SYM_ENUM_MEMBER:
+        ret ST_ENUM_MEMBER
+    else k == sm.SYM_PACKAGE:
+        ret ST_NAMESPACE
+    else k == sm.SYM_INTERFACE:
+        ret ST_INTERFACE
+    end
+    ret ST_TYPE
+end
+
+func decl_mods(d: Decl): int:
+    mut m := 0
+    if d.kind == sm.SYM_CONST or ((d.kind == sm.SYM_VAR or d.kind == sm.SYM_PARAM) and not d.is_mut):
+        m = m | SM_READONLY
+    end
+    if d.is_mut:
+        m = m | SM_MUTABLE
+    end
+    if d.std:
+        m = m | SM_DEFAULT_LIBRARY
+    end
+    if d.is_deprecated:
+        m = m | SM_DEPRECATED
+    end
+    ret m
+end
+
+func is_word_lexeme(s: str): bool:
+    if str.Len(s) == 0:
+        ret false
+    end
+    c := byte_at(s, 0)
+    ret (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c >= 128
+end
+
+func token_class(an &: An, t: tok.Token, ref_at: HashMap<int, int>, decl_pos: HashMap<int, int>, mods &: int): int:
+    k := t.kind
+    mods = 0
+    if k == tok.TK_COMMENT_LINE or k == tok.TK_COMMENT_BLOCK:
+        ret ST_COMMENT
+    end
+    if k == tok.TK_STRING or k == tok.TK_TRIPLE_STRING or k == tok.TK_RAW_STRING or k == tok.TK_CHAR or k == tok.TK_UTF8_CHAR:
+        ret ST_STRING
+    end
+    if k == tok.TK_INT or k == tok.TK_FLOAT:
+        ret ST_NUMBER
+    end
+    if k == tok.TK_META:
+        ret ST_DECORATOR
+    end
+    if k == tok.TK_LAYOUT_ELEMENT:
+        ret ST_CLASS
+    end
+    if k == tok.TK_LAYOUT_ATTR_NAME:
+        ret ST_PROPERTY
+    end
+    if tok.IsKeyword(k):
+        ret ST_KEYWORD
+    end
+    if k == tok.TK_AND or k == tok.TK_OR or k == tok.TK_NOT or k == tok.TK_EQ or k == tok.TK_NE or k == tok.TK_LT or k == tok.TK_GT or k == tok.TK_LE or k == tok.TK_GE:
+        if is_word_lexeme(t.lexeme):
+            ret ST_KEYWORD
+        end
+        ret 0 - 1
+    end
+    if k == tok.TK_IDENT:
+        b := t.begin_index as int
+        if decl_pos.has(b):
+            d := an.decls.get(decl_pos.get(b))
+            mods = decl_mods(d) | SM_DECLARATION
+            ret sym_token_type(d.kind)
+        end
+        if ref_at.has(b):
+            d := an.decls.get(an.refs.get(ref_at.get(b)).decl)
+            mods = decl_mods(d)
+            ret sym_token_type(d.kind)
+        end
+        if sm.PrimKindFromName(t.lexeme, an.lang) >= 0:
+            mods = SM_DEFAULT_LIBRARY
+            ret ST_TYPE
+        end
+    end
+    ret 0 - 1
+end
+
+func src_of(an: An): src.SourceFile:
+    mut sf := src.New()
+    sf.path = an.target
+    sf.text = an.text
+    sf.len = str.Len(an.text)
+    ret sf
+end
+
+func emit_tokens(an &: An, j &: Json):
+    mut ref_at := HashMap {} as HashMap<int, int>
+    defer ref_at.free()
+    mut decl_pos := HashMap {} as HashMap<int, int>
+    defer decl_pos.free()
+    repeat an.refs.len() in i:
+        ref_at.put(an.refs.get(i).b, i)
+    end
+    repeat an.decls.len() in i:
+        d := an.decls.get(i)
+        if d.nb >= 0:
+            decl_pos.put(d.nb, i)
+        end
+    end
+    jw_karr(j, "tokens")
+    mut pl := 0
+    mut pc := 0
+    each t in an.toks:
+        mut mods := 0
+        cls := token_class(an, t, ref_at, decl_pos, mods)
+        if cls < 0:
+            continue
+        end
+        b := t.begin_index as int
+        e := t.end_index as int
+        if e <= b:
+            continue
+        end
+        p1 := li_pos(an.li, b)
+        lend := li_line_end(an.li, p1.line)
+        mut e2 := e
+        if e2 > lend:
+            e2 = lend
+        end
+        ln := utf16_units(an.text, b, e2)
+        if ln <= 0:
+            continue
+        end
+        dl := p1.line - pl
+        dc := dl == 0 ? p1.ch - pc : p1.ch
+        jw_vint(j, dl)
+        jw_vint(j, dc)
+        jw_vint(j, ln)
+        jw_vint(j, cls)
+        jw_vint(j, mods)
+        pl = p1.line
+        pc = p1.ch
+    end
+    jw_end_arr(j)
+end
+
+func lsp_symbol_kind(k: int, in_struct: bool): int:
+    if k == at.AST_FUNC_DEF:
+        ret in_struct ? 6 : 12
+    else k == at.AST_STRUCT_DEF:
+        ret 23
+    else k == at.AST_FIELD:
+        ret 8
+    else k == at.AST_INTERFACE_DEF:
+        ret 11
+    else k == at.AST_IMPL_DEF:
+        ret 5
+    else k == at.AST_ENUM_DEF:
+        ret 10
+    else k == at.AST_ENUM_MEMBER:
+        ret 22
+    else k == at.AST_CONST_DECL:
+        ret 14
+    else k == at.AST_TYPE_ALIAS:
+        ret 26
+    else k == at.AST_VAR_DECL:
+        ret 13
+    else k == at.AST_LAYOUT_BLOCK or k == at.AST_LAYOUT_COMPONENT:
+        ret 2
+    end
+    ret 13
+end
+
+func outline_kind(k: int): bool:
+    ret k == at.AST_FUNC_DEF or k == at.AST_STRUCT_DEF or k == at.AST_FIELD or k == at.AST_INTERFACE_DEF or k == at.AST_IMPL_DEF or k == at.AST_ENUM_DEF or k == at.AST_ENUM_MEMBER or k == at.AST_CONST_DECL or k == at.AST_TYPE_ALIAS or k == at.AST_VAR_DECL or k == at.AST_LAYOUT_BLOCK or k == at.AST_LAYOUT_COMPONENT
+end
+
+func fold_kind(k: int): bool:
+    ret k == at.AST_FUNC_DEF or k == at.AST_STRUCT_DEF or k == at.AST_INTERFACE_DEF or k == at.AST_IMPL_DEF or k == at.AST_ENUM_DEF or k == at.AST_IF or k == at.AST_UNTIL or k == at.AST_FOR or k == at.AST_REPEAT or k == at.AST_EACH or k == at.AST_SWITCH or k == at.AST_CASE or k == at.AST_MATCH or k == at.AST_MATCH_ARM or k == at.AST_LAMBDA or k == at.AST_LAYOUT_BLOCK or k == at.AST_LAYOUT_ELEMENT or k == at.AST_LAYOUT_COMPONENT or k == at.AST_STRUCT_LIT or k == at.AST_ARRAY_LIT
+end
+
+func target_nodes(an &: An, pick: int, out &: Vector<OutNode>):
+    mut seen := HashMap {} as HashMap<str, bool>
+    defer seen.free()
+    total := at.Count(an.a)
+    mut i := 1
+    until i < total:
+        n := at.Get(an.a, i)
+        mut want := false
+        if pick == 0:
+            want = outline_kind(n.kind)
+        else:
+            want = fold_kind(n.kind)
+        end
+        if want and not n.synthetic and (n.end_index as int) > (n.begin_index as int) and in_target(an, n):
+            key := str.FromInt(n.kind as i64) + ":" + str.FromInt(n.begin_index as i64)
+            if not seen.has(key):
+                seen.put(key, true)
+                out.push(OutNode { node = i, kind = n.kind, b = n.begin_index as int, e = n.end_index as int })
+            end
+        end
+        i += 1
+    end
+    mut k := 1
+    until k < out.len():
+        cur := out.get(k)
+        mut m := k - 1
+        until m >= 0 and (out.get(m).b > cur.b or (out.get(m).b == cur.b and out.get(m).e < cur.e)):
+            out.set(m + 1, out.get(m))
+            m -= 1
+        end
+        out.set(m + 1, cur)
+        k += 1
+    end
+end
+
+func emit_symbol(an &: An, j &: Json, nodes: Vector<OutNode>, idx: int, kids: Vector<Vector<int>>, in_struct: bool):
+    nd := nodes.get(idx)
+    n := at.Get(an.a, nd.node)
+    mut nm := n.name
+    if str.Len(nm) == 0 or at.NameIsErr(nm):
+        nm = at.KindName(n.kind)
+    end
+    mut sb := nd.b
+    mut se := nd.b
+    if not ident_tok_in(an, nd.b, nd.e, n.name, false, sb, se):
+        sb = nd.b
+        se = nd.b
+    end
+    jw_obj(j)
+    jw_str(j, "name", nm)
+    mut detail := ""
+    if n.kind == at.AST_FUNC_DEF:
+        detail = func_header(an.text, nd.b)
+    else n.kind == at.AST_FIELD or n.kind == at.AST_VAR_DECL or n.kind == at.AST_CONST_DECL:
+        detail = type_disp(an, n.sema_type)
+    end
+    if str.Len(detail) > 0:
+        jw_str(j, "detail", detail)
+    end
+    jw_int(j, "kind", lsp_symbol_kind(n.kind, in_struct))
+    mut ee := nd.e
+    until ee > nd.b and (byte_at(an.text, ee - 1) == 10 or byte_at(an.text, ee - 1) == 13 or byte_at(an.text, ee - 1) == 32):
+        ee -= 1
+    end
+    jw_range(j, "range", an.li, nd.b, ee)
+    jw_range(j, "selectionRange", an.li, sb, se)
+    ch := kids.get(idx)
+    if ch.len() > 0:
+        jw_karr(j, "children")
+        each c in ch:
+            emit_symbol(an, j, nodes, c, kids, n.kind == at.AST_STRUCT_DEF or n.kind == at.AST_IMPL_DEF or n.kind == at.AST_INTERFACE_DEF)
+        end
+        jw_end_arr(j)
+    end
+    jw_end_obj(j)
+end
+
+func emit_outline(an &: An, j &: Json):
+    mut nodes := Vector {} as Vector<OutNode>
+    defer nodes.free()
+    target_nodes(an, 0, nodes)
+    mut kids := Vector {} as Vector<Vector<int>>
+    mut roots := Vector {} as Vector<int>
+    defer roots.free()
+    mut stack := Vector {} as Vector<int>
+    defer stack.free()
+    mut keep := Vector {} as Vector<bool>
+    defer keep.free()
+    repeat nodes.len() in i:
+        kids.push(Vector {} as Vector<int>)
+        nd := nodes.get(i)
+        until stack.len() > 0 and not (nd.b >= nodes.get(stack.get(stack.len() - 1)).b and nd.e <= nodes.get(stack.get(stack.len() - 1)).e):
+            _p := stack.pop()
+        end
+        mut parent := 0 - 1
+        mut parent_fn := false
+        if stack.len() > 0:
+            parent = stack.get(stack.len() - 1)
+            pk := nodes.get(parent).kind
+            parent_fn = pk == at.AST_FUNC_DEF or not keep.get(parent)
+        end
+        mut ok := true
+        if parent_fn:
+            ok = false
+        end
+        if nd.kind == at.AST_VAR_DECL and parent >= 0:
+            ok = false
+        end
+        keep.push(ok)
+        if ok:
+            if parent >= 0:
+                mut pv := kids.get(parent)
+                pv.push(i)
+                kids.set(parent, pv)
+            else:
+                roots.push(i)
+            end
+        end
+        stack.push(i)
+    end
+    jw_karr(j, "outline")
+    each r in roots:
+        emit_symbol(an, j, nodes, r, kids, false)
+    end
+    jw_end_arr(j)
+    each kv in kids:
+        mut kk := kv
+        kk.free()
+    end
+    kids.free()
+end
+
+func emit_folds(an &: An, j &: Json):
+    mut nodes := Vector {} as Vector<OutNode>
+    defer nodes.free()
+    target_nodes(an, 1, nodes)
+    jw_karr(j, "folds")
+    mut last_start := 0 - 1
+    each nd in nodes:
+        l1 := li_line_of(an.li, nd.b)
+        l2 := li_line_of(an.li, nd.e)
+        mut endl := l2
+        eb := li_line_end(an.li, l2)
+        lstart := an.li.starts.get(l2)
+        tail := trim(str.Substr(an.text, lstart, eb - lstart))
+        if str.StartsWith(tail, "end") or str.StartsWith(tail, "پایان") or str.StartsWith(tail, "else") or str.StartsWith(tail, "وگرنه") or str.Equals(tail, ")") or str.Equals(tail, "]") or str.Equals(tail, "}"):
+            endl = l2 - 1
+        end
+        if endl > l1 and l1 != last_start:
+            jw_obj(j)
+            jw_int(j, "startLine", l1)
+            jw_int(j, "endLine", endl)
+            jw_end_obj(j)
+            last_start = l1
+        end
+    end
+    mut run_start := 0 - 1
+    mut run_end := 0 - 1
+    mut first_import := 0 - 1
+    mut last_import := 0 - 1
+    each t in an.toks:
+        if t.kind == tok.TK_COMMENT_BLOCK:
+            l1 := li_line_of(an.li, t.begin_index as int)
+            l2 := li_line_of(an.li, t.end_index as int)
+            if l2 > l1:
+                jw_obj(j)
+                jw_int(j, "startLine", l1)
+                jw_int(j, "endLine", l2)
+                jw_str(j, "kind", "comment")
+                jw_end_obj(j)
+            end
+        else t.kind == tok.TK_COMMENT_LINE:
+            l := li_line_of(an.li, t.begin_index as int)
+            if run_start >= 0 and l == run_end + 1:
+                run_end = l
+            else:
+                if run_start >= 0 and run_end > run_start:
+                    jw_obj(j)
+                    jw_int(j, "startLine", run_start)
+                    jw_int(j, "endLine", run_end)
+                    jw_str(j, "kind", "comment")
+                    jw_end_obj(j)
+                end
+                run_start = l
+                run_end = l
+            end
+        else t.kind == tok.TK_KW_IMPORT or t.kind == tok.TK_KW_INCLUDE:
+            l := li_line_of(an.li, t.begin_index as int)
+            if first_import < 0:
+                first_import = l
+            end
+            last_import = l
+        end
+    end
+    if run_start >= 0 and run_end > run_start:
+        jw_obj(j)
+        jw_int(j, "startLine", run_start)
+        jw_int(j, "endLine", run_end)
+        jw_str(j, "kind", "comment")
+        jw_end_obj(j)
+    end
+    if first_import >= 0 and last_import > first_import:
+        jw_obj(j)
+        jw_int(j, "startLine", first_import)
+        jw_int(j, "endLine", last_import)
+        jw_str(j, "kind", "imports")
+        jw_end_obj(j)
+    end
+    jw_end_arr(j)
+end
+
+func emit_links(an &: An, j &: Json):
+    jw_karr(j, "links")
+    total := at.Count(an.a)
+    mut i := 1
+    until i < total:
+        n := at.Get(an.a, i)
+        if n.kind == at.AST_IMPORT and in_target(an, n) and str.Len(n.type_str) > 0 and (n.end_index as int) > (n.begin_index as int):
+            target := filepath.Clean(n.type_str)
+            if os.Exists(target) or src.HasOverlay(target):
+                jw_obj(j)
+                jw_range(j, "range", an.li, n.begin_index as int, n.end_index as int)
+                jw_str(j, "target", target)
+                jw_end_obj(j)
+            end
+        end
+        i += 1
+    end
+    jw_end_arr(j)
+end
+
+func method_names(an &: An, sc: int, names &: Vector<str>, ids &: Vector<int>):
+    mut all := Vector {} as Vector<int>
+    scope_syms(an, sc, all)
+    each id in all:
+        sv := sm.SymAt(an.s, id)
+        if sv.kind == sm.SYM_METHOD or sv.kind == sm.SYM_FUNC:
+            names.push(sv.name)
+            ids.push(id)
+        end
+    end
+    all.free()
+end
+
+func project_sym(an &: An, sv: sm.Symbol): bool:
+    if sv.decl <= 0 or sv.decl >= at.Count(an.a):
+        ret false
+    end
+    n := at.Get(an.a, sv.decl)
+    if n.synthetic or str.Len(sv.generic_base) > 0:
+        ret false
+    end
+    ret not is_std_file(an, node_file(an, n))
+end
+
+func emit_impls(an &: An, j &: Json):
+    mut ifaces := Vector {} as Vector<int>
+    mut structs := Vector {} as Vector<int>
+    total := sm.SymCount(an.s)
+    mut si := 1
+    until si < total:
+        sv := sm.SymAt(an.s, si)
+        if sv.kind == sm.SYM_INTERFACE and sv.members > 0 and sv.decl > 0:
+            ifaces.push(si)
+        else sv.kind == sm.SYM_STRUCT and sv.members > 0 and project_sym(an, sv):
+            structs.push(si)
+        end
+        si += 1
+    end
+    jw_karr(j, "impls")
+    each fi in ifaces:
+        fv := sm.SymAt(an.s, fi)
+        mut wn := Vector {} as Vector<str>
+        mut wi := Vector {} as Vector<int>
+        method_names(an, fv.members, wn, wi)
+        if wn.len() > 0:
+            each st in structs:
+                sv2 := sm.SymAt(an.s, st)
+                mut hn := Vector {} as Vector<str>
+                mut hi := Vector {} as Vector<int>
+                method_names(an, sv2.members, hn, hi)
+                mut have := HashMap {} as HashMap<str, int>
+                repeat hn.len() in k:
+                    have.put(hn.get(k), hi.get(k))
+                end
+                mut ok := true
+                each w in wn:
+                    if not have.has(w):
+                        ok = false
+                    end
+                end
+                if ok and (project_sym(an, fv) or project_sym(an, sv2)):
+                    jw_obj(j)
+                    jw_int(j, "i", make_decl(an, fi))
+                    jw_int(j, "s", make_decl(an, st))
+                    jw_karr(j, "m")
+                    repeat wn.len() in k2:
+                        jw_vint(j, make_decl(an, wi.get(k2)))
+                        jw_vint(j, make_decl(an, have.get(wn.get(k2))))
+                    end
+                    jw_end_arr(j)
+                    jw_end_obj(j)
+                end
+                have.free()
+                hn.free()
+                hi.free()
+            end
+        end
+        wn.free()
+        wi.free()
+    end
+    jw_end_arr(j)
+    ifaces.free()
+    structs.free()
+end
+
+func split_code(msg: str, code &: str): str:
+    if str.Len(msg) >= 6 and (byte_at(msg, 0) == 69 or byte_at(msg, 0) == 87) and byte_at(msg, 4) == 58 and byte_at(msg, 5) == 32:
+        code = str.Substr(msg, 0, 4)
+        ret str.Substr(msg, 6, str.Len(msg) - 6)
+    end
+    ret msg
+end
+
+func word_end(text: str, b: int): int:
+    n := str.Len(text)
+    mut e := b
+    until e < n and is_ident_byte(byte_at(text, e)):
+        e += 1
+    end
+    if e == b and b < n and byte_at(text, b) != 10:
+        e = b + 1
+        until e < n and byte_at(text, e) >= 128 and byte_at(text, e) < 192:
+            e += 1
+        end
+    end
+    ret e
+end
+
+func fix_edit(an &: An, f: lg.Fix, file: str, j &: Json): bool:
+    other := not str.Equals(file, an.target)
+    if other and (str.Len(an.std_root) > 0 and str.StartsWith(file, an.std_root)):
+        ret false
+    end
+    text := other ? file_text(an, file) : an.text
+    if other and str.Len(text) == 0:
+        ret false
+    end
+    mut b := 0
+    mut e := 0
+    mut new_text := ""
+    if not lg.ResolveFix(text, f, b, e, new_text):
+        ret false
+    end
+    mut li := an.li
+    if other:
+        li = an.li_list.get(file_li(an, file))
+    end
+    jw_obj(j)
+    if other:
+        jw_str(j, "path", file)
+    end
+    jw_range(j, "range", li, b, e)
+    jw_str(j, "newText", new_text)
+    jw_end_obj(j)
+    ret true
+end
+
+func emit_fixes(an &: An, j &: Json, ri: int, rfile: str):
+    mut idx := Vector {} as Vector<int>
+    defer idx.free()
+    repeat an.fixes.len() in fi:
+        if an.fixes.get(fi).rec == ri:
+            idx.push(fi)
+        end
+    end
+    if idx.len() == 0:
+        ret
+    end
+    jw_karr(j, "fixes")
+    mut k := 0
+    until k < idx.len():
+        f0 := an.fixes.get(idx.get(k))
+        mut k2 := k + 1
+        until k2 < idx.len() and str.Equals(an.fixes.get(idx.get(k2)).title, f0.title):
+            k2 += 1
+        end
+        mut sub := jw_new()
+        jw_arr(sub)
+        mut ok := true
+        mut q := k
+        until q < k2:
+            fq := an.fixes.get(idx.get(q))
+            ffile := str.Len(fq.file) > 0 ? filepath.Clean(fq.file) : rfile
+            if not fix_edit(an, fq, ffile, sub):
+                ok = false
+            end
+            q += 1
+        end
+        jw_end_arr(sub)
+        edits := jw_done(sub)
+        if ok:
+            jw_obj(j)
+            jw_str(j, "title", f0.title)
+            jw_bool(j, "preferred", f0.preferred)
+            jw_raw(j, "edits", edits)
+            jw_end_obj(j)
+        end
+        k = k2
+    end
+    jw_end_arr(j)
+end
+
+func emit_diags(an &: An, j &: Json):
+    jw_karr(j, "diags")
+    mut seen := HashMap {} as HashMap<str, bool>
+    defer seen.free()
+    each ri, r in an.records:
+        mut file := an.target
+        if str.Len(r.file) > 0:
+            file = filepath.Clean(r.file)
+        else an.is_virtual:
+            continue
+        end
+        if not str.Equals(file, an.target):
+            continue
+        end
+        mut b := 0
+        if r.index >= 0:
+            b = r.index
+        else r.line > 0:
+            l := r.line - 1
+            if l < an.li.starts.len():
+                b = an.li.starts.get(l) + (r.col > 0 ? r.col - 1 : 0)
+            else:
+                b = an.li.n
+            end
+        end
+        if b > an.li.n:
+            b = an.li.n
+        end
+        mut e := b + r.length
+        if r.length <= 0:
+            ti := tok_first_at(an, b)
+            if ti < an.toks.len() and (an.toks.get(ti).begin_index as int) == b and (an.toks.get(ti).end_index as int) > b:
+                e = an.toks.get(ti).end_index as int
+            else:
+                e = word_end(an.text, b)
+            end
+        end
+        lend := li_line_end(an.li, li_line_of(an.li, b))
+        if e > lend and lend > b:
+            e = lend
+        end
+        mut code := ""
+        msg := split_code(r.msg, code)
+        key := str.FromInt(b as i64) + ":" + msg
+        if seen.has(key):
+            continue
+        end
+        seen.put(key, true)
+        jw_obj(j)
+        jw_range(j, "range", an.li, b, e)
+        jw_int(j, "severity", r.level == lg.LOG_ERROR ? 1 : 2)
+        if str.Len(code) > 0:
+            jw_str(j, "code", code)
+        end
+        jw_str(j, "source", "salam")
+        jw_str(j, "message", msg)
+        if str.Len(r.help) > 0:
+            jw_str(j, "help", r.help)
+        end
+        emit_fixes(an, j, ri, file)
+        jw_end_obj(j)
+    end
+    jw_end_arr(j)
+end
+
+func emit_decl(j &: Json, d: Decl):
+    jw_obj(j)
+    jw_str(j, "name", d.name)
+    jw_int(j, "kind", d.kind)
+    if str.Len(d.detail) > 0:
+        jw_str(j, "detail", d.detail)
+    end
+    if str.Len(d.doc) > 0:
+        jw_str(j, "doc", d.doc)
+    end
+    if str.Len(d.ty) > 0:
+        jw_str(j, "ty", d.ty)
+    end
+    if str.Len(d.ret) > 0:
+        jw_str(j, "ret", d.ret)
+    end
+    if str.Len(d.ty_key) > 0 and not str.Equals(d.ty_key, d.ty):
+        jw_str(j, "tk", d.ty_key)
+    end
+    if str.Len(d.ret_key) > 0 and not str.Equals(d.ret_key, d.ret):
+        jw_str(j, "rk", d.ret_key)
+    end
+    if str.Len(d.container) > 0:
+        jw_str(j, "pkg", d.container)
+    end
+    if d.is_mut:
+        jw_bool(j, "mut", true)
+    end
+    if d.is_pub:
+        jw_bool(j, "pub", true)
+    end
+    if d.std:
+        jw_bool(j, "std", true)
+    end
+    if d.has_loc:
+        jw_str(j, "file", d.file)
+        jw_karr(j, "loc")
+        jw_vint(j, d.line)
+        jw_vint(j, d.ch)
+        jw_vint(j, d.eline)
+        jw_vint(j, d.ech)
+        jw_end_arr(j)
+    end
+    jw_end_obj(j)
+end
+
+func scope_syms(an &: An, sc: int, out &: Vector<int>):
+    if sc <= 0 or sc >= sm.ScopeCount(an.s):
+        ret
+    end
+    scv := sm.ScopeAt(an.s, sc)
+    each id in scv.symbols:
+        out.push(id)
+    end
+end
+
+func struct_members_of(an &: An, t0: int, out &: Vector<int>): bool:
+    mut t := t0
+    mut guard := 0
+    until guard < 8 and t >= 0:
+        tv := sm.TypeAt(an.s, t)
+        if tv.kind == sm.TY_PTR:
+            t = tv.pointee
+        else:
+            if tv.kind == sm.TY_STRUCT and tv.decl > 0:
+                sv := sm.SymAt(an.s, tv.decl)
+                scope_syms(an, sv.members, out)
+                ret true
+            end
+            ret false
+        end
+        guard += 1
+    end
+    ret false
+end
+
+func fn_nodes(an &: An, out &: Vector<OutNode>):
+    total := at.Count(an.a)
+    mut i := 1
+    until i < total:
+        n := at.Get(an.a, i)
+        k := n.kind
+        if (k == at.AST_FUNC_DEF or k == at.AST_LAMBDA or k == at.AST_BLOCK or k == at.AST_EACH or k == at.AST_REPEAT or k == at.AST_FOR) and in_target(an, n) and (n.end_index as int) > (n.begin_index as int):
+            out.push(OutNode { node = i, kind = n.kind, b = n.begin_index as int, e = n.end_index as int })
+        end
+        i += 1
+    end
+end
+
+func emit_completion_data(an &: An, j &: Json):
+    mut globals := Vector {} as Vector<int>
+    defer globals.free()
+    scope_syms(an, an.scope, globals)
+    mut gidx := Vector {} as Vector<int>
+    defer gidx.free()
+    mut pkgs := Vector {} as Vector<int>
+    defer pkgs.free()
+    each gs in globals:
+        sv := sm.SymAt(an.s, gs)
+        if str.StartsWith(sv.name, "__") or str.Equals(sv.name, VIRTUAL_PKG):
+            continue
+        end
+        gidx.push(make_decl(an, gs))
+        if sv.kind == sm.SYM_PACKAGE:
+            pkgs.push(gs)
+        end
+    end
+    mut fns := Vector {} as Vector<OutNode>
+    defer fns.free()
+    fn_nodes(an, fns)
+    mut locals := Vector {} as Vector<int>
+    defer locals.free()
+    mut lfrom := Vector {} as Vector<int>
+    defer lfrom.free()
+    mut lto := Vector {} as Vector<int>
+    defer lto.free()
+    total := sm.SymCount(an.s)
+    mut si := 1
+    until si < total:
+        sv := sm.SymAt(an.s, si)
+        if (sv.kind == sm.SYM_VAR or sv.kind == sm.SYM_PARAM or sv.kind == sm.SYM_CONST) and sv.decl > 0 and sv.decl < at.Count(an.a) and sv.home != an.scope:
+            n := at.Get(an.a, sv.decl)
+            if in_target(an, n):
+                db := n.begin_index as int
+                mut best_b := 0 - 1
+                mut best_e := 0 - 1
+                each f in fns:
+                    if f.b <= db and db < f.e and (best_b < 0 or f.b > best_b or (f.b == best_b and f.e < best_e)):
+                        best_b = f.b
+                        best_e = f.e
+                    end
+                end
+                if best_b >= 0:
+                    locals.push(make_decl(an, si))
+                    lfrom.push(db)
+                    lto.push(best_e)
+                end
+            end
+        end
+        si += 1
+    end
+    jw_karr(j, "globals")
+    each g in gidx:
+        jw_vint(j, g)
+    end
+    jw_end_arr(j)
+    jw_karr(j, "locals")
+    repeat locals.len() in li:
+        p1 := li_pos(an.li, lfrom.get(li))
+        p2 := li_pos(an.li, lto.get(li))
+        jw_obj(j)
+        jw_int(j, "d", locals.get(li))
+        jw_int(j, "fl", p1.line)
+        jw_int(j, "fc", p1.ch)
+        jw_int(j, "tl", p2.line)
+        jw_int(j, "tc", p2.ch)
+        jw_end_obj(j)
+    end
+    jw_end_arr(j)
+    jw_kobj(j, "packages")
+    each pk in pkgs:
+        pv := sm.SymAt(an.s, pk)
+        mut ms := Vector {} as Vector<int>
+        scope_syms(an, pv.members, ms)
+        jw_karr(j, pv.name)
+        each m in ms:
+            mv := sm.SymAt(an.s, m)
+            if mv.is_pub and mv.kind != sm.SYM_PACKAGE and not str.StartsWith(mv.name, "_"):
+                jw_vint(j, make_decl(an, m))
+            end
+        end
+        jw_end_arr(j)
+        ms.free()
+    end
+    jw_end_obj(j)
+    mut done := HashMap {} as HashMap<str, bool>
+    defer done.free()
+    jw_kobj(j, "types")
+    mut round := 0
+    mut from := 0
+    until round < 3:
+        upto := an.decls.len()
+        mut di := from
+        until di < upto:
+            d := an.decls.get(di)
+            dsv := sm.SymAt(an.s, d.sym)
+            mut tt := dsv.ty
+            if d.kind == sm.SYM_FUNC or d.kind == sm.SYM_METHOD:
+                tt = 0 - 1
+                if dsv.overloads.len() > 0:
+                    tt = sm.SigAt(an.s, dsv.overloads.get(0)).ret_type
+                end
+            end
+            if tt >= 0:
+                key := type_str(an, tt)
+                if str.Len(key) > 0 and not done.has(key):
+                    mut ms := Vector {} as Vector<int>
+                    if struct_members_of(an, tt, ms):
+                        done.put(key, true)
+                        mut ids := Vector {} as Vector<int>
+                        each m in ms:
+                            ids.push(make_decl(an, m))
+                        end
+                        jw_karr(j, key)
+                        each id in ids:
+                            jw_vint(j, id)
+                        end
+                        jw_end_arr(j)
+                        ids.free()
+                    end
+                    ms.free()
+                end
+            end
+            di += 1
+        end
+        from = upto
+        round += 1
+    end
+    jw_end_obj(j)
+end
+
+func target_an(base: An, lgr: lg.Logger, fallback: int, target: str, text: str): An:
+    mut an := An {}
+    an.a = base.a
+    an.s = base.s
+    an.target = target
+    an.text = text
+    an.messages = base.messages
+    an.std_root = base.std_root
+    an.entry_path = base.entry_path
+    an.is_virtual = base.is_virtual
+    an.scope = base.scope
+    an.records = base.records
+    an.fixes = base.fixes
+    an.texts.put(target, text)
+    tpack := lx.Detect(src_of(an), fallback)
+    an.lang = lp.Code(tpack)
+    mut ttoks := tok.StreamNew(target)
+    _tl := lx.RunEx(lgr, tpack, src_of(an), true, ttoks)
+    each t in ttoks.toks:
+        an.toks.push(t)
+    end
+    an.li = line_index(an.text)
+    ret an
+end
+
+func emit_one(an &: An, refn: Vector<int>, refs: Vector<int>, light: bool, with_path: bool): str:
+    repeat refn.len() in k:
+        add_ref(an, refn.get(k), refs.get(k))
+    end
+    total := sm.SymCount(an.s)
+    mut si := 1
+    until si < total:
+        sv := sm.SymAt(an.s, si)
+        if sv.decl > 0 and sv.decl < at.Count(an.a) and sv.kind != sm.SYM_PACKAGE:
+            n := at.Get(an.a, sv.decl)
+            if in_target(an, n) and not n.synthetic:
+                _d := make_decl(an, si)
+            end
+        end
+        si += 1
+    end
+    mut j := jw_new()
+    jw_obj(j)
+    jw_bool(j, "ok", true)
+    if with_path:
+        jw_str(j, "path", an.target)
+    end
+    jw_str(j, "std_root", an.std_root)
+    emit_diags(an, j)
+    emit_outline(an, j)
+    emit_links(an, j)
+    emit_impls(an, j)
+    if not light:
+        emit_folds(an, j)
+        emit_completion_data(an, j)
+        emit_tokens(an, j)
+    end
+    jw_karr(j, "refs")
+    each rf in an.refs:
+        p1 := li_pos(an.li, rf.b)
+        p2 := li_pos(an.li, rf.e)
+        jw_obj(j)
+        jw_karr(j, "r")
+        jw_vint(j, p1.line)
+        jw_vint(j, p1.ch)
+        jw_vint(j, p2.line)
+        jw_vint(j, p2.ch)
+        jw_end_arr(j)
+        jw_int(j, "d", rf.decl)
+        if str.Len(rf.ty) > 0:
+            jw_str(j, "t", rf.ty)
+        end
+        jw_end_obj(j)
+    end
+    jw_end_arr(j)
+    jw_karr(j, "decls")
+    each d in an.decls:
+        emit_decl(j, d)
+    end
+    jw_end_arr(j)
+    jw_end_obj(j)
+    ret jw_done(j)
+end
+
+func analyze(r: Req): str:
+    i18.SetLang(str.Equals(r.messages, "fa") ? "fa" : "en")
+    sm.SetStdlibRoot(r.stdlib)
+    sm.SetSwitchLint(r.switch_lint, r.switch_lint_min)
+    sm.LayoutSchemaInit(r.stdlib)
+    target := filepath.Clean(r.path)
+    src.SetOverlay(target, r.text)
+    repeat r.overlay_paths.len() in oi:
+        if oi < r.overlay_texts.len():
+            src.SetOverlay(r.overlay_paths.get(oi), r.overlay_texts.get(oi))
+        end
+    end
+    mut base := An {}
+    base.target = target
+    base.text = r.text
+    base.messages = r.messages
+    sroot := sm.GetStdlibRoot()
+    if os.IsDir(pth.PathJoin(sroot, "std")) and not os.IsDir(pth.PathJoin(sroot, "core")):
+        base.std_root = filepath.Clean(pth.PathJoin(sroot, "std")) + "/"
+    else str.Len(sroot) > 0:
+        base.std_root = filepath.Clean(sroot) + "/"
+    end
+    mut entry := target
+    root := package_root_of(target)
+    if str.Len(root) > 0:
+        dir := pth.PathDir(root)
+        bname := pth.PathBase(dir)
+        entry = filepath.Clean(pth.PathJoin(pth.PathDir(dir), VIRTUAL_ENTRY))
+        src.SetOverlay(entry, "include " + VIRTUAL_PKG + " \"" + bname + "/" + bname + ".salam\"\n")
+        base.is_virtual = true
+    end
+    base.entry_path = entry
+    mut fallback := lp.Load(str.Len(r.lang) > 0 ? r.lang : "en")
+    if fallback == lp.LP_NONE:
+        fallback = lp.Load("en")
+    end
+    lgr := lg.New(lg.LOG_WARN, false)
+    lg.SetCapture(true)
+    lg.SetRecord(true)
+    sm.SetRecordRefs(true)
+    mut sf := src.New()
+    _lok := src.Load(entry, sf)
+    modpack := lx.Detect(sf, fallback)
+    mut toks := tok.StreamNew(entry)
+    _lx := lx.Run(lgr, modpack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    _pok := ps.Run(lgr, toks, a, prog)
+    tok.StreamFree(toks)
+    table := cc.TableBuild("", r.defines)
+    cc.TableSetPack(table, modpack)
+    _cc := cc.PruneProgram(a, lgr, entry, table, prog)
+    _vw := lo.PrepareViews(lgr, modpack, table, a, prog, entry)
+    mut s := sm.New(lgr, entry, lp.Code(modpack))
+    sm.SetCc(s, table)
+    _sok := sm.Run(s, a, prog)
+    repeat lg.RecordCount() in ri:
+        base.records.push(lg.RecordAt(ri))
+    end
+    repeat lg.FixCount() in fi:
+        base.fixes.push(lg.FixAt(fi))
+    end
+    mut refn := Vector {} as Vector<int>
+    mut refs := Vector {} as Vector<int>
+    repeat sm.RefCount() in qi:
+        refn.push(sm.RefNode(qi))
+        refs.push(sm.RefSym(qi))
+    end
+    sm.SetRecordRefs(false)
+    lg.SetRecord(false)
+    base.a = a
+    base.s = s
+    base.scope = s.global
+    if base.is_virtual:
+        vb := sm.LookupLocal(s, s.global, VIRTUAL_PKG)
+        if vb != 0:
+            base.scope = sm.SymAt(s, vb).members
+        end
+    end
+    mut an := target_an(base, lgr, fallback, target, r.text)
+    primary := emit_one(an, refn, refs, r.light, false)
+    if r.targets.len() == 0:
+        lg.SetCapture(false)
+        ret primary
+    end
+    mut others := Vector {} as Vector<str>
+    each tgt in r.targets:
+        op := filepath.Clean(tgt)
+        if str.Equals(op, target):
+            continue
+        end
+        otext := io.ReadFile(op)
+        if str.Len(otext) == 0:
+            continue
+        end
+        mut oan := target_an(base, lgr, fallback, op, otext)
+        others.push(emit_one(oan, refn, refs, true, true))
+    end
+    lg.SetCapture(false)
+    out := str.Substr(primary, 0, str.Len(primary) - 1) + ",\"others\":[" + str.Join(others, ",") + "]}"
+    others.free()
+    ret out
+end
+
+pub func AnalyzeMain(req_path: str): int:
+    mut r := Req {}
+    if not read_req(req_path, r):
+        io.EPrintln("salam lsp: bad analysis request " + req_path)
+        ret 2
+    end
+    out := analyze(r)
+    if str.Len(r.out) > 0:
+        if io.WriteFile(r.out, out) < 0:
+            ret 1
+        end
+    else:
+        println out
+    end
+    ret 0
+end

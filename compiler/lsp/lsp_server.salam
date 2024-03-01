@@ -1,0 +1,1985 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package lsp
+
+import str
+import io
+import os
+import encoding.json
+import encoding.value
+import encoding.encerr
+import os.process
+import os.temp
+
+include co "../sal_core.salam"
+include lg "../logger.salam"
+include src "../source.salam"
+include lx "../lexer/lexer.salam"
+include lp "../langpack.salam"
+include fm "../sal_fmt.salam"
+include tok "../token.salam"
+
+const DEBOUNCE_MS := 200
+
+mut g_docs := Vector {} as Vector<Doc>
+mut g_exe := "salam"
+mut g_stdlib := ""
+mut g_messages := "en"
+mut g_defines := Vector {} as Vector<str>
+mut g_fix_order := false
+mut g_switch_lint := 0
+mut g_switch_lint_min := 4
+mut g_shutdown := false
+mut g_req_path := ""
+mut g_out_path := ""
+mut g_analyses := 0
+mut g_job_on := false
+mut g_job_uri := ""
+mut g_job_proc := process.Process {}
+mut g_pending := Vector {} as Vector<Pending>
+mut g_job_index := ""
+mut g_client_name := ""
+mut g_pull_diags := false
+
+struct Doc:
+    pub uri: str = ""
+    pub path: str = ""
+    pub text: str = ""
+    pub version: int = 0
+    pub dirty: bool = true
+    pub open: bool = true
+    pub has_snap: bool = false
+    pub snap: value.Value = value.Value {}
+end
+
+struct Pending:
+    pub id: str = ""
+    pub method: str = ""
+    pub uri: str = ""
+    pub params: value.Value = value.Value {}
+end
+
+struct Hit:
+    pub ok: bool = false
+    pub decl: int = 0 - 1
+    pub line: int = 0
+    pub ch: int = 0
+    pub eline: int = 0
+    pub ech: int = 0
+    pub ty: str = ""
+end
+
+func obj(v: value.Value, key: str): value.Value:
+    if value.IsObject(v) and value.ObjectHas(v, key):
+        ret value.ObjectGet(v, key)
+    end
+    ret value.ValueNull()
+end
+
+func arr_int(v: value.Value, i: int): int:
+    if value.IsArray(v) and i < value.ArrayLen(v):
+        ret value.AsInt(value.ArrayGet(v, i)) as int
+    end
+    ret 0
+end
+
+func hexval(c: int): int:
+    if c >= 48 and c <= 57:
+        ret c - 48
+    else c >= 97 and c <= 102:
+        ret c - 87
+    else c >= 65 and c <= 70:
+        ret c - 55
+    end
+    ret 0 - 1
+end
+
+func uri_to_path(uri: str): str:
+    mut s := uri
+    if str.StartsWith(s, "file://"):
+        s = str.Substr(s, 7, str.Len(s) - 7)
+    end
+    mut sb := str.NewBuilder()
+    n := str.Len(s)
+    mut i := 0
+    until i < n:
+        c := byte_at(s, i)
+        if c == 37 and i + 2 < n and hexval(byte_at(s, i + 1)) >= 0 and hexval(byte_at(s, i + 2)) >= 0:
+            str.BufAppendChar(sb, hexval(byte_at(s, i + 1)) * 16 + hexval(byte_at(s, i + 2)))
+            i += 3
+        else:
+            str.BufAppendChar(sb, c)
+            i += 1
+        end
+    end
+    mut p := str.BufStr(sb)
+    str.BufFree(sb)
+    if str.Len(p) >= 3 and byte_at(p, 0) == 47 and byte_at(p, 2) == 58:
+        p = str.Substr(p, 1, str.Len(p) - 1)
+    end
+    ret p
+end
+
+func path_to_uri(path: str): str:
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "file://")
+    if str.Len(path) >= 2 and byte_at(path, 1) == 58:
+        str.BufAppendChar(sb, 47)
+    end
+    n := str.Len(path)
+    repeat n in i:
+        c := byte_at(path, i)
+        if (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 47 or c == 45 or c == 95 or c == 46 or c == 126 or c == 58:
+            str.BufAppendChar(sb, c)
+        else c == 92:
+            str.BufAppendChar(sb, 47)
+        else:
+            str.BufAppendChar(sb, 37)
+            str.BufAppendChar(sb, hexdig(c / 16) >= 97 ? hexdig(c / 16) - 32 : hexdig(c / 16))
+            str.BufAppendChar(sb, hexdig(c % 16) >= 97 ? hexdig(c % 16) - 32 : hexdig(c % 16))
+        end
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func doc_index(uri: str): int:
+    repeat g_docs.len() in i:
+        if str.Equals(g_docs.get(i).uri, uri):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func send_result(id: str, result: str):
+    send_message("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":" + result + "}")
+end
+
+func send_error(id: str, code: int, msg: str):
+    send_message("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + str.FromInt(code as i64) + ",\"message\":" + jq(msg) + "}}")
+end
+
+func send_notify(method: str, params: str):
+    send_message("{\"jsonrpc\":\"2.0\",\"method\":" + jq(method) + ",\"params\":" + params + "}")
+end
+
+func log_client(level: int, msg: str):
+    send_notify("window/logMessage", "{\"type\":" + str.FromInt(level as i64) + ",\"message\":" + jq(msg) + "}")
+end
+
+func apply_settings(v: value.Value):
+    if not value.IsObject(v):
+        ret
+    end
+    mut s := v
+    if value.ObjectHas(v, "salam"):
+        s = value.ObjectGet(v, "salam")
+    end
+    sp := vstr(s, "stdlibPath")
+    if str.Len(sp) > 0:
+        g_stdlib = sp
+    end
+    m := vstr(s, "messages")
+    if str.Equals(m, "fa") or str.Equals(m, "en"):
+        g_messages = m
+    end
+    if value.ObjectHas(s, "defines"):
+        g_defines.clear()
+        req_strs(s, "defines", g_defines)
+    end
+    if value.ObjectHas(s, "formatFixOrder"):
+        g_fix_order = vbool(s, "formatFixOrder")
+    end
+    sl := vstr(s, "switchLint")
+    if str.Equals(sl, "off"):
+        g_switch_lint = 0
+    else str.Equals(sl, "warn"):
+        g_switch_lint = 1
+    end
+    if value.ObjectHas(s, "switchLintMin"):
+        g_switch_lint_min = vint(s, "switchLintMin", g_switch_lint_min)
+    end
+    if value.ObjectHas(s, "index"):
+        g_index_on = vbool(s, "index")
+    end
+    if value.ObjectHas(s, "indexMaxFiles"):
+        g_index_max = vint(s, "indexMaxFiles", g_index_max)
+    end
+end
+
+func caps_json(): str:
+    mut j := jw_new()
+    jw_obj(j)
+    jw_kobj(j, "capabilities")
+    jw_str(j, "positionEncoding", "utf-16")
+    jw_kobj(j, "textDocumentSync")
+    jw_bool(j, "openClose", true)
+    jw_int(j, "change", 2)
+    jw_kobj(j, "save")
+    jw_bool(j, "includeText", false)
+    jw_end_obj(j)
+    jw_end_obj(j)
+    jw_bool(j, "hoverProvider", true)
+    jw_bool(j, "definitionProvider", true)
+    jw_bool(j, "declarationProvider", true)
+    jw_bool(j, "typeDefinitionProvider", true)
+    jw_bool(j, "referencesProvider", true)
+    jw_bool(j, "documentHighlightProvider", true)
+    jw_bool(j, "documentSymbolProvider", true)
+    jw_bool(j, "workspaceSymbolProvider", true)
+    jw_bool(j, "foldingRangeProvider", true)
+    jw_bool(j, "documentFormattingProvider", true)
+    jw_bool(j, "documentRangeFormattingProvider", true)
+    jw_kobj(j, "documentOnTypeFormattingProvider")
+    jw_str(j, "firstTriggerCharacter", "\n")
+    jw_end_obj(j)
+    jw_kobj(j, "renameProvider")
+    jw_bool(j, "prepareProvider", true)
+    jw_end_obj(j)
+    jw_kobj(j, "completionProvider")
+    jw_karr(j, "triggerCharacters")
+    jw_vstr(j, ".")
+    jw_end_arr(j)
+    jw_bool(j, "resolveProvider", false)
+    jw_end_obj(j)
+    jw_kobj(j, "signatureHelpProvider")
+    jw_karr(j, "triggerCharacters")
+    jw_vstr(j, "(")
+    jw_vstr(j, ",")
+    jw_end_arr(j)
+    jw_end_obj(j)
+    jw_kobj(j, "codeActionProvider")
+    jw_karr(j, "codeActionKinds")
+    jw_vstr(j, "quickfix")
+    jw_end_arr(j)
+    jw_end_obj(j)
+    jw_bool(j, "selectionRangeProvider", true)
+    jw_bool(j, "inlayHintProvider", true)
+    jw_bool(j, "callHierarchyProvider", true)
+    jw_bool(j, "implementationProvider", true)
+    jw_bool(j, "colorProvider", true)
+    jw_kobj(j, "diagnosticProvider")
+    jw_str(j, "identifier", "salam")
+    jw_bool(j, "interFileDependencies", true)
+    jw_bool(j, "workspaceDiagnostics", true)
+    jw_end_obj(j)
+    jw_bool(j, "typeHierarchyProvider", true)
+    jw_kobj(j, "codeLensProvider")
+    jw_bool(j, "resolveProvider", false)
+    jw_end_obj(j)
+    jw_kobj(j, "documentLinkProvider")
+    jw_bool(j, "resolveProvider", false)
+    jw_end_obj(j)
+    jw_kobj(j, "workspace")
+    jw_kobj(j, "workspaceFolders")
+    jw_bool(j, "supported", true)
+    jw_bool(j, "changeNotifications", true)
+    jw_end_obj(j)
+    jw_end_obj(j)
+    jw_kobj(j, "semanticTokensProvider")
+    jw_kobj(j, "legend")
+    jw_karr(j, "tokenTypes")
+    each tt in ["namespace", "type", "struct", "enum", "interface", "enumMember", "function", "method", "parameter", "variable", "property", "keyword", "string", "number", "comment", "operator", "class", "decorator"]:
+        jw_vstr(j, tt)
+    end
+    jw_end_arr(j)
+    jw_karr(j, "tokenModifiers")
+    each tm in ["declaration", "readonly", "defaultLibrary", "deprecated", "mutable"]:
+        jw_vstr(j, tm)
+    end
+    jw_end_arr(j)
+    jw_end_obj(j)
+    jw_bool(j, "full", true)
+    jw_bool(j, "range", false)
+    jw_end_obj(j)
+    jw_end_obj(j)
+    jw_kobj(j, "serverInfo")
+    jw_str(j, "name", "salam-lsp")
+    jw_str(j, "version", co.VERSION)
+    jw_end_obj(j)
+    jw_end_obj(j)
+    ret jw_done(j)
+end
+
+func analysis_request(d: Doc, light: bool): str:
+    mut j := jw_new()
+    jw_obj(j)
+    jw_bool(j, "light", light)
+    jw_str(j, "path", d.path)
+    jw_str(j, "text", d.text)
+    jw_str(j, "messages", g_messages)
+    jw_int(j, "switch_lint", g_switch_lint)
+    jw_int(j, "switch_lint_min", g_switch_lint_min)
+    jw_str(j, "stdlib", g_stdlib)
+    jw_str(j, "out", g_out_path)
+    jw_karr(j, "overlay_paths")
+    each o in g_docs:
+        if o.open and not str.Equals(o.uri, d.uri):
+            jw_vstr(j, o.path)
+        end
+    end
+    jw_end_arr(j)
+    jw_karr(j, "overlay_texts")
+    each o2 in g_docs:
+        if o2.open and not str.Equals(o2.uri, d.uri):
+            jw_vstr(j, o2.text)
+        end
+    end
+    jw_end_arr(j)
+    jw_karr(j, "defines")
+    each df in g_defines:
+        jw_vstr(j, df)
+    end
+    jw_end_arr(j)
+    jw_end_obj(j)
+    ret jw_done(j)
+end
+
+func start_job(i: int):
+    mut d := g_docs.get(i)
+    d.dirty = false
+    g_docs.set(i, d)
+    ensure_tmp_paths()
+    if io.WriteFile(g_req_path, analysis_request(d, false)) < 0:
+        log_client(1, "salam lsp: cannot write " + g_req_path)
+        ret
+    end
+    spawn_worker(d.uri)
+end
+
+func ensure_tmp_paths():
+    if str.Len(g_req_path) == 0:
+        g_req_path = temp.File()
+        g_out_path = temp.File()
+    end
+end
+
+func spawn_worker(uri: str):
+    _w := io.WriteFile(g_out_path, "")
+    mut args := Vector {} as Vector<str>
+    args.push("lsp")
+    args.push("--analyze")
+    args.push(g_req_path)
+    p := process.StartCaptured(g_exe, args)
+    args.free()
+    if not process.IsRunning(p):
+        log_client(1, "salam lsp: cannot start the analysis worker '" + g_exe + "'")
+        g_job_index = ""
+        ret
+    end
+    g_job_on = true
+    g_job_uri = uri
+    g_job_proc = p
+    if SALAM_OS_WINDOWS:
+        rc := process.Wait(g_job_proc)
+        finish_job(rc)
+    end
+end
+
+func cancel_job():
+    if not g_job_on:
+        ret
+    end
+    _k := process.Kill(g_job_proc)
+    mut code := 0
+    _d := child_done(process.Pid(g_job_proc), true, code)
+    process.Cleanup(g_job_proc)
+    g_job_on = false
+    if str.Len(g_job_index) > 0:
+        g_index_queue.push(g_job_index)
+        g_job_index = ""
+        ret
+    end
+    i := doc_index(g_job_uri)
+    if i >= 0:
+        mut d := g_docs.get(i)
+        d.dirty = true
+        g_docs.set(i, d)
+    end
+end
+
+func finish_job(rc: int):
+    g_job_on = false
+    g_analyses += 1
+    errtext := process.ReadStderr(g_job_proc)
+    process.Cleanup(g_job_proc)
+    if str.Len(g_job_index) > 0:
+        finish_index_job(rc)
+        ret
+    end
+    i := doc_index(g_job_uri)
+    if i < 0 or not g_docs.get(i).open:
+        ret
+    end
+    d := g_docs.get(i)
+    text := io.ReadFile(g_out_path)
+    if rc != 0 or str.Len(text) == 0:
+        mut msg := "salam lsp: analysis of " + d.path + " failed (exit " + str.FromInt(rc as i64) + ")"
+        if str.Len(errtext) > 0:
+            msg = msg + ": " + str.Substr(errtext, 0, str.Len(errtext) > 2000 ? 2000 : str.Len(errtext))
+        end
+        log_client(1, msg)
+        answer_pending(d.uri)
+        ret
+    end
+    mut err := encerr.EncodingError {}
+    v := json.Decode(text, err)
+    if encerr.IsError(err) or not value.IsObject(v):
+        log_client(1, "salam lsp: the analysis worker returned bad JSON")
+        answer_pending(d.uri)
+        ret
+    end
+    mut d2 := g_docs.get(i)
+    d2.snap = v
+    d2.has_snap = true
+    g_docs.set(i, d2)
+    publish(d2)
+    if not d2.dirty:
+        answer_pending(d2.uri)
+    end
+end
+
+func poll_job():
+    if not g_job_on:
+        ret
+    end
+    mut code := 0
+    if child_done(process.Pid(g_job_proc), false, code):
+        finish_job(code)
+    end
+end
+
+func needs_wait(i: int): bool:
+    if i < 0:
+        ret false
+    end
+    d := g_docs.get(i)
+    ret d.dirty or not d.has_snap or (g_job_on and str.Equals(g_job_uri, d.uri))
+end
+
+func defer_request(id: str, method: str, params: value.Value):
+    uri := vstr(obj(params, "textDocument"), "uri")
+    g_pending.push(Pending { id = id, method = method, uri = uri, params = params })
+end
+
+func answer_pending(uri: str):
+    mut keep := Vector {} as Vector<Pending>
+    mut run := Vector {} as Vector<Pending>
+    each pq in g_pending:
+        if str.Equals(pq.uri, uri):
+            run.push(pq)
+        else:
+            keep.push(pq)
+        end
+    end
+    g_pending.free()
+    g_pending = keep
+    each pr in run:
+        i := doc_index(pr.uri)
+        if i >= 0 and g_docs.get(i).has_snap:
+            dispatch_request(pr.id, pr.method, pr.params, true)
+        else:
+            send_result(pr.id, "null")
+        end
+    end
+    run.free()
+end
+
+func diag_items(snap: value.Value): str:
+    mut j := jw_new()
+    jw_arr(j)
+    diags := obj(snap, "diags")
+    if value.IsArray(diags):
+        repeat value.ArrayLen(diags) in i:
+            dv := value.ArrayGet(diags, i)
+            jw_obj(j)
+            jw_raw(j, "range", json.EncodeDefault(obj(dv, "range")))
+            jw_int(j, "severity", vint(dv, "severity", 1))
+            code := vstr(dv, "code")
+            if str.Len(code) > 0:
+                jw_str(j, "code", code)
+            end
+            jw_str(j, "source", "salam")
+            mut msg := vstr(dv, "message")
+            help := vstr(dv, "help")
+            if str.Len(help) > 0:
+                msg = msg + "\nhelp: " + help
+            end
+            jw_str(j, "message", msg)
+            fixes := obj(dv, "fixes")
+            if value.IsArray(fixes) and value.ArrayLen(fixes) > 0:
+                jw_kobj(j, "data")
+                jw_raw(j, "fixes", json.EncodeDefault(fixes))
+                jw_end_obj(j)
+            end
+            if str.Contains(msg, "unused ") or str.Contains(msg, "never used"):
+                jw_karr(j, "tags")
+                jw_vint(j, 1)
+                jw_end_arr(j)
+            end
+            jw_end_obj(j)
+        end
+    end
+    jw_end_arr(j)
+    ret jw_done(j)
+end
+
+func publish(d: Doc):
+    if g_pull_diags and d.open:
+        ret
+    end
+    mut items := "[]"
+    if d.has_snap and d.open:
+        items = diag_items(d.snap)
+    end
+    send_notify("textDocument/publishDiagnostics", "{\"uri\":" + jq(d.uri) + ",\"version\":" + str.FromInt(d.version as i64) + ",\"diagnostics\":" + items + "}")
+end
+
+func on_pull_diagnostics(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0 or not g_docs.get(i).has_snap:
+        send_result(id, "{\"kind\":\"full\",\"items\":[]}")
+        ret
+    end
+    send_result(id, "{\"kind\":\"full\",\"items\":" + diag_items(g_docs.get(i).snap) + "}")
+end
+
+func on_workspace_diagnostics(id: str):
+    mut parts := Vector {} as Vector<str>
+    mut open := HashMap {} as HashMap<str, bool>
+    each d in g_docs:
+        if d.open:
+            open.put(d.uri, true)
+        end
+    end
+    each e in g_index:
+        if not open.has(e.uri):
+            parts.push("{\"kind\":\"full\",\"uri\":" + jq(e.uri) + ",\"version\":null,\"items\":" + diag_items(e.snap) + "}")
+        end
+    end
+    send_result(id, "{\"items\":[" + str.Join(parts, ",") + "]}")
+    parts.free()
+    open.free()
+end
+
+func hex_at(s: str, i: int): int:
+    if i >= str.Len(s):
+        ret 0 - 1
+    end
+    ret hexval(byte_at(s, i))
+end
+
+func color_json(text: str, at0: int, n: int): str:
+    mut r := 0
+    mut g := 0
+    mut b := 0
+    mut a := 255
+    if n == 3:
+        r = hex_at(text, at0) * 17
+        g = hex_at(text, at0 + 1) * 17
+        b = hex_at(text, at0 + 2) * 17
+    else:
+        r = hex_at(text, at0) * 16 + hex_at(text, at0 + 1)
+        g = hex_at(text, at0 + 2) * 16 + hex_at(text, at0 + 3)
+        b = hex_at(text, at0 + 4) * 16 + hex_at(text, at0 + 5)
+        if n == 8:
+            a = hex_at(text, at0 + 6) * 16 + hex_at(text, at0 + 7)
+        end
+    end
+    ret "{\"red\":" + str.FromFloat((r as f64) / 255.0) + ",\"green\":" + str.FromFloat((g as f64) / 255.0) + ",\"blue\":" + str.FromFloat((b as f64) / 255.0) + ",\"alpha\":" + str.FromFloat((a as f64) / 255.0) + "}"
+end
+
+func on_document_color(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "[]")
+        ret
+    end
+    text := g_docs.get(i).text
+    li := line_index(text)
+    mut out := Vector {} as Vector<str>
+    n := str.Len(text)
+    mut k := 0
+    until k < n:
+        if byte_at(text, k) == 35 and k > 0:
+            pc := byte_at(text, k - 1)
+            if pc == 34 or pc == 32 or pc == 58 or pc == 39 or pc == 40:
+                mut m := k + 1
+                until m < n and hexval(byte_at(text, m)) >= 0:
+                    m += 1
+                end
+                cnt := m - k - 1
+                endc := m < n ? byte_at(text, m) : 0
+                if (cnt == 3 or cnt == 6 or cnt == 8) and not is_ident_byte(endc):
+                    p1 := li_pos(li, k)
+                    p2 := li_pos(li, m)
+                    out.push("{\"range\":" + range_json(p1.line, p1.ch, p2.line, p2.ch) + ",\"color\":" + color_json(text, k + 1, cnt) + "}")
+                end
+                k = m
+                continue
+            end
+        end
+        k += 1
+    end
+    mut l2 := li
+    li_free(l2)
+    send_result(id, "[" + str.Join(out, ",") + "]")
+    out.free()
+end
+
+func hex2(v: f64): str:
+    mut n := (v * 255.0 + 0.5) as int
+    if n < 0:
+        n = 0
+    end
+    if n > 255:
+        n = 255
+    end
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, hexdig(n / 16))
+    str.BufAppendChar(sb, hexdig(n % 16))
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func vfloat(v: value.Value, key: str): f64:
+    if value.IsObject(v) and value.ObjectHas(v, key):
+        x := value.ObjectGet(v, key)
+        if value.IsNumber(x):
+            ret value.AsFloat(x)
+        end
+    end
+    ret 0.0
+end
+
+func on_color_presentation(id: str, params: value.Value):
+    c := obj(params, "color")
+    mut label := "#" + hex2(vfloat(c, "red")) + hex2(vfloat(c, "green")) + hex2(vfloat(c, "blue"))
+    al := vfloat(c, "alpha")
+    if al < 0.999:
+        label = label + hex2(al)
+    end
+    send_result(id, "[{\"label\":" + jq(label) + "}]")
+end
+
+func has_dirty(): bool:
+    each d in g_docs:
+        if d.dirty and d.open:
+            ret true
+        end
+    end
+    ret false
+end
+
+func next_dirty(): int:
+    repeat g_docs.len() in i:
+        if g_docs.get(i).dirty and g_docs.get(i).open:
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func apply_change(text: str, ch: value.Value): str:
+    if not value.ObjectHas(ch, "range"):
+        ret vstr(ch, "text")
+    end
+    rg := obj(ch, "range")
+    st := obj(rg, "start")
+    en := obj(rg, "end")
+    li := line_index(text)
+    b := li_offset(li, vint(st, "line", 0), vint(st, "character", 0))
+    e := li_offset(li, vint(en, "line", 0), vint(en, "character", 0))
+    mut li2 := li
+    li_free(li2)
+    n := str.Len(text)
+    ret str.Substr(text, 0, b) + vstr(ch, "text") + str.Substr(text, e, n - e)
+end
+
+func text_doc(params: value.Value): int:
+    ret doc_index(vstr(obj(params, "textDocument"), "uri"))
+end
+
+func pos_of(params: value.Value, line &: int, ch &: int):
+    p := obj(params, "position")
+    line = vint(p, "line", 0)
+    ch = vint(p, "character", 0)
+end
+
+func pos_in(line: int, ch: int, l1: int, c1: int, l2: int, c2: int): bool:
+    if line < l1 or line > l2:
+        ret false
+    end
+    if line == l1 and ch < c1:
+        ret false
+    end
+    if line == l2 and ch > c2:
+        ret false
+    end
+    ret true
+end
+
+func decl_at(snap: value.Value, i: int): value.Value:
+    ds := obj(snap, "decls")
+    if value.IsArray(ds) and i >= 0 and i < value.ArrayLen(ds):
+        ret value.ArrayGet(ds, i)
+    end
+    ret value.ValueNull()
+end
+
+func find_hit(d: Doc, line: int, ch: int): Hit:
+    mut h := Hit {}
+    if not d.has_snap:
+        ret h
+    end
+    refs := obj(d.snap, "refs")
+    if value.IsArray(refs):
+        repeat value.ArrayLen(refs) in i:
+            rv := value.ArrayGet(refs, i)
+            r := obj(rv, "r")
+            if pos_in(line, ch, arr_int(r, 0), arr_int(r, 1), arr_int(r, 2), arr_int(r, 3)):
+                h.ok = true
+                h.decl = vint(rv, "d", 0 - 1)
+                h.line = arr_int(r, 0)
+                h.ch = arr_int(r, 1)
+                h.eline = arr_int(r, 2)
+                h.ech = arr_int(r, 3)
+                h.ty = vstr(rv, "t")
+                ret h
+            end
+        end
+    end
+    ds := obj(d.snap, "decls")
+    if value.IsArray(ds):
+        repeat value.ArrayLen(ds) in k:
+            dv := value.ArrayGet(ds, k)
+            if str.Equals(vstr(dv, "file"), d.path):
+                loc := obj(dv, "loc")
+                if pos_in(line, ch, arr_int(loc, 0), arr_int(loc, 1), arr_int(loc, 2), arr_int(loc, 3)) and (arr_int(loc, 0) != arr_int(loc, 2) or arr_int(loc, 1) != arr_int(loc, 3)):
+                    h.ok = true
+                    h.decl = k
+                    h.line = arr_int(loc, 0)
+                    h.ch = arr_int(loc, 1)
+                    h.eline = arr_int(loc, 2)
+                    h.ech = arr_int(loc, 3)
+                    ret h
+                end
+            end
+        end
+    end
+    ret h
+end
+
+func range_json(l1: int, c1: int, l2: int, c2: int): str:
+    ret "{\"start\":{\"line\":" + str.FromInt(l1 as i64) + ",\"character\":" + str.FromInt(c1 as i64) + "},\"end\":{\"line\":" + str.FromInt(l2 as i64) + ",\"character\":" + str.FromInt(c2 as i64) + "}}"
+end
+
+func location_of_decl(dv: value.Value): str:
+    if not value.ObjectHas(dv, "loc"):
+        ret ""
+    end
+    loc := obj(dv, "loc")
+    ret "{\"uri\":" + jq(path_to_uri(vstr(dv, "file"))) + ",\"range\":" + range_json(arr_int(loc, 0), arr_int(loc, 1), arr_int(loc, 2), arr_int(loc, 3)) + "}"
+end
+
+func kind_label(k: int): str:
+    if k == 0:
+        ret "variable"
+    else k == 1:
+        ret "constant"
+    else k == 2:
+        ret "parameter"
+    else k == 3:
+        ret "field"
+    else k == 4:
+        ret "function"
+    else k == 5:
+        ret "method"
+    else k == 6:
+        ret "struct"
+    else k == 7:
+        ret "enum"
+    else k == 8:
+        ret "type alias"
+    else k == 9:
+        ret "enum member"
+    else k == 10:
+        ret "package"
+    else k == 11:
+        ret "interface"
+    end
+    ret "symbol"
+end
+
+func hover_markdown(dv: value.Value, ty: str): str:
+    mut md := "```salam\n" + vstr(dv, "detail") + "\n```"
+    dty := vstr(dv, "ty")
+    if str.Len(ty) > 0 and str.Len(dty) == 0 and vint(dv, "kind", 0) != 4 and vint(dv, "kind", 0) != 5:
+        md = md + "\n\ntype: `" + ty + "`"
+    end
+    pkg := vstr(dv, "pkg")
+    mut tail := kind_label(vint(dv, "kind", 0))
+    if str.Len(pkg) > 0 and not str.Equals(pkg, "main"):
+        tail = tail + " in package `" + pkg + "`"
+    end
+    if vbool(dv, "std"):
+        tail = tail + " (standard library)"
+    end
+    md = md + "\n\n*" + tail + "*"
+    doc := vstr(dv, "doc")
+    if str.Len(doc) > 0:
+        md = md + "\n\n---\n\n" + doc
+    end
+    ret md
+end
+
+func on_hover(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "null")
+        ret
+    end
+    mut line := 0
+    mut ch := 0
+    pos_of(params, line, ch)
+    d := g_docs.get(i)
+    h := find_hit(d, line, ch)
+    if not h.ok:
+        send_result(id, "null")
+        ret
+    end
+    dv := decl_at(d.snap, h.decl)
+    if value.IsNull(dv):
+        send_result(id, "null")
+        ret
+    end
+    md := hover_markdown(dv, h.ty)
+    send_result(id, "{\"contents\":{\"kind\":\"markdown\",\"value\":" + jq(md) + "},\"range\":" + range_json(h.line, h.ch, h.eline, h.ech) + "}")
+end
+
+func strip_type(t0: str): str:
+    mut t := str.Trim(t0)
+    until str.EndsWith(t, "*"):
+        t = str.Substr(t, 0, str.Len(t) - 1)
+    end
+    lntext := str.IndexOf(t, "<")
+    if lntext > 0:
+        t = str.Substr(t, 0, lntext)
+    end
+    dot := str.LastIndex(t, ".")
+    if dot >= 0:
+        t = str.Substr(t, dot + 1, str.Len(t) - dot - 1)
+    end
+    ret t
+end
+
+func on_definition(id: str, params: value.Value, want_type: bool):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "null")
+        ret
+    end
+    mut line := 0
+    mut ch := 0
+    pos_of(params, line, ch)
+    d := g_docs.get(i)
+    h := find_hit(d, line, ch)
+    if not h.ok:
+        send_result(id, "null")
+        ret
+    end
+    dv := decl_at(d.snap, h.decl)
+    if want_type:
+        mut tname := vstr(dv, "ty")
+        if str.Len(tname) == 0:
+            tname = h.ty
+        end
+        if str.Len(tname) == 0:
+            tname = vstr(dv, "ret")
+        end
+        want := strip_type(tname)
+        ds := obj(d.snap, "decls")
+        repeat value.ArrayLen(ds) in k:
+            tv := value.ArrayGet(ds, k)
+            tk := vint(tv, "kind", 0)
+            if (tk == 6 or tk == 7 or tk == 11 or tk == 8) and str.Equals(vstr(tv, "name"), want):
+                loc := location_of_decl(tv)
+                if str.Len(loc) > 0:
+                    send_result(id, loc)
+                    ret
+                end
+            end
+        end
+        send_result(id, "null")
+        ret
+    end
+    loc := location_of_decl(dv)
+    send_result(id, str.Len(loc) > 0 ? loc : "null")
+end
+
+func decl_key(dv: value.Value): str:
+    if not value.ObjectHas(dv, "loc"):
+        ret ""
+    end
+    loc := obj(dv, "loc")
+    ret vstr(dv, "file") + ":" + str.FromInt(arr_int(loc, 0) as i64) + ":" + str.FromInt(arr_int(loc, 1) as i64)
+end
+
+func collect_refs(key: str, include_decl: bool, out &: Vector<str>, out_uris &: Vector<str>):
+    mut decl_done := false
+    mut suris := Vector {} as Vector<str>
+    mut snaps := Vector {} as Vector<value.Value>
+    snap_set(suris, snaps)
+    repeat snaps.len() in si:
+        ouri := suris.get(si)
+        osnap := snaps.get(si)
+        ds := obj(osnap, "decls")
+        refs := obj(osnap, "refs")
+        if not value.IsArray(ds) or not value.IsArray(refs):
+            continue
+        end
+        mut ids := HashMap {} as HashMap<int, bool>
+        repeat value.ArrayLen(ds) in k:
+            if str.Equals(decl_key(value.ArrayGet(ds, k)), key):
+                ids.put(k, true)
+                if include_decl and not decl_done:
+                    loc := location_of_decl(value.ArrayGet(ds, k))
+                    if str.Len(loc) > 0:
+                        out.push(loc)
+                        out_uris.push(path_to_uri(vstr(value.ArrayGet(ds, k), "file")))
+                        decl_done = true
+                    end
+                end
+            end
+        end
+        if ids.size() > 0:
+            repeat value.ArrayLen(refs) in r:
+                rv := value.ArrayGet(refs, r)
+                if ids.has(vint(rv, "d", 0 - 1)):
+                    rr := obj(rv, "r")
+                    out.push("{\"uri\":" + jq(ouri) + ",\"range\":" + range_json(arr_int(rr, 0), arr_int(rr, 1), arr_int(rr, 2), arr_int(rr, 3)) + "}")
+                    out_uris.push(ouri)
+                end
+            end
+        end
+        ids.free()
+    end
+    suris.free()
+    snaps.free()
+end
+
+func hit_key(d: Doc, h: Hit): str:
+    dv := decl_at(d.snap, h.decl)
+    k := decl_key(dv)
+    if str.Len(k) > 0:
+        ret k
+    end
+    ret "#" + d.uri + "#" + str.FromInt(h.decl as i64)
+end
+
+func refs_in_doc(d: Doc, decl: int, out &: Vector<str>):
+    refs := obj(d.snap, "refs")
+    if not value.IsArray(refs):
+        ret
+    end
+    repeat value.ArrayLen(refs) in r:
+        rv := value.ArrayGet(refs, r)
+        if vint(rv, "d", 0 - 1) == decl:
+            rr := obj(rv, "r")
+            out.push(range_json(arr_int(rr, 0), arr_int(rr, 1), arr_int(rr, 2), arr_int(rr, 3)))
+        end
+    end
+end
+
+func on_references(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "[]")
+        ret
+    end
+    mut line := 0
+    mut ch := 0
+    pos_of(params, line, ch)
+    d := g_docs.get(i)
+    h := find_hit(d, line, ch)
+    if not h.ok:
+        send_result(id, "[]")
+        ret
+    end
+    inc := vbool(obj(params, "context"), "includeDeclaration")
+    mut locs := Vector {} as Vector<str>
+    mut uris := Vector {} as Vector<str>
+    key := hit_key(d, h)
+    if str.StartsWith(key, "#"):
+        mut rs := Vector {} as Vector<str>
+        refs_in_doc(d, h.decl, rs)
+        each r in rs:
+            locs.push("{\"uri\":" + jq(d.uri) + ",\"range\":" + r + "}")
+        end
+        rs.free()
+    else:
+        collect_refs(key, inc, locs, uris)
+    end
+    send_result(id, "[" + str.Join(locs, ",") + "]")
+    locs.free()
+    uris.free()
+end
+
+func on_highlight(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "[]")
+        ret
+    end
+    mut line := 0
+    mut ch := 0
+    pos_of(params, line, ch)
+    d := g_docs.get(i)
+    h := find_hit(d, line, ch)
+    if not h.ok:
+        send_result(id, "[]")
+        ret
+    end
+    mut rs := Vector {} as Vector<str>
+    refs_in_doc(d, h.decl, rs)
+    dv := decl_at(d.snap, h.decl)
+    if str.Equals(vstr(dv, "file"), d.path) and value.ObjectHas(dv, "loc"):
+        loc := obj(dv, "loc")
+        rs.push(range_json(arr_int(loc, 0), arr_int(loc, 1), arr_int(loc, 2), arr_int(loc, 3)))
+    end
+    mut items := Vector {} as Vector<str>
+    each r in rs:
+        items.push("{\"range\":" + r + ",\"kind\":1}")
+    end
+    send_result(id, "[" + str.Join(items, ",") + "]")
+    rs.free()
+    items.free()
+end
+
+func on_snapshot_field(id: str, params: value.Value, field: str, wrap_data: bool):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, wrap_data ? "{\"data\":[]}" : "[]")
+        ret
+    end
+    d := g_docs.get(i)
+    if not d.has_snap:
+        send_result(id, wrap_data ? "{\"data\":[]}" : "[]")
+        ret
+    end
+    raw := json.EncodeDefault(obj(d.snap, field))
+    if wrap_data:
+        send_result(id, "{\"data\":" + raw + "}")
+    else:
+        send_result(id, raw)
+    end
+end
+
+func valid_name(n: str): bool:
+    if str.Len(n) == 0:
+        ret false
+    end
+    c0 := byte_at(n, 0)
+    if c0 >= 48 and c0 <= 57:
+        ret false
+    end
+    repeat str.Len(n) in i:
+        c := byte_at(n, i)
+        if not is_ident_byte(c) and c != 32:
+            ret false
+        end
+    end
+    if lp.LookupKeyword(lp.Load("en"), n) != tok.TK_IDENT:
+        ret false
+    end
+    ret lp.LookupKeyword(lp.Load("fa"), n) == tok.TK_IDENT
+end
+
+func on_prepare_rename(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "null")
+        ret
+    end
+    mut line := 0
+    mut ch := 0
+    pos_of(params, line, ch)
+    d := g_docs.get(i)
+    h := find_hit(d, line, ch)
+    if not h.ok:
+        send_result(id, "null")
+        ret
+    end
+    dv := decl_at(d.snap, h.decl)
+    if vbool(dv, "std") or not value.ObjectHas(dv, "loc"):
+        send_error(id, 0 - 32803, "this symbol is defined outside the project and cannot be renamed")
+        ret
+    end
+    send_result(id, "{\"range\":" + range_json(h.line, h.ch, h.eline, h.ech) + ",\"placeholder\":" + jq(vstr(dv, "name")) + "}")
+end
+
+func on_rename(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "null")
+        ret
+    end
+    mut line := 0
+    mut ch := 0
+    pos_of(params, line, ch)
+    newname := vstr(params, "newName")
+    if not valid_name(newname):
+        send_error(id, 0 - 32602, "'" + newname + "' is not a valid Salam name")
+        ret
+    end
+    d := g_docs.get(i)
+    h := find_hit(d, line, ch)
+    if not h.ok:
+        send_result(id, "null")
+        ret
+    end
+    dv := decl_at(d.snap, h.decl)
+    if vbool(dv, "std") or not value.ObjectHas(dv, "loc"):
+        send_error(id, 0 - 32803, "this symbol is defined outside the project and cannot be renamed")
+        ret
+    end
+    mut locs := Vector {} as Vector<str>
+    mut uris := Vector {} as Vector<str>
+    collect_refs(hit_key(d, h), true, locs, uris)
+    mut by_uri := HashMap {} as HashMap<str, str>
+    mut order := Vector {} as Vector<str>
+    mut seen := HashMap {} as HashMap<str, bool>
+    repeat locs.len() in k:
+        u := uris.get(k)
+        loc := locs.get(k)
+        rpos := str.IndexOf(loc, "\"range\":")
+        rg := str.Substr(loc, rpos + 8, str.Len(loc) - rpos - 9)
+        if seen.has(u + rg):
+            continue
+        end
+        seen.put(u + rg, true)
+        edit := "{\"range\":" + rg + ",\"newText\":" + jq(newname) + "}"
+        if by_uri.has(u):
+            by_uri.put(u, by_uri.get(u) + "," + edit)
+        else:
+            by_uri.put(u, edit)
+            order.push(u)
+        end
+    end
+    mut parts := Vector {} as Vector<str>
+    each u in order:
+        parts.push(jq(u) + ":[" + by_uri.get(u) + "]")
+    end
+    send_result(id, "{\"changes\":{" + str.Join(parts, ",") + "}}")
+    parts.free()
+    order.free()
+    by_uri.free()
+    seen.free()
+    locs.free()
+    uris.free()
+end
+
+func on_workspace_symbol(id: str, params: value.Value):
+    q := str.Lower(vstr(params, "query"))
+    mut items := Vector {} as Vector<str>
+    mut seen := HashMap {} as HashMap<str, bool>
+    mut suris := Vector {} as Vector<str>
+    mut snaps := Vector {} as Vector<value.Value>
+    snap_set(suris, snaps)
+    each snap in snaps:
+        ds := obj(snap, "decls")
+        if not value.IsArray(ds):
+            continue
+        end
+        repeat value.ArrayLen(ds) in k:
+            dv := value.ArrayGet(ds, k)
+            kd := vint(dv, "kind", 0)
+            if vbool(dv, "std") or kd == 0 or kd == 2 or kd == 10:
+                continue
+            end
+            nm := vstr(dv, "name")
+            key := decl_key(dv)
+            if str.Len(key) == 0 or seen.has(key):
+                continue
+            end
+            if str.Len(q) > 0 and not str.Contains(str.Lower(nm), q):
+                continue
+            end
+            seen.put(key, true)
+            items.push("{\"name\":" + jq(nm) + ",\"kind\":" + str.FromInt(sym_kind_lsp(kd) as i64) + ",\"location\":" + location_of_decl(dv) + "}")
+            if items.len() >= 500:
+                break
+            end
+        end
+    end
+    send_result(id, "[" + str.Join(items, ",") + "]")
+    items.free()
+    seen.free()
+    suris.free()
+    snaps.free()
+end
+
+func sym_kind_lsp(k: int): int:
+    if k == 0:
+        ret 13
+    else k == 1:
+        ret 14
+    else k == 3:
+        ret 8
+    else k == 4:
+        ret 12
+    else k == 5:
+        ret 6
+    else k == 6:
+        ret 23
+    else k == 7:
+        ret 10
+    else k == 9:
+        ret 22
+    else k == 10:
+        ret 4
+    else k == 11:
+        ret 11
+    end
+    ret 26
+end
+
+func format_text(text: str, path: str, tabs: bool, width: int, fix_order: bool, out &: str): bool:
+    mut sfile := src.New()
+    sfile.path = path
+    sfile.text = text
+    sfile.len = str.Len(text)
+    pack := lx.Detect(sfile, lp.Load("en"))
+    style := fm.NewStyle(tabs, width, false)
+    lgr := lg.New(lg.LOG_OFF, false)
+    mut fin := sfile
+    if fix_order:
+        mut reordered := co.SbNew()
+        if fm.ReorderToplevel(lgr, pack, sfile, lp.EntryFor(lp.Code(pack)), reordered):
+            rtext := co.SbCstr(reordered)
+            mut rfile := src.New()
+            rfile.path = path
+            rfile.text = rtext
+            rfile.len = str.Len(rtext)
+            fin = rfile
+        end
+        co.SbFree(reordered)
+    end
+    mut sb := co.SbNew()
+    ok := fm.Source(lgr, pack, fin, style, sb)
+    if ok:
+        out = co.SbCstr(sb)
+    end
+    co.SbFree(sb)
+    ret ok
+end
+
+func minimal_edit(old: str, neu: str): str:
+    if str.Equals(old, neu):
+        ret "[]"
+    end
+    lo_ := line_index(old)
+    ln := line_index(neu)
+    no := lo_.starts.len()
+    nn := ln.starts.len()
+    mut pre := 0
+    until pre < no - 1 and pre < nn - 1:
+        a1 := str.Substr(old, lo_.starts.get(pre), lo_.starts.get(pre + 1) - lo_.starts.get(pre))
+        b1 := str.Substr(neu, ln.starts.get(pre), ln.starts.get(pre + 1) - ln.starts.get(pre))
+        if not str.Equals(a1, b1):
+            break
+        end
+        pre += 1
+    end
+    mut suf := 0
+    until suf < no - pre - 1 and suf < nn - pre - 1:
+        oi := no - 1 - suf
+        ni := nn - 1 - suf
+        a2 := str.Substr(old, lo_.starts.get(oi - 1), (oi < no ? lo_.starts.get(oi) : lo_.n) - lo_.starts.get(oi - 1))
+        b2 := str.Substr(neu, ln.starts.get(ni - 1), (ni < nn ? ln.starts.get(ni) : ln.n) - ln.starts.get(ni - 1))
+        if not str.Equals(a2, b2):
+            break
+        end
+        suf += 1
+    end
+    ob := lo_.starts.get(pre)
+    nb := ln.starts.get(pre)
+    mut oe := lo_.n
+    mut ne := ln.n
+    if suf > 0:
+        oe = lo_.starts.get(no - 1 - suf)
+        ne = ln.starts.get(nn - 1 - suf)
+    end
+    p1 := li_pos(lo_, ob)
+    p2 := li_pos(lo_, oe)
+    repl := str.Substr(neu, nb, ne - nb)
+    mut l1 := lo_
+    mut l2 := ln
+    li_free(l1)
+    li_free(l2)
+    ret "[{\"range\":" + range_json(p1.line, p1.ch, p2.line, p2.ch) + ",\"newText\":" + jq(repl) + "}]"
+end
+
+func on_formatting(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "null")
+        ret
+    end
+    d := g_docs.get(i)
+    opts := obj(params, "options")
+    tabs := value.ObjectHas(opts, "insertSpaces") and not vbool(opts, "insertSpaces")
+    width := vint(opts, "tabSize", 4)
+    mut out := ""
+    if not format_text(d.text, d.path, tabs, width > 0 and width <= 16 ? width : 4, g_fix_order, out):
+        log_client(2, "salam: cannot format " + d.path + ": fix the lexical errors first")
+        send_result(id, "null")
+        ret
+    end
+    send_result(id, minimal_edit(d.text, out))
+end
+
+func line_text(text: str, line: int): str:
+    li := line_index(text)
+    if line < 0 or line >= li.starts.len():
+        ret ""
+    end
+    b := li.starts.get(line)
+    e := li_line_end(li, line)
+    out := str.Substr(text, b, e - b)
+    mut l2 := li
+    li_free(l2)
+    ret out
+end
+
+func on_type_formatting(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "null")
+        ret
+    end
+    mut line := 0
+    mut ch := 0
+    pos_of(params, line, ch)
+    d := g_docs.get(i)
+    if line <= 0:
+        send_result(id, "[]")
+        ret
+    end
+    prev := line_text(d.text, line - 1)
+    cur := line_text(d.text, line)
+    mut indent := ""
+    mut k := 0
+    until k < str.Len(prev) and (byte_at(prev, k) == 32 or byte_at(prev, k) == 9):
+        indent = indent + str.Substr(prev, k, 1)
+        k += 1
+    end
+    pt := str.TrimRight(prev)
+    opts := obj(params, "options")
+    width := vint(opts, "tabSize", 4)
+    mut unit := "    "
+    if value.ObjectHas(opts, "insertSpaces") and not vbool(opts, "insertSpaces"):
+        unit = "\t"
+    else width > 0 and width <= 16:
+        unit = str.Repeat(" ", width)
+    end
+    if str.EndsWith(pt, ":") and not str.StartsWith(str.TrimLeft(pt), "//"):
+        indent = indent + unit
+    end
+    mut cw := 0
+    until cw < str.Len(cur) and (byte_at(cur, cw) == 32 or byte_at(cur, cw) == 9):
+        cw += 1
+    end
+    if str.Len(str.Trim(cur)) > 0:
+        send_result(id, "[]")
+        ret
+    end
+    send_result(id, "[{\"range\":" + range_json(line, 0, line, utf16_units(cur, 0, cw)) + ",\"newText\":" + jq(indent) + "}]")
+end
+
+func on_range_formatting(id: str, params: value.Value):
+    on_formatting(id, params)
+end
+
+func swap_for(word: str): str:
+    if str.Equals(word, "while"):
+        ret "until"
+    else str.Equals(word, "return"):
+        ret "ret"
+    else str.Equals(word, "elif"):
+        ret "else"
+    else str.Equals(word, "def") or str.Equals(word, "fn") or str.Equals(word, "function"):
+        ret "func"
+    else str.Equals(word, "class"):
+        ret "struct"
+    end
+    ret ""
+end
+
+func fix_action(title: str, uri: str, dj: str, rg: str, text: str): str:
+    ret "{\"title\":" + jq(title) + ",\"kind\":\"quickfix\",\"isPreferred\":true,\"diagnostics\":[" + dj + "],\"edit\":{\"changes\":{" + jq(uri) + ":[{\"range\":" + rg + ",\"newText\":" + jq(text) + "}]}}}"
+end
+
+func word_fix(d: Doc, dv: value.Value, rg: value.Value, dj: str, acts &: Vector<str>):
+    if str.Len(vstr(dv, "code")) > 0:
+        ret
+    end
+    st := obj(rg, "start")
+    ln := vint(st, "line", 0)
+    lntext := line_text(d.text, ln)
+    lli := line_index(lntext)
+    off := li_offset(lli, 0, vint(st, "character", 0))
+    mut l2 := lli
+    li_free(l2)
+    mut b := off
+    until b > 0 and is_ident_byte(byte_at(lntext, b - 1)):
+        b -= 1
+    end
+    mut e := off
+    until e < str.Len(lntext) and is_ident_byte(byte_at(lntext, e)):
+        e += 1
+    end
+    if e <= b:
+        ret
+    end
+    word := str.Substr(lntext, b, e - b)
+    c1 := utf16_units(lntext, 0, b)
+    c2 := utf16_units(lntext, 0, e)
+    sw := swap_for(word)
+    if str.Len(sw) > 0:
+        acts.push(fix_action("Replace '" + word + "' with '" + sw + "'", d.uri, dj, range_json(ln, c1, ln, c2), sw))
+        ret
+    end
+    if str.Equals(word, "let") or str.Equals(word, "var"):
+        mut k := e
+        until k < str.Len(lntext) and byte_at(lntext, k) == 32:
+            k += 1
+        end
+        mut ne := k
+        until ne < str.Len(lntext) and is_ident_byte(byte_at(lntext, ne)):
+            ne += 1
+        end
+        name := str.Substr(lntext, k, ne - k)
+        mut q := ne
+        until q < str.Len(lntext) and byte_at(lntext, q) == 32:
+            q += 1
+        end
+        prefix := str.Equals(word, "var") ? "mut " : ""
+        if str.Len(name) > 0 and q < str.Len(lntext) and byte_at(lntext, q) == 61 and (q + 1 >= str.Len(lntext) or byte_at(lntext, q + 1) != 61):
+            mut v := q + 1
+            until v < str.Len(lntext) and byte_at(lntext, v) == 32:
+                v += 1
+            end
+            acts.push(fix_action("Write '" + prefix + name + " := ...'", d.uri, dj, range_json(ln, c1, ln, utf16_units(lntext, 0, v)), prefix + name + " := "))
+        end
+    end
+end
+
+func snap_fixes(d: Doc, dv: value.Value): value.Value:
+    data := obj(dv, "data")
+    direct := obj(data, "fixes")
+    if value.IsArray(direct):
+        ret direct
+    end
+    if not d.has_snap:
+        ret value.ValueNull()
+    end
+    want := json.EncodeDefault(obj(dv, "range"))
+    msg := vstr(dv, "message")
+    diags := obj(d.snap, "diags")
+    if value.IsArray(diags):
+        repeat value.ArrayLen(diags) in i:
+            sv := value.ArrayGet(diags, i)
+            if str.Equals(json.EncodeDefault(obj(sv, "range")), want) and str.StartsWith(msg, vstr(sv, "message")):
+                ret obj(sv, "fixes")
+            end
+        end
+    end
+    ret value.ValueNull()
+end
+
+func compiler_fixes(d: Doc, dv: value.Value, dj: str, acts &: Vector<str>): bool:
+    fixes := snap_fixes(d, dv)
+    if not value.IsArray(fixes) or value.ArrayLen(fixes) == 0:
+        ret false
+    end
+    repeat value.ArrayLen(fixes) in i:
+        fv := value.ArrayGet(fixes, i)
+        edits := obj(fv, "edits")
+        if not value.IsArray(edits):
+            continue
+        end
+        mut by_uri := HashMap {} as HashMap<str, str>
+        mut order := Vector {} as Vector<str>
+        repeat value.ArrayLen(edits) in k:
+            ev := value.ArrayGet(edits, k)
+            pth0 := vstr(ev, "path")
+            uri := str.Len(pth0) > 0 ? path_to_uri(pth0) : d.uri
+            one := "{\"range\":" + json.EncodeDefault(obj(ev, "range")) + ",\"newText\":" + jq(vstr(ev, "newText")) + "}"
+            if by_uri.has(uri):
+                by_uri.put(uri, by_uri.get(uri) + "," + one)
+            else:
+                by_uri.put(uri, one)
+                order.push(uri)
+            end
+        end
+        mut parts := Vector {} as Vector<str>
+        each u in order:
+            parts.push(jq(u) + ":[" + by_uri.get(u) + "]")
+        end
+        pref := vbool(fv, "preferred")
+        acts.push("{\"title\":" + jq(vstr(fv, "title")) + ",\"kind\":\"quickfix\",\"isPreferred\":" + (pref ? "true" : "false") + ",\"diagnostics\":[" + dj + "],\"edit\":{\"changes\":{" + str.Join(parts, ",") + "}}}")
+        parts.free()
+        order.free()
+        by_uri.free()
+    end
+    ret true
+end
+
+func on_code_action(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "[]")
+        ret
+    end
+    d := g_docs.get(i)
+    diags := obj(obj(params, "context"), "diagnostics")
+    mut acts := Vector {} as Vector<str>
+    if value.IsArray(diags):
+        repeat value.ArrayLen(diags) in k:
+            dv := value.ArrayGet(diags, k)
+            msg := vstr(dv, "message")
+            rg := obj(dv, "range")
+            rjson := json.EncodeDefault(rg)
+            dj := json.EncodeDefault(dv)
+            if compiler_fixes(d, dv, dj, acts):
+                continue
+            end
+            mut dm := str.IndexOf(msg, "did you mean ")
+            mut skip := 13
+            mut qmark := "?"
+            if dm < 0:
+                dm = str.IndexOf(msg, "منظورتان ")
+                skip = str.Len("منظورتان ")
+                qmark = "؟"
+            end
+            if dm >= 0:
+                qe := str.IndexFrom(msg, qmark, dm)
+                lim := qe > dm ? qe : str.Len(msg)
+                mut p := dm + skip
+                mut first := true
+                until p < lim:
+                    q1 := str.IndexFrom(msg, "'", p)
+                    if q1 < 0 or q1 >= lim:
+                        break
+                    end
+                    q2 := str.IndexFrom(msg, "'", q1 + 1)
+                    if q2 < 0 or q2 > lim:
+                        break
+                    end
+                    cand := str.Substr(msg, q1 + 1, q2 - q1 - 1)
+                    acts.push("{\"title\":" + jq("Change to '" + cand + "'") + ",\"kind\":\"quickfix\",\"isPreferred\":" + (first ? "true" : "false") + ",\"diagnostics\":[" + dj + "],\"edit\":{\"changes\":{" + jq(d.uri) + ":[{\"range\":" + rjson + ",\"newText\":" + jq(cand) + "}]}}}")
+                    first = false
+                    p = q2 + 1
+                end
+            end
+            if str.Contains(msg, "is declared 'mut' but never mutated"):
+                st := obj(rg, "start")
+                ln := vint(st, "line", 0)
+                lntext := line_text(d.text, ln)
+                mi := str.IndexOf(lntext, "mut ")
+                if mi >= 0:
+                    c1 := utf16_units(lntext, 0, mi)
+                    acts.push("{\"title\":\"Remove 'mut'\",\"kind\":\"quickfix\",\"isPreferred\":true,\"diagnostics\":[" + dj + "],\"edit\":{\"changes\":{" + jq(d.uri) + ":[{\"range\":" + range_json(ln, c1, ln, c1 + 4) + ",\"newText\":\"\"}]}}}")
+                end
+            end
+            word_fix(d, dv, rg, dj, acts)
+            if str.Contains(msg, "unused variable '"):
+                st2 := obj(rg, "start")
+                acts.push("{\"title\":\"Prefix the name with '_'\",\"kind\":\"quickfix\",\"diagnostics\":[" + dj + "],\"edit\":{\"changes\":{" + jq(d.uri) + ":[{\"range\":" + range_json(vint(st2, "line", 0), vint(st2, "character", 0), vint(st2, "line", 0), vint(st2, "character", 0)) + ",\"newText\":\"_\"}]}}}")
+            end
+        end
+    end
+    send_result(id, "[" + str.Join(acts, ",") + "]")
+    acts.free()
+end
+
+func hint_for(d: Doc, dv: value.Value, l1: int, l2: int, seen &: HashMap<str, bool>, out &: Vector<str>):
+    k := vint(dv, "kind", 0)
+    ty := vstr(dv, "ty")
+    if (k != 0 and k != 1) or str.Len(ty) == 0 or not str.Equals(vstr(dv, "file"), d.path) or not value.ObjectHas(dv, "loc"):
+        ret
+    end
+    loc := obj(dv, "loc")
+    el := arr_int(loc, 2)
+    ec := arr_int(loc, 3)
+    if el < l1 or el > l2 or (el == arr_int(loc, 0) and ec == arr_int(loc, 1)):
+        ret
+    end
+    key := str.FromInt(el as i64) + ":" + str.FromInt(ec as i64)
+    if seen.has(key):
+        ret
+    end
+    lntext := line_text(d.text, el)
+    lli := line_index(lntext)
+    off := li_offset(lli, 0, ec)
+    mut l2i := lli
+    li_free(l2i)
+    mut k2 := off
+    until k2 < str.Len(lntext) and byte_at(lntext, k2) == 32:
+        k2 += 1
+    end
+    if k2 >= str.Len(lntext) or byte_at(lntext, k2) != 58 or k2 + 1 >= str.Len(lntext) or byte_at(lntext, k2 + 1) != 61:
+        ret
+    end
+    seen.put(key, true)
+    out.push("{\"position\":{\"line\":" + str.FromInt(el as i64) + ",\"character\":" + str.FromInt(ec as i64) + "},\"label\":" + jq(": " + ty) + ",\"kind\":1,\"paddingLeft\":false}")
+end
+
+func on_inlay_hint(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "[]")
+        ret
+    end
+    d := g_docs.get(i)
+    rg := obj(params, "range")
+    l1 := vint(obj(rg, "start"), "line", 0)
+    l2 := vint(obj(rg, "end"), "line", 1000000)
+    mut out := Vector {} as Vector<str>
+    mut seen := HashMap {} as HashMap<str, bool>
+    locs := obj(d.snap, "locals")
+    if value.IsArray(locs):
+        repeat value.ArrayLen(locs) in k:
+            hint_for(d, decl_at(d.snap, vint(value.ArrayGet(locs, k), "d", 0 - 1)), l1, l2, seen, out)
+        end
+    end
+    gs := obj(d.snap, "globals")
+    if value.IsArray(gs):
+        repeat value.ArrayLen(gs) in k2:
+            hint_for(d, decl_at(d.snap, value.AsInt(value.ArrayGet(gs, k2)) as int), l1, l2, seen, out)
+        end
+    end
+    send_result(id, "[" + str.Join(out, ",") + "]")
+    out.free()
+    seen.free()
+end
+
+func on_selection_range(id: str, params: value.Value):
+    i := text_doc(params)
+    ps := obj(params, "positions")
+    if i < 0 or not value.IsArray(ps):
+        send_result(id, "[]")
+        ret
+    end
+    d := g_docs.get(i)
+    mut out := Vector {} as Vector<str>
+    repeat value.ArrayLen(ps) in k:
+        pv := value.ArrayGet(ps, k)
+        line := vint(pv, "line", 0)
+        ch := vint(pv, "character", 0)
+        lntext := line_text(d.text, line)
+        li := line_index(lntext)
+        off := li_offset(li, 0, ch)
+        mut b := off
+        until b > 0 and is_ident_byte(byte_at(lntext, b - 1)):
+            b -= 1
+        end
+        mut e := off
+        until e < str.Len(lntext) and is_ident_byte(byte_at(lntext, e)):
+            e += 1
+        end
+        mut ind := 0
+        until ind < str.Len(lntext) and (byte_at(lntext, ind) == 32 or byte_at(lntext, ind) == 9):
+            ind += 1
+        end
+        mut l2 := li
+        li_free(l2)
+        word := range_json(line, utf16_units(lntext, 0, b), line, utf16_units(lntext, 0, e))
+        whole := range_json(line, utf16_units(lntext, 0, ind), line, utf16_units(lntext, 0, str.Len(lntext)))
+        out.push("{\"range\":" + word + ",\"parent\":{\"range\":" + whole + "}}")
+    end
+    send_result(id, "[" + str.Join(out, ",") + "]")
+    out.free()
+end
+
+func on_did_open(params: value.Value):
+    td := obj(params, "textDocument")
+    uri := vstr(td, "uri")
+    mut d := Doc {}
+    d.uri = uri
+    d.path = uri_to_path(uri)
+    d.text = vstr(td, "text")
+    d.version = vint(td, "version", 0)
+    d.dirty = true
+    idx := doc_index(uri)
+    if idx >= 0:
+        g_docs.set(idx, d)
+    else:
+        g_docs.push(d)
+    end
+end
+
+func on_did_change(params: value.Value):
+    td := obj(params, "textDocument")
+    i := doc_index(vstr(td, "uri"))
+    if i < 0:
+        ret
+    end
+    mut d := g_docs.get(i)
+    changes := obj(params, "contentChanges")
+    if value.IsArray(changes):
+        repeat value.ArrayLen(changes) in k:
+            d.text = apply_change(d.text, value.ArrayGet(changes, k))
+        end
+    end
+    d.version = vint(td, "version", d.version)
+    d.dirty = true
+    g_docs.set(i, d)
+end
+
+func on_did_close(params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        ret
+    end
+    mut d := g_docs.get(i)
+    d.open = false
+    d.has_snap = false
+    publish(d)
+    d.text = ""
+    d.snap = value.Value {}
+    g_docs.set(i, d)
+end
+
+func mark_all_dirty():
+    repeat g_docs.len() in i:
+        mut d := g_docs.get(i)
+        d.dirty = true
+        g_docs.set(i, d)
+    end
+end
+
+func fresh_method(method: str): bool:
+    ret str.Equals(method, "textDocument/documentSymbol") or str.Equals(method, "textDocument/foldingRange") or str.Equals(method, "textDocument/semanticTokens/full") or str.Equals(method, "textDocument/inlayHint") or str.Equals(method, "textDocument/codeLens") or str.Equals(method, "textDocument/documentLink") or str.Equals(method, "textDocument/diagnostic")
+end
+
+func dispatch_request(id: str, method: str, params: value.Value, replay: bool):
+    di := text_doc(params)
+    if not replay and di >= 0:
+        if (fresh_method(method) and needs_wait(di)) or not g_docs.get(di).has_snap:
+            defer_request(id, method, params)
+            ret
+        end
+    end
+    if str.Equals(method, "textDocument/hover"):
+        on_hover(id, params)
+    else str.Equals(method, "textDocument/definition") or str.Equals(method, "textDocument/declaration"):
+        on_definition(id, params, false)
+    else str.Equals(method, "textDocument/implementation"):
+        on_implementation(id, params)
+    else str.Equals(method, "textDocument/prepareTypeHierarchy"):
+        on_prepare_type_hierarchy(id, params)
+    else str.Equals(method, "typeHierarchy/supertypes"):
+        on_type_relatives(id, params, true)
+    else str.Equals(method, "typeHierarchy/subtypes"):
+        on_type_relatives(id, params, false)
+    else str.Equals(method, "textDocument/typeDefinition"):
+        on_definition(id, params, true)
+    else str.Equals(method, "textDocument/references"):
+        on_references(id, params)
+    else str.Equals(method, "textDocument/documentHighlight"):
+        on_highlight(id, params)
+    else str.Equals(method, "textDocument/documentSymbol"):
+        on_snapshot_field(id, params, "outline", false)
+    else str.Equals(method, "textDocument/foldingRange"):
+        on_snapshot_field(id, params, "folds", false)
+    else str.Equals(method, "textDocument/semanticTokens/full"):
+        on_snapshot_field(id, params, "tokens", true)
+    else str.Equals(method, "textDocument/completion"):
+        on_completion(id, params)
+    else str.Equals(method, "textDocument/signatureHelp"):
+        on_signature_help(id, params)
+    else str.Equals(method, "textDocument/formatting"):
+        on_formatting(id, params)
+    else str.Equals(method, "textDocument/rangeFormatting"):
+        on_range_formatting(id, params)
+    else str.Equals(method, "textDocument/onTypeFormatting"):
+        on_type_formatting(id, params)
+    else str.Equals(method, "textDocument/prepareRename"):
+        on_prepare_rename(id, params)
+    else str.Equals(method, "textDocument/rename"):
+        on_rename(id, params)
+    else str.Equals(method, "textDocument/codeAction"):
+        on_code_action(id, params)
+    else str.Equals(method, "textDocument/selectionRange"):
+        on_selection_range(id, params)
+    else str.Equals(method, "textDocument/inlayHint"):
+        on_inlay_hint(id, params)
+    else str.Equals(method, "textDocument/prepareCallHierarchy"):
+        on_prepare_call_hierarchy(id, params)
+    else str.Equals(method, "callHierarchy/incomingCalls"):
+        on_incoming_calls(id, params)
+    else str.Equals(method, "callHierarchy/outgoingCalls"):
+        on_outgoing_calls(id, params)
+    else str.Equals(method, "textDocument/diagnostic"):
+        on_pull_diagnostics(id, params)
+    else str.Equals(method, "workspace/diagnostic"):
+        on_workspace_diagnostics(id)
+    else str.Equals(method, "textDocument/documentColor"):
+        on_document_color(id, params)
+    else str.Equals(method, "textDocument/colorPresentation"):
+        on_color_presentation(id, params)
+    else str.Equals(method, "textDocument/codeLens"):
+        on_code_lens(id, params)
+    else str.Equals(method, "textDocument/documentLink"):
+        on_document_link(id, params)
+    else str.Equals(method, "workspace/symbol"):
+        on_workspace_symbol(id, params)
+    else:
+        send_error(id, 0 - 32601, "method not supported: " + method)
+    end
+end
+
+func handle(text: str): int:
+    mut err := encerr.EncodingError {}
+    v := json.Decode(text, err)
+    if encerr.IsError(err) or not value.IsObject(v):
+        send_message("{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"parse error\"}}")
+        ret 0 - 1
+    end
+    method := vstr(v, "method")
+    mut id := "null"
+    has_id := value.ObjectHas(v, "id") and not value.IsNull(value.ObjectGet(v, "id"))
+    if has_id:
+        id = json.EncodeDefault(value.ObjectGet(v, "id"))
+    end
+    params := obj(v, "params")
+    if str.Len(method) == 0:
+        ret 0 - 1
+    end
+    if g_shutdown and not str.Equals(method, "exit"):
+        if has_id:
+            send_error(id, 0 - 32600, "the server is shutting down")
+        end
+        ret 0 - 1
+    end
+    if str.Equals(method, "initialize"):
+        apply_settings(obj(params, "initializationOptions"))
+        g_client_name = vstr(obj(params, "clientInfo"), "name")
+        g_pull_diags = value.ObjectHas(obj(obj(params, "capabilities"), "textDocument"), "diagnostic")
+        note_roots(params)
+        loc := vstr(params, "locale")
+        if str.StartsWith(loc, "fa") and not value.ObjectHas(obj(params, "initializationOptions"), "messages"):
+            g_messages = "fa"
+        end
+        send_result(id, caps_json())
+    else str.Equals(method, "initialized"):
+        g_index_wanted = true
+        ret 0 - 1
+    else str.Equals(method, "shutdown"):
+        cancel_job()
+        g_shutdown = true
+        send_result(id, "null")
+    else str.Equals(method, "exit"):
+        cancel_job()
+        ret g_shutdown ? 0 : 1
+    else str.Equals(method, "textDocument/didOpen"):
+        on_did_open(params)
+    else str.Equals(method, "textDocument/didChange"):
+        if g_job_on and str.Equals(g_job_uri, vstr(obj(params, "textDocument"), "uri")):
+            cancel_job()
+        end
+        on_did_change(params)
+    else str.Equals(method, "textDocument/didSave"):
+        mark_all_dirty()
+        reindex_all()
+    else str.Equals(method, "textDocument/didClose"):
+        if g_job_on and str.Equals(g_job_uri, vstr(obj(params, "textDocument"), "uri")):
+            cancel_job()
+        end
+        on_did_close(params)
+        answer_pending(vstr(obj(params, "textDocument"), "uri"))
+    else str.Equals(method, "workspace/didChangeConfiguration"):
+        apply_settings(obj(params, "settings"))
+        mark_all_dirty()
+    else str.Equals(method, "workspace/didChangeWatchedFiles"):
+        mark_all_dirty()
+        reindex_all()
+    else str.Equals(method, "workspace/didChangeWorkspaceFolders"):
+        change_roots(params)
+    else str.StartsWith(method, "$/"):
+        ret 0 - 1
+    else has_id:
+        dispatch_request(id, method, params, false)
+    end
+    ret 0 - 1
+end
+
+func pump(): int:
+    mut ok := false
+    msg := read_message(ok)
+    if not ok:
+        cancel_job()
+        ret g_shutdown ? 0 : 1
+    end
+    ret handle(msg)
+end
+
+func serve(): int:
+    io_init()
+    until true:
+        if g_job_on:
+            if input_ready(25):
+                rc := pump()
+                if rc >= 0:
+                    ret rc
+                end
+            else:
+                poll_job()
+            end
+            continue
+        end
+        if has_dirty():
+            if input_ready(DEBOUNCE_MS):
+                rc2 := pump()
+                if rc2 >= 0:
+                    ret rc2
+                end
+            else:
+                start_job(next_dirty())
+            end
+            continue
+        end
+        if index_pending():
+            if input_ready(20):
+                rc4 := pump()
+                if rc4 >= 0:
+                    ret rc4
+                end
+            else:
+                start_index_job()
+            end
+            continue
+        end
+        rc3 := pump()
+        if rc3 >= 0:
+            ret rc3
+        end
+    end
+end

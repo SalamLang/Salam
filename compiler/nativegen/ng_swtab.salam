@@ -1,0 +1,202 @@
+package nativegen
+
+func swt_ret_const(g &: Ng, b: int): int:
+    f := g.b_first[b]
+    if f < 0 or g.i_op[f] != OP_RET or g.b_npred[b] != 1:
+        ret 0 - 1
+    end
+    v := g.i_a[f]
+    if v < 0 or not is_cint(g, v):
+        ret 0 - 1
+    end
+    ret v
+end
+
+func swt_test(g &: Ng, b: int, first: bool, x &: int, k &: i64): bool:
+    t := g.b_last[b]
+    if t < 0 or g.i_op[t] != OP_CBR:
+        ret false
+    end
+    c := g.i_a[t]
+    if c < 0 or g.v_kind[c] != VK_INS:
+        ret false
+    end
+    ci := g.v_def[c]
+    if g.i_op[ci] != OP_ICMP or g.i_x[ci] != CC_EQ or g.i_blk[ci] != b or g.i_next[ci] != t:
+        ret false
+    end
+    if not first and (g.b_first[b] != ci or g.b_npred[b] != 1):
+        ret false
+    end
+    a := g.i_a[ci]
+    kv := g.i_b[ci]
+    if not is_cint(g, kv) or a < 0 or g.v_kind[a] == VK_INT:
+        ret false
+    end
+    if x >= 0 and a != x:
+        ret false
+    end
+    x = a
+    k = norm_int(g, g.v_ty[a], g.v_i[kv])
+    ret true
+end
+
+func swt_block(g &: Ng, b0: int, keys &: Vector<i64>, vals &: Vector<i64>): bool:
+    keys.clear()
+    vals.clear()
+    mut x := 0 - 1
+    mut b := b0
+    mut fb := 0 - 1
+    mut first := true
+    repeat 600:
+        mut k := 0 as i64
+        if not swt_test(g, b, first, x, k):
+            fb = b
+            break
+        end
+        t := g.b_last[b]
+        rv := swt_ret_const(g, g.i_b[t])
+        if rv < 0:
+            if first:
+                ret false
+            end
+            fb = b
+            break
+        end
+        each kk in keys:
+            if kk == k:
+                ret false
+            end
+        end
+        keys.push(k)
+        vals.push(g.v_i[rv])
+        first = false
+        b = g.i_c[t]
+    end
+    if fb < 0 or keys.len() < 5:
+        ret false
+    end
+    tx := g.v_ty[x]
+    if tx != T_I32 and tx != T_I64:
+        ret false
+    end
+    mut lo := keys[0]
+    mut hi := keys[0]
+    each kk2 in keys:
+        if kk2 < lo: lo = kk2 end
+        if kk2 > hi: hi = kk2 end
+    end
+    span := hi - lo + (1 as i64)
+    if span > (512 as i64) or span > (keys.len() * 2) as i64:
+        ret false
+    end
+    fr := swt_ret_const(g, fb)
+    full := span == (keys.len() as i64)
+    if not full and fr < 0:
+        ret false
+    end
+    t0 := g.b_last[b0]
+    rt := g.v_ty[g.i_a[g.b_first[g.i_b[t0]]]]
+    if is_flt(g, rt) or is_agg(g, rt) or is_vec(g, rt):
+        ret false
+    end
+    mut dflt := 0 as i64
+    if fr >= 0:
+        dflt = g.v_i[fr]
+    end
+    mut small := dflt >= (0 as i64) and dflt <= (255 as i64)
+    each vv in vals:
+        if vv < (0 as i64) or vv > (255 as i64):
+            small = false
+        end
+    end
+    esz := small ? 1 : tsize(g, rt)
+    g.swt_n += 1
+    s := sym_named(g, ".Lswt." + g.swt_n)
+    sec_align_to(g, SEC_RODATA, esz)
+    start := sec_len(g, SEC_RODATA)
+    repeat span as int in q:
+        mut ev := dflt
+        repeat keys.len() in z:
+            if keys[z] - lo == (q as i64):
+                ev = vals[z]
+            end
+        end
+        sec_le(g, SEC_RODATA, ev, esz)
+    end
+    g.sy_kind[s] = SY_DATA
+    g.sy_def[s] = true
+    g.sy_local[s] = true
+    g.sy_sec[s] = SEC_RODATA
+    g.sy_off[s] = start
+    g.sy_size[s] = (span as int) * esz
+    g.sy_align[s] = esz
+    until g.sy_ro.len() <= s:
+        g.sy_ro.push(false)
+    end
+    g.sy_ro[s] = true
+    ci := g.v_def[g.i_a[t0]]
+    d := ins_new(g, OP_SUB, tx)
+    g.i_a[d] = x
+    g.i_b[d] = const_int(g, tx, lo)
+    dv := new_res(g, d)
+    ins_before(g, ci, d)
+    g.i_a[ci] = dv
+    g.i_b[ci] = const_int(g, tx, span)
+    g.i_x[ci] = CC_ULT
+    tb := new_blk(g)
+    g.i_b[t0] = tb
+    g.i_c[t0] = fb
+    mut idx := dv
+    if tx != T_I64:
+        zx := ins_new(g, OP_ZEXT, T_I64)
+        g.i_a[zx] = dv
+        g.i_x[zx] = tx
+        idx = new_res(g, zx)
+        ins_append(g, tb, zx)
+    end
+    ad := ins_new(g, OP_ADDR, T_PTR)
+    g.i_a[ad] = new_val(g, VK_GLB, T_PTR, 0 as i64)
+    g.v_def[g.i_a[ad]] = s
+    g.i_b[ad] = idx
+    g.i_x[ad] = esz
+    g.i_d[ad] = 0 as i64
+    av := new_res(g, ad)
+    ins_append(g, tb, ad)
+    ldt := small ? T_I8 : rt
+    ld := ins_new(g, OP_LOAD, ldt)
+    g.i_a[ld] = av
+    lv := new_res(g, ld)
+    ins_append(g, tb, ld)
+    mut res := lv
+    if small and rt != T_I8:
+        ze := ins_new(g, OP_ZEXT, rt)
+        g.i_a[ze] = lv
+        g.i_x[ze] = T_I8
+        res = new_res(g, ze)
+        ins_append(g, tb, ze)
+    end
+    rr := ins_new(g, OP_RET, rt)
+    g.i_a[rr] = res
+    ins_append(g, tb, rr)
+    ret true
+end
+
+func switch_tables(g &: Ng): bool:
+    mut keys := Vector {} as Vector<i64>
+    mut vals := Vector {} as Vector<i64>
+    mut changed := false
+    each b in g.b_rpo:
+        if swt_block(g, b, keys, vals):
+            changed = true
+            break
+        end
+    end
+    keys.free()
+    vals.free()
+    if changed:
+        ensure_terms(g)
+        build_cfg(g)
+    end
+    ret changed
+end

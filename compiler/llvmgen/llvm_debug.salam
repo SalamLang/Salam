@@ -1,0 +1,369 @@
+package llvmgen
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include sm "../semantic/semantic.salam"
+
+func meta_add(v &: Lv, text: str): str:
+    id := "!" + co.I64Toa(v.meta_n as i64)
+    v.meta_n += 1
+    out_meta(v, id + " = " + text + "\n")
+    ret id
+end
+
+func tbaa_ensure_common(v &: Lv):
+    if str.Len(v.tbaa_char) > 0:
+        ret
+    end
+    root := meta_add(v, `!{!"salam-tbaa"}`)
+    v.tbaa_char = meta_add(v, `!{!"salam bytes", ` + root + ", i64 0}")
+end
+
+func tbaa_suffix(v &: Lv, s &: sm.Sema, ts: str, is_field: bool): str:
+    if str.Len(ts) == 0:
+        ret ""
+    end
+    if is_ptr_ts(ts) or is_str(s, ts) or fn_prefix(ts) != 0:
+        if not is_field:
+            ret ""
+        end
+        if str.Len(v.tbaa_ptr_sfx) == 0:
+            tbaa_ensure_common(v)
+            pnode := meta_add(v, `!{!"any pointer", ` + v.tbaa_char + ", i64 0}")
+            ptag := meta_add(v, "!{" + pnode + ", " + pnode + ", i64 0}")
+            v.tbaa_ptr_sfx = ", !tbaa " + ptag
+        end
+        ret v.tbaa_ptr_sfx
+    end
+    if not (is_float(ts) or (is_int_ts(ts) and int_bits(v, ts) >= 16)):
+        ret ""
+    end
+    if str.Len(v.tbaa_data_sfx) == 0:
+        tbaa_ensure_common(v)
+        dnode := meta_add(v, `!{!"salam data", ` + v.tbaa_char + ", i64 0}")
+        dtag := meta_add(v, "!{" + dnode + ", " + dnode + ", i64 0}")
+        v.tbaa_data_sfx = ", !tbaa " + dtag
+    end
+    ret v.tbaa_data_sfx
+end
+
+func di_escape(sx: str): str:
+    n := str.Len(sx)
+    mut b := co.SbNew()
+    mut i := 0
+    until i < n:
+        c := byte_at(sx, i)
+        if c == 92 or c == 34:
+            co.SbPutc(b, 92)
+        end
+        co.SbPutc(b, c)
+        i += 1
+    end
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+func di_split_path(v &: Lv, path: str):
+    if str.Len(path) == 0:
+        v.src_file = v.module + ".salam"
+        v.src_dir = "."
+        ret
+    end
+    slash := last_byte(path, 47)
+    bs := last_byte(path, 92)
+    mut cut := slash
+    if bs >= 0 and (slash < 0 or bs > slash):
+        cut = bs
+    end
+    if cut >= 0:
+        v.src_file = str.Substr(path, cut + 1, str.Len(path) - cut - 1)
+        v.src_dir = str.Substr(path, 0, cut)
+    else:
+        v.src_file = path
+        v.src_dir = "."
+    end
+end
+
+func debug_init(v &: Lv, src_path: str):
+    di_split_path(v, src_path)
+    v.di_file = meta_add(
+        v, `!DIFile(filename: "` + di_escape(v.src_file) + `", directory: "` + di_escape(v.src_dir) + `")`
+    )
+    v.di_paths.push(src_path)
+    v.di_ids.push(v.di_file)
+    v.di_cu = di_reserve(v)
+    types := meta_add(v, "!{null}")
+    v.di_subty = meta_add(v, "!DISubroutineType(types: " + types + ")")
+    v.di_flag_dwarf = meta_add(v, `!{i32 7, !"Dwarf Version", i32 4}`)
+    v.di_flag_debug = meta_add(v, `!{i32 2, !"Debug Info Version", i32 3}`)
+end
+
+func debug_file_for(v &: Lv, path: str): str:
+    if str.Len(path) == 0:
+        ret v.di_file
+    end
+    repeat v.di_paths.len() in i:
+        if str.Equals(v.di_paths.get(i), path):
+            ret v.di_ids.get(i)
+        end
+    end
+    slash := last_byte(path, 47)
+    bs := last_byte(path, 92)
+    mut cut := slash
+    if bs >= 0 and (slash < 0 or bs > slash):
+        cut = bs
+    end
+    mut fname := path
+    mut dir := "."
+    if cut >= 0:
+        fname = str.Substr(path, cut + 1, str.Len(path) - cut - 1)
+        dir = str.Substr(path, 0, cut)
+    end
+    id := meta_add(v, `!DIFile(filename: "` + di_escape(fname) + `", directory: "` + di_escape(dir) + `")`)
+    v.di_paths.push(path)
+    v.di_ids.push(id)
+    ret id
+end
+
+func debug_subprogram(v &: Lv, name: str, line: int, path: str): str:
+    df := debug_file_for(v, path)
+    v.di_cur_file = df
+    sp := meta_add(
+        v, `distinct !DISubprogram(name: "` + name + `", scope: ` + df + ", file: " + df + ", line: " + co.I64Toa(line as i64) + ", type: " + v.di_subty + ", scopeLine: " + co.I64Toa(line as i64) + ", spFlags: DISPFlagDefinition, unit: " + v.di_cu + ")"
+    )
+    v.cur_sp = sp
+    v.cur_scope = sp
+    ret sp
+end
+
+func di_reserve(v &: Lv): str:
+    id := "!" + co.I64Toa(v.meta_n as i64)
+    v.meta_n += 1
+    ret id
+end
+
+func di_find(v &: Lv, ts: str): str:
+    repeat v.di_tnames.len() in i:
+        if str.Equals(v.di_tnames.get(i), ts):
+            ret v.di_tids.get(i)
+        end
+    end
+    ret ""
+end
+
+func di_remember(v &: Lv, ts: str, id: str): str:
+    v.di_tnames.push(ts)
+    v.di_tids.push(id)
+    ret id
+end
+
+func di_basic(v &: Lv, ts: str, bits: int, enc: str): str:
+    ret di_remember(v, ts, meta_add(v, `!DIBasicType(name: "` + di_escape(ts) + `", size: ` + co.I64Toa(bits as i64) + ", encoding: " + enc + ")"))
+end
+
+func di_type(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): str:
+    if str.Len(ts) == 0 or str.Equals(ts, "void"):
+        ret ""
+    end
+    hit := di_find(v, ts)
+    if str.Len(hit) > 0:
+        ret hit
+    end
+    pbits := co.I64Toa(v.ptr_bits as i64)
+    if is_str(s, ts):
+        ch := di_find(v, "char")
+        cid := str.Len(ch) > 0 ? ch : di_basic(v, "char", 8, "DW_ATE_signed_char")
+        ret di_remember(v, ts, meta_add(v, "!DIDerivedType(tag: DW_TAG_pointer_type, name: \"str\", baseType: " + cid + ", size: " + pbits + ")"))
+    end
+    if is_ptr_ts(ts):
+        el := str.Substr(ts, 0, str.Len(ts) - 1)
+        mut bt := "null"
+        if not str.Equals(str.Trim(el), "void"):
+            d := di_type(v, s, a, str.Trim(el))
+            if str.Len(d) > 0:
+                bt = d
+            end
+        end
+        ret di_remember(v, ts, meta_add(v, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: " + bt + ", size: " + pbits + ")"))
+    end
+    if is_slice(ts) or str.StartsWith(ts, "dyn ") or is_variant_value_ts(ts) or fn_prefix(ts) != 0:
+        ret ""
+    end
+    if idx_byte(ts, 91) >= 0:
+        dim := array_dim(ts)
+        et := di_type(v, s, a, array_elem(ts))
+        if str.Len(et) == 0 or dim <= (0 as i64):
+            ret ""
+        end
+        mut sz := 0 as i64
+        mut al := 0 as i64
+        type_layout(v, s, a, ts, sz, al)
+        sr := meta_add(v, "!DISubrange(count: " + co.I64Toa(dim) + ")")
+        el2 := meta_add(v, "!{" + sr + "}")
+        ret di_remember(v, ts, meta_add(v, "!DICompositeType(tag: DW_TAG_array_type, baseType: " + et + ", size: " + co.I64Toa(sz * (8 as i64)) + ", elements: " + el2 + ")"))
+    end
+    if str.Equals(ts, "f32"):
+        ret di_basic(v, ts, 32, "DW_ATE_float")
+    end
+    if str.Equals(ts, "f64"):
+        ret di_basic(v, ts, 64, "DW_ATE_float")
+    end
+    if str.Equals(ts, "bool"):
+        ret di_basic(v, ts, 8, "DW_ATE_boolean")
+    end
+    if str.Equals(ts, "char"):
+        ret di_basic(v, ts, 8, "DW_ATE_signed_char")
+    end
+    if is_int_ts(ts):
+        ret di_basic(v, ts, int_bits(v, ts), is_signed_ts(ts) ? "DW_ATE_signed" : "DW_ATE_unsigned")
+    end
+    esym := enum_sym(v, s, a, ts)
+    if esym != 0:
+        if enum_backed_float(v, s, a, ts):
+            ret di_basic(v, ts, 64, "DW_ATE_float")
+        end
+        if not enum_backed_int(v, s, a, ts):
+            ch2 := di_find(v, "char")
+            cid2 := str.Len(ch2) > 0 ? ch2 : di_basic(v, "char", 8, "DW_ATE_signed_char")
+            ret di_remember(v, ts, meta_add(v, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: " + cid2 + ", size: " + pbits + ")"))
+        end
+        mut eb2 := co.SbNew()
+        co.SbPuts(eb2, "!{")
+        emembers := sm.SymAt(s, esym).members
+        esyms := sm.ScopeAt(s, emembers).symbols
+        mut first := true
+        repeat esyms.len() in q:
+            m := sm.SymAt(s, esyms.get(q))
+            if m.kind == sm.SYM_ENUM_MEMBER:
+                en := meta_add(v, `!DIEnumerator(name: "` + di_escape(m.name) + `", value: ` + co.I64Toa(m.enum_value) + ")")
+                if not first:
+                    co.SbPuts(eb2, ", ")
+                end
+                co.SbPuts(eb2, en)
+                first = false
+            end
+        end
+        co.SbPuts(eb2, "}")
+        els2 := meta_add(v, co.SbCstr(eb2))
+        co.SbFree(eb2)
+        ret di_remember(v, ts, meta_add(v, `!DICompositeType(tag: DW_TAG_enumeration_type, name: "` + di_escape(ts) + `", size: 32, elements: ` + els2 + ")"))
+    end
+    ssym := struct_sym(v, s, a, ts)
+    if ssym == 0:
+        ret ""
+    end
+    id := di_reserve(v)
+    _r := di_remember(v, ts, id)
+    mut ssz := 0 as i64
+    mut sal := 0 as i64
+    struct_layout(v, s, a, ts, ssz, sal)
+    mut mems := Vector {} as Vector<str>
+    members := sm.SymAt(s, ssym).members
+    syms := sm.ScopeAt(s, members).symbols
+    mut off := 0 as i64
+    repeat syms.len() in j:
+        f := sm.SymAt(s, syms.get(j))
+        if f.kind == sm.SYM_FIELD:
+            fts := sm.ToString(s, f.ty)
+            mut fsz := 0 as i64
+            mut fal := 0 as i64
+            type_layout(v, s, a, fts, fsz, fal)
+            if fal < (1 as i64):
+                fal = 1 as i64
+            end
+            off = (off + fal - (1 as i64)) / fal * fal
+            ft := di_type(v, s, a, fts)
+            if str.Len(ft) > 0:
+                mems.push(meta_add(v, `!DIDerivedType(tag: DW_TAG_member, name: "` + di_escape(f.name) + `", scope: ` + id + ", baseType: " + ft + ", size: " + co.I64Toa(fsz * (8 as i64)) + ", offset: " + co.I64Toa(off * (8 as i64)) + ")"))
+            end
+            off += fsz
+        end
+    end
+    mut eb := co.SbNew()
+    co.SbPuts(eb, "!{")
+    repeat mems.len() in k:
+        if k > 0:
+            co.SbPuts(eb, ", ")
+        end
+        co.SbPuts(eb, mems.get(k))
+    end
+    co.SbPuts(eb, "}")
+    els := meta_add(v, co.SbCstr(eb))
+    co.SbFree(eb)
+    mems.free()
+    out_meta(v, id + ` = distinct !DICompositeType(tag: DW_TAG_structure_type, name: "` + di_escape(ts) + `", size: ` + co.I64Toa(ssz * (8 as i64)) + ", elements: " + els + ")\n")
+    ret id
+end
+
+func debug_global(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, ts: str, line: int, path: str): str:
+    if not v.debug:
+        ret ""
+    end
+    ty := di_type(v, s, a, ts)
+    if str.Len(ty) == 0:
+        ret ""
+    end
+    df := debug_file_for(v, path)
+    gv := meta_add(v, `distinct !DIGlobalVariable(name: "` + di_escape(name) + `", scope: ` + v.di_cu + ", file: " + df + ", line: " + co.I64Toa(line as i64) + ", type: " + ty + ", isLocal: true, isDefinition: true)")
+    ge := meta_add(v, "!DIGlobalVariableExpression(var: " + gv + ", expr: !DIExpression())")
+    v.di_globals.push(ge)
+    ret ", !dbg " + ge
+end
+
+func debug_declare(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, slot: str, ts: str, line: int, argno: int):
+    if not v.debug or str.Len(v.cur_sp) == 0 or str.Len(name) == 0:
+        ret
+    end
+    ty := di_type(v, s, a, ts)
+    if str.Len(ty) == 0:
+        ret
+    end
+    argp := argno > 0 ? "arg: " + co.I64Toa(argno as i64) + ", " : ""
+    var := meta_add(v, `!DILocalVariable(name: "` + di_escape(name) + `", ` + argp + "scope: " + v.cur_scope + ", file: " + v.di_cur_file + ", line: " + co.I64Toa(line as i64) + ", type: " + ty + ")")
+    loc := meta_add(v, "!DILocation(line: " + co.I64Toa(line as i64) + ", column: 1, scope: " + v.cur_scope + ")")
+    out_al(v, "  call void @llvm.dbg.declare(metadata ptr " + slot + ", metadata " + var + ", metadata !DIExpression()), !dbg " + loc + "\n")
+end
+
+func debug_scope_enter(v &: Lv, line: int, col: int):
+    if not v.debug or str.Len(v.cur_sp) == 0 or str.Len(v.cur_scope) == 0:
+        ret
+    end
+    v.cur_scope = meta_add(v, "distinct !DILexicalBlock(scope: " + v.cur_scope + ", file: " + v.di_cur_file + ", line: " + co.I64Toa(line as i64) + ", column: " + co.I64Toa(col as i64) + ")")
+end
+
+func debug_location(v &: Lv, line: int, col: int): str:
+    if str.Len(v.cur_sp) == 0:
+        ret ""
+    end
+    ret meta_add(
+        v, "!DILocation(line: " + co.I64Toa(line as i64) + ", column: " + co.I64Toa(col as i64) + ", scope: " + v.cur_scope + ")"
+    )
+end
+
+func debug_finalize(v &: Lv):
+    if not v.debug and v.meta_n == 0:
+        ret
+    end
+    out_g(v, "\n")
+    if v.debug:
+        mut gl := co.SbNew()
+        repeat v.di_globals.len() in i:
+            if i > 0:
+                co.SbPuts(gl, ", ")
+            end
+            co.SbPuts(gl, v.di_globals.get(i))
+        end
+        gls := meta_add(v, "!{" + co.SbCstr(gl) + "}")
+        co.SbFree(gl)
+        out_meta(v, v.di_cu + " = distinct !DICompileUnit(language: DW_LANG_C99, file: " + v.di_file + `, producer: "salam", ` + "isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug, globals: " + gls + ")\n")
+        out_g(
+            v, "!llvm.module.flags = !{" + v.di_flag_dwarf + ", " + v.di_flag_debug + "}\n"
+        )
+        out_g(v, "!llvm.dbg.cu = !{" + v.di_cu + "}\n")
+        out_g(v, "declare void @llvm.dbg.declare(metadata, metadata, metadata) nounwind\n")
+    end
+    out_g(v, co.SbCstr(v.bmeta))
+end

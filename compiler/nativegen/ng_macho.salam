@@ -1,0 +1,440 @@
+package nativegen
+
+const MO_RELOC_UNSIGNED := 0
+const MO_RELOC_SIGNED := 1
+const MO_RELOC_BRANCH := 2
+const MO_RELOC_GOT_LOAD := 3
+
+func mo_secs(g &: Ng): Vector<int>:
+    mut v := Vector {} as Vector<int>
+    v.push(SEC_TEXT)
+    each s in [SEC_RODATA, SEC_CONST, SEC_DATA, SEC_INIT, SEC_FINI]:
+        if sec_bytes(g, s).len() > 0:
+            v.push(s)
+        end
+    end
+    if g.s_eh.len() > 0:
+        v.push(SEC_EHFRAME)
+    end
+    if g.s_dinfo.len() > 0:
+        each d in [SEC_DBGINFO, SEC_DBGABBREV, SEC_DBGLINE, SEC_DBGRANGES, SEC_DBGLOC]:
+            if sec_bytes(g, d).len() > 0:
+                v.push(d)
+            end
+        end
+    end
+    if g.bss_size > 0:
+        v.push(SEC_BSS)
+    end
+    ret v
+end
+
+func mo_has_relocs(g &: Ng, sec: int): bool:
+    each rs in g.r_sec:
+        if rs == sec:
+            ret true
+        end
+    end
+    ret false
+end
+
+func mo_is_dbg(sec: int): bool:
+    ret sec == SEC_DBGINFO or sec == SEC_DBGABBREV or sec == SEC_DBGLINE or sec == SEC_DBGRANGES or sec == SEC_DBGLOC
+end
+
+func mo_seg_name(g &: Ng, sec: int): str:
+    if mo_is_dbg(sec):
+        ret "__DWARF"
+    end
+    if sec == SEC_TEXT or sec == SEC_CONST or sec == SEC_EHFRAME:
+        ret "__TEXT"
+    end
+    if sec == SEC_RODATA:
+        ret mo_has_relocs(g, sec) ? "__DATA" : "__TEXT"
+    end
+    ret "__DATA"
+end
+
+func mo_sec_name(sec: int): str:
+    switch sec:
+        SEC_TEXT: ret "__text" end
+        SEC_RODATA: ret "__const" end
+        SEC_CONST: ret "__salam_cst" end
+        SEC_DATA: ret "__data" end
+        SEC_BSS: ret "__bss" end
+        SEC_INIT: ret "__mod_init_func" end
+        SEC_FINI: ret "__mod_term_func" end
+        SEC_EHFRAME: ret "__eh_frame" end
+        SEC_DBGINFO: ret "__debug_info" end
+        SEC_DBGABBREV: ret "__debug_abbrev" end
+        SEC_DBGLINE: ret "__debug_line" end
+        SEC_DBGRANGES: ret "__debug_ranges" end
+        SEC_DBGLOC: ret "__debug_loc" end
+    end
+    ret "__data"
+end
+
+func mo_sec_flags(sec: int): i64:
+    switch sec:
+        SEC_TEXT: ret 0x80000400 end
+        SEC_BSS: ret 1 end
+        SEC_INIT: ret 9 end
+        SEC_FINI: ret 10 end
+        SEC_EHFRAME: ret 0x6800000B end
+        SEC_DBGINFO, SEC_DBGABBREV, SEC_DBGLINE, SEC_DBGRANGES, SEC_DBGLOC: ret 0x02000000 end
+    end
+    ret 0
+end
+
+func mo_log2(a: int): int:
+    mut n := 0
+    mut x := a
+    until x > 1:
+        x = x >> 1
+        n += 1
+    end
+    ret n
+end
+
+func ob_name16(o &: Ob, s: str):
+    n := str_len_of(s)
+    p := sp(s)
+    mut k := 0
+    until k < 16:
+        if k < n:
+            o.b.push(p[k])
+        else:
+            ob_u8(o, 0)
+        end
+        k += 1
+    end
+end
+
+func mo_rtype_a64(t: int): int:
+    switch t:
+        R_A64_CALL26: ret 2 end
+        R_A64_ADRP: ret 3 end
+        R_A64_ADDLO: ret 4 end
+        R_A64_GOTPAGE: ret 5 end
+        R_A64_GOTLO: ret 6 end
+    end
+    ret 0
+end
+
+func mo_rtype(t: int): int:
+    if t == R_PLT32: ret MO_RELOC_BRANCH end
+    if t == R_GOTPCRELX: ret MO_RELOC_GOT_LOAD end
+    if t == R_PC32: ret MO_RELOC_SIGNED end
+    ret MO_RELOC_UNSIGNED
+end
+
+func mo_eh_sym(g &: Ng): int:
+    if g.s_eh.len() == 0:
+        ret 0 - 1
+    end
+    s := sym_named(g, "salam_eh_frame")
+    g.sy_kind[s] = SY_DATA
+    g.sy_def[s] = true
+    g.sy_local[s] = true
+    g.sy_sec[s] = SEC_EHFRAME
+    g.sy_off[s] = 0
+    ret s
+end
+
+func write_macho(g &: Ng, path: str): bool:
+    eh0 := mo_eh_sym(g)
+    secs := mo_secs(g)
+    ns := secs.len()
+    mut ord := Vector {} as Vector<int>
+    repeat SEC_COUNT:
+        ord.push(0)
+    end
+    repeat ns in q0:
+        ord[secs[q0]] = q0 + 1
+    end
+    mut addr := Vector {} as Vector<int>
+    mut size := Vector {} as Vector<int>
+    mut algn := Vector {} as Vector<int>
+    mut vpos := 0
+    each s in secs:
+        mut al := g.sec_align[s]
+        if s == SEC_TEXT:
+            al = al < 16 ? 16 : al
+        else s == SEC_INIT or s == SEC_FINI or s == SEC_EHFRAME:
+            al = 8
+        end
+        if al < 1:
+            al = 1
+        end
+        until (vpos % al) != 0:
+            vpos += 1
+        end
+        addr.push(vpos)
+        sz := s == SEC_BSS ? g.bss_size : sec_bytes(g, s).len()
+        size.push(sz)
+        algn.push(al)
+        vpos += sz
+    end
+    vmsize := vpos
+    nsym := g.sy_kind.len()
+    mut mo_idx := Vector {} as Vector<int>
+    repeat nsym:
+        mo_idx.push(0 - 1)
+    end
+    mut strtab := Ob {}
+    ob_u8(strtab, 0x20)
+    ob_u8(strtab, 0)
+    mut symtab := Ob {}
+    mut cnt := Vector {} as Vector<int>
+    repeat 3 in pass:
+        mut c := 0
+        repeat nsym in s:
+            if not emit_sym_for(g, s):
+                continue
+            end
+            def := g.sy_def[s]
+            if def and (g.sy_sec[s] < 0 or g.sy_sec[s] >= SEC_COUNT or ord[g.sy_sec[s]] == 0 or mo_is_dbg(g.sy_sec[s])):
+                continue
+            end
+            mut cls := 2
+            if def:
+                cls = g.sy_local[s] ? 0 : 1
+            end
+            if cls != pass:
+                continue
+            end
+            mo_idx[s] = symtab.b.len() / 16
+            ob_le(symtab, strtab.b.len() as i64, 4)
+            ob_u8(strtab, 0x5F)
+            ob_sym_name(g, strtab, s)
+            if def:
+                ob_u8(symtab, cls == 0 ? 0x0E : 0x0F)
+                o2 := ord[g.sy_sec[s]]
+                ob_u8(symtab, o2)
+                ob_le(symtab, 0 as i64, 2)
+                ob_le(symtab, (addr[o2 - 1] + g.sy_off[s]) as i64, 8)
+            else:
+                ob_u8(symtab, 0x01)
+                ob_u8(symtab, 0)
+                ob_le(symtab, 0 as i64, 2)
+                ob_le(symtab, 0 as i64, 8)
+            end
+            c += 1
+        end
+        cnt.push(c)
+    end
+    ob_pad(strtab, 8)
+    mut body := Vector {} as Vector<Vector<u8>>
+    mut rels := Vector {} as Vector<Ob>
+    each s2 in secs:
+        mut b := Vector {} as Vector<u8>
+        if s2 != SEC_BSS:
+            each x in sec_bytes(g, s2):
+                b.push(x)
+            end
+        end
+        mut ro := Ob {}
+        repeat g.r_sec.len() in ri:
+            if g.r_sec[ri] != s2:
+                continue
+            end
+            sy := g.r_sym[ri]
+            rt := g.r_type[ri]
+            off := g.r_off[ri]
+            if mo_is_dbg(s2) and rt == R_ABS32 and sy >= 0 and sy < nsym and g.sy_def[sy] and mo_is_dbg(g.sy_sec[sy]):
+                v1 := (g.sy_off[sy] as i64) + g.r_add[ri]
+                repeat 4 in k1:
+                    b[off + k1] = ((v1 >> ((8 * k1) as i64)) & (255 as i64)) as u8
+                end
+                continue
+            end
+            if mo_is_dbg(s2) and rt == R_ABS64 and sy >= 0 and sy < nsym and g.sy_def[sy] and g.sy_sec[sy] >= 0 and g.sy_sec[sy] < SEC_COUNT and ord[g.sy_sec[sy]] > 0:
+                o3 := ord[g.sy_sec[sy]]
+                v5 := ((addr[o3 - 1] + g.sy_off[sy]) as i64) + g.r_add[ri]
+                repeat 8 in k5:
+                    b[off + k5] = ((v5 >> ((8 * k5) as i64)) & (255 as i64)) as u8
+                end
+                ob_le(ro, off as i64, 4)
+                ob_le(ro, (o3 as i64) | ((3 as i64) << (25 as i64)), 4)
+                continue
+            end
+            if sy < 0 or sy >= nsym or mo_idx[sy] < 0:
+                continue
+            end
+            if s2 == SEC_EHFRAME:
+                v0 := g.r_add[ri] - (off as i64)
+                repeat 4 in k0:
+                    b[off + k0] = ((v0 >> ((8 * k0) as i64)) & (255 as i64)) as u8
+                end
+                sub_t := g.arch == NG_ARCH_A64 ? 1 : 5
+                ob_le(ro, off as i64, 4)
+                ob_le(ro, (mo_idx[eh0] as i64) | ((2 as i64) << (25 as i64)) | ((1 as i64) << (27 as i64)) | ((sub_t as i64) << (28 as i64)), 4)
+                ob_le(ro, off as i64, 4)
+                ob_le(ro, (mo_idx[sy] as i64) | ((2 as i64) << (25 as i64)) | ((1 as i64) << (27 as i64)), 4)
+                continue
+            end
+            mut len := 2
+            mut pcrel := 1
+            if g.arch == NG_ARCH_A64 and rt != R_ABS64 and rt != R_ABS32:
+                pc_a := rt == R_A64_CALL26 or rt == R_A64_ADRP or rt == R_A64_GOTPAGE ? 1 : 0
+                ad := g.r_add[ri]
+                if ad != (0 as i64):
+                    ob_le(ro, off as i64, 4)
+                    wa := (ad & (0xFFFFFF as i64)) | ((2 as i64) << (25 as i64)) | ((10 as i64) << (28 as i64))
+                    ob_le(ro, wa, 4)
+                end
+                ob_le(ro, off as i64, 4)
+                wb := (mo_idx[sy] as i64) | ((pc_a as i64) << (24 as i64)) | ((2 as i64) << (25 as i64)) | ((1 as i64) << (27 as i64)) | ((mo_rtype_a64(rt) as i64) << (28 as i64))
+                ob_le(ro, wb, 4)
+                continue
+            end
+            if rt == R_ABS64:
+                len = 3
+                pcrel = 0
+                mut k := 0
+                v := g.r_add[ri]
+                until k < 8:
+                    b[off + k] = ((v >> ((8 * k) as i64)) & (255 as i64)) as u8
+                    k += 1
+                end
+            else rt == R_ABS32:
+                pcrel = 0
+                mut k2 := 0
+                v2 := g.r_add[ri]
+                until k2 < 4:
+                    b[off + k2] = ((v2 >> ((8 * k2) as i64)) & (255 as i64)) as u8
+                    k2 += 1
+                end
+            else:
+                v3 := g.r_add[ri] + (4 as i64)
+                mut k3 := 0
+                until k3 < 4:
+                    b[off + k3] = ((v3 >> ((8 * k3) as i64)) & (255 as i64)) as u8
+                    k3 += 1
+                end
+            end
+            ob_le(ro, off as i64, 4)
+            w := (mo_idx[sy] as i64) | ((pcrel as i64) << (24 as i64)) | ((len as i64) << (25 as i64)) | ((1 as i64) << (27 as i64)) | ((mo_rtype(rt) as i64) << (28 as i64))
+            ob_le(ro, w, 4)
+        end
+        body.push(b)
+        rels.push(ro)
+    end
+    hdr := 32
+    seg_cmd := 72 + 80 * ns
+    cmds := seg_cmd + 24 + 24 + 80
+    mut o := Ob {}
+    ob_le(o, 0xFEEDFACF as i64, 4)
+    ob_le(o, (g.arch == NG_ARCH_A64 ? 0x0100000C : 0x01000007) as i64, 4)
+    ob_le(o, (g.arch == NG_ARCH_A64 ? 0 : 3) as i64, 4)
+    ob_le(o, 1 as i64, 4)
+    ob_le(o, 4 as i64, 4)
+    ob_le(o, cmds as i64, 4)
+    ob_le(o, 0 as i64, 4)
+    ob_le(o, 0 as i64, 4)
+    data_off := hdr + cmds
+    mut foff := Vector {} as Vector<int>
+    mut fp := data_off
+    repeat ns in q1:
+        if secs[q1] == SEC_BSS:
+            foff.push(0)
+            continue
+        end
+        fp = addr[q1] + data_off
+        foff.push(fp)
+        fp += size[q1]
+    end
+    mut file_end := fp
+    until (file_end % 8) != 0:
+        file_end += 1
+    end
+    mut roff := Vector {} as Vector<int>
+    repeat ns in q2:
+        roff.push(file_end)
+        file_end += rels[q2].b.len()
+    end
+    sym_off := file_end
+    str_off := sym_off + symtab.b.len()
+    filesize := (fp - data_off)
+    ob_le(o, 0x19 as i64, 4)
+    ob_le(o, seg_cmd as i64, 4)
+    ob_name16(o, "")
+    ob_le(o, 0 as i64, 8)
+    ob_le(o, vmsize as i64, 8)
+    ob_le(o, data_off as i64, 8)
+    ob_le(o, filesize as i64, 8)
+    ob_le(o, 7 as i64, 4)
+    ob_le(o, 7 as i64, 4)
+    ob_le(o, ns as i64, 4)
+    ob_le(o, 0 as i64, 4)
+    repeat ns in q3:
+        s3 := secs[q3]
+        ob_name16(o, mo_sec_name(s3))
+        ob_name16(o, mo_seg_name(g, s3))
+        ob_le(o, addr[q3] as i64, 8)
+        ob_le(o, size[q3] as i64, 8)
+        ob_le(o, foff[q3] as i64, 4)
+        ob_le(o, mo_log2(algn[q3]) as i64, 4)
+        nrel := rels[q3].b.len() / 8
+        ob_le(o, (nrel > 0 ? roff[q3] : 0) as i64, 4)
+        ob_le(o, nrel as i64, 4)
+        ob_le(o, mo_sec_flags(s3), 4)
+        ob_le(o, 0 as i64, 4)
+        ob_le(o, 0 as i64, 4)
+        ob_le(o, 0 as i64, 4)
+    end
+    ob_le(o, 0x32 as i64, 4)
+    ob_le(o, 24 as i64, 4)
+    ob_le(o, 1 as i64, 4)
+    ob_le(o, 0x000B0000 as i64, 4)
+    ob_le(o, 0x000B0000 as i64, 4)
+    ob_le(o, 0 as i64, 4)
+    ob_le(o, 0x2 as i64, 4)
+    ob_le(o, 24 as i64, 4)
+    ob_le(o, sym_off as i64, 4)
+    ob_le(o, (symtab.b.len() / 16) as i64, 4)
+    ob_le(o, str_off as i64, 4)
+    ob_le(o, strtab.b.len() as i64, 4)
+    ob_le(o, 0xB as i64, 4)
+    ob_le(o, 80 as i64, 4)
+    ob_le(o, 0 as i64, 4)
+    ob_le(o, cnt[0] as i64, 4)
+    ob_le(o, cnt[0] as i64, 4)
+    ob_le(o, cnt[1] as i64, 4)
+    ob_le(o, (cnt[0] + cnt[1]) as i64, 4)
+    ob_le(o, cnt[2] as i64, 4)
+    repeat 12:
+        ob_le(o, 0 as i64, 4)
+    end
+    repeat ns in q4:
+        if secs[q4] == SEC_BSS:
+            continue
+        end
+        until o.b.len() < foff[q4]:
+            ob_u8(o, 0)
+        end
+        ob_bytes(o, body[q4])
+    end
+    rel_start := roff.len() > 0 ? roff[0] : sym_off
+    until o.b.len() < rel_start:
+        ob_u8(o, 0)
+    end
+    repeat ns in q5:
+        ob_bytes(o, rels[q5].b)
+    end
+    ob_bytes(o, symtab.b)
+    ob_bytes(o, strtab.b)
+    ok := write_file(path, o)
+    o.b.free()
+    symtab.b.free()
+    strtab.b.free()
+    mo_idx.free()
+    ord.free()
+    addr.free()
+    size.free()
+    algn.free()
+    foff.free()
+    roff.free()
+    cnt.free()
+    ret ok
+end

@@ -1,0 +1,276 @@
+package nativegen
+
+const SROA_MAX_LEAVES := 48
+
+pub struct Sroa:
+    pub lo: Vector<int> = Vector {}
+    pub ltyp: Vector<int> = Vector {}
+    pub la: Vector<int> = Vector {}
+    pub uses: Vector<int> = Vector {}
+    pub uoff: Vector<int> = Vector {}
+end
+
+func flatten(g &: Ng, t: int, base: int, s &: Sroa): bool:
+    k := g.t_kind[t]
+    if k == TK_STRUCT:
+        repeat g.t_nf[t] in i:
+            if not flatten(g, field_ty(g, t, i), base + field_off(g, t, i), s):
+                ret false
+            end
+        end
+        ret true
+    end
+    if k == TK_ARRAY:
+        n := g.t_count[t]
+        if n > (8 as i64):
+            ret false
+        end
+        el := g.t_elem[t]
+        es := tsize(g, el)
+        repeat n as int in j:
+            if not flatten(g, el, base + j * es, s):
+                ret false
+            end
+        end
+        ret true
+    end
+    if k == TK_OPAQUE or t == T_I128:
+        ret false
+    end
+    if s.lo.len() >= SROA_MAX_LEAVES:
+        ret false
+    end
+    s.lo.push(base)
+    s.ltyp.push(t)
+    ret true
+end
+
+func leaf_at(s &: Sroa, off: int, t: int): int:
+    repeat s.lo.len() in i:
+        if s.lo[i] == off and s.ltyp[i] == t:
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func leaf_range_ok(g &: Ng, s &: Sroa, off: int, t: int): bool:
+    mut tmp := Sroa {}
+    if not flatten(g, t, off, tmp):
+        tmp.lo.free()
+        tmp.ltyp.free()
+        ret false
+    end
+    mut ok := true
+    repeat tmp.lo.len() in i:
+        if leaf_at(s, tmp.lo[i], tmp.ltyp[i]) < 0:
+            ok = false
+        end
+    end
+    tmp.lo.free()
+    tmp.ltyp.free()
+    ret ok
+end
+
+func sroa_collect(g &: Ng, v: int, off: int, s &: Sroa): bool:
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            if op == OP_LOAD and g.i_a[i] == v:
+                t := g.i_ty[i]
+                if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+                    ret false
+                end
+                if is_agg(g, t):
+                    if not leaf_range_ok(g, s, off, t):
+                        ret false
+                    end
+                else leaf_at(s, off, t) < 0:
+                    ret false
+                end
+                s.uses.push(i)
+                s.uoff.push(off)
+            else op == OP_STORE and (g.i_a[i] == v or g.i_b[i] == v):
+                if g.i_a[i] == v:
+                    ret false
+                end
+                if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+                    ret false
+                end
+                t2 := g.v_ty[g.i_a[i]]
+                if is_agg(g, t2):
+                    if not leaf_range_ok(g, s, off, t2):
+                        ret false
+                    end
+                else leaf_at(s, off, t2) < 0:
+                    ret false
+                end
+                s.uses.push(i)
+                s.uoff.push(off)
+            else op == OP_ADDR and g.i_a[i] == v:
+                if g.i_b[i] >= 0 or g.i_res[i] < 0:
+                    ret false
+                end
+                if not sroa_collect(g, g.i_res[i], off + (g.i_d[i] as int), s):
+                    ret false
+                end
+            else op != OP_ALLOCA and uses_val(g, i, v):
+                ret false
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret true
+end
+
+func sroa_one(g &: Ng, ai: int, entry_at: int):
+    v := g.i_res[ai]
+    t := g.i_x[ai]
+    if v < 0 or g.i_d[ai] > (1 as i64):
+        ret
+    end
+    mut s := Sroa {}
+    if not flatten(g, t, 0, s) or s.lo.len() == 0:
+        s.lo.free()
+        s.ltyp.free()
+        ret
+    end
+    if not sroa_collect(g, v, 0, s):
+        s.lo.free()
+        s.ltyp.free()
+        s.uses.free()
+        s.uoff.free()
+        ret
+    end
+    repeat s.lo.len() in k:
+        na := ins_new(g, OP_ALLOCA, T_PTR)
+        g.i_x[na] = s.ltyp[k]
+        nv := new_res(g, na)
+        ins_before(g, entry_at, na)
+        s.la.push(nv)
+        dv_sroa_leaf(g, v, nv, s.lo[k], tsize(g, s.ltyp[k]))
+    end
+    repeat s.uses.len() in u:
+        i := s.uses[u]
+        off := s.uoff[u]
+        if g.i_op[i] == OP_LOAD:
+            lty := g.i_ty[i]
+            if not is_agg(g, lty):
+                g.i_a[i] = s.la[leaf_at(s, off, lty)]
+            else:
+                sroa_split_load(g, i, off, s)
+            end
+        else:
+            st := g.v_ty[g.i_a[i]]
+            if not is_agg(g, st):
+                g.i_b[i] = s.la[leaf_at(s, off, st)]
+            else:
+                sroa_split_store(g, i, off, s)
+            end
+        end
+    end
+    s.lo.free()
+    s.ltyp.free()
+    s.la.free()
+    s.uses.free()
+    s.uoff.free()
+end
+
+func sroa_split_store(g &: Ng, i: int, off: int, s &: Sroa):
+    val := g.i_a[i]
+    t := g.v_ty[val]
+    mut tmp := Sroa {}
+    _f := flatten(g, t, 0, tmp)
+    kv := g.v_kind[val]
+    repeat tmp.lo.len() in k:
+        lty := tmp.ltyp[k]
+        li := leaf_at(s, off + tmp.lo[k], lty)
+        mut fv := 0 - 1
+        if kv == VK_ZERO:
+            if is_flt(g, lty):
+                fv = new_val(g, VK_FLT, lty, 0 as i64)
+            else:
+                fv = new_val(g, VK_INT, lty, 0 as i64)
+            end
+        else kv == VK_UNDEF:
+            fv = new_val(g, VK_UNDEF, lty, 0 as i64)
+        else:
+            ex := ins_new(g, OP_EXTV, lty)
+            g.i_a[ex] = val
+            g.i_d[ex] = tmp.lo[k] as i64
+            g.i_x[ex] = t
+            fv = new_res(g, ex)
+            ins_before(g, i, ex)
+        end
+        stn := ins_new(g, OP_STORE, T_VOID)
+        g.i_a[stn] = fv
+        g.i_b[stn] = s.la[li]
+        g.i_x[stn] = lty
+        ins_before(g, i, stn)
+    end
+    ins_unlink(g, i)
+    tmp.lo.free()
+    tmp.ltyp.free()
+end
+
+func sroa_split_load(g &: Ng, i: int, off: int, s &: Sroa):
+    t := g.i_ty[i]
+    mut tmp := Sroa {}
+    _f := flatten(g, t, 0, tmp)
+    mut acc := new_val(g, VK_UNDEF, t, 0 as i64)
+    repeat tmp.lo.len() in k:
+        lty := tmp.ltyp[k]
+        li := leaf_at(s, off + tmp.lo[k], lty)
+        ld := ins_new(g, OP_LOAD, lty)
+        g.i_a[ld] = s.la[li]
+        lv := new_res(g, ld)
+        ins_before(g, i, ld)
+        iv := ins_new(g, OP_INSV, t)
+        g.i_a[iv] = acc
+        g.i_b[iv] = lv
+        g.i_d[iv] = tmp.lo[k] as i64
+        g.i_x[iv] = lty
+        acc = new_res(g, iv)
+        ins_before(g, i, iv)
+    end
+    r := g.i_res[i]
+    ins_unlink(g, i)
+    if r >= 0:
+        repl_grow(g)
+        g.v_repl[r] = acc
+    end
+    tmp.lo.free()
+    tmp.ltyp.free()
+end
+
+func sroa(g &: Ng): bool:
+    mut cands := Vector {} as Vector<int>
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            if g.i_op[i] == OP_ALLOCA and is_agg(g, g.i_x[i]):
+                cands.push(i)
+            end
+            i = g.i_next[i]
+        end
+    end
+    if cands.len() == 0:
+        cands.free()
+        ret false
+    end
+    entry_at := g.b_first[0]
+    repl_grow(g)
+    n0 := g.i_op.len()
+    each c in cands:
+        if g.i_blk[c] >= 0:
+            sroa_one(g, c, entry_at)
+        end
+    end
+    changed := g.i_op.len() != n0
+    cands.free()
+    if changed:
+        remap_all(g)
+    end
+    ret changed
+end

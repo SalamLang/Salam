@@ -1,0 +1,549 @@
+package parser
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+
+func is_comment_kind(k: int): bool:
+    ret k == tok.TK_COMMENT_LINE or k == tok.TK_COMMENT_BLOCK
+end
+
+func skip_comments_from(p &: Ps, from: int): int:
+    mut i := from
+    until i < p.count - 1 and is_comment_kind(p.toks.toks.get(i).kind):
+        i += 1
+    end
+    ret i
+end
+
+func p_peek(p &: Ps): tok.Token:
+    mut i := skip_comments_from(p, p.pos)
+    if i >= p.count:
+        i = p.count - 1
+    end
+    ret p.toks.toks.get(i)
+end
+
+func p_peek2(p &: Ps): tok.Token:
+    mut i := skip_comments_from(p, p.pos)
+    if i < p.count - 1:
+        i = skip_comments_from(p, i + 1)
+    end
+    if i >= p.count:
+        i = p.count - 1
+    end
+    ret p.toks.toks.get(i)
+end
+
+func p_prev(p &: Ps): tok.Token:
+    mut i := 0
+    if p.pos > 0:
+        i = p.pos - 1
+    end
+    ret p.toks.toks.get(i)
+end
+
+func p_list_next(p &: Ps, close: int): bool:
+    if p_match(p, tok.TK_COMMA):
+        ret not p_at(p, close)
+    end
+    ret not p.panic and not p_at(p, close) and not p_at_eof(p) and p.pos > 0 and p_peek(p).begin_line > p_prev(p).end_line
+end
+
+func p_at(p &: Ps, k: int): bool:
+    ret p_peek(p).kind == k
+end
+
+func p_at_eof(p &: Ps): bool:
+    ret p_peek(p).kind == tok.TK_EOF
+end
+
+func p_advance(p &: Ps):
+    p.pos = skip_comments_from(p, p.pos)
+    if p.pos < p.count - 1:
+        p.pos += 1
+        p.pos = skip_comments_from(p, p.pos)
+    end
+end
+
+func p_match(p &: Ps, k: int): bool:
+    if p_at(p, k):
+        p_advance(p)
+        ret true
+    end
+    ret false
+end
+
+func p_skip_terminators(p &: Ps):
+    until p_at(p, tok.TK_STMT_END):
+        p_advance(p)
+    end
+end
+
+func p_error(p &: Ps, msg: str):
+    if p.panic:
+        ret
+    end
+    t := p_peek(p)
+    mut m := ""
+    if t.kind == tok.TK_EOF:
+        m = co.Format1(i18.Tr("%s (at end of file)"), co.ArgStr(i18.Tr(msg)))
+    else t.kind == tok.TK_STMT_END and not str.Equals(t.lexeme, ";"):
+        m = co.Format1(i18.Tr("%s (at end of line)"), co.ArgStr(i18.Tr(msg)))
+    else:
+        m = co.Format2(
+            i18.Tr("%s (near '%s')"), co.ArgStr(i18.Tr(msg)), co.ArgStr(t.lexeme)
+        )
+    end
+    lg.LogAt(
+        p.lgr, lg.PH_PARSER, lg.LOG_ERROR, p.file, t.begin_line as int, t.begin_col as int, m
+    )
+    if not p.had_error and t.kind == tok.TK_EOF:
+        p.err_at_eof = true
+    end
+    p.had_error = true
+    p.panic = true
+end
+
+func p_star_pair_kind(p &: Ps): int:
+    t := p_peek(p)
+    if t.kind != tok.TK_STAR:
+        ret t.kind
+    end
+    t2 := p_peek2(p)
+    if t2.begin_index != t.end_index:
+        ret t.kind
+    end
+    if t2.kind == tok.TK_STAR:
+        ret tok.TK_POWER
+    end
+    if t2.kind == tok.TK_STAR_EQ:
+        ret tok.TK_POWER_EQ
+    end
+    ret t.kind
+end
+
+func p_error_at(p &: Ps, t: tok.Token, msg: str):
+    lg.LogAt(
+        p.lgr, lg.PH_PARSER, lg.LOG_ERROR, p.file, t.begin_line as int, t.begin_col as int, i18.Tr(msg)
+    )
+    p.had_error = true
+end
+
+func p_error_verbatim(p &: Ps, help: str, msg: str):
+    if p.panic:
+        ret
+    end
+    t := p_peek(p)
+    lg.LogAtHelp(
+        p.lgr, lg.PH_PARSER, lg.LOG_ERROR, p.file, t.begin_line as int, t.begin_col as int, help, msg
+    )
+    if not p.had_error and t.kind == tok.TK_EOF:
+        p.err_at_eof = true
+    end
+    p.had_error = true
+    p.panic = true
+end
+
+func p_line_head(p &: Ps): tok.Token:
+    mut i := p.pos
+    if i >= p.count:
+        i = p.count - 1
+    end
+    line := p.toks.toks.get(i).begin_line
+    until i > 0 and p.toks.toks.get(i - 1).begin_line == line:
+        i -= 1
+    end
+    until i < p.pos and (p.toks.toks.get(i).kind == tok.TK_STMT_END or is_comment_kind(p.toks.toks.get(i).kind)):
+        i += 1
+    end
+    ret p.toks.toks.get(i)
+end
+
+func p_expect_end(p &: Ps, head: tok.Token, what: str): bool:
+    if p_at(p, tok.TK_KW_END):
+        p_advance(p)
+        ret true
+    end
+    if p_at_eof(p) and not p.panic and head.lexeme.len() > 0:
+        msg := i18.LocalizeTypes(co.Format2(
+            i18.Tr("missing 'end': the '%s' block that starts on line %d is never closed"), co.ArgStr(head.lexeme), co.ArgInt(head.begin_line as i64)
+        ))
+        t := p_peek(p)
+        lg.LogAt(
+            p.lgr, lg.PH_PARSER, lg.LOG_ERROR, p.file, t.begin_line as int, t.begin_col as int, msg
+        )
+        if not p.had_error:
+            p.err_at_eof = true
+        end
+        p.had_error = true
+        p.panic = true
+        ret false
+    end
+    ret p_expect(p, tok.TK_KW_END, what)
+end
+
+func p_expect(p &: Ps, k: int, what: str): bool:
+    if p_at(p, k):
+        p_advance(p)
+        ret true
+    end
+    p_error(p, co.Format1(i18.Tr("expected %s"), co.ArgStr(i18.Tr(what))))
+    ret false
+end
+
+func p_close_angle(p &: Ps, what: str): bool:
+    if p.angle_pending > 0:
+        p.angle_pending -= 1
+        ret true
+    end
+    if p_at(p, tok.TK_GT):
+        p_advance(p)
+        ret true
+    end
+    if p_at(p, tok.TK_SHR):
+        p_advance(p)
+        p.angle_pending += 1
+        ret true
+    end
+    p_error(p, co.Format1(i18.Tr("expected %s"), co.ArgStr(i18.Tr(what))))
+    ret false
+end
+
+func p_sync(p &: Ps):
+    p.panic = false
+    p.angle_pending = 0
+    until not p_at_eof(p):
+        k := p_peek(p).kind
+        if k == tok.TK_STMT_END:
+            p_advance(p)
+            ret
+        end
+        if k == tok.TK_KW_FUNC or k == tok.TK_KW_STRUCT or k == tok.TK_KW_ENUM or k == tok.TK_KW_TYPE or k == tok.TK_KW_CONST or k == tok.TK_KW_IMPORT or k == tok.TK_KW_INCLUDE or k == tok.TK_KW_EXTERN or k == tok.TK_KW_EXPORT or k == tok.TK_KW_LAYOUT or k == tok.TK_KW_IF or k == tok.TK_KW_UNTIL or k == tok.TK_KW_EACH or k == tok.TK_KW_REPEAT or k == tok.TK_KW_MATCH or k == tok.TK_KW_SWITCH or k == tok.TK_KW_RET or k == tok.TK_RBRACE or k == tok.TK_KW_END:
+            ret
+        end
+        p_advance(p)
+    end
+end
+
+func p_mk(p &: Ps, a &: at.Ast, kind: int): int:
+    t := p_peek(p)
+    id := at.NewNode(a, kind)
+    at.SetSpan(
+        a, id, t.begin_line, t.begin_col, t.begin_index, t.end_line, t.end_col, t.end_index, t.length
+    )
+    ret id
+end
+
+func p_fin(p &: Ps, a &: at.Ast, id: int):
+    t := p_prev(p)
+    mut n := at.Get(a, id)
+    n.end_line = t.end_line
+    n.end_col = t.end_col
+    n.end_index = t.end_index
+    at.Put(a, id, n)
+end
+
+func p_term(p &: Ps):
+    if p_at(p, tok.TK_STMT_END):
+        p_advance(p)
+    end
+end
+
+func p_rule(p &: Ps, nm: str):
+    if lg.Enabled(p.lgr, lg.LOG_TRACE):
+        t := p_peek(p)
+        lg.LogAt(
+            p.lgr, lg.PH_PARSER, lg.LOG_TRACE, p.file, t.begin_line as int, t.begin_col as int, "rule " + nm + " @ " + tok.KindName(t.kind)
+        )
+    end
+end
+
+func p_at_reserved_word(p &: Ps): bool:
+    t := p_peek(p)
+    if tok.IsKeyword(t.kind):
+        ret true
+    end
+    if t.kind == tok.TK_AND or t.kind == tok.TK_OR:
+        ret t.lexeme.len() > 0 and byte_at(t.lexeme, 0) >= 128
+    end
+    ret false
+end
+
+func p_foreign_error(p &: Ps, help: str, msg: str):
+    t := p_peek(p)
+    lg.LogAtHelp(
+        p.lgr, lg.PH_PARSER, lg.LOG_ERROR, p.file, t.begin_line as int, t.begin_col as int, i18.Tr(help), i18.Tr(msg)
+    )
+    p.had_error = true
+end
+
+func p_kw(p &: Ps, kind: int): str:
+    sp := lp.Spelling(p.toks.pack != 0 ? p.toks.pack : lp.LP_EN, kind)
+    if str.Len(sp) > 0:
+        ret sp
+    end
+    ret lp.Spelling(lp.LP_EN, kind)
+end
+
+func p_token_fix(t: tok.Token, length: int, title: str, text: str):
+    mut f := lg.Fix {}
+    f.title = title
+    f.index = t.begin_index as int
+    f.length = length
+    f.text = text
+    f.preferred = true
+    f.safe = true
+    lg.StageFix(f)
+end
+
+func p_foreign_swap(p &: Ps, help: str, msg: str, kw: int):
+    ft := p_peek(p)
+    word := p_kw(p, kw)
+    p_token_fix(ft, (ft.end_index - ft.begin_index) as int, co.Format1(i18.Tr("Write '%s'"), co.ArgStr(word)), word)
+    p_foreign_error(p, help, msg)
+end
+
+func tk_starts_statement(k: int): bool:
+    ret k == tok.TK_KW_IF or k == tok.TK_KW_UNTIL or k == tok.TK_KW_EACH or k == tok.TK_KW_REPEAT or k == tok.TK_KW_RET or k == tok.TK_KW_MATCH or k == tok.TK_KW_SWITCH or k == tok.TK_KW_MUT or k == tok.TK_KW_CONST or k == tok.TK_KW_DEFER or k == tok.TK_KW_TRY or k == tok.TK_KW_THROW or k == tok.TK_KW_BREAK or k == tok.TK_KW_CONTINUE or k == tok.TK_KW_PRINT or k == tok.TK_KW_PRINTLN or k == tok.TK_KW_FUNC or k == tok.TK_KW_STRUCT
+end
+
+func p_reserved_word_error(p &: Ps):
+    t := p_peek(p)
+    word := t.lexeme.len() > 0 ? t.lexeme : "<eof>"
+    if p.pos > 0 and tk_starts_statement(t.kind) and t.begin_line > p_prev(p).end_line:
+        lmsg := co.Format1(i18.Tr("'%s' starts a new statement, but the line above it is not finished"), co.ArgStr(word))
+        p_error_verbatim(p, i18.Tr("close the '(' or '[' that is still open on the previous line"), lmsg)
+        ret
+    end
+    msg := co.Format1(
+        i18.Tr("'%s' is a reserved word, so it cannot be used as a name"), co.ArgStr(word)
+    )
+    help := co.Format1(i18.Tr("pick a different name, for example '%s_'"), co.ArgStr(word))
+    p_error_verbatim(p, help, msg)
+end
+
+func p_name(p &: Ps, what: str): str:
+    if p_at(p, tok.TK_IDENT):
+        s := p_peek(p).lexeme
+        p_advance(p)
+        ret s
+    end
+    if p_at_reserved_word(p):
+        p_reserved_word_error(p)
+        p_advance(p)
+        ret "<error>"
+    end
+    p_error(p, what)
+    ret "<error>"
+end
+
+func p_at_word_op(p &: Ps): bool:
+    k := p_peek(p).kind
+    if k != tok.TK_LT and k != tok.TK_GT and k != tok.TK_LE and k != tok.TK_GE and k != tok.TK_EQ and k != tok.TK_NE:
+        ret false
+    end
+    lx := p_peek(p).lexeme
+    ret lx.len() > 0 and byte_at(lx, 0) >= 128
+end
+
+func p_member_name(p &: Ps, what: str): str:
+    if p_at(p, tok.TK_IDENT) or tok.IsKeyword(p_peek(p).kind) or p_at_word_op(p):
+        s := p_peek(p).lexeme
+        p_advance(p)
+        ret s
+    end
+    p_error(p, what)
+    ret ""
+end
+
+func p_error_node(p &: Ps, a &: at.Ast): int:
+    n := p_mk(p, a, at.AST_IDENTIFIER)
+    at.SetName(a, n, "<error>")
+    p_fin(p, a, n)
+    ret n
+end
+
+func p_peekn(p &: Ps, k: int): tok.Token:
+    mut i := skip_comments_from(p, p.pos)
+    repeat k:
+        if i < p.count - 1:
+            i += 1
+            i = skip_comments_from(p, i)
+        end
+    end
+    if i >= p.count:
+        i = p.count - 1
+    end
+    ret p.toks.toks.get(i)
+end
+
+func p_ident_run_len(p &: Ps): int:
+    mut m := 0
+    mut line := 0 as u32
+    mut have := false
+    until p_peekn(p, m).kind == tok.TK_IDENT:
+        l := p_peekn(p, m).begin_line
+        if not have:
+            line = l
+            have = true
+        else l != line:
+            break
+        end
+        m += 1
+    end
+    ret m
+end
+
+func p_munch_name(p &: Ps): str:
+    if not p_at(p, tok.TK_IDENT):
+        ret p_name(p, "expected name")
+    end
+    mut b := ""
+    mut first := true
+    line := p_peek(p).begin_line
+    until p_at(p, tok.TK_IDENT) and p_peek(p).begin_line == line:
+        if not first:
+            b = b + " "
+        end
+        b = b + p_peek(p).lexeme
+        first = false
+        p_advance(p)
+    end
+    ret b
+end
+
+func p_is_alias_word_keyword(k: int): bool:
+    ret k == tok.TK_KW_PACKAGE or k == tok.TK_KW_IN or k == tok.TK_KW_INPUT or k == tok.TK_KW_REPEAT or k == tok.TK_KW_COMPONENT
+end
+
+func p_at_mergeable_word(p &: Ps): bool:
+    k := p_peek(p).kind
+    if k == tok.TK_NOT:
+        ret not str.Equals(p_peek(p).lexeme, "!")
+    end
+    if k == tok.TK_KW_IN and p.no_in_word:
+        ret false
+    end
+    ret k == tok.TK_IDENT or p_is_alias_word_keyword(k)
+end
+
+func p_at_mergeable_value_word(p &: Ps): bool:
+    k := p_peek(p).kind
+    ret k == tok.TK_IDENT or k == tok.TK_KW_PACKAGE
+end
+
+func tk_is_new_binding(k: int): bool:
+    ret k == tok.TK_COLON_ASSIGN
+end
+
+func p_munch_value_name(p &: Ps): str:
+    if not p_at(p, tok.TK_IDENT):
+        ret p_name(p, "expected name")
+    end
+    line := p_peek(p).begin_line
+    mut b := p_peek(p).lexeme
+    p_advance(p)
+    until p_at_mergeable_value_word(p) and p_peek(p).begin_line == line and not tk_is_new_binding(p_peek2(p).kind):
+        b = b + " " + p_peek(p).lexeme
+        p_advance(p)
+    end
+    ret b
+end
+
+func p_munch_member_name(p &: Ps, what: str): str:
+    if not p_at_mergeable_word(p) and not tok.IsKeyword(p_peek(p).kind) and not p_at_word_op(p):
+        ret p_member_name(p, what)
+    end
+    line := p_peek(p).begin_line
+    mut b := p_peek(p).lexeme
+    p_advance(p)
+    until p_at_mergeable_word(p) and p_peek(p).begin_line == line:
+        b = b + " " + p_peek(p).lexeme
+        p_advance(p)
+    end
+    ret b
+end
+
+func parse_decl_name(p &: Ps): str:
+    ret p_munch_name(p)
+end
+
+func p_recurse_enter(p &: Ps, what: str): bool:
+    if p.depth >= PS_MAX_DEPTH:
+        p_error(p, what)
+        ret false
+    end
+    p.depth += 1
+    ret true
+end
+
+func p_recurse_leave(p &: Ps):
+    p.depth -= 1
+end
+
+func p_throws_type(a &: at.Ast, owner: int, rt: int): int:
+    ov := at.Get(a, rt != 0 ? rt : owner)
+    t := at.NewNode(a, at.AST_TYPE)
+    at.SetSpan(a, t, ov.begin_line, ov.begin_col, ov.begin_index, ov.end_line, ov.end_col, ov.end_index, ov.length)
+    at.SetName(a, t, "Throws")
+    mut tv := at.Get(a, t)
+    tv.is_throws = true
+    at.Put(a, t, tv)
+    mut inner := rt
+    if inner == 0:
+        inner = at.NewNode(a, at.AST_TYPE)
+        at.SetSpan(a, inner, ov.begin_line, ov.begin_col, ov.begin_index, ov.end_line, ov.end_col, ov.end_index, ov.length)
+        at.SetName(a, inner, "bool")
+        mut iv := at.Get(a, inner)
+        iv.synthetic = true
+        at.Put(a, inner, iv)
+    end
+    at.AddChild(a, t, inner)
+    ret t
+end
+
+func p_apply_throws(p &: Ps, a &: at.Ast, n: int, rt: int): int:
+    if not p_match(p, tok.TK_KW_THROWS):
+        ret rt
+    end
+    mut fv := at.Get(a, n)
+    fv.is_throws = true
+    at.Put(a, n, fv)
+    ret p_throws_type(a, n, rt)
+end
+
+func p_try_return_type(p &: Ps, a &: at.Ast, out_type &: int): bool:
+    if not p_at(p, tok.TK_COLON):
+        ret false
+    end
+    save_pos := p.pos
+    colon_line := p_peek(p).begin_line
+    p_advance(p)
+    if p_peek(p).begin_line != colon_line:
+        p.pos = save_pos
+        ret false
+    end
+    save_panic := p.panic
+    save_had_error := p.had_error
+    p.panic = true
+    p.ret_type = true
+    t := parse_type(p, a)
+    p.ret_type = false
+    tname := at.Get(a, t).name
+    valid_name := tname.len() > 0 and not str.Equals(tname, "<error>")
+    if valid_name and (p_at(p, tok.TK_COLON) or p_at(p, tok.TK_STMT_END) or p_at(p, tok.TK_KW_THROWS) or p_at_eof(p)):
+        p.panic = save_panic
+        out_type = t
+        ret true
+    end
+    p.pos = save_pos
+    p.panic = save_panic
+    p.had_error = save_had_error
+    ret false
+end

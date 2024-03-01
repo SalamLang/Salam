@@ -1,0 +1,1186 @@
+package nativegen
+
+const AIP := 12
+const ALR := 14
+const ASPR := 13
+const ADS := 13
+const ARM_AL := 14
+
+k_arm_rmap := [0, 1, 2, 3, 13, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15]
+k_arm_alu := [4, 12, 5, 6, 0, 2, 1, 10]
+
+pub struct Arm:
+    pub w: Vector<int> = Vector {}
+    pub lbl_pos: Vector<int> = Vector {}
+    pub mi_pos: Vector<int> = Vector {}
+    pub fx_at: Vector<int> = Vector {}
+    pub fx_lbl: Vector<int> = Vector {}
+    pub fx_cond: Vector<int> = Vector {}
+    pub rl_at: Vector<int> = Vector {}
+    pub rl_sym: Vector<int> = Vector {}
+    pub rl_type: Vector<int> = Vector {}
+    pub rl_add: Vector<i64> = Vector {}
+    pub fbase: int = 0
+    pub sub: int = 0
+    pub mask: int = 0
+end
+
+func arm_r(r: int): int:
+    if r >= 0 and r < 16:
+        ret k_arm_rmap[r]
+    end
+    ret r
+end
+
+func arm_d(r: int): int:
+    if r >= 16 and r < 24:
+        ret r - 16
+    end
+    if r == 29:
+        ret 13
+    end
+    if r == 30:
+        ret 14
+    end
+    if r == 31:
+        ret 15
+    end
+    ret r - 16
+end
+
+func arm_w(a &: Arm, v: i64):
+    a.w.push((v & (0xFFFFFFFF as i64)) as int)
+end
+
+func arm_rel(a &: Arm, sym: int, rt: int, add: i64):
+    a.rl_at.push(a.w.len())
+    a.rl_sym.push(sym)
+    a.rl_type.push(rt)
+    a.rl_add.push(add)
+end
+
+func arm_imm(v0: i64): int:
+    v := v0 & (0xFFFFFFFF as i64)
+    repeat 16 in rot:
+        s := (2 * rot) as i64
+        x := ((v << s) | (v >> ((32 as i64) - s))) & (0xFFFFFFFF as i64)
+        if rot == 0:
+            if v <= (255 as i64):
+                ret v as int
+            end
+        else x <= (255 as i64):
+            ret (rot << 8) | (x as int)
+        end
+    end
+    ret 0 - 1
+end
+
+func arm_dp(a &: Arm, cond: int, op: int, s: bool, rn: int, rd: int, op2: i64, imm: bool):
+    mut v := ((cond as i64) << (28 as i64)) | ((op as i64) << (21 as i64)) | ((rn as i64) << (16 as i64)) | ((rd as i64) << (12 as i64)) | op2
+    if imm:
+        v = v | (0x02000000 as i64)
+    end
+    if s:
+        v = v | (0x00100000 as i64)
+    end
+    arm_w(a, v)
+end
+
+func arm_dpr(a &: Arm, op: int, s: bool, rd: int, rn: int, rm: int):
+    arm_dp(a, ARM_AL, op, s, rn, rd, rm as i64, false)
+end
+
+func arm_dps(a &: Arm, op: int, s: bool, rd: int, rn: int, rm: int, ty: int, sh: int):
+    arm_dp(a, ARM_AL, op, s, rn, rd, (rm as i64) | ((ty as i64) << (5 as i64)) | ((sh as i64) << (7 as i64)), false)
+end
+
+func x_movw(a &: Arm, rd: int, v: i64):
+    arm_w(a, (0xE3000000 as i64) | (((v >> (12 as i64)) & (15 as i64)) << (16 as i64)) | ((rd as i64) << (12 as i64)) | (v & (0xFFF as i64)))
+end
+
+func x_movt(a &: Arm, rd: int, v: i64):
+    arm_w(a, (0xE3400000 as i64) | (((v >> (12 as i64)) & (15 as i64)) << (16 as i64)) | ((rd as i64) << (12 as i64)) | (v & (0xFFF as i64)))
+end
+
+func x_mov_imm(a &: Arm, rd: int, v0: i64):
+    v := v0 & (0xFFFFFFFF as i64)
+    e := arm_imm(v)
+    if e >= 0:
+        arm_dp(a, ARM_AL, 13, false, 0, rd, e as i64, true)
+        ret
+    end
+    e2 := arm_imm(~v)
+    if e2 >= 0:
+        arm_dp(a, ARM_AL, 15, false, 0, rd, e2 as i64, true)
+        ret
+    end
+    x_movw(a, rd, v & (0xFFFF as i64))
+    if (v >> (16 as i64)) != (0 as i64):
+        x_movt(a, rd, v >> (16 as i64))
+    end
+end
+
+func x_mov(a &: Arm, rd: int, rm: int):
+    if rd != rm:
+        arm_dpr(a, 13, false, rd, 0, rm)
+    end
+end
+
+func x_add_imm(a &: Arm, rd: int, rn: int, v: i64, scratch: int):
+    if v == (0 as i64):
+        x_mov(a, rd, rn)
+        ret
+    end
+    e := arm_imm(v)
+    if e >= 0:
+        arm_dp(a, ARM_AL, 4, false, rn, rd, e as i64, true)
+        ret
+    end
+    e2 := arm_imm(0 - v)
+    if e2 >= 0:
+        arm_dp(a, ARM_AL, 2, false, rn, rd, e2 as i64, true)
+        ret
+    end
+    x_mov_imm(a, scratch, v)
+    arm_dpr(a, 4, false, rd, rn, scratch)
+end
+
+func x_cmp0(a &: Arm, r: int):
+    arm_dp(a, ARM_AL, 10, true, r, 0, 0 as i64, true)
+end
+
+func x_ext(a &: Arm, rd: int, rm: int, from: int, signed: bool):
+    if from >= 4:
+        x_mov(a, rd, rm)
+        ret
+    end
+    mut b := 0xE6EF0070 as i64
+    if from == 2:
+        b = signed ? (0xE6BF0070 as i64) : (0xE6FF0070 as i64)
+    else signed:
+        b = 0xE6AF0070 as i64
+    end
+    arm_w(a, b | ((rd as i64) << (12 as i64)) | (rm as i64))
+end
+
+func x_bfi(a &: Arm, rd: int, rn: int, width: int):
+    arm_w(a, (0xE7C00010 as i64) | (((width - 1) as i64) << (16 as i64)) | ((rd as i64) << (12 as i64)) | (rn as i64))
+end
+
+func x_push(a &: Arm, mask: int):
+    arm_w(a, (0xE92D0000 as i64) | (mask as i64))
+end
+
+func x_pop(a &: Arm, mask: int):
+    arm_w(a, (0xE8BD0000 as i64) | (mask as i64))
+end
+
+func x_dmb(a &: Arm):
+    arm_w(a, 0xF57FF05B as i64)
+end
+
+func arm_tmp(avoid1: int, avoid2: int, avoid3: int): int:
+    each t in [11, 10, 9, 8, 7]:
+        if t != avoid1 and t != avoid2 and t != avoid3:
+            ret t
+        end
+    end
+    ret 6
+end
+
+func arm_tmp2(t1: int, avoid1: int, avoid2: int, avoid3: int): int:
+    each t in [11, 10, 9, 8, 7, 6]:
+        if t != t1 and t != avoid1 and t != avoid2 and t != avoid3:
+            ret t
+        end
+    end
+    ret 5
+end
+
+func arm_addr(g &: Ng, a &: Arm, i: int, base &: int, off &: i64):
+    k := g.mc.mk[i]
+    sh := a_lsz(g.mc.ms[i])
+    if k == MK_FRAME:
+        base = ASPR
+        off = (a.fbase as i64) - (g.mc.fs_off[g.mc.mb[i]] as i64) + g.mc.md[i]
+        if g.mc.mi[i] >= 0:
+            arm_dps(a, 4, false, AIP, ASPR, arm_r(g.mc.mi[i]), 0, sh)
+            base = AIP
+        end
+        ret
+    end
+    if k == MK_ARG:
+        base = ASPR
+        off = (a.fbase as i64) + g.mc.md[i]
+        ret
+    end
+    if k == MK_RIP or k == MK_GOT:
+        md := g.mc.md[i]
+        small := md >= (0 - 32768 as i64) and md < (32768 as i64)
+        arm_rel(a, g.mc.msym[i], R_ARM_MOVW, small ? md : (0 as i64))
+        x_movw(a, AIP, 0 as i64)
+        arm_rel(a, g.mc.msym[i], R_ARM_MOVT, small ? md : (0 as i64))
+        x_movt(a, AIP, 0 as i64)
+        base = AIP
+        off = small ? (0 as i64) : md
+        ret
+    end
+    b := g.mc.mb[i]
+    off = g.mc.md[i]
+    if b < 0:
+        if g.mc.mi[i] >= 0:
+            arm_dps(a, 13, false, AIP, 0, arm_r(g.mc.mi[i]), 0, sh)
+        else:
+            x_mov_imm(a, AIP, off)
+            off = 0 as i64
+        end
+        base = AIP
+        ret
+    end
+    if g.mc.mi[i] >= 0:
+        arm_dps(a, 4, false, AIP, arm_r(b), arm_r(g.mc.mi[i]), 0, sh)
+        base = AIP
+        ret
+    end
+    base = arm_r(b)
+end
+
+func arm_fit(a &: Arm, base &: int, off &: i64, lim: i64, al: i64):
+    if off <= lim and off >= (0 as i64) - lim and (off % al) == (0 as i64):
+        ret
+    end
+    if base == AIP:
+        x_mov_imm(a, ALR, off)
+        arm_dpr(a, 4, false, AIP, AIP, ALR)
+    else:
+        x_mov_imm(a, AIP, off)
+        arm_dpr(a, 4, false, AIP, base, AIP)
+    end
+    base = AIP
+    off = 0 as i64
+end
+
+func arm_ri_form(g &: Ng, i: int): bool:
+    k := g.mc.mk[i]
+    ret k != MK_FRAME and k != MK_ARG and k != MK_RIP and k != MK_GOT and g.mc.mb[i] >= 0 and g.mc.mi[i] >= 0
+end
+
+func ldst_reg(a &: Arm, load: bool, byte: bool, rt: int, base: int, idx: int, sh: int):
+    mut v := 0xE7800000 as i64
+    if load:
+        v = v | (0x00100000 as i64)
+    end
+    if byte:
+        v = v | (0x00400000 as i64)
+    end
+    arm_w(a, v | ((base as i64) << (16 as i64)) | ((rt as i64) << (12 as i64)) | ((sh as i64) << (7 as i64)) | (idx as i64))
+end
+
+func arm_addr_reg(g &: Ng, a &: Arm, i: int, rd: int):
+    if arm_ri_form(g, i):
+        arm_dps(a, 4, false, rd, arm_r(g.mc.mb[i]), arm_r(g.mc.mi[i]), 0, a_lsz(g.mc.ms[i]))
+        if g.mc.md[i] != (0 as i64):
+            x_add_imm(a, rd, rd, g.mc.md[i], rd == ALR ? AIP : ALR)
+        end
+        ret
+    end
+    mut base := 0
+    mut off := 0 as i64
+    arm_addr(g, a, i, base, off)
+    if off == (0 as i64):
+        x_mov(a, rd, base)
+        ret
+    end
+    x_add_imm(a, rd, base, off, rd == ALR ? AIP : ALR)
+end
+
+func ldst_word(a &: Arm, load: bool, byte: bool, rt: int, base: int, off: i64):
+    mut v := 0xE5000000 as i64
+    if load:
+        v = v | (0x00100000 as i64)
+    end
+    if byte:
+        v = v | (0x00400000 as i64)
+    end
+    mut o := off
+    if o >= (0 as i64):
+        v = v | (0x00800000 as i64)
+    else:
+        o = 0 - o
+    end
+    arm_w(a, v | ((base as i64) << (16 as i64)) | ((rt as i64) << (12 as i64)) | o)
+end
+
+func ldst_half(a &: Arm, load: bool, kind: int, rt: int, base: int, off: i64):
+    mut v := 0xE1400000 as i64
+    if load:
+        v = v | (0x00100000 as i64)
+    end
+    mut o := off
+    if o >= (0 as i64):
+        v = v | (0x00800000 as i64)
+    else:
+        o = 0 - o
+    end
+    arm_w(a, v | ((base as i64) << (16 as i64)) | ((rt as i64) << (12 as i64)) | ((o >> (4 as i64)) << (8 as i64)) | ((kind as i64) << (4 as i64)) | (o & (15 as i64)))
+end
+
+func arm_gp_load(g &: Ng, a &: Arm, i: int, rt: int, sz: int, signed: bool):
+    if (sz >= 4 or (sz == 1 and not signed)) and arm_ri_form(g, i) and g.mc.md[i] == (0 as i64):
+        ldst_reg(a, true, sz == 1, rt, arm_r(g.mc.mb[i]), arm_r(g.mc.mi[i]), a_lsz(g.mc.ms[i]))
+        ret
+    end
+    mut base := 0
+    mut off := 0 as i64
+    arm_addr(g, a, i, base, off)
+    if sz >= 4 or (sz == 1 and not signed):
+        arm_fit(a, base, off, 4095 as i64, 1 as i64)
+        ldst_word(a, true, sz == 1, rt, base, off)
+        ret
+    end
+    arm_fit(a, base, off, 255 as i64, 1 as i64)
+    mut kind := 11
+    if signed:
+        kind = sz == 1 ? 13 : 15
+    end
+    ldst_half(a, true, kind, rt, base, off)
+end
+
+func arm_gp_store_at(a &: Arm, rt: int, sz: int, base0: int, off0: i64):
+    mut base := base0
+    mut off := off0
+    if sz >= 4 or sz == 1:
+        arm_fit(a, base, off, 4095 as i64, 1 as i64)
+        ldst_word(a, false, sz == 1, rt, base, off)
+        ret
+    end
+    arm_fit(a, base, off, 255 as i64, 1 as i64)
+    ldst_half(a, false, 11, rt, base, off)
+end
+
+func arm_gp_store(g &: Ng, a &: Arm, i: int, rt: int, sz: int):
+    if (sz >= 4 or sz == 1) and arm_ri_form(g, i) and g.mc.md[i] == (0 as i64):
+        ldst_reg(a, false, sz == 1, rt, arm_r(g.mc.mb[i]), arm_r(g.mc.mi[i]), a_lsz(g.mc.ms[i]))
+        ret
+    end
+    mut base := 0
+    mut off := 0 as i64
+    arm_addr(g, a, i, base, off)
+    arm_gp_store_at(a, rt, sz, base, off)
+end
+
+func vfp_ldst(a &: Arm, load: bool, sz: int, d: int, base: int, off: i64):
+    mut v := 0xED000A00 as i64
+    if load:
+        v = v | (0x00100000 as i64)
+    end
+    mut o := off
+    if o >= (0 as i64):
+        v = v | (0x00800000 as i64)
+    else:
+        o = 0 - o
+    end
+    if sz == 8:
+        v = v | (0x100 as i64) | ((d as i64) << (12 as i64))
+    else:
+        s := 2 * d
+        v = v | (((s & 1) as i64) << (22 as i64)) | (((s >> 1) as i64) << (12 as i64))
+    end
+    arm_w(a, v | ((base as i64) << (16 as i64)) | (o >> (2 as i64)))
+end
+
+func arm_vfp_mem(g &: Ng, a &: Arm, i: int, load: bool, sz: int, d: int):
+    mut base := 0
+    mut off := 0 as i64
+    arm_addr(g, a, i, base, off)
+    arm_fit(a, base, off, 1020 as i64, 4 as i64)
+    vfp_ldst(a, load, sz, d, base, off)
+end
+
+func arm_sf(s: int, at: int, bit: int): i64:
+    ret (((s >> 1) as i64) << (at as i64)) | (((s & 1) as i64) << (bit as i64))
+end
+
+func arm_v3(a &: Arm, base: i64, sz: int, d: int, n: int, m: int):
+    if sz == 8:
+        arm_w(a, base | (0x100 as i64) | ((n as i64) << (16 as i64)) | ((d as i64) << (12 as i64)) | (m as i64))
+        ret
+    end
+    arm_w(a, base | arm_sf(2 * n, 16, 7) | arm_sf(2 * d, 12, 22) | arm_sf(2 * m, 0, 5))
+end
+
+func arm_v2(a &: Arm, base: i64, sz: int, d: int, m: int):
+    arm_v3(a, base, sz, d, 0, m)
+end
+
+func x_vmov_s_r(a &: Arm, s: int, rt: int):
+    arm_w(a, (0xEE000A10 as i64) | (((s >> 1) as i64) << (16 as i64)) | ((rt as i64) << (12 as i64)) | (((s & 1) as i64) << (7 as i64)))
+end
+
+func x_vmov_r_s(a &: Arm, rt: int, s: int):
+    arm_w(a, (0xEE100A10 as i64) | (((s >> 1) as i64) << (16 as i64)) | ((rt as i64) << (12 as i64)) | (((s & 1) as i64) << (7 as i64)))
+end
+
+func x_vmov_ss(a &: Arm, sd: int, sm: int):
+    arm_w(a, (0xEEB00A40 as i64) | arm_sf(sd, 12, 22) | arm_sf(sm, 0, 5))
+end
+
+func x_vmov_dd(a &: Arm, cond: int, d: int, m: int):
+    if d == m and cond == ARM_AL:
+        ret
+    end
+    arm_w(a, ((cond as i64) << (28 as i64)) | (0x0EB00B40 as i64) | ((d as i64) << (12 as i64)) | (m as i64))
+end
+
+func arm_fop_base(cc: int): i64:
+    switch cc:
+        FO_ADD: ret 0xEE300A00 end
+        FO_SUB: ret 0xEE300A40 end
+        FO_MUL: ret 0xEE200A00 end
+        FO_DIV: ret 0xEE800A00 end
+    end
+    ret 0
+end
+
+func arm_fop(g &: Ng, a &: Arm, cc: int, sz: int, d: int, m: int):
+    if cc == 0x5D or cc == 0x5F:
+        arm_v2(a, 0xEEB40A40 as i64, sz, d, m)
+        arm_w(a, 0xEEF1FA10 as i64)
+        c := cc == 0x5D ? 5 : 13
+        if sz == 8:
+            x_vmov_dd(a, c, d, m)
+        else:
+            arm_w(a, ((c as i64) << (28 as i64)) | (0x0EB00A40 as i64) | arm_sf(2 * d, 12, 22) | arm_sf(2 * m, 0, 5))
+        end
+        ret
+    end
+    b := arm_fop_base(cc)
+    if b == (0 as i64):
+        fail(g, "native backend: arm cannot encode float op " + str_of_int(cc))
+        ret
+    end
+    arm_v3(a, b, sz, d, d, m)
+end
+
+func arm_narrow(a &: Arm, sz: int, ra: int, rb: int, imm: i64, use_imm: bool, test: bool):
+    sh := 32 - 8 * sz
+    arm_dps(a, 13, false, AIP, 0, ra, 0, sh)
+    if (test and not use_imm and ra == rb) or (use_imm and not test and ((imm << (sh as i64)) & (0xFFFFFFFF as i64)) == (0 as i64)):
+        x_cmp0(a, AIP)
+        ret
+    end
+    if use_imm:
+        x_mov_imm(a, ALR, imm << (sh as i64))
+    else:
+        arm_dps(a, 13, false, ALR, 0, rb, 0, sh)
+    end
+    if test:
+        arm_dpr(a, 0, false, AIP, AIP, ALR)
+        x_cmp0(a, AIP)
+    else:
+        arm_dpr(a, 10, true, 0, AIP, ALR)
+    end
+end
+
+func arm_narrow_test(a &: Arm, sz: int, r: int):
+    arm_dps(a, 13, false, AIP, 0, r, 0, 32 - 8 * sz)
+    x_cmp0(a, AIP)
+end
+
+func arm_alu(g &: Ng, a &: Arm, i: int, op: int, rd: int, rn: int, rm: int, sz: int):
+    if op == ALU_SBBCMP:
+        arm_dpr(a, 6, true, AIP, rn, rm)
+        ret
+    end
+    if op == ALU_ADDCMP:
+        arm_dpr(a, 11, true, 0, rn, rm)
+        ret
+    end
+    fl := flags_needed(g, i)
+    aop := k_arm_alu[op]
+    if op == ALU_CMP:
+        if sz < 4:
+            arm_narrow(a, sz, rn, rm, 0 as i64, false, false)
+            ret
+        end
+        arm_dpr(a, 10, true, 0, rn, rm)
+        ret
+    end
+    if op == ALU_SBB or op == ALU_ADC:
+        arm_dpr(a, aop, true, rd, rn, rm)
+        ret
+    end
+    if op == ALU_ADD or op == ALU_SUB:
+        arm_dpr(a, aop, fl and sz >= 4, rd, rn, rm)
+        if fl and sz < 4:
+            arm_narrow_test(a, sz, rd)
+        end
+        ret
+    end
+    arm_dpr(a, aop, false, rd, rn, rm)
+    if fl:
+        if sz < 4:
+            arm_narrow_test(a, sz, rd)
+        else:
+            x_cmp0(a, rd)
+        end
+    end
+end
+
+func arm_alu_imm(g &: Ng, a &: Arm, i: int, op: int, rd: int, rn: int, imm0: i64, sz: int, scratch: int):
+    imm := norm32(imm0)
+    if op == ALU_ADDCMP:
+        ec := arm_imm(imm)
+        if ec >= 0:
+            arm_dp(a, ARM_AL, 11, true, rn, 0, ec as i64, true)
+        else:
+            x_mov_imm(a, scratch, imm)
+            arm_dpr(a, 11, true, 0, rn, scratch)
+        end
+        ret
+    end
+    fl := flags_needed(g, i)
+    arith := op == ALU_ADD or op == ALU_SUB or op == ALU_ADC or op == ALU_SBB
+    if op == ALU_CMP:
+        if sz < 4:
+            arm_narrow(a, sz, rn, 0, imm, true, false)
+            ret
+        end
+        e := arm_imm(imm)
+        if e >= 0:
+            arm_dp(a, ARM_AL, 10, true, rn, 0, e as i64, true)
+        else:
+            x_mov_imm(a, scratch, imm)
+            arm_dpr(a, 10, true, 0, rn, scratch)
+        end
+        ret
+    end
+    aop := k_arm_alu[op]
+    e2 := arm_imm(imm)
+    if e2 >= 0 and op != ALU_CMP:
+        arm_dp(a, ARM_AL, aop, fl and sz >= 4 and arith, rn, rd, e2 as i64, true)
+    else (op == ALU_ADD or op == ALU_SUB) and not fl and arm_imm(0 - imm) >= 0:
+        arm_dp(a, ARM_AL, op == ALU_ADD ? 2 : 4, false, rn, rd, arm_imm(0 - imm) as i64, true)
+    else op == ALU_AND and arm_imm(~imm) >= 0:
+        arm_dp(a, ARM_AL, 14, false, rn, rd, arm_imm(~imm) as i64, true)
+    else:
+        x_mov_imm(a, scratch, imm)
+        arm_dpr(a, aop, fl and sz >= 4 and arith, rd, rn, scratch)
+    end
+    if fl:
+        if sz < 4:
+            arm_narrow_test(a, sz, rd)
+        else not arith:
+            x_cmp0(a, rd)
+        end
+    end
+end
+
+func arm_shift(g &: Ng, a &: Arm, i: int, rd: int, sub: int, sz: int, imm: i64, byreg: bool):
+    if sz < 4 and (sub == SH_SHR or sub == SH_SAR):
+        x_ext(a, rd, rd, sz, sub == SH_SAR)
+    end
+    mut ty := 0
+    if sub == SH_SHR:
+        ty = 1
+    else sub == SH_SAR:
+        ty = 2
+    else sub == SH_ROR or sub == 0:
+        ty = 3
+    end
+    if byreg:
+        cnt := arm_r(RCX)
+        if sub == 0:
+            arm_dp(a, ARM_AL, 3, false, cnt, AIP, 32 as i64, true)
+            arm_dp(a, ARM_AL, 0, false, AIP, AIP, 31 as i64, true)
+        else:
+            arm_dp(a, ARM_AL, 0, false, cnt, AIP, 31 as i64, true)
+        end
+        arm_dp(a, ARM_AL, 13, false, 0, rd, (rd as i64) | ((ty as i64) << (5 as i64)) | (0x10 as i64) | ((AIP as i64) << (8 as i64)), false)
+    else:
+        mut s := ((imm as int) % 32 + 32) % 32
+        if sub == 0:
+            s = (32 - s) % 32
+        end
+        if s != 0:
+            arm_dps(a, 13, false, rd, 0, rd, ty, s)
+        end
+    end
+    if flags_needed(g, i):
+        if sz < 4:
+            arm_narrow_test(a, sz, rd)
+        else:
+            x_cmp0(a, rd)
+        end
+    end
+end
+
+func arm_branch_to(a &: Arm, lbl: int, cond: int):
+    a.fx_at.push(a.w.len())
+    a.fx_lbl.push(lbl)
+    a.fx_cond.push(cond)
+    arm_w(a, 0 as i64)
+end
+
+func arm_excl(sz: int, store: bool): i64:
+    if store:
+        if sz == 1: ret 0xE1C00F90 end
+        if sz == 2: ret 0xE1E00F90 end
+        ret 0xE1800F90
+    end
+    if sz == 1: ret 0xE1D00F9F end
+    if sz == 2: ret 0xE1F00F9F end
+    ret 0xE1900F9F
+end
+
+func x_ldrex(a &: Arm, sz: int, rt: int, rn: int):
+    arm_w(a, arm_excl(sz, false) | ((rn as i64) << (16 as i64)) | ((rt as i64) << (12 as i64)))
+end
+
+func x_strex(a &: Arm, sz: int, rd: int, rt: int, rn: int):
+    arm_w(a, arm_excl(sz, true) | ((rn as i64) << (16 as i64)) | ((rd as i64) << (12 as i64)) | (rt as i64))
+end
+
+func x_bcond_back(a &: Arm, cond: int, target: int):
+    d := (target - a.w.len() - 2) as i64
+    arm_w(a, ((cond as i64) << (28 as i64)) | (0x0A000000 as i64) | (d & (0xFFFFFF as i64)))
+end
+
+func arm_atomic(g &: Ng, a &: Arm, i: int, op: int, sz0: int):
+    sz := sz0 >= 4 ? 4 : sz0
+    arm_addr_reg(g, a, i, AIP)
+    if op == M_XCHG:
+        rv := arm_r(g.mc.r0[i])
+        t := arm_tmp(rv, 0 - 1, 0 - 1)
+        x_push(a, 1 << t)
+        x_dmb(a)
+        top := a.w.len()
+        x_ldrex(a, sz, ALR, AIP)
+        x_strex(a, sz, t, rv, AIP)
+        x_cmp0(a, t)
+        x_bcond_back(a, 1, top)
+        x_dmb(a)
+        x_pop(a, 1 << t)
+        x_mov(a, rv, ALR)
+        ret
+    end
+    if op == M_LXADD:
+        rv2 := arm_r(g.mc.r0[i])
+        t1 := arm_tmp(rv2, 0 - 1, 0 - 1)
+        t2 := arm_tmp2(t1, rv2, 0 - 1, 0 - 1)
+        x_push(a, (1 << t1) | (1 << t2))
+        x_dmb(a)
+        top2 := a.w.len()
+        x_ldrex(a, sz, ALR, AIP)
+        arm_dpr(a, 4, false, t1, ALR, rv2)
+        x_strex(a, sz, t2, t1, AIP)
+        x_cmp0(a, t2)
+        x_bcond_back(a, 1, top2)
+        x_dmb(a)
+        x_pop(a, (1 << t1) | (1 << t2))
+        if flags_needed(g, i):
+            arm_dpr(a, 4, true, AIP, ALR, rv2)
+        end
+        x_mov(a, rv2, ALR)
+        ret
+    end
+    rn := arm_r(g.mc.r1[i])
+    rax := arm_r(RAX)
+    t3 := arm_tmp(rn, rax, 0 - 1)
+    x_push(a, 1 << t3)
+    x_dmb(a)
+    top3 := a.w.len()
+    x_ldrex(a, sz, ALR, AIP)
+    if sz < 4:
+        x_ext(a, t3, rax, sz, false)
+        arm_dpr(a, 10, true, 0, ALR, t3)
+    else:
+        arm_dpr(a, 10, true, 0, ALR, rax)
+    end
+    bne_at := a.w.len()
+    arm_w(a, 0 as i64)
+    x_strex(a, sz, t3, rn, AIP)
+    x_cmp0(a, t3)
+    x_bcond_back(a, 1, top3)
+    b_at := a.w.len()
+    arm_w(a, 0 as i64)
+    a.w[bne_at] = ((0x1A000000 as i64) | (((a.w.len() - bne_at - 2) as i64) & (0xFFFFFF as i64))) as int
+    arm_w(a, 0xF57FF01F as i64)
+    a.w[b_at] = ((0xEA000000 as i64) | (((a.w.len() - b_at - 2) as i64) & (0xFFFFFF as i64))) as int
+    x_dmb(a)
+    x_pop(a, 1 << t3)
+    x_mov(a, rax, ALR)
+end
+
+func arm_xorps(a &: Arm, d: int, m: int, sz: int, and_op: bool, zero: bool):
+    if zero:
+        x_mov_imm(a, AIP, 0 as i64)
+        arm_w(a, (0xEC400B10 as i64) | ((AIP as i64) << (16 as i64)) | ((AIP as i64) << (12 as i64)) | (d as i64))
+        ret
+    end
+    n := sz == 8 ? 2 : 1
+    repeat n in h:
+        x_vmov_r_s(a, AIP, 2 * d + h)
+        x_vmov_r_s(a, ALR, 2 * m + h)
+        arm_dpr(a, and_op ? 0 : 1, false, AIP, AIP, ALR)
+        x_vmov_s_r(a, 2 * d + h, AIP)
+    end
+end
+
+func arm_prologue(g &: Ng, a &: Arm):
+    x_push(a, a.mask | (1 << ALR))
+    if g.mc.fsave > 0:
+        arm_w(a, 0xED2DDB06 as i64)
+    end
+    if a.sub > 0:
+        x_add_imm(a, ASPR, ASPR, (0 - a.sub) as i64, AIP)
+    end
+end
+
+func arm_epilogue(g &: Ng, a &: Arm):
+    if a.sub > 0:
+        x_add_imm(a, ASPR, ASPR, a.sub as i64, AIP)
+    end
+    if g.mc.fsave > 0:
+        arm_w(a, 0xECBDDB06 as i64)
+    end
+    x_pop(a, a.mask | (1 << 15))
+end
+
+func arm_ins(g &: Ng, a &: Arm, i: int):
+    op := g.mc.op[i]
+    sz := g.mc.sz[i]
+    r0 := g.mc.r0[i]
+    r1 := g.mc.r1[i]
+    imm := g.mc.imm[i]
+    switch op:
+        M_NOP, M_COPY, M_LABEL: ret end
+        M_MOV_RR:
+            if sz < 4:
+                x_bfi(a, arm_r(r0), arm_r(r1), 8 * sz)
+            else:
+                x_mov(a, arm_r(r0), arm_r(r1))
+            end
+            ret
+        end
+        M_MOV_RI:
+            if sz < 4:
+                x_mov_imm(a, ALR, imm)
+                x_bfi(a, arm_r(r0), ALR, 8 * sz)
+            else:
+                x_mov_imm(a, arm_r(r0), imm)
+            end
+            ret
+        end
+        M_LD:
+            arm_gp_load(g, a, i, arm_r(r0), sz, false)
+            ret
+        end
+        M_LDZX:
+            arm_gp_load(g, a, i, arm_r(r0), g.mc.sz2[i], false)
+            ret
+        end
+        M_LDSX:
+            arm_gp_load(g, a, i, arm_r(r0), g.mc.sz2[i], true)
+            ret
+        end
+        M_LDGOT:
+            arm_rel(a, g.mc.msym[i], R_ARM_MOVW, 0 as i64)
+            x_movw(a, arm_r(r0), 0 as i64)
+            arm_rel(a, g.mc.msym[i], R_ARM_MOVT, 0 as i64)
+            x_movt(a, arm_r(r0), 0 as i64)
+            ret
+        end
+        M_ST:
+            arm_gp_store(g, a, i, arm_r(r1), sz)
+            ret
+        end
+        M_STI:
+            mut sb := 0
+            mut so := 0 as i64
+            arm_addr(g, a, i, sb, so)
+            arm_fit(a, sb, so, (sz == 2 ? 255 : 4095) as i64, 1 as i64)
+            x_mov_imm(a, ALR, imm)
+            arm_gp_store_at(a, ALR, sz, sb, so)
+            ret
+        end
+        M_LEA:
+            arm_addr_reg(g, a, i, arm_r(r0))
+            ret
+        end
+        M_ALU_RR:
+            if g.mc.cc[i] == ALU_XOR and r0 == r1:
+                x_mov_imm(a, arm_r(r0), 0 as i64)
+                if flags_needed(g, i):
+                    x_cmp0(a, arm_r(r0))
+                end
+                ret
+            end
+            arm_alu(g, a, i, g.mc.cc[i], arm_r(r0), arm_r(r0), arm_r(r1), sz)
+            ret
+        end
+        M_ALU_RI:
+            arm_alu_imm(g, a, i, g.mc.cc[i], arm_r(r0), arm_r(r0), imm, sz, ALR)
+            ret
+        end
+        M_ALU_RM:
+            arm_gp_load(g, a, i, ALR, sz, false)
+            arm_alu(g, a, i, g.mc.cc[i], arm_r(r0), arm_r(r0), ALR, sz)
+            ret
+        end
+        M_ALU_MR, M_ALU_MI:
+            c := g.mc.cc[i]
+            mut mbase := AIP
+            mut moff := 0 as i64
+            if c != ALU_CMP and c != ALU_SBBCMP and c != ALU_ADDCMP and op == M_ALU_MI and arm_imm(norm32(imm)) < 0:
+                arm_addr_reg(g, a, i, AIP)
+            else:
+                arm_addr(g, a, i, mbase, moff)
+                arm_fit(a, mbase, moff, (sz >= 4 or sz == 1) ? (4095 as i64) : (255 as i64), 1 as i64)
+            end
+            if sz >= 4 or sz == 1:
+                ldst_word(a, true, sz == 1, ALR, mbase, moff)
+            else:
+                ldst_half(a, true, 11, ALR, mbase, moff)
+            end
+            if c == ALU_CMP or c == ALU_SBBCMP or c == ALU_ADDCMP:
+                if op == M_ALU_MR:
+                    arm_alu(g, a, i, c, ALR, ALR, arm_r(r1), sz)
+                else:
+                    if sz < 4:
+                        arm_narrow(a, sz, ALR, 0, imm, true, false)
+                    else:
+                        e := arm_imm(norm32(imm))
+                        cmpop := c == ALU_ADDCMP ? 11 : 10
+                        if e >= 0:
+                            arm_dp(a, ARM_AL, cmpop, true, ALR, 0, e as i64, true)
+                        else:
+                            x_mov_imm(a, AIP, imm)
+                            arm_dpr(a, cmpop, true, 0, ALR, AIP)
+                        end
+                    end
+                end
+                ret
+            end
+            fl := flags_needed(g, i)
+            setf := fl and sz >= 4 and (c == ALU_ADD or c == ALU_SUB)
+            if op == M_ALU_MR:
+                arm_dpr(a, k_arm_alu[c], setf, ALR, ALR, arm_r(r1))
+            else:
+                e2 := arm_imm(norm32(imm))
+                if e2 >= 0:
+                    arm_dp(a, ARM_AL, k_arm_alu[c], setf, ALR, ALR, e2 as i64, true)
+                else:
+                    t := arm_tmp(0 - 1, 0 - 1, 0 - 1)
+                    x_push(a, 1 << t)
+                    x_mov_imm(a, t, imm)
+                    arm_dpr(a, k_arm_alu[c], setf, ALR, ALR, t)
+                    x_pop(a, 1 << t)
+                end
+            end
+            if sz >= 4 or sz == 1:
+                ldst_word(a, false, sz == 1, ALR, mbase, moff)
+            else:
+                ldst_half(a, false, 11, ALR, mbase, moff)
+            end
+            if fl and not setf:
+                if sz < 4:
+                    arm_narrow_test(a, sz, ALR)
+                else:
+                    x_cmp0(a, ALR)
+                end
+            end
+            ret
+        end
+        M_TEST_RR:
+            if sz < 4:
+                arm_narrow(a, sz, arm_r(r0), arm_r(r1), 0 as i64, false, true)
+            else r0 == r1:
+                x_cmp0(a, arm_r(r0))
+            else:
+                arm_dpr(a, 0, false, AIP, arm_r(r0), arm_r(r1))
+                x_cmp0(a, AIP)
+            end
+            ret
+        end
+        M_TEST_RI:
+            if sz < 4:
+                arm_narrow(a, sz, arm_r(r0), 0, imm, true, true)
+            else:
+                e3 := arm_imm(norm32(imm))
+                if e3 >= 0:
+                    arm_dp(a, ARM_AL, 0, false, arm_r(r0), AIP, e3 as i64, true)
+                else:
+                    x_mov_imm(a, ALR, imm)
+                    arm_dpr(a, 0, false, AIP, arm_r(r0), ALR)
+                end
+                x_cmp0(a, AIP)
+            end
+            ret
+        end
+        M_IMUL_RR:
+            arm_w(a, (0xE0000090 as i64) | ((arm_r(r0) as i64) << (16 as i64)) | ((arm_r(r1) as i64) << (8 as i64)) | (arm_r(r0) as i64))
+            ret
+        end
+        M_IMUL_RRI:
+            x_mov_imm(a, ALR, imm)
+            arm_w(a, (0xE0000090 as i64) | ((arm_r(r0) as i64) << (16 as i64)) | ((ALR as i64) << (8 as i64)) | (arm_r(r1) as i64))
+            ret
+        end
+        M_SHIFT_RI:
+            arm_shift(g, a, i, arm_r(r0), g.mc.cc[i], sz, imm, false)
+            ret
+        end
+        M_SHIFT_RC:
+            arm_shift(g, a, i, arm_r(r0), g.mc.cc[i], sz, 0 as i64, true)
+            ret
+        end
+        M_UNARY:
+            if g.mc.cc[i] == UN_NOT:
+                arm_dpr(a, 15, false, arm_r(r0), 0, arm_r(r0))
+            else:
+                arm_dp(a, ARM_AL, 3, flags_needed(g, i), arm_r(r0), arm_r(r0), 0 as i64, true)
+            end
+            ret
+        end
+        M_CQO:
+            arm_dps(a, 13, false, arm_r(RDX), 0, arm_r(RAX), 2, 31)
+            ret
+        end
+        M_MULHI:
+            hb := g.mc.cc[i] == 1 ? (0xE0C00090 as i64) : (0xE0800090 as i64)
+            arm_w(a, hb | ((arm_r(RDX) as i64) << (16 as i64)) | ((AIP as i64) << (12 as i64)) | ((arm_r(r1) as i64) << (8 as i64)) | (arm_r(RAX) as i64))
+            ret
+        end
+        M_SETCC:
+            cs := a_cond(g.mc.cc[i], producer_kind(g, i))
+            if cs >= 14:
+                x_mov_imm(a, arm_r(r0), (cs == 14 ? 1 : 0) as i64)
+            else:
+                x_mov_imm(a, arm_r(r0), 0 as i64)
+                arm_dp(a, cs, 13, false, 0, arm_r(r0), 1 as i64, true)
+            end
+            ret
+        end
+        M_MOVZX_RR:
+            x_ext(a, arm_r(r0), arm_r(r1), g.mc.sz2[i], false)
+            ret
+        end
+        M_MOVSX_RR:
+            x_ext(a, arm_r(r0), arm_r(r1), g.mc.sz2[i], true)
+            ret
+        end
+        M_CMOV:
+            cm := a_cond(g.mc.cc[i], producer_kind(g, i))
+            if cm == 14:
+                x_mov(a, arm_r(r0), arm_r(r1))
+            else cm < 14:
+                arm_dp(a, cm, 13, false, 0, arm_r(r0), arm_r(r1) as i64, false)
+            end
+            ret
+        end
+        M_JMP:
+            arm_branch_to(a, g.mc.tgt[i], ARM_AL)
+            ret
+        end
+        M_JCC:
+            cj := a_cond(g.mc.cc[i], producer_kind(g, i))
+            if cj == 14:
+                arm_branch_to(a, g.mc.tgt[i], ARM_AL)
+            else cj < 14:
+                arm_branch_to(a, g.mc.tgt[i], cj)
+            end
+            ret
+        end
+        M_CALL:
+            arm_rel(a, g.mc.msym[i], R_ARM_CALL, 0 as i64)
+            arm_w(a, 0xEB000000 as i64)
+            ret
+        end
+        M_CALLR:
+            arm_w(a, (0xE12FFF30 as i64) | (arm_r(r1) as i64))
+            ret
+        end
+        M_RET:
+            arm_epilogue(g, a)
+            ret
+        end
+        M_UD2:
+            arm_w(a, 0xE7F000F0 as i64)
+            ret
+        end
+        M_XCHG, M_LXADD, M_LCMPXCHG:
+            arm_atomic(g, a, i, op, sz)
+            ret
+        end
+        M_MFENCE:
+            x_dmb(a)
+            ret
+        end
+        M_FMOV_RR:
+            x_vmov_dd(a, ARM_AL, arm_d(r0), arm_d(r1))
+            ret
+        end
+        M_FLD:
+            arm_vfp_mem(g, a, i, true, sz, arm_d(r0))
+            ret
+        end
+        M_FST:
+            arm_vfp_mem(g, a, i, false, sz, arm_d(r1))
+            ret
+        end
+        M_FOP_RR:
+            arm_fop(g, a, g.mc.cc[i], sz, arm_d(r0), arm_d(r1))
+            ret
+        end
+        M_FOP_RM:
+            arm_vfp_mem(g, a, i, true, sz, ADS)
+            arm_fop(g, a, g.mc.cc[i], sz, arm_d(r0), ADS)
+            ret
+        end
+        M_SQRT:
+            arm_v2(a, 0xEEB10AC0 as i64, sz, arm_d(r0), arm_d(r1))
+            ret
+        end
+        M_UCOMI:
+            arm_v2(a, 0xEEB40A40 as i64, sz, arm_d(r0), arm_d(r1))
+            arm_w(a, 0xEEF1FA10 as i64)
+            ret
+        end
+        M_CVTSI2F:
+            x_vmov_s_r(a, 2 * ADS, arm_r(r1))
+            us := g.mc.cc[i] == 1
+            if sz == 8:
+                arm_w(a, (us ? (0xEEB80B40 as i64) : (0xEEB80BC0 as i64)) | ((arm_d(r0) as i64) << (12 as i64)) | arm_sf(2 * ADS, 0, 5))
+            else:
+                arm_w(a, (us ? (0xEEB80A40 as i64) : (0xEEB80AC0 as i64)) | arm_sf(2 * arm_d(r0), 12, 22) | arm_sf(2 * ADS, 0, 5))
+            end
+            ret
+        end
+        M_CVTF2SI:
+            uf := g.mc.cc[i] == 1
+            if sz == 8:
+                arm_w(a, (uf ? (0xEEBC0BC0 as i64) : (0xEEBD0BC0 as i64)) | arm_sf(2 * ADS, 12, 22) | (arm_d(r1) as i64))
+            else:
+                arm_w(a, (uf ? (0xEEBC0AC0 as i64) : (0xEEBD0AC0 as i64)) | arm_sf(2 * ADS, 12, 22) | arm_sf(2 * arm_d(r1), 0, 5))
+            end
+            x_vmov_r_s(a, arm_r(r0), 2 * ADS)
+            ret
+        end
+        M_CVTF2F:
+            if sz == 8:
+                arm_w(a, (0xEEB70AC0 as i64) | ((arm_d(r0) as i64) << (12 as i64)) | arm_sf(2 * arm_d(r1), 0, 5))
+            else:
+                arm_w(a, (0xEEB70BC0 as i64) | arm_sf(2 * arm_d(r0), 12, 22) | (arm_d(r1) as i64))
+            end
+            ret
+        end
+        M_MOVQ_XG:
+            x_vmov_s_r(a, 2 * arm_d(r0), arm_r(r1))
+            ret
+        end
+        M_MOVQ_GX:
+            x_vmov_r_s(a, arm_r(r0), 2 * arm_d(r1) + (g.mc.sz2[i] == 1 ? 1 : 0))
+            ret
+        end
+        M_XORPS:
+            arm_xorps(a, arm_d(r0), arm_d(r1), sz, false, r0 == r1)
+            ret
+        end
+        M_ANDPS:
+            arm_xorps(a, arm_d(r0), arm_d(r1), sz, true, false)
+            ret
+        end
+        M_ARM_SODD:
+            if g.mc.cc[i] == 0:
+                x_vmov_ss(a, 2 * arm_d(r0) + 1, 2 * arm_d(r1))
+            else:
+                x_vmov_ss(a, 2 * arm_d(r0), 2 * arm_d(r1) + 1)
+            end
+            ret
+        end
+    end
+    fail(g, "native backend: arm cannot encode machine op " + str_of_int(op) + " in " + tab_str(g.syms, g.f_sym))
+end
+
+func encode_function_arm(g &: Ng):
+    if g.opt:
+        share_epilogue(g)
+        rotate_loops(g)
+    end
+    peephole_jumps(g)
+    if g.opt:
+        rotate_loops(g)
+        peephole_jumps(g)
+        if not g.off_kbr and const_branches(g):
+            peephole_jumps(g)
+        end
+        if not g.off_stfwd:
+            store_forward(g)
+        end
+    end
+    mut a := Arm {}
+    ngp := ngp_count(g)
+    repeat ngp in k:
+        a.mask = a.mask | (1 << arm_r(g.mc.callee_used[k]))
+    end
+    a.fbase = 4 * ngp + g.mc.fpo_pad - 4
+    a.sub = g.mc.fpo_pad - g.mc.fsave
+    if a.sub < 0:
+        a.sub = 0
+    end
+    repeat g.mc.nlabels:
+        a.lbl_pos.push(0 - 1)
+    end
+    arm_prologue(g, a)
+    n := g.mc.op.len()
+    repeat n in i:
+        a.mi_pos.push(a.w.len())
+        if g.mc.op[i] == M_LABEL:
+            a.lbl_pos[g.mc.tgt[i]] = a.w.len()
+            continue
+        end
+        arm_ins(g, a, i)
+        if not g.ok:
+            ret
+        end
+    end
+    repeat a.fx_at.len() in f:
+        at := a.fx_at[f]
+        tp := a.lbl_pos[a.fx_lbl[f]]
+        d := (tp - at - 2) as i64
+        a.w[at] = (((a.fx_cond[f] as i64) << (28 as i64)) | (0x0A000000 as i64) | (d & (0xFFFFFF as i64))) as int
+    end
+    sec_align_to(g, SEC_TEXT, 16)
+    base := g.s_text.len()
+    g.sy_sec[g.f_sym] = SEC_TEXT
+    g.sy_off[g.f_sym] = base
+    repeat a.rl_at.len() in r:
+        add_reloc(g, SEC_TEXT, base + 4 * a.rl_at[r], a.rl_sym[r], a.rl_type[r], a.rl_add[r])
+    end
+    each wv in a.w:
+        v := wv as i64
+        g.s_text.push((v & (255 as i64)) as u8)
+        g.s_text.push(((v >> (8 as i64)) & (255 as i64)) as u8)
+        g.s_text.push(((v >> (16 as i64)) & (255 as i64)) as u8)
+        g.s_text.push(((v >> (24 as i64)) & (255 as i64)) as u8)
+    end
+    g.sy_size[g.f_sym] = g.s_text.len() - base
+    g.sy_align[g.f_sym] = 16
+    if g.os == NG_OS_LINUX:
+        arm_exidx(g, a)
+    end
+    g.mc.dv_spb = a.fbase as i64
+    dbg_words(g, base, a.mi_pos, 4)
+    dv_words(g, base, a.mi_pos, g.s_text.len(), 4)
+    a.w.free()
+    a.mi_pos.free()
+    a.lbl_pos.free()
+    a.fx_at.free()
+    a.fx_lbl.free()
+    a.fx_cond.free()
+    a.rl_at.free()
+    a.rl_sym.free()
+    a.rl_type.free()
+    a.rl_add.free()
+end

@@ -1,0 +1,203 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ml
+
+import matrix
+
+@en "PCA"
+@fa "تحلیل مؤلفه اصلی"
+pub struct PCA:
+    @en "n_components"
+    @fa "شمار مؤلفه‌ها"
+    pub n_components: int = 0
+    @en "components"
+    @fa "مؤلفه‌ها"
+    pub components: matrix.Matrix = matrix.Matrix {}
+    @en "mean"
+    @fa "میانگین"
+    pub mean: matrix.Matrix = matrix.Matrix {}
+    @en "explained_variance"
+    @fa "واریانس توضیح‌داده‌شده"
+    pub explained_variance: matrix.Matrix = matrix.Matrix {}
+    @en "explained_ratio"
+    @fa "نسبت توضیح‌داده‌شده"
+    pub explained_ratio: matrix.Matrix = matrix.Matrix {}
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    pub func fit(x &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty() or x.rows < 2: ret false end
+        mut full := matrix.PCAFit(x)
+        if full.components.is_empty():
+            full.free()
+            ret false
+        end
+        mut keep := this.n_components
+        if keep <= 0 or keep > full.components.cols: keep = full.components.cols end
+        matrix.Free(this.components)
+        matrix.Free(this.mean)
+        matrix.Free(this.explained_variance)
+        matrix.Free(this.explained_ratio)
+        this.components = matrix.SubMatrix(full.components, 0, 0, full.components.rows, keep)
+        this.mean = matrix.Clone(full.center)
+        this.explained_variance = matrix.SubMatrix(full.variances, 0, 0, 1, keep)
+        mut total := 0.0
+        repeat full.variances.count() in t: total += full.variances.a.get(t) end
+        this.explained_ratio = matrix.Zeros(1, keep)
+        if total > 0.0:
+            repeat keep in j: this.explained_ratio.set(0, j, this.explained_variance.at(0, j) / total) end
+        end
+        full.free()
+        this.n_components = keep
+        this.ok = true
+        ret true
+    end
+
+    @en "transform"
+    @fa "تبدیل"
+    pub func transform(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false or x.cols != this.components.rows: ret matrix.Matrix {} end
+        mut xc := matrix.Clone(x)
+        repeat x.rows in i:
+            repeat x.cols in j: xc.add_at(i, j, 0.0 - this.mean.at(0, j)) end
+        end
+        r := matrix.MatMul(xc, this.components)
+        matrix.Free(xc)
+        ret r
+    end
+
+    @en "fit_transform"
+    @fa "برازش سپس تبدیل"
+    pub func fit_transform(x &: matrix.Matrix): matrix.Matrix:
+        if this.fit(x) == false: ret matrix.Matrix {} end
+        ret this.transform(x)
+    end
+
+    @en "inverse_transform"
+    @fa "تبدیل معکوس"
+    pub func inverse_transform(z &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false or z.cols != this.components.cols: ret matrix.Matrix {} end
+        mut r := matrix.MulTranspose(z, this.components)
+        repeat r.rows in i:
+            repeat r.cols in j: r.add_at(i, j, this.mean.at(0, j)) end
+        end
+        ret r
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        matrix.Free(this.components)
+        matrix.Free(this.mean)
+        matrix.Free(this.explained_variance)
+        matrix.Free(this.explained_ratio)
+    end
+end
+
+@en "TruncatedSVD"
+@fa "تجزیه مقادیر تکین بریده"
+pub struct TruncatedSVD:
+    @en "n_components"
+    @fa "شمار مؤلفه‌ها"
+    pub n_components: int = 2
+    @en "components"
+    @fa "مؤلفه‌ها"
+    pub components: matrix.Matrix = matrix.Matrix {}
+    @en "singular_values"
+    @fa "مقدارهای تکین"
+    pub singular_values: matrix.Matrix = matrix.Matrix {}
+    @en "explained_variance"
+    @fa "واریانس توضیح‌داده‌شده"
+    pub explained_variance: matrix.Matrix = matrix.Matrix {}
+    @en "explained_ratio"
+    @fa "نسبت توضیح‌داده‌شده"
+    pub explained_ratio: matrix.Matrix = matrix.Matrix {}
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+
+    @en "fit"
+    @fa "برازش"
+    pub func fit(x &: matrix.Matrix): bool:
+        this.ok = false
+        if x.is_empty(): ret false end
+        mut k := this.n_components
+        mut most := x.cols
+        if x.rows < most: most = x.rows end
+        if k < 1 or k > most: k = most end
+        mut f := matrix.SVDecompose(x)
+        if f.ok == false:
+            f.free()
+            ret false
+        end
+        matrix.Free(this.components)
+        matrix.Free(this.singular_values)
+        matrix.Free(this.explained_variance)
+        matrix.Free(this.explained_ratio)
+        this.components = matrix.SubMatrix(f.v, 0, 0, x.cols, k)
+        this.singular_values = matrix.Zeros(1, k)
+        this.explained_variance = matrix.Zeros(1, k)
+        this.explained_ratio = matrix.Zeros(1, k)
+        nf := (x.rows - 1) as f64
+        mut total := 0.0
+        repeat x.rows in i:
+            repeat x.cols in j: total += x.at(i, j) * x.at(i, j) end
+        end
+        repeat k in c:
+            s := f.s.at(0, c)
+            this.singular_values.set(0, c, s)
+            this.explained_variance.set(0, c, nf > 0.0 ? s * s / nf : 0.0)
+            this.explained_ratio.set(0, c, total > 0.0 ? s * s / total : 0.0)
+        end
+        f.free()
+        this.n_components = k
+        this.ok = true
+        ret true
+    end
+
+    @en "transform"
+    @fa "تبدیل"
+    pub func transform(x &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false or x.cols != this.components.rows: ret matrix.Matrix {} end
+        ret matrix.MatMul(x, this.components)
+    end
+
+    @en "fit_transform"
+    @fa "برازش سپس تبدیل"
+    pub func fit_transform(x &: matrix.Matrix): matrix.Matrix:
+        if this.fit(x) == false: ret matrix.Matrix {} end
+        ret this.transform(x)
+    end
+
+    @en "inverse_transform"
+    @fa "تبدیل معکوس"
+    pub func inverse_transform(z &: matrix.Matrix): matrix.Matrix:
+        if this.ok == false or z.cols != this.components.cols: ret matrix.Matrix {} end
+        ret matrix.MulTranspose(z, this.components)
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        matrix.Free(this.components)
+        matrix.Free(this.singular_values)
+        matrix.Free(this.explained_variance)
+        matrix.Free(this.explained_ratio)
+    end
+end

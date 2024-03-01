@@ -1,0 +1,149 @@
+pkg.en = net/email
+pkg.name = net/email
+pkg.group = Network
+pkg.summary = Sending email over SMTP and reading it over IMAP and POP3.
+pkg.title = The net/email package in Salam | SMTP and IMAP
+pkg.description = The net/email package in Salam: sending email over SMTP with TLS, building an HTML message, logging in with OAuth, and reading a mailbox over IMAP and POP3, with examples.
+pkg.import = net.email
+pkg.intro <<
+<p>This package speaks the three mail protocols directly over <a href="/std/net/tcp/">net/tcp</a> and <a href="/std/tls/">tls</a>: SMTP to send, POP3 and IMAP to read. Use it for password reset mails, alerts and reports from a server, or a script that reads a support inbox. It is a protocol client, not a mail library: it builds simple text and HTML messages, but it has no attachments and no MIME parser, so a fetched message comes back as raw lines.</p>
+<p>The pieces:</p>
+<ul>
+<li><code>BuildMessage</code> writes the message text: the headers plus a text body, an HTML body, or both as <code>multipart/alternative</code>.</li>
+<li><code>Send</code> does a whole SMTP delivery to one recipient in one call. For several recipients, Bcc or a useful error message, drive an <code>SMTPClient</code> step by step; every step returns true or false and leaves the server's answer in <code>last_reply</code>.</li>
+<li>POP3 (<code>POP3Client</code>) downloads messages and can delete them; IMAP (<code>IMAPClient</code>) leaves them on the server and lets you search, so it is the one to use for a shared mailbox.</li>
+</ul>
+<p>Things people get wrong:</p>
+<ul>
+<li><strong><code>Send</code> always encrypts.</strong> With <code>use_tls</code> true it uses TLS from the first byte (port 465); with false it upgrades with STARTTLS (port 587) and fails if the server cannot. It logs in with AUTH PLAIN when a user name is given.</li>
+<li><strong><code>BuildMessage</code> writes only From, To, Subject and the content headers.</strong> It adds no <code>Date</code> or <code>Message-ID</code> and does not encode a non-ASCII subject; see the first guide. Write line breaks in bodies as <code>\r\n</code>: bare <code>\n</code> is passed through, and some servers reject it.</li>
+<li><strong>IMAP <code>Login</code> puts the user name and password in double quotes without escaping.</strong> A password that contains <code>"</code> or <code>\</code> fails; use <code>Command</code> with an IMAP literal or <code>LoginXOAuth2</code> for those.</li>
+<li><strong><code>Fetch</code> returns the reply lines only</strong>, not whether the command worked; call <code>Command</code> when you need the status.</li>
+</ul>
+<p>The protocol examples talk to a tiny fake server in a thread of the same program, so you can run them offline and see every command that goes over the wire.</p>
+
+<h2 id="guide-message">What BuildMessage writes</h2>
+<p><code>BuildMessage(from, to, subject, text, html)</code> returns the full message text that SMTP sends. With only a text body it is a plain <code>text/plain</code> message, with only HTML it is <code>text/html</code>, and with both it becomes <code>multipart/alternative</code> so that each mail program shows the version it prefers. Bodies are UTF-8, so any language works in the body.</p>
+{{example.net-email-plain-message}}
+<p>The subject is written as it is. Plain ASCII subjects are always safe; for a subject in another script, encode it the way mail headers expect, <code>=?UTF-8?B?</code> plus the Base64 of the text plus <code>?=</code>, as the last lines do, and pass that string as the subject. To add a <code>Date</code> or <code>Message-ID</code> header, put the line in front of what <code>BuildMessage</code> returns, for example <code>"Date: " + time.FormatHTTPDate(time.Now()) + "\r\n" + message</code>; mail without a date is more likely to be marked as spam.</p>
+
+<h2 id="guide-smtp">An SMTP session step by step</h2>
+<p><code>Send</code> does everything in one call, but driving the client yourself lets you add several recipients, use another login method, or see where a server says no. The steps are always the same: <code>DialSMTP</code> (or <code>DialSMTPTLS</code>), <code>Hello</code>, an <code>Auth...</code> call on a real server, <code>MailFrom</code>, one <code>RcptTo</code> per recipient, <code>Data</code> with the message, and <code>Quit</code>. Each step returns true or false and leaves the server's answer in <code>last_reply</code>.</p>
+{{example.net-email-smtp-session}}
+<p>The <code>To</code> header in the message and the <code>RcptTo</code> calls are separate: the header is what people see, the <code>RcptTo</code> list is where the mail is delivered. A Bcc recipient is simply one who gets a <code>RcptTo</code> but is not in the header.</p>
+<p><code>Send</code> with <code>use_tls</code> false still switches to TLS with STARTTLS before it logs in, so it cannot talk to a local test server without TLS such as MailHog. For those, use the steps above without <code>StartTLS</code>.</p>
+
+<h2 id="guide-pop3">Reading a mailbox with POP3</h2>
+<p>POP3 is the simple way to fetch mail: log in with <code>User</code> and <code>Pass</code>, ask for the count and size with <code>Stat</code>, list the messages with <code>POP3List</code>, fetch one with <code>Retr</code>, and mark it for deletion with <code>Dele</code>. Deletions happen when <code>POP3Quit</code> ends the session.</p>
+{{example.net-email-pop3-inbox}}
+<p>In POP3 a line of the message that starts with a dot is sent with an extra dot. <code>Retr</code> removes it again, which is why the stored <code>..end of invoice</code> comes back as <code>.end of invoice</code>.</p>
+
+<h2 id="guide-imap">Finding unread mail with IMAP</h2>
+<p>IMAP keeps the mail on the server and lets you search it. After <code>Login</code>, <code>Command</code> sends any IMAP command and returns its lines and final status, and <code>Fetch</code> asks for parts of chosen messages. The usual pattern for new mail is <code>SELECT</code> a mailbox, <code>SEARCH UNSEEN</code> for the numbers of unread messages, then <code>Fetch</code> what you need of them.</p>
+{{example.net-email-imap-unread}}
+<p><code>Fetch</code> puts the parentheses around the item list itself, so pass <code>FLAGS</code> or <code>BODY[HEADER]</code>, not <code>(FLAGS)</code>.</p>
+
+<h2 id="guide-imap-headers">Reading subjects and senders with IMAP</h2>
+<p>To list a mailbox without downloading whole messages, fetch only the header fields you need with <code>BODY.PEEK[HEADER.FIELDS (SUBJECT FROM)]</code>; <code>PEEK</code> keeps the messages unread. The server sends each header block as an IMAP literal (<code>{57}</code> followed by that many bytes), and <code>Fetch</code> returns it split into lines: the <code>* 2 FETCH</code> line, the header lines, the empty line that ends the headers and a closing <code>)</code>. The program walks those lines and prints one row per message.</p>
+{{example.net-email-imap-headers}}
+<p>Header values can be folded over several lines and encoded as <code>=?UTF-8?B?...?=</code>; the lines come back exactly as the server sent them, so decode them yourself if your mail is not plain ASCII.</p>
+
+<h2 id="guide-gmail">Sending through Gmail</h2>
+<p>Gmail, like most providers, accepts only encrypted connections and does not take your normal password. Turn on two step verification and create an app password, or use an OAuth token with <code>AuthXOAuth2</code>. Port 465 with <code>use_tls</code> true connects with TLS from the start. The program reads the address and secrets from environment variables so they stay out of the source:</p>
+<pre class="code" dir="ltr"><code>MAIL_USER=you@gmail.com MAIL_APP_PASSWORD='abcd efgh ijkl mnop' salam run net-email-gmail.salam</code></pre>
+{{example.net-email-gmail}}
+>>
+
+doc.BuildMessage = Builds a complete email message with From, To and Subject headers. When you give both plain text and HTML, the message becomes <code>multipart/alternative</code> so every mail program can show the version that suits it.
+doc.Send = Sends an email to one recipient in one step: it connects, logs in with AUTH PLAIN (when a user name is given) and sends what <code>BuildMessage</code> writes. When <code>use_tls</code> is true it connects encrypted from the start; otherwise it must be able to upgrade with STARTTLS. Returns only true or false.
+doc.BuildXOAuth2 = Builds the XOAUTH2 login string as base64, for logging in with an OAuth token, as Gmail wants.
+doc.SMTPClient = An SMTP client for sending email.
+doc.SMTPClient.conn = The connection.
+doc.SMTPClient.secure = It is encrypted.
+doc.SMTPClient.tls_idx = The internal TLS index.
+doc.SMTPClient.ok = The connection is up.
+doc.SMTPClient.rxbuf = The data not yet read.
+doc.SMTPClient.last_reply = The last reply of the server; for debugging.
+doc.DialSMTP = Connects to an SMTP server without encryption, usually port 587 or 25; <code>ok</code> is true when the server greets with 220.
+doc.DialSMTPTLS = Connects encrypted from the start, usually port 465.
+doc.Hello = Sends the EHLO greeting with the domain name of the sender.
+doc.StartTLS = Encrypts a plain connection with STARTTLS.
+doc.AuthLogin = Logs in with the LOGIN method.
+doc.AuthPlain = Logs in with the PLAIN method, sending the user name and password in one Base64 line.
+doc.AuthXOAuth2 = Logs in with an OAuth token.
+doc.MailFrom = Declares the envelope sender address, without angle brackets; bounces go there.
+doc.RcptTo = Adds one envelope recipient; call it again for each further one. This, not the <code>To</code> header, decides who gets the mail.
+doc.Data = Sends the complete text of the message and doubles any leading dot on a line.
+doc.Quit = Ends the session and closes the connection.
+doc.IMAPClient = An IMAP client for reading a mailbox.
+doc.IMAPClient.conn = The connection.
+doc.IMAPClient.secure = It is encrypted.
+doc.IMAPClient.tls_idx = The internal TLS index.
+doc.IMAPClient.ok = The connection is up.
+doc.IMAPClient.rxbuf = The data not yet read.
+doc.IMAPClient.tag_counter = The command tag counter.
+doc.IMAPReply = The reply to one IMAP command.
+doc.IMAPReply.ok = The reply was OK.
+doc.IMAPReply.status = The closing status line.
+doc.IMAPReply.lines = The lines of the reply.
+doc.DialIMAP = Connects to an IMAP server, usually port 143.
+doc.DialIMAPTLS = Connects encrypted, usually port 993.
+doc.Command = Sends any IMAP command with the next tag and returns its untagged lines and the tagged status line.
+doc.Login = Logs in with a user name and password, each put in double quotes without escaping.
+doc.LoginXOAuth2 = Logs in with an OAuth token.
+doc.Select = Picks a mailbox, INBOX for instance, to work in.
+doc.List = The raw <code>* LIST</code> lines for the mailboxes that match a reference and a pattern, such as <code>""</code> and <code>"*"</code>.
+doc.Fetch = Fetches parts of messages: a sequence set such as <code>2:3</code> and the items without parentheses. Returns the reply lines without the status.
+doc.Logout = Logs out and closes the connection.
+doc.POP3Client = A POP3 client for taking email away.
+doc.POP3Client.conn = The connection.
+doc.POP3Client.secure = It is encrypted.
+doc.POP3Client.tls_idx = The internal TLS index.
+doc.POP3Client.ok = The connection is up.
+doc.POP3Client.rxbuf = The data not yet read.
+doc.DialPOP3 = Connects to a POP3 server, usually port 110.
+doc.DialPOP3TLS = Connects encrypted, usually port 995.
+doc.User = Sends the user name.
+doc.Pass = Sends the password.
+doc.Stat = The raw <code>+OK</code> reply with the number of messages and their total size in bytes.
+doc.POP3List = One line per message: its number and size in bytes.
+doc.Retr = The complete text of one message, with the POP3 dot-stuffing removed.
+doc.Dele = Marks the message for deletion; it goes when you log out.
+doc.POP3Quit = Logs out and makes the deletions final.
+
+ex.BuildMessage = net-email-Message
+ex.BuildXOAuth2 = net-email-Message
+ex.Send = net-email-Clients
+ex.SMTPClient = net-email-Clients
+ex.DialSMTP = net-email-Clients
+ex.DialSMTPTLS = net-email-Clients
+ex.Hello = net-email-Clients
+ex.StartTLS = net-email-Clients
+ex.AuthLogin = net-email-Clients
+ex.AuthPlain = net-email-Clients
+ex.AuthXOAuth2 = net-email-Clients
+ex.MailFrom = net-email-Clients
+ex.RcptTo = net-email-Clients
+ex.Data = net-email-Clients
+ex.Quit = net-email-Clients
+ex.IMAPClient = net-email-Clients
+ex.IMAPReply = net-email-Clients
+ex.DialIMAP = net-email-Clients
+ex.DialIMAPTLS = net-email-Clients
+ex.Command = net-email-Clients
+ex.Login = net-email-Clients
+ex.LoginXOAuth2 = net-email-Clients
+ex.Select = net-email-Clients
+ex.List = net-email-Clients
+ex.Fetch = net-email-Clients
+ex.Logout = net-email-Clients
+ex.POP3Client = net-email-Clients
+ex.DialPOP3 = net-email-Clients
+ex.DialPOP3TLS = net-email-Clients
+ex.User = net-email-Clients
+ex.Pass = net-email-Clients
+ex.Stat = net-email-Clients
+ex.POP3List = net-email-Clients
+ex.Retr = net-email-Clients
+ex.Dele = net-email-Clients
+ex.POP3Quit = net-email-Clients

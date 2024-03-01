@@ -1,0 +1,163 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package metatrader
+
+import conv
+import net.http
+import encoding.json
+import encoding.encerr
+
+mut _base_url := DEFAULT_BRIDGE_URL
+mut _timeout_ms := DEFAULT_TIMEOUT_MS
+mut _connected := false
+mut _last_code := RES_S_OK
+mut _last_desc := "ok"
+
+struct initRequest:
+    login: i64 = 0 as i64
+    password: str = ""
+    server: str = ""
+    timeout_ms: int = 0
+    portable: bool = false
+end
+
+struct loginRequest:
+    login: i64 = 0 as i64
+    password: str = ""
+    server: str = ""
+    timeout_ms: int = 0
+end
+
+func _fail(code: int, desc: str): bool:
+    _last_code = code
+    _last_desc = desc
+    ret false
+end
+
+func _succeed(): bool:
+    _last_code = RES_S_OK
+    _last_desc = "ok"
+    ret true
+end
+
+func _endpoint(path: str): str:
+    ret _base_url.concat(path)
+end
+
+func _get_raw(path: str, params: HashMap<str, str>): http.Response:
+    ret http.GetWith(http.WithQuery(_endpoint(path), params), http.NewHeaders())
+end
+
+func _post_raw(path: str, body: str): http.Response:
+    mut headers := http.NewHeaders()
+    headers.put("Content-Type", "application/json")
+    ret http.Request("POST", _endpoint(path), headers, body)
+end
+
+func _check(r: http.Response): bool:
+    if r.err.len() > 0:
+        ret _fail(RES_E_INTERNAL_FAIL_CONNECT, r.err)
+    end
+    if r.status < 200 or r.status >= 300:
+        ret _fail(RES_E_INTERNAL_FAIL, "bridge returned HTTP " + conv.FormatInt(r.status as i64) + ": " + r.body)
+    end
+    ret _succeed()
+end
+
+func _decode<T>(r: http.Response, out &: T): bool:
+    mut e := encerr.EncodingError {}
+    if not json.UnmarshalLenient(r.body, out, e):
+        ret _fail(RES_E_INTERNAL_FAIL_RECEIVE, e.message)
+    end
+    ret _succeed()
+end
+
+@en "SetBridgeUrl"
+@fa "تنظیم نشانی پل"
+pub func SetBridgeUrl(url: str):
+    _base_url = url
+end
+
+@en "BridgeUrl"
+@fa "نشانی پل"
+pub func BridgeUrl(): str:
+    ret _base_url
+end
+
+@en "Initialize"
+@fa "آغاز"
+pub func Initialize(path: str = "", login: i64 = 0 as i64, password: str = "", server: str = "", timeout_ms: int = DEFAULT_TIMEOUT_MS, portable: bool = false): bool:
+    if path.len() > 0:
+        _base_url = path
+    end
+    _timeout_ms = timeout_ms
+    req := initRequest { login = login, password = password, server = server, timeout_ms = timeout_ms, portable = portable }
+    r := _post_raw("/initialize", json.Marshal(req))
+    if not _check(r):
+        _connected = false
+        ret false
+    end
+    _connected = true
+    ret true
+end
+
+@en "Login"
+@fa "ورود"
+pub func Login(login: i64, password: str = "", server: str = "", timeout_ms: int = DEFAULT_TIMEOUT_MS): bool:
+    _timeout_ms = timeout_ms
+    req := loginRequest { login = login, password = password, server = server, timeout_ms = timeout_ms }
+    r := _post_raw("/login", json.Marshal(req))
+    if not _check(r):
+        _connected = false
+        ret false
+    end
+    _connected = true
+    ret true
+end
+
+@en "Shutdown"
+@fa "پایان"
+pub func Shutdown():
+    _post_raw("/shutdown", "{}")
+    _connected = false
+end
+
+@en "IsConnected"
+@fa "متصل است"
+pub func IsConnected(): bool:
+    ret _connected
+end
+
+@en "Version"
+@fa "نسخه"
+pub func Version(): VersionInfo:
+    mut out := VersionInfo {}
+    r := _get_raw("/version", http.NewHeaders())
+    if not _check(r): ret out end
+    _decode(r, out)
+    ret out
+end
+
+@en "LastError"
+@fa "آخرین خطا"
+pub func LastError(): LastErrorInfo:
+    ret LastErrorInfo { code = _last_code, description = _last_desc }
+end
+
+@en "Ok"
+@fa "موفق"
+pub func Ok(): bool:
+    ret _last_code == RES_S_OK
+end

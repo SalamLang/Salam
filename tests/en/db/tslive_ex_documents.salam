@@ -1,0 +1,70 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import db.typesense
+
+struct Book:
+    pub id: str = ""
+    pub title: str = ""
+    pub author: str = ""
+    pub year: int = 0
+end
+
+func main:
+    parts := os.Env("SALAM_TEST_TYPESENSE").split(" ")
+    mut c := typesense.New(parts.get(0), parts.get(1))
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+    _ := typesense.DeleteCollection(c, "ex_doc_books", err)
+    mut s := typesense.Schema { name = "ex_doc_books" }
+    s.fields.push(typesense.NewField("title", typesense.TYPE_STRING))
+    s.fields.push(typesense.Field { name = "author", kind = typesense.TYPE_STRING, optional = true })
+    s.fields.push(typesense.Field { name = "year", kind = typesense.TYPE_INT32, optional = true })
+    _ := typesense.CreateCollection(c, s, err)
+
+    println "create:", typesense.CreateDocument(c, "ex_doc_books", `{"id": "1", "title": "Dune", "year": 1965}`, err)
+    _ := typesense.CreateDocument(c, "ex_doc_books", `{"id": "1", "title": "Dune"}`, err)
+    println "create twice:", typesense.IsConflict(err)
+    println "upsert:", typesense.UpsertDocument(c, "ex_doc_books", `{"id": "1", "title": "Dune", "author": "Frank Herbert", "year": 1965}`, err)
+    println "update:", typesense.UpdateDocument(c, "ex_doc_books", "1", `{"year": 1966}`, err)
+    println "emplace new:", typesense.EmplaceDocument(c, "ex_doc_books", `{"id": "2", "title": "Emma"}`, err)
+    println "emplace existing:", typesense.EmplaceDocument(c, "ex_doc_books", `{"id": "2", "author": "Jane Austen"}`, err)
+    _ := typesense.UpdateDocument(c, "ex_doc_books", "2", `{"year": "1815"}`, err)
+    println "wrong type:", err.status
+    println "coerced:", typesense.UpdateDocumentWith(c, "ex_doc_books", "2", `{"year": "1815"}`, typesense.DIRTY_COERCE_OR_REJECT, err)
+    println "index with options:", typesense.IndexDocument(c, "ex_doc_books", `{"id": "3", "title": "Ulysses", "year": "unknown"}`, typesense.WriteOptions { action = typesense.ACTION_UPSERT, dirty_values = typesense.DIRTY_COERCE_OR_DROP }, err)
+
+    println "get:", typesense.GetDocument(c, "ex_doc_books", "1", err)
+    println "exists:", typesense.DocumentExists(c, "ex_doc_books", "1", err), typesense.DocumentExists(c, "ex_doc_books", "99", err)
+
+    mut b := Book {}
+    if typesense.GetDocumentAs(c, "ex_doc_books", "1", b, err):
+        println "typed:", b.title, "by", b.author, "in", b.year
+    end
+    _ := typesense.CreateDocumentOf(c, "ex_doc_books", Book { id = "4", title = "Beloved", author = "Toni Morrison", year = 1987 }, err)
+    _ := typesense.UpsertDocumentOf(c, "ex_doc_books", Book { id = "4", title = "Beloved", author = "Toni Morrison", year = 1988 }, err)
+    mut b4 := Book {}
+    _ := typesense.GetDocumentAs(c, "ex_doc_books", "4", b4, err)
+    println "from a struct:", b4.title, b4.year
+    mut one := Book {}
+    println "decode:", typesense.DecodeDocument(`{"id": "9", "title": "Walden", "year": 1854}`, one, err), one.title, one.year
+    mut wrong := Book {}
+    println "decode bad:", typesense.DecodeDocument(`{"year": "not a number"}`, wrong, err), err.kind == typesense.KIND_DECODE
+
+    println "delete:", typesense.DeleteDocument(c, "ex_doc_books", "3", err)
+    _ := typesense.DeleteDocument(c, "ex_doc_books", "3", err)
+    println "delete again:", typesense.IsNotFound(err)
+    _ := typesense.DeleteCollection(c, "ex_doc_books", err)
+end

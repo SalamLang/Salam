@@ -1,0 +1,189 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import str
+
+regex_prev_punct := "(,=:[!&|?{};~+-*/%<>^"
+func roots_list(): Vector<str>:
+    mut v := Vector {} as Vector<str> v.push("web")
+    v.push("extensions")
+    ret v
+end
+func is_skip_name(name: str): bool:
+    switch name:
+        ".git", "node_modules", "dist", "build", ".venv", "vendor":
+            ret true
+        end
+    end
+    ret false
+end
+func find_from(s: str, sub: str, start: int): int:
+    if start >= s.len(): ret 0 - 1 end
+    rest := s.substr(start, s.len() - start)
+    k := rest.find(sub)
+    if k < 0: ret 0 - 1 end
+    ret start + k
+end
+func is_word_byte(code: int): bool:
+    if code >= 48 and code <= 57: ret true end
+    if code >= 65 and code <= 90: ret true end
+    if code >= 97 and code <= 122: ret true end
+    if code == 95 or code == 36: ret true end
+    ret false
+end
+func is_space_byte(code: int): bool:
+    ret code == 32 or code == 9 or code == 10 or code == 13
+end
+func is_regex_keyword(w: str): bool:
+    switch w:
+        "return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "do", "else", "case", "yield", "await", "throw":
+            ret true
+        end
+    end
+    ret false
+end
+func regex_allowed(prev: str): bool:
+    if prev.len() == 0: ret true end
+    if is_regex_keyword(prev): ret true end
+    last := prev.substr(prev.len() - 1, 1)
+    ret regex_prev_punct.find(last) >= 0
+end
+func strip_comments(text: str, line_comments: bool, templates: bool): str:
+    mut sb := str.NewBuilder()
+    mut cur_word := ""
+    mut last_token := ""
+    n := text.len()
+    mut i := 0
+    until i < n:
+        c := text.substr(i, 1)
+        mut nxt := ""
+        if i + 1 < n: nxt = text.substr(i + 1, 1) end
+        if line_comments and c == "/" and nxt == "/":
+            j := find_from(text, "\n", i)
+            if j < 0: i = n else:
+                i = j
+            end
+            continue
+        end
+        if c == "/" and nxt == "*":
+            j := find_from(text, "*/", i + 2)
+            if j < 0: i = n else:
+                i = j + 2
+            end
+            continue
+        end
+        mut prev := cur_word
+        if prev.len() == 0: prev = last_token end
+        if line_comments and c == "/" and regex_allowed(prev):
+            str.BufAppend(sb, c)
+            i = i + 1
+            mut in_class := false
+            until i < n:
+                ch := text.substr(i, 1)
+                if ch == "\n": break end
+                str.BufAppend(sb, ch)
+                if ch == "\\" and i + 1 < n:
+                    str.BufAppend(sb, text.substr(i + 1, 1))
+                    i = i + 2
+                    continue
+                end
+                i = i + 1
+                if ch == "[": in_class = true
+                else ch == "]": in_class = false
+                else ch == "/" and in_class == false: break
+                end
+            end
+            cur_word = ""
+            last_token = "/"
+            continue
+        end
+        if c == "\"" or c == "'" or (templates and c == "`"):
+            quote := c
+            str.BufAppend(sb, c)
+            i = i + 1
+            until i < n:
+                ch := text.substr(i, 1)
+                str.BufAppend(sb, ch)
+                if ch == "\\" and i + 1 < n:
+                    str.BufAppend(sb, text.substr(i + 1, 1))
+                    i = i + 2
+                    continue
+                end
+                i = i + 1
+                if ch == quote: break end
+            end
+            cur_word = ""
+            last_token = quote
+            continue
+        end
+        str.BufAppend(sb, c)
+        code := char_code(c)
+        if is_word_byte(code):
+            cur_word = cur_word.concat(c)
+        else is_space_byte(code):
+            if cur_word.len() > 0:
+                last_token = cur_word
+                cur_word = ""
+            end
+        else:
+            if cur_word.len() > 0:
+                last_token = cur_word
+                cur_word = ""
+            end
+            last_token = c
+        end
+        i = i + 1
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+func in_skip_dir(path: str): bool:
+    mut parts := path.split("/")
+    repeat parts.len() in i:
+        if is_skip_name(parts.get(i)):
+            parts.free()
+            ret true
+        end
+    end
+    defer parts.free()
+    ret false
+end
+func main:
+    mut changed := 0
+    mut roots := roots_list()
+    repeat roots.len() in r:
+        root := roots.get(r)
+        if os.IsDir(root) == false: continue end
+        mut all := os.Walk(root)
+        repeat all.len() in i:
+            path := all.get(i)
+            is_css := str.EndsWith(path, ".css")
+            is_js := str.EndsWith(path, ".js")
+            if is_css == false and is_js == false: continue end
+            if in_skip_dir(path): continue end
+            original := os.ReadFile(path)
+            stripped := strip_comments(original, is_js, is_js)
+            if stripped != original:
+                os.WriteFile(path, stripped)
+                changed = changed + 1
+                println "stripped:", path
+            end
+        end
+        all.free()
+    end
+    println ""
+    println "Done. Modified", changed, "file(s)."
+end

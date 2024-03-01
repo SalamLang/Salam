@@ -1,0 +1,428 @@
+package nativegen
+
+k_sh_x64 := [12, 13, 14, 15, 3, 6, 7, 8, 9, 0, 1, 2]
+k_sh_x86 := [3, 5, 0, 1, 2]
+k_sh_arm := [5, 6, 7, 8, 9, 12, 0, 1, 2, 3]
+
+pub struct Sh:
+    pub lpos: Vector<int> = Vector {}
+    pub seen: Vector<int> = Vector {}
+    pub stk: Vector<int> = Vector {}
+    pub uses: Vector<int> = Vector {}
+    pub defs: Vector<int> = Vector {}
+    pub refd: Vector<bool> = Vector {}
+    pub slots: Vector<int> = Vector {}
+    pub offs: Vector<i64> = Vector {}
+    pub cnt: Vector<int> = Vector {}
+    pub ld: Vector<int> = Vector {}
+    pub regs: Vector<int> = Vector {}
+    pub stamp: int = 0
+end
+
+func sh_is_arg(g &: Ng, r: int): bool:
+    if g.arch == NG_ARCH_X86:
+        ret false
+    end
+    if g.arch == NG_ARCH_ARM:
+        ret r >= 0 and r <= 3
+    end
+    if g.arch == NG_ARCH_A64 or g.arch == NG_ARCH_RV64:
+        ret (r >= 0 and r <= 3) or (r >= 5 and r <= 9)
+    end
+    if g.os == NG_OS_WINDOWS:
+        ret r == RCX or r == RDX or r == R8 or r == R9
+    end
+    ret r == RDI or r == RSI or r == RDX or r == RCX or r == R8 or r == R9
+end
+
+func sh_live(g &: Ng, t &: Sh, start: int, r: int): bool:
+    t.stamp += 1
+    t.stk.clear()
+    t.stk.push(start)
+    n := g.mc.op.len()
+    mut steps := 0
+    until t.stk.len() > 0:
+        mut i := t.stk.pop()
+        until i >= 0 and i < n:
+            steps += 1
+            if steps > 20000:
+                ret true
+            end
+            if t.seen[i] == t.stamp:
+                break
+            end
+            t.seen[i] = t.stamp
+            op := g.mc.op[i]
+            if op == M_RET:
+                if r == RAX or r == RDX:
+                    ret true
+                end
+                break
+            end
+            if op == M_UD2:
+                break
+            end
+            if op == M_CALL or op == M_CALLR:
+                if sh_is_arg(g, r) or (op == M_CALLR and g.mc.r0[i] == r):
+                    ret true
+                end
+                if not is_callee_saved(g, r):
+                    break
+                end
+                i += 1
+                continue
+            end
+            if op == M_JMP:
+                i = t.lpos[g.mc.tgt[i]]
+                continue
+            end
+            if op == M_JCC:
+                t.stk.push(t.lpos[g.mc.tgt[i]])
+                i += 1
+                continue
+            end
+            if op != M_LABEL and op != M_NOP:
+                mi_regs(g, i, t.uses, t.defs)
+                each u in t.uses:
+                    if u == r:
+                        ret true
+                    end
+                end
+                mut killed := false
+                each d in t.defs:
+                    if d == r:
+                        killed = true
+                    end
+                end
+                if killed:
+                    break
+                end
+            end
+            i += 1
+        end
+    end
+    ret false
+end
+
+func sh_mark(g &: Ng, t &: Sh, i: int):
+    mi_regs(g, i, t.uses, t.defs)
+    each u in t.uses:
+        if u >= 0 and u < 32:
+            t.refd[u] = true
+        end
+    end
+    each d in t.defs:
+        if d >= 0 and d < 32:
+            t.refd[d] = true
+        end
+    end
+    r0 := g.mc.r0[i]
+    r1 := g.mc.r1[i]
+    if r0 >= 0 and r0 < 32: t.refd[r0] = true end
+    if r1 >= 0 and r1 < 32: t.refd[r1] = true end
+    if g.mc.mk[i] == MK_BI:
+        if g.mc.mb[i] >= 0 and g.mc.mb[i] < 32: t.refd[g.mc.mb[i]] = true end
+        if g.mc.mi[i] >= 0 and g.mc.mi[i] < 32: t.refd[g.mc.mi[i]] = true end
+    end
+end
+
+func sh_slot_ld(g &: Ng, i: int): bool:
+    ret g.mc.op[i] == M_LD and g.mc.sz[i] == 8 and g.mc.mk[i] == MK_FRAME and g.mc.mi[i] < 0
+end
+
+func sh_loop(g &: Ng, t &: Sh, lo: int, hi: int): bool:
+    n := g.mc.op.len()
+    repeat n in k:
+        op := g.mc.op[k]
+        if (k < lo or k > hi) and (op == M_JMP or op == M_JCC):
+            p := t.lpos[g.mc.tgt[k]]
+            if p > lo and p <= hi:
+                ret false
+            end
+        end
+    end
+    t.refd.clear()
+    repeat 32:
+        t.refd.push(false)
+    end
+    t.slots.clear()
+    t.offs.clear()
+    t.cnt.clear()
+    mut i := lo
+    until i <= hi:
+        op := g.mc.op[i]
+        if op == M_CALL or op == M_CALLR or op == M_RET or op == M_UD2:
+            ret false
+        end
+        if op != M_LABEL and op != M_NOP and op != M_JMP and op != M_JCC:
+            sh_mark(g, t, i)
+        end
+        if sh_slot_ld(g, i):
+            s := slot_loc(g, g.mc.mb[i])
+            mut f := 0 - 1
+            repeat t.slots.len() in q:
+                if t.slots[q] == s and t.offs[q] == g.mc.md[i]:
+                    f = q
+                end
+            end
+            if f < 0:
+                t.slots.push(s)
+                t.offs.push(g.mc.md[i])
+                t.cnt.push(1)
+            else:
+                t.cnt[f] = t.cnt[f] + 1
+            end
+        end
+        i += 1
+    end
+    if t.slots.len() == 0:
+        ret false
+    end
+    mut j := lo
+    until j <= hi:
+        if g.mc.mk[j] == MK_FRAME and not frame_read_only(g.mc.op[j], g.mc.cc[j]):
+            ws := slot_loc(g, g.mc.mb[j])
+            repeat t.slots.len() in q2:
+                if t.slots[q2] == ws:
+                    t.cnt[q2] = 0
+                end
+            end
+        end
+        j += 1
+    end
+    t.regs.clear()
+    if g.arch == NG_ARCH_ARM:
+        each ca in k_sh_arm:
+            if not t.refd[ca] and not sh_live(g, t, lo, ca):
+                t.regs.push(ca)
+            end
+        end
+    else g.arch == NG_ARCH_X86:
+        each c86 in k_sh_x86:
+            if not t.refd[c86] and not sh_live(g, t, lo, c86):
+                t.regs.push(c86)
+            end
+        end
+    else:
+        each cand in k_sh_x64:
+            if not t.refd[cand] and not sh_live(g, t, lo, cand):
+                t.regs.push(cand)
+            end
+        end
+    end
+    ret t.regs.len() > 0
+end
+
+func sh_forward(g &: Ng, t &: Sh, k: int, hi: int, rx: int, rn: int): bool:
+    mut j := k + 1
+    mut fixes := Vector {} as Vector<int>
+    mut ok := false
+    until j <= hi:
+        op := g.mc.op[j]
+        if op == M_LABEL or op == M_JMP or op == M_JCC or op == M_CALL or op == M_CALLR or op == M_RET:
+            break
+        end
+        if op != M_NOP:
+            mi_regs(g, j, t.uses, t.defs)
+            mut u := false
+            mut d := false
+            each x in t.uses:
+                if x == rx:
+                    u = true
+                end
+            end
+            each y in t.defs:
+                if y == rx:
+                    d = true
+                end
+            end
+            if u and d:
+                break
+            end
+            if u:
+                if not sh_renames(g, t, j, rx, rn):
+                    break
+                end
+                fixes.push(j)
+            end
+            if d:
+                ok = true
+                break
+            end
+        end
+        j += 1
+    end
+    if ok:
+        each f in fixes:
+            sh_rename(g, f, rx, rn)
+        end
+    end
+    fixes.free()
+    ret ok
+end
+
+func sh_rename(g &: Ng, f: int, rx: int, rn: int):
+    if g.mc.r0[f] == rx: g.mc.r0[f] = rn end
+    if g.mc.r1[f] == rx: g.mc.r1[f] = rn end
+    if g.mc.mk[f] == MK_BI:
+        if g.mc.mb[f] == rx: g.mc.mb[f] = rn end
+        if g.mc.mi[f] == rx: g.mc.mi[f] = rn end
+    else g.mc.mk[f] == MK_FRAME:
+        if g.mc.mi[f] == rx: g.mc.mi[f] = rn end
+    end
+end
+
+func sh_renames(g &: Ng, t &: Sh, j: int, rx: int, rn: int): bool:
+    r0 := g.mc.r0[j]
+    r1 := g.mc.r1[j]
+    mb := g.mc.mb[j]
+    mi := g.mc.mi[j]
+    sh_rename(g, j, rx, rn)
+    mi_regs(g, j, t.uses, t.defs)
+    g.mc.r0[j] = r0
+    g.mc.r1[j] = r1
+    g.mc.mb[j] = mb
+    g.mc.mi[j] = mi
+    each x in t.uses:
+        if x == rx:
+            ret false
+        end
+    end
+    ret true
+end
+
+func sh_apply(g &: Ng, t &: Sh, lo: int, hi: int):
+    t.ld.clear()
+    mut q := 0
+    mut used := 0
+    until q < t.slots.len() and used < t.regs.len():
+        mut best := 0 - 1
+        repeat t.slots.len() in k:
+            if t.cnt[k] > 0 and (best < 0 or t.cnt[k] > t.cnt[best]):
+                best = k
+            end
+        end
+        if best < 0:
+            break
+        end
+        t.ld.push(best)
+        t.ld.push(t.regs[used])
+        t.cnt[best] = 0
+        used += 1
+        q += 1
+    end
+    if t.ld.len() == 0:
+        ret
+    end
+    mut i := lo
+    until i <= hi:
+        if sh_slot_ld(g, i):
+            s := slot_loc(g, g.mc.mb[i])
+            repeat t.ld.len() / 2 in p:
+                k2 := t.ld[2 * p]
+                if t.slots[k2] == s and t.offs[k2] == g.mc.md[i]:
+                    rn := t.ld[2 * p + 1]
+                    rx := g.mc.r0[i]
+                    if sh_forward(g, t, i, hi, rx, rn):
+                        g.mc.op[i] = M_NOP
+                    else:
+                        g.mc.op[i] = M_MOV_RR
+                        g.mc.r1[i] = rn
+                        g.mc.mk[i] = MK_NONE
+                        g.mc.mb[i] = 0 - 1
+                        g.mc.md[i] = 0 as i64
+                    end
+                end
+            end
+        end
+        i += 1
+    end
+    head := g.mc.tgt[lo]
+    entry := new_label(g)
+    n := g.mc.op.len()
+    repeat n in k3:
+        op := g.mc.op[k3]
+        if (k3 < lo or k3 > hi) and (op == M_JMP or op == M_JCC) and g.mc.tgt[k3] == head:
+            g.mc.tgt[k3] = entry
+        end
+    end
+    mut o := mc_take(g)
+    repeat n in k4:
+        if k4 == lo:
+            lb := mi_new(g, M_LABEL, 0)
+            g.mc.tgt[lb] = entry
+            repeat t.ld.len() / 2 in p2:
+                k5 := t.ld[2 * p2]
+                l := mi_new(g, M_LD, 8)
+                g.mc.r0[l] = t.ld[2 * p2 + 1]
+                g.mc.mk[l] = MK_FRAME
+                g.mc.mb[l] = t.slots[k5]
+                g.mc.md[l] = t.offs[k5]
+            end
+        end
+        _c := mi_clone(g, o, k4)
+    end
+    mc_free_arrays(o)
+end
+
+func spill_hoist(g &: Ng):
+    mut t := Sh {}
+    mut rounds := 0
+    mut done := Vector {} as Vector<int>
+    until rounds < 32:
+        rounds += 1
+        n := g.mc.op.len()
+        t.lpos.clear()
+        repeat g.mc.nlabels + 1:
+            t.lpos.push(0 - 1)
+        end
+        t.seen.clear()
+        repeat n + 1:
+            t.seen.push(0)
+        end
+        t.stamp = 0
+        repeat n in i:
+            if g.mc.op[i] == M_LABEL:
+                t.lpos[g.mc.tgt[i]] = i
+            end
+        end
+        mut blo := 0 - 1
+        mut bhi := 0 - 1
+        repeat n in j:
+            op := g.mc.op[j]
+            if op == M_JMP or op == M_JCC:
+                lb := g.mc.tgt[j]
+                p := t.lpos[lb]
+                mut skip := false
+                each dn in done:
+                    if dn == lb:
+                        skip = true
+                    end
+                end
+                if not skip and p >= 0 and p < j and (blo < 0 or j - p < bhi - blo):
+                    blo = p
+                    bhi = j
+                end
+            end
+        end
+        if blo < 0:
+            break
+        end
+        done.push(g.mc.tgt[blo])
+        if sh_loop(g, t, blo, bhi):
+            sh_apply(g, t, blo, bhi)
+        end
+    end
+    done.free()
+    t.lpos.free()
+    t.seen.free()
+    t.stk.free()
+    t.uses.free()
+    t.defs.free()
+    t.refd.free()
+    t.slots.free()
+    t.offs.free()
+    t.cnt.free()
+    t.ld.free()
+    t.regs.free()
+end

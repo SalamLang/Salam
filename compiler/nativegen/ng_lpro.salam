@@ -1,0 +1,276 @@
+package nativegen
+
+func lpro_safe(g &: Ng, a: int, t: int): bool:
+    mut disp := 0 as i64
+    r := addr_root(g, a, disp)
+    if r < 0 or disp < (0 as i64) or disp >= (4096 as i64):
+        ret false
+    end
+    if g.v_kind[r] == VK_ARG:
+        k := g.v_i[r] as int
+        ret k >= 0 and k < g.f_argf.len() and (g.f_argf[k] & IF_NONNULL) != 0
+    end
+    if g.v_kind[r] == VK_INS and g.i_op[g.v_def[r]] == OP_ALLOCA:
+        d := g.v_def[r]
+        n := g.i_d[d] < (1 as i64) ? (1 as i64) : g.i_d[d]
+        ret disp + (tsize(g, t) as i64) <= (tsize(g, g.i_x[d]) as i64) * n
+    end
+    ret false
+end
+
+func lpro_scan(g &: Ng, l &: Lp, mk: int, a: int, c: int, calls &: Vector<int>): bool:
+    calls.clear()
+    each b in g.b_rpo:
+        if l.inl[b] != mk:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            if op == OP_CALL:
+                if not call_no_write(g, i):
+                    calls.push(i)
+                end
+            else op == OP_STORE:
+                sc := mem_cls(g, i)
+                if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0 or sc == 0 or sc == c:
+                    ret false
+                end
+            else op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE:
+                ret false
+            else op == OP_LOAD and g.i_a[i] == a and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+                ret false
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret calls.len() > 0 and calls.len() <= 4
+end
+
+func lpro_reload(g &: Ng, at: int, a: int, t: int, c: int, tmp: int):
+    ld := ins_new(g, OP_LOAD, t)
+    g.i_a[ld] = a
+    g.i_c[ld] = c
+    lv := new_res(g, ld)
+    st := ins_new(g, OP_STORE, T_VOID)
+    g.i_a[st] = lv
+    g.i_b[st] = tmp
+    ins_before(g, at, ld)
+    ins_before(g, at, st)
+end
+
+func lpro_loop(g &: Ng, l &: Lp, mk: int, pt: int, calls &: Vector<int>, done &: Vector<int>): bool:
+    done.clear()
+    mut changed := false
+    each b in g.b_rpo:
+        if l.inl[b] != mk:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            if g.i_op[i] == OP_LOAD and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0:
+                a := g.i_a[i]
+                t := g.i_ty[i]
+                c := mem_cls(g, i)
+                mut seen := false
+                each dv in done:
+                    if dv == a:
+                        seen = true
+                    end
+                end
+                if not seen and c != 0 and not is_agg(g, t) and not is_vec(g, t) and lp_inv(g, l, a, mk) and lpro_safe(g, a, t) and lpro_scan(g, l, mk, a, c, calls):
+                    done.push(a)
+                    al := ins_new(g, OP_ALLOCA, T_PTR)
+                    g.i_x[al] = t
+                    g.i_d[al] = 1 as i64
+                    tmp := new_res(g, al)
+                    ins_before(g, g.b_first[0], al)
+                    each b2 in g.b_rpo:
+                        if l.inl[b2] == mk:
+                            mut j := g.b_first[b2]
+                            until j >= 0:
+                                if g.i_op[j] == OP_LOAD and g.i_a[j] == a and g.i_ty[j] == t:
+                                    g.i_a[j] = tmp
+                                end
+                                j = g.i_next[j]
+                            end
+                        end
+                    end
+                    lpro_reload(g, pt, a, t, c, tmp)
+                    each cl in calls:
+                        lpro_reload(g, g.i_next[cl], a, t, c, tmp)
+                    end
+                    changed = true
+                end
+            end
+            i = nx
+        end
+    end
+    ret changed
+end
+
+func lpro(g &: Ng): bool:
+    build_dom(g)
+    mut l := Lp {}
+    repeat g.b_first.len():
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    if l.head.len() == 0:
+        l.inl.free()
+        ret false
+    end
+    if make_preheaders(g, l):
+        build_cfg(g)
+        build_dom(g)
+        l.inl.clear()
+        repeat g.b_first.len():
+            l.inl.push(0)
+        end
+        lp_find(g, l)
+    end
+    mut calls := Vector {} as Vector<int>
+    mut done := Vector {} as Vector<int>
+    mut changed := false
+    mut mk := 3000000
+    each h in l.head:
+        mk += 1
+        _s := lp_body(g, l, h, mk)
+        p := lp_outside_pred(g, l, h, mk)
+        if p < 0:
+            continue
+        end
+        pt := g.b_last[p]
+        if pt < 0 or g.i_op[pt] != OP_BR:
+            continue
+        end
+        if lpro_loop(g, l, mk, pt, calls, done):
+            changed = true
+        end
+    end
+    calls.free()
+    done.free()
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+    if changed:
+        build_cfg(g)
+        mem2reg(g)
+        simplify_phis(g)
+    end
+    ret changed
+end
+
+func fch_loop(g &: Ng, l &: Lp, mk: int, pt: int, keys &: Vector<i64>, vals &: Vector<int>): bool:
+    keys.clear()
+    vals.clear()
+    mut changed := false
+    each b in g.b_rpo:
+        if l.inl[b] != mk:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            iop := g.i_op[i]
+            if iop == OP_ADD or iop == OP_SUB or iop == OP_AND or iop == OP_OR or iop == OP_XOR or iop == OP_ICMP:
+                bk := g.i_b[i]
+                if bk >= 0 and g.v_kind[bk] == VK_INT and g.v_ty[bk] == T_I64 and not is_imm32(g.v_i[bk]) and not (iop == OP_AND and g.v_i[bk] == (4294967295 as i64)):
+                    key2 := g.v_i[bk] ^ ((T_I64 as i64) << (56 as i64)) ^ (1 as i64) << (55 as i64)
+                    mut nv2 := 0 - 1
+                    repeat keys.len() in q2:
+                        if keys[q2] == key2:
+                            nv2 = vals[q2]
+                        end
+                    end
+                    if nv2 < 0:
+                        bc2 := ins_new(g, OP_BITCAST, T_I64)
+                        g.i_a[bc2] = bk
+                        g.i_x[bc2] = T_I64
+                        nv2 = new_res(g, bc2)
+                        ins_before(g, pt, bc2)
+                        keys.push(key2)
+                        vals.push(nv2)
+                    end
+                    g.i_b[i] = nv2
+                    changed = true
+                end
+            end
+            if g.i_op[i] == OP_FCMP:
+                repeat 2 in k:
+                    c := k == 0 ? g.i_a[i] : g.i_b[i]
+                    if c >= 0 and g.v_kind[c] == VK_FLT:
+                        t := g.v_ty[c]
+                        key := g.v_i[c] ^ ((t as i64) << (56 as i64))
+                        mut nv := 0 - 1
+                        repeat keys.len() in q:
+                            if keys[q] == key:
+                                nv = vals[q]
+                            end
+                        end
+                        if nv < 0:
+                            it := t == T_F32 ? T_I32 : T_I64
+                            mut bits := g.v_i[c]
+                            if t == T_F32:
+                                bits = f32_bits_of(bits_f64(bits)) as i64
+                            end
+                            bc := ins_new(g, OP_BITCAST, t)
+                            g.i_a[bc] = const_int(g, it, bits)
+                            g.i_x[bc] = it
+                            nv = new_res(g, bc)
+                            ins_before(g, pt, bc)
+                            keys.push(key)
+                            vals.push(nv)
+                        end
+                        if k == 0:
+                            g.i_a[i] = nv
+                        else:
+                            g.i_b[i] = nv
+                        end
+                        changed = true
+                    end
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret changed
+end
+
+func fcmp_const_hoist(g &: Ng): bool:
+    build_dom(g)
+    mut l := Lp {}
+    repeat g.b_first.len():
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut keys := Vector {} as Vector<i64>
+    mut vals := Vector {} as Vector<int>
+    mut changed := false
+    mut mk := 4000000
+    each h in l.head:
+        mk += 1
+        _s := lp_body(g, l, h, mk)
+        p := lp_outside_pred(g, l, h, mk)
+        if p < 0:
+            continue
+        end
+        pt := g.b_last[p]
+        if pt < 0 or g.i_op[pt] != OP_BR:
+            continue
+        end
+        if fch_loop(g, l, mk, pt, keys, vals):
+            changed = true
+        end
+    end
+    keys.free()
+    vals.free()
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+    ret changed
+end

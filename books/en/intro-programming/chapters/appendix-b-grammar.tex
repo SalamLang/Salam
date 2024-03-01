@@ -1,0 +1,249 @@
+\chapter{Grammar (Simplified)}%
+\label{app:grammar}
+
+This is a simplified, informal grammar of the Salam general language, in the style
+of EBNF, intended as a reader's reference rather than a precise specification.
+Square brackets \code{[ ]} mark an optional part, a star \code{*} means ``zero or
+more,'' a plus \code{+} means ``one or more,'' and a vertical bar \code{|} means
+``or.'' It reflects the colon-and-\code{end} block style used throughout this book.
+Keywords are shown in English; a Persian program uses the spellings from
+Appendix~\ref{app:keywords} with exactly the same grammar.
+
+\section*{Program structure}
+
+\begin{shell}
+program     = [ package ] import* include* toplevel*
+
+package     = "package" IDENT
+
+import      = "import" IDENT ( "." IDENT )*
+
+include     = "include" [ IDENT ] STRING
+
+toplevel    = const | global | link | extern | export
+            | typealias | struct | enum | interface | impl
+            | function | layout       // layout: the web DSL, not covered here
+            | "if" expression ":" toplevel*         // conditional compilation
+              [ "else" ":" toplevel* ] "end"
+\end{shell}
+
+\noindent The order is enforced: \code{package}, imports, includes, constants and
+globals, types (\code{struct}, \code{enum}, \code{type}, \code{interface},
+\code{impl}), and then functions.
+
+\section*{Functions}
+
+\begin{shell}
+function    = modifier* "func" IDENT [ generics ] [ "(" params ")" ]
+                  [ ":" type ] ":"
+                  statement*
+              "end"
+
+modifier    = "pub" | "mut" | "static" | "inline" | "noinline"
+            | "pure" | "noret" | "deprecated"
+
+params      = [ param ( "," param )* ]
+param       = IDENT ( ":" | "&:" ) type [ "=" expression ]
+                                     // "&:" passes by reference;
+                                     // "= expression" is a default value
+
+generics    = "<" typeparam ( "," typeparam )* ">"
+typeparam   = IDENT [ ":" IDENT ]          // optional interface bound
+\end{shell}
+
+\noindent A function with no parameters may leave out the parentheses
+(\code{func main:}). With no \code{": type"} before the block colon, the function
+returns nothing. \code{main} may \code{ret} an \code{int}, the program's exit
+code.
+
+\section*{Types}
+
+\begin{shell}
+type        = basetype dimension* "*"*
+basetype    = "i8" | "i16" | "i32" | "i64"
+            | "u8" | "u16" | "u32" | "u64" | "usize" | "size"
+            | "f32" | "f64"
+            | "bool" | "char" | "uchar" | "str" | "void"
+            | "int" | "uint" | "float"           // short names
+            | IDENT [ "<" type ( "," type )* ">" ]   // struct, enum, generic
+            | IDENT "." IDENT [ "<" ... ">" ]    // a type from a package
+            | "dyn" IDENT                        // dynamic interface
+            | "func" "(" [ type ( "," type )* ] ")" [ type ]   // function type
+dimension   = "[" [ INT ] "]"                    // array; "[]" is a slice
+\end{shell}
+
+\section*{Declarations}
+
+\begin{shell}
+vardecl     = [ "mut" ] IDENT ":=" expression
+const       = "const" IDENT ":=" expression
+global      = [ "pub" ] vardecl | [ "pub" ] const
+typealias   = "type" IDENT "=" type              // another name, same type
+            | "type" IDENT ":" type              // a new distinct type,
+                  function*                      //   with its own methods
+              "end"
+\end{shell}
+
+\noindent A declaration always has a value, and the variable takes its type
+from it; use \code{as} to choose a different one (\code{n := 0 as i64}). The
+\code{name: type} form appears only in parameters and struct fields.
+
+\section*{Statements}
+
+\begin{shell}
+statement   = vardecl | const
+            | assignment
+            | expression                 // e.g. a function or method call
+            | if | switch | until | repeat | each
+            | "break" [ INT ] | "continue"
+            | "ret" [ expression ]
+            | "defer" statement
+            | ( "print" | "println" | "printerr" | "printerrln" ) args
+
+assignment  = lvalue ( "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "**="
+                     | "&=" | "|=" | "^=" | "<<=" | ">>=" ) expression
+            | lvalue ( "++" | "--" )
+lvalue      = IDENT ( "." IDENT | "[" expression "]" )*
+args        = expression ( "," expression )*
+\end{shell}
+
+\section*{Control flow}
+
+\begin{shell}
+if          = "if" expression ":" statement*
+              ( "else" expression ":" statement* )*     // else-if
+              [ "else" ":" statement* ]
+              "end"
+
+until       = "until" expression ":" statement* "end"   // loops WHILE true
+
+repeat      = "repeat" expression [ "to" expression [ "by" expression ] ]
+                  [ "in" IDENT ] ":"
+                  statement*
+              "end"
+
+each        = "each" IDENT [ "," IDENT ] "in" expression ":"
+                  statement*
+              "end"
+
+switch      = "switch" expression ":"
+                  ( label ":" statement* "end" )*       // arms fall through
+                  [ "else" ":" statement* "end" ]
+              "end"
+label       = expression ( "," expression )*
+            | expression "to" expression               // a range
+            | ( ">" | ">=" | "<" | "<=" | "==" | "!=" ) expression
+
+match       = "match" expression ":"
+                  ( pattern ( "," pattern )* [ "if" expression ] ":"
+                        statement* expression "end" )*
+                  [ "else" ":" statement* expression "end" ]
+              "end"
+pattern     = expression                       // a value or enum member
+            | IDENT [ "(" IDENT ( "," IDENT )* ")" ]   // enum member with data
+            | type IDENT                       // a Variant member type
+\end{shell}
+
+\noindent A \code{switch} arm runs on into the next one unless it ends with
+\code{break}. A \code{match} is an expression: each arm gives a value, there is
+no fallthrough, and the arms must cover every case (or end with \code{else}).
+
+\section*{Structs, enums, and interfaces}
+
+\begin{shell}
+struct      = [ "pub" ] "struct" IDENT [ generics ] ":"
+                  ( field | method | [ "pub" ] "use" type )*
+              "end"
+field       = [ "pub" ] IDENT ":" type [ "=" expression ]
+method      = function                       // defined inside the struct body
+
+enum        = [ "pub" ] "enum" IDENT [ generics ] ":"
+                  member ( "," member )* [ "," ]
+              "end"
+member      = IDENT [ "=" ( INT | FLOAT | STRING ) ]
+            | IDENT "(" param ( "," param )* ")"  // a member carrying data
+              // one kind per enum: an int-backed member may omit "=" and
+              // counts on from the previous value; a str- or
+              // float-backed one must always give an explicit value.
+
+interface   = [ "pub" ] "interface" IDENT ":"
+                  ( signature | function )*  // a body makes a default method
+              "end"
+signature   = [ "mut" ] "func" IDENT [ "(" params ")" ] [ ":" type ]
+
+impl        = "impl" IDENT "on" type ":" function* "end"
+\end{shell}
+
+\section*{Expressions (by decreasing precedence)}
+
+\begin{shell}
+primary     = INT | FLOAT | STRING | CHAR | "true" | "false" | "null"
+            | IDENT
+            | IDENT "(" [ args ] ")"             // call
+            | type "{" [ IDENT "=" expression ( "," ... )* ] "}"  // struct literal
+            | "[" [ expression ( "," expression )* ] "]"          // array literal
+            | "(" params ")" ":" statement* "end"                 // lambda
+            | match
+            | "input" expression                 // read a line, after a prompt
+            | "(" expression ")"
+
+postfix     = primary ( "." IDENT [ "(" [ args ] ")" ]   // field / method
+                      | "[" expression "]"               // index
+                      | "[" [ expression ] ":" [ expression ] "]" )*  // slice
+
+unary       = [ "not" | "-" | "~" ] postfix
+power       = unary [ "**" power ]
+cast        = power ( "as" type )*
+product     = cast ( ( "*" | "/" | "%" ) cast )*
+sum         = product ( ( "+" | "-" ) product )*
+shift       = sum ( ( "<<" | ">>" ) sum )*
+compare     = shift ( ( "<" | ">" | "<=" | ">=" | "lt" | "gt" | "lte" | "gte" ) shift )*
+equality    = compare ( ( "==" | "!=" | "eq" | "neq" ) compare )*
+bitand      = equality ( "&" equality )*
+bitxor      = bitand ( "^" bitand )*
+bitor       = bitxor ( "|" bitxor )*
+logic       = bitor ( ( "and" | "or" ) bitor )*
+expression  = logic [ "?" expression ":" expression ]
+\end{shell}
+
+\noindent A lambda never declares its result type; it is inferred from the
+\code{ret}. Lambdas capture the variables they use by value.
+
+\section*{Foreign functions}
+
+\begin{shell}
+link        = "link" ( "dynamic" | "static" | "framework" ) STRING
+extern      = "extern" ":"
+                  ( modifier* "func" IDENT "(" externparams ")" [ ":" type ] )*
+              "end"
+externparams= [ param ( "," param )* [ "," "..." ] ]   // ... = variadic
+export      = "export" ":"
+                  ( [ "deprecated" ] [ "pure" | "noret" ]
+                    "func" IDENT "(" params ")" [ ":" type ] ":"
+                        statement*
+                    "end" )*
+              "end"
+\end{shell}
+
+\section*{Lexical notes}
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \code{IDENT}: a name: a letter or underscore, then letters, digits, or
+        underscores. Unicode (including Persian) letters are allowed, and a
+        name may contain spaces (\code{func is weekend(d: Day)}) as long as no
+        word after the first is a keyword.
+  \item \code{INT}: a whole number (type \code{int} by default), in decimal,
+        hex (\code{0xFF}), binary (\code{0b1010}) or octal (\code{0o17}).
+  \item \code{FLOAT}: a number with a decimal point or exponent (type
+        \code{f64}).
+  \item \code{STRING}: text in double quotes, or triple quotes
+        (\code{"""..."""}) across lines; both support escapes such as
+        \code{\textbackslash n}, \code{\textbackslash t},
+        \code{\textbackslash\textbackslash} and \code{\textbackslash"}.
+        Text in backticks is raw: no escapes, and it may span lines.
+  \item \code{CHAR}: a single character in single quotes; \code{u'...'} holds
+        one Unicode character.
+  \item Comments are \code{//} to end of line, or \code{/* ... */} across lines.
+  \item Blocks open with \code{:} and close with \code{end}; a single-statement
+        branch or body may follow the colon on the same line.
+\end{itemize}

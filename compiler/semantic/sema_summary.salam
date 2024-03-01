@@ -1,0 +1,911 @@
+package semantic
+
+import str
+
+include at "../ast.salam"
+include tok "../token.salam"
+include dg "../diag.salam"
+
+const SU_READ := 0
+const SU_KEEP := 1
+const SU_FREE := 2
+const SU_GROW := 3
+const SU_RET := 4
+const SU_ALIAS := 5
+
+func su_call_decl(s &: Sema, call: int): int:
+    if call <= 0 or not s.call_decl.has(call):
+        ret 0
+    end
+    ret s.call_decl.get(call)
+end
+
+func su_fn_idx(s &: Sema, decl: int): int:
+    if decl == 0 or not s.own_idx.has(decl):
+        ret 0 - 1
+    end
+    ret s.own_idx.get(decl)
+end
+
+func su_np(s &: Sema, fi: int): int:
+    ret s.sum_np.get(fi)
+end
+
+func su_flag(v: Vector<bool>, s &: Sema, fi: int, slot: int): bool:
+    if slot < 0 or slot >= s.sum_np.get(fi):
+        ret true
+    end
+    ret v.get(s.sum_off.get(fi) + slot)
+end
+
+func su_par_build(a &: at.Ast, nid: int, parent: int, pm &: HashMap<int, int>):
+    if nid == 0:
+        ret
+    end
+    pm.put(nid, parent)
+    na := at.At(a, nid).a
+    nb := at.At(a, nid).b
+    nc := at.At(a, nid).c
+    nd := at.At(a, nid).d
+    su_par_build(a, na, nid, pm)
+    su_par_build(a, nb, nid, pm)
+    su_par_build(a, nc, nid, pm)
+    su_par_build(a, nd, nid, pm)
+    repeat at.ChildCount(a, nid) in i:
+        su_par_build(a, at.Child(a, nid, i), nid, pm)
+    end
+end
+
+func su_parent(pm &: HashMap<int, int>, nid: int): int:
+    if not pm.has(nid):
+        ret 0
+    end
+    ret pm.get(nid)
+end
+
+func su_in_lambda(a &: at.Ast, pm &: HashMap<int, int>, nid: int): bool:
+    mut cur := su_parent(pm, nid)
+    until cur != 0:
+        if at.KindOf(a, cur) == at.AST_LAMBDA:
+            ret true
+        end
+        cur = su_parent(pm, cur)
+    end
+    ret false
+end
+
+func su_is_mem_call(s &: Sema, a &: at.Ast, call: int, name: str): bool:
+    callee := at.At(a, call).a
+    if callee == 0 or at.KindOf(a, callee) != at.AST_MEMBER:
+        ret false
+    end
+    ret str.Equals(at.At(a, callee).name, name) and ow_is_mem_pkg(s, a, at.At(a, callee).a)
+end
+
+func su_extern_reader(name: str): bool:
+    ret str.Equals(name, "memcpy") or str.Equals(name, "memmove") or str.Equals(name, "memset") or str.Equals(name, "memcmp") or str.Equals(name, "strlen") or str.Equals(name, "strcmp") or str.Equals(name, "strncmp") or str.Equals(name, "strchr") or str.Equals(name, "strstr")
+end
+
+func su_extern_ret_alias(name: str): bool:
+    ret str.Equals(name, "memcpy") or str.Equals(name, "memmove") or str.Equals(name, "memset") or str.Equals(name, "strchr") or str.Equals(name, "strstr")
+end
+
+func su_arg_effect(s &: Sema, a &: at.Ast, call: int, slot: int): int:
+    d := su_call_decl(s, call)
+    if d == 0:
+        ret SU_KEEP
+    end
+    fi := su_fn_idx(s, d)
+    if fi < 0:
+        if at.At(a, d).a == 0 and su_extern_reader(at.At(a, d).name):
+            ret SU_READ
+        end
+        ret SU_KEEP
+    end
+    if slot >= su_np(s, fi):
+        ret SU_KEEP
+    end
+    if su_flag(s.sp_free, s, fi, slot):
+        ret SU_FREE
+    end
+    if su_flag(s.sp_keep, s, fi, slot):
+        ret SU_KEEP
+    end
+    if su_flag(s.sp_grow, s, fi, slot):
+        ret SU_GROW
+    end
+    ret SU_READ
+end
+
+func su_classify0(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, id: int, decl_out &: int): int:
+    mut cur := id
+    mut steps := 0
+    until steps < 64:
+        steps += 1
+        p := su_parent(pm, cur)
+        if p == 0:
+            ret SU_READ
+        end
+        k := at.KindOf(a, p)
+        if k == at.AST_CAST:
+            cur = p
+            continue
+        end
+        if k == at.AST_BINARY:
+            op := at.At(a, p).op
+            pts := at.At(a, p).type_str
+            if (op == tok.TK_PLUS or op == tok.TK_MINUS) and not str.Equals(pts, "str") and not str.Equals(pts, "bool"):
+                cur = p
+                continue
+            end
+            ret SU_READ
+        end
+        if k == at.AST_TERNARY:
+            if at.At(a, p).a == cur:
+                ret SU_READ
+            end
+            cur = p
+            continue
+        end
+        if k == at.AST_INDEX or k == at.AST_EXPR_STMT or k == at.AST_IF or k == at.AST_UNTIL or k == at.AST_FOR or k == at.AST_SWITCH or k == at.AST_CASE_ITEM or k == at.AST_REPEAT:
+            ret SU_READ
+        end
+        if k == at.AST_MATCH:
+            if at.At(a, p).a == cur:
+                ret SU_READ
+            end
+            ret SU_KEEP
+        end
+        if k == at.AST_RETURN:
+            ret SU_RET
+        end
+        if (k == at.AST_VAR_DECL or k == at.AST_CONST_DECL) and at.At(a, p).a == cur:
+            decl_out = p
+            ret SU_ALIAS
+        end
+        if k == at.AST_ASSIGN:
+            if at.At(a, p).a == cur:
+                ret SU_READ
+            end
+            ret SU_KEEP
+        end
+        if k == at.AST_MEMBER:
+            if at.At(a, p).a != cur:
+                ret SU_READ
+            end
+            mut top := p
+            mut climb := true
+            until climb:
+                q := su_parent(pm, top)
+                if q != 0 and at.KindOf(a, q) == at.AST_MEMBER and at.At(a, q).a == top:
+                    top = q
+                else:
+                    climb = false
+                end
+            end
+            q2 := su_parent(pm, top)
+            if q2 != 0 and at.KindOf(a, q2) == at.AST_CALL and at.At(a, q2).a == top:
+                recv := at.At(a, top).a
+                rts := at.At(a, recv).type_str
+                mn := at.At(a, top).name
+                deep := recv != cur
+                if ow_is_container(rts):
+                    if str.Equals(mn, "free"):
+                        ret deep ? SU_GROW : SU_FREE
+                    end
+                    if ow_is_grow(mn, rts):
+                        ret SU_GROW
+                    end
+                    if str.Equals(mn, "ref") or str.Equals(mn, "iter"):
+                        cur = q2
+                        continue
+                    end
+                    ret SU_READ
+                end
+                if str.StartsWith(rts, "dyn ") and str.Equals(mn, "free"):
+                    ret deep ? SU_GROW : SU_FREE
+                end
+                if str.Equals(rts, "str") or str.Equals(rts, "uchar"):
+                    ret SU_READ
+                end
+                me := su_arg_effect(s, a, q2, 0)
+                if me == SU_KEEP and deep:
+                    ret SU_READ
+                end
+                if me == SU_FREE and deep:
+                    ret SU_GROW
+                end
+                ret me
+            end
+            if ow_is_container(at.At(a, cur).type_str):
+                q3 := su_parent(pm, top)
+                if not (q3 != 0 and at.KindOf(a, q3) == at.AST_ASSIGN and at.At(a, q3).a == top):
+                    cur = top
+                    continue
+                end
+            end
+            ret SU_READ
+        end
+        if k == at.AST_CALL:
+            if at.At(a, p).a == cur:
+                ret SU_READ
+            end
+            mut ai := 0 - 1
+            repeat at.ChildCount(a, p) in i:
+                if at.Child(a, p, i) == cur:
+                    ai = i
+                end
+            end
+            if ai < 0:
+                ret SU_KEEP
+            end
+            if sf_is_print(a, at.At(a, p).a):
+                ret SU_READ
+            end
+            if su_is_mem_call(s, a, p, "Free"):
+                ret SU_FREE
+            end
+            xd := su_call_decl(s, p)
+            if ai == 0 and xd != 0 and at.At(a, xd).a == 0 and su_extern_ret_alias(at.At(a, xd).name):
+                gp := su_parent(pm, p)
+                if gp != 0 and at.KindOf(a, gp) != at.AST_EXPR_STMT:
+                    cur = p
+                    continue
+                end
+            end
+            ret su_arg_effect(s, a, p, ai + 1)
+        end
+        ret SU_KEEP
+    end
+    ret SU_KEEP
+end
+
+func su_root(pm &: HashMap<int, int>, id: int): int:
+    mut cur := id
+    mut p := su_parent(pm, cur)
+    until p != 0:
+        cur = p
+        p = su_parent(pm, cur)
+    end
+    ret cur
+end
+
+func su_classify_d(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, id: int, depth: int): int:
+    mut d := 0
+    c := su_classify0(s, a, pm, id, d)
+    if c != SU_ALIAS:
+        ret c
+    end
+    if depth >= 3 or d == 0:
+        ret SU_KEEP
+    end
+    name := at.At(a, d).name
+    if str.Len(name) == 0:
+        ret SU_KEEP
+    end
+    body := su_root(pm, id)
+    mut decls := Vector {} as Vector<int>
+    su_collect_kind(a, body, at.AST_VAR_DECL, decls)
+    mut cnt := 0
+    repeat decls.len() in i:
+        if str.Equals(at.At(a, decls.get(i)).name, name):
+            cnt += 1
+        end
+    end
+    decls.free()
+    if cnt != 1:
+        ret SU_KEEP
+    end
+    mut refs := Vector {} as Vector<int>
+    su_collect_refs(a, body, name, refs)
+    mut worst := SU_READ
+    repeat refs.len() in j:
+        r := refs.get(j)
+        if su_in_lambda(a, pm, r):
+            worst = SU_KEEP
+            break
+        end
+        c2 := su_classify_d(s, a, pm, r, depth + 1)
+        if c2 == SU_KEEP or c2 == SU_RET:
+            worst = SU_KEEP
+            break
+        end
+        if c2 == SU_GROW:
+            worst = SU_KEEP
+            break
+        end
+        if c2 == SU_FREE:
+            worst = SU_FREE
+        end
+    end
+    refs.free()
+    ret worst
+end
+
+func su_classify(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, id: int): int:
+    ret su_classify_d(s, a, pm, id, 0)
+end
+
+func su_collect_refs_in(a &: at.Ast, nid: int, name: str, want_this: bool, out &: Vector<int>):
+    if nid == 0:
+        ret
+    end
+    n := at.At(a, nid)
+    if want_this:
+        if n.kind == at.AST_THIS:
+            out.push(nid)
+        end
+    else n.kind == at.AST_IDENTIFIER and str.Equals(n.name, name):
+        out.push(nid)
+    end
+    su_collect_refs_in(a, n.a, name, want_this, out)
+    su_collect_refs_in(a, n.b, name, want_this, out)
+    su_collect_refs_in(a, n.c, name, want_this, out)
+    su_collect_refs_in(a, n.d, name, want_this, out)
+    repeat n.list.len() in i:
+        su_collect_refs_in(a, n.list.get(i), name, want_this, out)
+    end
+end
+
+func su_collect_refs(a &: at.Ast, nid: int, name: str, out &: Vector<int>):
+    su_collect_refs_in(a, nid, name, str.Equals(name, "this"), out)
+end
+
+func su_collect_kind(a &: at.Ast, nid: int, kind: int, out &: Vector<int>):
+    if nid == 0:
+        ret
+    end
+    k := at.KindOf(a, nid)
+    if k == at.AST_LAMBDA:
+        ret
+    end
+    if k == kind:
+        out.push(nid)
+    end
+    na := at.At(a, nid).a
+    nb := at.At(a, nid).b
+    nc := at.At(a, nid).c
+    nd := at.At(a, nid).d
+    su_collect_kind(a, na, kind, out)
+    su_collect_kind(a, nb, kind, out)
+    su_collect_kind(a, nc, kind, out)
+    su_collect_kind(a, nd, kind, out)
+    repeat at.ChildCount(a, nid) in i:
+        su_collect_kind(a, at.Child(a, nid, i), kind, out)
+    end
+end
+
+func su_call_fresh(s &: Sema, a &: at.Ast, call: int): bool:
+    if not s.sum_ready or call == 0 or at.KindOf(a, call) != at.AST_CALL:
+        ret false
+    end
+    callee := at.At(a, call).a
+    if callee != 0 and at.KindOf(a, callee) == at.AST_MEMBER:
+        mn := at.At(a, callee).name
+        if su_is_mem_call(s, a, call, "Allocate") or su_is_mem_call(s, a, call, "AllocateZeroed"):
+            ret true
+        end
+        rts := at.At(a, at.At(a, callee).a).type_str
+        if str.Equals(rts, "str") and (str.Equals(mn, "substr") or str.Equals(mn, "concat")):
+            ret true
+        end
+    end
+
+    fi := su_fn_idx(s, su_call_decl(s, call))
+    if fi < 0:
+        ret false
+    end
+    ret s.sum_fresh.get(fi)
+end
+
+func su_fresh_expr(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, body: int, e: int, depth: int): bool:
+    if e == 0 or depth > 8:
+        ret false
+    end
+    k := at.KindOf(a, e)
+    if k == at.AST_CAST:
+        ret su_fresh_expr(s, a, pm, body, at.At(a, e).a, depth + 1)
+    end
+    if k == at.AST_BINARY:
+        ret at.At(a, e).op == tok.TK_PLUS and str.Equals(at.At(a, e).type_str, "str")
+    end
+    if k == at.AST_STRUCT_LIT:
+        ret sf_cont_kind(at.At(a, e).type_str) != 0 and sf_empty_lit(a, e)
+    end
+    if k == at.AST_CALL:
+        ret su_call_fresh(s, a, e)
+    end
+    if k == at.AST_TERNARY:
+        ret su_fresh_expr(s, a, pm, body, at.At(a, e).b, depth + 1) and su_fresh_expr(s, a, pm, body, at.At(a, e).c, depth + 1)
+    end
+    if k == at.AST_IDENTIFIER:
+        ret su_local_fresh(s, a, pm, body, at.At(a, e).name, depth + 1)
+    end
+    ret false
+end
+
+func su_local_fresh(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, body: int, name: str, depth: int): bool:
+    if depth > 8 or str.Len(name) == 0:
+        ret false
+    end
+    mut decls := Vector {} as Vector<int>
+    su_collect_kind(a, body, at.AST_VAR_DECL, decls)
+    mut found := 0
+    mut init := 0
+    repeat decls.len() in i:
+        if str.Equals(at.At(a, decls.get(i)).name, name):
+            found += 1
+            init = at.At(a, decls.get(i)).a
+        end
+    end
+    decls.free()
+    if found != 1 or not su_fresh_expr(s, a, pm, body, init, depth + 1):
+        ret false
+    end
+    mut refs := Vector {} as Vector<int>
+    su_collect_refs(a, body, name, refs)
+    mut ok := true
+    repeat refs.len() in j:
+        r := refs.get(j)
+        if su_in_lambda(a, pm, r):
+            ok = false
+            break
+        end
+        mut c := su_classify(s, a, pm, r)
+        if c == SU_GROW and sf_cont_kind(at.At(a, r).type_str) != 0:
+            c = SU_READ
+        end
+        if c == SU_READ or c == SU_RET:
+            p := su_parent(pm, r)
+            if c == SU_READ and p != 0 and at.KindOf(a, p) == at.AST_ASSIGN and at.At(a, p).a == r:
+                if at.At(a, p).op != tok.TK_ASSIGN or not su_fresh_expr(s, a, pm, body, at.At(a, p).b, depth + 1):
+                    ok = false
+                    break
+                end
+            end
+        else:
+            ok = false
+            break
+        end
+    end
+    refs.free()
+    ret ok
+end
+
+func su_set(v &: Vector<bool>, s &: Sema, fi: int, slot: int): bool:
+    idx := s.sum_off.get(fi) + slot
+    if v.get(idx):
+        ret false
+    end
+    v.set(idx, true)
+    ret true
+end
+
+func su_stmt_frees(s &: Sema, a &: at.Ast, st: int, name: str, is_this: bool, by_value: bool): bool:
+    mut e := st
+    if e != 0 and at.KindOf(a, e) == at.AST_EXPR_STMT:
+        e = at.At(a, e).a
+    end
+    if e == 0 or at.KindOf(a, e) != at.AST_CALL:
+        ret false
+    end
+    callee := at.At(a, e).a
+    if callee == 0:
+        ret false
+    end
+    if su_is_mem_call(s, a, e, "Free") and at.ChildCount(a, e) == 1:
+        r := ow_strip_cast(a, at.Child(a, e, 0))
+        ret r != 0 and at.KindOf(a, r) == at.AST_IDENTIFIER and not is_this and str.Equals(at.At(a, r).name, name)
+    end
+    if at.KindOf(a, callee) == at.AST_MEMBER and str.Equals(at.At(a, callee).name, "free") and at.ChildCount(a, e) == 0:
+        r2 := at.At(a, callee).a
+        rts := at.At(a, r2).type_str
+        if not str.StartsWith(rts, "dyn ") and not (by_value and ow_is_container(rts)):
+            ret false
+        end
+        if is_this:
+            ret at.KindOf(a, r2) == at.AST_THIS
+        end
+        ret at.KindOf(a, r2) == at.AST_IDENTIFIER and str.Equals(at.At(a, r2).name, name)
+    end
+    d := su_call_decl(s, e)
+    fi := su_fn_idx(s, d)
+    if fi < 0:
+        ret false
+    end
+    repeat at.ChildCount(a, e) in i:
+        arg := ow_strip_cast(a, at.Child(a, e, i))
+        if arg != 0 and at.KindOf(a, arg) == at.AST_IDENTIFIER and not is_this and str.Equals(at.At(a, arg).name, name):
+            if i + 1 < su_np(s, fi) and s.sp_mfree.get(s.sum_off.get(fi) + i + 1):
+                ret true
+            end
+        end
+    end
+    ret false
+end
+
+func su_must_free(s &: Sema, a &: at.Ast, fnid: int, name: str, is_this: bool, by_value: bool): bool:
+    body := at.At(a, fnid).a
+    if body == 0 or at.KindOf(a, body) != at.AST_BLOCK:
+        ret false
+    end
+    repeat at.ChildCount(a, body) in i:
+        st := at.Child(a, body, i)
+        if su_stmt_frees(s, a, st, name, is_this, by_value):
+            ret true
+        end
+        mut rets := Vector {} as Vector<int>
+        su_collect_kind(a, st, at.AST_RETURN, rets)
+        has_ret := rets.len() > 0
+        rets.free()
+        if has_ret:
+            ret false
+        end
+        if st != 0 and at.KindOf(a, st) == at.AST_ASSIGN:
+            lhs_n := at.At(a, st).a
+            if lhs_n != 0 and at.KindOf(a, lhs_n) == at.AST_IDENTIFIER and str.Equals(at.At(a, lhs_n).name, name):
+                ret false
+            end
+        end
+    end
+    ret false
+end
+
+func su_gf_merge(cur: str, add: str): str:
+    if str.Equals(cur, "*") or str.Len(add) == 0:
+        ret cur
+    end
+    if str.Equals(add, "*"):
+        ret "*"
+    end
+    mut out := cur
+    mut parts := str.Split(add, ",")
+    repeat parts.len() in i:
+        f := parts.get(i)
+        if str.Len(f) > 0 and not str.Contains(out, "," + f + ","):
+            out = str.Len(out) == 0 ? "," + f + "," : out + f + ","
+        end
+    end
+    parts.free()
+    ret out
+end
+
+func su_grow_field(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, r: int): str:
+    p := su_parent(pm, r)
+    if p == 0:
+        ret "*"
+    end
+    k := at.KindOf(a, p)
+    if k == at.AST_MEMBER and at.At(a, p).a == r:
+        q := su_parent(pm, p)
+        if q != 0 and at.KindOf(a, q) == at.AST_CALL and at.At(a, q).a == p:
+            ret "*"
+        end
+        ret "," + at.At(a, p).name + ","
+    end
+    if k == at.AST_CALL and at.At(a, p).a != r:
+        fi := su_fn_idx(s, su_call_decl(s, p))
+        if fi < 0:
+            ret "*"
+        end
+        repeat at.ChildCount(a, p) in i:
+            if at.Child(a, p, i) == r and i + 1 < su_np(s, fi):
+                g := s.sp_gf.get(s.sum_off.get(fi) + i + 1)
+                ret str.Len(g) == 0 ? "*" : g
+            end
+        end
+    end
+    ret "*"
+end
+
+func su_analyze(s &: Sema, a &: at.Ast, fi: int): bool:
+    fnid := s.own_fns.get(fi)
+    body := at.At(a, fnid).a
+    mut changed := false
+    mut pm := HashMap {} as HashMap<int, int>
+    su_par_build(a, body, 0, pm)
+    np := su_np(s, fi)
+    repeat np in slot:
+        mut name := "this"
+        if slot > 0:
+            name = at.At(a, at.Child(a, fnid, slot - 1)).name
+        end
+        mut refs := Vector {} as Vector<int>
+        su_collect_refs(a, body, name, refs)
+        repeat refs.len() in j:
+            r := refs.get(j)
+            mut c := su_classify(s, a, pm, r)
+            if su_in_lambda(a, pm, r):
+                c = SU_KEEP
+            end
+            if slot > 0 and at.At(a, at.Child(a, fnid, slot - 1)).is_ref:
+                rp0 := su_parent(pm, r)
+                if rp0 != 0 and at.KindOf(a, rp0) == at.AST_ASSIGN and at.At(a, rp0).a == r:
+                    c = SU_KEEP
+                end
+            end
+            if c == SU_KEEP or c == SU_RET:
+                if su_set(s.sp_keep, s, fi, slot):
+                    changed = true
+                end
+            else c == SU_FREE:
+                if su_set(s.sp_free, s, fi, slot):
+                    changed = true
+                end
+                byv := slot > 0 and not at.At(a, at.Child(a, fnid, slot - 1)).is_ref
+                if su_must_free(s, a, fnid, name, slot == 0, byv) and su_set(s.sp_mfree, s, fi, slot):
+                    changed = true
+                end
+            else c == SU_GROW:
+                if su_set(s.sp_grow, s, fi, slot):
+                    changed = true
+                end
+                gi := s.sum_off.get(fi) + slot
+                ng := su_gf_merge(s.sp_gf.get(gi), su_grow_field(s, a, pm, r))
+                if not str.Equals(ng, s.sp_gf.get(gi)):
+                    s.sp_gf.set(gi, ng)
+                    changed = true
+                end
+            end
+        end
+        refs.free()
+    end
+    if s.sum_fresh.get(fi):
+        mut rets := Vector {} as Vector<int>
+        su_collect_kind(a, body, at.AST_RETURN, rets)
+        mut fresh := rets.len() > 0
+        repeat rets.len() in q:
+            e := at.At(a, rets.get(q)).a
+            if e == 0 or not (str.Equals(at.At(a, e).type_str, "str") or sf_cont_kind(at.At(a, e).type_str) != 0) or not su_fresh_expr(s, a, pm, body, e, 0):
+                fresh = false
+                break
+            end
+        end
+        rets.free()
+        if not fresh:
+            s.sum_fresh.set(fi, false)
+            changed = true
+        end
+    end
+    pm.free()
+    ret changed
+end
+
+func su_chain_of(a &: at.Ast, nid: int, names &: Vector<str>): int:
+    mut cur := nid
+    mut rev := Vector {} as Vector<str>
+    mut root := 0
+    until cur != 0:
+        k := at.KindOf(a, cur)
+        if k == at.AST_CAST:
+            cur = at.At(a, cur).a
+        else k == at.AST_MEMBER:
+            rev.push(at.At(a, cur).name)
+            cur = at.At(a, cur).a
+        else k == at.AST_IDENTIFIER or k == at.AST_THIS:
+            root = cur
+            cur = 0
+        else:
+            cur = 0
+        end
+    end
+    mut i := rev.len()
+    until i > 0:
+        i -= 1
+        names.push(rev.get(i))
+    end
+    rev.free()
+    ret root
+end
+
+func su_slot_of(a &: at.Ast, fnid: int, root: int): int:
+    if root == 0:
+        ret 0 - 1
+    end
+    if at.KindOf(a, root) == at.AST_THIS:
+        ret 0
+    end
+    nm := at.At(a, root).name
+    repeat at.ChildCount(a, fnid) in i:
+        ch := at.Child(a, fnid, i)
+        if ch != 0 and at.KindOf(a, ch) == at.AST_PARAM and str.Equals(at.At(a, ch).name, nm):
+            ret i + 1
+        end
+    end
+    ret 0 - 1
+end
+
+func su_alias(s &: Sema, a &: at.Ast, fi: int):
+    fnid := s.own_fns.get(fi)
+    body := at.At(a, fnid).a
+    mut rets := Vector {} as Vector<int>
+    su_collect_kind(a, body, at.AST_RETURN, rets)
+    mut slot := 0 - 1
+    mut chain := ""
+    mut isref := false
+    mut ok := rets.len() > 0
+    repeat rets.len() in q:
+        if not ok:
+            break
+        end
+        e := at.At(a, rets.get(q)).a
+        if e == 0 or not str.EndsWith(at.At(a, e).type_str, "*"):
+            ok = false
+            break
+        end
+        mut base := e
+        mut r := false
+        if at.KindOf(a, e) == at.AST_CALL:
+            cal := at.At(a, e).a
+            if cal != 0 and at.KindOf(a, cal) == at.AST_MEMBER and str.Equals(at.At(a, cal).name, "ref") and ow_is_container(at.At(a, at.At(a, cal).a).type_str):
+                base = at.At(a, cal).a
+                r = true
+            else:
+                ok = false
+                break
+            end
+        end
+        mut names := Vector {} as Vector<str>
+        root := su_chain_of(a, base, names)
+        sl := su_slot_of(a, fnid, root)
+        mut joined := ""
+        repeat names.len() in ni:
+            joined = ni == 0 ? names.get(ni) : joined + "." + names.get(ni)
+        end
+        names.free()
+        if sl < 0:
+            ok = false
+            break
+        end
+        if q == 0:
+            slot = sl
+            chain = joined
+            isref = r
+        else sl != slot or not str.Equals(joined, chain) or r != isref:
+            ok = false
+            break
+        end
+    end
+    rets.free()
+    if not ok:
+        slot = 0 - 1
+    end
+    s.sum_ralias.set(fi, slot)
+    s.sum_rchain.set(fi, chain)
+    s.sum_rref.set(fi, isref)
+end
+
+func su_infer(s &: Sema, a &: at.Ast):
+    s.sum_fresh.clear()
+    s.sum_off.clear()
+    s.sum_np.clear()
+    s.sp_keep.clear()
+    s.sp_free.clear()
+    s.sp_grow.clear()
+    s.sp_mfree.clear()
+    s.sp_gf.clear()
+    s.sum_ralias.clear()
+    s.sum_rchain.clear()
+    s.sum_rref.clear()
+    repeat s.own_fns.len() in i:
+        fnid := s.own_fns.get(i)
+        mut np := 1
+        repeat at.ChildCount(a, fnid) in c:
+            ch := at.Child(a, fnid, c)
+            if ch != 0 and at.KindOf(a, ch) == at.AST_PARAM:
+                np += 1
+            end
+        end
+        s.sum_off.push(s.sp_keep.len())
+        s.sum_np.push(np)
+        repeat np:
+            s.sp_keep.push(false)
+            s.sp_free.push(false)
+            s.sp_grow.push(false)
+            s.sp_mfree.push(false)
+            s.sp_gf.push("")
+        end
+        s.sum_fresh.push(true)
+        s.sum_ralias.push(0 - 1)
+        s.sum_rchain.push("")
+        s.sum_rref.push(false)
+    end
+    repeat s.own_fns.len() in ai:
+        su_alias(s, a, ai)
+    end
+    s.sum_ready = true
+    mut rounds := 0
+    mut changed := true
+    limit := s.own_fns.len() + 30
+    until changed and rounds < limit:
+        changed = false
+        rounds += 1
+        repeat s.own_fns.len() in f:
+            if su_analyze(s, a, f):
+                changed = true
+            end
+        end
+    end
+    if changed:
+        repeat s.sum_fresh.len() in z:
+            s.sum_fresh.set(z, false)
+        end
+        repeat s.sp_keep.len() in z2:
+            s.sp_keep.set(z2, true)
+            s.sp_mfree.set(z2, false)
+            s.sp_gf.set(z2, "*")
+        end
+    end
+end
+
+pub func SemaOwnRegister(s &: Sema, fnid: int):
+    if fnid == 0 or s.requal or s.own_idx.has(fnid):
+        ret
+    end
+    s.own_idx.put(fnid, s.own_fns.len())
+    s.own_fns.push(fnid)
+    s.own_glob.push(s.global)
+    s.own_file.push(s.file)
+    s.own_derive.push(s.in_derive)
+end
+
+pub func SemaOwnPost(s &: Sema, a &: at.Ast):
+    if g_sm_ownership == 0 or dg.ErrorCount(s.diag) > 0 or s.own_fns.len() <= s.own_done:
+        ret
+    end
+    su_infer(s, a)
+    saved_file := s.file
+    saved_global := s.global
+    saved_derive := s.in_derive
+    start := s.own_done
+    total := s.own_fns.len()
+    s.own_done = total
+    mut i := start
+    until i < total:
+        s.file = s.own_file.get(i)
+        s.global = s.own_glob.get(i)
+        s.in_derive = s.own_derive.get(i)
+        SemaCheckOwnership(s, a, s.own_fns.get(i))
+        i += 1
+    end
+    if dg.ErrorCount(s.diag) == 0:
+        mut j := start
+        until j < total:
+            s.file = s.own_file.get(j)
+            s.global = s.own_glob.get(j)
+            s.in_derive = s.own_derive.get(j)
+            SemaAutoFreeStrings(s, a, s.own_fns.get(j))
+            j += 1
+        end
+    end
+    s.file = saved_file
+    s.global = saved_global
+    s.in_derive = saved_derive
+end
+
+pub func SuCallFresh(s &: Sema, a &: at.Ast, call: int): bool:
+    ret su_call_fresh(s, a, call)
+end
+
+pub func SuArgMustFree(s &: Sema, call: int, slot: int): bool:
+    if not s.sum_ready:
+        ret false
+    end
+    fi := su_fn_idx(s, su_call_decl(s, call))
+    if fi < 0 or slot < 0 or slot >= su_np(s, fi):
+        ret false
+    end
+    ret s.sp_mfree.get(s.sum_off.get(fi) + slot)
+end
+
+pub func SuGrowFields(s &: Sema, call: int, slot: int): str:
+    if not s.sum_ready:
+        ret "*"
+    end
+    fi := su_fn_idx(s, su_call_decl(s, call))
+    if fi < 0 or slot < 0 or slot >= su_np(s, fi):
+        ret "*"
+    end
+    g := s.sp_gf.get(s.sum_off.get(fi) + slot)
+    ret str.Len(g) == 0 ? "*" : g
+end

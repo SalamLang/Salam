@@ -1,0 +1,365 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import filepath
+import mem
+
+const _RAR4_SIG_LEN := 7
+const _RAR5_SIG_LEN := 8
+
+func _rar4_sig_match(p: void*, n: int): bool:
+    if n < _RAR4_SIG_LEN: ret false end
+    bp := p as u8*
+    ret bp[0] as int == 0x52 and bp[1] as int == 0x61 and bp[2] as int == 0x72 and bp[3] as int == 0x21 and bp[4] as int == 0x1a and bp[5] as int == 0x07 and bp[6] as int == 0x00
+end
+
+func _rar5_sig_match(p: void*, n: int): bool:
+    if n < _RAR5_SIG_LEN: ret false end
+    bp := p as u8*
+    ret bp[0] as int == 0x52 and bp[1] as int == 0x61 and bp[2] as int == 0x72 and bp[3] as int == 0x21 and bp[4] as int == 0x1a and bp[5] as int == 0x07 and bp[6] as int == 0x01 and bp[7] as int == 0x00
+end
+
+func _rar_bytes_to_str(p: void*, off: int, n: int): str:
+    mut buf := compress.NewByteBuf()
+    compress.BufPushBytes(buf, ((p as i64) + (off as i64)) as void*, n)
+    s := compress.BufToStrUnsafe(buf)
+    compress.BufFree(buf)
+    ret s
+end
+
+func _rar_free_name(s: str):
+    if s.len() > 0:
+        mem.Free(s as void*)
+    end
+end
+
+func _rar4_read_file_fields(p: void*, block_start: int, pack_size_out &: int, unp_size_out &: int, method_out &: int, flags_out &: int, name_out &: str): int:
+    bp := p as u8*
+    flags_out = (bp[block_start + 3] as int) | ((bp[block_start + 4] as int) << 8)
+    head_size := (bp[block_start + 5] as int) | ((bp[block_start + 6] as int) << 8)
+    f := block_start + 7
+    pack_size_out = LEGet32(p, f)
+    unp_size_out = LEGet32(p, f + 4)
+    method_out = bp[f + 18] as int
+    name_size := LEGet16(p, f + 19)
+    name_off := f + 25
+    name_out = _rar_bytes_to_str(p, name_off, name_size)
+    ret head_size
+end
+
+func _rar5_vint(p: void*, pos: int, len_out &: int): i64:
+    bp := p as u8*
+    mut result := 0 as i64
+    mut shift := 0
+    mut i := 0
+    until i < 10:
+        b := bp[pos + i] as int
+        result = result | (((b & 0x7f) as i64) << shift)
+        i += 1
+        if (b & 0x80) == 0:
+            len_out = i
+            ret result
+        end
+        shift += 7
+    end
+    len_out = i
+    ret result
+end
+
+func _rar5_parse_block(p: void*, block_start: int, n: int, header_type_out &: int, total_size_out &: int, is_dir_out &: bool, unp_size_out &: int, method_out &: int, name_out &: str, data_offset_out &: int, data_size_out &: int): bool:
+    if block_start + 5 > n:
+        ret false
+    end
+    mut hsize_len := 0
+    hsize := _rar5_vint(p, block_start + 4, hsize_len) as int
+    header_data_start := block_start + 4 + hsize_len
+    if header_data_start + hsize > n:
+        ret false
+    end
+
+    mut cur := header_data_start
+    mut vlen := 0
+    header_type := _rar5_vint(p, cur, vlen) as int
+    cur += vlen
+    header_flags := _rar5_vint(p, cur, vlen) as int
+    cur += vlen
+
+    if (header_flags & 0x01) != 0:
+        _extra_size := _rar5_vint(p, cur, vlen)
+        cur += vlen
+    end
+    mut data_size := 0
+    if (header_flags & 0x02) != 0:
+        data_size = _rar5_vint(p, cur, vlen) as int
+        cur += vlen
+    end
+
+    header_type_out = header_type
+    data_size_out = data_size
+    is_dir_out = false
+    unp_size_out = 0
+    method_out = 0
+    name_out = ""
+    data_offset_out = header_data_start + hsize
+
+    if header_type == 2 or header_type == 3:
+        file_flags := _rar5_vint(p, cur, vlen) as int
+        cur += vlen
+        unp_size := _rar5_vint(p, cur, vlen) as int
+        cur += vlen
+        _attr := _rar5_vint(p, cur, vlen)
+        cur += vlen
+        if (file_flags & 0x02) != 0:
+            cur += 4
+        end
+        if (file_flags & 0x04) != 0:
+            cur += 4
+        end
+        compinfo := _rar5_vint(p, cur, vlen) as int
+        cur += vlen
+        _host_os := _rar5_vint(p, cur, vlen)
+        cur += vlen
+        name_size := _rar5_vint(p, cur, vlen) as int
+        cur += vlen
+        name_out = _rar_bytes_to_str(p, cur, name_size)
+
+        is_dir_out = (file_flags & 0x01) != 0
+        unp_size_out = unp_size
+        method_out = (compinfo >> 7) & 7
+    end
+
+    total_size_out = (header_data_start - block_start) + hsize + data_size
+    ret true
+end
+
+func _rar4_list(p: void*, n: int, out &: Vector<Entry>):
+    bp := p as u8*
+    mut pos := _RAR4_SIG_LEN
+    until pos + 7 <= n:
+        head_type := bp[pos + 2] as int
+        head_size := (bp[pos + 5] as int) | ((bp[pos + 6] as int) << 8)
+        if head_size < 7:
+            break
+        end
+        if head_type == 0x7b:
+            break
+        end
+        if head_type == 0x74:
+            mut pack_size := 0
+            mut unp_size := 0
+            mut method := 0
+            mut flags := 0
+            mut name := ""
+            _rar4_read_file_fields(p, pos, pack_size, unp_size, method, flags, name)
+            e := Entry {
+                name = name
+                size = unp_size as i64
+                compressed_size = pack_size as i64
+                is_dir = false
+                method = method
+                crc32 = 0 as u32
+                mtime = 0 as i64
+            }
+            out.push(e)
+            pos += head_size + pack_size
+        else:
+            pos += head_size
+        end
+    end
+end
+
+func _rar5_list(p: void*, n: int, out &: Vector<Entry>):
+    mut pos := _RAR5_SIG_LEN
+    until pos < n:
+        mut header_type := 0
+        mut total_size := 0
+        mut is_dir := false
+        mut unp_size := 0
+        mut method := 0
+        mut name := ""
+        mut data_offset := 0
+        mut data_size := 0
+        good := _rar5_parse_block(p, pos, n, header_type, total_size, is_dir, unp_size, method, name, data_offset, data_size)
+        if good and total_size > 0 and header_type == 2 and name.len() > 0:
+            e := Entry {
+                name = name
+                size = unp_size as i64
+                compressed_size = data_size as i64
+                is_dir = is_dir
+                method = method
+                crc32 = 0 as u32
+                mtime = 0 as i64
+            }
+            out.push(e)
+        else:
+            _rar_free_name(name)
+        end
+        if not good or total_size <= 0:
+            break
+        end
+        if header_type == 5:
+            break
+        end
+        pos += total_size
+    end
+end
+
+func _rar4_extract(p: void*, n: int, name: str, out &: compress.ByteBuf, ok &: bool):
+    bp := p as u8*
+    mut pos := _RAR4_SIG_LEN
+    until pos + 7 <= n:
+        head_type := bp[pos + 2] as int
+        head_size := (bp[pos + 5] as int) | ((bp[pos + 6] as int) << 8)
+        if head_size < 7:
+            break
+        end
+        if head_type == 0x7b:
+            break
+        end
+        if head_type == 0x74:
+            mut pack_size := 0
+            mut unp_size := 0
+            mut method := 0
+            mut flags := 0
+            mut nm := ""
+            _rar4_read_file_fields(p, pos, pack_size, unp_size, method, flags, nm)
+            hit := nm == name
+            _rar_free_name(nm)
+            if hit:
+                if (flags & 0x0004) != 0:
+                    ret
+                end
+                if method != 0x30:
+                    ret
+                end
+                data_ptr := ((p as i64) + ((pos + head_size) as i64)) as void*
+                compress.BufPushBytes(out, data_ptr, pack_size)
+                ok = true
+                ret
+            end
+            pos += head_size + pack_size
+        else:
+            pos += head_size
+        end
+    end
+end
+
+func _rar5_extract(p: void*, n: int, name: str, out &: compress.ByteBuf, ok &: bool):
+    mut pos := _RAR5_SIG_LEN
+    until pos < n:
+        mut header_type := 0
+        mut total_size := 0
+        mut is_dir := false
+        mut unp_size := 0
+        mut method := 0
+        mut nm := ""
+        mut data_offset := 0
+        mut data_size := 0
+        good := _rar5_parse_block(p, pos, n, header_type, total_size, is_dir, unp_size, method, nm, data_offset, data_size)
+        hit := header_type == 2 and nm == name and not is_dir
+        _rar_free_name(nm)
+        if not good or total_size <= 0:
+            break
+        end
+        if header_type == 5:
+            break
+        end
+        if hit:
+            if method != 0:
+                ret
+            end
+            data_ptr := ((p as i64) + (data_offset as i64)) as void*
+            compress.BufPushBytes(out, data_ptr, data_size)
+            ok = true
+            ret
+        end
+        pos += total_size
+    end
+end
+
+@en "IsRar"
+@fa "آر ای آر است"
+pub func IsRar(p: void*, n: int): bool:
+    ret _rar4_sig_match(p, n) or _rar5_sig_match(p, n)
+end
+
+@en "RarList"
+@fa "فهرست آر ای آر"
+pub func RarList(p: void*, n: int): Vector<Entry>:
+    mut out := Vector {} as Vector<Entry>
+    if _rar4_sig_match(p, n):
+        _rar4_list(p, n, out)
+    else:
+        if _rar5_sig_match(p, n):
+            _rar5_list(p, n, out)
+        end
+    end
+    ret out
+end
+
+@en "RarExtractByName"
+@fa "استخراج با نام از آر ای آر"
+pub func RarExtractByName(p: void*, n: int, name: str, ok &: bool): compress.ByteBuf:
+    ok = false
+    mut out := compress.NewByteBuf()
+    if _rar4_sig_match(p, n):
+        _rar4_extract(p, n, name, out, ok)
+    else:
+        if _rar5_sig_match(p, n):
+            _rar5_extract(p, n, name, out, ok)
+        end
+    end
+    ret out
+end
+
+@en "RarExtractAll"
+@fa "استخراج همه از آر ای آر"
+pub func RarExtractAll(p: void*, n: int, destdir: str): bool:
+    entries := RarList(p, n)
+    mut all_ok := true
+    mut i := 0
+    until i < entries.len():
+        e := entries.get(i)
+        if not _safe_entry_name(e.name):
+            all_ok = false
+            i += 1
+            continue
+        end
+        outpath := filepath.Join(destdir, e.name)
+        if e.is_dir:
+            EnsureDir(outpath)
+        else:
+            parent := filepath.Dir(outpath)
+            EnsureDir(parent)
+            mem.Free(parent as void*)
+            mut ok := false
+            data := RarExtractByName(p, n, e.name, ok)
+            if ok:
+                if not WriteBinaryFileBuf(outpath, data):
+                    all_ok = false
+                end
+            else:
+                all_ok = false
+            end
+            compress.BufFree(data)
+        end
+        mem.Free(outpath as void*)
+        i += 1
+    end
+    defer FreeEntries(entries)
+    ret all_ok
+end

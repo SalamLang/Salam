@@ -1,0 +1,628 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package cli
+
+import os
+import io
+import str
+import sort
+import mem
+import filepath
+import db.sql
+
+include dr "../driver/driver.salam"
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include lx "../lexer/lexer.salam"
+include tok "../token.salam"
+include src "../source.salam"
+include lp "../langpack.salam"
+include co "../sal_core.salam"
+
+const K_SQL_START_COUNT := 10
+
+k_sql_starts := [
+    "SELECT ", "INSERT ", "UPDATE ", "DELETE ", "CREATE ", "ALTER ", "DROP ", "WITH ",
+    "REPLACE ", "TRUNCATE "
+]
+
+k_sql_needs := [
+    " FROM ", " INTO ", " SET ", " FROM ", "", " TABLE ", "", " AS ", " INTO ", ""
+]
+
+k_sql_engine_refs := [
+    "db.mysql", "db.mariadb", "db.postgres", "db.sqlite",
+    "دیتابیس.مای اس کیو ال", "دیتابیس.پستگرس", "دیتابیس.اس کیو لایت"
+]
+
+k_sql_engine_ids := [1, 2, 3, 0, 1, 3, 0]
+
+k_sql_second := [
+    "", "", "", "", "TABLE INDEX VIEW UNIQUE TEMP TEMPORARY OR MATERIALIZED", "",
+    "TABLE INDEX VIEW", "", "", "TABLE"
+]
+
+struct SqlJob:
+    pub dialect: sql.Dialect = sql.Dialect {}
+    pub cat: sql.Catalog = sql.Catalog {}
+    pub has_schema: bool = false
+    pub errors: int = 0
+    pub warnings: int = 0
+    pub files: int = 0
+    pub queries: int = 0
+    pub glued: int = 0
+    pub schema_files: Vector<str> = Vector {}
+    pub forced: bool = false
+    pub run_dialect: int = 0 - 1
+end
+
+func sql_sev_name(s: int): str:
+    if s == sql.ERROR:
+        ret "error"
+    end
+    if s == sql.WARNING:
+        ret "warning"
+    end
+    ret "note"
+end
+
+func word_after(text: str, start: int): str:
+    n := str.Len(text)
+    mut i := start
+    until i < n and text[i] == ' ':
+        i = i + 1
+    end
+    mut j := i
+    until j < n and text[j] != ' ' and text[j] != '(':
+        j = j + 1
+    end
+    if j <= i:
+        ret str.Clone("")
+    end
+    ret str.Substr(text, i, j - i)
+end
+
+func sql_looks_like_sql(q: str): bool:
+    trimmed := str.Trim(q)
+    if str.Len(trimmed) < 12:
+        mem.Free(trimmed as void*)
+        ret false
+    end
+    upper := trimmed.upper()
+    mut hit := false
+    mut i := 0
+    until i < K_SQL_START_COUNT:
+        start := k_sql_starts[i]
+        if str.StartsWith(upper, start):
+            needs := k_sql_needs[i]
+            second := k_sql_second[i]
+            mut good := true
+            if not str.IsEmpty(needs):
+                if not str.Contains(upper, needs):
+                    good = false
+                end
+            end
+            if good and not str.IsEmpty(second):
+                w := word_after(upper, str.Len(start) - 1)
+                if str.IsEmpty(w) or not str.Contains(second, w):
+                    good = false
+                end
+                mem.Free(w as void*)
+            end
+            if good:
+                hit = true
+            end
+            break
+        end
+        i = i + 1
+    end
+    mem.Free(upper as void*)
+    mem.Free(trimmed as void*)
+    ret hit
+end
+
+func sql_glued_at(stream: tok.TokenStream, at: int): bool:
+    if at > 0:
+        if stream.toks.get(at - 1).kind == tok.TK_PLUS:
+            ret true
+        end
+    end
+    if at + 1 < stream.toks.len():
+        nk := stream.toks.get(at + 1).kind
+        if nk == tok.TK_PLUS or nk == tok.TK_DOT:
+            ret true
+        end
+    end
+    ret false
+end
+
+func sql_all_at_end(r: sql.Report, text: str): bool:
+    if r.items.len() == 0:
+        ret false
+    end
+    stop := str.Len(text)
+    mut i := 0
+    until i < r.items.len():
+        if r.items.get(i).offset < stop:
+            ret false
+        end
+        i = i + 1
+    end
+    ret true
+end
+
+func sql_pkg_dialect(name: str): int:
+    if str.Equals(name, "mysql") or str.Equals(name, "مای اس کیو ال"):
+        ret sql.MYSQL
+    end
+    if str.Equals(name, "postgres") or str.Equals(name, "پستگرس"):
+        ret sql.POSTGRES
+    end
+    if str.Equals(name, "sqlite") or str.Equals(name, "اس کیو لایت"):
+        ret sql.SQLITE
+    end
+    ret 0 - 1
+end
+
+func sql_text_dialect(text: str): int:
+    mut found := 0 - 1
+    mut i := 0
+    until i < len(k_sql_engine_refs):
+        if str.Contains(text, k_sql_engine_refs[i]):
+            pick := k_sql_engine_ids[i]
+            if found >= 0 and found != pick:
+                ret 0 - 2
+            end
+            found = pick
+        end
+        i = i + 1
+    end
+    ret found
+end
+
+func sql_note_run_dialect(job &: SqlJob, found: int):
+    if found < 0:
+        ret
+    end
+    if job.run_dialect == 0 - 2:
+        ret
+    end
+    if job.run_dialect >= 0 and job.run_dialect != found:
+        job.run_dialect = 0 - 2
+        ret
+    end
+    job.run_dialect = found
+end
+
+func sql_prescan_file(job &: SqlJob, path: str):
+    text := os.ReadFile(path)
+    if str.IsEmpty(text):
+        ret
+    end
+    sql_note_run_dialect(job, sql_text_dialect(text))
+    mem.Free(text as void*)
+end
+
+func sql_prescan(job &: SqlJob, path: str):
+    if os.IsDir(path):
+        mut found := os.Walk(path)
+        mut i := 0
+        until i < found.len():
+            f := found.get(i)
+            if str.EndsWith(f, ".salam") and not sql_is_schema_file(job, f):
+                sql_prescan_file(job, f)
+            end
+            i = i + 1
+        end
+        found.free()
+        ret
+    end
+    if str.EndsWith(path, ".salam"):
+        sql_prescan_file(job, path)
+    end
+end
+
+func sql_dialect_of_file(job: SqlJob, stream: tok.TokenStream): sql.Dialect:
+    if job.forced:
+        ret job.dialect
+    end
+    mut found := 0 - 1
+    mut i := 0
+    until i + 2 < stream.toks.len():
+        a := stream.toks.get(i)
+        if a.kind == tok.TK_IDENT and stream.toks.get(i + 1).kind == tok.TK_DOT:
+            if str.Equals(a.lexeme, "db") or str.Equals(a.lexeme, "دیتابیس"):
+                pick := sql_pkg_dialect(stream.toks.get(i + 2).lexeme)
+                if pick >= 0:
+                    if found >= 0 and found != pick:
+                        ret job.dialect
+                    end
+                    found = pick
+                end
+            end
+        end
+        i = i + 1
+    end
+    if found < 0:
+        if job.run_dialect >= 0:
+            ret sql.DialectOf(job.run_dialect)
+        end
+        ret job.dialect
+    end
+    ret sql.DialectOf(found)
+end
+
+func sql_report(job &: SqlJob, file: str, base_line: int, base_col: int, r: sql.Report):
+    mut i := 0
+    until i < r.items.len():
+        d := r.items.get(i)
+        line := base_line + d.line - 1
+        mut col := d.col
+        if d.line == 1:
+            col = base_col + d.col - 1
+        end
+        where := file + ":" + str.FromInt(line as i64) + ":" + str.FromInt(col as i64) + ": "
+        println where + sql_sev_name(d.severity) + "[" + d.code + "]: " + d.message
+        if not str.IsEmpty(d.help):
+            println "  help: " + d.help
+        end
+        if d.severity == sql.ERROR:
+            job.errors = job.errors + 1
+        else d.severity == sql.WARNING:
+            job.warnings = job.warnings + 1
+        end
+        i = i + 1
+    end
+end
+
+func sql_one(
+    job &: SqlJob, file: str, base_line: int, base_col: int, query: str, literal: bool, d: sql.Dialect
+):
+    mut r := sql.Report {}
+    if job.has_schema:
+        r = sql.Check(query, job.cat)
+    else:
+        r = sql.Lint(query, d)
+    end
+    if literal and sql_all_at_end(r, query):
+        job.glued = job.glued + 1
+        sql.FreeReport(r)
+        ret
+    end
+    sql_report(job, file, base_line, base_col, r)
+    job.queries = job.queries + r.statements
+    sql.FreeReport(r)
+end
+
+func sql_quote_width(text: str, at: int): int:
+    n := str.Len(text)
+    if at + 2 < n:
+        if text[at] == '"' and text[at + 1] == '"' and text[at + 2] == '"':
+            ret 3
+        end
+    end
+    ret 1
+end
+
+func sql_scan_salam(job &: SqlJob, path: str):
+    mut sfile := src.New()
+    if not src.Load(path, sfile):
+        io.EPrintln(co.Format1(i18.Tr("salam: cannot read '%s'"), co.ArgStr(path)))
+        job.errors = job.errors + 1
+        ret
+    end
+    job.files = job.files + 1
+    quiet := lg.New(lg.LOG_OFF, false)
+    pack := lx.Detect(sfile, lp.LP_EN)
+    mut stream := tok.StreamNew(path)
+    if lx.Run(quiet, pack, sfile, stream):
+        d := sql_dialect_of_file(job, stream)
+        mut i := 0
+        until i < stream.toks.len():
+            t := stream.toks.get(i)
+            if t.kind == tok.TK_STRING and t.value.kind == tok.TV_STRING:
+                if sql_looks_like_sql(t.value.sval):
+                    if sql_glued_at(stream, i):
+                        job.glued = job.glued + 1
+                    else:
+                        w := sql_quote_width(sfile.text, t.begin_index as int)
+                        sql_one(
+                            job, path, t.begin_line as int, (t.begin_col as int) + w, t.value.sval,
+                            true, d
+                        )
+                    end
+                end
+            end
+            i = i + 1
+        end
+    end
+    tok.StreamFree(stream)
+    src.Free(sfile)
+end
+
+func sql_scan_sql_file(job &: SqlJob, path: str):
+    text := os.ReadFile(path)
+    if str.IsEmpty(text):
+        ret
+    end
+    job.files = job.files + 1
+    mut d := job.dialect
+    if not job.forced and job.run_dialect >= 0:
+        d = sql.DialectOf(job.run_dialect)
+    end
+    sql_one(job, path, 1, 1, text, false, d)
+    mem.Free(text as void*)
+end
+
+func sql_is_schema_file(job: SqlJob, path: str): bool:
+    if job.schema_files.len() == 0:
+        ret false
+    end
+    want := filepath.Clean(path)
+    mut i := 0
+    until i < job.schema_files.len():
+        if str.Equals(job.schema_files.get(i), want):
+            mem.Free(want as void*)
+            ret true
+        end
+        i = i + 1
+    end
+    mem.Free(want as void*)
+    ret false
+end
+
+func sql_scan_path(job &: SqlJob, path: str):
+    if sql_is_schema_file(job, path):
+        ret
+    end
+    if os.IsDir(path):
+        mut found := os.Walk(path)
+        sort.Sort(found)
+        mut i := 0
+        until i < found.len():
+            f := found.get(i)
+            if sql_is_schema_file(job, f):
+                i = i + 1
+                continue
+            end
+            if str.EndsWith(f, ".salam"):
+                sql_scan_salam(job, f)
+            else str.EndsWith(f, ".sql"):
+                sql_scan_sql_file(job, f)
+            end
+            i = i + 1
+        end
+        found.free()
+        ret
+    end
+    if str.EndsWith(path, ".sql"):
+        sql_scan_sql_file(job, path)
+        ret
+    end
+    sql_scan_salam(job, path)
+end
+
+func sql_apply_schema_file(job &: SqlJob, path: str): bool:
+    text := os.ReadFile(path)
+    if str.IsEmpty(text):
+        io.EPrintln(co.Format1(i18.Tr("salam: cannot read '%s'"), co.ArgStr(path)))
+        ret false
+    end
+    job.schema_files.push(filepath.Clean(path))
+    mut r := sql.Apply(job.cat, text)
+    sql_report(job, path, 1, 1, r)
+    ok := r.errors == 0
+    sql.FreeReport(r)
+    mem.Free(text as void*)
+    ret ok
+end
+
+func sql_load_schema(job &: SqlJob, spec: str): bool:
+    if not os.Exists(spec):
+        io.EPrintln(co.Format1(i18.Tr("salam: no schema at '%s'"), co.ArgStr(spec)))
+        ret false
+    end
+    job.cat = sql.NewCatalog(job.dialect)
+    job.has_schema = true
+    if not os.IsDir(spec):
+        ret sql_apply_schema_file(job, spec)
+    end
+    mut found := os.Walk(spec)
+    sort.Sort(found)
+    mut ok := true
+    mut i := 0
+    until i < found.len():
+        f := found.get(i)
+        if str.EndsWith(f, ".sql"):
+            if not sql_apply_schema_file(job, f):
+                ok = false
+            end
+        end
+        i = i + 1
+    end
+    found.free()
+    ret ok
+end
+
+func sql_cmd(opt &: dr.Dr): int:
+    mut inputs := Vector {} as Vector<str>
+    defer inputs.free()
+    mut mode := 0
+    mut seen_word := false
+    mut i := 0
+    until i < opt.inputs.len():
+        a := opt.inputs.get(i)
+        if not seen_word and inputs.len() == 0 and str.Equals(a, "check"):
+            seen_word = true
+        else not seen_word and inputs.len() == 0 and str.Equals(a, "generate"):
+            seen_word = true
+            mode = 1
+        else:
+            inputs.push(a)
+        end
+        i = i + 1
+    end
+    if inputs.len() == 0:
+        io.EPrintln(i18.Tr("salam: 'sql' requires a file or a directory"))
+        ret 2
+    end
+    mut job := SqlJob {}
+    job.dialect = str.IsEmpty(opt.sql_dialect) ? sql.DialectOf(sql.SQLITE) : sql.DialectNamed(opt.sql_dialect)
+    if not str.IsEmpty(opt.sql_dialect):
+        job.forced = true
+        if not str.Equals(job.dialect.name, opt.sql_dialect.lower()):
+            io.EPrintln(co.Format1(i18.Tr("salam: unknown SQL dialect '%s' (sqlite|mysql|mariadb|postgres)"),
+                co.ArgStr(opt.sql_dialect)))
+            ret 2
+        end
+    end
+    if not str.IsEmpty(opt.sql_schema):
+        if not sql_load_schema(job, opt.sql_schema):
+            if job.has_schema:
+                sql.FreeCatalog(job.cat)
+            end
+            ret 1
+        end
+    end
+    if mode == 1:
+        rc := sql_generate(opt, job, inputs)
+        if job.has_schema:
+            sql.FreeCatalog(job.cat)
+        end
+        mut sg := 0
+        until sg < job.schema_files.len():
+            mem.Free(job.schema_files.get(sg) as void*)
+            sg = sg + 1
+        end
+        job.schema_files.free()
+        ret rc
+    end
+    mut pre := 0
+    until pre < inputs.len():
+        sql_prescan(job, inputs.get(pre))
+        pre = pre + 1
+    end
+    mut k := 0
+    until k < inputs.len():
+        sql_scan_path(job, inputs.get(k))
+        k = k + 1
+    end
+    if job.has_schema:
+        sql.FreeCatalog(job.cat)
+    end
+    mut sf := 0
+    until sf < job.schema_files.len():
+        mem.Free(job.schema_files.get(sf) as void*)
+        sf = sf + 1
+    end
+    job.schema_files.free()
+    counted := "checked " + str.FromInt(job.queries as i64) + " statement(s) in "
+    scanned := counted + str.FromInt(job.files as i64) + " file(s): "
+    tally := str.FromInt(job.errors as i64) + " error(s), "
+    mut line := scanned + tally + str.FromInt(job.warnings as i64) + " warning(s)"
+    if job.glued > 0:
+        line = line + "; " + str.FromInt(job.glued as i64) + " built by concatenation, not checked"
+    end
+    println line
+    if job.errors > 0:
+        ret 1
+    end
+    ret 0
+end
+
+func sql_collect_queries(job &: SqlJob, path: str, out &: Vector<sql.Query>, rep &: sql.Report): bool:
+    if os.IsDir(path):
+        mut found := os.Walk(path)
+        sort.Sort(found)
+        mut ok := true
+        mut i := 0
+        until i < found.len():
+            f := found.get(i)
+            if str.EndsWith(f, ".sql") and not sql_is_schema_file(job, f):
+                if not sql_collect_queries(job, f, out, rep):
+                    ok = false
+                end
+            end
+            i = i + 1
+        end
+        found.free()
+        ret ok
+    end
+    text := os.ReadFile(path)
+    if str.IsEmpty(text):
+        io.EPrintln(co.Format1(i18.Tr("salam: cannot read '%s'"), co.ArgStr(path)))
+        ret false
+    end
+    job.files = job.files + 1
+    mut one := sql.ParseQueries(text, rep)
+    mut i := 0
+    until i < one.len():
+        out.push(one.get(i))
+        i = i + 1
+    end
+    one.free()
+    mem.Free(text as void*)
+    ret true
+end
+
+func sql_generate(opt &: dr.Dr, job &: SqlJob, inputs: Vector<str>): int:
+    if str.IsEmpty(opt.sql_schema):
+        io.EPrintln(i18.Tr("salam: 'sql generate' needs --schema=PATH"))
+        ret 2
+    end
+    mut rep := sql.Report {}
+    mut queries := Vector {} as Vector<sql.Query>
+    mut ok := true
+    mut i := 0
+    until i < inputs.len():
+        if not sql_collect_queries(job, inputs.get(i), queries, rep):
+            ok = false
+        end
+        i = i + 1
+    end
+    if not ok:
+        sql.FreeQueries(queries)
+        sql.FreeReport(rep)
+        ret 1
+    end
+    mut pkg := opt.sql_package
+    if str.IsEmpty(pkg):
+        pkg = "queries"
+    end
+    code := sql.Generate(pkg, queries, job.cat, rep)
+    sql_report(job, str.IsEmpty(opt.output) ? "<queries>" : opt.output, 1, 1, rep)
+    failed := job.errors > 0
+    sql.FreeReport(rep)
+    job.queries = queries.len()
+    sql.FreeQueries(queries)
+    if failed:
+        mem.Free(code as void*)
+        ret 1
+    end
+    if str.IsEmpty(opt.output):
+        print code
+    else:
+        if io.WriteFile(opt.output, code) < 0:
+            io.EPrintln(co.Format1(i18.Tr("salam: cannot write '%s'"), co.ArgStr(opt.output)))
+            mem.Free(code as void*)
+            ret 1
+        end
+        println co.Format1(
+            i18.Tr("wrote %s"), co.ArgStr(opt.output)
+        ) + " (" + str.FromInt(job.queries as i64) + " queries)"
+    end
+    mem.Free(code as void*)
+    ret 0
+end

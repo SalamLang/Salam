@@ -1,0 +1,114 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import jwt
+import net.http
+import net.router
+import encoding.json
+
+const PORT := 8084
+
+func guard(): jwt.Guard:
+    mut g := jwt.NewGuard("dev-only-secret-change-me")
+    g.opts.issuer = "scopes.example"
+    g.opts.require_exp = true
+    ret g
+end
+
+func send(ctx: i64, code: int, body: str):
+    http.SetStatus(ctx, code)
+    http.Json(ctx, body)
+end
+
+func scopes_of(user: str): str:
+    if user == "sara": ret "reports:read reports:write billing:read" end
+    if user == "ali": ret "reports:read" end
+    ret ""
+end
+
+func roles_of(user: str): str:
+    if user == "sara": ret `["admin","analyst"]` end
+    if user == "ali": ret `["analyst"]` end
+    ret "[]"
+end
+
+func login(ctx: i64):
+    user := json.Get(http.Body(ctx), "user")
+    if scopes_of(user).len() == 0:
+        send(ctx, 401, `{"error":"unknown user"}`)
+        ret
+    end
+    mut c := jwt.NewClaims()
+    c.sub = user
+    jwt.SetStr(c, "scope", scopes_of(user))
+    jwt.SetRaw(c, "roles", roles_of(user))
+    mut err := 0
+    token := jwt.Issue(guard(), c, 3600 as i64, err)
+    send(ctx, 200, `{"token":"` + token + `"}`)
+end
+
+func reports(ctx: i64):
+    mut t := jwt.Token {}
+    if not jwt.Require(ctx, guard(), t): ret end
+    send(ctx, 200, `{"reports":["q1","q2"],"for":"` + t.claims.sub + `"}`)
+end
+
+func create_report(ctx: i64):
+    mut t := jwt.Token {}
+    if not jwt.RequireScope(ctx, guard(), "reports:write", t): ret end
+    send(ctx, 201, `{"created":true,"by":"` + t.claims.sub + `"}`)
+end
+
+func audit_log(ctx: i64):
+    mut t := jwt.Token {}
+    if not jwt.RequireClaim(ctx, guard(), "roles", "admin", t): ret end
+    send(ctx, 200, `{"entries":41,"viewer":"` + t.claims.sub + `"}`)
+end
+
+func user_settings(ctx: i64):
+    id := http.Param(ctx, "id")
+    mut t := jwt.Token {}
+    if not jwt.RequireSubject(ctx, guard(), id, t): ret end
+    send(ctx, 200, `{"user":"` + id + `","theme":"dark"}`)
+end
+
+func close_account(ctx: i64):
+    id := http.Param(ctx, "id")
+    mut t := jwt.Token {}
+    if not jwt.Require(ctx, guard(), t): ret end
+    owner := t.claims.sub == id
+    admin := jwt.ListHas(t, "roles", "admin")
+    if not owner and not admin:
+        jwt.Forbidden(ctx, "only the account holder or an admin can close this")
+        ret
+    end
+    send(ctx, 200, `{"closed":"` + id + `","by":"` + t.claims.sub + `"}`)
+end
+
+func main:
+    mut r := router.NewRouter()
+    router.Post(r, "/login", login)
+    router.Get(r, "/api/reports", reports)
+    router.Post(r, "/api/reports", create_report)
+    router.Get(r, "/api/audit", audit_log)
+    router.Get(r, "/api/users/:id/settings", user_settings)
+    router.Delete(r, "/api/users/:id", close_account)
+    mut s := http.NewServer(PORT)
+    http.Use(s, r)
+    println "listening on http://localhost:8084"
+    http.Run(s)
+    ret 0
+end

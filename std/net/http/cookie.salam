@@ -1,0 +1,178 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package http
+
+import encoding
+import conv
+import time
+
+@en "Cookie"
+@fa "کوکی"
+pub struct Cookie:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "value"
+    @fa "مقدار"
+    pub value: str = ""
+    @en "path"
+    @fa "مسیر"
+    pub path: str = "/"
+    @en "domain"
+    @fa "دامنه"
+    pub domain: str = ""
+    @en "max_age"
+    @fa "حداکثر‌عمر"
+    pub max_age: int = 0
+    @en "has_max_age"
+    @fa "دارای‌حداکثر‌عمر"
+    pub has_max_age: bool = false
+    @en "secure"
+    @fa "امن"
+    pub secure: bool = false
+    @en "http_only"
+    @fa "فقط‌اچ‌تی‌تی‌پی"
+    pub http_only: bool = true
+    @en "same_site"
+    @fa "سایت‌یکسان"
+    pub same_site: str = "Lax"
+end
+
+func _cookie_string(c: Cookie): str:
+    mut out := c.name.concat("=").concat(encoding.URLEncode(c.value))
+    if c.path.len() > 0:
+        out = out.concat("; Path=").concat(c.path)
+    end
+    if c.domain.len() > 0:
+        out = out.concat("; Domain=").concat(c.domain)
+    end
+    if c.has_max_age:
+        out = out.concat("; Max-Age=").concat(conv.FormatInt(c.max_age as i64))
+        expires_at := time.Now() + (c.max_age as i64)
+        out = out.concat("; Expires=").concat(time.FormatHTTPDate(expires_at))
+    end
+    mut force_secure := c.secure
+    if c.same_site.len() > 0:
+        if c.same_site == "None":
+            force_secure = true
+        end
+        out = out.concat("; SameSite=").concat(c.same_site)
+    end
+    if force_secure:
+        out = out.concat("; Secure")
+    end
+    if c.http_only:
+        out = out.concat("; HttpOnly")
+    end
+    ret out
+end
+
+func _parse_cookie_header(raw: str): HashMap<str, str>:
+    m := HashMap {} as HashMap<str, str>
+    if raw.len() == 0: ret m end
+    mut rest := raw
+    until rest.len() > 0:
+        semi := rest.find(";")
+        mut pair := ""
+        if semi >= 0:
+            pair = rest.substr(0, semi)
+            rest = rest.substr(semi + 1, rest.len() - semi - 1).trim()
+        else:
+            pair = rest
+            rest = ""
+        end
+        eq_at := pair.find("=")
+        if eq_at >= 0:
+            nm := pair.substr(0, eq_at).trim()
+            vl := pair.substr(eq_at + 1, pair.len() - eq_at - 1).trim()
+            if nm.len() > 0:
+                m.put(nm, encoding.URLDecode(vl))
+            end
+        end
+    end
+    ret m
+end
+
+func _ctx_cookies(h: i64): HashMap<str, str>:
+    ret _parse_cookie_header(salam_ctx_kv_get(h, 0, "Cookie"))
+end
+
+func _ctx_cookie(h: i64, name: str): str:
+    m := _ctx_cookies(h)
+    if m.has(name): ret m.get(name) end
+    ret ""
+end
+
+func _ctx_has_cookie(h: i64, name: str): bool:
+    ret _ctx_cookies(h).has(name)
+end
+
+func _ctx_set_cookie(h: i64, c: Cookie):
+    salam_ctx_kv_set_cookie(h, c.name, _cookie_string(c))
+end
+
+@en "NewCookie"
+@fa "کوکی جدید"
+pub func NewCookie(name: str, value: str): Cookie:
+    ret Cookie { name = name, value = value }
+end
+
+@en "ExpiringCookie"
+@fa "کوکی با انقضا"
+pub func ExpiringCookie(name: str, value: str, max_age_seconds: int): Cookie:
+    ret Cookie { name = name, value = value, max_age = max_age_seconds, has_max_age = true }
+end
+
+@en "ExpiredCookie"
+@fa "کوکی منقضی شده"
+pub func ExpiredCookie(name: str, path: str, domain: str): Cookie:
+    ret Cookie { name = name, value = "", path = path, domain = domain, max_age = 0 - 1, has_max_age = true, http_only = true }
+end
+
+@en "Cookies"
+@fa "کوکی ها"
+pub func Cookies(h: i64): HashMap<str, str>:
+    ret _ctx_cookies(h)
+end
+
+@en "CookieValue"
+@fa "مقدار کوکی"
+pub func CookieValue(h: i64, name: str): str:
+    ret _ctx_cookie(h, name)
+end
+
+@en "HasCookie"
+@fa "کوکی دارد"
+pub func HasCookie(h: i64, name: str): bool:
+    ret _ctx_has_cookie(h, name)
+end
+
+@en "SetCookie"
+@fa "تنظیم کوکی"
+pub func SetCookie(h: i64, c: Cookie):
+    _ctx_set_cookie(h, c)
+end
+
+@en "ClearCookie"
+@fa "پاک کردن کوکی"
+pub func ClearCookie(h: i64, name: str):
+    _ctx_set_cookie(h, ExpiredCookie(name, "/", ""))
+end
+
+@en "ClearCookieAt"
+@fa "پاک کردن کوکی در مسیر"
+pub func ClearCookieAt(h: i64, name: str, path: str, domain: str):
+    _ctx_set_cookie(h, ExpiredCookie(name, path, domain))
+end

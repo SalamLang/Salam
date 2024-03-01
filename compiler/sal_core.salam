@@ -1,0 +1,826 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package sal_core
+
+import io
+import mem
+import os
+import str
+
+extern:
+    func snprintf(buf: char*, cap: u64, fmt: str, ...): int
+    func strtod(s: str, endptr: void*): f64
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func GetCurrentProcess(): void*
+        func GetProcessTimes(h: void*, creation: void*, exit_t: void*, kernel: void*, user: void*): int
+    end
+else:
+    extern:
+        func clock(): i64
+    end
+end
+
+pub const SAL_NUMSTR_MAX := 21
+
+pub const VERSION := SALAM_VERSION
+pub const GIT_COMMIT := SALAM_GIT_COMMIT
+pub const GIT_DATE := SALAM_GIT_DATE
+pub const GIT_DIRTY := SALAM_GIT_DIRTY
+pub const BUILD_DATE := SALAM_BUILD_DATE
+
+pub const ST_OK := 0
+pub const ST_ERROR := 1
+pub const ST_FATAL := 2
+
+pub const ARG_INT := 0
+pub const ARG_UINT := 1
+pub const ARG_FLOAT := 2
+pub const ARG_STR := 3
+pub const ARG_CHAR := 4
+pub const ARG_PTR := 5
+
+pub struct Arena:
+    pub blocks: Vector<i64> = Vector {}
+    pub block_size: u64 = 0 as u64
+end
+
+pub struct SrcPos:
+    pub line: u32 = 0 as u32
+    pub col: u32 = 0 as u32
+    pub index: u32 = 0 as u32
+end
+
+pub struct SrcSpan:
+    pub begin: SrcPos = SrcPos {}
+    pub finish: SrcPos = SrcPos {}
+    pub length: u32 = 0 as u32
+end
+
+pub enum Status:
+    Ok = 0,
+    Error,
+    Fatal
+end
+
+pub struct FmtArg:
+    pub kind: int = 0
+    pub i: i64 = 0
+    pub u: u64 = 0 as u64
+    pub f: f64 = 0.0
+    pub s: str = ""
+end
+
+func size_max_u64(): u64:
+    ret (0 as u64) - (1 as u64)
+end
+
+func overflow_abort(what: str):
+    io.EPrintln("salam: fatal: size overflow in " + what)
+    os.Exit(1)
+end
+
+inline func fmt_bp(s: str): i8*:
+    ret (s as void*) as i8*
+end
+
+func fmt_ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+func arg_i64(a: FmtArg): i64:
+    if a.kind == ARG_UINT or a.kind == ARG_PTR:
+        ret a.u as i64
+    end
+    if a.kind == ARG_FLOAT:
+        ret a.f as i64
+    end
+    ret a.i
+end
+
+func arg_u64(a: FmtArg): u64:
+    if a.kind == ARG_INT or a.kind == ARG_CHAR:
+        ret a.i as u64
+    end
+    if a.kind == ARG_FLOAT:
+        ret (a.f as i64) as u64
+    end
+    ret a.u
+end
+
+func arg_f64(a: FmtArg): f64:
+    if a.kind == ARG_INT or a.kind == ARG_CHAR:
+        ret a.i as f64
+    end
+    if a.kind == ARG_UINT or a.kind == ARG_PTR:
+        ret a.u as f64
+    end
+    ret a.f
+end
+
+func arg_str(a: FmtArg): str:
+    if a.kind == ARG_STR:
+        ret a.s
+    end
+    ret ""
+end
+
+func u64_hex(v: u64): str:
+    if v == (0 as u64):
+        ret "0"
+    end
+    tbl := "0123456789abcdef"
+    mut out := ""
+    mut t := v
+    until t != (0 as u64):
+        out = tbl.substr((t % (16 as u64)) as int, 1).concat(out)
+        t /= (16 as u64)
+    end
+    ret out
+end
+
+func emit_int(
+    out &: str.StringBuilder, mag: u64, neg: bool, base: u64, upper: bool, width: int, prec: int, fminus: bool, fzero: bool, fplus: bool, fspace: bool, fhash: bool
+):
+    tbl := upper ? "0123456789ABCDEF" : "0123456789abcdef"
+    mut digs := ""
+    if mag == (0 as u64):
+        if prec != 0:
+            digs = "0"
+        end
+    else:
+        mut v := mag
+        until v != (0 as u64):
+            digs = tbl.substr((v % base) as int, 1).concat(digs)
+            v /= base
+        end
+    end
+    ndig := digs.len()
+    mut zprec := 0
+    if prec > ndig:
+        zprec = prec - ndig
+    end
+    mut sign := ""
+    if neg:
+        sign = "-"
+    else fplus:
+        sign = "+"
+    else fspace:
+        sign = " "
+    end
+    mut hashpfx := ""
+    if fhash and mag != (0 as u64):
+        if base == (16 as u64):
+            hashpfx = upper ? "0X" : "0x"
+        else base == (8 as u64):
+            hashpfx = "0"
+        end
+    end
+    content := sign.len() + hashpfx.len() + zprec + ndig
+    mut pad := 0
+    if width > content:
+        pad = width - content
+    end
+    mut zwidth := 0
+    if fzero and not fminus and prec < 0:
+        zwidth = pad
+        pad = 0
+    end
+    if not fminus and pad > 0:
+        str.BufAppend(out, " ".repeat(pad))
+    end
+    if sign.len() > 0:
+        str.BufAppend(out, sign)
+    end
+    if hashpfx.len() > 0:
+        str.BufAppend(out, hashpfx)
+    end
+    if zwidth > 0:
+        str.BufAppend(out, "0".repeat(zwidth))
+    end
+    if zprec > 0:
+        str.BufAppend(out, "0".repeat(zprec))
+    end
+    str.BufAppend(out, digs)
+    if fminus and pad > 0:
+        str.BufAppend(out, " ".repeat(pad))
+    end
+end
+
+func pad_append(out &: str.StringBuilder, sv: str, width: int, fminus: bool):
+    padn := width - sv.len()
+    if not fminus and padn > 0:
+        str.BufAppend(out, " ".repeat(padn))
+    end
+    str.BufAppend(out, sv)
+    if fminus and padn > 0:
+        str.BufAppend(out, " ".repeat(padn))
+    end
+end
+
+func c_format_f64(
+    fminus: bool, fplus: bool, fspace: bool, fzero: bool, fhash: bool, width: int, prec: int, cv: int, v: f64
+): str:
+    mut sp := "%"
+    if fminus: sp = sp.concat("-") end
+    if fplus: sp = sp.concat("+") end
+    if fspace: sp = sp.concat(" ") end
+    if fzero: sp = sp.concat("0") end
+    if fhash: sp = sp.concat("#") end
+    if width >= 0:
+        sp = sp.concat(str.FromInt(width as i64))
+    end
+    if prec >= 0:
+        sp = sp.concat(".").concat(str.FromInt(prec as i64))
+    end
+    sp = sp.concat(char_from_code(cv))
+    cap := 352 as u64
+    buf := mem.Allocate(cap)
+    n := snprintf(buf as char*, cap, sp, v)
+    mut out := ""
+    if n > 0:
+        if cv == 101 or cv == 69 or cv == 103 or cv == 71:
+            _fix_exp(buf as i8*)
+        end
+        out = str.Clone(buf as str)
+    end
+    mem.Free(buf)
+    ret out
+end
+
+func _fix_exp(p: i8*):
+    mut n := 0
+    until (p[n] as int) != 0:
+        n += 1
+    end
+    mut e := 0
+    until e < n and (p[e] as int) != 101 and (p[e] as int) != 69:
+        e += 1
+    end
+    if e >= n:
+        ret
+    end
+    mut d := e + 1
+    if d < n and ((p[d] as int) == 43 or (p[d] as int) == 45):
+        d += 1
+    end
+    mut z := d
+    until n - z > 2 and (p[z] as int) == 48:
+        z += 1
+    end
+    if z == d:
+        ret
+    end
+    mut i := d
+    mut j := z
+    until j <= n:
+        p[i] = p[j]
+        i += 1
+        j += 1
+    end
+end
+
+func fmt_g(v: f64, prec: int): str:
+    cap := 64 as u64
+    buf := mem.Allocate(cap)
+    n := snprintf(buf as char*, cap, "%." + str.FromInt(prec as i64) + "g", v)
+    mut out := ""
+    if n > 0:
+        _fix_exp(buf as i8*)
+        out = str.Clone(buf as str)
+    end
+    mem.Free(buf)
+    ret out
+end
+
+pub func FmtF64(v: f64): str:
+    if v != v:
+        ret "nan"
+    end
+    mut prec := 15
+    until prec <= 17:
+        sv := fmt_g(v, prec)
+        if prec == 17 or strtod(sv, null) == v:
+            ret sv
+        end
+        prec += 1
+    end
+    ret ""
+end
+
+pub inline func ByteAt(s: str, i: int): int:
+    bp := (s as void*) as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+pub func Strdup(s: str): str:
+    ret str.Clone(s)
+end
+
+pub func SizeAdd(a: u64, b: u64): u64:
+    if a > size_max_u64() - b:
+        overflow_abort("size_add")
+    end
+    ret a + b
+end
+
+pub func SizeMul(a: u64, b: u64): u64:
+    if b != (0 as u64) and a > size_max_u64() / b:
+        overflow_abort("size_mul")
+    end
+    ret a * b
+end
+
+pub func GrowCap(cap: u64, need: u64, seed: u64): u64:
+    mut ncap := cap
+    if ncap == (0 as u64):
+        ncap = seed
+        if ncap == (0 as u64):
+            ncap = 1 as u64
+        end
+    end
+    until ncap < need:
+        if ncap > size_max_u64() / (2 as u64):
+            ret need
+        end
+        ncap *= (2 as u64)
+    end
+    ret ncap
+end
+
+pub func SizeMax(): u64:
+    ret (0 as u64) - (1 as u64)
+end
+
+pub func U64Toa(v: u64): str:
+    if v == (0 as u64):
+        ret "0"
+    end
+    mut out := ""
+    mut t := v
+    until t != (0 as u64):
+        out = char_from_code((t % (10 as u64)) as int + 48).concat(out)
+        t /= (10 as u64)
+    end
+    ret out
+end
+
+pub func I64Toa(v: i64): str:
+    if v < 0:
+        mag := (0 as u64) - (v as u64)
+        ret "-".concat(U64Toa(mag))
+    end
+    ret U64Toa(v as u64)
+end
+
+pub func ArenaNew(block_size: u64): Arena:
+    mut bs := block_size
+    if bs == (0 as u64):
+        bs = 65536 as u64
+    end
+    ret Arena { block_size = bs }
+end
+
+pub func ArenaAlloc(a &: Arena, n: u64): void*:
+    mut nn := n
+    if nn == (0 as u64):
+        nn = 1 as u64
+    end
+    p := mem.Allocate(nn)
+    a.blocks.push(p as i64)
+    ret p
+end
+
+pub func ArenaStrndup(_a &: Arena, s: str, n: int): str:
+    mut k := n
+    if k > s.len():
+        k = s.len()
+    end
+    ret s.substr(0, k)
+end
+
+pub func ArenaStrdup(_a &: Arena, s: str): str:
+    ret str.Clone(s)
+end
+
+pub func ArenaFree(a &: Arena):
+    each p in a.blocks:
+        mem.Free(p as void*)
+    end
+    a.blocks.free()
+end
+
+pub func SbNew(): str.StringBuilder:
+    ret str.NewBuilder()
+end
+
+pub func SbFree(s &: str.StringBuilder):
+    str.BufFree(s)
+end
+
+pub func SbPutc(s &: str.StringBuilder, code: int):
+    str.BufAppendChar(s, code)
+end
+
+pub func SbPuts(s &: str.StringBuilder, t: str):
+    str.BufAppend(s, t)
+end
+
+pub func SbPrintf(s &: str.StringBuilder, fmt: str, args: Vector<FmtArg>):
+    str.BufAppend(s, Format(fmt, args))
+end
+
+pub func SbPutShellArg(s &: str.StringBuilder, arg: str):
+    if SALAM_OS_WINDOWS:
+        str.BufAppendChar(s, 34)
+        bp := (arg as void*) as i8*
+        n := arg.len()
+        mut i := 0
+        until i < n:
+            mut nbs := 0
+            until i < n and bp[i] == (92 as i8):
+                nbs += 1
+                i += 1
+            end
+            if i >= n:
+                repeat nbs * 2:
+                    str.BufAppendChar(s, 92)
+                end
+                break
+            else bp[i] == (34 as i8):
+                repeat nbs * 2 + 1:
+                    str.BufAppendChar(s, 92)
+                end
+                str.BufAppendChar(s, 34)
+                i += 1
+            else:
+                repeat nbs:
+                    str.BufAppendChar(s, 92)
+                end
+                str.BufAppendChar(s, bp[i] as int)
+                i += 1
+            end
+        end
+        str.BufAppendChar(s, 34)
+    else:
+        str.BufAppendChar(s, 39)
+        bp := (arg as void*) as i8*
+        n := arg.len()
+        mut i := 0
+        until i < n:
+            if bp[i] == (39 as i8):
+                str.BufAppend(s, "'\\''")
+            else:
+                str.BufAppendChar(s, bp[i] as int)
+            end
+            i += 1
+        end
+        str.BufAppendChar(s, 39)
+    end
+end
+
+pub func SbCstr(s &: str.StringBuilder): str:
+    ret str.BufStr(s)
+end
+
+pub func SbLen(s &: str.StringBuilder): i64:
+    ret str.BufLen(s)
+end
+
+pub func MakePos(line: u32, col: u32, index: u32): SrcPos:
+    ret SrcPos { line = line, col = col, index = index }
+end
+
+pub func EmptyPos(): SrcPos:
+    ret SrcPos {}
+end
+
+pub func EmptySpan(): SrcSpan:
+    ret SrcSpan {}
+end
+
+pub func MakeSpan(begin: SrcPos, finish: SrcPos, length: u32): SrcSpan:
+    ret SrcSpan { begin = begin, finish = finish, length = length }
+end
+
+pub func VecPush<T>(v &: Vector<T>, item: T):
+    v.push(item)
+end
+
+pub func VecAt<T>(v: Vector<T>, i: int): T: ret v.get(i)
+end
+
+pub func VecLen<T>(v: Vector<T>): int: ret v.len()
+end
+
+pub func Format(fmt: str, args: Vector<FmtArg>): str:
+    mut out := str.NewBuilder()
+    bp := fmt_bp(fmt)
+    n := fmt.len()
+    mut i := 0
+    mut argi := 0
+    until i < n:
+        c0 := fmt_ub(bp, i)
+        if c0 != 37:
+            str.BufAppendChar(out, c0)
+            i += 1
+            continue
+        end
+        start := i
+        i += 1
+        mut posarg := 0 - 1
+        mut pj := i
+        until pj < n and fmt_ub(bp, pj) >= 48 and fmt_ub(bp, pj) <= 57:
+            pj += 1
+        end
+        if pj > i and pj < n and fmt_ub(bp, pj) == 36:
+            mut pn := 0
+            until i < pj:
+                pn = pn * 10 + (fmt_ub(bp, i) - 48)
+                i += 1
+            end
+            posarg = pn - 1
+            i = pj + 1
+        end
+        mut fminus := false
+        mut fplus := false
+        mut fspace := false
+        mut fzero := false
+        mut fhash := false
+        until i < n:
+            fc := fmt_ub(bp, i)
+            if fc == 45:
+                fminus = true
+            else fc == 43:
+                fplus = true
+            else fc == 32:
+                fspace = true
+            else fc == 48:
+                fzero = true
+            else fc == 35:
+                fhash = true
+            else:
+                break
+            end
+            i += 1
+        end
+        mut width := 0 - 1
+        if i < n and fmt_ub(bp, i) == 42:
+            width = 0
+            if argi < args.len():
+                width = arg_i64(args.get(argi)) as int
+                argi += 1
+            end
+            i += 1
+            if width < 0:
+                fminus = true
+                width = 0 - width
+            end
+        else i < n and fmt_ub(bp, i) >= 48 and fmt_ub(bp, i) <= 57:
+            width = 0
+            until i < n and fmt_ub(bp, i) >= 48 and fmt_ub(bp, i) <= 57:
+                width = width * 10 + (fmt_ub(bp, i) - 48)
+                i += 1
+            end
+        end
+        mut prec := 0 - 1
+        if i < n and fmt_ub(bp, i) == 46:
+            i += 1
+            if i < n and fmt_ub(bp, i) == 42:
+                prec = 0
+                if argi < args.len():
+                    prec = arg_i64(args.get(argi)) as int
+                    argi += 1
+                end
+                i += 1
+            else:
+                prec = 0
+                until i < n and fmt_ub(bp, i) >= 48 and fmt_ub(bp, i) <= 57:
+                    prec = prec * 10 + (fmt_ub(bp, i) - 48)
+                    i += 1
+                end
+            end
+            if prec < 0:
+                prec = 0 - 1
+            end
+        end
+        if i < n and fmt_ub(bp, i) == 108:
+            i += 1
+            if i < n and fmt_ub(bp, i) == 108:
+                i += 1
+            end
+        else i < n and fmt_ub(bp, i) == 122:
+            i += 1
+        else i < n and fmt_ub(bp, i) == 104:
+            i += 1
+            if i < n and fmt_ub(bp, i) == 104:
+                i += 1
+            end
+        else i < n and (fmt_ub(bp, i) == 106 or fmt_ub(bp, i) == 116 or fmt_ub(bp, i) == 76):
+            i += 1
+        end
+        if i >= n:
+            str.BufAppend(out, fmt.substr(start, i - start))
+            break
+        end
+        cv := fmt_ub(bp, i)
+        i += 1
+        known := cv == 100 or cv == 105 or cv == 117 or cv == 111 or cv == 120 or cv == 88 or cv == 99 or cv == 115 or cv == 112 or cv == 101 or cv == 69 or cv == 102 or cv == 70 or cv == 103 or cv == 71 or cv == 97 or cv == 65
+        if not known:
+            if cv == 37:
+                str.BufAppendChar(out, 37)
+            else:
+                str.BufAppend(out, fmt.substr(start, i - start))
+            end
+            continue
+        end
+        mut a := FmtArg {}
+        if posarg >= 0:
+            if posarg < args.len():
+                a = args.get(posarg)
+            end
+        else argi < args.len():
+            a = args.get(argi)
+            argi += 1
+        end
+        if cv == 100 or cv == 105:
+            v := arg_i64(a)
+            mut neg := false
+            mut mag := v as u64
+            if v < 0:
+                neg = true
+                mag = (0 as u64) - (v as u64)
+            end
+            emit_int(
+                out, mag, neg, 10 as u64, false, width, prec, fminus, fzero, fplus, fspace, fhash
+            )
+        else cv == 117:
+            emit_int(
+                out, arg_u64(a), false, 10 as u64, false, width, prec, fminus, fzero, fplus, fspace, fhash
+            )
+        else cv == 111:
+            emit_int(
+                out, arg_u64(a), false, 8 as u64, false, width, prec, fminus, fzero, fplus, fspace, fhash
+            )
+        else cv == 120:
+            emit_int(
+                out, arg_u64(a), false, 16 as u64, false, width, prec, fminus, fzero, fplus, fspace, fhash
+            )
+        else cv == 88:
+            emit_int(
+                out, arg_u64(a), false, 16 as u64, true, width, prec, fminus, fzero, fplus, fspace, fhash
+            )
+        else cv == 99:
+            pad_append(out, char_from_code(arg_i64(a) as int), width, fminus)
+        else cv == 115:
+            mut sv := arg_str(a)
+            if prec >= 0 and prec < sv.len():
+                sv = sv.substr(0, prec)
+            end
+            pad_append(out, sv, width, fminus)
+        else cv == 112:
+            pv := arg_u64(a)
+            mut ps := "(nil)"
+            if pv != (0 as u64):
+                ps = "0x".concat(u64_hex(pv))
+            end
+            pad_append(out, ps, width, fminus)
+        else:
+            str.BufAppend(
+                out, c_format_f64(
+                    fminus, fplus, fspace, fzero, fhash, width, prec, cv, arg_f64(a)
+                )
+            )
+        end
+    end
+    res := str.BufStr(out)
+    str.BufFree(out)
+    ret res
+end
+
+pub func ArgInt(v: i64): FmtArg:
+    ret FmtArg { kind = ARG_INT, i = v }
+end
+
+pub func ArgUint(v: u64): FmtArg:
+    ret FmtArg { kind = ARG_UINT, u = v }
+end
+
+pub func ArgFloat(v: f64): FmtArg:
+    ret FmtArg { kind = ARG_FLOAT, f = v }
+end
+
+pub func ArgStr(v: str): FmtArg:
+    ret FmtArg { kind = ARG_STR, s = v }
+end
+
+pub func ArgChar(code: int): FmtArg:
+    ret FmtArg { kind = ARG_CHAR, i = code as i64 }
+end
+
+pub func ArgPtr(v: u64): FmtArg:
+    ret FmtArg { kind = ARG_PTR, u = v }
+end
+
+pub func Format0(fmt: str): str:
+    mut v := Vector {} as Vector<FmtArg>
+    defer v.free()
+    r := Format(fmt, v)
+    ret r
+end
+
+pub func Format1(fmt: str, a: FmtArg): str:
+    mut v := Vector {} as Vector<FmtArg>
+    defer v.free()
+    v.push(a)
+    r := Format(fmt, v)
+    ret r
+end
+
+pub func Format2(fmt: str, a: FmtArg, b: FmtArg): str:
+    mut v := Vector {} as Vector<FmtArg>
+    defer v.free()
+    v.push(a)
+    v.push(b)
+    r := Format(fmt, v)
+    ret r
+end
+
+pub func Format3(fmt: str, a: FmtArg, b: FmtArg, c: FmtArg): str:
+    mut v := Vector {} as Vector<FmtArg>
+    defer v.free()
+    v.push(a)
+    v.push(b)
+    v.push(c)
+    r := Format(fmt, v)
+    ret r
+end
+
+pub func Format4(fmt: str, a: FmtArg, b: FmtArg, c: FmtArg, d: FmtArg): str:
+    mut v := Vector {} as Vector<FmtArg>
+    defer v.free()
+    v.push(a)
+    v.push(b)
+    v.push(c)
+    v.push(d)
+    r := Format(fmt, v)
+    ret r
+end
+
+pub func Catf(prefix: str, fmt: str, args: Vector<FmtArg>): str:
+    ret prefix.concat(Format(fmt, args))
+end
+
+pub func EPrintf(fmt: str, args: Vector<FmtArg>):
+    io.EPrint(Format(fmt, args))
+end
+
+if SALAM_OS_WINDOWS:
+    pub func CpuNanos(): i64:
+        cbuf := mem.AllocateZeroed(8 as u64)
+        xbuf := mem.AllocateZeroed(8 as u64)
+        kbuf := mem.AllocateZeroed(8 as u64)
+        ubuf := mem.AllocateZeroed(8 as u64)
+        mut out := 0 as i64
+        if GetProcessTimes(GetCurrentProcess(), cbuf, xbuf, kbuf, ubuf) != 0:
+            kp := kbuf as i64*
+            up := ubuf as i64*
+            out = (kp[0] + up[0]) * 100
+        end
+        mem.Free(cbuf)
+        mem.Free(xbuf)
+        mem.Free(kbuf)
+        mem.Free(ubuf)
+        ret out
+    end
+else:
+    pub func CpuNanos(): i64:
+        ret clock() * 1000
+    end
+end
+
+pub func PeakRss(): i64:
+    ret 0
+end

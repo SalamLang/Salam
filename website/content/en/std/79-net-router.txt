@@ -1,0 +1,115 @@
+pkg.en = net/router
+pkg.name = net/router
+pkg.group = Network
+pkg.summary = Routing HTTP requests, with parameters, groups and static files.
+pkg.title = The net/router package in Salam | Router
+pkg.description = The net/router package in Salam: registering routes for GET, POST and the other methods, path parameters such as :id, route groups and serving static files, with an example.
+pkg.import = net.router
+pkg.intro <<
+<p>The router maps a method and a path to a handler function. It is the routing layer of the <a href="/std/net/http/">net/http</a> server: you register routes on a <code>Router</code>, hand it to the server with <code>http.Use</code>, and for every request the server calls <code>Dispatch</code>, copies the path parameters into the request context and calls the handler with that context id. Handlers read parameters with <code>http.Param</code>. Shared work such as access logs, CORS and security headers comes from <a href="/std/net/http/middleware/">net/http/middleware</a>, which a handler calls first.</p>
+<p>A pattern is matched segment by segment:</p>
+<ul>
+<li>a literal segment such as <code>/notes</code> must match exactly, byte for byte (so method names and paths are case sensitive);</li>
+<li>a segment that starts with <code>:</code> is a parameter: <code>/books/:id</code> matches <code>/books/42</code> with <code>id</code> set to <code>42</code>;</li>
+<li>a <code>*</code> matches everything after it, slashes included, without making a parameter.</li>
+</ul>
+<p>Most examples below call <code>Dispatch</code> directly instead of starting a server. It is the same lookup the server does, and it makes the rules easy to see and to test. <code>Dispatch</code> returns a <code>Match</code> with <code>matched</code>, the handler <code>fn</code> and the parameters; free it with <code>FreeMatch</code>.</p>
+<p>Things that catch people out:</p>
+<ul>
+<li><strong>Register every route before <code>http.Use</code>.</strong> The server keeps its own copy of the router, so a route added afterwards is never seen and answers 404.</li>
+<li><strong>Trailing slashes only match parameter and wildcard routes.</strong> <code>/users/:name</code> also accepts <code>/users/sara/</code>, but the literal route <code>/notes</code> does not accept <code>/notes/</code>.</li>
+<li><strong>Parameters are not URL-decoded.</strong> <code>/tags/open%20source</code> gives <code>open%20source</code>; pass it through <code>http.UrlDecode</code>. The query string is already split off and is read with <code>http.Query</code>.</li>
+<li>There is no automatic 405 and only one static folder per router; both are covered below.</li>
+</ul>
+
+<h2 id="guide-rest">Routes for a REST resource</h2>
+<p>A resource such as notes usually gets five routes: list and create on the collection, read, replace and delete on one item. Register each method with its own function (<code>Get</code>, <code>Post</code>, <code>Put</code>, <code>Delete</code>, and <code>Patch</code> for partial updates) and read the item id with <code>ParamGet</code>. A path that matches no pattern, or a method with no route, gives <code>matched</code> false, which the server answers with 404.</p>
+{{example.net-router-guide-rest}}
+<p>A parameter matches exactly one path segment: <code>/notes/17/comments</code> does not reach <code>/notes/:id</code>. Give nested resources their own pattern, such as <code>/notes/:id/comments</code>.</p>
+
+<h2 id="guide-order">Which route wins</h2>
+<p>When several patterns fit one path, a literal segment beats a parameter and a parameter beats <code>*</code>, so <code>/users/me</code> reaches its own handler even though <code>/users/:name</code> was registered first. Between two wildcard routes the one registered first wins, so register a catch-all <code>/*</code> last, after more specific ones like <code>/assets/*</code>. The output shows three more rules: <code>/users/sara/</code> with a trailing slash still reaches the parameter route, <code>/users/me/</code> misses the literal route and lands on <code>/users/:name</code> with <code>name</code> set to <code>me</code>, and a <code>HEAD</code> request falls back to the <code>GET</code> route.</p>
+{{example.net-router-guide-order}}
+
+<h2 id="guide-allow">404 or 405: telling the client what is allowed</h2>
+<p>A request for a path that exists with the wrong method should get <code>405 Method Not Allowed</code> and an <code>Allow</code> header, not a 404. The router does not do this by itself, but it is easy to build on <code>Dispatch</code>: when a request does not match, try the same path with the other methods and list the ones that do.</p>
+{{example.net-router-guide-allow}}
+
+<h2 id="guide-versions">Grouping routes under a prefix</h2>
+<p><code>Group</code> registers a route under a shared prefix, which keeps API versions apart: <code>/api/v1/users</code> and <code>/api/v2/users</code> can live side by side and point to different handlers. Keep the prefix in a variable so a version is renamed in one place. The registered routes are in <code>r.routes</code>, which is useful for printing a route table at start-up.</p>
+{{example.net-router-guide-versions}}
+
+<h2 id="guide-server">Path parameters in a running server</h2>
+<p>Inside a handler the parameters come from the request context: <code>http.Param(ctx, "slug")</code> reads one, and <code>http.Query(ctx, "page")</code> reads the query string, which the server removes from the path before routing. The program below serves a blog and a tag page. It shows the two server rules from the top of the page: the tag arrives still percent-encoded until <code>http.UrlDecode</code> turns it back into text, and <code>/late</code>, registered after <code>http.Use</code>, is a 404.</p>
+{{example.net-router-guide-server}}
+
+<h2 id="guide-static">Serving a folder next to the API</h2>
+<p><code>Static(r, prefix, folder)</code> serves the files under a folder for paths that start with the prefix, with the <code>Content-Type</code> from <a href="/std/net/mime/">net/mime</a> and <code>index.html</code> for a directory. A directory requested without its trailing slash gets a 301 redirect to the slashed path, and <code>..</code> cannot climb out of the folder. Static files are checked before the routes and for every method, and a path with no file falls through to the routes and then to a 404, so <code>/api/status</code> still reaches its handler. The program writes a small <code>public</code> folder, serves it on 127.0.0.1 and fetches four paths.</p>
+{{example.net-router-guide-static}}
+<p>The prefix is a plain string prefix. With <code>/</code> every path is first looked up on disk, which is fine for a small site; for a large API put the files under their own prefix such as <code>/static</code>. A router has one static folder: a second <code>Static</code> call replaces the first. <code>EnableListing</code> makes a folder without <code>index.html</code> answer with an HTML list of its files instead of a 404.</p>
+>>
+
+doc.Router = The router: it sends requests to the right function by method and path.
+doc.Router.routes = The registered routes.
+doc.Router.static_prefix = The path prefix of the static files.
+doc.Router.static_dir = The directory of the static files.
+doc.Router.has_static = Static files are enabled.
+doc.Router.static_listing = Show the contents of directories.
+doc.Router.fallback = The handler that runs when no route matches. Zero means there is none and the server answers 404.
+doc.Router.idx = The hash table of the literal routes.
+doc.Router.idx_mask = The table size minus one.
+doc.Router.n_literal = The number of literal routes.
+doc.Router.n_dynamic = The number of routes with parameters.
+doc.Route = One registered route.
+doc.Route.method = The HTTP method.
+doc.Route.pattern = The path pattern.
+doc.Route.fn = The handler function.
+doc.Route.mid = The method id.
+doc.Route.spec = The kind of pattern: zero literal, 1 with parameters, 2 with a <code>*</code>.
+doc.Match = The result of finding a route.
+doc.Match.matched = A route was found.
+doc.Match.fn = The handler function of the route.
+doc.Match.params = The path parameters.
+doc.Param = One path parameter.
+doc.Param.key = The name, without the <code>:</code>.
+doc.Param.value = The value from the request path.
+doc.ParamList = A list of parameters.
+doc.ParamList.items = The parameters.
+doc.NewRouter = An empty router.
+doc.Get = Registers the handler for GET requests to a path.
+doc.Post = For POST.
+doc.Put = For PUT.
+doc.Delete = For DELETE.
+doc.Patch = For PATCH.
+doc.Head = For HEAD.
+doc.Options = For OPTIONS.
+doc.Method = Registers the handler for any method you name, such as <code>PROPFIND</code>. The name is matched case sensitively.
+doc.Group = Registers one route under a prefix, for example <code>/api/v1</code>; it is the same as registering <code>prefix + path</code> with that method.
+doc.Static = Serves the files of the given directory under a path prefix. A router has one static folder; calling it again replaces the first.
+doc.EnableListing = For directories with no <code>index.html</code>, shows the list of files.
+doc.SetFallback = Sets the handler for every request that no route matches, whatever its method or path; the handler builds the whole response. It is how a server that picks the answer from the <code>Host</code> header, such as <code>net/httpd</code>, sits behind one router.
+doc.ParamGet = The value of one path parameter, still URL-encoded; an empty string when there is none.
+doc.Dispatch = Finds the right route for the method and path of the request. Literal routes win over routes with parameters, and a HEAD request falls back to the GET route when it has none of its own.
+doc.FreeMatch = Frees the memory of the result.
+
+ex.Router = net-router-Dispatch
+ex.Route = net-router-Dispatch
+ex.Match = net-router-Dispatch
+ex.Param = net-router-Dispatch
+ex.ParamList = net-router-Dispatch
+ex.NewRouter = net-router-Dispatch
+ex.Get = net-router-Dispatch
+ex.Post = net-router-Dispatch
+ex.Put = net-router-Dispatch
+ex.Delete = net-router-Dispatch
+ex.Patch = net-router-Dispatch
+ex.Head = net-router-Dispatch
+ex.Options = net-router-Dispatch
+ex.Method = net-router-Dispatch
+ex.Group = net-router-Dispatch
+ex.Static = net-router-Dispatch
+ex.EnableListing = net-router-Dispatch
+ex.SetFallback = net-router-Fallback
+ex.ParamGet = net-router-Dispatch
+ex.Dispatch = net-router-Dispatch
+ex.FreeMatch = net-router-Dispatch

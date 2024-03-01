@@ -1,0 +1,244 @@
+package nativelink
+
+func wr16(p: u8*, o: i64, v: i64):
+    p[o] = (v & (255 as i64)) as u8
+    p[o + (1 as i64)] = ((v >> (8 as i64)) & (255 as i64)) as u8
+end
+
+func rv_hi(v: i64): i64:
+    ret (v + (0x800 as i64)) >> (12 as i64)
+end
+
+func rv_lo(v: i64): i64:
+    ret v - (rv_hi(v) << (12 as i64))
+end
+
+func rv_set_u(buf: u8*, place: i64, hi: i64):
+    w := rd32(buf, place)
+    wr32(buf, place, (w & (0xFFF as i64)) | ((hi & (0xFFFFF as i64)) << (12 as i64)))
+end
+
+func rv_set_i(buf: u8*, place: i64, lo: i64):
+    w := rd32(buf, place)
+    wr32(buf, place, (w & (0xFFFFF as i64)) | ((lo & (0xFFF as i64)) << (20 as i64)))
+end
+
+func rv_set_s(buf: u8*, place: i64, lo: i64):
+    w := rd32(buf, place)
+    wr32(buf, place, (w & (0x1FFF07F as i64)) | (((lo >> (5 as i64)) & (0x7F as i64)) << (25 as i64)) | ((lo & (31 as i64)) << (7 as i64)))
+end
+
+func rv_set_b(buf: u8*, place: i64, d: i64):
+    w := rd32(buf, place)
+    b := (((d >> (12 as i64)) & (1 as i64)) << (31 as i64)) | (((d >> (5 as i64)) & (0x3F as i64)) << (25 as i64)) | (((d >> (1 as i64)) & (15 as i64)) << (8 as i64)) | (((d >> (11 as i64)) & (1 as i64)) << (7 as i64))
+    wr32(buf, place, (w & (0x1FFF07F as i64)) | b)
+end
+
+func rv_set_j(buf: u8*, place: i64, d: i64):
+    w := rd32(buf, place)
+    j := (((d >> (20 as i64)) & (1 as i64)) << (31 as i64)) | (((d >> (1 as i64)) & (0x3FF as i64)) << (21 as i64)) | (((d >> (11 as i64)) & (1 as i64)) << (20 as i64)) | (((d >> (12 as i64)) & (0xFF as i64)) << (12 as i64))
+    wr32(buf, place, (w & (0xFFF as i64)) | j)
+end
+
+func rv_set_cb(buf: u8*, place: i64, d: i64):
+    h := rd16(buf, place) as i64
+    b := (((d >> (8 as i64)) & (1 as i64)) << (12 as i64)) | (((d >> (3 as i64)) & (3 as i64)) << (10 as i64)) | (((d >> (6 as i64)) & (3 as i64)) << (5 as i64)) | (((d >> (1 as i64)) & (3 as i64)) << (3 as i64)) | (((d >> (5 as i64)) & (1 as i64)) << (2 as i64))
+    wr16(buf, place, (h & (0xE383 as i64)) | b)
+end
+
+func rv_set_cj(buf: u8*, place: i64, d: i64):
+    h := rd16(buf, place) as i64
+    j := (((d >> (11 as i64)) & (1 as i64)) << (12 as i64)) | (((d >> (4 as i64)) & (1 as i64)) << (11 as i64)) | (((d >> (8 as i64)) & (3 as i64)) << (9 as i64)) | (((d >> (10 as i64)) & (1 as i64)) << (8 as i64)) | (((d >> (6 as i64)) & (1 as i64)) << (7 as i64)) | (((d >> (7 as i64)) & (1 as i64)) << (6 as i64)) | (((d >> (1 as i64)) & (7 as i64)) << (3 as i64)) | (((d >> (5 as i64)) & (1 as i64)) << (2 as i64))
+    wr16(buf, place, (h & (0xE003 as i64)) | j)
+end
+
+func rv_uleb_len(buf: u8*, place: i64): int:
+    mut n := 1
+    until (buf[place + ((n - 1) as i64)] & (0x80 as u8)) != (0 as u8):
+        n += 1
+    end
+    ret n
+end
+
+func rv_uleb_read(buf: u8*, place: i64): i64:
+    mut v := 0 as i64
+    n := rv_uleb_len(buf, place)
+    repeat n in k:
+        b := buf[place + (k as i64)] as i64
+        v = v | ((b & (0x7F as i64)) << ((7 * k) as i64))
+    end
+    ret v
+end
+
+func rv_uleb_write(buf: u8*, place: i64, v0: i64):
+    n := rv_uleb_len(buf, place)
+    mut v := v0
+    repeat n in k:
+        mut b := v & (0x7F as i64)
+        v = v >> (7 as i64)
+        if k < n - 1:
+            b = b | (0x80 as i64)
+        end
+        buf[place + (k as i64)] = b as u8
+    end
+end
+
+func rv_pcrel_hi(l &: Nl, s2: int, at: i64): i64:
+    r0 := l.s_rel0[s2]
+    repeat l.s_nrel[s2] in k:
+        r := r0 + k
+        ty := l.r_type[r]
+        if (ty == 23 or ty == 20 or ty == 21 or ty == 22) and l.s_addr[s2] + l.r_off[r] == at:
+            if ty == 20:
+                ret got_entry(l, l.r_sym[r]) - at
+            end
+            if ty == 21 or ty == 22:
+                ret tls_slot_addr(l, l.r_sym[r], ty == 21 ? TG_TP : TG_MOD) - at
+            end
+            ret sym_addr(l, l.r_sym[r]) + l.r_add[r] - at
+        end
+    end
+    ret 0 - 0x7FFFFFFFFFFF as i64
+end
+
+func reloc_riscv(l &: Nl, buf: u8*, s2: int, r: int, ty: int, place: i64, pc: i64, a: i64, sv: i64, os: int): bool:
+    x := sv + a
+    switch ty:
+        1:
+            wr32(buf, place, x)
+            ret true
+        end
+        2:
+            wr64(buf, place, x)
+            ret true
+        end
+        16:
+            rv_set_b(buf, place, x - pc)
+            ret true
+        end
+        17:
+            rv_set_j(buf, place, x - pc)
+            ret true
+        end
+        18, 19:
+            d := x - pc
+            rv_set_u(buf, place, rv_hi(d))
+            rv_set_i(buf, place + (4 as i64), rv_lo(d))
+            ret true
+        end
+        20:
+            ga := got_or_fail(l, os, s2, r)
+            if ga < (0 as i64): ret false end
+            rv_set_u(buf, place, rv_hi(ga + a - pc))
+            ret true
+        end
+        23:
+            rv_set_u(buf, place, rv_hi(x - pc))
+            ret true
+        end
+        24, 25:
+            v := rv_pcrel_hi(l, s2, x)
+            if v == (0 - 0x7FFFFFFFFFFF as i64):
+                nl_fail(l, "RISC-V %pcrel_lo without a matching %pcrel_hi at " + reloc_where(l, s2, r))
+                ret false
+            end
+            if ty == 24:
+                rv_set_i(buf, place, rv_lo(v))
+            else:
+                rv_set_s(buf, place, rv_lo(v))
+            end
+            ret true
+        end
+        26:
+            rv_set_u(buf, place, rv_hi(x))
+            ret true
+        end
+        27:
+            rv_set_i(buf, place, rv_lo(x))
+            ret true
+        end
+        28:
+            rv_set_s(buf, place, rv_lo(x))
+            ret true
+        end
+        33:
+            buf[place] = ((rd8(buf, place) as i64 + x) & (255 as i64)) as u8
+            ret true
+        end
+        34:
+            wr16(buf, place, (rd16(buf, place) as i64) + x)
+            ret true
+        end
+        35:
+            wr32(buf, place, rd32(buf, place) + x)
+            ret true
+        end
+        36:
+            wr64(buf, place, rd64(buf, place) + x)
+            ret true
+        end
+        37:
+            buf[place] = ((rd8(buf, place) as i64 - x) & (255 as i64)) as u8
+            ret true
+        end
+        38:
+            wr16(buf, place, (rd16(buf, place) as i64) - x)
+            ret true
+        end
+        39:
+            wr32(buf, place, rd32(buf, place) - x)
+            ret true
+        end
+        40:
+            wr64(buf, place, rd64(buf, place) - x)
+            ret true
+        end
+        43, 51:
+            ret true
+        end
+        44:
+            rv_set_cb(buf, place, x - pc)
+            ret true
+        end
+        45:
+            rv_set_cj(buf, place, x - pc)
+            ret true
+        end
+        52:
+            old := rd8(buf, place) as i64
+            buf[place] = ((old & (0xC0 as i64)) | ((old - x) & (0x3F as i64))) as u8
+            ret true
+        end
+        53:
+            old2 := rd8(buf, place) as i64
+            buf[place] = ((old2 & (0xC0 as i64)) | (x & (0x3F as i64))) as u8
+            ret true
+        end
+        54:
+            buf[place] = (x & (255 as i64)) as u8
+            ret true
+        end
+        55:
+            wr16(buf, place, x)
+            ret true
+        end
+        56:
+            wr32(buf, place, x)
+            ret true
+        end
+        57:
+            wr32(buf, place, x - pc)
+            ret true
+        end
+        60:
+            rv_uleb_write(buf, place, x)
+            ret true
+        end
+        61:
+            rv_uleb_write(buf, place, rv_uleb_read(buf, place) - x)
+            ret true
+        end
+    end
+    nl_fail(l, "unsupported RISC-V relocation type " + str.FromInt(ty as i64) + " at " + reloc_where(l, s2, r))
+    ret false
+end

@@ -1,0 +1,703 @@
+package nativegen
+
+const INL_MAX := 40
+const INL_ALWAYS_MAX := 200
+const INL_GROW := 2000
+const INL_FRAME_MAX := 512
+const INL_ONE_MAX := 300
+const INL_UNR_MAX := 320
+const INL_SITE_MAX := 48
+const INL_TINY := 10
+const INL_SLOT_BONUS := 16
+const INL_MEMOP_BONUS := 6
+const INL_CONST_BONUS := 6
+const INL_LOOP_SITE := 120
+const INL_LOOP_BLOCKS := 40
+
+pub struct Ic:
+    pub ent: Vector<int> = Vector {}
+    pub e_v0: Vector<int> = Vector {}
+    pub e_nv: Vector<int> = Vector {}
+    pub e_i0: Vector<int> = Vector {}
+    pub e_ni: Vector<int> = Vector {}
+    pub e_p0: Vector<int> = Vector {}
+    pub e_nb: Vector<int> = Vector {}
+    pub e_cost: Vector<int> = Vector {}
+    pub e_need: Vector<int> = Vector {}
+    pub e_na: Vector<int> = Vector {}
+    pub e_am0: Vector<int> = Vector {}
+    pub am: Vector<int> = Vector {}
+    pub e_rec: Vector<bool> = Vector {}
+    pub vk: Vector<int> = Vector {}
+    pub vt: Vector<int> = Vector {}
+    pub vi: Vector<i64> = Vector {}
+    pub vd: Vector<int> = Vector {}
+    pub op: Vector<int> = Vector {}
+    pub ty: Vector<int> = Vector {}
+    pub res: Vector<int> = Vector {}
+    pub a: Vector<int> = Vector {}
+    pub b: Vector<int> = Vector {}
+    pub c: Vector<int> = Vector {}
+    pub dbg: Vector<int> = Vector {}
+    pub x: Vector<int> = Vector {}
+    pub d: Vector<i64> = Vector {}
+    pub f: Vector<int> = Vector {}
+    pub ps: Vector<int> = Vector {}
+    pub pcount: Vector<int> = Vector {}
+    pub blk: Vector<int> = Vector {}
+    pub pool: Vector<int> = Vector {}
+    pub vmap: Vector<int> = Vector {}
+    pub bmap: Vector<int> = Vector {}
+    pub ev_anchor: Vector<int> = Vector {}
+    pub ev_var: Vector<int> = Vector {}
+    pub ev_foff: Vector<int> = Vector {}
+    pub ev_fsz: Vector<int> = Vector {}
+    pub ev_ind: Vector<bool> = Vector {}
+    pub ev_ctx: Vector<int> = Vector {}
+    pub ev_val: Vector<int> = Vector {}
+    pub e_ev0: Vector<int> = Vector {}
+    pub e_evcount: Vector<int> = Vector {}
+end
+
+func ic_lookup(g &: Ng, sym: int): int:
+    if sym < 0 or sym >= g.ic.ent.len():
+        ret 0 - 1
+    end
+    ret g.ic.ent[sym]
+end
+
+func fn_cost(g &: Ng): int:
+    mut n := 0
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            if op != OP_NOP and op != OP_PHI and op != OP_BR:
+                n += 1
+                if op == OP_CALL:
+                    n += 2
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret n
+end
+
+func one_caller(g &: Ng): bool:
+    s := g.f_sym
+    if g.off_inl1 or g.ip_off or s < 0 or s >= g.ip_ncall.len():
+        ret false
+    end
+    ret g.ip_ncall[s] == 1 and not g.ip_taken[s]
+end
+
+func inline_ok_fn(g &: Ng, cost: int): int:
+    if g.f_noinline or g.f_noret:
+        if g.inl_trace:
+            printerrln "inline: skip " + tab_str(g.syms, g.f_sym) + " noinline"
+        end
+        ret 0 - 1
+    end
+    mut lim := g.inl_max > 0 ? g.inl_max : INL_MAX
+    if g.f_always:
+        lim = INL_ALWAYS_MAX
+    end
+    if one_caller(g) and lim < INL_ONE_MAX:
+        lim = INL_ONE_MAX
+    end
+    if not g.off_aggbonus:
+        if is_agg(g, g.f_ret) and tsize(g, g.f_ret) <= 64:
+            lim += 16
+        end
+        each av in g.f_args:
+            if av >= 0 and is_agg(g, g.v_ty[av]) and tsize(g, g.v_ty[av]) <= 64:
+                lim += 8
+            end
+        end
+    end
+    mut need := 0
+    if cost > lim:
+        if g.off_isite or cost > lim + (g.off_loopinl ? INL_SITE_MAX : INL_LOOP_SITE):
+            if g.inl_trace:
+                printerrln "inline: skip " + tab_str(g.syms, g.f_sym) + " cost " + cost + " limit " + lim
+            end
+            ret 0 - 1
+        end
+        need = cost - lim
+    end
+    each fl in g.f_argf:
+        if (fl & IF_BYVAL) != 0:
+            if g.inl_trace:
+                printerrln "inline: skip " + tab_str(g.syms, g.f_sym) + " byval"
+            end
+            ret 0 - 1
+        end
+    end
+    mut frame := 0
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            if g.i_op[i] == OP_ALLOCA:
+                frame += tsize(g, g.i_x[i]) * (g.i_d[i] < (1 as i64) ? 1 : g.i_d[i] as int)
+                if frame > INL_FRAME_MAX:
+                    if g.inl_trace:
+                        printerrln "inline: skip " + tab_str(g.syms, g.f_sym) + " frame"
+                    end
+                    ret 0 - 1
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret need
+end
+
+func cache_val(g &: Ng, v: int, base: int): int:
+    if v < 0:
+        ret v
+    end
+    if g.ic.vmap[v] >= 0:
+        ret g.ic.vmap[v]
+    end
+    nv := g.ic.vk.len() - base
+    g.ic.vk.push(g.v_kind[v])
+    g.ic.vt.push(g.v_ty[v])
+    g.ic.vi.push(g.v_i[v])
+    g.ic.vd.push(g.v_def[v])
+    g.ic.vmap[v] = nv
+    ret nv
+end
+
+func cache_function(g &: Ng):
+    cost := fn_cost(g)
+    mut eff := cost
+    if not g.off_inlunr and g.unr_grow > 0 and cost <= INL_UNR_MAX:
+        eff = cost - g.unr_grow
+        if eff < 1:
+            eff = 1
+        end
+    end
+    need := inline_ok_fn(g, eff)
+    if need < 0:
+        ret
+    end
+    s := g.f_sym
+    until g.ic.ent.len() <= s:
+        g.ic.ent.push(0 - 1)
+    end
+    g.ic.vmap.clear()
+    repeat g.v_kind.len():
+        g.ic.vmap.push(0 - 1)
+    end
+    g.ic.bmap.clear()
+    repeat g.b_first.len():
+        g.ic.bmap.push(0 - 1)
+    end
+    repeat g.b_rpo.len() in ri:
+        g.ic.bmap[g.b_rpo[ri]] = ri
+    end
+    v0 := g.ic.vk.len()
+    i0 := g.ic.op.len()
+    p0 := g.ic.pool.len()
+    repeat g.f_args.len() in k:
+        _a := cache_val(g, g.f_args[k], v0)
+    end
+    mut imap := Vector {} as Vector<int>
+    repeat g.i_op.len():
+        imap.push(0 - 1)
+    end
+    mut n := 0
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            imap[i] = n
+            n += 1
+            i = g.i_next[i]
+        end
+    end
+    each b2 in g.b_rpo:
+        mut j := g.b_first[b2]
+        until j >= 0:
+            op := g.i_op[j]
+            g.ic.op.push(op)
+            g.ic.dbg.push(g.i_dbg[j])
+            g.ic.ty.push(g.i_ty[j])
+            g.ic.x.push(g.i_x[j])
+            g.ic.d.push(g.i_d[j])
+            g.ic.f.push(g.i_f[j])
+            g.ic.blk.push(g.ic.bmap[b2])
+            m := val_mask(op)
+            mut va := g.i_a[j]
+            mut vb := g.i_b[j]
+            mut vc := g.i_c[j]
+            if (m & 1) != 0:
+                va = cache_val(g, va, v0)
+            end
+            if (m & 2) != 0:
+                vb = cache_val(g, vb, v0)
+            else op == OP_BR or op == OP_CBR:
+                vb = g.ic.bmap[vb]
+            end
+            if (m & 4) != 0:
+                vc = cache_val(g, vc, v0)
+            else op == OP_CBR:
+                vc = g.ic.bmap[vc]
+            end
+            g.ic.a.push(va)
+            g.ic.b.push(vb)
+            g.ic.c.push(vc)
+            r := g.i_res[j]
+            if r >= 0:
+                cr := cache_val(g, r, v0)
+                g.ic.vd[v0 + cr] = imap[j]
+                g.ic.res.push(cr)
+            else:
+                g.ic.res.push(0 - 1)
+            end
+            g.ic.ps.push(g.ic.pool.len() - p0)
+            g.ic.pcount.push(g.i_pcount[j])
+            if op == OP_CALL:
+                repeat g.i_pcount[j] in k2:
+                    q := g.i_ps[j] + 3 * k2
+                    g.ic.pool.push(cache_val(g, g.pool[q], v0))
+                    g.ic.pool.push(g.pool[q + 1])
+                    g.ic.pool.push(g.pool[q + 2])
+                end
+            else op == OP_PHI:
+                repeat g.i_pcount[j] in k3:
+                    q2 := g.i_ps[j] + 2 * k3
+                    g.ic.pool.push(cache_val(g, g.pool[q2], v0))
+                    g.ic.pool.push(g.ic.bmap[g.pool[q2 + 1]])
+                end
+            end
+            j = g.i_next[j]
+        end
+    end
+    ev0 := g.ic.ev_anchor.len()
+    if g.dbg_on and g.ev_fv.len() > 0:
+        dv_cache_events(g, imap, v0)
+    end
+    imap.free()
+    g.ic.e_ev0.push(ev0)
+    g.ic.e_evcount.push(g.ic.ev_anchor.len() - ev0)
+    g.ic.ent[s] = g.ic.e_v0.len()
+    g.ic.e_v0.push(v0)
+    g.ic.e_nv.push(g.ic.vk.len() - v0)
+    g.ic.e_i0.push(i0)
+    g.ic.e_ni.push(g.ic.op.len() - i0)
+    g.ic.e_p0.push(p0)
+    g.ic.e_nb.push(g.b_rpo.len())
+    g.ic.e_cost.push(cost)
+    g.ic.e_need.push(need)
+    g.ic.e_na.push(g.f_args.len())
+    g.ic.e_am0.push(g.ic.am.len())
+    each av in g.f_args:
+        g.ic.am.push(arg_memops(g, av))
+    end
+    g.ic.e_rec.push(calls_self(g))
+end
+
+func map_cval(g &: Ng, cv: int, v0: int, call: int): int:
+    if cv < 0:
+        ret cv
+    end
+    if g.ic.vmap[cv] >= 0:
+        ret g.ic.vmap[cv]
+    end
+    k := g.ic.vk[v0 + cv]
+    mut nv := 0 - 1
+    if k == VK_ARG:
+        ai := g.ic.vi[v0 + cv] as int
+        nv = resolve(g, g.pool[g.i_ps[call] + 3 * ai])
+    else:
+        nv = new_val(g, k, g.ic.vt[v0 + cv], g.ic.vi[v0 + cv])
+        if k == VK_GLB:
+            g.v_def[nv] = g.ic.vd[v0 + cv]
+        end
+    end
+    g.ic.vmap[cv] = nv
+    ret nv
+end
+
+func split_after(g &: Ng, c: int): int:
+    b := g.i_blk[c]
+    b2 := new_blk(g)
+    nx := g.i_next[c]
+    if nx >= 0:
+        g.b_first[b2] = nx
+        g.b_last[b2] = g.b_last[b]
+        g.i_prev[nx] = 0 - 1
+        mut j := nx
+        until j >= 0:
+            g.i_blk[j] = b2
+            j = g.i_next[j]
+        end
+        g.i_next[c] = 0 - 1
+        g.b_last[b] = c
+    end
+    t := g.b_last[b2]
+    if t >= 0:
+        op := g.i_op[t]
+        mut s1 := 0 - 1
+        mut s2 := 0 - 1
+        if op == OP_BR:
+            s1 = g.i_b[t]
+        else op == OP_CBR:
+            s1 = g.i_b[t]
+            s2 = g.i_c[t]
+        end
+        retarget_phis(g, s1, b, b2)
+        if s2 != s1:
+            retarget_phis(g, s2, b, b2)
+        end
+    end
+    ret b2
+end
+
+func retarget_phis(g &: Ng, s: int, from: int, into: int):
+    if s < 0:
+        ret
+    end
+    mut i := g.b_first[s]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        ps := g.i_ps[i]
+        repeat g.i_pcount[i] in k:
+            if g.pool[ps + 2 * k + 1] == from:
+                g.pool[ps + 2 * k + 1] = into
+            end
+        end
+        i = g.i_next[i]
+    end
+end
+
+func inline_call(g &: Ng, c: int, e: int):
+    v0 := g.ic.e_v0[e]
+    i0 := g.ic.e_i0[e]
+    ni := g.ic.e_ni[e]
+    p0 := g.ic.e_p0[e]
+    nb := g.ic.e_nb[e]
+    g.ic.vmap.clear()
+    repeat g.ic.e_nv[e]:
+        g.ic.vmap.push(0 - 1)
+    end
+    cl := g.i_dbg[c]
+    b2 := split_after(g, c)
+    g.ic.bmap.clear()
+    repeat nb:
+        g.ic.bmap.push(new_blk(g))
+    end
+    mut rv := Vector {} as Vector<int>
+    mut rb := Vector {} as Vector<int>
+    ev_count := g.ic.e_evcount[e]
+    mut newi := Vector {} as Vector<int>
+    repeat ni in k:
+        ci := i0 + k
+        op := g.ic.op[ci]
+        nb2 := g.ic.bmap[g.ic.blk[ci]]
+        if op == OP_RET:
+            if g.ic.a[ci] >= 0:
+                rv.push(map_cval(g, g.ic.a[ci], v0, c))
+                rb.push(nb2)
+            end
+            bi := ins_new(g, OP_BR, T_VOID)
+            g.i_b[bi] = b2
+            ins_append(g, nb2, bi)
+            if ev_count > 0:
+                newi.push(bi)
+            end
+            continue
+        end
+        ni2 := ins_new(g, op, g.ic.ty[ci])
+        if ev_count > 0:
+            newi.push(ni2)
+        end
+        g.i_dbg[ni2] = dbg_rebase(g, g.ic.dbg[ci], cl)
+        g.i_x[ni2] = g.ic.x[ci]
+        g.i_d[ni2] = g.ic.d[ci]
+        g.i_f[ni2] = g.ic.f[ci]
+        m := val_mask(op)
+        if (m & 1) != 0:
+            g.i_a[ni2] = map_cval(g, g.ic.a[ci], v0, c)
+        else:
+            g.i_a[ni2] = g.ic.a[ci]
+        end
+        if (m & 2) != 0:
+            g.i_b[ni2] = map_cval(g, g.ic.b[ci], v0, c)
+        else op == OP_BR or op == OP_CBR:
+            g.i_b[ni2] = g.ic.bmap[g.ic.b[ci]]
+        else:
+            g.i_b[ni2] = g.ic.b[ci]
+        end
+        if (m & 4) != 0:
+            g.i_c[ni2] = map_cval(g, g.ic.c[ci], v0, c)
+        else op == OP_CBR:
+            g.i_c[ni2] = g.ic.bmap[g.ic.c[ci]]
+        else:
+            g.i_c[ni2] = g.ic.c[ci]
+        end
+        pcount := g.ic.pcount[ci]
+        if op == OP_CALL:
+            g.i_ps[ni2] = g.pool.len()
+            g.i_pcount[ni2] = pcount
+            repeat pcount in q:
+                pq := p0 + g.ic.ps[ci] + 3 * q
+                g.pool.push(map_cval(g, g.ic.pool[pq], v0, c))
+                g.pool.push(g.ic.pool[pq + 1])
+                g.pool.push(g.ic.pool[pq + 2])
+            end
+        else op == OP_PHI:
+            g.i_ps[ni2] = g.pool.len()
+            g.i_pcount[ni2] = pcount
+            repeat pcount in q2:
+                pq2 := p0 + g.ic.ps[ci] + 2 * q2
+                g.pool.push(map_cval(g, g.ic.pool[pq2], v0, c))
+                g.pool.push(g.ic.bmap[g.ic.pool[pq2 + 1]])
+            end
+        end
+        cr := g.ic.res[ci]
+        if cr >= 0:
+            nv := map_cval(g, cr, v0, c)
+            g.v_kind[nv] = VK_INS
+            g.i_res[ni2] = nv
+            g.v_def[nv] = ni2
+        end
+        ins_append(g, nb2, ni2)
+    end
+    if ev_count > 0 and g.dbg_on and cl >= 0:
+        dv_inline_events(g, e, newi, v0, c, cl)
+    end
+    newi.free()
+    r := g.i_res[c]
+    g.i_op[c] = OP_BR
+    g.i_ty[c] = T_VOID
+    g.i_a[c] = 0 - 1
+    g.i_b[c] = g.ic.bmap[0]
+    g.i_c[c] = 0 - 1
+    g.i_res[c] = 0 - 1
+    g.i_pcount[c] = 0
+    repl_grow(g)
+    if r >= 0:
+        if rv.len() == 1:
+            g.v_repl[r] = rv[0]
+        else rv.len() > 1:
+            ph := ins_new(g, OP_PHI, g.v_ty[r])
+            g.i_ps[ph] = g.pool.len()
+            g.i_pcount[ph] = rv.len()
+            repeat rv.len() in q3:
+                g.pool.push(rv[q3])
+                g.pool.push(rb[q3])
+            end
+            pv := new_res(g, ph)
+            first := g.b_first[b2]
+            if first >= 0:
+                ins_before(g, first, ph)
+            else:
+                ins_append(g, b2, ph)
+            end
+            repl_grow(g)
+            g.v_repl[r] = pv
+        else:
+            g.v_repl[r] = new_val(g, VK_UNDEF, g.v_ty[r], 0 as i64)
+            repl_grow(g)
+        end
+    end
+    rv.free()
+    rb.free()
+end
+
+func call_inlinable(g &: Ng, i: int, grown: int): int:
+    cv := g.i_a[i]
+    if g.v_kind[cv] != VK_GLB or g.v_i[cv] != (0 as i64):
+        ret 0 - 1
+    end
+    s := g.v_def[cv]
+    if s == g.f_sym and not g.allow_self:
+        ret 0 - 1
+    end
+    e := ic_lookup(g, s)
+    if e < 0:
+        if g.inl_trace:
+            printerrln "inline: uncached " + tab_str(g.syms, s) + " in " + tab_str(g.syms, g.f_sym)
+        end
+        ret 0 - 1
+    end
+    if g.ic.e_rec[e] and s != g.f_sym:
+        ret 0 - 1
+    end
+    if grown + g.ic.e_cost[e] > INL_GROW and (g.off_tiny or g.ic.e_cost[e] > INL_TINY):
+        if g.inl_trace:
+            printerrln "inline: grown " + tab_str(g.syms, s) + " in " + tab_str(g.syms, g.f_sym)
+        end
+        ret 0 - 1
+    end
+    if (g.i_f[i] & IF_VARARG) != 0 or g.i_pcount[i] != g.ic.e_na[e]:
+        ret 0 - 1
+    end
+    repeat g.i_pcount[i] in k:
+        if (g.pool[g.i_ps[i] + 3 * k + 1] & IF_BYVAL) != 0:
+            ret 0 - 1
+        end
+    end
+    if g.ic.e_need[e] > 0 and (g.ic.e_rec[e] or site_bonus(g, i, e) < g.ic.e_need[e]):
+        if g.inl_trace:
+            printerrln "inline: need " + tab_str(g.syms, s) + " in " + tab_str(g.syms, g.f_sym) + " need " + g.ic.e_need[e] + " bonus " + site_bonus(g, i, e)
+        end
+        ret 0 - 1
+    end
+    ret e
+end
+
+func arg_memops(g &: Ng, av: int): int:
+    if av < 0 or g.v_ty[av] != T_PTR:
+        ret 0
+    end
+    mut n := 0
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            if (op == OP_LOAD and g.i_a[i] == av) or (op == OP_STORE and g.i_b[i] == av and g.i_a[i] != av):
+                n += 1
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret n
+end
+
+func agg_res_fields_only(g &: Ng, c: int): bool:
+    r := g.i_res[c]
+    if r < 0 or not is_agg(g, g.v_ty[r]) or tsize(g, g.v_ty[r]) <= 16:
+        ret false
+    end
+    mut n := 0
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            if i != c and uses_val(g, i, r):
+                if g.i_op[i] != OP_EXTV or g.i_a[i] != r:
+                    ret false
+                end
+                n += 1
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret n > 0
+end
+
+func inl_mark_loops(g &: Ng):
+    nb := g.b_first.len()
+    g.inl_loopb.clear()
+    repeat nb:
+        g.inl_loopb.push(false)
+    end
+    if g.off_loopinl or g.b_rpo.len() > INL_LOOP_BLOCKS:
+        ret
+    end
+    build_dom(g)
+    mut l := Lp {}
+    repeat nb:
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut mark := 9000000
+    each h in l.head:
+        mark += 1
+        _n := lp_body(g, l, h, mark)
+    end
+    repeat nb in b:
+        if l.inl[b] != 0:
+            g.inl_loopb[b] = true
+        end
+    end
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+end
+
+func ic_leaf(g &: Ng, e: int): bool:
+    i0 := g.ic.e_i0[e]
+    repeat g.ic.e_ni[e] in k:
+        if g.ic.op[i0 + k] == OP_CALL:
+            ret false
+        end
+    end
+    ret true
+end
+
+func site_bonus(g &: Ng, c: int, e: int): int:
+    mut bonus := 0
+    cb := g.i_blk[c]
+    if cb >= 0 and cb < g.inl_loopb.len() and g.inl_loopb[cb] and ic_leaf(g, e):
+        bonus += INL_LOOP_SITE
+    end
+    if not g.off_aggres and agg_res_fields_only(g, c):
+        bonus += 16 + tsize(g, g.v_ty[g.i_res[c]]) / 8
+    end
+    repeat g.i_pcount[c] in k:
+        v := g.pool[g.i_ps[c] + 3 * k]
+        if v >= 0 and v < g.v_kind.len():
+            kd := g.v_kind[v]
+            if kd == VK_INS:
+                d := g.v_def[v]
+                if d >= 0 and g.i_op[d] == OP_ALLOCA and not is_agg(g, g.i_x[d]) and g.i_d[d] <= (1 as i64):
+                    bonus += INL_SLOT_BONUS + INL_MEMOP_BONUS * g.ic.am[g.ic.e_am0[e] + k]
+                end
+            else kd == VK_INT or kd == VK_ZERO:
+                bonus += INL_CONST_BONUS
+            end
+        end
+    end
+    ret bonus
+end
+
+func inline_calls(g &: Ng): bool:
+    mut grown := 0
+    mut changed := false
+    inl_mark_loops(g)
+    mut work := Vector {} as Vector<int>
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            if g.i_op[i] == OP_CALL:
+                work.push(i)
+            end
+            i = g.i_next[i]
+        end
+    end
+    repl_grow(g)
+    each c in work:
+        e := call_inlinable(g, c, grown)
+        if e >= 0:
+            repeat g.i_pcount[c] in k:
+                q := g.i_ps[c] + 3 * k
+                g.pool[q] = resolve(g, g.pool[q])
+            end
+            inline_call(g, c, e)
+            grown += g.ic.e_cost[e]
+            changed = true
+        end
+    end
+    work.free()
+    ret changed
+end
+
+func calls_self(g &: Ng): bool:
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            if g.i_op[i] == OP_CALL:
+                cv := g.i_a[i]
+                if cv >= 0 and g.v_kind[cv] == VK_GLB and g.v_def[cv] == g.f_sym:
+                    ret true
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret false
+end

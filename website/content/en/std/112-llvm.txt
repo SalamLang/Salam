@@ -1,0 +1,434 @@
+pkg.en = llvm
+pkg.name = llvm
+pkg.group = Compiler and tools
+pkg.summary = Building, optimizing, running and linking code with LLVM.
+pkg.title = The llvm package in Salam | LLVM IR, JIT and LLD
+pkg.description = The llvm package in Salam: building LLVM IR with a builder, verifying a module, optimizing, emitting assembly and an object file, running with the ORC JIT and linking with LLD, with examples.
+pkg.flat = true
+pkg.import = llvm
+pkg.intro <<
+<p>LLVM is the compiler infrastructure behind Salam's own native backend. This package binds its C API so that a Salam program can be a compiler: build or read IR in a <code>Module</code>, check it with <code>Verify</code>, optimize it, then run it at once with the JIT or write an object file and link it into an executable. Use it when you are writing a language, a query compiler or a code generator. To run Salam code itself you do not need it; <code>salam build</code> already goes through LLVM.</p>
+<h3>Core ideas</h3>
+<ul>
+<li><strong>Context, module, builder.</strong> A <code>Context</code> owns everything LLVM allocates. A <code>Module</code> is one translation unit of functions and globals inside it. A <code>Builder</code> is a cursor that appends instructions to the end of a block.</li>
+<li><strong>Values are not numbers.</strong> <code>Add</code>, <code>Load</code> and the other instruction functions return a <code>Value</code>: the result the generated code will compute when it runs, not a result now.</li>
+<li><strong>Two ways in.</strong> Write IR as text and read it with <code>ParseIR</code>, or build it call by call. Both end in the same <code>Module</code>.</li>
+<li><strong>Two ways out.</strong> <code>RunJIT</code> compiles in memory and calls <code>main</code>. <code>Run</code> with an <code>Options</code> value, or <code>NewTargetMachine</code>, <code>RunOpt</code> and <code>EmitObject</code> step by step, write files for any target LLVM knows.</li>
+</ul>
+<h3>Things that trip people up</h3>
+<ul>
+<li><code>ParseIR</code>, <code>RunJIT</code> and <code>Run</code> take the <em>path</em> of a <code>.ll</code> file, not the IR text. Write the text to a file first, as the examples do.</li>
+<li><code>RunJIT</code> parses that file again by itself; it does not run a module you already have. Its <code>rc</code> is the <code>i32</code> that <code>main</code> returned.</li>
+<li>Invalid IR can crash LLVM later instead of producing an error. Call <code>Verify</code> on everything you build before you optimize or emit it.</li>
+<li>The linker inside the program (<code>LinkAuto</code>) still needs the target's C library files: a musl sysroot for Linux, MinGW for Windows, a WASI sysroot for WebAssembly. Without one the link fails with a message naming the directory it looked in; point <code>$SALAM_SYSROOTS</code> or <code>Options.sysroot</code> at one.</li>
+<li>Free in reverse order: builder, then module, then context.</li>
+</ul>
+<p>Programs that use this package link against <code>libsalam_llvm</code>, so the site only compiles them. Build the library as the repository's LLVM backend instructions describe, then run them with <code>salam run</code>. The output shown is what they printed with LLVM 22 on x86-64 Linux.</p>
+
+<h2 id="guide-text">Running IR you wrote as text</h2>
+<p>The shortest way in is to write LLVM IR as text, the same <code>.ll</code> format <code>clang -S -emit-llvm</code> prints, and save it to a file. <code>ParseIR</code> reads that file into a module in a fresh context and reports syntax errors in <code>err</code>; <code>Verify</code> then checks the rules the parser does not, such as every block ending in a branch or a return. <code>RunJIT</code> compiles the same file in memory and calls its <code>main</code>.</p>
+{{example.llvm-guide-text}}
+<p>The loop adds 1 to 10, so the program prints <code>valid: true</code> and then <code>sum of 1..10 = 55</code>. The value of <code>main</code> comes back as <code>rc</code>, just like an exit code, which keeps the round trip simple while you are experimenting.</p>
+
+<h2 id="guide-compiler">A tiny compiler with the builder</h2>
+<p>A real compiler does not glue strings together; it walks its own syntax tree and calls the builder. This one reads arithmetic in reverse Polish notation: a number pushes a constant on a stack, and an operator pops two values and pushes the instruction that combines them. A <code>Value</code> stands for a result that will exist at run time, so the stack holds instructions, not numbers.</p>
+{{example.llvm-guide-rpn}}
+<p><code>(2 + 3) * 4 - 6</code> is 14, and that is what the JIT returns. With constants only, LLVM's builder folds the whole expression while you build it, so the IR is just <code>ret i32 14</code>; with parameters or loaded values you would see the <code>add</code>, <code>mul</code> and <code>sub</code> instructions.</p>
+
+<h2 id="guide-verify">Let Verify catch your mistakes</h2>
+<p>Bugs in a code generator usually produce IR that is not valid, and LLVM may crash on it later instead of reporting it. Call <code>Verify</code> after building a module and before optimizing or running it. Here the block computes a value but never returns, so the module is rejected with a message that names the problem.</p>
+{{example.llvm-guide-verify}}
+
+<h2 id="guide-static">An object file and a static program</h2>
+<p><code>Run</code> takes the whole pipeline from one <code>Options</code> value: the optimization level, the target triple and what to produce. <code>OUT_OBJ</code> writes an object file for the chosen triple, even one that is not the machine you are on. For <code>x86_64-unknown-linux-musl</code>, LLD inside the program links it into a static executable with no system linker involved; <code>CanLinkTriple</code> says whether that is possible for a triple.</p>
+{{example.llvm-guide-static}}
+<p>On a machine without musl's files in <code>/usr/lib/x86_64-linux-musl</code> (the <code>musl-dev</code> package) or under <code>$SALAM_SYSROOTS</code>, the object is still written but the link step reports <code>no musl sysroot</code>. <code>CanLinkTriple</code> only tells you that LLD is built in and knows the triple; it does not look for the sysroot. The program it builds just exits with 7. For a Windows target use <code>x86_64-w64-windows-gnu</code> and an output ending in <code>.exe</code>; to work out sizes and file names from a triple without LLVM at all, see <a href="/std/llvm/triple/"><code>llvm/triple</code></a>.</p>
+
+<h2 id="guide-opt">Optimize, then read the result</h2>
+<p>Looking at the optimized IR and the machine code is how you check that your generator produces what you meant. <code>NewTargetMachine</code> describes the target CPU; give the module the same triple and its data layout with <code>SetTargetTriple</code> and <code>ApplyDataLayout</code>, then <code>RunOpt</code> runs LLVM's standard <code>O2</code> pipeline on it in place. <code>ModuleToString</code> prints the module as text and <code>EmitAsm</code> writes assembly to a file.</p>
+{{example.llvm-guide-opt}}
+<pre class="code" dir="ltr"><code>define i32 @square_sum(i32 %n) local_unnamed_addr #0 {
+  %x = mul i32 %n, %n
+  ret i32 %x
+movl %edi, %eax
+imull %edi, %eax
+retq</code></pre>
+<p>The input stores through a stack slot the way a naive code generator would. The optimizer turns the slot into registers, drops the add of zero and leaves one multiply, which becomes two x86 instructions. A front end can emit simple, slow-looking code like this and leave the cleanup to LLVM; that is the usual design. <code>OPT_OS</code> optimizes for size instead, and <code>EmitObject</code> writes a <code>.o</code> instead of assembly.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<table>
+<tr><th>Job</th><th>Functions</th></tr>
+<tr><td>Read IR text</td><td><code>ParseIR</code>, then <code>Verify</code></td></tr>
+<tr><td>Build IR from code</td><td><code>NewContext</code>, <code>NewModule</code>, <code>NewBuilder</code>, then <code>AddFunction</code>, <code>AppendBlock</code> and the instruction functions</td></tr>
+<tr><td>Run it now</td><td><code>RunJIT</code>, <code>RunJITArgs</code></td></tr>
+<tr><td>The whole pipeline from a file</td><td><code>Run</code> with <code>OptionsDefault</code></td></tr>
+<tr><td>Fine control over optimizing and emitting</td><td><code>NewTargetMachine</code>, <code>RunOpt</code>, <code>EmitObject</code>, <code>EmitAsm</code></td></tr>
+<tr><td>Link an object</td><td><code>LinkAuto</code>, or <code>LinkExternal</code> for the system linker</td></tr>
+</table>
+>>
+
+doc.TargetMachine = The target machine: the architecture, the CPU and the optimization level for generating code.
+doc.TargetMachine.handle = The internal LLVM handle.
+doc.TargetData = A target's data layout.
+doc.TargetData.handle = The internal LLVM handle.
+doc.TargetMachineResult = The result of making a target machine.
+doc.TargetMachineResult.tm = The target machine.
+doc.TargetMachineResult.ok = It worked.
+doc.TargetMachineResult.err = The error message.
+doc.InitTargets = Initializes every LLVM target; call it once before making a target machine.
+doc.CodeGenLevelOf = The code generation level that matches an optimization level.
+doc.PassPipelineOf = The pass pipeline for an optimization level, like <code>default&lt;O3&gt;</code>.
+doc.DefaultTriple = The host machine's target triple, like <code>x86_64-unknown-linux-gnu</code>.
+doc.NewTargetMachine = Makes a target machine for a triple, an optimization level and the native CPU; an empty triple means the host.
+doc.FreeTargetMachine = Frees the target machine.
+doc.ApplyDataLayout = Puts the target machine's data layout and triple on the module.
+doc.LinkResult = The result of linking.
+doc.LinkResult.ok = It worked.
+doc.LinkResult.err = The error message.
+doc.CanLinkTriple = This target links with the in-process LLD: Windows with MinGW, Linux with musl and WASI. It does not check that the sysroot is installed.
+doc.LinkExternal = Links with the system linker, like cc.
+doc.HostLinkTriple = The host triple if the in process LLD can link for it; otherwise empty.
+doc.LinkElf = A static Linux executable with musl.
+doc.LinkWasi = A WebAssembly module for WASI.
+doc.LinkMingw = A Windows executable with MinGW.
+doc.LinkAuto = Picks the in-process linker from the options' target triple. It needs the target's sysroot (musl, MinGW or WASI) and fails for other triples.
+doc.Available = LLVM support is in this build.
+doc.Run = Runs the whole pipeline on a <code>.ll</code> file with the options: parsing, optimizing and emitting the output or running with the JIT.
+doc.LLD_ELF = The LLD flavour for ELF.
+doc.LLD_MINGW = The LLD flavour for MinGW.
+doc.LLD_COFF = The LLD flavour for Windows COFF.
+doc.LLD_MACHO = The LLD flavour for macOS Mach-O.
+doc.LLD_WASM = The LLD flavour for WebAssembly.
+doc.LldAvailable = LLD is linked into this build.
+doc.Link = Runs LLD with command line arguments; argv is an array of strings whose first one is the program name.
+doc.EmitResult = The result of emitting a file.
+doc.EmitResult.ok = It worked.
+doc.EmitResult.err = The error message.
+doc.EmitAsm = Writes the module as assembly.
+doc.EmitObject = Writes the module as an object file.
+doc.EmitBitcode = Writes the module as LLVM bitcode.
+doc.VERIFY_RETURN_STATUS = The verifying mode that returns the error instead of stopping the program.
+doc.Context = An LLVM context; every type and module belongs to one.
+doc.Context.handle = The internal LLVM handle.
+doc.Module = One module: its functions and global variables.
+doc.Module.handle = The internal LLVM handle.
+doc.ParseResult = The result of parsing IR.
+doc.ParseResult.ctx = The context that was made; free it too.
+doc.ParseResult.mod = The module.
+doc.ParseResult.ok = It worked.
+doc.ParseResult.err = The error message.
+doc.VerifyResult = The result of verifying.
+doc.VerifyResult.ok = The module is correct.
+doc.VerifyResult.err = What the error is.
+doc.NewContext = A new context.
+doc.FreeContext = Frees the context, after its modules.
+doc.FreeModule = Frees the module.
+doc.ParseIR = Parses a text <code>.ll</code> file in a new context.
+doc.Verify = Verifies the module; call it before generating code or using the JIT.
+doc.TargetTripleOf = The module's target triple.
+doc.SetTargetTriple = Sets the module's target triple.
+doc.INT_EQ = Integer comparison predicate: equal.
+doc.INT_NE = Integer comparison predicate: not equal.
+doc.INT_UGT = Integer comparison predicate: greater, unsigned.
+doc.INT_UGE = Integer comparison predicate: greater or equal, unsigned.
+doc.INT_ULT = Integer comparison predicate: less, unsigned.
+doc.INT_ULE = Integer comparison predicate: less or equal, unsigned.
+doc.INT_SGT = Integer comparison predicate: greater, signed.
+doc.INT_SGE = Integer comparison predicate: greater or equal, signed.
+doc.INT_SLT = Integer comparison predicate: less, signed.
+doc.INT_SLE = Integer comparison predicate: less or equal, signed.
+doc.LINKAGE_EXTERNAL = External linkage: it is seen from other modules.
+doc.LINKAGE_INTERNAL = Internal linkage: only in this module, like static in C.
+doc.LINKAGE_PRIVATE = Private linkage: it does not even appear in the symbol table.
+doc.Type = One LLVM type.
+doc.Type.handle = The internal LLVM handle.
+doc.Value = One value: a constant, an instruction, a parameter or a function.
+doc.Value.handle = The internal LLVM handle.
+doc.BasicBlock = One basic block: the instructions that end with a jump or a return.
+doc.BasicBlock.handle = The internal LLVM handle.
+doc.Builder = The instruction builder; it adds the instructions at the end of the current block.
+doc.Builder.handle = The internal LLVM handle.
+doc.NewModule = A new module with a name.
+doc.ModuleToString = The module's IR text.
+doc.Int1Type = The i1 type, for a boolean.
+doc.Int8Type = The i8 type.
+doc.Int16Type = The i16 type.
+doc.Int32Type = The i32 type.
+doc.Int64Type = The i64 type.
+doc.VoidType = The void type.
+doc.FloatType = The 32 bit float type.
+doc.DoubleType = The 64 bit double type.
+doc.PointerType = The untyped <code>ptr</code> pointer type.
+doc.ArrayType = An array type with a fixed length.
+doc.FunctionType = A function type with a return type, the parameters and the variadic flag, like printf.
+doc.AddFunction = Adds a function to the module; with no block it is only a declaration.
+doc.NamedFunction = The function with this name.
+doc.Param = Parameter number i of a function.
+doc.SetLinkage = Sets the linkage kind.
+doc.AppendBlock = Adds a new block at the end of a function.
+doc.NewBuilder = A new builder.
+doc.PositionAtEnd = Moves the builder to the end of a block.
+doc.InsertBlock = The block the builder is writing in right now.
+doc.FreeBuilder = Frees the builder.
+doc.ConstInt = An integer constant.
+doc.ConstReal = A float constant.
+doc.Ret = Returns from the function with a value.
+doc.RetVoid = Returns from the function with no value.
+doc.Add = Addition.
+doc.Sub = Subtraction.
+doc.Mul = Multiplication.
+doc.SDiv = Signed integer division.
+doc.SRem = Signed remainder.
+doc.ICmp = An integer comparison with one of the <code>INT_...</code> predicates; the result is an i1.
+doc.Br = An unconditional jump.
+doc.CondBr = A conditional jump.
+doc.Phi = The phi instruction: a value that depends on the block it came from; for loops.
+doc.AddIncoming = Adds pairs of a value and the block it came from to a phi.
+doc.Call = Calls a function with its type and the arguments; for a void function leave the name empty.
+doc.Alloca = Takes room on the stack and returns a pointer to it.
+doc.Load = Reads a value from a pointer.
+doc.Store = Writes a value into a pointer.
+doc.GlobalString = A global constant string and a pointer to it.
+doc.AddGlobal = Adds a global variable.
+doc.SetInitializer = A global variable's starting value.
+doc.SetGlobalConstant = Makes a global variable constant.
+doc.RunResult = The result of running with the JIT.
+doc.RunResult.ok = It worked.
+doc.RunResult.rc = What main returned.
+doc.RunResult.err = The error message.
+doc.RunJIT = Runs a <code>.ll</code> file with the ORC JIT in this same process and calls main.
+doc.RunJITArgs = Like the routine above, with command line arguments.
+doc.OptResult = The result of optimizing.
+doc.OptResult.ok = It worked.
+doc.OptResult.err = The error message.
+doc.RunOpt = Runs the optimization passes on the module.
+doc.OPT_O0 = Optimization level: no optimization.
+doc.OPT_O1 = Optimization level: a little optimization.
+doc.OPT_O2 = Optimization level: the usual optimization.
+doc.OPT_O3 = Optimization level: aggressive optimization.
+doc.OPT_OS = Optimization level: make the code small.
+doc.OPT_OZ = Optimization level: the smallest code.
+doc.OUT_IR = Output kind: IR text.
+doc.OUT_ASM = Output kind: assembly.
+doc.OUT_OBJ = Output kind: an object file.
+doc.OUT_BITCODE = Output kind: bitcode.
+doc.OUT_EXEC = Output kind: an executable.
+doc.OUT_JIT = Output kind: running with the JIT.
+doc.CODEGEN_FILE_ASSEMBLY = The generated file kind: assembly.
+doc.CODEGEN_FILE_OBJECT = The generated file kind: an object.
+doc.CODEGEN_LEVEL_NONE = Code generation level: no optimization.
+doc.CODEGEN_LEVEL_LESS = Code generation level: less.
+doc.CODEGEN_LEVEL_DEFAULT = Code generation level: the default.
+doc.CODEGEN_LEVEL_AGGRESSIVE = Code generation level: aggressive.
+doc.RELOC_DEFAULT = The default relocation model.
+doc.RELOC_PIC = Position independent code, for shared libraries.
+doc.CODE_MODEL_DEFAULT = The default code model.
+doc.Options = The options of the <code>Run</code> pipeline.
+doc.Options.opt_level = The optimization level.
+doc.Options.debug_info = Keep the debug information.
+doc.Options.verify_module = Verify the module before generating.
+doc.Options.native_cpu = Optimize for this machine's own CPU.
+doc.Options.output_mode = The output kind, one of the <code>OUT_...</code> constants.
+doc.Options.output_file = The output path.
+doc.Options.target_triple = The target triple; empty means the module's triple.
+doc.Options.link_libs = The libraries that are linked.
+doc.Options.link_kinds = Each library's kind: static or dynamic.
+doc.Options.sysroot = The target system's root for cross linking.
+doc.Options.lib_paths = The library search paths.
+doc.Options.extra_objects = Other object files to link.
+doc.Options.run_args = The arguments for running with the JIT.
+doc.Output = The result of <code>Run</code>.
+doc.Output.ok = It worked.
+doc.Output.error = The error message.
+doc.Output.rc = The program's exit code in JIT mode.
+doc.OptionsDefault = The default options.
+doc.ParallelResult = The result of generating in parallel.
+doc.ParallelResult.ok = It worked.
+doc.ParallelResult.err = The error message.
+doc.ParallelResult.objects = The object files that were built.
+doc.ParallelJobs = The number of parallel jobs, from the number of cores.
+doc.ParallelPartitions = The module is split into this many independent parts; never more than jobs.
+doc.OptimizeEmitParallel = Optimizes the module, splits it into parts and builds the object files in parallel, for building large programs faster.
+
+ex.TargetMachineResult.ok = llvm-Build
+ex.LinkResult.ok = llvm-Build
+ex.EmitResult.ok = llvm-Build
+ex.Context = llvm-Build
+ex.Module = llvm-Build
+ex.ParseResult.ok = llvm-Build
+ex.VerifyResult = llvm-Build
+ex.VerifyResult.ok = llvm-Build
+ex.NewContext = llvm-Build
+ex.FreeContext = llvm-Build
+ex.FreeModule = llvm-Build
+ex.Verify = llvm-Build
+ex.INT_SLT = llvm-Build
+ex.Type = llvm-Build
+ex.Value = llvm-Build
+ex.BasicBlock = llvm-Build
+ex.BasicBlock.handle = llvm-Build
+ex.Builder = llvm-Build
+ex.NewModule = llvm-Build
+ex.ModuleToString = llvm-Build
+ex.Int32Type = llvm-Build
+ex.FunctionType = llvm-Build
+ex.AddFunction = llvm-Build
+ex.AppendBlock = llvm-Build
+ex.NewBuilder = llvm-Build
+ex.PositionAtEnd = llvm-Build
+ex.FreeBuilder = llvm-Build
+ex.ConstInt = llvm-Build
+ex.Ret = llvm-Build
+ex.Add = llvm-Build
+ex.ICmp = llvm-Build
+ex.Br = llvm-Build
+ex.CondBr = llvm-Build
+ex.Phi = llvm-Build
+ex.AddIncoming = llvm-Build
+ex.RunResult = llvm-Build
+ex.RunResult.ok = llvm-Build
+ex.RunResult.rc = llvm-Build
+ex.RunJIT = llvm-Build
+ex.OptResult.ok = llvm-Build
+ex.Output = llvm-Build
+ex.Output.ok = llvm-Build
+ex.Output.error = llvm-Build
+ex.Output.rc = llvm-Build
+ex.ParallelResult.ok = llvm-Build
+ex.TargetData.handle = llvm-Program
+ex.Link = llvm-Program
+ex.Context.handle = llvm-Program
+ex.Module.handle = llvm-Program
+ex.INT_EQ = llvm-Program
+ex.INT_NE = llvm-Program
+ex.INT_UGT = llvm-Program
+ex.INT_UGE = llvm-Program
+ex.INT_ULT = llvm-Program
+ex.INT_ULE = llvm-Program
+ex.INT_SGT = llvm-Program
+ex.INT_SGE = llvm-Program
+ex.INT_SLE = llvm-Program
+ex.LINKAGE_EXTERNAL = llvm-Program
+ex.LINKAGE_INTERNAL = llvm-Program
+ex.LINKAGE_PRIVATE = llvm-Program
+ex.Type.handle = llvm-Program
+ex.Value.handle = llvm-Program
+ex.Builder.handle = llvm-Program
+ex.Int1Type = llvm-Program
+ex.Int8Type = llvm-Program
+ex.Int16Type = llvm-Program
+ex.Int64Type = llvm-Program
+ex.VoidType = llvm-Program
+ex.FloatType = llvm-Program
+ex.DoubleType = llvm-Program
+ex.PointerType = llvm-Program
+ex.ArrayType = llvm-Program
+ex.NamedFunction = llvm-Program
+ex.Param = llvm-Program
+ex.SetLinkage = llvm-Program
+ex.InsertBlock = llvm-Program
+ex.ConstReal = llvm-Program
+ex.RetVoid = llvm-Program
+ex.Sub = llvm-Program
+ex.Mul = llvm-Program
+ex.SDiv = llvm-Program
+ex.SRem = llvm-Program
+ex.Call = llvm-Program
+ex.Alloca = llvm-Program
+ex.Load = llvm-Program
+ex.Store = llvm-Program
+ex.GlobalString = llvm-Program
+ex.AddGlobal = llvm-Program
+ex.SetInitializer = llvm-Program
+ex.SetGlobalConstant = llvm-Program
+ex.TargetMachine = llvm-Target
+ex.TargetMachine.handle = llvm-Target
+ex.TargetData = llvm-Target
+ex.TargetMachineResult = llvm-Target
+ex.TargetMachineResult.tm = llvm-Target
+ex.TargetMachineResult.err = llvm-Target
+ex.InitTargets = llvm-Target
+ex.CodeGenLevelOf = llvm-Target
+ex.PassPipelineOf = llvm-Target
+ex.DefaultTriple = llvm-Target
+ex.NewTargetMachine = llvm-Target
+ex.FreeTargetMachine = llvm-Target
+ex.ApplyDataLayout = llvm-Target
+ex.LinkResult.err = llvm-Target
+ex.EmitResult = llvm-Target
+ex.EmitResult.err = llvm-Target
+ex.EmitAsm = llvm-Target
+ex.EmitObject = llvm-Target
+ex.EmitBitcode = llvm-Target
+ex.ParseResult.err = llvm-Target
+ex.VerifyResult.err = llvm-Target
+ex.RunResult.err = llvm-Target
+ex.OptResult = llvm-Target
+ex.OptResult.err = llvm-Target
+ex.RunOpt = llvm-Target
+ex.OPT_O0 = llvm-Target
+ex.OPT_O1 = llvm-Target
+ex.OPT_O2 = llvm-Target
+ex.OPT_O3 = llvm-Target
+ex.OPT_OS = llvm-Target
+ex.OPT_OZ = llvm-Target
+ex.CODEGEN_FILE_ASSEMBLY = llvm-Target
+ex.CODEGEN_FILE_OBJECT = llvm-Target
+ex.CODEGEN_LEVEL_NONE = llvm-Target
+ex.CODEGEN_LEVEL_LESS = llvm-Target
+ex.CODEGEN_LEVEL_DEFAULT = llvm-Target
+ex.CODEGEN_LEVEL_AGGRESSIVE = llvm-Target
+ex.RELOC_DEFAULT = llvm-Target
+ex.RELOC_PIC = llvm-Target
+ex.CODE_MODEL_DEFAULT = llvm-Target
+ex.ParallelResult = llvm-Target
+ex.ParallelResult.err = llvm-Target
+ex.ParallelResult.objects = llvm-Target
+ex.ParallelJobs = llvm-Target
+ex.ParallelPartitions = llvm-Target
+ex.OptimizeEmitParallel = llvm-Target
+ex.LinkResult = llvm-Run
+ex.CanLinkTriple = llvm-Run
+ex.LinkExternal = llvm-Run
+ex.HostLinkTriple = llvm-Run
+ex.LinkElf = llvm-Run
+ex.LinkWasi = llvm-Run
+ex.LinkMingw = llvm-Run
+ex.LinkAuto = llvm-Run
+ex.Available = llvm-Run
+ex.Run = llvm-Run
+ex.LLD_ELF = llvm-Run
+ex.LLD_MINGW = llvm-Run
+ex.LLD_COFF = llvm-Run
+ex.LLD_MACHO = llvm-Run
+ex.LLD_WASM = llvm-Run
+ex.LldAvailable = llvm-Run
+ex.VERIFY_RETURN_STATUS = llvm-Run
+ex.ParseResult = llvm-Run
+ex.ParseResult.ctx = llvm-Run
+ex.ParseResult.mod = llvm-Run
+ex.ParseIR = llvm-Run
+ex.TargetTripleOf = llvm-Run
+ex.SetTargetTriple = llvm-Run
+ex.RunJITArgs = llvm-Run
+ex.OUT_IR = llvm-Run
+ex.OUT_ASM = llvm-Run
+ex.OUT_OBJ = llvm-Run
+ex.OUT_BITCODE = llvm-Run
+ex.OUT_EXEC = llvm-Run
+ex.OUT_JIT = llvm-Run
+ex.Options = llvm-Run
+ex.Options.opt_level = llvm-Run
+ex.Options.debug_info = llvm-Run
+ex.Options.verify_module = llvm-Run
+ex.Options.native_cpu = llvm-Run
+ex.Options.output_mode = llvm-Run
+ex.Options.output_file = llvm-Run
+ex.Options.target_triple = llvm-Run
+ex.Options.link_libs = llvm-Run
+ex.Options.link_kinds = llvm-Run
+ex.Options.sysroot = llvm-Run
+ex.Options.lib_paths = llvm-Run
+ex.Options.extra_objects = llvm-Run
+ex.Options.run_args = llvm-Run
+ex.OptionsDefault = llvm-Run

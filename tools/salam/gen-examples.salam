@@ -1,0 +1,309 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import conv
+
+func json_escape(s: str): str:
+    mut out := ""
+    mut i := 0
+    until i < s.len():
+        c := s.substr(i, 1)
+        switch c:
+            "\\":
+                out = out.concat("\\\\")
+                break
+            end
+            "\"":
+                out = out.concat("\\\"")
+                break
+            end
+            "\n":
+                out = out.concat("\\n")
+                break
+            end
+            "\t":
+                out = out.concat("\\t")
+                break
+            end
+            "\r":
+                out = out.concat("")
+                break
+            end
+            else:
+                out = out.concat(c)
+            end
+        end
+        i = i + 1
+    end
+    ret out
+end
+
+func copyright_header(): str:
+    mut h := "/*\n"
+    h = h.concat(" * Salam Programming Language (2024-2026)\n")
+    h = h.concat(" *\n")
+    h = h.concat(" *   +-------------------+\n")
+    h = h.concat(" *   |     S A L A M     |\n")
+    h = h.concat(" *   +-------------------+\n")
+    h = h.concat(" *\n")
+    h = h.concat(" * Designed by Seyyed Ali Mohammadiyeh and the Salam Team\n")
+    h = h.concat(" * Born from a decade of language design experience (since 2018)\n")
+    h = h.concat(" *\n")
+    h = h.concat(" * Repository: https://github.com/SalamLang/Salam\n")
+    h = h.concat(" *\n")
+    h = h.concat(" */\n\n")
+    ret h
+end
+
+func find_from(s: str, sub: str, start: int): int:
+    if start >= s.len(): ret 0 - 1 end
+    rest := s.substr(start, s.len() - start)
+    k := rest.find(sub)
+    if k < 0: ret 0 - 1 end
+    ret start + k
+end
+
+func head_offset(s: str): int:
+    n := s.len()
+    mut i := 0
+    until i < n:
+        c := s.substr(i, 1)
+        if c == " " or c == "\t" or c == "\n" or c == "\r":
+            i = i + 1
+            continue
+        end
+        mut nxt := ""
+        if i + 1 < n: nxt = s.substr(i + 1, 1) end
+        if c == "/" and nxt == "/":
+            mut bang := ""
+            if i + 2 < n: bang = s.substr(i + 2, 1) end
+            if bang == "!": ret i end
+            j := find_from(s, "\n", i)
+            if j < 0: ret n end
+            i = j + 1
+            continue
+        end
+        if c == "/" and nxt == "*":
+            mut depth := 1
+            i = i + 2
+            until i < n and depth > 0:
+                c2 := s.substr(i, 1)
+                mut n2 := ""
+                if i + 1 < n: n2 = s.substr(i + 1, 1) end
+                if c2 == "/" and n2 == "*":
+                    depth = depth + 1
+                    i = i + 2
+                else c2 == "*" and n2 == "/":
+                    depth = depth - 1
+                    i = i + 2
+                else:
+                    i = i + 1
+                end
+            end
+            continue
+        end
+        ret i
+    end
+    ret n
+end
+
+func is_directive_at(s: str, off: int): bool:
+    if off + 3 > s.len(): ret false end
+    ret s.substr(off, 3) == "//!"
+end
+
+func first_line(s: str): str:
+    off := head_offset(s)
+    if is_directive_at(s, off) == false: ret "" end
+    rest := s.substr(off, s.len() - off)
+    nl := rest.find("\n")
+    if nl < 0: ret rest end
+    ret rest.substr(0, nl)
+end
+
+func strip_header(s: str): str:
+    off := head_offset(s)
+    rest := s.substr(off, s.len() - off)
+    if is_directive_at(s, off) == false: ret rest end
+    nl := rest.find("\n")
+    if nl < 0: ret "" end
+    ret rest.substr(nl + 1, rest.len() - nl - 1)
+end
+
+func field_value(header: str, key_en: str, key_fa: str, key_ar: str): str:
+    mut a := header.find(key_ar)
+    mut klen := key_ar.len()
+    if a < 0:
+        a = header.find(key_fa)
+        klen = key_fa.len()
+    end
+    if a < 0:
+        a = header.find(key_en)
+        klen = key_en.len()
+    end
+    if a < 0: ret "" end
+    start := a + klen
+    rest := header.substr(start, header.len() - start)
+    bar := rest.find(" |")
+    if bar < 0: ret rest end
+    ret rest.substr(0, bar)
+end
+
+func parse_mode(header: str): str:
+    v := field_value(header, "mode: ", "حالت: ", "وضع: ")
+    switch v:
+        "", "برنامه", "برنامج":
+            ret "app"
+        end
+        "صفحه", "چیدمان", "تخطيط":
+            ret "layout"
+        end
+    end
+    ret v
+end
+
+func parse_title(header: str): str:
+    ret field_value(header, "title: ", "عنوان: ", "عنوان: ")
+end
+
+func manifest_lines(): Vector<str>:
+    text := os.ReadFile("tools/salam/editor-examples.tsv")
+    ret text.split("\n")
+end
+
+func manifest_field(lines: Vector<str>, id: str, col: int): str:
+    repeat lines.len() in i:
+        parts := lines.get(i).split("\t")
+        if parts.len() >= 4 and parts.get(0) == id:
+            v := parts.get(col)
+            ret v
+        end
+    end
+    ret ""
+end
+
+func infer_mode(code: str): str:
+    if code.find("layout:") == 0 or code.find("\nlayout:") >= 0 or code.find("صفحه:") == 0 or code.find("\nصفحه:") >= 0 or code.find("چیدمان:") == 0 or code.find("\nچیدمان:") >= 0:
+        ret "layout"
+    end
+    ret "app"
+end
+
+func id_from_name(name: str): str:
+    mut s := name.substr(3, name.len() - 3)
+    dot := s.find(".salam")
+    if dot < 0: ret s end
+    ret s.substr(0, dot)
+end
+
+func order_of(name: str): int:
+    ret name.substr(0, 2).to_int()
+end
+
+func is_salam_file(name: str): bool:
+    n := name.len()
+    if n < 6: ret false end
+    ret name.substr(n - 6, 6) == ".salam"
+end
+
+func main:
+    en_dir := "tests/en/editor-selected"
+    fa_dir := "tests/fa/editor-selected"
+    mut entries := os.ListDir(en_dir)
+    mut files := Vector {} as Vector<str>
+    repeat entries.len() in i:
+        if is_salam_file(entries.get(i)):
+            files.push(entries.get(i))
+        end
+    end
+    n := files.len()
+    if n == 0:
+        println "error: no .salam examples found in", en_dir
+        println "       run this from the repository root: salam run tools/salam/gen-examples.salam"
+        ret 1
+    end
+    repeat n - 1 in i:
+        mut lo := i
+        repeat i + 1 to n - 1 in j:
+            if order_of(files.get(j)) < order_of(files.get(lo)):
+                lo = j
+            end
+        end
+        if lo != i:
+            t := files.get(i)
+            files.set(i, files.get(lo))
+            files.set(lo, t)
+        end
+    end
+    manifest := manifest_lines()
+    mut examples_lit := "pub const EXAMPLES := [\n"
+    repeat n + 0 in i:
+        name := files.get(i)
+        en := os.ReadFile(en_dir.concat("/").concat(name))
+        fa := os.ReadFile(fa_dir.concat("/").concat(name))
+        id := id_from_name(name)
+        code_en := strip_header(en)
+        code_fa := strip_header(fa)
+        mut mode := parse_mode(first_line(en))
+        mut title_en := parse_title(first_line(en))
+        mut title_fa := parse_title(first_line(fa))
+        if first_line(en).len() == 0:
+            mode = manifest_field(manifest, id, 1)
+            if mode.len() == 0:
+                mode = infer_mode(code_en)
+            end
+        end
+        if title_en.len() == 0:
+            title_en = manifest_field(manifest, id, 2)
+        end
+        if title_fa.len() == 0:
+            title_fa = manifest_field(manifest, id, 3)
+        end
+        if title_en.len() == 0:
+            title_en = id
+        end
+        if title_fa.len() == 0:
+            title_fa = title_en
+        end
+        examples_lit = examples_lit.concat("    Example {\n")
+        examples_lit = examples_lit.concat("        id = \"").concat(id).concat("\"\n")
+        examples_lit = examples_lit.concat("        mode = \"").concat(mode).concat("\"\n")
+        examples_lit = examples_lit.concat("        title_en = \"").concat(json_escape(title_en)).concat("\"\n")
+        examples_lit = examples_lit.concat("        title_fa = \"").concat(json_escape(title_fa)).concat("\"\n")
+        examples_lit = examples_lit.concat("        code_en = \"").concat(json_escape(code_en)).concat("\"\n")
+        examples_lit = examples_lit.concat("        code_fa = \"").concat(json_escape(code_fa)).concat("\"\n")
+        if i < n - 1: examples_lit = examples_lit.concat("    },\n")
+        else:
+            examples_lit = examples_lit.concat("    }\n")
+        end
+    end
+    examples_lit = examples_lit.concat("]\n\n")
+
+    mut out := copyright_header()
+    out = out.concat("package examples_data\n\n")
+    out = out.concat("pub const EXAMPLE_COUNT := ").concat(conv.FormatInt(n as i64)).concat("\n\n")
+    out = out.concat(examples_lit)
+    out = out.concat("pub struct Example:\n")
+    out = out.concat("    pub id: str = \"\"\n")
+    out = out.concat("    pub mode: str = \"\"\n")
+    out = out.concat("    pub title_en: str = \"\"\n")
+    out = out.concat("    pub title_fa: str = \"\"\n")
+    out = out.concat("    pub code_en: str = \"\"\n")
+    out = out.concat("    pub code_fa: str = \"\"\n")
+    out = out.concat("end\n")
+    os.WriteFile("editor/examples_data.salam", out)
+    println "wrote editor/examples_data.salam with", n, "examples"
+    ret 0
+end

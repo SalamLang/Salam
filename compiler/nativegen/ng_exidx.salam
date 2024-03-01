@@ -1,0 +1,105 @@
+package nativegen
+
+func ex_uleb(ops &: Vector<int>, v: int):
+    mut x := v
+    until true:
+        b := x & 127
+        x = x >> 7
+        if x == 0:
+            ops.push(b)
+            ret
+        end
+        ops.push(b | 128)
+    end
+end
+
+func arm_unwind_ops(g &: Ng, a &: Arm, ops &: Vector<int>):
+    mut rem := a.sub
+    if rem > 0x204:
+        ops.push(0xB2)
+        ex_uleb(ops, (rem - 0x204) >> 2)
+    else:
+        until rem > 0x104:
+            ops.push(0x3F)
+            rem -= 0x100
+        end
+        if rem > 0:
+            ops.push((rem - 4) >> 2)
+        end
+    end
+    if g.mc.fsave > 0:
+        ops.push(0xC9)
+        ops.push(0x82)
+    end
+    full := a.mask | (1 << 14)
+    lo := full & 15
+    if lo != 0:
+        ops.push(0xB1)
+        ops.push(lo)
+    end
+    hi := (full >> 4) & 0xFFF
+    ops.push(0x80 | (hi >> 8))
+    ops.push(hi & 255)
+end
+
+func arm_exidx_inline(g &: Ng, sym: int, w: i64):
+    sec_align_to(g, SEC_PDATA, 4)
+    po := g.s_pdata.len()
+    add_reloc(g, SEC_PDATA, po, sym, R_ARM_PREL31, 0 as i64)
+    repeat 4:
+        sec_put(g, SEC_PDATA, 0)
+    end
+    repeat 4 in b:
+        sec_put(g, SEC_PDATA, ((w >> ((8 * b) as i64)) & (255 as i64)) as int)
+    end
+end
+
+func arm_exidx(g &: Ng, a &: Arm):
+    mut ops := Vector {} as Vector<int>
+    arm_unwind_ops(g, a, ops)
+    sec_align_to(g, SEC_PDATA, 4)
+    po := g.s_pdata.len()
+    add_reloc(g, SEC_PDATA, po, g.f_sym, R_ARM_PREL31, 0 as i64)
+    repeat 4:
+        sec_put(g, SEC_PDATA, 0)
+    end
+    if ops.len() <= 3:
+        until ops.len() < 3:
+            ops.push(0xB0)
+        end
+        w := (0x80 << 24) | (ops[0] << 16) | (ops[1] << 8) | ops[2]
+        repeat 4 in b:
+            sec_put(g, SEC_PDATA, (w >> (8 * b)) & 255)
+        end
+        ops.free()
+        ret
+    end
+    n := ops.len()
+    extra := (n - 2 + 3) / 4
+    until ops.len() < 2 + 4 * extra:
+        ops.push(0xB0)
+    end
+    sec_align_to(g, SEC_XDATA, 4)
+    xo := g.s_xdata.len()
+    w0 := (0x81 << 24) | (extra << 16) | (ops[0] << 8) | ops[1]
+    repeat 4 in b0:
+        sec_put(g, SEC_XDATA, (w0 >> (8 * b0)) & 255)
+    end
+    repeat extra in k:
+        mut wk := 0
+        repeat 4 in j:
+            wk = (wk << 8) | ops[2 + 4 * k + j]
+        end
+        repeat 4 in b1:
+            sec_put(g, SEC_XDATA, (wk >> (8 * b1)) & 255)
+        end
+    end
+    repeat 4:
+        sec_put(g, SEC_XDATA, 0)
+    end
+    add_reloc(g, SEC_PDATA, po + 4, g.sym_xdata, R_ARM_PREL31, xo as i64)
+    repeat 4:
+        sec_put(g, SEC_PDATA, 0)
+    end
+    ops.free()
+end

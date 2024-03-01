@@ -1,0 +1,456 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "synth"
+@fa "صداساز"
+package synth
+
+import audio
+import math
+import mem
+import rand
+
+@en "WaveSine"
+@fa "موج سینوسی"
+pub const WaveSine := 0
+
+@en "WaveSquare"
+@fa "موج مربعی"
+pub const WaveSquare := 1
+
+@en "WaveSaw"
+@fa "موج اره‌ای"
+pub const WaveSaw := 2
+
+@en "WaveTriangle"
+@fa "موج مثلثی"
+pub const WaveTriangle := 3
+
+@en "WaveNoise"
+@fa "موج نوفه"
+pub const WaveNoise := 4
+
+@en "WavePulse"
+@fa "موج تپی"
+pub const WavePulse := 5
+
+@en "Osc"
+@fa "نوساز"
+pub struct Osc:
+    @en "wave"
+    @fa "موج"
+    pub wave: int = 0
+    @en "freq"
+    @fa "بسامد"
+    pub freq: f64 = 440.0
+    @en "phase"
+    @fa "فاز"
+    pub phase: f64 = 0.0
+    @en "duty"
+    @fa "چرخه کار"
+    pub duty: f64 = 0.5
+    @en "rate"
+    @fa "نرخ"
+    pub rate: int = 44100
+end
+
+@en "ADSR"
+@fa "پوشش"
+pub struct ADSR:
+    @en "attack"
+    @fa "حمله"
+    pub attack: f64 = 0.01
+    @en "decay"
+    @fa "افت"
+    pub decay: f64 = 0.05
+    @en "sustain"
+    @fa "پایداری"
+    pub sustain: f64 = 0.7
+    @en "release"
+    @fa "رهایش"
+    pub release: f64 = 0.1
+end
+
+@en "Note"
+@fa "نت"
+pub struct Note:
+    @en "note"
+    @fa "شماره نت"
+    pub note: int = 60
+    @en "start"
+    @fa "آغاز"
+    pub start: f64 = 0.0
+    @en "length"
+    @fa "درازی"
+    pub length: f64 = 0.5
+    @en "gain"
+    @fa "بهره"
+    pub gain: f64 = 0.5
+    @en "wave"
+    @fa "موج"
+    pub wave: int = 0
+    @en "pan"
+    @fa "میزان چپ راست"
+    pub pan: f64 = 0.5
+end
+
+func _frac(x: f64): f64:
+    ret x - math.Floor(x)
+end
+
+func _wave_at(wave: int, phase: f64, duty: f64): f64:
+    p := _frac(phase)
+    if wave == WaveSine:
+        ret math.Sin(2.0 * math.PI * p)
+    end
+    if wave == WaveSquare:
+        ret p < 0.5 ? 1.0 : -1.0
+    end
+    if wave == WavePulse:
+        ret p < duty ? 1.0 : -1.0
+    end
+    if wave == WaveSaw:
+        ret 2.0 * p - 1.0
+    end
+    if wave == WaveTriangle:
+        ret p < 0.5 ? (4.0 * p - 1.0) : (3.0 - 4.0 * p)
+    end
+    if wave == WaveNoise:
+        ret rand.FloatRange(-1.0, 1.0)
+    end
+    ret 0.0
+end
+
+@en "NewOsc"
+@fa "نوساز جدید"
+pub func NewOsc(wave: int, freq: f64, rate: int): Osc:
+    ret Osc { wave = wave, freq = freq, rate = rate }
+end
+
+@en "OscNext"
+@fa "نمونه بعدی نوساز"
+pub func OscNext(o &: Osc): f64:
+    v := _wave_at(o.wave, o.phase, o.duty)
+    if o.rate > 0:
+        o.phase += o.freq / (o.rate as f64)
+        if o.phase >= 1.0:
+            o.phase -= math.Floor(o.phase)
+        end
+    end
+    ret v
+end
+
+@en "WaveValue"
+@fa "مقدار موج"
+pub func WaveValue(wave: int, phase: f64, duty: f64): f64:
+    ret _wave_at(wave, phase, duty)
+end
+
+@en "ADSRAt"
+@fa "پوشش در زمان"
+pub func ADSRAt(e: ADSR, t: f64, held: f64): f64:
+    if t < 0.0:
+        ret 0.0
+    end
+    if t < e.attack:
+        if e.attack <= 0.0:
+            ret 1.0
+        end
+        ret t / e.attack
+    end
+    d := t - e.attack
+    if d < e.decay:
+        if e.decay <= 0.0:
+            ret e.sustain
+        end
+        ret 1.0 + (e.sustain - 1.0) * (d / e.decay)
+    end
+    if t < held:
+        ret e.sustain
+    end
+    r := t - held
+    if r < e.release:
+        if e.release <= 0.0:
+            ret 0.0
+        end
+        ret e.sustain * (1.0 - r / e.release)
+    end
+    ret 0.0
+end
+
+@en "ADSRTotal"
+@fa "درازی کل پوشش"
+pub func ADSRTotal(e: ADSR, held: f64): f64:
+    mut h := held
+    if h < e.attack + e.decay:
+        h = e.attack + e.decay
+    end
+    ret h + e.release
+end
+
+@en "Tone"
+@fa "نوا"
+pub func Tone(freq: f64, seconds: f64, rate: int, wave: int): audio.Clip:
+    c := audio.NewSilence(rate, 1, seconds)
+    if audio.IsEmpty(c):
+        ret c
+    end
+    mut o := NewOsc(wave, freq, rate)
+    p := audio.Data(c)
+    mut i := 0
+    until i < c.frames:
+        p[i] = OscNext(o) as f32
+        i += 1
+    end
+    ret c
+end
+
+@en "ToneEnvelope"
+@fa "نوا با پوشش"
+pub func ToneEnvelope(freq: f64, seconds: f64, rate: int, wave: int, e: ADSR, gain: f64): audio.Clip:
+    total := ADSRTotal(e, seconds)
+    c := audio.NewSilence(rate, 1, total)
+    if audio.IsEmpty(c):
+        ret c
+    end
+    mut o := NewOsc(wave, freq, rate)
+    p := audio.Data(c)
+    mut i := 0
+    until i < c.frames:
+        t := (i as f64) / (rate as f64)
+        p[i] = (OscNext(o) * ADSRAt(e, t, seconds) * gain) as f32
+        i += 1
+    end
+    ret c
+end
+
+@en "Chord"
+@fa "آکورد"
+pub func Chord(freqs: Vector<f64>, seconds: f64, rate: int, wave: int): audio.Clip:
+    c := audio.NewSilence(rate, 1, seconds)
+    if audio.IsEmpty(c) or freqs.len() == 0:
+        ret c
+    end
+    scale := 1.0 / (freqs.len() as f64)
+    p := audio.Data(c)
+    each f in freqs:
+        mut o := NewOsc(wave, f, rate)
+        mut i := 0
+        until i < c.frames:
+            p[i] = ((p[i] as f64) + OscNext(o) * scale) as f32
+            i += 1
+        end
+    end
+    ret c
+end
+
+@en "NoiseWhite"
+@fa "نوفه سپید"
+pub func NoiseWhite(seconds: f64, rate: int): audio.Clip:
+    c := audio.NewSilence(rate, 1, seconds)
+    if audio.IsEmpty(c):
+        ret c
+    end
+    p := audio.Data(c)
+    mut i := 0
+    until i < c.frames:
+        p[i] = rand.FloatRange(-1.0, 1.0) as f32
+        i += 1
+    end
+    ret c
+end
+
+@en "NoisePink"
+@fa "نوفه صورتی"
+pub func NoisePink(seconds: f64, rate: int): audio.Clip:
+    c := audio.NewSilence(rate, 1, seconds)
+    if audio.IsEmpty(c):
+        ret c
+    end
+    p := audio.Data(c)
+    mut b0 := 0.0
+    mut b1 := 0.0
+    mut b2 := 0.0
+    mut i := 0
+    until i < c.frames:
+        w := rand.FloatRange(-1.0, 1.0)
+        b0 = 0.99765 * b0 + w * 0.0990460
+        b1 = 0.96300 * b1 + w * 0.2965164
+        b2 = 0.57000 * b2 + w * 1.0526913
+        p[i] = ((b0 + b1 + b2 + w * 0.1848) * 0.4) as f32
+        i += 1
+    end
+    ret c
+end
+
+@en "NoiseBrown"
+@fa "نوفه قهوه‌ای"
+pub func NoiseBrown(seconds: f64, rate: int): audio.Clip:
+    c := audio.NewSilence(rate, 1, seconds)
+    if audio.IsEmpty(c):
+        ret c
+    end
+    p := audio.Data(c)
+    mut last := 0.0
+    mut i := 0
+    until i < c.frames:
+        w := rand.FloatRange(-1.0, 1.0)
+        last = (last + 0.02 * w) / 1.02
+        p[i] = (last * 3.5) as f32
+        i += 1
+    end
+    ret c
+end
+
+@en "FMTone"
+@fa "نوا اف‌ام"
+pub func FMTone(carrier: f64, ratio: f64, index: f64, seconds: f64, rate: int): audio.Clip:
+    c := audio.NewSilence(rate, 1, seconds)
+    if audio.IsEmpty(c):
+        ret c
+    end
+    p := audio.Data(c)
+    mut i := 0
+    until i < c.frames:
+        t := (i as f64) / (rate as f64)
+        m := math.Sin(2.0 * math.PI * carrier * ratio * t)
+        p[i] = math.Sin(2.0 * math.PI * carrier * t + index * m) as f32
+        i += 1
+    end
+    ret c
+end
+
+@en "Additive"
+@fa "افزایشی"
+pub func Additive(freq: f64, partials: int, decay: f64, seconds: f64, rate: int): audio.Clip:
+    c := audio.NewSilence(rate, 1, seconds)
+    if audio.IsEmpty(c) or partials <= 0:
+        ret c
+    end
+    p := audio.Data(c)
+    mut norm := 0.0
+    mut k := 1
+    until k < partials + 1:
+        norm += math.Pow(decay, (k - 1) as f64)
+        k += 1
+    end
+    if norm <= 0.0:
+        ret c
+    end
+    mut h := 1
+    until h < partials + 1:
+        amp := math.Pow(decay, (h - 1) as f64) / norm
+        f := freq * (h as f64)
+        if f < (rate as f64) / 2.0:
+            mut i := 0
+            until i < c.frames:
+                t := (i as f64) / (rate as f64)
+                p[i] = ((p[i] as f64) + amp * math.Sin(2.0 * math.PI * f * t)) as f32
+                i += 1
+            end
+        end
+        h += 1
+    end
+    ret c
+end
+
+@en "KarplusStrong"
+@fa "کارپلوس استرانگ"
+pub func KarplusStrong(freq: f64, seconds: f64, rate: int, damping: f64): audio.Clip:
+    c := audio.NewSilence(rate, 1, seconds)
+    if audio.IsEmpty(c) or freq <= 0.0:
+        ret c
+    end
+    n := ((rate as f64) / freq + 0.5) as int
+    if n < 2:
+        ret c
+    end
+    buf := mem.Allocate((n * 8) as u64) as f64*
+    if buf == null:
+        ret c
+    end
+    mut i := 0
+    until i < n:
+        buf[i] = rand.FloatRange(-1.0, 1.0)
+        i += 1
+    end
+    p := audio.Data(c)
+    mut at := 0
+    mut f := 0
+    until f < c.frames:
+        v := buf[at]
+        nxt := (at + 1) % n
+        buf[at] = damping * 0.5 * (v + buf[nxt])
+        p[f] = v as f32
+        at = nxt
+        f += 1
+    end
+    mem.Free(buf as void*)
+    ret c
+end
+
+@en "RenderNotes"
+@fa "ساختن نت‌ها"
+pub func RenderNotes(notes: Vector<Note>, rate: int, channels: int, e: ADSR): audio.Clip:
+    if notes.len() == 0 or rate <= 0 or channels <= 0:
+        ret audio.Clip {}
+    end
+    mut span := 0.0
+    each nt in notes:
+        stop := nt.start + ADSRTotal(e, nt.length)
+        if stop > span:
+            span = stop
+        end
+    end
+    out := audio.NewSilence(rate, channels, span)
+    if audio.IsEmpty(out):
+        ret out
+    end
+    p := audio.Data(out)
+    each nt in notes:
+        freq := 440.0 * math.Pow(2.0, ((nt.note - 69) as f64) / 12.0)
+        mut o := NewOsc(nt.wave, freq, rate)
+        first := (nt.start * (rate as f64)) as int
+        span2 := ADSRTotal(e, nt.length)
+        count := (span2 * (rate as f64)) as int
+        mut i := 0
+        until i < count:
+            at := first + i
+            if at >= out.frames:
+                break
+            end
+            t := (i as f64) / (rate as f64)
+            v := OscNext(o) * ADSRAt(e, t, nt.length) * nt.gain
+            mut ch := 0
+            until ch < channels:
+                mut g := 1.0
+                if channels == 2:
+                    g = ch == 0 ? (1.0 - nt.pan) : nt.pan
+                    g = g * 2.0
+                end
+                idx := at * channels + ch
+                p[idx] = ((p[idx] as f64) + v * g) as f32
+                ch += 1
+            end
+            i += 1
+        end
+    end
+    ret out
+end
+
+@en "NoteAt"
+@fa "نت در"
+pub func NoteAt(note: int, start: f64, length: f64, gain: f64, wave: int): Note:
+    ret Note { note = note, start = start, length = length, gain = gain, wave = wave }
+end

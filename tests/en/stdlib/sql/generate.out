@@ -1,0 +1,241 @@
+-- reading the headers
+read 4 queries
+  GetUser kind=0 line=2 sql=SELECT id, email FROM users WHERE id = ?
+  ListUsers kind=1 line=5 sql=SELECT id FROM users
+  AddUser kind=2 line=8 sql=INSERT INTO users (email) VALUES (?)
+  DropUsers kind=3 line=11 sql=DELETE FROM users WHERE age < ?
+ok   (headers)
+
+-- headers the reader will not take
+read 0 queries
+bad  (headers)
+     SQL500 1:1 a query header needs a name and a kind
+       help: write '-- name: GetUser :one'
+read 1 queries
+  GetUser kind=-1 line=1 sql=SELECT 1
+bad  (headers)
+     SQL502 1:1 ':maybe' is not a query kind
+       help: one of :one, :many, :exec or :execrows
+read 1 queries
+  switch kind=0 line=1 sql=SELECT 1
+bad  (headers)
+     SQL501 1:1 'switch' cannot be a Salam function name
+       help: use letters, digits and underscore, and not a keyword
+read 1 queries
+  has kind=-1 line=1 sql=SELECT 1
+bad  (headers)
+     SQL502 1:1 'space' is not a query kind
+       help: one of :one, :many, :exec or :execrows
+read 1 queries
+  9lives kind=0 line=1 sql=SELECT 1
+bad  (headers)
+     SQL501 1:1 '9lives' cannot be a Salam function name
+       help: use letters, digits and underscore, and not a keyword
+read 0 queries
+ok   (headers)
+
+-- the generated file
+package store
+
+import db
+import db.sql
+import mem
+import option
+
+struct GetUserRow:
+    pub id: i64 = 0 as i64
+    pub email: str = ""
+    pub name: option.Option<str> = option.None() as option.Option<str>
+    pub age: option.Option<i64> = option.None() as option.Option<i64>
+    pub paid: bool = false
+end
+
+struct UsersOlderThanRow:
+    pub id: i64 = 0 as i64
+    pub email: str = ""
+    pub total: option.Option<f64> = option.None() as option.Option<f64>
+end
+
+func fill_query(c: dyn db.Connection, raw: str, a: sql.Args): str:
+    mut rep := sql.Report {}
+    out := sql.Fill(raw, a, sql.DialectNamed(c.Kind()), rep)
+    sql.FreeReport(rep)
+    ret out
+end
+
+pub func GetUser(c: dyn db.Connection, email: str, ok &: bool): GetUserRow:
+    mut a := sql.NewArgs()
+    sql.AddText(a, email)
+    q := fill_query(c, "SELECT id, email, name, age, paid FROM users WHERE email = ?", a)
+    sql.FreeArgs(a)
+    mut out := GetUserRow {}
+    ok = false
+    r := c.Query(q)
+    if r.Ok():
+        if r.Next():
+            out.id = r.Int64(0)
+            out.email = r.Text(1)
+            if r.IsNull(2):
+                out.name = option.None() as option.Option<str>
+            else:
+                out.name = option.Some(r.Text(2))
+            end
+            if r.IsNull(3):
+                out.age = option.None() as option.Option<i64>
+            else:
+                out.age = option.Some(r.Int64(3))
+            end
+            out.paid = r.Int64(4) != 0
+            ok = true
+        end
+        r.Close()
+    end
+    mem.Free(q as void*)
+    ret out
+end
+
+pub func UsersOlderThan(c: dyn db.Connection, age: i64): Vector<UsersOlderThanRow>:
+    mut a := sql.NewArgs()
+    sql.AddInt(a, age)
+    q := fill_query(c, "SELECT u.id, u.email, o.total FROM users u LEFT JOIN orders o ON o.user_id = u.id WHERE u.age > ?", a)
+    sql.FreeArgs(a)
+    mut rows := Vector {} as Vector<UsersOlderThanRow>
+    r := c.Query(q)
+    if r.Ok():
+        until r.Next():
+            mut out := UsersOlderThanRow {}
+            out.id = r.Int64(0)
+            out.email = r.Text(1)
+            if r.IsNull(2):
+                out.total = option.None() as option.Option<f64>
+            else:
+                out.total = option.Some(r.Float(2))
+            end
+            rows.push(out)
+        end
+        r.Close()
+    end
+    mem.Free(q as void*)
+    ret rows
+end
+
+pub func AddUser(c: dyn db.Connection, email: str, name: str): bool:
+    mut a := sql.NewArgs()
+    sql.AddText(a, email)
+    sql.AddText(a, name)
+    q := fill_query(c, "INSERT INTO users (email, name) VALUES (?, ?)", a)
+    sql.FreeArgs(a)
+    done := c.Exec(q) == 0
+    mem.Free(q as void*)
+    ret done
+end
+
+pub func TouchUser(c: dyn db.Connection, name: str, id: i64): i64:
+    mut a := sql.NewArgs()
+    sql.AddText(a, name)
+    sql.AddInt(a, id)
+    q := fill_query(c, "UPDATE users SET name = ? WHERE id = ?", a)
+    sql.FreeArgs(a)
+    rc := c.Exec(q)
+    mut n := 0 as i64
+    if rc == 0:
+        n = c.Changes()
+    end
+    mem.Free(q as void*)
+    ret n
+end
+
+-- names the generator has to clean up
+package store
+
+import db
+import db.sql
+import mem
+import option
+
+struct OddRow:
+    pub col1: i64 = 0 as i64
+    pub col2: str = ""
+    pub id: option.Option<str> = option.None() as option.Option<str>
+    pub id_2: option.Option<i64> = option.None() as option.Option<i64>
+end
+
+func fill_query(c: dyn db.Connection, raw: str, a: sql.Args): str:
+    mut rep := sql.Report {}
+    out := sql.Fill(raw, a, sql.DialectNamed(c.Kind()), rep)
+    sql.FreeReport(rep)
+    ret out
+end
+
+pub func Odd(c: dyn db.Connection, id: i64, ok &: bool): OddRow:
+    mut a := sql.NewArgs()
+    sql.AddInt(a, id)
+    q := fill_query(c, "SELECT id AS type, email AS until, name AS id, age AS id FROM users WHERE id = ?", a)
+    sql.FreeArgs(a)
+    mut out := OddRow {}
+    ok = false
+    r := c.Query(q)
+    if r.Ok():
+        if r.Next():
+            out.col1 = r.Int64(0)
+            out.col2 = r.Text(1)
+            if r.IsNull(2):
+                out.id = option.None() as option.Option<str>
+            else:
+                out.id = option.Some(r.Text(2))
+            end
+            if r.IsNull(3):
+                out.id_2 = option.None() as option.Option<i64>
+            else:
+                out.id_2 = option.Some(r.Int64(3))
+            end
+            ok = true
+        end
+        r.Close()
+    end
+    mem.Free(q as void*)
+    ret out
+end
+
+-- a query with nothing to return
+package store
+
+import db
+import db.sql
+import mem
+
+struct NothingRow:
+    pub col1: i64 = 0 as i64
+end
+
+func fill_query(c: dyn db.Connection, raw: str, a: sql.Args): str:
+    mut rep := sql.Report {}
+    out := sql.Fill(raw, a, sql.DialectNamed(c.Kind()), rep)
+    sql.FreeReport(rep)
+    ret out
+end
+
+pub func Nothing(c: dyn db.Connection, ok &: bool): NothingRow:
+    a := sql.NewArgs()
+    q := fill_query(c, "SELECT 1", a)
+    sql.FreeArgs(a)
+    mut out := NothingRow {}
+    ok = false
+    r := c.Query(q)
+    if r.Ok():
+        if r.Next():
+            out.col1 = r.Int64(0)
+            ok = true
+        end
+        r.Close()
+    end
+    mem.Free(q as void*)
+    ret out
+end
+
+-- a query the schema refuses
+bad  (generate)
+     SQL311 3:12 Broken: no column named "totl" in this statement
+       help: did you mean "total"?
+bad  (generate)
+     SQL317 3:16 NoTable: no table named "nope"

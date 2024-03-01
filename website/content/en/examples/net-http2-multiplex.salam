@@ -1,0 +1,67 @@
+import net.http2
+import net.tcp
+import compress
+
+mut server := tcp.Server {}
+
+func serve():
+    conn := tcp.Accept(server)
+    mut c := http2.NewConn(http2.PlainTransport(conn.fd), true)
+    if not http2.ServerHandshake(c):
+        ret
+    end
+    mut ids := Vector {} as Vector<int>
+    until ids.len() < 3:
+        ids.push(http2.AwaitAnyHeaders(c, 20))
+    end
+    mut i := ids.len() - 1
+    until i >= 0:
+        id := ids.get(i)
+        path := http2.HeadersGet(http2.StreamAt(c, id).headers, ":path")
+        mut h := http2.HeaderList {}
+        http2.HeadersAdd(h, ":status", "200")
+        _ := http2.SendHeaders(c, id, h, false)
+        _ := http2.SendData(c, id, compress.BufFromStr("page " + path), true)
+        i -= 1
+    end
+    _ := http2.AwaitStreamEnd(c, 0, 5)
+    http2.CloseConn(c)
+end
+
+func request(c &: http2.Conn, path: str): int:
+    id := http2.NextStreamId(c)
+    mut h := http2.HeaderList {}
+    http2.HeadersAdd(h, ":method", "GET")
+    http2.HeadersAdd(h, ":scheme", "http")
+    http2.HeadersAdd(h, ":path", path)
+    http2.HeadersAdd(h, ":authority", "127.0.0.1")
+    _ := http2.SendHeaders(c, id, h, true)
+    ret id
+end
+
+func main:
+    server = tcp.Bind(0)
+    t := spawn(serve)
+    conn := tcp.Dial("127.0.0.1", tcp.Port(server))
+    mut c := http2.NewConn(http2.PlainTransport(conn.fd), false)
+    if not http2.ClientHandshake(c):
+        println "handshake failed"
+        ret 1
+    end
+    mut ids := Vector {} as Vector<int>
+    each p in ["/a", "/b", "/c"]:
+        ids.push(request(c, p))
+    end
+    println "three requests sent on streams", ids.get(0), ids.get(1), ids.get(2)
+    each id in ids:
+        _ := http2.AwaitStreamEnd(c, id, 50)
+        s := http2.StreamAt(c, id)
+        println "stream", id, http2.HeadersGet(s.headers, ":status"), compress.BufToStrUnsafe(s.data)
+    end
+    println "connections used: 1, streams:", http2.StreamCount(c)
+    _ := http2.SendGoAway(c, http2.H2_NO_ERROR, "")
+    http2.CloseConn(c)
+    join(t)
+    tcp.CloseServer(server)
+    ret 0
+end

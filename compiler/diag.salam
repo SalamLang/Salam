@@ -1,0 +1,299 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package diag
+
+import io
+import os
+import str
+
+include co "sal_core.salam"
+include lg "logger.salam"
+include dr "diag_render.salam"
+include i18 "i18n.salam"
+
+pub const SEV_ERROR := 0
+pub const SEV_WARNING := 1
+
+pub const DIAG_STYLE_RUST := 0
+pub const DIAG_STYLE_GCC := 1
+pub const DIAG_STYLE_CLANG := 2
+
+pub const DIAG_FORMAT_HUMAN := 0
+pub const DIAG_FORMAT_JSON := 1
+pub const DIAG_FORMAT_XML := 2
+
+pub type Severity = int
+pub type DiagStyle = int
+pub type DiagFormat = int
+
+pub struct Diag:
+    pub sev: Severity = 0
+    pub code: int = 0
+    pub span: co.SrcSpan = co.EmptySpan()
+    pub file: str = ""
+    pub message: str = ""
+    pub body: str = ""
+end
+
+pub struct Engine:
+    pub items: Vector<Diag> = Vector {}
+    pub errors: int = 0
+    pub warnings: int = 0
+    pub log: lg.Logger = lg.New(2, false)
+    pub phase: int = 0
+end
+
+func is_std_path(file: str): bool:
+    ret str.StartsWith(file, "std/") or str.Find(file, "/std/") >= 0
+end
+
+func source_for(e: Engine, file: str, src_text: str, cache &: HashMap<str, str>): str:
+    if str.Len(file) == 0:
+        ret src_text
+    end
+    if cache.has(file):
+        ret cache.get(file)
+    end
+    mut text := src_text
+    mut found := false
+    each ent in e.log.src_table:
+        if not found and str.Equals(ent.file, file):
+            text = ent.text
+            found = true
+        end
+    end
+    if not found and os.Exists(file) and not os.IsDir(file):
+        text = io.ReadFile(file)
+        found = true
+    end
+    if not found and is_std_path(file):
+        text = ""
+    end
+    cache.put(file, text)
+    ret text
+end
+
+func tr(s: str): str:
+    ret i18.LocalizeTypes(s)
+end
+
+func ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+pub func New(log: lg.Logger, phase: int): Engine:
+    mut e := Engine {}
+    e.log = log
+    e.phase = phase
+    ret e
+end
+
+pub func SetLogger(e &: Engine, log: lg.Logger):
+    e.log = log
+end
+
+pub func NewDefault(min_level: int, color: bool, phase: int): Engine:
+    ret New(lg.New(min_level, color), phase)
+end
+
+pub func SpanAt(line: int, col: int, index: int, length: int): co.SrcSpan:
+    b := co.MakePos(line as u32, col as u32, index as u32)
+    f := co.MakePos(line as u32, (col + length) as u32, (index + length) as u32)
+    ret co.MakeSpan(b, f, length as u32)
+end
+
+pub func NoSpan(): co.SrcSpan:
+    ret co.EmptySpan()
+end
+
+pub func Report(e &: Engine, sev: Severity, code: int, file: str, span: co.SrcSpan, msg: str):
+    ReportHelp(e, sev, code, file, span, msg, "")
+end
+
+pub func ReportHelp(e &: Engine, sev: Severity, code: int, file: str, span: co.SrcSpan, msg: str, help: str):
+    body := tr(msg)
+    is_error := sev == SEV_ERROR
+    full := co.Format3(
+        "%c%03d: %s", co.ArgChar(is_error ? 69 : 87), co.ArgInt(code as i64), co.ArgStr(body)
+    )
+    mut d := Diag {}
+    d.sev = sev
+    d.code = code
+    d.span = span
+    d.file = file
+    d.message = full
+    d.body = body
+    e.items.push(d)
+    if is_error:
+        e.errors += 1
+    else:
+        e.warnings += 1
+    end
+    has_span := span.begin.line > (0 as u32) or span.begin.col > (0 as u32) or span.length > (0 as u32)
+    mut logfile := ""
+    if has_span:
+        logfile = file
+    end
+    lvl := is_error ? lg.LOG_ERROR : lg.LOG_WARN
+    mut help_text := ""
+    if str.Len(help) > 0:
+        help_text = tr(help)
+    end
+    mut length := span.length as int
+    if length == 0 and span.finish.index > span.begin.index:
+        length = (span.finish.index - span.begin.index) as int
+    end
+    lg.LogSpanHelp(
+        e.log, e.phase, lvl, logfile, span.begin.line as int, span.begin.col as int, has_span ? span.begin.index as int : 0 - 1, length, help_text, full
+    )
+end
+
+pub func ReportNoSpan(e &: Engine, sev: Severity, code: int, file: str, msg: str):
+    Report(e, sev, code, file, co.EmptySpan(), msg)
+end
+
+pub func HasErrors(e: Engine): bool:
+    ret e.errors > 0
+end
+
+pub func ErrorCount(e: Engine): int:
+    ret e.errors
+end
+
+pub func WarningCount(e: Engine): int:
+    ret e.warnings
+end
+
+pub func Count(e: Engine): int:
+    ret e.items.len()
+end
+
+pub func ItemAt(e: Engine, i: int): Diag:
+    ret e.items[i]
+end
+
+pub func Free(e &: Engine):
+    e.items.free()
+end
+
+pub func SplitCodePrefix(msg: str, is_error &: bool, code &: int): str:
+    bp := (msg as void*) as i8*
+    n := str.Len(msg)
+    if n < 6:
+        ret msg
+    end
+    c0 := ub(bp, 0)
+    if c0 != 69 and c0 != 87:
+        ret msg
+    end
+    d1 := ub(bp, 1)
+    d2 := ub(bp, 2)
+    d3 := ub(bp, 3)
+    if d1 < 48 or d1 > 57 or d2 < 48 or d2 > 57 or d3 < 48 or d3 > 57:
+        ret msg
+    end
+    if ub(bp, 4) != 58 or ub(bp, 5) != 32:
+        ret msg
+    end
+    is_error = c0 == 69
+    code = (d1 - 48) * 100 + (d2 - 48) * 10 + (d3 - 48)
+    ret msg.substr(6, n - 6)
+end
+
+pub func RenderAll(
+    e: Engine, src_text: str, src_len: int, style: DiagStyle, format: DiagFormat, color: bool
+): str:
+    mut out := ""
+    mut cache := HashMap {} as HashMap<str, str>
+    defer cache.free()
+    n := e.items.len()
+    mut i := 0
+    until i < n:
+        d := e.items[i]
+        is_error := d.sev == SEV_ERROR
+        lvl := is_error ? "error" : "warning"
+        text := source_for(e, d.file, src_text, cache)
+        text_len := str.Equals(text, src_text) ? src_len : str.Len(text)
+        out = out + Render(
+            lvl, d.code, is_error, d.file, d.span, text, text_len, d.body, "", style, format, color
+        )
+        i += 1
+    end
+    ret out
+end
+
+pub func StyleFromString(s: str, out &: int): bool:
+    ret dr.StyleFromString(s, out)
+end
+
+pub func FormatFromString(s: str, out &: int): bool:
+    ret dr.FormatFromString(s, out)
+end
+
+pub func Render(
+    level: str, code: int, is_error: bool, file: str, span: co.SrcSpan, src_text: str, src_len: int, msg: str, help: str, style: DiagStyle, format: DiagFormat, color: bool
+): str:
+    ret dr.Render(
+        level, code, is_error, file, span, src_text, src_len, msg, help, style, format, color
+    )
+end
+
+pub func RenderAt(
+    level: str, code: int, is_error: bool, file: str, line: int, col: int, length: int, src_text: str, src_len: int, msg: str, help: str, style: DiagStyle, format: DiagFormat, color: bool
+): str:
+    ret dr.RenderAt(
+        level, code, is_error, file, line, col, length, src_text, src_len, msg, help, style, format, color
+    )
+end
+
+pub func RenderJson(
+    level: str, code: int, is_error: bool, file: str, line: int, col: int, length: int, body: str, help: str
+): str:
+    ret dr.RenderJson(level, code, is_error, file, line, col, length, body, help)
+end
+
+pub func RenderXml(
+    level: str, code: int, is_error: bool, file: str, line: int, col: int, length: int, body: str, help: str
+): str:
+    ret dr.RenderXml(level, code, is_error, file, line, col, length, body, help)
+end
+
+pub func RenderRust(
+    level: str, code: int, is_error: bool, file: str, line: int, col: int, length: int, src_text: str, src_len: int, body: str, help: str, color: bool
+): str:
+    ret dr.RenderRust(
+        level, code, is_error, file, line, col, length, src_text, src_len, body, help, color
+    )
+end
+
+pub func RenderGcc(
+    level: str, code: int, is_error: bool, file: str, line: int, col: int, length: int, src_text: str, src_len: int, body: str, help: str, color: bool
+): str:
+    ret dr.RenderGcc(
+        level, code, is_error, file, line, col, length, src_text, src_len, body, help, color
+    )
+end
+
+pub func RenderClang(
+    level: str, code: int, is_error: bool, file: str, line: int, col: int, length: int, src_text: str, src_len: int, body: str, help: str, color: bool
+): str:
+    ret dr.RenderClang(
+        level, code, is_error, file, line, col, length, src_text, src_len, body, help, color
+    )
+end

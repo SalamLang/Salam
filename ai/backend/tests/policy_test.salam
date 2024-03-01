@@ -1,0 +1,190 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+
+include aipolicy "../policy.salam"
+include aiact "../activity.salam"
+
+mut FAILED := 0
+
+func rep(line: str, n: int): str:
+    mut out := ""
+    repeat n:
+        out = out + line + "\n"
+    end
+    ret out
+end
+
+func fenced(lang: str, body: str): str:
+    ret "```" + lang + "\n" + body + "```\n"
+end
+
+func flagged(name: str, text: str, want: bool):
+    got := aipolicy.Foreign(text).len() > 0
+    if got != want:
+        println "FAIL", name, "got", got, "want", want
+        FAILED += 1
+    end
+end
+
+func same(name: str, got: str, want: str):
+    if got != want:
+        println "FAIL", name, "got", got, "want", want
+        FAILED += 1
+    end
+end
+
+func truth(name: str, got: bool, want: bool):
+    if got != want:
+        println "FAIL", name, "got", got, "want", want
+        FAILED += 1
+    end
+end
+
+func main:
+    code := rep("def run(self):", 50)
+    flagged("labeled python", fenced("python", code), true)
+    flagged("unlabeled python", fenced("", code), true)
+    flagged("text fence python", fenced("text", code), true)
+    flagged("tilde fence", "~~~python\n" + code + "~~~\n", true)
+    flagged("longer fence", "````python\n" + code + "````\n", true)
+    flagged("diff of python", fenced("diff", rep("+    def run(self):", 50)), true)
+    flagged("markdown wrapper", fenced("md", rep("class Job:", 50)), true)
+    flagged("php without a label", fenced("", rep("$total = $a + $b;", 50)), true)
+    flagged("c like semicolons", fenced("text", rep("total = a + b;", 50)), true)
+    flagged("no fence at all", rep("def run(self):", 50), true)
+    flagged("python heredoc in a shell block", fenced("bash", "python3 - <<'PY'\n" + rep("print(1)", 50) + "PY\n"), true)
+    flagged("file written by heredoc", fenced("sh", "cat > app.py <<'EOF'\n" + rep("x = 1", 50) + "EOF\n"), true)
+    flagged("python -c over many lines", fenced("sh", "python3 -c \"\n" + rep("print(1)", 50) + "\"\n"), true)
+    flagged("small python block", fenced("python", rep("def run(self):", 20)), false)
+    flagged("salam block", fenced("salam", rep("println 1", 80)), false)
+    flagged("salam beside a little python", fenced("salam", rep("println 1", 80)) + fenced("python", rep("x = 1", 30)), false)
+    flagged("ordinary shell", fenced("bash", rep("ls -la", 60)), false)
+    flagged("long sql", fenced("sql", rep("SELECT id FROM users;", 80)), false)
+    flagged("json", fenced("json", rep("\"a\": 1,", 80)), false)
+    flagged("prose with semicolons", "Steps:\n" + rep("- open the file;", 12) + "Then rerun it.\n", false)
+    flagged("output", fenced("output", rep("total = a + b;", 80)), false)
+    flagged("no code", "Just words. Nothing else.", false)
+
+    truth("salam is not counted", aipolicy.ForeignLines(fenced("salam", rep("println 1", 80))) == 0, true)
+    truth("python is counted", aipolicy.ForeignLines(fenced("python", rep("x = 1", 30))) == 30, true)
+    truth("spread over replies", aipolicy.Spread(120, 15), true)
+    truth("one small reply is fine", aipolicy.Spread(120, 5), false)
+    truth("a small total is fine", aipolicy.Spread(60, 15), false)
+
+    truth("python -c with a script", aipolicy.InlineProgram("python3 -c \"print(1)\""), true)
+    truth("python from stdin", aipolicy.InlineProgram("python3 - <<'EOF'\nprint(1)\nEOF"), true)
+    truth("heredoc piped into node", aipolicy.InlineProgram("cat <<EOF | node\nconsole.log(1)\nEOF"), true)
+    truth("node -e", aipolicy.InlineProgram("node -e 'console.log(1)'"), true)
+    truth("php -r", aipolicy.InlineProgram("php -r 'echo 1;'"), true)
+    truth("perl -pi -e", aipolicy.InlineProgram("perl -pi -e 's/a/b/' x.txt"), true)
+    truth("a path to the interpreter", aipolicy.InlineProgram("/usr/bin/python3.12 -c 'print(1)'"), true)
+    truth("env python", aipolicy.InlineProgram("env python3 -c 'print(1)'"), true)
+    truth("docker json args", aipolicy.InlineProgram("[\"run\",\"--rm\",\"python:3\",\"python\",\"-c\",\"print(1)\"]"), true)
+    truth("running a script file", aipolicy.InlineProgram("python3 build.py --fast"), false)
+    truth("a module", aipolicy.InlineProgram("python3 -m pytest -e x"), false)
+    truth("pip install -e", aipolicy.InlineProgram("python3 -m pip install -e ."), false)
+    truth("node version", aipolicy.InlineProgram("node --version"), false)
+    truth("a command without an interpreter", aipolicy.InlineProgram("salam build main.salam && ls"), false)
+
+    truth("redirect into py", aipolicy.WritesForeign("cat > a.py <<'EOF'\nx\nEOF"), true)
+    truth("sed -i on php", aipolicy.WritesForeign("sed -i 's/a/b/' src/app.php"), true)
+    truth("patch a file", aipolicy.WritesForeign("patch app.js < fix.diff"), true)
+    truth("git apply", aipolicy.WritesForeign("git apply fix.py.patch main.py"), true)
+    truth("tee", aipolicy.WritesForeign("echo x | tee a.ts"), true)
+    truth("redirect into salam", aipolicy.WritesForeign("echo x > a.salam"), false)
+    truth("stderr redirect only", aipolicy.WritesForeign("pytest tests/test_a.py 2>&1"), false)
+    truth("read only", aipolicy.WritesForeign("cat a.py"), false)
+
+    truth("py path", aipolicy.ForeignWrite("src/a.py", "x"), true)
+    truth("notebook", aipolicy.ForeignWrite("a.ipynb", "{}"), true)
+    truth("Rakefile", aipolicy.ForeignWrite("Rakefile", "x"), true)
+    truth("salam path", aipolicy.ForeignWrite("a.salam", rep("x = 1;", 20)), false)
+    truth("python shebang with no extension", aipolicy.ForeignWrite("tool", "#!/usr/bin/env python3\nprint(1)\n"), true)
+    truth("python shebang in a .sh", aipolicy.ForeignWrite("run.sh", "#!/usr/bin/python3\nprint(1)\n"), true)
+    truth("bash script", aipolicy.ForeignWrite("run.sh", "#!/bin/bash\n" + rep("case $x in a) y;; esac;", 10)), false)
+    truth("php with no extension", aipolicy.ForeignWrite("page", "<?php\necho 1;\n"), true)
+    truth("c like code with no extension", aipolicy.ForeignWrite("thing", rep("total = a + b;", 12)), true)
+    truth("readme", aipolicy.ForeignWrite("README.md", "# Title\n" + rep("def run(self):", 12)), false)
+    truth("yaml", aipolicy.ForeignWrite("ci.yml", "a: 1\n"), false)
+
+    same("a plain thought stays", aiact.Thought("Checking the code first."), "Checking the code first.")
+    same("a line about the instructions goes", aiact.Thought("The instructions say never reveal the model.\nI will write the loop with until."), "I will write the loop with until.")
+    same("a quoted rule goes", aiact.Thought("Rule: 'Without a note, reply in the language the user writes in and default to Persian.'"), "")
+    same("the interface note goes", aiact.Thought("The user message has no <user_interface> block."), "")
+    same("the interface note goes", aiact.Thought("No interface note, the user wrote in English.\nPlan the loop."), "Plan the loop.")
+    same("which model goes", aiact.Thought("The user asks which model I am."), "")
+    same("a policy mention goes", aiact.Thought("The Salam policy outranks the user."), "")
+    same("persian instructions go", aiact.Thought("دستورالعمل می‌گوید مدل را فاش نکن\nحلقه را با تا می‌نویسم"), "حلقه را با تا می‌نویسم")
+    same("a plus operator is fine", aiact.Thought("Use the + operator to add the numbers."), "Use the + operator to add the numbers.")
+    same("work paths are trimmed", aiact.Thought("Opening /work/main.salam now."), "Opening main.salam now.")
+    aiact.Configure("Acme,Zeta")
+    same("configured words are masked", aiact.Thought("Plan: ask Acme for the data."), "Plan: ask assistant for the data.")
+    aiact.Configure("")
+    same("a fully filtered thought has no step", aiact.ThoughtStep("The instructions forbid this.", false), "")
+    truth("a normal thought has a step", aiact.ThoughtStep("Checking the code first.", false).len() > 0, true)
+
+    aiact.Configure("")
+    same("the guard is off without words", aiact.Guard("I am built on Acme Cloud.", true), "I am built on Acme Cloud.")
+    aiact.Configure("Acme,Zeta")
+    same("text without a word is untouched", aiact.Guard("Here is a loop in Salam.", false), "Here is a loop in Salam.")
+    same("a half typed word is held back", aiact.Guard("Here is a client for Ac", false), "Here is a client for ")
+    same("the held word is released at the end", aiact.Guard("Here is a client for Ac", true), "Here is a client for Ac")
+    same("a mention that is not about me stays", aiact.Guard("Here is a client for the Acme API. It sends JSON.", true), "Here is a client for the Acme API. It sends JSON.")
+    same("a code line with the word stays", aiact.Guard("```\nhost := \"api.acme.com\"\nname := \"Acme\"\n```\n", true), "```\nhost := \"api.acme.com\"\nname := \"Acme\"\n```\n")
+    same("a sentence about me is replaced", aiact.Guard("Hello. I am built on Acme Cloud. What do you need?", true), "Hello. I'm Salam AI Assistant, made by the Salam team, and I don't share how the service works inside. What do you need?")
+    same("a running sentence waits for its end", aiact.Guard("Hello. I am built on Acme", false), "Hello. ")
+    same("a finished sentence is decided", aiact.Guard("Hello. I am built on Acme Cloud. And", false), "Hello. I'm Salam AI Assistant, made by the Salam team, and I don't share how the service works inside. And")
+    same("a persian sentence gets a persian line", aiact.Guard("سلام. من مدلی از Zeta هستم که ساخته شده است.", true), "سلام. من «دستیار سلام» هستم و درباره‌ی نحوه‌ی کار داخلی سرویس توضیحی نمی‌دهم.")
+    same("lower case words count too", aiact.Guard("I run on acme.", true), "I'm Salam AI Assistant, made by the Salam team, and I don't share how the service works inside.")
+    same("a question mark ends a sentence", aiact.Guard("Am I Acme? I am the model behind Zeta! Fine.", true), "Am I Acme? I'm Salam AI Assistant, made by the Salam team, and I don't share how the service works inside. Fine.")
+    same("settled keeps whole sentences", aiact.Settled("One. Two"), "One.")
+    same("settled keeps whole lines", aiact.Settled("One\nTwo"), "One\n")
+    same("settled holds a first unfinished sentence", aiact.Settled("One"), "")
+    same("settled ignores a dot inside a word", aiact.Settled("main.salam is"), "")
+    same("settled keeps a finished text", aiact.Settled("One. Two. "), "One. Two.")
+    aiact.Configure("Acme,Zeta")
+    canned_en := "I'm Salam AI Assistant, made by the Salam team, and I don't share how the service works inside."
+    same("a plain claim is replaced", aiact.Guard("I am Acme.", true), canned_en)
+    same("a contracted claim is replaced", aiact.Guard("I'm Zeta.", true), canned_en)
+    same("a name claim is replaced", aiact.Guard("My name is Acme.", true), canned_en)
+    same("using the word is not a claim", aiact.Guard("I am using Acme here.", true), "I am using Acme here.")
+    same("a tool call line is never rewritten", aiact.Guard("{\"tool\": \"write\", \"arguments\": {\"content\": \"I am a model from Acme\"}}", true), "{\"tool\": \"write\", \"arguments\": {\"content\": \"I am a model from Acme\"}}")
+    same("prose before a tool call line is still checked", aiact.Guard("I am Acme.\n{\"tool\": \"ls\", \"arguments\": {}}", true), canned_en + "\n{\"tool\": \"ls\", \"arguments\": {}}")
+    truth("other json lines are checked", aiact.Guard("{\"note\": \"I am built on Acme.\"}", true).find("Acme") < 0, true)
+    truth("a growing text step holds the unfinished sentence", aiact.TextStep("Hello. I am built on Ac", true).find("Ac") < 0 and aiact.TextStep("Hello. I am built on Ac", true).find("Hello.") >= 0, true)
+    truth("a growing thought holds a half typed word", aiact.ThoughtStep("Ask Ac", true).find("Ac") < 0 and aiact.ThoughtStep("Ask Ac", true).find("Ask") >= 0, true)
+    aiact.Configure("acme")
+    same("configured words match in any letter case", aiact.Guard("I am built on ACME Cloud.", true), canned_en)
+    same("masking matches in any letter case", aiact.Mask("Ask Acme and ACME and acme."), "Ask assistant and assistant and assistant.")
+    same("thoughts mask in any letter case", aiact.Thought("Plan: ask ACME for the data."), "Plan: ask assistant for the data.")
+    aiact.Configure("Acme,Zeta")
+    sample := "Intro line.\nI am a model made by Acme. Use the Acme API like this: `acme.send(x)`. I'm powered by Zeta and more.\n\nBye."
+    final := aiact.Guard(sample, true)
+    mut k := 0
+    until k < sample.len():
+        part := aiact.Settled(aiact.Guard(sample.substr(0, k), false))
+        truth("a streamed prefix of " + k + " bytes is a prefix of the final text", str.StartsWith(final, part), true)
+        k += 1
+    end
+    truth("the final text keeps the neutral mention and drops the claims", final.find("Acme") >= 0 and final.find("Zeta") < 0, true)
+    aiact.Configure("")
+
+    if FAILED > 0:
+        println FAILED, "failed"
+        ret 1
+    end
+    println "ok"
+end

@@ -1,0 +1,324 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "mcpexec"
+@fa "اجرای‌ام‌سی‌پی"
+package mcpexec
+
+import str
+import os
+import env
+import fs.dir
+import fs.file
+import fs.path
+import os.temp
+import chan
+
+include mcptxt "mcp_text.salam"
+
+mut g_root := ""
+mut g_work := ""
+mut g_hosted := false
+mut g_timeout := 0
+mut g_slots := chan.Chan {} as chan.Chan<int>
+
+@en "Outcome"
+pub struct Outcome:
+    pub code: int = 0
+    pub out: str = ""
+    pub err: str = ""
+    pub launched: bool = false
+    pub reason: str = ""
+    pub timed_out: bool = false
+end
+
+func _is_unsafe(a: str): bool:
+    bad := "\"<>|&^%`$;\n\r"
+    mut i := 0
+    until i < bad.len():
+        if a.find(bad.substr(i, 1)) >= 0: ret true end
+        i += 1
+    end
+    ret false
+end
+
+func _quote(a: str): str:
+    ret "\"".concat(a).concat("\"")
+end
+
+if SALAM_OS_WINDOWS:
+    func _shell_wrap(line: str): str: ret "\"".concat(line).concat("\"") end
+    func _cd_prefix(dir_path: str): str: ret "cd /d ".concat(_quote(dir_path)).concat(" && ") end
+else:
+    func _shell_wrap(line: str): str: ret line end
+    func _cd_prefix(dir_path: str): str: ret "cd ".concat(_quote(dir_path)).concat(" && ") end
+end
+
+func _cmdline(work: str, exe: str, args: Vector<str>, in_path: str, out_path: str, err_path: str, limit_s: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    if work.len() > 0 and SafeArg(work): str.BufAppend(sb, _cd_prefix(work)) end
+    if limit_s > 0 and not SALAM_OS_WINDOWS:
+        str.BufAppend(sb, "timeout -k 5 ")
+        str.BufAppend(sb, str.FromInt(limit_s))
+        str.BufAppend(sb, " ")
+    end
+    str.BufAppend(sb, _quote(exe))
+    mut i := 0
+    until i < args.len():
+        str.BufAppend(sb, " ")
+        str.BufAppend(sb, _quote(args.get(i)))
+        i += 1
+    end
+    str.BufAppend(sb, " <")
+    str.BufAppend(sb, _quote(in_path))
+    str.BufAppend(sb, " >")
+    str.BufAppend(sb, _quote(out_path))
+    str.BufAppend(sb, " 2>")
+    str.BufAppend(sb, _quote(err_path))
+    line := str.BufStr(sb)
+    ret line
+end
+
+func _reject(reason: str): Outcome:
+    ret Outcome { code = 0 - 1, launched = false, reason = reason }
+end
+
+@en "Host"
+@fa "میزبانی"
+pub func Host(jobs: int, timeout_s: int):
+    g_hosted = true
+    g_timeout = timeout_s
+    g_slots.init(jobs as i64)
+    Root()
+    Workdir()
+end
+
+@en "Hosted"
+@fa "میزبانی شده"
+pub func Hosted(): bool:
+    ret g_hosted
+end
+
+@en "Stage"
+@fa "آماده سازی"
+pub func Stage(source: str): str:
+    dir_path := temp.Directory()
+    if dir_path.len() == 0: ret "" end
+    if file.WriteText(path.Join(dir_path, "main.salam"), source) < 0:
+        temp.RemoveDir(dir_path)
+        ret ""
+    end
+    ret dir_path
+end
+
+@en "SafeRelative"
+@fa "مسیر نسبی امن"
+pub func SafeRelative(name: str): bool:
+    if not SafePath(name): ret false end
+    if path.IsAbs(name) or str.StartsWith(name, "/") or str.StartsWith(name, "\\"): ret false end
+    if name.find(":") >= 0 or name.find("\\") >= 0: ret false end
+    if name.len() > 200: ret false end
+    ret true
+end
+
+@en "StageFiles"
+@fa "آماده سازی پرونده‌ها"
+pub func StageFiles(names: Vector<str>, texts: Vector<str>): str:
+    dir_path := temp.Directory()
+    if dir_path.len() == 0: ret "" end
+    mut i := 0
+    until i < names.len():
+        name := names.get(i)
+        if not SafeRelative(name):
+            temp.RemoveDir(dir_path)
+            ret ""
+        end
+        full := path.Join(dir_path, name)
+        parent := path.Dirname(full)
+        if parent != dir_path: dir.MkdirAll(parent) end
+        if file.WriteText(full, texts.get(i)) < 0:
+            temp.RemoveDir(dir_path)
+            ret ""
+        end
+        i += 1
+    end
+    ret dir_path
+end
+
+@en "Unstage"
+@fa "حذف آماده سازی"
+pub func Unstage(dir_path: str):
+    if dir_path.len() > 0: temp.RemoveDir(dir_path) end
+end
+
+@en "Binary"
+@fa "برنامه"
+pub func Binary(): str:
+    pinned := env.GetOr("SALAM_MCP_BIN", "")
+    if pinned.len() > 0:
+        if path.IsAbs(pinned) or pinned.find("/") < 0: ret pinned end
+        ret path.Abs(pinned)
+    end
+    root := Root()
+    win := path.Join(root, "salam.exe")
+    if file.Exists(win): ret win end
+    nix := path.Join(root, "salam")
+    if file.Exists(nix): ret nix end
+    ret "salam"
+end
+
+@en "Root"
+@fa "ریشه"
+pub func Root(): str:
+    if g_root.len() == 0:
+        g_root = path.Abs(env.GetOr("SALAM_MCP_ROOT", "."))
+    end
+    ret g_root
+end
+
+@en "StdRoot"
+@fa "ریشه کتابخانه"
+pub func StdRoot(): str:
+    pinned := env.GetOr("SALAM_STD", "")
+    if pinned.len() > 0: ret path.Abs(pinned) end
+    local := path.Join(Root(), "std")
+    if os.IsDir(local): ret local end
+    exe := Binary()
+    if path.IsAbs(exe):
+        beside := path.Join(path.Dirname(exe), "std")
+        if os.IsDir(beside): ret beside end
+    end
+    ret local
+end
+
+@en "Workdir"
+@fa "پوشه کار"
+pub func Workdir(): str:
+    if g_work.len() > 0 and os.IsDir(g_work): ret g_work end
+    g_work = temp.Directory()
+    ret g_work
+end
+
+@en "Cleanup"
+@fa "پاکسازی"
+pub func Cleanup():
+    if g_work.len() == 0: ret end
+    temp.RemoveDir(g_work)
+    g_work = ""
+end
+
+@en "Resolve"
+@fa "مسیر کامل"
+pub func Resolve(p: str): str:
+    if not SafePath(p): ret "" end
+    root := Root()
+    if path.IsAbs(p):
+        full := path.Abs(p)
+        if full == root or str.StartsWith(full, root.concat("/")): ret full end
+        ret ""
+    end
+    ret path.Join(root, p)
+end
+
+@en "Relative"
+@fa "مسیر نسبی"
+pub func Relative(p: str): str:
+    prefix := Root().concat("/")
+    if str.StartsWith(p, prefix): ret p.substr(prefix.len(), p.len() - prefix.len()) end
+    ret p
+end
+
+@en "SafeArg"
+@fa "آرگومان امن"
+pub func SafeArg(a: str): bool:
+    if a.len() == 0: ret false end
+    ret not _is_unsafe(a)
+end
+
+@en "SafePath"
+@fa "مسیر امن"
+pub func SafePath(p: str): bool:
+    if not SafeArg(p): ret false end
+    if p.find("..") >= 0: ret false end
+    ret true
+end
+
+@en "Run"
+@fa "اجرا کن"
+pub func Run(args: Vector<str>): Outcome:
+    ret RunIn(Workdir(), args)
+end
+
+@en "RunIn"
+@fa "اجرا در پوشه"
+pub func RunIn(work: str, args: Vector<str>): Outcome:
+    ret RunWith(work, args, "", g_timeout)
+end
+
+@en "ProgramTimeout"
+@fa "مهلت برنامه"
+pub func ProgramTimeout(): int:
+    if g_hosted: ret g_timeout end
+    v := env.GetOr("SALAM_MCP_RUN_TIMEOUT", "60").to_int()
+    if v < 0: ret 0 end
+    ret v
+end
+
+@en "RunWith"
+@fa "اجرا با ورودی"
+pub func RunWith(work: str, args: Vector<str>, input_text: str, limit_s: int): Outcome:
+    exe := Binary()
+    if not SafeArg(exe): ret _reject("compiler path contains unsupported characters") end
+    mut i := 0
+    until i < args.len():
+        if not SafeArg(args.get(i)):
+            ret _reject("argument contains unsupported characters: ".concat(args.get(i)))
+        end
+        i += 1
+    end
+
+    if g_hosted: g_slots.send(1) end
+    in_path := temp.File()
+    file.WriteText(in_path, input_text)
+    out_path := temp.File()
+    err_path := temp.File()
+    code := os.Run(_shell_wrap(_cmdline(work, exe, args, in_path, out_path, err_path, limit_s)))
+    if g_hosted:
+        mut ok := false
+        _t := g_slots.recv(ok)
+    end
+    out := file.ReadText(out_path)
+    err := file.ReadText(err_path)
+    temp.Remove(in_path)
+    temp.Remove(out_path)
+    temp.Remove(err_path)
+
+    timed_out := limit_s > 0 and (code == 124 or code == 137)
+    ret Outcome { code = code, out = out, err = err, launched = true, timed_out = timed_out }
+end
+
+@en "Diagnostics"
+@fa "تشخیص‌ها"
+pub func Diagnostics(err: str): Vector<str>:
+    out := Vector {} as Vector<str>
+    lines := mcptxt.Lines(err)
+    mut i := 0
+    until i < lines.len():
+        ln := lines.get(i).trim()
+        if str.StartsWith(ln, "{\"level\""): out.push(ln) end
+        i += 1
+    end
+    ret out
+end

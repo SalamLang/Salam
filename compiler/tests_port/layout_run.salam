@@ -1,0 +1,192 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import os
+import io
+import str
+
+include pth "../sal_path.salam"
+include tok "../token.salam"
+include src "../source.salam"
+include lg "../logger.salam"
+include dg "../diag.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+include lx "../lexer/lexer.salam"
+include at "../ast.salam"
+include ps "../parser/parser.salam"
+include cc "../condcomp.salam"
+include sm "../semantic/semantic.salam"
+include lo "../sal_layout/sal_layout.salam"
+
+func module_of(path: str): str:
+    ret pth.PathStem(path)
+end
+
+func dir_of(path: str): str:
+    ret pth.PathDir(path)
+end
+
+func write_file(path: str, content: str): bool:
+    n := io.WriteFile(path, content)
+    ret n == str.Len(content)
+end
+
+func main:
+    args := os.Args()
+    defer args.free()
+    mut argi := 1
+    mut inline_mode := false
+    if args.len() > argi and str.Equals(args[argi], "inline"):
+        inline_mode = true
+        argi += 1
+    end
+    if args.len() <= argi:
+        io.EPrintln("usage: layout_run [inline] <file1.salam> [file2.salam ...]")
+        ret 2
+    end
+
+    i18.SetLang("en")
+    sm.LayoutSchemaInit(sm.GetStdlibRoot())
+
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut diag := dg.NewDefault(2, false, 6)
+    mut rc := 0
+    minify_ws := true
+
+    n_inputs := args.len() - argi
+    multi := n_inputs > 1
+
+    mut modules := Vector {} as Vector<str>
+    mut htmls := Vector {} as Vector<str>
+    mut csss := Vector {} as Vector<str>
+    mut jss := Vector {} as Vector<str>
+    mut heads := Vector {} as Vector<str>
+    mut titles := Vector {} as Vector<str>
+    mut langs := Vector {} as Vector<str>
+    mut dirs := Vector {} as Vector<str>
+    defer modules.free()
+    defer htmls.free()
+    defer csss.free()
+    defer jss.free()
+    defer heads.free()
+    defer titles.free()
+    defer langs.free()
+    defer dirs.free()
+
+    mut i := argi
+    until i < args.len():
+        path := args[i]
+        i += 1
+        mut sf := src.New()
+        if not src.Load(path, sf):
+            io.EPrintln("cannot read source file '" + path + "'")
+            rc = 2
+            continue
+        end
+        pack := lx.Detect(sf, lp.Load("en"))
+        mut toks := tok.StreamNew(path)
+        _lok := lx.Run(quiet, pack, sf, toks)
+        mut a := at.NewAst()
+        mut prog := 0
+        _pok := ps.Run(quiet, toks, a, prog)
+        tok.StreamFree(toks)
+        table := cc.TableBuild("", Vector {} as Vector<str>)
+        _ck := cc.PruneProgram(a, quiet, path, table, prog)
+
+        base_dir := dir_of(path)
+        eerr := lo.Expand(quiet, pack, table, a, prog, base_dir)
+        if eerr > 0:
+            rc = 1
+        end
+        mut s := sm.New(quiet, path, lp.Code(pack))
+        sm.SetCc(s, table)
+        _sok := sm.Run(s, a, prog)
+
+        lb := lo.FindLayout(a, prog)
+        if lb == 0:
+            io.EPrintln(path + " has no layout block")
+            sm.Free(s)
+            at.FreeAst(a)
+            continue
+        end
+        r := lo.Generate(quiet, diag, path, a, lb, minify_ws, lp.Code(pack))
+        modules.push(module_of(path))
+        htmls.push(r.html)
+        csss.push(r.css)
+        jss.push(r.js)
+        heads.push(r.head)
+        titles.push(r.title)
+        langs.push(r.lang)
+        dirs.push(r.dir)
+        sm.Free(s)
+        at.FreeAst(a)
+    end
+
+    if dg.HasErrors(diag):
+        rc = 1
+    end
+
+    mut mcss := ""
+    mut mjs := ""
+    repeat modules.len() in oi:
+        mod := modules.get(oi)
+        mut r := lo.NewResult()
+        r.html = htmls.get(oi)
+        r.css = csss.get(oi)
+        r.js = jss.get(oi)
+        r.head = heads.get(oi)
+        r.title = titles.get(oi)
+        r.lang = langs.get(oi)
+        r.dir = dirs.get(oi)
+        html_path := mod + ".html"
+        if inline_mode:
+            _w := write_file(html_path, lo.Document(r, true, "", "", minify_ws))
+        else multi:
+            _w := write_file(
+                html_path, lo.Document(r, false, "style.css", "script.js", minify_ws)
+            )
+            if str.Len(r.css) > 0:
+                mcss += r.css
+            end
+            if str.Len(r.js) > 0:
+                mjs += r.js
+            end
+        else:
+            css_href := str.Len(r.css) > 0 ? mod + ".css" : ""
+            js_href := str.Len(r.js) > 0 ? mod + ".js" : ""
+            _w := write_file(
+                html_path, lo.Document(r, false, css_href, js_href, minify_ws)
+            )
+            if str.Len(css_href) > 0:
+                _w1 := write_file(css_href, r.css)
+            end
+            if str.Len(js_href) > 0:
+                _w2 := write_file(js_href, r.js)
+            end
+        end
+    end
+    if multi and not inline_mode:
+        if str.Len(mcss) > 0:
+            _w3 := write_file("style.css", mcss)
+        end
+        if str.Len(mjs) > 0:
+            _w4 := write_file("script.js", mjs)
+        end
+    end
+    dg.Free(diag)
+    ret rc
+end

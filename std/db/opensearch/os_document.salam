@@ -1,0 +1,306 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package opensearch
+
+import str
+import encoding.json
+
+@en "ByQueryResult"
+@fa "نتیجه پرسمانی"
+pub struct ByQueryResult:
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+    @en "status"
+    @fa "وضعیت"
+    pub status: int = 0
+    @en "took"
+    @fa "زمان اجرا"
+    pub took: i64 = 0
+    @en "timed_out"
+    @fa "مهلت تمام شد"
+    pub timed_out: bool = false
+    @en "total"
+    @fa "کل"
+    pub total: i64 = 0
+    @en "created"
+    @fa "ایجاد‌شده"
+    pub created: i64 = 0
+    @en "updated"
+    @fa "به‌روز‌شده"
+    pub updated: i64 = 0
+    @en "deleted"
+    @fa "حذف‌شده"
+    pub deleted: i64 = 0
+    @en "batches"
+    @fa "دسته‌ها"
+    pub batches: i64 = 0
+    @en "version_conflicts"
+    @fa "تعارض‌های نسخه"
+    pub version_conflicts: i64 = 0
+    @en "noops"
+    @fa "بدون تغییر"
+    pub noops: i64 = 0
+    @en "failures"
+    @fa "ناموفق‌ها"
+    pub failures: str = ""
+    @en "task"
+    @fa "کار"
+    pub task: str = ""
+    @en "error"
+    @fa "خطا"
+    pub error: str = ""
+end
+
+func _os_write_result(r: Response): WriteResult:
+    mut w := WriteResult { ok = r.ok, status = r.status, error = r.error }
+    if r.body.len() == 0: ret w end
+    w.index = _os_jstr(r.body, "_index")
+    w.id = _os_jstr(r.body, "_id")
+    w.result = _os_jstr(r.body, "result")
+    w.version = _os_ji64(r.body, "_version", 0)
+    w.seq_no = _os_ji64(r.body, "_seq_no", -1)
+    w.primary_term = _os_ji64(r.body, "_primary_term", 0)
+    w.shards_total = _os_int(_os_path_raw(r.body, "_shards.total"))
+    w.shards_successful = _os_int(_os_path_raw(r.body, "_shards.successful"))
+    ret w
+end
+
+func _os_document(raw: str, status: int, err: str): Document:
+    mut d := Document { error = err }
+    if raw.len() == 0: ret d end
+    d.index = _os_jstr(raw, "_index")
+    d.id = _os_jstr(raw, "_id")
+    d.found = _os_jbool(raw, "found")
+    d.version = _os_ji64(raw, "_version", 0)
+    d.seq_no = _os_ji64(raw, "_seq_no", -1)
+    d.primary_term = _os_ji64(raw, "_primary_term", 0)
+    d.routing = _os_jstr(raw, "_routing")
+    d.source = _os_jraw(raw, "_source")
+    d.fields = _os_jraw(raw, "fields")
+    if status == 404 and not d.found: d.error = "" end
+    ret d
+end
+
+func _os_by_query(r: Response): ByQueryResult:
+    mut b := ByQueryResult { ok = r.ok, status = r.status, error = r.error }
+    if r.body.len() == 0: ret b end
+    b.task = _os_jstr(r.body, "task")
+    b.took = _os_ji64(r.body, "took", 0)
+    b.timed_out = _os_jbool(r.body, "timed_out")
+    b.total = _os_ji64(r.body, "total", 0)
+    b.created = _os_ji64(r.body, "created", 0)
+    b.updated = _os_ji64(r.body, "updated", 0)
+    b.deleted = _os_ji64(r.body, "deleted", 0)
+    b.batches = _os_ji64(r.body, "batches", 0)
+    b.version_conflicts = _os_ji64(r.body, "version_conflicts", 0)
+    b.noops = _os_ji64(r.body, "noops", 0)
+    f := _os_jraw(r.body, "failures")
+    if f.len() > 0 and f != "[]":
+        b.failures = f
+        b.ok = false
+        if b.error.len() == 0: b.error = "some documents failed: " + f end
+    end
+    ret b
+end
+
+func _os_doc_path(index: str, kind: str, id: str): str:
+    ret "/" + _os_seg(index) + "/" + kind + "/" + _os_seg(id)
+end
+
+@en "Index"
+@fa "نمایه‌سازی"
+pub func Index(c: Client, index: str, id: str, doc: str): WriteResult:
+    ret IndexWith(c, index, id, doc, Options {})
+end
+
+@en "IndexWith"
+@fa "نمایه‌سازی با گزینه"
+pub func IndexWith(c: Client, index: str, id: str, doc: str, o: Options): WriteResult:
+    mut q := Vector {} as Vector<str>
+    _os_opts_query(q, o)
+    if id.len() == 0:
+        ret _os_write_result(Perform(c, "POST", "/" + _os_seg(index) + "/_doc" + _os_qs(q), doc))
+    end
+    ret _os_write_result(Perform(c, "PUT", _os_doc_path(index, "_doc", id) + _os_qs(q), doc))
+end
+
+@en "Create"
+@fa "ایجاد سند"
+pub func Create(c: Client, index: str, id: str, doc: str): WriteResult:
+    ret CreateWith(c, index, id, doc, Options {})
+end
+
+@en "CreateWith"
+@fa "ایجاد سند با گزینه"
+pub func CreateWith(c: Client, index: str, id: str, doc: str, o: Options): WriteResult:
+    mut q := Vector {} as Vector<str>
+    _os_opts_query(q, o)
+    ret _os_write_result(Perform(c, "PUT", _os_doc_path(index, "_create", id) + _os_qs(q), doc))
+end
+
+@en "Get"
+@fa "دریافت"
+pub func Get(c: Client, index: str, id: str): Document:
+    r := Perform(c, "GET", _os_doc_path(index, "_doc", id), "")
+    ret _os_document(r.body, r.status, r.ok or r.status == 404 ? "" : r.error)
+end
+
+@en "GetFields"
+@fa "دریافت فیلدها"
+pub func GetFields(c: Client, index: str, id: str, includes: Vector<str>, routing: str): Document:
+    mut q := Vector {} as Vector<str>
+    if includes.len() > 0: _os_qadd(q, "_source_includes", str.Join(includes, ",")) end
+    _os_qadd(q, "routing", routing)
+    r := Perform(c, "GET", _os_doc_path(index, "_doc", id) + _os_qs(q), "")
+    ret _os_document(r.body, r.status, r.ok or r.status == 404 ? "" : r.error)
+end
+
+@en "GetSource"
+@fa "دریافت منبع"
+pub func GetSource(c: Client, index: str, id: str): str:
+    r := Perform(c, "GET", _os_doc_path(index, "_source", id), "")
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "Exists"
+@fa "وجود سند"
+pub func Exists(c: Client, index: str, id: str): bool:
+    r := Perform(c, "HEAD", _os_doc_path(index, "_doc", id), "")
+    ret r.status == 200
+end
+
+@en "Update"
+@fa "به‌روزرسانی"
+pub func Update(c: Client, index: str, id: str, partial: str): WriteResult:
+    ret UpdateWith(c, index, id, _os_one("doc", partial), Options {})
+end
+
+@en "UpdateWith"
+@fa "به‌روزرسانی با گزینه"
+pub func UpdateWith(c: Client, index: str, id: str, body: str, o: Options): WriteResult:
+    mut q := Vector {} as Vector<str>
+    _os_opts_query(q, o)
+    if o.retry_on_conflict >= 0: _os_qadd(q, "retry_on_conflict", str.FromInt(o.retry_on_conflict as i64)) end
+    ret _os_write_result(Perform(c, "POST", _os_doc_path(index, "_update", id) + _os_qs(q), body))
+end
+
+@en "Upsert"
+@fa "به‌روزرسانی درجی"
+pub func Upsert(c: Client, index: str, id: str, doc: str): WriteResult:
+    ret UpdateWith(c, index, id, _os_two("doc", doc, "doc_as_upsert", "true"), Options {})
+end
+
+@en "UpdateScript"
+@fa "به‌روزرسانی اسکریپتی"
+pub func UpdateScript(c: Client, index: str, id: str, script: str, upsert: str): WriteResult:
+    mut m := Vector {} as Vector<str>
+    m.push(_os_m("script", script))
+    if upsert.len() > 0: m.push(_os_m("upsert", upsert)) end
+    ret UpdateWith(c, index, id, _os_obj(m), Options {})
+end
+
+@en "Delete"
+@fa "حذف سند"
+pub func Delete(c: Client, index: str, id: str): WriteResult:
+    ret DeleteWith(c, index, id, Options {})
+end
+
+@en "DeleteWith"
+@fa "حذف سند با گزینه"
+pub func DeleteWith(c: Client, index: str, id: str, o: Options): WriteResult:
+    mut q := Vector {} as Vector<str>
+    _os_opts_query(q, o)
+    ret _os_write_result(Perform(c, "DELETE", _os_doc_path(index, "_doc", id) + _os_qs(q), ""))
+end
+
+@en "MGet"
+@fa "دریافت چندگانه"
+pub func MGet(c: Client, index: str, ids: Vector<str>): Vector<Document>:
+    mut out := Vector {} as Vector<Document>
+    r := Perform(c, "POST", "/" + _os_seg(index) + "/_mget", _os_one("ids", _os_strs(ids)))
+    if not r.ok: ret out end
+    each d in _os_items(_os_jraw(r.body, "docs")):
+        e := _os_path(d, "error.reason")
+        out.push(_os_document(d, 200, e))
+    end
+    ret out
+end
+
+@en "Count"
+@fa "شمارش"
+pub func Count(c: Client, index: str, query: str): i64:
+    mut body := ""
+    if query.len() > 0: body = _os_one("query", query) end
+    method := body.len() > 0 ? "POST" : "GET"
+    r := Perform(c, method, _os_ipath(index, "/_count"), body)
+    if not r.ok: ret -1 end
+    ret _os_ji64(r.body, "count", 0)
+end
+
+@en "DeleteByQuery"
+@fa "حذف پرسمانی"
+pub func DeleteByQuery(c: Client, index: str, query: str): ByQueryResult:
+    ret DeleteByQueryWith(c, index, query, Options {})
+end
+
+@en "DeleteByQueryWith"
+@fa "حذف پرسمانی با گزینه"
+pub func DeleteByQueryWith(c: Client, index: str, query: str, o: Options): ByQueryResult:
+    mut q := Vector {} as Vector<str>
+    _os_qadd(q, "refresh", o.refresh)
+    _os_qadd(q, "routing", o.routing)
+    _os_qadd(q, "conflicts", o.conflicts)
+    _os_qadd(q, "timeout", o.timeout)
+    ret _os_by_query(Perform(c, "POST", _os_ipath(index, "/_delete_by_query") + _os_qs(q), _os_one("query", query)))
+end
+
+@en "UpdateByQuery"
+@fa "به‌روزرسانی پرسمانی"
+pub func UpdateByQuery(c: Client, index: str, query: str, script: str): ByQueryResult:
+    ret UpdateByQueryWith(c, index, query, script, Options {})
+end
+
+@en "UpdateByQueryWith"
+@fa "به‌روزرسانی پرسمانی با گزینه"
+pub func UpdateByQueryWith(c: Client, index: str, query: str, script: str, o: Options): ByQueryResult:
+    mut q := Vector {} as Vector<str>
+    _os_qadd(q, "refresh", o.refresh)
+    _os_qadd(q, "routing", o.routing)
+    _os_qadd(q, "conflicts", o.conflicts)
+    _os_qadd(q, "pipeline", o.pipeline)
+    _os_qadd(q, "timeout", o.timeout)
+    mut m := Vector {} as Vector<str>
+    if query.len() > 0: m.push(_os_m("query", query)) end
+    if script.len() > 0: m.push(_os_m("script", script)) end
+    ret _os_by_query(Perform(c, "POST", _os_ipath(index, "/_update_by_query") + _os_qs(q), _os_obj(m)))
+end
+
+@en "Reindex"
+@fa "نمایه‌سازی دوباره"
+pub func Reindex(c: Client, source: str, dest: str): ByQueryResult:
+    body := _os_two("source", _os_one("index", json.Str(source)), "dest", _os_one("index", json.Str(dest)))
+    ret ReindexBody(c, body, true)
+end
+
+@en "ReindexBody"
+@fa "نمایه‌سازی دوباره با بدنه"
+pub func ReindexBody(c: Client, body: str, wait: bool): ByQueryResult:
+    mut q := Vector {} as Vector<str>
+    _os_qadd(q, "refresh", "true")
+    if not wait: _os_qadd(q, "wait_for_completion", "false") end
+    ret _os_by_query(Perform(c, "POST", "/_reindex" + _os_qs(q), body))
+end

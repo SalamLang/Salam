@@ -1,0 +1,46 @@
+import db.meilisearch
+
+func main:
+    c := meilisearch.New("http://127.0.0.1:7700", "masterKey")
+    mut err := meilisearch.Error {}
+
+    info := meilisearch.CreateIndex(c, "movies", "id", err)
+    println info.task_uid, info.index_uid, info.status, info.kind, info.enqueued_at
+    done := meilisearch.Wait(c, info, err)
+    if not meilisearch.Ok(err):
+        println meilisearch.ErrorString(err)
+        ret
+    end
+    println done.status
+
+    i := meilisearch.GetIndex(c, "movies", err)
+    println i.uid, i.primary_key, i.created_at, i.updated_at
+    page := meilisearch.ListIndexes(c, 0, 20, err)
+    println page.total, page.offset, page.limit
+    each idx in page.results:
+        println idx.uid
+    end
+
+    meilisearch.WaitForTask(c, meilisearch.UpdateIndex(c, "movies", "movie_id", err).task_uid, 10000, 50, err)
+    meilisearch.Wait(c, meilisearch.RenameIndex(c, "movies", "films", err), err)
+
+    mut swaps := Vector {} as Vector<meilisearch.IndexSwap>
+    swaps.push(meilisearch.IndexSwap { first = "films", second = "films_next" })
+    swaps.push(meilisearch.IndexSwap { first = "drafts", second = "drafts_v2", rename = true })
+    meilisearch.Wait(c, meilisearch.SwapIndexes(c, swaps, err), err)
+
+    s := meilisearch.GetIndexStats(c, "films", err)
+    println s.number_of_documents, s.raw_document_db_size, s.avg_document_size, s.is_indexing
+    println s.number_of_embeddings, s.number_of_embedded_documents, s.field_distribution
+
+    meilisearch.Wait(c, meilisearch.CompactIndex(c, "movies", err), err)
+    mut fq := meilisearch.FieldsQuery { offset = 0, limit = 50, filter = `{"filterable": true}` }
+    fq.attribute_patterns.push("*")
+    fields := meilisearch.ListFields(c, "movies", fq, err)
+    println fields.total, fields.offset, fields.limit
+    each f in fields.results:
+        println f.name, f.displayed, f.searchable, f.sortable, f.distinct, f.filterable, f.ranking_rule, f.localized, f.raw.len()
+    end
+    println s.index_size, s.used_index_size, s.internal_database_sizes
+    meilisearch.Wait(c, meilisearch.DeleteIndex(c, "films", err), err)
+end

@@ -1,0 +1,273 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import os
+import io
+import str
+
+include pth "../sal_path.salam"
+include tok "../token.salam"
+include src "../source.salam"
+include lg "../logger.salam"
+include lp "../langpack.salam"
+include lx "../lexer/lexer.salam"
+include at "../ast.salam"
+include ps "../parser/parser.salam"
+include cc "../condcomp.salam"
+include sm "../semantic/semantic.salam"
+include cg "../codegen/codegen.salam"
+
+func byte_at(s: str, i: int): int:
+    bp := (s as void*) as i8*
+    mut v := bp[i] as int
+    if v < 0:
+        v += 256
+    end
+    ret v
+end
+
+func module_of(path: str): str:
+    ret pth.PathStem(path)
+end
+
+func dir_of(path: str): str:
+    ret pth.PathDir(path)
+end
+
+func link_define(lib: str): str:
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "SALAM_LINK_")
+    n := str.Len(lib)
+    repeat n in i:
+        code := byte_at(lib, i)
+        mut c := code
+        if c >= 97 and c <= 122:
+            c = c - 32
+        else (c >= 65 and c <= 90) or (c >= 48 and c <= 57):
+            c = c
+        else:
+            c = 95
+        end
+        str.BufAppendChar(b, c)
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func in_list(v: Vector<str>, x: str): bool:
+    repeat v.len() in i:
+        if str.Equals(v.get(i), x):
+            ret true
+        end
+    end
+    ret false
+end
+
+func main:
+    args := os.Args()
+    defer args.free()
+    if args.len() < 4:
+        io.EPrintln(
+            "usage: codegen_run <file.salam> <module> <out_prefix> " + "[--all]"
+        )
+        ret 2
+    end
+    path := args[1]
+    in_module := args[2]
+    prefix := args[3]
+    emit_all := args.len() > 4 and str.Equals(args[4], "--all")
+
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut defines := Vector {} as Vector<str>
+    defer defines.free()
+    defines.push("SALAM_SAFE")
+
+    mut work := Vector {} as Vector<str>
+    defer work.free()
+    work.push(path)
+    if emit_all:
+        memp := sm.ResolveImport("", "mem")
+        if str.Len(memp) > 0 and os.Exists(memp) and not in_list(work, memp):
+            work.push(memp)
+        end
+        corep := sm.ResolveImport("", "core")
+        if str.Len(corep) > 0 and os.Exists(corep) and not in_list(work, corep):
+            work.push(corep)
+        end
+    end
+
+    mut w_ast := Vector {} as Vector<at.Ast>
+    mut w_sema := Vector {} as Vector<sm.Sema>
+    mut w_prog := Vector {} as Vector<int>
+    mut w_module := Vector {} as Vector<str>
+    mut w_entry := Vector {} as Vector<str>
+    mut w_pkg := Vector {} as Vector<str>
+    mut w_path := Vector {} as Vector<str>
+    defer w_ast.free()
+    defer w_sema.free()
+    defer w_prog.free()
+    defer w_module.free()
+    defer w_entry.free()
+    defer w_pkg.free()
+    defer w_path.free()
+
+    sm.DceReset()
+    sm.DceEnable()
+
+    mut all_ok := true
+    mut wi := 0
+    until wi < work.len():
+        wpath := work.get(wi)
+        mut sf := src.New()
+        if not src.Load(wpath, sf):
+            io.EPrintln("cannot read " + wpath)
+            ret 2
+        end
+        pack := lx.Detect(sf, lp.Load("en"))
+        modentry := lp.Entry(pack)
+        module := wi == 0 ? in_module : module_of(wpath)
+        table := cc.TableBuild("", defines)
+        mut toks := tok.StreamNew(wpath)
+        _lok := lx.Run(quiet, pack, sf, toks)
+        mut a := at.NewAst()
+        mut prog := 0
+        _pok := ps.Run(quiet, toks, a, prog)
+        tok.StreamFree(toks)
+        _ck := cc.PruneProgram(a, quiet, wpath, table, prog)
+        mut pfiles := sm.PackageFiles(wpath)
+        mut pi := 1
+        until pi < pfiles.len():
+            mut psf := src.New()
+            if src.Load(pfiles.get(pi), psf):
+                mut ptoks := tok.StreamNew(pfiles.get(pi))
+                _plok := lx.Run(quiet, pack, psf, ptoks)
+                mut pprog := 0
+                _ppok := ps.Run(quiet, ptoks, a, pprog)
+                tok.StreamFree(ptoks)
+                _pck := cc.PruneProgram(
+                    a, quiet, pfiles.get(pi), table, pprog
+                )
+                sm.MergeProgram(a, prog, pprog)
+            end
+            pi += 1
+        end
+        pfiles.free()
+        mut s := sm.New(quiet, wpath, lp.Code(pack))
+        sm.SetCc(s, table)
+        sok := sm.Run(s, a, prog)
+        if not sok:
+            io.EPrintln("sema failed for " + wpath)
+            all_ok = false
+            sm.Free(s)
+            wi += 1
+            continue
+        end
+        prog_n := at.Get(a, prog)
+        modpkg := str.Len(prog_n.name) > 0 ? prog_n.name : "main"
+        repeat prog_n.list.len() in di:
+            d := at.Get(a, prog_n.list.get(di))
+            if d.kind == at.AST_FUNC_DEF and str.Equals(d.name, modentry):
+                sm.DceMarkRoot(modpkg, modentry)
+                break
+            end
+        end
+        idir := dir_of(wpath)
+        repeat prog_n.list.len() in di2:
+            did := prog_n.list.get(di2)
+            d2 := at.Get(a, did)
+            if d2.kind == at.AST_LINK:
+                if d2.value_kind == tok.TV_STRING and str.Len(d2.value_str) > 0:
+                    def := link_define(d2.value_str)
+                    if not in_list(defines, def):
+                        defines.push(def)
+                    end
+                end
+                continue
+            end
+            if d2.kind != at.AST_IMPORT:
+                continue
+            end
+            if not emit_all:
+                continue
+            end
+            mut ipath := d2.type_str
+            if str.Len(ipath) == 0:
+                ipath = sm.ResolveImportNode(a, idir, did, lp.Code(pack))
+            end
+            if str.Len(ipath) == 0:
+                continue
+            end
+            if not in_list(work, ipath):
+                work.push(ipath)
+            end
+        end
+        w_ast.push(a)
+        w_sema.push(s)
+        w_prog.push(prog)
+        w_module.push(module)
+        w_entry.push(modentry)
+        w_pkg.push(modpkg)
+        w_path.push(wpath)
+        wi += 1
+    end
+
+    if not all_ok:
+        ret 1
+    end
+
+    sm.DceFinish()
+
+    mut total := 0
+    repeat w_prog.len() in bi:
+        mut a2 := w_ast.get(bi)
+        mut s2 := w_sema.get(bi)
+        prog2 := w_prog.get(bi)
+        module2 := w_module.get(bi)
+        mut kept := Vector {} as Vector<int>
+        pn := at.Get(a2, prog2)
+        repeat pn.list.len() in ki:
+            did2 := pn.list.get(ki)
+            d3 := at.Get(a2, did2)
+            mut keep := true
+            if d3.kind == at.AST_FUNC_DEF and not d3.is_extern and not d3.synthetic and d3.typarams.len() == 0 and not str.Equals(d3.name, w_entry.get(bi)):
+                keep = sm.DceReachable(w_pkg.get(bi), d3.name)
+            end
+            if keep:
+                kept.push(did2)
+            end
+        end
+        mut pw := at.Get(a2, prog2)
+        mut old_list := pw.list
+        pw.list = kept
+        at.Put(a2, prog2, pw)
+        old_list.free()
+
+        o := cg.Run(
+            quiet, s2, a2, prog2, module2, true, false, w_path.get(bi), w_entry.get(bi), ""
+        )
+        mut opfx := prefix
+        if bi > 0:
+            opfx = prefix + "__" + module2
+        end
+        _w1 := os.WriteFile(opfx + ".h", o.h_src)
+        _w2 := os.WriteFile(opfx + ".c", o.c_src)
+        total += str.Len(o.h_src) + str.Len(o.c_src)
+        sm.Free(s2)
+        at.FreeAst(a2)
+    end
+    println "wrote " + w_prog.len() + " module(s), " + total + " bytes"
+end

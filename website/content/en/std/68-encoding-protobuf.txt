@@ -1,0 +1,205 @@
+pkg.en = encoding/protobuf
+pkg.name = encoding/protobuf
+pkg.group = Encoding and data
+pkg.summary = Reading <code>.proto</code> files, the Protocol Buffers wire encoding, and generating Salam code from them.
+pkg.title = The encoding/protobuf package in Salam | Protocol Buffers
+pkg.description = The encoding/protobuf package in Salam: parsing a proto file, varint and zigzag encoding, writing and reading fields, and generating message and gRPC service code, with examples.
+pkg.import = encoding.protobuf
+group.FK_.title = Field kinds
+group.FK_ = The <code>kind</code> of a field: the plain protobuf types, message, enum and map.
+group.WT_.title = Wire types
+group.WT_ = How a field value is written in the bytes: varint, 8 fixed bytes, length prefixed or 4 fixed bytes.
+group.PTK_.title = Token kinds
+group.PTK_ = The <code>kind</code> of the tokens from <code>Tokenize</code>.
+pkg.intro <<
+<p>Protocol Buffers is Google's binary format for structured messages. The shape of the messages is defined in a <code>.proto</code> file, and this package reads it, generates Salam code for the messages and services, and also carries the low level tools for writing and reading fields.</p>
+<p>In the bytes, every field comes as a <strong>tag</strong>, the field number and the wire type, followed by its value. Numbers are usually written as a <strong>varint</strong>: each byte holds 7 bits of the number and its top bit says whether another byte follows.</p>
+
+<p>Use Protocol Buffers when you talk to a service that already speaks it, usually over <a href="/std/grpc/">grpc</a>, or when several languages share one schema. Between Salam programs, or when no <code>.proto</code> file exists, <a href="/std/encoding/msgpack/">encoding/msgpack</a> needs no schema and <a href="/std/encoding/json/">encoding/json</a> stays readable.</p>
+<h3 id="pitfalls">What trips people up</h3>
+<ul>
+<li><strong>Generated readers do not accept packed repeated numbers.</strong> Proto3 writers such as <code>protoc</code>, Go and Java send a <code>repeated int32</code> as one length-prefixed block by default. The generated <code>Unmarshal</code> reads one tag per element and does not check the wire type, so a packed field fails or gives wrong numbers. The generated <code>Marshal</code> writes the unpacked form, which every reader accepts. Decode packed fields by hand as in the packed guide, or mark the field <code>[packed = false]</code> on the other side.</li>
+<li><strong>The generator skips message, enum and <code>map</code> fields.</strong> Members of a <code>oneof</code> become ordinary fields, so nothing stops two of them being set. Write those parts by hand.</li>
+<li><strong>Varints are <code>u64</code>.</strong> <code>ReadVarint</code> returns a <code>u64</code>; cast to <code>i64</code> or <code>int</code> yourself, and run <code>sint</code> fields through <code>ZigZagDecode64</code>.</li>
+<li><strong>Check <code>ok</code> once, at the end.</strong> Every reader clears the shared <code>ok</code> flag when the data runs out; nothing stops the program, so test it before you use the result.</li>
+</ul>
+
+<p>The guide below works through the jobs you meet in practice: writing a message by hand, reading one back while skipping fields you do not know, nesting messages, packed repeated numbers, choosing between <code>int64</code> and <code>sint64</code>, and generating the code from a <code>.proto</code> file instead of writing it. Every byte buffer here is a <code>compress.ByteBuf</code> from <a href="/std/compress/">compress</a>, so programs import both packages.</p>
+
+<h2 id="guide-encode">Writing a message by hand</h2>
+<p>A message is nothing more than its fields one after another. For each field call <code>WriteTag</code> with the field number from the <code>.proto</code> file and the wire type, then the writer for the value: <code>WriteVarint</code> for integers, enums and booleans, <code>WriteLenPrefixedStr</code> for strings and <code>WriteLenPrefixedBytes</code> for bytes and nested messages. The program below writes <code>User { id: 42, name: "Sara", admin: true }</code> and prints the bytes in hex.</p>
+{{example.encoding-protobuf-encode-user}}
+<p>Read the output in pairs: <code>08</code> is field 1 with wire type 0, <code>2a</code> is 42; <code>12</code> is field 2 with wire type 2, <code>04</code> the length and then the four letters; <code>18 01</code> is field 3 set to true. Proto3 leaves out fields that hold their default value (0, an empty string, false), so a sender usually checks the value before it writes the tag.</p>
+
+<h2 id="guide-decode">Reading a message and skipping unknown fields</h2>
+<p>Decoding is a loop: read a tag, look at the field number, read the value with the reader that matches, and repeat until the reader is empty. A field number you do not know must still be stepped over, which is what <code>SkipField</code> does with the wire type. That is how an old program keeps reading messages from a newer one that added fields. Every reader takes the same <code>ok</code> flag, so one check after the loop catches a message that was cut short.</p>
+{{example.encoding-protobuf-decode-loop}}
+<p>The second call reads the same bytes minus the last two: the string length promises four bytes that are not there, <code>ReadLenPrefixedStr</code> clears <code>ok</code>, and the loop stops. Always test <code>ok</code> before you trust the struct you filled.</p>
+
+<h2 id="guide-nested">Nested and repeated messages</h2>
+<p>A field whose type is another message is written as bytes: encode the inner message into its own buffer, then write it with wire type <code>WT_LEN</code> and <code>WriteLenPrefixedBytes</code>. A <code>repeated</code> field is the same tag written once per element. On the reading side <code>ReadLenPrefixedBuf</code> hands you the inner bytes as a new buffer, which you decode with the same loop and then free.</p>
+{{example.encoding-protobuf-nested}}
+
+<h2 id="guide-packed">Packed repeated numbers</h2>
+<p>A <code>repeated</code> field of numbers can travel in two shapes. Unpacked, each element has its own tag. Packed, the default in proto3, there is one tag with wire type <code>WT_LEN</code> and the varints follow one after another inside it. A correct reader accepts both, so look at the wire type: for <code>WT_LEN</code>, take the block with <code>ReadLenPrefixedBuf</code> and read varints until it is empty.</p>
+{{example.encoding-protobuf-packed}}
+<p>Packing saves one tag byte per element, which adds up in long lists of small numbers. This is also the code to use in place of the generated <code>Unmarshal</code> for a field that comes from <code>protoc</code>-generated code in another language.</p>
+
+<h2 id="guide-zigzag">Negative numbers: int64 or sint64</h2>
+<p>A plain <code>int32</code> or <code>int64</code> field writes a negative number as a huge unsigned value, which always takes ten bytes. The <code>sint32</code> and <code>sint64</code> types first map the number with ZigZag (0, -1, 1, -2 become 0, 1, 2, 3), so small negative numbers stay small. Use <code>ZigZagEncode64</code> before <code>WriteVarint</code> and <code>ZigZagDecode64</code> after <code>ReadVarint</code>, and pick <code>sint64</code> in the <code>.proto</code> file for fields such as offsets or temperature deltas that are often below zero.</p>
+{{example.encoding-protobuf-zigzag}}
+
+<h2 id="guide-generate">Generating the code from a .proto file</h2>
+<p>For more than a couple of messages, let the package write the code. <code>GenerateSingle</code> turns a <code>.proto</code> source into a Salam package with one struct per message and a <code>Marshal</code> and <code>Unmarshal</code> function for each; <code>GenerateWithServices</code> adds gRPC client stubs for the services (see <a href="/std/grpc/">grpc</a>). The program below prints only the declarations of the generated code.</p>
+{{example.encoding-protobuf-codegen}}
+<p>Save the text to a file such as <code>point_pb.salam</code>, add <code>include pb "point_pb.salam"</code> to your program, and call <code>pb.MarshalPoint(p)</code> to get a <code>ByteBuf</code> and <code>pb.UnmarshalPoint(buf.data, buf.len, ok)</code> to read one back. The generator covers scalar fields, strings, bytes and repeated scalars. It leaves out fields whose type is another message or an enum, gives <code>map</code> fields no code and turns <code>oneof</code> members into ordinary fields, so write those few by hand as in the nested example above, or keep the enum as an <code>int32</code> in the <code>.proto</code> file. Repeated numbers are read only in the unpacked form; see the packed guide.</p>
+
+<h2 id="guide-which">Which function for which field type</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>.proto type</th><th>Wire type</th><th>Write</th><th>Read</th></tr></thead>
+<tbody>
+<tr><td><code>int32 int64 uint32 uint64 bool enum</code></td><td><code>WT_VARINT</code></td><td><code>WriteVarint</code></td><td><code>ReadVarint</code></td></tr>
+<tr><td><code>sint32 sint64</code></td><td><code>WT_VARINT</code></td><td><code>ZigZagEncode64</code>, then <code>WriteVarint</code></td><td><code>ReadVarint</code>, then <code>ZigZagDecode64</code></td></tr>
+<tr><td><code>fixed32 sfixed32</code></td><td><code>WT_FIXED32</code></td><td><code>WriteFixed32</code></td><td><code>ReadFixed32</code></td></tr>
+<tr><td><code>fixed64 sfixed64</code></td><td><code>WT_FIXED64</code></td><td><code>WriteFixed64</code></td><td><code>ReadFixed64</code></td></tr>
+<tr><td><code>float</code></td><td><code>WT_FIXED32</code></td><td><code>WriteFloat</code></td><td><code>ReadFloat</code></td></tr>
+<tr><td><code>double</code></td><td><code>WT_FIXED64</code></td><td><code>WriteDouble</code></td><td><code>ReadDouble</code></td></tr>
+<tr><td><code>string</code></td><td><code>WT_LEN</code></td><td><code>WriteLenPrefixedStr</code></td><td><code>ReadLenPrefixedStr</code></td></tr>
+<tr><td><code>bytes</code>, nested message</td><td><code>WT_LEN</code></td><td><code>WriteLenPrefixedBytes</code></td><td><code>ReadLenPrefixedBuf</code></td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.PFile = One parsed <code>.proto</code> file.
+doc.PFile.packageName = The package name.
+doc.PFile.messages = The messages.
+doc.PFile.enums = The top level enums.
+doc.PFile.imports = The imported files.
+doc.PFile.services = The services.
+doc.PMessage = One message.
+doc.PMessage.name = The name.
+doc.PMessage.fields = The fields in the order they were defined.
+doc.PMessage.oneofs = The <code>oneof</code> groups.
+doc.PMessage.nestedMessages = The nested messages.
+doc.PMessage.nestedEnums = The nested enums.
+doc.PField = One message field.
+doc.PField.name = The name.
+doc.PField.kind = The field kind; one of the <code>FK_</code> constants.
+doc.PField.typeName = The type name for a message and an enum. The parser does not resolve names, so an enum comes out as a message kind too.
+doc.PField.keyKind = The key kind of a <code>map</code>.
+doc.PField.mapValueKind = The value kind of a <code>map</code>.
+doc.PField.mapValueTypeName = The type name of the <code>map</code> value.
+doc.PField.number = The field number.
+doc.PField.repeated = The field is repeated.
+doc.PField.packedOpt = Repeated numbers are written packed.
+doc.PField.oneofIndex = The index of the <code>oneof</code> group; -1 when there is none.
+doc.PField.is_deprecated = The field is marked deprecated.
+doc.POneof = One <code>oneof</code> group: only one of its fields has a value.
+doc.POneof.name = The name.
+doc.POneof.fieldIndices = The indices of the member fields in the message.
+doc.PEnum = One enum.
+doc.PEnum.name = The name.
+doc.PEnum.values = The values.
+doc.PEnumValue = One enum value.
+doc.PEnumValue.name = The name.
+doc.PEnumValue.number = The number.
+doc.PService = One gRPC service.
+doc.PService.name = The name.
+doc.PService.methods = The methods.
+doc.PMethod = One service method.
+doc.PMethod.name = The name.
+doc.PMethod.inputType = The input type.
+doc.PMethod.outputType = The output type.
+doc.PMethod.clientStream = The input is a stream.
+doc.PMethod.serverStream = The output is a stream.
+doc.ParseFile = Reads <code>.proto</code> text in the proto3 syntax.
+doc.FieldKindName = The name of a field kind, such as <code>int64</code>.
+doc.ScalarKindFromName = The field kind for a plain type name; zero for a message name.
+doc.PTokenStream = The tokens of a text.
+doc.PTokenStream.toks = The tokens.
+doc.PToken = One token.
+doc.PToken.kind = The token kind.
+doc.PToken.lexeme = The text of the token.
+doc.PToken.ival = The integer value.
+doc.PToken.fval = The float value.
+doc.PToken.sval = The string value.
+doc.PToken.line = The line number.
+doc.Tokenize = Breaks the text into tokens.
+doc.MakeTag = A field tag: the field number and the wire type in one number.
+doc.WriteTag = Writes the tag as a varint.
+doc.ReadTag = Reads a tag and splits out the field number and the wire type.
+doc.WriteVarint = Writes the number with variable length encoding (varint): 7 bits per byte, so small numbers are shorter.
+doc.ReadVarint = Reads one varint as a <code>u64</code>; <code>ok</code> turns false when the bytes run out.
+doc.ZigZagEncode32 = Zigzag encoding: it moves small negative numbers to small positive ones so they get a short varint.
+doc.ZigZagDecode32 = Undoes 32 bit zigzag.
+doc.ZigZagEncode64 = 64 bit zigzag encoding.
+doc.ZigZagDecode64 = Undoes 64 bit zigzag.
+doc.WriteFixed32 = Writes a 32 bit number as 4 little-endian bytes.
+doc.ReadFixed32 = Reads 4 bytes.
+doc.WriteFixed64 = Writes a 64 bit number as 8 bytes.
+doc.ReadFixed64 = Reads 8 bytes.
+doc.WriteFloat = Writes a 32 bit float.
+doc.ReadFloat = Reads a 32 bit float.
+doc.WriteDouble = Writes a 64 bit float.
+doc.ReadDouble = Reads a 64 bit float.
+doc.WriteLenPrefixedBytes = Writes the length and then the bytes; for bytes fields and nested messages.
+doc.WriteLenPrefixedStr = Writes the length and then the string.
+doc.ReadLenPrefixedBuf = Reads one length prefixed part into a buffer.
+doc.ReadLenPrefixedStr = Reads one length prefixed part into a string.
+doc.SkipField = Steps over the value of a field of the given wire type; for unknown fields.
+doc.GenerateSingle = Generates Salam code from <code>.proto</code> text: one struct per message, with its serialising functions. Message, enum and map fields are left out, and the generated reader expects repeated numbers unpacked.
+doc.ServiceCount = The number of services.
+doc.ServiceNameAt = The name of service number <code>i</code>.
+doc.ServiceMethodCount = The number of methods of a service.
+doc.ServiceMethodSignature = The signature of one method, such as <code>Say(Ping) returns (Ping)</code>.
+doc.GenerateServices = Generates the service interface code.
+doc.GenerateWithServices = Generates the message and service code together.
+doc.ServiceSummary = A readable summary of the services and their methods.
+
+ex.PFile = encoding-protobuf-Parse
+ex.PMessage = encoding-protobuf-Parse
+ex.PField = encoding-protobuf-Parse
+ex.POneof = encoding-protobuf-Parse
+ex.PEnum = encoding-protobuf-Parse
+ex.PEnumValue = encoding-protobuf-Parse
+ex.PService = encoding-protobuf-Parse
+ex.PMethod = encoding-protobuf-Parse
+ex.ParseFile = encoding-protobuf-Parse
+ex.FieldKindName = encoding-protobuf-Parse
+ex.ScalarKindFromName = encoding-protobuf-Parse
+ex.PTokenStream = encoding-protobuf-Parse
+ex.PToken = encoding-protobuf-Parse
+ex.Tokenize = encoding-protobuf-Parse
+ex.group.FK_ = encoding-protobuf-Parse
+ex.group.PTK_ = encoding-protobuf-Parse
+ex.MakeTag = encoding-protobuf-Wire
+ex.WriteTag = encoding-protobuf-Wire
+ex.ReadTag = encoding-protobuf-Wire
+ex.WriteVarint = encoding-protobuf-Wire
+ex.ReadVarint = encoding-protobuf-Wire
+ex.ZigZagEncode32 = encoding-protobuf-Wire
+ex.ZigZagDecode32 = encoding-protobuf-Wire
+ex.ZigZagEncode64 = encoding-protobuf-Wire
+ex.ZigZagDecode64 = encoding-protobuf-Wire
+ex.WriteFixed32 = encoding-protobuf-Wire
+ex.ReadFixed32 = encoding-protobuf-Wire
+ex.WriteFixed64 = encoding-protobuf-Wire
+ex.ReadFixed64 = encoding-protobuf-Wire
+ex.WriteFloat = encoding-protobuf-Wire
+ex.ReadFloat = encoding-protobuf-Wire
+ex.WriteDouble = encoding-protobuf-Wire
+ex.ReadDouble = encoding-protobuf-Wire
+ex.WriteLenPrefixedBytes = encoding-protobuf-Wire
+ex.WriteLenPrefixedStr = encoding-protobuf-Wire
+ex.ReadLenPrefixedBuf = encoding-protobuf-Wire
+ex.ReadLenPrefixedStr = encoding-protobuf-Wire
+ex.SkipField = encoding-protobuf-Wire
+ex.group.WT_ = encoding-protobuf-Wire
+ex.GenerateSingle = encoding-protobuf-Generate
+ex.ServiceCount = encoding-protobuf-Generate
+ex.ServiceNameAt = encoding-protobuf-Generate
+ex.ServiceMethodCount = encoding-protobuf-Generate
+ex.ServiceMethodSignature = encoding-protobuf-Generate
+ex.GenerateServices = encoding-protobuf-Generate
+ex.GenerateWithServices = encoding-protobuf-Generate
+ex.ServiceSummary = encoding-protobuf-Generate

@@ -1,0 +1,321 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.http
+import net.router
+import os
+import str
+import time
+import sync
+import crypto
+import encoding
+import encoding.json
+
+const MARK := "__SALAM_EXIT__"
+const MAX_OUTPUT := 400000
+const MAX_CMD := 100000
+const REAP_MS := 300000
+
+mut SECRET := ""
+mut IMAGE := "salam-sandbox"
+mut NETWORK := "salam-sandbox"
+mut MEMORY := "1g"
+mut CPUS := "1.5"
+mut MAX_BOXES := 40
+mut IDLE_SECONDS := 7200
+mut LOCK := sync.Mutex {}
+mut SEEN := HashMap {} as HashMap<str, i64>
+
+func env_or(name: str, fallback: str): str:
+    v := os.Env(name)
+    if v.len() == 0:
+        ret fallback
+    end
+    ret v
+end
+
+func fail(ctx: i64, status: int, code: str, message: str):
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("error", code))
+    m.push(json.Member("message", message))
+    http.SetStatus(ctx, status)
+    http.Json(ctx, json.Object(m))
+end
+
+func authorized(ctx: i64): bool:
+    h := http.Header(ctx, "Authorization")
+    if SECRET.len() < 16 or not str.StartsWith(h, "Bearer "):
+        ret false
+    end
+    ret crypto.SecretEquals(str.Trim(h.substr(7, h.len() - 7)), SECRET)
+end
+
+func hex_only(s: str): bool:
+    if s.len() != 32:
+        ret false
+    end
+    mut i := 0
+    until i < s.len():
+        c := s[i] as int
+        if not ((c >= 48 and c <= 57) or (c >= 97 and c <= 102)):
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+func path_ok(s: str): bool:
+    if s.len() == 0 or s.len() > 300:
+        ret false
+    end
+    mut i := 0
+    until i < s.len():
+        c := s[i] as int
+        if not ((c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 47 or c == 46 or c == 45 or c == 95):
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+func key_ok(s: str): bool:
+    if s.len() == 0 or s.len() > 64:
+        ret false
+    end
+    mut i := 0
+    until i < s.len():
+        c := s[i] as int
+        if not ((c >= 48 and c <= 57) or (c >= 65 and c <= 90) or c == 95):
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+func name_of(session: str): str:
+    ret "sbx-" + session.substr(0, 24)
+end
+
+func now_ms(): i64:
+    ret time.NowMillis()
+end
+
+func touch(name: str):
+    _l := sync.Lock(LOCK)
+    SEEN.put(name, now_ms())
+    _u := sync.Unlock(LOCK)
+end
+
+func ensure(name: str): int:
+    _l := sync.Lock(LOCK)
+    state := str.Trim(os.Output("docker inspect -f '{{.State.Running}}' " + name + " 2>/dev/null"))
+    mut rc := 0
+    if state == "true":
+        _u := sync.Unlock(LOCK)
+        ret 0
+    end
+    if state == "false":
+        rc = os.Run("docker start " + name + " >/dev/null 2>&1")
+        _v := sync.Unlock(LOCK)
+        ret rc == 0 ? 0 : 2
+    end
+    count := str.Trim(os.Output("docker ps -q --filter label=salam.sandbox=1 | wc -l")).to_int()
+    if count >= MAX_BOXES:
+        _w := sync.Unlock(LOCK)
+        ret 1
+    end
+    run := "docker run -d --init --name " + name + " --label salam.sandbox=1 --network " + NETWORK + " --hostname sandbox --memory " + MEMORY + " --memory-swap " + MEMORY + " --cpus " + CPUS + " --pids-limit 512 --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /work:rw,exec,nosuid,size=1g,mode=1777 --tmpfs /tmp:rw,exec,nosuid,size=256m,mode=1777 --user 1000:1000 -e HOME=/work/.home -e LANG=C.UTF-8 -w /work " + IMAGE + " sleep infinity >/dev/null 2>&1"
+    rc = os.Run(run)
+    if rc == 0:
+        _x := os.Run("docker exec " + name + " mkdir -p /work/.home >/dev/null 2>&1")
+    end
+    _y := sync.Unlock(LOCK)
+    ret rc == 0 ? 0 : 2
+end
+
+func exec_run(ctx: i64):
+    if not authorized(ctx):
+        fail(ctx, 401, "unauthorized", "the sandbox secret is wrong")
+        ret
+    end
+    body := http.Body(ctx)
+    session := json.Get(body, "session")
+    cmd := json.Get(body, "cmd")
+    mut cwd := json.Get(body, "cwd")
+    stdin := json.Get(body, "stdin")
+    mut timeout := json.Get(body, "timeout").to_int()
+    if not hex_only(session) or cmd.len() == 0 or cmd.len() > MAX_CMD:
+        fail(ctx, 400, "bad_request", "session and cmd are required")
+        ret
+    end
+    if cwd.len() == 0:
+        cwd = "/work"
+    end
+    if not str.StartsWith(cwd, "/"):
+        cwd = "/work/" + cwd
+    end
+    if not path_ok(cwd):
+        fail(ctx, 400, "bad_request", "cwd has characters that are not allowed")
+        ret
+    end
+    if timeout <= 0:
+        timeout = 120
+    end
+    if timeout > 900:
+        timeout = 900
+    end
+    name := name_of(session)
+    made := ensure(name)
+    if made == 1:
+        fail(ctx, 503, "full", "The sandbox is full right now. Try again in a few minutes.")
+        ret
+    end
+    if made != 0:
+        fail(ctx, 503, "docker", "The sandbox could not start. Try again in a moment.")
+        ret
+    end
+    touch(name)
+    stamp := crypto.RandomHex(8)
+    cmd_file := "/tmp/sbxm-" + stamp + ".sh"
+    in_file := "/tmp/sbxm-" + stamp + ".in"
+    _w := os.WriteFile(cmd_file, cmd)
+    mut envs := ""
+    each key in json.Keys(json.Get(body, "env")):
+        if key_ok(key):
+            value := json.Get(json.Get(body, "env"), key)
+            if value.len() <= 65536:
+                envs = envs + " -e " + key + "=\"$(printf %s '" + encoding.Base64Encode(value) + "' | base64 -d)\""
+            end
+        end
+    end
+    mut feed := " < /dev/null"
+    mut flag := ""
+    if stdin.len() > 0:
+        _s := os.WriteFile(in_file, stdin)
+        feed = " < " + in_file
+        flag = " -i"
+    end
+    inner := "docker exec" + flag + " -w " + cwd + envs + " " + name + " timeout -k 3 " + timeout + " bash -c \"$(cat " + cmd_file + ")\""
+    full := "( timeout -k 5 " + (timeout + 15) + " " + inner + feed + " 2>&1; echo \"" + MARK + "$?\" ) | head -c " + MAX_OUTPUT
+    res := os.RunCapture(full)
+    _r1 := os.Remove(cmd_file)
+    if stdin.len() > 0:
+        _r2 := os.Remove(in_file)
+    end
+    touch(name)
+    mut out := res.out
+    mut code := -1
+    parts := out.split(MARK)
+    if parts.len() > 1:
+        code = str.Trim(parts.get(parts.len() - 1)).to_int()
+        parts.pop()
+        out = str.Join(parts, MARK)
+    end
+    timed := code == 124 or code == 137
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberInt("exit", code as i64))
+    m.push(json.Member("output", out))
+    m.push(json.MemberBool("timed_out", timed))
+    http.SetStatus(ctx, 200)
+    http.Json(ctx, json.Object(m))
+end
+
+func destroy_box(ctx: i64):
+    if not authorized(ctx):
+        fail(ctx, 401, "unauthorized", "the sandbox secret is wrong")
+        ret
+    end
+    session := json.Get(http.Body(ctx), "session")
+    if not hex_only(session):
+        fail(ctx, 400, "bad_request", "session is required")
+        ret
+    end
+    name := name_of(session)
+    _r := os.Run("docker rm -f " + name + " >/dev/null 2>&1")
+    _l := sync.Lock(LOCK)
+    if SEEN.has(name):
+        _d := SEEN.remove(name)
+    end
+    _u := sync.Unlock(LOCK)
+    http.SetStatus(ctx, 200)
+    http.Json(ctx, `{"ok": true}`)
+end
+
+func health(ctx: i64):
+    http.SetStatus(ctx, 200)
+    http.Json(ctx, `{"ok": true, "name": "salam-sandbox"}`)
+end
+
+func reaper():
+    until true:
+        sync.SleepMs(REAP_MS)
+        now := now_ms()
+        mut old := Vector {} as Vector<str>
+        _l := sync.Lock(LOCK)
+        each k, v in SEEN:
+            if now - v > (IDLE_SECONDS as i64) * 1000:
+                old.push(k)
+            end
+        end
+        each k in old:
+            _d := SEEN.remove(k)
+        end
+        _u := sync.Unlock(LOCK)
+        each k in old:
+            _r := os.Run("docker rm -f " + k + " >/dev/null 2>&1")
+        end
+    end
+end
+
+func main:
+    args := os.Args()
+    port := env_or("SANDBOX_PORT", "8090").to_int()
+    if args.len() > 1 and args.get(1) == "--health":
+        r := http.Get("http://127.0.0.1:" + port + "/health")
+        if http.Status(r) == 200:
+            ret 0
+        end
+        ret 1
+    end
+    SECRET = os.Env("SANDBOX_SECRET")
+    if SECRET.len() < 16:
+        println "SANDBOX_SECRET must be at least 16 characters"
+        ret 1
+    end
+    IMAGE = env_or("SANDBOX_IMAGE", "salam-sandbox")
+    NETWORK = env_or("SANDBOX_NETWORK", "salam-sandbox")
+    MEMORY = env_or("SANDBOX_MEMORY", "1g")
+    CPUS = env_or("SANDBOX_CPUS", "1.5")
+    MAX_BOXES = env_or("SANDBOX_MAX", "40").to_int()
+    IDLE_SECONDS = env_or("SANDBOX_IDLE_SECONDS", "7200").to_int()
+    LOCK = sync.NewMutex()
+    _clean := os.Run("docker ps -aq --filter label=salam.sandbox=1 | xargs -r docker rm -f >/dev/null 2>&1")
+    _net := os.Run("docker network inspect " + NETWORK + " >/dev/null 2>&1 || docker network create " + NETWORK + " >/dev/null 2>&1")
+    _r := spawn(reaper)
+    http.SetMaxBodyBytes(12582912)
+    mut r := router.NewRouter()
+    router.Get(r, "/health", health)
+    router.Post(r, "/v1/exec", exec_run)
+    router.Post(r, "/v1/destroy", destroy_box)
+    mut s := http.NewServer(port)
+    http.SetHost(s, env_or("SANDBOX_HOST", "0.0.0.0"))
+    http.Use(s, r)
+    println "salam-sandbox listening on port", port
+    http.Run(s)
+end

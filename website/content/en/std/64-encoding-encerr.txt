@@ -1,0 +1,89 @@
+pkg.en = encoding/encerr
+pkg.name = encoding/encerr
+pkg.group = Encoding and data
+pkg.summary = The shared error of the format readers: a kind, a message and a position in the text.
+pkg.title = The encoding/encerr package in Salam | Format reading errors
+pkg.description = The encoding/encerr package in Salam: the kind, message and position of an error while reading JSON, YAML and the other formats, with an example.
+pkg.import = encoding.encerr
+pkg.intro <<
+<p><code>EncodingError</code> is the error type the encoding packages share. It is a plain struct with three fields: <code>kind</code> (one of the <code>Kind</code> constants), <code>message</code> (English text) and <code>position</code> (a byte offset into the input, or -1). Functions that can fail take it as an <code>err &amp;:</code> out-parameter: create one with <code>NoError()</code>, pass it in, then test <code>IsError(err)</code>.</p>
+<p>Among the encoding packages, the ones that fill it are <a href="/std/encoding/json/">encoding/json</a> (<code>Decode</code>, <code>Unmarshal</code> and the stream reader), <a href="/std/encoding/envfile/">encoding/envfile</a> (<code>ParseStrict</code>), <a href="/std/encoding/msgpack/">encoding/msgpack</a> (<code>Unmarshal</code>) and <a href="/std/encoding/yaml/">encoding/yaml</a> (<code>Decode</code>). Other readers, such as <a href="/std/encoding/toml/">encoding/toml</a> and <a href="/std/encoding/xml/">encoding/xml</a>, report a plain <code>ok</code> bool instead. For errors outside encoding, see <a href="/std/error/">error</a>.</p>
+<h3 id="pitfalls">What trips people up</h3>
+<ul>
+<li><strong>A successful call does not clear the error.</strong> Readers only write <code>err</code> when something goes wrong, so an error left over from an earlier call stays. <code>msgpack.Unmarshal</code> goes further and returns null at once when it is handed an error that is already set. Reset with <code>e = encerr.NoError()</code> before each call.</li>
+<li><strong>Not every kind is used.</strong> The standard readers produce <code>KindUnexpectedEOF</code>, <code>KindUnexpectedToken</code>, <code>KindTrailingData</code> and <code>KindCustom</code>. A field of the wrong type in <code>json.Unmarshal</code> arrives as <code>KindUnexpectedToken</code>, and too deep nesting as <code>KindCustom</code>. Branch on the kinds you will actually see, and treat everything else as "bad input".</li>
+<li><strong><code>position</code> counts bytes</strong>, not characters or lines; the first guide converts it. For <code>yaml.Decode</code> it points into the JSON the YAML was translated to internally, so do not show it to users.</li>
+<li><strong><code>message</code> is English</strong> and meant for logs. Show users your own text chosen by <code>kind</code>.</li>
+</ul>
+
+<h2 id="guide-position">Guide: point the user at the mistake</h2>
+<p><code>position</code> is a byte offset into the text, which is exact but not what a person looks for in an editor. Count the line breaks before it to turn it into a line and a column, and print it the way compilers do: file, line, column, message.</p>
+{{example.encoding-encerr-guide-position}}
+<p>The reader stops where it noticed the problem, which is often just after the real mistake: here the comma is missing at the end of line 3, and the reader complains at the start of line 4. Columns count bytes, so a line with Persian text before the mistake shows a larger number than the letters you see.</p>
+
+<h2 id="guide-handler">Guide: one error report for several formats</h2>
+<p>A program that loads a JSON file, a <code>.env</code> file and a MessagePack cache can handle all three failures with one function, because they share the error type. The <code>report</code> function below turns the kind into a short description and prints the byte position and the message for the log.</p>
+{{example.encoding-encerr-guide-handler}}
+<p>The wrong type in <code>limits.json</code> comes out as an unexpected token, as described above. The MessagePack data is cut one byte short, so the reader runs out of input. The last three lines show why to reset: decoding the complete cache with the old error still set fails at once, and the same call after <code>NoError()</code> works.</p>
+
+<h2 id="guide-custom">Guide: the same errors in your own parser</h2>
+<p>When you write a small parser of your own, report errors in the same type, so callers can handle your format and the standard ones with the same code. <code>ErrUnexpectedEOF</code>, <code>ErrUnexpectedToken</code> and <code>ErrTypeMismatch</code> fill in the kind and a standard message; <code>NewError</code> with <code>KindCustom</code> takes any message. Callers can then branch on <code>kind</code>.</p>
+{{example.encoding-encerr-guide-custom}}
+
+<h2 id="guide-kinds">The error kinds</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Constant</th><th>Value</th><th>Meaning</th><th>Produced by</th></tr></thead>
+<tbody>
+<tr><td><code>KindNone</code></td><td>0</td><td>No error</td><td><code>NoError()</code></td></tr>
+<tr><td><code>KindUnexpectedEOF</code></td><td>1</td><td>The input ended in the middle of a value</td><td>json, msgpack</td></tr>
+<tr><td><code>KindUnexpectedToken</code></td><td>2</td><td>A character or word that does not belong there, or a JSON value of the wrong type for a struct field</td><td>json, envfile</td></tr>
+<tr><td><code>KindInvalidUTF8</code></td><td>3</td><td>Bytes that are not valid UTF-8</td><td>reserved, not produced yet</td></tr>
+<tr><td><code>KindInvalidNumber</code></td><td>4</td><td>A number that cannot be read</td><td>reserved, not produced yet</td></tr>
+<tr><td><code>KindDepthExceeded</code></td><td>5</td><td>Nesting deeper than the reader allows</td><td>reserved; json and msgpack report depth as <code>KindCustom</code></td></tr>
+<tr><td><code>KindTypeMismatch</code></td><td>6</td><td>A value of the wrong kind</td><td>only <code>ErrTypeMismatch</code>, for your own code</td></tr>
+<tr><td><code>KindKeyNotFound</code></td><td>7</td><td>A required key is missing</td><td>reserved, not produced yet</td></tr>
+<tr><td><code>KindTrailingData</code></td><td>8</td><td>More input after a complete value</td><td>json</td></tr>
+<tr><td><code>KindCustom</code></td><td>99</td><td>Anything else</td><td>json and msgpack (nesting over 512 levels, unsupported MessagePack types), and your own errors</td></tr>
+</tbody>
+</table></div>
+<p>The reserved kinds exist so that your own parsers, and later versions of the standard readers, have a precise name for these cases. Your code may compare against them, but do not expect the standard readers to return them today.</p>
+>>
+
+doc.EncodingError = An error from reading or writing a format.
+doc.EncodingError.kind = The kind of error; one of the Kind constants.
+doc.EncodingError.message = The error message, in English.
+doc.EncodingError.position = Where the error is in the input, as a byte offset from 0, or -1 when it is not known.
+doc.KindNone = No error.
+doc.KindUnexpectedEOF = The text ended sooner than expected.
+doc.KindUnexpectedToken = A character or token turned up out of place.
+doc.KindInvalidUTF8 = The text is not valid UTF-8.
+doc.KindInvalidNumber = An invalid number.
+doc.KindDepthExceeded = The nesting went past the allowed depth.
+doc.KindTypeMismatch = The value's type does not match the expected one.
+doc.KindKeyNotFound = A required key was not found.
+doc.KindTrailingData = Extra data turned up after the end of the value.
+doc.KindCustom = An error defined by the program.
+doc.NoError = The empty error, meaning "no error". Assign it again to reset a variable before reusing it.
+doc.NewError = A new error with a kind, a message and a position.
+doc.ErrUnexpectedEOF = An unexpected end of text error at the given position.
+doc.ErrUnexpectedToken = An out of place token error with a message.
+doc.ErrTypeMismatch = A type mismatch error; its message names the expected type.
+doc.IsError = True when <code>kind</code> is not <code>KindNone</code>.
+
+ex.EncodingError = encoding-encerr-Error
+ex.KindNone = encoding-encerr-Error
+ex.KindUnexpectedEOF = encoding-encerr-Error
+ex.KindUnexpectedToken = encoding-encerr-Error
+ex.KindInvalidUTF8 = encoding-encerr-Error
+ex.KindInvalidNumber = encoding-encerr-Error
+ex.KindDepthExceeded = encoding-encerr-Error
+ex.KindTypeMismatch = encoding-encerr-Error
+ex.KindKeyNotFound = encoding-encerr-Error
+ex.KindTrailingData = encoding-encerr-Error
+ex.KindCustom = encoding-encerr-Error
+ex.NoError = encoding-encerr-Error
+ex.NewError = encoding-encerr-Error
+ex.ErrUnexpectedEOF = encoding-encerr-Error
+ex.ErrUnexpectedToken = encoding-encerr-Error
+ex.ErrTypeMismatch = encoding-encerr-Error
+ex.IsError = encoding-encerr-Error

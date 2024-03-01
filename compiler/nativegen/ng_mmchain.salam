@@ -1,0 +1,141 @@
+package nativegen
+
+func mm_kind(g &: Ng, s: int): int:
+    if s < 0 or g.i_op[s] != OP_SELECT:
+        ret 0 - 1
+    end
+    c := g.i_a[s]
+    if c < 0 or g.v_kind[c] != VK_INS or g.v_uses[c] != 1:
+        ret 0 - 1
+    end
+    ci := g.v_def[c]
+    if g.i_op[ci] != OP_ICMP:
+        ret 0 - 1
+    end
+    x := g.i_a[ci]
+    y := g.i_b[ci]
+    mut first := false
+    if g.i_b[s] == x and g.i_c[s] == y:
+        first = true
+    else g.i_b[s] != y or g.i_c[s] != x:
+        ret 0 - 1
+    end
+    p := g.i_x[ci]
+    mut is_lt := 0 - 1
+    mut uns := 0
+    if p == CC_SLT or p == CC_SLE:
+        is_lt = 1
+    else p == CC_SGT or p == CC_SGE:
+        is_lt = 0
+    else p == CC_ULT or p == CC_ULE:
+        is_lt = 1
+        uns = 2
+    else p == CC_UGT or p == CC_UGE:
+        is_lt = 0
+        uns = 2
+    end
+    if is_lt < 0:
+        ret 0 - 1
+    end
+    mn := first ? is_lt == 1 : is_lt == 0
+    ret uns + (mn ? 0 : 1)
+end
+
+func mm_late(g &: Ng, v: int, depth: int): bool:
+    if depth > 3 or v < 0 or g.v_kind[v] != VK_INS:
+        ret false
+    end
+    d := g.v_def[v]
+    op := g.i_op[d]
+    if op == OP_PHI or op == OP_SELECT:
+        ret true
+    end
+    if op == OP_ADD or op == OP_SUB:
+        if g.v_kind[g.i_b[d]] == VK_INT:
+            ret mm_late(g, g.i_a[d], depth + 1)
+        end
+        if op == OP_ADD and g.v_kind[g.i_a[d]] == VK_INT:
+            ret mm_late(g, g.i_b[d], depth + 1)
+        end
+    end
+    ret false
+end
+
+func mm_set(g &: Ng, s: int, k: int, a: int, b: int):
+    ci := g.v_def[g.i_a[s]]
+    g.i_a[ci] = a
+    g.i_b[ci] = b
+    uns := k >= 2
+    mn := (k & 1) == 0
+    if uns:
+        g.i_x[ci] = mn ? CC_ULT : CC_UGT
+    else:
+        g.i_x[ci] = mn ? CC_SLT : CC_SGT
+    end
+    g.i_b[s] = a
+    g.i_c[s] = b
+end
+
+func mm_move(g &: Ng, i: int, at: int):
+    keep := g.i_op[i]
+    ins_unlink(g, i)
+    g.i_op[i] = keep
+    ins_before(g, at, i)
+end
+
+func mm_try(g &: Ng, s2: int): bool:
+    k := mm_kind(g, s2)
+    if k < 0:
+        ret false
+    end
+    ci2 := g.v_def[g.i_a[s2]]
+    mut s1v := g.i_b[s2]
+    mut z := g.i_c[s2]
+    if s1v < 0 or g.v_kind[s1v] != VK_INS or mm_kind(g, g.v_def[s1v]) != k or g.v_uses[s1v] != 2:
+        s1v = g.i_c[s2]
+        z = g.i_b[s2]
+        if s1v < 0 or g.v_kind[s1v] != VK_INS or mm_kind(g, g.v_def[s1v]) != k or g.v_uses[s1v] != 2:
+            ret false
+        end
+    end
+    s1 := g.v_def[s1v]
+    if g.i_blk[s1] != g.i_blk[s2] or mm_late(g, z, 0):
+        ret false
+    end
+    a := g.i_b[s1]
+    b := g.i_c[s1]
+    mut late := 0 - 1
+    mut other := 0 - 1
+    if mm_late(g, a, 0) and not mm_late(g, b, 0):
+        late = a
+        other = b
+    else mm_late(g, b, 0) and not mm_late(g, a, 0):
+        late = b
+        other = a
+    end
+    if late < 0:
+        ret false
+    end
+    ci1 := g.v_def[g.i_a[s1]]
+    mm_set(g, s1, k, other, z)
+    mm_set(g, s2, k, late, s1v)
+    mm_move(g, ci1, ci2)
+    mm_move(g, s1, ci2)
+    ret true
+end
+
+func mm_chain(g &: Ng): bool:
+    count_uses(g)
+    mut changed := false
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            if g.i_op[i] == OP_SELECT and not is_flt(g, g.i_ty[i]) and not is_vec(g, g.i_ty[i]) and not is_agg(g, g.i_ty[i]) and mm_try(g, i):
+                changed = true
+            end
+            i = nx
+        end
+    end
+    ret changed
+end

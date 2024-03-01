@@ -1,0 +1,119 @@
+---
+name: 📊 Benchmark - PR Report
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: benchmark-pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  changes:
+    uses: ./.github/workflows/_changes.yml # zizmor: ignore[self-repository]
+    with:
+      paths: |
+        compiler/*
+        std/*
+        benchmark/*
+        .github/workflows/_changes.yml
+        .github/workflows/benchmark-pr.yml
+  benchmark:
+    needs: changes
+    if: needs.changes.outputs.run == 'true' && false
+    name: Run full benchmark suite
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build benchmark toolchain image (cached)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: benchmark/docker/Dockerfile
+          target: bench
+          tags: salam-bench:ci
+          load: true
+          build-args: |
+            ALPINE_VERSION=3.24
+            LLVM_VERSION=22
+          cache-from: type=gha,scope=bench-v2
+          cache-to: type=gha,mode=max,scope=bench-v2
+
+      - name: Run full benchmark suite
+        env:
+          BENCH_RUNS: '1'
+        run: |
+          set -euo pipefail
+          rm -rf benchmark/results && mkdir -p benchmark/results
+          docker run --rm \
+            --user "$(id -u)":"$(id -g)" \
+            -e BENCH_RUNS="${BENCH_RUNS}" \
+            -v "${{ github.workspace }}/benchmark/results":/repo/benchmark/results \
+            salam-bench:ci
+
+      - name: Publish full report to job summary
+        run: cat benchmark/results/README.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload raw results artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: benchmark-results-${{ github.event.pull_request.number || github.run_id }}
+          path: |
+            benchmark/results/
+          retention-days: 30
+
+      - name: Build PR comment body
+        if: github.event_name == 'pull_request'
+        env:
+          SHORT_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ARTIFACT_NAME: benchmark-results-${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${SHORT_SHA:0:7}" \
+            benchmark/ci/build_pr_comment.sh benchmark/results/README.md > /tmp/benchmark_comment.md
+
+      - name: Post or update sticky PR comment
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('/tmp/benchmark_comment.md', 'utf8');
+            const marker = '<!-- salam-benchmark-report -->';
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

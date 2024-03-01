@@ -1,0 +1,311 @@
+package nativegen
+
+import os
+import str
+
+k_ng_opn := ["nop", "alloca", "load", "store", "addr", "add", "sub", "mul", "sdiv", "udiv", "srem", "urem", "and", "or", "xor", "shl", "lshr", "ashr", "fadd", "fsub", "fmul", "fdiv", "frem", "fneg", "icmp", "fcmp", "sext", "zext", "trunc", "ptrtoint", "inttoptr", "bitcast", "sitofp", "uitofp", "fptosi", "fptoui", "fpext", "fptrunc", "select", "phi", "call", "br", "cbr", "ret", "unreachable", "insertvalue", "extractvalue", "atomicrmw", "cmpxchg", "copy", "fence", "vbcast", "vredadd", "rethi", "mulhu", "cmp64", "adc64", "i64tof", "div6432", "vredh", "vredmm", "vsadb", "vlanes", "vrev"]
+
+func dvs(g &: Ng, v: int): str:
+    if v < 0:
+        ret "_"
+    end
+    k := g.v_kind[v]
+    if k == VK_INT:
+        ret "" + g.v_i[v]
+    end
+    if k == VK_FLT:
+        ret "f" + g.v_i[v]
+    end
+    if k == VK_GLB:
+        ret "@" + tab_str(g.syms, g.v_def[v]) + (g.v_i[v] != (0 as i64) ? "+" + g.v_i[v] : "")
+    end
+    if k == VK_UNDEF:
+        ret "undef"
+    end
+    if k == VK_ZERO:
+        ret "zero"
+    end
+    if k == VK_ARG:
+        ret "%a" + g.v_i[v]
+    end
+    ret "%" + v
+end
+
+func dump_wanted(g &: Ng): bool:
+    want := os.Env("SALAM_NG_DUMP")
+    if want.len() == 0:
+        ret false
+    end
+    nm := tab_str(g.syms, g.f_sym)
+    ret want == nm or str.Contains("," + want + ",", "," + nm + ",")
+end
+
+func dump_ir(g &: Ng, tag: str):
+    printerrln "== " + tag + " " + tab_str(g.syms, g.f_sym)
+    each b in g.b_rpo:
+        mut pr := ""
+        repeat g.b_npred[b] in k:
+            pr = pr + " b" + g.b_pred[g.b_ps[b] + k]
+        end
+        printerrln "b" + b + ": preds" + pr
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            mut line := "  "
+            if g.i_res[i] >= 0:
+                line = line + "%" + g.i_res[i] + " = "
+            end
+            line = line + k_ng_opn[op] + ((g.i_f[i] & IF_NSW) != 0 and op >= OP_ADD and op <= OP_ASHR ? " nsw" : "") + " t" + g.i_ty[i]
+            m := val_mask(op)
+            if (m & 1) != 0 or op == OP_CALL:
+                line = line + " " + dvs(g, g.i_a[i])
+            end
+            if (m & 2) != 0:
+                line = line + ", " + dvs(g, g.i_b[i])
+            else op == OP_BR or op == OP_CBR:
+                line = line + " b" + g.i_b[i]
+            end
+            if (m & 4) != 0:
+                line = line + ", " + dvs(g, g.i_c[i])
+            else op == OP_CBR:
+                line = line + " b" + g.i_c[i]
+            end
+            if op == OP_ADDR:
+                line = line + " *" + g.i_x[i] + " +" + g.i_d[i]
+            else op == OP_ALLOCA:
+                line = line + " T" + g.i_x[i]
+            else op == OP_ICMP or op == OP_FCMP:
+                line = line + " p" + g.i_x[i]
+            else op == OP_INSV or op == OP_EXTV:
+                line = line + " @" + g.i_d[i]
+            end
+            if op == OP_CALL:
+                line = line + "("
+                repeat g.i_pcount[i] in k2:
+                    line = line + (k2 > 0 ? ", " : "") + dvs(g, g.pool[g.i_ps[i] + 3 * k2])
+                end
+                line = line + ")"
+            else op == OP_PHI:
+                repeat g.i_pcount[i] in k3:
+                    line = line + " [" + dvs(g, g.pool[g.i_ps[i] + 2 * k3]) + ", b" + g.pool[g.i_ps[i] + 2 * k3 + 1] + "]"
+                end
+            end
+            printerrln line
+            i = g.i_next[i]
+        end
+    end
+end
+
+func verify_use(g &: Ng, v: int, ub: int, pos: int, order &: Vector<int>): bool:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret true
+    end
+    d := g.v_def[v]
+    if d < 0:
+        ret false
+    end
+    db := g.i_blk[d]
+    if db == ub:
+        ret order[d] < pos
+    end
+    ret dominates(g, db, ub)
+end
+
+func verify_ssa(g &: Ng):
+    build_cfg(g)
+    build_dom(g)
+    mut order := Vector {} as Vector<int>
+    repeat g.i_op.len():
+        order.push(0 - 1)
+    end
+    each b in g.b_rpo:
+        mut n := 0
+        mut i := g.b_first[b]
+        until i >= 0:
+            order[i] = n
+            n += 1
+            i = g.i_next[i]
+        end
+    end
+    mut bad := 0 - 1
+    each b2 in g.b_rpo:
+        mut j := g.b_first[b2]
+        until j >= 0 and bad < 0:
+            op := g.i_op[j]
+            if op == OP_PHI:
+                ps := g.i_ps[j]
+                repeat g.i_pcount[j] in q:
+                    pb := g.pool[ps + 2 * q + 1]
+                    pv := g.pool[ps + 2 * q]
+                    if pb >= 0 and g.b_order[pb] >= 0 and not verify_use(g, pv, pb, 1000000000, order):
+                        bad = j
+                    end
+                end
+            else:
+                m := val_mask(op)
+                if (m & 1) != 0 and not verify_use(g, g.i_a[j], b2, order[j], order): bad = j end
+                if (m & 2) != 0 and not verify_use(g, g.i_b[j], b2, order[j], order): bad = j end
+                if (m & 4) != 0 and not verify_use(g, g.i_c[j], b2, order[j], order): bad = j end
+                if op == OP_CALL:
+                    ps2 := g.i_ps[j]
+                    repeat g.i_pcount[j] in q2:
+                        if not verify_use(g, g.pool[ps2 + 3 * q2], b2, order[j], order): bad = j end
+                    end
+                end
+            end
+            j = g.i_next[j]
+        end
+    end
+    order.free()
+    if bad >= 0:
+        dump_ir(g, "unverified")
+        fail(g, "native backend: SSA use not dominated by its definition in " + tab_str(g.syms, g.f_sym) + " at b" + str.FromInt(g.i_blk[bad] as i64))
+    end
+end
+
+func read_pass_switches(g &: Ng):
+    g.gvn_x = os.Env("SALAM_NG_GVN_SKIP")
+    g.verify = os.Env("SALAM_NG_VERIFY").len() > 0
+    mx := os.Env("SALAM_NG_GVN_MAX")
+    if mx.len() > 0:
+        g.gvn_max = str.ToInt(mx)
+    end
+    g.off_str = os.Env("SALAM_NG_OFF")
+    g.off_base = os.Env("SALAM_NG_OFF_BASE")
+    rg := os.Env("SALAM_NG_OFF_RANGE")
+    if rg.len() > 0:
+        cpos := str.IndexOf(rg, ":")
+        if cpos > 0:
+            g.off_lo = str.ToInt(str.Substr(rg, 0, cpos))
+            g.off_hi = str.ToInt(str.Substr(rg, cpos + 1, str.Len(rg) - cpos - 1))
+        end
+    end
+    g.off_fns = os.Env("SALAM_NG_OFF_FNS")
+    if g.off_fns.len() > 0 and g.off_hi == 0:
+        g.off_hi = 0 - 1
+    end
+    set_off(g, g.off_str)
+end
+
+func set_off(g &: Ng, off: str):
+    g.off_gvn = str.Contains(off, "gvn")
+    g.off_ifc = str.Contains(off, "ifc")
+    g.off_thread = str.Contains(off, "thread")
+    g.off_inline = str.Contains(off, "inline")
+    g.off_sroa = str.Contains(off, "sroa")
+    g.off_slp = str.Contains(off, "slp") or (g.arch != NG_ARCH_X64 and g.arch != NG_ARCH_X86 and g.arch != NG_ARCH_A64)
+    g.off_tailrec = str.Contains(off, "tailrec")
+    g.off_unroll = str.Contains(off, "unroll")
+    g.off_licm = str.Contains(off, "licm")
+    g.off_split = str.Contains(off, "split")
+    g.off_lsr = str.Contains(off, "lsr")
+    g.off_lcse = str.Contains(off, "lcse")
+    g.off_range = str.Contains(off, "range")
+    g.off_rvec = str.Contains(off, "rvec") or (g.arch != NG_ARCH_X64 and g.arch != NG_ARCH_X86 and g.arch != NG_ARCH_A64)
+    g.off_rvc = str.Contains(off, "rvc")
+    g.off_selfinl = str.Contains(off, "selfinl")
+    g.off_idiom = str.Contains(off, "idiom")
+    g.off_dbits = str.Contains(off, "dbits")
+    g.off_lle = str.Contains(off, "lle")
+    g.off_widen = str.Contains(off, "widen")
+    g.off_unswitch = str.Contains(off, "unswitch")
+    g.off_runroll = str.Contains(off, "runroll")
+    g.off_cmp64 = str.Contains(off, "cmp64")
+    g.off_adc64 = str.Contains(off, "adc64")
+    g.off_niv = str.Contains(off, "niv")
+    g.off_x86si = str.Contains(off, "x86si")
+    g.off_ndiv = str.Contains(off, "ndiv")
+    g.off_iss = str.Contains(off, "iss")
+    g.off_sink = str.Contains(off, "sink")
+    g.off_mmchain = str.Contains(off, "mmchain")
+    g.off_inl1 = str.Contains(off, "inl1")
+    g.off_afwd = str.Contains(off, "afwd")
+    g.off_lpro = str.Contains(off, "lpro")
+    g.off_lsf = str.Contains(off, "lsf")
+    g.off_scse = str.Contains(off, "scse")
+    g.off_lpre = str.Contains(off, "lpre")
+    g.off_dtest = str.Contains(off, "dtest")
+    g.off_fch = str.Contains(off, "fch")
+    g.off_p2div = str.Contains(off, "p2div")
+    g.off_aggbonus = str.Contains(off, "aggbonus")
+    g.off_rot = str.Contains(off, "rot")
+    g.off_bits = str.Contains(off, "bitsimp")
+    g.off_xsplit = str.Contains(off, "xsplit")
+    g.off_lreas = str.Contains(off, "lreas")
+    g.off_swt = str.Contains(off, "swtab")
+    g.off_sxa = str.Contains(off, "sxadd")
+    g.off_pae = str.Contains(off, "allocep")
+    g.off_rmw = str.Contains(off, "rmw")
+    g.off_mtie = str.Contains(off, "mtie")
+    g.off_usim = str.Contains(off, "usim")
+    g.off_dse = str.Contains(off, "dse")
+    g.off_inlunr = str.Contains(off, "inlunr")
+    g.off_chain = str.Contains(off, "chain")
+    g.off_mph = str.Contains(off, "mpre")
+    g.off_dloop = str.Contains(off, "dloop")
+    g.off_lvec = str.Contains(off, "lvec") or (g.arch != NG_ARCH_X64 and g.arch != NG_ARCH_A64)
+    g.off_selhoist = str.Contains(off, "selhoist")
+    g.off_shoist = str.Contains(off, "shoist")
+    g.off_asplit = str.Contains(off, "asplit")
+    g.off_lhoist = str.Contains(off, "lhoist")
+    g.off_mlp = str.Contains(off, "mlp")
+    g.off_ipcp = str.Contains(off, "ipcp")
+    g.off_aload = str.Contains(off, "aload")
+    g.off_pst = str.Contains(off, "pst")
+    g.off_sfld = str.Contains(off, "sfld")
+    g.off_isite = str.Contains(off, "isite")
+    g.off_chst = str.Contains(off, "chst")
+    g.off_fx = str.Contains(off, "fastx") or g.arch != NG_ARCH_X64
+    g.off_sscale = str.Contains(off, "sscale")
+    g.off_ccse = str.Contains(off, "ccse")
+    g.off_kstr = str.Contains(off, "kstr")
+    g.off_nowr = str.Contains(off, "nowr")
+    g.off_crange = str.Contains(off, "crng")
+    g.off_lsink = str.Contains(off, "jload")
+    g.off_mxun = str.Contains(off, "mxun")
+    g.off_gbase = str.Contains(off, "gbase")
+    g.off_bcmp = str.Contains(off, "bcmp")
+    g.off_mreas = str.Contains(off, "mreas")
+    g.off_dcse = str.Contains(off, "dcse")
+    g.off_aggres = str.Contains(off, "aggres")
+    g.inl_trace = os.Env("SALAM_NG_INLTRACE").len() > 0
+    g.off_tiny = str.Contains(off, "tiny")
+    g.off_kbr = str.Contains(off, "kbr")
+    g.off_paddr = str.Contains(off, "paddr")
+    g.off_izero = str.Contains(off, "izero")
+    g.off_istore = str.Contains(off, "istore")
+    g.off_stfwd = str.Contains(off, "stfwd")
+    g.off_cpelim = str.Contains(off, "cpelim")
+    g.off_tord = str.Contains(off, "tord")
+    g.off_vrev = str.Contains(off, "vrev")
+    g.off_cdown = str.Contains(off, "cdown")
+    g.off_tfold = str.Contains(off, "tfold")
+    g.off_mexit = str.Contains(off, "mexit")
+    g.off_sqself = str.Contains(off, "sqself")
+    g.off_vsign = str.Contains(off, "vsign")
+    g.off_redinv = str.Contains(off, "redinv")
+    g.off_ldcmp = str.Contains(off, "ldcmp")
+    g.off_phix = str.Contains(off, "phix")
+    g.off_selinc = str.Contains(off, "selinc")
+    g.off_wweb = str.Contains(off, "wweb")
+    g.off_wwdep = str.Contains(off, "wwdep")
+    g.off_wwtr = str.Contains(off, "wwtr")
+    g.off_tdup = str.Contains(off, "tdup")
+    g.off_padjmp = str.Contains(off, "padjmp")
+    g.off_seltie = str.Contains(off, "seltie")
+    g.off_cpref = str.Contains(off, "cpref")
+    g.off_llphi = str.Contains(off, "llphi")
+    g.off_memaddr = str.Contains(off, "memaddr")
+    g.off_vshv = str.Contains(off, "vshv")
+    g.off_lvhoist = str.Contains(off, "lvhoist")
+    g.off_vcount = str.Contains(off, "vcount")
+    g.off_viv = str.Contains(off, "viv")
+    g.off_loopinl = str.Contains(off, "loopinl")
+    g.off_zins = str.Contains(off, "zins")
+    g.list_fns = os.Env("SALAM_NG_LIST").len() > 0
+    im := os.Env("SALAM_NG_INL_MAX")
+    if im.len() > 0:
+        g.inl_max = str.ToInt(im)
+    end
+    g.off_belady = str.Contains(off, "belady")
+end

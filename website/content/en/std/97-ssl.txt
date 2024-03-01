@@ -1,0 +1,106 @@
+pkg.en = ssl
+pkg.name = ssl
+pkg.group = Security and cryptography
+pkg.summary = A familiar OpenSSL style interface for secure connections, on top of Salam's own TLS.
+pkg.title = The ssl package in Salam
+pkg.description = The ssl package in Salam: client and server TLS connections with an OpenSSL style interface, certificate verification, the hostname and the minimum version, with examples.
+pkg.import = ssl
+pkg.intro <<
+<p>This package gives an OpenSSL style context and connection interface (<code>SSL_CTX</code>, <code>SSL_connect</code>, <code>SSL_read</code> and friends, under Salam names), but underneath it is Salam's own <a href="/std/tls/">tls</a> and it needs no outside library. Use it when you port C code written against OpenSSL, or when you like that split between a shared context and many connections. For new code <a href="/std/tls/">tls</a> is shorter, and for web requests <a href="/std/net/http/">net/http</a> does all of it for you.</p>
+<p>The flow: make one context, hand each TCP socket to it with <code>Wrap</code>, for a client set the hostname and call <code>Connect</code> (a server calls <code>Accept</code>), then <code>Read</code> and <code>Write</code>. Things to know:</p>
+<ul>
+<li><strong>A client context checks certificates against the system roots from the start</strong>, with TLS 1.2 as the minimum. <code>LoadVerifyLocationsFile</code> replaces the system roots with your file; <code>SetDefaultVerifyPaths</code> switches back.</li>
+<li><strong><code>SetHostname</code> is required</strong> before <code>Connect</code> while verification is on; without it the handshake is refused.</li>
+<li><strong><code>Shutdown</code> and <code>Close</code> do not close the socket.</strong> As in OpenSSL, the TCP connection you wrapped is yours; close it with <a href="/std/net/tcp/">net/tcp</a> afterwards.</li>
+<li><code>SetMinVersion(ctx, TLS1_3)</code> is checked after the handshake: a server that only offers 1.2 is connected and then refused. <code>Read</code> returns a <code>str</code>, which stops at a zero byte.</li>
+</ul>
+
+<h2 id="guide-fetch">A complete client</h2>
+<p>The steps are always the same: one context for the whole program, then for each connection a TCP socket, <code>Wrap</code>, <code>SetHostname</code> and <code>Connect</code>. A context made with <code>NewClientContext</code> already trusts the system roots and stops the handshake when the check fails; the calls to <code>SetDefaultVerifyPaths</code> and <code>SetVerify(ctx, VERIFY_PEER)</code> in the program only make that explicit, the way OpenSSL code usually reads. <code>Read</code> returns an empty string when the server closes the connection, which is the end of a <code>Connection: close</code> response.</p>
+{{example.ssl-fetch-page}}
+<p>It needs network access, so it is only checked here. Run against the real hosts, it printed:</p>
+<pre class="code" dir="ltr"><code>HTTP/1.1 200 OK
+handshake failed: certificate verification failed: certificate expired</code></pre>
+
+<h2 id="guide-private-ca">Trusting only your own certificate authority</h2>
+<p>Services inside a company often use certificates from a private CA. Load that CA with <code>LoadVerifyLocationsFile</code> instead of the system roots: the client then accepts only servers whose certificate your CA signed, which is stricter than the public web. <code>SetMinVersion(ctx, TLS1_3)</code> refuses anything older than TLS 1.3, and after the handshake <code>PeerVerified</code> and <code>VerifyResult</code> tell you how the check went.</p>
+{{example.ssl-private-ca}}
+<p><code>VerifyResult</code> is <code>CERT_OK</code> (zero) when the certificate was accepted. Keep the CA file readable by the program but not writable, since anyone who can replace it can impersonate your servers.</p>
+
+<h2 id="guide-starttls">STARTTLS: encrypt a connection that is already open</h2>
+<p>Mail, IMAP, XMPP and some database protocols start in plain text and switch to TLS on the same connection when the client asks. This is why <code>Wrap</code> takes a socket descriptor rather than a host: talk to the server with <a href="/std/net/tcp/">net/tcp</a> until it agrees, then wrap the very same <code>fd</code> and carry on through <code>ssl.Read</code> and <code>ssl.Write</code>.</p>
+{{example.ssl-starttls}}
+<p>Against Gmail's submission port it printed the server's greeting in plain text and then its first encrypted reply; the ids at the end of each line change with every run:</p>
+<pre class="code" dir="ltr"><code>plain: 220 smtp.gmail.com ESMTP ... - gsmtp
+encrypted: 250-smtp.gmail.com at your service, [...]</code></pre>
+<p>A real mail client should check every reply code, not only the one for STARTTLS, and should send <code>EHLO</code> again after the switch, as the program does, because the server forgets everything it was told in plain text.</p>
+
+<h2 id="guide-errors">When something fails</h2>
+<p>There are three places to look. <code>LastErrorString</code> describes the last failure that has no connection yet, such as a context that could not read its certificate. <code>ConnErrorString</code> describes what went wrong on one connection, for example a failed certificate check. And when <code>Read</code> or <code>Write</code> returns zero or less, <code>ErrorCode(conn, n)</code> tells a clean close by the other side apart from a protocol or socket error, the same split OpenSSL's <code>SSL_get_error</code> makes.</p>
+>>
+
+doc.Wrap = Makes a new SSL connection over an open socket.
+doc.ConnOk = The connection was created.
+doc.Connect = Does the client handshake.
+doc.Accept = Does the server handshake.
+doc.Read = Reads up to this many bytes as a string; empty when the other side closed. The text stops at a zero byte.
+doc.Write = Sends data and returns the number of bytes, or a negative number on an error.
+doc.Shutdown = Sends the close alert and ends the TLS session; the socket stays open.
+doc.Close = Sends the close alert if needed and frees the connection; the socket stays open, so close it yourself.
+doc.ErrorCode = The OpenSSL style error code for the result of one read or write.
+doc.ConnErrorString = The error text of this connection; unlike <code>LastErrorString</code> it is not shared between threads.
+doc.LastErrorString = The text of the last error, and clears it.
+doc.SetHostname = Sets the hostname for SNI and for certificate verification.
+doc.VerifyResult = The result of verifying the certificate of the other side.
+doc.PeerVerified = The certificate of the other side was verified and accepted.
+doc.NewClientContext = A client context with TLS 1.2 as the minimum, certificate verification and the system roots.
+doc.NewServerContext = A server context with a certificate and key from files.
+doc.CtxOk = The context was created.
+doc.SetVerify = The certificate verification mode.
+doc.LoadVerifyLocationsFile = Trusts the root certificates in this PEM file instead of the system roots; false when the file holds none.
+doc.SetDefaultVerifyPaths = Goes back to the system roots, the default for a new context.
+doc.SetMinVersion = The minimum TLS version, <code>TLS1_2</code> or <code>TLS1_3</code>; checked once the handshake is done.
+doc.CloseContext = Frees the context.
+doc.VERIFY_NONE = Verification mode: no verification.
+doc.VERIFY_PEER = Verification mode: verify the certificate of the other side.
+doc.FILETYPE_PEM = The PEM file type.
+doc.TLS1_2 = The version number of TLS 1.2.
+doc.TLS1_3 = The version number of TLS 1.3.
+doc.CERT_OK = Verification result: the certificate is valid.
+doc.Context = A TLS context, shared between connections.
+doc.Context.handle = The pointer to the context state.
+doc.Conn = One TLS connection.
+doc.Conn.handle = The pointer to the connection state.
+
+ex.Wrap = ssl-Client
+ex.ConnOk = ssl-Client
+ex.Connect = ssl-Client
+ex.Read = ssl-Client
+ex.Write = ssl-Client
+ex.Shutdown = ssl-Client
+ex.Close = ssl-Client
+ex.ErrorCode = ssl-Client
+ex.ConnErrorString = ssl-Client
+ex.LastErrorString = ssl-Client
+ex.SetHostname = ssl-Client
+ex.VerifyResult = ssl-Client
+ex.PeerVerified = ssl-Client
+ex.NewClientContext = ssl-Client
+ex.CtxOk = ssl-Client
+ex.SetDefaultVerifyPaths = ssl-Client
+ex.SetMinVersion = ssl-Client
+ex.CloseContext = ssl-Client
+ex.TLS1_3 = ssl-Client
+ex.CERT_OK = ssl-Client
+ex.Context = ssl-Client
+ex.Context.handle = ssl-Client
+ex.Conn = ssl-Client
+ex.Conn.handle = ssl-Client
+ex.Accept = ssl-Server
+ex.NewServerContext = ssl-Server
+ex.SetVerify = ssl-Server
+ex.LoadVerifyLocationsFile = ssl-Server
+ex.VERIFY_NONE = ssl-Server
+ex.VERIFY_PEER = ssl-Server
+ex.FILETYPE_PEM = ssl-Server
+ex.TLS1_2 = ssl-Server

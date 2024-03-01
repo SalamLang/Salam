@@ -1,0 +1,164 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import encoding.json
+import encoding.value
+import encoding.encerr
+import testing
+import mem
+
+struct Point:
+    pub x: int = 0
+    pub y: int = 0
+end
+
+struct Floats:
+    pub a: f64 = 0.0
+    pub b: f64 = 0.0
+    pub c: f64 = 0.0
+end
+
+struct Chain:
+    pub id: int = 0
+    pub next: Chain* = null
+end
+
+func typed_rejections():
+    mut p := Point {}
+
+    mut e1 := encerr.NoError()
+    testing.AssertFalse(json.Unmarshal(`{"x":1,"y":2,"z":3}`, p, e1))
+    testing.AssertTrue(encerr.IsError(e1))
+    testing.AssertContains(e1.message, "unknown key")
+
+    mut e2 := encerr.NoError()
+    testing.AssertFalse(json.Unmarshal(`{"x":1}`, p, e2))
+    testing.AssertTrue(encerr.IsError(e2))
+
+    mut e3 := encerr.NoError()
+    testing.AssertFalse(json.Unmarshal(`{"x":1,"x":2,"y":3}`, p, e3))
+    testing.AssertTrue(encerr.IsError(e3))
+
+    mut e4 := encerr.NoError()
+    testing.AssertFalse(json.Unmarshal(`{"x":"1","y":2}`, p, e4))
+    testing.AssertTrue(encerr.IsError(e4))
+
+    mut e5 := encerr.NoError()
+    testing.AssertFalse(json.Unmarshal(`{"x":1,"y":2} tail`, p, e5))
+    testing.AssertEqInt(e5.kind, encerr.KindTrailingData)
+
+    mut e6 := encerr.NoError()
+    testing.AssertFalse(json.Unmarshal(`{"x":1,`, p, e6))
+    testing.AssertTrue(e6.position > 0)
+
+    mut q := Point {}
+    mut e7 := encerr.NoError()
+    testing.AssertTrue(json.UnmarshalLenient(`{"x":1,"x":2,"z":9}`, q, e7))
+    testing.AssertEqInt(q.y, 0)
+
+    mut e8 := encerr.NoError()
+    testing.AssertFalse(json.UnmarshalLenient(`{"x":`, q, e8))
+    testing.AssertTrue(encerr.IsError(e8))
+end
+
+func dynamic_rejections():
+    mut ok1 := encerr.NoError()
+    v1 := json.Decode(`{"x":1,"y":2,"z":3}`, ok1)
+    testing.AssertFalse(encerr.IsError(ok1))
+    testing.AssertEqInt(value.ObjectLen(v1), 3)
+    value.ValueFree(v1)
+
+    mut ok2 := encerr.NoError()
+    v2 := json.Decode(`{"x":"1"}`, ok2)
+    testing.AssertFalse(encerr.IsError(ok2))
+    testing.AssertTrue(value.IsString(value.ObjectGet(v2, "x")))
+    value.ValueFree(v2)
+
+    mut b1 := encerr.NoError()
+    json.Decode(`{"a": }`, b1)
+    testing.AssertTrue(encerr.IsError(b1))
+    testing.AssertTrue(b1.position > 0)
+
+    mut b2 := encerr.NoError()
+    json.Decode(`[1,2`, b2)
+    testing.AssertTrue(encerr.IsError(b2))
+
+    mut deep := ""
+    mut shallow := ""
+    repeat 600:
+        deep = deep.concat("[")
+    end
+    repeat 100:
+        shallow = shallow.concat("[")
+    end
+    repeat 100:
+        shallow = shallow.concat("]")
+    end
+    mut b_deep := encerr.NoError()
+    json.Decode(deep, b_deep)
+    testing.AssertTrue(encerr.IsError(b_deep))
+    mut ok_shallow := encerr.NoError()
+    vs := json.Decode(shallow, ok_shallow)
+    testing.AssertFalse(encerr.IsError(ok_shallow))
+    value.ValueFree(vs)
+
+    mut b3 := encerr.NoError()
+    json.Decode(``, b3)
+    testing.AssertTrue(encerr.IsError(b3))
+
+    mut b4 := encerr.NoError()
+    json.Decode(`{} {}`, b4)
+    testing.AssertEqInt(b4.kind, encerr.KindTrailingData)
+
+    testing.AssertTrue(json.Valid(`{"a":[1,2,{"b":null}]}`))
+    testing.AssertFalse(json.Valid(`{"a":}`))
+end
+
+func encoder_edges():
+    inf := 1.0 / 0.0
+    f := Floats { a = 0.0 - inf, b = inf, c = 0.5 }
+    text := json.Marshal(f)
+    testing.AssertEqStr(text, `{"a":null,"b":null,"c":0.5}`)
+    testing.AssertTrue(json.Valid(text))
+
+    testing.AssertEqStr(json.Marshal(Chain { id = 3 }), `{"id":3,"next":null}`)
+    cell := mem.Allocate(64 as u64)
+    defer mem.Free(cell)
+    tail := cell as Chain*
+    tail[0] = Chain { id = 2, next = null }
+    head := Chain { id = 1, next = tail }
+    testing.AssertEqStr(json.Marshal(head), `{"id":1,"next":{"id":2,"next":null}}`)
+
+    raw := "tab\there \"quoted\" \\ back"
+    enc := json.Marshal(raw)
+    testing.AssertTrue(json.Valid(enc))
+    mut got := ""
+    mut e := encerr.NoError()
+    testing.AssertTrue(json.Unmarshal(enc, got, e))
+    testing.AssertEqStr(got, raw)
+
+    mut de := encerr.NoError()
+    v := json.Decode(enc, de)
+    testing.AssertEqStr(value.AsString(v), raw)
+    value.ValueFree(v)
+end
+
+func main:
+    typed_rejections()
+    dynamic_rejections()
+    encoder_edges()
+    ret testing.Summary()
+end

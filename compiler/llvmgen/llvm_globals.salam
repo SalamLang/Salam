@@ -1,0 +1,628 @@
+package llvmgen
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include sm "../semantic/semantic.salam"
+
+func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
+    node := at.Get(a, n)
+    if str.Len(node.name) > 0:
+        ret
+    end
+    idx := v.lam_n
+    v.lam_n += 1
+    name := "salam_lambda_" + co.I64Toa(idx as i64)
+    envty := "%lam." + co.I64Toa(idx as i64) + ".env"
+    at.SetName(a, n, name)
+    rts := func_ret(node.type_str)
+    ncap := node.captures.len()
+
+    mut et := co.SbNew()
+    co.SbPuts(et, envty + " = type { ptr")
+    repeat ncap in ci:
+        cap := at.Get(a, node.captures.get(ci))
+        co.SbPuts(et, ", " + ty_of(v, s, a, cap.type_str))
+    end
+    co.SbPuts(et, " }\n")
+    out_g(v, co.SbCstr(et))
+    co.SbFree(et)
+    if ncap == 0:
+        out_g(
+            v, "@" + name + ".env = internal global " + envty + " { ptr @" + name + " }\n"
+        )
+    end
+
+    saved_bb := v.bb
+    saved_ba := v.ba
+    saved_in_fn := v.in_fn
+    saved_tmp := v.tmp
+    saved_lbl := v.lbl
+    saved_nloop := v.nloop
+    mut saved_dmk2 := Vector {} as Vector<int>
+    mut saved_brk2 := Vector {} as Vector<str>
+    mut saved_cont2 := Vector {} as Vector<str>
+    repeat saved_nloop in sbi2:
+        saved_brk2.push(v.brk.get(sbi2))
+        saved_cont2.push(v.cont.get(sbi2))
+        saved_dmk2.push(v.loop_dmark.get(sbi2))
+    end
+    saved_main := v.is_main
+    saved_term := v.term
+    saved_ret := v.ret_ts
+    saved_self := v.self_ts
+    saved_this := v.this_ref
+    saved_sp := v.cur_sp
+    saved_scope := v.cur_scope
+    saved_dbg := v.cur_dbg
+    saved_lam := v.cur_lambda
+    saved_env := v.env_ref
+    saved_envty := v.env_ty
+    saved_locals := v.locals
+    saved_defers := v.defers
+    saved_mres := v.match_result_ptr
+    saved_mts := v.match_result_ts
+    saved_mmerge := v.match_merge_block
+
+    v.bb = str.NewBuilder()
+    v.ba = str.NewBuilder()
+    v.in_fn = true
+    v.tmp = 0
+    v.lbl = 0
+    v.nloop = 0
+    v.term = false
+    v.is_main = false
+    v.ret_ts = rts
+    v.self_ts = ""
+    v.this_ref = ""
+    v.cur_lambda = n
+    v.env_ref = "%env"
+    v.env_ty = envty
+    v.match_result_ptr = ""
+    v.match_result_ts = ""
+    v.match_merge_block = ""
+    v.locals = Vector {} as Vector<LvVar>
+    v.defers = Vector {} as Vector<int>
+
+    mut hdr := co.SbNew()
+    co.SbPuts(
+        hdr, "define internal " + ty_of(v, s, a, rts) + " @" + name + "(ptr noundef %env"
+    )
+    repeat at.ChildCount(a, n) in i:
+        p := at.Get(a, node.list.get(i))
+        if p.is_ref:
+            co.SbPuts(hdr, ", ptr %arg" + co.I64Toa(i as i64))
+        else:
+            co.SbPuts(
+                hdr, ", " + ty_of(v, s, a, p.type_str) + " %arg" + co.I64Toa(i as i64)
+            )
+        end
+    end
+    if v.debug:
+        lsp := debug_subprogram(v, name, node.begin_line as int, node.src_file)
+        v.cur_dbg = debug_location(v, node.begin_line as int, node.begin_col as int)
+        co.SbPuts(hdr, ") nounwind !dbg " + lsp + " {\n")
+    else:
+        co.SbPuts(hdr, ") nounwind {\n")
+    end
+    header := co.SbCstr(hdr)
+    co.SbFree(hdr)
+
+    repeat at.ChildCount(a, n) in i2:
+        p2 := at.Get(a, node.list.get(i2))
+        if p2.is_ref:
+            local_add(v, p2.name, "%arg" + co.I64Toa(i2 as i64), p2.type_str)
+            debug_declare(v, s, a, p2.name, "%arg" + co.I64Toa(i2 as i64), p2.type_str, p2.begin_line as int, i2 + 1)
+        else:
+            ptr2 := "%p." + safe_name(p2.name)
+            emit_alloca(v, ptr2 + " = alloca " + ty_of(v, s, a, p2.type_str))
+            emit(
+                v, "store " + ty_of(v, s, a, p2.type_str) + " %arg" + co.I64Toa(i2 as i64) + ", ptr " + ptr2
+            )
+            local_add(v, p2.name, ptr2, p2.type_str)
+            debug_declare(v, s, a, p2.name, ptr2, p2.type_str, p2.begin_line as int, i2 + 1)
+        end
+    end
+    if node.a != 0:
+        lv_block_top(v, s, a, node.a)
+    end
+    if not v.term:
+        emit_return(v, s, a, 0)
+    end
+
+    out_g(v, header)
+    out_g(v, "entry:\n")
+    out_g(v, co.SbCstr(v.ba))
+    out_g(v, co.SbCstr(v.bb))
+    out_g(v, "}\n\n")
+    str.BufFree(v.bb)
+    str.BufFree(v.ba)
+
+    v.bb = saved_bb
+    v.ba = saved_ba
+    v.in_fn = saved_in_fn
+    v.tmp = saved_tmp
+    v.lbl = saved_lbl
+    v.nloop = saved_nloop
+    repeat saved_nloop in rbi2:
+        v.brk.set(rbi2, saved_brk2.get(rbi2))
+        v.cont.set(rbi2, saved_cont2.get(rbi2))
+        v.loop_dmark.set(rbi2, saved_dmk2.get(rbi2))
+    end
+    defer saved_brk2.free()
+    defer saved_dmk2.free()
+    defer saved_cont2.free()
+    v.is_main = saved_main
+    v.term = saved_term
+    v.ret_ts = saved_ret
+    v.self_ts = saved_self
+    v.this_ref = saved_this
+    v.cur_sp = saved_sp
+    v.cur_scope = saved_scope
+    v.cur_dbg = saved_dbg
+    v.cur_lambda = saved_lam
+    v.env_ref = saved_env
+    v.env_ty = saved_envty
+    v.locals.free()
+    v.defers.free()
+    v.locals = saved_locals
+    v.defers = saved_defers
+    v.match_result_ptr = saved_mres
+    v.match_result_ts = saved_mts
+    v.match_merge_block = saved_mmerge
+end
+
+func fp_text(vtext: str): str:
+    if str.Len(vtext) == 0:
+        ret "0.0"
+    end
+    if str.Contains(vtext, ".") or str.Contains(vtext, "n") or str.Contains(vtext, "N") or str.Contains(vtext, "i") or str.Contains(vtext, "I"):
+        ret vtext
+    end
+    mut epos := str.IndexOf(vtext, "e")
+    if epos < 0:
+        epos = str.IndexOf(vtext, "E")
+    end
+    if epos < 0:
+        ret vtext + ".0"
+    end
+    mant := str.Substr(vtext, 0, epos)
+    expo := str.Substr(vtext, epos, str.Len(vtext) - epos)
+    ret mant + ".0" + expo
+end
+
+// A folded constant written for its LLVM type: floats in LLVM's float form,
+// and an integer cast to a pointer (`0 as T*`) as null or an inttoptr - LLVM
+// rejects `ptr 0`.
+func const_fpfix(lety: str, vtext: str): str:
+    if str.Equals(lety, "double") or str.Equals(lety, "float"):
+        ret fp_text(vtext)
+    end
+    if str.Equals(lety, "ptr") and const_is_int(vtext):
+        if str.Equals(vtext, "0") or str.Equals(vtext, "-0"):
+            ret "null"
+        end
+        ret "inttoptr (i64 " + vtext + " to ptr)"
+    end
+    ret vtext
+end
+
+func const_is_int(t: str): bool:
+    n := str.Len(t)
+    if n == 0:
+        ret false
+    end
+    mut i := 0
+    if t[0] == '-':
+        i = 1
+    end
+    if i >= n:
+        ret false
+    end
+    until i < n:
+        if t[i] < '0' or t[i] > '9':
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+func const_value(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, out2 &: str
+): bool:
+    if n == 0:
+        ret false
+    end
+    node := at.Get(a, n)
+    if node.kind == at.AST_CAST:
+        ret const_value(v, s, a, node.a, out2)
+    end
+    if node.kind == at.AST_LITERAL:
+        op := node.op
+        if op == tok.TK_INT or op == tok.TK_FLOAT or op == tok.TK_STRING or op == tok.TK_TRIPLE_STRING or op == tok.TK_RAW_STRING or op == tok.TK_UTF8_CHAR or op == tok.TK_CHAR or op == tok.TK_KW_TRUE or op == tok.TK_KW_FALSE or op == tok.TK_KW_NULL:
+            out2 = lv_expr(v, s, a, n).ref
+            ret true
+        end
+        ret false
+    end
+    if node.kind == at.AST_ARRAY_LIT or node.kind == at.AST_STRUCT_LIT:
+        ret const_agg(v, s, a, n, out2)
+    end
+    ret false
+end
+
+func const_agg(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, out2 &: str): bool:
+    node := at.Get(a, n)
+    if node.kind == at.AST_ARRAY_LIT:
+        ats := node.type_str
+        if str.Len(ats) == 0 or idx_byte(ats, 91) < 0:
+            ret false
+        end
+        ety := array_elem(ats)
+        lety := ty_of(v, s, a, ety)
+        if node.list.len() == 0:
+            out2 = "zeroinitializer"
+            ret true
+        end
+        mut b := co.SbNew()
+        co.SbPuts(b, "[")
+        mut okall := true
+        mut i := 0
+        until i < node.list.len() and okall:
+            mut vtext := ""
+            if not const_value(v, s, a, node.list.get(i), vtext):
+                okall = false
+            else:
+                if i != 0:
+                    co.SbPuts(b, ", ")
+                end
+                co.SbPuts(b, lety + " " + const_fpfix(lety, vtext))
+            end
+            i += 1
+        end
+        if not okall:
+            co.SbFree(b)
+            ret false
+        end
+        co.SbPuts(b, "]")
+        out2 = co.SbCstr(b)
+        co.SbFree(b)
+        ret true
+    end
+    if node.kind == at.AST_STRUCT_LIT:
+        ss := struct_sym(
+            v, s, a, str.Len(node.type_str) > 0 ? node.type_str : node.name
+        )
+        if ss == 0:
+            ret false
+        end
+        mut b2 := co.SbNew()
+        co.SbPuts(b2, "{ ")
+        mut idx := 0
+        mut okall2 := true
+        fsyms := sm.ScopeAt(s, sm.SymAt(s, ss).members).symbols
+        mut fi := 0
+        until fi < fsyms.len() and okall2:
+            f := sm.SymAt(s, fsyms.get(fi))
+            if f.kind == sm.SYM_FIELD:
+                fts := sm.ToString(s, f.ty)
+                mut prov := 0
+                repeat node.list.len() in j:
+                    fld := at.Get(a, node.list.get(j))
+                    if prov == 0 and str.Len(fld.name) > 0 and str.Equals(fld.name, f.name):
+                        prov = node.list.get(j)
+                    end
+                end
+                mut vtext2 := ""
+                if prov != 0:
+                    if not const_value(v, s, a, at.Get(a, prov).a, vtext2):
+                        okall2 = false
+                    end
+                else f.decl != 0 and at.Get(a, f.decl).a != 0:
+                    if not const_value(v, s, a, at.Get(a, f.decl).a, vtext2):
+                        okall2 = false
+                    end
+                else:
+                    vtext2 = zero_of(s, fts)
+                end
+                if okall2:
+                    flety := ty_of(v, s, a, fts)
+                    if idx != 0:
+                        co.SbPuts(b2, ", ")
+                    end
+                    co.SbPuts(b2, flety + " " + const_fpfix(flety, vtext2))
+                    idx += 1
+                end
+            end
+            fi += 1
+        end
+        if not okall2:
+            co.SbFree(b2)
+            ret false
+        end
+        if idx == 0:
+            co.SbFree(b2)
+            out2 = "zeroinitializer"
+            ret true
+        end
+        co.SbPuts(b2, " }")
+        out2 = co.SbCstr(b2)
+        co.SbFree(b2)
+        ret true
+    end
+    ret false
+end
+
+func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
+    mut any := false
+    mut gpkg := pkg_of_scope(s, v.pkg_scope)
+    if str.Len(gpkg) == 0:
+        gpkg = "main"
+    end
+    repeat at.ChildCount(a, program) in i:
+        d := at.Child(a, program, i)
+        dn := at.Get(a, d)
+        mut skip := dn.kind != at.AST_CONST_DECL and dn.kind != at.AST_VAR_DECL
+        if not skip and global_find_in(v, gpkg, dn.name) >= 0:
+            skip = true
+        end
+        if not skip and dn.is_extern:
+            ets := str.Len(dn.type_str) > 0 ? dn.type_str : "i32"
+            eref := "@" + dn.name
+            out_g(v, eref + " = external global " + ty_of(v, s, a, ets) + "\n")
+            mut ev := LvVar {}
+            ev.name = dn.name
+            ev.ptr = eref
+            ev.ts = ets
+            ev.pkg = ""
+            ev.init = 0
+            v.globals.push(ev)
+            any = true
+            skip = true
+        end
+        if not skip:
+            ts := str.Len(dn.type_str) > 0 ? dn.type_str : "i32"
+            gref := "@g." + safe_name(gpkg) + "." + str.TrimPrefix(struct_ltype(dn.name), "%struct.")
+            lty := ty_of(v, s, a, ts)
+            mut init := ""
+            mut cv := ""
+            mut gv := LvVar {}
+            gv.name = dn.name
+            gv.ptr = gref
+            gv.ts = ts
+            gv.pkg = gpkg
+            gv.init = 0
+            if dn.a != 0 and const_value(v, s, a, dn.a, cv):
+                init = const_fpfix(lty, cv)
+            else:
+                init = zero_of(s, ts)
+                if dn.a != 0:
+                    gv.init = dn.a
+                    v.gdefer.push(v.globals.len())
+                else dn.kind == at.AST_VAR_DECL and lv_needs_str_fill(v, s, a, ts, 0):
+                    v.gdefer.push(v.globals.len())
+                end
+            end
+            out_g(v, gref + " = internal global " + lty + " " + init + debug_global(v, s, a, dn.name, ts, dn.begin_line as int, dn.src_file) + "\n")
+            v.globals.push(gv)
+            any = true
+        end
+    end
+    if any:
+        out_g(v, "\n")
+    end
+end
+
+func extern_seen(v &: Lv, name: str): bool:
+    if str.Equals(name, "_write") and target_is_windows_of(v.triple):
+        ret true
+    end
+    repeat k_lv_prologue_externs.len() in p:
+        if str.Equals(name, k_lv_prologue_externs[p]):
+            ret true
+        end
+    end
+    repeat v.extern_names.len() in i:
+        if str.Equals(name, v.extern_names.get(i)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func body_sig_for(s &: sm.Sema, a &: at.Ast, name: str, owner &: int): int:
+    gs := sm.LookupLocal(s, s.global, name)
+    if gs != 0 and sm.SymAt(s, gs).kind == sm.SYM_FUNC:
+        gov := sm.SymAt(s, gs).overloads
+        mut gi := 0
+        until gi < gov.len():
+            gsig := gov.get(gi)
+            gi += 1
+            gd := sm.SigAt(s, gsig).decl
+            if gd != 0 and at.Get(a, gd).a != 0 and at.Get(a, gd).is_extern:
+                owner = 0
+                ret gsig
+            end
+        end
+    end
+    mut pi := 0
+    until pi < sm.PackageCount(s):
+        pk := sm.PackageAt(s, pi)
+        pi += 1
+        if pk == 0 or sm.SymAt(s, pk).kind != sm.SYM_PACKAGE:
+            continue
+        end
+        mems := sm.SymAt(s, pk).members
+        if mems == 0:
+            continue
+        end
+        fs := sm.LookupLocal(s, mems, name)
+        if fs == 0 or sm.SymAt(s, fs).kind != sm.SYM_FUNC:
+            continue
+        end
+        ov := sm.SymAt(s, fs).overloads
+        mut o := 0
+        until o < ov.len():
+            sgid := ov.get(o)
+            o += 1
+            d := sm.SigAt(s, sgid).decl
+            if d != 0 and at.Get(a, d).a != 0 and at.Get(a, d).is_extern:
+                owner = pk
+                ret sgid
+            end
+        end
+    end
+    ret 0 - 1
+end
+
+func StdcallCc(v &: Lv, name: str): str:
+    if not target_is_windows_of(v.triple) or target_ptr_bits_of(v.triple) != 32:
+        ret ""
+    end
+    repeat k_lv_win32_stdcall.len() in i:
+        if str.Equals(name, k_lv_win32_stdcall[i]):
+            ret " x86_stdcallcc"
+        end
+    end
+    ret ""
+end
+
+func declare_extern(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, sigid: int):
+    sg := sm.SigAt(s, sigid)
+    if sg.decl == 0 or extern_seen(v, name):
+        ret
+    end
+    repeat v.emitted.len() in ke:
+        if str.Equals(name, v.emitted.get(ke)):
+            ret
+        end
+    end
+    mut bowner := 0
+    bsig := body_sig_for(s, a, name, bowner)
+    if bsig >= 0:
+        ensure_fn(v, s, a, sm.SigAt(s, bsig).decl, 0, sm.SymAt(s, bowner).members)
+        ret
+    end
+    v.extern_names.push(name)
+    dn2 := at.Get(a, sg.decl)
+    narrow := not str.Equals(v.usize, "i64")
+    mut rty := ty_of(v, s, a, sm.ToString(s, sg.ret_type))
+    if narrow and str.Equals(rty, "i64") and libc_size_ret(name) != 0:
+        rty = v.usize
+    end
+    mut b := co.SbNew()
+    co.SbPuts(b, "declare" + StdcallCc(v, name) + " " + rty + " @" + name + "(")
+    repeat sg.params.len() in j:
+        if j != 0:
+            co.SbPuts(b, ", ")
+        end
+        mut pty := ty_of(v, s, a, sm.ToString(s, sg.params.get(j)))
+        if narrow and str.Equals(pty, "i64") and libc_size_param(name, j):
+            pty = v.usize
+        end
+        co.SbPuts(b, pty)
+    end
+    if sg.variadic:
+        co.SbPuts(b, sg.params.len() > 0 ? ", ..." : "...")
+    end
+    co.SbPuts(b, ")")
+    if dn2.is_pure:
+        co.SbPuts(b, " nounwind willreturn nofree nosync memory(read)")
+    end
+    if dn2.is_noret:
+        co.SbPuts(b, " noreturn")
+    end
+    co.SbPuts(b, "\n")
+    out_g(v, co.SbCstr(b))
+    co.SbFree(b)
+end
+
+func emit_externs_in(v &: Lv, s &: sm.Sema, a &: at.Ast, gsc: int):
+    syms := sm.ScopeAt(s, gsc).symbols
+    repeat syms.len() in i:
+        symid := syms.get(i)
+        sy := sm.SymAt(s, symid)
+        mut skip := sy.kind != sm.SYM_FUNC or sy.overloads.len() == 0
+        mut sigid := 0
+        if not skip:
+            sigid = sy.overloads.get(0)
+            d := sm.SigAt(s, sigid).decl
+            if d == 0:
+                skip = true
+            else:
+                dn := at.Get(a, d)
+                if not dn.is_extern or dn.a != 0:
+                    skip = true
+                end
+            end
+        end
+        if not skip:
+            declare_extern(v, s, a, sy.name, sigid)
+        end
+    end
+end
+
+func emit_externs(v &: Lv, s &: sm.Sema, a &: at.Ast):
+    emit_externs_in(v, s, a, s.global)
+end
+
+func touch_pkg(v &: Lv, s &: sm.Sema, a &: at.Ast, pk: int):
+    if pk == 0:
+        ret
+    end
+    py := sm.SymAt(s, pk)
+    if py.kind != sm.SYM_PACKAGE or py.decl == 0:
+        ret
+    end
+    repeat v.pkg_touched.len() in i:
+        if v.pkg_touched.get(i) == pk:
+            ret
+        end
+    end
+    v.pkg_touched.push(pk)
+    prog := py.decl
+    saved := v.pkg_scope
+    v.pkg_scope = py.members
+    emit_struct_types(v, s, a, prog)
+    if py.members != 0:
+        emit_externs_in(v, s, a, py.members)
+    end
+    emit_globals(v, s, a, prog)
+    if py.members != 0:
+        emit_impls_in(v, s, a, py.members)
+    end
+    v.pkg_scope = saved
+end
+
+func touch_pkg_named(v &: Lv, s &: sm.Sema, a &: at.Ast, pkgname: str):
+    if str.Len(pkgname) == 0:
+        ret
+    end
+    repeat sm.PackageCount(s) in i:
+        pk := sm.PackageAt(s, i)
+        if pk != 0 and str.Equals(sm.SymAt(s, pk).pkgname, pkgname):
+            touch_pkg(v, s, a, pk)
+            ret
+        end
+    end
+end
+
+func emit_global_inits(v &: Lv, s &: sm.Sema, a &: at.Ast):
+    repeat v.gdefer.len() in i:
+        gi := v.gdefer.get(i)
+        if gi >= 0 and gi < v.globals.len():
+            g := v.globals.get(gi)
+            if g.init != 0:
+                val := conv(v, s, a, lv_expr(v, s, a, g.init), g.ts)
+                emit(
+                    v, "store " + ty_of(v, s, a, g.ts) + " " + val + ", ptr " + g.ptr
+                )
+            else:
+                lv_str_fill(v, s, a, g.ptr, g.ts, 0)
+            end
+        end
+    end
+end

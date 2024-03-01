@@ -1,0 +1,330 @@
+package parser
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+
+func attach_pending(a &: at.Ast, target: int, pending &: Vector<str>):
+    repeat pending.len() in i:
+        at.AddAlias(a, target, pending.get(i))
+    end
+    pending.clear()
+end
+
+func metas_have_lang(out: Vector<str>, lang: str): bool:
+    mut i := 0
+    until i + 1 < out.len():
+        if str.Equals(out.get(i), lang):
+            ret true
+        end
+        i += 2
+    end
+    ret false
+end
+
+func parse_metas(p &: Ps, out &: Vector<str>):
+    p_skip_terminators(p)
+    until p_at(p, tok.TK_META):
+        lang := p_peek(p).lexeme
+        if metas_have_lang(out, lang):
+            p_error(
+                p, co.Format2(
+                    i18.Tr(`duplicate '@%s' marker on one definition; give one marker several values instead: @%s "a" "b"`), co.ArgStr(lang), co.ArgStr(lang)
+                )
+            )
+        end
+        p_advance(p)
+        if p_at(p, tok.TK_STRING):
+            until p_at(p, tok.TK_STRING):
+                out.push(lang)
+                out.push(p_peek(p).value.sval)
+                p_advance(p)
+            end
+        else:
+            p_error(p, "expected a string after '@' annotation")
+        end
+        p_skip_terminators(p)
+    end
+end
+
+func parse_package(p &: Ps, a &: at.Ast, prog: int, pending &: Vector<str>): bool:
+    if not p_at(p, tok.TK_KW_PACKAGE):
+        ret false
+    end
+    p_advance(p)
+    if p_at(p, tok.TK_IDENT) or p_at(p, tok.TK_KW_LAYOUT):
+        name_tok := p_peek(p)
+        if p.toks.pack == lp.LP_FA and str.Equals(name_tok.lexeme, "main"):
+            lg.LogAtHelp(
+                p.lgr, lg.PH_PARSER, lg.LOG_ERROR, p.file, name_tok.begin_line as int, name_tok.begin_col as int,
+                co.Format1(i18.Tr("name the package in Persian, for example '%s'"), co.ArgStr(lp.Entry(lp.LP_FA))),
+                i18.Tr("package name 'main' must be Persian in a Persian file")
+            )
+            p.had_error = true
+        end
+        at.SetName(a, prog, name_tok.lexeme)
+        p_advance(p)
+    else:
+        p_error(p, "expected package name after 'package'")
+    end
+    attach_pending(a, prog, pending)
+    p_term(p)
+    ret true
+end
+
+func parse_top_level_item_into(p &: Ps, a &: at.Ast, dest: int, pending &: Vector<str>):
+    p_skip_terminators(p)
+    parse_metas(p, pending)
+    if p_at_eof(p):
+        if pending.len() > 0:
+            p_error(p, i18.Tr("expected a definition after the '@' annotation"))
+        end
+        ret
+    end
+    if p_at(p, tok.TK_KW_IMPORT):
+        pending.clear()
+        parse_imports_into(p, a, dest)
+        ret
+    end
+    if p_at(p, tok.TK_KW_INCLUDE):
+        pending.clear()
+        parse_includes_into(p, a, dest)
+        ret
+    end
+    if p_at(p, tok.TK_KW_EXTERN):
+        pending.clear()
+        parse_extern_into(p, a, dest)
+        ret
+    end
+    if p_at(p, tok.TK_KW_EXPORT):
+        pending.clear()
+        parse_export_into(p, a, dest)
+        ret
+    end
+    if try_link_directive(p, a, dest):
+        pending.clear()
+        ret
+    end
+    if p_at(p, tok.TK_KW_IF):
+        pending.clear()
+        at.AddChild(a, dest, parse_toplevel_if(p, a))
+        ret
+    end
+    def := parse_top_level(p, a)
+    if def != 0:
+        attach_pending(a, def, pending)
+        at.AddChild(a, dest, def)
+    end
+    pending.clear()
+    if p.panic:
+        p_sync(p)
+    end
+end
+
+func fill_toplevel_block_body(p &: Ps, a &: at.Ast, n: int):
+    mut pending := Vector {} as Vector<str>
+    defer pending.free()
+    p_skip_terminators(p)
+    until not p_at(p, tok.TK_KW_END) and not p_at(p, tok.TK_KW_ELSE) and not p_at_eof(p):
+        p_skip_terminators(p)
+        if p_at(p, tok.TK_KW_END) or p_at(p, tok.TK_KW_ELSE) or p_at_eof(p):
+            break
+        end
+        parse_top_level_item_into(p, a, n, pending)
+        if p.panic:
+            p_sync(p)
+        end
+    end
+end
+
+func parse_toplevel_if_tail(p &: Ps, a &: at.Ast): int:
+    if not p_recurse_enter(p, "if/else chain nested too deeply"):
+        ret p_mk(p, a, at.AST_IF)
+    end
+    n := p_mk(p, a, at.AST_IF)
+    ps_set_a(a, n, parse_cond_expr(p, a))
+    b := p_mk(p, a, at.AST_BLOCK)
+    ps_set_b(a, n, b)
+    p_expect(p, tok.TK_COLON, "':' after if condition")
+    fill_toplevel_block_body(p, a, b)
+    p_fin(p, a, b)
+    p_skip_terminators(p)
+    if p_match(p, tok.TK_KW_ELSE):
+        p_match(p, tok.TK_KW_IF)
+        if not p_at(p, tok.TK_COLON):
+            ps_set_c(a, n, parse_toplevel_if_tail(p, a))
+        else:
+            c := p_mk(p, a, at.AST_BLOCK)
+            ps_set_c(a, n, c)
+            p_expect(p, tok.TK_COLON, "':' after else")
+            fill_toplevel_block_body(p, a, c)
+            p_expect(p, tok.TK_KW_END, "'end' to close if")
+            p_fin(p, a, c)
+        end
+    else:
+        p_expect(p, tok.TK_KW_END, "'end' to close if")
+    end
+    p_fin(p, a, n)
+    p_recurse_leave(p)
+    ret n
+end
+
+func parse_toplevel_if(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "toplevel_if_stmt")
+    p_advance(p)
+    ret parse_toplevel_if_tail(p, a)
+end
+
+func parse_program(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "program")
+    prog := p_mk(p, a, at.AST_PROGRAM)
+    at.SetName(a, prog, "main")
+
+    mut pending := Vector {} as Vector<str>
+    defer pending.free()
+    p_skip_terminators(p)
+    parse_metas(p, pending)
+    parse_package(p, a, prog, pending)
+    if p_at_eof(p) and pending.len() > 0:
+        p_error(p, i18.Tr("expected a definition after the '@' annotation"))
+    end
+    until not p_at_eof(p):
+        parse_top_level_item_into(p, a, prog, pending)
+    end
+    repeat p.tail_defs.len() in i:
+        at.AddChild(a, prog, p.tail_defs.get(i))
+    end
+    p.tail_defs.clear()
+    p_fin(p, a, prog)
+    ret prog
+end
+
+func p_at_string_import(p &: Ps): bool:
+    ret p_at(p, tok.TK_STRING) or (p_at(p, tok.TK_IDENT) and p_peek2(p).kind == tok.TK_STRING)
+end
+
+func p_string_is_package_path(p &: Ps): bool:
+    mut t := p_peek(p)
+    if t.kind != tok.TK_STRING:
+        t = p_peek2(p)
+    end
+    spec := t.value.sval
+    slash := str.IndexOf(spec, "/")
+    if slash <= 0 or str.EndsWith(spec, ".salam"):
+        ret false
+    end
+    head := str.Substr(spec, 0, slash)
+    ret str.Contains(head, ".") and not str.StartsWith(head, ".") and not str.StartsWith(spec, "@")
+end
+
+func parse_string_import_entry(p &: Ps, a &: at.Ast): int:
+    n := p_mk(p, a, at.AST_IMPORT)
+    mut alias := ""
+    if p_at(p, tok.TK_IDENT) and p_peek2(p).kind == tok.TK_STRING:
+        alias = p_peek(p).lexeme
+        p_advance(p)
+    end
+    if p_at(p, tok.TK_STRING):
+        at.SetName(a, n, alias)
+        at.SetTokenValue(a, n, p_peek(p).value)
+        p_advance(p)
+    else:
+        p_error(p, i18.Tr("expected a file path string after 'include'"))
+    end
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_ident_import_entry(p &: Ps, a &: at.Ast): int:
+    n := p_mk(p, a, at.AST_IMPORT)
+    mut b := p_munch_name(p)
+    until p_at(p, tok.TK_DOT):
+        p_advance(p)
+        b = b + "." + p_munch_name(p)
+    end
+    at.SetName(a, n, b)
+    p_fin(p, a, n)
+    ret n
+end
+
+func parse_imports_into(p &: Ps, a &: at.Ast, prog: int):
+    p_advance(p)
+    if p_at(p, tok.TK_LPAREN):
+        p_error(p, `grouped imports are not supported; write one import per line, and include "a.salam" "b.salam" for files`)
+        until not p_at(p, tok.TK_RPAREN) and not p_at_eof(p):
+            p_advance(p)
+        end
+        p_match(p, tok.TK_RPAREN)
+        p_term(p)
+        ret
+    end
+    if p_at_string_import(p) and p_string_is_package_path(p):
+        n := parse_string_import_entry(p, a)
+        mut nn := at.Get(a, n)
+        nn.is_extern = true
+        at.Put(a, n, nn)
+        at.AddChild(a, prog, n)
+    else p_at_string_import(p):
+        p_error(p, i18.Tr("'import' loads a library by name; load a file with include, for example include \"util.salam\""))
+        until p_at_string_import(p):
+            p_advance(p)
+        end
+    else p_at(p, tok.TK_IDENT):
+        at.AddChild(a, prog, parse_ident_import_entry(p, a))
+    else:
+        p_error(p, i18.Tr("expected a library name after 'import'"))
+    end
+    p_term(p)
+end
+
+func parse_includes_into(p &: Ps, a &: at.Ast, prog: int):
+    p_advance(p)
+    if not p_at_string_import(p):
+        p_error(p, i18.Tr("'include' takes a file path string, for example include \"util.salam\""))
+        p_term(p)
+        ret
+    end
+    at.AddChild(a, prog, parse_string_import_entry(p, a))
+    until p_at_string_import(p):
+        at.AddChild(a, prog, parse_string_import_entry(p, a))
+    end
+    p_term(p)
+end
+
+pub func NeedsMore(lgr: lg.Logger, toks: tok.TokenStream, a &: at.Ast): bool:
+    mut p := Ps {}
+    p.toks = toks
+    p.count = tok.StreamCount(toks)
+    p.pos = 0
+    p.file = tok.StreamFile(toks)
+    p.lgr = lgr
+    _prog := parse_program(p, a)
+    ret p.had_error and p.err_at_eof
+end
+
+pub func Run(
+    lgr: lg.Logger, toks: tok.TokenStream, a &: at.Ast, out_program &: int
+): bool:
+    mut p := Ps {}
+    p.toks = toks
+    p.count = tok.StreamCount(toks)
+    p.pos = 0
+    p.file = tok.StreamFile(toks)
+    p.lgr = lgr
+    lg.Log(lgr, lg.PH_PARSER, lg.LOG_INFO, "parsing " + p.count + " tokens")
+    prog := parse_program(p, a)
+    at.StampSrcFile(a, prog, p.file)
+    out_program = prog
+    mut suffix := ""
+    if p.had_error:
+        suffix = i18.Tr(" (with errors)")
+    end
+    lg.Log(
+        lgr, lg.PH_PARSER, lg.LOG_INFO, "parse complete: " + at.ChildCount(a, prog) + " top-level defs" + suffix
+    )
+    ret not p.had_error
+end

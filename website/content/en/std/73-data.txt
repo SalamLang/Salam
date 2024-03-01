@@ -1,0 +1,123 @@
+pkg.en = data
+pkg.name = data
+pkg.group = Encoding and data
+pkg.summary = Reading data for machine learning: CSV tables, batching samples, MNIST and images, and synthetic data.
+pkg.title = The data package in Salam | Datasets for machine learning
+pkg.description = The data package in Salam: reading CSV into a table, categorical columns, batching and shuffling samples, reading MNIST and an image folder, and making synthetic data, with examples.
+group.COL_.title = Column kinds
+group.COL_ = The kind of each table column, worked out as the CSV is read.
+pkg.intro <<
+<p>This package readies data for training a model. <code>LoadCsv</code> reads a CSV file into a <code>Table</code>, decides for each column whether it holds integers, floats, categories or free text, and turns categories into numbers by itself; <code>split_xy</code> then divides the table into a feature matrix and a label. <code>MatrixDataset</code> hands the rows out in shuffled mini-batches, <code>LoadMnist</code>, <code>LoadIdx</code> and <code>LoadImageFolder</code> read image sets, and the <code>Make...</code> functions build synthetic data from a fixed seed, for trying algorithms out without a file.</p>
+<p>Everything comes out as a <a href="/std/matrix/">matrix</a> or a <a href="/std/tensor/">tensor</a>, ready for <a href="/std/ml/">ml</a> and <a href="/std/nn/">nn</a>. To read a CSV file cell by cell as text, use <a href="/std/encoding/csv/">encoding/csv</a>; for spreadsheets, <a href="/std/excel/">excel</a>; for arrays saved by NumPy, <a href="/std/npy/">npy</a>.</p>
+<h3 id="pitfalls">What trips people up</h3>
+<ul>
+<li><strong>Category codes depend on the file.</strong> Codes are given in order of first appearance, so <code>red</code> may be 0 in the training file and 2 in the test file, and a column with 25 distinct values may be a category in one file and text in another. Load all rows from one file and split them, as the test-set guide does, or map new files through the training table's <code>cat_levels</code>.</li>
+<li><strong>One bad cell changes a column's kind.</strong> A single <code>12,5</code> or <code>n/a</code> in a number column turns the whole column into categories or text. Check <code>kinds</code> after loading.</li>
+<li><strong>Empty cells</strong> are NaN in number columns but their own category, the empty string, in category columns.</li>
+<li><strong>Only commas.</strong> The separator is always <code>,</code>; convert semicolon or tab files first, for example with <a href="/std/encoding/csv/">encoding/csv</a>.</li>
+</ul>
+<p>The guide below follows the order of a small machine learning project: load a CSV file and see how its columns were read, split it into features and a label and fit a first model, train in mini-batches, hold back a test set, and read the MNIST file format.</p>
+
+<h2 id="guide-columns">How LoadCsv reads each column</h2>
+<p><code>LoadCsv</code> looks at every value of a column and picks its kind on its own. All whole numbers give <code>COL_INT</code>, all numbers <code>COL_FLOAT</code>. Text with a limited number of different values (at most 20, or a tenth of the rows when that is more, and fewer than the rows) becomes <code>COL_CAT</code>: each value gets a code from 0 in order of first appearance and <code>cat_levels</code> gives the names back. Text where every row is different, such as a free comment, stays <code>COL_STR</code>. An empty cell in a number column is stored as NaN, which <code>math.IsNaN</code> detects; in a category column it becomes a level of its own.</p>
+{{example.data-columns}}
+<p><code>to_matrix</code> and <code>split_xy</code> leave <code>COL_STR</code> columns out, which is why five columns become four. A category is stored as its code, which suits decision trees; for a linear model or a neural network build one-hot columns from the code, as the last lines do.</p>
+
+<h2 id="guide-regression">From a CSV file to a first model</h2>
+<p><code>split_xy</code> takes the name of the label column and fills two matrices: every other usable column as features, and the label as a one column matrix. It returns false when the label is missing or is plain text. That is exactly the shape <a href="/std/matrix/">matrix</a> functions expect, so a least squares fit with <code>matrix.LinearRegression</code> is one more line. Its result has the intercept first, then one coefficient per feature.</p>
+{{example.data-regression}}
+
+<h2 id="guide-minibatch">Training in mini-batches</h2>
+<p>Gradient descent on a large data set looks at a few rows at a time. Wrap the features and labels in a <code>MatrixDataset</code>, ask it for <code>batches(size, shuffle, seed)</code>, and call <code>next</code> until it returns false; each call replaces the two matrices you pass with the next batch. <code>reset(epoch)</code> starts a new pass and shuffles again with the seed plus the epoch, so every epoch sees a different order but a run can be repeated exactly. <code>MakeRegression</code> builds a test problem with known true coefficients, so you can see that training found them.</p>
+{{example.data-minibatch}}
+<p><code>next</code> frees the matrices it is given before it fills them, so pass the same two variables every time and free them once after the loop.</p>
+
+<h2 id="guide-split">Keeping a test set aside</h2>
+<p>A model has to be judged on rows it never saw. The simplest split reuses the batch iterator: shuffle once with a fixed seed, take a first batch the size of the training set and a second batch with the rest. Here a nearest-centre classifier learns the centre of each of three clusters from <code>MakeBlobs</code> and is scored on the 30 held back points.</p>
+{{example.data-split}}
+<p>Changing the seed gives another split and slightly different numbers. For a fair comparison of two models, use the same seed for both.</p>
+
+<h2 id="guide-mnist">The MNIST file format</h2>
+<p>MNIST and many image sets that copy it use the IDX format: a magic number whose third byte is the element type and fourth the number of dimensions, the size of each dimension as a big-endian 32 bit number, then the raw bytes. <code>LoadMnist</code> reads an image file and a label file into a matrix with one image per row, pixels scaled from 0..255 to 0..1, and a one column label matrix. <code>LoadIdx</code> reads any IDX file as it is. The program writes three tiny 2x2 images itself so it runs without a download; for the real set, point the same call at <code>train-images-idx3-ubyte</code> and <code>train-labels-idx1-ubyte</code>.</p>
+{{example.data-mnist-format}}
+<p>Both readers return false, or clear <code>ok</code>, when a file is missing or does not match, so check the result before you use the matrices.</p>
+>>
+
+doc.Table = A data table with named columns, for machine learning.
+doc.Table.names = The column names.
+doc.Table.kinds = The kind of each column; one of the <code>COL_</code> constants.
+doc.Table.cats = The levels of each categorical column.
+doc.Table.raw = The original text of the cells of <code>COL_STR</code> columns; empty for the other kinds.
+doc.Table.cells = The numeric value of the cells; a categorical column holds the level number.
+doc.Table.rows = The number of data rows, not counting the header.
+doc.Table.cols = The number of columns.
+doc.Table.col_index = The index of the column with this name; -1 when there is none.
+doc.Table.cat_levels = The levels of a categorical column, in the order they were seen.
+doc.Table.to_matrix = Turns every column into a numeric matrix.
+doc.Table.split_xy = Moves the label column into <code>y</code> and the rest into <code>x</code>.
+doc.Table.free = Frees the memory.
+doc.LoadCsv = Reads comma-separated text into a table and works out the kind of each column: integer, float, category or free text. With <code>header</code> false the columns are named <code>col0</code>, <code>col1</code> and so on.
+doc.LoadCsvFile = Reads a CSV file into a table.
+doc.MatrixDataset = A dataset of a feature matrix and labels.
+doc.MatrixDataset.x = The feature matrix, one row per sample.
+doc.MatrixDataset.y = The labels, one row per sample.
+doc.MatrixDataset.len = The number of samples.
+doc.MatrixDataset.batches = An iterator that hands out the samples a batch at a time; when <code>shuffle</code> is true the order is shuffled from <code>seed</code>.
+doc.MatrixDataset.free = Frees the memory.
+doc.BatchIter = A batch iterator.
+doc.BatchIter.x = The features.
+doc.BatchIter.y = The labels.
+doc.BatchIter.batch = The batch size.
+doc.BatchIter.shuffle = Shuffle the order.
+doc.BatchIter.seed = The shuffle seed.
+doc.BatchIter.order = The order of the samples in this epoch.
+doc.BatchIter.pos = The current position.
+doc.BatchIter.reset = Goes back to the start and builds a fresh order from the seed plus the epoch number.
+doc.BatchIter.next = Puts the next batch in <code>x_out</code> and <code>y_out</code>; the last batch may be smaller. False when no batch is left.
+doc.BatchIter.next_tensor = Hands out the next batch as a tensor and a list of integer labels.
+doc.BatchIter.batches_per_epoch = The number of batches in one epoch.
+doc.BatchIter.free = Frees the memory.
+doc.XTensor = Turns the feature matrix into a tensor.
+doc.YLabels = Turns the label column into a list of integers.
+doc.LoadImageFolder = Loads the images of a folder: each subfolder is one class. The images are resized to the given size, and turned grey when <code>gray</code> is true.
+doc.ParseIdx = Reads IDX format data, the MNIST format, from memory into a matrix.
+doc.LoadIdx = Reads an IDX file into a matrix.
+doc.LoadMnist = Reads the MNIST image and label files; each image is one row of 784 values between zero and 1.
+doc.MakeBlobs = Random samples in several clusters with random centres; the label of a sample is the number of its cluster.
+doc.MakeMoons = Two interleaving crescents with two labels; for trying non linear separators out.
+doc.MakeCircles = Two concentric circles with two labels; <code>factor</code> is the radius ratio of the inner circle.
+doc.MakeRegression = Linear regression data with random coefficients; the real coefficients come back in <code>true_coef</code>.
+doc.MakeClassification = Classification data with several classes; <code>sep</code> sets how far apart the classes are.
+
+ex.Table = data-Table
+ex.Table.rows = data-Table
+ex.Table.cols = data-Table
+ex.Table.col_index = data-Table
+ex.Table.cat_levels = data-Table
+ex.Table.to_matrix = data-Table
+ex.Table.split_xy = data-Table
+ex.Table.free = data-Table
+ex.LoadCsv = data-Table
+ex.LoadCsvFile = data-Table
+ex.group.COL_ = data-Table
+ex.MakeBlobs = data-Synth
+ex.MakeMoons = data-Synth
+ex.MakeCircles = data-Synth
+ex.MakeRegression = data-Synth
+ex.MakeClassification = data-Synth
+ex.MatrixDataset = data-Batch
+ex.MatrixDataset.len = data-Batch
+ex.MatrixDataset.batches = data-Batch
+ex.MatrixDataset.free = data-Batch
+ex.BatchIter = data-Batch
+ex.BatchIter.reset = data-Batch
+ex.BatchIter.next = data-Batch
+ex.BatchIter.next_tensor = data-Batch
+ex.BatchIter.batches_per_epoch = data-Batch
+ex.BatchIter.free = data-Batch
+ex.XTensor = data-Batch
+ex.YLabels = data-Batch
+ex.LoadImageFolder = data-Batch
+ex.ParseIdx = data-Batch
+ex.LoadIdx = data-Batch
+ex.LoadMnist = data-Batch

@@ -1,0 +1,157 @@
+pkg.en = sync
+pkg.name = sync
+pkg.group = Time and concurrency
+pkg.summary = Mutexes, condition variables, wait groups, read-write locks, semaphores and once, for coordinating threads.
+pkg.title = The sync package in Salam | Mutexes and wait groups
+pkg.description = The sync package in Salam: mutexes, condition variables, wait groups, read-write locks, semaphores and run-once, with examples.
+pkg.import = sync
+pkg.intro <<
+<p>When several threads change the same variable they have to take turns, or the result depends on the order the threads happen to run in. The <code>sync</code> package has the classic tools for taking turns, built on the operating system's threads library:</p>
+<ul>
+<li>A <strong>mutex</strong>: each thread takes the lock before touching the data and releases it afterwards. An <strong>RWMutex</strong> lets many readers in at once.</li>
+<li>A <strong>condition variable</strong>: a thread sleeps until another one says that something has changed.</li>
+<li>A <strong>wait group</strong>: call <code>Add</code> before starting a piece of work, <code>Done</code> at its end, and <code>Wait</code> until the count is back to zero.</li>
+<li>A <strong>semaphore</strong> caps how many threads are inside a part at once, and a <strong>once</strong> runs setup a single time.</li>
+</ul>
+<p>Threads themselves come from <code>spawn</code> and the <a href="/std/thread/">thread</a> package. For a single shared number, <a href="/std/atomic/">atomic</a> is cheaper than a lock; to hand values from one thread to another, <a href="/std/chan/">chan</a> does the locking and waiting for you; to cancel work, <a href="/std/ctx/">ctx</a>.</p>
+<p>The things people get wrong:</p>
+<ul>
+<li>Using a value that was never created. Every tool here is made with a <code>New...</code> function; a zero <code>sync.Mutex {}</code> has no lock inside and crashes on <code>Lock</code>. Globals are declared with <code>{}</code> and created at the top of <code>main</code>.</li>
+<li>Locking twice. A mutex is not reentrant: a thread that calls <code>Lock</code> on a mutex it already holds waits forever. <code>Do</code> holds a lock while its function runs, so calling <code>Do</code> on the same <code>Once</code> from inside it hangs too.</li>
+<li>Waiting on a condition without a loop. <code>WaitCond</code> can return before the condition is true; always wait inside <code>until not condition:</code>.</li>
+<li>Forgetting <code>Destroy...</code>. Each tool holds operating system memory; destroy it after the last thread that uses it has been joined.</li>
+</ul>
+
+<h2 id="guide-mutex">Keep data consistent with a mutex</h2>
+<p>A lock is not only for counters. Anything that has to stay true across several variables, such as "the money in all accounts adds up to the same total", needs every change to happen while the lock is held. Take the lock at the top of the function and put <code>Unlock</code> in a <code>defer</code>, so it is released on every return path, including the early <code>ret</code>.</p>
+{{example.sync-guide-transfer}}
+<p>Four threads move money around 4000 times and the total is still 1000. Without the lock two threads could read the same balance at once and one of the changes would be lost.</p>
+
+<h2 id="guide-rwmutex">Many readers, few writers</h2>
+<p>When data is read far more often than it is changed, such as settings or a cache, a plain mutex makes readers wait for each other for no reason. An <code>RWMutex</code> lets any number of readers in together with <code>RLock</code>, and gives a writer the data to itself with <code>WLock</code>.</p>
+{{example.sync-guide-settings}}
+<p>A reader must never write while holding only the read lock. If a reader may need to change the data, take the write lock instead.</p>
+
+<h2 id="guide-semaphore">Limit how many run at once</h2>
+<p>A <code>Semaphore</code> holds a number of permits. <code>Acquire</code> takes one and waits when none are left, <code>Release</code> gives it back. With two permits, at most two threads are inside the guarded part at any moment, which is how you cap parallel downloads or database connections.</p>
+{{example.sync-guide-limit}}
+<p><code>TryAcquire</code> takes a permit only if one is free and returns <code>false</code> at once otherwise, for work that should be skipped rather than queued.</p>
+
+<h2 id="guide-once">Set something up exactly once</h2>
+<p>Some setup is expensive and should happen only when it is first needed, but several threads may need it at the same moment. <code>Do</code> runs its function the first time it is called on a <code>Once</code>; every other caller waits until that run has finished and then goes on without running it again.</p>
+{{example.sync-guide-once}}
+
+<h2 id="guide-condvar">A work queue: wait for work, wait for the end</h2>
+<p>A condition variable is how a thread sleeps until there is something to do instead of checking in a busy loop. The workers below wait on <code>has_work</code> while the queue is empty, and the main thread calls <code>Signal</code> after each push to wake one of them. A wait group counts the jobs: <code>Add</code> before each push, <code>Done</code> when it is processed, and <code>Wait</code> returns when all are done. To stop the workers, set a flag and <code>Broadcast</code>, which wakes all of them.</p>
+{{example.sync-guide-queue}}
+<p><code>WaitCond</code> releases the lock while it sleeps and takes it again before it returns, which is why the worker can check the queue right after it. <code>WaitCondTimeout</code> does the same with a time limit, returning true when it was woken and false when the time ran out. The wait group does not replace <code>join</code>: every spawned thread still has to be joined once.</p>
+
+<h2 id="guide-choose">Pitfalls, and which tool to use</h2>
+<ul>
+<li>When two locks are needed, every thread must take them in the same order. Taking A then B in one thread and B then A in another can stop both.</li>
+<li>Keep the locked part short. Do slow work, such as file or network calls, before taking the lock or after releasing it.</li>
+<li>Every <code>New...</code> has a matching <code>Destroy...</code>. Call it after the last thread using the value has been joined.</li>
+</ul>
+<div class="table-wrap"><table>
+<thead><tr><th>Situation</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Several threads change the same data</td><td><code>Mutex</code></td></tr>
+<tr><td>Data is read much more often than written</td><td><code>RWMutex</code></td></tr>
+<tr><td>Wait until N tasks are done</td><td><code>WaitGroup</code></td></tr>
+<tr><td>At most N tasks at a time</td><td><code>Semaphore</code></td></tr>
+<tr><td>Setup that must run once</td><td><code>Once</code></td></tr>
+<tr><td>Wait until some condition becomes true</td><td><code>CondVar</code> with a <code>Mutex</code></td></tr>
+<tr><td>A single shared number</td><td><a href="/std/atomic/">atomic</a>.<code>I64</code></td></tr>
+<tr><td>Hand values from one thread to another</td><td><a href="/std/chan/">chan</a>.<code>Chan</code></td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.Mutex = A mutex; only one thread holds it at a time.
+doc.Mutex.handle = The operating system's lock.
+doc.CondVar = A condition variable: threads sleep on it until another thread wakes them.
+doc.CondVar.handle = The operating system's condition variable.
+doc.WaitGroup = A wait group: a count of unfinished work.
+doc.WaitGroup.counter = The number of unfinished pieces of work.
+doc.WaitGroup.mu = The internal lock.
+doc.WaitGroup.cv = The internal condition variable.
+doc.RWMutex = A read-write lock: several readers together, or one writer alone.
+doc.RWMutex.state = The internal state: the readers, the writer and the waiting writers.
+doc.RWMutex.mu = The internal lock.
+doc.RWMutex.cv = The internal condition variable.
+doc.Semaphore = A semaphore: a limited number of permits that threads take and give back.
+doc.Semaphore.permits = The number of free permits.
+doc.Semaphore.mu = The internal lock.
+doc.Semaphore.cv = The internal condition variable.
+doc.Once = A "once": it runs a function only the first time.
+doc.Once.done = Whether the function has run.
+doc.Once.mu = The internal lock.
+doc.NewMutex = A new mutex. A mutex is not reentrant.
+doc.Lock = Takes the lock, waiting when another thread holds it. Returns 0, or minus one on an error from the system.
+doc.Unlock = Releases the lock.
+doc.Destroy = Releases the mutex.
+doc.SleepMs = Puts the current thread to sleep for a number of milliseconds.
+doc.NewCondVar = A new condition variable.
+doc.WaitCond = Releases the lock and sleeps until it is signalled; the lock is held again on waking. Always recheck the condition in a loop.
+doc.WaitCondTimeout = Like <code>WaitCond</code>, but for at most <code>ms</code> milliseconds. Returns true when it was woken and false when the time ran out. The lock is held again either way.
+doc.NowMs = The wall clock time in milliseconds on Linux and macOS, a tick count on Windows; only differences between two readings mean anything.
+doc.Signal = Wakes one of the waiting threads.
+doc.Broadcast = Wakes every waiting thread.
+doc.DestroyCondVar = Releases the condition variable.
+doc.NewWaitGroup = A new wait group with a count of zero.
+doc.Add = Changes the count of work by <code>delta</code>; call it before starting the work, not inside it.
+doc.Done = Reports one piece of work as finished.
+doc.Wait = Waits until the count is zero or below; if it already is, it returns at once.
+doc.DestroyWaitGroup = Releases the wait group.
+doc.NewRWMutex = A new read-write lock.
+doc.RLock = Takes the lock for reading, waiting while a writer is working or waiting.
+doc.RUnlock = Releases a read lock.
+doc.WLock = Takes the lock for writing and waits for every reader to leave. A waiting writer comes before new readers.
+doc.WUnlock = Releases the write lock.
+doc.DestroyRWMutex = Releases the lock.
+doc.NewSemaphore = A semaphore with the given number of permits.
+doc.Acquire = Takes one permit, waiting when none is left.
+doc.TryAcquire = Takes a permit if one is free and returns true; it never waits.
+doc.Release = Gives one permit back and wakes one waiting thread. It does not check the starting count, so an extra <code>Release</code> adds a permit.
+doc.DestroySemaphore = Releases the semaphore.
+doc.NewOnce = A new "once".
+doc.Do = Runs the function only if this is the first time; other threads wait until it finishes. It holds a lock while the function runs, so the function must not call <code>Do</code> on the same <code>Once</code>.
+doc.DestroyOnce = Releases the "once".
+
+ex.Mutex = sync-Mutex
+ex.NewMutex = sync-Mutex
+ex.Lock = sync-Mutex
+ex.Unlock = sync-Mutex
+ex.Destroy = sync-Mutex
+ex.WaitGroup = sync-Mutex
+ex.NewWaitGroup = sync-Mutex
+ex.Add = sync-Mutex
+ex.Done = sync-Mutex
+ex.Wait = sync-Mutex
+ex.DestroyWaitGroup = sync-Mutex
+ex.CondVar = sync-CondVar
+ex.NewCondVar = sync-CondVar
+ex.WaitCond = sync-CondVar
+ex.WaitCondTimeout = sync-CondVar
+ex.NowMs = sync-CondVar
+ex.Signal = sync-CondVar
+ex.Broadcast = sync-CondVar
+ex.DestroyCondVar = sync-CondVar
+ex.SleepMs = sync-CondVar
+ex.RWMutex = sync-RWMutex
+ex.NewRWMutex = sync-RWMutex
+ex.RLock = sync-RWMutex
+ex.RUnlock = sync-RWMutex
+ex.WLock = sync-RWMutex
+ex.WUnlock = sync-RWMutex
+ex.DestroyRWMutex = sync-RWMutex
+ex.Semaphore = sync-RWMutex
+ex.NewSemaphore = sync-RWMutex
+ex.Acquire = sync-RWMutex
+ex.TryAcquire = sync-RWMutex
+ex.Release = sync-RWMutex
+ex.DestroySemaphore = sync-RWMutex
+ex.Once = sync-RWMutex
+ex.NewOnce = sync-RWMutex
+ex.Do = sync-RWMutex
+ex.DestroyOnce = sync-RWMutex

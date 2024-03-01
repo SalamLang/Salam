@@ -1,0 +1,127 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.http
+import net.router
+import net.http.swagger
+import net.internal.rawsock
+import str
+import time
+
+const API_PORT := 19271
+const DOC_PORT := 19272
+
+struct Todo:
+    pub id: i64 = 0 as i64
+    pub title: str = ""
+end
+
+func list_todos(ctx: i64):
+    http.Json(ctx, "[{\"id\":1,\"title\":\"write docs\"}]")
+end
+
+func get_resp(port: int, path: str): str:
+    mut sock := rawsock.Connect("127.0.0.1", port)
+    mut tries := 0
+    until not rawsock.Ok(sock) and tries < 200:
+        time.Sleep(10)
+        sock = rawsock.Connect("127.0.0.1", port)
+        tries = tries + 1
+    end
+    if not rawsock.Ok(sock):
+        ret ""
+    end
+    host := "127.0.0.1:" + port
+    rawsock.Send(sock, "GET " + path + " HTTP/1.0\r\nHost: " + host + "\r\n\r\n")
+    mut resp := ""
+    mut chunk := rawsock.Recv(sock, 16384)
+    until chunk.len() > 0:
+        resp = resp + chunk
+        chunk = rawsock.Recv(sock, 16384)
+    end
+    rawsock.Close(sock)
+    ret resp
+end
+
+func main:
+    mut r := router.NewRouter()
+    router.Get(r, "/api/todos", list_todos)
+
+    mut doc := swagger.New("Todo API", "1.0.0")
+    swagger.Server(doc, "http://127.0.0.1:19271", "local")
+    swagger.Scan(doc, r)
+    _a := swagger.At(doc, "GET", "/api/todos")
+    swagger.Summary(doc, "List todos")
+    swagger.Tag(doc, "todos")
+    swagger.Returns(doc, 200, "every todo", Vector {} as Vector<Todo>)
+
+    swagger.Mount(doc, r, "/docs")
+
+    mut s := http.NewServer(API_PORT)
+    http.SetHost(s, "127.0.0.1")
+    http.Use(s, r)
+    println http.RunBackground(s)
+    println swagger.Serve(doc, DOC_PORT)
+
+    ui := get_resp(API_PORT, "/docs")
+    println str.Contains(ui, "text/html")
+    println str.Contains(ui, "<title>Todo API</title>")
+    println str.Contains(ui, "https://unpkg.com") == false
+    println str.Contains(ui, "location.pathname")
+
+    ui_slash := get_resp(API_PORT, "/docs/")
+    println str.Contains(ui_slash, "<title>Todo API</title>")
+
+    spec := get_resp(API_PORT, "/docs/openapi.json")
+    println str.Contains(spec, "application/json")
+    println str.Contains(spec, "\"openapi\":\"3.1.0\"")
+    println str.Contains(spec, "/api/todos")
+    println str.Contains(spec, "#/components/schemas/Todo")
+    println str.Contains(spec, "Access-Control-Allow-Origin")
+
+    ui2 := get_resp(DOC_PORT, "/")
+    println str.Contains(ui2, "<title>Todo API</title>")
+    spec2 := get_resp(DOC_PORT, "/openapi.json")
+    println str.Contains(spec2, "\"openapi\":\"3.1.0\"")
+
+    api := get_resp(API_PORT, "/api/todos")
+    println str.Contains(api, "write docs")
+    println str.Contains(get_resp(DOC_PORT, "/api/todos"), "404")
+
+    mut r2 := router.NewRouter()
+    swagger.MountSpec(
+        "{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"Imported\",\"version\":\"9\"},\"paths\":{}}", "Imported", r2, "/imported"
+    )
+    mut s2 := http.NewServer(19273)
+    http.SetHost(s2, "127.0.0.1")
+    http.Use(s2, r2)
+    println http.RunBackground(s2)
+    println str.Contains(get_resp(19273, "/imported"), "<title>Imported</title>")
+    println str.Contains(get_resp(19273, "/imported/openapi.json"), "\"title\":\"Imported\"")
+
+    mut ra := router.NewRouter()
+    router.Get(ra, "/alpha", list_todos)
+    mut da := swagger.New("Alpha", "1")
+    swagger.Scan(da, ra)
+    mut rb := router.NewRouter()
+    router.Get(rb, "/beta", list_todos)
+    mut db := swagger.New("Beta", "2")
+    swagger.Scan(db, rb)
+    println swagger.Serve(da, 19274)
+    println swagger.Serve(db, 19275)
+    println str.Contains(get_resp(19274, "/"), "<title>Alpha</title>")
+    println str.Contains(get_resp(19275, "/"), "<title>Beta</title>")
+    println str.Contains(get_resp(19274, "/openapi.json"), "/alpha")
+    println str.Contains(get_resp(19275, "/openapi.json"), "/beta")
+end

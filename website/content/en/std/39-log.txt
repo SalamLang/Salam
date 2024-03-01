@@ -1,0 +1,127 @@
+pkg.en = log
+pkg.name = log
+pkg.group = System and tools
+pkg.summary = Recording what a program does, with levels, a prefix, structured fields, JSON output and writing to a file.
+pkg.title = The log package in Salam | Levelled and JSON logging
+pkg.description = The log package in Salam: levels from debug to error, formatted messages, key and value fields, JSON logs, and writing to a file with rotation, with examples.
+pkg.intro <<
+<p>For a program running on a server, <code>println</code> is not enough: you need to know how important each message is and when it was written, and to be able to silence the unimportant ones. The <code>log</code> package has four levels, debug, info, warn and error, and records only the messages at or above the level you set; the default level is info. Each line goes out in plain text or as one JSON object, to standard error, standard output or a file that can rotate.</p>
+<p>A text line looks like <code>2026-10-17 13:09:22 [INFO] shop order 1042 accepted</code>: the local time, the level, the prefix and the message. The examples below turn the time off with <code>ShowTime(false)</code> so their output is stable.</p>
+<p>All settings are global to the program: call <code>SetLevel</code>, <code>SetFormat</code>, <code>SetPrefix</code> and one of <code>ToStderr</code>, <code>ToStdout</code> or <code>ToFile</code> once near the start of <code>main</code>, and every package that imports <code>log</code> writes the same way. For a quick look at a value while you work on the code, <a href="/std/debug/">debug</a> is the better tool; for timing and memory figures, <a href="/std/runtime/">runtime</a>.</p>
+<p>The things people get wrong:</p>
+<ul>
+<li>A file log is buffered. Lines reach the disk when the buffer fills or at <code>CloseFile</code>, so <code>tail -f</code> lags behind and a crash loses the last lines. Call <code>CloseFile</code> on every way out of the program.</li>
+<li>The text format writes the message as it is. A value from a user that holds a line break starts a fake log line; use JSON, which escapes it (see <a href="#guide-untrusted">below</a>).</li>
+<li>The settings are plain globals with no lock. Change them at startup only, not while other threads are logging.</li>
+<li>The time is local time with no zone offset, also in JSON. Run servers with <code>TZ=UTC</code> when logs from several machines are compared.</li>
+</ul>
+
+<h2 id="guide-level">Choose the level from the settings</h2>
+<p>The level should not be fixed in the code. During development you want debug messages; on a busy server you want warnings and errors only. Read the level as text from a settings file or the environment and turn it into a number with <code>ParseLevel</code>. It accepts <code>debug</code>, <code>info</code>, <code>warn</code>, <code>warning</code> and <code>error</code> in any case, and falls back to info for anything else, so a typo never silences the log completely.</p>
+{{example.log-level-config}}
+<p>The <code>config</code> package used here is described on its own page, <a href="/std/config/">config</a>. The prefix is a good place for the program's name, so that lines from several programs in one log stay apart.</p>
+
+<h2 id="guide-json">JSON logs for a log collector</h2>
+<p>Text lines are easy to read; JSON lines are easy for tools such as Loki, Elasticsearch or a cloud log service to search. <code>SetFormat(FormatJSON)</code> turns every line into one JSON object with <code>level</code>, the optional <code>prefix</code>, <code>msg</code>, and one member for each key given to the <code>...KV</code> functions. With the time switched on, a <code>time</code> member in ISO 8601 comes first.</p>
+{{example.log-json-requests}}
+<p>Picking the level from the result, error for a 5xx answer and warn for a 4xx one, lets you alert on errors without reading every request. Quotes inside a value are escaped, so each line stays valid JSON. All values are written as JSON strings, numbers included.</p>
+
+<h2 id="guide-rotation">Log to a file that does not grow forever</h2>
+<p><code>ToFile</code> appends to a file and returns 0, or minus one when the file cannot be opened. <code>SetRotation(max_bytes, max_backups)</code> keeps it in check: when the file has reached <code>max_bytes</code>, the next line first renames it to <code>.1</code>, shifts the older copies up by one and starts a new, empty file. Copies past <code>max_backups</code> are deleted.</p>
+{{example.log-rotation}}
+<p>The limit here is tiny so that the example rotates a few times. A real service uses something like <code>10 * 1024 * 1024</code> bytes and five backups. The size is checked before each line is written, so a file can end up one line longer than the limit. Call <code>CloseFile</code> before the program ends, or the last lines stay in the buffer; <code>Fatal</code> closes the file for you before it exits with status 1.</p>
+
+<h2 id="guide-fields">Key and value fields in text logs</h2>
+<p>For text logs, <code>Field</code>, <code>FieldInt</code> and <code>FieldBool</code> build <code>key=value</code> pieces and <code>KV</code> joins them after a message. <code>Field</code> puts quotes around a value that contains a space or a quote, and escapes the quotes inside, so a line can still be split into fields by a program.</p>
+{{example.log-fields}}
+<p>An empty value is written as <code>key=</code> with nothing after it. Only spaces and quotes trigger the quoting: a tab, a backslash or a line break goes through unchanged. These helpers only build text; the level filter still applies when you pass the result to <code>Info</code> or <code>Warn</code>.</p>
+
+<h2 id="guide-untrusted">Formatted messages and values from users</h2>
+<p><code>Infof</code> and the other <code>...f</code> functions fill each <code>{}</code> with the next string from a vector, which reads better than a chain of <code>+</code>. They do not clean the values. Here a user name with a line break forges an <code>[ERROR]</code> line in the text log, while the JSON line keeps it inside one string as <code>\n</code>.</p>
+{{example.log-untrusted}}
+<p>The end of the example shows a trick for tests and quiet tools: a level above <code>LevelError</code> silences everything, and setting it back turns logging on again.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>You want</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>A plain message</td><td><code>Debug</code>, <code>Info</code>, <code>Warn</code>, <code>Error</code></td></tr>
+<tr><td>A message with values filled in</td><td><code>Infof</code> and the other <code>...f</code> functions, with <code>{}</code> placeholders</td></tr>
+<tr><td>Fields that tools can search</td><td><code>InfoKV</code> and the other <code>...KV</code> functions, best with <code>FormatJSON</code></td></tr>
+<tr><td>The level as a variable</td><td><code>Log(level, msg)</code></td></tr>
+<tr><td>Stop the program after an unrecoverable error</td><td><code>Fatal</code></td></tr>
+<tr><td>Output for a container or systemd</td><td>the default, <code>ToStderr</code></td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.LevelDebug = The debug level: detail for whoever is working on the code.
+doc.LevelInfo = The info level: ordinary events.
+doc.LevelWarn = The warn level: something unusual, but not an error.
+doc.LevelError = The error level.
+doc.FormatText = The readable text format.
+doc.FormatJSON = The JSON format, one object per line, for log collectors.
+doc.LevelName = The upper case name of a level: <code>DEBUG</code>, <code>INFO</code>, <code>WARN</code> or <code>ERROR</code>. Anything below 0 counts as debug and anything above 3 as error.
+doc.ParseLevel = Turns text such as <code>"warn"</code> into a level, ignoring case and surrounding spaces. It knows <code>debug</code>, <code>info</code>, <code>warn</code>, <code>warning</code> and <code>error</code>, and gives info for anything else.
+doc.SetLevel = The lowest level that is recorded. <code>LevelError + 1</code> silences the log.
+doc.GetLevel = The current level.
+doc.SetPrefix = A prefix that comes after the level on every message, such as the program name; in JSON it is the <code>prefix</code> member. An empty string removes it.
+doc.ShowTime = Whether to start each message with the local time, to the second. On by default.
+doc.SetFormat = The text or JSON format.
+doc.GetFormat = The current format.
+doc.SetRotation = For a file log: once the file has reached <code>max_bytes</code>, the next line renames it to <code>.1</code>, moves older copies up and starts a new file, keeping at most <code>max_backups</code> old copies. 0 bytes turns rotation off.
+doc.ToStderr = Write the log to standard error, which is the default.
+doc.ToStdout = Write the log to standard output.
+doc.ToFile = Appends the log to a file and returns 0, or minus one when it cannot be opened. Writes are buffered until <code>CloseFile</code>.
+doc.CloseFile = Flushes and closes the log file and sends the log back to standard error.
+doc.Log = Records a message at the level you choose.
+doc.Debug = A debug message.
+doc.Info = An info message.
+doc.Warn = A warning.
+doc.Error = An error message.
+doc.Debugf = A formatted debug message: every <code>{}</code> is filled with the next string from <code>args</code>.
+doc.Infof = A formatted info message.
+doc.Warnf = A formatted warning.
+doc.Errorf = A formatted error message.
+doc.Fatal = Records an error message, closes the log file and ends the program with code 1, without running <code>defer</code>. Its example is not run here.
+doc.Field = Builds one <code>key=value</code> field, with quotes around a value that has a space or a quote.
+doc.FieldInt = A field with a numeric value.
+doc.FieldBool = A field with a boolean value.
+doc.KV = Joins a message and its fields with spaces, for passing to <code>Info</code> and the others.
+doc.DebugKV = A debug message with key and value fields.
+doc.InfoKV = An info message with fields from two vectors of the same length, keys and values. In JSON each pair becomes a member, always as a string.
+doc.WarnKV = A warning with fields.
+doc.ErrorKV = An error message with fields.
+
+ex.LevelDebug = log-Info
+ex.LevelInfo = log-Info
+ex.LevelWarn = log-Info
+ex.LevelError = log-Info
+ex.LevelName = log-Info
+ex.ParseLevel = log-Info
+ex.SetLevel = log-Info
+ex.GetLevel = log-Info
+ex.SetPrefix = log-Info
+ex.ShowTime = log-Info
+ex.ToStdout = log-Info
+ex.Log = log-Info
+ex.Debug = log-Info
+ex.Warn = log-Info
+ex.Error = log-Info
+ex.Debugf = log-Infof
+ex.Warnf = log-Infof
+ex.Errorf = log-Infof
+ex.FormatText = log-InfoKV
+ex.FormatJSON = log-InfoKV
+ex.SetFormat = log-InfoKV
+ex.GetFormat = log-InfoKV
+ex.Field = log-InfoKV
+ex.FieldInt = log-InfoKV
+ex.FieldBool = log-InfoKV
+ex.KV = log-InfoKV
+ex.DebugKV = log-InfoKV
+ex.WarnKV = log-InfoKV
+ex.ErrorKV = log-InfoKV
+ex.SetRotation = log-ToFile
+ex.ToStderr = log-ToFile
+ex.CloseFile = log-ToFile

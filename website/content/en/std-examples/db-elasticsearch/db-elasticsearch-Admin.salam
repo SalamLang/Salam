@@ -1,0 +1,48 @@
+import time
+import encoding.json
+import db.elasticsearch
+
+func main:
+    c := elasticsearch.Connect("http://localhost:9200")
+
+    elasticsearch.PutPipeline(c, "clean", `{"processors":[{"lowercase":{"field":"tag"}},{"set":{"field":"seen","value":true}}]}`)
+    test := elasticsearch.SimulatePipeline(c, "clean", `{"docs":[{"_source":{"tag":"LOUD"}}]}`)
+    println json.GetPath(test, "docs.0.doc._source.tag")
+    elasticsearch.IndexWith(c, "books", "9", `{"tag":"Poetry"}`, elasticsearch.Options { pipeline = "clean" })
+
+    elasticsearch.PutIndexTemplate(c, "app_logs", `{"index_patterns":["applog-*"],"data_stream":{},"priority":200}`)
+    elasticsearch.CreateDataStream(c, "applog-web")
+    elasticsearch.Create(c, "applog-web", "", `{"@timestamp":"2026-10-16T10:00:00Z","msg":"started"}`)
+    elasticsearch.Rollover(c, "applog-web", "")
+    println elasticsearch.GetDataStream(c, "applog-web")
+
+    policy := `{"policy":{"phases":{"delete":{"min_age":"30d","actions":{"delete":{}}}}}}`
+    if not elasticsearch.IsOpenSearch(c): elasticsearch.PutLifecyclePolicy(c, "month", policy) end
+
+    elasticsearch.PutRepository(c, "backups", `{"type":"fs","settings":{"location":"/mnt/backups"}}`)
+    elasticsearch.CreateSnapshot(c, "backups", "nightly", `{"indices":"books"}`)
+    println elasticsearch.ListSnapshots(c, "backups")
+
+    id := elasticsearch.StartUpdateByQuery(c, "books", elasticsearch.MatchAll(), elasticsearch.Script("ctx._source.year += 1", ""))
+    mut task := elasticsearch.GetTask(c, id)
+    until task.ok and not task.completed:
+        time.Sleep(200)
+        task = elasticsearch.GetTask(c, id)
+    end
+    println json.Get(task.response, "updated")
+
+    elasticsearch.PutStoredScript(c, "by_tag", "mustache", `{"query":{"term":{"tag":"{{tag}}"}}}`)
+    hits := elasticsearch.SearchTemplate(c, "books", "by_tag", `{"tag":"poetry"}`)
+    println hits.total
+
+    mut a := elasticsearch.SubmitAsyncSearch(c, "books", elasticsearch.SearchRequest { query = elasticsearch.MatchAll() }, "1s")
+    until a.running:
+        a = elasticsearch.GetAsyncSearch(c, a.id, "1s")
+    end
+    println a.result.total
+    elasticsearch.DeleteAsyncSearch(c, a.id)
+
+    println elasticsearch.ValidateQuery(c, "books", elasticsearch.Match("title", "shahnameh"))
+    println elasticsearch.Explain(c, "books", "9", elasticsearch.Term("tag", "poetry"))
+    println elasticsearch.PutClusterSettings(c, `{"persistent":{"indices.recovery.max_bytes_per_sec":"100mb"}}`)
+end

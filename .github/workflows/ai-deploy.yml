@@ -1,0 +1,317 @@
+---
+name: 🚀 Salam AI - Test & Deploy
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      target:
+        description: What to deploy after the tests pass
+        type: choice
+        options:
+          - changed
+          - all
+          - ai
+          - mcp
+          - none
+        default: changed
+permissions:
+  contents: read
+concurrency:
+  group: salam-ai-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  changes-ai:
+    uses: ./.github/workflows/_changes.yml # zizmor: ignore[self-repository]
+    with:
+      paths: |
+        ai/*
+        .github/workflows/ai-deploy.yml
+  changes-mcp:
+    uses: ./.github/workflows/_changes.yml # zizmor: ignore[self-repository]
+    with:
+      paths: |
+        tools/mcp/*
+        docs/ai/*
+        .github/workflows/ai-deploy.yml
+  test:
+    needs: [changes-ai, changes-mcp]
+    if: needs.changes-ai.outputs.run == 'true' || needs.changes-mcp.outputs.run == 'true'
+    name: Build like production and run the flow tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: rootpass
+          MARIADB_DATABASE: salam_ai
+          MARIADB_USER: salam_ai
+          MARIADB_PASSWORD: testpass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Read the compiler version the images build with
+        id: version
+        run: |
+          set -eu
+          v=$(sed -n 's/^ARG SALAM_VERSION=//p' ai/backend/Dockerfile | head -n 1)
+          m=$(sed -n 's/^ARG SALAM_VERSION=//p' tools/mcp/Dockerfile | head -n 1)
+          if [ -z "$v" ] || [ "$v" != "$m" ]; then
+            echo "::error::ai/backend/Dockerfile ($v) and tools/mcp/Dockerfile ($m) must build with the same Salam release"
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Install that Salam release
+        id: salam
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+        with:
+          version: ${{ steps.version.outputs.version }}
+
+      - name: Build the AI backend and the MCP server
+        env:
+          SALAM_BIN: ${{ steps.salam.outputs.salam }}
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/build"
+          export SALAM_STD="$GITHUB_WORKSPACE/std"
+          (cd "$RUNNER_TEMP/build" && "$SALAM_BIN" build "$GITHUB_WORKSPACE/ai/backend/main.salam" --output="$RUNNER_TEMP/salam-ai" --log-level=error)
+          SALAM="$SALAM_BIN" sh tools/mcp/build.sh "$RUNNER_TEMP/salam-mcp"
+
+      - name: Salam-only rule detection tests
+        env:
+          SALAM_BIN: ${{ steps.salam.outputs.salam }}
+        run: '"$SALAM_BIN" exec ai/backend/tests/policy_test.salam'
+
+      - name: Generate throwaway secrets for the test servers
+        run: |
+          set -eu
+          resource=$(openssl rand -hex 24)
+          service=$(openssl rand -hex 32)
+          bridge=$(openssl rand -hex 24)
+          echo "::add-mask::$resource"
+          echo "::add-mask::$service"
+          echo "::add-mask::$bridge"
+          {
+            echo "TEST_RESOURCE_SECRET=$resource"
+            echo "TEST_SERVICE_TOKEN=$service"
+            echo "TEST_BRIDGE_SECRET=$bridge"
+          } >> "$GITHUB_ENV"
+
+      - name: Start the engine mock, the API and the MCP server
+        env:
+          SALAM_BIN: ${{ steps.salam.outputs.salam }}
+        run: |
+          set -eu
+          PORT=18099 BRIDGE_SECRET="$TEST_BRIDGE_SECRET" nohup node ai/backend/tests/engine_mock.mjs > "$RUNNER_TEMP/mock.log" 2>&1 &
+          PORT=18098 nohup node ai/backend/tests/gateway_mock.mjs > "$RUNNER_TEMP/gateway.log" 2>&1 &
+          PORT=18097 TELEGRAM_TOKEN=123456:TEST nohup node ai/backend/tests/telegram_mock.mjs > "$RUNNER_TEMP/telegram.log" 2>&1 &
+          PORT=18096 nohup node ai/backend/tests/sandbox_mock.mjs > "$RUNNER_TEMP/sandbox.log" 2>&1 &
+          PORT=18095 nohup node ai/backend/tests/provider_mock.mjs > "$RUNNER_TEMP/provider.log" 2>&1 &
+          AI_PORT=18090 AI_STREAM_PORT=18091 AI_HOST=127.0.0.1 \
+          AI_DB_HOST=127.0.0.1 AI_DB_PORT=3306 AI_DB_USER=salam_ai AI_DB_PASSWORD=testpass AI_DB_NAME=salam_ai \
+          AI_ENGINE_URL=http://127.0.0.1:18099 AI_ENGINE_FALLBACK_MODELS=mock/backup-one,mock/backup-two AI_REDACT_WORDS=Acme,Zeta AI_UPLOAD_DIR="$RUNNER_TEMP/uploads" AI_GUEST_LIMIT=3 AI_ADMIN_IDS=1 AI_ADMIN_EMAILS=reserved@test.ir \
+          AI_RESOURCE_SECRET="$TEST_RESOURCE_SECRET" AI_OAUTH_ISSUER=http://127.0.0.1:18090 \
+          AI_APP_URL=http://localhost:3000 AI_ALLOWED_ORIGINS=http://localhost:3000 \
+          AI_OAUTH_RESOURCES=http://127.0.0.1:18092/mcp AI_API_HOURLY=12 AI_BRIDGE_SECRET="$TEST_BRIDGE_SECRET" AI_BRIDGE_HOLD_SECONDS=2 AI_SALAM_BIN="$SALAM_BIN" \
+          AI_API_START_SECONDS=20 AI_API_ANSWER_SECONDS=120 AI_CHAT_MEMORY_IDLE_SECONDS=1 AI_CHAT_MEMORY_PAUSE_SECONDS=1 \
+          AI_ZARINPAL_MERCHANT=test-zarinpal AI_ZIBAL_MERCHANT=test-zibal AI_ZARINPAL_BASE=http://127.0.0.1:18098 AI_ZIBAL_BASE=http://127.0.0.1:18098 AI_BILLING_CALLBACK=http://127.0.0.1:18090 AI_BILLING_SWEEP_SECONDS=5 \
+          AI_TELEGRAM_TOKEN=123456:TEST AI_TELEGRAM_API=http://127.0.0.1:18097 AI_TELEGRAM_GUEST_LIMIT=2 \
+          AI_SANDBOX_URL=http://127.0.0.1:18096 AI_SANDBOX_SECRET=sandboxsecret123456 \
+          AI_GITHUB_API=http://127.0.0.1:18095 AI_GITHUB_WEB=http://127.0.0.1:18095 AI_FIGMA_API=http://127.0.0.1:18095 AI_FIGMA_WEB=http://127.0.0.1:18095 \
+          AI_GITHUB_CLIENT_ID=gh-client AI_GITHUB_CLIENT_SECRET=gh-secret AI_FIGMA_CLIENT_ID=fg-client AI_FIGMA_CLIENT_SECRET=fg-secret \
+          nohup "$RUNNER_TEMP/salam-ai" > "$RUNNER_TEMP/ai.log" 2>&1 &
+          SALAM_MCP_ROOT="$GITHUB_WORKSPACE" SALAM_MCP_BIN="$SALAM_BIN" SALAM_STD="$GITHUB_WORKSPACE/std" \
+          SALAM_MCP_HOST=127.0.0.1 SALAM_MCP_PORT=18092 SALAM_MCP_AUTH_URL=http://127.0.0.1:18090 \
+          SALAM_MCP_AUTH_SECRET="$TEST_RESOURCE_SECRET" SALAM_MCP_SERVICE_TOKEN="$TEST_SERVICE_TOKEN" \
+          SALAM_MCP_ISSUER=http://127.0.0.1:18090 SALAM_MCP_RESOURCES=http://127.0.0.1:18092/mcp \
+          nohup "$RUNNER_TEMP/salam-mcp" --http > "$RUNNER_TEMP/mcp.log" 2>&1 &
+          for url in http://127.0.0.1:18090/health http://127.0.0.1:18092/health; do
+            ok=0
+            for _ in $(seq 60); do
+              if curl -fsS "$url" > /dev/null 2>&1; then ok=1; break; fi
+              sleep 1
+            done
+            [ "$ok" -eq 1 ] || { echo "::error::$url did not come up"; exit 1; }
+          done
+
+      - name: OAuth sign-in flow
+        run: node ai/backend/tests/oauth_flow.mjs
+
+      - name: OpenAI-compatible API flow
+        env:
+          HOURLY: '12'
+          START_SECONDS: '20'
+        run: UPLOAD_DIR="$RUNNER_TEMP/uploads" node ai/backend/tests/api_flow.mjs
+
+      - name: Desktop bridge flow
+        run: BRIDGE_SECRET="$TEST_BRIDGE_SECRET" node ai/backend/tests/bridge_flow.mjs
+
+      - name: Plans and payments flow
+        env:
+          HOURLY: '12'
+          SWEEP_SECONDS: '5'
+        run: node ai/backend/tests/billing_flow.mjs
+
+      - name: Telegram bot flow
+        run: GUEST_LIMIT=2 node ai/backend/tests/telegram_flow.mjs
+
+      - name: Admin policy, cost split and Telegram sessions flow
+        run: node ai/backend/tests/policy_flow.mjs
+
+      - name: Sign in with GitHub and Figma flow
+        run: node ai/backend/tests/login_flow.mjs
+
+      - name: Cloud sandbox and integrations flow
+        run: node ai/backend/tests/cloud_flow.mjs
+
+      - name: MCP protocol conformance
+        env:
+          SALAM_MCP_BIN: ${{ steps.salam.outputs.salam }}
+        run: node tools/mcp/tests/protocol_test.mjs "$RUNNER_TEMP/salam-mcp" "$GITHUB_WORKSPACE"
+
+      - name: Frontend typecheck and build
+        working-directory: ai/frontend
+        run: |
+          set -eu
+          bun install --frozen-lockfile
+          bun run typecheck
+          bun run build
+
+      - name: Show service logs
+        if: failure()
+        run: |
+          for f in ai mcp mock; do
+            echo "::group::$f.log"
+            cat "$RUNNER_TEMP/$f.log" 2>/dev/null || true
+            echo "::endgroup::"
+          done
+
+  deploy-ai:
+    needs: [changes-ai, test]
+    if: >-
+      github.ref == 'refs/heads/main' && github.event_name != 'pull_request' &&
+      ((github.event_name == 'push' && needs.changes-ai.outputs.run == 'true') ||
+      (github.event_name == 'workflow_dispatch' && (inputs.target == 'all' || inputs.target == 'ai' || (inputs.target == 'changed' && needs.changes-ai.outputs.run == 'true'))))
+    name: Deploy ai.salamlang.ir and ai-api.salamlang.ir
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: https://ai.salamlang.ir
+    concurrency:
+      group: salam-production-deploy
+      cancel-in-progress: false
+    steps:
+      - name: Deploy over SSH
+        env:
+          HOST: ${{ secrets.SALAM_DEPLOY_HOST }}
+          KEY: ${{ secrets.SALAM_DEPLOY_KEY }}
+          KNOWN: ${{ secrets.SALAM_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -eu
+          if [ -z "$HOST" ] || [ -z "$KEY" ] || [ -z "$KNOWN" ]; then
+            echo "::error::SALAM_DEPLOY_HOST, SALAM_DEPLOY_KEY and SALAM_DEPLOY_KNOWN_HOSTS must be set"
+            exit 1
+          fi
+          dir="$RUNNER_TEMP/ssh"
+          mkdir -p "$dir" && chmod 700 "$dir"
+          printf '%s\n' "$KEY" > "$dir/id" && chmod 600 "$dir/id"
+          printf '%s\n' "$KNOWN" > "$dir/known_hosts"
+          ssh -i "$dir/id" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$dir/known_hosts" -o ConnectTimeout=20 -o ServerAliveInterval=15 \
+            "root@$HOST" ai
+
+      - name: Remove SSH credentials
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/ssh"
+
+      - name: Smoke test the live sites
+        run: |
+          set -eu
+          check() {
+            for _ in $(seq 30); do
+              if curl -fsS --max-time 10 "$1" | grep -q "$2"; then echo "ok $1"; return 0; fi
+              sleep 4
+            done
+            echo "::error::$1 did not answer with '$2'"
+            return 1
+          }
+          check https://ai-api.salamlang.ir/health '"ok": true'
+          check https://ai-api.salamlang.ir/models '"id": "salam"'
+          check https://ai-api.salamlang.ir/.well-known/oauth-authorization-server '"issuer": "https://ai-api.salamlang.ir"'
+          check https://ai.salamlang.ir/ '<div id="root">'
+
+  deploy-mcp:
+    needs: [changes-mcp, test]
+    if: >-
+      github.ref == 'refs/heads/main' && github.event_name != 'pull_request' &&
+      ((github.event_name == 'push' && needs.changes-mcp.outputs.run == 'true') ||
+      (github.event_name == 'workflow_dispatch' && (inputs.target == 'all' || inputs.target == 'mcp' || (inputs.target == 'changed' && needs.changes-mcp.outputs.run == 'true'))))
+    name: Deploy mcp.salamlang.ir
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: https://mcp.salamlang.ir
+    concurrency:
+      group: salam-production-deploy
+      cancel-in-progress: false
+    steps:
+      - name: Deploy over SSH
+        env:
+          HOST: ${{ secrets.SALAM_DEPLOY_HOST }}
+          KEY: ${{ secrets.SALAM_DEPLOY_KEY }}
+          KNOWN: ${{ secrets.SALAM_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -eu
+          if [ -z "$HOST" ] || [ -z "$KEY" ] || [ -z "$KNOWN" ]; then
+            echo "::error::SALAM_DEPLOY_HOST, SALAM_DEPLOY_KEY and SALAM_DEPLOY_KNOWN_HOSTS must be set"
+            exit 1
+          fi
+          dir="$RUNNER_TEMP/ssh"
+          mkdir -p "$dir" && chmod 700 "$dir"
+          printf '%s\n' "$KEY" > "$dir/id" && chmod 600 "$dir/id"
+          printf '%s\n' "$KNOWN" > "$dir/known_hosts"
+          ssh -i "$dir/id" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$dir/known_hosts" -o ConnectTimeout=20 -o ServerAliveInterval=15 \
+            "root@$HOST" mcp
+
+      - name: Remove SSH credentials
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/ssh"
+
+      - name: Smoke test the live server
+        run: |
+          set -eu
+          for _ in $(seq 30); do
+            if curl -fsS --max-time 10 https://mcp.salamlang.ir/health | grep -q '"ok":true'; then break; fi
+            sleep 4
+          done
+          curl -fsS --max-time 10 https://mcp.salamlang.ir/health | grep -q '"ok":true'
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' https://mcp.salamlang.ir/mcp)
+          [ "$code" = "401" ] || { echo "::error::expected 401 from /mcp without a token, got $code"; exit 1; }
+          echo "ok mcp.salamlang.ir"

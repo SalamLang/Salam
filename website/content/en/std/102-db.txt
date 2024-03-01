@@ -1,0 +1,177 @@
+pkg.en = db
+pkg.name = db
+pkg.group = Database
+pkg.summary = One interface shared by the database engines, schema migrations and a connection pool.
+pkg.title = The db package in Salam | SQL and migrations
+pkg.description = The db package in Salam: one interface shared by SQLite, MySQL and PostgreSQL, queries and transactions, versioned schema migrations and a connection pool, with examples.
+pkg.import = db
+pkg.flat = true
+pkg.intro <<
+<p>Every database engine has its own package: <a href="/std/db/sqlite/">db/sqlite</a>, <a href="/std/db/mysql/">db/mysql</a>, <a href="/std/db/postgres/">db/postgres</a>, for key and value <a href="/std/db/redis/">db/redis</a>, and for search <a href="/std/db/typesense/">db/typesense</a>, <a href="/std/db/meilisearch/">db/meilisearch</a>, <a href="/std/db/elasticsearch/">db/elasticsearch</a> and, for search and analytics, <a href="/std/db/opensearch/">db/opensearch</a>; the last two also answer SQL queries through <code>Connection</code>. This package gives the <code>Connection</code> interface that the three SQL engines implement; write your code against it and changing engine is one line. To check the SQL itself before it ever reaches a server, <a href="/std/db/sql/">db/sql</a> parses it for each engine's dialect and resolves it against your schema.</p>
+<p>Migrations move the database schema along with the code: every change has a number and <code>MigrateUp</code> applies the ones numbered above the current schema version. Never paste a value a user typed straight into SQL; send it through <code>QuoteLiteral</code> or as a prepared parameter.</p>
+<div class="note"><p>Things that catch people out:</p>
+<ul>
+<li><code>QuoteLiteral</code> only doubles single quotes, which is the SQL standard that SQLite and PostgreSQL follow. MySQL also treats a backslash as an escape by default, so on MySQL quote with the connection's own <code>c.Quote</code>, which escapes backslashes as well.</li>
+<li><code>MigrateUp</code> compares version numbers, not a list of applied names. A migration numbered below the highest applied one, for example one merged from an older branch, is skipped without a word. Always give a new migration the next free number.</li>
+<li>MySQL commits every <code>CREATE</code>, <code>ALTER</code> and <code>DROP</code> on its own, so on MySQL a migration that fails halfway can leave the first statements applied. SQLite and PostgreSQL roll the whole migration back.</li>
+<li>Migration SQL is split into statements at each <code>;</code> outside single quotes. A PostgreSQL function body in <code>$$ ... $$</code> or a trigger with several statements is cut apart; run those with <code>c.Exec</code> instead.</li>
+</ul></div>
+<h2 id="guide-store">Writing code against Connection</h2>
+<p>Give your data functions a <code>dyn db.Connection</code> parameter instead of a SQLite or PostgreSQL database. They then work with every SQL engine, and tests can pass an in-memory SQLite database while production passes PostgreSQL. <code>db.Run</code> runs one statement and returns true on success; <code>c.Error()</code> says what went wrong; <code>c.LastInsertId()</code> gives the id of the row just inserted.</p>
+{{example.db-guide-store}}
+<p>Every value that came from a user goes through <code>QuoteLiteral</code>, which wraps it in quotes and doubles any quote inside. That is why the apostrophe in <code>Reza's</code> is stored correctly, and why the author name <code>x' OR '1'='1</code> is stored as an odd name instead of changing the meaning of the query. Never build SQL by gluing raw input into it.</p>
+<p>A query returns <code>dyn db.Rows</code>. <code>Next</code> moves to the next row and returns false at the end, so <code>until rows.Next():</code> visits every row; read columns by position with <code>Int</code>, <code>Text</code>, <code>Float</code> and <code>IsNull</code>, and always <code>Close</code> the rows. For a single number or string, <code>QueryInt</code> and <code>QueryText</code> do all of that in one call.</p>
+
+<h2 id="guide-transfer">Transactions: all or nothing</h2>
+<p>When several statements must succeed or fail together, run them inside a transaction. <code>c.Begin()</code> returns a <code>dyn db.Tx</code> with its own <code>Exec</code> and <code>Query</code>; <code>Commit</code> makes the changes permanent and <code>Rollback</code> throws them all away. The transfer below takes money from one account, gives it to the other, then checks the result and rolls back if the first account went below zero.</p>
+{{example.db-guide-transfer}}
+<p>Inside the transaction the queries already see the uncommitted changes, which is what makes the check possible. Other connections do not see them until <code>Commit</code>. When you have a fixed list of statements and no checks in between, <code>db.InTx</code> runs them in one transaction and returns false, with nothing applied, if any of them fails.</p>
+
+<h2 id="guide-startup">Migrations at start up</h2>
+<p>Call <code>MigrateUp</code> every time the program starts. It records each applied version in a table of its own, so the first run creates the schema, later runs do nothing, and a release that adds migration 3 applies only that one. Existing data stays where it is.</p>
+{{example.db-guide-startup}}
+<p>Never change a migration that has already run somewhere: add a new one instead. Each migration runs in its own transaction, so on SQLite and PostgreSQL a failing one leaves the schema at the previous version. <code>Rollback</code> undoes the last migration with its <code>down</code> SQL and <code>MigrateTo</code> moves to any version, which is useful in development but rarely in production.</p>
+
+<h2 id="guide-engines">Choosing the engine at run time</h2>
+<p>Because the rest of the program only sees <code>dyn db.Connection</code>, the engine can be picked from a setting. Here the <code>APP_DB</code> environment variable chooses PostgreSQL, MySQL or a SQLite file, and everything after <code>connect</code> is the same for all three.</p>
+{{example.db-guide-engines}}
+<p>Without <code>APP_DB</code> it uses SQLite and needs nothing else; each run adds a visit, so the count grows by one each time. To try PostgreSQL, start a server with Docker and run the program with <code>APP_DB=postgres</code>:</p>
+<pre class="code" dir="ltr"><code>docker run -d -p 5432:5432 -e POSTGRES_USER=app -e POSTGRES_PASSWORD=secret -e POSTGRES_DB=app postgres:17
+APP_DB=postgres salam run db-guide-engines.salam</code></pre>
+<p>Stick to SQL that all your engines understand, or keep the engine specific parts in one function. Placeholders and quoting differ between engines, which is one more reason to let <code>QuoteLiteral</code> or <code>c.Quote</code> do the quoting.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>One statement, did it work?</td><td><code>db.Run</code></td></tr>
+<tr><td>A single value</td><td><code>QueryInt</code>, <code>QueryInt64</code>, <code>QueryFloat</code>, <code>QueryText</code></td></tr>
+<tr><td>Many rows</td><td><code>c.Query</code>, then <code>Next</code> and <code>Close</code></td></tr>
+<tr><td>Several statements that belong together</td><td><code>c.Begin</code>, <code>Commit</code>, <code>Rollback</code>, or <code>db.InTx</code></td></tr>
+<tr><td>Schema changes</td><td><code>NewMigrator</code>, <code>AddMigration</code>, <code>MigrateUp</code></td></tr>
+<tr><td>Several connections for threads</td><td><code>NewPool</code>, <code>Acquire</code>, <code>Release</code></td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.MIGRATION_TABLE = The default name of the table the applied versions are recorded in.
+doc.Migration = One migration: one numbered change to the database schema.
+doc.Migration.version = The version number; migrations are applied in that order.
+doc.Migration.name = The name.
+doc.Migration.up = The SQL that applies it; separate several statements with <code>;</code>.
+doc.Migration.down = The SQL that undoes it.
+doc.Migrator = A set of migrations.
+doc.Migrator.items = The migrations.
+doc.Migrator.table = The name of the version table.
+doc.NewMigrator = A migrator with the default table.
+doc.NewMigratorIn = A migrator with a version table of another name.
+doc.FreeMigrator = Frees the memory.
+doc.AddMigration = Adds a migration with a number, a name and the up and down SQL; the order you add them in does not matter.
+doc.MigrationCount = The number of migrations.
+doc.SplitStatements = Splits SQL text into statements at each <code>;</code>. A <code>;</code> inside a single quoted string is not a separator, but one inside a double quoted name, a comment or a <code>$$</code> block is.
+doc.EnsureTable = Makes the version table when it is not there.
+doc.SchemaVersion = The highest applied version; zero when there is none.
+doc.IsApplied = This version has been applied.
+doc.PendingCount = The number of migrations not applied yet.
+doc.MigrateUp = Applies, in order, every migration whose version is above the current schema version, each in its own transaction, and returns how many ran. It stops at the first failure.
+doc.Rollback = Undoes the last migration.
+doc.MigrateTo = Goes up or down until the version reaches the given number and returns how many steps; zero means undo them all.
+doc.SQLITE = The name of the SQLite engine.
+doc.MYSQL = The name of the MySQL engine.
+doc.POSTGRES = The name of the PostgreSQL engine.
+doc.ELASTICSEARCH = The name of the Elasticsearch engine.
+doc.OPENSEARCH = The name of the OpenSearch engine.
+doc.TYPE_NULL = Column type: null.
+doc.TYPE_INT = Column type: integer.
+doc.TYPE_FLOAT = Column type: float.
+doc.TYPE_TEXT = Column type: text.
+doc.TYPE_BLOB = Column type: binary.
+doc.Rows = The interface of the rows of a query; its methods are <code>next</code>, <code>text</code>, <code>int</code>, <code>close</code> and the like.
+doc.Tx = The transaction interface; its methods are <code>exec</code>, <code>query</code>, <code>commit</code> and <code>rollback</code>.
+doc.Connection = The interface shared by every engine. Code written against it runs unchanged on SQLite, MySQL and PostgreSQL; get one from the <code>Connect</code> of whichever engine.
+doc.QueryInt = The first column of the first row as an integer; for <code>COUNT</code> and the like.
+doc.QueryInt64 = The same, 64 bit.
+doc.QueryFloat = The same, as a float.
+doc.QueryText = The same, as text.
+doc.CountRows = The number of rows in the result of a query.
+doc.Run = Runs one statement; true when it succeeded.
+doc.RunAll = Runs the statements in order and returns how many succeeded.
+doc.InTx = Runs every statement in one transaction; when one fails, none of them is applied.
+doc.QuoteLiteral = Returns the string as an SQL value: wrapped in single quotes, with each <code>'</code> inside doubled. Backslashes are left alone, so on MySQL use the connection's <code>Quote</code>.
+doc.NO_LEASE = The number <code>Acquire</code> returns when no connection is free.
+doc.Pool = A pool of connections, for programs that need several at once.
+doc.Pool.conns = The connections.
+doc.Pool.taken = Which connections are taken.
+doc.Pool.limit = The greatest number of connections.
+doc.NewPool = An empty pool with a greatest number of connections.
+doc.Add = Adds a connection to the pool; false when the pool is full.
+doc.Acquire = Takes a free connection and returns the lease number.
+doc.Leased = This lease number is valid.
+doc.Conn = The connection of a lease.
+doc.Release = Returns the connection to the pool.
+doc.Size = The number of connections.
+doc.Idle = The number of free connections.
+doc.InUse = The number of connections taken.
+doc.DropDead = Closes and removes the free connections that no longer answer.
+doc.CloseAll = Closes every connection.
+doc.Free = Frees the memory of the pool.
+
+ex.Rollback = db-Connection
+ex.SQLITE = db-Connection
+ex.MYSQL = db-Connection
+ex.POSTGRES = db-Connection
+ex.ELASTICSEARCH = db-Connection
+ex.OPENSEARCH = db-Connection
+ex.TYPE_NULL = db-Connection
+ex.TYPE_INT = db-Connection
+ex.TYPE_FLOAT = db-Connection
+ex.TYPE_TEXT = db-Connection
+ex.TYPE_BLOB = db-Connection
+ex.Rows = db-Connection
+ex.Tx = db-Connection
+ex.Connection = db-Connection
+ex.QueryInt = db-Connection
+ex.QueryInt64 = db-Connection
+ex.QueryFloat = db-Connection
+ex.QueryText = db-Connection
+ex.CountRows = db-Connection
+ex.Run = db-Connection
+ex.RunAll = db-Connection
+ex.InTx = db-Connection
+ex.QuoteLiteral = db-Connection
+ex.Add = db-Connection
+ex.MIGRATION_TABLE = db-Migrate
+ex.Migration = db-Migrate
+ex.Migration.version = db-Migrate
+ex.Migration.name = db-Migrate
+ex.Migration.up = db-Migrate
+ex.Migration.down = db-Migrate
+ex.Migrator = db-Migrate
+ex.Migrator.items = db-Migrate
+ex.Migrator.table = db-Migrate
+ex.NewMigrator = db-Migrate
+ex.NewMigratorIn = db-Migrate
+ex.FreeMigrator = db-Migrate
+ex.AddMigration = db-Migrate
+ex.MigrationCount = db-Migrate
+ex.SplitStatements = db-Migrate
+ex.EnsureTable = db-Migrate
+ex.SchemaVersion = db-Migrate
+ex.IsApplied = db-Migrate
+ex.PendingCount = db-Migrate
+ex.MigrateUp = db-Migrate
+ex.MigrateTo = db-Migrate
+ex.Free = db-Migrate
+ex.NO_LEASE = db-Pool
+ex.Pool = db-Pool
+ex.Pool.conns = db-Pool
+ex.Pool.taken = db-Pool
+ex.Pool.limit = db-Pool
+ex.NewPool = db-Pool
+ex.Acquire = db-Pool
+ex.Leased = db-Pool
+ex.Conn = db-Pool
+ex.Release = db-Pool
+ex.Size = db-Pool
+ex.Idle = db-Pool
+ex.InUse = db-Pool
+ex.DropDead = db-Pool
+ex.CloseAll = db-Pool

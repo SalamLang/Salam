@@ -1,0 +1,53 @@
+import net.socketio
+import net.websocket
+import encoding.json
+
+mut server := websocket.Server {}
+mut seen := Vector {} as Vector<str>
+
+func fake_server():
+    mut conn := websocket.Accept(server)
+    _ := websocket.SendText(conn, `0{"sid":"s1","upgrades":[],"pingInterval":20000,"pingTimeout":5000}`)
+    if websocket.ReceiveText(conn) != "40": ret end
+    _ := websocket.SendText(conn, `40{"sid":"a1"}`)
+    join := websocket.ReceiveText(conn)
+    seen.push(join)
+    _ := websocket.SendText(conn, `430[{"ok":true,"members":3}]`)
+    _ := websocket.SendText(conn, `4217["confirm","order 1042"]`)
+    seen.push(websocket.ReceiveText(conn))
+    _ := websocket.SendText(conn, "41")
+    _ := websocket.Poll(conn, 1000)
+    websocket.Close(conn)
+end
+
+func main:
+    server = websocket.Listen(0)
+    t := spawn(fake_server)
+    mut o := socketio.NewOptions()
+    o.transports = socketio.TRANSPORT_WEBSOCKET
+    o.reconnection = false
+    c := socketio.DialWith("http://127.0.0.1:" + websocket.Port(server), o)
+
+    mut a := socketio.NewArgs()
+    socketio.AddStr(a, "room-1")
+    mut answer := socketio.EmitAck(c, "join", a, 2000)
+    socketio.ArgsFree(a)
+    println "join answered:", answer.ok, "members:", json.GetInt(socketio.AckArg(answer, 0), "members")
+    socketio.AckFree(answer)
+
+    mut going := true
+    until going:
+        e := socketio.Next(c, 3000)
+        if e.kind == socketio.EV_EVENT and e.name == "confirm":
+            println "server asks:", socketio.ArgStr(e, 0), "ack id", e.ack_id
+            _ := socketio.ReplyStr(e, "yes")
+        else e.kind == socketio.EV_DISCONNECT or e.kind == socketio.EV_TIMEOUT:
+            going = false
+        end
+    end
+    socketio.Close(c)
+    join(t)
+    websocket.CloseServer(server)
+    println "the server saw:"
+    each line in seen: println " ", line end
+end

@@ -1,0 +1,59 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.meilisearch
+
+include fake "../_fake.salam"
+
+const PORT := 19824
+
+struct Movie:
+    pub id: int = 0
+    pub title: str = ""
+    pub genre: str = ""
+    pub year: int = 0
+end
+
+func main:
+    fake.On("POST", "/indexes/movies/search", 200, `{"hits":[{"id":3,"title":"Alien","genre":"Horror","year":1979},{"id":9,"title":"Aliens","genre":"Action","year":1986}],"query":"alien","processingTimeMs":2,"limit":20,"offset":0,"estimatedTotalHits":2}`)
+    fake.On("POST", "/indexes/movies/search", 200, `{"hits":[{"id":2,"title":"Moana","genre":"Family","year":2016,"_formatted":{"title":"<em>Moana</em>"}}],"query":"moana","processingTimeMs":1,"limit":5,"offset":0,"estimatedTotalHits":1,"facetDistribution":{"genre":{"Family":1}}}`)
+    fake.On("POST", "/indexes/movies/search", 200, `{"hits":[{"id":4,"title":"Up","genre":"Family","year":2009}],"query":"","processingTimeMs":1,"hitsPerPage":1,"page":2,"totalHits":3,"totalPages":3}`)
+    if not fake.Start(PORT):
+        println "the example server did not start"
+        ret 1
+    end
+    c := meilisearch.New("http://127.0.0.1:" + PORT, "searchKey")
+    mut err := meilisearch.Error {}
+
+    res := meilisearch.Query(c, "movies", "alien", err)
+    println "\"" + res.query + "\": " + res.estimated_total_hits + " hits in " + res.processing_time_ms + " ms"
+    mut movies := Vector {} as Vector<Movie>
+    meilisearch.HitsAs(res, movies, err)
+    each movie in movies:
+        println "  " + movie.title + " (" + movie.year + ")"
+    end
+
+    mut req := meilisearch.SearchRequest { query = "moana", limit = 5, filter = "year > 2000 AND genre = Family" }
+    req.sort.push("year:desc")
+    req.facets.push("genre")
+    req.attributes_to_highlight.push("title")
+    req.matching_strategy = meilisearch.MATCH_ALL
+    filtered := meilisearch.Search(c, "movies", req, err)
+    println "filtered: " + filtered.hits.get(0)
+    println "facets: " + filtered.facet_distribution
+
+    paged := meilisearch.Search(c, "movies", meilisearch.SearchRequest { page = 2, hits_per_page = 1 }, err)
+    println "page " + paged.page + " of " + paged.total_pages + " (" + paged.total_hits + " hits)"
+    ret 0
+end

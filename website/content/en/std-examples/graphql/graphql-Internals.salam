@@ -1,0 +1,71 @@
+import graphql
+import encoding.value
+import encoding.json
+
+func names(slot: i64):
+    graphql.ResolveStr(slot, json.EncodeDefault(graphql.Args(slot)))
+end
+
+func main:
+    mut ok := false
+    stream := graphql.Tokenize(`query Q($v: [Int!]! = [1]) @x { ...F a: b(c: 2.5, d: """text""") | & ? }`, ok)
+    mut kinds := ""
+    each t in stream.toks:
+        if kinds.len() > 0:
+            kinds += " "
+        end
+        kinds += graphql.TokenKindName(t.kind)
+    end
+    println ok, kinds
+    println graphql.TOK_EOF, graphql.TOK_NAME, graphql.TOK_INT, graphql.TOK_FLOAT, graphql.TOK_BLOCK_STRING, graphql.TOK_BANG, graphql.TOK_DOLLAR
+    println graphql.TOK_AMP, graphql.TOK_LPAREN, graphql.TOK_RPAREN, graphql.TOK_SPREAD, graphql.TOK_COLON, graphql.TOK_EQUALS, graphql.TOK_AT
+    println graphql.TOK_LBRACKET, graphql.TOK_RBRACKET, graphql.TOK_RBRACE, graphql.TOK_PIPE, graphql.TOK_ERROR
+
+    mut err := graphql.NewError(graphql.ERR_SYNTAX, "")
+    mut s := graphql.ParseSchema(`
+type Query { names(a: Boolean, b: Float, o: In, v: Int): String! book: Book }
+input In { x: Int! }
+type Book { id: ID! title: String! }`, err)
+    _ := graphql.SetResolver(s, "Query", "names", names)
+
+    mut doc := graphql.Parse(`query ($v: Int, $l: [Int!]) { names(a: true, b: 1.5, o: { x: 3 }, v: $v) book { id ...F ... on Book { title } } }
+fragment F on Book { title }`, err)
+    op := doc.ops.get(0)
+    println op.optype == graphql.OP_QUERY
+    sel := graphql.SelectionAt(doc, op.selections.get(0))
+    mut vars := value.NewValueObject()
+    value.ObjectSet(vars, "v", value.ValueInt(42))
+    each a in sel.args:
+        v := graphql.ValueAt(doc, a.value)
+        lit := graphql.LiteralToValue(s, doc, a.value, vars)
+        println a.name, v.kind == graphql.VAL_BOOL, v.kind == graphql.VAL_FLOAT, v.kind == graphql.VAL_OBJECT, v.kind == graphql.VAL_VARIABLE, lit.ok, json.EncodeDefault(lit.value)
+    end
+
+    lref := op.varDefs.get(1).typeRef
+    elem := graphql.TypeRefElement(doc, lref)
+    println graphql.PrintTypeRef(doc, lref), graphql.PrintTypeRef(doc, elem), graphql.TypeRefAt(doc, elem).kind == graphql.TREF_NAMED
+    mut list := value.NewValueArray()
+    value.ArrayPush(list, value.ValueInt(1))
+    value.ArrayPush(list, value.ValueString("two"))
+    c := graphql.CoerceInput(s, doc, lref, list)
+    println c.ok, c.message.len() > 0
+
+    bk := graphql.SelectionAt(doc, op.selections.get(1))
+    println graphql.SelectionAt(doc, bk.selections.get(1)).kind == graphql.SEL_FRAGMENT_SPREAD, graphql.SelectionAt(doc, bk.selections.get(2)).kind == graphql.SEL_INLINE_FRAGMENT
+    mut groups := graphql.CollectFields(s, doc, bk.selections, "Book", vars)
+    each g in groups.items:
+        println g.key, g.sels.len(), graphql.MergeSelections(doc, g).len()
+    end
+    graphql.FreeFieldGroups(groups)
+
+    mut r := graphql.Execute(s, doc, "", vars, value.ValueNull(), value.ValueNull())
+    mut ext := value.NewValueObject()
+    value.ObjectSet(ext, "ms", value.ValueInt(3))
+    graphql.SetExtensions(r, ext)
+    println value.IsObject(graphql.ResultToValue(r))
+    println graphql.ResultToJSONIndent(r)
+    graphql.FreeResult(r)
+    graphql.FreeDocument(doc)
+    graphql.FreeSchema(s)
+    graphql.FreeError(err)
+end

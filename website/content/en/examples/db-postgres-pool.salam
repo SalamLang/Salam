@@ -1,0 +1,49 @@
+import db
+import db.postgres
+import mem
+import thread
+
+const DSN := "host=127.0.0.1 user=postgres password=secret dbname=bookshop"
+
+struct Job:
+    pub author: str = ""
+    pub sold: int = 0
+end
+
+func countSold(j: Job*):
+    d := postgres.Open(DSN)
+    defer postgres.Close(d)
+    j[0].sold = postgres.QueryInt(d, "SELECT coalesce(sum(o.qty), 0) FROM orders o JOIN books b ON b.id = o.book_id WHERE b.author = " + postgres.Quote(d, j[0].author))
+end
+
+func main:
+    mut pool := db.NewPool(3)
+    defer db.Free(pool)
+    repeat 3:
+        _ := db.Add(pool, postgres.Conn(postgres.Open(DSN)))
+    end
+    println "pool:", db.Size(pool), "connections,", db.Idle(pool), "idle"
+
+    a := db.Acquire(pool)
+    b := db.Acquire(pool)
+    println "two requests in flight:", db.InUse(pool), "in use"
+    println "books:", db.QueryInt(db.Conn(pool, a), "SELECT count(*) FROM books"), "orders:", db.QueryInt(db.Conn(pool, b), "SELECT count(*) FROM orders")
+    db.Release(pool, a)
+    db.Release(pool, b)
+
+    mut jobs := Vector {} as Vector<Job*>
+    defer jobs.free()
+    mut group := Vector {} as Vector<thread.Thread>
+    defer group.free()
+    each name in ["Frank Herbert", "William Gibson", "Antoine de Saint-Exupéry", "Jane Austen"]:
+        j := mem.Allocate(sizeof(Job)) as Job*
+        j[0] = Job { author = name }
+        jobs.push(j)
+        group = thread.Collect(group, spawn(countSold, j))
+    end
+    thread.JoinAll(group)
+    each j in jobs:
+        println j[0].author, "sold", j[0].sold
+        mem.Free(j as void*)
+    end
+end

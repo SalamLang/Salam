@@ -1,0 +1,66 @@
+import gguf
+import compress
+import encoding.binary
+import archive
+import os
+
+func string(b &: compress.ByteBuf, text: str):
+    binary.WriteU64LE(b, text.len() as i64)
+    compress.BufPushBytes(b, text as void*, text.len())
+end
+
+func build(b &: compress.ByteBuf):
+    compress.BufPushBytes(b, "GGUF" as void*, 4)
+    binary.WriteU32LE(b, 3)
+    binary.WriteU64LE(b, 1)
+    binary.WriteU64LE(b, 3)
+    string(b, "general.architecture")
+    binary.WriteU32LE(b, gguf.META_STRING)
+    string(b, "llama")
+    string(b, "llama.context_length")
+    binary.WriteU32LE(b, 4)
+    binary.WriteU32LE(b, 2048)
+    string(b, "tokenizer.tokens")
+    binary.WriteU32LE(b, gguf.META_ARRAY)
+    binary.WriteU32LE(b, gguf.META_STRING)
+    binary.WriteU64LE(b, 2)
+    string(b, "<s>")
+    string(b, "hello")
+    string(b, "w")
+    binary.WriteU32LE(b, 2)
+    binary.WriteU64LE(b, 3)
+    binary.WriteU64LE(b, 2)
+    binary.WriteU32LE(b, gguf.GGML_F32)
+    binary.WriteU64LE(b, 0)
+    until compress.BufLen(b) % 32 != 0:
+        binary.WriteU8(b, 0)
+    end
+    repeat 6 in i:
+        binary.WriteF32(b, (i as f64) * 0.5, false)
+    end
+end
+
+func main:
+    mut buffer := compress.NewByteBuf()
+    build(buffer)
+    path := os.TempDir() + "/salam_tiny_en.gguf"
+    _ := archive.WriteBinaryFileBuf(path, buffer)
+    mut good := false
+    mut in_memory := gguf.ParseGguf(buffer, good)
+    println good, in_memory.error == ""
+    in_memory.free()
+
+    mut g := gguf.LoadGguf(path, good)
+    println good, g.ok, g.version, g.keys.len(), g.tensors.len(), g.alignment, g.data_offset
+    println g.meta_str("general.architecture"), g.meta_int("llama.context_length", 0), g.meta_int("llama.block_count", 32)
+    tokens := g.values.get(g.meta_index("tokenizer.tokens"))
+    println tokens.kind == gguf.META_ARRAY, tokens.elem_kind == gguf.META_STRING, tokens.strs.get(1)
+    idx := g.tensor_index("w")
+    info := g.tensors.get(idx)
+    println info.name, info.dims.len(), info.count(), info.ggml_type, info.offset, gguf.TensorBytes(g, idx)
+    mut t := gguf.LoadTensorF32(g, idx, good)
+    println good, t.at(0), t.at(5)
+    t.free()
+    println gguf.GGML_F16, gguf.GGML_Q4_0, gguf.GGML_Q4_1, gguf.GGML_Q8_0
+    g.free()
+end

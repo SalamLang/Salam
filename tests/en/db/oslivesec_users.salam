@@ -1,0 +1,78 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import str
+import db.opensearch
+
+const USER := "oslive_reader"
+const ROLE := "oslive_read_role"
+const IDX := "oslivesec_docs"
+const OTHER := "oslivesec_other"
+
+func one(a: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push(a)
+    ret v
+end
+
+func connect(url: str, user: str, pass: str): opensearch.Client:
+    mut cfg := opensearch.Config { username = user, password = pass, insecure = true, max_retries = 0 }
+    cfg.nodes.push(url)
+    ret opensearch.NewClient(cfg)
+end
+
+func main:
+    parts := str.Fields(os.Env("SALAM_TEST_OPENSEARCH_SECURE"))
+    url := parts.get(0)
+    mut admin := connect(url, parts.get(1), parts.get(2))
+    me := opensearch.WhoAmI(admin)
+    println "whoami:", me.ok, me.user, me.roles.len() > 0
+    println "security health:", opensearch.SecurityHealth(admin)
+    opensearch.DeleteUser(admin, USER)
+    opensearch.DeleteIndexIfExists(admin, IDX)
+    opensearch.DeleteIndexIfExists(admin, OTHER)
+    println "indices:", opensearch.CreateIndex(admin, IDX, ""), opensearch.CreateIndex(admin, OTHER, "")
+    opensearch.IndexWith(admin, IDX, "1", `{"t":"visible"}`, opensearch.Options { refresh = "true" })
+    opensearch.IndexWith(admin, OTHER, "1", `{"t":"hidden"}`, opensearch.Options { refresh = "true" })
+    role := opensearch.RoleBody(one("cluster_composite_ops_ro"), one(IDX), one("read"))
+    println "role:", opensearch.PutRole(admin, ROLE, role), opensearch.GetRole(admin, ROLE).len() > 0
+    println "user:", opensearch.PutUser(admin, USER, "Reader-Pass-2026!", Vector {} as Vector<str>, `{"team":"salam"}`)
+    mut found := false
+    each u in opensearch.Users(admin):
+        if u == USER: found = true end
+    end
+    println "listed:", found, opensearch.JsonPath(opensearch.GetUser(admin, USER), "attributes.team")
+    println "mapping:", opensearch.PutRoleMapping(admin, ROLE, one(USER), Vector {} as Vector<str>), opensearch.JsonPath(opensearch.GetRoleMapping(admin, ROLE), "users.0")
+    mut reader := connect(url, USER, "Reader-Pass-2026!")
+    who := opensearch.WhoAmI(reader)
+    println "reader:", who.ok, who.user
+    d := opensearch.Get(reader, IDX, "1")
+    println "allowed read:", d.found, d.source
+    denied := opensearch.Get(reader, OTHER, "1")
+    println "denied read:", denied.found, opensearch.Status(reader), opensearch.ErrorType(reader)
+    w := opensearch.Index(reader, IDX, "2", `{"t":"nope"}`)
+    println "denied write:", w.ok, w.status
+    println "password:", opensearch.ChangePassword(reader, "Reader-Pass-2026!", "Reader-Pass-2027!")
+    opensearch.Close(reader)
+    mut old := connect(url, USER, "Reader-Pass-2026!")
+    println "old password:", opensearch.Ping(old), opensearch.Status(old), opensearch.Error(old)
+    opensearch.Close(old)
+    mut fresh := connect(url, USER, "Reader-Pass-2027!")
+    println "new password:", opensearch.WhoAmI(fresh).user
+    opensearch.Close(fresh)
+    println "cleanup:", opensearch.DeleteRoleMapping(admin, ROLE), opensearch.DeleteUser(admin, USER), opensearch.DeleteRole(admin, ROLE)
+    println "drop:", opensearch.DeleteIndex(admin, IDX), opensearch.DeleteIndex(admin, OTHER)
+    opensearch.Close(admin)
+end

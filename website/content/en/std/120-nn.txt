@@ -1,0 +1,312 @@
+pkg.en = nn
+pkg.name = nn
+pkg.group = Machine learning
+pkg.summary = Neural network layers: linear, convolutional, recurrent, transformer, and checkpoints.
+pkg.title = The nn package in Salam | Layers and transformers
+pkg.description = The nn package in Salam: linear and convolutional layers, normalisation, LSTM and GRU, multi head attention and transformers, weight initialisation and saving a model, with examples.
+pkg.import = nn
+pkg.intro <<
+<p>This package has the ready made layers for building a neural network in Salam: linear, convolution, pooling, normalization, embedding, LSTM and GRU, attention and transformer blocks, plus weight initializers and checkpoints. The weights of every layer live in one <code>ParamStore</code>. Make each layer with a <code>New...</code> function and a unique name, and call its <code>forward</code> on the <a href="/std/autograd/">autograd</a> tape at every step. <code>Sequential</code> runs several layers one after the other. Training itself is done by <a href="/std/optim/">optim</a>.</p>
+<p>For a model someone else trained, load it with <a href="/std/onnx/">onnx</a> instead. For classical models such as decision trees, k-means or logistic regression on tabular data, <a href="/std/ml/">ml</a> is shorter and needs no training loop.</p>
+<h3>Things that trip people up</h3>
+<ul>
+<li>A layer value holds only the numbers of its weights in the store, not the weights. Pass the same store to <code>forward</code> that you passed to <code>New...</code>.</li>
+<li>Names must be unique. <code>add</code> does not check, and a checkpoint loads each tensor into the first parameter with its name, so a repeated name breaks loading.</li>
+<li><code>Sequential</code> takes only layers whose <code>forward</code> receives the store: <code>Linear</code>, <code>Conv2D</code>, the norms and the activation layers. Call <code>Dropout</code>, <code>MaxPool2D</code>, <code>AvgPool2D</code> and <code>Flatten</code> yourself between them.</li>
+<li>A checkpoint holds the <code>ParamStore</code> only. The running mean and variance of <code>BatchNorm</code> and the optimiser's state are not saved.</li>
+<li>Set <code>tape.training = false</code> before you evaluate, so dropout stops dropping and batch normalization uses its running averages.</li>
+</ul>
+<h2 id="guide-xor">A first network: XOR</h2>
+<p>XOR is the smallest problem a straight line cannot solve, so it is the classic first test of a network with a hidden layer. <code>Sequential</code> chains a <code>Linear</code> layer of eight units, a <code>TanhLayer</code> and a second <code>Linear</code> layer with one output. The loss is <code>BCEWithLogits</code>, which takes the raw output and applies the sigmoid itself, more stably than doing it in two steps. After training, <code>tensor.Sigmoid</code> turns the outputs into probabilities and rounding gives the answer.</p>
+{{example.nn-guide-xor}}
+<p>The training loop has the same five lines in every program: <code>reset</code> the tape, <code>zero_grad</code> the store, run <code>forward</code> and the loss, <code>Backward</code>, and the optimiser's <code>step</code>. The seed passed to <code>NewRng</code> fixes the starting weights, so a run can be repeated exactly.</p>
+
+<h2 id="guide-classify">Classifying into several classes</h2>
+<p>For more than two classes the last layer has one output per class and the loss is <code>CrossEntropyLogits</code>, which takes the class numbers as a plain <code>Vector&lt;int&gt;</code>. The prediction is the class with the largest output, found with <code>tensor.ArgMaxAxis</code>. Here sixty points around three centres are separated perfectly; on real data, measure accuracy on examples the model did not train on.</p>
+{{example.nn-guide-classify}}
+<p>Write <code>((group % 2) as f64) * 2.0</code> with the parentheses. Without them <code>as f64 *</code> reads as the pointer type <code>f64*</code> and the line does not compile.</p>
+
+<h2 id="guide-checkpoint">Saving and loading weights</h2>
+<p>A checkpoint stores every tensor of a <code>ParamStore</code> under its layer name. To load it, build the same layers with the same names and shapes, then call <code>LoadCheckpoint</code> (a file) or <code>LoadCheckpointBuf</code> (memory); the starting weights are overwritten. The second model below starts from different random weights, gives a different answer, and after loading answers exactly like the first.</p>
+{{example.nn-guide-checkpoint}}
+<p><code>LoadCheckpoint</code> returns true only when every tensor in the file found a parameter with the same name and shape and every parameter was filled. It does not roll back: after a false result some weights may already be overwritten, so build a fresh store before trying another file. A path ending in <code>.gz</code> is compressed with gzip on save and decompressed on load. Loading matches by name, so renaming a layer breaks old checkpoints. Keep the names stable, and keep the code that builds the model in one function used both for training and for loading, as <code>build</code> is here.</p>
+
+<h2 id="guide-which">Which layer for which job</h2>
+<table>
+<tr><th>Data</th><th>Layers</th></tr>
+<tr><td>Rows of numbers</td><td><code>NewLinear</code> with <code>ReluLayer</code>, <code>GeluLayer</code> or <code>TanhLayer</code> between</td></tr>
+<tr><td>Images</td><td><code>NewConv2D</code>, <code>MaxPool2D</code>, <code>NewBatchNorm</code>, then <code>Flatten</code> and <code>NewLinear</code></td></tr>
+<tr><td>Words and tokens</td><td><code>NewEmbedding</code> and <code>SinusoidalPositions</code></td></tr>
+<tr><td>Sequences, step by step</td><td><code>NewLSTM</code>, <code>NewGRU</code>, <code>LastStep</code></td></tr>
+<tr><td>Sequences, all at once</td><td><code>NewMultiHeadAttention</code>, <code>NewTransformerEncoderLayer</code>, <code>CausalMask</code></td></tr>
+<tr><td>Steadier training</td><td><code>NewLayerNorm</code>, <code>NewRMSNorm</code>, <code>Dropout</code></td></tr>
+</table>
+>>
+
+doc.Parameter = One learnable parameter.
+doc.Parameter.name = The name.
+doc.Parameter.value = The value.
+doc.Parameter.grad = The gradient.
+doc.ParamStore = The parameter store; every weight of the model lives there and the layers point at them by index.
+doc.ParamStore.items = The parameters.
+doc.ParamStore.add = Adds a parameter and returns its index. Names are not checked for duplicates.
+doc.ParamStore.count = The number of parameters.
+doc.ParamStore.at = Parameter number h.
+doc.ParamStore.zero_grad = Zeroes the gradients; at the start of every step.
+doc.ParamStore.free = Frees all of them.
+doc.Bind = Binds a parameter to the tape and returns its node.
+doc.Layer = The layer interface: anything with a forward that can sit in a Sequential.
+doc.Sequential = A chain of layers that run one after the other.
+doc.Sequential.layers = The layers.
+doc.Sequential.add = Adds a layer to the end.
+doc.Sequential.forward = Passes the input through every layer.
+doc.Sequential.free = Frees the chain.
+doc.ReluLayer = A rectifier layer for a Sequential.
+doc.ReluLayer.unused = Unused.
+doc.ReluLayer.forward = Works out the output of the layer on the tape.
+doc.GeluLayer = A GELU layer for a Sequential.
+doc.GeluLayer.unused = Unused.
+doc.GeluLayer.forward = Works out the output of the layer on the tape.
+doc.TanhLayer = A hyperbolic tangent layer for a Sequential.
+doc.TanhLayer.unused = Unused.
+doc.TanhLayer.forward = Works out the output of the layer on the tape.
+doc.Linear = A linear layer: xW+b.
+doc.Linear.w = The weight index.
+doc.Linear.b = The bias index.
+doc.Linear.in_features = The input size.
+doc.Linear.out_features = The output size.
+doc.Linear.has_bias = It has a bias.
+doc.Linear.forward = Works out the output of the layer on the tape.
+doc.NewLinear = A linear layer with Kaiming initial weights.
+doc.NewLinearNoBias = A linear layer with no bias.
+doc.Conv2D = A two dimensional convolution layer.
+doc.Conv2D.w = The weight index.
+doc.Conv2D.b = The bias index.
+doc.Conv2D.stride = The stride.
+doc.Conv2D.pad = The padding.
+doc.Conv2D.forward = Works out the output of the layer on the tape.
+doc.NewConv2D = A convolution layer with channels, a kernel size, a stride and padding.
+doc.MaxPool2D = A two dimensional max pooling layer.
+doc.MaxPool2D.size = The window size.
+doc.MaxPool2D.stride = The stride.
+doc.MaxPool2D.forward = Works out the output of the layer on the tape.
+doc.AvgPool2D = A two dimensional average pooling layer.
+doc.AvgPool2D.size = The window size.
+doc.AvgPool2D.stride = The stride.
+doc.AvgPool2D.forward = Works out the output of the layer on the tape.
+doc.Flatten = Folds every dimension but the first into one; between a convolution and a linear layer.
+doc.LayerNorm = Layer normalisation.
+doc.LayerNorm.gamma = The gamma index.
+doc.LayerNorm.beta = The beta index.
+doc.LayerNorm.eps = The small number for stability.
+doc.LayerNorm.forward = Works out the output of the layer on the tape.
+doc.RMSNorm = Root mean square normalisation.
+doc.RMSNorm.gamma = The gamma index.
+doc.RMSNorm.eps = The small number for stability.
+doc.RMSNorm.forward = Works out the output of the layer on the tape.
+doc.BatchNorm = Batch normalisation. Its running averages live in the layer, not the store, so checkpoints do not save them.
+doc.BatchNorm.gamma = The gamma index.
+doc.BatchNorm.beta = The beta index.
+doc.BatchNorm.running_mean = The running mean, for prediction.
+doc.BatchNorm.running_var = The running variance.
+doc.BatchNorm.momentum = The coefficient for updating the running statistics.
+doc.BatchNorm.eps = The small number for stability.
+doc.BatchNorm.forward = Works out the output of the layer on the tape.
+doc.BatchNorm.free = Frees the running statistics.
+doc.GroupNorm = Group normalisation.
+doc.GroupNorm.gamma = The gamma index.
+doc.GroupNorm.beta = The beta index.
+doc.GroupNorm.groups = The number of groups.
+doc.GroupNorm.eps = The small number for stability.
+doc.GroupNorm.forward = Works out the output of the layer on the tape.
+doc.NewLayerNorm = Layer normalisation with a size.
+doc.NewBatchNorm = Batch normalisation with channels.
+doc.NewGroupNorm = Group normalisation.
+doc.NewRMSNorm = Root mean square normalisation.
+doc.Dropout = A dropout layer.
+doc.Dropout.p = The drop probability.
+doc.Dropout.forward = Works out the output of the layer on the tape.
+doc.Embedding = An embedding table: one vector per word index.
+doc.Embedding.w = The table index.
+doc.Embedding.vocab = The vocabulary size.
+doc.Embedding.dim = The vector size.
+doc.Embedding.forward = Takes the vectors of the given indices.
+doc.NewEmbedding = An embedding table with a vocabulary and a size.
+doc.SinusoidalPositions = The sinusoidal position embedding of the original transformer, for a batch and a length.
+doc.MultiHeadAttention = Multi head attention.
+doc.MultiHeadAttention.wq = The query layer.
+doc.MultiHeadAttention.wk = The key layer.
+doc.MultiHeadAttention.wv = The value layer.
+doc.MultiHeadAttention.wo = The output layer.
+doc.MultiHeadAttention.dim = The size.
+doc.MultiHeadAttention.heads = The number of heads.
+doc.MultiHeadAttention.dropout = The drop probability.
+doc.MultiHeadAttention.causal = Each position sees only the ones before it.
+doc.MultiHeadAttention.forward = Self attention over the input, with a batch and a length.
+doc.NewMultiHeadAttention = Multi head attention with a size and a number of heads.
+doc.TransformerEncoderLayer = One transformer layer: attention and a feed forward network, each with normalisation and a residual connection.
+doc.TransformerEncoderLayer.attn = The attention.
+doc.TransformerEncoderLayer.ln1 = The first normalisation.
+doc.TransformerEncoderLayer.ln2 = The second normalisation.
+doc.TransformerEncoderLayer.ff1 = The first feed forward layer.
+doc.TransformerEncoderLayer.ff2 = The second feed forward layer.
+doc.TransformerEncoderLayer.dropout = The drop probability.
+doc.TransformerEncoderLayer.forward = Works out the output of the layer on the tape.
+doc.NewTransformerEncoderLayer = An encoder layer.
+doc.NewTransformerDecoderLayer = A decoder layer: the same, with causal attention for a language model.
+doc.CausalMask = The causal mask: negative infinity above the diagonal.
+doc.LSTM = A long short term memory network.
+doc.LSTM.wx = The input weight.
+doc.LSTM.wh = The state weight.
+doc.LSTM.hidden = The state size.
+doc.LSTM.forward = Returns the state of every step.
+doc.GRU = A gated recurrent unit.
+doc.GRU.wx = The input weight.
+doc.GRU.wh = The state weight.
+doc.GRU.hidden = The state size.
+doc.GRU.forward = Returns the state of every step.
+doc.NewLSTM = An LSTM with an input and a state size.
+doc.NewGRU = A GRU with an input and a state size.
+doc.LastStep = The state of the last step of each sequence; for sequence classification.
+doc.XavierUniform = Xavier uniform initialisation; for layers with tanh and sigmoid.
+doc.XavierNormal = Xavier normal initialisation.
+doc.KaimingUniform = Kaiming uniform initialisation; for layers with a rectifier.
+doc.KaimingNormal = Kaiming normal initialisation.
+doc.SaveCheckpoint = Saves every parameter to a file, gzip-compressed when the path ends in <code>.gz</code>.
+doc.LoadCheckpoint = Loads the parameters from a file by name; true only when every name and shape matched. A partial load is not undone.
+doc.SaveCheckpointBuf = The parameters into a buffer.
+doc.LoadCheckpointBuf = The parameters from a buffer.
+
+ex.Parameter = nn-Layers
+ex.Parameter.name = nn-Layers
+ex.Parameter.value = nn-Layers
+ex.Parameter.grad = nn-Layers
+ex.ParamStore = nn-Layers
+ex.ParamStore.items = nn-Layers
+ex.ParamStore.add = nn-Layers
+ex.ParamStore.count = nn-Layers
+ex.ParamStore.at = nn-Layers
+ex.ParamStore.zero_grad = nn-Layers
+ex.ParamStore.free = nn-Layers
+ex.Bind = nn-Layers
+ex.Layer = nn-Layers
+ex.Sequential = nn-Layers
+ex.Sequential.layers = nn-Layers
+ex.Sequential.add = nn-Layers
+ex.Sequential.forward = nn-Layers
+ex.Sequential.free = nn-Layers
+ex.ReluLayer = nn-Layers
+ex.ReluLayer.unused = nn-Layers
+ex.ReluLayer.forward = nn-Layers
+ex.GeluLayer = nn-Layers
+ex.GeluLayer.unused = nn-Layers
+ex.GeluLayer.forward = nn-Layers
+ex.TanhLayer = nn-Layers
+ex.TanhLayer.unused = nn-Layers
+ex.TanhLayer.forward = nn-Layers
+ex.Linear = nn-Layers
+ex.Linear.w = nn-Layers
+ex.Linear.b = nn-Layers
+ex.Linear.in_features = nn-Layers
+ex.Linear.out_features = nn-Layers
+ex.Linear.has_bias = nn-Layers
+ex.Linear.forward = nn-Layers
+ex.NewLinear = nn-Layers
+ex.NewLinearNoBias = nn-Layers
+ex.Conv2D = nn-Layers
+ex.Conv2D.w = nn-Layers
+ex.Conv2D.b = nn-Layers
+ex.Conv2D.stride = nn-Layers
+ex.Conv2D.pad = nn-Layers
+ex.Conv2D.forward = nn-Layers
+ex.NewConv2D = nn-Layers
+ex.MaxPool2D = nn-Layers
+ex.MaxPool2D.size = nn-Layers
+ex.MaxPool2D.stride = nn-Layers
+ex.MaxPool2D.forward = nn-Layers
+ex.AvgPool2D = nn-Layers
+ex.AvgPool2D.size = nn-Layers
+ex.AvgPool2D.stride = nn-Layers
+ex.AvgPool2D.forward = nn-Layers
+ex.Flatten = nn-Layers
+ex.LayerNorm = nn-Layers
+ex.LayerNorm.gamma = nn-Layers
+ex.LayerNorm.beta = nn-Layers
+ex.LayerNorm.eps = nn-Layers
+ex.LayerNorm.forward = nn-Layers
+ex.RMSNorm = nn-Layers
+ex.RMSNorm.gamma = nn-Layers
+ex.RMSNorm.eps = nn-Layers
+ex.RMSNorm.forward = nn-Layers
+ex.BatchNorm = nn-Layers
+ex.BatchNorm.gamma = nn-Layers
+ex.BatchNorm.beta = nn-Layers
+ex.BatchNorm.running_mean = nn-Layers
+ex.BatchNorm.running_var = nn-Layers
+ex.BatchNorm.momentum = nn-Layers
+ex.BatchNorm.eps = nn-Layers
+ex.BatchNorm.forward = nn-Layers
+ex.BatchNorm.free = nn-Layers
+ex.GroupNorm = nn-Layers
+ex.GroupNorm.gamma = nn-Layers
+ex.GroupNorm.beta = nn-Layers
+ex.GroupNorm.groups = nn-Layers
+ex.GroupNorm.eps = nn-Layers
+ex.GroupNorm.forward = nn-Layers
+ex.NewLayerNorm = nn-Layers
+ex.NewBatchNorm = nn-Layers
+ex.NewGroupNorm = nn-Layers
+ex.NewRMSNorm = nn-Layers
+ex.Dropout = nn-Layers
+ex.Dropout.p = nn-Layers
+ex.Dropout.forward = nn-Layers
+ex.XavierUniform = nn-Layers
+ex.XavierNormal = nn-Layers
+ex.KaimingUniform = nn-Layers
+ex.KaimingNormal = nn-Layers
+ex.SaveCheckpoint = nn-Layers
+ex.LoadCheckpoint = nn-Layers
+ex.SaveCheckpointBuf = nn-Layers
+ex.LoadCheckpointBuf = nn-Layers
+ex.Embedding = nn-Sequence
+ex.Embedding.w = nn-Sequence
+ex.Embedding.vocab = nn-Sequence
+ex.Embedding.dim = nn-Sequence
+ex.Embedding.forward = nn-Sequence
+ex.NewEmbedding = nn-Sequence
+ex.SinusoidalPositions = nn-Sequence
+ex.MultiHeadAttention = nn-Sequence
+ex.MultiHeadAttention.wq = nn-Sequence
+ex.MultiHeadAttention.wk = nn-Sequence
+ex.MultiHeadAttention.wv = nn-Sequence
+ex.MultiHeadAttention.wo = nn-Sequence
+ex.MultiHeadAttention.dim = nn-Sequence
+ex.MultiHeadAttention.heads = nn-Sequence
+ex.MultiHeadAttention.dropout = nn-Sequence
+ex.MultiHeadAttention.causal = nn-Sequence
+ex.MultiHeadAttention.forward = nn-Sequence
+ex.NewMultiHeadAttention = nn-Sequence
+ex.TransformerEncoderLayer = nn-Sequence
+ex.TransformerEncoderLayer.attn = nn-Sequence
+ex.TransformerEncoderLayer.ln1 = nn-Sequence
+ex.TransformerEncoderLayer.ln2 = nn-Sequence
+ex.TransformerEncoderLayer.ff1 = nn-Sequence
+ex.TransformerEncoderLayer.ff2 = nn-Sequence
+ex.TransformerEncoderLayer.dropout = nn-Sequence
+ex.TransformerEncoderLayer.forward = nn-Sequence
+ex.NewTransformerEncoderLayer = nn-Sequence
+ex.NewTransformerDecoderLayer = nn-Sequence
+ex.CausalMask = nn-Sequence
+ex.LSTM = nn-Sequence
+ex.LSTM.wx = nn-Sequence
+ex.LSTM.wh = nn-Sequence
+ex.LSTM.hidden = nn-Sequence
+ex.LSTM.forward = nn-Sequence
+ex.GRU = nn-Sequence
+ex.GRU.wx = nn-Sequence
+ex.GRU.wh = nn-Sequence
+ex.GRU.hidden = nn-Sequence
+ex.GRU.forward = nn-Sequence
+ex.NewLSTM = nn-Sequence
+ex.NewGRU = nn-Sequence
+ex.LastStep = nn-Sequence

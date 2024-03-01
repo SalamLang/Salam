@@ -1,0 +1,569 @@
+package cli
+
+import io
+import os
+import str
+import mem
+import net.http
+
+include pth "../sal_path.salam"
+include dr "../driver/driver.salam"
+include i18 "../i18n.salam"
+include co "../sal_core.salam"
+include sm "../semantic/semantic.salam"
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _fullpath(buf: void*, path: str, n: u64): void*
+    end
+else:
+    extern:
+        func realpath(path: str, resolved: void*): void*
+    end
+end
+
+const UPD_RELEASES := "https://github.com/SalamLang/Salam/releases"
+const UPD_API := "https://api.github.com/repos/SalamLang/Salam/releases/latest"
+const UPD_RAW := "https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/"
+const UPD_AGENT := "SalamUpdate/1.0"
+
+if SALAM_OS_WINDOWS:
+    func upd_real(p: str): str:
+        r := _fullpath(null, p, 0 as u64)
+        if r == null:
+            ret p
+        end
+        s := str.Clone(r as str)
+        mem.Free(r)
+        ret s
+    end
+
+    func upd_exe_name(): str: ret "salam.exe" end
+
+    func upd_script_name(): str: ret "install.ps1" end
+
+    func upd_null_dev(): str: ret "NUL" end
+else:
+    func upd_real(p: str): str:
+        r := realpath(p, null)
+        if r == null:
+            ret p
+        end
+        s := str.Clone(r as str)
+        mem.Free(r)
+        ret s
+    end
+
+    func upd_exe_name(): str: ret "salam" end
+
+    func upd_script_name(): str: ret "install.sh" end
+
+    func upd_null_dev(): str: ret "/dev/null" end
+end
+
+func upd_shell(cmd: str): str:
+    if SALAM_OS_WINDOWS:
+        ret "\"" + cmd + "\""
+    else:
+        ret cmd
+    end
+end
+
+func upd_width(s: str): int:
+    mut w := 0
+    repeat str.Len(s) in i:
+        b := co.ByteAt(s, i)
+        if b < 128 or b >= 192:
+            w += 1
+        end
+    end
+    ret w
+end
+
+func upd_info(label: str, value: str):
+    mut pad := label
+    mut w := upd_width(label)
+    until w < 11:
+        pad = pad + " "
+        w += 1
+    end
+    println "  " + pad + value
+end
+
+func upd_err(msg: str):
+    io.EPrintln(i18.Tr("salam upgrade: ") + msg)
+end
+
+func upd_core(v0: str): str:
+    v := str.Trim(v0)
+    if str.StartsWith(v, "v") or str.StartsWith(v, "V"):
+        ret str.Substr(v, 1, str.Len(v) - 1)
+    end
+    ret v
+end
+
+func upd_valid_version(v: str): bool:
+    n := str.Len(v)
+    if n == 0 or n > 64 or not str.IsAsciiDigit(co.ByteAt(v, 0)):
+        ret false
+    end
+    mut in_suffix := false
+    mut dots := 0
+    mut i := 0
+    until i < n:
+        c := co.ByteAt(v, i)
+        digit := str.IsAsciiDigit(c)
+        alpha := (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+        if c == 45:
+            in_suffix = true
+        else c == 46 and not in_suffix:
+            if not str.IsAsciiDigit(co.ByteAt(v, i - 1)) or i + 1 >= n or not str.IsAsciiDigit(co.ByteAt(v, i + 1)):
+                ret false
+            end
+            dots += 1
+        else not digit and c != 46 and not (in_suffix and alpha):
+            ret false
+        end
+        i += 1
+    end
+    ret dots == 2
+end
+
+func upd_release_missing(version: str): bool:
+    r := http.GetWith(UPD_RELEASES + "/tag/v" + version, upd_headers())
+    ret r.status == 404
+end
+
+func upd_part(v: str, idx: int): int:
+    dash := str.Find(v, "-")
+    core := dash >= 0 ? str.Substr(v, 0, dash) : v
+    parts := str.Split(core, ".")
+    defer parts.free()
+    if idx >= parts.len():
+        ret 0
+    end
+    ret str.ToInt(parts.get(idx))
+end
+
+func upd_compare(a0: str, b0: str): int:
+    a := upd_core(a0)
+    b := upd_core(b0)
+    repeat 3 in i:
+        x := upd_part(a, i)
+        y := upd_part(b, i)
+        if x < y:
+            ret 0 - 1
+        end
+        if x > y:
+            ret 1
+        end
+    end
+    pre_a := str.Find(a, "-") >= 0
+    pre_b := str.Find(b, "-") >= 0
+    if pre_a and not pre_b:
+        ret 0 - 1
+    end
+    if pre_b and not pre_a:
+        ret 1
+    end
+    ret 0
+end
+
+func upd_tag_after(s: str, marker: str): str:
+    at := str.Find(s, marker)
+    if at < 0:
+        ret ""
+    end
+    start := at + str.Len(marker)
+    n := str.Len(s)
+    mut e := start
+    mut going := true
+    until going and e < n:
+        c := co.ByteAt(s, e)
+        if c == 47 or c == 63 or c == 35 or c == 34 or c == 32 or c == 13 or c == 10 or c == 9:
+            going = false
+        else:
+            e += 1
+        end
+    end
+    ret str.Substr(s, start, e - start)
+end
+
+func upd_json_tag(body: str): str:
+    at := str.Find(body, "\"tag_name\"")
+    if at < 0:
+        ret ""
+    end
+    colon := str.IndexFrom(body, ":", at)
+    if colon < 0:
+        ret ""
+    end
+    q1 := str.IndexFrom(body, "\"", colon)
+    if q1 < 0:
+        ret ""
+    end
+    q2 := str.IndexFrom(body, "\"", q1 + 1)
+    if q2 < 0:
+        ret ""
+    end
+    ret str.Substr(body, q1 + 1, q2 - q1 - 1)
+end
+
+func upd_headers(): HashMap<str, str>:
+    h := http.NewHeaders()
+    h.put("User-Agent", UPD_AGENT)
+    ret h
+end
+
+func upd_token(): str:
+    t := os.Env("GITHUB_TOKEN")
+    if str.Len(t) > 0:
+        ret t
+    end
+    ret os.Env("GH_TOKEN")
+end
+
+func upd_latest_native(why &: str): str:
+    r := http.GetWith(UPD_RELEASES + "/latest", upd_headers())
+    if r.status >= 300 and r.status < 400:
+        tag := upd_tag_after(http.GetHeader(r, "Location"), "/releases/tag/")
+        if str.Len(tag) > 0:
+            ret tag
+        end
+    end
+    if str.Len(r.err) > 0:
+        why = r.err
+    end
+    ah := upd_headers()
+    ah.put("Accept", "application/vnd.github+json")
+    tok := upd_token()
+    if str.Len(tok) > 0:
+        ah.put("Authorization", "Bearer " + tok)
+    end
+    a := http.GetWith(UPD_API, ah)
+    if a.status == 200:
+        tag := upd_json_tag(a.body)
+        if str.Len(tag) > 0:
+            ret tag
+        end
+        why = i18.Tr("GitHub's answer named no release")
+    else a.status == 403 or a.status == 429:
+        why = i18.Tr("GitHub's API rate limit was reached (setting GITHUB_TOKEN raises it)")
+    else a.status > 0:
+        why = co.Format1(i18.Tr("GitHub answered HTTP %s"), co.ArgStr(str.FromInt(a.status as i64)))
+    else str.Len(a.err) > 0:
+        why = a.err
+    end
+    ret ""
+end
+
+func upd_latest_curl(): str:
+    mut curl := ""
+    if not sm.FindPathTool("curl", curl):
+        ret ""
+    end
+    cmd := shell_arg(curl) + " -fsS -o " + upd_null_dev() + " -A " + shell_arg(UPD_AGENT) + " -w " + shell_arg("%{redirect_url}") + " --connect-timeout 20 --max-time 30 " + shell_arg(UPD_RELEASES + "/latest")
+    res := os.RunCapture(upd_shell(cmd))
+    if res.code != 0:
+        ret ""
+    end
+    ret upd_tag_after(res.out, "/releases/tag/")
+end
+
+func upd_latest_tag(why &: str): str:
+    tag := upd_latest_native(why)
+    if str.Len(tag) > 0:
+        ret tag
+    end
+    ret upd_latest_curl()
+end
+
+func upd_looks_like_installer(text: str): bool:
+    ret str.Len(text) > 1024 and str.Contains(text, "Salam") and not str.StartsWith(str.Trim(text), "<")
+end
+
+func upd_fetch_tool(url: str, dest: str): bool:
+    mut tool := ""
+    mut cmd := ""
+    if sm.FindPathTool("curl", tool):
+        cmd = shell_arg(tool) + " -fsSL --connect-timeout 20 --max-time 120 -A " + shell_arg(UPD_AGENT) + " -o " + shell_arg(dest) + " " + shell_arg(url)
+    else sm.FindPathTool("wget", tool):
+        cmd = shell_arg(tool) + " -q -T 60 -U " + shell_arg(UPD_AGENT) + " -O " + shell_arg(dest) + " " + shell_arg(url)
+    else:
+        ret false
+    end
+    ret os.Run(upd_shell(cmd)) == 0 and upd_looks_like_installer(os.ReadFile(dest))
+end
+
+func upd_fetch(url: str, dest: str, why &: str): bool:
+    r := http.GetWith(url, upd_headers())
+    if r.status == 200 and upd_looks_like_installer(r.body):
+        if io.WriteFile(dest, r.body) == str.Len(r.body):
+            ret true
+        end
+        why = co.Format1(i18.Tr("cannot write %s"), co.ArgStr(dest))
+        ret false
+    end
+    if str.Len(r.err) > 0:
+        why = r.err
+    else r.status != 200:
+        why = co.Format1(i18.Tr("GitHub answered HTTP %s"), co.ArgStr(str.FromInt(r.status as i64)))
+    else:
+        why = i18.Tr("the download was not an installer script")
+    end
+    ret upd_fetch_tool(url, dest)
+end
+
+func upd_exe_path(out &: str): bool:
+    mut p := ""
+    if not sm.ExePath(p):
+        ret false
+    end
+    if not pth.PathIsAbs(p):
+        p = pth.PathJoin(os.Cwd(), p)
+    end
+    if SALAM_OS_WINDOWS:
+        if not os.Exists(p) and not str.EndsWith(str.Lower(p), ".exe"):
+            p = p + ".exe"
+        end
+    end
+    out = upd_real(p)
+    ret true
+end
+
+func upd_source_checkout(dir: str): bool:
+    ret os.Exists(pth.PathJoin(dir, "compiler/main.salam")) or os.Exists(pth.PathJoin(dir, ".git"))
+end
+
+func upd_managed_by(dir: str, installer: str): str:
+    if str.Equals(installer, "chocolatey"):
+        ret "choco upgrade salam"
+    end
+    if str.Len(installer) > 0 and not str.StartsWith(installer, "install."):
+        ret co.Format1(i18.Tr("the %s package that installed it"), co.ArgStr(installer))
+    end
+    if str.Len(installer) > 0:
+        ret ""
+    end
+    d := str.Lower(pth.PathToSlash(dir)) + "/"
+    if str.Contains(d, "/cellar/") or str.Contains(d, "/homebrew/") or str.Contains(d, "/linuxbrew/"):
+        ret "brew upgrade salam"
+    end
+    if str.StartsWith(d, "/nix/store/"):
+        ret "nix profile upgrade salam"
+    end
+    if str.StartsWith(d, "/snap/"):
+        ret "sudo snap refresh salam"
+    end
+    if str.Contains(d, "/scoop/"):
+        ret "scoop update salam"
+    end
+    if str.Contains(d, "/chocolatey/"):
+        ret "choco upgrade salam"
+    end
+    if str.Contains(d, "/winget/"):
+        ret "winget upgrade SalamLang.Salam"
+    end
+    if str.Contains(d, "/node_modules/"):
+        ret "npm install -g salamlang@latest"
+    end
+    if str.Contains(d, "/.asdf/"):
+        ret "asdf install salam latest"
+    end
+    if str.Equals(d, "/usr/bin/") or str.StartsWith(d, "/usr/lib/") or str.StartsWith(d, "/usr/libexec/") or str.StartsWith(d, "/usr/share/"):
+        ret i18.Tr("your system package manager (apt, dnf, pacman, apk, ...)")
+    end
+    ret ""
+end
+
+func upd_powershell(): str:
+    root := os.Env("SystemRoot")
+    if str.Len(root) > 0:
+        p := root + "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        if os.Exists(p):
+            ret shell_arg(p)
+        end
+    end
+    ret "powershell.exe"
+end
+
+func upd_installer_cmd(script: str, dir: str, version: str): str:
+    tail := " --dir " + shell_arg(dir) + " --version " + shell_arg(version) + " --no-modify-path"
+    if SALAM_OS_WINDOWS:
+        ret upd_powershell() + " -NoProfile -ExecutionPolicy Bypass -File " + shell_arg(script) + tail
+    else:
+        ret "sh " + shell_arg(script) + tail
+    end
+end
+
+func upd_get_installer(tmp: str, why &: str): str:
+    local := os.Env("SALAM_INSTALLER")
+    if str.Len(local) > 0 and not str.StartsWith(local, "https://") and not str.StartsWith(local, "http://"):
+        if not os.Exists(local):
+            why = co.Format1(i18.Tr("SALAM_INSTALLER names %s, which does not exist"), co.ArgStr(local))
+            ret ""
+        end
+        ret local
+    end
+    url := str.Len(local) > 0 ? local : UPD_RAW + upd_script_name()
+    dest := pth.PathJoin(tmp, upd_script_name())
+    upd_info(i18.Tr("installer"), url)
+    if not upd_fetch(url, dest, why):
+        ret ""
+    end
+    ret dest
+end
+
+func upd_install(exe: str, dir: str, version: str): int:
+    tmp := pth.PathJoin(os.TempDir(), "salam-update-" + str.FromInt(os.Pid() as i64))
+    _mk := os.MkdirAll(tmp)
+    mut why := ""
+    script := upd_get_installer(tmp, why)
+    if str.Len(script) == 0:
+        upd_err(i18.Tr("could not download the installer"))
+        if str.Len(why) > 0:
+            io.EPrintln("  " + why)
+        end
+        io.EPrintln(co.Format1(i18.Tr("  check your connection, or install by hand from %s"), co.ArgStr(UPD_RELEASES)))
+        _rm := os.RemoveAll(tmp)
+        ret 1
+    end
+    old := exe + ".old"
+    mut moved := false
+    if SALAM_OS_WINDOWS:
+        _rm_old := os.Remove(old)
+        moved = os.Move(exe, old) == 0
+    end
+    rc := os.Run(upd_shell(upd_installer_cmd(script, dir, version)))
+    if moved and not os.Exists(exe):
+        _back := os.Move(old, exe)
+    end
+    _rm_tmp := os.RemoveAll(tmp)
+    ret rc
+end
+
+func upd_installed_version(exe: str): str:
+    res := os.RunCapture(upd_shell(shell_arg(exe) + " version --short"))
+    if res.code != 0:
+        ret ""
+    end
+    ret str.Trim(res.out)
+end
+
+func update_cmd(opt &: dr.Dr): int:
+    current := co.VERSION
+    mut exe := ""
+    if not upd_exe_path(exe):
+        upd_err(i18.Tr("cannot tell where this salam is installed"))
+        ret 1
+    end
+    dir := pth.PathDir(exe)
+    if SALAM_OS_WINDOWS:
+        _rm_old := os.Remove(exe + ".old")
+    end
+    receipt_path := pth.PathJoin(dir, ".salam-release")
+    receipt := os.Exists(receipt_path) ? os.ReadFile(receipt_path) : ""
+    installer := receipt_field(receipt, "installer")
+
+    upd_info(i18.Tr("installed"), current)
+    upd_info(i18.Tr("location"), dir)
+
+    if upd_source_checkout(dir):
+        upd_err(i18.Tr("this salam was built from a source checkout, so a release would overwrite your tree"))
+        io.EPrintln(i18.Tr("  update it with 'git pull', then rebuild the compiler"))
+        ret 1
+    end
+    manager := upd_managed_by(dir, installer)
+    if str.Len(manager) > 0 and not opt.force:
+        upd_err(i18.Tr("this salam belongs to a package manager, which would lose track of it"))
+        io.EPrintln(co.Format1(i18.Tr("  update it with: %s"), co.ArgStr(manager)))
+        io.EPrintln(i18.Tr("  or pass --force to replace it anyway"))
+        ret 1
+    end
+
+    explicit := str.Len(opt.update_version) > 0
+    mut target := upd_core(opt.update_version)
+    if explicit and not upd_valid_version(target):
+        upd_err(co.Format1(i18.Tr("'%s' is not a release version (expected something like 0.5.4)"), co.ArgStr(opt.update_version)))
+        ret 2
+    end
+    if not explicit:
+        mut why := ""
+        tag := upd_latest_tag(why)
+        if str.Len(tag) == 0:
+            upd_err(i18.Tr("could not ask GitHub for the latest release"))
+            if str.Len(why) > 0:
+                io.EPrintln("  " + why)
+            end
+            io.EPrintln(i18.Tr("  check your connection, or name a version: salam upgrade 0.5.4"))
+            ret 1
+        end
+        target = upd_core(tag)
+    end
+    if not upd_valid_version(target):
+        upd_err(co.Format1(i18.Tr("'%s' is not a release version (expected something like 0.5.4)"), co.ArgStr(target)))
+        ret 2
+    end
+    upd_info(explicit ? i18.Tr("requested") : i18.Tr("latest"), target)
+
+    cmp := upd_compare(current, target)
+    if opt.update_check:
+        if cmp < 0:
+            println co.Format2(i18.Tr("an update is available: %s -> %s; run 'salam upgrade' to install it"), co.ArgStr(current), co.ArgStr(target))
+        else cmp == 0:
+            println co.Format1(i18.Tr("salam %s is up to date"), co.ArgStr(current))
+        else:
+            println co.Format2(i18.Tr("this salam (%s) is newer than the latest release (%s)"), co.ArgStr(current), co.ArgStr(target))
+        end
+        ret 0
+    end
+    if cmp == 0 and not opt.force:
+        println co.Format1(i18.Tr("salam %s is up to date (--force reinstalls it)"), co.ArgStr(current))
+        ret 0
+    end
+    if cmp > 0 and not explicit and not opt.force:
+        println co.Format2(i18.Tr("this salam (%s) is newer than the latest release (%s); nothing to do"), co.ArgStr(current), co.ArgStr(target))
+        println i18.Tr("pass a version to switch to that release: salam upgrade X.Y.Z")
+        ret 0
+    end
+    if not str.Equals(pth.PathBase(exe), upd_exe_name()):
+        upd_err(co.Format2(i18.Tr("this binary is named '%s', but the installer only writes '%s'"), co.ArgStr(pth.PathBase(exe)), co.ArgStr(upd_exe_name())))
+        io.EPrintln(i18.Tr("  rename it back, or reinstall with the installer from the releases page"))
+        ret 1
+    end
+    if explicit and upd_release_missing(target):
+        upd_err(co.Format1(i18.Tr("there is no release v%s"), co.ArgStr(target)))
+        io.EPrintln(co.Format1(i18.Tr("  the published versions are listed at %s"), co.ArgStr(UPD_RELEASES)))
+        ret 1
+    end
+
+    println co.Format2(i18.Tr("updating salam %s -> %s, with its standard library"), co.ArgStr(current), co.ArgStr(target))
+    rc := upd_install(exe, dir, target)
+    if rc != 0:
+        upd_err(co.Format2(i18.Tr("the installer failed (exit %s); salam %s is still installed"), co.ArgStr(str.FromInt(rc as i64)), co.ArgStr(current)))
+        ret 1
+    end
+    now := upd_installed_version(exe)
+    if str.Len(now) > 0 and upd_compare(now, target) != 0:
+        upd_err(co.Format2(i18.Tr("the installer finished, but %s still reports version %s"), co.ArgStr(exe), co.ArgStr(now)))
+        ret 1
+    end
+    println co.Format2(i18.Tr("salam is now %s (was %s)"), co.ArgStr(target), co.ArgStr(current))
+    ret 0
+end
+
+pub func UpdateCompareVersions(a: str, b: str): int:
+    ret upd_compare(a, b)
+end
+
+pub func UpdateValidVersion(v: str): bool:
+    ret upd_valid_version(upd_core(v))
+end
+
+pub func UpdateTagFromLocation(location: str): str:
+    ret upd_tag_after(location, "/releases/tag/")
+end
+
+pub func UpdateManagedBy(dir: str, installer: str): str:
+    ret upd_managed_by(dir, installer)
+end

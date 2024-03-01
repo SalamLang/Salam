@@ -1,0 +1,295 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package rpc
+
+import compress
+import encoding.value
+import net.tcp
+import net.http
+
+@en "Client"
+@fa "کارخواه"
+pub struct Client:
+    @en "conn"
+    @fa "اتصال"
+    pub conn: tcp.Conn = tcp.Conn {}
+    @en "stream"
+    @fa "جریان"
+    pub stream: Stream = Stream {}
+    @en "codec"
+    @fa "کدک"
+    pub codec: int = 0
+    @en "framing"
+    @fa "قاب‌بندی"
+    pub framing: int = 0
+    @en "next_id"
+    @fa "شناسه بعدی"
+    pub next_id: i64 = 1
+    @en "ok"
+    @fa "سالم"
+    pub ok: bool = false
+    @en "last_error"
+    @fa "آخرین خطا"
+    pub last_error: str = ""
+end
+
+func _join(parts: Vector<str>, sep: str): str:
+    mut out := ""
+    mut i := 0
+    until i < parts.len():
+        if i > 0: out = out + sep end
+        out = out + parts.get(i)
+        i += 1
+    end
+    ret out
+end
+
+func _client_fail(c &: Client, message: str): Response:
+    c.last_error = message
+    mut r := Response {}
+    r.is_error = true
+    r.err = NewError(RPC_INTERNAL_ERROR, message)
+    ret r
+end
+
+func _send(c &: Client, req: Request): bool:
+    mut payload := EncodeRequest(c.codec, req)
+    sent := WriteFrame(c.conn.fd, c.framing, payload)
+    compress.BufFree(payload)
+    ret sent
+end
+
+@en "DialClient"
+@fa "اتصال کارخواه"
+pub func DialClient(host: str, port: int, codec: int): Client:
+    mut c := Client {}
+    c.codec = codec
+    c.framing = CodecDefaultFraming(codec)
+    c.next_id = 1 as i64
+    c.conn = tcp.Dial(host, port)
+    if not tcp.ConnOk(c.conn):
+        c.last_error = "connect failed"
+        ret c
+    end
+    c.stream = NewStream(c.conn.fd)
+    c.ok = true
+    ret c
+end
+
+@en "ClientFromFd"
+@fa "کارخواه از توصیف‌گر"
+pub func ClientFromFd(fd: i64, codec: int): Client:
+    mut c := Client {}
+    c.codec = codec
+    c.framing = CodecDefaultFraming(codec)
+    c.next_id = 1 as i64
+    c.conn = tcp.ConnFromFd(fd)
+    c.stream = NewStream(fd)
+    c.ok = fd >= 0
+    ret c
+end
+
+@en "ClientSetFraming"
+@fa "تنظیم قاب‌بندی کارخواه"
+pub func ClientSetFraming(c &: Client, framing: int):
+    c.framing = framing
+end
+
+@en "ClientOk"
+@fa "کارخواه معتبر"
+pub func ClientOk(c: Client): bool:
+    ret c.ok
+end
+
+@en "ClientError"
+@fa "خطای کارخواه"
+pub func ClientError(c: Client): str:
+    ret c.last_error
+end
+
+@en "CloseClient"
+@fa "بستن کارخواه"
+pub func CloseClient(c &: Client):
+    if c.ok:
+        FreeStream(c.stream)
+        tcp.Close(c.conn)
+    end
+    c.ok = false
+end
+
+@en "Call"
+@fa "فراخوان"
+pub func Call(c &: Client, method: str, params: value.Value): Response:
+    if not c.ok: ret _client_fail(c, "client is not connected") end
+    id := c.next_id
+    c.next_id += 1 as i64
+    req := NewRequest(method, params, id)
+    if not _send(c, req): ret _client_fail(c, "send failed") end
+    mut ok := false
+    mut payload := ReadFrame(c.stream, c.framing, ok)
+    if not ok:
+        compress.BufFree(payload)
+        ret _client_fail(c, "no reply (connection closed)")
+    end
+    mut dok := false
+    resp := DecodeResponse(c.codec, payload, dok)
+    compress.BufFree(payload)
+    if not dok: ret _client_fail(c, "malformed reply") end
+    if resp.has_id and value.IsInt(resp.id) and value.AsInt(resp.id) != id:
+        ret _client_fail(c, "reply id mismatch")
+    end
+    ret resp
+end
+
+@en "CallNoParams"
+@fa "فراخوان بدون پارامتر"
+pub func CallNoParams(c &: Client, method: str): Response:
+    ret Call(c, method, value.NewValueArray())
+end
+
+@en "CallArgs"
+@fa "فراخوان با آرگومان"
+pub func CallArgs(c &: Client, method: str, args: Vector<value.Value>): Response:
+    mut arr := value.NewValueArray()
+    mut i := 0
+    until i < args.len():
+        value.ArrayPush(arr, args.get(i))
+        i += 1
+    end
+    ret Call(c, method, arr)
+end
+
+@en "Notify"
+@fa "اعلان"
+pub func Notify(c &: Client, method: str, params: value.Value): bool:
+    if not c.ok: ret false end
+    ret _send(c, NewNotification(method, params))
+end
+
+@en "CallBatch"
+@fa "فراخوان دسته‌ای"
+pub func CallBatch(c &: Client, reqs: Vector<Request>): Responses:
+    mut out := Responses {}
+    out.is_batch = true
+    if not c.ok: ret out end
+    if c.codec == RPC_CODEC_MSGPACK:
+        mut i := 0
+        until i < reqs.len():
+            r := reqs.get(i)
+            out.items.push(Call(c, r.method, r.params))
+            i += 1
+        end
+        ret out
+    end
+    mut parts := Vector {} as Vector<str>
+    mut expected := 0
+    mut i := 0
+    until i < reqs.len():
+        mut r := reqs.get(i)
+        if r.has_id:
+            r.id = value.ValueInt(c.next_id)
+            r.msgid = c.next_id
+            c.next_id += 1 as i64
+            expected += 1
+        end
+        parts.push(JsonEncodeRequest(r))
+        i += 1
+    end
+    text := "[" + _join(parts, ",") + "]"
+    if not WriteFrameStr(c.conn.fd, c.framing, text): ret out end
+    if expected == 0: ret out end
+    mut ok := false
+    reply := ReadFrameStr(c.stream, c.framing, ok)
+    if not ok: ret out end
+    mut dok := false
+    ret JsonDecodeResponses(reply, dok)
+end
+
+@en "ResultInt"
+@fa "نتیجه عددی"
+pub func ResultInt(r: Response): i64:
+    if r.is_error: ret 0 end
+    if value.IsInt(r.result) or value.IsFloat(r.result): ret value.AsInt(r.result) end
+    ret 0
+end
+
+@en "ResultFloat"
+@fa "نتیجه اعشاری"
+pub func ResultFloat(r: Response): f64:
+    if r.is_error: ret 0.0 end
+    if value.IsInt(r.result) or value.IsFloat(r.result): ret value.AsFloat(r.result) end
+    ret 0.0
+end
+
+@en "ResultStr"
+@fa "نتیجه متنی"
+pub func ResultStr(r: Response): str:
+    if r.is_error: ret "" end
+    if value.IsString(r.result): ret value.AsString(r.result) end
+    ret ""
+end
+
+@en "ResultBool"
+@fa "نتیجه بولی"
+pub func ResultBool(r: Response): bool:
+    if r.is_error: ret false end
+    if value.IsBool(r.result): ret value.AsBool(r.result) end
+    ret false
+end
+
+@en "IsErrorResponse"
+@fa "پاسخ خطاست"
+pub func IsErrorResponse(r: Response): bool:
+    ret r.is_error
+end
+
+@en "ErrorCode"
+@fa "کد خطا"
+pub func ErrorCode(r: Response): int:
+    if not r.is_error: ret 0 end
+    ret r.err.code
+end
+
+@en "ErrorMessage"
+@fa "پیام خطا"
+pub func ErrorMessage(r: Response): str:
+    if not r.is_error: ret "" end
+    ret r.err.message
+end
+
+@en "CallHTTP"
+@fa "فراخوان اچ تی تی پی"
+pub func CallHTTP(url: str, method: str, params: value.Value, id: i64): Response:
+    req := NewRequest(method, params, id)
+    body := JsonEncodeRequest(req)
+    mut headers := http.NewHeaders()
+    headers.put("Content-Type", "application/json")
+    headers.put("Accept", "application/json")
+    hr := http.PostWith(url, body, headers)
+    mut r := Response {}
+    if not http.Ok(hr):
+        r.is_error = true
+        r.err = NewError(RPC_INTERNAL_ERROR, "HTTP request failed")
+        ret r
+    end
+    mut ok := false
+    out := JsonDecodeResponse(http.Body(hr), ok)
+    if not ok:
+        r.is_error = true
+        r.err = NewError(RPC_PARSE_ERROR, "malformed JSON-RPC reply")
+        ret r
+    end
+    ret out
+end

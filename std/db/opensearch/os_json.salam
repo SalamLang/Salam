@@ -1,0 +1,236 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package opensearch
+
+import str
+import conv
+import encoding.json
+
+inline pure func _os_bp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _os_ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+func _os_ws(s: str, i: int): int:
+    l := str.ByteLen(s)
+    bp := _os_bp(s)
+    mut p := i
+    until p < l:
+        code := _os_ub(bp, p)
+        if code != 32 and code != 9 and code != 10 and code != 13: ret p end
+        p += 1
+    end
+    ret p
+end
+
+func _os_value_end(s: str, i: int): int:
+    l := str.ByteLen(s)
+    bp := _os_bp(s)
+    mut p := i
+    mut depth := 0
+    mut in_str := false
+    until p < l:
+        code := _os_ub(bp, p)
+        if in_str:
+            if code == 92:
+                p += 1
+            else code == 34:
+                in_str = false
+                if depth == 0: ret p + 1 end
+            end
+        else code == 34:
+            in_str = true
+        else code == 123 or code == 91:
+            depth += 1
+        else code == 125 or code == 93:
+            if depth == 0: ret p end
+            depth -= 1
+            if depth == 0: ret p + 1 end
+        else code == 44:
+            if depth == 0: ret p end
+        end
+        p += 1
+    end
+    ret p
+end
+
+func _os_items(raw: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    l := str.ByteLen(raw)
+    bp := _os_bp(raw)
+    mut p := _os_ws(raw, 0)
+    if p >= l or _os_ub(bp, p) != 91: ret out end
+    p = _os_ws(raw, p + 1)
+    until p < l:
+        if _os_ub(bp, p) == 93: ret out end
+        e := _os_value_end(raw, p)
+        if e <= p: ret out end
+        out.push(str.TrimRight(str.ByteSub(raw, p, e - p)))
+        p = _os_ws(raw, e)
+        if p < l and _os_ub(bp, p) == 44:
+            p = _os_ws(raw, p + 1)
+        end
+    end
+    ret out
+end
+
+func _os_unquote(raw: str): str:
+    if raw.len() == 0: ret str.Clone("") end
+    bp := _os_bp(raw)
+    if _os_ub(bp, 0) != 34: ret str.Clone(raw) end
+    ret json.Get(`{"v":` + raw + `}`, "v")
+end
+
+func _os_is_index(seg: str): bool:
+    if seg.len() == 0: ret false end
+    bp := _os_bp(seg)
+    repeat str.ByteLen(seg) in i:
+        code := _os_ub(bp, i)
+        if code < 48 or code > 57: ret false end
+    end
+    ret true
+end
+
+func _os_members(raw: str, keys &: Vector<str>, vals &: Vector<str>):
+    l := str.ByteLen(raw)
+    bp := _os_bp(raw)
+    mut p := _os_ws(raw, 0)
+    if p >= l or _os_ub(bp, p) != 123: ret end
+    p = _os_ws(raw, p + 1)
+    until p < l:
+        if _os_ub(bp, p) != 34: ret end
+        ke := _os_value_end(raw, p)
+        if ke <= p: ret end
+        k := _os_unquote(str.ByteSub(raw, p, ke - p))
+        p = _os_ws(raw, ke)
+        if p >= l or _os_ub(bp, p) != 58: ret end
+        vs := _os_ws(raw, p + 1)
+        ve := _os_value_end(raw, vs)
+        if ve <= vs: ret end
+        keys.push(k)
+        vals.push(str.TrimRight(str.ByteSub(raw, vs, ve - vs)))
+        p = _os_ws(raw, ve)
+        if p < l and _os_ub(bp, p) == 44:
+            p = _os_ws(raw, p + 1)
+            continue
+        end
+        ret
+    end
+end
+
+func _os_raw_member(text: str, key: str): str:
+    mut keys := Vector {} as Vector<str>
+    mut vals := Vector {} as Vector<str>
+    _os_members(text, keys, vals)
+    mut out := ""
+    repeat keys.len() in i:
+        if keys.get(i) == key:
+            out = vals.get(i)
+            break
+        end
+    end
+    keys.free()
+    vals.free()
+    ret out
+end
+
+func _os_path_raw(text: str, path: str): str:
+    mut cur := text
+    each seg in path.split("."):
+        t := str.Trim(cur)
+        if t.len() == 0: ret "" end
+        if str.StartsWith(t, "["):
+            if not _os_is_index(seg): ret "" end
+            items := _os_items(t)
+            k := seg.to_int()
+            if k >= items.len(): ret "" end
+            cur = items.get(k)
+        else str.StartsWith(t, "{"):
+            cur = _os_raw_member(t, seg)
+        else:
+            ret ""
+        end
+    end
+    ret cur
+end
+
+func _os_path(text: str, path: str): str:
+    raw := _os_path_raw(text, path)
+    if raw == "null": ret "" end
+    ret _os_unquote(raw)
+end
+
+func _os_jstr(text: str, key: str): str:
+    v := json.Get(text, key)
+    if v == "null": ret "" end
+    ret v
+end
+
+func _os_jraw(text: str, key: str): str:
+    v := _os_raw_member(text, key)
+    if v == "null": ret "" end
+    ret v
+end
+
+func _os_jbool(text: str, key: str): bool:
+    ret json.Get(text, key) == "true"
+end
+
+func _os_i64(raw: str): i64:
+    if raw.len() == 0 or raw == "null": ret 0 end
+    t := str.Trim(raw)
+    dot := t.find(".")
+    if dot > 0: ret conv.ParseInt(t.substr(0, dot)) end
+    ret conv.ParseInt(t)
+end
+
+func _os_int(raw: str): int:
+    ret _os_i64(raw) as int
+end
+
+func _os_f64(raw: str): f64:
+    if raw.len() == 0 or raw == "null": ret 0.0 end
+    ret str.Trim(raw).to_float()
+end
+
+func _os_ji64(text: str, key: str, fallback: i64): i64:
+    v := json.Get(text, key)
+    if v.len() == 0 or v == "null": ret fallback end
+    ret _os_i64(v)
+end
+
+func _os_strs(items: Vector<str>): str:
+    mut quoted := Vector {} as Vector<str>
+    each it in items:
+        quoted.push(json.Str(it))
+    end
+    ret "[" + str.Join(quoted, ",") + "]"
+end
+
+func _os_one(key: str, raw: str): str:
+    ret "{" + json.Str(key) + ":" + raw + "}"
+end
+
+func _os_two(k1: str, v1: str, k2: str, v2: str): str:
+    ret "{" + json.Str(k1) + ":" + v1 + "," + json.Str(k2) + ":" + v2 + "}"
+end
+
+func _os_body_or_empty(raw: str): str:
+    if str.Trim(raw).len() == 0: ret str.Clone("{}") end
+    ret str.Clone(raw)
+end

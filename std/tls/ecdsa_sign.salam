@@ -1,0 +1,186 @@
+package tls
+
+func _rfc6979_k(cv: Curve, kind: int, dbytes: void*, h1: void*, h1len: int, kout: void*): bool:
+    hlen := _hash_size(kind)
+    rlen := cv.nb
+
+    z := _ecdsa_digest_scalar(cv, h1, h1len)
+    mut h1oct := _newbuf(rlen)
+    defer _buf_wipe(h1oct)
+    _putzeros(h1oct, rlen)
+    _fe_to_bytes(z, h1oct.p, rlen)
+
+    mut v := _newbuf(hlen)
+    defer _buf_wipe(v)
+    _putzeros(v, hlen)
+    repeat hlen in i:
+        _bufset(v, i, 0x01)
+    end
+
+    mut k := _newbuf(hlen)
+    defer _buf_wipe(k)
+    _putzeros(k, hlen)
+
+    mut scratch := _newbuf(hlen)
+    defer _buf_wipe(scratch)
+    _putzeros(scratch, hlen)
+
+    mut seed := _newbuf(hlen + 1 + 2 * rlen)
+    defer _buf_wipe(seed)
+
+    _bufreset(seed)
+    _putraw(seed, v.p, hlen)
+    _put8(seed, 0x00)
+    _putraw(seed, dbytes, rlen)
+    _putraw(seed, h1oct.p, rlen)
+    _hmac(kind, k.p, hlen, seed.p, seed.len, scratch.p)
+    mem.Copy(k.p, scratch.p, hlen as u64)
+    _hmac(kind, k.p, hlen, v.p, hlen, scratch.p)
+    mem.Copy(v.p, scratch.p, hlen as u64)
+
+    _bufreset(seed)
+    _putraw(seed, v.p, hlen)
+    _put8(seed, 0x01)
+    _putraw(seed, dbytes, rlen)
+    _putraw(seed, h1oct.p, rlen)
+    _hmac(kind, k.p, hlen, seed.p, seed.len, scratch.p)
+    mem.Copy(k.p, scratch.p, hlen as u64)
+    _hmac(kind, k.p, hlen, v.p, hlen, scratch.p)
+    mem.Copy(v.p, scratch.p, hlen as u64)
+
+    mut t := _newbuf(rlen + hlen)
+    defer _buf_wipe(t)
+    mut tries := 0
+    mut found := false
+    until tries < 256 and not found:
+        _bufreset(t)
+        until t.len < rlen:
+            _hmac(kind, k.p, hlen, v.p, hlen, scratch.p)
+            mem.Copy(v.p, scratch.p, hlen as u64)
+            _putraw(t, v.p, hlen)
+        end
+        cand := _fe_from_bytes(t.p, rlen)
+        if not _fe_is_zero(cand, cv.nl) and _fe_lt(cand, cv.n, cv.nl):
+            _fe_to_bytes(cand, kout, rlen)
+            found = true
+        else:
+            _bufreset(seed)
+            _putraw(seed, v.p, hlen)
+            _put8(seed, 0x00)
+            _hmac(kind, k.p, hlen, seed.p, seed.len, scratch.p)
+            mem.Copy(k.p, scratch.p, hlen as u64)
+            _hmac(kind, k.p, hlen, v.p, hlen, scratch.p)
+            mem.Copy(v.p, scratch.p, hlen as u64)
+            tries += 1
+        end
+    end
+    ret found
+end
+
+func _ecdsa_sign(cv: Curve, kind: int, dbytes: void*, digest: void*, dlen: int, rout: void*, sout: void*): bool:
+    mut kbuf := _newbuf(cv.nb)
+    defer _buf_wipe(kbuf)
+    _putzeros(kbuf, cv.nb)
+    if not _rfc6979_k(cv, kind, dbytes, digest, dlen, kbuf.p):
+        ret false
+    end
+    kfe := _fe_from_bytes(kbuf.p, cv.nb)
+    if _fe_is_zero(kfe, cv.nl) or not _fe_lt(kfe, cv.n, cv.nl):
+        ret false
+    end
+
+    r := _jac_mul(cv, kfe, _jac_generator(cv))
+    mut xb := _newbuf(cv.nb)
+    defer _buf_free(xb)
+    _putzeros(xb, cv.nb)
+    mut yb := _newbuf(cv.nb)
+    defer _buf_free(yb)
+    _putzeros(yb, cv.nb)
+    if not _jac_to_affine(cv, r, xb.p, yb.p):
+        ret false
+    end
+    mut x1 := _fe_from_bytes(xb.p, cv.nb)
+    mut rn := Fe {}
+    borrow := _fe_sub_raw(rn, x1, _fe_from(cv.n, cv.nl), cv.nl)
+    _fe_cmov(x1, rn, ((borrow ^ (1 as u32)) & (1 as u32)) as int, cv.nl)
+    if _fe_is_zero(x1, cv.nl):
+        ret false
+    end
+
+    z := _ecdsa_digest_scalar(cv, digest, dlen)
+    dfe := _fe_from_bytes(dbytes, cv.nb)
+
+    mut km := Fe {}
+    _sn_to_mont(cv, km, kfe)
+    mut kinv := Fe {}
+    _sn_inv(cv, kinv, km)
+
+    mut rm := Fe {}
+    _sn_to_mont(cv, rm, x1)
+    mut dm := Fe {}
+    _sn_to_mont(cv, dm, dfe)
+    mut rdm := Fe {}
+    _sn_mul(cv, rdm, rm, dm)
+    mut rd := Fe {}
+    _sn_from_mont(cv, rd, rdm)
+
+    mut zrd := Fe {}
+    _fe_add_mod(zrd, z, rd, cv.n, cv.nl)
+
+    mut zrdm := Fe {}
+    _sn_to_mont(cv, zrdm, zrd)
+    mut sm := Fe {}
+    _sn_mul(cv, sm, kinv, zrdm)
+    mut s := Fe {}
+    _sn_from_mont(cv, s, sm)
+    if _fe_is_zero(s, cv.nl):
+        ret false
+    end
+
+    _fe_to_bytes(x1, rout, cv.nb)
+    _fe_to_bytes(s, sout, cv.nb)
+    ret true
+end
+
+func _ecdsa_p256_sign(dbytes: void*, digest: void*, dlen: int, rout: void*, sout: void*): bool:
+    ret _ecdsa_sign(_curve_p256(), HASH_SHA256, dbytes, digest, dlen, rout, sout)
+end
+
+func _ecdsa_p384_sign(dbytes: void*, digest: void*, dlen: int, rout: void*, sout: void*): bool:
+    ret _ecdsa_sign(_curve_p384(), HASH_SHA384, dbytes, digest, dlen, rout, sout)
+end
+
+func _der_put_uint_from_bytes(out &: Buf, p: void*, n: int):
+    mut i := 0
+    until i < n - 1 and _bget(p, i) == 0:
+        i += 1
+    end
+    mut vlen := n - i
+    mut needpad := false
+    if _bget(p, i) >= 0x80:
+        needpad = true
+        vlen += 1
+    end
+    _put8(out, ASN1_INTEGER)
+    _put8(out, vlen)
+    if needpad:
+        _put8(out, 0x00)
+    end
+    _putraw(out, ((p as i64) + (i as i64)) as void*, n - i)
+end
+
+func _ecdsa_der_encode(rbytes: void*, sbytes: void*, width: int, out &: Buf):
+    _bufreset(out)
+    mut body := _newbuf(2 * width + 8)
+    defer _buf_free(body)
+    _der_put_uint_from_bytes(body, rbytes, width)
+    _der_put_uint_from_bytes(body, sbytes, width)
+    _put8(out, ASN1_SEQUENCE)
+    if body.len < 128:
+        _put8(out, body.len)
+    else:
+        _put8(out, 0x81)
+        _put8(out, body.len)
+    end
+    _putbuf(out, body)
+end

@@ -1,0 +1,400 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "aiff"
+@fa "ایف"
+package aiff
+
+import audio
+import compress
+import archive
+import encoding.binary
+
+@en "CompNone"
+@fa "فشرده هیچ"
+pub const CompNone := 0
+
+@en "CompSowt"
+@fa "فشرده کوچک‌انتها"
+pub const CompSowt := 1
+
+@en "CompFloat32"
+@fa "فشرده اعشار۳۲"
+pub const CompFloat32 := 2
+
+@en "CompFloat64"
+@fa "فشرده اعشار۶۴"
+pub const CompFloat64 := 3
+
+@en "CompALaw"
+@fa "فشرده ای‌لا"
+pub const CompALaw := 4
+
+@en "CompMuLaw"
+@fa "فشرده میولا"
+pub const CompMuLaw := 5
+
+@en "Common"
+@fa "مشترک"
+pub struct Common:
+    @en "channels"
+    @fa "کانال ها"
+    pub channels: int = 0
+    @en "frames"
+    @fa "فریم ها"
+    pub frames: int = 0
+    @en "bits"
+    @fa "بیت ها"
+    pub bits: int = 0
+    @en "rate"
+    @fa "نرخ"
+    pub rate: int = 0
+    @en "compression"
+    @fa "روش فشرده"
+    pub compression: int = 0
+    @en "data_offset"
+    @fa "جای داده"
+    pub data_offset: int = 0
+    @en "data_size"
+    @fa "اندازه داده"
+    pub data_size: int = 0
+end
+
+func _tag(a: int, b: int, c: int, d: int): int:
+    ret (a << 24) | (b << 16) | (c << 8) | d
+end
+
+func _tag_at(p: void*, off: int): int:
+    bp := p as u8*
+    ret _tag(bp[off] as int, bp[off + 1] as int, bp[off + 2] as int, bp[off + 3] as int)
+end
+
+func _u16(p: void*, off: int): int:
+    bp := p as u8*
+    ret ((bp[off] as int) << 8) | (bp[off + 1] as int)
+end
+
+func _u32(p: void*, off: int): i64:
+    bp := p as u8*
+    ret ((bp[off] as i64) << 24) | ((bp[off + 1] as i64) << 16) | ((bp[off + 2] as i64) << 8) | (bp[off + 3] as i64)
+end
+
+func _read_rate(p: void*, off: int): int:
+    bp := p as u8*
+    exp := (((bp[off] as int) & 127) << 8) | (bp[off + 1] as int)
+    hi := ((bp[off + 2] as i64) << 24) | ((bp[off + 3] as i64) << 16) | ((bp[off + 4] as i64) << 8) | (bp[off + 5] as i64)
+    if exp == 0 or hi == (0 as i64):
+        ret 0
+    end
+    shift := exp - 16414
+    if shift >= 0:
+        if shift > 20:
+            ret 0
+        end
+        ret (hi << shift) as int
+    end
+    drop := 0 - shift
+    if drop > 62:
+        ret 0
+    end
+    half := (1 as i64) << (drop - 1)
+    ret ((hi + half) >> drop) as int
+end
+
+func _write_rate(b &: compress.ByteBuf, rate: int):
+    if rate <= 0:
+        mut z := 0
+        until z < 10:
+            compress.BufPush(b, 0)
+            z += 1
+        end
+        ret
+    end
+    mut k := 0
+    mut v := rate
+    until v > 1:
+        v = v >> 1
+        k += 1
+    end
+    exp := 16383 + k
+    hi := (rate as i64) << (31 - k)
+    compress.BufPush(b, (exp >> 8) & 127)
+    compress.BufPush(b, exp & 255)
+    compress.BufPush(b, ((hi >> 24) & (255 as i64)) as int)
+    compress.BufPush(b, ((hi >> 16) & (255 as i64)) as int)
+    compress.BufPush(b, ((hi >> 8) & (255 as i64)) as int)
+    compress.BufPush(b, (hi & (255 as i64)) as int)
+    mut t := 0
+    until t < 4:
+        compress.BufPush(b, 0)
+        t += 1
+    end
+end
+
+func _comp_of(tag: int): int:
+    if tag == _tag(78, 79, 78, 69):
+        ret CompNone
+    end
+    if tag == _tag(115, 111, 119, 116):
+        ret CompSowt
+    end
+    if tag == _tag(102, 108, 51, 50) or tag == _tag(70, 76, 51, 50):
+        ret CompFloat32
+    end
+    if tag == _tag(102, 108, 54, 52) or tag == _tag(70, 76, 54, 52):
+        ret CompFloat64
+    end
+    if tag == _tag(97, 108, 97, 119) or tag == _tag(65, 76, 65, 87):
+        ret CompALaw
+    end
+    if tag == _tag(117, 108, 97, 119) or tag == _tag(85, 76, 65, 87):
+        ret CompMuLaw
+    end
+    ret -1
+end
+
+@en "IsAIFF"
+@fa "ایف است"
+pub func IsAIFF(p: void*, n: int): bool:
+    if n < 12:
+        ret false
+    end
+    if _tag_at(p, 0) != _tag(70, 79, 82, 77):
+        ret false
+    end
+    form := _tag_at(p, 8)
+    ret form == _tag(65, 73, 70, 70) or form == _tag(65, 73, 70, 67)
+end
+
+@en "ReadCommon"
+@fa "خواندن مشترک"
+pub func ReadCommon(p: void*, n: int, out &: Common): bool:
+    if not IsAIFF(p, n):
+        ret false
+    end
+    mut c := Common {}
+    mut have_comm := false
+    mut have_ssnd := false
+    mut at := 12
+    until at + 8 <= n:
+        tag := _tag_at(p, at)
+        size := _u32(p, at + 4)
+        body := at + 8
+        mut avail := n - body
+        if size < (avail as i64):
+            avail = size as int
+        end
+        if tag == _tag(67, 79, 77, 77) and avail >= 18:
+            c.channels = _u16(p, body)
+            c.frames = _u32(p, body + 2) as int
+            c.bits = _u16(p, body + 6)
+            c.rate = _read_rate(p, body + 8)
+            if avail >= 22:
+                c.compression = _comp_of(_tag_at(p, body + 18))
+            else:
+                c.compression = CompNone
+            end
+            have_comm = true
+        end
+        if tag == _tag(83, 83, 78, 68) and avail >= 8:
+            skip := _u32(p, body) as int
+            c.data_offset = body + 8 + skip
+            c.data_size = avail - 8 - skip
+            if c.data_size < 0:
+                c.data_size = 0
+            end
+            have_ssnd = true
+        end
+        mut step := avail
+        if (step % 2) == 1:
+            step += 1
+        end
+        at = body + step
+    end
+    if not have_comm or not have_ssnd:
+        ret false
+    end
+    if c.channels <= 0 or c.rate <= 0 or c.compression < 0:
+        ret false
+    end
+    if c.compression == CompFloat32:
+        c.bits = 32
+    end
+    if c.compression == CompFloat64:
+        c.bits = 64
+    end
+    if c.compression == CompALaw or c.compression == CompMuLaw:
+        c.bits = 8
+    end
+    if not audio.PcmDepthValid(c.bits) and c.bits != 64:
+        ret false
+    end
+    out = c
+    ret true
+end
+
+@en "ProbeAIFF"
+@fa "بررسی ایف"
+pub func ProbeAIFF(p: void*, n: int, ok &: bool): audio.Info:
+    ok = false
+    mut info := audio.Info {}
+    mut c := Common {}
+    if not ReadCommon(p, n, c):
+        ret info
+    end
+    info.format = audio.FormatAIFF
+    info.rate = c.rate
+    info.channels = c.channels
+    info.bits = c.bits
+    info.frames = c.frames
+    info.lossless = c.compression != CompALaw and c.compression != CompMuLaw
+    info.bitrate = c.rate * c.channels * c.bits
+    info.duration = (c.frames as f64) / (c.rate as f64)
+    ok = true
+    ret info
+end
+
+@en "DecodeAIFF"
+@fa "کدگشایی ایف"
+pub func DecodeAIFF(p: void*, n: int, ok &: bool): audio.Clip:
+    ok = false
+    mut cm := Common {}
+    if not ReadCommon(p, n, cm):
+        ret audio.Clip {}
+    end
+    frame := (cm.bits / 8) * cm.channels
+    if frame <= 0:
+        ret audio.Clip {}
+    end
+    mut frames := cm.frames
+    avail := cm.data_size / frame
+    if avail < frames:
+        frames = avail
+    end
+    if frames <= 0:
+        ret audio.Clip {}
+    end
+    mut out := audio.New(cm.rate, cm.channels, frames)
+    if out.samples == null:
+        ret out
+    end
+    out.bits = cm.bits
+    mut good := false
+    if cm.compression == CompMuLaw:
+        good = audio.DecodeLawPcm(p, cm.data_offset, out, false)
+        out.bits = 16
+    else cm.compression == CompALaw:
+        good = audio.DecodeLawPcm(p, cm.data_offset, out, true)
+        out.bits = 16
+    else cm.compression == CompFloat32 or cm.compression == CompFloat64:
+        good = audio.DecodeFloatPcm(p, n, cm.data_offset, out, cm.bits, true)
+    else cm.compression == CompSowt:
+        good = audio.DecodePcm(p, cm.data_offset, out, cm.bits, false, false)
+    else:
+        good = audio.DecodePcm(p, cm.data_offset, out, cm.bits, true, false)
+    end
+    if not good:
+        audio.Free(out)
+        ret audio.Clip {}
+    end
+    ok = true
+    ret out
+end
+
+@en "EncodeAIFFBits"
+@fa "کدگذاری ایف با بیت"
+pub func EncodeAIFFBits(c: audio.Clip, bits: int): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    if audio.IsEmpty(c) or not audio.PcmDepthValid(bits):
+        ret out
+    end
+    data_bytes := c.frames * c.channels * (bits / 8)
+    compress.BufPush(out, 70)
+    compress.BufPush(out, 79)
+    compress.BufPush(out, 82)
+    compress.BufPush(out, 77)
+    binary.WriteU32BE(out, 4 + 8 + 18 + 8 + 8 + data_bytes)
+    compress.BufPush(out, 65)
+    compress.BufPush(out, 73)
+    compress.BufPush(out, 70)
+    compress.BufPush(out, 70)
+    compress.BufPush(out, 67)
+    compress.BufPush(out, 79)
+    compress.BufPush(out, 77)
+    compress.BufPush(out, 77)
+    binary.WriteU32BE(out, 18)
+    binary.WriteU16BE(out, c.channels)
+    binary.WriteU32BE(out, c.frames)
+    binary.WriteU16BE(out, bits)
+    _write_rate(out, c.rate)
+    compress.BufPush(out, 83)
+    compress.BufPush(out, 83)
+    compress.BufPush(out, 78)
+    compress.BufPush(out, 68)
+    binary.WriteU32BE(out, 8 + data_bytes)
+    binary.WriteU32BE(out, 0)
+    binary.WriteU32BE(out, 0)
+    audio.EncodePcm(out, c, bits, true, false)
+    ret out
+end
+
+@en "EncodeAIFF"
+@fa "کدگذاری ایف"
+pub func EncodeAIFF(c: audio.Clip): compress.ByteBuf:
+    mut bits := c.bits
+    if not audio.PcmDepthValid(bits):
+        bits = 16
+    end
+    ret EncodeAIFFBits(c, bits)
+end
+
+@en "OpenAIFF"
+@fa "بازکردن ایف"
+pub func OpenAIFF(path: str, ok &: bool): audio.Clip:
+    mut read_ok := false
+    buf := archive.ReadBinaryFile(path, read_ok)
+    if not read_ok:
+        ok = false
+        ret audio.Clip {}
+    end
+    out := DecodeAIFF(buf.data, buf.len, ok)
+    compress.BufFree(buf)
+    ret out
+end
+
+@en "SaveAIFF"
+@fa "ذخیره ایف"
+pub func SaveAIFF(c: audio.Clip, path: str): bool:
+    buf := EncodeAIFF(c)
+    if compress.BufLen(buf) == 0:
+        compress.BufFree(buf)
+        ret false
+    end
+    ok := archive.WriteBinaryFileBuf(path, buf)
+    compress.BufFree(buf)
+    ret ok
+end
+
+@en "SaveAIFFBits"
+@fa "ذخیره ایف با بیت"
+pub func SaveAIFFBits(c: audio.Clip, path: str, bits: int): bool:
+    buf := EncodeAIFFBits(c, bits)
+    if compress.BufLen(buf) == 0:
+        compress.BufFree(buf)
+        ret false
+    end
+    ok := archive.WriteBinaryFileBuf(path, buf)
+    compress.BufFree(buf)
+    ret ok
+end

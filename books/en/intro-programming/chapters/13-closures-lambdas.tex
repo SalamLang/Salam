@@ -1,0 +1,253 @@
+\chapter{Closures and Lambdas}%
+\label{ch:closures-lambdas}
+
+So far functions have been things we \emph{define} and \emph{call}. In this
+chapter functions become \emph{values}: things we can store in a variable, pass to
+another function, and create on the spot without giving them a name. A small,
+unnamed function is called a \textbf{lambda}, and when one captures variables from
+around it, it becomes a \textbf{closure}. These ideas unlock a flexible,
+expressive style of programming.
+
+\section{Functions as values}
+
+A \textbf{lambda} is a function written as an expression, with no name. Its
+syntax is a parameter list, a colon, the body, and \code{end}, exactly like a
+named function, just without the name (and without a return type: the
+compiler works that out from the \code{ret}). Give back a value with \code{ret}:
+
+\begin{salamen}
+func main:
+    double := (x: int): ret x * 2 end
+    println double(21)
+end
+\end{salamen}
+
+\begin{progout}
+42
+\end{progout}
+
+Here \code{(x: int): ret x * 2 end} is a function value: it takes an
+\code{int} called \code{x} and produces \code{x * 2}. We store it in the variable \code{double}
+(\code{:=} infers its type, as for any other value) and then \emph{call} it just like any
+function: \code{double(21)}. The lambda has no name of its own: the name
+\code{double} belongs to the variable, not the function.
+
+\subsection{The type of a function value}
+
+The type of \code{double} is \code{func(int) int}: ``a function taking an
+\code{int} and returning an \code{int}.'' In general a function-value type is
+written \code{func(}\textit{argument types}\code{) }\textit{return type}. A
+function value taking nothing and returning an \code{int} has type
+\code{func() int}. You will see these types most often where one function accepts
+another as a parameter.
+
+\subsection{Multi-statement bodies}
+
+A lambda body is a block, so it takes as many statements as you need. Nothing
+about the syntax changes:
+
+\begin{salamen}
+func main:
+    f := (x: int):
+        y := x * x
+        ret y + 1
+    end
+    println f(4)
+end
+\end{salamen}
+
+\begin{progout}
+17
+\end{progout}
+
+There is only this one form: a lambda always opens with a colon and closes with
+\code{end}. (If you meet an older Salam program that writes
+\code{(x: int) => x * 2}, that arrow form was removed in Salam 0.5.0.)
+
+\section{Higher-order functions}
+
+A function that takes another function as a parameter, or returns one, is
+called a \textbf{higher-order function}. Because a function value has a type like
+\code{func(int) int}, you can declare a parameter of that type and call it inside:
+
+\begin{salamen}
+func apply(f: func(int) int, x: int): int:
+    ret f(x)
+end
+
+func main:
+    println apply((x: int): ret x + 100 end, 5)
+end
+\end{salamen}
+
+\begin{progout}
+105
+\end{progout}
+
+\code{apply} does not know or care what \code{f} does; it just calls \code{f(x)}.
+We hand it a lambda created right at the call site,
+\code{(x: int): ret x + 100 end}, and
+\code{apply} runs it on \code{5}. This is the essence of higher-order
+programming: behaviour passed around as data. The same \code{apply} could square,
+negate, or double its argument, depending only on the lambda you give it.
+
+\section{Closures: capturing the surrounding state}
+
+Here is where function values become truly powerful. A lambda can \emph{use
+variables from the scope in which it was created}, not just its own parameters.
+When it does, it ``closes over'' those variables, and we call it a
+\textbf{closure}. The captured values travel with the function, even after the
+scope that created them has returned.
+
+The classic example is a function that \emph{builds} another function:
+
+\begin{salamen}
+func make_adder(n: int): func(int) int:
+    ret (x: int): ret x + n end
+end
+
+func main:
+    add10 := make_adder(10)
+    add100 := make_adder(100)
+    println add10(5)
+    println add100(5)
+end
+\end{salamen}
+
+\begin{progout}
+15
+105
+\end{progout}
+
+\code{make\_adder} returns a lambda that adds \code{n}, but \code{n} is
+\code{make\_adder}'s parameter, not the lambda's. The returned closure
+\emph{captures} the value of \code{n}. So \code{make\_adder(10)} produces a
+function that always adds 10, and \code{make\_adder(100)} produces a separate one
+that always adds 100. Each closure remembers its own captured \code{n}, long after
+\code{make\_adder} has finished running.
+
+\subsection{Captured by value}
+
+A closure captures a \emph{copy} of each outer variable, taken at the moment the
+lambda is created. Changing the outer variable afterwards does not reach the
+copy:
+
+\begin{salamen}
+func main:
+    mut n := 1
+    get := (): ret n end
+    n = 5
+    println get(), n
+end
+\end{salamen}
+
+\begin{progout}
+1 5
+\end{progout}
+
+\code{get} still returns 1, the value \code{n} had when the lambda was made. The
+same rule works in the other direction: a lambda that assigns to a captured
+variable changes its own copy, never the original. If two pieces of code really
+must share one changing value, share it through something that lives on the
+heap, such as a \code{Vector}, or through a \code{mut} global.
+
+\section{Closures that remember and change state}
+
+Because a closure carries its captured variables with it, it can also \emph{update}
+its own copies between calls, giving a function that has memory. A counter is the
+canonical example:
+
+\begin{salamen}
+func make_counter(): func() int:
+    mut count := 0
+    ret ():
+        count = count + 1
+        ret count
+    end
+end
+
+func main:
+    next := make_counter()
+    println next()
+    println next()
+    println next()
+end
+\end{salamen}
+
+\begin{progout}
+1
+2
+3
+\end{progout}
+
+Each call to \code{next()} increments and returns the captured \code{count}. The
+variable \code{count} lives on inside the closure even though \code{make\_counter}
+returned long ago: the closure has kept its own copy alive. Call \code{make\_counter()} a
+second time and you get a fresh, independent counter starting again at zero.
+
+\begin{deep}[In Depth: how closures are implemented]
+A closure is more than a pointer to code: it must also carry the variables it
+captured. Salam implements this by allocating a small \emph{environment} on the
+heap holding the captured values, and pairing it with the lambda's code. The
+function value you pass around is really this code-plus-environment bundle. When
+you call it, the captured variables are read from (and written to) that
+environment, which is why \code{count} survives between calls and why two counters
+do not interfere. Because the environment holds copies, made when the lambda was
+created, the closure never sees later changes to the original variables. The compiler performs this ``lifting'' of the lambda and its
+captures automatically; you simply write the closure and it works.
+\end{deep}
+
+\section{Why closures matter}
+
+Closures let you parameterise \emph{behaviour}, not just values. A sort routine
+can take a closure describing how to compare two elements; a retry helper can take
+a closure describing the work to attempt; an event system can take closures to run
+when something happens. In each case you hand over a small piece of custom logic,
+created exactly where it is needed and carrying whatever surrounding context it
+requires. This keeps general machinery (the sorter, the retrier) cleanly separated
+from the specific behaviour you plug into it.
+
+\begin{tip}
+Lambdas are at their best when they are small: a comparison, a transformation, a
+quick test. If a lambda grows into a substantial block of logic, give it a real
+name with \code{func} instead; a named function is easier to read, reuse, and
+discuss. Reach for a lambda when naming it would add noise, not clarity.
+\end{tip}
+
+\section{Chapter summary}
+
+\begin{itemize}[leftmargin=1.4em]
+  \item A \textbf{lambda} is an unnamed function value:
+        \code{(params): ... end}, with \code{ret} for the value it gives
+        back.
+  \item A function value has a type like \code{func(int) int} or \code{func()
+        int}.
+  \item A \textbf{higher-order function} takes or returns a function value; call a
+        function-typed parameter just like any function.
+  \item A \textbf{closure} is a lambda that captures variables from its
+        surrounding scope; it captures them \emph{by value}, as copies made
+        when the lambda is created, and those copies live on with the closure.
+  \item Closures can carry mutable state (e.g. a counter), and each closure
+        instance has its own independent captured variables.
+  \item Use lambdas for small, local behaviour; promote anything substantial to a
+        named function.
+\end{itemize}
+
+\section{Exercises}
+
+\exercise Create a lambda \code{square} that returns its argument times itself,
+store it in a variable with \code{:=}, and print \code{square(7)}.
+
+\exercise Write a higher-order function \code{apply\_twice(f: func(int) int, x:
+int): int} that returns \code{f(f(x))}, and test it with a lambda that adds 3.
+
+\exercise Write \code{make\_multiplier(factor: int): func(int) int} that returns a
+closure multiplying by \code{factor}. Build a ``times 3'' and a ``times 10''
+function from it.
+
+\exercise Using \code{make\_counter}, create two independent counters and show by
+interleaving their calls that they do not share state.
+
+\exercise Write a higher-order function \code{transform\_all} that takes a
+\code{Vector<int>} and a \code{func(int) int}, and returns a new vector with the
+function applied to every element. Test it with a doubling lambda.

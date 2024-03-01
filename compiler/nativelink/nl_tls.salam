@@ -1,0 +1,313 @@
+package nativelink
+
+const TG_TP := 1
+const TG_MOD := 2
+const TG_DTP := 3
+const TG_ZERO := 4
+
+func has_tls(l &: Nl): bool:
+    repeat l.s_obj.len() in s:
+        if l.s_live[s] and (l.s_oc[s] == OC_TDATA or l.s_oc[s] == OC_TBSS):
+            ret true
+        end
+    end
+    ret false
+end
+
+func tls_place(l &: Nl, fpos &: i64):
+    l.tls_lo = 0 as i64
+    l.tls_hi = 0 as i64
+    l.tls_align = 1 as i64
+    if not has_tls(l):
+        ret
+    end
+    repeat l.s_obj.len() in s:
+        if l.s_live[s] and (l.s_oc[s] == OC_TDATA or l.s_oc[s] == OC_TBSS) and l.s_align[s] > l.tls_align:
+            l.tls_align = l.s_align[s]
+        end
+    end
+    fpos = align_to(fpos, l.tls_align)
+    start := fpos
+    place_class(l, OC_TDATA, fpos, false)
+    mut tb := fpos
+    place_class(l, OC_TBSS, tb, true)
+    l.oc_fpos[OC_TBSS] = fpos
+    l.tls_lo = l.base + start
+    l.tls_hi = l.base + tb
+end
+
+func tls_tpoff(l &: Nl, v: i64): i64:
+    off := v - l.tls_lo
+    if l.mach == EM_AARCH64:
+        ret align_to(16 as i64, l.tls_align) + off
+    end
+    if l.mach == EM_ARM:
+        ret align_to(8 as i64, l.tls_align) + off
+    end
+    if l.mach == EM_RISCV:
+        ret off
+    end
+    ret off - align_to(l.tls_hi - l.tls_lo, l.tls_align)
+end
+
+func tls_dtpoff(l &: Nl, v: i64): i64:
+    if l.mach == EM_RISCV:
+        ret v - l.tls_lo - (0x800 as i64)
+    end
+    ret v - l.tls_lo
+end
+
+func tls_slot(l &: Nl, os: int, kind: int): int:
+    key := (kind == TG_ZERO ? "ld" : str.FromInt(os as i64)) + ":" + str.FromInt(kind as i64)
+    if l.tls_got.has(key):
+        ret l.tls_got.get(key)
+    end
+    ix := l.got_sym.len()
+    g := l.os_glob[os]
+    l.got_sym.push(g >= 0 ? g : 0 - 1 - os)
+    l.got_tlsk.put(ix, kind)
+    l.tls_got.put(key, ix)
+    if kind == TG_MOD:
+        l.got_sym.push(g >= 0 ? g : 0 - 1 - os)
+        l.got_tlsk.put(ix + 1, TG_DTP)
+    end
+    if kind == TG_ZERO:
+        l.got_tlsk.put(ix, TG_MOD)
+        l.got_sym.push(g >= 0 ? g : 0 - 1 - os)
+        l.got_tlsk.put(ix + 1, TG_ZERO)
+    end
+    ret ix
+end
+
+func tls_slot_addr(l &: Nl, os: int, kind: int): i64:
+    key := (kind == TG_ZERO ? "ld" : str.FromInt(os as i64)) + ":" + str.FromInt(kind as i64)
+    if not l.tls_got.has(key):
+        ret 0 - 1
+    end
+    ret l.oc_addr[OC_GOT] + ((got_esz(l) * l.tls_got.get(key)) as i64)
+end
+
+func tls_got_kind(l &: Nl, ty: int): int:
+    if l.mach == EM_X86_64:
+        if ty == 22: ret TG_TP end
+        if ty == 19: ret TG_MOD end
+        if ty == 20: ret TG_ZERO end
+    else l.mach == EM_386:
+        if ty == 15 or ty == 16: ret TG_TP end
+        if ty == 18: ret TG_MOD end
+        if ty == 19: ret TG_ZERO end
+    else l.mach == EM_AARCH64:
+        if ty == 541 or ty == 542: ret TG_TP end
+        if ty == 513 or ty == 514: ret TG_MOD end
+    else l.mach == EM_ARM:
+        if ty == 107: ret TG_TP end
+        if ty == 104: ret TG_MOD end
+        if ty == 105: ret TG_ZERO end
+    else l.mach == EM_RISCV:
+        if ty == 21: ret TG_TP end
+        if ty == 22: ret TG_MOD end
+    end
+    ret 0
+end
+
+func tls_got_value(l &: Nl, q: int, v: i64): i64:
+    k := l.got_tlsk.get(q)
+    if k == TG_TP:
+        ret tls_tpoff(l, v)
+    end
+    if k == TG_MOD:
+        ret 1
+    end
+    if k == TG_DTP:
+        ret tls_dtpoff(l, v)
+    end
+    ret 0
+end
+
+func tls_need(l &: Nl, s2: int, r: int, ty: int): bool:
+    if l.tls_hi > l.tls_lo:
+        ret true
+    end
+    nl_fail(l, "thread-local relocation " + str.FromInt(ty as i64) + " but no .tdata or .tbss at " + reloc_where(l, s2, r))
+    ret false
+end
+
+func tls_fits32(l &: Nl, v: i64, s2: int, r: int): bool:
+    if fits32s(v):
+        ret true
+    end
+    nl_fail(l, "thread-local offset out of range at " + reloc_where(l, s2, r))
+    ret false
+end
+
+func reloc_tls(l &: Nl, buf: u8*, s2: int, r: int, ty: int, place: i64, pc: i64, a: i64, sv: i64, os: int): int:
+    x := sv + a
+    k := tls_got_kind(l, ty)
+    if k > 0:
+        if shared_g(l, os) < 0 and not tls_need(l, s2, r, ty):
+            ret 0 - 1
+        end
+        ga := tls_slot_addr(l, os, k)
+        if ga < (0 as i64):
+            nl_fail(l, "thread-local GOT entry missing at " + reloc_where(l, s2, r))
+            ret 0 - 1
+        end
+        got := l.oc_addr[OC_GOT]
+        if l.mach == EM_X86_64 or l.mach == EM_ARM:
+            wr32(buf, place, ga + a - pc)
+        else l.mach == EM_386:
+            wr32(buf, place, ty == 15 ? ga + a : ga + a - got)
+        else l.mach == EM_AARCH64:
+            if ty == 541 or ty == 513:
+                pg := (page4k(ga) - page4k(pc)) >> (12 as i64)
+                ins_set(buf, place, (0x60FFFFE0 as i64), ((pg & (3 as i64)) << (29 as i64)) | (((pg >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64)))
+            else ty == 542:
+                ins_set(buf, place, (0x3FFC00 as i64), ((ga & (0xFFF as i64)) >> (3 as i64)) << (10 as i64))
+            else:
+                ins_set(buf, place, (0x3FFC00 as i64), (ga & (0xFFF as i64)) << (10 as i64))
+            end
+        else:
+            rv_set_u(buf, place, rv_hi(ga + a - pc))
+        end
+        ret 1
+    end
+    if l.mach == EM_X86_64:
+        if ty == 23 or ty == 18 or ty == 21 or ty == 17 or ty == 16:
+            if not tls_need(l, s2, r, ty):
+                ret 0 - 1
+            end
+            if ty == 16:
+                wr64(buf, place, 1 as i64)
+            else ty == 18:
+                wr64(buf, place, tls_tpoff(l, x))
+            else ty == 17:
+                wr64(buf, place, tls_dtpoff(l, x))
+            else:
+                v := ty == 23 ? tls_tpoff(l, x) : tls_dtpoff(l, x)
+                if not tls_fits32(l, v, s2, r):
+                    ret 0 - 1
+                end
+                wr32(buf, place, v)
+            end
+            ret 1
+        end
+        ret 0
+    end
+    if l.mach == EM_386:
+        if ty == 17 or ty == 37 or ty == 34 or ty == 32 or ty == 35 or ty == 36:
+            if not tls_need(l, s2, r, ty):
+                ret 0 - 1
+            end
+            mut v2 := tls_tpoff(l, x)
+            if ty == 34:
+                v2 = 0 - v2
+            else ty == 32 or ty == 36:
+                v2 = tls_dtpoff(l, x)
+            else ty == 35:
+                v2 = 1 as i64
+            end
+            wr32(buf, place, v2)
+            ret 1
+        end
+        ret 0
+    end
+    if l.mach == EM_ARM:
+        if ty == 108 or ty == 106 or ty == 17 or ty == 18 or ty == 19:
+            if not tls_need(l, s2, r, ty):
+                ret 0 - 1
+            end
+            mut v3 := tls_tpoff(l, x)
+            if ty == 106 or ty == 18:
+                v3 = tls_dtpoff(l, x)
+            else ty == 17:
+                v3 = 1 as i64
+            end
+            wr32(buf, place, v3)
+            ret 1
+        end
+        ret 0
+    end
+    if l.mach == EM_RISCV:
+        if ty == 29 or ty == 30 or ty == 31 or ty == 32 or ty == 7 or ty == 9 or ty == 11:
+            if not tls_need(l, s2, r, ty):
+                ret 0 - 1
+            end
+            tp := tls_tpoff(l, x)
+            if ty == 29:
+                rv_set_u(buf, place, rv_hi(tp))
+            else ty == 30:
+                rv_set_i(buf, place, rv_lo(tp))
+            else ty == 31:
+                rv_set_s(buf, place, rv_lo(tp))
+            else ty == 7:
+                wr64(buf, place, 1 as i64)
+            else ty == 9:
+                wr64(buf, place, tls_dtpoff(l, x))
+            else ty == 11:
+                wr64(buf, place, tp)
+            end
+            ret 1
+        end
+        ret 0
+    end
+    if l.mach == EM_AARCH64:
+        if (ty >= 544 and ty <= 559) or ty == 562 or ty == 563 or ty == 564 or ty == 569 or ty == 1028 or ty == 1029 or ty == 1030:
+            if shared_g(l, os) < 0 and not tls_need(l, s2, r, ty):
+                ret 0 - 1
+            end
+            if (ty == 562 or ty == 563 or ty == 564 or ty == 569) and shared_g(l, os) >= 0:
+                gs := tls_slot_addr(l, os, TG_TP)
+                if ty == 562:
+                    pg := (page4k(gs) - page4k(pc)) >> (12 as i64)
+                    wr32(buf, place, (0x90000000 as i64) | ((pg & (3 as i64)) << (29 as i64)) | (((pg >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64)))
+                else ty == 563:
+                    wr32(buf, place, (0xF9400000 as i64) | (((gs & (0xFFF as i64)) >> (3 as i64)) << (10 as i64)))
+                else:
+                    wr32(buf, place, 0xD503201F as i64)
+                end
+                ret 1
+            end
+            tp2 := tls_tpoff(l, x)
+            if ty == 1028:
+                wr64(buf, place, 1 as i64)
+                ret 1
+            end
+            if ty == 1029:
+                wr64(buf, place, tls_dtpoff(l, x))
+                ret 1
+            end
+            if ty == 1030:
+                wr64(buf, place, tp2)
+                ret 1
+            end
+            if tp2 < (0 as i64) or tp2 >= ((1 as i64) << (32 as i64)):
+                nl_fail(l, "thread-local offset out of range at " + reloc_where(l, s2, r))
+                ret 0 - 1
+            end
+            if ty == 562:
+                wr32(buf, place, (0xD2A00000 as i64) | (((tp2 >> (16 as i64)) & (0xFFFF as i64)) << (5 as i64)))
+            else ty == 563:
+                wr32(buf, place, (0xF2800000 as i64) | ((tp2 & (0xFFFF as i64)) << (5 as i64)))
+            else ty == 564 or ty == 569:
+                wr32(buf, place, 0xD503201F as i64)
+            else ty == 549:
+                if tp2 >= ((1 as i64) << (24 as i64)):
+                    nl_fail(l, "thread-local offset out of range at " + reloc_where(l, s2, r))
+                    ret 0 - 1
+                end
+                ins_set(buf, place, (0x3FFC00 as i64), ((tp2 >> (12 as i64)) & (0xFFF as i64)) << (10 as i64))
+            else ty == 550 or ty == 551:
+                ins_set(buf, place, (0x3FFC00 as i64), (tp2 & (0xFFF as i64)) << (10 as i64))
+            else ty >= 552:
+                sh := (ty - 552) / 2
+                ins_set(buf, place, (0x3FFC00 as i64), ((tp2 & (0xFFF as i64)) >> (sh as i64)) << (10 as i64))
+            else:
+                grp := ty == 544 ? 2 : (ty == 545 or ty == 546 ? 1 : 0)
+                ins_set(buf, place, (0x1FFFE0 as i64), ((tp2 >> ((16 * grp) as i64)) & (0xFFFF as i64)) << (5 as i64))
+            end
+            ret 1
+        end
+        ret 0
+    end
+    ret 0
+end

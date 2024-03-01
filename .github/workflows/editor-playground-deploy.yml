@@ -1,0 +1,158 @@
+---
+name: 🕹️ Editor - Build & Deploy Playground (WebAssembly)
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: editor-playground-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  changes:
+    uses: ./.github/workflows/_changes.yml # zizmor: ignore[self-repository]
+    with:
+      paths: |
+        compiler/*
+        tools/bash/*
+        std/*
+        editor/*
+        tests/*/editor-selected/*
+        .github/workflows/editor-playground-deploy.yml
+        .github/actions/setup-*
+        .github/actions/deploy-ssh/*
+        .github/actions/publish-gh-pages/*
+        .github/workflows/_changes.yml
+  build-deploy:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    name: Build and Deploy
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      built: ${{ steps.verify.outputs.built }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Set up pinned tcc
+        uses: ./.github/actions/setup-tcc # zizmor: ignore[self-repository]
+
+      - name: Cache Emscripten SDK
+        id: emsdk-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/emsdk
+          key: emsdk-${{ runner.os }}-v1
+
+      - name: Install Emscripten SDK
+        run: |
+          set -e
+          if [ ! -x "$HOME/emsdk/emsdk" ]; then
+            git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          fi
+          cd "$HOME/emsdk"
+          if [ ! -d "upstream/emscripten" ]; then
+            ./emsdk install latest
+            ./emsdk activate latest
+          else
+            echo "Emscripten SDK restored from cache - skipping install"
+          fi
+          . ./emsdk_env.sh
+          echo "$EMSDK" >> "$GITHUB_PATH"
+          echo "$EMSDK/upstream/emscripten" >> "$GITHUB_PATH"
+          echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
+          echo "EM_CONFIG=$EMSDK/.emscripten" >> "$GITHUB_ENV"
+
+      - name: Verify editor source files are present
+        run: |
+          set -eu
+          missing=0
+          for f in editor/page.salam editor/app.salam editor/anim.salam editor/anim_frames.salam editor/history.salam editor/build.sh editor/assets/logo.svg; do
+            if [ ! -f "$f" ]; then
+              echo "::error::missing editor source file: $f (is it committed? editor/* is gitignored except sources)"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+
+      - name: Build self-hosted compiler + WebAssembly playground bundle
+        run: |
+          set -e
+          emcc --version
+          sh tools/bash/update-playground.sh --selfhost
+
+      - name: Verify generated editor assets
+        id: verify
+        run: |
+          set -eu
+          missing=0
+          for f in editor/salam-wa-*.js editor/salam-wa-*.wasm editor/salam-wa-*.data \
+                   editor/examples_data.salam editor/index.html; do
+            if [ ! -f "$f" ]; then
+              echo "::error::missing generated asset: $f"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          echo "==> Editor directory to be published:"
+          ls -l editor/
+          echo "built=true" >> "$GITHUB_OUTPUT"
+
+      - name: Keep the bundle for the server deploy
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: editor-site
+          path: editor
+          retention-days: 3
+
+      - name: Publish the playground to the gh-pages-editor branch
+        uses: ./.github/actions/publish-gh-pages # zizmor: ignore[self-repository]
+        with:
+          source: editor
+          branch: gh-pages-editor
+          token: ${{ secrets.GITHUB_TOKEN }}
+          message: 'Publish the WebAssembly playground'
+
+  deploy-server:
+    name: Deploy to production server
+    needs: build-deploy
+    if: always() && needs.build-deploy.outputs.built == 'true'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: deploy-editor-server
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions
+
+      - name: Download the editor bundle
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: editor-site
+          path: editor-site
+
+      - name: Upload to the server
+        uses: ./.github/actions/deploy-ssh # zizmor: ignore[self-repository]
+        with:
+          source: editor-site
+          target: ${{ secrets.SSH_PATH_EDITOR }}
+          host: ${{ secrets.SSH_HOST }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          username: ${{ secrets.SSH_USERNAME }}
+          private-key: ${{ secrets.SSH_PRIVATEKEY }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          known-hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
+          allowed-root: /hosts/
+          exclude: '*.salam build.sh package.json README.md'

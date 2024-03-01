@@ -1,0 +1,468 @@
+package semantic
+
+import str
+import os
+import mem
+
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+include src "../source.salam"
+include pth "../sal_path.salam"
+include pm "../pkgmgr/pkgmgr.salam"
+
+func norm_ident(s0: str): str:
+    n := str.Len(s0)
+    mut need := false
+    mut i := 0
+    until i < n:
+        b0 := byte_at(s0, i)
+        if b0 == 226 and i + 2 < n and byte_at(s0, i + 1) == 128 and byte_at(s0, i + 2) == 140:
+            need = true
+            break
+        end
+        if b0 == 217 and i + 1 < n and (byte_at(s0, i + 1) == 138 or byte_at(s0, i + 1) == 131):
+            need = true
+            break
+        end
+        i += 1
+    end
+    if not need:
+        ret s0
+    end
+    mut out := ""
+    mut j := 0
+    until j < n:
+        c0 := byte_at(s0, j)
+        mut c1 := 0
+        if j + 1 < n:
+            c1 = byte_at(s0, j + 1)
+        end
+        if c0 == 226 and c1 == 128 and j + 2 < n and byte_at(s0, j + 2) == 140:
+            out = out + " "
+            j += 3
+        else c0 == 217 and c1 == 138:
+            out = out + "ی"
+            j += 2
+        else c0 == 217 and c1 == 131:
+            out = out + "ک"
+            j += 2
+        else:
+            out = out + str.Substr(s0, j, 1)
+            j += 1
+        end
+    end
+    ret out
+end
+
+func pkg_decl_offset(txt: str, n: int): int:
+    mut ls := 0
+    until ls < n:
+        mut p := ls
+        until p < n and (byte_at(txt, p) == 32 or byte_at(txt, p) == 9):
+            p += 1
+        end
+        if p + 8 <= n and str.Equals(str.Substr(txt, p, 8), "package "):
+            ret ls
+        end
+        mut e := ls
+        until e < n and byte_at(txt, e) != 10:
+            e += 1
+        end
+        if e >= n:
+            ret n
+        end
+        ls = e + 1
+    end
+    ret n
+end
+
+func index_pkg_file(path: str, canon: str):
+    mut sf := src.New()
+    if not src.Load(path, sf):
+        ret
+    end
+    txt := sf.text
+    n := sf.len
+    limit := pkg_decl_offset(txt, n)
+    mut i := 0
+    until i + 4 < limit and g_sm_seg_n < K_SM_SEG_MAX:
+        if byte_at(txt, i) != 64:
+            i += 1
+            continue
+        end
+        b1 := byte_at(txt, i + 1)
+        b2 := byte_at(txt, i + 2)
+        mut lang := ""
+        if b1 == 101 and b2 == 110:
+            lang = "en"
+        else b1 == 102 and b2 == 97:
+            lang = "fa"
+        end
+        if str.Len(lang) == 0:
+            i += 1
+            continue
+        end
+        mut cur := i + 3
+        until g_sm_seg_n < K_SM_SEG_MAX:
+            mut q := cur
+            until q < n and (byte_at(txt, q) == 32 or byte_at(txt, q) == 9):
+                q += 1
+            end
+            if q >= n or byte_at(txt, q) != 34 or q >= limit:
+                break
+            end
+            mut e := 0 - 1
+            mut k := q + 1
+            until k < n:
+                if byte_at(txt, k) == 34:
+                    e = k
+                    break
+                end
+                k += 1
+            end
+            if e < 0:
+                break
+            end
+            g_sm_seg_lang.push(lang)
+            g_sm_seg_alias.push(norm_ident(str.Substr(txt, q + 1, e - q - 1)))
+            g_sm_seg_canon.push(canon)
+            g_sm_seg_n += 1
+            cur = e + 1
+        end
+        if cur > i + 3:
+            i = cur - 1
+        end
+        i += 1
+    end
+    src.Free(sf)
+end
+
+func sort_entries(v &: Vector<str>):
+    n := v.len()
+    mut i := 1
+    until i < n:
+        key := v.get(i)
+        mut j := i - 1
+        until j >= 0 and str.Compare(v.get(j), key) > 0:
+            v.set(j + 1, v.get(j))
+            j -= 1
+        end
+        v.set(j + 1, key)
+        i += 1
+    end
+end
+
+func scan_std_dir(base: str, depth: int):
+    mut entries := os.ListDir(base)
+    defer entries.free()
+    sort_entries(entries)
+    repeat entries.len() in i:
+        e := entries.get(i)
+        sub := pth.PathJoin(base, e)
+        pf := pth.PathJoin(sub, e + ".salam")
+        if file_exists(pf):
+            index_pkg_file(pf, e)
+        end
+        if depth > 0:
+            scan_std_dir(sub, depth - 1)
+        end
+    end
+end
+
+func build_seg_index(root: str):
+    g_sm_seg_lang.clear()
+    g_sm_seg_alias.clear()
+    g_sm_seg_canon.clear()
+    g_sm_seg_n = 0
+    scan_std_dir(pth.PathJoin(root, "std"), 2)
+    g_sm_seg_root = root
+end
+
+func seg_to_canon(root: str, seg: str, lang: str): str:
+    if g_sm_seg_n < 0 or not str.Equals(g_sm_seg_root, root):
+        build_seg_index(root)
+    end
+    ns := norm_ident(seg)
+    repeat g_sm_seg_n in i:
+        if str.Equals(g_sm_seg_lang.get(i), lang) and str.Equals(g_sm_seg_alias.get(i), ns):
+            ret g_sm_seg_canon.get(i)
+        end
+    end
+    ret ""
+end
+
+func resolve_ident_import(root: str, dotted: str, lang: str): str:
+    n := str.Len(dotted)
+    mut spec := ""
+    mut last := ""
+    mut pos := 0
+    until pos < n:
+        mut dot := str.IndexFrom(dotted, ".", pos)
+        if dot >= n:
+            dot = 0 - 1
+        end
+        seglen := dot >= 0 ? dot - pos : n - pos
+        seg := str.Substr(dotted, pos, seglen)
+        canon := seg_to_canon(root, seg, lang)
+        if str.Len(canon) == 0:
+            ret ""
+        end
+        if str.Len(spec) > 0:
+            spec = spec + "/"
+        end
+        spec = spec + canon
+        last = canon
+        if dot < 0:
+            break
+        end
+        pos = dot + 1
+    end
+    if str.Len(last) == 0:
+        ret ""
+    end
+    ret in_std(root, spec + "/" + last + ".salam")
+end
+
+func in_std(root: str, rel: str): str:
+    if str.Len(root) > 0:
+        ret root + "/std/" + rel
+    end
+    ret "std/" + rel
+end
+
+func resolve_ident_direct(root: str, dotted: str): str:
+    n := str.Len(dotted)
+    mut spec := ""
+    mut last := ""
+    mut pos := 0
+    until pos < n:
+        mut dot := str.IndexFrom(dotted, ".", pos)
+        if dot >= n:
+            dot = 0 - 1
+        end
+        seglen := dot >= 0 ? dot - pos : n - pos
+        seg := str.Substr(dotted, pos, seglen)
+        if str.Len(spec) > 0:
+            spec = spec + "/"
+        end
+        spec = spec + seg
+        last = seg
+        if dot < 0:
+            break
+        end
+        pos = dot + 1
+    end
+    if str.Len(last) == 0:
+        ret ""
+    end
+    out := in_std(root, spec + "/" + last + ".salam")
+    if file_exists(out):
+        ret out
+    end
+    ret ""
+end
+
+func resolve_user_string(dir: str, spec: str): str:
+    has_ext := str.Contains(spec, ".salam")
+    mut base := dir
+    mut rel := spec
+    if str.StartsWith(spec, "@/"):
+        base = g_sm_project_root
+        rel = str.Substr(spec, 2, str.Len(spec) - 2)
+    end
+    mut p := pth.PathJoin(base, rel)
+    if not has_ext:
+        p = p + ".salam"
+    end
+    ret pth.PathNormalize(p)
+end
+
+func resolve_import(dir: str, spec: str): str:
+    root := get_stdlib_root()
+    has_ext := str.Contains(spec, ".salam")
+    if has_ext:
+        ret pth.PathNormalize(pth.PathJoin(dir, spec))
+    end
+    last := pth.PathBase(spec)
+    mut p2 := "std/" + spec + "/" + last + ".salam"
+    if str.Len(root) > 0:
+        p2 = root + "/std/" + spec + "/" + last + ".salam"
+    end
+    p2 = pth.PathNormalize(p2)
+    if not file_exists(p2):
+        loc := resolve_ident_import(root, spec, i18.Lang())
+        if str.Len(loc) > 0:
+            ret loc
+        end
+    end
+    ret p2
+end
+
+func resolve_import_node(a &: at.Ast, dir: str, imp: int, lang: str): str:
+    n := at.Get(a, imp)
+    if n.is_extern and n.value_kind == tok.TV_STRING:
+        mut code := 0
+        entry := pm.ResolveImport(dir, n.value_str, code)
+        if code != pm.RES_OK:
+            ret ""
+        end
+        ret entry
+    end
+    if n.value_kind == tok.TV_STRING:
+        ret resolve_user_string(dir, n.value_str)
+    end
+    if str.Len(n.name) > 0:
+        root := get_stdlib_root()
+        mut use_lang := "en"
+        if str.Len(lang) > 0:
+            use_lang = lang
+        end
+        aliased := resolve_ident_import(root, n.name, use_lang)
+        if str.Len(aliased) > 0:
+            ret aliased
+        end
+        if str.Equals(use_lang, "en"):
+            direct := resolve_ident_direct(root, n.name)
+            if str.Len(direct) > 0:
+                ret direct
+            end
+        end
+        ret ""
+    end
+    ret ""
+end
+
+func import_local_name(a &: at.Ast, imp: int, spec: str): str:
+    n := at.Get(a, imp)
+    if n.value_kind != tok.TV_STRING:
+        mut nm := spec
+        if str.Len(n.name) > 0:
+            nm = n.name
+        end
+        dot := str.LastIndex(nm, ".")
+        if dot >= 0:
+            ret str.Substr(nm, dot + 1, str.Len(nm) - dot - 1)
+        end
+        ret nm
+    end
+    if str.Len(n.name) > 0:
+        ret n.name
+    end
+    if n.is_extern:
+        ret pm.PackageNameOf(spec)
+    end
+    seg := pth.PathBase(spec)
+    dot2 := str.IndexOf(seg, ".salam")
+    if dot2 >= 0:
+        ret str.Substr(seg, 0, dot2)
+    end
+    ret seg
+end
+
+func package_files(main_path: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    out.push(main_path)
+    dir := dir_of(main_path)
+    mainbase := pth.PathBase(main_path)
+    dot := str.LastIndex(mainbase, ".")
+    stemlen := dot >= 0 ? dot : str.Len(mainbase)
+    mut dirseg := ""
+    if str.Len(dir) > 0:
+        dirseg = pth.PathBase(dir)
+    end
+    if str.Len(dirseg) != stemlen or not str.Equals(dirseg, str.Substr(mainbase, 0, stemlen)):
+        ret out
+    end
+    mut dbuf := "."
+    if str.Len(dir) > 0:
+        dbuf = dir
+    end
+    entries := os.ListDir(dbuf)
+    defer entries.free()
+    repeat entries.len() in i:
+        nm := entries.get(i)
+        if str.Len(nm) > 6 and str.EndsWith(nm, ".salam") and not str.Equals(nm, mainbase) and out.len() < K_SM_PKG_FILES_MAX:
+            out.push(pth.PathJoin(dbuf, nm))
+        end
+        mem.Free(nm as void*)
+    end
+    mut i2 := 2
+    until i2 < out.len():
+        key := out.get(i2)
+        mut j := i2 - 1
+        until j >= 1 and str.Compare(out.get(j), key) > 0:
+            out.set(j + 1, out.get(j))
+            j -= 1
+        end
+        out.set(j + 1, key)
+        i2 += 1
+    end
+    ret out
+end
+
+func import_spec_of(n: at.Node): str:
+    if n.value_kind == tok.TV_STRING:
+        ret n.value_str
+    end
+    ret n.name
+end
+
+func merge_program(a &: at.Ast, dst: int, srcprog: int):
+    mut marked := false
+    sl := at.Get(a, srcprog).list
+    repeat sl.len() in i:
+        did := sl.get(i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_IMPORT:
+            spec := import_spec_of(d)
+            mut dup := false
+            dl := at.Get(a, dst).list
+            repeat dl.len() in j:
+                e := at.Get(a, dl.get(j))
+                if e.kind == at.AST_IMPORT:
+                    es := import_spec_of(e)
+                    if str.Len(spec) > 0 and str.Len(es) > 0 and str.Equals(spec, es):
+                        dup = true
+                        break
+                    end
+                end
+            end
+            if dup:
+                continue
+            end
+        else d.kind == at.AST_LINK:
+            mut lib := ""
+            if d.value_kind == tok.TV_STRING:
+                lib = d.value_str
+            end
+            mut dup2 := false
+            if str.Len(lib) > 0:
+                dl2 := at.Get(a, dst).list
+                repeat dl2.len() in j2:
+                    e2 := at.Get(a, dl2.get(j2))
+                    if e2.kind == at.AST_LINK:
+                        mut el := ""
+                        if e2.value_kind == tok.TV_STRING:
+                            el = e2.value_str
+                        end
+                        if str.Len(el) > 0 and str.Equals(lib, el):
+                            dup2 = true
+                            break
+                        end
+                    end
+                end
+            end
+            if dup2:
+                continue
+            end
+        end
+        if not marked:
+            mut dm := at.Get(a, did)
+            dm.file_boundary = true
+            at.Put(a, did, dm)
+            marked = true
+        end
+        at.AddChild(a, dst, did)
+    end
+end

@@ -1,0 +1,227 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "mcprpc"
+@fa "فراخوان‌ام‌سی‌پی"
+package mcprpc
+
+import io
+import str
+import encoding.json
+import encoding.value
+import encoding.encerr
+
+extern:
+    func getchar(): int
+end
+
+@en "McpProtoModern"
+pub const McpProtoModern := "2026-07-28"
+
+@en "McpMetaProto"
+pub const McpMetaProto := "io.modelcontextprotocol/protocolVersion"
+
+@en "McpMetaServerInfo"
+pub const McpMetaServerInfo := "io.modelcontextprotocol/serverInfo"
+
+@en "McpErrParse"
+pub const McpErrParse := 0 - 32700
+
+@en "McpErrInvalidRequest"
+pub const McpErrInvalidRequest := 0 - 32600
+
+@en "McpErrMethodNotFound"
+pub const McpErrMethodNotFound := 0 - 32601
+
+@en "McpErrInvalidParams"
+pub const McpErrInvalidParams := 0 - 32602
+
+@en "McpErrInternal"
+pub const McpErrInternal := 0 - 32603
+
+@en "McpErrHeaderMismatch"
+pub const McpErrHeaderMismatch := 0 - 32020
+
+@en "McpErrUnsupportedVersion"
+pub const McpErrUnsupportedVersion := 0 - 32022
+
+@en "Line"
+pub struct Line:
+    pub text: str = ""
+    pub eof: bool = false
+end
+
+@en "Request"
+pub struct Request:
+    pub ok: bool = false
+    pub bad_json: bool = false
+    pub has_id: bool = false
+    pub id_json: str = "null"
+    pub method: str = ""
+    pub proto: str = ""
+    pub has_proto: bool = false
+    pub params: value.Value = value.Value {}
+end
+
+func _compact(v: value.Value): str:
+    ret json.Encode(v, json.JSONOptions {})
+end
+
+func _meta_proto(params: value.Value): str:
+    if not value.IsObject(params): ret "" end
+    if not value.ObjectHas(params, "_meta"): ret "" end
+    meta := value.ObjectGet(params, "_meta")
+    if not value.IsObject(meta): ret "" end
+    if not value.ObjectHas(meta, McpMetaProto): ret "" end
+    pv := value.ObjectGet(meta, McpMetaProto)
+    if not value.IsString(pv): ret "" end
+    ret value.AsString(pv)
+end
+
+func _envelope(id_json: str, key: str, body: str): str:
+    parts := Vector {} as Vector<str>
+    defer parts.free()
+    parts.push(json.Member("jsonrpc", "2.0"))
+    parts.push(json.MemberRaw("id", id_json))
+    parts.push(json.MemberRaw(key, body))
+    ret json.Object(parts)
+end
+
+@en "Log"
+@fa "گزارش"
+pub func Log(msg: str):
+    io.EPrintln("[salam-mcp] ".concat(msg))
+end
+
+@en "ReadLine"
+@fa "خط بخوان"
+pub func ReadLine(): Line:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut any := false
+    mut c := getchar()
+    until c != -1 and c != 10:
+        str.BufAppendChar(sb, c)
+        any = true
+        c = getchar()
+    end
+    if c == -1 and not any:
+        ret Line { text = "", eof = true }
+    end
+    out := str.BufStr(sb)
+    ret Line { text = out, eof = false }
+end
+
+@en "WriteMessage"
+@fa "پیام بنویس"
+pub func WriteMessage(msg: str):
+    println msg
+end
+
+@en "Parse"
+@fa "تجزیه"
+pub func Parse(line: str): Request:
+    mut req := Request {}
+    mut err := encerr.EncodingError {}
+    root := json.Decode(line, err)
+    if encerr.IsError(err) or not value.IsObject(root):
+        req.bad_json = true
+        ret req
+    end
+    if value.ObjectHas(root, "id"):
+        idv := value.ObjectGet(root, "id")
+        if not value.IsNull(idv):
+            req.has_id = true
+            req.id_json = _compact(idv)
+        end
+    end
+    if value.ObjectHas(root, "method"):
+        mv := value.ObjectGet(root, "method")
+        if value.IsString(mv): req.method = value.AsString(mv) end
+    end
+    if value.ObjectHas(root, "params"):
+        req.params = value.ObjectGet(root, "params")
+    end
+    req.proto = _meta_proto(req.params)
+    req.has_proto = req.proto.len() > 0
+    req.ok = req.method.len() > 0
+    ret req
+end
+
+@en "ResultMessage"
+@fa "پیام نتیجه"
+pub func ResultMessage(id_json: str, result: value.Value): str:
+    ret _envelope(id_json, "result", _compact(result))
+end
+
+@en "ErrorMessage"
+@fa "پیام خطا"
+pub func ErrorMessage(id_json: str, code: int, message: str): str:
+    body := Vector {} as Vector<str>
+    defer body.free()
+    body.push(json.MemberInt("code", code))
+    body.push(json.Member("message", message))
+    ret _envelope(id_json, "error", json.Object(body))
+end
+
+@en "ErrorMessageData"
+@fa "پیام خطا با داده"
+pub func ErrorMessageData(id_json: str, code: int, message: str, data: value.Value): str:
+    body := Vector {} as Vector<str>
+    defer body.free()
+    body.push(json.MemberInt("code", code))
+    body.push(json.Member("message", message))
+    body.push(json.MemberRaw("data", _compact(data)))
+    ret _envelope(id_json, "error", json.Object(body))
+end
+
+@en "ParamStr"
+@fa "پارامتر رشته"
+pub func ParamStr(params: value.Value, key: str, fallback: str): str:
+    if not value.IsObject(params): ret fallback end
+    if not value.ObjectHas(params, key): ret fallback end
+    v := value.ObjectGet(params, key)
+    if not value.IsString(v): ret fallback end
+    ret value.AsString(v)
+end
+
+@en "ParamBool"
+@fa "پارامتر بولی"
+pub func ParamBool(params: value.Value, key: str, fallback: bool): bool:
+    if not value.IsObject(params): ret fallback end
+    if not value.ObjectHas(params, key): ret fallback end
+    v := value.ObjectGet(params, key)
+    if not value.IsBool(v): ret fallback end
+    ret value.AsBool(v)
+end
+
+@en "ParamInt"
+@fa "پارامتر عددی"
+pub func ParamInt(params: value.Value, key: str, fallback: int): int:
+    if not value.IsObject(params): ret fallback end
+    if not value.ObjectHas(params, key): ret fallback end
+    v := value.ObjectGet(params, key)
+    if not value.IsNumber(v): ret fallback end
+    ret value.AsInt(v) as int
+end
+
+@en "ParamObject"
+@fa "پارامتر شیء"
+pub func ParamObject(params: value.Value, key: str): value.Value:
+    if not value.IsObject(params): ret value.NewValueObject() end
+    if not value.ObjectHas(params, key): ret value.NewValueObject() end
+    v := value.ObjectGet(params, key)
+    if not value.IsObject(v): ret value.NewValueObject() end
+    ret v
+end

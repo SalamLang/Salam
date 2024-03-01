@@ -1,0 +1,181 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ssh
+
+import str
+
+@en "Session"
+@fa "نشست"
+pub struct Session:
+    @en "ch"
+    @fa "کانال"
+    pub ch: Channel = Channel {}
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+end
+
+@en "ExecResult"
+@fa "نتیجه اجرا"
+pub struct ExecResult:
+    @en "stdout"
+    @fa "خروجی"
+    pub stdout: str = ""
+    @en "stderr"
+    @fa "خروجی خطا"
+    pub stderr: str = ""
+    @en "exit_code"
+    @fa "کد خروج"
+    pub exit_code: int = 0 - 1
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+end
+
+func _buf_to_str_lossy(b: Buf): str:
+    if b.len == 0:
+        ret ""
+    end
+    mut z := NewBuf(b.len + 1)
+    BufPutBuf(z, b)
+    BufPutByte(z, 0)
+    ret str.Clone(z.p as str)
+end
+
+@en "NewSession"
+@fa "نشست جدید"
+pub func NewSession(client &: Client): Session:
+    mut s := Session {}
+    s.ch = _channel_open_session(client.transport)
+    s.ok = s.ch.open
+    ret s
+end
+
+@en "RequestPty"
+@fa "درخواست پی تی وای"
+pub func RequestPty(session &: Session, client &: Client, term: str, cols: int, rows: int): bool:
+    ret _channel_pty(client.transport, session.ch, term, cols, rows)
+end
+
+@en "Start"
+@fa "شروع"
+pub func Start(session &: Session, client &: Client, cmd: str): bool:
+    ret _channel_exec(client.transport, session.ch, cmd)
+end
+
+@en "Shell"
+@fa "پوسته"
+pub func Shell(session &: Session, client &: Client): bool:
+    ret _channel_shell(client.transport, session.ch)
+end
+
+@en "Wait"
+@fa "انتظار"
+pub func Wait(session &: Session, client &: Client): int:
+    _channel_pump_to_close(client.transport, session.ch)
+    ret session.ch.exit_status
+end
+
+@en "ReadStep"
+@fa "گام خواندن"
+pub func ReadStep(session &: Session, client &: Client): bool:
+    code := _channel_pump_step(client.transport, session.ch)
+    ret code != 3 and code != (0 - 1)
+end
+
+@en "Output"
+@fa "خروجی"
+pub func Output(session: Session): str:
+    ret _buf_to_str_lossy(session.ch.stdout)
+end
+
+@en "StderrOutput"
+@fa "خروجی خطا"
+pub func StderrOutput(session: Session): str:
+    ret _buf_to_str_lossy(session.ch.stderr)
+end
+
+@en "DrainOutput"
+@fa "تخلیه خروجی"
+pub func DrainOutput(session &: Session): str:
+    out := _buf_to_str_lossy(session.ch.stdout)
+    FreeBuf(session.ch.stdout)
+    session.ch.stdout = NewBuf(256)
+    ret out
+end
+
+@en "DrainStderrOutput"
+@fa "تخلیه خروجی خطا"
+pub func DrainStderrOutput(session &: Session): str:
+    out := _buf_to_str_lossy(session.ch.stderr)
+    FreeBuf(session.ch.stderr)
+    session.ch.stderr = NewBuf(256)
+    ret out
+end
+
+@en "ExitCode"
+@fa "کد خروج"
+pub func ExitCode(session: Session): int:
+    ret session.ch.exit_status
+end
+
+@en "SessionClosed"
+@fa "نشست بسته شده"
+pub func SessionClosed(session: Session): bool:
+    ret session.ch.close_received
+end
+
+@en "WriteInput"
+@fa "نوشتن ورودی"
+pub func WriteInput(session &: Session, client &: Client, data: str): bool:
+    ret _channel_write(client.transport, session.ch, data as void*, data.len())
+end
+
+@en "CloseInput"
+@fa "بستن ورودی"
+pub func CloseInput(session &: Session, client &: Client):
+    _channel_send_eof(client.transport, session.ch)
+end
+
+@en "CloseSession"
+@fa "بستن نشست"
+pub func CloseSession(session &: Session, client &: Client):
+    if not session.ch.close_received:
+        _channel_send_eof(client.transport, session.ch)
+        _channel_send_close(client.transport, session.ch)
+    end
+    _channel_free(session.ch)
+end
+
+@en "Exec"
+@fa "اجرا"
+pub func Exec(client &: Client, cmd: str): ExecResult:
+    mut result := ExecResult {}
+    mut s := NewSession(client)
+    if not s.ok:
+        ret result
+    end
+    if not Start(s, client, cmd):
+        CloseSession(s, client)
+        ret result
+    end
+    exit_code := Wait(s, client)
+    result.stdout = Output(s)
+    result.stderr = StderrOutput(s)
+    result.exit_code = exit_code
+    result.ok = true
+    CloseSession(s, client)
+    ret result
+end

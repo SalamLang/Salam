@@ -1,0 +1,251 @@
+package cli
+
+import os
+import io
+import str
+import regex
+
+include pth "../sal_path.salam"
+include dr "../driver/driver.salam"
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+include lx "../lexer/lexer.salam"
+include src "../source.salam"
+include co "../sal_core.salam"
+include sf "../sal_fmt.salam"
+
+func has_salam_ext(name: str): bool:
+    ret str.EndsWith(name, ".salam")
+end
+
+func glob_to_regex(pat: str): str:
+    n := str.Len(pat)
+    mut out := "^"
+    mut i := 0
+    until i < n:
+        c := byte_at(pat, i)
+        if c == 42 and i + 1 < n and byte_at(pat, i + 1) == 42:
+            out = out + ".*"
+            i += 2
+        else c == 42:
+            out = out + "[^/]*"
+            i += 1
+        else c == 63:
+            out = out + "[^/]"
+            i += 1
+        else c == 46 or c == 43 or c == 40 or c == 41 or c == 91 or c == 93 or c == 123 or c == 125 or c == 94 or c == 36 or c == 124 or c == 92:
+            out = out + "\\" + str.Substr(pat, i, 1)
+            i += 1
+        else:
+            out = out + str.Substr(pat, i, 1)
+            i += 1
+        end
+    end
+    ret out + "$"
+end
+
+func norm_rel_path(p: str): str:
+    mut s := p
+    until str.StartsWith(s, "./"):
+        s = str.Substr(s, 2, str.Len(s) - 2)
+    end
+    ret s
+end
+
+func path_matches(pattern: str, rel_path: str): bool:
+    target := str.Contains(pattern, "/") ? norm_rel_path(rel_path) : pth.PathBase(rel_path)
+    ret regex.MatchStr(glob_to_regex(pattern), target)
+end
+
+func any_pattern_matches(patterns: Vector<str>, rel_path: str): bool:
+    repeat patterns.len() in i:
+        if path_matches(patterns.get(i), rel_path):
+            ret true
+        end
+    end
+    ret false
+end
+
+func path_excluded(c &: FmtCtx, path: str): bool:
+    ret c.exclude.len() > 0 and any_pattern_matches(c.exclude, path)
+end
+
+func path_included(c &: FmtCtx, path: str): bool:
+    ret c.includes.len() == 0 or any_pattern_matches(c.includes, path)
+end
+
+func copy_patterns(dst &: Vector<str>, src: Vector<str>):
+    repeat src.len() in i:
+        dst.push(src.get(i))
+    end
+end
+
+func load_ignore_file(path: str, out &: Vector<str>): bool:
+    if not os.Exists(path) or os.IsDir(path):
+        ret false
+    end
+    text := os.ReadFile(path)
+    lines := str.Split(text, "\n")
+    defer lines.free()
+    repeat lines.len() in i:
+        line := str.TrimRight(str.TrimLeft(lines.get(i)))
+        if str.Len(line) == 0 or str.StartsWith(line, "#"):
+            continue
+        end
+        out.push(line)
+    end
+    ret true
+end
+
+func fmt_one_file(c &: FmtCtx, path: str):
+    mut sfile := src.New()
+    if not src.Load(path, sfile):
+        io.EPrintln(co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(path)))
+        c.errors += 1
+        ret
+    end
+    c.total += 1
+    pack := lx.Detect(sfile, c.pack)
+    style := sf.NewStyle(c.tabs, c.width, c.minify)
+    mut out := co.SbNew()
+    lgr := lg.New(lg.LOG_OFF, false)
+    mut fmt_input := sfile
+    if c.fix_order:
+        mut reordered := co.SbNew()
+        if sf.ReorderToplevel(lgr, pack, sfile, lp.EntryFor(lp.Code(pack)), reordered):
+            rtext := co.SbCstr(reordered)
+            mut rfile := src.New()
+            rfile.path = sfile.path
+            rfile.text = rtext
+            rfile.len = str.Len(rtext)
+            fmt_input = rfile
+        end
+        co.SbFree(reordered)
+    end
+    ok := sf.Source(lgr, pack, fmt_input, style, out)
+    if not ok:
+        co.SbFree(out)
+        io.EPrintln(
+            co.Format1(
+                i18.Tr("cannot format '%s': fix the lexical errors first"), co.ArgStr(path)
+            )
+        )
+        c.errors += 1
+        ret
+    end
+    formatted := co.SbCstr(out)
+    changed := not str.Equals(formatted, sfile.text)
+    if not changed:
+        c.ok += 1
+        co.SbFree(out)
+        ret
+    end
+    c.changed += 1
+    if c.check:
+        println path
+    else:
+        wrc := io.WriteFile(path, formatted)
+        if wrc < 0:
+            io.EPrintln(co.Format1(i18.Tr("salam: cannot write '%s'"), co.ArgStr(path)))
+            c.errors += 1
+        else:
+            println co.Format1(i18.Tr("formatted %s"), co.ArgStr(path))
+        end
+    end
+    co.SbFree(out)
+end
+
+func fmt_walk(c &: FmtCtx, dir: str):
+    entries := os.ListDir(dir)
+    defer entries.free()
+    repeat entries.len() in i:
+        name := entries.get(i)
+        if str.StartsWith(name, "."):
+            continue
+        end
+        child := pth.PathJoin(dir, name)
+        if path_excluded(c, child):
+            c.skipped += 1
+            continue
+        end
+        if os.IsDir(child):
+            fmt_walk(c, child)
+        else has_salam_ext(name):
+            if path_included(c, child):
+                fmt_one_file(c, child)
+            else:
+                c.skipped += 1
+            end
+        end
+    end
+end
+
+func fmt_cmd(opt &: dr.Dr): int:
+    pack := lp.Load(opt.lang)
+    if pack == lp.LP_NONE:
+        io.EPrintln(co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang)))
+        ret 2
+    end
+    mut c := FmtCtx {}
+    defer c.exclude.free()
+    defer c.includes.free()
+    c.check = opt.fmt_check
+    c.fix_order = opt.fmt_fix_order
+    c.minify = opt.fmt_minify
+    c.tabs = opt.fmt_tabs
+    c.width = opt.fmt_indent_width
+    c.pack = pack
+    copy_patterns(c.exclude, opt.fmt_exclude)
+    copy_patterns(c.includes, opt.fmt_include)
+    repeat opt.fmt_exclude_from.len() in i:
+        f := opt.fmt_exclude_from.get(i)
+        if not load_ignore_file(f, c.exclude):
+            io.EPrintln(co.Format1(i18.Tr("salam: cannot read --exclude-from file '%s'"), co.ArgStr(f)))
+            ret 2
+        end
+    end
+    load_ignore_file(".salamfmtignore", c.exclude)
+    if opt.inputs.len() == 0:
+        fmt_walk(c, ".")
+    else:
+        repeat opt.inputs.len() in i:
+            p := opt.inputs.get(i)
+            is_dir := os.IsDir(p)
+            if path_excluded(c, p):
+                c.skipped += 1
+            else not is_dir and not path_included(c, p):
+                c.skipped += 1
+            else is_dir:
+                fmt_walk(c, p)
+            else:
+                fmt_one_file(c, p)
+            end
+        end
+    end
+    if c.check:
+        if c.changed == 0:
+            println co.Format2(
+                i18.Tr("all %d file%s already formatted"), co.ArgInt(c.total as i64), co.ArgStr(plural_suffix(c.total))
+            )
+        else:
+            println co.Format3(
+                i18.Tr("%d of %d file%s need formatting"), co.ArgInt(c.changed as i64), co.ArgInt(c.total as i64), co.ArgStr(plural_suffix(c.total))
+            )
+        end
+    else:
+        println co.Format2(
+            i18.Tr("done: %d formatted, %d unchanged"), co.ArgInt(c.changed as i64), co.ArgInt(c.ok as i64)
+        )
+    end
+    if c.skipped > 0:
+        println co.Format2(i18.Tr("skipped: %d file%s (--exclude/--include)"), co.ArgInt(c.skipped as i64), co.ArgStr(plural_suffix(c.skipped)))
+    end
+    mut rc := 0
+    if c.errors > 0:
+        rc = 2
+    else c.check and c.changed > 0:
+        rc = 1
+    end
+    ret rc
+end

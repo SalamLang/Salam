@@ -1,0 +1,708 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package lsp
+
+import str
+import io
+import os
+import mem
+import encoding.json
+import encoding.value
+import encoding.encerr
+
+include pth "../sal_path.salam"
+
+mut g_roots := Vector {} as Vector<str>
+mut g_index := Vector {} as Vector<IndexEntry>
+mut g_index_files := Vector {} as Vector<str>
+mut g_index_queue := Vector {} as Vector<str>
+mut g_index_on := true
+mut g_index_max := 400
+mut g_index_wanted := false
+mut g_index_scanned := false
+
+struct IndexEntry:
+    pub path: str = ""
+    pub uri: str = ""
+    pub snap: value.Value = value.Value {}
+end
+
+struct CallGroup:
+    pub key: str = ""
+    pub item: str = ""
+    pub ranges: Vector<str> = Vector {}
+end
+
+func note_roots(params: value.Value):
+    g_roots.clear()
+    folders := obj(params, "workspaceFolders")
+    if value.IsArray(folders):
+        repeat value.ArrayLen(folders) in i:
+            u := vstr(value.ArrayGet(folders, i), "uri")
+            if str.Len(u) > 0:
+                g_roots.push(uri_to_path(u))
+            end
+        end
+    end
+    if g_roots.len() == 0:
+        ru := vstr(params, "rootUri")
+        if str.Len(ru) > 0:
+            g_roots.push(uri_to_path(ru))
+        else:
+            rp := vstr(params, "rootPath")
+            if str.Len(rp) > 0:
+                g_roots.push(rp)
+            end
+        end
+    end
+end
+
+func change_roots(params: value.Value):
+    ev := obj(params, "event")
+    added := obj(ev, "added")
+    if value.IsArray(added):
+        repeat value.ArrayLen(added) in i:
+            g_roots.push(uri_to_path(vstr(value.ArrayGet(added, i), "uri")))
+        end
+    end
+    removed := obj(ev, "removed")
+    if value.IsArray(removed):
+        mut keep := Vector {} as Vector<str>
+        each r in g_roots:
+            mut gone := false
+            repeat value.ArrayLen(removed) in k:
+                if str.Equals(uri_to_path(vstr(value.ArrayGet(removed, k), "uri")), r):
+                    gone = true
+                end
+            end
+            if not gone:
+                keep.push(r)
+            end
+        end
+        g_roots.free()
+        g_roots = keep
+    end
+    g_index_scanned = false
+end
+
+func skip_dir(dir: str, name: str): bool:
+    if str.StartsWith(name, ".") or str.Equals(name, "node_modules") or str.Equals(name, "build") or str.Equals(name, "out") or str.Equals(name, "dist") or str.Equals(name, "target"):
+        ret true
+    end
+    if str.Equals(name, "std") and os.Exists(pth.PathJoin(pth.PathJoin(dir, name), "core/core.salam")):
+        ret true
+    end
+    ret false
+end
+
+func scan_dir(dir: str, depth: int, out &: Vector<str>): bool:
+    if depth > 12:
+        ret true
+    end
+    entries := os.ListDir(dir)
+    mut ok := true
+    repeat entries.len() in i:
+        nm := entries.get(i)
+        if ok:
+            full := pth.PathJoin(dir, nm)
+            if os.IsDir(full):
+                if not skip_dir(dir, nm):
+                    ok = scan_dir(full, depth + 1, out)
+                end
+            else str.EndsWith(nm, ".salam"):
+                if out.len() >= g_index_max:
+                    ok = false
+                else:
+                    out.push(full)
+                end
+            end
+        end
+        mem.Free(nm as void*)
+    end
+    mut ents := entries
+    ents.free()
+    ret ok
+end
+
+func scan_workspace():
+    g_index_scanned = true
+    g_index_files.clear()
+    g_index_queue.clear()
+    if not g_index_on:
+        ret
+    end
+    mut found := Vector {} as Vector<str>
+    mut ok := true
+    each r in g_roots:
+        if ok and os.IsDir(r):
+            ok = scan_dir(r, 0, found)
+        end
+    end
+    if not ok:
+        log_client(3, "salam lsp: the workspace has more than " + str.FromInt(g_index_max as i64) + " Salam files; only open files are indexed (raise salam.indexMaxFiles to change this)")
+        found.free()
+        ret
+    end
+    each f in found:
+        g_index_files.push(f)
+        g_index_queue.push(f)
+    end
+    found.free()
+end
+
+func reindex_all():
+    if not g_index_scanned:
+        ret
+    end
+    g_index_queue.clear()
+    each f in g_index_files:
+        g_index_queue.push(f)
+    end
+end
+
+func index_pending(): bool:
+    if not g_index_on or not g_index_wanted:
+        ret false
+    end
+    if not g_index_scanned:
+        scan_workspace()
+    end
+    ret g_index_queue.len() > 0
+end
+
+func start_index_job():
+    path := g_index_queue.pop()
+    uri := path_to_uri(path)
+    if doc_index(uri) >= 0 and g_docs.get(doc_index(uri)).open:
+        ret
+    end
+    text := io.ReadFile(path)
+    if str.Len(text) == 0:
+        ret
+    end
+    mut d := Doc {}
+    d.uri = uri
+    d.path = path
+    d.text = text
+    mut targets := Vector {} as Vector<str>
+    dir := pth.PathDir(path)
+    if os.Exists(pth.PathJoin(dir, pth.PathBase(dir) + ".salam")):
+        mut keep := Vector {} as Vector<str>
+        each q in g_index_queue:
+            if str.Equals(pth.PathDir(q), dir):
+                targets.push(q)
+            else:
+                keep.push(q)
+            end
+        end
+        g_index_queue.free()
+        g_index_queue = keep
+    end
+    ensure_tmp_paths()
+    req := analysis_request(d, true)
+    mut body := req
+    if targets.len() > 0:
+        mut quoted := Vector {} as Vector<str>
+        each tq in targets:
+            quoted.push(jq(tq))
+        end
+        body = str.Substr(req, 0, str.Len(req) - 1) + ",\"targets\":[" + str.Join(quoted, ",") + "]}"
+        quoted.free()
+    end
+    targets.free()
+    if io.WriteFile(g_req_path, body) < 0:
+        ret
+    end
+    g_job_index = path
+    spawn_worker(uri)
+end
+
+func store_index(path: str, v: value.Value):
+    e := IndexEntry { path = path, uri = path_to_uri(path), snap = v }
+    repeat g_index.len() in i:
+        if str.Equals(g_index.get(i).path, path):
+            g_index.set(i, e)
+            ret
+        end
+    end
+    g_index.push(e)
+end
+
+func finish_index_job(rc: int):
+    path := g_job_index
+    g_job_index = ""
+    if rc != 0:
+        ret
+    end
+    text := io.ReadFile(g_out_path)
+    mut err := encerr.EncodingError {}
+    v := json.Decode(text, err)
+    if encerr.IsError(err) or not value.IsObject(v):
+        ret
+    end
+    store_index(path, v)
+    others := obj(v, "others")
+    if value.IsArray(others):
+        repeat value.ArrayLen(others) in k:
+            ov := value.ArrayGet(others, k)
+            op := vstr(ov, "path")
+            if str.Len(op) > 0:
+                store_index(op, ov)
+            end
+        end
+    end
+end
+
+func snap_set(uris &: Vector<str>, snaps &: Vector<value.Value>):
+    mut open := HashMap {} as HashMap<str, bool>
+    each d in g_docs:
+        if d.open and d.has_snap:
+            uris.push(d.uri)
+            snaps.push(d.snap)
+            open.put(d.uri, true)
+        end
+    end
+    each e in g_index:
+        if not open.has(e.uri):
+            uris.push(e.uri)
+            snaps.push(e.snap)
+        end
+    end
+    open.free()
+end
+
+func sym_key(path: str, sv: value.Value): str:
+    st := obj(obj(sv, "selectionRange"), "start")
+    ret path + ":" + str.FromInt(vint(st, "line", 0) as i64) + ":" + str.FromInt(vint(st, "character", 0) as i64)
+end
+
+func is_fn_kind(k: int): bool:
+    ret k == 12 or k == 6
+end
+
+func find_enclosing(syms: value.Value, line: int, ch: int, best &: value.Value, found &: bool):
+    if not value.IsArray(syms):
+        ret
+    end
+    repeat value.ArrayLen(syms) in i:
+        sv := value.ArrayGet(syms, i)
+        rg := obj(sv, "range")
+        st := obj(rg, "start")
+        en := obj(rg, "end")
+        if pos_in(line, ch, vint(st, "line", 0), vint(st, "character", 0), vint(en, "line", 0), vint(en, "character", 0)):
+            if is_fn_kind(vint(sv, "kind", 0)):
+                best = sv
+                found = true
+            end
+            find_enclosing(obj(sv, "children"), line, ch, best, found)
+        end
+    end
+end
+
+func find_symbol_by_key(path: str, syms: value.Value, key: str, out &: value.Value): bool:
+    if not value.IsArray(syms):
+        ret false
+    end
+    repeat value.ArrayLen(syms) in i:
+        sv := value.ArrayGet(syms, i)
+        if str.Equals(sym_key(path, sv), key):
+            out = sv
+            ret true
+        end
+        if find_symbol_by_key(path, obj(sv, "children"), key, out):
+            ret true
+        end
+    end
+    ret false
+end
+
+func item_json(name: str, kind: int, uri: str, rg: str, sel: str, key: str): str:
+    ret "{\"name\":" + jq(name) + ",\"kind\":" + str.FromInt(kind as i64) + ",\"uri\":" + jq(uri) + ",\"range\":" + rg + ",\"selectionRange\":" + sel + ",\"data\":{\"key\":" + jq(key) + "}}"
+end
+
+func symbol_item(path: str, uri: str, sv: value.Value): str:
+    ret item_json(vstr(sv, "name"), vint(sv, "kind", 12), uri, json.EncodeDefault(obj(sv, "range")), json.EncodeDefault(obj(sv, "selectionRange")), sym_key(path, sv))
+end
+
+func decl_item(dv: value.Value): str:
+    loc := obj(dv, "loc")
+    rg := range_json(arr_int(loc, 0), arr_int(loc, 1), arr_int(loc, 2), arr_int(loc, 3))
+    k := vint(dv, "kind", 4) == 5 ? 6 : 12
+    file := vstr(dv, "file")
+    ret item_json(vstr(dv, "name"), k, path_to_uri(file), rg, rg, decl_key(dv))
+end
+
+func on_prepare_call_hierarchy(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "null")
+        ret
+    end
+    mut line := 0
+    mut ch := 0
+    pos_of(params, line, ch)
+    d := g_docs.get(i)
+    h := find_hit(d, line, ch)
+    if not h.ok:
+        send_result(id, "null")
+        ret
+    end
+    dv := decl_at(d.snap, h.decl)
+    k := vint(dv, "kind", 0)
+    if (k != 4 and k != 5) or not value.ObjectHas(dv, "loc"):
+        send_result(id, "null")
+        ret
+    end
+    send_result(id, "[" + decl_item(dv) + "]")
+end
+
+func group_add(groups &: Vector<CallGroup>, key: str, item: str, rg: str):
+    repeat groups.len() in i:
+        if str.Equals(groups.get(i).key, key):
+            mut g := groups.get(i)
+            g.ranges.push(rg)
+            groups.set(i, g)
+            ret
+        end
+    end
+    mut g2 := CallGroup { key = key, item = item }
+    g2.ranges.push(rg)
+    groups.push(g2)
+end
+
+func groups_json(groups: Vector<CallGroup>, field: str): str:
+    mut parts := Vector {} as Vector<str>
+    each g in groups:
+        parts.push("{\"" + field + "\":" + g.item + ",\"fromRanges\":[" + str.Join(g.ranges, ",") + "]}")
+    end
+    out := "[" + str.Join(parts, ",") + "]"
+    parts.free()
+    ret out
+end
+
+func free_groups(groups &: Vector<CallGroup>):
+    each g in groups:
+        mut rs := g.ranges
+        rs.free()
+    end
+    groups.free()
+end
+
+func on_incoming_calls(id: str, params: value.Value):
+    key := vstr(obj(obj(params, "item"), "data"), "key")
+    mut groups := Vector {} as Vector<CallGroup>
+    mut uris := Vector {} as Vector<str>
+    mut snaps := Vector {} as Vector<value.Value>
+    snap_set(uris, snaps)
+    repeat snaps.len() in s:
+        snap := snaps.get(s)
+        uri := uris.get(s)
+        path := uri_to_path(uri)
+        ds := obj(snap, "decls")
+        refs := obj(snap, "refs")
+        if not value.IsArray(ds) or not value.IsArray(refs):
+            continue
+        end
+        mut ids := HashMap {} as HashMap<int, bool>
+        repeat value.ArrayLen(ds) in k:
+            if str.Equals(decl_key(value.ArrayGet(ds, k)), key):
+                ids.put(k, true)
+            end
+        end
+        if ids.size() > 0:
+            repeat value.ArrayLen(refs) in r:
+                rv := value.ArrayGet(refs, r)
+                if ids.has(vint(rv, "d", 0 - 1)):
+                    rr := obj(rv, "r")
+                    mut best := value.Value {}
+                    mut found := false
+                    find_enclosing(obj(snap, "outline"), arr_int(rr, 0), arr_int(rr, 1), best, found)
+                    if found:
+                        group_add(groups, sym_key(path, best), symbol_item(path, uri, best), range_json(arr_int(rr, 0), arr_int(rr, 1), arr_int(rr, 2), arr_int(rr, 3)))
+                    end
+                end
+            end
+        end
+        ids.free()
+    end
+    send_result(id, groups_json(groups, "from"))
+    free_groups(groups)
+    uris.free()
+    snaps.free()
+end
+
+func on_outgoing_calls(id: str, params: value.Value):
+    item := obj(params, "item")
+    key := vstr(obj(item, "data"), "key")
+    uri := vstr(item, "uri")
+    path := uri_to_path(uri)
+    mut groups := Vector {} as Vector<CallGroup>
+    mut uris := Vector {} as Vector<str>
+    mut snaps := Vector {} as Vector<value.Value>
+    snap_set(uris, snaps)
+    repeat snaps.len() in s:
+        if not str.Equals(uris.get(s), uri):
+            continue
+        end
+        snap := snaps.get(s)
+        mut fsym := value.Value {}
+        if not find_symbol_by_key(path, obj(snap, "outline"), key, fsym):
+            continue
+        end
+        rg := obj(fsym, "range")
+        st := obj(rg, "start")
+        en := obj(rg, "end")
+        refs := obj(snap, "refs")
+        repeat value.ArrayLen(refs) in r:
+            rv := value.ArrayGet(refs, r)
+            rr := obj(rv, "r")
+            if pos_in(arr_int(rr, 0), arr_int(rr, 1), vint(st, "line", 0), vint(st, "character", 0), vint(en, "line", 0), vint(en, "character", 0)):
+                dv := decl_at(snap, vint(rv, "d", 0 - 1))
+                dk := vint(dv, "kind", 0)
+                if (dk == 4 or dk == 5) and value.ObjectHas(dv, "loc"):
+                    group_add(groups, decl_key(dv), decl_item(dv), range_json(arr_int(rr, 0), arr_int(rr, 1), arr_int(rr, 2), arr_int(rr, 3)))
+                end
+            end
+        end
+        break
+    end
+    send_result(id, groups_json(groups, "to"))
+    free_groups(groups)
+    uris.free()
+    snaps.free()
+end
+
+func ref_counts(out &: HashMap<str, int>):
+    mut uris := Vector {} as Vector<str>
+    mut snaps := Vector {} as Vector<value.Value>
+    snap_set(uris, snaps)
+    each snap in snaps:
+        ds := obj(snap, "decls")
+        refs := obj(snap, "refs")
+        if not value.IsArray(ds) or not value.IsArray(refs):
+            continue
+        end
+        mut keys := Vector {} as Vector<str>
+        repeat value.ArrayLen(ds) in k:
+            keys.push(decl_key(value.ArrayGet(ds, k)))
+        end
+        repeat value.ArrayLen(refs) in r:
+            di := vint(value.ArrayGet(refs, r), "d", 0 - 1)
+            if di >= 0 and di < keys.len():
+                key := keys.get(di)
+                if str.Len(key) > 0:
+                    out.put(key, out.has(key) ? out.get(key) + 1 : 1)
+                end
+            end
+        end
+        keys.free()
+    end
+    uris.free()
+    snaps.free()
+end
+
+func lens_for(path: str, syms: value.Value, counts: HashMap<str, int>, out &: Vector<str>):
+    if not value.IsArray(syms):
+        ret
+    end
+    vscode := str.Contains(g_client_name, "Visual Studio Code") or str.Contains(g_client_name, "VSCodium")
+    repeat value.ArrayLen(syms) in i:
+        sv := value.ArrayGet(syms, i)
+        k := vint(sv, "kind", 0)
+        if k == 12 or k == 6 or k == 23 or k == 10 or k == 11:
+            key := sym_key(path, sv)
+            n := counts.has(key) ? counts.get(key) : 0
+            rg := json.EncodeDefault(obj(sv, "selectionRange"))
+            title := str.FromInt(n as i64) + (n == 1 ? " reference" : " references")
+            out.push("{\"range\":" + rg + ",\"command\":{\"title\":" + jq(title) + ",\"command\":\"\"}}")
+            nm := vstr(sv, "name")
+            if vscode and k == 12 and (str.Equals(nm, "main") or str.Equals(nm, "ریشه")):
+                out.push("{\"range\":" + rg + ",\"command\":{\"title\":\"Run\",\"command\":\"salam.run\"}}")
+            end
+        end
+        lens_for(path, obj(sv, "children"), counts, out)
+    end
+end
+
+func on_code_lens(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0 or not g_docs.get(i).has_snap:
+        send_result(id, "[]")
+        ret
+    end
+    d := g_docs.get(i)
+    mut counts := HashMap {} as HashMap<str, int>
+    ref_counts(counts)
+    mut out := Vector {} as Vector<str>
+    lens_for(d.path, obj(d.snap, "outline"), counts, out)
+    send_result(id, "[" + str.Join(out, ",") + "]")
+    out.free()
+    counts.free()
+end
+
+func on_document_link(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0 or not g_docs.get(i).has_snap:
+        send_result(id, "[]")
+        ret
+    end
+    links := obj(g_docs.get(i).snap, "links")
+    mut out := Vector {} as Vector<str>
+    if value.IsArray(links):
+        repeat value.ArrayLen(links) in k:
+            lv := value.ArrayGet(links, k)
+            out.push("{\"range\":" + json.EncodeDefault(obj(lv, "range")) + ",\"target\":" + jq(path_to_uri(vstr(lv, "target"))) + "}")
+        end
+    end
+    send_result(id, "[" + str.Join(out, ",") + "]")
+    out.free()
+end
+
+func impl_locations(key: str, method: bool, out &: Vector<str>):
+    mut uris := Vector {} as Vector<str>
+    mut snaps := Vector {} as Vector<value.Value>
+    snap_set(uris, snaps)
+    mut seen := HashMap {} as HashMap<str, bool>
+    each snap in snaps:
+        impls := obj(snap, "impls")
+        if not value.IsArray(impls):
+            continue
+        end
+        repeat value.ArrayLen(impls) in k:
+            iv := value.ArrayGet(impls, k)
+            mut target := 0 - 1
+            if method:
+                ms := obj(iv, "m")
+                mut q := 0
+                until q + 1 < value.ArrayLen(ms):
+                    if str.Equals(decl_key(decl_at(snap, value.AsInt(value.ArrayGet(ms, q)) as int)), key):
+                        target = value.AsInt(value.ArrayGet(ms, q + 1)) as int
+                    end
+                    q += 2
+                end
+            else str.Equals(decl_key(decl_at(snap, vint(iv, "i", 0 - 1))), key):
+                target = vint(iv, "s", 0 - 1)
+            end
+            if target >= 0:
+                dv := decl_at(snap, target)
+                dk := decl_key(dv)
+                loc := location_of_decl(dv)
+                if str.Len(loc) > 0 and not seen.has(dk):
+                    seen.put(dk, true)
+                    out.push(loc)
+                end
+            end
+        end
+    end
+    seen.free()
+    uris.free()
+    snaps.free()
+end
+
+func on_implementation(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "null")
+        ret
+    end
+    mut line := 0
+    mut ch := 0
+    pos_of(params, line, ch)
+    d := g_docs.get(i)
+    h := find_hit(d, line, ch)
+    if not h.ok:
+        send_result(id, "null")
+        ret
+    end
+    dv := decl_at(d.snap, h.decl)
+    k := vint(dv, "kind", 0)
+    mut out := Vector {} as Vector<str>
+    if k == 11:
+        impl_locations(decl_key(dv), false, out)
+    else k == 4 or k == 5:
+        impl_locations(decl_key(dv), true, out)
+    end
+    if out.len() == 0:
+        out.free()
+        on_definition(id, params, false)
+        ret
+    end
+    send_result(id, "[" + str.Join(out, ",") + "]")
+    out.free()
+end
+
+func type_item(dv: value.Value): str:
+    loc := obj(dv, "loc")
+    rg := range_json(arr_int(loc, 0), arr_int(loc, 1), arr_int(loc, 2), arr_int(loc, 3))
+    k := vint(dv, "kind", 6) == 11 ? 11 : 23
+    ret item_json(vstr(dv, "name"), k, path_to_uri(vstr(dv, "file")), rg, rg, decl_key(dv))
+end
+
+func on_prepare_type_hierarchy(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "null")
+        ret
+    end
+    mut line := 0
+    mut ch := 0
+    pos_of(params, line, ch)
+    d := g_docs.get(i)
+    h := find_hit(d, line, ch)
+    if not h.ok:
+        send_result(id, "null")
+        ret
+    end
+    dv := decl_at(d.snap, h.decl)
+    k := vint(dv, "kind", 0)
+    if (k != 6 and k != 11) or not value.ObjectHas(dv, "loc"):
+        send_result(id, "null")
+        ret
+    end
+    send_result(id, "[" + type_item(dv) + "]")
+end
+
+func on_type_relatives(id: str, params: value.Value, supers: bool):
+    key := vstr(obj(obj(params, "item"), "data"), "key")
+    mut uris := Vector {} as Vector<str>
+    mut snaps := Vector {} as Vector<value.Value>
+    snap_set(uris, snaps)
+    mut seen := HashMap {} as HashMap<str, bool>
+    mut out := Vector {} as Vector<str>
+    each snap in snaps:
+        impls := obj(snap, "impls")
+        if not value.IsArray(impls):
+            continue
+        end
+        repeat value.ArrayLen(impls) in k:
+            iv := value.ArrayGet(impls, k)
+            src_i := supers ? vint(iv, "s", 0 - 1) : vint(iv, "i", 0 - 1)
+            dst_i := supers ? vint(iv, "i", 0 - 1) : vint(iv, "s", 0 - 1)
+            if str.Equals(decl_key(decl_at(snap, src_i)), key):
+                tv := decl_at(snap, dst_i)
+                tk := decl_key(tv)
+                if value.ObjectHas(tv, "loc") and not seen.has(tk):
+                    seen.put(tk, true)
+                    out.push(type_item(tv))
+                end
+            end
+        end
+    end
+    send_result(id, "[" + str.Join(out, ",") + "]")
+    out.free()
+    seen.free()
+    uris.free()
+    snaps.free()
+end

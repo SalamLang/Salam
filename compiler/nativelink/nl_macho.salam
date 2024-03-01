@@ -1,0 +1,1580 @@
+package nativelink
+
+import crypto
+
+const MR_BASE := 2000
+const MO_TEXT := 0
+const MO_STUBS := 1
+const MO_CSTR := 2
+const MO_EH := 3
+const MO_GOT := 4
+const MO_INIT := 5
+const MO_CONST := 6
+const MO_DATA := 7
+const MO_BSS := 8
+const MO_TCONST := 9
+const MO_TVARS := 10
+const MO_TDATA := 11
+const MO_TBSS := 12
+const MO_UNW := 13
+const MO_COUNT := 14
+const MO_DROP := 0 - 1
+
+pub struct Mo:
+    pub out_k: Vector<int> = Vector {}
+    pub addr: Vector<i64> = Vector {}
+    pub size: Vector<i64> = Vector {}
+    pub fpos: Vector<i64> = Vector {}
+    pub align: Vector<i64> = Vector {}
+    pub stub_g: Vector<int> = Vector {}
+    pub stub_of: HashMap<int, int> = HashMap {}
+    pub got_k: Vector<int> = Vector {}
+    pub got_of: HashMap<int, int> = HashMap {}
+    pub rebase: Vector<i64> = Vector {}
+    pub bind_at: Vector<i64> = Vector {}
+    pub bind_g: Vector<int> = Vector {}
+    pub bind_add: Vector<i64> = Vector {}
+    pub base: i64 = 0x100000000
+    pub page: i64 = 0x4000
+    pub hdr: i64 = 0
+    pub text_end: i64 = 0
+    pub dc_start: i64 = 0
+    pub dc_end: i64 = 0
+    pub d_start: i64 = 0
+    pub d_fend: i64 = 0
+    pub d_end: i64 = 0
+    pub le_off: i64 = 0
+    pub dw_off: i64 = 0
+    pub dw_size: i64 = 0
+    pub dw_vm: i64 = 0
+    pub com_g: Vector<int> = Vector {}
+    pub unw_n: int = 0
+end
+
+func is_macho(p: u8*, base: i64): bool:
+    ret rd32(p, base) == (0xFEEDFACF as i64)
+end
+
+func mstr(p: u8*, at: i64, n: int): str:
+    mut b := str.NewBuilder()
+    mut k := 0
+    until k < n and p[at + (k as i64)] != (0 as u8):
+        str.BufAppendChar(b, p[at + (k as i64)] as int)
+        k += 1
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func add_macho(l &: Nl, f: int, base: i64, size: i64, label: str):
+    p := fptr(l, f)
+    if size < (32 as i64):
+        nl_fail(l, label + ": truncated Mach-O object")
+        ret
+    end
+    cpu := rd32(p, base + (4 as i64))
+    mut m := 0
+    if cpu == (0x01000007 as i64):
+        m = EM_X86_64
+    else cpu == (0x0100000C as i64):
+        m = EM_AARCH64
+    else:
+        nl_fail(l, label + ": Mach-O object for an unsupported CPU")
+        ret
+    end
+    if rd32(p, base + (12 as i64)) != (1 as i64):
+        nl_fail(l, label + ": not a Mach-O relocatable object")
+        ret
+    end
+    if l.mach == 0:
+        l.mach = m
+    else l.mach != m:
+        nl_fail(l, label + ": is for " + mach_name(m) + ", but the link is for " + mach_name(l.mach))
+        ret
+    end
+    l.macho = true
+    ncmds := rd32(p, base + (16 as i64)) as int
+    o := l.o_file.len()
+    l.o_file.push(f)
+    l.o_base.push(base)
+    l.o_label.push(label)
+    l.o_coff.push(false)
+    sec0 := l.s_obj.len()
+    l.o_sec0.push(sec0)
+    mut nsect := 0
+    mut symoff := 0 as i64
+    mut nsyms := 0
+    mut stroff := 0 as i64
+    mut lc := base + (32 as i64)
+    push_msec(l, o, name_id(l, ""), 0, 0 as i64, 0 as i64, 0 as i64, 1 as i64, 0 as i64)
+    mut rel_off := Vector {} as Vector<i64>
+    mut rel_n := Vector {} as Vector<int>
+    rel_off.push(0 as i64)
+    rel_n.push(0)
+    repeat ncmds:
+        cmd := rd32(p, lc)
+        csz := rd32(p, lc + (4 as i64))
+        if cmd == (0x19 as i64):
+            ns := rd32(p, lc + (64 as i64)) as int
+            repeat ns in k:
+                sh := lc + (72 as i64) + ((80 * k) as i64)
+                sect := mstr(p, sh, 16)
+                seg := mstr(p, sh + (16 as i64), 16)
+                addr := rd64(p, sh + (32 as i64))
+                sz := rd64(p, sh + (40 as i64))
+                off := rd32(p, sh + (48 as i64))
+                al := (1 as i64) << rd32(p, sh + (52 as i64))
+                flg := rd32(p, sh + (64 as i64))
+                push_msec(l, o, name_id(l, seg + "," + sect), flg as int, base + off, sz, addr, al, flg)
+                rel_off.push(base + rd32(p, sh + (56 as i64)))
+                rel_n.push(rd32(p, sh + (60 as i64)) as int)
+                nsect += 1
+            end
+        else cmd == (0x29 as i64):
+            doff := base + rd32(p, lc + (8 as i64))
+            dsz := rd32(p, lc + (12 as i64))
+            repeat (dsz / (8 as i64)) as int in di:
+                de := doff + ((8 * di) as i64)
+                l.dic_obj.push(o)
+                l.dic_addr.push(rd32(p, de))
+                l.dic_len.push(rd16(p, de + (4 as i64)))
+                l.dic_kind.push(rd16(p, de + (6 as i64)))
+            end
+        else cmd == (2 as i64):
+            symoff = base + rd32(p, lc + (8 as i64))
+            nsyms = rd32(p, lc + (12 as i64)) as int
+            stroff = base + rd32(p, lc + (16 as i64))
+        end
+        lc = lc + csz
+    end
+    l.o_nsec.push(nsect + 1)
+    sym0 := l.os_sec.len()
+    l.o_sym0.push(sym0)
+    l.o_nsym.push(nsyms + nsect)
+    repeat nsyms in i:
+        e := symoff + ((16 * i) as i64)
+        strx := rd32(p, e)
+        ty := rd8(p, e + (4 as i64))
+        ns2 := rd8(p, e + (5 as i64))
+        desc := rd16(p, e + (6 as i64))
+        val := rd64(p, e + (8 as i64))
+        nmo := stroff + strx
+        nm := nt_find(l.names, p, nmo, cstr_len(p, nmo, l.f_size[f]), true)
+        mut sec := 0 - 1
+        mut v := val
+        if (ty & 0xe0) != 0:
+            sec = 0 - 1
+        else (ty & 0x0e) == 0x0e and ns2 > 0 and ns2 <= nsect:
+            sec = sec0 + ns2
+            v = val - l.s_maddr[sec]
+        else (ty & 0x0e) == 2:
+            sec = 0 - 2
+        end
+        l.os_sec.push(sec)
+        l.os_val.push(v)
+        l.os_name.push((ty & 0xe0) == 0 and sec >= 0 ? nm : 0 - 1)
+        l.os_type.push((ty & 1) != 0 ? 0x12 : 0x02)
+        l.os_size.push(0 as i64)
+        mut gi := 0 - 1
+        if (ty & 0xe0) == 0 and (ty & 1) != 0:
+            gi = glob_of(l, nm)
+            if (ty & 0x0e) == 0:
+                if val > (0 as i64):
+                    if l.g_common[gi] < val:
+                        l.g_common[gi] = val
+                    end
+                    if l.g_firstref[gi] < 0:
+                        l.g_firstref[gi] = o
+                    end
+                else:
+                    sym_merge(l, gi, o, 0 - 1, 0 as i64, (desc & 0x40) != 0)
+                end
+            else:
+                sym_merge(l, gi, o, sec, v, (desc & 0x80) != 0)
+            end
+        end
+        l.os_glob.push(gi)
+    end
+    secsym0 := l.os_sec.len()
+    repeat nsect in q:
+        l.os_sec.push(sec0 + 1 + q)
+        l.os_val.push(0 as i64)
+        l.os_name.push(0 - 1)
+        l.os_type.push(0)
+        l.os_size.push(0 as i64)
+        l.os_glob.push(0 - 1)
+    end
+    repeat nsect + 1 in si:
+        s := sec0 + si
+        nr := rel_n[si]
+        l.s_rel0[s] = l.r_off.len()
+        mut kept := 0
+        mut pend_add := 0 as i64
+        mut have_add := false
+        mut pend_sub := 0 - 1
+        repeat nr in r:
+            re := rel_off[si] + ((8 * r) as i64)
+            raddr := rd32(p, re)
+            info := rd32(p, re + (4 as i64))
+            symn := (info & (0xFFFFFF as i64)) as int
+            rlen := ((info >> (25 as i64)) & (3 as i64)) as int
+            ext := ((info >> (27 as i64)) & (1 as i64)) as int
+            rty := ((info >> (28 as i64)) & (15 as i64)) as int
+            if (raddr & (0x80000000 as i64)) != (0 as i64):
+                nl_fail(l, label + ": scattered relocations are not supported")
+                ret
+            end
+            mut os := 0
+            if ext == 1:
+                os = sym0 + symn
+            else:
+                os = secsym0 + symn - 1
+            end
+            if m == EM_AARCH64 and rty == 10:
+                pend_add = sext(symn as i64, 24)
+                have_add = true
+                continue
+            end
+            if (m == EM_X86_64 and rty == 5) or (m == EM_AARCH64 and rty == 1):
+                pend_sub = os
+                continue
+            end
+            placef := l.s_off[s] + raddr
+            mut add := 0 as i64
+            if m == EM_X86_64:
+                if rty == 0:
+                    add = rlen == 3 ? rd64(p, placef) : rd32s_at(p, placef)
+                    if ext == 0:
+                        add = add - l.s_maddr[l.os_sec[os]]
+                    end
+                else:
+                    disp := rd32s_at(p, placef)
+                    bias := rty == 6 ? 1 : (rty == 7 ? 2 : (rty == 8 ? 4 : 0))
+                    if ext == 0:
+                        add = disp + l.s_maddr[s] + raddr + ((4 + bias) as i64) - l.s_maddr[l.os_sec[os]]
+                    else:
+                        add = disp + (bias as i64)
+                    end
+                end
+            else:
+                if rty == 0:
+                    add = rlen == 3 ? rd64(p, placef) : rd32s_at(p, placef)
+                    if ext == 0:
+                        add = add - l.s_maddr[l.os_sec[os]]
+                    end
+                else have_add:
+                    add = pend_add
+                end
+            end
+            have_add = false
+            until l.r_sub.len() < l.r_off.len():
+                l.r_sub.push(0 - 1)
+            end
+            l.r_off.push(raddr)
+            l.r_type.push(MR_BASE + rty * 4 + rlen)
+            l.r_sym.push(os)
+            l.r_add.push(add)
+            l.r_sub.push(pend_sub)
+            pend_sub = 0 - 1
+            kept += 1
+        end
+        l.s_nrel[s] = kept
+    end
+    rel_off.free()
+    rel_n.free()
+end
+
+func push_msec(l &: Nl, o: int, nm: int, mflags: int, off: i64, sz: i64, maddr: i64, al: i64, flg: i64):
+    until l.s_maddr.len() < l.s_obj.len():
+        l.s_maddr.push(0 as i64)
+    end
+    l.s_obj.push(o)
+    l.s_name.push(nm)
+    ty := mflags & 0xff
+    l.s_type.push(ty == 1 or ty == 12 ? 8 : 1)
+    l.s_flags.push(flg)
+    l.s_off.push(off)
+    l.s_size.push(sz)
+    l.s_align.push(al)
+    l.s_rel0.push(l.r_off.len())
+    l.s_nrel.push(0)
+    l.s_oc.push(OC_NONE)
+    l.s_live.push(false)
+    l.s_addr.push(0 as i64)
+    l.s_fpos.push(0 as i64)
+    l.s_comdat.push(false)
+    l.s_sel.push(0)
+    l.s_assoc.push(0 - 1)
+    l.s_drop.push(false)
+    l.s_link.push(0 - 1)
+    l.s_maddr.push(maddr)
+end
+
+func mo_class(l &: Nl, s: int): int:
+    nm := name_of(l, l.s_name[s])
+    if str.Len(nm) == 0:
+        ret MO_DROP
+    end
+    fl := l.s_flags[s]
+    ty := (fl & (255 as i64)) as int
+    if str.StartsWith(nm, "__LD,") or str.StartsWith(nm, "__DWARF,"):
+        ret MO_DROP
+    end
+    if ty == 0x11:
+        ret MO_TDATA
+    end
+    if ty == 0x12:
+        ret MO_TBSS
+    end
+    if ty == 0x13:
+        ret MO_TVARS
+    end
+    if ty == 1 or ty == 12:
+        ret MO_BSS
+    end
+    if ty == 9:
+        ret MO_INIT
+    end
+    if str.Equals(nm, "__TEXT,__eh_frame"):
+        ret MO_EH
+    end
+    if str.StartsWith(nm, "__TEXT,"):
+        if (fl & (0x80000000 as i64)) != (0 as i64) or (fl & (0x400 as i64)) != (0 as i64):
+            ret MO_TEXT
+        end
+        if ty == 2:
+            ret MO_CSTR
+        end
+        ret MO_TCONST
+    end
+    if str.StartsWith(nm, "__DATA_CONST,"):
+        ret MO_CONST
+    end
+    ret MO_DATA
+end
+
+func mo_rtype(t: int): int:
+    ret (t - MR_BASE) / 4
+end
+
+func mo_rlen(t: int): int:
+    ret (t - MR_BASE) % 4
+end
+
+func mo_imported(l &: Nl, os: int): int:
+    g := l.os_glob[os]
+    if g >= 0 and l.g_state[g] == SY_UNDEF and l.g_common[g] == (0 as i64):
+        ret g
+    end
+    ret 0 - 1
+end
+
+func mo_is_got_reloc(l &: Nl, rt: int): bool:
+    if l.mach == EM_X86_64:
+        ret rt == 3 or rt == 4
+    end
+    ret rt == 5 or rt == 6 or rt == 7
+end
+
+func mo_is_branch(rt: int): bool:
+    ret rt == 2
+end
+
+func mo_got_key(l &: Nl, os: int): int:
+    g := l.os_glob[os]
+    if g >= 0:
+        ret g
+    end
+    ret 0 - 1 - os
+end
+
+func mo_scan(l &: Nl, t &: Mo):
+    repeat l.s_obj.len() in s:
+        if t.out_k[s] == MO_DROP:
+            continue
+        end
+        r0 := l.s_rel0[s]
+        repeat l.s_nrel[s] in k:
+            r := r0 + k
+            rt := mo_rtype(l.r_type[r])
+            os := l.r_sym[r]
+            if mo_is_got_reloc(l, rt):
+                key := mo_got_key(l, os)
+                if not t.got_of.has(key):
+                    t.got_of.put(key, t.got_k.len())
+                    t.got_k.push(key)
+                end
+            else mo_is_branch(rt):
+                g := mo_imported(l, os)
+                if g >= 0 and not t.stub_of.has(g):
+                    t.stub_of.put(g, t.stub_g.len())
+                    t.stub_g.push(g)
+                end
+            end
+        end
+    end
+    each g2 in t.stub_g:
+        if not t.got_of.has(g2):
+            t.got_of.put(g2, t.got_k.len())
+            t.got_k.push(g2)
+        end
+    end
+end
+
+func mo_stub_size(l &: Nl): i64:
+    ret l.mach == EM_X86_64 ? (6 as i64) : (12 as i64)
+end
+
+func mo_place_class(l &: Nl, t &: Mo, k: int, pos &: i64):
+    mut start := 0 - 1 as i64
+    repeat l.s_obj.len() in s:
+        if t.out_k[s] != k:
+            continue
+        end
+        pos = align_to(pos, l.s_align[s])
+        if start < (0 as i64):
+            start = pos
+            t.align[k] = l.s_align[s]
+        end
+        l.s_addr[s] = t.base + pos
+        l.s_live[s] = true
+        pos = pos + l.s_size[s] + th_pad(l, s)
+    end
+    if start < (0 as i64):
+        start = pos
+    end
+    t.addr[k] = t.base + start
+    t.fpos[k] = start
+    t.size[k] = pos - start
+end
+
+func mo_ncmds_size(l &: Nl, t &: Mo, nsect: int): i64:
+    _t := t.base
+    mut dl := 0
+    each dn in l.dy_name:
+        dl += 24 + ((str.Len(dn) + 8) / 8) * 8
+    end
+    dw := l.dg_name.len() > 0 ? 72 + 80 * l.dg_name.len() : 0
+    ret 72 + 72 + 80 * nsect + 72 + 72 + 72 + 48 + 24 + 80 + 32 + 24 + 32 + 24 + 56 + 16 + 16 + dl + dw
+end
+
+func mo_dylib_list(l &: Nl): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("/usr/lib/libSystem.B.dylib")
+    each dn in l.dy_name:
+        mut seen := false
+        each e in v:
+            if str.Equals(e, dn):
+                seen = true
+            end
+        end
+        if not seen:
+            v.push(dn)
+        end
+    end
+    ret v
+end
+
+func mo_ordinal(l &: Nl, g: int, dl: Vector<str>): int:
+    if not l.dy_sym.has(l.g_name[g]):
+        ret 1
+    end
+    nm := l.dy_name.get(l.dy_sym.get(l.g_name[g]))
+    repeat dl.len() in i:
+        if str.Equals(dl.get(i), nm):
+            ret i + 1
+        end
+    end
+    ret 1
+end
+
+func is_tbd(p: u8*, n: i64): bool:
+    ret n >= (12 as i64) and p[0] == (45 as u8) and p[1] == (45 as u8) and p[2] == (45 as u8) and p[4] == (33 as u8) and p[5] == (116 as u8)
+end
+
+func tbd_word(p: u8*, at &: i64, n: i64): str:
+    until at < n and (p[at] == (32 as u8) or p[at] == (39 as u8) or p[at] == (34 as u8) or p[at] == (44 as u8) or p[at] == (10 as u8) or p[at] == (13 as u8)):
+        at = at + (1 as i64)
+    end
+    mut b := str.NewBuilder()
+    until at < n and p[at] != (39 as u8) and p[at] != (34 as u8) and p[at] != (44 as u8) and p[at] != (93 as u8) and p[at] != (10 as u8) and p[at] != (32 as u8):
+        str.BufAppendChar(b, p[at] as int)
+        at = at + (1 as i64)
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func tbd_starts(p: u8*, at: i64, n: i64, w: str): bool:
+    wp := (w as void*) as u8*
+    k := str.Len(w)
+    if at + (k as i64) > n:
+        ret false
+    end
+    repeat k in i:
+        if p[at + (i as i64)] != wp[i]:
+            ret false
+        end
+    end
+    ret true
+end
+
+func add_tbd(l &: Nl, f: int):
+    p := fptr(l, f)
+    n := l.f_size[f]
+    l.macho = true
+    mut idx := 0 - 1
+    mut in_exp := false
+    mut at := 0 as i64
+    until at < n:
+        mut ls := at
+        until ls < n and (p[ls] == (32 as u8)):
+            ls = ls + (1 as i64)
+        end
+        if tbd_starts(p, ls, n, "install-name:") and idx < 0:
+            mut q := ls + (13 as i64)
+            nm := tbd_word(p, q, n)
+            idx = l.dy_name.len()
+            l.dy_name.push(nm)
+        else tbd_starts(p, ls, n, "exports:") or tbd_starts(p, ls, n, "reexports:"):
+            in_exp = true
+        else tbd_starts(p, ls, n, "undefineds:"):
+            in_exp = false
+        else in_exp and idx >= 0 and (tbd_starts(p, ls, n, "symbols:") or tbd_starts(p, ls, n, "weak-symbols:") or tbd_starts(p, ls, n, "- symbols:")):
+            mut q2 := ls
+            until q2 < n and p[q2] != (91 as u8):
+                q2 = q2 + (1 as i64)
+            end
+            q2 = q2 + (1 as i64)
+            until q2 < n and p[q2] != (93 as u8):
+                w := tbd_word(p, q2, n)
+                if str.Len(w) > 0:
+                    l.dy_sym.put(name_id(l, w), idx)
+                end
+                until q2 < n and (p[q2] == (44 as u8) or p[q2] == (32 as u8) or p[q2] == (10 as u8) or p[q2] == (13 as u8) or p[q2] == (39 as u8)):
+                    q2 = q2 + (1 as i64)
+                end
+            end
+            at = q2
+        end
+        until at < n and p[at] != (10 as u8):
+            at = at + (1 as i64)
+        end
+        at = at + (1 as i64)
+    end
+end
+
+func trie_walk(l &: Nl, p: u8*, start: i64, node: i64, prefix: str, idx: int, depth: int):
+    if depth > 128:
+        ret
+    end
+    mut at := start + node
+    tsz := ehh_uleb(p, at)
+    if tsz > (0 as i64):
+        l.dy_sym.put(name_id(l, prefix), idx)
+    end
+    at = at + tsz
+    nkids := p[at] as int
+    at = at + (1 as i64)
+    repeat nkids:
+        mut b := str.NewBuilder()
+        str.BufAppend(b, prefix)
+        until p[at] != (0 as u8):
+            str.BufAppendChar(b, p[at] as int)
+            at = at + (1 as i64)
+        end
+        at = at + (1 as i64)
+        child := ehh_uleb(p, at)
+        edge := str.BufStr(b)
+        str.BufFree(b)
+        trie_walk(l, p, start, child, edge, idx, depth + 1)
+    end
+end
+
+func add_dylib(l &: Nl, f: int, base: i64):
+    p := fptr(l, f)
+    l.macho = true
+    ncmds := rd32(p, base + (16 as i64)) as int
+    mut lc := base + (32 as i64)
+    mut idx := 0 - 1
+    mut eoff := 0 as i64
+    mut esz := 0 as i64
+    repeat ncmds:
+        cmd := rd32(p, lc)
+        csz := rd32(p, lc + (4 as i64))
+        if cmd == (0xD as i64):
+            idx = l.dy_name.len()
+            l.dy_name.push(mstr(p, lc + rd32(p, lc + (8 as i64)), (csz - rd32(p, lc + (8 as i64))) as int))
+        else cmd == (0x80000022 as i64) or cmd == (0x22 as i64):
+            eoff = rd32(p, lc + (40 as i64))
+            esz = rd32(p, lc + (44 as i64))
+        else cmd == (0x80000033 as i64):
+            eoff = rd32(p, lc + (8 as i64))
+            esz = rd32(p, lc + (12 as i64))
+        end
+        lc = lc + csz
+    end
+    if idx >= 0 and esz > (0 as i64):
+        trie_walk(l, p, base + eoff, 0 as i64, "", idx, 0)
+    end
+end
+
+
+func macho_link(l &: Nl, out: str):
+    mut t := Mo {}
+    if l.mach == EM_X86_64:
+        t.page = 0x1000 as i64
+    end
+    repeat l.s_obj.len() in s:
+        t.out_k.push(mo_class(l, s))
+    end
+    repeat MO_COUNT:
+        t.addr.push(0 as i64)
+        t.size.push(0 as i64)
+        t.fpos.push(0 as i64)
+        t.align.push(1 as i64)
+    end
+    mh := glob_find(l, "__mh_execute_header")
+    dso := glob_find(l, "___dso_handle")
+    each sg in [mh, dso]:
+        if sg >= 0 and l.g_state[sg] == SY_UNDEF:
+            l.g_state[sg] = SY_ABS
+            l.g_sec[sg] = SYN_EHDR
+        end
+    end
+    mo_scan(l, t)
+    if not l.ok:
+        ret
+    end
+    t.unw_n = mo_fde_count(l, t)
+    if not l.strip:
+        dbg_collect_mo(l)
+    end
+    mut nsect := 0
+    repeat MO_COUNT in k0:
+        if mo_has(l, t, k0):
+            nsect += 1
+        end
+    end
+    t.hdr = (32 as i64) + mo_ncmds_size(l, t, nsect)
+    mo_layout(l, t)
+    until l.ok and mo_th_plan(l, t):
+        mo_layout(l, t)
+    end
+    t.le_off = align_to(t.d_fend, t.page)
+    if l.dg_name.len() > 0:
+        t.dw_off = t.le_off
+        repeat l.dg_name.len() in dk:
+            t.dw_size = t.dw_size + l.dg_size[dk]
+        end
+        t.dw_vm = align_to(t.dw_size, t.page)
+        t.le_off = align_to(t.dw_off + t.dw_size, t.page)
+    end
+    total := t.le_off
+    buf := malloc(total as u64) as u8*
+    l.out_ptr = buf as i64
+    repeat total in z:
+        buf[z] = 0 as u8
+    end
+    repeat l.s_obj.len() in s2:
+        if not l.s_live[s2] or l.s_type[s2] == 8 or l.s_off[s2] <= (0 as i64):
+            continue
+        end
+        p := fptr(l, l.o_file[l.s_obj[s2]])
+        dst := l.s_addr[s2] - t.base
+        repeat l.s_size[s2] in b:
+            buf[dst + b] = p[l.s_off[s2] + b]
+        end
+    end
+    mo_write_stubs(l, t, buf)
+    mo_th_write(l, t, buf)
+    mo_relocs(l, t, buf)
+    if not l.ok:
+        ret
+    end
+    mo_got_fill(l, t, buf)
+    if t.unw_n > 0:
+        mo_unwind(l, t, buf)
+    end
+    if l.dg_name.len() > 0:
+        dbg_build_mo(l)
+        repeat l.dg_bytes.len() in dq:
+            buf[t.dw_off + (dq as i64)] = l.dg_bytes[dq]
+        end
+    end
+    ent := glob_find(l, "_main")
+    if ent < 0 or l.g_state[ent] != SY_DEF:
+        nl_fail(l, "cannot link: no '_main' function")
+        ret
+    end
+    mo_write(l, t, buf, out)
+end
+
+func mo_layout(l &: Nl, t &: Mo):
+    mut pos := t.hdr
+    mo_place_class(l, t, MO_TEXT, pos)
+    pos = align_to(pos, 4 as i64)
+    t.addr[MO_STUBS] = t.base + pos
+    t.fpos[MO_STUBS] = pos
+    t.size[MO_STUBS] = mo_stub_size(l) * (t.stub_g.len() as i64)
+    t.align[MO_STUBS] = 4 as i64
+    pos = pos + t.size[MO_STUBS]
+    mo_place_class(l, t, MO_CSTR, pos)
+    mo_place_class(l, t, MO_TCONST, pos)
+    mo_place_class(l, t, MO_EH, pos)
+    pos = align_to(pos, 4 as i64)
+    t.addr[MO_UNW] = t.base + pos
+    t.fpos[MO_UNW] = pos
+    t.size[MO_UNW] = mo_unw_size(t.unw_n)
+    t.align[MO_UNW] = 4 as i64
+    pos = pos + t.size[MO_UNW]
+    t.text_end = align_to(pos, t.page)
+    pos = t.text_end
+    t.dc_start = pos
+    pos = align_to(pos, 8 as i64)
+    t.addr[MO_GOT] = t.base + pos
+    t.fpos[MO_GOT] = pos
+    t.size[MO_GOT] = (8 * t.got_k.len()) as i64
+    t.align[MO_GOT] = 8 as i64
+    pos = pos + t.size[MO_GOT]
+    mo_place_class(l, t, MO_INIT, pos)
+    mo_place_class(l, t, MO_CONST, pos)
+    t.dc_end = align_to(pos, t.page)
+    pos = t.dc_end
+    t.d_start = pos
+    mo_place_class(l, t, MO_DATA, pos)
+    mo_place_class(l, t, MO_TVARS, pos)
+    mo_place_class(l, t, MO_TDATA, pos)
+    t.d_fend = pos
+    mut mem := pos
+    repeat l.s_obj.len() in sb:
+        if t.out_k[sb] == MO_BSS or t.out_k[sb] == MO_TBSS:
+            l.s_type[sb] = 8
+        end
+    end
+    mo_place_class(l, t, MO_TBSS, mem)
+    mo_place_class(l, t, MO_BSS, mem)
+    if t.com_g.len() == 0:
+        repeat l.g_name.len() in gc:
+            if l.g_state[gc] == SY_UNDEF and l.g_common[gc] > (0 as i64):
+                l.g_state[gc] = SY_ABS
+                l.g_sec[gc] = SYN_COMMON
+                t.com_g.push(gc)
+            end
+        end
+    end
+    each gc2 in t.com_g:
+        mem = align_to(mem, 16 as i64)
+        l.g_val[gc2] = t.base + mem
+        mem = mem + l.g_common[gc2]
+    end
+    t.size[MO_BSS] = t.base + mem - t.addr[MO_BSS]
+    t.d_end = align_to(mem, t.page)
+    if t.d_end == t.d_start:
+        t.d_end = t.d_start + t.page
+    end
+end
+
+func mo_tls_lo(t &: Mo): i64:
+    if t.size[MO_TDATA] > (0 as i64):
+        ret t.addr[MO_TDATA]
+    end
+    ret t.addr[MO_TBSS]
+end
+
+func mo_tls_target(l &: Nl, t &: Mo, os: int): bool:
+    g := l.os_glob[os]
+    mut s := l.os_sec[os]
+    if g >= 0:
+        s = l.g_state[g] == SY_DEF ? l.g_sec[g] : 0 - 1
+    end
+    ret s >= 0 and (t.out_k[s] == MO_TDATA or t.out_k[s] == MO_TBSS)
+end
+
+func mo_has(l &: Nl, t &: Mo, k: int): bool:
+    if k == MO_STUBS:
+        ret t.stub_g.len() > 0
+    end
+    if k == MO_GOT:
+        ret t.got_k.len() > 0
+    end
+    if k == MO_UNW:
+        ret t.unw_n > 0
+    end
+    repeat l.s_obj.len() in s:
+        if t.out_k[s] == k:
+            ret true
+        end
+    end
+    ret false
+end
+
+func mo_sym(l &: Nl, os: int): i64:
+    g := l.os_glob[os]
+    if g >= 0:
+        if l.g_state[g] == SY_DEF:
+            ret l.s_addr[l.g_sec[g]] + l.g_val[g]
+        end
+        if l.g_state[g] == SY_ABS and l.g_sec[g] == SYN_EHDR:
+            ret 0x100000000
+        end
+        ret l.g_val[g]
+    end
+    s := l.os_sec[os]
+    if s >= 0:
+        ret l.s_addr[s] + l.os_val[os]
+    end
+    ret l.os_val[os]
+end
+
+func mo_got_addr(t &: Mo, key: int): i64:
+    ret t.addr[MO_GOT] + ((8 * t.got_of.get(key)) as i64)
+end
+
+func mo_write_stubs(l &: Nl, t &: Mo, buf: u8*):
+    repeat t.stub_g.len() in i:
+        at := t.addr[MO_STUBS] + mo_stub_size(l) * (i as i64)
+        f := at - t.base
+        ga := mo_got_addr(t, t.stub_g[i])
+        if l.mach == EM_X86_64:
+            buf[f] = 0xFF as u8
+            buf[f + (1 as i64)] = 0x25 as u8
+            wr32(buf, f + (2 as i64), ga - (at + (6 as i64)))
+        else:
+            pg := (page4k(ga) - page4k(at)) >> (12 as i64)
+            adrp := (0x90000010 as i64) | ((pg & (3 as i64)) << (29 as i64)) | (((pg >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64))
+            wr32(buf, f, adrp)
+            wr32(buf, f + (4 as i64), (0xF9400210 as i64) | (((ga & (0xFFF as i64)) >> (3 as i64)) << (10 as i64)))
+            wr32(buf, f + (8 as i64), 0xD61F0200 as i64)
+        end
+    end
+end
+
+func mo_got_fill(l &: Nl, t &: Mo, buf: u8*):
+    repeat t.got_k.len() in i:
+        key := t.got_k[i]
+        at := t.addr[MO_GOT] + ((8 * i) as i64)
+        if key >= 0 and l.g_state[key] == SY_UNDEF and l.g_common[key] == (0 as i64):
+            t.bind_at.push(at)
+            t.bind_g.push(key)
+            t.bind_add.push(0 as i64)
+            continue
+        end
+        mut v := 0 as i64
+        if key >= 0:
+            v = mo_sym_g(l, key)
+        else:
+            v = mo_sym(l, 0 - 1 - key)
+        end
+        wr64(buf, at - t.base, v)
+        t.rebase.push(at)
+    end
+end
+
+func mo_sym_g(l &: Nl, g: int): i64:
+    if l.g_state[g] == SY_DEF:
+        ret l.s_addr[l.g_sec[g]] + l.g_val[g]
+    end
+    if l.g_state[g] == SY_ABS and l.g_sec[g] == SYN_EHDR:
+        ret 0x100000000
+    end
+    ret l.g_val[g]
+end
+
+func mo_ldst_scale(ins: i64): int:
+    if (ins & (0x3B000000 as i64)) == (0x39000000 as i64):
+        sz := ((ins >> (30 as i64)) & (3 as i64)) as int
+        if sz == 0 and (ins & (0x04800000 as i64)) == (0x04800000 as i64):
+            ret 4
+        end
+        ret sz
+    end
+    ret 0
+end
+
+func mo_relocs(l &: Nl, t &: Mo, buf: u8*):
+    repeat l.s_obj.len() in s:
+        if not l.s_live[s] or l.s_type[s] == 8:
+            continue
+        end
+        r0 := l.s_rel0[s]
+        repeat l.s_nrel[s] in k:
+            r := r0 + k
+            rt := mo_rtype(l.r_type[r])
+            rlen := mo_rlen(l.r_type[r])
+            os := l.r_sym[r]
+            pc := l.s_addr[s] + l.r_off[r]
+            f := pc - t.base
+            a := l.r_add[r]
+            sub := l.r_sub[r]
+            gimp := mo_imported(l, os)
+            if rt == 0 and t.out_k[s] == MO_TVARS and mo_tls_target(l, t, os):
+                wr64(buf, f, mo_sym(l, os) + a - mo_tls_lo(t))
+                continue
+            end
+            if rt == 0:
+                if sub >= 0:
+                    v := mo_sym(l, os) - mo_sym(l, sub) + a
+                    if rlen == 3:
+                        wr64(buf, f, v)
+                    else:
+                        wr32(buf, f, v)
+                    end
+                    continue
+                end
+                if rlen != 3:
+                    wr32(buf, f, mo_sym(l, os) + a)
+                    continue
+                end
+                if gimp >= 0:
+                    t.bind_at.push(pc)
+                    t.bind_g.push(gimp)
+                    t.bind_add.push(a)
+                    continue
+                end
+                wr64(buf, f, mo_sym(l, os) + a)
+                if pc >= t.base + t.dc_start:
+                    t.rebase.push(pc)
+                end
+                continue
+            end
+            mut tgt := 0 as i64
+            mut a2 := a
+            if rt == 2 and l.th_of_rel.has(r):
+                tgt = th_addr(l, l.th_of_rel.get(r))
+                a2 = 0
+            else mo_is_got_reloc(l, rt):
+                tgt = mo_got_addr(t, mo_got_key(l, os))
+            else gimp >= 0:
+                if not t.stub_of.has(gimp):
+                    nl_fail(l, "cannot reference imported symbol '" + name_of(l, l.g_name[gimp]) + "' directly in " + l.o_label[l.s_obj[s]])
+                    ret
+                end
+                tgt = t.addr[MO_STUBS] + mo_stub_size(l) * (t.stub_of.get(gimp) as i64)
+            else:
+                tgt = mo_sym(l, os)
+            end
+            if (l.mach == EM_X86_64 and rt == 9) or (l.mach == EM_AARCH64 and (rt == 8 or rt == 9)):
+                if gimp >= 0:
+                    nl_fail(l, "thread-local variable '" + name_of(l, l.g_name[gimp]) + "' from a dylib is not supported in " + l.o_label[l.s_obj[s]])
+                    ret
+                end
+                if l.mach == EM_X86_64:
+                    if f >= (2 as i64) and buf[f - (2 as i64)] == (0x8b as u8):
+                        buf[f - (2 as i64)] = 0x8d as u8
+                    end
+                else rt == 9:
+                    ins0 := rd32(buf, f)
+                    wr32(buf, f, (0x91000000 as i64) | (((tgt + a) & (0xFFF as i64)) << (10 as i64)) | (ins0 & (0x3FF as i64)))
+                    continue
+                else:
+                    pg8 := (page4k(tgt + a) - page4k(pc)) >> (12 as i64)
+                    ins_set(buf, f, (0x60FFFFE0 as i64), ((pg8 & (3 as i64)) << (29 as i64)) | (((pg8 >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64)))
+                    continue
+                end
+            end
+            if l.mach == EM_X86_64:
+                bias := rt == 6 ? 1 : (rt == 7 ? 2 : (rt == 8 ? 4 : 0))
+                wr32(buf, f, tgt + a - (pc + ((4 + bias) as i64)))
+                continue
+            end
+            x := tgt + a2
+            if rt == 2:
+                d := x - pc
+                if not th_in_range(d, 28):
+                    nl_fail(l, "branch out of range in " + l.o_label[l.s_obj[s]])
+                    ret
+                end
+                ins_set(buf, f, (0x3FFFFFF as i64), d >> (2 as i64))
+            else rt == 3 or rt == 5:
+                pg := (page4k(x) - page4k(pc)) >> (12 as i64)
+                ins_set(buf, f, (0x60FFFFE0 as i64), ((pg & (3 as i64)) << (29 as i64)) | (((pg >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64)))
+            else rt == 4 or rt == 6:
+                ins := rd32(buf, f)
+                sc := mo_ldst_scale(ins)
+                ins_set(buf, f, (0x3FFC00 as i64), ((x & (0xFFF as i64)) >> (sc as i64)) << (10 as i64))
+            else rt == 7:
+                wr32(buf, f, x - pc)
+            else:
+                nl_fail(l, "unsupported Mach-O relocation type " + str.FromInt(rt as i64) + " in " + l.o_label[l.s_obj[s]])
+                ret
+            end
+        end
+    end
+end
+
+func be32(v &: Vector<u8>, x: i64):
+    v.push(((x >> (24 as i64)) & (255 as i64)) as u8)
+    v.push(((x >> (16 as i64)) & (255 as i64)) as u8)
+    v.push(((x >> (8 as i64)) & (255 as i64)) as u8)
+    v.push((x & (255 as i64)) as u8)
+end
+
+func be64(v &: Vector<u8>, x: i64):
+    be32(v, (x >> (32 as i64)) & (0xFFFFFFFF as i64))
+    be32(v, x & (0xFFFFFFFF as i64))
+end
+
+func uleb(v &: Vector<u8>, x0: i64):
+    mut x := x0
+    until true:
+        mut b := (x & (127 as i64)) as int
+        x = x >> (7 as i64)
+        if x != (0 as i64):
+            b = b | 128
+        end
+        v.push(b as u8)
+        if x == (0 as i64):
+            break
+        end
+    end
+end
+
+func sleb(v &: Vector<u8>, x0: i64):
+    mut x := x0
+    until true:
+        b := (x & (127 as i64)) as int
+        x = x >> (7 as i64)
+        done := (x == (0 as i64) and (b & 64) == 0) or (x == (0 - 1 as i64) and (b & 64) != 0)
+        v.push((done ? b : (b | 128)) as u8)
+        if done:
+            break
+        end
+    end
+end
+
+func mo_seg_of(t &: Mo, addr: i64, segi &: int, off &: i64):
+    a := addr - t.base
+    if a < t.text_end:
+        segi = 1
+        off = a
+    else a < t.dc_end:
+        segi = 2
+        off = a - t.dc_start
+    else:
+        segi = 3
+        off = a - t.d_start
+    end
+end
+
+func mo_sort(v &: Vector<i64>):
+    n := v.len()
+    mut i := 1
+    until i < n:
+        x := v[i]
+        mut j := i - 1
+        until j >= 0 and v[j] > x:
+            v[j + 1] = v[j]
+            j -= 1
+        end
+        v[j + 1] = x
+        i += 1
+    end
+end
+
+func mo_rebase_ops(t &: Mo): Vector<u8>:
+    mut o := Vector {} as Vector<u8>
+    mo_sort(t.rebase)
+    o.push(0x11 as u8)
+    each a in t.rebase:
+        mut sg := 0
+        mut off := 0 as i64
+        mo_seg_of(t, a, sg, off)
+        o.push((0x20 | sg) as u8)
+        uleb(o, off)
+        o.push(0x51 as u8)
+    end
+    o.push(0 as u8)
+    until (o.len() % 8) != 0:
+        o.push(0 as u8)
+    end
+    ret o
+end
+
+func mo_bind_ops(l &: Nl, t &: Mo): Vector<u8>:
+    dl := mo_dylib_list(l)
+    mut o := Vector {} as Vector<u8>
+    repeat t.bind_at.len() in i:
+        mut sg := 0
+        mut off := 0 as i64
+        mo_seg_of(t, t.bind_at[i], sg, off)
+        ordn := mo_ordinal(l, t.bind_g[i], dl)
+        if ordn < 16:
+            o.push((0x10 | ordn) as u8)
+        else:
+            o.push(0x20 as u8)
+            uleb(o, ordn as i64)
+        end
+        o.push(0x40 as u8)
+        nm := name_of(l, l.g_name[t.bind_g[i]])
+        np := (nm as void*) as u8*
+        repeat str.Len(nm) in c:
+            o.push(np[c])
+        end
+        o.push(0 as u8)
+        o.push(0x51 as u8)
+        if t.bind_add[i] != (0 as i64):
+            o.push(0x60 as u8)
+            sleb(o, t.bind_add[i])
+        end
+        o.push((0x70 | sg) as u8)
+        uleb(o, off)
+        o.push(0x90 as u8)
+    end
+    o.push(0 as u8)
+    until (o.len() % 8) != 0:
+        o.push(0 as u8)
+    end
+    ret o
+end
+
+func mo_name16(h &: Vector<u8>, s: str):
+    p := (s as void*) as u8*
+    repeat 16 in i:
+        h.push(i < str.Len(s) ? p[i] : (0 as u8))
+    end
+end
+
+func mo_sect(h &: Vector<u8>, sect: str, seg: str, addr: i64, size: i64, off: i64, al: i64, flags: i64, r1: int, r2: int):
+    mo_name16(h, sect)
+    mo_name16(h, seg)
+    tb_le(h, addr, 8)
+    tb_le(h, size, 8)
+    tb_le(h, off, 4)
+    mut lg := 0
+    until ((1 as i64) << (lg as i64)) < al:
+        lg += 1
+    end
+    tb_le(h, lg as i64, 4)
+    tb_le(h, 0 as i64, 4)
+    tb_le(h, 0 as i64, 4)
+    tb_le(h, flags, 4)
+    tb_le(h, r1 as i64, 4)
+    tb_le(h, r2 as i64, 4)
+    tb_le(h, 0 as i64, 4)
+end
+
+func mo_seg(h &: Vector<u8>, name: str, vmaddr: i64, vmsize: i64, fileoff: i64, filesize: i64, prot: int, nsect: int, flags: int):
+    tb_le(h, 0x19 as i64, 4)
+    tb_le(h, (72 + 80 * nsect) as i64, 4)
+    mo_name16(h, name)
+    tb_le(h, vmaddr, 8)
+    tb_le(h, vmsize, 8)
+    tb_le(h, fileoff, 8)
+    tb_le(h, filesize, 8)
+    tb_le(h, prot as i64, 4)
+    tb_le(h, prot as i64, 4)
+    tb_le(h, nsect as i64, 4)
+    tb_le(h, flags as i64, 4)
+end
+
+func mo_count(l &: Nl, t &: Mo, ks: int[]): int:
+    mut n := 0
+    each k in ks:
+        if mo_has(l, t, k):
+            n += 1
+        end
+    end
+    ret n
+end
+
+func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
+    rebase := mo_rebase_ops(t)
+    bind := mo_bind_ops(l, t)
+    mut strs := Vector {} as Vector<u8>
+    strs.push(32 as u8)
+    strs.push(0 as u8)
+    dyl := mo_dylib_list(l)
+    mut syms := Vector {} as Vector<u8>
+    mut nsym := 0
+    mut nimp := 0
+    mut nloc := 0
+    repeat l.os_sec.len() in os:
+        s := l.os_sec[os]
+        if l.os_glob[os] >= 0 or l.os_name[os] < 0 or s < 0 or not l.s_live[s]:
+            continue
+        end
+        tb_le(syms, tb_name(l, strs, l.os_name[os]), 4)
+        syms.push(0x0e as u8)
+        syms.push(mo_secno(l, t, s) as u8)
+        tb_le(syms, 0 as i64, 2)
+        tb_le(syms, mo_sym(l, os), 8)
+        nsym += 1
+        nloc += 1
+    end
+    repeat 2 in pass:
+        repeat l.g_name.len() in g:
+            imp := l.g_state[g] == SY_UNDEF and l.g_common[g] == (0 as i64)
+            def := l.g_state[g] == SY_DEF
+            if (pass == 0 and not def) or (pass == 1 and not imp):
+                continue
+            end
+            tb_le(syms, tb_name(l, strs, l.g_name[g]), 4)
+            syms.push((def ? 0x0f : 0x01) as u8)
+            syms.push((def ? mo_secno(l, t, l.g_sec[g]) : 0) as u8)
+            tb_le(syms, (def ? 0 : (mo_ordinal(l, g, dyl) << 8)) as i64, 2)
+            tb_le(syms, def ? mo_sym_g(l, g) : (0 as i64), 8)
+            nsym += 1
+            if imp:
+                nimp += 1
+            end
+        end
+    end
+    until (strs.len() % 8) != 0:
+        strs.push(0 as u8)
+    end
+    mut ind := Vector {} as Vector<u8>
+    each sg in t.stub_g:
+        tb_le(ind, mo_imp_index(l, sg, nloc, nsym - nimp), 4)
+    end
+    each gk in t.got_k:
+        if gk >= 0 and l.g_state[gk] == SY_UNDEF and l.g_common[gk] == (0 as i64):
+            tb_le(ind, mo_imp_index(l, gk, nloc, nsym - nimp), 4)
+        else:
+            tb_le(ind, 0x80000000 as i64, 4)
+        end
+    end
+    mut le := Vector {} as Vector<u8>
+    rb_off := t.le_off
+    each b in rebase:
+        le.push(b)
+    end
+    bd_off := t.le_off + (le.len() as i64)
+    each b2 in bind:
+        le.push(b2)
+    end
+    sym_off := t.le_off + (le.len() as i64)
+    each b3 in syms:
+        le.push(b3)
+    end
+    dic_off := t.le_off + (le.len() as i64)
+    mut ndic := 0
+    repeat l.dic_obj.len() in dq:
+        o2 := l.dic_obj[dq]
+        a2 := l.dic_addr[dq]
+        repeat l.o_nsec[o2] in sq:
+            s3 := l.o_sec0[o2] + sq
+            if l.s_live[s3] and a2 >= l.s_maddr[s3] and a2 < l.s_maddr[s3] + l.s_size[s3]:
+                tb_le(le, l.s_addr[s3] + a2 - l.s_maddr[s3] - t.base, 4)
+                tb_le(le, l.dic_len[dq] as i64, 2)
+                tb_le(le, l.dic_kind[dq] as i64, 2)
+                ndic += 1
+            end
+        end
+    end
+    ind_off := t.le_off + (le.len() as i64)
+    each b5 in ind:
+        le.push(b5)
+    end
+    str_off := t.le_off + (le.len() as i64)
+    each b4 in strs:
+        le.push(b4)
+    end
+    until (le.len() % 16) != 0:
+        le.push(0 as u8)
+    end
+    cs_off := t.le_off + (le.len() as i64)
+    ident := basename_of(out)
+    npages := ((cs_off + (4095 as i64)) / (4096 as i64)) as int
+    cd_hdr := 88
+    id_len := str.Len(ident) + 1
+    cd_len := cd_hdr + id_len + 32 * npages
+    cs_len := 12 + 8 + cd_len
+    cs_pad := align_to(cs_len as i64, 16 as i64)
+    le_size := (le.len() as i64) + cs_pad
+    mut h := Vector {} as Vector<u8>
+    tb_le(h, 0xFEEDFACF as i64, 4)
+    tb_le(h, (l.mach == EM_X86_64 ? 0x01000007 : 0x0100000C) as i64, 4)
+    tb_le(h, (l.mach == EM_X86_64 ? 3 : 0) as i64, 4)
+    tb_le(h, 2 as i64, 4)
+    tb_le(h, 0 as i64, 4)
+    tb_le(h, 0 as i64, 4)
+    tb_le(h, (mo_has(l, t, MO_TVARS) ? 0x00A00085 : 0x00200085) as i64, 4)
+    tb_le(h, 0 as i64, 4)
+    mut ncmd := 0
+    mo_seg(h, "__PAGEZERO", 0 as i64, t.base, 0 as i64, 0 as i64, 0, 0, 0)
+    ncmd += 1
+    ntext := mo_count(l, t, [MO_TEXT, MO_STUBS, MO_CSTR, MO_TCONST, MO_EH, MO_UNW])
+    mo_seg(h, "__TEXT", t.base, t.text_end, 0 as i64, t.text_end, 5, ntext, 0)
+    ncmd += 1
+    if mo_has(l, t, MO_TEXT):
+        mo_sect(h, "__text", "__TEXT", t.addr[MO_TEXT], t.size[MO_TEXT], t.fpos[MO_TEXT], t.align[MO_TEXT], 0x80000400 as i64, 0, 0)
+    end
+    if mo_has(l, t, MO_STUBS):
+        mo_sect(h, "__stubs", "__TEXT", t.addr[MO_STUBS], t.size[MO_STUBS], t.fpos[MO_STUBS], 4 as i64, 0x80000408 as i64, 0, mo_stub_size(l) as int)
+    end
+    if mo_has(l, t, MO_CSTR):
+        mo_sect(h, "__cstring", "__TEXT", t.addr[MO_CSTR], t.size[MO_CSTR], t.fpos[MO_CSTR], t.align[MO_CSTR], 2 as i64, 0, 0)
+    end
+    if mo_has(l, t, MO_TCONST):
+        mo_sect(h, "__const", "__TEXT", t.addr[MO_TCONST], t.size[MO_TCONST], t.fpos[MO_TCONST], t.align[MO_TCONST], 0 as i64, 0, 0)
+    end
+    if mo_has(l, t, MO_EH):
+        mo_sect(h, "__eh_frame", "__TEXT", t.addr[MO_EH], t.size[MO_EH], t.fpos[MO_EH], t.align[MO_EH], 0x6800000B as i64, 0, 0)
+    end
+    if mo_has(l, t, MO_UNW):
+        mo_sect(h, "__unwind_info", "__TEXT", t.addr[MO_UNW], t.size[MO_UNW], t.fpos[MO_UNW], 4 as i64, 0 as i64, 0, 0)
+    end
+    ndc := mo_count(l, t, [MO_GOT, MO_INIT, MO_CONST])
+    mo_seg(h, "__DATA_CONST", t.base + t.dc_start, t.dc_end - t.dc_start, t.dc_start, t.dc_end - t.dc_start, 3, ndc, 16)
+    ncmd += 1
+    if mo_has(l, t, MO_GOT):
+        mo_sect(h, "__got", "__DATA_CONST", t.addr[MO_GOT], t.size[MO_GOT], t.fpos[MO_GOT], 8 as i64, 6 as i64, t.stub_g.len(), 0)
+    end
+    if mo_has(l, t, MO_INIT):
+        mo_sect(h, "__mod_init_func", "__DATA_CONST", t.addr[MO_INIT], t.size[MO_INIT], t.fpos[MO_INIT], 8 as i64, 9 as i64, 0, 0)
+    end
+    if mo_has(l, t, MO_CONST):
+        mo_sect(h, "__const", "__DATA_CONST", t.addr[MO_CONST], t.size[MO_CONST], t.fpos[MO_CONST], t.align[MO_CONST], 0 as i64, 0, 0)
+    end
+    nd := mo_count(l, t, [MO_DATA, MO_TVARS, MO_TDATA, MO_TBSS, MO_BSS])
+    mo_seg(h, "__DATA", t.base + t.d_start, t.d_end - t.d_start, t.d_start, t.d_fend - t.d_start, 3, nd, 0)
+    ncmd += 1
+    if mo_has(l, t, MO_DATA):
+        mo_sect(h, "__data", "__DATA", t.addr[MO_DATA], t.size[MO_DATA], t.fpos[MO_DATA], t.align[MO_DATA], 0 as i64, 0, 0)
+    end
+    if mo_has(l, t, MO_TVARS):
+        mo_sect(h, "__thread_vars", "__DATA", t.addr[MO_TVARS], t.size[MO_TVARS], t.fpos[MO_TVARS], t.align[MO_TVARS], 0x13 as i64, 0, 0)
+    end
+    if mo_has(l, t, MO_TDATA):
+        mo_sect(h, "__thread_data", "__DATA", t.addr[MO_TDATA], t.size[MO_TDATA], t.fpos[MO_TDATA], t.align[MO_TDATA], 0x11 as i64, 0, 0)
+    end
+    if mo_has(l, t, MO_TBSS):
+        mo_sect(h, "__thread_bss", "__DATA", t.addr[MO_TBSS], t.size[MO_TBSS], 0 as i64, t.align[MO_TBSS], 0x12 as i64, 0, 0)
+    end
+    if mo_has(l, t, MO_BSS):
+        mo_sect(h, "__bss", "__DATA", t.addr[MO_BSS], t.size[MO_BSS], 0 as i64, t.align[MO_BSS], 1 as i64, 0, 0)
+    end
+    if l.dg_name.len() > 0:
+        mo_seg(h, "__DWARF", t.base + t.d_end, t.dw_vm, t.dw_off, t.dw_size, 1, l.dg_name.len(), 0)
+        ncmd += 1
+        repeat l.dg_name.len() in dk2:
+            nm := name_of(l, l.dg_name[dk2])
+            mo_sect(h, str.Substr(nm, 8, str.Len(nm) - 8), "__DWARF", t.base + t.d_end + l.dg_base[dk2], l.dg_size[dk2], t.dw_off + l.dg_base[dk2], 1 as i64, 0x02000000 as i64, 0, 0)
+        end
+    end
+    mo_seg(h, "__LINKEDIT", t.base + t.d_end + t.dw_vm, align_to(le_size, t.page), t.le_off, le_size, 1, 0, 0)
+    ncmd += 1
+    tb_le(h, 0x80000022 as i64, 4)
+    tb_le(h, 48 as i64, 4)
+    tb_le(h, rb_off, 4)
+    tb_le(h, rebase.len() as i64, 4)
+    tb_le(h, bd_off, 4)
+    tb_le(h, bind.len() as i64, 4)
+    repeat 6:
+        tb_le(h, 0 as i64, 4)
+    end
+    ncmd += 1
+    tb_le(h, 2 as i64, 4)
+    tb_le(h, 24 as i64, 4)
+    tb_le(h, sym_off, 4)
+    tb_le(h, nsym as i64, 4)
+    tb_le(h, str_off, 4)
+    tb_le(h, strs.len() as i64, 4)
+    ncmd += 1
+    tb_le(h, 0x0B as i64, 4)
+    tb_le(h, 80 as i64, 4)
+    tb_le(h, 0 as i64, 4)
+    tb_le(h, nloc as i64, 4)
+    tb_le(h, nloc as i64, 4)
+    tb_le(h, (nsym - nimp - nloc) as i64, 4)
+    tb_le(h, (nsym - nimp) as i64, 4)
+    tb_le(h, nimp as i64, 4)
+    repeat 6:
+        tb_le(h, 0 as i64, 4)
+    end
+    tb_le(h, ind_off, 4)
+    tb_le(h, (t.stub_g.len() + t.got_k.len()) as i64, 4)
+    repeat 4:
+        tb_le(h, 0 as i64, 4)
+    end
+    ncmd += 1
+    tb_le(h, 0x0E as i64, 4)
+    tb_le(h, 32 as i64, 4)
+    tb_le(h, 12 as i64, 4)
+    tb_cstr(h, "/usr/lib/dyld")
+    until (h.len() % 8) != 0:
+        h.push(0 as u8)
+    end
+    ncmd += 1
+    tb_le(h, 0x1B as i64, 4)
+    tb_le(h, 24 as i64, 4)
+    mut uh := 0x5a17 as i64
+    repeat 16 in u:
+        uh = (uh * (1103515245 as i64) + (12345 as i64) + (cs_off >> ((u % 8) as i64))) & (0x7FFFFFFF as i64)
+        h.push((uh & (255 as i64)) as u8)
+    end
+    ncmd += 1
+    tb_le(h, 0x32 as i64, 4)
+    tb_le(h, 24 as i64, 4)
+    tb_le(h, 1 as i64, 4)
+    tb_le(h, 0x000B0000 as i64, 4)
+    tb_le(h, 0x000B0000 as i64, 4)
+    tb_le(h, 0 as i64, 4)
+    ncmd += 1
+    ent := glob_find(l, "_main")
+    tb_le(h, 0x80000028 as i64, 4)
+    tb_le(h, 24 as i64, 4)
+    tb_le(h, mo_sym_g(l, ent) - t.base, 8)
+    tb_le(h, 0 as i64, 8)
+    ncmd += 1
+    each dname in dyl:
+        dsz := 24 + ((str.Len(dname) + 8) / 8) * 8
+        tb_le(h, 0x0C as i64, 4)
+        tb_le(h, dsz as i64, 4)
+        tb_le(h, 24 as i64, 4)
+        tb_le(h, 2 as i64, 4)
+        tb_le(h, (str.Equals(dname, "/usr/lib/libSystem.B.dylib") ? 0x05270000 : 0x00010000) as i64, 4)
+        tb_le(h, 0x00010000 as i64, 4)
+        tb_cstr(h, dname)
+        until (h.len() % 8) != 0:
+            h.push(0 as u8)
+        end
+        ncmd += 1
+    end
+    tb_le(h, 0x29 as i64, 4)
+    tb_le(h, 16 as i64, 4)
+    tb_le(h, dic_off, 4)
+    tb_le(h, (8 * ndic) as i64, 4)
+    ncmd += 1
+    tb_le(h, 0x1D as i64, 4)
+    tb_le(h, 16 as i64, 4)
+    tb_le(h, cs_off, 4)
+    tb_le(h, cs_len as i64, 4)
+    ncmd += 1
+    if (h.len() as i64) > t.hdr:
+        nl_fail(l, "Mach-O header does not fit")
+        ret
+    end
+    put32_le(h, 16, ncmd as i64)
+    put32_le(h, 20, (h.len() - 32) as i64)
+    repeat h.len() in hb:
+        buf[hb] = h[hb]
+    end
+    mut img := Vector {} as Vector<u8>
+    repeat t.le_off in ib:
+        img.push(buf[ib])
+    end
+    each lb in le:
+        img.push(lb)
+    end
+    mut cs := Vector {} as Vector<u8>
+    be32(cs, 0xFADE0CC0 as i64)
+    be32(cs, cs_len as i64)
+    be32(cs, 1 as i64)
+    be32(cs, 0 as i64)
+    be32(cs, 20 as i64)
+    be32(cs, 0xFADE0C02 as i64)
+    be32(cs, cd_len as i64)
+    be32(cs, 0x20400 as i64)
+    be32(cs, 0x20002 as i64)
+    be32(cs, (cd_hdr + id_len) as i64)
+    be32(cs, cd_hdr as i64)
+    be32(cs, 0 as i64)
+    be32(cs, npages as i64)
+    be32(cs, cs_off)
+    cs.push(32 as u8)
+    cs.push(2 as u8)
+    cs.push(0 as u8)
+    cs.push(12 as u8)
+    be32(cs, 0 as i64)
+    be32(cs, 0 as i64)
+    be32(cs, 0 as i64)
+    be32(cs, 0 as i64)
+    be64(cs, 0 as i64)
+    be64(cs, 0 as i64)
+    be64(cs, t.text_end)
+    be64(cs, 1 as i64)
+    ip := (ident as void*) as u8*
+    repeat str.Len(ident) in ic:
+        cs.push(ip[ic])
+    end
+    cs.push(0 as u8)
+    mut hsh := Vector {} as Vector<u8>
+    repeat 32:
+        hsh.push(0 as u8)
+    end
+    repeat npages in pg:
+        st := (pg * 4096) as i64
+        mut n := 4096 as i64
+        if st + n > cs_off:
+            n = cs_off - st
+        end
+        crypto.Sha256Bytes(((img.data as i64) + st) as void*, n as int, hsh.data as void*)
+        each hb2 in hsh:
+            cs.push(hb2)
+        end
+    end
+    until (cs.len() as i64) < cs_pad:
+        cs.push(0 as u8)
+    end
+    each cb in cs:
+        img.push(cb)
+    end
+    fh := fopen(out, "wb")
+    if fh == null:
+        nl_fail(l, "cannot write " + out)
+        ret
+    end
+    w := fwrite(img.data as void*, 1 as u64, img.len() as u64, fh)
+    _c := fclose(fh)
+    l.file_size = img.len() as i64
+    if (w as i64) != l.file_size:
+        nl_fail(l, "cannot write " + out)
+        ret
+    end
+    _m := chmod(out, 493)
+    img.free()
+    cs.free()
+    hsh.free()
+    le.free()
+    h.free()
+end
+
+func mo_secno(l &: Nl, t &: Mo, s: int): int:
+    if s < 0:
+        ret 0
+    end
+    k := t.out_k[s]
+    mut n := 0
+    each kk in [MO_TEXT, MO_STUBS, MO_CSTR, MO_TCONST, MO_EH, MO_UNW, MO_GOT, MO_INIT, MO_CONST, MO_DATA, MO_TVARS, MO_TDATA, MO_TBSS, MO_BSS]:
+        if mo_has(l, t, kk):
+            n += 1
+            if kk == k:
+                ret n
+            end
+        end
+    end
+    ret 0
+end
+
+func put32_le(h &: Vector<u8>, at: int, v: i64):
+    repeat 4 in k:
+        h[at + k] = ((v >> ((8 * k) as i64)) & (255 as i64)) as u8
+    end
+end
+
+func basename_of(p: str): str:
+    mut i := str.Len(p) - 1
+    pp := (p as void*) as u8*
+    until i >= 0 and pp[i] != (47 as u8):
+        i -= 1
+    end
+    ret str.Substr(p, i + 1, str.Len(p) - i - 1)
+end
+
+func mo_imp_index(l &: Nl, g: int, nloc: int, first_imp: int): i64:
+    mut k := first_imp
+    repeat l.g_name.len() in i:
+        if l.g_state[i] == SY_UNDEF and l.g_common[i] == (0 as i64):
+            if i == g:
+                ret k
+            end
+            k += 1
+        end
+    end
+    _n := nloc
+    ret 0x80000000
+end

@@ -1,0 +1,217 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+const _EIG_MAX_SWEEPS := 100
+
+@en "EigenSym"
+@fa "تجزیه ویژه متقارن"
+pub struct EigenSym:
+    @en "n"
+    @fa "اندازه"
+    pub n: int = 0
+    @en "values"
+    @fa "مقادیر ویژه"
+    pub values: Matrix = Matrix {}
+    @en "vectors"
+    @fa "بردارهای ویژه"
+    pub vectors: Matrix = Matrix {}
+    @en "sweeps"
+    @fa "شمار دورها"
+    pub sweeps: int = 0
+    @en "ok"
+    @fa "همگرا"
+    pub ok: bool = false
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        this.values.free()
+        this.vectors.free()
+    end
+end
+
+func _off_norm(a &: Matrix, n: int): f64:
+    mut s := 0.0
+    repeat n in i:
+        mut j := i + 1
+        until j < n:
+            s += a.at(i, j) * a.at(i, j)
+            j += 1
+        end
+    end
+    ret math.Sqrt(2.0 * s)
+end
+
+func _sym_rotate(a &: Matrix, v &: Matrix, p: int, q: int, c: f64, s: f64):
+    n := a.rows
+    repeat n in k:
+        akp := a.at(k, p)
+        akq := a.at(k, q)
+        a.set(k, p, c * akp - s * akq)
+        a.set(k, q, s * akp + c * akq)
+    end
+    repeat n in k:
+        apk := a.at(p, k)
+        aqk := a.at(q, k)
+        a.set(p, k, c * apk - s * aqk)
+        a.set(q, k, s * apk + c * aqk)
+    end
+    repeat n in k:
+        vkp := v.at(k, p)
+        vkq := v.at(k, q)
+        v.set(k, p, c * vkp - s * vkq)
+        v.set(k, q, s * vkp + c * vkq)
+    end
+end
+
+func _sym_step(a &: Matrix, v &: Matrix, p: int, q: int, tol: f64): bool:
+    apq := a.at(p, q)
+    if math.Abs(apq) <= tol: ret false end
+    theta := (a.at(q, q) - a.at(p, p)) / (2.0 * apq)
+    mut t := 1.0 / (math.Abs(theta) + math.Sqrt(theta * theta + 1.0))
+    if theta < 0.0: t = 0.0 - t end
+    c := 1.0 / math.Sqrt(t * t + 1.0)
+    s := t * c
+    _sym_rotate(a, v, p, q, c, s)
+    ret true
+end
+
+func _sym_sweep(a &: Matrix, v &: Matrix, n: int, tol: f64):
+    mut p := 0
+    until p < n - 1:
+        mut q := p + 1
+        until q < n:
+            _sym_step(a, v, p, q, tol)
+            q += 1
+        end
+        p += 1
+    end
+end
+
+func _eig_sort(vals &: Matrix, vecs &: Matrix, n: int):
+    repeat n in i:
+        mut best := i
+        mut j := i + 1
+        until j < n:
+            if vals.at(0, j) > vals.at(0, best): best = j end
+            j += 1
+        end
+        if best != i:
+            t := vals.at(0, i)
+            vals.set(0, i, vals.at(0, best))
+            vals.set(0, best, t)
+            SwapCols(vecs, i, best)
+        end
+    end
+end
+
+func _fix_signs(vecs &: Matrix, n: int):
+    repeat n in j:
+        mut bi := 0
+        repeat vecs.rows in i:
+            if math.Abs(vecs.at(i, j)) > math.Abs(vecs.at(bi, j)): bi = i end
+        end
+        if vecs.at(bi, j) < 0.0:
+            repeat vecs.rows in i: vecs.set(i, j, 0.0 - vecs.at(i, j)) end
+        end
+    end
+end
+
+func _eig_iterate(r &: EigenSym, work &: Matrix, n: int, tol: f64):
+    mut sweeps := 0
+    until _off_norm(work, n) > tol and sweeps < _EIG_MAX_SWEEPS:
+        _sym_sweep(work, r.vectors, n, tol * 0.001)
+        sweeps += 1
+    end
+    r.sweeps = sweeps
+    r.ok = sweeps < _EIG_MAX_SWEEPS
+end
+
+func _pow_eigval(f &: EigenSym, k: int, p: f64):
+    v := f.values.a.get(k)
+    if v <= 0.0:
+        f.values.a.set(k, 0.0)
+        ret
+    end
+    f.values.a.set(k, math.Pow(v, p))
+end
+
+@en "EigSym"
+@fa "ویژه متقارن"
+pub func EigSym(x &: Matrix): EigenSym:
+    mut r := EigenSym {}
+    if x.is_square() == false: ret r end
+    n := x.rows
+    r.n = n
+    mut work := SymPart(x)
+    r.vectors = Eye(n)
+    tol := MAT_EPS * NormFrobenius(work)
+    _eig_iterate(r, work, n, tol)
+    r.values = Diagonal(work)
+    _eig_sort(r.values, r.vectors, n)
+    _fix_signs(r.vectors, n)
+    defer work.free()
+    ret r
+end
+
+@en "EigValsSym"
+@fa "مقادیر ویژه متقارن"
+pub func EigValsSym(x &: Matrix): Matrix:
+    mut f := EigSym(x)
+    v := Clone(f.values)
+    defer f.free()
+    ret v
+end
+
+@en "EigReconstruct"
+@fa "بازسازی ویژه"
+pub func EigReconstruct(f &: EigenSym): Matrix:
+    mut d := Diag(f.values.a)
+    mut t := MatMul(f.vectors, d)
+    r := MulTranspose(t, f.vectors)
+    defer d.free()
+    defer t.free()
+    ret r
+end
+
+@en "SpectralRadiusSym"
+@fa "شعاع طیفی متقارن"
+pub func SpectralRadiusSym(x &: Matrix): f64:
+    mut v := EigValsSym(x)
+    mut m := 0.0
+    repeat v.count() in k:
+        a := math.Abs(v.a.get(k))
+        if a > m: m = a end
+    end
+    defer v.free()
+    ret m
+end
+
+@en "PowSym"
+@fa "توان متقارن"
+pub func PowSym(x &: Matrix, p: f64): Matrix:
+    mut f := EigSym(x)
+    repeat f.values.count() in k: _pow_eigval(f, k, p) end
+    r := EigReconstruct(f)
+    defer f.free()
+    ret r
+end
+
+@en "SqrtSym"
+@fa "جذر متقارن"
+pub func SqrtSym(x &: Matrix): Matrix: ret PowSym(x, 0.5) end

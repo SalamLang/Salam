@@ -1,0 +1,355 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+
+func jd_owned(call: str): bool:
+    each p in ["__jdi(", "__jdu(", "__jdf(", "__jdqs(", "__jdqso(", "__jdch(", "_jsonenc_"]:
+        if str.StartsWith(call, p):
+            ret true
+        end
+    end
+    ret false
+end
+
+func jd_add(ind: str, arg: str): str:
+    if jd_owned(arg):
+        ret ind + "__jdown(" + JV_BUF + ", " + arg + ")\n"
+    end
+    ret ind + "__jdadd(" + JV_BUF + ", " + arg + ")\n"
+end
+
+func jd_scalar_call(s &: Sema, t: int, expr: str): str:
+    k := ty_at(s, t).kind
+    if k == TY_STR or k == TY_UCHAR:
+        ret "__jdqs(" + expr + ")"
+    end
+    if k == TY_BOOL:
+        ret "__jdb(" + expr + ")"
+    end
+    if k == TY_CHAR:
+        ret "__jdch((" + expr + ") as int)"
+    end
+    if type_is_float(s, t):
+        ret "__jdf((" + expr + ") as f64)"
+    end
+    if type_is_integer(s, t):
+        if jd_is_unsigned(s, t):
+            ret "__jdu((" + expr + ") as u64)"
+        end
+        ret "__jdi((" + expr + ") as i64)"
+    end
+    ret ""
+end
+
+func jd_maybe_stringify(s &: Sema, t: int, call: str, at_string: bool): str:
+    if not at_string:
+        ret call
+    end
+    k := ty_at(s, t).kind
+    if k == TY_STR or k == TY_UCHAR:
+        ret call
+    end
+    if jd_owned(call):
+        ret "__jdqso(" + call + ")"
+    end
+    ret "__jdqs(" + call + ")"
+end
+
+func jd_enc_enum(s &: Sema, t: int, expr: str, ind: str): str:
+    sym := ty_at(s, t).decl
+    if sym == 0 or sym_at(s, sym).members == 0:
+        ret ""
+    end
+    mems := scope_at(s, sym_at(s, sym).members).symbols
+    mut out := ""
+    mut first := true
+    repeat mems.len() in i:
+        m := sym_at(s, mems.get(i))
+        if m.kind == SYM_ENUM_MEMBER:
+            head := first ? "if" : "else"
+            out = out + ind + head + " (" + expr + ") as i64 == " + m.enum_value + ":\n"
+            out = out + jd_add(ind + JIND, jd_quote(jd_quote(m.name)))
+            first = false
+        end
+    end
+    if first:
+        ret ""
+    end
+    out = out + ind + "else:\n"
+    out = out + jd_add(ind + JIND, "__jdi((" + expr + ") as i64)")
+    ret out + ind + "end\n"
+end
+
+func jd_enc_ptr(
+    s &: Sema, a &: at.Ast, t: int, expr: str, ind: str, home: int, sp: co.SrcSpan
+): str:
+    deep := ind + JIND
+    inner := jd_enc_value(s, a, ty_at(s, t).pointee, "(" + expr + ")[0]", deep, false, home, sp)
+    if str.Len(inner) == 0:
+        ret ""
+    end
+    mut out := ind + "if (" + expr + ") == null:\n"
+    out = out + jd_add(deep, "\"null\"")
+    out = out + ind + "else:\n" + inner
+    ret out + ind + "end\n"
+end
+
+func jd_enc_value(
+    s &: Sema, a &: at.Ast, t: int, expr: str, ind: str, as_string: bool, home: int, sp: co.SrcSpan
+): str:
+    if t < 0:
+        ret ""
+    end
+    call := jd_scalar_call(s, t, expr)
+    if str.Len(call) > 0:
+        ret jd_add(ind, jd_maybe_stringify(s, t, call, as_string))
+    end
+    if as_string:
+        ret ""
+    end
+    k := ty_at(s, t).kind
+    if k == TY_ENUM:
+        ret jd_enc_enum(s, t, expr, ind)
+    end
+    if k == TY_PTR:
+        ret jd_enc_ptr(s, a, t, expr, ind, home, sp)
+    end
+    fn := derive_json_enc(s, a, t, home, sp)
+    if str.Len(fn) == 0:
+        ret ""
+    end
+    ret jd_add(ind, fn + "(" + expr + ")")
+end
+
+func jd_empty_test(s &: Sema, t: int, expr: str): str:
+    if t < 0:
+        ret ""
+    end
+    k := ty_at(s, t).kind
+    if k == TY_STR or k == TY_UCHAR or k == TY_VEC:
+        ret "(" + expr + ").len() > 0"
+    end
+    if k == TY_BOOL:
+        ret expr
+    end
+    if k == TY_PTR:
+        ret "(" + expr + ") != null"
+    end
+    if type_is_float(s, t):
+        ret "(" + expr + ") as f64 != 0.0"
+    end
+    if k == TY_ENUM or k == TY_CHAR or type_is_integer(s, t):
+        ret "(" + expr + ") as i64 != 0"
+    end
+    if k == TY_MAP:
+        ret "(" + expr + ").size() > 0"
+    end
+    if k == TY_STRUCT:
+        ret jd_empty_test_struct(s, ty_at(s, t).decl, expr)
+    end
+    ret ""
+end
+
+func jd_empty_test_struct(s &: Sema, sym: int, expr: str): str:
+    if sym == 0:
+        ret ""
+    end
+    if derive_map_cursor(s, sym) != 0:
+        ret "(" + expr + ").size() > 0"
+    end
+    count := derive_seq_count(s, sym)
+    if str.Len(count) > 0 and derive_seq_elem(s, sym) >= 0:
+        ret "(" + expr + ")." + count + "() > 0"
+    end
+    ret ""
+end
+
+func jd_enc_field(
+    s &: Sema, a &: at.Ast, f: int, home: int, sp: co.SrcSpan
+): str:
+    fa := jd_attr_of(s, a, f, sp)
+    if not fa.ok:
+        ret ""
+    end
+    if fa.skip:
+        ret JIND
+    end
+    fv := sym_at(s, f)
+    expr := JV_PARAM + "." + derive_ident(fv.name)
+    test := fa.omitempty ? jd_empty_test(s, fv.ty, expr) : ""
+    ind := str.Len(test) > 0 ? JIND + JIND : JIND
+    val := jd_enc_value(s, a, fv.ty, expr, ind, fa.as_string, home, sp)
+    if str.Len(val) == 0:
+        jd_field_err(s, a, f, fv.ty, sp)
+        ret ""
+    end
+    mut out := str.Len(test) > 0 ? JIND + "if " + test + ":\n" : ""
+    out = out + ind + "if _n > 0: __jdadd(" + JV_BUF + ", \",\") end\n"
+    out = out + ind + "_n = _n + 1\n"
+    out = out + jd_add(ind, jd_quote("\"" + fa.name + "\":")) + val
+    ret str.Len(test) > 0 ? out + JIND + "end\n" : out
+end
+
+func jd_enc_struct(s &: Sema, a &: at.Ast, t: int, home: int, sp: co.SrcSpan): str:
+    sym := ty_at(s, t).decl
+    mems := sym_at(s, sym).members == 0 ? Vector {} as Vector<int>
+    : scope_at(s, sym_at(s, sym).members).symbols
+        mut nfields := 0
+        repeat mems.len() in i:
+            if sym_at(s, mems.get(i)).kind == SYM_FIELD:
+                nfields += 1
+            end
+        end
+        mut out := jd_add(JIND, "\"{\"")
+        if nfields == 0:
+            ret out + jd_add(JIND, "\"}\"")
+        end
+        out = out + JIND + "mut _n := 0\n"
+        repeat mems.len() in j:
+            f := mems.get(j)
+            if sym_at(s, f).kind == SYM_FIELD:
+                part := jd_enc_field(s, a, f, home, sp)
+                if str.Len(part) == 0:
+                    ret ""
+                end
+                out = out + (str.Equals(part, JIND) ? "" : part)
+            end
+        end
+        ret out + jd_add(JIND, "\"}\"")
+    end
+
+    func jd_enc_seq(
+        s &: Sema, a &: at.Ast, elem: int, count: str, item: str, home: int, sp: co.SrcSpan
+    ): str:
+        val := jd_enc_value(s, a, elem, item, JIND + JIND, false, home, sp)
+        if str.Len(val) == 0:
+            ret ""
+        end
+        mut out := jd_add(JIND, "\"[\"")
+        out = out + JIND + "mut _i := 0\n"
+        out = out + JIND + "until _i < " + count + ":\n"
+        out = out + JIND + JIND + "if _i > 0: __jdadd(" + JV_BUF + ", \",\") end\n"
+        out = out + val + JIND + JIND + "_i = _i + 1\n" + JIND + "end\n"
+        ret out + jd_add(JIND, "\"]\"")
+    end
+
+    func jd_key_expr(s &: Sema, key: int): str:
+        if key < 0:
+            ret ""
+        end
+        k := ty_at(s, key).kind
+        if k == TY_STR or k == TY_UCHAR:
+            ret "__jdqs(_it.key())"
+        end
+        if type_is_integer(s, key):
+            ret "__jdqso(__jdi(_it.key() as i64))"
+        end
+        ret ""
+    end
+
+    func jd_enc_map(
+        s &: Sema, a &: at.Ast, key: int, val: int, home: int, sp: co.SrcSpan
+    ): str:
+        ke := jd_key_expr(s, key)
+        body := jd_enc_value(s, a, val, "_it.value()", JIND + JIND, false, home, sp)
+        if str.Len(ke) == 0 or str.Len(body) == 0:
+            ret ""
+        end
+        mut out := jd_add(JIND, "\"{\"") + JIND + "mut _n := 0\n"
+        out = out + JIND + "mut _it := " + JV_PARAM + ".iter()\n"
+        out = out + JIND + "until _it.has_next():\n"
+        out = out + JIND + JIND + "if _n > 0: __jdadd(" + JV_BUF + ", \",\") end\n"
+        out = out + jd_add(JIND + JIND, ke) + jd_add(JIND + JIND, "\":\"") + body
+        out = out + JIND + JIND + "_n = _n + 1\n" + JIND + JIND + "_it.next()\n"
+        ret out + JIND + "end\n" + jd_add(JIND, "\"}\"")
+    end
+
+    func jd_enc_of_struct(s &: Sema, a &: at.Ast, t: int, home: int, sp: co.SrcSpan): str:
+        sym := ty_at(s, t).decl
+        sid := derive_method_sig(s, sym, "to_json", 0)
+        if sid != 0 and ty_at(s, sig_at(s, sid).ret_type).kind == TY_STR:
+            ret jd_add(JIND, JV_PARAM + ".to_json()")
+        end
+        cur := derive_map_cursor(s, sym)
+        if cur != 0:
+            kt := sig_at(s, derive_method_sig(s, cur, "key", 0)).ret_type
+            vt := sig_at(s, derive_method_sig(s, cur, "value", 0)).ret_type
+            ret jd_enc_map(s, a, kt, vt, home, sp)
+        end
+        count := derive_seq_count(s, sym)
+        elem := derive_seq_elem(s, sym)
+        if str.Len(count) > 0 and elem >= 0:
+            ret jd_enc_seq(
+                s, a, elem, JV_PARAM + "." + count + "()", JV_PARAM + ".get(_i)", home, sp
+            )
+        end
+        ret jd_enc_struct(s, a, t, home, sp)
+    end
+
+    func jd_enc_body(s &: Sema, a &: at.Ast, t: int, home: int, sp: co.SrcSpan): str:
+        v := ty_at(s, t)
+        if v.kind == TY_STRUCT:
+            ret jd_enc_of_struct(s, a, t, home, sp)
+        end
+        if v.kind == TY_VEC:
+            ret jd_enc_seq(s, a, v.elem, JV_PARAM + ".len()", JV_PARAM + ".get(_i)", home, sp)
+        end
+        if v.kind == TY_ARRAY or v.kind == TY_SLICE:
+            ret jd_enc_seq(s, a, v.elem, "len(" + JV_PARAM + ")", JV_PARAM + "[_i]", home, sp)
+        end
+        if v.kind == TY_MAP:
+            ret jd_enc_map(s, a, v.key, v.elem, home, sp)
+        end
+        if v.kind == TY_VARIANT and enum_data_sym(s, t) != 0:
+            ret jd_enc_enum_data(s, a, t, home, sp)
+        end
+        if not jd_is_scalar(s, t) and v.kind != TY_ENUM and v.kind != TY_PTR:
+            ret ""
+        end
+        ret jd_enc_value(s, a, t, JV_PARAM, JIND, false, home, sp)
+    end
+
+    func jd_enc_enum_data(s &: Sema, a &: at.Ast, vt: int, home: int, sp: co.SrcSpan): str:
+        i2 := JIND + JIND
+        i3 := i2 + JIND
+        mut out := JIND + "match " + JV_PARAM + ":\n"
+        repeat enum_case_count(s, vt) in i:
+            cs := enum_case_struct(s, vt, i)
+            mname := enum_case_member(s, cs)
+            mut fields := Vector {} as Vector<str>
+            enum_case_fields(s, a, cs, fields)
+            nf := fields.len()
+            fields.free()
+            out = out + i2 + derive_ident(mname) + " _c:\n"
+            if nf == 0:
+                out = out + jd_add(i3, jd_quote(jd_quote(mname)))
+            else:
+                val := jd_enc_value(s, a, sym_at(s, cs).ty, "_c", i3, false, home, sp)
+                if str.Len(val) == 0:
+                    ret ""
+                end
+                out = out + jd_add(i3, jd_quote("{" + jd_quote(mname) + ":")) + val + jd_add(i3, jd_quote("}"))
+            end
+            out = out + i2 + "end\n"
+        end
+        ret out + JIND + "end\n"
+    end
+
+    func jd_enc_source(
+        s &: Sema, a &: at.Ast, t: int, fname: str, home: int, sp: co.SrcSpan
+    ): str:
+        spelling := derive_type_spelling(s, t)
+        if str.Len(spelling) == 0:
+            ret ""
+        end
+        body := jd_enc_body(s, a, t, home, sp)
+        if str.Len(body) == 0:
+            ret ""
+        end
+        mut out := "func " + fname + "(" + JV_PARAM + ": " + spelling + "): str:\n"
+        out = out + JIND + "mut " + JV_BUF + " := __jdnew()\n" + body
+        ret out + JIND + "ret __jdfin(" + JV_BUF + ")\nend\n"
+    end

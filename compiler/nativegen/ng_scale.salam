@@ -1,0 +1,183 @@
+package nativegen
+
+func odd_scale(g &: Ng, i: int): bool:
+    if g.i_op[i] != OP_ADDR or g.i_b[i] < 0 or g.i_res[i] < 0:
+        ret false
+    end
+    sc := g.i_x[i]
+    if sc == 1 or sc == 2 or sc == 4 or sc == 8 or sc <= 0:
+        ret false
+    end
+    ret g.v_ty[g.i_b[i]] == T_I64
+end
+
+func scale_anchor(g &: Ng, idx: int): int:
+    if g.v_kind[idx] == VK_INS:
+        d := g.v_def[idx]
+        mut j := g.i_next[d]
+        if g.i_op[d] == OP_PHI:
+            until j >= 0 and g.i_op[j] == OP_PHI:
+                j = g.i_next[j]
+            end
+        end
+        ret j
+    end
+    if g.v_kind[idx] == VK_ARG:
+        mut k := g.b_first[g.b_rpo[0]]
+        until k >= 0 and g.i_op[k] == OP_ALLOCA:
+            k = g.i_next[k]
+        end
+        ret k
+    end
+    ret 0 - 1
+end
+
+func share_scales(g &: Ng): bool:
+    if g.off_sscale:
+        ret false
+    end
+    mut cand := Vector {} as Vector<int>
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            if odd_scale(g, i) and cand.len() < 512:
+                cand.push(i)
+            end
+            i = g.i_next[i]
+        end
+    end
+    mut done := Vector {} as Vector<bool>
+    repeat cand.len():
+        done.push(false)
+    end
+    mut changed := false
+    repeat cand.len() in a:
+        if done[a]:
+            continue
+        end
+        ia := cand[a]
+        idx := g.i_b[ia]
+        sc := g.i_x[ia]
+        mut n := 1
+        repeat cand.len() in b2:
+            if b2 > a and not done[b2] and g.i_b[cand[b2]] == idx and g.i_x[cand[b2]] == sc:
+                n += 1
+            end
+        end
+        if n < 2:
+            continue
+        end
+        at_i := scale_anchor(g, idx)
+        if at_i < 0:
+            continue
+        end
+        m := ins_new(g, OP_MUL, T_I64)
+        g.i_a[m] = idx
+        g.i_b[m] = const_int(g, T_I64, sc as i64)
+        mv := new_res(g, m)
+        ins_before(g, at_i, m)
+        repeat cand.len() in b3:
+            if b3 >= a and not done[b3] and g.i_b[cand[b3]] == idx and g.i_x[cand[b3]] == sc:
+                g.i_b[cand[b3]] = mv
+                g.i_x[cand[b3]] = 1
+                done[b3] = true
+            end
+        end
+        changed = true
+    end
+    cand.free()
+    done.free()
+    ret changed
+end
+
+func mark_loops(g &: Ng, inl &: Vector<bool>):
+    inl.clear()
+    repeat g.b_first.len():
+        inl.push(false)
+    end
+    mut wl := Vector {} as Vector<int>
+    each h in g.b_rpo:
+        repeat g.b_npred[h] in k:
+            p := g.b_pred[g.b_ps[h] + k]
+            if g.b_order[p] >= g.b_order[h]:
+                inl[h] = true
+                if not inl[p]:
+                    inl[p] = true
+                    wl.push(p)
+                end
+                until wl.len() > 0:
+                    x := wl.pop()
+                    if x == h:
+                        continue
+                    end
+                    repeat g.b_npred[x] in q:
+                        y := g.b_pred[g.b_ps[x] + q]
+                        if g.b_order[y] >= 0 and not inl[y]:
+                            inl[y] = true
+                            wl.push(y)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    wl.free()
+end
+
+func glb_bases(g &: Ng): bool:
+    if g.off_gbase:
+        ret false
+    end
+    mut inl := Vector {} as Vector<bool>
+    mark_loops(g, inl)
+    mut syms := Vector {} as Vector<int>
+    mut vals := Vector {} as Vector<int>
+    entry := g.b_rpo[0]
+    mut at := g.b_first[entry]
+    until at >= 0 and g.i_op[at] == OP_ALLOCA:
+        at = g.i_next[at]
+    end
+    mut changed := false
+    each b in g.b_rpo:
+        if not inl[b]:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            if g.i_op[i] == OP_ADDR and g.i_b[i] >= 0:
+                a := g.i_a[i]
+                if a >= 0 and g.v_kind[a] == VK_GLB and g.v_def[a] >= 0 and at >= 0:
+                    sy := g.v_def[a]
+                    mut v := 0 - 1
+                    repeat syms.len() in q:
+                        if syms[q] == sy:
+                            v = vals[q]
+                        end
+                    end
+                    if v < 0 and syms.len() < 4:
+                        ad := ins_new(g, OP_ADDR, T_PTR)
+                        g.i_a[ad] = new_val(g, VK_GLB, T_PTR, 0 as i64)
+                        g.v_def[g.i_a[ad]] = sy
+                        g.i_b[ad] = 0 - 1
+                        g.i_x[ad] = 1
+                        g.i_d[ad] = 0 as i64
+                        v = new_res(g, ad)
+                        ins_before(g, at, ad)
+                        syms.push(sy)
+                        vals.push(v)
+                    end
+                    if v >= 0:
+                        g.i_d[i] = g.i_d[i] + g.v_i[a]
+                        g.i_a[i] = v
+                        changed = true
+                    end
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    inl.free()
+    syms.free()
+    vals.free()
+    ret changed
+end

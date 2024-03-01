@@ -1,0 +1,106 @@
+package cli
+
+import os
+import io
+import str
+
+include pth "../sal_path.salam"
+include dr "../driver/driver.salam"
+include docg "../docgen/docgen.salam"
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+include co "../sal_core.salam"
+include sm "../semantic/semantic.salam"
+
+func doc_walk(dir: str, files &: Vector<str>):
+    entries := os.ListDir(dir)
+    defer entries.free()
+    repeat entries.len() in i:
+        name := entries.get(i)
+        if str.StartsWith(name, "."):
+            continue
+        end
+        child := pth.PathJoin(dir, name)
+        if os.IsDir(child):
+            doc_walk(child, files)
+        else has_salam_ext(name):
+            files.push(child)
+        end
+    end
+end
+
+func doc_output_path(explicit: str, path: str): str:
+    if str.Len(explicit) > 0:
+        ret explicit
+    end
+    if os.IsDir(path):
+        ret pth.PathJoin(path, "doc.html")
+    end
+    ret pth.PathJoin(pth.PathDir(path), path_stem(path) + ".doc.html")
+end
+
+func doc_write(lgr: lg.Logger, path: str, content: str): bool:
+    if io.WriteFile(path, content) < 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot write '%s'"), co.ArgStr(path)))
+        ret false
+    end
+    ret true
+end
+
+func doc_cmd(opt &: dr.Dr): int:
+    path := opt.inputs.len() > 0 ? opt.inputs.get(0) : "."
+    if not os.Exists(path):
+        io.EPrintln(co.Format1(i18.Tr("salam doc: '%s' does not exist"), co.ArgStr(path)))
+        ret 2
+    end
+    pack := lp.Load(opt.lang)
+    if pack == lp.LP_NONE:
+        io.EPrintln(co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang)))
+        ret 2
+    end
+    mut files := Vector {} as Vector<str>
+    defer files.free()
+    if os.IsDir(path):
+        doc_walk(pth.PathTrimSep(path), files)
+    else:
+        files = sm.PackageFiles(path)
+    end
+    if files.len() == 0:
+        io.EPrintln(co.Format1(i18.Tr("salam doc: no .salam files found under '%s'"), co.ArgStr(path)))
+        ret 2
+    end
+    lgr := lg.New(lg.LOG_OFF, false)
+    mut db := docg.NewDb()
+    mut warn := 0
+    repeat files.len() in i:
+        p := files.get(i)
+        ok := docg.ParseFile(db, lgr, pack, p, p, opt.defines)
+        if not ok:
+            warn += 1
+        end
+    end
+    title := path_stem(pth.PathTrimSep(path))
+    out := doc_output_path(opt.output, path)
+    content := str.EndsWith(out, ".json") ? docg.RenderJson(db) : docg.Render(db, title)
+    if not doc_write(lgr, out, content):
+        ret 2
+    end
+    mut pub_count := 0
+    mut priv_count := 0
+    repeat db.decls.len() in i:
+        d := db.decls.get(i)
+        if d.is_pub:
+            pub_count += 1
+        else:
+            priv_count += 1
+        end
+    end
+    summary := "salam doc: scanned " + str.FromInt(files.len() as i64) + " file" + plural_suffix(files.len()) + " (" + str.FromInt(pub_count as i64) + " public, " + str.FromInt(priv_count as i64) + " private declarations)"
+    println summary
+    println "  -> " + out
+    if warn > 0:
+        println "  note: " + str.FromInt(warn as i64) + " file" + plural_suffix(warn) + " did not parse cleanly; declarations the parser could not read were skipped"
+    end
+    ret warn > 0 ? 1 : 0
+end

@@ -1,0 +1,69 @@
+import db.opensearch
+
+func main:
+    c := opensearch.Connect("http://localhost:9200")
+    mut req := opensearch.SearchRequest { query = opensearch.Match("title", "kings"), size = 10 }
+    req.sort.push(opensearch.SortDesc("year"))
+    req.aggs = opensearch.AddAgg(opensearch.AddAgg("{}", "by_tag", opensearch.TermsAgg("tag", 5)), "avg_year", opensearch.AvgAgg("year"))
+    req.aggs = opensearch.AddAgg(req.aggs, "stats", opensearch.StatsAgg("year"))
+    mut pcts := Vector {} as Vector<f64>
+    pcts.push(50.0)
+    pcts.push(99.0)
+    req.aggs = opensearch.AddAgg(req.aggs, "pages", opensearch.PercentilesAgg("pages", pcts))
+    req.suggest = opensearch.TermSuggest("fix", "kngs", "title")
+    r := opensearch.SearchWith(c, "books", req)
+    println r.ok, r.status, r.took, r.timed_out, r.total, r.total_relation, r.max_score, r.error
+    each h in r.hits:
+        println h.index, h.id, h.score, h.source, h.sort, h.highlight, h.fields, h.inner_hits, h.matched_queries, h.raw.len()
+    end
+    each bk in opensearch.Buckets(r.aggregations, "by_tag"):
+        println bk.key, bk.key_as_string, bk.doc_count, bk.raw.len()
+    end
+    println opensearch.AggValue(r.aggregations, "avg_year"), opensearch.AggField(r.aggregations, "stats", "max")
+    println opensearch.AggRaw(r.aggregations, "stats"), opensearch.Suggestions(r.suggest, "fix")
+    println opensearch.AggPercentile(r.aggregations, "pages", 50.0), opensearch.AggPercentile(r.aggregations, "pages", 99.0)
+    println opensearch.Search(c, "books,articles", opensearch.MatchAll()).total
+    println opensearch.SearchRaw(c, "books", `{"query":{"match_all":{}},"size":1}`).hits.len()
+    p := opensearch.SearchParams {
+        routing = "poetry", preference = "_local", search_pipeline = "rerank", search_type = "dfs_query_then_fetch",
+        request_cache = "true", allow_partial_search_results = "false", ignore_unavailable = true
+    }
+    println opensearch.SearchParamsWith(c, "books", `{"size":0}`, p).total, p.scroll.len()
+    parsed := opensearch.ParseSearch(r.raw)
+    println parsed.hits.len(), parsed.scroll_id, parsed.pit_id
+
+    mut page := opensearch.SearchScroll(c, "books", opensearch.SearchRequest { query = opensearch.MatchAll(), size = 500 }, "1m")
+    mut seen := 0
+    until page.hits.len() > 0:
+        seen += page.hits.len()
+        page = opensearch.Scroll(c, page.scroll_id, "1m")
+    end
+    println seen, opensearch.ClearScroll(c, page.scroll_id)
+
+    pit := opensearch.CreatePit(c, "books", "2m")
+    mut preq := opensearch.SearchRequest { query = opensearch.MatchAll(), size = 100, pit_id = pit, pit_keep_alive = "2m" }
+    preq.sort.push(opensearch.SortAsc("year"))
+    mut pp := opensearch.SearchWith(c, "", preq)
+    until pp.hits.len() > 0:
+        preq.search_after = pp.hits.get(pp.hits.len() - 1).sort
+        pp = opensearch.SearchWith(c, "", preq)
+    end
+    println opensearch.ListPits(c), opensearch.DeletePit(c, pit), opensearch.DeleteAllPits(c)
+
+    mut bodies := Vector {} as Vector<str>
+    bodies.push(`{"query":{"term":{"tag":"poetry"}},"size":0}`)
+    bodies.push(`{"query":{"match_all":{}},"size":0}`)
+    each one in opensearch.MSearch(c, "books", bodies):
+        println one.ok, one.total
+    end
+    println opensearch.SearchTemplate(c, "books", "by_tag", `{"tag":"poetry"}`).total
+    println opensearch.SearchInlineTemplate(c, "books", `{"query":{"term":{"tag":"{{t}}"}}}`, `{"t":"poetry"}`).total
+    println opensearch.RenderTemplate(c, `{"query":{"term":{"tag":"{{t}}"}}}`, `{"t":"poetry"}`)
+    println opensearch.Explain(c, "books", "1", opensearch.Match("title", "kings"))
+    println opensearch.Validate(c, "books", opensearch.Match("title", "kings"))
+    mut fields := Vector {} as Vector<str>
+    fields.push("title")
+    println opensearch.FieldCaps(c, "books", fields)
+    println opensearch.JsonPath(r.raw, "hits.hits.0._source.title"), opensearch.JsonPathRaw(r.raw, "hits.total")
+    println opensearch.JsonItems(`[1,"two",{"three":3}]`).len()
+end

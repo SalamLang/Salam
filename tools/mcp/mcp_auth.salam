@@ -1,0 +1,308 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "mcpauth"
+@fa "احراز‌ام‌سی‌پی"
+package mcpauth
+
+import str
+import env
+import sync
+import chan
+import time
+import crypto
+import encoding
+import encoding.json
+import net.http
+
+include mcprpc "mcp_rpc.salam"
+
+mut g_url := ""
+mut g_secret := ""
+mut g_service := ""
+mut g_issuer := ""
+mut g_resources := Vector {} as Vector<str>
+mut g_lock := sync.Mutex {}
+mut g_cache := HashMap {} as HashMap<str, str>
+mut g_queue := chan.Chan {} as chan.Chan<str>
+mut g_dropped := 0
+
+@en "Principal"
+pub struct Principal:
+    pub ok: bool = false
+    pub problem: str = ""
+    pub grant: str = ""
+    pub user: str = ""
+    pub email: str = ""
+    pub client: str = ""
+    pub scope: str = ""
+end
+
+func _normal(r: str): str:
+    mut v := r.trim()
+    if str.EndsWith(v, "/") and v.len() > 8: v = v.substr(0, v.len() - 1) end
+    slash := v.find("://")
+    if slash < 0: ret v end
+    rest := v.substr(slash + 3, v.len() - slash - 3)
+    cut := rest.find("/")
+    mut host := rest
+    mut path := ""
+    if cut >= 0:
+        host = rest.substr(0, cut)
+        path = rest.substr(cut, rest.len() - cut)
+    end
+    ret v.substr(0, slash).lower().concat("://").concat(host.lower()).concat(path)
+end
+
+func _known(resource: str): bool:
+    want := _normal(resource)
+    mut i := 0
+    until i < g_resources.len():
+        if g_resources.get(i) == want: ret true end
+        i += 1
+    end
+    ret false
+end
+
+func _basic(): str:
+    ret "Basic ".concat(encoding.Base64Encode("salam-mcp:".concat(g_secret)))
+end
+
+func _field(cached: str, index: int): str:
+    mut rest := cached
+    mut i := 0
+    until i < index:
+        bar := rest.find("|")
+        if bar < 0: ret "" end
+        rest = rest.substr(bar + 1, rest.len() - bar - 1)
+        i += 1
+    end
+    bar := rest.find("|")
+    if bar < 0: ret rest end
+    ret rest.substr(0, bar)
+end
+
+func _from_cache(key: str, found &: bool): str:
+    _l := sync.Lock(g_lock)
+    mut out := ""
+    found = false
+    if g_cache.has(key):
+        v := g_cache.get(key)
+        if _field(v, 0).to_int() as i64 > time.Now():
+            out = v
+            found = true
+        end
+    end
+    _u := sync.Unlock(g_lock)
+    ret out
+end
+
+func _to_cache(key: str, v: str):
+    _l := sync.Lock(g_lock)
+    if g_cache.size() > 5000:
+        g_cache.free()
+        g_cache = HashMap {} as HashMap<str, str>
+    end
+    g_cache.put(key, v)
+    _u := sync.Unlock(g_lock)
+end
+
+func _clean(s: str): str:
+    ret str.Replace(s, "|", "")
+end
+
+func _introspect(token: str): str:
+    mut headers := http.NewHeaders()
+    headers.put("Authorization", _basic())
+    headers.put("Content-Type", "application/x-www-form-urlencoded")
+    headers.put("Accept", "application/json")
+    r := http.PostWith(g_url.concat("/oauth/introspect"), "token=".concat(encoding.URLEncode(token)), headers)
+    if http.Status(r) != 200: ret "" end
+    body := http.Body(r)
+    now := time.Now()
+    if json.Get(body, "active") != "true":
+        ret str.FromInt(now + 10).concat("|0")
+    end
+    exp := json.Get(body, "exp").to_int() as i64
+    if exp <= now: ret str.FromInt(now + 10).concat("|0") end
+    if not _known(json.Get(body, "aud")): ret str.FromInt(now + 10).concat("|0") end
+    mut until_t := now + 30
+    if exp < until_t: until_t = exp end
+    mut parts := Vector {} as Vector<str>
+    parts.push(str.FromInt(until_t))
+    parts.push("1")
+    parts.push(_clean(json.Get(body, "grant_id")))
+    parts.push(_clean(json.Get(body, "sub")))
+    parts.push(_clean(json.Get(body, "username")))
+    parts.push(_clean(json.Get(body, "client_name")))
+    parts.push(_clean(json.Get(body, "scope")))
+    mut out := parts.get(0)
+    mut i := 1
+    until i < parts.len():
+        out = out.concat("|").concat(parts.get(i))
+        i += 1
+    end
+    ret out
+end
+
+func _worker():
+    mut open := true
+    until open:
+        payload := g_queue.recv(open)
+        if not open: break end
+        mut headers := http.NewHeaders()
+        headers.put("Authorization", _basic())
+        headers.put("Content-Type", "application/json")
+        r := http.PostWith(g_url.concat("/internal/mcp/events"), payload, headers)
+        if http.Status(r) >= 300: mcprpc.Log("could not record an event: HTTP ".concat(str.FromInt(http.Status(r)))) end
+    end
+end
+
+@en "Configure"
+@fa "پیکربندی"
+pub func Configure():
+    g_url = str.TrimSuffix(env.GetOr("SALAM_MCP_AUTH_URL", "").trim(), "/")
+    g_secret = env.GetOr("SALAM_MCP_AUTH_SECRET", "")
+    g_service = env.GetOr("SALAM_MCP_SERVICE_TOKEN", "")
+    if g_service.len() < 32: g_service = "" end
+    g_issuer = str.TrimSuffix(env.GetOr("SALAM_MCP_ISSUER", "https://ai-api.salamlang.ir"), "/")
+    list := env.GetOr("SALAM_MCP_RESOURCES", "https://mcp.salamlang.ir/mcp")
+    mut cur := ""
+    mut i := 0
+    until i <= list.len():
+        mut c := ","
+        if i < list.len(): c = list.substr(i, 1) end
+        if c == ",":
+            if cur.trim().len() > 0: g_resources.push(_normal(cur)) end
+            cur = ""
+        else:
+            cur = cur.concat(c)
+        end
+        i += 1
+    end
+    if g_url.len() == 0: ret end
+    g_lock = sync.NewMutex()
+    g_queue.init(1024)
+    _w := spawn(_worker)
+    mcprpc.Log("sign-in required; tokens checked at ".concat(g_url))
+end
+
+@en "Enabled"
+@fa "فعال"
+pub func Enabled(): bool:
+    ret g_url.len() > 0
+end
+
+@en "Resource"
+@fa "منبع"
+pub func Resource(scheme: str, host: str): str:
+    if scheme.len() > 0 and host.len() > 0:
+        guess := _normal(scheme.concat("://").concat(host).concat("/mcp"))
+        if _known(guess): ret guess end
+    end
+    if g_resources.len() > 0: ret g_resources.get(0) end
+    ret ""
+end
+
+@en "MetadataUrl"
+@fa "نشانی فراداده"
+pub func MetadataUrl(resource: str): str:
+    slash := resource.find("://")
+    if slash < 0: ret resource end
+    rest := resource.substr(slash + 3, resource.len() - slash - 3)
+    cut := rest.find("/")
+    if cut < 0: ret resource.concat("/.well-known/oauth-protected-resource") end
+    origin := resource.substr(0, slash + 3 + cut)
+    ret origin.concat("/.well-known/oauth-protected-resource").concat(rest.substr(cut, rest.len() - cut))
+end
+
+@en "Metadata"
+@fa "فراداده"
+pub func Metadata(resource: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("resource", resource))
+    m.push(json.MemberRaw("authorization_servers", "[".concat(json.Str(g_issuer)).concat("]")))
+    m.push(json.MemberRaw("scopes_supported", `["mcp"]`))
+    m.push(json.MemberRaw("bearer_methods_supported", `["header"]`))
+    m.push(json.Member("resource_name", "Salam MCP"))
+    m.push(json.Member("resource_documentation", "https://mcp.salamlang.ir/"))
+    ret json.Object(m)
+end
+
+@en "Challenge"
+@fa "چالش"
+pub func Challenge(resource: str, error: str, description: str): str:
+    mut v := "Bearer resource_metadata=\"".concat(MetadataUrl(resource)).concat("\", scope=\"mcp\"")
+    if error.len() > 0:
+        v = v.concat(", error=\"").concat(error).concat("\", error_description=\"").concat(description).concat("\"")
+    end
+    ret v
+end
+
+@en "Check"
+@fa "بررسی"
+pub func Check(token: str): Principal:
+    if token.len() < 20 or token.len() > 512:
+        ret Principal { problem = "missing" }
+    end
+    if g_service.len() > 0 and crypto.SecretEquals(token, g_service):
+        ret Principal { ok = true, grant = "service", user = "", email = "", client = "salam-ai", scope = "mcp" }
+    end
+    key := crypto.Sha256Hex(token)
+    mut found := false
+    mut cached := _from_cache(key, found)
+    if not found:
+        cached = _introspect(token)
+        if cached.len() == 0: ret Principal { problem = "unavailable" } end
+        _to_cache(key, cached)
+    end
+    if _field(cached, 1) != "1": ret Principal { problem = "invalid" } end
+    scope := _field(cached, 6)
+    if (" ".concat(scope).concat(" ")).find(" mcp ") < 0:
+        ret Principal { problem = "scope" }
+    end
+    ret Principal { ok = true, grant = _field(cached, 2), user = _field(cached, 3), email = _field(cached, 4), client = _field(cached, 5), scope = scope }
+end
+
+@en "Record"
+@fa "ثبت"
+pub func Record(p: Principal, method: str, tool: str, ok: bool, ms: i64, args: str, ip: str, agent: str):
+    if not Enabled() or not p.ok: ret end
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("grant_id", p.grant))
+    m.push(json.Member("method", method))
+    m.push(json.Member("tool", tool))
+    m.push(json.MemberBool("ok", ok))
+    m.push(json.MemberInt("ms", ms))
+    m.push(json.Member("args", args))
+    m.push(json.Member("ip", ip))
+    m.push(json.Member("agent", agent))
+    if not g_queue.try_send(json.Object(m)):
+        _l := sync.Lock(g_lock)
+        g_dropped += 1
+        total := g_dropped
+        _u := sync.Unlock(g_lock)
+        mcprpc.Log("activity queue full; dropped an event (".concat(str.FromInt(total)).concat(" so far)"))
+    end
+end
+
+@en "Dropped"
+@fa "دورریخته"
+pub func Dropped(): int:
+    if not Enabled(): ret 0 end
+    _l := sync.Lock(g_lock)
+    v := g_dropped
+    _u := sync.Unlock(g_lock)
+    ret v
+end

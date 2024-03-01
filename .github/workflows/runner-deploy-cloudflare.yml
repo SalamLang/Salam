@@ -1,0 +1,69 @@
+---
+name: ⚙️ Runner - Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-deploy-cloudflare-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  changes:
+    uses: ./.github/workflows/_changes.yml # zizmor: ignore[self-repository]
+    with:
+      paths: |
+        runner/*
+        package.json
+        bun.lock
+        .github/workflows/runner-deploy-cloudflare.yml
+        .github/workflows/_changes.yml
+  deploy:
+    needs: changes
+    if: github.repository == 'SalamLang/Salam' && needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    name: Deploy
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+          no-cache: true
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Check that the API token can use Cloudflare Containers
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -eu
+          code=$(curl -s -o /tmp/cf-containers.json -w '%{http_code}' -H "Authorization: Bearer $CF_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/containers/me" || echo 000)
+          if [ "$code" != "200" ]; then
+            if [ "$code" = "401" ] && grep -q "Cloudflare Containers" /tmp/cf-containers.json; then
+              echo "::warning::Cloudflare Containers is not enabled for this account (Workers Paid is required); skipping the runner deploy."
+              echo "SKIP_CONTAINER_DEPLOY=1" >> "$GITHUB_ENV"
+            else
+              echo "::error::Cloudflare answered HTTP $code for /containers/me. CLOUDFLARE_API_TOKEN needs the account permission Containers: Edit (and the account needs Workers Paid). Create a new token with it and update the secret."
+              cat /tmp/cf-containers.json || true
+              exit 1
+            fi
+          fi
+      - name: Deploy
+        if: env.SKIP_CONTAINER_DEPLOY != '1'
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
+        env:
+          WRANGLER_LOG: debug
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: 'runner'
+          packageManager: bun

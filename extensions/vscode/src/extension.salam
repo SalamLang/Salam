@@ -1,0 +1,435 @@
+/*
+ * Salam Programming Language - VS Code extension entry point.
+ */
+
+import node
+import str
+
+include "vscode.salam"
+
+extern:
+    func salam_js_call(obj: i64, method: str, ...): i64
+end
+
+const LANG_ID := "salam"
+const OUTPUT_NAME := "Salam"
+
+mut g_output := 0 as i64
+mut g_terminal := 0 as i64
+mut g_client := 0 as i64
+mut g_context := 0 as i64
+
+struct LangItem:
+    pub label: str
+    pub value: str
+end
+
+struct Utf8Char:
+    pub cp: int
+    pub byte_len: int
+end
+
+func is_shell_safe(c: char): bool:
+    ret (c >= '0' and c <= '9') or (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z') or c == '_' or c == '-' or c == '.' or c == '/' or c == ':' or c == '\\'
+end
+
+func shell_quote(arg: str): str:
+    n := arg.len()
+    if n == 0: ret `""` end
+    mut safe := true
+    mut i := 0
+    until i < n:
+        if not is_shell_safe(arg[i]):
+            safe = false
+            break
+        end
+        i += 1
+    end
+    if safe: ret arg end
+    mut out := `"`
+    mut j := 0
+    until j < n:
+        c := arg[j]
+        if c == '"' or c == '\\' or c == '$' or c == '`':
+            out = out + `\`
+        end
+        out = out + arg.substr(j, 1)
+        j += 1
+    end
+    ret out + `"`
+end
+
+func lower1(s: str): str: ret str.Lower(s) end
+
+func ends_with_ci(s: str, suffix: str): bool:
+    n := s.len()
+    m := suffix.len()
+    if m > n: ret false end
+    ret lower1(s.substr(n - m, m)) == lower1(suffix)
+end
+
+func contains_substr(s: str, sub: str): bool: ret s.find(sub) >= 0 end
+
+func decode_utf8_at(s: str, i: int, _n: int): Utf8Char:
+    ret Utf8Char { cp = s[i] as int, byte_len = 1 }
+end
+
+func is_persian_specific(cp: int): bool:
+    ret cp == 0x067E or cp == 0x0686 or cp == 0x0698 or cp == 0x06A9 or cp == 0x06AF or cp == 0x06CC or (cp >= 0x06F0 and cp <= 0x06F9)
+end
+
+func is_arabic_range(cp: int): bool:
+    ret (cp >= 0x0600 and cp <= 0x06FF) or (cp >= 0x0750 and cp <= 0x077F) or (cp >= 0xFB50 and cp <= 0xFDFF) or (cp >= 0xFE70 and cp <= 0xFEFF)
+end
+
+func min_int(a: int, b: int): int: ret a < b ? a : b end
+
+func find_directive_lang(head: str): str:
+    n := head.len()
+    mut markers := ["LANG", "lang", "زبان"]
+    mut best := 0 - 1
+    mut mi := 0
+    until mi < 3:
+        p := head.find(markers[mi])
+        if p >= 0 and (best < 0 or p < best): best = p end
+        mi += 1
+    end
+    if best < 0: ret "" end
+    mut i := best
+    mut adv := 4
+    if head.find(markers[2]) == best: adv = markers[2].len() end
+    i = best + adv
+    until i < n and (head[i] == ' ' or head[i] == '\t'):
+        i += 1
+    end
+    if i >= n or head[i] != ':': ret "" end
+    i += 1
+    until i < n and (head[i] == ' ' or head[i] == '\t'):
+        i += 1
+    end
+    if i + 2 > n: ret "" end
+    a := head[i]
+    b := head[i + 1]
+    is_alpha := (a >= 'A' and a <= 'Z' or a >= 'a' and a <= 'z') and (b >= 'A' and b <= 'Z' or b >= 'a' and b <= 'z')
+    if not is_alpha: ret "" end
+    ret lower1(head.substr(i, 2))
+end
+
+func detect_lang(text: str): str:
+    choice := vscode.ConfigGetStr(vscode.GetConfiguration("salam"), "languagePack", "auto")
+    if choice == "en" or choice == "fa": ret choice end
+
+    n := min_int(text.len(), 4000)
+    head := text.substr(0, n)
+
+    directive := find_directive_lang(head)
+    if directive != "": ret directive end
+
+    hn := head.len()
+    mut i := 0
+    mut has_persian := false
+    mut arabic_count := 0
+    until i < hn:
+        ch := decode_utf8_at(head, i, hn)
+        if is_persian_specific(ch.cp): has_persian = true end
+        if is_arabic_range(ch.cp): arabic_count += 1 end
+        i += ch.byte_len
+    end
+    if has_persian: ret "fa" end
+    ret arabic_count >= 3 ? "fa" : "en"
+end
+
+func compiler_path(): str: ret vscode.ConfigGetStr(vscode.GetConfiguration("salam"), "compilerPath", "salam") end
+
+func ensure_terminal(): i64:
+    if g_terminal == 0 or vscode.TerminalHasExited(g_terminal):
+        g_terminal = vscode.CreateTerminal(OUTPUT_NAME)
+    end
+    ret g_terminal
+end
+
+func run_in_terminal(args: i64, cwd: str):
+    term := ensure_terminal()
+    vscode.ShowTerminal(term)
+    mut cmd := shell_quote(compiler_path())
+    count := node.GetNum(args, "length") as i64
+    mut i := 0
+    until i < count:
+        piece := node.ToStr(node.GetProp(args, node.ToStr(i)))
+        cmd = cmd + " " + shell_quote(piece)
+        i += 1
+    end
+    if cwd != "":
+        vscode.SendText(term, "cd " + shell_quote(cwd))
+    end
+    vscode.SendText(term, cmd)
+end
+
+func common_args(document: i64): i64:
+    args := node.NewArray()
+    node.PushStr(args, "--lang=" + detect_lang(vscode.DocumentGetText(document)))
+    stdlib := vscode.ConfigGetStr(vscode.GetConfiguration("salam"), "stdlibPath", "")
+    if stdlib != "":
+        node.PushStr(args, "--stdlib-path=" + stdlib)
+    end
+    ret args
+end
+
+func dirname_of(fsPath: str): str:
+    mut i := fsPath.len() - 1
+    until i >= 0 and fsPath[i] != '/' and fsPath[i] != '\\':
+        i -= 1
+    end
+    if i <= 0: ret fsPath end
+    ret fsPath.substr(0, i)
+end
+
+func with_salam_doc(cb: func (i64)):
+    editor := vscode.ActiveTextEditor()
+    if node.IsNullish(editor):
+        vscode.ShowWarningMessage("Salam: open a .salam file first.")
+        ret
+    end
+    doc := vscode.EditorDocument(editor)
+    if vscode.DocumentLanguageId(doc) != LANG_ID:
+        vscode.ShowWarningMessage("Salam: open a .salam file first.")
+        ret
+    end
+    if vscode.DocumentIsDirty(doc):
+        vscode.Then1(vscode.DocumentSave(doc), (_ok: i64): cb(doc) end)
+    else:
+        cb(doc)
+    end
+end
+
+func cmd_run_with(subcommand: str):
+    with_salam_doc(
+        (doc: i64): file := vscode.DocumentUriFsPath(doc) args := node.NewArray() node.PushStr(args, subcommand) node.PushStr(args, file) append_all(args, common_args(doc)) run_in_terminal(args, dirname_of(file)) end
+    )
+end
+
+func append_all(dst: i64, src: i64):
+    count := node.GetNum(src, "length") as i64
+    mut i := 0
+    until i < count:
+        node.Push(dst, node.GetProp(src, node.ToStr(i)))
+        i += 1
+    end
+end
+
+func cmd_build():
+    with_salam_doc(
+        (doc: i64): file := vscode.DocumentUriFsPath(doc) target := vscode.ConfigGetStr(vscode.GetConfiguration("salam"), "build.target", "") wantsExe := node.IsWindows() or contains_substr(target, "windows") or contains_substr(target, "mingw") or contains_substr(target, "win32") mut out := file if ends_with_ci(file, ".salam"): out = file.substr(0, file.len() - 6) end if wantsExe: out = out + ".exe" end args := node.NewArray() node.PushStr(args, "build") node.PushStr(args, file) node.PushStr(args, "--output=" + out) if target != "": node.PushStr(args, "--target=" + target) end append_all(args, common_args(doc)) run_in_terminal(args, dirname_of(file)) end
+    )
+end
+
+func report_compiler_missing():
+    vscode.Then1(
+        vscode.ShowErrorMessageAction(
+            "Salam: could not run '" + compiler_path() + `'. Set "salam.compilerPath" to the salam executable.`, "Open Settings"
+        ), (pick: i64): if not node.IsNullish(pick) and node.ToStr(pick) == "Open Settings": vscode.OpenSettings("salam.compilerPath") end end
+    )
+end
+
+func exec_capture(args: i64, cwd: str, cb: func (i64, str, str)):
+    node.ExecFileRaw(
+        compiler_path(), args, cwd, (err: i64, stdout: str, stderr: str): if node.IsNullish(err): cb(0, stdout, stderr) else: code_prop := node.GetProp(err, "code") is_enoent := not node.IsNullish(code_prop) and node.ToStr(code_prop) == "ENOENT" cb(is_enoent ? (0 - 1) : 1, stdout, stderr) end end
+    )
+end
+
+func trim_or(a: str, b: str): str:
+    ta := a.trim()
+    if ta != "": ret ta end
+    tb := b.trim()
+    if tb != "": ret tb end
+    ret "(no output)"
+end
+
+func cmd_emit_xml(flag: str, languageTitle: str):
+    with_salam_doc(
+        (doc: i64): file := vscode.DocumentUriFsPath(doc) args := node.NewArray() node.PushStr(args, file) node.PushStr(args, flag) append_all(args, common_args(doc)) exec_capture(
+            args, dirname_of(file), (code: i64, stdout: str, stderr: str): if code == (0 - 1): report_compiler_missing() ret end body := trim_or(stdout, stderr) vscode.Then1(
+                vscode.OpenTextDocumentContent(body, "xml"), (shown: i64): vscode.ShowTextDocumentPreview(shown) end
+            ) if code != 0 and stderr.trim() != "": vscode.AppendLine(g_output, "[" + languageTitle + "] exited " + node.ToStr(code) + ": " + stderr.trim()) end end
+        ) end
+    )
+end
+
+func indent_flag(): str:
+    indent := vscode.ConfigGetStr(vscode.GetConfiguration("salam"), "format.indent", "4")
+    if indent == "tab" or indent == "tabs": ret "--tabs" end
+    mut all_digits := indent.len() > 0
+    mut i := 0
+    until i < indent.len():
+        c := indent[i]
+        if not (c >= '0' and c <= '9'): all_digits = false end
+        i += 1
+    end
+    if all_digits: ret "--indent=" + indent end
+    ret ""
+end
+
+func format_text(text: str, lang: str, cb: func (bool, str)):
+    tmpBase := node.PathJoin2(node.TmpDir(), "salam-fmt-")
+    tmpDir := node.MkdtempSync(tmpBase)
+    tmpFile := node.PathJoin2(tmpDir, "document.salam")
+    node.WriteFileSync(tmpFile, text)
+
+    args := node.NewArray()
+    node.PushStr(args, "format")
+    node.PushStr(args, tmpFile)
+    node.PushStr(args, "--lang=" + lang)
+    iflag := indent_flag()
+    if iflag != "": node.PushStr(args, iflag) end
+
+    exec_capture(
+        args, tmpDir, (code: i64, stdout: str, stderr: str): if code == (0 - 1): node.RmSyncRecursiveForce(tmpDir) report_compiler_missing() cb(false, "") ret end if code != 0: msg := stderr.trim() != "" ? stderr.trim() : stdout.trim() vscode.AppendLine(g_output, "[fmt] " + msg) vscode.ShowErrorMessage(`Salam: formatting failed (see "Salam" output for details).`) node.RmSyncRecursiveForce(tmpDir) cb(false, "") ret end formatted := node.ReadFileSync(tmpFile) node.RmSyncRecursiveForce(tmpDir) cb(true, formatted) end
+    )
+end
+
+func whole_document_range(doc: i64): i64:
+    last := vscode.DocumentLineCount(doc) - 1
+    lastLine := vscode.DocumentLineAt(doc, last)
+    lastText := vscode.LineText(lastLine)
+    ret vscode.NewRange(0, 0, last, lastText.len() as i64)
+end
+
+func provide_formatting_edits(doc: i64): i64:
+    ret node.NewPromise(
+        (resolve: i64, _reject: i64): cfg := vscode.GetConfiguration("salam") if not vscode.ConfigGetBool(cfg, "format.enable", true): node.Invoke1(resolve, node.NewArray()) ret end text := vscode.DocumentGetText(doc) lang := detect_lang(text) format_text(
+            text, lang, (ok: bool, formatted: str): if not ok or formatted == "" or formatted == text: node.Invoke1(resolve, node.NewArray()) ret end edits := node.NewArray() node.Push(edits, vscode.TextEditReplace(whole_document_range(doc), formatted)) node.Invoke1(resolve, edits) end
+        ) end
+    )
+end
+
+func cmd_format():
+    editor := vscode.ActiveTextEditor()
+    if node.IsNullish(editor) or vscode.DocumentLanguageId(vscode.EditorDocument(editor)) != LANG_ID:
+        vscode.ShowWarningMessage("Salam: open a .salam file first.")
+        ret
+    end
+    vscode.ExecuteCommand0("editor.action.formatDocument")
+end
+
+func is_valid_project_name(name: str): bool:
+    n := name.len()
+    if n == 0: ret false end
+    mut i := 0
+    until i < n:
+        c := name[i]
+        ok := (c >= '0' and c <= '9') or (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z') or c == '_' or c == '.' or c == '-'
+        if not ok: ret false end
+        i += 1
+    end
+    ret true
+end
+
+func cmd_new_project():
+    vscode.Then1(
+        vscode.ShowInputBox("Project name", "my-salam-app"), (nameV: i64): if node.IsNullish(nameV): ret end name := node.ToStr(nameV) if not is_valid_project_name(name): vscode.ShowErrorMessage("Salam: use letters, digits, dots, hyphens or underscores for the project name.") ret end items := [
+            LangItem { label = "English (en)", value = "en" }, LangItem { label = "فارسی (fa)", value = "fa" }
+        ] picks := node.NewArray() mut k := 0 until k < 2: salam_js_call(picks, "push", items[k]) k += 1 end vscode.Then1(
+            vscode.ShowQuickPick(picks, "Keyword language pack for the new project"), (pick: i64): if node.IsNullish(pick): ret end value := node.GetStr(pick, "value") args := node.NewArray() node.PushStr(args, "new") node.PushStr(args, name) node.PushStr(args, "--lang=" + value) run_in_terminal(args, "") end
+        ) end
+    )
+end
+
+func server_options(): i64:
+    cfg := vscode.GetConfiguration("salam")
+    opts := node.NewObject()
+    stdlib := vscode.ConfigGetStr(cfg, "stdlibPath", "")
+    if stdlib != "":
+        node.SetStr(opts, "stdlibPath", stdlib)
+    end
+    messages := vscode.ConfigGetStr(cfg, "lsp.messages", "auto")
+    if messages == "en" or messages == "fa":
+        node.SetStr(opts, "messages", messages)
+    end
+    node.SetBool(opts, "formatFixOrder", vscode.ConfigGetBool(cfg, "lsp.formatFixOrder", false))
+    switch_lint := vscode.ConfigGetStr(cfg, "lsp.switchLint", "off")
+    if switch_lint == "warn":
+        node.SetStr(opts, "switchLint", switch_lint)
+        node.SetProp(opts, "switchLintMin", node.CallS2(cfg, "get", "lsp.switchLintMin", "4"))
+    end
+    node.SetBool(opts, "index", vscode.ConfigGetBool(cfg, "lsp.index", true))
+    node.SetProp(opts, "indexMaxFiles", node.CallS2(cfg, "get", "lsp.indexMaxFiles", "400"))
+    ret opts
+end
+
+func use_cli_formatter():
+    vscode.ContextSubscriptionsPush(g_context, vscode.RegisterDocumentFormattingEditProvider(LANG_ID, (d: i64): ret provide_formatting_edits(d) end))
+end
+
+func probe_server():
+    args := node.NewArray()
+    node.PushStr(args, "lsp")
+    node.PushStr(args, "--version")
+    exec_capture(
+        args, "", (code: i64, _out: str, _err: str): if code == 0: start_server() register_debugger() ret end use_cli_formatter() if code == (0 - 1): report_compiler_missing() else: vscode.AppendLine(g_output, "[lsp] '" + compiler_path() + " lsp' is not available in this Salam version; update Salam to get diagnostics, completion and navigation in the editor.") end end
+    )
+end
+
+func register_debugger():
+    args := node.NewArray()
+    node.PushStr(args, "dap")
+    vscode.ContextSubscriptionsPush(g_context, vscode.RegisterDebugAdapter("salam", compiler_path(), args))
+end
+
+func start_server():
+    args := node.NewArray()
+    node.PushStr(args, "lsp")
+    g_client = vscode.StartLanguageClient(compiler_path(), args, server_options())
+end
+
+func restart_server():
+    if g_client != 0:
+        vscode.Then1(vscode.StopLanguageClient(g_client), (_r: i64): start_server() end)
+        ret
+    end
+    start_server()
+end
+
+func activate(context: i64):
+    g_output = vscode.CreateOutputChannel(OUTPUT_NAME)
+    vscode.ContextSubscriptionsPush(context, g_output)
+
+    vscode.ContextSubscriptionsPush(
+        context, vscode.RegisterCommand(
+            "salam.run", (): runCmd := vscode.ConfigGetStr(vscode.GetConfiguration("salam"), "run.command", "exec") cmd_run_with(runCmd) end
+        )
+    )
+    vscode.ContextSubscriptionsPush(context, vscode.RegisterCommand("salam.exec", (): cmd_run_with("exec") end))
+    vscode.ContextSubscriptionsPush(context, vscode.RegisterCommand("salam.build", (): cmd_build() end))
+    vscode.ContextSubscriptionsPush(context, vscode.RegisterCommand("salam.format", (): cmd_format() end))
+    vscode.ContextSubscriptionsPush(context, vscode.RegisterCommand("salam.emitTokens", (): cmd_emit_xml("--emit-tokens", "tokens") end))
+    vscode.ContextSubscriptionsPush(context, vscode.RegisterCommand("salam.emitAst", (): cmd_emit_xml("--emit-ast", "ast") end))
+    vscode.ContextSubscriptionsPush(context, vscode.RegisterCommand("salam.newProject", (): cmd_new_project() end))
+    g_context = context
+    if vscode.ConfigGetBool(vscode.GetConfiguration("salam"), "lsp.enable", true):
+        probe_server()
+    else:
+        use_cli_formatter()
+    end
+    vscode.ContextSubscriptionsPush(context, vscode.RegisterCommand("salam.restartServer", (): restart_server() end))
+    vscode.ContextSubscriptionsPush(
+        context, vscode.OnDidCloseTerminal(
+            (t: i64): if t == g_terminal: g_terminal = 0 end end
+        )
+    )
+end
+
+func deactivate():
+    if g_terminal != 0:
+        vscode.Dispose(g_terminal)
+    end
+    if g_client != 0:
+        _s := vscode.StopLanguageClient(g_client)
+        g_client = 0
+    end
+end
+
+func main():
+    exports := node.Exports()
+    node.SetPropFn1(exports, "activate", (ctx: i64): activate(ctx) end)
+    node.SetPropFn0(exports, "deactivate", (): deactivate() end)
+end

@@ -1,0 +1,182 @@
+package nativegen
+
+func fx_const(g &: Ng, v: int, out &: i64): bool:
+    if v < 0:
+        ret false
+    end
+    if g.v_kind[v] == VK_INT:
+        out = g.v_i[v]
+        ret is_imm32(out)
+    end
+    if g.v_kind[v] == VK_ZERO:
+        out = 0 as i64
+        ret true
+    end
+    ret false
+end
+
+func fx_arg_reg(g &: Ng, v: int): int:
+    if v < 0 or g.v_kind[v] != VK_ARG:
+        ret 0 - 1
+    end
+    k := g.v_i[v] as int
+    if k < 0 or k >= g.f_args.len() or vcls_ty(g, g.v_ty[v]) != 0 or is_agg(g, g.v_ty[v]):
+        ret 0 - 1
+    end
+    mut gi := 0
+    repeat k in j:
+        t := g.v_ty[g.f_args[j]]
+        if vcls_ty(g, t) == 0 or is_agg(g, t):
+            gi += 1
+        end
+    end
+    if gi >= 6:
+        ret 0 - 1
+    end
+    ret k_sysv_gp[gi]
+end
+
+func fx_ret_ok(g &: Ng, blk0: int): bool:
+    mut blk := blk0
+    j := blk >= 0 ? g.b_first[blk] : 0 - 1
+    if j >= 0 and j == g.b_last[blk] and g.i_op[j] == OP_BR:
+        blk = g.i_b[j]
+    end
+    if blk < 0:
+        ret false
+    end
+    r := g.b_first[blk]
+    if r < 0 or r != g.b_last[blk] or g.i_op[r] != OP_RET:
+        ret false
+    end
+    v := g.i_a[r]
+    if v < 0:
+        g.fx_kind = 0
+        ret true
+    end
+    mut imm := 0 as i64
+    if fx_const(g, v, imm):
+        g.fx_kind = 1
+        g.fx_rimm = imm
+        ret true
+    end
+    rr := fx_arg_reg(g, v)
+    if rr >= 0 and g.v_ty[v] != T_I1:
+        g.fx_kind = 2
+        g.fx_rreg = rr
+        ret true
+    end
+    ret false
+end
+
+func fast_exit_plan(g &: Ng):
+    g.fx_on = false
+    if g.off_fx or not g.opt or g.os == NG_OS_WINDOWS or g.b_rpo.len() < 3:
+        ret
+    end
+    rt := g.f_ret
+    if rt != T_VOID and (is_agg(g, rt) or is_flt(g, rt) or is_vec(g, rt) or rt == T_I128):
+        ret
+    end
+    b0 := g.b_rpo[0]
+    t := g.b_last[b0]
+    ic := g.b_first[b0]
+    if t < 0 or ic < 0 or g.i_op[t] != OP_CBR or g.i_next[ic] != t or g.i_op[ic] != OP_ICMP:
+        ret
+    end
+    if g.i_a[t] != g.i_res[ic]:
+        ret
+    end
+    a := g.i_a[ic]
+    b := g.i_b[ic]
+    if a < 0 or b < 0:
+        ret
+    end
+    bits := int_bits(g, g.v_ty[a])
+    if bits != 32 and bits != 64:
+        ret
+    end
+    mut pred := g.i_x[ic]
+    mut imm := 0 as i64
+    mut reg := fx_arg_reg(g, a)
+    if reg < 0 or not fx_const(g, b, imm):
+        reg = fx_arg_reg(g, b)
+        if reg < 0 or not fx_const(g, a, imm):
+            ret
+        end
+        pred = swap_pred(pred)
+    end
+    cc := icmp_cc(pred)
+    if fx_ret_ok(g, g.i_b[t]):
+        g.fx_cc = cc
+    else fx_ret_ok(g, g.i_c[t]):
+        g.fx_cc = inv_cc(cc)
+    else:
+        ret
+    end
+    g.fx_on = true
+    g.fx_reg = reg
+    g.fx_w = bits == 64
+    g.fx_imm = imm
+    g.fx_rw = rt == T_PTR or (rt != T_VOID and int_bits(g, rt) == 64)
+end
+
+func fx_put32(out &: Vector<int>, v: i64):
+    repeat 4 in k:
+        out.push(((v >> ((8 * k) as i64)) & (255 as i64)) as int)
+    end
+end
+
+func enc_fast_exit(g &: Ng, e &: Enc):
+    mut stub := Vector {} as Vector<int>
+    if g.fx_kind == 1:
+        if g.fx_rimm == (0 as i64):
+            stub.push(0x31)
+            stub.push(0xC0)
+        else g.fx_rw and g.fx_rimm < (0 as i64):
+            stub.push(0x48)
+            stub.push(0xC7)
+            stub.push(0xC0)
+            fx_put32(stub, g.fx_rimm)
+        else:
+            stub.push(0xB8)
+            fx_put32(stub, g.fx_rimm)
+        end
+    else g.fx_kind == 2:
+        s := g.fx_rreg
+        stub.push(0x48 | (s >= 8 ? 4 : 0))
+        stub.push(0x89)
+        stub.push(0xC0 | ((s & 7) << 3))
+    end
+    stub.push(0xC3)
+    r := g.fx_reg
+    w := g.fx_w ? 8 : 0
+    if g.fx_imm == (0 as i64):
+        rex := 0x40 | w | (r >= 8 ? 5 : 0)
+        if rex != 0x40:
+            eb(e, rex)
+        end
+        eb(e, 0x85)
+        eb(e, 0xC0 | ((r & 7) << 3) | (r & 7))
+    else:
+        rex2 := 0x40 | w | (r >= 8 ? 1 : 0)
+        if rex2 != 0x40:
+            eb(e, rex2)
+        end
+        if fits8(g.fx_imm):
+            eb(e, 0x83)
+            eb(e, 0xF8 | (r & 7))
+            eb(e, (g.fx_imm & (255 as i64)) as int)
+        else:
+            eb(e, 0x81)
+            eb(e, 0xF8 | (r & 7))
+            e32(e, g.fx_imm)
+        end
+    end
+    eb(e, 0x70 + inv_cc(g.fx_cc))
+    eb(e, stub.len())
+    each x in stub:
+        eb(e, x)
+    end
+    stub.free()
+end

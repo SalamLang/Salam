@@ -1,0 +1,147 @@
+package nativegen
+
+pub struct Lsf:
+    pub root: Vector<int> = Vector {}
+    pub base: Vector<int> = Vector {}
+    pub disp: Vector<i64> = Vector {}
+    pub size: Vector<i64> = Vector {}
+    pub ty: Vector<int> = Vector {}
+    pub cls: Vector<int> = Vector {}
+    pub val: Vector<int> = Vector {}
+end
+
+func lsf_clear(t &: Lsf):
+    t.root.clear()
+    t.base.clear()
+    t.disp.clear()
+    t.size.clear()
+    t.ty.clear()
+    t.cls.clear()
+    t.val.clear()
+end
+
+func lsf_drop(t &: Lsf, k: int):
+    n := t.root.len() - 1
+    t.root[k] = t.root[n]
+    t.base[k] = t.base[n]
+    t.disp[k] = t.disp[n]
+    t.size[k] = t.size[n]
+    t.ty[k] = t.ty[n]
+    t.cls[k] = t.cls[n]
+    t.val[k] = t.val[n]
+    _a := t.root.pop()
+    _b := t.base.pop()
+    _c := t.disp.pop()
+    _d := t.size.pop()
+    _e := t.ty.pop()
+    _f := t.cls.pop()
+    _g := t.val.pop()
+end
+
+func lsf_add(t &: Lsf, root: int, base: int, disp: i64, size: i64, ty: int, cls: int, val: int):
+    t.root.push(root)
+    t.base.push(base)
+    t.disp.push(disp)
+    t.size.push(size)
+    t.ty.push(ty)
+    t.cls.push(cls)
+    t.val.push(val)
+end
+
+func lsf_apart(g &: Ng, t &: Lsf, k: int, root: int, base: int, disp: i64, size: i64, cls: int): bool:
+    if cls != 0 and t.cls[k] != 0 and cls != t.cls[k]:
+        ret true
+    end
+    if root >= 0 and t.root[k] == root:
+        ret disp + size <= t.disp[k] or t.disp[k] + t.size[k] <= disp
+    end
+    if base >= 0 and t.base[k] >= 0 and base != t.base[k]:
+        ret root_kind(g, base) != 0 and root_kind(g, t.base[k]) != 0
+    end
+    ret false
+end
+
+func lsf_block(g &: Ng, t &: Lsf, b: int): bool:
+    lsf_clear(t)
+    mut changed := false
+    mut i := g.b_first[b]
+    until i >= 0:
+        nx := g.i_next[i]
+        op := g.i_op[i]
+        if op == OP_LOAD:
+            vol := (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0
+            ty := g.i_ty[i]
+            if vol:
+                lsf_clear(t)
+            else not is_agg(g, ty) and not is_vec(g, ty) and g.i_res[i] >= 0:
+                mut d := 0 as i64
+                r := addr_root(g, g.i_a[i], d)
+                mut hit := 0 - 1
+                repeat t.root.len() in k:
+                    if t.root[k] == r and t.disp[k] == d and t.ty[k] == ty:
+                        hit = t.val[k]
+                    end
+                end
+                if hit >= 0:
+                    repl_grow(g)
+                    g.v_repl[g.i_res[i]] = hit
+                    ins_unlink(g, i)
+                    changed = true
+                else:
+                    lsf_add(t, r, addr_base(g, g.i_a[i]), d, tsize(g, ty) as i64, ty, mem_cls(g, i), g.i_res[i])
+                end
+            end
+        else op == OP_STORE:
+            sv := g.i_a[i]
+            st := g.v_ty[sv]
+            if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+                lsf_clear(t)
+            else:
+                mut d2 := 0 as i64
+                r2 := addr_root(g, g.i_b[i], d2)
+                base2 := addr_base(g, g.i_b[i])
+                sz := tsize(g, st) as i64
+                cls := mem_cls(g, i)
+                mut k2 := t.root.len() - 1
+                until k2 >= 0:
+                    if not lsf_apart(g, t, k2, r2, base2, d2, sz, cls):
+                        lsf_drop(t, k2)
+                    end
+                    k2 -= 1
+                end
+                if not is_agg(g, st) and not is_vec(g, st) and sv >= 0 and (g.v_kind[sv] == VK_INS or g.v_kind[sv] == VK_ARG or g.v_kind[sv] == VK_INT or g.v_kind[sv] == VK_FLT or g.v_kind[sv] == VK_GLB):
+                    lsf_add(t, r2, base2, d2, sz, st, cls, sv)
+                end
+            end
+        else op == OP_CALL:
+            if not call_no_write(g, i):
+                lsf_clear(t)
+            end
+        else op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE:
+            lsf_clear(t)
+        end
+        i = nx
+    end
+    ret changed
+end
+
+func local_store_fwd(g &: Ng): bool:
+    mut t := Lsf {}
+    mut changed := false
+    each b in g.b_rpo:
+        if lsf_block(g, t, b):
+            changed = true
+        end
+    end
+    t.root.free()
+    t.base.free()
+    t.disp.free()
+    t.size.free()
+    t.ty.free()
+    t.cls.free()
+    t.val.free()
+    if changed:
+        remap_all(g)
+    end
+    ret changed
+end

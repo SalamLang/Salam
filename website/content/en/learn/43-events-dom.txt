@@ -1,0 +1,141 @@
+lesson.part = Web pages
+lesson.title = State, the DOM and timers
+lesson.summary = How the pieces of an interactive page fit: state in variables, reading and changing elements, classes and styles, creating and removing elements, timers, storage, dialogs, components with handlers and how to debug
+lesson.seo_title = Interactive pages in Salam: state, the DOM, timers and storage | Lesson 43
+lesson.description = How to make a Salam web page interactive: keeping state in variables, finding and changing elements with the dom package, classes, styles and attributes, creating and removing elements, timeouts, intervals and animation frames, local storage, dialogs, components with handlers, organising the code and debugging, with thirteen working examples.
+lesson.lead = The last three lessons showed single events. A real page puts them together: it remembers something, reacts to a click or a key, and then updates what the reader sees. This lesson teaches that loop with small complete pages, a counter, a todo list, tabs, a stopwatch, a quiz, and the dom functions each one needs.
+lesson.body <<
+<h2 id="state">State lives in variables</h2>
+<p>An interactive page is a loop of three steps: something happens, the program changes what it remembers, and the page is redrawn from what the program remembers. What the program remembers is its <em>state</em>. In Salam the state of a page is a handful of top level <code>mut</code> variables above the <code>page:</code> block. Handlers change them, and one function, usually called <code>draw</code> or <code>show</code>, copies them into the page.</p>
+{{example.web-dom-counter}}
+<p>Look at how the example is split. <code>count</code> is the only place that knows the number. <code>fewer</code>, <code>more</code> and <code>start_over</code> change it and call <code>draw</code>, and <code>draw</code> is the only function that touches the page. When something looks wrong on screen you know where to look: either the state is wrong or the drawing is. The red colour of a negative number is a rule inside <code>draw</code>, so it is applied every time, whichever handler ran.</p>
+<p>The helpers come from <code>import dom</code>, and the whole list is on the <a href="/std/dom/">dom package page</a>. This lesson teaches the page side: which helper to reach for and how the parts fit together.</p>
+<div class="note"><p>A page program does not need a <code>main</code> and nothing calls one. If you add one, the compiler starts counting only what <code>main</code> calls, and your handlers are reported as unused functions (error E066). Put the work in handlers, and see <a href="#storage">the storage section</a> for code that must run when the page opens.</p></div>
+
+<h2 id="reading">Finding elements, reading and writing them</h2>
+<p>To change an element you first need a handle on it. <code>dom.ById("value")</code> returns the element with that <code>id</code>, and the compiler checks the id for you: if no element of the same page has it, the build stops with error E138, so a typing mistake is found before the page ever runs.</p>
+<pre class="code" dir="ltr"><code>E138: no element with id 'result2' in this file's layout</code></pre>
+<p>The check only sees ids written as plain text. An id built while the page runs, such as <code>dom.ById("votes-" + name)</code>, is not checked, so a typing mistake there shows up as an error in the browser console instead. When there is no id to use, <code>dom.Query(".note")</code> returns the first element that matches a CSS selector, and <code>dom.QueryAll("#books li")</code> returns all of them as a list. Read a list with <code>dom.CountOf(list)</code> and <code>dom.ItemAt(list, i)</code>, counting from 0.</p>
+<p>With a handle you can read and write. <code>dom.SetText(el, "...")</code> and <code>dom.GetText(el)</code> deal with text, and <code>dom.SetValue(el, "...")</code> and <code>dom.GetValue(el)</code> with what is typed in a field. The character counter below reads the box on every <code>input</code> event, shows the count and the share of the limit, and switches the button off while the note is empty or too long.</p>
+{{example.web-dom-charcount}}
+<p>The count comes from <code>dom.GetNum(field, "textLength")</code>, a property the browser keeps for a text area, and not from <code>text.len()</code>. In the browser a Salam string counts UTF-8 bytes, so the Persian word <code>سلام</code> would count as 8. <code>GetNum</code>, <code>GetStr</code>, <code>GetBool</code> and <code>GetProp</code> read any property of an element, and they are how you reach whatever the other helpers do not cover.</p>
+<p>A list of elements is what a live filter needs. The handler below goes through every row, shows the ones that contain the search text and hides the rest, counts how many stayed, and shows a message when none did.</p>
+{{example.web-dom-filter}}
+<p>A list from <code>QueryAll</code> is a snapshot. Rows added later are not in it, so ask again each time, as the handler does.</p>
+<p>One more way to write is <code>dom.SetHtml(el, "...")</code>. It makes the browser read the string as HTML, so it can build a whole fragment in one call, and <code>dom.SetHtml(el, "")</code> empties an element. That is also the danger. A name typed by a visitor and put in with <code>SetHtml</code> is run as HTML, and a name such as <code>&lt;img src=x onerror=...&gt;</code> becomes a program. Text that came from outside always goes in with <code>SetText</code>, which shows every character as it is:</p>
+<pre class="code snip" dir="ltr"><code>func echo:
+    dom.SetText(dom.ById("shown"), dom.GetValue(dom.ById("name")))
+end
+
+page:
+    input: id = "name" input = echo placeholder = "Your name" end
+    paragraph: id = "shown" end
+end</code></pre>
+<div class="note"><p>A missing element is not an empty value. <code>dom.ById</code> and <code>dom.Query</code> give JavaScript <code>null</code> for an element that is not there, and using it stops the handler with an error in the console. When an element may be absent, ask first with <code>dom.Exists("banner")</code>, as in <code>if dom.Exists("banner"): dom.Remove(dom.ById("banner")) end</code>.</p></div>
+
+<h2 id="look">Classes, styles and attributes</h2>
+<p>There are three ways to change how an element looks or behaves, and the order of preference is the order below. First, <strong>classes</strong>: <code>dom.AddClass</code>, <code>dom.RemoveClass</code> and <code>dom.ToggleClass</code> switch a class on and off, and the CSS for it is written once, in a <code>style</code> element. The script says what state the element is in, the style sheet says what that looks like, and the two stay apart. The theme switch below changes one class on the <code>body</code>, and every colour on the page follows.</p>
+{{example.web-dom-theme}}
+<p>Second, <strong>styles</strong>: <code>dom.SetStyle(el, "width", "40%")</code> sets one CSS property of one element, with its CSS name (<code>background-color</code>, not <code>backgroundColor</code>), and an empty value removes it again. It is the right tool for a value you work out while running, such as the width of the bar in the character counter. <code>dom.GetStyle(el, "display")</code> returns the value the browser is using now, for example <code>none</code> for a hidden element.</p>
+<p>Third, <strong>attributes</strong>: <code>dom.SetAttr(el, "aria-expanded", "true")</code> and <code>dom.GetAttr(el, "aria-expanded")</code> read and write HTML attributes as text. They matter most for the accessibility attributes, because a screen reader reads <code>aria-expanded</code> and ignores the class. This accordion keeps both in step: the class shows or hides the panel, and the attribute tells assistive software whether it is open.</p>
+{{example.web-dom-accordion}}
+<p>The accordion is a component, and its handler remembers the <code>name</code> it was made with. <a href="#reuse">The section on reuse</a> comes back to that. The browser also has the <code>details</code> element for exactly this job, with no script at all (see <a href="/learn/page-structure/">the lesson on page structure</a>). The accordion is here because it shows state, classes and attributes working together.</p>
+<p>Some things are not attributes but properties of the element: <code>checked</code>, <code>disabled</code>, <code>value</code>. The attribute only gives the starting value, and the property is the live one. Read and write those with <code>dom.GetBool</code> and <code>dom.SetBool</code>:</p>
+<pre class="code snip" dir="ltr"><code>func agree_changed:
+    ticked := dom.GetBool(dom.ById("agree"), "checked")
+    dom.SetBool(dom.ById("join"), "disabled", not ticked)
+end
+
+page:
+    input: id = "agree" type = checkbox change = agree_changed end
+    label: for = "agree" content = "I accept the rules" end
+    button: id = "join" disabled = true content = "Join" end
+end</code></pre>
+<p>Tabs put the three tools together. One handler goes through every tab and every panel, and the one with the chosen number gets the class <code>on</code> and <code>aria-selected = true</code> while all the others lose them.</p>
+{{example.web-dom-tabs}}
+<div class="note"><p>When two things have to change together, put them in one function and call it, as <code>show_tab</code> does. If the tab buttons and the panels were updated in different places, sooner or later one of them would be forgotten.</p></div>
+
+<h2 id="make">Making and removing elements</h2>
+<p>A page often has to grow: a new row in a list, a new message. <code>dom.Create("li")</code> makes an element that is not on the page yet, <code>dom.SetText</code> and <code>dom.SetAttr</code> fill it in, and <code>dom.Append(parent, child)</code> puts it at the end of the parent. <code>dom.Remove(el)</code> takes it out again. The todo list below does all of it.</p>
+{{example.web-dom-todo}}
+<p>Read <code>add_task</code> from the top. It reads the field, makes a <code>li</code> with a <code>span</code> for the text and a button, puts them together, adds the row to the list, clears the field and updates the count. The count is not a variable: <code>refresh</code> counts the rows that are on the page, so it can never disagree with them. The page is its own state here, which is fine for a number that is easy to read back.</p>
+<p>The new button needs a handler, and an element that does not exist when the page is written cannot have a <code>click</code> attribute. <code>dom.OnEvent(el, "click", handler)</code> adds one while the page runs. The handler is a lambda, and it remembers the variables around it, so the lambda made for one row removes <em>that</em> row. When the handler must see the event, use <code>dom.OnEventE</code> and a lambda with an <code>i64</code> parameter instead, such as <code>(e: i64): hello(e) end</code>.</p>
+<p>The form of the example matters too. The field and the button sit in a <code>form</code> with <code>submit = add_task</code>, so the Enter key adds a task as well as the button, with no key handling written. The handler calls <code>dom.PreventDefault(e)</code>, because otherwise the browser would send the form and reload the page.</p>
+<div class="note"><p>Text from a user goes into a new element with <code>dom.SetText</code>, never into <code>SetHtml</code>, for the reason given above. Building elements one by one is longer to write, and it is safe.</p></div>
+
+<h2 id="eventobj">What an event tells you</h2>
+<p>A handler declared with an <code>i64</code> parameter receives the event, and a few helpers read it. <code>dom.EventTarget(e)</code> is the element that was hit, <code>dom.EventX(e)</code> and <code>dom.EventY(e)</code> the position of the pointer, <code>dom.EventKey(e)</code> the key, <code>dom.PreventDefault(e)</code> cancels what the browser would do next and <code>dom.StopPropagation(e)</code> stops the event reaching the elements above. Each has its lesson: <a href="/learn/events-mouse/">mouse events</a>, <a href="/learn/events-keys-forms/">keyboard and forms</a>, <a href="/learn/events-drag-touch/">drag, drop and touch</a> and <a href="/learn/events-media-more/">media and the rest</a>.</p>
+<p><code>EventTarget</code> is what lets one handler serve many elements. The seat picker below has eight identical buttons made with <code>repeat = 8</code>, which cannot have eight different ids. The handler asks the event which one was clicked, flips its class, and counts the seats that have it.</p>
+{{example.web-dom-seats}}
+
+<h2 id="timers">Timers and frames</h2>
+<p>Three helpers run a function later. <code>dom.SetTimeout(fn, ms)</code> runs it once after that many milliseconds. <code>dom.SetInterval(fn, ms)</code> runs it again and again. Both return a number, and <code>dom.ClearTimeout(id)</code> and <code>dom.ClearInterval(id)</code> cancel the timer with that number. Keep the number in a top level variable declared <code>mut id := 0 as i64</code>, because a timer you cannot cancel keeps running for as long as the page is open. The functions take a function without parameters, so pass a lambda: <code>(): tick() end</code>.</p>
+<p>The stopwatch starts an interval of 100 milliseconds when you press Start, adds one tenth of a second on every tick, and clears the interval when you press Stop. The toast does it with a timeout: it shows a message, and a second click first cancels the waiting timeout so that the message stays for a full two seconds from the last click.</p>
+{{example.web-dom-stopwatch}}
+{{example.web-dom-toast}}
+<p>A browser does not promise that an interval is exact. It can run late, and a tab in the background runs it a lot less often. The stopwatch counts ticks, which is simple and good enough to show the idea. For a clock that must be right, remember the start with <code>dom.Now()</code> (milliseconds since the page opened) and show the difference on every tick.</p>
+<p>For movement use <code>dom.RequestFrame(fn)</code>. It runs the function once, just before the browser draws the next picture, and passes the time in milliseconds. To keep going, the function asks for the next frame itself. This is smoother than an interval because it follows the screen. The ball below is placed from the time that has passed, and not by adding a fixed step, so it takes the same time on a slow screen and on a fast one.</p>
+{{example.web-dom-slide}}
+<p>If you want a loop that never stops, such as a game, <code>dom.EveryFrame</code> does the asking for you. The CSS lesson on <a href="/learn/css-motion/">transitions and animations</a> comes first, though: when CSS can do the movement, let it.</p>
+
+<h2 id="storage">Remembering after the page closes</h2>
+<p>Variables vanish when the page is closed. <code>dom.StoreSetStr("note", text)</code> keeps a string in the browser's <code>localStorage</code>, <code>dom.StoreGetStr("note")</code> gives it back (an empty string when nothing is stored), and <code>StoreSetInt</code> and <code>StoreGetInt</code> do the same for whole numbers. The data stays on the reader's device, for that site only, until it is cleared. Never store a password or anything private there, and never trust what you read back: it is only a convenience, and the visitor can change it.</p>
+<p>Storage can be unavailable. A private window, a blocked setting or an embedded frame like the preview below can refuse it. The helpers do not stop the page when that happens: a write is dropped and a read gives an empty string, with a warning in the console. Your code should still behave. This note saves as you type and reads the value back to check it, so it can tell the reader when the browser would not keep it. Press the button, or reload a real page, to load the saved note.</p>
+{{example.web-dom-notes}}
+<p>The last line of the page is a small <code>script</code> element. The <code>page:</code> block has no start-up hook, so this line asks the browser to run <code>load_note</code> once the page has been read. It can name the function because a function used as an event handler (here the button's <code>click</code>) is also placed where the browser can find it. Without this line the page would load the note only when you press the button.</p>
+
+<h2 id="dialogs">Alerts, questions and prompts</h2>
+<p>Three helpers use the browser's own dialogs: <code>dom.Alert(message)</code> shows a message, <code>dom.Confirm(question)</code> gives <code>true</code> or <code>false</code>, and <code>dom.Prompt(question)</code> gives the text the reader typed, or an empty string when they cancelled.</p>
+<pre class="code snip" dir="ltr"><code>func wipe:
+    if dom.Confirm("Delete all notes?"):
+        dom.SetText(dom.ById("notes"), "")
+    end
+end
+
+page:
+    paragraph: id = "notes" content = "Three notes" end
+    button: click = wipe content = "Delete all" end
+end</code></pre>
+<p>They are quick to write and poor to live with. The page freezes until the reader answers, you cannot style them, the browser may offer to block them, and a page embedded in another page is often not allowed to show them, in which case <code>Confirm</code> quietly answers <code>false</code>. Use them for a first test of an idea, and in a finished page use a <code>dialog</code> element (<a href="/learn/page-structure/">page structure</a>) or a message inside the page like the toast above.</p>
+
+<h2 id="reuse">Components, repeat and handlers</h2>
+<p>A <code>component</code> is a piece of page you can use more than once, and its handlers can use the component's parameters. In the poll below, the lambda in <code>Choice</code> calls <code>vote(name)</code> with the name its own copy was made with, and the counter has an id built from the same name, so each copy counts its own votes.</p>
+{{example.web-dom-poll}}
+<p>Two limits are worth knowing. A lambda in a page attribute takes no event parameter, so when a handler needs the event, name a function that has one, as the seat picker does. And a plain page is fixed: <code>repeat = 8</code> makes eight identical copies, but <code>each</code> and <code>if</code> need runtime values and work only in a page with parameters, which the server fills in (error E133 otherwise). That kind of page is covered in <a href="/learn/layout/">the first lesson of this part</a>, and its ids must be different in every copy, so use a class or <code>EventTarget</code> there.</p>
+
+<h2 id="quiz">Putting it together: a quiz</h2>
+<p>Here is a bigger one with a little of everything. The state is three variables: which question is showing, the score, and whether the current question has been answered. The questions are not in the markup. One function returns the question and its answers as a single string, <code>split("|")</code> cuts it into parts, and <code>show_card</code> pours the parts into the page. Adding a question means adding one line.</p>
+{{example.web-dom-quiz}}
+<p>Notice the guard in <code>pick</code>: once a question is answered <code>locked</code> is true and further clicks do nothing, so nobody scores twice. Notice also that Next does nothing until an answer is chosen. Checks like these are state again, and they are cheaper than hiding and showing buttons.</p>
+<p>The pattern for every page in this lesson is the same. Decide what the page must remember. Write one function that draws it. Make each handler change the state and call the drawing function.</p>
+
+<h2 id="debug">When it does not work</h2>
+<ul>
+<li><strong>Open the browser console</strong> (F12, then Console). An error in a handler appears there with its line, and nothing appears on the page. Most of the problems below are visible in it.</li>
+<li><strong>Print what you want to know.</strong> <code>println "count is", count</code> in a handler writes to the console, as <code>console.log</code> would. It is the simplest way to see whether a handler runs at all and what the state is.</li>
+<li><strong>Nothing happens on click.</strong> Check that the function name is not a name the browser already owns (<code>reset</code>, <code>open</code>, <code>close</code>, <code>focus</code>; see the note in <a href="/learn/events-mouse/">the mouse lesson</a>), and that there is no <code>main</code> in the file. A call written with parentheses, <code>click = more()</code>, is not a silent failure: the compiler rejects it with error E137, because the attribute wants the function itself.</li>
+<li><strong>"Cannot read properties of null".</strong> An id or selector matched nothing. Compare it with the page, and remember that ids built at run time are not checked by the compiler.</li>
+<li><strong>The page changes, then changes back.</strong> A form was sent. Call <code>dom.PreventDefault(e)</code> in its <code>submit</code> handler.</li>
+<li><strong>A list is out of date.</strong> A <code>QueryAll</code> result is a snapshot. Ask again after you add or remove elements.</li>
+<li><strong>Persian text is counted wrong.</strong> <code>str.len()</code> counts bytes in the browser. For what the reader sees use <code>textLength</code> as above.</li>
+</ul>
+<pre class="code snip" dir="ltr"><code>mut clicks := 0
+
+func more:
+    clicks += 1
+    println "clicks:", clicks
+end
+
+page:
+    button: click = more content = "Click and watch the console" end
+end</code></pre>
+<div class="note"><p>Everything the page does in the browser can be seen and changed by the reader. Check anything that matters, such as prices, rights and limits, again on the server. <a href="/learn/layout/">The first lesson of this part</a> shows how a Salam program serves a page, and the <a href="/std/dom/">dom package page</a> lists every helper with its signature.</p></div>
+
+<h2 id="practice">Try it yourself</h2>
+<ul>
+<li>Make the todo list keep its tasks: save the text of every task with <code>StoreSetStr</code> when the list changes, and read it back when the page opens, as the notes example does.</li>
+<li>Add a fourth question to the quiz, and under the final score a line that tells the reader how many answers were right in a row.</li>
+<li>Turn the stopwatch into a countdown: start from 30 seconds, stop at zero, and use <code>dom.SetTimeout</code> or the interval to show a message when time is up.</li>
+<li>Make the accordion close the other panels when one opens, so only one is open at a time. Use <code>QueryAll</code> to visit them all.</li>
+</ul>
+>>

@@ -1,0 +1,56 @@
+import onnx
+import tensor
+import compress
+import encoding.protobuf
+
+func text(b &: compress.ByteBuf, field: int, value: str):
+    protobuf.WriteTag(b, field, protobuf.WT_LEN)
+    protobuf.WriteLenPrefixedStr(b, value)
+end
+
+func sub(b &: compress.ByteBuf, field: int, message: compress.ByteBuf):
+    protobuf.WriteTag(b, field, protobuf.WT_LEN)
+    protobuf.WriteLenPrefixedBytes(b, message.data, compress.BufLen(message))
+end
+
+func relu_model(): compress.ByteBuf:
+    mut node := compress.NewByteBuf()
+    text(node, 1, "x")
+    text(node, 2, "y")
+    text(node, 4, "Relu")
+    mut input_x := compress.NewByteBuf()
+    text(input_x, 1, "x")
+    mut output_y := compress.NewByteBuf()
+    text(output_y, 1, "y")
+    mut graph := compress.NewByteBuf()
+    sub(graph, 1, node)
+    sub(graph, 11, input_x)
+    sub(graph, 12, output_y)
+    mut m := compress.NewByteBuf()
+    protobuf.WriteTag(m, 1, protobuf.WT_VARINT)
+    protobuf.WriteVarint(m, 8 as u64)
+    sub(m, 7, graph)
+    ret m
+end
+
+func main:
+    mut ok := false
+    junk := "this is not a model"
+    _ := onnx.ParseOnnx(junk as void*, junk.len(), ok)
+    println "junk parsed:", ok
+
+    mut bytes := relu_model()
+    mut model := onnx.ParseOnnx(bytes.data, compress.BufLen(bytes), ok)
+    println "model parsed:", ok, "inputs:", model.feed_names().len()
+
+    mut nothing := Vector {} as Vector<tensor.Tensor>
+    _ := onnx.Run(model, nothing, ok)
+    println "run without inputs:", ok, "|", model.error
+
+    mut feeds := Vector {} as Vector<tensor.Tensor>
+    feeds.push(tensor.Arange(4) - tensor.Full(tensor.Shape1(4), 2.0))
+    results := onnx.Run(model, feeds, ok)
+    println "run with x:", ok, tensor.ToString(results.get(0))
+    model.free()
+    compress.BufFree(bytes)
+end

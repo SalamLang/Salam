@@ -1,0 +1,832 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package sql
+
+import str
+
+const TK_EOF := 0
+const TK_IDENT := 1
+const TK_KEYWORD := 2
+const TK_NUMBER := 3
+const TK_STRING := 4
+const TK_BLOB := 5
+const TK_PARAM := 6
+const TK_SYM := 7
+
+const CH_NUL := '\x00'
+
+k_sql_keywords := [
+    "ABORT", "ACTION", "ADD", "AFTER", "ALL", "ALTER", "ALWAYS", "ANALYZE", "AND", "ANY", "AS",
+    "ASC", "ATTACH", "AUTOINCREMENT", "AUTO_INCREMENT", "BEFORE", "BEGIN", "BETWEEN", "BINARY",
+    "BOTH", "BY", "CASCADE", "CASE", "CAST", "CHANGE", "CHARACTER", "CHECK", "COLLATE", "COLUMN",
+    "COMMENT", "COMMIT", "CONFLICT", "CONSTRAINT", "CREATE", "CROSS", "CURRENT", "CURRENT_DATE",
+    "CURRENT_TIME", "CURRENT_TIMESTAMP", "DATABASE", "DEFAULT", "DEFERRABLE", "DEFERRED", "DELAYED",
+    "DELETE", "DESC", "DETACH", "DISTINCT", "DO", "DROP", "DUPLICATE", "EACH", "ELSE", "END",
+    "ESCAPE", "EXCEPT", "EXCLUDE", "EXCLUSIVE", "EXISTS", "EXPLAIN", "FAIL", "FALSE", "FETCH",
+    "FILTER", "FIRST", "FOLLOWING", "FOR", "FOREIGN", "FROM", "FULL", "GENERATED", "GLOB", "GROUP",
+    "GROUPS", "HAVING", "HIGH_PRIORITY", "IDENTITY", "IF", "IGNORE", "ILIKE", "IMMEDIATE", "IN",
+    "INDEX", "INDEXED", "INITIALLY", "INNER", "INSERT", "INSTEAD", "INTERSECT", "INTO", "IS",
+    "ISNULL", "JOIN", "KEY", "LAST", "LATERAL", "LEADING", "LEFT", "LIKE", "LIMIT", "LOCK",
+    "LOW_PRIORITY", "MATCH", "MATERIALIZED", "MODIFY", "NATURAL", "NEXT", "NO", "NOT", "NOTHING",
+    "NOTNULL", "NULL", "NULLS", "OF", "OFFSET", "ON", "ONLY", "OPTION", "OR", "ORDER", "OTHERS",
+    "OUTER", "OVER", "PARTITION", "PLAN", "PRAGMA", "PRECEDING", "PRIMARY", "QUERY", "RAISE",
+    "RANGE", "RECURSIVE", "REFERENCES", "REGEXP", "REINDEX", "RELEASE", "RENAME", "REPLACE",
+    "RESTART", "RESTRICT", "RETURNING", "RIGHT", "ROLLBACK", "ROW", "ROWID", "ROWS", "SAVEPOINT",
+    "SELECT", "SEPARATOR", "SET", "SHARE", "SOME", "STORED", "STRAIGHT_JOIN", "TABLE", "TEMP",
+    "TEMPORARY", "THEN", "TIES", "TO", "TRAILING", "TRANSACTION", "TRIGGER", "TRUE", "TRUNCATE",
+    "UNBOUNDED", "UNION", "UNIQUE", "UNSIGNED", "UPDATE", "USING", "VACUUM", "VALUES", "VERBOSE",
+    "VIEW", "VIRTUAL", "WHEN", "WHERE", "WINDOW", "WITH", "WITHIN", "WITHOUT", "ZEROFILL"
+]
+
+k_sql_hard_keywords := [
+    "ALL", "AND", "AS", "ASC", "BETWEEN", "BY", "CASE", "CROSS", "DEFAULT", "DELETE", "DESC",
+    "DISTINCT", "ELSE", "END", "EXCEPT", "EXISTS", "FROM", "FULL", "GROUP", "HAVING", "IN", "INNER",
+    "INSERT", "INTERSECT", "INTO", "IS", "JOIN", "LEFT", "LIKE", "LIMIT", "NATURAL", "NOT", "NULL",
+    "OFFSET", "ON", "OR", "ORDER", "OUTER", "RETURNING", "RIGHT", "SELECT", "SET", "THEN", "UNION",
+    "UPDATE", "USING", "VALUES", "WHEN", "WHERE", "WITH"
+]
+
+struct Token:
+    pub kind: int = 0
+    pub off: int = 0
+    pub len: int = 0
+    pub line: int = 1
+    pub col: int = 1
+    pub quote: char = CH_NUL
+    pub sub: char = CH_NUL
+end
+
+struct Lexer:
+    pub src: str = ""
+    pub n: int = 0
+    pub i: int = 0
+    pub line: int = 1
+    pub col: int = 1
+    pub d: Dialect = Dialect {}
+    pub toks: Vector<Token> = Vector {}
+end
+
+func char_to_text(c: char): str:
+    empty := ""
+    ret empty + c
+end
+
+func ch_upper(c: char): char:
+    if c >= 'a' and c <= 'z':
+        ret ((c as int) - 32) as char
+    end
+    ret c
+end
+
+func ch_digit(c: char): bool:
+    ret c >= '0' and c <= '9'
+end
+
+func ch_hex(c: char): bool:
+    ret ch_digit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+end
+
+func ch_high(c: char): bool:
+    ret c > '\x7F' or c < '\x00'
+end
+
+func ch_ident_start(c: char): bool:
+    ret (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_' or ch_high(c)
+end
+
+func ch_ident_part(c: char): bool:
+    ret ch_ident_start(c) or ch_digit(c) or c == '$'
+end
+
+func range_eq_fold(src: str, off: int, n: int, word: str): bool:
+    if n != word.len(): ret false end
+    mut i := 0
+    until i < n:
+        if ch_upper(src[off + i]) != ch_upper(word[i]):
+            ret false
+        end
+        i = i + 1
+    end
+    ret true
+end
+
+func kw_index(src: str, off: int, n: int): int:
+    if n < 2 or n > 17: ret 0 - 1 end
+    mut i := 0
+    until i < len(k_sql_keywords):
+        if range_eq_fold(src, off, n, k_sql_keywords[i]):
+            ret i
+        end
+        i = i + 1
+    end
+    ret 0 - 1
+end
+
+func lx_cur(l: Lexer): char:
+    if l.i >= l.n: ret CH_NUL end
+    ret l.src[l.i]
+end
+
+func lx_peek(l: Lexer, k: int): char:
+    j := l.i + k
+    if j >= l.n: ret CH_NUL end
+    ret l.src[j]
+end
+
+func lx_bump(l &: Lexer):
+    if l.i >= l.n: ret end
+    if l.src[l.i] == '\n':
+        l.line = l.line + 1
+        l.col = 1
+    else:
+        l.col = l.col + 1
+    end
+    l.i = l.i + 1
+end
+
+func lx_push(l &: Lexer, kind: int, off: int, line: int, col: int, q: char):
+    l.toks.push(Token { kind = kind, off = off, len = l.i - off, line = line, col = col, quote = q })
+end
+
+func lx_push_sub(l &: Lexer, kind: int, off: int, line: int, col: int, sub: char):
+    l.toks.push(Token { kind = kind, off = off, len = l.i - off, line = line, col = col, sub = sub })
+end
+
+func bump_n(l &: Lexer, n: int):
+    mut k := 0
+    until k < n:
+        lx_bump(l)
+        k = k + 1
+    end
+end
+
+func cp_at(l: Lexer): int:
+    if l.i >= l.n:
+        ret 0 - 1
+    end
+    c0 := (l.src[l.i] as int) & 255
+    if c0 < 128:
+        ret c0
+    end
+    if c0 >= 192 and c0 < 224 and l.i + 1 < l.n:
+        c1 := (l.src[l.i + 1] as int) & 63
+        ret ((c0 & 31) << 6) | c1
+    end
+    if c0 >= 224 and c0 < 240 and l.i + 2 < l.n:
+        c1 := (l.src[l.i + 1] as int) & 63
+        c2 := (l.src[l.i + 2] as int) & 63
+        ret ((c0 & 15) << 12) | (c1 << 6) | c2
+    end
+    ret 0 - 1
+end
+
+func cp_width(cp: int): int:
+    if cp < 128:
+        ret 1
+    end
+    if cp < 2048:
+        ret 2
+    end
+    ret 3
+end
+
+func cp_is_eastern_digit(cp: int): bool:
+    if cp >= 0x06F0 and cp <= 0x06F9:
+        ret true
+    end
+    ret cp >= 0x0660 and cp <= 0x0669
+end
+
+func cp_is_curly_quote(cp: int): bool:
+    if cp == 0x2018 or cp == 0x2019 or cp == 0x201C or cp == 0x201D:
+        ret true
+    end
+    ret cp == 0x00AB or cp == 0x00BB
+end
+
+func cp_is_foreign_punct(cp: int): bool:
+    if cp == 0x00A0 or cp == 0x200B or cp == 0xFEFF:
+        ret true
+    end
+    if cp_is_curly_quote(cp):
+        ret true
+    end
+    if cp == 0x060C or cp == 0x066B or cp == 0x061B or cp == 0x061F:
+        ret true
+    end
+    if cp == 0x00D7 or cp == 0x2212 or cp == 0x2013 or cp == 0x2014:
+        ret true
+    end
+    ret cp == 0xFF08 or cp == 0xFF09
+end
+
+func word_breaks_here(l: Lexer): bool:
+    if not ch_high(lx_cur(l)):
+        ret false
+    end
+    ret cp_is_foreign_punct(cp_at(l))
+end
+
+func lx_eastern_number(l &: Lexer, r &: Report):
+    off := l.i
+    line := l.line
+    col := l.col
+    until true:
+        cp := cp_at(l)
+        if cp_is_eastern_digit(cp):
+            bump_n(l, cp_width(cp))
+            continue
+        end
+        if cp >= 48 and cp <= 57:
+            lx_bump(l)
+            continue
+        end
+        break
+    end
+    add_diag(
+        r, ERROR, "SQL007", "numbers in SQL have to be written with ASCII digits",
+        "write 0 to 9 instead of the Persian or Arabic digits", line, col, off, l.i - off
+    )
+    lx_push(l, TK_NUMBER, off, line, col, CH_NUL)
+end
+
+func lx_curly_string(l &: Lexer, r &: Report):
+    off := l.i
+    line := l.line
+    col := l.col
+    bump_n(l, cp_width(cp_at(l)))
+    mut closed := false
+    until l.i < l.n:
+        cp := cp_at(l)
+        if cp == '\n' as int:
+            break
+        end
+        if cp_is_curly_quote(cp):
+            bump_n(l, cp_width(cp))
+            closed = true
+            break
+        end
+        bump_n(l, cp_width(cp))
+    end
+    if closed:
+        add_diag(
+            r, ERROR, "SQL008", "this text is quoted with typographic quotes",
+            "SQL strings are quoted with ' ... '", line, col, off, l.i - off
+        )
+    else:
+        add_diag(
+            r, ERROR, "SQL001", "unterminated string literal",
+            "SQL strings are quoted with ' ... '", line, col, off, l.i - off
+        )
+    end
+    lx_push(l, TK_STRING, off, line, col, '\'')
+end
+
+func lx_foreign(l &: Lexer, r &: Report, cp: int): bool:
+    if cp < 128:
+        ret false
+    end
+    if cp == 0x00A0 or cp == 0x200B or cp == 0x200C or cp == 0x200D or cp == 0xFEFF:
+        off := l.i
+        line := l.line
+        col := l.col
+        bump_n(l, cp_width(cp))
+        add_diag(
+            r, ERROR, "SQL006", "an invisible character is in this statement",
+            "delete it: only a plain space separates words in SQL", line, col, off, l.i - off
+        )
+        ret true
+    end
+    if cp_is_eastern_digit(cp):
+        lx_eastern_number(l, r)
+        ret true
+    end
+    if cp_is_curly_quote(cp):
+        lx_curly_string(l, r)
+        ret true
+    end
+    mut sub := CH_NUL
+    mut label := ""
+    if cp == 0x060C or cp == 0x066B:
+        sub = ','
+        label = "an Arabic comma"
+    else cp == 0x061B:
+        sub = ';'
+        label = "an Arabic semicolon"
+    else cp == 0x061F:
+        sub = '?'
+        label = "an Arabic question mark"
+    else cp == 0x00D7:
+        sub = '*'
+        label = "a multiplication sign"
+    else cp == 0x2212 or cp == 0x2013 or cp == 0x2014:
+        sub = '-'
+        label = "a dash"
+    else cp == 0xFF08:
+        sub = '('
+        label = "a wide parenthesis"
+    else cp == 0xFF09:
+        sub = ')'
+        label = "a wide parenthesis"
+    else:
+        ret false
+    end
+    off := l.i
+    line := l.line
+    col := l.col
+    bump_n(l, cp_width(cp))
+    one := l.src.substr(off, l.i - off)
+    add_diag(
+        r, ERROR, "SQL005", label + " '" + one + "' is not SQL punctuation", "write '" + char_to_text(sub) + "' instead",
+        line, col, off, l.i - off
+    )
+    lx_push_sub(l, TK_SYM, off, line, col, sub)
+    ret true
+end
+
+func lx_line_comment(l &: Lexer):
+    until l.i < l.n and lx_cur(l) != '\n':
+        lx_bump(l)
+    end
+end
+
+func lx_trivia(l &: Lexer, r &: Report):
+    until l.i < l.n:
+        c := lx_cur(l)
+        if c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\x0B' or c == '\x0C':
+            lx_bump(l)
+            continue
+        end
+        if c == '-' and lx_peek(l, 1) == '-':
+            lx_line_comment(l)
+            continue
+        end
+        if c == '#' and l.d.hash_comment:
+            lx_line_comment(l)
+            continue
+        end
+        if c == '/' and lx_peek(l, 1) == '*':
+            off := l.i
+            line := l.line
+            col := l.col
+            lx_bump(l)
+            lx_bump(l)
+            mut closed := false
+            until l.i < l.n:
+                if lx_cur(l) == '*' and lx_peek(l, 1) == '/':
+                    lx_bump(l)
+                    lx_bump(l)
+                    closed = true
+                    break
+                end
+                lx_bump(l)
+            end
+            if not closed:
+                add_diag(
+                    r, ERROR, "SQL002", "unterminated block comment", "close the comment with */",
+                    line, col, off, l.i - off
+                )
+            end
+            continue
+        end
+        break
+    end
+end
+
+func lx_string(l &: Lexer, r &: Report, q: char, kind: int, prefix: int):
+    off := l.i
+    line := l.line
+    col := l.col
+    mut k := 0
+    until k < prefix:
+        lx_bump(l)
+        k = k + 1
+    end
+    lx_bump(l)
+    mut closed := false
+    until l.i < l.n:
+        c := lx_cur(l)
+        if c == '\\' and l.d.backslash_escape:
+            lx_bump(l)
+            if l.i < l.n: lx_bump(l) end
+            continue
+        end
+        if c == q:
+            if lx_peek(l, 1) == q:
+                lx_bump(l)
+                lx_bump(l)
+                continue
+            end
+            lx_bump(l)
+            closed = true
+            break
+        end
+        lx_bump(l)
+    end
+    if not closed:
+        add_diag(
+            r, ERROR, "SQL001", "unterminated string literal", "close it with a matching quote",
+            line, col, off, l.i - off
+        )
+    end
+    lx_push(l, kind, off, line, col, q)
+end
+
+func lx_qident(l &: Lexer, r &: Report, close: char, doubling: bool):
+    off := l.i
+    line := l.line
+    col := l.col
+    lx_bump(l)
+    mut closed := false
+    until l.i < l.n:
+        c := lx_cur(l)
+        if c == close:
+            if doubling and lx_peek(l, 1) == close:
+                lx_bump(l)
+                lx_bump(l)
+                continue
+            end
+            lx_bump(l)
+            closed = true
+            break
+        end
+        lx_bump(l)
+    end
+    if not closed:
+        add_diag(
+            r, ERROR, "SQL003", "unterminated quoted name", "close the name with a matching quote",
+            line, col, off, l.i - off
+        )
+    end
+    lx_push(l, TK_IDENT, off, line, col, close)
+end
+
+func lx_number(l &: Lexer):
+    off := l.i
+    line := l.line
+    col := l.col
+    if lx_cur(l) == '0' and (lx_peek(l, 1) == 'x' or lx_peek(l, 1) == 'X'):
+        lx_bump(l)
+        lx_bump(l)
+        until l.i < l.n and ch_hex(lx_cur(l)):
+            lx_bump(l)
+        end
+        lx_push(l, TK_NUMBER, off, line, col, CH_NUL)
+        ret
+    end
+    until l.i < l.n and ch_digit(lx_cur(l)):
+        lx_bump(l)
+    end
+    if lx_cur(l) == '.':
+        lx_bump(l)
+        until l.i < l.n and ch_digit(lx_cur(l)):
+            lx_bump(l)
+        end
+    end
+    c := lx_cur(l)
+    if c == 'e' or c == 'E':
+        nx := lx_peek(l, 1)
+        signed_exp := (nx == '+' or nx == '-') and ch_digit(lx_peek(l, 2))
+        if ch_digit(nx) or signed_exp:
+            lx_bump(l)
+            if lx_cur(l) == '+' or lx_cur(l) == '-':
+                lx_bump(l)
+            end
+            until l.i < l.n and ch_digit(lx_cur(l)):
+                lx_bump(l)
+            end
+        end
+    end
+    lx_push(l, TK_NUMBER, off, line, col, CH_NUL)
+end
+
+func lx_dollar_string(l &: Lexer, r &: Report): bool:
+    mut j := l.i + 1
+    until j < l.n and l.src[j] != '$' and ch_ident_part(l.src[j]):
+        j = j + 1
+    end
+    if j >= l.n:
+        ret false
+    end
+    if l.src[j] != '$':
+        ret false
+    end
+    tag_len := j + 1 - l.i
+    off := l.i
+    line := l.line
+    col := l.col
+    mut k := 0
+    until k < tag_len:
+        lx_bump(l)
+        k = k + 1
+    end
+    mut closed := false
+    until l.i < l.n:
+        if lx_cur(l) == '$' and l.i + tag_len <= l.n and bytes_eq(l.src, l.i, off, tag_len):
+            mut m := 0
+            until m < tag_len:
+                lx_bump(l)
+                m = m + 1
+            end
+            closed = true
+            break
+        end
+        lx_bump(l)
+    end
+    if not closed:
+        add_diag(
+            r, ERROR, "SQL001", "unterminated dollar-quoted string",
+            "close it with the same $tag$ it opened with", line, col, off, l.i - off
+        )
+    end
+    lx_push(l, TK_STRING, off, line, col, '$')
+    ret true
+end
+
+func bytes_eq(src: str, a: int, b: int, n: int): bool:
+    mut i := 0
+    until i < n:
+        if src[a + i] != src[b + i]:
+            ret false
+        end
+        i = i + 1
+    end
+    ret true
+end
+
+func lx_param(l &: Lexer, r &: Report):
+    off := l.i
+    line := l.line
+    col := l.col
+    c := lx_cur(l)
+    lx_bump(l)
+    if c == '?':
+        until l.i < l.n and ch_digit(lx_cur(l)):
+            lx_bump(l)
+        end
+        if not l.d.qmark_param:
+            add_diag(
+                r, ERROR, "SQL201", "'?' is not a placeholder in " + l.d.name,
+                "postgres numbers its placeholders: $1, $2", line, col, off, l.i - off
+            )
+        end
+    else c == '$':
+        until l.i < l.n and ch_ident_part(lx_cur(l)):
+            lx_bump(l)
+        end
+        if not l.d.numbered_param:
+            add_diag(
+                r, ERROR, "SQL202", "'$1' is not a placeholder in " + l.d.name,
+                "this driver binds by position with ?", line, col, off, l.i - off
+            )
+        end
+    else:
+        until l.i < l.n and ch_ident_part(lx_cur(l)):
+            lx_bump(l)
+        end
+        if not l.d.named_param:
+            add_diag(
+                r, ERROR, "SQL203", "named placeholders are not supported by " + l.d.name,
+                "bind by position instead", line, col, off, l.i - off
+            )
+        end
+    end
+    lx_push(l, TK_PARAM, off, line, col, c)
+end
+
+func sym_width(l: Lexer, c: char): int:
+    nx := lx_peek(l, 1)
+    if c == '<' and (nx == '>' or nx == '=' or nx == '<'): ret 2 end
+    if c == '>' and (nx == '=' or nx == '>'): ret 2 end
+    if c == '!' and nx == '=': ret 2 end
+    if c == '=' and nx == '=': ret 2 end
+    if c == '|' and nx == '|': ret 2 end
+    if c == '&' and nx == '&': ret 2 end
+    if c == ':' and nx == ':': ret 2 end
+    if c == '-' and nx == '>':
+        if lx_peek(l, 2) == '>': ret 3 end
+        ret 2
+    end
+    if c == '#' and nx == '>':
+        if lx_peek(l, 2) == '>': ret 3 end
+        ret 2
+    end
+    if c == '@' and nx == '>': ret 2 end
+    if c == '@' and nx == '@': ret 2 end
+    if c == '^' and nx == '@': ret 2 end
+    if c == '~' and nx == '*': ret 2 end
+    if c == '?' and (nx == '|' or nx == '&'): ret 2 end
+    if c == '!' and nx == '~':
+        if lx_peek(l, 2) == '*': ret 3 end
+        ret 2
+    end
+    if c == '<' and nx == '-':
+        if lx_peek(l, 2) == '>': ret 3 end
+        ret 1
+    end
+    if c == '<' and nx == '@': ret 2 end
+    ret 1
+end
+
+func sym_known(c: char): bool:
+    if c == '(' or c == ')' or c == ',' or c == '.' or c == ';':
+        ret true
+    end
+    if c == '*' or c == '+' or c == '-' or c == '/' or c == '%':
+        ret true
+    end
+    if c == '=' or c == '<' or c == '>' or c == '!':
+        ret true
+    end
+    if c == '|' or c == '&' or c == '^' or c == '~':
+        ret true
+    end
+    if c == '[' or c == ']' or c == '{' or c == '}':
+        ret true
+    end
+    if c == ':' or c == '#' or c == '@' or c == '?':
+        ret true
+    end
+    ret false
+end
+
+func lx_sym(l &: Lexer, r &: Report):
+    off := l.i
+    line := l.line
+    col := l.col
+    c := lx_cur(l)
+    if not sym_known(c):
+        lx_bump(l)
+        add_diag(
+            r, ERROR, "SQL004", "unexpected character in SQL",
+            "remove it or quote it as part of a literal", line, col, off, 1
+        )
+        ret
+    end
+    w := sym_width(l, c)
+    mut k := 0
+    until k < w:
+        lx_bump(l)
+        k = k + 1
+    end
+    lx_push(l, TK_SYM, off, line, col, CH_NUL)
+end
+
+func lx_word(l &: Lexer):
+    off := l.i
+    line := l.line
+    col := l.col
+    until l.i < l.n and ch_ident_part(lx_cur(l)) and not word_breaks_here(l):
+        lx_bump(l)
+    end
+    mut kind := TK_IDENT
+    if kw_index(l.src, off, l.i - off) >= 0:
+        kind = TK_KEYWORD
+    end
+    lx_push(l, kind, off, line, col, CH_NUL)
+end
+
+func lex_into(l &: Lexer, r &: Report):
+    until true:
+        lx_trivia(l, r)
+        if l.i >= l.n:
+            break
+        end
+        c := lx_cur(l)
+        nx := lx_peek(l, 1)
+        if c == '\'':
+            lx_string(l, r, '\'', TK_STRING, 0)
+            continue
+        end
+        if c == '"':
+            if l.d.double_quoted_string:
+                lx_string(l, r, '"', TK_STRING, 0)
+            else:
+                lx_qident(l, r, '"', true)
+            end
+            continue
+        end
+        if c == '`':
+            if l.d.backtick_ident:
+                lx_qident(l, r, '`', true)
+            else:
+                off := l.i
+                line := l.line
+                col := l.col
+                lx_bump(l)
+                add_diag(
+                    r, ERROR, "SQL204", "backtick names are not supported by " + l.d.name,
+                    "quote the name with \" instead", line, col, off, 1
+                )
+            end
+            continue
+        end
+        if c == '[' and l.d.bracket_ident:
+            lx_qident(l, r, ']', false)
+            continue
+        end
+        if (c == 'x' or c == 'X' or c == 'b' or c == 'B') and nx == '\'':
+            lx_string(l, r, '\'', TK_BLOB, 1)
+            continue
+        end
+        if (c == 'e' or c == 'E' or c == 'n' or c == 'N') and nx == '\'':
+            lx_string(l, r, '\'', TK_STRING, 1)
+            continue
+        end
+        if ch_digit(c):
+            lx_number(l)
+            continue
+        end
+        if c == '.' and ch_digit(nx):
+            lx_number(l)
+            continue
+        end
+        if c == '$' and l.d.dollar_string and not ch_digit(nx):
+            if lx_dollar_string(l, r):
+                continue
+            end
+        end
+        if c == '?' and l.d.qmark_param:
+            lx_param(l, r)
+            continue
+        end
+        if c == '$' and ch_digit(nx):
+            lx_param(l, r)
+            continue
+        end
+        if (c == ':' and nx != ':' and ch_ident_start(nx)) or (c == '@' and ch_ident_start(nx)):
+            lx_param(l, r)
+            continue
+        end
+        if ch_high(c):
+            if lx_foreign(l, r, cp_at(l)):
+                continue
+            end
+        end
+        if ch_ident_start(c):
+            lx_word(l)
+            continue
+        end
+        lx_sym(l, r)
+    end
+    l.toks.push(Token { kind = TK_EOF, off = l.n, len = 0, line = l.line, col = l.col })
+end
+
+func tok_text(src: str, t: Token): str:
+    ret src.substr(t.off, t.len)
+end
+
+func tok_is_kw(src: str, t: Token, word: str): bool:
+    if t.kind != TK_KEYWORD: ret false end
+    ret range_eq_fold(src, t.off, t.len, word)
+end
+
+func tok_is_sym(src: str, t: Token, word: str): bool:
+    if t.kind != TK_SYM:
+        ret false
+    end
+    if t.sub != CH_NUL:
+        if word.len() != 1:
+            ret false
+        end
+        ret word[0] == t.sub
+    end
+    ret range_eq_fold(src, t.off, t.len, word)
+end
+
+func tok_is_hard_kw(src: str, t: Token): bool:
+    if t.kind != TK_KEYWORD: ret false end
+    mut i := 0
+    until i < len(k_sql_hard_keywords):
+        if range_eq_fold(src, t.off, t.len, k_sql_hard_keywords[i]):
+            ret true
+        end
+        i = i + 1
+    end
+    ret false
+end
+
+func tok_name(src: str, t: Token): str:
+    if t.quote == CH_NUL or t.len < 2:
+        ret src.substr(t.off, t.len)
+    end
+    inner := src.substr(t.off + 1, t.len - 2)
+    if t.quote == ']':
+        ret inner
+    end
+    dq := t.quote == '"' ? "\"\"" : "``"
+    one := t.quote == '"' ? "\"" : "`"
+    ret str.Replace(inner, dq, one)
+end

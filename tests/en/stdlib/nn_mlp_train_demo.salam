@@ -1,0 +1,92 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import autograd
+import data
+import matrix
+import nn
+import optim
+import tensor
+import testing
+
+struct Mlp:
+    pub fc1: nn.Linear = nn.Linear {}
+    pub fc2: nn.Linear = nn.Linear {}
+
+    pub func forward(tp &: autograd.Tape, ps &: nn.ParamStore, x: int): int:
+        h := autograd.Relu(tp, this.fc1.forward(tp, ps, x))
+        ret this.fc2.forward(tp, ps, h)
+    end
+end
+
+func main:
+    mut ym := matrix.Matrix {}
+    mut xm := data.MakeClassification(1000, 16, 10, 4.0, 42, ym)
+    mut x := tensor.FromMatrix(xm)
+    n := xm.rows
+    mut targets := Vector {} as Vector<int>
+    repeat n in i: targets.push(ym.at(i, 0) as int) end
+    matrix.Free(xm)
+    matrix.Free(ym)
+
+    mut ps := nn.ParamStore {}
+    mut g := tensor.NewRng(7)
+    mut model := Mlp {}
+    model.fc1 = nn.NewLinear(ps, "fc1", 16, 64, g)
+    model.fc2 = nn.NewLinear(ps, "fc2", 64, 10, g)
+    mut opt := optim.SGD { lr = 0.2, momentum = 0.9 }
+
+    mut tp := autograd.NewTape(1)
+    mut first_loss := 0.0
+    mut last_loss := 0.0
+    repeat 120 in step:
+        tp.reset()
+        ps.zero_grad()
+        xid := autograd.Input(tp, x)
+        logits := model.forward(tp, ps, xid)
+        loss := autograd.CrossEntropyLogits(tp, logits, targets)
+        lv := autograd.Value(tp, loss)
+        if step == 0: first_loss = lv.at(0) end
+        last_loss = lv.at(0)
+        autograd.Backward(tp, loss)
+        opt.step(ps)
+    end
+
+    testing.AssertTrue(first_loss > 1.5)
+    testing.AssertTrue(last_loss < 0.15)
+
+    tp.reset()
+    tp.training = false
+    xid := autograd.Input(tp, x)
+    logits := model.forward(tp, ps, xid)
+    lv := autograd.Value(tp, logits)
+    mut preds := tensor.ArgMaxAxis(lv, 1, false)
+    mut hits := 0
+    repeat n in i:
+        if (preds.at(i) as int) == targets.get(i): hits += 1 end
+    end
+    acc := (hits as f64) / (n as f64)
+    testing.AssertTrue(acc >= 0.97)
+
+    tp.free()
+    opt.free()
+    ps.free()
+    tensor.Free(x)
+    tensor.Free(preds)
+    targets.free()
+
+    ret testing.Summary()
+end

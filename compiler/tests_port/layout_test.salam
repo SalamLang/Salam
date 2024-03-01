@@ -1,0 +1,228 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import str
+import testing
+
+include tok "../token.salam"
+include src "../source.salam"
+include lg "../logger.salam"
+include dg "../diag.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+include lx "../lexer/lexer.salam"
+include at "../ast.salam"
+include ps "../parser/parser.salam"
+include cc "../condcomp.salam"
+include sm "../semantic/semantic.salam"
+include lo "../sal_layout/sal_layout.salam"
+
+quiet := lg.New(lg.LOG_OFF, false)
+
+func gen(source_text: str): lo.Result:
+    mut sf := src.New()
+    sf.path = "<test>"
+    sf.text = source_text
+    sf.len = str.Len(source_text)
+    pack := lx.Detect(sf, lp.Load("en"))
+    mut toks := tok.StreamNew("<test>")
+    _lok := lx.Run(quiet, pack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    _pok := ps.Run(quiet, toks, a, prog)
+    tok.StreamFree(toks)
+    table := cc.TableBuild("", Vector {} as Vector<str>)
+    _ck := cc.PruneProgram(a, quiet, "<test>", table, prog)
+    _eerr := lo.Expand(quiet, pack, table, a, prog, "")
+    mut s := sm.New(quiet, "<test>", lp.Code(pack))
+    sm.SetCc(s, table)
+    _sok := sm.Run(s, a, prog)
+    lb := lo.FindLayout(a, prog)
+    mut diag := dg.NewDefault(2, false, 6)
+    r := lo.Generate(quiet, diag, "<test>", a, lb, true, lp.Code(pack))
+    dg.Free(diag)
+    sm.Free(s)
+    at.FreeAst(a)
+    ret r
+end
+
+func basic_element_cases:
+    r1 := gen("page:\n    heading: size = 3 content = \"Title\" end\nend\n")
+    testing.AssertEqStr(r1.html, "<h3>Title</h3>")
+    testing.AssertEqStr(r1.css, "")
+    testing.AssertEqStr(r1.title, "Salam Page")
+    testing.AssertEqStr(r1.lang, "en")
+    testing.AssertEqStr(r1.dir, "ltr")
+
+    r2 := gen(
+        "page:\n    heading: size = 0 content = \"A\" end\n" + "    heading: size = 9 content = \"B\" end\nend\n"
+    )
+    testing.AssertEqStr(r2.html, "<h1>A</h1><h6>B</h6>")
+
+    r3 := gen("page:\n    frobnicate: content = \"x\" end\nend\n")
+    testing.AssertEqStr(r3.html, "<div>x</div>")
+
+    r4 := gen("page:\n    box:\n        paragraph: content = \"p\" end\n    end\nend\n")
+    testing.AssertEqStr(r4.html, "<div><p>p</p></div>")
+end
+
+func css_class_cases:
+    r := gen(
+        "page:\n    box:\n        padding = \"10px\"\n        color = \"red\"\n" + "        hover_color = \"blue\"\n" + "        heading: size = 2 content = \"Hi\" end\n" + "        paragraph: content = \"world\" hover_color = \"green\" end\n" + "    end\nend\n"
+    )
+    testing.AssertEqStr(r.html, `<div class="a"><h2>Hi</h2><p class="b">world</p></div>`)
+    testing.AssertEqStr(r.css, ".a{padding:10px;color:red}.a:hover{color:blue}.b:hover{color:green}")
+
+    r2 := gen("page:\n    box: class = \"myclass\" color = \"red\" end\nend\n")
+    testing.AssertEqStr(r2.html, `<div class="myclass"></div>`)
+    testing.AssertEqStr(r2.css, ".myclass{color:red}")
+
+    r3 := gen("page:\n    box: color = \"red\" end\n    box: color = \"red\" end\nend\n")
+    testing.AssertEqStr(r3.html, `<div class="a"></div><div class="a"></div>`)
+    testing.AssertEqStr(r3.css, ".a{color:red}")
+end
+
+func pseudo_and_length_cases:
+    r := gen(
+        "page:\n    box:\n        before_content = \"*\"\n" + "        after_content = \"!\"\n" + "        focus_color = \"green\"\n" + "        active_color = \"navy\"\n    end\nend\n"
+    )
+    testing.AssertEqStr(r.html, `<div class="a"></div>`)
+    testing.AssertEqStr(
+        r.css, ".a:focus{color:green}.a:active{color:navy}" + `.a::before{content:"*"}.a::after{content:"!"}`
+    )
+
+    r2 := gen("page:\n    box: width = \"10\" height = \"2 em\" end\nend\n")
+    testing.AssertEqStr(r2.css, ".a{width:10px;height:2em}")
+end
+
+func media_style_script_global_cases:
+    r := gen(
+        "page:\n" + "    style: content = \"body{color:red}\" end\n" + "    global: selector = \".x\" color = \"red\" end\n" + "    box: width = \"10 px\" end\n" + "    media: condition = \"(max-width: 600px)\" color = \"blue\" end\n" + "    script: content = \"console.log(1)\" end\nend\n"
+    )
+    testing.AssertEqStr(r.html, `<div class="b"></div>`)
+    testing.AssertEqStr(
+        r.css, "body{color:red}.x{color:red}.b{width:10px}" + "@media (max-width: 600px){.body{color:blue}}"
+    )
+    testing.AssertEqStr(r.js, "console.log(1) ")
+
+    r2 := gen(
+        "page:\n    box:\n        color = \"red\"\n" + "        media: color = \"blue\" end\n    end\nend\n"
+    )
+    testing.AssertEqStr(r2.css, ".a{color:red}@media all{.a{color:blue}}")
+end
+
+func special_elements_cases:
+    r := gen(
+        "page:\n    meta: name = \"description\" content = \"hi \\\"there\\\"\" end\n" + "    head_link: rel = \"preload\" href = \"/a.css\" as = \"style\" end\nend\n"
+    )
+    testing.AssertEqStr(
+        r.head, `<meta name="description" content="hi &quot;there&quot;">` + `<link rel="preload" href="/a.css" as="style">`
+    )
+    testing.AssertEqStr(r.html, "")
+
+    r2 := gen(
+        "page:\n" + "    link: source = \"/p\" content = \"go\" end\n" + "    image: source = \"/i.png\" content = \"alt text\" end\n" + "    input: type = \"textarea\" content = \"hello\" end\n" + "    input: type = \"text\" required = true end\n" + "    canvas: width = \"100\" height = \"50\" end\n" + "    iframe: src = \"/f\" end\nend\n"
+    )
+    testing.AssertEqStr(
+        r2.html, `<a href="/p">go</a>` + `<img src="/i.png" alt="alt text">` + "<textarea>hello</textarea>" + `<input type="text" required>` + `<canvas width="100" height="50"></canvas>` + `<iframe src="/f"></iframe>`
+    )
+
+    r3 := gen("page:\n    link: source = \"/x\"\n        paragraph: content = \"y\" end\n    end\nend\n")
+    testing.AssertEqStr(r3.html, `<a href="/x"><p>y</p></a>`)
+end
+
+func document_attrs_cases:
+    r := gen(
+        "page:\n    title = \"T\"\n    lang = \"farsi\"\n" + "    dir = \"right to left\"\n    favicon = \"/f.ico\"\n" + "    heading: size = 1 content = \"H\" end\nend\n"
+    )
+    testing.AssertEqStr(r.title, "T")
+    testing.AssertEqStr(r.lang, "fa")
+    testing.AssertEqStr(r.dir, "rtl")
+    testing.AssertEqStr(r.head, `<link rel="icon" href="/f.ico">`)
+    testing.AssertEqStr(r.html, "<h1>H</h1>")
+
+    r2 := gen("page:\n    repeat = 3\n    paragraph: content = \"x\" end\nend\n")
+    testing.AssertEqStr(r2.html, "<p>x</p><p>x</p><p>x</p>")
+
+    r3 := gen("page:\n    paragraph: repeat = 2 content = \"y\" end\nend\n")
+    testing.AssertEqStr(r3.html, "<p>y</p><p>y</p>")
+
+    r4 := gen("page:\n    content = \"a & b\"\nend\n")
+    testing.AssertEqStr(r4.html, "a &amp; b")
+end
+
+func document_wrap_cases:
+    r := gen("page:\n    title = \"Wrap\"\n    box: color = \"red\" end\nend\n")
+    compact_href := lo.Document(r, false, "s.css", "s.js", true)
+    testing.AssertEqStr(
+        compact_href, `<!doctype html><html lang="en" dir="ltr"><head>` + `<meta charset="utf-8">` + `<meta name="viewport" content="width=device-width, initial-scale=1">` + `<title>Wrap</title><link rel="stylesheet" href="s.css">` + `</head><body><div class="a"></div>` + `<script src="s.js"></script></body></html>`
+    )
+    compact_inline := lo.Document(r, true, "", "", true)
+    testing.AssertEqStr(
+        compact_inline, `<!doctype html><html lang="en" dir="ltr"><head>` + `<meta charset="utf-8">` + `<meta name="viewport" content="width=device-width, initial-scale=1">` + `<title>Wrap</title><style>.a{color:red}</style>` + `</head><body><div class="a"></div></body></html>`
+    )
+    plain := lo.Document(r, false, "", "", false)
+    testing.AssertEqStr(
+        plain, "<!doctype html>\n<html lang=\"en\" dir=\"ltr\">\n<head>\n" + "  <meta charset=\"utf-8\">\n" + "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n" + "  <title>Wrap</title>\n</head>\n<body>\n<div class=\"a\"></div>" + "</body>\n</html>\n"
+    )
+end
+
+func include_component_cases:
+    r := gen(
+        "component card(title = \"T\", body = \"B\"):\n" + "    box:\n" + "        heading: size = 3 content = \"{title}\" end\n" + "        paragraph: content = \"{body}\" end\n" + "    end\nend\n" + "page:\n    card: title = \"Hi\" end\n    card: end\nend\n"
+    )
+    testing.AssertEqStr(
+        r.html, "<div><h3>Hi</h3><p>B</p></div><div><h3>T</h3><p>B</p></div>"
+    )
+
+    r2 := gen(
+        "component panel():\n    box:\n        content: end\n    end\nend\n" + "page:\n    panel:\n        paragraph: content = \"inside\" end\n    end\nend\n"
+    )
+    testing.AssertEqStr(r2.html, "<div><p>inside</p></div>")
+end
+
+func schema_cases:
+    mut errs := sm.LayoutSchemaErrors()
+    testing.AssertEqInt(errs.len(), 0)
+    errs.free()
+end
+
+func context_variant_cases:
+    r := gen(
+        "page:\n    header: content = \"h\" end\n" + "    table:\n        header: row: column: content = \"a\" end end end\n" + "        main: row: column: content = \"b\" end end end\n    end\nend\n"
+    )
+    testing.AssertEqStr(
+        r.html, "<header>h</header><table><thead><tr><th>a</th></tr></thead><tbody><tr><td>b</td></tr></tbody></table>"
+    )
+    r2 := gen("page:\n    table: row: column: content = \"x\" end end end\nend\n")
+    testing.AssertEqStr(r2.html, "<table><tr><td>x</td></tr></table>")
+end
+
+func main:
+    i18.SetLang("en")
+    sm.LayoutSchemaInit(sm.GetStdlibRoot())
+    schema_cases()
+    context_variant_cases()
+    basic_element_cases()
+    css_class_cases()
+    pseudo_and_length_cases()
+    media_style_script_global_cases()
+    special_elements_cases()
+    document_attrs_cases()
+    document_wrap_cases()
+    include_component_cases()
+    ret testing.Summary()
+end

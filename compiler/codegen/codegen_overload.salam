@@ -1,0 +1,224 @@
+package codegen
+
+import str
+
+include tok "../token.salam"
+include at "../ast.salam"
+include sm "../semantic/semantic.salam"
+
+func pick_overload(s &: sm.Sema, a &: at.Ast, fsym: int, call: int): int:
+    mut fallback := 0
+    fs := sm.SymAt(s, fsym)
+    cn := at.Get(a, call)
+    repeat fs.overloads.len() in i:
+        sg := fs.overloads.get(i)
+        if fallback == 0:
+            fallback = sg
+        end
+        sv := sm.SigAt(s, sg)
+        if cn.list.len() < sv.required:
+            continue
+        end
+        if not sv.variadic and cn.list.len() > sv.params.len():
+            continue
+        end
+        mut nfix := cn.list.len()
+        if nfix > sv.params.len():
+            nfix = sv.params.len()
+        end
+        mut ok := true
+        repeat nfix in j:
+            argn := at.Get(a, cn.list.get(j))
+            pt := sm.ToString(s, sv.params.get(j))
+            if str.Len(argn.type_str) == 0 or not str.Equals(argn.type_str, pt):
+                ok = false
+                break
+            end
+        end
+        if ok:
+            ret sg
+        end
+    end
+    ret fallback
+end
+
+func struct_in_home(s &: sm.Sema, home: int, name: str): int:
+    sy := sm.Lookup(s, home, name)
+    if sy != 0 and sm.SymAt(s, sy).kind == sm.SYM_STRUCT:
+        ret sy
+    end
+    ret 0
+end
+
+func struct_by_name(s &: sm.Sema, name: str): int:
+    sy := sm.Lookup(s, s.global, name)
+    if sy != 0 and sm.SymAt(s, sy).kind == sm.SYM_STRUCT:
+        ret sy
+    end
+    gsc := sm.ScopeAt(s, s.global)
+    repeat gsc.symbols.len() in i:
+        symid := gsc.symbols.get(i)
+        sv := sm.SymAt(s, symid)
+        if sv.kind == sm.SYM_STRUCT and sv.ty != sm.TYPE_NONE and str.Equals(sm.TypeAt(s, sv.ty).name, name) and str.Len(sm.TypeAt(s, sv.ty).name) > 0:
+            ret symid
+        end
+    end
+    repeat gsc.symbols.len() in i2:
+        pkid := gsc.symbols.get(i2)
+        pk := sm.SymAt(s, pkid)
+        if pk.kind != sm.SYM_PACKAGE or pk.members == 0:
+            continue
+        end
+        psc := sm.ScopeAt(s, pk.members)
+        repeat psc.symbols.len() in j:
+            symid2 := psc.symbols.get(j)
+            sv2 := sm.SymAt(s, symid2)
+            if sv2.kind != sm.SYM_STRUCT:
+                continue
+            end
+            if str.Equals(sv2.name, name):
+                ret symid2
+            end
+            if sv2.ty != sm.TYPE_NONE and str.Len(sm.TypeAt(s, sv2.ty).name) > 0 and str.Equals(sm.TypeAt(s, sv2.ty).name, name):
+                ret symid2
+            end
+        end
+    end
+    repeat s.pkg_cache_syms.len() in ci:
+        pkid2 := s.pkg_cache_syms.get(ci)
+        if pkid2 == 0:
+            continue
+        end
+        pk2 := sm.SymAt(s, pkid2)
+        if pk2.kind != sm.SYM_PACKAGE or pk2.members == 0:
+            continue
+        end
+        psc2 := sm.ScopeAt(s, pk2.members)
+        repeat psc2.symbols.len() in j2:
+            symid3 := psc2.symbols.get(j2)
+            sv3 := sm.SymAt(s, symid3)
+            if sv3.kind != sm.SYM_STRUCT:
+                continue
+            end
+            if str.Equals(sv3.name, name):
+                ret symid3
+            end
+            if sv3.ty != sm.TYPE_NONE and str.Len(sm.TypeAt(s, sv3.ty).name) > 0 and str.Equals(sm.TypeAt(s, sv3.ty).name, name):
+                ret symid3
+            end
+        end
+    end
+    ret 0
+end
+
+func cg_addressable(s &: sm.Sema, a &: at.Ast, n: int): bool:
+    k := at.KindOf(a, n)
+    if k == at.AST_MEMBER:
+        ret cg_addressable(s, a, at.Get(a, n).a)
+    end
+    if k == at.AST_INDEX:
+        cont := at.Get(a, n).a
+        cts := at.Get(a, cont).type_str
+        if str.EndsWith(cts, "*"):
+            ret true
+        end
+        if str.Len(cts) > 0:
+            mut sname := ""
+            css := cg_struct_of(s, cts, sname)
+            if css != 0 and sm.LookupLocal(
+                s, sm.SymAt(s, css).members, "operator_index"
+            ) != 0:
+                ret false
+            end
+        end
+        ret cg_addressable(s, a, cont)
+    end
+    ret k == at.AST_IDENTIFIER or k == at.AST_THIS or k == at.AST_STRUCT_LIT
+end
+
+func cg_struct_of(s &: sm.Sema, ts: str, sname &: str): int:
+    mut ptr := false
+    mut dims := Vector {} as Vector<int>
+    defer dims.free()
+    parse_typestr(ts, 96, sname, ptr, dims)
+    if dims.len() > 0 or cg_is_slice_ts(ts):
+        ret 0
+    end
+    ret struct_by_name(s, sname)
+end
+
+func cg_op_method(k: int): str:
+    if k == tok.TK_PLUS:
+        ret "operator_add"
+    end
+    if k == tok.TK_MINUS:
+        ret "operator_sub"
+    end
+    if k == tok.TK_STAR:
+        ret "operator_mul"
+    end
+    if k == tok.TK_SLASH:
+        ret "operator_div"
+    end
+    if k == tok.TK_PERCENT:
+        ret "operator_mod"
+    end
+    if k == tok.TK_POWER:
+        ret "operator_pow"
+    end
+    if k == tok.TK_EQ:
+        ret "operator_eq"
+    end
+    if k == tok.TK_NE:
+        ret "operator_ne"
+    end
+    if k == tok.TK_LT:
+        ret "operator_lt"
+    end
+    if k == tok.TK_GT:
+        ret "operator_gt"
+    end
+    if k == tok.TK_LE:
+        ret "operator_le"
+    end
+    if k == tok.TK_GE:
+        ret "operator_ge"
+    end
+    ret ""
+end
+
+func cg_compound_base(k: int): int:
+    if k == tok.TK_PLUS_EQ:
+        ret tok.TK_PLUS
+    end
+    if k == tok.TK_MINUS_EQ:
+        ret tok.TK_MINUS
+    end
+    if k == tok.TK_STAR_EQ:
+        ret tok.TK_STAR
+    end
+    if k == tok.TK_SLASH_EQ:
+        ret tok.TK_SLASH
+    end
+    if k == tok.TK_PERCENT_EQ:
+        ret tok.TK_PERCENT
+    end
+    if k == tok.TK_POWER_EQ:
+        ret tok.TK_POWER
+    end
+    ret tok.TK_EOF
+end
+
+func pick_op_overload(s &: sm.Sema, msym: int, want_nparams: int): int:
+    mut fallback := 0
+    ms := sm.SymAt(s, msym)
+    repeat ms.overloads.len() in i:
+        sg := ms.overloads.get(i)
+        if sm.SigAt(s, sg).params.len() == want_nparams:
+            if fallback == 0:
+                fallback = sg
+            end
+        end
+    end
+    ret fallback
+end

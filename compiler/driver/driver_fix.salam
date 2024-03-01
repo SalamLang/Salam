@@ -1,0 +1,176 @@
+package driver
+
+import io
+import os
+import str
+
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include co "../sal_core.salam"
+include sm "../semantic/semantic.salam"
+include pth "../sal_path.salam"
+
+struct FixEdit:
+    pub file: str = ""
+    pub b: int = 0
+    pub e: int = 0
+    pub text: str = ""
+end
+
+func fix_group_end(i: int): int:
+    f0 := lg.FixAt(i)
+    mut k := i + 1
+    until k < lg.FixCount() and lg.FixAt(k).rec == f0.rec and str.Equals(lg.FixAt(k).title, f0.title):
+        k += 1
+    end
+    ret k
+end
+
+func fix_source(texts &: HashMap<str, str>, file: str): str:
+    if not texts.has(file):
+        mut text := ""
+        if os.Exists(file) and not os.IsDir(file):
+            text = io.ReadFile(file)
+        end
+        texts.put(file, text)
+    end
+    ret texts.get(file)
+end
+
+func fix_in_std(file: str): bool:
+    root := sm.GetStdlibRoot()
+    if str.Len(root) == 0:
+        ret false
+    end
+    ret str.StartsWith(file, pth.PathJoin(root, "std"))
+end
+
+func collect_safe_fixes(texts &: HashMap<str, str>, edits &: Vector<FixEdit>):
+    mut done := HashMap {} as HashMap<int, bool>
+    defer done.free()
+    mut i := 0
+    until i < lg.FixCount():
+        k := fix_group_end(i)
+        f0 := lg.FixAt(i)
+        if f0.safe and f0.preferred and not done.has(f0.rec):
+            mut group := Vector {} as Vector<FixEdit>
+            mut ok := true
+            mut q := i
+            until q < k:
+                fq := lg.FixAt(q)
+                text := fix_source(texts, fq.file)
+                mut b := 0
+                mut e := 0
+                mut nt := ""
+                if str.Len(fq.file) == 0 or fix_in_std(fq.file) or str.Len(text) == 0 or not lg.ResolveFix(text, fq, b, e, nt):
+                    ok = false
+                    break
+                end
+                group.push(FixEdit { file = fq.file, b = b, e = e, text = nt })
+                q += 1
+            end
+            if ok:
+                each g in group:
+                    edits.push(g)
+                end
+                done.put(f0.rec, true)
+            end
+            group.free()
+        end
+        i = k
+    end
+end
+
+func apply_file_fixes(file: str, text: str, edits: Vector<FixEdit>): int:
+    mut mine := Vector {} as Vector<FixEdit>
+    defer mine.free()
+    each ed in edits:
+        if not str.Equals(ed.file, file):
+            continue
+        end
+        mut at_i := mine.len()
+        until at_i > 0 and mine.get(at_i - 1).b > ed.b:
+            at_i -= 1
+        end
+        mine.insert(at_i, ed)
+    end
+    mut out := str.NewBuilder()
+    mut pos := 0
+    mut last_b := 0 - 1
+    mut last_e := 0
+    mut last_text := ""
+    mut count := 0
+    each ed in mine:
+        if ed.b == last_b and ed.e == last_e and str.Equals(ed.text, last_text):
+            continue
+        end
+        if ed.b < pos:
+            continue
+        end
+        str.BufAppend(out, str.Substr(text, pos, ed.b - pos))
+        str.BufAppend(out, ed.text)
+        pos = ed.e
+        last_b = ed.b
+        last_e = ed.e
+        last_text = ed.text
+        count += 1
+    end
+    if count == 0:
+        str.BufFree(out)
+        ret 0
+    end
+    str.BufAppend(out, str.Substr(text, pos, str.Len(text) - pos))
+    fixed := str.BufStr(out)
+    str.BufFree(out)
+    if io.WriteFile(file, fixed) < 0:
+        io.EPrintln(co.Format1(i18.Tr("salam: cannot write '%s'"), co.ArgStr(file)))
+        ret 0
+    end
+    ret count
+end
+
+func apply_check_fixes(): int:
+    mut texts := HashMap {} as HashMap<str, str>
+    defer texts.free()
+    mut edits := Vector {} as Vector<FixEdit>
+    defer edits.free()
+    collect_safe_fixes(texts, edits)
+    mut files := Vector {} as Vector<str>
+    defer files.free()
+    each ed in edits:
+        mut seen := false
+        each f in files:
+            if str.Equals(f, ed.file):
+                seen = true
+            end
+        end
+        if not seen:
+            files.push(ed.file)
+        end
+    end
+    mut total := 0
+    each f in files:
+        n := apply_file_fixes(f, texts.get(f), edits)
+        if n > 0:
+            println co.Format2(i18.Tr("%s: applied %d fix(es)"), co.ArgStr(f), co.ArgInt(n as i64))
+            total += n
+        end
+    end
+    ret total
+end
+
+func check_fix(opt &: Dr): int:
+    mut quiet := opt
+    quiet.check_fix = false
+    quiet.log_level = lg.LOG_OFF
+    lg.SetRecord(true)
+    _first := Inspect(quiet)
+    applied := apply_check_fixes()
+    lg.SetRecord(false)
+    if applied == 0:
+        println i18.Tr("salam: nothing to fix automatically")
+    end
+    mut again := opt
+    again.check_fix = false
+    ret Inspect(again)
+end

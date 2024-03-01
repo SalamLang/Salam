@@ -1,0 +1,442 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "os"
+@fa "سیستم عامل"
+package os
+
+import mem
+import str
+import io
+import filepath
+
+extern:
+    func salam_open(path: str, mode: str): File*
+    func salam_os_listdir(path: str, out_count: void*): void*
+    func getenv(name: str): void*
+    noret func exit(code: int)
+    noret func abort()
+    func remove(path: str): int
+    func rename(old: str, new_path: str): int
+    func fopen(path: str, mode: str): void*
+    func fseek(fp: void*, off: int, whence: int): int
+    func ftell(fp: void*): int
+    func fclose(fp: void*): int
+    func system(cmd: str): int
+    func fgets(buf: void*, n: int, fp: void*): void*
+    func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _wmkdir(path: void*): int
+        func _wrmdir(path: void*): int
+        func _wchdir(path: void*): int
+        func GetCurrentDirectoryW(sz: int, buf: void*): int
+        func GetFileAttributesW(path: void*): int
+        func DeleteFileW(path: void*): int
+        func MoveFileExW(old: void*, new_path: void*, flags: u32): int
+        func _wopen(path: void*, flags: int, mode: int): int
+        func _fdopen(fd: int, mode: str): void*
+        func MultiByteToWideChar(codepage: u32, flags: u32, src: str, srclen: i32, dst: void*, dstlen: i32): i32
+        func WideCharToMultiByte(codepage: u32, flags: u32, src: void*, srclen: i32, dst: void*, dstlen: i32, def: void*, used: void*): i32
+        func _popen(cmd: str, mode: str): void*
+        func _pclose(fp: void*): int
+        func _getpid(): int
+    end
+else:
+    extern:
+        func mkdir(path: str, mode: int): int
+        func rmdir(path: str): int
+        func chdir(path: str): int
+        func access(path: str, mode: int): int
+        func getcwd(buf: void*, sz: int): void*
+        func opendir(path: str): void*
+        func closedir(d: void*): int
+        func popen(cmd: str, mode: str): void*
+        func pclose(fp: void*): int
+        func getpid(): int
+    end
+end
+
+const COPY_CHUNK := 65536
+
+@en "FileInfo"
+@fa "اطلاعات پرونده"
+pub struct FileInfo:
+    @en "size"
+    @fa "اندازه"
+    pub size: i64 = 0
+    @en "is_dir"
+    @fa "پوشه است"
+    pub is_dir: bool = false
+    @en "exists"
+    @fa "هست"
+    pub exists: bool = false
+end
+
+@en "CmdResult"
+@fa "نتیجه فرمان"
+pub struct CmdResult:
+    @en "code"
+    @fa "کد"
+    pub code: int = 0
+    @en "out"
+    @fa "خروجی"
+    pub out: str = ""
+end
+
+if SALAM_OS_WINDOWS:
+    func _str_to_wide(s: str): void*:
+        n := MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, null, 0)
+        if n <= 0:
+            ret mem.Allocate(2 as u64)
+        end
+        w := mem.Allocate((n * 2) as u64)
+        MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, w, n)
+        ret w
+    end
+
+    func _wide_to_str(w: void*): str:
+        if w == null: ret "" end
+        n := WideCharToMultiByte(65001 as u32, 0 as u32, w, 0 - 1, null, 0, null, null)
+        if n <= 0: ret "" end
+        buf := mem.Allocate(n as u64)
+        WideCharToMultiByte(65001 as u32, 0 as u32, w, 0 - 1, buf, n, null, null)
+        ret buf as str
+    end
+
+    func _wopen_flags(mode: str): int:
+        O_RDONLY := 0
+        O_WRONLY := 1
+        O_APPEND := 8
+        O_CREAT := 256
+        O_TRUNC := 512
+        O_BINARY := 32768
+        if mode.len() == 0:
+            ret O_RDONLY | O_BINARY
+        end
+        c := mode.substr(0, 1)
+        if c == "w":
+            ret O_WRONLY | O_CREAT | O_TRUNC | O_BINARY
+        end
+        if c == "a":
+            ret O_WRONLY | O_CREAT | O_APPEND | O_BINARY
+        end
+        ret O_RDONLY | O_BINARY
+    end
+end
+
+func _fopen_compat(path: str, mode: str): void*:
+    if SALAM_OS_WINDOWS:
+        S_IREAD_IWRITE := 384
+        wpath := _str_to_wide(path)
+        fd := _wopen(wpath, _wopen_flags(mode), S_IREAD_IWRITE)
+        mem.Free(wpath)
+        if fd < 0: ret null end
+        ret _fdopen(fd, mode)
+    else:
+        ret fopen(path, mode)
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    func _proc_open(cmd: str): void*: ret _popen(cmd, "r") end
+
+    func _proc_close(fp: void*): int: ret _pclose(fp) end
+
+    func _proc_pid(): int: ret _getpid() end
+
+    func _proc_status(code: int): int: ret code end
+else:
+    func _proc_open(cmd: str): void*: ret popen(cmd, "r") end
+
+    func _proc_close(fp: void*): int: ret pclose(fp) end
+
+    func _proc_pid(): int: ret getpid() end
+
+    func _proc_status(code: int): int:
+        if code < 0: ret -1 end
+        ret (code / 256) % 256
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    func _os_mkdir(path: str): int:
+        w := _str_to_wide(path)
+        r := _wmkdir(w)
+        mem.Free(w)
+        if r == 0: ret 0 end
+        ret 0 - 1
+    end
+
+    func _os_rmdir(path: str): int:
+        w := _str_to_wide(path)
+        r := _wrmdir(w)
+        mem.Free(w)
+        if r == 0: ret 0 end
+        ret 0 - 1
+    end
+
+    func _os_chdir(path: str): int:
+        w := _str_to_wide(path)
+        r := _wchdir(w)
+        mem.Free(w)
+        if r == 0: ret 0 end
+        ret 0 - 1
+    end
+
+    func _os_cwd(): str:
+        buf := mem.Allocate((2048 as u64) * (2 as u64))
+        n := GetCurrentDirectoryW(2048, buf)
+        mut s := ""
+        if n > 0 and n < 2048: s = _wide_to_str(buf) end
+        mem.Free(buf)
+        ret s
+    end
+
+    func _os_exists(path: str): bool:
+        w := _str_to_wide(path)
+        r := GetFileAttributesW(w)
+        mem.Free(w)
+        ret r != (0 - 1)
+    end
+
+    func _os_is_dir(path: str): bool:
+        w := _str_to_wide(path)
+        attr := GetFileAttributesW(w)
+        mem.Free(w)
+        if attr == (0 - 1): ret false end
+        ret (attr / 16) % 2 == 1
+    end
+else:
+    func _os_mkdir(path: str): int: if mkdir(path, 511) == 0: ret 0 end ret -1 end
+
+    func _os_rmdir(path: str): int: if rmdir(path) == 0: ret 0 end ret -1 end
+
+    func _os_chdir(path: str): int: if chdir(path) == 0: ret 0 end ret -1 end
+
+    func _os_cwd(): str:
+        buf := mem.Allocate(2048 as u64)
+        r := getcwd(buf, 2048)
+        mut s := ""
+        if r != null: s = str.Clone(r as str) end
+        mem.Free(buf)
+        ret s
+    end
+
+    func _os_exists(path: str): bool:
+        ret access(path, 0) == 0
+    end
+
+    func _os_is_dir(path: str): bool:
+        d := opendir(path)
+        if d == null: ret false end
+        closedir(d)
+        ret true
+    end
+end
+
+@en "Open"
+@fa "بازکردن"
+pub func Open(path: str, mode: str): File*: ret salam_open(path, mode) end
+
+@en "Exit"
+@fa "خروج"
+pub noret func Exit(code: int): exit(code) end
+
+@en "Abort"
+@fa "توقف ناگهانی"
+pub noret func Abort(): abort() end
+
+@en "Args"
+@fa "آرگومان ها"
+pub func Args(): Vector<str>: ret args() end
+
+@en "Env"
+@fa "متغیر محیطی"
+pub func Env(name: str): str:
+    v := getenv(name)
+    if v == null: ret "" end
+    ret str.Clone(v as str)
+end
+
+@en "Remove"
+@fa "حذف"
+pub func Remove(path: str): int:
+    if SALAM_OS_WINDOWS:
+        w := _str_to_wide(path)
+        r := DeleteFileW(w)
+        mem.Free(w)
+        if r != 0: ret 0 end
+        ret 0 - 1
+    else:
+        if remove(path) == 0: ret 0 end
+        ret 0 - 1
+    end
+end
+
+@en "Mkdir"
+@fa "ساخت پوشه"
+pub func Mkdir(path: str): int: ret _os_mkdir(path) end
+
+@en "Rmdir"
+@fa "حذف پوشه"
+pub func Rmdir(path: str): int: ret _os_rmdir(path) end
+
+@en "Copy"
+@fa "کپی"
+pub func Copy(src: str, dst: str): int:
+    fin := _fopen_compat(src, "rb")
+    if fin == null: ret 0 - 1 end
+    fout := _fopen_compat(dst, "wb")
+    if fout == null:
+        _shut := fclose(fin)
+        ret 0 - 1
+    end
+    buf := mem.Allocate(COPY_CHUNK as u64)
+    if buf == null:
+        _a := fclose(fin)
+        _b := fclose(fout)
+        ret 0 - 1
+    end
+    mut failed := false
+    mut going := true
+    until going:
+        got := fread(buf, 1 as u64, COPY_CHUNK as u64, fin)
+        if got == 0 as u64:
+            going = false
+        else:
+            if fwrite(buf, 1 as u64, got, fout) != got:
+                failed = true
+                going = false
+            end
+        end
+    end
+    mem.Free(buf)
+    _a := fclose(fin)
+    if fclose(fout) != 0: failed = true end
+    if failed: ret 0 - 1 end
+    ret 0
+end
+
+@en "Move"
+@fa "جابجایی"
+pub func Move(src: str, dst: str): int:
+    if SALAM_OS_WINDOWS:
+        wsrc := _str_to_wide(src)
+        wdst := _str_to_wide(dst)
+        r := MoveFileExW(wsrc, wdst, 0 as u32)
+        mem.Free(wsrc)
+        mem.Free(wdst)
+        if r != 0: ret 0 end
+        ret 0 - 1
+    else:
+        if rename(src, dst) == 0: ret 0 end
+        ret 0 - 1
+    end
+end
+
+@en "ListDir"
+@fa "فهرست پوشه"
+pub func ListDir(path: str): Vector<str>: ret listdir(path) end
+
+@en "IsDir"
+@fa "پوشه است"
+pub func IsDir(path: str): bool: ret _os_is_dir(path) end
+
+@en "Walk"
+@fa "پیمایش"
+pub func Walk(root: str): Vector<str>:
+    files := Vector {} as Vector<str> stack := Vector {} as Vector<str> defer stack.free()
+    stack.push(root)
+    until stack.len() > 0:
+        dir := stack.pop()
+        entries := listdir(dir)
+        repeat entries.len() in i:
+            name := entries.get(i)
+            full := filepath.Join(dir, name)
+            if _os_is_dir(full):
+                stack.push(full)
+            else:
+                files.push(full)
+            end
+        end
+        entries.free()
+    end
+    ret files
+end
+
+@en "Exists"
+@fa "وجود دارد"
+pub func Exists(path: str): bool: ret _os_exists(path) end
+
+@en "Cwd"
+@fa "پوشه جاری"
+pub func Cwd(): str: ret _os_cwd() end
+
+@en "Chdir"
+@fa "تغییر پوشه"
+pub func Chdir(path: str): int: ret _os_chdir(path) end
+
+@en "TempDir"
+@fa "پوشه موقت"
+pub func TempDir(): str:
+    t := Env("TEMP")
+    if t.len() > 0: ret t end
+    t2 := Env("TMP")
+    if t2.len() > 0: ret t2 end
+    t3 := Env("TMPDIR")
+    if t3.len() > 0: ret t3 end
+    ret "/tmp"
+end
+
+@en "ReadFile"
+@fa "خواندن پرونده"
+pub func ReadFile(path: str): str: ret io.ReadFile(path) end
+
+@en "WriteFile"
+@fa "نوشتن پرونده"
+pub func WriteFile(path: str, data: str): int: ret io.WriteFile(path, data) end
+
+@en "AppendFile"
+@fa "افزودن به پرونده"
+pub func AppendFile(path: str, data: str): int: ret io.AppendFile(path, data) end
+
+@en "FileSize"
+@fa "اندازه پرونده"
+pub func FileSize(path: str): i64:
+    fp := _fopen_compat(path, "rb")
+    if fp == null: ret 0 - 1 end
+    fseek(fp, 0, 2)
+    n := ftell(fp)
+    fclose(fp)
+    ret n
+end
+
+@en "Stat"
+@fa "وضعیت پرونده"
+pub func Stat(path: str): FileInfo:
+    if _os_exists(path) == false:
+        ret FileInfo { size = 0, is_dir = false, exists = false }
+    end
+    dir := _os_is_dir(path)
+    mut sz := 0 as i64
+    if dir == false:
+        sz = FileSize(path)
+        if sz < 0: sz = 0 end
+    end
+    ret FileInfo { size = sz, is_dir = dir, exists = true }
+end

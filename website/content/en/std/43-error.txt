@@ -1,0 +1,70 @@
+pkg.en = error
+pkg.name = error
+pkg.group = System and tools
+pkg.summary = The one Error type behind throw, try and catch: a kind, a message, where it happened, and a retry policy.
+pkg.title = The error package in Salam | Error, ErrorKind, throw, try and catch
+pkg.description = The error package in Salam: the Error type that throw, try and catch carry, its kinds, wrapping an error with context, positions for parsers, and a retry policy with exponential backoff, with examples.
+pkg.intro <<
+<p>A function that can fail says so in its signature with <code>throws</code>, and reports the failure with <code>throw</code>. The caller either passes the error on with <code>try</code>, or handles it in a <code>try: ... catch e: ... end</code> block. What travels is always an <code>Error</code> from this package, so an error from a JSON decoder, a file read and your own code all look the same to the caller. <code>Error</code> and <code>ErrorKind</code> need no import; import <code>error</code> only for the helper functions below.</p>
+<p>An <code>Error</code> has a <strong>kind</strong>, such as <code>ErrorKind.NotFound</code>, for the code to decide on, and a <strong>message</strong> for a person to read. Parsers also fill in where the problem is: an <code>offset</code>, a <code>line</code> and <code>column</code>, and a <code>path</code> such as <code>$.users[3].age</code>. A package can put a precise <code>code</code> of its own, such as <code>json.trailing_data</code>, next to the general kind. When an error passes through a layer that knows more, <code>wrap</code> adds that layer's explanation in front, and the kind stays the same.</p>
+<p>Under the hood a <code>throws</code> function returns a <code>Throws</code> value, and <code>try</code> checks it right after the call. Nothing is unwound and nothing is hidden: <code>defer</code> runs as with any other early return, and a call that can throw always carries <code>try</code> or sits inside a <code>try:</code> block. A bug, such as an index out of bounds, is not an error value: it still stops the program, and <code>catch</code> does not see it.</p>
+<p>Neighbouring packages: <a href="/std/result/">result</a> and <a href="/std/option/">option</a> keep a value or its absence in one place, when you want to store a result instead of handling it right away.</p>
+<p>The things people get wrong:</p>
+<ul>
+<li>A call to a <code>throws</code> function needs <code>try</code> in front of it, or a <code>try:</code> block around it. The compiler refuses it otherwise (E139).</li>
+<li><code>try</code> on its own passes the error to the caller, so it only works in a function that is itself <code>throws</code> (E140). In <code>main</code>, either declare <code>func main throws:</code> or use a <code>try:</code> block.</li>
+<li><code>try x catch fallback</code> evaluates the fallback first, every time. Keep it a plain value.</li>
+<li><code>wrap</code>, <code>with_code</code>, <code>with_path</code> and <code>with_position</code> return a new error and leave the old one as it was.</li>
+<li>Decide by <code>kind</code> or <code>is</code>, not by reading the message: messages are for people and may change.</li>
+</ul>
+
+<h2 id="guide-layers">Errors through the layers of a program</h2>
+<p>A typical program has layers: one reads data, the next builds something from it, and the top one answers a user. Each layer that can fail is <code>throws</code>. A middle layer that has something to add catches the error, wraps it, and throws it again; the top layer decides what to do by <strong>kind</strong>.</p>
+{{example.error-guide-layers}}
+<p>Wrapping keeps the kind of the original error, so the top layer can still see that the root cause was "not found" and answer 404. The <code>code</code> carries a detail, here the missing id, that the code can read without parsing text.</p>
+
+<h2 id="guide-retry">A retry loop</h2>
+<p><code>ShouldRetry</code> answers the whole question in one call: is the error the kind that may go away by itself (<code>Unavailable</code>, <code>Timeout</code> or <code>Io</code>), and are there attempts left? <code>DelayForAttempt</code> gives the wait before the next try, doubling each time up to the maximum. When the attempts run out, the last error is wrapped and thrown to the caller.</p>
+{{example.error-guide-retry}}
+<p>An invalid argument is never retried: sending the same bad request again gives the same answer. In a server, keep the total wait well below the time the caller is willing to wait for you.</p>
+
+<h2 id="guide-validate">Collect every problem at once</h2>
+<p>For a form or a config file, stopping at the first mistake makes the user fix them one by one. An <code>Error</code> is an ordinary value, so collect them in a vector instead and show them all, with <code>path</code> naming the field each one is about. Throw once at the end if any were found.</p>
+{{example.error-guide-validate}}
+
+<h2 id="guide-kinds">Choosing a kind</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Kind</th><th>Use it when</th><th>Retry?</th></tr></thead>
+<tbody>
+<tr><td><code>Syntax</code></td><td>The input does not follow its format</td><td>No</td></tr>
+<tr><td><code>UnexpectedEnd</code></td><td>The input stopped in the middle of something</td><td>No</td></tr>
+<tr><td><code>TypeMismatch</code></td><td>A value has the wrong type, such as text where a number belongs</td><td>No</td></tr>
+<tr><td><code>MissingKey</code></td><td>A required key or field is absent</td><td>No</td></tr>
+<tr><td><code>OutOfRange</code></td><td>A number or index is outside what is allowed</td><td>No</td></tr>
+<tr><td><code>InvalidArgument</code></td><td>The caller passed bad input</td><td>No</td></tr>
+<tr><td><code>NotFound</code></td><td>The thing asked for does not exist</td><td>No</td></tr>
+<tr><td><code>PermissionDenied</code></td><td>The caller may not do this</td><td>No</td></tr>
+<tr><td><code>Unavailable</code></td><td>A service is down or busy</td><td>Yes</td></tr>
+<tr><td><code>Timeout</code></td><td>Something took too long</td><td>Yes</td></tr>
+<tr><td><code>Io</code></td><td>A file or device operation failed</td><td>Yes</td></tr>
+<tr><td><code>Internal</code></td><td>A broken invariant inside the program</td><td>No</td></tr>
+</tbody>
+</table></div>
+<p>Keep messages short and in lower case without a final full stop, because <code>to_str</code> joins the context and the message with ": " into one sentence.</p>
+>>
+
+doc.RetryPolicy = A retry policy.
+doc.RetryPolicy.max_attempts = The greatest number of attempts; three by default.
+doc.RetryPolicy.base_delay_ms = The delay after the first failed attempt, in milliseconds; 100 by default.
+doc.RetryPolicy.max_delay_ms = The ceiling on the delay, in milliseconds; 5000 by default.
+doc.KindName = A short English name for a kind, such as "not found"; <code>to_str</code> uses it when the message is empty.
+doc.IsRetryable = True when the error is transient and worth retrying: a timeout, an unavailable service or a read or write error.
+doc.NewRetryPolicy = Builds a policy with a maximum number of attempts and a base and maximum delay.
+doc.DelayForAttempt = How many milliseconds to wait after attempt number <code>attempt</code> failed: the base delay after the first, then doubling each time up to the ceiling. It does not sleep.
+doc.ShouldRetry = True when the error is retryable and <code>attempt</code> is still below <code>max_attempts</code>.
+
+ex.KindName = error-RetryPolicy
+ex.IsRetryable = error-RetryPolicy
+ex.NewRetryPolicy = error-RetryPolicy
+ex.DelayForAttempt = error-RetryPolicy
+ex.ShouldRetry = error-RetryPolicy

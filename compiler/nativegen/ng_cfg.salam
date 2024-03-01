@@ -1,0 +1,771 @@
+package nativegen
+
+func is_term(op: int): bool:
+    ret op == OP_BR or op == OP_CBR or op == OP_RET or op == OP_UNREACH
+end
+
+func val_mask(op: int): int:
+    switch op:
+        OP_LOAD, OP_FNEG, OP_EXTV, OP_CALL, OP_CBR: ret 1 end
+        OP_RET, OP_MULHU, OP_I64TOF: ret 3 end
+        OP_STORE, OP_ADDR, OP_ICMP, OP_FCMP, OP_INSV, OP_RMW: ret 3 end
+        OP_SELECT, OP_CMPXCHG, OP_CMP64, OP_ADC64, OP_DIV6432: ret 7 end
+        OP_COPY, OP_VBCAST, OP_VREDADD, OP_VREDH, OP_VREDMM, OP_VSADB, OP_VREV: ret 1 end
+    end
+    if op >= OP_ADD and op <= OP_FREM:
+        ret 3
+    end
+    if op >= OP_SEXT and op <= OP_FPTRUNC:
+        ret 1
+    end
+    ret 0
+end
+
+func resolve(g &: Ng, v: int): int:
+    if v < 0:
+        ret v
+    end
+    mut r := v
+    until g.v_repl[r] >= 0:
+        r = g.v_repl[r]
+    end
+    mut x := v
+    until g.v_repl[x] >= 0:
+        nx := g.v_repl[x]
+        g.v_repl[x] = r
+        x = nx
+    end
+    ret r
+end
+
+func repl_reset(g &: Ng):
+    if g.ev_fv.len() > 0:
+        dv_resolve_all(g)
+    end
+    g.v_repl.clear()
+    repeat g.v_kind.len():
+        g.v_repl.push(0 - 1)
+    end
+end
+
+func repl_grow(g &: Ng):
+    until g.v_repl.len() < g.v_kind.len():
+        g.v_repl.push(0 - 1)
+    end
+end
+
+func remap_ins(g &: Ng, i: int):
+    m := val_mask(g.i_op[i])
+    if (m & 1) != 0:
+        g.i_a[i] = resolve(g, g.i_a[i])
+    end
+    if (m & 2) != 0:
+        g.i_b[i] = resolve(g, g.i_b[i])
+    end
+    if (m & 4) != 0:
+        g.i_c[i] = resolve(g, g.i_c[i])
+    end
+    op := g.i_op[i]
+    if op == OP_CALL:
+        ps := g.i_ps[i]
+        repeat g.i_pcount[i] in k:
+            g.pool[ps + 3 * k] = resolve(g, g.pool[ps + 3 * k])
+        end
+    else op == OP_CMP64 or op == OP_ADC64:
+        g.i_d[i] = resolve(g, g.i_d[i] as int) as i64
+    else op == OP_PHI:
+        ps2 := g.i_ps[i]
+        repeat g.i_pcount[i] in k2:
+            g.pool[ps2 + 2 * k2] = resolve(g, g.pool[ps2 + 2 * k2])
+        end
+    end
+end
+
+func remap_all(g &: Ng):
+    repl_grow(g)
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            remap_ins(g, i)
+            i = g.i_next[i]
+        end
+    end
+    if g.ev_fv.len() > 0:
+        dv_resolve_all(g)
+    end
+end
+
+func add_use(g &: Ng, v: int):
+    if v >= 0:
+        g.v_uses[v] = g.v_uses[v] + 1
+    end
+end
+
+func count_uses(g &: Ng):
+    g.v_uses.clear()
+    repeat g.v_kind.len():
+        g.v_uses.push(0)
+    end
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            m := val_mask(g.i_op[i])
+            if (m & 1) != 0: add_use(g, g.i_a[i]) end
+            if (m & 2) != 0: add_use(g, g.i_b[i]) end
+            if (m & 4) != 0: add_use(g, g.i_c[i]) end
+            op := g.i_op[i]
+            if op == OP_CALL:
+                repeat g.i_pcount[i] in k:
+                    add_use(g, g.pool[g.i_ps[i] + 3 * k])
+                end
+            else op == OP_CMP64 or op == OP_ADC64:
+                add_use(g, g.i_d[i] as int)
+            else op == OP_PHI:
+                repeat g.i_pcount[i] in k2:
+                    add_use(g, g.pool[g.i_ps[i] + 2 * k2])
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+end
+
+func blk_succs(g &: Ng, b: int, out &: Vector<int>):
+    out.clear()
+    t := g.b_last[b]
+    if t < 0:
+        ret
+    end
+    op := g.i_op[t]
+    if op == OP_BR:
+        out.push(g.i_b[t])
+    else op == OP_CBR:
+        out.push(g.i_b[t])
+        if g.i_c[t] != g.i_b[t]:
+            out.push(g.i_c[t])
+        end
+    end
+end
+
+func ensure_terms(g &: Ng):
+    nb := g.b_first.len()
+    repeat nb in b:
+        t := g.b_last[b]
+        if t < 0 or not is_term(g.i_op[t]):
+            i := ins_new(g, OP_UNREACH, T_VOID)
+            ins_append(g, b, i)
+        end
+    end
+end
+
+func build_cfg(g &: Ng):
+    nb := g.b_first.len()
+    g.b_order.clear()
+    g.b_rpo.clear()
+    repeat nb:
+        g.b_order.push(0 - 1)
+    end
+    mut post := Vector {} as Vector<int>
+    mut seen := Vector {} as Vector<bool>
+    repeat nb:
+        seen.push(false)
+    end
+    mut stk := Vector {} as Vector<int>
+    mut sidx := Vector {} as Vector<int>
+    mut succ := Vector {} as Vector<int>
+    stk.push(0)
+    sidx.push(0)
+    seen[0] = true
+    until stk.len() > 0:
+        top := stk.len() - 1
+        b := stk[top]
+        blk_succs(g, b, succ)
+        k := sidx[top]
+        if k < succ.len():
+            sidx[top] = k + 1
+            s := succ[succ.len() - 1 - k]
+            if not seen[s]:
+                seen[s] = true
+                stk.push(s)
+                sidx.push(0)
+            end
+        else:
+            post.push(b)
+            _p := stk.pop()
+            _q := sidx.pop()
+        end
+    end
+    mut r := post.len() - 1
+    until r >= 0:
+        g.b_order[post[r]] = g.b_rpo.len()
+        g.b_rpo.push(post[r])
+        r -= 1
+    end
+    repeat nb in b2:
+        if g.b_order[b2] < 0:
+            mut i := g.b_first[b2]
+            until i >= 0:
+                nx := g.i_next[i]
+                g.i_op[i] = OP_NOP
+                g.i_blk[i] = 0 - 1
+                i = nx
+            end
+            g.b_first[b2] = 0 - 1
+            g.b_last[b2] = 0 - 1
+        end
+    end
+    build_preds(g, succ)
+    post.free()
+    seen.free()
+    stk.free()
+    sidx.free()
+    succ.free()
+end
+
+func build_preds(g &: Ng, succ &: Vector<int>):
+    nb := g.b_first.len()
+    g.b_ps.clear()
+    g.b_npred.clear()
+    g.b_pred.clear()
+    g.b_ss.clear()
+    g.b_sn.clear()
+    g.b_succ.clear()
+    repeat nb:
+        g.b_npred.push(0)
+        g.b_ps.push(0)
+        g.b_ss.push(0)
+        g.b_sn.push(0)
+    end
+    each b in g.b_rpo:
+        blk_succs(g, b, succ)
+        g.b_ss[b] = g.b_succ.len()
+        g.b_sn[b] = succ.len()
+        each s in succ:
+            g.b_succ.push(s)
+            g.b_npred[s] = g.b_npred[s] + 1
+        end
+    end
+    mut tot := 0
+    repeat nb in b2:
+        g.b_ps[b2] = tot
+        tot += g.b_npred[b2]
+        g.b_npred[b2] = 0
+    end
+    repeat tot:
+        g.b_pred.push(0)
+    end
+    each b3 in g.b_rpo:
+        repeat g.b_sn[b3] in k:
+            s2 := g.b_succ[g.b_ss[b3] + k]
+            g.b_pred[g.b_ps[s2] + g.b_npred[s2]] = b3
+            g.b_npred[s2] = g.b_npred[s2] + 1
+        end
+    end
+    fix_phis(g)
+end
+
+func blk_is_pred(g &: Ng, b: int, p: int): bool:
+    repeat g.b_npred[b] in k:
+        if g.b_pred[g.b_ps[b] + k] == p:
+            ret true
+        end
+    end
+    ret false
+end
+
+func fix_phis(g &: Ng):
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0 and g.i_op[i] == OP_PHI:
+            ps := g.i_ps[i]
+            mut w := 0
+            repeat g.i_pcount[i] in k:
+                pb := g.pool[ps + 2 * k + 1]
+                if pb >= 0 and g.b_order[pb] >= 0 and blk_is_pred(g, b, pb):
+                    g.pool[ps + 2 * w] = g.pool[ps + 2 * k]
+                    g.pool[ps + 2 * w + 1] = pb
+                    w += 1
+                end
+            end
+            g.i_pcount[i] = w
+            i = g.i_next[i]
+        end
+    end
+end
+
+func intersect(g &: Ng, b1: int, b2: int): int:
+    mut f1 := b1
+    mut f2 := b2
+    until f1 != f2:
+        until g.b_order[f1] > g.b_order[f2]:
+            f1 = g.b_idom[f1]
+        end
+        until g.b_order[f2] > g.b_order[f1]:
+            f2 = g.b_idom[f2]
+        end
+    end
+    ret f1
+end
+
+func build_dom(g &: Ng):
+    nb := g.b_first.len()
+    g.b_idom.clear()
+    repeat nb:
+        g.b_idom.push(0 - 1)
+    end
+    g.b_idom[0] = 0
+    mut changed := true
+    until changed:
+        changed = false
+        repeat g.b_rpo.len() - 1 in ri:
+            b := g.b_rpo[ri + 1]
+            mut nd := 0 - 1
+            repeat g.b_npred[b] in k:
+                p := g.b_pred[g.b_ps[b] + k]
+                if g.b_idom[p] >= 0:
+                    if nd < 0:
+                        nd = p
+                    else:
+                        nd = intersect(g, p, nd)
+                    end
+                end
+            end
+            if nd != g.b_idom[b]:
+                g.b_idom[b] = nd
+                changed = true
+            end
+        end
+    end
+    g.b_kn.clear()
+    g.b_ks.clear()
+    g.b_kids.clear()
+    repeat nb:
+        g.b_kn.push(0)
+        g.b_ks.push(0)
+    end
+    each b2 in g.b_rpo:
+        if b2 != 0:
+            d := g.b_idom[b2]
+            g.b_kn[d] = g.b_kn[d] + 1
+        end
+    end
+    mut tot := 0
+    repeat nb in b3:
+        g.b_ks[b3] = tot
+        tot += g.b_kn[b3]
+        g.b_kn[b3] = 0
+    end
+    repeat tot:
+        g.b_kids.push(0)
+    end
+    each b4 in g.b_rpo:
+        if b4 != 0:
+            d2 := g.b_idom[b4]
+            g.b_kids[g.b_ks[d2] + g.b_kn[d2]] = b4
+            g.b_kn[d2] = g.b_kn[d2] + 1
+        end
+    end
+end
+
+func build_df(g &: Ng):
+    nb := g.b_first.len()
+    g.b_dfs.clear()
+    g.b_dfn.clear()
+    g.b_dfp.clear()
+    mut lists := Vector {} as Vector<int>
+    mut nexts := Vector {} as Vector<int>
+    mut heads := Vector {} as Vector<int>
+    repeat nb:
+        heads.push(0 - 1)
+        g.b_dfn.push(0)
+        g.b_dfs.push(0)
+    end
+    each b in g.b_rpo:
+        if g.b_npred[b] >= 2:
+            repeat g.b_npred[b] in k:
+                mut run := g.b_pred[g.b_ps[b] + k]
+                until run != g.b_idom[b]:
+                    mut dup := false
+                    mut h := heads[run]
+                    until h >= 0 and not dup:
+                        if lists[h] == b:
+                            dup = true
+                        end
+                        h = nexts[h]
+                    end
+                    if not dup:
+                        lists.push(b)
+                        nexts.push(heads[run])
+                        heads[run] = lists.len() - 1
+                        g.b_dfn[run] = g.b_dfn[run] + 1
+                    end
+                    run = g.b_idom[run]
+                end
+            end
+        end
+    end
+    repeat nb in b2:
+        g.b_dfs[b2] = g.b_dfp.len()
+        mut h2 := heads[b2]
+        until h2 >= 0:
+            g.b_dfp.push(lists[h2])
+            h2 = nexts[h2]
+        end
+    end
+    lists.free()
+    nexts.free()
+    heads.free()
+end
+
+func alloca_of(g &: Ng, v: int): int:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    if d >= 0 and g.i_op[d] == OP_ALLOCA:
+        ret d
+    end
+    ret 0 - 1
+end
+
+func reject_alloca(g &: Ng, v: int):
+    ai := alloca_of(g, v)
+    if ai >= 0:
+        g.a_var[ai] = 0 - 1
+    end
+end
+
+func mem2reg(g &: Ng):
+    ni := g.i_op.len()
+    g.a_var.clear()
+    repeat ni:
+        g.a_var.push(0 - 2)
+    end
+    mut ncand := 0
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            if g.i_op[i] == OP_ALLOCA:
+                t := g.i_x[i]
+                if not is_agg(g, t) and g.i_d[i] <= (1 as i64) and t != T_I128:
+                    g.a_var[i] = 0
+                    ncand += 1
+                else:
+                    g.a_var[i] = 0 - 1
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    if ncand == 0:
+        ret
+    end
+    each b2 in g.b_rpo:
+        mut j := g.b_first[b2]
+        until j >= 0:
+            op := g.i_op[j]
+            if op == OP_LOAD:
+                ai := alloca_of(g, g.i_a[j])
+                if ai >= 0 and (g.i_ty[j] != g.i_x[ai] or (g.i_f[j] & IF_VOLATILE) != 0):
+                    g.a_var[ai] = 0 - 1
+                end
+            else op == OP_STORE:
+                reject_alloca(g, g.i_a[j])
+                ai2 := alloca_of(g, g.i_b[j])
+                if ai2 >= 0 and (g.v_ty[g.i_a[j]] != g.i_x[ai2] or (g.i_f[j] & IF_VOLATILE) != 0):
+                    g.a_var[ai2] = 0 - 1
+                end
+            else op != OP_ALLOCA:
+                m := val_mask(op)
+                if (m & 1) != 0: reject_alloca(g, g.i_a[j]) end
+                if (m & 2) != 0: reject_alloca(g, g.i_b[j]) end
+                if (m & 4) != 0: reject_alloca(g, g.i_c[j]) end
+                if op == OP_CALL:
+                    repeat g.i_pcount[j] in k:
+                        reject_alloca(g, g.pool[g.i_ps[j] + 3 * k])
+                    end
+                else op == OP_PHI:
+                    repeat g.i_pcount[j] in k2:
+                        reject_alloca(g, g.pool[g.i_ps[j] + 2 * k2])
+                    end
+                end
+            end
+            j = g.i_next[j]
+        end
+    end
+    g.av_ty.clear()
+    g.av_fv.clear()
+    g.av_cur.clear()
+    mut nv := 0
+    each b3 in g.b_rpo:
+        mut j2 := g.b_first[b3]
+        until j2 >= 0:
+            if g.i_op[j2] == OP_ALLOCA and g.a_var[j2] == 0:
+                g.a_var[j2] = nv
+                g.av_ty.push(g.i_x[j2])
+                rj := g.i_res[j2]
+                g.av_fv.push(rj >= 0 and g.fv_of.has(rj) ? g.fv_of.get(rj) : 0 - 1)
+                g.av_cur.push(new_val(g, VK_UNDEF, g.i_x[j2], 0 as i64))
+                nv += 1
+            end
+            j2 = g.i_next[j2]
+        end
+    end
+    if nv == 0:
+        ret
+    end
+    build_dom(g)
+    build_df(g)
+    place_phis(g, nv)
+    rename_vars(g)
+    repl_grow(g)
+    each b4 in g.b_rpo:
+        mut j3 := g.b_first[b4]
+        until j3 >= 0:
+            nx := g.i_next[j3]
+            op3 := g.i_op[j3]
+            if op3 == OP_ALLOCA and g.a_var[j3] >= 0:
+                ins_unlink(g, j3)
+            else op3 == OP_PHI:
+                g.i_f[j3] = 0
+            end
+            j3 = nx
+        end
+    end
+    remap_all(g)
+end
+
+func place_phis(g &: Ng, nv: int):
+    nb := g.b_first.len()
+    mut has_phi := Vector {} as Vector<int>
+    mut in_wl := Vector {} as Vector<int>
+    repeat nb:
+        has_phi.push(0 - 1)
+        in_wl.push(0 - 1)
+    end
+    mut defb := Vector {} as Vector<int>
+    mut defv := Vector {} as Vector<int>
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            if g.i_op[i] == OP_STORE:
+                ai := alloca_of(g, g.i_b[i])
+                if ai >= 0 and g.a_var[ai] >= 0:
+                    defb.push(b)
+                    defv.push(g.a_var[ai])
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    mut wl := Vector {} as Vector<int>
+    repeat nv in av:
+        wl.clear()
+        repeat defb.len() in k:
+            if defv[k] == av and in_wl[defb[k]] != av:
+                in_wl[defb[k]] = av
+                wl.push(defb[k])
+            end
+        end
+        until wl.len() > 0:
+            x := wl.pop()
+            repeat g.b_dfn[x] in d:
+                y := g.b_dfp[g.b_dfs[x] + d]
+                if has_phi[y] != av:
+                    has_phi[y] = av
+                    insert_m2r_phi(g, y, av)
+                    if in_wl[y] != av:
+                        in_wl[y] = av
+                        wl.push(y)
+                    end
+                end
+            end
+        end
+    end
+    has_phi.free()
+    in_wl.free()
+    defb.free()
+    defv.free()
+    wl.free()
+end
+
+func insert_m2r_phi(g &: Ng, b: int, av: int):
+    i := ins_new(g, OP_PHI, g.av_ty[av])
+    g.i_x[i] = av
+    g.i_f[i] = 1
+    g.i_ps[i] = g.pool.len()
+    g.i_pcount[i] = g.b_npred[b]
+    repeat g.b_npred[b] in k:
+        g.pool.push(0 - 1)
+        g.pool.push(g.b_pred[g.b_ps[b] + k])
+    end
+    _r := new_res(g, i)
+    first := g.b_first[b]
+    if first >= 0:
+        ins_before(g, first, i)
+    else:
+        ins_append(g, b, i)
+    end
+    g.a_var.push(0 - 2)
+end
+
+func rename_vars(g &: Ng):
+    repl_reset(g)
+    g.av_stk.clear()
+    g.av_stv.clear()
+    mut wb := Vector {} as Vector<int>
+    mut wm := Vector {} as Vector<int>
+    wb.push(0)
+    wm.push(0 - 1)
+    until wb.len() > 0:
+        b := wb.pop()
+        mark := wm.pop()
+        if mark >= 0:
+            until g.av_stk.len() > mark:
+                av := g.av_stk.pop()
+                g.av_cur[av] = g.av_stv.pop()
+            end
+            continue
+        end
+        h := g.av_stk.len()
+        repl_grow(g)
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            op := g.i_op[i]
+            if op == OP_PHI and g.i_f[i] == 1:
+                av2 := g.i_x[i]
+                g.av_stk.push(av2)
+                g.av_stv.push(g.av_cur[av2])
+                g.av_cur[av2] = g.i_res[i]
+                if av2 < g.av_fv.len() and g.av_fv[av2] >= 0:
+                    dv_ev_add(g, 0 - 1 - b, g.av_fv[av2], g.i_res[i])
+                end
+            else op == OP_LOAD:
+                ai := alloca_of(g, g.i_a[i])
+                if ai >= 0 and g.a_var[ai] >= 0:
+                    r := g.i_res[i]
+                    if r >= 0:
+                        g.v_repl[r] = resolve(g, g.av_cur[g.a_var[ai]])
+                    end
+                    ins_unlink(g, i)
+                end
+            else op == OP_STORE:
+                ai2 := alloca_of(g, g.i_b[i])
+                if ai2 >= 0 and g.a_var[ai2] >= 0:
+                    av3 := g.a_var[ai2]
+                    g.av_stk.push(av3)
+                    g.av_stv.push(g.av_cur[av3])
+                    g.av_cur[av3] = resolve(g, g.i_a[i])
+                    if av3 < g.av_fv.len() and g.av_fv[av3] >= 0:
+                        dv_ev_add(g, i, g.av_fv[av3], g.av_cur[av3])
+                    end
+                    ins_unlink(g, i)
+                end
+            end
+            i = nx
+        end
+        repeat g.b_sn[b] in k:
+            s := g.b_succ[g.b_ss[b] + k]
+            mut j := g.b_first[s]
+            until j >= 0 and g.i_op[j] == OP_PHI:
+                if g.i_f[j] == 1:
+                    ps := g.i_ps[j]
+                    repeat g.i_pcount[j] in q:
+                        if g.pool[ps + 2 * q + 1] == b:
+                            g.pool[ps + 2 * q] = resolve(g, g.av_cur[g.i_x[j]])
+                        end
+                    end
+                end
+                j = g.i_next[j]
+            end
+        end
+        wb.push(b)
+        wm.push(h)
+        repeat g.b_kn[b] in c:
+            wb.push(g.b_kids[g.b_ks[b] + c])
+            wm.push(0 - 1)
+        end
+    end
+    wb.free()
+    wm.free()
+end
+
+func simplify_phis(g &: Ng):
+    mut changed := true
+    until changed:
+        changed = false
+        repl_grow(g)
+        each b in g.b_rpo:
+            mut i := g.b_first[b]
+            until i >= 0 and g.i_op[i] == OP_PHI:
+                nx := g.i_next[i]
+                r := g.i_res[i]
+                mut same := 0 - 1
+                mut trivial := true
+                ps := g.i_ps[i]
+                repeat g.i_pcount[i] in k:
+                    v := resolve(g, g.pool[ps + 2 * k])
+                    if v != r and v != same:
+                        if same >= 0:
+                            trivial = false
+                        else:
+                            same = v
+                        end
+                    end
+                end
+                if trivial and r >= 0:
+                    if same < 0:
+                        same = new_val(g, VK_UNDEF, g.i_ty[i], 0 as i64)
+                        repl_grow(g)
+                    end
+                    g.v_repl[r] = same
+                    ins_unlink(g, i)
+                    changed = true
+                end
+                i = nx
+            end
+        end
+    end
+    remap_all(g)
+end
+
+func blk_has_phi(g &: Ng, b: int): bool:
+    f := g.b_first[b]
+    ret f >= 0 and g.i_op[f] == OP_PHI
+end
+
+func split_crit_edges(g &: Ng): bool:
+    mut changed := false
+    mut blocks := Vector {} as Vector<int>
+    each b0 in g.b_rpo:
+        blocks.push(b0)
+    end
+    each b in blocks:
+        t := g.b_last[b]
+        if t < 0 or g.i_op[t] != OP_CBR:
+            continue
+        end
+        repeat 2 in side:
+            s := side == 0 ? g.i_b[t] : g.i_c[t]
+            if g.b_npred[s] >= 2 and blk_has_phi(g, s):
+                n := new_blk(g)
+                br := ins_new(g, OP_BR, T_VOID)
+                g.i_b[br] = s
+                ins_append(g, n, br)
+                if side == 0:
+                    g.i_b[t] = n
+                else:
+                    g.i_c[t] = n
+                end
+                retarget_phis(g, s, b, n)
+                changed = true
+            end
+        end
+    end
+    blocks.free()
+    if changed:
+        build_cfg(g)
+    end
+    ret changed
+end

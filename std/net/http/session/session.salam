@@ -1,0 +1,286 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/http/session"
+@fa "نشست"
+package session
+
+import net.http
+import crypto
+import time
+import sync
+
+@en "DefaultCookieName"
+@fa "نام پیش فرض کوکی"
+pub const DefaultCookieName := "salam_sid"
+
+@en "DefaultMaxAge"
+@fa "حداکثر عمر پیش فرض"
+pub const DefaultMaxAge := 86400
+
+const _csrf_key := "_csrf_token"
+
+mut _sessions := HashMap {} as HashMap<str, Session>
+mut _mu := sync.Mutex {}
+mut _cookie_name := "salam_sid"
+mut _max_age := 86400
+mut _secure := false
+mut _same_site := "Lax"
+mut _gc_hits := 0
+
+@en "SessionData"
+@fa "داده نشست"
+pub struct SessionData:
+    @en "items"
+    @fa "مقدارها"
+    pub items: HashMap<str, str> = HashMap {} as HashMap<str, str>
+end
+
+@en "Session"
+@fa "نشست"
+pub struct Session:
+    @en "id"
+    @fa "شناسه"
+    pub id: str = ""
+    @en "data"
+    @fa "داده"
+    pub data: SessionData = SessionData {}
+    @en "created_at"
+    @fa "زمان ساخت"
+    pub created_at: i64 = 0
+    @en "last_seen"
+    @fa "آخرین استفاده"
+    pub last_seen: i64 = 0
+    @en "max_age"
+    @fa "بیشترین عمر"
+    pub max_age: int = 0
+end
+
+func _gen_id(): str:
+    ret crypto.RandomToken(32)
+end
+
+func _is_expired(s: Session, now: i64): bool:
+    if s.max_age <= 0: ret false end
+    ret (now - s.last_seen) > (s.max_age as i64)
+end
+
+func _ensure_mu():
+    if _mu.handle == null:
+        _mu = sync.NewMutex()
+    end
+end
+
+func _store_put(id: str, s: Session):
+    _ensure_mu()
+    sync.Lock(_mu)
+    _sessions.put(id, s)
+    sync.Unlock(_mu)
+end
+
+func _store_delete(id: str):
+    _ensure_mu()
+    sync.Lock(_mu)
+    _sessions.remove(id)
+    sync.Unlock(_mu)
+end
+
+func _store_touch(id: str, ok &: bool): Session:
+    now := time.Now()
+    _ensure_mu()
+    sync.Lock(_mu)
+    mut found := _sessions.has(id)
+    mut s := Session {}
+    if found:
+        s = _sessions.get(id)
+        if _is_expired(s, now):
+            _sessions.remove(id)
+            found = false
+        else:
+            s.last_seen = now
+            _sessions.put(id, s)
+        end
+    end
+    sync.Unlock(_mu)
+    ok = found
+    ret s
+end
+
+func _cleanup_expired(): int:
+    now := time.Now()
+    mut dead := Vector {} as Vector<str>
+    _ensure_mu()
+    sync.Lock(_mu)
+    it := _sessions.iter()
+    until it.has_next():
+        s := it.value()
+        if _is_expired(s, now):
+            dead.push(it.key())
+        end
+        it.next()
+    end
+    repeat dead.len() in i:
+        _sessions.remove(dead.get(i))
+    end
+    sync.Unlock(_mu)
+    n := dead.len()
+    defer dead.free()
+    ret n
+end
+
+func _maybe_gc():
+    _gc_hits += 1
+    if _gc_hits < 100:
+        ret
+    end
+    _gc_hits = 0
+    _cleanup_expired()
+end
+
+func _cookie_for(id: str): http.Cookie:
+    mut c := http.ExpiringCookie(_cookie_name, id, _max_age)
+    c.secure = _secure
+    c.same_site = _same_site
+    c.http_only = true
+    c.path = "/"
+    ret c
+end
+
+@en "Configure"
+@fa "پیکربندی"
+pub func Configure(cookie_name: str, max_age_seconds: int, secure: bool, same_site: str):
+    _cookie_name = cookie_name
+    _max_age = max_age_seconds
+    _secure = secure
+    _same_site = same_site
+end
+
+@en "CleanupExpired"
+@fa "پاکسازی منقضی شده ها"
+pub func CleanupExpired(): int: ret _cleanup_expired() end
+
+@en "New"
+@fa "جدید"
+pub func New(): Session:
+    _maybe_gc()
+    now := time.Now()
+    s := Session { id = _gen_id(), created_at = now, last_seen = now, max_age = _max_age }
+    _store_put(s.id, s)
+    ret s
+end
+
+@en "Get"
+@fa "دریافت"
+pub func Get(id: str, ok &: bool): Session:
+    _maybe_gc()
+    mut found := false
+    s := _store_touch(id, found)
+    ok = found
+    ret s
+end
+
+@en "Save"
+@fa "ذخیره"
+pub func Save(s: Session): _store_put(s.id, s) end
+
+@en "Destroy"
+@fa "نابودسازی"
+pub func Destroy(id: str): _store_delete(id) end
+
+@en "Value"
+@fa "مقدار"
+pub func Value(s: Session, key: str): str:
+    if s.data.items.has(key): ret s.data.items.get(key) end
+    ret ""
+end
+
+@en "HasValue"
+@fa "مقدار دارد"
+pub func HasValue(s: Session, key: str): bool:
+    ret s.data.items.has(key)
+end
+
+@en "SetValue"
+@fa "تنظیم مقدار"
+pub func SetValue(s &: Session, key: str, value: str):
+    s.data.items.put(key, value)
+end
+
+@en "DeleteValue"
+@fa "حذف مقدار"
+pub func DeleteValue(s &: Session, key: str): bool:
+    ret s.data.items.remove(key)
+end
+
+@en "ClearValues"
+@fa "پاک کردن مقادیر"
+pub func ClearValues(s &: Session):
+    s.data = SessionData {}
+end
+
+@en "Start"
+@fa "شروع"
+pub func Start(h: i64): Session:
+    sid := http.CookieValue(h, _cookie_name)
+    mut ok := false
+    mut s := Session {}
+    if sid.len() > 0:
+        s = Get(sid, ok)
+    end
+    if ok == false:
+        s = New()
+    end
+    http.SetCookie(h, _cookie_for(s.id))
+    ret s
+end
+
+@en "End"
+@fa "پایان"
+pub func End(h: i64):
+    sid := http.CookieValue(h, _cookie_name)
+    if sid.len() > 0:
+        Destroy(sid)
+    end
+    http.ClearCookie(h, _cookie_name)
+end
+
+@en "Regenerate"
+@fa "بازتولید"
+pub func Regenerate(h: i64, s &: Session):
+    Destroy(s.id)
+    now := time.Now()
+    s.id = _gen_id()
+    s.created_at = now
+    s.last_seen = now
+    Save(s)
+    http.SetCookie(h, _cookie_for(s.id))
+end
+
+@en "CSRFToken"
+@fa "توکن سی اس آر اف"
+pub func CSRFToken(s &: Session): str:
+    if HasValue(s, _csrf_key) == false:
+        SetValue(s, _csrf_key, crypto.RandomToken(24))
+    end
+    ret Value(s, _csrf_key)
+end
+
+@en "CSRFVerify"
+@fa "تایید سی اس آر اف"
+pub func CSRFVerify(s: Session, token: str): bool:
+    if token.len() == 0: ret false end
+    want := Value(s, _csrf_key)
+    if want.len() == 0: ret false end
+    ret crypto.SecretEquals(want, token)
+end

@@ -1,0 +1,123 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.meilisearch
+
+include fake "_fake.salam"
+
+const PORT := 19809
+
+func show(label: str, err: meilisearch.Error):
+    println label + ": " + fake.Last()
+    if not meilisearch.Ok(err):
+        println "  error: " + meilisearch.ErrorString(err)
+    end
+end
+
+func hook(w: meilisearch.Webhook):
+    println "  -> " + w.uuid + " " + w.url + " editable=" + w.is_editable + " headers=" + w.headers
+end
+
+func main:
+    one := `{"uuid":"11111111-2222-3333-4444-555555555555","url":"https://example.com/hook","headers":{"authorization":"XXX..."},"isEditable":true}`
+    fake.On("GET", "/webhooks", 200, `{"results":[` + one + `,{"uuid":"00000000-0000-0000-0000-000000000000","url":"https://cloud.example","headers":{},"isEditable":false}]}`)
+    fake.On("POST", "/webhooks", 201, one)
+    fake.On("GET", "/webhooks/11111111-2222-3333-4444-555555555555", 200, one)
+    fake.On("PATCH", "/webhooks/11111111-2222-3333-4444-555555555555", 200, one)
+    fake.On("DELETE", "/webhooks/11111111-2222-3333-4444-555555555555", 204, ``)
+    rule := `{"uid":"black-friday","lastUpdatedAt":"2025-11-01T00:00:00Z","precedence":10,"active":true,"conditions":{"query":{"words":"sale"}},"actions":{"pin":[{"id":"42","position":0}]}}`
+    queued := `{"taskUid":50,"indexUid":null,"status":"enqueued","type":"dynamicSearchRulesUpdate","enqueuedAt":"2025-01-02T03:04:05Z"}`
+    fake.On("POST", "/dynamic-search-rules", 200, `{"results":[` + rule + `],"offset":0,"limit":20,"total":1}`)
+    fake.On("GET", "/dynamic-search-rules/black-friday", 200, rule)
+    fake.On("PATCH", "/dynamic-search-rules/black-friday", 202, queued)
+    fake.On("DELETE", "/dynamic-search-rules/black-friday", 202, queued)
+    fake.On("DELETE", "/dynamic-search-rules", 202, queued)
+    fake.On("GET", "/chats", 200, `{"results":[{"uid":"support"},{"uid":"sales"}],"offset":0,"limit":20,"total":2}`)
+    fake.On("GET", "/chats/support", 200, `{"uid":"support"}`)
+    fake.On("DELETE", "/chats/support", 204, ``)
+    fake.On("GET", "/chats/support/settings", 200, `{"source":"openAi","apiKey":"XXX...","prompts":{"system":"Be brief."}}`)
+    fake.On("PATCH", "/chats/support/settings", 200, `{"source":"openAi","prompts":{"system":"Be kind."}}`)
+    fake.On("DELETE", "/chats/support/settings", 200, `{"source":"openAi"}`)
+    fake.On("POST", "/chats/support/chat/completions", 200, "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\ndata: [DONE]\n\n")
+    fake.On("POST", "/logs/stderr", 204, ``)
+    fake.On("POST", "/network/control", 200, `{}`)
+    fake.On("POST", "/render-template", 200, `{"template":"{{doc.title}}","rendered":"Up"}`)
+    fake.On("GET", "/indexes/movies/settings/foreign-keys", 200, `[{"foreignIndexUid":"actors","fieldName":"actor_ids"}]`)
+    fake.On("PUT", "/indexes/movies/settings/foreign-keys", 202, queued)
+    fake.On("DELETE", "/indexes/movies/settings/foreign-keys", 202, queued)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    c := meilisearch.New("http://127.0.0.1:" + PORT, "masterKey")
+    mut err := meilisearch.Error {}
+
+    hooks := meilisearch.ListWebhooks(c, err)
+    show("webhooks", err)
+    each w in hooks:
+        hook(w)
+    end
+    hook(meilisearch.CreateWebhook(c, "https://example.com/hook", `{"authorization":"secret"}`, err))
+    show("create webhook", err)
+    hook(meilisearch.GetWebhook(c, "11111111-2222-3333-4444-555555555555", err))
+    meilisearch.UpdateWebhook(c, "11111111-2222-3333-4444-555555555555", "https://example.com/v2", "", err)
+    show("update webhook", err)
+    println "deleted: " + meilisearch.DeleteWebhook(c, "11111111-2222-3333-4444-555555555555", err)
+    println "missing: [" + meilisearch.GetWebhook(c, "nope", err).uuid + "] " + err.code
+
+    page := meilisearch.ListSearchRules(c, meilisearch.SearchRuleQuery { limit = 20, query = "sale", active = 1 }, err)
+    show("rules", err)
+    each r in page.results:
+        println "  -> " + r.uid + " " + r.precedence + " active=" + r.active + " " + r.last_updated_at
+        println "     " + r.conditions + " " + r.actions
+    end
+    meilisearch.ListSearchRules(c, meilisearch.SearchRuleQuery { active = 0 }, err)
+    show("inactive rules", err)
+    meilisearch.ListSearchRules(c, meilisearch.SearchRuleQuery {}, err)
+    show("all rules", err)
+    println "rule: " + meilisearch.GetSearchRule(c, "black-friday", err).uid
+    up := meilisearch.UpdateSearchRule(c, "black-friday", `{"active":false}`, err)
+    show("update rule", err)
+    println "  -> " + up.task_uid + " " + up.kind
+    meilisearch.DeleteSearchRule(c, "black-friday", err)
+    show("delete rule", err)
+    meilisearch.DeleteAllSearchRules(c, err)
+    show("delete rules", err)
+
+    ws := meilisearch.ListChatWorkspaces(c, 0, 20, err)
+    show("workspaces", err)
+    println "  -> " + ws.total + " " + ws.results.get(0) + " " + ws.results.get(1)
+    println "workspace: " + meilisearch.GetChatWorkspace(c, "support", err)
+    println "chat settings: " + meilisearch.GetChatSettings(c, "support", err)
+    println "chat update: " + meilisearch.UpdateChatSettings(c, "support", `{"prompts":{"system":"Be kind."}}`, err)
+    show("chat update", err)
+    println "chat reset: " + meilisearch.ResetChatSettings(c, "support", err)
+    reply := meilisearch.ChatCompletion(c, "support", `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Hello"}],"stream":true}`, err)
+    show("completion", err)
+    println "  -> events " + reply.split("data: ").len()
+    println "workspace deleted: " + meilisearch.DeleteChatWorkspace(c, "support", err)
+
+    println "logs: " + meilisearch.SetStderrLogs(c, "milli=debug", err)
+    show("logs", err)
+    meilisearch.NetworkControl(c, `{"origin":{"remoteName":"ms-0","taskUid":1},"message":{"type":"exportNoIndexForRemote","remote":"ms-1"}}`, err)
+    show("network control", err)
+    println "render: " + meilisearch.RenderTemplate(c, `{"template":{"kind":"inline","inline":"{{doc.title}}"},"input":{"kind":"inline","inline":{"title":"Up"}}}`, err)
+
+    println "foreign keys: " + meilisearch.GetForeignKeys(c, "movies", err)
+    meilisearch.UpdateForeignKeys(c, "movies", `[{"foreignIndexUid":"actors","fieldName":"actor_ids"}]`, err)
+    show("foreign keys", err)
+    meilisearch.ResetForeignKeys(c, "movies", err)
+    show("foreign keys reset", err)
+    ret 0
+end

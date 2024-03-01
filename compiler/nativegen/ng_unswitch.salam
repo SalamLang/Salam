@@ -1,0 +1,376 @@
+package nativegen
+
+const USW_MAX_SIZE := 220
+
+pub struct Usw:
+    pub vmap: Vector<int> = Vector {}
+    pub bmap: Vector<int> = Vector {}
+    pub blocks: Vector<int> = Vector {}
+end
+
+func usw_val(u &: Usw, v: int): int:
+    if v >= 0 and v < u.vmap.len() and u.vmap[v] >= 0:
+        ret u.vmap[v]
+    end
+    ret v
+end
+
+func usw_blk(u &: Usw, b: int): int:
+    if b >= 0 and b < u.bmap.len() and u.bmap[b] >= 0:
+        ret u.bmap[b]
+    end
+    ret b
+end
+
+func usw_clone_ins(g &: Ng, u &: Usw, i: int, nb: int):
+    op := g.i_op[i]
+    ni := ins_new(g, op, g.i_ty[i])
+    g.i_dbg[ni] = g.i_dbg[i]
+    if g.ev_fv.len() > 0:
+        dv_queue(g, i, ni)
+    end
+    m := val_mask(op)
+    g.i_a[ni] = (m & 1) != 0 ? usw_val(u, g.i_a[i]) : g.i_a[i]
+    g.i_b[ni] = (m & 2) != 0 ? usw_val(u, g.i_b[i]) : g.i_b[i]
+    g.i_c[ni] = (m & 4) != 0 ? usw_val(u, g.i_c[i]) : g.i_c[i]
+    if op == OP_BR:
+        g.i_b[ni] = usw_blk(u, g.i_b[i])
+    else op == OP_CBR:
+        g.i_b[ni] = usw_blk(u, g.i_b[i])
+        g.i_c[ni] = usw_blk(u, g.i_c[i])
+    end
+    g.i_x[ni] = g.i_x[i]
+    g.i_d[ni] = g.i_d[i]
+    g.i_f[ni] = g.i_f[i]
+    g.i_pcount[ni] = g.i_pcount[i]
+    if op == OP_CALL:
+        ps := g.i_ps[i]
+        g.i_ps[ni] = g.pool.len()
+        repeat g.i_pcount[i] in k:
+            g.pool.push(usw_val(u, g.pool[ps + 3 * k]))
+            g.pool.push(g.pool[ps + 3 * k + 1])
+            g.pool.push(g.pool[ps + 3 * k + 2])
+        end
+    else op == OP_PHI:
+        ps2 := g.i_ps[i]
+        g.i_ps[ni] = g.pool.len()
+        repeat g.i_pcount[i] in k2:
+            g.pool.push(usw_val(u, g.pool[ps2 + 2 * k2]))
+            g.pool.push(usw_blk(u, g.pool[ps2 + 2 * k2 + 1]))
+        end
+    else:
+        g.i_ps[ni] = g.i_ps[i]
+    end
+    if g.i_res[i] >= 0:
+        u.vmap[g.i_res[i]] = new_res(g, ni)
+    end
+    ins_append(g, nb, ni)
+end
+
+func usw_loop(g &: Ng, l &: Lp, mark: int, h: int, pre: int): bool:
+    t := g.b_last[h]
+    if t < 0 or g.i_op[t] != OP_CBR:
+        ret false
+    end
+    tin := l.inl[g.i_b[t]] == mark
+    cin := l.inl[g.i_c[t]] == mark
+    if tin == cin:
+        ret false
+    end
+    mut ex := tin ? g.i_c[t] : g.i_b[t]
+    mut size := 0
+    mut cond := 0 - 1
+    mut u := Usw {}
+    each b in g.b_rpo:
+        if l.inl[b] != mark:
+            continue
+        end
+        u.blocks.push(b)
+        if b != h:
+            mut sc := Vector {} as Vector<int>
+            blk_succs(g, b, sc)
+            each sx in sc:
+                if l.inl[sx] != mark:
+                    sc.free()
+                    u.blocks.free()
+                    ret false
+                end
+            end
+            sc.free()
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            size += 1
+            op := g.i_op[i]
+            if op == OP_ALLOCA:
+                u.blocks.free()
+                ret false
+            end
+            if op == OP_CBR and i != t and cond < 0:
+                c := g.i_a[i]
+                if c >= 0 and g.v_kind[c] == VK_INS and l.inl[g.i_blk[g.v_def[c]]] != mark and g.i_b[i] != g.i_c[i]:
+                    cond = c
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    if cond < 0 or size > USW_MAX_SIZE:
+        u.blocks.free()
+        ret false
+    end
+    if g.b_npred[ex] != 1:
+        xe := new_blk(g)
+        bxe := ins_new(g, OP_BR, T_VOID)
+        g.i_b[bxe] = ex
+        ins_append(g, xe, bxe)
+        replace_succ(g, t, ex, xe)
+        mut pe := g.b_first[ex]
+        until pe >= 0 and g.i_op[pe] == OP_PHI:
+            pps := g.i_ps[pe]
+            repeat g.i_pcount[pe] in qe:
+                if g.pool[pps + 2 * qe + 1] == h:
+                    g.pool[pps + 2 * qe + 1] = xe
+                end
+            end
+            pe = g.i_next[pe]
+        end
+        ex = xe
+    end
+    repeat g.v_kind.len():
+        u.vmap.push(0 - 1)
+    end
+    repeat g.b_first.len():
+        u.bmap.push(0 - 1)
+    end
+    each b2 in u.blocks:
+        u.bmap[b2] = new_blk(g)
+    end
+    each b3 in u.blocks:
+        mut j := g.b_first[b3]
+        until j >= 0:
+            if g.i_op[j] == OP_PHI and g.i_res[j] >= 0:
+                u.vmap[g.i_res[j]] = new_val(g, VK_INS, g.i_ty[j], 0 as i64)
+            end
+            j = g.i_next[j]
+        end
+    end
+    each b4 in u.blocks:
+        mut j2 := g.b_first[b4]
+        until j2 >= 0:
+            if g.i_op[j2] == OP_PHI and g.i_res[j2] >= 0:
+                pre_v := u.vmap[g.i_res[j2]]
+                usw_clone_ins(g, u, j2, u.bmap[b4])
+                nphi := g.v_def[u.vmap[g.i_res[j2]]]
+                g.v_kind[pre_v] = VK_INS
+                g.v_def[pre_v] = nphi
+                g.i_res[nphi] = pre_v
+                u.vmap[g.i_res[j2]] = pre_v
+            else:
+                usw_clone_ins(g, u, j2, u.bmap[b4])
+            end
+            j2 = g.i_next[j2]
+        end
+        if g.ev_fv.len() > 0:
+            dv_queue(g, 0 - 1 - b4, 0 - 1 - u.bmap[b4])
+        end
+    end
+    repeat g.dq_ni.len() in dq:
+        dv_ev_add(g, g.dq_ni[dq], g.dq_fv[dq], usw_val(u, g.dq_v[dq]))
+    end
+    dv_queue_clear(g)
+    each b6 in u.blocks:
+        nb6 := u.bmap[b6]
+        mut k2 := g.b_first[nb6]
+        until k2 >= 0:
+            if g.i_op[k2] == OP_PHI:
+                ps3 := g.i_ps[k2]
+                repeat g.i_pcount[k2] in q2:
+                    g.pool[ps3 + 2 * q2] = usw_val(u, g.pool[ps3 + 2 * q2])
+                end
+            end
+            m := val_mask(g.i_op[k2])
+            if (m & 1) != 0: g.i_a[k2] = usw_val(u, g.i_a[k2]) end
+            if (m & 2) != 0: g.i_b[k2] = usw_val(u, g.i_b[k2]) end
+            if (m & 4) != 0: g.i_c[k2] = usw_val(u, g.i_c[k2]) end
+            k2 = g.i_next[k2]
+        end
+    end
+    each b7 in u.blocks:
+        mut k3 := g.b_first[b7]
+        until k3 >= 0:
+            if g.i_op[k3] == OP_CBR and g.i_a[k3] == cond:
+                g.i_a[k3] = const_int(g, T_I1, 1 as i64)
+            end
+            k3 = g.i_next[k3]
+        end
+        mut k4 := g.b_first[u.bmap[b7]]
+        until k4 >= 0:
+            if g.i_op[k4] == OP_CBR and g.i_a[k4] == cond:
+                g.i_a[k4] = const_int(g, T_I1, 0 as i64)
+            end
+            k4 = g.i_next[k4]
+        end
+    end
+    pt := g.b_last[pre]
+    g.i_op[pt] = OP_CBR
+    g.i_a[pt] = cond
+    g.i_b[pt] = h
+    g.i_c[pt] = u.bmap[h]
+    xb := new_blk(g)
+    replace_succ(g, t, ex, xb)
+    replace_succ(g, g.b_last[u.bmap[h]], ex, xb)
+    bx := ins_new(g, OP_BR, T_VOID)
+    g.i_b[bx] = ex
+    ins_append(g, xb, bx)
+    mut ei := g.b_first[ex]
+    until ei >= 0 and g.i_op[ei] == OP_PHI:
+        eps := g.i_ps[ei]
+        repeat g.i_pcount[ei] in q3:
+            if g.pool[eps + 2 * q3 + 1] == h:
+                g.pool[eps + 2 * q3 + 1] = xb
+                ov := g.pool[eps + 2 * q3]
+                nv := usw_val(u, ov)
+                if nv != ov:
+                    mp := ins_new(g, OP_PHI, g.v_ty[ov])
+                    g.i_ps[mp] = g.pool.len()
+                    g.i_pcount[mp] = 2
+                    g.pool.push(ov)
+                    g.pool.push(h)
+                    g.pool.push(nv)
+                    g.pool.push(u.bmap[h])
+                    mv := new_res(g, mp)
+                    ins_before(g, bx, mp)
+                    g.pool[eps + 2 * q3] = mv
+                end
+            end
+        end
+        ei = g.i_next[ei]
+    end
+    mut outs := Vector {} as Vector<int>
+    mut outp := Vector {} as Vector<int>
+    mut hi := g.b_first[h]
+    until hi >= 0:
+        r := g.i_res[hi]
+        if r >= 0 and u.vmap[r] >= 0:
+            outs.push(r)
+            outp.push(0 - 1)
+        end
+        hi = g.i_next[hi]
+    end
+    each bo in g.b_rpo:
+        if l.inl[bo] == mark:
+            continue
+        end
+        mut oi := g.b_first[bo]
+        until oi >= 0:
+            usw_fix_outside(g, u, oi, outs, outp, xb, h)
+            oi = g.i_next[oi]
+        end
+    end
+    outs.free()
+    outp.free()
+    u.vmap.free()
+    u.bmap.free()
+    u.blocks.free()
+    ret true
+end
+
+func usw_merge(g &: Ng, u &: Usw, outs &: Vector<int>, outp &: Vector<int>, v: int, xb: int, h: int): int:
+    repeat outs.len() in k:
+        if outs[k] == v:
+            if outp[k] < 0:
+                mp := ins_new(g, OP_PHI, g.v_ty[v])
+                g.i_ps[mp] = g.pool.len()
+                g.i_pcount[mp] = 2
+                g.pool.push(v)
+                g.pool.push(h)
+                g.pool.push(usw_val(u, v))
+                g.pool.push(u.bmap[h])
+                outp[k] = new_res(g, mp)
+                ins_before(g, g.b_first[xb], mp)
+            end
+            ret outp[k]
+        end
+    end
+    ret v
+end
+
+func usw_fix_outside(g &: Ng, u &: Usw, i: int, outs &: Vector<int>, outp &: Vector<int>, xb: int, h: int):
+    if g.i_blk[i] == xb:
+        ret
+    end
+    op := g.i_op[i]
+    m := val_mask(op)
+    if (m & 1) != 0: g.i_a[i] = usw_merge(g, u, outs, outp, g.i_a[i], xb, h) end
+    if (m & 2) != 0: g.i_b[i] = usw_merge(g, u, outs, outp, g.i_b[i], xb, h) end
+    if (m & 4) != 0: g.i_c[i] = usw_merge(g, u, outs, outp, g.i_c[i], xb, h) end
+    if op == OP_CALL:
+        repeat g.i_pcount[i] in k:
+            q := g.i_ps[i] + 3 * k
+            g.pool[q] = usw_merge(g, u, outs, outp, g.pool[q], xb, h)
+        end
+    else op == OP_PHI:
+        repeat g.i_pcount[i] in k2:
+            q2 := g.i_ps[i] + 2 * k2
+            g.pool[q2] = usw_merge(g, u, outs, outp, g.pool[q2], xb, h)
+        end
+    end
+end
+
+func unswitch_loops(g &: Ng): bool:
+    ensure_preheaders(g)
+    build_dom(g)
+    mut l := Lp {}
+    repeat g.b_first.len():
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut heads := Vector {} as Vector<int>
+    each hh in l.head:
+        heads.push(hh)
+    end
+    mut changed := false
+    mut mark := 7000000
+    each h in heads:
+        if changed:
+            break
+        end
+        mark += 1
+        _n := lp_body(g, l, h, mark)
+        mut inner := true
+        each b in g.b_rpo:
+            if l.inl[b] == mark and b != h:
+                mut sc := Vector {} as Vector<int>
+                blk_succs(g, b, sc)
+                each sx in sc:
+                    if sx != h and l.inl[sx] == mark and g.b_order[sx] <= g.b_order[b]:
+                        inner = false
+                    end
+                end
+                sc.free()
+            end
+        end
+        if not inner:
+            continue
+        end
+        p := lp_outside_pred(g, l, h, mark)
+        if p < 0 or g.b_last[p] < 0 or g.i_op[g.b_last[p]] != OP_BR:
+            continue
+        end
+        if usw_loop(g, l, mark, h, p):
+            changed = true
+        end
+    end
+    heads.free()
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+    if changed:
+        ensure_terms(g)
+        build_cfg(g)
+    end
+    ret changed
+end

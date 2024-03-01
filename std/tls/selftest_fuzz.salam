@@ -1,0 +1,80 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+mut _fz_state := 0 as u64
+
+func _fz_next(): int:
+    _fz_state = _fz_state * (6364136223846793005 as u64) + (1442695040888963407 as u64)
+    ret ((_fz_state >> (33 as u64)) & (0x7FFFFFFF as u64)) as int
+end
+
+func _selftest_fuzz():
+    _fz_state = 0x5A1A11C0FFEE as u64
+
+    mut root := _hexbuf(TC_ROOT)
+    defer _buf_free(root)
+    mut leaf := _hexbuf(TC_LEAF)
+    defer _buf_free(leaf)
+
+    mut roots := _roots_new()
+    defer _roots_free(roots)
+    _roots_add(roots, root.p, root.len)
+
+    mut work := _newbuf(leaf.len + 8)
+    defer _buf_free(work)
+    mut ch: Reader[8]
+    repeat 8 in i:
+        ch[i] = _newreader(null, 0)
+    end
+
+    now := 20270601000000 as i64
+    mut accepted := 0
+    mut parsed := 0
+    rounds := 400
+
+    repeat rounds in iter:
+        _bufreset(work)
+        _putbuf(work, leaf)
+        if (iter % 7) == 0:
+            cut := 1 + (_fz_next() % work.len)
+            work.len = work.len - cut
+        else:
+            nmut := 1 + (_fz_next() % 3)
+            repeat nmut:
+                if work.len > 0:
+                    pos := _fz_next() % work.len
+                    old := _bufat(work, pos)
+                    _bufset(work, pos, (old + 1 + (_fz_next() % 255)) & 0xFF)
+                end
+            end
+        end
+        if work.len > 0:
+            c := _cert_parse(work.p, work.len)
+            if c.ok:
+                parsed += 1
+                _cert_match_host(c, "example.com")
+            end
+            ch[0] = _readerof(work)
+            if _verify_chain(ch, 1, roots, "example.com", now) == VERR_NONE:
+                accepted += 1
+            end
+        end
+    end
+
+    _ck(accepted == 0, "fuzz: no mutated certificate verifies")
+    _ck(parsed > 0, "fuzz: some mutations still reach the parser body")
+    println "  fuzz:", rounds, "mutations,", parsed, "parsed,", accepted, "accepted"
+end

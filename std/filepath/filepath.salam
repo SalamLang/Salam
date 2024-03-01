@@ -1,0 +1,302 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "filepath"
+@fa "مسیر پرونده"
+package filepath
+
+import mem
+import str
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func GetCurrentDirectoryA(sz: int, buf: void*): int
+    end
+else:
+    extern:
+        func getcwd(buf: void*, sz: int): void*
+    end
+end
+
+@en "Separator"
+@fa "جداکننده"
+pub const Separator := "/"
+
+inline func _fp_sep(c: int): bool: ret c == 47 or c == 92 end
+
+inline func _fp_end(c: int): bool: ret c == 0 or c == 47 or c == 92 end
+
+func _fp_put(dst: u8*, at: int, src: u8*, from: int, n: int):
+    repeat n in i:
+        c := src[from + i]
+        dst[at + i] = c as int == 92 ? 47 as u8 : c
+    end
+end
+
+func _fp_cwd(): str:
+    buf := mem.Allocate(2048 as u64)
+    mut s := ""
+    if SALAM_OS_WINDOWS:
+        n := GetCurrentDirectoryA(2048, buf)
+        if n > 0 and n < 2048: s = str.Clone(buf as str) end
+    else:
+        r := getcwd(buf, 2048)
+        if r != null: s = str.Clone(r as str) end
+    end
+    mem.Free(buf)
+    ret s
+end
+
+func _fp_segments(p: str): Vector<str>:
+    parts := p.split("/")
+    defer parts.free()
+    out := Vector {} as Vector<str>
+    repeat parts.len() in i:
+        seg := parts.get(i)
+        if seg.len() > 0:
+            out.push(seg)
+        end
+    end
+    ret out
+end
+
+@en "Normalize"
+@fa "نرمال سازی"
+pub func Normalize(p: str): str:
+    n := p.len()
+    out := mem.Allocate((n + 1) as u64) as u8*
+    _fp_put(out, 0, p as u8*, 0, n)
+    out[n] = 0 as u8
+    ret out as str
+end
+
+@en "IsAbs"
+@fa "مطلق است"
+pub func IsAbs(p: str): bool:
+    q := Normalize(p)
+    if str.StartsWith(q, "/"): ret true
+    else q.len() >= 2 and q.substr(1, 1) == ":":
+        c := char_code(q.substr(0, 1))
+        ret str.IsAsciiAlpha(c)
+    end
+    ret false
+end
+
+@en "Join"
+@fa "پیوند"
+pub func Join(a: str, b: str): str:
+    na := a.len()
+    nb := b.len()
+    if na == 0: ret Normalize(b) end
+    if nb == 0: ret Normalize(a) end
+    ap := a as u8*
+    bp := b as u8*
+    out := mem.Allocate((na + nb + 2) as u64) as u8*
+    _fp_put(out, 0, ap, 0, na)
+    mut w := na
+    a_sep := _fp_sep(ap[na - 1] as int)
+    b_sep := _fp_sep(bp[0] as int)
+    mut from := 0
+    if a_sep and b_sep:
+        from = 1
+    else not a_sep and not b_sep:
+        out[w] = 47 as u8
+        w += 1
+    end
+    _fp_put(out, w, bp, from, nb - from)
+    out[w + nb - from] = 0 as u8
+    ret out as str
+end
+
+@en "Base"
+@fa "نام پایه"
+pub func Base(p: str): str:
+    mut q := Normalize(p)
+    until q.len() > 1 and str.EndsWith(q, "/"):
+        shorter := q.substr(0, q.len() - 1)
+        mem.Free(q as void*)
+        q = shorter
+    end
+    if q == "/":
+        mem.Free(q as void*)
+        ret str.Clone("/")
+    else q.len() == 0:
+        mem.Free(q as void*)
+        ret str.Clone(".")
+    end
+    idx := str.LastIndex(q, "/")
+    if idx < 0: ret q end
+    out := q.substr(idx + 1, q.len() - idx - 1)
+    mem.Free(q as void*)
+    ret out
+end
+
+@en "Dir"
+@fa "پوشه"
+pub func Dir(p: str): str:
+    mut q := Normalize(p)
+    until q.len() > 1 and str.EndsWith(q, "/"):
+        t := q.substr(0, q.len() - 1)
+        mem.Free(q as void*)
+        q = t
+    end
+    idx := str.LastIndex(q, "/")
+    mut out := ""
+    if idx < 0:
+        out = str.Clone(".")
+    else idx == 0:
+        out = str.Clone("/")
+    else:
+        out = q.substr(0, idx)
+    end
+    mem.Free(q as void*)
+    ret out
+end
+
+@en "Ext"
+@fa "پسوند"
+pub func Ext(p: str): str:
+    b := Base(p)
+    idx := str.LastIndex(b, ".")
+    if idx <= 0:
+        mem.Free(b as void*)
+        ret str.Clone("")
+    end
+    out := b.substr(idx, b.len() - idx)
+    mem.Free(b as void*)
+    ret out
+end
+
+@en "Stem"
+@fa "نام بدون پسوند"
+pub func Stem(p: str): str:
+    b := Base(p)
+    idx := str.LastIndex(b, ".")
+    if idx <= 0: ret b end
+    ret b.substr(0, idx)
+end
+
+@en "Clean"
+@fa "پاک سازی"
+pub func Clean(p: str): str:
+    n := p.len()
+    if n == 0: ret str.Clone(".") end
+    src := p as u8*
+    out := mem.Allocate((n + 2) as u64) as u8*
+    rooted := _fp_sep(src[0] as int)
+    mut r := 0
+    mut w := 0
+    mut dotdot := 0
+    if rooted:
+        out[0] = 47 as u8
+        w = 1
+        r = 1
+        dotdot = 1
+    end
+    until r < n:
+        c := src[r] as int
+        if _fp_sep(c):
+            r += 1
+        else c == 46 and _fp_end(src[r + 1] as int):
+            r += 1
+        else c == 46 and src[r + 1] as int == 46 and _fp_end(src[r + 2] as int):
+            r += 2
+            if w > dotdot:
+                w -= 1
+                until w > dotdot and out[w] as int != 47:
+                    w -= 1
+                end
+            else not rooted:
+                if w > 0:
+                    out[w] = 47 as u8
+                    w += 1
+                end
+                out[w] = 46 as u8
+                out[w + 1] = 46 as u8
+                w += 2
+                dotdot = w
+            end
+        else:
+            if (rooted and w != 1) or (not rooted and w != 0):
+                out[w] = 47 as u8
+                w += 1
+            end
+            until r < n and not _fp_sep(src[r] as int):
+                out[w] = src[r]
+                w += 1
+                r += 1
+            end
+        end
+    end
+    if w == 0:
+        out[0] = 46 as u8
+        w = 1
+    end
+    out[w] = 0 as u8
+    ret out as str
+end
+
+@en "Abs"
+@fa "مسیر مطلق"
+pub func Abs(p: str): str:
+    if IsAbs(p): ret Clean(p) end
+    cwd := _fp_cwd()
+    ret Clean(Join(cwd, p))
+end
+
+@en "Rel"
+@fa "مسیر نسبی"
+pub func Rel(base: str, target: str): str:
+    ab := Abs(base)
+    at := Abs(target)
+    bs := _fp_segments(ab)
+    defer bs.free()
+    ts := _fp_segments(at)
+    defer ts.free()
+    mut common := 0
+    until common < bs.len() and common < ts.len() and bs.get(common) == ts.get(common):
+        common += 1
+    end
+    out := Vector {} as Vector<str>
+    defer out.free()
+    mut up := common
+    until up < bs.len():
+        out.push("..")
+        up += 1
+    end
+    mut i := common
+    until i < ts.len():
+        out.push(ts.get(i))
+        i += 1
+    end
+    if out.len() == 0: ret "." end
+    ret str.Join(out, "/")
+end
+
+@en "Validate"
+@fa "اعتبارسنجی مسیر"
+pub func Validate(p: str): bool:
+    ret p.len() > 0
+end
+
+@en "IsSafe"
+@fa "مسیر امن است"
+pub func IsSafe(base: str, p: str): bool:
+    if Validate(p) == false: ret false end
+    b := Clean(Abs(base))
+    full := Clean(Join(b, p))
+    if full == b: ret true end
+    prefix := b.concat("/")
+    ret str.StartsWith(full, prefix)
+end

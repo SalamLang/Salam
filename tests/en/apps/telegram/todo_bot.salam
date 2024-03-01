@@ -1,0 +1,130 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import telegram.bot
+import os
+import str
+
+mut todos := HashMap {} as HashMap<i64, str>
+
+func todo_text(chat_id: i64): str:
+    if not todos.has(chat_id): ret "" end
+    ret todos.get(chat_id)
+end
+
+func todo_lines(chat_id: i64): Vector<str>:
+    text := todo_text(chat_id)
+    if text.len() == 0: ret Vector {} end
+    ret text.split("\n")
+end
+
+func save_lines(chat_id: i64, lines: Vector<str>):
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat lines.len() in i:
+        if i > 0: str.BufAppend(sb, "\n") end
+        str.BufAppend(sb, lines.get(i))
+    end
+    todos.put(chat_id, str.BufStr(sb))
+end
+
+func reply_list(b: bot.Bot, chat_id: i64):
+    mut lines := todo_lines(chat_id)
+    if lines.len() == 0:
+        bot.SendMessage(b, chat_id, "Your todo list is empty. Use /add <task> to add one.")
+        lines.free()
+        ret
+    end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat lines.len() in i:
+        str.BufAppend(sb, str.FromInt((i + 1) as i64))
+        str.BufAppend(sb, ". ")
+        str.BufAppend(sb, lines.get(i))
+        str.BufAppend(sb, "\n")
+    end
+    bot.SendMessage(b, chat_id, str.BufStr(sb))
+    defer lines.free()
+end
+
+func on_update(b: bot.Bot, u: bot.Update):
+    if not u.has_message: ret end
+    m := u.message
+    chat_id := m.chat.id
+    if not bot.IsCommand(m.text): ret end
+
+    cmd := bot.CommandName(m.text)
+    args := bot.CommandArgs(m.text)
+
+    switch cmd:
+        "start", "help":
+            bot.SendMessage(b, chat_id, "Todo bot commands:\n/add <task>\n/list\n/done <number>\n/clear")
+            break
+        end
+        "add":
+            if args.len() == 0:
+                bot.SendMessage(b, chat_id, "Usage: /add <task>")
+            else:
+                mut current := todo_text(chat_id)
+                if current.len() > 0: current = current + "\n" end
+                todos.put(chat_id, current + args)
+                bot.SendMessage(b, chat_id, "Added: " + args)
+            end
+            break
+        end
+        "list":
+            reply_list(b, chat_id)
+            break
+        end
+        "done":
+            mut lines := todo_lines(chat_id)
+            idx := str.ToInt(args)
+            if idx < 1 or idx > lines.len():
+                bot.SendMessage(b, chat_id, "Give a valid task number. Use /list to see numbers.")
+            else:
+                done := lines.get(idx - 1)
+                lines.remove_at(idx - 1)
+                save_lines(chat_id, lines)
+                bot.SendMessage(b, chat_id, "Done: " + done)
+            end
+            lines.free()
+            break
+        end
+        "clear":
+            todos.put(chat_id, "")
+            bot.SendMessage(b, chat_id, "Todo list cleared.")
+            break
+        end
+    end
+end
+
+func main:
+    token := os.Env("BOT_TOKEN")
+    if token.len() == 0:
+        println "Set BOT_TOKEN to your bot token (from @BotFather) before running this example."
+        ret
+    end
+
+    b := bot.NewBot(token)
+    me := bot.GetMe(b)
+    if not me.ok:
+        println "could not reach Telegram with this token: " + me.description
+        ret
+    end
+    println "todo_bot is running as @" + bot.ParseUser(me.result).username
+
+    bot.Poll(b, 30, (u: bot.Update): on_update(b, u) end)
+end

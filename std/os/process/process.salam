@@ -1,0 +1,431 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "process"
+@fa "فرآیند"
+package process
+
+import mem
+import str
+import io
+import os
+import os.error
+import os.temp
+
+if SALAM_OS_WINDOWS:
+    link dynamic "kernel32"
+    extern:
+        func CreateProcessA(app: void*, cmdline: void*, pattr: void*, tattr: void*, inherit: int, flags: int, envp: void*, cwd: void*, si: void*, pi: void*): int
+        func WaitForSingleObject(h: void*, ms: int): int
+        func GetExitCodeProcess(h: void*, code: void*): int
+        func TerminateProcess(h: void*, code: int): int
+        func CloseHandle(h: void*): int
+        func GetLastError(): int
+        noret func ExitProcess(code: int)
+        func CreateFileA(path: str, access: u32, share: u32, sattr: void*, disp: u32, flags: u32, template: void*): void*
+    end
+else:
+    extern:
+        environ: void*
+        func posix_spawnp(pid: void*, file: str, file_actions: void*, attrp: void*, argv: void*, envp: void*): int
+        func waitpid(pid: int, status: void*, options: int): int
+        func kill(pid: int, sig: int): int
+        func posix_spawn_file_actions_init(actions: void*): int
+        func posix_spawn_file_actions_destroy(actions: void*): int
+        func posix_spawn_file_actions_addopen(actions: void*, fd: int, path: str, flags: int, mode: int): int
+        func fork(): int
+        noret func _exit(code: int)
+    end
+end
+
+@en "Process"
+@fa "فرآیند"
+pub struct Process:
+    @en "pid"
+    @fa "شناسه"
+    pub pid: int = 0
+    @en "handle"
+    @fa "دسته"
+    pub handle: void* = null
+    @en "running"
+    @fa "فعال"
+    pub running: bool = false
+    @en "exit_code"
+    @fa "کد خروج"
+    pub exit_code: int = 0
+    @en "stdout_path"
+    @fa "مسیر خروجی"
+    pub stdout_path: str = ""
+    @en "stderr_path"
+    @fa "مسیر خروجی خطا"
+    pub stderr_path: str = ""
+end
+
+func _strptr(s: str): i64:
+    v := s as void*
+    ret v as i64
+end
+
+if SALAM_OS_WINDOWS:
+    func _u32_at(base: void*, off: i64): u32:
+        p := ((base as i64) + off) as u32*
+        ret p[0]
+    end
+
+    func _u32_set(base: void*, off: i64, v: u32):
+        p := ((base as i64) + off) as u32*
+        p[0] = v
+    end
+
+    func _ptr_at(base: void*, off: i64): void*:
+        p := ((base as i64) + off) as i64*
+        ret (p[0]) as void*
+    end
+
+    func _needs_quotes(s: str): bool:
+        if s.len() == 0: ret true end
+        ret str.Contains(s, " ")
+    end
+
+    func _append_token(sb &: str.StringBuilder, tok: str):
+        if _needs_quotes(tok):
+            str.BufAppendChar(sb, 34)
+            str.BufAppend(sb, tok)
+            str.BufAppendChar(sb, 34)
+        else:
+            str.BufAppend(sb, tok)
+        end
+    end
+
+    func _build_cmdline(path: str, args: Vector<str>): str:
+        mut sb := str.NewBuilder()
+        _append_token(sb, path)
+        n := args.len()
+        mut i := 0
+        until i < n:
+            str.BufAppendChar(sb, 32)
+            _append_token(sb, args.get(i))
+            i += 1
+        end
+        out := str.BufStr(sb)
+        str.BufFree(sb)
+        ret out
+    end
+
+    func _build_sa(): void*:
+        sa := mem.AllocateZeroed(24 as u64)
+        _u32_set(sa, 0, 24 as u32)
+        _u32_set(sa, 16, 1 as u32)
+        ret sa
+    end
+
+    func _open_inheritable(path: str, access: u32, disp: u32): void*:
+        sa := _build_sa()
+        h := CreateFileA(path, access, 3 as u32, sa, disp, 128 as u32, null)
+        mem.Free(sa)
+        invalid := (0 - 1) as i64
+        if (h as i64) == invalid: ret null end
+        ret h
+    end
+else:
+    func _build_argv(path: str, args: Vector<str>): void*:
+        n := args.len()
+        arr := mem.Allocate(((n + 2) as u64) * (sizeof(str) as u64)) as str*
+        arr[0] = path
+        mut i := 0
+        until i < n:
+            arr[i + 1] = args.get(i)
+            i += 1
+        end
+        arr[n + 1] = (null as void*) as str
+        ret arr as void*
+    end
+
+    func _open_flags(): int:
+        if SALAM_OS_MAC or SALAM_OS_BSD: ret 1 + 512 + 1024 else:
+            ret 1 + 64 + 512
+        end
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    @en "Start"
+    @fa "شروع"
+    pub func Start(path: str, args: Vector<str>): Process:
+        cmdline := _build_cmdline(path, args)
+        si := mem.AllocateZeroed(104 as u64)
+        _u32_set(si, 0, 104 as u32)
+        pi := mem.AllocateZeroed(24 as u64)
+        ok := CreateProcessA(null, cmdline as void*, null, null, 0, 0, null, null, si, pi)
+        mem.Free(si)
+        mut p := Process {}
+        if ok == 0:
+            error.Set(error.ProcessFailed, "CreateProcess failed", "Start", path, GetLastError())
+            mem.Free(pi)
+            ret p
+        end
+        p.pid = _u32_at(pi, 16) as int
+        p.handle = _ptr_at(pi, 0)
+        th := _ptr_at(pi, 8)
+        CloseHandle(th)
+        mem.Free(pi)
+        p.running = true
+        ret p
+    end
+
+    @en "StartCaptured"
+    @fa "شروع با ضبط"
+    pub func StartCaptured(path: str, args: Vector<str>): Process:
+        out_path := temp.File()
+        err_path := temp.File()
+        out_h := _open_inheritable(out_path, 1073741824 as u32, 2 as u32)
+        err_h := _open_inheritable(err_path, 1073741824 as u32, 2 as u32)
+        in_h := _open_inheritable("NUL", 2147483648 as u32, 3 as u32)
+
+        cmdline := _build_cmdline(path, args)
+        si := mem.AllocateZeroed(104 as u64)
+        _u32_set(si, 0, 104 as u32)
+        _u32_set(si, 60, 256 as u32)
+        p80 := ((si as i64) + 80) as i64*
+        p80[0] = in_h as i64
+        p88 := ((si as i64) + 88) as i64*
+        p88[0] = out_h as i64
+        p96 := ((si as i64) + 96) as i64*
+        p96[0] = err_h as i64
+
+        pi := mem.AllocateZeroed(24 as u64)
+        ok := CreateProcessA(null, cmdline as void*, null, null, 1, 0, null, null, si, pi)
+        mem.Free(si)
+        if in_h != null: CloseHandle(in_h) end
+        if out_h != null: CloseHandle(out_h) end
+        if err_h != null: CloseHandle(err_h) end
+
+        mut p := Process {}
+        p.stdout_path = out_path
+        p.stderr_path = err_path
+        if ok == 0:
+            error.Set(error.ProcessFailed, "CreateProcess failed", "StartCaptured", path, GetLastError())
+            mem.Free(pi)
+            ret p
+        end
+        p.pid = _u32_at(pi, 16) as int
+        p.handle = _ptr_at(pi, 0)
+        th := _ptr_at(pi, 8)
+        CloseHandle(th)
+        mem.Free(pi)
+        p.running = true
+        ret p
+    end
+
+    @en "Wait"
+    @fa "انتظار"
+    pub func Wait(p &: Process): int:
+        if p.handle == null: ret 0 - 1 end
+        WaitForSingleObject(p.handle, 0 - 1)
+        buf := mem.AllocateZeroed(4 as u64)
+        GetExitCodeProcess(p.handle, buf)
+        code := _u32_at(buf, 0) as int
+        mem.Free(buf)
+        CloseHandle(p.handle)
+        p.handle = null
+        p.running = false
+        p.exit_code = code
+        ret code
+    end
+
+    @en "Kill"
+    @fa "کشتن"
+    pub func Kill(p &: Process): int:
+        if p.handle == null: ret 0 - 1 end
+        if TerminateProcess(p.handle, 1) == 0: ret 0 - 1 end
+        p.running = false
+        ret 0
+    end
+
+    @en "Terminate"
+    @fa "پایان دادن"
+    pub func Terminate(p &: Process): int: ret Kill(p) end
+
+    @en "WaitPid"
+    @fa "انتظار شناسه"
+    pub func WaitPid(pid: int): int:
+        ret 0 - 1
+    end
+
+    @en "Fork"
+    @fa "انشعاب"
+    pub func Fork(): int:
+        ret 0 - 1
+    end
+
+    @en "ExitNow"
+    @fa "خروج فوری"
+    pub func ExitNow(code: int):
+        ExitProcess(code)
+    end
+else:
+    @en "Start"
+    @fa "شروع"
+    pub func Start(path: str, args: Vector<str>): Process:
+        argv := _build_argv(path, args)
+        pidbuf := mem.AllocateZeroed(4 as u64)
+        rc := posix_spawnp(pidbuf, path, null, null, argv, environ)
+        mem.Free(argv)
+        mut p := Process {}
+        if rc != 0:
+            error.Set(error.ProcessFailed, "posix_spawnp failed", "Start", path, rc)
+            mem.Free(pidbuf)
+            ret p
+        end
+        pidp := pidbuf as int*
+        p.pid = pidp[0]
+        mem.Free(pidbuf)
+        p.running = true
+        ret p
+    end
+
+    @en "StartCaptured"
+    @fa "شروع با ضبط"
+    pub func StartCaptured(path: str, args: Vector<str>): Process:
+        out_path := temp.File()
+        err_path := temp.File()
+        argv := _build_argv(path, args)
+        actions := mem.AllocateZeroed(256 as u64)
+        posix_spawn_file_actions_init(actions)
+        posix_spawn_file_actions_addopen(actions, 0, "/dev/null", 0, 0)
+        posix_spawn_file_actions_addopen(actions, 1, out_path, _open_flags(), 420)
+        posix_spawn_file_actions_addopen(actions, 2, err_path, _open_flags(), 420)
+        pidbuf := mem.AllocateZeroed(4 as u64)
+        rc := posix_spawnp(pidbuf, path, actions, null, argv, environ)
+        posix_spawn_file_actions_destroy(actions)
+        mem.Free(actions)
+        mem.Free(argv)
+        mut p := Process {}
+        p.stdout_path = out_path
+        p.stderr_path = err_path
+        if rc != 0:
+            error.Set(error.ProcessFailed, "posix_spawnp failed", "StartCaptured", path, rc)
+            mem.Free(pidbuf)
+            ret p
+        end
+        pidp2 := pidbuf as int*
+        p.pid = pidp2[0]
+        mem.Free(pidbuf)
+        p.running = true
+        ret p
+    end
+
+    @en "WaitPid"
+    @fa "انتظار شناسه"
+    pub func WaitPid(pid: int): int:
+        if pid <= 0: ret 0 - 1 end
+        statusbuf := mem.AllocateZeroed(4 as u64)
+        mut rc := waitpid(pid, statusbuf, 0)
+        until rc < 0 and kill(pid, 0) == 0:
+            rc = waitpid(pid, statusbuf, 0)
+        end
+        sp := statusbuf as int*
+        status := sp[0]
+        mem.Free(statusbuf)
+        mut code := 0 - 1
+        if rc == pid:
+            low := status % 128
+            if low == 0:
+                code = (status / 256) % 256
+            else:
+                if low != 127: code = 128 + low end
+            end
+        end
+        ret code
+    end
+
+    @en "Wait"
+    @fa "انتظار"
+    pub func Wait(p &: Process): int:
+        if p.pid <= 0: ret 0 - 1 end
+        code := WaitPid(p.pid)
+        p.running = false
+        p.exit_code = code
+        ret code
+    end
+
+    @en "Fork"
+    @fa "انشعاب"
+    pub func Fork(): int:
+        ret fork()
+    end
+
+    @en "ExitNow"
+    @fa "خروج فوری"
+    pub func ExitNow(code: int):
+        _exit(code)
+    end
+
+    @en "Kill"
+    @fa "کشتن"
+    pub func Kill(p &: Process): int:
+        if p.pid <= 0: ret 0 - 1 end
+        if kill(p.pid, 9) != 0: ret 0 - 1 end
+        p.running = false
+        ret 0
+    end
+
+    @en "Terminate"
+    @fa "پایان دادن"
+    pub func Terminate(p &: Process): int:
+        if p.pid <= 0: ret 0 - 1 end
+        if kill(p.pid, 15) != 0: ret 0 - 1 end
+        p.running = false
+        ret 0
+    end
+end
+
+@en "ReadStdout"
+@fa "خواندن خروجی"
+pub func ReadStdout(p: Process): str:
+    if p.stdout_path.len() == 0: ret "" end
+    ret io.ReadFile(p.stdout_path)
+end
+
+@en "ReadStderr"
+@fa "خواندن خطا"
+pub func ReadStderr(p: Process): str:
+    if p.stderr_path.len() == 0: ret "" end
+    ret io.ReadFile(p.stderr_path)
+end
+
+@en "Cleanup"
+@fa "پاکسازی"
+pub func Cleanup(p &: Process):
+    if p.stdout_path.len() > 0:
+        os.Remove(p.stdout_path)
+        p.stdout_path = ""
+    end
+    if p.stderr_path.len() > 0:
+        os.Remove(p.stderr_path)
+        p.stderr_path = ""
+    end
+end
+
+@en "ExitCode"
+@fa "کد خروج"
+pub func ExitCode(p: Process): int: ret p.exit_code end
+
+@en "Pid"
+@fa "شناسه فرآیند"
+pub func Pid(p: Process): int: ret p.pid end
+
+@en "IsRunning"
+@fa "در حال اجرا"
+pub func IsRunning(p: Process): bool: ret p.running end

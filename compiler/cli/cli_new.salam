@@ -1,0 +1,160 @@
+package cli
+
+import os
+import io
+import str
+
+include dr "../driver/driver.salam"
+include i18 "../i18n.salam"
+include co "../sal_core.salam"
+include pth "../sal_path.salam"
+
+func toml_quote(s: str): str:
+    ret "\"" + str.Replace(str.Replace(s, "\\", "\\\\"), "\"", "\\\"") + "\""
+end
+
+func project_path(dir: str, file: str): str:
+    if str.Len(dir) == 0 or str.Equals(dir, "."):
+        ret file
+    end
+    ret pth.PathJoin(dir, file)
+end
+
+func write_if_missing(path: str, content: str, made &: Vector<str>): bool:
+    if os.Exists(path):
+        ret true
+    end
+    if io.WriteFile(path, content) < 0:
+        io.EPrintln(co.Format1(i18.Tr("salam: cannot write '%s'"), co.ArgStr(path)))
+        ret false
+    end
+    made.push(path)
+    ret true
+end
+
+func has_salam_files(dir: str): bool:
+    entries := os.ListDir(dir)
+    defer entries.free()
+    repeat entries.len() in i:
+        if str.EndsWith(entries.get(i), ".salam"):
+            ret true
+        end
+    end
+    ret false
+end
+
+func scaffold(dir: str, name: str, fa: bool, with_main: bool, made &: Vector<str>): bool:
+    if with_main:
+        mut content := "func main:\n    println \"Hello, World!\"\nend\n"
+        if fa:
+            content = "تابع ریشه:\n    سرچاپ \"سلام، دنیا!\"\nپایان\n"
+        end
+        if not write_if_missing(project_path(dir, "main.salam"), content, made):
+            ret false
+        end
+    end
+    manifest := "[package]\nname = " + toml_quote(name) + "\nversion = \"0.1.0\"\nsalam = \">=" + str.TrimPrefix(co.VERSION, "v") + "\"\n\n[dependencies]\n"
+    if not write_if_missing(project_path(dir, "salam.toml"), manifest, made):
+        ret false
+    end
+    ignore := ".salam-build/\n/" + name + "\n/" + name + ".exe\n"
+    ret write_if_missing(project_path(dir, ".gitignore"), ignore, made)
+end
+
+func print_created(name: str, made: Vector<str>, cd: str, runnable: bool):
+    println co.Format1(i18.Tr("Created project '%s':"), co.ArgStr(name))
+    repeat made.len() in i:
+        println "  " + made.get(i)
+    end
+    println ""
+    if not runnable:
+        println i18.Tr("this directory already has .salam files: rename the one with the entry function to main.salam")
+        ret
+    end
+    println i18.Tr("Next steps:")
+    if str.Len(cd) > 0:
+        println "  cd " + cd
+    end
+    println "  salam run"
+end
+
+func new_project(opt &: dr.Dr): int:
+    mut name := opt.new_name
+    if str.Len(name) == 0:
+        print "Project name: "
+        line := io.Input()
+        name = str.Trim(line)
+    end
+    if str.Len(name) == 0:
+        io.EPrintln(i18.Tr("salam: project name cannot be empty"))
+        ret 2
+    end
+    if str.Contains(name, "/") or str.Contains(name, "\\"):
+        io.EPrintln(
+            co.Format1(
+                i18.Tr("salam: project name must not contain path separators ('%s')"), co.ArgStr(name)
+            )
+        )
+        ret 2
+    end
+    if os.Mkdir(name) != 0:
+        if os.Exists(name):
+            io.EPrintln(co.Format1(i18.Tr("salam: '%s' already exists"), co.ArgStr(name)))
+        else:
+            io.EPrintln(
+                co.Format1(
+                    i18.Tr("salam: cannot create directory '%s'"), co.ArgStr(name)
+                )
+            )
+        end
+        ret 2
+    end
+    mut made := Vector {} as Vector<str>
+    defer made.free()
+    if not scaffold(name, name, str.Equals(opt.lang, "fa"), true, made):
+        ret 2
+    end
+    print_created(name, made, name, true)
+    ret 0
+end
+
+func init_project(opt &: dr.Dr): int:
+    mut dir := opt.new_name
+    if str.Len(dir) == 0:
+        dir = "."
+    end
+    if not os.Exists(dir):
+        if os.MkdirAll(dir) != 0:
+            io.EPrintln(co.Format1(i18.Tr("salam: cannot create directory '%s'"), co.ArgStr(dir)))
+            ret 2
+        end
+    else not os.IsDir(dir):
+        io.EPrintln(co.Format1(i18.Tr("salam: '%s' is not a directory"), co.ArgStr(dir)))
+        ret 2
+    end
+    has_main := os.Exists(project_path(dir, "main.salam"))
+    if has_main and os.Exists(project_path(dir, "salam.toml")):
+        io.EPrintln(co.Format1(i18.Tr("salam: '%s' is already a Salam project"), co.ArgStr(dir)))
+        ret 2
+    end
+    mut base := dir
+    if str.Equals(dir, "."):
+        base = os.Cwd()
+    end
+    mut name := pth.PathBase(pth.PathTrimSep(base))
+    if str.Len(name) == 0 or str.Equals(name, ".") or str.Equals(name, ".."):
+        name = "app"
+    end
+    with_main := not has_main and not has_salam_files(dir)
+    mut made := Vector {} as Vector<str>
+    defer made.free()
+    if not scaffold(dir, name, str.Equals(opt.lang, "fa"), with_main, made):
+        ret 2
+    end
+    mut cd := ""
+    if not str.Equals(dir, "."):
+        cd = dir
+    end
+    print_created(name, made, cd, has_main or with_main)
+    ret 0
+end

@@ -1,0 +1,701 @@
+package nativegen
+
+extern:
+    func fopen(path: str, mode: str): void*
+    func fwrite(p: void*, sz: u64, n: u64, f: void*): u64
+    func fclose(f: void*): int
+end
+
+pub struct Ob:
+    pub b: Vector<u8> = Vector {}
+end
+
+func ob_u8(o &: Ob, v: int):
+    o.b.push((v & 255) as u8)
+end
+
+func ob_le(o &: Ob, v: i64, n: int):
+    mut x := v as u64
+    repeat n:
+        o.b.push((x & (255 as u64)) as u8)
+        x = x >> (8 as u64)
+    end
+end
+
+func ob_pad(o &: Ob, a: int):
+    until (o.b.len() % a) != 0:
+        o.b.push(0 as u8)
+    end
+end
+
+func ob_bytes(o &: Ob, src: Vector<u8>):
+    each x in src:
+        o.b.push(x)
+    end
+end
+
+func ob_str(o &: Ob, s: str):
+    p := sp(s)
+    n := str_len_of(s)
+    repeat n in i:
+        o.b.push(p[i])
+    end
+    o.b.push(0 as u8)
+end
+
+func str_len_of(s: str): int:
+    p := sp(s)
+    mut n := 0
+    until p[n] != (0 as u8):
+        n += 1
+    end
+    ret n
+end
+
+func ob_sym_name(g &: Ng, o &: Ob, s: int):
+    off := g.syms.off[s]
+    repeat g.syms.len[s] in i:
+        o.b.push(g.syms.bytes[off + i])
+    end
+    o.b.push(0 as u8)
+end
+
+func write_file(path: str, o &: Ob): bool:
+    f := fopen(path, "wb")
+    if f == null:
+        ret false
+    end
+    n := o.b.len() as u64
+    w := fwrite(o.b.data as void*, 1 as u64, n, f)
+    _c := fclose(f)
+    ret w == n
+end
+
+func elf_rtype(g &: Ng, t: int): int:
+    if g.arch == NG_ARCH_A64:
+        switch t:
+            R_ABS64: ret 257 end
+            R_ABS32: ret 258 end
+            R_PC32: ret 261 end
+            R_A64_CALL26: ret 283 end
+            R_A64_ADRP: ret 275 end
+            R_A64_ADDLO: ret 277 end
+            R_A64_GOTPAGE: ret 311 end
+            R_A64_GOTLO: ret 312 end
+        end
+        ret 0
+    end
+    if g.arch == NG_ARCH_RV64:
+        switch t:
+            R_ABS64: ret 2 end
+            R_ABS32: ret 1 end
+            R_PC32: ret 57 end
+            R_RV_CALL: ret 19 end
+            R_RV_HI20: ret 26 end
+            R_RV_LO12: ret 27 end
+        end
+        ret 0
+    end
+    if g.arch == NG_ARCH_ARM:
+        switch t:
+            R_ABS32: ret 2 end
+            R_PC32: ret 3 end
+            R_ARM_CALL: ret 28 end
+            R_ARM_JUMP24: ret 29 end
+            R_ARM_MOVW: ret 43 end
+            R_ARM_MOVT: ret 44 end
+            R_ARM_PREL31: ret 42 end
+        end
+        ret 0
+    end
+    if g.arch == NG_ARCH_X86:
+        if t == R_ABS32: ret 1 end
+        if t == R_PC32: ret 2 end
+        if t == R_PLT32: ret 4 end
+        ret 0
+    end
+    if t == R_ABS64: ret 1 end
+    if t == R_PC32: ret 2 end
+    if t == R_PLT32: ret 4 end
+    if t == R_GOTPCRELX: ret 42 end
+    if t == R_ABS32: ret 10 end
+    ret 0
+end
+
+func sec_bytes(g &: Ng, sec: int): Vector<u8>:
+    switch sec:
+        SEC_TEXT: ret g.s_text end
+        SEC_RODATA: ret g.s_ro end
+        SEC_DATA: ret g.s_data end
+        SEC_FINI: ret g.s_fini end
+        SEC_INIT: ret g.s_init end
+        SEC_PDATA: ret g.s_pdata end
+        SEC_XDATA: ret g.s_xdata end
+        SEC_CONST: ret g.s_cst end
+        SEC_EHFRAME: ret g.s_eh end
+        SEC_DBGINFO: ret g.s_dinfo end
+        SEC_DBGABBREV: ret g.s_dabbrev end
+        SEC_DBGLINE: ret g.s_dline end
+        SEC_DBGRANGES: ret g.s_dranges end
+        SEC_DBGLOC: ret g.s_dloc end
+        SEC_CVSYM: ret g.s_cvsym end
+        SEC_CVTYP: ret g.s_cvtyp end
+    end
+    ret g.s_text
+end
+
+func emit_sym_for(g &: Ng, s: int): bool:
+    if g.sy_def[s]:
+        ret true
+    end
+    if not g.sy_used[s]:
+        ret false
+    end
+    o := g.syms.off[s]
+    b := g.syms.bytes
+    ret not (g.syms.len[s] > 5 and b[o] == (108 as u8) and b[o + 1] == (108 as u8) and b[o + 2] == (118 as u8) and b[o + 3] == (109 as u8) and b[o + 4] == (46 as u8))
+end
+
+func elf_machine(g &: Ng): int:
+    if g.arch == NG_ARCH_A64: ret 183 end
+    if g.arch == NG_ARCH_X86: ret 3 end
+    if g.arch == NG_ARCH_ARM: ret 40 end
+    if g.arch == NG_ARCH_RV64: ret 243 end
+    ret 62
+end
+
+func elf_secs(g &: Ng): Vector<int>:
+    mut v := Vector {} as Vector<int>
+    v.push(SEC_TEXT)
+    v.push(SEC_RODATA)
+    v.push(SEC_CONST)
+    v.push(SEC_DATA)
+    v.push(SEC_BSS)
+    v.push(SEC_INIT)
+    v.push(SEC_FINI)
+    if g.s_eh.len() > 0:
+        v.push(SEC_EHFRAME)
+    end
+    if g.arch == NG_ARCH_ARM and g.s_pdata.len() > 0:
+        v.push(SEC_PDATA)
+    end
+    if g.arch == NG_ARCH_ARM and g.s_xdata.len() > 0:
+        v.push(SEC_XDATA)
+    end
+    if g.s_dinfo.len() > 0:
+        v.push(SEC_DBGINFO)
+        v.push(SEC_DBGABBREV)
+        v.push(SEC_DBGLINE)
+        v.push(SEC_DBGRANGES)
+        v.push(SEC_DBGLOC)
+    end
+    ret v
+end
+
+func elf_name(sec: int): str:
+    switch sec:
+        SEC_TEXT: ret ".text" end
+        SEC_RODATA: ret ".rodata" end
+        SEC_CONST: ret ".rodata.salam" end
+        SEC_DATA: ret ".data" end
+        SEC_BSS: ret ".bss" end
+        SEC_INIT: ret ".init_array" end
+        SEC_FINI: ret ".fini_array" end
+        SEC_EHFRAME: ret ".eh_frame" end
+        SEC_PDATA: ret ".ARM.exidx" end
+        SEC_XDATA: ret ".ARM.extab" end
+        SEC_DBGINFO: ret ".debug_info" end
+        SEC_DBGABBREV: ret ".debug_abbrev" end
+        SEC_DBGLINE: ret ".debug_line" end
+        SEC_DBGRANGES: ret ".debug_ranges" end
+        SEC_DBGLOC: ret ".debug_loc" end
+    end
+    ret ".data"
+end
+
+func elf_type(sec: int): int:
+    if sec == SEC_BSS: ret 8 end
+    if sec == SEC_INIT: ret 14 end
+    if sec == SEC_FINI: ret 15 end
+    if sec == SEC_PDATA: ret 0x70000001 end
+    ret 1
+end
+
+func elf_flags(sec: int): int:
+    if sec == SEC_DBGINFO or sec == SEC_DBGABBREV or sec == SEC_DBGLINE or sec == SEC_DBGRANGES or sec == SEC_DBGLOC: ret 0 end
+    if sec == SEC_TEXT: ret 6 end
+    if sec == SEC_RODATA or sec == SEC_CONST or sec == SEC_EHFRAME or sec == SEC_XDATA: ret 2 end
+    if sec == SEC_PDATA: ret 0x82 end
+    ret 3
+end
+
+func sh_entry(o &: Ob, x32: bool, name: int, typ: int, flags: int, off: int, size: int, link: int, info: int, al: int, ent: int):
+    if x32:
+        ob_le(o, name as i64, 4)
+        ob_le(o, typ as i64, 4)
+        ob_le(o, flags as i64, 4)
+        ob_le(o, 0 as i64, 4)
+        ob_le(o, off as i64, 4)
+        ob_le(o, size as i64, 4)
+        ob_le(o, link as i64, 4)
+        ob_le(o, info as i64, 4)
+        ob_le(o, al as i64, 4)
+        ob_le(o, ent as i64, 4)
+        ret
+    end
+    ob_le(o, name as i64, 4)
+    ob_le(o, typ as i64, 4)
+    ob_le(o, flags as i64, 8)
+    ob_le(o, 0 as i64, 8)
+    ob_le(o, off as i64, 8)
+    ob_le(o, size as i64, 8)
+    ob_le(o, link as i64, 4)
+    ob_le(o, info as i64, 4)
+    ob_le(o, al as i64, 8)
+    ob_le(o, ent as i64, 8)
+end
+
+func elf_sym(o &: Ob, x32: bool, name: int, info: int, shndx: int, value: i64, size: i64):
+    ob_le(o, name as i64, 4)
+    if x32:
+        ob_le(o, value, 4)
+        ob_le(o, size, 4)
+        ob_u8(o, info)
+        ob_u8(o, 0)
+        ob_le(o, shndx as i64, 2)
+        ret
+    end
+    ob_u8(o, info)
+    ob_u8(o, 0)
+    ob_le(o, shndx as i64, 2)
+    ob_le(o, value, 8)
+    ob_le(o, size, 8)
+end
+
+func patch_add32(b &: Vector<u8>, at: int, v: i64):
+    mut acc := 0 as i64
+    repeat 4 in k:
+        acc = acc | ((b[at + k] as i64) << ((8 * k) as i64))
+    end
+    mut x := ((acc + v) as u64) & (0xFFFFFFFF as u64)
+    repeat 4 in k2:
+        b[at + k2] = (x & (255 as u64)) as u8
+        x = x >> (8 as u64)
+    end
+end
+
+func arm_embed(b &: Vector<u8>, at: int, rt: int, add: i64):
+    mut w := 0 as i64
+    repeat 4 in k:
+        w = w | ((b[at + k] as i64) << ((8 * k) as i64))
+    end
+    if rt == R_ARM_CALL or rt == R_ARM_JUMP24:
+        w = (w & (0xFF000000 as i64)) | (((add - (8 as i64)) >> (2 as i64)) & (0xFFFFFF as i64))
+    else:
+        v := add & (0xFFFF as i64)
+        w = (w & (0xFFF0F000 as i64)) | ((v >> (12 as i64)) << (16 as i64)) | (v & (0xFFF as i64))
+    end
+    repeat 4 in k2:
+        b[at + k2] = ((w >> ((8 * k2) as i64)) & (255 as i64)) as u8
+    end
+end
+
+func write_elf(g &: Ng, path: str): bool:
+    x32 := g.wsz == 4
+    se := x32 ? 16 : 24
+    re := x32 ? 8 : 24
+    pw := x32 ? 4 : 8
+    secs := elf_secs(g)
+    nds := secs.len()
+    mut shidx := Vector {} as Vector<int>
+    repeat SEC_COUNT:
+        shidx.push(0)
+    end
+    repeat nds in q0:
+        shidx[secs[q0]] = q0 + 1
+    end
+    nsym := g.sy_kind.len()
+    mut elf_idx := Vector {} as Vector<int>
+    repeat nsym:
+        elf_idx.push(0)
+    end
+    mut strtab := Ob {}
+    ob_u8(strtab, 0)
+    mut symtab := Ob {}
+    repeat se:
+        ob_u8(symtab, 0)
+    end
+    mut nloc := 1
+    repeat nds in sx:
+        elf_sym(symtab, x32, 0, 3, sx + 1, 0 as i64, 0 as i64)
+        nloc += 1
+    end
+    repeat 2 in pass:
+        repeat nsym in s:
+            if not emit_sym_for(g, s) or (g.sy_def[s] and (g.sy_sec[s] < 0 or shidx[g.sy_sec[s]] == 0)):
+                continue
+            end
+            local := g.sy_def[s] and g.sy_local[s]
+            if (pass == 0) != local:
+                continue
+            end
+            elf_idx[s] = symtab.b.len() / se
+            sname := strtab.b.len()
+            ob_sym_name(g, strtab, s)
+            mut typ := 0
+            if g.sy_kind[s] == SY_FUNC:
+                typ = 2
+            else g.sy_kind[s] == SY_DATA and g.sy_def[s]:
+                typ = 1
+            end
+            bind := local ? 0 : 1
+            mut shndx := 0
+            if g.sy_def[s]:
+                shndx = shidx[g.sy_sec[s]]
+            end
+            elf_sym(symtab, x32, sname, (bind << 4) | typ, shndx, g.sy_off[s] as i64, g.sy_size[s] as i64)
+            if pass == 0:
+                nloc += 1
+            end
+        end
+    end
+    mut rbufs := Ob {}
+    mut rstart := Vector {} as Vector<int>
+    mut rsize := Vector {} as Vector<int>
+    each rs in secs:
+        rstart.push(rbufs.b.len())
+        repeat g.r_sec.len() in ri:
+            if g.r_sec[ri] == rs:
+                s2 := g.r_sym[ri]
+                mut idx := elf_idx[s2]
+                mut addend := g.r_add[ri]
+                rt := g.r_type[ri]
+                armc := rt == R_ARM_CALL or rt == R_ARM_JUMP24 or rt == R_ARM_MOVW or rt == R_ARM_MOVT
+                if not armc and g.sy_def[s2] and g.sy_local[s2] and g.sy_sec[s2] >= 0 and shidx[g.sy_sec[s2]] > 0:
+                    idx = shidx[g.sy_sec[s2]]
+                    addend = addend + (g.sy_off[s2] as i64)
+                end
+                if x32:
+                    mut sb := sec_bytes(g, rs)
+                    if armc:
+                        arm_embed(sb, g.r_off[ri], rt, addend)
+                    else:
+                        patch_add32(sb, g.r_off[ri], addend)
+                    end
+                    ob_le(rbufs, g.r_off[ri] as i64, 4)
+                    ob_le(rbufs, ((idx as i64) << (8 as i64)) | (elf_rtype(g, g.r_type[ri]) as i64), 4)
+                else:
+                    ob_le(rbufs, g.r_off[ri] as i64, 8)
+                    ob_le(rbufs, ((idx as i64) << (32 as i64)) | (elf_rtype(g, g.r_type[ri]) as i64), 8)
+                    ob_le(rbufs, addend, 8)
+                end
+            end
+        end
+        rsize.push(rbufs.b.len() - rstart[rstart.len() - 1])
+    end
+    mut shstr := Ob {}
+    ob_u8(shstr, 0)
+    mut nm_data := Vector {} as Vector<int>
+    mut nm_relsec := Vector {} as Vector<int>
+    each sc in secs:
+        nm_data.push(shstr.b.len())
+        ob_str(shstr, elf_name(sc))
+    end
+    each sc2 in secs:
+        nm_relsec.push(shstr.b.len())
+        ob_str(shstr, (x32 ? ".rel" : ".rela") + elf_name(sc2))
+    end
+    nm_sym := shstr.b.len()
+    ob_str(shstr, ".symtab")
+    nm_str := shstr.b.len()
+    ob_str(shstr, ".strtab")
+    nm_shstrtab := shstr.b.len()
+    ob_str(shstr, ".shstrtab")
+    nm_gnu := shstr.b.len()
+    ob_str(shstr, ".note.GNU-stack")
+    eh := x32 ? 52 : 64
+    sh := x32 ? 40 : 64
+    mut o := Ob {}
+    repeat eh:
+        ob_u8(o, 0)
+    end
+    mut offs := Vector {} as Vector<int>
+    mut sizes := Vector {} as Vector<int>
+    each ds in secs:
+        if ds == SEC_BSS:
+            offs.push(o.b.len())
+            sizes.push(g.bss_size)
+            continue
+        end
+        ob_pad(o, 16)
+        offs.push(o.b.len())
+        b := sec_bytes(g, ds)
+        ob_bytes(o, b)
+        sizes.push(b.len())
+    end
+    ob_pad(o, 8)
+    rel_file_off := o.b.len()
+    ob_bytes(o, rbufs.b)
+    ob_pad(o, 8)
+    sym_off := o.b.len()
+    ob_bytes(o, symtab.b)
+    str_off := o.b.len()
+    ob_bytes(o, strtab.b)
+    shstr_off := o.b.len()
+    ob_bytes(o, shstr.b)
+    ob_pad(o, 8)
+    sh_off := o.b.len()
+    repeat sh:
+        ob_u8(o, 0)
+    end
+    symtab_idx := 1 + 2 * nds
+    repeat nds in q:
+        sc3 := secs[q]
+        mut al := g.sec_align[sc3]
+        if sc3 == SEC_TEXT:
+            al = al < 16 ? 16 : al
+        else sc3 == SEC_INIT or sc3 == SEC_FINI or sc3 == SEC_EHFRAME:
+            al = pw
+        end
+        if al < 1:
+            al = 1
+        end
+        ent := (sc3 == SEC_INIT or sc3 == SEC_FINI) ? pw : 0
+        sh_entry(o, x32, nm_data[q], elf_type(sc3), elf_flags(sc3), offs[q], sizes[q], sc3 == SEC_PDATA ? 1 : 0, 0, al, ent)
+    end
+    repeat nds in q2:
+        sh_entry(o, x32, nm_relsec[q2], x32 ? 9 : 4, 0x40, rel_file_off + rstart[q2], rsize[q2], symtab_idx, q2 + 1, pw, re)
+    end
+    sh_entry(o, x32, nm_sym, 2, 0, sym_off, symtab.b.len(), symtab_idx + 1, nloc, pw, se)
+    sh_entry(o, x32, nm_str, 3, 0, str_off, strtab.b.len(), 0, 0, 1, 0)
+    sh_entry(o, x32, nm_shstrtab, 3, 0, shstr_off, shstr.b.len(), 0, 0, 1, 0)
+    sh_entry(o, x32, nm_gnu, 1, 0, shstr_off, 0, 0, 0, 1, 0)
+    nsec := symtab_idx + 4
+    o.b[0] = 0x7F as u8
+    o.b[1] = 0x45 as u8
+    o.b[2] = 0x4C as u8
+    o.b[3] = 0x46 as u8
+    o.b[4] = (x32 ? 1 : 2) as u8
+    o.b[5] = 1 as u8
+    o.b[6] = 1 as u8
+    put_le(o, 16, 1 as i64, 2)
+    put_le(o, 18, elf_machine(g) as i64, 2)
+    put_le(o, 20, 1 as i64, 4)
+    if x32:
+        put_le(o, 32, sh_off as i64, 4)
+        put_le(o, 36, (g.arch == NG_ARCH_ARM ? 0x05000400 : g.elf_flags) as i64, 4)
+        put_le(o, 40, 52 as i64, 2)
+        put_le(o, 46, 40 as i64, 2)
+        put_le(o, 48, nsec as i64, 2)
+        put_le(o, 50, (symtab_idx + 2) as i64, 2)
+    else:
+        put_le(o, 40, sh_off as i64, 8)
+        if g.arch == NG_ARCH_RV64:
+            put_le(o, 48, (g.uses_rvc ? 5 : 4) as i64, 4)
+        end
+        put_le(o, 52, 64 as i64, 2)
+        put_le(o, 58, 64 as i64, 2)
+        put_le(o, 60, nsec as i64, 2)
+        put_le(o, 62, (symtab_idx + 2) as i64, 2)
+    end
+    ok := write_file(path, o)
+    o.b.free()
+    symtab.b.free()
+    strtab.b.free()
+    shstr.b.free()
+    rbufs.b.free()
+    elf_idx.free()
+    shidx.free()
+    rstart.free()
+    rsize.free()
+    nm_data.free()
+    nm_relsec.free()
+    offs.free()
+    sizes.free()
+    ret ok
+end
+
+func put_le(o &: Ob, pos0: int, v: i64, n: int):
+    mut x := v as u64
+    repeat n in i:
+        o.b[pos0 + i] = (x & (255 as u64)) as u8
+        x = x >> (8 as u64)
+    end
+end
+
+func eh_u8(g &: Ng, v: int):
+    g.s_eh.push((v & 255) as u8)
+end
+
+func eh_le(g &: Ng, v: i64, n: int):
+    mut x := v as u64
+    repeat n:
+        g.s_eh.push((x & (255 as u64)) as u8)
+        x = x >> (8 as u64)
+    end
+end
+
+func eh_uleb(g &: Ng, v: int):
+    mut x := v
+    until true:
+        b := x & 127
+        x = x >> 7
+        if x == 0:
+            eh_u8(g, b)
+            ret
+        end
+        eh_u8(g, b | 128)
+    end
+end
+
+func eh_put32(g &: Ng, at: int, v: int):
+    mut x := v
+    repeat 4 in k:
+        g.s_eh[at + k] = (x & 255) as u8
+        x = x >> 8
+    end
+end
+
+func dw_reg(r: int): int:
+    switch r:
+        1: ret 2 end
+        2: ret 1 end
+        4: ret 7 end
+        5: ret 6 end
+        6: ret 4 end
+        7: ret 5 end
+    end
+    ret r
+end
+
+func eh_advance(g &: Ng, loc &: int, dst: int):
+    d := dst - loc
+    if d <= 0:
+        ret
+    end
+    if d < 64:
+        eh_u8(g, 0x40 | d)
+    else d < 256:
+        eh_u8(g, 0x02)
+        eh_u8(g, d)
+    else:
+        eh_u8(g, 0x03)
+        eh_le(g, d as i64, 2)
+    end
+    loc = dst
+end
+
+func eh_cfa(g &: Ng, off: int):
+    eh_u8(g, 0x0E)
+    eh_uleb(g, off)
+end
+
+func push_len(r: int): int:
+    ret r >= 8 ? 2 : 1
+end
+
+func build_eh_frame(g &: Ng):
+    g.s_eh.clear()
+    if g.eh_sym.len() == 0:
+        ret
+    end
+    df := g.os == NG_OS_WINDOWS
+    al8 := df ? 4 : 8
+    eh_le(g, 0 as i64, 4)
+    eh_le(g, df ? (0xFFFFFFFF as i64) : (0 as i64), 4)
+    eh_u8(g, 1)
+    if not df:
+        eh_u8(g, 0x7A)
+        eh_u8(g, 0x52)
+    end
+    eh_u8(g, 0)
+    x32 := g.arch == NG_ARCH_X86
+    ws := x32 ? 4 : 8
+    eh_uleb(g, 1)
+    eh_u8(g, x32 ? 0x7C : 0x78)
+    eh_uleb(g, x32 ? 8 : 16)
+    if not df:
+        eh_uleb(g, 1)
+        eh_u8(g, 0x1B)
+    end
+    eh_u8(g, 0x0C)
+    eh_uleb(g, x32 ? 4 : 7)
+    eh_uleb(g, ws)
+    eh_u8(g, x32 ? 0x88 : 0x90)
+    eh_uleb(g, 1)
+    until (g.s_eh.len() % al8) != 0:
+        eh_u8(g, 0)
+    end
+    eh_put32(g, 0, g.s_eh.len() - 4)
+    mut cie := 0 - 1
+    if df:
+        cie = dbg_local_sym(g, ".Lsalam.dframe0", SEC_EHFRAME)
+    end
+    repeat g.eh_sym.len() in f:
+        fs := g.eh_sym[f]
+        if g.sy_live.len() > 0 and (fs >= g.sy_live.len() or not g.sy_live[fs]):
+            continue
+        end
+        if not g.sy_def[fs] or g.sy_sec[fs] != SEC_TEXT:
+            continue
+        end
+        start := g.s_eh.len()
+        eh_le(g, 0 as i64, 4)
+        if df:
+            add_reloc(g, SEC_EHFRAME, g.s_eh.len(), cie, R_ABS32, 0 as i64)
+            eh_le(g, 0 as i64, 4)
+            add_reloc(g, SEC_EHFRAME, g.s_eh.len(), fs, R_ABS32, 0 as i64)
+            eh_le(g, 0 as i64, 4)
+            eh_le(g, g.sy_size[fs] as i64, 4)
+        else:
+            eh_le(g, (start + 4) as i64, 4)
+            add_reloc(g, SEC_EHFRAME, g.s_eh.len(), fs, R_PC32, 0 as i64)
+            eh_le(g, 0 as i64, 4)
+            eh_le(g, g.sy_size[fs] as i64, 4)
+            eh_uleb(g, 0)
+        end
+        mut loc := 0
+        mut at := g.eh_pre[f]
+        nr := g.eh_rn[f]
+        repeat nr in k:
+            r := g.eh_regs[g.eh_rs[f] + k]
+            at += push_len(r)
+            eh_advance(g, loc, at)
+            eh_cfa(g, ws + ws * (k + 1))
+            eh_u8(g, 0x80 | (x32 ? r : dw_reg(r)))
+            eh_uleb(g, k + 2)
+        end
+        al := g.eh_alloc[f]
+        alen := x32 ? (fits8(al as i64) ? 3 : 6) : (fits8(al as i64) ? 4 : 7)
+        if al > 0:
+            at += alen
+            eh_advance(g, loc, at)
+            eh_cfa(g, ws + ws * nr + al)
+        end
+        repeat g.eh_en[f] in q:
+            ep := g.eh_ep[g.eh_es[f] + q]
+            mut p := ep
+            eh_advance(g, loc, p)
+            eh_u8(g, 0x0A)
+            if al > 0:
+                p += alen
+                eh_advance(g, loc, p)
+                eh_cfa(g, ws + ws * nr)
+            end
+            mut k2 := nr - 1
+            until k2 >= 0:
+                p += push_len(g.eh_regs[g.eh_rs[f] + k2])
+                eh_advance(g, loc, p)
+                eh_cfa(g, ws + ws * k2)
+                k2 -= 1
+            end
+            p += g.eh_rl[f]
+            eh_advance(g, loc, p)
+            eh_u8(g, 0x0B)
+        end
+        until (g.s_eh.len() % al8) != 0:
+            eh_u8(g, 0)
+        end
+        eh_put32(g, start, g.s_eh.len() - start - 4)
+    end
+end

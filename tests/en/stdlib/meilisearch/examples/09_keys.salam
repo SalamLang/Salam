@@ -1,0 +1,57 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.meilisearch
+import jwt
+import str
+
+include fake "../_fake.salam"
+
+const PORT := 19828
+
+func main:
+    created := `{"name":"Web search","description":"Search only","key":"web-search-key","uid":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","actions":["search"],"indexes":["movies"],"expiresAt":null,"createdAt":"2026-10-01T08:00:00Z","updatedAt":"2026-10-01T08:00:00Z"}`
+    fake.On("POST", "/keys", 201, created)
+    fake.On("GET", "/keys", 200, `{"results":[` + created + `],"offset":0,"limit":20,"total":1}`)
+    fake.On("PATCH", "/keys/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", 200, created)
+    fake.On("DELETE", "/keys/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", 204, ``)
+    if not fake.Start(PORT):
+        println "the example server did not start"
+        ret 1
+    end
+    admin := meilisearch.New("http://127.0.0.1:" + PORT, "masterKey")
+    mut err := meilisearch.Error {}
+
+    mut req := meilisearch.KeyRequest { name = "Web search", description = "Search only" }
+    req.actions.push("search")
+    req.indexes.push("movies")
+    key := meilisearch.CreateKey(admin, req, err)
+    println "key: " + key.name + " can " + str.Join(key.actions, ",") + " on " + str.Join(key.indexes, ",")
+
+    page := meilisearch.GetKeys(admin, 0, 20, err)
+    println "keys: " + page.total
+    meilisearch.UpdateKey(admin, key.uid, "Web search", "Search only, movies only", err)
+    println "updated: " + meilisearch.Ok(err)
+
+    rules := `{"movies": {"filter": "user_id = 42"}}`
+    token := meilisearch.TenantToken(key.uid, key.key, rules, 0, err)
+    mut code := 0
+    checked := jwt.VerifyHS256(token, key.key, code)
+    println "tenant token valid: " + jwt.IsValid(token, key.key, jwt.DefaultOptions()) + ", rules: " + jwt.Raw(checked, "searchRules")
+    user := meilisearch.New("http://127.0.0.1:" + PORT, token)
+    println "user client ready: " + (user.api_key.len() > 0)
+
+    println "deleted: " + meilisearch.DeleteKey(admin, key.uid, err)
+    ret 0
+end

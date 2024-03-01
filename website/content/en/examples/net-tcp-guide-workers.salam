@@ -1,0 +1,54 @@
+import net.tcp
+import chan
+import str
+
+mut server := tcp.Server {}
+mut jobs := chan.Chan {} as chan.Chan<i64>
+
+func acceptor():
+    repeat 3:
+        conn := tcp.Accept(server)
+        if tcp.ConnOk(conn): _ := jobs.send(conn.fd) end
+    end
+    jobs.close()
+end
+
+func worker():
+    mut ok := true
+    until true:
+        fd := jobs.recv(ok)
+        if not ok: break end
+        conn := tcp.ConnFromFd(fd)
+        tcp.SetReadDeadline(conn, 2000)
+        request := tcp.Read(conn, 1024)
+        _ := tcp.Write(conn, "HELLO " + str.Upper(request))
+        tcp.Close(conn)
+    end
+end
+
+func main:
+    server = tcp.Bind(0)
+    jobs.init(8 as i64)
+    a := spawn(acceptor)
+    w1 := spawn(worker)
+    w2 := spawn(worker)
+
+    names := ["sara", "reza", "mina"]
+    mut conns := Vector {} as Vector<tcp.Conn>
+    repeat names.len():
+        c := tcp.Dial("127.0.0.1", tcp.Port(server))
+        tcp.SetReadDeadline(c, 2000)
+        conns.push(c)
+    end
+    each i, c in conns:
+        _ := tcp.Write(c, names[i])
+    end
+    each i, c in conns:
+        println names[i], "->", tcp.Read(c, 1024)
+        tcp.Close(c)
+    end
+    join(a)
+    join(w1)
+    join(w2)
+    tcp.CloseServer(server)
+end

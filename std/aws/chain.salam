@@ -1,0 +1,409 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aws
+
+import str
+import time
+import env
+import os
+import net.http
+
+const _IMDS_HOST := "http://169.254.169.254"
+
+const _ECS_HOST := "http://169.254.170.2"
+
+const _IMDS_TIMEOUT_MS := 1000
+
+const _IMDS_TTL := "21600"
+
+@en "SOURCE_ENV"
+@fa "منبع محیط"
+pub const SOURCE_ENV := "environment"
+@en "SOURCE_PROFILE"
+@fa "منبع نمایه"
+pub const SOURCE_PROFILE := "profile"
+@en "SOURCE_WEB_IDENTITY"
+@fa "منبع هویت وب"
+pub const SOURCE_WEB_IDENTITY := "web-identity"
+@en "SOURCE_CONTAINER"
+@fa "منبع کانتینر"
+pub const SOURCE_CONTAINER := "container"
+@en "SOURCE_INSTANCE"
+@fa "منبع ماشین"
+pub const SOURCE_INSTANCE := "instance"
+
+@en "ChainOptions"
+@fa "گزینه‌های زنجیره"
+pub struct ChainOptions:
+    @en "use_env"
+    @fa "استفاده از متغیرهای محیطی"
+    pub use_env: bool = true
+    @en "use_profile"
+    @fa "استفاده از نمایه"
+    pub use_profile: bool = true
+    @en "profile"
+    @fa "نمایه"
+    pub profile: str = ""
+    @en "use_web_identity"
+    @fa "استفاده از هویت وب"
+    pub use_web_identity: bool = false
+    @en "use_container"
+    @fa "استفاده از کانتینر"
+    pub use_container: bool = false
+    @en "use_instance"
+    @fa "استفاده از ماشین"
+    pub use_instance: bool = false
+    @en "follow_roles"
+    @fa "دنبال کردن نقش‌ها"
+    pub follow_roles: bool = true
+    @en "max_role_depth"
+    @fa "بیشترین عمق نقش"
+    pub max_role_depth: int = 4
+    @en "session_name"
+    @fa "نام نشست"
+    pub session_name: str = ""
+    @en "duration"
+    @fa "مدت"
+    pub duration: int = 0
+    @en "timeout_ms"
+    @fa "مهلت"
+    pub timeout_ms: int = 1000
+end
+
+func _http_get(
+    url: str, path: str, headers: str, method: str, timeout_ms: int, status &: int
+): str:
+    ep := http.ParseEndpoint(url)
+    status = 0
+    if not ep.ok: ret "" end
+    head := method + " " + path + " HTTP/1.1\r\nHost: " + ep.host + "\r\n" + headers + "Content-Length: 0\r\nConnection: close\r\n\r\n"
+    mut raw := http.SendRawTimeout(ep, head, null, 0, timeout_ms)
+    defer http.FreeRaw(raw)
+    status = raw.status
+    if raw.error.len() > 0: ret "" end
+    ret http.RawText(raw)
+end
+
+func _imds_token(timeout_ms: int): str:
+    mut status := 0
+    ret _http_get(
+        _IMDS_HOST, "/latest/api/token", "X-aws-ec2-metadata-token-ttl-seconds: " + _IMDS_TTL + "\r\n", "PUT", timeout_ms, status
+    ).trim()
+end
+
+func _imds_get(token: str, path: str, timeout_ms: int, status &: int): str:
+    ret _http_get(
+        _IMDS_HOST, path, "X-aws-ec2-metadata-token: " + token + "\r\n", "GET", timeout_ms, status
+    )
+end
+
+func _creds_from_json(body: str, source: str): Credentials:
+    if body.len() == 0:
+        ret Credentials {
+            error = "no credential document was returned", code = "NoCredentials", source = source
+        }
+    end
+    mut out := Credentials {
+        access_key = _json_field(body, "AccessKeyId"), secret_key = _json_field(body, "SecretAccessKey"), session_token = _json_field(body, "Token"), expires = _json_field(body, "Expiration"), source = source
+    }
+    if out.session_token.len() == 0:
+        out.session_token = _json_field(body, "SessionToken")
+    end
+    out.expires_epoch = _iso_epoch(out.expires)
+    if out.access_key.len() == 0 or out.secret_key.len() == 0:
+        out.error = "the credential document was incomplete"
+        out.code = "MalformedDocument"
+        ret out
+    end
+    out.ok = true
+    ret out
+end
+
+func _profile_text(path: str): str:
+    if path.len() == 0 or not os.Exists(path): ret "" end
+    ret os.ReadFile(path)
+end
+
+func _config_value(text: str, profile: str, key: str): str:
+    direct := ParseIni(text, profile, key)
+    if direct.len() > 0: ret direct end
+    ret ParseIni(text, "profile " + profile, key)
+end
+
+func _static_from_profile(
+    creds_text: str, config_text: str, profile: str
+): Credentials:
+    mut out := Credentials {
+        access_key = ParseIni(creds_text, profile, "aws_access_key_id"), secret_key = ParseIni(creds_text, profile, "aws_secret_access_key"), session_token = ParseIni(creds_text, profile, "aws_session_token"), source = SOURCE_PROFILE + " " + profile
+    }
+    if out.access_key.len() == 0:
+        out.access_key = _config_value(config_text, profile, "aws_access_key_id")
+        out.secret_key = _config_value(config_text, profile, "aws_secret_access_key")
+        out.session_token = _config_value(config_text, profile, "aws_session_token")
+    end
+    out.ok = out.access_key.len() > 0 and out.secret_key.len() > 0
+    if not out.ok:
+        out.error = "profile '" + profile + "' carries no credentials"
+        out.code = "NoCredentials"
+    end
+    ret out
+end
+
+func _resolve_profile(profile: str, o: ChainOptions, depth: int): Credentials:
+    mut name := profile
+    if name.len() == 0: name = env.Get("AWS_PROFILE") end
+    if name.len() == 0: name = "default" end
+    if depth > o.max_role_depth:
+        ret Credentials {
+            error = "the profile chain from '" + name + "' is longer than " + o.max_role_depth + " steps; it is probably a loop", code = "ProfileLoop", source = SOURCE_PROFILE
+        }
+    end
+    creds_text := _profile_text(CredentialsPath())
+    config_text := _profile_text(ConfigPath())
+    role_arn := _config_value(config_text, name, "role_arn")
+    if role_arn.len() == 0 or not o.follow_roles:
+        ret _static_from_profile(creds_text, config_text, name)
+    end
+    token_file := _config_value(config_text, name, "web_identity_token_file")
+    mut base := Config { region = _config_value(config_text, name, "region") }
+    if base.region.len() == 0: base.region = "us-east-1" end
+    base.timeout_ms = o.timeout_ms
+    mut session := _config_value(config_text, name, "role_session_name")
+    if session.len() == 0: session = o.session_name end
+    if token_file.len() > 0:
+        if not os.Exists(token_file):
+            ret Credentials {
+                error = "the web identity token file '" + token_file + "' named by profile '" + name + "' is not there", code = "NoCredentials", source = SOURCE_WEB_IDENTITY
+            }
+        end
+        mut got := AssumeRoleWithWebIdentity(
+            base, role_arn, session, os.ReadFile(token_file).trim(), o.duration
+        )
+        got.source = SOURCE_PROFILE + " " + name + " -> " + got.source
+        ret got
+    end
+    source_profile := _config_value(config_text, name, "source_profile")
+    credential_source := _config_value(config_text, name, "credential_source")
+    mut start := Credentials {}
+    if source_profile.len() > 0:
+        start = _resolve_profile(source_profile, o, depth + 1)
+    else credential_source.lower() == "ec2instancemetadata":
+        start = FromInstanceCredentials(o.timeout_ms)
+    else credential_source.lower() == "ecscontainer":
+        start = FromContainerCredentials(o.timeout_ms)
+    else credential_source.lower() == "environment":
+        start = FromEnvironmentCredentials()
+    else:
+        start = _static_from_profile(creds_text, config_text, name)
+    end
+    if not start.ok:
+        if start.code == "ProfileLoop": ret start end
+        ret Credentials {
+            error = "profile '" + name + "' names a role but its starting " + "credential could not be found: " + start.error, code = start.code, source = SOURCE_PROFILE + " " + name
+        }
+    end
+    mut assumed := AssumeRole(Apply(base, start), role_arn, session, o.duration)
+    assumed.source = SOURCE_PROFILE + " " + name + " -> " + assumed.source
+    ret assumed
+end
+
+@en "FromEnvironmentCredentials"
+@fa "اعتبارنامه از محیط"
+pub func FromEnvironmentCredentials(): Credentials:
+    mut out := Credentials {
+        access_key = env.Get("AWS_ACCESS_KEY_ID"), secret_key = env.Get("AWS_SECRET_ACCESS_KEY"), session_token = env.Get("AWS_SESSION_TOKEN"), source = SOURCE_ENV
+    }
+    out.ok = out.access_key.len() > 0 and out.secret_key.len() > 0
+    if not out.ok:
+        out.error = "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are not both set"
+        out.code = "NoCredentials"
+    end
+    ret out
+end
+
+@en "FromProfileCredentials"
+@fa "اعتبارنامه از نمایه"
+pub func FromProfileCredentials(profile: str, o: ChainOptions): Credentials:
+    ret _resolve_profile(profile, o, 0)
+end
+
+@en "FromWebIdentityCredentials"
+@fa "اعتبارنامه از هویت وب"
+pub func FromWebIdentityCredentials(o: ChainOptions): Credentials:
+    token_file := env.Get("AWS_WEB_IDENTITY_TOKEN_FILE")
+    role_arn := env.Get("AWS_ROLE_ARN")
+    if token_file.len() == 0 or role_arn.len() == 0:
+        ret Credentials {
+            error = "AWS_WEB_IDENTITY_TOKEN_FILE and AWS_ROLE_ARN are not both set", code = "NoCredentials", source = SOURCE_WEB_IDENTITY
+        }
+    end
+    if not os.Exists(token_file):
+        ret Credentials {
+            error = "the web identity token file '" + token_file + "' is not there", code = "NoCredentials", source = SOURCE_WEB_IDENTITY
+        }
+    end
+    mut session := env.Get("AWS_ROLE_SESSION_NAME")
+    if session.len() == 0: session = o.session_name end
+    mut base := Config { region = env.GetOr("AWS_REGION", "us-east-1") }
+    base.timeout_ms = o.timeout_ms
+    ret AssumeRoleWithWebIdentity(
+        base, role_arn, session, os.ReadFile(token_file).trim(), o.duration
+    )
+end
+
+@en "FromContainerCredentials"
+@fa "اعتبارنامه از کانتینر"
+pub func FromContainerCredentials(timeout_ms: int): Credentials:
+    relative := env.Get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+    full := env.Get("AWS_CONTAINER_CREDENTIALS_FULL_URI")
+    if relative.len() == 0 and full.len() == 0:
+        ret Credentials {
+            error = "no container credential address is set", code = "NoCredentials", source = SOURCE_CONTAINER
+        }
+    end
+    mut headers := ""
+    auth := env.Get("AWS_CONTAINER_AUTHORIZATION_TOKEN")
+    if auth.len() > 0: headers = "Authorization: " + auth + "\r\n" end
+    mut host := _ECS_HOST
+    mut path := relative
+    if relative.len() == 0:
+        ep := http.ParseEndpoint(full)
+        if not ep.ok:
+            ret Credentials {
+                error = "AWS_CONTAINER_CREDENTIALS_FULL_URI could not be parsed", code = "Config", source = SOURCE_CONTAINER
+            }
+        end
+        host = full
+        slash := str.IndexFrom(full, "/", full.find("://") + 3)
+        path = "/"
+        if slash >= 0:
+            host = full.substr(0, slash)
+            path = full.substr(slash, full.len() - slash)
+        end
+    end
+    mut status := 0
+    body := _http_get(host, path, headers, "GET", timeout_ms, status)
+    if status != 200:
+        ret Credentials {
+            error = "the container credential provider answered " + status, code = "NoCredentials", source = SOURCE_CONTAINER
+        }
+    end
+    ret _creds_from_json(body, SOURCE_CONTAINER)
+end
+
+@en "FromInstanceCredentials"
+@fa "اعتبارنامه از ماشین"
+pub func FromInstanceCredentials(timeout_ms: int): Credentials:
+    mut ms := timeout_ms
+    if ms <= 0: ms = _IMDS_TIMEOUT_MS end
+    token := _imds_token(ms)
+    if token.len() == 0:
+        ret Credentials {
+            error = "no instance metadata service answered; this is probably not an EC2 instance", code = "NoCredentials", source = SOURCE_INSTANCE
+        }
+    end
+    mut status := 0
+    role := _imds_get(
+        token, "/latest/meta-data/iam/security-credentials/", ms, status
+    ).trim()
+    if status != 200 or role.len() == 0:
+        ret Credentials {
+            error = "the instance carries no role", code = "NoCredentials", source = SOURCE_INSTANCE
+        }
+    end
+    mut first := role
+    nl := role.find("\n")
+    if nl >= 0: first = role.substr(0, nl).trim() end
+    body := _imds_get(
+        token, "/latest/meta-data/iam/security-credentials/" + first, ms, status
+    )
+    if status != 200:
+        ret Credentials {
+            error = "the metadata service answered " + status + " for role " + first, code = "NoCredentials", source = SOURCE_INSTANCE
+        }
+    end
+    ret _creds_from_json(body, SOURCE_INSTANCE + " " + first)
+end
+
+@en "InstanceRegion"
+@fa "منطقه ماشین"
+pub func InstanceRegion(timeout_ms: int): str:
+    mut ms := timeout_ms
+    if ms <= 0: ms = _IMDS_TIMEOUT_MS end
+    token := _imds_token(ms)
+    if token.len() == 0: ret "" end
+    mut status := 0
+    where := _imds_get(token, "/latest/meta-data/placement/region", ms, status)
+    if status != 200: ret "" end
+    ret where.trim()
+end
+
+@en "DefaultChain"
+@fa "زنجیره پیش‌فرض"
+pub func DefaultChain(): ChainOptions:
+    ret ChainOptions {}
+end
+
+@en "ContainerChain"
+@fa "زنجیره کانتینر"
+pub func ContainerChain(): ChainOptions:
+    ret ChainOptions {
+        use_env = true, use_profile = false, use_web_identity = true, use_container = true, use_instance = true
+    }
+end
+
+@en "Resolve"
+@fa "یافتن اعتبارنامه"
+pub func Resolve(o: ChainOptions): Credentials:
+    mut last := Credentials {
+        error = "no credential source was enabled", code = "NoCredentials"
+    }
+    if o.use_env:
+        got := FromEnvironmentCredentials()
+        if got.ok: ret got end
+        last = got
+    end
+    if o.use_web_identity:
+        got := FromWebIdentityCredentials(o)
+        if got.ok: ret got end
+        last = got
+    end
+    if o.use_profile:
+        got := FromProfileCredentials(o.profile, o)
+        if got.ok: ret got end
+        last = got
+    end
+    if o.use_container:
+        got := FromContainerCredentials(o.timeout_ms)
+        if got.ok: ret got end
+        last = got
+    end
+    if o.use_instance:
+        got := FromInstanceCredentials(o.timeout_ms)
+        if got.ok: ret got end
+        last = got
+    end
+    ret last
+end
+
+@en "ResolveConfig"
+@fa "یافتن پیکربندی"
+pub func ResolveConfig(bucket: str, region: str, o: ChainOptions): Config:
+    creds := Resolve(o)
+    mut cfg := ForAws(region, bucket)
+    cfg.timeout_ms = o.timeout_ms
+    if not creds.ok: ret cfg end
+    ret Apply(cfg, creds)
+end

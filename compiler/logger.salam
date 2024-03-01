@@ -1,0 +1,616 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package logger
+
+import str
+import io
+import os
+import time
+
+include dr "diag_render.salam"
+include co "sal_core.salam"
+include i18 "i18n.salam"
+
+pub const LOG_TRACE := 0
+pub const LOG_DEBUG := 1
+pub const LOG_INFO := 2
+pub const LOG_WARN := 3
+pub const LOG_ERROR := 4
+pub const LOG_OFF := 5
+
+pub const PH_DRIVER := 0
+pub const PH_CLI := 1
+pub const PH_LEXER := 2
+pub const PH_PARSER := 3
+pub const PH_SEMANTIC := 4
+pub const PH_IR := 5
+pub const PH_CODEGEN := 6
+
+pub const LOGGER_MAX_DIAG_SOURCES := 512
+
+pub const FIX_RANGE := 0
+pub const FIX_LINES := 1
+pub const FIX_LINE_AFTER := 2
+pub const FIX_LINE_BEFORE := 3
+
+mut g_capture_on := false
+mut g_capture_buf := ""
+mut g_record_on := false
+
+mut g_records := Vector {} as Vector<Record>
+mut g_fixes := Vector {} as Vector<Fix>
+mut g_staged := Vector {} as Vector<Fix>
+
+pub struct Record:
+    pub level: int = 0
+    pub file: str = ""
+    pub line: int = 0
+    pub col: int = 0
+    pub index: int = 0 - 1
+    pub length: int = 0
+    pub help: str = ""
+    pub msg: str = ""
+end
+
+pub struct Fix:
+    pub rec: int = 0
+    pub title: str = ""
+    pub file: str = ""
+    pub index: int = 0
+    pub length: int = 0
+    pub find: str = ""
+    pub text: str = ""
+    pub mode: int = 0
+    pub preferred: bool = false
+    pub safe: bool = false
+end
+
+pub struct DiagSourceEntry:
+    pub file: str = ""
+    pub text: str = ""
+    pub len: int = 0
+end
+
+pub struct Logger:
+    pub min_level: int = 2
+    pub color: bool = false
+    pub timestamps: bool = true
+    pub diag_rich: bool = false
+    pub diag_style: int = 0
+    pub diag_format: int = 0
+    pub src_text: str = ""
+    pub src_len: int = 0
+    pub src_table: Vector<DiagSourceEntry> = Vector {}
+end
+
+func level_color(level: int): str:
+    ret match level:
+        0: "\x1b[90m" end
+        1: "\x1b[36m" end
+        2: "\x1b[32m" end
+        3: "\x1b[33m" end
+        4: "\x1b[31m" end
+        else: "\x1b[0m" end
+    end
+end
+
+func timestamp_str(): str:
+    ret "[" + time.Format(time.Now()) + "]"
+end
+
+inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
+
+func split_code_prefix(msg: str, is_error &: bool, code &: int): str:
+    n := str.Len(msg)
+    if n < 6:
+        ret msg
+    end
+    c0 := byte_at(msg, 0)
+    if c0 != 69 and c0 != 87:
+        ret msg
+    end
+    d1 := byte_at(msg, 1)
+    d2 := byte_at(msg, 2)
+    d3 := byte_at(msg, 3)
+    if d1 < 48 or d1 > 57 or d2 < 48 or d2 > 57 or d3 < 48 or d3 > 57:
+        ret msg
+    end
+    if byte_at(msg, 4) != 58 or byte_at(msg, 5) != 32:
+        ret msg
+    end
+    is_error = c0 == 69
+    code = (d1 - 48) * 100 + (d2 - 48) * 10 + (d3 - 48)
+    ret msg.substr(6, n - 6)
+end
+
+func find_src(lgr: Logger, file: str): str:
+    n := lgr.src_table.len()
+    mut i := 0
+    until i < n:
+        e := lgr.src_table.get(i)
+        if str.Equals(e.file, file):
+            ret e.text
+        end
+        i += 1
+    end
+    if n > 0 and str.Len(file) > 0 and os.Exists(file) and not os.IsDir(file):
+        ret io.ReadFile(file)
+    end
+    ret lgr.src_text
+end
+
+func render_rich(lgr: Logger, level: int, file: str, line: int, col: int, help: str, msg: str): str:
+    mut is_error := level == LOG_ERROR
+    mut code := 0
+    body := split_code_prefix(msg, is_error, code)
+    lvl := is_error ? "error" : "warning"
+    src := find_src(lgr, file)
+    ret dr.RenderAt(
+        lvl, code, is_error, file, line, col, 0, src, str.Len(src), body, help, lgr.diag_style, lgr.diag_format, lgr.color
+    )
+end
+
+func record(level: int, file: str, line: int, col: int, index: int, length: int, help: str, msg: str):
+    if not g_record_on or level < LOG_WARN or level > LOG_ERROR:
+        ret
+    end
+    mut r := Record {}
+    r.level = level
+    r.file = file
+    r.line = line
+    r.col = col
+    r.index = index
+    r.length = length
+    r.help = help
+    r.msg = msg
+    rec := g_records.len()
+    g_records.push(r)
+    each f in g_staged:
+        mut x := f
+        x.rec = rec
+        if str.Len(x.file) == 0:
+            x.file = file
+        end
+        g_fixes.push(x)
+    end
+end
+
+func ident_byte(b: int): bool:
+    ret (b >= 48 and b <= 57) or (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b == 95 or b >= 128
+end
+
+func find_word(text: str, word: str, b: int, lim: int): int:
+    wn := str.Len(word)
+    mut i := str.IndexFrom(text, word, b)
+    until i >= 0 and i + wn <= lim:
+        before_ok := i == 0 or not ident_byte(byte_at(text, i - 1))
+        after_ok := i + wn >= str.Len(text) or not ident_byte(byte_at(text, i + wn))
+        if before_ok and after_ok:
+            ret i
+        end
+        i = str.IndexFrom(text, word, i + 1)
+    end
+    ret 0 - 1
+end
+
+func line_start_of(text: str, i: int): int:
+    mut k := i
+    until k > 0 and byte_at(text, k - 1) != 10:
+        k -= 1
+    end
+    ret k
+end
+
+func line_end_of(text: str, i: int): int:
+    n := str.Len(text)
+    mut k := i
+    until k < n and byte_at(text, k) != 10:
+        k += 1
+    end
+    if k > i and byte_at(text, k - 1) == 13:
+        k -= 1
+    end
+    ret k
+end
+
+func line_no_col(text: str, off: int, line &: int, col &: int):
+    mut l := 1
+    mut s := 0
+    repeat off in i:
+        if byte_at(text, i) == 10:
+            l += 1
+            s = i + 1
+        end
+    end
+    line = l
+    col = off - s + 1
+end
+
+func fixes_json(lgr: Logger, file: str): str:
+    mut parts := Vector {} as Vector<str>
+    mut k := 0
+    until k < g_staged.len():
+        f0 := g_staged.get(k)
+        mut k2 := k + 1
+        until k2 < g_staged.len() and str.Equals(g_staged.get(k2).title, f0.title):
+            k2 += 1
+        end
+        mut edits := Vector {} as Vector<str>
+        mut ok := true
+        mut q := k
+        until q < k2:
+            fq := g_staged.get(q)
+            ffile := str.Len(fq.file) > 0 ? fq.file : file
+            text := find_src(lgr, ffile)
+            mut b := 0
+            mut e := 0
+            mut nt := ""
+            if ResolveFix(text, fq, b, e, nt):
+                mut ln := 0
+                mut col := 0
+                line_no_col(text, b, ln, col)
+                edits.push(`{"file":"` + dr.JsonEscape(ffile) + `","offset":` + b + `,"length":` + (e - b) + `,"line":` + ln + `,"column":` + col + `,"text":"` + dr.JsonEscape(nt) + `"}`)
+            else:
+                ok = false
+            end
+            q += 1
+        end
+        if ok and edits.len() > 0:
+            parts.push(`{"title":"` + dr.JsonEscape(f0.title) + `","preferred":` + (f0.preferred ? "true" : "false") + `,"safe":` + (f0.safe ? "true" : "false") + `,"edits":[` + str.Join(edits, ",") + "]}")
+        end
+        edits.free()
+        k = k2
+    end
+    out := str.Join(parts, ",")
+    parts.free()
+    ret out
+end
+
+func with_fixes(lgr: Logger, file: str, text: str): str:
+    if g_staged.len() == 0:
+        ret text
+    end
+    if lgr.diag_format == 1:
+        fj := fixes_json(lgr, file)
+        n := str.Len(text)
+        if str.Len(fj) == 0 or n < 2 or byte_at(text, n - 1) != 10 or byte_at(text, n - 2) != 125:
+            ret text
+        end
+        ret str.Substr(text, 0, n - 2) + `,"fixes":[` + fj + "]}\n"
+    end
+    if lgr.diag_format != 0 or lgr.diag_style != 0:
+        ret text
+    end
+    n := str.Len(text)
+    mut ls := n > 0 ? n - 1 : 0
+    until ls > 0 and byte_at(text, ls - 1) != 10:
+        ls -= 1
+    end
+    bar := str.IndexFrom(text, "|", ls)
+    pad := " ".repeat(bar > ls ? bar - ls : 2)
+    mut out := text
+    mut last := ""
+    each f in g_staged:
+        if not str.Equals(f.title, last):
+            out = out + pad + "= " + i18.Tr("fix") + ": " + f.title + "\n"
+            last = f.title
+        end
+    end
+    ret out
+end
+
+func emit_at(lgr: Logger, phase: int, level: int, file: str, line: int, col: int, help: str, msg: str):
+    if not Enabled(lgr, level):
+        ret
+    end
+    if g_capture_on:
+        if lgr.diag_rich and str.Len(file) > 0 and line > 0 and (level == LOG_ERROR or level == LOG_WARN):
+            g_capture_buf += with_fixes(lgr, file, render_rich(lgr, level, file, line, col, help, msg))
+        else:
+            g_capture_buf += FormatPlain(lgr, phase, level, file, line, col, msg) + "\n"
+            if str.Len(help) > 0:
+                g_capture_buf += FormatPlainHelp(help) + "\n"
+            end
+        end
+        ret
+    end
+    if lgr.diag_rich and str.Len(file) > 0 and line > 0 and (level == LOG_ERROR or level == LOG_WARN):
+        io.EPrint(with_fixes(lgr, file, render_rich(lgr, level, file, line, col, help, msg)))
+        ret
+    end
+    io.EPrintln(FormatPlain(lgr, phase, level, file, line, col, msg))
+    if str.Len(help) > 0:
+        io.EPrintln(FormatPlainHelp(help))
+    end
+end
+
+pub func New(min_level: int, color: bool): Logger:
+    mut lg := Logger {}
+    lg.min_level = min_level
+    lg.color = color
+    lg.timestamps = true
+    lg.diag_rich = false
+    lg.diag_style = 0
+    lg.diag_format = 0
+    lg.src_text = ""
+    lg.src_len = 0
+    lg.src_table = Vector {} as Vector<DiagSourceEntry>
+    ret lg
+end
+
+pub func SetDiagSource(lg &: Logger, src_text: str, src_len: int, style: int, format: int):
+    lg.diag_rich = str.Len(src_text) > 0
+    lg.src_text = src_text
+    lg.src_len = src_len
+    lg.diag_style = style
+    lg.diag_format = format
+end
+
+pub func AddDiagSource(lg &: Logger, file: str, src_text: str, src_len: int):
+    lg.src_table.reserve(LOGGER_MAX_DIAG_SOURCES)
+    n := lg.src_table.len()
+    mut i := 0
+    until i < n:
+        mut e := lg.src_table.get(i)
+        if str.Equals(e.file, file):
+            e.text = src_text
+            e.len = src_len
+            lg.src_table.set(i, e)
+            ret
+        end
+        i += 1
+    end
+    if n < LOGGER_MAX_DIAG_SOURCES:
+        mut ne := DiagSourceEntry {}
+        ne.file = file
+        ne.text = src_text
+        ne.len = src_len
+        lg.src_table.push(ne)
+    end
+end
+
+pub func SetTimestamps(lg &: Logger, enabled: bool):
+    lg.timestamps = enabled
+end
+
+pub func SetCapture(enabled: bool):
+    if enabled:
+        g_capture_buf = ""
+    end
+    g_capture_on = enabled
+end
+
+pub func Captured(): str:
+    ret g_capture_buf
+end
+
+pub func SetLevel(lg &: Logger, min_level: int):
+    lg.min_level = min_level
+end
+
+pub func GetLevel(lg: Logger): int:
+    ret lg.min_level
+end
+
+pub func LevelName(level: int): str:
+    ret match level:
+        0: "TRACE" end
+        1: "DEBUG" end
+        2: "INFO" end
+        3: "WARN" end
+        4: "ERROR" end
+        5: "OFF" end
+        else: "?" end
+    end
+end
+
+pub func PhaseName(phase: int): str:
+    ret match phase:
+        0: "DRIVER" end
+        1: "CLI" end
+        2: "LEXER" end
+        3: "PARSER" end
+        4: "SEMANTIC" end
+        5: "IR" end
+        6: "CODEGEN" end
+        else: "?" end
+    end
+end
+
+pub func LevelFromString(s: str, out &: int): bool:
+    if str.EqualFold(s, "trace"):
+        out = 0
+        ret true
+    end
+    if str.EqualFold(s, "debug"):
+        out = 1
+        ret true
+    end
+    if str.EqualFold(s, "info"):
+        out = 2
+        ret true
+    end
+    if str.EqualFold(s, "warn") or str.EqualFold(s, "warning"):
+        out = 3
+        ret true
+    end
+    if str.EqualFold(s, "error"):
+        out = 4
+        ret true
+    end
+    if str.EqualFold(s, "off"):
+        out = 5
+        ret true
+    end
+    ret false
+end
+
+pub func Enabled(lgr: Logger, level: int): bool:
+    if level < lgr.min_level or lgr.min_level == LOG_OFF:
+        ret false
+    end
+    ret true
+end
+
+pub func FormatPlain(lgr: Logger, phase: int, level: int, file: str, line: int, col: int, msg: str): str:
+    mut out := ""
+    if lgr.timestamps:
+        out = timestamp_str()
+    end
+    if lgr.color:
+        out = out + "[" + PhaseName(phase) + "][" + level_color(level) + LevelName(level) + "\x1b[0m" + "] "
+    else:
+        out = out + "[" + PhaseName(phase) + "][" + LevelName(level) + "] "
+    end
+    out = out + msg
+    if str.Len(file) > 0:
+        out = out + " (" + file + ":" + line + ":" + col + ")"
+    end
+    ret out
+end
+
+pub func FormatPlainHelp(help: str): str:
+    ret "  " + i18.Tr("help") + ": " + help
+end
+
+pub func SetRecord(enabled: bool):
+    g_record_on = enabled
+    g_records.clear()
+    g_fixes.clear()
+end
+
+pub func Recording(): bool:
+    ret g_record_on
+end
+
+pub func StageFix(f: Fix):
+    g_staged.push(f)
+end
+
+pub func ResolveFix(text: str, f: Fix, b &: int, e &: int, new_text &: str): bool:
+    n := str.Len(text)
+    if f.index < 0 or f.index > n:
+        ret false
+    end
+    b = f.index
+    e = f.index + f.length
+    if e > n:
+        e = n
+    end
+    new_text = f.text
+    lend := line_end_of(text, b)
+    if str.Len(f.find) > 0:
+        lim := e > b ? e : lend
+        w := find_word(text, f.find, b, lim)
+        if w < 0:
+            ret false
+        end
+        b = w
+        e = w + str.Len(f.find)
+        if str.Len(new_text) == 0:
+            until e < lend and (byte_at(text, e) == 32 or byte_at(text, e) == 9):
+                e += 1
+            end
+        end
+    end
+    if f.mode == FIX_LINES:
+        b = line_start_of(text, b)
+        last := e > b ? e - 1 : b
+        mut k := last
+        until k < n and byte_at(text, k) != 10:
+            k += 1
+        end
+        e = k < n ? k + 1 : n
+    else f.mode == FIX_LINE_AFTER:
+        mut k := b
+        until k < n and byte_at(text, k) != 10:
+            k += 1
+        end
+        if k < n:
+            b = k + 1
+        else:
+            b = n
+            new_text = "\n" + new_text
+        end
+        e = b
+    else f.mode == FIX_LINE_BEFORE:
+        b = line_start_of(text, b)
+        e = b
+    end
+    ret true
+end
+
+pub func FixCount(): int:
+    ret g_fixes.len()
+end
+
+pub func FixAt(i: int): Fix:
+    ret g_fixes.get(i)
+end
+
+pub func RecordCount(): int:
+    ret g_records.len()
+end
+
+pub func RecordAt(i: int): Record:
+    ret g_records.get(i)
+end
+
+pub func Log(lgr: Logger, phase: int, level: int, msg: str):
+    record(level, "", 0, 0, 0 - 1, 0, "", msg)
+    g_staged.clear()
+    if not Enabled(lgr, level):
+        ret
+    end
+    if (lgr.diag_format == 1 or lgr.diag_format == 2) and (level == LOG_ERROR or level == LOG_WARN):
+        is_error := level == LOG_ERROR
+        lvl := is_error ? "error" : "warning"
+        mut text := ""
+        if lgr.diag_format == 1:
+            text = dr.RenderJson(lvl, 0, is_error, "", 0, 0, 0, msg, "")
+        else:
+            text = dr.RenderXml(lvl, 0, is_error, "", 0, 0, 0, msg, "")
+        end
+        if g_capture_on:
+            g_capture_buf += text
+            ret
+        end
+        io.EPrint(text)
+        ret
+    end
+    if g_capture_on:
+        g_capture_buf += FormatPlain(lgr, phase, level, "", 0, 0, msg) + "\n"
+        ret
+    end
+    io.EPrintln(FormatPlain(lgr, phase, level, "", 0, 0, msg))
+end
+
+pub func LogAt(lgr: Logger, phase: int, level: int, file: str, line: int, col: int, msg: str):
+    LogAtHelp(lgr, phase, level, file, line, col, "", msg)
+end
+
+pub func LogAtHelp(lgr: Logger, phase: int, level: int, file: str, line: int, col: int, help: str, msg: str):
+    record(level, file, line, col, 0 - 1, 0, help, msg)
+    emit_at(lgr, phase, level, file, line, col, help, msg)
+    g_staged.clear()
+end
+
+pub func LogSpanHelp(
+    lgr: Logger, phase: int, level: int, file: str, line: int, col: int, index: int, length: int, help: str, msg: str
+):
+    record(level, file, line, col, index, length, help, msg)
+    emit_at(lgr, phase, level, file, line, col, help, msg)
+    g_staged.clear()
+end

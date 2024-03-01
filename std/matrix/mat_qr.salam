@@ -1,0 +1,272 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package matrix
+
+import math
+
+@en "QR"
+@fa "کیوآر"
+pub struct QR:
+    @en "m"
+    @fa "شمار سطرها"
+    pub m: int = 0
+    @en "n"
+    @fa "شمار ستون‌ها"
+    pub n: int = 0
+    @en "qr"
+    @fa "ماتریس فشرده"
+    pub qr: Matrix = Matrix {}
+    @en "rdiag"
+    @fa "قطر آر"
+    pub rdiag: Matrix = Matrix {}
+    @en "full_rank"
+    @fa "رتبه کامل"
+    pub full_rank: bool = true
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        this.qr.free()
+        this.rdiag.free()
+    end
+end
+
+func _house_norm(a &: Matrix, k: int, m: int): f64:
+    mut scale := 0.0
+    mut i := k
+    until i < m:
+        v := math.Abs(a.at(i, k))
+        if v > scale: scale = v end
+        i += 1
+    end
+    if scale == 0.0: ret 0.0 end
+    mut s := 0.0
+    mut j := k
+    until j < m:
+        t := a.at(j, k) / scale
+        s += t * t
+        j += 1
+    end
+    ret scale * math.Sqrt(s)
+end
+
+func _house_apply(a &: Matrix, k: int, j: int, m: int):
+    mut s := 0.0
+    mut i := k
+    until i < m:
+        s += a.at(i, k) * a.at(i, j)
+        i += 1
+    end
+    if a.at(k, k) == 0.0: ret end
+    f := 0.0 - s / a.at(k, k)
+    mut p := k
+    until p < m:
+        a.add_at(p, j, f * a.at(p, k))
+        p += 1
+    end
+end
+
+func _house_step(f &: QR, k: int):
+    mut nrm := _house_norm(f.qr, k, f.m)
+    if nrm != 0.0:
+        if f.qr.at(k, k) < 0.0: nrm = 0.0 - nrm end
+        mut i := k
+        until i < f.m:
+            f.qr.set(i, k, f.qr.at(i, k) / nrm)
+            i += 1
+        end
+        f.qr.add_at(k, k, 1.0)
+        mut j := k + 1
+        until j < f.n:
+            _house_apply(f.qr, k, j, f.m)
+            j += 1
+        end
+    end
+    f.rdiag.set(0, k, 0.0 - nrm)
+    if nrm == 0.0: f.full_rank = false end
+end
+
+func _qt_apply(f &: QR, b &: Matrix):
+    repeat f.n in k:
+        repeat b.cols in c: _qt_col(f, b, k, c) end
+    end
+end
+
+func _qt_col(f &: QR, b &: Matrix, k: int, c: int):
+    mut s := 0.0
+    mut i := k
+    until i < f.m:
+        s += f.qr.at(i, k) * b.at(i, c)
+        i += 1
+    end
+    if f.qr.at(k, k) == 0.0: ret end
+    t := 0.0 - s / f.qr.at(k, k)
+    mut p := k
+    until p < f.m:
+        b.add_at(p, c, t * f.qr.at(p, k))
+        p += 1
+    end
+end
+
+func _r_backsolve(f &: QR, b &: Matrix):
+    repeat b.cols in c:
+        mut k := f.n - 1
+        until k >= 0:
+            mut s := b.at(k, c)
+            mut j := k + 1
+            until j < f.n:
+                s -= f.qr.at(k, j) * b.at(j, c)
+                j += 1
+            end
+            b.set(k, c, s / f.rdiag.at(0, k))
+            k -= 1
+        end
+    end
+end
+
+func _q_expand(f &: QR, q &: Matrix, k: int, j: int):
+    if f.qr.at(k, k) == 0.0: ret end
+    mut s := 0.0
+    mut i := k
+    until i < f.m:
+        s += f.qr.at(i, k) * q.at(i, j)
+        i += 1
+    end
+    t := 0.0 - s / f.qr.at(k, k)
+    mut p := k
+    until p < f.m:
+        q.add_at(p, j, t * f.qr.at(p, k))
+        p += 1
+    end
+end
+
+func _mgs_column(w &: Matrix, cols &: Vector<int>, j: int):
+    before := _col_length(w, j)
+    repeat cols.len() in t:
+        b := cols.get(t)
+        mut d := 0.0
+        repeat w.rows in i: d += w.at(i, b) * w.at(i, j) end
+        repeat w.rows in i: w.add_at(i, j, 0.0 - d * w.at(i, b)) end
+    end
+    nrm := _col_length(w, j)
+    if nrm <= before * MAT_EPS * (w.rows as f64) * 8.0: ret end
+    repeat w.rows in i: w.set(i, j, w.at(i, j) / nrm) end
+    cols.push(j)
+end
+
+func _col_length(w &: Matrix, j: int): f64:
+    mut s := 0.0
+    repeat w.rows in i: s += w.at(i, j) * w.at(i, j) end
+    ret math.Sqrt(s)
+end
+
+func _pack_cols(w &: Matrix, cols &: Vector<int>): Matrix:
+    mut r := Zeros(w.rows, cols.len())
+    repeat cols.len() in c:
+        j := cols.get(c)
+        repeat w.rows in i: r.set(i, c, w.at(i, j)) end
+    end
+    ret r
+end
+
+@en "QRDecompose"
+@fa "تجزیه کیوآر"
+pub func QRDecompose(x &: Matrix): QR:
+    mut f := QR {}
+    if x.is_empty(): ret f end
+    f.m = x.rows
+    f.n = x.cols
+    f.qr = Clone(x)
+    f.rdiag = Zeros(1, x.cols)
+    repeat x.cols in k: _house_step(f, k) end
+    ret f
+end
+
+@en "QRGetQ"
+@fa "کیو"
+pub func QRGetQ(f &: QR): Matrix:
+    mut q := Zeros(f.m, f.n)
+    mut k := f.n - 1
+    until k >= 0:
+        q.set(k, k, 1.0)
+        mut j := k
+        until j < f.n:
+            _q_expand(f, q, k, j)
+            j += 1
+        end
+        k -= 1
+    end
+    ret q
+end
+
+@en "QRGetR"
+@fa "آر"
+pub func QRGetR(f &: QR): Matrix:
+    mut r := Zeros(f.n, f.n)
+    repeat f.n in i:
+        r.set(i, i, f.rdiag.at(0, i))
+        mut j := i + 1
+        until j < f.n:
+            r.set(i, j, f.qr.at(i, j))
+            j += 1
+        end
+    end
+    ret r
+end
+
+@en "LeastSquares"
+@fa "کمترین مربعات"
+pub func LeastSquares(a &: Matrix, b &: Matrix): Matrix:
+    if a.rows != b.rows or a.rows < a.cols: ret Zeros(0, 0) end
+    mut f := QRDecompose(a)
+    r := QRSolve(f, b)
+    defer f.free()
+    ret r
+end
+
+@en "QRSolve"
+@fa "حل کیوآر"
+pub func QRSolve(f &: QR, b &: Matrix): Matrix:
+    if f.full_rank == false or f.m != b.rows: ret Zeros(0, 0) end
+    mut work := Clone(b)
+    _qt_apply(f, work)
+    _r_backsolve(f, work)
+    r := SubMatrix(work, 0, 0, f.n, b.cols)
+    defer work.free()
+    ret r
+end
+
+@en "Residual"
+@fa "باقیمانده"
+pub func Residual(a &: Matrix, x &: Matrix, b &: Matrix): Matrix:
+    mut ax := MatMul(a, x)
+    r := Sub(b, ax)
+    defer ax.free()
+    ret r
+end
+
+@en "Orthonormalize"
+@fa "متعامدسازی"
+pub func Orthonormalize(x &: Matrix): Matrix:
+    mut cols := Vector {} as Vector<int>
+    mut w := Clone(x)
+    repeat x.cols in j:
+        _mgs_column(w, cols, j)
+    end
+    r := _pack_cols(w, cols)
+    defer cols.free()
+    defer w.free()
+    ret r
+end

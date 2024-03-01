@@ -1,0 +1,41 @@
+import compress
+
+func seal(payload: str): compress.ByteBuf:
+    mut b := compress.BufFromStr(payload)
+    compress.BufPushU32(b, compress.CRC32Str(payload) as int)
+    ret b
+end
+
+func check(b: compress.ByteBuf): bool:
+    if b.len < 4: ret false end
+    mut r := compress.NewByteReader(b.data, b.len)
+    body := compress.RdBytes(r, b.len - 4)
+    stored := compress.RdU32(r) as u32
+    ret compress.CRC32Buf(body) == stored
+end
+
+func gunzip_checked(g: compress.ByteBuf, ok &: bool): compress.ByteBuf:
+    out := compress.GzipDecompressBuf(g, ok)
+    if not ok: ret out end
+    at := g.len - 8
+    stored := compress.BufGet(g, at) | (compress.BufGet(g, at + 1) << 8) | (compress.BufGet(g, at + 2) << 16) | (compress.BufGet(g, at + 3) << 24)
+    ok = compress.CRC32Buf(out) == stored as u32
+    ret out
+end
+
+func main:
+    mut packet := seal("move 3 to slot 7")
+    println "length:", packet.len, "intact:", check(packet)
+    compress.BufSet(packet, 5, 52)
+    println "after one changed byte, intact:", check(packet)
+    g := compress.GzipCompressStr("move 3 to slot 7")
+    mut broken := compress.BufClone(g)
+    compress.BufSet(broken, broken.len - 6, compress.BufGet(broken, broken.len - 6) ^ 1)
+    mut ok := false
+    _ := compress.GzipDecompressBuf(broken, ok)
+    println "damaged gzip, plain decompress:", ok
+    _ := gunzip_checked(broken, ok)
+    println "damaged gzip, checked:", ok
+    _ := gunzip_checked(g, ok)
+    println "good gzip, checked:", ok
+end

@@ -1,0 +1,187 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package http
+
+import net.router
+import net.internal.rawsock
+import mem
+import tls
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _beginthread(start: void *, stack: u32, arg: void *): usize
+    end
+else:
+    extern:
+        func pthread_create(thread: void *, attr: void *, start: void *, arg: void *): int
+        func pthread_detach(thread: u64): int
+    end
+end
+
+if not SALAM_OS_WINDOWS:
+    extern:
+        func signal(signum: int, handler: void *): void *
+    end
+
+    export:
+        func _http_ignore_sigpipe():
+            signal(13, 1 as void *)
+        end
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    export:
+        func salam_spawn_fn_i64(fn: i64, arg: i64):
+            _h := _beginthread(fn as void *, 0 as u32, arg as void *)
+        end
+    end
+else:
+    export:
+        func salam_spawn_fn_i64(fn: i64, arg: i64):
+            t := mem.Allocate(8 as u64)
+            if pthread_create(t, null, fn as void *, arg as void *) == 0:
+                tp := t as i64 *
+                pthread_detach(tp[0] as u64)
+            end
+            mem.Free(t)
+        end
+    end
+end
+
+func _bind(s: Server): i64:
+    _reqctx_sizeof()
+    _warm_up_split()
+    if not SALAM_OS_WINDOWS:
+        _http_ignore_sigpipe()
+    end
+    ret _net_listen(s.host, s.port)
+end
+
+func _accept_loop(packed: i64):
+    slot := _srv_slot_of(packed)
+    lfd := _srv_fd_of(packed)
+    events := _ev_start()
+    ctl := mem.AllocateZeroed(16 as u64)
+    until 1 == 1:
+        cfd := _net_accept(lfd)
+        if cfd >= 0:
+            if not (events and _ev_adopt(slot, cfd, ctl)):
+                salam_spawn_fn_i64(_web_conn_handler, _srv_pack(slot, cfd))
+            end
+        end
+    end
+end
+
+func _accept_loop_tls(packed: i64):
+    slot := _srv_slot_of(packed)
+    lfd := _srv_fd_of(packed)
+    until 1 == 1:
+        cfd := _net_accept(lfd)
+        if cfd >= 0:
+            salam_spawn_fn_i64(_web_tls_conn_handler, _srv_pack(slot, cfd))
+        end
+    end
+end
+
+@en "NewServer"
+@fa "سرور جدید"
+pub func NewServer(port: int): Server:
+    ret Server { port = port }
+end
+
+@en "Use"
+@fa "استفاده"
+pub func Use(s &: Server, r: router.Router):
+    s.router = r
+end
+
+@en "HideTokens"
+@fa "پنهان سازی توکن"
+pub func HideTokens(s &: Server):
+    s.hide_tokens = true
+end
+
+@en "SetHost"
+@fa "تنظیم میزبان"
+pub func SetHost(s &: Server, host: str):
+    s.host = host
+end
+
+@en "EnableAccessLog"
+@fa "فعال سازی گزارش دسترسی"
+pub func EnableAccessLog(s &: Server):
+    s.access_log = true
+end
+
+@en "Run"
+@fa "اجرا"
+pub func Run(s: Server):
+    if SALAM_OS_WASM:
+        _edge_serve(s.router, s.hide_tokens, s.access_log)
+    else:
+        lfd := _bind(s)
+        if lfd < 0:
+            ret
+        end
+        slot := _srv_claim(s.router, s.hide_tokens, s.access_log)
+        if slot < 0:
+            rawsock.Close(rawsock.FromFd(lfd))
+            ret
+        end
+        _accept_loop(_srv_pack(slot, lfd))
+    end
+end
+
+@en "RunBackground"
+@fa "اجرا در پس زمینه"
+pub func RunBackground(s: Server): bool:
+    if SALAM_OS_WASM:
+        _edge_serve(s.router, s.hide_tokens, s.access_log)
+        ret true
+    else:
+        lfd := _bind(s)
+        if lfd < 0:
+            ret false
+        end
+        slot := _srv_claim(s.router, s.hide_tokens, s.access_log)
+        if slot < 0:
+            rawsock.Close(rawsock.FromFd(lfd))
+            ret false
+        end
+        salam_spawn_fn_i64(_accept_loop, _srv_pack(slot, lfd))
+        ret true
+    end
+end
+
+@en "RunTLS"
+@fa "اجرای امن"
+pub func RunTLS(s: Server, cert_file: str, key_file: str):
+    if SALAM_OS_WASM:
+        _edge_serve(s.router, s.hide_tokens, s.access_log)
+    else:
+        lfd := _bind(s)
+        if lfd < 0:
+            ret
+        end
+        slot := _srv_claim(s.router, s.hide_tokens, s.access_log)
+        if slot < 0:
+            rawsock.Close(rawsock.FromFd(lfd))
+            ret
+        end
+        _srv_tls.set(slot, tls.NewServerConfig(cert_file, key_file))
+        _accept_loop_tls(_srv_pack(slot, lfd))
+    end
+end

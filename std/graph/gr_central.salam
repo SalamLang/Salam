@@ -1,0 +1,368 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package graph
+
+import math
+
+func _brandes_bfs(g &: Graph, s: int, dist &: Vector<int>, sigma &: Vector<f64>, order &: Vector<int>):
+    FillInt(dist, g.n, GRAPH_NONE)
+    FillFloat(sigma, g.n, 0.0)
+    order.clear()
+    dist.set(s, 0)
+    sigma.set(s, 1.0)
+    order.push(s)
+    mut head := 0
+    until head < order.len():
+        u := order.get(head)
+        head += 1
+        _brandes_scan(g, u, dist, sigma, order)
+    end
+end
+
+func _brandes_scan(g &: Graph, u: int, dist &: Vector<int>, sigma &: Vector<f64>, order &: Vector<int>):
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        if dist.get(v) == GRAPH_NONE:
+            dist.set(v, dist.get(u) + 1)
+            order.push(v)
+        end
+        if dist.get(v) == dist.get(u) + 1: sigma.set(v, sigma.get(v) + sigma.get(u)) end
+        k += 1
+    end
+end
+
+func _brandes_back(g &: Graph, s: int, dist: Vector<int>, sigma: Vector<f64>, order: Vector<int>, delta &: Vector<f64>, score &: Vector<f64>, edge_score &: Vector<f64>):
+    FillFloat(delta, g.n, 0.0)
+    mut i := order.len() - 1
+    until i >= 0:
+        w := order.get(i)
+        _brandes_push(g, w, dist, sigma, delta, edge_score)
+        if w != s: score.set(w, score.get(w) + delta.get(w)) end
+        i = i - 1
+    end
+end
+
+func _brandes_push(g &: Graph, w: int, dist: Vector<int>, sigma: Vector<f64>, delta &: Vector<f64>, edge_score &: Vector<f64>):
+    mut k := g.in_start(w)
+    stop := g.in_stop(w)
+    until k < stop:
+        v := g.in_node(k)
+        if dist.get(v) == dist.get(w) - 1:
+            share := sigma.get(v) / sigma.get(w) * (1.0 + delta.get(w))
+            delta.set(v, delta.get(v) + share)
+            if edge_score.len() > 0:
+                e := g.in_edge(k)
+                edge_score.set(e, edge_score.get(e) + share)
+            end
+        end
+        k += 1
+    end
+end
+
+func _normalize(v &: Vector<f64>):
+    mut norm := 0.0
+    repeat v.len() in i: norm += v.get(i) * v.get(i) end
+    norm = math.Sqrt(norm)
+    if norm <= 0.0: ret end
+    repeat v.len() in i: v.set(i, v.get(i) / norm) end
+end
+
+func _scale_to_sum(v &: Vector<f64>):
+    mut s := 0.0
+    repeat v.len() in i: s += v.get(i) end
+    if s <= 0.0: ret end
+    repeat v.len() in i: v.set(i, v.get(i) / s) end
+end
+
+func _delta_of(a: Vector<f64>, b: Vector<f64>): f64:
+    mut d := 0.0
+    repeat a.len() in i: d += math.Abs(a.get(i) - b.get(i)) end
+    ret d
+end
+
+func _spread_out(g &: Graph, src: Vector<f64>, dst &: Vector<f64>):
+    FillFloat(dst, g.n, 0.0)
+    repeat g.n in u:
+        mut k := g.adj_start(u)
+        stop := g.adj_stop(u)
+        until k < stop:
+            v := g.adj_node(k)
+            dst.set(v, dst.get(v) + src.get(u))
+            k += 1
+        end
+    end
+end
+
+func _spread_in(g &: Graph, src: Vector<f64>, dst &: Vector<f64>):
+    FillFloat(dst, g.n, 0.0)
+    repeat g.n in u:
+        mut k := g.in_start(u)
+        stop := g.in_stop(u)
+        until k < stop:
+            v := g.in_node(k)
+            dst.set(v, dst.get(v) + src.get(u))
+            k += 1
+        end
+    end
+end
+
+func _pagerank_step(g &: Graph, cur: Vector<f64>, nxt &: Vector<f64>, damping: f64):
+    n := g.n
+    mut sink := 0.0
+    FillFloat(nxt, n, 0.0)
+    repeat n in u:
+        d := g.out_degree(u)
+        if d == 0: sink += cur.get(u)
+        else:
+            _pagerank_spread(g, u, cur.get(u) / (d as f64), nxt)
+        end
+    end
+    base := (1.0 - damping) / (n as f64) + damping * sink / (n as f64)
+    repeat n in u: nxt.set(u, base + damping * nxt.get(u)) end
+end
+
+func _pagerank_spread(g &: Graph, u: int, share: f64, nxt &: Vector<f64>):
+    mut k := g.adj_start(u)
+    stop := g.adj_stop(u)
+    until k < stop:
+        v := g.adj_node(k)
+        nxt.set(v, nxt.get(v) + share)
+        k += 1
+    end
+end
+
+func _closeness_of(dist: Vector<int>, n: int): f64:
+    mut total := 0.0
+    mut reached := 0
+    repeat n in v:
+        d := dist.get(v)
+        if d > 0:
+            total += d as f64
+            reached += 1
+        end
+    end
+    if reached == 0: ret 0.0 end
+    if n < 2: ret 0.0 end
+    ret ((reached as f64) / total) * ((reached as f64) / ((n - 1) as f64))
+end
+
+func _brandes_all(g &: Graph, score &: Vector<f64>, edge_score &: Vector<f64>):
+    mut dist := Vector {} as Vector<int>
+    defer dist.free()
+    mut sigma := Vector {} as Vector<f64>
+    defer sigma.free()
+    mut order := Vector {} as Vector<int>
+    defer order.free()
+    mut delta := Vector {} as Vector<f64>
+    defer delta.free()
+    repeat g.n in s:
+        _brandes_bfs(g, s, dist, sigma, order)
+        _brandes_back(g, s, dist, sigma, order, delta, score, edge_score)
+    end
+end
+
+@en "DegreeCentrality"
+@fa "مرکزیت درجه"
+pub func DegreeCentrality(g &: Graph): Vector<f64>:
+    mut out := Vector {} as Vector<f64>
+    if g.n < 2: ret out end
+    d := (g.n - 1) as f64
+    repeat g.n in u: out.push((g.degree(u) as f64) / d) end
+    ret out
+end
+
+@en "InDegreeCentrality"
+@fa "مرکزیت درجه ورودی"
+pub func InDegreeCentrality(g &: Graph): Vector<f64>:
+    mut out := Vector {} as Vector<f64>
+    if g.n < 2: ret out end
+    d := (g.n - 1) as f64
+    repeat g.n in u: out.push((g.in_degree(u) as f64) / d) end
+    ret out
+end
+
+@en "OutDegreeCentrality"
+@fa "مرکزیت درجه خروجی"
+pub func OutDegreeCentrality(g &: Graph): Vector<f64>:
+    mut out := Vector {} as Vector<f64>
+    if g.n < 2: ret out end
+    d := (g.n - 1) as f64
+    repeat g.n in u: out.push((g.out_degree(u) as f64) / d) end
+    ret out
+end
+
+@en "ClosenessCentrality"
+@fa "مرکزیت نزدیکی"
+pub func ClosenessCentrality(g &: Graph): Vector<f64>:
+    mut out := Vector {} as Vector<f64>
+    mut dist := Vector {} as Vector<int>
+    defer dist.free()
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    repeat g.n in u:
+        BFSFrom(g, u, dist, parent)
+        out.push(_closeness_of(dist, g.n))
+    end
+    ret out
+end
+
+@en "HarmonicCentrality"
+@fa "مرکزیت هارمونیک"
+pub func HarmonicCentrality(g &: Graph): Vector<f64>:
+    mut out := Vector {} as Vector<f64>
+    mut dist := Vector {} as Vector<int>
+    defer dist.free()
+    mut parent := Vector {} as Vector<int>
+    defer parent.free()
+    repeat g.n in u:
+        BFSFrom(g, u, dist, parent)
+        mut s := 0.0
+        repeat g.n in v:
+            if v != u:
+                d := dist.get(v)
+                if d > 0: s += 1.0 / (d as f64) end
+            end
+        end
+        if g.n > 1: s = s / ((g.n - 1) as f64) end
+        out.push(s)
+    end
+    ret out
+end
+
+@en "BetweennessCentrality"
+@fa "مرکزیت بینابینی"
+pub func BetweennessCentrality(g &: Graph): Vector<f64>:
+    mut score := Vector {} as Vector<f64>
+    mut edge_score := Vector {} as Vector<f64>
+    defer edge_score.free()
+    FillFloat(score, g.n, 0.0)
+    _brandes_all(g, score, edge_score)
+    if g.directed == false:
+        repeat g.n in u: score.set(u, score.get(u) / 2.0) end
+    end
+    ret score
+end
+
+@en "EdgeBetweenness"
+@fa "بینابینی یال"
+pub func EdgeBetweenness(g &: Graph): Vector<f64>:
+    mut score := Vector {} as Vector<f64>
+    defer score.free()
+    mut edge_score := Vector {} as Vector<f64>
+    FillFloat(score, g.n, 0.0)
+    FillFloat(edge_score, g.size(), 0.0)
+    _brandes_all(g, score, edge_score)
+    if g.directed == false:
+        repeat g.size() in e: edge_score.set(e, edge_score.get(e) / 2.0) end
+    end
+    ret edge_score
+end
+
+@en "EigenvectorCentrality"
+@fa "مرکزیت بردار ویژه"
+pub func EigenvectorCentrality(g &: Graph, iters: int, tol: f64): Vector<f64>:
+    mut cur := Vector {} as Vector<f64>
+    mut nxt := Vector {} as Vector<f64>
+    defer nxt.free()
+    FillFloat(cur, g.n, 1.0)
+    _normalize(cur)
+    mut step := 0
+    until step < iters:
+        _spread_out(g, cur, nxt)
+        _normalize(nxt)
+        d := _delta_of(cur, nxt)
+        repeat g.n in u: cur.set(u, nxt.get(u)) end
+        if d < tol: break end
+        step += 1
+    end
+    ret cur
+end
+
+@en "KatzCentrality"
+@fa "مرکزیت کاتز"
+pub func KatzCentrality(g &: Graph, alpha: f64, beta: f64, iters: int, tol: f64): Vector<f64>:
+    mut cur := Vector {} as Vector<f64>
+    mut nxt := Vector {} as Vector<f64>
+    defer nxt.free()
+    FillFloat(cur, g.n, beta)
+    mut step := 0
+    until step < iters:
+        _spread_out(g, cur, nxt)
+        repeat g.n in u: nxt.set(u, beta + alpha * nxt.get(u)) end
+        d := _delta_of(cur, nxt)
+        repeat g.n in u: cur.set(u, nxt.get(u)) end
+        if d < tol: break end
+        step += 1
+    end
+    ret cur
+end
+
+@en "PageRank"
+@fa "رتبه‌بندی صفحه"
+pub func PageRank(g &: Graph, damping: f64, iters: int, tol: f64): Vector<f64>:
+    mut cur := Vector {} as Vector<f64>
+    mut nxt := Vector {} as Vector<f64>
+    defer nxt.free()
+    if g.n == 0: ret cur end
+    FillFloat(cur, g.n, 1.0 / (g.n as f64))
+    mut step := 0
+    until step < iters:
+        _pagerank_step(g, cur, nxt, damping)
+        d := _delta_of(cur, nxt)
+        repeat g.n in u: cur.set(u, nxt.get(u)) end
+        if d < tol: break end
+        step += 1
+    end
+    ret cur
+end
+
+@en "HITS"
+@fa "هیتس"
+pub func HITS(g &: Graph, iters: int, tol: f64, hubs &: Vector<f64>, auth &: Vector<f64>):
+    FillFloat(hubs, g.n, 1.0)
+    FillFloat(auth, g.n, 1.0)
+    mut tmp := Vector {} as Vector<f64>
+    defer tmp.free()
+    mut step := 0
+    until step < iters:
+        _spread_out(g, hubs, tmp)
+        _normalize(tmp)
+        d := _delta_of(auth, tmp)
+        repeat g.n in u: auth.set(u, tmp.get(u)) end
+        _spread_in(g, auth, tmp)
+        _normalize(tmp)
+        repeat g.n in u: hubs.set(u, tmp.get(u)) end
+        if d < tol: break end
+        step += 1
+    end
+end
+
+@en "TopNode"
+@fa "برترین گره"
+pub func TopNode(score: Vector<f64>): int:
+    mut best := GRAPH_NONE
+    repeat score.len() in u:
+        if best == GRAPH_NONE: best = u
+        else score.get(u) > score.get(best): best = u
+        end
+    end
+    ret best
+end
+
+@en "ScaleToSum"
+@fa "مقیاس به مجموع"
+pub func ScaleToSum(v &: Vector<f64>): _scale_to_sum(v) end

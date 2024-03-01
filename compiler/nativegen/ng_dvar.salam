@@ -1,0 +1,1488 @@
+package nativegen
+
+import str
+
+struct DvTypes:
+    pub tmap: HashMap<int, int> = HashMap {}
+    pub wl: Vector<int> = Vector {}
+    pub fx_pos: Vector<int> = Vector {}
+    pub fx_md: Vector<int> = Vector {}
+    pub le_head: Vector<int> = Vector {}
+    pub le_next: Vector<int> = Vector {}
+end
+
+func dv_num_after(g &: Ng, p: int, e: int, key: str, dflt: int): int:
+    at := find_in_line(g, p, e, key)
+    if at < 0:
+        ret dflt
+    end
+    ret num_at(g, at)
+end
+
+func dv_ref_after(g &: Ng, p: int, e: int, key: str): int:
+    at := find_in_line(g, p, e, key)
+    if at < 0 or at >= e or g.src[at] != (33 as u8):
+        ret 0 - 1
+    end
+    ret num_at(g, at + 1)
+end
+
+func dv_tag_of(g &: Ng, p: int, e: int): int:
+    if find_in_line(g, p, e, "DW_TAG_pointer_type") >= 0: ret 0x0f end
+    if find_in_line(g, p, e, "DW_TAG_member") >= 0: ret 0x0d end
+    if find_in_line(g, p, e, "DW_TAG_structure_type") >= 0: ret 0x13 end
+    if find_in_line(g, p, e, "DW_TAG_array_type") >= 0: ret 0x01 end
+    if find_in_line(g, p, e, "DW_TAG_typedef") >= 0: ret 0x16 end
+    if find_in_line(g, p, e, "DW_TAG_enumeration_type") >= 0: ret 0x04 end
+    ret 0
+end
+
+func dv_enc_of(g &: Ng, p: int, e: int): int:
+    if find_in_line(g, p, e, "DW_ATE_boolean") >= 0: ret 2 end
+    if find_in_line(g, p, e, "DW_ATE_float") >= 0: ret 4 end
+    if find_in_line(g, p, e, "DW_ATE_signed_char") >= 0: ret 6 end
+    if find_in_line(g, p, e, "DW_ATE_unsigned_char") >= 0: ret 8 end
+    if find_in_line(g, p, e, "DW_ATE_signed") >= 0: ret 5 end
+    if find_in_line(g, p, e, "DW_ATE_unsigned") >= 0: ret 7 end
+    ret 7
+end
+
+func dv_md_line(g &: Ng, id: int, p: int, e: int):
+    if find_in_line(g, p, e, "!DILocalVariable(") >= 0:
+        md_grow(g, id)
+        g.md_kind[id] = 4
+        nm := find_in_line(g, p, e, "name: \"")
+        g.md_s1[id] = nm >= 0 ? qstr_at(g, nm) : ""
+        g.md_a[id] = dv_num_after(g, p, e, "arg: ", 0)
+        g.md_scope[id] = dv_ref_after(g, p, e, "scope: ")
+        g.md_file[id] = dv_ref_after(g, p, e, "file: ")
+        g.md_line[id] = dv_num_after(g, p, e, "line: ", 0)
+        g.md_t[id] = dv_ref_after(g, p, e, " type: ")
+        ret
+    end
+    if find_in_line(g, p, e, "!DILexicalBlock(") >= 0:
+        md_grow(g, id)
+        g.md_kind[id] = 13
+        g.md_scope[id] = dv_ref_after(g, p, e, "scope: ")
+        g.md_file[id] = dv_ref_after(g, p, e, "file: ")
+        g.md_line[id] = dv_num_after(g, p, e, "line: ", 0)
+        ret
+    end
+    if find_in_line(g, p, e, "!DIGlobalVariableExpression(") >= 0:
+        md_grow(g, id)
+        g.md_kind[id] = 10
+        g.md_t[id] = dv_ref_after(g, p, e, "var: ")
+        ret
+    end
+    if find_in_line(g, p, e, "!DIGlobalVariable(") >= 0:
+        md_grow(g, id)
+        g.md_kind[id] = 11
+        nmg := find_in_line(g, p, e, "name: \"")
+        g.md_s1[id] = nmg >= 0 ? qstr_at(g, nmg) : ""
+        g.md_file[id] = dv_ref_after(g, p, e, "file: ")
+        g.md_line[id] = dv_num_after(g, p, e, "line: ", 0)
+        g.md_t[id] = dv_ref_after(g, p, e, " type: ")
+        ret
+    end
+    if find_in_line(g, p, e, "!DIBasicType(") >= 0:
+        md_grow(g, id)
+        g.md_kind[id] = 5
+        nm2 := find_in_line(g, p, e, "name: \"")
+        g.md_s1[id] = nm2 >= 0 ? qstr_at(g, nm2) : ""
+        g.md_sz[id] = dv_num_after(g, p, e, "size: ", 0)
+        g.md_a[id] = dv_enc_of(g, p, e)
+        ret
+    end
+    if find_in_line(g, p, e, "!DIDerivedType(") >= 0 or find_in_line(g, p, e, "!DICompositeType(") >= 0:
+        md_grow(g, id)
+        g.md_kind[id] = find_in_line(g, p, e, "!DIDerivedType(") >= 0 ? 6 : 7
+        g.md_tag[id] = dv_tag_of(g, p, e)
+        nm3 := find_in_line(g, p, e, "name: \"")
+        g.md_s1[id] = nm3 >= 0 ? qstr_at(g, nm3) : ""
+        g.md_t[id] = dv_ref_after(g, p, e, "baseType: ")
+        g.md_sz[id] = dv_num_after(g, p, e, "size: ", 0)
+        g.md_off[id] = dv_num_after(g, p, e, "offset: ", 0)
+        g.md_el[id] = dv_ref_after(g, p, e, "elements: ")
+        ret
+    end
+    if find_in_line(g, p, e, "!DIEnumerator(") >= 0:
+        md_grow(g, id)
+        g.md_kind[id] = 12
+        nme := find_in_line(g, p, e, "name: \"")
+        g.md_s1[id] = nme >= 0 ? qstr_at(g, nme) : ""
+        va := find_in_line(g, p, e, "value: ")
+        if va >= 0 and va < e and g.src[va] == (45 as u8):
+            g.md_a[id] = 0 - num_at(g, va + 1)
+        else va >= 0:
+            g.md_a[id] = num_at(g, va)
+        end
+        ret
+    end
+    if find_in_line(g, p, e, "!DISubrange(") >= 0:
+        md_grow(g, id)
+        g.md_kind[id] = 8
+        g.md_a[id] = dv_num_after(g, p, e, "count: ", 0)
+        ret
+    end
+    at := find_in_line(g, p, e, "= !{")
+    if at >= 0:
+        md_grow(g, id)
+        g.md_kind[id] = 9
+        g.md_l0[id] = g.md_pool.len()
+        mut q := at
+        until q < e:
+            if g.src[q] == (33 as u8) and q + 1 < e and g.src[q + 1] >= (48 as u8) and g.src[q + 1] <= (57 as u8):
+                g.md_pool.push(num_at(g, q + 1))
+            end
+            q += 1
+        end
+        g.md_ln[id] = g.md_pool.len() - g.md_l0[id]
+    end
+end
+
+func dv_declare_line(g &: Ng, p: int, e: int): bool:
+    at := find_in_line(g, p, e, "call void @llvm.dbg.declare(metadata ")
+    if at < 0:
+        ret false
+    end
+    pc := find_in_line(g, at, e, "%")
+    vm := find_in_line(g, at, e, ", metadata !")
+    if pc >= 0 and vm >= 0:
+        mut q := pc
+        until q < e and g.src[q] != (44 as u8) and g.src[q] != (32 as u8):
+            q += 1
+        end
+        mut b := str.NewBuilder()
+        mut k := pc
+        until k < q:
+            str.BufAppendChar(b, g.src[k] as int)
+            k += 1
+        end
+        g.dv_pos.push(p)
+        g.dv_name.push(str.BufStr(b))
+        str.BufFree(b)
+        g.dv_var.push(num_at(g, vm))
+    end
+    mut z := p
+    until z < e:
+        g.src[z] = 32 as u8
+        z += 1
+    end
+    ret true
+end
+
+func dv_reset(g &: Ng):
+    g.fv_val.clear()
+    g.fv_var.clear()
+    g.fv_ind.clear()
+    g.fv_bad.clear()
+    g.fv_foff.clear()
+    g.fv_ctx.clear()
+    g.fv_fsz.clear()
+    g.fv_of = HashMap {} as HashMap<int, int>
+    g.av_fv.clear()
+    g.ev_fv.clear()
+    g.ev_val.clear()
+    g.ev_next.clear()
+    g.ev_head = HashMap {} as HashMap<int, int>
+    g.ev_tail = HashMap {} as HashMap<int, int>
+    g.me_idx.clear()
+    g.me_fv.clear()
+    g.me_val.clear()
+    g.me_blk.clear()
+    g.mk_fv.clear()
+    g.mk_k.clear()
+    g.mk_p.clear()
+    g.mk_x.clear()
+    g.mk_next.clear()
+    g.mc_dv = 0 - 1
+end
+
+func dv_bind(g &: Ng, fstart: int, fend: int):
+    if not g.dbg_on or g.dv_pos.len() == 0:
+        ret
+    end
+    mut lo := 0
+    mut hi := g.dv_pos.len()
+    until lo < hi:
+        mid := (lo + hi) / 2
+        if g.dv_pos[mid] < fstart:
+            lo = mid + 1
+        else:
+            hi = mid
+        end
+    end
+    mut k := lo
+    until k < g.dv_pos.len() and g.dv_pos[k] < fend:
+        nm := g.dv_name.get(k)
+        id := tab_get(g.ltab, sp(nm), 0, str.Len(nm))
+        var := g.dv_var[k]
+        if id >= 0 and id < g.lval.len() and var >= 0 and var < g.md_kind.len() and g.md_kind[var] == 4:
+            v := g.lval[id]
+            if v >= 0 and not g.fv_of.has(v):
+                f := g.fv_val.len()
+                g.fv_val.push(v)
+                g.fv_var.push(var)
+                g.fv_ind.push(g.v_kind[v] == VK_ARG)
+                g.fv_bad.push(false)
+                g.fv_foff.push(0 - 1)
+                g.fv_ctx.push(0 - 1)
+                g.fv_fsz.push(0)
+                g.fv_of.put(v, f)
+            end
+        end
+        k += 1
+    end
+end
+
+func dv_ev_add(g &: Ng, anchor: int, f: int, val: int):
+    if f < 0:
+        ret
+    end
+    e := g.ev_fv.len()
+    g.ev_fv.push(f)
+    g.ev_val.push(val)
+    g.ev_next.push(0 - 1)
+    if g.ev_tail.has(anchor):
+        g.ev_next[g.ev_tail.get(anchor)] = e
+    else:
+        g.ev_head.put(anchor, e)
+    end
+    g.ev_tail.put(anchor, e)
+end
+
+func dv_move(g &: Ng, from: int, upto: int):
+    if from == upto or not g.ev_head.has(from):
+        ret
+    end
+    h := g.ev_head.get(from)
+    t := g.ev_tail.get(from)
+    _r1 := g.ev_head.remove(from)
+    _r2 := g.ev_tail.remove(from)
+    if g.ev_tail.has(upto):
+        g.ev_next[g.ev_tail.get(upto)] = h
+    else:
+        g.ev_head.put(upto, h)
+    end
+    g.ev_tail.put(upto, t)
+end
+
+func dv_unlink(g &: Ng, i: int):
+    if g.ev_fv.len() == 0 or not g.ev_head.has(i):
+        ret
+    end
+    pv := g.i_prev[i]
+    b := g.i_blk[i]
+    if pv >= 0:
+        dv_move(g, i, pv)
+    else b >= 0:
+        dv_move(g, i, 0 - 1 - b)
+    end
+end
+
+func dv_events_of(g &: Ng, i: int): Vector<int>:
+    mut r := Vector {} as Vector<int>
+    if g.ev_fv.len() == 0 or not g.ev_head.has(i):
+        ret r
+    end
+    mut e := g.ev_head.get(i)
+    until e >= 0:
+        r.push(e)
+        e = g.ev_next[e]
+    end
+    ret r
+end
+
+func dv_taint(g &: Ng, i: int):
+    mut evs := dv_events_of(g, i)
+    each e in evs:
+        g.fv_bad[g.ev_fv[e]] = true
+    end
+    evs.free()
+end
+
+func dv_resolve_all(g &: Ng):
+    n := g.v_repl.len()
+    repeat g.ev_val.len() in e:
+        v := g.ev_val[e]
+        if v >= 0 and v < n:
+            g.ev_val[e] = resolve(g, v)
+        end
+    end
+end
+
+func dv_apply(g &: Ng, st &: Vector<int>, anchor: int):
+    if not g.ev_head.has(anchor):
+        ret
+    end
+    mut e := g.ev_head.get(anchor)
+    until e >= 0:
+        st[g.ev_fv[e]] = g.ev_val[e]
+        e = g.ev_next[e]
+    end
+end
+
+func dv_isel_begin(g &: Ng):
+    g.rs_out.clear()
+    nf := g.fv_val.len()
+    if nf == 0:
+        ret
+    end
+    nb := g.b_first.len()
+    repeat nb * nf:
+        g.rs_out.push(0 - 3)
+    end
+    mut st := Vector {} as Vector<int>
+    repeat nf:
+        st.push(0 - 1)
+    end
+    mut changed := true
+    mut rounds := 0
+    until changed and rounds < 64:
+        changed = false
+        rounds += 1
+        each b in g.b_rpo:
+            dv_block_in(g, b, st)
+            dv_apply(g, st, 0 - 1 - b)
+            mut i := g.b_first[b]
+            until i >= 0:
+                dv_apply(g, st, i)
+                i = g.i_next[i]
+            end
+            repeat nf in f:
+                if g.rs_out[b * nf + f] != st[f]:
+                    g.rs_out[b * nf + f] = st[f]
+                    changed = true
+                end
+            end
+        end
+    end
+    st.free()
+end
+
+func dv_block_in(g &: Ng, b: int, st &: Vector<int>):
+    nf := g.fv_val.len()
+    repeat nf in f:
+        mut v := 0 - 3
+        if b == 0:
+            v = 0 - 1
+        end
+        repeat g.b_npred[b] in k:
+            p := g.b_pred[g.b_ps[b] + k]
+            o := g.rs_out[p * nf + f]
+            if o == 0 - 3:
+                continue
+            end
+            if v == 0 - 3:
+                v = o
+            else v != o:
+                v = 0 - 1
+            end
+        end
+        st[f] = v == 0 - 3 ? 0 - 1 : v
+    end
+end
+
+func dv_me(g &: Ng, f: int, val: int):
+    if f >= 0 and g.fv_bad[f]:
+        ret
+    end
+    g.me_idx.push(g.mc.op.len())
+    g.me_fv.push(f)
+    g.me_val.push(val)
+    g.me_blk.push(g.cur_b)
+end
+
+func dv_isel_block(g &: Ng, b: int):
+    nf := g.fv_val.len()
+    if nf == 0 or g.rs_out.len() == 0:
+        ret
+    end
+    mut st := Vector {} as Vector<int>
+    repeat nf:
+        st.push(0 - 1)
+    end
+    dv_block_in(g, b, st)
+    dv_apply(g, st, 0 - 1 - b)
+    dv_me(g, 0 - 1, 0 - 1)
+    repeat nf in f:
+        if st[f] >= 0:
+            dv_me(g, f, st[f])
+        end
+    end
+    st.free()
+end
+
+func dv_isel_after(g &: Ng, i: int):
+    if g.fv_val.len() == 0 or not g.ev_head.has(i):
+        ret
+    end
+    mut e := g.ev_head.get(i)
+    until e >= 0:
+        dv_me(g, g.ev_fv[e], g.ev_val[e])
+        e = g.ev_next[e]
+    end
+end
+
+func dv_val_loc(g &: Ng, v: int, blk: int, k &: int, p &: int, x &: int):
+    k = 0
+    p = 0
+    x = 0
+    if v < 0 or v >= g.v_kind.len():
+        ret
+    end
+    vk := g.v_kind[v]
+    if vk == VK_INT:
+        if not is_flt(g, g.v_ty[v]):
+            k = 2
+            p = g.v_i[v] as int
+        end
+        ret
+    end
+    if vk != VK_INS and vk != VK_ARG:
+        ret
+    end
+    if v < g.vak.len() and g.vak[v] != AK_NONE:
+        ak := g.vak[v]
+        if ak == AK_PTR and g.var_[v] >= VBASE:
+            k = 4
+            p = g.var_[v]
+            x = g.vao[v]
+        else ak == AK_FRAME and g.var_[v] >= 0:
+            k = 5
+            p = g.var_[v]
+            x = g.vao[v]
+        end
+        ret
+    end
+    if v >= g.vv.len():
+        ret
+    end
+    mut r := g.vv[v]
+    saved := g.cur_b
+    g.cur_b = blk
+    sr := split_lookup(g, v)
+    g.cur_b = saved
+    if sr >= 0:
+        r = sr
+    end
+    if r >= VBASE:
+        k = 1
+        p = r
+    end
+end
+
+func dv_live_at(ra &: Ra, v: int, pos: int): bool:
+    if v >= ra.v_r0.len():
+        ret false
+    end
+    mut lo := ra.v_r0[v]
+    mut hi := lo + ra.v_rn[v]
+    until lo < hi:
+        mid := (lo + hi) / 2
+        if ra.rg_e[mid] < pos:
+            lo = mid + 1
+        else:
+            hi = mid
+        end
+    end
+    ret lo < ra.v_r0[v] + ra.v_rn[v] and ra.rg_s[lo] <= pos
+end
+
+func dv_mark(g &: Ng, head &: int, tail &: int, f: int, k: int, p: int, x: int):
+    m := g.mk_fv.len()
+    g.mk_fv.push(f)
+    g.mk_k.push(k)
+    g.mk_p.push(p)
+    g.mk_x.push(x)
+    g.mk_next.push(0 - 1)
+    if tail >= 0:
+        g.mk_next[tail] = m
+    else:
+        head = m
+    end
+    tail = m
+end
+
+func dv_markers(g &: Ng, ra &: Ra):
+    n := g.mc.op.len()
+    g.mc.dv.clear()
+    repeat n:
+        g.mc.dv.push(0 - 1)
+    end
+    nf := g.fv_val.len()
+    if nf == 0 or g.me_idx.len() == 0:
+        ret
+    end
+    mut ck := Vector {} as Vector<int>
+    mut cp := Vector {} as Vector<int>
+    mut ek := Vector {} as Vector<int>
+    mut ep := Vector {} as Vector<int>
+    mut ext := Vector {} as Vector<bool>
+    mut inact := Vector {} as Vector<bool>
+    mut cx := Vector {} as Vector<int>
+    repeat nf:
+        cx.push(0)
+        ck.push(0)
+        cp.push(0)
+        ek.push(0)
+        ep.push(0)
+        ext.push(false)
+        inact.push(false)
+    end
+    mut act := Vector {} as Vector<int>
+    mut uses := Vector {} as Vector<int>
+    mut defs := Vector {} as Vector<int>
+    mut mc_cur := 0
+    nme := g.me_idx.len()
+    each b in g.mc.lorder:
+        bs := g.mc.bstart[b]
+        be := g.mc.bend[b]
+        if bs < 0 or be <= bs:
+            continue
+        end
+        until mc_cur < nme and g.me_idx[mc_cur] < bs:
+            mc_cur += 1
+        end
+        each fa in act:
+            ck[fa] = 0
+            ek[fa] = 0
+            ext[fa] = false
+            inact[fa] = false
+        end
+        act.clear()
+        mut i := bs
+        until i < be:
+            mut head := 0 - 1
+            mut tail := 0 - 1
+            until mc_cur < nme and g.me_idx[mc_cur] == i:
+                fx := g.me_fv[mc_cur]
+                if fx < 0:
+                    dv_mark(g, head, tail, 0 - 1, 0, 0, 0)
+                    mc_cur += 1
+                    continue
+                end
+                mut kk := 0
+                mut pp := 0
+                mut xx := 0
+                dv_val_loc(g, g.me_val[mc_cur], g.me_blk[mc_cur], kk, pp, xx)
+                if kk != ck[fx] or pp != cp[fx]:
+                    ext[fx] = false
+                end
+                ck[fx] = kk
+                cp[fx] = pp
+                cx[fx] = xx
+                if not inact[fx]:
+                    inact[fx] = true
+                    act.push(fx)
+                end
+                mc_cur += 1
+            end
+            mut w := 0
+            repeat act.len() in ai:
+                f := act[ai]
+                mut dk := ck[f]
+                dp := cp[f]
+                if dk == 1 or dk == 4:
+                    if dv_live_at(ra, dp, 2 * i):
+                        ext[f] = dp < g.mc.vloc.len() and g.mc.vloc[dp] >= 0
+                    else not ext[f]:
+                        dk = 0
+                    end
+                end
+                if dk != ek[f] or (dk != 0 and dp != ep[f]):
+                    dv_mark(g, head, tail, f, dk, dp, cx[f])
+                    ek[f] = dk
+                    ep[f] = dp
+                end
+                if ck[f] == 0 and ek[f] == 0:
+                    inact[f] = false
+                else:
+                    act[w] = f
+                    w += 1
+                end
+            end
+            until act.len() > w:
+                _x := act.pop()
+            end
+            g.mc.dv[i] = head
+            op := g.mc.op[i]
+            is_call := op == M_CALL or op == M_CALLR
+            mut need := false
+            each fq in act:
+                if ext[fq] and (ck[fq] == 1 or ck[fq] == 4):
+                    need = true
+                end
+            end
+            if need:
+                mi_regs(g, i, uses, defs)
+                each f2 in act:
+                    if not ext[f2] or (ck[f2] != 1 and ck[f2] != 4):
+                        continue
+                    end
+                    r := cp[f2]
+                    ph := g.mc.vloc[r]
+                    if is_call and is_caller_saved(g, ph):
+                        ext[f2] = false
+                        continue
+                    end
+                    if (op == M_COPY or op == M_FMOV_RR) and g.mc.r1[i] == r:
+                        continue
+                    end
+                    each d in defs:
+                        if d != r:
+                            dph := d >= VBASE ? (d < g.mc.vloc.len() ? g.mc.vloc[d] : 0 - 1) : d
+                            if dph == ph:
+                                ext[f2] = false
+                            end
+                        end
+                    end
+                end
+            end
+            i += 1
+        end
+    end
+    ck.free()
+    cp.free()
+    ek.free()
+    ep.free()
+    ext.free()
+    inact.free()
+    cx.free()
+    act.free()
+    uses.free()
+    defs.free()
+end
+
+func dv_dwreg(g &: Ng, r: int): int:
+    if g.arch == NG_ARCH_X86:
+        ret r >= 16 ? 21 + (r - 16) : r
+    end
+    if g.arch == NG_ARCH_A64:
+        if r >= 16:
+            ret 64 + avr(r)
+        end
+        x := axr(r)
+        ret x == 32 ? 31 : x
+    end
+    if g.arch == NG_ARCH_RV64:
+        ret r >= 16 ? 32 + rv_f(r) : rv_x(r)
+    end
+    if g.arch == NG_ARCH_ARM:
+        ret r >= 16 ? 256 + arm_d(r) : arm_r(r)
+    end
+    if r >= 16:
+        ret 17 + (r - 16)
+    end
+    k_map := [0, 2, 1, 3, 7, 6, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15]
+    ret k_map[r]
+end
+
+func dv_spreg(g &: Ng): int:
+    switch g.arch:
+        NG_ARCH_X86: ret 4 end
+        NG_ARCH_A64: ret 31 end
+        NG_ARCH_RV64: ret 2 end
+        NG_ARCH_ARM: ret 13 end
+    end
+    ret 7
+end
+
+func dv_sp_frame(g &: Ng): bool:
+    ret g.arch == NG_ARCH_A64 or g.arch == NG_ARCH_RV64 or g.arch == NG_ARCH_ARM
+end
+
+func dv_breg(e &: Vector<u8>, r: int, off: i64):
+    if r < 32:
+        e.push((0x70 + r) as u8)
+    else:
+        e.push(0x92 as u8)
+        vb_uleb(e, r as i64)
+    end
+    vb_sleb(e, off)
+end
+
+func dv_words(g &: Ng, base: int, pos: Vector<int>, endpc: int, scale: int):
+    ndf := g.df_sym.len()
+    vt := g.dbg_on and g.fv_val.len() > 0
+    if vt:
+        dv_enc_begin(g)
+        repeat pos.len() in i:
+            if g.mc.dv[i] >= 0:
+                dv_enc_at(g, base + scale * pos[i], g.mc.dv[i])
+            end
+        end
+    end
+    dbg_func(g, base, endpc - base)
+    if vt:
+        dv_enc_end(g, endpc, g.df_sym.len() > ndf)
+    end
+end
+
+func dv_slot_off(g &: Ng, s: int): i64:
+    if dv_sp_frame(g):
+        ret g.mc.dv_spb - (g.mc.fs_off[s] as i64)
+    end
+    if g.mc.fpo:
+        ret fpo_base(g) - (g.mc.fs_off[s] as i64)
+    end
+    ret win_adj(g) - (g.mc.fs_off[s] as i64)
+end
+
+func dv_slot_kind(g &: Ng, deref: bool): int:
+    if g.mc.fpo or dv_sp_frame(g):
+        ret deref ? 7 : 3
+    end
+    ret deref ? 9 : 8
+end
+
+func dv_frame_ok(g &: Ng): bool:
+    ret g.mc.fpo or g.os == NG_OS_WINDOWS or dv_sp_frame(g)
+end
+
+func dv_slot_shared(g &: Ng, s: int): bool:
+    if s < 0 or s >= g.mc.fs_alias.len():
+        ret true
+    end
+    if g.mc.fs_alias[s] >= 0:
+        ret true
+    end
+    repeat g.mc.fs_alias.len() in q:
+        if g.mc.fs_alias[q] == s:
+            ret true
+        end
+    end
+    ret false
+end
+
+func dv_concrete(g &: Ng, k0: int, p: int, x: int, ind: bool, ok &: int, op &: i64, ox &: int):
+    ok = 0
+    op = 0 as i64
+    ox = 0
+    mut k := k0
+    mut xx := x
+    if ind:
+        if k == 1:
+            k = 4
+            xx = 0
+        else k == 2:
+            ret
+        end
+    end
+    if k == 2:
+        ok = 2
+        op = p as i64
+        ret
+    end
+    if k == 5:
+        if dv_slot_shared(g, p) or not dv_frame_ok(g):
+            ret
+        end
+        ok = dv_slot_kind(g, false)
+        op = dv_slot_off(g, p) + (xx as i64)
+        ret
+    end
+    if (k != 1 and k != 4) or p >= g.mc.vloc.len():
+        ret
+    end
+    ph := g.mc.vloc[p]
+    if ph >= 0 and ph < 32:
+        ok = k == 1 ? 1 : 6
+        op = dv_dwreg(g, ph) as i64
+        ox = xx
+        ret
+    end
+    if p < g.mc.vslot.len() and g.mc.vslot[p] >= 0 and dv_frame_ok(g):
+        sl := slot_loc(g, g.mc.vslot[p])
+        ok = dv_slot_kind(g, k != 1)
+        op = dv_slot_off(g, sl)
+        ox = xx
+    end
+end
+
+func dv_enc_begin(g &: Ng):
+    g.es_open.clear()
+    g.es_x.clear()
+    g.es_k.clear()
+    g.es_p.clear()
+    g.es_s.clear()
+    g.es_gv.clear()
+    repeat g.fv_val.len() in f:
+        g.es_k.push(0)
+        g.es_p.push(0 as i64)
+        g.es_x.push(0)
+        g.es_s.push(0)
+        gv := g.gv_md.len()
+        g.es_gv.push(gv)
+        g.gv_md.push(g.fv_var[f])
+        g.gv_df.push(0 - 2)
+        g.gv_ind.push(g.fv_ind[f])
+        v := g.fv_val[f]
+        mut mem := false
+        mut moff := 0 as i64
+        if not g.fv_ind[f] and v >= 0 and v < g.vak.len() and g.vak[v] == AK_ALLOCA and g.var_[v] >= 0 and dv_frame_ok(g) and not dv_slot_shared(g, g.var_[v]):
+            mem = true
+            moff = dv_slot_off(g, slot_loc(g, g.var_[v]))
+        end
+        g.gv_mk.push(dv_slot_kind(g, false))
+        g.gv_mem.push(mem)
+        g.gv_foff.push(g.fv_foff[f])
+        g.gv_ctx.push(g.fv_ctx[f])
+        g.gv_fsz.push(g.fv_fsz[f])
+        g.gv_moff.push(moff)
+        g.gv_l0.push(g.le_s.len())
+    end
+end
+
+func dv_close(g &: Ng, f: int, pc: int):
+    if g.es_k[f] != 0 and pc > g.es_s[f]:
+        g.le_gv.push(g.es_gv[f])
+        g.le_s.push(g.es_s[f])
+        g.le_e.push(pc)
+        g.le_k.push(g.es_k[f])
+        g.le_p.push(g.es_p[f])
+        g.le_x.push(g.es_x[f])
+    end
+    g.es_k[f] = 0
+end
+
+func dv_enc_at(g &: Ng, pc: int, head: int):
+    mut m := head
+    until m >= 0:
+        f := g.mk_fv[m]
+        if f < 0:
+            each fo in g.es_open:
+                dv_close(g, fo, pc)
+            end
+            g.es_open.clear()
+            m = g.mk_next[m]
+            continue
+        end
+
+        mut nk := 0
+        mut np := 0 as i64
+        mut nx := 0
+        dv_concrete(g, g.mk_k[m], g.mk_p[m], g.mk_x[m], g.fv_ind[f], nk, np, nx)
+        if nk != g.es_k[f] or np != g.es_p[f] or nx != g.es_x[f]:
+            dv_close(g, f, pc)
+            if nk != 0:
+                g.es_k[f] = nk
+                g.es_p[f] = np
+                g.es_x[f] = nx
+                g.es_s[f] = pc
+                g.es_open.push(f)
+            end
+        end
+        m = g.mk_next[m]
+    end
+end
+
+func dv_enc_end(g &: Ng, endpc: int, has_func: bool):
+    repeat g.fv_val.len() in f:
+        dv_close(g, f, endpc)
+        g.gv_df[g.es_gv[f]] = has_func ? g.df_sym.len() - 1 : 0 - 1
+    end
+end
+
+func dv_copy_list(g &: Ng, from: int, head &: int, tail &: int):
+    mut m := from
+    until m >= 0:
+        dv_mark(g, head, tail, g.mk_fv[m], g.mk_k[m], g.mk_p[m], g.mk_x[m])
+        m = g.mk_next[m]
+    end
+end
+
+func dv_join(g &: Ng, a: int, b: int): int:
+    if a < 0:
+        ret b
+    end
+    if b < 0:
+        ret a
+    end
+    mut head := 0 - 1
+    mut tail := 0 - 1
+    dv_copy_list(g, a, head, tail)
+    dv_copy_list(g, b, head, tail)
+    ret head
+end
+
+func dv_is_type(g &: Ng, md: int): bool:
+    if md < 0 or md >= g.md_kind.len():
+        ret false
+    end
+    k := g.md_kind[md]
+    ret k == 5 or k == 6 or k == 7
+end
+
+func dv_ref(g &: Ng, t &: DvTypes, di &: Vector<u8>, md: int):
+    key := dv_is_type(g, md) ? md : 0 - 2
+    t.fx_pos.push(di.len())
+    t.fx_md.push(key)
+    vb_le(di, 0 as i64, 4)
+    if not t.tmap.has(key):
+        t.wl.push(key)
+    end
+end
+
+func dv_write_type(g &: Ng, t &: DvTypes, di &: Vector<u8>, md: int):
+    if t.tmap.has(md):
+        ret
+    end
+    t.tmap.put(md, di.len())
+    if md < 0:
+        vb_uleb(di, 6 as i64)
+        vb_str(di, "void")
+        vb_uleb(di, 0 as i64)
+        di.push(7 as u8)
+        ret
+    end
+    k := g.md_kind[md]
+    if k == 5:
+        vb_uleb(di, 6 as i64)
+        vb_str(di, g.md_s1[md])
+        bs := g.md_sz[md] / 8
+        vb_uleb(di, (bs > 0 ? bs : 1) as i64)
+        di.push(g.md_a[md] as u8)
+        ret
+    end
+    if k == 6 and g.md_tag[md] == 0x0f:
+        if g.md_t[md] < 0:
+            vb_uleb(di, 8 as i64)
+            vb_uleb(di, 8 as i64)
+        else:
+            vb_uleb(di, 7 as i64)
+            vb_uleb(di, 8 as i64)
+            dv_ref(g, t, di, g.md_t[md])
+        end
+        ret
+    end
+    if k == 7 and g.md_tag[md] == 0x13:
+        vb_uleb(di, 9 as i64)
+        vb_str(di, g.md_s1[md])
+        vb_uleb(di, (g.md_sz[md] / 8) as i64)
+        el := g.md_el[md]
+        if el >= 0 and el < g.md_kind.len() and g.md_kind[el] == 9:
+            repeat g.md_ln[el] in q:
+                m := g.md_pool[g.md_l0[el] + q]
+                if m >= 0 and m < g.md_kind.len() and g.md_kind[m] == 6 and g.md_tag[m] == 0x0d:
+                    vb_uleb(di, 10 as i64)
+                    vb_str(di, g.md_s1[m])
+                    dv_ref(g, t, di, g.md_t[m])
+                    vb_uleb(di, (g.md_off[m] / 8) as i64)
+                end
+            end
+        end
+        di.push(0 as u8)
+        ret
+    end
+    if k == 7 and g.md_tag[md] == 0x04:
+        vb_uleb(di, 23 as i64)
+        vb_str(di, g.md_s1[md])
+        vb_uleb(di, (g.md_sz[md] / 8) as i64)
+        el3 := g.md_el[md]
+        if el3 >= 0 and el3 < g.md_kind.len() and g.md_kind[el3] == 9:
+            repeat g.md_ln[el3] in q3:
+                m3 := g.md_pool[g.md_l0[el3] + q3]
+                if m3 >= 0 and m3 < g.md_kind.len() and g.md_kind[m3] == 12:
+                    vb_uleb(di, 24 as i64)
+                    vb_str(di, g.md_s1[m3])
+                    vb_sleb(di, g.md_a[m3] as i64)
+                end
+            end
+        end
+        di.push(0 as u8)
+        ret
+    end
+    if k == 7 and g.md_tag[md] == 0x01:
+        vb_uleb(di, 11 as i64)
+        dv_ref(g, t, di, g.md_t[md])
+        el2 := g.md_el[md]
+        mut cnt := 0
+        if el2 >= 0 and el2 < g.md_kind.len() and g.md_kind[el2] == 9 and g.md_ln[el2] > 0:
+            sr := g.md_pool[g.md_l0[el2]]
+            if sr >= 0 and sr < g.md_kind.len() and g.md_kind[sr] == 8:
+                cnt = g.md_a[sr]
+            end
+        end
+        vb_uleb(di, 12 as i64)
+        vb_uleb(di, cnt as i64)
+        di.push(0 as u8)
+        ret
+    end
+    vb_uleb(di, 6 as i64)
+    vb_str(di, g.md_s1[md])
+    vb_uleb(di, (g.md_sz[md] / 8) as i64)
+    di.push(7 as u8)
+end
+
+func dv_types_flush(g &: Ng, t &: DvTypes, di &: Vector<u8>):
+    until t.wl.len() > 0:
+        md := t.wl.pop()
+        dv_write_type(g, t, di, md)
+    end
+    repeat t.fx_pos.len() in i:
+        vb_put32(di, t.fx_pos[i], t.tmap.get(t.fx_md[i]) as i64)
+    end
+end
+
+func dv_expr(g &: Ng, k: int, p: i64, x: int): Vector<u8>:
+    mut e := Vector {} as Vector<u8>
+    r := p as int
+    if k == 1:
+        if r < 32:
+            e.push((0x50 + r) as u8)
+        else:
+            e.push(0x90 as u8)
+            vb_uleb(e, r as i64)
+        end
+    else k == 2:
+        e.push(0x11 as u8)
+        vb_sleb(e, p)
+        e.push(0x9f as u8)
+    else k == 3:
+        dv_breg(e, dv_spreg(g), p)
+    else k == 6:
+        if r < 32:
+            e.push((0x70 + r) as u8)
+            vb_sleb(e, x as i64)
+        else:
+            e.push(0x92 as u8)
+            vb_uleb(e, r as i64)
+            vb_sleb(e, x as i64)
+        end
+    else k == 7 or k == 9:
+        dv_breg(e, k == 7 ? dv_spreg(g) : 6, p)
+        e.push(0x06 as u8)
+        if x != 0:
+            e.push(0x23 as u8)
+            vb_uleb(e, x as i64)
+        end
+    else k == 8:
+        e.push(0x76 as u8)
+        vb_sleb(e, p)
+    end
+    ret e
+end
+
+func dv_index_entries(g &: Ng, t &: DvTypes):
+    repeat g.gv_md.len():
+        t.le_head.push(0 - 1)
+    end
+    mut tails := Vector {} as Vector<int>
+    repeat g.gv_md.len():
+        tails.push(0 - 1)
+    end
+    repeat g.le_s.len() in i:
+        t.le_next.push(0 - 1)
+        v := g.le_gv[i]
+        if tails[v] < 0:
+            t.le_head[v] = i
+        else:
+            t.le_next[tails[v]] = i
+        end
+        tails[v] = i
+    end
+    tails.free()
+end
+
+func dv_write_var(g &: Ng, t &: DvTypes, di &: Vector<u8>, gv: int, lsym: int):
+    md := g.gv_md[gv]
+    param := g.md_a[md] > 0
+    mut ab := 15
+    h := t.le_head[gv]
+    if g.gv_mem[gv]:
+        ab = 14
+    else h >= 0:
+        ab = 13
+    end
+    vb_uleb(di, (param ? ab + 3 : ab) as i64)
+    vb_str(di, g.md_s1[md])
+    fm := g.md_file[md]
+    vb_uleb(di, (fm >= 0 and fm < g.md_kind.len() and g.md_kind[fm] == 3 ? dbg_file_index(g, fm) : 1) as i64)
+    vb_uleb(di, g.md_line[md] as i64)
+    dv_ref(g, t, di, g.md_t[md])
+    if ab == 14:
+        mut x := dv_expr(g, g.gv_mk[gv], g.gv_moff[gv], 0)
+        vb_uleb(di, x.len() as i64)
+        each b in x:
+            di.push(b)
+        end
+        x.free()
+    else ab == 13:
+        add_reloc(g, SEC_DBGINFO, di.len(), lsym, R_ABS32, g.s_dloc.len() as i64)
+        vb_le(di, 0 as i64, 4)
+        mut e := h
+        until e >= 0:
+            mut y := dv_expr(g, g.le_k[e], g.le_p[e], g.le_x[e])
+            vb_le(g.s_dloc, g.le_s[e] as i64, dbg_aw(g))
+            vb_le(g.s_dloc, g.le_e[e] as i64, dbg_aw(g))
+            vb_le(g.s_dloc, y.len() as i64, 2)
+            each b2 in y:
+                g.s_dloc.push(b2)
+            end
+            y.free()
+            e = t.le_next[e]
+        end
+        vb_le(g.s_dloc, 0 as i64, dbg_aw(g))
+        vb_le(g.s_dloc, 0 as i64, dbg_aw(g))
+    end
+end
+
+func dv_queue(g &: Ng, i: int, ni: int):
+    mut evs := dv_events_of(g, i)
+    each ev in evs:
+        g.dq_ni.push(ni)
+        g.dq_fv.push(g.ev_fv[ev])
+        g.dq_v.push(g.ev_val[ev])
+    end
+    evs.free()
+end
+
+func dv_queue_clear(g &: Ng):
+    g.dq_ni.clear()
+    g.dq_fv.clear()
+    g.dq_v.clear()
+end
+
+func dv_sroa_leaf(g &: Ng, old: int, leaf: int, off: int, size: int):
+    if g.fv_val.len() == 0 or not g.fv_of.has(old):
+        ret
+    end
+    f0 := g.fv_of.get(old)
+    f := g.fv_val.len()
+    g.fv_val.push(leaf)
+    g.fv_var.push(g.fv_var[f0])
+    g.fv_ind.push(false)
+    g.fv_bad.push(g.fv_bad[f0])
+    g.fv_foff.push(g.fv_foff[f0] >= 0 ? g.fv_foff[f0] + off : off)
+    g.fv_ctx.push(g.fv_ctx[f0])
+    g.fv_fsz.push(size)
+    g.fv_of.put(leaf, f)
+end
+
+func dv_write_fn_vars(g &: Ng, t &: DvTypes, di &: Vector<u8>, fgv: Vector<int>, lsym: int):
+    mut done := Vector {} as Vector<bool>
+    repeat fgv.len():
+        done.push(false)
+    end
+    repeat fgv.len() in i:
+        if done[i]:
+            continue
+        end
+        gv := fgv[i]
+        md := g.gv_md[gv]
+        mut grp := Vector {} as Vector<int>
+        repeat fgv.len() - i in j0:
+            j := i + j0
+            if not done[j] and g.gv_md[fgv[j]] == md:
+                done[j] = true
+                if g.gv_foff[fgv[j]] >= 0 or g.gv_mem[fgv[j]] or t.le_head[fgv[j]] >= 0 or grp.len() == 0:
+                    grp.push(fgv[j])
+                end
+            end
+        end
+        mut frag := false
+        each q in grp:
+            if g.gv_foff[q] >= 0:
+                frag = true
+            end
+        end
+        if not frag:
+            mut best := grp[0]
+            each q2 in grp:
+                if g.gv_mem[q2] or (t.le_head[q2] >= 0 and not g.gv_mem[best]):
+                    best = q2
+                end
+            end
+            dv_write_var(g, t, di, best, lsym)
+        else:
+            dv_write_frag(g, t, di, grp, lsym)
+        end
+        grp.free()
+    end
+    done.free()
+end
+
+func dv_type_bytes(g &: Ng, md: int): int:
+    if md < 0 or md >= g.md_kind.len():
+        ret 0
+    end
+    ret g.md_sz[md] / 8
+end
+
+func dv_write_frag(g &: Ng, t &: DvTypes, di &: Vector<u8>, grp: Vector<int>, lsym: int):
+    md := g.gv_md[grp[0]]
+    param := g.md_a[md] > 0
+    mut fr := Vector {} as Vector<int>
+    each q in grp:
+        if g.gv_foff[q] >= 0:
+            mut at := fr.len()
+            repeat fr.len() in z:
+                if at == fr.len() and g.gv_foff[fr[z]] > g.gv_foff[q]:
+                    at = z
+                end
+            end
+            fr.push(q)
+            mut w := fr.len() - 1
+            until w > at:
+                fr[w] = fr[w - 1]
+                w -= 1
+            end
+            fr[at] = q
+        end
+    end
+    mut bnd := Vector {} as Vector<int>
+    each q3 in fr:
+        mut e := t.le_head[q3]
+        until e >= 0:
+            bnd.push(g.le_s[e])
+            bnd.push(g.le_e[e])
+            e = t.le_next[e]
+        end
+    end
+    repeat bnd.len() in a:
+        repeat bnd.len() - a - 1 in b0:
+            b := a + b0 + 1
+            if bnd[b] < bnd[a]:
+                tmp := bnd[a]
+                bnd[a] = bnd[b]
+                bnd[b] = tmp
+            end
+        end
+    end
+    total := dv_type_bytes(g, g.md_t[md])
+    mut body := Vector {} as Vector<u8>
+    mut uq := Vector {} as Vector<int>
+    each bv in bnd:
+        if uq.len() == 0 or uq[uq.len() - 1] != bv:
+            uq.push(bv)
+        end
+    end
+    repeat uq.len() in ix:
+        if ix + 1 >= uq.len():
+            continue
+        end
+        lo := uq[ix]
+        hi := uq[ix + 1]
+        mut ex := Vector {} as Vector<u8>
+        mut any := false
+        mut fcur := 0
+        each q4 in fr:
+            off := g.gv_foff[q4]
+            sz := g.gv_fsz[q4]
+            if off < fcur:
+                continue
+            end
+            if off > fcur:
+                ex.push(0x93 as u8)
+                vb_uleb(ex, (off - fcur) as i64)
+            end
+            mut e2 := t.le_head[q4]
+            mut hit := 0 - 1
+            until e2 >= 0:
+                if g.le_s[e2] <= lo and g.le_e[e2] >= hi:
+                    hit = e2
+                end
+                e2 = t.le_next[e2]
+            end
+            if hit >= 0:
+                mut y := dv_expr(g, g.le_k[hit], g.le_p[hit], g.le_x[hit])
+                each yb in y:
+                    ex.push(yb)
+                end
+                y.free()
+                any = true
+            end
+            ex.push(0x93 as u8)
+            vb_uleb(ex, sz as i64)
+            fcur = off + sz
+        end
+        if total > fcur:
+            ex.push(0x93 as u8)
+            vb_uleb(ex, (total - fcur) as i64)
+        end
+        if any:
+            vb_le(body, lo as i64, dbg_aw(g))
+            vb_le(body, hi as i64, dbg_aw(g))
+            vb_le(body, ex.len() as i64, 2)
+            each exb in ex:
+                body.push(exb)
+            end
+        end
+        ex.free()
+    end
+    ab := body.len() > 0 ? 13 : 15
+    vb_uleb(di, (param ? ab + 3 : ab) as i64)
+    vb_str(di, g.md_s1[md])
+    fm := g.md_file[md]
+    vb_uleb(di, (fm >= 0 and fm < g.md_kind.len() and g.md_kind[fm] == 3 ? dbg_file_index(g, fm) : 1) as i64)
+    vb_uleb(di, g.md_line[md] as i64)
+    dv_ref(g, t, di, g.md_t[md])
+    if body.len() > 0:
+        add_reloc(g, SEC_DBGINFO, di.len(), lsym, R_ABS32, g.s_dloc.len() as i64)
+        vb_le(di, 0 as i64, 4)
+        each bb in body:
+            g.s_dloc.push(bb)
+        end
+        vb_le(g.s_dloc, 0 as i64, dbg_aw(g))
+        vb_le(g.s_dloc, 0 as i64, dbg_aw(g))
+    end
+    body.free()
+    fr.free()
+    bnd.free()
+    uq.free()
+end
+
+func dv_cache_ok(g &: Ng, v: int, imap &: Vector<int>): bool:
+    if v < 0 or v >= g.v_kind.len():
+        ret false
+    end
+    k := g.v_kind[v]
+    if k == VK_INT or k == VK_ARG:
+        ret true
+    end
+    if k != VK_INS:
+        ret false
+    end
+    d := g.v_def[v]
+    ret d >= 0 and d < imap.len() and imap[d] >= 0 and g.i_blk[d] >= 0
+end
+
+func dv_cache_one(g &: Ng, anchor_at: int, e: int, imap &: Vector<int>, v0: int):
+    f := g.ev_fv[e]
+    if g.fv_bad[f]:
+        ret
+    end
+    g.ic.ev_anchor.push(anchor_at)
+    g.ic.ev_var.push(g.fv_var[f])
+    g.ic.ev_foff.push(g.fv_foff[f])
+    g.ic.ev_fsz.push(g.fv_fsz[f])
+    g.ic.ev_ind.push(g.fv_ind[f])
+    g.ic.ev_ctx.push(g.fv_ctx[f])
+    v := g.ev_val[e]
+    g.ic.ev_val.push(dv_cache_ok(g, v, imap) ? cache_val(g, v, v0) : 0 - 1)
+end
+
+func dv_cache_events(g &: Ng, imap &: Vector<int>, v0: int):
+    if g.v_repl.len() > 0:
+        dv_resolve_all(g)
+    end
+    repeat g.b_rpo.len() in ri:
+        b := g.b_rpo[ri]
+        if g.ev_head.has(0 - 1 - b):
+            mut e := g.ev_head.get(0 - 1 - b)
+            until e >= 0:
+                dv_cache_one(g, 0 - 1 - ri, e, imap, v0)
+                e = g.ev_next[e]
+            end
+        end
+        mut j := g.b_first[b]
+        until j >= 0:
+            if g.ev_head.has(j):
+                mut e2 := g.ev_head.get(j)
+                until e2 >= 0:
+                    dv_cache_one(g, imap[j], e2, imap, v0)
+                    e2 = g.ev_next[e2]
+                end
+            end
+            j = g.i_next[j]
+        end
+    end
+end
+
+func dv_inline_events(g &: Ng, e: int, newi &: Vector<int>, v0: int, c: int, cl: int):
+    q0 := g.ic.e_ev0[e]
+    mut kv := Vector {} as Vector<int>
+    mut ko := Vector {} as Vector<int>
+    mut kc := Vector {} as Vector<int>
+    mut kf := Vector {} as Vector<int>
+    repeat g.ic.e_evcount[e] in k:
+        q := q0 + k
+        cx := g.ic.ev_ctx[q] >= 0 ? dbg_rebase(g, g.ic.ev_ctx[q], cl) : cl
+        var := g.ic.ev_var[q]
+        fo := g.ic.ev_foff[q]
+        mut f := 0 - 1
+        repeat kv.len() in z:
+            if f < 0 and kv[z] == var and ko[z] == fo and kc[z] == cx:
+                f = kf[z]
+            end
+        end
+        if f < 0:
+            f = g.fv_val.len()
+            g.fv_val.push(0 - 1)
+            g.fv_var.push(var)
+            g.fv_ind.push(g.ic.ev_ind[q])
+            g.fv_bad.push(false)
+            g.fv_foff.push(fo)
+            g.fv_ctx.push(cx)
+            g.fv_fsz.push(g.ic.ev_fsz[q])
+            kv.push(var)
+            ko.push(fo)
+            kc.push(cx)
+            kf.push(f)
+        end
+        a := g.ic.ev_anchor[q]
+        mut anchor := 0 - 1
+        if a >= 0:
+            if a >= newi.len():
+                continue
+            end
+            anchor = newi[a]
+        else:
+            rb := 0 - 1 - a
+            if rb >= g.ic.bmap.len():
+                continue
+            end
+            anchor = 0 - 1 - g.ic.bmap[rb]
+        end
+        cv := g.ic.ev_val[q]
+        dv_ev_add(g, anchor, f, cv >= 0 ? map_cval(g, cv, v0, c) : 0 - 1)
+    end
+    kv.free()
+    ko.free()
+    kc.free()
+    kf.free()
+end
+
+func dv_global_line(g &: Ng, p: int, e: int, ge: int):
+    mut q := p + 1
+    until q < e and g.src[q] != (32 as u8):
+        q += 1
+    end
+    mut b := str.NewBuilder()
+    mut k := p + 1
+    until k < q:
+        str.BufAppendChar(b, g.src[k] as int)
+        k += 1
+    end
+    g.dg_gname.push(str.BufStr(b))
+    str.BufFree(b)
+    g.dg_gmd.push(ge)
+end
+
+func dv_write_globals(g &: Ng, t &: DvTypes, di &: Vector<u8>):
+    repeat g.dg_gname.len() in i:
+        ge := g.dg_gmd[i]
+        if ge < 0 or ge >= g.md_kind.len() or g.md_kind[ge] != 10:
+            continue
+        end
+        var := g.md_t[ge]
+        if var < 0 or var >= g.md_kind.len() or g.md_kind[var] != 11:
+            continue
+        end
+        nm := g.dg_gname.get(i)
+        s := tab_get(g.syms, sp(nm), 0, str.Len(nm))
+        if s < 0 or not g.sy_def[s] or g.sy_sec[s] < 0:
+            continue
+        end
+        vb_uleb(di, 22 as i64)
+        vb_str(di, g.md_s1[var])
+        fm := g.md_file[var]
+        vb_uleb(di, (fm >= 0 and fm < g.md_kind.len() and g.md_kind[fm] == 3 ? dbg_file_index(g, fm) : 1) as i64)
+        vb_uleb(di, g.md_line[var] as i64)
+        dv_ref(g, t, di, g.md_t[var])
+        vb_uleb(di, (dbg_aw(g) + 1) as i64)
+        di.push(0x03 as u8)
+        dbg_addr(g, SEC_DBGINFO, di, s, 0 as i64)
+    end
+end

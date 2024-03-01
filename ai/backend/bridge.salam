@@ -1,0 +1,857 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aibridge
+
+import net.http
+import net.router
+import net.tcp
+import encoding.json
+import encoding.value
+import encoding.encerr
+import crypto
+import sync
+import time
+import str
+
+include aistore "store.salam"
+include aiweb "web.salam"
+include aipolicy "policy.salam"
+include aicloud "cloud.salam"
+
+const POLL_MS := 25000
+const CALL_MS := 600000
+const OFFLINE_SECONDS := 45
+const MAX_DEVICES := 10
+const MAX_OUTPUT := 200000
+const PROTOCOL := "2025-06-18"
+const TOOLS := `[
+{"name": "shell", "description": "Run a command in the user's shell (bash or sh on Linux and macOS, PowerShell on Windows unless shell is set). Runs in the workspace unless cwd is given. Use it to build, run, install, use git and so on.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string", "description": "The desktop session id from the conversation."}, "command": {"type": "string"}, "cwd": {"type": "string", "description": "Directory relative to the workspace."}, "shell": {"type": "string", "enum": ["default", "bash", "sh", "powershell", "cmd"]}, "timeout": {"type": "integer", "description": "Seconds, default 120, at most 1800."}}, "required": ["session", "command"]}},
+{"name": "read_file", "description": "Read a text file. Lines are numbered from 1; use offset and limit for big files.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "path": {"type": "string"}, "offset": {"type": "integer"}, "limit": {"type": "integer"}}, "required": ["session", "path"]}},
+{"name": "write_file", "description": "Create a file or replace its whole content. Parent folders are created.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "path": {"type": "string"}, "content": {"type": "string"}}, "required": ["session", "path", "content"]}},
+{"name": "edit_file", "description": "Replace one exact occurrence of old_text with new_text. old_text must appear exactly once unless replace_all is true.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}, "replace_all": {"type": "boolean"}}, "required": ["session", "path", "old_text", "new_text"]}},
+{"name": "list_dir", "description": "List a directory. Folders end with a slash.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "path": {"type": "string"}}, "required": ["session"]}},
+{"name": "glob", "description": "Find files by glob pattern such as src/**/*.rs, respecting .gitignore.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "pattern": {"type": "string"}, "path": {"type": "string"}}, "required": ["session", "pattern"]}},
+{"name": "grep", "description": "Search file contents with a regular expression, respecting .gitignore. Returns path:line: text.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "pattern": {"type": "string"}, "path": {"type": "string"}, "glob": {"type": "string"}, "ignore_case": {"type": "boolean"}}, "required": ["session", "pattern"]}},
+{"name": "docker", "description": "Run the docker CLI with the given arguments, for example [\"ps\", \"-a\"] or [\"compose\", \"up\", \"-d\"].", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}, "cwd": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["session", "args"]}},
+{"name": "wsl", "description": "Windows only: run a bash command inside WSL. distro is optional; leave command empty to list the installed distros.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "command": {"type": "string"}, "distro": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["session"]}},
+{"name": "run_tests", "description": "Detect the project's test runner (cargo, npm, bun, pnpm, yarn, go, pytest, make) and run it, or run command if given.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "command": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["session"]}},
+{"name": "save_memory", "description": "Save or update one memory about this project in .salam-agent/memory/<slug>.md and refresh .salam-agent/index.md. Use it for what will help in a later session: how to build and test, the layout, decisions, the user's preferences, traps. Reuse a slug to update that memory.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "title": {"type": "string", "description": "A few words."}, "description": {"type": "string", "description": "One line that says when this memory is useful."}, "content": {"type": "string", "description": "The full memory in Markdown."}, "slug": {"type": "string", "description": "Optional file name without .md, lowercase words joined by dashes; reuse one to update it."}}, "required": ["session", "title", "description", "content"]}},
+{"name": "forget_memory", "description": "Delete one memory from .salam-agent/memory/ and refresh .salam-agent/index.md.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "slug": {"type": "string"}}, "required": ["session", "slug"]}},
+{"name": "wait", "description": "Wait for a call that is still running on the user's computer and return its result. Use the call_id from the earlier result that said the call is still running. Do not repeat the original call.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "call_id": {"type": "string"}}, "required": ["session", "call_id"]}}
+,
+{"name": "github_api", "description": "Cloud sessions only: call the GitHub REST API as the user (private repositories included). path starts with /, for example /user/repos?per_page=100, /repos/OWNER/REPO/contents/PATH, /repos/OWNER/REPO/issues, /repos/OWNER/REPO/pulls. body is a JSON string for POST, PUT and PATCH.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]}, "path": {"type": "string"}, "body": {"type": "string"}}, "required": ["session", "path"]}},
+{"name": "github_git", "description": "Cloud sessions only: run clone, fetch, pull, push or ls-remote in the sandbox with the user's GitHub login. args is the git argument list, for example [\"clone\", \"https://github.com/OWNER/REPO.git\"]. Use shell for every other git command.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}, "cwd": {"type": "string"}}, "required": ["session", "args"]}},
+{"name": "figma_api", "description": "Cloud sessions only: read Figma as the user. path starts with /v1/, for example /v1/files/FILE_KEY?depth=2, /v1/files/FILE_KEY/nodes?ids=1:2, /v1/files/FILE_KEY/comments, /v1/me. POST is allowed only for comments.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "method": {"type": "string", "enum": ["GET", "POST"]}, "path": {"type": "string"}, "body": {"type": "string"}}, "required": ["session", "path"]}},
+{"name": "figma_export", "description": "Cloud sessions only: render Figma nodes as png, jpg, svg or pdf and save them into the sandbox folder dir (default assets).", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "file_key": {"type": "string"}, "ids": {"type": "string", "description": "Comma separated node ids such as 1:2,3:4."}, "format": {"type": "string", "enum": ["png", "jpg", "svg", "pdf"]}, "scale": {"type": "integer"}, "dir": {"type": "string"}}, "required": ["session", "file_key", "ids"]}}
+]`
+const INSTRUCTIONS := "These tools act either on the user's own computer through Salam Agent, the desktop app on the user's computer, or, in a cloud session, inside a private sandbox container on the Salam servers. Every call needs the session id given at the top of the user's message. The user may refuse a call; respect the refusal and do not retry the same call. A call that takes long, or waits for the user's approval, returns a call_id; then call wait with it until the result arrives instead of repeating the call."
+
+mut SECRET := ""
+mut SLOTS := 32
+mut HOLD_MS := 40000 as i64
+mut ACTIVE := 0
+mut LOCK := sync.Mutex {}
+mut SEEN := HashMap {} as HashMap<str, str>
+mut CALLS := HashMap {} as HashMap<str, str>
+mut OWNER := HashMap {} as HashMap<str, str>
+mut TAKEN := HashMap {} as HashMap<str, str>
+mut RESULTS := HashMap {} as HashMap<str, str>
+mut STARTED := HashMap {} as HashMap<str, i64>
+mut BUDGET := HashMap {} as HashMap<str, int>
+
+func one(v: str): Vector<str>:
+    mut a := Vector {} as Vector<str>
+    a.push(v)
+    ret a
+end
+
+func two(v: str, w: str): Vector<str>:
+    mut a := one(v)
+    a.push(w)
+    ret a
+end
+
+func n(v: i64): str:
+    ret aiweb.I64s(v)
+end
+
+func clip(s: str, max: int): str:
+    if s.len() <= max:
+        ret s
+    end
+    mut cut := max
+    until cut > 0:
+        b := s[cut] as int
+        if b < 128 or b >= 192:
+            break
+        end
+        cut -= 1
+    end
+    ret s.substr(0, cut)
+end
+
+func safe_args(args: str): str:
+    mut err := encerr.EncodingError {}
+    mut root := json.Decode(args, err)
+    if encerr.IsError(err) or not value.IsObject(root):
+        value.ValueFree(root)
+        ret "{}"
+    end
+    _d := value.ObjectDelete(root, "session")
+    out := json.Encode(root, json.JSONOptions {})
+    value.ValueFree(root)
+    ret out
+end
+
+func start_call(id: str, chat: str, dev: str, tool: str, args: str):
+    mut uid := "0"
+    mut mid := "0"
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT c.user_id, COALESCE(m.id, 0) FROM chats c LEFT JOIN messages m ON m.chat_id = c.id AND m.role = 'assistant' AND m.status = 'pending' WHERE c.id = ?1 ORDER BY m.id DESC LIMIT 1", one(chat))
+    if aistore.Next(rows):
+        uid = aistore.Text(rows, 0)
+        mid = aistore.Text(rows, 1)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    if uid == "0":
+        ret
+    end
+    mut a := Vector {} as Vector<str>
+    a.push(id)
+    a.push(uid)
+    a.push(chat)
+    a.push(mid)
+    a.push(dev)
+    a.push(tool)
+    a.push(safe_args(args))
+    a.push(n(aistore.Now()))
+    aistore.Lock()
+    _r := aistore.Run("INSERT INTO bridge_calls (id, user_id, chat_id, message_id, device_id, tool, args, detail, output, status, state, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '', '', 'running', 'running', ?8) ON DUPLICATE KEY UPDATE id = id", a)
+    aistore.Unlock()
+end
+
+func persist_result(id: str, body: str):
+    status := json.Get(body, "status")
+    mut state := "error"
+    if status == "ok":
+        state = "done"
+    else status == "denied":
+        state = "denied"
+    end
+    mut a := Vector {} as Vector<str>
+    a.push(status)
+    a.push(state)
+    a.push(clip(json.Get(body, "output"), MAX_OUTPUT))
+    a.push(clip(json.Get(body, "summary"), 480))
+    a.push(json.Get(body, "detail"))
+    a.push(clip(json.Get(body, "lang"), 16))
+    a.push(clip(json.Get(body, "kind"), 8))
+    a.push(clip(json.Get(body, "cwd"), 990))
+    a.push(json.Get(body, "outside") == "true" ? "1" : "0")
+    a.push(n(aistore.Now()))
+    a.push(id)
+    aistore.Lock()
+    _r := aistore.Run("UPDATE bridge_calls SET status = ?1, state = ?2, output = ?3, summary = ?4, detail = ?5, lang = ?6, kind = ?7, cwd = ?8, outside = ?9, finished = ?10 WHERE id = ?11", a)
+    aistore.Unlock()
+end
+
+func persist_late(id: str, dev: str, body: str): bool:
+    aistore.Lock()
+    have := aistore.OneText("SELECT COUNT(*) FROM bridge_calls WHERE id = ?1 AND device_id = ?2", two(id, dev))
+    aistore.Unlock()
+    if have == "0":
+        ret false
+    end
+    persist_result(id, body)
+    ret true
+end
+
+func header(h: HashMap<str, str>, name: str): str:
+    if h.has(name):
+        ret h.get(name)
+    end
+    ret ""
+end
+
+func wr_all(c: tcp.Conn, data: str): bool:
+    mut off := 0
+    mut tries := 0
+    until off < data.len():
+        got := tcp.Write(c, data.substr(off, data.len() - off))
+        if got > 0:
+            off += got
+            tries = 0
+        else:
+            tries += 1
+            if tries >= 4:
+                ret false
+            end
+            sync.SleepMs(50)
+        end
+    end
+    ret true
+end
+
+func respond(c: tcp.Conn, status: str, body: str): bool:
+    head := "HTTP/1.1 " + status + "\r\nContent-Type: application/json\r\nContent-Length: " + body.len() + "\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n" + body
+    ret wr_all(c, head)
+end
+
+func fail(c: tcp.Conn, status: str, code: str, message: str):
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("error", code))
+    m.push(json.Member("message", message))
+    _r := respond(c, status, json.Object(m))
+end
+
+func bearer_of(h: HashMap<str, str>): str:
+    auth := header(h, "authorization")
+    if not str.StartsWith(str.Lower(auth), "bearer "):
+        ret ""
+    end
+    ret str.Trim(auth.substr(7, auth.len() - 7))
+end
+
+func device_of(h: HashMap<str, str>): str:
+    raw := bearer_of(h)
+    if not str.StartsWith(raw, "sd-"):
+        ret ""
+    end
+    aistore.Lock()
+    id := aistore.OneText("SELECT id FROM bridge_devices WHERE hash = ?1 AND revoked = 0", one(aiweb.Hash(raw)))
+    aistore.Unlock()
+    ret id
+end
+
+func slot(delta: int): bool:
+    _l := sync.Lock(LOCK)
+    mut ok := true
+    if delta > 0 and ACTIVE >= SLOTS:
+        ok = false
+    else:
+        ACTIVE = ACTIVE + delta
+    end
+    _u := sync.Unlock(LOCK)
+    ret ok
+end
+
+func touch(dev: str):
+    _l := sync.Lock(LOCK)
+    SEEN.put(dev, n(aistore.Now()))
+    _u := sync.Unlock(LOCK)
+end
+
+func next_call(dev: str): str:
+    _l := sync.Lock(LOCK)
+    mut found := ""
+    each k, v in OWNER:
+        if v == dev and not TAKEN.has(k):
+            found = k
+            break
+        end
+    end
+    mut out := ""
+    if found.len() > 0:
+        TAKEN.put(found, "1")
+        out = CALLS.get(found)
+    end
+    _u := sync.Unlock(LOCK)
+    ret out
+end
+
+func untake(call: str):
+    id := json.Get(call, "id")
+    _l := sync.Lock(LOCK)
+    if TAKEN.has(id):
+        _r := TAKEN.remove(id)
+    end
+    _u := sync.Unlock(LOCK)
+end
+
+func poll(c: tcp.Conn, h: HashMap<str, str>):
+    dev := device_of(h)
+    if dev.len() == 0:
+        fail(c, "401 Unauthorized", "unauthorized", "unknown or revoked device")
+        ret
+    end
+    if not slot(1):
+        fail(c, "503 Service Unavailable", "busy", "too many devices are waiting; retry shortly")
+        ret
+    end
+    tcp.SetReadDeadline(c, 0)
+    start := time.NowMillis()
+    mut call := ""
+    until time.NowMillis() - start < POLL_MS:
+        touch(dev)
+        call = next_call(dev)
+        if call.len() > 0:
+            break
+        end
+        sync.SleepMs(100)
+    end
+    _s := slot(0 - 1)
+    if call.len() == 0:
+        _w := wr_all(c, "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        ret
+    end
+    if not respond(c, "200 OK", `{"call": ` + call + "}"):
+        untake(call)
+    end
+end
+
+func result(c: tcp.Conn, h: HashMap<str, str>, body: str):
+    dev := device_of(h)
+    if dev.len() == 0:
+        fail(c, "401 Unauthorized", "unauthorized", "unknown or revoked device")
+        ret
+    end
+    id := json.Get(body, "call_id")
+    _l := sync.Lock(LOCK)
+    mine := OWNER.has(id) and OWNER.get(id) == dev
+    if mine:
+        RESULTS.put(id, body)
+    end
+    _u := sync.Unlock(LOCK)
+    if not mine:
+        if persist_late(id, dev, body):
+            touch(dev)
+            _r := respond(c, "200 OK", `{"ok": true}`)
+            ret
+        end
+        fail(c, "404 Not Found", "not_found", "no such call is waiting for this device")
+        ret
+    end
+    persist_result(id, body)
+    touch(dev)
+    _r := respond(c, "200 OK", `{"ok": true}`)
+end
+
+func online(dev: str): bool:
+    _l := sync.Lock(LOCK)
+    mut seen := 0
+    if SEEN.has(dev):
+        seen = SEEN.get(dev).to_int()
+    end
+    _u := sync.Unlock(LOCK)
+    ret seen > 0 and (aistore.Now() as int) - seen <= OFFLINE_SECONDS
+end
+
+func known_tool(name: str): bool:
+    switch name:
+        "shell", "read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "docker", "wsl", "run_tests", "save_memory", "forget_memory", "github_api", "github_git", "figma_api", "figma_export":
+            ret true
+        end
+    end
+    ret false
+end
+
+func tool_text(text: str, is_error: bool): str:
+    mut item := Vector {} as Vector<str>
+    item.push(json.Member("type", "text"))
+    item.push(json.Member("text", text))
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("content", "[" + json.Object(item) + "]"))
+    m.push(json.MemberBool("isError", is_error))
+    ret json.Object(m)
+end
+
+func forget(id: str):
+    _l := sync.Lock(LOCK)
+    if CALLS.has(id):
+        _c := CALLS.remove(id)
+    end
+    if OWNER.has(id):
+        _o := OWNER.remove(id)
+    end
+    if TAKEN.has(id):
+        _t := TAKEN.remove(id)
+    end
+    if RESULTS.has(id):
+        _r := RESULTS.remove(id)
+    end
+    if STARTED.has(id):
+        _s := STARTED.remove(id)
+    end
+    _u := sync.Unlock(LOCK)
+end
+
+func sweep():
+    now := time.NowMillis()
+    mut old := Vector {} as Vector<str>
+    _l := sync.Lock(LOCK)
+    each k, v in STARTED:
+        if now - v > CALL_MS + 60000:
+            old.push(k)
+        end
+    end
+    _u := sync.Unlock(LOCK)
+    each k in old:
+        forget(k)
+    end
+end
+
+func session_device(session: str, chat &: str, dev &: str, workspace &: str):
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT c.id, c.device_id, c.workspace FROM chats c JOIN bridge_devices d ON d.id = c.device_id AND d.user_id = c.user_id AND d.revoked = 0 WHERE c.bridge_token = ?1", one(session))
+    if aistore.Next(rows):
+        chat = aistore.Text(rows, 0)
+        dev = aistore.Text(rows, 1)
+        workspace = aistore.Text(rows, 2)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+end
+
+func await_call(id: str, dev: str): str:
+    if not slot(1):
+        ret tool_text("Too many tool calls are running. Call wait again with call_id \"" + id + "\" in a moment.", false)
+    end
+    held := time.NowMillis()
+    _a := sync.Lock(LOCK)
+    began := STARTED.has(id) ? STARTED.get(id) : held
+    _b := sync.Unlock(LOCK)
+    mut got := ""
+    mut lost := false
+    until got.len() == 0:
+        _c := sync.Lock(LOCK)
+        if RESULTS.has(id):
+            got = RESULTS.get(id)
+        end
+        _d := sync.Unlock(LOCK)
+        if got.len() == 0:
+            now := time.NowMillis()
+            if now - began > CALL_MS or not online(dev):
+                lost = true
+                break
+            end
+            if now - held > HOLD_MS:
+                break
+            end
+            sync.SleepMs(100)
+        end
+    end
+    _s := slot(0 - 1)
+    if lost:
+        forget(id)
+        ret tool_text("Salam Agent did not answer in time or disconnected.", true)
+    end
+    if got.len() == 0:
+        ret tool_text("The call is still running on the user's computer (it may be waiting for the user's approval). Call wait with call_id \"" + id + "\" and the same session to get its result. Do not repeat the original call.", false)
+    end
+    forget(id)
+    status := json.Get(got, "status")
+    mut output := clip(json.Get(got, "output"), MAX_OUTPUT)
+    if status == "denied" and output.len() == 0:
+        output = "The user refused this call."
+    end
+    ret tool_text(output, status != "ok")
+end
+
+func await_cloud(id: str): str:
+    if not slot(1):
+        ret tool_text("Too many tool calls are running. Call wait again with call_id \"" + id + "\" in a moment.", false)
+    end
+    held := time.NowMillis()
+    mut got := ""
+    until got.len() == 0:
+        got = aicloud.Take(id)
+        if got.len() == 0:
+            if time.NowMillis() - held > HOLD_MS:
+                break
+            end
+            sync.SleepMs(100)
+        end
+    end
+    _s := slot(0 - 1)
+    if got.len() == 0:
+        ret tool_text("The call is still running in the sandbox. Call wait with call_id \"" + id + "\" and the same session to get its result. Do not repeat the original call.", false)
+    end
+    ret tool_text(clip(json.Get(got, "output"), MAX_OUTPUT), json.Get(got, "status") != "ok")
+end
+
+func cloud_call(name: str, args: str, session: str, chat: str, uid: str): str:
+    refused := guard(name, args, chat)
+    if refused.len() > 0:
+        ret tool_text(refused, true)
+    end
+    aicloud.Sweep(CALL_MS + 60000)
+    id := crypto.RandomHex(12)
+    start_call(id, chat, "0", name, args)
+    aicloud.Submit(id, session, uid, name, args)
+    ret await_cloud(id)
+end
+
+func wait_call(args: str): str:
+    session := json.Get(args, "session")
+    id := json.Get(args, "call_id")
+    mut chat := ""
+    mut dev := ""
+    mut workspace := ""
+    if session.len() == 32:
+        session_device(session, chat, dev, workspace)
+    end
+    if chat.len() == 0 and session.len() == 32:
+        mut cchat := ""
+        mut cuid := ""
+        if aicloud.Owner(session, cchat, cuid) and aicloud.Known(id):
+            ret await_cloud(id)
+        end
+    end
+    _l := sync.Lock(LOCK)
+    mine := dev.len() > 0 and OWNER.has(id) and OWNER.get(id) == dev and CALLS.has(id) and json.Get(CALLS.get(id), "chat") == chat
+    _u := sync.Unlock(LOCK)
+    if not mine:
+        ret tool_text("No call with this call_id is running for this session. It may have finished already; run the original call again only if its result is really needed.", true)
+    end
+    ret await_call(id, dev)
+end
+
+func foreign_budget(chat: str, lines: int): int:
+    _l := sync.Lock(LOCK)
+    if BUDGET.size() > 5000:
+        BUDGET = HashMap {} as HashMap<str, int>
+    end
+    used := BUDGET.has(chat) ? BUDGET.get(chat) : 0
+    if used + lines <= aipolicy.ChatMax():
+        BUDGET.put(chat, used + lines)
+        _u := sync.Unlock(LOCK)
+        ret -1
+    end
+    _v := sync.Unlock(LOCK)
+    ret used
+end
+
+func guard(name: str, args: str, chat: str): str:
+    if aiweb.ChatPolicyFree(chat):
+        ret ""
+    end
+    mut lines := 0
+    if name == "write_file" or name == "edit_file":
+        target := json.Get(args, "path")
+        body := json.Get(args, name == "write_file" ? "content" : "new_text")
+        if not aipolicy.ForeignWrite(target, body):
+            ret ""
+        end
+        lines = aipolicy.FileLines(body)
+        if lines > aipolicy.FileMax():
+            ret "Refused by the Salam service: this would put " + lines + " lines of code in another language into " + target + ". Salam Agent builds software in Salam: write this part as .salam files instead. Small glue files in other languages (up to " + aipolicy.FileMax() + " lines) are fine."
+        end
+    else name == "shell" or name == "wsl" or name == "run_tests" or name == "docker":
+        command := name == "docker" ? str.Replace(str.Replace(json.Get(args, "args"), "\\n", "\n"), "\\\"", "\"") : json.Get(args, "command")
+        tool := aipolicy.Scaffold(command)
+        if tool.len() > 0:
+            ret "Refused by the Salam service: " + tool + " starts a project in another language. Salam Agent builds projects in Salam: start one with salam new or salam init, or write the .salam files directly."
+        end
+        size := aipolicy.FileLines(command)
+        if size > aipolicy.CommandMax():
+            ret "Refused by the Salam service: this command is " + size + " lines long. Keep shell commands and scripts short and put the program itself in Salam."
+        end
+        scripted := aipolicy.InlineProgram(command)
+        if scripted and size > aipolicy.InlineMax():
+            ret "Refused by the Salam service: this command runs a program in another language (" + size + " lines) straight from the command line. Salam Agent builds software in Salam: write it as a .salam file and run it with salam run. One-line commands are fine."
+        end
+        if not scripted and not aipolicy.WritesForeign(command):
+            ret ""
+        end
+        lines = size
+    else:
+        ret ""
+    end
+    used := foreign_budget(chat, lines)
+    if used >= 0:
+        ret "Refused by the Salam service: this conversation already wrote " + used + " lines of code in other languages, and the limit is " + aipolicy.ChatMax() + ". Salam Agent builds software in Salam: write the rest in Salam."
+    end
+    ret ""
+end
+
+func call_tool(params: str): str:
+    name := json.Get(params, "name")
+    mut args := json.Get(params, "arguments")
+    if args.len() == 0:
+        args = "{}"
+    end
+    if name == "wait":
+        ret wait_call(args)
+    end
+    if not known_tool(name):
+        ret tool_text("Unknown tool " + name + ".", true)
+    end
+    session := json.Get(args, "session")
+    if session.len() != 32:
+        ret tool_text("The session argument is missing or wrong. Copy it exactly from the desktop session block in the user's message.", true)
+    end
+    mut chat := ""
+    mut dev := ""
+    mut workspace := ""
+    session_device(session, chat, dev, workspace)
+    if chat.len() == 0:
+        mut cchat := ""
+        mut cuid := ""
+        if aicloud.Owner(session, cchat, cuid):
+            ret cloud_call(name, args, session, cchat, cuid)
+        end
+        ret tool_text("This session is not linked to Salam Agent. Tell the user to open the conversation in Salam Agent.", true)
+    end
+    if name == "github_api" or name == "github_git" or name == "figma_api" or name == "figma_export":
+        ret tool_text("This tool only works in cloud sessions, not in Salam Agent on the user's computer.", true)
+    end
+    refused := guard(name, args, chat)
+    if refused.len() > 0:
+        ret tool_text(refused, true)
+    end
+    if not online(dev):
+        ret tool_text("Salam Agent is not connected right now. Ask the user to open it and try again.", true)
+    end
+    sweep()
+    id := crypto.RandomHex(12)
+    start_call(id, chat, dev, name, args)
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("id", id))
+    m.push(json.Member("tool", name))
+    m.push(json.MemberRaw("args", args))
+    m.push(json.Member("chat", chat))
+    m.push(json.Member("workspace", workspace))
+    _l := sync.Lock(LOCK)
+    CALLS.put(id, json.Object(m))
+    OWNER.put(id, dev)
+    STARTED.put(id, time.NowMillis())
+    _u := sync.Unlock(LOCK)
+    ret await_call(id, dev)
+end
+
+func rpc_id(body: str): str:
+    mut err := encerr.EncodingError {}
+    root := json.Decode(body, err)
+    if encerr.IsError(err) or not value.IsObject(root):
+        ret ""
+    end
+    mut ok := false
+    idv := value.ObjectGetOk(root, "id", ok)
+    mut out := ""
+    if ok and not value.IsNull(idv):
+        out = json.Encode(idv, json.JSONOptions {})
+    end
+    value.ValueFree(root)
+    ret out
+end
+
+func envelope(id: str, key: str, body: str): str:
+    ret `{"jsonrpc": "2.0", "id": ` + id + `, "` + key + `": ` + body + "}"
+end
+
+func mcp(c: tcp.Conn, method: str, h: HashMap<str, str>, body: str):
+    if SECRET.len() < 16 or not crypto.SecretEquals(bearer_of(h), SECRET):
+        fail(c, "401 Unauthorized", "unauthorized", "the bridge secret is wrong")
+        ret
+    end
+    if method != "POST":
+        _w := wr_all(c, "HTTP/1.1 405 Method Not Allowed\r\nAllow: POST\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        ret
+    end
+    tcp.SetReadDeadline(c, 0)
+    id := rpc_id(body)
+    rpc := json.Get(body, "method")
+    if id.len() == 0:
+        _w := wr_all(c, "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        ret
+    end
+    params := json.Get(body, "params")
+    mut out := ""
+    switch rpc:
+        "initialize":
+            mut proto := json.Get(params, "protocolVersion")
+            if proto.len() == 0:
+                proto = PROTOCOL
+            end
+            mut m := Vector {} as Vector<str>
+            m.push(json.Member("protocolVersion", proto))
+            m.push(json.MemberRaw("capabilities", `{"tools": {"listChanged": false}}`))
+            m.push(json.MemberRaw("serverInfo", `{"name": "salam-agent", "version": "1.0.0"}`))
+            m.push(json.Member("instructions", INSTRUCTIONS))
+            out = envelope(id, "result", json.Object(m))
+            break
+        end
+        "ping":
+            out = envelope(id, "result", "{}")
+            break
+        end
+        "tools/list":
+            out = envelope(id, "result", `{"tools": ` + TOOLS + "}")
+            break
+        end
+        "tools/call":
+            out = envelope(id, "result", call_tool(params))
+            break
+        end
+        else:
+            out = envelope(id, "error", `{"code": -32601, "message": "method not found"}`)
+        end
+    end
+    _r := respond(c, "200 OK", out)
+end
+
+func device_json(id: str, name: str, os_name: str, created: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("id", id))
+    m.push(json.Member("name", name))
+    m.push(json.Member("os", os_name))
+    m.push(json.MemberRaw("created", created))
+    m.push(json.MemberBool("online", online(id)))
+    ret json.Object(m)
+end
+
+func list_devices(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    mut items := Vector {} as Vector<str>
+    mut ids := Vector {} as Vector<str>
+    mut names := Vector {} as Vector<str>
+    mut systems := Vector {} as Vector<str>
+    mut times := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, name, os, created FROM bridge_devices WHERE user_id = ?1 AND revoked = 0 ORDER BY id DESC", one(n(uid)))
+    until aistore.Next(rows):
+        ids.push(aistore.Text(rows, 0))
+        names.push(aistore.Text(rows, 1))
+        systems.push(aistore.Text(rows, 2))
+        times.push(aistore.Text(rows, 3))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    repeat ids.len() in i:
+        items.push(device_json(ids.get(i), names.get(i), systems.get(i), times.get(i)))
+    end
+    aiweb.Reply(ctx, 200, `{"devices": ` + json.Array(items) + "}")
+end
+
+func create_device(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    body := http.Body(ctx)
+    name := str.Trim(json.Get(body, "name"))
+    mut os_name := json.Get(body, "os")
+    if name.len() == 0 or str.CodePoints(name).len() > 80:
+        aiweb.Fail(ctx, 400, "name", "نام دستگاه باید بین ۱ تا ۸۰ نویسه باشد.")
+        ret
+    end
+    if os_name != "windows" and os_name != "macos" and os_name != "linux":
+        os_name = "other"
+    end
+    aistore.Lock()
+    active := aistore.OneText("SELECT COUNT(*) FROM bridge_devices WHERE user_id = ?1 AND revoked = 0", one(n(uid)))
+    aistore.Unlock()
+    if active.to_int() >= MAX_DEVICES:
+        aiweb.Fail(ctx, 409, "too_many", "حداکثر ۱۰ دستگاه می‌توانید وصل کنید. یکی را حذف کنید.")
+        ret
+    end
+    secret := "sd-" + crypto.RandomHex(24)
+    t := n(aistore.Now())
+    mut a := two(n(uid), name)
+    a.push(os_name)
+    a.push(aiweb.Hash(secret))
+    a.push(t)
+    aistore.Lock()
+    ok := aistore.Run("INSERT INTO bridge_devices (user_id, name, os, hash, created) VALUES (?1, ?2, ?3, ?4, ?5)", a)
+    id := aistore.LastId()
+    aistore.Unlock()
+    if not ok:
+        aiweb.Fail(ctx, 500, "server", "ثبت دستگاه ناموفق بود. دوباره تلاش کنید.")
+        ret
+    end
+    aiweb.Reply(ctx, 201, `{"device": ` + device_json(id, name, os_name, t) + `, "secret": ` + json.Str(secret) + "}")
+end
+
+func revoke_device(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    aistore.Lock()
+    found := aistore.OneText("SELECT id FROM bridge_devices WHERE id = ?1 AND user_id = ?2 AND revoked = 0", two(id, n(uid)))
+    if found.len() > 0:
+        _u := aistore.Run("UPDATE bridge_devices SET revoked = 1 WHERE id = ?1", one(id))
+    end
+    aistore.Unlock()
+    if found.len() == 0:
+        aiweb.Fail(ctx, 404, "not_found", "این دستگاه پیدا نشد.")
+        ret
+    end
+    aiweb.Reply(ctx, 200, `{"ok": true}`)
+end
+
+pub func Configure(secret: str, slots: int, hold_seconds: int):
+    SECRET = secret
+    LOCK = sync.NewMutex()
+    if slots > 0:
+        SLOTS = slots
+    end
+    if hold_seconds > 0:
+        HOLD_MS = (hold_seconds as i64) * 1000
+    end
+end
+
+pub func DeviceOs(uid: i64, dev: str): str:
+    aistore.Lock()
+    found := aistore.OneText("SELECT os FROM bridge_devices WHERE id = ?1 AND user_id = ?2 AND revoked = 0", two(dev, n(uid)))
+    aistore.Unlock()
+    ret found
+end
+
+pub func Online(dev: str): bool:
+    ret online(dev)
+end
+
+pub func Handles(path: str): bool:
+    ret path == "/bridge/poll" or path == "/bridge/result" or path == "/bridge/mcp"
+end
+
+pub func Serve(c: tcp.Conn, method: str, path: str, h: HashMap<str, str>, body: str):
+    switch path:
+        "/bridge/poll":
+            if method == "GET":
+                poll(c, h)
+                ret
+            end
+            break
+        end
+        "/bridge/result":
+            if method == "POST":
+                result(c, h, body)
+                ret
+            end
+            break
+        end
+        "/bridge/mcp":
+            mcp(c, method, h, body)
+            ret
+        end
+    end
+    fail(c, "404 Not Found", "not_found", "unknown bridge endpoint")
+end
+
+pub func Routes(r &: router.Router):
+    router.Get(r, "/bridge/devices", list_devices)
+    router.Post(r, "/bridge/devices", create_device)
+    router.Delete(r, "/bridge/devices/:id", revoke_device)
+    each path in ["/bridge/devices", "/bridge/devices/:id"]:
+        router.Options(r, path, aiweb.Preflight)
+    end
+end

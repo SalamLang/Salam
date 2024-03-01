@@ -1,0 +1,106 @@
+-- the dialect a name maps to
+sqlite mysql
+mariadb postgres
+postgres sqlite
+
+-- auto-increment, each engine's own spelling
+ok   CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT)
+ok   CREATE TABLE t (id INT AUTO_INCREMENT PRIMARY KEY)
+ok   CREATE TABLE t (id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY)
+bad  CREATE TABLE t (id INT AUTO_INCREMENT)
+     SQL211 1:24 AUTO_INCREMENT is a mysql keyword
+       help: sqlite spells it AUTOINCREMENT
+bad  CREATE TABLE t (id INT AUTOINCREMENT)
+     SQL211 1:24 AUTOINCREMENT is sqlite only
+       help: mysql spells it AUTO_INCREMENT
+bad  CREATE TABLE t (id INT AUTOINCREMENT)
+     SQL211 1:24 AUTOINCREMENT is sqlite only
+       help: postgres has no auto-increment keyword: use GENERATED ALWAYS AS IDENTITY, or the SERIAL types
+
+-- upsert, each engine's own clause
+ok   INSERT INTO t (a) VALUES (1) ON CONFLICT (a) DO NOTHING
+ok   INSERT INTO t (a) VALUES (1) ON CONFLICT (a) DO NOTHING
+ok   INSERT INTO t (a) VALUES (1) ON DUPLICATE KEY UPDATE a = VALUES(a)
+bad  INSERT INTO t (a) VALUES (1) ON CONFLICT (a) DO NOTHING
+     SQL209 1:30 ON CONFLICT is not supported by mysql
+       help: mysql writes ON DUPLICATE KEY UPDATE
+bad  INSERT INTO t (a) VALUES (1) ON DUPLICATE KEY UPDATE a = 1
+     SQL210 1:30 ON DUPLICATE KEY UPDATE is mysql only
+       help: sqlite and postgres write ON CONFLICT (col) DO UPDATE SET ...
+
+-- RETURNING
+ok   DELETE FROM t WHERE a = 1 RETURNING a
+ok   DELETE FROM t WHERE a = 1 RETURNING a
+ok   DELETE FROM t WHERE a = 1 RETURNING a
+bad  DELETE FROM t WHERE a = 1 RETURNING a
+     SQL208 1:27 RETURNING is not supported by mysql
+       help: read the row back with a second query, or use LAST_INSERT_ID()
+
+-- paging
+ok   SELECT a FROM t LIMIT 10 OFFSET 5
+ok   SELECT a FROM t LIMIT 5, 10
+ok   SELECT a FROM t LIMIT 5, 10
+bad  SELECT a FROM t LIMIT 5, 10
+     SQL207 1:23 LIMIT a, b is not supported by postgres
+       help: write LIMIT count OFFSET start instead
+ok   SELECT a FROM t ORDER BY a OFFSET 10 FETCH FIRST 5 ROWS ONLY
+
+-- matching and casting
+ok   SELECT a FROM t WHERE b ILIKE 'x%'
+bad  SELECT a FROM t WHERE b ILIKE 'x%'
+     SQL205 1:25 ILIKE is postgres only
+       help: use LOWER(x) LIKE LOWER(y), or LIKE on a case-insensitive column
+bad  SELECT a FROM t WHERE b ILIKE 'x%'
+     SQL205 1:25 ILIKE is postgres only
+       help: use LOWER(x) LIKE LOWER(y), or LIKE on a case-insensitive column
+ok   SELECT a::text FROM t
+bad  SELECT a::text FROM t
+     SQL206 1:9 '::' casts are postgres only
+       help: write CAST(x AS type) instead
+ok   SELECT CAST(a AS TEXT) FROM t
+ok   SELECT a FROM t WHERE b REGEXP 'x'
+
+-- postgres operator family
+ok   SELECT a FROM t WHERE to_tsvector(b) @@ plainto_tsquery('x')
+ok   SELECT a FROM t WHERE tags @> '{x}' OR '{y}' <@ tags
+ok   SELECT a FROM t WHERE data ? 'k' AND data ?| '{a}' AND data ?& '{b}'
+ok   SELECT data -> 'k', data ->> 'k', data #> '{a}', data #>> '{a}' FROM t
+ok   SELECT a FROM t WHERE b ~ '^x' AND c !~* 'y'
+ok   SELECT a FROM t WHERE b ^@ 'pre' ORDER BY v <-> '[1]'
+bad  SELECT a FROM t WHERE tags @> '{x}'
+     SQL214 1:28 this operator is postgres only
+       help: sqlite and mysql have no operator spelled like this
+ok   SELECT data #> '{a}' FROM t
+bad  SELECT a FROM t WHERE b ~ 'x'
+     SQL214 1:25 this operator is postgres only
+       help: sqlite and mysql have no operator spelled like this
+
+-- engine-only statements
+ok   TRUNCATE TABLE t
+ok   TRUNCATE TABLE t
+bad  TRUNCATE TABLE t
+     SQL212 1:1 sqlite has no TRUNCATE statement
+       help: write DELETE FROM the_table instead
+ok   PRAGMA journal_mode = WAL
+bad  PRAGMA journal_mode = WAL
+     SQL213 1:1 PRAGMA is sqlite only
+       help: mysql configures the session with SET
+bad  PRAGMA journal_mode = WAL
+     SQL213 1:1 PRAGMA is sqlite only
+       help: postgres configures the session with SET
+
+-- quoting that differs
+ok   SELECT `a` FROM `t`
+ok   SELECT `a` FROM `t`
+bad  SELECT `a` FROM `t`
+     SQL204 1:8 backtick names are not supported by postgres
+       help: quote the name with " instead
+     SQL204 1:10 backtick names are not supported by postgres
+       help: quote the name with " instead
+     SQL204 1:17 backtick names are not supported by postgres
+       help: quote the name with " instead
+     SQL204 1:19 backtick names are not supported by postgres
+       help: quote the name with " instead
+ok   CREATE TABLE t (a INT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+ok   CREATE TABLE t (a INT, b VARCHAR(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin)
+ok   CREATE TABLE t (a TEXT[], b TIMESTAMP WITH TIME ZONE, c NUMERIC(10,2))

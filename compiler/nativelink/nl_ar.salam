@@ -1,0 +1,187 @@
+package nativelink
+
+func ar_size_field(p: u8*, h: i64): i64:
+    mut v := 0 as i64
+    repeat 10 in k:
+        c := p[h + (48 + k) as i64] as int
+        if c >= 48 and c <= 57:
+            v = v * (10 as i64) + ((c - 48) as i64)
+        end
+    end
+    ret v
+end
+
+func ar_first_set(l &: Nl, name: int, e: int):
+    until l.ar_first.len() <= name:
+        l.ar_first.push(0 - 1)
+    end
+    if l.ar_first[name] < 0:
+        l.ar_first[name] = e
+    end
+end
+
+func ar_first_of(l &: Nl, name: int): int:
+    if name < 0 or name >= l.ar_first.len():
+        ret 0 - 1
+    end
+    ret l.ar_first[name]
+end
+
+func bsd_namelen(p: u8*, h: i64): i64:
+    if p[h] != (35 as u8) or p[h + (1 as i64)] != (49 as u8) or p[h + (2 as i64)] != (47 as u8):
+        ret 0
+    end
+    mut v := 0 as i64
+    mut k := 3
+    until k < 16 and p[h + (k as i64)] >= (48 as u8) and p[h + (k as i64)] <= (57 as u8):
+        v = v * (10 as i64) + ((p[h + (k as i64)] as i64) - (48 as i64))
+        k += 1
+    end
+    ret v
+end
+
+func is_symdef(p: u8*, at: i64, lim: i64): bool:
+    w := "__.SYMDEF"
+    wp := (w as void*) as u8*
+    if at + (9 as i64) > lim:
+        ret false
+    end
+    repeat 9 in i:
+        if p[at + (i as i64)] != wp[i]:
+            ret false
+        end
+    end
+    ret true
+end
+
+func ar_bsd_index(l &: Nl, f: int, d: i64, end0: i64, is64: bool):
+    p := fptr(l, f)
+    w := is64 ? 8 : 4
+    rsz := is64 ? rd64(p, d) : rd32(p, d)
+    ents := d + (w as i64)
+    nent := (rsz / ((2 * w) as i64)) as int
+    sbase := ents + rsz + (w as i64)
+    repeat nent in k:
+        e := ents + ((2 * w * k) as i64)
+        strx := is64 ? rd64(p, e) : rd32(p, e)
+        moff := is64 ? rd64(p, e + (8 as i64)) : rd32(p, e + (4 as i64))
+        np := sbase + strx
+        ln := cstr_len(p, np, end0)
+        nm := nt_find(l.names, p, np, ln, true)
+        ei := l.ar_name.len()
+        l.ar_name.push(nm)
+        l.ar_file.push(f)
+        l.ar_moff.push(moff)
+        l.ar_loaded.push(false)
+        ar_first_set(l, nm, ei)
+    end
+end
+
+func ar_index(l &: Nl, f: int):
+    p := fptr(l, f)
+    n := l.f_size[f]
+    mut h := 8 as i64
+    mut found := false
+    until h + (60 as i64) <= n and not found:
+        sz := ar_size_field(p, h)
+        bl := bsd_namelen(p, h)
+        nmat := h + (60 as i64)
+        if (bl > (0 as i64) and is_symdef(p, nmat, nmat + bl)) or (bl == (0 as i64) and is_symdef(p, h, h + (16 as i64))):
+            is64 := p[(bl > (0 as i64) ? nmat : h) + (9 as i64)] == (95 as u8) and p[(bl > (0 as i64) ? nmat : h) + (10 as i64)] == (54 as u8)
+            ar_bsd_index(l, f, nmat + bl, h + (60 as i64) + sz, is64)
+            found = true
+        end
+        if p[h] == (47 as u8) and p[h + (1 as i64)] == (47 as u8):
+            l.f_long[f] = h + (60 as i64)
+        end
+        if p[h] == (47 as u8) and p[h + (1 as i64)] == (32 as u8):
+            d := h + (60 as i64)
+            cnt := rd32be(p, d) as int
+            mut np := d + (4 as i64) + ((4 * cnt) as i64)
+            repeat cnt in k:
+                moff := rd32be(p, d + (4 as i64) + ((4 * k) as i64))
+                ln := cstr_len(p, np, d + sz)
+                nm := nt_find(l.names, p, np, ln, true)
+                e := l.ar_name.len()
+                l.ar_name.push(nm)
+                l.ar_file.push(f)
+                l.ar_moff.push(moff)
+                l.ar_loaded.push(false)
+                ar_first_set(l, nm, e)
+                np = np + ((ln + 1) as i64)
+            end
+            found = true
+        end
+        h = h + (60 as i64) + sz + (sz & (1 as i64))
+    end
+    mut h2 := 8 as i64
+    mut seen := 0
+    until h2 + (60 as i64) <= n and l.f_long[f] < (0 as i64) and seen < 4:
+        sz2 := ar_size_field(p, h2)
+        if p[h2] == (47 as u8) and p[h2 + (1 as i64)] == (47 as u8):
+            l.f_long[f] = h2 + (60 as i64)
+        end
+        h2 = h2 + (60 as i64) + sz2 + (sz2 & (1 as i64))
+        seen += 1
+    end
+    if not found:
+        nl_fail(l, "archive " + l.f_name[f] + " has no symbol index; rebuild it with 'ar s'")
+    end
+end
+
+func ar_member_label(l &: Nl, f: int, h: i64): str:
+    p := fptr(l, f)
+    mut b := str.NewBuilder()
+    bl := bsd_namelen(p, h)
+    if bl > (0 as i64):
+        mut q0 := h + (60 as i64)
+        until q0 < h + (60 as i64) + bl and p[q0] != (0 as u8):
+            str.BufAppendChar(b, p[q0] as int)
+            q0 = q0 + (1 as i64)
+        end
+        nmb := str.BufStr(b)
+        str.BufFree(b)
+        ret l.f_name[f] + "(" + nmb + ")"
+    end
+    if p[h] == (47 as u8) and p[h + (1 as i64)] >= (48 as u8) and p[h + (1 as i64)] <= (57 as u8) and l.f_long[f] >= (0 as i64):
+        mut v := 0 as i64
+        mut k0 := 1
+        until k0 < 16 and p[h + (k0 as i64)] >= (48 as u8) and p[h + (k0 as i64)] <= (57 as u8):
+            v = v * (10 as i64) + ((p[h + (k0 as i64)] as i64) - (48 as i64))
+            k0 += 1
+        end
+        mut q := l.f_long[f] + v
+        until p[q] != (47 as u8) and p[q] != (10 as u8):
+            str.BufAppendChar(b, p[q] as int)
+            q = q + (1 as i64)
+        end
+        nm0 := str.BufStr(b)
+        str.BufFree(b)
+        ret l.f_name[f] + "(" + nm0 + ")"
+    end
+    repeat 16 in k:
+        c := p[h + (k as i64)] as int
+        if c == 47 or c == 32:
+            break
+        end
+        str.BufAppendChar(b, c)
+    end
+    nm := str.BufStr(b)
+    str.BufFree(b)
+    ret l.f_name[f] + "(" + nm + ")"
+end
+
+func ar_load(l &: Nl, e: int):
+    f := l.ar_file[e]
+    moff := l.ar_moff[e]
+    repeat l.ar_name.len() in k:
+        if l.ar_file[k] == f and l.ar_moff[k] == moff:
+            l.ar_loaded[k] = true
+        end
+    end
+    p := fptr(l, f)
+    sz := ar_size_field(p, moff)
+    bl := bsd_namelen(p, moff)
+    lab := ar_member_label(l, f, moff)
+    add_object(l, f, moff + (60 as i64) + bl, sz - bl, lab)
+end

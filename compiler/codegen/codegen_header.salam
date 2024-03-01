@@ -1,0 +1,1136 @@
+package codegen
+
+import str
+
+include pth "../sal_path.salam"
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include sm "../semantic/semantic.salam"
+
+func cg_import_module(a &: at.Ast, did: int): str:
+    d := at.Get(a, did)
+    mut p := d.name
+    if d.value_kind == tok.TV_STRING and str.Len(d.value_str) > 0:
+        p = d.value_str
+    end
+    if str.Len(p) == 0:
+        ret ""
+    end
+    mut resolved := d.type_str
+    if str.Len(resolved) == 0:
+        resolved = sm.ResolveImport("", p)
+    end
+    if str.Len(resolved) == 0:
+        ret ""
+    end
+    stem := str.Len(resolved) - str.Len(pth.PathBase(resolved))
+    rl := str.Len(resolved)
+    mut b := co.SbNew()
+    mut q := stem
+    until q < rl:
+        c := byte_at(resolved, q)
+        if c == 46:
+            break
+        end
+        co.SbPutc(b, c)
+        q += 1
+    end
+    basev := co.SbCstr(b)
+    co.SbFree(b)
+    ret basev
+end
+
+func cg_module_init_name(module_name: str): str:
+    ret CG_MOD_PREFIX + cg_cident(module_name) + "_init"
+end
+
+func vec_collect_one(g &: Cg, ts: str):
+    if str.Len(ts) == 0:
+        ret
+    end
+    if str.StartsWith(ts, "Vector<"):
+        repeat g.vec_types.len() in i:
+            if str.Equals(g.vec_types.get(i), ts):
+                ret
+            end
+        end
+        g.vec_types.push(ts)
+    else str.StartsWith(ts, "Variant<"):
+        repeat g.variant_types.len() in i2:
+            if str.Equals(g.variant_types.get(i2), ts):
+                ret
+            end
+        end
+        g.variant_types.push(ts)
+    end
+end
+
+func vec_collect(g &: Cg, a &: at.Ast, id: int):
+    if id == 0:
+        ret
+    end
+    n := at.Get(a, id)
+    vec_collect_one(g, n.type_str)
+    vec_collect(g, a, n.ty)
+    vec_collect(g, a, n.a)
+    vec_collect(g, a, n.b)
+    vec_collect(g, a, n.c)
+    vec_collect(g, a, n.d)
+    repeat n.list.len() in i:
+        vec_collect(g, a, n.list.get(i))
+    end
+    repeat n.dims.len() in i2:
+        vec_collect(g, a, n.dims.get(i2))
+    end
+end
+
+func vec_collect_types(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
+    prog := at.Get(a, program)
+    repeat prog.list.len() in i:
+        d := at.Get(a, prog.list.get(i))
+        if d.kind != at.AST_STRUCT_DEF:
+            continue
+        end
+        ssym := sm.LookupLocal(s, s.global, d.name)
+        if ssym == 0:
+            continue
+        end
+        members := sm.SymAt(s, ssym).members
+        msc := sm.ScopeAt(s, members)
+        repeat msc.symbols.len() in j:
+            f := sm.SymAt(s, msc.symbols.get(j))
+            if f.kind == sm.SYM_FIELD and f.ty != sm.TYPE_NONE:
+                vec_collect_one(g, sm.ToString(s, f.ty))
+            end
+        end
+    end
+end
+
+func dyn_set_add(setv &: Vector<str>, s2: str):
+    repeat setv.len() in i:
+        if str.Equals(setv.get(i), s2):
+            ret
+        end
+    end
+    setv.push(s2)
+end
+
+func cg_iface_canon_name(s &: sm.Sema, sym: int): str:
+    symv := sm.SymAt(s, sym)
+    if str.Len(symv.pkgname) > 0 and not str.Equals(symv.pkgname, "main"):
+        ret symv.pkgname + "_" + symv.name
+    end
+    ret symv.name
+end
+
+func dyn_collect(g &: Cg, s &: sm.Sema, a &: at.Ast, id: int):
+    if id == 0:
+        ret
+    end
+    n := at.Get(a, id)
+    if str.StartsWith(n.type_str, "dyn "):
+        dyn_set_add(
+            g.dyn_ifaces, str.Substr(
+                n.type_str, 4, str.Len(n.type_str) - 4
+            )
+        )
+    end
+    if n.kind == at.AST_TYPE and n.is_dyn and str.Len(n.name) > 0:
+        isym3 := cg_iface_sym(s, n.name)
+        dyn_set_add(g.dyn_ifaces, isym3 != 0 ? cg_iface_canon_name(s, isym3) : n.name)
+    end
+    if n.kind == at.AST_CAST and str.StartsWith(n.type_str, "dyn ") and n.a != 0:
+        an := at.Get(a, n.a)
+        if str.Len(an.type_str) > 0:
+            iface := str.Substr(n.type_str, 4, str.Len(n.type_str) - 4)
+            dyn_set_add(g.dyn_ifaces, iface)
+            dyn_set_add(g.dyn_impls, iface + "|" + an.type_str)
+        end
+    end
+    dyn_collect(g, s, a, n.ty)
+    dyn_collect(g, s, a, n.a)
+    dyn_collect(g, s, a, n.b)
+    dyn_collect(g, s, a, n.c)
+    dyn_collect(g, s, a, n.d)
+    repeat n.list.len() in i:
+        dyn_collect(g, s, a, n.list.get(i))
+    end
+    repeat n.dims.len() in i2:
+        dyn_collect(g, s, a, n.dims.get(i2))
+    end
+end
+
+func dyn_match_sig(s &: sm.Sema, cm: int, want: int): int:
+    if cm == 0:
+        ret 0
+    end
+    cs := sm.SymAt(s, cm)
+    wsig := sm.SigAt(s, want)
+    repeat cs.overloads.len() in k:
+        h := cs.overloads.get(k)
+        hsig := sm.SigAt(s, h)
+        if hsig.params.len() != wsig.params.len():
+            continue
+        end
+        mut ok := true
+        repeat wsig.params.len() in p:
+            if not sm.Equiv(s, hsig.params.get(p), wsig.params.get(p)):
+                ok = false
+                break
+            end
+        end
+        if ok:
+            ret h
+        end
+    end
+    if cs.overloads.len() > 0:
+        ret cs.overloads.get(0)
+    end
+    ret 0
+end
+
+func cg_canon_sym(s &: sm.Sema, name: str, kind: int): int:
+    if str.Len(name) == 0:
+        ret 0
+    end
+    mut sym := sm.Lookup(s, s.global, name)
+    if sym != 0 and sm.SymAt(s, sym).kind == kind:
+        ret sym
+    end
+    repeat sm.PackageCount(s) in p:
+        pk := sm.PackageAt(s, p)
+        pkv := sm.SymAt(s, pk)
+        if pkv.kind != sm.SYM_PACKAGE or pkv.members == 0:
+            continue
+        end
+        msc := sm.ScopeAt(s, pkv.members)
+        repeat msc.symbols.len() in i:
+            sym = msc.symbols.get(i)
+            symv := sm.SymAt(s, sym)
+            if symv.kind != kind or str.Len(symv.name) == 0:
+                continue
+            end
+            if symv.ty != sm.TYPE_NONE and str.Equals(sm.TypeAt(s, symv.ty).name, name):
+                ret sym
+            end
+            if str.Len(symv.pkgname) == 0:
+                continue
+            end
+            if str.Equals(symv.pkgname + "_" + symv.name, name):
+                ret sym
+            end
+        end
+    end
+    ret 0
+end
+
+func cg_iface_sym(s &: sm.Sema, name: str): int:
+    ret cg_canon_sym(s, name, sm.SYM_INTERFACE)
+end
+
+func cg_struct_sym(s &: sm.Sema, name: str): int:
+    ret cg_canon_sym(s, name, sm.SYM_STRUCT)
+end
+
+func sig_param_is_ref(s &: sm.Sema, a &: at.Ast, sigid: int, p: int): bool:
+    decl := sm.SigAt(s, sigid).decl
+    if decl == 0:
+        ret false
+    end
+    dn := at.Get(a, decl)
+    if p >= dn.list.len():
+        ret false
+    end
+    ret at.Get(a, dn.list.get(p)).is_ref
+end
+
+func cg_emit_dyn_types(g &: Cg, s &: sm.Sema, a &: at.Ast):
+    repeat g.dyn_ifaces.len() in i0:
+        iname0 := g.dyn_ifaces.get(i0)
+        ci0 := cg_cident(iname0)
+        if cg_iface_sym(s, iname0) == 0:
+            continue
+        end
+        outh(
+            g, "#ifndef SALAM_DYN_" + ci0 + "_DECLARED\n#define SALAM_DYN_" + ci0 + "_DECLARED\n" + "typedef struct _Salam_vtbl_" + ci0 + " _Salam_vtbl_" + ci0 + ";\n" + "typedef struct _Salam_dyn_" + ci0 + " _Salam_dyn_" + ci0 + ";\n#endif\n"
+        )
+    end
+    repeat g.dyn_ifaces.len() in i:
+        iname := g.dyn_ifaces.get(i)
+        ci := cg_cident(iname)
+        isym := cg_iface_sym(s, iname)
+        if isym == 0:
+            continue
+        end
+        outh(
+            g, "#ifndef SALAM_DYN_" + ci + "_DEFINED\n#define SALAM_DYN_" + ci + "_DEFINED\n"
+        )
+        outh(g, "struct _Salam_vtbl_" + ci + " {\n")
+        imembers := sm.SymAt(s, isym).members
+        isc := sm.ScopeAt(s, imembers)
+        repeat isc.symbols.len() in m:
+            ms := sm.SymAt(s, isc.symbols.get(m))
+            if ms.kind != sm.SYM_METHOD or ms.overloads.len() == 0:
+                continue
+            end
+            sigid := ms.overloads.get(0)
+            sig := sm.SigAt(s, sigid)
+            sret := type_is_byval_agg(s, sig.ret_type)
+            ret_ts0 := sm.ToString(s, sig.ret_type)
+            rc := cg_ctype(ret_ts0)
+            ret_act0 := cg_array_ctype(ret_ts0)
+            mut ret_out0 := ""
+            if str.Len(ret_act0) > 0:
+                ret_out0 = cg_array_ret_decl(ret_ts0, "")
+            else:
+                ret_out0 = rc + "*"
+            end
+            outh(
+                g, "    " + (sret ? "void" : rc) + " (*" + cg_cident(ms.name) + ")(void*"
+            )
+            repeat sig.params.len() in p:
+                pts0 := sm.ToString(s, sig.params.get(p))
+                pact0 := sig_param_is_ref(s, a, sigid, p) ? "" : cg_array_ctype(pts0)
+                if str.Len(pact0) > 0:
+                    outh(g, ", " + cg_decl_cn(pts0, ""))
+                else:
+                    outh(g, ", " + cg_ctype(pts0) + (sig_param_is_ref(s, a, sigid, p) ? "*" : ""))
+                end
+            end
+            if sret:
+                outh(g, ", " + ret_out0)
+            end
+            outh(g, ");\n")
+        end
+        outh(g, "};\n")
+        outh(
+            g, "struct _Salam_dyn_" + ci + " { void* data; const _Salam_vtbl_" + ci + "* vtable; };\n"
+        )
+        outh(g, "#endif\n")
+    end
+end
+
+func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema, a &: at.Ast):
+    repeat g.dyn_impls.len() in i:
+        pair := g.dyn_impls.get(i)
+        bar := str.IndexOf(pair, "|")
+        if bar < 0:
+            continue
+        end
+        iname := str.Substr(pair, 0, bar)
+        cnamev := str.Substr(pair, bar + 1, str.Len(pair) - bar - 1)
+        ci := cg_cident(iname)
+        cc2 := cg_cident(cnamev)
+        isym := cg_iface_sym(s, iname)
+        csym := cg_struct_sym(s, cnamev)
+        if isym == 0 or csym == 0:
+            continue
+        end
+        imembers := sm.SymAt(s, isym).members
+        isc := sm.ScopeAt(s, imembers)
+        repeat isc.symbols.len() in m:
+            ms := sm.SymAt(s, isc.symbols.get(m))
+            if ms.kind != sm.SYM_METHOD or ms.overloads.len() == 0:
+                continue
+            end
+            isig := ms.overloads.get(0)
+            cm := sm.LookupLocal(s, sm.SymAt(s, csym).members, ms.name)
+            csig := dyn_match_sig(s, cm, isig)
+            mut mangled := ""
+            mut recv_star := "*"
+            if csig != 0:
+                mangled = cg_mangle_method(
+                    g, s, sm.SymAt(s, csym).name, csym, ms.name, sm.SigAt(s, csig).params
+                )
+            else:
+                iowner := sm.FindImplOwner(s, cnamev)
+                mut icm := 0
+                if iowner != 0 and sm.SymAt(s, iowner).kind == sm.SYM_TYPEIMPL:
+                    icm = sm.LookupLocal(s, sm.SymAt(s, iowner).members, ms.name)
+                end
+                icsig := dyn_match_sig(s, icm, isig)
+                if icsig == 0:
+                    continue
+                end
+                mangled = cg_mangle_ti(s, cnamev, ms.name, sm.SigAt(s, icsig).params)
+                recv_star = ""
+            end
+            isigv := sm.SigAt(s, isig)
+            iret_ts := sm.ToString(s, isigv.ret_type)
+            rets := cg_ctype(iret_ts)
+            iret_act := cg_array_ctype(iret_ts)
+            mut ret_out1 := ""
+            if str.Len(iret_act) > 0:
+                ret_out1 = cg_array_ret_decl(iret_ts, "__ret")
+            else:
+                ret_out1 = rets + "* __ret"
+            end
+            mut ps := co.SbNew()
+            mut asb := co.SbNew()
+            repeat isigv.params.len() in p:
+                pts1 := sm.ToString(s, isigv.params.get(p))
+                pact1 := sig_param_is_ref(s, a, isig, p) ? "" : cg_array_ctype(pts1)
+                if str.Len(pact1) > 0:
+                    co.SbPuts(ps, ", " + cg_decl_cn(pts1, "__a" + p))
+                else:
+                    pt := cg_ctype(pts1) + (sig_param_is_ref(s, a, isig, p) ? "*" : "")
+                    co.SbPuts(ps, ", " + pt + " __a" + p)
+                end
+                co.SbPuts(asb, ", __a" + p)
+            end
+            isvoid := isigv.ret_type != sm.TYPE_NONE and sm.TypeAt(s, isigv.ret_type).kind == sm.TY_VOID
+            sret2 := type_is_byval_agg(s, isigv.ret_type)
+            recv_expr := recv_star == "*" ? "(" + cc2 + "*)self" : "*(" + cc2 + "*)self"
+            if sret2:
+                out(
+                    g, "static void _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms.name) + "(void* self" + co.SbCstr(ps) + ", " + ret_out1 + "){ " + mangled + "(" + recv_expr + co.SbCstr(asb) + ", __ret); }\n"
+                )
+            else:
+                out(
+                    g, "static " + rets + " _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms.name) + "(void* self" + co.SbCstr(ps) + "){ " + (isvoid ? "" : "return ") + mangled + "(" + recv_expr + co.SbCstr(asb) + "); }\n"
+                )
+            end
+            co.SbFree(ps)
+            co.SbFree(asb)
+        end
+        out(
+            g, "static const _Salam_vtbl_" + ci + " _Salam_vtbl_" + ci + "_" + cc2 + " = {"
+        )
+        mut first := true
+        repeat isc.symbols.len() in m2:
+            ms2 := sm.SymAt(s, isc.symbols.get(m2))
+            if ms2.kind != sm.SYM_METHOD or ms2.overloads.len() == 0:
+                continue
+            end
+            out(
+                g, (first ? "" : ",") + " _Salam_thunk_" + ci + "_" + cc2 + "_" + cg_cident(ms2.name)
+            )
+            first = false
+        end
+        out(g, " };\n")
+    end
+    if g.dyn_impls.len() > 0:
+        outc(g, 10)
+    end
+end
+
+func vec_emit_typedef(g &: Cg, ts: str):
+    elem := cg_vec_elem(ts, 96)
+    ec := cg_ctype(elem)
+    cn := cg_vec_cname(ts)
+    outh(
+        g, "#ifndef SALAM_" + cn + "_TYPEDEF\n#define SALAM_" + cn + "_TYPEDEF\n"
+    )
+    outh(
+        g, "typedef struct { " + ec + "* data; int32_t len; int32_t cap; " + "} " + cn + ";\n"
+    )
+    outh(g, "#endif\n")
+end
+
+func variant_emit_typedef(g &: Cg, ts: str):
+    mut members := cg_variant_members(ts)
+    defer members.free()
+    cn := cg_variant_cname(ts)
+    variant_emit_fwd(g, ts)
+    outh(
+        g, "#ifndef SALAM_" + cn + "_TYPEDEF\n#define SALAM_" + cn + "_TYPEDEF\n"
+    )
+    outh(g, "struct " + cn + " { int32_t tag; union {")
+    repeat members.len() in i:
+        outh(g, " " + cg_decl(members.get(i), "v" + i) + ";")
+    end
+    outh(g, " } payload; };\n")
+    outh(g, "#endif\n")
+end
+
+func variant_emit_fwd(g &: Cg, ts: str):
+    cn := cg_variant_cname(ts)
+    outh(
+        g, "#ifndef SALAM_" + cn + "_FWD\n#define SALAM_" + cn + "_FWD\ntypedef struct " + cn + " " + cn + ";\n#endif\n"
+    )
+end
+
+func vec_emit(g &: Cg, ts: str):
+    elem := cg_vec_elem(ts, 96)
+    ec := cg_ctype(elem)
+    cn := cg_vec_cname(ts)
+    outh(
+        g, "#ifndef SALAM_" + cn + "_DEFINED\n#define SALAM_" + cn + "_DEFINED\n"
+    )
+    outh(
+        g, "static void " + cn + "_grow(" + cn + "* v, int32_t need){ " + "if(need<=v->cap) return; int32_t c=v->cap?v->cap:4; " + "while(c<need) c*=2; v->data=(" + ec + "*)" + CG_MEM_REALLOC + "(v->data,(uint64_t)c*sizeof(" + ec + ")); v->cap=c; }\n"
+    )
+    outh(
+        g, "static void " + cn + "_push(" + cn + "* v, " + ec + " x){ " + cn + "_grow(v, v->len+1); v->data[v->len++]=x; }\n"
+    )
+    outh(
+        g, "static " + ec + " " + cn + "_pop(" + cn + "* v){ return " + "v->data[--v->len]; }\n"
+    )
+    outh(
+        g, "static " + ec + " " + cn + "_get(" + cn + "* v, int32_t i){ " + "if(i<0||i>=v->len) salam_panic(salam_strcat(salam_strcat(salam_strcat(salam_strcat(\"Vector.get: index \", salam_tostr_i32(i)), \" out of bounds (len \"), salam_tostr_i64((int64_t)v->len)), \")\")); return v->data[i]; }\n"
+    )
+    outh(
+        g, "static " + ec + "* " + cn + "_ref(" + cn + "* v, int32_t i){ " + "if(i<0||i>=v->len) return (" + ec + "*)0; return " + "&v->data[i]; }\n"
+    )
+    outh(
+        g, "static void " + cn + "_set(" + cn + "* v, int32_t i, " + ec + " x){ if(i<0) return; " + cn + "_grow(v, i+1); if(i>=v->len) " + "v->len=i+1; v->data[i]=x; }\n"
+    )
+    outh(
+        g, "static int32_t " + cn + "_len(" + cn + "* v){ return v->len; " + "}\n"
+    )
+    outh(
+        g, "static int32_t " + cn + "_cap(" + cn + "* v){ return v->cap; " + "}\n"
+    )
+    outh(
+        g, "static void " + cn + "_free(" + cn + "* v){ " + CG_MEM_FREE + "(v->data); v->data=(" + ec + "*)0; v->len=0; v->cap=0; }\n"
+    )
+    outh(g, "#endif\n")
+end
+
+func rt_decl(g &: Cg, s &: sm.Sema, a &: at.Ast, name: str, proto: str):
+    did := libc_definition(a, name)
+    if did == 0:
+        outh(g, proto)
+        ret
+    end
+    sig := sig_for_decl(s, did)
+    if sig != 0:
+        outh(g, cg_extern_proto(s, a, did, sig) + ";\n")
+    end
+end
+
+func hdr_prelude(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
+    outh(g, "#pragma once\n")
+    guard := cg_cident(g.module)
+    outh(
+        g, "#ifndef SALAM_MODULE_" + guard + "_H\n#define SALAM_MODULE_" + guard + "_H\n"
+    )
+    if g.is_gui_mode:
+        outh(g, "#ifdef _WIN32\n#include <windows.h>\n#endif\n")
+    end
+    if g.freestanding:
+        outh(
+            g, "#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n"
+        )
+    else:
+        outh(
+            g, "#include <stdint.h>\n#include <stdbool.h>\n#include <math.h>" + "\n#include <stddef.h>\n"
+        )
+    end
+    outh(
+        g, "#ifndef SALAM_ARRCPY_DEFINED\n#define SALAM_ARRCPY_DEFINED\n" + "static inline void salam_arrcpy(void *d, const void *s, size_t n) {\n" + "#if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)\n" + "    __builtin_memcpy(d, s, n);\n" + "#else\n" + "    unsigned char *dd = (unsigned char *)d; const unsigned char *ss = (const unsigned char *)s;\n" + "    while (n--) *dd++ = *ss++;\n" + "#endif\n" + "}\n#endif\n"
+    )
+    if not g.freestanding:
+        outh(
+            g, "#include <stdio.h>\n" + "#undef stdin\n#undef stdout\n#undef stderr\n" + "#undef EOF\n#undef BUFSIZ\n" + "#undef SEEK_SET\n#undef SEEK_CUR\n#undef SEEK_END\n"
+        )
+    end
+    if g.freestanding:
+        outh(
+            g, "#ifndef SALAM_ALLOC_TUNE_DEFINED\n#define SALAM_ALLOC_TUNE_DEFINED\n" + "static inline void salam_tune_allocator(void) { }\n" + "#endif\n"
+        )
+    else:
+        outh(
+            g, "#ifndef SALAM_ALLOC_TUNE_DEFINED\n#define SALAM_ALLOC_TUNE_DEFINED\n" + "#if defined(__GLIBC__) && !defined(SALAM_NO_ALLOC_TUNE)\n" + "#include <malloc.h>\n" + "static inline void salam_tune_allocator(void) {\n" + "    static int done = 0;\n" + "    if (done) return;\n" + "    done = 1;\n" + "    mallopt(M_MMAP_THRESHOLD, 256 * 1024 * 1024);\n" + "    mallopt(M_TRIM_THRESHOLD, 512 * 1024 * 1024);\n" + "}\n" + "#else\n" + "static inline void salam_tune_allocator(void) { }\n" + "#endif\n#endif\n"
+        )
+    end
+    if g.freestanding:
+        outh(
+            g, "#ifndef SALAM_OUT_DEFINED\n#define SALAM_OUT_DEFINED\n" + "extern void salam_rt_write(int32_t fd, void *buf, uint64_t n);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) (salam_rt_write((int32_t)(fd), " + "(void *)(buf), (uint64_t)(n)), 0)\n" + "static inline uint64_t salam_cstrlen(const char *s) {\n" + "    uint64_t n = 0; if (!s) return 0; while (s[n]) n++; return n;\n" + "}\n" + "static inline void salam_out_flush(void) { }\n" + "static inline void salam_out_write_(const void *s, uint64_t n) {\n" + "    salam_rt_write(1, (void *)s, n);\n" + "}\n" + "#define SALAM_OUT_LIT(s, n) salam_out_write_((s), (uint64_t)(n))\n" + "#endif\n"
+        )
+    else:
+        if not g.out_locked:
+            outh(g, "#ifndef SALAM_OUT_NOLOCK\n#define SALAM_OUT_NOLOCK 1\n#endif\n")
+        end
+        outh(
+            g, "#ifndef SALAM_OUT_DEFINED\n" + "#define SALAM_OUT_DEFINED\n" + "#define SALAM_OB_SZ 65536\n" + "#if defined(_WIN32)\n" + "extern int _write(int, void *, unsigned);\n" + "extern int _isatty(int);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) _write((fd), (void *)(buf), (unsigned)(n))\n" + "#define SALAM_ISATTY(fd) _isatty(fd)\n" + "#define SALAM_OB_YIELD() ((void)0)\n" + "#elif defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ == 4\n" + "extern int32_t write(int32_t, void *, uint32_t);\n" + "extern int isatty(int);\n" + "extern int sched_yield(void);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) write((fd), (void *)(buf), (uint32_t)(n))\n" + "#define SALAM_ISATTY(fd) isatty(fd)\n" + "#define SALAM_OB_YIELD() ((void)sched_yield())\n" + "#else\n" + "extern int64_t write(int32_t, void *, uint64_t);\n" + "extern int isatty(int);\n" + "extern int sched_yield(void);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) write((fd), (void *)(buf), (uint64_t)(n))\n" + "#define SALAM_ISATTY(fd) isatty(fd)\n" + "#define SALAM_OB_YIELD() ((void)sched_yield())\n" + "#endif\n" + "#if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)\n" + "#define SALAM_OB_LINK __attribute__((weak))\n" + "#define SALAM_OB_COPY(d, s, n) __builtin_memcpy((d), (s), (size_t)(n))\n" + "#else\n" + "#define SALAM_OB_LINK static\n" + "#define SALAM_OB_COPY(d, s, n) do { uint64_t __i; for (__i = 0; __i < (uint64_t)(n); __i++) ((char *)(d))[__i] = ((const char *)(s))[__i]; } while (0)\n" + "#endif\n" + "SALAM_OB_LINK char salam_ob[SALAM_OB_SZ];\n" + "SALAM_OB_LINK uint64_t salam_obn;\n" + "SALAM_OB_LINK int32_t salam_ob_tty = -1;\n" + "SALAM_OB_LINK int32_t salam_ob_lk;\n" + "#if defined(SALAM_OUT_NOLOCK)\n" + "static inline void salam_out_lock(void) { }\n" + "static inline void salam_out_unlock(void) { }\n" + "#elif (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__) && defined(__arm__) && defined(__ARM_ARCH) && __ARM_ARCH < 6\n" + "static inline void salam_out_lock(void) {\n" + "    while (__sync_lock_test_and_set(&salam_ob_lk, 1)) SALAM_OB_YIELD();\n" + "}\n" + "static inline void salam_out_unlock(void) { __sync_lock_release(&salam_ob_lk); }\n" + "#elif ((defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)) || (defined(__TINYC__) && __TINYC__ >= 928)\n" + "static inline void salam_out_lock(void) {\n" + "    int32_t one = 1;\n" + "    int32_t old = 1;\n" + "    for (;;) {\n" + "        __atomic_exchange(&salam_ob_lk, &one, &old, 2);\n" + "        if (!old) return;\n" + "        SALAM_OB_YIELD();\n" + "    }\n" + "}\n" + "static inline void salam_out_unlock(void) {\n" + "    int32_t zero = 0;\n" + "    __atomic_store(&salam_ob_lk, &zero, 3);\n" + "}\n" + "#else\n" + "static inline void salam_out_lock(void) { }\n" + "static inline void salam_out_unlock(void) { }\n" + "#endif\n" + "SALAM_OB_LINK void salam_out_flush_l(int32_t fd) {\n" + "    uint64_t off = 0;\n" + "    while (off < salam_obn) {\n" + "        int64_t r = (int64_t)SALAM_RAW_WRITE(fd, salam_ob + off, salam_obn - off);\n" + "        if (r <= 0) break;\n" + "        off += (uint64_t)r;\n" + "    }\n" + "    salam_obn = 0;\n" + "}\n" + "SALAM_OB_LINK void salam_out_flush_fd(int32_t fd) {\n" + "    salam_out_lock();\n" + "    salam_out_flush_l(fd);\n" + "    salam_out_unlock();\n" + "}\n" + "SALAM_OB_LINK void salam_out_flush(void) { if (salam_obn) salam_out_flush_fd(1); }\n" + "#if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)\n" + "__attribute__((weak)) volatile int32_t salam_stdio_dirty;\n" + "#define SALAM_STDIO_SYNC() ((void)(salam_stdio_dirty && (salam_stdio_dirty = 0, fflush(0), 1)))\n" + "#define SALAM_STDIO_DIRTY() ((void)(salam_stdio_dirty = 1))\n" + "#else\n" + "#define SALAM_STDIO_SYNC() ((void)fflush(0))\n" + "#define SALAM_STDIO_DIRTY() ((void)0)\n" + "#endif\n" + "#if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)\n" + "__attribute__((weak, destructor)) void salam_out_fini(void) { salam_out_flush(); }\n" + "#endif\n" + "#if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__) && !defined(_WIN32)\n" + "#define SALAM_OB_XS2(x) #x\n" + "#define SALAM_OB_XS(x) SALAM_OB_XS2(x)\n" + "extern void *salam_ob_signal_(int, void *) __asm__(SALAM_OB_XS(__USER_LABEL_PREFIX__) \"signal\");\n" + "extern void salam_ob_exit_(int) __asm__(SALAM_OB_XS(__USER_LABEL_PREFIX__) \"exit\");\n" + "__attribute__((weak)) void salam_out_onsig(int sig) { salam_out_flush_l(1); salam_ob_exit_(128 + sig); }\n" + "__attribute__((weak)) void salam_out_sig_init(void) {\n" + "    salam_ob_signal_(2, (void *)salam_out_onsig);\n" + "    salam_ob_signal_(15, (void *)salam_out_onsig);\n" + "}\n" + "#else\n" + "static inline void salam_out_sig_init(void) { }\n" + "#endif\n" + "SALAM_OB_LINK int32_t salam_out_tty_init(void) {\n" + "    salam_ob_tty = SALAM_ISATTY(1) ? 1 : 0;\n" + "    return salam_ob_tty;\n" + "}\n" + "static inline void salam_out_put_(const void *s, uint64_t n) {\n" + "    if (salam_obn + n > SALAM_OB_SZ) salam_out_flush_l(1);\n" + "    if (n >= SALAM_OB_SZ) {\n" + "        uint64_t off = 0;\n" + "        while (off < n) {\n" + "            int64_t r = (int64_t)SALAM_RAW_WRITE(1, (const char *)s + off, n - off);\n" + "            if (r <= 0) break;\n" + "            off += (uint64_t)r;\n" + "        }\n" + "        return;\n" + "    }\n" + "    SALAM_OB_COPY(salam_ob + salam_obn, s, n);\n" + "    salam_obn += n;\n" + "}\n" + "#if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)\n" + "#define SALAM_OUT_END1() do { if (salam_ob_tty != 0 && (salam_ob_tty > 0 || salam_out_tty_init())) salam_out_flush_l(1); } while (0)\n" + "#else\n" + "#define SALAM_OUT_END1() salam_out_flush_l(1)\n" + "#endif\n" + "static inline void salam_out_write_(const void *s, uint64_t n) {\n" + "    salam_out_lock();\n" + "    salam_out_put_(s, n);\n" + "    SALAM_OUT_END1();\n" + "    salam_out_unlock();\n" + "}\n" + "static inline void salam_out_str(const char *s) {\n" + "    uint64_t n = 0;\n" + "    if (!s) s = \"(null)\";\n" + "    while (s[n]) n++;\n" + "    salam_out_put_(s, n);\n" + "}\n" + "static inline void salam_out_u64_(uint64_t u, int neg) {\n" + "    char t[24];\n" + "    char *e = t + 24;\n" + "    char *p = e;\n" + "    do { *--p = (char)('0' + (int)(u % 10)); u /= 10; } while (u);\n" + "    if (neg) *--p = '-';\n" + "    salam_out_put_(p, (uint64_t)(e - p));\n" + "}\n" + "static inline void salam_out_i64(int64_t v) {\n" + "    salam_out_u64_(v < 0 ? (uint64_t)0 - (uint64_t)v : (uint64_t)v, v < 0);\n" + "}\n" + "static inline void salam_out_u64(uint64_t v) { salam_out_u64_(v, 0); }\n" + "static inline void salam_out_byte(int32_t c) { char b = (char)c; salam_out_put_(&b, 1); }\n" + "static inline void salam_out_bool(int b) {\n" + "    if (b) salam_out_put_(\"true\", 4); else salam_out_put_(\"false\", 5);\n" + "}\n" + "#define SALAM_OUT_LIT(s, n) salam_out_write_((s), (uint64_t)(n))\n" + "#endif\n"
+        )
+    end
+    outh(
+        g, "#ifndef SALAM_FPARG_DEFINED\n#define SALAM_FPARG_DEFINED\n" + "#if defined(__TINYC__)\n" + "static double salam_fparg_d(double v) { return v; }\n" + "static float salam_fparg_f(float v) { return v; }\n" + "#define SALAM_FPARG_D(x) salam_fparg_d(x)\n" + "#define SALAM_FPARG_F(x) salam_fparg_f(x)\n" + "#else\n" + "#define SALAM_FPARG_D(x) (x)\n" + "#define SALAM_FPARG_F(x) (x)\n" + "#endif\n" + "#endif\n"
+    )
+    outh(
+        g, "#ifndef SALAM_FN_ATTRS_DEFINED\n#define " + "SALAM_FN_ATTRS_DEFINED\n" + "#if defined(__GNUC__) || defined(__clang__)\n" + "#define SALAM_NOINLINE __attribute__((noinline))\n" + "#define SALAM_PURE __attribute__((pure))\n" + "#define SALAM_NORET __attribute__((noreturn))\n" + "#define SALAM_DEPRECATED __attribute__((deprecated))\n" + "#else\n" + "#define SALAM_NOINLINE\n" + "#define SALAM_PURE\n" + "#define SALAM_NORET\n" + "#define SALAM_DEPRECATED\n" + "#endif\n" + "#endif\n"
+    )
+    outh(
+        g, "#ifndef SALAM_RT_TYPES_DEFINED\n#define " + "SALAM_RT_TYPES_DEFINED\n" + "typedef struct salam_file salam_file;\n" + "typedef struct salam_map salam_map;\n" + "typedef struct salam_map_iter salam_map_iter;\n" + "typedef struct { void* data; int64_t len; } salam_slice;\n" + "extern int64_t salam_idx(int64_t, int64_t);\n" + "#define SALAM_IDX(i, n) ({ int64_t __salam_ix = (int64_t)(i); " + "((uint64_t)__salam_ix < (uint64_t)(int64_t)(n)) ? __salam_ix " + ": (salam_out_flush(), salam_idx(__salam_ix, (int64_t)(n))); })\n" + "extern int64_t salam_div0(int32_t);\n" + "#define SALAM_NZ(d, m) ({ int64_t __salam_nz = (int64_t)(d); " + "__salam_nz ? __salam_nz : (salam_out_flush(), salam_div0(m)); })\n" + "extern SALAM_NORET void salam_panic(const char* msg);\n" + "extern const char* salam_strcat(const char* a, const char* b);\n" + "extern const char* salam_strcat_v(int32_t n, const char** parts, uint8_t* own);\n" + "extern const char* salam_tostr_i32(int32_t x);\n" + "extern const char* salam_tostr_i64(int64_t x);\n" + "extern const char* salam_tostr_u32(uint32_t x);\n" + "extern const char* salam_tostr_u64(uint64_t x);\n" + "extern const char* salam_tostr_bool(_Bool b);\n" + "extern const char* salam_tostr_char(unsigned char c);\n" + "extern const char* salam_tostr_f64(double x);\n" + "extern uint64_t salam_hash_int(uint64_t x);\n" + "extern uint64_t salam_str_hash(const char* s);\n" + "void* " + CG_MEM_ALLOC + "(uint64_t size);\n" + "void* " + CG_MEM_ALLOC_ZEROED + "(uint64_t size);\n" + "void* " + CG_MEM_REALLOC + "(void* ptr, uint64_t size);\n" + "void " + CG_MEM_FREE + "(void* ptr);\n" + "static inline void salam_slice_new(salam_slice* out, void* " + "b, int64_t lo, int64_t hi, int64_t esz)" + "{ out->data=(void*)((char*)b+(lo)*(esz)); " + "out->len=(hi)-(lo); }\n" + "static inline salam_slice salam_slice_make(void* b, int64_t lo, " + "int64_t hi, int64_t esz)" + "{ salam_slice s; s.data=(void*)((char*)b+(lo)*(esz)); " + "s.len=(hi)-(lo); return s; }\n" + "static inline void salam_slice_sub(salam_slice* out, " + "salam_slice b, int64_t lo, int64_t hi, int has_hi, int64_t " + "esz)" + "{ if(!has_hi) hi=b.len; " + "out->data=(void*)((char*)b.data+(lo)*(esz)); " + "out->len=(hi)-(lo); }\n" + "static inline void* salam_slice_at(salam_slice s, int64_t i, " + "int64_t esz, int sf)" + "{ return " + "(void*)((char*)s.data+(sf?SALAM_IDX(i,s.len):i)*(esz)); }\n" + "typedef void (*salam_thread_fn)(void);\n" + "typedef void (*salam_thread_arg_fn)(void*);\n" + "#endif\n"
+    )
+    if g.is_gui_mode:
+        outh(g, "#ifdef _WIN32\n#define SALAM_RT_STR_DEFINED\n" + "#define SALAM_EXTERN_LIBC_ON_WIN32\n" + "#if !defined(__TINYC__)\n" + "#define SALAM_EXTERN_WIDE_LIBC_ON_WIN32\n" + "#endif\n#endif\n")
+    end
+    outh(g, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n")
+    rt_decl(g, s, a, "strlen", "extern size_t strlen(const char* s);\n")
+    rt_decl(g, s, a, "strcmp", "extern int strcmp(const char* a, const char* b);\n")
+    rt_decl(g, s, a, "strstr", "extern char* strstr(const char* haystack, const char* needle);\n")
+    rt_decl(g, s, a, "strtol", "extern long strtol(const char* s, char** endptr, int base);\n")
+    rt_decl(g, s, a, "strtod", "extern double strtod(const char* s, char** endptr);\n")
+    outh(g, "#endif\n")
+    outh(
+        g, "#ifndef SALAM_RT_STR2_DEFINED\n#define SALAM_RT_STR2_DEFINED\n" + "extern const char* salam_strcat(const char* a, const char* " + "b);\n" + "extern const char* salam_strcat_own(const char* a, int32_t fa, " + "const char* b, int32_t fb);\n" + "extern const char* salam_char_from_code(int32_t c);\n" + "extern int32_t salam_uchar_code(const char* c);\n" + "extern const char* salam_uchar_from_code(int32_t cp);\n" + "extern const char* salam_fmt_f64(double v);\n" + "extern const char* salam_str_substr(const char* s, int32_t " + "start, int32_t n);" + "\nextern const char* salam_str_piece(const char* s, int32_t start, int32_t n);\n" + "extern const char* salam_str_trim(const char* s);\n" + "extern void* salam_str_split(const char* s, const char* " + "delim, void* out_count);\n" + "extern const char* salam_str_repeat(const char* s, int32_t " + "n);\n" + "extern const char* salam_str_upper(const char* s);\n" + "extern const char* salam_str_lower(const char* s);\n" + "extern int32_t salam_str_char_count(const char* s);\n" + "extern const char* salam_str_char_at(const char* s, int32_t " + "i);\n" + "extern const char* salam_str_char_substr(const char* s, " + "int32_t start, int32_t n);\n" + "extern int32_t salam_str_char_find(const char* s, const " + "char* sub);\n" + "#endif\n"
+    )
+    if not str.Equals(g.module, "core"):
+        outh(g, `#include "` + CG_MOD_PREFIX + "core.h\"\n")
+    end
+    prog := at.Get(a, program)
+    repeat prog.list.len() in i:
+        d := at.Get(a, prog.list.get(i))
+        if d.kind != at.AST_IMPORT:
+            continue
+        end
+        basev := cg_import_module(a, prog.list.get(i))
+        if str.Len(basev) == 0:
+            continue
+        end
+        outh(g, `#include "` + CG_MOD_PREFIX + basev + ".h\"\n")
+    end
+    outh(g, "\n")
+end
+
+func hdr_enums(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
+    prog := at.Get(a, program)
+    repeat prog.list.len() in i:
+        d := at.Get(a, prog.list.get(i))
+        if d.kind != at.AST_ENUM_DEF:
+            continue
+        end
+        esym := sm.LookupLocal(s, s.global, d.name)
+        backing := esym != 0 ? sm.SymAt(s, esym).enum_val_kind : tok.TV_INT
+        tname := cg_enum_tname(s, esym, d.name)
+        if backing != tok.TV_INT:
+            outh(
+                g, "typedef " + (backing == tok.TV_STRING ? "const char *" : "double") + " " + cg_cident(tname) + ";\n"
+            )
+            repeat d.list.len() in j:
+                m := at.Get(a, d.list.get(j))
+                mut lit := "0"
+                if m.a != 0:
+                    ma := at.Get(a, m.a)
+                    if ma.kind == at.AST_LITERAL:
+                        if backing == tok.TV_STRING:
+                            lit = cg_cescape(ma.value_str)
+                        else if backing == tok.TV_FLOAT:
+                            lit = co.Format1("%.17g", co.ArgFloat(ma.value_float))
+                        end
+                    end
+                end
+                outh(
+                    g, "static const " + cg_cident(tname) + " " + cg_cident(tname) + "_" + cg_cident(m.name) + " = " + lit + ";\n"
+                )
+            end
+            continue
+        end
+        outh(g, "typedef enum {")
+        mut next := 0 as i64
+        repeat d.list.len() in j:
+            m := at.Get(a, d.list.get(j))
+            if m.a != 0:
+                ma := at.Get(a, m.a)
+                if ma.kind == at.AST_LITERAL and ma.value_kind == tok.TV_INT:
+                    next = ma.value_int as i64
+                end
+            end
+            outh(
+                g, (j > 0 ? "," : "") + " " + cg_cident(tname) + "_" + cg_cident(m.name) + " = " + co.I64Toa(next)
+            )
+            next += 1 as i64
+        end
+        outh(g, " } " + cg_cident(tname) + ";\n")
+    end
+end
+
+func hdr_struct_fwd(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
+    prog := at.Get(a, program)
+    repeat prog.list.len() in i:
+        d := at.Get(a, prog.list.get(i))
+        if d.kind != at.AST_STRUCT_DEF:
+            continue
+        end
+        if d.typarams.len() > 0:
+            continue
+        end
+        ssym2 := sm.LookupLocal(s, s.global, d.name)
+        mut raw2 := d.name
+        if ssym2 != 0:
+            sv := sm.SymAt(s, ssym2)
+            if sv.ty != sm.TYPE_NONE:
+                tn := sm.TypeAt(s, sv.ty).name
+                if str.Len(tn) > 0:
+                    raw2 = tn
+                end
+            end
+        end
+        cn := cg_cident(raw2)
+        outh(
+            g, "#ifndef SALAM_FWD_" + cn + "\n#define SALAM_FWD_" + cn + "\ntypedef struct " + cn + " " + cn + ";\n#endif\n"
+        )
+    end
+end
+
+func hdr_struct_fwd_imports(g &: Cg, s &: sm.Sema, a &: at.Ast):
+    repeat sm.PackageCount(s) in p:
+        pk := sm.PackageAt(s, p)
+        if pk == 0:
+            continue
+        end
+        pkv := sm.SymAt(s, pk)
+        if pkv.kind != sm.SYM_PACKAGE or pkv.members == 0:
+            continue
+        end
+        psc := sm.ScopeAt(s, pkv.members)
+        repeat psc.symbols.len() in i:
+            sv := sm.SymAt(s, psc.symbols.get(i))
+            if sv.kind != sm.SYM_STRUCT or sv.ty == sm.TYPE_NONE:
+                continue
+            end
+            tn := sm.TypeAt(s, sv.ty).name
+            if str.Len(tn) == 0:
+                continue
+            end
+            if sv.decl != 0 and at.Get(a, sv.decl).typarams.len() > 0:
+                continue
+            end
+            cn := cg_cident(tn)
+            outh(
+                g, "#ifndef SALAM_FWD_" + cn + "\n#define SALAM_FWD_" + cn + "\ntypedef struct " + cn + " " + cn + ";\n#endif\n"
+            )
+        end
+    end
+end
+
+func emit_struct_def(g &: Cg, s &: sm.Sema, ssym: int, gcn: str):
+    outh(
+        g, "#ifndef SALAM_DEF_" + gcn + "\n#define SALAM_DEF_" + gcn + "\n"
+    )
+    outh(g, "struct " + gcn + " {\n")
+    mut nfields := 0
+    msc := sm.ScopeAt(s, sm.SymAt(s, ssym).members)
+    repeat msc.symbols.len() in j:
+        f := sm.SymAt(s, msc.symbols.get(j))
+        if f.kind != sm.SYM_FIELD:
+            continue
+        end
+        outh(g, "    " + cg_decl(sm.ToString(s, f.ty), f.name) + ";\n")
+        nfields += 1
+    end
+    if nfields == 0:
+        outh(g, "    char _salam_empty;\n")
+    end
+    outh(g, "};\n#endif\n")
+end
+
+func struct_dep_cname(s &: sm.Sema, t0: int): str:
+    mut t := t0
+    until t != sm.TYPE_NONE and sm.TypeAt(s, t).kind == sm.TY_ARRAY:
+        t = sm.TypeAt(s, t).elem
+    end
+    if t == sm.TYPE_NONE:
+        ret ""
+    end
+    k := sm.TypeAt(s, t).kind
+    if k == sm.TY_STRUCT or k == sm.TY_VEC or k == sm.TY_MAP_ITER:
+        ret cg_ctype(sm.ToString(s, t))
+    end
+    ret ""
+end
+
+func hdr_struct_visit_dep(
+    g &: Cg, s &: sm.Sema, dep: str, self: int, syms: Vector<int>, gcns: Vector<str>, state &: Vector<int>
+):
+    n := gcns.len()
+    repeat n in k:
+        if k != self and str.Equals(dep, gcns.get(k)):
+            hdr_struct_visit(g, s, k, syms, gcns, state)
+        end
+    end
+end
+
+func hdr_variant_field_deps(
+    g &: Cg, s &: sm.Sema, vt: int, self: int, syms: Vector<int>, gcns: Vector<str>, state &: Vector<int>
+):
+    vtv := sm.TypeAt(s, vt)
+    repeat vtv.params.len() in m:
+        dep := struct_dep_cname(s, vtv.params.get(m))
+        if str.Len(dep) > 0:
+            hdr_struct_visit_dep(g, s, dep, self, syms, gcns, state)
+        end
+    end
+    variant_emit_typedef(g, sm.ToString(s, vt))
+end
+
+func hdr_struct_visit(
+    g &: Cg, s &: sm.Sema, i: int, syms: Vector<int>, gcns: Vector<str>, state &: Vector<int>
+):
+    if state.get(i) != 0:
+        ret
+    end
+    state.set(i, 1)
+    ssym := syms.get(i)
+    msc := sm.ScopeAt(s, sm.SymAt(s, ssym).members)
+    repeat msc.symbols.len() in j:
+        f := sm.SymAt(s, msc.symbols.get(j))
+        if f.kind != sm.SYM_FIELD:
+            continue
+        end
+        if f.ty != sm.TYPE_NONE and sm.TypeAt(s, f.ty).kind == sm.TY_VARIANT:
+            hdr_variant_field_deps(g, s, f.ty, i, syms, gcns, state)
+            continue
+        end
+        dep := struct_dep_cname(s, f.ty)
+        if str.Len(dep) > 0:
+            hdr_struct_visit_dep(g, s, dep, i, syms, gcns, state)
+        end
+    end
+    emit_struct_def(g, s, ssym, gcns.get(i))
+    state.set(i, 2)
+end
+
+func hdr_structs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
+    mut syms := Vector {} as Vector<int>
+    defer syms.free()
+    mut gcns := Vector {} as Vector<str>
+    defer gcns.free()
+    mut state := Vector {} as Vector<int>
+    defer state.free()
+    prog := at.Get(a, program)
+    repeat prog.list.len() in i:
+        d := at.Get(a, prog.list.get(i))
+        if d.kind != at.AST_STRUCT_DEF:
+            continue
+        end
+        if d.typarams.len() > 0:
+            continue
+        end
+        ssym := sm.LookupLocal(s, s.global, d.name)
+        if ssym == 0 or sm.SymAt(s, ssym).members == 0:
+            continue
+        end
+        mut raw_cn := d.name
+        sv := sm.SymAt(s, ssym)
+        if sv.ty != sm.TYPE_NONE:
+            tn := sm.TypeAt(s, sv.ty).name
+            if str.Len(tn) > 0:
+                raw_cn = tn
+            end
+        end
+        syms.push(ssym)
+        gcns.push(cg_cident(raw_cn))
+        state.push(0)
+    end
+    repeat syms.len() in i2:
+        hdr_struct_visit(g, s, i2, syms, gcns, state)
+    end
+end
+
+func hdr_aliases(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
+    prog := at.Get(a, program)
+    repeat prog.list.len() in i:
+        d := at.Get(a, prog.list.get(i))
+        if d.kind != at.AST_TYPE_ALIAS or d.typarams.len() > 0:
+            continue
+        end
+        asym := sm.LookupLocal(s, s.global, d.name)
+        if asym == 0:
+            continue
+        end
+        outh(
+            g, "typedef " + cg_decl(sm.ToString(s, sm.SymAt(s, asym).ty), d.name) + ";\n"
+        )
+    end
+end
+
+func is_wellknown_libc_name(name: str): bool:
+    names := [
+        "malloc", "realloc", "free", "calloc", "memset", "memcpy", "memmove", "memcmp", "strlen", "strcmp", "strncmp", "strcpy", "strncpy", "strcat", "strncat", "strstr", "strchr", "strrchr", "strtol", "strtod", "atoi", "atof", "FindFirstFileA", "FindNextFileA", "FindClose", "WaitForSingleObject", "CloseHandle", "CreateMutexA", "ReleaseMutex", "Sleep", "SleepEx", "GetSystemTimeAsFileTime", "GetCurrentDirectoryA", "GetFileAttributesA", "GetFileAttributesExA", "GetCurrentDirectoryW", "GetFileAttributesW", "MultiByteToWideChar", "WideCharToMultiByte", "CreateWindowExA", "DestroyWindow", "IsWindow", "PeekMessageA", "TranslateMessage", "DispatchMessageA", "SetWindowTextA", "SetWindowPos", "CreateProcessA", "CreatePipe", "ReadFile", "GetStdHandle", "GetFileType", "GetLastError", "GetExitCodeProcess", "TerminateProcess", "SetHandleInformation", "MoveFileExA", "MoveFileExW", "DeleteFileW", "GetConsoleMode", "SetConsoleMode", "ReadConsoleInputA", "DebugBreak", "QueryPerformanceCounter", "QueryPerformanceFrequency", "GetCurrentProcess", "GetProcessTimes", "CreateFileA", "WriteFile", "Arc", "BeginPath", "FillRect", "LineTo", "RoundRect", "LoadImage", "GetProp", "SetProp", "ExitProcess", "InitializeCriticalSection", "EnterCriticalSection", "LeaveCriticalSection", "DeleteCriticalSection", "GetModuleHandleA", "GetProcAddress", "GetTickCount", "GetSystemInfo", "GetConsoleScreenBufferInfo", "InitializeConditionVariable", "SleepConditionVariableCS", "WakeConditionVariable", "WakeAllConditionVariable", "GetTickCount64"
+    ]
+    repeat names.len() in i:
+        if str.Equals(names[i], name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func is_libm_name(name: str): bool:
+    names := [
+        "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "log", "log10", "exp", "floor", "ceil", "fabs", "fmod"
+    ]
+    repeat names.len() in i:
+        if str.Equals(names[i], name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func is_stdio_name(name: str): bool:
+    names := [
+        "clearerr", "fclose", "feof", "ferror", "fflush", "fgetc", "fgetpos", "fgets", "fopen", "fprintf", "fputc", "fputs", "fread", "freopen", "fscanf", "fseek", "fsetpos", "ftell", "fwrite", "getc", "getchar", "perror", "printf", "putc", "putchar", "puts", "remove", "rename", "rewind", "scanf", "setbuf", "setvbuf", "snprintf", "sprintf", "sscanf", "tmpfile", "tmpnam", "ungetc", "vfprintf", "vprintf", "vsnprintf", "vsprintf", "fdopen", "fileno", "fseeko", "ftello", "getdelim", "getline", "pclose", "popen", "_fdopen", "_fileno", "_fseeki64", "_ftelli64", "_pclose", "_popen", "_wfopen", "_wremove", "_wrename"
+    ]
+    repeat names.len() in i:
+        if str.Equals(names[i], name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func libc_definition(a &: at.Ast, name: str): int:
+    total := at.Count(a)
+    mut i := 1
+    until i < total:
+        n := at.Get(a, i)
+        if n.kind == at.AST_FUNC_DEF and n.is_extern and n.a != 0 and str.Equals(n.name, name):
+            ret i
+        end
+        i += 1
+    end
+    ret 0
+end
+
+func sig_for_decl(s &: sm.Sema, decl: int): int:
+    total := sm.SigCount(s)
+    mut i := 1
+    until i < total:
+        if sm.SigAt(s, i).decl == decl:
+            ret i
+        end
+        i += 1
+    end
+    ret 0
+end
+
+func libc_canonical_proto(name: str): str:
+    if str.Equals(name, "memcpy"):
+        ret "extern void* memcpy(void* dst, const void* src, size_t n)"
+    end
+    if str.Equals(name, "memmove"):
+        ret "extern void* memmove(void* dst, const void* src, size_t n)"
+    end
+    if str.Equals(name, "strstr"):
+        ret "extern char* strstr(const char* haystack, const char* needle)"
+    end
+    if str.Equals(name, "strtol"):
+        ret "extern long strtol(const char* s, char** endptr, int base)"
+    end
+    if str.Equals(name, "strtoll"):
+        ret "extern long long strtoll(const char* s, char** endptr, int base)"
+    end
+    if str.Equals(name, "strtod"):
+        ret "extern double strtod(const char* s, char** endptr)"
+    end
+    if str.Equals(name, "strlen"):
+        ret "extern size_t strlen(const char* s)"
+    end
+    if str.Equals(name, "malloc"):
+        ret "extern void* malloc(size_t size)"
+    end
+    if str.Equals(name, "calloc"):
+        ret "extern void* calloc(size_t n, size_t size)"
+    end
+    if str.Equals(name, "realloc"):
+        ret "extern void* realloc(void* ptr, size_t size)"
+    end
+    if str.Equals(name, "memset"):
+        ret "extern void* memset(void* ptr, int value, size_t n)"
+    end
+    if str.Equals(name, "memcmp"):
+        ret "extern int memcmp(const void* a, const void* b, size_t n)"
+    end
+    protos := [
+        "abort", "extern void abort(void)", "abs", "extern int abs(int)", "acos", "extern double acos(double)", "acosf", "extern float acosf(float)", "acosh", "extern double acosh(double)", "acoshf", "extern float acoshf(float)", "acoshl", "extern long double acoshl(long double)", "acosl", "extern long double acosl(long double)", "alloca", "extern void* alloca(size_t)", "asin", "extern double asin(double)", "asinf", "extern float asinf(float)", "asinh", "extern double asinh(double)", "asinhf", "extern float asinhf(float)", "asinhl", "extern long double asinhl(long double)", "asinl", "extern long double asinl(long double)", "atan", "extern double atan(double)", "atan2", "extern double atan2(double, double)", "atan2f", "extern float atan2f(float, float)", "atan2l", "extern long double atan2l(long double, long double)", "atanf", "extern float atanf(float)", "atanh", "extern double atanh(double)", "atanhf", "extern float atanhf(float)", "atanhl", "extern long double atanhl(long double)", "atanl", "extern long double atanl(long double)", "bcmp", "extern int bcmp(const void*, const void*, size_t)", "bcopy", "extern void bcopy(const void*, void*, size_t)", "bzero", "extern void bzero(void*, size_t)", "cbrt", "extern double cbrt(double)", "cbrtf", "extern float cbrtf(float)", "cbrtl", "extern long double cbrtl(long double)", "ceil", "extern double ceil(double)", "ceilf", "extern float ceilf(float)", "ceill", "extern long double ceill(long double)", "copysign", "extern double copysign(double, double)", "copysignf", "extern float copysignf(float, float)", "copysignl", "extern long double copysignl(long double, long double)", "cos", "extern double cos(double)", "cosf", "extern float cosf(float)", "cosh", "extern double cosh(double)", "coshf", "extern float coshf(float)", "coshl", "extern long double coshl(long double)", "cosl", "extern long double cosl(long double)", "drem", "extern double drem(double, double)", "dremf", "extern float dremf(float, float)", "dreml", "extern long double dreml(long double, long double)", "erf", "extern double erf(double)", "erfc", "extern double erfc(double)", "erfcf", "extern float erfcf(float)", "erfcl", "extern long double erfcl(long double)", "erff", "extern float erff(float)", "erfl", "extern long double erfl(long double)", "execl", "extern int execl(const char*, const char*, ...)", "execle", "extern int execle(const char*, const char*, ...)", "execlp", "extern int execlp(const char*, const char*, ...)", "execv", "extern int execv(const char*, char*const*)", "execve", "extern int execve(const char*, char*const*, char*const*)", "execvp", "extern int execvp(const char*, char*const*)", "exit", "extern void exit(int)", "exp", "extern double exp(double)", "exp2", "extern double exp2(double)", "exp2f", "extern float exp2f(float)", "exp2l", "extern long double exp2l(long double)", "expf", "extern float expf(float)", "expl", "extern long double expl(long double)", "expm1", "extern double expm1(double)", "expm1f", "extern float expm1f(float)", "expm1l", "extern long double expm1l(long double)", "fabs", "extern double fabs(double)", "fabsf", "extern float fabsf(float)", "fabsl", "extern long double fabsl(long double)", "fdim", "extern double fdim(double, double)", "fdimf", "extern float fdimf(float, float)", "fdiml", "extern long double fdiml(long double, long double)", "ffs", "extern int ffs(int)", "ffsl", "extern int ffsl(long int)", "ffsll", "extern int ffsll(long long int)", "finite", "extern int finite(double)", "finitef", "extern int finitef(float)", "finitel", "extern int finitel(long double)", "floor", "extern double floor(double)", "floorf", "extern float floorf(float)", "floorl", "extern long double floorl(long double)", "fma", "extern double fma(double, double, double)", "fmaf", "extern float fmaf(float, float, float)", "fmal", "extern long double fmal(long double, long double, long double)", "fmax", "extern double fmax(double, double)", "fmaxf", "extern float fmaxf(float, float)", "fmaxl", "extern long double fmaxl(long double, long double)", "fmin", "extern double fmin(double, double)", "fminf", "extern float fminf(float, float)", "fminl", "extern long double fminl(long double, long double)", "fmod", "extern double fmod(double, double)", "fmodf", "extern float fmodf(float, float)", "fmodl", "extern long double fmodl(long double, long double)", "free", "extern void free(void*)", "frexp", "extern double frexp(double, int*)", "frexpf", "extern float frexpf(float, int*)", "frexpl", "extern long double frexpl(long double, int*)", "gamma", "extern double gamma(double)", "gammaf", "extern float gammaf(float)", "gammal", "extern long double gammal(long double)", "hypot", "extern double hypot(double, double)", "hypotf", "extern float hypotf(float, float)", "hypotl", "extern long double hypotl(long double, long double)", "ilogb", "extern int ilogb(double)", "ilogbf", "extern int ilogbf(float)", "ilogbl", "extern int ilogbl(long double)", "index", "extern char* index(const char*, int)", "isinf", "extern int isinf(double)", "isinff", "extern int isinff(float)", "isinfl", "extern int isinfl(long double)", "isnan", "extern int isnan(double)", "isnanf", "extern int isnanf(float)", "isnanl", "extern int isnanl(long double)", "j0", "extern double j0(double)", "j0f", "extern float j0f(float)", "j0l", "extern long double j0l(long double)", "j1", "extern double j1(double)", "j1f", "extern float j1f(float)", "j1l", "extern long double j1l(long double)", "jn", "extern double jn(int, double)", "jnf", "extern float jnf(int, float)", "jnl", "extern long double jnl(int, long double)", "labs", "extern long int labs(long int)", "ldexp", "extern double ldexp(double, int)", "ldexpf", "extern float ldexpf(float, int)", "ldexpl", "extern long double ldexpl(long double, int)", "lgamma", "extern double lgamma(double)", "lgammaf", "extern float lgammaf(float)", "lgammal", "extern long double lgammal(long double)", "llabs", "extern long long int llabs(long long int)", "llrint", "extern long long int llrint(double)", "llrintf", "extern long long int llrintf(float)", "llrintl", "extern long long int llrintl(long double)", "llround", "extern long long int llround(double)", "llroundf", "extern long long int llroundf(float)", "llroundl", "extern long long int llroundl(long double)", "log", "extern double log(double)", "log10", "extern double log10(double)", "log10f", "extern float log10f(float)", "log10l", "extern long double log10l(long double)", "log1p", "extern double log1p(double)", "log1pf", "extern float log1pf(float)", "log1pl", "extern long double log1pl(long double)", "log2", "extern double log2(double)", "log2f", "extern float log2f(float)", "log2l", "extern long double log2l(long double)", "logb", "extern double logb(double)", "logbf", "extern float logbf(float)", "logbl", "extern long double logbl(long double)", "logf", "extern float logf(float)", "logl", "extern long double logl(long double)", "lrint", "extern long int lrint(double)", "lrintf", "extern long int lrintf(float)", "lrintl", "extern long int lrintl(long double)", "lround", "extern long int lround(double)", "lroundf", "extern long int lroundf(float)", "lroundl", "extern long int lroundl(long double)", "memalign", "extern void* memalign(size_t, size_t)", "memccpy", "extern void* memccpy(void*, const void*, int, size_t)", "memchr", "extern void* memchr(const void*, int, size_t)", "mempcpy", "extern void* mempcpy(void*, const void*, size_t)", "modf", "extern double modf(double, double*)", "modff", "extern float modff(float, float*)", "modfl", "extern long double modfl(long double, long double*)", "nan", "extern double nan(const char*)", "nanf", "extern float nanf(const char*)", "nanl", "extern long double nanl(const char*)", "nearbyint", "extern double nearbyint(double)", "nearbyintf", "extern float nearbyintf(float)", "nearbyintl", "extern long double nearbyintl(long double)", "nextafter", "extern double nextafter(double, double)", "nextafterf", "extern float nextafterf(float, float)", "nextafterl", "extern long double nextafterl(long double, long double)", "nexttoward", "extern double nexttoward(double, long double)", "nexttowardf", "extern float nexttowardf(float, long double)", "nexttowardl", "extern long double nexttowardl(long double, long double)", "pow", "extern double pow(double, double)", "powf", "extern float powf(float, float)", "powl", "extern long double powl(long double, long double)", "printf", "extern int printf(const char*, ...)", "putchar", "extern int putchar(int)", "puts", "extern int puts(const char*)", "remainder", "extern double remainder(double, double)", "remainderf", "extern float remainderf(float, float)", "remainderl", "extern long double remainderl(long double, long double)", "remquo", "extern double remquo(double, double, int*)", "remquof", "extern float remquof(float, float, int*)", "remquol", "extern long double remquol(long double, long double, int*)", "rindex", "extern char* rindex(const char*, int)", "rint", "extern double rint(double)", "rintf", "extern float rintf(float)", "rintl", "extern long double rintl(long double)", "round", "extern double round(double)", "roundf", "extern float roundf(float)", "roundl", "extern long double roundl(long double)", "scalb", "extern double scalb(double, double)", "scalbf", "extern float scalbf(float, float)", "scalbl", "extern long double scalbl(long double, long double)", "scalbln", "extern double scalbln(double, long int)", "scalblnf", "extern float scalblnf(float, long int)", "scalblnl", "extern long double scalblnl(long double, long int)", "scalbn", "extern double scalbn(double, int)", "scalbnf", "extern float scalbnf(float, int)", "scalbnl", "extern long double scalbnl(long double, int)", "scanf", "extern int scanf(const char*, ...)", "significand", "extern double significand(double)", "significandf", "extern float significandf(float)", "significandl", "extern long double significandl(long double)", "sin", "extern double sin(double)", "sinf", "extern float sinf(float)", "sinh", "extern double sinh(double)", "sinhf", "extern float sinhf(float)", "sinhl", "extern long double sinhl(long double)", "sinl", "extern long double sinl(long double)", "sqrt", "extern double sqrt(double)", "sqrtf", "extern float sqrtf(float)", "sqrtl", "extern long double sqrtl(long double)", "sscanf", "extern int sscanf(const char*, const char*, ...)", "strcasecmp", "extern int strcasecmp(const char*, const char*)", "strchr", "extern char* strchr(const char*, int)", "strcmp", "extern int strcmp(const char*, const char*)", "strcspn", "extern size_t strcspn(const char*, const char*)", "strdup", "extern char* strdup(const char*)", "strerror", "extern char* strerror(int)", "strncasecmp", "extern int strncasecmp(const char*, const char*, size_t)", "strncmp", "extern int strncmp(const char*, const char*, size_t)", "strndup", "extern char* strndup(const char*, size_t)", "strnlen", "extern size_t strnlen(const char*, size_t)", "strpbrk", "extern char* strpbrk(const char*, const char*)", "strrchr", "extern char* strrchr(const char*, int)", "strspn", "extern size_t strspn(const char*, const char*)", "tan", "extern double tan(double)", "tanf", "extern float tanf(float)", "tanh", "extern double tanh(double)", "tanhf", "extern float tanhf(float)", "tanhl", "extern long double tanhl(long double)", "tanl", "extern long double tanl(long double)", "tgamma", "extern double tgamma(double)", "tgammaf", "extern float tgammaf(float)", "tgammal", "extern long double tgammal(long double)", "trunc", "extern double trunc(double)", "truncf", "extern float truncf(float)", "truncl", "extern long double truncl(long double)", "y0", "extern double y0(double)", "y0f", "extern float y0f(float)", "y0l", "extern long double y0l(long double)", "y1", "extern double y1(double)", "y1f", "extern float y1f(float)", "y1l", "extern long double y1l(long double)", "yn", "extern double yn(int, double)", "ynf", "extern float ynf(int, float)", "ynl", "extern long double ynl(int, long double)"
+    ]
+    mut i := 0
+    until i < protos.len():
+        if str.Equals(protos[i], name):
+            ret protos[i + 1]
+        end
+        i += 2
+    end
+    ret ""
+end
+
+func is_wide_libc_name(name: str): bool:
+    names := [
+        "abort", "exit", "getenv", "system", "_putenv_s", "socket", "bind", "listen", "accept", "connect", "shutdown", "closesocket", "ioctlsocket", "send", "recv", "sendto", "recvfrom", "setsockopt", "getsockname", "gethostbyname", "inet_ntoa", "htons", "ntohs", "WSAStartup", "CertOpenSystemStoreA", "CertEnumCertificatesInStore", "CertCloseStore",
+    ]
+    repeat names.len() in i:
+        if str.Equals(names[i], name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func hdr_externs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
+    prog := at.Get(a, program)
+    repeat prog.list.len() in i:
+        did := prog.list.get(i)
+        d := at.Get(a, did)
+        if not d.is_extern:
+            continue
+        end
+        if d.kind == at.AST_FUNC_DEF:
+            fsym := sm.LookupLocal(s, s.global, d.name)
+            sig := sig_of_decl(s, fsym, did)
+            suppress := not g.freestanding and (is_libm_name(d.name) or is_stdio_name(d.name) or str.Equals(d.name, "write"))
+            if sig != 0 and not suppress:
+                mut guard := ""
+                if is_wellknown_libc_name(d.name):
+                    guard = "SALAM_EXTERN_LIBC_ON_WIN32"
+                else is_wide_libc_name(d.name):
+                    guard = "SALAM_EXTERN_WIDE_LIBC_ON_WIN32"
+                end
+                if str.Len(guard) > 0:
+                    outh(g, "#ifndef " + guard + "\n")
+                end
+                mut proto := ""
+                if libc_definition(a, d.name) == 0:
+                    proto = libc_canonical_proto(d.name)
+                end
+                if str.Len(proto) == 0:
+                    proto = cg_extern_proto(s, a, did, sig)
+                end
+                outh(g, proto + ";\n")
+                if str.Len(guard) > 0:
+                    outh(g, "#endif\n")
+                end
+            end
+        else d.kind == at.AST_VAR_DECL:
+            ts := str.Len(d.type_str) > 0 ? d.type_str : "int32_t"
+            outh(g, "extern " + cg_decl_cn(ts, d.name) + ";\n")
+        end
+    end
+    outh(g, "\n")
+end
+
+func hdr_globals(g &: Cg, a &: at.Ast, program: int):
+    prog := at.Get(a, program)
+    repeat prog.list.len() in i:
+        d := at.Get(a, prog.list.get(i))
+        pkgmod := not str.Equals(g.pkg, "main")
+        if d.kind != at.AST_CONST_DECL and d.kind != at.AST_VAR_DECL:
+            continue
+        end
+        if d.is_extern or (not d.is_pub and not pkgmod):
+            continue
+        end
+        ts := str.Len(d.type_str) > 0 ? d.type_str : "int32_t"
+        decl := cg_decl_cn(ts, cg_global_cname(g.pkg, d.name))
+        is_array := str.IndexOf(ts, "[") >= 0
+        can_defer := d.kind == at.AST_VAR_DECL and d.a != 0 and at.KindOf(a, d.a) != at.AST_LITERAL and not is_array
+        want_const := not can_defer and not is_array and not type_is_callable(ts) and (d.kind == at.AST_CONST_DECL or not d.is_mut)
+        gct_const := want_const and str.StartsWith(cg_ctype(ts), "const ")
+        pfx := (want_const and not gct_const) ? "const " : ""
+        outh(g, "extern " + pfx + decl + ";\n")
+    end
+    outh(g, "\n")
+end
+
+func hdr_prototypes(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
+    prog := at.Get(a, program)
+    repeat prog.list.len() in i:
+        did := prog.list.get(i)
+        d := at.Get(a, did)
+        pkgmod := not str.Equals(g.pkg, "main")
+        if d.typarams.len() > 0:
+            continue
+        end
+        if d.is_extern:
+            continue
+        end
+        if d.synthetic:
+            continue
+        end
+        is_entry := str.Equals(d.name, g.entry) and cg_is_entry_pkg(g.pkg)
+        if d.kind == at.AST_FUNC_DEF and not is_entry and (d.is_pub or pkgmod):
+            fsym := sm.LookupLocal(s, s.global, d.name)
+            sig := sig_of_decl(s, fsym, did)
+            if sig != 0:
+                outh(g, func_signature(g, s, a, did, 0, sig, false) + ";\n")
+            end
+        else d.kind == at.AST_STRUCT_DEF:
+            ssym := sm.LookupLocal(s, s.global, d.name)
+            if ssym == 0 or sm.SymAt(s, ssym).members == 0:
+                continue
+            end
+            repeat d.list.len() in j:
+                mid := d.list.get(j)
+                m := at.Get(a, mid)
+                if m.kind != at.AST_FUNC_DEF:
+                    continue
+                end
+                msym := sm.LookupLocal(s, sm.SymAt(s, ssym).members, m.name)
+                sig2 := sig_of_decl(s, msym, mid)
+                if sig2 != 0:
+                    outh(
+                        g, func_signature(
+                            g, s, a, mid, ssym, sig2, false
+                        ) + ";\n"
+                    )
+                end
+            end
+        end
+    end
+end
+
+func hdr_impl_prototypes(g &: Cg, s &: sm.Sema, a &: at.Ast):
+    gsc := sm.ScopeAt(s, s.global)
+    repeat gsc.symbols.len() in i:
+        oid := gsc.symbols.get(i)
+        owner := sm.SymAt(s, oid)
+        if owner.kind != sm.SYM_TYPEIMPL or owner.members == 0:
+            continue
+        end
+        msc := sm.ScopeAt(s, owner.members)
+        repeat msc.symbols.len() in j:
+            m := sm.SymAt(s, msc.symbols.get(j))
+            if m.kind != sm.SYM_METHOD:
+                continue
+            end
+            repeat m.overloads.len() in k:
+                sig := m.overloads.get(k)
+                if sig != 0 and sm.SigAt(s, sig).decl != 0:
+                    outh(
+                        g, func_signature(
+                            g, s, a, sm.SigAt(s, sig).decl, oid, sig, false
+                        ) + ";\n"
+                    )
+                end
+            end
+        end
+    end
+end
+
+func cg_header_impl(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
+    hdr_prelude(g, s, a, program)
+    hdr_enums(g, s, a, program)
+    hdr_struct_fwd(g, s, a, program)
+    hdr_struct_fwd_imports(g, s, a)
+    dyn_collect(g, s, a, program)
+    cg_emit_dyn_types(g, s, a)
+    outh(g, "\n")
+    vec_collect(g, a, program)
+    vec_collect_types(g, s, a, program)
+    repeat g.vec_types.len() in i:
+        vec_emit_typedef(g, g.vec_types.get(i))
+    end
+    outh(g, "\n")
+    repeat g.variant_types.len() in iv:
+        variant_emit_fwd(g, g.variant_types.get(iv))
+    end
+    hdr_structs(g, s, a, program)
+    repeat g.variant_types.len() in i2:
+        variant_emit_typedef(g, g.variant_types.get(i2))
+    end
+    hdr_aliases(g, s, a, program)
+    outh(g, "\n")
+    repeat g.vec_types.len() in i3:
+        vec_emit(g, g.vec_types.get(i3))
+    end
+    outh(g, "\n")
+    hdr_externs(g, s, a, program)
+    hdr_globals(g, a, program)
+    hdr_prototypes(g, s, a, program)
+    hdr_impl_prototypes(g, s, a)
+end

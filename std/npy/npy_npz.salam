@@ -1,0 +1,102 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package npy
+
+import archive
+import compress
+import mem
+import str
+
+func _strip_npy(name: str): str:
+    if str.EndsWith(name, ".npy"):
+        ret str.Substr(name, 0, str.Len(name) - 4)
+    end
+    ret str.Clone(name)
+end
+
+@en "NpzList"
+@fa "فهرست ان‌پی‌زد"
+pub func NpzList(path: str, ok &: bool): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    ok = false
+    mut fok := false
+    mut raw := archive.ReadBinaryFile(path, fok)
+    if fok == false:
+        compress.BufFree(raw)
+        ret out
+    end
+    mut entries := archive.ZipList(raw.data, compress.BufLen(raw))
+    repeat entries.len() in i:
+        e := entries.get(i)
+        if e.is_dir == false: out.push(_strip_npy(e.name)) end
+    end
+    ok = entries.len() > 0
+    archive.FreeEntries(entries)
+    compress.BufFree(raw)
+    ret out
+end
+
+@en "NpzRead"
+@fa "خواندن ان‌پی‌زد"
+pub func NpzRead(path: str, key: str, ok &: bool): NpyArray:
+    ok = false
+    mut fok := false
+    mut raw := archive.ReadBinaryFile(path, fok)
+    if fok == false:
+        compress.BufFree(raw)
+        ret NpyArray {}
+    end
+    mut zok := false
+    named := key + ".npy"
+    mut member := archive.ZipExtractByName(raw.data, compress.BufLen(raw), named, zok)
+    mem.Free(named as void*)
+    if zok == false:
+        compress.BufFree(member)
+        member = archive.ZipExtractByName(raw.data, compress.BufLen(raw), key, zok)
+    end
+    mut a := NpyArray {}
+    if zok: a = ReadNpy(member.data, compress.BufLen(member), ok) end
+    compress.BufFree(member)
+    compress.BufFree(raw)
+    ret a
+end
+
+@en "NpzWrite"
+@fa "نوشتن ان‌پی‌زد"
+pub func NpzWrite(path: str, keys &: Vector<str>, arrays &: Vector<NpyArray>): bool:
+    if keys.len() != arrays.len() or keys.len() == 0: ret false end
+    mut bufs := Vector {} as Vector<compress.ByteBuf>
+    mut inputs := Vector {} as Vector<archive.ZipFileInput>
+    repeat keys.len() in i:
+        mut a := arrays.get(i)
+        b := WriteNpy(a)
+        mut fi := archive.ZipFileInput {}
+        fi.name = keys.get(i) + ".npy"
+        fi.data_ptr = b.data
+        fi.data_len = compress.BufLen(b)
+        fi.method = 0
+        inputs.push(fi)
+        bufs.push(b)
+    end
+    ok := archive.ZipCreateFile(inputs, path)
+    repeat bufs.len() in i:
+        mut b := bufs.get(i)
+        compress.BufFree(b)
+    end
+    repeat inputs.len() in i: mem.Free(inputs.get(i).name as void*) end
+    bufs.free()
+    inputs.free()
+    ret ok
+end

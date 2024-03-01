@@ -1,0 +1,141 @@
+pkg.en = net/dns
+pkg.name = net/dns
+pkg.group = Network
+pkg.summary = Finding the address of a name and asking for any kind of DNS record.
+pkg.title = The net/dns package in Salam | DNS
+pkg.description = The net/dns package in Salam: finding an IP address, MX, TXT and CNAME records and reverse lookups, and building and reading a DNS message, with examples.
+pkg.import = net.dns
+pkg.intro <<
+<p>DNS turns names such as <code>salamlang.ir</code> into IP addresses. <code>Lookup</code> is the simplest way and does what a browser does. The <code>Lookup...</code> functions ask the DNS server for one particular kind of record and are what you want for building network tools or checking the configuration of a domain.</p>
+<p>A lookup can fail for ordinary reasons: the name does not exist, the network is down or the server is slow. None of the functions stop the program. <code>Lookup</code> and <code>LookupCNAME</code> return an empty string, and the others return an empty list, so check the result before using it.</p>
+<h3 id="resolvers">Two different resolvers</h3>
+<ul>
+<li><strong><code>Lookup</code></strong> asks the operating system, exactly as connecting by name does: the hosts file, <code>localhost</code>, search domains and the system cache all apply. It returns one IPv4 address.</li>
+<li><strong>The <code>Lookup...</code> record functions</strong> send their own queries over UDP to the servers from <code>DefaultServers</code>: the <code>nameserver</code> lines of <code>/etc/resolv.conf</code> on Linux, macOS and BSD. The hosts file is not used. When there is no such file, which is always the case on Windows, they fall back to the public resolvers <code>8.8.8.8</code> and <code>1.1.1.1</code>, so the names you look up leave your network. Each server gets 3 seconds before the next one is tried.</li>
+</ul>
+<h3 id="pitfalls">What trips people up</h3>
+<ul>
+<li><strong>Large answers can be incomplete.</strong> An answer that does not fit in one UDP packet comes back with <code>tc</code> set and is not retried over TCP, so very long TXT records or long lists of addresses may be cut short.</li>
+<li><strong><code>QueryServer</code> does not check the answer's id</strong> against the question's. On an untrusted network compare <code>Message.id</code> yourself, or prefer a resolver you trust.</li>
+<li><strong>Everything is plain text on port 53.</strong> There is no DNSSEC validation and no DNS over TLS or HTTPS.</li>
+<li><strong><code>LookupPTR</code> takes IPv4 addresses only.</strong></li>
+</ul>
+
+<h2 id="guide-connect">Resolve a name, then connect</h2>
+<p><a href="/std/net/tcp/">net/tcp</a> and <a href="/std/net/udp/">net/udp</a> take a host name or an address, but resolving the name yourself first lets you report a clear error before you try to connect. <code>Lookup</code> uses the operating system resolver, so <code>localhost</code> and the names in the hosts file work too, offline.</p>
+{{example.net-dns-guide-connect}}
+<p>The <code>.invalid</code> top level domain is reserved and never exists, which makes it handy for testing the failure path.</p>
+
+<h2 id="guide-mail">Checking the mail setup of a domain</h2>
+<p>Mail for a domain goes to the servers in its MX records, lowest priority number first; the others are fallbacks. The domain's TXT records hold the SPF policy, which says which servers may send mail for it, and the DMARC policy lives in the TXT record of <code>_dmarc.</code> plus the domain. This program needs the internet, so it is only compiled here. Against the real DNS it printed:</p>
+{{example.net-dns-guide-mail}}
+<pre class="code" dir="ltr"><code>MX 10 alt1.gmail-smtp-in.l.google.com
+MX 20 alt2.gmail-smtp-in.l.google.com
+MX 40 alt4.gmail-smtp-in.l.google.com
+MX 30 alt3.gmail-smtp-in.l.google.com
+MX 5 gmail-smtp-in.l.google.com
+deliver to: gmail-smtp-in.l.google.com first
+SPF: v=spf1 redirect=_spf.google.com
+DMARC: v=DMARC1; p=none; sp=quarantine; rua=mailto:mailauth-reports@google.com</code></pre>
+<p>The records come back in whatever order the server chose, so sort or pick by <code>priority</code> yourself, as the loop does.</p>
+
+<h2 id="guide-servers">Asking one server directly</h2>
+<p><code>QueryServer</code> skips the system resolver and asks the server you name, which is how you compare what different resolvers say or test your own DNS server. It returns the whole <code>Message</code>: <code>rcode</code> 3 means the name does not exist, and an empty message (no <code>qr</code> flag, id 0) means no answer came back within the timeout. Each record has a <code>ttl</code>, the number of seconds a cache may keep it. A name that is an alias answers with a CNAME record before the address, which is why the loop looks at <code>rtype</code>. This one needs the internet too.</p>
+{{example.net-dns-guide-servers}}
+<p><code>192.0.2.1</code> belongs to a range reserved for documentation, so nothing answers there and the program shows the timeout case. The addresses and TTLs you see will differ from run to run.</p>
+
+<h2 id="guide-toy-server">Speaking the protocol yourself</h2>
+<p>DNS is just small binary packets over UDP, and <code>EncodeQuery</code> and <code>Decode</code> build and read them. That is enough for a test double: the program below runs a toy DNS server on <code>127.0.0.1</code> that answers every question with <em>no such name</em> by setting two flag bytes of the query and sending it back. The client sends a real query with <a href="/std/net/udp/">net/udp</a> and decodes the answer, all offline.</p>
+{{example.net-dns-guide-toy-server}}
+<p>The id of the answer matches the id of the question (7 here). A real client sends a random id and ignores any answer whose id does not match, so a stray or forged packet is not mistaken for the answer.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Get an address to connect to</td><td><code>Lookup</code></td></tr>
+<tr><td>All IPv4 or IPv6 addresses of a name</td><td><code>LookupA</code>, <code>LookupAAAA</code></td></tr>
+<tr><td>Where mail for a domain goes</td><td><code>LookupMX</code></td></tr>
+<tr><td>SPF, DMARC and domain verification codes</td><td><code>LookupTXT</code></td></tr>
+<tr><td>The real name behind an alias</td><td><code>LookupCNAME</code></td></tr>
+<tr><td>The name of an IP address</td><td><code>LookupPTR</code></td></tr>
+<tr><td>Ask a chosen server, see TTLs and error codes</td><td><code>QueryServer</code></td></tr>
+<tr><td>Build or read raw DNS packets</td><td><code>EncodeQuery</code>, <code>Decode</code></td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.TypeA = An IPv4 address record.
+doc.TypeNS = A name server of the domain.
+doc.TypeCNAME = An alias.
+doc.TypeSOA = The start of authority of the domain.
+doc.TypePTR = The name for an address (a reverse lookup).
+doc.TypeMX = A mail server.
+doc.TypeTXT = Free text, such as SPF records.
+doc.TypeAAAA = An IPv6 address record.
+doc.ClassIN = The internet class; nearly always this one.
+doc.Message = One DNS message, a question or an answer.
+doc.Message.id = The id that ties an answer to its question.
+doc.Message.qr = The message is an answer.
+doc.Message.opcode = The kind of operation; zero is an ordinary question.
+doc.Message.aa = The answer comes from the authoritative server.
+doc.Message.tc = The answer was truncated.
+doc.Message.rd = A recursive lookup was asked for.
+doc.Message.ra = The server supports recursive lookups.
+doc.Message.rcode = The result code; zero means no error, 3 means the name does not exist.
+doc.Message.questions = The questions.
+doc.Message.answers = The answers.
+doc.Message.authorities = The authority records.
+doc.Message.extras = The additional records.
+doc.Question = One question.
+doc.Question.name = The domain name.
+doc.Question.qtype = The record type.
+doc.Question.qclass = The class.
+doc.Questions = A list of questions.
+doc.Questions.items = The questions.
+doc.Record = One answer record.
+doc.Record.name = The domain name.
+doc.Record.rtype = The record type.
+doc.Record.rclass = The class.
+doc.Record.ttl = How many seconds the answer may be kept.
+doc.Record.priority = The priority of an MX record; a smaller number means a higher priority.
+doc.Record.data = The record data as text: an address, a name or some text.
+doc.Records = A list of records.
+doc.Records.items = The records.
+doc.EncodeQuery = Builds a DNS question message to send over UDP.
+doc.Decode = Reads a DNS message from bytes.
+doc.Lookup = Finds one IPv4 address of a host name through the operating system resolver, hosts file included; an empty string when it fails.
+doc.QueryServer = Asks the given server on port 53 directly, with a random id, and returns the answer message; an empty message after <code>timeout_ms</code> without an answer. The answer id is not compared with the question.
+doc.DefaultServers = The DNS servers from the <code>nameserver</code> lines of <code>/etc/resolv.conf</code>; <code>8.8.8.8</code> and <code>1.1.1.1</code> when there are none, which is always the case on Windows.
+doc.LookupA = The IPv4 addresses of a name.
+doc.LookupAAAA = The IPv6 addresses of a name.
+doc.LookupCNAME = The real name behind an alias.
+doc.LookupMX = The mail servers of a domain, with their priority.
+doc.LookupTXT = The text records of a domain.
+doc.LookupPTR = The names of an IPv4 address; an empty list for anything else.
+
+ex.TypeA = net-dns-Message
+ex.TypeNS = net-dns-Message
+ex.TypeCNAME = net-dns-Message
+ex.TypeSOA = net-dns-Message
+ex.TypePTR = net-dns-Message
+ex.TypeMX = net-dns-Message
+ex.TypeTXT = net-dns-Message
+ex.TypeAAAA = net-dns-Message
+ex.ClassIN = net-dns-Message
+ex.Message = net-dns-Message
+ex.Question = net-dns-Message
+ex.Questions = net-dns-Message
+ex.EncodeQuery = net-dns-Message
+ex.Decode = net-dns-Message
+ex.Lookup = net-dns-Message
+ex.DefaultServers = net-dns-Message
+ex.Record = net-dns-Lookup
+ex.Records = net-dns-Lookup
+ex.QueryServer = net-dns-Lookup
+ex.LookupA = net-dns-Lookup
+ex.LookupAAAA = net-dns-Lookup
+ex.LookupCNAME = net-dns-Lookup
+ex.LookupMX = net-dns-Lookup
+ex.LookupTXT = net-dns-Lookup
+ex.LookupPTR = net-dns-Lookup

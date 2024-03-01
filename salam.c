@@ -863,7 +863,7 @@ void read_string(lexer_t* lexer, wchar_t ch)
     size_t allocated_size = 20;
     char* string = (char*) malloc(sizeof(char) * allocated_size);
     if (string == NULL) {
-        printf("Error: Memory allocation failed.\n");
+        printf("Error: read_string - Memory allocation failed.\n");
         exit(EXIT_FAILURE);
     }
 
@@ -874,7 +874,7 @@ void read_string(lexer_t* lexer, wchar_t ch)
             allocated_size *= 2;
             char* temp = (char*)realloc(string, sizeof(char) * allocated_size);
             if (temp == NULL) {
-                printf("Error: Memory reallocation failed.\n");
+                printf("Error: read_string iterate - Memory reallocation failed.\n");
                 free(string);
                 exit(EXIT_FAILURE);
             }
@@ -883,7 +883,7 @@ void read_string(lexer_t* lexer, wchar_t ch)
 
         int char_size = wctomb(&string[i], ch);
         if (char_size < 0) {
-            printf("Error: Failed to convert wide character to multibyte\n");
+            printf("Error: read_string - Failed to convert wide character to multibyte\n");
             free(string);
             exit(EXIT_FAILURE);
         }
@@ -904,7 +904,7 @@ size_t mb_strlen(char* identifier)
 {
 	size_t wcs_len = mbstowcs(NULL, identifier, 0);
 	if (wcs_len == (size_t)-1) {
-		perror("Error in mbstowcs");
+		perror("Error in mbstowcs - count length");
 		exit(EXIT_FAILURE);
 	}
 

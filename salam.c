@@ -34,7 +34,7 @@ typedef struct ast_literal_t {
 		ast_argument_t* argument_value;
 	};
 
-	struct ast_expression_t* main; // To have a reference into parser ast so we can free it later after interpreter
+	struct ast_expression_t** main; // To have a reference into parser ast so we can free it later after interpreter
 } ast_literal_t;
 
 typedef struct SymbolTableEntry {
@@ -1179,7 +1179,8 @@ void ast_expression_free_data(ast_literal_t** val)
 	printf("free expression data main\n");
 	if ((*val)->main != NULL) {
 		printf("ast_expression_free_data main\n");
-		ast_expression_free((ast_expression_t**) &((*val)->main));
+		// ast_expression_free((ast_expression_t**) &((*val)->main));
+		ast_expression_free((ast_expression_t**) ((*val)->main));
 	}
 
 	printf("let's free it's at all\n");
@@ -2213,7 +2214,7 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 					printf("<Main>\n");
 
 						print_indentation(indent_level + 3);
-						print_xml_ast_expression((ast_expression_t*) expr->data.literal->main, indent_level + 3);
+						print_xml_ast_expression((ast_expression_t*) *(expr->data.literal->main), indent_level + 3);
 
 					print_indentation(indent_level + 2);
 					printf("</Main>\n");
@@ -2787,7 +2788,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 	ast_literal_t* right = (ast_literal_t*) interpreter_expression(expr->data.binary_op->right, interpreter);
 
 	ast_literal_t* res = (ast_literal_t*) malloc(sizeof(ast_literal_t));
-	res->main = (struct ast_expression_t*) expr;
+	res->main = (struct ast_expression_t**) &expr;
 
 	bool isReverse = false;
 	if (strcmp(expr->data.binary_op->operator, "!=") == 0) {
@@ -3049,8 +3050,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 		variable = (ast_literal_t*) malloc(sizeof(ast_literal_t));
 	}
 
-	// variable->main = (struct ast_expression_t*) expr;
-	variable->main = NULL;
+	variable->main = (struct ast_expression_t**) &expr;
 	variable->type = right->type;
 	if (right->type == VALUE_TYPE_STRING) {
 		variable->string_value = strdup(right->string_value);

@@ -67,144 +67,6 @@ typedef struct SymbolTableStack {
 
 SymbolTableStack* symbolTableStack = NULL;
 
-SymbolTable* createSymbolTable(size_t capacity)
-{
-	SymbolTable* table = (SymbolTable*) malloc(sizeof(SymbolTable));
-	table->entries = (SymbolTableEntry**) calloc(capacity, sizeof(SymbolTableEntry*) );
-	table->size = 0;
-	table->capacity = capacity;
-	return table;
-}
-
-void pushSymbolTable()
-{
-	SymbolTable* table = createSymbolTable(3);
-	SymbolTableStack* newScope = (SymbolTableStack*) malloc(sizeof(SymbolTableStack));
-	newScope->table = table;
-	newScope->next = symbolTableStack;
-	symbolTableStack = newScope;
-}
-
-void popSymbolTable()
-{
-	if (symbolTableStack == NULL) {
-		return;
-	}
-
-	SymbolTableStack* top = symbolTableStack;
-	symbolTableStack = top->next;
-
-	SymbolTable* table = top->table;
-	for (size_t i = 0; i < table->capacity; ++i) {
-		SymbolTableEntry* entry = table->entries[i];
-		while (entry != NULL) {
-			SymbolTableEntry* next = entry->next;
-			if (entry->identifier != NULL) {
-				free(entry->identifier);
-				entry->identifier = NULL;
-			}
-			if (entry->data != NULL) {
-				// ast_expression_free_data(&(entry->data));
-				entry->prevdata = entry->data;
-				entry->data = NULL;
-			}
-			free(entry);
-
-			entry = next;
-		}
-	}
-	free(table->entries);
-	table->entries = NULL;
-	free(table);
-	table = NULL;
-	free(top);
-	top = NULL;
-}
-
-unsigned int hash(const char* str, size_t capacity)
-{
-	unsigned int hash = 0;
-	while (*str) {
-		hash = (hash * 31) + (*str++);
-	}
-	return hash % capacity;
-}
-
-static SymbolTableEntry* findSymbolInParentScopes(SymbolTableStack* symbolTableStack, const char* identifier)
-{
-	if (symbolTableStack == NULL) {
-		return NULL;
-	}
-
-	SymbolTable* table = symbolTableStack->table;
-	unsigned int index = hash(identifier, table->capacity);
-
-	SymbolTableEntry* entry = table->entries[index];
-	while (entry != NULL) {
-		if (strcmp(entry->identifier, identifier) == 0) {
-			return entry;
-		}
-		entry = entry->next;
-	}
-
-	return findSymbolInParentScopes(symbolTableStack->next, identifier);
-}
-
-void addToSymbolTable(SymbolTableStack* symbolTableStack, const char* identifier, ast_literal_t* value)
-{
-	if (symbolTableStack == NULL) {
-		return;
-	}
-
-	SymbolTableEntry* existingEntry = findSymbolInParentScopes(symbolTableStack, identifier);
-
-	if (existingEntry != NULL) {
-		existingEntry->data = value;
-		return;
-	}
-
-	SymbolTable* table = symbolTableStack->table;
-	unsigned int index = hash(identifier, table->capacity);
-
-	SymbolTableEntry* entry = (SymbolTableEntry*) malloc(sizeof(SymbolTableEntry));
-	entry->identifier = strdup(identifier);
-	entry->data = value;
-	entry->next = table->entries[index];
-
-	table->entries[index] = entry;
-	table->size++;
-}
-
-ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const char* identifier)
-{
-	SymbolTable* table = currentScope->table;
-	unsigned int index = hash(identifier, table->capacity);
-	SymbolTableEntry* entry = table->entries[index];
-
-	while (entry != NULL) {
-		if (strcmp(entry->identifier, identifier) == 0) {
-			return entry->data;
-		}
-		entry = entry->next;
-	}
-
-	return NULL;
-}
-
-ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier)
-{
-	while (currentScope != NULL) {
-		ast_literal_t* data = findInSymbolTableCurrent(currentScope, identifier);
-		if (data != NULL) {
-			return data;
-		}
-
-		currentScope = currentScope->next;
-	}
-
-	return NULL;
-}
-
 typedef enum {
 	// Values
 	TOKEN_TYPE_IDENTIFIER,
@@ -369,6 +231,8 @@ typedef struct ast_expression {
 typedef enum {
 	AST_FUNCTION_DECLARATION,
 	AST_STATEMENT_RETURN,
+	AST_STATEMENT_CONTINUE,
+	AST_STATEMENT_BREAK,
 	AST_STATEMENT_PRINT,
 	AST_STATEMENT_IF,
 	AST_STATEMENT_UNTIL,
@@ -420,6 +284,144 @@ typedef struct {
 	int return_code;
 	parser_t** parser;
 } interpreter_t;
+
+SymbolTable* createSymbolTable(size_t capacity)
+{
+	SymbolTable* table = (SymbolTable*) malloc(sizeof(SymbolTable));
+	table->entries = (SymbolTableEntry**) calloc(capacity, sizeof(SymbolTableEntry*) );
+	table->size = 0;
+	table->capacity = capacity;
+	return table;
+}
+
+void pushSymbolTable()
+{
+	SymbolTable* table = createSymbolTable(3);
+	SymbolTableStack* newScope = (SymbolTableStack*) malloc(sizeof(SymbolTableStack));
+	newScope->table = table;
+	newScope->next = symbolTableStack;
+	symbolTableStack = newScope;
+}
+
+void popSymbolTable()
+{
+	if (symbolTableStack == NULL) {
+		return;
+	}
+
+	SymbolTableStack* top = symbolTableStack;
+	symbolTableStack = top->next;
+
+	SymbolTable* table = top->table;
+	for (size_t i = 0; i < table->capacity; ++i) {
+		SymbolTableEntry* entry = table->entries[i];
+		while (entry != NULL) {
+			SymbolTableEntry* next = entry->next;
+			if (entry->identifier != NULL) {
+				free(entry->identifier);
+				entry->identifier = NULL;
+			}
+			if (entry->data != NULL) {
+				// ast_expression_free_data(&(entry->data));
+				entry->prevdata = entry->data;
+				entry->data = NULL;
+			}
+			free(entry);
+
+			entry = next;
+		}
+	}
+	free(table->entries);
+	table->entries = NULL;
+	free(table);
+	table = NULL;
+	free(top);
+	top = NULL;
+}
+
+unsigned int hash(const char* str, size_t capacity)
+{
+	unsigned int hash = 0;
+	while (*str) {
+		hash = (hash * 31) + (*str++);
+	}
+	return hash % capacity;
+}
+
+static SymbolTableEntry* findSymbolInParentScopes(SymbolTableStack* symbolTableStack, const char* identifier)
+{
+	if (symbolTableStack == NULL) {
+		return NULL;
+	}
+
+	SymbolTable* table = symbolTableStack->table;
+	unsigned int index = hash(identifier, table->capacity);
+
+	SymbolTableEntry* entry = table->entries[index];
+	while (entry != NULL) {
+		if (strcmp(entry->identifier, identifier) == 0) {
+			return entry;
+		}
+		entry = entry->next;
+	}
+
+	return findSymbolInParentScopes(symbolTableStack->next, identifier);
+}
+
+void addToSymbolTable(SymbolTableStack* symbolTableStack, const char* identifier, ast_literal_t* value)
+{
+	if (symbolTableStack == NULL) {
+		return;
+	}
+
+	SymbolTableEntry* existingEntry = findSymbolInParentScopes(symbolTableStack, identifier);
+
+	if (existingEntry != NULL) {
+		existingEntry->data = value;
+		return;
+	}
+
+	SymbolTable* table = symbolTableStack->table;
+	unsigned int index = hash(identifier, table->capacity);
+
+	SymbolTableEntry* entry = (SymbolTableEntry*) malloc(sizeof(SymbolTableEntry));
+	entry->identifier = strdup(identifier);
+	entry->data = value;
+	entry->next = table->entries[index];
+
+	table->entries[index] = entry;
+	table->size++;
+}
+
+ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const char* identifier)
+{
+	SymbolTable* table = currentScope->table;
+	unsigned int index = hash(identifier, table->capacity);
+	SymbolTableEntry* entry = table->entries[index];
+
+	while (entry != NULL) {
+		if (strcmp(entry->identifier, identifier) == 0) {
+			return entry->data;
+		}
+		entry = entry->next;
+	}
+
+	return NULL;
+}
+
+ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier)
+{
+	while (currentScope != NULL) {
+		ast_literal_t* data = findInSymbolTableCurrent(currentScope, identifier);
+		if (data != NULL) {
+			return data;
+		}
+
+		currentScope = currentScope->next;
+	}
+
+	return NULL;
+}
 
 bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter);
 
@@ -1548,6 +1550,30 @@ ast_node_t* parser_statement_return(parser_t* parser)
 	return node;
 }
 
+ast_node_t* parser_statement_break(parser_t* parser)
+{
+	printf("Parsing statement break\n");
+
+	parser->token_index++;
+
+	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
+	node->type = AST_STATEMENT_BREAK;
+
+	return node;
+}
+
+ast_node_t* parser_statement_continue(parser_t* parser)
+{
+	printf("Parsing statement continue\n");
+
+	parser->token_index++;
+
+	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
+	node->type = AST_STATEMENT_CONTINUE;
+
+	return node;
+}
+
 bool parser_expression_has(parser_t* parser)
 {
 	if ((*parser->lexer)->tokens->length > parser->token_index) {
@@ -1644,6 +1670,14 @@ ast_node_t* parser_statement(parser_t* parser)
 		switch (tok->type) {
 			case TOKEN_TYPE_RETURN:
 				stmt = parser_statement_return(parser);
+				break;
+
+			case TOKEN_TYPE_BREAK:
+				stmt = parser_statement_break(parser);
+				break;
+
+			case TOKEN_TYPE_CONTINUE:
+				stmt = parser_statement_continue(parser);
 				break;
 
 			case TOKEN_TYPE_IF:
@@ -2332,17 +2366,17 @@ ast_node_t* interpreter_statement_if(ast_statement_if_t* node, interpreter_t* in
 	// printf("If\n");
 
 	if (interpreter_expression_truly(node->condition, interpreter)) {
-		return interpreter_block(node->block->data.block, interpreter, TOKEN_TYPE_IF);
+		interpreter_block(node->block->data.block, interpreter, TOKEN_TYPE_IF);
 	} else {
 		for (size_t i = 0; i < node->num_elseifs; i++) {
 			ast_node_t* elseif = (ast_node_t*) node->elseifs[i];
 			if (interpreter_expression_truly(elseif->data.statement_if->condition, interpreter)) {
-				return interpreter_block(elseif->data.statement_if->block->data.block, interpreter, TOKEN_TYPE_ELSEIF);
+				interpreter_block(elseif->data.statement_if->block->data.block, interpreter, TOKEN_TYPE_ELSEIF);
 			}
 		}
 
 		if (node->else_block != NULL) {
-			return interpreter_block(node->else_block->data.block, interpreter, TOKEN_TYPE_ELSEIF);
+			interpreter_block(node->else_block->data.block, interpreter, TOKEN_TYPE_ELSEIF);
 		}
 	}
 
@@ -2365,7 +2399,7 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 			break;
 
 		case AST_STATEMENT_RETURN:
-			ast_literal_t* ret = interpreter_statement_return(node->data.statement_return, interpreter);
+			interpreter_statement_return(node->data.statement_return, interpreter);
 			return node;
 			break;
 		
@@ -2494,9 +2528,9 @@ ast_block_t* interpreter_block(ast_block_t* block, interpreter_t* interpreter, t
 
 		if (stmt->type == AST_STATEMENT_RETURN) {
 
-		} else if (stmt->type == AST_STATEMENT_RETURN) {
+		} else if (stmt->type == AST_STATEMENT_BREAK) {
 
-		} else if (stmt->type == AST_STATEMENT_RETURN) {
+		} else if (stmt->type == AST_STATEMENT_CONTINUE) {
 
 		}
 

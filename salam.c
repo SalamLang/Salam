@@ -2713,16 +2713,14 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 		if (left->type == VALUE_TYPE_INT && right->type == TOKEN_TYPE_STRING) {
 			res->type = VALUE_TYPE_STRING;
 			char* left_str = intToString(left->int_value);
-			int result = strcmp(left_str, right->string_value);
 			res->type = VALUE_TYPE_BOOL;
-			res->bool_value = (result == 0);
+			res->bool_value = strcmp(left_str, right->string_value) == 0 ? true : false;
 			free(left_str);
 		} else if (left->type == TOKEN_TYPE_STRING && right->type == VALUE_TYPE_INT) {
 			res->type = VALUE_TYPE_STRING;
 			char* right_var = intToString(right->int_value);
-			int result = strcmp(right_var, left->string_value);
 			res->type = VALUE_TYPE_BOOL;
-			res->bool_value = (result == 0);
+			res->bool_value = strcmp(left->string_value, right_var) == 0 ? true : false;
 			free(right_var);
 		} else if (left->type == VALUE_TYPE_NULL && right->type == TOKEN_TYPE_NULL) {
 			res->type = VALUE_TYPE_BOOL;

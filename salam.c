@@ -918,7 +918,7 @@ void read_identifier(lexer_t* lexer, wchar_t ch)
 	while (is_ident(ch)) {
 		int char_size = wctomb(&identifier[i], ch);
 		if (char_size < 0) {
-			printf("Error: Failed to convert wide character to multibyte\n");
+			printf("Error: read_identifier - Failed to convert wide character to multibyte\n");
 			exit(EXIT_FAILURE);
 		}
 		i += char_size;

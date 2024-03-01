@@ -320,6 +320,15 @@ typedef struct {
 	bool is_global_scope;
 } interpreter_t;
 
+unsigned int hash(const char* str, size_t capacity)
+{
+	unsigned int hash = 0;
+	while (*str) {
+		hash = (hash * 31) + (*str++);
+	}
+	return hash % capacity;
+}
+
 SymbolTable* createSymbolTable(size_t capacity)
 {
 	SymbolTable* table = (SymbolTable*) malloc(sizeof(SymbolTable));
@@ -335,7 +344,7 @@ void pushSymbolTable(SymbolTableStack* ts)
 		return;
 	}
 
-    SymbolTable* table = createSymbolTable(16);  // Initial capacity, adjust as needed
+    SymbolTable* table = createSymbolTable(16);
     SymbolTableStack* newScope = (SymbolTableStack*)malloc(sizeof(SymbolTableStack));
     newScope->table = table;
     newScope->next = ts;
@@ -379,15 +388,6 @@ void popSymbolTable(SymbolTableStack* ts)
 
 	free(top);
 	top = NULL;
-}
-
-unsigned int hash(const char* str, size_t capacity)
-{
-	unsigned int hash = 0;
-	while (*str) {
-		hash = (hash * 31) + (*str++);
-	}
-	return hash % capacity;
 }
 
 static SymbolTableEntry* findSymbolInParentScopes(SymbolTableStack* ts, const char* identifier)
@@ -437,6 +437,10 @@ void addToSymbolTable(SymbolTableStack* ts, const char* identifier, ast_literal_
 
 ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const char* identifier)
 {
+	if (currentScope == NULL) {
+		return NULL;
+	}
+
 	SymbolTable* table = currentScope->table;
 	unsigned int index = hash(identifier, table->capacity);
 	SymbolTableEntry* entry = table->entries[index];
@@ -451,8 +455,19 @@ ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const ch
 	return NULL;
 }
 
-ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier)
+ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier, bool checkGlobal)
 {
+	if (checkGlobal == true && symbolGlobalTableStack != NULL) {
+		ast_literal_t* globalVar = findInSymbolTable(symbolGlobalTableStack, identifier, false);
+		if (globalVar != NULL) {
+			return globalVar;
+		}
+	}
+
+	if (currentScope == NULL) {
+		return NULL;
+	}
+
 	while (currentScope != NULL) {
 		ast_literal_t* data = findInSymbolTableCurrent(currentScope, identifier);
 		if (data != NULL) {
@@ -2651,7 +2666,7 @@ ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* int
 {
 	// printf("Variable: %s\n", expr->data.identifier->name);
 
-	ast_literal_t* val = findInSymbolTable(symbolTableStack, expr->data.identifier->name);
+	ast_literal_t* val = findInSymbolTable(symbolTableStack, expr->data.identifier->name, true);
 	if (val != NULL) {
 		// printf("Variable found: %s\n", expr->data.identifier->name);
 		return val;
@@ -2976,8 +2991,9 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 	}
 
 	ast_literal_t* lit = NULL;
+	bool is_global_scope = interpreter->is_global_scope;
 
-	if (interpreter->is_global_scope == true && (expr->type != AST_EXPRESSION_FUNCTION_CALL && AST_EXPRESSION_ASSIGNMENT)) {
+	if (is_global_scope == true && (expr->type != AST_EXPRESSION_FUNCTION_CALL && expr->type != AST_EXPRESSION_ASSIGNMENT)) {
 		printf("Error: it's not possible to have other type of expressions in global scope!\n");
 		exit(EXIT_FAILURE);
 		return NULL;
@@ -3006,14 +3022,18 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 			break;
 
 		case AST_EXPRESSION_FUNCTION_CALL:
+			if (is_global_scope == true) interpreter->is_global_scope = false;
 			lit = interpreter_function_call(expr, interpreter);
+			if (is_global_scope == true) interpreter->is_global_scope = true;
 			// if (lit != NULL) {
 			// 	lit->main = (struct ast_expression_t*) expr;
 			// }
 			break;
 
 		case AST_EXPRESSION_ASSIGNMENT:
+			if (is_global_scope == true) interpreter->is_global_scope = false;
 			lit = interpreter_expression_assignment(expr, interpreter);
+			if (is_global_scope == true) interpreter->is_global_scope = true;
 			// ast_expression_free(&(expr));
 			// expr = NULL;
 			// if (lit != NULL) {

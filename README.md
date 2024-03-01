@@ -1,1 +1,1 @@
-# SallamLang
+# Salam Programming Language

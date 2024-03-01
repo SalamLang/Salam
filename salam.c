@@ -341,7 +341,7 @@ SymbolTable* createSymbolTable(size_t capacity)
 
 void pushSymbolTable(SymbolTableStack** ts, bool is_function_call)
 {
-	printf("create scope with %d state\n", is_function_call ? 1 : 0);
+	// printf("create scope with %d state\n", is_function_call ? 1 : 0);
     SymbolTable* table = createSymbolTable(16);
     SymbolTableStack* newScope = (SymbolTableStack*) malloc(sizeof(SymbolTableStack));
     newScope->table = table;
@@ -458,14 +458,14 @@ ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const ch
 ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier, bool wantsGlobal)
 {
 	while (currentScope != NULL) {
-		printf("looking for %s on a scope %d\n", identifier, currentScope->is_function_call ? 1 : 0);
+		// printf("looking for %s on a scope %d\n", identifier, currentScope->is_function_call ? 1 : 0);
 		ast_literal_t* data = findInSymbolTableCurrent(currentScope, identifier);
 		if (data != NULL) {
 			return data;
 		}
 
 		if (currentScope->is_function_call == true) {
-			printf("this scope is call enabled, so break loop (%d)!\n", wantsGlobal ? 1 : 0);
+			// printf("this scope is call enabled, so break loop (%d)!\n", wantsGlobal ? 1 : 0);
 			break;
 		}
 		currentScope = currentScope->next;
@@ -2666,7 +2666,7 @@ ast_literal_t* interpreter_literal(ast_expression_t* expr)
 
 ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* interpreter)
 {
-	printf("Variable: %s (%d)\n", expr->data.identifier->name, interpreter->is_global_scope ? 1 : 0);
+	// printf("Variable: %s (%d)\n", expr->data.identifier->name, interpreter->is_global_scope ? 1 : 0);
 
 	ast_literal_t* val;
 
@@ -2846,7 +2846,7 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 	}
 
 	// Scope entry
-	printf("create a scope with function_call enabled\n");
+	// printf("create a scope with function_call enabled\n");
 	pushSymbolTable(&symbolTableStack, true);
 
 	for (size_t i = 0; i < arguments_count; i++) {
@@ -2863,7 +2863,7 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 	
 	// Scope exit
 	popSymbolTable(&symbolTableStack);
-	printf("delete a scope with function_call enabled\n");
+	// printf("delete a scope with function_call enabled\n");
 
 	return NULL;
 }
@@ -2927,7 +2927,7 @@ bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpr
 
 ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpreter_t* interpreter)
 {
-	printf("Assignment\n");
+	// printf("Assignment\n");
 
 	if (expr->data.assignment->left->type != AST_EXPRESSION_IDENTIFIER) {
 		printf("Error: Assignment to non-variable\n");
@@ -2938,7 +2938,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	bool isNew = false;
 	char* identifier = strdup(expr->data.assignment->left->data.identifier->name);
 
-	printf("============> assign %s variable\n", identifier);
+	// printf("============> assign %s variable\n", identifier);
 
 	ast_literal_t* right = interpreter_expression(expr->data.assignment->right, interpreter);
 	ast_literal_t* variable;
@@ -2950,11 +2950,9 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	}
 
 	if (variable == NULL) {
-		printf("this is a new variable on this scope!\n");
+		// printf("this is a new variable on this scope!\n");
 		isNew = true;
 		variable = (ast_literal_t*) malloc(sizeof(ast_literal_t));
-	} else {
-		printf("this is not a new variable on current scope!\n");
 	}
 
 	variable->main = (struct ast_expression_t*) expr;

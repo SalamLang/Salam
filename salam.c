@@ -8,33 +8,7 @@
 
 struct ast_expression;
 
-char* intToString(int value)
-{
-    int sign = (value < 0) ? -1 : 1;
-
-    int temp = value;
-    int numDigits = (value == 0) ? 1 : 0;
-    while (temp != 0) {
-        temp /= 10;
-        numDigits++;
-    }
-
-    char* result = (char*) malloc(numDigits + 1 + (sign == -1 ? 1 : 0));
-    if (result != NULL) {
-        if (sign == -1) {
-            result[0] = '-';
-        }
-
-        for (int i = numDigits - 1 + (sign == -1 ? 1 : 0); i >= (sign == -1 ? 1 : 0); i--) {
-            result[i] = '0' + abs(value % 10);
-            value /= 10;
-        }
-
-        result[numDigits + (sign == -1 ? 1 : 0)] = '\0';
-    }
-
-    return result;
-}
+struct ast_literal_t;
 
 typedef enum {
 	VALUE_TYPE_NULL,
@@ -44,20 +18,6 @@ typedef enum {
 	VALUE_TYPE_STRING,
 	VALUE_TYPE_ARGUMENT,
 } ast_literal_type_t;
-
-char* literal_type2name(ast_literal_type_t type)
-{
-	switch (type) {
-		case VALUE_TYPE_NULL: return "NULL";
-		case VALUE_TYPE_INT: return "INT";
-		case VALUE_TYPE_FLOAT: return "FLOAT";
-		case VALUE_TYPE_BOOL: return "BOOL";
-		case VALUE_TYPE_STRING: return "STRING";
-		default: return "TYPE_UNKNOWN";
-	}
-}
-
-struct ast_literal_t;
 
 typedef struct {
 	char* name;
@@ -95,9 +55,6 @@ typedef struct SymbolTableStack {
 	bool is_function_call;
 	struct SymbolTableStack* next;
 } SymbolTableStack;
-
-SymbolTableStack* symbolTableStack = NULL;
-SymbolTableStack* symbolGlobalTableStack = NULL;
 
 typedef enum {
 	// Values
@@ -321,6 +278,143 @@ typedef struct {
 	bool is_global_scope;
 } interpreter_t;
 
+typedef ast_expression_t* (*nud_func_t)(parser_t* parser, token_t* token);
+typedef ast_expression_t* (*led_func_t)(parser_t* parser, token_t* token, ast_expression_t* left);
+
+typedef struct {
+	size_t precedence;
+	nud_func_t nud;
+	led_func_t led;
+} token_info_t;
+
+enum {
+	PRECEDENCE_LOWEST = 0,    // START FROM HERE
+	PRECEDENCE_ANDOR = 1,     // AND OR
+	PRECEDENCE_HIGHEST = 2,   // =
+	PRECEDENCE_MULTIPY = 3,   // / *
+	PRECEDENCE_SUM = 4,       // + -
+};
+
+// Function dec
+bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter);
+
+interpreter_t* interpreter_interpret(interpreter_t* interpreter);
+ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type);
+
+void interpreter_expression_data(ast_literal_t* data);
+
+void ast_expression_free_data(ast_literal_t** val);
+
+wchar_t read_token(lexer_t* lexer);
+void read_number(lexer_t* lexer, wchar_t ch);
+size_t mb_strlen(char* identifier);
+void read_identifier(lexer_t* lexer, wchar_t ch);
+size_t wchar_length(wchar_t wide_char);
+
+lexer_t* lexer_create(const char* data);
+void lexer_free(lexer_t** lexer);
+void lexer_lex(lexer_t* lexer);
+
+parser_t* parser_create(lexer_t** lexer);
+void parser_free(parser_t** parser);
+void parser_parse(parser_t* parser);
+ast_node_t* parser_function(parser_t* parser);
+ast_node_t* parser_block(parser_t* parser);
+ast_node_t* parser_statement(parser_t* parser);
+ast_node_t* parser_statement_return(parser_t* parser);
+ast_node_t* parser_statement_print(parser_t* parser);
+ast_expression_t* parser_expression(parser_t* parser);
+
+ast_node_t* interpreter_statement_expression(ast_node_t* expr, interpreter_t* interpreter);
+ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* interpreter);
+ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter_t* interpreter);
+ast_literal_t* interpreter_literal(ast_expression_t* expr);
+ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* interpreter);
+
+ast_node_t* interpreter_statement_print(ast_node_t* node, interpreter_t* interpreter);
+ast_node_t* interpreter_statement_return(ast_node_t* node, interpreter_t* interpreter);
+ast_node_t* interpreter_function_declaration(ast_node_t* node, interpreter_t* interpreter, array_t* arguments);
+ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type, array_t* arguments);
+
+ast_expression_t* nud_bool(parser_t* parser, token_t* token);
+ast_expression_t* nud_number(parser_t* parser, token_t* token);
+ast_expression_t* nud_string(parser_t* parser, token_t* token);
+ast_expression_t* nud_identifier(parser_t* parser, token_t* token);
+ast_expression_t* nud_parentheses(parser_t* parser, token_t* token);
+ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expression_t* left);
+ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* left);
+ast_expression_t* led_equal_equal(parser_t* parser, token_t* token, ast_expression_t* left);
+ast_expression_t* led_and(parser_t* parser, token_t* token, ast_expression_t* left);
+ast_expression_t* led_or(parser_t* parser, token_t* token, ast_expression_t* left);
+ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence);
+
+// Global variables
+SymbolTableStack* symbolTableStack = NULL;
+SymbolTableStack* symbolGlobalTableStack = NULL;
+
+token_info_t token_infos[] = {
+	[TOKEN_TYPE_TRUE] = {PRECEDENCE_LOWEST, nud_bool, NULL},
+	[TOKEN_TYPE_FALSE] = {PRECEDENCE_LOWEST, nud_bool, NULL},
+	[TOKEN_TYPE_NUMBER] = {PRECEDENCE_LOWEST, nud_number, NULL},
+	[TOKEN_TYPE_NUMBER] = {PRECEDENCE_LOWEST, nud_number, NULL},
+	[TOKEN_TYPE_IDENTIFIER] = {PRECEDENCE_LOWEST, nud_identifier, NULL},
+	[TOKEN_TYPE_STRING] = {PRECEDENCE_LOWEST, nud_string, NULL},
+	[TOKEN_TYPE_PARENTHESE_OPEN] = {PRECEDENCE_LOWEST, nud_parentheses, NULL},
+	[TOKEN_TYPE_PLUS] = {PRECEDENCE_SUM, NULL, led_plus_minus},
+	[TOKEN_TYPE_AND] = {PRECEDENCE_ANDOR, NULL, led_and},
+	[TOKEN_TYPE_OR] = {PRECEDENCE_ANDOR, NULL, led_or},
+	[TOKEN_TYPE_MINUS] = {PRECEDENCE_SUM, NULL, led_plus_minus},
+	[TOKEN_TYPE_MULTIPY] = {PRECEDENCE_MULTIPY, NULL, led_plus_minus},
+	[TOKEN_TYPE_DIVIDE] = {PRECEDENCE_MULTIPY, NULL, led_plus_minus},
+
+	[TOKEN_TYPE_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal},
+
+	[TOKEN_TYPE_NOT_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
+	[TOKEN_TYPE_EQUAL_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
+};
+
+// Helper functions
+char* intToString(int value)
+{
+	int sign = (value < 0) ? -1 : 1;
+
+	int temp = value;
+	int numDigits = (value == 0) ? 1 : 0;
+	while (temp != 0) {
+		temp /= 10;
+		numDigits++;
+	}
+
+	char* result = (char*) malloc(numDigits + 1 + (sign == -1 ? 1 : 0));
+	if (result != NULL) {
+		if (sign == -1) {
+			result[0] = '-';
+		}
+
+		for (int i = numDigits - 1 + (sign == -1 ? 1 : 0); i >= (sign == -1 ? 1 : 0); i--) {
+			result[i] = '0' + abs(value % 10);
+			value /= 10;
+		}
+
+		result[numDigits + (sign == -1 ? 1 : 0)] = '\0';
+	}
+
+	return result;
+}
+
+// Functions
+char* literal_type2name(ast_literal_type_t type)
+{
+	switch (type) {
+		case VALUE_TYPE_NULL: return "NULL";
+		case VALUE_TYPE_INT: return "INT";
+		case VALUE_TYPE_FLOAT: return "FLOAT";
+		case VALUE_TYPE_BOOL: return "BOOL";
+		case VALUE_TYPE_STRING: return "STRING";
+		default: return "TYPE_UNKNOWN";
+	}
+}
+
 unsigned int hash(const char* str, size_t capacity)
 {
 	unsigned int hash = 0;
@@ -342,12 +436,12 @@ SymbolTable* createSymbolTable(size_t capacity)
 void pushSymbolTable(SymbolTableStack** ts, bool is_function_call)
 {
 	// printf("create scope with %d state\n", is_function_call ? 1 : 0);
-    SymbolTable* table = createSymbolTable(16);
-    SymbolTableStack* newScope = (SymbolTableStack*) malloc(sizeof(SymbolTableStack));
-    newScope->table = table;
+	SymbolTable* table = createSymbolTable(16);
+	SymbolTableStack* newScope = (SymbolTableStack*) malloc(sizeof(SymbolTableStack));
+	newScope->table = table;
 	newScope->is_function_call = is_function_call;
-    newScope->next = *ts;
-    *ts = newScope;
+	newScope->next = *ts;
+	*ts = newScope;
 }
 
 void popSymbolTable(SymbolTableStack** ts)
@@ -476,97 +570,6 @@ ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* ide
 	}
 	return NULL;
 }
-
-bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter);
-
-interpreter_t* interpreter_interpret(interpreter_t* interpreter);
-ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type);
-
-void interpreter_expression_data(ast_literal_t* data);
-
-void ast_expression_free_data(ast_literal_t** val);
-
-wchar_t read_token(lexer_t* lexer);
-void read_number(lexer_t* lexer, wchar_t ch);
-size_t mb_strlen(char* identifier);
-void read_identifier(lexer_t* lexer, wchar_t ch);
-size_t wchar_length(wchar_t wide_char);
-
-lexer_t* lexer_create(const char* data);
-void lexer_free(lexer_t** lexer);
-void lexer_lex(lexer_t* lexer);
-
-parser_t* parser_create(lexer_t** lexer);
-void parser_free(parser_t** parser);
-void parser_parse(parser_t* parser);
-ast_node_t* parser_function(parser_t* parser);
-ast_node_t* parser_block(parser_t* parser);
-ast_node_t* parser_statement(parser_t* parser);
-ast_node_t* parser_statement_return(parser_t* parser);
-ast_node_t* parser_statement_print(parser_t* parser);
-ast_expression_t* parser_expression(parser_t* parser);
-
-ast_node_t* interpreter_statement_expression(ast_node_t* expr, interpreter_t* interpreter);
-ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* interpreter);
-ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter_t* interpreter);
-ast_literal_t* interpreter_literal(ast_expression_t* expr);
-ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* interpreter);
-
-ast_node_t* interpreter_statement_print(ast_node_t* node, interpreter_t* interpreter);
-ast_node_t* interpreter_statement_return(ast_node_t* node, interpreter_t* interpreter);
-ast_node_t* interpreter_function_declaration(ast_node_t* node, interpreter_t* interpreter, array_t* arguments);
-ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type, array_t* arguments);
-
-typedef ast_expression_t* (*nud_func_t)(parser_t* parser, token_t* token);
-typedef ast_expression_t* (*led_func_t)(parser_t* parser, token_t* token, ast_expression_t* left);
-
-typedef struct {
-	size_t precedence;
-	nud_func_t nud;
-	led_func_t led;
-} token_info_t;
-
-ast_expression_t* nud_bool(parser_t* parser, token_t* token);
-ast_expression_t* nud_number(parser_t* parser, token_t* token);
-ast_expression_t* nud_string(parser_t* parser, token_t* token);
-ast_expression_t* nud_identifier(parser_t* parser, token_t* token);
-ast_expression_t* nud_parentheses(parser_t* parser, token_t* token);
-ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expression_t* left);
-ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* left);
-ast_expression_t* led_equal_equal(parser_t* parser, token_t* token, ast_expression_t* left);
-ast_expression_t* led_and(parser_t* parser, token_t* token, ast_expression_t* left);
-ast_expression_t* led_or(parser_t* parser, token_t* token, ast_expression_t* left);
-
-ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence);
-
-enum {
-	PRECEDENCE_LOWEST = 0,    // START FROM HERE
-	PRECEDENCE_ANDOR = 1,     // AND OR
-	PRECEDENCE_HIGHEST = 2,   // =
-	PRECEDENCE_MULTIPY = 3,   // / *
-	PRECEDENCE_SUM = 4,       // + -
-};
-
-token_info_t token_infos[] = {
-	[TOKEN_TYPE_TRUE] = {PRECEDENCE_LOWEST, nud_bool, NULL},
-	[TOKEN_TYPE_FALSE] = {PRECEDENCE_LOWEST, nud_bool, NULL},
-	[TOKEN_TYPE_NUMBER] = {PRECEDENCE_LOWEST, nud_number, NULL},
-	[TOKEN_TYPE_NUMBER] = {PRECEDENCE_LOWEST, nud_number, NULL},
-	[TOKEN_TYPE_IDENTIFIER] = {PRECEDENCE_LOWEST, nud_identifier, NULL},
-	[TOKEN_TYPE_STRING] = {PRECEDENCE_LOWEST, nud_string, NULL},
-	[TOKEN_TYPE_PARENTHESE_OPEN] = {PRECEDENCE_LOWEST, nud_parentheses, NULL},
-	[TOKEN_TYPE_PLUS] = {PRECEDENCE_SUM, NULL, led_plus_minus},
-	[TOKEN_TYPE_AND] = {PRECEDENCE_ANDOR, NULL, led_and},
-	[TOKEN_TYPE_OR] = {PRECEDENCE_ANDOR, NULL, led_or},
-	[TOKEN_TYPE_MINUS] = {PRECEDENCE_SUM, NULL, led_plus_minus},
-	[TOKEN_TYPE_MULTIPY] = {PRECEDENCE_MULTIPY, NULL, led_plus_minus},
-	[TOKEN_TYPE_DIVIDE] = {PRECEDENCE_MULTIPY, NULL, led_plus_minus},
-
-	[TOKEN_TYPE_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal},
-
-	[TOKEN_TYPE_NOT_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
-	[TOKEN_TYPE_EQUAL_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
-};
 
 char* token_op_type2str(ast_expression_type_t type)
 {
@@ -854,44 +857,44 @@ void read_number(lexer_t* lexer, wchar_t ch)
 
 void read_string(lexer_t* lexer, wchar_t ch)
 {
-    size_t allocated_size = 20;
-    char* string = (char*) malloc(sizeof(char) * allocated_size);
-    if (string == NULL) {
-        printf("Error: read_string - Memory allocation failed.\n");
-        exit(EXIT_FAILURE);
-    }
+	size_t allocated_size = 20;
+	char* string = (char*) malloc(sizeof(char) * allocated_size);
+	if (string == NULL) {
+		printf("Error: read_string - Memory allocation failed.\n");
+		exit(EXIT_FAILURE);
+	}
 
-    size_t i = 0;
+	size_t i = 0;
 
-    while (ch != L'"') {
-        if (i >= allocated_size - 1) {
-            allocated_size *= 2;
-            char* temp = (char*)realloc(string, sizeof(char) * allocated_size);
-            if (temp == NULL) {
-                printf("Error: read_string iterate - Memory reallocation failed.\n");
-                free(string);
-                exit(EXIT_FAILURE);
-            }
-            string = temp;
-        }
+	while (ch != L'"') {
+		if (i >= allocated_size - 1) {
+			allocated_size *= 2;
+			char* temp = (char*)realloc(string, sizeof(char) * allocated_size);
+			if (temp == NULL) {
+				printf("Error: read_string iterate - Memory reallocation failed.\n");
+				free(string);
+				exit(EXIT_FAILURE);
+			}
+			string = temp;
+		}
 
-        int char_size = wctomb(&string[i], ch);
-        if (char_size < 0) {
-            printf("Error: read_string - Failed to convert wide character to multibyte\n");
-            free(string);
-            exit(EXIT_FAILURE);
-        }
-        i += char_size;
+		int char_size = wctomb(&string[i], ch);
+		if (char_size < 0) {
+			printf("Error: read_string - Failed to convert wide character to multibyte\n");
+			free(string);
+			exit(EXIT_FAILURE);
+		}
+		i += char_size;
 
-        ch = read_token(lexer);
-    }
+		ch = read_token(lexer);
+	}
 
-    string[i] = '\0';
+	string[i] = '\0';
 
-    token_t* t = token_create(TOKEN_TYPE_STRING, string, i, lexer->line, lexer->column - i, lexer->line, lexer->column);
-    array_push(lexer->tokens, t);
+	token_t* t = token_create(TOKEN_TYPE_STRING, string, i, lexer->line, lexer->column - i, lexer->line, lexer->column);
+	array_push(lexer->tokens, t);
 
-    free(string);
+	free(string);
 }
 
 size_t mb_strlen(char* identifier)
@@ -1125,6 +1128,7 @@ void ast_expression_free_data(ast_literal_t** val)
 		// Nothing to free
 	}
 
+	// TODO: MEMORY LEAKS
 	if ((*val)->main != NULL) {
 		printf("ast_expression_free_data main\n");
 		ast_expression_free((ast_expression_t**) &((*val)->main));
@@ -1151,6 +1155,7 @@ void ast_expression_free_literal(ast_expression_t** expr)
 		} else {
 			printf("literal is not null\n");
 		}
+		printf("check expr value of literal\n");
 		ast_expression_free_data(&((*expr)->data.literal));
 		(*expr)->data.literal = NULL;
 	}
@@ -1380,7 +1385,9 @@ void ast_node_free(ast_node_t** node)
 					(*node)->data.statement_return->expression = NULL;
 				}
 
+				// TODO: MEMORY LEAKS
 				if ((*node)->data.statement_return->expression_value != NULL) {
+					printf("check expr value of return\n");
 					ast_expression_free_data(&((*node)->data.statement_return->expression_value));
 					(*node)->data.statement_return->expression_value = NULL;
 				}
@@ -1398,7 +1405,9 @@ void ast_node_free(ast_node_t** node)
 					(*node)->data.statement_print->expression = NULL;
 				}
 
+				// TODO: MEMORY LEAKS
 				if ((*node)->data.statement_print->expression_value != NULL) {
+					printf("check expr value of print\n");
 					ast_expression_free_data(&((*node)->data.statement_print->expression_value));
 					(*node)->data.statement_print->expression_value = NULL;
 				}
@@ -1475,8 +1484,8 @@ void parser_free(parser_t** parser)
 				}
 			}
 
-			free((*parser)->functions->data);
-			(*parser)->functions->data = NULL;
+			free((*parser)->expressions->data);
+			(*parser)->expressions->data = NULL;
 		}
 
 		free((*parser)->expressions);
@@ -1591,7 +1600,7 @@ ast_node_t* parser_function(parser_t* parser)
 	node->data.function_declaration->arguments = array_create(3);
 	
 	if (parser_token_skip_ifhas(parser, TOKEN_TYPE_PARENTHESE_OPEN)) {
-	    printf("Parsing parameters\n");
+		printf("Parsing parameters\n");
 
 		while ((*parser->lexer)->tokens->length > parser->token_index && ((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type == TOKEN_TYPE_IDENTIFIER) {
 			token_t* t = (*parser->lexer)->tokens->data[parser->token_index];
@@ -1602,7 +1611,7 @@ ast_node_t* parser_function(parser_t* parser)
 			if (parser_token_ifhas(parser, TOKEN_TYPE_COMMA) == false) {
 				break;
 			}
-	    }
+		}
 
 		parser_token_eat_nodata(parser, TOKEN_TYPE_PARENTHESE_CLOSE);
 	}

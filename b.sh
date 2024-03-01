@@ -23,7 +23,7 @@ fi
 # gcc -g -ggdb -o "$OUTPUT_FILE" "$INPUT_FILE"
 gcc -g -fsanitize=undefined,address -Walloca -o "$OUTPUT_FILE" "$INPUT_FILE" -lefence
 
-# emcc salam.c -o salam.js
+# emcc salam.c -o salam.js -s ALLOW_MEMORY_GROWTH=1
  
 # Check if compilation was successful
 if [ $? -eq 0 ]; then

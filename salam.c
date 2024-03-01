@@ -324,6 +324,8 @@ bool is_ident(wchar_t ch);
 wchar_t read_token(lexer_t* lexer);
 wchar_t unread_token(lexer_t* lexer);
 void read_number(lexer_t* lexer, wchar_t ch);
+void read_comment_singleline(lexer_t* lexer);
+void read_comment_multiline(lexer_t* lexer);
 void read_string(lexer_t* lexer, wchar_t ch);
 size_t mb_strlen(char* identifier);
 void read_identifier(lexer_t* lexer, wchar_t ch);
@@ -903,6 +905,31 @@ void read_number(lexer_t* lexer, wchar_t ch)
 	unread_token(lexer);
 }
 
+void read_comment_singleline(lexer_t* lexer)
+{
+    // Eating until finding \n or EOF
+    while (1) {
+        if (lexer->data[lexer->index] == '\n' || lexer->data[lexer->index] == '\0') {
+            break;
+		}
+    }
+}
+
+void read_comment_multiline(lexer_t* lexer)
+{
+    // Eating until finding */
+	// EOF is not allowed
+    while (1) {
+		if (lexer->data[lexer->index] == '\0') {
+			printf("Error: you have to close your multiline comments and it's not allowed to ignore and leave your multiline comment non-closed!\n");
+			exit(EXIT_FAILURE);
+			break;
+		} else if (lexer->data[lexer->index - 1] == '*' && lexer->data[lexer->index] == '/') {
+            break;
+		}
+    }
+}
+
 void read_string(lexer_t* lexer, wchar_t ch)
 {
 	size_t allocated_size = 20;
@@ -1039,8 +1066,18 @@ void lexer_lex(lexer_t* lexer)
 			token_t* t = token_create(TOKEN_TYPE_MULTIPY, "*", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		} else if (current_wchar == '/') {
-			token_t* t = token_create(TOKEN_TYPE_DIVIDE, "/", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
-			array_push(lexer->tokens, t);
+			if (lexer->index < lexer->length && lexer->data[lexer->index] == L'/') {
+				lexer->index++;
+				lexer->column++;
+				read_comment_singleline(lexer);
+			} else if (lexer->index < lexer->length && lexer->data[lexer->index] == L'*') {
+				lexer->index++;
+				lexer->column++;
+				read_comment_multiline(lexer);
+			} else {
+				token_t* t = token_create(TOKEN_TYPE_DIVIDE, "/", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+				array_push(lexer->tokens, t);
+			}
 		} else if (current_wchar == ',') {
 			token_t* t = token_create(TOKEN_TYPE_COMMA, ",", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
@@ -1049,13 +1086,11 @@ void lexer_lex(lexer_t* lexer)
 			array_push(lexer->tokens, t);
 		} else if (current_wchar == L'=') {
 			if (lexer->index < lexer->length && lexer->data[lexer->index] == L'=') {
-				// wprintf(L"has ==\n");
 				token_t* t = token_create(TOKEN_TYPE_EQUAL_EQUAL, "==", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
 				lexer->index++;
 				lexer->column++;
 			} else {
-				// wprintf(L"has =\n");
 				token_t* t = token_create(TOKEN_TYPE_EQUAL, "=", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
 			}

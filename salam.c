@@ -2366,9 +2366,6 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 
 		case AST_STATEMENT_RETURN:
 			ast_literal_t* ret = interpreter_statement_return(node->data.statement_return, interpreter);
-			// if (ret != NULL) {
-			// 	return ret;
-			// }
 			return node;
 			break;
 		
@@ -2384,23 +2381,11 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 
 		case AST_STATEMENT_PRINT:
 			interpreter_statement_print(node->data.statement_print, interpreter);
-			// interpreter_expression_data(node->data.statement_print->expression_value);
 			return node;
 			break;
 
 		case AST_EXPRESSION:
 			interpreter_expression(node->data.expression, interpreter);
-			// ast_expression_t* old_expr = node->data.expression;
-			// node->data.expression = (ast_expression_t*) malloc(sizeof(ast_expression_t));
-			// node->data.expression->type = AST_EXPRESSION_LITERAL;
-			// node->data.expression->data.literal = val;
-			// if (node->data.expression->data.literal == NULL) {
-			// 	return NULL;
-			// }
-			// node->data.expression->data.literal->main = (struct ast_expression_t*) old_expr;
-
-			// print_xml_ast_node(node, 0);
-			// exit(EXIT_FAILURE);
 			return node;
 			break;
 
@@ -2454,9 +2439,6 @@ ast_function_declaration_t* interpreter_function_declaration(ast_function_declar
 	// printf("Function Declaration: %s\n", stmt->name);
 
 	interpreter_block(stmt->body->data.block, interpreter, TOKEN_TYPE_FUNCTION);
-	// print_xml_ast_node(stmt->body, 0);
-	// printf("sign - done - max\n");
-	// exit(EXIT_SUCCESS);
 
 	return stmt;
 }
@@ -2485,12 +2467,6 @@ ast_statement_return_t* interpreter_statement_return(ast_statement_return_t* stm
 
 	// stmt->expression_value = 
 	(ast_literal_t*) interpreter_expression(stmt->expression, interpreter);
-	// printf("ret val:");
-	// interpreter_expression_data(stmt->expression_value);
-	// ast_expression_free(&(stmt->expression->data.expression));
-	// stmt->expression->data.expression = NULL;
-	// free(stmt->expression);
-	// stmt->expression = NULL;
 
 	return stmt;
 }
@@ -2502,10 +2478,6 @@ ast_statement_print_t* interpreter_statement_print(ast_statement_print_t* stmt, 
 	interpreter_expression_data(
 		(ast_literal_t*) interpreter_expression(stmt->expression, interpreter)
 	);
-	// ast_expression_free(&(stmt->expression->data.expression));
-	// stmt->expression->data.expression = NULL;
-	// free(stmt->expression);
-	// stmt->expression = NULL;
 
 	return stmt;
 }
@@ -2529,7 +2501,6 @@ ast_block_t* interpreter_block(ast_block_t* block, interpreter_t* interpreter, t
 		}
 
 		interpreter_interpret_once(stmt, interpreter, parent_type);
-		// print_xml_ast_node(node, 0);
 	}
 
 	// Scope exit

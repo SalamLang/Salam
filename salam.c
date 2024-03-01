@@ -329,23 +329,27 @@ SymbolTable* createSymbolTable(size_t capacity)
 	return table;
 }
 
-void pushSymbolTable()
+void pushSymbolTable(SymbolTableStack* ts)
 {
-	SymbolTable* table = createSymbolTable(3);
-	SymbolTableStack* newScope = (SymbolTableStack*) malloc(sizeof(SymbolTableStack));
-	newScope->table = table;
-	newScope->next = symbolTableStack;
-	symbolTableStack = newScope;
-}
-
-void popSymbolTable()
-{
-	if (symbolTableStack == NULL) {
+	if (ts == NULL) {
 		return;
 	}
 
-	SymbolTableStack* top = symbolTableStack;
-	symbolTableStack = top->next;
+    SymbolTable* table = createSymbolTable(16);  // Initial capacity, adjust as needed
+    SymbolTableStack* newScope = (SymbolTableStack*)malloc(sizeof(SymbolTableStack));
+    newScope->table = table;
+    newScope->next = ts;
+    ts = newScope;
+}
+
+void popSymbolTable(SymbolTableStack* ts)
+{
+	if (ts == NULL) {
+		return;
+	}
+
+	SymbolTableStack* top = ts;
+	ts = top->next;
 
 	SymbolTable* table = top->table;
 	for (size_t i = 0; i < table->capacity; ++i) {
@@ -366,10 +370,13 @@ void popSymbolTable()
 			entry = next;
 		}
 	}
+
 	free(table->entries);
 	table->entries = NULL;
+
 	free(table);
 	table = NULL;
+
 	free(top);
 	top = NULL;
 }
@@ -383,13 +390,13 @@ unsigned int hash(const char* str, size_t capacity)
 	return hash % capacity;
 }
 
-static SymbolTableEntry* findSymbolInParentScopes(SymbolTableStack* symbolTableStack, const char* identifier)
+static SymbolTableEntry* findSymbolInParentScopes(SymbolTableStack* ts, const char* identifier)
 {
-	if (symbolTableStack == NULL) {
+	if (ts == NULL) {
 		return NULL;
 	}
 
-	SymbolTable* table = symbolTableStack->table;
+	SymbolTable* table = ts->table;
 	unsigned int index = hash(identifier, table->capacity);
 
 	SymbolTableEntry* entry = table->entries[index];
@@ -400,23 +407,23 @@ static SymbolTableEntry* findSymbolInParentScopes(SymbolTableStack* symbolTableS
 		entry = entry->next;
 	}
 
-	return findSymbolInParentScopes(symbolTableStack->next, identifier);
+	return findSymbolInParentScopes(ts->next, identifier);
 }
 
-void addToSymbolTable(SymbolTableStack* symbolTableStack, const char* identifier, ast_literal_t* value)
+void addToSymbolTable(SymbolTableStack* ts, const char* identifier, ast_literal_t* value)
 {
-	if (symbolTableStack == NULL) {
+	if (ts == NULL) {
 		return;
 	}
 
-	SymbolTableEntry* existingEntry = findSymbolInParentScopes(symbolTableStack, identifier);
+	SymbolTableEntry* existingEntry = findSymbolInParentScopes(ts, identifier);
 
 	if (existingEntry != NULL) {
 		existingEntry->data = value;
 		return;
 	}
 
-	SymbolTable* table = symbolTableStack->table;
+	SymbolTable* table = ts->table;
 	unsigned int index = hash(identifier, table->capacity);
 
 	SymbolTableEntry* entry = (SymbolTableEntry*) malloc(sizeof(SymbolTableEntry));
@@ -2407,6 +2414,7 @@ interpreter_t* interpreter_create(parser_t** parser)
 {
 	interpreter_t* interpreter = (interpreter_t*) malloc(sizeof(interpreter_t));
 	interpreter->parser = parser;
+	interpreter->is_global_scope = true;
 	return interpreter;
 }
 
@@ -2506,7 +2514,6 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 	pushSymbolTable(symbolTableStack);
 
 	// Expressions
-	interpreter->is_global_scope = true;
 	if ((*interpreter->parser)->expressions != NULL) {
 		for (size_t i = 0; i < (*interpreter->parser)->expressions->length; i++) {
 			// printf("Interpreting global expression\n");
@@ -2817,7 +2824,6 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 		return NULL;
 	}
 
-
 	// Scope entry
 	pushSymbolTable(symbolTableStack);
 
@@ -3033,10 +3039,17 @@ void interpreter_free(interpreter_t** interpreter)
 	}
 
 	while (symbolTableStack != NULL) {
-		popSymbolTable();
+		popSymbolTable(symbolTableStack);
 	}
 	if (symbolTableStack != NULL) {
 		free(symbolTableStack);
+	}
+
+	while (symbolGlobalTableStack != NULL) {
+		popSymbolTable(symbolGlobalTableStack);
+	}
+	if (symbolGlobalTableStack != NULL) {
+		free(symbolGlobalTableStack);
 	}
 
 	if (*interpreter != NULL) {

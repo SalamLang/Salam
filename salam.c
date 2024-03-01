@@ -2666,13 +2666,10 @@ ast_literal_t* interpreter_literal(ast_expression_t* expr)
 
 ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* interpreter)
 {
-	printf("Variable: %s\n", expr->data.identifier->name);
-
-
+	// printf("Variable: %s\n", expr->data.identifier->name);
 
 	ast_literal_t* val = findInSymbolTable(symbolTableStack, expr->data.identifier->name, true);
 	if (val != NULL) {
-		// printf("Variable found: %s\n", expr->data.identifier->name);
 		return val;
 	} else {
 		printf("Error: Variable not found: %s\n", expr->data.identifier->name);
@@ -2726,9 +2723,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 			res->string_value = strdup("");
 		} else if (leftlen != 0 && rightlen != 0) {
 			size_t new_size = sizeof(char*) * (leftlen + rightlen + 1);
-
 			res->string_value = (char*) malloc(new_size);
-
 			strcpy(res->string_value, left->string_value);
 			strcat(res->string_value, right->string_value);
 		} else if (leftlen == 0) {
@@ -2938,10 +2933,8 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	ast_literal_t* variable;
 
 	if (interpreter->is_global_scope == true) {
-		printf("Adding variable into global scope\n");
 		variable = findInSymbolTableCurrent(symbolGlobalTableStack, identifier);
 	} else {
-		printf("Adding variable into local scope\n");
 		variable = findInSymbolTableCurrent(symbolTableStack, identifier);
 	}
 
@@ -2966,15 +2959,10 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 
 	if (isNew == true) {
 		if (interpreter->is_global_scope == true) {
-			printf("going to add into global\n");
 			addToSymbolTable(symbolGlobalTableStack, identifier, variable);
 		} else {
-			printf("going to add into local\n");
 			addToSymbolTable(symbolTableStack, identifier, variable);
 		}
-		// printf("Saving %s variable\n", identifier);
-	} else {
-		// printf("Update variable %s\n", identifier);
 	}
 
 	free(identifier);

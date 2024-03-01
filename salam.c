@@ -493,8 +493,8 @@ ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* int
 
 ast_node_t* interpreter_statement_print(ast_node_t* node, interpreter_t* interpreter);
 ast_node_t* interpreter_statement_return(ast_node_t* node, interpreter_t* interpreter);
-ast_node_t* interpreter_function_declaration(ast_node_t* node, interpreter_t* interpreter);
-ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type);
+ast_node_t* interpreter_function_declaration(ast_node_t* node, interpreter_t* interpreter, array_t* arguments);
+ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type, array_t* arguments);
 
 typedef ast_expression_t* (*nud_func_t)(parser_t* parser, token_t* token);
 typedef ast_expression_t* (*led_func_t)(parser_t* parser, token_t* token, ast_expression_t* left);
@@ -2412,14 +2412,8 @@ ast_node_t* interpreter_statement_until(ast_node_t* node, interpreter_t* interpr
 {
 	// printf("Until\n");
 
-	// if (interpreter_expression_truly(node->data.statement_until->condition, interpreter)) {
-	// 	printf("is true\n");
-	// } else {
-	// 	printf("is false\n");
-	// }
-
 	while (interpreter_expression_truly(node->data.statement_until->condition, interpreter) == true) {
-		ast_node_t* returned = interpreter_block(node->data.statement_until->block, interpreter, TOKEN_TYPE_UNTIL);
+		ast_node_t* returned = interpreter_block(node->data.statement_until->block, interpreter, TOKEN_TYPE_UNTIL, NULL);
 
 		if (returned != NULL) {
 			if (returned->type == AST_STATEMENT_RETURN) {
@@ -2440,17 +2434,17 @@ ast_node_t* interpreter_statement_if(ast_node_t* node, interpreter_t* interprete
 	// printf("If\n");
 
 	if (interpreter_expression_truly(node->data.statement_if->condition, interpreter)) {
-		return interpreter_block(node->data.statement_if->block, interpreter, TOKEN_TYPE_IF);
+		return interpreter_block(node->data.statement_if->block, interpreter, TOKEN_TYPE_IF, NULL);
 	} else {
 		for (size_t i = 0; i < node->data.statement_if->num_elseifs; i++) {
 			ast_node_t* elseif = (ast_node_t*) node->data.statement_if->elseifs[i];
 			if (interpreter_expression_truly(elseif->data.statement_if->condition, interpreter)) {
-				return interpreter_block(elseif->data.statement_if->block, interpreter, TOKEN_TYPE_ELSEIF);
+				return interpreter_block(elseif->data.statement_if->block, interpreter, TOKEN_TYPE_ELSEIF, NULL);
 			}
 		}
 
 		if (node->data.statement_if->else_block != NULL) {
-			return interpreter_block(node->data.statement_if->else_block, interpreter, TOKEN_TYPE_ELSEIF);
+			return interpreter_block(node->data.statement_if->else_block, interpreter, TOKEN_TYPE_ELSEIF, NULL);
 		}
 	}
 
@@ -2463,11 +2457,11 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 
 	switch (node->type) {
 		case AST_BLOCK:
-			return interpreter_block(node, interpreter, parent_type);
+			return interpreter_block(node, interpreter, parent_type, NULL);
 			break;
 
 		case AST_FUNCTION_DECLARATION:
-			return interpreter_function_declaration(node, interpreter);
+			return interpreter_function_declaration(node, interpreter, NULL);
 			break;
 
 		case AST_STATEMENT_RETURN:
@@ -2526,7 +2520,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 			ast_node_t* function = (ast_node_t*) (*interpreter->parser)->functions->data[i];
 
 			if (strcmp(function->data.function_declaration->name, "سلام") == 0) {
-				main_returned = interpreter_function_declaration(function, interpreter);
+				main_returned = interpreter_function_declaration(function, interpreter, NULL);
 			}
 		}
 	}
@@ -2545,11 +2539,11 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 	return interpreter;
 }
 
-ast_node_t* interpreter_function_declaration(ast_node_t* node, interpreter_t* interpreter)
+ast_node_t* interpreter_function_declaration(ast_node_t* node, interpreter_t* interpreter, array_t* arguments)
 {
 	// printf("Function Declaration: %s\n", stmt->name);
 	
-	return interpreter_block(node->data.function_declaration->body, interpreter, TOKEN_TYPE_FUNCTION);
+	return interpreter_block(node->data.function_declaration->body, interpreter, TOKEN_TYPE_FUNCTION, arguments);
 }
 
 void interpreter_expression_data(ast_literal_t* data)
@@ -2592,7 +2586,7 @@ ast_node_t* interpreter_statement_print(ast_node_t* node, interpreter_t* interpr
 	return node;
 }
 
-ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type)
+ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type, array_t* arguments)
 {
 	// printf("Block\n");
 
@@ -2823,7 +2817,7 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 		addToSymbolTable(symbolTableStack, arg_name, arg_value);
 	}
 
-	ast_node_t* returned = interpreter_function_declaration(function, interpreter);
+	ast_node_t* returned = interpreter_function_declaration(function, interpreter, arguments);
 	if (returned != NULL && returned->type == AST_STATEMENT_RETURN) {
 		return returned->data.statement_return->expression_value;
 	}

@@ -801,31 +801,44 @@ void read_number(lexer_t* lexer, wchar_t ch)
 
 void read_string(lexer_t* lexer, wchar_t ch)
 {
-	char* string = (char*) malloc(sizeof(char) * 1024); // 1023 + 1 for null terminator
-	int i = 0;
+    size_t allocated_size = 20;
+    char* string = (char*)malloc(sizeof(char) * allocated_size);
+    if (string == NULL) {
+        printf("Error: Memory allocation failed.\n");
+        exit(EXIT_FAILURE);
+    }
 
-	while (ch != L'"') {
-		if (i >= 1023) {
-			printf("Error: String length exceeds the maximum allowed length.\n");
-			exit(EXIT_FAILURE);
-		}
+    size_t i = 0;
 
-		int char_size = wctomb(&string[i], ch);
-		if (char_size < 0) {
-			printf("Error: Failed to convert wide character to multibyte\n");
-			exit(EXIT_FAILURE);
-		}
-		i += char_size;
+    while (ch != L'"') {
+        if (i >= allocated_size - 1) {
+            allocated_size *= 2;
+            char* temp = (char*)realloc(string, sizeof(char) * allocated_size);
+            if (temp == NULL) {
+                printf("Error: Memory reallocation failed.\n");
+                free(string);
+                exit(EXIT_FAILURE);
+            }
+            string = temp;
+        }
 
-		ch = read_token(lexer);
-	}
+        int char_size = wctomb(&string[i], ch);
+        if (char_size < 0) {
+            printf("Error: Failed to convert wide character to multibyte\n");
+            free(string);
+            exit(EXIT_FAILURE);
+        }
+        i += char_size;
 
-	string[i] = '\0';
+        ch = read_token(lexer);
+    }
 
-	token_t* t = token_create(TOKEN_TYPE_STRING, string, i, lexer->line, lexer->column - i, lexer->line, lexer->column);
-	array_push(lexer->tokens, t);
+    string[i] = '\0';
 
-	free(string);
+    token_t* t = token_create(TOKEN_TYPE_STRING, string, i, lexer->line, lexer->column - i, lexer->line, lexer->column);
+    array_push(lexer->tokens, t);
+
+    free(string);
 }
 
 size_t mb_strlen(char* identifier)
@@ -2479,7 +2492,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 	popSymbolTable(symbolTableStack);
 
 	printf("Main returned: ");
-	print_xml_ast_node(main_returned, 3);
+	// print_xml_ast_node(main_returned, 3);
 	if (main_returned->type == AST_STATEMENT_RETURN) {
 		interpreter_expression_data(main_returned->data.statement_return->expression_value);
 	}
@@ -2551,7 +2564,7 @@ ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, toke
 		}
 
 		stmt = interpreter_interpret_once(stmt, interpreter, parent_type);
-		if (stmt->type == AST_STATEMENT_RETURN || stmt->type == AST_STATEMENT_BREAK || stmt->type == AST_STATEMENT_CONTINUE) {
+		if (stmt != NULL && (stmt->type == AST_STATEMENT_RETURN || stmt->type == AST_STATEMENT_BREAK || stmt->type == AST_STATEMENT_CONTINUE)) {
 			return stmt;
 		}
 	}

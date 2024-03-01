@@ -214,6 +214,8 @@ typedef enum {
 	// Keywords
 	TOKEN_TYPE_FUNCTION, // عملکرد
 	TOKEN_TYPE_RETURN, // برگشت
+	TOKEN_TYPE_BREAK, // توقف
+	TOKEN_TYPE_CONTINUE, // ادامه
 	TOKEN_TYPE_PRINT, // نمایش
 	TOKEN_TYPE_IF, // اگر
 	TOKEN_TYPE_UNTIL, // تا
@@ -258,6 +260,8 @@ typedef struct {
 keyword_mapping_t keyword_mapping[] = {
 	{"عملکرد", TOKEN_TYPE_FUNCTION},
 	{"برگشت", TOKEN_TYPE_RETURN},
+	{"ادامه", TOKEN_TYPE_CONTINUE},
+	{"توقف", TOKEN_TYPE_BREAK},
 	{"نمایش", TOKEN_TYPE_PRINT},
 	{"واگرنه", TOKEN_TYPE_ELSEIF},
 	{"اگر", TOKEN_TYPE_IF},
@@ -454,7 +458,7 @@ ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* int
 ast_statement_print_t* interpreter_statement_print(ast_statement_print_t* stmt, interpreter_t* interpreter);
 ast_statement_return_t* interpreter_statement_return(ast_statement_return_t* stmt, interpreter_t* interpreter);
 ast_function_declaration_t* interpreter_function_declaration(ast_function_declaration_t* stmt, interpreter_t* interpreter);
-ast_block_t* interpreter_block(ast_block_t* block, interpreter_t* interpreter);
+ast_block_t* interpreter_block(ast_block_t* block, interpreter_t* interpreter, token_type_t parent_type);
 
 typedef ast_expression_t* (*nud_func_t)(parser_t* parser, token_t* token);
 typedef ast_expression_t* (*led_func_t)(parser_t* parser, token_t* token, ast_expression_t* left);
@@ -2340,6 +2344,8 @@ ast_node_t* interpreter_statement_if(ast_statement_if_t* node, interpreter_t* in
 
 		if (node->else_block != NULL) {
 			// return node->else_block;
+			interpreter_block(
+				***
 			return interpreter_interpret_once(node->else_block, interpreter);
 		}
 	}
@@ -2347,52 +2353,55 @@ ast_node_t* interpreter_statement_if(ast_statement_if_t* node, interpreter_t* in
 	return NULL;
 }
 
-ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpreter)
+ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type)
 {
 	// printf("Interpreter Interpret Once\n");
 
 	switch (node->type) {
 		case AST_BLOCK:
-			node->data.block = interpreter_block(node->data.block, interpreter);
+			interpreter_block(node->data.block, interpreter, parent_type);
 			return node;
 			break;
 
 		case AST_FUNCTION_DECLARATION:
-			node->data.function_declaration = interpreter_function_declaration(node->data.function_declaration, interpreter);
+			interpreter_function_declaration(node->data.function_declaration, interpreter);
 			return node;
 			break;
 
 		case AST_STATEMENT_RETURN:
-			node->data.statement_return = interpreter_statement_return(node->data.statement_return, interpreter);
+			ast_literal_t* ret = interpreter_statement_return(node->data.statement_return, interpreter);
+			if (ret != NULL) {
+				return ret;
+			}
 			return node;
 			break;
 		
 		case AST_STATEMENT_IF:
-			node = interpreter_statement_if(node->data.statement_if, interpreter);
+			interpreter_statement_if(node->data.statement_if, interpreter);
 			return node;
 			break;
 
 		case AST_STATEMENT_UNTIL:
-			node = interpreter_statement_until(node->data.statement_until, interpreter);
+			interpreter_statement_until(node->data.statement_until, interpreter);
 			return node;
 			break;
 
 		case AST_STATEMENT_PRINT:
-			node->data.statement_print = interpreter_statement_print(node->data.statement_print, interpreter);
-			interpreter_expression_data(node->data.statement_print->expression_value);
+			interpreter_statement_print(node->data.statement_print, interpreter);
+			// interpreter_expression_data(node->data.statement_print->expression_value);
 			return node;
 			break;
 
 		case AST_EXPRESSION:
-			ast_literal_t* val = interpreter_expression(node->data.expression, interpreter);
-			ast_expression_t* old_expr = node->data.expression;
-			node->data.expression = (ast_expression_t*) malloc(sizeof(ast_expression_t));
-			node->data.expression->type = AST_EXPRESSION_LITERAL;
-			node->data.expression->data.literal = val;
-			if (node->data.expression->data.literal == NULL) {
-				return NULL;
-			}
-			node->data.expression->data.literal->main = (struct ast_expression_t*) old_expr;
+			interpreter_expression(node->data.expression, interpreter);
+			// ast_expression_t* old_expr = node->data.expression;
+			// node->data.expression = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+			// node->data.expression->type = AST_EXPRESSION_LITERAL;
+			// node->data.expression->data.literal = val;
+			// if (node->data.expression->data.literal == NULL) {
+			// 	return NULL;
+			// }
+			// node->data.expression->data.literal->main = (struct ast_expression_t*) old_expr;
 
 			// print_xml_ast_node(node, 0);
 			// exit(EXIT_FAILURE);
@@ -2423,10 +2432,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 		for (size_t i = 0; i < (*interpreter->parser)->expressions->length; i++) {
 			printf("Interpreting global expression\n");
 			ast_node_t* expression = (ast_node_t*) (*interpreter->parser)->expressions->data[i];
-			ast_literal_t* val = interpreter_expression(expression->data.expression, interpreter);
-			expression->type = AST_EXPRESSION_LITERAL;
-			expression->data.expression->data.literal = val;
-			(*interpreter->parser)->expressions->data[i] = expression;
+			interpreter_expression(expression->data.expression, interpreter);
 		}
 	}
 
@@ -2434,15 +2440,9 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 	if ((*interpreter->parser)->functions != NULL) {
 		for (size_t i = 0; i < (*interpreter->parser)->functions->length; i++) {
 			ast_node_t* function = (ast_node_t*) (*interpreter->parser)->functions->data[i];
-			ast_function_declaration_t* val;
 
 			if (strcmp(function->data.function_declaration->name, "سلام") == 0) {
-				val = interpreter_function_declaration(function->data.function_declaration, interpreter);
-				function->type = AST_FUNCTION_DECLARATION;
-				function->data.function_declaration = val;
-				// print_xml_ast_node(function, 0);
-				// printf("sign - done - max\n");
-				// exit(EXIT_SUCCESS);
+				interpreter_function_declaration(function->data.function_declaration, interpreter);
 			}
 		}
 	}
@@ -2457,7 +2457,7 @@ ast_function_declaration_t* interpreter_function_declaration(ast_function_declar
 {
 	// printf("Function Declaration: %s\n", stmt->name);
 
-	stmt->body->data.block = interpreter_block(stmt->body->data.block, interpreter);
+	interpreter_block(stmt->body->data.block, interpreter, TOKEN_TYPE_FUNCTION);
 	// print_xml_ast_node(stmt->body, 0);
 	// printf("sign - done - max\n");
 	// exit(EXIT_SUCCESS);
@@ -2487,7 +2487,8 @@ ast_statement_return_t* interpreter_statement_return(ast_statement_return_t* stm
 {
 	// printf("Return Statement\n");
 
-	stmt->expression_value = (ast_literal_t*) interpreter_expression(stmt->expression, interpreter);
+	// stmt->expression_value = 
+	(ast_literal_t*) interpreter_expression(stmt->expression, interpreter);
 	// printf("ret val:");
 	// interpreter_expression_data(stmt->expression_value);
 	// ast_expression_free(&(stmt->expression->data.expression));
@@ -2502,7 +2503,9 @@ ast_statement_print_t* interpreter_statement_print(ast_statement_print_t* stmt, 
 {
 	// printf("Print Statement\n");
 
-	stmt->expression_value = (ast_literal_t*) interpreter_expression(stmt->expression, interpreter);
+	interpreter_expression_data(
+		(ast_literal_t*) interpreter_expression(stmt->expression, interpreter)
+	);
 	// ast_expression_free(&(stmt->expression->data.expression));
 	// stmt->expression->data.expression = NULL;
 	// free(stmt->expression);
@@ -2511,7 +2514,7 @@ ast_statement_print_t* interpreter_statement_print(ast_statement_print_t* stmt, 
 	return stmt;
 }
 
-ast_block_t* interpreter_block(ast_block_t* block, interpreter_t* interpreter)
+ast_block_t* interpreter_block(ast_block_t* block, interpreter_t* interpreter, token_type_t parent_type)
 {
 	// printf("Block\n");
 
@@ -2519,9 +2522,13 @@ ast_block_t* interpreter_block(ast_block_t* block, interpreter_t* interpreter)
 	pushSymbolTable(symbolTableStack);
 
 	for (size_t i = 0; i < block->num_statements; i++) {
-		ast_node_t* node = interpreter_interpret_once(block->statements[i], interpreter);
+		ast_node_t* stmt = block->statements[i];
+		if (stmt->type == AST_STATEMENT_RETURN) {
+
+		}
+		interpreter_interpret_once(stmt, interpreter);
 		// print_xml_ast_node(node, 0);
-		block->statements[i] = node;
+		// block->statements[i] = node;
 		// TODO: break on return statement
 	}
 
@@ -2940,9 +2947,9 @@ int main(int argc, char** argv)
 	printf("====================================\n");
 	printf("DONE\n");
 
-	print_xml_ast_tree(parser);
+	// print_xml_ast_tree(parser);
 
-	printf("====================================\n");
+	// printf("====================================\n");
 
 	// printf("start signing...\n");
 	// print_xml_ast_tree(parser);

@@ -406,6 +406,7 @@ static SymbolTableEntry* findSymbolInParentScopes(SymbolTableStack* ts, const ch
 		entry = entry->next;
 	}
 
+	if (ts->is_function_call == true) return NULL;
 	return findSymbolInParentScopes(ts->next, identifier);
 }
 
@@ -454,21 +455,8 @@ ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const ch
 	return NULL;
 }
 
-ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier, bool checkGlobal)
+ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier, bool wantsGlobal)
 {
-	if (checkGlobal == true) {
-		// printf("looking for global and that is not null\n");
-		// exit(EXIT_FAILURE);
-		ast_literal_t* globalVar = findInSymbolTable(symbolGlobalTableStack, identifier, false);
-		if (globalVar != NULL) {
-			return globalVar;
-		}
-	}
-
-	if (currentScope == NULL) {
-		return NULL;
-	}
-
 	while (currentScope != NULL) {
 		printf("looking for %s on a scope %d\n", identifier, currentScope->is_function_call ? 1 : 0);
 		ast_literal_t* data = findInSymbolTableCurrent(currentScope, identifier);
@@ -476,10 +464,16 @@ ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* ide
 			return data;
 		}
 
-		if (currentScope->is_function_call == true) break;
+		if (currentScope->is_function_call == true) {
+			printf("this scope is call enabled, so break loop (%d)!\n", wantsGlobal ? 1 : 0);
+			break;
+		}
 		currentScope = currentScope->next;
 	}
 
+	if (wantsGlobal == true) {
+		return findInSymbolTable(symbolGlobalTableStack, identifier, false);
+	}
 	return NULL;
 }
 
@@ -2933,7 +2927,7 @@ bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpr
 
 ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpreter_t* interpreter)
 {
-	// printf("Assignment\n");
+	printf("Assignment\n");
 
 	if (expr->data.assignment->left->type != AST_EXPRESSION_IDENTIFIER) {
 		printf("Error: Assignment to non-variable\n");
@@ -2943,6 +2937,9 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 
 	bool isNew = false;
 	char* identifier = strdup(expr->data.assignment->left->data.identifier->name);
+
+	printf("============> assign %s variable\n", identifier);
+
 	ast_literal_t* right = interpreter_expression(expr->data.assignment->right, interpreter);
 	ast_literal_t* variable;
 
@@ -2953,8 +2950,11 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	}
 
 	if (variable == NULL) {
+		printf("this is a new variable on this scope!\n");
 		isNew = true;
 		variable = (ast_literal_t*) malloc(sizeof(ast_literal_t));
+	} else {
+		printf("this is not a new variable on current scope!\n");
 	}
 
 	variable->main = (struct ast_expression_t*) expr;

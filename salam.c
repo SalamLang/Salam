@@ -2773,14 +2773,12 @@ ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* int
 		val = findInSymbolTable(symbolTableStack, expr->data.identifier->name, true);
 	}
 
-	if (val != NULL) {
-		return val;
-	} else {
+	if (val == NULL) {
 		printf("Error: Variable not found: %s\n", expr->data.identifier->name);
 		exit(EXIT_FAILURE);
+		return NULL;
 	}
-
-	return NULL;
+	return val;
 }
 
 ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter_t* interpreter)

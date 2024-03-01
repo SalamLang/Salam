@@ -19,7 +19,7 @@ char* intToString(int value)
         numDigits++;
     }
 
-    char* result = (char*)malloc(numDigits + 1 + (sign == -1 ? 1 : 0));
+    char* result = (char*) malloc(numDigits + 1 + (sign == -1 ? 1 : 0));
     if (result != NULL) {
         if (sign == -1) {
             result[0] = '-';
@@ -92,6 +92,7 @@ typedef struct {
 
 typedef struct SymbolTableStack {
 	SymbolTable* table;
+	bool is_function_call;
 	struct SymbolTableStack* next;
 } SymbolTableStack;
 
@@ -338,11 +339,13 @@ SymbolTable* createSymbolTable(size_t capacity)
 	return table;
 }
 
-void pushSymbolTable(SymbolTableStack** ts)
+void pushSymbolTable(SymbolTableStack** ts, bool is_function_call)
 {
+	printf("create scope with %d state\n", is_function_call ? 1 : 0);
     SymbolTable* table = createSymbolTable(16);
-    SymbolTableStack* newScope = (SymbolTableStack*)malloc(sizeof(SymbolTableStack));
+    SymbolTableStack* newScope = (SymbolTableStack*) malloc(sizeof(SymbolTableStack));
     newScope->table = table;
+	newScope->is_function_call = is_function_call;
     newScope->next = *ts;
     *ts = newScope;
 }
@@ -467,11 +470,13 @@ ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* ide
 	}
 
 	while (currentScope != NULL) {
+		printf("looking for %s on a scope %d\n", identifier, currentScope->is_function_call ? 1 : 0);
 		ast_literal_t* data = findInSymbolTableCurrent(currentScope, identifier);
 		if (data != NULL) {
 			return data;
 		}
 
+		if (currentScope->is_function_call == true) break;
 		currentScope = currentScope->next;
 	}
 
@@ -856,7 +861,7 @@ void read_number(lexer_t* lexer, wchar_t ch)
 void read_string(lexer_t* lexer, wchar_t ch)
 {
     size_t allocated_size = 20;
-    char* string = (char*)malloc(sizeof(char) * allocated_size);
+    char* string = (char*) malloc(sizeof(char) * allocated_size);
     if (string == NULL) {
         printf("Error: Memory allocation failed.\n");
         exit(EXIT_FAILURE);
@@ -2005,11 +2010,11 @@ ast_node_t* parser_block(parser_t* parser)
 
 	size_t allocated_size = 5;
 
-	ast_node_t* block_node = (ast_node_t*)malloc(sizeof(ast_node_t));
+	ast_node_t* block_node = (ast_node_t*) malloc(sizeof(ast_node_t));
 	block_node->type = AST_BLOCK;
-	block_node->data.block = (ast_block_t*)malloc(sizeof(ast_block_t));
+	block_node->data.block = (ast_block_t*) malloc(sizeof(ast_block_t));
 	block_node->data.block->num_statements = 0;
-	block_node->data.block->statements = (ast_node_t**)malloc(sizeof(ast_node_t*) * (allocated_size + 1));
+	block_node->data.block->statements = (ast_node_t**) malloc(sizeof(ast_node_t*) * (allocated_size + 1));
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_SECTION_OPEN);
 
@@ -2524,8 +2529,8 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 	}
 
 	// Scope entry
-	pushSymbolTable(&symbolGlobalTableStack);
-	pushSymbolTable(&symbolTableStack);
+	pushSymbolTable(&symbolGlobalTableStack, false);
+	pushSymbolTable(&symbolTableStack, false);
 
 	// Expressions
 	interpreter->is_global_scope = true;
@@ -2621,7 +2626,8 @@ ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, toke
 
 	// Scope entry
 	if (interpreter->is_global_scope == false) {
-		pushSymbolTable(&symbolTableStack);
+		pushSymbolTable(&symbolTableStack, false);
+		// pushSymbolTable(&symbolTableStack, parent_type == TOKEN_TYPE_FUNCTION ? true : false);
 	}
 
 	for (size_t i = 0; i < node->data.block->num_statements; i++) {
@@ -2666,7 +2672,7 @@ ast_literal_t* interpreter_literal(ast_expression_t* expr)
 
 ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* interpreter)
 {
-	// printf("Variable: %s\n", expr->data.identifier->name);
+	printf("Variable: %s (%d)\n", expr->data.identifier->name, interpreter->is_global_scope ? 1 : 0);
 
 	ast_literal_t* val;
 
@@ -2846,7 +2852,8 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 	}
 
 	// Scope entry
-	pushSymbolTable(&symbolTableStack);
+	printf("create a scope with function_call enabled\n");
+	pushSymbolTable(&symbolTableStack, true);
 
 	for (size_t i = 0; i < arguments_count; i++) {
 		char* arg_name = function->data.function_declaration->arguments->data[i];
@@ -2862,6 +2869,7 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 	
 	// Scope exit
 	popSymbolTable(&symbolTableStack);
+	printf("delete a scope with function_call enabled\n");
 
 	return NULL;
 }
@@ -2890,7 +2898,6 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		exit(EXIT_FAILURE);
 		return NULL;
 	}
-
 
 	ast_literal_t* ret = interpreter_function_run(func_exists, node->data.function_call->arguments, interpreter);
 	if (ret == NULL) {

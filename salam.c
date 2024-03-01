@@ -835,8 +835,26 @@ bool is_number(wchar_t ch)
 bool is_alpha(wchar_t ch)
 {
 	return (
-		ch >= L'آ' && ch <= L'ی' || ch == L'_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
-	) && !(ch == '+' || ch == '-' || ch == '*' || ch == '/' || ch == '=' || ch == '>' || ch == '<' || ch == ','	);
+		(ch >= L'آ' && ch <= L'ی') ||
+		ch == L'_' ||
+		(ch >= 'a' && ch <= 'z') ||
+		(ch >= 'A' && ch <= 'Z')
+	)
+	&&
+	!(
+		ch == '+' ||
+		ch == '-' ||
+		ch == '*' ||
+		ch == '/' ||
+		ch == '=' ||
+		ch == '>' ||
+		ch == '<' ||
+		ch == ',' ||
+		ch == '(' ||
+		ch == ')' ||
+		ch == '{' ||
+		ch == '}'
+	);
 }
 
 bool is_ident(wchar_t ch)
@@ -1140,6 +1158,7 @@ void lexer_lex(lexer_t* lexer)
 
 			token_t* t = token_create(TOKEN_TYPE_ERROR, (char[]){current_char,'\0'}, 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
+			lexer->index++;
 		}
 	}
 

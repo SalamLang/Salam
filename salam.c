@@ -340,10 +340,6 @@ SymbolTable* createSymbolTable(size_t capacity)
 
 void pushSymbolTable(SymbolTableStack** ts)
 {
-	if (ts == NULL || *ts == NULL) {
-		return;
-	}
-
     SymbolTable* table = createSymbolTable(16);
     SymbolTableStack* newScope = (SymbolTableStack*)malloc(sizeof(SymbolTableStack));
     newScope->table = table;
@@ -457,9 +453,9 @@ ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const ch
 
 ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier, bool checkGlobal)
 {
-	if (checkGlobal == true && symbolGlobalTableStack != NULL) {
-		printf("looking for global and that is not null\n");
-		exit(EXIT_FAILURE);
+	if (checkGlobal == true) {
+		// printf("looking for global and that is not null\n");
+		// exit(EXIT_FAILURE);
 		ast_literal_t* globalVar = findInSymbolTable(symbolGlobalTableStack, identifier, false);
 		if (globalVar != NULL) {
 			return globalVar;
@@ -2532,6 +2528,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 	pushSymbolTable(&symbolTableStack);
 
 	// Expressions
+	interpreter->is_global_scope = true;
 	if ((*interpreter->parser)->expressions != NULL) {
 		for (size_t i = 0; i < (*interpreter->parser)->expressions->length; i++) {
 			// printf("Interpreting global expression\n");
@@ -2623,7 +2620,9 @@ ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, toke
 	ast_node_t* returned = NULL;
 
 	// Scope entry
-	pushSymbolTable(&symbolTableStack);
+	if (interpreter->is_global_scope == false) {
+		pushSymbolTable(&symbolTableStack);
+	}
 
 	for (size_t i = 0; i < node->data.block->num_statements; i++) {
 		ast_node_t* stmt = node->data.block->statements[i];
@@ -2649,7 +2648,9 @@ ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, toke
 	}
 
 	// Scope exit
-	popSymbolTable(&symbolTableStack);
+	if (interpreter->is_global_scope == false) {
+		popSymbolTable(&symbolTableStack);
+	}
 
 	return returned;
 }
@@ -2665,7 +2666,9 @@ ast_literal_t* interpreter_literal(ast_expression_t* expr)
 
 ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* interpreter)
 {
-	// printf("Variable: %s\n", expr->data.identifier->name);
+	printf("Variable: %s\n", expr->data.identifier->name);
+
+
 
 	ast_literal_t* val = findInSymbolTable(symbolTableStack, expr->data.identifier->name, true);
 	if (val != NULL) {
@@ -2935,8 +2938,10 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	ast_literal_t* variable;
 
 	if (interpreter->is_global_scope == true) {
+		printf("Adding variable into global scope\n");
 		variable = findInSymbolTableCurrent(symbolGlobalTableStack, identifier);
 	} else {
+		printf("Adding variable into local scope\n");
 		variable = findInSymbolTableCurrent(symbolTableStack, identifier);
 	}
 
@@ -2961,8 +2966,10 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 
 	if (isNew == true) {
 		if (interpreter->is_global_scope == true) {
+			printf("going to add into global\n");
 			addToSymbolTable(symbolGlobalTableStack, identifier, variable);
 		} else {
+			printf("going to add into local\n");
 			addToSymbolTable(symbolTableStack, identifier, variable);
 		}
 		// printf("Saving %s variable\n", identifier);
@@ -2993,13 +3000,14 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 	}
 
 	ast_literal_t* lit = NULL;
-	bool is_global_scope = interpreter->is_global_scope;
+	// bool is_global_scope = interpreter->is_global_scope;
+	// printf("global scope is %d\n", is_global_scope ? 1 : 0);
 
-	if (is_global_scope == true && (expr->type != AST_EXPRESSION_FUNCTION_CALL && expr->type != AST_EXPRESSION_ASSIGNMENT)) {
-		printf("Error: it's not possible to have other type of expressions in global scope!\n");
-		exit(EXIT_FAILURE);
-		return NULL;
-	}
+	// if (is_global_scope == true && (expr->type != AST_EXPRESSION_FUNCTION_CALL && expr->type != AST_EXPRESSION_ASSIGNMENT)) {
+	// 	printf("Error: it's not possible to have other type of expressions in global scope!\n");
+	// 	exit(EXIT_FAILURE);
+	// 	return NULL;
+	// }
 
 	switch (expr->type) {
 		case AST_EXPRESSION_LITERAL:
@@ -3024,18 +3032,18 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 			break;
 
 		case AST_EXPRESSION_FUNCTION_CALL:
-			if (is_global_scope == true) interpreter->is_global_scope = false;
+			// if (is_global_scope == true) interpreter->is_global_scope = false;
 			lit = interpreter_function_call(expr, interpreter);
-			if (is_global_scope == true) interpreter->is_global_scope = true;
+			// if (is_global_scope == true) interpreter->is_global_scope = true;
 			// if (lit != NULL) {
 			// 	lit->main = (struct ast_expression_t*) expr;
 			// }
 			break;
 
 		case AST_EXPRESSION_ASSIGNMENT:
-			if (is_global_scope == true) interpreter->is_global_scope = false;
+			// if (is_global_scope == true) interpreter->is_global_scope = false;
 			lit = interpreter_expression_assignment(expr, interpreter);
-			if (is_global_scope == true) interpreter->is_global_scope = true;
+			// if (is_global_scope == true) interpreter->is_global_scope = true;
 			// ast_expression_free(&(expr));
 			// expr = NULL;
 			// if (lit != NULL) {

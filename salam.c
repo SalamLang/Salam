@@ -8,10 +8,31 @@
 
 struct ast_expression;
 
+char* intToString(int value)
+{
+    int sign = (value < 0) ? -1 : 1;
 
-char* intToString(int value) {
-    char* result = (char*)malloc(20);
-    snprintf(result, 20, "%d", value);
+    int temp = value;
+    int numDigits = (value == 0) ? 1 : 0;
+    while (temp != 0) {
+        temp /= 10;
+        numDigits++;
+    }
+
+    char* result = (char*)malloc(numDigits + 1 + (sign == -1 ? 1 : 0));
+    if (result != NULL) {
+        if (sign == -1) {
+            result[0] = '-';
+        }
+
+        for (int i = numDigits - 1 + (sign == -1 ? 1 : 0); i >= (sign == -1 ? 1 : 0); i--) {
+            result[i] = '0' + abs(value % 10);
+            value /= 10;
+        }
+
+        result[numDigits + (sign == -1 ? 1 : 0)] = '\0';
+    }
+
     return result;
 }
 

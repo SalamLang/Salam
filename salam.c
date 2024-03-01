@@ -96,6 +96,7 @@ typedef struct SymbolTableStack {
 } SymbolTableStack;
 
 SymbolTableStack* symbolTableStack = NULL;
+SymbolTableStack* symbolGlobalTableStack = NULL;
 
 typedef enum {
 	// Values
@@ -316,6 +317,7 @@ typedef struct {
 typedef struct {
 	int return_code;
 	parser_t** parser;
+	bool is_global_scope;
 } interpreter_t;
 
 SymbolTable* createSymbolTable(size_t capacity)
@@ -2504,6 +2506,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 	pushSymbolTable(symbolTableStack);
 
 	// Expressions
+	interpreter->is_global_scope = true;
 	if ((*interpreter->parser)->expressions != NULL) {
 		for (size_t i = 0; i < (*interpreter->parser)->expressions->length; i++) {
 			// printf("Interpreting global expression\n");
@@ -2511,6 +2514,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 			interpreter_expression(expression->data.expression, interpreter);
 		}
 	}
+	interpreter->is_global_scope = false;
 
 	ast_node_t* main_returned = NULL;
 
@@ -2906,7 +2910,13 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	bool isNew = false;
 	char* identifier = strdup(expr->data.assignment->left->data.identifier->name);
 	ast_literal_t* right = interpreter_expression(expr->data.assignment->right, interpreter);
-	ast_literal_t* variable = findInSymbolTableCurrent(symbolTableStack, identifier);
+	ast_literal_t* variable;
+
+	if (interpreter->is_global_scope == true) {
+		variable = findInSymbolTableCurrent(symbolGlobalTableStack, identifier);
+	} else {
+		variable = findInSymbolTableCurrent(symbolTableStack, identifier);
+	}
 
 	if (variable == NULL) {
 		isNew = true;
@@ -2928,12 +2938,15 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	}
 
 	if (isNew == true) {
-		addToSymbolTable(symbolTableStack, identifier, variable);
+		if (interpreter->is_global_scope == true) {
+			addToSymbolTable(symbolGlobalTableStack, identifier, variable);
+		} else {
+			addToSymbolTable(symbolTableStack, identifier, variable);
+		}
 		// printf("Saving %s variable\n", identifier);
 	} else {
 		// printf("Update variable %s\n", identifier);
 	}
-	
 	free(identifier);
 	identifier = NULL;
 
@@ -2957,6 +2970,12 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 	}
 
 	ast_literal_t* lit = NULL;
+
+	if (interpreter->is_global_scope == true && (expr->type != AST_EXPRESSION_FUNCTION_CALL && AST_EXPRESSION_ASSIGNMENT)) {
+		printf("Error: it's not possible to have other type of expressions in global scope!\n");
+		exit(EXIT_FAILURE);
+		return NULL;
+	}
 
 	switch (expr->type) {
 		case AST_EXPRESSION_LITERAL:

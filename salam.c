@@ -2810,13 +2810,6 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 		return NULL;
 	}
 
-	for (size_t i = 0; i < arguments_count; i++) {
-		char* arg_name = function->data.function_declaration->arguments->data[i];
-		ast_literal_t* arg_value = interpreter_expression((ast_expression_t*) arguments->data[i], interpreter);
-		
-		addToSymbolTable(symbolTableStack, arg_name, arg_value);
-	}
-
 	ast_node_t* returned = interpreter_function_declaration(function, interpreter, arguments);
 	if (returned != NULL && returned->type == AST_STATEMENT_RETURN) {
 		return returned->data.statement_return->expression_value;
@@ -2849,9 +2842,6 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		exit(EXIT_FAILURE);
 		return NULL;
 	}
-
-	// Scope entry
-	pushSymbolTable(symbolTableStack);
 
 	ast_literal_t* ret = interpreter_function_run(func_exists, node->data.function_call->arguments, interpreter);
 	if (ret == NULL) {

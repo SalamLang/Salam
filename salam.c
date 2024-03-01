@@ -338,27 +338,27 @@ SymbolTable* createSymbolTable(size_t capacity)
 	return table;
 }
 
-void pushSymbolTable(SymbolTableStack* ts)
+void pushSymbolTable(SymbolTableStack** ts)
 {
-	if (ts == NULL) {
+	if (ts == NULL || *ts == NULL) {
 		return;
 	}
 
     SymbolTable* table = createSymbolTable(16);
     SymbolTableStack* newScope = (SymbolTableStack*)malloc(sizeof(SymbolTableStack));
     newScope->table = table;
-    newScope->next = ts;
-    ts = newScope;
+    newScope->next = *ts;
+    *ts = newScope;
 }
 
-void popSymbolTable(SymbolTableStack* ts)
+void popSymbolTable(SymbolTableStack** ts)
 {
-	if (ts == NULL) {
+	if (ts == NULL || *ts == NULL) {
 		return;
 	}
 
-	SymbolTableStack* top = ts;
-	ts = top->next;
+	SymbolTableStack* top =* ts;
+	*ts = top->next;
 
 	SymbolTable* table = top->table;
 	for (size_t i = 0; i < table->capacity; ++i) {
@@ -458,6 +458,8 @@ ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const ch
 ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier, bool checkGlobal)
 {
 	if (checkGlobal == true && symbolGlobalTableStack != NULL) {
+		printf("looking for global and that is not null\n");
+		exit(EXIT_FAILURE);
 		ast_literal_t* globalVar = findInSymbolTable(symbolGlobalTableStack, identifier, false);
 		if (globalVar != NULL) {
 			return globalVar;
@@ -2526,7 +2528,8 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 	}
 
 	// Scope entry
-	pushSymbolTable(symbolTableStack);
+	pushSymbolTable(&symbolGlobalTableStack);
+	pushSymbolTable(&symbolTableStack);
 
 	// Expressions
 	if ((*interpreter->parser)->expressions != NULL) {
@@ -2551,11 +2554,9 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 		}
 	}
 
-	// Calling main function
-	
-
 	// Scope exit
-	popSymbolTable(symbolTableStack);
+	popSymbolTable(&symbolGlobalTableStack);
+	popSymbolTable(&symbolTableStack);
 
 	// print_xml_ast_node(main_returned, 3);
 	if (main_returned != NULL && main_returned->type == AST_STATEMENT_RETURN) {
@@ -2622,7 +2623,7 @@ ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, toke
 	ast_node_t* returned = NULL;
 
 	// Scope entry
-	pushSymbolTable(symbolTableStack);
+	pushSymbolTable(&symbolTableStack);
 
 	for (size_t i = 0; i < node->data.block->num_statements; i++) {
 		ast_node_t* stmt = node->data.block->statements[i];
@@ -2648,7 +2649,7 @@ ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, toke
 	}
 
 	// Scope exit
-	popSymbolTable(symbolTableStack);
+	popSymbolTable(&symbolTableStack);
 
 	return returned;
 }
@@ -2840,7 +2841,7 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 	}
 
 	// Scope entry
-	pushSymbolTable(symbolTableStack);
+	pushSymbolTable(&symbolTableStack);
 
 	for (size_t i = 0; i < arguments_count; i++) {
 		char* arg_name = function->data.function_declaration->arguments->data[i];
@@ -2855,7 +2856,7 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 	}
 	
 	// Scope exit
-	popSymbolTable(symbolTableStack);
+	popSymbolTable(&symbolTableStack);
 
 	return NULL;
 }
@@ -2968,6 +2969,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	} else {
 		// printf("Update variable %s\n", identifier);
 	}
+
 	free(identifier);
 	identifier = NULL;
 
@@ -3059,14 +3061,14 @@ void interpreter_free(interpreter_t** interpreter)
 	}
 
 	while (symbolTableStack != NULL) {
-		popSymbolTable(symbolTableStack);
+		popSymbolTable(&symbolTableStack);
 	}
 	if (symbolTableStack != NULL) {
 		free(symbolTableStack);
 	}
 
 	while (symbolGlobalTableStack != NULL) {
-		popSymbolTable(symbolGlobalTableStack);
+		popSymbolTable(&symbolGlobalTableStack);
 	}
 	if (symbolGlobalTableStack != NULL) {
 		free(symbolGlobalTableStack);

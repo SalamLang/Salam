@@ -950,7 +950,7 @@ size_t mb_strlen(char* identifier)
 {
 	size_t wcs_len = mbstowcs(NULL, identifier, 0);
 	if (wcs_len == (size_t)-1) {
-		perror("Error in mbstowcs - count length");
+		perror("Error: in mbstowcs - count length");
 		exit(EXIT_FAILURE);
 	}
 
@@ -993,7 +993,7 @@ size_t wchar_length(wchar_t wide_char)
 {
 	char mb_char[MB_LEN_MAX];
 	if (wcrtomb(mb_char, wide_char, NULL) == (size_t)-1) {
-		perror("Error in wcrtomb");
+		perror("Error: in wcrtomb");
 		return 0;
 	}
 
@@ -1409,13 +1409,13 @@ void ast_node_free(ast_node_t** node)
 		case AST_FUNCTION_DECLARATION:
 			printf("free ast function\n");
 			if ((*node)->data.function_declaration != NULL) {
-				// printf("free function name\n");
+				printf("free function name\n");
 				if ((*node)->data.function_declaration->name != NULL) {
 					free((*node)->data.function_declaration->name);
 					(*node)->data.function_declaration->name = NULL;
 				}
 				
-				// printf("free function body\n");
+				printf("free function body\n");
 				if ((*node)->data.function_declaration->body != NULL) {
 					ast_node_free(&((*node)->data.function_declaration->body));
 					(*node)->data.function_declaration->body = NULL;
@@ -1429,12 +1429,14 @@ void ast_node_free(ast_node_t** node)
 		case AST_STATEMENT_RETURN:
 			printf("free ast return\n");
 			if ((*node)->data.statement_return != NULL) {
+				printf("free return expr\n");
 				if ((*node)->data.statement_return->expression != NULL) {
 					ast_expression_free(&((*node)->data.statement_return->expression));
 					(*node)->data.statement_return->expression = NULL;
 				}
 
 				// TODO: MEMORY LEAKS
+				printf("free return expr value\n");
 				if ((*node)->data.statement_return->expression_value != NULL) {
 					printf("check expr value of return\n");
 					ast_expression_free_data(&((*node)->data.statement_return->expression_value));
@@ -1449,12 +1451,14 @@ void ast_node_free(ast_node_t** node)
 		case AST_STATEMENT_PRINT:
 			printf("free ast print\n");
 			if ((*node)->data.statement_print != NULL) {
+				printf("free print expr\n");
 				if ((*node)->data.statement_print->expression != NULL) {
 					ast_expression_free(&((*node)->data.statement_print->expression));
 					(*node)->data.statement_print->expression = NULL;
 				}
 
 				// TODO: MEMORY LEAKS
+				printf("free print expr value\n");
 				if ((*node)->data.statement_print->expression_value != NULL) {
 					printf("check expr value of print\n");
 					ast_expression_free_data(&((*node)->data.statement_print->expression_value));
@@ -1790,7 +1794,7 @@ ast_node_t* parser_statement_if(parser_t* parser)
 				);
 
 				if (node->data.statement_if->elseifs == NULL) {
-					fprintf(stderr, "Error in parsing block: Memory reallocation failed.\n");
+					fprintf(stderr, "Error: in parsing block: Memory reallocation failed.\n");
 					exit(EXIT_FAILURE);
 					break;
 				}
@@ -2114,7 +2118,7 @@ ast_node_t* parser_block(parser_t* parser)
 			);
 
 			if (block_node->data.block->statements == NULL) {
-				fprintf(stderr, "Error in parsing block: Memory reallocation failed.\n");
+				fprintf(stderr, "Error: in parsing block: Memory reallocation failed.\n");
 				exit(EXIT_FAILURE);
 			}
 		}

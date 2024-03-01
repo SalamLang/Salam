@@ -296,57 +296,106 @@ enum {
 };
 
 // Function dec
-bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter);
-
-interpreter_t* interpreter_interpret(interpreter_t* interpreter);
-ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type);
-
-void interpreter_expression_data(ast_literal_t* data);
-
-void ast_expression_free_data(ast_literal_t** val);
-
+char* intToString(int value);
+char* literal_type2name(ast_literal_type_t type);
+unsigned int hash(const char* str, size_t capacity);
+SymbolTable* createSymbolTable(size_t capacity);
+void pushSymbolTable(SymbolTableStack** ts, bool is_function_call);
+void popSymbolTable(SymbolTableStack** ts);
+static SymbolTableEntry* findSymbolInParentScopes(SymbolTableStack* ts, const char* identifier);
+void addToSymbolTable(SymbolTableStack* ts, const char* identifier, ast_literal_t* value);
+ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const char* identifier);
+ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier, bool wantsGlobal);
+char* token_op_type2str(ast_expression_type_t type);
+char* token_type2str(token_type_t type);
+char* file_read(char* file_Name);
+token_t* token_create(token_type_t type, const char* value, int a, int b, int c, int b2, int c2);
+array_t* array_create(size_t size);
+void* array_pop(array_t* arr);
+void array_push(array_t* arr, void* data);
+void array_free(array_t* arr);
+void token_print(token_t* t);
+void array_print(array_t* arr);
+lexer_t* lexer_create(const char* data);
+void lexer_free(lexer_t** lexer);
+bool is_number(wchar_t ch);
+bool is_alpha(wchar_t ch);
+bool is_ident(wchar_t ch);
 wchar_t read_token(lexer_t* lexer);
+wchar_t unread_token(lexer_t* lexer);
 void read_number(lexer_t* lexer, wchar_t ch);
+void read_string(lexer_t* lexer, wchar_t ch);
 size_t mb_strlen(char* identifier);
 void read_identifier(lexer_t* lexer, wchar_t ch);
 size_t wchar_length(wchar_t wide_char);
-
-lexer_t* lexer_create(const char* data);
-void lexer_free(lexer_t** lexer);
 void lexer_lex(lexer_t* lexer);
-
+void help();
 parser_t* parser_create(lexer_t** lexer);
+void debug_current_token(parser_t* parser);
+void ast_expression_free(ast_expression_t** expr);;
+void ast_expression_free_data(ast_literal_t** val);
+void ast_expression_free_literal(ast_expression_t** expr);
+void ast_expression_free_identifier(ast_expression_t** expr);
+void ast_expression_free_functioncall(ast_expression_t** expr);
+void ast_expression_free_assignment(ast_expression_t** expr);
+void ast_expression_free_binary(ast_expression_t** expr);
+void ast_expression_free(ast_expression_t** expr);
+void ast_node_free(ast_node_t** node);
 void parser_free(parser_t** parser);
-void parser_parse(parser_t* parser);
+void parser_token_next(parser_t* parser);
+token_t* parser_token_skip(parser_t* parser, token_type_t type);
+bool parser_token_ifhas(parser_t* parser, token_type_t type);
+bool parser_token_skip_ifhas(parser_t* parser, token_type_t type);
+void parser_token_eat_nodata(parser_t* parser, token_type_t type);
+token_t* parser_token_eat(parser_t* parser, token_type_t type);
 ast_node_t* parser_function(parser_t* parser);
-ast_node_t* parser_block(parser_t* parser);
-ast_node_t* parser_statement(parser_t* parser);
-ast_node_t* parser_statement_return(parser_t* parser);
 ast_node_t* parser_statement_print(parser_t* parser);
+ast_node_t* parser_statement_return(parser_t* parser);
+ast_node_t* parser_statement_break(parser_t* parser);
+ast_node_t* parser_statement_continue(parser_t* parser);
+bool parser_expression_has(parser_t* parser);
+ast_node_t* parser_statement_if(parser_t* parser);
+ast_node_t* parser_statement_until(parser_t* parser);
+ast_node_t* parser_statement(parser_t* parser);
 ast_expression_t* parser_expression(parser_t* parser);
-
-ast_node_t* interpreter_statement_expression(ast_node_t* expr, interpreter_t* interpreter);
-ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* interpreter);
-ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter_t* interpreter);
-ast_literal_t* interpreter_literal(ast_expression_t* expr);
-ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* interpreter);
-
-ast_node_t* interpreter_statement_print(ast_node_t* node, interpreter_t* interpreter);
-ast_node_t* interpreter_statement_return(ast_node_t* node, interpreter_t* interpreter);
-ast_node_t* interpreter_function_declaration(ast_node_t* node, interpreter_t* interpreter, array_t* arguments);
-ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type, array_t* arguments);
-
+ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence);
+ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* left);
+ast_expression_t* led_equal_equal(parser_t* parser, token_t* token, ast_expression_t* left);
+ast_expression_t* led_and(parser_t* parser, token_t* token, ast_expression_t* left);
+ast_expression_t* led_or(parser_t* parser, token_t* token, ast_expression_t* left);
+ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expression_t* left);
 ast_expression_t* nud_bool(parser_t* parser, token_t* token);
 ast_expression_t* nud_number(parser_t* parser, token_t* token);
 ast_expression_t* nud_string(parser_t* parser, token_t* token);
 ast_expression_t* nud_identifier(parser_t* parser, token_t* token);
 ast_expression_t* nud_parentheses(parser_t* parser, token_t* token);
-ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expression_t* left);
-ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* left);
-ast_expression_t* led_equal_equal(parser_t* parser, token_t* token, ast_expression_t* left);
-ast_expression_t* led_and(parser_t* parser, token_t* token, ast_expression_t* left);
-ast_expression_t* led_or(parser_t* parser, token_t* token, ast_expression_t* left);
-ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence);
+ast_node_t* parser_block(parser_t* parser);
+void parser_parse(parser_t* parser);
+void print_indentation(int indent_level);
+void print_xml_ast_expression(ast_expression_t* expr, int indent_level);
+void print_xml_ast_node(ast_node_t* node, int indent_level);
+void print_xml_ast_tree(parser_t* parser);
+interpreter_t* interpreter_create(parser_t** parser);
+ast_node_t* interpreter_statement_until(ast_node_t* node, interpreter_t* interpreter);
+ast_node_t* interpreter_statement_if(ast_node_t* node, interpreter_t* interpreter);
+ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type);
+interpreter_t* interpreter_interpret(interpreter_t* interpreter);
+ast_node_t* interpreter_function_declaration(ast_node_t* node, interpreter_t* interpreter, array_t* arguments);
+void interpreter_expression_data(ast_literal_t* data);
+ast_node_t* interpreter_statement_return(ast_node_t* node, interpreter_t* interpreter);
+ast_node_t* interpreter_statement_print(ast_node_t* node, interpreter_t* interpreter);
+ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type, array_t* arguments);
+ast_literal_t* interpreter_literal(ast_expression_t* expr);
+ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* interpreter);
+ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter_t* interpreter);
+ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments, interpreter_t* interpreter);
+ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* interpreter);
+bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter);
+ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpreter_t* interpreter);
+ast_node_t* interpreter_statement_expression(ast_node_t* node, interpreter_t* interpreter);
+ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* interpreter);;
+void interpreter_free(interpreter_t** interpreter);;
+int main(int argc, char** argv);;
 
 // Global variables
 SymbolTableStack* symbolTableStack = NULL;

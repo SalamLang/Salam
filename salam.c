@@ -2320,7 +2320,7 @@ ast_node_t* interpreter_statement_until(ast_statement_until_t* node, interpreter
 
 	while (interpreter_expression_truly(node->condition, interpreter) == true) {
 		// return node->block;
-		interpreter_block(node->block, interpreter, TOKEN_TYPE_UNTIL);
+		interpreter_block(node->block->data.block, interpreter, TOKEN_TYPE_UNTIL);
 		// return interpreter_interpret_once(node->block, interpreter);
 	}
 
@@ -2332,23 +2332,17 @@ ast_node_t* interpreter_statement_if(ast_statement_if_t* node, interpreter_t* in
 	// printf("If\n");
 
 	if (interpreter_expression_truly(node->condition, interpreter)) {
-		// return node->block;
-		return interpreter_block(node->block, interpreter, TOKEN_TYPE_IF);
-		// return interpreter_interpret_once(node->block, interpreter);
+		return interpreter_block(node->block->data.block, interpreter, TOKEN_TYPE_IF);
 	} else {
 		for (size_t i = 0; i < node->num_elseifs; i++) {
 			ast_node_t* elseif = (ast_node_t*) node->elseifs[i];
 			if (interpreter_expression_truly(elseif->data.statement_if->condition, interpreter)) {
-				// return elseif->data.statement_if->block;
-				return interpreter_block(elseif->data.statement_if->block, interpreter, TOKEN_TYPE_ELSEIF);
-				// return interpreter_interpret_once(elseif->data.statement_if->block, interpreter);
+				return interpreter_block(elseif->data.statement_if->block->data.block, interpreter, TOKEN_TYPE_ELSEIF);
 			}
 		}
 
 		if (node->else_block != NULL) {
-			// return node->else_block;
-			return interpreter_block(node->else_block, interpreter, TOKEN_TYPE_ELSEIF);
-			// return interpreter_interpret_once(node->else_block, interpreter);
+			return interpreter_block(node->else_block->data.block, interpreter, TOKEN_TYPE_ELSEIF);
 		}
 	}
 
@@ -2372,9 +2366,9 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 
 		case AST_STATEMENT_RETURN:
 			ast_literal_t* ret = interpreter_statement_return(node->data.statement_return, interpreter);
-			if (ret != NULL) {
-				return ret;
-			}
+			// if (ret != NULL) {
+			// 	return ret;
+			// }
 			return node;
 			break;
 		
@@ -2525,13 +2519,17 @@ ast_block_t* interpreter_block(ast_block_t* block, interpreter_t* interpreter, t
 
 	for (size_t i = 0; i < block->num_statements; i++) {
 		ast_node_t* stmt = block->statements[i];
+
 		if (stmt->type == AST_STATEMENT_RETURN) {
 
+		} else if (stmt->type == AST_STATEMENT_RETURN) {
+
+		} else if (stmt->type == AST_STATEMENT_RETURN) {
+
 		}
-		interpreter_interpret_once(stmt, interpreter);
+
+		interpreter_interpret_once(stmt, interpreter, parent_type);
 		// print_xml_ast_node(node, 0);
-		// block->statements[i] = node;
-		// TODO: break on return statement
 	}
 
 	// Scope exit
@@ -2575,7 +2573,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 	res->main = (struct ast_expression_t*) expr;
 
 	if (left == NULL || right == NULL) {
-		printf("Error: cannot calculate binary operator for NULL values!\n");
+		printf("Error: cannot calculate binary operator for invalid values!\n");
 		invalid = true;
 	} else if (left->type == VALUE_TYPE_STRING && right->type == VALUE_TYPE_STRING && strcmp(expr->data.binary_op->operator, "+") == 0) {
 		res->type = VALUE_TYPE_STRING;
@@ -2681,8 +2679,6 @@ ast_literal_t* interpreter_function_run_return(ast_node_t* node, ast_function_de
 		case AST_STATEMENT_RETURN:
 			// printf("we have a ret stmt here...\n");
 			return node->data.statement_return->expression_value;
-			// return node->data.statement_return->expression->data.literal;
-			// return node->data.statement_return->expression_value;
 			break;
 		
 		default:
@@ -2701,9 +2697,6 @@ ast_literal_t* interpreter_function_run(ast_function_declaration_t* function, ar
 	size_t function_arguments_count = function->arguments == NULL ? 0 : function->arguments->length;
 	size_t arguments_count = arguments == NULL ? 0 : arguments->length;
 
-	// printf("Number of function arguments: %zu\n", function_arguments_count);
-	// printf("Number of arguments: %zu\n", arguments_count);
-
 	if (function_arguments_count != arguments_count) {
 		if (arguments_count > function_arguments_count) {
 			printf("Error: number of arguments is not match with the function - you are passing more arguments!\n");
@@ -2715,13 +2708,9 @@ ast_literal_t* interpreter_function_run(ast_function_declaration_t* function, ar
 	}
 
 	for (size_t i = 0; i < arguments_count; i++) {
-		// printf("->arg %zu\n", i);
 		char* arg_name = function->arguments->data[i];
 		ast_literal_t* arg_value = interpreter_expression((ast_expression_t*) arguments->data[i], interpreter);
 		
-		// printf("Create argument variable '%s'\n", arg_name);
-		// interpreter_expression_data(arg_value);
-
 		addToSymbolTable(symbolTableStack, arg_name, arg_value);
 	}
 
@@ -2770,9 +2759,6 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		default_ret->int_value = 0;
 		return default_ret;
 	}
-
-	// printf("final ret val: ");
-	// interpreter_expression_data(ret);
 
 	// Scope exit
 	popSymbolTable(symbolTableStack);

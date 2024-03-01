@@ -2626,7 +2626,9 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 		for (size_t i = 0; i < (*interpreter->parser)->expressions->length; i++) {
 			// printf("Interpreting global expression\n");
 			ast_node_t* expression = (ast_node_t*) (*interpreter->parser)->expressions->data[i];
-			interpreter_expression(expression->data.expression, interpreter);
+			if (expression != NULL && expression->data.expression != NULL) {
+				interpreter_expression(expression->data.expression, interpreter);
+			}
 		}
 	}
 	interpreter->is_global_scope = false;
@@ -2637,9 +2639,10 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 	if ((*interpreter->parser)->functions != NULL) {
 		for (size_t i = 0; i < (*interpreter->parser)->functions->length; i++) {
 			ast_node_t* function = (ast_node_t*) (*interpreter->parser)->functions->data[i];
-
-			if (strcmp(function->data.function_declaration->name, "سلام") == 0) {
-				main_returned = interpreter_function_declaration(function, interpreter, NULL);
+			if (function != NULL && function->data.function_declaration != NULL) {
+				if (strcmp(function->data.function_declaration->name, "سلام") == 0) {
+					main_returned = interpreter_function_declaration(function, interpreter, NULL);
+				}
 			}
 		}
 	}

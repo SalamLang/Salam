@@ -2941,15 +2941,22 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 		return NULL;
 	}
 
+	array_t* arg_values = array_create(arguments_count);
+	for (size_t i = 0; i < arguments_count; i++) {
+		char* arg_name = function->data.function_declaration->arguments->data[i];
+		ast_literal_t* arg_value = interpreter_expression((ast_expression_t*) arguments->data[i], interpreter);
+
+		array_push(arg_values, arg_value);
+	}
+
 	// Scope entry
 	// printf("create a scope with function_call enabled\n");
 	pushSymbolTable(&symbolTableStack, true);
 
 	for (size_t i = 0; i < arguments_count; i++) {
-		char* arg_name = function->data.function_declaration->arguments->data[i];
-		ast_literal_t* arg_value = interpreter_expression((ast_expression_t*) arguments->data[i], interpreter);
-		
-		addToSymbolTable(symbolTableStack, arg_name, arg_value);
+		char* arg_name = function->data.function_declaration->arguments->data[i];	
+			
+		addToSymbolTable(symbolTableStack, arg_name, arg_values->data[i]);
 	}
 
 	ast_node_t* returned = interpreter_function_declaration(function, interpreter, arguments);

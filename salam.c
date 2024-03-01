@@ -781,10 +781,16 @@ void array_print(array_t* arr)
 lexer_t* lexer_create(const char* data)
 {
 	lexer_t* lexer = (lexer_t*) malloc(sizeof(lexer_t));
-	lexer->data = (char*) data;
 	lexer->index = 0;
 	lexer->tokens = array_create(10);
-	lexer->length = strlen(data);
+
+	if (data == NULL) {
+		lexer->data = "";
+		lexer->length = 0;
+	} else {
+		lexer->data = (char*) data;
+		lexer->length = strlen(data);
+	}
 
 	return lexer;
 }
@@ -1975,8 +1981,8 @@ ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence)
 
 	ast_expression_t* left = token_infos[current_token->type].nud(parser, current_token);
 
-	printf("Token as op: %s\n", token_type2str(((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type));
-	while (precedence < token_infos[((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type].precedence) {
+	// printf("Token as op: %s\n", token_type2str(((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type));
+	while (((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type != TOKEN_TYPE_EOF && precedence < token_infos[((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type].precedence) {
 		current_token = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
 		parser->token_index++;
 
@@ -3249,70 +3255,89 @@ int main(int argc, char** argv)
 	}
 
 	char* file_data;
+	bool passingCode = false;
 	if (argc == 2) {
 		file_data = file_read(argv[1]);
 	} else {
+		passingCode = true;
 		file_data = argv[2];
 	}
 
-	printf("%s\n============", file_data);
+	if (passingCode) {
+		// Print input source code
+		printf("%s\n============\n", file_data);
 
-	lexer_t* lexer = lexer_create(file_data);
-	lexer_lex(lexer);
+		// Running
+		lexer_t* lexer = lexer_create(file_data);
+		lexer_lex(lexer);
+		parser_t* parser = parser_create(&lexer);
+		parser_parse(parser);
+		interpreter_t* interpreter = interpreter_create(&parser);
+		interpreter_interpret(interpreter);
 
-	array_print(lexer->tokens);
+		// Free memory
+		lexer_free(&lexer);
+		parser_free(interpreter->parser);
+		interpreter_free(&interpreter);
+	} else {
+		lexer_t* lexer = lexer_create(file_data);
+		lexer_lex(lexer);
 
-	parser_t* parser = parser_create(&lexer);
-	parser_parse(parser);
+		array_print(lexer->tokens);
 
-	print_xml_ast_tree(parser);
+		parser_t* parser = parser_create(&lexer);
+		parser_parse(parser);
 
-	printf("====================================\n");
+		print_xml_ast_tree(parser);
 
-	interpreter_t* interpreter = interpreter_create(&parser);
-	interpreter_interpret(interpreter);
+		printf("====================================\n");
 
-	printf("====================================\n");
-	printf("DONE\n");
+		interpreter_t* interpreter = interpreter_create(&parser);
+		interpreter_interpret(interpreter);
 
-	// print_xml_ast_tree(parser);
+		printf("====================================\n");
+		printf("DONE\n");
 
-	// printf("====================================\n");
+		// print_xml_ast_tree(parser);
 
-	// printf("start signing...\n");
-	// print_xml_ast_tree(parser);
-	// printf("sign-done\n");
-	// exit(EXIT_FAILURE);
+		// printf("====================================\n");
 
-	// printf("start second signing...\n");
-	// print_xml_ast_tree(parser);
-	// print_xml_ast_tree(*(interpreter->parser));
-	// printf("second sign-done\n");
+		// printf("start signing...\n");
+		// print_xml_ast_tree(parser);
+		// printf("sign-done\n");
+		// exit(EXIT_FAILURE);
 
-	// return 0;
+		// printf("start second signing...\n");
+		// print_xml_ast_tree(parser);
+		// print_xml_ast_tree(*(interpreter->parser));
+		// printf("second sign-done\n");
 
-	printf("free lexer\n");
-	lexer_free(&lexer);
-	printf("end lexer free\n");
+		// return 0;
 
-	printf("free parser\n");
-	parser_free(interpreter->parser);
-	// parser_free(parser);
-	printf("end parser free\n");
+		printf("free lexer\n");
+		lexer_free(&lexer);
+		printf("end lexer free\n");
 
-	printf("out-after parser is null %d\n", parser == NULL ? 1 : 0);
-	printf("out-after interp-parser is null %d\n", (*interpreter->parser) == NULL ? 1 : 0);
+		printf("free parser\n");
+		parser_free(interpreter->parser);
+		// parser_free(parser);
+		printf("end parser free\n");
 
-	printf("free interpreter\n");
-	interpreter_free(&interpreter);
-	printf("end interpreter free\n");
+		printf("out-after parser is null %d\n", parser == NULL ? 1 : 0);
+		printf("out-after interp-parser is null %d\n", (*interpreter->parser) == NULL ? 1 : 0);
 
-	// if (file_data != NULL) {
-	// 	free(file_data);
-	// 	file_data = NULL;
-	// }
+		printf("free interpreter\n");
+		interpreter_free(&interpreter);
+		printf("end interpreter free\n");
 
-	printf("DONE\n");
+		// if (file_data != NULL) {
+		// 	free(file_data);
+		// 	file_data = NULL;
+		// }
+
+		printf("DONE\n");
+	}
 
 	exit(EXIT_SUCCESS);
+	return 0;
 }

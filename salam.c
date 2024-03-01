@@ -2556,6 +2556,8 @@ ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, toke
 {
 	// printf("Block\n");
 
+	ast_node_t* returned = NULL;
+
 	// Scope entry
 	pushSymbolTable(symbolTableStack);
 
@@ -2569,15 +2571,23 @@ ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, toke
 		}
 
 		stmt = interpreter_interpret_once(stmt, interpreter, parent_type);
-		if (stmt != NULL && (stmt->type == AST_STATEMENT_RETURN || stmt->type == AST_STATEMENT_BREAK || stmt->type == AST_STATEMENT_CONTINUE)) {
-			return stmt;
+		if (stmt != NULL) {
+			if (stmt->type == AST_STATEMENT_RETURN) {
+				returned = stmt;
+				break;
+			} else if (stmt->type == AST_STATEMENT_BREAK) {
+				returned = stmt;
+				break;
+			} else if (stmt->type == AST_STATEMENT_CONTINUE) {
+				continue;
+			}
 		}
 	}
 
 	// Scope exit
 	popSymbolTable(symbolTableStack);
 
-	return NULL;
+	return returned;
 }
 
 ast_literal_t* interpreter_literal(ast_expression_t* expr)

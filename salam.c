@@ -424,7 +424,7 @@ typedef struct {
 bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter);
 
 interpreter_t* interpreter_interpret(interpreter_t* interpreter);
-ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpreter);
+ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type);
 
 void interpreter_expression_data(ast_literal_t* data);
 
@@ -2320,7 +2320,8 @@ ast_node_t* interpreter_statement_until(ast_statement_until_t* node, interpreter
 
 	while (interpreter_expression_truly(node->condition, interpreter) == true) {
 		// return node->block;
-		return interpreter_interpret_once(node->block, interpreter);
+		interpreter_block(node->block, interpreter, TOKEN_TYPE_UNTIL);
+		// return interpreter_interpret_once(node->block, interpreter);
 	}
 
 	return NULL;
@@ -2332,21 +2333,22 @@ ast_node_t* interpreter_statement_if(ast_statement_if_t* node, interpreter_t* in
 
 	if (interpreter_expression_truly(node->condition, interpreter)) {
 		// return node->block;
-		return interpreter_interpret_once(node->block, interpreter);
+		return interpreter_block(node->block, interpreter, TOKEN_TYPE_IF);
+		// return interpreter_interpret_once(node->block, interpreter);
 	} else {
 		for (size_t i = 0; i < node->num_elseifs; i++) {
 			ast_node_t* elseif = (ast_node_t*) node->elseifs[i];
 			if (interpreter_expression_truly(elseif->data.statement_if->condition, interpreter)) {
 				// return elseif->data.statement_if->block;
-				return interpreter_interpret_once(elseif->data.statement_if->block, interpreter);
+				return interpreter_block(elseif->data.statement_if->block, interpreter, TOKEN_TYPE_ELSEIF);
+				// return interpreter_interpret_once(elseif->data.statement_if->block, interpreter);
 			}
 		}
 
 		if (node->else_block != NULL) {
 			// return node->else_block;
-			interpreter_block(
-				***
-			return interpreter_interpret_once(node->else_block, interpreter);
+			return interpreter_block(node->else_block, interpreter, TOKEN_TYPE_ELSEIF);
+			// return interpreter_interpret_once(node->else_block, interpreter);
 		}
 	}
 

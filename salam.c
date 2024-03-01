@@ -8,6 +8,13 @@
 
 struct ast_expression;
 
+
+char* intToString(int value) {
+    char* result = (char*)malloc(20);
+    snprintf(result, 20, "%d", value);
+    return result;
+}
+
 typedef enum {
 	VALUE_TYPE_NULL,
 	VALUE_TYPE_INT,
@@ -2644,6 +2651,24 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 	if (left == NULL || right == NULL) {
 		printf("Error: cannot calculate binary operator for invalid values!\n");
 		invalid = true;
+	} else if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_STRING && strcmp(expr->data.binary_op->operator, "+") == 0) {
+		char* left_str = intToString(left->int_value);
+		size_t leftlen = strlen(left_str);
+		size_t rightlen = strlen(right->string_value);
+		res->type = VALUE_TYPE_STRING;
+		res->string_value = malloc(sizeof(char) * (leftlen + rightlen) + 1);
+		strcpy(res->string_value, left_str);
+		strcat(res->string_value, right->string_value);
+		free(left_str);
+	} else if (left->type == VALUE_TYPE_STRING && right->type == VALUE_TYPE_INT && strcmp(expr->data.binary_op->operator, "+") == 0) {
+		char* right_str = intToString(right->int_value);
+		size_t leftlen = strlen(left->string_value);
+		size_t rightlen = strlen(right_str);
+		res->type = VALUE_TYPE_STRING;
+		res->string_value = malloc(sizeof(char) * (leftlen + rightlen) + 1);
+		strcpy(res->string_value, left->string_value);
+		strcat(res->string_value, right_str);
+		free(right_str);
 	} else if (left->type == VALUE_TYPE_STRING && right->type == VALUE_TYPE_STRING && strcmp(expr->data.binary_op->operator, "+") == 0) {
 		res->type = VALUE_TYPE_STRING;
 		size_t leftlen = strlen(left->string_value);
@@ -2664,7 +2689,21 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 			res->string_value = strdup(left->string_value);
 		}
 	} else if (strcmp(expr->data.binary_op->operator, "==") == 0 || strcmp(expr->data.binary_op->operator, "!=") == 0) {
-		if (left->type == VALUE_TYPE_NULL && right->type == TOKEN_TYPE_NULL) {
+		if (left->type == VALUE_TYPE_INT && right->type == TOKEN_TYPE_STRING) {
+			res->type = VALUE_TYPE_STRING;
+			char* left_str = intToString(left->int_value);
+			int result = strcmp(left_str, right->string_value);
+			res->type = VALUE_TYPE_BOOL;
+			res->bool_value = (result == 0);
+			free(left_str);
+		} else if (left->type == TOKEN_TYPE_STRING && right->type == VALUE_TYPE_INT) {
+			res->type = VALUE_TYPE_STRING;
+			char* right_var = intToString(right->int_value);
+			int result = strcmp(right_var, left->string_value);
+			res->type = VALUE_TYPE_BOOL;
+			res->bool_value = (result == 0);
+			free(right_var);
+		} else if (left->type == VALUE_TYPE_NULL && right->type == TOKEN_TYPE_NULL) {
 			res->type = VALUE_TYPE_BOOL;
 			res->bool_value = true;
 		} else if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_FLOAT) {

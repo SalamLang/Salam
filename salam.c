@@ -2955,19 +2955,21 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 
 	for (size_t i = 0; i < arguments_count; i++) {
 		char* arg_name = function->data.function_declaration->arguments->data[i];	
-			
+
 		addToSymbolTable(symbolTableStack, arg_name, arg_values->data[i]);
 	}
 
 	ast_node_t* returned = interpreter_function_declaration(function, interpreter, arguments);
-	if (returned != NULL && returned->type == AST_STATEMENT_RETURN) {
-		return returned->data.statement_return->expression_value;
-	}
 	
 	// Scope exit
 	popSymbolTable(&symbolTableStack);
 	// printf("delete a scope with function_call enabled\n");
 
+	array_free(arg_values);
+
+	if (returned != NULL && returned->type == AST_STATEMENT_RETURN) {
+		return returned->data.statement_return->expression_value;
+	}
 	return NULL;
 }
 

@@ -1764,6 +1764,7 @@ ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence)
 
 	ast_expression_t* left = token_infos[current_token->type].nud(parser, current_token);
 
+	printf("Token as op: %s\n", token_type2str(((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type));
 	while (precedence < token_infos[((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type].precedence) {
 		current_token = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
 		parser->token_index++;
@@ -2505,10 +2506,12 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 	// Scope exit
 	popSymbolTable(symbolTableStack);
 
-	printf("Main returned: ");
 	// print_xml_ast_node(main_returned, 3);
-	if (main_returned->type == AST_STATEMENT_RETURN) {
+	if (main_returned != NULL && main_returned->type == AST_STATEMENT_RETURN) {
+		printf("Main returned: ");
 		interpreter_expression_data(main_returned->data.statement_return->expression_value);
+	} else {
+		printf("No return value from main function, so default!\n");
 	}
 
 	return interpreter;

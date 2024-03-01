@@ -332,7 +332,7 @@ void lexer_lex(lexer_t* lexer);
 void help();
 parser_t* parser_create(lexer_t** lexer);
 void debug_current_token(parser_t* parser);
-void ast_expression_free(ast_expression_t** expr);;
+void ast_expression_free(ast_expression_t** expr);
 void ast_expression_free_data(ast_literal_t** val);
 void ast_expression_free_literal(ast_expression_t** expr);
 void ast_expression_free_identifier(ast_expression_t** expr);
@@ -393,9 +393,9 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter);
 ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpreter_t* interpreter);
 ast_node_t* interpreter_statement_expression(ast_node_t* node, interpreter_t* interpreter);
-ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* interpreter);;
-void interpreter_free(interpreter_t** interpreter);;
-int main(int argc, char** argv);;
+ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* interpreter);
+void interpreter_free(interpreter_t** interpreter);
+int main(int argc, char** argv);
 
 // Global variables
 SymbolTableStack* symbolTableStack = NULL;

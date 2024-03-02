@@ -3000,26 +3000,48 @@ ast_literal_t* interpreter_literal(ast_expression_t* expr, interpreter_t* interp
 	if (expr->data.literal->type == VALUE_TYPE_ARRAY) {
 		printf("preparing array...\n");
 		if (expr->data.literal->array_value != NULL) {
+			printf("array is not null\n");
 			array_t* new_arr = array_create(5);
+			printf("length of array is: ");
+			printf("%zu\n", expr->data.literal->array_value->length);
 			for (size_t i = 0; i < expr->data.literal->array_value->length; i++) {
-				ast_expression_t* arr_exp = expr->data.literal->array_value->data[i];
-				ast_literal_t* arr_val = interpreter_expression(arr_exp, interpreter);
-
-				array_push(new_arr, arr_val);
+				// ast_expression_t* arr_exp = expr->data.literal->array_value->data[i];
+				// if (arr_exp == NULL) {
+				// 	printf("arr exp is null\n");
+				// }
+				printf("now checking val interp\n");
+				printf("%s\n", interpreter_expression_data_type(
+						(ast_literal_t*) ((ast_expression_t*) expr->data.literal->array_value->data[i])->data.literal
+					)
+				);
+				printf("%s\n", interpreter_expression_data_type(
+						interpreter_expression(((ast_expression_t*) expr->data.literal->array_value->data[i]), interpreter)
+						// (ast_literal_t*) ((ast_expression_t*) expr->data.literal->array_value->data[i])->data.literal
+					)
+				);
+				// ast_literal_t* arr_val = interpreter_expression(expr->data.literal->array_value->data[i], interpreter);
+				// if (arr_val == NULL) {
+				// 	printf("arr vall is null\n");
+				// }
+				// // printf("set main...\n");
+				// // arr_val->main = (struct ast_expression_t**) &(expr->data.literal->array_value->data[i]);
+				// printf("append into array\n");
+				// array_push(new_arr, arr_val);
 
 				// expr->data.literal->array_value->data[i] = arr_val;
-				printf("arr value: ");
-				// interpreter_expression_data(expr->data.literal->array_value->data[i], true);
-				interpreter_expression_data(new_arr->data[i], true);
+				// printf("arr value: ");
+				// // interpreter_expression_data(expr->data.literal->array_value->data[i], true);
+				// interpreter_expression_data(new_arr->data[i], true);
 				// free(arr_exp);
 				// ast_expression_free(expr->data.literal->array_value->data[i]);
 				// free(expr->data.literal->array_value->data[i]);
-				expr->data.literal->array_value->data[i] = NULL;
+				// expr->data.literal->array_value->data[i] = NULL;
 			}
-			free(expr->data.literal->array_value->data);
-			expr->data.literal->array_value->data = NULL;
-			free(expr->data.literal->array_value);
+			// free(expr->data.literal->array_value->data);
+			// expr->data.literal->array_value->data = NULL;
+			// free(expr->data.literal->array_value);
 
+			printf("replace new arra into literal\n");
 			expr->data.literal->array_value = new_arr;
 			printf("new array size in interpreter: %zu\n", new_arr->length);
 		}
@@ -3456,6 +3478,8 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 	switch (expr->type) {
 		case AST_EXPRESSION_LITERAL:
 			lit = interpreter_literal(expr, interpreter);
+			printf("array size in interpreter - after: %zu\n", lit->array_value->length);
+			printf("array[0].int in interpreter - after: %d\n", ((ast_literal_t*) lit->array_value->data[0])->int_value);
 			break;
 
 		case AST_EXPRESSION_IDENTIFIER:

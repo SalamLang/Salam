@@ -5193,8 +5193,3 @@ var shouldRunNow = true;
 if (Module['noInitialRun']) shouldRunNow = false;
 
 run();
-
-
-
-
-

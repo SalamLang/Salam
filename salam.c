@@ -6,7 +6,8 @@
 #include <string.h>
 #include <limits.h>
 
-bool debug_enabled = false;
+// bool debug_enabled = false;
+bool debug_enabled = true;
 #define print_error(...) if (debug_enabled) fprintf(stderr, __VA_ARGS__);
 
 struct ast_expression;
@@ -299,6 +300,7 @@ enum {
 };
 
 // Function dec
+char* read_dynamic_string();
 char* intToString(int value);
 char* literal_type2name(ast_literal_type_t type);
 unsigned int hash(const char* str, size_t capacity);
@@ -427,6 +429,41 @@ token_info_t token_infos[] = {
 };
 
 // Helper functions
+char* read_dynamic_string() {
+    size_t current_size = 52;
+    char* input = malloc(sizeof(char) * current_size);
+    if (!input) {
+        perror("Memory allocation error");
+        exit(EXIT_FAILURE);
+    }
+
+    size_t length = 0;
+
+    while (1) {
+        int c = getchar();
+
+        if (c == '\n' || c == EOF) {
+            input[length] = '\0';
+            break;
+        }
+
+        if (length + 1 >= current_size) {
+            current_size *= 2;
+            char* new_input = realloc(input, current_size);
+            if (!new_input) {
+                free(input);
+                perror("Memory reallocation error");
+                exit(EXIT_FAILURE);
+            }
+            input = new_input;
+        }
+
+        input[length++] = c;
+    }
+
+    return input;
+}
+
 char* intToString(int value)
 {
 	int sign = (value < 0) ? -1 : 1;
@@ -3083,7 +3120,7 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 	ast_node_t* func_exists = NULL;
 
 	if (strcmp(node->data.function_call->name, "نوع") == 0) {
-		if (node->data.function_call->arguments->length != 1) {
+		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
 			print_error("Error: number of arguments of نوع() function should be only one!\n");
 			exit(EXIT_FAILURE);
 			return NULL;
@@ -3094,6 +3131,20 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		ast_literal_t* val = malloc(sizeof(ast_literal_t));
 		val->type = VALUE_TYPE_STRING;
 		val->string_value = strdup(interpreter_expression_data_type(arg_val));
+		val->main = NULL;
+		return val;
+	} else if (strcmp(node->data.function_call->name, "خواندن") == 0) {
+		if (node->data.function_call->arguments != NULL && node->data.function_call->arguments->length != 0) {
+			print_error("Error: number of arguments of خواندن() function should be empty!\n");
+			exit(EXIT_FAILURE);
+			return NULL;
+		}
+
+		char* input = read_dynamic_string();
+
+		ast_literal_t* val = malloc(sizeof(ast_literal_t));
+		val->type = VALUE_TYPE_STRING;
+		val->string_value = input;
 		val->main = NULL;
 		return val;
 	}

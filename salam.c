@@ -20,13 +20,19 @@ typedef enum {
 	VALUE_TYPE_FLOAT,
 	VALUE_TYPE_BOOL,
 	VALUE_TYPE_STRING,
-	VALUE_TYPE_ARGUMENT,
+	VALUE_TYPE_ARRAY,
 } ast_literal_type_t;
 
 typedef struct {
 	char* name;
 	struct ast_expression_t* value;
 } ast_argument_t;
+
+typedef struct {
+	size_t size;
+	size_t length;
+	void** data;
+} array_t;
 
 typedef struct ast_literal_t {
 	ast_literal_type_t type;
@@ -35,7 +41,7 @@ typedef struct ast_literal_t {
 		bool bool_value;
 		float float_value;
 		char* string_value;
-		ast_argument_t* argument_value;
+		array_t* array_value;
 	};
 
 	struct ast_expression_t** main; // To have a reference into parser ast so we can free it later after interpreter
@@ -87,6 +93,8 @@ typedef enum {
 	TOKEN_TYPE_SECTION_CLOSE, // }
 	TOKEN_TYPE_PARENTHESE_OPEN, // (
 	TOKEN_TYPE_PARENTHESE_CLOSE, // )
+	TOKEN_TYPE_BRACKETS_OPEN, // [
+	TOKEN_TYPE_BRACKETS_CLOSE, // ]
 
 	TOKEN_TYPE_PLUS, // +
 	TOKEN_TYPE_MINUS, // -
@@ -142,12 +150,6 @@ typedef struct {
 		size_t end_column;
 	} location;
 } token_t;
-
-typedef struct {
-	size_t size;
-	size_t length;
-	void** data;
-} array_t;
 
 typedef struct {
 	char* data;
@@ -293,10 +295,11 @@ typedef struct {
 
 enum {
 	PRECEDENCE_LOWEST = 0,    // START FROM HERE
-	PRECEDENCE_ANDOR = 1,     // AND OR
-	PRECEDENCE_HIGHEST = 2,   // =
-	PRECEDENCE_MULTIPLY = 3,   // / *
-	PRECEDENCE_SUM = 4,       // + -
+	PRECEDENCE_HIGHEST2 = 1, // =
+	PRECEDENCE_ANDOR = 2,     // AND OR
+	PRECEDENCE_HIGHEST = 3,   // == !=
+	PRECEDENCE_MULTIPLY = 4,   // / *
+	PRECEDENCE_SUM = 5,       // + -
 };
 
 // Function dec
@@ -372,6 +375,7 @@ ast_expression_t* led_or(parser_t* parser, token_t* token, ast_expression_t* lef
 ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expression_t* left);
 ast_expression_t* nud_bool(parser_t* parser, token_t* token);
 ast_expression_t* nud_number(parser_t* parser, token_t* token);
+ast_expression_t* nud_array(parser_t* parser, token_t* token);
 ast_expression_t* nud_string(parser_t* parser, token_t* token);
 ast_expression_t* nud_identifier(parser_t* parser, token_t* token);
 ast_expression_t* nud_parentheses(parser_t* parser, token_t* token);
@@ -387,12 +391,12 @@ ast_node_t* interpreter_statement_if(ast_node_t* node, interpreter_t* interprete
 ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type);
 interpreter_t* interpreter_interpret(interpreter_t* interpreter);
 ast_node_t* interpreter_function_declaration(ast_node_t* node, interpreter_t* interpreter, array_t* arguments);
-void interpreter_expression_data(ast_literal_t* data);
+void interpreter_expression_data(ast_literal_t* data, bool newLine);
 char* interpreter_expression_data_type(ast_literal_t* data);
 ast_node_t* interpreter_statement_return(ast_node_t* node, interpreter_t* interpreter);
 ast_node_t* interpreter_statement_print(ast_node_t* node, interpreter_t* interpreter);
 ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type, array_t* arguments);
-ast_literal_t* interpreter_literal(ast_expression_t* expr);
+ast_literal_t* interpreter_literal(ast_expression_t* expr, interpreter_t* interpreter);
 ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* interpreter);
 ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter_t* interpreter);
 ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments, interpreter_t* interpreter);
@@ -412,9 +416,11 @@ token_info_t token_infos[] = {
 	[TOKEN_TYPE_TRUE] = {PRECEDENCE_LOWEST, nud_bool, NULL},
 	[TOKEN_TYPE_FALSE] = {PRECEDENCE_LOWEST, nud_bool, NULL},
 	[TOKEN_TYPE_NUMBER] = {PRECEDENCE_LOWEST, nud_number, NULL},
+	[TOKEN_TYPE_BRACKETS_OPEN] = {PRECEDENCE_LOWEST, nud_array, NULL},
 	[TOKEN_TYPE_IDENTIFIER] = {PRECEDENCE_LOWEST, nud_identifier, NULL},
 	[TOKEN_TYPE_STRING] = {PRECEDENCE_LOWEST, nud_string, NULL},
 	[TOKEN_TYPE_PARENTHESE_OPEN] = {PRECEDENCE_LOWEST, nud_parentheses, NULL},
+
 	[TOKEN_TYPE_PLUS] = {PRECEDENCE_SUM, NULL, led_plus_minus},
 	[TOKEN_TYPE_AND] = {PRECEDENCE_ANDOR, NULL, led_and},
 	[TOKEN_TYPE_OR] = {PRECEDENCE_ANDOR, NULL, led_or},
@@ -422,10 +428,10 @@ token_info_t token_infos[] = {
 	[TOKEN_TYPE_MULTIPLY] = {PRECEDENCE_MULTIPLY, NULL, led_plus_minus},
 	[TOKEN_TYPE_DIVIDE] = {PRECEDENCE_MULTIPLY, NULL, led_plus_minus},
 
-	[TOKEN_TYPE_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal},
-
 	[TOKEN_TYPE_NOT_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
 	[TOKEN_TYPE_EQUAL_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
+
+	[TOKEN_TYPE_EQUAL] = {PRECEDENCE_HIGHEST2, NULL, led_equal},
 };
 
 // Helper functions
@@ -501,6 +507,7 @@ char* literal_type2name(ast_literal_type_t type)
 		case VALUE_TYPE_FLOAT: return "FLOAT";
 		case VALUE_TYPE_BOOL: return "BOOL";
 		case VALUE_TYPE_STRING: return "STRING";
+		case VALUE_TYPE_ARRAY: return "ARRAY";
 		default: return "TYPE_UNKNOWN";
 	}
 }
@@ -693,6 +700,8 @@ char* token_type2str(token_type_t type)
 		case TOKEN_TYPE_SECTION_CLOSE: return "SECTION_CLOSE";
 		case TOKEN_TYPE_PARENTHESE_OPEN: return "PARENTHESIS_OPEN";
 		case TOKEN_TYPE_PARENTHESE_CLOSE: return "PARENTHESIS_CLOSE";
+		case TOKEN_TYPE_BRACKETS_OPEN: return "BRACKETS_OPEN";
+		case TOKEN_TYPE_BRACKETS_CLOSE: return "BRACKETS_CLOSE";
 		case TOKEN_TYPE_PLUS: return "PLUS";
 		case TOKEN_TYPE_DIVIDE: return "DIVIDE";
 		case TOKEN_TYPE_MINUS: return "MINUS";
@@ -1116,6 +1125,12 @@ void lexer_lex(lexer_t* lexer)
 			lexer->index++;
 			lexer->column++;
 			continue;
+		} else if (current_wchar == '[') {
+			token_t* t = token_create(TOKEN_TYPE_BRACKETS_OPEN, "[", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+			array_push(lexer->tokens, t);
+		} else if (current_wchar == ']') {
+			token_t* t = token_create(TOKEN_TYPE_BRACKETS_CLOSE, "]", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+			array_push(lexer->tokens, t);
 		} else if (current_wchar == '{') {
 			token_t* t = token_create(TOKEN_TYPE_SECTION_OPEN, "{", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
@@ -1263,7 +1278,26 @@ void ast_expression_free_data(ast_literal_t** val)
 	print_error("start checking type on ast_expression_free_data\n");
 
 	print_error("free expression data\n");
-	if ((*val)->type == VALUE_TYPE_STRING) {
+	if ((*val)->type == VALUE_TYPE_ARRAY) {
+		print_error("has array\n");
+		if ((*val)->array_value != NULL) {
+			if ((*val)->array_value->data != NULL) {
+				for (size_t i = 0; i < (*val)->array_value->length; i++) {
+					ast_expression_free_data((ast_literal_t**) &(
+						(*val)->array_value->data[i]
+					));
+					free((*val)->array_value->data[i]);
+					(*val)->array_value->data[i] = NULL;
+				}
+
+				free((*val)->array_value->data);
+				(*val)->array_value->data = NULL;
+			}
+
+			free((*val)->array_value);
+			(*val)->array_value = NULL;
+		}
+	} else if ((*val)->type == VALUE_TYPE_STRING) {
 		print_error("has string\n");
 		print_error("%s\n", (*val)->string_value);
 		if (strcmp((*val)->string_value, "\0") != 0 && (*val)->string_value != NULL) {
@@ -1863,6 +1897,7 @@ bool parser_expression_has(parser_t* parser)
 			tok->type == TOKEN_TYPE_PLUS ||
 			tok->type == TOKEN_TYPE_MINUS ||
 			tok->type == TOKEN_TYPE_PARENTHESE_OPEN ||
+			tok->type == TOKEN_TYPE_BRACKETS_OPEN ||
 			tok->type == TOKEN_TYPE_STRING ||
 			tok->type == TOKEN_TYPE_NUMBER
 		) {
@@ -2022,7 +2057,6 @@ ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence)
 
 	ast_expression_t* left = token_infos[current_token->type].nud(parser, current_token);
 
-	// print_error("Token as op: %s\n", token_type2str(((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type));
 	while (((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type != TOKEN_TYPE_EOF && precedence < token_infos[((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type].precedence) {
 		current_token = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
 		parser->token_index++;
@@ -2139,6 +2173,43 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 	literal_expr->data.literal->int_value = atoi(token->value);
 
 	return literal_expr;
+}
+
+ast_expression_t* nud_array(parser_t* parser, token_t* token)
+{
+	print_error("Parsing array\n");
+
+	ast_expression_t* literal_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+	literal_expr->type = AST_EXPRESSION_LITERAL;
+
+	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
+	literal_expr->data.literal->main = NULL;
+	literal_expr->data.literal->type = VALUE_TYPE_ARRAY;
+	array_t* arr = array_create(5);
+
+    // Eating until found TOKEN_TYPE_BRACKETS_CLOSE
+    while (!parser_token_skip_ifhas(parser, TOKEN_TYPE_BRACKETS_CLOSE)) {
+        ast_expression_t* element = parser_expression(parser);
+        array_push(arr, element);
+
+        if (parser_token_skip_ifhas(parser, TOKEN_TYPE_COMMA)) {
+            // Eat the comma and continue for more elements
+        }
+        else if (parser_token_skip_ifhas(parser, TOKEN_TYPE_BRACKETS_CLOSE)) {
+            // End of the array
+            break;
+        }
+        else {
+			array_free(arr); // TODO
+            print_error("Error: Expected ',' or ']' in array value.\n");
+            exit(EXIT_FAILURE);
+            return NULL;
+        }
+    }
+
+	literal_expr->data.literal->array_value = arr;
+
+    return literal_expr;
 }
 
 ast_expression_t* nud_string(parser_t* parser, token_t* token)
@@ -2324,6 +2395,11 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 					print_error("<Value>%d</Value>\n", expr->data.literal->int_value);
 				} else if (expr->data.literal->type == VALUE_TYPE_BOOL) {
 					print_error("<Value>%s</Value>\n", expr->data.literal->bool_value ? "True" : "False");
+				} else if (expr->data.literal->type == VALUE_TYPE_ARRAY) {
+					print_error("<Value>");
+					print_error("Array (%zu)", expr->data.literal->array_value->length);
+					// if (debug_enabled) interpreter_expression_data(expr->data.literal, false);
+					print_error("</Value>\n");
 				} else {
 					print_error("<!-- Unhandled Literal Type -->\n");
 				}
@@ -2773,7 +2849,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 	// print_xml_ast_node(main_returned, 3);
 	if (main_returned != NULL && main_returned->type == AST_STATEMENT_RETURN) {
 		print_error("Main returned: ");
-		interpreter_expression_data(main_returned->data.statement_return->expression_value);
+		interpreter_expression_data(main_returned->data.statement_return->expression_value, true);
 	} else {
 		print_error("No return value from main function, so default!\n");
 	}
@@ -2802,29 +2878,43 @@ char* interpreter_expression_data_type(ast_literal_t* data)
 		return "درستی";
 	} else if (data->type == VALUE_TYPE_STRING) {
 		return "رشته";
+	} else if (data->type == VALUE_TYPE_ARRAY) {
+		return "دسته";
 	} else {
 		return "نامشخص";
 	}
 }
 
-void interpreter_expression_data(ast_literal_t* data)
+void interpreter_expression_data(ast_literal_t* data, bool newLine)
 {
 	if (data == NULL) {
-		printf("نامشخص\n");
+		printf("نامشخص");
 		return;
 	} else if (data->type == VALUE_TYPE_NULL) {
-		printf("پوچ\n");
+		printf("پوچ");
 	} else if (data->type == VALUE_TYPE_INT) {
-		printf("%d\n", data->int_value);
+		printf("%d", data->int_value);
 	} else if (data->type == VALUE_TYPE_FLOAT) {
-		printf("%f\n", data->float_value);
+		printf("%f", data->float_value);
 	} else if (data->type == VALUE_TYPE_BOOL) {
-		printf("%s\n", data->bool_value == true ? "درست" : "غلط");
+		printf("%s", data->bool_value == true ? "درست" : "غلط");
 	} else if (data->type == VALUE_TYPE_STRING) {
-		printf("%s\n", data->string_value);
+		printf("%s", data->string_value);
+	} else if (data->type == VALUE_TYPE_ARRAY) {
+		printf("[");
+		if (data->array_value != NULL) {
+			array_t* arr = data->array_value;
+			for (size_t i = 0; i < arr->length; i++) {
+				printf(".");
+				interpreter_expression_data((ast_literal_t*) arr->data[i], false);
+			}
+		}
+		printf("]");
 	} else {
-		printf("نامشخص\n");
+		printf("نامشخص");
 	}
+
+	if (newLine) printf("\n");
 }
 
 ast_node_t* interpreter_statement_return(ast_node_t* node, interpreter_t* interpreter)
@@ -2842,7 +2932,18 @@ ast_node_t* interpreter_statement_print(ast_node_t* node, interpreter_t* interpr
 
 	node->data.statement_print->expression_value = (ast_literal_t*) interpreter_expression(node->data.statement_print->expression, interpreter);
 
-	interpreter_expression_data(node->data.statement_print->expression_value);
+	printf("print res: ");
+
+	printf("%s\n", interpreter_expression_data_type(node->data.statement_print->expression_value));
+
+	if (node->data.statement_print->expression_value->type == VALUE_TYPE_ARRAY) {
+		array_t* arr = node->data.statement_print->expression_value->array_value;
+		printf("OK, is array....\n");
+		printf("array size in interpreter: %zu\n", arr->length);
+		printf("array[0].int in interpreter: %d\n", ((ast_literal_t*) arr->data[0])->int_value);
+	}
+
+	interpreter_expression_data(node->data.statement_print->expression_value, true);
 
 	return node;
 }
@@ -2890,10 +2991,41 @@ ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, toke
 	return returned;
 }
 
-ast_literal_t* interpreter_literal(ast_expression_t* expr)
+ast_literal_t* interpreter_literal(ast_expression_t* expr, interpreter_t* interpreter)
 {
 	if (expr == NULL) {
 		return NULL;
+	}
+
+	if (expr->data.literal->type == VALUE_TYPE_ARRAY) {
+		printf("preparing array...\n");
+		if (expr->data.literal->array_value != NULL) {
+			array_t* new_arr = array_create(5);
+			for (size_t i = 0; i < expr->data.literal->array_value->length; i++) {
+				ast_expression_t* arr_exp = expr->data.literal->array_value->data[i];
+				ast_literal_t* arr_val = interpreter_expression(arr_exp, interpreter);
+
+				array_push(new_arr, arr_val);
+
+				// expr->data.literal->array_value->data[i] = arr_val;
+				printf("arr value: ");
+				// interpreter_expression_data(expr->data.literal->array_value->data[i], true);
+				interpreter_expression_data(new_arr->data[i], true);
+				// free(arr_exp);
+				// ast_expression_free(expr->data.literal->array_value->data[i]);
+				// free(expr->data.literal->array_value->data[i]);
+				expr->data.literal->array_value->data[i] = NULL;
+			}
+			free(expr->data.literal->array_value->data);
+			expr->data.literal->array_value->data = NULL;
+			free(expr->data.literal->array_value);
+
+			expr->data.literal->array_value = new_arr;
+			printf("new array size in interpreter: %zu\n", new_arr->length);
+		}
+
+		printf("array size in interpreter: %zu\n", expr->data.literal->array_value->length);
+		printf("array[0].int in interpreter: %d\n", ((ast_literal_t*) expr->data.literal->array_value->data[0])->int_value);
 	}
 
 	return expr->data.literal;
@@ -3323,7 +3455,7 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 
 	switch (expr->type) {
 		case AST_EXPRESSION_LITERAL:
-			lit = interpreter_literal(expr);
+			lit = interpreter_literal(expr, interpreter);
 			break;
 
 		case AST_EXPRESSION_IDENTIFIER:
@@ -3449,7 +3581,7 @@ int main(int argc, char** argv)
 		interpreter_interpret(interpreter);
 
 		print_error("====================================\n");
-		print_error("DONE\n");
+		print_error("RUN DONE\n");
 
 		// print_xml_ast_tree(parser);
 
@@ -3476,8 +3608,8 @@ int main(int argc, char** argv)
 		// parser_free(parser);
 		print_error("end parser free\n");
 
-		print_error("out-after parser is null %d\n", parser == NULL ? 1 : 0);
-		print_error("out-after interp-parser is null %d\n", (*interpreter->parser) == NULL ? 1 : 0);
+		// print_error("out-after parser is null %d\n", parser == NULL ? 1 : 0);
+		// print_error("out-after interp-parser is null %d\n", (*interpreter->parser) == NULL ? 1 : 0);
 
 		print_error("free interpreter\n");
 		interpreter_free(&interpreter);

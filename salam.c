@@ -2791,19 +2791,19 @@ ast_node_t* interpreter_function_declaration(ast_node_t* node, interpreter_t* in
 char* interpreter_expression_data_type(ast_literal_t* data)
 {
 	if (data == NULL) {
-		return "NULL";
+		return "نامشخص";
 	} else if (data->type == VALUE_TYPE_NULL) {
-		return "NULL";
+		return "پوچ";
 	} else if (data->type == VALUE_TYPE_INT) {
-		return "INT";
+		return "صحیح";
 	} else if (data->type == VALUE_TYPE_FLOAT) {
-		return "FLOAT";
+		return "اعشاری";
 	} else if (data->type == VALUE_TYPE_BOOL) {
-		return "BOOL";
+		return "درستی";
 	} else if (data->type == VALUE_TYPE_STRING) {
-		return "STRING";
+		return "رشته";
 	} else {
-		return "UNKNOWN";
+		return "نامشخص";
 	}
 }
 

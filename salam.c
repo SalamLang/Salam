@@ -386,6 +386,7 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 interpreter_t* interpreter_interpret(interpreter_t* interpreter);
 ast_node_t* interpreter_function_declaration(ast_node_t* node, interpreter_t* interpreter, array_t* arguments);
 void interpreter_expression_data(ast_literal_t* data);
+char* interpreter_expression_data_type(ast_literal_t* data);
 ast_node_t* interpreter_statement_return(ast_node_t* node, interpreter_t* interpreter);
 ast_node_t* interpreter_statement_print(ast_node_t* node, interpreter_t* interpreter);
 ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type, array_t* arguments);
@@ -2750,6 +2751,25 @@ ast_node_t* interpreter_function_declaration(ast_node_t* node, interpreter_t* in
 	return interpreter_block(node->data.function_declaration->body, interpreter, TOKEN_TYPE_FUNCTION, arguments);
 }
 
+char* interpreter_expression_data_type(ast_literal_t* data)
+{
+	if (data == NULL) {
+		return "NULL";
+	} else if (data->type == VALUE_TYPE_NULL) {
+		return "NULL";
+	} else if (data->type == VALUE_TYPE_INT) {
+		return "INT";
+	} else if (data->type == VALUE_TYPE_FLOAT) {
+		return "FLOAT";
+	} else if (data->type == VALUE_TYPE_BOOL) {
+		return "BOOL";
+	} else if (data->type == VALUE_TYPE_STRING) {
+		return "STRING";
+	} else {
+		return "UNKNOWN";
+	}
+}
+
 void interpreter_expression_data(ast_literal_t* data)
 {
 	if (data == NULL) {
@@ -3061,6 +3081,25 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 	// Check if functions exists in (*interpreter->parser)->...
 	bool exists = false;
 	ast_node_t* func_exists = NULL;
+
+	if (strcmp(node->data.function_call->name, "نوع") == 0) {
+		if (node->data.function_call->arguments->length != 1) {
+			print_error("Error: number of arguments of نوع() function should be only one!\n");
+			exit(EXIT_FAILURE);
+			return NULL;
+		}
+
+		ast_literal_t* arg_val = (ast_literal_t*) interpreter_expression(node->data.function_call->arguments->data[0], interpreter);
+
+		printf("%s\n", interpreter_expression_data_type(arg_val));
+		interpreter_expression_data(arg_val);
+		
+		ast_literal_t* val = malloc(sizeof(ast_literal_t));
+		val->type = VALUE_TYPE_STRING;
+		val->string_value = strdup(interpreter_expression_data_type(arg_val));
+		val->main = NULL;
+		return val;
+	}
 
 	if ((*interpreter->parser)->functions != NULL) {
 		for (size_t i = 0; i < (*interpreter->parser)->functions->length; i++) {

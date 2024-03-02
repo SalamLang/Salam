@@ -3147,6 +3147,25 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		val->string_value = input;
 		val->main = NULL;
 		return val;
+	} else if (strcmp(node->data.function_call->name, "طول") == 0) {
+		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
+			print_error("Error: number of arguments of طول() function should be empty!\n");
+			exit(EXIT_FAILURE);
+			return NULL;
+		}
+
+		ast_literal_t* arg_val = (ast_literal_t*) interpreter_expression(node->data.function_call->arguments->data[0], interpreter);
+		if (arg_val->type != VALUE_TYPE_STRING) {
+			print_error("Error: argument type of طول() function should be a string!\n");
+			exit(EXIT_FAILURE);
+			return NULL;
+		}
+
+		ast_literal_t* val = malloc(sizeof(ast_literal_t));
+		val->type = VALUE_TYPE_INT;
+		val->int_value = strlen(arg_val->string_value);
+		val->main = NULL;
+		return val;
 	}
 
 	if ((*interpreter->parser)->functions != NULL) {

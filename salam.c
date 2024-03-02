@@ -6,6 +6,9 @@
 #include <string.h>
 #include <limits.h>
 
+bool debug_enabled = false;
+#define print_error(...) if (debug_enabled) fprintf(stderr, __VA_ARGS__);
+
 struct ast_expression;
 
 struct ast_literal_t;
@@ -484,7 +487,7 @@ SymbolTable* createSymbolTable(size_t capacity)
 
 void pushSymbolTable(SymbolTableStack** ts, bool is_function_call)
 {
-	// printf("create scope with %d state\n", is_function_call ? 1 : 0);
+	// print_error("create scope with %d state\n", is_function_call ? 1 : 0);
 	SymbolTable* table = createSymbolTable(16);
 	SymbolTableStack* newScope = (SymbolTableStack*) malloc(sizeof(SymbolTableStack));
 	newScope->table = table;
@@ -601,14 +604,14 @@ ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const ch
 ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier, bool wantsGlobal)
 {
 	while (currentScope != NULL) {
-		// printf("looking for %s on a scope %d\n", identifier, currentScope->is_function_call ? 1 : 0);
+		// print_error("looking for %s on a scope %d\n", identifier, currentScope->is_function_call ? 1 : 0);
 		ast_literal_t* data = findInSymbolTableCurrent(currentScope, identifier);
 		if (data != NULL) {
 			return data;
 		}
 
 		if (currentScope->is_function_call == true) {
-			// printf("this scope is call enabled, so break loop (%d)!\n", wantsGlobal ? 1 : 0);
+			// print_error("this scope is call enabled, so break loop (%d)!\n", wantsGlobal ? 1 : 0);
 			break;
 		}
 		currentScope = currentScope->next;
@@ -675,7 +678,7 @@ char* file_read(char* file_Name)
 {
 	FILE* file = fopen(file_Name, "r");
 	if (file == NULL) {
-		printf("Error: file not found\n");
+		print_error("Error: file not found\n");
 		return NULL;
 	}
 
@@ -758,22 +761,22 @@ void array_free(array_t* arr)
 
 void token_print(token_t* t)
 {
-	printf("%d ", t->type);
-	// printf("...\n");
-	// printf("%zu - ", t->location.length);
-	printf("%s - ", token_type2str(t->type));
-	printf("%s\n", t->value);
+	print_error("%d ", t->type);
+	// print_error("...\n");
+	// print_error("%zu - ", t->location.length);
+	print_error("%s - ", token_type2str(t->type));
+	print_error("%s\n", t->value);
 }
 
 void array_print(array_t* arr)
 {
-	// printf("Array Length: %zu\n", arr->length);
-	// printf("Array Size: %zu\n", arr->size);
-	// printf("Array Contents:\n");
+	// print_error("Array Length: %zu\n", arr->length);
+	// print_error("Array Size: %zu\n", arr->size);
+	// print_error("Array Contents:\n");
 
 	for (size_t i = 0; i < arr->length; i++) {
 		token_t* t = arr->data[i];
-		printf("[%zu]: ", i);
+		print_error("[%zu]: ", i);
 		token_print(t);
 	}
 }
@@ -873,7 +876,7 @@ wchar_t read_token(lexer_t* lexer)
 	wchar_t current_char;
 	int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
 	if (char_size < 0) {
-		printf("Syntax Error: read token - invalid unicode character\n");
+		print_error("Syntax Error: read token - invalid unicode character\n");
 		exit(EXIT_FAILURE);
 		return 0;
 	}
@@ -899,7 +902,7 @@ wchar_t unread_token(lexer_t* lexer)
 	wchar_t current_char;
 	int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
 	if (char_size < 0) {
-		printf("Syntax Error: nuread - invalid unicode character\n");
+		print_error("Syntax Error: nuread - invalid unicode character\n");
 		exit(EXIT_FAILURE);
 		return 0;
 	}
@@ -947,7 +950,7 @@ void read_comment_multiline(lexer_t* lexer)
 	// TODO: Eating first character lexer->index++;
     while (1) {
 		if (lexer->data[lexer->index] == '\0') {
-			printf("Error: you have to close your multiline comments and it's not allowed to ignore and leave your multiline comment non-closed!\n");
+			print_error("Error: you have to close your multiline comments and it's not allowed to ignore and leave your multiline comment non-closed!\n");
 			exit(EXIT_FAILURE);
 			break;
 		} else if (lexer->data[lexer->index - 1] == '*' && lexer->data[lexer->index] == '/') {
@@ -963,7 +966,7 @@ void read_string(lexer_t* lexer, wchar_t ch)
 	size_t allocated_size = 20;
 	char* string = (char*) malloc(sizeof(char) * allocated_size);
 	if (string == NULL) {
-		printf("Error: read_string - Memory allocation failed.\n");
+		print_error("Error: read_string - Memory allocation failed.\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -974,7 +977,7 @@ void read_string(lexer_t* lexer, wchar_t ch)
 			allocated_size *= 2;
 			char* temp = (char*)realloc(string, sizeof(char) * allocated_size);
 			if (temp == NULL) {
-				printf("Error: read_string iterate - Memory reallocation failed.\n");
+				print_error("Error: read_string iterate - Memory reallocation failed.\n");
 				free(string);
 				exit(EXIT_FAILURE);
 			}
@@ -983,7 +986,7 @@ void read_string(lexer_t* lexer, wchar_t ch)
 
 		int char_size = wctomb(&string[i], ch);
 		if (char_size < 0) {
-			printf("Error: read_string - Failed to convert wide character to multibyte\n");
+			print_error("Error: read_string - Failed to convert wide character to multibyte\n");
 			free(string);
 			exit(EXIT_FAILURE);
 		}
@@ -1018,7 +1021,7 @@ void read_identifier(lexer_t* lexer, wchar_t ch)
 	while (is_ident(ch)) {
 		int char_size = wctomb(&identifier[i], ch);
 		if (char_size < 0) {
-			printf("Error: read_identifier - Failed to convert wide character to multibyte\n");
+			print_error("Error: read_identifier - Failed to convert wide character to multibyte\n");
 			exit(EXIT_FAILURE);
 		}
 		i += char_size;
@@ -1160,7 +1163,7 @@ void lexer_lex(lexer_t* lexer)
 		} else if (is_alpha(current_wchar)) {
 			read_identifier(lexer, current_wchar);
 		} else {
-			printf("Error: Unexpected character '%c' at line %zu, column %zu\n", current_char, lexer->line, lexer->column - 1);
+			print_error("Error: Unexpected character '%c' at line %zu, column %zu\n", current_char, lexer->line, lexer->column - 1);
 
 			token_t* t = token_create(TOKEN_TYPE_ERROR, (char[]){current_char,'\0'}, 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
@@ -1176,21 +1179,21 @@ void lexer_lex(lexer_t* lexer)
 
 void help()
 {
-	printf("Welcome to Salam Programming Language!\n");
-	printf("Salam is the first Persian/Iranian computer scripting language.\n");
-	printf("\n");
+	print_error("Welcome to Salam Programming Language!\n");
+	print_error("Salam is the first Persian/Iranian computer scripting language.\n");
+	print_error("\n");
 
-	printf("Usage:\n");
-	printf("  salam <filename>\t\t\t# Execute a Salam script\n");
-	printf("\n");
+	print_error("Usage:\n");
+	print_error("  salam <filename>\t\t\t# Execute a Salam script\n");
+	print_error("\n");
 
-	printf("Example:\n");
-	printf("  salam my_script.salam\t\t# Run the Salam script 'my_script.salam'\n");
-	printf("\n");
+	print_error("Example:\n");
+	print_error("  salam my_script.salam\t\t# Run the Salam script 'my_script.salam'\n");
+	print_error("\n");
 
-	printf("Feel free to explore and create using Salam!\n");
-	printf("For more information, visit: https://salamlang.ir\n");
-	printf("\n");
+	print_error("Feel free to explore and create using Salam!\n");
+	print_error("For more information, visit: https://salamlang.ir\n");
+	print_error("\n");
 }
 
 parser_t* parser_create(lexer_t** lexer)
@@ -1207,24 +1210,24 @@ parser_t* parser_create(lexer_t** lexer)
 void debug_current_token(parser_t* parser)
 {
 	token_t* t = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
-	printf("=========> Current token: %s - %s\n", token_type2str(t->type) ,t->value);
+	print_error("=========> Current token: %s - %s\n", token_type2str(t->type) ,t->value);
 }
 
 void ast_expression_free_data(ast_literal_t** val)
 {
-	printf("ast_expression_free_data\n");
+	print_error("ast_expression_free_data\n");
 
 	if (val == NULL || *val == NULL) {
-		printf("is null?\n");
+		print_error("is null?\n");
 		return;
 	}
 
-	printf("start checking type on ast_expression_free_data\n");
+	print_error("start checking type on ast_expression_free_data\n");
 
-	printf("free expression data\n");
+	print_error("free expression data\n");
 	if ((*val)->type == VALUE_TYPE_STRING) {
-		printf("has string\n");
-		printf("%s\n", (*val)->string_value);
+		print_error("has string\n");
+		print_error("%s\n", (*val)->string_value);
 		if (strcmp((*val)->string_value, "\0") != 0 && (*val)->string_value != NULL) {
 			free((*val)->string_value);
 			(*val)->string_value = NULL;
@@ -1240,14 +1243,14 @@ void ast_expression_free_data(ast_literal_t** val)
 	}
 
 	// TODO: MEMORY LEAKS
-	printf("free expression data main\n");
+	print_error("free expression data main\n");
 	if ((*val)->main != NULL) {
-		printf("ast_expression_free_data main\n");
+		print_error("ast_expression_free_data main\n");
 		// ast_expression_free((ast_expression_t**) &((*val)->main));
 		ast_expression_free((ast_expression_t**) ((*val)->main));
 	}
 
-	printf("let's free it's at all\n");
+	print_error("let's free it's at all\n");
 
 	free(*val);
 	*val = NULL;
@@ -1255,15 +1258,15 @@ void ast_expression_free_data(ast_literal_t** val)
 
 void ast_expression_free_literal(ast_expression_t** expr)
 {
-	printf("ast_expression_free_literal\n");
+	print_error("ast_expression_free_literal\n");
 
 	if (expr || *expr == NULL) {
 		return;
 	}
 
-	printf("free identifier\n");
+	print_error("free identifier\n");
 	if ((*expr)->data.literal != NULL) {
-		printf("check expr value of literal\n");
+		print_error("check expr value of literal\n");
 		ast_expression_free_data(&((*expr)->data.literal));
 		(*expr)->data.literal = NULL;
 	}
@@ -1271,15 +1274,15 @@ void ast_expression_free_literal(ast_expression_t** expr)
 
 void ast_expression_free_identifier(ast_expression_t** expr)
 {
-	printf("ast_expression_free_identifier\n");
+	print_error("ast_expression_free_identifier\n");
 
 	if (expr || *expr == NULL) {
 		return;
 	}
 
-	printf("free identifier\n");
+	print_error("free identifier\n");
 	if ((*expr)->data.identifier != NULL) {
-		printf("free identifier name\n");
+		print_error("free identifier name\n");
 		if ((*expr)->data.identifier->name != NULL) {
 			free((*expr)->data.identifier->name);
 			(*expr)->data.identifier->name = NULL;
@@ -1292,7 +1295,7 @@ void ast_expression_free_identifier(ast_expression_t** expr)
 
 void ast_expression_free_functioncall(ast_expression_t** expr)
 {
-	printf("ast_expression_free_functioncall\n");
+	print_error("ast_expression_free_functioncall\n");
 
 	if (expr || *expr == NULL) {
 		return;
@@ -1319,21 +1322,21 @@ void ast_expression_free_functioncall(ast_expression_t** expr)
 
 void ast_expression_free_assignment(ast_expression_t** expr)
 {
-	printf("ast_expression_free_assignment\n");
+	print_error("ast_expression_free_assignment\n");
 
 	if (expr || *expr == NULL) {
 		return;
 	}
 
-	printf("free assignment\n");
+	print_error("free assignment\n");
 	if ((*expr)->data.assignment != NULL) {
-		printf("free assignment left\n");
+		print_error("free assignment left\n");
 		if ((*expr)->data.assignment->left != NULL) {
 			ast_expression_free(&((*expr)->data.assignment->left));
 			(*expr)->data.assignment->left = NULL;
 		}
 
-		printf("free assignment right\n");
+		print_error("free assignment right\n");
 		if ((*expr)->data.assignment->right != NULL) {
 			ast_expression_free(&((*expr)->data.assignment->right));
 			(*expr)->data.assignment->right = NULL;
@@ -1346,7 +1349,7 @@ void ast_expression_free_assignment(ast_expression_t** expr)
 
 void ast_expression_free_binary(ast_expression_t** expr)
 {
-	printf("ast_expression_free_binary\n");
+	print_error("ast_expression_free_binary\n");
 	
 	if (expr || *expr == NULL) {
 		return;
@@ -1375,13 +1378,13 @@ void ast_expression_free_binary(ast_expression_t** expr)
 
 void ast_expression_free(ast_expression_t** expr)
 {
-	printf("ast_expression_free\n");
+	print_error("ast_expression_free\n");
 
 	if (expr == NULL || *expr == NULL) {
 		return;
 	}
 	
-	printf("---- expr type: %d\n", (*expr)->type);
+	print_error("---- expr type: %d\n", (*expr)->type);
 
 	switch ((*expr)->type) {
 		case AST_EXPRESSION_LITERAL:
@@ -1415,13 +1418,13 @@ void ast_expression_free(ast_expression_t** expr)
 
 void ast_node_free(ast_node_t** node)
 {
-	printf("ast_node_free\n");
+	print_error("ast_node_free\n");
 
 	if (node == NULL || *node == NULL) {
 		return;
 	}
 
-	printf("node type: %d\n", (*node)->type);
+	print_error("node type: %d\n", (*node)->type);
 
 	switch ((*node)->type) {
 		case AST_STATEMENT_CONTINUE:
@@ -1431,7 +1434,7 @@ void ast_node_free(ast_node_t** node)
 			break;
 
 		case AST_STATEMENT_UNTIL:
-			// printf("free ast until\n");
+			// print_error("free ast until\n");
 			if ((*node)->data.statement_until != NULL) {
 				if ((*node)->data.statement_until->condition != NULL) {
 					ast_expression_free(&((*node)->data.statement_until->condition));
@@ -1450,7 +1453,7 @@ void ast_node_free(ast_node_t** node)
 
 		case AST_STATEMENT_IF:
 		case AST_STATEMENT_ELSEIF:
-			// printf("free ast if/else\n");
+			// print_error("free ast if/else\n");
 			if ((*node)->data.statement_if != NULL) {
 				if ((*node)->data.statement_if->condition != NULL) {
 					ast_expression_free(&((*node)->data.statement_if->condition));
@@ -1482,15 +1485,15 @@ void ast_node_free(ast_node_t** node)
 			break;
 
 		case AST_FUNCTION_DECLARATION:
-			printf("free ast function\n");
+			print_error("free ast function\n");
 			if ((*node)->data.function_declaration != NULL) {
-				printf("free function name\n");
+				print_error("free function name\n");
 				if ((*node)->data.function_declaration->name != NULL) {
 					free((*node)->data.function_declaration->name);
 					(*node)->data.function_declaration->name = NULL;
 				}
 				
-				printf("free function body\n");
+				print_error("free function body\n");
 				if ((*node)->data.function_declaration->body != NULL) {
 					ast_node_free(&((*node)->data.function_declaration->body));
 					(*node)->data.function_declaration->body = NULL;
@@ -1502,18 +1505,18 @@ void ast_node_free(ast_node_t** node)
 			break;
 
 		case AST_STATEMENT_RETURN:
-			printf("free ast return\n");
+			print_error("free ast return\n");
 			if ((*node)->data.statement_return != NULL) {
-				printf("free return expr\n");
+				print_error("free return expr\n");
 				if ((*node)->data.statement_return->expression != NULL) {
 					ast_expression_free(&((*node)->data.statement_return->expression));
 					(*node)->data.statement_return->expression = NULL;
 				}
 
 				// TODO: MEMORY LEAKS
-				printf("free return expr value\n");
+				print_error("free return expr value\n");
 				if ((*node)->data.statement_return->expression_value != NULL) {
-					printf("check expr value of return\n");
+					print_error("check expr value of return\n");
 					ast_expression_free_data(&((*node)->data.statement_return->expression_value));
 					(*node)->data.statement_return->expression_value = NULL;
 				}
@@ -1524,18 +1527,18 @@ void ast_node_free(ast_node_t** node)
 			break;
 
 		case AST_STATEMENT_PRINT:
-			printf("free ast print\n");
+			print_error("free ast print\n");
 			if ((*node)->data.statement_print != NULL) {
-				printf("free print expr\n");
+				print_error("free print expr\n");
 				if ((*node)->data.statement_print->expression != NULL) {
 					ast_expression_free(&((*node)->data.statement_print->expression));
 					(*node)->data.statement_print->expression = NULL;
 				}
 
 				// TODO: MEMORY LEAKS
-				printf("free print expr value\n");
+				print_error("free print expr value\n");
 				if ((*node)->data.statement_print->expression_value != NULL) {
-					printf("check expr value of print\n");
+					print_error("check expr value of print\n");
 					ast_expression_free_data(&((*node)->data.statement_print->expression_value));
 					(*node)->data.statement_print->expression_value = NULL;
 				}
@@ -1546,13 +1549,13 @@ void ast_node_free(ast_node_t** node)
 			break;
 
 		case AST_BLOCK:
-			printf("free ast block\n");
+			print_error("free ast block\n");
 			if ((*node)->data.block != NULL) {
-				// printf("free block of func\n");
+				// print_error("free block of func\n");
 				if ((*node)->data.block->statements != NULL) {
-					// printf("free stmts of func\n");
+					// print_error("free stmts of func\n");
 					for (size_t i = 0; i < (*node)->data.block->num_statements; i++) {
-						// printf("free one of stmt of func\n");
+						// print_error("free one of stmt of func\n");
 						ast_node_free(&((*node)->data.block->statements[i]));
 						(*node)->data.block->statements[i] = NULL;
 					}
@@ -1566,9 +1569,9 @@ void ast_node_free(ast_node_t** node)
 			break;
 
 		case AST_EXPRESSION:
-			printf("free ast expr AST_EXPRESSION\n");
+			print_error("free ast expr AST_EXPRESSION\n");
 			if ((*node)->data.expression != NULL) {
-				// printf("AST_EXPRESSION is not null so lets do it\n");
+				// print_error("AST_EXPRESSION is not null so lets do it\n");
 				ast_expression_free(&((*node)->data.expression));
 				(*node)->data.expression = NULL;
 			}
@@ -1588,7 +1591,7 @@ void parser_free(parser_t** parser)
 	if ((*parser)->functions != NULL) {
 		if ((*parser)->functions->data != NULL) {
 			for (size_t i = 0; i < (*parser)->functions->length; i++) {
-				printf("Free function %s\n", ((ast_node_t*) (*parser)->functions->data[i])->data.function_declaration->name);
+				print_error("Free function %s\n", ((ast_node_t*) (*parser)->functions->data[i])->data.function_declaration->name);
 				if ((*parser)->functions->data[i] != NULL) {
 					ast_node_free((ast_node_t**) &((*parser)->functions->data[i]));
 					(*parser)->functions->data[i] = NULL;
@@ -1622,8 +1625,8 @@ void parser_free(parser_t** parser)
 
 	free(*parser);
 	*parser = NULL;
-	printf("*parser is null %d\n", *parser == NULL ? 1 : 0);
-	printf("parser is null %d\n", parser == NULL ? 1 : 0);
+	print_error("*parser is null %d\n", *parser == NULL ? 1 : 0);
+	print_error("parser is null %d\n", parser == NULL ? 1 : 0);
 }
 
 void parser_token_next(parser_t* parser)
@@ -1631,7 +1634,7 @@ void parser_token_next(parser_t* parser)
 	if ((*parser->lexer)->tokens->length > parser->token_index) {
 		parser->token_index++;
 	} else {
-		printf("Error: Unexpected end of file\n");
+		print_error("Error: Unexpected end of file\n");
 		exit(EXIT_FAILURE);
 	}
 }
@@ -1684,11 +1687,11 @@ void parser_token_eat_nodata(parser_t* parser, token_type_t type)
 		if (token->type == type) {
 			parser->token_index++;
 		} else {
-			printf("Error: Expected %s\n", token_type2str(type));
+			print_error("Error: Expected %s\n", token_type2str(type));
 			exit(EXIT_FAILURE);
 		}
 	} else {
-		printf("Error: Unexpected end of file\n");
+		print_error("Error: Unexpected end of file\n");
 		exit(EXIT_FAILURE);
 	}
 }
@@ -1701,11 +1704,11 @@ token_t* parser_token_eat(parser_t* parser, token_type_t type)
 		if (token->type == type) {
 			return (token_t*) (*parser->lexer)->tokens->data[parser->token_index++];
 		} else {
-			printf("Error: Expected %s\n", token_type2str(type));
+			print_error("Error: Expected %s\n", token_type2str(type));
 			exit(EXIT_FAILURE);
 		}
 	} else {
-		printf("Error: Unexpected end of file\n");
+		print_error("Error: Unexpected end of file\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -1714,7 +1717,7 @@ token_t* parser_token_eat(parser_t* parser, token_type_t type)
 
 ast_node_t* parser_function(parser_t* parser)
 {
-	printf("Parsing function\n");
+	print_error("Parsing function\n");
 
 	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
 	node->type = AST_FUNCTION_DECLARATION;
@@ -1728,11 +1731,11 @@ ast_node_t* parser_function(parser_t* parser)
 	node->data.function_declaration->arguments = array_create(3);
 	
 	if (parser_token_skip_ifhas(parser, TOKEN_TYPE_PARENTHESE_OPEN)) {
-		printf("Parsing parameters\n");
+		print_error("Parsing parameters\n");
 
 		while ((*parser->lexer)->tokens->length > parser->token_index && ((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type == TOKEN_TYPE_IDENTIFIER) {
 			token_t* t = (*parser->lexer)->tokens->data[parser->token_index];
-			// printf("we have an arg %s\n", t->value);
+			// print_error("we have an arg %s\n", t->value);
 			array_push(node->data.function_declaration->arguments, strdup(t->value));
 			parser->token_index++;
 
@@ -1760,7 +1763,7 @@ ast_node_t* parser_function(parser_t* parser)
 
 ast_node_t* parser_statement_print(parser_t* parser)
 {
-	printf("Parsing statement print\n");
+	print_error("Parsing statement print\n");
 
 	parser->token_index++;
 
@@ -1776,7 +1779,7 @@ ast_node_t* parser_statement_print(parser_t* parser)
 
 ast_node_t* parser_statement_return(parser_t* parser)
 {
-	printf("Parsing statement return\n");
+	print_error("Parsing statement return\n");
 
 	parser->token_index++;
 
@@ -1792,7 +1795,7 @@ ast_node_t* parser_statement_return(parser_t* parser)
 
 ast_node_t* parser_statement_break(parser_t* parser)
 {
-	printf("Parsing statement break\n");
+	print_error("Parsing statement break\n");
 
 	parser->token_index++;
 
@@ -1804,7 +1807,7 @@ ast_node_t* parser_statement_break(parser_t* parser)
 
 ast_node_t* parser_statement_continue(parser_t* parser)
 {
-	printf("Parsing statement continue\n");
+	print_error("Parsing statement continue\n");
 
 	parser->token_index++;
 
@@ -1833,7 +1836,7 @@ bool parser_expression_has(parser_t* parser)
 
 ast_node_t* parser_statement_if(parser_t* parser)
 {
-	printf("Parsing statement if\n");
+	print_error("Parsing statement if\n");
 
 	parser->token_index++; // Eating IF token
 
@@ -1869,7 +1872,7 @@ ast_node_t* parser_statement_if(parser_t* parser)
 				);
 
 				if (node->data.statement_if->elseifs == NULL) {
-					fprintf(stderr, "Error: in parsing block: Memory reallocation failed.\n");
+					print_error("Error: in parsing block: Memory reallocation failed.\n");
 					exit(EXIT_FAILURE);
 					break;
 				}
@@ -1887,7 +1890,7 @@ ast_node_t* parser_statement_if(parser_t* parser)
 
 ast_node_t* parser_statement_until(parser_t* parser)
 {
-	printf("Parsing statement until\n");
+	print_error("Parsing statement until\n");
 
 	parser->token_index++; // Eating UNTIL token
 
@@ -1902,7 +1905,7 @@ ast_node_t* parser_statement_until(parser_t* parser)
 
 ast_node_t* parser_statement(parser_t* parser)
 {
-	printf("Parsing statement\n");
+	print_error("Parsing statement\n");
 
 	ast_node_t* stmt = NULL;
 
@@ -1945,7 +1948,7 @@ ast_node_t* parser_statement(parser_t* parser)
 					stmt->data.expression = parser_expression(parser);
 					return stmt;
 				} else {
-					printf("Error: Unexpected token as statement %s\n", token_type2str(tok->type));
+					print_error("Error: Unexpected token as statement %s\n", token_type2str(tok->type));
 					exit(EXIT_FAILURE);
 				}
 				break;
@@ -1953,7 +1956,7 @@ ast_node_t* parser_statement(parser_t* parser)
 	}
 	
 	if (stmt == NULL) {
-		printf("Error: Unexpected token as statement %s\n", token_type2str(((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type));
+		print_error("Error: Unexpected token as statement %s\n", token_type2str(((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type));
 		exit(EXIT_FAILURE);
 	}
 	return stmt;
@@ -1961,7 +1964,7 @@ ast_node_t* parser_statement(parser_t* parser)
 
 ast_expression_t* parser_expression(parser_t* parser)
 {
-	printf("Parsing expression\n");
+	print_error("Parsing expression\n");
 
 	return parser_expression_pratt(parser, PRECEDENCE_LOWEST);
 
@@ -1974,14 +1977,14 @@ ast_expression_t* parser_expression(parser_t* parser)
 
 ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence)
 {
-	printf("Parsing pratt\n");
+	print_error("Parsing pratt\n");
 
 	token_t* current_token = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
 	parser->token_index++;
 
 	ast_expression_t* left = token_infos[current_token->type].nud(parser, current_token);
 
-	// printf("Token as op: %s\n", token_type2str(((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type));
+	// print_error("Token as op: %s\n", token_type2str(((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type));
 	while (((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type != TOKEN_TYPE_EOF && precedence < token_infos[((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type].precedence) {
 		current_token = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
 		parser->token_index++;
@@ -1994,7 +1997,7 @@ ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence)
 
 ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	printf("Parsing operator assignment\n");
+	print_error("Parsing operator assignment\n");
 
 	ast_expression_t* binary_op_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 	binary_op_expr->type = AST_EXPRESSION_ASSIGNMENT;
@@ -2008,7 +2011,7 @@ ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* 
 
 ast_expression_t* led_equal_equal(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	printf("Parsing operator == or !=\n");
+	print_error("Parsing operator == or !=\n");
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
@@ -2024,7 +2027,7 @@ ast_expression_t* led_equal_equal(parser_t* parser, token_t* token, ast_expressi
 
 ast_expression_t* led_and(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	printf("Parsing operator and\n");
+	print_error("Parsing operator and\n");
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
@@ -2040,7 +2043,7 @@ ast_expression_t* led_and(parser_t* parser, token_t* token, ast_expression_t* le
 
 ast_expression_t* led_or(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	printf("Parsing operator and\n");
+	print_error("Parsing operator and\n");
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
@@ -2056,7 +2059,7 @@ ast_expression_t* led_or(parser_t* parser, token_t* token, ast_expression_t* lef
 
 ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	printf("Parsing operator binary\n");
+	print_error("Parsing operator binary\n");
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
@@ -2072,7 +2075,7 @@ ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expressio
 
 ast_expression_t* nud_bool(parser_t* parser, token_t* token)
 {
-	printf("Parsing bool\n");
+	print_error("Parsing bool\n");
 
 	ast_expression_t* literal_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 	literal_expr->type = AST_EXPRESSION_LITERAL;
@@ -2087,7 +2090,7 @@ ast_expression_t* nud_bool(parser_t* parser, token_t* token)
 
 ast_expression_t* nud_number(parser_t* parser, token_t* token)
 {
-	printf("Parsing number\n");
+	print_error("Parsing number\n");
 
 	ast_expression_t* literal_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 	literal_expr->type = AST_EXPRESSION_LITERAL;
@@ -2102,7 +2105,7 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 
 ast_expression_t* nud_string(parser_t* parser, token_t* token)
 {
-	printf("Parsing string\n");
+	print_error("Parsing string\n");
 
 	ast_expression_t* literal_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 	literal_expr->type = AST_EXPRESSION_LITERAL;
@@ -2117,7 +2120,7 @@ ast_expression_t* nud_string(parser_t* parser, token_t* token)
 
 ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 {
-	printf("Parsing identifier\n");
+	print_error("Parsing identifier\n");
 
 	ast_expression_t* expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
 
@@ -2157,7 +2160,7 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 
 ast_expression_t* nud_parentheses(parser_t* parser, token_t* token)
 {
-	printf("Parsing parentheses\n");
+	print_error("Parsing parentheses\n");
 
 	ast_expression_t* expression_node = parser_expression_pratt(parser, PRECEDENCE_LOWEST);
 
@@ -2168,7 +2171,7 @@ ast_expression_t* nud_parentheses(parser_t* parser, token_t* token)
 
 ast_node_t* parser_block(parser_t* parser)
 {
-	printf("Parsing block\n");
+	print_error("Parsing block\n");
 
 	size_t allocated_size = 5;
 
@@ -2193,7 +2196,7 @@ ast_node_t* parser_block(parser_t* parser)
 			);
 
 			if (block_node->data.block->statements == NULL) {
-				fprintf(stderr, "Error: in parsing block: Memory reallocation failed.\n");
+				print_error("Error: in parsing block: Memory reallocation failed.\n");
 				exit(EXIT_FAILURE);
 			}
 		}
@@ -2247,7 +2250,7 @@ void parser_parse(parser_t* parser)
 						array_push(parser->expressions, expression_node);
 					}
 				} else {
-					printf("Error: bad token as statement %s\n", token_type2str(current_token->type));
+					print_error("Error: bad token as statement %s\n", token_type2str(current_token->type));
 					exit(EXIT_FAILURE);
 				}
 				break;
@@ -2258,157 +2261,157 @@ void parser_parse(parser_t* parser)
 void print_indentation(int indent_level)
 {
 	for (int i = 0; i < indent_level; i++) {
-		printf("  ");
+		print_error("  ");
 	}
 }
 
 void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 {
-	printf("<Expression>\n");
+	print_error("<Expression>\n");
 
 	switch (expr->type) {
 		case AST_EXPRESSION_LITERAL:
 			print_indentation(indent_level + 1);
-			printf("<Literal>\n");
+			print_error("<Literal>\n");
 
 				print_indentation(indent_level + 2);
-				printf("<Type>%s</Type>\n", literal_type2name(expr->data.literal->type));
+				print_error("<Type>%s</Type>\n", literal_type2name(expr->data.literal->type));
 
 				print_indentation(indent_level + 2);
 				if (expr->data.literal->type == VALUE_TYPE_STRING) {
-					printf("<Value>%s</Value>\n", expr->data.literal->string_value);
+					print_error("<Value>%s</Value>\n", expr->data.literal->string_value);
 				} else if (expr->data.literal->type == VALUE_TYPE_NULL) {
-					printf("<Value>NULL</value>\n");
+					print_error("<Value>NULL</value>\n");
 				} else if (expr->data.literal->type == VALUE_TYPE_INT) {
-					printf("<Value>%d</Value>\n", expr->data.literal->int_value);
+					print_error("<Value>%d</Value>\n", expr->data.literal->int_value);
 				} else if (expr->data.literal->type == VALUE_TYPE_BOOL) {
-					printf("<Value>%s</Value>\n", expr->data.literal->bool_value ? "True" : "False");
+					print_error("<Value>%s</Value>\n", expr->data.literal->bool_value ? "True" : "False");
 				} else {
-					printf("<!-- Unhandled Literal Type -->\n");
+					print_error("<!-- Unhandled Literal Type -->\n");
 				}
 
 				if (expr->data.literal->main != NULL) {
 					print_indentation(indent_level + 2);
-					printf("<Main>\n");
+					print_error("<Main>\n");
 
 						print_indentation(indent_level + 3);
 						print_xml_ast_expression((ast_expression_t*) *(expr->data.literal->main), indent_level + 3);
 
 					print_indentation(indent_level + 2);
-					printf("</Main>\n");
+					print_error("</Main>\n");
 				}
 
 			print_indentation(indent_level + 1);
-			printf("</Literal>\n");
+			print_error("</Literal>\n");
 			break;
 		
 		case AST_EXPRESSION_FUNCTION_CALL:
 			print_indentation(indent_level + 1);
-			printf("<FunctionCall>\n");
+			print_error("<FunctionCall>\n");
 
 				print_indentation(indent_level + 2);
-				printf("<Name>%s</Name>\n", expr->data.function_call->name);
+				print_error("<Name>%s</Name>\n", expr->data.function_call->name);
 
 				if (expr->data.function_call->arguments == NULL) {
 					print_indentation(indent_level + 2);
-					printf("<Arguments />\n");
+					print_error("<Arguments />\n");
 				} else {
 					print_indentation(indent_level + 2);
-					printf("<Arguments>\n");
+					print_error("<Arguments>\n");
 
 						for (size_t i = 0; i < expr->data.function_call->arguments->length; i++) {
 							print_indentation(indent_level + 3);
-							printf("<Argument>\n");
+							print_error("<Argument>\n");
 
 								print_indentation(indent_level + 4);
 								print_xml_ast_expression(expr->data.function_call->arguments->data[i], indent_level + 4);
 
 							print_indentation(indent_level + 3);
-							printf("<Argument>\n");
+							print_error("<Argument>\n");
 						}
 
 					print_indentation(indent_level + 2);
-					printf("</Arguments>\n");
+					print_error("</Arguments>\n");
 				}
 
 			print_indentation(indent_level + 1);
-			printf("</FunctionCall>\n");
+			print_error("</FunctionCall>\n");
 			break;
 
 		case AST_EXPRESSION_IDENTIFIER:
 			print_indentation(indent_level + 1);
-			printf("<Identifier>\n");
+			print_error("<Identifier>\n");
 
 				print_indentation(indent_level + 2);
-				printf("<Name>%s</Name>\n", expr->data.identifier->name);
+				print_error("<Name>%s</Name>\n", expr->data.identifier->name);
 
 			print_indentation(indent_level + 1);
-			printf("</Identifier>\n");
+			print_error("</Identifier>\n");
 			break;
 
 		case AST_EXPRESSION_BINARY:
 			print_indentation(indent_level + 1);
-			printf("<BinaryOperator>\n");
+			print_error("<BinaryOperator>\n");
 
 				print_indentation(indent_level + 2);
-				printf("<Operator>%s</Operator>\n", expr->data.binary_op->operator);
+				print_error("<Operator>%s</Operator>\n", expr->data.binary_op->operator);
 
 				print_indentation(indent_level + 2);
-				printf("<Left>\n");
+				print_error("<Left>\n");
 
 					print_indentation(indent_level + 3);
 					print_xml_ast_expression(expr->data.binary_op->left, indent_level + 3);
 
 				print_indentation(indent_level + 2);
-				printf("</Left>\n");
+				print_error("</Left>\n");
 
 				print_indentation(indent_level + 2);
-				printf("<Right>\n");
+				print_error("<Right>\n");
 
 					print_indentation(indent_level + 3);
 					print_xml_ast_expression(expr->data.binary_op->right, indent_level + 3);
 
 				print_indentation(indent_level + 2);
-				printf("</Right>\n");
+				print_error("</Right>\n");
 
 			print_indentation(indent_level + 1);
-			printf("</BinaryOperator>\n");
+			print_error("</BinaryOperator>\n");
 			break;
 
 		case AST_EXPRESSION_ASSIGNMENT:
 			print_indentation(indent_level + 1);
-			printf("<Assignment>\n");
+			print_error("<Assignment>\n");
 
 				print_indentation(indent_level + 2);
-				printf("<Left>\n");
+				print_error("<Left>\n");
 
 					print_indentation(indent_level + 3);
 					print_xml_ast_expression(expr->data.assignment->left, indent_level + 3);
 
 				print_indentation(indent_level + 2);
-				printf("</Left>\n");
+				print_error("</Left>\n");
 
 				print_indentation(indent_level + 2);
-				printf("<Right>\n");
+				print_error("<Right>\n");
 
 					print_indentation(indent_level + 3);
 					print_xml_ast_expression(expr->data.assignment->right, indent_level + 3);
 
 				print_indentation(indent_level + 2);
-				printf("</Right>\n");
+				print_error("</Right>\n");
 
 			print_indentation(indent_level + 1);
-			printf("</Assignment>\n");
+			print_error("</Assignment>\n");
 			break;
 
 		default:
 			print_indentation(indent_level + 1);
-			printf("<!-- Unhandled Expression Type -->\n");
+			print_error("<!-- Unhandled Expression Type -->\n");
 			break;
 	}
 
 	print_indentation(indent_level);
-	printf("</Expression>\n");
+	print_error("</Expression>\n");
 }
 
 void print_xml_ast_node(ast_node_t* node, int indent_level)
@@ -2421,125 +2424,125 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 
 	switch (node->type) {
 		case AST_STATEMENT_UNTIL:
-			printf("<StatementUntil>\n");
+			print_error("<StatementUntil>\n");
 
 				print_indentation(indent_level + 1);
-				printf("<Condition>\n");
+				print_error("<Condition>\n");
 
 					print_indentation(indent_level + 2);
 					print_xml_ast_expression(node->data.statement_if->condition, indent_level + 2);
 
 				print_indentation(indent_level + 1);
-				printf("</Condition>\n");
+				print_error("</Condition>\n");
 
 				print_xml_ast_node(node->data.statement_if->block, indent_level + 1);
 
 			print_indentation(indent_level);
-			printf("</StatementUntil>\n");
+			print_error("</StatementUntil>\n");
 			break;
 
 		case AST_STATEMENT_IF:
 		case AST_STATEMENT_ELSEIF:
-			printf("<StatementIf>\n");
+			print_error("<StatementIf>\n");
 
 				print_indentation(indent_level + 1);
-				printf("<Condition>\n");
+				print_error("<Condition>\n");
 
 					print_indentation(indent_level + 2);
 					print_xml_ast_expression(node->data.statement_if->condition, indent_level + 2);
 
 				print_indentation(indent_level + 1);
-				printf("</Condition>\n");
+				print_error("</Condition>\n");
 
 				print_xml_ast_node(node->data.statement_if->block, indent_level + 1);
 
 				if (node->data.statement_if->num_elseifs > 0) {
 					print_indentation(indent_level + 1);
-					printf("<ElseIfBlocks>\n");
+					print_error("<ElseIfBlocks>\n");
 
 						for (size_t i = 0; i < node->data.statement_if->num_elseifs; i++) {
 							print_xml_ast_node((ast_node_t*) node->data.statement_if->elseifs[i], indent_level + 2);
 						}
 
 					print_indentation(indent_level + 1);
-					printf("</ElseIfBlocks>\n");
+					print_error("</ElseIfBlocks>\n");
 				}
 
 				if (node->data.statement_if->else_block != NULL) {
 					print_indentation(indent_level + 1);
-					printf("<Else>\n");
+					print_error("<Else>\n");
 
 						if (node->data.statement_if->else_block != NULL) {
 							print_xml_ast_node(node->data.statement_if->else_block, indent_level + 2);
 						}
 					
 					print_indentation(indent_level + 1);
-					printf("</Else>\n");
+					print_error("</Else>\n");
 				}
 
 			print_indentation(indent_level);
-			printf("</StatementIf>\n");
+			print_error("</StatementIf>\n");
 			break;
 
 		case AST_FUNCTION_DECLARATION:
-			printf("<FunctionDeclaration>\n");
+			print_error("<FunctionDeclaration>\n");
 
 				print_indentation(indent_level + 1);
-				printf("<Name>%s</Name>\n", node->data.function_declaration->name);
+				print_error("<Name>%s</Name>\n", node->data.function_declaration->name);
 
 				if (node->data.function_declaration->arguments == NULL || node->data.function_declaration->arguments->length == 0) {
 					print_indentation(indent_level + 1);
-					printf("<Arguments />\n");
+					print_error("<Arguments />\n");
 				} else {
 					print_indentation(indent_level + 1);
-					printf("<Arguments>\n");
+					print_error("<Arguments>\n");
 
 					for (size_t i = 0; i < node->data.function_declaration->arguments->length; i++) {
 						char* ident = node->data.function_declaration->arguments->data[i];
 
 						print_indentation(indent_level + 2);
-						printf("<Argument>%s</Argument>\n", ident);
+						print_error("<Argument>%s</Argument>\n", ident);
 					}
 
 					print_indentation(indent_level + 1);
-					printf("</Arguments>\n");
+					print_error("</Arguments>\n");
 				}
 
 				print_xml_ast_node(node->data.function_declaration->body, indent_level + 1);
 
 			print_indentation(indent_level);
-			printf("</FunctionDeclaration>\n");
+			print_error("</FunctionDeclaration>\n");
 			break;
 
 		case AST_STATEMENT_PRINT:
-			printf("<StatementPrint>\n");
+			print_error("<StatementPrint>\n");
 
 				print_indentation(indent_level + 1);
 				print_xml_ast_expression(node->data.statement_print->expression, indent_level + 1);
 
 			print_indentation(indent_level);
-			printf("</StatementPrint>\n");
+			print_error("</StatementPrint>\n");
 			break;
 			
 		case AST_STATEMENT_RETURN:
-			printf("<StatementReturn>\n");
+			print_error("<StatementReturn>\n");
 
 				print_indentation(indent_level + 1);
 				print_xml_ast_expression(node->data.statement_return->expression, indent_level + 1);
 
 			print_indentation(indent_level);
-			printf("</StatementReturn>\n");
+			print_error("</StatementReturn>\n");
 			break;
 
 		case AST_BLOCK:
-			printf("<Block>\n");
+			print_error("<Block>\n");
 
 			for (size_t i = 0; i < node->data.block->num_statements; i++) {
 				print_xml_ast_node(node->data.block->statements[i], indent_level + 1);
 			}
 
 			print_indentation(indent_level);
-			printf("</Block>\n");
+			print_error("</Block>\n");
 			break;
 
 		case AST_EXPRESSION:
@@ -2548,20 +2551,20 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 
 		default:
 			print_indentation(indent_level);
-			printf("<!-- Unhandled AST Node Type -->\n");
+			print_error("<!-- Unhandled AST Node Type -->\n");
 			break;
 	}
 }
 
 void print_xml_ast_tree(parser_t* parser)
 {
-	printf("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-	printf("<AST>\n");
+	print_error("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+	print_error("<AST>\n");
 
 	if (parser != NULL) {
 		if (parser->functions != NULL) {
 			print_indentation(1);
-			printf("<Functions>\n");
+			print_error("<Functions>\n");
 
 				if (parser->functions != NULL) {
 					for (size_t i = 0; i < parser->functions->length; i++) {
@@ -2570,7 +2573,7 @@ void print_xml_ast_tree(parser_t* parser)
 				}
 
 			print_indentation(1);
-			printf("</Functions>\n");
+			print_error("</Functions>\n");
 		}
 
 		////////////////////////////////////////////
@@ -2578,7 +2581,7 @@ void print_xml_ast_tree(parser_t* parser)
 
 		if (parser->expressions != NULL) {
 			print_indentation(1);
-			printf("<Expressions>\n");
+			print_error("<Expressions>\n");
 
 				if (parser->expressions != NULL) {
 					for (size_t i = 0; i < parser->expressions->length; i++) {
@@ -2587,11 +2590,11 @@ void print_xml_ast_tree(parser_t* parser)
 				}
 			
 			print_indentation(1);
-			printf("</Expressions>\n");
+			print_error("</Expressions>\n");
 		}
 	}
 
-	printf("</AST>\n");
+	print_error("</AST>\n");
 }
 
 interpreter_t* interpreter_create(parser_t** parser)
@@ -2604,7 +2607,7 @@ interpreter_t* interpreter_create(parser_t** parser)
 
 ast_node_t* interpreter_statement_until(ast_node_t* node, interpreter_t* interpreter)
 {
-	// printf("Until\n");
+	// print_error("Until\n");
 
 	while (interpreter_expression_truly(node->data.statement_until->condition, interpreter) == true) {
 		ast_node_t* returned = interpreter_block(node->data.statement_until->block, interpreter, TOKEN_TYPE_UNTIL, NULL);
@@ -2625,7 +2628,7 @@ ast_node_t* interpreter_statement_until(ast_node_t* node, interpreter_t* interpr
 
 ast_node_t* interpreter_statement_if(ast_node_t* node, interpreter_t* interpreter)
 {
-	// printf("If\n");
+	// print_error("If\n");
 
 	if (interpreter_expression_truly(node->data.statement_if->condition, interpreter)) {
 		return interpreter_block(node->data.statement_if->block, interpreter, TOKEN_TYPE_IF, NULL);
@@ -2647,7 +2650,7 @@ ast_node_t* interpreter_statement_if(ast_node_t* node, interpreter_t* interprete
 
 ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type)
 {
-	// printf("Interpreter Interpret Once\n");
+	// print_error("Interpreter Interpret Once\n");
 
 	switch (node->type) {
 		case AST_BLOCK:
@@ -2679,7 +2682,7 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 			break;
 
 		default:
-			printf("interpreter_interpret - default\n");
+			print_error("interpreter_interpret - default\n");
 			break;
 	}
 
@@ -2688,7 +2691,7 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 
 interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 {
-	// printf("Interpreter Interpret\n");
+	// print_error("Interpreter Interpret\n");
 
 	if (interpreter == NULL || (*interpreter->parser) == NULL) {
 		return NULL;
@@ -2702,7 +2705,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 	interpreter->is_global_scope = true;
 	if ((*interpreter->parser)->expressions != NULL) {
 		for (size_t i = 0; i < (*interpreter->parser)->expressions->length; i++) {
-			// printf("Interpreting global expression\n");
+			// print_error("Interpreting global expression\n");
 			ast_node_t* expression = (ast_node_t*) (*interpreter->parser)->expressions->data[i];
 			if (expression != NULL && expression->data.expression != NULL) {
 				interpreter_expression(expression->data.expression, interpreter);
@@ -2731,10 +2734,10 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 
 	// print_xml_ast_node(main_returned, 3);
 	if (main_returned != NULL && main_returned->type == AST_STATEMENT_RETURN) {
-		printf("Main returned: ");
+		print_error("Main returned: ");
 		interpreter_expression_data(main_returned->data.statement_return->expression_value);
 	} else {
-		printf("No return value from main function, so default!\n");
+		print_error("No return value from main function, so default!\n");
 	}
 
 	return interpreter;
@@ -2742,7 +2745,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 
 ast_node_t* interpreter_function_declaration(ast_node_t* node, interpreter_t* interpreter, array_t* arguments)
 {
-	// printf("Function Declaration: %s\n", stmt->name);
+	// print_error("Function Declaration: %s\n", stmt->name);
 	
 	return interpreter_block(node->data.function_declaration->body, interpreter, TOKEN_TYPE_FUNCTION, arguments);
 }
@@ -2769,7 +2772,7 @@ void interpreter_expression_data(ast_literal_t* data)
 
 ast_node_t* interpreter_statement_return(ast_node_t* node, interpreter_t* interpreter)
 {
-	// printf("Return Statement\n");
+	// print_error("Return Statement\n");
 
 	node->data.statement_return->expression_value = (ast_literal_t*) interpreter_expression(node->data.statement_return->expression, interpreter);
 
@@ -2778,7 +2781,7 @@ ast_node_t* interpreter_statement_return(ast_node_t* node, interpreter_t* interp
 
 ast_node_t* interpreter_statement_print(ast_node_t* node, interpreter_t* interpreter)
 {
-	// printf("Print Statement\n");
+	// print_error("Print Statement\n");
 
 	node->data.statement_print->expression_value = (ast_literal_t*) interpreter_expression(node->data.statement_print->expression, interpreter);
 
@@ -2789,7 +2792,7 @@ ast_node_t* interpreter_statement_print(ast_node_t* node, interpreter_t* interpr
 
 ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type, array_t* arguments)
 {
-	// printf("Block\n");
+	// print_error("Block\n");
 
 	ast_node_t* returned = NULL;
 
@@ -2803,7 +2806,7 @@ ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, toke
 		ast_node_t* stmt = node->data.block->statements[i];
 
 		if (parent_type != TOKEN_TYPE_UNTIL && (stmt->type == AST_STATEMENT_BREAK || stmt->type == AST_STATEMENT_CONTINUE)) {
-			printf("Error: it's not possible to have break/continue inside a non-loop!\n");
+			print_error("Error: it's not possible to have break/continue inside a non-loop!\n");
 			exit(EXIT_FAILURE);
 			return NULL;
 		}
@@ -2841,7 +2844,7 @@ ast_literal_t* interpreter_literal(ast_expression_t* expr)
 
 ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* interpreter)
 {
-	// printf("Variable: %s (%d)\n", expr->data.identifier->name, interpreter->is_global_scope ? 1 : 0);
+	// print_error("Variable: %s (%d)\n", expr->data.identifier->name, interpreter->is_global_scope ? 1 : 0);
 
 	ast_literal_t* val;
 
@@ -2852,7 +2855,7 @@ ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* int
 	}
 
 	if (val == NULL) {
-		printf("Error: Variable not found: %s\n", expr->data.identifier->name);
+		print_error("Error: Variable not found: %s\n", expr->data.identifier->name);
 		exit(EXIT_FAILURE);
 		return NULL;
 	}
@@ -2875,7 +2878,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 	}
 
 	if (left == NULL || right == NULL) {
-		printf("Error: cannot calculate binary operator for invalid values!\n");
+		print_error("Error: cannot calculate binary operator for invalid values!\n");
 		invalid = true;
 	} else if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_STRING && strcmp(expr->data.binary_op->operator, "+") == 0) {
 		char* left_str = intToString(left->int_value);
@@ -2950,11 +2953,11 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 			res->type = VALUE_TYPE_BOOL;
 			res->bool_value = left->float_value == right->float_value ? true : false;
 		} else {
-			printf("Error: cannot compare unknown types!\n");
+			print_error("Error: cannot compare unknown types!\n");
 			invalid = true;
 		}
 	} else if ((left->type != VALUE_TYPE_INT && left->type != VALUE_TYPE_BOOL) || (right->type != VALUE_TYPE_INT && right->type != VALUE_TYPE_BOOL)) {
-		printf("Error: cannot calculate binary operator for non-int values!\n");
+		print_error("Error: cannot calculate binary operator for non-int values!\n");
 		invalid = true;
 	} else if (strcmp(expr->data.binary_op->operator, "+") == 0) {
 		res->type = VALUE_TYPE_INT;
@@ -2973,14 +2976,14 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 		res->int_value = left->int_value || right->int_value;
 	} else if (strcmp(expr->data.binary_op->operator, "/") == 0) {
 		if (right->int_value == 0) {
-			printf("Error: cannot divide by zero!\n");
+			print_error("Error: cannot divide by zero!\n");
 			invalid = true;
 		} else {
 			res->type = VALUE_TYPE_INT;
 			res->int_value = left->int_value / right->int_value;
 		}
 	} else {
-		printf("Error: unknown operator: %s\n", expr->data.binary_op->operator);
+		print_error("Error: unknown operator: %s\n", expr->data.binary_op->operator);
 		invalid = true;
 	}
 
@@ -3011,9 +3014,9 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 
 	if (function_arguments_count != arguments_count) {
 		if (arguments_count > function_arguments_count) {
-			printf("Error: number of arguments is not match with the function - you are passing more arguments!\n");
+			print_error("Error: number of arguments is not match with the function - you are passing more arguments!\n");
 		} else {
-			printf("Error: number of arguments is not match with the function - you are passing less arguments!\n");
+			print_error("Error: number of arguments is not match with the function - you are passing less arguments!\n");
 		}
 		exit(EXIT_FAILURE);
 		return NULL;
@@ -3028,7 +3031,7 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 	}
 
 	// Scope entry
-	// printf("create a scope with function_call enabled\n");
+	// print_error("create a scope with function_call enabled\n");
 	pushSymbolTable(&symbolTableStack, true);
 
 	for (size_t i = 0; i < arguments_count; i++) {
@@ -3041,7 +3044,7 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 	
 	// Scope exit
 	popSymbolTable(&symbolTableStack);
-	// printf("delete a scope with function_call enabled\n");
+	// print_error("delete a scope with function_call enabled\n");
 
 	array_free(arg_values);
 
@@ -3053,7 +3056,7 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 
 ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* interpreter)
 {
-	// printf("Function Call: %s\n", node->data.function_call->name);
+	// print_error("Function Call: %s\n", node->data.function_call->name);
 
 	// Check if functions exists in (*interpreter->parser)->...
 	bool exists = false;
@@ -3071,7 +3074,7 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 	}
 	
 	if (exists == false || func_exists == NULL) {
-		printf("Error: function not exists!\n");
+		print_error("Error: function not exists!\n");
 		exit(EXIT_FAILURE);
 		return NULL;
 	}
@@ -3089,7 +3092,7 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 
 bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter)
 {
-	// printf("Truly\n");
+	// print_error("Truly\n");
 
 	ast_literal_t* res = interpreter_expression(expr, interpreter);
 	// ast_expression_free(&(expr));
@@ -3110,10 +3113,10 @@ bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpr
 
 ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpreter_t* interpreter)
 {
-	// printf("Assignment\n");
+	// print_error("Assignment\n");
 
 	if (expr->data.assignment->left->type != AST_EXPRESSION_IDENTIFIER) {
-		printf("Error: Assignment to non-variable\n");
+		print_error("Error: Assignment to non-variable\n");
 		exit(EXIT_FAILURE);
 		return NULL;
 	}
@@ -3121,7 +3124,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	bool isNew = false;
 	char* identifier = strdup(expr->data.assignment->left->data.identifier->name);
 
-	// printf("============> assign %s variable\n", identifier);
+	// print_error("============> assign %s variable\n", identifier);
 
 	ast_literal_t* right = interpreter_expression(expr->data.assignment->right, interpreter);
 	ast_literal_t* variable;
@@ -3133,7 +3136,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	}
 
 	if (variable == NULL) {
-		// printf("this is a new variable on this scope!\n");
+		// print_error("this is a new variable on this scope!\n");
 		isNew = true;
 		variable = (ast_literal_t*) malloc(sizeof(ast_literal_t));
 	}
@@ -3206,7 +3209,7 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 			break;
 
 		default:
-			printf("Error: default expr type: %d\n", expr->type);
+			print_error("Error: default expr type: %d\n", expr->type);
 			exit(EXIT_FAILURE);
 			return NULL;
 	}
@@ -3287,52 +3290,52 @@ int main(int argc, char** argv)
 
 		print_xml_ast_tree(parser);
 
-		printf("====================================\n");
+		print_error("====================================\n");
 
 		interpreter_t* interpreter = interpreter_create(&parser);
 		interpreter_interpret(interpreter);
 
-		printf("====================================\n");
-		printf("DONE\n");
+		print_error("====================================\n");
+		print_error("DONE\n");
 
 		// print_xml_ast_tree(parser);
 
-		// printf("====================================\n");
+		// print_error("====================================\n");
 
-		// printf("start signing...\n");
+		// print_error("start signing...\n");
 		// print_xml_ast_tree(parser);
-		// printf("sign-done\n");
+		// print_error("sign-done\n");
 		// exit(EXIT_FAILURE);
 
-		// printf("start second signing...\n");
+		// print_error("start second signing...\n");
 		// print_xml_ast_tree(parser);
 		// print_xml_ast_tree(*(interpreter->parser));
-		// printf("second sign-done\n");
+		// print_error("second sign-done\n");
 
 		// return 0;
 
-		printf("free lexer\n");
+		print_error("free lexer\n");
 		lexer_free(&lexer);
-		printf("end lexer free\n");
+		print_error("end lexer free\n");
 
-		printf("free parser\n");
+		print_error("free parser\n");
 		parser_free(interpreter->parser);
 		// parser_free(parser);
-		printf("end parser free\n");
+		print_error("end parser free\n");
 
-		printf("out-after parser is null %d\n", parser == NULL ? 1 : 0);
-		printf("out-after interp-parser is null %d\n", (*interpreter->parser) == NULL ? 1 : 0);
+		print_error("out-after parser is null %d\n", parser == NULL ? 1 : 0);
+		print_error("out-after interp-parser is null %d\n", (*interpreter->parser) == NULL ? 1 : 0);
 
-		printf("free interpreter\n");
+		print_error("free interpreter\n");
 		interpreter_free(&interpreter);
-		printf("end interpreter free\n");
+		print_error("end interpreter free\n");
 
 		// if (file_data != NULL) {
 		// 	free(file_data);
 		// 	file_data = NULL;
 		// }
 
-		printf("DONE\n");
+		print_error("DONE\n");
 	}
 
 	exit(EXIT_SUCCESS);

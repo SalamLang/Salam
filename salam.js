@@ -67,7 +67,7 @@ var read_,
 // Normally we don't log exceptions but instead let them bubble out the top
 // level where the embedding environment (e.g. the browser) can handle
 // them.
-// However under v8 and node we sometimes exit the process direcly in which case
+// However under v8 and node we sometimes exit the process directly in which case
 // its up to use us to log the exception before exiting.
 // If we fix https://github.com/emscripten-core/emscripten/issues/15080
 // this may no longer be needed under node.
@@ -1510,7 +1510,7 @@ function abort(what) {
   // simply make the program stop.
 
   // Suppress closure compiler warning here. Closure compiler's builtin extern
-  // defintion for WebAssembly.RuntimeError claims it takes no arguments even
+  // definition for WebAssembly.RuntimeError claims it takes no arguments even
   // though it can.
   // TODO(https://github.com/google/closure-compiler/pull/3913): Remove if/when upstream closure gets fixed.
 
@@ -2949,7 +2949,7 @@ var ASM_CONSTS = {
         // parents must exist
         var lookup, old_dir, new_dir;
   
-        // let the errors from non existant directories percolate up
+        // let the errors from non existent directories percolate up
         lookup = FS.lookupPath(old_path, { parent: true });
         old_dir = lookup.node;
         lookup = FS.lookupPath(new_path, { parent: true });

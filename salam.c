@@ -3166,6 +3166,34 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		val->int_value = strlen(arg_val->string_value);
 		val->main = NULL;
 		return val;
+	} else if (strcmp(node->data.function_call->name, "رشته") == 0) {
+		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
+			print_error("Error: number of arguments of رشته() function should be empty!\n");
+			exit(EXIT_FAILURE);
+			return NULL;
+		}
+
+		ast_literal_t* arg_val = (ast_literal_t*) interpreter_expression(node->data.function_call->arguments->data[0], interpreter);
+		if (arg_val->type == VALUE_TYPE_STRING) {
+			return arg_val;
+		}
+
+		ast_literal_t* val = malloc(sizeof(ast_literal_t));
+		val->type = VALUE_TYPE_STRING;
+		val->main = NULL;
+
+		if (arg_val->type == VALUE_TYPE_INT) {
+			val->string_value = intToString(arg_val->int_value);
+		} else if (arg_val->type == VALUE_TYPE_BOOL) {
+			val->string_value = strdup(arg_val->bool_value == true ? "درست" : "غلط");
+		} else if (arg_val->type == VALUE_TYPE_NULL) {
+			val->string_value = strdup("پوچ");
+		} else {
+			val->string_value = strdup("نامشخص");
+		}
+		// TODO: supporting float
+
+		return val;
 	}
 
 	if ((*interpreter->parser)->functions != NULL) {

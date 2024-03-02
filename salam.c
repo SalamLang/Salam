@@ -3090,9 +3090,6 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		}
 
 		ast_literal_t* arg_val = (ast_literal_t*) interpreter_expression(node->data.function_call->arguments->data[0], interpreter);
-
-		printf("%s\n", interpreter_expression_data_type(arg_val));
-		interpreter_expression_data(arg_val);
 		
 		ast_literal_t* val = malloc(sizeof(ast_literal_t));
 		val->type = VALUE_TYPE_STRING;

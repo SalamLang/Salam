@@ -2810,20 +2810,20 @@ char* interpreter_expression_data_type(ast_literal_t* data)
 void interpreter_expression_data(ast_literal_t* data)
 {
 	if (data == NULL) {
-		printf("NULL\n");
+		printf("نامشخص\n");
 		return;
 	} else if (data->type == VALUE_TYPE_NULL) {
-		printf("NULL\n");
+		printf("پوچ\n");
 	} else if (data->type == VALUE_TYPE_INT) {
 		printf("%d\n", data->int_value);
 	} else if (data->type == VALUE_TYPE_FLOAT) {
 		printf("%f\n", data->float_value);
 	} else if (data->type == VALUE_TYPE_BOOL) {
-		printf("%s\n", data->bool_value == true ? "True" : "False");
+		printf("%s\n", data->bool_value == true ? "درست" : "غلط");
 	} else if (data->type == VALUE_TYPE_STRING) {
 		printf("%s\n", data->string_value);
 	} else {
-		printf("Unknown (%d)\n", data->type);
+		printf("نامشخص\n", data->type);
 	}
 }
 

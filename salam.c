@@ -2823,7 +2823,7 @@ void interpreter_expression_data(ast_literal_t* data)
 	} else if (data->type == VALUE_TYPE_STRING) {
 		printf("%s\n", data->string_value);
 	} else {
-		printf("نامشخص\n", data->type);
+		printf("نامشخص\n");
 	}
 }
 
@@ -3386,16 +3386,27 @@ int main(int argc, char** argv)
 		return 0;
 	}
 
-	if (argc == 3 && strcmp(argv[1], "--code") != 0) {
+	if (argc == 3 && strcmp(argv[1], "--code") != 0 && strcmp(argv[1], "--ast") != 0) {
 		help();
 		return 0;
 	}
 
 	char* file_data;
+	bool isAst = false;
+	bool isRun = false;
 	bool passingCode = false;
+	interpreter_t* interpreter;
+
 	if (argc == 2) {
 		file_data = file_read(argv[1]);
 	} else {
+		if (strcmp(argv[1], "--ast")) {
+			isAst = true;
+			isRun = false;
+		} else {
+			isAst = false;
+			isRun = true;
+		}
 		passingCode = true;
 		file_data = argv[2];
 	}
@@ -3406,13 +3417,21 @@ int main(int argc, char** argv)
 		lexer_lex(lexer);
 		parser_t* parser = parser_create(&lexer);
 		parser_parse(parser);
-		interpreter_t* interpreter = interpreter_create(&parser);
-		interpreter_interpret(interpreter);
+		if (isAst) {
+			print_xml_ast_tree(parser);
+		} else if (isRun) {
+			interpreter = interpreter_create(&parser);
+			interpreter_interpret(interpreter);
+		}
 
 		// Free memory
 		lexer_free(&lexer);
-		parser_free(interpreter->parser);
-		interpreter_free(&interpreter);
+		if (isRun) {
+			parser_free(interpreter->parser);
+			interpreter_free(&interpreter);
+		} else {
+			parser_free(&(parser));
+		}
 	} else {
 		lexer_t* lexer = lexer_create(file_data);
 		lexer_lex(lexer);

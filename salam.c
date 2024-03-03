@@ -41,7 +41,7 @@ typedef struct ast_literal_t {
 		bool bool_value;
 		float float_value;
 		char* string_value;
-		array_t** array_value;
+		array_t* array_value;
 	};
 
 	struct ast_expression_t** main; // To have a reference into parser ast so we can free it later after interpreter
@@ -2189,13 +2189,12 @@ ast_expression_t* nud_array(parser_t* parser, token_t* token)
 	literal_expr->data.literal->main = NULL;
 	literal_expr->data.literal->type = VALUE_TYPE_ARRAY;
 	literal_expr->data.literal->string_value = NULL;
-	array_t* arr = array_create(5);
-	literal_expr->data.literal->array_value = &arr;
+	literal_expr->data.literal->array_value = array_create(5);
 
 	// Eating until found TOKEN_TYPE_BRACKETS_CLOSE
 	while (!parser_token_skip_ifhas(parser, TOKEN_TYPE_BRACKETS_CLOSE)) {
 		ast_expression_t* element = parser_expression(parser);
-		array_push(*(literal_expr->data.literal->array_value), element);
+		array_push(literal_expr->data.literal->array_value, element);
 
 		if (parser_token_skip_ifhas(parser, TOKEN_TYPE_COMMA)) {
 			// Eat the comma and continue for more elements
@@ -2398,22 +2397,22 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 					print_error("<Value>%s</Value>\n", expr->data.literal->bool_value ? "True" : "False");
 				} else if (expr->data.literal->type == VALUE_TYPE_ARRAY) {
 					print_error("<Count>");
-					print_error("%zu", (*(expr->data.literal->array_value))->length);
+					print_error("%zu", (expr->data.literal->array_value)->length);
 					print_error("</Count>\n");
 
 					print_indentation(indent_level + 2);
 					print_error("<Values>\n");
 
-						// for (size_t i = 0; i < (*(expr->data.literal->array_value))->length; i++) {
-						// 	print_indentation(indent_level + 3);
-						// 	print_error("<ArrayItem>\n");
+						for (size_t i = 0; i < (expr->data.literal->array_value)->length; i++) {
+							print_indentation(indent_level + 3);
+							print_error("<ArrayItem>\n");
 
-						// 		print_indentation(indent_level + 4);
-						// 		print_xml_ast_expression((*(expr->data.literal->array_value))->data[i], indent_level + 4);
+								print_indentation(indent_level + 4);
+								print_xml_ast_expression((expr->data.literal->array_value)->data[i], indent_level + 4);
 							
-						// 	print_indentation(indent_level + 3);
-						// 	print_error("</ArrayItem>\n");
-						// }
+							print_indentation(indent_level + 3);
+							print_error("</ArrayItem>\n");
+						}
 
 					print_indentation(indent_level + 2);
 					print_error("</Values>\n");
@@ -2922,12 +2921,12 @@ void interpreter_expression_data(ast_literal_t* data, bool newLine)
 		printf("[");
 		if (data->array_value != NULL) {
 			printf("===>...\n");
-			size_t arr_length = (*(data->array_value))->length;
+			size_t arr_length = (data->array_value)->length;
 			// gcc -g -fsanitize=undefined,address -Walloca -o s salam.c -lefence
 			printf("arr size: %zu\n", arr_length);
-			for (size_t i = 0; i < (*(data->array_value))->length; i++) {
+			for (size_t i = 0; i < (data->array_value)->length; i++) {
 				printf(".");
-				interpreter_expression_data((ast_literal_t*) (*(data->array_value))->data[i], false);
+				interpreter_expression_data((ast_literal_t*) (data->array_value)->data[i], false);
 			}
 		}
 		printf("]");
@@ -3024,19 +3023,20 @@ ast_literal_t* interpreter_literal(ast_expression_t* expr, interpreter_t* interp
 			printf("length of array is: ");
 			printf("...\n");
 			// printf("%zu\n", expr->data.literal->array_value);
-			printf("%zu\n", (*(expr->data.literal->array_value))->length);
-			for (size_t i = 0; i < (*(expr->data.literal->array_value))->length; i++) {
-				ast_expression_t* arr_exp = (*(expr->data.literal->array_value))->data[i];
-				ast_literal_t* arr_val;
-				if (arr_exp->type == AST_EXPRESSION_VALUE) {
-					arr_val = arr_exp->data.literal;
-					arr_val->main = (struct ast_expression_t**) &arr_exp;
-				} else {
-					arr_val = interpreter_expression(arr_exp, interpreter);
-				}
+			printf("%zu\n", (expr->data.literal->array_value)->length);
 
-				(*(expr->data.literal->array_value))->data[i] = arr_val;
-			}
+			// for (size_t i = 0; i < (expr->data.literal->array_value)->length; i++) {
+			// 	ast_expression_t* arr_exp = (expr->data.literal->array_value)->data[i];
+			// 	ast_literal_t* arr_val;
+			// 	if (arr_exp->type == AST_EXPRESSION_VALUE) {
+			// 		arr_val = arr_exp->data.literal;
+			// 		arr_val->main = (struct ast_expression_t**) &arr_exp;
+			// 	} else {
+			// 		arr_val = interpreter_expression(arr_exp, interpreter);
+			// 	}
+
+			// 	(expr->data.literal->array_value)->data[i] = arr_val;
+			// }
 		}
 	}
 
@@ -3157,6 +3157,47 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 			print_error("Error: cannot compare unknown types!\n");
 			invalid = true;
 		}
+	} else if (strcmp(expr->data.binary_op->operator, "و") == 0) {
+		res->type = VALUE_TYPE_BOOL;
+		if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_INT) {
+			res->bool_value = left->int_value && right->int_value;
+		} else if (left->type == VALUE_TYPE_FLOAT && right->type == VALUE_TYPE_FLOAT) {
+			res->bool_value = left->float_value && right->float_value;
+		} else if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_BOOL) {
+			res->bool_value = (left->int_value > 0 ? true : false) && right->bool_value;
+		} else if (left->type == VALUE_TYPE_FLOAT && right->type == VALUE_TYPE_BOOL) {
+			res->bool_value = (left->float_value > 0 ? true : false) && right->bool_value;
+		} else if (left->type == VALUE_TYPE_BOOL && right->type == VALUE_TYPE_INT) {
+			res->bool_value = left->bool_value && (right->int_value > 0 ? true : false);
+		} else if (left->type == VALUE_TYPE_BOOL && right->type == VALUE_TYPE_FLOAT) {
+			res->bool_value = left->bool_value && (right->float_value > 0 ? true : false);
+		} else if (left->type == VALUE_TYPE_BOOL && right->type == VALUE_TYPE_BOOL) {
+			res->bool_value = left->bool_value && right->bool_value;
+		} else {
+			print_error("Error: cannot calculate this values for AND operator!\n");
+			invalid = true;
+		}
+	} else if (strcmp(expr->data.binary_op->operator, "یا") == 0) {
+		res->type = VALUE_TYPE_BOOL;
+		res->type = VALUE_TYPE_BOOL;
+		if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_INT) {
+			res->bool_value = left->int_value || right->int_value;
+		} else if (left->type == VALUE_TYPE_FLOAT && right->type == VALUE_TYPE_FLOAT) {
+			res->bool_value = left->float_value || right->float_value;
+		} else if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_BOOL) {
+			res->bool_value = (left->int_value > 0 ? true : false) || right->bool_value;
+		} else if (left->type == VALUE_TYPE_FLOAT && right->type == VALUE_TYPE_BOOL) {
+			res->bool_value = (left->float_value > 0 ? true : false) || right->bool_value;
+		} else if (left->type == VALUE_TYPE_BOOL && right->type == VALUE_TYPE_INT) {
+			res->bool_value = left->bool_value || (right->int_value > 0 ? true : false);
+		} else if (left->type == VALUE_TYPE_BOOL && right->type == VALUE_TYPE_FLOAT) {
+			res->bool_value = left->bool_value || (right->float_value > 0 ? true : false);
+		} else if (left->type == VALUE_TYPE_BOOL && right->type == VALUE_TYPE_BOOL) {
+			res->bool_value = left->bool_value || right->bool_value;
+		} else {
+			print_error("Error: cannot calculate this values for OR operator!\n");
+			invalid = true;
+		}
 	} else if ((left->type != VALUE_TYPE_INT && left->type != VALUE_TYPE_BOOL) || (right->type != VALUE_TYPE_INT && right->type != VALUE_TYPE_BOOL)) {
 		print_error("Error: cannot calculate binary operator for non-int values!\n");
 		invalid = true;
@@ -3169,12 +3210,6 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 	} else if (strcmp(expr->data.binary_op->operator, "*") == 0) {
 		res->type = VALUE_TYPE_INT;
 		res->int_value = left->int_value * right->int_value;
-	} else if (strcmp(expr->data.binary_op->operator, "و") == 0) {
-		res->type = VALUE_TYPE_BOOL;
-		res->int_value = left->int_value && right->int_value;
-	} else if (strcmp(expr->data.binary_op->operator, "یا") == 0) {
-		res->type = VALUE_TYPE_BOOL;
-		res->int_value = left->int_value || right->int_value;
 	} else if (strcmp(expr->data.binary_op->operator, "/") == 0) {
 		if (right->int_value == 0) {
 			print_error("Error: cannot divide by zero!\n");

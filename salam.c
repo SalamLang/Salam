@@ -2185,12 +2185,12 @@ ast_expression_t* nud_array(parser_t* parser, token_t* token)
 	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
 	literal_expr->data.literal->main = NULL;
 	literal_expr->data.literal->type = VALUE_TYPE_ARRAY;
-	array_t* arr = array_create(5);
+	literal_expr->data.literal->array_value = array_create(5);
 
     // Eating until found TOKEN_TYPE_BRACKETS_CLOSE
     while (!parser_token_skip_ifhas(parser, TOKEN_TYPE_BRACKETS_CLOSE)) {
         ast_expression_t* element = parser_expression(parser);
-        array_push(arr, element);
+        array_push(literal_expr->data.literal->array_value, element);
 
         if (parser_token_skip_ifhas(parser, TOKEN_TYPE_COMMA)) {
             // Eat the comma and continue for more elements
@@ -2200,14 +2200,12 @@ ast_expression_t* nud_array(parser_t* parser, token_t* token)
             break;
         }
         else {
-			array_free(arr); // TODO
+			// array_free(literal_expr->data.literal->array_value); // TODO
             print_error("Error: Expected ',' or ']' in array value.\n");
             exit(EXIT_FAILURE);
             return NULL;
         }
     }
-
-	literal_expr->data.literal->array_value = arr;
 
     return literal_expr;
 }
@@ -2396,10 +2394,27 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 				} else if (expr->data.literal->type == VALUE_TYPE_BOOL) {
 					print_error("<Value>%s</Value>\n", expr->data.literal->bool_value ? "True" : "False");
 				} else if (expr->data.literal->type == VALUE_TYPE_ARRAY) {
-					print_error("<Value>");
-					print_error("Array (%zu)", expr->data.literal->array_value->length);
-					// if (debug_enabled) interpreter_expression_data(expr->data.literal, false);
-					print_error("</Value>\n");
+					print_error("<Count>");
+					print_error("%zu", expr->data.literal->array_value->length);
+					print_error("</Count>\n");
+
+					print_indentation(indent_level + 2);
+					print_error("<Values>\n");
+
+						for (size_t i = 0; i < expr->data.literal->array_value->length; i++) {
+							print_indentation(indent_level + 3);
+							print_error("<ArrayItem>\n");
+
+								print_indentation(indent_level + 4);
+								print_xml_ast_expression(expr->data.literal->array_value->data[i], indent_level + 4);
+							
+							print_indentation(indent_level + 3);
+							print_error("</ArrayItem>\n");
+						}
+
+					print_indentation(indent_level + 2);
+					print_error("</Values>\n");
+
 				} else {
 					print_error("<!-- Unhandled Literal Type -->\n");
 				}
@@ -3001,24 +3016,28 @@ ast_literal_t* interpreter_literal(ast_expression_t* expr, interpreter_t* interp
 		printf("preparing array...\n");
 		if (expr->data.literal->array_value != NULL) {
 			printf("array is not null\n");
-			array_t* new_arr = array_create(5);
+			// array_t* new_arr = array_create(5);
 			printf("length of array is: ");
 			printf("%zu\n", expr->data.literal->array_value->length);
 			for (size_t i = 0; i < expr->data.literal->array_value->length; i++) {
-				// ast_expression_t* arr_exp = expr->data.literal->array_value->data[i];
+				ast_expression_t* arr_exp = expr->data.literal->array_value->data[i];
 				// if (arr_exp == NULL) {
 				// 	printf("arr exp is null\n");
 				// }
 				printf("now checking val interp\n");
-				printf("%s\n", interpreter_expression_data_type(
-						(ast_literal_t*) ((ast_expression_t*) expr->data.literal->array_value->data[i])->data.literal
-					)
-				);
-				printf("%s\n", interpreter_expression_data_type(
-						interpreter_expression(((ast_expression_t*) expr->data.literal->array_value->data[i]), interpreter)
-						// (ast_literal_t*) ((ast_expression_t*) expr->data.literal->array_value->data[i])->data.literal
-					)
-				);
+				print_xml_ast_expression(arr_exp, 4);
+				printf("next what about checking val interp\n");
+				ast_literal_t* arr_val = interpreter_expression(arr_exp, interpreter);
+				// printf("%s\n", interpreter_expression_data_type(((ast_expression_t*) expr->data.literal->array_value->data[i])->type));
+				// printf("%s\n", interpreter_expression_data_type(arr_val));
+				// 		(ast_literal_t*) ((ast_expression_t*) expr->data.literal->array_value->data[i])->data.literal
+				// 	)
+				// );
+				// printf("%s\n", interpreter_expression_data_type(
+				// 		interpreter_expression(((ast_expression_t*) expr->data.literal->array_value->data[i]), interpreter)
+				// 		// (ast_literal_t*) ((ast_expression_t*) expr->data.literal->array_value->data[i])->data.literal
+				// 	)
+				// );
 				// ast_literal_t* arr_val = interpreter_expression(expr->data.literal->array_value->data[i], interpreter);
 				// if (arr_val == NULL) {
 				// 	printf("arr vall is null\n");
@@ -3042,8 +3061,8 @@ ast_literal_t* interpreter_literal(ast_expression_t* expr, interpreter_t* interp
 			// free(expr->data.literal->array_value);
 
 			printf("replace new arra into literal\n");
-			expr->data.literal->array_value = new_arr;
-			printf("new array size in interpreter: %zu\n", new_arr->length);
+			// expr->data.literal->array_value = new_arr;
+			// printf("new array size in interpreter: %zu\n", new_arr->length);
 		}
 
 		printf("array size in interpreter: %zu\n", expr->data.literal->array_value->length);

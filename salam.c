@@ -2930,12 +2930,9 @@ void interpreter_expression_data(ast_literal_t* data, bool newLine)
 	} else if (data->type == VALUE_TYPE_ARRAY_LITERAL) {
 		printf("[");
 		if (data->array_literal_value != NULL) {
-			// printf("===>...\n");
-			// printf("arr size: %zu\n", data->size_value);
+			printf("arr size: %zu\n", data->size_value);
 			for (int i = 0; i < data->size_value; i++) {
-				// printf(".");
-				// interpreter_expression_data((ast_literal_t*) (data->array_value)->data[i], false);
-				// printf("%s, ", interpreter_expression_data_type((ast_literal_t*) (data->array_value)->data[i]));
+				printf(".");
 				interpreter_expression_data(
 					(ast_literal_t*) data->array_literal_value[i],
 					false
@@ -3029,30 +3026,13 @@ ast_literal_t* interpreter_literal(ast_expression_t* expr, interpreter_t* interp
 	}
 
 	if (expr->data.literal->type == VALUE_TYPE_ARRAY_EXPRESSION) {
-		printf("preparing array...\n");
 		if (expr->data.literal->array_expression_value != NULL) {
-			printf("array is not null\n");
-			// array_t* new_arr = array_create(5);
-			printf("length of array is: ");
-			printf("...\n");
-			// printf("%zu\n", expr->data.literal->array_value);
-			printf("%zu\n", expr->data.literal->size_value);
-			// print_xml_ast_expression(expr, 5);
-			interpreter_expression_data(expr->data.literal, 5);
-
 			expr->data.literal->array_literal_value = (struct ast_literal_t**) malloc(sizeof(ast_literal_t*) * expr->data.literal->size_value);
 			expr->data.literal->type = VALUE_TYPE_ARRAY_LITERAL;
 
 			for (size_t i = 0; i < expr->data.literal->size_value; i++) {
 				ast_expression_t* arr_exp = (ast_expression_t*) expr->data.literal->array_expression_value[i];
-				ast_literal_t* arr_val;
-				if (arr_exp->type == AST_EXPRESSION_VALUE) {
-					arr_val = arr_exp->data.literal;
-					arr_val->main = (struct ast_expression_t**) &arr_exp;
-				} else {
-					arr_val = interpreter_expression(arr_exp, interpreter);
-				}
-
+				ast_literal_t* arr_val = interpreter_expression(arr_exp, interpreter);
 				expr->data.literal->array_literal_value[i] = arr_val;
 			}
 		}

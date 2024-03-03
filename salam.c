@@ -20,7 +20,8 @@ typedef enum {
 	VALUE_TYPE_FLOAT,
 	VALUE_TYPE_BOOL,
 	VALUE_TYPE_STRING,
-	VALUE_TYPE_ARRAY,
+	VALUE_TYPE_ARRAY_LITERAL,
+	VALUE_TYPE_ARRAY_EXPRESSION,
 } ast_literal_type_t;
 
 typedef struct {
@@ -41,8 +42,11 @@ typedef struct ast_literal_t {
 		bool bool_value;
 		float float_value;
 		char* string_value;
-		array_t* array_value;
 	};
+
+	size_t size_value;
+	struct ast_expression_t** array_expression_value;
+	struct ast_literal_t** array_literal_value;
 
 	struct ast_expression_t** main; // To have a reference into parser ast so we can free it later after interpreter
 } ast_literal_t;
@@ -507,7 +511,7 @@ char* literal_type2name(ast_literal_type_t type)
 		case VALUE_TYPE_FLOAT: return "FLOAT";
 		case VALUE_TYPE_BOOL: return "BOOL";
 		case VALUE_TYPE_STRING: return "STRING";
-		case VALUE_TYPE_ARRAY: return "ARRAY";
+		case VALUE_TYPE_ARRAY_EXPRESSION: case VALUE_TYPE_ARRAY_LITERAL: return "ARRAY";
 		default: return "TYPE_UNKNOWN";
 	}
 }
@@ -1278,28 +1282,23 @@ void ast_expression_free_data(ast_literal_t** val)
 	print_error("start checking type on ast_expression_free_data\n");
 
 	print_error("free expression data\n");
-	if ((*val)->type == VALUE_TYPE_ARRAY) {
+	if ((*val)->type == VALUE_TYPE_ARRAY_EXPRESSION) {
 		print_error("free array\n");
-		// if ((*val)->array_value != NULL) {
-		// 	print_error("has array data\n");
-		// 	if (*((*val)->array_value)->data != NULL) {
-		// 		for (size_t i = 0; i < *((*val)->array_value)->length; i++) {
-		// 			print_error("has array data item\n");
-		// 			ast_expression_free_data((ast_literal_t**) &(
-		// 				*((*val)->array_value)->data[i]
-		// 			));
+		if ((*val)->array_expression_value != NULL) {
+			print_error("has array data\n");
+			// for (size_t i = 0; i < (*val)->size_value; i++) {
+			// 	print_error("has array data item\n");
+			// 	// ast_expression_free_data((ast_literal_t**) &(
+			// 	// 	(*val)->array_expression_value->data[i]
+			// 	// ));
 
-		// 			free(*((*val)->array_value)->data[i]);
-		// 			*((*val)->array_value)->data[i] = NULL;
-		// 		}
+			// 	free((*val)->array_expression_value->data[i]);
+			// 	(*val)->array_expression_value->data[i] = NULL;
+			// }
 
-		// 		free(*((*val)->array_value)->data);
-		// 		*((*val)->array_value)->data = NULL;
-		// 	}
-
-		// 	free(*((*val)->array_value));
-		// 	*((*val)->array_value) = NULL;
-		// }
+			free((*val)->array_expression_value);
+			(*val)->array_expression_value = NULL;
+		}
 	} else if ((*val)->type == VALUE_TYPE_STRING) {
 		print_error("has string\n");
 		print_error("%s\n", (*val)->string_value);
@@ -2187,14 +2186,16 @@ ast_expression_t* nud_array(parser_t* parser, token_t* token)
 
 	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
 	literal_expr->data.literal->main = NULL;
-	literal_expr->data.literal->type = VALUE_TYPE_ARRAY;
+	literal_expr->data.literal->type = VALUE_TYPE_ARRAY_EXPRESSION;
 	literal_expr->data.literal->string_value = NULL;
-	literal_expr->data.literal->array_value = array_create(5);
+	literal_expr->data.literal->array_expression_value = (struct ast_expression_t**) malloc(sizeof(ast_expression_t*) * 10);
+	literal_expr->data.literal->array_literal_value = NULL;
 
 	// Eating until found TOKEN_TYPE_BRACKETS_CLOSE
+	size_t i = 0;
 	while (!parser_token_skip_ifhas(parser, TOKEN_TYPE_BRACKETS_CLOSE)) {
 		ast_expression_t* element = parser_expression(parser);
-		array_push(literal_expr->data.literal->array_value, element);
+		literal_expr->data.literal->array_expression_value[i++] = (struct ast_expression_t*) element;
 
 		if (parser_token_skip_ifhas(parser, TOKEN_TYPE_COMMA)) {
 			// Eat the comma and continue for more elements
@@ -2202,12 +2203,12 @@ ast_expression_t* nud_array(parser_t* parser, token_t* token)
 			// End of the array
 			break;
 		} else {
-			// array_free(literal_expr->data.literal->array_value); // TODO
 			print_error("Error: Expected ',' or ']' in array value.\n");
 			exit(EXIT_FAILURE);
 			return NULL;
 		}
 	}
+	literal_expr->data.literal->size_value = i;
 
 	return literal_expr;
 }
@@ -2395,20 +2396,20 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 					print_error("<Value>%d</Value>\n", expr->data.literal->int_value);
 				} else if (expr->data.literal->type == VALUE_TYPE_BOOL) {
 					print_error("<Value>%s</Value>\n", expr->data.literal->bool_value ? "True" : "False");
-				} else if (expr->data.literal->type == VALUE_TYPE_ARRAY) {
+				} else if (expr->data.literal->type == VALUE_TYPE_ARRAY_EXPRESSION) {
 					print_error("<Count>");
-					print_error("%zu", (expr->data.literal->array_value)->length);
+					print_error("%zu", expr->data.literal->size_value);
 					print_error("</Count>\n");
 
 					print_indentation(indent_level + 2);
 					print_error("<Values>\n");
 
-						for (size_t i = 0; i < (expr->data.literal->array_value)->length; i++) {
+						for (size_t i = 0; i < expr->data.literal->size_value; i++) {
 							print_indentation(indent_level + 3);
 							print_error("<ArrayItem>\n");
 
 								print_indentation(indent_level + 4);
-								print_xml_ast_expression((expr->data.literal->array_value)->data[i], indent_level + 4);
+								print_xml_ast_expression((ast_expression_t*) expr->data.literal->array_expression_value[i], indent_level + 4);
 							
 							print_indentation(indent_level + 3);
 							print_error("</ArrayItem>\n");
@@ -2895,7 +2896,7 @@ char* interpreter_expression_data_type(ast_literal_t* data)
 		return "درستی";
 	} else if (data->type == VALUE_TYPE_STRING) {
 		return "رشته";
-	} else if (data->type == VALUE_TYPE_ARRAY) {
+	} else if (data->type == VALUE_TYPE_ARRAY_LITERAL || data->type == VALUE_TYPE_ARRAY_EXPRESSION) {
 		return "دسته";
 	} else {
 		return "نامشخص";
@@ -2917,19 +2918,26 @@ void interpreter_expression_data(ast_literal_t* data, bool newLine)
 		printf("%s", data->bool_value == true ? "درست" : "غلط");
 	} else if (data->type == VALUE_TYPE_STRING) {
 		printf("%s", data->string_value);
-	} else if (data->type == VALUE_TYPE_ARRAY) {
+	} else if (data->type == VALUE_TYPE_ARRAY_EXPRESSION) {
 		printf("[");
-		if (data->array_value != NULL) {
-			printf("===>...\n");
-			size_t arr_length = (data->array_value)->length;
-			// gcc -g -fsanitize=undefined,address -Walloca -o s salam.c -lefence
-			printf("arr size: %zu\n", arr_length);
-			for (size_t i = 0; i < (data->array_value)->length; i++) {
-				printf(".");
+		if (data->array_expression_value != NULL) {
+			for (int i = 0; i < data->size_value; i++) {
+				printf("expr");
+				if (i + 1 != (data->size_value)) printf(",");
+			}
+		}
+		printf("]");
+	} else if (data->type == VALUE_TYPE_ARRAY_LITERAL) {
+		printf("[");
+		if (data->array_literal_value != NULL) {
+			// printf("===>...\n");
+			// printf("arr size: %zu\n", data->size_value);
+			for (int i = 0; i < data->size_value; i++) {
+				// printf(".");
 				// interpreter_expression_data((ast_literal_t*) (data->array_value)->data[i], false);
-				printf("%s, ", interpreter_expression_data_type((ast_literal_t*) (data->array_value)->data[i]));
+				// printf("%s, ", interpreter_expression_data_type((ast_literal_t*) (data->array_value)->data[i]));
 				interpreter_expression_data(
-					(ast_literal_t*) (data->array_value)->data[i],
+					(ast_literal_t*) data->array_literal_value[i],
 					false
 				);
 			}
@@ -3020,30 +3028,33 @@ ast_literal_t* interpreter_literal(ast_expression_t* expr, interpreter_t* interp
 		return NULL;
 	}
 
-	if (expr->data.literal->type == VALUE_TYPE_ARRAY) {
+	if (expr->data.literal->type == VALUE_TYPE_ARRAY_EXPRESSION) {
 		printf("preparing array...\n");
-		if (expr->data.literal->array_value != NULL) {
+		if (expr->data.literal->array_expression_value != NULL) {
 			printf("array is not null\n");
 			// array_t* new_arr = array_create(5);
 			printf("length of array is: ");
 			printf("...\n");
 			// printf("%zu\n", expr->data.literal->array_value);
-			printf("%zu\n", (expr->data.literal->array_value)->length);
+			printf("%zu\n", expr->data.literal->size_value);
 			// print_xml_ast_expression(expr, 5);
 			interpreter_expression_data(expr->data.literal, 5);
 
-			// for (size_t i = 0; i < (expr->data.literal->array_value)->length; i++) {
-			// 	ast_expression_t* arr_exp = (expr->data.literal->array_value)->data[i];
-			// 	ast_literal_t* arr_val;
-			// 	if (arr_exp->type == AST_EXPRESSION_VALUE) {
-			// 		arr_val = arr_exp->data.literal;
-			// 		arr_val->main = (struct ast_expression_t**) &arr_exp;
-			// 	} else {
-			// 		arr_val = interpreter_expression(arr_exp, interpreter);
-			// 	}
+			expr->data.literal->array_literal_value = (struct ast_literal_t**) malloc(sizeof(ast_literal_t*) * expr->data.literal->size_value);
+			expr->data.literal->type = VALUE_TYPE_ARRAY_LITERAL;
 
-			// 	(expr->data.literal->array_value)->data[i] = arr_val;
-			// }
+			for (size_t i = 0; i < expr->data.literal->size_value; i++) {
+				ast_expression_t* arr_exp = (ast_expression_t*) expr->data.literal->array_expression_value[i];
+				ast_literal_t* arr_val;
+				if (arr_exp->type == AST_EXPRESSION_VALUE) {
+					arr_val = arr_exp->data.literal;
+					arr_val->main = (struct ast_expression_t**) &arr_exp;
+				} else {
+					arr_val = interpreter_expression(arr_exp, interpreter);
+				}
+
+				expr->data.literal->array_literal_value[i] = arr_val;
+			}
 		}
 	}
 

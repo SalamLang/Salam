@@ -2926,7 +2926,12 @@ void interpreter_expression_data(ast_literal_t* data, bool newLine)
 			printf("arr size: %zu\n", arr_length);
 			for (size_t i = 0; i < (data->array_value)->length; i++) {
 				printf(".");
-				interpreter_expression_data((ast_literal_t*) (data->array_value)->data[i], false);
+				// interpreter_expression_data((ast_literal_t*) (data->array_value)->data[i], false);
+				printf("%s, ", interpreter_expression_data_type((ast_literal_t*) (data->array_value)->data[i]));
+				interpreter_expression_data(
+					(ast_literal_t*) (data->array_value)->data[i],
+					false
+				);
 			}
 		}
 		printf("]");
@@ -3024,6 +3029,8 @@ ast_literal_t* interpreter_literal(ast_expression_t* expr, interpreter_t* interp
 			printf("...\n");
 			// printf("%zu\n", expr->data.literal->array_value);
 			printf("%zu\n", (expr->data.literal->array_value)->length);
+			// print_xml_ast_expression(expr, 5);
+			interpreter_expression_data(expr->data.literal, 5);
 
 			// for (size_t i = 0; i < (expr->data.literal->array_value)->length; i++) {
 			// 	ast_expression_t* arr_exp = (expr->data.literal->array_value)->data[i];

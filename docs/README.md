@@ -10,8 +10,6 @@
 
 <https://salamlang.ir>
 
-<https://salamlaang.ir>
-
 ## Keywords
 
 ```

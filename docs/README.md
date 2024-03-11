@@ -13,19 +13,19 @@
 ## Keywords
 
 ```
-FUNCTION    |   عملکرد
-RETURN      |   برگشت
+AND         |   و
 BREAK       |   توقف
 CONTINUE    |   ادامه
-PRINT       |   نمایش
+ELSEIF      |   واگرنه
+FALSE       |   غلط
+FUNCTION    |   عملکرد
 IF          |   اگر
 NULL        |   پوچ
-UNTIL       |  تا
-TRUE        |   درست
-FALSE       |   غلط
-ELSEIF      |   واگرنه
-AND         |   و
 OR          |   یا
+PRINT       |   نمایش
+RETURN      |   برگشت
+TRUE        |   درست
+UNTIL       |  تا
 ```
 
 ## Operators

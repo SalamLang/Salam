@@ -1424,7 +1424,7 @@ void ast_expression_free_assignment(ast_expression_t** expr)
 void ast_expression_free_binary(ast_expression_t** expr)
 {
 	print_error("ast_expression_free_binary\n");
-	
+
 	if (expr || *expr == NULL) {
 		return;
 	}
@@ -1457,7 +1457,7 @@ void ast_expression_free(ast_expression_t** expr)
 	if (expr == NULL || *expr == NULL) {
 		return;
 	}
-	
+
 	print_error("---- expr type: %d\n", (*expr)->type);
 
 	switch ((*expr)->type) {
@@ -1480,7 +1480,7 @@ void ast_expression_free(ast_expression_t** expr)
 		case AST_EXPRESSION_BINARY:
 			ast_expression_free_binary(expr);
 			break;
-		
+
 		case AST_EXPRESSION_VALUE:
 			// Ignore
 			break;
@@ -1566,7 +1566,7 @@ void ast_node_free(ast_node_t** node)
 					free((*node)->data.function_declaration->name);
 					(*node)->data.function_declaration->name = NULL;
 				}
-				
+
 				print_error("free function body\n");
 				if ((*node)->data.function_declaration->body != NULL) {
 					ast_node_free(&((*node)->data.function_declaration->body));
@@ -1803,7 +1803,7 @@ ast_node_t* parser_function(parser_t* parser)
 	node->data.function_declaration = (ast_function_declaration_t*) malloc(sizeof(ast_function_declaration_t));
 	node->data.function_declaration->name = strdup(name->value);
 	node->data.function_declaration->arguments = array_create(3);
-	
+
 	if (parser_token_skip_ifhas(parser, TOKEN_TYPE_PARENTHESE_OPEN)) {
 		print_error("Parsing parameters\n");
 
@@ -2007,15 +2007,15 @@ ast_node_t* parser_statement(parser_t* parser)
 			case TOKEN_TYPE_IF:
 				stmt = parser_statement_if(parser);
 				break;
-			
+
 			case TOKEN_TYPE_PRINT:
 				stmt = parser_statement_print(parser);
 				break;
-			
+
 			case TOKEN_TYPE_SECTION_OPEN:
 				stmt = parser_block(parser);
 				break;
-			
+
 			default:
 				if (parser_expression_has(parser)) {
 					stmt = malloc(sizeof(ast_node_t));
@@ -2029,7 +2029,7 @@ ast_node_t* parser_statement(parser_t* parser)
 				break;
 		}
 	}
-	
+
 	if (stmt == NULL) {
 		print_error("Error: Unexpected token as statement %s\n", token_type2str(((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type));
 		exit(EXIT_FAILURE);
@@ -2046,7 +2046,7 @@ ast_expression_t* parser_expression(parser_t* parser)
 	// ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
 	// node->type = AST_EXPRESSION;
 	// node->data.expression = parser_expression_pratt(parser, PRECEDENCE_LOWEST);
-	
+
 	// return node;
 }
 
@@ -2264,7 +2264,7 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 		expr->data.identifier = (ast_identifier_t*) malloc(sizeof(ast_identifier_t));
 		expr->data.identifier->name = strdup(token->value);
 	}
-	
+
 	return expr;
 }
 
@@ -2343,7 +2343,7 @@ void parser_parse(parser_t* parser)
 				parser->token_index++;
 				return;
 				break;
-			
+
 			case TOKEN_TYPE_FUNCTION:
 				function_node = parser_function(parser);
 				if (parser->functions && function_node != NULL) {
@@ -2410,7 +2410,7 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 
 								print_indentation(indent_level + 4);
 								print_xml_ast_expression((ast_expression_t*) expr->data.literal->array_expression_value[i], indent_level + 4);
-							
+
 							print_indentation(indent_level + 3);
 							print_error("</ArrayItem>\n");
 						}
@@ -2436,7 +2436,7 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 			print_indentation(indent_level + 1);
 			print_error("</Literal>\n");
 			break;
-		
+
 		case AST_EXPRESSION_FUNCTION_CALL:
 			print_indentation(indent_level + 1);
 			print_error("<FunctionCall>\n");
@@ -2551,7 +2551,7 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 	if (node == NULL) {
 		return;
 	}
-	
+
 	print_indentation(indent_level);
 
 	switch (node->type) {
@@ -2607,7 +2607,7 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 						if (node->data.statement_if->else_block != NULL) {
 							print_xml_ast_node(node->data.statement_if->else_block, indent_level + 2);
 						}
-					
+
 					print_indentation(indent_level + 1);
 					print_error("</Else>\n");
 				}
@@ -2655,7 +2655,7 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 			print_indentation(indent_level);
 			print_error("</StatementPrint>\n");
 			break;
-			
+
 		case AST_STATEMENT_RETURN:
 			print_error("<StatementReturn>\n");
 
@@ -2720,7 +2720,7 @@ void print_xml_ast_tree(parser_t* parser)
 						print_xml_ast_node(parser->expressions->data[i], 2);
 					}
 				}
-			
+
 			print_indentation(1);
 			print_error("</Expressions>\n");
 		}
@@ -2796,7 +2796,7 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 		case AST_STATEMENT_RETURN:
 			return interpreter_statement_return(node, interpreter);
 			break;
-		
+
 		case AST_STATEMENT_IF:
 			return interpreter_statement_if(node, interpreter);
 			break;
@@ -2878,7 +2878,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 ast_node_t* interpreter_function_declaration(ast_node_t* node, interpreter_t* interpreter, array_t* arguments)
 {
 	// print_error("Function Declaration: %s\n", stmt->name);
-	
+
 	return interpreter_block(node->data.function_declaration->body, interpreter, TOKEN_TYPE_FUNCTION, arguments);
 }
 
@@ -3269,13 +3269,13 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 	pushSymbolTable(&symbolTableStack, true);
 
 	for (size_t i = 0; i < arguments_count; i++) {
-		char* arg_name = function->data.function_declaration->arguments->data[i];	
+		char* arg_name = function->data.function_declaration->arguments->data[i];
 
 		addToSymbolTable(symbolTableStack, arg_name, arg_values->data[i]);
 	}
 
 	ast_node_t* returned = interpreter_function_declaration(function, interpreter, arguments);
-	
+
 	// Scope exit
 	popSymbolTable(&symbolTableStack);
 	// print_error("delete a scope with function_call enabled\n");
@@ -3304,7 +3304,7 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		}
 
 		ast_literal_t* arg_val = (ast_literal_t*) interpreter_expression(node->data.function_call->arguments->data[0], interpreter);
-		
+
 		ast_literal_t* val = malloc(sizeof(ast_literal_t));
 		val->type = VALUE_TYPE_STRING;
 		val->string_value = strdup(interpreter_expression_data_type(arg_val));
@@ -3383,7 +3383,7 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 			}
 		}
 	}
-	
+
 	if (exists == false || func_exists == NULL) {
 		print_error("Error: function not exists!\n");
 		exit(EXIT_FAILURE);

@@ -1,7 +1,7 @@
 FROM ubuntu:noble
 
 RUN apt-get update && \
-    apt-get -y install gcc mono-mcs && \
+    apt-get install -y --no-install-recommends gcc mono-mcs && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

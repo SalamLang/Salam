@@ -16,3 +16,6 @@ Example:
 Feel free to explore and create using Salam!
 For more information, visit: https://salamlang.ir
 ```
+
+Salam is being developed by <a href="https://github.com/BaseMax">Max Base</a>
+and <a href="https://github.com/jbampton">John Bampton</a>.

@@ -28,3 +28,4 @@ For more information, visit: https://salamlang.ir
 
 - [Max Base](https://github.com/BaseMax)
 - [John Bampton](https://github.com/jbampton)
+- [Anwar Hossain](https://github.com/anwarhossain1)

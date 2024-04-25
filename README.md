@@ -1,3 +1,10 @@
+<div align="center">
+  <p>
+    <img src="https://avatars.githubusercontent.com/u/161657044?s=200&v=4"
+    alt="The Salam Programming Language" title="Salam">
+  </p>
+</div>
+
 # Salam Programming Language
 
 Salam Language, inspired by the Persian and Arabic roots of the word `salam`, which means `peace`, is a programming language crafted for simplicity and accessibility within the Iranian and Arabic-speaking communities. Serving as the first Persian and Arabic programming language, Salam Language is designed to provide an intuitive and user-friendly experience, specifically tailored for users, students, and developers familiar with Persian or Arabic. Embracing the cultural and linguistic richness of the region, Salam Language aims to empower a diverse range of individuals, making programming more approachable and fostering a sense of ease and collaboration in the local coding community.

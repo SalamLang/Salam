@@ -61,6 +61,6 @@ To maintain consistency and readability, please follow these coding conventions 
 
 ## Feedback and Support
 
-if you have any questions, feedback, or need support, don't hesitate to reach out to the project maintainers or the community. We're here to help and support each other in making Salam the best it can be.
+If you have any questions, feedback, or need support, don't hesitate to reach out to the project maintainers or the community. We're here to help and support each other in making Salam the best it can be.
 
 Thank you for your interest in contributing to Salam! We appreciate your help in making this project a success. Happy coding!

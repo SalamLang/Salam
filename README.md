@@ -22,7 +22,6 @@ Example:
 
 Feel free to explore and create using Salam!
 For more information, visit: https://salamlang.ir
-
 ```
 
 ## Contributing

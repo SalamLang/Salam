@@ -22,7 +22,7 @@ fi
 
 ldconfig -p | grep efence  &>/dev/null
 if ! [ $? -eq 0 ]; then
-        echo "efence libraray is missing"
+        echo "efence library is missing"
         echo "Install efence - Electric Fence Malloc Debugger"
         exit 1
 fi

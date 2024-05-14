@@ -10,6 +10,13 @@
 bool debug_enabled = true;
 #define print_error(...) if (debug_enabled) fprintf(stderr, __VA_ARGS__);
 
+#define CREATE_MEMORY_OBJECT(result, type, length, fmt, ...) \
+	result = (type *)malloc(sizeof(type) * (length));  \
+	if (!result) { \
+	    fprintf(stderr, fmt,  __VA_ARGS__);\
+		exit(EXIT_FAILURE); \
+	}
+
 struct ast_expression;
 
 struct ast_literal_t;
@@ -441,11 +448,8 @@ token_info_t token_infos[] = {
 // Helper functions
 char* read_dynamic_string() {
 	size_t current_size = 52;
-	char* input = malloc(sizeof(char) * current_size);
-	if (!input) {
-		perror("Memory allocation error");
-		exit(EXIT_FAILURE);
-	}
+	char* input;
+	CREATE_MEMORY_OBJECT(input, char, current_size, "Error: read_dynamic_string<input> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	size_t length = 0;
 
@@ -485,7 +489,8 @@ char* intToString(int value)
 		numDigits++;
 	}
 
-	char* result = (char*) malloc(numDigits + 1 + (sign == -1 ? 1 : 0));
+	char* result;
+	CREATE_MEMORY_OBJECT(result, char, numDigits + 1 + (sign == -1 ? 1 : 0), "Error: intToString<result> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	if (result != NULL) {
 		if (sign == -1) {
 			result[0] = '-';
@@ -527,7 +532,8 @@ unsigned int hash(const char* str, size_t capacity)
 
 SymbolTable* createSymbolTable(size_t capacity)
 {
-	SymbolTable* table = (SymbolTable*) malloc(sizeof(SymbolTable));
+	SymbolTable* table;
+	CREATE_MEMORY_OBJECT(table, SymbolTable, 1, "Error: createSymbolTable<table> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	table->entries = (SymbolTableEntry**) calloc(capacity, sizeof(SymbolTableEntry*) );
 	table->size = 0;
 	table->capacity = capacity;
@@ -538,7 +544,8 @@ void pushSymbolTable(SymbolTableStack** ts, bool is_function_call)
 {
 	// print_error("create scope with %d state\n", is_function_call ? 1 : 0);
 	SymbolTable* table = createSymbolTable(16);
-	SymbolTableStack* newScope = (SymbolTableStack*) malloc(sizeof(SymbolTableStack));
+	SymbolTableStack* newScope;
+	CREATE_MEMORY_OBJECT(newScope, SymbolTableStack, 1, "Error: pushSymbolTable<newScope> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	newScope->table = table;
 	newScope->is_function_call = is_function_call;
 	newScope->next = *ts;
@@ -621,7 +628,8 @@ void addToSymbolTable(SymbolTableStack* ts, const char* identifier, ast_literal_
 	SymbolTable* table = ts->table;
 	unsigned int index = hash(identifier, table->capacity);
 
-	SymbolTableEntry* entry = (SymbolTableEntry*) malloc(sizeof(SymbolTableEntry));
+	SymbolTableEntry* entry;
+	CREATE_MEMORY_OBJECT(entry, SymbolTableEntry, 1, "Error: addToSymbolTable<entry> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	entry->identifier = strdup(identifier);
 	entry->data = value;
 	entry->next = table->entries[index];
@@ -737,7 +745,8 @@ char* file_read(char* file_Name)
 	long file_size = ftell(file);
 	fseek(file, 0, SEEK_SET);
 
-	char* file_data = (char*) malloc(file_size + 1);
+	char* file_data;
+	CREATE_MEMORY_OBJECT(file_data, char, file_size + 1, "Error: file_read<file_data> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	fread(file_data, 1, file_size, file);
 	file_data[file_size] = 0;
 
@@ -747,7 +756,8 @@ char* file_read(char* file_Name)
 
 token_t* token_create(token_type_t type, const char* value, int a, int b, int c, int b2, int c2)
 {
-	token_t* t = (token_t*) malloc(sizeof(token_t));
+	token_t* t;
+	CREATE_MEMORY_OBJECT(t, token_t, 1, "Error: token_create<t> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	t->type = type;
 	t->value = strdup(value);
 	t->location.length = a;
@@ -763,10 +773,15 @@ array_t* array_create(size_t size)
 {
 	size_t min_size = 1;
 
-	array_t* arr = (array_t*) malloc(sizeof(array_t));
+	array_t* arr;
+	CREATE_MEMORY_OBJECT(arr, array_t, 1, "Error: array_create<arr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	arr->length = 0;
 	arr->size = size > min_size ? size : min_size;
 	arr->data = (void*) malloc(sizeof(void*) * arr->size);
+	if (!arr->data) {
+		perror("Memory allocation error");
+		exit(EXIT_FAILURE);
+	}
 
 	return arr;
 }
@@ -834,7 +849,8 @@ void array_print(array_t* arr)
 
 lexer_t* lexer_create(const char* data)
 {
-	lexer_t* lexer = (lexer_t*) malloc(sizeof(lexer_t));
+	lexer_t* lexer;
+	CREATE_MEMORY_OBJECT(lexer, lexer_t, 1, "Error: lexer_create<lexer> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	lexer->index = 0;
 	lexer->tokens = array_create(10);
 
@@ -1015,11 +1031,8 @@ void read_comment_multiline(lexer_t* lexer)
 void read_string(lexer_t* lexer, wchar_t ch)
 {
 	size_t allocated_size = 20;
-	char* string = (char*) malloc(sizeof(char) * allocated_size);
-	if (string == NULL) {
-		print_error("Error: read_string - Memory allocation failed.\n");
-		exit(EXIT_FAILURE);
-	}
+	char* string;
+	CREATE_MEMORY_OBJECT(string, char, allocated_size, "Error: read_string<string> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	size_t i = 0;
 
@@ -1255,7 +1268,8 @@ void help()
 
 parser_t* parser_create(lexer_t** lexer)
 {
-	parser_t* parser = (parser_t*) malloc(sizeof(parser_t));
+	parser_t* parser;
+	CREATE_MEMORY_OBJECT(parser, parser_t, 1, "Error: parser_create<parser> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	parser->lexer = lexer;
 	parser->token_index = 0;
 	parser->functions = array_create(5);
@@ -1296,8 +1310,6 @@ void ast_expression_free_data(ast_literal_t** val)
 			// 	(*val)->array_expression_value->data[i] = NULL;
 			// }
 
-			free((*val)->array_expression_value);
-			(*val)->array_expression_value = NULL;
 		}
 	} else if ((*val)->type == VALUE_TYPE_STRING) {
 		print_error("has string\n");
@@ -1793,14 +1805,16 @@ ast_node_t* parser_function(parser_t* parser)
 {
 	print_error("Parsing function\n");
 
-	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
+	ast_node_t* node;
+	CREATE_MEMORY_OBJECT(node, ast_node_t, 1, "Error: parser_function<node> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 	node->type = AST_FUNCTION_DECLARATION;
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_FUNCTION);
 
 	token_t* name = parser_token_eat(parser, TOKEN_TYPE_IDENTIFIER);
 
-	node->data.function_declaration = (ast_function_declaration_t*) malloc(sizeof(ast_function_declaration_t));
+	CREATE_MEMORY_OBJECT(node->data.function_declaration, ast_function_declaration_t, 1, "Error: parser_function<function_declaration> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	node->data.function_declaration->name = strdup(name->value);
 	node->data.function_declaration->arguments = array_create(3);
 
@@ -1841,10 +1855,11 @@ ast_node_t* parser_statement_print(parser_t* parser)
 
 	parser->token_index++;
 
-	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
+	ast_node_t* node;
+	CREATE_MEMORY_OBJECT(node, ast_node_t, 1, "Error: parser_statement_print<node> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	node->type = AST_STATEMENT_PRINT;
 
-	node->data.statement_print = (ast_statement_print_t*) malloc(sizeof(ast_statement_print_t));
+	CREATE_MEMORY_OBJECT(node->data.statement_print, ast_statement_print_t, 1, "Error: parser_statement_print<ast_statement_print_t> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	node->data.statement_print->expression_value = NULL;
 	node->data.statement_print->expression = (ast_expression_t*) parser_expression(parser);
 
@@ -1857,10 +1872,11 @@ ast_node_t* parser_statement_return(parser_t* parser)
 
 	parser->token_index++;
 
-	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
+	ast_node_t* node;
+	CREATE_MEMORY_OBJECT(node, ast_node_t, 1, "Error: parser_statement_return<node> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	node->type = AST_STATEMENT_RETURN;
 
-	node->data.statement_return = (ast_statement_return_t*) malloc(sizeof(ast_statement_return_t));
+	CREATE_MEMORY_OBJECT(node->data.statement_return, ast_statement_return_t, 1, "Error: parser_statement_return<statement_return> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	node->data.statement_return->expression_value = NULL;
 	node->data.statement_return->expression = (ast_expression_t*) parser_expression(parser);
 
@@ -1873,7 +1889,8 @@ ast_node_t* parser_statement_break(parser_t* parser)
 
 	parser->token_index++;
 
-	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
+	ast_node_t* node;
+	CREATE_MEMORY_OBJECT(node, ast_node_t, 1, "Error: parser_statement_break<node> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	node->type = AST_STATEMENT_BREAK;
 
 	return node;
@@ -1885,7 +1902,8 @@ ast_node_t* parser_statement_continue(parser_t* parser)
 
 	parser->token_index++;
 
-	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
+	ast_node_t* node;
+	CREATE_MEMORY_OBJECT(node, ast_node_t, 1, "Error: parser_statement_continue<node> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	node->type = AST_STATEMENT_CONTINUE;
 
 	return node;
@@ -1917,23 +1935,28 @@ ast_node_t* parser_statement_if(parser_t* parser)
 
 	size_t allocated_size = 2;
 
-	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
+	ast_node_t* node;
+	CREATE_MEMORY_OBJECT(node, ast_node_t, 1, "Error: parser_statement_if<node> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	node->type = AST_STATEMENT_IF;
-	node->data.statement_if = (ast_statement_if_t*) malloc(sizeof(ast_statement_if_t));
+	CREATE_MEMORY_OBJECT(node->data.statement_if, ast_statement_if_t, 1, "Error: parser_statement_if<statement_if> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	node->data.statement_if->condition = parser_expression(parser);
 	node->data.statement_if->block = parser_block(parser);
 	node->data.statement_if->num_elseifs = 0;
-	node->data.statement_if->elseifs = (struct ast_node_t**) malloc(sizeof(ast_node_t*) * (allocated_size + 1));
+	CREATE_MEMORY_OBJECT(node->data.statement_if->elseifs, struct ast_node_t*, allocated_size + 1, "Error: parser_statement_if<elseifs> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 	node->data.statement_if->else_block = NULL;
 
 	while ((*parser->lexer)->tokens->length > parser->token_index && ((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type == TOKEN_TYPE_ELSEIF) {
 		parser->token_index++; // Eating ELSEIF token
 
 		if (parser_expression_has(parser)) {
-			ast_node_t* elseif = (ast_node_t*) malloc(sizeof(ast_node_t));
+			ast_node_t* elseif;
+			CREATE_MEMORY_OBJECT(elseif, ast_node_t, 1, "Error: parser_statement_if<elseif> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 			elseif->type = AST_STATEMENT_ELSEIF;
 
 			elseif->data.statement_if = (ast_statement_if_t*) malloc(sizeof(ast_statement_if_t));
+			CREATE_MEMORY_OBJECT(elseif->data.statement_if, ast_statement_if_t, 1, "Error: parser_statement_if<elseif(statement_if)> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 			elseif->data.statement_if->condition = parser_expression(parser);
 			elseif->data.statement_if->block = parser_block(parser);
 			elseif->data.statement_if->num_elseifs = 0;
@@ -1969,9 +1992,10 @@ ast_node_t* parser_statement_until(parser_t* parser)
 
 	parser->token_index++; // Eating UNTIL token
 
-	ast_node_t* node = (ast_node_t*) malloc(sizeof(ast_node_t));
+	ast_node_t* node;
+	CREATE_MEMORY_OBJECT(node, ast_node_t, 1, "Error: parser_statement_until<node> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	node->type = AST_STATEMENT_UNTIL;
-	node->data.statement_until = (ast_statement_until_t*) malloc(sizeof(ast_statement_until_t));
+	CREATE_MEMORY_OBJECT(node->data.statement_until, ast_statement_until_t, 1, "Error: parser_statement_until<statement_until> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	node->data.statement_until->condition = parser_expression(parser);
 	node->data.statement_until->block = parser_block(parser);
 
@@ -2018,7 +2042,7 @@ ast_node_t* parser_statement(parser_t* parser)
 
 			default:
 				if (parser_expression_has(parser)) {
-					stmt = malloc(sizeof(ast_node_t));
+					CREATE_MEMORY_OBJECT(stmt, ast_node_t, 1, "Error: parser_statement<stmt> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 					stmt->type = AST_EXPRESSION;
 					stmt->data.expression = parser_expression(parser);
 					return stmt;
@@ -2073,10 +2097,11 @@ ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* 
 {
 	print_error("Parsing operator assignment\n");
 
-	ast_expression_t* binary_op_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+	ast_expression_t* binary_op_expr;
+	CREATE_MEMORY_OBJECT(binary_op_expr, ast_expression_t, 1, "Error: led_equal<binary_op_expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	binary_op_expr->type = AST_EXPRESSION_ASSIGNMENT;
 	binary_op_expr->data.assignment = NULL;
-	binary_op_expr->data.assignment = (ast_expression_assignment_t*) malloc(sizeof(ast_expression_assignment_t));
+	CREATE_MEMORY_OBJECT(binary_op_expr->data.assignment, ast_expression_assignment_t, 1, "Error: led_equal<assignment> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	binary_op_expr->data.assignment->left = left;
 	binary_op_expr->data.assignment->right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
@@ -2089,9 +2114,11 @@ ast_expression_t* led_equal_equal(parser_t* parser, token_t* token, ast_expressi
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
-	ast_expression_t* binary_op_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+	ast_expression_t* binary_op_expr;
+	CREATE_MEMORY_OBJECT(binary_op_expr, ast_expression_t, 1, "Error: led_equal_equal<binary_op_expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	binary_op_expr->type = AST_EXPRESSION_BINARY;
-	binary_op_expr->data.binary_op = (ast_expression_binary_t*) malloc(sizeof(ast_expression_binary_t));
+	CREATE_MEMORY_OBJECT(binary_op_expr->data.binary_op, ast_expression_binary_t, 1, "Error: led_equal_equal<binary_op> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 	binary_op_expr->data.binary_op->left = left;
 	binary_op_expr->data.binary_op->right = right;
 	binary_op_expr->data.binary_op->operator = strdup(token->value);
@@ -2105,9 +2132,11 @@ ast_expression_t* led_and(parser_t* parser, token_t* token, ast_expression_t* le
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
-	ast_expression_t* binary_op_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+	ast_expression_t* binary_op_expr;
+	CREATE_MEMORY_OBJECT(binary_op_expr, ast_expression_t, 1, "Error: led_and<binary_op_expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	binary_op_expr->type = AST_EXPRESSION_BINARY;
-	binary_op_expr->data.binary_op = (ast_expression_binary_t*) malloc(sizeof(ast_expression_binary_t));
+	CREATE_MEMORY_OBJECT(binary_op_expr->data.binary_op, ast_expression_binary_t, 1, "Error: led_and<binary_op> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 	binary_op_expr->data.binary_op->operator = strdup(token->value);
 	binary_op_expr->data.binary_op->left = left;
 	binary_op_expr->data.binary_op->right = right;
@@ -2121,9 +2150,10 @@ ast_expression_t* led_or(parser_t* parser, token_t* token, ast_expression_t* lef
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
-	ast_expression_t* binary_op_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+	ast_expression_t* binary_op_expr;
+	CREATE_MEMORY_OBJECT(binary_op_expr, ast_expression_t, 1, "Error: led_or<binary_op_expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	binary_op_expr->type = AST_EXPRESSION_BINARY;
-	binary_op_expr->data.binary_op = (ast_expression_binary_t*) malloc(sizeof(ast_expression_binary_t));
+	CREATE_MEMORY_OBJECT(binary_op_expr->data.binary_op, ast_expression_binary_t, 1, "Error: led_or<binary_op> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	binary_op_expr->data.binary_op->operator = strdup(token->value);
 	binary_op_expr->data.binary_op->left = left;
 	binary_op_expr->data.binary_op->right = right;
@@ -2137,9 +2167,11 @@ ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expressio
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
-	ast_expression_t* binary_op_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+	ast_expression_t* binary_op_expr;
+	CREATE_MEMORY_OBJECT(binary_op_expr, ast_expression_t, 1, "Error: led_plus_minus<binary_op_expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 	binary_op_expr->type = AST_EXPRESSION_BINARY;
-	binary_op_expr->data.binary_op = (ast_expression_binary_t*) malloc(sizeof(ast_expression_binary_t));
+	CREATE_MEMORY_OBJECT(binary_op_expr->data.binary_op, ast_expression_binary_t, 1, "Error: led_plus_minus<binary_op> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	binary_op_expr->data.binary_op->operator = strdup(token->value);
 	binary_op_expr->data.binary_op->left = left;
 	binary_op_expr->data.binary_op->right = right;
@@ -2151,10 +2183,11 @@ ast_expression_t* nud_bool(parser_t* parser, token_t* token)
 {
 	print_error("Parsing bool\n");
 
-	ast_expression_t* literal_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+	ast_expression_t* literal_expr;
+	CREATE_MEMORY_OBJECT(literal_expr, ast_expression_t, 1, "Error: nud_bool<literal_expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
-	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
+	CREATE_MEMORY_OBJECT(literal_expr->data.literal , ast_literal_t, 1, "Error: nud_bool<literal> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	literal_expr->data.literal->main = NULL;
 	literal_expr->data.literal->type = VALUE_TYPE_BOOL;
 	literal_expr->data.literal->bool_value = strcmp(token->value, "درست") == 0 ? true : false;
@@ -2166,10 +2199,11 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 {
 	print_error("Parsing number\n");
 
-	ast_expression_t* literal_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+	ast_expression_t* literal_expr;
+	CREATE_MEMORY_OBJECT(literal_expr, ast_expression_t, 1, "Error: nud_number<literal_expr> -Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
-	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
+	CREATE_MEMORY_OBJECT(literal_expr->data.literal , ast_literal_t, 1, "Error: nud_number<literal> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	literal_expr->data.literal->main = NULL;
 	literal_expr->data.literal->type = VALUE_TYPE_INT;
 	literal_expr->data.literal->int_value = atoi(token->value);
@@ -2181,14 +2215,16 @@ ast_expression_t* nud_array(parser_t* parser, token_t* token)
 {
 	print_error("Parsing array\n");
 
-	ast_expression_t* literal_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+	ast_expression_t* literal_expr;
+	CREATE_MEMORY_OBJECT(literal_expr, ast_expression_t, 1, "Error: nud_array<literal_expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
-	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
+	CREATE_MEMORY_OBJECT(literal_expr->data.literal , ast_literal_t, 1, "Error: nud_array<literal> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	literal_expr->data.literal->main = NULL;
 	literal_expr->data.literal->type = VALUE_TYPE_ARRAY_EXPRESSION;
 	literal_expr->data.literal->string_value = NULL;
-	literal_expr->data.literal->array_expression_value = (struct ast_expression_t**) malloc(sizeof(ast_expression_t*) * 10);
+	CREATE_MEMORY_OBJECT(literal_expr->data.literal->array_expression_value , struct ast_expression_t*, 10, "Error: nud_array<array_expression_value> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 	literal_expr->data.literal->array_literal_value = NULL;
 
 	// Eating until found TOKEN_TYPE_BRACKETS_CLOSE
@@ -2217,10 +2253,12 @@ ast_expression_t* nud_string(parser_t* parser, token_t* token)
 {
 	print_error("Parsing string\n");
 
-	ast_expression_t* literal_expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+	ast_expression_t* literal_expr;
+	CREATE_MEMORY_OBJECT(literal_expr, ast_expression_t, 1, "Error: nud_string<literal_expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 	literal_expr->type = AST_EXPRESSION_LITERAL;
 
-	literal_expr->data.literal = (ast_literal_t*) malloc(sizeof(ast_literal_t));
+	CREATE_MEMORY_OBJECT(literal_expr->data.literal, ast_literal_t, 1, "Error: nud_string<literal> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	literal_expr->data.literal->main = NULL;
 	literal_expr->data.literal->type = VALUE_TYPE_STRING;
 	literal_expr->data.literal->string_value = strdup(token->value);
@@ -2232,12 +2270,13 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 {
 	print_error("Parsing identifier\n");
 
-	ast_expression_t* expr = (ast_expression_t*) malloc(sizeof(ast_expression_t));
+	ast_expression_t* expr;
+	CREATE_MEMORY_OBJECT(expr, ast_expression_t, 1, "Error: nud_identifier<expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	// Check if current token is (
 	if (parser_token_skip_ifhas(parser, TOKEN_TYPE_PARENTHESE_OPEN)) {
 		expr->type = AST_EXPRESSION_FUNCTION_CALL;
-		expr->data.function_call = (ast_function_call_t*) malloc(sizeof(ast_function_call_t));
+		CREATE_MEMORY_OBJECT(expr->data.function_call, ast_function_call_t, 1, "Error: nud_identifier<function_call> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		expr->data.function_call->name = strdup(token->value);
 		expr->data.function_call->arguments = NULL;
 		expr->data.function_call->arguments = array_create(3);
@@ -2261,7 +2300,8 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 		parser_token_eat_nodata(parser, TOKEN_TYPE_PARENTHESE_CLOSE);
 	} else {
 		expr->type = AST_EXPRESSION_IDENTIFIER;
-		expr->data.identifier = (ast_identifier_t*) malloc(sizeof(ast_identifier_t));
+		CREATE_MEMORY_OBJECT(expr->data.identifier, ast_identifier_t, 1, "Error: nud_identifier<identifier> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 		expr->data.identifier->name = strdup(token->value);
 	}
 
@@ -2285,11 +2325,12 @@ ast_node_t* parser_block(parser_t* parser)
 
 	size_t allocated_size = 5;
 
-	ast_node_t* block_node = (ast_node_t*) malloc(sizeof(ast_node_t));
+	ast_node_t* block_node;
+	CREATE_MEMORY_OBJECT(block_node, ast_node_t, 1, "Error: parser_block<block_node> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	block_node->type = AST_BLOCK;
-	block_node->data.block = (ast_block_t*) malloc(sizeof(ast_block_t));
+	CREATE_MEMORY_OBJECT(block_node->data.block, ast_block_t, 1, "Error: parser_block<block> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	block_node->data.block->num_statements = 0;
-	block_node->data.block->statements = (ast_node_t**) malloc(sizeof(ast_node_t*) * (allocated_size + 1));
+	CREATE_MEMORY_OBJECT(block_node->data.block->statements, ast_node_t*, allocated_size + 1, "Error: parser_block<statements> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_SECTION_OPEN);
 
@@ -2353,7 +2394,8 @@ void parser_parse(parser_t* parser)
 
 			default:
 				if (parser_expression_has(parser)) {
-					expression_node = malloc(sizeof(ast_node_t));
+					CREATE_MEMORY_OBJECT(expression_node, ast_node_t, 1, "Error: parser_parse<expression_node> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 					expression_node->type = AST_EXPRESSION;
 					expression_node->data.expression = parser_expression(parser);
 					if (parser->expressions && expression_node != NULL) {
@@ -2731,7 +2773,8 @@ void print_xml_ast_tree(parser_t* parser)
 
 interpreter_t* interpreter_create(parser_t** parser)
 {
-	interpreter_t* interpreter = (interpreter_t*) malloc(sizeof(interpreter_t));
+	interpreter_t* interpreter;
+	CREATE_MEMORY_OBJECT(interpreter, interpreter_t, 1, "Error: interpreter_create<interpreter> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	interpreter->parser = parser;
 	interpreter->is_global_scope = true;
 	return interpreter;
@@ -3027,7 +3070,7 @@ ast_literal_t* interpreter_literal(ast_expression_t* expr, interpreter_t* interp
 
 	if (expr->data.literal->type == VALUE_TYPE_ARRAY_EXPRESSION) {
 		if (expr->data.literal->array_expression_value != NULL) {
-			expr->data.literal->array_literal_value = (struct ast_literal_t**) malloc(sizeof(ast_literal_t*) * expr->data.literal->size_value);
+			CREATE_MEMORY_OBJECT(expr->data.literal->array_literal_value, struct ast_literal_t*, expr->data.literal->size_value, "Error: interpreter_literal<array_literal_value> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 			expr->data.literal->type = VALUE_TYPE_ARRAY_LITERAL;
 
 			for (size_t i = 0; i < expr->data.literal->size_value; i++) {
@@ -3068,7 +3111,8 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 	ast_literal_t* left = (ast_literal_t*) interpreter_expression(expr->data.binary_op->left, interpreter);
 	ast_literal_t* right = (ast_literal_t*) interpreter_expression(expr->data.binary_op->right, interpreter);
 
-	ast_literal_t* res = (ast_literal_t*) malloc(sizeof(ast_literal_t));
+	ast_literal_t* res;
+	CREATE_MEMORY_OBJECT(res, ast_literal_t, 1, "Error: interpreter_expression_binary<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	res->main = (struct ast_expression_t**) &expr;
 
 	bool isReverse = false;
@@ -3084,7 +3128,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 		size_t leftlen = strlen(left_str);
 		size_t rightlen = strlen(right->string_value);
 		res->type = VALUE_TYPE_STRING;
-		res->string_value = malloc(sizeof(char) * (leftlen + rightlen) + 1);
+		CREATE_MEMORY_OBJECT(res->string_value, char, leftlen + rightlen + 1, "Error: interpreter_expression_binary<string_value 1> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		strcpy(res->string_value, left_str);
 		strcat(res->string_value, right->string_value);
 		free(left_str);
@@ -3093,7 +3137,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 		size_t leftlen = strlen(left->string_value);
 		size_t rightlen = strlen(right_str);
 		res->type = VALUE_TYPE_STRING;
-		res->string_value = malloc(sizeof(char) * (leftlen + rightlen) + 1);
+		CREATE_MEMORY_OBJECT(res->string_value, char, leftlen + rightlen + 1, "Error: interpreter_expression_binary<string_value 2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		strcpy(res->string_value, left->string_value);
 		strcat(res->string_value, right_str);
 		free(right_str);
@@ -3106,7 +3150,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 			res->string_value = strdup("");
 		} else if (leftlen != 0 && rightlen != 0) {
 			size_t new_size = sizeof(char*) * (leftlen + rightlen + 1);
-			res->string_value = (char*) malloc(new_size);
+			CREATE_MEMORY_OBJECT(res->string_value, char, new_size, "Error: interpreter_expression_binary<string_value 3> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 			strcpy(res->string_value, left->string_value);
 			strcat(res->string_value, right->string_value);
 		} else if (leftlen == 0) {
@@ -3305,7 +3349,8 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 
 		ast_literal_t* arg_val = (ast_literal_t*) interpreter_expression(node->data.function_call->arguments->data[0], interpreter);
 
-		ast_literal_t* val = malloc(sizeof(ast_literal_t));
+		ast_literal_t* val;
+		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_function_call<val 1> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_STRING;
 		val->string_value = strdup(interpreter_expression_data_type(arg_val));
 		val->main = NULL;
@@ -3319,7 +3364,8 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 
 		char* input = read_dynamic_string();
 
-		ast_literal_t* val = malloc(sizeof(ast_literal_t));
+		ast_literal_t* val;
+		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_function_call<val 2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_STRING;
 		val->string_value = input;
 		val->main = NULL;
@@ -3338,7 +3384,8 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 			return NULL;
 		}
 
-		ast_literal_t* val = malloc(sizeof(ast_literal_t));
+		ast_literal_t* val;
+		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_function_call<val 3> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_INT;
 		val->int_value = strlen(arg_val->string_value);
 		val->main = NULL;
@@ -3355,7 +3402,8 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 			return arg_val;
 		}
 
-		ast_literal_t* val = malloc(sizeof(ast_literal_t));
+		ast_literal_t* val;
+		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_function_call<val 4> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_STRING;
 		val->main = NULL;
 
@@ -3392,7 +3440,8 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 
 	ast_literal_t* ret = interpreter_function_run(func_exists, node->data.function_call->arguments, interpreter);
 	if (ret == NULL) {
-		ast_literal_t* default_ret = malloc(sizeof(ast_literal_t));
+		ast_literal_t* default_ret;
+		CREATE_MEMORY_OBJECT(default_ret, ast_literal_t, 1, "Error: interpreter_function_call<default_ret> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		default_ret->type = VALUE_TYPE_NULL;
 		default_ret->main = NULL;
 		return default_ret;
@@ -3449,7 +3498,8 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	if (variable == NULL) {
 		// print_error("this is a new variable on this scope!\n");
 		isNew = true;
-		variable = (ast_literal_t*) malloc(sizeof(ast_literal_t));
+		CREATE_MEMORY_OBJECT(variable, ast_literal_t, 1, "Error: interpreter_function_call<variable> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 	}
 
 	variable->main = (struct ast_expression_t**) &expr;

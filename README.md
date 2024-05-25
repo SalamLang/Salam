@@ -29,3 +29,5 @@ All contributors are expected to adhere to our [Code of Conduct](CODE_OF_CONDUCT
 - [John Bampton](https://github.com/jbampton)
 - [Anwar Hossain](https://github.com/anwarhossain1)
 - [Anuradha Fernando](https://github.com/anufdo)
+- [Youcef Mokrane](https://github.com/yOOs-dz)
+- [gabrahmad](https://github.com/gabrahmad)

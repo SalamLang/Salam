@@ -5,7 +5,6 @@
 #include <stdbool.h>
 #include <string.h>
 #include <limits.h>
-
 // bool debug_enabled = false;
 bool debug_enabled = true;
 #define print_error(...) if (debug_enabled) fprintf(stderr, __VA_ARGS__);
@@ -175,12 +174,12 @@ typedef struct {
 } ast_function_declaration_t;
 
 typedef struct {
-	struct ast_expression* expression;
+	struct ast_expression_t* expression;
 	struct ast_literal_t* expression_value;
 } ast_statement_return_t;
 
 typedef struct {
-	struct ast_expression* expression;
+	struct ast_expression_t* expression;
 	struct ast_literal_t* expression_value;
 } ast_statement_print_t;
 
@@ -195,13 +194,13 @@ typedef struct {
 
 typedef struct {
 	char* operator;
-	struct ast_expression* left;
-	struct ast_expression* right;
+	struct ast_expression_t* left;
+	struct ast_expression_t* right;
 } ast_expression_binary_t;
 
 typedef struct {
-	struct ast_expression* left;
-	struct ast_expression* right;
+	struct ast_expression_t* left;
+	struct ast_expression_t* right;
 } ast_expression_assignment_t;
 
 typedef enum {
@@ -218,7 +217,7 @@ typedef struct {
 	array_t* arguments;
 } ast_function_call_t;
 
-typedef struct ast_expression {
+typedef struct ast_expression_t {
 	ast_expression_type_t type;
 
 	union {
@@ -1302,7 +1301,7 @@ void ast_expression_free_data(ast_literal_t** val)
 	} else if ((*val)->type == VALUE_TYPE_STRING) {
 		print_error("has string\n");
 		print_error("%s\n", (*val)->string_value);
-		if (strcmp((*val)->string_value, "\0") != 0 && (*val)->string_value != NULL) {
+		if ((*val)->string_value != NULL && strcmp((*val)->string_value, "\0") != 0 ) {
 			free((*val)->string_value);
 			(*val)->string_value = NULL;
 		}
@@ -1315,13 +1314,13 @@ void ast_expression_free_data(ast_literal_t** val)
 	} else if ((*val)->type == VALUE_TYPE_FLOAT) {
 		// Nothing to free
 	}
-
+  
 	// TODO: MEMORY LEAKS
 	print_error("free expression data main\n");
 	if ((*val)->main != NULL) {
 		print_error("ast_expression_free_data main\n");
 		// ast_expression_free((ast_expression_t**) &((*val)->main));
-		ast_expression_free((ast_expression_t**) ((*val)->main));
+		ast_expression_free((*val)->main);
 	}
 
 	print_error("let's free it's at all\n");
@@ -1441,7 +1440,7 @@ void ast_expression_free_binary(ast_expression_t** expr)
 		}
 
 		if ((*expr)->data.binary_op->operator != NULL) {
-			free((*expr)->data.binary_op->operator);
+			free((char*)((*expr)->data.binary_op->operator));
 			(*expr)->data.binary_op->operator = NULL;
 		}
 
@@ -1450,7 +1449,7 @@ void ast_expression_free_binary(ast_expression_t** expr)
 	}
 }
 
-void ast_expression_free(ast_expression_t** expr)
+void ast_expression_free(struct ast_expression_t** expr)
 {
 	print_error("ast_expression_free\n");
 
@@ -2327,7 +2326,7 @@ ast_node_t* parser_block(parser_t* parser)
 void parser_parse(parser_t* parser)
 {
 	if ((*parser->lexer)->tokens->length == 1 &&
-		((ast_node_t*) (*parser->lexer)->tokens->data[0])->type == TOKEN_TYPE_EOF
+		((token_t*)(*parser->lexer)->tokens->data[0])->type == TOKEN_TYPE_EOF
 	) {
 		return;
 	}
@@ -3069,7 +3068,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 	ast_literal_t* right = (ast_literal_t*) interpreter_expression(expr->data.binary_op->right, interpreter);
 
 	ast_literal_t* res = (ast_literal_t*) malloc(sizeof(ast_literal_t));
-	res->main = (struct ast_expression_t**) &expr;
+	res->main = &expr;
 
 	bool isReverse = false;
 	if (strcmp(expr->data.binary_op->operator, "!=") == 0) {
@@ -3115,19 +3114,19 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 			res->string_value = strdup(left->string_value);
 		}
 	} else if (strcmp(expr->data.binary_op->operator, "==") == 0 || strcmp(expr->data.binary_op->operator, "!=") == 0) {
-		if (left->type == VALUE_TYPE_INT && right->type == TOKEN_TYPE_STRING) {
+		if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_STRING) {
 			res->type = VALUE_TYPE_STRING;
 			char* left_str = intToString(left->int_value);
 			res->type = VALUE_TYPE_BOOL;
 			res->bool_value = strcmp(left_str, right->string_value) == 0 ? true : false;
 			free(left_str);
-		} else if (left->type == TOKEN_TYPE_STRING && right->type == VALUE_TYPE_INT) {
+		} else if (left->type == VALUE_TYPE_STRING && right->type == VALUE_TYPE_INT) {
 			res->type = VALUE_TYPE_STRING;
 			char* right_var = intToString(right->int_value);
 			res->type = VALUE_TYPE_BOOL;
 			res->bool_value = strcmp(left->string_value, right_var) == 0 ? true : false;
 			free(right_var);
-		} else if (left->type == VALUE_TYPE_NULL && right->type == TOKEN_TYPE_NULL) {
+		} else if (left->type == VALUE_TYPE_NULL && right->type == VALUE_TYPE_NULL) {
 			res->type = VALUE_TYPE_BOOL;
 			res->bool_value = true;
 		} else if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_FLOAT) {
@@ -3452,7 +3451,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 		variable = (ast_literal_t*) malloc(sizeof(ast_literal_t));
 	}
 
-	variable->main = (struct ast_expression_t**) &expr;
+    variable->main = NULL;
 	variable->type = right->type;
 	if (right->type == VALUE_TYPE_STRING) {
 		variable->string_value = strdup(right->string_value);

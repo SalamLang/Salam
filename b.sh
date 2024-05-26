@@ -19,12 +19,11 @@ if [ -e "$OUTPUT_FILE" ]; then
 	rm "$OUTPUT_FILE"
 fi
 
-
-ldconfig -p | grep efence  &>/dev/null
+ldconfig -p | grep efence &>/dev/null
 if ! [ $? -eq 0 ]; then
-        echo "efence library is missing"
-        echo "Install efence - Electric Fence Malloc Debugger"
-        exit 1
+	echo "efence library is missing"
+	echo "Install efence - Electric Fence Malloc Debugger"
+	exit 1
 fi
 
 # Compile
@@ -32,9 +31,9 @@ fi
 gcc -g -fsanitize=undefined,address -Walloca -o "$OUTPUT_FILE" "$INPUT_FILE" -lefence
 
 if ! [ -x "$(command -v emcc)" ]; then
-        echo 'Error: emcc is not installed.' >&2
-        echo 'Install from https://emscripten.org/docs/getting_started/downloads.html'
-        exit 1
+	echo 'Error: emcc is not installed.' >&2
+	echo 'Install from https://emscripten.org/docs/getting_started/downloads.html'
+	exit 1
 fi
 
 # Compiling for web

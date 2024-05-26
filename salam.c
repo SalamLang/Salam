@@ -1314,7 +1314,7 @@ void ast_expression_free_data(ast_literal_t** val)
 	} else if ((*val)->type == VALUE_TYPE_FLOAT) {
 		// Nothing to free
 	}
-  
+
 	// TODO: MEMORY LEAKS
 	print_error("free expression data main\n");
 	if ((*val)->main != NULL) {

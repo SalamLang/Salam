@@ -19,7 +19,7 @@ if [ -e "$OUTPUT_FILE" ]; then
 	rm "$OUTPUT_FILE"
 fi
 
-ldconfig -p | grep efence  &>/dev/null
+ldconfig -p | grep efence &>/dev/null
 if ! [ $? -eq 0 ]; then
 	echo "efence library is missing"
 	echo "Install efence - Electric Fence Malloc Debugger"

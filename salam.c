@@ -1299,16 +1299,13 @@ void ast_expression_free_data(ast_literal_t** val)
 		print_error("free array\n");
 		if ((*val)->array_expression_value != NULL) {
 			print_error("has array data\n");
-			// for (size_t i = 0; i < (*val)->size_value; i++) {
-			// 	print_error("has array data item\n");
-			// 	// ast_expression_free_data((ast_literal_t**) &(
-			// 	// 	(*val)->array_expression_value->data[i]
-			// 	// ));
-
-			// 	free((*val)->array_expression_value->data[i]);
-			// 	(*val)->array_expression_value->data[i] = NULL;
-			// }
-
+			for (size_t i = 0; i < (*val)->size_value; i++) {
+				ast_expression_free((struct ast_expression_t **)&(*val)->array_expression_value[i]->data);
+				free((*val)->array_expression_value[i]);
+				(*val)->array_expression_value[i] = NULL;
+			}
+			free((*val)->array_expression_value);
+			(*val)->array_expression_value = NULL;
 		}
 	} else if ((*val)->type == VALUE_TYPE_STRING) {
 		print_error("has string\n");
@@ -1576,6 +1573,12 @@ void ast_node_free(ast_node_t** node)
 				if ((*node)->data.function_declaration->name != NULL) {
 					free((*node)->data.function_declaration->name);
 					(*node)->data.function_declaration->name = NULL;
+				}
+
+				print_error("free function arguments\n");
+				if ((*node)->data.function_declaration->arguments != NULL) {
+					array_free((*node)->data.function_declaration->arguments);
+					(*node)->data.function_declaration->arguments = NULL;
 				}
 
 				print_error("free function body\n");

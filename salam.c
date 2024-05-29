@@ -1575,6 +1575,12 @@ void ast_node_free(ast_node_t** node)
 					(*node)->data.function_declaration->name = NULL;
 				}
 
+				print_error("free function arguments\n");
+				if ((*node)->data.function_declaration->arguments != NULL) {
+					array_free((*node)->data.function_declaration->arguments);
+					(*node)->data.function_declaration->arguments = NULL;
+				}
+
 				print_error("free function body\n");
 				if ((*node)->data.function_declaration->body != NULL) {
 					ast_node_free(&((*node)->data.function_declaration->body));

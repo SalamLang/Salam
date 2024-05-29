@@ -1018,7 +1018,6 @@ void read_comment_multiline(lexer_t* lexer)
 		if (lexer->data[lexer->index] == '\0') {
 			print_error("Error: you have to close your multiline comments and it's not allowed to ignore and leave your multiline comment non-closed!\n");
 			exit(EXIT_FAILURE);
-			break;
 		} else if (lexer->data[lexer->index - 1] == '*' && lexer->data[lexer->index] == '/') {
 			lexer->index++;
 			break;
@@ -1845,6 +1844,16 @@ ast_node_t* parser_function(parser_t* parser)
 	}
 
 	if (node->data.function_declaration->body == NULL) {
+		free(node->data.function_declaration->name);
+		node->data.function_declaration->name = NULL;
+		if (node->data.function_declaration->arguments != NULL) {
+			array_free(node->data.function_declaration->arguments);
+			node->data.function_declaration->arguments = NULL;
+		}
+		free(node->data.function_declaration);
+		node->data.function_declaration = NULL;
+		free(node);
+		node = NULL;
 		return NULL;
 	}
 
@@ -1956,7 +1965,6 @@ ast_node_t* parser_statement_if(parser_t* parser)
 			CREATE_MEMORY_OBJECT(elseif, ast_node_t, 1, "Error: parser_statement_if<elseif> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 			elseif->type = AST_STATEMENT_ELSEIF;
 
-			elseif->data.statement_if = (ast_statement_if_t*) malloc(sizeof(ast_statement_if_t));
 			CREATE_MEMORY_OBJECT(elseif->data.statement_if, ast_statement_if_t, 1, "Error: parser_statement_if<elseif(statement_if)> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 			elseif->data.statement_if->condition = parser_expression(parser);
@@ -1974,7 +1982,6 @@ ast_node_t* parser_statement_if(parser_t* parser)
 				if (node->data.statement_if->elseifs == NULL) {
 					print_error("Error: in parsing block: Memory reallocation failed.\n");
 					exit(EXIT_FAILURE);
-					break;
 				}
 			}
 
@@ -2102,7 +2109,6 @@ ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* 
 	ast_expression_t* binary_op_expr;
 	CREATE_MEMORY_OBJECT(binary_op_expr, ast_expression_t, 1, "Error: led_equal<binary_op_expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	binary_op_expr->type = AST_EXPRESSION_ASSIGNMENT;
-	binary_op_expr->data.assignment = NULL;
 	CREATE_MEMORY_OBJECT(binary_op_expr->data.assignment, ast_expression_assignment_t, 1, "Error: led_equal<assignment> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	binary_op_expr->data.assignment->left = left;
 	binary_op_expr->data.assignment->right = parser_expression_pratt(parser, token_infos[token->type].precedence);
@@ -2243,7 +2249,6 @@ ast_expression_t* nud_array(parser_t* parser, token_t* token)
 		} else {
 			print_error("Error: Expected ',' or ']' in array value.\n");
 			exit(EXIT_FAILURE);
-			return NULL;
 		}
 	}
 	literal_expr->data.literal->size_value = i;
@@ -2280,7 +2285,6 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 		expr->type = AST_EXPRESSION_FUNCTION_CALL;
 		CREATE_MEMORY_OBJECT(expr->data.function_call, ast_function_call_t, 1, "Error: nud_identifier<function_call> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		expr->data.function_call->name = strdup(token->value);
-		expr->data.function_call->arguments = NULL;
 		expr->data.function_call->arguments = array_create(3);
 
 		// Eating parser_expression until find ( token
@@ -2385,7 +2389,6 @@ void parser_parse(parser_t* parser)
 			case TOKEN_TYPE_EOF:
 				parser->token_index++;
 				return;
-				break;
 
 			case TOKEN_TYPE_FUNCTION:
 				function_node = parser_function(parser);
@@ -2832,35 +2835,27 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 	switch (node->type) {
 		case AST_BLOCK:
 			return interpreter_block(node, interpreter, parent_type, NULL);
-			break;
 
 		case AST_FUNCTION_DECLARATION:
 			return interpreter_function_declaration(node, interpreter, NULL);
-			break;
 
 		case AST_STATEMENT_RETURN:
 			return interpreter_statement_return(node, interpreter);
-			break;
 
 		case AST_STATEMENT_IF:
 			return interpreter_statement_if(node, interpreter);
-			break;
 
 		case AST_STATEMENT_UNTIL:
 			return interpreter_statement_until(node, interpreter);
-			break;
 
 		case AST_STATEMENT_PRINT:
 			return interpreter_statement_print(node, interpreter);
-			break;
 
 		case AST_EXPRESSION:
 			return interpreter_statement_expression(node, interpreter);
-			break;
 
 		default:
 			print_error("interpreter_interpret - default\n");
-			break;
 	}
 
 	return NULL;
@@ -3039,7 +3034,6 @@ ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, toke
 		if (parent_type != TOKEN_TYPE_UNTIL && (stmt->type == AST_STATEMENT_BREAK || stmt->type == AST_STATEMENT_CONTINUE)) {
 			print_error("Error: it's not possible to have break/continue inside a non-loop!\n");
 			exit(EXIT_FAILURE);
-			return NULL;
 		}
 
 		stmt = interpreter_interpret_once(stmt, interpreter, parent_type);
@@ -3101,7 +3095,6 @@ ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* int
 	if (val == NULL) {
 		print_error("Error: Variable not found: %s\n", expr->data.identifier->name);
 		exit(EXIT_FAILURE);
-		return NULL;
 	}
 	return val;
 }
@@ -3275,7 +3268,6 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 		// ast_expression_free_data(&right);
 		// right = NULL;
 		exit(EXIT_FAILURE);
-		return NULL;
 	} else if (isReverse && res->type == VALUE_TYPE_BOOL) {
 		res->bool_value = res->bool_value == true ? false : true;
 	}
@@ -3299,7 +3291,6 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 			print_error("Error: number of arguments is not match with the function - you are passing less arguments!\n");
 		}
 		exit(EXIT_FAILURE);
-		return NULL;
 	}
 
 	array_t* arg_values = array_create(arguments_count);
@@ -3346,7 +3337,6 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
 			print_error("Error: number of arguments of نوع() function should be only one!\n");
 			exit(EXIT_FAILURE);
-			return NULL;
 		}
 
 		ast_literal_t* arg_val = (ast_literal_t*) interpreter_expression(node->data.function_call->arguments->data[0], interpreter);
@@ -3361,7 +3351,6 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		if (node->data.function_call->arguments != NULL && node->data.function_call->arguments->length != 0) {
 			print_error("Error: number of arguments of خواندن() function should be empty!\n");
 			exit(EXIT_FAILURE);
-			return NULL;
 		}
 
 		char* input = read_dynamic_string();
@@ -3376,14 +3365,12 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
 			print_error("Error: number of arguments of طول() function should be empty!\n");
 			exit(EXIT_FAILURE);
-			return NULL;
 		}
 
 		ast_literal_t* arg_val = (ast_literal_t*) interpreter_expression(node->data.function_call->arguments->data[0], interpreter);
 		if (arg_val->type != VALUE_TYPE_STRING) {
 			print_error("Error: argument type of طول() function should be a string!\n");
 			exit(EXIT_FAILURE);
-			return NULL;
 		}
 
 		ast_literal_t* val;
@@ -3396,7 +3383,6 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
 			print_error("Error: number of arguments of رشته() function should be empty!\n");
 			exit(EXIT_FAILURE);
-			return NULL;
 		}
 
 		ast_literal_t* arg_val = (ast_literal_t*) interpreter_expression(node->data.function_call->arguments->data[0], interpreter);
@@ -3437,7 +3423,6 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 	if (exists == false || func_exists == NULL) {
 		print_error("Error: function not exists!\n");
 		exit(EXIT_FAILURE);
-		return NULL;
 	}
 
 	ast_literal_t* ret = interpreter_function_run(func_exists, node->data.function_call->arguments, interpreter);
@@ -3480,7 +3465,6 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	if (expr->data.assignment->left->type != AST_EXPRESSION_IDENTIFIER) {
 		print_error("Error: Assignment to non-variable\n");
 		exit(EXIT_FAILURE);
-		return NULL;
 	}
 
 	bool isNew = false;
@@ -3576,7 +3560,6 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 		default:
 			print_error("Error: default expr type: %d\n", expr->type);
 			exit(EXIT_FAILURE);
-			return NULL;
 	}
 
 	return lit;

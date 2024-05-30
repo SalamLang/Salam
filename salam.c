@@ -3600,7 +3600,7 @@ int main(int argc, char** argv)
 		return 0;
 	}
 
-	if (argc == 3 && strcmp(argv[1], "--code") != 0 && strcmp(argv[1], "--ast") != 0) {
+	if (argc == 3 && (strcmp(argv[1], "--code") != 0 || strcmp(argv[1], "--ast") != 0)) {
 		help();
 		return 0;
 	}
@@ -3614,15 +3614,19 @@ int main(int argc, char** argv)
 	if (argc == 2) {
 		file_data = file_read(argv[1]);
 	} else {
-		if (strcmp(argv[1], "--ast")) {
+		if (strcmp(argv[1], "--ast") == 0) {
 			isAst = true;
 			isRun = false;
-		} else {
+		} else if (strcmp(argv[1], "--code") == 0) {
 			isAst = false;
 			isRun = true;
+		} else {
+			print_error("Second argument should be either --ast or --code\n");
+			help();
+			return 0;
 		}
 		passingCode = true;
-		file_data = argv[2];
+		file_data = file_read(argv[2]);
 	}
 
 	if (passingCode) {
@@ -3705,6 +3709,5 @@ int main(int argc, char** argv)
 		print_error("DONE\n");
 	}
 
-	exit(EXIT_SUCCESS);
 	return 0;
 }

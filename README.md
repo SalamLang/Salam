@@ -17,7 +17,18 @@ Feel free to explore and create using Salam!
 For more information, visit: https://salamlang.ir
 ```
 
+## Contributing
+
+Want to contribute to Salam? Check out our [Contributing Guide](CONTRIBUTING.md) for more information.
+
+All contributors are expected to adhere to our [Code of Conduct](CODE_OF_CONDUCT.md). Please make sure you are familiar with it before participating in this project.
+
 ## Salam Contributors
 
 - [Max Base](https://github.com/BaseMax)
 - [John Bampton](https://github.com/jbampton)
+- [Anwar Hossain](https://github.com/anwarhossain1)
+- [Anuradha Fernando](https://github.com/anufdo)
+- [Youcef Mokrane](https://github.com/yOOs-dz)
+- [gabrahmad](https://github.com/gabrahmad)
+- [Erfan](https://github.com/erfangnu)

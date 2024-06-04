@@ -6,7 +6,7 @@
     </a>
 </p>
 
-# The Salam Programming Language
+# Salam Language
 
 Salam Language: The inaugural coding language for Persian and Arabic speakers, inspired by the word "salam" meaning "peace". With a user-friendly approach, it provides an accessible coding experience, promoting collaboration and simplicity for local developers and students.
 

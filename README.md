@@ -1,4 +1,12 @@
-# Salam Programming Language
+<div align="center">
+
+<p>
+    <a href="https://onelang.org/">
+        <img width="150" src="https://github.com/SalamLang/Salam/blob/main/logo.png?raw=true" alt="The Salam Programming Language - زبان برنامه نویسی سلام">
+    </a>
+</p>
+
+# The Salam Programming Language
 
 ![Salam Programming Language](logo.png)
 
@@ -25,12 +33,4 @@ Want to contribute to Salam? Check out our [Contributing Guide](CONTRIBUTING.md)
 
 All contributors are expected to adhere to our [Code of Conduct](CODE_OF_CONDUCT.md). Please make sure you are familiar with it before participating in this project.
 
-## Salam Contributors
-
-- [Max Base](https://github.com/BaseMax)
-- [John Bampton](https://github.com/jbampton)
-- [Anwar Hossain](https://github.com/anwarhossain1)
-- [Anuradha Fernando](https://github.com/anufdo)
-- [Youcef Mokrane](https://github.com/yOOs-dz)
-- [gabrahmad](https://github.com/gabrahmad)
-- [Erfan](https://github.com/erfangnu)
+</div>

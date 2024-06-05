@@ -1,4 +1,20 @@
-# Salam Programming Language
+<div align="center">
+
+<p>
+    <a href="https://onelang.org/">
+        <img width="150" src="https://github.com/SalamLang/Salam/blob/main/logo.png?raw=true" alt="The Salam Programming Language - زبان برنامه نویسی سلام">
+    </a>
+</p>
+
+# Salam Language
+
+Salam Language: The inaugural coding language for Persian and Arabic speakers, inspired by the word "salam" meaning "peace". With a user-friendly approach, it provides an accessible coding experience, promoting collaboration and simplicity for local developers and students.
+
+</div>
+
+---------
+
+# Salam Language: Salam Programming Language
 
 Salam Language, inspired by the Persian and Arabic roots of the word `salam`, which means `peace`, is a programming language crafted for simplicity and accessibility within the Iranian, Persian-speaking, and Arabic-speaking communities. Serving as the first Persian and Arabic programming language, Salam Language is designed to provide an intuitive and user-friendly experience, specifically tailored for users, students, and developers familiar with Persian or Arabic. Embracing the cultural and linguistic richness of the region, Salam Language aims to empower a diverse range of individuals, making programming more approachable and fostering a sense of ease and collaboration in the local coding community.
 
@@ -22,13 +38,3 @@ For more information, visit: https://salamlang.ir
 Want to contribute to Salam? Check out our [Contributing Guide](CONTRIBUTING.md) for more information.
 
 All contributors are expected to adhere to our [Code of Conduct](CODE_OF_CONDUCT.md). Please make sure you are familiar with it before participating in this project.
-
-## Salam Contributors
-
-- [Max Base](https://github.com/BaseMax)
-- [John Bampton](https://github.com/jbampton)
-- [Anwar Hossain](https://github.com/anwarhossain1)
-- [Anuradha Fernando](https://github.com/anufdo)
-- [Youcef Mokrane](https://github.com/yOOs-dz)
-- [gabrahmad](https://github.com/gabrahmad)
-- [Erfan](https://github.com/erfangnu)

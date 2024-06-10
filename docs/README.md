@@ -18,7 +18,7 @@ BREAK       |   توقف
 CONTINUE    |   ادامه
 ELSEIF      |   واگرنه
 FALSE       |   غلط
-FUNCTION    |   عملکرد
+FUNCTION    |   تابع
 IF          |   اگر
 NULL        |   پوچ
 OR          |   یا

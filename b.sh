@@ -28,7 +28,8 @@ fi
 
 # Compile
 # gcc -g -ggdb -o "$OUTPUT_FILE" "$INPUT_FILE"
-gcc -g -fsanitize=undefined,address -Walloca -o "$OUTPUT_FILE" "$INPUT_FILE" -lefence
+# gcc -g -fsanitize=undefined,address -Walloca -o "$OUTPUT_FILE" "$INPUT_FILE" -lefence
+gcc -g -fsanitize=undefined,address -Walloca -o "$OUTPUT_FILE" "$INPUT_FILE"
 
 if ! [ -x "$(command -v emcc)" ]; then
 	echo 'Error: emcc is not installed.' >&2

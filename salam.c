@@ -2050,7 +2050,11 @@ ast_node_t* parser_statement_repeat(parser_t* parser)
 	CREATE_MEMORY_OBJECT(node, ast_node_t, 1, "Error: parser_statement_repeat<node> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	node->type = AST_STATEMENT_REPEAT;
 	CREATE_MEMORY_OBJECT(node->data.statement_repeat, ast_statement_repeat_t, 1, "Error: parser_statement_repeat<statement_repeat> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-	node->data.statement_repeat->condition = parser_expression(parser);
+	
+	if (! parser_token_ifhas(parser, TOKEN_TYPE_SECTION_OPEN)) {
+		node->data.statement_repeat->condition = parser_expression(parser);
+	}	
+
 	node->data.statement_repeat->block = parser_block(parser);
 
 	return node;
@@ -2856,21 +2860,33 @@ ast_node_t* interpreter_statement_repeat(ast_node_t* node, interpreter_t* interp
 {
 	// print_error("Repeat\n");
 
-	ast_literal_t* count = interpreter_expression(node->data.statement_repeat->condition, interpreter);
-	if (count->type == VALUE_TYPE_STRING) {
-		count->type = VALUE_TYPE_INT;
-		count->int_value = strlen(count->string_value);
-	} else if (count->type == VALUE_TYPE_INT) {
+	bool isInfinity = false;
+	ast_literal_t* count;
+
+	if (node->data.statement_repeat->condition == NULL) {
+		isInfinity = true;
 	} else {
-		print_error("Repeat statement only accepts integer or string values.");
-		return NULL;
+		count = interpreter_expression(node->data.statement_repeat->condition, interpreter);
+		if (count->type == VALUE_TYPE_STRING) {
+			count->type = VALUE_TYPE_INT;
+			count->int_value = strlen(count->string_value);
+		} else if (count->type == VALUE_TYPE_INT) {
+			if (count->int_value < 0) {
+				print_error("Repeat statement only accepts positive numbers or zero.");
+				return NULL;
+			}
+		} else {
+			print_error("Repeat statement only accepts integer or string values.");
+			return NULL;
+		}
 	}
 
 	int i = 1;
 
-	while (i <= count->int_value) {
+	while (isInfinity == true || (count != NULL && i <= count->int_value)) {
 		// TODO: add i variable to local variable scope.
-		ast_node_t* returned = interpreter_block(node->data.statement_repeat->block, interpreter, TOKEN_TYPE_REPEAT, NULL);
+
+		ast_node_t* returned = 	(node->data.statement_repeat->block, interpreter, TOKEN_TYPE_REPEAT, NULL);
 
 		if (returned != NULL) {
 			if (returned->type == AST_STATEMENT_RETURN) {

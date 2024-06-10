@@ -92,6 +92,7 @@ typedef enum {
 	TOKEN_TYPE_NULL, // پوچ
 
 	TOKEN_TYPE_UNTIL, // تا
+	TOKEN_TYPE_REPEAT, // تکرار
 	TOKEN_TYPE_TRUE, // درست
 	TOKEN_TYPE_FALSE, // غلط
 	TOKEN_TYPE_ELSEIF, // واگرنه
@@ -142,6 +143,7 @@ keyword_mapping_t keyword_mapping[] = {
 	{"اگر", TOKEN_TYPE_IF},
 	{"پوچ", TOKEN_TYPE_NULL},
 	{"تا", TOKEN_TYPE_UNTIL},
+	{"تکرار", TOKEN_TYPE_REPEAT},
 	{"درست", TOKEN_TYPE_TRUE},
 	{"غلط", TOKEN_TYPE_FALSE},
 	{"و", TOKEN_TYPE_AND},
@@ -244,6 +246,7 @@ typedef enum {
 	AST_STATEMENT_PRINT,
 	AST_STATEMENT_IF,
 	AST_STATEMENT_UNTIL,
+	AST_STATEMENT_REPEAT,
 	AST_STATEMENT_ELSEIF,
 	AST_BLOCK,
 	AST_EXPRESSION,
@@ -253,6 +256,11 @@ typedef struct {
 	ast_expression_t* condition;
 	struct ast_node* block;
 } ast_statement_until_t;
+
+typedef struct {
+	ast_expression_t* condition;
+	struct ast_node* block;
+} ast_statement_repeat_t;
 
 typedef struct {
 	ast_expression_t* condition;
@@ -272,6 +280,7 @@ typedef struct ast_node {
 		ast_expression_t* expression;
 		ast_statement_if_t* statement_if;
 		ast_statement_until_t* statement_until;
+		ast_statement_repeat_t* statement_repeat;
 		ast_function_call_t* function_call;
 	} data;
 } ast_node_t;
@@ -375,6 +384,7 @@ ast_node_t* parser_statement_continue(parser_t* parser);
 bool parser_expression_has(parser_t* parser);
 ast_node_t* parser_statement_if(parser_t* parser);
 ast_node_t* parser_statement_until(parser_t* parser);
+ast_node_t* parser_statement_repeat(parser_t* parser);
 ast_node_t* parser_statement(parser_t* parser);
 ast_expression_t* parser_expression(parser_t* parser);
 ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence);
@@ -695,6 +705,7 @@ char* token_type2str(token_type_t type)
 {
 	switch(type) {
 		case TOKEN_TYPE_UNTIL: return "UNTIL";
+		case TOKEN_TYPE_REPEAT: return "REPEAT";
 		case TOKEN_TYPE_IDENTIFIER: return "IDENTIFIER";
 		case TOKEN_TYPE_NUMBER: return "NUMBER";
 		case TOKEN_TYPE_STRING: return "STRING";
@@ -1531,6 +1542,24 @@ void ast_node_free(ast_node_t** node)
 				(*node)->data.statement_until = NULL;
 			}
 			break;
+		
+		case AST_STATEMENT_REPEAT:
+			// print_error("free ast repeat\n");
+			if ((*node)->data.statement_repeat != NULL) {
+				if ((*node)->data.statement_repeat->condition != NULL) {
+					ast_expression_free(&((*node)->data.statement_repeat->condition));
+					(*node)->data.statement_repeat->condition = NULL;
+				}
+
+				if ((*node)->data.statement_repeat->block != NULL) {
+					ast_node_free(&((*node)->data.statement_repeat->block));
+					(*node)->data.statement_repeat->block = NULL;
+				}
+
+				free((*node)->data.statement_repeat);
+				(*node)->data.statement_repeat = NULL;
+			}
+			break;
 
 		case AST_STATEMENT_IF:
 		case AST_STATEMENT_ELSEIF:
@@ -2011,6 +2040,22 @@ ast_node_t* parser_statement_until(parser_t* parser)
 	return node;
 }
 
+ast_node_t* parser_statement_repeat(parser_t* parser)
+{
+	print_error("Parsing statement repeat\n");
+
+	parser->token_index++; // Eating UNTIL token
+
+	ast_node_t* node;
+	CREATE_MEMORY_OBJECT(node, ast_node_t, 1, "Error: parser_statement_repeat<node> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	node->type = AST_STATEMENT_REPEAT;
+	CREATE_MEMORY_OBJECT(node->data.statement_repeat, ast_statement_repeat_t, 1, "Error: parser_statement_repeat<statement_repeat> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	node->data.statement_repeat->condition = parser_expression(parser);
+	node->data.statement_repeat->block = parser_block(parser);
+
+	return node;
+}
+
 ast_node_t* parser_statement(parser_t* parser)
 {
 	print_error("Parsing statement\n");
@@ -2035,6 +2080,10 @@ ast_node_t* parser_statement(parser_t* parser)
 
 			case TOKEN_TYPE_UNTIL:
 				stmt = parser_statement_until(parser);
+				break;
+
+			case TOKEN_TYPE_REPEAT:
+				stmt = parser_statement_repeat(parser);
 				break;
 
 			case TOKEN_TYPE_IF:
@@ -2620,6 +2669,24 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 			print_error("</StatementUntil>\n");
 			break;
 
+		case AST_STATEMENT_REPEAT:
+			print_error("<StatementRepeat>\n");
+
+				print_indentation(indent_level + 1);
+				print_error("<Condition>\n");
+
+					print_indentation(indent_level + 2);
+					print_xml_ast_expression(node->data.statement_if->condition, indent_level + 2);
+
+				print_indentation(indent_level + 1);
+				print_error("</Condition>\n");
+
+				print_xml_ast_node(node->data.statement_if->block, indent_level + 1);
+
+			print_indentation(indent_level);
+			print_error("</StatementUntil>\n");
+			break;
+
 		case AST_STATEMENT_IF:
 		case AST_STATEMENT_ELSEIF:
 			print_error("<StatementIf>\n");
@@ -2785,6 +2852,42 @@ interpreter_t* interpreter_create(parser_t** parser)
 	return interpreter;
 }
 
+ast_node_t* interpreter_statement_repeat(ast_node_t* node, interpreter_t* interpreter)
+{
+	// print_error("Repeat\n");
+
+	ast_literal_t* count = interpreter_expression(node->data.statement_repeat->condition, interpreter);
+	if (count->type == VALUE_TYPE_STRING) {
+		count->type = VALUE_TYPE_INT;
+		count->int_value = strlen(count->string_value);
+	} else if (count->type == VALUE_TYPE_INT) {
+	} else {
+		print_error("Repeat statement only accepts integer or string values.");
+		return NULL;
+	}
+
+	int i = 1;
+
+	while (i <= count->int_value) {
+		// TODO: add i variable to local variable scope.
+		ast_node_t* returned = interpreter_block(node->data.statement_repeat->block, interpreter, TOKEN_TYPE_REPEAT, NULL);
+
+		if (returned != NULL) {
+			if (returned->type == AST_STATEMENT_RETURN) {
+				return returned;
+			} else if (returned->type == AST_STATEMENT_BREAK) {
+				break;
+			} else if (returned->type == AST_STATEMENT_CONTINUE) {
+				continue;
+			}
+		}
+
+		i++;
+	}
+
+	return NULL;
+}
+
 ast_node_t* interpreter_statement_until(ast_node_t* node, interpreter_t* interpreter)
 {
 	// print_error("Until\n");
@@ -2847,6 +2950,9 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 
 		case AST_STATEMENT_UNTIL:
 			return interpreter_statement_until(node, interpreter);
+
+		case AST_STATEMENT_REPEAT:
+			return interpreter_statement_repeat(node, interpreter);
 
 		case AST_STATEMENT_PRINT:
 			return interpreter_statement_print(node, interpreter);
@@ -3031,7 +3137,7 @@ ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, toke
 	for (size_t i = 0; i < node->data.block->num_statements; i++) {
 		ast_node_t* stmt = node->data.block->statements[i];
 
-		if (parent_type != TOKEN_TYPE_UNTIL && (stmt->type == AST_STATEMENT_BREAK || stmt->type == AST_STATEMENT_CONTINUE)) {
+		if (parent_type != TOKEN_TYPE_UNTIL && parent_type != TOKEN_TYPE_REPEAT && (stmt->type == AST_STATEMENT_BREAK || stmt->type == AST_STATEMENT_CONTINUE)) {
 			print_error("Error: it's not possible to have break/continue inside a non-loop!\n");
 			exit(EXIT_FAILURE);
 		}

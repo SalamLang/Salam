@@ -2901,7 +2901,7 @@ ast_node_t* interpreter_statement_repeat(ast_node_t* node, interpreter_t* interp
 	while (isInfinity == true || (count != NULL && i <= count->int_value)) {
 		// TODO: add i variable to local variable scope.
 
-		ast_node_t* returned = 	(node->data.statement_repeat->block, interpreter, TOKEN_TYPE_REPEAT, NULL);
+		ast_node_t* returned = interpreter_block(node->data.statement_repeat->block, interpreter, TOKEN_TYPE_REPEAT, NULL);
 
 		if (returned != NULL) {
 			if (returned->type == AST_STATEMENT_RETURN) {

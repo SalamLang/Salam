@@ -2052,8 +2052,12 @@ ast_node_t* parser_statement_repeat(parser_t* parser)
 	CREATE_MEMORY_OBJECT(node->data.statement_repeat, ast_statement_repeat_t, 1, "Error: parser_statement_repeat<statement_repeat> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	
 	if (! parser_token_ifhas(parser, TOKEN_TYPE_SECTION_OPEN)) {
+		printf("inside if...\n");
 		node->data.statement_repeat->condition = parser_expression(parser);
-	}	
+	} else {
+		node->data.statement_repeat->condition = NULL;
+		printf("inside elseif...\n");
+	}
 
 	node->data.statement_repeat->block = parser_block(parser);
 
@@ -2662,12 +2666,12 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 				print_error("<Condition>\n");
 
 					print_indentation(indent_level + 2);
-					print_xml_ast_expression(node->data.statement_if->condition, indent_level + 2);
+					print_xml_ast_expression(node->data.statement_until->condition, indent_level + 2);
 
 				print_indentation(indent_level + 1);
 				print_error("</Condition>\n");
 
-				print_xml_ast_node(node->data.statement_if->block, indent_level + 1);
+				print_xml_ast_node(node->data.statement_until->block, indent_level + 1);
 
 			print_indentation(indent_level);
 			print_error("</StatementUntil>\n");
@@ -2680,12 +2684,12 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 				print_error("<Condition>\n");
 
 					print_indentation(indent_level + 2);
-					print_xml_ast_expression(node->data.statement_if->condition, indent_level + 2);
+					print_xml_ast_expression(node->data.statement_repeat->condition, indent_level + 2);
 
 				print_indentation(indent_level + 1);
 				print_error("</Condition>\n");
 
-				print_xml_ast_node(node->data.statement_if->block, indent_level + 1);
+				print_xml_ast_node(node->data.statement_repeat->block, indent_level + 1);
 
 			print_indentation(indent_level);
 			print_error("</StatementUntil>\n");

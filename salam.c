@@ -2662,14 +2662,19 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 		case AST_STATEMENT_UNTIL:
 			print_error("<StatementUntil>\n");
 
-				print_indentation(indent_level + 1);
-				print_error("<Condition>\n");
+			print_indentation(indent_level + 1);
 
-					print_indentation(indent_level + 2);
-					print_xml_ast_expression(node->data.statement_until->condition, indent_level + 2);
+				if (node->data.statement_until->condition == NULL) {
+					print_error("<Condition />\n");
+				} else {
+					print_error("<Condition>\n");
 
-				print_indentation(indent_level + 1);
-				print_error("</Condition>\n");
+						print_indentation(indent_level + 2);
+						print_xml_ast_expression(node->data.statement_until->condition, indent_level + 2);
+
+					print_indentation(indent_level + 1);
+					print_error("</Condition>\n");
+				}
 
 				print_xml_ast_node(node->data.statement_until->block, indent_level + 1);
 
@@ -2680,14 +2685,19 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 		case AST_STATEMENT_REPEAT:
 			print_error("<StatementRepeat>\n");
 
-				print_indentation(indent_level + 1);
-				print_error("<Condition>\n");
+			print_indentation(indent_level + 1);
 
-					print_indentation(indent_level + 2);
-					print_xml_ast_expression(node->data.statement_repeat->condition, indent_level + 2);
+				if (node->data.statement_repeat->condition == NULL) {
+					print_error("<Condition />\n");
+				} else {
+					print_error("<Condition>\n");
 
-				print_indentation(indent_level + 1);
-				print_error("</Condition>\n");
+						print_indentation(indent_level + 2);
+						print_xml_ast_expression(node->data.statement_repeat->condition, indent_level + 2);
+
+					print_indentation(indent_level + 1);
+					print_error("</Condition>\n");
+				}
 
 				print_xml_ast_node(node->data.statement_repeat->block, indent_level + 1);
 
@@ -2699,7 +2709,8 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 		case AST_STATEMENT_ELSEIF:
 			print_error("<StatementIf>\n");
 
-				print_indentation(indent_level + 1);
+			print_indentation(indent_level + 1);
+
 				print_error("<Condition>\n");
 
 					print_indentation(indent_level + 2);

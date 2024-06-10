@@ -83,7 +83,7 @@ typedef enum {
 	TOKEN_TYPE_STRING,
 
 	// Keywords
-	TOKEN_TYPE_FUNCTION, // عملکرد
+	TOKEN_TYPE_FUNCTION, // تابع
 	TOKEN_TYPE_RETURN, // برگشت
 	TOKEN_TYPE_BREAK, // توقف
 	TOKEN_TYPE_CONTINUE, // ادامه
@@ -133,7 +133,7 @@ typedef struct {
 } keyword_mapping_t;
 
 keyword_mapping_t keyword_mapping[] = {
-	{"عملکرد", TOKEN_TYPE_FUNCTION},
+	{"تابع", TOKEN_TYPE_FUNCTION},
 	{"برگشت", TOKEN_TYPE_RETURN},
 	{"ادامه", TOKEN_TYPE_CONTINUE},
 	{"توقف", TOKEN_TYPE_BREAK},

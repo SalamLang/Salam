@@ -1160,7 +1160,7 @@ void lexer_lex(lexer_t* lexer)
 		} else if (current_wchar == ']') {
 			token_t* t = token_create(TOKEN_TYPE_BRACKETS_CLOSE, "]", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_wchar == '%') {
+		} else if (current_wchar == '%' || current_wchar == L'٪') {
 			token_t* t = token_create(TOKEN_TYPE_MODULE, "%", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		} else if (current_wchar == '{') {
@@ -3390,6 +3390,9 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 	} else if (strcmp(expr->data.binary_op->operator, "*") == 0) {
 		res->type = VALUE_TYPE_INT;
 		res->int_value = left->int_value * right->int_value;
+	} else if (strcmp(expr->data.binary_op->operator, "%") == 0 || strcmp(expr->data.binary_op->operator, "٪") == 0) {
+		res->type = VALUE_TYPE_INT;
+		res->int_value = left->int_value % right->int_value;
 	} else if (strcmp(expr->data.binary_op->operator, "/") == 0) {
 		if (right->int_value == 0) {
 			print_error("Error: cannot divide by zero!\n");

@@ -3390,7 +3390,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 	} else if (strcmp(expr->data.binary_op->operator, "*") == 0) {
 		res->type = VALUE_TYPE_INT;
 		res->int_value = left->int_value * right->int_value;
-	} else if (strcmp(expr->data.binary_op->operator, "%") == 0 || strcmp(expr->data.binary_op->operator, "٪") == 0) {
+	} else if (strcmp(expr->data.binary_op->operator, "%") == 0) {
 		res->type = VALUE_TYPE_INT;
 		res->int_value = left->int_value % right->int_value;
 	} else if (strcmp(expr->data.binary_op->operator, "/") == 0) {

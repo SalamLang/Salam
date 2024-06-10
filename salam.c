@@ -112,6 +112,8 @@ typedef enum {
 	TOKEN_TYPE_MULTIPLY, // *
 	TOKEN_TYPE_DIVIDE, // /
 	TOKEN_TYPE_MODULE, // %
+	// TOKEN_TYPE_EVEN, // زوج
+	// TOKEN_TYPE_ODD, // فرد
 
 	TOKEN_TYPE_COMMA, // ,
 
@@ -450,6 +452,9 @@ token_info_t token_infos[] = {
 	[TOKEN_TYPE_DIVIDE] = {PRECEDENCE_MULTIPLY, NULL, led_plus_minus},
 	[TOKEN_TYPE_MODULE] = {PRECEDENCE_MULTIPLY, NULL, led_plus_minus},
 
+	// [TOKEN_TYPE_EVEN] = {PRECEDENCE_MULTIPLY, NULL, led_plus_minus},
+	// [TOKEN_TYPE_ODD] = {PRECEDENCE_MULTIPLY, NULL, led_plus_minus},
+
 	[TOKEN_TYPE_NOT_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
 	[TOKEN_TYPE_EQUAL_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
 
@@ -728,6 +733,9 @@ char* token_type2str(token_type_t type)
 		case TOKEN_TYPE_BRACKETS_CLOSE: return "BRACKETS_CLOSE";
 		case TOKEN_TYPE_PLUS: return "PLUS";
 		case TOKEN_TYPE_DIVIDE: return "DIVIDE";
+		// case TOKEN_TYPE_EVEN: return "EVEN";
+		// case TOKEN_TYPE_ODD: return "ODD";
+
 		case TOKEN_TYPE_MODULE: return "MODULE";
 		case TOKEN_TYPE_MINUS: return "MINUS";
 		case TOKEN_TYPE_MULTIPLY: return "MULTIPLY";
@@ -1178,7 +1186,6 @@ void lexer_lex(lexer_t* lexer)
 		} else if (current_wchar == '+') {
 			token_t* t = token_create(TOKEN_TYPE_PLUS, "+", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_wchar == '*') {
 			token_t* t = token_create(TOKEN_TYPE_MULTIPLY, "*", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		} else if (current_wchar == '/') {

@@ -1555,7 +1555,7 @@ void ast_node_free(ast_node_t** node)
 				(*node)->data.statement_until = NULL;
 			}
 			break;
-		
+
 		case AST_STATEMENT_REPEAT:
 			// print_error("free ast repeat\n");
 			if ((*node)->data.statement_repeat != NULL) {
@@ -2063,7 +2063,7 @@ ast_node_t* parser_statement_repeat(parser_t* parser)
 	CREATE_MEMORY_OBJECT(node, ast_node_t, 1, "Error: parser_statement_repeat<node> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	node->type = AST_STATEMENT_REPEAT;
 	CREATE_MEMORY_OBJECT(node->data.statement_repeat, ast_statement_repeat_t, 1, "Error: parser_statement_repeat<statement_repeat> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-	
+
 	if (! parser_token_ifhas(parser, TOKEN_TYPE_SECTION_OPEN)) {
 		printf("inside if...\n");
 		node->data.statement_repeat->condition = parser_expression(parser);

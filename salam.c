@@ -79,7 +79,8 @@ typedef struct SymbolTableStack {
 typedef enum {
 	// Values
 	TOKEN_TYPE_IDENTIFIER,
-	TOKEN_TYPE_NUMBER,
+	TOKEN_TYPE_INT,
+	TOKEN_TYPE_FLOAT,
 	TOKEN_TYPE_STRING,
 
 	// Keywords
@@ -438,7 +439,8 @@ SymbolTableStack* symbolGlobalTableStack = NULL;
 token_info_t token_infos[] = {
 	[TOKEN_TYPE_TRUE] = {PRECEDENCE_LOWEST, nud_bool, NULL},
 	[TOKEN_TYPE_FALSE] = {PRECEDENCE_LOWEST, nud_bool, NULL},
-	[TOKEN_TYPE_NUMBER] = {PRECEDENCE_LOWEST, nud_number, NULL},
+	[TOKEN_TYPE_INT] = {PRECEDENCE_LOWEST, nud_number, NULL},
+	[TOKEN_TYPE_FLOAT] = {PRECEDENCE_LOWEST, nud_number, NULL},
 	[TOKEN_TYPE_BRACKETS_OPEN] = {PRECEDENCE_LOWEST, nud_array, NULL},
 	[TOKEN_TYPE_IDENTIFIER] = {PRECEDENCE_LOWEST, nud_identifier, NULL},
 	[TOKEN_TYPE_STRING] = {PRECEDENCE_LOWEST, nud_string, NULL},
@@ -714,7 +716,8 @@ char* token_type2str(token_type_t type)
 		case TOKEN_TYPE_UNTIL: return "UNTIL";
 		case TOKEN_TYPE_REPEAT: return "REPEAT";
 		case TOKEN_TYPE_IDENTIFIER: return "IDENTIFIER";
-		case TOKEN_TYPE_NUMBER: return "NUMBER";
+		case TOKEN_TYPE_INT: return "NUMBER_INT";
+		case TOKEN_TYPE_FLOAT: return "NUMBER_FLOAT";
 		case TOKEN_TYPE_STRING: return "STRING";
 		case TOKEN_TYPE_FUNCTION: return "FUNCTION";
 		case TOKEN_TYPE_RETURN: return "RETURN";
@@ -1013,7 +1016,29 @@ void read_number(lexer_t* lexer, wchar_t ch)
 	}
 	number[i] = 0;
 
-	token_t* t = token_create(TOKEN_TYPE_NUMBER, number, i, lexer->line, lexer->column - i, lexer->line, lexer->column);
+	bool isFloat = false;
+	if (ch == '.') {
+		i++;
+		ch = read_token(lexer);
+
+		if (!is_number(ch)) {
+			print_error("Syntax Error: we expect a number after dot of a float value\n");
+			exit(EXIT_FAILURE);
+		}
+		isFloat = true;
+
+		while (is_number(ch)) {
+			if (ch >= '0' && ch <= '9') {
+				number[i] = ch;
+			} else {
+				number[i] = ch - L'۰' + '0';
+			}
+			i++;
+			ch = read_token(lexer);
+		}
+	}
+
+	token_t* t = token_create(isFloat ? TOKEN_TYPE_FLOAT : TOKEN_TYPE_INT, number, i, lexer->line, lexer->column - i, lexer->line, lexer->column);
 	array_push(lexer->tokens, t);
 
 	unread_token(lexer);
@@ -1973,7 +1998,8 @@ bool parser_expression_has(parser_t* parser)
 			tok->type == TOKEN_TYPE_PARENTHESE_OPEN ||
 			tok->type == TOKEN_TYPE_BRACKETS_OPEN ||
 			tok->type == TOKEN_TYPE_STRING ||
-			tok->type == TOKEN_TYPE_NUMBER
+			tok->type == TOKEN_TYPE_INT ||
+			tok->type == TOKEN_TYPE_FLOAT
 		) {
 			return true;
 		}
@@ -2284,8 +2310,15 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 
 	CREATE_MEMORY_OBJECT(literal_expr->data.literal , ast_literal_t, 1, "Error: nud_number<literal> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	literal_expr->data.literal->main = NULL;
-	literal_expr->data.literal->type = VALUE_TYPE_INT;
-	literal_expr->data.literal->int_value = atoi(token->value);
+
+	if (token->type == TOKEN_TYPE_FLOAT) {
+		literal_expr->data.literal->type = VALUE_TYPE_INT;
+		literal_expr->data.literal->int_value = atof(token->value);
+	} else {
+		literal_expr->data.literal->type = VALUE_TYPE_INT;
+		literal_expr->data.literal->int_value = atoi(token->value);
+	}
+
 
 	return literal_expr;
 }
@@ -2512,6 +2545,8 @@ void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 					print_error("<Value>NULL</value>\n");
 				} else if (expr->data.literal->type == VALUE_TYPE_INT) {
 					print_error("<Value>%d</Value>\n", expr->data.literal->int_value);
+				} else if (expr->data.literal->type == VALUE_TYPE_FLOAT) {
+					print_error("<Value>%f</Value>\n", expr->data.literal->float_value);
 				} else if (expr->data.literal->type == VALUE_TYPE_BOOL) {
 					print_error("<Value>%s</Value>\n", expr->data.literal->bool_value ? "True" : "False");
 				} else if (expr->data.literal->type == VALUE_TYPE_ARRAY_EXPRESSION) {

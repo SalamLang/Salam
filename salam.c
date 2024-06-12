@@ -1186,6 +1186,7 @@ void lexer_lex(lexer_t* lexer)
 		} else if (current_wchar == '+') {
 			token_t* t = token_create(TOKEN_TYPE_PLUS, "+", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
+		} else if (current_wchar == '*') {
 			token_t* t = token_create(TOKEN_TYPE_MULTIPLY, "*", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		} else if (current_wchar == '/') {
@@ -3489,6 +3490,40 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		val->string_value = strdup(interpreter_expression_data_type(arg_val));
 		val->main = NULL;
 		return val;
+	} else if (strcmp(node->data.function_call->name, "زوج") == 0) {
+		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
+			print_error("Error: number of arguments of زوج() function should be one!\n");
+			exit(EXIT_FAILURE);
+		}
+		ast_literal_t* arg = node->data.function_call->arguments->data[0];
+		bool boolResult = false;
+
+		if (arg->type == VALUE_TYPE_INT) boolResult = arg->int_value % 2 == 0 ? true : false;
+		else if (arg->type == VALUE_TYPE_FLOAT) boolResult = ((int)arg->float_value) % 2 == 0 ? true : false;
+
+		ast_literal_t* val;
+		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_function_call<val 2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+		val->type = VALUE_TYPE_BOOL;
+		val->bool_value = boolResult;
+		val->main = NULL;
+		return val;
+	} else if (strcmp(node->data.function_call->name, "فرد") == 0) {
+		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
+			print_error("Error: number of arguments of فرد() function should be one!\n");
+			exit(EXIT_FAILURE);
+		}
+		ast_literal_t* arg = node->data.function_call->arguments->data[0];
+		bool boolResult = false;
+
+		if (arg->type == VALUE_TYPE_INT) boolResult = arg->int_value % 2 != 0 ? true : false;
+		else if (arg->type == VALUE_TYPE_FLOAT) boolResult = ((int)arg->float_value) % 2 != 0 ? true : false;
+
+		ast_literal_t* val;
+		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_function_call<val 2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+		val->type = VALUE_TYPE_BOOL;
+		val->bool_value = boolResult;
+		val->main = NULL;
+		return val;
 	} else if (strcmp(node->data.function_call->name, "خواندن") == 0) {
 		if (node->data.function_call->arguments != NULL && node->data.function_call->arguments->length != 0) {
 			print_error("Error: number of arguments of خواندن() function should be empty!\n");
@@ -3498,7 +3533,7 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		char* input = read_dynamic_string();
 
 		ast_literal_t* val;
-		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_function_call<val 2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_function_call<val 3> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_STRING;
 		val->string_value = input;
 		val->main = NULL;
@@ -3516,7 +3551,7 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		}
 
 		ast_literal_t* val;
-		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_function_call<val 3> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_function_call<val 4> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_INT;
 		val->int_value = strlen(arg_val->string_value);
 		val->main = NULL;
@@ -3533,7 +3568,7 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		}
 
 		ast_literal_t* val;
-		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_function_call<val 4> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_function_call<val 5> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_STRING;
 		val->main = NULL;
 

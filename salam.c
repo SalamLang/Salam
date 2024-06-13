@@ -86,6 +86,7 @@ typedef enum {
 	MESSAGE_INTERPRETER_FUNCTION_CALL_FIRST_ARGUMENT_SHOULD_BE_ONLY_A_STRING,
 	MESSAGE_LEXER_FILE_NOT_EXISTS,
 	MESSAGE_MEMORY_ALLOCATE_ERROR,
+	MESSAGE_INTERPRETER_MAIN_RETURN_CODE,
     MESSAGE_COUNT,
 } message_key_t;
 
@@ -3173,7 +3174,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 
 	// print_xml_ast_node(main_returned, 3);
 	if (main_returned != NULL && main_returned->type == AST_STATEMENT_RETURN) {
-		print_message("Main returned: ");
+		print_message(messages[language][MESSAGE_INTERPRETER_MAIN_RETURN_CODE]);
 		interpreter_expression_data(main_returned->data.statement_return->expression_value, true);
 	} else {
 		print_error(messages[language][MESSAGE_INTERPRETER_MAIN_NORETURN]);

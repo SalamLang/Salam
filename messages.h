@@ -70,6 +70,8 @@ const char* messages[LANGUAGE_COUNT][MESSAGE_COUNT] = {
         [MESSAGE_INTERPRETER_FUNCTION_CALL_FIRST_ARGUMENT_SHOULD_BE_ONLY_A_STRING] = "Error: argument type of %S() function should be a string!\n",
         [MESSAGE_LEXER_FILE_NOT_EXISTS] = "Error: file %s not found\n",
         [MESSAGE_MEMORY_ALLOCATE_ERROR] = "Memory allocation error\n",
+
+        [MESSAGE_INTERPRETER_MAIN_RETURN_CODE] = "Main returned: ",
     },
 
     [LANGUAGE_ARABIC] = {

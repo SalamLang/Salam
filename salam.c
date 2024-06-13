@@ -335,8 +335,8 @@ void pushSymbolTable(SymbolTableStack** ts, bool is_function_call);
 void popSymbolTable(SymbolTableStack** ts);
 static SymbolTableEntry* findSymbolInParentScopes(SymbolTableStack* ts, const char* identifier);
 void addToSymbolTable(SymbolTableStack* ts, const char* identifier, ast_literal_t* value);
-ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const char* identifier);
-ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier, bool wantsGlobal);
+ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const char* identifier, bool checkEverythingEvenIsFuncCall);
+ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier, bool wantsGlobal, bool checkEverythingEvenIsFuncCall);
 char* token_op_type2str(ast_expression_type_t type);
 char* token_type2str(token_type_t type);
 char* file_read(char* file_Name);
@@ -420,15 +420,15 @@ char* interpreter_expression_data_type(ast_literal_t* data);
 ast_node_t* interpreter_statement_return(ast_node_t* node, interpreter_t* interpreter);
 ast_node_t* interpreter_statement_print(ast_node_t* node, interpreter_t* interpreter);
 ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type, array_t* arguments);
-ast_literal_t* interpreter_literal(ast_expression_t* expr, interpreter_t* interpreter);
-ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* interpreter);
-ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter_t* interpreter);
+ast_literal_t* interpreter_expression_literal(ast_expression_t* expr, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall);
+ast_literal_t* interpreter_expression_identifier(ast_expression_t* expr, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall);
+ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall);
+ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall);
+bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall);
+ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall);
+ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall);
 ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments, interpreter_t* interpreter);
-ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* interpreter);
-bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter);
-ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpreter_t* interpreter);
 ast_node_t* interpreter_statement_expression(ast_node_t* node, interpreter_t* interpreter);
-ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* interpreter);
 void interpreter_free(interpreter_t** interpreter);
 int main(int argc, char** argv);
 
@@ -656,7 +656,7 @@ void addToSymbolTable(SymbolTableStack* ts, const char* identifier, ast_literal_
 	table->size++;
 }
 
-ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const char* identifier)
+ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const char* identifier, bool checkEverythingEvenIsFuncCall)
 {
 	if (currentScope == NULL) {
 		return NULL;
@@ -676,16 +676,16 @@ ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const ch
 	return NULL;
 }
 
-ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier, bool wantsGlobal)
+ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier, bool wantsGlobal, bool checkEverythingEvenIsFuncCall)
 {
 	while (currentScope != NULL) {
 		// print_error("looking for %s on a scope %d\n", identifier, currentScope->is_function_call ? 1 : 0);
-		ast_literal_t* data = findInSymbolTableCurrent(currentScope, identifier);
+		ast_literal_t* data = findInSymbolTableCurrent(currentScope, identifier, checkEverythingEvenIsFuncCall);
 		if (data != NULL) {
 			return data;
 		}
 
-		if (currentScope->is_function_call == true) {
+		if (checkEverythingEvenIsFuncCall == false && currentScope->is_function_call == true) {
 			// print_error("this scope is call enabled, so break loop (%d)!\n", wantsGlobal ? 1 : 0);
 			break;
 		}
@@ -693,7 +693,7 @@ ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* ide
 	}
 
 	if (wantsGlobal == true) {
-		return findInSymbolTable(symbolGlobalTableStack, identifier, false);
+		return findInSymbolTable(symbolGlobalTableStack, identifier, false, checkEverythingEvenIsFuncCall);
 	}
 	return NULL;
 }
@@ -2930,7 +2930,7 @@ ast_node_t* interpreter_statement_repeat(ast_node_t* node, interpreter_t* interp
 	if (node->data.statement_repeat->condition == NULL) {
 		isInfinity = true;
 	} else {
-		count = interpreter_expression(node->data.statement_repeat->condition, interpreter);
+		count = interpreter_expression(node->data.statement_repeat->condition, interpreter, false);
 		if (count->type == VALUE_TYPE_STRING) {
 			count->type = VALUE_TYPE_INT;
 			count->int_value = strlen(count->string_value);
@@ -2972,7 +2972,7 @@ ast_node_t* interpreter_statement_until(ast_node_t* node, interpreter_t* interpr
 {
 	// print_error("Until\n");
 
-	while (interpreter_expression_truly(node->data.statement_until->condition, interpreter) == true) {
+	while (interpreter_expression_truly(node->data.statement_until->condition, interpreter, false) == true) {
 		ast_node_t* returned = interpreter_block(node->data.statement_until->block, interpreter, TOKEN_TYPE_UNTIL, NULL);
 
 		if (returned != NULL) {
@@ -2993,12 +2993,12 @@ ast_node_t* interpreter_statement_if(ast_node_t* node, interpreter_t* interprete
 {
 	// print_error("If\n");
 
-	if (interpreter_expression_truly(node->data.statement_if->condition, interpreter)) {
+	if (interpreter_expression_truly(node->data.statement_if->condition, interpreter, false)) {
 		return interpreter_block(node->data.statement_if->block, interpreter, TOKEN_TYPE_IF, NULL);
 	} else {
 		for (size_t i = 0; i < node->data.statement_if->num_elseifs; i++) {
 			ast_node_t* elseif = (ast_node_t*) node->data.statement_if->elseifs[i];
-			if (interpreter_expression_truly(elseif->data.statement_if->condition, interpreter)) {
+			if (interpreter_expression_truly(elseif->data.statement_if->condition, interpreter, false)) {
 				return interpreter_block(elseif->data.statement_if->block, interpreter, TOKEN_TYPE_ELSEIF, NULL);
 			}
 		}
@@ -3066,7 +3066,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 			// print_error("Interpreting global expression\n");
 			ast_node_t* expression = (ast_node_t*) (*interpreter->parser)->expressions->data[i];
 			if (expression != NULL && expression->data.expression != NULL) {
-				interpreter_expression(expression->data.expression, interpreter);
+				interpreter_expression(expression->data.expression, interpreter, false);
 			}
 		}
 	}
@@ -3177,7 +3177,7 @@ ast_node_t* interpreter_statement_return(ast_node_t* node, interpreter_t* interp
 {
 	// print_error("Return Statement\n");
 
-	node->data.statement_return->expression_value = (ast_literal_t*) interpreter_expression(node->data.statement_return->expression, interpreter);
+	node->data.statement_return->expression_value = (ast_literal_t*) interpreter_expression(node->data.statement_return->expression, interpreter, false);
 
 	return node;
 }
@@ -3186,7 +3186,7 @@ ast_node_t* interpreter_statement_print(ast_node_t* node, interpreter_t* interpr
 {
 	// print_error("Print Statement\n");
 
-	node->data.statement_print->expression_value = (ast_literal_t*) interpreter_expression(node->data.statement_print->expression, interpreter);
+	node->data.statement_print->expression_value = (ast_literal_t*) interpreter_expression(node->data.statement_print->expression, interpreter, false);
 
 	// printf("print res: ");
 	// printf("%s\n", interpreter_expression_data_type(node->data.statement_print->expression_value));
@@ -3244,7 +3244,7 @@ ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, toke
 	return returned;
 }
 
-ast_literal_t* interpreter_literal(ast_expression_t* expr, interpreter_t* interpreter)
+ast_literal_t* interpreter_expression_literal(ast_expression_t* expr, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall)
 {
 	if (expr == NULL) {
 		return NULL;
@@ -3257,7 +3257,7 @@ ast_literal_t* interpreter_literal(ast_expression_t* expr, interpreter_t* interp
 
 			for (size_t i = 0; i < expr->data.literal->size_value; i++) {
 				ast_expression_t* arr_exp = (ast_expression_t*) expr->data.literal->array_expression_value[i];
-				ast_literal_t* arr_val = interpreter_expression(arr_exp, interpreter);
+				ast_literal_t* arr_val = interpreter_expression(arr_exp, interpreter, checkEverythingEvenIsFuncCall);
 				expr->data.literal->array_literal_value[i] = arr_val;
 			}
 		}
@@ -3266,16 +3266,16 @@ ast_literal_t* interpreter_literal(ast_expression_t* expr, interpreter_t* interp
 	return expr->data.literal;
 }
 
-ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* interpreter)
+ast_literal_t* interpreter_expression_identifier(ast_expression_t* expr, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall)
 {
 	print_error("Variable: %s (%d)\n", expr->data.identifier->name, interpreter->is_global_scope ? 1 : 0);
 
 	ast_literal_t* val;
 
 	if (interpreter->is_global_scope == true) {
-		val = findInSymbolTable(symbolGlobalTableStack, expr->data.identifier->name, false);
+		val = findInSymbolTable(symbolGlobalTableStack, expr->data.identifier->name, false, checkEverythingEvenIsFuncCall);
 	} else {
-		val = findInSymbolTable(symbolTableStack, expr->data.identifier->name, true);
+		val = findInSymbolTable(symbolTableStack, expr->data.identifier->name, true, checkEverythingEvenIsFuncCall);
 	}
 
 	if (val == NULL) {
@@ -3285,12 +3285,12 @@ ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* int
 	return val;
 }
 
-ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter_t* interpreter)
+ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall)
 {
 	bool invalid = false;
 
-	ast_literal_t* left = (ast_literal_t*) interpreter_expression(expr->data.binary_op->left, interpreter);
-	ast_literal_t* right = (ast_literal_t*) interpreter_expression(expr->data.binary_op->right, interpreter);
+	ast_literal_t* left = (ast_literal_t*) interpreter_expression(expr->data.binary_op->left, interpreter, checkEverythingEvenIsFuncCall);
+	ast_literal_t* right = (ast_literal_t*) interpreter_expression(expr->data.binary_op->right, interpreter, checkEverythingEvenIsFuncCall);
 
 	ast_literal_t* res;
 	CREATE_MEMORY_OBJECT(res, ast_literal_t, 1, "Error: interpreter_expression_binary<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -3486,9 +3486,9 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 	pushSymbolTable(&symbolTableStack, true);
 	for (size_t i = 0; i < arguments_count; i++) {
 		char* arg_name = function->data.function_declaration->arguments->data[i];
-		ast_literal_t* arg_value = interpreter_expression((ast_expression_t*) arguments->data[i], interpreter);
 		printf("Check %s arg\n", arg_name);
-		print_xml_ast_node(arguments->data[i], 0);
+		ast_literal_t* arg_value = interpreter_expression((ast_expression_t*) arguments->data[i], interpreter, true);
+		// print_xml_ast_node(arguments->data[i], 0);
 
 		addToSymbolTable(symbolTableStack, arg_name, arg_value);
 	}
@@ -3505,7 +3505,7 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 	return NULL;
 }
 
-ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* interpreter)
+ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall)
 {
 	print_error("Function Call: %s\n", node->data.function_call->name);
 
@@ -3519,10 +3519,10 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 			exit(EXIT_FAILURE);
 		}
 
-		ast_literal_t* arg_val = (ast_literal_t*) interpreter_expression(node->data.function_call->arguments->data[0], interpreter);
+		ast_literal_t* arg_val = (ast_literal_t*) interpreter_expression(node->data.function_call->arguments->data[0], interpreter, checkEverythingEvenIsFuncCall);
 
 		ast_literal_t* val;
-		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_function_call<val 1> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_expression_function_call<val 1> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_STRING;
 		val->string_value = strdup(interpreter_expression_data_type(arg_val));
 		val->main = NULL;
@@ -3539,7 +3539,7 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		else if (arg->type == VALUE_TYPE_FLOAT) boolResult = ((int)arg->float_value) % 2 == 0 ? true : false;
 
 		ast_literal_t* val;
-		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_function_call<val 2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_expression_function_call<val 2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_BOOL;
 		val->bool_value = boolResult;
 		val->main = NULL;
@@ -3556,7 +3556,7 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		else if (arg->type == VALUE_TYPE_FLOAT) boolResult = ((int)arg->float_value) % 2 != 0 ? true : false;
 
 		ast_literal_t* val;
-		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_function_call<val 2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_expression_function_call<val 2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_BOOL;
 		val->bool_value = boolResult;
 		val->main = NULL;
@@ -3570,7 +3570,7 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		char* input = read_dynamic_string();
 
 		ast_literal_t* val;
-		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_function_call<val 3> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_expression_function_call<val 3> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_STRING;
 		val->string_value = input;
 		val->main = NULL;
@@ -3581,14 +3581,14 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 			exit(EXIT_FAILURE);
 		}
 
-		ast_literal_t* arg_val = (ast_literal_t*) interpreter_expression(node->data.function_call->arguments->data[0], interpreter);
+		ast_literal_t* arg_val = (ast_literal_t*) interpreter_expression(node->data.function_call->arguments->data[0], interpreter, false);
 		if (arg_val->type != VALUE_TYPE_STRING) {
 			print_error("Error: argument type of طول() function should be a string!\n");
 			exit(EXIT_FAILURE);
 		}
 
 		ast_literal_t* val;
-		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_function_call<val 4> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_expression_function_call<val 4> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_INT;
 		val->int_value = strlen(arg_val->string_value);
 		val->main = NULL;
@@ -3599,13 +3599,13 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 			exit(EXIT_FAILURE);
 		}
 
-		ast_literal_t* arg_val = (ast_literal_t*) interpreter_expression(node->data.function_call->arguments->data[0], interpreter);
+		ast_literal_t* arg_val = (ast_literal_t*) interpreter_expression(node->data.function_call->arguments->data[0], interpreter, false);
 		if (arg_val->type == VALUE_TYPE_STRING) {
 			return arg_val;
 		}
 
 		ast_literal_t* val;
-		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_function_call<val 5> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_expression_function_call<val 5> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_STRING;
 		val->main = NULL;
 
@@ -3643,13 +3643,14 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 	// 	interpreter_expression(func->data.function_call->arguments[i])
 	// 	// node->data.statement_return->expression_value = (ast_literal_t*) interpreter_expression(node->data.statement_return->expression, interpreter);
 	// }
-	
+
 	printf("func - before interpreter_function_run\n");
 	ast_literal_t* ret = interpreter_function_run(func_exists, node->data.function_call->arguments, interpreter);
 	printf("func - after interpreter_function_run\n");
+
 	if (ret == NULL) {
 		ast_literal_t* default_ret;
-		CREATE_MEMORY_OBJECT(default_ret, ast_literal_t, 1, "Error: interpreter_function_call<default_ret> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+		CREATE_MEMORY_OBJECT(default_ret, ast_literal_t, 1, "Error: interpreter_expression_function_call<default_ret> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		default_ret->type = VALUE_TYPE_NULL;
 		default_ret->main = NULL;
 		return default_ret;
@@ -3658,11 +3659,11 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 	return ret;
 }
 
-bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter)
+bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall)
 {
 	// print_error("Truly\n");
 
-	ast_literal_t* res = interpreter_expression(expr, interpreter);
+	ast_literal_t* res = interpreter_expression(expr, interpreter, checkEverythingEvenIsFuncCall);
 	// ast_expression_free(&(expr));
 	if (res->type == VALUE_TYPE_BOOL) {
 		return res->bool_value;
@@ -3679,7 +3680,7 @@ bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpr
 	return false;
 }
 
-ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpreter_t* interpreter)
+ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall)
 {
 	// print_error("Assignment\n");
 
@@ -3693,19 +3694,19 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 
 	// print_error("============> assign %s variable\n", identifier);
 
-	ast_literal_t* right = interpreter_expression(expr->data.assignment->right, interpreter);
+	ast_literal_t* right = interpreter_expression(expr->data.assignment->right, interpreter, checkEverythingEvenIsFuncCall);
 	ast_literal_t* variable;
 
 	if (interpreter->is_global_scope == true) {
-		variable = findInSymbolTable(symbolGlobalTableStack, identifier, false);
+		variable = findInSymbolTable(symbolGlobalTableStack, identifier, false, checkEverythingEvenIsFuncCall);
 	} else {
-		variable = findInSymbolTable(symbolTableStack, identifier, true);
+		variable = findInSymbolTable(symbolTableStack, identifier, true, checkEverythingEvenIsFuncCall);
 	}
 
 	if (variable == NULL) {
 		// print_error("this is a new variable on this scope!\n");
 		isNew = true;
-		CREATE_MEMORY_OBJECT(variable, ast_literal_t, 1, "Error: interpreter_function_call<variable> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+		CREATE_MEMORY_OBJECT(variable, ast_literal_t, 1, "Error: interpreter_expression_function_call<variable> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	}
 
@@ -3739,7 +3740,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 
 ast_node_t* interpreter_statement_expression(ast_node_t* node, interpreter_t* interpreter)
 {
-	ast_literal_t* val = interpreter_expression(node->data.expression, interpreter);
+	ast_literal_t* val = interpreter_expression(node->data.expression, interpreter, false);
 
 	// node->type = AST_STATEMENT_EX...
 	// TODO
@@ -3747,7 +3748,7 @@ ast_node_t* interpreter_statement_expression(ast_node_t* node, interpreter_t* in
 	return node;
 }
 
-ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* interpreter)
+ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall)
 {
 	if (expr == NULL) {
 		return NULL;
@@ -3757,25 +3758,25 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 
 	switch (expr->type) {
 		case AST_EXPRESSION_LITERAL:
-			lit = interpreter_literal(expr, interpreter);
+			lit = interpreter_expression_literal(expr, interpreter, checkEverythingEvenIsFuncCall);
 			// printf("array size in interpreter - after: %zu\n", lit->array_value->length);
 			// printf("array[0].int in interpreter - after: %d\n", ((ast_literal_t*) lit->array_value->data[0])->int_value);
 			break;
 
 		case AST_EXPRESSION_IDENTIFIER:
-			lit = interpreter_identifier(expr, interpreter);
+			lit = interpreter_expression_identifier(expr, interpreter, checkEverythingEvenIsFuncCall);
 			break;
 
 		case AST_EXPRESSION_BINARY:
-			lit = interpreter_expression_binary(expr, interpreter);
+			lit = interpreter_expression_binary(expr, interpreter, checkEverythingEvenIsFuncCall);
 			break;
 
 		case AST_EXPRESSION_FUNCTION_CALL:
-			lit = interpreter_function_call(expr, interpreter);
+			lit = interpreter_expression_function_call(expr, interpreter, checkEverythingEvenIsFuncCall);
 			break;
 
 		case AST_EXPRESSION_ASSIGNMENT:
-			lit = interpreter_expression_assignment(expr, interpreter);
+			lit = interpreter_expression_assignment(expr, interpreter, checkEverythingEvenIsFuncCall);
 			break;
 
 		default:

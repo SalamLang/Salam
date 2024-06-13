@@ -26,6 +26,7 @@ struct ast_literal_t;
 
 typedef enum {
     MESSAGE_NAME,
+	MESSAGE_ENTRY_POINT_FUNCTION_NAME,
     MESSAGE_WELCOME,
 	MESSAGE_LEXER_UNEXPECTED_CHAR,
 	MESSAGE_LEXER_COMMENT_MULTI_NOT_CLOSED,
@@ -39,6 +40,19 @@ typedef enum {
 	MESSAGE_LEXER_IDENTIFIER_CONVERT_MULTIBYTE,
 	MESSAGE_LEXER_CHAR_LENGTH_ISSUE,
 	MESSAGE_LEXER_ARRAY_NOT_CLOSED,
+	MESSAGE_INTERPRETER_MAIN_NORETURN,
+	MESSAGE_INTERPRETER_CANNOT_HAVE_RET_BREAK_CON_OUT_OF_LOOP,
+	MESSAGE_INTERPRETER_VARIABLE_NOT_FOUND,
+	MESSAGE_INTERPRETER_EXPRESSION_INVALID_VALUE_IN_BINARY,
+	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_COMPARE_THIS_KIND_OF_VALUE_TYPES,
+	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_AND_FOR_THIS_VALUES,
+	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_OR_FOR_THIS_VALUES,
+	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_BINARY_OP_FOR_NON_INT,
+	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_MODULE_OP_FOR_FLOAT,
+	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_DIVIDE_BY_ZERO,
+	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_DO_THIS_OPERATOR,
+	MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_IS_MORE,
+	MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_IS_LESS,
     MESSAGE_COUNT,
 } message_key_t;
 
@@ -3128,7 +3142,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 		for (size_t i = 0; i < (*interpreter->parser)->functions->length; i++) {
 			ast_node_t* function = (ast_node_t*) (*interpreter->parser)->functions->data[i];
 			if (function != NULL && function->data.function_declaration != NULL) {
-				if (strcmp(function->data.function_declaration->name, "سلام") == 0) {
+				if (strcmp(function->data.function_declaration->name, messages[language][MESSAGE_ENTRY_POINT_FUNCTION_NAME]) == 0) {
 					main_returned = interpreter_function_declaration(function, interpreter, NULL);
 				}
 			}
@@ -3144,7 +3158,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 		print_error("Main returned: ");
 		interpreter_expression_data(main_returned->data.statement_return->expression_value, true);
 	} else {
-		print_error("No return value from main function, so default!\n");
+		print_error(messages[language][MESSAGE_INTERPRETER_MAIN_NORETURN]);
 	}
 
 	return interpreter;
@@ -3267,7 +3281,7 @@ ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, toke
 		ast_node_t* stmt = node->data.block->statements[i];
 
 		if (parent_type != TOKEN_TYPE_UNTIL && parent_type != TOKEN_TYPE_REPEAT && (stmt->type == AST_STATEMENT_BREAK || stmt->type == AST_STATEMENT_CONTINUE)) {
-			print_error("Error: it's not possible to have break/continue inside a non-loop!\n");
+			print_error(messages[language][MESSAGE_INTERPRETER_CANNOT_HAVE_RET_BREAK_CON_OUT_OF_LOOP]);
 			exit(EXIT_FAILURE);
 		}
 
@@ -3328,7 +3342,7 @@ ast_literal_t* interpreter_expression_identifier(ast_expression_t* expr, interpr
 	}
 
 	if (val == NULL) {
-		print_error("Error: Variable not found: %s\n", expr->data.identifier->name);
+		print_error(messages[language][MESSAGE_INTERPRETER_VARIABLE_NOT_FOUND], expr->data.identifier->name);
 		exit(EXIT_FAILURE);
 	}
 	return val;
@@ -3351,7 +3365,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 	}
 
 	if (left == NULL || right == NULL) {
-		print_error("Error: cannot calculate binary operator for invalid values!\n");
+		print_error(messages[language][MESSAGE_INTERPRETER_EXPRESSION_INVALID_VALUE_IN_BINARY]);
 		invalid = true;
 	} else if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_STRING && strcmp(expr->data.binary_op->operator, "+") == 0) {
 		char* left_str = intToString(left->int_value);
@@ -3426,7 +3440,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 			res->type = VALUE_TYPE_BOOL;
 			res->bool_value = left->float_value == right->float_value ? true : false;
 		} else {
-			print_error("Error: cannot compare unknown types!\n");
+			print_error(messages[language][MESSAGE_INTERPRETER_EXPRESSION_CANNOT_COMPARE_THIS_KIND_OF_VALUE_TYPES]);
 			invalid = true;
 		}
 	} else if (strcmp(expr->data.binary_op->operator, "و") == 0) {
@@ -3446,7 +3460,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 		} else if (left->type == VALUE_TYPE_BOOL && right->type == VALUE_TYPE_BOOL) {
 			res->bool_value = left->bool_value && right->bool_value;
 		} else {
-			print_error("Error: cannot calculate this values for AND operator!\n");
+			print_error(messages[language][MESSAGE_INTERPRETER_EXPRESSION_CANNOT_AND_FOR_THIS_VALUES]);
 			invalid = true;
 		}
 	} else if (strcmp(expr->data.binary_op->operator, "یا") == 0) {
@@ -3467,11 +3481,11 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 		} else if (left->type == VALUE_TYPE_BOOL && right->type == VALUE_TYPE_BOOL) {
 			res->bool_value = left->bool_value || right->bool_value;
 		} else {
-			print_error("Error: cannot calculate this values for OR operator!\n");
+			print_error(messages[language][MESSAGE_INTERPRETER_EXPRESSION_CANNOT_OR_FOR_THIS_VALUES]);
 			invalid = true;
 		}
 	} else if ((left->type != VALUE_TYPE_INT && left->type != VALUE_TYPE_FLOAT && left->type != VALUE_TYPE_BOOL) || (right->type != VALUE_TYPE_INT && right->type != VALUE_TYPE_FLOAT && right->type != VALUE_TYPE_BOOL)) {
-		print_error("Error: cannot calculate binary operator for non-int values!\n");
+		print_error(messages[language][MESSAGE_INTERPRETER_EXPRESSION_CANNOT_BINARY_OP_FOR_NON_INT]);
 		invalid = true;
 	} else {
 		// convert bool values to int
@@ -3516,7 +3530,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 			}
 		} else if (strcmp(expr->data.binary_op->operator, "%") == 0) {
 			if (left->type == VALUE_TYPE_FLOAT || right->type == VALUE_TYPE_FLOAT) {
-				print_error("Error: cannot calculate %% operator for float values!\n");
+				print_error(messages[language][MESSAGE_INTERPRETER_EXPRESSION_CANNOT_MODULE_OP_FOR_FLOAT]);
 			} else {
 				res->type = VALUE_TYPE_INT;
 				res->int_value = left->int_value % right->int_value;
@@ -3526,7 +3540,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 				(right->type == VALUE_TYPE_FLOAT && right->float_value == 0) ||
 				(right->type == VALUE_TYPE_BOOL && right->bool_value == false)
 			) {
-				print_error("Error: cannot divide by zero!\n");
+				print_error(messages[language][MESSAGE_INTERPRETER_EXPRESSION_CANNOT_DIVIDE_BY_ZERO]);
 				invalid = true;
 			} else {
 				if (left->type == VALUE_TYPE_FLOAT || right->type == VALUE_TYPE_FLOAT) {
@@ -3540,7 +3554,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 				}
 			}
 		} else {
-			print_error("Error: unknown operator: %s\n", expr->data.binary_op->operator);
+			print_error(messages[language][MESSAGE_INTERPRETER_EXPRESSION_CANNOT_DO_THIS_OPERATOR], expr->data.binary_op->operator);
 			invalid = true;
 		}
 	}
@@ -3571,9 +3585,9 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 
 	if (function_arguments_count != arguments_count) {
 		if (arguments_count > function_arguments_count) {
-			print_error("Error: number of arguments is not match with the function - you are passing more arguments!\n");
+			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_IS_MORE]);
 		} else {
-			print_error("Error: number of arguments is not match with the function - you are passing less arguments!\n");
+			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_IS_LESS]);
 		}
 		exit(EXIT_FAILURE);
 	}
@@ -3582,9 +3596,8 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 	pushSymbolTable(&symbolTableStack, true);
 	for (size_t i = 0; i < arguments_count; i++) {
 		char* arg_name = function->data.function_declaration->arguments->data[i];
-		printf("Check %s arg\n", arg_name);
+
 		ast_literal_t* arg_value = interpreter_expression((ast_expression_t*) arguments->data[i], interpreter, true);
-		// print_xml_ast_node(arguments->data[i], 0);
 
 		addToSymbolTable(symbolTableStack, arg_name, arg_value);
 	}

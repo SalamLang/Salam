@@ -1,4 +1,6 @@
 // THE SALAM PROGRAMMING LANGUAGE
+#define _SALAM_LANGUAGE_
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <wchar.h>
@@ -23,9 +25,16 @@ struct ast_expression;
 struct ast_literal_t;
 
 typedef enum {
-    MESSAGE_HELLO,
-    MESSAGE_GOODBYE,
-    MESSAGE_THANK_YOU,
+    MESSAGE_NAME,
+    MESSAGE_WELCOME,
+	MESSAGE_LEXER_UNEXPECTED_CHAR,
+	MESSAGE_LEXER_COMMENT_MULTI_NOT_CLOSED,
+	MESSAGE_LEXER_NUMBER_FLOAT_NEED_NUMBER_AFTER_DOT,
+	MESSAGE_LEXER_TOKEN_UNREAD_UNICODE,
+	MESSAGE_LEXER_TOKEN_READ_UNICODE,
+	MESSAGE_LEXER_STRING_READ_MEMORY,
+	MESSAGE_LEXER_STRING_UNKNOWN_ESCAPE,
+	MESSAGE_LEXER_STRING_CONVERT_MULTIBYTE,
     MESSAGE_COUNT,
 } message_key_t;
 
@@ -333,10 +342,10 @@ typedef struct {
 
 enum {
 	PRECEDENCE_LOWEST = 0,    // START FROM HERE
-	PRECEDENCE_HIGHEST2 = 1, // =
+	PRECEDENCE_HIGHEST2 = 1,  // =
 	PRECEDENCE_ANDOR = 2,     // AND OR
 	PRECEDENCE_HIGHEST = 3,   // == !=
-	PRECEDENCE_MULTIPLY = 4,   // / *
+	PRECEDENCE_MULTIPLY = 4,  // / *
 	PRECEDENCE_SUM = 5,       // + -
 };
 
@@ -452,18 +461,7 @@ SymbolTableStack* symbolTableStack = NULL;
 SymbolTableStack* symbolGlobalTableStack = NULL;
 language_t language = LANGUAGE_PERSIAN;
 
-const char* messages[LANGUAGE_COUNT][MESSAGE_COUNT] = {
-    [LANGUAGE_PERSIAN] = {
-        [MESSAGE_HELLO] = "سلام",
-        [MESSAGE_GOODBYE] = "خداحافظ",
-        [MESSAGE_THANK_YOU] = "متشکرم"
-    },
-    [LANGUAGE_ARABIC] = {
-        [MESSAGE_HELLO] = "مرحبا",
-        [MESSAGE_GOODBYE] = "وداعا",
-        [MESSAGE_THANK_YOU] = "شكرا"
-    }
-};
+#include "messages.h"
 
 token_info_t token_infos[] = {
 	[TOKEN_TYPE_TRUE] = {PRECEDENCE_LOWEST, nud_bool, NULL},
@@ -1003,7 +1001,7 @@ wchar_t read_token(lexer_t* lexer)
 	wchar_t current_char;
 	int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
 	if (char_size < 0) {
-		print_error("Syntax Error: read token - invalid unicode character\n");
+		print_error(messages[language][MESSAGE_LEXER_TOKEN_READ_UNICODE]);
 		exit(EXIT_FAILURE);
 		return 0;
 	}
@@ -1029,7 +1027,7 @@ wchar_t unread_token(lexer_t* lexer)
 	wchar_t current_char;
 	int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
 	if (char_size < 0) {
-		print_error("Syntax Error: nuread - invalid unicode character\n");
+		print_error(messages[language][MESSAGE_LEXER_TOKEN_UNREAD_UNICODE]);
 		exit(EXIT_FAILURE);
 		return 0;
 	}
@@ -1057,7 +1055,7 @@ void read_number(lexer_t* lexer, wchar_t ch)
 		ch = read_token(lexer);
 
 		if (!is_number(ch)) {
-			print_error("Syntax Error: we expect a number after dot of a float value\n");
+			print_error(messages[language][MESSAGE_LEXER_NUMBER_FLOAT_NEED_NUMBER_AFTER_DOT]);
 			exit(EXIT_FAILURE);
 		}
 		isFloat = true;
@@ -1088,6 +1086,7 @@ void read_comment_singleline(lexer_t* lexer)
 		if (lexer->data[lexer->index] == '\n' || lexer->data[lexer->index] == '\0') {
 			break;
 		}
+
 		lexer->index++;
 	}
 }
@@ -1100,12 +1099,14 @@ void read_comment_multiline(lexer_t* lexer)
 	// TODO: Eating first character lexer->index++;
 	while (1) {
 		if (lexer->data[lexer->index] == '\0') {
-			print_error("Error: you have to close your multiline comments and it's not allowed to ignore and leave your multiline comment non-closed!\n");
+			print_error(messages[language][MESSAGE_LEXER_COMMENT_MULTI_NOT_CLOSED]);
 			exit(EXIT_FAILURE);
 		} else if (lexer->data[lexer->index - 1] == '*' && lexer->data[lexer->index] == '/') {
 			lexer->index++;
+
 			break;
 		}
+
 		lexer->index++;
 	}
 }
@@ -1113,6 +1114,7 @@ void read_comment_multiline(lexer_t* lexer)
 void read_string(lexer_t* lexer, wchar_t ch)
 {
 	size_t allocated_size = 20;
+
 	char* string;
 	CREATE_MEMORY_OBJECT(string, char, allocated_size, "Error: read_string<string> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
@@ -1123,7 +1125,7 @@ void read_string(lexer_t* lexer, wchar_t ch)
 			allocated_size *= 2;
 			char* temp = (char*)realloc(string, sizeof(char) * allocated_size);
 			if (temp == NULL) {
-				print_error("Error: read_string iterate - Memory reallocation failed.\n");
+				print_error(messages[language][MESSAGE_LEXER_STRING_READ_MEMORY]);
 				free(string);
 				exit(EXIT_FAILURE);
 			}
@@ -1143,14 +1145,14 @@ void read_string(lexer_t* lexer, wchar_t ch)
             } else if (ch == L'\\') {
                 string[i++] = '\\';
             } else {
-                print_error("Error: read_string - Unknown escape sequence\n");
+                print_error(messages[language][MESSAGE_LEXER_STRING_UNKNOWN_ESCAPE]);
                 free(string);
                 exit(EXIT_FAILURE);
             }
         } else {
             int char_size = wctomb(&string[i], ch);
             if (char_size < 0) {
-                print_error("Error: read_string - Failed to convert wide character to multibyte\n");
+                print_error(messages[language][MESSAGE_LEXER_STRING_CONVERT_MULTIBYTE]);
                 free(string);
                 exit(EXIT_FAILURE);
             }
@@ -1337,7 +1339,7 @@ void lexer_lex(lexer_t* lexer)
 		} else if (is_alpha(current_wchar)) {
 			read_identifier(lexer, current_wchar);
 		} else {
-			print_error("Error: Unexpected character '%c' at line %zu, column %zu\n", current_char, lexer->line, lexer->column - 1);
+			print_error(messages[language][MESSAGE_LEXER_UNEXPECTED_CHAR], current_char, lexer->line, lexer->column - 1);
 
 			token_t* t = token_create(TOKEN_TYPE_ERROR, (char[]){current_char,'\0'}, 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
@@ -1353,21 +1355,7 @@ void lexer_lex(lexer_t* lexer)
 
 void help()
 {
-	print_error("Welcome to Salam Programming Language!\n");
-	print_error("Salam is the first Persian/Arabic Iranian computer scripting language.\n");
-	print_error("\n");
-
-	print_error("Usage:\n");
-	print_error("  salam <filename>\t\t\t# Execute a Salam script\n");
-	print_error("\n");
-
-	print_error("Example:\n");
-	print_error("  salam my_script.salam\t\t# Run the Salam script 'my_script.salam'\n");
-	print_error("\n");
-
-	print_error("Feel free to explore and create using Salam!\n");
-	print_error("For more information, visit: https://salamlang.ir\n");
-	print_error("\n");
+	printf("%s", messages[language][MESSAGE_WELCOME]);
 }
 
 parser_t* parser_create(lexer_t** lexer)

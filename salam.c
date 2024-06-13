@@ -212,24 +212,6 @@ typedef struct {
 	token_type_t token_type;
 } keyword_mapping_t;
 
-keyword_mapping_t keyword_mapping[] = {
-	{"تابع", TOKEN_TYPE_FUNCTION},
-	{"برگشت", TOKEN_TYPE_RETURN},
-	{"ادامه", TOKEN_TYPE_CONTINUE},
-	{"توقف", TOKEN_TYPE_BREAK},
-	{"نمایش", TOKEN_TYPE_PRINT},
-	{"واگرنه", TOKEN_TYPE_ELSEIF},
-	{"اگر", TOKEN_TYPE_IF},
-	{"پوچ", TOKEN_TYPE_NULL},
-	{"تا", TOKEN_TYPE_UNTIL},
-	{"تکرار", TOKEN_TYPE_REPEAT},
-	{"درست", TOKEN_TYPE_TRUE},
-	{"غلط", TOKEN_TYPE_FALSE},
-	{"و", TOKEN_TYPE_AND},
-	{"یا", TOKEN_TYPE_OR},
-	{NULL, TOKEN_TYPE_ERROR}
-};
-
 typedef struct {
 	token_type_t type;
 	char* value;
@@ -1249,11 +1231,12 @@ void read_identifier(lexer_t* lexer, wchar_t ch)
 
 	int mapping_index = 0;
 	token_type_t type = TOKEN_TYPE_IDENTIFIER;
-	while (keyword_mapping[mapping_index].keyword != NULL) {
-		if (strcmp(identifier, keyword_mapping[mapping_index].keyword) == 0) {
-			type = keyword_mapping[mapping_index].token_type;
+	while (keyword_mapping[language][mapping_index].keyword != NULL) {
+		if (strcmp(identifier, keyword_mapping[language][mapping_index].keyword) == 0) {
+			type = keyword_mapping[language][mapping_index].token_type;
 			break;
 		}
+		
 		mapping_index++;
 	}
 

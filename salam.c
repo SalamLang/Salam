@@ -59,6 +59,8 @@ typedef enum {
 	MESSAGE_INTERPRETER_CANNOT_ASSIGN_VARIABLE_WITH_A_NON_IDENTIFIER_AS_NAME,
 	MESSAGE_INTERPRETER_EXPRESSION_DONT_SUPPORT_THIS_TYPE_IN_EXPRESSION,
 	MESSAGE_PARSER_UNEXPECTED_TOKEN,
+	MESSAGE_PARSER_BLOCK_MEMORY_ISSUE,
+	MESSAGE_PARSER_BAD_TOKEN_AS_STATEMENT,
     MESSAGE_COUNT,
 } message_key_t;
 
@@ -2489,7 +2491,7 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 
 ast_expression_t* nud_parentheses(parser_t* parser, token_t* token)
 {
-	print_error("Parsing parentheses\n");
+	// print_error("Parsing parentheses\n");
 
 	ast_expression_t* expression_node = parser_expression_pratt(parser, PRECEDENCE_LOWEST);
 
@@ -2500,7 +2502,7 @@ ast_expression_t* nud_parentheses(parser_t* parser, token_t* token)
 
 ast_node_t* parser_block(parser_t* parser)
 {
-	print_error("Parsing block\n");
+	// print_error("Parsing block\n");
 
 	size_t allocated_size = 5;
 
@@ -2526,7 +2528,7 @@ ast_node_t* parser_block(parser_t* parser)
 			);
 
 			if (block_node->data.block->statements == NULL) {
-				print_error("Error: in parsing block: Memory reallocation failed.\n");
+				print_error(messages[language][MESSAGE_PARSER_BLOCK_MEMORY_ISSUE]);
 				exit(EXIT_FAILURE);
 			}
 		}
@@ -2580,7 +2582,7 @@ void parser_parse(parser_t* parser)
 						array_push(parser->expressions, expression_node);
 					}
 				} else {
-					print_error("Error: bad token as statement %s\n", token_type2str(current_token->type));
+					print_error(messages[language][MESSAGE_PARSER_BAD_TOKEN_AS_STATEMENT], token_type2str(current_token->type));
 					exit(EXIT_FAILURE);
 				}
 				break;

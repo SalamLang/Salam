@@ -1,3 +1,4 @@
+// THE SALAM PROGRAMMING LANGUAGE
 #include <stdio.h>
 #include <stdlib.h>
 #include <wchar.h>
@@ -5,8 +6,9 @@
 #include <stdbool.h>
 #include <string.h>
 #include <limits.h>
-// bool debug_enabled = false;
+
 bool debug_enabled = true;
+
 #define print_error(...) if (debug_enabled) fprintf(stderr, __VA_ARGS__);
 
 #define CREATE_MEMORY_OBJECT(result, type, length, fmt, ...) \

@@ -1,17 +1,22 @@
+// 
 // THE SALAM PROGRAMMING LANGUAGE
+// 
+
 #define _SALAM_LANGUAGE_
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <wchar.h>
+#include <stdlib.h>
 #include <locale.h>
-#include <stdbool.h>
 #include <string.h>
 #include <limits.h>
+#include <stdbool.h>
 
 bool debug_enabled = true;
 
-#define print_error(...) if (debug_enabled) fprintf(stderr, __VA_ARGS__);
+#define print_error(...) fprintf(stderr, __VA_ARGS__)
+
+#define print_message(...) if (debug_enabled) fprintf(stdout, __VA_ARGS__)
 
 #define CREATE_MEMORY_OBJECT(result, type, length, fmt, ...) \
 	result = (type *)malloc(sizeof(type) * (length));  \
@@ -79,6 +84,8 @@ typedef enum {
 	MESSAGE_TOKEN_FUNCTION_LENGTH,
 	MESSAGE_TOKEN_FUNCTION_STRING,
 	MESSAGE_INTERPRETER_FUNCTION_CALL_FIRST_ARGUMENT_SHOULD_BE_ONLY_A_STRING,
+	MESSAGE_LEXER_FILE_NOT_EXISTS,
+	MESSAGE_MEMORY_ALLOCATE_ERROR,
     MESSAGE_COUNT,
 } message_key_t;
 
@@ -638,7 +645,7 @@ SymbolTable* createSymbolTable(size_t capacity)
 
 void pushSymbolTable(SymbolTableStack** ts, bool is_function_call)
 {
-	// print_error("create scope with %d state\n", is_function_call ? 1 : 0);
+	// print_message("create scope with %d state\n", is_function_call ? 1 : 0);
 	SymbolTable* table = createSymbolTable(16);
 	SymbolTableStack* newScope;
 	CREATE_MEMORY_OBJECT(newScope, SymbolTableStack, 1, "Error: pushSymbolTable<newScope> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -757,14 +764,14 @@ ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const ch
 ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier, bool wantsGlobal, bool checkEverythingEvenIsFuncCall)
 {
 	while (currentScope != NULL) {
-		// print_error("looking for %s on a scope %d\n", identifier, currentScope->is_function_call ? 1 : 0);
+		// print_message("looking for %s on a scope %d\n", identifier, currentScope->is_function_call ? 1 : 0);
 		ast_literal_t* data = findInSymbolTableCurrent(currentScope, identifier, checkEverythingEvenIsFuncCall);
 		if (data != NULL) {
 			return data;
 		}
 
 		if (checkEverythingEvenIsFuncCall == false && currentScope->is_function_call == true) {
-			// print_error("this scope is call enabled, so break loop (%d)!\n", wantsGlobal ? 1 : 0);
+			// print_message("this scope is call enabled, so break loop (%d)!\n", wantsGlobal ? 1 : 0);
 			break;
 		}
 		currentScope = currentScope->next;
@@ -839,7 +846,7 @@ char* file_read(char* file_Name)
 {
 	FILE* file = fopen(file_Name, "r");
 	if (file == NULL) {
-		print_error("Error: file not found\n");
+		print_error(messages[language][MESSAGE_LEXER_FILE_NOT_EXISTS], file_Name);
 		return NULL;
 	}
 
@@ -881,7 +888,7 @@ array_t* array_create(size_t size)
 	arr->size = size > min_size ? size : min_size;
 	arr->data = (void*) malloc(sizeof(void*) * arr->size);
 	if (!arr->data) {
-		perror("Memory allocation error");
+		perror(messages[language][MESSAGE_MEMORY_ALLOCATE_ERROR];
 		exit(EXIT_FAILURE);
 	}
 
@@ -929,22 +936,22 @@ void array_free(array_t* arr)
 
 void token_print(token_t* t)
 {
-	print_error("%d ", t->type);
-	// print_error("...\n");
-	// print_error("%zu - ", t->location.length);
-	print_error("%s - ", token_type2str(t->type));
-	print_error("%s\n", t->value);
+	print_message("%d ", t->type);
+	// print_message("...\n");
+	// print_message("%zu - ", t->location.length);
+	print_message("%s - ", token_type2str(t->type));
+	print_message("%s\n", t->value);
 }
 
 void array_print(array_t* arr)
 {
-	// print_error("Array Length: %zu\n", arr->length);
-	// print_error("Array Size: %zu\n", arr->size);
-	// print_error("Array Contents:\n");
+	// print_message("Array Length: %zu\n", arr->length);
+	// print_message("Array Size: %zu\n", arr->size);
+	// print_message("Array Contents:\n");
 
 	for (size_t i = 0; i < arr->length; i++) {
 		token_t* t = arr->data[i];
-		print_error("[%zu]: ", i);
+		print_message("[%zu]: ", i);
 		token_print(t);
 	}
 }
@@ -1417,25 +1424,25 @@ parser_t* parser_create(lexer_t** lexer)
 void debug_current_token(parser_t* parser)
 {
 	token_t* t = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
-	print_error("=========> Current token: %s - %s\n", token_type2str(t->type) ,t->value);
+	print_message("=========> Current token: %s - %s\n", token_type2str(t->type) ,t->value);
 }
 
 void ast_expression_free_data(ast_literal_t** val)
 {
-	print_error("ast_expression_free_data\n");
+	print_message("ast_expression_free_data\n");
 
 	if (val == NULL || *val == NULL) {
-		print_error("is null?\n");
+		print_message("is null?\n");
 		return;
 	}
 
-	print_error("start checking type on ast_expression_free_data\n");
+	print_message("start checking type on ast_expression_free_data\n");
 
-	print_error("free expression data\n");
+	print_message("free expression data\n");
 	if ((*val)->type == VALUE_TYPE_ARRAY_EXPRESSION) {
-		print_error("free array\n");
+		print_message("free array\n");
 		if ((*val)->array_expression_value != NULL) {
-			print_error("has array data\n");
+			print_message("has array data\n");
 			for (size_t i = 0; i < (*val)->size_value; i++) {
 				ast_expression_free((struct ast_expression_t **)&(*val)->array_expression_value[i]->data);
 				free((*val)->array_expression_value[i]);
@@ -1445,8 +1452,8 @@ void ast_expression_free_data(ast_literal_t** val)
 			(*val)->array_expression_value = NULL;
 		}
 	} else if ((*val)->type == VALUE_TYPE_STRING) {
-		print_error("has string\n");
-		print_error("%s\n", (*val)->string_value);
+		print_message("has string\n");
+		print_message("%s\n", (*val)->string_value);
 		if ((*val)->string_value != NULL && strcmp((*val)->string_value, "\0") != 0 ) {
 			free((*val)->string_value);
 			(*val)->string_value = NULL;
@@ -1462,14 +1469,14 @@ void ast_expression_free_data(ast_literal_t** val)
 	}
 
 	// TODO: MEMORY LEAKS
-	print_error("free expression data main\n");
+	print_message("free expression data main\n");
 	if ((*val)->main != NULL) {
-		print_error("ast_expression_free_data main\n");
+		print_message("ast_expression_free_data main\n");
 		// ast_expression_free((ast_expression_t**) &((*val)->main));
 		ast_expression_free((*val)->main);
 	}
 
-	print_error("let's free it's at all\n");
+	print_message("let's free it's at all\n");
 
 	free(*val);
 	*val = NULL;
@@ -1477,15 +1484,15 @@ void ast_expression_free_data(ast_literal_t** val)
 
 void ast_expression_free_literal(ast_expression_t** expr)
 {
-	print_error("ast_expression_free_literal\n");
+	print_message("ast_expression_free_literal\n");
 
 	if (expr || *expr == NULL) {
 		return;
 	}
 
-	print_error("free identifier\n");
+	print_message("free identifier\n");
 	if ((*expr)->data.literal != NULL) {
-		print_error("check expr value of literal\n");
+		print_message("check expr value of literal\n");
 		ast_expression_free_data(&((*expr)->data.literal));
 		(*expr)->data.literal = NULL;
 	}
@@ -1493,15 +1500,15 @@ void ast_expression_free_literal(ast_expression_t** expr)
 
 void ast_expression_free_identifier(ast_expression_t** expr)
 {
-	print_error("ast_expression_free_identifier\n");
+	print_message("ast_expression_free_identifier\n");
 
 	if (expr || *expr == NULL) {
 		return;
 	}
 
-	print_error("free identifier\n");
+	print_message("free identifier\n");
 	if ((*expr)->data.identifier != NULL) {
-		print_error("free identifier name\n");
+		print_message("free identifier name\n");
 		if ((*expr)->data.identifier->name != NULL) {
 			free((*expr)->data.identifier->name);
 			(*expr)->data.identifier->name = NULL;
@@ -1514,7 +1521,7 @@ void ast_expression_free_identifier(ast_expression_t** expr)
 
 void ast_expression_free_functioncall(ast_expression_t** expr)
 {
-	print_error("ast_expression_free_functioncall\n");
+	print_message("ast_expression_free_functioncall\n");
 
 	if (expr || *expr == NULL) {
 		return;
@@ -1541,21 +1548,21 @@ void ast_expression_free_functioncall(ast_expression_t** expr)
 
 void ast_expression_free_assignment(ast_expression_t** expr)
 {
-	print_error("ast_expression_free_assignment\n");
+	print_message("ast_expression_free_assignment\n");
 
 	if (expr || *expr == NULL) {
 		return;
 	}
 
-	print_error("free assignment\n");
+	print_message("free assignment\n");
 	if ((*expr)->data.assignment != NULL) {
-		print_error("free assignment left\n");
+		print_message("free assignment left\n");
 		if ((*expr)->data.assignment->left != NULL) {
 			ast_expression_free(&((*expr)->data.assignment->left));
 			(*expr)->data.assignment->left = NULL;
 		}
 
-		print_error("free assignment right\n");
+		print_message("free assignment right\n");
 		if ((*expr)->data.assignment->right != NULL) {
 			ast_expression_free(&((*expr)->data.assignment->right));
 			(*expr)->data.assignment->right = NULL;
@@ -1568,7 +1575,7 @@ void ast_expression_free_assignment(ast_expression_t** expr)
 
 void ast_expression_free_binary(ast_expression_t** expr)
 {
-	print_error("ast_expression_free_binary\n");
+	print_message("ast_expression_free_binary\n");
 
 	if (expr || *expr == NULL) {
 		return;
@@ -1597,14 +1604,14 @@ void ast_expression_free_binary(ast_expression_t** expr)
 
 void ast_expression_free(struct ast_expression_t** expr)
 {
-	print_error("ast_expression_free\n");
+	print_message("ast_expression_free\n");
 
 	if (expr == NULL || *expr == NULL) {
-		print_error("ast_expression_free is null\n");
+		print_message("ast_expression_free is null\n");
 		return;
 	}
 
-	print_error("---- expr type: %d\n", (*expr)->type);
+	print_message("---- expr type: %d\n", (*expr)->type);
 
 	switch ((*expr)->type) {
 		case AST_EXPRESSION_LITERAL:
@@ -1638,13 +1645,13 @@ void ast_expression_free(struct ast_expression_t** expr)
 
 void ast_node_free(ast_node_t** node)
 {
-	print_error("ast_node_free\n");
+	print_message("ast_node_free\n");
 
 	if (node == NULL || *node == NULL) {
 		return;
 	}
 
-	print_error("node type: %d\n", (*node)->type);
+	print_message("node type: %d\n", (*node)->type);
 
 	switch ((*node)->type) {
 		case AST_STATEMENT_CONTINUE:
@@ -1654,7 +1661,7 @@ void ast_node_free(ast_node_t** node)
 			break;
 
 		case AST_STATEMENT_UNTIL:
-			// print_error("free ast until\n");
+			// print_message("free ast until\n");
 			if ((*node)->data.statement_until != NULL) {
 				if ((*node)->data.statement_until->condition != NULL) {
 					ast_expression_free(&((*node)->data.statement_until->condition));
@@ -1672,7 +1679,7 @@ void ast_node_free(ast_node_t** node)
 			break;
 
 		case AST_STATEMENT_REPEAT:
-			// print_error("free ast repeat\n");
+			// print_message("free ast repeat\n");
 			if ((*node)->data.statement_repeat != NULL) {
 				if ((*node)->data.statement_repeat->condition != NULL) {
 					ast_expression_free(&((*node)->data.statement_repeat->condition));
@@ -1691,7 +1698,7 @@ void ast_node_free(ast_node_t** node)
 
 		case AST_STATEMENT_IF:
 		case AST_STATEMENT_ELSEIF:
-			// print_error("free ast if/else\n");
+			// print_message("free ast if/else\n");
 			if ((*node)->data.statement_if != NULL) {
 				if ((*node)->data.statement_if->condition != NULL) {
 					ast_expression_free(&((*node)->data.statement_if->condition));
@@ -1723,21 +1730,21 @@ void ast_node_free(ast_node_t** node)
 			break;
 
 		case AST_FUNCTION_DECLARATION:
-			print_error("free ast function\n");
+			print_message("free ast function\n");
 			if ((*node)->data.function_declaration != NULL) {
-				print_error("free function name\n");
+				print_message("free function name\n");
 				if ((*node)->data.function_declaration->name != NULL) {
 					free((*node)->data.function_declaration->name);
 					(*node)->data.function_declaration->name = NULL;
 				}
 
-				print_error("free function arguments\n");
+				print_message("free function arguments\n");
 				if ((*node)->data.function_declaration->arguments != NULL) {
 					array_free((*node)->data.function_declaration->arguments);
 					(*node)->data.function_declaration->arguments = NULL;
 				}
 
-				print_error("free function body\n");
+				print_message("free function body\n");
 				if ((*node)->data.function_declaration->body != NULL) {
 					ast_node_free(&((*node)->data.function_declaration->body));
 					(*node)->data.function_declaration->body = NULL;
@@ -1749,18 +1756,18 @@ void ast_node_free(ast_node_t** node)
 			break;
 
 		case AST_STATEMENT_RETURN:
-			print_error("free ast return\n");
+			print_message("free ast return\n");
 			if ((*node)->data.statement_return != NULL) {
-				print_error("free return expr\n");
+				print_message("free return expr\n");
 				if ((*node)->data.statement_return->expression != NULL) {
 					ast_expression_free(&((*node)->data.statement_return->expression));
 					(*node)->data.statement_return->expression = NULL;
 				}
 
 				// TODO: MEMORY LEAKS
-				print_error("free return expr value\n");
+				print_message("free return expr value\n");
 				if ((*node)->data.statement_return->expression_value != NULL) {
-					print_error("check expr value of return\n");
+					print_message("check expr value of return\n");
 					ast_expression_free_data(&((*node)->data.statement_return->expression_value));
 					(*node)->data.statement_return->expression_value = NULL;
 				}
@@ -1771,18 +1778,18 @@ void ast_node_free(ast_node_t** node)
 			break;
 
 		case AST_STATEMENT_PRINT:
-			print_error("free ast print\n");
+			print_message("free ast print\n");
 			if ((*node)->data.statement_print != NULL) {
-				print_error("free print expr\n");
+				print_message("free print expr\n");
 				if ((*node)->data.statement_print->expression != NULL) {
 					ast_expression_free(&((*node)->data.statement_print->expression));
 					(*node)->data.statement_print->expression = NULL;
 				}
 
 				// TODO: MEMORY LEAKS
-				print_error("free print expr value\n");
+				print_message("free print expr value\n");
 				if ((*node)->data.statement_print->expression_value != NULL) {
-					print_error("check expr value of print\n");
+					print_message("check expr value of print\n");
 					ast_expression_free_data(&((*node)->data.statement_print->expression_value));
 					(*node)->data.statement_print->expression_value = NULL;
 				}
@@ -1793,13 +1800,13 @@ void ast_node_free(ast_node_t** node)
 			break;
 
 		case AST_BLOCK:
-			print_error("free ast block\n");
+			print_message("free ast block\n");
 			if ((*node)->data.block != NULL) {
-				// print_error("free block of func\n");
+				// print_message("free block of func\n");
 				if ((*node)->data.block->statements != NULL) {
-					// print_error("free stmts of func\n");
+					// print_message("free stmts of func\n");
 					for (size_t i = 0; i < (*node)->data.block->num_statements; i++) {
-						// print_error("free one of stmt of func\n");
+						// print_message("free one of stmt of func\n");
 						ast_node_free(&((*node)->data.block->statements[i]));
 						(*node)->data.block->statements[i] = NULL;
 					}
@@ -1813,9 +1820,9 @@ void ast_node_free(ast_node_t** node)
 			break;
 
 		case AST_EXPRESSION:
-			print_error("free ast expr AST_EXPRESSION\n");
+			print_message("free ast expr AST_EXPRESSION\n");
 			if ((*node)->data.expression != NULL) {
-				// print_error("AST_EXPRESSION is not null so lets do it\n");
+				// print_message("AST_EXPRESSION is not null so lets do it\n");
 				ast_expression_free(&((*node)->data.expression));
 				(*node)->data.expression = NULL;
 			}
@@ -1835,7 +1842,7 @@ void parser_free(parser_t** parser)
 	if ((*parser)->functions != NULL) {
 		if ((*parser)->functions->data != NULL) {
 			for (size_t i = 0; i < (*parser)->functions->length; i++) {
-				print_error("Free function %s\n", ((ast_node_t*) (*parser)->functions->data[i])->data.function_declaration->name);
+				print_message("Free function %s\n", ((ast_node_t*) (*parser)->functions->data[i])->data.function_declaration->name);
 				if ((*parser)->functions->data[i] != NULL) {
 					ast_node_free((ast_node_t**) &((*parser)->functions->data[i]));
 					(*parser)->functions->data[i] = NULL;
@@ -1869,8 +1876,8 @@ void parser_free(parser_t** parser)
 
 	free(*parser);
 	*parser = NULL;
-	print_error("*parser is null %d\n", *parser == NULL ? 1 : 0);
-	print_error("parser is null %d\n", parser == NULL ? 1 : 0);
+	print_message("*parser is null %d\n", *parser == NULL ? 1 : 0);
+	print_message("parser is null %d\n", parser == NULL ? 1 : 0);
 }
 
 void parser_token_next(parser_t* parser)
@@ -1878,7 +1885,7 @@ void parser_token_next(parser_t* parser)
 	if ((*parser->lexer)->tokens->length > parser->token_index) {
 		parser->token_index++;
 	} else {
-		print_error("Error: Unexpected end of file\n");
+		print_message("Error: Unexpected end of file\n");
 		exit(EXIT_FAILURE);
 	}
 }
@@ -1931,11 +1938,11 @@ void parser_token_eat_nodata(parser_t* parser, token_type_t type)
 		if (token->type == type) {
 			parser->token_index++;
 		} else {
-			print_error("Error: Expected %s\n", token_type2str(type));
+			print_message("Error: Expected %s\n", token_type2str(type));
 			exit(EXIT_FAILURE);
 		}
 	} else {
-		print_error("Error: Unexpected end of file\n");
+		print_message("Error: Unexpected end of file\n");
 		exit(EXIT_FAILURE);
 	}
 }
@@ -1948,11 +1955,11 @@ token_t* parser_token_eat(parser_t* parser, token_type_t type)
 		if (token->type == type) {
 			return (token_t*) (*parser->lexer)->tokens->data[parser->token_index++];
 		} else {
-			print_error("Error: Expected %s\n", token_type2str(type));
+			print_message("Error: Expected %s\n", token_type2str(type));
 			exit(EXIT_FAILURE);
 		}
 	} else {
-		print_error("Error: Unexpected end of file\n");
+		print_message("Error: Unexpected end of file\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -1961,7 +1968,7 @@ token_t* parser_token_eat(parser_t* parser, token_type_t type)
 
 ast_node_t* parser_function(parser_t* parser)
 {
-	// print_error("Parsing function\n");
+	// print_message("Parsing function\n");
 
 	ast_node_t* node;
 	CREATE_MEMORY_OBJECT(node, ast_node_t, 1, "Error: parser_function<node> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -1977,11 +1984,11 @@ ast_node_t* parser_function(parser_t* parser)
 	node->data.function_declaration->arguments = array_create(3);
 
 	if (parser_token_skip_ifhas(parser, TOKEN_TYPE_PARENTHESE_OPEN)) {
-		print_error("Parsing parameters\n");
+		print_message("Parsing parameters\n");
 
 		while ((*parser->lexer)->tokens->length > parser->token_index && ((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type == TOKEN_TYPE_IDENTIFIER) {
 			token_t* t = (*parser->lexer)->tokens->data[parser->token_index];
-			// print_error("we have an arg %s\n", t->value);
+			// print_message("we have an arg %s\n", t->value);
 			array_push(node->data.function_declaration->arguments, strdup(t->value));
 			parser->token_index++;
 
@@ -2019,7 +2026,7 @@ ast_node_t* parser_function(parser_t* parser)
 
 ast_node_t* parser_statement_print(parser_t* parser)
 {
-	// print_error("Parsing statement print\n");
+	// print_message("Parsing statement print\n");
 
 	parser->token_index++;
 
@@ -2036,7 +2043,7 @@ ast_node_t* parser_statement_print(parser_t* parser)
 
 ast_node_t* parser_statement_return(parser_t* parser)
 {
-	// print_error("Parsing statement return\n");
+	// print_message("Parsing statement return\n");
 
 	parser->token_index++;
 
@@ -2053,7 +2060,7 @@ ast_node_t* parser_statement_return(parser_t* parser)
 
 ast_node_t* parser_statement_break(parser_t* parser)
 {
-	// print_error("Parsing statement break\n");
+	// print_message("Parsing statement break\n");
 
 	parser->token_index++;
 
@@ -2066,7 +2073,7 @@ ast_node_t* parser_statement_break(parser_t* parser)
 
 ast_node_t* parser_statement_continue(parser_t* parser)
 {
-	// print_error("Parsing statement continue\n");
+	// print_message("Parsing statement continue\n");
 
 	parser->token_index++;
 
@@ -2098,7 +2105,7 @@ bool parser_expression_has(parser_t* parser)
 
 ast_node_t* parser_statement_if(parser_t* parser)
 {
-	// print_error("Parsing statement if\n");
+	// print_message("Parsing statement if\n");
 
 	parser->token_index++; // Eating IF token
 
@@ -2138,7 +2145,7 @@ ast_node_t* parser_statement_if(parser_t* parser)
 				);
 
 				if (node->data.statement_if->elseifs == NULL) {
-					print_error("Error: in parsing block: Memory reallocation failed.\n");
+					print_message("Error: in parsing block: Memory reallocation failed.\n");
 					exit(EXIT_FAILURE);
 				}
 			}
@@ -2155,7 +2162,7 @@ ast_node_t* parser_statement_if(parser_t* parser)
 
 ast_node_t* parser_statement_until(parser_t* parser)
 {
-	// print_error("Parsing statement until\n");
+	// print_message("Parsing statement until\n");
 
 	parser->token_index++; // Eating UNTIL token
 
@@ -2171,7 +2178,7 @@ ast_node_t* parser_statement_until(parser_t* parser)
 
 ast_node_t* parser_statement_repeat(parser_t* parser)
 {
-	// print_error("Parsing statement repeat\n");
+	// print_message("Parsing statement repeat\n");
 
 	parser->token_index++; // Eating UNTIL token
 
@@ -2195,7 +2202,7 @@ ast_node_t* parser_statement_repeat(parser_t* parser)
 
 ast_node_t* parser_statement(parser_t* parser)
 {
-	// print_error("Parsing statement\n");
+	// print_message("Parsing statement\n");
 
 	ast_node_t* stmt = NULL;
 
@@ -2258,7 +2265,7 @@ ast_node_t* parser_statement(parser_t* parser)
 
 ast_expression_t* parser_expression(parser_t* parser)
 {
-	// print_error("Parsing expression\n");
+	// print_message("Parsing expression\n");
 
 	return parser_expression_pratt(parser, PRECEDENCE_LOWEST);
 
@@ -2271,7 +2278,7 @@ ast_expression_t* parser_expression(parser_t* parser)
 
 ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence)
 {
-	// print_error("Parsing pratt\n");
+	// print_message("Parsing pratt\n");
 
 	token_t* current_token = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
 	parser->token_index++;
@@ -2290,7 +2297,7 @@ ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence)
 
 ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	// print_error("Parsing operator assignment\n");
+	// print_message("Parsing operator assignment\n");
 
 	ast_expression_t* binary_op_expr;
 	CREATE_MEMORY_OBJECT(binary_op_expr, ast_expression_t, 1, "Error: led_equal<binary_op_expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -2304,7 +2311,7 @@ ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* 
 
 ast_expression_t* led_equal_equal(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	// print_error("Parsing operator == or !=\n");
+	// print_message("Parsing operator == or !=\n");
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
@@ -2322,7 +2329,7 @@ ast_expression_t* led_equal_equal(parser_t* parser, token_t* token, ast_expressi
 
 ast_expression_t* led_and(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	// print_error("Parsing operator and\n");
+	// print_message("Parsing operator and\n");
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
@@ -2340,7 +2347,7 @@ ast_expression_t* led_and(parser_t* parser, token_t* token, ast_expression_t* le
 
 ast_expression_t* led_or(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	// print_error("Parsing operator and\n");
+	// print_message("Parsing operator and\n");
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
@@ -2357,7 +2364,7 @@ ast_expression_t* led_or(parser_t* parser, token_t* token, ast_expression_t* lef
 
 ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	// print_error("Parsing operator binary\n");
+	// print_message("Parsing operator binary\n");
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
@@ -2375,7 +2382,7 @@ ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expressio
 
 ast_expression_t* nud_bool(parser_t* parser, token_t* token)
 {
-	// print_error("Parsing bool\n");
+	// print_message("Parsing bool\n");
 
 	ast_expression_t* literal_expr;
 	CREATE_MEMORY_OBJECT(literal_expr, ast_expression_t, 1, "Error: nud_bool<literal_expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -2391,7 +2398,7 @@ ast_expression_t* nud_bool(parser_t* parser, token_t* token)
 
 ast_expression_t* nud_number(parser_t* parser, token_t* token)
 {
-	// print_error("Parsing number\n");
+	// print_message("Parsing number\n");
 
 	ast_expression_t* literal_expr;
 	CREATE_MEMORY_OBJECT(literal_expr, ast_expression_t, 1, "Error: nud_number<literal_expr> -Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -2414,7 +2421,7 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 
 ast_expression_t* nud_array(parser_t* parser, token_t* token)
 {
-	// print_error("Parsing array\n");
+	// print_message("Parsing array\n");
 
 	ast_expression_t* literal_expr;
 	CREATE_MEMORY_OBJECT(literal_expr, ast_expression_t, 1, "Error: nud_array<literal_expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -2451,7 +2458,7 @@ ast_expression_t* nud_array(parser_t* parser, token_t* token)
 
 ast_expression_t* nud_string(parser_t* parser, token_t* token)
 {
-	// print_error("Parsing string\n");
+	// print_message("Parsing string\n");
 
 	ast_expression_t* literal_expr;
 	CREATE_MEMORY_OBJECT(literal_expr, ast_expression_t, 1, "Error: nud_string<literal_expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -2468,7 +2475,7 @@ ast_expression_t* nud_string(parser_t* parser, token_t* token)
 
 ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 {
-	// print_error("Parsing identifier\n");
+	// print_message("Parsing identifier\n");
 
 	ast_expression_t* expr;
 	CREATE_MEMORY_OBJECT(expr, ast_expression_t, 1, "Error: nud_identifier<expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -2509,7 +2516,7 @@ ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 
 ast_expression_t* nud_parentheses(parser_t* parser, token_t* token)
 {
-	// print_error("Parsing parentheses\n");
+	// print_message("Parsing parentheses\n");
 
 	ast_expression_t* expression_node = parser_expression_pratt(parser, PRECEDENCE_LOWEST);
 
@@ -2520,7 +2527,7 @@ ast_expression_t* nud_parentheses(parser_t* parser, token_t* token)
 
 ast_node_t* parser_block(parser_t* parser)
 {
-	// print_error("Parsing block\n");
+	// print_message("Parsing block\n");
 
 	size_t allocated_size = 5;
 
@@ -2611,181 +2618,181 @@ void parser_parse(parser_t* parser)
 void print_indentation(int indent_level)
 {
 	for (int i = 0; i < indent_level; i++) {
-		print_error("  ");
+		print_message("  ");
 	}
 }
 
 void print_xml_ast_expression(ast_expression_t* expr, int indent_level)
 {
-	print_error("<Expression>\n");
+	print_message("<Expression>\n");
 
 	switch (expr->type) {
 		case AST_EXPRESSION_LITERAL:
 			print_indentation(indent_level + 1);
-			print_error("<Literal>\n");
+			print_message("<Literal>\n");
 
 				print_indentation(indent_level + 2);
-				print_error("<Type>%s</Type>\n", literal_type2name(expr->data.literal->type));
+				print_message("<Type>%s</Type>\n", literal_type2name(expr->data.literal->type));
 
 				print_indentation(indent_level + 2);
 				if (expr->data.literal->type == VALUE_TYPE_STRING) {
-					print_error("<Value>%s</Value>\n", expr->data.literal->string_value);
+					print_message("<Value>%s</Value>\n", expr->data.literal->string_value);
 				} else if (expr->data.literal->type == VALUE_TYPE_NULL) {
-					print_error("<Value>NULL</value>\n");
+					print_message("<Value>NULL</value>\n");
 				} else if (expr->data.literal->type == VALUE_TYPE_INT) {
-					print_error("<Value>%d</Value>\n", expr->data.literal->int_value);
+					print_message("<Value>%d</Value>\n", expr->data.literal->int_value);
 				} else if (expr->data.literal->type == VALUE_TYPE_FLOAT) {
-					print_error("<Value>%f</Value>\n", expr->data.literal->float_value);
+					print_message("<Value>%f</Value>\n", expr->data.literal->float_value);
 				} else if (expr->data.literal->type == VALUE_TYPE_BOOL) {
-					print_error("<Value>%s</Value>\n", expr->data.literal->bool_value ? "True" : "False");
+					print_message("<Value>%s</Value>\n", expr->data.literal->bool_value ? "True" : "False");
 				} else if (expr->data.literal->type == VALUE_TYPE_ARRAY_EXPRESSION) {
-					print_error("<Count>");
-					print_error("%zu", expr->data.literal->size_value);
-					print_error("</Count>\n");
+					print_message("<Count>");
+					print_message("%zu", expr->data.literal->size_value);
+					print_message("</Count>\n");
 
 					print_indentation(indent_level + 2);
-					print_error("<Values>\n");
+					print_message("<Values>\n");
 
 						for (size_t i = 0; i < expr->data.literal->size_value; i++) {
 							print_indentation(indent_level + 3);
-							print_error("<ArrayItem>\n");
+							print_message("<ArrayItem>\n");
 
 								print_indentation(indent_level + 4);
 								print_xml_ast_expression((ast_expression_t*) expr->data.literal->array_expression_value[i], indent_level + 4);
 
 							print_indentation(indent_level + 3);
-							print_error("</ArrayItem>\n");
+							print_message("</ArrayItem>\n");
 						}
 
 					print_indentation(indent_level + 2);
-					print_error("</Values>\n");
+					print_message("</Values>\n");
 
 				} else {
-					print_error("<!-- Unhandled Literal Type -->\n");
+					print_message("<!-- Unhandled Literal Type -->\n");
 				}
 
 				if (expr->data.literal->main != NULL) {
 					print_indentation(indent_level + 2);
-					print_error("<Main>\n");
+					print_message("<Main>\n");
 
 						print_indentation(indent_level + 3);
 						print_xml_ast_expression((ast_expression_t*) *(expr->data.literal->main), indent_level + 3);
 
 					print_indentation(indent_level + 2);
-					print_error("</Main>\n");
+					print_message("</Main>\n");
 				}
 
 			print_indentation(indent_level + 1);
-			print_error("</Literal>\n");
+			print_message("</Literal>\n");
 			break;
 
 		case AST_EXPRESSION_FUNCTION_CALL:
 			print_indentation(indent_level + 1);
-			print_error("<FunctionCall>\n");
+			print_message("<FunctionCall>\n");
 
 				print_indentation(indent_level + 2);
-				print_error("<Name>%s</Name>\n", expr->data.function_call->name);
+				print_message("<Name>%s</Name>\n", expr->data.function_call->name);
 
 				if (expr->data.function_call->arguments == NULL) {
 					print_indentation(indent_level + 2);
-					print_error("<Arguments />\n");
+					print_message("<Arguments />\n");
 				} else {
 					print_indentation(indent_level + 2);
-					print_error("<Arguments>\n");
+					print_message("<Arguments>\n");
 
 						for (size_t i = 0; i < expr->data.function_call->arguments->length; i++) {
 							print_indentation(indent_level + 3);
-							print_error("<Argument>\n");
+							print_message("<Argument>\n");
 
 								print_indentation(indent_level + 4);
 								print_xml_ast_expression(expr->data.function_call->arguments->data[i], indent_level + 4);
 
 							print_indentation(indent_level + 3);
-							print_error("<Argument>\n");
+							print_message("<Argument>\n");
 						}
 
 					print_indentation(indent_level + 2);
-					print_error("</Arguments>\n");
+					print_message("</Arguments>\n");
 				}
 
 			print_indentation(indent_level + 1);
-			print_error("</FunctionCall>\n");
+			print_message("</FunctionCall>\n");
 			break;
 
 		case AST_EXPRESSION_IDENTIFIER:
 			print_indentation(indent_level + 1);
-			print_error("<Identifier>\n");
+			print_message("<Identifier>\n");
 
 				print_indentation(indent_level + 2);
-				print_error("<Name>%s</Name>\n", expr->data.identifier->name);
+				print_message("<Name>%s</Name>\n", expr->data.identifier->name);
 
 			print_indentation(indent_level + 1);
-			print_error("</Identifier>\n");
+			print_message("</Identifier>\n");
 			break;
 
 		case AST_EXPRESSION_BINARY:
 			print_indentation(indent_level + 1);
-			print_error("<BinaryOperator>\n");
+			print_message("<BinaryOperator>\n");
 
 				print_indentation(indent_level + 2);
-				print_error("<Operator>%s</Operator>\n", expr->data.binary_op->operator);
+				print_message("<Operator>%s</Operator>\n", expr->data.binary_op->operator);
 
 				print_indentation(indent_level + 2);
-				print_error("<Left>\n");
+				print_message("<Left>\n");
 
 					print_indentation(indent_level + 3);
 					print_xml_ast_expression(expr->data.binary_op->left, indent_level + 3);
 
 				print_indentation(indent_level + 2);
-				print_error("</Left>\n");
+				print_message("</Left>\n");
 
 				print_indentation(indent_level + 2);
-				print_error("<Right>\n");
+				print_message("<Right>\n");
 
 					print_indentation(indent_level + 3);
 					print_xml_ast_expression(expr->data.binary_op->right, indent_level + 3);
 
 				print_indentation(indent_level + 2);
-				print_error("</Right>\n");
+				print_message("</Right>\n");
 
 			print_indentation(indent_level + 1);
-			print_error("</BinaryOperator>\n");
+			print_message("</BinaryOperator>\n");
 			break;
 
 		case AST_EXPRESSION_ASSIGNMENT:
 			print_indentation(indent_level + 1);
-			print_error("<Assignment>\n");
+			print_message("<Assignment>\n");
 
 				print_indentation(indent_level + 2);
-				print_error("<Left>\n");
+				print_message("<Left>\n");
 
 					print_indentation(indent_level + 3);
 					print_xml_ast_expression(expr->data.assignment->left, indent_level + 3);
 
 				print_indentation(indent_level + 2);
-				print_error("</Left>\n");
+				print_message("</Left>\n");
 
 				print_indentation(indent_level + 2);
-				print_error("<Right>\n");
+				print_message("<Right>\n");
 
 					print_indentation(indent_level + 3);
 					print_xml_ast_expression(expr->data.assignment->right, indent_level + 3);
 
 				print_indentation(indent_level + 2);
-				print_error("</Right>\n");
+				print_message("</Right>\n");
 
 			print_indentation(indent_level + 1);
-			print_error("</Assignment>\n");
+			print_message("</Assignment>\n");
 			break;
 
 		default:
 			print_indentation(indent_level + 1);
-			print_error("<!-- Unhandled Expression Type -->\n");
+			print_message("<!-- Unhandled Expression Type -->\n");
 			break;
 	}
 
 	print_indentation(indent_level);
-	print_error("</Expression>\n");
+	print_message("</Expression>\n");
 }
 
 void print_xml_ast_node(ast_node_t* node, int indent_level)
@@ -2798,154 +2805,154 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 
 	switch (node->type) {
 		case AST_STATEMENT_UNTIL:
-			print_error("<StatementUntil>\n");
+			print_message("<StatementUntil>\n");
 
 			print_indentation(indent_level + 1);
 
 				if (node->data.statement_until->condition == NULL) {
-					print_error("<Condition />\n");
+					print_message("<Condition />\n");
 				} else {
-					print_error("<Condition>\n");
+					print_message("<Condition>\n");
 
 						print_indentation(indent_level + 2);
 						print_xml_ast_expression(node->data.statement_until->condition, indent_level + 2);
 
 					print_indentation(indent_level + 1);
-					print_error("</Condition>\n");
+					print_message("</Condition>\n");
 				}
 
 				print_xml_ast_node(node->data.statement_until->block, indent_level + 1);
 
 			print_indentation(indent_level);
-			print_error("</StatementUntil>\n");
+			print_message("</StatementUntil>\n");
 			break;
 
 		case AST_STATEMENT_REPEAT:
-			print_error("<StatementRepeat>\n");
+			print_message("<StatementRepeat>\n");
 
 			print_indentation(indent_level + 1);
 
 				if (node->data.statement_repeat->condition == NULL) {
-					print_error("<Condition />\n");
+					print_message("<Condition />\n");
 				} else {
-					print_error("<Condition>\n");
+					print_message("<Condition>\n");
 
 						print_indentation(indent_level + 2);
 						print_xml_ast_expression(node->data.statement_repeat->condition, indent_level + 2);
 
 					print_indentation(indent_level + 1);
-					print_error("</Condition>\n");
+					print_message("</Condition>\n");
 				}
 
 				print_xml_ast_node(node->data.statement_repeat->block, indent_level + 1);
 
 			print_indentation(indent_level);
-			print_error("</StatementUntil>\n");
+			print_message("</StatementUntil>\n");
 			break;
 
 		case AST_STATEMENT_IF:
 		case AST_STATEMENT_ELSEIF:
-			print_error("<StatementIf>\n");
+			print_message("<StatementIf>\n");
 
 			print_indentation(indent_level + 1);
 
-				print_error("<Condition>\n");
+				print_message("<Condition>\n");
 
 					print_indentation(indent_level + 2);
 					print_xml_ast_expression(node->data.statement_if->condition, indent_level + 2);
 
 				print_indentation(indent_level + 1);
-				print_error("</Condition>\n");
+				print_message("</Condition>\n");
 
 				print_xml_ast_node(node->data.statement_if->block, indent_level + 1);
 
 				if (node->data.statement_if->num_elseifs > 0) {
 					print_indentation(indent_level + 1);
-					print_error("<ElseIfBlocks>\n");
+					print_message("<ElseIfBlocks>\n");
 
 						for (size_t i = 0; i < node->data.statement_if->num_elseifs; i++) {
 							print_xml_ast_node((ast_node_t*) node->data.statement_if->elseifs[i], indent_level + 2);
 						}
 
 					print_indentation(indent_level + 1);
-					print_error("</ElseIfBlocks>\n");
+					print_message("</ElseIfBlocks>\n");
 				}
 
 				if (node->data.statement_if->else_block != NULL) {
 					print_indentation(indent_level + 1);
-					print_error("<Else>\n");
+					print_message("<Else>\n");
 
 						if (node->data.statement_if->else_block != NULL) {
 							print_xml_ast_node(node->data.statement_if->else_block, indent_level + 2);
 						}
 
 					print_indentation(indent_level + 1);
-					print_error("</Else>\n");
+					print_message("</Else>\n");
 				}
 
 			print_indentation(indent_level);
-			print_error("</StatementIf>\n");
+			print_message("</StatementIf>\n");
 			break;
 
 		case AST_FUNCTION_DECLARATION:
-			print_error("<FunctionDeclaration>\n");
+			print_message("<FunctionDeclaration>\n");
 
 				print_indentation(indent_level + 1);
-				print_error("<Name>%s</Name>\n", node->data.function_declaration->name);
+				print_message("<Name>%s</Name>\n", node->data.function_declaration->name);
 
 				if (node->data.function_declaration->arguments == NULL || node->data.function_declaration->arguments->length == 0) {
 					print_indentation(indent_level + 1);
-					print_error("<Arguments />\n");
+					print_message("<Arguments />\n");
 				} else {
 					print_indentation(indent_level + 1);
-					print_error("<Arguments>\n");
+					print_message("<Arguments>\n");
 
 					for (size_t i = 0; i < node->data.function_declaration->arguments->length; i++) {
 						char* ident = node->data.function_declaration->arguments->data[i];
 
 						print_indentation(indent_level + 2);
-						print_error("<Argument>%s</Argument>\n", ident);
+						print_message("<Argument>%s</Argument>\n", ident);
 					}
 
 					print_indentation(indent_level + 1);
-					print_error("</Arguments>\n");
+					print_message("</Arguments>\n");
 				}
 
 				print_xml_ast_node(node->data.function_declaration->body, indent_level + 1);
 
 			print_indentation(indent_level);
-			print_error("</FunctionDeclaration>\n");
+			print_message("</FunctionDeclaration>\n");
 			break;
 
 		case AST_STATEMENT_PRINT:
-			print_error("<StatementPrint>\n");
+			print_message("<StatementPrint>\n");
 
 				print_indentation(indent_level + 1);
 				print_xml_ast_expression(node->data.statement_print->expression, indent_level + 1);
 
 			print_indentation(indent_level);
-			print_error("</StatementPrint>\n");
+			print_message("</StatementPrint>\n");
 			break;
 
 		case AST_STATEMENT_RETURN:
-			print_error("<StatementReturn>\n");
+			print_message("<StatementReturn>\n");
 
 				print_indentation(indent_level + 1);
 				print_xml_ast_expression(node->data.statement_return->expression, indent_level + 1);
 
 			print_indentation(indent_level);
-			print_error("</StatementReturn>\n");
+			print_message("</StatementReturn>\n");
 			break;
 
 		case AST_BLOCK:
-			print_error("<Block>\n");
+			print_message("<Block>\n");
 
 			for (size_t i = 0; i < node->data.block->num_statements; i++) {
 				print_xml_ast_node(node->data.block->statements[i], indent_level + 1);
 			}
 
 			print_indentation(indent_level);
-			print_error("</Block>\n");
+			print_message("</Block>\n");
 			break;
 
 		case AST_EXPRESSION:
@@ -2954,20 +2961,20 @@ void print_xml_ast_node(ast_node_t* node, int indent_level)
 
 		default:
 			print_indentation(indent_level);
-			print_error("<!-- Unhandled AST Node Type -->\n");
+			print_message("<!-- Unhandled AST Node Type -->\n");
 			break;
 	}
 }
 
 void print_xml_ast_tree(parser_t* parser)
 {
-	print_error("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-	print_error("<AST>\n");
+	print_message("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+	print_message("<AST>\n");
 
 	if (parser != NULL) {
 		if (parser->functions != NULL) {
 			print_indentation(1);
-			print_error("<Functions>\n");
+			print_message("<Functions>\n");
 
 				if (parser->functions != NULL) {
 					for (size_t i = 0; i < parser->functions->length; i++) {
@@ -2976,7 +2983,7 @@ void print_xml_ast_tree(parser_t* parser)
 				}
 
 			print_indentation(1);
-			print_error("</Functions>\n");
+			print_message("</Functions>\n");
 		}
 
 		////////////////////////////////////////////
@@ -2984,7 +2991,7 @@ void print_xml_ast_tree(parser_t* parser)
 
 		if (parser->expressions != NULL) {
 			print_indentation(1);
-			print_error("<Expressions>\n");
+			print_message("<Expressions>\n");
 
 				if (parser->expressions != NULL) {
 					for (size_t i = 0; i < parser->expressions->length; i++) {
@@ -2993,11 +3000,11 @@ void print_xml_ast_tree(parser_t* parser)
 				}
 
 			print_indentation(1);
-			print_error("</Expressions>\n");
+			print_message("</Expressions>\n");
 		}
 	}
 
-	print_error("</AST>\n");
+	print_message("</AST>\n");
 }
 
 interpreter_t* interpreter_create(parser_t** parser)
@@ -3011,7 +3018,7 @@ interpreter_t* interpreter_create(parser_t** parser)
 
 ast_node_t* interpreter_statement_repeat(ast_node_t* node, interpreter_t* interpreter)
 {
-	// print_error("Repeat\n");
+	// print_message("Repeat\n");
 
 	bool isInfinity = false;
 	ast_literal_t* count;
@@ -3025,11 +3032,11 @@ ast_node_t* interpreter_statement_repeat(ast_node_t* node, interpreter_t* interp
 			count->int_value = strlen(count->string_value);
 		} else if (count->type == VALUE_TYPE_INT) {
 			if (count->int_value < 0) {
-				print_error("Repeat statement only accepts positive numbers or zero.");
+				print_message("Repeat statement only accepts positive numbers or zero.");
 				return NULL;
 			}
 		} else {
-			print_error("Repeat statement only accepts integer or string values.");
+			print_message("Repeat statement only accepts integer or string values.");
 			return NULL;
 		}
 	}
@@ -3059,7 +3066,7 @@ ast_node_t* interpreter_statement_repeat(ast_node_t* node, interpreter_t* interp
 
 ast_node_t* interpreter_statement_until(ast_node_t* node, interpreter_t* interpreter)
 {
-	// print_error("Until\n");
+	// print_message("Until\n");
 
 	while (interpreter_expression_truly(node->data.statement_until->condition, interpreter, false) == true) {
 		ast_node_t* returned = interpreter_block(node->data.statement_until->block, interpreter, TOKEN_TYPE_UNTIL, NULL);
@@ -3080,7 +3087,7 @@ ast_node_t* interpreter_statement_until(ast_node_t* node, interpreter_t* interpr
 
 ast_node_t* interpreter_statement_if(ast_node_t* node, interpreter_t* interpreter)
 {
-	// print_error("If\n");
+	// print_message("If\n");
 
 	if (interpreter_expression_truly(node->data.statement_if->condition, interpreter, false)) {
 		return interpreter_block(node->data.statement_if->block, interpreter, TOKEN_TYPE_IF, NULL);
@@ -3102,7 +3109,7 @@ ast_node_t* interpreter_statement_if(ast_node_t* node, interpreter_t* interprete
 
 ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type)
 {
-	// print_error("Interpreter Interpret Once\n");
+	// print_message("Interpreter Interpret Once\n");
 
 	switch (node->type) {
 		case AST_BLOCK:
@@ -3130,7 +3137,7 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 			return interpreter_statement_expression(node, interpreter);
 
 		default:
-			print_error("interpreter_interpret - default\n");
+			print_message("interpreter_interpret - default\n");
 	}
 
 	return NULL;
@@ -3138,7 +3145,7 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 
 interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 {
-	// print_error("Interpreter Interpret\n");
+	// print_message("Interpreter Interpret\n");
 
 	if (interpreter == NULL || (*interpreter->parser) == NULL) {
 		return NULL;
@@ -3152,7 +3159,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 	interpreter->is_global_scope = true;
 	if ((*interpreter->parser)->expressions != NULL) {
 		for (size_t i = 0; i < (*interpreter->parser)->expressions->length; i++) {
-			// print_error("Interpreting global expression\n");
+			// print_message("Interpreting global expression\n");
 			ast_node_t* expression = (ast_node_t*) (*interpreter->parser)->expressions->data[i];
 			if (expression != NULL && expression->data.expression != NULL) {
 				interpreter_expression(expression->data.expression, interpreter, false);
@@ -3181,7 +3188,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 
 	// print_xml_ast_node(main_returned, 3);
 	if (main_returned != NULL && main_returned->type == AST_STATEMENT_RETURN) {
-		print_error("Main returned: ");
+		print_message("Main returned: ");
 		interpreter_expression_data(main_returned->data.statement_return->expression_value, true);
 	} else {
 		print_error(messages[language][MESSAGE_INTERPRETER_MAIN_NORETURN]);
@@ -3192,7 +3199,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 
 ast_node_t* interpreter_function_declaration(ast_node_t* node, interpreter_t* interpreter, array_t* arguments)
 {
-	// print_error("Function Declaration: %s\n", stmt->name);
+	// print_message("Function Declaration: %s\n", stmt->name);
 
 	return interpreter_block(node->data.function_declaration->body, interpreter, TOKEN_TYPE_FUNCTION, arguments);
 }
@@ -3269,7 +3276,7 @@ void interpreter_expression_data(ast_literal_t* data, bool newLine)
 
 ast_node_t* interpreter_statement_return(ast_node_t* node, interpreter_t* interpreter)
 {
-	// print_error("Return Statement\n");
+	// print_message("Return Statement\n");
 
 	node->data.statement_return->expression_value = (ast_literal_t*) interpreter_expression(node->data.statement_return->expression, interpreter, false);
 
@@ -3278,7 +3285,7 @@ ast_node_t* interpreter_statement_return(ast_node_t* node, interpreter_t* interp
 
 ast_node_t* interpreter_statement_print(ast_node_t* node, interpreter_t* interpreter)
 {
-	// print_error("Print Statement\n");
+	// print_message("Print Statement\n");
 
 	node->data.statement_print->expression_value = (ast_literal_t*) interpreter_expression(node->data.statement_print->expression, interpreter, false);
 
@@ -3298,7 +3305,7 @@ ast_node_t* interpreter_statement_print(ast_node_t* node, interpreter_t* interpr
 
 ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, token_type_t parent_type, array_t* arguments)
 {
-	// print_error("Block\n");
+	// print_message("Block\n");
 
 	ast_node_t* returned = NULL;
 
@@ -3362,7 +3369,7 @@ ast_literal_t* interpreter_expression_literal(ast_expression_t* expr, interprete
 
 ast_literal_t* interpreter_expression_identifier(ast_expression_t* expr, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall)
 {
-	// print_error("Variable: %s (%d)\n", expr->data.identifier->name, interpreter->is_global_scope ? 1 : 0);
+	// print_message("Variable: %s (%d)\n", expr->data.identifier->name, interpreter->is_global_scope ? 1 : 0);
 
 	ast_literal_t* val;
 
@@ -3637,7 +3644,7 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 
 	// Scope exit
 	popSymbolTable(&symbolTableStack);
-	// print_error("delete a scope with function_call enabled\n");
+	// print_message("delete a scope with function_call enabled\n");
 
 	if (returned != NULL && returned->type == AST_STATEMENT_RETURN) {
 		return returned->data.statement_return->expression_value;
@@ -3647,7 +3654,7 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 
 ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall)
 {
-	// print_error("Function Call: %s\n", node->data.function_call->name);
+	// print_message("Function Call: %s\n", node->data.function_call->name);
 
 	// Check if functions exists in (*interpreter->parser)->...
 	bool exists = false;
@@ -3754,7 +3761,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		} else if (arg_val->type == VALUE_TYPE_BOOL) {
 			val->string_value = strdup(arg_val->bool_value == true ? messages[language][MESSAGE_TOKEN_TRUE] : messages[language][MESSAGE_TOKEN_FALSE]);
 		} else if (arg_val->type == VALUE_TYPE_NULL) {
-			val->string_value = strdup(messages[language][MESSAGE_TOKEN_NULL];
+			val->string_value = strdup(messages[language][MESSAGE_TOKEN_NULL]);
 		} else {
 			val->string_value = strdup(messages[language][MESSAGE_TOKEN_UNKNOWN]);
 		}
@@ -3794,7 +3801,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 
 bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall)
 {
-	// print_error("Truly\n");
+	// print_message("Truly\n");
 
 	ast_literal_t* res = interpreter_expression(expr, interpreter, checkEverythingEvenIsFuncCall);
 	// ast_expression_free(&(expr));
@@ -3816,7 +3823,7 @@ bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpr
 
 ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall)
 {
-	// print_error("Assignment\n");
+	// print_message("Assignment\n");
 
 	if (expr->data.assignment->left->type != AST_EXPRESSION_IDENTIFIER) {
 		print_error(messages[language][MESSAGE_INTERPRETER_CANNOT_ASSIGN_VARIABLE_WITH_A_NON_IDENTIFIER_AS_NAME]);
@@ -3826,7 +3833,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	bool isNew = false;
 	char* identifier = strdup(expr->data.assignment->left->data.identifier->name);
 
-	// print_error("============> assign %s variable\n", identifier);
+	// print_message("============> assign %s variable\n", identifier);
 
 	ast_literal_t* right = interpreter_expression(expr->data.assignment->right, interpreter, checkEverythingEvenIsFuncCall);
 	ast_literal_t* variable;
@@ -3838,7 +3845,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	}
 
 	if (variable == NULL) {
-		// print_error("this is a new variable on this scope!\n");
+		// print_message("this is a new variable on this scope!\n");
 		isNew = true;
 		CREATE_MEMORY_OBJECT(variable, ast_literal_t, 1, "Error: interpreter_expression_function_call<variable> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
@@ -3977,7 +3984,7 @@ int main(int argc, char** argv)
 			isAst = false;
 			isRun = true;
 		} else {
-			print_error("Second argument should be either --ast or --code\n");
+			print_message("Second argument should be either --ast or --code\n");
 			help();
 			return 0;
 		}
@@ -4017,46 +4024,46 @@ int main(int argc, char** argv)
 
 		print_xml_ast_tree(parser);
 
-		print_error("====================================\n");
+		print_message("====================================\n");
 
 		interpreter_t* interpreter = interpreter_create(&parser);
 		interpreter_interpret(interpreter);
 
-		print_error("====================================\n");
-		// print_error("RUN DONE\n");
+		print_message("====================================\n");
+		// print_message("RUN DONE\n");
 
 		// print_xml_ast_tree(parser);
 
-		// print_error("====================================\n");
+		// print_message("====================================\n");
 
-		// print_error("start signing...\n");
+		// print_message("start signing...\n");
 		// print_xml_ast_tree(parser);
-		// print_error("sign-done\n");
+		// print_message("sign-done\n");
 		// exit(EXIT_FAILURE);
 
-		// print_error("start second signing...\n");
+		// print_message("start second signing...\n");
 		// print_xml_ast_tree(parser);
 		// print_xml_ast_tree(*(interpreter->parser));
-		// print_error("second sign-done\n");
+		// print_message("second sign-done\n");
 
 		// return 0;
 		
 		/*
-		print_error("free lexer\n");
+		print_message("free lexer\n");
 		lexer_free(&lexer);
-		print_error("end lexer free\n");
+		print_message("end lexer free\n");
 
-		print_error("free parser\n");
+		print_message("free parser\n");
 		parser_free(interpreter->parser);
 		// parser_free(parser);
-		print_error("end parser free\n");
+		print_message("end parser free\n");
 
-		// print_error("out-after parser is null %d\n", parser == NULL ? 1 : 0);
-		// print_error("out-after interp-parser is null %d\n", (*interpreter->parser) == NULL ? 1 : 0);
+		// print_message("out-after parser is null %d\n", parser == NULL ? 1 : 0);
+		// print_message("out-after interp-parser is null %d\n", (*interpreter->parser) == NULL ? 1 : 0);
 
-		print_error("free interpreter\n");
+		print_message("free interpreter\n");
 		interpreter_free(&interpreter);
-		print_error("end interpreter free\n");
+		print_message("end interpreter free\n");
 
 		// if (file_data != NULL) {
 		// 	free(file_data);
@@ -4064,7 +4071,7 @@ int main(int argc, char** argv)
 		// }
 		*/
 
-		print_error("DONE\n");
+		print_message("DONE\n");
 	}
 
 	return 0;

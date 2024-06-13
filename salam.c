@@ -3268,7 +3268,7 @@ ast_literal_t* interpreter_expression_literal(ast_expression_t* expr, interprete
 
 ast_literal_t* interpreter_expression_identifier(ast_expression_t* expr, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall)
 {
-	print_error("Variable: %s (%d)\n", expr->data.identifier->name, interpreter->is_global_scope ? 1 : 0);
+	// print_error("Variable: %s (%d)\n", expr->data.identifier->name, interpreter->is_global_scope ? 1 : 0);
 
 	ast_literal_t* val;
 
@@ -3507,7 +3507,7 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 
 ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, interpreter_t* interpreter, bool checkEverythingEvenIsFuncCall)
 {
-	print_error("Function Call: %s\n", node->data.function_call->name);
+	// print_error("Function Call: %s\n", node->data.function_call->name);
 
 	// Check if functions exists in (*interpreter->parser)->...
 	bool exists = false;
@@ -3644,9 +3644,9 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 	// 	// node->data.statement_return->expression_value = (ast_literal_t*) interpreter_expression(node->data.statement_return->expression, interpreter);
 	// }
 
-	printf("func - before interpreter_function_run\n");
+	// printf("func - before interpreter_function_run\n");
 	ast_literal_t* ret = interpreter_function_run(func_exists, node->data.function_call->arguments, interpreter);
-	printf("func - after interpreter_function_run\n");
+	// printf("func - after interpreter_function_run\n");
 
 	if (ret == NULL) {
 		ast_literal_t* default_ret;

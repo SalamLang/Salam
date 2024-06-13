@@ -3148,6 +3148,7 @@ interpreter_t* interpreter_interpret(interpreter_t* interpreter)
 		for (size_t i = 0; i < (*interpreter->parser)->expressions->length; i++) {
 			// print_message("Interpreting global expression\n");
 			ast_node_t* expression = (ast_node_t*) (*interpreter->parser)->expressions->data[i];
+
 			if (expression != NULL && expression->data.expression != NULL) {
 				interpreter_expression(expression->data.expression, interpreter, false);
 			}
@@ -3250,7 +3251,7 @@ void interpreter_expression_data(ast_literal_t* data, bool newLine)
 		}
 		printf("]");
 	} else {
-		printf("نامشخص");
+		printf(messages[language][MESSAGE_TOKEN_UNKNOWN]);
 	}
 
 	if (newLine) printf("\n");

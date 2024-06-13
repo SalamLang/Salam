@@ -1014,7 +1014,6 @@ void read_number(lexer_t* lexer, wchar_t ch)
 		i++;
 		ch = read_token(lexer);
 	}
-	number[i] = 0;
 
 	bool isFloat = false;
 	if (ch == '.') {
@@ -1037,6 +1036,11 @@ void read_number(lexer_t* lexer, wchar_t ch)
 			ch = read_token(lexer);
 		}
 	}
+
+	number[i] = 0;
+
+	printf("number: %s\n", number);
+	printf("number isFloat: %d\n", isFloat ? 1 : 0);
 
 	token_t* t = token_create(isFloat ? TOKEN_TYPE_FLOAT : TOKEN_TYPE_INT, number, i, lexer->line, lexer->column - i, lexer->line, lexer->column);
 	array_push(lexer->tokens, t);
@@ -3400,9 +3404,9 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 	} else if (strcmp(expr->data.binary_op->operator, "و") == 0) {
 		res->type = VALUE_TYPE_BOOL;
 		if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_INT) {
-			res->bool_value = left->int_value && right->int_value;
+			res->bool_value = left->int_value > 0 && right->int_value > 0;
 		} else if (left->type == VALUE_TYPE_FLOAT && right->type == VALUE_TYPE_FLOAT) {
-			res->bool_value = left->float_value && right->float_value;
+			res->bool_value = left->float_value > 0 && right->float_value > 0;
 		} else if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_BOOL) {
 			res->bool_value = (left->int_value > 0 ? true : false) && right->bool_value;
 		} else if (left->type == VALUE_TYPE_FLOAT && right->type == VALUE_TYPE_BOOL) {

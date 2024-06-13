@@ -3974,7 +3974,7 @@ int main(int argc, char** argv)
 			return 0;
 		}
 		passingCode = true;
-		file_data = file_read(argv[2]);
+		file_data = argv[2];
 	}
 
 	if (passingCode) {

@@ -38,6 +38,7 @@ typedef enum {
 	MESSAGE_LEXER_STRING_GET_LENGTH_UNICODE,
 	MESSAGE_LEXER_IDENTIFIER_CONVERT_MULTIBYTE,
 	MESSAGE_LEXER_CHAR_LENGTH_ISSUE,
+	MESSAGE_LEXER_ARRAY_NOT_CLOSED,
     MESSAGE_COUNT,
 } message_key_t;
 
@@ -2334,7 +2335,7 @@ ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expressio
 
 ast_expression_t* nud_bool(parser_t* parser, token_t* token)
 {
-	print_error("Parsing bool\n");
+	// print_error("Parsing bool\n");
 
 	ast_expression_t* literal_expr;
 	CREATE_MEMORY_OBJECT(literal_expr, ast_expression_t, 1, "Error: nud_bool<literal_expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -2350,7 +2351,7 @@ ast_expression_t* nud_bool(parser_t* parser, token_t* token)
 
 ast_expression_t* nud_number(parser_t* parser, token_t* token)
 {
-	print_error("Parsing number\n");
+	// print_error("Parsing number\n");
 
 	ast_expression_t* literal_expr;
 	CREATE_MEMORY_OBJECT(literal_expr, ast_expression_t, 1, "Error: nud_number<literal_expr> -Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -2373,7 +2374,7 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 
 ast_expression_t* nud_array(parser_t* parser, token_t* token)
 {
-	print_error("Parsing array\n");
+	// print_error("Parsing array\n");
 
 	ast_expression_t* literal_expr;
 	CREATE_MEMORY_OBJECT(literal_expr, ast_expression_t, 1, "Error: nud_array<literal_expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -2399,7 +2400,7 @@ ast_expression_t* nud_array(parser_t* parser, token_t* token)
 			// End of the array
 			break;
 		} else {
-			print_error("Error: Expected ',' or ']' in array value.\n");
+			print_error(messages[language][MESSAGE_LEXER_ARRAY_NOT_CLOSED]);
 			exit(EXIT_FAILURE);
 		}
 	}
@@ -2410,7 +2411,7 @@ ast_expression_t* nud_array(parser_t* parser, token_t* token)
 
 ast_expression_t* nud_string(parser_t* parser, token_t* token)
 {
-	print_error("Parsing string\n");
+	// print_error("Parsing string\n");
 
 	ast_expression_t* literal_expr;
 	CREATE_MEMORY_OBJECT(literal_expr, ast_expression_t, 1, "Error: nud_string<literal_expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -2427,7 +2428,7 @@ ast_expression_t* nud_string(parser_t* parser, token_t* token)
 
 ast_expression_t* nud_identifier(parser_t* parser, token_t* token)
 {
-	print_error("Parsing identifier\n");
+	// print_error("Parsing identifier\n");
 
 	ast_expression_t* expr;
 	CREATE_MEMORY_OBJECT(expr, ast_expression_t, 1, "Error: nud_identifier<expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);

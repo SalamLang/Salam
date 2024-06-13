@@ -2330,8 +2330,8 @@ ast_expression_t* nud_number(parser_t* parser, token_t* token)
 	literal_expr->data.literal->main = NULL;
 
 	if (token->type == TOKEN_TYPE_FLOAT) {
-		literal_expr->data.literal->type = VALUE_TYPE_INT;
-		literal_expr->data.literal->int_value = atof(token->value);
+		literal_expr->data.literal->type = VALUE_TYPE_FLOAT;
+		literal_expr->data.literal->float_value = atof(token->value);
 	} else {
 		literal_expr->data.literal->type = VALUE_TYPE_INT;
 		literal_expr->data.literal->int_value = atoi(token->value);

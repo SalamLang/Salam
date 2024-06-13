@@ -1395,7 +1395,7 @@ parser_t* parser_create(lexer_t** lexer)
 {
 	parser_t* parser;
 	CREATE_MEMORY_OBJECT(parser, parser_t, 1, "Error: parser_create<parser> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-	
+
 	parser->lexer = lexer;
 	parser->token_index = 0;
 	parser->functions = array_create(5);
@@ -2949,8 +2949,9 @@ void print_xml_ast_tree(parser_t* parser)
 	print_message("<AST>\n");
 
 	if (parser != NULL) {
-		if (parser->functions != NULL) {
-			print_indentation(1);
+		print_indentation(1);
+
+		if (parser->functions != NULL && parser->functions->length > 0) {
 			print_message("<Functions>\n");
 
 				if (parser->functions != NULL) {
@@ -2961,6 +2962,8 @@ void print_xml_ast_tree(parser_t* parser)
 
 			print_indentation(1);
 			print_message("</Functions>\n");
+		} else {
+			print_message("</Functions />\n");
 		}
 
 		////////////////////////////////////////////
@@ -2968,16 +2971,21 @@ void print_xml_ast_tree(parser_t* parser)
 
 		if (parser->expressions != NULL) {
 			print_indentation(1);
-			print_message("<Expressions>\n");
 
-				if (parser->expressions != NULL) {
-					for (size_t i = 0; i < parser->expressions->length; i++) {
-						print_xml_ast_node(parser->expressions->data[i], 2);
+			if (parser->expressions != NULL && parser->expressions->length > 0) {
+				print_message("<Expressions>\n");
+
+					if (parser->expressions != NULL) {
+						for (size_t i = 0; i < parser->expressions->length; i++) {
+							print_xml_ast_node(parser->expressions->data[i], 2);
+						}
 					}
-				}
 
-			print_indentation(1);
-			print_message("</Expressions>\n");
+				print_indentation(1);
+				print_message("</Expressions>\n");
+			} else {
+				print_message("<Expressions />\n");
+			}
 		}
 	}
 

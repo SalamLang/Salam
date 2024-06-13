@@ -87,6 +87,7 @@ typedef enum {
 	MESSAGE_LEXER_FILE_NOT_EXISTS,
 	MESSAGE_MEMORY_ALLOCATE_ERROR,
 	MESSAGE_INTERPRETER_MAIN_RETURN_CODE,
+	MESSAGE_INTERPRETER_UNKNOWN_NODE_AS_INTERPRETER_ONCE,
     MESSAGE_COUNT,
 } message_key_t;
 
@@ -3123,7 +3124,7 @@ ast_node_t* interpreter_interpret_once(ast_node_t* node, interpreter_t* interpre
 			return interpreter_statement_expression(node, interpreter);
 
 		default:
-			print_message("interpreter_interpret - default\n");
+			print_message(messages[language][MESSAGE_INTERPRETER_UNKNOWN_NODE_AS_INTERPRETER_ONCE]);
 	}
 
 	return NULL;

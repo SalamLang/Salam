@@ -23,6 +23,19 @@ struct ast_expression;
 struct ast_literal_t;
 
 typedef enum {
+    MESSAGE_HELLO,
+    MESSAGE_GOODBYE,
+    MESSAGE_THANK_YOU,
+    MESSAGE_COUNT,
+} message_key_t;
+
+typedef enum {
+    LANGUAGE_PERSIAN,
+    LANGUAGE_ARABIC,
+    LANGUAGE_COUNT,
+} language_t;
+
+typedef enum {
 	VALUE_TYPE_NULL,
 	VALUE_TYPE_INT,
 	VALUE_TYPE_FLOAT,
@@ -437,6 +450,20 @@ int main(int argc, char** argv);
 // Global variables
 SymbolTableStack* symbolTableStack = NULL;
 SymbolTableStack* symbolGlobalTableStack = NULL;
+language_t language = LANGUAGE_PERSIAN;
+
+const char* messages[LANGUAGE_COUNT][MESSAGE_COUNT] = {
+    [LANGUAGE_PERSIAN] = {
+        [MESSAGE_HELLO] = "سلام",
+        [MESSAGE_GOODBYE] = "خداحافظ",
+        [MESSAGE_THANK_YOU] = "متشکرم"
+    },
+    [LANGUAGE_ARABIC] = {
+        [MESSAGE_HELLO] = "مرحبا",
+        [MESSAGE_GOODBYE] = "وداعا",
+        [MESSAGE_THANK_YOU] = "شكرا"
+    }
+};
 
 token_info_t token_infos[] = {
 	[TOKEN_TYPE_TRUE] = {PRECEDENCE_LOWEST, nud_bool, NULL},
@@ -466,6 +493,13 @@ token_info_t token_infos[] = {
 };
 
 // Helper functions
+const char* get_message(language_t language, message_key_t key) {
+    if (language >= LANGUAGE_COUNT || key >= MESSAGE_COUNT) {
+        return NULL;
+    }
+    return messages[language][key];
+}
+
 char* read_dynamic_string() {
 	size_t current_size = 52;
 	char* input;
@@ -1320,7 +1354,7 @@ void lexer_lex(lexer_t* lexer)
 void help()
 {
 	print_error("Welcome to Salam Programming Language!\n");
-	print_error("Salam is the first Persian/Iranian computer scripting language.\n");
+	print_error("Salam is the first Persian/Arabic Iranian computer scripting language.\n");
 	print_error("\n");
 
 	print_error("Usage:\n");

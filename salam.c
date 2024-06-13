@@ -2163,11 +2163,11 @@ ast_node_t* parser_statement_repeat(parser_t* parser)
 	CREATE_MEMORY_OBJECT(node->data.statement_repeat, ast_statement_repeat_t, 1, "Error: parser_statement_repeat<statement_repeat> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	if (! parser_token_ifhas(parser, TOKEN_TYPE_SECTION_OPEN)) {
-		printf("inside if...\n");
+		// printf("inside if...\n");
 		node->data.statement_repeat->condition = parser_expression(parser);
 	} else {
+		// printf("inside elseif...\n");
 		node->data.statement_repeat->condition = NULL;
-		printf("inside elseif...\n");
 	}
 
 	node->data.statement_repeat->block = parser_block(parser);

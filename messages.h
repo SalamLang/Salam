@@ -39,6 +39,11 @@ const char* messages[LANGUAGE_COUNT][MESSAGE_COUNT] = {
         [MESSAGE_INTERPRETER_EXPRESSION_CANNOT_DO_THIS_OPERATOR] = "Error: unknown operator: %s\n",
         [MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_IS_MORE] = "Error: number of arguments is not match with the function - you are passing more arguments!\n",
         [MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_IS_LESS] = "Error: number of arguments is not match with the function - you are passing less arguments!\n",
+		[MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ZERO] = "Error: number of arguments of %s() function should be only zero - this function don't accept any arguments!\n",
+		[MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE] = "Error: number of arguments of %s() function should be only one!\n",
+        [MESSAGE_INTERPRETER_FUNCTION_NOT_EXISTS] = "Error: function not exists!\n",
+        [MESSAGE_INTERPRETER_CANNOT_ASSIGN_VARIABLE_WITH_A_NON_IDENTIFIER_AS_NAME] = "Error: Assignment to non-variable\n",
+        [MESSAGE_INTERPRETER_EXPRESSION_DONT_SUPPORT_THIS_TYPE_IN_EXPRESSION] = "Error: default expr type: %d\n",
     },
 
     [LANGUAGE_ARABIC] = {

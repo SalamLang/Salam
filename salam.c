@@ -53,6 +53,11 @@ typedef enum {
 	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_DO_THIS_OPERATOR,
 	MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_IS_MORE,
 	MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_IS_LESS,
+	MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ZERO,
+	MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE,
+	MESSAGE_INTERPRETER_FUNCTION_NOT_EXISTS,
+	MESSAGE_INTERPRETER_CANNOT_ASSIGN_VARIABLE_WITH_A_NON_IDENTIFIER_AS_NAME,
+	MESSAGE_INTERPRETER_EXPRESSION_DONT_SUPPORT_THIS_TYPE_IN_EXPRESSION,
     MESSAGE_COUNT,
 } message_key_t;
 
@@ -3624,7 +3629,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 
 	if (strcmp(node->data.function_call->name, "نوع") == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
-			print_error("Error: number of arguments of نوع() function should be only one!\n");
+			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE], node->data.function_call->name);
 			exit(EXIT_FAILURE);
 		}
 
@@ -3638,7 +3643,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		return val;
 	} else if (strcmp(node->data.function_call->name, "زوج") == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
-			print_error("Error: number of arguments of زوج() function should be one!\n");
+			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE], node->data.function_call->name);
 			exit(EXIT_FAILURE);
 		}
 		ast_literal_t* arg = node->data.function_call->arguments->data[0];
@@ -3655,7 +3660,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		return val;
 	} else if (strcmp(node->data.function_call->name, "فرد") == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
-			print_error("Error: number of arguments of فرد() function should be one!\n");
+			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE], node->data.function_call->name);
 			exit(EXIT_FAILURE);
 		}
 		ast_literal_t* arg = node->data.function_call->arguments->data[0];
@@ -3672,7 +3677,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		return val;
 	} else if (strcmp(node->data.function_call->name, "خواندن") == 0) {
 		if (node->data.function_call->arguments != NULL && node->data.function_call->arguments->length != 0) {
-			print_error("Error: number of arguments of خواندن() function should be empty!\n");
+			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ZERO], node->data.function_call->name);
 			exit(EXIT_FAILURE);
 		}
 
@@ -3686,7 +3691,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		return val;
 	} else if (strcmp(node->data.function_call->name, "طول") == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
-			print_error("Error: number of arguments of طول() function should be empty!\n");
+			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE], node->data.function_call->name);
 			exit(EXIT_FAILURE);
 		}
 
@@ -3704,7 +3709,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		return val;
 	} else if (strcmp(node->data.function_call->name, "رشته") == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
-			print_error("Error: number of arguments of رشته() function should be empty!\n");
+			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE], node->data.function_call->name);
 			exit(EXIT_FAILURE);
 		}
 
@@ -3744,7 +3749,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 	}
 
 	if (exists == false || func_exists == NULL) {
-		print_error("Error: function not exists!\n");
+		print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_NOT_EXISTS]);
 		exit(EXIT_FAILURE);
 	}
 
@@ -3767,6 +3772,7 @@ bool interpreter_expression_truly(ast_expression_t* expr, interpreter_t* interpr
 
 	ast_literal_t* res = interpreter_expression(expr, interpreter, checkEverythingEvenIsFuncCall);
 	// ast_expression_free(&(expr));
+
 	if (res->type == VALUE_TYPE_BOOL) {
 		return res->bool_value;
 	} else if (res->type == VALUE_TYPE_NULL) {
@@ -3787,7 +3793,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	// print_error("Assignment\n");
 
 	if (expr->data.assignment->left->type != AST_EXPRESSION_IDENTIFIER) {
-		print_error("Error: Assignment to non-variable\n");
+		print_error(messages[language][MESSAGE_INTERPRETER_CANNOT_ASSIGN_VARIABLE_WITH_A_NON_IDENTIFIER_AS_NAME]);
 		exit(EXIT_FAILURE);
 	}
 
@@ -3882,7 +3888,7 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 			break;
 
 		default:
-			print_error("Error: default expr type: %d\n", expr->type);
+			print_error(messages[language][MESSAGE_INTERPRETER_EXPRESSION_DONT_SUPPORT_THIS_TYPE_IN_EXPRESSION], expr->type);
 			exit(EXIT_FAILURE);
 	}
 

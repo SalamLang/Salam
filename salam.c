@@ -1017,7 +1017,7 @@ void read_number(lexer_t* lexer, wchar_t ch)
 
 	bool isFloat = false;
 	if (ch == '.') {
-		i++;
+		number[i++] = '.';
 		ch = read_token(lexer);
 
 		if (!is_number(ch)) {

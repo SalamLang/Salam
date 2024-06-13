@@ -1104,6 +1104,8 @@ void read_string(lexer_t* lexer, wchar_t ch)
                 string[i++] = '\t';
             } else if (ch == L'"') {
                 string[i++] = '"';
+            } else if (ch == L'\'') {
+                string[i++] = '\'';
             } else if (ch == L'\\') {
                 string[i++] = '\\';
             } else {
@@ -1532,6 +1534,7 @@ void ast_expression_free(struct ast_expression_t** expr)
 	print_error("ast_expression_free\n");
 
 	if (expr == NULL || *expr == NULL) {
+		print_error("ast_expression_free is null\n");
 		return;
 	}
 

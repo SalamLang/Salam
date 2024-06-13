@@ -44,6 +44,7 @@ const char* messages[LANGUAGE_COUNT][MESSAGE_COUNT] = {
         [MESSAGE_INTERPRETER_FUNCTION_NOT_EXISTS] = "Error: function not exists!\n",
         [MESSAGE_INTERPRETER_CANNOT_ASSIGN_VARIABLE_WITH_A_NON_IDENTIFIER_AS_NAME] = "Error: Assignment to non-variable\n",
         [MESSAGE_INTERPRETER_EXPRESSION_DONT_SUPPORT_THIS_TYPE_IN_EXPRESSION] = "Error: default expr type: %d\n",
+        [MESSAGE_PARSER_UNEXPECTED_TOKEN] = "Error: Unexpected token as statement %s\n",
     },
 
     [LANGUAGE_ARABIC] = {

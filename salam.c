@@ -3268,7 +3268,7 @@ ast_literal_t* interpreter_literal(ast_expression_t* expr, interpreter_t* interp
 
 ast_literal_t* interpreter_identifier(ast_expression_t* expr, interpreter_t* interpreter)
 {
-	// print_error("Variable: %s (%d)\n", expr->data.identifier->name, interpreter->is_global_scope ? 1 : 0);
+	print_error("Variable: %s (%d)\n", expr->data.identifier->name, interpreter->is_global_scope ? 1 : 0);
 
 	ast_literal_t* val;
 
@@ -3487,6 +3487,8 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 	for (size_t i = 0; i < arguments_count; i++) {
 		char* arg_name = function->data.function_declaration->arguments->data[i];
 		ast_literal_t* arg_value = interpreter_expression((ast_expression_t*) arguments->data[i], interpreter);
+		printf("Check %s arg\n", arg_name);
+		print_xml_ast_node(arguments->data[i], 0);
 
 		addToSymbolTable(symbolTableStack, arg_name, arg_value);
 	}
@@ -3505,7 +3507,7 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 
 ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* interpreter)
 {
-	// print_error("Function Call: %s\n", node->data.function_call->name);
+	print_error("Function Call: %s\n", node->data.function_call->name);
 
 	// Check if functions exists in (*interpreter->parser)->...
 	bool exists = false;
@@ -3637,7 +3639,14 @@ ast_literal_t* interpreter_function_call(ast_expression_t* node, interpreter_t* 
 		exit(EXIT_FAILURE);
 	}
 
+	// for (size_t i = 0; i < func->data.function_call->arguments->count; i++) {
+	// 	interpreter_expression(func->data.function_call->arguments[i])
+	// 	// node->data.statement_return->expression_value = (ast_literal_t*) interpreter_expression(node->data.statement_return->expression, interpreter);
+	// }
+	
+	printf("func - before interpreter_function_run\n");
 	ast_literal_t* ret = interpreter_function_run(func_exists, node->data.function_call->arguments, interpreter);
+	printf("func - after interpreter_function_run\n");
 	if (ret == NULL) {
 		ast_literal_t* default_ret;
 		CREATE_MEMORY_OBJECT(default_ret, ast_literal_t, 1, "Error: interpreter_function_call<default_ret> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);

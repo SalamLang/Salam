@@ -61,6 +61,24 @@ typedef enum {
 	MESSAGE_PARSER_UNEXPECTED_TOKEN,
 	MESSAGE_PARSER_BLOCK_MEMORY_ISSUE,
 	MESSAGE_PARSER_BAD_TOKEN_AS_STATEMENT,
+	MESSAGE_TOKEN_TRUE,
+	MESSAGE_TOKEN_FALSE,
+	MESSAGE_TOKEN_NULL,
+	MESSAGE_TOKEN_UNKNOWN,
+	MESSAGE_TOKEN_NUMBER_INT,
+	MESSAGE_TOKEN_NUMBER_FLOAT,
+	MESSAGE_TOKEN_BOOL,
+	MESSAGE_TOKEN_STRING,
+	MESSAGE_TOKEN_ARRAY,
+	MESSAGE_TOKEN_OR,
+	MESSAGE_TOKEN_AND,
+	MESSAGE_TOKEN_FUNCTION_TYPE,
+	MESSAGE_TOKEN_FUNCTION_EVEN,
+	MESSAGE_TOKEN_FUNCTION_ODD,
+	MESSAGE_TOKEN_FUNCTION_READ,
+	MESSAGE_TOKEN_FUNCTION_LENGTH,
+	MESSAGE_TOKEN_FUNCTION_STRING,
+	MESSAGE_INTERPRETER_FUNCTION_CALL_FIRST_ARGUMENT_SHOULD_BE_ONLY_A_STRING,
     MESSAGE_COUNT,
 } message_key_t;
 
@@ -3182,37 +3200,42 @@ ast_node_t* interpreter_function_declaration(ast_node_t* node, interpreter_t* in
 char* interpreter_expression_data_type(ast_literal_t* data)
 {
 	if (data == NULL) {
-		return "نامشخص";
+		return messages[language][MESSAGE_TOKEN_UNKNOWN];
 	} else if (data->type == VALUE_TYPE_NULL) {
-		return "پوچ";
+		return messages[language][MESSAGE_TOKEN_NULL];
 	} else if (data->type == VALUE_TYPE_INT) {
+		return messages[language][MESSAGE_TOKEN_NUMBER_INT];
 		return "صحیح";
 	} else if (data->type == VALUE_TYPE_FLOAT) {
+		return messages[language][MESSAGE_TOKEN_NUMBER_FLOAT];
 		return "اعشاری";
 	} else if (data->type == VALUE_TYPE_BOOL) {
+		return messages[language][MESSAGE_TOKEN_BOOL];
 		return "درستی";
 	} else if (data->type == VALUE_TYPE_STRING) {
+		return messages[language][MESSAGE_TOKEN_STRING];
 		return "رشته";
 	} else if (data->type == VALUE_TYPE_ARRAY_LITERAL || data->type == VALUE_TYPE_ARRAY_EXPRESSION) {
 		return "دسته";
+		return messages[language][MESSAGE_TOKEN_ARRAY];
 	} else {
-		return "نامشخص";
+		return messages[language][MESSAGE_TOKEN_UNKNOWN];
 	}
 }
 
 void interpreter_expression_data(ast_literal_t* data, bool newLine)
 {
 	if (data == NULL) {
-		printf("نامشخص");
+		printf(messages[language][MESSAGE_TOKEN_UNKNOWN]);
 		return;
 	} else if (data->type == VALUE_TYPE_NULL) {
-		printf("پوچ");
+		printf(messages[language][MESSAGE_TOKEN_NULL]);
 	} else if (data->type == VALUE_TYPE_INT) {
 		printf("%d", data->int_value);
 	} else if (data->type == VALUE_TYPE_FLOAT) {
 		printf("%f", data->float_value);
 	} else if (data->type == VALUE_TYPE_BOOL) {
-		printf("%s", data->bool_value == true ? "درست" : "غلط");
+		printf("%s", data->bool_value == true ? messages[language][MESSAGE_TOKEN_TRUE] : messages[language][MESSAGE_TOKEN_FALSE]);
 	} else if (data->type == VALUE_TYPE_STRING) {
 		printf("%s", data->string_value);
 	} else if (data->type == VALUE_TYPE_ARRAY_EXPRESSION) {
@@ -3451,7 +3474,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 			print_error(messages[language][MESSAGE_INTERPRETER_EXPRESSION_CANNOT_COMPARE_THIS_KIND_OF_VALUE_TYPES]);
 			invalid = true;
 		}
-	} else if (strcmp(expr->data.binary_op->operator, "و") == 0) {
+	} else if (strcmp(expr->data.binary_op->operator, messages[language][MESSAGE_TOKEN_AND]) == 0) {
 		res->type = VALUE_TYPE_BOOL;
 		if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_INT) {
 			res->bool_value = left->int_value > 0 && right->int_value > 0;
@@ -3471,7 +3494,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 			print_error(messages[language][MESSAGE_INTERPRETER_EXPRESSION_CANNOT_AND_FOR_THIS_VALUES]);
 			invalid = true;
 		}
-	} else if (strcmp(expr->data.binary_op->operator, "یا") == 0) {
+	} else if (strcmp(expr->data.binary_op->operator, messages[language][MESSAGE_TOKEN_OR]) == 0) {
 		res->type = VALUE_TYPE_BOOL;
 		res->type = VALUE_TYPE_BOOL;
 		if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_INT) {
@@ -3630,7 +3653,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 	bool exists = false;
 	ast_node_t* func_exists = NULL;
 
-	if (strcmp(node->data.function_call->name, "نوع") == 0) {
+	if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_TYPE]) == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
 			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE], node->data.function_call->name);
 			exit(EXIT_FAILURE);
@@ -3644,7 +3667,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		val->string_value = strdup(interpreter_expression_data_type(arg_val));
 		val->main = NULL;
 		return val;
-	} else if (strcmp(node->data.function_call->name, "زوج") == 0) {
+	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_EVEN]) == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
 			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE], node->data.function_call->name);
 			exit(EXIT_FAILURE);
@@ -3661,7 +3684,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		val->bool_value = boolResult;
 		val->main = NULL;
 		return val;
-	} else if (strcmp(node->data.function_call->name, "فرد") == 0) {
+	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_ODD]) == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
 			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE], node->data.function_call->name);
 			exit(EXIT_FAILURE);
@@ -3678,7 +3701,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		val->bool_value = boolResult;
 		val->main = NULL;
 		return val;
-	} else if (strcmp(node->data.function_call->name, "خواندن") == 0) {
+	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_READ]) == 0) {
 		if (node->data.function_call->arguments != NULL && node->data.function_call->arguments->length != 0) {
 			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ZERO], node->data.function_call->name);
 			exit(EXIT_FAILURE);
@@ -3692,7 +3715,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		val->string_value = input;
 		val->main = NULL;
 		return val;
-	} else if (strcmp(node->data.function_call->name, "طول") == 0) {
+	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_LENGTH]) == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
 			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE], node->data.function_call->name);
 			exit(EXIT_FAILURE);
@@ -3700,7 +3723,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 
 		ast_literal_t* arg_val = (ast_literal_t*) interpreter_expression(node->data.function_call->arguments->data[0], interpreter, false);
 		if (arg_val->type != VALUE_TYPE_STRING) {
-			print_error("Error: argument type of طول() function should be a string!\n");
+			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_FIRST_ARGUMENT_SHOULD_BE_ONLY_A_STRING], node->data.function_call->name);
 			exit(EXIT_FAILURE);
 		}
 
@@ -3710,7 +3733,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		val->int_value = strlen(arg_val->string_value);
 		val->main = NULL;
 		return val;
-	} else if (strcmp(node->data.function_call->name, "رشته") == 0) {
+	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_STRING]) == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
 			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE], node->data.function_call->name);
 			exit(EXIT_FAILURE);
@@ -3729,11 +3752,11 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		if (arg_val->type == VALUE_TYPE_INT) {
 			val->string_value = intToString(arg_val->int_value);
 		} else if (arg_val->type == VALUE_TYPE_BOOL) {
-			val->string_value = strdup(arg_val->bool_value == true ? "درست" : "غلط");
+			val->string_value = strdup(arg_val->bool_value == true ? messages[language][MESSAGE_TOKEN_TRUE] : messages[language][MESSAGE_TOKEN_FALSE]);
 		} else if (arg_val->type == VALUE_TYPE_NULL) {
-			val->string_value = strdup("پوچ");
+			val->string_value = strdup(messages[language][MESSAGE_TOKEN_NULL];
 		} else {
-			val->string_value = strdup("نامشخص");
+			val->string_value = strdup(messages[language][MESSAGE_TOKEN_UNKNOWN]);
 		}
 		// TODO: supporting float
 

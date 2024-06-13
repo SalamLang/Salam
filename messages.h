@@ -47,6 +47,27 @@ const char* messages[LANGUAGE_COUNT][MESSAGE_COUNT] = {
         [MESSAGE_PARSER_UNEXPECTED_TOKEN] = "Error: Unexpected token as statement %s\n",
         [MESSAGE_PARSER_BLOCK_MEMORY_ISSUE] = "Error: in parsing block: Memory reallocation failed.\n",
         [MESSAGE_PARSER_BAD_TOKEN_AS_STATEMENT] = "Error: bad token as statement %s\n",
+        [MESSAGE_TOKEN_TRUE] = "غلط",
+        [MESSAGE_TOKEN_FALSE] = "غلط",
+        [MESSAGE_TOKEN_NULL] = "پوچ",
+        [MESSAGE_TOKEN_UNKNOWN] = "نامشخص",
+
+        [MESSAGE_TOKEN_OR] = "یا",
+        [MESSAGE_TOKEN_AND] = "و",
+        [MESSAGE_TOKEN_NUMBER_INT] = "عددصحیح",
+        [MESSAGE_TOKEN_NUMBER_FLOAT] = "عدداعشار",
+        [MESSAGE_TOKEN_BOOL] = "بولی",
+        [MESSAGE_TOKEN_STRING] = "رشته",
+        [MESSAGE_TOKEN_ARRAY] = "دسته",
+
+        [MESSAGE_TOKEN_FUNCTION_TYPE] = "نوع",
+        [MESSAGE_TOKEN_FUNCTION_EVEN] = "زوج",
+        [MESSAGE_TOKEN_FUNCTION_ODD] = "فرد",
+        [MESSAGE_TOKEN_FUNCTION_READ] = "خواندن",
+        [MESSAGE_TOKEN_FUNCTION_LENGTH] = "طول",
+        [MESSAGE_TOKEN_FUNCTION_STRING] = "رشته",
+
+        [MESSAGE_INTERPRETER_FUNCTION_CALL_FIRST_ARGUMENT_SHOULD_BE_ONLY_A_STRING] = "Error: argument type of %S() function should be a string!\n",
     },
 
     [LANGUAGE_ARABIC] = {

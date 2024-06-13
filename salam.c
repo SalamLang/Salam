@@ -14,9 +14,9 @@
 
 bool debug_enabled = true;
 
-#define print_error(...) fprintf(stderr, __VA_ARGS__)
+#define print_error(fmt, ...) fprintf(stderr, fmt, ##__VA_ARGS__)
 
-#define print_message(...) if (debug_enabled) fprintf(stdout, __VA_ARGS__)
+#define print_message(fmt, ...) if (debug_enabled) fprintf(stdout, fmt, ##__VA_ARGS__)
 
 #define CREATE_MEMORY_OBJECT(result, type, length, fmt, ...) \
 	result = (type *)malloc(sizeof(type) * (length));  \

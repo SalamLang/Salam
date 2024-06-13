@@ -1039,9 +1039,6 @@ void read_number(lexer_t* lexer, wchar_t ch)
 
 	number[i] = 0;
 
-	printf("number: %s\n", number);
-	printf("number isFloat: %d\n", isFloat ? 1 : 0);
-
 	token_t* t = token_create(isFloat ? TOKEN_TYPE_FLOAT : TOKEN_TYPE_INT, number, i, lexer->line, lexer->column - i, lexer->line, lexer->column);
 	array_push(lexer->tokens, t);
 

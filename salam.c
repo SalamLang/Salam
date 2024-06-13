@@ -3212,18 +3212,13 @@ char* interpreter_expression_data_type(ast_literal_t* data)
 		return messages[language][MESSAGE_TOKEN_NULL];
 	} else if (data->type == VALUE_TYPE_INT) {
 		return messages[language][MESSAGE_TOKEN_NUMBER_INT];
-		return "صحیح";
 	} else if (data->type == VALUE_TYPE_FLOAT) {
 		return messages[language][MESSAGE_TOKEN_NUMBER_FLOAT];
-		return "اعشاری";
 	} else if (data->type == VALUE_TYPE_BOOL) {
 		return messages[language][MESSAGE_TOKEN_BOOL];
-		return "درستی";
 	} else if (data->type == VALUE_TYPE_STRING) {
 		return messages[language][MESSAGE_TOKEN_STRING];
-		return "رشته";
 	} else if (data->type == VALUE_TYPE_ARRAY_LITERAL || data->type == VALUE_TYPE_ARRAY_EXPRESSION) {
-		return "دسته";
 		return messages[language][MESSAGE_TOKEN_ARRAY];
 	} else {
 		return messages[language][MESSAGE_TOKEN_UNKNOWN];

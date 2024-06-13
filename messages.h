@@ -115,4 +115,3 @@ const keyword_mapping_t keyword_mapping[2][50] = {
 };
 
 #endif
-

@@ -888,7 +888,7 @@ array_t* array_create(size_t size)
 	arr->size = size > min_size ? size : min_size;
 	arr->data = (void*) malloc(sizeof(void*) * arr->size);
 	if (!arr->data) {
-		perror(messages[language][MESSAGE_MEMORY_ALLOCATE_ERROR];
+		perror(messages[language][MESSAGE_MEMORY_ALLOCATE_ERROR]);
 		exit(EXIT_FAILURE);
 	}
 
@@ -3848,7 +3848,6 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 		// print_message("this is a new variable on this scope!\n");
 		isNew = true;
 		CREATE_MEMORY_OBJECT(variable, ast_literal_t, 1, "Error: interpreter_expression_function_call<variable> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-
 	}
 
     variable->main = NULL;
@@ -4070,8 +4069,6 @@ int main(int argc, char** argv)
 		// 	file_data = NULL;
 		// }
 		*/
-
-		print_message("DONE\n");
 	}
 
 	return 0;

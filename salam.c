@@ -35,6 +35,9 @@ typedef enum {
 	MESSAGE_LEXER_STRING_READ_MEMORY,
 	MESSAGE_LEXER_STRING_UNKNOWN_ESCAPE,
 	MESSAGE_LEXER_STRING_CONVERT_MULTIBYTE,
+	MESSAGE_LEXER_STRING_GET_LENGTH_UNICODE,
+	MESSAGE_LEXER_IDENTIFIER_CONVERT_MULTIBYTE,
+	MESSAGE_LEXER_CHAR_LENGTH_ISSUE,
     MESSAGE_COUNT,
 } message_key_t;
 
@@ -1174,7 +1177,7 @@ size_t mb_strlen(char* identifier)
 {
 	size_t wcs_len = mbstowcs(NULL, identifier, 0);
 	if (wcs_len == (size_t)-1) {
-		perror("Error: in mbstowcs - count length");
+		perror(messages[language][MESSAGE_LEXER_STRING_GET_LENGTH_UNICODE]);
 		exit(EXIT_FAILURE);
 	}
 
@@ -1188,7 +1191,7 @@ void read_identifier(lexer_t* lexer, wchar_t ch)
 	while (is_ident(ch)) {
 		int char_size = wctomb(&identifier[i], ch);
 		if (char_size < 0) {
-			print_error("Error: read_identifier - Failed to convert wide character to multibyte\n");
+			print_error(messages[language][MESSAGE_LEXER_IDENTIFIER_CONVERT_MULTIBYTE]);
 			exit(EXIT_FAILURE);
 		}
 		i += char_size;
@@ -1217,7 +1220,7 @@ size_t wchar_length(wchar_t wide_char)
 {
 	char mb_char[MB_LEN_MAX];
 	if (wcrtomb(mb_char, wide_char, NULL) == (size_t)-1) {
-		perror("Error: in wcrtomb");
+		perror(messages[language][MESSAGE_LEXER_CHAR_LENGTH_ISSUE]);
 		return 0;
 	}
 
@@ -1252,7 +1255,7 @@ void lexer_lex(lexer_t* lexer)
 			token_t* t = token_create(TOKEN_TYPE_BRACKETS_CLOSE, "]", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		} else if (current_wchar == '%' || current_wchar == L'٪') {
-			token_t* t = token_create(TOKEN_TYPE_MODULE, "%", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+			token_t* t = token_create(TOKEN_TYPE_MODULE, "%%", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		} else if (current_wchar == '{') {
 			token_t* t = token_create(TOKEN_TYPE_SECTION_OPEN, "{", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);

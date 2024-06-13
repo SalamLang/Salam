@@ -3943,7 +3943,12 @@ int main(int argc, char** argv)
 		return 0;
 	}
 
-	if (argc == 3 && (strcmp(argv[1], "--code") != 0 || strcmp(argv[1], "--ast") != 0)) {
+	printf("%d\n", argc);
+	for (int i = 0; i < argc; i++) {
+		printf("--->%s\n", argv[i]);
+	}
+
+	if (argc == 3 && (strcmp(argv[1], "--code") != 0 && strcmp(argv[1], "--ast") != 0)) {
 		help();
 		return 0;
 	}

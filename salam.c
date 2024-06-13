@@ -1962,7 +1962,7 @@ ast_node_t* parser_function(parser_t* parser)
 	node->data.function_declaration->arguments = array_create(3);
 
 	if (parser_token_skip_ifhas(parser, TOKEN_TYPE_PARENTHESE_OPEN)) {
-		print_message("Parsing parameters\n");
+		// print_message("Parsing parameters\n");
 
 		while ((*parser->lexer)->tokens->length > parser->token_index && ((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type == TOKEN_TYPE_IDENTIFIER) {
 			token_t* t = (*parser->lexer)->tokens->data[parser->token_index];
@@ -3943,10 +3943,10 @@ int main(int argc, char** argv)
 		return 0;
 	}
 
-	printf("%d\n", argc);
-	for (int i = 0; i < argc; i++) {
-		printf("--->%s\n", argv[i]);
-	}
+	// printf("%d\n", argc);
+	// for (int i = 0; i < argc; i++) {
+	// 	printf("--->%s\n", argv[i]);
+	// }
 
 	if (argc == 3 && (strcmp(argv[1], "--code") != 0 && strcmp(argv[1], "--ast") != 0)) {
 		help();

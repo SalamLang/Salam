@@ -24,6 +24,7 @@ const char* messages[LANGUAGE_COUNT][MESSAGE_COUNT] = {
         [MESSAGE_LEXER_IDENTIFIER_CONVERT_MULTIBYTE] = "Error: read identifier - Failed to convert wide character to multibyte\n",
         [MESSAGE_LEXER_STRING_GET_LENGTH_UNICODE] = "Error: in mbstowcs - count length\n",
         [MESSAGE_LEXER_CHAR_LENGTH_ISSUE] = "Error: in wcrtomb in wide character\n",
+        [MESSAGE_LEXER_ARRAY_NOT_CLOSED] = "Error: Expected ',' or ']' in array value\n",
     },
 
     [LANGUAGE_ARABIC] = {

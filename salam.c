@@ -1943,7 +1943,7 @@ token_t* parser_token_eat(parser_t* parser, token_type_t type)
 
 ast_node_t* parser_function(parser_t* parser)
 {
-	print_error("Parsing function\n");
+	// print_error("Parsing function\n");
 
 	ast_node_t* node;
 	CREATE_MEMORY_OBJECT(node, ast_node_t, 1, "Error: parser_function<node> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -3987,7 +3987,7 @@ int main(int argc, char** argv)
 		lexer_t* lexer = lexer_create(file_data);
 		lexer_lex(lexer);
 
-		array_print(lexer->tokens);
+		// array_print(lexer->tokens);
 
 		parser_t* parser = parser_create(&lexer);
 		parser_parse(parser);
@@ -4000,7 +4000,7 @@ int main(int argc, char** argv)
 		interpreter_interpret(interpreter);
 
 		print_error("====================================\n");
-		print_error("RUN DONE\n");
+		// print_error("RUN DONE\n");
 
 		// print_xml_ast_tree(parser);
 
@@ -4017,7 +4017,8 @@ int main(int argc, char** argv)
 		// print_error("second sign-done\n");
 
 		// return 0;
-
+		
+		/*
 		print_error("free lexer\n");
 		lexer_free(&lexer);
 		print_error("end lexer free\n");
@@ -4038,6 +4039,7 @@ int main(int argc, char** argv)
 		// 	free(file_data);
 		// 	file_data = NULL;
 		// }
+		*/
 
 		print_error("DONE\n");
 	}

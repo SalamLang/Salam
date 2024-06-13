@@ -58,6 +58,7 @@ typedef enum {
 	MESSAGE_INTERPRETER_FUNCTION_NOT_EXISTS,
 	MESSAGE_INTERPRETER_CANNOT_ASSIGN_VARIABLE_WITH_A_NON_IDENTIFIER_AS_NAME,
 	MESSAGE_INTERPRETER_EXPRESSION_DONT_SUPPORT_THIS_TYPE_IN_EXPRESSION,
+	MESSAGE_PARSER_UNEXPECTED_TOKEN,
     MESSAGE_COUNT,
 } message_key_t;
 
@@ -1998,7 +1999,7 @@ ast_node_t* parser_function(parser_t* parser)
 
 ast_node_t* parser_statement_print(parser_t* parser)
 {
-	print_error("Parsing statement print\n");
+	// print_error("Parsing statement print\n");
 
 	parser->token_index++;
 
@@ -2015,7 +2016,7 @@ ast_node_t* parser_statement_print(parser_t* parser)
 
 ast_node_t* parser_statement_return(parser_t* parser)
 {
-	print_error("Parsing statement return\n");
+	// print_error("Parsing statement return\n");
 
 	parser->token_index++;
 
@@ -2032,7 +2033,7 @@ ast_node_t* parser_statement_return(parser_t* parser)
 
 ast_node_t* parser_statement_break(parser_t* parser)
 {
-	print_error("Parsing statement break\n");
+	// print_error("Parsing statement break\n");
 
 	parser->token_index++;
 
@@ -2045,7 +2046,7 @@ ast_node_t* parser_statement_break(parser_t* parser)
 
 ast_node_t* parser_statement_continue(parser_t* parser)
 {
-	print_error("Parsing statement continue\n");
+	// print_error("Parsing statement continue\n");
 
 	parser->token_index++;
 
@@ -2077,7 +2078,7 @@ bool parser_expression_has(parser_t* parser)
 
 ast_node_t* parser_statement_if(parser_t* parser)
 {
-	print_error("Parsing statement if\n");
+	// print_error("Parsing statement if\n");
 
 	parser->token_index++; // Eating IF token
 
@@ -2134,7 +2135,7 @@ ast_node_t* parser_statement_if(parser_t* parser)
 
 ast_node_t* parser_statement_until(parser_t* parser)
 {
-	print_error("Parsing statement until\n");
+	// print_error("Parsing statement until\n");
 
 	parser->token_index++; // Eating UNTIL token
 
@@ -2150,7 +2151,7 @@ ast_node_t* parser_statement_until(parser_t* parser)
 
 ast_node_t* parser_statement_repeat(parser_t* parser)
 {
-	print_error("Parsing statement repeat\n");
+	// print_error("Parsing statement repeat\n");
 
 	parser->token_index++; // Eating UNTIL token
 
@@ -2174,7 +2175,7 @@ ast_node_t* parser_statement_repeat(parser_t* parser)
 
 ast_node_t* parser_statement(parser_t* parser)
 {
-	print_error("Parsing statement\n");
+	// print_error("Parsing statement\n");
 
 	ast_node_t* stmt = NULL;
 
@@ -2221,7 +2222,7 @@ ast_node_t* parser_statement(parser_t* parser)
 					stmt->data.expression = parser_expression(parser);
 					return stmt;
 				} else {
-					print_error("Error: Unexpected token as statement %s\n", token_type2str(tok->type));
+					print_error(messages[language][MESSAGE_PARSER_UNEXPECTED_TOKEN], token_type2str(tok->type));
 					exit(EXIT_FAILURE);
 				}
 				break;
@@ -2229,7 +2230,7 @@ ast_node_t* parser_statement(parser_t* parser)
 	}
 
 	if (stmt == NULL) {
-		print_error("Error: Unexpected token as statement %s\n", token_type2str(((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type));
+		print_error(messages[language][MESSAGE_PARSER_UNEXPECTED_TOKEN], token_type2str(((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type));
 		exit(EXIT_FAILURE);
 	}
 	return stmt;
@@ -2237,7 +2238,7 @@ ast_node_t* parser_statement(parser_t* parser)
 
 ast_expression_t* parser_expression(parser_t* parser)
 {
-	print_error("Parsing expression\n");
+	// print_error("Parsing expression\n");
 
 	return parser_expression_pratt(parser, PRECEDENCE_LOWEST);
 
@@ -2250,7 +2251,7 @@ ast_expression_t* parser_expression(parser_t* parser)
 
 ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence)
 {
-	print_error("Parsing pratt\n");
+	// print_error("Parsing pratt\n");
 
 	token_t* current_token = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
 	parser->token_index++;
@@ -2269,7 +2270,7 @@ ast_expression_t* parser_expression_pratt(parser_t* parser, size_t precedence)
 
 ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	print_error("Parsing operator assignment\n");
+	// print_error("Parsing operator assignment\n");
 
 	ast_expression_t* binary_op_expr;
 	CREATE_MEMORY_OBJECT(binary_op_expr, ast_expression_t, 1, "Error: led_equal<binary_op_expr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -2283,7 +2284,7 @@ ast_expression_t* led_equal(parser_t* parser, token_t* token, ast_expression_t* 
 
 ast_expression_t* led_equal_equal(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	print_error("Parsing operator == or !=\n");
+	// print_error("Parsing operator == or !=\n");
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
@@ -2301,7 +2302,7 @@ ast_expression_t* led_equal_equal(parser_t* parser, token_t* token, ast_expressi
 
 ast_expression_t* led_and(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	print_error("Parsing operator and\n");
+	// print_error("Parsing operator and\n");
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
@@ -2319,7 +2320,7 @@ ast_expression_t* led_and(parser_t* parser, token_t* token, ast_expression_t* le
 
 ast_expression_t* led_or(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	print_error("Parsing operator and\n");
+	// print_error("Parsing operator and\n");
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 
@@ -2336,7 +2337,7 @@ ast_expression_t* led_or(parser_t* parser, token_t* token, ast_expression_t* lef
 
 ast_expression_t* led_plus_minus(parser_t* parser, token_t* token, ast_expression_t* left)
 {
-	print_error("Parsing operator binary\n");
+	// print_error("Parsing operator binary\n");
 
 	ast_expression_t* right = parser_expression_pratt(parser, token_infos[token->type].precedence);
 

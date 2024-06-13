@@ -76,4 +76,43 @@ const char* messages[LANGUAGE_COUNT][MESSAGE_COUNT] = {
     }
 };
 
+const keyword_mapping_t keyword_mapping[2][50] = {
+    [LANGUAGE_PERSIAN] = {
+        {"تابع", TOKEN_TYPE_FUNCTION},
+        {"برگشت", TOKEN_TYPE_RETURN},
+        {"ادامه", TOKEN_TYPE_CONTINUE},
+        {"توقف", TOKEN_TYPE_BREAK},
+        {"نمایش", TOKEN_TYPE_PRINT},
+        {"واگرنه", TOKEN_TYPE_ELSEIF},
+        {"اگر", TOKEN_TYPE_IF},
+        {"پوچ", TOKEN_TYPE_NULL},
+        {"تا", TOKEN_TYPE_UNTIL},
+        {"تکرار", TOKEN_TYPE_REPEAT},
+        {"درست", TOKEN_TYPE_TRUE},
+        {"غلط", TOKEN_TYPE_FALSE},
+        {"و", TOKEN_TYPE_AND},
+        {"یا", TOKEN_TYPE_OR},
+        {NULL, TOKEN_TYPE_ERROR},
+    },
+
+    [LANGUAGE_ARABIC] = {
+        {"تابع", TOKEN_TYPE_FUNCTION},
+        {"برگشت", TOKEN_TYPE_RETURN},
+        {"ادامه", TOKEN_TYPE_CONTINUE},
+        {"توقف", TOKEN_TYPE_BREAK},
+        {"نمایش", TOKEN_TYPE_PRINT},
+        {"واگرنه", TOKEN_TYPE_ELSEIF},
+        {"اگر", TOKEN_TYPE_IF},
+        {"پوچ", TOKEN_TYPE_NULL},
+        {"تا", TOKEN_TYPE_UNTIL},
+        {"تکرار", TOKEN_TYPE_REPEAT},
+        {"درست", TOKEN_TYPE_TRUE},
+        {"غلط", TOKEN_TYPE_FALSE},
+        {"و", TOKEN_TYPE_AND},
+        {"یا", TOKEN_TYPE_OR},
+        {NULL, TOKEN_TYPE_ERROR},
+    },
+};
+
 #endif
+

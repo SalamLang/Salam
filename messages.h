@@ -72,6 +72,7 @@ const char* messages[LANGUAGE_COUNT][MESSAGE_COUNT] = {
         [MESSAGE_MEMORY_ALLOCATE_ERROR] = "Memory allocation error\n",
 
         [MESSAGE_INTERPRETER_MAIN_RETURN_CODE] = "Main returned: ",
+        [MESSAGE_INTERPRETER_UNKNOWN_NODE_AS_INTERPRETER_ONCE] = "Error: unknown node as interpreter parser!\n",
     },
 
     [LANGUAGE_ARABIC] = {

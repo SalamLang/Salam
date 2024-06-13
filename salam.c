@@ -3441,32 +3441,79 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 			print_error("Error: cannot calculate this values for OR operator!\n");
 			invalid = true;
 		}
-	} else if ((left->type != VALUE_TYPE_INT && left->type != VALUE_TYPE_BOOL) || (right->type != VALUE_TYPE_INT && right->type != VALUE_TYPE_BOOL)) {
+	} else if ((left->type != VALUE_TYPE_INT && left->type != VALUE_TYPE_FLOAT && left->type != VALUE_TYPE_BOOL) || (right->type != VALUE_TYPE_INT && right->type != VALUE_TYPE_FLOAT && right->type != VALUE_TYPE_BOOL)) {
 		print_error("Error: cannot calculate binary operator for non-int values!\n");
 		invalid = true;
-	} else if (strcmp(expr->data.binary_op->operator, "+") == 0) {
-		res->type = VALUE_TYPE_INT;
-		res->int_value = left->int_value + right->int_value;
-	} else if (strcmp(expr->data.binary_op->operator, "-") == 0) {
-		res->type = VALUE_TYPE_INT;
-		res->int_value = left->int_value - right->int_value;
-	} else if (strcmp(expr->data.binary_op->operator, "*") == 0) {
-		res->type = VALUE_TYPE_INT;
-		res->int_value = left->int_value * right->int_value;
-	} else if (strcmp(expr->data.binary_op->operator, "%") == 0) {
-		res->type = VALUE_TYPE_INT;
-		res->int_value = left->int_value % right->int_value;
-	} else if (strcmp(expr->data.binary_op->operator, "/") == 0) {
-		if (right->int_value == 0) {
-			print_error("Error: cannot divide by zero!\n");
-			invalid = true;
-		} else {
-			res->type = VALUE_TYPE_INT;
-			res->int_value = left->int_value / right->int_value;
-		}
 	} else {
-		print_error("Error: unknown operator: %s\n", expr->data.binary_op->operator);
-		invalid = true;
+		// convert bool values to int
+		if (left->type == VALUE_TYPE_BOOL) {
+			left->type = VALUE_TYPE_INT;
+			left->int_value = left->bool_value ? 1 : 0;
+		}
+		if (right->type == VALUE_TYPE_BOOL) {
+			right->type = VALUE_TYPE_INT;
+			right->int_value = right->bool_value ? 1 : 0;
+		}
+
+		if (strcmp(expr->data.binary_op->operator, "+") == 0) {
+			if (left->type == VALUE_TYPE_FLOAT || right->type == VALUE_TYPE_FLOAT) {
+				res->type = VALUE_TYPE_FLOAT;
+				res->float_value = (left->type == VALUE_TYPE_INT ? left->int_value : left->float_value)
+									+
+									(right->type == VALUE_TYPE_INT ? right->int_value : right->float_value);
+			} else {
+				res->type = VALUE_TYPE_INT;
+				res->int_value = left->int_value + right->int_value;
+			}
+		} else if (strcmp(expr->data.binary_op->operator, "-") == 0) {
+			if (left->type == VALUE_TYPE_FLOAT || right->type == VALUE_TYPE_FLOAT) {
+				res->type = VALUE_TYPE_FLOAT;
+				res->float_value = (left->type == VALUE_TYPE_INT ? left->int_value : left->float_value)
+									-
+									(right->type == VALUE_TYPE_INT ? right->int_value : right->float_value);
+			} else {
+				res->type = VALUE_TYPE_INT;
+				res->int_value = left->int_value - right->int_value;
+			}
+		} else if (strcmp(expr->data.binary_op->operator, "*") == 0) {
+			if (left->type == VALUE_TYPE_FLOAT || right->type == VALUE_TYPE_FLOAT) {
+				res->type = VALUE_TYPE_FLOAT;
+				res->float_value = (left->type == VALUE_TYPE_INT ? left->int_value : left->float_value)
+									*
+									(right->type == VALUE_TYPE_INT ? right->int_value : right->float_value);
+			} else {
+				res->type = VALUE_TYPE_INT;
+				res->int_value = left->int_value * right->int_value;
+			}
+		} else if (strcmp(expr->data.binary_op->operator, "%") == 0) {
+			if (left->type == VALUE_TYPE_FLOAT || right->type == VALUE_TYPE_FLOAT) {
+				print_error("Error: cannot calculate %% operator for float values!\n");
+			} else {
+				res->type = VALUE_TYPE_INT;
+				res->int_value = left->int_value % right->int_value;
+			}
+		} else if (strcmp(expr->data.binary_op->operator, "/") == 0) {
+			if ((right->type == VALUE_TYPE_INT && right->int_value == 0) ||
+				(right->type == VALUE_TYPE_FLOAT && right->float_value == 0) ||
+				(right->type == VALUE_TYPE_BOOL && right->bool_value == false)
+			) {
+				print_error("Error: cannot divide by zero!\n");
+				invalid = true;
+			} else {
+				if (left->type == VALUE_TYPE_FLOAT || right->type == VALUE_TYPE_FLOAT) {
+					res->type = VALUE_TYPE_FLOAT;
+					res->float_value = (left->type == VALUE_TYPE_INT ? left->int_value : left->float_value)
+										/
+										(right->type == VALUE_TYPE_INT ? right->int_value : right->float_value);
+				} else {
+					res->type = VALUE_TYPE_INT;
+					res->int_value = left->int_value / right->int_value;
+				}
+			}
+		} else {
+			print_error("Error: unknown operator: %s\n", expr->data.binary_op->operator);
+			invalid = true;
+		}
 	}
 
 	if (invalid) {

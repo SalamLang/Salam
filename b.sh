@@ -49,3 +49,5 @@ if [ $? -eq 0 ]; then
 else
 	echo "Compilation failed!"
 fi
+
+# ./s --code "تابع سلام {\n    نمایش \"سلام، دنیا\"}"

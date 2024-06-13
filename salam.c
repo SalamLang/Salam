@@ -1093,15 +1093,32 @@ void read_string(lexer_t* lexer, wchar_t ch)
 			string = temp;
 		}
 
-		int char_size = wctomb(&string[i], ch);
-		if (char_size < 0) {
-			print_error("Error: read_string - Failed to convert wide character to multibyte\n");
-			free(string);
-			exit(EXIT_FAILURE);
-		}
-		i += char_size;
+        if (ch == L'\\') {
+            ch = read_token(lexer);
+            if (ch == L'n') {
+                string[i++] = '\n';
+            } else if (ch == L't') {
+                string[i++] = '\t';
+            } else if (ch == L'"') {
+                string[i++] = '"';
+            } else if (ch == L'\\') {
+                string[i++] = '\\';
+            } else {
+                print_error("Error: read_string - Unknown escape sequence\n");
+                free(string);
+                exit(EXIT_FAILURE);
+            }
+        } else {
+            int char_size = wctomb(&string[i], ch);
+            if (char_size < 0) {
+                print_error("Error: read_string - Failed to convert wide character to multibyte\n");
+                free(string);
+                exit(EXIT_FAILURE);
+            }
+            i += char_size;
+        }
 
-		ch = read_token(lexer);
+        ch = read_token(lexer);
 	}
 
 	string[i] = '\0';
@@ -3639,14 +3656,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		exit(EXIT_FAILURE);
 	}
 
-	// for (size_t i = 0; i < func->data.function_call->arguments->count; i++) {
-	// 	interpreter_expression(func->data.function_call->arguments[i])
-	// 	// node->data.statement_return->expression_value = (ast_literal_t*) interpreter_expression(node->data.statement_return->expression, interpreter);
-	// }
-
-	// printf("func - before interpreter_function_run\n");
 	ast_literal_t* ret = interpreter_function_run(func_exists, node->data.function_call->arguments, interpreter);
-	// printf("func - after interpreter_function_run\n");
 
 	if (ret == NULL) {
 		ast_literal_t* default_ret;

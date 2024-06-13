@@ -45,6 +45,8 @@ const char* messages[LANGUAGE_COUNT][MESSAGE_COUNT] = {
         [MESSAGE_INTERPRETER_CANNOT_ASSIGN_VARIABLE_WITH_A_NON_IDENTIFIER_AS_NAME] = "Error: Assignment to non-variable\n",
         [MESSAGE_INTERPRETER_EXPRESSION_DONT_SUPPORT_THIS_TYPE_IN_EXPRESSION] = "Error: default expr type: %d\n",
         [MESSAGE_PARSER_UNEXPECTED_TOKEN] = "Error: Unexpected token as statement %s\n",
+        [MESSAGE_PARSER_BLOCK_MEMORY_ISSUE] = "Error: in parsing block: Memory reallocation failed.\n",
+        [MESSAGE_PARSER_BAD_TOKEN_AS_STATEMENT] = "Error: bad token as statement %s\n",
     },
 
     [LANGUAGE_ARABIC] = {

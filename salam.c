@@ -327,7 +327,7 @@ enum {
 	PRECEDENCE_SUM = 5,       // + -
 };
 
-// Function dec
+// Function declarations
 char* read_dynamic_string();
 char* intToString(int value);
 char* literal_type2name(ast_literal_type_t type);

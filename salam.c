@@ -3991,13 +3991,13 @@ int main(int argc, char** argv)
 		}
 
 		// Free memory
-		lexer_free(&lexer);
-		if (isRun) {
-			parser_free(interpreter->parser);
-			interpreter_free(&interpreter);
-		} else {
-			parser_free(&(parser));
-		}
+		// lexer_free(&lexer);
+		// if (isRun) {
+		// 	parser_free(interpreter->parser);
+		// 	interpreter_free(&interpreter);
+		// } else {
+		// 	parser_free(&(parser));
+		// }
 	} else {
 		lexer_t* lexer = lexer_create(file_data);
 		lexer_lex(lexer);

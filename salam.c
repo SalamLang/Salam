@@ -421,7 +421,6 @@ size_t wchar_length(wchar_t wide_char);
 void lexer_lex(lexer_t* lexer);
 void help();
 parser_t* parser_create(lexer_t** lexer);
-void debug_current_token(parser_t* parser);
 void ast_expression_free(ast_expression_t** expr);
 void ast_expression_free_data(ast_literal_t** val);
 void ast_expression_free_literal(ast_expression_t** expr);
@@ -1236,7 +1235,7 @@ void read_identifier(lexer_t* lexer, wchar_t ch)
 			type = keyword_mapping[language][mapping_index].token_type;
 			break;
 		}
-		
+
 		mapping_index++;
 	}
 
@@ -1286,7 +1285,7 @@ void lexer_lex(lexer_t* lexer)
 			token_t* t = token_create(TOKEN_TYPE_BRACKETS_CLOSE, "]", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		} else if (current_wchar == '%' || current_wchar == L'٪') {
-			token_t* t = token_create(TOKEN_TYPE_MODULE, "%%", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+			token_t* t = token_create(TOKEN_TYPE_MODULE, "%", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		} else if (current_wchar == '{') {
 			token_t* t = token_create(TOKEN_TYPE_SECTION_OPEN, "{", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
@@ -1396,18 +1395,13 @@ parser_t* parser_create(lexer_t** lexer)
 {
 	parser_t* parser;
 	CREATE_MEMORY_OBJECT(parser, parser_t, 1, "Error: parser_create<parser> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	
 	parser->lexer = lexer;
 	parser->token_index = 0;
 	parser->functions = array_create(5);
 	parser->expressions = array_create(5);
 
 	return parser;
-}
-
-void debug_current_token(parser_t* parser)
-{
-	token_t* t = (token_t*) (*parser->lexer)->tokens->data[parser->token_index];
-	print_message("=========> Current token: %s - %s\n", token_type2str(t->type) ,t->value);
 }
 
 void ast_expression_free_data(ast_literal_t** val)

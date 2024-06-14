@@ -92,6 +92,7 @@ typedef enum {
 } message_key_t;
 
 typedef enum {
+	LANGUAGE_ENGLISH,
     LANGUAGE_PERSIAN,
     LANGUAGE_ARABIC,
     LANGUAGE_COUNT,

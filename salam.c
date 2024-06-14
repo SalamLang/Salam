@@ -21,7 +21,7 @@ bool debug_enabled = true;
 #define CREATE_MEMORY_OBJECT(result, type, length, fmt, ...) \
 	result = (type *)malloc(sizeof(type) * (length));  \
 	if (!result) { \
-	    fprintf(stderr, fmt,  __VA_ARGS__);\
+		fprintf(stderr, fmt,  __VA_ARGS__);\
 		exit(EXIT_FAILURE); \
 	}
 
@@ -88,14 +88,14 @@ typedef enum {
 	MESSAGE_MEMORY_ALLOCATE_ERROR,
 	MESSAGE_INTERPRETER_MAIN_RETURN_CODE,
 	MESSAGE_INTERPRETER_UNKNOWN_NODE_AS_INTERPRETER_ONCE,
-    MESSAGE_COUNT,
+	MESSAGE_COUNT,
 } message_key_t;
 
 typedef enum {
 	LANGUAGE_ENGLISH,
-    LANGUAGE_PERSIAN,
-    LANGUAGE_ARABIC,
-    LANGUAGE_COUNT,
+	LANGUAGE_PERSIAN,
+	LANGUAGE_ARABIC,
+	LANGUAGE_COUNT,
 } language_t;
 
 typedef enum {
@@ -527,10 +527,10 @@ token_info_t token_infos[] = {
 
 // Helper functions
 const char* get_message(language_t language, message_key_t key) {
-    if (language >= LANGUAGE_COUNT || key >= MESSAGE_COUNT) {
-        return NULL;
-    }
-    return messages[language][key];
+	if (language >= LANGUAGE_COUNT || key >= MESSAGE_COUNT) {
+		return NULL;
+	}
+	return messages[language][key];
 }
 
 char* read_dynamic_string() {
@@ -1167,34 +1167,34 @@ void read_string(lexer_t* lexer, wchar_t ch)
 			string = temp;
 		}
 
-        if (ch == L'\\') {
-            ch = read_token(lexer);
-            if (ch == L'n') {
-                string[i++] = '\n';
-            } else if (ch == L't') {
-                string[i++] = '\t';
-            } else if (ch == L'"') {
-                string[i++] = '"';
-            } else if (ch == L'\'') {
-                string[i++] = '\'';
-            } else if (ch == L'\\') {
-                string[i++] = '\\';
-            } else {
-                print_error(messages[language][MESSAGE_LEXER_STRING_UNKNOWN_ESCAPE]);
-                free(string);
-                exit(EXIT_FAILURE);
-            }
-        } else {
-            int char_size = wctomb(&string[i], ch);
-            if (char_size < 0) {
-                print_error(messages[language][MESSAGE_LEXER_STRING_CONVERT_MULTIBYTE]);
-                free(string);
-                exit(EXIT_FAILURE);
-            }
-            i += char_size;
-        }
+		if (ch == L'\\') {
+			ch = read_token(lexer);
+			if (ch == L'n') {
+				string[i++] = '\n';
+			} else if (ch == L't') {
+				string[i++] = '\t';
+			} else if (ch == L'"') {
+				string[i++] = '"';
+			} else if (ch == L'\'') {
+				string[i++] = '\'';
+			} else if (ch == L'\\') {
+				string[i++] = '\\';
+			} else {
+				print_error(messages[language][MESSAGE_LEXER_STRING_UNKNOWN_ESCAPE]);
+				free(string);
+				exit(EXIT_FAILURE);
+			}
+		} else {
+			int char_size = wctomb(&string[i], ch);
+			if (char_size < 0) {
+				print_error(messages[language][MESSAGE_LEXER_STRING_CONVERT_MULTIBYTE]);
+				free(string);
+				exit(EXIT_FAILURE);
+			}
+			i += char_size;
+		}
 
-        ch = read_token(lexer);
+		ch = read_token(lexer);
 	}
 
 	string[i] = '\0';
@@ -3834,7 +3834,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 		CREATE_MEMORY_OBJECT(variable, ast_literal_t, 1, "Error: interpreter_expression_function_call<variable> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	}
 
-    variable->main = NULL;
+	variable->main = NULL;
 	variable->type = right->type;
 	if (right->type == VALUE_TYPE_STRING) {
 		variable->string_value = strdup(right->string_value);

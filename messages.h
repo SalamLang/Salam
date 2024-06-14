@@ -111,10 +111,10 @@ const char* messages[LANGUAGE_COUNT][MESSAGE_COUNT] = {
         [MESSAGE_INTERPRETER_EXPRESSION_CANNOT_MODULE_OP_FOR_FLOAT] = "خطا: نمی‌توان عملیات باقی‌مانده بر روی مقادیر اعشاری انجام داد!\n",
         [MESSAGE_INTERPRETER_EXPRESSION_CANNOT_DIVIDE_BY_ZERO] = "خطا: تقسیم بر صفر!\n",
         [MESSAGE_INTERPRETER_EXPRESSION_CANNOT_DO_THIS_OPERATOR] = "خطا: عملگر ناشناخته: %s\n",
-        [MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_IS_MORE] = "خطا: تعداد زیادی آرگومان برای تابع!\n",
-        [MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_IS_LESS] = "خطا: تعداد کافی آرگومان برای تابع نیست!\n",
-		[MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ZERO] = "خطا: تابع %s() باید بدون آرگومان باشد!\n",
-		[MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE] = "خطا: تابع %s() باید دارای یک آرگومان باشد!\n",
+        [MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_IS_MORE] = "خطا: تعداد زیادی ورودی برای تابع!\n",
+        [MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_IS_LESS] = "خطا: تعداد کافی ورودی برای تابع نیست!\n",
+		[MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ZERO] = "خطا: تابع %s() باید بدون ورودی باشد!\n",
+		[MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE] = "خطا: تابع %s() باید دارای یک ورودی باشد!\n",
         [MESSAGE_INTERPRETER_FUNCTION_NOT_EXISTS] = "خطا: تابع وجود ندارد!\n",
         [MESSAGE_INTERPRETER_CANNOT_ASSIGN_VARIABLE_WITH_A_NON_IDENTIFIER_AS_NAME] = "خطا: اختصاص به یک غیرمتغیر\n",
         [MESSAGE_INTERPRETER_EXPRESSION_DONT_SUPPORT_THIS_TYPE_IN_EXPRESSION] = "خطا: نوع تعبیر پشتیبانی نمی‌شود: %d\n",
@@ -141,7 +141,7 @@ const char* messages[LANGUAGE_COUNT][MESSAGE_COUNT] = {
         [MESSAGE_TOKEN_FUNCTION_LENGTH] = "طول",
         [MESSAGE_TOKEN_FUNCTION_STRING] = "رشته",
 
-        [MESSAGE_INTERPRETER_FUNCTION_CALL_FIRST_ARGUMENT_SHOULD_BE_ONLY_A_STRING] = "خطا: اولین آرگومان تابع %S() باید یک رشته باشد!\n",
+        [MESSAGE_INTERPRETER_FUNCTION_CALL_FIRST_ARGUMENT_SHOULD_BE_ONLY_A_STRING] = "خطا: اولین ورودی تابع %S() باید یک رشته باشد!\n",
         [MESSAGE_LEXER_FILE_NOT_EXISTS] = "خطا: فایل %s یافت نشد\n",
         [MESSAGE_MEMORY_ALLOCATE_ERROR] = "خطا در تخصیص حافظه\n",
 

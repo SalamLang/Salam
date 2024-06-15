@@ -1,6 +1,6 @@
-// 
+//
 // THE SALAM PROGRAMMING LANGUAGE
-// 
+//
 
 #define _SALAM_LANGUAGE_
 
@@ -4035,7 +4035,7 @@ int main(int argc, char** argv)
 		// print_message("second sign-done\n");
 
 		// return 0;
-		
+
 		/*
 		print_message("free lexer\n");
 		lexer_free(&lexer);

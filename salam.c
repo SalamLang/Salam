@@ -1,6 +1,6 @@
-// 
+//
 // THE SALAM PROGRAMMING LANGUAGE
-// 
+//
 
 #define _SALAM_LANGUAGE_
 

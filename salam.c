@@ -86,13 +86,13 @@ typedef enum {
 	MESSAGE_INTERPRETER_FUNCTION_CALL_FIRST_ARGUMENT_SHOULD_BE_ONLY_A_STRING,
 	MESSAGE_LEXER_FILE_NOT_EXISTS,
 	MESSAGE_MEMORY_ALLOCATE_ERROR,
+	MESSAGE_MEMORY_REALLOCATE_ERROR,
 	MESSAGE_INTERPRETER_MAIN_RETURN_CODE,
 	MESSAGE_INTERPRETER_UNKNOWN_NODE_AS_INTERPRETER_ONCE,
 	MESSAGE_COUNT,
 } message_key_t;
 
 typedef enum {
-	LANGUAGE_ENGLISH,
 	LANGUAGE_PERSIAN,
 	LANGUAGE_ARABIC,
 	LANGUAGE_COUNT,
@@ -277,6 +277,7 @@ typedef struct {
 } ast_expression_assignment_t;
 
 typedef enum {
+	AST_EXPRESSION_ERROR,
 	AST_EXPRESSION_VALUE,
 	AST_EXPRESSION_LITERAL,
 	AST_EXPRESSION_IDENTIFIER,
@@ -553,7 +554,7 @@ char* read_dynamic_string() {
 			char* new_input = realloc(input, current_size);
 			if (!new_input) {
 				free(input);
-				perror("Memory reallocation error");
+				perror(messages[language][MESSAGE_MEMORY_REALLOCATE_ERROR]);
 				exit(EXIT_FAILURE);
 			}
 			input = new_input;
@@ -1416,7 +1417,7 @@ void ast_expression_free_data(ast_literal_t** val)
 		return;
 	}
 
-	print_message("start checking type on ast_expression_free_data\n");
+	print_message("start checking type on ast_expression_free_data %d\n", (*val)->type);
 
 	print_message("free expression data\n");
 	if ((*val)->type == VALUE_TYPE_ARRAY_EXPRESSION) {
@@ -1453,7 +1454,7 @@ void ast_expression_free_data(ast_literal_t** val)
 	if ((*val)->main != NULL) {
 		print_message("ast_expression_free_data main\n");
 		// ast_expression_free((ast_expression_t**) &((*val)->main));
-		ast_expression_free((*val)->main);
+		// ast_expression_free((*val)->main);
 	}
 
 	print_message("let's free it's at all\n");
@@ -1582,6 +1583,11 @@ void ast_expression_free_binary(ast_expression_t** expr)
 	}
 }
 
+void ast_expression_free_value(struct ast_expression_t** expr)
+{
+
+}
+
 void ast_expression_free(struct ast_expression_t** expr)
 {
 	print_message("ast_expression_free\n");
@@ -1592,6 +1598,8 @@ void ast_expression_free(struct ast_expression_t** expr)
 	}
 
 	print_message("---- expr type: %d\n", (*expr)->type);
+	// AST_EXPRESSION_VALUE
+	if ((*expr)->type == AST_EXPRESSION_ERROR) return;
 
 	switch ((*expr)->type) {
 		case AST_EXPRESSION_LITERAL:
@@ -1616,10 +1624,13 @@ void ast_expression_free(struct ast_expression_t** expr)
 
 		case AST_EXPRESSION_VALUE:
 			// Ignore
+			ast_expression_free_value(expr);
 			break;
 	}
 
-	free(*expr);
+	if (*expr != NULL && expr) {
+		free(*expr);
+	}
 	*expr = NULL;
 }
 
@@ -3656,7 +3667,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_expression_function_call<val 1> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_STRING;
 		val->string_value = strdup(interpreter_expression_data_type(arg_val));
-		val->main = NULL;
+		// val->main = NULL;
 		return val;
 	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_EVEN]) == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
@@ -3673,7 +3684,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_expression_function_call<val 2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_BOOL;
 		val->bool_value = boolResult;
-		val->main = NULL;
+		// val->main = NULL;
 		return val;
 	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_ODD]) == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
@@ -3690,7 +3701,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_expression_function_call<val 2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_BOOL;
 		val->bool_value = boolResult;
-		val->main = NULL;
+		// val->main = NULL;
 		return val;
 	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_READ]) == 0) {
 		if (node->data.function_call->arguments != NULL && node->data.function_call->arguments->length != 0) {
@@ -3704,7 +3715,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_expression_function_call<val 3> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_STRING;
 		val->string_value = input;
-		val->main = NULL;
+		// val->main = NULL;
 		return val;
 	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_LENGTH]) == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
@@ -3722,7 +3733,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_expression_function_call<val 4> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_INT;
 		val->int_value = strlen(arg_val->string_value);
-		val->main = NULL;
+		// val->main = NULL;
 		return val;
 	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_STRING]) == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
@@ -3738,7 +3749,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		ast_literal_t* val;
 		CREATE_MEMORY_OBJECT(val, ast_literal_t, 1, "Error: interpreter_expression_function_call<val 5> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		val->type = VALUE_TYPE_STRING;
-		val->main = NULL;
+		// val->main = NULL;
 
 		if (arg_val->type == VALUE_TYPE_INT) {
 			val->string_value = intToString(arg_val->int_value);
@@ -3815,7 +3826,9 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	}
 
 	bool isNew = false;
-	char* identifier = strdup(expr->data.assignment->left->data.identifier->name);
+
+	// char* identifier = strdup(expr->data.assignment->left->data.identifier->name);
+	char* identifier = expr->data.assignment->left->data.identifier->name;
 
 	// print_message("============> assign %s variable\n", identifier);
 
@@ -3829,7 +3842,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	}
 
 	if (variable == NULL) {
-		// print_message("this is a new variable on this scope!\n");
+		print_message("this is a new variable on this scope %s!\n", identifier);
 		isNew = true;
 		CREATE_MEMORY_OBJECT(variable, ast_literal_t, 1, "Error: interpreter_expression_function_call<variable> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	}
@@ -4036,15 +4049,13 @@ int main(int argc, char** argv)
 
 		// return 0;
 		
-		/*
-		print_message("free lexer\n");
-		lexer_free(&lexer);
-		print_message("end lexer free\n");
+		// print_message("free lexer\n");
+		// lexer_free(&lexer);
+		// print_message("end lexer free\n");
 
-		print_message("free parser\n");
-		parser_free(interpreter->parser);
-		// parser_free(parser);
-		print_message("end parser free\n");
+		// print_message("free parser\n");
+		// parser_free(interpreter->parser);
+		// print_message("end parser free\n");
 
 		// print_message("out-after parser is null %d\n", parser == NULL ? 1 : 0);
 		// print_message("out-after interp-parser is null %d\n", (*interpreter->parser) == NULL ? 1 : 0);
@@ -4053,11 +4064,19 @@ int main(int argc, char** argv)
 		interpreter_free(&interpreter);
 		print_message("end interpreter free\n");
 
+		print_message("free parser\n");
+		parser_free(&parser);
+		print_message("end parser free\n");
+
+		print_message("free lexer\n");
+		lexer_free(&lexer);
+		print_message("end lexer free\n");
+
 		// if (file_data != NULL) {
 		// 	free(file_data);
 		// 	file_data = NULL;
 		// }
-		*/
+		// */
 	}
 
 	return 0;

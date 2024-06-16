@@ -27,20 +27,20 @@ if ! [ $? -eq 0 ]; then
 fi
 
 # Compile
-gcc -g -ggdb -g -o "$OUTPUT_FILE" "$INPUT_FILE"
+# gcc -g -ggdb -g -o "$OUTPUT_FILE" "$INPUT_FILE"
 # gcc -g -fsanitize=undefined,address -Walloca -o "$OUTPUT_FILE" "$INPUT_FILE" -lefence
-# gcc -g -fsanitize=undefined,address -Walloca -o "$OUTPUT_FILE" "$INPUT_FILE"
+gcc -g -fsanitize=undefined,address -Walloca -o "$OUTPUT_FILE" "$INPUT_FILE"
 
-if [ $? -eq 0 ]; then
-	if ! [ -x "$(command -v emcc)" ]; then
-		echo 'Error: emcc is not installed.' >&2
-		echo 'Install from https://emscripten.org/docs/getting_started/downloads.html'
-		exit 1
-	fi
+# if [ $? -eq 0 ]; then
+# 	if ! [ -x "$(command -v emcc)" ]; then
+# 		echo 'Error: emcc is not installed.' >&2
+# 		echo 'Install from https://emscripten.org/docs/getting_started/downloads.html'
+# 		exit 1
+# 	fi
 
-	# Compiling for web
-	emcc salam.c -o salam.js -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s NO_EXIT_RUNTIME=1
-fi
+# 	# Compiling for web
+# 	emcc salam.c -o salam.js -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s NO_EXIT_RUNTIME=1
+# fi
 
 # Check if compilation was successful
 if [ $? -eq 0 ]; then
@@ -54,6 +54,6 @@ fi
 
 # ./s --code "تابع سلام {\n    نمایش \"سلام، دنیا\"}"
 
-./s --code "تابع سلام() {
-    نمایش \"سلام، دنیا\"
-}"
+# ./s --code "تابع سلام() {
+#     نمایش \"سلام، دنیا\"
+# }"

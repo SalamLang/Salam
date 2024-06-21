@@ -1,7 +1,7 @@
 <div align="center">
 
 <p>
-    <a href="https://onelang.org/">
+    <a href="https://salamlang.ir/">
         <img width="150" src="https://raw.githubusercontent.com/SalamLang/Salam/main/logo-box.svg" alt="The Salam Programming Language - زبان برنامه نویسی سلام">
     </a>
 </p>

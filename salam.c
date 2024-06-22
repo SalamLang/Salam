@@ -3378,6 +3378,7 @@ ast_literal_t* interpreter_expression_identifier(ast_expression_t* expr, interpr
 		print_error(messages[language][MESSAGE_INTERPRETER_VARIABLE_NOT_FOUND], expr->data.identifier->name);
 		exit(EXIT_FAILURE);
 	}
+	
 	return val;
 }
 
@@ -3408,6 +3409,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 		CREATE_MEMORY_OBJECT(res->string_value, char, leftlen + rightlen + 1, "Error: interpreter_expression_binary<string_value 1> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		strcpy(res->string_value, left_str);
 		strcat(res->string_value, right->string_value);
+
 		free(left_str);
 	} else if (left->type == VALUE_TYPE_STRING && right->type == VALUE_TYPE_INT && strcmp(expr->data.binary_op->operator, "+") == 0) {
 		char* right_str = intToString(right->int_value);
@@ -3417,6 +3419,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 		CREATE_MEMORY_OBJECT(res->string_value, char, leftlen + rightlen + 1, "Error: interpreter_expression_binary<string_value 2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		strcpy(res->string_value, left->string_value);
 		strcat(res->string_value, right_str);
+
 		free(right_str);
 	} else if (left->type == VALUE_TYPE_STRING && right->type == VALUE_TYPE_STRING && strcmp(expr->data.binary_op->operator, "+") == 0) {
 		res->type = VALUE_TYPE_STRING;
@@ -3428,6 +3431,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 		} else if (leftlen != 0 && rightlen != 0) {
 			size_t new_size = sizeof(char*) * (leftlen + rightlen + 1);
 			CREATE_MEMORY_OBJECT(res->string_value, char, new_size, "Error: interpreter_expression_binary<string_value 3> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 			strcpy(res->string_value, left->string_value);
 			strcat(res->string_value, right->string_value);
 		} else if (leftlen == 0) {
@@ -3441,12 +3445,14 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 			char* left_str = intToString(left->int_value);
 			res->type = VALUE_TYPE_BOOL;
 			res->bool_value = strcmp(left_str, right->string_value) == 0 ? true : false;
+
 			free(left_str);
 		} else if (left->type == VALUE_TYPE_STRING && right->type == VALUE_TYPE_INT) {
 			res->type = VALUE_TYPE_STRING;
 			char* right_var = intToString(right->int_value);
 			res->type = VALUE_TYPE_BOOL;
 			res->bool_value = strcmp(left->string_value, right_var) == 0 ? true : false;
+
 			free(right_var);
 		} else if (left->type == VALUE_TYPE_NULL && right->type == VALUE_TYPE_NULL) {
 			res->type = VALUE_TYPE_BOOL;
@@ -3478,6 +3484,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 		}
 	} else if (strcmp(expr->data.binary_op->operator, messages[language][MESSAGE_TOKEN_AND]) == 0) {
 		res->type = VALUE_TYPE_BOOL;
+
 		if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_INT) {
 			res->bool_value = left->int_value > 0 && right->int_value > 0;
 		} else if (left->type == VALUE_TYPE_FLOAT && right->type == VALUE_TYPE_FLOAT) {
@@ -3499,6 +3506,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 	} else if (strcmp(expr->data.binary_op->operator, messages[language][MESSAGE_TOKEN_OR]) == 0) {
 		res->type = VALUE_TYPE_BOOL;
 		res->type = VALUE_TYPE_BOOL;
+
 		if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_INT) {
 			res->bool_value = left->int_value || right->int_value;
 		} else if (left->type == VALUE_TYPE_FLOAT && right->type == VALUE_TYPE_FLOAT) {
@@ -3521,11 +3529,13 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 		print_error(messages[language][MESSAGE_INTERPRETER_EXPRESSION_CANNOT_BINARY_OP_FOR_NON_INT]);
 		invalid = true;
 	} else {
-		// convert bool values to int
+		// convert bool value to int
 		if (left->type == VALUE_TYPE_BOOL) {
 			left->type = VALUE_TYPE_INT;
 			left->int_value = left->bool_value ? 1 : 0;
 		}
+
+		// convert bool value to int
 		if (right->type == VALUE_TYPE_BOOL) {
 			right->type = VALUE_TYPE_INT;
 			right->int_value = right->bool_value ? 1 : 0;
@@ -3622,6 +3632,7 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 		} else {
 			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_IS_LESS]);
 		}
+
 		exit(EXIT_FAILURE);
 	}
 
@@ -3644,6 +3655,7 @@ ast_literal_t* interpreter_function_run(ast_node_t* function, array_t* arguments
 	if (returned != NULL && returned->type == AST_STATEMENT_RETURN) {
 		return returned->data.statement_return->expression_value;
 	}
+
 	return NULL;
 }
 
@@ -3668,6 +3680,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		val->type = VALUE_TYPE_STRING;
 		val->string_value = strdup(interpreter_expression_data_type(arg_val));
 		// val->main = NULL;
+
 		return val;
 	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_EVEN]) == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
@@ -3685,6 +3698,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		val->type = VALUE_TYPE_BOOL;
 		val->bool_value = boolResult;
 		// val->main = NULL;
+
 		return val;
 	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_ODD]) == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
@@ -3702,6 +3716,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		val->type = VALUE_TYPE_BOOL;
 		val->bool_value = boolResult;
 		// val->main = NULL;
+
 		return val;
 	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_READ]) == 0) {
 		if (node->data.function_call->arguments != NULL && node->data.function_call->arguments->length != 0) {
@@ -3716,6 +3731,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		val->type = VALUE_TYPE_STRING;
 		val->string_value = input;
 		// val->main = NULL;
+
 		return val;
 	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_LENGTH]) == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {

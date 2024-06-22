@@ -3842,7 +3842,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 	}
 
 	if (variable == NULL) {
-		print_message("this is a new variable on this scope %s!\n", identifier);
+		// print_message("this is a new variable on this scope %s!\n", identifier);
 		isNew = true;
 		CREATE_MEMORY_OBJECT(variable, ast_literal_t, 1, "Error: interpreter_expression_function_call<variable> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	}

@@ -3750,6 +3750,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		val->type = VALUE_TYPE_INT;
 		val->int_value = strlen(arg_val->string_value);
 		// val->main = NULL;
+
 		return val;
 	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_STRING]) == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
@@ -3787,6 +3788,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 			if (func != NULL && func->data.function_declaration != NULL && func->data.function_declaration->name != NULL && strcmp(func->data.function_declaration->name, node->data.function_call->name) == 0) {
 				func_exists = func;
 				exists = true;
+
 				break;
 			}
 		}
@@ -3804,6 +3806,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 		CREATE_MEMORY_OBJECT(default_ret, ast_literal_t, 1, "Error: interpreter_expression_function_call<default_ret> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		default_ret->type = VALUE_TYPE_NULL;
 		default_ret->main = NULL;
+		
 		return default_ret;
 	}
 

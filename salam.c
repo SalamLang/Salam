@@ -555,7 +555,7 @@ char* read_dynamic_string() {
 			if (!new_input) {
 				free(input);
 				perror(messages[language][MESSAGE_MEMORY_REALLOCATE_ERROR]);
-				
+
 				exit(EXIT_FAILURE);
 			}
 			input = new_input;
@@ -875,7 +875,7 @@ array_t* array_create(size_t size)
 	arr->data = (void*) malloc(sizeof(void*) * arr->size);
 	if (!arr->data) {
 		perror(messages[language][MESSAGE_MEMORY_ALLOCATE_ERROR]);
-		
+
 		exit(EXIT_FAILURE);
 	}
 
@@ -1040,7 +1040,7 @@ wchar_t read_token(lexer_t* lexer)
 	int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
 	if (char_size < 0) {
 		print_error(messages[language][MESSAGE_LEXER_TOKEN_READ_UNICODE]);
-		
+
 		exit(EXIT_FAILURE);
 		return 0;
 	}
@@ -1067,7 +1067,7 @@ wchar_t unread_token(lexer_t* lexer)
 	int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
 	if (char_size < 0) {
 		print_error(messages[language][MESSAGE_LEXER_TOKEN_UNREAD_UNICODE]);
-		
+
 		exit(EXIT_FAILURE);
 		return 0;
 	}
@@ -1096,7 +1096,7 @@ void read_number(lexer_t* lexer, wchar_t ch)
 
 		if (!is_number(ch)) {
 			print_error(messages[language][MESSAGE_LEXER_NUMBER_FLOAT_NEED_NUMBER_AFTER_DOT]);
-			
+
 			exit(EXIT_FAILURE);
 		}
 		isFloat = true;
@@ -1141,7 +1141,7 @@ void read_comment_multiline(lexer_t* lexer)
 	while (1) {
 		if (lexer->data[lexer->index] == '\0') {
 			print_error(messages[language][MESSAGE_LEXER_COMMENT_MULTI_NOT_CLOSED]);
-			
+
 			exit(EXIT_FAILURE);
 		} else if (lexer->data[lexer->index - 1] == '*' && lexer->data[lexer->index] == '/') {
 			lexer->index++;
@@ -1169,7 +1169,7 @@ void read_string(lexer_t* lexer, wchar_t ch)
 			if (temp == NULL) {
 				print_error(messages[language][MESSAGE_LEXER_STRING_READ_MEMORY]);
 				free(string);
-				
+
 				exit(EXIT_FAILURE);
 			}
 			string = temp;
@@ -1190,7 +1190,7 @@ void read_string(lexer_t* lexer, wchar_t ch)
 			} else {
 				print_error(messages[language][MESSAGE_LEXER_STRING_UNKNOWN_ESCAPE]);
 				free(string);
-				
+
 				exit(EXIT_FAILURE);
 			}
 		} else {
@@ -1198,7 +1198,7 @@ void read_string(lexer_t* lexer, wchar_t ch)
 			if (char_size < 0) {
 				print_error(messages[language][MESSAGE_LEXER_STRING_CONVERT_MULTIBYTE]);
 				free(string);
-				
+
 				exit(EXIT_FAILURE);
 			}
 			i += char_size;
@@ -1220,7 +1220,7 @@ size_t mb_strlen(char* identifier)
 	size_t wcs_len = mbstowcs(NULL, identifier, 0);
 	if (wcs_len == (size_t)-1) {
 		perror(messages[language][MESSAGE_LEXER_STRING_GET_LENGTH_UNICODE]);
-		
+
 		exit(EXIT_FAILURE);
 	}
 
@@ -1235,7 +1235,7 @@ void read_identifier(lexer_t* lexer, wchar_t ch)
 		int char_size = wctomb(&identifier[i], ch);
 		if (char_size < 0) {
 			print_error(messages[language][MESSAGE_LEXER_IDENTIFIER_CONVERT_MULTIBYTE]);
-			
+
 			exit(EXIT_FAILURE);
 		}
 		i += char_size;
@@ -1888,7 +1888,7 @@ void parser_token_next(parser_t* parser)
 		parser->token_index++;
 	} else {
 		print_message("Error: Unexpected end of file\n");
-		
+
 		exit(EXIT_FAILURE);
 	}
 }
@@ -1942,12 +1942,12 @@ void parser_token_eat_nodata(parser_t* parser, token_type_t type)
 			parser->token_index++;
 		} else {
 			print_message("Error: Expected %s\n", token_type2str(type));
-			
+
 			exit(EXIT_FAILURE);
 		}
 	} else {
 		print_message("Error: Unexpected end of file\n");
-		
+
 		exit(EXIT_FAILURE);
 	}
 }
@@ -1961,12 +1961,12 @@ token_t* parser_token_eat(parser_t* parser, token_type_t type)
 			return (token_t*) (*parser->lexer)->tokens->data[parser->token_index++];
 		} else {
 			print_message("Error: Expected %s\n", token_type2str(type));
-			
+
 			exit(EXIT_FAILURE);
 		}
 	} else {
 		print_message("Error: Unexpected end of file\n");
-		
+
 		exit(EXIT_FAILURE);
 	}
 
@@ -2153,7 +2153,7 @@ ast_node_t* parser_statement_if(parser_t* parser)
 
 				if (node->data.statement_if->elseifs == NULL) {
 					print_message("Error: in parsing block: Memory reallocation failed.\n");
-					
+
 					exit(EXIT_FAILURE);
 				}
 			}
@@ -2258,7 +2258,7 @@ ast_node_t* parser_statement(parser_t* parser)
 					return stmt;
 				} else {
 					print_error(messages[language][MESSAGE_PARSER_UNEXPECTED_TOKEN], token_type2str(tok->type));
-					
+
 					exit(EXIT_FAILURE);
 				}
 				break;
@@ -2267,7 +2267,7 @@ ast_node_t* parser_statement(parser_t* parser)
 
 	if (stmt == NULL) {
 		print_error(messages[language][MESSAGE_PARSER_UNEXPECTED_TOKEN], token_type2str(((token_t*) (*parser->lexer)->tokens->data[parser->token_index])->type));
-		
+
 		exit(EXIT_FAILURE);
 	}
 	return stmt;
@@ -2458,7 +2458,7 @@ ast_expression_t* nud_array(parser_t* parser, token_t* token)
 			break;
 		} else {
 			print_error(messages[language][MESSAGE_LEXER_ARRAY_NOT_CLOSED]);
-			
+
 			exit(EXIT_FAILURE);
 		}
 	}
@@ -2565,7 +2565,7 @@ ast_node_t* parser_block(parser_t* parser)
 
 			if (block_node->data.block->statements == NULL) {
 				print_error(messages[language][MESSAGE_PARSER_BLOCK_MEMORY_ISSUE]);
-				
+
 				exit(EXIT_FAILURE);
 			}
 		}
@@ -2620,7 +2620,7 @@ void parser_parse(parser_t* parser)
 					}
 				} else {
 					print_error(messages[language][MESSAGE_PARSER_BAD_TOKEN_AS_STATEMENT], token_type2str(current_token->type));
-					
+
 					exit(EXIT_FAILURE);
 				}
 				break;
@@ -3337,7 +3337,7 @@ ast_node_t* interpreter_block(ast_node_t* node, interpreter_t* interpreter, toke
 
 		if (parent_type != TOKEN_TYPE_UNTIL && parent_type != TOKEN_TYPE_REPEAT && (stmt->type == AST_STATEMENT_BREAK || stmt->type == AST_STATEMENT_CONTINUE)) {
 			print_error(messages[language][MESSAGE_INTERPRETER_CANNOT_HAVE_RET_BREAK_CON_OUT_OF_LOOP]);
-			
+
 			exit(EXIT_FAILURE);
 		}
 
@@ -3399,10 +3399,10 @@ ast_literal_t* interpreter_expression_identifier(ast_expression_t* expr, interpr
 
 	if (val == NULL) {
 		print_error(messages[language][MESSAGE_INTERPRETER_VARIABLE_NOT_FOUND], expr->data.identifier->name);
-		
+
 		exit(EXIT_FAILURE);
 	}
-	
+
 	return val;
 }
 
@@ -3717,7 +3717,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_EVEN]) == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
 			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE], node->data.function_call->name);
-			
+
 			exit(EXIT_FAILURE);
 		}
 		ast_literal_t* arg = node->data.function_call->arguments->data[0];
@@ -3736,7 +3736,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_ODD]) == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
 			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE], node->data.function_call->name);
-			
+
 			exit(EXIT_FAILURE);
 		}
 		ast_literal_t* arg = node->data.function_call->arguments->data[0];
@@ -3755,7 +3755,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_READ]) == 0) {
 		if (node->data.function_call->arguments != NULL && node->data.function_call->arguments->length != 0) {
 			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ZERO], node->data.function_call->name);
-			
+
 			exit(EXIT_FAILURE);
 		}
 
@@ -3771,14 +3771,14 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_LENGTH]) == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
 			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE], node->data.function_call->name);
-			
+
 			exit(EXIT_FAILURE);
 		}
 
 		ast_literal_t* arg_val = (ast_literal_t*) interpreter_expression(node->data.function_call->arguments->data[0], interpreter, false);
 		if (arg_val->type != VALUE_TYPE_STRING) {
 			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_FIRST_ARGUMENT_SHOULD_BE_ONLY_A_STRING], node->data.function_call->name);
-			
+
 			exit(EXIT_FAILURE);
 		}
 
@@ -3792,7 +3792,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 	} else if (strcmp(node->data.function_call->name, messages[language][MESSAGE_TOKEN_FUNCTION_STRING]) == 0) {
 		if (node->data.function_call->arguments == NULL || node->data.function_call->arguments->length != 1) {
 			print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE], node->data.function_call->name);
-			
+
 			exit(EXIT_FAILURE);
 		}
 
@@ -3834,7 +3834,7 @@ ast_literal_t* interpreter_expression_function_call(ast_expression_t* node, inte
 
 	if (exists == false || func_exists == NULL) {
 		print_error(messages[language][MESSAGE_INTERPRETER_FUNCTION_NOT_EXISTS]);
-		
+
 		exit(EXIT_FAILURE);
 	}
 
@@ -3880,7 +3880,7 @@ ast_literal_t* interpreter_expression_assignment(ast_expression_t* expr, interpr
 
 	if (expr->data.assignment->left->type != AST_EXPRESSION_IDENTIFIER) {
 		print_error(messages[language][MESSAGE_INTERPRETER_CANNOT_ASSIGN_VARIABLE_WITH_A_NON_IDENTIFIER_AS_NAME]);
-		
+
 		exit(EXIT_FAILURE);
 	}
 
@@ -3977,7 +3977,7 @@ ast_literal_t* interpreter_expression(ast_expression_t* expr, interpreter_t* int
 
 		default:
 			print_error(messages[language][MESSAGE_INTERPRETER_EXPRESSION_DONT_SUPPORT_THIS_TYPE_IN_EXPRESSION], expr->type);
-			
+
 			exit(EXIT_FAILURE);
 	}
 
@@ -4108,7 +4108,7 @@ int main(int argc, char** argv)
 		// print_message("second sign-done\n");
 
 		// return 0;
-		
+
 		// print_message("free lexer\n");
 		// lexer_free(&lexer);
 		// print_message("end lexer free\n");

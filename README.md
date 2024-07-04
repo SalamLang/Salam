@@ -12,7 +12,7 @@ Salam is a new programming language for students and children. Everyone can lear
 
 </div>
 
----------
+---
 
 # Salam Language: The Salam Programming Language
 

@@ -1,7 +1,3 @@
-## Pull request template added
-
-Issue:
-
 ### Description
 
 Please include a brief description of the changes introduced by this pull request.

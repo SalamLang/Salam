@@ -18,6 +18,12 @@ if [ -e "$OUTPUT_FILE" ]; then
 	rm "$OUTPUT_FILE"
 fi
 
+# Check if ldconfig command is available
+if ! command -v ldconfig &> /dev/null; then
+    echo "ldconfig command is not found. Please install ldconfig."
+    exit 1
+fi
+
 ldconfig -p | grep efence &>/dev/null
 if ! [ $? -eq 0 ]; then
 	echo "efence library is missing"

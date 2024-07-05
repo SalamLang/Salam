@@ -11,7 +11,6 @@ if [ "$#" -eq 1 ]; then
 fi
 
 # Clear screen
-cls
 clear
 
 # Delete file

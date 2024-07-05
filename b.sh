@@ -31,6 +31,8 @@ if ! [ $? -eq 0 ]; then
 	exit 1
 fi
 
+echo "efence library is installed"
+
 # Compile
 # gcc -g -ggdb -g -o "$OUTPUT_FILE" "$INPUT_FILE"
 # gcc -g -fsanitize=undefined,address -Walloca -o "$OUTPUT_FILE" "$INPUT_FILE" -lefence

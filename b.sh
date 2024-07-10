@@ -20,8 +20,8 @@ fi
 
 # Check if ldconfig command is available
 if ! command -v ldconfig &> /dev/null; then
-    echo "ldconfig command is not found. Please install ldconfig."
-    exit 1
+	echo "ldconfig command is not found. Please install ldconfig."
+	exit 1
 fi
 
 ldconfig -p | grep efence &>/dev/null

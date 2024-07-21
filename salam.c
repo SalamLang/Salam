@@ -161,6 +161,12 @@ typedef enum {
 	TOKEN_TYPE_FLOAT,
 	TOKEN_TYPE_STRING,
 
+	// Operators
+	TOKEN_TYPE_OP_NEQ,
+	TOKEN_TYPE_OP_EQ,
+	TOKEN_TYPE_OP_GT,
+	TOKEN_TYPE_OP_LT,
+	
 	// Keywords
 	TOKEN_TYPE_FUNCTION, // تابع
 	TOKEN_TYPE_RETURN, // برگشت
@@ -200,8 +206,10 @@ typedef enum {
 	TOKEN_TYPE_EQUAL_EQUAL, // ==
 	TOKEN_TYPE_NOT_EQUAL, // !=
 	TOKEN_TYPE_NOT, // !
+	
 	TOKEN_TYPE_LESS_THAN, // <
 	TOKEN_TYPE_GREATER_THAN, // >
+
 	TOKEN_TYPE_LESS_THAN_EQUAL, // <=
 	TOKEN_TYPE_GREATER_THAN_EQUAL, // >=
 
@@ -521,7 +529,16 @@ token_info_t token_infos[] = {
 	// [TOKEN_TYPE_ODD] = {PRECEDENCE_MULTIPLY, NULL, led_plus_minus},
 
 	[TOKEN_TYPE_NOT_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
+	[TOKEN_TYPE_OP_NEQ] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
+
 	[TOKEN_TYPE_EQUAL_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
+	[TOKEN_TYPE_OP_EQ] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
+
+	[TOKEN_TYPE_EQUAL_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
+	[TOKEN_TYPE_OP_EQ] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
+
+	[TOKEN_TYPE_EQUAL_EQUAL] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
+	[TOKEN_TYPE_OP_EQ] = {PRECEDENCE_HIGHEST, NULL, led_equal_equal},
 
 	[TOKEN_TYPE_EQUAL] = {PRECEDENCE_HIGHEST2, NULL, led_equal},
 };
@@ -3418,7 +3435,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 	res->main = &expr;
 
 	bool isReverse = false;
-	if (strcmp(expr->data.binary_op->operator, "!=") == 0) {
+	if (strcmp(expr->data.binary_op->operator, "!=") == 0 || strcmp(expr->data.binary_op->operator, "مخالف") == 0) {
 		isReverse = true;
 	}
 
@@ -3466,7 +3483,7 @@ ast_literal_t* interpreter_expression_binary(ast_expression_t* expr, interpreter
 		} else if (rightlen == 0) {
 			res->string_value = strdup(left->string_value);
 		}
-	} else if (strcmp(expr->data.binary_op->operator, "==") == 0 || strcmp(expr->data.binary_op->operator, "!=") == 0) {
+	} else if (strcmp(expr->data.binary_op->operator, "==") == 0 || strcmp(expr->data.binary_op->operator, "!=") == 0 || strcmp(expr->data.binary_op->operator, "مخالف") == 0) {
 		if (left->type == VALUE_TYPE_INT && right->type == VALUE_TYPE_STRING) {
 			res->type = VALUE_TYPE_STRING;
 			char* left_str = intToString(left->int_value);

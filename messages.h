@@ -161,6 +161,13 @@ const keyword_mapping_t keyword_mapping[LANGUAGE_COUNT][50] = {
 		{"نمایش", TOKEN_TYPE_PRINT},
 		{"واگرنه", TOKEN_TYPE_ELSEIF},
 		{"اگر", TOKEN_TYPE_IF},
+
+		{"مخالف", TOKEN_TYPE_NOT_EQUAL},
+		{"برابر", TOKEN_TYPE_EQUAL_EQUAL},
+
+		{"بزرگتر", TOKEN_TYPE_GREATER_THAN},
+		{"کوچکتر", TOKEN_TYPE_LESS_THAN},
+
 		{"پوچ", TOKEN_TYPE_NULL},
 		{"تا", TOKEN_TYPE_UNTIL},
 		{"تکرار", TOKEN_TYPE_REPEAT},

@@ -72,7 +72,7 @@ const char* messages[LANGUAGE_COUNT][MESSAGE_COUNT] = {
 		[MESSAGE_MEMORY_ALLOCATE_ERROR] = "خطا در تخصیص حافظه\n",
 		[MESSAGE_MEMORY_REALLOCATE_ERROR] = "خطا در افزایش حافظه تخصیص یافته\n",
 
-		[MESSAGE_INTERPRETER_MAIN_RETURN_CODE] = "بازگشت اصلی: ",
+		[MESSAGE_INTERPRETER_MAIN_RETURN_CODE] = "بازگشت تابع سلام: ",
 		[MESSAGE_INTERPRETER_UNKNOWN_NODE_AS_INTERPRETER_ONCE] = "خطا: نود ناشناخته در برنامه تفسیر!\n",
 	},
 

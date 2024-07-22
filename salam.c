@@ -4047,7 +4047,6 @@ int main(int argc, char** argv)
 	bool isRun = false;
 	bool passingCode = false;
 	interpreter_t* interpreter;
-	bool isXml = false;
 
 	if (argc == 2) {
 		file_data = file_read(argv[1]);
@@ -4056,9 +4055,9 @@ int main(int argc, char** argv)
 			isAst = true;
 			isRun = false;
 		} else if (strcmp(argv[1], "--code") == 0) {
-			isAst = false;
+			// isAst = false;
+			isAst = true;
 			isRun = true;
-			isXml = true;
 		} else {
 			print_message("Second argument should be either --ast or --code\n");
 			help();

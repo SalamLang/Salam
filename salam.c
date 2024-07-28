@@ -390,7 +390,8 @@ size_t wchar_length(wchar_t wide_char);
 void lexer_lex(lexer_t* lexer);
 void help();
 parser_t* parser_create(lexer_t* lexer);
-void parser_free(parser_t** parser);
+void parser_parse(parser_t* parser);
+void parser_free(parser_t* parser);
 void print_xml_ast_expression(ast_expression_t* expr, int indent_level);
 void print_xml_ast_node(ast_node_t* node, int indent_level);
 void print_xml_ast_tree(parser_t* parser);
@@ -1332,15 +1333,64 @@ parser_t* parser_create(lexer_t* lexer)
 	return parser;
 }
 
-void parser_free(parser_t** parser)
+void parser_parse(parser_t* parser)
 {
-	if (parser == NULL || *parser == NULL) {
+	if (parser->lexer->tokens->length == 1 &&
+		((token_t*)parser->lexer->tokens->data[0])->type == TOKEN_TYPE_EOF
+	) {
 		return;
 	}
 
-	free(*parser);
-	*parser = NULL;
-	print_message("*parser is null %d\n", *parser == NULL ? 1 : 0);
+	ast_node_t* expression_node;
+	ast_node_t* function_node;
+	ast_node_t* page_node;
+
+	while (parser->token_index < parser->lexer->tokens->length) {
+		token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+
+		switch (current_token->type) {
+			case TOKEN_TYPE_EOF:
+				parser->token_index++;
+				return;
+
+			// case TOKEN_TYPE_FUNCTION:
+			// 	function_node = parser_function(parser);
+			// 	if (parser->functions && function_node != NULL) {
+			// 		array_push(parser->functions, function_node);
+			// 	}
+			// 	break;
+
+			case TOKEN_TYPE_PAGE:
+				page_node = parser_page(parser);
+				break;
+
+			default:
+				// if (parser_expression_has(parser)) {
+				// 	CREATE_MEMORY_OBJECT(expression_node, ast_node_t, 1, "Error: parser_parse<expression_node> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
+				// 	expression_node->type = AST_EXPRESSION;
+				// 	expression_node->data.expression = parser_expression(parser);
+				// 	if (parser->expressions && expression_node != NULL) {
+				// 		array_push(parser->expressions, expression_node);
+				// 	}
+				// } else {
+					print_error(messages[language][MESSAGE_PARSER_BAD_TOKEN_AS_STATEMENT], token_type2str(current_token->type));
+
+					exit(EXIT_FAILURE);
+				// }
+				break;
+		}
+	}
+}
+
+void parser_free(parser_t* parser)
+{
+	if (parser == NULL) {
+		return;
+	}
+
+	free(parser);
+	parser = NULL;
 	print_message("parser is null %d\n", parser == NULL ? 1 : 0);
 }
 
@@ -1388,6 +1438,8 @@ int main(int argc, char** argv)
 	}
 
 	parser_t* parser = parser_create(lexer);
+	parser_parse(parser);
+	parser_free(parser);
 
     print_message("free lexer\n");
     lexer_free(lexer);

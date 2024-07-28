@@ -939,9 +939,7 @@ wchar_t read_token(lexer_t* lexer)
 	}
 
 	lexer->index += char_size;
-
-	printf("\tread token: %d - '%lc'\n", char_size, current_char);
-
+	
 	return current_char;
 }
 
@@ -995,7 +993,6 @@ void read_number(lexer_t* lexer, wchar_t ch)
 		ch = read_token(lexer);
 
 		if (is_number(ch)) {
-			print_message("it's a dot");
 			number[i++] = '.';
 			isFloat = true;
 
@@ -1193,8 +1190,6 @@ void lexer_lex(lexer_t* lexer)
 		}
 
 		wchar_t current_wchar = read_token(lexer);
-
-		printf("====>>> %lc\n", current_wchar);
 
 		if (current_wchar == L'\u200C') {
 			lexer->index++;

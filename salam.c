@@ -176,6 +176,7 @@ typedef enum {
 	TOKEN_TYPE_PLUS, // +
 	TOKEN_TYPE_COLON, // :
 	TOKEN_TYPE_DOT, // .
+	TOKEN_TYPE_SHARP, // #
 	TOKEN_TYPE_MINUS, // -
 	TOKEN_TYPE_MULTIPLY, // *
 	TOKEN_TYPE_DIVIDE, // /
@@ -702,6 +703,7 @@ char* token_type2str(token_type_t type)
 		case TOKEN_TYPE_GREATER_THAN_EQUAL: return "GREATER_THAN_EQUAL";
 		case TOKEN_TYPE_COLON: return "COLON";
 		case TOKEN_TYPE_DOT: return "DOT";
+		case TOKEN_TYPE_SHARP: return "SHARP";
 
 		// Others
 		case TOKEN_TYPE_EOF: return "EOF";
@@ -939,7 +941,7 @@ wchar_t read_token(lexer_t* lexer)
 	}
 
 	lexer->index += char_size;
-	
+
 	return current_char;
 }
 
@@ -1224,6 +1226,9 @@ void lexer_lex(lexer_t* lexer)
 			array_push(lexer->tokens, t);
 		} else if (current_wchar == '.') {
 			token_t* t = token_create(TOKEN_TYPE_DOT, ".", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+			array_push(lexer->tokens, t);
+		} else if (current_wchar == '#') {
+			token_t* t = token_create(TOKEN_TYPE_SHARP, "#", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		} else if (current_wchar == '*') {
 			token_t* t = token_create(TOKEN_TYPE_MULTIPLY, "*", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);

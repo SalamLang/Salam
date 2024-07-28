@@ -4074,9 +4074,10 @@ int main(int argc, char** argv)
 		parser_t* parser = parser_create(&lexer);
 		parser_parse(parser);
 		
-		if (isAst) {
-			print_xml_ast_tree(parser);
-		}
+		// if (isAst) {
+		// 	print_xml_ast_tree(parser);
+		// }
+
 		// else
 		if (isRun) {
 			interpreter = interpreter_create(&parser);

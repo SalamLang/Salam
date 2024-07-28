@@ -162,6 +162,8 @@ typedef enum {
 	TOKEN_TYPE_STRING,
 	
 	// Keywords
+	TOKEN_TYPE_PAGE, // صفحه
+	TOKEN_TYPE_END, // خاتمه
 	TOKEN_TYPE_FUNCTION, // تابع
 	TOKEN_TYPE_RETURN, // برگشت
 	TOKEN_TYPE_BREAK, // توقف
@@ -169,7 +171,6 @@ typedef enum {
 	TOKEN_TYPE_PRINT, // نمایش
 	TOKEN_TYPE_IF, // اگر
 	TOKEN_TYPE_NULL, // پوچ
-
 	TOKEN_TYPE_UNTIL, // تا
 	TOKEN_TYPE_REPEAT, // تکرار
 	TOKEN_TYPE_TRUE, // درست
@@ -187,27 +188,23 @@ typedef enum {
 	TOKEN_TYPE_BRACKETS_CLOSE, // ]
 
 	TOKEN_TYPE_PLUS, // +
+	TOKEN_TYPE_COLON, // :
+	TOKEN_TYPE_DOT, // .
 	TOKEN_TYPE_MINUS, // -
 	TOKEN_TYPE_MULTIPLY, // *
 	TOKEN_TYPE_DIVIDE, // /
 	TOKEN_TYPE_MODULE, // %
-	// TOKEN_TYPE_EVEN, // زوج
-	// TOKEN_TYPE_ODD, // فرد
-
 	TOKEN_TYPE_COMMA, // ,
-
 	TOKEN_TYPE_EQUAL, // =
 	TOKEN_TYPE_EQUAL_EQUAL, // ==
 	TOKEN_TYPE_NOT_EQUAL, // !=
 	TOKEN_TYPE_NOT, // !
-
 	TOKEN_TYPE_LESS_THAN, // <
 	TOKEN_TYPE_GREATER_THAN, // >
-
 	TOKEN_TYPE_LESS_THAN_EQUAL, // <=
 	TOKEN_TYPE_GREATER_THAN_EQUAL, // >=
 
-	// others
+	// Others
 	TOKEN_TYPE_EOF,
 	TOKEN_TYPE_ERROR,
 } token_type_t;
@@ -698,6 +695,9 @@ char* token_op_type2str(ast_expression_type_t type)
 char* token_type2str(token_type_t type)
 {
 	switch(type) {
+		// Keywords
+		case TOKEN_TYPE_END: return "END";
+		case TOKEN_TYPE_PAGE: return "PAGE";
 		case TOKEN_TYPE_UNTIL: return "UNTIL";
 		case TOKEN_TYPE_REPEAT: return "REPEAT";
 		case TOKEN_TYPE_IDENTIFIER: return "IDENTIFIER";
@@ -711,6 +711,8 @@ char* token_type2str(token_type_t type)
 		case TOKEN_TYPE_TRUE: return "TRUE";
 		case TOKEN_TYPE_FALSE: return "FALSE";
 		case TOKEN_TYPE_ELSEIF: return "ELSEIF";
+
+		// Operators
 		case TOKEN_TYPE_OR: return "OR";
 		case TOKEN_TYPE_AND: return "AND";
 		case TOKEN_TYPE_SECTION_OPEN: return "SECTION_OPEN";
@@ -721,9 +723,6 @@ char* token_type2str(token_type_t type)
 		case TOKEN_TYPE_BRACKETS_CLOSE: return "BRACKETS_CLOSE";
 		case TOKEN_TYPE_PLUS: return "PLUS";
 		case TOKEN_TYPE_DIVIDE: return "DIVIDE";
-		// case TOKEN_TYPE_EVEN: return "EVEN";
-		// case TOKEN_TYPE_ODD: return "ODD";
-
 		case TOKEN_TYPE_MODULE: return "MODULE";
 		case TOKEN_TYPE_MINUS: return "MINUS";
 		case TOKEN_TYPE_MULTIPLY: return "MULTIPLY";
@@ -736,6 +735,10 @@ char* token_type2str(token_type_t type)
 		case TOKEN_TYPE_GREATER_THAN: return "GREATER_THAN";
 		case TOKEN_TYPE_LESS_THAN_EQUAL: return "LESS_THAN_EQUAL";
 		case TOKEN_TYPE_GREATER_THAN_EQUAL: return "GREATER_THAN_EQUAL";
+		case TOKEN_TYPE_COLON: return "COLON";
+		case TOKEN_TYPE_DOT: return "DOT";
+
+		// Others
 		case TOKEN_TYPE_EOF: return "EOF";
 		case TOKEN_TYPE_ERROR: return "ERROR";
 		default: return "TOK_UNKNOWN";
@@ -1230,6 +1233,12 @@ void lexer_lex(lexer_t* lexer)
 			array_push(lexer->tokens, t);
 		} else if (current_wchar == '+') {
 			token_t* t = token_create(TOKEN_TYPE_PLUS, "+", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+			array_push(lexer->tokens, t);
+		} else if (current_wchar == ':') {
+			token_t* t = token_create(TOKEN_TYPE_COLON, ":", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+			array_push(lexer->tokens, t);
+		} else if (current_wchar == '.') {
+			token_t* t = token_create(TOKEN_TYPE_DOT, ".", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		} else if (current_wchar == '*') {
 			token_t* t = token_create(TOKEN_TYPE_MULTIPLY, "*", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);

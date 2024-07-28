@@ -344,7 +344,7 @@ typedef struct {
 } ast_variable_declaration_t;
 
 typedef struct {
-	lexer_t** lexer;
+	lexer_t* lexer;
 	size_t token_index;
 	array_t* functions;
 	array_t* expressions;
@@ -373,7 +373,7 @@ void array_free(array_t* arr);
 void token_print(token_t* t);
 void array_print(array_t* arr);
 lexer_t* lexer_create(const char* data);
-void lexer_free(lexer_t** lexer);
+void lexer_free(lexer_t* lexer);
 bool is_number(wchar_t ch);
 bool is_alpha(wchar_t ch);
 bool is_ident(wchar_t ch);
@@ -389,7 +389,7 @@ void read_identifier(lexer_t* lexer, wchar_t ch);
 size_t wchar_length(wchar_t wide_char);
 void lexer_lex(lexer_t* lexer);
 void help();
-parser_t* parser_create(lexer_t** lexer);
+parser_t* parser_create(lexer_t* lexer);
 void parser_free(parser_t** parser);
 void print_xml_ast_expression(ast_expression_t* expr, int indent_level);
 void print_xml_ast_node(ast_node_t* node, int indent_level);
@@ -845,15 +845,15 @@ lexer_t* lexer_create(const char* data)
 	return lexer;
 }
 
-void lexer_free(lexer_t** lexer)
+void lexer_free(lexer_t* lexer)
 {
-	if (lexer == NULL || *lexer == NULL) {
+	if (lexer == NULL) {
 		return;
 	}
 
-	if ((*lexer)->tokens != NULL) {
-		for (size_t i = 0; i < (*lexer)->tokens->length; i++) {
-			token_t* t = (token_t*) (*lexer)->tokens->data[i];
+	if (lexer->tokens != NULL) {
+		for (size_t i = 0; i < lexer->tokens->length; i++) {
+			token_t* t = (token_t*) lexer->tokens->data[i];
 			if (t != NULL) {
 				if (t->value != NULL) {
 					free(t->value);
@@ -865,22 +865,22 @@ void lexer_free(lexer_t** lexer)
 			}
 		}
 
-		if ((*lexer)->tokens->data != NULL) {
-			free((*lexer)->tokens->data);
-			(*lexer)->tokens->data = NULL;
+		if (lexer->tokens->data != NULL) {
+			free(lexer->tokens->data);
+			lexer->tokens->data = NULL;
 		}
 
-		free((*lexer)->tokens);
-		(*lexer)->tokens = NULL;
+		free(lexer->tokens);
+		lexer->tokens = NULL;
 	}
 
-	if ((*lexer)->data != NULL) {
-		free((*lexer)->data);
-		(*lexer)->data = NULL;
+	if (lexer->data != NULL) {
+		free(lexer->data);
+		lexer->data = NULL;
 	}
 
-	free(*lexer);
-	*lexer = NULL;
+	free(lexer);
+	lexer = NULL;
 }
 
 bool is_number(wchar_t ch)
@@ -1319,7 +1319,7 @@ void help()
 	printf("%s", messages[language][MESSAGE_WELCOME]);
 }
 
-parser_t* parser_create(lexer_t** lexer)
+parser_t* parser_create(lexer_t* lexer)
 {
 	parser_t* parser;
 	CREATE_MEMORY_OBJECT(parser, parser_t, 1, "Error: parser_create<parser> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -1361,7 +1361,7 @@ int main(int argc, char** argv)
 
 	char* file_data;
 	// bool isAst = false;
-	// bool passingCode = false;
+	bool passingCode = false;
 
 	if (argc == 2) {
 		file_data = file_read(argv[1]);
@@ -1376,17 +1376,21 @@ int main(int argc, char** argv)
 			return 0;
 		}
 
-		// passingCode = true;
+		passingCode = true;
 		file_data = argv[2];
 	}
 
     lexer_t* lexer = lexer_create(file_data);
     lexer_lex(lexer);
 
-    array_print(lexer->tokens);
+	if (!passingCode) {
+	    array_print(lexer->tokens);
+	}
+
+	parser_t* parser = parser_create(lexer);
 
     print_message("free lexer\n");
-    lexer_free(&lexer);
+    lexer_free(lexer);
     print_message("end lexer free\n");
 
 	return 0;

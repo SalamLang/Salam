@@ -25,7 +25,135 @@ bool debug_enabled = true;
 		exit(EXIT_FAILURE); \
 	}
 
-// Types
+struct ast_expression;
+
+struct ast_literal_t;
+
+typedef enum {
+	MESSAGE_NAME,
+	MESSAGE_ENTRY_POINT_FUNCTION_NAME,
+	MESSAGE_WELCOME,
+	MESSAGE_LEXER_UNEXPECTED_CHAR,
+	MESSAGE_LEXER_COMMENT_MULTI_NOT_CLOSED,
+	MESSAGE_LEXER_NUMBER_FLOAT_NEED_NUMBER_AFTER_DOT,
+	MESSAGE_LEXER_TOKEN_UNREAD_UNICODE,
+	MESSAGE_LEXER_TOKEN_READ_UNICODE,
+	MESSAGE_LEXER_STRING_READ_MEMORY,
+	MESSAGE_LEXER_STRING_UNKNOWN_ESCAPE,
+	MESSAGE_LEXER_STRING_CONVERT_MULTIBYTE,
+	MESSAGE_LEXER_STRING_GET_LENGTH_UNICODE,
+	MESSAGE_LEXER_IDENTIFIER_CONVERT_MULTIBYTE,
+	MESSAGE_LEXER_CHAR_LENGTH_ISSUE,
+	MESSAGE_LEXER_ARRAY_NOT_CLOSED,
+	MESSAGE_INTERPRETER_MAIN_NORETURN,
+	MESSAGE_INTERPRETER_CANNOT_HAVE_RET_BREAK_CON_OUT_OF_LOOP,
+	MESSAGE_INTERPRETER_VARIABLE_NOT_FOUND,
+	MESSAGE_INTERPRETER_EXPRESSION_INVALID_VALUE_IN_BINARY,
+	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_COMPARE_THIS_KIND_OF_VALUE_TYPES,
+	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_AND_FOR_THIS_VALUES,
+	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_OR_FOR_THIS_VALUES,
+	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_BINARY_OP_FOR_NON_INT,
+	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_MODULE_OP_FOR_FLOAT,
+	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_DIVIDE_BY_ZERO,
+	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_DO_THIS_OPERATOR,
+	MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_IS_MORE,
+	MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_IS_LESS,
+	MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ZERO,
+	MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE,
+	MESSAGE_INTERPRETER_FUNCTION_NOT_EXISTS,
+	MESSAGE_INTERPRETER_CANNOT_ASSIGN_VARIABLE_WITH_A_NON_IDENTIFIER_AS_NAME,
+	MESSAGE_INTERPRETER_EXPRESSION_DONT_SUPPORT_THIS_TYPE_IN_EXPRESSION,
+	MESSAGE_PARSER_UNEXPECTED_TOKEN,
+	MESSAGE_PARSER_BLOCK_MEMORY_ISSUE,
+	MESSAGE_PARSER_BAD_TOKEN_AS_STATEMENT,
+	MESSAGE_TOKEN_TRUE,
+	MESSAGE_TOKEN_FALSE,
+	MESSAGE_TOKEN_NULL,
+	MESSAGE_TOKEN_UNKNOWN,
+	MESSAGE_TOKEN_NUMBER_INT,
+	MESSAGE_TOKEN_NUMBER_FLOAT,
+	MESSAGE_TOKEN_BOOL,
+	MESSAGE_TOKEN_STRING,
+	MESSAGE_TOKEN_ARRAY,
+	MESSAGE_TOKEN_OR,
+	MESSAGE_TOKEN_AND,
+	MESSAGE_TOKEN_FUNCTION_TYPE,
+	MESSAGE_TOKEN_FUNCTION_EVEN,
+	MESSAGE_TOKEN_FUNCTION_ODD,
+	MESSAGE_TOKEN_FUNCTION_READ,
+	MESSAGE_TOKEN_FUNCTION_LENGTH,
+	MESSAGE_TOKEN_FUNCTION_STRING,
+	MESSAGE_INTERPRETER_FUNCTION_CALL_FIRST_ARGUMENT_SHOULD_BE_ONLY_A_STRING,
+	MESSAGE_LEXER_FILE_NOT_EXISTS,
+	MESSAGE_MEMORY_ALLOCATE_ERROR,
+	MESSAGE_MEMORY_REALLOCATE_ERROR,
+	MESSAGE_INTERPRETER_MAIN_RETURN_CODE,
+	MESSAGE_INTERPRETER_UNKNOWN_NODE_AS_INTERPRETER_ONCE,
+	MESSAGE_COUNT,
+} message_key_t;
+
+typedef enum {
+	LANGUAGE_PERSIAN,
+	LANGUAGE_ARABIC,
+	LANGUAGE_COUNT,
+} language_t;
+
+typedef enum {
+	VALUE_TYPE_NULL,
+	VALUE_TYPE_INT,
+	VALUE_TYPE_FLOAT,
+	VALUE_TYPE_BOOL,
+	VALUE_TYPE_STRING,
+	VALUE_TYPE_ARRAY_LITERAL,
+	VALUE_TYPE_ARRAY_EXPRESSION,
+} ast_literal_type_t;
+
+typedef struct {
+	char* name;
+	struct ast_expression_t* value;
+} ast_argument_t;
+
+typedef struct {
+	size_t size;
+	size_t length;
+	void** data;
+} array_t;
+
+typedef struct ast_literal_t {
+	ast_literal_type_t type;
+	union {
+		int int_value;
+		bool bool_value;
+		float float_value;
+		char* string_value;
+	};
+
+	size_t size_value;
+	struct ast_expression_t** array_expression_value;
+	struct ast_literal_t** array_literal_value;
+
+	struct ast_expression_t** main; // To have a reference into parser ast so we can free it later after interpreter
+} ast_literal_t;
+
+typedef struct SymbolTableEntry {
+	char* identifier;
+	ast_literal_t* data;
+	ast_literal_t* prevdata;
+	struct SymbolTableEntry* next;
+} SymbolTableEntry;
+
+typedef struct {
+	SymbolTableEntry** entries;
+	size_t size;
+	size_t capacity;
+} SymbolTable;
+
+typedef struct SymbolTableStack {
+	SymbolTable* table;
+	bool is_function_call;
+	struct SymbolTableStack* next;
+} SymbolTableStack;
+
 typedef enum {
 	// Values
 	TOKEN_TYPE_IDENTIFIER,
@@ -40,6 +168,7 @@ typedef enum {
 	TOKEN_TYPE_CONTINUE, // ادامه
 	TOKEN_TYPE_PRINT, // نمایش
 	TOKEN_TYPE_IF, // اگر
+	TOKEN_TYPE_NULL, // پوچ
 
 	TOKEN_TYPE_UNTIL, // تا
 	TOKEN_TYPE_REPEAT, // تکرار
@@ -62,6 +191,8 @@ typedef enum {
 	TOKEN_TYPE_MULTIPLY, // *
 	TOKEN_TYPE_DIVIDE, // /
 	TOKEN_TYPE_MODULE, // %
+	// TOKEN_TYPE_EVEN, // زوج
+	// TOKEN_TYPE_ODD, // فرد
 
 	TOKEN_TYPE_COMMA, // ,
 
@@ -76,10 +207,15 @@ typedef enum {
 	TOKEN_TYPE_LESS_THAN_EQUAL, // <=
 	TOKEN_TYPE_GREATER_THAN_EQUAL, // >=
 
-	// Others
+	// others
 	TOKEN_TYPE_EOF,
 	TOKEN_TYPE_ERROR,
 } token_type_t;
+
+typedef struct {
+	const char* keyword;
+	token_type_t token_type;
+} keyword_mapping_t;
 
 typedef struct {
 	token_type_t type;
@@ -94,12 +230,6 @@ typedef struct {
 } token_t;
 
 typedef struct {
-	size_t size;
-	size_t length;
-	void** data;
-} array_t;
-
-typedef struct {
 	char* data;
 	size_t length;
 	size_t index;
@@ -110,19 +240,529 @@ typedef struct {
 	size_t last_char_size;
 } lexer_t;
 
-// Headers
+struct ast_node;
+
+typedef struct {
+	char* name;
+	struct ast_node* body;
+	array_t* arguments;
+} ast_function_declaration_t;
+
+typedef struct {
+	struct ast_expression_t* expression;
+	struct ast_literal_t* expression_value;
+} ast_statement_return_t;
+
+typedef struct {
+	struct ast_expression_t* expression;
+	struct ast_literal_t* expression_value;
+} ast_statement_print_t;
+
+typedef struct {
+	struct ast_node** statements;
+	size_t num_statements;
+} ast_block_t;
+
+typedef struct {
+	char* name;
+} ast_identifier_t;
+
+typedef struct {
+	char* operator;
+	struct ast_expression_t* left;
+	struct ast_expression_t* right;
+} ast_expression_binary_t;
+
+typedef struct {
+	struct ast_expression_t* left;
+	struct ast_expression_t* right;
+} ast_expression_assignment_t;
+
+typedef enum {
+	AST_EXPRESSION_ERROR,
+	AST_EXPRESSION_VALUE,
+	AST_EXPRESSION_LITERAL,
+	AST_EXPRESSION_IDENTIFIER,
+	AST_EXPRESSION_BINARY,
+	AST_EXPRESSION_ASSIGNMENT,
+	AST_EXPRESSION_FUNCTION_CALL,
+} ast_expression_type_t;
+
+typedef struct {
+	char* name;
+	array_t* arguments;
+} ast_function_call_t;
+
+typedef struct ast_expression_t {
+	ast_expression_type_t type;
+
+	union {
+		ast_literal_t* literal;
+		ast_identifier_t* identifier;
+		ast_expression_binary_t* binary_op;
+		ast_expression_assignment_t* assignment;
+		ast_function_call_t* function_call;
+	} data;
+} ast_expression_t;
+
+typedef enum {
+	AST_FUNCTION_DECLARATION,
+	AST_STATEMENT_RETURN,
+	AST_STATEMENT_CONTINUE,
+	AST_STATEMENT_BREAK,
+	AST_STATEMENT_PRINT,
+	AST_STATEMENT_IF,
+	AST_STATEMENT_UNTIL,
+	AST_STATEMENT_REPEAT,
+	AST_STATEMENT_ELSEIF,
+	AST_BLOCK,
+	AST_EXPRESSION,
+} ast_node_type_t;
+
+typedef struct {
+	ast_expression_t* condition;
+	struct ast_node* block;
+} ast_statement_until_t;
+
+typedef struct {
+	ast_expression_t* condition;
+	struct ast_node* block;
+} ast_statement_repeat_t;
+
+typedef struct {
+	ast_expression_t* condition;
+	struct ast_node* block;
+	struct ast_node_t** elseifs;
+	struct ast_node* else_block;
+	size_t num_elseifs;
+} ast_statement_if_t;
+
+typedef struct ast_node {
+	ast_node_type_t type;
+	union {
+		ast_function_declaration_t* function_declaration;
+		ast_statement_return_t* statement_return;
+		ast_statement_print_t* statement_print;
+		ast_block_t* block;
+		ast_expression_t* expression;
+		ast_statement_if_t* statement_if;
+		ast_statement_until_t* statement_until;
+		ast_statement_repeat_t* statement_repeat;
+		ast_function_call_t* function_call;
+	} data;
+} ast_node_t;
+
+typedef struct {
+	char* name;
+	ast_expression_t* expression;
+} ast_variable_declaration_t;
+
+typedef struct {
+	lexer_t** lexer;
+	size_t token_index;
+	array_t* functions;
+	array_t* expressions;
+} parser_t;
+
+typedef struct {
+	int return_code;
+	parser_t** parser;
+	bool is_global_scope;
+} interpreter_t;
+
+typedef ast_expression_t* (*nud_func_t)(parser_t* parser, token_t* token);
+typedef ast_expression_t* (*led_func_t)(parser_t* parser, token_t* token, ast_expression_t* left);
+
+typedef struct {
+	size_t precedence;
+	nud_func_t nud;
+	led_func_t led;
+} token_info_t;
+
+enum {
+	PRECEDENCE_LOWEST = 0,    // START FROM HERE
+	PRECEDENCE_HIGHEST2 = 1,  // =
+	PRECEDENCE_ANDOR = 2,     // AND OR
+	PRECEDENCE_HIGHEST = 3,   // == !=
+	PRECEDENCE_MULTIPLY = 4,  // / *
+	PRECEDENCE_SUM = 5,       // + -
+};
+
+// Function declarations
+char* read_dynamic_string();
+char* intToString(int value);
+char* literal_type2name(ast_literal_type_t type);
+unsigned int hash(const char* str, size_t capacity);
+SymbolTable* createSymbolTable(size_t capacity);
+void pushSymbolTable(SymbolTableStack** ts, bool is_function_call);
+void popSymbolTable(SymbolTableStack** ts);
+static SymbolTableEntry* findSymbolInParentScopes(SymbolTableStack* ts, const char* identifier);
+void addToSymbolTable(SymbolTableStack* ts, const char* identifier, ast_literal_t* value);
+ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const char* identifier, bool checkEverythingEvenIsFuncCall);
+ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier, bool wantsGlobal, bool checkEverythingEvenIsFuncCall);
+char* token_op_type2str(ast_expression_type_t type);
+char* token_type2str(token_type_t type);
 char* file_read(char* file_Name);
-lexer_t* lexer_create(const char* data);
-void lexer_free(lexer_t** lexer);
+token_t* token_create(token_type_t type, const char* value, int a, int b, int c, int b2, int c2);
 array_t* array_create(size_t size);
 void* array_pop(array_t* arr);
 void array_push(array_t* arr, void* data);
 void array_free(array_t* arr);
+void token_print(token_t* t);
 void array_print(array_t* arr);
+lexer_t* lexer_create(const char* data);
+void lexer_free(lexer_t** lexer);
+bool is_number(wchar_t ch);
+bool is_alpha(wchar_t ch);
+bool is_ident(wchar_t ch);
+wchar_t read_token(lexer_t* lexer);
+wchar_t unread_token(lexer_t* lexer);
+void read_number(lexer_t* lexer, wchar_t ch);
+void read_comment_singleline(lexer_t* lexer);
+void read_comment_multiline(lexer_t* lexer);
+void read_string(lexer_t* lexer, wchar_t ch);
+size_t mb_strlen(char* identifier);
+void read_identifier(lexer_t* lexer, wchar_t ch);
+size_t wchar_length(wchar_t wide_char);
 void lexer_lex(lexer_t* lexer);
-token_t* token_create(token_type_t type, const char* value, int a, int b, int c, int b2, int c2);
+void help();
+parser_t* parser_create(lexer_t** lexer);
+void parser_free(parser_t** parser);
+void print_xml_ast_expression(ast_expression_t* expr, int indent_level);
+void print_xml_ast_node(ast_node_t* node, int indent_level);
+void print_xml_ast_tree(parser_t* parser);
+int main(int argc, char** argv);
+
+// Global variables
+SymbolTableStack* symbolTableStack = NULL;
+SymbolTableStack* symbolGlobalTableStack = NULL;
+language_t language = LANGUAGE_PERSIAN;
+
+#include "messages.h"
+
+// Helper functions
+const char* get_message(language_t language, message_key_t key) {
+	if (language >= LANGUAGE_COUNT || key >= MESSAGE_COUNT) {
+		return NULL;
+	}
+	return messages[language][key];
+}
+
+char* read_dynamic_string() {
+	size_t current_size = 52;
+	char* input;
+	CREATE_MEMORY_OBJECT(input, char, current_size, "Error: read_dynamic_string<input> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
+	size_t length = 0;
+
+	while (1) {
+		int c = getchar();
+
+		if (c == '\n' || c == EOF) {
+			input[length] = '\0';
+			break;
+		}
+
+		if (length + 1 >= current_size) {
+			current_size *= 2;
+			char* new_input = realloc(input, current_size);
+			if (!new_input) {
+				free(input);
+				perror(messages[language][MESSAGE_MEMORY_REALLOCATE_ERROR]);
+
+				exit(EXIT_FAILURE);
+			}
+			input = new_input;
+		}
+
+		input[length++] = c;
+	}
+
+	return input;
+}
+
+char* intToString(int value)
+{
+	int sign = (value < 0) ? -1 : 1;
+
+	int temp = value;
+	int numDigits = (value == 0) ? 1 : 0;
+	while (temp != 0) {
+		temp /= 10;
+		numDigits++;
+	}
+
+	char* result;
+	CREATE_MEMORY_OBJECT(result, char, numDigits + 1 + (sign == -1 ? 1 : 0), "Error: intToString<result> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	if (result != NULL) {
+		if (sign == -1) {
+			result[0] = '-';
+		}
+
+		for (int i = numDigits - 1 + (sign == -1 ? 1 : 0); i >= (sign == -1 ? 1 : 0); i--) {
+			result[i] = '0' + abs(value % 10);
+			value /= 10;
+		}
+
+		result[numDigits + (sign == -1 ? 1 : 0)] = '\0';
+	}
+
+	return result;
+}
 
 // Functions
+char* literal_type2name(ast_literal_type_t type)
+{
+	switch (type) {
+		case VALUE_TYPE_NULL: return "NULL";
+		case VALUE_TYPE_INT: return "INT";
+		case VALUE_TYPE_FLOAT: return "FLOAT";
+		case VALUE_TYPE_BOOL: return "BOOL";
+		case VALUE_TYPE_STRING: return "STRING";
+		case VALUE_TYPE_ARRAY_EXPRESSION: case VALUE_TYPE_ARRAY_LITERAL: return "ARRAY";
+		default: return "TYPE_UNKNOWN";
+	}
+}
+
+unsigned int hash(const char* str, size_t capacity)
+{
+	unsigned int hash = 0;
+	while (*str) {
+		hash = (hash * 31) + (*str++);
+	}
+	return hash % capacity;
+}
+
+SymbolTable* createSymbolTable(size_t capacity)
+{
+	SymbolTable* table;
+	CREATE_MEMORY_OBJECT(table, SymbolTable, 1, "Error: createSymbolTable<table> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	table->entries = (SymbolTableEntry**) calloc(capacity, sizeof(SymbolTableEntry*) );
+	table->size = 0;
+	table->capacity = capacity;
+	return table;
+}
+
+void pushSymbolTable(SymbolTableStack** ts, bool is_function_call)
+{
+	// print_message("create scope with %d state\n", is_function_call ? 1 : 0);
+	SymbolTable* table = createSymbolTable(16);
+	SymbolTableStack* newScope;
+	CREATE_MEMORY_OBJECT(newScope, SymbolTableStack, 1, "Error: pushSymbolTable<newScope> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	newScope->table = table;
+	newScope->is_function_call = is_function_call;
+	newScope->next = *ts;
+	*ts = newScope;
+}
+
+void popSymbolTable(SymbolTableStack** ts)
+{
+	if (ts == NULL || *ts == NULL) {
+		return;
+	}
+
+	SymbolTableStack* top =* ts;
+	*ts = top->next;
+
+	SymbolTable* table = top->table;
+	for (size_t i = 0; i < table->capacity; ++i) {
+		SymbolTableEntry* entry = table->entries[i];
+		while (entry != NULL) {
+			SymbolTableEntry* next = entry->next;
+			if (entry->identifier != NULL) {
+				free(entry->identifier);
+				entry->identifier = NULL;
+			}
+			if (entry->data != NULL) {
+				// ast_expression_free_data(&(entry->data));
+				entry->prevdata = entry->data;
+				entry->data = NULL;
+			}
+			free(entry);
+
+			entry = next;
+		}
+	}
+
+	free(table->entries);
+	table->entries = NULL;
+
+	free(table);
+	table = NULL;
+
+	free(top);
+	top = NULL;
+}
+
+static SymbolTableEntry* findSymbolInParentScopes(SymbolTableStack* ts, const char* identifier)
+{
+	if (ts == NULL) {
+		return NULL;
+	}
+
+	SymbolTable* table = ts->table;
+	unsigned int index = hash(identifier, table->capacity);
+
+	SymbolTableEntry* entry = table->entries[index];
+	while (entry != NULL) {
+		if (strcmp(entry->identifier, identifier) == 0) {
+			return entry;
+		}
+		entry = entry->next;
+	}
+
+	if (ts->is_function_call == true) return NULL;
+	return findSymbolInParentScopes(ts->next, identifier);
+}
+
+void addToSymbolTable(SymbolTableStack* ts, const char* identifier, ast_literal_t* value)
+{
+	if (ts == NULL) {
+		return;
+	}
+
+	SymbolTableEntry* existingEntry = findSymbolInParentScopes(ts, identifier);
+
+	if (existingEntry != NULL) {
+		existingEntry->data = value;
+		return;
+	}
+
+	SymbolTable* table = ts->table;
+	unsigned int index = hash(identifier, table->capacity);
+
+	SymbolTableEntry* entry;
+	CREATE_MEMORY_OBJECT(entry, SymbolTableEntry, 1, "Error: addToSymbolTable<entry> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	entry->identifier = strdup(identifier);
+	entry->data = value;
+	entry->next = table->entries[index];
+
+	table->entries[index] = entry;
+	table->size++;
+}
+
+ast_literal_t* findInSymbolTableCurrent(SymbolTableStack* currentScope, const char* identifier, bool checkEverythingEvenIsFuncCall)
+{
+	if (currentScope == NULL) {
+		return NULL;
+	}
+
+	SymbolTable* table = currentScope->table;
+	unsigned int index = hash(identifier, table->capacity);
+	SymbolTableEntry* entry = table->entries[index];
+
+	while (entry != NULL) {
+		if (strcmp(entry->identifier, identifier) == 0) {
+			return entry->data;
+		}
+		entry = entry->next;
+	}
+
+	return NULL;
+}
+
+ast_literal_t* findInSymbolTable(SymbolTableStack* currentScope, const char* identifier, bool wantsGlobal, bool checkEverythingEvenIsFuncCall)
+{
+	while (currentScope != NULL) {
+		// print_message("looking for %s on a scope %d\n", identifier, currentScope->is_function_call ? 1 : 0);
+		ast_literal_t* data = findInSymbolTableCurrent(currentScope, identifier, checkEverythingEvenIsFuncCall);
+		if (data != NULL) {
+			return data;
+		}
+
+		if (checkEverythingEvenIsFuncCall == false && currentScope->is_function_call == true) {
+			// print_message("this scope is call enabled, so break loop (%d)!\n", wantsGlobal ? 1 : 0);
+			break;
+		}
+		currentScope = currentScope->next;
+	}
+
+	if (wantsGlobal == true) {
+		return findInSymbolTable(symbolGlobalTableStack, identifier, false, checkEverythingEvenIsFuncCall);
+	}
+	return NULL;
+}
+
+char* token_op_type2str(ast_expression_type_t type)
+{
+	switch (type) {
+		case AST_EXPRESSION_LITERAL: return "LITERAL";
+		case AST_EXPRESSION_IDENTIFIER: return "IDENTIFIER";
+		case AST_EXPRESSION_BINARY: return "BINARY_OP";
+		case AST_EXPRESSION_ASSIGNMENT: return "ASSIGNMENT";
+		case AST_EXPRESSION_FUNCTION_CALL: return "FUNCTION_CALL";
+		default: return "OP_UNKNOWN";
+	}
+}
+
+char* token_type2str(token_type_t type)
+{
+	switch(type) {
+		case TOKEN_TYPE_UNTIL: return "UNTIL";
+		case TOKEN_TYPE_REPEAT: return "REPEAT";
+		case TOKEN_TYPE_IDENTIFIER: return "IDENTIFIER";
+		case TOKEN_TYPE_INT: return "NUMBER_INT";
+		case TOKEN_TYPE_FLOAT: return "NUMBER_FLOAT";
+		case TOKEN_TYPE_STRING: return "STRING";
+		case TOKEN_TYPE_FUNCTION: return "FUNCTION";
+		case TOKEN_TYPE_RETURN: return "RETURN";
+		case TOKEN_TYPE_PRINT: return "PRINT";
+		case TOKEN_TYPE_IF: return "IF";
+		case TOKEN_TYPE_TRUE: return "TRUE";
+		case TOKEN_TYPE_FALSE: return "FALSE";
+		case TOKEN_TYPE_ELSEIF: return "ELSEIF";
+		case TOKEN_TYPE_OR: return "OR";
+		case TOKEN_TYPE_AND: return "AND";
+		case TOKEN_TYPE_SECTION_OPEN: return "SECTION_OPEN";
+		case TOKEN_TYPE_SECTION_CLOSE: return "SECTION_CLOSE";
+		case TOKEN_TYPE_PARENTHESE_OPEN: return "PARENTHESIS_OPEN";
+		case TOKEN_TYPE_PARENTHESE_CLOSE: return "PARENTHESIS_CLOSE";
+		case TOKEN_TYPE_BRACKETS_OPEN: return "BRACKETS_OPEN";
+		case TOKEN_TYPE_BRACKETS_CLOSE: return "BRACKETS_CLOSE";
+		case TOKEN_TYPE_PLUS: return "PLUS";
+		case TOKEN_TYPE_DIVIDE: return "DIVIDE";
+		// case TOKEN_TYPE_EVEN: return "EVEN";
+		// case TOKEN_TYPE_ODD: return "ODD";
+
+		case TOKEN_TYPE_MODULE: return "MODULE";
+		case TOKEN_TYPE_MINUS: return "MINUS";
+		case TOKEN_TYPE_MULTIPLY: return "MULTIPLY";
+		case TOKEN_TYPE_COMMA: return "COMMA";
+		case TOKEN_TYPE_EQUAL: return "EQUAL";
+		case TOKEN_TYPE_EQUAL_EQUAL: return "EQUAL_EQUAL";
+		case TOKEN_TYPE_NOT_EQUAL: return "NOT_EQUAL";
+		case TOKEN_TYPE_NOT: return "NOT";
+		case TOKEN_TYPE_LESS_THAN: return "LESS_THAN";
+		case TOKEN_TYPE_GREATER_THAN: return "GREATER_THAN";
+		case TOKEN_TYPE_LESS_THAN_EQUAL: return "LESS_THAN_EQUAL";
+		case TOKEN_TYPE_GREATER_THAN_EQUAL: return "GREATER_THAN_EQUAL";
+		case TOKEN_TYPE_EOF: return "EOF";
+		case TOKEN_TYPE_ERROR: return "ERROR";
+		default: return "TOK_UNKNOWN";
+	}
+}
+
+char* file_read(char* file_Name)
+{
+	FILE* file = fopen(file_Name, "r");
+	if (file == NULL) {
+		print_error(messages[language][MESSAGE_LEXER_FILE_NOT_EXISTS], file_Name);
+		return NULL;
+	}
+
+	fseek(file, 0, SEEK_END);
+	long file_size = ftell(file);
+	fseek(file, 0, SEEK_SET);
+
+	char* file_data;
+	CREATE_MEMORY_OBJECT(file_data, char, file_size + 1, "Error: file_read<file_data> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	fread(file_data, 1, file_size, file);
+	file_data[file_size] = 0;
+
+	fclose(file);
+	return file_data;
+}
+
 token_t* token_create(token_type_t type, const char* value, int a, int b, int c, int b2, int c2)
 {
 	token_t* t;
@@ -148,7 +788,7 @@ array_t* array_create(size_t size)
 	arr->size = size > min_size ? size : min_size;
 	arr->data = (void*) malloc(sizeof(void*) * arr->size);
 	if (!arr->data) {
-		perror("MESSAGE_MEMORY_ALLOCATE_ERROR");
+		perror(messages[language][MESSAGE_MEMORY_ALLOCATE_ERROR]);
 
 		exit(EXIT_FAILURE);
 	}
@@ -195,15 +835,355 @@ void array_free(array_t* arr)
 	arr = NULL;
 }
 
+void token_print(token_t* t)
+{
+	print_message("%d ", t->type);
+	// print_message("...\n");
+	// print_message("%zu - ", t->location.length);
+	print_message("%s - ", token_type2str(t->type));
+	print_message("%s\n", t->value);
+}
+
 void array_print(array_t* arr)
 {
-	print_message("Array Length: %zu\n", arr->length);
-	print_message("Array Size: %zu\n", arr->size);
-	print_message("Array Contents:\n");
+	// print_message("Array Length: %zu\n", arr->length);
+	// print_message("Array Size: %zu\n", arr->size);
+	// print_message("Array Contents:\n");
 
 	for (size_t i = 0; i < arr->length; i++) {
-		print_message("[%zu]: ...\n", i);
+		token_t* t = arr->data[i];
+		print_message("[%zu]: ", i);
+		token_print(t);
 	}
+}
+
+lexer_t* lexer_create(const char* data)
+{
+	lexer_t* lexer;
+	CREATE_MEMORY_OBJECT(lexer, lexer_t, 1, "Error: lexer_create<lexer> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	lexer->index = 0;
+	lexer->tokens = array_create(10);
+
+	if (data == NULL) {
+		lexer->data = "";
+		lexer->length = 0;
+	} else {
+		lexer->data = (char*) data;
+		lexer->length = strlen(data);
+	}
+
+	return lexer;
+}
+
+void lexer_free(lexer_t** lexer)
+{
+	if (lexer == NULL || *lexer == NULL) {
+		return;
+	}
+
+	if ((*lexer)->tokens != NULL) {
+		for (size_t i = 0; i < (*lexer)->tokens->length; i++) {
+			token_t* t = (token_t*) (*lexer)->tokens->data[i];
+			if (t != NULL) {
+				if (t->value != NULL) {
+					free(t->value);
+					t->value = NULL;
+				}
+
+				free(t);
+				t = NULL;
+			}
+		}
+
+		if ((*lexer)->tokens->data != NULL) {
+			free((*lexer)->tokens->data);
+			(*lexer)->tokens->data = NULL;
+		}
+
+		free((*lexer)->tokens);
+		(*lexer)->tokens = NULL;
+	}
+
+	if ((*lexer)->data != NULL) {
+		free((*lexer)->data);
+		(*lexer)->data = NULL;
+	}
+
+	free(*lexer);
+	*lexer = NULL;
+}
+
+bool is_number(wchar_t ch)
+{
+	return (ch >= L'۰' && ch <= L'۹') || (ch >= '0' && ch <= '9');
+}
+
+bool is_alpha(wchar_t ch)
+{
+	return (
+		(ch >= L'آ' && ch <= L'ی') ||
+		ch == L'_' ||
+		(ch >= 'a' && ch <= 'z') ||
+		(ch >= 'A' && ch <= 'Z')
+	)
+	&&
+	!(
+		ch == '+' ||
+		ch == '-' ||
+		ch == '*' ||
+		ch == '/' ||
+		ch == '=' ||
+		ch == '>' ||
+		ch == '<' ||
+		ch == ',' ||
+		ch == '(' ||
+		ch == ')' ||
+		ch == '{' ||
+		ch == '}'
+	);
+}
+
+bool is_ident(wchar_t ch)
+{
+	return is_alpha(ch) || is_number(ch);
+}
+
+wchar_t read_token(lexer_t* lexer)
+{
+	wchar_t current_char;
+	int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
+	if (char_size < 0) {
+		print_error(messages[language][MESSAGE_LEXER_TOKEN_READ_UNICODE]);
+
+		exit(EXIT_FAILURE);
+		return 0;
+	}
+
+	if (current_char == '\n') {
+		lexer->line++;
+		lexer->column = 0;
+	} else {
+		lexer->column += char_size;
+	}
+
+	lexer->index += char_size;
+	lexer->last_char_size = char_size;
+
+	return current_char;
+}
+
+wchar_t unread_token(lexer_t* lexer)
+{
+	lexer->index -= lexer->last_char_size;
+	lexer->column -= lexer->last_char_size;
+
+	wchar_t current_char;
+	int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
+	if (char_size < 0) {
+		print_error(messages[language][MESSAGE_LEXER_TOKEN_UNREAD_UNICODE]);
+
+		exit(EXIT_FAILURE);
+		return 0;
+	}
+
+	return current_char;
+}
+
+void read_number(lexer_t* lexer, wchar_t ch)
+{
+	char number[21];
+	int i = 0;
+	while (is_number(ch)) {
+		if (ch >= '0' && ch <= '9') {
+			number[i] = ch;
+		} else {
+			number[i] = ch - L'۰' + '0';
+		}
+		i++;
+		ch = read_token(lexer);
+	}
+
+	bool isFloat = false;
+	if (ch == '.') {
+		number[i++] = '.';
+		ch = read_token(lexer);
+
+		if (!is_number(ch)) {
+			print_error(messages[language][MESSAGE_LEXER_NUMBER_FLOAT_NEED_NUMBER_AFTER_DOT]);
+
+			exit(EXIT_FAILURE);
+		}
+		isFloat = true;
+
+		while (is_number(ch)) {
+			if (ch >= '0' && ch <= '9') {
+				number[i] = ch;
+			} else {
+				number[i] = ch - L'۰' + '0';
+			}
+			i++;
+			ch = read_token(lexer);
+		}
+	}
+
+	number[i] = 0;
+
+	token_t* t = token_create(isFloat ? TOKEN_TYPE_FLOAT : TOKEN_TYPE_INT, number, i, lexer->line, lexer->column - i, lexer->line, lexer->column);
+	array_push(lexer->tokens, t);
+
+	unread_token(lexer);
+}
+
+void read_comment_singleline(lexer_t* lexer)
+{
+	// Eating until finding \n or EOF
+	while (1) {
+		if (lexer->data[lexer->index] == '\n' || lexer->data[lexer->index] == '\0') {
+			break;
+		}
+
+		lexer->index++;
+	}
+}
+
+void read_comment_multiline(lexer_t* lexer)
+{
+	// Eating until finding */
+	// EOF is not allowed
+
+	// TODO: Eating first character lexer->index++;
+	while (1) {
+		if (lexer->data[lexer->index] == '\0') {
+			print_error(messages[language][MESSAGE_LEXER_COMMENT_MULTI_NOT_CLOSED]);
+
+			exit(EXIT_FAILURE);
+		} else if (lexer->data[lexer->index - 1] == '*' && lexer->data[lexer->index] == '/') {
+			lexer->index++;
+
+			break;
+		}
+
+		lexer->index++;
+	}
+}
+
+void read_string(lexer_t* lexer, wchar_t ch)
+{
+	size_t allocated_size = 20;
+
+	char* string;
+	CREATE_MEMORY_OBJECT(string, char, allocated_size, "Error: read_string<string> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
+	size_t i = 0;
+
+	while (ch != L'"') {
+		if (i >= allocated_size - 1) {
+			allocated_size *= 2;
+			char* temp = (char*)realloc(string, sizeof(char) * allocated_size);
+			if (temp == NULL) {
+				print_error(messages[language][MESSAGE_LEXER_STRING_READ_MEMORY]);
+				free(string);
+
+				exit(EXIT_FAILURE);
+			}
+			string = temp;
+		}
+
+		if (ch == L'\\') {
+			ch = read_token(lexer);
+			if (ch == L'n') {
+				string[i++] = '\n';
+			} else if (ch == L't') {
+				string[i++] = '\t';
+			} else if (ch == L'"') {
+				string[i++] = '"';
+			} else if (ch == L'\'') {
+				string[i++] = '\'';
+			} else if (ch == L'\\') {
+				string[i++] = '\\';
+			} else {
+				print_error(messages[language][MESSAGE_LEXER_STRING_UNKNOWN_ESCAPE]);
+				free(string);
+
+				exit(EXIT_FAILURE);
+			}
+		} else {
+			int char_size = wctomb(&string[i], ch);
+			if (char_size < 0) {
+				print_error(messages[language][MESSAGE_LEXER_STRING_CONVERT_MULTIBYTE]);
+				free(string);
+
+				exit(EXIT_FAILURE);
+			}
+			i += char_size;
+		}
+
+		ch = read_token(lexer);
+	}
+
+	string[i] = '\0';
+
+	token_t* t = token_create(TOKEN_TYPE_STRING, string, i, lexer->line, lexer->column - i, lexer->line, lexer->column);
+	array_push(lexer->tokens, t);
+
+	free(string);
+}
+
+size_t mb_strlen(char* identifier)
+{
+	size_t wcs_len = mbstowcs(NULL, identifier, 0);
+	if (wcs_len == (size_t)-1) {
+		perror(messages[language][MESSAGE_LEXER_STRING_GET_LENGTH_UNICODE]);
+
+		exit(EXIT_FAILURE);
+	}
+
+	return wcs_len;
+}
+
+void read_identifier(lexer_t* lexer, wchar_t ch)
+{
+	char identifier[256];
+	int i = 0;
+	while (is_ident(ch)) {
+		int char_size = wctomb(&identifier[i], ch);
+		if (char_size < 0) {
+			print_error(messages[language][MESSAGE_LEXER_IDENTIFIER_CONVERT_MULTIBYTE]);
+
+			exit(EXIT_FAILURE);
+		}
+		i += char_size;
+		ch = read_token(lexer);
+	}
+	identifier[i] = 0;
+
+	int mapping_index = 0;
+	token_type_t type = TOKEN_TYPE_IDENTIFIER;
+	while (keyword_mapping[language][mapping_index].keyword != NULL) {
+		if (strcmp(identifier, keyword_mapping[language][mapping_index].keyword) == 0) {
+			type = keyword_mapping[language][mapping_index].token_type;
+			break;
+		}
+
+		mapping_index++;
+	}
+
+	size_t length = mb_strlen(identifier);
+	token_t* t = token_create(type, identifier, length, lexer->line, lexer->column - length, lexer->line, lexer->column);
+	array_push(lexer->tokens, t);
+
+	unread_token(lexer);
+}
+
+size_t wchar_length(wchar_t wide_char)
+{
+	char mb_char[MB_LEN_MAX];
+	if (wcrtomb(mb_char, wide_char, NULL) == (size_t)-1) {
+		perror(messages[language][MESSAGE_LEXER_CHAR_LENGTH_ISSUE]);
+		return 0;
+	}
+
+	return mbrlen(mb_char, MB_LEN_MAX, NULL);
 }
 
 void lexer_lex(lexer_t* lexer)
@@ -227,6 +1207,12 @@ void lexer_lex(lexer_t* lexer)
 			lexer->index++;
 			lexer->column++;
 			continue;
+		} else if (current_wchar == '[') {
+			token_t* t = token_create(TOKEN_TYPE_BRACKETS_OPEN, "[", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+			array_push(lexer->tokens, t);
+		} else if (current_wchar == ']') {
+			token_t* t = token_create(TOKEN_TYPE_BRACKETS_CLOSE, "]", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+			array_push(lexer->tokens, t);
 		} else if (current_wchar == '%' || current_wchar == L'٪') {
 			token_t* t = token_create(TOKEN_TYPE_MODULE, "%", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
@@ -315,7 +1301,7 @@ void lexer_lex(lexer_t* lexer)
 		} else if (is_alpha(current_wchar)) {
 			read_identifier(lexer, current_wchar);
 		} else {
-			print_error("MESSAGE_LEXER_UNEXPECTED_CHAR", current_char, lexer->line, lexer->column - 1);
+			print_error(messages[language][MESSAGE_LEXER_UNEXPECTED_CHAR], current_char, lexer->line, lexer->column - 1);
 
 			token_t* t = token_create(TOKEN_TYPE_ERROR, (char[]){current_char,'\0'}, 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
@@ -329,59 +1315,86 @@ void lexer_lex(lexer_t* lexer)
 	}
 }
 
-lexer_t* lexer_create(const char* data)
+void help()
 {
-	lexer_t* lexer;
-	CREATE_MEMORY_OBJECT(lexer, lexer_t, 1, "Error: lexer_create<lexer> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-	lexer->index = 0;
-	lexer->tokens = array_create(10);
-
-	if (data == NULL) {
-		lexer->data = "";
-		lexer->length = 0;
-	} else {
-		lexer->data = (char*) data;
-		lexer->length = strlen(data);
-	}
-
-	return lexer;
+	printf("%s", messages[language][MESSAGE_WELCOME]);
 }
 
-char* file_read(char* file_Name)
+parser_t* parser_create(lexer_t** lexer)
 {
-	FILE* file = fopen(file_Name, "r");
-	if (file == NULL) {
-		print_error("Error: this file %s not exists!", file_Name);
-		return NULL;
+	parser_t* parser;
+	CREATE_MEMORY_OBJECT(parser, parser_t, 1, "Error: parser_create<parser> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
+	parser->lexer = lexer;
+	parser->token_index = 0;
+	parser->functions = array_create(5);
+	parser->expressions = array_create(5);
+
+	return parser;
+}
+
+void parser_free(parser_t** parser)
+{
+	if (parser == NULL || *parser == NULL) {
+		return;
 	}
 
-	fseek(file, 0, SEEK_END);
-	long file_size = ftell(file);
-	fseek(file, 0, SEEK_SET);
-
-	char* file_data;
-	CREATE_MEMORY_OBJECT(file_data, char, file_size + 1, "Error: file_read<file_data> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-	fread(file_data, 1, file_size, file);
-	file_data[file_size] = 0;
-
-	fclose(file);
-	return file_data;
+	free(*parser);
+	*parser = NULL;
+	print_message("*parser is null %d\n", *parser == NULL ? 1 : 0);
+	print_message("parser is null %d\n", parser == NULL ? 1 : 0);
 }
 
 int main(int argc, char** argv)
 {
-    if (argc < 2) {
-        print_error("Error: no input file!\n");
-        return 1;
-    }
+	setlocale(LC_ALL, "");
 
-    char* file_data = file_read(argv[1]);
+	if (argc == 1 || argc > 3) {
+		help();
+		return 0;
+	}
+
+	// printf("%d\n", argc);
+	// for (int i = 0; i < argc; i++) {
+	// 	printf("--->%s\n", argv[i]);
+	// }
+
+	if (argc == 3 && (strcmp(argv[1], "--code") != 0 && strcmp(argv[1], "--ast") != 0)) {
+		help();
+		return 0;
+	}
+
+	char* file_data;
+	bool isAst = false;
+	bool passingCode = false;
+	interpreter_t* interpreter;
+
+	if (argc == 2) {
+		file_data = file_read(argv[1]);
+	} else {
+		if (strcmp(argv[1], "--ast") == 0) {
+			isAst = true;
+		} else if (strcmp(argv[1], "--code") == 0) {
+			isAst = false;
+			// isAst = true;
+		} else {
+			print_message("Second argument should be either --ast or --code\n");
+			help();
+			return 0;
+		}
+
+		passingCode = true;
+		file_data = argv[2];
+	}
 
     lexer_t* lexer = lexer_create(file_data);
     lexer_lex(lexer);
 
-    // parser_t* parser = parser_create(&lexer);
-    // parser_parse(parser);
+    array_print(lexer->tokens);
 
-    return 0;
+    print_message("free lexer\n");
+    lexer_free(&lexer);
+    print_message("end lexer free\n");
+
+	return 0;
 }

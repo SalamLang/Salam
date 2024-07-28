@@ -14,6 +14,10 @@
 
 bool debug_enabled = true;
 
+#ifndef MB_CUR_MAX
+	#define MB_CUR_MAX (MB_LEN_MAX)
+#endif
+
 #define print_error(fmt, ...) fprintf(stderr, fmt, ##__VA_ARGS__)
 
 #define print_message(fmt, ...) if (debug_enabled) fprintf(stdout, fmt, ##__VA_ARGS__)
@@ -45,24 +49,6 @@ typedef enum {
 	MESSAGE_LEXER_IDENTIFIER_CONVERT_MULTIBYTE,
 	MESSAGE_LEXER_CHAR_LENGTH_ISSUE,
 	MESSAGE_LEXER_ARRAY_NOT_CLOSED,
-	MESSAGE_INTERPRETER_MAIN_NORETURN,
-	MESSAGE_INTERPRETER_CANNOT_HAVE_RET_BREAK_CON_OUT_OF_LOOP,
-	MESSAGE_INTERPRETER_VARIABLE_NOT_FOUND,
-	MESSAGE_INTERPRETER_EXPRESSION_INVALID_VALUE_IN_BINARY,
-	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_COMPARE_THIS_KIND_OF_VALUE_TYPES,
-	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_AND_FOR_THIS_VALUES,
-	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_OR_FOR_THIS_VALUES,
-	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_BINARY_OP_FOR_NON_INT,
-	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_MODULE_OP_FOR_FLOAT,
-	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_DIVIDE_BY_ZERO,
-	MESSAGE_INTERPRETER_EXPRESSION_CANNOT_DO_THIS_OPERATOR,
-	MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_IS_MORE,
-	MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_IS_LESS,
-	MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ZERO,
-	MESSAGE_INTERPRETER_FUNCTION_CALL_NUMBER_ARGS_SHOULD_BE_ONLY_ONE,
-	MESSAGE_INTERPRETER_FUNCTION_NOT_EXISTS,
-	MESSAGE_INTERPRETER_CANNOT_ASSIGN_VARIABLE_WITH_A_NON_IDENTIFIER_AS_NAME,
-	MESSAGE_INTERPRETER_EXPRESSION_DONT_SUPPORT_THIS_TYPE_IN_EXPRESSION,
 	MESSAGE_PARSER_UNEXPECTED_TOKEN,
 	MESSAGE_PARSER_BLOCK_MEMORY_ISSUE,
 	MESSAGE_PARSER_BAD_TOKEN_AS_STATEMENT,
@@ -234,7 +220,9 @@ typedef struct {
 	size_t column;
 
 	array_t* tokens;
-	size_t last_char_size;
+	size_t last_index;
+	size_t last_line;
+	size_t last_column;
 } lexer_t;
 
 struct ast_node;
@@ -361,30 +349,6 @@ typedef struct {
 	array_t* expressions;
 } parser_t;
 
-typedef struct {
-	int return_code;
-	parser_t** parser;
-	bool is_global_scope;
-} interpreter_t;
-
-typedef ast_expression_t* (*nud_func_t)(parser_t* parser, token_t* token);
-typedef ast_expression_t* (*led_func_t)(parser_t* parser, token_t* token, ast_expression_t* left);
-
-typedef struct {
-	size_t precedence;
-	nud_func_t nud;
-	led_func_t led;
-} token_info_t;
-
-enum {
-	PRECEDENCE_LOWEST = 0,    // START FROM HERE
-	PRECEDENCE_HIGHEST2 = 1,  // =
-	PRECEDENCE_ANDOR = 2,     // AND OR
-	PRECEDENCE_HIGHEST = 3,   // == !=
-	PRECEDENCE_MULTIPLY = 4,  // / *
-	PRECEDENCE_SUM = 5,       // + -
-};
-
 // Function declarations
 char* read_dynamic_string();
 char* intToString(int value);
@@ -414,6 +378,7 @@ bool is_alpha(wchar_t ch);
 bool is_ident(wchar_t ch);
 wchar_t read_token(lexer_t* lexer);
 wchar_t unread_token(lexer_t* lexer);
+char digit_wchar2char(wchar_t ch);
 void read_number(lexer_t* lexer, wchar_t ch);
 void read_comment_singleline(lexer_t* lexer);
 void read_comment_multiline(lexer_t* lexer);
@@ -953,8 +918,12 @@ bool is_ident(wchar_t ch)
 
 wchar_t read_token(lexer_t* lexer)
 {
+	lexer->last_index = lexer->index;
+	lexer->last_line = lexer->line;
+	lexer->last_column = lexer->column;
+
 	wchar_t current_char;
-	int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
+    int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
 	if (char_size < 0) {
 		print_error(messages[language][MESSAGE_LEXER_TOKEN_READ_UNICODE]);
 
@@ -970,15 +939,17 @@ wchar_t read_token(lexer_t* lexer)
 	}
 
 	lexer->index += char_size;
-	lexer->last_char_size = char_size;
+
+	printf("\tread token: %d - '%lc'\n", char_size, current_char);
 
 	return current_char;
 }
 
 wchar_t unread_token(lexer_t* lexer)
 {
-	lexer->index -= lexer->last_char_size;
-	lexer->column -= lexer->last_char_size;
+	lexer->index = lexer->last_index;
+	lexer->line = lexer->last_line;
+	lexer->column = lexer->last_column;
 
 	wchar_t current_char;
 	int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
@@ -992,47 +963,63 @@ wchar_t unread_token(lexer_t* lexer)
 	return current_char;
 }
 
+char digit_wchar2char(wchar_t ch)
+{
+	// TODO: Arabic digits
+
+	// English digits
+	if (ch >= '0' && ch <= '9') {
+		return ch;
+	}
+	// Persian digits
+	else {
+		return ch - L'۰' + '0';
+	}
+}
+
 void read_number(lexer_t* lexer, wchar_t ch)
 {
 	char number[21];
 	int i = 0;
 	while (is_number(ch)) {
-		if (ch >= '0' && ch <= '9') {
-			number[i] = ch;
-		} else {
-			number[i] = ch - L'۰' + '0';
-		}
+		number[i] = digit_wchar2char(ch);
+
 		i++;
 		ch = read_token(lexer);
 	}
 
 	bool isFloat = false;
+	bool hasEmptyDot = false;
+
 	if (ch == '.') {
-		number[i++] = '.';
 		ch = read_token(lexer);
 
-		if (!is_number(ch)) {
-			print_error(messages[language][MESSAGE_LEXER_NUMBER_FLOAT_NEED_NUMBER_AFTER_DOT]);
+		if (is_number(ch)) {
+			print_message("it's a dot");
+			number[i++] = '.';
+			isFloat = true;
 
-			exit(EXIT_FAILURE);
-		}
-		isFloat = true;
-
-		while (is_number(ch)) {
-			if (ch >= '0' && ch <= '9') {
-				number[i] = ch;
-			} else {
-				number[i] = ch - L'۰' + '0';
+			while (is_number(ch)) {
+				number[i] = digit_wchar2char(ch);
+				
+				i++;
+				ch = read_token(lexer);
 			}
-			i++;
-			ch = read_token(lexer);
+		}
+		else {
+			hasEmptyDot = true;
 		}
 	}
 
 	number[i] = 0;
 
-	token_t* t = token_create(isFloat ? TOKEN_TYPE_FLOAT : TOKEN_TYPE_INT, number, i, lexer->line, lexer->column - i, lexer->line, lexer->column);
+	token_t* t = token_create(isFloat ? TOKEN_TYPE_FLOAT : TOKEN_TYPE_INT, number, i, lexer->line, lexer->column - i - (hasEmptyDot ? 1 : 0), lexer->line, lexer->column);
 	array_push(lexer->tokens, t);
+
+	if (hasEmptyDot) {
+		token_t* t = token_create(TOKEN_TYPE_DOT, ".", i, lexer->line, lexer->column - 1, lexer->line, lexer->column);
+		array_push(lexer->tokens, t);
+	}
 
 	unread_token(lexer);
 }
@@ -1206,6 +1193,9 @@ void lexer_lex(lexer_t* lexer)
 		}
 
 		wchar_t current_wchar = read_token(lexer);
+
+		printf("====>>> %lc\n", current_wchar);
+
 		if (current_wchar == L'\u200C') {
 			lexer->index++;
 			lexer->column++;
@@ -1356,7 +1346,8 @@ void parser_free(parser_t** parser)
 
 int main(int argc, char** argv)
 {
-	setlocale(LC_ALL, "");
+    // setlocale(LC_ALL, "");
+    setlocale(LC_ALL, "C.UTF-8");
 
 	if (argc == 1 || argc > 3) {
 		help();
@@ -1369,25 +1360,23 @@ int main(int argc, char** argv)
 	}
 
 	char* file_data;
-	bool isAst = false;
-	bool passingCode = false;
-	interpreter_t* interpreter;
+	// bool isAst = false;
+	// bool passingCode = false;
 
 	if (argc == 2) {
 		file_data = file_read(argv[1]);
 	} else {
 		if (strcmp(argv[1], "--ast") == 0) {
-			isAst = true;
-		} else if (strcmp(argv[1], "--code") == 0) {
-			isAst = false;
 			// isAst = true;
+		} else if (strcmp(argv[1], "--code") == 0) {
+			// isAst = false;
 		} else {
 			print_message("Second argument should be either --ast or --code\n");
 			help();
 			return 0;
 		}
 
-		passingCode = true;
+		// passingCode = true;
 		file_data = argv[2];
 	}
 

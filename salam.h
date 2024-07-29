@@ -9,7 +9,7 @@ bool debug_enabled = true;
 #define print_message(fmt, ...) if (debug_enabled) fprintf(stdout, fmt, ##__VA_ARGS__)
 
 #define CREATE_MEMORY_OBJECT(result, type, length, fmt, ...) \
-	result = (type *)malloc(sizeof(type) * (length));  \
+	result = (type *) malloc(sizeof(type) * (length));  \
 	if (!result) { \
 		fprintf(stderr, fmt,  __VA_ARGS__);\
 		exit(EXIT_FAILURE); \
@@ -75,6 +75,12 @@ typedef struct {
 	size_t length;
 	void** data;
 } array_t;
+
+typedef struct {
+	size_t size;
+	size_t length;
+	char* data;
+} string_t;
 
 typedef enum {
 	// Values
@@ -222,6 +228,17 @@ typedef struct {
 char* read_dynamic_string();
 char* intToString(int value);
 char* file_read(char* file_Name);
+
+// String
+string_t* string_create(size_t initial_size);
+void string_append_char(string_t* str, char c);
+void string_append_str(string_t* str, const char* suffix);
+void string_free(string_t* str);
+void string_print(string_t* str);
+
+// AST
+string_t* ast_string(parser_t* parser);
+void ast_print(parser_t* parser);
 
 // Array
 array_t* array_create(size_t size);

@@ -502,7 +502,7 @@ void read_string(lexer_t* lexer, wchar_t ch)
 	while (ch != L'"') {
 		if (i >= allocated_size - 1) {
 			allocated_size *= 2;
-			char* temp = (char*)realloc(string, sizeof(char) * allocated_size);
+			char* temp = (char*) realloc(string, sizeof(char) * allocated_size);
 			if (temp == NULL) {
 				print_error(messages[language][MESSAGE_LEXER_STRING_READ_MEMORY]);
 				free(string);
@@ -797,7 +797,8 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t
 	ast_layout_node_t* element;
 	CREATE_MEMORY_OBJECT(element, ast_layout_node_t, 1, "Error: parser_layout_element_single<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	element->type = type;
-	element->children = NULL;
+	// element->children = NULL;
+	element->children = array_create(1);
 
 	parser->token_index++; // Eating keyword
 
@@ -809,7 +810,8 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 	ast_layout_node_t* element;
 	CREATE_MEMORY_OBJECT(element, ast_layout_node_t, 1, "Error: parser_layout_element_mother<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	element->type = type;
-	element->children = NULL;
+	// element->children = NULL;
+	element->children = array_create(1);
 
 	parser->token_index++; // Eating keyword
 
@@ -854,7 +856,7 @@ array_t* parser_layout_elements(parser_t* parser)
 		token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
 
 		if (current_token->type == TOKEN_TYPE_IDENTIFIER) {
-			ast_node_t* element = parser_layout_element(parser);
+			ast_layout_node_t* element = parser_layout_element(parser);
 			if (element == NULL) {
 				token_free(current_token);
 				array_free(elements);
@@ -1122,6 +1124,96 @@ void parser_free(parser_t* parser)
 	print_message("parser is null %d\n", parser == NULL ? 1 : 0);
 }
 
+string_t* string_create(size_t initial_size)
+{
+	string_t* str;
+	CREATE_MEMORY_OBJECT(str, string_t, 1, "Error: string_create<str> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	str->size = initial_size;
+	str->length = 0;
+
+	CREATE_MEMORY_OBJECT(str->data, char, initial_size, "Error: string_create<str_data> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	if (str->data == NULL) {
+		fprintf(stderr, "Memory allocation failed\n");
+		exit(1);
+	}
+	str->data[0] = '\0';
+
+	return str;
+}
+
+void string_append_char(string_t* str, char c)
+{
+	if (str->length + 1 >= str->size) {
+		str->size *= 2;
+		str->data = (char*) realloc(str->data, str->size * sizeof(char));
+		if (str->data == NULL) {
+			fprintf(stderr, "Memory reallocation failed\n");
+			exit(1);
+		}
+	}
+	str->data[str->length] = c;
+	str->length++;
+	str->data[str->length] = '\0';
+}
+
+void string_append_str(string_t* str, const char* suffix)
+{
+	size_t suffix_len = strlen(suffix);
+	while (str->length + suffix_len >= str->size) {
+		str->size *= 2;
+		str->data = (char*) realloc(str->data, str->size * sizeof(char));
+		if (str->data == NULL) {
+			fprintf(stderr, "Memory reallocation failed\n");
+			exit(1);
+		}
+	}
+	strcpy(str->data + str->length, suffix);
+	str->length += suffix_len;
+}
+
+void string_free(string_t* str)
+{
+	if (str == NULL) return;
+
+	free(str->data);
+	str->data = NULL;
+
+	str->size = 0;
+	str->length = 0;
+
+	free(str);
+	str = NULL;
+}
+
+void string_print(string_t* str)
+{
+	if (str == NULL || str->data == NULL) printf("NULL\n");
+	else printf("%s\n", str->data);
+}
+
+string_t* ast_string(parser_t* parser)
+{
+    string_t* str = string_create(10);
+    return str;
+
+	// if (parser->layout != NULL) {
+
+	// }
+
+	// return str;
+}
+
+void ast_print(parser_t* parser)
+{
+	string_t* tree = ast_string(parser);
+
+	printf("XML AST Tree:\n");
+
+	string_print(tree);
+
+	string_free(tree);
+}
+
 int main(int argc, char** argv)
 {
 	// setlocale(LC_ALL, "");
@@ -1168,6 +1260,8 @@ int main(int argc, char** argv)
 	parser_t* parser = parser_create(lexer);
 	parser_parse(parser);
 	parser_free(parser);
+
+	ast_print(parser);
 
 	print_message("free lexer\n");
 	lexer_free(lexer);

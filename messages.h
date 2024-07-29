@@ -90,29 +90,9 @@ const keyword_mapping_t keyword_mapping[LANGUAGE_COUNT][50] = {
 
 const keyword_mapping_t layout_keyword_mapping[LANGUAGE_COUNT][50] = {
 	[LANGUAGE_PERSIAN] = {
-		{"صفحه", TOKEN_TYPE_LAYOUT},
-		{"خاتمه", TOKEN_TYPE_END},
-		{"تابع", TOKEN_TYPE_FUNCTION},
-		{"برگشت", TOKEN_TYPE_RETURN},
-		{"ادامه", TOKEN_TYPE_CONTINUE},
-		{"توقف", TOKEN_TYPE_BREAK},
-		{"نمایش", TOKEN_TYPE_PRINT},
-		{"واگرنه", TOKEN_TYPE_ELSEIF},
-		{"اگر", TOKEN_TYPE_IF},
-
-		{"مخالف", TOKEN_TYPE_NOT_EQUAL},
-		{"برابر", TOKEN_TYPE_EQUAL_EQUAL},
-
-		{"بزرگتر", TOKEN_TYPE_GREATER_THAN},
-		{"کوچکتر", TOKEN_TYPE_LESS_THAN},
-
-		{"پوچ", TOKEN_TYPE_NULL},
-		{"تا", TOKEN_TYPE_UNTIL},
-		{"تکرار", TOKEN_TYPE_REPEAT},
-		{"درست", TOKEN_TYPE_TRUE},
-		{"غلط", TOKEN_TYPE_FALSE},
-		{"و", TOKEN_TYPE_AND},
-		{"یا", TOKEN_TYPE_OR},
+		{"دکمه", TOKEN_TYPE_LAYOUT_BUTTON},
+		{"متن", TOKEN_TYPE_LAYOUT_TEXT},
+		{"فیلد", TOKEN_TYPE_LAYOUT_INPUT},
 		{NULL, TOKEN_TYPE_ERROR},
 	},
 };

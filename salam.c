@@ -358,7 +358,7 @@ wchar_t read_token(lexer_t* lexer)
 	lexer->last_length = lexer->length;
 
 	wchar_t current_char;
-    int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
+	int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
 	if (char_size < 0) {
 		print_error(messages[language][MESSAGE_LEXER_TOKEN_READ_UNICODE]);
 
@@ -840,14 +840,12 @@ ast_node_t* parser_layout_element_input(parser_t* parser)
 ast_node_t* parser_layout_element(parser_t* parser)
 {
 	token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
-	
-	if (current_token != TOKEN_TYPE_IDENTIFIER) {
+
+	if (current_token->type != TOKEN_TYPE_IDENTIFIER) {
 		return NULL;
 	}
 
-	ast_node_t* element;
-	CREATE_MEMORY_OBJECT(element, ast_node_t, 1, "Error: parser_layout_elements<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-
+	ast_node_t* element = NULL;
 	token_type_t type = convert_layout_identifier_token_type(current_token->value);
 
 	switch (type) {
@@ -883,6 +881,9 @@ array_t* parser_layout_elements(parser_t* parser)
 		if (current_token->type == TOKEN_TYPE_IDENTIFIER) {
 			ast_node_t* element = parser_layout_element(parser);
 			if (element == NULL) {
+				token_free(current_token);
+				array_free(elements);
+
 				print_message("Error: invalid element inside layout block!");
 				
 				exit(EXIT_FAILURE);
@@ -891,9 +892,7 @@ array_t* parser_layout_elements(parser_t* parser)
 			array_push(elements, element);
 		}
 		else {
-			print_message("Error: Expected nodata %s\n", token_type2str(current_token->type));
-			
-			exit(EXIT_FAILURE);
+			break;
 		}
 	}
 
@@ -1060,7 +1059,6 @@ void parser_free(parser_t* parser)
 	if (parser->layout != NULL) {
 		if (parser->layout->elements->data != NULL) {
 			for (size_t i = 0; i < parser->layout->elements->length; i++) {
-				print_message("Free layout element %s\n", ((ast_node_t*) parser->functions->data[i])->data.function_declaration->name);
 				if (parser->layout->elements->data[i] != NULL) {
 					ast_node_free((ast_node_t*) parser->layout->elements->data[i]);
 					parser->layout->elements->data[i] = NULL;
@@ -1120,8 +1118,8 @@ void parser_free(parser_t* parser)
 
 int main(int argc, char** argv)
 {
-    // setlocale(LC_ALL, "");
-    setlocale(LC_ALL, "C.UTF-8");
+	// setlocale(LC_ALL, "");
+	setlocale(LC_ALL, "C.UTF-8");
 
 	if (argc == 1 || argc > 3) {
 		help();
@@ -1154,20 +1152,20 @@ int main(int argc, char** argv)
 		file_data = argv[2];
 	}
 
-    lexer_t* lexer = lexer_create(file_data);
-    lexer_lex(lexer);
+	lexer_t* lexer = lexer_create(file_data);
+	lexer_lex(lexer);
 
 	if (!passingCode) {
-	    array_print(lexer->tokens);
+		array_print(lexer->tokens);
 	}
-
+	
 	parser_t* parser = parser_create(lexer);
 	parser_parse(parser);
 	parser_free(parser);
 
-    print_message("free lexer\n");
-    lexer_free(lexer);
-    print_message("end lexer free\n");
+	print_message("free lexer\n");
+	lexer_free(lexer);
+	print_message("end lexer free\n");
 
 	return 0;
 }

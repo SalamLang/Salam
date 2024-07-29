@@ -195,6 +195,8 @@ typedef struct {
 typedef struct {
     ast_layout_type_t type;
 
+    bool is_mother;
+
 	array_t* attributes;
 	array_t* children;
 } ast_layout_node_t;

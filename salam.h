@@ -235,10 +235,13 @@ void string_append_char(string_t* str, char c);
 void string_append_str(string_t* str, const char* suffix);
 void string_free(string_t* str);
 void string_print(string_t* str);
+void string_append(string_t* dest, string_t* src);
 
 // AST
 string_t* ast_string(parser_t* parser);
 void ast_print(parser_t* parser);
+char* ast_layout_type_string(ast_layout_type_t type);
+char* ast_node_type_string(ast_node_type_t type);
 
 // Array
 array_t* array_create(size_t size);

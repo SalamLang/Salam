@@ -88,11 +88,11 @@ const keyword_mapping_t keyword_mapping[LANGUAGE_COUNT][50] = {
 	},
 };
 
-const keyword_mapping_t layout_keyword_mapping[LANGUAGE_COUNT][50] = {
+const layout_keyword_mapping_t layout_keyword_mapping[LANGUAGE_COUNT][50] = {
 	[LANGUAGE_PERSIAN] = {
-		{"دکمه", TOKEN_TYPE_LAYOUT_BUTTON},
-		{"متن", TOKEN_TYPE_LAYOUT_TEXT},
-		{"فیلد", TOKEN_TYPE_LAYOUT_INPUT},
+		{"دکمه", AST_TYPE_LAYOUT_BUTTON},
+		{"متن", AST_TYPE_LAYOUT_TEXT},
+		{"فیلد", AST_TYPE_LAYOUT_INPUT},
 		{NULL, TOKEN_TYPE_ERROR},
 	},
 };

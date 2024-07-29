@@ -83,11 +83,6 @@ typedef enum {
 	TOKEN_TYPE_FLOAT,
 	TOKEN_TYPE_STRING,
 
-    // Layout Keywords
-    TOKEN_TYPE_LAYOUT_BUTTON, // دکمه
-    TOKEN_TYPE_LAYOUT_TEXT, // متن
-    TOKEN_TYPE_LAYOUT_INPUT, // فیلد
-
 	// Keywords
 	TOKEN_TYPE_LAYOUT, // صفحه
 	TOKEN_TYPE_END, // خاتمه
@@ -138,11 +133,6 @@ typedef enum {
 } token_type_t;
 
 typedef struct {
-	const char* keyword;
-	token_type_t token_type;
-} keyword_mapping_t;
-
-typedef struct {
 	token_type_t type;
 	char* value;
 	struct {
@@ -175,10 +165,32 @@ struct ast_node;
 typedef enum {
     AST_TYPE_FUNCTION,
     AST_TYPE_LAYOUT,
+} ast_node_type_t;
+
+typedef enum {
+    AST_TYPE_LAYOUT_ERROR,
     AST_TYPE_LAYOUT_BUTTON,
     AST_TYPE_LAYOUT_TEXT,
     AST_TYPE_LAYOUT_INPUT,
-} ast_node_type_t;
+    AST_TYPE_LAYOUT_LINE,
+    AST_TYPE_LAYOUT_BREAK,
+} ast_layout_type_t;
+
+typedef struct {
+    const char* keyword;
+    token_type_t token_type;
+} keyword_mapping_t;
+
+typedef struct {
+    const char* keyword;
+    ast_layout_type_t layout_type;
+} layout_keyword_mapping_t;
+
+typedef struct {
+    ast_layout_type_t type;
+
+	array_t* children;
+} ast_layout_node_t;
 
 typedef struct {
 	array_t* elements;
@@ -251,7 +263,9 @@ void parser_free(parser_t* parser);
 void parser_token_eat_nodata(parser_t* parser, token_type_t type);
 token_t* parser_token_eat(parser_t* parser, token_type_t type);
 array_t* parser_layout_elements(parser_t* parser);
-ast_node_t* parser_layout_element(parser_t* parser);
+ast_layout_node_t* parser_layout_element(parser_t* parser);
+ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t* parser);
+ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t* parser);
 ast_layout_t* parser_layout(parser_t* parser);
 
 void help();

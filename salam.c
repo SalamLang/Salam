@@ -581,14 +581,14 @@ token_type_t convert_identifier_token_type(char* identifier)
 	return type;
 }
 
-token_type_t convert_layout_identifier_token_type(char* identifier)
+ast_layout_type_t convert_layout_identifier_token_type(char* identifier)
 {
 	int mapping_index = 0;
-	token_type_t type = TOKEN_TYPE_IDENTIFIER;
+	ast_layout_type_t type = AST_TYPE_LAYOUT_ERROR;
 
 	while (layout_keyword_mapping[language][mapping_index].keyword != NULL) {
 		if (strcmp(identifier, layout_keyword_mapping[language][mapping_index].keyword) == 0) {
-			type = layout_keyword_mapping[language][mapping_index].token_type;
+			type = layout_keyword_mapping[language][mapping_index].layout_type;
 			break;
 		}
 
@@ -792,11 +792,12 @@ parser_t* parser_create(lexer_t* lexer)
 	return parser;
 }
 
-ast_node_t* parser_layout_element_button(parser_t* parser)
+ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t* parser)
 {
-	ast_node_t* element;
-	CREATE_MEMORY_OBJECT(element, ast_node_t, 1, "Error: parser_layout_element_button<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-	element->type = AST_TYPE_LAYOUT_BUTTON;
+	ast_layout_node_t* element;
+	CREATE_MEMORY_OBJECT(element, ast_layout_node_t, 1, "Error: parser_layout_element_single<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	element->type = type;
+	element->children = NULL;
 
 	parser->token_index++; // Eating keyword
 
@@ -807,11 +808,12 @@ ast_node_t* parser_layout_element_button(parser_t* parser)
 	return element;
 }
 
-ast_node_t* parser_layout_element_text(parser_t* parser)
+ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t* parser)
 {
-	ast_node_t* element;
-	CREATE_MEMORY_OBJECT(element, ast_node_t, 1, "Error: parser_layout_element_text<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-	element->type = AST_TYPE_LAYOUT_TEXT;
+	ast_layout_node_t* element;
+	CREATE_MEMORY_OBJECT(element, ast_layout_node_t, 1, "Error: parser_layout_element_mother<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	element->type = type;
+	element->children = NULL;
 
 	parser->token_index++; // Eating keyword
 
@@ -822,53 +824,30 @@ ast_node_t* parser_layout_element_text(parser_t* parser)
 	return element;
 }
 
-ast_node_t* parser_layout_element_input(parser_t* parser)
-{
-	ast_node_t* element;
-	CREATE_MEMORY_OBJECT(element, ast_node_t, 1, "Error: parser_layout_element_input<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-	element->type = AST_TYPE_LAYOUT_INPUT;
-
-	parser->token_index++; // Eating keyword
-
-	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
-
-	parser_token_eat_nodata(parser, TOKEN_TYPE_END);
-
-	return element;
-}
-
-ast_node_t* parser_layout_element(parser_t* parser)
+ast_layout_node_t* parser_layout_element(parser_t* parser)
 {
 	token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
 
-	if (current_token->type != TOKEN_TYPE_IDENTIFIER) {
-		return NULL;
-	}
-
-	ast_node_t* element = NULL;
-	token_type_t type = convert_layout_identifier_token_type(current_token->value);
+	if (current_token->type != TOKEN_TYPE_IDENTIFIER) return NULL;
+	
+	ast_layout_type_t type = convert_layout_identifier_token_type(current_token->value);
 
 	switch (type) {
-		case TOKEN_TYPE_LAYOUT_BUTTON:
-			element = parser_layout_element_button(parser);
-
+		case AST_TYPE_LAYOUT_TEXT:
+		case AST_TYPE_LAYOUT_INPUT:
+		case AST_TYPE_LAYOUT_BUTTON:
+			return parser_layout_element_mother(type, parser);
 			break;
-
-		case TOKEN_TYPE_LAYOUT_TEXT:
-			element = parser_layout_element_text(parser);
-
-			break;
-
-		case TOKEN_TYPE_LAYOUT_INPUT:
-			element = parser_layout_element_input(parser);
-
+		
+		case AST_TYPE_LAYOUT_LINE:
+		case AST_TYPE_LAYOUT_BREAK:
+			return parser_layout_element_single(type, parser);
 			break;
 
 		default:
+			return NULL;
 			break;
 	}
-
-	return element;
 }
 
 array_t* parser_layout_elements(parser_t* parser)
@@ -1018,35 +997,60 @@ void parser_parse(parser_t* parser)
 	}
 }
 
+void ast_layout_node_free(ast_layout_node_t* node)
+{
+	if (node == NULL) return;
+
+	if (node->children != NULL) {
+		if (node->children->data != NULL) {
+			for (size_t i = 0; i < node->children->length; i++) {
+				if (node->children->data[i] != NULL) {
+					ast_layout_node_free(node->children->data[i]);
+				}
+			}
+
+			free(node->children->data);
+			node->children->data = NULL;
+		}
+
+		free(node->children);
+		node->children = NULL;
+	}
+
+	free(node);
+	node = NULL;
+}
+
 void ast_node_free(ast_node_t* node)
 {
 	if (node == NULL) return;
-	
+
 	switch (node->type) {
 		case AST_TYPE_FUNCTION:
 
 			break;
 		
-		case AST_TYPE_LAYOUT_INPUT:
-		case AST_TYPE_LAYOUT_TEXT:
-		case AST_TYPE_LAYOUT_BUTTON:
-			break;
-		
 		case AST_TYPE_LAYOUT:
-			if (node->data.layout->elements != NULL) {
-				if (node->data.layout->elements->data != NULL) {
-					for (size_t i = 0; i < node->data.layout->elements->length; i++) {
-						if (node->data.layout->elements->data[i] != NULL) {
-							ast_node_free((ast_node_t*) node->data.layout->elements->data[i]);
-							node->data.layout->elements->data[i] = NULL;
+			if (node->data.layout != NULL) {
+				if (node->data.layout->elements != NULL) {
+					if (node->data.layout->elements->data != NULL) {
+						for (size_t i = 0; i < node->data.layout->elements->length; i++) {
+							if (node->data.layout->elements->data[i] != NULL) {
+								ast_layout_node_free((ast_layout_node_t*) node->data.layout->elements->data[i]);
+							}
 						}
 					}
-					// array_free(node->data.layout->elements);
-				}
-			}
 
-			free(node->data.layout);
-			node->data.layout = NULL;
+					free(node->data.layout->elements->data);
+					node->data.layout->elements->data = NULL;
+
+					free(node->data.layout->elements);
+					node->data.layout->elements = NULL;
+				}
+
+				free(node->data.layout);
+				node->data.layout = NULL;
+			}
 			break;
 		
 		default:
@@ -1067,8 +1071,7 @@ void parser_free(parser_t* parser)
 		if (parser->layout->elements->data != NULL) {
 			for (size_t i = 0; i < parser->layout->elements->length; i++) {
 				if (parser->layout->elements->data[i] != NULL) {
-					ast_node_free((ast_node_t*) parser->layout->elements->data[i]);
-					parser->layout->elements->data[i] = NULL;
+					ast_layout_node_free((ast_layout_node_t*) parser->layout->elements->data[i]);
 				}
 			}
 			// array_free(parser->layout->elements);

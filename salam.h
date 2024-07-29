@@ -70,61 +70,11 @@ typedef enum {
 	LANGUAGE_COUNT,
 } language_t;
 
-typedef enum {
-	VALUE_TYPE_NULL,
-	VALUE_TYPE_INT,
-	VALUE_TYPE_FLOAT,
-	VALUE_TYPE_BOOL,
-	VALUE_TYPE_STRING,
-	VALUE_TYPE_ARRAY_LITERAL,
-	VALUE_TYPE_ARRAY_EXPRESSION,
-} ast_literal_type_t;
-
-typedef struct {
-	char* name;
-	struct ast_expression_t* value;
-} ast_argument_t;
-
 typedef struct {
 	size_t size;
 	size_t length;
 	void** data;
 } array_t;
-
-typedef struct ast_literal_t {
-	ast_literal_type_t type;
-	union {
-		int int_value;
-		bool bool_value;
-		float float_value;
-		char* string_value;
-	};
-
-	size_t size_value;
-	struct ast_expression_t** array_expression_value;
-	struct ast_literal_t** array_literal_value;
-
-	struct ast_expression_t** main; // To have a reference into parser ast so we can free it later after interpreter
-} ast_literal_t;
-
-typedef struct SymbolTableEntry {
-	char* identifier;
-	ast_literal_t* data;
-	ast_literal_t* prevdata;
-	struct SymbolTableEntry* next;
-} SymbolTableEntry;
-
-typedef struct {
-	SymbolTableEntry** entries;
-	size_t size;
-	size_t capacity;
-} SymbolTable;
-
-typedef struct SymbolTableStack {
-	SymbolTable* table;
-	bool is_function_call;
-	struct SymbolTableStack* next;
-} SymbolTableStack;
 
 typedef enum {
 	// Values
@@ -217,120 +167,27 @@ typedef struct {
 
 struct ast_node;
 
-typedef struct {
-	char* name;
-	struct ast_node* body;
-	array_t* arguments;
-} ast_function_declaration_t;
-
-typedef struct {
-	struct ast_expression_t* expression;
-	struct ast_literal_t* expression_value;
-} ast_statement_return_t;
-
-typedef struct {
-	struct ast_expression_t* expression;
-	struct ast_literal_t* expression_value;
-} ast_statement_print_t;
-
-typedef struct {
-	struct ast_node** statements;
-	size_t num_statements;
-} ast_block_t;
-
-typedef struct {
-	char* name;
-} ast_identifier_t;
-
-typedef struct {
-	char* operator;
-	struct ast_expression_t* left;
-	struct ast_expression_t* right;
-} ast_expression_binary_t;
-
-typedef struct {
-	struct ast_expression_t* left;
-	struct ast_expression_t* right;
-} ast_expression_assignment_t;
-
 typedef enum {
-	AST_EXPRESSION_ERROR,
-	AST_EXPRESSION_VALUE,
-	AST_EXPRESSION_LITERAL,
-	AST_EXPRESSION_IDENTIFIER,
-	AST_EXPRESSION_BINARY,
-	AST_EXPRESSION_ASSIGNMENT,
-	AST_EXPRESSION_FUNCTION_CALL,
-} ast_expression_type_t;
-
-typedef struct {
-	char* name;
-	array_t* arguments;
-} ast_function_call_t;
-
-typedef struct ast_expression_t {
-	ast_expression_type_t type;
-
-	union {
-		ast_literal_t* literal;
-		ast_identifier_t* identifier;
-		ast_expression_binary_t* binary_op;
-		ast_expression_assignment_t* assignment;
-		ast_function_call_t* function_call;
-	} data;
-} ast_expression_t;
-
-typedef enum {
-	AST_FUNCTION_DECLARATION,
-	AST_STATEMENT_RETURN,
-	AST_STATEMENT_CONTINUE,
-	AST_STATEMENT_BREAK,
-	AST_STATEMENT_PRINT,
-	AST_STATEMENT_IF,
-	AST_STATEMENT_UNTIL,
-	AST_STATEMENT_REPEAT,
-	AST_STATEMENT_ELSEIF,
-	AST_BLOCK,
-	AST_EXPRESSION,
+    AST_TYPE_FUNCTION,
+    AST_TYPE_LAYOUT,
 } ast_node_type_t;
 
 typedef struct {
-	ast_expression_t* condition;
-	struct ast_node* block;
-} ast_statement_until_t;
+	array_t* elements;
+} ast_layout_t;
 
 typedef struct {
-	ast_expression_t* condition;
-	struct ast_node* block;
-} ast_statement_repeat_t;
-
-typedef struct {
-	ast_expression_t* condition;
-	struct ast_node* block;
-	struct ast_node_t** elseifs;
-	struct ast_node* else_block;
-	size_t num_elseifs;
-} ast_statement_if_t;
+	char* name;
+	array_t* arguments;
+} ast_function_declaration_t;
 
 typedef struct ast_node {
 	ast_node_type_t type;
 	union {
 		ast_function_declaration_t* function_declaration;
-		ast_statement_return_t* statement_return;
-		ast_statement_print_t* statement_print;
-		ast_block_t* block;
-		ast_expression_t* expression;
-		ast_statement_if_t* statement_if;
-		ast_statement_until_t* statement_until;
-		ast_statement_repeat_t* statement_repeat;
-		ast_function_call_t* function_call;
+		ast_layout_t* layout;
 	} data;
 } ast_node_t;
-
-typedef struct {
-	char* name;
-	ast_expression_t* expression;
-} ast_variable_declaration_t;
 
 typedef struct {
 	lexer_t* lexer;
@@ -338,13 +195,12 @@ typedef struct {
 	array_t* functions;
 	array_t* expressions;
 
-    ast_node_t* layout;
+    ast_layout_t* layout;
 } parser_t;
 
 // Function Declarations
 char* read_dynamic_string();
 char* intToString(int value);
-char* literal_type2name(ast_literal_type_t type);
 char* file_read(char* file_Name);
 
 // Array
@@ -360,7 +216,6 @@ void token_print(token_t* t);
 void token_free(token_t* token);
 
 // Token Utils
-char* token_op_type2str(ast_expression_type_t type);
 char* token_type2str(token_type_t type);
 bool is_number(wchar_t ch);
 bool is_alpha(wchar_t ch);
@@ -387,7 +242,8 @@ void parser_parse(parser_t* parser);
 void parser_free(parser_t* parser);
 void parser_token_eat_nodata(parser_t* parser, token_type_t type);
 token_t* parser_token_eat(parser_t* parser, token_type_t type);
-ast_node_t* parser_page_contents(parser_t* parser);
+array_t* parser_layout_elements(parser_t* parser);
+ast_layout_t* parser_layout(parser_t* parser);
 
 void help();
 int main(int argc, char** argv);

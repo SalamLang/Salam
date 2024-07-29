@@ -12,9 +12,9 @@
 #include <limits.h>
 #include <stdbool.h>
 
+#include "salam.h"
+
 // Global variables
-SymbolTableStack* symbolTableStack = NULL;
-SymbolTableStack* symbolGlobalTableStack = NULL;
 language_t language = LANGUAGE_PERSIAN;
 
 #include "messages.h"
@@ -789,12 +789,68 @@ parser_t* parser_create(lexer_t* lexer)
 	return parser;
 }
 
+ast_node_t* parser_page_contents(parser_t* parser)
+{
+	printf("parser_page_contents...");
+
+	return NULL;
+}
+
 ast_node_t* parser_page(parser_t* parser)
 {
-	printf("Token count: %d\n", parser->lexer->tokens->length);
-	printf("Token index: %d\n", parser->token_index);
+	parser_token_eat_nodata(parser, TOKEN_TYPE_PAGE);
+	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
+	
+	parser_page_contents(parser);
 
-	parser->token_index++;
+	parser_token_eat_nodata(parser, TOKEN_TYPE_END);
+
+	return NULL;
+}
+
+void token_free(token_t* token)
+{
+	free(token);
+}
+
+void parser_token_eat_nodata(parser_t* parser, token_type_t type)
+{
+	if (parser->lexer->tokens->length > parser->token_index) {
+		token_t* token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+
+		if (token->type == type) {
+			parser->token_index++;
+		} else {
+			token_free(token);
+			print_message("Error: Expected %s\n", token_type2str(type));
+
+			exit(EXIT_FAILURE);
+		}
+	} else {
+		print_message("Error: Unexpected end of file\n");
+
+		exit(EXIT_FAILURE);
+	}
+}
+
+token_t* parser_token_eat(parser_t* parser, token_type_t type)
+{
+	if (parser->lexer->tokens->length > parser->token_index) {
+		token_t* token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+
+		if (token->type == type) {
+			return (token_t*) parser->lexer->tokens->data[parser->token_index++];
+		} else {
+			token_free(token);
+			print_message("Error: Expected %s\n", token_type2str(type));
+
+			exit(EXIT_FAILURE);
+		}
+	} else {
+		print_message("Error: Unexpected end of file\n");
+
+		exit(EXIT_FAILURE);
+	}
 
 	return NULL;
 }
@@ -853,6 +909,41 @@ void parser_free(parser_t* parser)
 {
 	if (parser == NULL) {
 		return;
+	}
+
+	if (parser->functions != NULL) {
+		if (parser->functions->data != NULL) {
+			for (size_t i = 0; i < parser->functions->length; i++) {
+				print_message("Free function %s\n", ((ast_node_t*) parser->functions->data[i])->data.function_declaration->name);
+				if (parser->functions->data[i] != NULL) {
+					// ast_node_free((ast_node_t**) &(parser->functions->data[i]));
+					parser->functions->data[i] = NULL;
+				}
+			}
+
+			free(parser->functions->data);
+			parser->functions->data = NULL;
+		}
+
+		free(parser->functions);
+		parser->functions = NULL;
+	}
+
+	if (parser->expressions != NULL) {
+		if (parser->expressions->data != NULL) {
+			for (size_t i = 0; i < parser->expressions->length; i++) {
+				if (parser->expressions->data[i] != NULL) {
+					// ast_node_free((ast_node_t**) &(parser->expressions->data[i]));
+					parser->expressions->data[i] = NULL;
+				}
+			}
+
+			free(parser->expressions->data);
+			parser->expressions->data = NULL;
+		}
+
+		free(parser->expressions);
+		parser->expressions = NULL;
 	}
 
 	free(parser);

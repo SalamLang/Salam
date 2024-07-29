@@ -805,6 +805,17 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t
 	return element;
 }
 
+ast_attribute_t* ast_attribute_make(char* key, char* value)
+{
+	ast_attribute_t* attribute;
+	CREATE_MEMORY_OBJECT(attribute, ast_attribute_t, 1, "Error: ast_attribute_make<attribute> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
+	attribute->key = strdup(key);
+	attribute->value = strdup(value);
+
+	return attribute;
+}
+
 ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t* parser)
 {
 	ast_layout_node_t* element;
@@ -812,10 +823,42 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 	element->type = type;
 	// element->children = NULL;
 	element->children = array_create(1);
+	element->attributes = array_create(2);
 
 	parser->token_index++; // Eating keyword
 
+	printf("1\n");
 	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
+
+	// attr name
+	// COLON
+	// attr value (ident)
+	while (parser->token_index < parser->lexer->tokens->length) {
+		token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+
+		if (current_token->type == TOKEN_TYPE_END) break;
+
+		ast_layout_type_t type = convert_layout_identifier_token_type(current_token->value);
+
+		if (type == AST_TYPE_LAYOUT_ERROR) {
+			parser->token_index++; // Eating the attr name
+
+			printf("2\n");
+			token_print(parser->lexer->tokens->data[parser->token_index]);
+
+			parser_token_eat_nodata(parser, TOKEN_TYPE_COLON); // :
+			
+			token_t* attr_value = parser->lexer->tokens->data[parser->token_index];
+
+			ast_attribute_t* attribute = ast_attribute_make(current_token->value, attr_value->value);
+
+			parser->token_index++;
+
+			array_push(element->attributes, attribute);
+		} else {
+			array_push(element->children, parser_layout_element(parser));			
+		}
+	}
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_END);
 
@@ -917,6 +960,17 @@ void parser_token_eat_nodata(parser_t* parser, token_type_t type)
 
 		exit(EXIT_FAILURE);
 	}
+}
+
+token_t* parser_token_get(parser_t* parser)
+{
+	if (parser->lexer->tokens->length > parser->token_index) {
+		token_t* token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+
+		return (token_t*) parser->lexer->tokens->data[parser->token_index++];
+	}
+
+	return NULL;
 }
 
 token_t* parser_token_eat(parser_t* parser, token_type_t type)

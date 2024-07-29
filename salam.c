@@ -90,31 +90,6 @@ char* intToString(int value)
 }
 
 // Functions
-char* literal_type2name(ast_literal_type_t type)
-{
-	switch (type) {
-		case VALUE_TYPE_NULL: return "NULL";
-		case VALUE_TYPE_INT: return "INT";
-		case VALUE_TYPE_FLOAT: return "FLOAT";
-		case VALUE_TYPE_BOOL: return "BOOL";
-		case VALUE_TYPE_STRING: return "STRING";
-		case VALUE_TYPE_ARRAY_EXPRESSION: case VALUE_TYPE_ARRAY_LITERAL: return "ARRAY";
-		default: return "TYPE_UNKNOWN";
-	}
-}
-
-char* token_op_type2str(ast_expression_type_t type)
-{
-	switch (type) {
-		case AST_EXPRESSION_LITERAL: return "LITERAL";
-		case AST_EXPRESSION_IDENTIFIER: return "IDENTIFIER";
-		case AST_EXPRESSION_BINARY: return "BINARY_OP";
-		case AST_EXPRESSION_ASSIGNMENT: return "ASSIGNMENT";
-		case AST_EXPRESSION_FUNCTION_CALL: return "FUNCTION_CALL";
-		default: return "OP_UNKNOWN";
-	}
-}
-
 char* token_type2str(token_type_t type)
 {
 	switch(type) {
@@ -787,27 +762,33 @@ parser_t* parser_create(lexer_t* lexer)
 	parser->token_index = 0;
 	parser->functions = array_create(5);
 	parser->expressions = array_create(5);
+	parser->layout = NULL;
 
 	return parser;
 }
 
-ast_node_t* parser_page_contents(parser_t* parser)
+array_t* parser_layout_elements(parser_t* parser)
 {
-	printf("parser_page_contents...");
+	array_t* elements = array_create(4);
+	printf("parser_layout_elements...");
 
-	return NULL;
+	return elements;
 }
 
-ast_node_t* parser_page(parser_t* parser)
+ast_layout_t* parser_layout(parser_t* parser)
 {
+	ast_layout_t* layout;
+
+	CREATE_MEMORY_OBJECT(layout, ast_layout_t, 1, "Error: parser_layout<layout> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 	parser_token_eat_nodata(parser, TOKEN_TYPE_PAGE);
 	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
 	
-	parser_page_contents(parser);
+	layout->elements = parser_layout_elements(parser);
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_END);
 
-	return NULL;
+	return layout;
 }
 
 void token_free(token_t* token)
@@ -885,7 +866,7 @@ void parser_parse(parser_t* parser)
 			// 	break;
 
 			case TOKEN_TYPE_PAGE:
-				page_node = parser_page(parser);
+				parser->layout = parser_layout(parser);
 				break;
 
 			default:
@@ -907,10 +888,59 @@ void parser_parse(parser_t* parser)
 	}
 }
 
+void ast_node_free(ast_node_t* node)
+{
+	switch (node->type) {
+		case AST_TYPE_FUNCTION:
+
+			break;
+		case AST_TYPE_LAYOUT:
+			if (node->data.layout->elements != NULL) {
+				if (node->data.layout->elements->data != NULL) {
+					for (size_t i = 0; i < node->data.layout->elements->length; i++) {
+						if (node->data.layout->elements->data[i] != NULL) {
+							ast_node_free((ast_node_t*) node->data.layout->elements->data[i]);
+							node->data.layout->elements->data[i] = NULL;
+						}
+					}
+					// array_free(node->data.layout->elements);
+				}
+			}
+
+			free(node->data.layout);
+			node->data.layout = NULL;
+
+			free(node);
+			node = NULL;
+			break;
+	}
+}
+
 void parser_free(parser_t* parser)
 {
 	if (parser == NULL) {
 		return;
+	}
+
+	if (parser->layout != NULL) {
+		if (parser->layout->elements->data != NULL) {
+			for (size_t i = 0; i < parser->layout->elements->length; i++) {
+				print_message("Free layout element %s\n", ((ast_node_t*) parser->functions->data[i])->data.function_declaration->name);
+				if (parser->layout->elements->data[i] != NULL) {
+					ast_node_free((ast_node_t*) parser->layout->elements->data[i]);
+					parser->layout->elements->data[i] = NULL;
+				}
+			}
+			// array_free(parser->layout->elements);
+		}
+		free(parser->layout->elements->data);
+		parser->layout->elements->data = NULL;
+
+		free(parser->layout->elements);
+		parser->layout->elements = NULL;		
+
+		free(parser->layout);
+		parser->layout = NULL;
 	}
 
 	if (parser->functions != NULL) {
@@ -918,7 +948,7 @@ void parser_free(parser_t* parser)
 			for (size_t i = 0; i < parser->functions->length; i++) {
 				print_message("Free function %s\n", ((ast_node_t*) parser->functions->data[i])->data.function_declaration->name);
 				if (parser->functions->data[i] != NULL) {
-					// ast_node_free((ast_node_t**) &(parser->functions->data[i]));
+					ast_node_free((ast_node_t*) parser->functions->data[i]);
 					parser->functions->data[i] = NULL;
 				}
 			}
@@ -935,7 +965,7 @@ void parser_free(parser_t* parser)
 		if (parser->expressions->data != NULL) {
 			for (size_t i = 0; i < parser->expressions->length; i++) {
 				if (parser->expressions->data[i] != NULL) {
-					// ast_node_free((ast_node_t**) &(parser->expressions->data[i]));
+					ast_node_free((ast_node_t*) parser->expressions->data[i]);
 					parser->expressions->data[i] = NULL;
 				}
 			}

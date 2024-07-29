@@ -380,6 +380,7 @@ wchar_t read_token(lexer_t* lexer)
 	lexer->last_index = lexer->index;
 	lexer->last_line = lexer->line;
 	lexer->last_column = lexer->column;
+	lexer->last_length = lexer->length;
 
 	wchar_t current_char;
     int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
@@ -407,6 +408,7 @@ wchar_t unread_token(lexer_t* lexer)
 	lexer->index = lexer->last_index;
 	lexer->line = lexer->last_line;
 	lexer->column = lexer->last_column;
+	lexer->length = lexer->last_length;
 
 	wchar_t current_char;
 	int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
@@ -863,9 +865,9 @@ void parser_parse(parser_t* parser)
 		return;
 	}
 
-	ast_node_t* expression_node;
-	ast_node_t* function_node;
 	ast_node_t* page_node;
+	ast_node_t* function_node;
+	ast_node_t* expression_node;
 
 	while (parser->token_index < parser->lexer->tokens->length) {
 		token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];

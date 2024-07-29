@@ -82,7 +82,12 @@ typedef enum {
 	TOKEN_TYPE_INT,
 	TOKEN_TYPE_FLOAT,
 	TOKEN_TYPE_STRING,
-	
+
+    // Layout Keywords
+    TOKEN_TYPE_LAYOUT_BUTTON, // دکمه
+    TOKEN_TYPE_LAYOUT_TEXT, // متن
+    TOKEN_TYPE_LAYOUT_INPUT, // فیلد
+
 	// Keywords
 	TOKEN_TYPE_LAYOUT, // صفحه
 	TOKEN_TYPE_END, // خاتمه

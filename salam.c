@@ -1020,6 +1020,8 @@ void parser_parse(parser_t* parser)
 
 void ast_node_free(ast_node_t* node)
 {
+	if (node == NULL) return;
+	
 	switch (node->type) {
 		case AST_TYPE_FUNCTION:
 

@@ -793,6 +793,8 @@ ast_layout_t* parser_layout(parser_t* parser)
 
 void token_free(token_t* token)
 {
+	if (token->value != NULL) free(token->value);
+	
 	free(token);
 }
 
@@ -805,7 +807,7 @@ void parser_token_eat_nodata(parser_t* parser, token_type_t type)
 			parser->token_index++;
 		} else {
 			token_free(token);
-			print_message("Error: Expected %s\n", token_type2str(type));
+			print_message("Error: Expected nodata %s\n", token_type2str(type));
 
 			exit(EXIT_FAILURE);
 		}
@@ -825,7 +827,7 @@ token_t* parser_token_eat(parser_t* parser, token_type_t type)
 			return (token_t*) parser->lexer->tokens->data[parser->token_index++];
 		} else {
 			token_free(token);
-			print_message("Error: Expected %s\n", token_type2str(type));
+			print_message("Error: Expected data %s\n", token_type2str(type));
 
 			exit(EXIT_FAILURE);
 		}
@@ -937,7 +939,7 @@ void parser_free(parser_t* parser)
 		parser->layout->elements->data = NULL;
 
 		free(parser->layout->elements);
-		parser->layout->elements = NULL;		
+		parser->layout->elements = NULL;
 
 		free(parser->layout);
 		parser->layout = NULL;

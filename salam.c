@@ -792,12 +792,58 @@ parser_t* parser_create(lexer_t* lexer)
 	return parser;
 }
 
+ast_node_t* parser_layout_element_button(parser_t* parser)
+{
+	ast_node_t* element;
+	CREATE_MEMORY_OBJECT(element, ast_node_t, 1, "Error: parser_layout_element_button<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
+	return element;
+}
+
+ast_node_t* parser_layout_element_text(parser_t* parser)
+{
+	ast_node_t* element;
+	CREATE_MEMORY_OBJECT(element, ast_node_t, 1, "Error: parser_layout_element_text<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
+	return element;
+}
+
+ast_node_t* parser_layout_element_input(parser_t* parser)
+{
+	ast_node_t* element;
+	CREATE_MEMORY_OBJECT(element, ast_node_t, 1, "Error: parser_layout_element_input<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
+	return element;
+}
+
 ast_node_t* parser_layout_element(parser_t* parser)
 {
 	ast_node_t* element;
-	CREATE_MEMORY_OBJECT(element, ast_node_t, 1, "Error: parser_layout_element<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+	token_type_t type = convert_layout_identifier_token_type(current_token->type);
 
-	if (strcmp(parser-))
+	switch (type) {
+		case TOKEN_TYPE_LAYOUT_BUTTON:
+			element = parser_layout_element_button(parser);
+			parser_token_eat_nodata(parser, type); // Eating keyword
+
+			break;
+
+		case TOKEN_TYPE_LAYOUT_TEXT:
+			element = parser_layout_element_text(parser);
+			parser_token_eat_nodata(parser, type); // Eating keyword
+
+			break;
+
+		case TOKEN_TYPE_LAYOUT_INPUT:
+			element = parser_layout_element_input(parser);
+			parser_token_eat_nodata(parser, type); // Eating keyword
+
+			break;
+
+		default:
+			break;
+	}
 
 	return element;
 }
@@ -805,7 +851,6 @@ ast_node_t* parser_layout_element(parser_t* parser)
 array_t* parser_layout_elements(parser_t* parser)
 {
 	array_t* elements = array_create(4);
-	printf("parser_layout_elements...");
 
 	while (parser->token_index < parser->lexer->tokens->length) {
 		token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];

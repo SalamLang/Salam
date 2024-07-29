@@ -195,8 +195,14 @@ typedef struct {
 typedef struct {
     ast_layout_type_t type;
 
+	array_t* attributes;
 	array_t* children;
 } ast_layout_node_t;
+
+typedef struct {
+    char* key;
+    char* value;
+} ast_attribute_t;
 
 typedef struct {
 	array_t* elements;
@@ -280,6 +286,7 @@ void lexer_lex(lexer_t* lexer);
 parser_t* parser_create(lexer_t* lexer);
 void parser_parse(parser_t* parser);
 void parser_free(parser_t* parser);
+token_t* parser_token_get(parser_t* parser);
 void parser_token_eat_nodata(parser_t* parser, token_type_t type);
 token_t* parser_token_eat(parser_t* parser, token_type_t type);
 array_t* parser_layout_elements(parser_t* parser);

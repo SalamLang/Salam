@@ -797,6 +797,8 @@ ast_node_t* parser_layout_element_button(parser_t* parser)
 	ast_node_t* element;
 	CREATE_MEMORY_OBJECT(element, ast_node_t, 1, "Error: parser_layout_element_button<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
+	parser->token_index++; // Eating keyword
+
 	return element;
 }
 
@@ -805,6 +807,8 @@ ast_node_t* parser_layout_element_text(parser_t* parser)
 	ast_node_t* element;
 	CREATE_MEMORY_OBJECT(element, ast_node_t, 1, "Error: parser_layout_element_text<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
+	parser->token_index++; // Eating keyword
+
 	return element;
 }
 
@@ -812,6 +816,8 @@ ast_node_t* parser_layout_element_input(parser_t* parser)
 {
 	ast_node_t* element;
 	CREATE_MEMORY_OBJECT(element, ast_node_t, 1, "Error: parser_layout_element_input<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	
+	parser->token_index++; // Eating keyword
 
 	return element;
 }
@@ -825,19 +831,16 @@ ast_node_t* parser_layout_element(parser_t* parser)
 	switch (type) {
 		case TOKEN_TYPE_LAYOUT_BUTTON:
 			element = parser_layout_element_button(parser);
-			parser_token_eat_nodata(parser, type); // Eating keyword
 
 			break;
 
 		case TOKEN_TYPE_LAYOUT_TEXT:
 			element = parser_layout_element_text(parser);
-			parser_token_eat_nodata(parser, type); // Eating keyword
 
 			break;
 
 		case TOKEN_TYPE_LAYOUT_INPUT:
 			element = parser_layout_element_input(parser);
-			parser_token_eat_nodata(parser, type); // Eating keyword
 
 			break;
 

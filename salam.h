@@ -175,6 +175,9 @@ struct ast_node;
 typedef enum {
     AST_TYPE_FUNCTION,
     AST_TYPE_LAYOUT,
+    AST_TYPE_LAYOUT_BUTTON,
+    AST_TYPE_LAYOUT_TEXT,
+    AST_TYPE_LAYOUT_INPUT,
 } ast_node_type_t;
 
 typedef struct {

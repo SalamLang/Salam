@@ -1019,6 +1019,30 @@ void ast_layout_node_free(ast_layout_node_t* node)
 	node = NULL;
 }
 
+char* ast_node_type_string(ast_node_type_t type)
+{
+	switch (type) {
+		case AST_TYPE_FUNCTION: return "function";
+		case AST_TYPE_LAYOUT: return "layout";
+		default: "none";
+	}
+}
+
+char* ast_layout_type_string(ast_layout_type_t type)
+{
+	switch (type) {
+		case AST_TYPE_LAYOUT_BUTTON: return "button";
+		case AST_TYPE_LAYOUT_TEXT: return "text";
+		case AST_TYPE_LAYOUT_INPUT: return "input";
+		case AST_TYPE_LAYOUT_LINE: return "line";
+		case AST_TYPE_LAYOUT_BREAK: return "break";
+
+		case AST_TYPE_LAYOUT_ERROR:
+		default:
+			return "error";
+	}
+}
+
 void ast_node_free(ast_node_t* node)
 {
 	if (node == NULL) return;
@@ -1072,7 +1096,6 @@ void parser_free(parser_t* parser)
 					ast_layout_node_free((ast_layout_node_t*) parser->layout->elements->data[i]);
 				}
 			}
-			// array_free(parser->layout->elements);
 		}
 		free(parser->layout->elements->data);
 		parser->layout->elements->data = NULL;
@@ -1121,7 +1144,6 @@ void parser_free(parser_t* parser)
 
 	free(parser);
 	parser = NULL;
-	print_message("parser is null %d\n", parser == NULL ? 1 : 0);
 }
 
 string_t* string_create(size_t initial_size)
@@ -1191,16 +1213,80 @@ void string_print(string_t* str)
 	else printf("%s\n", str->data);
 }
 
+string_t* ast_layout_string(ast_layout_node_t* element, parser_t* parser)
+{
+	string_t* str = string_create(10);
+	
+	switch (element->type) {
+		case AST_TYPE_LAYOUT_TEXT:
+			string_append_str(str, "<text>\n");
+			break;
+		
+		case AST_TYPE_LAYOUT_INPUT:
+			string_append_str(str, "<input>\n");
+			break;
+		
+		case AST_TYPE_LAYOUT_BUTTON:
+			string_append_str(str, "<button>\n");
+			break;
+		
+		case AST_TYPE_LAYOUT_LINE:
+			string_append_str(str, "<line />\n");
+			break;
+		
+		case AST_TYPE_LAYOUT_BREAK:
+			string_append_str(str, "<break />\n");
+			break;
+	}
+
+	return str;
+}
+
+void string_append(string_t* dest, string_t* src)
+{
+	if (dest == NULL || dest->data == NULL) return;
+	if (src == NULL || src->data == NULL) return;
+
+	string_append_str(dest, src->data);
+}
+
 string_t* ast_string(parser_t* parser)
 {
-    string_t* str = string_create(10);
-    return str;
+	string_t* str = string_create(10);
 
-	// if (parser->layout != NULL) {
+	if (parser == NULL) return str;
 
-	// }
+	if (parser->layout != NULL) {
+		string_append_str(str, "<layout>\n");
 
-	// return str;
+		for (size_t i = 0; i < parser->layout->elements->length; i++) {
+			ast_layout_node_t* element = (ast_layout_node_t*) parser->layout->elements->data[i];
+			char* element_name = ast_layout_type_string(element->type);
+
+			string_append_str(str, "\t<layout_");
+			string_append_str(str, element_name);
+			string_append_str(str, ">");
+
+			if (element->children != NULL) {
+				for (size_t j = 0; j < element->children->length; j++) {
+					ast_layout_node_t* child = (ast_layout_node_t*) element->children->data[j];
+
+					string_append(str, ast_layout_string(child, parser));
+				}
+			}
+
+			string_append_str(str, "</layout_");
+			string_append_str(str, element_name);
+			string_append_str(str, ">\n");
+		}
+
+		string_append_str(str, "</layout>\n");
+	}
+	else {
+		string_append_str(str, "<layout />\n");
+	}
+
+	return str;
 }
 
 void ast_print(parser_t* parser)
@@ -1259,9 +1345,10 @@ int main(int argc, char** argv)
 	
 	parser_t* parser = parser_create(lexer);
 	parser_parse(parser);
-	parser_free(parser);
 
 	ast_print(parser);
+
+	parser_free(parser);
 
 	print_message("free lexer\n");
 	lexer_free(lexer);

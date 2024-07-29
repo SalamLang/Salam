@@ -800,6 +800,7 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t
 	// element->children = NULL;
 	element->children = array_create(1);
 	element->attributes = array_create(2);
+	element->is_mother = false;
 
 	parser->token_index++; // Eating keyword
 
@@ -825,6 +826,7 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 	// element->children = NULL;
 	element->children = array_create(1);
 	element->attributes = array_create(2);
+	element->is_mother = true;
 
 	parser->token_index++; // Eating keyword
 
@@ -1339,19 +1341,40 @@ string_t* ast_string(parser_t* parser)
 
 			string_append_str(str, "\t<layout_");
 			string_append_str(str, element_name);
-			string_append_str(str, ">");
 
-			if (element->children != NULL) {
-				for (size_t j = 0; j < element->children->length; j++) {
-					ast_layout_node_t* child = (ast_layout_node_t*) element->children->data[j];
+			if (element->attributes != NULL && element->attributes->length > 0) {
+				for (size_t j = 0; j < element->attributes->length; j++) {
+					ast_attribute_t* attribute = (ast_attribute_t*) element->attributes->data[j];
 
-					string_append(str, ast_layout_string(child, parser));
+					string_append_char(str, ' ');
+
+					string_append_str(str, attribute->key);
+					string_append_char(str, '=');
+					string_append_char(str, '\"');
+					string_append_str(str, attribute->value);
+					string_append_char(str, '\"');
 				}
 			}
 
-			string_append_str(str, "</layout_");
-			string_append_str(str, element_name);
-			string_append_str(str, ">\n");
+
+			if (element->is_mother) {
+				string_append_str(str, ">");
+
+				if (element->children != NULL) {
+					for (size_t j = 0; j < element->children->length; j++) {
+						ast_layout_node_t* child = (ast_layout_node_t*) element->children->data[j];
+
+						string_append(str, ast_layout_string(child, parser));
+					}
+				}
+
+				string_append_str(str, "</layout_");
+				string_append_str(str, element_name);
+				string_append_str(str, ">\n");
+			}
+			else {
+				string_append_str(str, " />\n");
+			}
 		}
 
 		string_append_str(str, "</layout>\n");

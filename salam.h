@@ -334,6 +334,8 @@ typedef struct {
 	size_t token_index;
 	array_t* functions;
 	array_t* expressions;
+    
+    ast_node_t* layout;
 } parser_t;
 
 // Function Declarations
@@ -350,10 +352,13 @@ void array_free(array_t* arr);
 void array_print(array_t* arr);
 
 // Token
-char* token_op_type2str(ast_expression_type_t type);
-char* token_type2str(token_type_t type);
 token_t* token_create(token_type_t type, const char* value, int a, int b, int c, int b2, int c2);
 void token_print(token_t* t);
+void token_free(token_t* token);
+
+// Token Utils
+char* token_op_type2str(ast_expression_type_t type);
+char* token_type2str(token_type_t type);
 bool is_number(wchar_t ch);
 bool is_alpha(wchar_t ch);
 bool is_ident(wchar_t ch);
@@ -377,7 +382,9 @@ void lexer_lex(lexer_t* lexer);
 parser_t* parser_create(lexer_t* lexer);
 void parser_parse(parser_t* parser);
 void parser_free(parser_t* parser);
+void parser_token_eat_nodata(parser_t* parser, token_type_t type);
 token_t* parser_token_eat(parser_t* parser, token_type_t type);
+ast_node_t* parser_page_contents(parser_t* parser);
 
 void help();
 int main(int argc, char** argv);

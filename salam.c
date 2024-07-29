@@ -801,10 +801,6 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t
 
 	parser->token_index++; // Eating keyword
 
-	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
-
-	parser_token_eat_nodata(parser, TOKEN_TYPE_END);
-
 	return element;
 }
 

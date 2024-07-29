@@ -93,6 +93,9 @@ const layout_keyword_mapping_t layout_keyword_mapping[LANGUAGE_COUNT][50] = {
 		{"دکمه", AST_TYPE_LAYOUT_BUTTON},
 		{"متن", AST_TYPE_LAYOUT_TEXT},
 		{"فیلد", AST_TYPE_LAYOUT_INPUT},
+
+		{"فاصله", AST_TYPE_LAYOUT_LINE},
+		{"خط", AST_TYPE_LAYOUT_BREAK},
 		{NULL, TOKEN_TYPE_ERROR},
 	},
 };

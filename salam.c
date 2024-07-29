@@ -95,7 +95,7 @@ char* token_type2str(token_type_t type)
 	switch(type) {
 		// Keywords
 		case TOKEN_TYPE_END: return "END";
-		case TOKEN_TYPE_PAGE: return "PAGE";
+		case TOKEN_TYPE_LAYOUT: return "LAYOUT";
 		case TOKEN_TYPE_UNTIL: return "UNTIL";
 		case TOKEN_TYPE_REPEAT: return "REPEAT";
 		case TOKEN_TYPE_IDENTIFIER: return "IDENTIFIER";
@@ -564,6 +564,40 @@ size_t mb_strlen(char* identifier)
 	return wcs_len;
 }
 
+token_type_t convert_identifier_token_type(char* identifier)
+{
+	int mapping_index = 0;
+	token_type_t type = TOKEN_TYPE_IDENTIFIER;
+
+	while (keyword_mapping[language][mapping_index].keyword != NULL) {
+		if (strcmp(identifier, keyword_mapping[language][mapping_index].keyword) == 0) {
+			type = keyword_mapping[language][mapping_index].token_type;
+			break;
+		}
+
+		mapping_index++;
+	}
+
+	return type;
+}
+
+token_type_t convert_layout_identifier_token_type(char* identifier)
+{
+	int mapping_index = 0;
+	token_type_t type = TOKEN_TYPE_IDENTIFIER;
+
+	while (layout_keyword_mapping[language][mapping_index].keyword != NULL) {
+		if (strcmp(identifier, layout_keyword_mapping[language][mapping_index].keyword) == 0) {
+			type = layout_keyword_mapping[language][mapping_index].token_type;
+			break;
+		}
+
+		mapping_index++;
+	}
+
+	return type;	
+}
+
 void read_identifier(lexer_t* lexer, wchar_t ch)
 {
 	char identifier[256];
@@ -580,16 +614,7 @@ void read_identifier(lexer_t* lexer, wchar_t ch)
 	}
 	identifier[i] = 0;
 
-	int mapping_index = 0;
-	token_type_t type = TOKEN_TYPE_IDENTIFIER;
-	while (keyword_mapping[language][mapping_index].keyword != NULL) {
-		if (strcmp(identifier, keyword_mapping[language][mapping_index].keyword) == 0) {
-			type = keyword_mapping[language][mapping_index].token_type;
-			break;
-		}
-
-		mapping_index++;
-	}
+	token_type_t type = convert_identifier_token_type(identifier);
 
 	size_t length = mb_strlen(identifier);
 	token_t* t = token_create(type, identifier, length, lexer->line, lexer->column - length, lexer->line, lexer->column);
@@ -767,10 +792,37 @@ parser_t* parser_create(lexer_t* lexer)
 	return parser;
 }
 
+ast_node_t* parser_layout_element(parser_t* parser)
+{
+	ast_node_t* element;
+	CREATE_MEMORY_OBJECT(element, ast_node_t, 1, "Error: parser_layout_element<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
+	if (strcmp(parser-))
+
+	return element;
+}
+
 array_t* parser_layout_elements(parser_t* parser)
 {
 	array_t* elements = array_create(4);
 	printf("parser_layout_elements...");
+
+	while (parser->token_index < parser->lexer->tokens->length) {
+		token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+
+		if (current_token->type == TOKEN_TYPE_IDENTIFIER) {
+			ast_node_t* element;
+			CREATE_MEMORY_OBJECT(element, ast_node_t, 1, "Error: parser_layout_elements<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+			element = parser_layout_element(parser);
+
+			array_push(elements, element);
+		}
+		else {
+			print_message("Error: Expected nodata %s\n", token_type2str(current_token->type));
+			
+			exit(EXIT_FAILURE);
+		}
+	}
 
 	return elements;
 }
@@ -781,7 +833,7 @@ ast_layout_t* parser_layout(parser_t* parser)
 
 	CREATE_MEMORY_OBJECT(layout, ast_layout_t, 1, "Error: parser_layout<layout> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
-	parser_token_eat_nodata(parser, TOKEN_TYPE_PAGE);
+	parser_token_eat_nodata(parser, TOKEN_TYPE_LAYOUT);
 	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
 	
 	layout->elements = parser_layout_elements(parser);
@@ -794,7 +846,7 @@ ast_layout_t* parser_layout(parser_t* parser)
 void token_free(token_t* token)
 {
 	if (token->value != NULL) free(token->value);
-	
+
 	free(token);
 }
 
@@ -848,7 +900,7 @@ void parser_parse(parser_t* parser)
 		return;
 	}
 
-	ast_node_t* page_node;
+	ast_node_t* layout_node;
 	ast_node_t* function_node;
 	ast_node_t* expression_node;
 
@@ -867,8 +919,12 @@ void parser_parse(parser_t* parser)
 			// 	}
 			// 	break;
 
-			case TOKEN_TYPE_PAGE:
+			case TOKEN_TYPE_LAYOUT:
 				parser->layout = parser_layout(parser);
+				break;
+			
+			case TOKEN_TYPE_IDENTIFIER:
+
 				break;
 
 			default:
@@ -896,6 +952,7 @@ void ast_node_free(ast_node_t* node)
 		case AST_TYPE_FUNCTION:
 
 			break;
+		
 		case AST_TYPE_LAYOUT:
 			if (node->data.layout->elements != NULL) {
 				if (node->data.layout->elements->data != NULL) {
@@ -914,6 +971,9 @@ void ast_node_free(ast_node_t* node)
 
 			free(node);
 			node = NULL;
+			break;
+		
+		default:
 			break;
 	}
 }

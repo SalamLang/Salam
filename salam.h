@@ -202,14 +202,17 @@ typedef struct {
 typedef struct {
 	char* data;
 	size_t length;
+
 	size_t index;
 	size_t line;
 	size_t column;
 
 	array_t* tokens;
+
 	size_t last_index;
 	size_t last_line;
 	size_t last_column;
+	size_t last_length;
 } lexer_t;
 
 struct ast_node;
@@ -334,7 +337,7 @@ typedef struct {
 	size_t token_index;
 	array_t* functions;
 	array_t* expressions;
-    
+
     ast_node_t* layout;
 } parser_t;
 

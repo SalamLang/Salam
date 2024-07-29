@@ -84,7 +84,7 @@ typedef enum {
 	TOKEN_TYPE_STRING,
 	
 	// Keywords
-	TOKEN_TYPE_PAGE, // صفحه
+	TOKEN_TYPE_LAYOUT, // صفحه
 	TOKEN_TYPE_END, // خاتمه
 	TOKEN_TYPE_FUNCTION, // تابع
 	TOKEN_TYPE_RETURN, // برگشت
@@ -243,6 +243,7 @@ void parser_free(parser_t* parser);
 void parser_token_eat_nodata(parser_t* parser, token_type_t type);
 token_t* parser_token_eat(parser_t* parser, token_type_t type);
 array_t* parser_layout_elements(parser_t* parser);
+ast_node_t* parser_layout_element(parser_t* parser);
 ast_layout_t* parser_layout(parser_t* parser);
 
 void help();

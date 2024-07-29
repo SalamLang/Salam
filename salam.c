@@ -1025,6 +1025,11 @@ void ast_node_free(ast_node_t* node)
 
 			break;
 		
+		case AST_TYPE_LAYOUT_INPUT:
+		case AST_TYPE_LAYOUT_TEXT:
+		case AST_TYPE_LAYOUT_BUTTON:
+			break;
+		
 		case AST_TYPE_LAYOUT:
 			if (node->data.layout->elements != NULL) {
 				if (node->data.layout->elements->data != NULL) {
@@ -1040,14 +1045,14 @@ void ast_node_free(ast_node_t* node)
 
 			free(node->data.layout);
 			node->data.layout = NULL;
-
-			free(node);
-			node = NULL;
 			break;
 		
 		default:
 			break;
 	}
+
+	free(node);
+	node = NULL;
 }
 
 void parser_free(parser_t* parser)

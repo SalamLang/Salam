@@ -799,6 +799,7 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t
 	element->type = type;
 	// element->children = NULL;
 	element->children = array_create(1);
+	element->attributes = array_create(2);
 
 	parser->token_index++; // Eating keyword
 
@@ -827,7 +828,6 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 
 	parser->token_index++; // Eating keyword
 
-	printf("1\n");
 	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
 
 	// attr name
@@ -843,16 +843,12 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 		if (type == AST_TYPE_LAYOUT_ERROR) {
 			parser->token_index++; // Eating the attr name
 
-			printf("2\n");
-			token_print(parser->lexer->tokens->data[parser->token_index]);
-
 			parser_token_eat_nodata(parser, TOKEN_TYPE_COLON); // :
 			
 			token_t* attr_value = parser->lexer->tokens->data[parser->token_index];
+			parser->token_index++;
 
 			ast_attribute_t* attribute = ast_attribute_make(current_token->value, attr_value->value);
-
-			parser->token_index++;
 
 			array_push(element->attributes, attribute);
 		} else {
@@ -1052,6 +1048,30 @@ void parser_parse(parser_t* parser)
 void ast_layout_node_free(ast_layout_node_t* node)
 {
 	if (node == NULL) return;
+
+	if (node->attributes != NULL) {
+		if (node->attributes->data != NULL) {
+			for (size_t i = 0; i < node->attributes->length; i++) {
+				if (node->attributes->data[i] != NULL) {
+					ast_attribute_t* attribute = node->attributes->data[i];
+
+					free(attribute->key);
+					attribute->key = NULL;
+					free(attribute->value);
+					attribute->value = NULL;
+
+					free(attribute);
+					attribute = NULL;
+				}
+			}
+
+			free(node->attributes->data);
+			node->attributes->data = NULL;
+		}
+
+		free(node->attributes);
+		node->attributes = NULL;
+	}
 
 	if (node->children != NULL) {
 		if (node->children->data != NULL) {

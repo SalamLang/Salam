@@ -948,7 +948,6 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t
 	ast_layout_node_t* element;
 	CREATE_MEMORY_OBJECT(element, ast_layout_node_t, 1, "Error: parser_layout_element_single<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	element->type = type;
-	// element->children = NULL;
 	element->children = array_create(1);
 	element->attributes = hashmap_create();
 	element->is_mother = false;
@@ -963,7 +962,6 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 	ast_layout_node_t* element;
 	CREATE_MEMORY_OBJECT(element, ast_layout_node_t, 1, "Error: parser_layout_element_mother<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	element->type = type;
-	// element->children = NULL;
 	element->children = array_create(1);
 	element->attributes = hashmap_create();
 	element->is_mother = true;
@@ -972,9 +970,6 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
 
-	// attr name
-	// COLON
-	// attr value (ident)
 	while (parser->token_index < parser->lexer->tokens->length) {
 		token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
 

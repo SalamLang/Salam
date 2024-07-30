@@ -511,7 +511,7 @@ wchar_t read_token(lexer_t* lexer)
 	wchar_t current_char;
 	int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
 	if (char_size < 0) {
-		print_error(messages[language][MESSAGE_LEXER_TOKEN_READ_UNICODE]);
+		print_error("%s", messages[language][MESSAGE_LEXER_TOKEN_READ_UNICODE]);
 
 		exit(EXIT_FAILURE);
 		return 0;
@@ -539,7 +539,7 @@ wchar_t unread_token(lexer_t* lexer)
 	wchar_t current_char;
 	int char_size = mbtowc(&current_char, &lexer->data[lexer->index], MB_CUR_MAX);
 	if (char_size < 0) {
-		print_error(messages[language][MESSAGE_LEXER_TOKEN_UNREAD_UNICODE]);
+		print_error("%s", messages[language][MESSAGE_LEXER_TOKEN_UNREAD_UNICODE]);
 
 		exit(EXIT_FAILURE);
 		return 0;
@@ -628,7 +628,7 @@ void read_comment_multiline(lexer_t* lexer)
 	// TODO: Eating first character lexer->index++;
 	while (1) {
 		if (lexer->data[lexer->index] == '\0') {
-			print_error(messages[language][MESSAGE_LEXER_COMMENT_MULTI_NOT_CLOSED]);
+			print_error("%s", messages[language][MESSAGE_LEXER_COMMENT_MULTI_NOT_CLOSED]);
 
 			exit(EXIT_FAILURE);
 		} else if (lexer->data[lexer->index - 1] == '*' && lexer->data[lexer->index] == '/') {
@@ -655,7 +655,7 @@ void read_string(lexer_t* lexer, wchar_t ch)
 			allocated_size *= 2;
 			char* temp = (char*) realloc(string, sizeof(char) * allocated_size);
 			if (temp == NULL) {
-				print_error(messages[language][MESSAGE_LEXER_STRING_READ_MEMORY]);
+				print_error("%s", messages[language][MESSAGE_LEXER_STRING_READ_MEMORY]);
 				free(string);
 
 				exit(EXIT_FAILURE);
@@ -676,7 +676,7 @@ void read_string(lexer_t* lexer, wchar_t ch)
 			} else if (ch == L'\\') {
 				string[i++] = '\\';
 			} else {
-				print_error(messages[language][MESSAGE_LEXER_STRING_UNKNOWN_ESCAPE]);
+				print_error("%s", messages[language][MESSAGE_LEXER_STRING_UNKNOWN_ESCAPE]);
 				free(string);
 
 				exit(EXIT_FAILURE);
@@ -684,7 +684,7 @@ void read_string(lexer_t* lexer, wchar_t ch)
 		} else {
 			int char_size = wctomb(&string[i], ch);
 			if (char_size < 0) {
-				print_error(messages[language][MESSAGE_LEXER_STRING_CONVERT_MULTIBYTE]);
+				print_error("%s", messages[language][MESSAGE_LEXER_STRING_CONVERT_MULTIBYTE]);
 				free(string);
 
 				exit(EXIT_FAILURE);
@@ -756,7 +756,7 @@ void read_identifier(lexer_t* lexer, wchar_t ch)
 	while (is_ident(ch)) {
 		int char_size = wctomb(&identifier[i], ch);
 		if (char_size < 0) {
-			print_error(messages[language][MESSAGE_LEXER_IDENTIFIER_CONVERT_MULTIBYTE]);
+			print_error("%s", messages[language][MESSAGE_LEXER_IDENTIFIER_CONVERT_MULTIBYTE]);
 
 			exit(EXIT_FAILURE);
 		}
@@ -1127,11 +1127,11 @@ token_t* parser_token_eat(parser_t* parser, token_type_t type)
 
 void parser_parse(parser_t* parser)
 {
-	if (parser->lexer->tokens->length == 1 &&
-		((token_t*)parser->lexer->tokens->data[0])->type == TOKEN_TYPE_EOF
-	) {
-		return;
-	}
+	// Empty tokens
+	if (parser->lexer->tokens->length == 0) return;
+
+	// Only one EOF token
+	if (parser->lexer->tokens->length == 1 && ((token_t*)parser->lexer->tokens->data[0])->type == TOKEN_TYPE_EOF) return;
 
 	ast_node_t* layout_node;
 	ast_node_t* function_node;

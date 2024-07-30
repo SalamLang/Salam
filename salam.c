@@ -959,6 +959,7 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t
 
 ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t* parser)
 {
+	printf("parser_layout_element_mother\n");
 	ast_layout_node_t* element;
 	CREATE_MEMORY_OBJECT(element, ast_layout_node_t, 1, "Error: parser_layout_element_mother<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	element->type = type;
@@ -1052,6 +1053,7 @@ array_t* parser_layout_elements(parser_t* parser)
 
 ast_layout_t* parser_layout(parser_t* parser)
 {
+	printf("parser_layout\n");
 	ast_layout_t* layout;
 
 	CREATE_MEMORY_OBJECT(layout, ast_layout_t, 1, "Error: parser_layout<layout> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -1566,13 +1568,15 @@ bool is_style_attribute(char* attribute_name)
 	if (strcmp(attribute_name, "رنگ") == 0) return true;
 	else if (strcmp(attribute_name, "زمینه") == 0) return true;
 	else if (strcmp(attribute_name, "فونت") == 0) return true;
+	else if (strcmp(attribute_name, "اندازه") == 0) return true;
+	else if (strcmp(attribute_name, "فاصله") == 0) return true;
+	else if (strcmp(attribute_name, "فضا") == 0) return true;
+	else if (strcmp(attribute_name, "حاشیه") == 0) return true;
+	else if (strcmp(attribute_name, "ماوس") == 0) return true;
+	else if (strcmp(attribute_name, "گردی") == 0) return true;
 
 	return false;
 }
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 char* attribute_style2css(const char* attribute_name) {
 	char* res = malloc(sizeof(char) * 18);
@@ -1581,17 +1585,16 @@ char* attribute_style2css(const char* attribute_name) {
 		exit(1);
 	}
 
-	if (strcmp(attribute_name, "رنگ") == 0) {
-		strcpy(res, "color");
-	} else if (strcmp(attribute_name, "زمینه") == 0) {
-		strcpy(res, "background-color");
-	} else if (strcmp(attribute_name, "فونت") == 0) {
-		strcpy(res, "font");
-	} else if (strcmp(attribute_name, "اندازه") == 0) {
-		strcpy(res, "font-size");
-	} else {
-		strcpy(res, "");
-	}
+	if (strcmp(attribute_name, "رنگ") == 0) strcpy(res, "color");
+	else if (strcmp(attribute_name, "زمینه") == 0) strcpy(res, "background-color");
+	else if (strcmp(attribute_name, "فونت") == 0) strcpy(res, "font-family");
+	else if (strcmp(attribute_name, "اندازه") == 0) strcpy(res, "font-size");
+	else if (strcmp(attribute_name, "فاصله") == 0) strcpy(res, "padding");
+	else if (strcmp(attribute_name, "فضا") == 0) strcpy(res, "margin");
+	else if (strcmp(attribute_name, "حاشیه") == 0) strcpy(res, "border");
+	else if (strcmp(attribute_name, "ماوس") == 0) strcpy(res, "cursor");
+	else if (strcmp(attribute_name, "گردی") == 0) strcpy(res, "border-radius");
+	else strcpy(res, "");
 
 	return res;
 }
@@ -1615,7 +1618,7 @@ string_t* generate_layout_element_attribute(parser_t* parser, hashmap_entry_t* e
 	return str;
 }
 
-string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t* element, int ident)
+string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t* element, char** element_content, int ident)
 {
 	string_t* str = string_create(10);
 
@@ -1631,12 +1634,17 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 					hashmap_put(styles, entry->key, strdup(entry->value));
 				}
 				else {
-					string_append_char(str, ' ');
-					html_attrs++;
+					if (strcmp(entry->key, "محتوا") == 0 || strcmp(entry->key, "داده") == 0) {
+						*element_content = entry->value;
+					}
+					else {
+						string_append_char(str, ' ');
+						html_attrs++;
 
-					string_t* buf = generate_layout_element_attribute(parser, entry);
-					string_append(str, buf);
-					string_free(buf);
+						string_t* buf = generate_layout_element_attribute(parser, entry);
+						string_append(str, buf);
+						string_free(buf);
+					}
 				}
 
 				entry = entry->next;
@@ -1694,13 +1702,14 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 	if (element == NULL) return str;
 
 	char* element_name = generate_layout_type_string(element->type);
+	char* element_content = NULL;
 
 	generate_layout_ident(str, ident);
 
 	string_append_char(str, '<');
 	string_append_str(str, element_name);
 
-	string_t* buf = generate_layout_element_attributes(parser, element, ident);
+	string_t* buf = generate_layout_element_attributes(parser, element, &element_content, ident);
 	if (buf->length > 0) {
 		string_append_char(str, ' ');
 		
@@ -1720,6 +1729,12 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 				string_append(str, buf);
 				string_free(buf);
 			}
+		}
+
+		if (element_content != NULL && strlen(element_content) > 0) {
+			generate_layout_ident(str, ident + 1);
+			string_append_str(str, element_content);
+			string_append_char(str, '\n');
 		}
 
 		generate_layout_ident(str, ident);

@@ -76,6 +76,18 @@ typedef struct {
 	void** data;
 } array_t;
 
+typedef struct hashmap_entry {
+    char *key;
+    void *value;
+    struct hashmap_entry *next;
+} hashmap_entry_t;
+
+typedef struct {
+    hashmap_entry_t **data;
+    size_t size;
+    size_t length;
+} hashmap_t;
+
 typedef struct {
 	size_t size;
 	size_t length;
@@ -197,7 +209,7 @@ typedef struct {
 
     bool is_mother;
 
-	array_t* attributes;
+    hashmap_t* attributes;
 	array_t* children;
 } ast_layout_node_t;
 
@@ -250,6 +262,14 @@ string_t* ast_string(parser_t* parser, int ident);
 void ast_print(parser_t* parser);
 char* ast_layout_type_string(ast_layout_type_t type);
 char* ast_node_type_string(ast_node_type_t type);
+
+// Hashmap
+hashmap_t* hashmap_create();
+void hashmap_put(hashmap_t *map, const char *key, void *value);
+void* hashmap_get(hashmap_t *map, const char *key);
+void* hashmap_remove(hashmap_t *map, const char *key);
+void hashmap_free(hashmap_t *map);
+void hashmap_print(hashmap_t *map);
 
 // Array
 array_t* array_create(size_t size);

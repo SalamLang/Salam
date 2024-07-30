@@ -1321,7 +1321,9 @@ string_t* ast_layout_string(ast_layout_node_t* element, parser_t* parser, int id
 			for (size_t j = 0; j < element->children->length; j++) {
 				ast_layout_node_t* child = (ast_layout_node_t*) element->children->data[j];
 
-				string_append(str, ast_layout_string(child, parser, ident + 1));
+				string_t* buf = ast_layout_string(child, parser, ident + 1);
+				string_append(str, buf);
+				string_free(buf);
 			}
 		}
 
@@ -1358,7 +1360,9 @@ string_t* ast_string(parser_t* parser, int ident)
 		for (size_t i = 0; i < parser->layout->elements->length; i++) {
 			ast_layout_node_t* element = (ast_layout_node_t*) parser->layout->elements->data[i];
 			
-			string_append(str, ast_layout_string(element, parser, ident + 1));
+			string_t* buf = ast_layout_string(element, parser, ident + 1);
+			string_append(str, buf);
+			string_free(buf);
 		}
 
 		string_append_str(str, "</layout>\n");

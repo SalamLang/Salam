@@ -259,6 +259,153 @@ void array_print(array_t* arr)
 	}
 }
 
+unsigned long hash_function(const char *str)
+{
+	unsigned long hash = 5381;
+	int c;
+	while ((c = *str++)) {
+		hash = ((hash << 5) + hash) + c;
+	}
+	return hash;
+}
+
+hashmap_t* hashmap_create()
+{
+	hashmap_t *map;
+	map = (hashmap_t*) malloc(sizeof(hashmap_t));
+	map->length = 16;
+	map->size = 0;
+	map->data = (hashmap_entry_t**) calloc(map->length, sizeof(hashmap_entry_t*));
+	if (!map->data) {
+		perror("Error: hashmap_create - Memory allocation error");
+		exit(EXIT_FAILURE);
+	}
+	return map;
+}
+
+void hashmap_put(hashmap_t *map, const char *key, void *value)
+{
+	unsigned long hash = hash_function(key);
+
+	size_t index = hash % map->length;
+	hashmap_entry_t *entry = map->data[index];
+	
+	while (entry != NULL) {
+		if (strcmp(entry->key, key) == 0) {
+			entry->value = value;
+
+			return;
+		}
+
+		entry = entry->next;
+	}
+
+	hashmap_entry_t *new_entry = (hashmap_entry_t*) malloc(sizeof(hashmap_entry_t));
+	new_entry->key = strdup(key);
+	new_entry->value = value;
+	new_entry->next = map->data[index];
+	map->data[index] = new_entry;
+	map->size++;
+
+	if ((float)map->size / map->length >= 0.75) {
+		size_t new_length = map->length * 2;
+		hashmap_entry_t **new_data = (hashmap_entry_t**) calloc(new_length, sizeof(hashmap_entry_t*));
+		for (size_t i = 0; i < map->length; i++) {
+			hashmap_entry_t *entry = map->data[i];
+
+			while (entry) {
+				hashmap_entry_t *next = entry->next;
+				unsigned long new_index = hash_function(entry->key) % new_length;
+				entry->next = new_data[new_index];
+				new_data[new_index] = entry;
+				entry = next;
+			}
+		}
+
+		free(map->data);
+		map->data = new_data;
+		map->length = new_length;
+	}
+}
+
+void* hashmap_get(hashmap_t *map, const char *key)
+{
+	unsigned long hash = hash_function(key);
+	size_t index = hash % map->length;
+	hashmap_entry_t *entry = map->data[index];
+
+	while (entry != NULL) {
+		if (strcmp(entry->key, key) == 0) {
+			return entry->value;
+		}
+		entry = entry->next;
+	}
+
+	return NULL;
+}
+
+void* hashmap_remove(hashmap_t *map, const char *key)
+{
+	unsigned long hash = hash_function(key);
+
+	size_t index = hash % map->length;
+	hashmap_entry_t *entry = map->data[index];
+	hashmap_entry_t *prev = NULL;
+
+	while (entry != NULL) {
+		if (strcmp(entry->key, key) == 0) {
+			if (prev == NULL) {
+				map->data[index] = entry->next;
+			} else {
+				prev->next = entry->next;
+			}
+			void *value = entry->value;
+			free(entry->key);
+			free(entry);
+			map->size--;
+
+			return value;
+		}
+		prev = entry;
+		entry = entry->next;
+	}
+
+	return NULL;
+}
+
+void hashmap_free(hashmap_t *map)
+{
+	for (size_t i = 0; i < map->length; i++) {
+		hashmap_entry_t *entry = map->data[i];
+
+		while (entry) {
+			hashmap_entry_t *next = entry->next;
+			free(entry->key);
+			free(entry);
+			entry = next;
+		}
+	}
+
+	free(map->data);
+	free(map);
+}
+
+void hashmap_print(hashmap_t *map)
+{
+	printf("Hashmap Size: %zu\n", map->size);
+	printf("Hashmap Capacity: %zu\n", map->length);
+	printf("Hashmap Contents:\n");
+
+	for (size_t i = 0; i < map->length; i++) {
+		hashmap_entry_t *entry = map->data[i];
+
+		while (entry) {
+			printf("[%zu] Key: %s, Value: %p\n", i, entry->key, entry->value);
+			entry = entry->next;
+		}
+	}
+}
+
 lexer_t* lexer_create(const char* data)
 {
 	lexer_t* lexer;
@@ -799,7 +946,7 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t
 	element->type = type;
 	// element->children = NULL;
 	element->children = array_create(1);
-	element->attributes = array_create(2);
+	element->attributes = hashmap_create();
 	element->is_mother = false;
 
 	parser->token_index++; // Eating keyword
@@ -825,7 +972,7 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 	element->type = type;
 	// element->children = NULL;
 	element->children = array_create(1);
-	element->attributes = array_create(2);
+	element->attributes = hashmap_create();
 	element->is_mother = true;
 
 	parser->token_index++; // Eating keyword
@@ -850,9 +997,7 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 			token_t* attr_value = parser->lexer->tokens->data[parser->token_index];
 			parser->token_index++;
 
-			ast_attribute_t* attribute = ast_attribute_make(current_token->value, attr_value->value);
-
-			array_push(element->attributes, attribute);
+			hashmap_put(element->attributes, current_token->value, attr_value->value);
 		} else {
 			array_push(element->children, parser_layout_element(parser));			
 		}
@@ -1054,16 +1199,20 @@ void ast_layout_node_free(ast_layout_node_t* node)
 	if (node->attributes != NULL) {
 		if (node->attributes->data != NULL) {
 			for (size_t i = 0; i < node->attributes->length; i++) {
-				if (node->attributes->data[i] != NULL) {
-					ast_attribute_t* attribute = node->attributes->data[i];
+				hashmap_entry_t *entry = node->attributes->data[i];
 
-					free(attribute->key);
-					attribute->key = NULL;
-					free(attribute->value);
-					attribute->value = NULL;
+				while (entry) {
+					free(entry->key);
+					entry->key = NULL;
+					free(entry->value);
+					entry->value = NULL;
 
-					free(attribute);
-					attribute = NULL;
+					hashmap_entry_t *buf = entry;
+
+					entry = entry->next;
+
+					free(buf);
+					buf = NULL;
 				}
 			}
 
@@ -1301,16 +1450,20 @@ string_t* ast_layout_string(ast_layout_node_t* element, parser_t* parser, int id
 	string_append_str(str, element_name);
 
 	if (element->attributes != NULL && element->attributes->length > 0) {
-		for (size_t j = 0; j < element->attributes->length; j++) {
-			ast_attribute_t* attribute = (ast_attribute_t*) element->attributes->data[j];
+		for (size_t i = 0; i < element->attributes->length; i++) {
+			hashmap_entry_t *entry = element->attributes->data[i];
 
-			string_append_char(str, ' ');
+			while (entry) {
+				string_append_char(str, ' ');
 
-			string_append_str(str, attribute->key);
-			string_append_char(str, '=');
-			string_append_char(str, '\"');
-			string_append_str(str, attribute->value);
-			string_append_char(str, '\"');
+				string_append_str(str, entry->key);
+				string_append_char(str, '=');
+				string_append_char(str, '\"');
+				string_append_str(str, entry->value);
+				string_append_char(str, '\"');
+
+				entry = entry->next;
+			}
 		}
 	}
 

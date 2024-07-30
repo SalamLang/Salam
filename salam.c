@@ -182,13 +182,14 @@ token_t* token_create(token_type_t type, const char* value, int a, int b, int c,
 
 array_t* array_create(size_t size)
 {
-	size_t min_size = 1;
-
 	array_t* arr;
 	CREATE_MEMORY_OBJECT(arr, array_t, 1, "Error: array_create<arr> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
+	size_t min_size = 1;
 	arr->length = 0;
 	arr->size = size > min_size ? size : min_size;
 	arr->data = (void*) malloc(sizeof(void*) * arr->size);
+
 	if (!arr->data) {
 		perror(messages[language][MESSAGE_MEMORY_ALLOCATE_ERROR]);
 
@@ -200,11 +201,10 @@ array_t* array_create(size_t size)
 
 void* array_pop(array_t* arr)
 {
-	if (arr->length == 0) {
-		return NULL;
-	}
+	if (arr->length == 0) return NULL;
 
 	void* data = arr->data[--arr->length];
+
 	return data;
 }
 
@@ -221,9 +221,7 @@ void array_push(array_t* arr, void* data)
 
 void array_free(array_t* arr)
 {
-	if (arr == NULL) {
-		return;
-	}
+	if (arr == NULL) return;
 
 	if (arr->data != NULL) {
 		for (size_t i = 0; i < arr->length; i++) {
@@ -248,9 +246,9 @@ void token_print(token_t* t)
 
 void array_print(array_t* arr)
 {
-	// print_message("Array Length: %zu\n", arr->length);
-	// print_message("Array Size: %zu\n", arr->size);
-	// print_message("Array Contents:\n");
+	print_message("Array Length: %zu\n", arr->length);
+	print_message("Array Size: %zu\n", arr->size);
+	print_message("Array Contents:\n");
 
 	for (size_t i = 0; i < arr->length; i++) {
 		token_t* t = arr->data[i];
@@ -263,9 +261,11 @@ unsigned long hash_function(const char *str)
 {
 	unsigned long hash = 5381;
 	int c;
+
 	while ((c = *str++)) {
 		hash = ((hash << 5) + hash) + c;
 	}
+
 	return hash;
 }
 
@@ -276,10 +276,12 @@ hashmap_t* hashmap_create()
 	map->length = 16;
 	map->size = 0;
 	map->data = (hashmap_entry_t**) calloc(map->length, sizeof(hashmap_entry_t*));
+
 	if (!map->data) {
 		perror("Error: hashmap_create - Memory allocation error");
 		exit(EXIT_FAILURE);
 	}
+
 	return map;
 }
 

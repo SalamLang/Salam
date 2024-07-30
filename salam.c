@@ -294,6 +294,9 @@ void hashmap_put(hashmap_t *map, const char *key, void *value)
 	
 	while (entry != NULL) {
 		if (strcmp(entry->key, key) == 0) {
+			free(entry->value);
+			entry->value = NULL;
+
 			entry->value = value;
 
 			return;
@@ -303,7 +306,7 @@ void hashmap_put(hashmap_t *map, const char *key, void *value)
 	}
 
 	hashmap_entry_t *new_entry = (hashmap_entry_t*) malloc(sizeof(hashmap_entry_t));
-	new_entry->key = key;
+	new_entry->key = strdup(key);
 	new_entry->value = value;
 	new_entry->next = map->data[index];
 	map->data[index] = new_entry;
@@ -987,7 +990,7 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 			token_t* attr_value = parser->lexer->tokens->data[parser->token_index];
 			parser->token_index++;
 
-			hashmap_put(element->attributes, strdup(current_token->value), strdup(attr_value->value));
+			hashmap_put(element->attributes, current_token->value, strdup(attr_value->value));
 			// hashmap_put(element->attributes, current_token->value, attr_value->value);
 		} else {
 			array_push(element->children, parser_layout_element(parser));			

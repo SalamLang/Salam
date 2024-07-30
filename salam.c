@@ -1570,6 +1570,32 @@ bool is_style_attribute(char* attribute_name)
 	return false;
 }
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+char* attribute_style2css(const char* attribute_name) {
+	char* res = malloc(sizeof(char) * 18);
+	if (res == NULL) {
+		fprintf(stderr, "Memory allocation failed\n");
+		exit(1);
+	}
+
+	if (strcmp(attribute_name, "رنگ") == 0) {
+		strcpy(res, "color");
+	} else if (strcmp(attribute_name, "زمینه") == 0) {
+		strcpy(res, "background-color");
+	} else if (strcmp(attribute_name, "فونت") == 0) {
+		strcpy(res, "font");
+	} else if (strcmp(attribute_name, "اندازه") == 0) {
+		strcpy(res, "font-size");
+	} else {
+		strcpy(res, "");
+	}
+
+	return res;
+}
+
 string_t* generate_layout_element_attribute(parser_t* parser, hashmap_entry_t* entry)
 {
 	string_t* str = string_create(10);
@@ -1627,11 +1653,11 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 			hashmap_entry_t *entry = styles->data[i];
 
 			while (entry) {
-				// string_t* buf = generate_layout_element_attribute(parser, entry);
-				// string_append(str, buf);
-				// string_free(buf);
+				char* buf = attribute_style2css(entry->key);
+				string_append_str(str, buf);
+				free(buf);
+				buf = NULL;
 
-				string_append_str(str, entry->key);
 				string_append_char(str, ':');
 				string_append_str(str, entry->value);
 				string_append_char(str, ';');
@@ -1750,6 +1776,23 @@ string_t* generate_string(parser_t* parser, int ident)
 	return str;
 }
 
+void generate_file(parser_t* parser, char* output_file)
+{
+	string_t* code = generate_string(parser, 0);
+
+	FILE* file = fopen(output_file, "w");
+	if (file == NULL) {
+		fprintf(stderr, "Could not open file %s for writing\n", output_file);
+		string_free(code);
+		return;
+	}
+
+	fprintf(file, "%s", code->data);
+
+	fclose(file);
+	string_free(code);
+}
+
 void generate_print(parser_t* parser)
 {
 	string_t* code = generate_string(parser, 0);
@@ -1810,6 +1853,7 @@ int main(int argc, char** argv)
 	ast_print(parser);
 
 	generate_print(parser);
+	generate_file(parser, "output.html");
 
 	print_message("free parser\n");
 	parser_free(parser);

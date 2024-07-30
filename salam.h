@@ -257,6 +257,14 @@ string_t* ast_string(parser_t* parser, int ident);
 void ast_print(parser_t* parser);
 char* ast_layout_type_string(ast_layout_type_t type);
 char* ast_node_type_string(ast_node_type_t type);
+void ast_layout_ident(string_t* str, int ident);
+
+// Generate
+string_t* generate_layout(ast_layout_node_t* node, parser_t* parser, int ident);
+void generate_layout_ident(string_t* str, int ident);
+string_t* generate_string(parser_t* parser, int ident);
+void generate_print(parser_t* parser);
+char* generate_layout_type_string(ast_layout_type_t type);
 
 // Hashmap
 hashmap_t* hashmap_create();

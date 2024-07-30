@@ -971,7 +971,7 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
 
 	while (parser->token_index < parser->lexer->tokens->length) {
-		token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+		token_t* current_token = parser_token_get(parser);
 
 		if (current_token->type == TOKEN_TYPE_END) break;
 
@@ -982,7 +982,7 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 
 			parser_token_eat_nodata(parser, TOKEN_TYPE_COLON); // :
 			
-			token_t* attr_value = parser->lexer->tokens->data[parser->token_index];
+			token_t* attr_value = parser_token_get(parser);
 			parser->token_index++;
 
 			hashmap_put(element->attributes, current_token->value, strdup(attr_value->value));
@@ -999,7 +999,7 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 
 ast_layout_node_t* parser_layout_element(parser_t* parser)
 {
-	token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+	token_t* current_token = parser_token_get(parser);
 
 	if (current_token->type != TOKEN_TYPE_IDENTIFIER) return NULL;
 	
@@ -1028,7 +1028,7 @@ array_t* parser_layout_elements(parser_t* parser)
 	array_t* elements = array_create(4);
 
 	while (parser->token_index < parser->lexer->tokens->length) {
-		token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+		token_t* current_token = parser_token_get(parser);
 
 		if (current_token->type == TOKEN_TYPE_IDENTIFIER) {
 			ast_layout_node_t* element = parser_layout_element(parser);
@@ -1077,7 +1077,7 @@ void token_free(token_t* token)
 void parser_token_eat_nodata(parser_t* parser, token_type_t type)
 {
 	if (parser->lexer->tokens->length > parser->token_index) {
-		token_t* token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+		token_t* token = parser_token_get(parser);
 
 		if (token->type == type) {
 			parser->token_index++;
@@ -1097,9 +1097,7 @@ void parser_token_eat_nodata(parser_t* parser, token_type_t type)
 token_t* parser_token_get(parser_t* parser)
 {
 	if (parser->lexer->tokens->length > parser->token_index) {
-		token_t* token = (token_t*) parser->lexer->tokens->data[parser->token_index];
-
-		return (token_t*) parser->lexer->tokens->data[parser->token_index++];
+		return (token_t*) parser->lexer->tokens->data[parser->token_index];
 	}
 
 	return NULL;
@@ -1108,7 +1106,7 @@ token_t* parser_token_get(parser_t* parser)
 token_t* parser_token_eat(parser_t* parser, token_type_t type)
 {
 	if (parser->lexer->tokens->length > parser->token_index) {
-		token_t* token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+		token_t* token = parser_token_get(parser);
 
 		if (token->type == type) {
 			return (token_t*) parser->lexer->tokens->data[parser->token_index++];
@@ -1140,7 +1138,7 @@ void parser_parse(parser_t* parser)
 	ast_node_t* expression_node;
 
 	while (parser->token_index < parser->lexer->tokens->length) {
-		token_t* current_token = (token_t*) parser->lexer->tokens->data[parser->token_index];
+		token_t* current_token = parser_token_get(parser);
 
 		switch (current_token->type) {
 			case TOKEN_TYPE_EOF:

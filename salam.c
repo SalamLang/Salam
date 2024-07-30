@@ -1289,13 +1289,15 @@ void string_print(string_t* str)
 	else printf("%s\n", str->data);
 }
 
-string_t* ast_layout_string(ast_layout_node_t* element, parser_t* parser)
+string_t* ast_layout_string(ast_layout_node_t* element, parser_t* parser, int ident)
 {
 	string_t* str = string_create(10);
 	
 	char* element_name = ast_layout_type_string(element->type);
 
-	string_append_str(str, "\t<layout_");
+	for (int i = 0; i < ident; i++) string_append_char(str, '\t');
+
+	string_append_str(str, "<layout_");
 	string_append_str(str, element_name);
 
 	if (element->attributes != NULL && element->attributes->length > 0) {
@@ -1313,15 +1315,17 @@ string_t* ast_layout_string(ast_layout_node_t* element, parser_t* parser)
 	}
 
 	if (element->is_mother) {
-		string_append_str(str, ">");
+		string_append_str(str, ">\n");
 
 		if (element->children != NULL) {
 			for (size_t j = 0; j < element->children->length; j++) {
 				ast_layout_node_t* child = (ast_layout_node_t*) element->children->data[j];
 
-				string_append(str, ast_layout_string(child, parser));
+				string_append(str, ast_layout_string(child, parser, ident + 1));
 			}
 		}
+
+		for (int i = 0; i < ident; i++) string_append_char(str, '\t');
 
 		string_append_str(str, "</layout_");
 		string_append_str(str, element_name);
@@ -1342,7 +1346,7 @@ void string_append(string_t* dest, string_t* src)
 	string_append_str(dest, src->data);
 }
 
-string_t* ast_string(parser_t* parser)
+string_t* ast_string(parser_t* parser, int ident)
 {
 	string_t* str = string_create(10);
 
@@ -1354,7 +1358,7 @@ string_t* ast_string(parser_t* parser)
 		for (size_t i = 0; i < parser->layout->elements->length; i++) {
 			ast_layout_node_t* element = (ast_layout_node_t*) parser->layout->elements->data[i];
 			
-			string_append(str, ast_layout_string(element, parser));
+			string_append(str, ast_layout_string(element, parser, ident + 1));
 		}
 
 		string_append_str(str, "</layout>\n");
@@ -1368,7 +1372,7 @@ string_t* ast_string(parser_t* parser)
 
 void ast_print(parser_t* parser)
 {
-	string_t* tree = ast_string(parser);
+	string_t* tree = ast_string(parser, 0);
 
 	printf("XML AST Tree:\n");
 

@@ -1260,6 +1260,21 @@ char* ast_layout_type_string(ast_layout_type_t type)
 	}
 }
 
+char* generate_layout_type_string(ast_layout_type_t type)
+{
+	switch (type) {
+		case AST_TYPE_LAYOUT_BUTTON: return "button";
+		case AST_TYPE_LAYOUT_TEXT: return "text";
+		case AST_TYPE_LAYOUT_INPUT: return "input";
+		case AST_TYPE_LAYOUT_LINE: return "br";
+		case AST_TYPE_LAYOUT_BREAK: return "hr";
+
+		case AST_TYPE_LAYOUT_ERROR:
+		default:
+			return "error";
+	}
+}
+
 void ast_node_free(ast_node_t* node)
 {
 	if (node == NULL) return;
@@ -1430,13 +1445,18 @@ void string_print(string_t* str)
 	else printf("%s\n", str->data);
 }
 
+void ast_layout_ident(string_t* str, int ident)
+{
+	for (int i = 0; i < ident; i++) string_append_char(str, '\t');
+}
+
 string_t* ast_layout_string(ast_layout_node_t* element, parser_t* parser, int ident)
 {
 	string_t* str = string_create(10);
 	
 	char* element_name = ast_layout_type_string(element->type);
-
-	for (int i = 0; i < ident; i++) string_append_char(str, '\t');
+	
+	ast_layout_ident(str, ident);
 
 	string_append_str(str, "<layout_");
 	string_append_str(str, element_name);
@@ -1471,8 +1491,8 @@ string_t* ast_layout_string(ast_layout_node_t* element, parser_t* parser, int id
 				string_free(buf);
 			}
 		}
-
-		for (int i = 0; i < ident; i++) string_append_char(str, '\t');
+		
+		ast_layout_ident(str, ident);
 
 		string_append_str(str, "</layout_");
 		string_append_str(str, element_name);
@@ -1530,6 +1550,98 @@ void ast_print(parser_t* parser)
 	string_free(tree);
 }
 
+void generate_layout_ident(string_t* str, int ident)
+{
+	for (int i = 0; i < ident; i++) string_append_char(str, '\t');
+}
+
+string_t* generate_layout(ast_layout_node_t* node, parser_t* parser, int ident)
+{
+	string_t* str = string_create(10);
+
+	return str;
+}
+
+string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, int ident)
+{
+	string_t* str = string_create(10);
+
+	if (parser == NULL) return str;
+	if (element == NULL) return str;
+
+	char* element_name = generate_layout_type_string(element->type);
+
+	generate_layout_ident(str, ident);
+
+	string_append_char(str, '<');
+	string_append_str(str, element_name);
+	string_append_char(str, '>');
+	string_append_char(str, '\n');
+
+	if (element->is_mother) {
+		generate_layout_ident(str, ident);
+
+		string_append_char(str, '<');
+		string_append_char(str, '/');
+		string_append_str(str, element_name);
+		string_append_char(str, '>');
+		string_append_char(str, '\n');
+	}
+
+
+	return str;
+}
+
+string_t* generate_string(parser_t* parser, int ident)
+{
+	string_t* str = string_create(10);
+
+	if (parser == NULL) return str;
+
+	if (parser->layout != NULL) {
+		generate_layout_ident(str, ident);
+		string_append_str(str, "<!doctype html>\n");
+
+		generate_layout_ident(str, ident);
+		string_append_str(str, "<html dir=\"rtl\" lang=\"fa_IR\">\n");
+
+		generate_layout_ident(str, ident + 1);
+		string_append_str(str, "<head>\n");
+		generate_layout_ident(str, ident + 2);
+		string_append_str(str, "<meta charset=\"UTF-8\">\n");
+		generate_layout_ident(str, ident + 1);
+		string_append_str(str, "</head>\n");
+
+		generate_layout_ident(str, ident + 1);
+		string_append_str(str, "<body>\n");
+		for (size_t i = 0; i < parser->layout->elements->length; i++) {
+			ast_layout_node_t* element = (ast_layout_node_t*) parser->layout->elements->data[i];
+
+			string_t* buf = generate_layout_element(element, parser, ident + 2);
+			string_append(str, buf);
+			string_free(buf);
+		}
+		generate_layout_ident(str, ident + 1);
+		string_append_str(str, "</body>\n");
+
+		generate_layout_ident(str, ident);
+		string_append_str(str, "</html>");
+	}
+
+	return str;
+}
+
+void generate_print(parser_t* parser)
+{
+	string_t* code = generate_string(parser, 0);
+
+	printf("Generate Code:\n");
+
+	string_print(code);
+
+	string_free(code);
+}
+
 int main(int argc, char** argv)
 {
 	// setlocale(LC_ALL, "");
@@ -1578,7 +1690,11 @@ int main(int argc, char** argv)
 
 	ast_print(parser);
 
+	generate_print(parser);
+
+	print_message("free parser\n");
 	parser_free(parser);
+	print_message("end free parser\n");
 
 	print_message("free lexer\n");
 	lexer_free(lexer);

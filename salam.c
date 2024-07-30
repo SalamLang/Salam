@@ -144,11 +144,11 @@ char* token_type2str(token_type_t type)
 	}
 }
 
-char* file_read(char* file_Name)
+char* file_read(char* file_name)
 {
-	FILE* file = fopen(file_Name, "r");
+	FILE* file = fopen(file_name, "r");
 	if (file == NULL) {
-		print_error(messages[language][MESSAGE_LEXER_FILE_NOT_EXISTS], file_Name);
+		print_error(messages[language][MESSAGE_LEXER_FILE_NOT_EXISTS], file_name);
 		return NULL;
 	}
 
@@ -169,6 +169,7 @@ token_t* token_create(token_type_t type, const char* value, int a, int b, int c,
 {
 	token_t* t;
 	CREATE_MEMORY_OBJECT(t, token_t, 1, "Error: token_create<t> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 	t->type = type;
 	t->value = strdup(value);
 	t->location.length = a;

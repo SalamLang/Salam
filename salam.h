@@ -246,7 +246,7 @@ void string_print(string_t* str);
 void string_append(string_t* dest, string_t* src);
 
 // AST
-string_t* ast_string(parser_t* parser);
+string_t* ast_string(parser_t* parser, int ident);
 void ast_print(parser_t* parser);
 char* ast_layout_type_string(ast_layout_type_t type);
 char* ast_node_type_string(ast_node_type_t type);

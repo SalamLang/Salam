@@ -954,17 +954,6 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t
 	return element;
 }
 
-ast_attribute_t* ast_attribute_make(char* key, char* value)
-{
-	ast_attribute_t* attribute;
-	CREATE_MEMORY_OBJECT(attribute, ast_attribute_t, 1, "Error: ast_attribute_make<attribute> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-
-	attribute->key = strdup(key);
-	attribute->value = strdup(value);
-
-	return attribute;
-}
-
 ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t* parser)
 {
 	ast_layout_node_t* element;
@@ -997,7 +986,7 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 			token_t* attr_value = parser->lexer->tokens->data[parser->token_index];
 			parser->token_index++;
 
-			hashmap_put(element->attributes, current_token->value, attr_value->value);
+			hashmap_put(element->attributes, strdup(current_token->value), strdup(attr_value->value));
 		} else {
 			array_push(element->children, parser_layout_element(parser));			
 		}
@@ -1200,8 +1189,8 @@ void ast_layout_node_free(ast_layout_node_t* node)
 		if (node->attributes->data != NULL) {
 			for (size_t i = 0; i < node->attributes->length; i++) {
 				hashmap_entry_t *entry = node->attributes->data[i];
-
-				while (entry) {
+				
+				while (entry != NULL) {
 					free(entry->key);
 					entry->key = NULL;
 					free(entry->value);
@@ -1228,7 +1217,7 @@ void ast_layout_node_free(ast_layout_node_t* node)
 		if (node->children->data != NULL) {
 			for (size_t i = 0; i < node->children->length; i++) {
 				if (node->children->data[i] != NULL) {
-					ast_layout_node_free(node->children->data[i]);
+					ast_layout_node_free((ast_layout_node_t*) node->children->data[i]);
 				}
 			}
 

@@ -214,11 +214,6 @@ typedef struct {
 } ast_layout_node_t;
 
 typedef struct {
-    char* key;
-    char* value;
-} ast_attribute_t;
-
-typedef struct {
 	array_t* elements;
 } ast_layout_t;
 

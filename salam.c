@@ -986,7 +986,6 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 			parser->token_index++;
 
 			hashmap_put(element->attributes, current_token->value, strdup(attr_value->value));
-			// hashmap_put(element->attributes, current_token->value, attr_value->value);
 		} else {
 			array_push(element->children, parser_layout_element(parser));			
 		}
@@ -1562,26 +1561,100 @@ string_t* generate_layout(ast_layout_node_t* node, parser_t* parser, int ident)
 	return str;
 }
 
+bool is_style_attribute(char* attribute_name)
+{
+	if (strcmp(attribute_name, "رنگ") == 0) return true;
+	else if (strcmp(attribute_name, "زمینه") == 0) return true;
+	else if (strcmp(attribute_name, "فونت") == 0) return true;
+
+	return false;
+}
+
+string_t* generate_layout_element_attribute(parser_t* parser, hashmap_entry_t* entry)
+{
+	string_t* str = string_create(10);
+
+	string_append_str(str, entry->key);
+	string_append_char(str, '=');
+
+	if (strlen(entry->value) == 1) {
+		string_append_str(str, entry->value);
+	}
+	else {
+		string_append_char(str, '\"');
+		string_append_str(str, entry->value);
+		string_append_char(str, '\"');
+	}
+
+	return str;
+}
+
 string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t* element, int ident)
 {
 	string_t* str = string_create(10);
+
+	hashmap_t* styles = hashmap_create();
+	int html_attrs = 0;
 
 	if (element->attributes != NULL && element->attributes->length > 0) {
 		for (size_t i = 0; i < element->attributes->length; i++) {
 			hashmap_entry_t *entry = element->attributes->data[i];
 
 			while (entry) {
-				string_append_char(str, ' ');
+				if (is_style_attribute(entry->key)) {
+					hashmap_put(styles, entry->key, strdup(entry->value));
+				}
+				else {
+					string_append_char(str, ' ');
+					html_attrs++;
 
-				string_append_str(str, entry->key);
-				string_append_char(str, '=');
-				string_append_char(str, '\"');
-				string_append_str(str, entry->value);
-				string_append_char(str, '\"');
+					string_t* buf = generate_layout_element_attribute(parser, entry);
+					string_append(str, buf);
+					string_free(buf);
+				}
 
 				entry = entry->next;
 			}
 		}
+	}
+
+	if (styles->length > 0) {
+		if (html_attrs > 0) string_append_char(str, ' ');
+
+		string_append_str(str, "style=\"");
+
+		for (size_t i = 0; i < styles->length; i++) {
+			hashmap_entry_t *entry = styles->data[i];
+
+			while (entry) {
+				// string_t* buf = generate_layout_element_attribute(parser, entry);
+				// string_append(str, buf);
+				// string_free(buf);
+
+				string_append_str(str, entry->key);
+				string_append_char(str, ':');
+				string_append_str(str, entry->value);
+				string_append_char(str, ';');
+
+				hashmap_entry_t *temp = entry;
+				free(temp->key);
+				temp->key = NULL;
+				free(temp->value);
+				temp->value = NULL;
+				
+				entry = entry->next;
+
+				free(temp);
+				temp = NULL;
+			}
+		}
+
+		string_append_str(str, "\"");
+
+		free(styles->data);
+		styles->data = NULL;
+		free(styles);
+		styles = NULL;
 	}
 
 	return str;
@@ -1602,8 +1675,12 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 	string_append_str(str, element_name);
 
 	string_t* buf = generate_layout_element_attributes(parser, element, ident);
-	string_append(str, buf);
-	string_free(buf);
+	if (buf->length > 0) {
+		string_append_char(str, ' ');
+		
+		string_append(str, buf);
+		string_free(buf);
+	}
 
 	string_append_char(str, '>');
 	string_append_char(str, '\n');

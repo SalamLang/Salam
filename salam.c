@@ -426,13 +426,12 @@ lexer_t* lexer_create(const char* data)
 
 void lexer_free(lexer_t* lexer)
 {
-	if (lexer == NULL) {
-		return;
-	}
-
+	if (lexer == NULL) return;
+	
 	if (lexer->tokens != NULL) {
 		for (size_t i = 0; i < lexer->tokens->length; i++) {
 			token_t* t = (token_t*) lexer->tokens->data[i];
+
 			if (t != NULL) {
 				if (t->value != NULL) {
 					free(t->value);
@@ -986,7 +985,8 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 			token_t* attr_value = parser->lexer->tokens->data[parser->token_index];
 			parser->token_index++;
 
-			hashmap_put(element->attributes, strdup(current_token->value), strdup(attr_value->value));
+			// hashmap_put(element->attributes, strdup(current_token->value), strdup(attr_value->value));
+			hashmap_put(element->attributes, current_token->value, attr_value->value);
 		} else {
 			array_push(element->children, parser_layout_element(parser));			
 		}
@@ -1189,12 +1189,17 @@ void ast_layout_node_free(ast_layout_node_t* node)
 		if (node->attributes->data != NULL) {
 			for (size_t i = 0; i < node->attributes->length; i++) {
 				hashmap_entry_t *entry = node->attributes->data[i];
-				
+
 				while (entry != NULL) {
-					free(entry->key);
-					entry->key = NULL;
-					free(entry->value);
-					entry->value = NULL;
+					if (entry->key != NULL) {
+						free(entry->key);
+						entry->key = NULL;
+					}
+
+					if (entry->value != NULL) {
+						free(entry->value);
+						entry->value = NULL;
+					}
 
 					hashmap_entry_t *buf = entry;
 

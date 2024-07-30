@@ -1562,6 +1562,31 @@ string_t* generate_layout(ast_layout_node_t* node, parser_t* parser, int ident)
 	return str;
 }
 
+string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t* element, int ident)
+{
+	string_t* str = string_create(10);
+
+	if (element->attributes != NULL && element->attributes->length > 0) {
+		for (size_t i = 0; i < element->attributes->length; i++) {
+			hashmap_entry_t *entry = element->attributes->data[i];
+
+			while (entry) {
+				string_append_char(str, ' ');
+
+				string_append_str(str, entry->key);
+				string_append_char(str, '=');
+				string_append_char(str, '\"');
+				string_append_str(str, entry->value);
+				string_append_char(str, '\"');
+
+				entry = entry->next;
+			}
+		}
+	}
+
+	return str;
+}
+
 string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, int ident)
 {
 	string_t* str = string_create(10);
@@ -1575,10 +1600,25 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 
 	string_append_char(str, '<');
 	string_append_str(str, element_name);
+
+	string_t* buf = generate_layout_element_attributes(parser, element, ident);
+	string_append(str, buf);
+	string_free(buf);
+
 	string_append_char(str, '>');
 	string_append_char(str, '\n');
 
 	if (element->is_mother) {
+		if (element->children != NULL && element->children->length > 0) {
+			for (size_t i = 0; i < element->children->length; i++) {
+				ast_layout_node_t *entry = element->children->data[i];
+
+				string_t* buf = generate_layout_element(entry, parser, ident + 1);
+				string_append(str, buf);
+				string_free(buf);
+			}
+		}
+
 		generate_layout_ident(str, ident);
 
 		string_append_char(str, '<');
@@ -1614,6 +1654,7 @@ string_t* generate_string(parser_t* parser, int ident)
 
 		generate_layout_ident(str, ident + 1);
 		string_append_str(str, "<body>\n");
+
 		for (size_t i = 0; i < parser->layout->elements->length; i++) {
 			ast_layout_node_t* element = (ast_layout_node_t*) parser->layout->elements->data[i];
 
@@ -1621,6 +1662,7 @@ string_t* generate_string(parser_t* parser, int ident)
 			string_append(str, buf);
 			string_free(buf);
 		}
+
 		generate_layout_ident(str, ident + 1);
 		string_append_str(str, "</body>\n");
 

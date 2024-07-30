@@ -1293,28 +1293,44 @@ string_t* ast_layout_string(ast_layout_node_t* element, parser_t* parser)
 {
 	string_t* str = string_create(10);
 	
-	switch (element->type) {
-		case AST_TYPE_LAYOUT_TEXT:
-			string_append_str(str, "<text>\n");
-			break;
-		
-		case AST_TYPE_LAYOUT_INPUT:
-			string_append_str(str, "<input>\n");
-			break;
-		
-		case AST_TYPE_LAYOUT_BUTTON:
-			string_append_str(str, "<button>\n");
-			break;
-		
-		case AST_TYPE_LAYOUT_LINE:
-			string_append_str(str, "<line />\n");
-			break;
-		
-		case AST_TYPE_LAYOUT_BREAK:
-			string_append_str(str, "<break />\n");
-			break;
+	char* element_name = ast_layout_type_string(element->type);
+
+	string_append_str(str, "\t<layout_");
+	string_append_str(str, element_name);
+
+	if (element->attributes != NULL && element->attributes->length > 0) {
+		for (size_t j = 0; j < element->attributes->length; j++) {
+			ast_attribute_t* attribute = (ast_attribute_t*) element->attributes->data[j];
+
+			string_append_char(str, ' ');
+
+			string_append_str(str, attribute->key);
+			string_append_char(str, '=');
+			string_append_char(str, '\"');
+			string_append_str(str, attribute->value);
+			string_append_char(str, '\"');
+		}
 	}
 
+	if (element->is_mother) {
+		string_append_str(str, ">");
+
+		if (element->children != NULL) {
+			for (size_t j = 0; j < element->children->length; j++) {
+				ast_layout_node_t* child = (ast_layout_node_t*) element->children->data[j];
+
+				string_append(str, ast_layout_string(child, parser));
+			}
+		}
+
+		string_append_str(str, "</layout_");
+		string_append_str(str, element_name);
+		string_append_str(str, ">\n");
+	}
+	else {
+		string_append_str(str, " />\n");
+	}
+	
 	return str;
 }
 
@@ -1337,44 +1353,8 @@ string_t* ast_string(parser_t* parser)
 
 		for (size_t i = 0; i < parser->layout->elements->length; i++) {
 			ast_layout_node_t* element = (ast_layout_node_t*) parser->layout->elements->data[i];
-			char* element_name = ast_layout_type_string(element->type);
-
-			string_append_str(str, "\t<layout_");
-			string_append_str(str, element_name);
-
-			if (element->attributes != NULL && element->attributes->length > 0) {
-				for (size_t j = 0; j < element->attributes->length; j++) {
-					ast_attribute_t* attribute = (ast_attribute_t*) element->attributes->data[j];
-
-					string_append_char(str, ' ');
-
-					string_append_str(str, attribute->key);
-					string_append_char(str, '=');
-					string_append_char(str, '\"');
-					string_append_str(str, attribute->value);
-					string_append_char(str, '\"');
-				}
-			}
-
-
-			if (element->is_mother) {
-				string_append_str(str, ">");
-
-				if (element->children != NULL) {
-					for (size_t j = 0; j < element->children->length; j++) {
-						ast_layout_node_t* child = (ast_layout_node_t*) element->children->data[j];
-
-						string_append(str, ast_layout_string(child, parser));
-					}
-				}
-
-				string_append_str(str, "</layout_");
-				string_append_str(str, element_name);
-				string_append_str(str, ">\n");
-			}
-			else {
-				string_append_str(str, " />\n");
-			}
+			
+			string_append(str, ast_layout_string(element, parser));
 		}
 
 		string_append_str(str, "</layout>\n");

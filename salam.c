@@ -1630,17 +1630,55 @@ char* attribute_css_value(char* attribute_name, char* attribute_value)
 		exit(1);
 	}
 
-	if (strcmp(attribute_name, "color") == 0) {
+	if (strcmp(attribute_name, "color") == 0 || strcmp(attribute_name, "background-color") == 0) {
 		// printf("it's a color value\n");
 
 		if (strcmp(attribute_value, "سیاه") == 0) { strcpy(res, "black"); return res; }
 		else if (strcmp(attribute_value, "سفید") == 0) { strcpy(res, "white"); return res; }
 		else if (strcmp(attribute_value, "صورتی") == 0) { strcpy(res, "pink"); return res; }
+		else if (strcmp(attribute_value, "بنفش") == 0) { strcpy(res, "purple"); return res; }
 		else if (strcmp(attribute_value, "قرمز") == 0) { strcpy(res, "red"); return res; }
 		else if (strcmp(attribute_value, "سبز") == 0) { strcpy(res, "green"); return res; }
 		else if (strcmp(attribute_value, "زرد") == 0) { strcpy(res, "yellow"); return res; }
 		else if (strcmp(attribute_value, "ابی") == 0 || strcmp(attribute_value, "آبی") == 0) { strcpy(res, "blue"); return res; }
+		else if (strcmp(attribute_value, "قهوه‌ای") == 0 || strcmp(attribute_value, "قهوه ای") == 0) { strcpy(res, "brown"); return res; }
+		else if (strcmp(attribute_value, "نارنجی") == 0) { strcpy(res, "orange"); return res; }
+		else if (strcmp(attribute_value, "خاکستری") == 0) { strcpy(res, "gray"); return res; }
+		else if (strcmp(attribute_value, "طوسی") == 0) { strcpy(res, "silver"); return res; }
+		else if (strcmp(attribute_value, "طلایی") == 0) { strcpy(res, "gold"); return res; }
+		else if (strcmp(attribute_value, "بژ") == 0) { strcpy(res, "beige"); return res; }
+		else if (strcmp(attribute_value, "زیتونی") == 0) { strcpy(res, "olive"); return res; }
+		else if (strcmp(attribute_value, "لاجوردی") == 0) { strcpy(res, "navy"); return res; }
+		else if (strcmp(attribute_value, "فیروزه‌ای") == 0 || strcmp(attribute_value, "فیروزه ای") == 0) { strcpy(res, "turquoise"); return res; }
+		else if (strcmp(attribute_value, "نیلی") == 0) { strcpy(res, "indigo"); return res; }
 	} else if (strcmp(attribute_name, "font-family") == 0) {
+		strcpy(res, attribute_value);
+		return res;
+	} else if (strcmp(attribute_name, "font-size") == 0) {
+		strcpy(res, attribute_value);
+		return res;
+	} else if (strcmp(attribute_name, "padding") == 0 || strcmp(attribute_name, "padding-top") == 0 || strcmp(attribute_name, "padding-left") == 0 || strcmp(attribute_name, "padding-right") == 0 || strcmp(attribute_name, "padding-bottom") == 0) {
+		strcpy(res, attribute_value);
+		return res;
+	} else if (strcmp(attribute_name, "margin") == 0 || strcmp(attribute_name, "margin-top") == 0 || strcmp(attribute_name, "margin-left") == 0 || strcmp(attribute_name, "margin-right") == 0 || strcmp(attribute_name, "margin-bottom") == 0) {
+		strcpy(res, attribute_value);
+		return res;
+	} else if (strcmp(attribute_name, "padding-top") == 0) {
+		strcpy(res, attribute_value);
+		return res;
+	} else if (strcmp(attribute_name, "width") == 0) {
+		strcpy(res, attribute_value);
+		return res;
+	} else if (strcmp(attribute_name, "height") == 0) {
+		strcpy(res, attribute_value);
+		return res;
+	} else if (strcmp(attribute_name, "cursor") == 0) {
+		strcpy(res, attribute_value);
+		return res;
+	} else if (strcmp(attribute_name, "border-radius") == 0) {
+		strcpy(res, attribute_value);
+		return res;
+	} else if (strcmp(attribute_name, "border") == 0) {
 		strcpy(res, attribute_value);
 		return res;
 	} else {

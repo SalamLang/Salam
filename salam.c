@@ -652,6 +652,7 @@ void read_string(lexer_t* lexer, wchar_t ch)
 	size_t i = 0;
 
 	while (ch != L'"') {
+		if (ch == '\0') break;
 		if (i >= allocated_size - 1) {
 			allocated_size *= 2;
 			char* temp = (char*) realloc(string, sizeof(char) * allocated_size);

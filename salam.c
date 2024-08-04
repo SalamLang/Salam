@@ -1640,6 +1640,9 @@ char* attribute_css_value(char* attribute_name, char* attribute_value)
 		else if (strcmp(attribute_value, "سبز") == 0) { strcpy(res, "green"); return res; }
 		else if (strcmp(attribute_value, "زرد") == 0) { strcpy(res, "yellow"); return res; }
 		else if (strcmp(attribute_value, "ابی") == 0 || strcmp(attribute_value, "آبی") == 0) { strcpy(res, "blue"); return res; }
+	} else if (strcmp(attribute_name, "font-family") == 0) {
+		strcpy(res, attribute_value);
+		return res;
 	} else {
 		// printf("it's not a color value, so is %s\n", attribute_name);
 	}
@@ -1708,7 +1711,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 						hashmap_put(styles, entry->key, entry->value);
 					}
 					else {
-						if (strcmp(entry->key, "داده") == 0) *element_content = entry->value;
+						if (strcmp(entry->key, "محتوا") == 0) *element_content = entry->value;
 						else {
 							string_append_char(str, ' ');
 							html_attrs++;
@@ -1738,11 +1741,8 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 
 				char* buf1 = attribute_css_name(entry->key);
 				if (buf1) {
-					printf("buf1: %s\n", buf1);
-					printf("entry value: %s\n", (char*) entry->value);
 					char* buf2 = attribute_css_value(buf1, entry->value);
 					if (buf2) {
-						printf("buf2: %s\n", buf2);
 						string_append_str(css_buffer, buf1);
 
 						string_append_char(css_buffer, ':');
@@ -1768,6 +1768,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 			string_append(str, css_buffer);
 			string_append_str(str, "\"");
 		}
+
 		string_free(css_buffer);
 	}
 

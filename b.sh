@@ -34,6 +34,7 @@ fi
 echo "efence library is installed"
 
 # Compile
+echo "Compiling..."
 # gcc -g -ggdb -g -o "$OUTPUT_FILE" "$INPUT_FILE"
 # gcc -g -fsanitize=undefined,address -Walloca -o "$OUTPUT_FILE" "$INPUT_FILE" -lefence
 gcc -g -fsanitize=undefined,address -Walloca -o "$OUTPUT_FILE" "$INPUT_FILE"
@@ -51,6 +52,7 @@ gcc -g -fsanitize=undefined,address -Walloca -o "$OUTPUT_FILE" "$INPUT_FILE"
 # fi
 
 # Check if compilation was successful
+echo "Running..."
 if [ $? -eq 0 ]; then
 	./"$OUTPUT_FILE" "$EXAMPLE_FILE"
 	# LSAN_OPTIONS=verbosity=1:log_threads=1 ./"$OUTPUT_FILE" "$EXAMPLE_FILE"

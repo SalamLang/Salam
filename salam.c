@@ -298,7 +298,7 @@ void hashmap_put(hashmap_t *map, const char *key, void *value)
 			free(entry->value);
 			entry->value = NULL;
 
-			entry->value = value;
+			entry->value = strdup(value);
 
 			return;
 		}
@@ -308,7 +308,7 @@ void hashmap_put(hashmap_t *map, const char *key, void *value)
 
 	hashmap_entry_t *new_entry = (hashmap_entry_t*) malloc(sizeof(hashmap_entry_t));
 	new_entry->key = strdup(key);
-	new_entry->value = value;
+	new_entry->value = strdup(value);
 	new_entry->next = map->data[index];
 	map->data[index] = new_entry;
 	map->length++;
@@ -988,7 +988,7 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 			token_t* attr_value = parser_token_get(parser);
 			parser->token_index++;
 
-			hashmap_put(element->attributes, current_token->value, strdup(attr_value->value));
+			hashmap_put(element->attributes, current_token->value, attr_value->value);
 		} else {
 			array_push(element->children, parser_layout_element(parser));			
 		}
@@ -1633,31 +1633,46 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 
 			while (entry) {
 				if (is_style_attribute(entry->key)) {
-					hashmap_put(styles, entry->key, strdup(entry->value));
+					hashmap_put(styles, entry->key, entry->value);
 				}
 				else {
-					if (strcmp(entry->key, "محتوا") == 0 || strcmp(entry->key, "داده") == 0) {
-						*element_content = entry->value;
-					}
+					if (strcmp(entry->key, "داده") == 0) *element_content = entry->value;
 					else {
 						string_append_char(str, ' ');
 						html_attrs++;
 
 						string_t* buf = generate_layout_element_attribute(parser, entry);
-						string_append(str, buf);
+
+						if (strlen(buf->data) > 0) string_append(str, buf);
+
 						string_free(buf);
 					}
 				}
 
+				hashmap_entry_t *temp = entry;
+				free(temp->key);
+				temp->key = NULL;
+				free(temp->value);
+				temp->value = NULL;
+				
 				entry = entry->next;
+
+				free(temp);
+				temp = NULL;
 			}
 		}
+
+		hashmap_free(element->attributes);
+		// free(element->attributes);
+		element->attributes = NULL;
 	}
 
 	if (styles->length > 0) {
 		if (html_attrs > 0) string_append_char(str, ' ');
 
 		string_append_str(str, "style=\"");
+
+		printf("-->%ld\n", styles->length);
 
 		for (size_t i = 0; i < styles->length; i++) {
 			hashmap_entry_t *entry = styles->data[i];
@@ -1718,8 +1733,6 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 		string_append(str, buf);
 	}
 	string_free(buf);
-	// free(buf->data);
-	// free(buf);
 
 	string_append_char(str, '>');
 	bool needBreak = false;
@@ -1742,7 +1755,8 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 			if (needBreak) generate_layout_ident(str, ident + 1);
 
 			string_append_str(str, element_content);
-			string_append_char(str, '\n');
+			
+			if (needBreak) string_append_char(str, '\n');
 		}
 
 		if (needBreak) generate_layout_ident(str, ident);

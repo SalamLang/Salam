@@ -91,8 +91,18 @@ const keyword_mapping_t keyword_mapping[LANGUAGE_COUNT][50] = {
 const layout_keyword_mapping_t layout_keyword_mapping[LANGUAGE_COUNT][50] = {
 	[LANGUAGE_PERSIAN] = {
 		{"دکمه", AST_TYPE_LAYOUT_BUTTON},
+		{"تصویر", AST_TYPE_LAYOUT_IMAGE},
+		{"لینک", AST_TYPE_LAYOUT_LINK},
+		{"جدول", AST_TYPE_LAYOUT_TABLE},
+		{"سطر", AST_TYPE_LAYOUT_TABLE_ROW},
+		{"ستون", AST_TYPE_LAYOUT_TABLE_COLUMN},
+		{"جعبه", AST_TYPE_LAYOUT_DIV},
 		{"متن", AST_TYPE_LAYOUT_TEXT},
+		{"پاراگراف", AST_TYPE_LAYOUT_PARAGTAPH}, 
 		{"فیلد", AST_TYPE_LAYOUT_INPUT},
+		{"فیلدمتن", AST_TYPE_LAYOUT_TEXTAREA},
+		{"کشو", AST_TYPE_LAYOUT_SELECT},
+		{"اپشن", AST_TYPE_LAYOUT_SELECT_OPTION},
 
 		{"فاصله", AST_TYPE_LAYOUT_LINE},
 		{"خط", AST_TYPE_LAYOUT_BREAK},

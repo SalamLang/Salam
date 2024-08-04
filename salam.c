@@ -1298,6 +1298,16 @@ char* ast_layout_type_string(ast_layout_type_t type)
 		case AST_TYPE_LAYOUT_INPUT: return "input";
 		case AST_TYPE_LAYOUT_LINE: return "line";
 		case AST_TYPE_LAYOUT_BREAK: return "break";
+		case AST_TYPE_LAYOUT_LINK: return "a";
+		case AST_TYPE_LAYOUT_IMAGE: return "img";
+		case AST_TYPE_LAYOUT_TABLE: return "table";
+		case AST_TYPE_LAYOUT_TABLE_ROW: return "tr";
+		case AST_TYPE_LAYOUT_TABLE_COLUMN: return "td";
+		case AST_TYPE_LAYOUT_DIV: return "div";
+		case AST_TYPE_LAYOUT_PARAGTAPH: return "p";
+		case AST_TYPE_LAYOUT_TEXTAREA: return "textarea";
+		case AST_TYPE_LAYOUT_SELECT: return "select";
+		case AST_TYPE_LAYOUT_SELECT_OPTION: return "option";
 
 		case AST_TYPE_LAYOUT_ERROR:
 		default:
@@ -1311,8 +1321,18 @@ char* generate_layout_type_string(ast_layout_type_t type)
 		case AST_TYPE_LAYOUT_BUTTON: return "button";
 		case AST_TYPE_LAYOUT_TEXT: return "text";
 		case AST_TYPE_LAYOUT_INPUT: return "input";
-		case AST_TYPE_LAYOUT_LINE: return "br";
-		case AST_TYPE_LAYOUT_BREAK: return "hr";
+		case AST_TYPE_LAYOUT_LINE: return "line";
+		case AST_TYPE_LAYOUT_BREAK: return "break";
+		case AST_TYPE_LAYOUT_LINK: return "a";
+		case AST_TYPE_LAYOUT_IMAGE: return "img";
+		case AST_TYPE_LAYOUT_TABLE: return "table";
+		case AST_TYPE_LAYOUT_TABLE_ROW: return "tr";
+		case AST_TYPE_LAYOUT_TABLE_COLUMN: return "td";
+		case AST_TYPE_LAYOUT_DIV: return "div";
+		case AST_TYPE_LAYOUT_PARAGTAPH: return "p";
+		case AST_TYPE_LAYOUT_TEXTAREA: return "textarea";
+		case AST_TYPE_LAYOUT_SELECT: return "select";
+		case AST_TYPE_LAYOUT_SELECT_OPTION: return "option";
 
 		case AST_TYPE_LAYOUT_ERROR:
 		default:

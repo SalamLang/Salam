@@ -1686,12 +1686,12 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 		}
 
 		string_append_str(str, "\"");
-
-		free(styles->data);
-		styles->data = NULL;
-		free(styles);
-		styles = NULL;
 	}
+
+	free(styles->data);
+	styles->data = NULL;
+	free(styles);
+	styles = NULL;
 
 	return str;
 }
@@ -1716,8 +1716,10 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 		string_append_char(str, ' ');
 		
 		string_append(str, buf);
-		string_free(buf);
 	}
+	string_free(buf);
+	// free(buf->data);
+	// free(buf);
 
 	string_append_char(str, '>');
 	bool needBreak = false;

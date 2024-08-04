@@ -1654,8 +1654,6 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 		}
 	}
 
-	printf("-->%ld\n", styles->length);
-
 	if (styles->length > 0) {
 		if (html_attrs > 0) string_append_char(str, ' ');
 

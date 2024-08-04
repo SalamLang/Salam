@@ -408,21 +408,36 @@ void hashmap_string_free(hashmap_t *map)
 }
 void hashmap_free(hashmap_t *map)
 {
-	for (size_t i = 0; i < map->size; i++) {
-		hashmap_entry_t *entry = map->data[i];
+	if (map == NULL) return;
 
-		while (entry) {
-			hashmap_entry_t *next = entry->next;
-			free(entry->key);
-			free(entry->value);
+	if (map->data != NULL) {
+		for (size_t i = 0; i < map->size; i++) {
+			hashmap_entry_t *entry = map->data[i];
 
-			free(entry);
-			entry = next;
+			while (entry) {
+				hashmap_entry_t *next = entry->next;
+
+				if (entry->key != NULL) {
+					free(entry->key);
+					entry->key = NULL;
+				}
+
+				if (entry->value != NULL) {
+					free(entry->value);
+					entry->value = NULL;
+				}
+
+				free(entry);
+				entry = next;
+			}
 		}
+
+		free(map->data);
+		map->data = NULL;
 	}
 
-	free(map->data);
 	free(map);
+	map = NULL;
 }
 
 void hashmap_print(hashmap_t *map)
@@ -1220,7 +1235,9 @@ void ast_layout_node_free(ast_layout_node_t* node)
 			for (size_t i = 0; i < node->attributes->size; i++) {
 				hashmap_entry_t *entry = node->attributes->data[i];
 
-				while (entry != NULL) {
+				while (entry) {
+					hashmap_entry_t *next = entry->next;
+
 					if (entry->key != NULL) {
 						free(entry->key);
 						entry->key = NULL;
@@ -1231,16 +1248,9 @@ void ast_layout_node_free(ast_layout_node_t* node)
 						entry->value = NULL;
 					}
 
-					hashmap_entry_t *buf = entry;
-
-					entry = entry->next;
-
-					free(buf);
-					buf = NULL;
+					free(entry);
+					entry = next;
 				}
-
-				free(node->attributes->data[i]);
-				node->attributes->data[i] = NULL;
 			}
 
 			free(node->attributes->data);

@@ -1622,7 +1622,34 @@ bool is_style_attribute(char* attribute_name)
 	return false;
 }
 
-char* attribute_style2css(const char* attribute_name) {
+char* attribute_css_value(char* attribute_name, char* attribute_value)
+{
+	char* res = malloc(sizeof(char) * 18);
+	if (res == NULL) {
+		fprintf(stderr, "Memory allocation failed\n");
+		exit(1);
+	}
+
+	if (strcmp(attribute_name, "color") == 0) {
+		// printf("it's a color value\n");
+
+		if (strcmp(attribute_value, "سیاه") == 0) { strcpy(res, "black"); return res; }
+		else if (strcmp(attribute_value, "سفید") == 0) { strcpy(res, "white"); return res; }
+		else if (strcmp(attribute_value, "صورتی") == 0) { strcpy(res, "pink"); return res; }
+		else if (strcmp(attribute_value, "قرمز") == 0) { strcpy(res, "red"); return res; }
+		else if (strcmp(attribute_value, "سبز") == 0) { strcpy(res, "green"); return res; }
+		else if (strcmp(attribute_value, "زرد") == 0) { strcpy(res, "yellow"); return res; }
+		else if (strcmp(attribute_value, "ابی") == 0 || strcmp(attribute_value, "آبی") == 0) { strcpy(res, "blue"); return res; }
+	} else {
+		// printf("it's not a color value, so is %s\n", attribute_name);
+	}
+
+	free(res);
+	return NULL;
+}
+
+char* attribute_css_name(const char* attribute_name)
+{
 	char* res = malloc(sizeof(char) * 18);
 	if (res == NULL) {
 		fprintf(stderr, "Memory allocation failed\n");
@@ -1638,7 +1665,7 @@ char* attribute_style2css(const char* attribute_name) {
 	else if (strcmp(attribute_name, "حاشیه") == 0) strcpy(res, "border");
 	else if (strcmp(attribute_name, "ماوس") == 0) strcpy(res, "cursor");
 	else if (strcmp(attribute_name, "گردی") == 0) strcpy(res, "border-radius");
-	else strcpy(res, "");
+	else return NULL;
 
 	return res;
 }
@@ -1701,28 +1728,47 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	if (styles->length > 0) {
 		if (html_attrs > 0) string_append_char(str, ' ');
 
-		string_append_str(str, "style=\"");
+		string_t* css_buffer = string_create(10);
 
 		for (size_t i = 0; i < styles->size; i++) {
 			hashmap_entry_t *entry = styles->data[i];
 
 			while (entry) {
 				css_attrs++;
-				char* buf = attribute_style2css(entry->key);
-				string_append_str(str, buf);
-				free(buf);
-				buf = NULL;
 
-				string_append_char(str, ':');
-				string_append_str(str, entry->value);
+				char* buf1 = attribute_css_name(entry->key);
+				if (buf1) {
+					printf("buf1: %s\n", buf1);
+					printf("entry value: %s\n", (char*) entry->value);
+					char* buf2 = attribute_css_value(buf1, entry->value);
+					if (buf2) {
+						printf("buf2: %s\n", buf2);
+						string_append_str(css_buffer, buf1);
 
-				if (styles->length != css_attrs) string_append_char(str, ';');
+						string_append_char(css_buffer, ':');
+
+						string_append_str(css_buffer, buf2);
+
+						if (styles->length != css_attrs) string_append_char(css_buffer, ';');
+
+						free(buf2);
+						buf2 = NULL;
+					}
+
+					free(buf1);
+					buf1 = NULL;
+				}
 
 				entry = entry->next;
 			}
 		}
 
-		string_append_str(str, "\"");
+		if (css_buffer->length > 0) {
+			string_append_str(str, "style=\"");
+			string_append(str, css_buffer);
+			string_append_str(str, "\"");
+		}
+		string_free(css_buffer);
 	}
 
 	hashmap_string_free(styles);

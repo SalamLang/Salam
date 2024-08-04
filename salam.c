@@ -1667,6 +1667,8 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	string_t* str = string_create(10);
 
 	hashmap_t* styles = hashmap_create();
+
+	int css_attrs = 0;
 	int html_attrs = 0;
 
 	if (element->attributes != NULL) {
@@ -1701,10 +1703,11 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 
 		string_append_str(str, "style=\"");
 
-		for (size_t i = 0; i < styles->length; i++) {
+		for (size_t i = 0; i < styles->size; i++) {
 			hashmap_entry_t *entry = styles->data[i];
 
 			while (entry) {
+				css_attrs++;
 				char* buf = attribute_style2css(entry->key);
 				string_append_str(str, buf);
 				free(buf);
@@ -1712,7 +1715,8 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 
 				string_append_char(str, ':');
 				string_append_str(str, entry->value);
-				string_append_char(str, ';');
+
+				if (styles->length != css_attrs) string_append_char(str, ';');
 
 				entry = entry->next;
 			}

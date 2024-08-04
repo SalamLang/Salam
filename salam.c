@@ -1638,9 +1638,11 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 
 			while (entry) {
 				if (is_style_attribute(entry->key)) {
+					printf("%s is css key\n", entry->key);
 					hashmap_put(styles, entry->key, entry->value);
 				}
 				else {
+					printf("%s is html key\n", entry->key);
 					if (strcmp(entry->key, "داده") == 0) *element_content = entry->value;
 					else {
 						string_append_char(str, ' ');

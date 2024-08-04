@@ -1190,7 +1190,7 @@ void ast_layout_node_free(ast_layout_node_t* node)
 
 	if (node->attributes != NULL) {
 		if (node->attributes->data != NULL) {
-			for (size_t i = 0; i < node->attributes->length; i++) {
+			for (size_t i = 0; i < node->attributes->size; i++) {
 				hashmap_entry_t *entry = node->attributes->data[i];
 
 				while (entry != NULL) {
@@ -1469,8 +1469,8 @@ string_t* ast_layout_string(ast_layout_node_t* element, parser_t* parser, int id
 	string_append_str(str, "<layout_");
 	string_append_str(str, element_name);
 
-	if (element->attributes != NULL && element->attributes->length > 0) {
-		for (size_t i = 0; i < element->attributes->length; i++) {
+	if (element->attributes != NULL && element->attributes->size > 0) {
+		for (size_t i = 0; i < element->attributes->size; i++) {
 			hashmap_entry_t *entry = element->attributes->data[i];
 
 			while (entry) {
@@ -1632,17 +1632,15 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	hashmap_t* styles = hashmap_create();
 	int html_attrs = 0;
 
-	if (element->attributes != NULL && element->attributes->length > 0) {
-		for (size_t i = 0; i < element->attributes->length; i++) {
+	if (element->attributes != NULL && element->attributes->size > 0) {
+		for (size_t i = 0; i < element->attributes->size; i++) {
 			hashmap_entry_t *entry = element->attributes->data[i];
 
 			while (entry) {
 				if (is_style_attribute(entry->key)) {
-					printf("%s is css key\n", entry->key);
 					hashmap_put(styles, entry->key, entry->value);
 				}
 				else {
-					printf("%s is html key\n", entry->key);
 					if (strcmp(entry->key, "داده") == 0) *element_content = entry->value;
 					else {
 						string_append_char(str, ' ');

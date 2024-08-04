@@ -1720,10 +1720,13 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 	}
 
 	string_append_char(str, '>');
-	string_append_char(str, '\n');
+	bool needBreak = false;
 
 	if (element->is_mother) {
 		if (element->children != NULL && element->children->length > 0) {
+			needBreak = true;
+			string_append_char(str, '\n');
+
 			for (size_t i = 0; i < element->children->length; i++) {
 				ast_layout_node_t *entry = element->children->data[i];
 
@@ -1734,17 +1737,22 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 		}
 
 		if (element_content != NULL && strlen(element_content) > 0) {
-			generate_layout_ident(str, ident + 1);
+			if (needBreak) generate_layout_ident(str, ident + 1);
+
 			string_append_str(str, element_content);
 			string_append_char(str, '\n');
 		}
 
-		generate_layout_ident(str, ident);
+		if (needBreak) generate_layout_ident(str, ident);
 
 		string_append_char(str, '<');
 		string_append_char(str, '/');
 		string_append_str(str, element_name);
 		string_append_char(str, '>');
+		string_append_char(str, '\n');
+	}
+	else {
+		needBreak = true;
 		string_append_char(str, '\n');
 	}
 

@@ -274,9 +274,9 @@ hashmap_t* hashmap_create()
 {
 	hashmap_t *map;
 	map = (hashmap_t*) malloc(sizeof(hashmap_t));
-	map->length = 16;
-	map->size = 0;
-	map->data = (hashmap_entry_t**) calloc(map->length, sizeof(hashmap_entry_t*));
+	map->size = 16;
+	map->length = 0;
+	map->data = (hashmap_entry_t**) calloc(map->size, sizeof(hashmap_entry_t*));
 
 	if (!map->data) {
 		perror("Error: hashmap_create - Memory allocation error");
@@ -290,7 +290,7 @@ void hashmap_put(hashmap_t *map, const char *key, void *value)
 {
 	unsigned long hash = hash_function(key);
 
-	size_t index = hash % map->length;
+	size_t index = hash % map->size;
 	hashmap_entry_t *entry = map->data[index];
 	
 	while (entry != NULL) {
@@ -311,12 +311,12 @@ void hashmap_put(hashmap_t *map, const char *key, void *value)
 	new_entry->value = value;
 	new_entry->next = map->data[index];
 	map->data[index] = new_entry;
-	map->size++;
+	map->length++;
 
-	if ((float)map->size / map->length >= 0.75) {
-		size_t new_length = map->length * 2;
+	if ((float)map->length / map->size >= 0.75) {
+		size_t new_length = map->size * 2;
 		hashmap_entry_t **new_data = (hashmap_entry_t**) calloc(new_length, sizeof(hashmap_entry_t*));
-		for (size_t i = 0; i < map->length; i++) {
+		for (size_t i = 0; i < map->size; i++) {
 			hashmap_entry_t *entry = map->data[i];
 
 			while (entry) {
@@ -330,14 +330,14 @@ void hashmap_put(hashmap_t *map, const char *key, void *value)
 
 		free(map->data);
 		map->data = new_data;
-		map->length = new_length;
+		map->size = new_length;
 	}
 }
 
 void* hashmap_get(hashmap_t *map, const char *key)
 {
 	unsigned long hash = hash_function(key);
-	size_t index = hash % map->length;
+	size_t index = hash % map->size;
 	hashmap_entry_t *entry = map->data[index];
 
 	while (entry != NULL) {
@@ -354,7 +354,7 @@ void* hashmap_remove(hashmap_t *map, const char *key)
 {
 	unsigned long hash = hash_function(key);
 
-	size_t index = hash % map->length;
+	size_t index = hash % map->size;
 	hashmap_entry_t *entry = map->data[index];
 	hashmap_entry_t *prev = NULL;
 
@@ -368,7 +368,7 @@ void* hashmap_remove(hashmap_t *map, const char *key)
 			void *value = entry->value;
 			free(entry->key);
 			free(entry);
-			map->size--;
+			map->length--;
 
 			return value;
 		}
@@ -381,7 +381,7 @@ void* hashmap_remove(hashmap_t *map, const char *key)
 
 void hashmap_free(hashmap_t *map)
 {
-	for (size_t i = 0; i < map->length; i++) {
+	for (size_t i = 0; i < map->size; i++) {
 		hashmap_entry_t *entry = map->data[i];
 
 		while (entry) {
@@ -398,11 +398,11 @@ void hashmap_free(hashmap_t *map)
 
 void hashmap_print(hashmap_t *map)
 {
-	printf("Hashmap Size: %zu\n", map->size);
-	printf("Hashmap Capacity: %zu\n", map->length);
+	printf("Hashmap Size: %zu\n", map->length);
+	printf("Hashmap Capacity: %zu\n", map->size);
 	printf("Hashmap Contents:\n");
 
-	for (size_t i = 0; i < map->length; i++) {
+	for (size_t i = 0; i < map->size; i++) {
 		hashmap_entry_t *entry = map->data[i];
 
 		while (entry) {
@@ -1653,6 +1653,8 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 			}
 		}
 	}
+
+	printf("-->%ld\n", styles->length);
 
 	if (styles->length > 0) {
 		if (html_attrs > 0) string_append_char(str, ' ');

@@ -1722,7 +1722,6 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	}
 
 	hashmap_string_free(styles);
-	ast_layout_node_free(element);
 
 	return str;
 }

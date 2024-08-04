@@ -1716,43 +1716,6 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	return str;
 }
 
-
-void ast_layout_node_free(ast_layout_node_t *entry)
-{
-	if (!entry) return;
-
-	if (entry->attributes != NULL) {
-		for (size_t i = 0; i < entry->attributes->size; i++) {
-			hashmap_entry_t *entry = entry->attributes->data[i];
-
-			while (entry) {
-				hashmap_entry_t *next = entry->next;
-				free(entry->key);
-				free(entry->value);
-
-				free(entry);
-				entry = next;
-			}
-		}
-
-		hashmap_free(entry->attributes);
-		free(entry->attributes);
-		entry->attributes = NULL;
-	}
-
-	if (entry->children != NULL) {
-		for (int i = 0; i < entry->children->length; i++) {
-			ast_layout_node_free(entry->children->data[i]);
-		}
-
-		free(entry->children);
-		entry->children = NULL;
-	}
-
-	free(entry);
-	entry = NULL;
-}
-
 string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, int ident)
 {
 	string_t* str = string_create(10);

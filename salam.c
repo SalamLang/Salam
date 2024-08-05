@@ -1458,24 +1458,26 @@ void parser_free(parser_t* parser)
 	if (parser->layout != NULL) {
 		if (parser->layout->attributes != NULL) {
 			if (parser->layout->attributes->data != NULL) {
-				for (size_t i = 0; i < parser->layout->attributes->size; i++) {
-					hashmap_entry_t *entry = parser->layout->attributes->data[i];
+				if (parser->layout->attributes->length > 0) {
+					for (size_t i = 0; i < parser->layout->attributes->size; i++) {
+						hashmap_entry_t *entry = parser->layout->attributes->data[i];
 
-					while (entry) {
-						hashmap_entry_t *next = entry->next;
+						while (entry) {
+							hashmap_entry_t *next = entry->next;
 
-						if (entry->key != NULL) {
-							free(entry->key);
-							entry->key = NULL;
+							if (entry->key != NULL) {
+								free(entry->key);
+								entry->key = NULL;
+							}
+
+							if (entry->value != NULL) {
+								free(entry->value);
+								entry->value = NULL;
+							}
+
+							free(entry);
+							entry = next;
 						}
-
-						if (entry->value != NULL) {
-							free(entry->value);
-							entry->value = NULL;
-						}
-
-						free(entry);
-						entry = next;
 					}
 				}
 
@@ -1735,12 +1737,12 @@ void generate_layout_ident(string_t* str, int ident)
 	for (int i = 0; i < ident; i++) string_append_char(str, '\t');
 }
 
-string_t* generate_layout(ast_layout_node_t* node, parser_t* parser, int ident)
-{
-	string_t* str = string_create(10);
+// string_t* generate_layout(ast_layout_node_t* node, parser_t* parser, int ident)
+// {
+// 	string_t* str = string_create(10);
 
-	return str;
-}
+// 	return str;
+// }
 
 bool is_style_attribute(char* attribute_name)
 {
@@ -2224,8 +2226,45 @@ string_t* generate_string(parser_t* parser, int ident)
 
 		generate_layout_ident(str, ident + 1);
 		string_append_str(str, "<head>\n");
+
 		generate_layout_ident(str, ident + 2);
 		string_append_str(str, "<meta charset=\"UTF-8\">\n");
+
+		if (parser->layout->attributes != NULL) {
+			if (parser->layout->attributes->data != NULL) {
+				if (parser->layout->attributes->length > 0) {
+					char* title_value = hashmap_get(parser->layout->attributes, "عنوان");
+					if (title_value != NULL) {
+						generate_layout_ident(str, ident + 2);
+
+						string_append_str(str, "<title>");
+						string_append_str(str, title_value);
+						string_append_str(str, "</title>");
+					}
+					/*
+					for (size_t i = 0; i < parser->layout->attributes->size; i++) {
+						hashmap_entry_t *entry = parser->layout->attributes->data[i];
+
+						while (entry) {
+							generate_layout_ident(str, ident + 2);
+
+							string_append_char(str, '<');
+							string_append_str(str, entry->key);
+							string_append_char(str, '=');
+							string_append_char(str, '\"');
+							string_append_str(str, entry->value);
+							string_append_char(str, '\"');
+							string_append_char(str, '>');
+							string_append_char(str, '\n');
+
+							entry = entry->next;
+						}
+					}
+					*/
+				}
+			}
+		}
+
 		generate_layout_ident(str, ident + 1);
 		string_append_str(str, "</head>\n");
 

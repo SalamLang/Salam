@@ -225,6 +225,7 @@ typedef struct {
 } ast_layout_node_t;
 
 typedef struct {
+    hashmap_t* attributes;
 	array_t* elements;
 } ast_layout_t;
 
@@ -254,6 +255,9 @@ typedef struct {
 char* read_dynamic_string();
 char* intToString(int value);
 char* file_read(char* file_Name);
+char* trim_value(char* value);
+char* attribute_css_multiple_size_value(char* attribute_name, char* attribute_value);
+char* attribute_css_size_value(char* attribute_name, char* attribute_value);
 
 // String
 string_t* string_create(size_t initial_size);

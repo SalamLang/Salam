@@ -1055,6 +1055,8 @@ ast_layout_node_t* parser_layout_element(parser_t* parser)
 		case AST_TYPE_LAYOUT_TEXT:
 		case AST_TYPE_LAYOUT_INPUT:
 		case AST_TYPE_LAYOUT_BUTTON:
+		case AST_TYPE_LAYOUT_CENTER:
+		case AST_TYPE_LAYOUT_LINK:
 		case AST_TYPE_LAYOUT_IMAGE:
 		case AST_TYPE_LAYOUT_FORM:
 		case AST_TYPE_LAYOUT_DIV:
@@ -1064,6 +1066,7 @@ ast_layout_node_t* parser_layout_element(parser_t* parser)
 		case AST_TYPE_LAYOUT_TABLE:
 		case AST_TYPE_LAYOUT_TABLE_ROW:
 		case AST_TYPE_LAYOUT_TABLE_COLUMN:
+		case AST_TYPE_LAYOUT_BOLD:
 		case AST_TYPE_LAYOUT_TEXTAREA:
 			return parser_layout_element_mother(type, parser);
 			break;
@@ -1334,10 +1337,12 @@ char* ast_layout_type_string(ast_layout_type_t type)
 		case AST_TYPE_LAYOUT_LINE: return "line";
 		case AST_TYPE_LAYOUT_BREAK: return "break";
 		case AST_TYPE_LAYOUT_LINK: return "a";
+		case AST_TYPE_LAYOUT_CENTER: return "center";
 		case AST_TYPE_LAYOUT_IMAGE: return "img";
 		case AST_TYPE_LAYOUT_TABLE: return "table";
 		case AST_TYPE_LAYOUT_TABLE_ROW: return "tr";
 		case AST_TYPE_LAYOUT_TABLE_COLUMN: return "td";
+		case AST_TYPE_LAYOUT_BOLD: return "b";
 		case AST_TYPE_LAYOUT_DIV: return "div";
 		case AST_TYPE_LAYOUT_PARAGTAPH: return "p";
 		case AST_TYPE_LAYOUT_TEXTAREA: return "textarea";
@@ -1361,6 +1366,8 @@ char* generate_layout_type_string(ast_layout_type_t type)
 		case AST_TYPE_LAYOUT_BREAK: return "hr";
 		case AST_TYPE_LAYOUT_LINK: return "a";
 		case AST_TYPE_LAYOUT_FORM: return "form";
+		case AST_TYPE_LAYOUT_BOLD: return "b";
+		case AST_TYPE_LAYOUT_CENTER: return "center";
 		case AST_TYPE_LAYOUT_IMAGE: return "img";
 		case AST_TYPE_LAYOUT_TABLE: return "table";
 		case AST_TYPE_LAYOUT_TABLE_ROW: return "tr";
@@ -1752,7 +1759,10 @@ bool is_style_attribute(char* attribute_name)
 	else if (strcmp(attribute_name, "اندازه") == 0) return true;
 	else if (strcmp(attribute_name, "فاصله") == 0) return true;
 	else if (strcmp(attribute_name, "فضا") == 0) return true;
+	else if (strcmp(attribute_name, "طول") == 0) return true;
+	else if (strcmp(attribute_name, "ارتفاع") == 0) return true;
 	else if (strcmp(attribute_name, "حاشیه") == 0) return true;
+	else if (strcmp(attribute_name, "تصویر") == 0) return true;
 	else if (strcmp(attribute_name, "ماوس") == 0) return true;
 	else if (strcmp(attribute_name, "گردی") == 0) return true;
 
@@ -1788,15 +1798,56 @@ char* attribute_css_multiple_size_value(char* attribute_name, char* attribute_va
 	return attribute_css_size_value(attribute_name, attribute_value);
 }
 
+bool is_english_digit(wchar_t ch)
+{
+    return ch >= L'0' && ch <= L'9';
+}
+
+bool is_persian_digit(wchar_t ch)
+{
+    return ch >= 0x06F0 && ch <= 0x06F9;
+    // return ch >= '۰' && ch <= '۹';
+}
+
+bool is_arabic_digit(wchar_t ch)
+{
+    return ch >= 0x0660 && ch <= 0x0669;
+}
+
+bool string_is_number(const char* value)
+{
+    size_t len = mbstowcs(NULL, value, 0) + 1;
+    wchar_t wvalue[30];
+    mbstowcs(wvalue, value, len);
+
+    if (wvalue[0] == L'\0') return false;
+
+    for (size_t i = 0; wvalue[i] != L'\0'; i++) {
+        if (!(is_english_digit(wvalue[i]) || is_persian_digit(wvalue[i]) || is_arabic_digit(wvalue[i]))) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 char* attribute_css_size_value(char* attribute_name, char* attribute_value)
 {
-	char* res = malloc(sizeof(char) * 18);
+	char* res = malloc(sizeof(char) * 30);
 	if (res == NULL) {
 		fprintf(stderr, "Memory allocation failed\n");
 		exit(1);
 	}
-	
+
 	strcpy(res, attribute_value);
+
+	if (string_is_number(attribute_value)) {
+		printf("css value is a number %s %s\n", attribute_name, attribute_value);
+		strcat(res, "px");
+	}
+	else {
+		printf("css value is not a number %s %s\n", attribute_name, attribute_value);
+	}
 
 	return res;
 }
@@ -1808,6 +1859,8 @@ char* attribute_css_value(char* attribute_name, char* attribute_value)
 		fprintf(stderr, "Memory allocation failed\n");
 		exit(1);
 	}
+
+	printf("===> %s = %s\n", attribute_name, attribute_value);
 
 	if (strcmp(attribute_name, "color") == 0 || strcmp(attribute_name, "background-color") == 0) {
 		if (strcmp(attribute_value, "سیاه") == 0) { strcpy(res, "black"); return res; }
@@ -2002,8 +2055,15 @@ char* attribute_css_value(char* attribute_name, char* attribute_value)
 			return size_value;
 		}
 	} else if (strcmp(attribute_name, "border") == 0) {
+		char* size_value = attribute_css_size_value(attribute_name, attribute_value);
+		if (size_value) {
+			free(res);
+			return size_value;
+		}
+	// } else if (strcmp(attribute_name, "src") == 0) {
+	// 	strcpy(res, attribute_value);
+	} else if (strcmp(attribute_name, "background-image") == 0) {
 		strcpy(res, attribute_value);
-		return res;
 	} else {
 		// printf("it's not a color value, so is %s\n", attribute_name);
 	}
@@ -2027,8 +2087,11 @@ char* attribute_css_name(const char* attribute_name)
 	else if (strcmp(attribute_name, "فونت") == 0) strcpy(res, "font-family");
 	else if (strcmp(attribute_name, "اندازه") == 0) strcpy(res, "font-size");
 	else if (strcmp(attribute_name, "فاصله") == 0) strcpy(res, "padding");
+	else if (strcmp(attribute_name, "طول") == 0) strcpy(res, "width");
+	else if (strcmp(attribute_name, "ارتفاع") == 0) strcpy(res, "height");
 	else if (strcmp(attribute_name, "فضا") == 0) strcpy(res, "margin");
 	else if (strcmp(attribute_name, "حاشیه") == 0) strcpy(res, "border");
+	else if (strcmp(attribute_name, "تصویر") == 0) strcpy(res, "background-image");
 	else if (strcmp(attribute_name, "ماوس") == 0) strcpy(res, "cursor");
 	else if (strcmp(attribute_name, "گردی") == 0) strcpy(res, "border-radius");
 	else return NULL;
@@ -2070,14 +2133,31 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 				hashmap_entry_t *entry = element->attributes->data[i];
 
 				while (entry) {
-					if (is_style_attribute(entry->key)) {
+					// printf("attr %s -> %s\n", entry->key, entry->value);
+					bool isBorderTable = false;
+					if (element->type == AST_TYPE_LAYOUT_TABLE && strcmp(entry->key, "حاشیه") == 0) {
+						isBorderTable = true;
+
+						strcpy(entry->key, "border");
+					}
+
+					if (element->type == AST_TYPE_LAYOUT_LINK && strcmp(entry->key, "منبع") == 0) {
+						strcpy(entry->key, "href");
+					}
+
+					if (element->type == AST_TYPE_LAYOUT_IMAGE && strcmp(entry->key, "منبع") == 0) {
+						strcpy(entry->key, "src");
+					}
+
+					if (is_style_attribute(entry->key) && isBorderTable == false) {
 						hashmap_put(styles, entry->key, entry->value);
 					}
 					else {
 						if (strcmp(entry->key, "محتوا") == 0) *element_content = entry->value;
 						else {
-							string_append_char(str, ' ');
+							if (html_attrs != 0) string_append_char(str, ' ');
 							html_attrs++;
+
 
 							string_t* buf = generate_layout_element_attribute(parser, entry);
 							string_append(str, buf);
@@ -2090,6 +2170,8 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 			}
 		}
 	}
+
+	// printf("html attr count: %d\n", html_attrs);
 
 	if (styles->length > 0) {
 		if (html_attrs > 0) string_append_char(str, ' ');
@@ -2239,7 +2321,7 @@ string_t* generate_string(parser_t* parser, int ident)
 
 						string_append_str(str, "<title>");
 						string_append_str(str, title_value);
-						string_append_str(str, "</title>");
+						string_append_str(str, "</title>\n");
 					}
 					/*
 					for (size_t i = 0; i < parser->layout->attributes->size; i++) {

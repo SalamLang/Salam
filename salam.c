@@ -1860,9 +1860,12 @@ char* attribute_css_value(char* attribute_name, char* attribute_value)
 		exit(1);
 	}
 
-	printf("===> %s = %s\n", attribute_name, attribute_value);
+	// printf("===> %s = %s\n", attribute_name, attribute_value);
 
-	if (strcmp(attribute_name, "color") == 0 || strcmp(attribute_name, "background-color") == 0) {
+	if (strcmp(attribute_name, "cursor") == 0) {
+		if (strcmp(attribute_value, "دست") == 0) { strcpy(res, "pointer"); return res; }
+	}
+	else if (strcmp(attribute_name, "color") == 0 || strcmp(attribute_name, "background-color") == 0) {
 		if (strcmp(attribute_value, "سیاه") == 0) { strcpy(res, "black"); return res; }
 		else if (strcmp(attribute_value, "سفید") == 0) { strcpy(res, "white"); return res; }
 		else if (strcmp(attribute_value, "صورتی") == 0) { strcpy(res, "pink"); return res; }

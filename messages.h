@@ -98,12 +98,11 @@ const layout_keyword_mapping_t layout_keyword_mapping[LANGUAGE_COUNT][50] = {
 		{"ستون", AST_TYPE_LAYOUT_TABLE_COLUMN},
 		{"جعبه", AST_TYPE_LAYOUT_DIV},
 		{"متن", AST_TYPE_LAYOUT_TEXT},
-		{"پاراگراف", AST_TYPE_LAYOUT_PARAGTAPH}, 
+		{"پاراگراف", AST_TYPE_LAYOUT_PARAGTAPH},
 		{"فیلد", AST_TYPE_LAYOUT_INPUT},
 		{"فیلدمتن", AST_TYPE_LAYOUT_TEXTAREA},
 		{"کشو", AST_TYPE_LAYOUT_SELECT},
 		{"اپشن", AST_TYPE_LAYOUT_SELECT_OPTION},
-
 		{"فاصله", AST_TYPE_LAYOUT_LINE},
 		{"خط", AST_TYPE_LAYOUT_BREAK},
 		{NULL, TOKEN_TYPE_ERROR},

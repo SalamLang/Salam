@@ -1034,7 +1034,7 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 
 			hashmap_put(element->attributes, current_token->value, attr_value->value);
 		} else {
-			array_push(element->children, parser_layout_element(parser));			
+			array_push(element->children, parser_layout_element(parser));
 		}
 	}
 
@@ -1113,11 +1113,35 @@ ast_layout_t* parser_layout(parser_t* parser)
 	ast_layout_t* layout;
 
 	CREATE_MEMORY_OBJECT(layout, ast_layout_t, 1, "Error: parser_layout<layout> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	layout->attributes = hashmap_create();
+	layout->elements = array_create(10);
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_LAYOUT);
 	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
 	
-	layout->elements = parser_layout_elements(parser);
+
+	while (parser->token_index < parser->lexer->tokens->length) {
+		token_t* current_token = parser_token_get(parser);
+
+		if (current_token->type == TOKEN_TYPE_END) break;
+
+		ast_layout_type_t type = convert_layout_identifier_token_type(current_token->value);
+
+		if (type == AST_TYPE_LAYOUT_ERROR) {
+			parser->token_index++; // Eating the attr name
+
+			parser_token_eat_nodata(parser, TOKEN_TYPE_COLON); // :
+			
+			token_t* attr_value = parser_token_get(parser);
+			parser->token_index++;
+
+			hashmap_put(layout->attributes, current_token->value, attr_value->value);
+		} else {
+			array_push(layout->elements, parser_layout_element(parser));
+		}
+	}
+	
+	// layout->elements = parser_layout_elements(parser);
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_END);
 
@@ -1380,6 +1404,38 @@ void ast_node_free(ast_node_t* node)
 					node->data.layout->elements = NULL;
 				}
 
+
+				if (node->data.layout->attributes != NULL) {
+					if (node->data.layout->attributes->data != NULL) {
+						for (size_t i = 0; i < node->data.layout->attributes->size; i++) {
+							hashmap_entry_t *entry = node->data.layout->attributes->data[i];
+
+							while (entry) {
+								hashmap_entry_t *next = entry->next;
+
+								if (entry->key != NULL) {
+									free(entry->key);
+									entry->key = NULL;
+								}
+
+								if (entry->value != NULL) {
+									free(entry->value);
+									entry->value = NULL;
+								}
+
+								free(entry);
+								entry = next;
+							}
+						}
+
+						free(node->data.layout->attributes->data);
+						node->data.layout->attributes->data = NULL;
+					}
+
+					free(node->data.layout->attributes);
+					node->data.layout->attributes = NULL;
+				}
+
 				free(node->data.layout);
 				node->data.layout = NULL;
 			}
@@ -1558,19 +1614,31 @@ string_t* ast_layout_string(ast_layout_node_t* element, parser_t* parser, int id
 	}
 
 	if (element->is_mother) {
-		string_append_str(str, ">\n");
+		string_append_char(str, '>');
+
+		bool hasChild = false;
 
 		if (element->children != NULL) {
-			for (size_t j = 0; j < element->children->length; j++) {
-				ast_layout_node_t* child = (ast_layout_node_t*) element->children->data[j];
+			if (element->children->data != NULL) {
+				if (element->children->length > 0) {
+					hasChild = true;
 
-				string_t* buf = ast_layout_string(child, parser, ident + 1);
-				string_append(str, buf);
-				string_free(buf);
+					string_append_char(str, '\n');
+
+					for (size_t j = 0; j < element->children->length; j++) {
+						ast_layout_node_t* child = (ast_layout_node_t*) element->children->data[j];
+
+						string_t* buf = ast_layout_string(child, parser, ident + 1);
+						string_append(str, buf);
+						string_free(buf);
+					}
+				}
 			}
 		}
-		
-		ast_layout_ident(str, ident);
+
+		if (hasChild) {
+			ast_layout_ident(str, ident);
+		}
 
 		string_append_str(str, "</layout_");
 		string_append_str(str, element_name);
@@ -1653,6 +1721,48 @@ bool is_style_attribute(char* attribute_name)
 	else if (strcmp(attribute_name, "گردی") == 0) return true;
 
 	return false;
+}
+
+char* trim_value(char* value)
+{
+	char* res = malloc(sizeof(char) * 256);
+	if (res == NULL) {
+		fprintf(stderr, "Memory allocation failed\n");
+		exit(1);
+	}
+
+	int i = 0;
+	while (value[i] == ' ' || value[i] == '\t' || value[i] == '\n') i++;
+
+	int j = strlen(value) - 1;
+	while (value[j] == ' ' || value[j] == '\t' || value[j] == '\n') j--;
+
+	int k = 0;
+	for (int l = i; l <= j; l++) {
+		res[k] = value[l];
+		k++;
+	}
+	res[k] = '\0';
+
+	return res;
+}
+
+char* attribute_css_multiple_size_value(char* attribute_name, char* attribute_value)
+{
+	return attribute_css_size_value(attribute_name, attribute_value);
+}
+
+char* attribute_css_size_value(char* attribute_name, char* attribute_value)
+{
+	char* res = malloc(sizeof(char) * 18);
+	if (res == NULL) {
+		fprintf(stderr, "Memory allocation failed\n");
+		exit(1);
+	}
+
+	// if attribute_value is a number
+
+	return res;
 }
 
 char* attribute_css_value(char* attribute_name, char* attribute_value)
@@ -1817,29 +1927,44 @@ char* attribute_css_value(char* attribute_name, char* attribute_value)
 		strcpy(res, attribute_value);
 		return res;
 	} else if (strcmp(attribute_name, "font-size") == 0) {
-		strcpy(res, attribute_value);
-		return res;
-	} else if (strcmp(attribute_name, "padding") == 0 || strcmp(attribute_name, "padding-top") == 0 || strcmp(attribute_name, "padding-left") == 0 || strcmp(attribute_name, "padding-right") == 0 || strcmp(attribute_name, "padding-bottom") == 0) {
-		strcpy(res, attribute_value);
-		return res;
-	} else if (strcmp(attribute_name, "margin") == 0 || strcmp(attribute_name, "margin-top") == 0 || strcmp(attribute_name, "margin-left") == 0 || strcmp(attribute_name, "margin-right") == 0 || strcmp(attribute_name, "margin-bottom") == 0) {
-		strcpy(res, attribute_value);
-		return res;
-	} else if (strcmp(attribute_name, "padding-top") == 0) {
-		strcpy(res, attribute_value);
-		return res;
+		char* size_value = attribute_css_size_value(attribute_name, attribute_value);
+		if (size_value) {
+			free(res);
+			return size_value;
+		}
+	} else if (strcmp(attribute_name, "padding-top") == 0 || strcmp(attribute_name, "padding-left") == 0 || strcmp(attribute_name, "padding-right") == 0 || strcmp(attribute_name, "padding-bottom") == 0) {
+		char* size_value = attribute_css_size_value(attribute_name, attribute_value);
+		if (size_value) {
+			free(res);
+			return size_value;
+		}
+	} else if (strcmp(attribute_name, "margin-top") == 0 || strcmp(attribute_name, "margin-left") == 0 || strcmp(attribute_name, "margin-right") == 0 || strcmp(attribute_name, "margin-bottom") == 0) {
+		char* size_value = attribute_css_size_value(attribute_name, attribute_value);
+		if (size_value) {
+			free(res);
+			return size_value;
+		}
 	} else if (strcmp(attribute_name, "width") == 0) {
-		strcpy(res, attribute_value);
-		return res;
+		char* size_value = attribute_css_size_value(attribute_name, attribute_value);
+		if (size_value) {
+			free(res);
+			return size_value;
+		}
 	} else if (strcmp(attribute_name, "height") == 0) {
-		strcpy(res, attribute_value);
-		return res;
+		char* size_value = attribute_css_size_value(attribute_name, attribute_value);
+		if (size_value) {
+			free(res);
+			return size_value;
+		}
 	} else if (strcmp(attribute_name, "cursor") == 0) {
 		strcpy(res, attribute_value);
 		return res;
-	} else if (strcmp(attribute_name, "border-radius") == 0) {
-		strcpy(res, attribute_value);
-		return res;
+	} else if (strcmp(attribute_name, "border-radius") == 0 || strcmp(attribute_name, "padding") == 0 || strcmp(attribute_name, "margin") == 0) {
+		char* size_value = attribute_css_multiple_size_value(attribute_name, attribute_value);
+		if (size_value) {
+			free(res);
+			return size_value;
+		}
 	} else if (strcmp(attribute_name, "border") == 0) {
 		strcpy(res, attribute_value);
 		return res;
@@ -1848,6 +1973,8 @@ char* attribute_css_value(char* attribute_name, char* attribute_value)
 	}
 
 	free(res);
+	res = NULL;
+	
 	return NULL;
 }
 
@@ -1940,9 +2067,11 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 				css_attrs++;
 
 				char* buf1 = attribute_css_name(entry->key);
-				if (buf1) {
-					char* buf2 = attribute_css_value(buf1, entry->value);
-					if (buf2) {
+				if (buf1 != NULL) {
+					char* css_attr_value = trim_value(entry->value);
+					char* buf2 = attribute_css_value(buf1, css_attr_value);
+					free(css_attr_value);
+					if (buf2 != NULL) {
 						string_append_str(css_buffer, buf1);
 
 						string_append_char(css_buffer, ':');

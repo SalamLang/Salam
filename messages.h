@@ -62,7 +62,7 @@ const char* messages[LANGUAGE_COUNT][MESSAGE_COUNT] = {
 const keyword_mapping_t keyword_mapping[LANGUAGE_COUNT][50] = {
 	[LANGUAGE_PERSIAN] = {
 		{"صفحه", TOKEN_TYPE_LAYOUT},
-		{"خاتمه", TOKEN_TYPE_END},
+		{"پایان", TOKEN_TYPE_END},
 		{"تابع", TOKEN_TYPE_FUNCTION},
 		{"برگشت", TOKEN_TYPE_RETURN},
 		{"ادامه", TOKEN_TYPE_CONTINUE},

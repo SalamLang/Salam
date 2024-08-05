@@ -1486,6 +1486,7 @@ void parser_free(parser_t* parser)
 			free(parser->layout->attributes);
 			parser->layout->attributes = NULL;
 		}
+
 		if (parser->layout->elements != NULL) {
 			if (parser->layout->elements->data != NULL) {
 				for (size_t i = 0; i < parser->layout->elements->length; i++) {
@@ -1793,7 +1794,7 @@ char* attribute_css_size_value(char* attribute_name, char* attribute_value)
 		exit(1);
 	}
 
-	strcpy(res, strdup(attribute_value));
+	strcpy(res, attribute_value);
 
 	return res;
 }
@@ -1957,7 +1958,7 @@ char* attribute_css_value(char* attribute_name, char* attribute_value)
 		else if (strcmp(attribute_value, "برفی") == 0) { strcpy(res, "snow"); return res; }
 		else if (strcmp(attribute_value, "سفید دودی") == 0) { strcpy(res, "whitesmoke"); return res; }
 	} else if (strcmp(attribute_name, "font-family") == 0) {
-		strcpy(res, strdup(attribute_value));
+		strcpy(res, attribute_value);
 		return res;
 	} else if (strcmp(attribute_name, "font-size") == 0) {
 		char* size_value = attribute_css_size_value(attribute_name, attribute_value);
@@ -1990,7 +1991,7 @@ char* attribute_css_value(char* attribute_name, char* attribute_value)
 			return size_value;
 		}
 	} else if (strcmp(attribute_name, "cursor") == 0) {
-		strcpy(res, strdup(attribute_value));
+		strcpy(res, attribute_value);
 		return res;
 	} else if (strcmp(attribute_name, "border-radius") == 0 || strcmp(attribute_name, "padding") == 0 || strcmp(attribute_name, "margin") == 0) {
 		char* size_value = attribute_css_multiple_size_value(attribute_name, attribute_value);
@@ -1999,7 +2000,7 @@ char* attribute_css_value(char* attribute_name, char* attribute_value)
 			return size_value;
 		}
 	} else if (strcmp(attribute_name, "border") == 0) {
-		strcpy(res, strdup(attribute_value));
+		strcpy(res, attribute_value);
 		return res;
 	} else {
 		// printf("it's not a color value, so is %s\n", attribute_name);

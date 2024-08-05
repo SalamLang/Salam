@@ -92,10 +92,12 @@ const layout_keyword_mapping_t layout_keyword_mapping[LANGUAGE_COUNT][50] = {
 	[LANGUAGE_PERSIAN] = {
 		{"دکمه", AST_TYPE_LAYOUT_BUTTON},
 		{"تصویر", AST_TYPE_LAYOUT_IMAGE},
+		{"وسط", AST_TYPE_LAYOUT_CENTER},
 		{"لینک", AST_TYPE_LAYOUT_LINK},
 		{"جدول", AST_TYPE_LAYOUT_TABLE},
 		{"سطر", AST_TYPE_LAYOUT_TABLE_ROW},
 		{"ستون", AST_TYPE_LAYOUT_TABLE_COLUMN},
+		{"بولد", AST_TYPE_LAYOUT_BOLD},
 		{"جعبه", AST_TYPE_LAYOUT_DIV},
 		{"متن", AST_TYPE_LAYOUT_TEXT},
 		{"پاراگراف", AST_TYPE_LAYOUT_PARAGTAPH},

@@ -1793,7 +1793,7 @@ char* attribute_css_size_value(char* attribute_name, char* attribute_value)
 		fprintf(stderr, "Memory allocation failed\n");
 		exit(1);
 	}
-
+	
 	strcpy(res, attribute_value);
 
 	return res;

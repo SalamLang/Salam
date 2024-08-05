@@ -103,7 +103,7 @@ typedef enum {
 
 	// Keywords
 	TOKEN_TYPE_LAYOUT, // صفحه
-	TOKEN_TYPE_END, // خاتمه
+	TOKEN_TYPE_END, // پایان
 	TOKEN_TYPE_FUNCTION, // تابع
 	TOKEN_TYPE_RETURN, // برگشت
 	TOKEN_TYPE_BREAK, // توقف

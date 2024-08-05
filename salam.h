@@ -191,13 +191,15 @@ typedef enum {
     AST_TYPE_LAYOUT_TEXT,
     AST_TYPE_LAYOUT_INPUT,
     AST_TYPE_LAYOUT_LINE,
+	AST_TYPE_LAYOUT_LINK,
 	AST_TYPE_LAYOUT_IMAGE,
+	AST_TYPE_LAYOUT_CENTER,
 	AST_TYPE_LAYOUT_FORM,
     AST_TYPE_LAYOUT_BREAK,
-	AST_TYPE_LAYOUT_LINK,
 	AST_TYPE_LAYOUT_TABLE,
 	AST_TYPE_LAYOUT_TABLE_ROW,
 	AST_TYPE_LAYOUT_TABLE_COLUMN,
+	AST_TYPE_LAYOUT_BOLD,
 	AST_TYPE_LAYOUT_DIV,
 	AST_TYPE_LAYOUT_PARAGTAPH,
 	AST_TYPE_LAYOUT_TEXTAREA,
@@ -258,6 +260,10 @@ char* file_read(char* file_Name);
 char* trim_value(char* value);
 char* attribute_css_multiple_size_value(char* attribute_name, char* attribute_value);
 char* attribute_css_size_value(char* attribute_name, char* attribute_value);
+bool is_english_digit(wchar_t ch);
+bool is_persian_digit(wchar_t ch);
+bool is_arabic_digit(wchar_t ch);
+bool string_is_number(const char* value);
 
 // String
 string_t* string_create(size_t initial_size);

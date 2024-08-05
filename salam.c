@@ -1055,6 +1055,16 @@ ast_layout_node_t* parser_layout_element(parser_t* parser)
 		case AST_TYPE_LAYOUT_TEXT:
 		case AST_TYPE_LAYOUT_INPUT:
 		case AST_TYPE_LAYOUT_BUTTON:
+		case AST_TYPE_LAYOUT_IMAGE:
+		case AST_TYPE_LAYOUT_FORM:
+		case AST_TYPE_LAYOUT_DIV:
+		case AST_TYPE_LAYOUT_PARAGTAPH:
+		case AST_TYPE_LAYOUT_SELECT:
+		case AST_TYPE_LAYOUT_SELECT_OPTION:
+		case AST_TYPE_LAYOUT_TABLE:
+		case AST_TYPE_LAYOUT_TABLE_ROW:
+		case AST_TYPE_LAYOUT_TABLE_COLUMN:
+		case AST_TYPE_LAYOUT_TEXTAREA:
 			return parser_layout_element_mother(type, parser);
 			break;
 		
@@ -1062,7 +1072,7 @@ ast_layout_node_t* parser_layout_element(parser_t* parser)
 		case AST_TYPE_LAYOUT_BREAK:
 			return parser_layout_element_single(type, parser);
 			break;
-
+		
 		default:
 			return NULL;
 			break;
@@ -1286,6 +1296,7 @@ char* ast_node_type_string(ast_node_type_t type)
 	switch (type) {
 		case AST_TYPE_FUNCTION: return "function";
 		case AST_TYPE_LAYOUT: return "layout";
+		
 		default: "none";
 	}
 }
@@ -1308,6 +1319,7 @@ char* ast_layout_type_string(ast_layout_type_t type)
 		case AST_TYPE_LAYOUT_TEXTAREA: return "textarea";
 		case AST_TYPE_LAYOUT_SELECT: return "select";
 		case AST_TYPE_LAYOUT_SELECT_OPTION: return "option";
+		case AST_TYPE_LAYOUT_FORM: return "form";
 
 		case AST_TYPE_LAYOUT_ERROR:
 		default:
@@ -1324,6 +1336,7 @@ char* generate_layout_type_string(ast_layout_type_t type)
 		case AST_TYPE_LAYOUT_LINE: return "line";
 		case AST_TYPE_LAYOUT_BREAK: return "break";
 		case AST_TYPE_LAYOUT_LINK: return "a";
+		case AST_TYPE_LAYOUT_FORM: return "form";
 		case AST_TYPE_LAYOUT_IMAGE: return "img";
 		case AST_TYPE_LAYOUT_TABLE: return "table";
 		case AST_TYPE_LAYOUT_TABLE_ROW: return "tr";

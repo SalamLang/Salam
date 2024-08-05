@@ -1456,18 +1456,51 @@ void parser_free(parser_t* parser)
 	}
 
 	if (parser->layout != NULL) {
-		if (parser->layout->elements->data != NULL) {
-			for (size_t i = 0; i < parser->layout->elements->length; i++) {
-				if (parser->layout->elements->data[i] != NULL) {
-					ast_layout_node_free((ast_layout_node_t*) parser->layout->elements->data[i]);
-				}
-			}
-		}
-		free(parser->layout->elements->data);
-		parser->layout->elements->data = NULL;
+		if (parser->layout->attributes != NULL) {
+			if (parser->layout->attributes->data != NULL) {
+				for (size_t i = 0; i < parser->layout->attributes->size; i++) {
+					hashmap_entry_t *entry = parser->layout->attributes->data[i];
 
-		free(parser->layout->elements);
-		parser->layout->elements = NULL;
+					while (entry) {
+						hashmap_entry_t *next = entry->next;
+
+						if (entry->key != NULL) {
+							free(entry->key);
+							entry->key = NULL;
+						}
+
+						if (entry->value != NULL) {
+							free(entry->value);
+							entry->value = NULL;
+						}
+
+						free(entry);
+						entry = next;
+					}
+				}
+
+				free(parser->layout->attributes->data);
+				parser->layout->attributes->data = NULL;
+			}
+
+			free(parser->layout->attributes);
+			parser->layout->attributes = NULL;
+		}
+		if (parser->layout->elements != NULL) {
+			if (parser->layout->elements->data != NULL) {
+				for (size_t i = 0; i < parser->layout->elements->length; i++) {
+					if (parser->layout->elements->data[i] != NULL) {
+						ast_layout_node_free((ast_layout_node_t*) parser->layout->elements->data[i]);
+					}
+				}
+
+				free(parser->layout->elements->data);
+				parser->layout->elements->data = NULL;
+			}
+
+			free(parser->layout->elements);
+			parser->layout->elements = NULL;
+		}
 
 		free(parser->layout);
 		parser->layout = NULL;
@@ -1760,7 +1793,7 @@ char* attribute_css_size_value(char* attribute_name, char* attribute_value)
 		exit(1);
 	}
 
-	// if attribute_value is a number
+	strcpy(res, strdup(attribute_value));
 
 	return res;
 }
@@ -1924,7 +1957,7 @@ char* attribute_css_value(char* attribute_name, char* attribute_value)
 		else if (strcmp(attribute_value, "برفی") == 0) { strcpy(res, "snow"); return res; }
 		else if (strcmp(attribute_value, "سفید دودی") == 0) { strcpy(res, "whitesmoke"); return res; }
 	} else if (strcmp(attribute_name, "font-family") == 0) {
-		strcpy(res, attribute_value);
+		strcpy(res, strdup(attribute_value));
 		return res;
 	} else if (strcmp(attribute_name, "font-size") == 0) {
 		char* size_value = attribute_css_size_value(attribute_name, attribute_value);
@@ -1957,7 +1990,7 @@ char* attribute_css_value(char* attribute_name, char* attribute_value)
 			return size_value;
 		}
 	} else if (strcmp(attribute_name, "cursor") == 0) {
-		strcpy(res, attribute_value);
+		strcpy(res, strdup(attribute_value));
 		return res;
 	} else if (strcmp(attribute_name, "border-radius") == 0 || strcmp(attribute_name, "padding") == 0 || strcmp(attribute_name, "margin") == 0) {
 		char* size_value = attribute_css_multiple_size_value(attribute_name, attribute_value);
@@ -1966,7 +1999,7 @@ char* attribute_css_value(char* attribute_name, char* attribute_value)
 			return size_value;
 		}
 	} else if (strcmp(attribute_name, "border") == 0) {
-		strcpy(res, attribute_value);
+		strcpy(res, strdup(attribute_value));
 		return res;
 	} else {
 		// printf("it's not a color value, so is %s\n", attribute_name);

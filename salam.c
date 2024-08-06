@@ -1820,6 +1820,83 @@ char* trim_value(char* value)
 	return result;
 }
 
+char* replace_substring(const char* str, const char* old_substr, const char* new_substr)
+{
+	const char *pos = strstr(str, old_substr);
+	if (pos == NULL) {
+		char *result = (char*) malloc(strlen(str) + 1);
+		strcpy(result, str);
+		return result;
+	}
+
+	size_t old_len = strlen(old_substr);
+	size_t new_len = strlen(new_substr);
+	size_t result_len = strlen(str) - old_len + new_len;
+
+	char *result;
+	CREATE_MEMORY_OBJECT(result, char, result_len + 1, "Error: replace_substring<result> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
+	size_t pos_index = pos - str;
+	strncpy(result, str, pos_index);
+	result[pos_index] = '\0';
+
+	strcat(result, new_substr);
+
+	strcat(result, pos + old_len);
+
+	return result;
+}
+
+char* replace_all_substrings(const char* str, const char* old_substr, const char* new_substr)
+{
+	if (str == NULL || old_substr == NULL || new_substr == NULL) return NULL;
+
+	size_t str_len = strlen(str);
+	size_t old_len = strlen(old_substr);
+	size_t new_len = strlen(new_substr);
+
+	if (old_len == 0) {
+		char *result;
+		CREATE_MEMORY_OBJECT(result, char, str_len + 1, "Error: replace_all_substrings<result1> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+		strcpy(result, str);
+		return result;
+	}
+
+	size_t max_result_len = str_len;
+	const char *tmp = str;
+	while ((tmp = strstr(tmp, old_substr)) != NULL) {
+		max_result_len += (new_len - old_len);
+		tmp += old_len;
+	}
+
+	char *result;
+	CREATE_MEMORY_OBJECT(result, char, max_result_len + 1, "Error: replace_all_substrings<result2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	if (result == NULL) {
+		perror("malloc failed");
+		exit(EXIT_FAILURE);
+	}
+
+	char *result_ptr = result;
+	const char *search_start = str;
+	const char *pos;
+
+	while ((pos = strstr(search_start, old_substr)) != NULL) {
+		size_t bytes_to_copy = pos - search_start;
+
+		strncpy(result_ptr, search_start, bytes_to_copy);
+		result_ptr += bytes_to_copy;
+
+		strcpy(result_ptr, new_substr);
+		result_ptr += new_len;
+
+		search_start = pos + old_len;
+	}
+
+	strcpy(result_ptr, search_start);
+
+	return result;
+}
+
 char* attribute_css_multiple_size_value(char* attribute_name, char* attribute_value)
 {
 	char* res;
@@ -1837,7 +1914,7 @@ char* attribute_css_size_value(char* attribute_name, char* attribute_value)
 {
 	char* res;
 	int attribute_value_length = strlen(attribute_value) + 2;
-	CREATE_MEMORY_OBJECT(res, char, attribute_value_length, "Error: attribute_css_multiple_size_value<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	CREATE_MEMORY_OBJECT(res, char, attribute_value_length, "Error: attribute_css_size_value<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	strcpy(res, attribute_value);
 

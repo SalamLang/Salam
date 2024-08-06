@@ -1800,11 +1800,8 @@ bool is_style_attribute(char* attribute_name)
 
 char* trim_value(char* value)
 {
-	char* res = malloc(sizeof(char) * 256);
-	if (res == NULL) {
-		fprintf(stderr, "Memory allocation failed\n");
-		exit(1);
-	}
+	char* result = malloc(sizeof(char) * 256);
+	CREATE_MEMORY_OBJECT(result, char, 256, "Error: trim_value<result> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	int i = 0;
 	while (value[i] == ' ' || value[i] == '\t' || value[i] == '\n') i++;
@@ -1814,12 +1811,13 @@ char* trim_value(char* value)
 
 	int k = 0;
 	for (int l = i; l <= j; l++) {
-		res[k] = value[l];
+		result[k] = value[l];
 		k++;
 	}
-	res[k] = '\0';
+	
+	result[k] = '\0';
 
-	return res;
+	return result;
 }
 
 char* attribute_css_multiple_size_value(char* attribute_name, char* attribute_value)
@@ -1872,11 +1870,8 @@ bool string_is_number(const char* value)
 	size_t len = mbstowcs(NULL, value, 0);
 	if (len == (size_t)-1) return false;
 
-	wchar_t *wvalue = malloc((len + 1) * sizeof(wchar_t));
-	if (wvalue == NULL) {
-		fprintf(stderr, "Memory allocation failed\n");
-		exit(1);
-	}
+	wchar_t* wvalue;
+	CREATE_MEMORY_OBJECT(wvalue, wchar_t, (len + 1), "Error: string_is_number<wvalue> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	mbstowcs(wvalue, value, len + 1);
 
@@ -1898,11 +1893,8 @@ bool string_is_number(const char* value)
 
 char* attribute_css_value(char* attribute_name, char* attribute_value)
 {
-	char* res = malloc(sizeof(char) * 18);
-	if (res == NULL) {
-		fprintf(stderr, "Memory allocation failed\n");
-		exit(1);
-	}
+	char* res;
+	CREATE_MEMORY_OBJECT(res, char, 18, "Error: attribute_css_value<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	if (strcmp(attribute_name, "cursor") == 0) {
 		if (strcmp(attribute_value, "دست") == 0) { strcpy(res, "pointer"); return res; }
@@ -2136,11 +2128,8 @@ char* attribute_css_value(char* attribute_name, char* attribute_value)
 
 char* attribute_css_name(const char* attribute_name)
 {
-	char* res = malloc(sizeof(char) * 18);
-	if (res == NULL) {
-		fprintf(stderr, "Memory allocation failed\n");
-		exit(1);
-	}
+	char* res;
+	CREATE_MEMORY_OBJECT(res, char, 18, "Error: attribute_css_name<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	if (strcmp(attribute_name, "رنگ") == 0) strcpy(res, "color");
 	else if (strcmp(attribute_name, "زمینه") == 0) strcpy(res, "background-color");

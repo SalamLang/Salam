@@ -363,7 +363,8 @@ void* hashmap_remove(hashmap_t *map, const char *key)
 		if (strcmp(entry->key, key) == 0) {
 			if (prev == NULL) {
 				map->data[index] = entry->next;
-			} else {
+			}
+			else {
 				prev->next = entry->next;
 			}
 			void *value = entry->value;
@@ -467,7 +468,8 @@ lexer_t* lexer_create(const char* data)
 	if (data == NULL) {
 		lexer->data = "";
 		lexer->length = 0;
-	} else {
+	}
+	else {
 		lexer->data = (char*) data;
 		lexer->length = strlen(data);
 	}
@@ -566,7 +568,8 @@ wchar_t read_token(lexer_t* lexer)
 	if (current_char == '\n') {
 		lexer->line++;
 		lexer->column = 0;
-	} else {
+	}
+	else {
 		lexer->column += char_size;
 	}
 
@@ -727,13 +730,15 @@ void read_string(lexer_t* lexer, wchar_t ch)
 			}
 		else if (ch == L'\\') {
 				string[i++] = '\\';
-			} else {
+			}
+			else {
 				print_error("%s", messages[language][MESSAGE_LEXER_STRING_UNKNOWN_ESCAPE]);
 				free(string);
 
 				exit(EXIT_FAILURE);
 			}
-		} else {
+		}
+		else {
 			int char_size = wctomb(&string[i], ch);
 			if (char_size < 0) {
 				print_error("%s", messages[language][MESSAGE_LEXER_STRING_CONVERT_MULTIBYTE]);
@@ -919,7 +924,8 @@ void lexer_lex(lexer_t* lexer)
 				lexer->index++;
 				lexer->column++;
 				read_comment_multiline(lexer);
-			} else {
+			}
+			else {
 				token_t* t = token_create(TOKEN_TYPE_DIVIDE, "/", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
 			}
@@ -938,7 +944,8 @@ void lexer_lex(lexer_t* lexer)
 				array_push(lexer->tokens, t);
 				lexer->index++;
 				lexer->column++;
-			} else {
+			}
+			else {
 				token_t* t = token_create(TOKEN_TYPE_EQUAL, "=", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
 			}
@@ -949,7 +956,8 @@ void lexer_lex(lexer_t* lexer)
 				array_push(lexer->tokens, t);
 				lexer->index++;
 				lexer->column++;
-			} else {
+			}
+			else {
 				token_t* t = token_create(TOKEN_TYPE_NOT, "!", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
 			}
@@ -960,7 +968,8 @@ void lexer_lex(lexer_t* lexer)
 				array_push(lexer->tokens, t);
 				lexer->index++;
 				lexer->column++;
-			} else {
+			}
+			else {
 				token_t* t = token_create(TOKEN_TYPE_GREATER_THAN, ">", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
 			}
@@ -971,7 +980,8 @@ void lexer_lex(lexer_t* lexer)
 				array_push(lexer->tokens, t);
 				lexer->index++;
 				lexer->column++;
-			} else {
+			}
+			else {
 				token_t* t = token_create(TOKEN_TYPE_LESS_THAN, "<", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
 			}
@@ -985,7 +995,8 @@ void lexer_lex(lexer_t* lexer)
 		}
 		else if (is_alpha(current_wchar)) {
 			read_identifier(lexer, current_wchar);
-		} else {
+		}
+		else {
 			print_error(messages[language][MESSAGE_LEXER_UNEXPECTED_CHAR], current_char, lexer->line, lexer->column - 1);
 
 			token_t* t = token_create(TOKEN_TYPE_ERROR, (char[]){current_char,'\0'}, 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
@@ -1063,7 +1074,8 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 			parser->token_index++;
 
 			hashmap_put(element->attributes, current_token->value, attr_value->value);
-		} else {
+		}
+		else {
 			array_push(element->children, parser_layout_element(parser));
 		}
 	}
@@ -1169,7 +1181,8 @@ ast_layout_t* parser_layout(parser_t* parser)
 			parser->token_index++;
 
 			hashmap_put(layout->attributes, current_token->value, attr_value->value);
-		} else {
+		}
+		else {
 			array_push(layout->elements, parser_layout_element(parser));
 		}
 	}
@@ -1195,13 +1208,15 @@ void parser_token_eat_nodata(parser_t* parser, token_type_t type)
 
 		if (token->type == type) {
 			parser->token_index++;
-		} else {
+		}
+		else {
 			token_free(token);
 			print_message("Error: Expected nodata %s\n", token_type2str(type));
 
 			exit(EXIT_FAILURE);
 		}
-	} else {
+	}
+	else {
 		print_message("Error: Unexpected end of file\n");
 
 		exit(EXIT_FAILURE);
@@ -1224,13 +1239,15 @@ token_t* parser_token_eat(parser_t* parser, token_type_t type)
 
 		if (token->type == type) {
 			return (token_t*) parser->lexer->tokens->data[parser->token_index++];
-		} else {
+		}
+		else {
 			token_free(token);
 			print_message("Error: Expected data %s\n", token_type2str(type));
 
 			exit(EXIT_FAILURE);
 		}
-	} else {
+	}
+	else {
 		print_message("Error: Unexpected end of file\n");
 
 		exit(EXIT_FAILURE);
@@ -1283,7 +1300,8 @@ void parser_parse(parser_t* parser)
 				// 	if (parser->expressions && expression_node != NULL) {
 				// 		array_push(parser->expressions, expression_node);
 				// 	}
-				// } else {
+				// }
+				// else {
 					print_error(messages[language][MESSAGE_PARSER_BAD_TOKEN_AS_STATEMENT], token_type2str(current_token->type));
 
 					exit(EXIT_FAILURE);
@@ -1932,67 +1950,87 @@ char* replace_all_substrings(const char* str, const char* old_substr, const char
 
 char* attribute_css_multiple_size_value(char* attribute_name, char* attribute_value)
 {
-	char* res;
 	int attribute_value_length = strlen(attribute_value) + 2;
-	CREATE_MEMORY_OBJECT(res, char, attribute_value_length, "Error: attribute_css_multiple_size_value<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
+	char* res;
+	CREATE_MEMORY_OBJECT(res, char, attribute_value_length, "Error: attribute_css_multiple_size_value<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	
 	strcpy(res, attribute_value);
 
-	if (string_is_number(attribute_value)) strcat(res, "px");
-	else {
-		// array_t* arr = array_create(10);
-		// array_push(arr, any void* value);
-		// run trim on the attribute_value
-		// then split attribute_value by space
-		// and delete empty value
-		// if odd values is "px" or "پیکسل" we should delete that item and add "px" to the previus item (in the array)
-		// finally create a string from the final array again
+	if (string_is_number(attribute_value)) {
+		strcat(res, "px");
 
-		array_t* arr = array_create(10);
+		return res;
+	}
 
-		char* trimmed_value = trim_whitespace(attribute_value);
-		array_t* split_values = split_by_space(trimmed_value);
+	bool hasError = false;
+	array_t* arr = array_create(10);
 
-		for (size_t i = 0; i < split_values->length; i++) {
-			char* value = split_values->data[i];
-			if (strcmp(value, "px") == 0 || strcmp(value, "پیکسل") == 0) {
-				if (i > 0) {
+	char* trimmed_value = trim_whitespace(attribute_value);
+	array_t* split_values = split_by_space(trimmed_value);
+
+	for (size_t i = 0; i < split_values->length; i++) {
+		char* value = split_values->data[i];
+
+		printf("-->%s\n", value);
+		if (strcmp(value, "px") == 0 || strcmp(value, "پیکسل") == 0) {
+			if (i > 0) {
+				if (string_is_number(split_values->data[i-1])) {
 					char* prev_value = split_values->data[i - 1];
 					size_t new_length = strlen(prev_value) + 3;
-					char* new_value = (char*)malloc(new_length);
+
+					char* new_value;
+					CREATE_MEMORY_OBJECT(new_value, char, new_length, "Error: attribute_css_multiple_size_value<new_value> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 					snprintf(new_value, new_length, "%spx", prev_value);
 
 					free(split_values->data[i - 1]);
 					split_values->data[i - 1] = new_value;
+
+					printf("\tnew value: %s\n", new_value);
 				}
-			} else {
-				array_push(arr, strdup(value));
+				else {
+					hasError = true;
+					break;
+				}
+			}
+			else {
+				hasError = true;
+				break;
 			}
 		}
+		else {
+			array_push(arr, strdup(value));
+		}
+	}
 
+	if (hasError == false) {
 		size_t final_length = 1;
-		for (size_t i = 0; i < arr->length; i++) {
-			final_length += strlen(arr->data[i]) + 1;
+		for (size_t i = 0; i < split_values->length; i++) {
+			final_length += strlen(split_values->data[i]) + 1;
 		}
 
-		char* final_result = (char*)malloc(final_length);
+		char* final_result;
+		CREATE_MEMORY_OBJECT(final_result, char, final_length, "Error: attribute_css_multiple_size_value<final_result> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 		final_result[0] = '\0';
 
-		for (size_t i = 0; i < arr->length; i++) {
-			strcat(final_result, arr->data[i]);
-			if (i < arr->length - 1) {
-				strcat(final_result, " ");
-			}
-		}
+		for (size_t i = 0; i < split_values->length; i++) {
+			strcat(final_result, split_values->data[i]);
 
-		strcpy(res, final_result);
+			if (i < split_values->length - 1) strcat(final_result, " ");
+		}
 
 		array_free(split_values);
 		array_free(arr);
-		free(final_result);
-	}
+		free(res);
 
-	return res;
+		return final_result;
+	}
+	else {
+		free(res);
+
+		return NULL;
+	}
 }
 
 char* attribute_css_size_value(char* attribute_name, char* attribute_value)
@@ -2632,13 +2670,15 @@ int main(int argc, char** argv)
 
 	if (argc == 2) {
 		file_data = file_read(argv[1]);
-	} else {
+	}
+	else {
 		if (strcmp(argv[1], "--ast") == 0) {
 			// isAst = true;
 		}
 		else if (strcmp(argv[1], "--code") == 0) {
 			// isAst = false;
-		} else {
+		}
+		else {
 			print_message("Second argument should be either --ast or --code\n");
 			help();
 			return 0;

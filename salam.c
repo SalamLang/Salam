@@ -1964,43 +1964,70 @@ char* attribute_css_multiple_size_value(char* attribute_name, char* attribute_va
 	}
 
 	bool hasError = false;
-	array_t* arr = array_create(10);
-
 	char* trimmed_value = trim_whitespace(attribute_value);
 	array_t* split_values = split_by_space(trimmed_value);
+
+	array_t* arr = array_create(10);
 
 	for (size_t i = 0; i < split_values->length; i++) {
 		char* value = split_values->data[i];
 
 		printf("-->%s\n", value);
-		if (strcmp(value, "px") == 0 || strcmp(value, "پیکسل") == 0) {
-			if (i > 0) {
-				if (string_is_number(split_values->data[i-1])) {
+
+		if (string_is_number(value)) {
+			if (split_values->length == 1) {
+				char* prev_value = split_values->data[i - 1];
+				size_t new_length = strlen(prev_value) + 3;
+
+				char* new_value;
+				CREATE_MEMORY_OBJECT(new_value, char, new_length, "Error: attribute_css_multiple_size_value<new_value1> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
+				strcpy(new_value, value);
+				strcat(new_value, "px");
+
+				array_push(arr, new_value);
+			}
+			else {
+				if (strcmp(split_values->data[i + 1], "px") == 0 ||
+					strcmp(split_values->data[i + 1], "پیکسل") == 0 ||
+					strcmp(split_values->data[i + 1], "cm") == 0 ||
+					strcmp(split_values->data[i + 1], "سانتیمتر") == 0 ||
+					strcmp(split_values->data[i + 1], "سانت") == 0 ||
+					strcmp(split_values->data[i + 1], "em") == 0 ||
+					strcmp(split_values->data[i + 1], "اندازه_قلم") == 0 ||
+					strcmp(split_values->data[i + 1], "rem") == 0 ||
+					strcmp(split_values->data[i + 1], "اندازه_قلم_ریشه") == 0 ||
+					strcmp(split_values->data[i + 1], "vw") == 0 ||
+					strcmp(split_values->data[i + 1], "عرض_صفحه") == 0 ||
+					strcmp(split_values->data[i + 1], "vh") == 0 ||
+					strcmp(split_values->data[i + 1], "ارتفاع_صفحه") == 0 ||
+					strcmp(split_values->data[i + 1], "vmin") == 0 ||
+					strcmp(split_values->data[i + 1], "vmax") == 0
+				) {
 					char* prev_value = split_values->data[i - 1];
 					size_t new_length = strlen(prev_value) + 3;
 
 					char* new_value;
-					CREATE_MEMORY_OBJECT(new_value, char, new_length, "Error: attribute_css_multiple_size_value<new_value> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+					CREATE_MEMORY_OBJECT(new_value, char, new_length, "Error: attribute_css_multiple_size_value<new_value2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
-					snprintf(new_value, new_length, "%spx", prev_value);
+					strcpy(new_value, prev_value);
+					strcat(new_value, "px");
 
 					free(split_values->data[i - 1]);
 					split_values->data[i - 1] = new_value;
 
 					printf("\tnew value: %s\n", new_value);
+
 				}
-				else {
-					hasError = true;
-					break;
-				}
-			}
-			else {
-				hasError = true;
-				break;
 			}
 		}
 		else {
-			array_push(arr, strdup(value));
+			if (string_is_number(split_values->data[i - 1])) {
+				continue; // Already handled!
+			}
+			else {
+				array_push(arr, strdup(value));
+			}
 		}
 	}
 

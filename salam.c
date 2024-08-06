@@ -676,7 +676,8 @@ void read_comment_multiline(lexer_t* lexer)
 			print_error("%s", messages[language][MESSAGE_LEXER_COMMENT_MULTI_NOT_CLOSED]);
 
 			exit(EXIT_FAILURE);
-		} else if (lexer->data[lexer->index - 1] == '*' && lexer->data[lexer->index] == '/') {
+		}
+else if (lexer->data[lexer->index - 1] == '*' && lexer->data[lexer->index] == '/') {
 			lexer->index++;
 
 			break;
@@ -713,13 +714,17 @@ void read_string(lexer_t* lexer, wchar_t ch)
 			ch = read_token(lexer);
 			if (ch == L'n') {
 				string[i++] = '\n';
-			} else if (ch == L't') {
+			}
+else if (ch == L't') {
 				string[i++] = '\t';
-			} else if (ch == L'"') {
+			}
+else if (ch == L'"') {
 				string[i++] = '"';
-			} else if (ch == L'\'') {
+			}
+else if (ch == L'\'') {
 				string[i++] = '\'';
-			} else if (ch == L'\\') {
+			}
+else if (ch == L'\\') {
 				string[i++] = '\\';
 			} else {
 				print_error("%s", messages[language][MESSAGE_LEXER_STRING_UNKNOWN_ESCAPE]);
@@ -840,7 +845,8 @@ void lexer_lex(lexer_t* lexer)
 			lexer->column++;
 			lexer->index++;
 			continue;
-		} else if (current_char == '\n') {
+		}
+else if (current_char == '\n') {
 			lexer->index++;
 			lexer->line++;
 			lexer->column = 0;
@@ -853,48 +859,62 @@ void lexer_lex(lexer_t* lexer)
 			lexer->index++;
 			lexer->column++;
 			continue;
-		} else if (current_wchar == '[') {
+		}
+else if (current_wchar == '[') {
 			token_t* t = token_create(TOKEN_TYPE_BRACKETS_OPEN, "[", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_wchar == ']') {
+		}
+else if (current_wchar == ']') {
 			token_t* t = token_create(TOKEN_TYPE_BRACKETS_CLOSE, "]", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_wchar == '%' || current_wchar == L'٪') {
+		}
+else if (current_wchar == '%' || current_wchar == L'٪') {
 			token_t* t = token_create(TOKEN_TYPE_MODULE, "%", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_wchar == '{') {
+		}
+else if (current_wchar == '{') {
 			token_t* t = token_create(TOKEN_TYPE_SECTION_OPEN, "{", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_wchar == '}') {
+		}
+else if (current_wchar == '}') {
 			token_t* t = token_create(TOKEN_TYPE_SECTION_CLOSE, "}", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_wchar == '(') {
+		}
+else if (current_wchar == '(') {
 			token_t* t = token_create(TOKEN_TYPE_PARENTHESE_OPEN, "(", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_wchar == ')') {
+		}
+else if (current_wchar == ')') {
 			token_t* t = token_create(TOKEN_TYPE_PARENTHESE_CLOSE, ")", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_wchar == '+') {
+		}
+else if (current_wchar == '+') {
 			token_t* t = token_create(TOKEN_TYPE_PLUS, "+", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_wchar == ':') {
+		}
+else if (current_wchar == ':') {
 			token_t* t = token_create(TOKEN_TYPE_COLON, ":", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_wchar == '.') {
+		}
+else if (current_wchar == '.') {
 			token_t* t = token_create(TOKEN_TYPE_DOT, ".", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_wchar == '#') {
+		}
+else if (current_wchar == '#') {
 			token_t* t = token_create(TOKEN_TYPE_SHARP, "#", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_wchar == '*') {
+		}
+else if (current_wchar == '*') {
 			token_t* t = token_create(TOKEN_TYPE_MULTIPLY, "*", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_wchar == '/') {
+		}
+else if (current_wchar == '/') {
 			if (lexer->index < lexer->length && lexer->data[lexer->index] == L'/') {
 				lexer->index++;
 				lexer->column++;
 				read_comment_singleline(lexer);
-			} else if (lexer->index < lexer->length && lexer->data[lexer->index] == L'*') {
+			}
+else if (lexer->index < lexer->length && lexer->data[lexer->index] == L'*') {
 				lexer->index++;
 				lexer->column++;
 				read_comment_multiline(lexer);
@@ -902,13 +922,16 @@ void lexer_lex(lexer_t* lexer)
 				token_t* t = token_create(TOKEN_TYPE_DIVIDE, "/", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
 			}
-		} else if (current_wchar == ',') {
+		}
+else if (current_wchar == ',') {
 			token_t* t = token_create(TOKEN_TYPE_COMMA, ",", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_wchar == '-') {
+		}
+else if (current_wchar == '-') {
 			token_t* t = token_create(TOKEN_TYPE_MINUS, "-", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
-		} else if (current_wchar == L'=') {
+		}
+else if (current_wchar == L'=') {
 			if (lexer->index < lexer->length && lexer->data[lexer->index] == L'=') {
 				token_t* t = token_create(TOKEN_TYPE_EQUAL_EQUAL, "==", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
@@ -918,7 +941,8 @@ void lexer_lex(lexer_t* lexer)
 				token_t* t = token_create(TOKEN_TYPE_EQUAL, "=", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
 			}
-		} else if (current_char == '!') {
+		}
+else if (current_char == '!') {
 			if (lexer->index < lexer->length && lexer->data[lexer->index] == '=') {
 				token_t* t = token_create(TOKEN_TYPE_NOT_EQUAL, "!=", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
@@ -928,7 +952,8 @@ void lexer_lex(lexer_t* lexer)
 				token_t* t = token_create(TOKEN_TYPE_NOT, "!", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
 			}
-		} else if (current_char == '>') {
+		}
+else if (current_char == '>') {
 			if (lexer->index < lexer->length && lexer->data[lexer->index] == '=') {
 				token_t* t = token_create(TOKEN_TYPE_GREATER_THAN_EQUAL, ">=", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
@@ -938,7 +963,8 @@ void lexer_lex(lexer_t* lexer)
 				token_t* t = token_create(TOKEN_TYPE_GREATER_THAN, ">", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
 			}
-		} else if (current_char == '<') {
+		}
+else if (current_char == '<') {
 			if (lexer->index < lexer->length && lexer->data[lexer->index] == '=') {
 				token_t* t = token_create(TOKEN_TYPE_LESS_THAN_EQUAL, "<=", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
@@ -948,12 +974,15 @@ void lexer_lex(lexer_t* lexer)
 				token_t* t = token_create(TOKEN_TYPE_LESS_THAN, "<", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
 			}
-		} else if (current_wchar == '\"') {
+		}
+else if (current_wchar == '\"') {
 			current_wchar = read_token(lexer);
 			read_string(lexer, current_wchar);
-		} else if (is_number(current_wchar)) {
+		}
+else if (is_number(current_wchar)) {
 			read_number(lexer, current_wchar);
-		} else if (is_alpha(current_wchar)) {
+		}
+else if (is_alpha(current_wchar)) {
 			read_identifier(lexer, current_wchar);
 		} else {
 			print_error(messages[language][MESSAGE_LEXER_UNEXPECTED_CHAR], current_char, lexer->line, lexer->column - 1);
@@ -1872,8 +1901,6 @@ char* attribute_css_value(char* attribute_name, char* attribute_value)
 		exit(1);
 	}
 
-	// printf("===> %s = %s\n", attribute_name, attribute_value);
-
 	if (strcmp(attribute_name, "cursor") == 0) {
 		if (strcmp(attribute_value, "دست") == 0) { strcpy(res, "pointer"); return res; }
 	}
@@ -2027,65 +2054,74 @@ char* attribute_css_value(char* attribute_name, char* attribute_value)
 		else if (strcmp(attribute_value, "خاکستری تخته سنگی") == 0) { strcpy(res, "slategrey"); return res; }
 		else if (strcmp(attribute_value, "برفی") == 0) { strcpy(res, "snow"); return res; }
 		else if (strcmp(attribute_value, "سفید دودی") == 0) { strcpy(res, "whitesmoke"); return res; }
-	} else if (strcmp(attribute_name, "font-family") == 0) {
+	}
+	else if (strcmp(attribute_name, "font-family") == 0) {
 		strcpy(res, attribute_value);
 		return res;
-	} else if (strcmp(attribute_name, "font-size") == 0) {
+	}
+	else if (strcmp(attribute_name, "font-size") == 0) {
 		char* size_value = attribute_css_size_value(attribute_name, attribute_value);
 		if (size_value) {
 			free(res);
 			return size_value;
 		}
-	} else if (strcmp(attribute_name, "padding-top") == 0 || strcmp(attribute_name, "padding-left") == 0 || strcmp(attribute_name, "padding-right") == 0 || strcmp(attribute_name, "padding-bottom") == 0) {
+	}
+	else if (strcmp(attribute_name, "padding-top") == 0 || strcmp(attribute_name, "padding-left") == 0 || strcmp(attribute_name, "padding-right") == 0 || strcmp(attribute_name, "padding-bottom") == 0) {
 		char* size_value = attribute_css_size_value(attribute_name, attribute_value);
 		if (size_value) {
 			free(res);
 			return size_value;
 		}
-	} else if (strcmp(attribute_name, "margin-top") == 0 || strcmp(attribute_name, "margin-left") == 0 || strcmp(attribute_name, "margin-right") == 0 || strcmp(attribute_name, "margin-bottom") == 0) {
+	}
+	else if (strcmp(attribute_name, "margin-top") == 0 || strcmp(attribute_name, "margin-left") == 0 || strcmp(attribute_name, "margin-right") == 0 || strcmp(attribute_name, "margin-bottom") == 0) {
 		char* size_value = attribute_css_size_value(attribute_name, attribute_value);
 		if (size_value) {
 			free(res);
 			return size_value;
 		}
-	} else if (strcmp(attribute_name, "width") == 0) {
+	}
+	else if (strcmp(attribute_name, "width") == 0) {
 		char* size_value = attribute_css_size_value(attribute_name, attribute_value);
 		if (size_value) {
 			free(res);
 			return size_value;
 		}
-	} else if (strcmp(attribute_name, "height") == 0) {
+	}
+	else if (strcmp(attribute_name, "height") == 0) {
 		char* size_value = attribute_css_size_value(attribute_name, attribute_value);
 		if (size_value) {
 			free(res);
 			return size_value;
 		}
-	} else if (strcmp(attribute_name, "cursor") == 0) {
-		strcpy(res, attribute_value);
-		return res;
-	} else if (strcmp(attribute_name, "border-radius") == 0 || strcmp(attribute_name, "padding") == 0 || strcmp(attribute_name, "margin") == 0) {
+	}
+	else if (strcmp(attribute_name, "border-radius") == 0 || strcmp(attribute_name, "padding") == 0 || strcmp(attribute_name, "margin") == 0) {
 		char* size_value = attribute_css_multiple_size_value(attribute_name, attribute_value);
 		if (size_value) {
 			free(res);
 			return size_value;
 		}
-	} else if (strcmp(attribute_name, "border-size") == 0) {
+	}
+	else if (strcmp(attribute_name, "border-size") == 0) {
 		char* size_value = attribute_css_size_value(attribute_name, attribute_value);
 		if (size_value) {
 			free(res);
 			return size_value;
 		}
-	} else if (strcmp(attribute_name, "border") == 0) {
+	}
+	else if (strcmp(attribute_name, "border") == 0) {
 		char* size_value = attribute_css_size_value(attribute_name, attribute_value);
 		if (size_value) {
 			free(res);
 			return size_value;
 		}
-	// } else if (strcmp(attribute_name, "src") == 0) {
-	// 	strcpy(res, attribute_value);
-	} else if (strcmp(attribute_name, "background-image") == 0) {
+	}
+	else if (strcmp(attribute_name, "src") == 0) {
+		// strcpy(res, attribute_value);
+	}
+	else if (strcmp(attribute_name, "background-image") == 0) {
 		strcpy(res, attribute_value);
-	} else {
+	}
+	else {
 		// printf("it's not a color value, so is %s\n", attribute_name);
 	}
 
@@ -2446,7 +2482,8 @@ int main(int argc, char** argv)
 	} else {
 		if (strcmp(argv[1], "--ast") == 0) {
 			// isAst = true;
-		} else if (strcmp(argv[1], "--code") == 0) {
+		}
+else if (strcmp(argv[1], "--code") == 0) {
 			// isAst = false;
 		} else {
 			print_message("Second argument should be either --ast or --code\n");

@@ -1969,56 +1969,68 @@ char* attribute_css_multiple_size_value(char* attribute_name, char* attribute_va
 
 	array_t* arr = array_create(10);
 
+	if (split_values->length == 1) {
+		char* first = split_values->data[0];
+		if (string_is_number(first)) {
+			size_t new_length = strlen(first) + 2;
+
+			char* new_value;
+			CREATE_MEMORY_OBJECT(new_value, char, new_length, "Error: attribute_css_multiple_size_value<new_value1> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
+			strcpy(new_value, first);
+			strcat(new_value, "px");
+
+			array_push(arr, new_value);
+		}
+	}
+
 	for (size_t i = 0; i < split_values->length; i++) {
 		char* value = split_values->data[i];
 
 		printf("-->%s\n", value);
 
 		if (string_is_number(value)) {
-			if (split_values->length == 1) {
+			if (strcmp(split_values->data[i + 1], "px") == 0 ||
+				strcmp(split_values->data[i + 1], "پیکسل") == 0 ||
+				strcmp(split_values->data[i + 1], "cm") == 0 ||
+				strcmp(split_values->data[i + 1], "سانتیمتر") == 0 ||
+				strcmp(split_values->data[i + 1], "سانت") == 0 ||
+				strcmp(split_values->data[i + 1], "em") == 0 ||
+				strcmp(split_values->data[i + 1], "اندازه_قلم") == 0 ||
+				strcmp(split_values->data[i + 1], "rem") == 0 ||
+				strcmp(split_values->data[i + 1], "اندازه_قلم_ریشه") == 0 ||
+				strcmp(split_values->data[i + 1], "vw") == 0 ||
+				strcmp(split_values->data[i + 1], "عرض_صفحه") == 0 ||
+				strcmp(split_values->data[i + 1], "vh") == 0 ||
+				strcmp(split_values->data[i + 1], "ارتفاع_صفحه") == 0 ||
+				strcmp(split_values->data[i + 1], "vmin") == 0 ||
+				strcmp(split_values->data[i + 1], "vmax") == 0
+			) {
 				char* prev_value = split_values->data[i - 1];
 				size_t new_length = strlen(prev_value) + 3;
 
 				char* new_value;
-				CREATE_MEMORY_OBJECT(new_value, char, new_length, "Error: attribute_css_multiple_size_value<new_value1> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+				CREATE_MEMORY_OBJECT(new_value, char, new_length, "Error: attribute_css_multiple_size_value<new_value2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
+				strcpy(new_value, prev_value);
+				strcat(new_value, "px");
+
+				free(split_values->data[i - 1]);
+				split_values->data[i - 1] = new_value;
+
+				printf("\tnew value: %s\n", new_value);
+
+			}
+			else {
+				char* current_length = split_values->data[i];
+
+				char* new_value;
+				CREATE_MEMORY_OBJECT(new_value, char, current_length, "Error: attribute_css_multiple_size_value<new_value3> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 				strcpy(new_value, value);
 				strcat(new_value, "px");
 
 				array_push(arr, new_value);
-			}
-			else {
-				if (strcmp(split_values->data[i + 1], "px") == 0 ||
-					strcmp(split_values->data[i + 1], "پیکسل") == 0 ||
-					strcmp(split_values->data[i + 1], "cm") == 0 ||
-					strcmp(split_values->data[i + 1], "سانتیمتر") == 0 ||
-					strcmp(split_values->data[i + 1], "سانت") == 0 ||
-					strcmp(split_values->data[i + 1], "em") == 0 ||
-					strcmp(split_values->data[i + 1], "اندازه_قلم") == 0 ||
-					strcmp(split_values->data[i + 1], "rem") == 0 ||
-					strcmp(split_values->data[i + 1], "اندازه_قلم_ریشه") == 0 ||
-					strcmp(split_values->data[i + 1], "vw") == 0 ||
-					strcmp(split_values->data[i + 1], "عرض_صفحه") == 0 ||
-					strcmp(split_values->data[i + 1], "vh") == 0 ||
-					strcmp(split_values->data[i + 1], "ارتفاع_صفحه") == 0 ||
-					strcmp(split_values->data[i + 1], "vmin") == 0 ||
-					strcmp(split_values->data[i + 1], "vmax") == 0
-				) {
-					char* prev_value = split_values->data[i - 1];
-					size_t new_length = strlen(prev_value) + 3;
-
-					char* new_value;
-					CREATE_MEMORY_OBJECT(new_value, char, new_length, "Error: attribute_css_multiple_size_value<new_value2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-
-					strcpy(new_value, prev_value);
-					strcat(new_value, "px");
-
-					free(split_values->data[i - 1]);
-					split_values->data[i - 1] = new_value;
-
-					printf("\tnew value: %s\n", new_value);
-
-				}
 			}
 		}
 		else {
@@ -2104,17 +2116,29 @@ bool string_is_number(const char* value)
 
 	if (wvalue[0] == L'\0') {
 		free(wvalue);
+
 		return false;
 	}
 
-	for (size_t i = 0; wvalue[i] != L'\0'; i++) {
+	size_t start = 0;
+	if (wvalue[0] == L'+' || wvalue[0] == L'-') start = 1;
+
+	if (start == 1 && wvalue[1] == L'\0') {
+		free(wvalue);
+
+		return false;
+	}
+
+	for (size_t i = start; wvalue[i] != L'\0'; i++) {
 		if (!(is_english_digit(wvalue[i]) || is_persian_digit(wvalue[i]) || is_arabic_digit(wvalue[i]))) {
 			free(wvalue);
+
 			return false;
 		}
 	}
 
 	free(wvalue);
+
 	return true;
 }
 

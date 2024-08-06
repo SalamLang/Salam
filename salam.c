@@ -2122,7 +2122,7 @@ char* attribute_css_value(char* attribute_name, char* attribute_value)
 		strcpy(res, attribute_value);
 	}
 	else {
-		// printf("it's not a color value, so is %s\n", attribute_name);
+		printf("it's not a attribute valid value, error? %s => %s\n", attribute_name, attribute_value);
 	}
 
 	free(res);

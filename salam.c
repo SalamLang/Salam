@@ -189,7 +189,7 @@ array_t* array_create(size_t size)
 	size_t min_size = 1;
 	arr->length = 0;
 	arr->size = size > min_size ? size : min_size;
-	arr->data = (void*) malloc(sizeof(void*) * arr->size);
+	CREATE_MEMORY_OBJECT(arr->data, void*, arr->size, "Error: array_create<arr-data> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	if (!arr->data) {
 		perror(messages[language][MESSAGE_MEMORY_ALLOCATE_ERROR]);
@@ -273,7 +273,7 @@ unsigned long hash_function(const char *str)
 hashmap_t* hashmap_create()
 {
 	hashmap_t *map;
-	map = (hashmap_t*) malloc(sizeof(hashmap_t));
+	CREATE_MEMORY_OBJECT(map, hashmap_t, 1, "Error: hashmap_create<map> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	map->size = 16;
 	map->length = 0;
 	map->data = (hashmap_entry_t**) calloc(map->size, sizeof(hashmap_entry_t*));
@@ -677,7 +677,7 @@ void read_comment_multiline(lexer_t* lexer)
 
 			exit(EXIT_FAILURE);
 		}
-else if (lexer->data[lexer->index - 1] == '*' && lexer->data[lexer->index] == '/') {
+		else if (lexer->data[lexer->index - 1] == '*' && lexer->data[lexer->index] == '/') {
 			lexer->index++;
 
 			break;
@@ -715,16 +715,16 @@ void read_string(lexer_t* lexer, wchar_t ch)
 			if (ch == L'n') {
 				string[i++] = '\n';
 			}
-else if (ch == L't') {
+		else if (ch == L't') {
 				string[i++] = '\t';
 			}
-else if (ch == L'"') {
+		else if (ch == L'"') {
 				string[i++] = '"';
 			}
-else if (ch == L'\'') {
+		else if (ch == L'\'') {
 				string[i++] = '\'';
 			}
-else if (ch == L'\\') {
+		else if (ch == L'\\') {
 				string[i++] = '\\';
 			} else {
 				print_error("%s", messages[language][MESSAGE_LEXER_STRING_UNKNOWN_ESCAPE]);
@@ -846,7 +846,7 @@ void lexer_lex(lexer_t* lexer)
 			lexer->index++;
 			continue;
 		}
-else if (current_char == '\n') {
+		else if (current_char == '\n') {
 			lexer->index++;
 			lexer->line++;
 			lexer->column = 0;
@@ -860,61 +860,61 @@ else if (current_char == '\n') {
 			lexer->column++;
 			continue;
 		}
-else if (current_wchar == '[') {
+		else if (current_wchar == '[') {
 			token_t* t = token_create(TOKEN_TYPE_BRACKETS_OPEN, "[", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		}
-else if (current_wchar == ']') {
+		else if (current_wchar == ']') {
 			token_t* t = token_create(TOKEN_TYPE_BRACKETS_CLOSE, "]", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		}
-else if (current_wchar == '%' || current_wchar == L'٪') {
+		else if (current_wchar == '%' || current_wchar == L'٪') {
 			token_t* t = token_create(TOKEN_TYPE_MODULE, "%", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		}
-else if (current_wchar == '{') {
+		else if (current_wchar == '{') {
 			token_t* t = token_create(TOKEN_TYPE_SECTION_OPEN, "{", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		}
-else if (current_wchar == '}') {
+		else if (current_wchar == '}') {
 			token_t* t = token_create(TOKEN_TYPE_SECTION_CLOSE, "}", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		}
-else if (current_wchar == '(') {
+		else if (current_wchar == '(') {
 			token_t* t = token_create(TOKEN_TYPE_PARENTHESE_OPEN, "(", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		}
-else if (current_wchar == ')') {
+		else if (current_wchar == ')') {
 			token_t* t = token_create(TOKEN_TYPE_PARENTHESE_CLOSE, ")", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		}
-else if (current_wchar == '+') {
+		else if (current_wchar == '+') {
 			token_t* t = token_create(TOKEN_TYPE_PLUS, "+", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		}
-else if (current_wchar == ':') {
+		else if (current_wchar == ':') {
 			token_t* t = token_create(TOKEN_TYPE_COLON, ":", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		}
-else if (current_wchar == '.') {
+		else if (current_wchar == '.') {
 			token_t* t = token_create(TOKEN_TYPE_DOT, ".", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		}
-else if (current_wchar == '#') {
+		else if (current_wchar == '#') {
 			token_t* t = token_create(TOKEN_TYPE_SHARP, "#", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		}
-else if (current_wchar == '*') {
+		else if (current_wchar == '*') {
 			token_t* t = token_create(TOKEN_TYPE_MULTIPLY, "*", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		}
-else if (current_wchar == '/') {
+		else if (current_wchar == '/') {
 			if (lexer->index < lexer->length && lexer->data[lexer->index] == L'/') {
 				lexer->index++;
 				lexer->column++;
 				read_comment_singleline(lexer);
 			}
-else if (lexer->index < lexer->length && lexer->data[lexer->index] == L'*') {
+		else if (lexer->index < lexer->length && lexer->data[lexer->index] == L'*') {
 				lexer->index++;
 				lexer->column++;
 				read_comment_multiline(lexer);
@@ -923,15 +923,15 @@ else if (lexer->index < lexer->length && lexer->data[lexer->index] == L'*') {
 				array_push(lexer->tokens, t);
 			}
 		}
-else if (current_wchar == ',') {
+		else if (current_wchar == ',') {
 			token_t* t = token_create(TOKEN_TYPE_COMMA, ",", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		}
-else if (current_wchar == '-') {
+		else if (current_wchar == '-') {
 			token_t* t = token_create(TOKEN_TYPE_MINUS, "-", 1, lexer->line, lexer->column - 1, lexer->line, lexer->column);
 			array_push(lexer->tokens, t);
 		}
-else if (current_wchar == L'=') {
+		else if (current_wchar == L'=') {
 			if (lexer->index < lexer->length && lexer->data[lexer->index] == L'=') {
 				token_t* t = token_create(TOKEN_TYPE_EQUAL_EQUAL, "==", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
@@ -942,7 +942,7 @@ else if (current_wchar == L'=') {
 				array_push(lexer->tokens, t);
 			}
 		}
-else if (current_char == '!') {
+		else if (current_char == '!') {
 			if (lexer->index < lexer->length && lexer->data[lexer->index] == '=') {
 				token_t* t = token_create(TOKEN_TYPE_NOT_EQUAL, "!=", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
@@ -953,7 +953,7 @@ else if (current_char == '!') {
 				array_push(lexer->tokens, t);
 			}
 		}
-else if (current_char == '>') {
+		else if (current_char == '>') {
 			if (lexer->index < lexer->length && lexer->data[lexer->index] == '=') {
 				token_t* t = token_create(TOKEN_TYPE_GREATER_THAN_EQUAL, ">=", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
@@ -964,7 +964,7 @@ else if (current_char == '>') {
 				array_push(lexer->tokens, t);
 			}
 		}
-else if (current_char == '<') {
+		else if (current_char == '<') {
 			if (lexer->index < lexer->length && lexer->data[lexer->index] == '=') {
 				token_t* t = token_create(TOKEN_TYPE_LESS_THAN_EQUAL, "<=", 2, lexer->line, lexer->column - 2, lexer->line, lexer->column);
 				array_push(lexer->tokens, t);
@@ -975,14 +975,14 @@ else if (current_char == '<') {
 				array_push(lexer->tokens, t);
 			}
 		}
-else if (current_wchar == '\"') {
+		else if (current_wchar == '\"') {
 			current_wchar = read_token(lexer);
 			read_string(lexer, current_wchar);
 		}
-else if (is_number(current_wchar)) {
+		else if (is_number(current_wchar)) {
 			read_number(lexer, current_wchar);
 		}
-else if (is_alpha(current_wchar)) {
+		else if (is_alpha(current_wchar)) {
 			read_identifier(lexer, current_wchar);
 		} else {
 			print_error(messages[language][MESSAGE_LEXER_UNEXPECTED_CHAR], current_char, lexer->line, lexer->column - 1);
@@ -1800,7 +1800,7 @@ bool is_style_attribute(char* attribute_name)
 
 char* trim_value(char* value)
 {
-	char* result = malloc(sizeof(char) * 256);
+	char* result;
 	CREATE_MEMORY_OBJECT(result, char, 256, "Error: trim_value<result> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	int i = 0;
@@ -1814,7 +1814,7 @@ char* trim_value(char* value)
 		result[k] = value[l];
 		k++;
 	}
-	
+
 	result[k] = '\0';
 
 	return result;
@@ -2475,7 +2475,7 @@ int main(int argc, char** argv)
 		if (strcmp(argv[1], "--ast") == 0) {
 			// isAst = true;
 		}
-else if (strcmp(argv[1], "--code") == 0) {
+		else if (strcmp(argv[1], "--code") == 0) {
 			// isAst = false;
 		} else {
 			print_message("Second argument should be either --ast or --code\n");

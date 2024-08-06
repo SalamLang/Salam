@@ -1795,7 +1795,28 @@ char* trim_value(char* value)
 
 char* attribute_css_multiple_size_value(char* attribute_name, char* attribute_value)
 {
-	return attribute_css_size_value(attribute_name, attribute_value);
+	char* res;
+	int attribute_value_length = strlen(attribute_value) + 2;
+	CREATE_MEMORY_OBJECT(res, char, attribute_value_length, "Error: attribute_css_multiple_size_value<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
+	strcpy(res, attribute_value);
+
+	if (string_is_number(attribute_value)) strcat(res, "px");
+
+	return res;
+}
+
+char* attribute_css_size_value(char* attribute_name, char* attribute_value)
+{
+	char* res;
+	int attribute_value_length = strlen(attribute_value) + 2;
+	CREATE_MEMORY_OBJECT(res, char, attribute_value_length, "Error: attribute_css_multiple_size_value<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
+	strcpy(res, attribute_value);
+
+	if (string_is_number(attribute_value)) strcat(res, "px");
+
+	return res;
 }
 
 bool is_english_digit(wchar_t ch)
@@ -1816,40 +1837,31 @@ bool is_arabic_digit(wchar_t ch)
 
 bool string_is_number(const char* value)
 {
-    size_t len = mbstowcs(NULL, value, 0) + 1;
-    wchar_t wvalue[30];
-    mbstowcs(wvalue, value, len);
+    size_t len = mbstowcs(NULL, value, 0);
+    if (len == (size_t)-1) return false;
 
-    if (wvalue[0] == L'\0') return false;
+    wchar_t *wvalue = malloc((len + 1) * sizeof(wchar_t));
+    if (wvalue == NULL) {
+        fprintf(stderr, "Memory allocation failed\n");
+        exit(1);
+    }
+
+    mbstowcs(wvalue, value, len + 1);
+
+    if (wvalue[0] == L'\0') {
+        free(wvalue);
+        return false;
+    }
 
     for (size_t i = 0; wvalue[i] != L'\0'; i++) {
         if (!(is_english_digit(wvalue[i]) || is_persian_digit(wvalue[i]) || is_arabic_digit(wvalue[i]))) {
+            free(wvalue);
             return false;
         }
     }
 
+    free(wvalue);
     return true;
-}
-
-char* attribute_css_size_value(char* attribute_name, char* attribute_value)
-{
-	char* res = malloc(sizeof(char) * 30);
-	if (res == NULL) {
-		fprintf(stderr, "Memory allocation failed\n");
-		exit(1);
-	}
-
-	strcpy(res, attribute_value);
-
-	if (string_is_number(attribute_value)) {
-		printf("css value is a number %s %s\n", attribute_name, attribute_value);
-		strcat(res, "px");
-	}
-	else {
-		printf("css value is not a number %s %s\n", attribute_name, attribute_value);
-	}
-
-	return res;
 }
 
 char* attribute_css_value(char* attribute_name, char* attribute_value)
@@ -2053,6 +2065,12 @@ char* attribute_css_value(char* attribute_name, char* attribute_value)
 		return res;
 	} else if (strcmp(attribute_name, "border-radius") == 0 || strcmp(attribute_name, "padding") == 0 || strcmp(attribute_name, "margin") == 0) {
 		char* size_value = attribute_css_multiple_size_value(attribute_name, attribute_value);
+		if (size_value) {
+			free(res);
+			return size_value;
+		}
+	} else if (strcmp(attribute_name, "border-size") == 0) {
+		char* size_value = attribute_css_size_value(attribute_name, attribute_value);
 		if (size_value) {
 			free(res);
 			return size_value;

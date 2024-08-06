@@ -1044,19 +1044,10 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t
 	return element;
 }
 
-ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t* parser)
+
+hashmap_t* parser_layout_element_attributes(parser_t* parser, array_t* children)
 {
-	printf("parser_layout_element_mother\n");
-	ast_layout_node_t* element;
-	CREATE_MEMORY_OBJECT(element, ast_layout_node_t, 1, "Error: parser_layout_element_mother<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-	element->type = type;
-	element->children = array_create(1);
-	element->attributes = hashmap_create();
-	element->is_mother = true;
-
-	parser->token_index++; // Eating keyword
-
-	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
+	hashmap_t* attributes = hashmap_create();
 
 	while (parser->token_index < parser->lexer->tokens->length) {
 		token_t* current_token = parser_token_get(parser);
@@ -1070,15 +1061,54 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 
 			parser_token_eat_nodata(parser, TOKEN_TYPE_COLON); // :
 			
-			token_t* attr_value = parser_token_get(parser);
-			parser->token_index++;
+			array_t* values = array_create(2);
 
-			hashmap_put(element->attributes, current_token->value, attr_value->value);
+			while (parser->token_index < parser->lexer->tokens->length) {
+				token_t* attr_value = parser_token_get(parser);
+
+				if (attr_value->type == TOKEN_TYPE_END || attr_value->type == TOKEN_TYPE_EOF) break;
+
+				array_push(values, attr_value->value);
+				parser->token_index++;
+
+				if (parser->token_index < parser->lexer->tokens->length) {
+					attr_value = parser_token_get(parser);
+					if (attr_value->type == TOKEN_TYPE_COMMA) {
+						parser->token_index++;
+					}
+					else {
+						break;
+					}
+				}
+				else {
+					break;
+				}
+			}
+
+			hashmap_put(attributes, current_token->value, values);
 		}
 		else {
-			array_push(element->children, parser_layout_element(parser));
+			array_push(children, parser_layout_element(parser));
 		}
 	}
+
+	return attributes;
+}
+
+ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t* parser)
+{
+	printf("parser_layout_element_mother\n");
+	ast_layout_node_t* element;
+	CREATE_MEMORY_OBJECT(element, ast_layout_node_t, 1, "Error: parser_layout_element_mother<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	element->type = type;
+	element->children = array_create(1);
+	element->is_mother = true;
+
+	parser->token_index++; // Eating keyword
+
+	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
+
+	element->attributes = parser_layout_element_attributes(parser, element->children);
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_END);
 
@@ -1163,6 +1193,7 @@ ast_layout_t* parser_layout(parser_t* parser)
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_LAYOUT);
 	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
+
 	
 
 	while (parser->token_index < parser->lexer->tokens->length) {
@@ -2025,7 +2056,7 @@ char* attribute_css_multiple_size_value(char* attribute_name, char* attribute_va
 				char* current_length = split_values->data[i];
 
 				char* new_value;
-				CREATE_MEMORY_OBJECT(new_value, char, current_length, "Error: attribute_css_multiple_size_value<new_value3> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+				CREATE_MEMORY_OBJECT(new_value, char, strlen(current_length) + 2, "Error: attribute_css_multiple_size_value<new_value3> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 				strcpy(new_value, value);
 				strcat(new_value, "px");

@@ -1850,47 +1850,50 @@ char* attribute_css_size_value(char* attribute_name, char* attribute_value)
 
 bool is_english_digit(wchar_t ch)
 {
-    return ch >= L'0' && ch <= L'9';
+	// 0123456789
+	return ch >= L'0' && ch <= L'9';
 }
 
 bool is_persian_digit(wchar_t ch)
 {
-    return ch >= 0x06F0 && ch <= 0x06F9;
-    // return ch >= '۰' && ch <= '۹';
+	// ۰۱۲۳۴۵۶۷۸۹
+	return ch >= 0x06F0 && ch <= 0x06F9;
+	// return ch >= '۰' && ch <= '۹';
 }
 
 bool is_arabic_digit(wchar_t ch)
 {
-    return ch >= 0x0660 && ch <= 0x0669;
+	// ٠١٢٣٤٥٦٧٨٩
+	return ch >= 0x0660 && ch <= 0x0669;
 }
 
 bool string_is_number(const char* value)
 {
-    size_t len = mbstowcs(NULL, value, 0);
-    if (len == (size_t)-1) return false;
+	size_t len = mbstowcs(NULL, value, 0);
+	if (len == (size_t)-1) return false;
 
-    wchar_t *wvalue = malloc((len + 1) * sizeof(wchar_t));
-    if (wvalue == NULL) {
-        fprintf(stderr, "Memory allocation failed\n");
-        exit(1);
-    }
+	wchar_t *wvalue = malloc((len + 1) * sizeof(wchar_t));
+	if (wvalue == NULL) {
+		fprintf(stderr, "Memory allocation failed\n");
+		exit(1);
+	}
 
-    mbstowcs(wvalue, value, len + 1);
+	mbstowcs(wvalue, value, len + 1);
 
-    if (wvalue[0] == L'\0') {
-        free(wvalue);
-        return false;
-    }
+	if (wvalue[0] == L'\0') {
+		free(wvalue);
+		return false;
+	}
 
-    for (size_t i = 0; wvalue[i] != L'\0'; i++) {
-        if (!(is_english_digit(wvalue[i]) || is_persian_digit(wvalue[i]) || is_arabic_digit(wvalue[i]))) {
-            free(wvalue);
-            return false;
-        }
-    }
+	for (size_t i = 0; wvalue[i] != L'\0'; i++) {
+		if (!(is_english_digit(wvalue[i]) || is_persian_digit(wvalue[i]) || is_arabic_digit(wvalue[i]))) {
+			free(wvalue);
+			return false;
+		}
+	}
 
-    free(wvalue);
-    return true;
+	free(wvalue);
+	return true;
 }
 
 char* attribute_css_value(char* attribute_name, char* attribute_value)

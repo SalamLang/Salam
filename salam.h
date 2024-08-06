@@ -77,15 +77,15 @@ typedef struct {
 } array_t;
 
 typedef struct hashmap_entry {
-    char *key;
-    void *value;
-    struct hashmap_entry *next;
+	char *key;
+	void *value;
+	struct hashmap_entry *next;
 } hashmap_entry_t;
 
 typedef struct {
-    hashmap_entry_t **data;
-    size_t size;
-    size_t length;
+	hashmap_entry_t **data;
+	size_t size;
+	size_t length;
 } hashmap_t;
 
 typedef struct {
@@ -181,21 +181,21 @@ typedef struct {
 struct ast_node;
 
 typedef enum {
-    AST_TYPE_FUNCTION,
-    AST_TYPE_LAYOUT,
+	AST_TYPE_FUNCTION,
+	AST_TYPE_LAYOUT,
 } ast_node_type_t;
 
 typedef enum {
-    AST_TYPE_LAYOUT_ERROR,
-    AST_TYPE_LAYOUT_BUTTON,
-    AST_TYPE_LAYOUT_TEXT,
-    AST_TYPE_LAYOUT_INPUT,
-    AST_TYPE_LAYOUT_LINE,
+	AST_TYPE_LAYOUT_ERROR,
+	AST_TYPE_LAYOUT_BUTTON,
+	AST_TYPE_LAYOUT_TEXT,
+	AST_TYPE_LAYOUT_INPUT,
+	AST_TYPE_LAYOUT_LINE,
 	AST_TYPE_LAYOUT_LINK,
 	AST_TYPE_LAYOUT_IMAGE,
 	AST_TYPE_LAYOUT_CENTER,
 	AST_TYPE_LAYOUT_FORM,
-    AST_TYPE_LAYOUT_BREAK,
+	AST_TYPE_LAYOUT_BREAK,
 	AST_TYPE_LAYOUT_TABLE,
 	AST_TYPE_LAYOUT_TABLE_ROW,
 	AST_TYPE_LAYOUT_TABLE_COLUMN,
@@ -208,26 +208,26 @@ typedef enum {
 } ast_layout_type_t;
 
 typedef struct {
-    const char* keyword;
-    token_type_t token_type;
+	const char* keyword;
+	token_type_t token_type;
 } keyword_mapping_t;
 
 typedef struct {
-    const char* keyword;
-    ast_layout_type_t layout_type;
+	const char* keyword;
+	ast_layout_type_t layout_type;
 } layout_keyword_mapping_t;
 
 typedef struct {
-    ast_layout_type_t type;
+	ast_layout_type_t type;
 
-    bool is_mother;
+	bool is_mother;
 
-    hashmap_t* attributes;
+	hashmap_t* attributes;
 	array_t* children;
 } ast_layout_node_t;
 
 typedef struct {
-    hashmap_t* attributes;
+	hashmap_t* attributes;
 	array_t* elements;
 } ast_layout_t;
 
@@ -250,7 +250,7 @@ typedef struct {
 	array_t* functions;
 	array_t* expressions;
 
-    ast_layout_t* layout;
+	ast_layout_t* layout;
 } parser_t;
 
 // Function Declarations

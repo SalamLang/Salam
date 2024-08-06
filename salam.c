@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <wchar.h>
+#include <ctype.h>
 #include <stdlib.h>
 #include <locale.h>
 #include <string.h>
@@ -1798,6 +1799,38 @@ bool is_style_attribute(char* attribute_name)
 	return false;
 }
 
+char* trim_whitespace(char* str)
+{
+	char* end;
+
+	while (isspace((unsigned char) *str)) str++;
+
+	if (*str == 0) return str;
+
+	end = str + strlen(str) - 1;
+	while (end > str && isspace((unsigned char) *end)) end--;
+
+	end[1] = '\0';
+
+	return str;
+}
+
+array_t* split_by_space(const char* str)
+{
+	array_t* arr = array_create(10);
+	char* temp_str = strdup(str);
+	char* token = strtok(temp_str, " ");
+
+	while (token != NULL) {
+		array_push(arr, strdup(token));
+		token = strtok(NULL, " ");
+	}
+
+	free(temp_str);
+	
+	return arr;
+}
+
 char* trim_value(char* value)
 {
 	char* result;
@@ -1906,6 +1939,58 @@ char* attribute_css_multiple_size_value(char* attribute_name, char* attribute_va
 	strcpy(res, attribute_value);
 
 	if (string_is_number(attribute_value)) strcat(res, "px");
+	else {
+		// array_t* arr = array_create(10);
+		// array_push(arr, any void* value);
+		// run trim on the attribute_value
+		// then split attribute_value by space
+		// and delete empty value
+		// if odd values is "px" or "پیکسل" we should delete that item and add "px" to the previus item (in the array)
+		// finally create a string from the final array again
+
+		array_t* arr = array_create(10);
+
+		char* trimmed_value = trim_whitespace(attribute_value);
+		array_t* split_values = split_by_space(trimmed_value);
+
+		for (size_t i = 0; i < split_values->length; i++) {
+			char* value = split_values->data[i];
+			if (strcmp(value, "px") == 0 || strcmp(value, "پیکسل") == 0) {
+				if (i > 0) {
+					char* prev_value = split_values->data[i - 1];
+					size_t new_length = strlen(prev_value) + 3;
+					char* new_value = (char*)malloc(new_length);
+					snprintf(new_value, new_length, "%spx", prev_value);
+
+					free(split_values->data[i - 1]);
+					split_values->data[i - 1] = new_value;
+				}
+			} else {
+				array_push(arr, strdup(value));
+			}
+		}
+
+		size_t final_length = 1;
+		for (size_t i = 0; i < arr->length; i++) {
+			final_length += strlen(arr->data[i]) + 1;
+		}
+
+		char* final_result = (char*)malloc(final_length);
+		final_result[0] = '\0';
+
+		for (size_t i = 0; i < arr->length; i++) {
+			strcat(final_result, arr->data[i]);
+			if (i < arr->length - 1) {
+				strcat(final_result, " ");
+			}
+		}
+
+		strcpy(res, final_result);
+
+		array_free(split_values);
+		array_free(arr);
+		free(final_result);
+	}
 
 	return res;
 }
@@ -2259,7 +2344,6 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 				hashmap_entry_t *entry = element->attributes->data[i];
 
 				while (entry) {
-					// printf("attr %s -> %s\n", entry->key, entry->value);
 					bool isBorderTable = false;
 					if (element->type == AST_TYPE_LAYOUT_TABLE && strcmp(entry->key, "حاشیه") == 0) {
 						isBorderTable = true;

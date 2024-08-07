@@ -1729,6 +1729,37 @@ void ast_layout_ident(string_t* str, int ident)
 	for (int i = 0; i < ident; i++) string_append_char(str, '\t');
 }
 
+string_t* ast_layout_string_attributes(ast_layout_node_t* element, parser_t* parser, hashmap_t* attributes)
+{
+	string_t* buffer = string_create(10);
+
+	if (attributes != NULL && attributes->size > 0) {
+		for (size_t i = 0; i < attributes->size; i++) {
+			hashmap_entry_t *entry = attributes->data[i];
+
+			while (entry) {
+				string_append_char(buffer, ' ');
+
+				string_append_str(buffer, entry->key);
+				string_append_char(buffer, '=');
+				string_append_char(buffer, '\"');
+
+				array_t* arr = entry->value;
+				char* str_value = array_string(arr, ", ");
+				string_append_str(buffer, str_value == NULL ? "NULL" : str_value);
+
+				if (str_value != NULL) free(str_value);
+
+				string_append_char(buffer, '\"');
+
+				entry = entry->next;
+			}
+		}
+	}
+
+	return buffer;
+}
+
 string_t* ast_layout_string(ast_layout_node_t* element, parser_t* parser, int ident)
 {
 	string_t* str = string_create(10);
@@ -1740,29 +1771,17 @@ string_t* ast_layout_string(ast_layout_node_t* element, parser_t* parser, int id
 	string_append_str(str, "<layout_");
 	string_append_str(str, element_name);
 
-	if (element->attributes != NULL && element->attributes->size > 0) {
-		for (size_t i = 0; i < element->attributes->size; i++) {
-			hashmap_entry_t *entry = element->attributes->data[i];
+	string_t* attributes = ast_layout_string_attributes(element, parser, element->attributes);
+	if (attributes->length > 0) string_append_char(str, ' ');
+	string_append(str, attributes);
 
-			while (entry) {
-				string_append_char(str, ' ');
+	string_t* css_styles = ast_layout_string_attributes(element, parser, element->styles);
+	if (css_styles->length > 0) string_append_char(str, ' ');
+	string_append(str, css_styles);
 
-				string_append_str(str, entry->key);
-				string_append_char(str, '=');
-				string_append_char(str, '\"');
-
-				array_t* arr = entry->value;
-				char* str_value = array_string(arr, ", ");
-				string_append_str(str, str_value == NULL ? "NULL" : str_value);
-
-				if (str_value != NULL) free(str_value);
-
-				string_append_char(str, '\"');
-
-				entry = entry->next;
-			}
-		}
-	}
+	string_t* css_hover_styles = ast_layout_string_attributes(element, parser, element->hoverStyles);
+	if (css_hover_styles->length > 0) string_append_char(str, ' ');
+	string_append(str, css_hover_styles);
 
 	if (element->is_mother) {
 		string_append_char(str, '>');
@@ -2248,8 +2267,9 @@ char* attribute_css_multiple_size_value(char* attribute_name, array_t* attribute
 
 char* attribute_css_size_value(char* attribute_name, char* attribute_value)
 {
+	int attribute_value_length = strlen(attribute_value) + 5;
+
 	char* res;
-	int attribute_value_length = strlen(attribute_value) + 3;
 	CREATE_MEMORY_OBJECT(res, char, attribute_value_length, "Error: attribute_css_size_value<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	strcpy(res, attribute_value);
@@ -2616,7 +2636,7 @@ string_t* generate_layout_element_attributes_styles(parser_t* parser, ast_layout
 			(*count)++;
 
 			char* buf1 = attribute_css_name(entry->key);
-			
+
 			if (buf1 != NULL) {
 				array_t* values = entry->value;
 
@@ -2660,7 +2680,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 				}
 				else {
 					char* newKey;
-					CREATE_MEMORY_OBJECT(newKey, char, 100, "Error: generate_layout_element_attributes<newKey> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+					CREATE_MEMORY_OBJECT(newKey, char, 150, "Error: generate_layout_element_attributes<newKey> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 					if ((is_allowed_layout_property(element->is_mother, element->type, entry->key, &newKey) == true) && newKey != NULL) {
 						if (html_attrs != 0) string_append_char(str, ' ');

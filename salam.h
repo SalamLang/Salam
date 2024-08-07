@@ -362,11 +362,12 @@ token_t* parser_token_get(parser_t* parser);
 void parser_token_eat_nodata(parser_t* parser, token_type_t type);
 token_t* parser_token_eat(parser_t* parser, token_type_t type);
 // array_t* parser_layout_elements(parser_t* parser);
-hashmap_t* parser_layout_element_attributes(parser_t* parser, ast_layout_type_t type, array_t* children, hashmap_t* styles, hashmap_t** hoverStyles);
+void parser_layout_element_attribute(parser_t* parser, ast_layout_type_t layout_type, ast_layout_node_t* element, bool acceptAttrs, bool acceptStyles, bool acceptHoverStyles, bool acceptChildren);
+void parser_layout_element_attributes(parser_t* parser, ast_layout_type_t type, ast_layout_node_t* element, bool acceptAttrs, bool acceptStyles, bool acceptHoverStyles, bool acceptChildren);
+array_t* parser_layout_attribute_array_value(parser_t* parser);
 ast_layout_node_t* parser_layout_element(parser_t* parser);
-ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t* parser);
-ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t* parser);
-ast_layout_node_t* parser_layout(parser_t* parser);
+ast_layout_node_t* parser_layout_element_single(ast_layout_type_t layout_type, parser_t* parser);
+ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t layout_type, parser_t* parser);
 
 void help();
 int main(int argc, char** argv);

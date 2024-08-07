@@ -2196,13 +2196,19 @@ char* attribute_css_multiple_size_value(char* attribute_name, array_t* attribute
 
 char* attribute_css_size_value(char* attribute_name, char* attribute_value)
 {
+	printf("---------------------->>>> ");
+	printf("%s - ", attribute_name);
+	printf("%s\n", attribute_value);
+	
 	char* res;
-	int attribute_value_length = strlen(attribute_value) + 2;
+	int attribute_value_length = strlen(attribute_value) + 3;
 	CREATE_MEMORY_OBJECT(res, char, attribute_value_length, "Error: attribute_css_size_value<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	strcpy(res, attribute_value);
 
+	printf("check...");
 	if (string_is_number(attribute_value)) strcat(res, "px");
+	printf("passed...");
 
 	return res;
 }

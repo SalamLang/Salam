@@ -432,7 +432,7 @@ void hashmap_string_free(hashmap_t *map)
 				entry->value = NULL;
 				
 				free(entry);
-				
+
 				entry = next;
 			}
 		}
@@ -1260,8 +1260,6 @@ ast_layout_t* parser_layout(parser_t* parser)
 	parser_token_eat_nodata(parser, TOKEN_TYPE_LAYOUT);
 	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
 
-	
-
 	while (parser->token_index < parser->lexer->tokens->length) {
 		token_t* current_token = parser_token_get(parser);
 
@@ -1271,7 +1269,7 @@ ast_layout_t* parser_layout(parser_t* parser)
 
 		if (type == AST_TYPE_LAYOUT_ERROR) {
 			parser->token_index++; // Eating the attr name
-
+			
 			parser_token_eat_nodata(parser, TOKEN_TYPE_COLON); // :
 			
 			token_t* attr_value = parser_token_get(parser);
@@ -1280,11 +1278,13 @@ ast_layout_t* parser_layout(parser_t* parser)
 			hashmap_put(layout->attributes, current_token->value, attr_value->value);
 		}
 		else {
-			array_push(layout->elements, parser_layout_element(parser));
+			ast_layout_node_t* element = parser_layout_element(parser);
+			
+			if (element != NULL) {
+				array_push(layout->elements, element);
+			}
 		}
 	}
-	
-	// layout->elements = parser_layout_elements(parser);
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_END);
 
@@ -1585,6 +1585,7 @@ void parser_free(parser_t* parser)
 		if (parser->functions->data != NULL) {
 			for (size_t i = 0; i < parser->functions->length; i++) {
 				print_message("Free function %s\n", ((ast_node_t*) parser->functions->data[i])->data.function_declaration->name);
+
 				if (parser->functions->data[i] != NULL) {
 					ast_node_free((ast_node_t*) parser->functions->data[i]);
 					parser->functions->data[i] = NULL;

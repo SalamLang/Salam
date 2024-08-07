@@ -1775,14 +1775,17 @@ string_t* ast_layout_string(ast_layout_node_t* element, parser_t* parser, int id
 	string_t* attributes = ast_layout_string_attributes(element, parser, element->attributes);
 	if (attributes->length > 0) string_append_char(str, ' ');
 	string_append(str, attributes);
+	string_free(attributes);
 
 	string_t* css_styles = ast_layout_string_attributes(element, parser, element->styles);
 	if (css_styles->length > 0) string_append_char(str, ' ');
 	string_append(str, css_styles);
+	string_free(css_styles);
 
 	string_t* css_hover_styles = ast_layout_string_attributes(element, parser, element->hoverStyles);
 	if (css_hover_styles->length > 0) string_append_char(str, ' ');
 	string_append(str, css_hover_styles);
+	string_free(css_hover_styles);
 
 	if (element->is_mother) {
 		string_append_char(str, '>');

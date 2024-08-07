@@ -473,34 +473,34 @@ void hashmap_string_free(hashmap_t *map)
 	map = NULL;
 }
 
-// void hashmap_array_free(hashmap_t *map)
-// {
-// 	if (map == NULL) return;
+void hashmap_array_free(hashmap_t *map)
+{
+	if (map == NULL) return;
 
-// 	if (map->data != NULL) {
-// 		for (size_t i = 0; i < map->size; i++) {
-// 			hashmap_entry_t *entry = map->data[i];
+	if (map->data != NULL) {
+		for (size_t i = 0; i < map->size; i++) {
+			hashmap_entry_t *entry = map->data[i];
 
-// 			while (entry) {
-// 				hashmap_entry_t *next = entry->next;
-// 				free(entry->key);
-// 				entry->key = NULL;
-// 				array_t* array = entry->value;
-// 				array_free(array);
-// 				entry->value = NULL;
+			while (entry) {
+				hashmap_entry_t *next = entry->next;
+				free(entry->key);
+				entry->key = NULL;
+				array_t* array = entry->value;
+				array_free(array);
+				entry->value = NULL;
 				
-// 				free(entry);
-// 				entry = next;
-// 			}
-// 		}
+				free(entry);
+				entry = next;
+			}
+		}
 
-// 		free(map->data);
-// 		map->data = NULL;
-// 	}
+		free(map->data);
+		map->data = NULL;
+	}
 
-// 	free(map);
-// 	map = NULL;
-// }
+	free(map);
+	map = NULL;
+}
 
 void hashmap_free(hashmap_t *map)
 {
@@ -2598,7 +2598,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 		string_free(css_buffer);
 	}
 	
-	// hashmap_array_free(styles);
+	hashmap_array_free(styles);
 
 	return str;
 }
@@ -2699,11 +2699,17 @@ string_t* generate_string(parser_t* parser, int ident)
 				if (parser->layout->attributes->length > 0) {
 					array_t* title_values = hashmap_get(parser->layout->attributes, "عنوان");
 					if (title_values != NULL && title_values->length > 0) {
-						generate_layout_ident(str, ident + 2);
+						char* titles = array_string(title_values, ", ");
+						
+						if (titles != NULL) {
+							generate_layout_ident(str, ident + 2);
 
-						string_append_str(str, "<title>");
-						string_append_str(str, array_string(title_values, ", "));
-						string_append_str(str, "</title>\n");
+							string_append_str(str, "<title>");
+							string_append_str(str, titles);
+							string_append_str(str, "</title>\n");
+
+							free(titles);
+						}
 					}
 				}
 			}
@@ -2814,7 +2820,7 @@ int main(int argc, char** argv)
 
 	ast_print(parser);
 
-	// generate_print(parser);
+	generate_print(parser);
 	// generate_file(parser, "output.html");
 
 	print_message("free parser\n");

@@ -1746,7 +1746,7 @@ string_t* ast_layout_string_attributes(ast_layout_node_t* element, parser_t* par
 
 				array_t* arr = entry->value;
 				char* str_value = array_string(arr, ", ");
-				// ***********
+
 				string_append_str(buffer, str_value == NULL ? "NULL" : str_value);
 
 				if (str_value != NULL) free(str_value);
@@ -1865,10 +1865,9 @@ void ast_print(parser_t* parser)
 	string_t* tree = ast_string(parser, 0);
 
 	printf("XML AST Tree:\n");
-
 	string_print(tree);
 
-	string_free(tree);
+	if (tree != NULL) string_free(tree);
 }
 
 void generate_layout_ident(string_t* str, int ident)
@@ -2903,7 +2902,8 @@ void generate_file(parser_t* parser, char* output_file)
 	printf("File saved:\n%s\n", code->data);
 
 	fclose(file);
-	string_free(code);
+
+	if (code != NULL) string_free(code);
 }
 
 void generate_print(parser_t* parser)
@@ -2911,10 +2911,9 @@ void generate_print(parser_t* parser)
 	string_t* code = generate_string(parser, 0);
 
 	printf("Generate Code:\n");
-
 	string_print(code);
 
-	string_free(code);
+	if (code != NULL) string_free(code);
 }
 
 int main(int argc, char** argv)
@@ -2927,12 +2926,10 @@ int main(int argc, char** argv)
 	// printf("%s\n", has_css_size_prefix(test1, &out1) == true ? "true" : "false");
 	// printf("%s\n----\n", out1);
 
-
 	// char* test2 = "1234 px";
 	// char* out2;
 	// printf("%s\n", has_css_size_prefix(test2, &out2) == true ? "true" : "false");
 	// printf("%s\n----\n", out2);
-
 
 	// char* test3 = "3.14 px";
 	// char* out3;
@@ -2993,10 +2990,8 @@ int main(int argc, char** argv)
 	lexer_t* lexer = lexer_create(file_data);
 	lexer_lex(lexer);
 
-	if (!passingCode) {
-		array_print(lexer->tokens);
-	}
-	
+	if (!passingCode) array_print(lexer->tokens);
+
 	parser_t* parser = parser_create(lexer);
 	parser_parse(parser);
 

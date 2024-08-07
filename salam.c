@@ -370,7 +370,7 @@ void hashmap_put(hashmap_t *map, const char *key, void *value)
 			free(entry->value);
 			entry->value = NULL;
 
-			entry->value = strdup(value);
+			entry->value = value;
 
 			return;
 		}
@@ -2617,27 +2617,27 @@ char* attribute_css_name(const char* attribute_name)
 
 string_t* generate_layout_element_attribute(parser_t* parser, char* key, array_t* values)
 {
-	string_t* buf = string_create(10);
+	string_t* buffer = string_create(10);
 
 	char* str_values = array_string(values, " ");
 
 	if (str_values != NULL) {
-		string_append_str(buf, key);
-		string_append_char(buf, '=');
+		string_append_str(buffer, key);
+		string_append_char(buffer, '=');
 
 		if (strlen(str_values) == 1) {
-			string_append_str(buf, str_values);
+			string_append_str(buffer, str_values);
 		}
 		else {
-			string_append_char(buf, '\"');
-			string_append_str(buf, str_values);
-			string_append_char(buf, '\"');
+			string_append_char(buffer, '\"');
+			string_append_str(buffer, str_values);
+			string_append_char(buffer, '\"');
 		}
 
 		free(str_values);
 	}
 
-	return buf;
+	return buffer;
 }
 
 string_t* generate_layout_element_attributes_styles(parser_t* parser, ast_layout_node_t* element, int* count)
@@ -2848,6 +2848,7 @@ string_t* generate_string(parser_t* parser, int ident)
 			if (parser->layout->attributes->data != NULL) {
 				if (parser->layout->attributes->length > 0) {
 					array_t* title_values = hashmap_get(parser->layout->attributes, "عنوان");
+					
 					if (title_values != NULL && title_values->length > 0) {
 						char* titles = array_string(title_values, ", ");
 

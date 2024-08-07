@@ -303,6 +303,7 @@ void array_push(array_t* arr, void* data);
 void array_free(array_t* arr);
 void array_print(array_t* arr);
 array_t* array_copy(array_t* arr);
+void array_token_free(array_t* arr);
 
 // Token
 token_t* token_create(token_type_t type, const char* value, int a, int b, int c, int b2, int c2);

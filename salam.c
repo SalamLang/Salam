@@ -223,16 +223,16 @@ void array_push(array_t* arr, void* data)
 
 array_t* array_copy(array_t* arr)
 {
-    if (arr == NULL || arr->length == 0) return NULL;
+	if (arr == NULL || arr->length == 0) return NULL;
 
-    array_t* copy = array_create(arr->length);
-    if (copy == NULL) return NULL;
+	array_t* copy = array_create(arr->length);
+	if (copy == NULL) return NULL;
 
-    for (size_t i = 0; i < arr->length; i++) {
+	for (size_t i = 0; i < arr->length; i++) {
 		array_push(copy, strdup(arr->data[i]));
-    }
+	}
 
-    return copy;
+	return copy;
 
 }
 
@@ -1998,11 +1998,98 @@ char* replace_all_substrings(const char* str, const char* old_substr, const char
 	return result;
 }
 
+bool has_css_size_prefix(char* css_value, char** css_output_value)
+{
+	const char* prefixes[] = {"px", "em", "rem", "vw", "vh", "%", "cm", "mm", "in", "pt", "pc", "ex", "ch", "vmin", "vmax"};
+	int num_prefixes = sizeof(prefixes) / sizeof(prefixes[0]);
+	
+	const char* persian_prefixes[] = {"پیکسل", "ای ام", "رایم", "ویو ویدث", "ویو هایت", "درصد", "سانتیمتر", "میلیمتر", "اینچ", "پوینت", "پیکا", "اکس", "سی اچ", "وی مین", "وی مکس"};
+	int num_persian_prefixes = sizeof(persian_prefixes) / sizeof(persian_prefixes[0]);
+
+	size_t len = strlen(css_value);
+	if (len == 0) {
+		*css_output_value = NULL;
+		return false;
+	}
+
+	string_t* buffer = string_create(len);
+
+	size_t i = 0;
+	if (css_value[i] == '-' || css_value[i] == '+') {
+		if (css_value[i] == '-') string_append_char(buffer, css_value[i]);
+
+		i++;
+	}
+
+	if (!isdigit(css_value[i])) {
+		*css_output_value = NULL;
+		return false;
+	}
+
+	bool decimal_point_found = false;
+	while (i < len && (isdigit(css_value[i]) || (css_value[i] == '.' && !decimal_point_found))) {
+		if (css_value[i] == '.') {
+			string_append_char(buffer, css_value[i]);
+			decimal_point_found = true;
+		}
+		else {
+			string_append_char(buffer, css_value[i]);
+		}
+
+		i++;
+	}
+
+	while (i < len && isspace(css_value[i])) i++;
+
+	for (int j = 0; j < num_prefixes; j++) {
+		size_t prefix_len = strlen(prefixes[j]);
+		if (len - i == prefix_len && strncmp(css_value + i, prefixes[j], prefix_len) == 0) {
+			string_append_str(buffer, prefixes[j]);
+			*css_output_value = strdup(buffer->data);
+
+			string_free(buffer);
+
+			return true;
+		}
+	}
+
+	for (int j = 0; j < num_persian_prefixes; j++) {
+		size_t prefix_len = strlen(persian_prefixes[j]);
+		if (len - i == prefix_len && strncmp(css_value + i, persian_prefixes[j], prefix_len) == 0) {
+			string_append_str(buffer, prefixes[j]);
+			*css_output_value = strdup(buffer->data);
+
+			string_free(buffer);
+			
+			return true;
+		}
+	}
+	
+	*css_output_value = NULL;
+
+	return false;	
+}
+
 char* attribute_css_multiple_size_value(char* attribute_name, array_t* attribute_values)
 {
 	if (attribute_values == NULL || attribute_values->length == 0) return NULL;
 
-	return array_string(attribute_values, ", ");
+	if (attribute_values->length == 1) {
+		int value_length = strlen(attribute_values->data[0]);
+
+		char* res;
+		CREATE_MEMORY_OBJECT(res, char, value_length, "Error: attribute_css_multiple_size_value<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
+		strcpy(res, attribute_values->data[0]);
+
+		if (string_is_number(attribute_values->data[0])) strcat(res, "px");
+
+		return res;
+	}
+
+
+
+	// return array_string(attribute_values, ", ");
 	// return attribute_css_size_value(attribute_name, attribute_value);
 	
 	// int attribute_value_length = strlen(attribute_value) + 2;
@@ -2411,12 +2498,10 @@ char* attribute_css_values(char* attribute_name, array_t* attribute_values)
 		}
 	}
 	else if (strcmp(attribute_name, "border-radius") == 0 || strcmp(attribute_name, "padding") == 0 || strcmp(attribute_name, "margin") == 0) {
-		if (attribute_values->length == 1 || attribute_values->length == 2 || attribute_values->length == 4) {
-			char* size_value = attribute_css_multiple_size_value(attribute_name, attribute_values);
-			if (size_value) {
-				free(res);
-				return size_value;
-			}
+		char* size_value = attribute_css_multiple_size_value(attribute_name, attribute_values);
+		if (size_value) {
+			free(res);
+			return size_value;
 		}
 	}
 	else if (strcmp(attribute_name, "border-size") == 0) {
@@ -2772,6 +2857,40 @@ int main(int argc, char** argv)
 {
 	// setlocale(LC_ALL, "");
 	setlocale(LC_ALL, "C.UTF-8");
+
+	// char* test1 = "1px";
+	// char* out1;
+	// printf("%s\n", has_css_size_prefix(test1, &out1) == true ? "true" : "false");
+	// printf("%s\n----\n", out1);
+
+
+	// char* test2 = "1234 px";
+	// char* out2;
+	// printf("%s\n", has_css_size_prefix(test2, &out2) == true ? "true" : "false");
+	// printf("%s\n----\n", out2);
+
+
+	// char* test3 = "3.14 px";
+	// char* out3;
+	// printf("%s\n", has_css_size_prefix(test3, &out3) == true ? "true" : "false");
+	// printf("%s\n----\n", out3);
+
+	// char* test4 = "-3.14پیکسل";
+	// char* out4;
+	// printf("%s\n", has_css_size_prefix(test4, &out4) == true ? "true" : "false");
+	// printf("%s\n----\n", out4);
+
+	// char* test5 = "-3.14";
+	// char* out5;
+	// printf("%s\n", has_css_size_prefix(test5, &out5) == true ? "true" : "false");
+	// printf("%s\n----\n", out5);
+
+	// char* test6 = "px";
+	// char* out6;
+	// printf("%s\n", has_css_size_prefix(test6, &out6) == true ? "true" : "false");
+	// printf("%s\n----\n", out6);
+
+	// return 0;
 
 	if (argc == 1 || argc > 3) {
 		help();

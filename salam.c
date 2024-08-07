@@ -2579,7 +2579,11 @@ char* attribute_css_name(const char* attribute_name)
 	else if (strcmp(attribute_name, "تصویر") == 0) strcpy(res, "background-image");
 	else if (strcmp(attribute_name, "ماوس") == 0) strcpy(res, "cursor");
 	else if (strcmp(attribute_name, "گردی") == 0) strcpy(res, "border-radius");
-	else return NULL;
+	else {
+		free(res);
+		
+		return NULL;
+	}
 
 	return res;
 }
@@ -2612,8 +2616,6 @@ string_t* generate_layout_element_attribute(parser_t* parser, char* key, array_t
 string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t* element, array_t** element_content, int ident)
 {
 	string_t* str = string_create(10);
-
-	hashmap_t* styles = hashmap_create();
 
 	int css_attrs = 0;
 	int html_attrs = 0;
@@ -2651,8 +2653,8 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	if (element->styles != NULL && element->styles->length > 0) {
 		string_t* css_buffer = string_create(10);
 
-		for (size_t i = 0; i < styles->size; i++) {
-			hashmap_entry_t *entry = styles->data[i];
+		for (size_t i = 0; i < element->styles->size; i++) {
+			hashmap_entry_t *entry = element->styles->data[i];
 
 			while (entry) {
 				css_attrs++;
@@ -2672,7 +2674,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 
 							string_append_str(css_buffer, buf2);
 
-							if (styles->length != css_attrs) string_append_char(css_buffer, ';');
+							if (element->styles->length != css_attrs) string_append_char(css_buffer, ';');
 
 							free(buf2);
 							buf2 = NULL;
@@ -2698,8 +2700,6 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 		string_free(css_buffer);
 	}
 	
-	hashmap_array_free(styles);
-
 	return str;
 }
 

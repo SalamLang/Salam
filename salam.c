@@ -1178,10 +1178,10 @@ hashmap_t* parser_layout_element_attributes(parser_t* parser, ast_layout_type_t 
 			char* attribute_key = current_token->value;
 
 			if (is_style_attribute(attribute_key)) {
-				hashmap_put(attributes, attribute_key, values);
+				hashmap_put(styles, attribute_key, values);
 			}
 			else {
-				hashmap_put(styles, attribute_key, values);
+				hashmap_put(attributes, attribute_key, values);
 			}
 		}
 		else if (type != AST_TYPE_LAYOUT_HOVER) {
@@ -2581,7 +2581,7 @@ char* attribute_css_name(const char* attribute_name)
 	else if (strcmp(attribute_name, "گردی") == 0) strcpy(res, "border-radius");
 	else {
 		free(res);
-		
+
 		return NULL;
 	}
 
@@ -2621,11 +2621,18 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	int html_attrs = 0;
 
 	if (element->attributes != NULL && element->attributes->length > 0) {
+		printf("has attrs\n");
 		for (size_t i = 0; i < element->attributes->size; i++) {
 			hashmap_entry_t *entry = element->attributes->data[i];
+			printf("for iterate\n");
 
 			while (entry) {
-				if (strcmp(entry->key, "محتوا") == 0) *element_content = array_copy(entry->value);
+				printf("-->%s\n", entry->key);
+
+				if (strcmp(entry->key, "محتوا") == 0) {
+					printf("is content\n");
+					*element_content = array_copy(entry->value);
+				}
 				else {
 					char* newKey;
 					CREATE_MEMORY_OBJECT(newKey, char, 100, "Error: generate_layout_element_attributes<newKey> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -2638,8 +2645,6 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 						string_append(str, buf);
 
 						string_free(buf);
-
-						free(newKey);
 					}
 					
 					free(newKey);
@@ -2689,7 +2694,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 			}
 		}
 
-		if (css_buffer->length > 0) {
+		if (css_buffer != NULL && css_buffer->length > 0) {
 			if (html_attrs > 0) string_append_char(str, ' ');
 
 			string_append_str(str, "style=\"");
@@ -2697,7 +2702,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 			string_append_str(str, "\"");
 		}
 
-		string_free(css_buffer);
+		if (css_buffer != NULL) string_free(css_buffer);
 	}
 	
 	return str;
@@ -2718,8 +2723,10 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 	string_append_char(str, '<');
 	string_append_str(str, element_name);
 
+	string_append_str(str, "...");
+
 	string_t* buf = generate_layout_element_attributes(parser, element, &element_content, ident);
-	if (buf->length > 0) {
+	if (buf != NULL && buf->length > 0) {
 		string_append_char(str, ' ');
 		
 		string_append(str, buf);
@@ -2739,7 +2746,7 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 					ast_layout_node_t *entry = element->children->data[i];
 
 					string_t* buf = generate_layout_element(entry, parser, ident + 1);
-					if (buf) {
+					if (buf != NULL && buf->length > 0) {
 						string_append(str, buf);
 						string_free(buf);
 					}

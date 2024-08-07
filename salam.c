@@ -1127,7 +1127,7 @@ hashmap_t* parser_layout_element_attributes(parser_t* parser, array_t* children)
 
 			parser_token_eat_nodata(parser, TOKEN_TYPE_COLON); // :
 			
-			array_t* values = array_create(2);
+			array_t* values = array_create(1);
 
 			while (parser->token_index < parser->lexer->tokens->length) {
 				token_t* attr_value = parser_token_get(parser);
@@ -1277,7 +1277,7 @@ ast_layout_t* parser_layout(parser_t* parser)
 
 			array_t* values = array_create(1);
 			array_push(values, attr_value->value);
-			
+
 			hashmap_put(layout->attributes, current_token->value, values);
 		}
 		else {
@@ -2508,6 +2508,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 
 					if (is_style_attribute(entry->key) && isBorderTable == false) {
 						array_t* values = array_copy(entry->value);
+						
 						hashmap_put(styles, entry->key, values);
 					}
 					else {

@@ -486,6 +486,7 @@ void hashmap_array_free(hashmap_t *map)
 				free(entry->key);
 				entry->key = NULL;
 				array_t* array = entry->value;
+
 				array_free(array);
 				entry->value = NULL;
 				
@@ -2070,148 +2071,55 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 	return false;	
 }
 
+char* normalise_css_size(char* attribute_value)
+{
+    if (!string_is_number(attribute_value)) return attribute_value;
+
+    int value_length = strlen(attribute_value) + 3;
+
+    char* res = realloc(attribute_value, value_length * sizeof(char));
+    CHECK_MEMORY_ALLOCATION(res, "Error: normalise_css_size<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
+    strcat(res, "px");
+
+    return res;
+}
+
 char* attribute_css_multiple_size_value(char* attribute_name, array_t* attribute_values)
 {
 	if (attribute_values == NULL || attribute_values->length == 0) return NULL;
 
 	if (attribute_values->length == 1) {
-		int value_length = strlen(attribute_values->data[0]);
+		char* value = strdup(attribute_values->data[0]);
+		value = normalise_css_size(value);
 
-		char* res;
-		CREATE_MEMORY_OBJECT(res, char, value_length, "Error: attribute_css_multiple_size_value<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-
-		strcpy(res, attribute_values->data[0]);
-
-		if (string_is_number(attribute_values->data[0])) strcat(res, "px");
-
-		return res;
+		return value;
 	}
 
+	string_t* buffer = string_create(10);
 
+	for (size_t i = 0; i < attribute_values->length; i++) {
+		char* value = strdup(attribute_values->data[i]);
+		value = normalise_css_size(value);
+		
+		char* out_value;
+		if (!has_css_size_prefix(value, &out_value)) return NULL;
 
-	// return array_string(attribute_values, ", ");
-	// return attribute_css_size_value(attribute_name, attribute_value);
-	
-	// int attribute_value_length = strlen(attribute_value) + 2;
+		if (value != NULL) free(value);
 
-	// char* res;
-	// CREATE_MEMORY_OBJECT(res, char, attribute_value_length, "Error: attribute_css_multiple_size_value<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-	
-	// strcpy(res, attribute_value);
+		if (out_value != NULL) {
+			string_append_str(buffer, out_value);
 
-	// if (string_is_number(attribute_value)) {
-	// 	strcat(res, "px");
+			if (out_value != NULL) free(out_value);
 
-	// 	return res;
-	// }
+			if (i != attribute_values->length - 1) string_append_char(buffer, ' ');
+		}
+	}
 
-	// bool hasError = false;
-	// char* trimmed_value = trim_whitespace(attribute_value);
-	// array_t* split_values = split_by_space(trimmed_value);
+	char* buf = strdup(buffer->data);
+	string_free(buffer);
 
-	// array_t* arr = array_create(10);
-
-	// if (split_values->length == 1) {
-	// 	char* first = split_values->data[0];
-	// 	if (string_is_number(first)) {
-	// 		size_t new_length = strlen(first) + 2;
-
-	// 		char* new_value;
-	// 		CREATE_MEMORY_OBJECT(new_value, char, new_length, "Error: attribute_css_multiple_size_value<new_value1> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-
-	// 		strcpy(new_value, first);
-	// 		strcat(new_value, "px");
-
-	// 		array_push(arr, new_value);
-	// 	}
-	// }
-
-	// for (size_t i = 0; i < split_values->length; i++) {
-	// 	char* value = split_values->data[i];
-
-	// 	printf("-->%s\n", value);
-
-	// 	if (string_is_number(value)) {
-	// 		if (strcmp(split_values->data[i + 1], "px") == 0 ||
-	// 			strcmp(split_values->data[i + 1], "پیکسل") == 0 ||
-	// 			strcmp(split_values->data[i + 1], "cm") == 0 ||
-	// 			strcmp(split_values->data[i + 1], "سانتیمتر") == 0 ||
-	// 			strcmp(split_values->data[i + 1], "سانت") == 0 ||
-	// 			strcmp(split_values->data[i + 1], "em") == 0 ||
-	// 			strcmp(split_values->data[i + 1], "اندازه_قلم") == 0 ||
-	// 			strcmp(split_values->data[i + 1], "rem") == 0 ||
-	// 			strcmp(split_values->data[i + 1], "اندازه_قلم_ریشه") == 0 ||
-	// 			strcmp(split_values->data[i + 1], "vw") == 0 ||
-	// 			strcmp(split_values->data[i + 1], "عرض_صفحه") == 0 ||
-	// 			strcmp(split_values->data[i + 1], "vh") == 0 ||
-	// 			strcmp(split_values->data[i + 1], "ارتفاع_صفحه") == 0 ||
-	// 			strcmp(split_values->data[i + 1], "vmin") == 0 ||
-	// 			strcmp(split_values->data[i + 1], "vmax") == 0
-	// 		) {
-	// 			char* prev_value = split_values->data[i - 1];
-	// 			size_t new_length = strlen(prev_value) + 3;
-
-	// 			char* new_value;
-	// 			CREATE_MEMORY_OBJECT(new_value, char, new_length, "Error: attribute_css_multiple_size_value<new_value2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-
-	// 			strcpy(new_value, prev_value);
-	// 			strcat(new_value, "px");
-
-	// 			free(split_values->data[i - 1]);
-	// 			split_values->data[i - 1] = new_value;
-
-	// 			printf("\tnew value: %s\n", new_value);
-
-	// 		}
-	// 		else {
-	// 			char* current_length = split_values->data[i];
-
-	// 			char* new_value;
-	// 			CREATE_MEMORY_OBJECT(new_value, char, strlen(current_length) + 2, "Error: attribute_css_multiple_size_value<new_value3> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-
-	// 			strcpy(new_value, value);
-	// 			strcat(new_value, "px");
-
-	// 			array_push(arr, new_value);
-	// 		}
-	// 	}
-	// 	else {
-	// 		if (string_is_number(split_values->data[i - 1])) {
-	// 			continue; // Already handled!
-	// 		}
-	// 		else {
-	// 			array_push(arr, strdup(value));
-	// 		}
-	// 	}
-	// }
-
-	// if (hasError == false) {
-	// 	size_t final_length = 1;
-	// 	for (size_t i = 0; i < split_values->length; i++) {
-	// 		final_length += strlen(split_values->data[i]) + 1;
-	// 	}
-
-	// 	char* final_result;
-	// 	CREATE_MEMORY_OBJECT(final_result, char, final_length, "Error: attribute_css_multiple_size_value<final_result> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-	// 	final_result[0] = '\0';
-
-	// 	for (size_t i = 0; i < split_values->length; i++) {
-	// 		strcat(final_result, split_values->data[i]);
-
-	// 		if (i < split_values->length - 1) strcat(final_result, " ");
-	// 	}
-
-	// 	array_free(split_values);
-	// 	array_free(arr);
-	// 	free(res);
-
-	// 	return final_result;
-	// }
-	// else {
-	// 	free(res);
-
-	// 	return NULL;
-	// }
+	return buf;
 }
 
 char* attribute_css_size_value(char* attribute_name, char* attribute_value)
@@ -2939,7 +2847,7 @@ int main(int argc, char** argv)
 	ast_print(parser);
 
 	generate_print(parser);
-	// generate_file(parser, "output.html");
+	generate_file(parser, "output.html");
 
 	print_message("free parser\n");
 	parser_free(parser);

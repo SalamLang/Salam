@@ -1140,7 +1140,7 @@ hashmap_t* parser_layout_element_attributes(parser_t* parser, array_t* children)
 
 				if (attr_value->type == TOKEN_TYPE_END || attr_value->type == TOKEN_TYPE_EOF) break;
 
-				array_push(values, attr_value->value);
+				array_push(values, strdup(attr_value->value));
 				parser->token_index++;
 
 				if (parser->token_index < parser->lexer->tokens->length) {
@@ -1743,8 +1743,9 @@ string_t* ast_layout_string(ast_layout_node_t* element, parser_t* parser, int id
 
 				array_t* arr = entry->value;
 				char* str_value = array_string(arr, ", ");
-
 				string_append_str(str, str_value == NULL ? "NULL" : str_value);
+
+				if (str_value != NULL) free(str_value);
 
 				string_append_char(str, '\"');
 

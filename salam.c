@@ -1162,7 +1162,7 @@ hashmap_t* parser_layout_element_attributes(parser_t* parser, array_t* children)
 			hashmap_put(attributes, current_token->value, values);
 		}
 		else {
-			array_push(children, parser_layout_element(parser));
+			array_push(children, parser_layout_element(parser, true));
 		}
 	}
 
@@ -1189,7 +1189,7 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 	return element;
 }
 
-ast_layout_node_t* parser_layout_element(parser_t* parser)
+ast_layout_node_t* parser_layout_element(parser_t* parser, bool isMain)
 {
 	token_t* current_token = parser_token_get(parser);
 
@@ -1239,7 +1239,7 @@ array_t* parser_layout_elements(parser_t* parser)
 		token_t* current_token = parser_token_get(parser);
 
 		if (current_token->type == TOKEN_TYPE_IDENTIFIER) {
-			ast_layout_node_t* element = parser_layout_element(parser);
+			ast_layout_node_t* element = parser_layout_element(parser, false);
 			if (element == NULL) {
 				token_free(current_token);
 				array_free(elements);
@@ -1292,7 +1292,7 @@ ast_layout_t* parser_layout(parser_t* parser)
 			hashmap_put(layout->attributes, current_token->value, values);
 		}
 		else {
-			ast_layout_node_t* element = parser_layout_element(parser);
+			ast_layout_node_t* element = parser_layout_element(parser, true);
 
 			if (element != NULL) {
 				array_push(layout->elements, element);

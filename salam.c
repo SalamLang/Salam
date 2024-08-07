@@ -2608,18 +2608,17 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 								html_attrs++;
 
 								string_t* buf = generate_layout_element_attribute(parser, newKey, entry->value);
-								free(newKey);
 								string_append(str, buf);
 
 								string_free(buf);
 							}
 							else {
-								free(newKey);
-
 								entry = entry->next;
 
 								continue;
 							}
+							
+							free(newKey);
 						}
 					}
 					

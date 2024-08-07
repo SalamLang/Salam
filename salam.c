@@ -1746,6 +1746,7 @@ string_t* ast_layout_string_attributes(ast_layout_node_t* element, parser_t* par
 
 				array_t* arr = entry->value;
 				char* str_value = array_string(arr, ", ");
+				// ***********
 				string_append_str(buffer, str_value == NULL ? "NULL" : str_value);
 
 				if (str_value != NULL) free(str_value);

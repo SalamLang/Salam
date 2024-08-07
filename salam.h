@@ -195,6 +195,9 @@ typedef enum {
 
 typedef enum {
 	AST_TYPE_LAYOUT_ERROR,
+
+	AST_TYPE_LAYOUT_BODY,
+
 	AST_TYPE_LAYOUT_BUTTON,
 	AST_TYPE_LAYOUT_TEXT,
 	AST_TYPE_LAYOUT_INPUT,
@@ -248,7 +251,7 @@ typedef struct ast_node {
 	ast_node_type_t type;
 	union {
 		ast_function_declaration_t* function_declaration;
-		ast_layout_t* layout;
+		ast_layout_node_t* layout;
 	} data;
 } ast_node_t;
 
@@ -258,7 +261,7 @@ typedef struct {
 	array_t* functions;
 	array_t* expressions;
 
-	ast_layout_t* layout;
+	ast_layout_node_t* layout;
 } parser_t;
 
 // Function Declarations
@@ -274,10 +277,10 @@ bool is_arabic_digit(wchar_t ch);
 bool string_is_number(const char* value);
 char* attribute_css_values(char* attribute_name, array_t* attribute_values);
 char* normalise_css_size(char* attribute_value);
-bool is_allowed_layout_property(bool is_mother, ast_layout_type_t type, char* attribute_name);
-bool is_allowed_single_layout_property(ast_layout_type_t type, char* attribute_name);
-bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_name);
-bool is_allowed_general_layout_property(char* attribute_name);
+bool is_allowed_single_layout_property(ast_layout_type_t type, char* attribute_name, char** new_attribute_name);
+bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_name, char** new_attribute_name);
+bool is_allowed_general_layout_property(char* attribute_name, char** new_attribute_name);
+bool is_allowed_layout_property(bool is_mother, ast_layout_type_t type, char* attribute_name, char** new_attribute_name);
 
 // String
 string_t* string_create(size_t initial_size);
@@ -356,7 +359,7 @@ array_t* parser_layout_elements(parser_t* parser);
 ast_layout_node_t* parser_layout_element(parser_t* parser);
 ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t* parser);
 ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t* parser);
-ast_layout_t* parser_layout(parser_t* parser);
+ast_layout_node_t* parser_layout(parser_t* parser);
 
 void help();
 int main(int argc, char** argv);

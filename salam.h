@@ -200,6 +200,7 @@ typedef enum {
 
 	AST_TYPE_LAYOUT_BUTTON,
 	AST_TYPE_LAYOUT_TEXT,
+	AST_TYPE_LAYOUT_HOVER,
 	AST_TYPE_LAYOUT_INPUT,
 	AST_TYPE_LAYOUT_LINE,
 	AST_TYPE_LAYOUT_LINK,
@@ -234,6 +235,10 @@ typedef struct {
 	bool is_mother;
 
 	hashmap_t* attributes;
+
+	hashmap_t* styles;
+	hashmap_t* hoverStyles;
+
 	array_t* children;
 } ast_layout_node_t;
 
@@ -281,6 +286,7 @@ bool is_allowed_single_layout_property(ast_layout_type_t type, char* attribute_n
 bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_name, char** new_attribute_name);
 bool is_allowed_general_layout_property(char* attribute_name, char** new_attribute_name);
 bool is_allowed_layout_property(bool is_mother, ast_layout_type_t type, char* attribute_name, char** new_attribute_name);
+bool is_style_attribute(char* attribute_name);
 
 // String
 string_t* string_create(size_t initial_size);
@@ -355,7 +361,8 @@ void parser_free(parser_t* parser);
 token_t* parser_token_get(parser_t* parser);
 void parser_token_eat_nodata(parser_t* parser, token_type_t type);
 token_t* parser_token_eat(parser_t* parser, token_type_t type);
-array_t* parser_layout_elements(parser_t* parser);
+// array_t* parser_layout_elements(parser_t* parser);
+hashmap_t* parser_layout_element_attributes(parser_t* parser, ast_layout_type_t type, array_t* children, hashmap_t** styles, hashmap_t** hoverStyles);
 ast_layout_node_t* parser_layout_element(parser_t* parser);
 ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t* parser);
 ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t* parser);

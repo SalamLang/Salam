@@ -1186,7 +1186,11 @@ hashmap_t* parser_layout_element_attributes(parser_t* parser, ast_layout_type_t 
 		else if (type == AST_TYPE_LAYOUT_HOVER) {
 			ast_layout_node_t* element = parser_layout_element(parser);
 			
-			*hoverStyles = element->attributes;
+			*hoverStyles = element->styles;
+			hashmap_array_free(element->hoverStyles);
+			array_free(element->children);
+
+			free(element);
 		}
 		else {
 			ast_layout_node_t* element = parser_layout_element(parser);
@@ -2620,6 +2624,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	string_t* str = string_create(10);
 
 	int css_attrs = 0;
+	int css_hover_attrs = 0;
 	int html_attrs = 0;
 
 	if (element->attributes != NULL && element->attributes->length > 0) {
@@ -2714,7 +2719,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 			hashmap_entry_t *entry = element->hoverStyles->data[i];
 
 			while (entry) {
-				css_attrs++;
+				css_hover_attrs++;
 
 				char* buf1 = attribute_css_name(entry->key);
 
@@ -2731,7 +2736,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 
 							string_append_str(css_hover_buffer, buf2);
 
-							if (element->hoverStyles->length != css_attrs) string_append_char(css_hover_buffer, ';');
+							if (element->hoverStyles->length != css_hover_attrs) string_append_char(css_hover_buffer, ';');
 
 							free(buf2);
 							buf2 = NULL;

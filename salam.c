@@ -1125,8 +1125,8 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t
 	element->type = type;
 	element->children = array_create(1);
 	element->attributes = hashmap_create();
-	element->styles = hashmap_create();
-	element->hoverStyles = hashmap_create();
+	element->styles = NULL; // hashmap_create();
+	element->hoverStyles = NULL; // hashmap_create();
 	element->is_mother = false;
 
 	parser->token_index++; // Eating keyword
@@ -1476,6 +1476,8 @@ void ast_layout_node_free(ast_layout_node_t* node)
 	if (node == NULL) return;
 
 	attributes_free(node->attributes);
+	attributes_free(node->styles);
+	attributes_free(node->hoverStyles);
 
 	children_free(node->children);
 

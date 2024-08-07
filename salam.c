@@ -369,7 +369,8 @@ void hashmap_put(hashmap_t *map, const char *key, void *value)
 		entry = entry->next;
 	}
 
-	hashmap_entry_t *new_entry = (hashmap_entry_t*) malloc(sizeof(hashmap_entry_t));
+	hashmap_entry_t *new_entry;
+	CREATE_MEMORY_OBJECT(new_entry, hashmap_entry_t, 1, "Error: hashmap_put<new_entry> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	new_entry->key = strdup(key);
 	new_entry->value = value;
 	new_entry->next = map->data[index];
@@ -1998,8 +1999,13 @@ char* replace_substring(const char* str, const char* old_substr, const char* new
 {
 	const char *pos = strstr(str, old_substr);
 	if (pos == NULL) {
-		char *result = (char*) malloc(strlen(str) + 1);
+		size_t result_len = strlen(str);
+
+		char *result;
+		CREATE_MEMORY_OBJECT(result, char, result_len + 1, "Error: replace_substring<result1> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 		strcpy(result, str);
+
 		return result;
 	}
 
@@ -2008,7 +2014,7 @@ char* replace_substring(const char* str, const char* old_substr, const char* new
 	size_t result_len = strlen(str) - old_len + new_len;
 
 	char *result;
-	CREATE_MEMORY_OBJECT(result, char, result_len + 1, "Error: replace_substring<result> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	CREATE_MEMORY_OBJECT(result, char, result_len + 1, "Error: replace_substring<result2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	size_t pos_index = pos - str;
 	strncpy(result, str, pos_index);
@@ -2196,19 +2202,13 @@ char* attribute_css_multiple_size_value(char* attribute_name, array_t* attribute
 
 char* attribute_css_size_value(char* attribute_name, char* attribute_value)
 {
-	printf("---------------------->>>> ");
-	printf("%s - ", attribute_name);
-	printf("%s\n", attribute_value);
-	
 	char* res;
 	int attribute_value_length = strlen(attribute_value) + 3;
 	CREATE_MEMORY_OBJECT(res, char, attribute_value_length, "Error: attribute_css_size_value<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	strcpy(res, attribute_value);
 
-	printf("check...");
 	if (string_is_number(attribute_value)) strcat(res, "px");
-	printf("passed...");
 
 	return res;
 }
@@ -2615,7 +2615,8 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 					else {
 						if (strcmp(entry->key, "محتوا") == 0) *element_content = array_copy(entry->value);
 						else {
-							char* newKey = malloc(sizeof(char) * 100);
+							char* newKey;
+							CREATE_MEMORY_OBJECT(newKey, char, 100, "Error: generate_layout_element_attributes<newKey> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 							if ((is_allowed_layout_property(element->is_mother, element->type, entry->key, &newKey) == true) && newKey != NULL) {
 								if (html_attrs != 0) string_append_char(str, ' ');

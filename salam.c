@@ -79,18 +79,17 @@ char* intToString(int value)
 
 	char* result;
 	CREATE_MEMORY_OBJECT(result, char, numDigits + 1 + (sign == -1 ? 1 : 0), "Error: intToString<result> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-	if (result != NULL) {
-		if (sign == -1) {
-			result[0] = '-';
-		}
-
-		for (int i = numDigits - 1 + (sign == -1 ? 1 : 0); i >= (sign == -1 ? 1 : 0); i--) {
-			result[i] = '0' + abs(value % 10);
-			value /= 10;
-		}
-
-		result[numDigits + (sign == -1 ? 1 : 0)] = '\0';
+	
+	if (sign == -1) {
+		result[0] = '-';
 	}
+
+	for (int i = numDigits - 1 + (sign == -1 ? 1 : 0); i >= (sign == -1 ? 1 : 0); i--) {
+		result[i] = '0' + abs(value % 10);
+		value /= 10;
+	}
+
+	result[numDigits + (sign == -1 ? 1 : 0)] = '\0';
 
 	return result;
 }
@@ -1184,11 +1183,15 @@ hashmap_t* parser_layout_element_attributes(parser_t* parser, ast_layout_type_t 
 				hashmap_put(attributes, attribute_key, values);
 			}
 		}
-		else if (type != AST_TYPE_LAYOUT_HOVER) {
+		else if (type == AST_TYPE_LAYOUT_HOVER) {
+			ast_layout_node_t* element = parser_layout_element(parser);
+			
+			*hoverStyles = element->attributes;
+		}
+		else {
 			ast_layout_node_t* element = parser_layout_element(parser);
 
-			if (element->type == AST_TYPE_LAYOUT_HOVER) *hoverStyles = element->attributes;
-			else array_push(children, element);
+			array_push(children, element);
 		}
 	}
 
@@ -1197,9 +1200,9 @@ hashmap_t* parser_layout_element_attributes(parser_t* parser, ast_layout_type_t 
 
 ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t* parser)
 {
-	printf("parser_layout_element_mother\n");
 	ast_layout_node_t* element;
 	CREATE_MEMORY_OBJECT(element, ast_layout_node_t, 1, "Error: parser_layout_element_mother<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 	element->type = type;
 	element->children = array_create(1);
 	element->styles = hashmap_create();
@@ -1640,14 +1643,12 @@ string_t* string_create(size_t initial_size)
 {
 	string_t* str;
 	CREATE_MEMORY_OBJECT(str, string_t, 1, "Error: string_create<str> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 	str->size = initial_size;
 	str->length = 0;
 
 	CREATE_MEMORY_OBJECT(str->data, char, initial_size, "Error: string_create<str_data> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-	if (str->data == NULL) {
-		fprintf(stderr, "Memory allocation failed\n");
-		exit(1);
-	}
+
 	str->data[0] = '\0';
 
 	return str;
@@ -2073,6 +2074,7 @@ char* replace_all_substrings(const char* str, const char* old_substr, const char
 	if (old_len == 0) {
 		char *result;
 		CREATE_MEMORY_OBJECT(result, char, str_len + 1, "Error: replace_all_substrings<result1> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 		strcpy(result, str);
 		return result;
 	}
@@ -2703,6 +2705,56 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 		}
 
 		if (css_buffer != NULL) string_free(css_buffer);
+	}
+
+	if (element->hoverStyles != NULL && element->hoverStyles->length > 0) {
+		string_t* css_hover_buffer = string_create(10);
+
+		for (size_t i = 0; i < element->hoverStyles->size; i++) {
+			hashmap_entry_t *entry = element->hoverStyles->data[i];
+
+			while (entry) {
+				css_attrs++;
+
+				char* buf1 = attribute_css_name(entry->key);
+
+				if (buf1 != NULL) {
+					array_t* values = entry->value;
+
+					if (values != NULL && values->length > 0) {
+						char* buf2 = attribute_css_values(buf1, values);
+
+						if (buf2 != NULL) {
+							string_append_str(css_hover_buffer, buf1);
+
+							string_append_char(css_hover_buffer, ':');
+
+							string_append_str(css_hover_buffer, buf2);
+
+							if (element->hoverStyles->length != css_attrs) string_append_char(css_hover_buffer, ';');
+
+							free(buf2);
+							buf2 = NULL;
+						}
+					}
+
+					free(buf1);
+					buf1 = NULL;
+				}
+
+				entry = entry->next;
+			}
+		}
+
+		if (css_hover_buffer != NULL && css_hover_buffer->length > 0) {
+			if (html_attrs > 0 || css_attrs > 0) string_append_char(str, ' ');
+
+			string_append_str(str, "hover_style=\"");
+			string_append(str, css_hover_buffer);
+			string_append_str(str, "\"");
+		}
+
+		if (css_hover_buffer != NULL) string_free(css_hover_buffer);
 	}
 	
 	return str;

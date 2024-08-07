@@ -1331,7 +1331,7 @@ token_t* parser_token_get(parser_t* parser)
 {
 	if (parser->lexer->tokens->length > parser->token_index) {
 		token_t* token = parser->lexer->tokens->data[parser->token_index];
-		
+
 		return token;
 	}
 
@@ -1344,7 +1344,9 @@ token_t* parser_token_eat(parser_t* parser, token_type_t type)
 		token_t* token = parser_token_get(parser);
 
 		if (token->type == type) {
-			return (token_t*) parser->lexer->tokens->data[parser->token_index++];
+			token_t* token = parser->lexer->tokens->data[parser->token_index];
+
+			return token;
 		}
 		else {
 			token_free(token);
@@ -1364,10 +1366,8 @@ token_t* parser_token_eat(parser_t* parser, token_type_t type)
 
 void parser_parse(parser_t* parser)
 {
-	// Empty tokens
 	if (parser->lexer->tokens->length == 0) return;
 
-	// Only one EOF token
 	if (parser->lexer->tokens->length == 1 && ((token_t*)parser->lexer->tokens->data[0])->type == TOKEN_TYPE_EOF) return;
 
 	ast_node_t* layout_node;
@@ -1380,6 +1380,7 @@ void parser_parse(parser_t* parser)
 		switch (current_token->type) {
 			case TOKEN_TYPE_EOF:
 				parser->token_index++;
+
 				return;
 
 			// case TOKEN_TYPE_FUNCTION:
@@ -1387,10 +1388,12 @@ void parser_parse(parser_t* parser)
 			// 	if (parser->functions && function_node != NULL) {
 			// 		array_push(parser->functions, function_node);
 			// 	}
+			// 
 			// 	break;
 
 			case TOKEN_TYPE_LAYOUT:
 				parser->layout = parser_layout(parser);
+
 				break;
 			
 			case TOKEN_TYPE_IDENTIFIER:
@@ -1400,7 +1403,7 @@ void parser_parse(parser_t* parser)
 			default:
 				// if (parser_expression_has(parser)) {
 				// 	CREATE_MEMORY_OBJECT(expression_node, ast_node_t, 1, "Error: parser_parse<expression_node> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-
+				// 
 				// 	expression_node->type = AST_EXPRESSION;
 				// 	expression_node->data.expression = parser_expression(parser);
 				// 	if (parser->expressions && expression_node != NULL) {
@@ -1412,6 +1415,7 @@ void parser_parse(parser_t* parser)
 
 					exit(EXIT_FAILURE);
 				// }
+				
 				break;
 		}
 	}

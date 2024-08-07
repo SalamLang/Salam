@@ -274,6 +274,10 @@ bool is_arabic_digit(wchar_t ch);
 bool string_is_number(const char* value);
 char* attribute_css_values(char* attribute_name, array_t* attribute_values);
 char* normalise_css_size(char* attribute_value);
+bool is_allowed_layout_property(bool is_mother, ast_layout_type_t type, char* attribute_name);
+bool is_allowed_single_layout_property(ast_layout_type_t type, char* attribute_name);
+bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_name);
+bool is_allowed_general_layout_property(char* attribute_name);
 
 // String
 string_t* string_create(size_t initial_size);

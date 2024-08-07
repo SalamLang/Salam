@@ -260,14 +260,16 @@ void array_token_free(array_t* arr)
 	if (arr->data != NULL) {
 		for (size_t i = 0; i < arr->length; i++) {
 			token_t* token = arr->data[i];
-			
-			if(token->value != NULL) {
-				free(token->value);
-				token->value = NULL;
-			}
 
-			free(arr->data[i]);
-			arr->data[i] = NULL;
+			if (token != NULL) {
+				if(token->value != NULL) {
+					free(token->value);
+					token->value = NULL;
+				}
+				
+				free(arr->data[i]);
+				arr->data[i] = NULL;
+			}
 		}
 		
 		free(arr->data);
@@ -1284,7 +1286,7 @@ ast_layout_t* parser_layout(parser_t* parser)
 			parser->token_index++;
 
 			array_t* values = array_create(1);
-			array_push(values, attr_value->value);
+			array_push(values, strdup(attr_value->value));
 
 			hashmap_put(layout->attributes, current_token->value, values);
 		}
@@ -2694,12 +2696,12 @@ string_t* generate_string(parser_t* parser, int ident)
 		if (parser->layout->attributes != NULL) {
 			if (parser->layout->attributes->data != NULL) {
 				if (parser->layout->attributes->length > 0) {
-					char* title_value = hashmap_get(parser->layout->attributes, "عنوان");
-					if (title_value != NULL) {
+					array_t* title_values = hashmap_get(parser->layout->attributes, "عنوان");
+					if (title_values != NULL && title_values->length > 0) {
 						generate_layout_ident(str, ident + 2);
 
 						string_append_str(str, "<title>");
-						string_append_str(str, title_value);
+						string_append_str(str, array_string(title_values, ", "));
 						string_append_str(str, "</title>\n");
 					}
 				}

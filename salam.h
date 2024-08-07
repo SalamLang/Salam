@@ -295,6 +295,7 @@ void* hashmap_get(hashmap_t *map, const char *key);
 void* hashmap_remove(hashmap_t *map, const char *key);
 void hashmap_free(hashmap_t *map);
 void hashmap_print(hashmap_t *map);
+void hashmap_array_free(hashmap_t *map);
 
 // Array
 array_t* array_create(size_t size);

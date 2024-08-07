@@ -2576,9 +2576,8 @@ char* attribute_css_name(const char* attribute_name)
 	else if (strcmp(attribute_name, "تصویر") == 0) return "background-image";
 	else if (strcmp(attribute_name, "ماوس") == 0) return "cursor";
 	else if (strcmp(attribute_name, "گردی") == 0) return "border-radius";
-	else {
-		return NULL;
-	}
+
+	return NULL;
 }
 
 string_t* generate_layout_element_attribute(parser_t* parser, char* key, array_t* values)
@@ -2606,6 +2605,43 @@ string_t* generate_layout_element_attribute(parser_t* parser, char* key, array_t
 	return buf;
 }
 
+string_t* generate_layout_element_attributes_styles(parser_t* parser, ast_layout_node_t* element, int* count)
+{
+	string_t* css_hover_buffer = string_create(10);
+
+	for (size_t i = 0; i < element->hoverStyles->size; i++) {
+		hashmap_entry_t *entry = element->hoverStyles->data[i];
+
+		while (entry) {
+			(*count)++;
+
+			char* buf1 = attribute_css_name(entry->key);
+			
+			if (buf1 != NULL) {
+				array_t* values = entry->value;
+
+				if (values != NULL && values->length > 0) {
+					char* buf2 = attribute_css_values(buf1, values);
+
+					if (buf2 != NULL) {
+						string_append_str(css_hover_buffer, buf1);
+
+						string_append_char(css_hover_buffer, ':');
+
+						string_append_str(css_hover_buffer, buf2);
+
+						if (element->hoverStyles->length != (*count)) string_append_char(css_hover_buffer, ';');
+					}
+				}
+			}
+
+			entry = entry->next;
+		}
+	}
+
+	return css_hover_buffer;
+}
+
 string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t* element, array_t** element_content, int ident)
 {
 	string_t* str = string_create(10);
@@ -2615,16 +2651,11 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	int html_attrs = 0;
 
 	if (element->attributes != NULL && element->attributes->length > 0) {
-		printf("has attrs\n");
 		for (size_t i = 0; i < element->attributes->size; i++) {
 			hashmap_entry_t *entry = element->attributes->data[i];
-			printf("for iterate\n");
 
 			while (entry) {
-				printf("-->%s\n", entry->key);
-
 				if (strcmp(entry->key, "محتوا") == 0) {
-					printf("is content\n");
 					*element_content = array_copy(entry->value);
 				}
 				else {
@@ -2650,43 +2681,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	}
 
 	if (element->styles != NULL && element->styles->length > 0) {
-		string_t* css_buffer = string_create(10);
-
-		for (size_t i = 0; i < element->styles->size; i++) {
-			hashmap_entry_t *entry = element->styles->data[i];
-
-			while (entry) {
-				css_attrs++;
-
-				char* buf1 = attribute_css_name(entry->key);
-
-				if (buf1 != NULL) {
-					array_t* values = entry->value;
-
-					if (values != NULL && values->length > 0) {
-						char* buf2 = attribute_css_values(buf1, values);
-
-						if (buf2 != NULL) {
-							string_append_str(css_buffer, buf1);
-
-							string_append_char(css_buffer, ':');
-
-							string_append_str(css_buffer, buf2);
-
-							if (element->styles->length != css_attrs) string_append_char(css_buffer, ';');
-
-							free(buf2);
-							buf2 = NULL;
-						}
-					}
-
-					free(buf1);
-					buf1 = NULL;
-				}
-
-				entry = entry->next;
-			}
-		}
+		string_t* css_buffer = generate_layout_element_attributes_styles(parser, element, &css_attrs);
 
 		if (css_buffer != NULL && css_buffer->length > 0) {
 			if (html_attrs > 0) string_append_char(str, ' ');
@@ -2700,43 +2695,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	}
 
 	if (element->hoverStyles != NULL && element->hoverStyles->length > 0) {
-		string_t* css_hover_buffer = string_create(10);
-
-		for (size_t i = 0; i < element->hoverStyles->size; i++) {
-			hashmap_entry_t *entry = element->hoverStyles->data[i];
-
-			while (entry) {
-				css_hover_attrs++;
-
-				char* buf1 = attribute_css_name(entry->key);
-
-				if (buf1 != NULL) {
-					array_t* values = entry->value;
-
-					if (values != NULL && values->length > 0) {
-						char* buf2 = attribute_css_values(buf1, values);
-
-						if (buf2 != NULL) {
-							string_append_str(css_hover_buffer, buf1);
-
-							string_append_char(css_hover_buffer, ':');
-
-							string_append_str(css_hover_buffer, buf2);
-
-							if (element->hoverStyles->length != css_hover_attrs) string_append_char(css_hover_buffer, ';');
-
-							free(buf2);
-							buf2 = NULL;
-						}
-					}
-
-					free(buf1);
-					buf1 = NULL;
-				}
-
-				entry = entry->next;
-			}
-		}
+		string_t* css_hover_buffer = generate_layout_element_attributes_styles(parser, element, &css_hover_attrs);
 
 		if (css_hover_buffer != NULL && css_hover_buffer->length > 0) {
 			if (html_attrs > 0 || css_attrs > 0) string_append_char(str, ' ');

@@ -59,7 +59,7 @@ char* read_dynamic_string()
 
 			input = new_input;
 		}
-		
+
 		input[length++] = c;
 	}
 
@@ -1120,6 +1120,8 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t
 	element->type = type;
 	element->children = array_create(1);
 	element->attributes = hashmap_create();
+	element->styles = hashmap_create();
+	element->hoverStyles = hashmap_create();
 	element->is_mother = false;
 
 	parser->token_index++; // Eating keyword
@@ -1127,8 +1129,7 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t
 	return element;
 }
 
-
-hashmap_t* parser_layout_element_attributes(parser_t* parser, array_t* children)
+hashmap_t* parser_layout_element_attributes(parser_t* parser, ast_layout_type_t type, array_t* children, hashmap_t** styles, hashmap_t** hoverStyles)
 {
 	hashmap_t* attributes = hashmap_create();
 
@@ -1169,10 +1170,21 @@ hashmap_t* parser_layout_element_attributes(parser_t* parser, array_t* children)
 				}
 			}
 
-			hashmap_put(attributes, current_token->value, values);
+			char* attribute_key = current_token->value;
+
+			if (is_style_attribute(attribute_key)) {
+				hashmap_put(attributes, attribute_key, values);
+			}
+			else {
+				hashmap_put(styles, attribute_key, values);
+			}
 		}
-		else {
-			array_push(children, parser_layout_element(parser));
+		else if (type != AST_TYPE_LAYOUT_HOVER) {
+			ast_layout_node_t* element = parser_layout_element(parser);
+
+			if (element->type == AST_TYPE_LAYOUT_HOVER) *hoverStyles = element->attributes;
+
+			array_push(children, element);
 		}
 	}
 
@@ -1186,13 +1198,15 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 	CREATE_MEMORY_OBJECT(element, ast_layout_node_t, 1, "Error: parser_layout_element_mother<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	element->type = type;
 	element->children = array_create(1);
+	element->styles = hashmap_create();
+	element->hoverStyles = hashmap_create();
 	element->is_mother = true;
 
 	parser->token_index++; // Eating keyword
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
 
-	element->attributes = parser_layout_element_attributes(parser, element->children);
+	element->attributes = parser_layout_element_attributes(parser, type, element->children, element->styles, element->hoverStyles);
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_END);
 
@@ -1208,6 +1222,7 @@ ast_layout_node_t* parser_layout_element(parser_t* parser)
 	ast_layout_type_t type = convert_layout_identifier_token_type(current_token->value);
 
 	switch (type) {
+		case AST_TYPE_LAYOUT_HOVER:
 		case AST_TYPE_LAYOUT_TEXT:
 		case AST_TYPE_LAYOUT_INPUT:
 		case AST_TYPE_LAYOUT_BUTTON:
@@ -1241,33 +1256,34 @@ ast_layout_node_t* parser_layout_element(parser_t* parser)
 	}
 }
 
-array_t* parser_layout_elements(parser_t* parser)
-{
-	array_t* elements = array_create(4);
+// array_t* parser_layout_elements(parser_t* parser)
+// {
+// 	array_t* elements = array_create(4);
 
-	while (parser->token_index < parser->lexer->tokens->length) {
-		token_t* current_token = parser_token_get(parser);
+// 	while (parser->token_index < parser->lexer->tokens->length) {
+// 		token_t* current_token = parser_token_get(parser);
 
-		if (current_token->type == TOKEN_TYPE_IDENTIFIER) {
-			ast_layout_node_t* element = parser_layout_element(parser);
-			if (element == NULL) {
-				token_free(current_token);
-				array_free(elements);
+// 		if (current_token->type == TOKEN_TYPE_IDENTIFIER) {
+// 			ast_layout_node_t* element = parser_layout_element(parser);
 
-				print_message("Error: invalid element inside layout block!");
+// 			if (element == NULL) {
+// 				token_free(current_token);
+// 				array_free(elements);
+
+// 				print_message("Error: invalid element inside layout block!");
 				
-				exit(EXIT_FAILURE);
-			}
+// 				exit(EXIT_FAILURE);
+// 			}
 
-			array_push(elements, element);
-		}
-		else {
-			break;
-		}
-	}
+// 			array_push(elements, element);
+// 		}
+// 		else {
+// 			break;
+// 		}
+// 	}
 
-	return elements;
-}
+// 	return elements;
+// }
 
 ast_layout_node_t* parser_layout(parser_t* parser)
 {
@@ -2592,65 +2608,46 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	int css_attrs = 0;
 	int html_attrs = 0;
 
-	if (element->attributes != NULL) {
-		if (element->attributes->size > 0) {
-			for (size_t i = 0; i < element->attributes->size; i++) {
-				hashmap_entry_t *entry = element->attributes->data[i];
+	// if (is_style_attribute(entry->key) && isBorderTable == false) {
+	// 	array_t* values = array_copy(entry->value);
+	// 
+	// 	hashmap_put(styles, entry->key, values);
+	// }
 
-				while (entry) {
-					bool isBorderTable = false;
+	if (element->attributes != NULL && element->attributes->length > 0) {
+		for (size_t i = 0; i < element->attributes->size; i++) {
+			hashmap_entry_t *entry = element->attributes->data[i];
 
-					if (element->type == AST_TYPE_LAYOUT_TABLE && strcmp(entry->key, "حاشیه") == 0) {
-						isBorderTable = true;
+			while (entry) {
+				if (strcmp(entry->key, "محتوا") == 0) *element_content = array_copy(entry->value);
+				else {
+					char* newKey;
+					CREATE_MEMORY_OBJECT(newKey, char, 100, "Error: generate_layout_element_attributes<newKey> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
-						strcpy(entry->key, "border");
-					}
-					else if (element->type == AST_TYPE_LAYOUT_LINK && strcmp(entry->key, "منبع") == 0) {
-						strcpy(entry->key, "href");
-					}
-					else if (element->type == AST_TYPE_LAYOUT_IMAGE && strcmp(entry->key, "منبع") == 0) {
-						strcpy(entry->key, "src");
-					}
+					if ((is_allowed_layout_property(element->is_mother, element->type, entry->key, &newKey) == true) && newKey != NULL) {
+						if (html_attrs != 0) string_append_char(str, ' ');
+						html_attrs++;
 
-					if (is_style_attribute(entry->key) && isBorderTable == false) {
-						array_t* values = array_copy(entry->value);
+						string_t* buf = generate_layout_element_attribute(parser, newKey, entry->value);
+						string_append(str, buf);
 
-						hashmap_put(styles, entry->key, values);
+						string_free(buf);
 					}
 					else {
-						if (strcmp(entry->key, "محتوا") == 0) *element_content = array_copy(entry->value);
-						else {
-							char* newKey;
-							CREATE_MEMORY_OBJECT(newKey, char, 100, "Error: generate_layout_element_attributes<newKey> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+						entry = entry->next;
 
-							if ((is_allowed_layout_property(element->is_mother, element->type, entry->key, &newKey) == true) && newKey != NULL) {
-								if (html_attrs != 0) string_append_char(str, ' ');
-								html_attrs++;
-
-								string_t* buf = generate_layout_element_attribute(parser, newKey, entry->value);
-								string_append(str, buf);
-
-								string_free(buf);
-							}
-							else {
-								entry = entry->next;
-
-								continue;
-							}
-							
-							free(newKey);
-						}
+						continue;
 					}
 					
-					entry = entry->next;
+					free(newKey);
 				}
+				
+				entry = entry->next;
 			}
 		}
 	}
 
-	if (styles->length > 0) {
-		if (html_attrs > 0) string_append_char(str, ' ');
-
+	if (element->styles != NULL && element->styles->length > 0) {
 		string_t* css_buffer = string_create(10);
 
 		for (size_t i = 0; i < styles->size; i++) {
@@ -2661,7 +2658,6 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 
 				char* buf1 = attribute_css_name(entry->key);
 				if (buf1 != NULL) {
-					// array_t* values = array_copy(entry->value);
 					array_t* values = entry->value;
 
 					if (values != NULL && values->length > 0) {
@@ -2679,9 +2675,6 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 							free(buf2);
 							buf2 = NULL;
 						}
-
-						// array_free(values);
-						// values = NULL;
 					}
 
 					free(buf1);
@@ -2693,6 +2686,8 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 		}
 
 		if (css_buffer->length > 0) {
+			if (html_attrs > 0) string_append_char(str, ' ');
+
 			string_append_str(str, "style=\"");
 			string_append(str, css_buffer);
 			string_append_str(str, "\"");

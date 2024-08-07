@@ -2547,8 +2547,6 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 		}
 	}
 
-	// printf("html attr count: %d\n", html_attrs);
-
 	if (styles->length > 0) {
 		if (html_attrs > 0) string_append_char(str, ' ');
 
@@ -2653,6 +2651,7 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 			char* value = array_string(element_content, "\n");
 
 			string_append_str(str, value == NULL ? "NULL" : value);
+			if (value != NULL) free(value);
 			
 			if (needBreak) string_append_char(str, '\n');
 		}
@@ -2670,7 +2669,7 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 		string_append_char(str, '\n');
 	}
 
-	// array_free(element_content);
+	if (element_content != NULL) array_free(element_content);
 
 	return str;
 }
@@ -2700,7 +2699,7 @@ string_t* generate_string(parser_t* parser, int ident)
 					array_t* title_values = hashmap_get(parser->layout->attributes, "عنوان");
 					if (title_values != NULL && title_values->length > 0) {
 						char* titles = array_string(title_values, ", ");
-						
+
 						if (titles != NULL) {
 							generate_layout_ident(str, ident + 2);
 

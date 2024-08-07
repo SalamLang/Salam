@@ -2539,26 +2539,26 @@ char* attribute_css_name(const char* attribute_name)
 	return res;
 }
 
-string_t* generate_layout_element_attribute(parser_t* parser, hashmap_entry_t* entry)
+string_t* generate_layout_element_attribute(parser_t* parser, char* key, array_t* values)
 {
 	string_t* buf = string_create(10);
 
-	char* values = array_string(entry->value, " ");
+	char* str_values = array_string(values, " ");
 
-	if (values != NULL) {
-		string_append_str(buf, entry->key);
+	if (str_values != NULL) {
+		string_append_str(buf, key);
 		string_append_char(buf, '=');
 
-		if (strlen(values) == 1) {
-			string_append_str(buf, values);
+		if (strlen(str_values) == 1) {
+			string_append_str(buf, str_values);
 		}
 		else {
 			string_append_char(buf, '\"');
-			string_append_str(buf, values);
+			string_append_str(buf, str_values);
 			string_append_char(buf, '\"');
 		}
 
-		free(values);
+		free(str_values);
 	}
 
 	return buf;
@@ -2607,10 +2607,8 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 								if (html_attrs != 0) string_append_char(str, ' ');
 								html_attrs++;
 
-								free(entry->key);
-								entry->key = newKey;
-
-								string_t* buf = generate_layout_element_attribute(parser, entry);
+								string_t* buf = generate_layout_element_attribute(parser, newKey, entry->value);
+								free(newKey);
 								string_append(str, buf);
 
 								string_free(buf);
@@ -2826,16 +2824,18 @@ string_t* generate_string(parser_t* parser, int ident)
 
 void generate_file(parser_t* parser, char* output_file)
 {
-	string_t* code = generate_string(parser, 0);
-
 	FILE* file = fopen(output_file, "w");
 	if (file == NULL) {
 		fprintf(stderr, "Could not open file %s for writing\n", output_file);
-		string_free(code);
+		
 		return;
 	}
 
+	string_t* code = generate_string(parser, 0);
+
 	fprintf(file, "%s", code->data);
+
+	printf("File saved:\n%s\n", code->data);
 
 	fclose(file);
 	string_free(code);

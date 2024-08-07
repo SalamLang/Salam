@@ -1162,7 +1162,7 @@ hashmap_t* parser_layout_element_attributes(parser_t* parser, array_t* children)
 			hashmap_put(attributes, current_token->value, values);
 		}
 		else {
-			array_push(children, parser_layout_element(parser, true));
+			array_push(children, parser_layout_element(parser));
 		}
 	}
 
@@ -1189,7 +1189,7 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 	return element;
 }
 
-ast_layout_node_t* parser_layout_element(parser_t* parser, bool isMain)
+ast_layout_node_t* parser_layout_element(parser_t* parser)
 {
 	token_t* current_token = parser_token_get(parser);
 
@@ -1239,7 +1239,7 @@ array_t* parser_layout_elements(parser_t* parser)
 		token_t* current_token = parser_token_get(parser);
 
 		if (current_token->type == TOKEN_TYPE_IDENTIFIER) {
-			ast_layout_node_t* element = parser_layout_element(parser, false);
+			ast_layout_node_t* element = parser_layout_element(parser);
 			if (element == NULL) {
 				token_free(current_token);
 				array_free(elements);
@@ -1259,50 +1259,9 @@ array_t* parser_layout_elements(parser_t* parser)
 	return elements;
 }
 
-ast_layout_t* parser_layout(parser_t* parser)
+ast_layout_node_t* parser_layout(parser_t* parser)
 {
-	printf("parser_layout\n");
-	ast_layout_t* layout;
-
-	CREATE_MEMORY_OBJECT(layout, ast_layout_t, 1, "Error: parser_layout<layout> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-	layout->attributes = hashmap_create();
-	layout->elements = array_create(10);
-
-	parser_token_eat_nodata(parser, TOKEN_TYPE_LAYOUT);
-	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
-
-	while (parser->token_index < parser->lexer->tokens->length) {
-		token_t* current_token = parser_token_get(parser);
-
-		if (current_token->type == TOKEN_TYPE_END) break;
-
-		ast_layout_type_t type = convert_layout_identifier_token_type(current_token->value);
-
-		if (type == AST_TYPE_LAYOUT_ERROR) {
-			parser->token_index++; // Eating the attr name
-			
-			parser_token_eat_nodata(parser, TOKEN_TYPE_COLON); // :
-			
-			token_t* attr_value = parser_token_get(parser);
-			parser->token_index++;
-
-			array_t* values = array_create(1);
-			array_push(values, strdup(attr_value->value));
-
-			hashmap_put(layout->attributes, current_token->value, values);
-		}
-		else {
-			ast_layout_node_t* element = parser_layout_element(parser, true);
-
-			if (element != NULL) {
-				array_push(layout->elements, element);
-			}
-		}
-	}
-
-	parser_token_eat_nodata(parser, TOKEN_TYPE_END);
-
-	return layout;
+	return parser_layout_element_mother(AST_TYPE_LAYOUT_BODY, parser);
 }
 
 void token_free(token_t* token)
@@ -1571,7 +1530,7 @@ void ast_node_free(ast_node_t* node)
 		
 		case AST_TYPE_LAYOUT:
 			if (node->data.layout != NULL) {
-				children_free(node->data.layout->elements);
+				children_free(node->data.layout->children);
 
 				attributes_free(node->data.layout->attributes);
 
@@ -1595,7 +1554,7 @@ void parser_free(parser_t* parser)
 	if (parser->layout != NULL) {
 		attributes_free(parser->layout->attributes);
 
-		children_free(parser->layout->elements);
+		children_free(parser->layout->children);
 
 		free(parser->layout);
 		parser->layout = NULL;
@@ -1810,8 +1769,8 @@ string_t* ast_string(parser_t* parser, int ident)
 	if (parser->layout != NULL) {
 		string_append_str(str, "<layout>\n");
 
-		for (size_t i = 0; i < parser->layout->elements->length; i++) {
-			ast_layout_node_t* element = (ast_layout_node_t*) parser->layout->elements->data[i];
+		for (size_t i = 0; i < parser->layout->children->length; i++) {
+			ast_layout_node_t* element = (ast_layout_node_t*) parser->layout->children->data[i];
 			
 			string_t* buf = ast_layout_string(element, parser, ident + 1);
 			string_append(str, buf);
@@ -1844,56 +1803,61 @@ void generate_layout_ident(string_t* str, int ident)
 	for (int i = 0; i < ident; i++) string_append_char(str, '\t');
 }
 
-bool is_allowed_general_layout_property(char* attribute_name)
+bool is_allowed_general_layout_property(char* attribute_name, char** new_attribute_name)
 {
 	const char* attributes[] = {
 		"شناسه",
 		"کلاس",
 	};
+	const char* html_attributes[] = {
+		"id",
+		"class",
+	};
 	int num_attributes = sizeof(attributes) / sizeof(attributes[0]);
 
 	for (int i = 0; i < num_attributes; i++) {
-		if (strcmp(attribute_name, attributes[i]) == 0) return true;
+		if (strcmp(attribute_name, attributes[i]) == 0) { strcpy(*new_attribute_name, html_attributes[i]); return true; }
 	}
 
 	return false;
 }
 
-bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_name)
+bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_name, char** new_attribute_name)
 {
-	if (is_allowed_general_layout_property(attribute_name)) return true;
+	*new_attribute_name = NULL;
+	if (is_allowed_general_layout_property(attribute_name, new_attribute_name)) return true;
 
 	switch (type) {
 		case AST_TYPE_LAYOUT_BUTTON:
-			if (strcmp(attribute_name, "نام") == 0) return true;
+			if (strcmp(attribute_name, "نام") == 0) { strcpy(*new_attribute_name, "name"); return true; }
 		break;
 
 		case AST_TYPE_LAYOUT_TEXT:
 		break;
 
 		case AST_TYPE_LAYOUT_INPUT:
-			if (strcmp(attribute_name, "نام") == 0) return true;
-			else if (strcmp(attribute_name, "نوع") == 0) return true;
+			if (strcmp(attribute_name, "نام") == 0) { strcpy(*new_attribute_name, "name"); return true; }
+			else if (strcmp(attribute_name, "نوع") == 0) { strcpy(*new_attribute_name, "type"); return true; }
 		break;
 
 		case AST_TYPE_LAYOUT_LINK:
-			if (strcmp(attribute_name, "منبع") == 0) return true;
-			else if (strcmp(attribute_name, "نوع") == 0) return true;
+			if (strcmp(attribute_name, "منبع") == 0) { strcpy(*new_attribute_name, "href"); return true; }
+			else if (strcmp(attribute_name, "نوع") == 0) { strcpy(*new_attribute_name, "target"); return true; }
 		break;
 
 		case AST_TYPE_LAYOUT_IMAGE:
-			if (strcmp(attribute_name, "منبع") == 0) return true;
-			else if (strcmp(attribute_name, "عرض") == 0) return true;
-			else if (strcmp(attribute_name, "ارتفاع") == 0) return true;
+			if (strcmp(attribute_name, "منبع") == 0) { strcpy(*new_attribute_name, "src"); return true; }
+			else if (strcmp(attribute_name, "عرض") == 0) { strcpy(*new_attribute_name, "width"); return true; }
+			else if (strcmp(attribute_name, "ارتفاع") == 0) { strcpy(*new_attribute_name, "height"); return true; }
 		break;
 
 		case AST_TYPE_LAYOUT_CENTER:
 		break;
 
 		case AST_TYPE_LAYOUT_FORM:
-			if (strcmp(attribute_name, "نام") == 0) return true;
-			else if (strcmp(attribute_name, "نوع") == 0) return true;
-			else if (strcmp(attribute_name, "منبع") == 0) return true;
+			if (strcmp(attribute_name, "نام") == 0) { strcpy(*new_attribute_name, "name"); return true; }
+			else if (strcmp(attribute_name, "نوع") == 0) { strcpy(*new_attribute_name, "method"); return true; }
+			else if (strcmp(attribute_name, "منبع") == 0) { strcpy(*new_attribute_name, "action"); return true; }
 		break;
 
 		case AST_TYPE_LAYOUT_TABLE:
@@ -1915,25 +1879,26 @@ bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_n
 		break;
 
 		case AST_TYPE_LAYOUT_TEXTAREA:
-			if (strcmp(attribute_name, "نام") == 0) return true;
+			if (strcmp(attribute_name, "نام") == 0) { strcpy(*new_attribute_name, "name"); return true; }
 		break;
 
 		case AST_TYPE_LAYOUT_SELECT:
-			if (strcmp(attribute_name, "نام") == 0) return true;
+			if (strcmp(attribute_name, "نام") == 0) { strcpy(*new_attribute_name, "name"); return true; }
 		break;
 
 		case AST_TYPE_LAYOUT_SELECT_OPTION:
-			if (strcmp(attribute_name, "نام") == 0) return true;
-			else if (strcmp(attribute_name, "مقدار") == 0) return true;
+			if (strcmp(attribute_name, "نام") == 0) { strcpy(*new_attribute_name, "name"); return true; } // THIS WILL MOVE TO INNER HTML
+			else if (strcmp(attribute_name, "مقدار") == 0) { strcpy(*new_attribute_name, "value"); return true; }
 		break;
 	}
 
 	return false;
 }
 
-bool is_allowed_single_layout_property(ast_layout_type_t type, char* attribute_name)
+bool is_allowed_single_layout_property(ast_layout_type_t type, char* attribute_name, char** new_attribute_name)
 {
-	// if (is_allowed_general_layout_property(attribute_name)) return true;
+	*new_attribute_name = NULL;
+	// if (is_allowed_general_layout_property(attribute_name, new_attribute_name)) return true;
 
 	switch (type) {
 		case AST_TYPE_LAYOUT_LINE:
@@ -1946,10 +1911,10 @@ bool is_allowed_single_layout_property(ast_layout_type_t type, char* attribute_n
 	return false;
 }
 
-bool is_allowed_layout_property(bool is_mother, ast_layout_type_t type, char* attribute_name)
+bool is_allowed_layout_property(bool is_mother, ast_layout_type_t type, char* attribute_name, char** new_attribute_name)
 {
-	if (is_mother) return is_allowed_mother_layout_property(type, attribute_name);
-	else return is_allowed_single_layout_property(type, attribute_name);
+	if (is_mother) return is_allowed_mother_layout_property(type, attribute_name, new_attribute_name);
+	else return is_allowed_single_layout_property(type, attribute_name, new_attribute_name);
 }
 
 bool is_style_attribute(char* attribute_name)
@@ -2631,18 +2596,20 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 					else {
 						if (strcmp(entry->key, "محتوا") == 0) *element_content = array_copy(entry->value);
 						else {
-							if (is_allowed_layout_property(element->is_mother, element->type, entry->key) == false) {
+							char* newKey;
+							if (is_allowed_layout_property(element->is_mother, element->type, entry->key, &newKey) == true && newKey != NULL) {
+								if (html_attrs != 0) string_append_char(str, ' ');
+								html_attrs++;
+
+								string_t* buf = generate_layout_element_attribute(parser, entry);
+								string_append(str, buf);
+
+								string_free(buf);
+							}
+							else {
 								entry = entry->next;
 								continue;
 							}
-
-							if (html_attrs != 0) string_append_char(str, ' ');
-							html_attrs++;
-
-							string_t* buf = generate_layout_element_attribute(parser, entry);
-							string_append(str, buf);
-
-							string_free(buf);
 						}
 					}
 					
@@ -2825,8 +2792,8 @@ string_t* generate_string(parser_t* parser, int ident)
 		generate_layout_ident(str, ident + 1);
 		string_append_str(str, "<body>\n");
 
-		for (size_t i = 0; i < parser->layout->elements->length; i++) {
-			ast_layout_node_t* element = (ast_layout_node_t*) parser->layout->elements->data[i];
+		for (size_t i = 0; i < parser->layout->children->length; i++) {
+			ast_layout_node_t* element = (ast_layout_node_t*) parser->layout->children->data[i];
 
 			string_t* buf = generate_layout_element(element, parser, ident + 2);
 			if (buf) {

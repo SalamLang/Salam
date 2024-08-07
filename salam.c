@@ -1275,11 +1275,14 @@ ast_layout_t* parser_layout(parser_t* parser)
 			token_t* attr_value = parser_token_get(parser);
 			parser->token_index++;
 
-			hashmap_put(layout->attributes, current_token->value, attr_value->value);
+			array_t* values = array_create(1);
+			array_push(values, attr_value->value);
+			
+			hashmap_put(layout->attributes, current_token->value, values);
 		}
 		else {
 			ast_layout_node_t* element = parser_layout_element(parser);
-			
+
 			if (element != NULL) {
 				array_push(layout->elements, element);
 			}

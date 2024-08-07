@@ -221,6 +221,21 @@ void array_push(array_t* arr, void* data)
 	arr->data[arr->length++] = data;
 }
 
+array_t* array_copy(array_t* arr)
+{
+    if (arr == NULL || arr->length == 0) return NULL;
+
+    array_t* copy = array_create(arr->length);
+    if (copy == NULL) return NULL;
+
+    for (size_t i = 0; i < arr->length; i++) {
+		array_push(copy, strdup(arr->data[i]));
+    }
+
+    return copy;
+
+}
+
 void array_free(array_t* arr)
 {
 	if (arr == NULL) return;
@@ -254,9 +269,11 @@ char* array_string(array_t* array, char* seperator)
 
 	for (size_t i = 0; i < array->length; i++) {
 		char* t = (char*) array->data[i];
-		string_append_str(buffer, t);
+		if (t != NULL) {
+			string_append_str(buffer, t);
 
-		if (seperator != NULL && i < array->length - 1) string_append_str(buffer, seperator);
+			if (seperator != NULL && i < array->length - 1) string_append_str(buffer, seperator);
+		}
 	}
 
 	char* buf = strdup(buffer->data);
@@ -428,6 +445,36 @@ void hashmap_string_free(hashmap_t *map)
 	free(map);
 	map = NULL;
 }
+
+void hashmap_array_free(hashmap_t *map)
+{
+	if (map == NULL) return;
+
+	if (map->data != NULL) {
+		for (size_t i = 0; i < map->size; i++) {
+			hashmap_entry_t *entry = map->data[i];
+
+			while (entry) {
+				hashmap_entry_t *next = entry->next;
+				free(entry->key);
+				entry->key = NULL;
+				array_t* array = entry->value;
+				array_free(array);
+				entry->value = NULL;
+				
+				free(entry);
+				entry = next;
+			}
+		}
+
+		free(map->data);
+		map->data = NULL;
+	}
+
+	free(map);
+	map = NULL;
+}
+
 void hashmap_free(hashmap_t *map)
 {
 	if (map == NULL) return;
@@ -1362,14 +1409,12 @@ void parser_parse(parser_t* parser)
 	}
 }
 
-void ast_layout_node_free(ast_layout_node_t* node)
+void attributes_free(hashmap_t* attributes)
 {
-	if (node == NULL) return;
-
-	if (node->attributes != NULL) {
-		if (node->attributes->data != NULL) {
-			for (size_t i = 0; i < node->attributes->size; i++) {
-				hashmap_entry_t *entry = node->attributes->data[i];
+	if (attributes != NULL) {
+		if (attributes->data != NULL) {
+			for (size_t i = 0; i < attributes->size; i++) {
+				hashmap_entry_t *entry = attributes->data[i];
 
 				while (entry) {
 					hashmap_entry_t *next = entry->next;
@@ -1380,7 +1425,8 @@ void ast_layout_node_free(ast_layout_node_t* node)
 					}
 
 					if (entry->value != NULL) {
-						free(entry->value);
+						array_free(entry->value);
+						// free(entry->value);
 						entry->value = NULL;
 					}
 
@@ -1389,29 +1435,41 @@ void ast_layout_node_free(ast_layout_node_t* node)
 				}
 			}
 
-			free(node->attributes->data);
-			node->attributes->data = NULL;
+			free(attributes->data);
+			attributes->data = NULL;
 		}
 
-		free(node->attributes);
-		node->attributes = NULL;
+		free(attributes);
+		attributes = NULL;
 	}
+}
 
-	if (node->children != NULL) {
-		if (node->children->data != NULL) {
-			for (size_t i = 0; i < node->children->length; i++) {
-				if (node->children->data[i] != NULL) {
-					ast_layout_node_free((ast_layout_node_t*) node->children->data[i]);
+void children_free(array_t* children)
+{
+	if (children != NULL) {
+		if (children->data != NULL) {
+			for (size_t i = 0; i < children->length; i++) {
+				if (children->data[i] != NULL) {
+					ast_layout_node_free((ast_layout_node_t*) children->data[i]);
 				}
 			}
 
-			free(node->children->data);
-			node->children->data = NULL;
+			free(children->data);
+			children->data = NULL;
 		}
 
-		free(node->children);
-		node->children = NULL;
+		free(children);
+		children = NULL;
 	}
+}
+
+void ast_layout_node_free(ast_layout_node_t* node)
+{
+	if (node == NULL) return;
+
+	attributes_free(node->attributes);
+
+	children_free(node->children);
 
 	free(node);
 	node = NULL;
@@ -1494,53 +1552,9 @@ void ast_node_free(ast_node_t* node)
 		
 		case AST_TYPE_LAYOUT:
 			if (node->data.layout != NULL) {
-				if (node->data.layout->elements != NULL) {
-					if (node->data.layout->elements->data != NULL) {
-						for (size_t i = 0; i < node->data.layout->elements->length; i++) {
-							if (node->data.layout->elements->data[i] != NULL) {
-								ast_layout_node_free((ast_layout_node_t*) node->data.layout->elements->data[i]);
-							}
-						}
+				children_free(node->data.layout->elements);
 
-						free(node->data.layout->elements->data);
-						node->data.layout->elements->data = NULL;
-					}
-
-					free(node->data.layout->elements);
-					node->data.layout->elements = NULL;
-				}
-
-
-				if (node->data.layout->attributes != NULL) {
-					if (node->data.layout->attributes->data != NULL) {
-						for (size_t i = 0; i < node->data.layout->attributes->size; i++) {
-							hashmap_entry_t *entry = node->data.layout->attributes->data[i];
-
-							while (entry) {
-								hashmap_entry_t *next = entry->next;
-
-								if (entry->key != NULL) {
-									free(entry->key);
-									entry->key = NULL;
-								}
-
-								if (entry->value != NULL) {
-									free(entry->value);
-									entry->value = NULL;
-								}
-
-								free(entry);
-								entry = next;
-							}
-						}
-
-						free(node->data.layout->attributes->data);
-						node->data.layout->attributes->data = NULL;
-					}
-
-					free(node->data.layout->attributes);
-					node->data.layout->attributes = NULL;
-				}
+				attributes_free(node->data.layout->attributes);
 
 				free(node->data.layout);
 				node->data.layout = NULL;
@@ -1557,59 +1571,12 @@ void ast_node_free(ast_node_t* node)
 
 void parser_free(parser_t* parser)
 {
-	if (parser == NULL) {
-		return;
-	}
+	if (parser == NULL) return;
 
 	if (parser->layout != NULL) {
-		if (parser->layout->attributes != NULL) {
-			if (parser->layout->attributes->data != NULL) {
-				if (parser->layout->attributes->length > 0) {
-					for (size_t i = 0; i < parser->layout->attributes->size; i++) {
-						hashmap_entry_t *entry = parser->layout->attributes->data[i];
+		attributes_free(parser->layout->attributes);
 
-						while (entry) {
-							hashmap_entry_t *next = entry->next;
-
-							if (entry->key != NULL) {
-								free(entry->key);
-								entry->key = NULL;
-							}
-
-							if (entry->value != NULL) {
-								free(entry->value);
-								entry->value = NULL;
-							}
-
-							free(entry);
-							entry = next;
-						}
-					}
-				}
-
-				free(parser->layout->attributes->data);
-				parser->layout->attributes->data = NULL;
-			}
-
-			free(parser->layout->attributes);
-			parser->layout->attributes = NULL;
-		}
-
-		if (parser->layout->elements != NULL) {
-			if (parser->layout->elements->data != NULL) {
-				for (size_t i = 0; i < parser->layout->elements->length; i++) {
-					if (parser->layout->elements->data[i] != NULL) {
-						ast_layout_node_free((ast_layout_node_t*) parser->layout->elements->data[i]);
-					}
-				}
-
-				free(parser->layout->elements->data);
-				parser->layout->elements->data = NULL;
-			}
-
-			free(parser->layout->elements);
-			parser->layout->elements = NULL;
-		}
+		children_free(parser->layout->elements);
 
 		free(parser->layout);
 		parser->layout = NULL;
@@ -1688,16 +1655,23 @@ void string_append_char(string_t* str, char c)
 
 void string_append_str(string_t* str, const char* suffix)
 {
+	// if (suffix == NULL) {
+	// 	printf("==>%s\n", str->data);
+	// }
 	size_t suffix_len = strlen(suffix);
+
 	while (str->length + suffix_len >= str->size) {
 		str->size *= 2;
 		str->data = (char*) realloc(str->data, str->size * sizeof(char));
+
 		if (str->data == NULL) {
 			fprintf(stderr, "Memory reallocation failed\n");
 			exit(1);
 		}
 	}
+
 	strcpy(str->data + str->length, suffix);
+
 	str->length += suffix_len;
 }
 
@@ -1749,10 +1723,6 @@ string_t* ast_layout_string(ast_layout_node_t* element, parser_t* parser, int id
 				string_append_char(str, '\"');
 
 				array_t* arr = entry->value;
-
-				// printf("--->%s => %ld\n", entry->key, arr->length);
-				// printf("\t%s\n", (char*) arr->data[0]);
-
 				char* str_value = array_string(arr, ", ");
 
 				string_append_str(str, str_value == NULL ? "NULL" : str_value);
@@ -2010,6 +1980,8 @@ char* replace_all_substrings(const char* str, const char* old_substr, const char
 
 char* attribute_css_multiple_size_value(char* attribute_name, array_t* attribute_values)
 {
+	if (attribute_values == NULL || attribute_values->length == 0) return NULL;
+
 	return array_string(attribute_values, ", ");
 	// return attribute_css_size_value(attribute_name, attribute_value);
 	
@@ -2205,7 +2177,7 @@ bool string_is_number(const char* value)
 	return true;
 }
 
-char* attribute_css_value(char* attribute_name, array_t* attribute_values)
+char* attribute_css_values(char* attribute_name, array_t* attribute_values)
 {
 	if (attribute_name == NULL) return NULL;
 	else if (attribute_values == NULL || attribute_values->length == 0) return NULL;
@@ -2423,7 +2395,6 @@ char* attribute_css_value(char* attribute_name, array_t* attribute_values)
 			char* size_value = attribute_css_multiple_size_value(attribute_name, attribute_values);
 			if (size_value) {
 				free(res);
-				// array_free(attribute_values);
 				return size_value;
 			}
 		}
@@ -2533,10 +2504,10 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 					}
 
 					if (is_style_attribute(entry->key) && isBorderTable == false) {
-						hashmap_put(styles, entry->key, entry->value);
+						hashmap_put(styles, entry->key, array_copy(entry->value));
 					}
 					else {
-						if (strcmp(entry->key, "محتوا") == 0) *element_content = entry->value;
+						if (strcmp(entry->key, "محتوا") == 0) *element_content = array_copy(entry->value);
 						else {
 							if (html_attrs != 0) string_append_char(str, ' ');
 							html_attrs++;
@@ -2569,7 +2540,8 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 
 				char* buf1 = attribute_css_name(entry->key);
 				if (buf1 != NULL) {
-					char* buf2 = attribute_css_value(buf1, entry->value);
+					array_t* values = entry->value;
+					char* buf2 = attribute_css_values(buf1, values);
 					if (buf2 != NULL) {
 						string_append_str(css_buffer, buf1);
 
@@ -2599,8 +2571,9 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 
 		string_free(css_buffer);
 	}
-
-	hashmap_string_free(styles);
+	
+	hashmap_array_free(styles);
+	// hashmap_string_free(styles);
 
 	return str;
 }
@@ -2652,7 +2625,7 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 		if (element_content != NULL && element_content->length > 0) {
 			if (needBreak) generate_layout_ident(str, ident + 1);
 
-			char* value = array_string(element_content, NULL);
+			char* value = array_string(element_content, "\n");
 
 			string_append_str(str, value == NULL ? "NULL" : value);
 			
@@ -2672,6 +2645,7 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 		string_append_char(str, '\n');
 	}
 
+	// array_free(element_content);
 
 	return str;
 }
@@ -2835,8 +2809,8 @@ int main(int argc, char** argv)
 
 	ast_print(parser);
 
-	generate_print(parser);
-	generate_file(parser, "output.html");
+	// generate_print(parser);
+	// generate_file(parser, "output.html");
 
 	print_message("free parser\n");
 	parser_free(parser);

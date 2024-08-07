@@ -28,7 +28,8 @@ const char* get_message(language_t language, message_key_t key) {
 	return messages[language][key];
 }
 
-char* read_dynamic_string() {
+char* read_dynamic_string()
+{
 	size_t current_size = 52;
 	char* input;
 	CREATE_MEMORY_OBJECT(input, char, current_size, "Error: read_dynamic_string<input> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
@@ -45,16 +46,20 @@ char* read_dynamic_string() {
 
 		if (length + 1 >= current_size) {
 			current_size *= 2;
+
 			char* new_input = realloc(input, current_size);
-			if (!new_input) {
+
+			if (new_input == NULL) {
 				free(input);
+
 				perror(messages[language][MESSAGE_MEMORY_REALLOCATE_ERROR]);
 
 				exit(EXIT_FAILURE);
 			}
+
 			input = new_input;
 		}
-
+		
 		input[length++] = c;
 	}
 
@@ -192,7 +197,7 @@ array_t* array_create(size_t size)
 	arr->size = size > min_size ? size : min_size;
 	CREATE_MEMORY_OBJECT(arr->data, void*, arr->size, "Error: array_create<arr-data> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
-	if (!arr->data) {
+	if (arr->data == NULL) {
 		perror(messages[language][MESSAGE_MEMORY_ALLOCATE_ERROR]);
 
 		exit(EXIT_FAILURE);
@@ -341,8 +346,9 @@ hashmap_t* hashmap_create()
 	map->length = 0;
 	map->data = (hashmap_entry_t**) calloc(map->size, sizeof(hashmap_entry_t*));
 
-	if (!map->data) {
+	if (map->data == NULL) {
 		perror("Error: hashmap_create - Memory allocation error");
+
 		exit(EXIT_FAILURE);
 	}
 
@@ -837,6 +843,7 @@ void read_string(lexer_t* lexer, wchar_t ch)
 size_t mb_strlen(char* identifier)
 {
 	size_t wcs_len = mbstowcs(NULL, identifier, 0);
+
 	if (wcs_len == (size_t)-1) {
 		perror(messages[language][MESSAGE_LEXER_STRING_GET_LENGTH_UNICODE]);
 
@@ -908,8 +915,10 @@ void read_identifier(lexer_t* lexer, wchar_t ch)
 size_t wchar_length(wchar_t wide_char)
 {
 	char mb_char[MB_LEN_MAX];
-	if (wcrtomb(mb_char, wide_char, NULL) == (size_t)-1) {
+
+	if (wcrtomb(mb_char, wide_char, NULL) == (size_t) -1) {
 		perror(messages[language][MESSAGE_LEXER_CHAR_LENGTH_ISSUE]);
+
 		return 0;
 	}
 
@@ -2051,10 +2060,6 @@ char* replace_all_substrings(const char* str, const char* old_substr, const char
 
 	char *result;
 	CREATE_MEMORY_OBJECT(result, char, max_result_len + 1, "Error: replace_all_substrings<result2> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-	if (result == NULL) {
-		perror("malloc failed");
-		exit(EXIT_FAILURE);
-	}
 
 	char *result_ptr = result;
 	const char *search_start = str;

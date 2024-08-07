@@ -2145,16 +2145,16 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 
 char* normalise_css_size(char* attribute_value)
 {
-    if (!string_is_number(attribute_value)) return attribute_value;
+	if (!string_is_number(attribute_value)) return attribute_value;
 
-    int value_length = strlen(attribute_value) + 3;
+	int value_length = strlen(attribute_value) + 3;
 
-    char* res = realloc(attribute_value, value_length * sizeof(char));
-    CHECK_MEMORY_ALLOCATION(res, "Error: normalise_css_size<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	char* res = realloc(attribute_value, value_length * sizeof(char));
+	CHECK_MEMORY_ALLOCATION(res, "Error: normalise_css_size<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
-    strcat(res, "px");
+	strcat(res, "px");
 
-    return res;
+	return res;
 }
 
 char* attribute_css_multiple_size_value(char* attribute_name, array_t* attribute_values)
@@ -2541,27 +2541,27 @@ char* attribute_css_name(const char* attribute_name)
 
 string_t* generate_layout_element_attribute(parser_t* parser, hashmap_entry_t* entry)
 {
-	string_t* str = string_create(10);
+	string_t* buf = string_create(10);
 
 	char* values = array_string(entry->value, " ");
 
 	if (values != NULL) {
-		string_append_str(str, entry->key);
-		string_append_char(str, '=');
+		string_append_str(buf, entry->key);
+		string_append_char(buf, '=');
 
 		if (strlen(values) == 1) {
-			string_append_str(str, values);
+			string_append_str(buf, values);
 		}
 		else {
-			string_append_char(str, '\"');
-			string_append_str(str, values);
-			string_append_char(str, '\"');
+			string_append_char(buf, '\"');
+			string_append_str(buf, values);
+			string_append_char(buf, '\"');
 		}
 
 		free(values);
 	}
 
-	return str;
+	return buf;
 }
 
 string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t* element, array_t** element_content, int ident)
@@ -2619,7 +2619,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 								free(newKey);
 
 								entry = entry->next;
-								
+
 								continue;
 							}
 						}

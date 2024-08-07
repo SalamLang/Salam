@@ -16,12 +16,12 @@ bool debug_enabled = true;
 	}
 
 #define CHECK_MEMORY_ALLOCATION(ptr, errorMsg, ...)             \
-    do {                                                       \
-        if (ptr == NULL) {                                     \
-            fprintf(stderr, errorMsg, ##__VA_ARGS__);          \
-            exit(EXIT_FAILURE);                                \
-        }                                                      \
-    } while (0)
+	do {                                                       \
+		if (ptr == NULL) {                                     \
+			fprintf(stderr, errorMsg, ##__VA_ARGS__);          \
+			exit(EXIT_FAILURE);                                \
+		}                                                      \
+	} while (0)
 
 struct ast_expression;
 

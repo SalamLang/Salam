@@ -2649,6 +2649,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 
 				char* buf1 = attribute_css_name(entry->key);
 				if (buf1 != NULL) {
+					// array_t* values = array_copy(entry->value);
 					array_t* values = entry->value;
 
 					if (values != NULL && values->length > 0) {
@@ -2666,6 +2667,9 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 							free(buf2);
 							buf2 = NULL;
 						}
+
+						// array_free(values);
+						// values = NULL;
 					}
 
 					free(buf1);
@@ -2958,7 +2962,7 @@ int main(int argc, char** argv)
 	ast_print(parser);
 
 	generate_print(parser);
-	generate_file(parser, "output.html");
+	// generate_file(parser, "output.html");
 
 	print_message("free parser\n");
 	parser_free(parser);

@@ -255,8 +255,6 @@ void array_free(array_t* arr)
 void token_print(token_t* t)
 {
 	print_message("%d ", t->type);
-	// print_message("...\n");
-	// print_message("%zu - ", t->location.length);
 	print_message("%s - ", token_type2str(t->type));
 	print_message("%s\n", t->value);
 }
@@ -345,7 +343,6 @@ void hashmap_put(hashmap_t *map, const char *key, void *value)
 
 	hashmap_entry_t *new_entry = (hashmap_entry_t*) malloc(sizeof(hashmap_entry_t));
 	new_entry->key = strdup(key);
-	// new_entry->value = strdup(value);
 	new_entry->value = value;
 	new_entry->next = map->data[index];
 	map->data[index] = new_entry;
@@ -379,9 +376,8 @@ void* hashmap_get(hashmap_t *map, const char *key)
 	hashmap_entry_t *entry = map->data[index];
 
 	while (entry != NULL) {
-		if (strcmp(entry->key, key) == 0) {
-			return entry->value;
-		}
+		if (strcmp(entry->key, key) == 0) return entry->value;
+
 		entry = entry->next;
 	}
 
@@ -398,15 +394,15 @@ void* hashmap_remove(hashmap_t *map, const char *key)
 
 	while (entry != NULL) {
 		if (strcmp(entry->key, key) == 0) {
-			if (prev == NULL) {
-				map->data[index] = entry->next;
-			}
-			else {
-				prev->next = entry->next;
-			}
+			if (prev == NULL) map->data[index] = entry->next;
+			else prev->next = entry->next;
+
 			void *value = entry->value;
+
 			free(entry->key);
+
 			free(entry);
+
 			map->length--;
 
 			return value;
@@ -428,12 +424,15 @@ void hashmap_string_free(hashmap_t *map)
 
 			while (entry) {
 				hashmap_entry_t *next = entry->next;
+
 				free(entry->key);
 				entry->key = NULL;
+
 				free(entry->value);
 				entry->value = NULL;
 				
 				free(entry);
+				
 				entry = next;
 			}
 		}

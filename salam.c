@@ -321,7 +321,9 @@ void array_print(array_t* arr)
 
 	for (size_t i = 0; i < arr->length; i++) {
 		token_t* t = arr->data[i];
+
 		print_message("[%zu]: ", i);
+		
 		token_print(t);
 	}
 }
@@ -1116,12 +1118,12 @@ parser_t* parser_create(lexer_t* lexer)
 	return parser;
 }
 
-ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t* parser)
+ast_layout_node_t* parser_layout_element_single(ast_layout_type_t layout_type, parser_t* parser)
 {
 	ast_layout_node_t* element;
 	CREATE_MEMORY_OBJECT(element, ast_layout_node_t, 1, "Error: parser_layout_element_single<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
-	element->type = type;
+	element->type = layout_type;
 	element->children = array_create(1);
 	element->attributes = hashmap_create();
 	element->styles = NULL; // hashmap_create();
@@ -1133,81 +1135,85 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t
 	return element;
 }
 
-hashmap_t* parser_layout_element_attributes(parser_t* parser, ast_layout_type_t type, array_t* children, hashmap_t* styles, hashmap_t** hoverStyles)
+array_t* parser_layout_attribute_array_value(parser_t* parser)
 {
-	hashmap_t* attributes = hashmap_create();
+	array_t* values = array_create(1);
 
+	while (parser->token_index < parser->lexer->tokens->length) {
+		token_t* attr_value = parser_token_get(parser);
+
+		if (attr_value->type == TOKEN_TYPE_END || attr_value->type == TOKEN_TYPE_EOF) break;
+
+		array_push(values, strdup(attr_value->value));
+		parser->token_index++;
+
+		if (parser->token_index < parser->lexer->tokens->length) {
+			attr_value = parser_token_get(parser);
+
+			if (attr_value->type == TOKEN_TYPE_COMMA) {
+				parser->token_index++;
+			}
+			else {
+				break;
+			}
+		}
+		else {
+			break;
+		}
+	}
+
+	return values;
+}
+
+void parser_layout_element_attribute(parser_t* parser, ast_layout_type_t layout_type, ast_layout_node_t* element, bool acceptAttrs, bool acceptStyles, bool acceptHoverStyles, bool acceptChildren)
+{
+	token_t* current_token = parser_token_get(parser);
+
+	ast_layout_type_t type = convert_layout_identifier_token_type(current_token->value);
+
+	if (type == AST_TYPE_LAYOUT_ERROR) {
+		parser->token_index++; // Eating the attr name
+		parser_token_eat_nodata(parser, TOKEN_TYPE_COLON); // :
+		
+		array_t* values = parser_layout_attribute_array_value(parser);
+
+		if (acceptStyles == true && is_style_attribute(current_token->value)) hashmap_put(element->styles, current_token->value, values);
+		else if (acceptAttrs == true) hashmap_put(element->attributes, current_token->value, values);
+	}
+	else if (acceptHoverStyles == true && type == AST_TYPE_LAYOUT_HOVER) {
+		parser->token_index++; // Eating keyword
+		parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
+		
+		parser_layout_element_attributes(parser, type, element, false, true, false, false);
+
+		parser_token_eat_nodata(parser, TOKEN_TYPE_END);
+	}
+	else {
+		token_print(current_token);
+
+		ast_layout_node_t* new_child = parser_layout_element(parser);
+
+		array_push(element->children, new_child);
+	}
+}
+
+void parser_layout_element_attributes(parser_t* parser, ast_layout_type_t layout_type, ast_layout_node_t* element, bool acceptAttrs, bool acceptStyles, bool acceptHoverStyles, bool acceptChildren)
+{
 	while (parser->token_index < parser->lexer->tokens->length) {
 		token_t* current_token = parser_token_get(parser);
 
 		if (current_token->type == TOKEN_TYPE_END) break;
 
-		ast_layout_type_t type = convert_layout_identifier_token_type(current_token->value);
-
-		if (type == AST_TYPE_LAYOUT_ERROR) {
-			parser->token_index++; // Eating the attr name
-
-			parser_token_eat_nodata(parser, TOKEN_TYPE_COLON); // :
-			
-			array_t* values = array_create(1);
-
-			while (parser->token_index < parser->lexer->tokens->length) {
-				token_t* attr_value = parser_token_get(parser);
-
-				if (attr_value->type == TOKEN_TYPE_END || attr_value->type == TOKEN_TYPE_EOF) break;
-
-				array_push(values, strdup(attr_value->value));
-				parser->token_index++;
-
-				if (parser->token_index < parser->lexer->tokens->length) {
-					attr_value = parser_token_get(parser);
-
-					if (attr_value->type == TOKEN_TYPE_COMMA) {
-						parser->token_index++;
-					}
-					else {
-						break;
-					}
-				}
-				else {
-					break;
-				}
-			}
-
-			char* attribute_key = current_token->value;
-
-			if (is_style_attribute(attribute_key)) {
-				hashmap_put(styles, attribute_key, values);
-			}
-			else {
-				hashmap_put(attributes, attribute_key, values);
-			}
-		}
-		else if (type == AST_TYPE_LAYOUT_HOVER) {
-			ast_layout_node_t* element = parser_layout_element(parser);
-			
-			*hoverStyles = element->styles;
-			hashmap_array_free(element->hoverStyles);
-			array_free(element->children);
-
-			free(element);
-		}
-		else {
-			ast_layout_node_t* element = parser_layout_element(parser);
-
-			array_push(children, element);
-		}
+		parser_layout_element_attribute(parser, layout_type, element, acceptAttrs, acceptStyles, acceptHoverStyles, acceptChildren);
 	}
-
-	return attributes;
 }
 
-ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t* parser)
+ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t layout_type, parser_t* parser)
 {
 	ast_layout_node_t* element;
 	CREATE_MEMORY_OBJECT(element, ast_layout_node_t, 1, "Error: parser_layout_element_mother<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
-	element->type = type;
+	element->type = layout_type;
 	element->children = array_create(1);
 	element->styles = hashmap_create();
 	element->hoverStyles = hashmap_create();
@@ -1217,7 +1223,7 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
 
-	element->attributes = parser_layout_element_attributes(parser, type, element->children, element->styles, &element->hoverStyles);
+	parser_layout_element_attributes(parser, layout_type, element, true, true, true, true);
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_END);
 
@@ -1296,10 +1302,6 @@ ast_layout_node_t* parser_layout_element(parser_t* parser)
 // 	return elements;
 // }
 
-ast_layout_node_t* parser_layout(parser_t* parser)
-{
-	return parser_layout_element_mother(AST_TYPE_LAYOUT_BODY, parser);
-}
 
 void token_free(token_t* token)
 {
@@ -1395,7 +1397,7 @@ void parser_parse(parser_t* parser)
 			// 	break;
 
 			case TOKEN_TYPE_LAYOUT:
-				parser->layout = parser_layout(parser);
+				parser->layout = parser_layout_element_mother(AST_TYPE_LAYOUT, parser);
 
 				break;
 			

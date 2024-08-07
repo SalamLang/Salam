@@ -244,6 +244,32 @@ void array_free(array_t* arr)
 		for (size_t i = 0; i < arr->length; i++) {
 			free(arr->data[i]);
 		}
+		
+		free(arr->data);
+		arr->data = NULL;
+	}
+
+	free(arr);
+	arr = NULL;
+}
+
+void array_token_free(array_t* arr)
+{
+	if (arr == NULL) return;
+
+	if (arr->data != NULL) {
+		for (size_t i = 0; i < arr->length; i++) {
+			token_t* token = arr->data[i];
+			
+			if(token->value != NULL) {
+				free(token->value);
+				token->value = NULL;
+			}
+
+			free(arr->data[i]);
+			arr->data[i] = NULL;
+		}
+		
 		free(arr->data);
 		arr->data = NULL;
 	}
@@ -547,29 +573,7 @@ void lexer_free(lexer_t* lexer)
 {
 	if (lexer == NULL) return;
 
-	if (lexer->tokens != NULL) {
-		for (size_t i = 0; i < lexer->tokens->length; i++) {
-			token_t* t = (token_t*) lexer->tokens->data[i];
-
-			if (t != NULL) {
-				if (t->value != NULL) {
-					free(t->value);
-					t->value = NULL;
-				}
-
-				free(t);
-				t = NULL;
-			}
-		}
-
-		if (lexer->tokens->data != NULL) {
-			free(lexer->tokens->data);
-			lexer->tokens->data = NULL;
-		}
-
-		free(lexer->tokens);
-		lexer->tokens = NULL;
-	}
+	array_token_free(lexer->tokens);
 
 	if (lexer->data != NULL) {
 		free(lexer->data);
@@ -1415,7 +1419,7 @@ void parser_parse(parser_t* parser)
 
 					exit(EXIT_FAILURE);
 				// }
-				
+
 				break;
 		}
 	}

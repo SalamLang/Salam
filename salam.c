@@ -446,34 +446,34 @@ void hashmap_string_free(hashmap_t *map)
 	map = NULL;
 }
 
-void hashmap_array_free(hashmap_t *map)
-{
-	if (map == NULL) return;
+// void hashmap_array_free(hashmap_t *map)
+// {
+// 	if (map == NULL) return;
 
-	if (map->data != NULL) {
-		for (size_t i = 0; i < map->size; i++) {
-			hashmap_entry_t *entry = map->data[i];
+// 	if (map->data != NULL) {
+// 		for (size_t i = 0; i < map->size; i++) {
+// 			hashmap_entry_t *entry = map->data[i];
 
-			while (entry) {
-				hashmap_entry_t *next = entry->next;
-				free(entry->key);
-				entry->key = NULL;
-				array_t* array = entry->value;
-				array_free(array);
-				entry->value = NULL;
+// 			while (entry) {
+// 				hashmap_entry_t *next = entry->next;
+// 				free(entry->key);
+// 				entry->key = NULL;
+// 				array_t* array = entry->value;
+// 				array_free(array);
+// 				entry->value = NULL;
 				
-				free(entry);
-				entry = next;
-			}
-		}
+// 				free(entry);
+// 				entry = next;
+// 			}
+// 		}
 
-		free(map->data);
-		map->data = NULL;
-	}
+// 		free(map->data);
+// 		map->data = NULL;
+// 	}
 
-	free(map);
-	map = NULL;
-}
+// 	free(map);
+// 	map = NULL;
+// }
 
 void hashmap_free(hashmap_t *map)
 {
@@ -2504,7 +2504,8 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 					}
 
 					if (is_style_attribute(entry->key) && isBorderTable == false) {
-						hashmap_put(styles, entry->key, array_copy(entry->value));
+						array_t* values = array_copy(entry->value);
+						hashmap_put(styles, entry->key, values);
 					}
 					else {
 						if (strcmp(entry->key, "محتوا") == 0) *element_content = array_copy(entry->value);
@@ -2541,18 +2542,22 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 				char* buf1 = attribute_css_name(entry->key);
 				if (buf1 != NULL) {
 					array_t* values = entry->value;
-					char* buf2 = attribute_css_values(buf1, values);
-					if (buf2 != NULL) {
-						string_append_str(css_buffer, buf1);
 
-						string_append_char(css_buffer, ':');
+					if (values != NULL && values->length > 0) {
+						char* buf2 = attribute_css_values(buf1, values);
 
-						string_append_str(css_buffer, buf2);
+						if (buf2 != NULL) {
+							string_append_str(css_buffer, buf1);
 
-						if (styles->length != css_attrs) string_append_char(css_buffer, ';');
+							string_append_char(css_buffer, ':');
 
-						free(buf2);
-						buf2 = NULL;
+							string_append_str(css_buffer, buf2);
+
+							if (styles->length != css_attrs) string_append_char(css_buffer, ';');
+
+							free(buf2);
+							buf2 = NULL;
+						}
 					}
 
 					free(buf1);
@@ -2572,8 +2577,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 		string_free(css_buffer);
 	}
 	
-	hashmap_array_free(styles);
-	// hashmap_string_free(styles);
+	// hashmap_array_free(styles);
 
 	return str;
 }
@@ -2680,26 +2684,6 @@ string_t* generate_string(parser_t* parser, int ident)
 						string_append_str(str, title_value);
 						string_append_str(str, "</title>\n");
 					}
-					/*
-					for (size_t i = 0; i < parser->layout->attributes->size; i++) {
-						hashmap_entry_t *entry = parser->layout->attributes->data[i];
-
-						while (entry) {
-							generate_layout_ident(str, ident + 2);
-
-							string_append_char(str, '<');
-							string_append_str(str, entry->key);
-							string_append_char(str, '=');
-							string_append_char(str, '\"');
-							string_append_str(str, entry->value);
-							string_append_char(str, '\"');
-							string_append_char(str, '>');
-							string_append_char(str, '\n');
-
-							entry = entry->next;
-						}
-					}
-					*/
 				}
 			}
 		}

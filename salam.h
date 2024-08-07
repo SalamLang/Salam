@@ -258,7 +258,7 @@ char* read_dynamic_string();
 char* intToString(int value);
 char* file_read(char* file_Name);
 char* trim_value(char* value);
-char* attribute_css_multiple_size_value(char* attribute_name, char* attribute_value);
+char* attribute_css_multiple_size_value(char* attribute_name, array_t* attribute_values);
 char* attribute_css_size_value(char* attribute_name, char* attribute_value);
 bool is_english_digit(wchar_t ch);
 bool is_persian_digit(wchar_t ch);

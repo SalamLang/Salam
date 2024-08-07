@@ -15,6 +15,14 @@ bool debug_enabled = true;
 		exit(EXIT_FAILURE); \
 	}
 
+#define CHECK_MEMORY_ALLOCATION(ptr, errorMsg, ...)             \
+    do {                                                       \
+        if (ptr == NULL) {                                     \
+            fprintf(stderr, errorMsg, ##__VA_ARGS__);          \
+            exit(EXIT_FAILURE);                                \
+        }                                                      \
+    } while (0)
+
 struct ast_expression;
 
 struct ast_literal_t;
@@ -265,6 +273,7 @@ bool is_persian_digit(wchar_t ch);
 bool is_arabic_digit(wchar_t ch);
 bool string_is_number(const char* value);
 char* attribute_css_values(char* attribute_name, array_t* attribute_values);
+char* normalise_css_size(char* attribute_value);
 
 // String
 string_t* string_create(size_t initial_size);

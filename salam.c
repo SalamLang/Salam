@@ -1815,6 +1815,7 @@ string_t* ast_string(parser_t* parser, int ident)
 			
 			string_t* buf = ast_layout_string(element, parser, ident + 1);
 			string_append(str, buf);
+
 			string_free(buf);
 		}
 
@@ -1843,12 +1844,113 @@ void generate_layout_ident(string_t* str, int ident)
 	for (int i = 0; i < ident; i++) string_append_char(str, '\t');
 }
 
-// string_t* generate_layout(ast_layout_node_t* node, parser_t* parser, int ident)
-// {
-// 	string_t* str = string_create(10);
+bool is_allowed_general_layout_property(char* attribute_name)
+{
+	const char* attributes[] = {
+		"شناسه",
+		"کلاس",
+	};
+	int num_attributes = sizeof(attributes) / sizeof(attributes[0]);
 
-// 	return str;
-// }
+	for (int i = 0; i < num_attributes; i++) {
+		if (strcmp(attribute_name, attributes[i]) == 0) return true;
+	}
+
+	return false;
+}
+
+bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_name)
+{
+	if (is_allowed_general_layout_property(attribute_name)) return true;
+
+	switch (type) {
+		case AST_TYPE_LAYOUT_BUTTON:
+			if (strcmp(attribute_name, "نام") == 0) return true;
+		break;
+
+		case AST_TYPE_LAYOUT_TEXT:
+		break;
+
+		case AST_TYPE_LAYOUT_INPUT:
+			if (strcmp(attribute_name, "نام") == 0) return true;
+			else if (strcmp(attribute_name, "نوع") == 0) return true;
+		break;
+
+		case AST_TYPE_LAYOUT_LINK:
+			if (strcmp(attribute_name, "منبع") == 0) return true;
+			else if (strcmp(attribute_name, "نوع") == 0) return true;
+		break;
+
+		case AST_TYPE_LAYOUT_IMAGE:
+			if (strcmp(attribute_name, "منبع") == 0) return true;
+			else if (strcmp(attribute_name, "عرض") == 0) return true;
+			else if (strcmp(attribute_name, "ارتفاع") == 0) return true;
+		break;
+
+		case AST_TYPE_LAYOUT_CENTER:
+		break;
+
+		case AST_TYPE_LAYOUT_FORM:
+			if (strcmp(attribute_name, "نام") == 0) return true;
+			else if (strcmp(attribute_name, "نوع") == 0) return true;
+			else if (strcmp(attribute_name, "منبع") == 0) return true;
+		break;
+
+		case AST_TYPE_LAYOUT_TABLE:
+		break;
+
+		case AST_TYPE_LAYOUT_TABLE_ROW:
+		break;
+
+		case AST_TYPE_LAYOUT_TABLE_COLUMN:
+		break;
+
+		case AST_TYPE_LAYOUT_BOLD:
+		break;
+
+		case AST_TYPE_LAYOUT_DIV:
+		break;
+
+		case AST_TYPE_LAYOUT_PARAGTAPH:
+		break;
+
+		case AST_TYPE_LAYOUT_TEXTAREA:
+			if (strcmp(attribute_name, "نام") == 0) return true;
+		break;
+
+		case AST_TYPE_LAYOUT_SELECT:
+			if (strcmp(attribute_name, "نام") == 0) return true;
+		break;
+
+		case AST_TYPE_LAYOUT_SELECT_OPTION:
+			if (strcmp(attribute_name, "نام") == 0) return true;
+			else if (strcmp(attribute_name, "مقدار") == 0) return true;
+		break;
+	}
+
+	return false;
+}
+
+bool is_allowed_single_layout_property(ast_layout_type_t type, char* attribute_name)
+{
+	// if (is_allowed_general_layout_property(attribute_name)) return true;
+
+	switch (type) {
+		case AST_TYPE_LAYOUT_LINE:
+		break;
+
+		case AST_TYPE_LAYOUT_BREAK:
+		break;
+	}
+
+	return false;
+}
+
+bool is_allowed_layout_property(bool is_mother, ast_layout_type_t type, char* attribute_name)
+{
+	if (is_mother) return is_allowed_mother_layout_property(type, attribute_name);
+	else return is_allowed_single_layout_property(type, attribute_name);
+}
 
 bool is_style_attribute(char* attribute_name)
 {
@@ -2529,6 +2631,11 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 					else {
 						if (strcmp(entry->key, "محتوا") == 0) *element_content = array_copy(entry->value);
 						else {
+							if (is_allowed_layout_property(element->is_mother, element->type, entry->key) == false) {
+								entry = entry->next;
+								continue;
+							}
+
 							if (html_attrs != 0) string_append_char(str, ' ');
 							html_attrs++;
 

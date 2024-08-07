@@ -2723,8 +2723,6 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 	string_append_char(str, '<');
 	string_append_str(str, element_name);
 
-	string_append_str(str, "...");
-
 	string_t* buf = generate_layout_element_attributes(parser, element, &element_content, ident);
 	if (buf != NULL && buf->length > 0) {
 		string_append_char(str, ' ');

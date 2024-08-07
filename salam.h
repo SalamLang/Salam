@@ -264,6 +264,7 @@ bool is_english_digit(wchar_t ch);
 bool is_persian_digit(wchar_t ch);
 bool is_arabic_digit(wchar_t ch);
 bool string_is_number(const char* value);
+char* attribute_css_values(char* attribute_name, array_t* attribute_values);
 
 // String
 string_t* string_create(size_t initial_size);
@@ -301,6 +302,7 @@ void* array_pop(array_t* arr);
 void array_push(array_t* arr, void* data);
 void array_free(array_t* arr);
 void array_print(array_t* arr);
+array_t* array_copy(array_t* arr);
 
 // Token
 token_t* token_create(token_type_t type, const char* value, int a, int b, int c, int b2, int c2);
@@ -343,3 +345,7 @@ ast_layout_t* parser_layout(parser_t* parser);
 
 void help();
 int main(int argc, char** argv);
+
+void attributes_free(hashmap_t* attributes);
+void children_free(array_t* children);
+void ast_layout_node_free(ast_layout_node_t* node);

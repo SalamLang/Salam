@@ -1171,7 +1171,7 @@ void parser_layout_element_attribute(parser_t* parser, ast_layout_type_t layout_
 
 	ast_layout_type_t type = convert_layout_identifier_token_type(current_token->value);
 
-	if (type == AST_TYPE_LAYOUT_ERROR) {
+	if (type == AST_TYPE_LAYOUT_ERROR && (acceptAttrs == true || acceptStyles == true)) {
 		parser->token_index++; // Eating the attr name
 		parser_token_eat_nodata(parser, TOKEN_TYPE_COLON); // :
 		
@@ -1180,20 +1180,25 @@ void parser_layout_element_attribute(parser_t* parser, ast_layout_type_t layout_
 		if (acceptStyles == true && is_style_attribute(current_token->value)) hashmap_put(element->styles, current_token->value, values);
 		else if (acceptAttrs == true) hashmap_put(element->attributes, current_token->value, values);
 	}
-	else if (acceptHoverStyles == true && type == AST_TYPE_LAYOUT_HOVER) {
+	else if (type == AST_TYPE_LAYOUT_HOVER && acceptHoverStyles == true) {
 		parser->token_index++; // Eating keyword
 		parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
-		
-		parser_layout_element_attributes(parser, type, element, false, true, false, false);
+
+		parser_layout_element_attributes(parser, layout_type, element, false, true, false, false);
 
 		parser_token_eat_nodata(parser, TOKEN_TYPE_END);
 	}
-	else {
+	else if (acceptChildren == true) {
 		token_print(current_token);
 
 		ast_layout_node_t* new_child = parser_layout_element(parser);
 
 		array_push(element->children, new_child);
+	}
+	else {
+		printf("Error!");
+
+		exit(1);
 	}
 }
 
@@ -1210,11 +1215,13 @@ void parser_layout_element_attributes(parser_t* parser, ast_layout_type_t layout
 
 ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t layout_type, parser_t* parser)
 {
+	printf("parser_layout_element_mother\n");
 	ast_layout_node_t* element;
 	CREATE_MEMORY_OBJECT(element, ast_layout_node_t, 1, "Error: parser_layout_element_mother<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	element->type = layout_type;
 	element->children = array_create(1);
+	element->attributes = hashmap_create();
 	element->styles = hashmap_create();
 	element->hoverStyles = hashmap_create();
 	element->is_mother = true;

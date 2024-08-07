@@ -2471,16 +2471,22 @@ string_t* generate_layout_element_attribute(parser_t* parser, hashmap_entry_t* e
 {
 	string_t* str = string_create(10);
 
-	string_append_str(str, entry->key);
-	string_append_char(str, '=');
+	char* values = array_string(entry->value, " ");
 
-	if (strlen(entry->value) == 1) {
-		string_append_str(str, entry->value);
-	}
-	else {
-		string_append_char(str, '\"');
-		string_append_str(str, entry->value);
-		string_append_char(str, '\"');
+	if (values != NULL) {
+		string_append_str(str, entry->key);
+		string_append_char(str, '=');
+
+		if (strlen(values) == 1) {
+			string_append_str(str, values);
+		}
+		else {
+			string_append_char(str, '\"');
+			string_append_str(str, values);
+			string_append_char(str, '\"');
+		}
+
+		free(values);
 	}
 
 	return str;
@@ -2502,17 +2508,16 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 
 				while (entry) {
 					bool isBorderTable = false;
+
 					if (element->type == AST_TYPE_LAYOUT_TABLE && strcmp(entry->key, "حاشیه") == 0) {
 						isBorderTable = true;
 
 						strcpy(entry->key, "border");
 					}
-
-					if (element->type == AST_TYPE_LAYOUT_LINK && strcmp(entry->key, "منبع") == 0) {
+					else if (element->type == AST_TYPE_LAYOUT_LINK && strcmp(entry->key, "منبع") == 0) {
 						strcpy(entry->key, "href");
 					}
-
-					if (element->type == AST_TYPE_LAYOUT_IMAGE && strcmp(entry->key, "منبع") == 0) {
+					else if (element->type == AST_TYPE_LAYOUT_IMAGE && strcmp(entry->key, "منبع") == 0) {
 						strcpy(entry->key, "src");
 					}
 
@@ -2527,9 +2532,9 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 							if (html_attrs != 0) string_append_char(str, ' ');
 							html_attrs++;
 
-
 							string_t* buf = generate_layout_element_attribute(parser, entry);
 							string_append(str, buf);
+
 							string_free(buf);
 						}
 					}

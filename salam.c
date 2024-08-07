@@ -1139,6 +1139,7 @@ hashmap_t* parser_layout_element_attributes(parser_t* parser, array_t* children)
 
 				if (parser->token_index < parser->lexer->tokens->length) {
 					attr_value = parser_token_get(parser);
+
 					if (attr_value->type == TOKEN_TYPE_COMMA) {
 						parser->token_index++;
 					}
@@ -1207,15 +1208,18 @@ ast_layout_node_t* parser_layout_element(parser_t* parser)
 		case AST_TYPE_LAYOUT_BOLD:
 		case AST_TYPE_LAYOUT_TEXTAREA:
 			return parser_layout_element_mother(type, parser);
+
 			break;
 		
 		case AST_TYPE_LAYOUT_LINE:
 		case AST_TYPE_LAYOUT_BREAK:
 			return parser_layout_element_single(type, parser);
+
 			break;
 		
 		default:
 			return NULL;
+
 			break;
 	}
 }
@@ -1326,7 +1330,9 @@ void parser_token_eat_nodata(parser_t* parser, token_type_t type)
 token_t* parser_token_get(parser_t* parser)
 {
 	if (parser->lexer->tokens->length > parser->token_index) {
-		return (token_t*) parser->lexer->tokens->data[parser->token_index];
+		token_t* token = parser->lexer->tokens->data[parser->token_index];
+		
+		return token;
 	}
 
 	return NULL;
@@ -2508,7 +2514,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 
 					if (is_style_attribute(entry->key) && isBorderTable == false) {
 						array_t* values = array_copy(entry->value);
-						
+
 						hashmap_put(styles, entry->key, values);
 					}
 					else {

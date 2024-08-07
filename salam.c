@@ -164,6 +164,7 @@ char* file_read(char* file_name)
 
 	char* file_data;
 	CREATE_MEMORY_OBJECT(file_data, char, file_size + 1, "Error: file_read<file_data> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 	fread(file_data, 1, file_size, file);
 	file_data[file_size] = 0;
 
@@ -342,6 +343,7 @@ hashmap_t* hashmap_create()
 {
 	hashmap_t *map;
 	CREATE_MEMORY_OBJECT(map, hashmap_t, 1, "Error: hashmap_create<map> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 	map->size = 16;
 	map->length = 0;
 	map->data = (hashmap_entry_t**) calloc(map->size, sizeof(hashmap_entry_t*));
@@ -377,6 +379,7 @@ void hashmap_put(hashmap_t *map, const char *key, void *value)
 
 	hashmap_entry_t *new_entry;
 	CREATE_MEMORY_OBJECT(new_entry, hashmap_entry_t, 1, "Error: hashmap_put<new_entry> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	
 	new_entry->key = strdup(key);
 	new_entry->value = value;
 	new_entry->next = map->data[index];
@@ -564,6 +567,7 @@ lexer_t* lexer_create(const char* data)
 {
 	lexer_t* lexer;
 	CREATE_MEMORY_OBJECT(lexer, lexer_t, 1, "Error: lexer_create<lexer> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 	lexer->index = 0;
 	lexer->tokens = array_create(10);
 
@@ -1117,6 +1121,7 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t
 {
 	ast_layout_node_t* element;
 	CREATE_MEMORY_OBJECT(element, ast_layout_node_t, 1, "Error: parser_layout_element_single<element> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 	element->type = type;
 	element->children = array_create(1);
 	element->attributes = hashmap_create();
@@ -1129,7 +1134,7 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t type, parser_t
 	return element;
 }
 
-hashmap_t* parser_layout_element_attributes(parser_t* parser, ast_layout_type_t type, array_t* children, hashmap_t** styles, hashmap_t** hoverStyles)
+hashmap_t* parser_layout_element_attributes(parser_t* parser, ast_layout_type_t type, array_t* children, hashmap_t* styles, hashmap_t** hoverStyles)
 {
 	hashmap_t* attributes = hashmap_create();
 
@@ -1183,8 +1188,7 @@ hashmap_t* parser_layout_element_attributes(parser_t* parser, ast_layout_type_t 
 			ast_layout_node_t* element = parser_layout_element(parser);
 
 			if (element->type == AST_TYPE_LAYOUT_HOVER) *hoverStyles = element->attributes;
-
-			array_push(children, element);
+			else array_push(children, element);
 		}
 	}
 
@@ -1206,7 +1210,7 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t type, parser_t
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
 
-	element->attributes = parser_layout_element_attributes(parser, type, element->children, element->styles, element->hoverStyles);
+	element->attributes = parser_layout_element_attributes(parser, type, element->children, element->styles, &element->hoverStyles);
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_END);
 
@@ -1556,9 +1560,11 @@ void ast_node_free(ast_node_t* node)
 		
 		case AST_TYPE_LAYOUT:
 			if (node->data.layout != NULL) {
-				children_free(node->data.layout->children);
-
 				attributes_free(node->data.layout->attributes);
+				attributes_free(node->data.layout->styles);
+				attributes_free(node->data.layout->hoverStyles);
+
+				children_free(node->data.layout->children);
 
 				free(node->data.layout);
 				node->data.layout = NULL;
@@ -1579,6 +1585,8 @@ void parser_free(parser_t* parser)
 
 	if (parser->layout != NULL) {
 		attributes_free(parser->layout->attributes);
+		attributes_free(parser->layout->styles);
+		attributes_free(parser->layout->hoverStyles);
 
 		children_free(parser->layout->children);
 
@@ -2608,12 +2616,6 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	int css_attrs = 0;
 	int html_attrs = 0;
 
-	// if (is_style_attribute(entry->key) && isBorderTable == false) {
-	// 	array_t* values = array_copy(entry->value);
-	// 
-	// 	hashmap_put(styles, entry->key, values);
-	// }
-
 	if (element->attributes != NULL && element->attributes->length > 0) {
 		for (size_t i = 0; i < element->attributes->size; i++) {
 			hashmap_entry_t *entry = element->attributes->data[i];
@@ -2632,15 +2634,12 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 						string_append(str, buf);
 
 						string_free(buf);
-					}
-					else {
-						entry = entry->next;
 
-						continue;
+						free(newKey);
 					}
 					
 					free(newKey);
-				}
+				}				
 				
 				entry = entry->next;
 			}
@@ -2657,6 +2656,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 				css_attrs++;
 
 				char* buf1 = attribute_css_name(entry->key);
+
 				if (buf1 != NULL) {
 					array_t* values = entry->value;
 
@@ -2823,7 +2823,7 @@ string_t* generate_string(parser_t* parser, int ident)
 		generate_layout_ident(str, ident + 2);
 		string_append_str(str, "<style type=\"text/css\">\n");
 		generate_layout_ident(str, ident + 3);
-		string_append_str(str, "html,body,div,span,applet,object,iframe,h1,h2,h3,h4,h5,h6,p,blockquote,pre,a,abbr,acronym,address,big,cite,code,del,dfn,em,img,ins,kbd,q,s,samp,small,strike,strong,sub,sup,tt,var,b,u,i,center,dl,dt,dd,ol,ul,li,fieldset,form,label,legend,table,caption,tbody,tfoot,thead,tr,th,td,article,aside,canvas,details,embed,figure,figcaption,footer,header,hgroup,menu,nav,output,ruby,section,summary,time,mark,audio,video {margin:0;padding:0;border:0;font-size:100%;font:inherit;vertical-align:baseline}article,aside,details,figcaption,figure,footer,header,hgroup,menu,nav,section {display:block}body {line-height:1}ol,ul {list-style:none}blockquote,q {quotes:none}blockquote:before,blockquote:after,q:before,q:after {content:'';content:none}table {border-collapse:collapse;border-spacing:0}\n");
+		string_append_str(str, "html,body,div,span,applet,object,iframe,h1,h2,h3,h4,h5,h6,p,blockquote,pre,a,abbr,acronym,address,big,cite,code,del,dfn,em,img,ins,kbd,q,s,samp,small,strike,strong,sub,sup,tt,var,b,u,i,center,dl,dt,dd,ol,ul,li,fieldset,form,label,legend,table,caption,tbody,tfoot,thead,tr,th,td,article,aside,canvas,details,embed,figure,figcaption,footer,header,hgroup,menu,nav,output,ruby,section,summary,time,mark,audio,video{margin:0;padding:0;border:0;font-size:100%;font:inherit;vertical-align:baseline}article,aside,details,figcaption,figure,footer,header,hgroup,menu,nav,section{display:block}body{line-height:1}ol,ul{list-style:none}blockquote,q{quotes:none}blockquote:before,blockquote:after,q:before,q:after{content:'';content:none}table{border-collapse:collapse;border-spacing:0}\n");
 		generate_layout_ident(str, ident + 2);
 		string_append_str(str, "</style>\n");
 
@@ -2969,7 +2969,7 @@ int main(int argc, char** argv)
 	ast_print(parser);
 
 	generate_print(parser);
-	// generate_file(parser, "output.html");
+	generate_file(parser, "output.html");
 
 	print_message("free parser\n");
 	parser_free(parser);

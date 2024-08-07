@@ -2579,28 +2579,21 @@ char* attribute_css_values(char* attribute_name, array_t* attribute_values)
 
 char* attribute_css_name(const char* attribute_name)
 {
-	char* res;
-	CREATE_MEMORY_OBJECT(res, char, 18, "Error: attribute_css_name<res> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-
-	if (strcmp(attribute_name, "رنگ") == 0) strcpy(res, "color");
-	else if (strcmp(attribute_name, "زمینه") == 0) strcpy(res, "background-color");
-	else if (strcmp(attribute_name, "فونت") == 0) strcpy(res, "font-family");
-	else if (strcmp(attribute_name, "اندازه") == 0) strcpy(res, "font-size");
-	else if (strcmp(attribute_name, "فاصله") == 0) strcpy(res, "padding");
-	else if (strcmp(attribute_name, "طول") == 0) strcpy(res, "width");
-	else if (strcmp(attribute_name, "ارتفاع") == 0) strcpy(res, "height");
-	else if (strcmp(attribute_name, "فضا") == 0) strcpy(res, "margin");
-	else if (strcmp(attribute_name, "حاشیه") == 0) strcpy(res, "border");
-	else if (strcmp(attribute_name, "تصویر") == 0) strcpy(res, "background-image");
-	else if (strcmp(attribute_name, "ماوس") == 0) strcpy(res, "cursor");
-	else if (strcmp(attribute_name, "گردی") == 0) strcpy(res, "border-radius");
+	if (strcmp(attribute_name, "رنگ") == 0) return "color";
+	else if (strcmp(attribute_name, "زمینه") == 0) return "background-color";
+	else if (strcmp(attribute_name, "فونت") == 0) return "font-family";
+	else if (strcmp(attribute_name, "اندازه") == 0) return "font-size";
+	else if (strcmp(attribute_name, "فاصله") == 0) return "padding";
+	else if (strcmp(attribute_name, "طول") == 0) return "width";
+	else if (strcmp(attribute_name, "ارتفاع") == 0) return "height";
+	else if (strcmp(attribute_name, "فضا") == 0) return "margin";
+	else if (strcmp(attribute_name, "حاشیه") == 0) return  "border";
+	else if (strcmp(attribute_name, "تصویر") == 0) return "background-image";
+	else if (strcmp(attribute_name, "ماوس") == 0) return "cursor";
+	else if (strcmp(attribute_name, "گردی") == 0) return "border-radius";
 	else {
-		free(res);
-
 		return NULL;
 	}
-
-	return res;
 }
 
 string_t* generate_layout_element_attribute(parser_t* parser, char* key, array_t* values)

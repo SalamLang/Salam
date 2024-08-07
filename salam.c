@@ -1805,18 +1805,23 @@ void generate_layout_ident(string_t* str, int ident)
 
 bool is_allowed_general_layout_property(char* attribute_name, char** new_attribute_name)
 {
+	// *new_attribute_name = NULL;
+
 	const char* attributes[] = {
 		"شناسه",
 		"کلاس",
+		"الویت",
 	};
 	const char* html_attributes[] = {
 		"id",
 		"class",
+		"z-index",
 	};
 	int num_attributes = sizeof(attributes) / sizeof(attributes[0]);
 
 	for (int i = 0; i < num_attributes; i++) {
-		if (strcmp(attribute_name, attributes[i]) == 0) { strcpy(*new_attribute_name, html_attributes[i]); return true; }
+		if (strcmp(attribute_name, attributes[i]) == 0)
+		{ strcpy(*new_attribute_name, html_attributes[i]); return true; }
 	}
 
 	return false;
@@ -1824,7 +1829,7 @@ bool is_allowed_general_layout_property(char* attribute_name, char** new_attribu
 
 bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_name, char** new_attribute_name)
 {
-	*new_attribute_name = NULL;
+	// *new_attribute_name = NULL;
 	if (is_allowed_general_layout_property(attribute_name, new_attribute_name)) return true;
 
 	switch (type) {
@@ -1897,7 +1902,7 @@ bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_n
 
 bool is_allowed_single_layout_property(ast_layout_type_t type, char* attribute_name, char** new_attribute_name)
 {
-	*new_attribute_name = NULL;
+	// *new_attribute_name = NULL;
 	// if (is_allowed_general_layout_property(attribute_name, new_attribute_name)) return true;
 
 	switch (type) {
@@ -2596,10 +2601,14 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 					else {
 						if (strcmp(entry->key, "محتوا") == 0) *element_content = array_copy(entry->value);
 						else {
-							char* newKey;
-							if (is_allowed_layout_property(element->is_mother, element->type, entry->key, &newKey) == true && newKey != NULL) {
+							char* newKey = malloc(sizeof(char) * 100);
+
+							if ((is_allowed_layout_property(element->is_mother, element->type, entry->key, &newKey) == true) && newKey != NULL) {
 								if (html_attrs != 0) string_append_char(str, ' ');
 								html_attrs++;
+
+								free(entry->key);
+								entry->key = newKey;
 
 								string_t* buf = generate_layout_element_attribute(parser, entry);
 								string_append(str, buf);
@@ -2607,7 +2616,10 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 								string_free(buf);
 							}
 							else {
+								free(newKey);
+
 								entry = entry->next;
+								
 								continue;
 							}
 						}

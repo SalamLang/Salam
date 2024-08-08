@@ -1165,7 +1165,7 @@ array_t* parser_layout_attribute_array_value(parser_t* parser)
 	return values;
 }
 
-void parser_layout_element_attribute(parser_t* parser, ast_layout_type_t layout_type, ast_layout_node_t* element, bool acceptAttrs, bool acceptStyles, bool acceptHoverStyles, bool acceptChildren)
+void parser_layout_element_attribute(parser_t* parser, ast_layout_type_t layout_type, ast_layout_node_t* element, bool acceptAttrs, bool acceptStyles, bool acceptHoverStyles, bool acceptChildren, bool isHoverStyles)
 {
 	token_t* current_token = parser_token_get(parser);
 
@@ -1177,14 +1177,17 @@ void parser_layout_element_attribute(parser_t* parser, ast_layout_type_t layout_
 		
 		array_t* values = parser_layout_attribute_array_value(parser);
 
-		if (acceptStyles == true && is_style_attribute(current_token->value)) hashmap_put(element->styles, current_token->value, values);
+		if (acceptStyles == true && is_style_attribute(current_token->value)) {
+			if (isHoverStyles == true) hashmap_put(element->hoverStyles, current_token->value, values);
+			else hashmap_put(element->styles, current_token->value, values);
+		}
 		else if (acceptAttrs == true) hashmap_put(element->attributes, current_token->value, values);
 	}
 	else if (type == AST_TYPE_LAYOUT_HOVER && acceptHoverStyles == true) {
 		parser->token_index++; // Eating keyword
 		parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
 
-		parser_layout_element_attributes(parser, layout_type, element, false, true, false, false);
+		parser_layout_element_attributes(parser, layout_type, element, false, true, false, false, true);
 
 		parser_token_eat_nodata(parser, TOKEN_TYPE_END);
 	}
@@ -1202,14 +1205,14 @@ void parser_layout_element_attribute(parser_t* parser, ast_layout_type_t layout_
 	}
 }
 
-void parser_layout_element_attributes(parser_t* parser, ast_layout_type_t layout_type, ast_layout_node_t* element, bool acceptAttrs, bool acceptStyles, bool acceptHoverStyles, bool acceptChildren)
+void parser_layout_element_attributes(parser_t* parser, ast_layout_type_t layout_type, ast_layout_node_t* element, bool acceptAttrs, bool acceptStyles, bool acceptHoverStyles, bool acceptChildren, bool isHoverStyles)
 {
 	while (parser->token_index < parser->lexer->tokens->length) {
 		token_t* current_token = parser_token_get(parser);
 
 		if (current_token->type == TOKEN_TYPE_END) break;
 
-		parser_layout_element_attribute(parser, layout_type, element, acceptAttrs, acceptStyles, acceptHoverStyles, acceptChildren);
+		parser_layout_element_attribute(parser, layout_type, element, acceptAttrs, acceptStyles, acceptHoverStyles, acceptChildren, isHoverStyles);
 	}
 }
 
@@ -1230,7 +1233,7 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t layout_type, p
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_COLON);
 
-	parser_layout_element_attributes(parser, layout_type, element, true, true, true, true);
+	parser_layout_element_attributes(parser, layout_type, element, true, true, true, true, false);
 
 	parser_token_eat_nodata(parser, TOKEN_TYPE_END);
 

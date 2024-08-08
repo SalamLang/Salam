@@ -2151,7 +2151,17 @@ bool is_style_attribute(char* attribute_name)
 	else if (strcmp(attribute_name, "اندازه") == 0) return true;
 	else if (strcmp(attribute_name, "وزن") == 0) return true;
 	else if (strcmp(attribute_name, "فاصله") == 0) return true;
+	else if (strcmp(attribute_name, "فاصله‌راست") == 0) return true;
+	else if (strcmp(attribute_name, "فاصله‌چپ") == 0) return true;
+	else if (strcmp(attribute_name, "فاصله‌بالا") == 0) return true;
+	else if (strcmp(attribute_name, "فاصله‌پایین") == 0) return true;
+	else if (strcmp(attribute_name, "طول") == 0) return true;
+	else if (strcmp(attribute_name, "ارتفاع") == 0) return true;
 	else if (strcmp(attribute_name, "فضا") == 0) return true;
+	else if (strcmp(attribute_name, "فضا‌راست") == 0) return true;
+	else if (strcmp(attribute_name, "فضا‌چپ") == 0) return true;
+	else if (strcmp(attribute_name, "فضا‌بالا") == 0) return true;
+	else if (strcmp(attribute_name, "فضا‌پایین") == 0) return true;
 	else if (strcmp(attribute_name, "طول") == 0) return true;
 	else if (strcmp(attribute_name, "ارتفاع") == 0) return true;
 	else if (strcmp(attribute_name, "حاشیه") == 0) return true;
@@ -2507,6 +2517,42 @@ char* attribute_css_values(ast_layout_type_t type, char* attribute_name, array_t
 		else if (attribute_values->length == 1 && strcmp(attribute_value, "بزرگ‌نمایی خروج") == 0) { strcpy(res, "zoom-out"); return res; }
 		else if (attribute_values->length == 1 && strcmp(attribute_value, "در حال بارگذاری") == 0) { strcpy(res, "progress"); return res; }
 	}
+	if (strcmp(attribute_name, "display") == 0) {
+		if (attribute_values->length == 1 && strcmp(attribute_value, "بلوک") == 0) { strcpy(res, "block"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "درون‌خطی") == 0) { strcpy(res, "inline"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "درون‌خطی بلوک") == 0) { strcpy(res, "inline-block"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "انعطاف") == 0) { strcpy(res, "flex"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "درون‌خطی انعطاف") == 0) { strcpy(res, "inline-flex"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "شبکه") == 0) { strcpy(res, "grid"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "درون‌خطی شبکه") == 0) { strcpy(res, "inline-grid"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "ریشه جریان") == 0) { strcpy(res, "flow-root"); return res; }
+		
+		// box generation
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "هیچ") == 0) { strcpy(res, "none"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "محتوا") == 0) { strcpy(res, "contents"); return res; }
+
+		// multi-keyword syntax
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "بلوک انعطاف") == 0) { strcpy(res, "block flex"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "بلوک جریان") == 0) { strcpy(res, "block flow"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "بلوک ریشه جریان") == 0) { strcpy(res, "block flow-root"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "بلوک شبکه") == 0) { strcpy(res, "block grid"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "درون‌خطی انعطاف") == 0) { strcpy(res, "inline flex"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "درون‌خطی جریان") == 0) { strcpy(res, "inline flow"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "درون‌خطی ریشه جریان") == 0) { strcpy(res, "inline flow-root"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "درون‌خطی شبکه") == 0) { strcpy(res, "inline grid"); return res; }
+
+		// other values
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "جدول") == 0) { strcpy(res, "table"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سطر جدول") == 0) { strcpy(res, "table-row"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آیتم فهرست") == 0) { strcpy(res, "list-item"); return res; }
+	}
+	else if (strcmp(attribute_name, "position") == 0) {
+		if (attribute_values->length == 1 && strcmp(attribute_value, "ایستا") == 0) { strcpy(res, "static"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "نسبی") == 0) { strcpy(res, "relative"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "مطلق") == 0) { strcpy(res, "absolute"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "ثابت") == 0) { strcpy(res, "fixed"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "چسبنده") == 0) { strcpy(res, "sticky"); return res; }
+	}
 	else if (strcmp(attribute_name, "position") == 0) {
 		if (attribute_values->length == 1 && strcmp(attribute_value, "ایستا") == 0) { strcpy(res, "static"); return res; }
 		else if (attribute_values->length == 1 && strcmp(attribute_value, "نسبی") == 0) { strcpy(res, "relative"); return res; }
@@ -2839,9 +2885,17 @@ char* attribute_css_name(const char* attribute_name)
 	else if (strcmp(attribute_name, "اندازه") == 0) return "font-size";
 	else if (strcmp(attribute_name, "وزن") == 0) return "font-weight";
 	else if (strcmp(attribute_name, "فاصله") == 0) return "padding";
+	else if (strcmp(attribute_name, "فاصله‌راست") == 0) return "padding-right";
+	else if (strcmp(attribute_name, "فاصله‌چپ") == 0) return "padding-left";
+	else if (strcmp(attribute_name, "فاصله‌بالا") == 0) return "padding-top";
+	else if (strcmp(attribute_name, "فاصله‌پایین") == 0) return "padding-bottom";
 	else if (strcmp(attribute_name, "طول") == 0) return "width";
 	else if (strcmp(attribute_name, "ارتفاع") == 0) return "height";
 	else if (strcmp(attribute_name, "فضا") == 0) return "margin";
+	else if (strcmp(attribute_name, "فضا‌راست") == 0) return "margin-right";
+	else if (strcmp(attribute_name, "فضا‌چپ") == 0) return "margin-lef";
+	else if (strcmp(attribute_name, "فضا‌بالا") == 0) return "margin-top";
+	else if (strcmp(attribute_name, "فضا‌پایین") == 0) return "margin-bottom";
 	else if (strcmp(attribute_name, "حاشیه") == 0) return  "border";
 	else if (strcmp(attribute_name, "تصویر") == 0) return "background-image";
 	else if (strcmp(attribute_name, "ماوس") == 0) return "cursor";

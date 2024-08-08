@@ -342,7 +342,7 @@ void token_print(token_t* t)
 	print_message("%s\n", t->value);
 }
 
-char* array_string(array_t* array, char* seperator)
+char* array_string(array_t* array, char* separator)
 {
 	if (array == NULL || array->length == 0) return NULL;
 
@@ -353,7 +353,7 @@ char* array_string(array_t* array, char* seperator)
 		if (t != NULL) {
 			string_append_str(buffer, t);
 
-			if (seperator != NULL && i < array->length - 1) string_append_str(buffer, seperator);
+			if (separator != NULL && i < array->length - 1) string_append_str(buffer, separator);
 		}
 	}
 

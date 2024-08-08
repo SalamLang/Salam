@@ -1126,8 +1126,8 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t layout_type, p
 	element->type = layout_type;
 	element->children = array_create(1);
 	element->attributes = hashmap_create();
-	element->styles = NULL; // hashmap_create();
-	element->hoverStyles = NULL; // hashmap_create();
+	element->styles = hashmap_create();
+	element->hoverStyles = hashmap_create();
 	element->is_mother = false;
 
 	parser->token_index++; // Eating keyword
@@ -1581,14 +1581,16 @@ void ast_node_free(ast_node_t* node)
 		
 		case AST_TYPE_LAYOUT:
 			if (node->data.layout != NULL) {
-				attributes_free(node->data.layout->attributes);
-				attributes_free(node->data.layout->styles);
-				attributes_free(node->data.layout->hoverStyles);
+				ast_layout_node_free(node->data.layout);
 
-				children_free(node->data.layout->children);
+				// attributes_free(node->data.layout->attributes);
+				// attributes_free(node->data.layout->styles);
+				// attributes_free(node->data.layout->hoverStyles);
 
-				free(node->data.layout);
-				node->data.layout = NULL;
+				// children_free(node->data.layout->children);
+
+				// free(node->data.layout);
+				// node->data.layout = NULL;
 			}
 			break;
 		
@@ -2643,12 +2645,12 @@ string_t* generate_layout_element_attribute(parser_t* parser, char* key, array_t
 	return buffer;
 }
 
-string_t* generate_layout_element_attributes_styles(parser_t* parser, ast_layout_node_t* element, int* count)
+string_t* generate_layout_element_attributes_styles(parser_t* parser, ast_layout_node_t* element, hashmap_t* styles, int* count)
 {
 	string_t* css_hover_buffer = string_create(10);
 
-	for (size_t i = 0; i < element->hoverStyles->size; i++) {
-		hashmap_entry_t *entry = element->hoverStyles->data[i];
+	for (size_t i = 0; i < styles->size; i++) {
+		hashmap_entry_t *entry = styles->data[i];
 
 		while (entry) {
 			(*count)++;
@@ -2668,7 +2670,7 @@ string_t* generate_layout_element_attributes_styles(parser_t* parser, ast_layout
 
 						string_append_str(css_hover_buffer, buf2);
 
-						if (element->hoverStyles->length != (*count)) string_append_char(css_hover_buffer, ';');
+						if (styles->length != (*count)) string_append_char(css_hover_buffer, ';');
 					}
 				}
 			}
@@ -2719,7 +2721,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	}
 
 	if (element->styles != NULL && element->styles->length > 0) {
-		string_t* css_buffer = generate_layout_element_attributes_styles(parser, element, &css_attrs);
+		string_t* css_buffer = generate_layout_element_attributes_styles(parser, element, element->styles, &css_attrs);
 
 		if (css_buffer != NULL && css_buffer->length > 0) {
 			if (html_attrs > 0) string_append_char(str, ' ');
@@ -2733,7 +2735,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	}
 
 	if (element->hoverStyles != NULL && element->hoverStyles->length > 0) {
-		string_t* css_hover_buffer = generate_layout_element_attributes_styles(parser, element, &css_hover_attrs);
+		string_t* css_hover_buffer = generate_layout_element_attributes_styles(parser, element, element->hoverStyles, &css_hover_attrs);
 
 		if (css_hover_buffer != NULL && css_hover_buffer->length > 0) {
 			if (html_attrs > 0 || css_attrs > 0) string_append_char(str, ' ');

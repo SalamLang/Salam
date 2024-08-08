@@ -100,6 +100,7 @@ const layout_keyword_mapping_t layout_keyword_mapping[LANGUAGE_COUNT][50] = {
 		{"بولد", AST_TYPE_LAYOUT_BOLD},
 		{"جعبه", AST_TYPE_LAYOUT_DIV},
 		{"متن", AST_TYPE_LAYOUT_TEXT},
+		{"فرم", AST_TYPE_LAYOUT_FORM},
 		{"هاور", AST_TYPE_LAYOUT_HOVER},
 		{"پاراگراف", AST_TYPE_LAYOUT_PARAGTAPH},
 		{"فیلد", AST_TYPE_LAYOUT_INPUT},

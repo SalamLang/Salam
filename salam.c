@@ -1758,7 +1758,6 @@ void string_append_str_begin(string_t* str, const char* prefix)
     str->length += prefix_len;
 }
 
-
 void string_append_char(string_t* str, char c)
 {
 	if (str->length + 1 >= str->size) {
@@ -1976,7 +1975,7 @@ void generate_layout_ident(string_t* str, int ident)
 	for (int i = 0; i < ident; i++) string_append_char(str, '\t');
 }
 
-bool is_allowed_general_layout_property(char* attribute_name, char** new_attribute_name)
+bool is_allowed_general_layout_property(ast_layout_type_t type, char* attribute_name, array_t* attribute_values, char** new_attribute_name)
 {
 	// *new_attribute_name = NULL;
 
@@ -1993,17 +1992,27 @@ bool is_allowed_general_layout_property(char* attribute_name, char** new_attribu
 	int num_attributes = sizeof(attributes) / sizeof(attributes[0]);
 
 	for (int i = 0; i < num_attributes; i++) {
-		if (strcmp(attribute_name, attributes[i]) == 0)
-		{ strcpy(*new_attribute_name, html_attributes[i]); return true; }
+		if (strcmp(attribute_name, attributes[i]) == 0) { strcpy(*new_attribute_name, html_attributes[i]); return true; }
+	}
+
+	if (type == AST_TYPE_LAYOUT_FORM) {
+		if (strcmp(attribute_name, "نوع") == 0) {
+			if (attribute_values->length == 1) return true;
+			else return false;
+		}
+		else if (strcmp(attribute_name, "منبع") == 0) {
+			if (attribute_values->length == 1) return true;
+			else return false;
+		}
 	}
 
 	return false;
 }
 
-bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_name, char** new_attribute_name)
+bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_name, array_t* attribute_values, char** new_attribute_name)
 {
 	// *new_attribute_name = NULL;
-	if (is_allowed_general_layout_property(attribute_name, new_attribute_name)) return true;
+	if (is_allowed_general_layout_property(type, attribute_name, attribute_values, new_attribute_name)) return true;
 
 	switch (type) {
 		case AST_TYPE_LAYOUT_BUTTON:
@@ -2073,7 +2082,7 @@ bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_n
 	return false;
 }
 
-bool is_allowed_single_layout_property(ast_layout_type_t type, char* attribute_name, char** new_attribute_name)
+bool is_allowed_single_layout_property(ast_layout_type_t type, char* attribute_name, array_t* attribute_values, char** new_attribute_name)
 {
 	// *new_attribute_name = NULL;
 	// if (is_allowed_general_layout_property(attribute_name, new_attribute_name)) return true;
@@ -2089,10 +2098,10 @@ bool is_allowed_single_layout_property(ast_layout_type_t type, char* attribute_n
 	return false;
 }
 
-bool is_allowed_layout_property(bool is_mother, ast_layout_type_t type, char* attribute_name, char** new_attribute_name)
+bool is_allowed_layout_property(bool is_mother, ast_layout_type_t type, char* attribute_name, array_t* attribute_values, char** new_attribute_name)
 {
-	if (is_mother) return is_allowed_mother_layout_property(type, attribute_name, new_attribute_name);
-	else return is_allowed_single_layout_property(type, attribute_name, new_attribute_name);
+	if (is_mother) return is_allowed_mother_layout_property(type, attribute_name, attribute_values, new_attribute_name);
+	else return is_allowed_single_layout_property(type, attribute_name, attribute_values, new_attribute_name);
 }
 
 bool is_style_attribute(char* attribute_name)
@@ -2440,175 +2449,182 @@ bool string_is_number(const char* value)
 	return true;
 }
 
-char* attribute_css_values(char* attribute_name, array_t* attribute_values)
+char* attribute_css_values(ast_layout_type_t type, char* attribute_name, array_t* attribute_values)
 {
 	if (attribute_name == NULL) return NULL;
 	else if (attribute_values == NULL || attribute_values->length == 0) return NULL;
 
+	int current_size = 100;
+
+	char* res;
+	CREATE_MEMORY_OBJECT(res, char, current_size, "Error: read_dynamic_string<input> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 	char* attribute_value = (char*) attribute_values->data[0];
 
 	if (strcmp(attribute_name, "cursor") == 0) {
-		if (attribute_values->length == 1 && strcmp(attribute_value, "دست") == 0) return "pointer";
+		if (attribute_values->length == 1 && strcmp(attribute_value, "دست") == 0) { strcpy(res, "pointer"); return res; }
 	}
 	else if (strcmp(attribute_name, "color") == 0 || strcmp(attribute_name, "background-color") == 0) {
-		if (attribute_values->length == 1 && strcmp(attribute_value, "سیاه") == 0) return "black";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سفید") == 0) return "white";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "صورتی") == 0) return "pink";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "بنفش") == 0) return "purple";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "قرمز") == 0) return "red";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز") == 0) return "green";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "زرد") == 0) return "yellow";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "ابی") == 0 || strcmp(attribute_value, "آبی") == 0) return "blue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "قهوه‌ای") == 0 || strcmp(attribute_value, "قهوه ای") == 0) return "brown";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "نارنجی") == 0) return "orange";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری") == 0) return "gray";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "طوسی") == 0) return "silver";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "طلایی") == 0) return "gold";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "بژ") == 0) return "beige";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "زیتونی") == 0) return "olive";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "لاجوردی") == 0) return "navy";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "فیروزه‌ای") == 0 || strcmp(attribute_value, "فیروزه ای") == 0) return "turquoise";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "نیلی") == 0) return "indigo";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خرمایی") == 0) return "crimson";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "قرمز تیره") == 0) return "darkred";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "صورتی تیره") == 0) return "deeppink";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آتشین") == 0) return "firebrick";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "صورتی داغ") == 0) return "hotpink";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "قرمز هندی") == 0) return "indianred";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "اسطوخودوسی") == 0) return "lavenderblush";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "مرجانی روشن") == 0) return "lightcoral";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "صورتی روشن") == 0) return "lightpink";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "زرشکی") == 0) return "maroon";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "رز مه آلود") == 0) return "mistyrose";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "قرمز بنفش کم رنگ") == 0) return "palevioletred";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "رنگ پوست") == 0) return "bisque";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "مرجانی") == 0) return "coral";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "نارنجی تیره") == 0) return "darkorange";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سالمون تیره") == 0) return "darksalmon";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سالمون روشن") == 0) return "lightsalmon";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "نارنجی قرمز") == 0) return "orangered";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خامه پاپایا") == 0) return "papayawhip";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "هلو") == 0) return "peachpuff";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سالمون") == 0) return "salmon";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "گوجه فرنگی") == 0) return "tomato";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خمیر ذرت") == 0) return "cornsilk";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "طلایی تیره") == 0) return "darkgoldenrod";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکی تیره") == 0) return "darkkhaki";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "طلایی روشن") == 0) return "lightgoldenrodyellow";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "زرد روشن") == 0) return "lightyellow";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکی") == 0) return "khaki";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "پرتقالی کم رنگ") == 0) return "palegoldenrod";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "زرد کم رنگ") == 0) return "palegoldenrod";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز دریایی") == 0) return "aquamarine";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "چارتوز") == 0) return "chartreuse";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز تیره") == 0) return "darkgreen";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "زیتونی تیره") == 0) return "darkolivegreen";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز دریایی تیره") == 0) return "darkseagreen";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری تیره") == 0) return "darkslategray";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری تیره") == 0) return "darkslategrey";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز جنگلی") == 0) return "forestgreen";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "زرد سبز") == 0) return "greenyellow";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "شهد") == 0) return "honeydew";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز چمنی") == 0) return "lawngreen";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز روشن") == 0) return "lightgreen";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز دریایی روشن") == 0) return "lightseagreen";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "لیمو سبز") == 0) return "lime";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "لیمو سبز روشن") == 0) return "limegreen";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آب دریایی میانه") == 0) return "mediumaquamarine";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز دریایی میانه") == 0) return "mediumseagreen";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز بهاری میانه") == 0) return "mediumspringgreen";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز زیتونی تیره") == 0) return "olivedrab";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز کم رنگ") == 0) return "palegreen";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز دریایی") == 0) return "seagreen";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز بهاری") == 0) return "springgreen";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "فیروزه ای") == 0) return "teal";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز زرد") == 0) return "yellowgreen";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی آسمانی روشن") == 0) return "aliceblue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی") == 0) return "aqua";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی روشن") == 0) return "azure";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی") == 0) return "blue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی کاپیتان") == 0) return "cadetblue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی گل گندم") == 0) return "cornflowerblue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی آسمانی تیره") == 0) return "darkcyan";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "فیروزه ای تیره") == 0) return "darkturquoise";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی آسمانی عمیق") == 0) return "deepskyblue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی آسمانی داج") == 0) return "dodgerblue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی روشن") == 0) return "lightblue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "فیروزه ای روشن") == 0) return "lightcyan";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی آسمانی روشن") == 0) return "lightskyblue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی فولادی روشن") == 0) return "lightsteelblue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی میانه") == 0) return "mediumblue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "فیروزه ای میانه") == 0) return "mediumturquoise";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی نیمه شب") == 0) return "midnightblue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "نیلی") == 0) return "navy";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی روشن") == 0) return "paleturquoise";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی پودری") == 0) return "powderblue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی سلطنتی") == 0) return "royalblue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی آسمانی") == 0) return "skyblue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی فولادی") == 0) return "steelblue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی بنفش") == 0) return "blueviolet";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "ارغوانی تیره") == 0) return "darkmagenta";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "بنفش ارکیده تیره") == 0) return "darkorchid";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی ارغوانی تیره") == 0) return "darkslateblue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "بنفش تیره") == 0) return "darkviolet";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سرخابی") == 0) return "fuchsia";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "نیلی") == 0) return "indigo";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "اسطوخودوس") == 0) return "lavender";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "ارکیده میانه") == 0) return "mediumorchid";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "ارغوانی میانه") == 0) return "mediumpurple";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی ارغوانی میانه") == 0) return "mediumslateblue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "قرمز بنفش میانه") == 0) return "mediumvioletred";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "ارکیده") == 0) return "orchid";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آلو") == 0) return "plum";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "بنفش") == 0) return "purple";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "بنفش ربکا") == 0) return "rebeccapurple";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی تخته سنگ") == 0) return "slateblue";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خار مریم") == 0) return "thistle";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "بنفش") == 0) return "violet";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سفید قدیمی") == 0) return "antiquewhite";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "بادام سفید شده") == 0) return "blanchedalmond";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "چوب بری") == 0) return "burlywood";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "شکلاتی") == 0) return "chocolate";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "کتان") == 0) return "linen";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "موکاسین") == 0) return "moccasin";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سفید ناواجو") == 0) return "navajowhite";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "توری قدیمی") == 0) return "oldlace";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "پرو") == 0) return "peru";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "قهوه ای گل رز") == 0) return "rosybrown";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "قهوه ای زین اسب") == 0) return "saddlebrown";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "قهوه ای شنی") == 0) return "sandybrown";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سیه نا") == 0) return "sienna";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "حنا") == 0) return "tan";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "گندمی") == 0) return "wheat";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری تیره") == 0) return "darkgray";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری کم رنگ") == 0) return "darkgrey";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری کم رنگ") == 0) return "dimgray";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری کم رنگ") == 0) return "dimgrey";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "گل سفید") == 0) return "floralwhite";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری روشن") == 0) return "gainsboro";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری سفید") == 0) return "ghostwhite";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری") == 0) return "gray";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری") == 0) return "grey";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری کم رنگ") == 0) return "lightgray";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری کم رنگ") == 0) return "lightgrey";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری تخته سنگی روشن") == 0) return "lightslategray";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری تخته سنگی روشن") == 0) return "lightslategrey";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "نعنایی") == 0) return "mintcream";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "صدف") == 0) return "seashell";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری نقره ای") == 0) return "silver";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری تخته سنگی") == 0) return "slategray";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری تخته سنگی") == 0) return "slategrey";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "برفی") == 0) return "snow";
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "سفید دودی") == 0) return "whitesmoke";
+		if (attribute_values->length == 1 && strcmp(attribute_value, "سیاه") == 0) { strcpy(res, "black"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سفید") == 0) { strcpy(res, "white"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "صورتی") == 0) { strcpy(res, "pink"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "بنفش") == 0) { strcpy(res, "purple"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "قرمز") == 0) { strcpy(res, "red"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز") == 0) { strcpy(res, "green"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "زرد") == 0) { strcpy(res, "yellow"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "ابی") == 0 || strcmp(attribute_value, "آبی") == 0) { strcpy(res, "blue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "قهوه‌ای") == 0 || strcmp(attribute_value, "قهوه ای") == 0) { strcpy(res, "brown"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "نارنجی") == 0) { strcpy(res, "orange"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری") == 0) { strcpy(res, "gray"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "طوسی") == 0) { strcpy(res, "silver"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "طلایی") == 0) { strcpy(res, "gold"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "بژ") == 0) { strcpy(res, "beige"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "زیتونی") == 0) { strcpy(res, "olive"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "لاجوردی") == 0) { strcpy(res, "navy"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "فیروزه‌ای") == 0 || strcmp(attribute_value, "فیروزه ای") == 0) { strcpy(res, "turquoise"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "نیلی") == 0) { strcpy(res, "indigo"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خرمایی") == 0) { strcpy(res, "crimson"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "قرمز تیره") == 0) { strcpy(res, "darkred"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "صورتی تیره") == 0) { strcpy(res, "deeppink"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آتشین") == 0) { strcpy(res, "firebrick"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "صورتی داغ") == 0) { strcpy(res, "hotpink"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "قرمز هندی") == 0) { strcpy(res, "indianred"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "اسطوخودوسی") == 0) { strcpy(res, "lavenderblush"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "مرجانی روشن") == 0) { strcpy(res, "lightcoral"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "صورتی روشن") == 0) { strcpy(res, "lightpink"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "زرشکی") == 0) { strcpy(res, "maroon"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "رز مه آلود") == 0) { strcpy(res, "mistyrose"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "قرمز بنفش کم رنگ") == 0) { strcpy(res, "palevioletred"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "رنگ پوست") == 0) { strcpy(res, "bisque"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "مرجانی") == 0) { strcpy(res, "coral"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "نارنجی تیره") == 0) { strcpy(res, "darkorange"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سالمون تیره") == 0) { strcpy(res, "darksalmon"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سالمون روشن") == 0) { strcpy(res, "lightsalmon"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "نارنجی قرمز") == 0) { strcpy(res, "orangered"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خامه پاپایا") == 0) { strcpy(res, "papayawhip"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "هلو") == 0) { strcpy(res, "peachpuff"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سالمون") == 0) { strcpy(res, "salmon"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "گوجه فرنگی") == 0) { strcpy(res, "tomato"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خمیر ذرت") == 0) { strcpy(res, "cornsilk"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "طلایی تیره") == 0) { strcpy(res, "darkgoldenrod"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکی تیره") == 0) { strcpy(res, "darkkhaki"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "طلایی روشن") == 0) { strcpy(res, "lightgoldenrodyellow"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "زرد روشن") == 0) { strcpy(res, "lightyellow"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکی") == 0) { strcpy(res, "khaki"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "پرتقالی کم رنگ") == 0) { strcpy(res, "palegoldenrod"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "زرد کم رنگ") == 0) { strcpy(res, "palegoldenrod"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز دریایی") == 0) { strcpy(res, "aquamarine"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "چارتوز") == 0) { strcpy(res, "chartreuse"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز تیره") == 0) { strcpy(res, "darkgreen"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "زیتونی تیره") == 0) { strcpy(res, "darkolivegreen"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز دریایی تیره") == 0) { strcpy(res, "darkseagreen"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری تیره") == 0) { strcpy(res, "darkslategray"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری تیره") == 0) { strcpy(res, "darkslategrey"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز جنگلی") == 0) { strcpy(res, "forestgreen"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "زرد سبز") == 0) { strcpy(res, "greenyellow"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "شهد") == 0) { strcpy(res, "honeydew"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز چمنی") == 0) { strcpy(res, "lawngreen"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز روشن") == 0) { strcpy(res, "lightgreen"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز دریایی روشن") == 0) { strcpy(res, "lightseagreen"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "لیمو سبز") == 0) { strcpy(res, "lime"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "لیمو سبز روشن") == 0) { strcpy(res, "limegreen"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آب دریایی میانه") == 0) { strcpy(res, "mediumaquamarine"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز دریایی میانه") == 0) { strcpy(res, "mediumseagreen"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز بهاری میانه") == 0) { strcpy(res, "mediumspringgreen"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز زیتونی تیره") == 0) { strcpy(res, "olivedrab"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز کم رنگ") == 0) { strcpy(res, "palegreen"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز دریایی") == 0) { strcpy(res, "seagreen"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز بهاری") == 0) { strcpy(res, "springgreen"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "فیروزه ای") == 0) { strcpy(res, "teal"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سبز زرد") == 0) { strcpy(res, "yellowgreen"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی آسمانی روشن") == 0) { strcpy(res, "aliceblue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی") == 0) { strcpy(res, "aqua"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی روشن") == 0) { strcpy(res, "azure"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی") == 0) { strcpy(res, "blue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی کاپیتان") == 0) { strcpy(res, "cadetblue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی گل گندم") == 0) { strcpy(res, "cornflowerblue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی آسمانی تیره") == 0) { strcpy(res, "darkcyan"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "فیروزه ای تیره") == 0) { strcpy(res, "darkturquoise"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی آسمانی عمیق") == 0) { strcpy(res, "deepskyblue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی آسمانی داج") == 0) { strcpy(res, "dodgerblue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی روشن") == 0) { strcpy(res, "lightblue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "فیروزه ای روشن") == 0) { strcpy(res, "lightcyan"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی آسمانی روشن") == 0) { strcpy(res, "lightskyblue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی فولادی روشن") == 0) { strcpy(res, "lightsteelblue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی میانه") == 0) { strcpy(res, "mediumblue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "فیروزه ای میانه") == 0) { strcpy(res, "mediumturquoise"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی نیمه شب") == 0) { strcpy(res, "midnightblue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "نیلی") == 0) { strcpy(res, "navy"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی روشن") == 0) { strcpy(res, "paleturquoise"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی پودری") == 0) { strcpy(res, "powderblue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی سلطنتی") == 0) { strcpy(res, "royalblue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی آسمانی") == 0) { strcpy(res, "skyblue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی فولادی") == 0) { strcpy(res, "steelblue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی بنفش") == 0) { strcpy(res, "blueviolet"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "ارغوانی تیره") == 0) { strcpy(res, "darkmagenta"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "بنفش ارکیده تیره") == 0) { strcpy(res, "darkorchid"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی ارغوانی تیره") == 0) { strcpy(res, "darkslateblue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "بنفش تیره") == 0) { strcpy(res, "darkviolet"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سرخابی") == 0) { strcpy(res, "fuchsia"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "نیلی") == 0) { strcpy(res, "indigo"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "اسطوخودوس") == 0) { strcpy(res, "lavender"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "ارکیده میانه") == 0) { strcpy(res, "mediumorchid"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "ارغوانی میانه") == 0) { strcpy(res, "mediumpurple"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی ارغوانی میانه") == 0) { strcpy(res, "mediumslateblue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "قرمز بنفش میانه") == 0) { strcpy(res, "mediumvioletred"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "ارکیده") == 0) { strcpy(res, "orchid"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آلو") == 0) { strcpy(res, "plum"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "بنفش") == 0) { strcpy(res, "purple"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "بنفش ربکا") == 0) { strcpy(res, "rebeccapurple"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "آبی تخته سنگ") == 0) { strcpy(res, "slateblue"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خار مریم") == 0) { strcpy(res, "thistle"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "بنفش") == 0) { strcpy(res, "violet"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سفید قدیمی") == 0) { strcpy(res, "antiquewhite"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "بادام سفید شده") == 0) { strcpy(res, "blanchedalmond"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "چوب بری") == 0) { strcpy(res, "burlywood"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "شکلاتی") == 0) { strcpy(res, "chocolate"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "کتان") == 0) { strcpy(res, "linen"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "موکاسین") == 0) { strcpy(res, "moccasin"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سفید ناواجو") == 0) { strcpy(res, "navajowhite"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "توری قدیمی") == 0) { strcpy(res, "oldlace"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "پرو") == 0) { strcpy(res, "peru"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "قهوه ای گل رز") == 0) { strcpy(res, "rosybrown"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "قهوه ای زین اسب") == 0) { strcpy(res, "saddlebrown"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "قهوه ای شنی") == 0) { strcpy(res, "sandybrown"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سیه نا") == 0) { strcpy(res, "sienna"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "حنا") == 0) { strcpy(res, "tan"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "گندمی") == 0) { strcpy(res, "wheat"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری تیره") == 0) { strcpy(res, "darkgray"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری کم رنگ") == 0) { strcpy(res, "darkgrey"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری کم رنگ") == 0) { strcpy(res, "dimgray"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری کم رنگ") == 0) { strcpy(res, "dimgrey"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "گل سفید") == 0) { strcpy(res, "floralwhite"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری روشن") == 0) { strcpy(res, "gainsboro"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری سفید") == 0) { strcpy(res, "ghostwhite"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری") == 0) { strcpy(res, "gray"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری") == 0) { strcpy(res, "grey"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری کم رنگ") == 0) { strcpy(res, "lightgray"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری کم رنگ") == 0) { strcpy(res, "lightgrey"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری تخته سنگی روشن") == 0) { strcpy(res, "lightslategray"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری تخته سنگی روشن") == 0) { strcpy(res, "lightslategrey"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "نعنایی") == 0) { strcpy(res, "mintcream"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "صدف") == 0) { strcpy(res, "seashell"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری نقره ای") == 0) { strcpy(res, "silver"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری تخته سنگی") == 0) { strcpy(res, "slategray"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "خاکستری تخته سنگی") == 0) { strcpy(res, "slategrey"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "برفی") == 0) { strcpy(res, "snow"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سفید دودی") == 0) { strcpy(res, "whitesmoke"); return res; }
 	}
 	else if (strcmp(attribute_name, "font-family") == 0) {
-		return attribute_value;
+		strcpy(res, attribute_value);
+		return res;
 	}
 	else if (strcmp(attribute_name, "font-size") == 0) {
 		if (attribute_values->length == 1) {
 			char* size_value = attribute_css_size_value(attribute_name, attribute_value);
 
 			if (size_value) {
+				free(res);
 				return size_value;
 			}
 		}
@@ -2618,6 +2634,7 @@ char* attribute_css_values(char* attribute_name, array_t* attribute_values)
 			char* size_value = attribute_css_size_value(attribute_name, attribute_value);
 
 			if (size_value) {
+				free(res);
 				return size_value;
 			}
 		}
@@ -2627,6 +2644,7 @@ char* attribute_css_values(char* attribute_name, array_t* attribute_values)
 			char* size_value = attribute_css_size_value(attribute_name, attribute_value);
 
 			if (size_value) {
+				free(res);
 				return size_value;
 			}
 		}
@@ -2636,6 +2654,7 @@ char* attribute_css_values(char* attribute_name, array_t* attribute_values)
 			char* size_value = attribute_css_size_value(attribute_name, attribute_value);
 
 			if (size_value) {
+				free(res);
 				return size_value;
 			}
 		}
@@ -2645,6 +2664,7 @@ char* attribute_css_values(char* attribute_name, array_t* attribute_values)
 			char* size_value = attribute_css_size_value(attribute_name, attribute_value);
 
 			if (size_value) {
+				free(res);
 				return size_value;
 			}
 		}
@@ -2653,6 +2673,7 @@ char* attribute_css_values(char* attribute_name, array_t* attribute_values)
 		char* size_value = attribute_css_multiple_size_value(attribute_name, attribute_values);
 
 		if (size_value) {
+			free(res);
 			return size_value;
 		}
 	}
@@ -2661,6 +2682,7 @@ char* attribute_css_values(char* attribute_name, array_t* attribute_values)
 			char* size_value = attribute_css_size_value(attribute_name, attribute_value);
 
 			if (size_value) {
+				free(res);
 				return size_value;
 			}
 		}
@@ -2670,18 +2692,22 @@ char* attribute_css_values(char* attribute_name, array_t* attribute_values)
 			char* size_value = attribute_css_size_value(attribute_name, attribute_value);
 
 			if (size_value) {
+				free(res);
 				return size_value;
 			}
 		}
 	}
 	else if (strcmp(attribute_name, "background-image") == 0) {
 		if (attribute_values->length == 1) {
-			return attribute_value;
+			strcpy(res, attribute_value);
+			return res;
 		}
 	}
 	else {
 		printf("This is not a attribute valid value, error? %s => %s\n", attribute_name, attribute_value);
 	}
+
+	free(res);
 
 	return NULL;
 }
@@ -2708,22 +2734,24 @@ string_t* generate_layout_element_attribute(parser_t* parser, char* key, array_t
 {
 	string_t* buffer = string_create(10);
 
-	char* str_values = array_string(values, " ");
+	if (key != NULL) {
+		char* str_values = array_string(values, " ");
 
-	if (str_values != NULL) {
-		string_append_str(buffer, key);
-		string_append_char(buffer, '=');
+		if (str_values != NULL) {
+			string_append_str(buffer, key);
+			string_append_char(buffer, '=');
 
-		if (strlen(str_values) == 1) {
-			string_append_str(buffer, str_values);
+			if (strlen(str_values) == 1) {
+				string_append_str(buffer, str_values);
+			}
+			else {
+				string_append_char(buffer, '\"');
+				string_append_str(buffer, str_values);
+				string_append_char(buffer, '\"');
+			}
+
+			free(str_values);
 		}
-		else {
-			string_append_char(buffer, '\"');
-			string_append_str(buffer, str_values);
-			string_append_char(buffer, '\"');
-		}
-
-		free(str_values);
 	}
 
 	return buffer;
@@ -2745,7 +2773,7 @@ string_t* generate_layout_element_attributes_styles(parser_t* parser, ast_layout
 				array_t* values = entry->value;
 
 				if (values != NULL && values->length > 0) {
-					char* buf2 = attribute_css_values(buf1, values);
+					char* buf2 = attribute_css_values(element->type, buf1, values);
 
 					if (buf2 != NULL) {
 						string_append_str(css_hover_buffer, buf1);
@@ -2755,6 +2783,9 @@ string_t* generate_layout_element_attributes_styles(parser_t* parser, ast_layout
 						string_append_str(css_hover_buffer, buf2);
 
 						if (styles->length != (*count)) string_append_char(css_hover_buffer, ';');
+						
+						free(buf2);
+						buf2 = NULL;
 					}
 				}
 			}
@@ -2786,17 +2817,17 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 					char* newKey;
 					CREATE_MEMORY_OBJECT(newKey, char, 150, "Error: generate_layout_element_attributes<newKey> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
-					if ((is_allowed_layout_property(element->is_mother, element->type, entry->key, &newKey) == true) && newKey != NULL) {
+					if ((is_allowed_layout_property(element->is_mother, element->type, entry->key, entry->value, &newKey) == true) && newKey != NULL) {
 						if (html_attrs != 0) string_append_char(buffer, ' ');
 						html_attrs++;
 
 						string_t* buf = generate_layout_element_attribute(parser, newKey, entry->value);
-						string_append(buffer, buf);
+
+						if (buf->length > 0) string_append(buffer, buf);
 
 						string_free(buf);
 					}
-					
-					free(newKey);
+					if (newKey != NULL) free(newKey);
 				}				
 				
 				entry = entry->next;

@@ -2029,55 +2029,17 @@ bool is_allowed_general_layout_property(ast_layout_type_t type, char* attribute_
 		}
 	}
 
-	if (type == AST_TYPE_LAYOUT_BODY) {
-		if (strcmp(attribute_name, "جهت") == 0) {
-			if (attribute_values->length == 1) {
-				if (strcmp(attribute_values->data[0], "راستچین") == 0) {
-					strcpy(*new_attribute_name, "dir");
-					strcpy(attribute_values->data[0], "rtl");
+	return false;
+}
 
-					return true;
-				}
-				else if (strcmp(attribute_values->data[0], "چپچین") == 0) {
-					strcpy(*new_attribute_name, "dir");
-					strcpy(attribute_values->data[0], "ltr");
+bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_name, array_t* attribute_values, char** new_attribute_name)
+{
+	if (is_allowed_general_layout_property(type, attribute_name, attribute_values, new_attribute_name)) return true;
 
-					return true;
-				}
-
-				return false;
-			}
-			else return false;
-		}
-		else if (strcmp(attribute_name, "عنوان") == 0) {
-			strcpy(*new_attribute_name, "title");
-			
-			return true;
-		}
-		else if (strcmp(attribute_name, "زبان") == 0) {
-			if (attribute_values->length == 1) {
-				if (strcmp(attribute_values->data[0], "فارسی") == 0) {
-					strcpy(*new_attribute_name, "lang");
-					strcpy(attribute_values->data[0], "fa-IR");
-
-					return true;
-				}
-				else if (strcmp(attribute_values->data[0], "انگلیسی") == 0) {
-					strcpy(*new_attribute_name, "lang");
-					strcpy(attribute_values->data[0], "en-US");
-
-					return true;
-				}
-
-				return false;
-			}
-			else return false;
-		}
-	}
-	else if (type == AST_TYPE_LAYOUT_FORM) {
+	if (type == AST_TYPE_LAYOUT_FORM) {
 		if (strcmp(attribute_name, "نوع") == 0) {
 			if (attribute_values->length == 1) {
-				strcpy(*new_attribute_name, "method");
+				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "method");
 
 				if (strcmp(attribute_values->data[0], "گت") == 0) {
 					strcpy(attribute_values->data[0], "GET");
@@ -2096,30 +2058,101 @@ bool is_allowed_general_layout_property(ast_layout_type_t type, char* attribute_
 		}
 		else if (strcmp(attribute_name, "منبع") == 0) {
 			if (attribute_values->length == 1) {
-				strcpy(*new_attribute_name, "action");
+				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "action");
 				return true;
 			}
 			else return false;
 		}
 	}
 
-	return false;
-}
-
-bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_name, array_t* attribute_values, char** new_attribute_name)
-{
-	if (is_allowed_general_layout_property(type, attribute_name, attribute_values, new_attribute_name)) return true;
-
 	switch (type) {
-		// case AST_TYPE_LAYOUT_BODY:
-		// 	if (strcmp(attribute_name, "عنوان") == 0) { strcpy(*new_attribute_name, "title"); return true; }
-		// 	else if (strcmp(attribute_name, "جهت") == 0) { strcpy(*new_attribute_name, "dir"); return true; }
-		// 	else if (strcmp(attribute_name, "زبان") == 0) { strcpy(*new_attribute_name, "lang"); return true; }
-		// 
-		// break;
+		case AST_TYPE_LAYOUT_BODY:
+			if (strcmp(attribute_name, "جهت") == 0) {
+				if (attribute_values->length == 1) {
+					if (strcmp(attribute_values->data[0], "راستچین") == 0) {
+						// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "dir");
+
+						strcpy(attribute_values->data[0], "rtl");
+
+						return true;
+					}
+					else if (strcmp(attribute_values->data[0], "چپچین") == 0) {
+						// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "dir");
+
+						strcpy(attribute_values->data[0], "ltr");
+
+						return true;
+					}
+
+					return false;
+				}
+				else return false;
+			}
+			else if (strcmp(attribute_name, "عنوان") == 0) {
+				// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "title");
+				
+				return true;
+			}
+			else if (strcmp(attribute_name, "توضیح") == 0) {
+				// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "description");
+				
+				return true;
+			}
+			else if (strcmp(attribute_name, "کلمات") == 0) {
+				// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "keywords");
+				
+				return true;
+			}
+			else if (strcmp(attribute_name, "ایکن") == 0) {
+				// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "keywords");
+				
+				return true;
+			}
+			else if (strcmp(attribute_name, "نویسنده") == 0) {
+				// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "author");
+				
+				return true;
+			}
+			else if (strcmp(attribute_name, "ارجاع") == 0) {
+				// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "canonical");
+				
+				return true;
+			}
+			else if (strcmp(attribute_name, "ربات") == 0) {
+				// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "robots");
+				
+				return true;
+			}
+			else if (strcmp(attribute_name, "زبان") == 0) {
+				if (attribute_values->length == 1) {
+					if (strcmp(attribute_values->data[0], "فارسی") == 0) {
+						// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "lang");
+						
+						strcpy(attribute_values->data[0], "fa-IR");
+
+						return true;
+					}
+					else if (strcmp(attribute_values->data[0], "انگلیسی") == 0) {
+						// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "lang");
+						
+						strcpy(attribute_values->data[0], "en-US");
+
+						return true;
+					}
+
+					return false;
+				}
+				else return false;
+			}
+		
+		break;
 
 		case AST_TYPE_LAYOUT_BUTTON:
-			if (strcmp(attribute_name, "نام") == 0) { strcpy(*new_attribute_name, "name"); return true; }
+			if (strcmp(attribute_name, "نام") == 0) {
+				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "name");
+				
+				return true;
+			}
 
 		break;
 
@@ -2128,21 +2161,49 @@ bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_n
 		break;
 
 		case AST_TYPE_LAYOUT_INPUT:
-			if (strcmp(attribute_name, "نام") == 0) { strcpy(*new_attribute_name, "name"); return true; }
-			else if (strcmp(attribute_name, "نوع") == 0) { strcpy(*new_attribute_name, "type"); return true; }
+			if (strcmp(attribute_name, "نام") == 0) {
+				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "name");
+
+				return true;
+			}
+			else if (strcmp(attribute_name, "نوع") == 0) {
+				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "type");
+				
+				return true;
+			}
 
 		break;
 
 		case AST_TYPE_LAYOUT_LINK:
-			if (strcmp(attribute_name, "منبع") == 0) { strcpy(*new_attribute_name, "href"); return true; }
-			else if (strcmp(attribute_name, "نوع") == 0) { strcpy(*new_attribute_name, "target"); return true; }
+			if (strcmp(attribute_name, "منبع") == 0) {
+				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "href");
+
+				return true;
+				}
+			else if (strcmp(attribute_name, "نوع") == 0) {
+				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "target");
+
+				return true;
+			}
 
 		break;
 
 		case AST_TYPE_LAYOUT_IMAGE:
-			if (strcmp(attribute_name, "منبع") == 0) { strcpy(*new_attribute_name, "src"); return true; }
-			else if (strcmp(attribute_name, "عرض") == 0) { strcpy(*new_attribute_name, "width"); return true; }
-			else if (strcmp(attribute_name, "ارتفاع") == 0) { strcpy(*new_attribute_name, "height"); return true; }
+			if (strcmp(attribute_name, "منبع") == 0) {
+				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "src");
+				
+				return true;
+			}
+			else if (strcmp(attribute_name, "عرض") == 0) {
+				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "width");
+				
+				return true;
+			}
+			else if (strcmp(attribute_name, "ارتفاع") == 0) {
+				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "height");
+				
+				return true;
+			}
 
 		break;
 
@@ -2151,9 +2212,21 @@ bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_n
 		break;
 
 		case AST_TYPE_LAYOUT_FORM:
-			if (strcmp(attribute_name, "نام") == 0) { strcpy(*new_attribute_name, "name"); return true; }
-			else if (strcmp(attribute_name, "نوع") == 0) { strcpy(*new_attribute_name, "method"); return true; }
-			else if (strcmp(attribute_name, "منبع") == 0) { strcpy(*new_attribute_name, "action"); return true; }
+			if (strcmp(attribute_name, "نام") == 0) {
+				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "name");
+				
+				return true;
+			}
+			else if (strcmp(attribute_name, "نوع") == 0) {
+				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "method");
+				
+				return true;
+			}
+			else if (strcmp(attribute_name, "منبع") == 0) {
+				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "action");
+				
+				return true;
+			}
 
 		break;
 
@@ -2182,17 +2255,33 @@ bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_n
 		break;
 
 		case AST_TYPE_LAYOUT_TEXTAREA:
-			if (strcmp(attribute_name, "نام") == 0) { strcpy(*new_attribute_name, "name"); return true; }
+			if (strcmp(attribute_name, "نام") == 0) {
+				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "name");
+				
+				return true;
+			}
 
 		break;
 
 		case AST_TYPE_LAYOUT_SELECT:
-			if (strcmp(attribute_name, "نام") == 0) { strcpy(*new_attribute_name, "name"); return true; }
+			if (strcmp(attribute_name, "نام") == 0) {
+				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "name");
+				
+				return true;
+			}
 		break;
 
 		case AST_TYPE_LAYOUT_SELECT_OPTION:
-			if (strcmp(attribute_name, "نام") == 0) { strcpy(*new_attribute_name, "name"); return true; } // THIS WILL MOVE TO INNER HTML
-			else if (strcmp(attribute_name, "مقدار") == 0) { strcpy(*new_attribute_name, "value"); return true; }
+			if (strcmp(attribute_name, "نام") == 0) {
+				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "name");
+
+				return true;
+			} // TODO: THIS WILL MOVE TO INNER HTML
+			else if (strcmp(attribute_name, "مقدار") == 0) {
+				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "value");
+
+				return true;
+			}
 		break;
 	}
 
@@ -3124,7 +3213,7 @@ string_t* generate_layout_element_attributes_styles(parser_t* parser, ast_layout
 	return css_hover_buffer;
 }
 
-string_t* generate_layout_element_attributes_check(parser_t* parser, ast_layout_node_t* element, array_t** element_content)
+bool generate_layout_element_attributes_check(parser_t* parser, ast_layout_node_t* element, array_t** element_content)
 {
 	if (element->attributes != NULL && element->attributes->length > 0) {
 		for (size_t i = 0; i < element->attributes->size; i++) {
@@ -3136,11 +3225,19 @@ string_t* generate_layout_element_attributes_check(parser_t* parser, ast_layout_
 				}
 				else {
 					char* newKey = NULL;
-					CREATE_MEMORY_OBJECT(newKey, char, 150, "Error: generate_layout_element_attributes_check<newKey> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+					// CREATE_MEMORY_OBJECT(newKey, char, 150, "Error: generate_layout_element_attributes_check<newKey> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
-					if ((is_allowed_layout_property(element->is_mother, element->type, entry->key, entry->value, &newKey) == true) && newKey != NULL) {}
+					if ((is_allowed_layout_property(element->is_mother, element->type, entry->key, entry->value, &newKey) == true)) {
+						// if (newKey != NULL) {}
+						// free(newKey);
 
-					if (newKey != NULL) free(newKey);
+						return true;
+					}
+					else {
+						// if (newKey != NULL) free(newKey);
+
+						return false;
+					}
 				}				
 				
 				entry = entry->next;
@@ -3342,10 +3439,13 @@ string_t* generate_string(parser_t* parser, int ident)
 		array_t* html_dir_values = NULL;
 		array_t* html_lang_values = NULL;
 		array_t* html_title_values = NULL;
-
 		array_t* element_content = NULL;
 
-		generate_layout_element_attributes_check(parser, parser->layout, &element_content);
+		if (generate_layout_element_attributes_check(parser, parser->layout, &element_content) == false) {
+			printf("Error: invalid attribute in the main layout body!\n");
+			exit(1);
+			return NULL;
+		}
 
 		if (parser->layout->attributes != NULL) {
 			if (parser->layout->attributes->data != NULL) {
@@ -3383,7 +3483,7 @@ string_t* generate_string(parser_t* parser, int ident)
 			free(buf);
 		}
 		else {
-			string_append_str(str, "fa_IR");
+			string_append_str(str, "fa-IR");
 		}
 		string_append_str(str, "\">\n");
 
@@ -3424,6 +3524,82 @@ string_t* generate_string(parser_t* parser, int ident)
 			string_append_str(str, "Salam Program");
 			string_append_str(str, "</title>\n");
 		}
+
+
+		if (parser->layout->attributes != NULL) {
+			if (parser->layout->attributes->data != NULL) {
+				if (parser->layout->attributes->length > 0) {
+					for (size_t i = 0; i < parser->layout->attributes->size; i++) {
+						hashmap_entry_t *entry = parser->layout->attributes->data[i];
+
+						while (entry) {
+							if (strcmp(entry->key, "title") == 0 || strcmp(entry->key, "lang") == 0 || strcmp(entry->key, "dir") == 0) continue;
+							else if (strcmp(entry->key, "ارجاع") == 0) {
+								generate_layout_ident(str, ident + 2);
+								string_append_str(str, "<link rel=\"canonical\" href=\"");
+								char* buf = array_string(entry->value, ", ");
+
+								string_append_str(str, buf);
+
+								free(buf);
+
+								string_append_str(str, "\">\n");
+							}
+							else if (strcmp(entry->key, "توضیح") == 0) {
+								generate_layout_ident(str, ident + 2);
+								string_append_str(str, "<meta name=\"description\" content=\"");
+								char* buf = array_string(entry->value, ", ");
+
+								string_append_str(str, buf);
+
+								free(buf);
+
+								string_append_str(str, "\">\n");
+							}
+							else if (strcmp(entry->key, "کلمات") == 0) {
+								generate_layout_ident(str, ident + 2);
+								string_append_str(str, "<meta name=\"keywords\" content=\"");
+								char* buf = array_string(entry->value, ", ");
+
+								string_append_str(str, buf);
+
+								free(buf);
+
+								string_append_str(str, "\">\n");
+							}
+							else if (strcmp(entry->key, "نویسنده") == 0) {
+								generate_layout_ident(str, ident + 2);
+								string_append_str(str, "<meta name=\"author\" content=\"");
+								char* buf = array_string(entry->value, ", ");
+
+								string_append_str(str, buf);
+
+								free(buf);
+
+								string_append_str(str, "\">\n");
+							}
+							else if (strcmp(entry->key, "ربات") == 0) {
+								generate_layout_ident(str, ident + 2);
+								string_append_str(str, "<meta name=\"robots\" content=\"");
+								char* buf = array_string(entry->value, ", ");
+
+								string_append_str(str, buf);
+
+								free(buf);
+
+								string_append_str(str, "\">\n");
+							}
+							else {
+								printf("---> %s\n", entry->key);
+							}
+
+							entry = entry->next;
+						}
+					}
+				}
+			}
+		}
+
 
 		generate_layout_ident(str, ident + 2);
 		// string_append_str(str, "<style type=\"text/css\">\n");

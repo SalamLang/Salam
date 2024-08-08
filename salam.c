@@ -2023,7 +2023,7 @@ bool is_allowed_general_layout_property(ast_layout_type_t type, char* attribute_
 	for (int i = 0; i < num_attributes; i++) {
 		if (strcmp(attribute_name, attributes[i]) == 0) {
 			strcpy(*new_attribute_name, html_attributes[i]);
-			
+
 			return true;
 		}
 	}
@@ -3364,7 +3364,7 @@ string_t* generate_string(parser_t* parser, int ident)
 			free(buf);
 		}
 		else {
-			string_append_str(str, "default_rtl");
+			string_append_str(str, "rtl");
 		}
 
 		string_append_str(str, "\" lang=\"");
@@ -3374,7 +3374,7 @@ string_t* generate_string(parser_t* parser, int ident)
 			free(buf);
 		}
 		else {
-			string_append_str(str, "default_fa_IR");
+			string_append_str(str, "fa_IR");
 		}
 		string_append_str(str, "\">\n");
 

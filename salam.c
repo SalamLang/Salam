@@ -3350,6 +3350,10 @@ string_t* generate_string(parser_t* parser, int ident)
 			array_push(parser->styles, strdup(css_hover_buffer->data));
 		}
 
+		if (css_buffer != NULL) string_free(css_buffer);
+
+		if (css_hover_buffer != NULL) string_free(css_hover_buffer);
+
 		for (size_t i = 0; i < parser->layout->children->length; i++) {
 			ast_layout_node_t* element = (ast_layout_node_t*) parser->layout->children->data[i];
 

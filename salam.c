@@ -21,11 +21,62 @@ language_t language = LANGUAGE_PERSIAN;
 #include "messages.h"
 
 // Helper functions
-const char* get_message(language_t language, message_key_t key) {
-	if (language >= LANGUAGE_COUNT || key >= MESSAGE_COUNT) {
-		return NULL;
-	}
+const char* get_message(language_t language, message_key_t key)
+{
+	if (language >= LANGUAGE_COUNT || key >= MESSAGE_COUNT) return NULL;
+
 	return messages[language][key];
+}
+
+void initIdentifierGenerator(identifier_generator* gen)
+{
+	gen->current = malloc(2);
+
+	if (gen->current) {
+		gen->current[0] = 'a';
+		gen->current[1] = '\0';
+	}
+}
+
+char* getNextIdentifier(identifier_generator* gen)
+{
+	int length = strlen(gen->current);
+	char *identifier = malloc(length + 1);
+	strcpy(identifier, gen->current);
+
+	for (int i = length - 1; i >= 0; i--) {
+		if (gen->current[i] < 'z') {
+			gen->current[i]++;
+			return identifier;
+		}
+
+		gen->current[i] = 'a';
+
+		if (i == 0) {
+			char *new_current = malloc(length + 2);
+
+			if (new_current) {
+				memset(new_current, 'a', length + 1);
+
+				new_current[length + 1] = '\0';
+
+				free(gen->current);
+
+				gen->current = new_current;
+			}
+		}
+	}
+
+	return identifier;
+}
+
+void freeIdentifierGenerator(identifier_generator* gen)
+{
+	if (gen == NULL) return;
+
+	if (gen->current != NULL) free(gen->current);
+
+	free(gen);
 }
 
 char* read_dynamic_string()
@@ -72,6 +123,7 @@ char* intToString(int value)
 
 	int temp = value;
 	int numDigits = (value == 0) ? 1 : 0;
+
 	while (temp != 0) {
 		temp /= 10;
 		numDigits++;
@@ -80,9 +132,7 @@ char* intToString(int value)
 	char* result;
 	CREATE_MEMORY_OBJECT(result, char, numDigits + 1 + (sign == -1 ? 1 : 0), "Error: intToString<result> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 	
-	if (sign == -1) {
-		result[0] = '-';
-	}
+	if (sign == -1) result[0] = '-';
 
 	for (int i = numDigits - 1 + (sign == -1 ? 1 : 0); i >= (sign == -1 ? 1 : 0); i--) {
 		result[i] = '0' + abs(value % 10);
@@ -1115,6 +1165,9 @@ parser_t* parser_create(lexer_t* lexer)
 	parser->expressions = array_create(5);
 	parser->styles = array_create(5);
 	parser->layout = NULL;
+	parser->gen = malloc(sizeof(identifier_generator));
+
+	initIdentifierGenerator(parser->gen);
 
 	return parser;
 }
@@ -1608,6 +1661,8 @@ void parser_free(parser_t* parser)
 	if (parser == NULL) return;
 
 	if (parser->styles != NULL) array_free(parser->styles);
+
+	if (parser->gen != NULL) freeIdentifierGenerator(parser->gen);
 
 	if (parser->layout != NULL) {
 		attributes_free(parser->layout->attributes);
@@ -2962,6 +3017,17 @@ int main(int argc, char** argv)
 {
 	// setlocale(LC_ALL, "");
 	setlocale(LC_ALL, "C.UTF-8");
+	
+	// identifier_generator gen;
+	// initIdentifierGenerator(&gen);
+	// 
+	// for (int i = 0; i < 30; i++) {
+	// 	char *identifier = getNextIdentifier(&gen);
+	// 	printf("%s\n", identifier);
+	// 	free(identifier);
+	// }
+	// 
+	// freeIdentifierGenerator(&parser->gen);
 
 	// char* test1 = "1px";
 	// char* out1;

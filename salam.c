@@ -3618,14 +3618,6 @@ string_t* generate_string(parser_t* parser, int ident)
 								}
 
 								string_append_str(str, ">\n");
-
-								char* buf = array_string(entry->value, ", ");
-
-								string_append_str(str, buf);
-
-								free(buf);
-
-								string_append_str(str, "\">\n");
 							}
 							else {
 								printf("---> %s\n", entry->key);

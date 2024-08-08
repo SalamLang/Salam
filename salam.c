@@ -2156,17 +2156,17 @@ bool is_style_attribute(char* attribute_name)
 	else if (strcmp(attribute_name, "اندازه") == 0) return true;
 	else if (strcmp(attribute_name, "وزن") == 0) return true;
 	else if (strcmp(attribute_name, "فاصله") == 0) return true;
-	else if (strcmp(attribute_name, "فاصله-راست") == 0) return true;
-	else if (strcmp(attribute_name, "فاصله-چپ") == 0) return true;
-	else if (strcmp(attribute_name, "فاصله-بالا") == 0) return true;
-	else if (strcmp(attribute_name, "فاصله-پایین") == 0) return true;
+	else if (strcmp(attribute_name, "فاصله_راست") == 0) return true;
+	else if (strcmp(attribute_name, "فاصله_چپ") == 0) return true;
+	else if (strcmp(attribute_name, "فاصله_بالا") == 0) return true;
+	else if (strcmp(attribute_name, "فاصله_پایین") == 0) return true;
 	else if (strcmp(attribute_name, "طول") == 0) return true;
 	else if (strcmp(attribute_name, "ارتفاع") == 0) return true;
 	else if (strcmp(attribute_name, "فضا") == 0) return true;
-	else if (strcmp(attribute_name, "فضا-راست") == 0) return true;
-	else if (strcmp(attribute_name, "فضا-چپ") == 0) return true;
-	else if (strcmp(attribute_name, "فضا-بالا") == 0) return true;
-	else if (strcmp(attribute_name, "فضا-پایین") == 0) return true;
+	else if (strcmp(attribute_name, "فضا_راست") == 0) return true;
+	else if (strcmp(attribute_name, "فضا_چپ") == 0) return true;
+	else if (strcmp(attribute_name, "فضا_بالا") == 0) return true;
+	else if (strcmp(attribute_name, "فضا_پایین") == 0) return true;
 	else if (strcmp(attribute_name, "طول") == 0) return true;
 	else if (strcmp(attribute_name, "ارتفاع") == 0) return true;
 	else if (strcmp(attribute_name, "حاشیه") == 0) return true;
@@ -2757,8 +2757,10 @@ char* attribute_css_values(ast_layout_type_t type, char* attribute_name, array_t
 	}
 	else if (strcmp(attribute_name, "flex-direction") == 0) {
 		if (attribute_values->length == 1 && strcmp(attribute_value, "ردیف") == 0) { strcpy(res, "row"); return res; }
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "ستون") == 0) { strcpy(res, "row-reverse"); return res; }
-		else if (attribute_values->length == 1 && strcmp(attribute_value, "معکوس-ردیف") == 0) { strcpy(res, "column"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "سطر") == 0) { strcpy(res, "row"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "معکوس-ردیف") == 0) { strcpy(res, "row-reverse"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "معکوس-سطر") == 0) { strcpy(res, "row-reverse"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "ستون") == 0) { strcpy(res, "column"); return res; }
 		else if (attribute_values->length == 1 && strcmp(attribute_value, "معکوس-ستون") == 0) { strcpy(res, "column-reverse"); return res; }
 	}
 	else if (strcmp(attribute_name, "justify-content") == 0) {
@@ -2941,17 +2943,17 @@ char* attribute_css_name(const char* attribute_name)
 	else if (strcmp(attribute_name, "اندازه") == 0) return "font-size";
 	else if (strcmp(attribute_name, "وزن") == 0) return "font-weight";
 	else if (strcmp(attribute_name, "فاصله") == 0) return "padding";
-	else if (strcmp(attribute_name, "فاصله‌راست") == 0) return "padding-right";
-	else if (strcmp(attribute_name, "فاصله‌چپ") == 0) return "padding-left";
-	else if (strcmp(attribute_name, "فاصله‌بالا") == 0) return "padding-top";
-	else if (strcmp(attribute_name, "فاصله‌پایین") == 0) return "padding-bottom";
+	else if (strcmp(attribute_name, "فاصله_راست") == 0) return "padding-right";
+	else if (strcmp(attribute_name, "فاصله_چپ") == 0) return "padding-left";
+	else if (strcmp(attribute_name, "فاصله_بالا") == 0) return "padding-top";
+	else if (strcmp(attribute_name, "فاصله_پایین") == 0) return "padding-bottom";
 	else if (strcmp(attribute_name, "طول") == 0) return "width";
 	else if (strcmp(attribute_name, "ارتفاع") == 0) return "height";
 	else if (strcmp(attribute_name, "فضا") == 0) return "margin";
-	else if (strcmp(attribute_name, "فضا‌راست") == 0) return "margin-right";
-	else if (strcmp(attribute_name, "فضا‌چپ") == 0) return "margin-lef";
-	else if (strcmp(attribute_name, "فضا‌بالا") == 0) return "margin-top";
-	else if (strcmp(attribute_name, "فضا‌پایین") == 0) return "margin-bottom";
+	else if (strcmp(attribute_name, "فضا_راست") == 0) return "margin-right";
+	else if (strcmp(attribute_name, "فضا_چپ") == 0) return "margin-lef";
+	else if (strcmp(attribute_name, "فضا_بالا") == 0) return "margin-top";
+	else if (strcmp(attribute_name, "فضا_پایین") == 0) return "margin-bottom";
 	else if (strcmp(attribute_name, "حاشیه") == 0) return  "border";
 	else if (strcmp(attribute_name, "تصویر") == 0) return "background-image";
 	else if (strcmp(attribute_name, "ماوس") == 0) return "cursor";
@@ -3285,7 +3287,68 @@ string_t* generate_string(parser_t* parser, int ident)
 		string_append_str(str, "</head>\n");
 
 		generate_layout_ident(str, ident + 1);
-		string_append_str(str, "<body>\n");
+
+		int css_attrs = 0;
+		int css_hover_attrs = 0;
+
+		string_t* css_buffer = NULL;
+		string_t* css_hover_buffer = NULL;
+
+		if (parser->layout->styles != NULL && parser->layout->styles->length > 0) css_buffer = generate_layout_element_attributes_styles(parser, parser->layout, parser->layout->styles, &css_attrs);
+
+		if (parser->layout->hoverStyles != NULL && parser->layout->hoverStyles->length > 0) css_hover_buffer = generate_layout_element_attributes_styles(parser, parser->layout, parser->layout->hoverStyles, &css_hover_attrs);
+
+		string_append_str(str, "<body");
+
+		if (css_attrs > 0 || css_hover_attrs > 0) {
+			if (parser->layout->className == NULL) parser->layout->className = getNextIdentifier(parser->gen);
+
+			int class_length = strlen(parser->layout->className);
+
+			if (class_length > 0) {
+				string_append_str(str, " class=");
+
+				if (class_length > 1) string_append_char(str, '\"');
+
+				string_append_str(str, parser->layout->className);
+
+				if (class_length > 1) string_append_char(str, '\"');
+			}
+		}
+
+		string_append_str(str, ">\n");
+
+
+		if (css_attrs > 0) {
+			string_t* begin = string_create(10);
+
+			string_append_char(begin, '.');
+			string_append_str(begin, parser->layout->className);
+			string_append_char(begin, '{');
+			string_append_str_begin(css_buffer, begin->data);
+			string_append_char(css_buffer, '}');
+			// string_append_char(css_buffer, '\n');
+
+			string_free(begin);
+
+			array_push(parser->styles, strdup(css_buffer->data));
+		}
+
+		if (css_hover_attrs > 0) {
+			string_t* begin = string_create(10);
+
+			string_append_char(begin, '.');
+			string_append_str(begin, parser->layout->className);
+			string_append_str(begin, ":hover");
+			string_append_char(begin, '{');
+			string_append_str_begin(css_hover_buffer, begin->data);
+			string_append_char(css_hover_buffer, '}');
+			// string_append_char(css_hover_buffer, '\n');
+
+			string_free(begin);
+
+			array_push(parser->styles, strdup(css_hover_buffer->data));
+		}
 
 		for (size_t i = 0; i < parser->layout->children->length; i++) {
 			ast_layout_node_t* element = (ast_layout_node_t*) parser->layout->children->data[i];

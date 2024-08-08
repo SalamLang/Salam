@@ -1182,9 +1182,9 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t layout_type, p
 	element->attributes = hashmap_create();
 	element->styles = hashmap_create();
 	element->hoverStyles = hashmap_create();
-	element->is_mother = false;
+	element->className = NULL;
 
-	CREATE_MEMORY_OBJECT(element->className, char, 100, "Error: parser_layout_element_single<element-classNames> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	element->is_mother = false;
 
 	parser->token_index++; // Eating keyword
 
@@ -1283,9 +1283,9 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t layout_type, p
 	element->attributes = hashmap_create();
 	element->styles = hashmap_create();
 	element->hoverStyles = hashmap_create();
-	element->is_mother = true;
+	element->className = NULL;
 
-	CREATE_MEMORY_OBJECT(element->className, char, 100, "Error: parser_layout_element_mother<element-className> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	element->is_mother = true;
 
 	parser->token_index++; // Eating keyword
 
@@ -1535,7 +1535,9 @@ void children_free(array_t* children)
 		if (children->data != NULL) {
 			for (size_t i = 0; i < children->length; i++) {
 				if (children->data[i] != NULL) {
-					ast_layout_node_free((ast_layout_node_t*) children->data[i]);
+					ast_layout_node_t* child = children->data[i];
+
+					ast_layout_node_free(child);
 				}
 			}
 
@@ -1555,10 +1557,11 @@ void ast_layout_node_free(ast_layout_node_t* node)
 	attributes_free(node->attributes);
 	attributes_free(node->styles);
 	attributes_free(node->hoverStyles);
+	
+	if (node->className != NULL) free(node->className);
 
 	children_free(node->children);
 
-	if (node->className != NULL) free(node->className);
 
 	free(node);
 	node = NULL;
@@ -1717,6 +1720,45 @@ string_t* string_create(size_t initial_size)
 	return str;
 }
 
+void string_append_char_begin(string_t* str, char c)
+{
+    if (str->length + 1 >= str->size) {
+        str->size *= 2;
+        str->data = (char*) realloc(str->data, str->size * sizeof(char));
+
+        if (str->data == NULL) {
+            fprintf(stderr, "Memory reallocation failed\n");
+            exit(1);
+        }
+    }
+    
+    memmove(str->data + 1, str->data, str->length + 1);
+    
+    str->data[0] = c;
+    str->length++;
+}
+
+void string_append_str_begin(string_t* str, const char* prefix)
+{
+    size_t prefix_len = strlen(prefix);
+
+    while (str->length + prefix_len >= str->size) {
+        str->size *= 2;
+        str->data = (char*) realloc(str->data, str->size * sizeof(char));
+
+        if (str->data == NULL) {
+            fprintf(stderr, "Memory reallocation failed\n");
+            exit(1);
+        }
+    }
+    
+    memmove(str->data + prefix_len, str->data, str->length + 1);
+    
+    memcpy(str->data, prefix, prefix_len);
+    str->length += prefix_len;
+}
+
+
 void string_append_char(string_t* str, char c)
 {
 	if (str->length + 1 >= str->size) {
@@ -1734,9 +1776,6 @@ void string_append_char(string_t* str, char c)
 
 void string_append_str(string_t* str, const char* suffix)
 {
-	// if (suffix == NULL) {
-	// 	printf("==>%s\n", str->data);
-	// }
 	size_t suffix_len = strlen(suffix);
 
 	while (str->length + suffix_len >= str->size) {
@@ -2765,34 +2804,56 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 		}
 	}
 
-	if (element->styles != NULL && element->styles->length > 0) {
-		string_t* css_buffer = generate_layout_element_attributes_styles(parser, element, element->styles, &css_attrs);
+	string_t* css_buffer = NULL;
+	string_t* css_hover_buffer = NULL;
 
-		if (css_buffer != NULL && css_buffer->length > 0) {
-			if (html_attrs > 0) string_append_char(buffer, ' ');
+	if (element->styles != NULL && element->styles->length > 0) css_buffer = generate_layout_element_attributes_styles(parser, element, element->styles, &css_attrs);
 
-			string_append_str(buffer, "style=\"");
-			string_append(buffer, css_buffer);
-			string_append_str(buffer, "\"");
-		}
+	if (element->hoverStyles != NULL && element->hoverStyles->length > 0) css_hover_buffer = generate_layout_element_attributes_styles(parser, element, element->hoverStyles, &css_hover_attrs);
 
-		if (css_buffer != NULL) string_free(css_buffer);
+	if (css_attrs > 0 || css_hover_attrs > 0) {
+		if (element->className == NULL) element->className = getNextIdentifier(parser->gen);
+
+		string_append_str(buffer, "class=\"");
+		string_append_str(buffer, element->className);
+		string_append_str(buffer, "\"");
 	}
 
-	if (element->hoverStyles != NULL && element->hoverStyles->length > 0) {
-		string_t* css_hover_buffer = generate_layout_element_attributes_styles(parser, element, element->hoverStyles, &css_hover_attrs);
-		
-		if (css_hover_buffer != NULL && css_hover_buffer->length > 0) {
-			if (html_attrs > 0 || css_attrs > 0) string_append_char(buffer, ' ');
+	if (css_attrs > 0) {
+		string_t* begin = string_create(10);
 
-			string_append_str(buffer, "hover_style=\"");
-			string_append(buffer, css_hover_buffer);
-			string_append_str(buffer, "\"");
-		}
+		string_append_char(begin, '.');
+		string_append_str(begin, element->className);
+		string_append_char(begin, '{');
+		string_append_str_begin(css_buffer, begin->data);
+		string_append_char(css_buffer, '}');
+		// string_append_char(css_buffer, '\n');
 
-		if (css_hover_buffer != NULL) string_free(css_hover_buffer);
+		string_free(begin);
+
+		array_push(parser->styles, strdup(css_buffer->data));
 	}
-	
+
+	if (css_hover_attrs > 0) {
+		string_t* begin = string_create(10);
+
+		string_append_char(begin, '.');
+		string_append_str(begin, element->className);
+		string_append_str(begin, ":hover");
+		string_append_char(begin, '{');
+		string_append_str_begin(css_hover_buffer, begin->data);
+		string_append_char(css_hover_buffer, '}');
+		// string_append_char(css_hover_buffer, '\n');
+
+		string_free(begin);
+
+		array_push(parser->styles, strdup(css_hover_buffer->data));
+	}
+
+	if (css_buffer != NULL) string_free(css_buffer);
+
+	if (css_hover_buffer != NULL) string_free(css_hover_buffer);
+
 	return buffer;
 }
 
@@ -2938,6 +2999,7 @@ string_t* generate_string(parser_t* parser, int ident)
 						}
 					}
 
+					string_append_str(str, "\n");
 					generate_layout_ident(str, ident + 2);
 					string_append_str(str, "</style>\n");
 				}

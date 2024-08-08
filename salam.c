@@ -1995,7 +1995,36 @@ bool is_allowed_general_layout_property(ast_layout_type_t type, char* attribute_
 		if (strcmp(attribute_name, attributes[i]) == 0) { strcpy(*new_attribute_name, html_attributes[i]); return true; }
 	}
 
-	if (type == AST_TYPE_LAYOUT_FORM) {
+	if (type == AST_TYPE_LAYOUT_BODY) {
+		if (strcmp(attribute_name, "جهت") == 0) {
+			if (attribute_values->length == 1) {
+				strcpy(*new_attribute_name, "dir");
+
+				if (strcmp(attribute_values->data[0], "راستچین") == 0) { strcpy(attribute_values->data[0], "rtl"); return true; }
+				else if (strcmp(attribute_values->data[0], "چپچین") == 0) { strcpy(attribute_values->data[0], "ltr"); return true; }
+
+				return false;
+			}
+			else return false;
+		}
+		else if (strcmp(attribute_name, "عنوان") == 0) {
+			strcpy(*new_attribute_name, "title");
+			
+			return true;
+		}
+		else if (strcmp(attribute_name, "زبان") == 0) {
+			if (attribute_values->length == 1) {
+				strcpy(*new_attribute_name, "lang");
+
+				if (strcmp(attribute_values->data[0], "فارسی") == 0) { strcpy(attribute_values->data[0], "fa_IR"); return true; }
+				else if (strcmp(attribute_values->data[0], "انگلیسی") == 0) { strcpy(attribute_values->data[0], "en_US"); return true; }
+
+				return false;
+			}
+			else return false;
+		}
+	}
+	else if (type == AST_TYPE_LAYOUT_FORM) {
 		if (strcmp(attribute_name, "نوع") == 0) {
 			if (attribute_values->length == 1) {
 				strcpy(*new_attribute_name, "method");
@@ -3219,8 +3248,38 @@ string_t* generate_string(parser_t* parser, int ident)
 		generate_layout_ident(str, ident);
 		string_append_str(str, "<!doctype html>\n");
 
+		array_t* html_dir_values;
+		array_t* html_lang_values;
+		array_t* html_title_values;
+
+		if (parser->layout->attributes != NULL) {
+			if (parser->layout->attributes->data != NULL) {
+				if (parser->layout->attributes->length > 0) {
+					html_dir_values = hashmap_get(parser->layout->attributes, "dir");
+					html_lang_values = hashmap_get(parser->layout->attributes, "lang");
+					html_title_values = hashmap_get(parser->layout->attributes, "title");
+				}
+			}
+		}
+
 		generate_layout_ident(str, ident);
-		string_append_str(str, "<html dir=\"rtl\" lang=\"fa_IR\">\n");
+
+		string_append_str(str, "<html dir=\"");
+		if (html_dir_values != NULL && html_dir_values->length > 0) {
+			string_append_str(str, array_string(html_dir_values, ", "));
+		}
+		else {
+			string_append_str(str, "rtl");
+		}
+
+		string_append_str(str, "\" lang=\"");
+		if (html_lang_values != NULL && html_lang_values->length > 0) {
+			string_append_str(str, array_string(html_lang_values, ""));
+		}
+		else {
+			string_append_str(str, "fa_IR");
+		}
+		string_append_str(str, "\">\n");
 
 		generate_layout_ident(str, ident + 1);
 		string_append_str(str, "<head>\n");
@@ -3233,26 +3292,18 @@ string_t* generate_string(parser_t* parser, int ident)
 
 		generate_layout_ident(str, ident + 2);
 		string_append_str(str, "<meta http-equiv=\"X-UA-Compatible\" content=\"ie=edge\">\n");
+		
+		if (html_title_values != NULL && html_title_values->length > 0) {
+			char* titles = array_string(html_title_values, ", ");
 
-		if (parser->layout->attributes != NULL) {
-			if (parser->layout->attributes->data != NULL) {
-				if (parser->layout->attributes->length > 0) {
-					array_t* title_values = hashmap_get(parser->layout->attributes, "عنوان");
-					
-					if (title_values != NULL && title_values->length > 0) {
-						char* titles = array_string(title_values, ", ");
+			if (titles != NULL) {
+				generate_layout_ident(str, ident + 2);
 
-						if (titles != NULL) {
-							generate_layout_ident(str, ident + 2);
+				string_append_str(str, "<title>");
+				string_append_str(str, titles);
+				string_append_str(str, "</title>\n");
 
-							string_append_str(str, "<title>");
-							string_append_str(str, titles);
-							string_append_str(str, "</title>\n");
-
-							free(titles);
-						}
-					}
-				}
+				free(titles);
 			}
 		}
 

@@ -107,8 +107,8 @@ const layout_keyword_mapping_t layout_keyword_mapping[LANGUAGE_COUNT][50] = {
 		{"فیلدمتن", AST_TYPE_LAYOUT_TEXTAREA},
 		{"کشو", AST_TYPE_LAYOUT_SELECT},
 		{"اپشن", AST_TYPE_LAYOUT_SELECT_OPTION},
-		{"فاصله", AST_TYPE_LAYOUT_LINE},
-		{"خط", AST_TYPE_LAYOUT_BREAK},
+		{"خط", AST_TYPE_LAYOUT_LINE},
+		{"برش", AST_TYPE_LAYOUT_BREAK},
 		{NULL, TOKEN_TYPE_ERROR},
 	},
 };

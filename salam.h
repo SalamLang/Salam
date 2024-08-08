@@ -267,6 +267,7 @@ typedef struct {
 	array_t* expressions;
 
 	ast_layout_node_t* layout;
+	array_t* styles;
 } parser_t;
 
 // Function Declarations

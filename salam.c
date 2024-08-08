@@ -2757,6 +2757,7 @@ string_t* generate_layout_element_attribute(parser_t* parser, char* key, array_t
 
 		if (str_values != NULL) {
 			string_append_str(buffer, key);
+
 			string_append_char(buffer, '=');
 
 			if (strlen(str_values) == 1) {
@@ -2822,7 +2823,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	int html_attrs = 0;
 	int css_attrs = 0;
 	int css_hover_attrs = 0;
-
+	
 	if (element->attributes != NULL && element->attributes->length > 0) {
 		for (size_t i = 0; i < element->attributes->size; i++) {
 			hashmap_entry_t *entry = element->attributes->data[i];
@@ -2867,9 +2868,19 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	if (css_attrs > 0 || css_hover_attrs > 0) {
 		if (element->className == NULL) element->className = getNextIdentifier(parser->gen);
 
-		string_append_str(buffer, "class=\"");
-		string_append_str(buffer, element->className);
-		string_append_str(buffer, "\"");
+		int class_length = strlen(element->className);
+
+		if (class_length > 0) {
+			string_append_str(buffer, "class=");
+
+			if (class_length > 1) string_append_char(buffer, '\"');
+
+			string_append_str(buffer, element->className);
+
+			if (class_length > 1) string_append_char(buffer, '\"');
+
+			string_append_str(buffer, "\"");
+		}
 	}
 
 	if (css_attrs > 0) {

@@ -300,6 +300,8 @@ bool is_style_attribute(char* attribute_name);
 string_t* string_create(size_t initial_size);
 void string_append_char(string_t* str, char c);
 void string_append_str(string_t* str, const char* suffix);
+void string_append_char_begin(string_t* str, char c);
+void string_append_str_begin(string_t* str, const char* prefix);
 void string_free(string_t* str);
 void string_print(string_t* str);
 void string_append(string_t* dest, string_t* src);

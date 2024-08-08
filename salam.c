@@ -1184,6 +1184,8 @@ ast_layout_node_t* parser_layout_element_single(ast_layout_type_t layout_type, p
 	element->hoverStyles = hashmap_create();
 	element->is_mother = false;
 
+	CREATE_MEMORY_OBJECT(element->className, char, 100, "Error: parser_layout_element_single<element-classNames> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+
 	parser->token_index++; // Eating keyword
 
 	return element;
@@ -1282,6 +1284,8 @@ ast_layout_node_t* parser_layout_element_mother(ast_layout_type_t layout_type, p
 	element->styles = hashmap_create();
 	element->hoverStyles = hashmap_create();
 	element->is_mother = true;
+
+	CREATE_MEMORY_OBJECT(element->className, char, 100, "Error: parser_layout_element_mother<element-className> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 	parser->token_index++; // Eating keyword
 
@@ -1554,6 +1558,8 @@ void ast_layout_node_free(ast_layout_node_t* node)
 
 	children_free(node->children);
 
+	if (node->className != NULL) free(node->className);
+
 	free(node);
 	node = NULL;
 }
@@ -1634,18 +1640,8 @@ void ast_node_free(ast_node_t* node)
 			break;
 		
 		case AST_TYPE_LAYOUT:
-			if (node->data.layout != NULL) {
-				ast_layout_node_free(node->data.layout);
+			if (node->data.layout != NULL) ast_layout_node_free(node->data.layout);
 
-				// attributes_free(node->data.layout->attributes);
-				// attributes_free(node->data.layout->styles);
-				// attributes_free(node->data.layout->hoverStyles);
-
-				// children_free(node->data.layout->children);
-
-				// free(node->data.layout);
-				// node->data.layout = NULL;
-			}
 			break;
 		
 		default:
@@ -1664,16 +1660,7 @@ void parser_free(parser_t* parser)
 
 	if (parser->gen != NULL) freeIdentifierGenerator(parser->gen);
 
-	if (parser->layout != NULL) {
-		attributes_free(parser->layout->attributes);
-		attributes_free(parser->layout->styles);
-		attributes_free(parser->layout->hoverStyles);
-
-		children_free(parser->layout->children);
-
-		free(parser->layout);
-		parser->layout = NULL;
-	}
+	if (parser->layout != NULL) ast_layout_node_free(parser->layout);
 
 	if (parser->functions != NULL) {
 		if (parser->functions->data != NULL) {

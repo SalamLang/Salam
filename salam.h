@@ -237,6 +237,8 @@ typedef struct {
 	ast_layout_type_t type;
 
 	bool is_mother;
+	
+	char* className;
 
 	hashmap_t* attributes;
 

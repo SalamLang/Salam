@@ -1833,6 +1833,7 @@ string_t* ast_layout_string_attributes(ast_layout_node_t* element, parser_t* par
 				string_append_char(buffer, '\"');
 
 				array_t* arr = entry->value;
+				
 				char* str_value = array_string(arr, ", ");
 
 				string_append_str(buffer, str_value == NULL ? "NULL" : str_value);
@@ -3304,6 +3305,7 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 			char* value = array_string(element_content, "\n");
 
 			string_append_str(str, value == NULL ? "NULL" : value);
+
 			if (value != NULL) free(value);
 			
 			if (needBreak) string_append_char(str, '\n');
@@ -3360,7 +3362,9 @@ string_t* generate_string(parser_t* parser, int ident)
 		string_append_str(str, "<html dir=\"");
 		if (html_dir_values != NULL && html_dir_values->length > 0) {
 			char* buf = array_string(html_dir_values, "");
+
 			string_append_str(str, buf);
+
 			free(buf);
 		}
 		else {
@@ -3370,7 +3374,9 @@ string_t* generate_string(parser_t* parser, int ident)
 		string_append_str(str, "\" lang=\"");
 		if (html_lang_values != NULL && html_lang_values->length > 0) {
 			char* buf = array_string(html_lang_values, "");
+
 			string_append_str(str, buf);
+
 			free(buf);
 		}
 		else {

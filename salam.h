@@ -79,6 +79,10 @@ typedef enum {
 } language_t;
 
 typedef struct {
+    char *current;
+} identifier_generator;
+
+typedef struct {
 	size_t size;
 	size_t length;
 	void** data;
@@ -268,6 +272,7 @@ typedef struct {
 
 	ast_layout_node_t* layout;
 	array_t* styles;
+	identifier_generator* gen;
 } parser_t;
 
 // Function Declarations

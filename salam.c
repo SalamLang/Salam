@@ -1113,6 +1113,7 @@ parser_t* parser_create(lexer_t* lexer)
 	parser->token_index = 0;
 	parser->functions = array_create(5);
 	parser->expressions = array_create(5);
+	parser->styles = array_create(5);
 	parser->layout = NULL;
 
 	return parser;
@@ -1605,6 +1606,8 @@ void ast_node_free(ast_node_t* node)
 void parser_free(parser_t* parser)
 {
 	if (parser == NULL) return;
+
+	if (parser->styles != NULL) array_free(parser->styles);
 
 	if (parser->layout != NULL) {
 		attributes_free(parser->layout->attributes);
@@ -2684,11 +2687,11 @@ string_t* generate_layout_element_attributes_styles(parser_t* parser, ast_layout
 
 string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t* element, array_t** element_content, int ident)
 {
-	string_t* str = string_create(10);
+	string_t* buffer = string_create(10);
 
+	int html_attrs = 0;
 	int css_attrs = 0;
 	int css_hover_attrs = 0;
-	int html_attrs = 0;
 
 	if (element->attributes != NULL && element->attributes->length > 0) {
 		for (size_t i = 0; i < element->attributes->size; i++) {
@@ -2703,11 +2706,11 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 					CREATE_MEMORY_OBJECT(newKey, char, 150, "Error: generate_layout_element_attributes<newKey> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 					if ((is_allowed_layout_property(element->is_mother, element->type, entry->key, &newKey) == true) && newKey != NULL) {
-						if (html_attrs != 0) string_append_char(str, ' ');
+						if (html_attrs != 0) string_append_char(buffer, ' ');
 						html_attrs++;
 
 						string_t* buf = generate_layout_element_attribute(parser, newKey, entry->value);
-						string_append(str, buf);
+						string_append(buffer, buf);
 
 						string_free(buf);
 					}
@@ -2724,11 +2727,11 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 		string_t* css_buffer = generate_layout_element_attributes_styles(parser, element, element->styles, &css_attrs);
 
 		if (css_buffer != NULL && css_buffer->length > 0) {
-			if (html_attrs > 0) string_append_char(str, ' ');
+			if (html_attrs > 0) string_append_char(buffer, ' ');
 
-			string_append_str(str, "style=\"");
-			string_append(str, css_buffer);
-			string_append_str(str, "\"");
+			string_append_str(buffer, "style=\"");
+			string_append(buffer, css_buffer);
+			string_append_str(buffer, "\"");
 		}
 
 		if (css_buffer != NULL) string_free(css_buffer);
@@ -2736,19 +2739,19 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 
 	if (element->hoverStyles != NULL && element->hoverStyles->length > 0) {
 		string_t* css_hover_buffer = generate_layout_element_attributes_styles(parser, element, element->hoverStyles, &css_hover_attrs);
-
+		
 		if (css_hover_buffer != NULL && css_hover_buffer->length > 0) {
-			if (html_attrs > 0 || css_attrs > 0) string_append_char(str, ' ');
+			if (html_attrs > 0 || css_attrs > 0) string_append_char(buffer, ' ');
 
-			string_append_str(str, "hover_style=\"");
-			string_append(str, css_hover_buffer);
-			string_append_str(str, "\"");
+			string_append_str(buffer, "hover_style=\"");
+			string_append(buffer, css_hover_buffer);
+			string_append_str(buffer, "\"");
 		}
 
 		if (css_hover_buffer != NULL) string_free(css_hover_buffer);
 	}
 	
-	return str;
+	return buffer;
 }
 
 string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, int ident)
@@ -2873,10 +2876,31 @@ string_t* generate_string(parser_t* parser, int ident)
 
 		generate_layout_ident(str, ident + 2);
 		string_append_str(str, "<style type=\"text/css\">\n");
-		generate_layout_ident(str, ident + 3);
+		generate_layout_ident(str, ident + 2);
 		string_append_str(str, "html,body,div,span,applet,object,iframe,h1,h2,h3,h4,h5,h6,p,blockquote,pre,a,abbr,acronym,address,big,cite,code,del,dfn,em,img,ins,kbd,q,s,samp,small,strike,strong,sub,sup,tt,var,b,u,i,center,dl,dt,dd,ol,ul,li,fieldset,form,label,legend,table,caption,tbody,tfoot,thead,tr,th,td,article,aside,canvas,details,embed,figure,figcaption,footer,header,hgroup,menu,nav,output,ruby,section,summary,time,mark,audio,video{margin:0;padding:0;border:0;font-size:100%;font:inherit;vertical-align:baseline}article,aside,details,figcaption,figure,footer,header,hgroup,menu,nav,section{display:block}body{line-height:1}ol,ul{list-style:none}blockquote,q{quotes:none}blockquote:before,blockquote:after,q:before,q:after{content:'';content:none}table{border-collapse:collapse;border-spacing:0}\n");
 		generate_layout_ident(str, ident + 2);
 		string_append_str(str, "</style>\n");
+
+		if (parser->styles != NULL) {
+			if (parser->styles->data != NULL) {
+				if (parser->styles->length > 0) {
+					generate_layout_ident(str, ident + 2);
+					string_append_str(str, "<style type=\"text/css\">\n");
+					generate_layout_ident(str, ident + 2);
+
+					for (int i = 0; i < parser->styles->length; i++) {
+						char* style_code = parser->styles->data[i];
+
+						if (style_code != NULL) {
+							string_append_str(str, style_code);
+						}
+					}
+
+					generate_layout_ident(str, ident + 2);
+					string_append_str(str, "</style>\n");
+				}
+			}
+		}
 
 		generate_layout_ident(str, ident + 1);
 		string_append_str(str, "</head>\n");

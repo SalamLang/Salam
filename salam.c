@@ -2146,6 +2146,9 @@ bool is_style_attribute(char* attribute_name)
 	else if (strcmp(attribute_name, "موقعیت") == 0) return true;
 	else if (strcmp(attribute_name, "لاین‌خارجی") == 0) return true;
 	else if (strcmp(attribute_name, "نمایش") == 0) return true;
+	else if (strcmp(attribute_name, "سایه") == 0) return true;
+	else if (strcmp(attribute_name, "سایه‌متن") == 0) return true;
+	else if (strcmp(attribute_name, "زیرمتن") == 0) return true;
 	else if (strcmp(attribute_name, "زمینه") == 0) return true;
 	else if (strcmp(attribute_name, "فونت") == 0) return true;
 	else if (strcmp(attribute_name, "اندازه") == 0) return true;
@@ -2517,7 +2520,12 @@ char* attribute_css_values(ast_layout_type_t type, char* attribute_name, array_t
 		else if (attribute_values->length == 1 && strcmp(attribute_value, "بزرگ‌نمایی خروج") == 0) { strcpy(res, "zoom-out"); return res; }
 		else if (attribute_values->length == 1 && strcmp(attribute_value, "در حال بارگذاری") == 0) { strcpy(res, "progress"); return res; }
 	}
-	if (strcmp(attribute_name, "display") == 0) {
+	else if (strcmp(attribute_name, "text-decoration") == 0) {
+		if (attribute_values->length == 1 && strcmp(attribute_value, "زیرخط") == 0) { strcpy(res, "underline"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "بالاخط") == 0) { strcpy(res, "overline"); return res; }
+		else if (attribute_values->length == 1 && strcmp(attribute_value, "هیچ") == 0) { strcpy(res, "none"); return res; }
+	}
+	else if (strcmp(attribute_name, "display") == 0) {
 		if (attribute_values->length == 1 && strcmp(attribute_value, "بلوک") == 0) { strcpy(res, "block"); return res; }
 		else if (attribute_values->length == 1 && strcmp(attribute_value, "درون‌خطی") == 0) { strcpy(res, "inline"); return res; }
 		else if (attribute_values->length == 1 && strcmp(attribute_value, "درون‌خطی بلوک") == 0) { strcpy(res, "inline-block"); return res; }
@@ -2753,6 +2761,14 @@ char* attribute_css_values(ast_layout_type_t type, char* attribute_name, array_t
 		strcpy(res, attribute_value);
 		return res;
 	}
+	else if (strcmp(attribute_name, "box-shadow") == 0) {
+		strcpy(res, attribute_value);
+		return res;
+	}
+	else if (strcmp(attribute_name, "text-shadow") == 0) {
+		strcpy(res, attribute_value);
+		return res;
+	}
 	else if (strcmp(attribute_name, "font-weight") == 0) {
 		if (attribute_values->length == 1) {
 			char* size_value = attribute_css_size_value(attribute_name, attribute_value);
@@ -2784,7 +2800,8 @@ char* attribute_css_values(ast_layout_type_t type, char* attribute_name, array_t
 		}
 	}
 	else if (strcmp(attribute_name, "top") == 0 || strcmp(attribute_name, "left") == 0 || strcmp(attribute_name, "right") == 0 || strcmp(attribute_name, "bottom") == 0) {
-		if (attribute_values->length == 1) {
+		if (attribute_values->length == 1 && strcmp(attribute_value, "خودکار") == 0) { strcpy(res, "auto"); return res;}
+		else if (attribute_values->length == 1) {
 			char* size_value = attribute_css_size_value(attribute_name, attribute_value);
 
 			if (size_value) {
@@ -2794,7 +2811,8 @@ char* attribute_css_values(ast_layout_type_t type, char* attribute_name, array_t
 		}
 	}
 	else if (strcmp(attribute_name, "margin-top") == 0 || strcmp(attribute_name, "margin-left") == 0 || strcmp(attribute_name, "margin-right") == 0 || strcmp(attribute_name, "margin-bottom") == 0) {
-		if (attribute_values->length == 1) {
+		if (attribute_values->length == 1 && strcmp(attribute_value, "خودکار") == 0) { strcpy(res, "auto"); return res;}
+		else if (attribute_values->length == 1) {
 			char* size_value = attribute_css_size_value(attribute_name, attribute_value);
 
 			if (size_value) {
@@ -2823,12 +2841,23 @@ char* attribute_css_values(ast_layout_type_t type, char* attribute_name, array_t
 			}
 		}
 	}
-	else if (strcmp(attribute_name, "border-radius") == 0 || strcmp(attribute_name, "padding") == 0 || strcmp(attribute_name, "margin") == 0) {
+	else if (strcmp(attribute_name, "border-radius") == 0) {
 		char* size_value = attribute_css_multiple_size_value(attribute_name, attribute_values);
 
 		if (size_value) {
 			free(res);
 			return size_value;
+		}
+	}
+	else if (strcmp(attribute_name, "padding") == 0 || strcmp(attribute_name, "margin") == 0) {
+		if (attribute_values->length == 1 && strcmp(attribute_value, "خودکار") == 0) { strcpy(res, "auto"); return res;}
+		else {
+			char* size_value = attribute_css_multiple_size_value(attribute_name, attribute_values);
+
+			if (size_value) {
+				free(res);
+				return size_value;
+			}
 		}
 	}
 	else if (strcmp(attribute_name, "border-size") == 0) {
@@ -2880,6 +2909,9 @@ char* attribute_css_name(const char* attribute_name)
 	else if (strcmp(attribute_name, "موقعیت") == 0) return "position";
 	else if (strcmp(attribute_name, "لاین‌خارجی") == 0) return "outline";
 	else if (strcmp(attribute_name, "نمایش") == 0) return "display";
+	else if (strcmp(attribute_name, "سایه") == 0) return "box-shadow";
+	else if (strcmp(attribute_name, "سایه‌متن") == 0) return "text-shadow";
+	else if (strcmp(attribute_name, "زیرمتن") == 0) return "text-decoration";
 	else if (strcmp(attribute_name, "زمینه") == 0) return "background-color";
 	else if (strcmp(attribute_name, "فونت") == 0) return "font-family";
 	else if (strcmp(attribute_name, "اندازه") == 0) return "font-size";

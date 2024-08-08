@@ -3589,6 +3589,50 @@ string_t* generate_string(parser_t* parser, int ident)
 
 								string_append_str(str, "\">\n");
 							}
+							else if (strcmp(entry->key, "آیکون") == 0 || strcmp(entry->key, "ایکون") == 0) {
+								array_t* values = entry->value;
+								
+								generate_layout_ident(str, ident + 2);
+								string_append_str(str, "<link rel=\"icon\" href=\"");
+
+								string_append_str(str, values->data[0]);
+
+								string_append_str(str, "\" type=\"");
+
+								if (values->length > 1) string_append_str(str, values->data[1]);
+								else string_append_str(str, "image/x-icon");
+								
+								string_append_str(str, "\"");
+
+								if (values->length > 2) {
+									string_append_str(str, " sizes=\"");
+
+									string_append_str(str, values->data[2]);
+
+									string_append_str(str, "\"");
+								}
+
+								string_append_str(str, ">\n");
+
+								char* buf = array_string(entry->value, ", ");
+
+								string_append_str(str, buf);
+
+								free(buf);
+
+								string_append_str(str, "\">\n");
+							}
+							else if (strcmp(entry->key, "ربات") == 0) {
+								generate_layout_ident(str, ident + 2);
+								string_append_str(str, "<meta name=\"robots\" content=\"");
+								char* buf = array_string(entry->value, ", ");
+
+								string_append_str(str, buf);
+
+								free(buf);
+
+								string_append_str(str, "\">\n");
+							}
 							else {
 								printf("---> %s\n", entry->key);
 							}

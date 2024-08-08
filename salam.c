@@ -2108,6 +2108,11 @@ bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_n
 				
 				return true;
 			}
+			else if (strcmp(attribute_name, "ایکن") == 0 || strcmp(attribute_name, "آیکن") == 0 || strcmp(attribute_name, "ایکون") == 0 || strcmp(attribute_name, "آیکون") == 0) {
+				// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "author");
+				
+				return true;
+			}
 			else if (strcmp(attribute_name, "نویسنده") == 0) {
 				// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "author");
 				
@@ -3589,9 +3594,9 @@ string_t* generate_string(parser_t* parser, int ident)
 
 								string_append_str(str, "\">\n");
 							}
-							else if (strcmp(entry->key, "آیکون") == 0 || strcmp(entry->key, "ایکون") == 0) {
+							else if (strcmp(entry->key, "ایکن") == 0 || strcmp(entry->key, "آیکن") == 0 || strcmp(entry->key, "آیکون") == 0 || strcmp(entry->key, "ایکون") == 0) {
 								array_t* values = entry->value;
-								
+
 								generate_layout_ident(str, ident + 2);
 								string_append_str(str, "<link rel=\"icon\" href=\"");
 
@@ -3614,17 +3619,6 @@ string_t* generate_string(parser_t* parser, int ident)
 
 								string_append_str(str, ">\n");
 
-								char* buf = array_string(entry->value, ", ");
-
-								string_append_str(str, buf);
-
-								free(buf);
-
-								string_append_str(str, "\">\n");
-							}
-							else if (strcmp(entry->key, "ربات") == 0) {
-								generate_layout_ident(str, ident + 2);
-								string_append_str(str, "<meta name=\"robots\" content=\"");
 								char* buf = array_string(entry->value, ", ");
 
 								string_append_str(str, buf);

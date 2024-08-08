@@ -3498,12 +3498,6 @@ string_t* generate_string(parser_t* parser, int ident)
 		generate_layout_ident(str, ident + 2);
 		string_append_str(str, "<meta charset=\"UTF-8\">\n");
 
-		generate_layout_ident(str, ident + 2);
-		string_append_str(str, "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n");
-
-		generate_layout_ident(str, ident + 2);
-		string_append_str(str, "<meta http-equiv=\"X-UA-Compatible\" content=\"ie=edge\">\n");
-		
 		bool hasTitle = false;
 
 		if (html_title_values != NULL && html_title_values->length > 0) {
@@ -3530,7 +3524,12 @@ string_t* generate_string(parser_t* parser, int ident)
 			string_append_str(str, "</title>\n");
 		}
 
+		generate_layout_ident(str, ident + 2);
+		string_append_str(str, "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n");
 
+		generate_layout_ident(str, ident + 2);
+		string_append_str(str, "<meta http-equiv=\"X-UA-Compatible\" content=\"ie=edge\">\n");
+		
 		if (parser->layout->attributes != NULL) {
 			if (parser->layout->attributes->data != NULL) {
 				if (parser->layout->attributes->length > 0) {

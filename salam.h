@@ -321,6 +321,7 @@ string_t* generate_string(parser_t* parser, int ident);
 void generate_print(parser_t* parser);
 char* generate_layout_type_string(ast_layout_type_t type);
 string_t* generate_layout_element_attributes_styles(parser_t* parser, ast_layout_node_t* element, hashmap_t* styles, int* count);
+bool generate_layout_element_attributes_check(parser_t* parser, ast_layout_node_t* element, array_t** element_content);
 
 // Hashmap
 hashmap_t* hashmap_create();

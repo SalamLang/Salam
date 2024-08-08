@@ -3267,19 +3267,21 @@ string_t* generate_string(parser_t* parser, int ident)
 			if (parser->styles->data != NULL) {
 				if (parser->styles->length > 0) {
 					generate_layout_ident(str, ident + 2);
+
 					string_append_str(str, "<style type=\"text/css\">\n");
+
 					generate_layout_ident(str, ident + 2);
 
 					for (int i = 0; i < parser->styles->length; i++) {
 						char* style_code = parser->styles->data[i];
-
-						if (style_code != NULL) {
-							string_append_str(str, style_code);
-						}
+						
+						if (style_code != NULL) string_append_str(str, style_code);
 					}
 
 					string_append_str(str, "\n");
+
 					generate_layout_ident(str, ident + 2);
+
 					string_append_str(str, "</style>\n");
 				}
 			}

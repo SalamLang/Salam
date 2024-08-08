@@ -1997,11 +1997,17 @@ bool is_allowed_general_layout_property(ast_layout_type_t type, char* attribute_
 
 	if (type == AST_TYPE_LAYOUT_FORM) {
 		if (strcmp(attribute_name, "نوع") == 0) {
-			if (attribute_values->length == 1) return true;
+			if (attribute_values->length == 1) {
+				strcpy(*new_attribute_name, "method");
+				return true;
+			}
 			else return false;
 		}
 		else if (strcmp(attribute_name, "منبع") == 0) {
-			if (attribute_values->length == 1) return true;
+			if (attribute_values->length == 1) {
+				strcpy(*new_attribute_name, "action");
+				return true;
+			}
 			else return false;
 		}
 	}
@@ -2837,6 +2843,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 					CREATE_MEMORY_OBJECT(newKey, char, 150, "Error: generate_layout_element_attributes<newKey> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 					if ((is_allowed_layout_property(element->is_mother, element->type, entry->key, entry->value, &newKey) == true) && newKey != NULL) {
+						// printf("--->%s\n", newKey);
 						string_t* buf = generate_layout_element_attribute(parser, newKey, entry->value);
 
 						if (buf->length > 0) {
@@ -2878,8 +2885,6 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 			string_append_str(buffer, element->className);
 
 			if (class_length > 1) string_append_char(buffer, '\"');
-
-			string_append_str(buffer, "\"");
 		}
 	}
 

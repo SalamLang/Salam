@@ -102,7 +102,7 @@ const layout_keyword_mapping_t layout_keyword_mapping[LANGUAGE_COUNT][50] = {
 		{"متن", AST_TYPE_LAYOUT_TEXT},
 		{"فرم", AST_TYPE_LAYOUT_FORM},
 		{"هاور", AST_TYPE_LAYOUT_HOVER},
-		{"پاراگراف", AST_TYPE_LAYOUT_PARAGTAPH},
+		{"پاراگراف", AST_TYPE_LAYOUT_PARAGRAPH},
 		{"فیلد", AST_TYPE_LAYOUT_INPUT},
 		{"فیلدمتن", AST_TYPE_LAYOUT_TEXTAREA},
 		{"کشو", AST_TYPE_LAYOUT_SELECT},

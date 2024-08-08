@@ -1722,40 +1722,40 @@ string_t* string_create(size_t initial_size)
 
 void string_append_char_begin(string_t* str, char c)
 {
-    if (str->length + 1 >= str->size) {
-        str->size *= 2;
-        str->data = (char*) realloc(str->data, str->size * sizeof(char));
+	if (str->length + 1 >= str->size) {
+		str->size *= 2;
+		str->data = (char*) realloc(str->data, str->size * sizeof(char));
 
-        if (str->data == NULL) {
-            fprintf(stderr, "Memory reallocation failed\n");
-            exit(1);
-        }
-    }
-    
-    memmove(str->data + 1, str->data, str->length + 1);
-    
-    str->data[0] = c;
-    str->length++;
+		if (str->data == NULL) {
+			fprintf(stderr, "Memory reallocation failed\n");
+			exit(1);
+		}
+	}
+	
+	memmove(str->data + 1, str->data, str->length + 1);
+	
+	str->data[0] = c;
+	str->length++;
 }
 
 void string_append_str_begin(string_t* str, const char* prefix)
 {
-    size_t prefix_len = strlen(prefix);
+	size_t prefix_len = strlen(prefix);
 
-    while (str->length + prefix_len >= str->size) {
-        str->size *= 2;
-        str->data = (char*) realloc(str->data, str->size * sizeof(char));
+	while (str->length + prefix_len >= str->size) {
+		str->size *= 2;
+		str->data = (char*) realloc(str->data, str->size * sizeof(char));
 
-        if (str->data == NULL) {
-            fprintf(stderr, "Memory reallocation failed\n");
-            exit(1);
-        }
-    }
-    
-    memmove(str->data + prefix_len, str->data, str->length + 1);
-    
-    memcpy(str->data, prefix, prefix_len);
-    str->length += prefix_len;
+		if (str->data == NULL) {
+			fprintf(stderr, "Memory reallocation failed\n");
+			exit(1);
+		}
+	}
+	
+	memmove(str->data + prefix_len, str->data, str->length + 1);
+	
+	memcpy(str->data, prefix, prefix_len);
+	str->length += prefix_len;
 }
 
 void string_append_char(string_t* str, char c)
@@ -2011,62 +2011,75 @@ bool is_allowed_general_layout_property(ast_layout_type_t type, char* attribute_
 
 bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_name, array_t* attribute_values, char** new_attribute_name)
 {
-	// *new_attribute_name = NULL;
 	if (is_allowed_general_layout_property(type, attribute_name, attribute_values, new_attribute_name)) return true;
 
 	switch (type) {
 		case AST_TYPE_LAYOUT_BUTTON:
 			if (strcmp(attribute_name, "نام") == 0) { strcpy(*new_attribute_name, "name"); return true; }
+
 		break;
 
 		case AST_TYPE_LAYOUT_TEXT:
+
 		break;
 
 		case AST_TYPE_LAYOUT_INPUT:
 			if (strcmp(attribute_name, "نام") == 0) { strcpy(*new_attribute_name, "name"); return true; }
 			else if (strcmp(attribute_name, "نوع") == 0) { strcpy(*new_attribute_name, "type"); return true; }
+
 		break;
 
 		case AST_TYPE_LAYOUT_LINK:
 			if (strcmp(attribute_name, "منبع") == 0) { strcpy(*new_attribute_name, "href"); return true; }
 			else if (strcmp(attribute_name, "نوع") == 0) { strcpy(*new_attribute_name, "target"); return true; }
+
 		break;
 
 		case AST_TYPE_LAYOUT_IMAGE:
 			if (strcmp(attribute_name, "منبع") == 0) { strcpy(*new_attribute_name, "src"); return true; }
 			else if (strcmp(attribute_name, "عرض") == 0) { strcpy(*new_attribute_name, "width"); return true; }
 			else if (strcmp(attribute_name, "ارتفاع") == 0) { strcpy(*new_attribute_name, "height"); return true; }
+
 		break;
 
 		case AST_TYPE_LAYOUT_CENTER:
+
 		break;
 
 		case AST_TYPE_LAYOUT_FORM:
 			if (strcmp(attribute_name, "نام") == 0) { strcpy(*new_attribute_name, "name"); return true; }
 			else if (strcmp(attribute_name, "نوع") == 0) { strcpy(*new_attribute_name, "method"); return true; }
 			else if (strcmp(attribute_name, "منبع") == 0) { strcpy(*new_attribute_name, "action"); return true; }
+
 		break;
 
 		case AST_TYPE_LAYOUT_TABLE:
+
 		break;
 
 		case AST_TYPE_LAYOUT_TABLE_ROW:
+
 		break;
 
 		case AST_TYPE_LAYOUT_TABLE_COLUMN:
+
 		break;
 
 		case AST_TYPE_LAYOUT_BOLD:
+
 		break;
 
 		case AST_TYPE_LAYOUT_DIV:
+
 		break;
 
 		case AST_TYPE_LAYOUT_PARAGTAPH:
+
 		break;
 
 		case AST_TYPE_LAYOUT_TEXTAREA:
 			if (strcmp(attribute_name, "نام") == 0) { strcpy(*new_attribute_name, "name"); return true; }
+
 		break;
 
 		case AST_TYPE_LAYOUT_SELECT:
@@ -2079,21 +2092,26 @@ bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_n
 		break;
 	}
 
+	*new_attribute_name = NULL;
+
 	return false;
 }
 
 bool is_allowed_single_layout_property(ast_layout_type_t type, char* attribute_name, array_t* attribute_values, char** new_attribute_name)
 {
-	// *new_attribute_name = NULL;
 	// if (is_allowed_general_layout_property(attribute_name, new_attribute_name)) return true;
 
 	switch (type) {
 		case AST_TYPE_LAYOUT_LINE:
+
 		break;
 
 		case AST_TYPE_LAYOUT_BREAK:
+
 		break;
 	}
+
+	*new_attribute_name = NULL;
 
 	return false;
 }
@@ -2818,15 +2836,19 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 					CREATE_MEMORY_OBJECT(newKey, char, 150, "Error: generate_layout_element_attributes<newKey> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
 
 					if ((is_allowed_layout_property(element->is_mother, element->type, entry->key, entry->value, &newKey) == true) && newKey != NULL) {
-						if (html_attrs != 0) string_append_char(buffer, ' ');
-						html_attrs++;
-
 						string_t* buf = generate_layout_element_attribute(parser, newKey, entry->value);
 
-						if (buf->length > 0) string_append(buffer, buf);
+						if (buf->length > 0) {
+							if (html_attrs != 0) string_append_char(buffer, ' ');
+
+							string_append(buffer, buf);
+
+							html_attrs++;
+						}
 
 						string_free(buf);
 					}
+
 					if (newKey != NULL) free(newKey);
 				}				
 				

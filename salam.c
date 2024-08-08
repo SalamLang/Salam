@@ -1833,7 +1833,7 @@ string_t* ast_layout_string_attributes(ast_layout_node_t* element, parser_t* par
 				string_append_char(buffer, '\"');
 
 				array_t* arr = entry->value;
-				
+
 				char* str_value = array_string(arr, ", ");
 
 				string_append_str(buffer, str_value == NULL ? "NULL" : str_value);
@@ -2058,13 +2058,13 @@ bool is_allowed_general_layout_property(ast_layout_type_t type, char* attribute_
 			if (attribute_values->length == 1) {
 				if (strcmp(attribute_values->data[0], "فارسی") == 0) {
 					strcpy(*new_attribute_name, "lang");
-					strcpy(attribute_values->data[0], "fa_IR");
+					strcpy(attribute_values->data[0], "fa-IR");
 
 					return true;
 				}
 				else if (strcmp(attribute_values->data[0], "انگلیسی") == 0) {
 					strcpy(*new_attribute_name, "lang");
-					strcpy(attribute_values->data[0], "en_US");
+					strcpy(attribute_values->data[0], "en-US");
 
 					return true;
 				}
@@ -3339,9 +3339,9 @@ string_t* generate_string(parser_t* parser, int ident)
 		generate_layout_ident(str, ident);
 		string_append_str(str, "<!doctype html>\n");
 
-		array_t* html_dir_values;
-		array_t* html_lang_values;
-		array_t* html_title_values;
+		array_t* html_dir_values = NULL;
+		array_t* html_lang_values = NULL;
+		array_t* html_title_values = NULL;
 
 		array_t* element_content = NULL;
 
@@ -3360,12 +3360,15 @@ string_t* generate_string(parser_t* parser, int ident)
 		generate_layout_ident(str, ident);
 
 		string_append_str(str, "<html dir=\"");
+
 		if (html_dir_values != NULL && html_dir_values->length > 0) {
 			char* buf = array_string(html_dir_values, "");
 
-			string_append_str(str, buf);
+			if (buf != NULL) {
+				string_append_str(str, buf);
 
-			free(buf);
+				free(buf);
+			}
 		}
 		else {
 			string_append_str(str, "rtl");
@@ -3376,7 +3379,7 @@ string_t* generate_string(parser_t* parser, int ident)
 			char* buf = array_string(html_lang_values, "");
 
 			string_append_str(str, buf);
-
+			
 			free(buf);
 		}
 		else {
@@ -3396,10 +3399,14 @@ string_t* generate_string(parser_t* parser, int ident)
 		generate_layout_ident(str, ident + 2);
 		string_append_str(str, "<meta http-equiv=\"X-UA-Compatible\" content=\"ie=edge\">\n");
 		
+		bool hasTitle = false;
+
 		if (html_title_values != NULL && html_title_values->length > 0) {
 			char* titles = array_string(html_title_values, ", ");
 
 			if (titles != NULL) {
+				hasTitle = true;
+
 				generate_layout_ident(str, ident + 2);
 
 				string_append_str(str, "<title>");
@@ -3410,8 +3417,17 @@ string_t* generate_string(parser_t* parser, int ident)
 			}
 		}
 
+		if (hasTitle == false) {
+			generate_layout_ident(str, ident + 2);
+
+			string_append_str(str, "<title>");
+			string_append_str(str, "Salam Program");
+			string_append_str(str, "</title>\n");
+		}
+
 		generate_layout_ident(str, ident + 2);
-		string_append_str(str, "<style type=\"text/css\">\n");
+		// string_append_str(str, "<style type=\"text/css\">\n");
+		string_append_str(str, "<style>\n");
 		generate_layout_ident(str, ident + 2);
 		string_append_str(str, "html,body,div,span,applet,object,iframe,h1,h2,h3,h4,h5,h6,p,blockquote,pre,a,abbr,acronym,address,big,cite,code,del,dfn,em,img,ins,kbd,q,s,samp,small,strike,strong,sub,sup,tt,var,b,u,i,center,dl,dt,dd,ol,ul,li,fieldset,form,label,legend,table,caption,tbody,tfoot,thead,tr,th,td,article,aside,canvas,details,embed,figure,figcaption,footer,header,hgroup,menu,nav,output,ruby,section,summary,time,mark,audio,video{margin:0;padding:0;border:0;font-size:100%;font:inherit;vertical-align:baseline}article,aside,details,figcaption,figure,footer,header,hgroup,menu,nav,section{display:block}body{line-height:1}ol,ul{list-style:none}blockquote,q{quotes:none}blockquote:before,blockquote:after,q:before,q:after{content:'';content:none}table{border-collapse:collapse;border-spacing:0}\n");
 		generate_layout_ident(str, ident + 2);
@@ -3422,7 +3438,8 @@ string_t* generate_string(parser_t* parser, int ident)
 				if (parser->styles->length > 0) {
 					generate_layout_ident(str, ident + 2);
 
-					string_append_str(str, "<style type=\"text/css\">\n");
+					// string_append_str(str, "<style type=\"text/css\">\n");
+					string_append_str(str, "<style>\n");
 
 					generate_layout_ident(str, ident + 2);
 

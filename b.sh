@@ -68,3 +68,5 @@ fi
 # ./s --code "تابع سلام() {
 #     نمایش \"سلام، دنیا\"
 # }"
+
+pre-commit run --all-files

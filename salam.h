@@ -79,7 +79,7 @@ typedef enum {
 } language_t;
 
 typedef struct {
-    char *current;
+	char *current;
 } identifier_generator;
 
 typedef struct {

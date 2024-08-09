@@ -28,7 +28,7 @@ const char* get_message(language_t language, message_key_t key)
 	return messages[language][key];
 }
 
-void init_identifier_generator(identifier_generator* gen)
+void identifier_generator_init(identifier_generator* gen)
 {
 	gen->current = malloc(2);
 
@@ -70,7 +70,7 @@ char* getNextIdentifier(identifier_generator* gen)
 	return identifier;
 }
 
-void free_identifier_generator(identifier_generator* gen)
+void identifier_generator_free(identifier_generator* gen)
 {
 	if (gen == NULL) return;
 
@@ -1166,7 +1166,7 @@ parser_t* parser_create(lexer_t* lexer)
 	parser->layout = NULL;
 	parser->gen = malloc(sizeof(identifier_generator));
 
-	init_identifier_generator(parser->gen);
+	identifier_generator_init(parser->gen);
 
 	return parser;
 }
@@ -1662,7 +1662,7 @@ void parser_free(parser_t* parser)
 
 	if (parser->styles != NULL) array_free(parser->styles);
 
-	if (parser->gen != NULL) free_identifier_generator(parser->gen);
+	if (parser->gen != NULL) identifier_generator_free(parser->gen);
 
 	if (parser->layout != NULL) ast_layout_node_free(parser->layout);
 
@@ -3810,7 +3810,7 @@ int main(int argc, char** argv)
 	setlocale(LC_ALL, "C.UTF-8");
 	
 	// identifier_generator gen;
-	// init_identifier_generator(&gen);
+	// identifier_generator_init(&gen);
 	// 
 	// for (int i = 0; i < 30; i++) {
 	// 	char *identifier = getNextIdentifier(&gen);
@@ -3818,7 +3818,7 @@ int main(int argc, char** argv)
 	// 	free(identifier);
 	// }
 	// 
-	// free_identifier_generator(&parser->gen);
+	// identifier_generator_free(&parser->gen);
 
 	// char* test1 = "1px";
 	// char* out1;

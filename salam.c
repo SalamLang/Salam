@@ -28,7 +28,7 @@ const char* get_message(language_t language, message_key_t key)
 	return messages[language][key];
 }
 
-void initIdentifierGenerator(identifier_generator* gen)
+void init_identifier_generator(identifier_generator* gen)
 {
 	gen->current = malloc(2);
 
@@ -70,7 +70,7 @@ char* getNextIdentifier(identifier_generator* gen)
 	return identifier;
 }
 
-void freeIdentifierGenerator(identifier_generator* gen)
+void free_identifier_generator(identifier_generator* gen)
 {
 	if (gen == NULL) return;
 
@@ -288,7 +288,6 @@ array_t* array_copy(array_t* arr)
 	}
 
 	return copy;
-
 }
 
 void array_free(array_t* arr)
@@ -1167,7 +1166,7 @@ parser_t* parser_create(lexer_t* lexer)
 	parser->layout = NULL;
 	parser->gen = malloc(sizeof(identifier_generator));
 
-	initIdentifierGenerator(parser->gen);
+	init_identifier_generator(parser->gen);
 
 	return parser;
 }
@@ -1200,7 +1199,10 @@ array_t* parser_layout_attribute_array_value(parser_t* parser)
 
 		if (attr_value->type == TOKEN_TYPE_END || attr_value->type == TOKEN_TYPE_EOF) break;
 
-		array_push(values, strdup(attr_value->value));
+		char* attribute_value = strdup(attr_value->value);
+		array_push(values, attribute_value);
+		// free(attribute_value);
+
 		parser->token_index++;
 
 		if (parser->token_index < parser->lexer->tokens->length) {
@@ -1661,7 +1663,7 @@ void parser_free(parser_t* parser)
 
 	if (parser->styles != NULL) array_free(parser->styles);
 
-	if (parser->gen != NULL) freeIdentifierGenerator(parser->gen);
+	if (parser->gen != NULL) free_identifier_generator(parser->gen);
 
 	if (parser->layout != NULL) ast_layout_node_free(parser->layout);
 
@@ -3809,7 +3811,7 @@ int main(int argc, char** argv)
 	setlocale(LC_ALL, "C.UTF-8");
 	
 	// identifier_generator gen;
-	// initIdentifierGenerator(&gen);
+	// init_identifier_generator(&gen);
 	// 
 	// for (int i = 0; i < 30; i++) {
 	// 	char *identifier = getNextIdentifier(&gen);
@@ -3817,7 +3819,7 @@ int main(int argc, char** argv)
 	// 	free(identifier);
 	// }
 	// 
-	// freeIdentifierGenerator(&parser->gen);
+	// free_identifier_generator(&parser->gen);
 
 	// char* test1 = "1px";
 	// char* out1;

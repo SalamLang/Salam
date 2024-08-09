@@ -416,8 +416,7 @@ void hashmap_put(hashmap_t *map, const char *key, void *value)
 	
 	while (entry != NULL) {
 		if (strcmp(entry->key, key) == 0) {
-			array_free(entry->value);
-			// free(entry->value);
+			free(entry->value);
 			entry->value = NULL;
 
 			entry->value = value;
@@ -436,7 +435,59 @@ void hashmap_put(hashmap_t *map, const char *key, void *value)
 	new_entry->next = map->data[index];
 
 	map->data[index] = new_entry;
+
+	map->length++;
+
+	if ((float)map->length / map->size >= 0.75) {
+		size_t new_length = map->size * 2;
+		hashmap_entry_t **new_data = (hashmap_entry_t**) calloc(new_length, sizeof(hashmap_entry_t*));
+		for (size_t i = 0; i < map->size; i++) {
+			hashmap_entry_t *entry = map->data[i];
+
+			while (entry) {
+				hashmap_entry_t *next = entry->next;
+				unsigned long new_index = hash_function(entry->key) % new_length;
+				entry->next = new_data[new_index];
+				new_data[new_index] = entry;
+				entry = next;
+			}
+		}
+
+		free(map->data);
+		map->data = new_data;
+		map->size = new_length;
+	}
+}
+
+void hashmap_put_array(hashmap_t *map, const char *key, void *value)
+{
+	unsigned long hash = hash_function(key);
+
+	size_t index = hash % map->size;
+	hashmap_entry_t *entry = map->data[index];
 	
+	while (entry != NULL) {
+		if (strcmp(entry->key, key) == 0) {
+			array_free(entry->value);
+			entry->value = NULL;
+
+			entry->value = value;
+
+			return;
+		}
+
+		entry = entry->next;
+	}
+
+	hashmap_entry_t *new_entry;
+	CREATE_MEMORY_OBJECT(new_entry, hashmap_entry_t, 1, "Error: hashmap_put<new_entry> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
+	
+	new_entry->key = strdup(key);
+	new_entry->value = value;
+	new_entry->next = map->data[index];
+
+	map->data[index] = new_entry;
+
 	map->length++;
 
 	if ((float)map->length / map->size >= 0.75) {
@@ -553,40 +604,6 @@ void hashmap_array_free(hashmap_t *map)
 				array_free(array);
 				entry->value = NULL;
 				
-				free(entry);
-				entry = next;
-			}
-		}
-
-		free(map->data);
-		map->data = NULL;
-	}
-
-	free(map);
-	map = NULL;
-}
-
-void hashmap_free(hashmap_t *map)
-{
-	if (map == NULL) return;
-
-	if (map->data != NULL) {
-		for (size_t i = 0; i < map->size; i++) {
-			hashmap_entry_t *entry = map->data[i];
-
-			while (entry) {
-				hashmap_entry_t *next = entry->next;
-
-				if (entry->key != NULL) {
-					free(entry->key);
-					entry->key = NULL;
-				}
-
-				if (entry->value != NULL) {
-					free(entry->value);
-					entry->value = NULL;
-				}
-
 				free(entry);
 				entry = next;
 			}
@@ -1235,10 +1252,10 @@ void parser_layout_element_attribute(parser_t* parser, ast_layout_type_t layout_
 		array_t* values = parser_layout_attribute_array_value(parser);
 
 		if (acceptStyles == true && is_style_attribute(current_token->value)) {
-			if (isHoverStyles == true) hashmap_put(element->hoverStyles, current_token->value, values);
-			else hashmap_put(element->styles, current_token->value, values);
+			if (isHoverStyles == true) hashmap_put_array(element->hoverStyles, current_token->value, values);
+			else hashmap_put_array(element->styles, current_token->value, values);
 		}
-		else if (acceptAttrs == true) hashmap_put(element->attributes, current_token->value, values);
+		else if (acceptAttrs == true) hashmap_put_array(element->attributes, current_token->value, values);
 	}
 	else if (type == AST_TYPE_LAYOUT_HOVER && acceptHoverStyles == true) {
 		parser->token_index++; // Eating keyword

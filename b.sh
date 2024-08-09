@@ -13,6 +13,23 @@ fi
 # Clear screen
 clear
 
+# Check if the virtual environment activation script exists
+if [ -f /opt/venv/bin/activate ]; then
+    # Activate the virtual environment
+    source /opt/venv/bin/activate
+    echo "Virtual environment activated."
+else
+    echo "Virtual environment not found."
+fi
+
+# Source Emscripten environment
+if [ -f /opt/emsdk/emsdk_env.sh ]; then
+    source /opt/emsdk/emsdk_env.sh
+    echo "Emscripten environment activated."
+else
+    echo "Emscripten environment not found."
+fi
+
 # Delete file
 if [ -e "$OUTPUT_FILE" ]; then
 	rm "$OUTPUT_FILE"
@@ -28,6 +45,7 @@ ldconfig -p | grep efence &>/dev/null
 if ! [ $? -eq 0 ]; then
 	echo "efence library is missing"
 	echo "Install efence - Electric Fence Malloc Debugger"
+	echo ldconfig -p | grep efence
 	exit 1
 fi
 
@@ -40,24 +58,21 @@ echo "Compiling..."
 gcc -g -fsanitize=undefined,address -Walloca -o "$OUTPUT_FILE" "$INPUT_FILE"
 # gcc -o "$OUTPUT_FILE" "$INPUT_FILE" -Wall
 
-# if [ $? -eq 0 ]; then
-# 	if ! [ -x "$(command -v emcc)" ]; then
-# 		echo 'Error: emcc is not installed.' >&2
-# 		echo 'Install from https://emscripten.org/docs/getting_started/downloads.html'
-# 		exit 1
-# 	fi
+if [ $? -eq 0 ]; then
+	if ! [ -x "$(command -v emcc)" ]; then
+		echo 'Error: emcc is not installed.' >&2
+		echo 'Install from https://emscripten.org/docs/getting_started/downloads.html'
+		exit 1
+	fi
 
-# 	# Compiling for web
-# 	emcc "$INPUT_FILE" -o salam.js -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s NO_EXIT_RUNTIME=1
-# fi
+	# Compiling for web
+	emcc "$INPUT_FILE" -o salam.js -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s NO_EXIT_RUNTIME=1
+fi
 
 # Check if compilation was successful
 echo "Running..."
 if [ $? -eq 0 ]; then
 	./"$OUTPUT_FILE" "$EXAMPLE_FILE"
-	# LSAN_OPTIONS=verbosity=1:log_threads=1 ./"$OUTPUT_FILE" "$EXAMPLE_FILE"
-	# ASAN_OPTIONS=detect_leaks=1 ./"$OUTPUT_FILE" "$EXAMPLE_FILE"
-	# LSAN_OPTIONS=verbosity=1:log_threads=1:detect_leaks=1 ./"$OUTPUT_FILE" "$EXAMPLE_FILE"
 else
 	echo "Compilation failed!"
 fi
@@ -69,4 +84,9 @@ fi
 #     نمایش \"سلام، دنیا\"
 # }"
 
-pre-commit run --all-files
+if command -v pre-commit &> /dev/null; then
+    echo "Running pre-commit..."
+    pre-commit run --all-files
+else
+    echo "pre-commit is not installed."
+fi

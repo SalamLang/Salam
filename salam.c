@@ -3305,18 +3305,20 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	if (css_attrs > 0 || css_hover_attrs > 0) {
 		if (element->className == NULL) element->className = getNextIdentifier(parser->gen);
 
-		int class_length = strlen(element->className);
+		if (element->className != NULL) {
+			int class_length = strlen(element->className);
 
-		if (class_length > 0) {
-			if (html_attrs > 0) string_append_char(buffer, ' ');
+			if (class_length > 0) {
+				if (html_attrs > 0) string_append_char(buffer, ' ');
 
-			string_append_str(buffer, "class=");
+				string_append_str(buffer, "class=");
 
-			if (class_length > 1) string_append_char(buffer, '\"');
+				if (class_length > 1) string_append_char(buffer, '\"');
 
-			string_append_str(buffer, element->className);
+				string_append_str(buffer, element->className);
 
-			if (class_length > 1) string_append_char(buffer, '\"');
+				if (class_length > 1) string_append_char(buffer, '\"');
+			}
 		}
 	}
 
@@ -3361,7 +3363,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, int ident)
 {
 	string_t* str = string_create(10);
-
+	
 	if (parser == NULL) return NULL;
 	else if (element == NULL) return NULL;
 

@@ -676,7 +676,10 @@ bool is_number(wchar_t ch)
 bool is_alpha(wchar_t ch)
 {
 	return (
-		(ch >= L'آ' && ch <= L'ی') ||
+		(
+			(ch >= L'آ' || ch >= L'ا') && ch <= L'ی'
+		) ||
+		ch == L'ـ' ||
 		ch == L'_' ||
 		(ch >= 'a' && ch <= 'z') ||
 		(ch >= 'A' && ch <= 'Z')

@@ -3537,7 +3537,10 @@ string_t* generate_string(parser_t* parser, int ident)
 						hashmap_entry_t *entry = parser->layout->attributes->data[i];
 
 						while (entry) {
-							if (strcmp(entry->key, "title") == 0 || strcmp(entry->key, "lang") == 0 || strcmp(entry->key, "dir") == 0) continue;
+							if (strcmp(entry->key, "عنوان") == 0 || strcmp(entry->key, "زبان") == 0 || strcmp(entry->key, "جهت") == 0) {
+								entry = entry->next;
+								continue;
+							}
 							else if (strcmp(entry->key, "ارجاع") == 0) {
 								generate_layout_ident(str, ident + 2);
 								string_append_str(str, "<link rel=\"canonical\" href=\"");
@@ -3619,7 +3622,7 @@ string_t* generate_string(parser_t* parser, int ident)
 								string_append_str(str, ">\n");
 							}
 							else {
-								printf("---> %s\n", entry->key);
+								printf("LAYOUT META: %s\n", entry->key);
 							}
 
 							entry = entry->next;
@@ -3651,7 +3654,11 @@ string_t* generate_string(parser_t* parser, int ident)
 					for (int i = 0; i < parser->styles->length; i++) {
 						char* style_code = parser->styles->data[i];
 						
-						if (style_code != NULL) string_append_str(str, style_code);
+						if (style_code != NULL) {
+							string_append_str(str, style_code);
+
+							free(style_code);
+						}
 					}
 
 					string_append_str(str, "\n");

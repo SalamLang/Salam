@@ -416,7 +416,8 @@ void hashmap_put(hashmap_t *map, const char *key, void *value)
 	
 	while (entry != NULL) {
 		if (strcmp(entry->key, key) == 0) {
-			free(entry->value);
+			array_free(entry->value);
+			// free(entry->value);
 			entry->value = NULL;
 
 			entry->value = value;
@@ -433,7 +434,9 @@ void hashmap_put(hashmap_t *map, const char *key, void *value)
 	new_entry->key = strdup(key);
 	new_entry->value = value;
 	new_entry->next = map->data[index];
+
 	map->data[index] = new_entry;
+	
 	map->length++;
 
 	if ((float)map->length / map->size >= 0.75) {
@@ -1208,12 +1211,8 @@ array_t* parser_layout_attribute_array_value(parser_t* parser)
 		if (parser->token_index < parser->lexer->tokens->length) {
 			attr_value = parser_token_get(parser);
 
-			if (attr_value->type == TOKEN_TYPE_COMMA) {
-				parser->token_index++;
-			}
-			else {
-				break;
-			}
+			if (attr_value->type == TOKEN_TYPE_COMMA) parser->token_index++;
+			else break;
 		}
 		else {
 			break;

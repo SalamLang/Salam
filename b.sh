@@ -34,10 +34,11 @@ fi
 echo "efence library is installed"
 
 # Compile
+echo "Compiling..."
 # gcc -g -ggdb -g -o "$OUTPUT_FILE" "$INPUT_FILE"
 # gcc -g -fsanitize=undefined,address -Walloca -o "$OUTPUT_FILE" "$INPUT_FILE" -lefence
-# gcc -g -fsanitize=undefined,address -Walloca -o "$OUTPUT_FILE" "$INPUT_FILE"
-gcc -o "$OUTPUT_FILE" "$INPUT_FILE"
+gcc -g -fsanitize=undefined,address -Walloca -o "$OUTPUT_FILE" "$INPUT_FILE"
+# gcc -o "$OUTPUT_FILE" "$INPUT_FILE" -Wall
 
 # if [ $? -eq 0 ]; then
 # 	if ! [ -x "$(command -v emcc)" ]; then
@@ -47,10 +48,11 @@ gcc -o "$OUTPUT_FILE" "$INPUT_FILE"
 # 	fi
 
 # 	# Compiling for web
-# 	emcc salam.c -o salam.js -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s NO_EXIT_RUNTIME=1
+# 	emcc "$INPUT_FILE" -o salam.js -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s NO_EXIT_RUNTIME=1
 # fi
 
 # Check if compilation was successful
+echo "Running..."
 if [ $? -eq 0 ]; then
 	./"$OUTPUT_FILE" "$EXAMPLE_FILE"
 	# LSAN_OPTIONS=verbosity=1:log_threads=1 ./"$OUTPUT_FILE" "$EXAMPLE_FILE"
@@ -62,6 +64,9 @@ fi
 
 # ./s --code "تابع سلام {\n    نمایش \"سلام، دنیا\"}"
 
-./s --code "تابع سلام() {
-    نمایش \"سلام، دنیا\"
-}"
+# ./s input.salam
+# ./s --code "تابع سلام() {
+#     نمایش \"سلام، دنیا\"
+# }"
+
+pre-commit run --all-files

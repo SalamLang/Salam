@@ -326,11 +326,12 @@ bool generate_layout_element_attributes_check(parser_t* parser, ast_layout_node_
 // Hashmap
 hashmap_t* hashmap_create();
 void hashmap_put(hashmap_t *map, const char *key, void *value);
+void hashmap_put_array(hashmap_t *map, const char *key, void *value);
 void* hashmap_get(hashmap_t *map, const char *key);
 void* hashmap_remove(hashmap_t *map, const char *key);
-void hashmap_free(hashmap_t *map);
-void hashmap_print(hashmap_t *map);
 void hashmap_array_free(hashmap_t *map);
+void hashmap_string_free(hashmap_t *map);
+void hashmap_print(hashmap_t *map);
 
 // Array
 array_t* array_create(size_t size);

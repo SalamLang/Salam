@@ -3,7 +3,7 @@
 # Variables
 INPUT_FILE="salam.c"
 OUTPUT_FILE="s"
-EXAMPLE_FILE="input.salam"
+EXAMPLE_FILE="examples/input.salam"
 
 # Check if an argument is provided
 if [ "$#" -eq 1 ]; then

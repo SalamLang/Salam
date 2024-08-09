@@ -1554,19 +1554,18 @@ void children_free(array_t* children)
 
 void ast_layout_node_free(ast_layout_node_t* node)
 {
-	if (node == NULL) return;
+	if (node != NULL) {
+		attributes_free(node->attributes);
+		attributes_free(node->styles);
+		attributes_free(node->hoverStyles);
 
-	attributes_free(node->attributes);
-	attributes_free(node->styles);
-	attributes_free(node->hoverStyles);
-	
-	if (node->className != NULL) free(node->className);
+		if (node->className != NULL) free(node->className);
 
-	children_free(node->children);
-
-
-	free(node);
-	node = NULL;
+		children_free(node->children);
+		
+		free(node);
+		node = NULL;
+	}
 }
 
 char* ast_node_type_string(ast_node_type_t type)

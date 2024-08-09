@@ -1486,7 +1486,7 @@ void parser_parse(parser_t* parser)
 			// 	break;
 
 			case TOKEN_TYPE_LAYOUT:
-				parser->layout = parser_layout_element_mother(AST_TYPE_LAYOUT, parser);
+				parser->layout = parser_layout_element_mother(AST_TYPE_LAYOUT_BODY, parser);
 
 				break;
 
@@ -1593,7 +1593,7 @@ char* ast_node_type_string(ast_node_type_t type)
 		case AST_TYPE_FUNCTION: return "function";
 		case AST_TYPE_LAYOUT: return "layout";
 
-		default: "none";
+		default: return "none";
 	}
 }
 
@@ -2325,6 +2325,10 @@ bool is_allowed_single_layout_property(ast_layout_type_t type, char* attribute_n
 		break;
 
 		case AST_TYPE_LAYOUT_BREAK:
+
+		break;
+
+		default:
 
 		break;
 	}

@@ -131,7 +131,7 @@ char* intToString(int value)
 
 	char* result;
 	CREATE_MEMORY_OBJECT(result, char, numDigits + 1 + (sign == -1 ? 1 : 0), "Error: intToString<result> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-	
+
 	if (sign == -1) result[0] = '-';
 
 	for (int i = numDigits - 1 + (sign == -1 ? 1 : 0); i >= (sign == -1 ? 1 : 0); i--) {
@@ -298,7 +298,7 @@ void array_free(array_t* arr)
 		for (size_t i = 0; i < arr->length; i++) {
 			free(arr->data[i]);
 		}
-		
+
 		free(arr->data);
 		arr->data = NULL;
 	}
@@ -320,12 +320,12 @@ void array_token_free(array_t* arr)
 					free(token->value);
 					token->value = NULL;
 				}
-				
+
 				free(arr->data[i]);
 				arr->data[i] = NULL;
 			}
 		}
-		
+
 		free(arr->data);
 		arr->data = NULL;
 	}
@@ -372,7 +372,7 @@ void array_print(array_t* arr)
 		token_t* t = arr->data[i];
 
 		print_message("[%zu]: ", i);
-		
+
 		token_print(t);
 	}
 }
@@ -413,7 +413,7 @@ void hashmap_put(hashmap_t *map, const char *key, void *value)
 
 	size_t index = hash % map->size;
 	hashmap_entry_t *entry = map->data[index];
-	
+
 	while (entry != NULL) {
 		if (strcmp(entry->key, key) == 0) {
 			free(entry->value);
@@ -429,7 +429,7 @@ void hashmap_put(hashmap_t *map, const char *key, void *value)
 
 	hashmap_entry_t *new_entry;
 	CREATE_MEMORY_OBJECT(new_entry, hashmap_entry_t, 1, "Error: hashmap_put<new_entry> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-	
+
 	new_entry->key = strdup(key);
 	new_entry->value = value;
 	new_entry->next = map->data[index];
@@ -465,7 +465,7 @@ void hashmap_put_array(hashmap_t *map, const char *key, void *value)
 
 	size_t index = hash % map->size;
 	hashmap_entry_t *entry = map->data[index];
-	
+
 	while (entry != NULL) {
 		if (strcmp(entry->key, key) == 0) {
 			array_free(entry->value);
@@ -481,7 +481,7 @@ void hashmap_put_array(hashmap_t *map, const char *key, void *value)
 
 	hashmap_entry_t *new_entry;
 	CREATE_MEMORY_OBJECT(new_entry, hashmap_entry_t, 1, "Error: hashmap_put<new_entry> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-	
+
 	new_entry->key = strdup(key);
 	new_entry->value = value;
 	new_entry->next = map->data[index];
@@ -572,7 +572,7 @@ void hashmap_string_free(hashmap_t *map)
 
 				free(entry->value);
 				entry->value = NULL;
-				
+
 				free(entry);
 
 				entry = next;
@@ -603,7 +603,7 @@ void hashmap_array_free(hashmap_t *map)
 
 				array_free(array);
 				entry->value = NULL;
-				
+
 				free(entry);
 				entry = next;
 			}
@@ -788,7 +788,7 @@ void read_number(lexer_t* lexer, wchar_t ch)
 
 			while (is_number(ch)) {
 				number[i] = digit_wchar2char(ch);
-				
+
 				i++;
 				ch = read_token(lexer);
 			}
@@ -958,7 +958,7 @@ ast_layout_type_t convert_layout_identifier_token_type(char* identifier)
 		mapping_index++;
 	}
 
-	return type;	
+	return type;
 }
 
 void read_identifier(lexer_t* lexer, wchar_t ch)
@@ -1248,7 +1248,7 @@ void parser_layout_element_attribute(parser_t* parser, ast_layout_type_t layout_
 	if (type == AST_TYPE_LAYOUT_ERROR && (acceptAttrs == true || acceptStyles == true)) {
 		parser->token_index++; // Eating the attr name
 		parser_token_eat_nodata(parser, TOKEN_TYPE_COLON); // :
-		
+
 		array_t* values = parser_layout_attribute_array_value(parser);
 
 		if (acceptStyles == true && is_style_attribute(current_token->value)) {
@@ -1321,7 +1321,7 @@ ast_layout_node_t* parser_layout_element(parser_t* parser)
 	token_t* current_token = parser_token_get(parser);
 
 	if (current_token->type != TOKEN_TYPE_IDENTIFIER) return NULL;
-	
+
 	ast_layout_type_t type = convert_layout_identifier_token_type(current_token->value);
 
 	switch (type) {
@@ -1345,13 +1345,13 @@ ast_layout_node_t* parser_layout_element(parser_t* parser)
 			return parser_layout_element_mother(type, parser);
 
 			break;
-		
+
 		case AST_TYPE_LAYOUT_LINE:
 		case AST_TYPE_LAYOUT_BREAK:
 			return parser_layout_element_single(type, parser);
 
 			break;
-		
+
 		default:
 			return NULL;
 
@@ -1374,7 +1374,7 @@ ast_layout_node_t* parser_layout_element(parser_t* parser)
 // 				array_free(elements);
 
 // 				print_message("Error: invalid element inside layout block!");
-				
+
 // 				exit(EXIT_FAILURE);
 // 			}
 
@@ -1479,14 +1479,14 @@ void parser_parse(parser_t* parser)
 			// 	if (parser->functions && function_node != NULL) {
 			// 		array_push(parser->functions, function_node);
 			// 	}
-			// 
+			//
 			// 	break;
 
 			case TOKEN_TYPE_LAYOUT:
 				parser->layout = parser_layout_element_mother(AST_TYPE_LAYOUT, parser);
 
 				break;
-			
+
 			case TOKEN_TYPE_IDENTIFIER:
 
 				break;
@@ -1494,7 +1494,7 @@ void parser_parse(parser_t* parser)
 			default:
 				// if (parser_expression_has(parser)) {
 				// 	CREATE_MEMORY_OBJECT(expression_node, ast_node_t, 1, "Error: parser_parse<expression_node> - Memory allocation error in %s:%d\n",  __FILE__, __LINE__);
-				// 
+				//
 				// 	expression_node->type = AST_EXPRESSION;
 				// 	expression_node->data.expression = parser_expression(parser);
 				// 	if (parser->expressions && expression_node != NULL) {
@@ -1578,7 +1578,7 @@ void ast_layout_node_free(ast_layout_node_t* node)
 		if (node->className != NULL) free(node->className);
 
 		children_free(node->children);
-		
+
 		free(node);
 		node = NULL;
 	}
@@ -1658,12 +1658,12 @@ void ast_node_free(ast_node_t* node)
 		case AST_TYPE_FUNCTION:
 
 			break;
-		
+
 		case AST_TYPE_LAYOUT:
 			if (node->data.layout != NULL) ast_layout_node_free(node->data.layout);
 
 			break;
-		
+
 		default:
 			break;
 	}
@@ -1748,9 +1748,9 @@ void string_append_char_begin(string_t* str, char c)
 			exit(1);
 		}
 	}
-	
+
 	memmove(str->data + 1, str->data, str->length + 1);
-	
+
 	str->data[0] = c;
 	str->length++;
 }
@@ -1768,9 +1768,9 @@ void string_append_str_begin(string_t* str, const char* prefix)
 			exit(1);
 		}
 	}
-	
+
 	memmove(str->data + prefix_len, str->data, str->length + 1);
-	
+
 	memcpy(str->data, prefix, prefix_len);
 	str->length += prefix_len;
 }
@@ -1870,9 +1870,9 @@ string_t* ast_layout_string_attributes(ast_layout_node_t* element, parser_t* par
 string_t* ast_layout_string(ast_layout_node_t* element, parser_t* parser, int ident)
 {
 	string_t* str = string_create(10);
-	
+
 	char* element_name = ast_layout_type_string(element->type);
-	
+
 	ast_layout_ident(str, ident);
 
 	string_append_str(str, "<layout_");
@@ -1939,7 +1939,7 @@ string_t* ast_layout_string(ast_layout_node_t* element, parser_t* parser, int id
 	else {
 		string_append_str(str, " />\n");
 	}
-	
+
 	return str;
 }
 
@@ -1991,7 +1991,7 @@ string_t* ast_string(parser_t* parser, int ident)
 
 		for (size_t i = 0; i < parser->layout->children->length; i++) {
 			ast_layout_node_t* element = (ast_layout_node_t*) parser->layout->children->data[i];
-			
+
 			string_t* buf = ast_layout_string(element, parser, ident + 1);
 			string_append(str, buf);
 
@@ -2107,56 +2107,56 @@ bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_n
 			}
 			else if (strcmp(attribute_name, "عنوان") == 0) {
 				// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "title");
-				
+
 				return true;
 			}
 			else if (strcmp(attribute_name, "توضیح") == 0) {
 				// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "description");
-				
+
 				return true;
 			}
 			else if (strcmp(attribute_name, "کلمات") == 0) {
 				// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "keywords");
-				
+
 				return true;
 			}
 			else if (strcmp(attribute_name, "ایکن") == 0) {
 				// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "keywords");
-				
+
 				return true;
 			}
 			else if (strcmp(attribute_name, "ایکن") == 0 || strcmp(attribute_name, "آیکن") == 0 || strcmp(attribute_name, "ایکون") == 0 || strcmp(attribute_name, "آیکون") == 0) {
 				// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "author");
-				
+
 				return true;
 			}
 			else if (strcmp(attribute_name, "نویسنده") == 0) {
 				// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "author");
-				
+
 				return true;
 			}
 			else if (strcmp(attribute_name, "ارجاع") == 0) {
 				// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "canonical");
-				
+
 				return true;
 			}
 			else if (strcmp(attribute_name, "ربات") == 0) {
 				// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "robots");
-				
+
 				return true;
 			}
 			else if (strcmp(attribute_name, "زبان") == 0) {
 				if (attribute_values->length == 1) {
 					if (strcmp(attribute_values->data[0], "فارسی") == 0) {
 						// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "lang");
-						
+
 						strcpy(attribute_values->data[0], "fa-IR");
 
 						return true;
 					}
 					else if (strcmp(attribute_values->data[0], "انگلیسی") == 0) {
 						// if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "lang");
-						
+
 						strcpy(attribute_values->data[0], "en-US");
 
 						return true;
@@ -2166,13 +2166,13 @@ bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_n
 				}
 				else return false;
 			}
-		
+
 		break;
 
 		case AST_TYPE_LAYOUT_BUTTON:
 			if (strcmp(attribute_name, "نام") == 0) {
 				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "name");
-				
+
 				return true;
 			}
 
@@ -2190,7 +2190,7 @@ bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_n
 			}
 			else if (strcmp(attribute_name, "نوع") == 0) {
 				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "type");
-				
+
 				return true;
 			}
 
@@ -2213,17 +2213,17 @@ bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_n
 		case AST_TYPE_LAYOUT_IMAGE:
 			if (strcmp(attribute_name, "منبع") == 0) {
 				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "src");
-				
+
 				return true;
 			}
 			else if (strcmp(attribute_name, "عرض") == 0) {
 				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "width");
-				
+
 				return true;
 			}
 			else if (strcmp(attribute_name, "ارتفاع") == 0) {
 				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "height");
-				
+
 				return true;
 			}
 
@@ -2236,17 +2236,17 @@ bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_n
 		case AST_TYPE_LAYOUT_FORM:
 			if (strcmp(attribute_name, "نام") == 0) {
 				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "name");
-				
+
 				return true;
 			}
 			else if (strcmp(attribute_name, "نوع") == 0) {
 				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "method");
-				
+
 				return true;
 			}
 			else if (strcmp(attribute_name, "منبع") == 0) {
 				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "action");
-				
+
 				return true;
 			}
 
@@ -2279,7 +2279,7 @@ bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_n
 		case AST_TYPE_LAYOUT_TEXTAREA:
 			if (strcmp(attribute_name, "نام") == 0) {
 				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "name");
-				
+
 				return true;
 			}
 
@@ -2288,7 +2288,7 @@ bool is_allowed_mother_layout_property(ast_layout_type_t type, char* attribute_n
 		case AST_TYPE_LAYOUT_SELECT:
 			if (strcmp(attribute_name, "نام") == 0) {
 				if (*new_attribute_name != NULL) strcpy(*new_attribute_name, "name");
-				
+
 				return true;
 			}
 		break;
@@ -2410,7 +2410,7 @@ array_t* split_by_space(const char* str)
 	}
 
 	free(temp_str);
-	
+
 	return arr;
 }
 
@@ -2519,7 +2519,7 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 {
 	const char* prefixes[] = {"px", "em", "rem", "vw", "vh", "%", "cm", "mm", "in", "pt", "pc", "ex", "ch", "vmin", "vmax"};
 	int num_prefixes = sizeof(prefixes) / sizeof(prefixes[0]);
-	
+
 	const char* persian_prefixes[] = {"پیکسل", "ای ام", "رایم", "ویو ویدث", "ویو هایت", "درصد", "سانتیمتر", "میلیمتر", "اینچ", "پوینت", "پیکا", "اکس", "سی اچ", "وی مین", "وی مکس"};
 	int num_persian_prefixes = sizeof(persian_prefixes) / sizeof(persian_prefixes[0]);
 
@@ -2577,14 +2577,14 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 			*css_output_value = strdup(buffer->data);
 
 			string_free(buffer);
-			
+
 			return true;
 		}
 	}
-	
+
 	*css_output_value = NULL;
 
-	return false;	
+	return false;
 }
 
 char* normalise_css_size(char* attribute_value)
@@ -2617,7 +2617,7 @@ char* attribute_css_multiple_size_value(char* attribute_name, array_t* attribute
 	for (size_t i = 0; i < attribute_values->length; i++) {
 		char* value = strdup(attribute_values->data[i]);
 		value = normalise_css_size(value);
-		
+
 		char* out_value;
 		if (!has_css_size_prefix(value, &out_value)) return NULL;
 
@@ -3221,7 +3221,7 @@ string_t* generate_layout_element_attributes_styles(parser_t* parser, ast_layout
 						string_append_str(css_hover_buffer, buf2);
 
 						if (styles->length != (*count)) string_append_char(css_hover_buffer, ';');
-						
+
 						free(buf2);
 						buf2 = NULL;
 					}
@@ -3260,8 +3260,8 @@ bool generate_layout_element_attributes_check(parser_t* parser, ast_layout_node_
 
 						return false;
 					}
-				}				
-				
+				}
+
 				entry = entry->next;
 			}
 		}
@@ -3276,7 +3276,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 	int html_attrs = 0;
 	int css_attrs = 0;
 	int css_hover_attrs = 0;
-	
+
 	if (element->attributes != NULL && element->attributes->length > 0) {
 		for (size_t i = 0; i < element->attributes->size; i++) {
 			hashmap_entry_t *entry = element->attributes->data[i];
@@ -3304,8 +3304,8 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 					}
 
 					if (newKey != NULL) free(newKey);
-				}				
-				
+				}
+
 				entry = entry->next;
 			}
 		}
@@ -3379,7 +3379,7 @@ string_t* generate_layout_element_attributes(parser_t* parser, ast_layout_node_t
 string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, int ident)
 {
 	string_t* str = string_create(10);
-	
+
 	if (parser == NULL) return NULL;
 	else if (element == NULL) return NULL;
 
@@ -3394,7 +3394,7 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 	string_t* buf = generate_layout_element_attributes(parser, element, &element_content, ident);
 	if (buf != NULL && buf->length > 0) {
 		string_append_char(str, ' ');
-		
+
 		string_append(str, buf);
 	}
 	string_free(buf);
@@ -3428,7 +3428,7 @@ string_t* generate_layout_element(ast_layout_node_t* element, parser_t* parser, 
 			string_append_str(str, value == NULL ? "NULL" : value);
 
 			if (value != NULL) free(value);
-			
+
 			if (needBreak) string_append_char(str, '\n');
 		}
 
@@ -3503,7 +3503,7 @@ string_t* generate_string(parser_t* parser, int ident)
 			char* buf = array_string(html_lang_values, "");
 
 			string_append_str(str, buf);
-			
+
 			free(buf);
 		}
 		else {
@@ -3548,7 +3548,7 @@ string_t* generate_string(parser_t* parser, int ident)
 
 		generate_layout_ident(str, ident + 2);
 		string_append_str(str, "<meta http-equiv=\"X-UA-Compatible\" content=\"ie=edge\">\n");
-		
+
 		if (parser->layout->attributes != NULL) {
 			if (parser->layout->attributes->data != NULL) {
 				if (parser->layout->attributes->length > 0) {
@@ -3627,7 +3627,7 @@ string_t* generate_string(parser_t* parser, int ident)
 
 								if (values->length > 1) string_append_str(str, values->data[1]);
 								else string_append_str(str, "image/x-icon");
-								
+
 								string_append_str(str, "\"");
 
 								if (values->length > 2) {
@@ -3672,7 +3672,7 @@ string_t* generate_string(parser_t* parser, int ident)
 
 					for (int i = 0; i < parser->styles->length; i++) {
 						char* style_code = parser->styles->data[i];
-						
+
 						if (style_code != NULL) {
 							string_append_str(str, style_code);
 
@@ -3797,7 +3797,7 @@ void generate_file(parser_t* parser, char* output_file)
 	FILE* file = fopen(output_file, "w");
 	if (file == NULL) {
 		fprintf(stderr, "Could not open file %s for writing!\n", output_file);
-		
+
 		return;
 	}
 
@@ -3826,16 +3826,16 @@ int main(int argc, char** argv)
 {
 	// setlocale(LC_ALL, "");
 	setlocale(LC_ALL, "C.UTF-8");
-	
+
 	// identifier_generator gen;
 	// identifier_generator_init(&gen);
-	// 
+	//
 	// for (int i = 0; i < 30; i++) {
 	// 	char *identifier = getNextIdentifier(&gen);
 	// 	printf("%s\n", identifier);
 	// 	free(identifier);
 	// }
-	// 
+	//
 	// identifier_generator_free(&parser->gen);
 
 	// char* test1 = "1px";

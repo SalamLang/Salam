@@ -2,7 +2,7 @@
 REM Variables
 set INPUT_FILE=salam.c
 set OUTPUT_FILE=s
-set EXAMPLE_FILE=input.salam
+set EXAMPLE_FILE=examples/input.salam
 
 REM Check if an argument is provided
 if "%~1" neq "" (

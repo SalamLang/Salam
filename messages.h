@@ -84,6 +84,7 @@ const keyword_mapping_t keyword_mapping[LANGUAGE_COUNT][50] = {
 		{"غلط", TOKEN_TYPE_FALSE},
 		{"و", TOKEN_TYPE_AND},
 		{"یا", TOKEN_TYPE_OR},
+
 		{NULL, TOKEN_TYPE_ERROR},
 	},
 };
@@ -109,7 +110,8 @@ const layout_keyword_mapping_t layout_keyword_mapping[LANGUAGE_COUNT][50] = {
 		{"اپشن", AST_TYPE_LAYOUT_SELECT_OPTION},
 		{"خط", AST_TYPE_LAYOUT_LINE},
 		{"برش", AST_TYPE_LAYOUT_BREAK},
-		{NULL, TOKEN_TYPE_ERROR},
+
+		{NULL, AST_TYPE_LAYOUT_ERROR},
 	},
 };
 

@@ -7,6 +7,9 @@
 #include "lexer.h"
 #include "log.h"
 #include "array.h"
+#include "ast.h"
+#include "parser.h"
+#include "generator.h"
 
 void doargs(int argc, char** argv)
 {
@@ -26,6 +29,12 @@ void doargs(int argc, char** argv)
     lexer_lex(lexer);
 
     lexer_debug(lexer);
+
+    ast_t* ast = parser_parse(lexer);
+    
+    ast_debug(ast);
+
+    ast_free(ast);
 
     lexer_destroy(lexer);
 

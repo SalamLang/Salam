@@ -2,8 +2,9 @@
 #define _LEXER_H_
 
 #include <stdio.h>
+#include <stdbool.h>
 
-#include "array.h"
+#include "base.h"
 
 typedef struct {
     size_t index;
@@ -17,7 +18,44 @@ typedef struct {
 } location_t;
 
 typedef enum {
-    TOKEN_EOF,
+    TOKEN_EOF = -1,
+    TOKEN_LEFT_BRACE = '{',
+    TOKEN_RIGHT_BRACE = '}',
+    TOKEN_LEFT_BRACKET = '[',
+    TOKEN_RIGHT_BRACKET = ']',
+    TOKEN_COLON = ':',
+    TOKEN_COMMMA = ',',
+    TOKEN_LEFT_PAREN = '(',
+    TOKEN_RIGHT_PAREN = ')',
+
+    TOKEN_PLUS = '+',
+    TOKEN_MINUS = '-',
+    TOKEN_MULTIPLY = '*',
+    TOKEN_DIVIDE = '/',
+    TOKEN_MOD = '%',
+    TOKEN_POWER = '^',
+    TOKEN_ASSIGN = '=',
+    TOKEN_LESS = '<',
+    TOKEN_GREATER = '>',
+    TOKEN_NOT = '!',
+
+    TOKEN_NOT_EQUAL = 300,
+    TOKEN_EQUAL,
+    TOKEN_AND_AND,
+    TOKEN_OR_OR,
+    TOKEN_AND_BIT,
+    TOKEN_OR_BIT,
+    TOKEN_LESS_EQUAL,
+    TOKEN_GREATER_EQUAL,
+
+    TOKEN_INCREMENT,
+    TOKEN_DECREMENT,
+
+    TOKEN_SHIFT_LEFT,
+    TOKEN_SHIFT_RIGHT,
+    TOKEN_SHIFT_LEFT_ASSIGN,
+    TOKEN_SHIFT_RIGHT_ASSIGN,
+
     TOKEN_IDENTIFIER,
     TOKEN_STRING,
     TOKEN_NUMBER_INT,
@@ -44,6 +82,8 @@ typedef struct {
     char* (*value)(void*);
 } token_t;
 
+#include "array.h"
+
 typedef struct {
     const char* file_path; // NULL if source is REPL
     char *source;
@@ -51,6 +91,7 @@ typedef struct {
     size_t line;
     size_t column;
     array_t* tokens;
+    size_t token_index; // For parsing purposes
 } lexer_t;
 
 /**
@@ -214,5 +255,15 @@ void lexer_lex_identifier(lexer_t* lexer);
  * 
  */
 void lexer_lex_number(lexer_t* lexer);
+
+/**
+ * 
+ * @function lexer_lex_string
+ * @brief Lexing a string
+ * @param {lexer_t*} lexer - Lexer state
+ * @returns {void}
+ * 
+ */
+void lexer_lex_string(lexer_t* lexer);
 
 #endif

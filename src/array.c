@@ -14,7 +14,7 @@ array_t* array_create(size_t element_size, size_t capacity)
 {
     array_t* array = memory_allocate(sizeof(array_t));
     array->size = 0;
-    array->capacity = capacity < 0 ? 1 : capacity;
+    array->capacity = capacity;
     array->element_size = element_size;
     array->data = memory_allocate(array->element_size * array->capacity);
     return array;
@@ -166,5 +166,44 @@ void array_token_print(array_token_t* array)
         printf("\t");
         token_t* token = array_get(array, i);
         token->print(token);
+    }
+}
+
+/**
+ * 
+ * @function array_node_free
+ * @brief Free the node array memory
+ * @param {array_t*} array - Node array
+ * @returns {void}
+ * 
+ */
+void array_node_free(array_t* array)
+{
+    ast_node_t** node_array = (ast_node_t**) array->data;
+
+    for (size_t i = 0; i < array->size; i++) {
+        ast_node_t* node_item = node_array[i];
+        ast_node_free(node_item);
+    }
+
+    array_free(array);
+}
+
+/**
+ * 
+ * @function array_node_print
+ * @brief Print the node array
+ * @param {array_t*} array - Node array
+ * @returns {void}
+ * 
+ */
+void array_node_print(array_t* array)
+{
+    printf("Node array: %zu\n", array->size);
+
+    for (size_t i = 0; i < array->size; i++) {
+        printf("\t");
+        ast_node_t* node = array_get(array, i);
+        node->print(node);
     }
 }

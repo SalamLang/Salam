@@ -7,8 +7,6 @@
 #include <string.h>
 #include <stdbool.h>
 
-#include "memory.h"
-
 typedef struct {
     void** data;
     size_t size;
@@ -17,7 +15,10 @@ typedef struct {
 } array_t;
 
 typedef array_t array_token_t;
+typedef array_t array_node_t;
 
+#include "memory.h"
+#include "ast.h"
 #include "lexer.h"
 
 /**
@@ -116,5 +117,25 @@ void array_token_free(array_token_t* array);
  * 
  */
 void array_token_print(array_token_t* array);
+
+/**
+ * 
+ * @function array_node_free
+ * @brief Free the node array memory
+ * @param {array_t*} array - Node array
+ * @returns {void}
+ * 
+ */
+void array_node_free(array_t* array);
+
+/**
+ * 
+ * @function array_node_print
+ * @brief Print the node array
+ * @param {array_t*} array - Node array
+ * @returns {void}
+ * 
+ */
+void array_node_print(array_t* array);
 
 #endif

@@ -127,6 +127,7 @@ void array_free(array_t* array)
     array->size = 0;
     array->capacity = 0;
     array->element_size = 0;
+    free(array);
 }
 
 /**
@@ -147,4 +148,23 @@ void array_token_free(array_token_t* array)
     }
 
     array_free(array);
+}
+
+/**
+ * 
+ * @function array_token_print
+ * @brief Print the token array
+ * @param {array_token_t*} array - Token array
+ * @returns {void}
+ * 
+ */
+void array_token_print(array_token_t* array)
+{
+    printf("Token array: %zu\n", array->size);
+
+    for (size_t i = 0; i < array->size; i++) {
+        printf("\t");
+        token_t* token = array_get(array, i);
+        token->print(token);
+    }
 }

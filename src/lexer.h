@@ -55,6 +55,46 @@ typedef struct {
 
 /**
  * 
+ * @function is_char_digit
+ * @brief Check if a character is a digit
+ * @param {char} c - Character
+ * @returns {bool}
+ * 
+ */
+bool is_char_digit(char c);
+
+/**
+ * 
+ * @function is_char_alpha
+ * @brief Check if a character is an alphabet
+ * @param {char} c - Character
+ * @returns {bool}
+ * 
+ */
+bool is_char_alpha(char c);
+
+/**
+ * 
+ * @function is_char_alnum
+ * @brief Check if a character is an alphabet or a digit
+ * @param {char} c - Character
+ * @returns {bool}
+ * 
+ */
+bool is_char_alnum(char c);
+
+/**
+ * 
+ * @function is_char_whitespace
+ * @brief Check if a character is a whitespace
+ * @param {char} c - Character
+ * @returns {bool}
+ * 
+ */
+bool is_char_whitespace(char c);
+
+/**
+ * 
  * @function location_print
  * @brief Print a location
  * @param {location_t} location - Location
@@ -137,6 +177,16 @@ void lexer_destroy(lexer_t* lexer);
 
 /**
  * 
+ * @function lexer_debug
+ * @brief Debugging the lexer state
+ * @param {lexer_t*} lexer - Lexer state
+ * @returns {void}
+ * 
+ */
+void lexer_debug(lexer_t* lexer);
+
+/**
+ * 
  * @function lexer_lex
  * @brief Lexing the source code
  * @param {lexer_t*} lexer - Lexer state
@@ -144,5 +194,25 @@ void lexer_destroy(lexer_t* lexer);
  * 
  */
 void lexer_lex(lexer_t* lexer);
+
+/**
+ * 
+ * @function lexer_lex_identifier
+ * @brief Lexing an identifier
+ * @param {lexer_t*} lexer - Lexer state
+ * @returns {void}
+ * 
+ */
+void lexer_lex_identifier(lexer_t* lexer);
+
+/**
+ * 
+ * @function lexer_lex_number
+ * @brief Lexing a number
+ * @param {lexer_t*} lexer - Lexer state
+ * @returns {void}
+ * 
+ */
+void lexer_lex_number(lexer_t* lexer);
 
 #endif

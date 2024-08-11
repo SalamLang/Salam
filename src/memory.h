@@ -1,3 +1,6 @@
+#ifndef _MEMORY_H_
+#define _MEMORY_H_
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -105,3 +108,5 @@ void memory_swap(void* ptr1, void* ptr2, size_t size);
  * 
  */
 void memory_reverse(void* ptr, size_t size);
+
+#endif

@@ -2,12 +2,66 @@
 #include "lexer.h"
 
 #define LEXER_CURRENT (lexer->source[lexer->index])
+#define LEXER_CURRENT_PREV (lexer->source[lexer->index - 1])
+#define LEXER_CURRENT_NEXT (lexer->source[lexer->index + 1])
 #define LEXER_NEXT lexer->index++
 #define LEXER_PREV lexer->index--
 #define LEXER_NEXT_LINE lexer->line++
 #define LEXER_NEXT_COLUMN lexer->column++
 #define LEXER_ZERO_COLUMN lexer->column = 0;
 #define LEXER_PUSH_TOKEN(TOKEN) array_push(lexer->tokens, TOKEN)
+
+/**
+ * 
+ * @function is_char_digit
+ * @brief Check if a character is a digit
+ * @param {char} c - Character
+ * @returns {bool}
+ * 
+ */
+bool is_char_digit(char c)
+{
+    return c >= '0' && c <= '9';
+}
+
+/**
+ * 
+ * @function is_char_alpha
+ * @brief Check if a character is an alphabet
+ * @param {char} c - Character
+ * @returns {bool}
+ * 
+ */
+bool is_char_alpha(char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+/**
+ * 
+ * @function is_char_alnum
+ * @brief Check if a character is an alphabet or a digit
+ * @param {char} c - Character
+ * @returns {bool}
+ * 
+ */
+bool is_char_alnum(char c)
+{
+    return is_char_alpha(c) || is_char_digit(c);
+}
+
+/**
+ * 
+ * @function is_char_whitespace
+ * @brief Check if a character is a whitespace
+ * @param {char} c - Character
+ * @returns {bool}
+ * 
+ */
+bool is_char_whitespace(char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
 
 /**
  * 
@@ -194,6 +248,28 @@ void lexer_destroy(lexer_t* lexer)
 
 /**
  * 
+ * @function lexer_debug
+ * @brief Debugging the lexer state
+ * @param {lexer_t*} lexer - Lexer state
+ * @returns {void}
+ * 
+ */
+void lexer_debug(lexer_t* lexer)
+{
+    printf("============= START LEXER DEBUG =============\n");
+
+    printf("Lexer source: %s\n", lexer->source == NULL ? "REPL" : lexer->source);
+    printf("Lexer index: %zu\n", lexer->index);
+    printf("Lexer line: %zu\n", lexer->line);
+    printf("Lexer column: %zu\n", lexer->column);
+
+    array_token_print(lexer->tokens);
+
+    printf("============= END LEXER DEBUG =============\n");
+}
+
+/**
+ * 
  * @function lexer_lex_number
  * @brief Lexing a number
  * @param {lexer_t*} lexer - Lexer state
@@ -202,36 +278,71 @@ void lexer_destroy(lexer_t* lexer)
  */
 void lexer_lex_number(lexer_t* lexer)
 {
-    int number = 0;
-    while (isdigit(LEXER_CURRENT)) {
-        number = number * 10 + (LEXER_CURRENT - '0');
+    char* buffer = memory_allocate(256);
+    size_t index = 0;
+    buffer[index++] = LEXER_CURRENT_PREV;
+
+    while (is_char_digit(LEXER_CURRENT)) {
+        buffer[index++] = LEXER_CURRENT;
         LEXER_NEXT;
         LEXER_NEXT_COLUMN;
     }
 
     if (LEXER_CURRENT == '.') {
+        buffer[index++] = LEXER_CURRENT;
         LEXER_NEXT;
         LEXER_NEXT_COLUMN;
 
-        float decimal = 0.0;
-        float factor = 0.1;
-        while (isdigit(LEXER_CURRENT)) {
-            decimal += factor * (LEXER_CURRENT - '0');
-            factor /= 10;
+        while (is_char_digit(LEXER_CURRENT)) {
+            buffer[index++] = LEXER_CURRENT;
             LEXER_NEXT;
             LEXER_NEXT_COLUMN;
         }
 
+        buffer[index] = '\0';
+
         token_t* token = token_create(TOKEN_NUMBER_FLOAT, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-        token->data.number_float = number + decimal;
+        token->data.number_float = atof(buffer);
         LEXER_PUSH_TOKEN(token);
+
+        free(buffer);
     } else {
+        buffer[index] = '\0';
+
         token_t* token = token_create(TOKEN_NUMBER_INT, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-        token->data.number_int = number;
+        token->data.number_int = atoi(buffer);
         LEXER_PUSH_TOKEN(token);
+
+        free(buffer);
     }
 }
 
+/**
+ * 
+ * @function lexer_lex_identifier
+ * @brief Lexing an identifier
+ * @param {lexer_t*} lexer - Lexer state
+ * @returns {void}
+ * 
+ */
+void lexer_lex_identifier(lexer_t* lexer)
+{
+    char* buffer = memory_allocate(256);
+    size_t index = 0;
+    buffer[index++] = LEXER_CURRENT_PREV;
+
+    while (isalnum(LEXER_CURRENT) || LEXER_CURRENT == '_') {
+        buffer[index++] = LEXER_CURRENT;
+        LEXER_NEXT;
+        LEXER_NEXT_COLUMN;
+    }
+
+    buffer[index] = '\0';
+
+    token_t* token = token_create(TOKEN_IDENTIFIER, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+    token->data.string = buffer;
+    LEXER_PUSH_TOKEN(token);
+}
 /**
  * 
  * @function lexer_lex
@@ -242,40 +353,48 @@ void lexer_lex_number(lexer_t* lexer)
  */
 void lexer_lex(lexer_t* lexer)
 {
-    // while (LEXER_CURRENT != '\0') {
-    //     LEXER_NEXT;
-    //     LEXER_NEXT_COLUMN;
+    while (LEXER_CURRENT != '\0') {
+        LEXER_NEXT;
+        LEXER_NEXT_COLUMN;
 
-    //     switch (LEXER_CURRENT) {
-    //         case '\0': // End of file
-    //         case -1: // End of file
-    //             break;
+        switch (LEXER_CURRENT_PREV) {
+            case '\0': // End of file
+            case -1: // End of file
+                goto gotoend;
+                break;
             
-    //         case '\n': // New line
-    //             LEXER_NEXT_LINE;
-    //             LEXER_ZERO_COLUMN;
-    //             break;
+            case '\n': // New line
+                LEXER_NEXT_LINE;
+                LEXER_ZERO_COLUMN;
+                continue;
             
-    //         case '\a': // Alert
-    //         case '\b': // Backspace
-    //         case '\f': // Form feed
-    //         case '\r': // Carriage return
-    //         case '\t': // Horizontal tab
-    //         case '\v': // Vertical tab
-    //         case ' ': // Space
-    //             continue;
+            case '\a': // Alert
+            case '\b': // Backspace
+            case '\f': // Form feed
+            case '\r': // Carriage return
+            case '\t': // Horizontal tab
+            case '\v': // Vertical tab
+            case ' ': // Space
+                continue;
             
-    //         case '0': case '1': case '2': case '3': case '4':
-    //         case '5': case '6': case '7': case '8': case '9': {
-    //             lexer_lex_number(lexer);
-    //         }
+            case '0': case '1': case '2': case '3': case '4':
+            case '5': case '6': case '7': case '8': case '9':
+                lexer_lex_number(lexer);
+                continue;
 
-    //         default:
-    //             continue;
-    //     }
-    // }
+            default:
+                if (is_char_alpha(LEXER_CURRENT_PREV) || LEXER_CURRENT_PREV == '_') {
+                    lexer_lex_identifier(lexer);
+                } else {
+                    printf("%c\n", LEXER_CURRENT_PREV);
+                    token_t* token = token_create(TOKEN_ERROR, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+                    LEXER_PUSH_TOKEN(token);
+                }
+                continue;
+        }
+    }
     
+    gotoend:
     token_t* token = token_create(TOKEN_EOF, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-    token->print(token);
     LEXER_PUSH_TOKEN(token);
 }

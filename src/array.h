@@ -107,4 +107,14 @@ void array_free(array_t* array);
  */
 void array_token_free(array_token_t* array);
 
+/**
+ * 
+ * @function array_token_print
+ * @brief Print the token array
+ * @param {array_token_t*} array - Token array
+ * @returns {void}
+ * 
+ */
+void array_token_print(array_token_t* array);
+
 #endif

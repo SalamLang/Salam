@@ -200,6 +200,16 @@ token_t* token_create(token_type_t type, location_t location);
 
 /**
  * 
+ * @function token_copy
+ * @brief Copying a token
+ * @params {token_t*} token - Token
+ * @returns {token_t*}
+ * 
+ */
+token_t* token_copy(token_t* token);
+
+/**
+ * 
  * @function token_name
  * @brief Get the name of a token
  * @params {token_type_t} Token type

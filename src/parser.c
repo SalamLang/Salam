@@ -195,8 +195,8 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer, ast_ty
 			PARSER_NEXT; // Eating the identifier token
 			PARSER_NEXT; // Eating the colon token
 			PARSER_NEXT; // Eating the value token
-
-			array_push(values, value);
+			
+			array_push(values, token_copy(value));
 
 			ast_layout_attribute_t* attribute = ast_layout_attribute_create(token->data.string, values);
 			hashmap_put(cast(hashmap_t*, block->attributes), token->data.string, attribute);
@@ -276,8 +276,9 @@ ast_t* parser_parse(lexer_t* lexer)
 
 			ast->layout = node->data.layout;
 			
-			memory_destroy(node);
-			node = NULL;
+			if (node != NULL) {
+				memory_destroy(node);
+			}
 		}
 	}
 

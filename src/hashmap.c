@@ -117,7 +117,9 @@ void hashmap_put_custom(hashmap_t *map, const char *key, void *value, void (*fre
 			}
 		}
 
-		memory_destroy(map->data);
+		if (map->data != NULL) {
+			memory_destroy(map->data);
+		}
 
 		map->data = new_data;
 		map->size = new_length;
@@ -173,9 +175,13 @@ void* hashmap_remove(hashmap_t *map, const char *key)
 
 			// TODO: Do we need to free the value or not?
 
-			memory_destroy(entry->key);
+			if (entry != NULL) {
+				if (entry->key != NULL) {
+					memory_destroy(entry->key);
+				}
 
-			memory_destroy(entry);
+				memory_destroy(entry);
+			}
 
 			map->length--;
 

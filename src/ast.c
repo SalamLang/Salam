@@ -30,7 +30,9 @@ ast_node_t* ast_node_create(ast_type_t type, location_t location)
  */
 void ast_node_destroy(ast_node_t* value)
 {
-	memory_destroy(value);
+	if (value != NULL) {
+		memory_destroy(value);
+	}
 }
 
 /**
@@ -110,11 +112,15 @@ ast_layout_attribute_t* ast_layout_attribute_create(char* key, array_t* values)
  */
 void ast_layout_attribute_destroy(ast_layout_attribute_t* value)
 {
-	memory_destroy(value->key);
+	if (value != NULL) {
+		if (value->key != NULL) {
+			memory_destroy(value->key);
+		}
 
-	array_destroy_custom(value->values, cast(void (*)(void*), token_destroy));
-
-	memory_destroy(value);
+		array_destroy_custom(value->values, cast(void (*)(void*), token_destroy));
+		
+		memory_destroy(value);
+	}
 }
 
 /**
@@ -127,12 +133,14 @@ void ast_layout_attribute_destroy(ast_layout_attribute_t* value)
  */
 void ast_layout_block_destroy(ast_layout_block_t* value)
 {
-	hashmap_destroy_custom(cast(hashmap_t*, value->attributes), cast(void (*)(void*), ast_layout_attribute_destroy));
-	hashmap_destroy_custom(cast(hashmap_t*, value->styles), cast(void (*)(void*), ast_layout_attribute_destroy));
+	if (value != NULL) {
+		hashmap_destroy_custom(cast(hashmap_t*, value->attributes), cast(void (*)(void*), ast_layout_attribute_destroy));
+		hashmap_destroy_custom(cast(hashmap_t*, value->styles), cast(void (*)(void*), ast_layout_attribute_destroy));
 
-	array_destroy_custom(value->children, cast(void (*)(void*), ast_node_destroy));
+		array_destroy_custom(value->children, cast(void (*)(void*), ast_node_destroy));
 
-	memory_destroy(value);
+		memory_destroy(value);
+	}
 }
 
 /**
@@ -243,9 +251,11 @@ ast_layout_t* ast_layout_create()
  */
 void ast_layout_destroy(ast_layout_t* value)
 {
-	ast_layout_block_destroy(value->block);
+	if (value != NULL) {
+		ast_layout_block_destroy(value->block);
 
-	memory_destroy(value);
+		memory_destroy(value);
+	}
 }
 
 /**
@@ -348,7 +358,9 @@ void ast_debug(ast_t* ast)
  */
 void ast_destroy(ast_t* ast)
 {
-	ast_layout_destroy(ast->layout);
+	if (ast != NULL) {
+		ast_layout_destroy(ast->layout);
 
-	memory_destroy(ast);
+		memory_destroy(ast);
+	}
 }

@@ -17,6 +17,7 @@ typedef struct {
 typedef array_t array_token_t;
 typedef array_t array_node_t;
 typedef array_t array_node_layout_t;
+typedef array_t array_layout_attribute_t;
 
 #include "memory.h"
 #include "ast.h"
@@ -122,16 +123,6 @@ void array_token_print(array_token_t* array);
 
 /**
  * 
- * @function array_node_destroy
- * @brief Free the node array memory
- * @param {array_t*} array - Node array
- * @returns {void}
- * 
- */
-void array_node_destroy(array_t* array);
-
-/**
- * 
  * @function array_node_print
  * @brief Print the node array
  * @param {array_node_t*} array - Node array
@@ -149,5 +140,25 @@ void array_node_print(array_node_t* array);
  * 
  */
 void array_token_destroy(array_token_t* array);
+
+/**
+ * 
+ * @function array_size
+ * @brief Get the size of the array
+ * @param {array_t*} array - Array
+ * @returns {size_t} - Size of the array
+ * 
+ */
+size_t array_size(array_t* array);
+
+/**
+ * 
+ * @function array_layout_attribute_print
+ * @brief Print the attribute array
+ * @param {array_layout_attribute_t*} array - Attribute array
+ * @returns {void}
+ * 
+ */
+void array_layout_attribute_print(array_layout_attribute_t* array);
 
 #endif

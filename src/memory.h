@@ -120,4 +120,15 @@ void memory_swap(void* ptr1, void* ptr2, size_t size);
  */
 void memory_reverse(void* ptr, size_t size);
 
+/**
+ * 
+ * @function memory_duplicate
+ * @brief Duplicate memory
+ * @param {void*} ptr
+ * @param {size_t} size
+ * @returns {void*}
+ * 
+ */
+void* memory_duplicate(void* ptr, size_t size);
+
 #endif

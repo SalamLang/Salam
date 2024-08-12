@@ -152,17 +152,7 @@ void ast_layout_node_destroy(ast_layout_node_t* value);
 
 /**
  * 
- * @function ast_layout_node_destroy
- * @brief Free the AST node layout attribute
- * @params {ast_layout_node_t*} value - AST layout node
- * @returns {void}
- * 
- */
-void ast_layout_node_destroy(ast_layout_node_t* value);
-
-/**
- * 
- * @function ast_layout_attribute_create
+ * @function ast_layout_create
  * @brief Create a new AST node layout attribute
  * @returns {ast_layout_attribute_t*} - Pointer to the created AST node layout attribute
  * 
@@ -171,7 +161,7 @@ ast_layout_t* ast_layout_create();
 
 /**
  * 
- * @function ast_layout_attribute_create
+ * @function ast_layout_destroy
  * @brief Create a new AST node layout attribute
  * @params {ast_layout_t*} value - AST layout node
  * @returns {void}
@@ -230,7 +220,7 @@ void ast_destroy(ast_t* ast);
 
 /**
  * 
- * @function ast_layout_attribute_create
+ * @function ast_layout_block_create
  * @brief Create a new AST node layout attribute
  * @returns {ast_layout_block_t*} - Pointer to the created AST node layout block
  * 
@@ -259,7 +249,7 @@ void ast_layout_block_destroy(ast_layout_block_t* value);
 
 /**
  * 
- * @function ast_layout_attribute_create
+ * @function ast_layout_node_create
  * @brief Create a new AST node layout attribute
  * @params {ast_layout_node_type_t} type - Type of the layout node
  * @returns {ast_layout_node_t*} - Pointer to the created AST node layout attribute
@@ -269,7 +259,7 @@ ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t type);
 
 /**
  * 
- * @function ast_layout_attribute_create
+ * @function ast_layout_attribute_destroy
  * @brief Create a new AST node layout attribute
  * @params {ast_layout_attribute_t*} value - AST layout attribute
  * @returns {void}
@@ -279,13 +269,13 @@ void ast_layout_attribute_destroy(ast_layout_attribute_t* value);
 
 /**
  * 
- * @function ast_layout_attribute_create
- * @brief Create a new AST node layout attribute
- * @params {hashmap_t*} value - AST layout attribute
+ * @function ast_layout_attribute_print
+ * @brief Print the AST layout attribute
+ * @params {ast_layout_attribute_t*} value - AST layout attribute
  * @returns {void}
  * 
  */
-void ast_layout_attribute_print(struct hashmap_t* value);
+void ast_layout_attribute_print(ast_layout_attribute_t* value);
 
 /**
  * 
@@ -296,5 +286,16 @@ void ast_layout_attribute_print(struct hashmap_t* value);
  * 
  */
 void ast_layout_print(ast_layout_t* value);
+
+/**
+ * 
+ * @function ast_layout_attribute_create
+ * @brief Create a new AST node layout attribute
+ * @params {const char*} key - Key of the attribute
+ * @params {array_t*} values - Values of the attribute
+ * @returns {ast_layout_attribute_t*} - Pointer to the created AST node layout attribute
+ * 
+ */
+ast_layout_attribute_t* ast_layout_attribute_create(char* key, array_t* values);
 
 #endif

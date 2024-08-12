@@ -8,6 +8,26 @@
  * @returns {unsigned long}
  * 
  */
+unsigned long hash_function(const char* str)
+{
+	unsigned long hash = 5381;
+	int c;
+
+	while ((c = *str++)) {
+		hash = ((hash << 5) + hash) + c;
+	}
+
+	return hash;
+}
+
+/**
+ * 
+ * @function hash_function
+ * @brief Hash function
+ * @param {const char*} key
+ * @returns {unsigned long}
+ * 
+ */
 hashmap_t* hashmap_create()
 {
 	hashmap_t *map = memory_allocate(sizeof(hashmap_t));
@@ -165,11 +185,10 @@ void* hashmap_remove(hashmap_t *map, const char *key)
  * @function hashmap_free
  * @brief Free the hashmap memory
  * @param {hashmap_t*} map
- * @param {void (*free_fn)(void*)} free_fn
  * @returns {void}
  * 
  */
-void hashmap_free(hashmap_t *map, void (*free_fn)(void*))
+void hashmap_free(hashmap_t *map)
 {
     hashmap_free_custom(map, free);
 }

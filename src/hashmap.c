@@ -39,7 +39,7 @@ hashmap_t* hashmap_create(size_t size)
 	map->data = (hashmap_entry_t**) memory_callocate(map->size, sizeof(hashmap_entry_t*));
 
 	map->print = cast(void (*)(void*), hashmap_print);
-	map->free = cast(void (*)(void*), hashmap_destroy);
+	map->destroy = cast(void (*)(void*), hashmap_destroy);
 
 	return map;
 }
@@ -327,5 +327,41 @@ void hashmap_print_layout_attribute(hashmap_attribute_t* map)
 
 			entry = entry->next;
 		}
+	}
+}
+
+/**
+ * 
+ * @function hashmap_create_layout_attribute
+ * @brief Destroy the hashmap of layout attributes
+ * @params {hashmap_attribute_t*} map
+ * @returns {void}
+ * 
+ */
+void hashmap_destroy_layout_attribute(hashmap_attribute_t *map)
+{
+	if (map != NULL) {
+		if (map->data != NULL) {
+			for (size_t i = 0; i < map->size; i++) {
+				hashmap_entry_t *entry = map->data[i];
+
+				while (entry) {
+					hashmap_entry_t *next = entry->next;
+
+					memory_destroy(entry->key);
+
+					ast_layout_attribute_t* layout_attribute = cast(ast_layout_attribute_t*, entry->value);
+					layout_attribute->destroy(layout_attribute);
+
+					memory_destroy(entry);
+
+					entry = next;
+				}
+			}
+
+			memory_destroy(map->data);
+		}
+
+		memory_destroy(map);
 	}
 }

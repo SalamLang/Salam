@@ -190,6 +190,7 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer, ast_ty
 
 		if (match(lexer, TOKEN_IDENTIFIER) && match_next(lexer, TOKEN_COLON)) {
 			array_t* values = array_create(1, sizeof(token_t*));
+    		values->destroy = cast(void (*)(void*), array_token_destroy);
 			token_t* value = PARSER_CURRENT;
 
 			PARSER_NEXT; // Eating the identifier token
@@ -200,6 +201,7 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer, ast_ty
 			array_push(values, value_copy);
 
 			ast_layout_attribute_t* attribute = ast_layout_attribute_create(token->data.string, values);
+
 			hashmap_put(cast(hashmap_t*, block->attributes), token->data.string, attribute);
 		}
 		else {

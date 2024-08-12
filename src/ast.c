@@ -69,11 +69,11 @@ ast_layout_block_t* ast_layout_block_create(ast_type_t parent_type)
 	cast(hashmap_t*, block->attributes)->print = cast(void (*)(void*), hashmap_print_layout_attribute);
 	cast(hashmap_t*, block->attributes)->destroy = cast(void (*)(void*), hashmap_destroy_layout_attribute);
 
-	// block->styles = cast(struct hashmap_t*, hashmap_create(16));
-	// cast(hashmap_t*, block->styles)->print = cast(void (*)(void*), hashmap_print_layout_attribute);
-	// cast(hashmap_t*, block->styles)->destroy = cast(void (*)(void*), ast_layout_attribute_destroy);
+	block->styles = cast(struct hashmap_t*, hashmap_create(16));
+	cast(hashmap_t*, block->styles)->print = cast(void (*)(void*), hashmap_print_layout_attribute);
+	cast(hashmap_t*, block->styles)->destroy = cast(void (*)(void*), hashmap_destroy_layout_attribute);
 
-	// block->children = array_create(sizeof(ast_layout_node_t*), 16);
+	block->children = array_create(sizeof(ast_layout_node_t*), 16);
 
 	block->print = cast(void (*)(void*), ast_layout_block_print);
 	block->destroy = cast(void (*)(void*), ast_layout_block_destroy);
@@ -136,29 +136,22 @@ void ast_layout_attribute_destroy(ast_layout_attribute_t* value)
  */
 void ast_layout_block_destroy(ast_layout_block_t* value)
 {
-	printf("ast_layout_block_destroy\n");
-
 	if (value != NULL) {
 		hashmap_t* attributes = value->attributes;
-		hashmap_t* styles = value->attributes;
+		hashmap_t* styles = value->styles;
 		array_t* children = value->children;
 		
 		if (attributes != NULL) {
-			printf("ast_layout_block_destroy attributes\n");
-			attributes->destroy(value->attributes);
+			attributes->destroy(attributes);
 		}
 
-		// if (styles != NULL) {
-		// 	printf("ast_layout_block_destroy styles\n");
-		// 	styles->destroy(styles);
-		// 	// hashmap_destroy_custom(cast(hashmap_t*, value->styles), cast(void (*)(void*), ast_layout_attribute_destroy));
-		// }
+		if (styles != NULL) {
+			styles->destroy(styles);
+		}
 
-		// if (children != NULL) {
-		// 	printf("ast_layout_block_destroy children\n");
-		// 	// array_destroy_custom(value->children, cast(void (*)(void*), ast_layout_node_destroy));
-		// 	children->destroy(children);
-		// }
+		if (children != NULL) {
+			children->destroy(children);
+		}
 
 		memory_destroy(value);
 	}

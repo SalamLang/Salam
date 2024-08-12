@@ -22,7 +22,7 @@ typedef struct {
 	size_t length;
 
     void (*print)(void* node);
-    void (*free)(void* node);
+    void (*destroy)(void* node);
 } hashmap_t;
 
 typedef hashmap_t hashmap_array_t;
@@ -144,5 +144,15 @@ void hashmap_print_custom(hashmap_t* map, void (*print_fn)(void*));
  * 
  */
 void hashmap_print_layout_attribute(hashmap_attribute_t* map);
+
+/**
+ * 
+ * @function hashmap_create_layout_attribute
+ * @brief Destroy the hashmap of layout attributes
+ * @params {hashmap_attribute_t*} map
+ * @returns {void}
+ * 
+ */
+void hashmap_destroy_layout_attribute(hashmap_attribute_t *map);
 
 #endif

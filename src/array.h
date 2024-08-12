@@ -14,7 +14,7 @@ typedef struct {
     size_t element_size;
 
     void (*print)(void* node);
-    void (*free)(void* node);
+    void (*destroy)(void* node);
 } array_t;
 
 typedef array_t array_token_t;

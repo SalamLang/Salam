@@ -73,24 +73,9 @@ typedef enum {
     TOKEN_FOR,
     TOKEN_BREAK,
     TOKEN_CONTINUE,
-    TOKEN_TRUE,
 
     TOKEN_ERROR,
 } token_type_t;
-
-// static const char* keywords_name[] = {
-//     "layout",
-//     "import",
-//     "function",
-//     "return",
-//     "if",
-//     "else",
-//     "while",
-//     "for",
-//     "break",
-//     "continue",
-//     "true",
-// };
 
 typedef struct {
     const char* name;
@@ -126,7 +111,7 @@ typedef struct {
 
     void (*print)(void*);
     void (*destroy)(void*);
-    char* (*name)(void*);
+    char* (*name)(token_type_t);
     char* (*value)(void*);
 } token_t;
 
@@ -217,11 +202,11 @@ token_t* token_create(token_type_t type, location_t location);
  * 
  * @function token_name
  * @brief Get the name of a token
- * @param {token_t} token -
+ * @param {token_type_t} Token type
  * @returns {char*}
  * 
  */
-char* token_name(token_t* token);
+char* token_name(token_type_t type);
 
 /**
  * 

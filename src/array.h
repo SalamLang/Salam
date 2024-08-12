@@ -16,6 +16,7 @@ typedef struct {
 
 typedef array_t array_token_t;
 typedef array_t array_node_t;
+typedef array_t array_node_layout_t;
 
 #include "memory.h"
 #include "ast.h"

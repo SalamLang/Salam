@@ -15,7 +15,8 @@ void panic(const char* message, ...)
     vfprintf(stderr, message, args);
     va_end(args);
     fprintf(stderr, "\n");
-    exit(1);
+
+    exit(EXIT_FAILURE);
 }
 
 /**

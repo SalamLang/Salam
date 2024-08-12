@@ -116,7 +116,7 @@ typedef struct ast_t {
 } ast_node_t;
 
 typedef struct {
-    array_t* layout;
+    ast_layout_t* layout;
 } ast_t;
 
 /**
@@ -129,6 +129,16 @@ typedef struct {
  * 
  */
 ast_node_t* ast_node_create(ast_type_t type, location_t location);
+
+/**
+ * 
+ * @function ast_layout_node_print
+ * @beief Print the AST layout node
+ * @params {ast_layout_node_t*} value - AST layout node
+ * @returns {void}
+ * 
+ */
+void ast_layout_node_print(ast_layout_node_t* value);
 
 /**
  * 
@@ -171,13 +181,13 @@ void ast_layout_destroy(ast_layout_t* value);
 
 /**
  * 
- * @function ast_print
+ * @function ast_node_print
  * @brief Print the AST node
  * @param {ast_node_t*} node - AST node
  * @returns {void}
  * 
  */
-void ast_print(ast_node_t* node);
+void ast_node_print(ast_node_t* node);
 
 /**
  * 
@@ -229,6 +239,16 @@ ast_layout_block_t* ast_layout_block_create();
 
 /**
  * 
+ * @function ast_layout_block_print
+ * @brief Free the AST node layout block
+ * @params {ast_layout_block_t*} value - AST layout block
+ * @returns {void}
+ * 
+ */
+void ast_layout_block_print(ast_layout_block_t* value);
+
+/**
+ * 
  * @function ast_layout_block_destroy
  * @brief Free the AST node layout block
  * @params {ast_layout_block_t*} value - AST layout block
@@ -256,5 +276,25 @@ ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t type);
  * 
  */
 void ast_layout_attribute_destroy(ast_layout_attribute_t* value);
+
+/**
+ * 
+ * @function ast_layout_attribute_create
+ * @brief Create a new AST node layout attribute
+ * @params {hashmap_t*} value - AST layout attribute
+ * @returns {void}
+ * 
+ */
+void ast_layout_attribute_print(struct hashmap_t* value);
+
+/**
+ * 
+ * @function ast_layout_print
+ * @brief Print the AST layout
+ * @param {ast_layout_t*} value - AST layout
+ * @returns {void}
+ * 
+ */
+void ast_layout_print(ast_layout_t* value);
 
 #endif

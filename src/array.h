@@ -30,8 +30,8 @@ typedef array_t array_layout_attribute_t;
  * 
  * @function array_create
  * @brief Create a new array
- * @param {size_t} element_size - Size of each element
- * @param {size_t} capacity - Initial capacity of the array
+ * @params {size_t} element_size - Size of each element
+ * @params {size_t} capacity - Initial capacity of the array
  * @returns {array_t*} - Pointer to the created array
  * 
  */
@@ -41,9 +41,9 @@ array_t* array_create(size_t element_size, size_t capacity);
  * 
  * @function array_init
  * @brief Create a new array
- * @param {array_t*} array - Array to initialize
- * @param {size_t} capacity - Initial capacity of the array
- * @param {size_t} element_size - Size of each element
+ * @params {array_t*} array - Array to initialize
+ * @params {size_t} capacity - Initial capacity of the array
+ * @params {size_t} element_size - Size of each element
  * @returns {void}
  * 
  */
@@ -53,8 +53,8 @@ void array_init(array_t* array, size_t capacity, size_t element_size);
  * 
  * @function array_push
  * @brief Push an element to the array
- * @param {array_t*} array - Array
- * @param {void*} element - Element to add
+ * @params {array_t*} array - Array
+ * @params {void*} element - Element to add
  * @returns {bool} - Success status
  * 
  */
@@ -64,8 +64,8 @@ bool array_push(array_t* array, void* element);
  * 
  * @function array_pop
  * @brief Pop an element from the array
- * @param {array_t*} array - Array
- * @param {void*} element - Buffer to store the popped element
+ * @params {array_t*} array - Array
+ * @params {void*} element - Buffer to store the popped element
  * @returns {bool} - Success status
  * 
  */
@@ -75,8 +75,8 @@ bool array_pop(array_t* array, void* element);
  * 
  * @function array_resize
  * @brief Resize the array to a new capacity
- * @param {array_t*} array - Array
- * @param {size_t} new_capacity - New capacity
+ * @params {array_t*} array - Array
+ * @params {size_t} new_capacity - New capacity
  * @returns {void}
  * 
  */
@@ -86,8 +86,8 @@ void array_resize(array_t* array, size_t new_capacity);
  * 
  * @function array_get
  * @brief Get an element from the array
- * @param {array_t*} array - Array
- * @param {size_t} index - Index of the element
+ * @params {array_t*} array - Array
+ * @params {size_t} index - Index of the element
  * @returns {void*} - Pointer to the element
  * 
  */
@@ -97,7 +97,7 @@ void* array_get(array_t* array, size_t index);
  * 
  * @function array_destroy
  * @brief Free the array memory
- * @param {array_t*} array - Array
+ * @params {array_t*} array - Array
  * @returns {void}
  * 
  */
@@ -107,8 +107,8 @@ void array_destroy(array_t* array);
  * 
  * @function array_destroy_custom
  * @brief Free the array memory
- * @param {array_t*} array - Array
- * @param {void (*free_fn)(void*)} free_fn - Custom free function
+ * @params {array_t*} array - Array
+ * @params {void (*free_fn)(void*)} free_fn - Custom free function
  * @returns {void}
  * 
  */
@@ -118,7 +118,7 @@ void array_destroy_custom(array_t* array, void (*free_fn)(void*));
  * 
  * @function array_token_print
  * @brief Print the token array
- * @param {array_token_t*} array - Token array
+ * @params {array_token_t*} array - Token array
  * @returns {void}
  * 
  */
@@ -128,7 +128,7 @@ void array_token_print(array_token_t* array);
  * 
  * @function array_node_print
  * @brief Print the node array
- * @param {array_node_t*} array - Node array
+ * @params {array_node_t*} array - Node array
  * @returns {void}
  * 
  */
@@ -138,7 +138,7 @@ void array_node_print(array_node_t* array);
  * 
  * @function array_token_destroy
  * @brief Free the token array memory
- * @param {array_token_t*} array - Token array
+ * @params {array_token_t*} array - Token array
  * @returns {void}
  * 
  */
@@ -148,7 +148,7 @@ void array_token_destroy(array_token_t* array);
  * 
  * @function array_size
  * @brief Get the size of the array
- * @param {array_t*} array - Array
+ * @params {array_t*} array - Array
  * @returns {size_t} - Size of the array
  * 
  */
@@ -158,7 +158,7 @@ size_t array_size(array_t* array);
  * 
  * @function array_layout_attribute_print
  * @brief Print the attribute array
- * @param {array_layout_attribute_t*} array - Attribute array
+ * @params {array_layout_attribute_t*} array - Attribute array
  * @returns {void}
  * 
  */
@@ -168,7 +168,7 @@ void array_layout_attribute_print(array_layout_attribute_t* array);
  * 
  * @function array_print
  * @brief Print the array
- * @param {array_t*} array - Array
+ * @params {array_t*} array - Array
  * @returns {void}
  * 
  */

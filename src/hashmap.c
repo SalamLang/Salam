@@ -1,5 +1,7 @@
 #include "hashmap.h"
 
+#include <string.h>
+
 /**
  * 
  * @function hash_function
@@ -22,19 +24,22 @@ unsigned long hash_function(const char* str)
 
 /**
  * 
- * @function hash_function
- * @brief Hash function
- * @param {const char*} key
- * @returns {unsigned long}
+ * @function hashmap_create
+ * @brief Create a new hashmap
+ * @param {size_t} size
+ * @returns {hashmap_t*}
  * 
  */
-hashmap_t* hashmap_create()
+hashmap_t* hashmap_create(size_t size)
 {
 	hashmap_t *map = memory_allocate(sizeof(hashmap_t));
 
-	map->size = 16;
+	map->size = size;
 	map->length = 0;
 	map->data = (hashmap_entry_t**) memory_callocate(map->size, sizeof(hashmap_entry_t*));
+
+	map->print = cast(void (*)(void*), hashmap_print);
+	map->free = cast(void (*)(void*), hashmap_destroy);
 
 	return map;
 }
@@ -74,7 +79,7 @@ void hashmap_put_custom(hashmap_t *map, const char *key, void *value, void (*fre
 
 	while (entry != NULL) {
 		if (strcmp(entry->key, key) == 0) {
-            free_fn(entry->value);
+			if (free_fn != NULL) free_fn(entry->value);
 			entry->value = NULL;
 
 			entry->value = value;
@@ -216,7 +221,7 @@ void hashmap_destroy_custom(hashmap_t *map, void (*free_fn)(void*))
                 free(entry->key);
                 entry->key = NULL;
 
-                free_fn(entry->value);
+                if (free_fn != NULL) free_fn(entry->value);
                 entry->value = NULL;
 
                 free(entry);
@@ -244,7 +249,7 @@ void hashmap_destroy_custom(hashmap_t *map, void (*free_fn)(void*))
 void hashmap_print(hashmap_t *map)
 {
 	printf("Hashmap Size: %zu\n", map->length);
-	printf("Hashmap Capacity: %zu\n", map->size);
+	// printf("Hashmap Capacity: %zu\n", map->size);
 	printf("Hashmap Contents:\n");
 
 	for (size_t i = 0; i < map->size; i++) {
@@ -252,6 +257,36 @@ void hashmap_print(hashmap_t *map)
 
 		while (entry) {
 			printf("[%zu] Key: %s, Value: %p\n", i, entry->key, entry->value);
+			entry = entry->next;
+		}
+	}
+}
+
+/**
+ * 
+ * @function hashmap_print_custom
+ * @brief Print the hashmap with a custom print function
+ * @param {hashmap_t*} map
+ * @param {void (*print_fn)(void*)} print_fn
+ * @returns {void}
+ * 
+ */
+void hashmap_print_custom(hashmap_t* map, void (*print_fn)(void*))
+{
+    printf("Hashmap array: %zu\n", map->length);
+	if (map->length == 0) {
+		printf("Hashmap is empty\n");
+		return;
+	}
+
+	for (size_t i = 0; i < map->size; i++) {
+		hashmap_entry_t *entry = map->data[i];
+
+		while (entry) {
+			printf("[%zu] Key: %s, Value: ", i, entry->key);
+			print_fn(entry->value);
+			printf("\n");
+
 			entry = entry->next;
 		}
 	}

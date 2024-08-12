@@ -13,22 +13,22 @@
 
 void doargs(int argc, char** argv)
 {
-    ast_layout_block_t* b = ast_layout_block_create();
+    // ast_layout_block_t* b = ast_layout_block_create();
 
-    array_t* values = array_create(1, sizeof(token_t*));
-    values->destroy = cast(void (*)(void*), array_token_destroy);
-    token_t* value_copy = token_create(TOKEN_STRING, (location_t){0, 0, 0, 0, 0, 0});
-    array_push(values, value_copy);
+    // array_t* values = array_create(1, sizeof(token_t*));
+    // values->destroy = cast(void (*)(void*), array_token_destroy);
+    // token_t* value_copy = token_create(TOKEN_STRING, (location_t){0, 0, 0, 0, 0, 0});
+    // array_push(values, value_copy);
 
-    ast_layout_attribute_t* attribute = ast_layout_attribute_create("class", values);
+    // ast_layout_attribute_t* attribute = ast_layout_attribute_create("class", values);
 
-    hashmap_put(cast(hashmap_t*, b->attributes), "class", attribute);
+    // hashmap_put(cast(hashmap_t*, b->attributes), "class", attribute);
 
-    b->destroy(b);
+    // b->destroy(b);
 
-    // values->destroy(values);
+    // // if (values != NULL) values->destroy(values);
 
-    return;
+    // return;
     if (argc < 2) {
         error(1, "Usage: %s <file>\n", argv[0]);
     }

@@ -153,7 +153,9 @@ void memory_swap(void* ptr1, void* ptr2, size_t size)
         memory_copy(ptr1, ptr2, size);
         memory_copy(ptr2, temp, size);
         
-        memory_destroy(temp);
+        if (temp != NULL) {
+            memory_destroy(temp);
+        }
     }
 }
 

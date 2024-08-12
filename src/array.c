@@ -148,8 +148,6 @@ void array_destroy(array_t* array)
  */
 void array_destroy_custom(array_t* array, void (*free_fn)(void*))
 {
-    array->print(array);
-
     if (array != NULL) {
         if (array->data != NULL) {
             if (free_fn != NULL) {
@@ -264,6 +262,14 @@ size_t array_size(array_t* array)
     return array->size;
 }
 
+/**
+ * 
+ * @function array_token_destroy
+ * @brief Free the token array memory
+ * @params {array_token_t*} array - Token array
+ * @returns {void}
+ * 
+ */
 void array_token_destroy(array_token_t* array)
 {
     if (array != NULL) {

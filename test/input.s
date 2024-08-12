@@ -1,3 +1,3 @@
 layout {
-    content: "Hey" + 123
+    123
 }

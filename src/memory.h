@@ -19,6 +19,17 @@ void* memory_allocate(size_t size);
 
 /**
  * 
+ * @function memory_callocate
+ * @brief Allocate memory and panic if allocation fails
+ * @param {size_t} count
+ * @param {size_t} size
+ * @returns {void*}
+ * 
+ */
+void* memory_callocate(size_t count, size_t size);
+
+/**
+ * 
  * @function memory_free
  * @brief Free memory and panic if pointer is NULL
  * @param {void*} ptr

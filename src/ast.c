@@ -15,22 +15,22 @@ ast_node_t* ast_node_create(ast_type_t type, location_t location)
     node->type = type;
     node->location = location;
     node->print = cast(void (*)(void*), ast_print);
-    node->free = cast(void (*)(void*), ast_free);
+    node->free = cast(void (*)(void*), ast_destroy);
 
     return node;
 }
 
 /**
  * 
- * @function ast_node_free
+ * @function ast_node_destroy
  * @brief Free the AST node
  * @param {ast_node_t*} value - AST node
  * @returns {void}
  * 
  */
-void ast_node_free(ast_node_t* value)
+void ast_node_destroy(ast_node_t* value)
 {
-    memory_free(value);
+    memory_destroy(value);
 }
 
 /**
@@ -52,18 +52,34 @@ ast_layout_block_t* ast_layout_block_create()
 
 /**
  * 
- * @function ast_layout_block_free
+ * @function ast_layout_attribute_create
+ * @brief Create a new AST node layout attribute
+ * @params {ast_layout_attribute_t*} value - AST layout attribute
+ * @returns {void}
+ * 
+ */
+void ast_layout_attribute_destroy(ast_layout_attribute_t* value)
+{
+    if (value->key != NULL) memory_destroy(value->key);
+    array_destroy_custom(value->values, memory_destroy);
+
+    memory_destroy(value);
+}
+
+/**
+ * 
+ * @function ast_layout_block_destroy
  * @brief Free the AST node layout block
  * @params {ast_layout_block_t*} value - AST layout block
  * @returns {void}
  * 
  */
-void ast_layout_block_free(ast_layout_block_t* value)
+void ast_layout_block_destroy(ast_layout_block_t* value)
 {
-    hashmap_free_custom(value->attributes);
-    hashmap_free_custom(value->styles);
-    array_node_free(value->children);
-    memory_free(value);
+    hashmap_destroy_custom(cast(hashmap_t*, value->attributes), cast(void (*)(void*), ast_layout_attribute_destroy));
+    hashmap_destroy_custom(cast(hashmap_t*, value->styles), cast(void (*)(void*), ast_layout_attribute_destroy));
+    array_node_destroy(value->children);
+    memory_destroy(value);
 }
 
 /**
@@ -86,17 +102,17 @@ ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t type)
 
 /**
  * 
- * @function ast_layout_node_free
+ * @function ast_layout_node_destroy
  * @brief Free the AST node layout attribute
  * @params {ast_layout_node_t*} value - AST layout node
  * @returns {void}
  * 
  */
-void ast_layout_node_free(ast_layout_node_t* value)
+void ast_layout_node_destroy(ast_layout_node_t* value)
 {
-    memory_free(value->tag);
+    memory_destroy(value->tag);
     ast_layout_block_create(value->block);
-    memory_free(value);
+    memory_destroy(value);
 }
 
 /**
@@ -121,10 +137,10 @@ ast_layout_t* ast_layout_create()
  * @returns {void}
  * 
  */
-void ast_layout_free(ast_layout_t* value)
+void ast_layout_destroy(ast_layout_t* value)
 {
     ast_layout_block_create(value->block);
-    memory_free(value);
+    memory_destroy(value);
 }
 
 /**
@@ -167,19 +183,6 @@ void ast_print(ast_node_t* node)
 
 /**
  * 
- * @function ast_free
- * @brief Free the AST node
- * @param {ast_node_t*} node - AST node
- * @returns {void}
- * 
- */
-void ast_node_free(ast_node_t* node)
-{
-    memory_free(node);
-}
-
-/**
- * 
  * @function ast_create
  * @brief Create a new AST
  * @returns {ast_t*} - Pointer to the created AST
@@ -214,14 +217,14 @@ void ast_debug(ast_t* ast)
 
 /**
  * 
- * @function ast_free
+ * @function ast_destroy
  * @brief Free the AST
  * @param {ast_t*} ast - AST
  * @returns {void}
  * 
  */
-void ast_free(ast_t* ast)
+void ast_destroy(ast_t* ast)
 {
-    array_node_free(ast->layout);
-    memory_free(ast);
+    array_node_destroy(ast->layout);
+    memory_destroy(ast);
 }

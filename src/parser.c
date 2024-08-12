@@ -97,26 +97,27 @@ bool match_prev(lexer_t* lexer, token_type_t token_type)
 ast_node_t* parser_parse_block(lexer_t* lexer, ast_node_type_t block_parent_type)
 {
     ast_node_t* node = ast_node_create(AST_NODE_TYPE_BLOCK, PARSER_CURRENT->location);
+    // node->block_parent_type = block_parent_type;
 
     expect(lexer, TOKEN_LEFT_BRACE);
 
-    while (PARSER_CURRENT->type != TOKEN_RIGHT_BRACE) {
-        ast_node_t* child = ast_node_create(AST_NODE_TYPE_ERROR, PARSER_CURRENT->location);
+    // while (PARSER_CURRENT->type != TOKEN_RIGHT_BRACE) {
+    //     ast_node_t* child = ast_node_create(AST_NODE_TYPE_ERROR, PARSER_CURRENT->location);
 
-        if (match(lexer, TOKEN_LAYOUT)) {
-            child = parser_parse_layout(lexer);
-        }
-        else {
-            unknown(lexer);
-        }
+    //     if (match(lexer, TOKEN_LAYOUT)) {
+    //         child = parser_parse_layout(lexer);
+    //     }
+    //     else {
+    //         unknown(lexer);
+    //     }
 
-        if (block_parent_type == AST_NODE_TYPE_LAYOUT) {
-            array_push(node->children, child);
-        }
-        else {
-            array_push(node->children, child);
-        }
-    }
+    //     if (block_parent_type == AST_NODE_TYPE_LAYOUT) {
+    //         array_push(node->children, child);
+    //     }
+    //     else {
+    //         array_push(node->children, child);
+    //     }
+    // }
 
     expect(lexer, TOKEN_RIGHT_BRACE);
 
@@ -135,6 +136,7 @@ ast_node_t* parser_parse_block(lexer_t* lexer, ast_node_type_t block_parent_type
 ast_node_t* parser_parse_layout_block(lexer_t* lexer, ast_node_type_t block_parent_type)
 {
     ast_node_t* node = ast_node_create(AST_NODE_TYPE_LAYOUT_BLOCK, PARSER_CURRENT->location);
+    node->layout_block = NULL;
 
     expect(lexer, TOKEN_LEFT_BRACE);
 
@@ -142,7 +144,8 @@ ast_node_t* parser_parse_layout_block(lexer_t* lexer, ast_node_type_t block_pare
         ast_node_t* child = ast_node_create(AST_NODE_TYPE_ERROR, PARSER_CURRENT->location);
 
         if (match(lexer, TOKEN_IDENTIFIER)) {
-            
+
+        }            
     }
 
     expect(lexer, TOKEN_RIGHT_BRACE);
@@ -165,7 +168,8 @@ ast_node_t* parser_parse_layout(lexer_t* lexer)
     ast_node_t* node = ast_node_create(AST_NODE_TYPE_LAYOUT, PARSER_CURRENT->location);
 
     if (match(lexer, TOKEN_LEFT_BRACE)) {
-        node->layout_block = cast(struct ast_node_t*, parser_parse_layout_block(lexer, node->type));
+        node->layout = ast_node_create
+        node->layout->block = parser_parse_layout_block(lexer, AST_NODE_TYPE_LAYOUT);
     }
     else {
         unknown(lexer);

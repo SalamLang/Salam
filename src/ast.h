@@ -10,12 +10,9 @@
 typedef enum {
     AST_NODE_TYPE_BLOCK,
     AST_NODE_TYPE_IMPORT,
-    AST_NODE_TYPE_NODE,
     AST_NODE_TYPE_FUNCTION,
-    AST_NODE_TYPE_FUNCTION_NODE,
     AST_NODE_TYPE_FUNCTION_ERROR,
     AST_NODE_TYPE_LAYOUT,
-    AST_NODE_TYPE_LAYOUT_ATTRIBUTE,
     AST_NODE_TYPE_LAYOUT_BLOCK,
     AST_NODE_TYPE_LAYOUT_NODE,
     AST_NODE_TYPE_ERROR,
@@ -23,29 +20,6 @@ typedef enum {
 
 struct ast_node_t;
 
-typedef struct {
-    ast_node_type_t type;
-    location_t location;
-
-    union {
-        struct ast_node_t* block;
-        struct ast_node_t* function;
-        struct ast_node_t* layout;
-    };
-
-    struct ast_node_t* block;
-    array_node_t* children;
-    array_node_t* layout_styles;
-    array_node_t* layout_attributes;
-    void (*free)(void* node);
-    void (*print)(void* node);
-} ast_node_t;
-
-typedef struct {
-    hashmap_array_t* attributes;
-    hashmap_array_t* styles;
-    array_node_layout_t* children;
-} ast_node_layout_t;
 
 typedef enum {
     AST_NODE_BLOCK_TYPE_LAYOUT,
@@ -57,6 +31,58 @@ typedef struct {
     ast_node_block_type_t type;
     array_node_t* children;
 } ast_node_block_t;
+
+typedef struct ast_node_import_t {
+    array_t* path;
+} ast_node_import_t;
+
+typedef struct ast_node_function_t {
+    char* name;
+    array_t* parameters;
+    ast_node_block_t* block;
+} ast_node_function_t;
+
+typedef struct ast_node_layout_block_t {
+    hashmap_array_t* attributes;
+    hashmap_array_t* styles;
+    array_node_layout_t* children;
+} ast_node_layout_block_t;
+
+typedef struct ast_node_layout_t {
+    ast_node_layout_block_t* block;
+} ast_node_layout_t;
+
+typedef enum {
+    AST_NODE_LAYOUT_NODE_TYPE_PARAGRAPH,
+    AST_NODE_LAYOUT_NODE_TYPE_BUTTON,
+    AST_NODE_LAYOUT_NODE_TYPE_FORM,
+    AST_NODE_LAYOUT_NODE_TYPE_DIV,
+} ast_node_layout_node_type_t;
+
+typedef struct ast_node_layout_node_t {
+    char* tag;
+    ast_node_layout_node_type_t type;
+    ast_node_layout_block_t* block;
+} ast_node_layout_node_t;
+
+typedef union {
+    ast_node_block_t* block;
+    ast_node_import_t* import;
+    ast_node_function_t* function;
+    ast_node_layout_t* layout;
+    ast_node_layout_block_t* layout_block;
+    ast_node_layout_node_t* layout_node;
+} ast_node_union_t;
+
+typedef struct ast_node_t {
+    ast_node_type_t type;
+    location_t location;
+
+    void (*free)(void* node);
+    void (*print)(void* node);
+
+    ast_node_union_t data;
+} ast_node_t;
 
 typedef struct {
     array_t* layout;

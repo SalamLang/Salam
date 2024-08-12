@@ -147,12 +147,19 @@ void array_destroy(array_t* array)
  */
 void array_destroy_custom(array_t* array, void (*free_fn)(void*))
 {
+    printf(">>>>>>>>>>>>>>>");
+    array->print(array);
+
+    printf("array_destroy_custom\n");
     if (array != NULL) {
         if (array->data != NULL) {
             if (free_fn != NULL) {
                 for (size_t i = 0; i < array->size; i++) {
                     if (array->data[i] != NULL) {
+                        printf("%zu\n", i);
+                        printf("array_destroy_custom 11111\n");
                         free_fn(array->data[i]);
+                        printf("array_destroy_custom 2222\n");
                     }
                 }
             }

@@ -16,8 +16,7 @@
  */
 ast_node_t* parser_layout(lexer_t* lexer)
 {
-    ast_node_t* node = memory_allocate(sizeof(ast_node_t));
-    node->type = AST_NODE_TYPE_LAYOUT;
+    ast_node_t* node = ast_node_create(AST_NODE_TYPE_LAYOUT_NODE, PARSER_CURRENT->location);
 
     PARSER_NEXT;
 

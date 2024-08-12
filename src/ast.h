@@ -7,9 +7,11 @@
 #include "lexer.h"
 
 typedef enum {
-    AST_NODE_TYPE_PROGRAM,
+    AST_NODE_TYPE_IMPORT,
+    AST_NODE_TYPE_NODE,
     AST_NODE_TYPE_FUNCTION,
-    AST_NODE_TYPE_LAYOUT,
+    AST_NODE_TYPE_FUNCTION_NODE,
+    AST_NODE_TYPE_LAYOUT_NODE,
     AST_NODE_TYPE_ERROR,
 } ast_node_type_t;
 
@@ -30,10 +32,11 @@ typedef struct {
  * @function ast_node_create
  * @brief Create a new AST node
  * @param {ast_node_type_t} type - Type of the AST node
+ * @param {location_t} location - Location of the AST node
  * @returns {ast_node_t*} - Pointer to the created AST node
  * 
  */
-ast_node_t* ast_node_create(ast_node_type_t type);
+ast_node_t* ast_node_create(ast_node_type_t type, location_t location);
 
 /**
  * 

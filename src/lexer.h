@@ -61,8 +61,56 @@ typedef enum {
     TOKEN_NUMBER_INT,
     TOKEN_NUMBER_FLOAT,
     TOKEN_BOOLEAN,
-    TOKEN_ERROR
+
+    // Keywords
+    TOKEN_LAYOUT,
+    TOKEN_IMPORT,
+    TOKEN_FUNCTION,
+    TOKEN_RETURN,
+    TOKEN_IF,
+    TOKEN_ELSE,
+    TOKEN_WHILE,
+    TOKEN_FOR,
+    TOKEN_BREAK,
+    TOKEN_CONTINUE,
+    TOKEN_TRUE,
+
+    TOKEN_ERROR,
 } token_type_t;
+
+// static const char* keywords_name[] = {
+//     "layout",
+//     "import",
+//     "function",
+//     "return",
+//     "if",
+//     "else",
+//     "while",
+//     "for",
+//     "break",
+//     "continue",
+//     "true",
+// };
+
+typedef struct {
+    const char* name;
+    token_type_t type;
+} keyword_t;
+
+static const keyword_t keywords[] = {
+    {"layout", TOKEN_LAYOUT},
+    {"import", TOKEN_IMPORT},
+    {"function", TOKEN_FUNCTION},
+    {"return", TOKEN_RETURN},
+    {"if", TOKEN_IF},
+    {"else", TOKEN_ELSE},
+    {"while", TOKEN_WHILE},
+    {"for", TOKEN_FOR},
+    {"break", TOKEN_BREAK},
+    {"continue", TOKEN_CONTINUE},
+    {"true", TOKEN_BOOLEAN},
+    {"false", TOKEN_BOOLEAN},
+};
 
 typedef struct {
     token_type_t type;
@@ -103,6 +151,16 @@ typedef struct {
  * 
  */
 bool is_char_digit(char c);
+
+/**
+ * 
+ * @function is_keyword
+ * @brief Check if a string is a keyword
+ * @param {const char*} string - String
+ * @returns {bool}
+ * 
+ */
+token_type_t type_keyword(const char* string);
 
 /**
  * 
@@ -225,6 +283,16 @@ void lexer_destroy(lexer_t* lexer);
  * 
  */
 void lexer_debug(lexer_t* lexer);
+
+/**
+ * 
+ * @function is_keyword
+ * @brief Check if a string is a keyword
+ * @param {const char*} string - String
+ * @returns {bool}
+ * 
+ */
+bool is_keyword(const char* string);
 
 /**
  * 

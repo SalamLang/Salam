@@ -184,6 +184,36 @@ void token_print(token_t* token)
         case TOKEN_ERROR:
             printf("ERROR\n");
             break;
+        case TOKEN_LAYOUT:
+            printf("LAYOUT\n");
+            break;
+        case TOKEN_IMPORT:
+            printf("IMPORT\n");
+            break;
+        case TOKEN_FUNCTION:
+            printf("FUNCTION\n");
+            break;
+        case TOKEN_RETURN:
+            printf("RETURN\n");
+            break;
+        case TOKEN_IF:
+            printf("IF\n");
+            break;
+        case TOKEN_ELSE:
+            printf("ELSE\n");
+            break;
+        case TOKEN_WHILE:
+            printf("WHILE\n");
+            break;
+        case TOKEN_FOR:
+            printf("FOR\n");
+            break;
+        case TOKEN_BREAK:
+            printf("BREAK\n");
+            break;
+        case TOKEN_CONTINUE:
+            printf("CONTINUE\n");
+            break;
         default:
             printf("UNKNOWN\n");
     }
@@ -278,6 +308,28 @@ char* token_name(token_t* token)
         case TOKEN_SHIFT_RIGHT_ASSIGN:
             return "SHIFT_RIGHT_ASSIGN";
 
+        // Keywords
+        case TOKEN_LAYOUT:
+            return "LAYOUT";
+        case TOKEN_IMPORT:
+            return "IMPORT";
+        case TOKEN_FUNCTION:
+            return "FUNCTION";
+        case TOKEN_RETURN:
+            return "RETURN";
+        case TOKEN_IF:
+            return "IF";
+        case TOKEN_ELSE:
+            return "ELSE";
+        case TOKEN_WHILE:
+            return "WHILE";
+        case TOKEN_FOR:
+            return "FOR";
+        case TOKEN_BREAK:
+            return "BREAK";
+        case TOKEN_CONTINUE:
+            return "CONTINUE";
+            
         case TOKEN_ERROR:
             return "ERROR";
     }
@@ -425,6 +477,42 @@ void lexer_lex_number(lexer_t* lexer)
 
 /**
  * 
+ * @function is_keyword
+ * @brief Check if a string is a keyword
+ * @param {const char*} string - String
+ * @returns {bool}
+ * 
+ */
+bool is_keyword(const char* string)
+{
+    for (size_t i = 0; i < sizeof(keywords_name) / sizeof(keywords_name[0]); i++) {
+        if (strcmp(string, keywords_name[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * 
+ * @function is_keyword
+ * @brief Check if a string is a keyword
+ * @param {const char*} string - String
+ * @returns {bool}
+ * 
+ */
+token_type_t type_keyword(const char* string)
+{
+    for (size_t i = 0; i < sizeof(keywords_name) / sizeof(keywords_name[0]); i++) {
+        if (strcmp(string, keywords_name[i]) == 0) {
+            return i + 1;
+        }
+    }
+    return TOKEN_IDENTIFIER;
+}
+
+/**
+ * 
  * @function lexer_lex_identifier
  * @brief Lexing an identifier
  * @param {lexer_t*} lexer - Lexer state
@@ -445,7 +533,9 @@ void lexer_lex_identifier(lexer_t* lexer)
 
     buffer[index] = '\0';
 
-    token_t* token = token_create(TOKEN_IDENTIFIER, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+    token_type_t type = type_keyword(buffer);
+
+    token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
     token->data.string = buffer;
     LEXER_PUSH_TOKEN(token);
 }

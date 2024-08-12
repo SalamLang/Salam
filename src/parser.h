@@ -59,25 +59,54 @@ void unknown(lexer_t* lexer);
 
 /**
  * 
+ * @function ast_layout_create
+ * @brief Create a new AST layout node
+ * @returns {ast_layout_t*} - AST layout node
+ * 
+ */
+ast_layout_block_t* ast_layout_block_create();
+
+/**
+ * 
  * @function parser_parse_block
  * @brief Parse the block
  * @param {lexer_t*} lexer - Lexer
- * @param {ast_node_type_t} block_parent_type - Block parent type
- * @returns {ast_node_t*} - AST node
+ * @param {ast_block_type_t} type - Block type
+ * @param {ast_type_t} block_parent_type - Block parent type
+ * @returns {ast_block_t*} - AST block node
  * 
  */
-ast_node_t* parser_parse_block(lexer_t* lexer, ast_node_type_t block_parent_type);
+ast_block_t* parser_parse_block(lexer_t* lexer, ast_block_type_t type, ast_type_t block_parent_type);
+
+/**
+ * 
+ * @function ast_block_create
+ * @brief Create a new AST block node
+ * @returns {ast_block_t*} - AST block node
+ * 
+ */
+ast_block_t* ast_block_create();
+
+/**
+ * 
+ * @function ast_layout_node_create
+ * @brief Create a new AST layout node
+ * @param {ast_layout_node_type_t} type - Type of the layout node
+ * @returns {ast_layout_node_t*} - AST layout node
+ * 
+ */
+ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t type);
 
 /**
  * 
  * @function parser_parse_layout_block
  * @brief Parse the block
  * @param {lexer_t*} lexer - Lexer
- * @param {ast_node_type_t} block_parent_type - Block parent type
- * @returns {ast_node_t*} - AST node
+ * @param {ast_type_t} block_parent_type - Block parent type
+ * @returns {ast_layout_block_t*} - AST layout block node
  * 
  */
-ast_node_t* parser_parse_layout_block(lexer_t* lexer, ast_node_type_t block_parent_type);
+ast_layout_block_t* parser_parse_layout_block(lexer_t* lexer, ast_type_t block_parent_type);
 
 /**
  * 

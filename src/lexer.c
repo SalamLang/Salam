@@ -89,6 +89,7 @@ token_t* token_create(token_type_t type, location_t location)
     token->type = type;
     token->location = location;
     token->data_type = TOKEN_ERROR;
+    token->data.string = NULL;
     token->name = cast(char* (*)(token_type_t), token_name);
     token->value = cast(char* (*)(void*), token_value);
     token->print = cast(void (*)(void*), token_print);
@@ -106,7 +107,7 @@ token_t* token_create(token_type_t type, location_t location)
  */
 void token_destroy(token_t* token)
 {
-    if (token->type == TOKEN_IDENTIFIER || token->type == TOKEN_STRING) {
+    if (token->data.string != NULL) {
         memory_free(token->data.string);
     }
 

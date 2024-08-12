@@ -101,13 +101,14 @@ void array_free(array_t* array);
 
 /**
  * 
- * @function array_token_free
- * @brief Free the token array memory
- * @param {array_token_t*} array - Token array
+ * @function array_free_custom
+ * @brief Free the array memory
+ * @param {array_t*} array - Array
+ * @param {void (*free_fn)(void*)} free_fn - Custom free function
  * @returns {void}
  * 
  */
-void array_token_free(array_token_t* array);
+void array_free_custom(array_t* array, void (*free_fn)(void*));
 
 /**
  * 

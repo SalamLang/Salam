@@ -1,3 +1,3 @@
 layout {
-    123
+    name: "Max"
 }

@@ -108,10 +108,10 @@ token_t* token_create(token_type_t type, location_t location)
 void token_destroy(token_t* token)
 {
     if (token->data.string != NULL) {
-        memory_free(token->data.string);
+        memory_destroy(token->data.string);
     }
 
-    memory_free(token);
+    memory_destroy(token);
 }
 
 /**
@@ -401,8 +401,8 @@ lexer_t* lexer_create(const char* file_path, char* source)
  */
 void lexer_destroy(lexer_t* lexer)
 {
-    array_token_free(lexer->tokens);
-    memory_free(lexer);
+    array_destroy_custom(lexer->tokens, cast(void (*)(void*), token_destroy));
+    memory_destroy(lexer);
 }
 
 /**

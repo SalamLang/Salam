@@ -30,13 +30,13 @@ void* memory_callocate(size_t count, size_t size);
 
 /**
  * 
- * @function memory_free
+ * @function memory_destroy
  * @brief Free memory and panic if pointer is NULL
  * @param {void*} ptr
  * @returns {void}
  * 
  */
-void memory_free(void* ptr);
+void memory_destroy(void* ptr);
 
 // memory related functions
 /**

@@ -73,7 +73,7 @@ typedef struct ast_layout_block_t {
 
 typedef struct ast_layout_attribute_t {
     char* key;
-    array_t values;
+    array_t* values;
     bool isStyle;
 
     void (*free)(void* node);
@@ -132,23 +132,23 @@ ast_node_t* ast_node_create(ast_type_t type, location_t location);
 
 /**
  * 
- * @function ast_layout_node_free
+ * @function ast_layout_node_destroy
  * @brief Free the AST node layout attribute
  * @params {ast_layout_node_t*} value - AST layout node
  * @returns {void}
  * 
  */
-void ast_layout_node_free(ast_layout_node_t* value);
+void ast_layout_node_destroy(ast_layout_node_t* value);
 
 /**
  * 
- * @function ast_layout_node_free
+ * @function ast_layout_node_destroy
  * @brief Free the AST node layout attribute
  * @params {ast_layout_node_t*} value - AST layout node
  * @returns {void}
  * 
  */
-void ast_layout_node_free(ast_layout_node_t* value);
+void ast_layout_node_destroy(ast_layout_node_t* value);
 
 /**
  * 
@@ -167,7 +167,7 @@ ast_layout_t* ast_layout_create();
  * @returns {void}
  * 
  */
-void ast_layout_free(ast_layout_t* value);
+void ast_layout_destroy(ast_layout_t* value);
 
 /**
  * 
@@ -181,13 +181,13 @@ void ast_print(ast_node_t* node);
 
 /**
  * 
- * @function ast_node_free
+ * @function ast_node_destroy
  * @brief Free the AST node
  * @param {ast_node_t*} value - AST node
  * @returns {void}
  * 
  */
-void ast_node_free(ast_node_t* value);
+void ast_node_destroy(ast_node_t* value);
 
 /**
  * 
@@ -210,13 +210,13 @@ void ast_debug(ast_t* ast);
 
 /**
  * 
- * @function ast_free
+ * @function ast_destroy
  * @brief Free the AST
  * @param {ast_t*} ast - AST
  * @returns {void}
  * 
  */
-void ast_free(ast_t* ast);
+void ast_destroy(ast_t* ast);
 
 /**
  * 
@@ -229,13 +229,13 @@ ast_layout_block_t* ast_layout_block_create();
 
 /**
  * 
- * @function ast_layout_block_free
+ * @function ast_layout_block_destroy
  * @brief Free the AST node layout block
  * @params {ast_layout_block_t*} value - AST layout block
  * @returns {void}
  * 
  */
-void ast_layout_block_free(ast_layout_block_t* value);
+void ast_layout_block_destroy(ast_layout_block_t* value);
 
 /**
  * 
@@ -246,5 +246,15 @@ void ast_layout_block_free(ast_layout_block_t* value);
  * 
  */
 ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t type);
+
+/**
+ * 
+ * @function ast_layout_attribute_create
+ * @brief Create a new AST node layout attribute
+ * @params {ast_layout_attribute_t*} value - AST layout attribute
+ * @returns {void}
+ * 
+ */
+void ast_layout_attribute_destroy(ast_layout_attribute_t* value);
 
 #endif

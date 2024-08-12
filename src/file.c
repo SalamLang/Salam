@@ -110,7 +110,7 @@ bool file_copy(const char* source, const char* destination)
 
     content = file_reads(source, &size);
     file_writes(destination, content);
-    memory_free(content);
+    memory_destroy(content);
 
     return true;
 }

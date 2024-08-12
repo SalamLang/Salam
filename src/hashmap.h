@@ -93,23 +93,23 @@ void* hashmap_remove(hashmap_t *map, const char *key);
 
 /**
  * 
- * @function hashmap_free
+ * @function hashmap_destroy
  * @brief Free the hashmap memory
  * @param {hashmap_t*} map
  * @returns {void}
  * 
  */
-void hashmap_free(hashmap_t *map);
+void hashmap_destroy(hashmap_t *map);
 
 /**
  * 
- * @function hashmap_free
+ * @function hashmap_destroy
  * @brief Free the hashmap memory
  * @param {hashmap_t*} map
  * @returns {void}
  * 
  */
-void hashmap_free_custom(hashmap_t *map, void (*free_fn)(void*));
+void hashmap_destroy_custom(hashmap_t *map, void (*free_fn)(void*));
 
 /**
  * 

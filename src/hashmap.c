@@ -205,7 +205,7 @@ void* hashmap_remove(hashmap_t *map, const char *key)
  */
 void hashmap_destroy(hashmap_t *map)
 {
-	hashmap_destroy_custom(map, free);
+	return hashmap_destroy_custom(map, free);
 }
 
 /**
@@ -219,29 +219,32 @@ void hashmap_destroy(hashmap_t *map)
  */
 void hashmap_destroy_custom(hashmap_t *map, void (*free_fn)(void*))
 {
-	if (map == NULL) return;
+	printf("hashmap_destroy_custom...\n");
+	if (map != NULL) {
+		if (map->data != NULL) {
+			for (size_t i = 0; i < map->size; i++) {
+				hashmap_entry_t *entry = map->data[i];
 
-	if (map->data != NULL) {
-		for (size_t i = 0; i < map->size; i++) {
-			hashmap_entry_t *entry = map->data[i];
+				while (entry) {
+					hashmap_entry_t *next = entry->next;
 
-			while (entry) {
-				hashmap_entry_t *next = entry->next;
+					memory_destroy(entry->key);
 
-				memory_destroy(entry->key);
+					printf("hashmap_destroy_custom 2222...\n");
+					free_fn(entry->value);
+					printf("hashmap_destroy_custom 3333...\n");
 
-				free_fn(entry->value);
+					memory_destroy(entry);
 
-				memory_destroy(entry);
-
-				entry = next;
+					entry = next;
+				}
 			}
+
+			memory_destroy(map->data);
 		}
 
-		memory_destroy(map->data);
+		memory_destroy(map);
 	}
-
-	memory_destroy(map);
 }
 
 /**

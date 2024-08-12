@@ -108,7 +108,12 @@ token_t* token_create(token_type_t type, location_t location)
 token_t* token_copy(token_t* token)
 {
     token_t* copy = token_create(token->type, token->location);
-    copy->data.string = strdup(token->data.string);
+
+    if (token->data.string == NULL) {
+        copy->data.string = NULL;
+    } else {
+        copy->data.string = strdup(token->data.string);
+    }
 
     return copy;
 }
@@ -419,6 +424,7 @@ lexer_t* lexer_create(const char* file_path, char* source)
  */
 void lexer_destroy(lexer_t* lexer)
 {
+    printf("lexer_destroy\n");
     if (lexer != NULL) {
         array_destroy_custom(lexer->tokens, cast(void (*)(void*), token_destroy));
         
@@ -482,7 +488,9 @@ void lexer_lex_number(lexer_t* lexer)
         buffer[index] = '\0';
 
         token_t* token = token_create(TOKEN_NUMBER_FLOAT, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+        token->data_type = TOKEN_NUMBER_FLOAT;
         token->data.number_float = atof(buffer);
+        token->data.string = NULL;
         LEXER_PUSH_TOKEN(token);
 
         if (buffer != NULL) {
@@ -492,7 +500,9 @@ void lexer_lex_number(lexer_t* lexer)
         buffer[index] = '\0';
 
         token_t* token = token_create(TOKEN_NUMBER_INT, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+        token->data_type = TOKEN_NUMBER_INT;
         token->data.number_int = atoi(buffer);
+        token->data.string = NULL;
         LEXER_PUSH_TOKEN(token);
 
         if (buffer != NULL) {

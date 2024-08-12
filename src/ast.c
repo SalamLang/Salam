@@ -117,7 +117,7 @@ void ast_layout_attribute_destroy(ast_layout_attribute_t* value)
 			memory_destroy(value->key);
 		}
 
-		array_destroy_custom(value->values, cast(void (*)(void*), token_destroy));
+		// array_destroy_custom(value->values, cast(void (*)(void*), memory_destroy));
 		
 		memory_destroy(value);
 	}
@@ -133,12 +133,18 @@ void ast_layout_attribute_destroy(ast_layout_attribute_t* value)
  */
 void ast_layout_block_destroy(ast_layout_block_t* value)
 {
+	printf("ast_layout_block_destroy\n");
 	if (value != NULL) {
+		printf("1\n");
 		hashmap_destroy_custom(cast(hashmap_t*, value->attributes), cast(void (*)(void*), ast_layout_attribute_destroy));
+
+		printf("2\n");
 		hashmap_destroy_custom(cast(hashmap_t*, value->styles), cast(void (*)(void*), ast_layout_attribute_destroy));
 
+		printf("3\n");
 		array_destroy_custom(value->children, cast(void (*)(void*), ast_node_destroy));
 
+		printf("4\n");
 		memory_destroy(value);
 	}
 }

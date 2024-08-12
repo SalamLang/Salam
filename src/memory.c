@@ -51,7 +51,7 @@ void memory_destroy(void* ptr)
         panic("Failed to free memory");
     }
 
-    memory_destroy(ptr);
+    free(ptr);
     ptr = NULL;
 }
 
@@ -147,10 +147,14 @@ void memory_set(void* ptr, int value, size_t size)
 void memory_swap(void* ptr1, void* ptr2, size_t size)
 {
     void* temp = memory_allocate(size);
-    memory_copy(temp, ptr1, size);
-    memory_copy(ptr1, ptr2, size);
-    memory_copy(ptr2, temp, size);
-    memory_destroy(temp);
+
+    if (temp != NULL) {
+        memory_copy(temp, ptr1, size);
+        memory_copy(ptr1, ptr2, size);
+        memory_copy(ptr2, temp, size);
+        
+        memory_destroy(temp);
+    }
 }
 
 /**

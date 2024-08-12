@@ -99,6 +99,22 @@ token_t* token_create(token_type_t type, location_t location)
 
 /**
  * 
+ * @function token_copy
+ * @brief Copying a token
+ * @params {token_t*} token - Token
+ * @returns {token_t*}
+ * 
+ */
+token_t* token_copy(token_t* token)
+{
+    token_t* copy = token_create(token->type, token->location);
+    copy->data.string = strdup(token->data.string);
+
+    return copy;
+}
+
+/**
+ * 
  * @function token_destroy
  * @brief Destroying a token
  * @params {token_t*} token - Token
@@ -403,8 +419,11 @@ lexer_t* lexer_create(const char* file_path, char* source)
  */
 void lexer_destroy(lexer_t* lexer)
 {
-    array_destroy_custom(lexer->tokens, cast(void (*)(void*), token_destroy));
-    memory_destroy(lexer);
+    if (lexer != NULL) {
+        array_destroy_custom(lexer->tokens, cast(void (*)(void*), token_destroy));
+        
+        memory_destroy(lexer);
+    }
 }
 
 /**
@@ -466,8 +485,9 @@ void lexer_lex_number(lexer_t* lexer)
         token->data.number_float = atof(buffer);
         LEXER_PUSH_TOKEN(token);
 
-        memory_destroy(buffer);
-        buffer = NULL;
+        if (buffer != NULL) {
+            memory_destroy(buffer);
+        }
     } else {
         buffer[index] = '\0';
 
@@ -475,8 +495,9 @@ void lexer_lex_number(lexer_t* lexer)
         token->data.number_int = atoi(buffer);
         LEXER_PUSH_TOKEN(token);
 
-        memory_destroy(buffer);
-        buffer = NULL;
+        if (buffer != NULL) {
+            memory_destroy(buffer);
+        }
     }
 }
 

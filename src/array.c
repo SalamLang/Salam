@@ -125,13 +125,15 @@ void* array_get(array_t* array, size_t index)
  */
 void array_destroy(array_t* array)
 {
-    memory_destroy(array->data);
+    if (array != NULL) {
+        memory_destroy(array->data);
 
-    array->size = 0;
-    array->capacity = 0;
-    array->element_size = 0;
+        array->size = 0;
+        array->capacity = 0;
+        array->element_size = 0;
 
-    memory_destroy(array);
+        memory_destroy(array);
+    }
 }
 
 /**
@@ -145,19 +147,25 @@ void array_destroy(array_t* array)
  */
 void array_destroy_custom(array_t* array, void (*free_fn)(void*))
 {
-    if (free_fn != NULL) {
-        for (size_t i = 0; i < array->size; i++) {
-            free_fn(array->data[i]);
+    if (array != NULL) {
+        if (array->data != NULL) {
+            if (free_fn != NULL) {
+                for (size_t i = 0; i < array->size; i++) {
+                    if (array->data[i] != NULL) {
+                        free_fn(array->data[i]);
+                    }
+                }
+            }
+            
+            memory_destroy(array->data);
         }
+
+        array->size = 0;
+        array->capacity = 0;
+        array->element_size = 0;
+
+        memory_destroy(array);
     }
-
-    memory_destroy(array->data);
-
-    array->size = 0;
-    array->capacity = 0;
-    array->element_size = 0;
-
-    memory_destroy(array);
 }
 
 /**

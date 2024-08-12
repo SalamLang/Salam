@@ -34,11 +34,19 @@ void doargs(int argc, char** argv)
     
     ast_debug(ast);
 
+    printf("end ast debug\n");
+
     ast_destroy(ast);
+
+    printf("end ast destroy\n");
 
     lexer_destroy(lexer);
 
+    printf("end lexer destroy\n");
+
     memory_destroy(content);
+
+    printf("end content destroy\n");
 }
 
 int main(int argc, char** argv)

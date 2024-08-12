@@ -39,13 +39,13 @@ void* memory_callocate(size_t count, size_t size)
 
 /**
  * 
- * @function memory_free
+ * @function memory_destroy
  * @brief Free memory and panic if pointer is NULL
  * @param {void*} ptr
  * @returns {void}
  * 
  */
-void memory_free(void* ptr)
+void memory_destroy(void* ptr)
 {
     if (ptr == NULL) {
         panic("Failed to free memory");
@@ -149,7 +149,7 @@ void memory_swap(void* ptr1, void* ptr2, size_t size)
     memory_copy(temp, ptr1, size);
     memory_copy(ptr1, ptr2, size);
     memory_copy(ptr2, temp, size);
-    memory_free(temp);
+    memory_destroy(temp);
 }
 
 /**

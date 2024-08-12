@@ -182,27 +182,27 @@ void* hashmap_remove(hashmap_t *map, const char *key)
 
 /**
  * 
- * @function hashmap_free
+ * @function hashmap_destroy
  * @brief Free the hashmap memory
  * @param {hashmap_t*} map
  * @returns {void}
  * 
  */
-void hashmap_free(hashmap_t *map)
+void hashmap_destroy(hashmap_t *map)
 {
-    hashmap_free_custom(map, free);
+    hashmap_destroy_custom(map, free);
 }
 
 /**
  * 
- * @function hashmap_free_custom
+ * @function hashmap_destroy_custom
  * @brief Free the hashmap memory
  * @param {hashmap_t*} map
  * @param {void (*free_fn)(void*)} free_fn
  * @returns {void}
  * 
  */
-void hashmap_free_custom(hashmap_t *map, void (*free_fn)(void*))
+void hashmap_destroy_custom(hashmap_t *map, void (*free_fn)(void*))
 {
     if (map == NULL) return;
 

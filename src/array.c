@@ -114,15 +114,15 @@ void* array_get(array_t* array, size_t index)
 
 /**
  * 
- * @function array_free
+ * @function array_destroy
  * @brief Free the array memory
  * @param {array_t*} array - Array
  * @returns {void}
  * 
  */
-void array_free(array_t* array)
+void array_destroy(array_t* array)
 {
-    memory_free(array->data);
+    memory_destroy(array->data);
     array->data = NULL;
     array->size = 0;
     array->capacity = 0;
@@ -132,38 +132,25 @@ void array_free(array_t* array)
 
 /**
  * 
- * @function array_free_custom
+ * @function array_destroy_custom
  * @brief Free the array memory
  * @param {array_t*} array - Array
  * @param {void (*free_fn)(void*)} free_fn - Custom free function
  * @returns {void}
  * 
  */
-void array_free_custom(array_t* array, void (*free_fn)(void*))
+void array_destroy_custom(array_t* array, void (*free_fn)(void*))
 {
     for (size_t i = 0; i < array->size; i++) {
         free_fn(array->data[i]);
     }
 
-    memory_free(array->data);
+    memory_destroy(array->data);
     array->data = NULL;
     array->size = 0;
     array->capacity = 0;
     array->element_size = 0;
     free(array);
-}
-
-/**
- * 
- * @function array_token_free
- * @brief Free the token array memory
- * @param {array_token_t*} array - Token array
- * @returns {void}
- * 
- */
-void array_token_free(array_token_t* array)
-{
-    array_free_custom(array, token_destroy);
 }
 
 /**
@@ -187,15 +174,15 @@ void array_token_print(array_token_t* array)
 
 /**
  * 
- * @function array_node_free
+ * @function array_node_destroy
  * @brief Free the node array memory
  * @param {array_t*} array - Node array
  * @returns {void}
  * 
  */
-void array_node_free(array_t* array)
+void array_node_destroy(array_t* array)
 {
-    array_free_custom(array, ast_node_free);
+    array_destroy_custom(array, cast(void (*)(void*), ast_node_destroy));
 }
 
 /**

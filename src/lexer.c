@@ -334,6 +334,7 @@ lexer_t* lexer_create(const char* file_path, char* source)
     lexer->line = 1;
     lexer->column = 1;
     lexer->tokens = array_create(sizeof(token_t*), 10);
+    lexer->token_index = 0;
     return lexer;
 }
 

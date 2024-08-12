@@ -132,10 +132,10 @@ void array_node_free(array_t* array);
  * 
  * @function array_node_print
  * @brief Print the node array
- * @param {array_t*} array - Node array
+ * @param {array_node_t*} array - Node array
  * @returns {void}
  * 
  */
-void array_node_print(array_t* array);
+void array_node_print(array_node_t* array);
 
 #endif

@@ -62,7 +62,7 @@ void unknown(lexer_t* lexer)
  */
 void unknown_scope(lexer_t* lexer, char* scope)
 {
-	printf("Unknown token type %s in scope %s at line %zu, column %zu\n", token_name(PARSER_CURRENT->type), scope, PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
+	error(2, "Unknown token type %s in scope %s at line %zu, column %zu\n", token_name(PARSER_CURRENT->type), scope, PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
 }
 
 /**
@@ -195,13 +195,12 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer, ast_ty
 			PARSER_NEXT; // Eating the identifier token
 			PARSER_NEXT; // Eating the colon token
 			PARSER_NEXT; // Eating the value token
-			
-			array_push(values, token_copy(value));
+
+			token_t* value_copy = token_copy(value);
+			array_push(values, value_copy);
 
 			ast_layout_attribute_t* attribute = ast_layout_attribute_create(token->data.string, values);
 			hashmap_put(cast(hashmap_t*, block->attributes), token->data.string, attribute);
-			
-			printf("Put %s attribute\n", token->data.string);
 		}
 		else {
 			unknown_scope(lexer, "layout block");

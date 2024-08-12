@@ -1,10 +1,15 @@
 #include "parser.h"
 
-#define PARSER_CURRENT ((token_t*)lexer->tokens->data[lexer->token_index])
 #define PARSER_NEXT lexer->token_index++
 #define PARSER_PREV lexer->token_index--
+
+#define PARSER_CURRENT ((token_t*)lexer->tokens->data[lexer->token_index])
 #define PARSER_CURRENT_NEXT ((token_t*)lexer->tokens->data[lexer->token_index + 1])
 #define PARSER_CURRENT_PREV ((token_t*)lexer->tokens->data[lexer->token_index + 1])
+
+// #define PARSER_CURRENT ((token_t*)array_get(lexer->tokens, lexer->token_index))
+// #define PARSER_CURRENT_NEXT ((token_t*)array_get(lexer->tokens, lexer->token_index + 1))
+// #define PARSER_CURRENT_PREV ((token_t*)array_get(lexer->tokens, lexer->token_index - 1))
 
 /**
  * 
@@ -114,6 +119,15 @@ bool match_prev(lexer_t* lexer, token_type_t token_type)
 	return PARSER_CURRENT_PREV->type == token_type;
 }
 
+token_t* parser_parse_value(lexer_t* lexer)
+{
+	token_t* token = PARSER_CURRENT;
+
+	PARSER_NEXT;
+
+	return token;
+}
+
 /**
  * 
  * @function parser_parse_block
@@ -189,16 +203,28 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer, ast_ty
 		token_t* token = PARSER_CURRENT;
 
 		if (match(lexer, TOKEN_IDENTIFIER) && match_next(lexer, TOKEN_COLON)) {
-			array_t* values = array_create(1, sizeof(token_t*));
+			array_t* values = array_create(sizeof(token_t*), 1);
     		values->destroy = cast(void (*)(void*), array_token_destroy);
-			token_t* value = PARSER_CURRENT;
 
 			PARSER_NEXT; // Eating the identifier token
 			PARSER_NEXT; // Eating the colon token
-			PARSER_NEXT; // Eating the value token
+
+			token_t* value = parser_parse_value(lexer);
 
 			token_t* value_copy = token_copy(value);
+
 			array_push(values, value_copy);
+
+			if (match(lexer, TOKEN_COMMA)) {
+				while (match(lexer, TOKEN_COMMA)) {
+					PARSER_NEXT; // Eating the comma token
+
+					token_t* new_value = parser_parse_value(lexer);
+
+					token_t* new_value_copy = token_copy(new_value);
+					array_push(values, new_value_copy);
+				}
+			}
 
 			ast_layout_attribute_t* attribute = ast_layout_attribute_create(token->data.string, values);
 

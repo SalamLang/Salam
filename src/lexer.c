@@ -89,7 +89,6 @@ token_t* token_create(token_type_t type, location_t location)
     token->type = type;
     token->location = location;
     token->data_type = TOKEN_ERROR;
-    token->data.string = NULL;
     token->name = cast(char* (*)(token_type_t), token_name);
     token->value = cast(char* (*)(void*), token_value);
     token->print = cast(void (*)(void*), token_print);
@@ -108,11 +107,30 @@ token_t* token_create(token_type_t type, location_t location)
 token_t* token_copy(token_t* token)
 {
     token_t* copy = token_create(token->type, token->location);
+    copy->data_type = token->data_type;
 
-    if (token->data.string == NULL) {
-        copy->data.string = NULL;
-    } else {
-        copy->data.string = strdup(token->data.string);
+    switch (token->data_type) {
+        case TOKEN_NUMBER_INT:
+            copy->data.number_int = token->data.number_int;
+            break;
+        
+        case TOKEN_NUMBER_FLOAT:
+            copy->data.number_float = token->data.number_float;
+            break;
+        
+        case TOKEN_STRING:
+        case TOKEN_IDENTIFIER:
+            if (token->data.string != NULL) {
+                copy->data.string = strdup(token->data.string);
+            }
+            break;
+        
+        case TOKEN_BOOLEAN:
+            copy->data.boolean = token->data.boolean;
+            break;
+        
+        default:
+            break;
     }
 
     return copy;
@@ -129,8 +147,10 @@ token_t* token_copy(token_t* token)
 void token_destroy(token_t* token)
 {
     if (token != NULL) {
-        if (token->data.string != NULL) {
-            memory_destroy(token->data.string);
+        if (token->data_type == TOKEN_STRING || token->data_type == TOKEN_IDENTIFIER) {
+            if (token->data.string != NULL) {
+                memory_destroy(token->data.string);
+            }
         }
 
         memory_destroy(token);
@@ -169,7 +189,7 @@ void token_print(token_t* token)
         case TOKEN_LEFT_BRACKET:
         case TOKEN_RIGHT_BRACKET:
         case TOKEN_COLON:
-        case TOKEN_COMMMA:
+        case TOKEN_COMMA:
         case TOKEN_LEFT_PAREN:
         case TOKEN_RIGHT_PAREN:
         case TOKEN_PLUS:
@@ -272,8 +292,8 @@ char* token_name(token_type_t type)
             return "RIGHT_BRACKET";
         case TOKEN_COLON:
             return "COLON";
-        case TOKEN_COMMMA:
-            return "COMMMA";
+        case TOKEN_COMMA:
+            return "COMMA";
         case TOKEN_LEFT_PAREN:
             return "LEFT_PAREN";
         case TOKEN_RIGHT_PAREN:
@@ -382,6 +402,7 @@ char* token_value(token_t* token)
             return buffer;
 
         case TOKEN_STRING:
+        case TOKEN_IDENTIFIER:
             return token->data.string;
 
         case TOKEN_BOOLEAN:
@@ -424,7 +445,6 @@ lexer_t* lexer_create(const char* file_path, char* source)
  */
 void lexer_destroy(lexer_t* lexer)
 {
-    printf("lexer_destroy\n");
     if (lexer != NULL) {
         array_destroy_custom(lexer->tokens, cast(void (*)(void*), token_destroy));
         
@@ -490,7 +510,6 @@ void lexer_lex_number(lexer_t* lexer)
         token_t* token = token_create(TOKEN_NUMBER_FLOAT, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
         token->data_type = TOKEN_NUMBER_FLOAT;
         token->data.number_float = atof(buffer);
-        token->data.string = NULL;
         LEXER_PUSH_TOKEN(token);
 
         if (buffer != NULL) {
@@ -502,7 +521,6 @@ void lexer_lex_number(lexer_t* lexer)
         token_t* token = token_create(TOKEN_NUMBER_INT, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
         token->data_type = TOKEN_NUMBER_INT;
         token->data.number_int = atoi(buffer);
-        token->data.string = NULL;
         LEXER_PUSH_TOKEN(token);
 
         if (buffer != NULL) {
@@ -574,6 +592,7 @@ void lexer_lex_identifier(lexer_t* lexer)
     token_type_t type = type_keyword(buffer);
 
     token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+    token->data_type = TOKEN_IDENTIFIER;
     token->data.string = buffer;
     LEXER_PUSH_TOKEN(token);
 }
@@ -603,6 +622,7 @@ void lexer_lex_string(lexer_t* lexer)
     LEXER_NEXT; // Eating the closing quote
 
     token_t* token = token_create(TOKEN_STRING, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+    token->data_type = TOKEN_STRING;
     token->data.string = buffer;
     LEXER_PUSH_TOKEN(token);
 }

@@ -172,3 +172,20 @@ void memory_reverse(void* ptr, size_t size)
         j--;
     }
 }
+
+/**
+ * 
+ * @function memory_duplicate
+ * @brief Duplicate memory
+ * @param {void*} ptr
+ * @param {size_t} size
+ * @returns {void*}
+ * 
+ */
+void* memory_duplicate(void* ptr, size_t size)
+{
+    void* new_ptr = memory_allocate(size);
+    memory_copy(new_ptr, ptr, size);
+
+    return new_ptr;
+}

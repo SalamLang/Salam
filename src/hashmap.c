@@ -291,3 +291,32 @@ void hashmap_print_custom(hashmap_t* map, void (*print_fn)(void*))
 		}
 	}
 }
+
+/**
+ * 
+ * @function hashmap_print_layout_attribute
+ * @brief Print the hashmap of layout attributes
+ * @params {ast_layout_attribute_t*} map - The hashmap to print
+ * @returns {void}
+ * 
+ */
+void hashmap_print_layout_attribute(hashmap_attribute_t* map)
+{
+	printf("Hashmap length: %zu\n", map->length);
+	if (map->length == 0) {
+		printf("Hashmap is empty\n");
+		return;
+	}
+
+	for (size_t i = 0; i < map->size; i++) {
+		hashmap_entry_t *entry = map->data[i];
+
+		while (entry) {
+			printf("[%zu] Key: %s, Value: ", i, entry->key);
+			ast_layout_attribute_t* layout_attribute = cast(ast_layout_attribute_t*, entry->value);
+			layout_attribute->print(layout_attribute);
+
+			entry = entry->next;
+		}
+	}
+}

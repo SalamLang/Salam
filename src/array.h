@@ -12,6 +12,9 @@ typedef struct {
     size_t size;
     size_t capacity;
     size_t element_size;
+
+    void (*print)(void* node);
+    void (*free)(void* node);
 } array_t;
 
 typedef array_t array_token_t;
@@ -160,5 +163,15 @@ size_t array_size(array_t* array);
  * 
  */
 void array_layout_attribute_print(array_layout_attribute_t* array);
+
+/**
+ * 
+ * @function array_print
+ * @brief Print the array
+ * @param {array_t*} array - Array
+ * @returns {void}
+ * 
+ */
+void array_print(array_t* array);
 
 #endif

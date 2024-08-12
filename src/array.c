@@ -17,6 +17,9 @@ array_t* array_create(size_t element_size, size_t capacity)
     array->capacity = capacity;
     array->element_size = element_size;
     array->data = memory_allocate(array->element_size * array->capacity);
+    
+    array->print = cast(void (*)(void*), array_print);
+    array->free = cast(void (*)(void*), array_destroy);
     return array;
 }
 
@@ -153,6 +156,23 @@ void array_destroy_custom(array_t* array, void (*free_fn)(void*))
     array->capacity = 0;
     array->element_size = 0;
     free(array);
+}
+
+/**
+ * 
+ * @function array_print
+ * @brief Print the array
+ * @param {array_t*} array - Array
+ * @returns {void}
+ * 
+ */
+void array_print(array_t* array)
+{
+    printf("Array: %zu\n", array->size);
+
+    for (size_t i = 0; i < array->size; i++) {
+        printf("\t%p\n", array->data[i]);
+    }
 }
 
 /**

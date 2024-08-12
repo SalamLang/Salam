@@ -135,4 +135,14 @@ void hashmap_print(hashmap_t *map);
  */
 void hashmap_print_custom(hashmap_t* map, void (*print_fn)(void*));
 
+/**
+ * 
+ * @function hashmap_print_layout_attribute
+ * @brief Print the hashmap of layout attributes
+ * @params {ast_layout_attribute_t*} map - The hashmap to print
+ * @returns {void}
+ * 
+ */
+void hashmap_print_layout_attribute(hashmap_attribute_t* map);
+
 #endif

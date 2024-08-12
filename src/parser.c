@@ -22,6 +22,37 @@ bool match(lexer_t* lexer, token_type_t token_type)
 
 /**
  * 
+ * @function expect
+ * @brief Expect the token type
+ * @param {lexer_t*} lexer - Lexer
+ * @param {token_type_t} token_type - Token type
+ * @returns {void}
+ * 
+ */
+void expect(lexer_t* lexer, token_type_t token_type)
+{
+    if (PARSER_CURRENT->type != token_type) {
+        error(2, "Expected token type %s, got %s at line %d, column %d", token_name(token_type), token_name(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
+    }
+
+    PARSER_NEXT;
+}
+
+/**
+ * 
+ * @function unknown
+ * @brief Unknown token type
+ * @param {lexer_t*} lexer - Lexer
+ * @returns {void}
+ * 
+ */
+void unknown(lexer_t* lexer)
+{
+    error(2, "Unexpected token type %s at line %d, column %d", token_name(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
+}
+
+/**
+ * 
  * @function match_next
  * @brief Match the next token type
  * @param {lexer_t*} lexer - Lexer
@@ -48,7 +79,7 @@ bool match_next(lexer_t* lexer, token_type_t token_type)
  */
 bool match_prev(lexer_t* lexer, token_type_t token_type)
 {
-    if (lexer->token_index - 1 < 0) {
+    if (lexer->token_index == 0) {
         return false;
     }
     return PARSER_CURRENT_PREV->type == token_type;
@@ -56,17 +87,90 @@ bool match_prev(lexer_t* lexer, token_type_t token_type)
 
 /**
  * 
- * @function parser_layout
+ * @function parser_parse_block
+ * @brief Parse the block
+ * @param {lexer_t*} lexer - Lexer
+ * @param {ast_node_type_t} block_parent_type - Block parent type
+ * @returns {ast_node_t*} - AST node
+ * 
+ */
+ast_node_t* parser_parse_block(lexer_t* lexer, ast_node_type_t block_parent_type)
+{
+    ast_node_t* node = ast_node_create(AST_NODE_TYPE_BLOCK, PARSER_CURRENT->location);
+
+    expect(lexer, TOKEN_LEFT_BRACE);
+
+    while (PARSER_CURRENT->type != TOKEN_RIGHT_BRACE) {
+        ast_node_t* child = ast_node_create(AST_NODE_TYPE_ERROR, PARSER_CURRENT->location);
+
+        if (match(lexer, TOKEN_LAYOUT)) {
+            child = parser_parse_layout(lexer);
+        }
+        else {
+            unknown(lexer);
+        }
+
+        if (block_parent_type == AST_NODE_TYPE_LAYOUT) {
+            array_push(node->children, child);
+        }
+        else {
+            array_push(node->children, child);
+        }
+    }
+
+    expect(lexer, TOKEN_RIGHT_BRACE);
+
+    return node;
+}
+
+/**
+ * 
+ * @function parser_parse_layout_block
+ * @brief Parse the block
+ * @param {lexer_t*} lexer - Lexer
+ * @param {ast_node_type_t} block_parent_type - Block parent type
+ * @returns {ast_node_t*} - AST node
+ * 
+ */
+ast_node_t* parser_parse_layout_block(lexer_t* lexer, ast_node_type_t block_parent_type)
+{
+    ast_node_t* node = ast_node_create(AST_NODE_TYPE_LAYOUT_BLOCK, PARSER_CURRENT->location);
+
+    expect(lexer, TOKEN_LEFT_BRACE);
+
+    while (PARSER_CURRENT->type != TOKEN_RIGHT_BRACE) {
+        ast_node_t* child = ast_node_create(AST_NODE_TYPE_ERROR, PARSER_CURRENT->location);
+
+        if (match(lexer, TOKEN_IDENTIFIER)) {
+            
+    }
+
+    expect(lexer, TOKEN_RIGHT_BRACE);
+
+    return node;
+}
+
+/**
+ * 
+ * @function parser_parse_layout
  * @brief Parse the layout
  * @param {lexer_t*} lexer - Lexer
  * @returns {ast_node_t*} - AST node
  * 
  */
-ast_node_t* parser_layout(lexer_t* lexer)
+ast_node_t* parser_parse_layout(lexer_t* lexer)
 {
-    ast_node_t* node = ast_node_create(AST_NODE_TYPE_ERROR, PARSER_CURRENT->location);
+    PARSER_NEXT; // Eat the layout token
 
-    PARSER_NEXT;
+    ast_node_t* node = ast_node_create(AST_NODE_TYPE_LAYOUT, PARSER_CURRENT->location);
+
+    if (match(lexer, TOKEN_LEFT_BRACE)) {
+        node->layout_block = cast(struct ast_node_t*, parser_parse_layout_block(lexer, node->type));
+    }
+    else {
+        unknown(lexer);
+    }
+
 
     return node;
 }
@@ -82,7 +186,10 @@ ast_node_t* parser_layout(lexer_t* lexer)
 ast_node_t* parser_parse_node(lexer_t* lexer)
 {
     if (match(lexer, TOKEN_LAYOUT)) {
-        return parser_layout(lexer);
+        return parser_parse_layout(lexer);
+    }
+    else {
+        unknown(lexer);
     }
 
     return NULL;
@@ -101,6 +208,8 @@ ast_t* parser_parse(lexer_t* lexer)
     ast_t* ast = ast_create();
 
     while (lexer->token_index < lexer->tokens->size) {
+        printf("Token: %s\n", token_name(PARSER_CURRENT->type));
+
         ast_node_t* node = parser_parse_node(lexer);
         array_push(ast->layout, node);
     }

@@ -14,6 +14,9 @@ ast_node_t* ast_node_create(ast_node_type_t type, location_t location)
     ast_node_t* node = memory_allocate(sizeof(ast_node_t));
     node->type = type;
     node->location = location;
+    node->block = NULL;
+    node->layout_block = NULL;
+    node->children = array_create(sizeof(ast_node_t*), 16);
     node->print = cast(void (*)(void*), ast_node_print);
     node->free = cast(void (*)(void*), ast_node_free);
     return node;
@@ -36,14 +39,29 @@ void ast_node_print(ast_node_t* node)
         case AST_NODE_TYPE_FUNCTION_NODE:
             printf("Function Node\n");
             break;
+        case AST_NODE_TYPE_FUNCTION_ERROR:
+            printf("Function Error\n");
+            break;
+        case AST_NODE_TYPE_BLOCK:
+            printf("Block\n");
+            break;
         case AST_NODE_TYPE_NODE:
             printf("Node\n");
             break;
         case AST_NODE_TYPE_IMPORT:
             printf("Import\n");
             break;
+        case AST_NODE_TYPE_LAYOUT:
+            printf("Layout\n");
+            break;
+        case AST_NODE_TYPE_LAYOUT_BLOCK:
+            printf("Layout Block\n");
+            break;
         case AST_NODE_TYPE_LAYOUT_NODE:
             printf("Layout Node\n");
+            break;
+        case AST_NODE_TYPE_LAYOUT_ATTRIBUTE:
+            printf("Layout Attribute\n");
             break;
         case AST_NODE_TYPE_ERROR:
             printf("Error\n");

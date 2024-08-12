@@ -89,7 +89,7 @@ token_t* token_create(token_type_t type, location_t location)
     token->type = type;
     token->location = location;
     token->data_type = TOKEN_ERROR;
-    token->name = cast(char* (*)(void*), token_name);
+    token->name = cast(char* (*)(token_type_t), token_name);
     token->value = cast(char* (*)(void*), token_value);
     token->print = cast(void (*)(void*), token_print);
     token->destroy = cast(void (*)(void*), token_destroy);
@@ -223,13 +223,13 @@ void token_print(token_t* token)
  * 
  * @function token_name
  * @brief Get the name of a token
- * @param {token_t*} Token
+ * @param {token_type_t} Token type
  * @returns {char*}
  * 
  */
-char* token_name(token_t* token)
+char* token_name(token_type_t type)
 {
-    switch (token->type) {
+    switch (type) {
         case TOKEN_EOF:
             return "EOF";
         case TOKEN_IDENTIFIER:
@@ -329,7 +329,7 @@ char* token_name(token_t* token)
             return "BREAK";
         case TOKEN_CONTINUE:
             return "CONTINUE";
-            
+
         case TOKEN_ERROR:
             return "ERROR";
     }
@@ -485,11 +485,12 @@ void lexer_lex_number(lexer_t* lexer)
  */
 bool is_keyword(const char* string)
 {
-    for (size_t i = 0; i < sizeof(keywords_name) / sizeof(keywords_name[0]); i++) {
-        if (strcmp(string, keywords_name[i]) == 0) {
+    for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
+        if (strcmp(string, keywords[i].name) == 0) {
             return true;
         }
     }
+
     return false;
 }
 
@@ -503,11 +504,12 @@ bool is_keyword(const char* string)
  */
 token_type_t type_keyword(const char* string)
 {
-    for (size_t i = 0; i < sizeof(keywords_name) / sizeof(keywords_name[0]); i++) {
-        if (strcmp(string, keywords_name[i]) == 0) {
-            return i + 1;
+    for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
+        if (strcmp(string, keywords[i].name) == 0) {
+            return keywords[i].type;
         }
     }
+
     return TOKEN_IDENTIFIER;
 }
 

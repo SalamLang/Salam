@@ -53,6 +53,21 @@ void unknown(lexer_t* lexer)
 
 /**
  * 
+ * @function ast_block_create
+ * @brief Create a new AST block node
+ * @returns {ast_block_t*} - AST block node
+ * 
+ */
+ast_block_t* ast_block_create()
+{
+    ast_block_t* block = malloc(sizeof(ast_block_t));
+    block->children = array_create(sizeof(ast_node_t*), 4);
+
+    return block;
+}
+
+/**
+ * 
  * @function match_next
  * @brief Match the next token type
  * @param {lexer_t*} lexer - Lexer
@@ -90,14 +105,16 @@ bool match_prev(lexer_t* lexer, token_type_t token_type)
  * @function parser_parse_block
  * @brief Parse the block
  * @param {lexer_t*} lexer - Lexer
- * @param {ast_node_type_t} block_parent_type - Block parent type
- * @returns {ast_node_t*} - AST node
+ * @param {ast_block_type_t} type - Block type
+ * @param {ast_type_t} block_parent_type - Block parent type
+ * @returns {ast_block_t*} - AST block node
  * 
  */
-ast_node_t* parser_parse_block(lexer_t* lexer, ast_node_type_t block_parent_type)
+ast_block_t* parser_parse_block(lexer_t* lexer, ast_block_type_t type, ast_type_t block_parent_type)
 {
-    ast_node_t* node = ast_node_create(AST_NODE_TYPE_BLOCK, PARSER_CURRENT->location);
-    // node->block_parent_type = block_parent_type;
+    ast_block_t* block = ast_block_create();
+    block->type = type;
+    block->parent_type = block_parent_type;
 
     expect(lexer, TOKEN_LEFT_BRACE);
 
@@ -121,6 +138,21 @@ ast_node_t* parser_parse_block(lexer_t* lexer, ast_node_type_t block_parent_type
 
     expect(lexer, TOKEN_RIGHT_BRACE);
 
+    return block;
+}
+
+/**
+ * 
+ * @function ast_layout_create
+ * @brief Create a new AST layout node
+ * @params {ast_layout_block_t*} block - Layout block
+ * @returns {ast_layout_t*} - AST layout node
+ * 
+ */
+ast_layout_node_t* parser_parse_layout_node()
+{
+    ast_layout_node_t* node = ast_layout_node_create(AST_NODE_LAYOUT_NODE_TYPE_DIV);
+
     return node;
 }
 
@@ -129,28 +161,26 @@ ast_node_t* parser_parse_block(lexer_t* lexer, ast_node_type_t block_parent_type
  * @function parser_parse_layout_block
  * @brief Parse the block
  * @param {lexer_t*} lexer - Lexer
- * @param {ast_node_type_t} block_parent_type - Block parent type
- * @returns {ast_node_t*} - AST node
+ * @param {ast_type_t} block_parent_type - Block parent type
+ * @returns {ast_layout_block_t*} - AST layout block node
  * 
  */
-ast_node_t* parser_parse_layout_block(lexer_t* lexer, ast_node_type_t block_parent_type)
+ast_layout_block_t* parser_parse_layout_block(lexer_t* lexer, ast_type_t block_parent_type)
 {
-    ast_node_t* node = ast_node_create(AST_NODE_TYPE_LAYOUT_BLOCK, PARSER_CURRENT->location);
-    node->layout_block = NULL;
-
-    expect(lexer, TOKEN_LEFT_BRACE);
+    ast_layout_block_t* block = ast_layout_block_create();
+    block->parent_type = block_parent_type;
 
     while (PARSER_CURRENT->type != TOKEN_RIGHT_BRACE) {
-        ast_node_t* child = ast_node_create(AST_NODE_TYPE_ERROR, PARSER_CURRENT->location);
+        token_t* token = PARSER_CURRENT;
+        PARSER_NEXT;
 
-        if (match(lexer, TOKEN_IDENTIFIER)) {
-
-        }            
+        if (match_next(lexer, TOKEN_COLON) && match_prev(lexer, TOKEN_IDENTIFIER)) {
+            ast_layout_node_t* node = parser_parse_layout_node();
+            array_push(block->children, node);
+        }
     }
 
-    expect(lexer, TOKEN_RIGHT_BRACE);
-
-    return node;
+    return block;
 }
 
 /**
@@ -167,14 +197,12 @@ ast_node_t* parser_parse_layout(lexer_t* lexer)
 
     ast_node_t* node = ast_node_create(AST_NODE_TYPE_LAYOUT, PARSER_CURRENT->location);
 
-    if (match(lexer, TOKEN_LEFT_BRACE)) {
-        node->layout = ast_node_create
-        node->layout->block = parser_parse_layout_block(lexer, AST_NODE_TYPE_LAYOUT);
-    }
-    else {
-        unknown(lexer);
-    }
+    expect(lexer, TOKEN_LEFT_BRACE);
 
+    node->data.layout = ast_layout_create();
+    node->data.layout->block = parser_parse_layout_block(lexer, AST_NODE_TYPE_LAYOUT);
+
+    expect(lexer, TOKEN_RIGHT_BRACE);
 
     return node;
 }

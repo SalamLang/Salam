@@ -132,6 +132,29 @@ void array_free(array_t* array)
 
 /**
  * 
+ * @function array_free_custom
+ * @brief Free the array memory
+ * @param {array_t*} array - Array
+ * @param {void (*free_fn)(void*)} free_fn - Custom free function
+ * @returns {void}
+ * 
+ */
+void array_free_custom(array_t* array, void (*free_fn)(void*))
+{
+    for (size_t i = 0; i < array->size; i++) {
+        free_fn(array->data[i]);
+    }
+
+    memory_free(array->data);
+    array->data = NULL;
+    array->size = 0;
+    array->capacity = 0;
+    array->element_size = 0;
+    free(array);
+}
+
+/**
+ * 
  * @function array_token_free
  * @brief Free the token array memory
  * @param {array_token_t*} array - Token array
@@ -140,14 +163,7 @@ void array_free(array_t* array)
  */
 void array_token_free(array_token_t* array)
 {
-    token_t** token_array = (token_t**) array->data;
-
-    for (size_t i = 0; i < array->size; i++) {
-        token_t* token_item = token_array[i];
-        token_destroy(token_item);
-    }
-
-    array_free(array);
+    array_free_custom(array, token_destroy);
 }
 
 /**
@@ -179,14 +195,7 @@ void array_token_print(array_token_t* array)
  */
 void array_node_free(array_t* array)
 {
-    ast_node_t** node_array = (ast_node_t**) array->data;
-
-    for (size_t i = 0; i < array->size; i++) {
-        ast_node_t* node_item = node_array[i];
-        ast_node_free(node_item);
-    }
-
-    array_free(array);
+    array_free_custom(array, ast_node_free);
 }
 
 /**

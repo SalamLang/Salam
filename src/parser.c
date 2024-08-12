@@ -171,15 +171,35 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer, ast_ty
 
 	expect(lexer, TOKEN_LEFT_BRACE);
 
-	// while (PARSER_CURRENT->type != TOKEN_RIGHT_BRACE) {
-	// 	token_t* token = PARSER_CURRENT;
-	// 	PARSER_NEXT;
+	while (PARSER_CURRENT->type != TOKEN_RIGHT_BRACE) {
+		token_t* token = PARSER_CURRENT;
 
-	// 	if (match_next(lexer, TOKEN_COLON) && match_prev(lexer, TOKEN_IDENTIFIER)) {
-	// 		ast_layout_node_t* node = parser_parse_layout_node();
-	// 		array_push(block->children, node);
-	// 	}
-	// }
+		if (match(lexer, TOKEN_IDENTIFIER) && match_next(lexer, TOKEN_COLON)) {
+			array_t* values = array_create(1, sizeof(token_t*));
+			token_t* value = PARSER_CURRENT;
+
+			PARSER_NEXT; // Eating the identifier token
+			PARSER_NEXT; // Eating the colon token
+			PARSER_NEXT; // Eating the value token
+
+			array_push(values, value);
+
+			ast_layout_attribute_t* attribute = ast_layout_attribute_create(token->data.string, values);
+			hashmap_put(cast(hashmap_t*, block->attributes), token->data.string, attribute);
+			
+			// printf("key is %s\n", token->data.string);
+			// printf("key is %s\n", attribute->key);
+			// values->print(values);
+			// printf("---------------------------->>>\n");
+			// attribute->print(attribute);
+			// attribute->free(attribute);
+			
+			printf("Put %s attribute\n", token->data.string);
+		}
+		else {
+			unknown(lexer);
+		}
+	}
 
 	expect(lexer, TOKEN_RIGHT_BRACE);
 }

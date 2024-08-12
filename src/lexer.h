@@ -24,7 +24,7 @@ typedef enum {
     TOKEN_LEFT_BRACKET = '[',
     TOKEN_RIGHT_BRACKET = ']',
     TOKEN_COLON = ':',
-    TOKEN_COMMMA = ',',
+    TOKEN_COMMA = ',',
     TOKEN_LEFT_PAREN = '(',
     TOKEN_RIGHT_PAREN = ')',
 

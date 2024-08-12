@@ -14,14 +14,57 @@ ast_node_t* ast_node_create(ast_node_type_t type, location_t location)
     ast_node_t* node = memory_allocate(sizeof(ast_node_t));
     node->type = type;
     node->location = location;
-    node->block = NULL;
-    node->layout_block = NULL;
-    node->children = array_create(sizeof(ast_node_t*), 16);
     node->print = cast(void (*)(void*), ast_node_print);
     node->free = cast(void (*)(void*), ast_node_free);
+
     return node;
 }
 
+/**
+ * 
+ * @function ast_node_layout_attribute_create
+ * @brief Create a new AST node layout attribute
+ * @returns {ast_node_layout_block_t*} - Pointer to the created AST node layout block
+ * 
+ */
+ast_node_layout_block_t* ast_node_layout_block_create()
+{
+    ast_node_layout_block_t* block = memory_allocate(sizeof(ast_node_layout_block_t));
+    block->attributes = hashmap_create(16);
+    block->styles = hashmap_create(16);
+    block->children = array_create(sizeof(ast_node_layout_node_t*), 16);
+
+    return block;
+}
+
+/**
+ * 
+ * @function ast_node_layout_attribute_create
+ * @brief Create a new AST node layout attribute
+ * @params {ast_node_layout_node_type_t} type - Type of the layout node
+ * @returns {ast_node_layout_node_t*} - Pointer to the created AST node layout attribute
+ * 
+ */
+ast_node_layout_node_t* ast_node_layout_node_create(ast_node_layout_node_type_t type)
+{
+    ast_node_layout_node_t* node = memory_allocate(sizeof(ast_node_layout_node_t));
+    node->tag = NULL;
+    node->type = type;
+    node->block = ast_node_layout_block_create();
+
+    return node;
+}
+
+/**
+ * 
+ * @function 
+ */
+ast_node_layout_t* ast_node_layout_create()
+{
+    ast_node_layout_t* node = memory_allocate(sizeof(ast_node_layout_t));
+    node->block = ast_node_layout_block_create();
+    return node;
+}
 /**
  * 
  * @function ast_node_print

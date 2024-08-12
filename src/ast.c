@@ -11,11 +11,11 @@
  */
 ast_node_t* ast_node_create(ast_type_t type, location_t location)
 {
-    ast_node_t* node = memory_allocate(sizeof(ast_t));
+    ast_node_t* node = memory_allocate(sizeof(ast_node_t));
     node->type = type;
     node->location = location;
-    node->print = cast(void (*)(void*), ast_print);
-    node->free = cast(void (*)(void*), ast_destroy);
+    node->print = cast(void (*)(void*), ast_node_print);
+    node->free = cast(void (*)(void*), ast_node_destroy);
 
     return node;
 }
@@ -37,15 +37,40 @@ void ast_node_destroy(ast_node_t* value)
  * 
  * @function ast_layout_attribute_create
  * @brief Create a new AST node layout attribute
+ * @params {struct hashmap_t*} value - AST layout attribute
+ * @returns {void}
+ * 
+ */
+void ast_layout_attribute_print(struct hashmap_t* value)
+{
+    hashmap_print_custom(cast(hashmap_t*, value), cast(void (*)(void*), array_layout_attribute_print));
+}
+
+/**
+ * 
+ * @function ast_layout_attribute_create
+ * @brief Create a new AST node layout attribute
+ * @params {ast_type_t} parent_type - Parent token type
  * @returns {ast_layout_block_t*} - Pointer to the created AST node layout block
  * 
  */
-ast_layout_block_t* ast_layout_block_create()
+ast_layout_block_t* ast_layout_block_create(ast_type_t parent_type)
 {
     ast_layout_block_t* block = memory_allocate(sizeof(ast_layout_block_t));
+
+    block->parent_type = parent_type;
+
+
     block->attributes = cast(struct hashmap_t*, hashmap_create(16));
+    cast(hashmap_t*, block->attributes)->print = cast(void (*)(void*), ast_layout_attribute_print);
+
     block->styles = cast(struct hashmap_t*, hashmap_create(16));
+    cast(hashmap_t*, block->styles)->print = cast(void (*)(void*), ast_layout_attribute_print);
+
     block->children = array_create(sizeof(ast_layout_node_t*), 16);
+
+    block->print = cast(void (*)(void*), ast_layout_block_print);
+    block->free = cast(void (*)(void*), ast_layout_block_destroy);
 
     return block;
 }
@@ -78,8 +103,37 @@ void ast_layout_block_destroy(ast_layout_block_t* value)
 {
     hashmap_destroy_custom(cast(hashmap_t*, value->attributes), cast(void (*)(void*), ast_layout_attribute_destroy));
     hashmap_destroy_custom(cast(hashmap_t*, value->styles), cast(void (*)(void*), ast_layout_attribute_destroy));
-    array_node_destroy(value->children);
+    array_destroy_custom(value->children, cast(void (*)(void*), ast_node_destroy));
     memory_destroy(value);
+}
+
+/**
+ * 
+ * @function ast_layout_block_print
+ * @brief Free the AST node layout block
+ * @params {ast_layout_block_t*} value - AST layout block
+ * @returns {void}
+ * 
+ */
+void ast_layout_block_print(ast_layout_block_t* value)
+{
+    hashmap_t* attributes = cast(hashmap_t*, value->attributes);
+    hashmap_t* styles = cast(hashmap_t*, value->styles);
+    array_node_layout_t* children = value->children;
+    size_t children_size = array_size(children);
+
+    printf("Block attributes:\n");
+    attributes->print(attributes);
+
+    printf("Block styles:\n");
+    styles->print(styles);
+
+    printf("Block children:\n");
+    for (size_t i = 0; i < children_size; i++) {
+        ast_layout_node_t* node = cast(ast_layout_node_t*, array_get(value->children, i));
+
+        node->print(node);
+    }
 }
 
 /**
@@ -95,9 +149,25 @@ ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t type)
     ast_layout_node_t* node = memory_allocate(sizeof(ast_layout_node_t));
     node->tag = NULL;
     node->type = type;
-    node->block = ast_layout_block_create();
+
+    node->print = cast(void (*)(void*), ast_layout_node_print);
+    node->free = cast(void (*)(void*), ast_layout_node_destroy);
 
     return node;
+}
+
+/**
+ * 
+ * @function ast_layout_node_print
+ * @beief Print the AST layout node
+ * @params {ast_layout_node_t*} value - AST layout node
+ * @returns {void}
+ * 
+ */
+void ast_layout_node_print(ast_layout_node_t* value)
+{
+    printf("Layout Node: %s\n", value->tag);
+    value->block->print(value->block);
 }
 
 /**
@@ -111,7 +181,7 @@ ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t type)
 void ast_layout_node_destroy(ast_layout_node_t* value)
 {
     memory_destroy(value->tag);
-    ast_layout_block_create(value->block);
+    ast_layout_block_destroy(value->block);
     memory_destroy(value);
 }
 
@@ -125,7 +195,11 @@ void ast_layout_node_destroy(ast_layout_node_t* value)
 ast_layout_t* ast_layout_create()
 {
     ast_layout_t* node = memory_allocate(sizeof(ast_layout_t));
-    node->block = ast_layout_block_create();
+    
+    node->block = ast_layout_block_create(AST_NODE_TYPE_LAYOUT);
+    node->print = cast(void (*)(void*), ast_layout_print);
+    node->free = cast(void (*)(void*), ast_layout_destroy);
+
     return node;
 }
 
@@ -139,19 +213,33 @@ ast_layout_t* ast_layout_create()
  */
 void ast_layout_destroy(ast_layout_t* value)
 {
-    ast_layout_block_create(value->block);
+    ast_layout_block_destroy(value->block);
     memory_destroy(value);
 }
 
 /**
  * 
- * @function ast_print
+ * @function ast_layout_print
+ * @brief Print the AST layout
+ * @param {ast_layout_t*} value - AST layout
+ * @returns {void}
+ * 
+ */
+void ast_layout_print(ast_layout_t* value)
+{
+    printf("Layout\n");
+    value->block->print(value->block);
+}
+
+/**
+ * 
+ * @function ast_node_print
  * @brief Print the AST node
  * @param {ast_node_t*} node - AST node
  * @returns {void}
  * 
  */
-void ast_print(ast_node_t* node)
+void ast_node_print(ast_node_t* node)
 {
     switch (node->type) {
         case AST_NODE_TYPE_FUNCTION:
@@ -191,7 +279,8 @@ void ast_print(ast_node_t* node)
 ast_t* ast_create()
 {
     ast_t* ast = memory_allocate(sizeof(ast_t));
-    ast->layout = array_create(sizeof(ast_t*), 16);
+    ast->layout = NULL;
+    
     return ast;
 }
 
@@ -207,10 +296,13 @@ void ast_debug(ast_t* ast)
 {
     printf("============= START AST DEBUG =============\n");
 
-    printf("AST\n");
-
     printf("AST Layout\n");
-    array_node_print(ast->layout);
+    if (ast->layout != NULL) {
+        ast->layout->print(ast->layout);
+    }
+    else {
+        printf("NULL\n");
+    }
 
     printf("============= END AST DEBUG =============\n");
 }
@@ -225,6 +317,9 @@ void ast_debug(ast_t* ast)
  */
 void ast_destroy(ast_t* ast)
 {
-    array_node_destroy(ast->layout);
+    if (ast->layout != NULL) {
+        ast_layout_destroy(ast->layout);
+    }
+
     memory_destroy(ast);
 }

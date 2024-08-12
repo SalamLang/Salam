@@ -20,6 +20,9 @@ typedef struct {
 	hashmap_entry_t **data;
 	size_t size;
 	size_t length;
+
+    void (*print)(void* node);
+    void (*free)(void* node);
 } hashmap_t;
 
 typedef hashmap_t hashmap_array_t;
@@ -37,13 +40,13 @@ unsigned long hash_function(const char* str);
 
 /**
  * 
- * @function hash_function
- * @brief Hash function
- * @param {const char*} key
- * @returns {unsigned long}
+ * @function hashmap_create
+ * @brief Create a new hashmap
+ * @param {size_t} size
+ * @returns {hashmap_t*}
  * 
  */
-hashmap_t* hashmap_create();
+hashmap_t* hashmap_create(size_t size);
 
 /**
  * 
@@ -120,5 +123,16 @@ void hashmap_destroy_custom(hashmap_t *map, void (*free_fn)(void*));
  * 
  */
 void hashmap_print(hashmap_t *map);
+
+/**
+ * 
+ * @function hashmap_print_custom
+ * @brief Print the hashmap with a custom print function
+ * @param {hashmap_t*} map
+ * @param {void (*print_fn)(void*)} print_fn
+ * @returns {void}
+ * 
+ */
+void hashmap_print_custom(hashmap_t* map, void (*print_fn)(void*));
 
 #endif

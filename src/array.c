@@ -19,7 +19,8 @@ array_t* array_create(size_t element_size, size_t capacity)
     array->data = memory_allocate(array->element_size * array->capacity);
 
     array->print = cast(void (*)(void*), array_print);
-    array->free = cast(void (*)(void*), array_destroy);
+    array->destroy = cast(void (*)(void*), array_destroy);
+    
     return array;
 }
 
@@ -267,3 +268,19 @@ size_t array_size(array_t* array)
 {
     return array->size;
 }
+
+void array_token_destroy(array_token_t* array)
+{
+    if (array != NULL) {
+        for (size_t i = 0; i < array->size; i++) {
+            token_t* token = array_get(array, i);
+            
+            if (token != NULL) {
+                token->destroy(token);
+            }
+        }
+
+        array_destroy(array);
+    }
+}
+

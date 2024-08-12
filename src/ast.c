@@ -15,7 +15,7 @@ ast_node_t* ast_node_create(ast_type_t type, location_t location)
 	node->type = type;
 	node->location = location;
 	node->print = cast(void (*)(void*), ast_node_print);
-	node->free = cast(void (*)(void*), ast_node_destroy);
+	node->destroy = cast(void (*)(void*), ast_node_destroy);
 
 	return node;
 }
@@ -65,17 +65,18 @@ ast_layout_block_t* ast_layout_block_create(ast_type_t parent_type)
 
 	block->parent_type = parent_type;
 
-
 	block->attributes = cast(struct hashmap_t*, hashmap_create(16));
 	cast(hashmap_t*, block->attributes)->print = cast(void (*)(void*), hashmap_print_layout_attribute);
+	cast(hashmap_t*, block->attributes)->destroy = cast(void (*)(void*), hashmap_destroy_layout_attribute);
 
-	block->styles = cast(struct hashmap_t*, hashmap_create(16));
-	cast(hashmap_t*, block->styles)->print = cast(void (*)(void*), hashmap_print_layout_attribute);
+	// block->styles = cast(struct hashmap_t*, hashmap_create(16));
+	// cast(hashmap_t*, block->styles)->print = cast(void (*)(void*), hashmap_print_layout_attribute);
+	// cast(hashmap_t*, block->styles)->destroy = cast(void (*)(void*), ast_layout_attribute_destroy);
 
-	block->children = array_create(sizeof(ast_layout_node_t*), 16);
+	// block->children = array_create(sizeof(ast_layout_node_t*), 16);
 
 	block->print = cast(void (*)(void*), ast_layout_block_print);
-	block->free = cast(void (*)(void*), ast_layout_block_destroy);
+	block->destroy = cast(void (*)(void*), ast_layout_block_destroy);
 
 	return block;
 }
@@ -97,7 +98,7 @@ ast_layout_attribute_t* ast_layout_attribute_create(char* key, array_t* values)
 	attribute->isStyle = false;
 
 	attribute->print = cast(void (*)(void*), ast_layout_attribute_print);
-	attribute->free = cast(void (*)(void*), ast_layout_attribute_destroy);
+	attribute->destroy = cast(void (*)(void*), ast_layout_attribute_destroy);
 
 	return attribute;
 }
@@ -117,7 +118,9 @@ void ast_layout_attribute_destroy(ast_layout_attribute_t* value)
 			memory_destroy(value->key);
 		}
 
-		// array_destroy_custom(value->values, cast(void (*)(void*), memory_destroy));
+		if (value->values != NULL) {
+			value->values->destroy(value->values);
+		}
 		
 		memory_destroy(value);
 	}
@@ -134,17 +137,29 @@ void ast_layout_attribute_destroy(ast_layout_attribute_t* value)
 void ast_layout_block_destroy(ast_layout_block_t* value)
 {
 	printf("ast_layout_block_destroy\n");
+
 	if (value != NULL) {
-		printf("1\n");
-		hashmap_destroy_custom(cast(hashmap_t*, value->attributes), cast(void (*)(void*), ast_layout_attribute_destroy));
+		hashmap_t* attributes = value->attributes;
+		hashmap_t* styles = value->attributes;
+		array_t* children = value->children;
+		
+		if (attributes != NULL) {
+			printf("ast_layout_block_destroy attributes\n");
+			attributes->destroy(value->attributes);
+		}
 
-		printf("2\n");
-		hashmap_destroy_custom(cast(hashmap_t*, value->styles), cast(void (*)(void*), ast_layout_attribute_destroy));
+		// if (styles != NULL) {
+		// 	printf("ast_layout_block_destroy styles\n");
+		// 	styles->destroy(styles);
+		// 	// hashmap_destroy_custom(cast(hashmap_t*, value->styles), cast(void (*)(void*), ast_layout_attribute_destroy));
+		// }
 
-		printf("3\n");
-		array_destroy_custom(value->children, cast(void (*)(void*), ast_node_destroy));
+		// if (children != NULL) {
+		// 	printf("ast_layout_block_destroy children\n");
+		// 	// array_destroy_custom(value->children, cast(void (*)(void*), ast_layout_node_destroy));
+		// 	children->destroy(children);
+		// }
 
-		printf("4\n");
 		memory_destroy(value);
 	}
 }
@@ -193,7 +208,7 @@ ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t type)
 	node->type = type;
 
 	node->print = cast(void (*)(void*), ast_layout_node_print);
-	node->free = cast(void (*)(void*), ast_layout_node_destroy);
+	node->destroy = cast(void (*)(void*), ast_layout_node_destroy);
 
 	return node;
 }
@@ -242,7 +257,7 @@ ast_layout_t* ast_layout_create()
 	
 	node->block = ast_layout_block_create(AST_NODE_TYPE_LAYOUT);
 	node->print = cast(void (*)(void*), ast_layout_print);
-	node->free = cast(void (*)(void*), ast_layout_destroy);
+	node->destroy = cast(void (*)(void*), ast_layout_destroy);
 
 	return node;
 }
@@ -258,7 +273,9 @@ ast_layout_t* ast_layout_create()
 void ast_layout_destroy(ast_layout_t* value)
 {
 	if (value != NULL) {
-		ast_layout_block_destroy(value->block);
+		if (value->block != NULL) {
+			value->block->destroy(value->block);
+		}
 
 		memory_destroy(value);
 	}
@@ -365,7 +382,7 @@ void ast_debug(ast_t* ast)
 void ast_destroy(ast_t* ast)
 {
 	if (ast != NULL) {
-		ast_layout_destroy(ast->layout);
+		ast->layout->destroy(ast->layout);
 
 		memory_destroy(ast);
 	}

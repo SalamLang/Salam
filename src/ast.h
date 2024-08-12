@@ -41,14 +41,14 @@ typedef struct {
     array_node_t* children;
     ast_type_t parent_type;
 
-    void (*free)(void* node);
+    void (*destroy)(void* node);
     void (*print)(void* node);
 } ast_block_t;
 
 typedef struct ast_import_t {
     array_t* path;
 
-    void (*free)(void* node);
+    void (*destroy)(void* node);
     void (*print)(void* node);
 } ast_import_t;
 
@@ -57,7 +57,7 @@ typedef struct ast_function_t {
     array_t* parameters;
     ast_block_t* block;
 
-    void (*free)(void* node);
+    void (*destroy)(void* node);
     void (*print)(void* node);
 } ast_function_t;
 
@@ -67,7 +67,7 @@ typedef struct ast_layout_block_t {
     struct hashmap_t* styles;
     array_node_layout_t* children;
 
-    void (*free)(void* node);
+    void (*destroy)(void* node);
     void (*print)(void* node);
 } ast_layout_block_t;
 
@@ -76,14 +76,14 @@ typedef struct ast_layout_attribute_t {
     array_t* values;
     bool isStyle;
 
-    void (*free)(void* node);
+    void (*destroy)(void* node);
     void (*print)(void* node);
 } ast_layout_attribute_t;
 
 typedef struct ast_layout_t {
     ast_layout_block_t* block;
 
-    void (*free)(void* node);
+    void (*destroy)(void* node);
     void (*print)(void* node);
 } ast_layout_t;
 
@@ -92,7 +92,7 @@ typedef struct ast_layout_node_t {
     ast_layout_node_type_t type;
     ast_layout_block_t* block;
 
-    void (*free)(void* node);
+    void (*destroy)(void* node);
     void (*print)(void* node);
 } ast_layout_node_t;
 
@@ -109,7 +109,7 @@ typedef struct ast_t {
     ast_type_t type;
     location_t location;
 
-    void (*free)(void* node);
+    void (*destroy)(void* node);
     void (*print)(void* node);
 
     ast_union_t data;

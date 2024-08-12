@@ -131,7 +131,7 @@ typedef struct {
  * 
  * @function is_char_digit
  * @brief Check if a character is a digit
- * @param {char} c - Character
+ * @params {char} c - Character
  * @returns {bool}
  * 
  */
@@ -141,7 +141,7 @@ bool is_char_digit(char c);
  * 
  * @function is_keyword
  * @brief Check if a string is a keyword
- * @param {const char*} string - String
+ * @params {const char*} string - String
  * @returns {bool}
  * 
  */
@@ -151,7 +151,7 @@ token_type_t type_keyword(const char* string);
  * 
  * @function is_char_alpha
  * @brief Check if a character is an alphabet
- * @param {char} c - Character
+ * @params {char} c - Character
  * @returns {bool}
  * 
  */
@@ -161,7 +161,7 @@ bool is_char_alpha(char c);
  * 
  * @function is_char_alnum
  * @brief Check if a character is an alphabet or a digit
- * @param {char} c - Character
+ * @params {char} c - Character
  * @returns {bool}
  * 
  */
@@ -171,7 +171,7 @@ bool is_char_alnum(char c);
  * 
  * @function is_char_whitespace
  * @brief Check if a character is a whitespace
- * @param {char} c - Character
+ * @params {char} c - Character
  * @returns {bool}
  * 
  */
@@ -181,7 +181,7 @@ bool is_char_whitespace(char c);
  * 
  * @function location_print
  * @brief Print a location
- * @param {location_t} location - Location
+ * @params {location_t} location - Location
  * @returns {void}
  * 
  */
@@ -191,8 +191,8 @@ void location_print(location_t location);
  * 
  * @function token_create
  * @brief Creating a new token
- * @param {token_type_t} type - Token type
- * @param {location_t} location - Token location
+ * @params {token_type_t} type - Token type
+ * @params {location_t} location - Token location
  * @returns {token_t*}
  * 
  */
@@ -202,7 +202,7 @@ token_t* token_create(token_type_t type, location_t location);
  * 
  * @function token_name
  * @brief Get the name of a token
- * @param {token_type_t} Token type
+ * @params {token_type_t} Token type
  * @returns {char*}
  * 
  */
@@ -212,7 +212,7 @@ char* token_name(token_type_t type);
  * 
  * @function token_value
  * @brief Get the value of a token 
- * @param {token_t*} token -
+ * @params {token_t*} token -
  * @returns {char*}
  * 
  */
@@ -222,7 +222,7 @@ char* token_value(token_t* token);
  * 
  * @function token_destroy
  * @brief Destroying a token
- * @param {token_t*} token - Token
+ * @params {token_t*} token - Token
  * @returns {void}
  * 
  */
@@ -232,7 +232,7 @@ void token_destroy(token_t* token);
  * 
  * @function token_print
  * @brief Print a token
- * @param {token_t*} token - Token
+ * @params {token_t*} token - Token
  * @returns {void}
  * 
  */
@@ -242,8 +242,8 @@ void token_print(token_t* token);
  * 
  * @function lexer_create
  * @brief Creating a new lexer state
- * @param {const char*} file_path - File path
- * @param {char*} source - Source code
+ * @params {const char*} file_path - File path
+ * @params {char*} source - Source code
  * @returns {lexer_t*}
  * 
  */
@@ -253,7 +253,7 @@ lexer_t* lexer_create(const char* file_path, char* source);
  * 
  * @function lexer_destroy
  * @brief Destroying a lexer state
- * @param {lexer_t*} lexer - Lexer state
+ * @params {lexer_t*} lexer - Lexer state
  * @returns {void}
  * 
  */
@@ -263,7 +263,7 @@ void lexer_destroy(lexer_t* lexer);
  * 
  * @function lexer_debug
  * @brief Debugging the lexer state
- * @param {lexer_t*} lexer - Lexer state
+ * @params {lexer_t*} lexer - Lexer state
  * @returns {void}
  * 
  */
@@ -273,7 +273,7 @@ void lexer_debug(lexer_t* lexer);
  * 
  * @function is_keyword
  * @brief Check if a string is a keyword
- * @param {const char*} string - String
+ * @params {const char*} string - String
  * @returns {bool}
  * 
  */
@@ -283,7 +283,7 @@ bool is_keyword(const char* string);
  * 
  * @function lexer_lex
  * @brief Lexing the source code
- * @param {lexer_t*} lexer - Lexer state
+ * @params {lexer_t*} lexer - Lexer state
  * @returns {void}
  * 
  */
@@ -293,7 +293,7 @@ void lexer_lex(lexer_t* lexer);
  * 
  * @function lexer_lex_identifier
  * @brief Lexing an identifier
- * @param {lexer_t*} lexer - Lexer state
+ * @params {lexer_t*} lexer - Lexer state
  * @returns {void}
  * 
  */
@@ -303,7 +303,7 @@ void lexer_lex_identifier(lexer_t* lexer);
  * 
  * @function lexer_lex_number
  * @brief Lexing a number
- * @param {lexer_t*} lexer - Lexer state
+ * @params {lexer_t*} lexer - Lexer state
  * @returns {void}
  * 
  */
@@ -313,7 +313,7 @@ void lexer_lex_number(lexer_t* lexer);
  * 
  * @function lexer_lex_string
  * @brief Lexing a string
- * @param {lexer_t*} lexer - Lexer state
+ * @params {lexer_t*} lexer - Lexer state
  * @returns {void}
  * 
  */

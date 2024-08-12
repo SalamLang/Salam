@@ -11,7 +11,7 @@
  * 
  * @function memory_allocate
  * @brief Allocate memory and panic if allocation fails
- * @param {size_t} size
+ * @params {size_t} size
  * @returns {void*}
  * 
  */
@@ -21,8 +21,8 @@ void* memory_allocate(size_t size);
  * 
  * @function memory_callocate
  * @brief Allocate memory and panic if allocation fails
- * @param {size_t} count
- * @param {size_t} size
+ * @params {size_t} count
+ * @params {size_t} size
  * @returns {void*}
  * 
  */
@@ -32,7 +32,7 @@ void* memory_callocate(size_t count, size_t size);
  * 
  * @function memory_destroy
  * @brief Free memory and panic if pointer is NULL
- * @param {void*} ptr
+ * @params {void*} ptr
  * @returns {void}
  * 
  */
@@ -43,8 +43,8 @@ void memory_destroy(void* ptr);
  * 
  * @function memory_rellacate
  * @brief Reallocate memory and panic if allocation fails
- * @param {void*} ptr
- * @param {size_t} size
+ * @params {void*} ptr
+ * @params {size_t} size
  * @returns {void*}
  * 
  */
@@ -54,8 +54,8 @@ void* memory_reallocate(void* ptr, size_t size);
  * 
  * @function memory_zero
  * @brief Zero out memory
- * @param {void*} ptr
- * @param {size_t} size
+ * @params {void*} ptr
+ * @params {size_t} size
  * @returns {void}
  * 
  */
@@ -65,9 +65,9 @@ void memory_zero(void* ptr, size_t size);
  * 
  * @function memory_copy
  * @brief Copy memory
- * @param {void*} dest - Destination
- * @param {const void*} src - Source
- * @param {size_t} size - Size in bytes
+ * @params {void*} dest - Destination
+ * @params {const void*} src - Source
+ * @params {size_t} size - Size in bytes
  * @returns {void}
  * 
  */
@@ -77,9 +77,9 @@ void memory_copy(void* dest, const void* src, size_t size);
  * 
  * @function memory_compare
  * @brief Compare memory
- * @param {void*} ptr1
- * @param {void*} ptr2
- * @param {size_t} size
+ * @params {void*} ptr1
+ * @params {void*} ptr2
+ * @params {size_t} size
  * @returns {int}
  * 
  */
@@ -89,9 +89,9 @@ int memory_compare(void* ptr1, void* ptr2, size_t size);
  * 
  * @function memory_set
  * @brief Set memory
- * @param {void*} ptr
- * @param {int} value
- * @param {size_t} size
+ * @params {void*} ptr
+ * @params {int} value
+ * @params {size_t} size
  * @returns {void}
  * 
  */
@@ -101,9 +101,9 @@ void memory_set(void* ptr, int value, size_t size);
  * 
  * @function memory_swap
  * @brief Swap memory
- * @param {void*} ptr1
- * @param {void*} ptr2
- * @param {size_t} size
+ * @params {void*} ptr1
+ * @params {void*} ptr2
+ * @params {size_t} size
  * @returns {void}
  * 
  */
@@ -113,8 +113,8 @@ void memory_swap(void* ptr1, void* ptr2, size_t size);
  * 
  * @function memory_reverse
  * @brief Reverse memory
- * @param {void*} ptr
- * @param {size_t} size
+ * @params {void*} ptr
+ * @params {size_t} size
  * @returns {void}
  * 
  */
@@ -124,8 +124,8 @@ void memory_reverse(void* ptr, size_t size);
  * 
  * @function memory_duplicate
  * @brief Duplicate memory
- * @param {void*} ptr
- * @param {size_t} size
+ * @params {void*} ptr
+ * @params {size_t} size
  * @returns {void*}
  * 
  */

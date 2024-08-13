@@ -169,6 +169,37 @@ char* array_string(array_t* array, char* sepertor)
 
 /**
  * 
+ * @function array_string_token
+ * @brief Convert the token array to a string
+ * @params {array_t*} array - Array
+ * @params {char*} sepertor - Separator
+ * @returns {char*} - String
+ * 
+ */
+char* array_string_token(array_t* array, char* sepertor)
+{
+    if (array == NULL || array->size == 0) {
+        return strdup("");
+    }
+
+    string_t* str = string_create(16);
+    for (size_t i = 0; i < array->size; i++) {
+        token_t* token = array_get(array, i);
+        string_append_str(str, token_value(token));
+
+        if (i < array->size - 1) {
+            string_append_str(str, sepertor);
+        }
+    }
+
+    char* buffer = strdup(str->data);
+    string_destroy(str);
+
+    return buffer;
+}
+
+/**
+ * 
  * @function array_destroy_custom
  * @brief Free the array memory
  * @params {array_t*} array - Array

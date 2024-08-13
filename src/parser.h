@@ -1,7 +1,9 @@
 #ifndef _PARSER_H_
 #define _PARSER_H_
 
+#include "base.h"
 #include "ast.h"
+#include "lexer.h"
 
 /**
  * 
@@ -115,7 +117,7 @@ ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t type);
  * @returns {ast_layout_node_t*} - AST layout node
  * 
  */
-ast_layout_node_t* parser_parse_layout_node();
+ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer);
 
 /**
  * 
@@ -169,5 +171,26 @@ ast_t* parser_parse(lexer_t* lexer);
  */
 ast_node_t* parser_layout(lexer_t* lexer);
 
+/**
+ * 
+ * @function parser_parse_layout_block_attribute
+ * @brief Parse the block attribute
+ * @params {ast_layout_block_t*} block - AST layout block node
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {void}
+ * 
+ */
+void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lexer);
+
+/**
+ * 
+ * @function parser_parse_layout_block_children
+ * @brief Parse the block children
+ * @params {ast_layout_block_t*} block - AST layout block node
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {void}
+ * 
+ */
+void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexer);
 
 #endif

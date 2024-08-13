@@ -5,8 +5,12 @@
 
 #include "memory.h"
 #include "string.h"
+#include "file.h"
+#include "ast.h"
 
 typedef struct {
+	ast_t* ast;
+
 	string_t* html;
 	string_t* css;
 	string_t* js;
@@ -16,11 +20,11 @@ typedef struct {
  * 
  * @function generator_create
  * @brief Create a generator
- * @params {}
+ * @params {ast_t*} ast - AST tree
  * @returns {generator_t*}
  * 
  */
-generator_t* generator_create();
+generator_t* generator_create(ast_t* ast);
 
 /**
  * 
@@ -51,5 +55,25 @@ void generator_debug(generator_t* generator);
  * 
  */
 void generator_save(generator_t* generator);
+
+/**
+ * 
+ * @function generator_code
+ * @params {generator_t*} generator - Generator
+ * @returns {void}
+ * 
+ */
+void generator_code(generator_t* generator);
+
+/**
+ * 
+ * @function generator_code_layout_html
+ * @brief Generate the HTML code for the layout block
+ * @params {ast_layout_block_t*} layout_block - Layout block
+ * @params {string_t*} html - HTML string
+ * @returns {void}
+ * 
+ */
+void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html);
 
 #endif

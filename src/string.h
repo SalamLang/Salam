@@ -4,7 +4,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
+#include "base.h"
 #include "memory.h"
 
 typedef struct {
@@ -12,8 +14,8 @@ typedef struct {
 	size_t length;
 	char* data;
     
-    void (*destroy)(void*);
     void (*print)(void*);
+    void (*destroy)(void*);
 } string_t;
 
 /**
@@ -89,5 +91,58 @@ void string_destroy(string_t* str);
  * 
  */
 void string_print(string_t* str);
+
+/**
+ * 
+ * @function string_set
+ * @brief Set the value of a string
+ * @params {string_t*} str - String
+ * @params {string_t*} value - Value
+ * @returns {void}
+ * 
+ */
+void string_set(string_t* str, string_t* value);
+
+/**
+ * 
+ * @function string_set_str
+ * @brief Set the value of a string
+ * @params {string_t*} str - String
+ * @params {const char*} value - Value
+ * @returns {void}
+ * 
+ */
+void string_set_str(string_t* str, const char* value);
+
+/**
+ * 
+ * @function string_append
+ * @brief Append a string to the end of the string
+ * @params {string_t*} str - String
+ * @params {string_t*} value - Value
+ * @returns {void}
+ * 
+ */
+void string_append(string_t* str, string_t* value);
+
+/**
+ * 
+ * @function string_lower_str
+ * @brief Convert a string to lowercase
+ * @params {const char*} str - String
+ * @returns {char*} - Lowercase string
+ * 
+ */
+char* string_lower_str(const char* str);
+
+/**
+ * 
+ * @function string_upper_str
+ * @brief Convert a string to uppercase
+ * @params {const char*} str - String
+ * @returns {char*} - Uppercase string
+ * 
+ */
+char* string_upper_str(const char* str);
 
 #endif

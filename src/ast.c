@@ -137,8 +137,8 @@ void ast_layout_attribute_destroy(ast_layout_attribute_t* value)
 void ast_layout_block_destroy(ast_layout_block_t* value)
 {
 	if (value != NULL) {
-		hashmap_t* attributes = value->attributes;
-		hashmap_t* styles = value->styles;
+		hashmap_t* attributes = cast(hashmap_t*, value->attributes);
+		hashmap_t* styles = cast(hashmap_t*, value->styles);
 		array_t* children = value->children;
 		
 		if (attributes != NULL) {
@@ -199,7 +199,8 @@ ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t type)
 	ast_layout_node_t* node = memory_allocate(sizeof(ast_layout_node_t));
 	node->tag = NULL;
 	node->type = type;
-
+	node->block = ast_layout_block_create(AST_NODE_TYPE_LAYOUT_NODE);
+	
 	node->print = cast(void (*)(void*), ast_layout_node_print);
 	node->destroy = cast(void (*)(void*), ast_layout_node_destroy);
 

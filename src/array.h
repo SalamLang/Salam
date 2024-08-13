@@ -186,4 +186,15 @@ void array_print(array_t* array);
  */
 char* array_string(array_t* array, char* sepertor);
 
+/**
+ * 
+ * @function array_string_token
+ * @brief Convert the token array to a string
+ * @params {array_t*} array - Array
+ * @params {char*} sepertor - Separator
+ * @returns {char*} - String
+ * 
+ */
+char* array_string_token(array_t* array, char* sepertor);
+
 #endif

@@ -32,6 +32,7 @@ typedef enum {
     AST_NODE_LAYOUT_NODE_TYPE_BUTTON,
     AST_NODE_LAYOUT_NODE_TYPE_FORM,
     AST_NODE_LAYOUT_NODE_TYPE_DIV,
+    AST_NODE_LAYOUT_NODE_TYPE_ERROR,
 } ast_layout_node_type_t;
 
 struct ast_t;

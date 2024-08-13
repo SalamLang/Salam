@@ -164,6 +164,105 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 
 /**
  * 
+ * @function generator_code_layout_attributes
+ * @brief Generate the HTML code for the layout block attributes
+ * @params {ast_layout_block_t*} block - Layout block
+ * @returns {string_t*}
+ * 
+ */
+string_t* generator_code_layout_attributes(ast_layout_block_t* block)
+{
+    size_t html_attributes_size = 0;
+    string_t* html_attributes = string_create(1024);
+
+    if (block != NULL) {
+        if (block->attributes != NULL) {
+            hashmap_t* attributes = cast(hashmap_t*, block->attributes);
+            
+            for (size_t i = 0; i < attributes->size; i++) {
+                hashmap_entry_t *entry = attributes->data[i];
+
+                while (entry) {
+                    ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
+                    array_t* attribute_values = cast(array_t*, attribute->values);
+                    char* attribute_values_str = array_string_token(attribute_values, ", ");
+                    size_t attribute_value_length = strlen(attribute_values_str);
+
+                    if (html_attributes_size != 0) string_append_char(html_attributes, ' ');
+
+                    string_append_str(html_attributes, entry->key);
+                    string_append_str(html_attributes, "=");
+
+                    if (attribute_value_length > 1) string_append_str(html_attributes, "\"");
+                    string_append_str(html_attributes, attribute_values_str);
+                    if (attribute_value_length > 1) string_append_str(html_attributes, "\"");
+
+                    if (attribute_values_str != NULL) memory_destroy(attribute_values_str);
+
+                    html_attributes_size++;
+                    entry = entry->next;
+                }
+            }
+
+        }
+    }
+
+    return html_attributes;
+}
+
+string_t* generator_code_layout_block(generator_t* generator, array_t* children)
+{
+    string_t* html = string_create(1024);
+
+    for (size_t i = 0; i < children->size; i++) {
+        ast_layout_node_t* node = array_get(children, i);
+
+        string_t* layout_block_str = string_create(1024);
+        string_t* layout_block_children = generator_code_layout_block(generator, node->block->children);
+
+        if (layout_block_children->length == 0) {
+            string_append_str(layout_block_str, "<...>");
+            string_append_str(layout_block_str, "</...>\n");
+        }
+        else {
+            string_append_str(layout_block_str, "<...>\n");
+            string_append(layout_block_str, layout_block_children);
+            string_append_str(layout_block_str, "</...>\n");
+        }
+
+        string_append(html, layout_block_str);
+        layout_block_str->destroy(layout_block_str);
+    }
+
+    return html;
+}
+
+void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layout_block, string_t* body)
+{
+    string_t* body_tag = string_create(1024);
+    string_t* body_content = string_create(1024);
+
+    string_append_str(body_tag, "<body");
+    string_t* body_attrs = generator_code_layout_attributes(layout_block);
+    if (body_attrs->length > 0) string_append_char(body_tag, ' ');
+    string_append(body_tag, body_attrs);
+    body_attrs->destroy(body_attrs);
+    string_append_str(body_tag, ">");
+
+    string_t* body_child = generator_code_layout_block(generator, layout_block->children);
+    string_append(body_content, body_child);
+    body_child->destroy(body_child);     
+
+    string_append(body_tag, body_content);
+    string_append_str(body_tag, "</body>\n");
+
+    string_set(body, body_tag);
+    body_tag->destroy(body_tag);
+    body_content->destroy(body_content);
+}
+
+/**
+ * 
  * @function generator_code
  * @params {generator_t*} generator - Generator
  * @returns {void}
@@ -177,44 +276,35 @@ void generator_code(generator_t* generator)
 
     ast_t* ast = generator->ast;
 
-    printf("1\n");
-
     if (generator->ast->layout != NULL) {
         ast_layout_t* layout = ast->layout;
         ast_layout_block_t* layout_block = NULL;
 
-    printf("2\n");
         if (layout->block != NULL) {
             layout_block = layout->block;
 
-    printf("3\n");
             string_t* head = string_create(1024);
             string_t* body = string_create(1024);
             string_t* html = string_create(1024);
 
-    printf("4\n");
             string_append_str(html, "<!doctype html>\n");
             string_append_str(html, "<html");
 
-
-    printf("42\n");
             generator_code_layout_html(layout_block, html);
-
-    printf("43\n");
 
             string_append_str(html, ">\n");
 
             string_append_str(html, "<head>\n");
             string_append_str(html, "<meta charset=\"UTF-8\">\n");
 
-    printf("44\n");
-
             string_append(html, head);
-            string_append_str(html, "<head>\n");
+            string_append_str(html, "</head>\n");
+
+            generator_code_layout_body(generator, layout_block, body);
+
+            string_append(html, body);
 
             string_append_str(html, "</html>");
-
-    printf("5\n");
 
             string_set(generator->html, html);
 

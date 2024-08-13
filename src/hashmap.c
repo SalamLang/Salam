@@ -30,13 +30,13 @@ unsigned long hash_function(const char* str)
  * @returns {hashmap_t*}
  * 
  */
-hashmap_t* hashmap_create(size_t size)
+hashmap_t* hashmap_create(size_t capacity)
 {
 	hashmap_t *map = memory_allocate(sizeof(hashmap_t));
 
-	map->size = size;
+	map->capacity = capacity;
 	map->length = 0;
-	map->data = (hashmap_entry_t**) memory_callocate(map->size, sizeof(hashmap_entry_t*));
+	map->data = (hashmap_entry_t**) memory_callocate(map->capacity, sizeof(hashmap_entry_t*));
 
 	map->print = cast(void (*)(void*), hashmap_print);
 	map->destroy = cast(void (*)(void*), hashmap_destroy);
@@ -74,7 +74,7 @@ void hashmap_put_custom(hashmap_t *map, const char *key, void *value, void (*fre
 {
 	unsigned long hash = hash_function(key);
 
-	size_t index = hash % map->size;
+	size_t index = hash % map->capacity;
 	hashmap_entry_t *entry = map->data[index];
 
 	while (entry != NULL) {
@@ -100,11 +100,11 @@ void hashmap_put_custom(hashmap_t *map, const char *key, void *value, void (*fre
 
 	map->length++;
 
-	if ((float)map->length / map->size >= 0.75) {
-		size_t new_length = map->size * 2;
+	if ((float)map->length / map->capacity >= 0.75) {
+		size_t new_length = map->capacity * 2;
 		hashmap_entry_t **new_data = (hashmap_entry_t**) memory_callocate(new_length, sizeof(hashmap_entry_t*));
 
-		for (size_t i = 0; i < map->size; i++) {
+		for (size_t i = 0; i < map->capacity; i++) {
 			hashmap_entry_t *entry = map->data[i];
 
 			while (entry) {
@@ -122,7 +122,7 @@ void hashmap_put_custom(hashmap_t *map, const char *key, void *value, void (*fre
 		}
 
 		map->data = new_data;
-		map->size = new_length;
+		map->capacity = new_length;
 	}
 }
 
@@ -138,7 +138,7 @@ void hashmap_put_custom(hashmap_t *map, const char *key, void *value, void (*fre
 void* hashmap_get(hashmap_t *map, const char *key)
 {
 	unsigned long hash = hash_function(key);
-	size_t index = hash % map->size;
+	size_t index = hash % map->capacity;
 	hashmap_entry_t *entry = map->data[index];
 
 	while (entry != NULL) {
@@ -162,7 +162,7 @@ void* hashmap_remove(hashmap_t *map, const char *key)
 {
 	unsigned long hash = hash_function(key);
 
-	size_t index = hash % map->size;
+	size_t index = hash % map->capacity;
 	hashmap_entry_t *entry = map->data[index];
 	hashmap_entry_t *prev = NULL;
 
@@ -222,7 +222,7 @@ void hashmap_destroy_custom(hashmap_t *map, void (*free_fn)(void*))
 	printf("hashmap_destroy_custom...\n");
 	if (map != NULL) {
 		if (map->data != NULL) {
-			for (size_t i = 0; i < map->size; i++) {
+			for (size_t i = 0; i < map->capacity; i++) {
 				hashmap_entry_t *entry = map->data[i];
 
 				while (entry) {
@@ -258,10 +258,10 @@ void hashmap_destroy_custom(hashmap_t *map, void (*free_fn)(void*))
 void hashmap_print(hashmap_t *map)
 {
 	printf("Hashmap Size: %zu\n", map->length);
-	// printf("Hashmap Capacity: %zu\n", map->size);
+	// printf("Hashmap Capacity: %zu\n", map->capacity);
 	printf("Hashmap Contents:\n");
 
-	for (size_t i = 0; i < map->size; i++) {
+	for (size_t i = 0; i < map->capacity; i++) {
 		hashmap_entry_t *entry = map->data[i];
 
 		while (entry) {
@@ -288,7 +288,7 @@ void hashmap_print_custom(hashmap_t* map, void (*print_fn)(void*))
 		return;
 	}
 
-	for (size_t i = 0; i < map->size; i++) {
+	for (size_t i = 0; i < map->capacity; i++) {
 		hashmap_entry_t *entry = map->data[i];
 
 		while (entry) {
@@ -317,7 +317,7 @@ void hashmap_print_layout_attribute(hashmap_attribute_t* map)
 		return;
 	}
 
-	for (size_t i = 0; i < map->size; i++) {
+	for (size_t i = 0; i < map->capacity; i++) {
 		hashmap_entry_t *entry = map->data[i];
 
 		while (entry) {
@@ -342,7 +342,7 @@ void hashmap_destroy_layout_attribute(hashmap_attribute_t *map)
 {
 	if (map != NULL) {
 		if (map->data != NULL) {
-			for (size_t i = 0; i < map->size; i++) {
+			for (size_t i = 0; i < map->capacity; i++) {
 				hashmap_entry_t *entry = map->data[i];
 
 				while (entry) {

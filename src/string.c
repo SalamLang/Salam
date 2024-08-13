@@ -4,18 +4,18 @@
  * 
  * @function string_create
  * @brief Create a string
- * @params {size_t} initial_size - Initial size of the string
+ * @params {size_t} initial_capacity - Initial size of the string
  * @returns {string_t*}
  * 
  */
-string_t* string_create(size_t initial_size)
+string_t* string_create(size_t initial_capacity)
 {
 	string_t* str = memory_allocate(sizeof(string_t));
 	
-	str->size = initial_size;
+	str->capacity = initial_capacity;
 	str->length = 0;
 
-	str->data = memory_allocate(initial_size * sizeof(char));
+	str->data = memory_allocate(initial_capacity * sizeof(char));
 	str->data[0] = '\0';
 
 	str->print = cast(void (*)(void*), string_print);
@@ -35,9 +35,9 @@ string_t* string_create(size_t initial_size)
  */
 void string_append_char_begin(string_t* str, char c)
 {
-	if (str->length + 1 >= str->size) {
-		str->size *= 2;
-		str->data = memory_reallocate(str->data, str->size * sizeof(char));
+	if (str->length + 1 >= str->capacity) {
+		str->capacity *= 2;
+		str->data = memory_reallocate(str->data, str->capacity * sizeof(char));
 	}
 
 	memmove(str->data + 1, str->data, str->length + 1);
@@ -59,9 +59,9 @@ void string_append_str_begin(string_t* str, const char* prefix)
 {
 	size_t prefix_len = strlen(prefix);
 
-	while (str->length + prefix_len >= str->size) {
-		str->size *= 2;
-		str->data = memory_reallocate(str->data, str->size * sizeof(char));
+	while (str->length + prefix_len >= str->capacity) {
+		str->capacity *= 2;
+		str->data = memory_reallocate(str->data, str->capacity * sizeof(char));
 	}
 
 	memmove(str->data + prefix_len, str->data, str->length + 1);
@@ -81,9 +81,9 @@ void string_append_str_begin(string_t* str, const char* prefix)
  */
 void string_append_char(string_t* str, char c)
 {
-	if (str->length + 1 >= str->size) {
-		str->size *= 2;
-		str->data = memory_reallocate(str->data, str->size * sizeof(char));
+	if (str->length + 1 >= str->capacity) {
+		str->capacity *= 2;
+		str->data = memory_reallocate(str->data, str->capacity * sizeof(char));
 	}
 
 	str->data[str->length] = c;
@@ -105,9 +105,9 @@ void string_append_str(string_t* str, const char* suffix)
 	size_t suffix_len = strlen(suffix);
 	if (suffix_len == 0) return;
 
-	while (str->length + suffix_len >= str->size) {
-		str->size *= 2;
-		str->data = memory_reallocate(str->data, str->size * sizeof(char));
+	while (str->length + suffix_len >= str->capacity) {
+		str->capacity *= 2;
+		str->data = memory_reallocate(str->data, str->capacity * sizeof(char));
 	}
 	
 	strcpy(str->data + str->length, suffix);
@@ -130,7 +130,7 @@ void string_destroy(string_t* str)
 			memory_destroy(str->data);
 		}
 
-		str->size = 0;
+		str->capacity = 0;
 		str->length = 0;
 
 		memory_destroy(str);

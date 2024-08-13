@@ -8,6 +8,6 @@ layout {
     // age: 1, 2, 3, 42
 
     div {
-        content: "Hey, mate!"
+        content: "Heymate!"
     }
 } //dfgdgdfg

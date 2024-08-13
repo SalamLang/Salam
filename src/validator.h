@@ -8,6 +8,7 @@
 #include "base.h"
 #include "ast.h"
 #include "hashmap.h"
+#include "parser.h"
 
 /**
  * 

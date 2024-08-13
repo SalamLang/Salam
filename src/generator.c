@@ -172,34 +172,37 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
  */
 string_t* generator_code_layout_attributes(ast_layout_block_t* block)
 {
-    size_t html_attributes_size = 0;
+    size_t html_attributes_capacity = 0;
     string_t* html_attributes = string_create(1024);
 
     if (block != NULL) {
         if (block->attributes != NULL) {
             hashmap_t* attributes = cast(hashmap_t*, block->attributes);
             
-            for (size_t i = 0; i < attributes->size; i++) {
+            for (size_t i = 0; i < attributes->capacity; i++) {
                 hashmap_entry_t *entry = attributes->data[i];
 
                 while (entry) {
                     ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
-                    array_t* attribute_values = cast(array_t*, attribute->values);
-                    char* attribute_values_str = array_string_token(attribute_values, ", ");
-                    size_t attribute_value_length = strlen(attribute_values_str);
 
-                    if (html_attributes_size != 0) string_append_char(html_attributes, ' ');
+                    if (attribute->isContent != true && attribute->isStyle != true) {
+                        array_t* attribute_values = cast(array_t*, attribute->values);
+                        char* attribute_values_str = array_string_token(attribute_values, ", ");
+                        size_t attribute_value_length = strlen(attribute_values_str);
 
-                    string_append_str(html_attributes, entry->key);
-                    string_append_str(html_attributes, "=");
+                        if (html_attributes_capacity != 0) string_append_char(html_attributes, ' ');
 
-                    if (attribute_value_length > 1) string_append_str(html_attributes, "\"");
-                    string_append_str(html_attributes, attribute_values_str);
-                    if (attribute_value_length > 1) string_append_str(html_attributes, "\"");
+                        string_append_str(html_attributes, entry->key);
+                        string_append_str(html_attributes, "=");
 
-                    if (attribute_values_str != NULL) memory_destroy(attribute_values_str);
+                        if (attribute_value_length > 1) string_append_str(html_attributes, "\"");
+                        string_append_str(html_attributes, attribute_values_str);
+                        if (attribute_value_length > 1) string_append_str(html_attributes, "\"");
 
-                    html_attributes_size++;
+                        if (attribute_values_str != NULL) memory_destroy(attribute_values_str);
+
+                        html_attributes_capacity++;
+                    }
                     entry = entry->next;
                 }
             }
@@ -210,33 +213,56 @@ string_t* generator_code_layout_attributes(ast_layout_block_t* block)
     return html_attributes;
 }
 
+/**
+ * 
+ * @function generator_code_layout_block
+ * @brief Generate the HTML code for the layout block
+ * @params {generator_t*} generator - Generator
+ * @params {array_t*} children - Children
+ * @returns {string_t*}
+ * 
+ */
 string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 {
     string_t* html = string_create(1024);
 
-    for (size_t i = 0; i < children->size; i++) {
+    for (size_t i = 0; i < children->length; i++) {
         ast_layout_node_t* node = array_get(children, i);
 
         string_t* layout_block_str = string_create(1024);
-        string_t* layout_block_children = generator_code_layout_block(generator, node->block->children);
-        
         string_t* node_attrs_str = generator_code_layout_attributes(node->block);
 
         string_append_str(layout_block_str, "<TAG");
-        if (node_attrs_str->length > 0) string_append_char(layout_block_str, ' ');
-        string_append(layout_block_str, node_attrs_str);
+        if (node_attrs_str->length > 0) {
+            string_append_char(layout_block_str, ' ');
+            string_append(layout_block_str, node_attrs_str);
+        }
         if (node_attrs_str != NULL) node_attrs_str->destroy(node_attrs_str);
         string_append_str(layout_block_str, ">");
 
-        if (layout_block_children->length > 0) {
-            string_append_char(layout_block_str, "\n");
-            string_append(layout_block_str, layout_block_children);
+        if (node->block->children->length > 0 || node->block->text_content != NULL) {
+            string_append_char(layout_block_str, '\n');
+
+            if (node->block->text_content != NULL) {
+                string_append_str(layout_block_str, "{");
+                string_append_str(layout_block_str, node->block->text_content);
+                string_append_str(layout_block_str, "}");
+            }
+
+            if (node->block->children->length > 0) {
+                string_t* layout_block_children = generator_code_layout_block(generator, node->block->children);
+
+                if (layout_block_children->length > 0) string_append(layout_block_str, layout_block_children);
+                if (layout_block_children != NULL) layout_block_children->destroy(layout_block_children);
+            }
+
         }
 
         string_append_str(layout_block_str, "</TAG>\n");
 
         string_append(html, layout_block_str);
-        layout_block_str->destroy(layout_block_str);
+
+        if (layout_block_str != NULL) layout_block_str->destroy(layout_block_str);
     }
 
     return html;

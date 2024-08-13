@@ -18,7 +18,7 @@ typedef struct hashmap_entry {
 
 typedef struct {
 	hashmap_entry_t **data;
-	size_t size;
+	size_t capacity;
 	size_t length;
 
     void (*print)(void* node);

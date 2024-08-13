@@ -17,15 +17,15 @@ char* file_reads(const char* path, size_t* size)
     }
 
     fseek(file, 0, SEEK_END);
-    size_t file_size = ftell(file);
+    size_t file_capacity = ftell(file);
     if (size != NULL) {
-        *size = file_size;
+        *size = file_capacity;
     }
     fseek(file, 0, SEEK_SET);
 
-    char* content = (char*)memory_allocate(file_size + 1);
-    fread(content, 1, file_size, file);
-    content[file_size] = '\0';
+    char* content = (char*)memory_allocate(file_capacity + 1);
+    fread(content, 1, file_capacity, file);
+    content[file_capacity] = '\0';
 
     fclose(file);
 
@@ -275,13 +275,13 @@ char* file_get_absolute(const char* path)
 
 /**
  * 
- * @function file_get_size
+ * @function file_get_capacity
  * @berif Get the size of a file
  * @params {char*} path - Path of file
  * @returns {long} - Size of file
  * 
  */
-long file_get_size(const char* path)
+long file_get_capacity(const char* path)
 {
     struct stat st;
     stat(path, &st);

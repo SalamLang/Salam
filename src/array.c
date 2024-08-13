@@ -5,18 +5,18 @@
  * 
  * @function array_create
  * @brief Create a new array
- * @params {size_t} element_size - Size of each element
+ * @params {size_t} element_capacity - Size of each element
  * @params {size_t} capacity - Initial capacity of the array
  * @returns {array_t*} - Pointer to the created array
  * 
  */
-array_t* array_create(size_t element_size, size_t capacity)
+array_t* array_create(size_t element_capacity, size_t capacity)
 {
     array_t* array = memory_allocate(sizeof(array_t));
-    array->size = 0;
+    array->length = 0;
     array->capacity = capacity;
-    array->element_size = element_size;
-    array->data = memory_allocate(array->element_size * array->capacity);
+    array->element_capacity = element_capacity;
+    array->data = memory_allocate(array->element_capacity * array->capacity);
 
     array->print = cast(void (*)(void*), array_print);
     array->destroy = cast(void (*)(void*), array_destroy);
@@ -30,16 +30,16 @@ array_t* array_create(size_t element_size, size_t capacity)
  * @brief Create a new array
  * @params {array_t*} array - Array to initialize
  * @params {size_t} capacity - Initial capacity of the array
- * @params {size_t} element_size - Size of each element
+ * @params {size_t} element_capacity - Size of each element
  * @returns {void}
  * 
  */
-void array_init(array_t* array, size_t capacity, size_t element_size)
+void array_init(array_t* array, size_t capacity, size_t element_capacity)
 {
-    array->size = 0;
+    array->length = 0;
     array->capacity = capacity;
-    array->element_size = element_size;
-    array->data = memory_allocate(element_size * capacity);
+    array->element_capacity = element_capacity;
+    array->data = memory_allocate(element_capacity * capacity);
 }
 
 /**
@@ -53,12 +53,12 @@ void array_init(array_t* array, size_t capacity, size_t element_size)
  */
 bool array_push(array_t* array, void* element)
 {
-    if (array->size >= array->capacity) {
+    if (array->length >= array->capacity) {
         array->capacity *= 2;
-        array->data = memory_reallocate(array->data, array->element_size * array->capacity);
+        array->data = memory_reallocate(array->data, array->element_capacity * array->capacity);
     }
 
-    array->data[array->size++] = element;
+    array->data[array->length++] = element;
 
     return true;
 }
@@ -74,12 +74,12 @@ bool array_push(array_t* array, void* element)
  */
 bool array_pop(array_t* array, void* element)
 {
-    if (array->size == 0) {
+    if (array->length == 0) {
         return false;
     }
 
-    array->size--;
-    memory_copy(element, (char*)array->data + (array->size * array->element_size), array->element_size);
+    array->length--;
+    memory_copy(element, (char*)array->data + (array->capacity * array->element_capacity), array->element_capacity);
     return true;
 }
 
@@ -95,7 +95,7 @@ bool array_pop(array_t* array, void* element)
 void array_resize(array_t* array, size_t new_capacity)
 {
     array->capacity = new_capacity;
-    array->data = memory_reallocate(array->data, array->element_size * new_capacity);
+    array->data = memory_reallocate(array->data, array->element_capacity * new_capacity);
 }
 
 /**
@@ -109,7 +109,7 @@ void array_resize(array_t* array, size_t new_capacity)
  */
 void* array_get(array_t* array, size_t index)
 {
-    if (index >= array->size) {
+    if (index >= array->length) {
         return NULL;
     }
 
@@ -129,9 +129,9 @@ void array_destroy(array_t* array)
     if (array != NULL) {
         memory_destroy(array->data);
 
-        array->size = 0;
         array->capacity = 0;
-        array->element_size = 0;
+        array->length = 0;
+        array->element_capacity = 0;
 
         memory_destroy(array);
     }
@@ -148,16 +148,20 @@ void array_destroy(array_t* array)
  */
 char* array_string(array_t* array, char* sepertor)
 {
-    if (array == NULL || array->size == 0) {
+    if (array == NULL || array->length == 0) {
         return strdup("");
     }
 
     string_t* str = string_create(16);
-    for (size_t i = 0; i < array->size; i++) {
-        string_append_str(str, array_get(array, i));
+    for (size_t i = 0; i < array->length; i++) {
+        char* item = array_get(array, i);
 
-        if (i < array->size - 1) {
-            string_append_str(str, sepertor);
+        if (item != NULL) {
+            string_append_str(str, item);
+            
+            if (i < array->length - 1) {
+                string_append_str(str, sepertor);
+            }
         }
     }
 
@@ -178,16 +182,16 @@ char* array_string(array_t* array, char* sepertor)
  */
 char* array_string_token(array_t* array, char* sepertor)
 {
-    if (array == NULL || array->size == 0) {
+    if (array == NULL || array->length == 0) {
         return strdup("");
     }
 
     string_t* str = string_create(16);
-    for (size_t i = 0; i < array->size; i++) {
+    for (size_t i = 0; i < array->length; i++) {
         token_t* token = array_get(array, i);
         string_append_str(str, token_value(token));
 
-        if (i < array->size - 1) {
+        if (i < array->length - 1) {
             string_append_str(str, sepertor);
         }
     }
@@ -212,7 +216,7 @@ void array_destroy_custom(array_t* array, void (*free_fn)(void*))
     if (array != NULL) {
         if (array->data != NULL) {
             if (free_fn != NULL) {
-                for (size_t i = 0; i < array->size; i++) {
+                for (size_t i = 0; i < array->length; i++) {
                     if (array->data[i] != NULL) {
                         free_fn(array->data[i]);
                     }
@@ -222,9 +226,9 @@ void array_destroy_custom(array_t* array, void (*free_fn)(void*))
             memory_destroy(array->data);
         }
 
-        array->size = 0;
         array->capacity = 0;
-        array->element_size = 0;
+        array->length = 0;
+        array->element_capacity = 0;
 
         memory_destroy(array);
     }
@@ -240,9 +244,9 @@ void array_destroy_custom(array_t* array, void (*free_fn)(void*))
  */
 void array_print(array_t* array)
 {
-    printf("Array: %zu\n", array->size);
+    printf("Array: %zu\n", array->length);
 
-    for (size_t i = 0; i < array->size; i++) {
+    for (size_t i = 0; i < array->length; i++) {
         printf("\t%p\n", array->data[i]);
     }
 }
@@ -257,11 +261,12 @@ void array_print(array_t* array)
  */
 void array_token_print(array_token_t* array)
 {
-    printf("Token array: %zu\n", array->size);
+    printf("Token array: %zu\n", array->length);
 
-    for (size_t i = 0; i < array->size; i++) {
+    for (size_t i = 0; i < array->length; i++) {
         printf("\t");
         token_t* token = array_get(array, i);
+
         token->print(token);
     }
 }
@@ -276,9 +281,9 @@ void array_token_print(array_token_t* array)
  */
 void array_node_print(array_node_t* array)
 {
-    printf("Node array: %zu\n", array->size);
+    printf("Node array: %zu\n", array->length);
 
-    for (size_t i = 0; i < array->size; i++) {
+    for (size_t i = 0; i < array->length; i++) {
         printf("\t");
         ast_node_t* node = array_get(array, i);
         node->print(node);
@@ -295,14 +300,14 @@ void array_node_print(array_node_t* array)
  */
 void array_layout_attribute_print(array_layout_attribute_t* array)
 {
-    printf("Attribute array: %zu\n", array->size);
+    printf("Attribute array: %zu\n", array->length);
 
-    if (array->size == 0) {
+    if (array->length == 0) {
 		printf("Array is empty\n");
         return;
     }
 
-    for (size_t i = 0; i < array->size; i++) {
+    for (size_t i = 0; i < array->length; i++) {
         printf("\t");
         ast_layout_attribute_t* attribute = array_get(array, i);
 
@@ -312,15 +317,28 @@ void array_layout_attribute_print(array_layout_attribute_t* array)
 
 /**
  * 
- * @function array_size
+ * @function array_capacity
  * @brief Get the size of the array
  * @params {array_t*} array - Array
  * @returns {size_t} - Size of the array
  * 
  */
-size_t array_size(array_t* array)
+size_t array_capacity(array_t* array)
 {
-    return array->size;
+    return array->capacity;
+}
+
+/**
+ * 
+ * @function array_length
+ * @brief Get the length of the array
+ * @params {array_t*} array - Array
+ * @returns {size_t} - Length of the array
+ * 
+ */
+size_t array_length(array_t* array)
+{
+    return array->length;
 }
 
 /**
@@ -334,7 +352,7 @@ size_t array_size(array_t* array)
 void array_token_destroy(array_token_t* array)
 {
     if (array != NULL) {
-        for (size_t i = 0; i < array->size; i++) {
+        for (size_t i = 0; i < array->length; i++) {
             token_t* token = array_get(array, i);
             
             if (token != NULL) {
@@ -346,3 +364,62 @@ void array_token_destroy(array_token_t* array)
     }
 }
 
+/**
+ * 
+ * @function array_node_destroy
+ * @brief Free the node array memory
+ * @params {array_node_t*} array - Node array
+ * @returns {void}
+ * 
+ */
+void array_layout_node_destroy(array_node_layout_t* array)
+{
+    printf("array_layout_node_destroy\n");
+    if (array != NULL) {
+        if (array->data != NULL) {
+            for (size_t i = 0; i < array->length; i++) {
+                printf("array_layout_node_destroy->node\n");
+                ast_layout_node_t* node = array_get(array, i);
+                printf("array_layout_node_destroy->node (after)\n");
+                if (node != NULL) {
+                    printf("array_layout_node_destroy->node->destroy\n");
+                    node->destroy(node);
+                }
+                printf("array_layout_node_destroy->node->destroy (after)\n");
+            }
+
+            memory_destroy(array->data);
+        }
+
+        array->capacity = 0;
+        array->length = 0;
+        array->element_capacity = 0;
+
+        memory_destroy(array);
+    }    
+}
+
+/**
+ * 
+ * @function array_layout_attribute_print
+ * @brief Print the attribute array
+ * @params {array_layout_attribute_t*} array - Attribute array
+ * @returns {void}
+ * 
+ */
+void array_layout_node_print(array_node_layout_t* array)
+{
+    printf("array_layout_node_print\n");
+    printf("Node array: %zu\n", array->length);
+
+    for (size_t i = 0; i < array->length; i++) {
+        printf("\t");
+        ast_layout_node_t* node = cast(ast_layout_node_t*, array_get(cast(array_t*, array), i));
+        if (node != NULL) {
+            node->print(node);
+        }
+        else {
+            printf("NULL\n");
+        }
+    }
+}

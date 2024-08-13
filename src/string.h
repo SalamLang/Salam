@@ -10,7 +10,7 @@
 #include "memory.h"
 
 typedef struct {
-	size_t size;
+	size_t capacity;
 	size_t length;
 	char* data;
     
@@ -22,11 +22,11 @@ typedef struct {
  * 
  * @function string_create
  * @brief Create a string
- * @params {size_t} initial_size - Initial size of the string
+ * @params {size_t} initial_capacity - Initial size of the string
  * @returns {string_t*}
  * 
  */
-string_t* string_create(size_t initial_size);
+string_t* string_create(size_t initial_capacity);
 
 /**
  * 

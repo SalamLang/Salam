@@ -117,13 +117,13 @@ char* file_get_absolute(const char* path);
 
 /**
  * 
- * @function file_get_size
+ * @function file_get_capacity
  * @berif Get the size of a file
  * @params {char*} path - Path of file
  * @returns {long} - Size of file
  * 
  */
-long file_get_size(const char* path);
+long file_get_capacity(const char* path);
 
 /**
  * 

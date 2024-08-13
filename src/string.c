@@ -103,6 +103,7 @@ void string_append_char(string_t* str, char c)
 void string_append_str(string_t* str, const char* suffix)
 {
 	size_t suffix_len = strlen(suffix);
+	if (suffix_len == 0) return;
 
 	while (str->length + suffix_len >= str->size) {
 		str->size *= 2;
@@ -162,6 +163,8 @@ void string_print(string_t* str)
  */
 void string_append(string_t* str, string_t* value)
 {
+	if (value->length == 0) return;
+
 	string_append_str(str, value->data);
 }
 

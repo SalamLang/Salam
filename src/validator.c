@@ -10,12 +10,24 @@
  */
 void validate_layout_block(ast_layout_block_t* block)
 {
-    hashmap_t attributes = cast(hashmap_t*, block->attributes);
+    hashmap_t* attributes = cast(hashmap_t*, block->attributes);
 
     ast_layout_attribute_t* attribute_content = hashmap_get(attributes, "content");
     if (attribute_content != NULL) {
-        if (attribute_content->values->size > 1) {
-            unknown_scope(NULL, "layout block content");
+        attribute_content->isContent = true;
+        
+        array_t* values = cast(array_t*, attribute_content->values);
+        char* content = array_string(values, ", ");
+
+        if (values->length > 0 && strlen(content) > 0) {
+            block->text_content = content;
         }
+        else {
+            if (content != NULL) memory_destroy(content);
+        }
+
+        // ast_layout_node_t* text = ast_layout_node_create(AST_NODE_LAYOUT_NODE_TYPE_PARAGRAPH_RAW);
+        // hashmap_put(cast(hashmap_t*, text->block->attributes), "content", values);
+        // array_push(block->children, text);
     }
 }

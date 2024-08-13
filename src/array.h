@@ -9,9 +9,9 @@
 
 typedef struct {
     void** data;
-    size_t size;
+    size_t length;
     size_t capacity;
-    size_t element_size;
+    size_t element_capacity;
 
     void (*print)(void* node);
     void (*destroy)(void* node);
@@ -31,12 +31,12 @@ typedef array_t array_layout_attribute_t;
  * 
  * @function array_create
  * @brief Create a new array
- * @params {size_t} element_size - Size of each element
+ * @params {size_t} element_capacity - Size of each element
  * @params {size_t} capacity - Initial capacity of the array
  * @returns {array_t*} - Pointer to the created array
  * 
  */
-array_t* array_create(size_t element_size, size_t capacity);
+array_t* array_create(size_t element_capacity, size_t capacity);
 
 /**
  * 
@@ -44,11 +44,11 @@ array_t* array_create(size_t element_size, size_t capacity);
  * @brief Create a new array
  * @params {array_t*} array - Array to initialize
  * @params {size_t} capacity - Initial capacity of the array
- * @params {size_t} element_size - Size of each element
+ * @params {size_t} element_capacity - Size of each element
  * @returns {void}
  * 
  */
-void array_init(array_t* array, size_t capacity, size_t element_size);
+void array_init(array_t* array, size_t capacity, size_t element_capacity);
 
 /**
  * 
@@ -147,13 +147,23 @@ void array_token_destroy(array_token_t* array);
 
 /**
  * 
- * @function array_size
+ * @function array_capacity
  * @brief Get the size of the array
  * @params {array_t*} array - Array
  * @returns {size_t} - Size of the array
  * 
  */
-size_t array_size(array_t* array);
+size_t array_capacity(array_t* array);
+
+/**
+ * 
+ * @function array_length
+ * @brief Get the length of the array
+ * @params {array_t*} array - Array
+ * @returns {size_t} - Length of the array
+ * 
+ */
+size_t array_length(array_t* array);
 
 /**
  * 
@@ -196,5 +206,25 @@ char* array_string(array_t* array, char* sepertor);
  * 
  */
 char* array_string_token(array_t* array, char* sepertor);
+
+/**
+ * 
+ * @function array_layout_attribute_print
+ * @brief Print the attribute array
+ * @params {array_layout_attribute_t*} array - Attribute array
+ * @returns {void}
+ * 
+ */
+void array_layout_node_print(array_node_layout_t* node);
+
+/**
+ * 
+ * @function array_node_destroy
+ * @brief Free the node array memory
+ * @params {array_node_t*} array - Node array
+ * @returns {void}
+ * 
+ */
+void array_layout_node_destroy(array_node_layout_t* array);
 
 #endif

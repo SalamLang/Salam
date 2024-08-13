@@ -29,6 +29,7 @@ typedef enum {
 
 typedef enum {
     AST_NODE_LAYOUT_NODE_TYPE_PARAGRAPH,
+    AST_NODE_LAYOUT_NODE_TYPE_PARAGRAPH_RAW,
     AST_NODE_LAYOUT_NODE_TYPE_BUTTON,
     AST_NODE_LAYOUT_NODE_TYPE_FORM,
     AST_NODE_LAYOUT_NODE_TYPE_DIV,
@@ -64,6 +65,8 @@ typedef struct ast_function_t {
 
 typedef struct ast_layout_block_t {
     ast_type_t parent_type;
+    char* text_content;
+
     struct hashmap_t* attributes;
     struct hashmap_t* styles;
     array_node_layout_t* children;
@@ -76,6 +79,7 @@ typedef struct ast_layout_attribute_t {
     char* key;
     array_t* values;
     bool isStyle;
+    bool isContent;
 
     void (*destroy)(void* node);
     void (*print)(void* node);

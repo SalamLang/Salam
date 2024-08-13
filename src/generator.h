@@ -86,4 +86,15 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
  */
 string_t* generator_code_layout_attributes(ast_layout_block_t* block);
 
+/**
+ * 
+ * @function generator_code_layout_block
+ * @brief Generate the HTML code for the layout block
+ * @params {generator_t*} generator - Generator
+ * @params {array_t*} children - Children
+ * @returns {string_t*}
+ * 
+ */
+string_t* generator_code_layout_block(generator_t* generator, array_t* children);
+
 #endif

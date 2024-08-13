@@ -96,7 +96,7 @@ ast_block_t* ast_block_create()
  */
 bool match_next(lexer_t* lexer, token_type_t token_type)
 {
-	if (lexer->token_index + 1 >= lexer->tokens->size) {
+	if (lexer->token_index + 1 >= lexer->tokens->capacity) {
 		return false;
 	}
 	return PARSER_CURRENT_NEXT->type == token_type;
@@ -202,6 +202,7 @@ ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer)
 
 	parser_parse_layout_block(node->block, lexer, AST_NODE_TYPE_LAYOUT);
 	
+	printf("========================\n==========================>>>>>");
 	token->print(token);
 
 	return node;
@@ -348,7 +349,7 @@ ast_t* parser_parse(lexer_t* lexer)
 {
 	ast_t* ast = ast_create();
 
-	while (lexer->token_index < lexer->tokens->size) {
+	while (lexer->token_index < lexer->tokens->capacity) {
 		if (PARSER_CURRENT->type == TOKEN_EOF) break;
 
 		ast_node_t* node = parser_parse_node(lexer);

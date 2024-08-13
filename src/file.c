@@ -195,7 +195,7 @@ char* file_get_directory(const char* path)
     }
     
     size_t size = last - path;
-    char* directory = (char*)memory_allocate(size + 1);
+    char* directory = memory_allocate(size + 1);
     strncpy(directory, path, size);
     directory[size] = '\0';
 

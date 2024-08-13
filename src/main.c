@@ -38,11 +38,22 @@ void doargs(int argc, char** argv)
 
     generator_t* generator = generator_create(ast);
 
+    printf("generate code\n");
+
+    generator_code(generator);
+
+    printf("generate debug\n");
+
     generator_debug(generator);
+
+    printf("generate save\n");
 
     generator_save(generator);
 
+    printf("generate destroy\n");
     generator_destroy(generator);
+
+    printf("ast destroy\n");
 
     ast_destroy(ast);
 

@@ -11,16 +11,16 @@
 string_t* string_create(size_t initial_size)
 {
 	string_t* str = memory_allocate(sizeof(string_t));
-
+	
 	str->size = initial_size;
 	str->length = 0;
 
 	str->data = memory_allocate(initial_size * sizeof(char));
-	str->print = string_print;
-	str->destroy = string_destroy;
-
 	str->data[0] = '\0';
 
+	str->print = cast(void (*)(void*), string_print);
+	str->destroy = cast(void (*)(void*), string_destroy);
+	
 	return str;
 }
 
@@ -133,6 +133,7 @@ void string_destroy(string_t* str)
 		str->length = 0;
 
 		memory_destroy(str);
+		str = NULL;
 	}
 }
 
@@ -148,4 +149,84 @@ void string_print(string_t* str)
 {
 	if (str == NULL || str->data == NULL) printf("NULL\n");
 	else printf("%s\n", str->data);
+}
+
+/**
+ * 
+ * @function string_append
+ * @brief Append a string to the end of the string
+ * @params {string_t*} str - String
+ * @params {string_t*} value - Value
+ * @returns {void}
+ * 
+ */
+void string_append(string_t* str, string_t* value)
+{
+	string_append_str(str, value->data);
+}
+
+/**
+ * 
+ * @function string_set
+ * @brief Set the value of a string
+ * @params {string_t*} str - String
+ * @params {string_t*} value - Value
+ * @returns {void}
+ * 
+ */
+void string_set(string_t* str, string_t* value)
+{
+	return string_append_str(str, value->data);
+}
+
+/**
+ * 
+ * @function string_set_str
+ * @brief Set the value of a string
+ * @params {string_t*} str - String
+ * @params {const char*} value - Value
+ * @returns {void}
+ * 
+ */
+void string_set_str(string_t* str, const char* value)
+{
+	return string_append_str(str, value);
+}
+
+/**
+ * 
+ * @function string_lower_str
+ * @brief Convert a string to lowercase
+ * @params {const char*} str - String
+ * @returns {char*} - Lowercase string
+ * 
+ */
+char* string_lower_str(const char* str)
+{
+	char* buffer = strdup(str);
+
+	for (size_t i = 0; i < strlen(buffer); i++) {
+		buffer[i] = tolower(buffer[i]);
+	}
+
+	return buffer;
+}
+
+/**
+ * 
+ * @function string_upper_str
+ * @brief Convert a string to uppercase
+ * @params {const char*} str - String
+ * @returns {char*} - Uppercase string
+ * 
+ */
+char* string_upper_str(const char* str)
+{
+	char* buffer = strdup(str);
+
+	for (size_t i = 0; i < strlen(buffer); i++) {
+		buffer[i] = tolower(buffer[i]);
+	}
+
+	return buffer;
 }

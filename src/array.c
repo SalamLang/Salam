@@ -139,6 +139,36 @@ void array_destroy(array_t* array)
 
 /**
  * 
+ * @function array_string
+ * @brief Convert the array to a string
+ * @params {array_t*} array - Array
+ * @params {char*} sepertor - Separator
+ * @returns {char*} - String
+ * 
+ */
+char* array_string(array_t* array, char* sepertor)
+{
+    if (array == NULL || array->size == 0) {
+        return strdup("");
+    }
+
+    string_t* str = string_create(16);
+    for (size_t i = 0; i < array->size; i++) {
+        string_append_str(str, array_get(array, i));
+
+        if (i < array->size - 1) {
+            string_append_str(str, sepertor);
+        }
+    }
+
+    char* buffer = strdup(str->data);
+    string_destroy(str);
+
+    return buffer;
+}
+
+/**
+ * 
  * @function array_destroy_custom
  * @brief Free the array memory
  * @params {array_t*} array - Array

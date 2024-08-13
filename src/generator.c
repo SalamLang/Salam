@@ -219,16 +219,21 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 
         string_t* layout_block_str = string_create(1024);
         string_t* layout_block_children = generator_code_layout_block(generator, node->block->children);
+        
+        string_t* node_attrs_str = generator_code_layout_attributes(node->block);
 
-        if (layout_block_children->length == 0) {
-            string_append_str(layout_block_str, "<...>");
-            string_append_str(layout_block_str, "</...>\n");
-        }
-        else {
-            string_append_str(layout_block_str, "<...>\n");
+        string_append_str(layout_block_str, "<TAG");
+        if (node_attrs_str->length > 0) string_append_char(layout_block_str, ' ');
+        string_append(layout_block_str, node_attrs_str);
+        if (node_attrs_str != NULL) node_attrs_str->destroy(node_attrs_str);
+        string_append_str(layout_block_str, ">");
+
+        if (layout_block_children->length > 0) {
+            string_append_char(layout_block_str, "\n");
             string_append(layout_block_str, layout_block_children);
-            string_append_str(layout_block_str, "</...>\n");
         }
+
+        string_append_str(layout_block_str, "</TAG>\n");
 
         string_append(html, layout_block_str);
         layout_block_str->destroy(layout_block_str);
@@ -250,6 +255,7 @@ void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layo
     string_append_str(body_tag, ">");
 
     string_t* body_child = generator_code_layout_block(generator, layout_block->children);
+    if (body_child->length > 0) string_append_char(body_tag, '\n');
     string_append(body_content, body_child);
     body_child->destroy(body_child);     
 

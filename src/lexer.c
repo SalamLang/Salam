@@ -681,10 +681,20 @@ void lexer_lex(lexer_t* lexer)
             case '<':
             case '>':
             case '!':
-                token_t* token = token_create(c, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-                LEXER_PUSH_TOKEN(token);
+                if (LEXER_CURRENT == '/') {
+                    LEXER_NEXT;
+                    LEXER_NEXT_COLUMN;
+                    while (LEXER_CURRENT != '\n' && LEXER_CURRENT != '\0') {
+                        LEXER_NEXT;
+                        LEXER_NEXT_COLUMN;
+                    }
+                    continue;
+                }
+                else {
+                    token_t* token = token_create(c, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+                    LEXER_PUSH_TOKEN(token);
+                }
                 continue;
-
             case '"':
                 lexer_lex_string(lexer);
                 continue;

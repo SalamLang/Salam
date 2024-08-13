@@ -176,11 +176,91 @@ ast_block_t* parser_parse_block(lexer_t* lexer, ast_block_type_t type, ast_type_
  * @returns {ast_layout_node_t*} - AST layout node
  * 
  */
-ast_layout_node_t* parser_parse_layout_node()
-{
-	ast_layout_node_t* node = ast_layout_node_create(AST_NODE_LAYOUT_NODE_TYPE_DIV);
+ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer)
+{	
+	token_t* token = PARSER_CURRENT;
+	expect(lexer, TOKEN_IDENTIFIER);
+
+	ast_layout_node_type_t type = AST_NODE_LAYOUT_NODE_TYPE_ERROR;
+	if (strcmp(token->data.string, "div") == 0) {
+		type = AST_NODE_LAYOUT_NODE_TYPE_DIV;
+	}
+	else if (strcmp(token->data.string, "form") == 0) {
+		type = AST_NODE_LAYOUT_NODE_TYPE_FORM;
+	}
+	else if (strcmp(token->data.string, "button") == 0) {
+		type = AST_NODE_LAYOUT_NODE_TYPE_BUTTON;
+	}
+	else if (strcmp(token->data.string, "paragraph") == 0) {
+		type = AST_NODE_LAYOUT_NODE_TYPE_PARAGRAPH;
+	}
+	else {
+		error(2, "Unknown layout node type %s at line %d, column %d", token->data.string, token->location.end_line, token->location.end_column);
+	}
+
+	ast_layout_node_t* node = ast_layout_node_create(type);
+
+	parser_parse_layout_block(node->block, lexer, AST_NODE_TYPE_LAYOUT);
+	
+	token->print(token);
 
 	return node;
+}
+
+/**
+ * 
+ * @function parser_parse_layout_block_attribute
+ * @brief Parse the block attribute
+ * @params {ast_layout_block_t*} block - AST layout block node
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {void}
+ * 
+ */
+void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lexer)
+{
+	token_t* token = PARSER_CURRENT;
+	array_t* values = array_create(sizeof(token_t*), 1);
+	values->destroy = cast(void (*)(void*), array_token_destroy);
+
+	PARSER_NEXT; // Eating the identifier token
+	PARSER_NEXT; // Eating the colon token
+
+	token_t* value = parser_parse_value(lexer);
+
+	token_t* value_copy = token_copy(value);
+
+	array_push(values, value_copy);
+
+	if (match(lexer, TOKEN_COMMA)) {
+		while (match(lexer, TOKEN_COMMA)) {
+			PARSER_NEXT; // Eating the comma token
+
+			token_t* new_value = parser_parse_value(lexer);
+
+			token_t* new_value_copy = token_copy(new_value);
+			array_push(values, new_value_copy);
+		}
+	}
+
+	ast_layout_attribute_t* attribute = ast_layout_attribute_create(token->data.string, values);
+
+	hashmap_put(cast(hashmap_t*, block->attributes), token->data.string, attribute);
+}
+
+/**
+ * 
+ * @function parser_parse_layout_block_children
+ * @brief Parse the block children
+ * @params {ast_layout_block_t*} block - AST layout block node
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {void}
+ * 
+ */
+void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexer)
+{
+	ast_layout_node_t* node = parser_parse_layout_node(lexer);
+
+	array_push(block->children, node);
 }
 
 /**
@@ -200,35 +280,11 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer, ast_ty
 	expect(lexer, TOKEN_LEFT_BRACE);
 
 	while (PARSER_CURRENT->type != TOKEN_RIGHT_BRACE) {
-		token_t* token = PARSER_CURRENT;
-
 		if (match(lexer, TOKEN_IDENTIFIER) && match_next(lexer, TOKEN_COLON)) {
-			array_t* values = array_create(sizeof(token_t*), 1);
-    		values->destroy = cast(void (*)(void*), array_token_destroy);
-
-			PARSER_NEXT; // Eating the identifier token
-			PARSER_NEXT; // Eating the colon token
-
-			token_t* value = parser_parse_value(lexer);
-
-			token_t* value_copy = token_copy(value);
-
-			array_push(values, value_copy);
-
-			if (match(lexer, TOKEN_COMMA)) {
-				while (match(lexer, TOKEN_COMMA)) {
-					PARSER_NEXT; // Eating the comma token
-
-					token_t* new_value = parser_parse_value(lexer);
-
-					token_t* new_value_copy = token_copy(new_value);
-					array_push(values, new_value_copy);
-				}
-			}
-
-			ast_layout_attribute_t* attribute = ast_layout_attribute_create(token->data.string, values);
-
-			hashmap_put(cast(hashmap_t*, block->attributes), token->data.string, attribute);
+			parser_parse_layout_block_attribute(block, lexer);
+		}
+		else if (match(lexer, TOKEN_IDENTIFIER) && match_next(lexer, TOKEN_LEFT_BRACE)) {
+			parser_parse_layout_block_children(block, lexer);
 		}
 		else {
 			unknown_scope(lexer, "layout block");

@@ -684,11 +684,11 @@ void lexer_lex(lexer_t* lexer)
                 if (LEXER_CURRENT == '/') {
                     LEXER_NEXT;
                     LEXER_NEXT_COLUMN;
+
                     while (LEXER_CURRENT != '\n' && LEXER_CURRENT != '\0') {
                         LEXER_NEXT;
                         LEXER_NEXT_COLUMN;
                     }
-                    continue;
                 }
                 else {
                     token_t* token = token_create(c, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});

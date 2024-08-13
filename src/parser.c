@@ -292,6 +292,8 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer, ast_ty
 	}
 
 	expect(lexer, TOKEN_RIGHT_BRACE);
+
+	validate_layout_block(block);
 }
 
 /**

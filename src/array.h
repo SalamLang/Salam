@@ -25,6 +25,7 @@ typedef array_t array_layout_attribute_t;
 #include "memory.h"
 #include "ast.h"
 #include "lexer.h"
+#include "string.h"
 
 /**
  * 
@@ -173,5 +174,16 @@ void array_layout_attribute_print(array_layout_attribute_t* array);
  * 
  */
 void array_print(array_t* array);
+
+/**
+ * 
+ * @function array_string
+ * @brief Convert the array to a string
+ * @params {array_t*} array - Array
+ * @params {char*} sepertor - Separator
+ * @returns {char*} - String
+ * 
+ */
+char* array_string(array_t* array, char* sepertor);
 
 #endif

@@ -63,4 +63,14 @@ void validate_layout_mainbody(ast_layout_block_t* block);
  */
 bool is_layout_node_a_single_tag(ast_layout_node_type_t type);
 
+/**
+ * 
+ * @function is_attribute_type_a_style
+ * @brief Check if the attribute type is a style
+ * @params {ast_layout_attribute_type_t} type - Attribute type
+ * @returns {bool} - True if the attribute type is a style, false otherwise
+ * 
+ */
+bool is_attribute_type_a_style(ast_layout_attribute_type_t type);
+
 #endif

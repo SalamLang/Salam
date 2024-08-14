@@ -165,7 +165,7 @@ ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer, ast_layout_block_t* 
 	ast_layout_node_type_t type = token_to_ast_layout_node_type(PARSER_CURRENT);
 	PARSER_NEXT;
 
-	ast_layout_node_t* node = ast_layout_node_create(type, block);
+	ast_layout_node_t* node = ast_layout_node_create(type);
 
 	parser_parse_layout_block(node->block, lexer);
 	
@@ -207,7 +207,6 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
 		}
 	}
 
-	
 	ast_layout_attribute_type_t attribute_key_type = token_to_ast_layout_attribute_type(token, block->parent_node_type);
 	token->print(token);
 

@@ -72,21 +72,6 @@ void unknown_scope(lexer_t* lexer, char* scope)
 
 /**
  * 
- * @function ast_block_create
- * @brief Create a new AST block node
- * @returns {ast_block_t*} - AST block node
- * 
- */
-ast_block_t* ast_block_create()
-{
-	ast_block_t* block = malloc(sizeof(ast_block_t));
-	block->children = array_create(sizeof(ast_node_t*), 4);
-
-	return block;
-}
-
-/**
- * 
  * @function match_next
  * @brief Match the next token type
  * @params {lexer_t*} lexer - Lexer
@@ -140,9 +125,7 @@ token_t* parser_parse_value(lexer_t* lexer)
  */
 ast_block_t* parser_parse_block(lexer_t* lexer, ast_block_type_t type, ast_type_t block_parent_type)
 {
-	ast_block_t* block = ast_block_create();
-	block->type = type;
-	block->parent_type = block_parent_type;
+	ast_block_t* block = ast_block_create(type, block_parent_type);
 
 	expect(lexer, TOKEN_LEFT_BRACE);
 
@@ -319,6 +302,37 @@ ast_node_t* parser_parse_layout(lexer_t* lexer)
 
 /**
  * 
+ * @function parser_parse_function
+ * @brief Parse the function
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {ast_node_t*} - AST node
+ * 
+ */
+ast_node_t* parser_parse_function(lexer_t* lexer)
+{
+	ast_node_t* node = ast_node_create(AST_NODE_TYPE_FUNCTION, PARSER_CURRENT->location);
+
+	PARSER_NEXT; // Eat the function token
+
+	expect(lexer, TOKEN_IDENTIFIER);
+
+	node->data.function = ast_function_create(PARSER_CURRENT->data.string);
+
+	PARSER_NEXT; // Eat the function name token
+
+	expect(lexer, TOKEN_LEFT_PAREN);
+
+	expect(lexer, TOKEN_RIGHT_PAREN);
+
+	expect(lexer, TOKEN_LEFT_BRACE);
+
+	expect(lexer, TOKEN_RIGHT_BRACE);
+
+	return node;
+}
+
+/**
+ * 
  * @function parser_parse_node
  * @brief Parse the node
  * @params {lexer_t*} lexer - Lexer
@@ -329,6 +343,9 @@ ast_node_t* parser_parse_node(lexer_t* lexer)
 {
 	if (match(lexer, TOKEN_LAYOUT)) {
 		return parser_parse_layout(lexer);
+	}
+	else if (match(lexer, TOKEN_FUNCTION)) {
+		return parser_parse_function(lexer);
 	}
 	
 	unknown_scope(lexer, "node");

@@ -263,6 +263,258 @@ void ast_layout_node_destroy(ast_layout_node_t* value)
 
 /**
  * 
+ * @function ast_block_create
+ * @brief Create a new AST block node
+ * @params {ast_block_type_t} type - Block type
+ * @params {ast_type_t} parent_type - Parent type
+ * @returns {ast_block_t*} - AST block node
+ * 
+ */
+ast_block_t* ast_block_create(ast_block_type_t type, ast_type_t parent_type)
+{
+	ast_block_t* block = malloc(sizeof(ast_block_t));
+	block->type = type;
+	block->parent_type = parent_type;
+	block->children = array_create(sizeof(ast_node_t*), 4);
+
+	return block;
+}
+
+/**
+ * 
+ * @function ast_function_create
+ * @brief Create a new AST node function
+ * @params {char*} name - Name of the function
+ * @returns {ast_function_t*} - Pointer to the created AST node function
+ * 
+ */
+ast_function_t* ast_function_create(char* name)
+{
+	ast_function_t* node = memory_allocate(sizeof(ast_function_t));
+	node->name = name;
+
+	node->return_type = ast_type_create(AST_TYPE_KIND_VOID);
+
+	node->parameters = array_create(sizeof(ast_function_parameter_t*), 16);
+	node->parameters->destroy = cast(void (*)(void*), array_function_parameter_destroy);
+	node->parameters->print = cast(void (*)(void*), array_function_parameter_print);
+
+	node->block = ast_block_create(AST_NODE_BLOCK_TYPE_FUNCTION, AST_NODE_TYPE_FUNCTION);
+
+	node->print = cast(void (*)(void*), ast_function_print);
+	node->destroy = cast(void (*)(void*), ast_function_destroy);
+
+	return node;
+}
+
+/**
+ * 
+ * @function ast_type_name
+ * @brief Get the name of the AST value type
+ * @params {ast_value_type_t*} type - AST value type
+ * @returns {char*} - Name of the AST value type
+ * 
+ */
+char* ast_type_name(ast_value_type_t* type)
+{
+	switch (type->kind) {
+		case AST_TYPE_KIND_VOID:
+			return "void";
+			break;
+		case AST_TYPE_KIND_INT:
+			return "int";
+			break;
+		case AST_TYPE_KIND_FLOAT:
+			return "float";
+			break;
+		case AST_TYPE_KIND_CHAR:
+			return "char";
+			break;
+		case AST_TYPE_KIND_STRING:
+			return "string";
+			break;
+		case AST_TYPE_KIND_BOOL:
+			return "bool";
+			break;
+	}
+
+	return "unknown";
+}
+
+/**
+ * 
+ * @function ast_type_print
+ * @brief Print the AST value type
+ * @params {ast_value_type_t*} type - AST value type
+ * @returns {void}
+ * 
+ */
+void ast_type_print(ast_value_type_t* type)
+{
+	printf("Type: ");
+
+	switch (type->kind) {
+		case AST_TYPE_KIND_VOID:
+			printf("void");
+			printf("\n");
+			return;
+
+		case AST_TYPE_KIND_INT:
+			printf("int");
+			printf("\n");
+			return;
+
+		case AST_TYPE_KIND_FLOAT:
+			printf("float");
+			printf("\n");
+			return;
+
+		case AST_TYPE_KIND_CHAR:
+			printf("char");
+			printf("\n");
+			return;
+
+		case AST_TYPE_KIND_STRING:
+			printf("string");
+			printf("\n");
+			return;
+
+		case AST_TYPE_KIND_BOOL:
+			printf("bool");
+			printf("\n");
+			return;
+	}
+	
+	printf("unknown type");
+	printf("\n");
+}
+
+/**
+ * 
+ * @function ast_type_create
+ * @brief Create a new AST value type
+ * @params {ast_value_type_kind_t} kind - Kind of the value type
+ * @returns {ast_value_type_t*} - Pointer to the created AST value type
+ * 
+ */
+ast_value_type_t* ast_type_create(ast_value_type_kind_t kind)
+{
+	ast_value_type_t* type = memory_allocate(sizeof(ast_value_type_t));
+	type->kind = kind;
+
+	type->print = cast(void (*)(void*), ast_type_print);
+	type->destroy = cast(void (*)(void*), ast_type_destroy);
+
+	return type;	
+}
+
+/**
+ * 
+ * @function ast_type_destroy
+ * @brief Free the AST value type
+ * @params {ast_value_type_t*} type - AST value type
+ * @returns {void}
+ * 
+ */
+void ast_type_destroy(ast_value_type_t* type)
+{
+	if (type != NULL) {
+		memory_destroy(type);
+	}
+}
+
+
+/**
+ * 
+ * @function ast_function_parameter_print
+ * @brief Print the AST function parameter
+ * @params {ast_function_parameter_t*} value - AST function parameter
+ * @returns {void}
+ * 
+ */
+void ast_function_parameter_print(ast_function_parameter_t* value)
+{
+	printf("Parameter: %s\n", value->name);
+}
+
+/**
+ * 
+ * @function ast_function_parameter_destroy
+ * @brief Free the AST function parameter
+ * @params {ast_function_parameter_t*} value - AST function parameter
+ * @returns {void}
+ * 
+ */
+void ast_function_parameter_destroy(ast_function_parameter_t* value)
+{
+	if (value != NULL) {
+		if (value->name != NULL) {
+			memory_destroy(value->name);
+		}
+
+		memory_destroy(value);
+	}
+}
+
+/**
+ * 
+ * @function ast_function_print
+ * @brief Print the AST function
+ * @params {ast_function_t*} value - AST function
+ * @returns {void}
+ * 
+ */
+void ast_function_print(ast_function_t* value)
+{
+	printf("Function: %s\n", value->name);
+
+	array_t* parameters = value->parameters;
+	size_t parameters_capacity = array_length(parameters);
+
+	printf("Return Type: ");
+	value->return_type->print(value->return_type);
+	printf("\n");
+
+	printf("Parameters: %zu\n", parameters_capacity);
+	for (size_t i = 0; i < parameters_capacity; i++) {
+		ast_function_parameter_t* parameter = cast(ast_function_parameter_t*, array_get(parameters, i));
+
+		parameter->print(parameter);
+	}
+
+	value->block->print(value->block);
+}
+
+/**
+ * 
+ * @function ast_function_destroy
+ * @brief Free the AST function
+ * @params {ast_function_t*} value - AST function
+ * @returns {void}
+ * 
+ */
+void ast_function_destroy(ast_function_t* value)
+{
+	if (value != NULL) {
+		if (value->name != NULL) {
+			memory_destroy(value->name);
+		}
+
+		if (value->parameters != NULL) {
+			value->parameters->destroy(value->parameters);
+		}
+
+		if (value->block != NULL) {
+			value->block->destroy(value->block);
+		}
+
+		memory_destroy(value);
+	}
+}
+
+
+/**
+ * 
  * @function ast_layout_create
  * @brief Create a new AST node layout attribute
  * @returns {ast_layout_attribute_t*} - Pointer to the created AST node layout attribute

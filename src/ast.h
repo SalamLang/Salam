@@ -28,13 +28,102 @@ typedef enum {
 } ast_block_type_t;
 
 typedef enum {
-    AST_NODE_LAYOUT_NODE_TYPE_PARAGRAPH,
-    AST_NODE_LAYOUT_NODE_TYPE_PARAGRAPH_RAW,
-    AST_NODE_LAYOUT_NODE_TYPE_BUTTON,
-    AST_NODE_LAYOUT_NODE_TYPE_FORM,
-    AST_NODE_LAYOUT_NODE_TYPE_DIV,
-    AST_NODE_LAYOUT_NODE_TYPE_ERROR,
+    AST_LAYOUT_NODE_TYPE_PARAGRAPH,
+    AST_LAYOUT_NODE_TYPE_PARAGRAPH_RAW,
+    AST_LAYOUT_NODE_TYPE_BUTTON,
+    AST_LAYOUT_NODE_TYPE_INPUT,
+    AST_LAYOUT_NODE_TYPE_TEXTAREA,
+    AST_LAYOUT_NODE_TYPE_SPAN,
+    AST_LAYOUT_NODE_TYPE_LABEL,
+    AST_LAYOUT_NODE_TYPE_HEADER,
+    AST_LAYOUT_NODE_TYPE_FOOTER,
+    AST_LAYOUT_NODE_TYPE_NAV,
+    AST_LAYOUT_NODE_TYPE_MAIN,
+    AST_LAYOUT_NODE_TYPE_SECTION,
+    AST_LAYOUT_NODE_TYPE_ARTICLE,
+    AST_LAYOUT_NODE_TYPE_ASIDE,
+    AST_LAYOUT_NODE_TYPE_SELECT,
+    AST_LAYOUT_NODE_TYPE_OPTION,
+    AST_LAYOUT_NODE_TYPE_IFRAME,
+    AST_LAYOUT_NODE_TYPE_CANVAS,
+    AST_LAYOUT_NODE_TYPE_BLOCKQUOTE,
+    AST_LAYOUT_NODE_TYPE_PRE,
+    AST_LAYOUT_NODE_TYPE_CODE,
+    AST_LAYOUT_NODE_TYPE_BR,
+    AST_LAYOUT_NODE_TYPE_HR,
+    AST_LAYOUT_NODE_TYPE_STRONG,
+    AST_LAYOUT_NODE_TYPE_EM,
+    AST_LAYOUT_NODE_TYPE_ITALIC,
+    AST_LAYOUT_NODE_TYPE_BOLD,
+    AST_LAYOUT_NODE_TYPE_UNDERLINE,
+    AST_LAYOUT_NODE_TYPE_S,
+    AST_LAYOUT_NODE_TYPE_SMALL,
+    AST_LAYOUT_NODE_TYPE_BIG,
+    AST_LAYOUT_NODE_TYPE_SUB,
+    AST_LAYOUT_NODE_TYPE_SUP,
+    AST_LAYOUT_NODE_TYPE_CENTER,
+    AST_LAYOUT_NODE_TYPE_DEL,
+    AST_LAYOUT_NODE_TYPE_INS,
+    AST_LAYOUT_NODE_TYPE_MARK,
+    AST_LAYOUT_NODE_TYPE_Q,
+    AST_LAYOUT_NODE_TYPE_CITE,
+    AST_LAYOUT_NODE_TYPE_DFN,
+    AST_LAYOUT_NODE_TYPE_ADDRESS,
+    AST_LAYOUT_NODE_TYPE_TIME,
+    AST_LAYOUT_NODE_TYPE_PROGRESS,
+    AST_LAYOUT_NODE_TYPE_METER,
+    AST_LAYOUT_NODE_TYPE_DETAILS,
+    AST_LAYOUT_NODE_TYPE_SUMMARY,
+    AST_LAYOUT_NODE_TYPE_DIALOG,
+    AST_LAYOUT_NODE_TYPE_MENU,
+    AST_LAYOUT_NODE_TYPE_MENUITEM,
+    AST_LAYOUT_NODE_TYPE_COMMAND,
+    AST_LAYOUT_NODE_TYPE_LEGEND,
+    AST_LAYOUT_NODE_TYPE_FIELDSET,
+    AST_LAYOUT_NODE_TYPE_CAPTION,
+    AST_LAYOUT_NODE_TYPE_COL,
+    AST_LAYOUT_NODE_TYPE_COLGROUP,
+    AST_LAYOUT_NODE_TYPE_TABLE_HEADER,
+    AST_LAYOUT_NODE_TYPE_TABLE_BODY,
+    AST_LAYOUT_NODE_TYPE_TABLE_FOOTER,
+    AST_LAYOUT_NODE_TYPE_UL,
+    AST_LAYOUT_NODE_TYPE_OL,
+    AST_LAYOUT_NODE_TYPE_LI,
+    AST_LAYOUT_NODE_TYPE_LINK,
+    AST_LAYOUT_NODE_TYPE_IMG,
+    AST_LAYOUT_NODE_TYPE_TABLE,
+    AST_LAYOUT_NODE_TYPE_TABLE_TR,
+    AST_LAYOUT_NODE_TYPE_TABLE_TD,
+    AST_LAYOUT_NODE_TYPE_TABLE_TH,
+    AST_LAYOUT_NODE_TYPE_VIDEO,
+    AST_LAYOUT_NODE_TYPE_AUDIO,
+    AST_LAYOUT_NODE_TYPE_FORM,
+    AST_LAYOUT_NODE_TYPE_DIV,
+    AST_LAYOUT_NODE_TYPE_SCRIPT,
+    AST_LAYOUT_NODE_TYPE_STYLE,
+
+    AST_LAYOUT_NODE_TYPE_ERROR,
 } ast_layout_node_type_t;
+
+typedef enum {
+    AST_LAYOUT_ATTRIBUTE_TYPE_CLASS,
+    AST_LAYOUT_ATTRIBUTE_TYPE_ID,
+    AST_LAYOUT_ATTRIBUTE_TYPE_STYLE,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,
+    AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
+    AST_LAYOUT_ATTRIBUTE_TYPE_DIR,
+    AST_LAYOUT_ATTRIBUTE_TYPE_LANG,
+    AST_LAYOUT_ATTRIBUTE_TYPE_TITLE,
+    AST_LAYOUT_ATTRIBUTE_TYPE_TYPE,
+    AST_LAYOUT_ATTRIBUTE_TYPE_ALT,
+    AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR,
+    AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION,
+    AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS,
+    AST_LAYOUT_ATTRIBUTE_TYPE_ICON,
+    AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
+    AST_LAYOUT_ATTRIBUTE_TYPE_ERROR,
+} ast_layout_attribute_type_t;
 
 struct ast_t;
 
@@ -76,6 +165,7 @@ typedef struct ast_layout_block_t {
 } ast_layout_block_t;
 
 typedef struct ast_layout_attribute_t {
+    ast_layout_attribute_type_t type;
     char* key;
     array_t* values;
     bool isStyle;
@@ -296,11 +386,72 @@ void ast_layout_print(ast_layout_t* value);
  * 
  * @function ast_layout_attribute_create
  * @brief Create a new AST node layout attribute
+ * @paramss {ast_layout_attribute_type_t} type - Type of the layout attribute
  * @paramss {const char*} key - Key of the attribute
  * @paramss {array_t*} values - Values of the attribute
  * @returns {ast_layout_attribute_t*} - Pointer to the created AST node layout attribute
  * 
  */
-ast_layout_attribute_t* ast_layout_attribute_create(char* key, array_t* values);
+ast_layout_attribute_t* ast_layout_attribute_create(ast_layout_attribute_type_t type, char* key, array_t* values);
+
+/**
+ * 
+ * @function name_to_ast_layout_node_type
+ * @brief Convert name to AST layout node type
+ * @params {char*} name - Name
+ * @returns {ast_layout_node_type_t} type - Layout Node Type
+ * 
+ */
+ast_layout_node_type_t name_to_ast_layout_node_type(char* name);
+
+/**
+ * 
+ * @function token_to_ast_layout_node_type
+ * @brief Convert token to AST layout node type
+ * @params {token_t*} token - Token
+ * @returns {ast_layout_node_type_t} type - Layout Node Type
+ * 
+ */
+ast_layout_node_type_t token_to_ast_layout_node_type(token_t* token);
+
+/**
+ * 
+ * @function ast_layout_node_type_to_name
+ * @brief Convert AST layout attribute type to name
+ * @params {ast_layout_node_type_t} type - Layout Attribute Type
+ * @returns {char*} name - Name
+ * 
+ */
+char* ast_layout_node_type_to_name(ast_layout_node_type_t type);
+
+/**
+ * 
+ * @function name_to_ast_layout_node_type
+ * @brief Convert name to AST layout node type
+ * @params {char*} name - Name
+ * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
+ * 
+ */
+ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name);
+
+/**
+ * 
+ * @function token_to_ast_layout_attribute_type
+ * @brief Convert token to AST layout attribute type
+ * @params {token_t*} token - Token
+ * @returns {ast_layout_node_type_t} type - Layout Node Type
+ * 
+ */
+ast_layout_attribute_type_t token_to_ast_layout_attribute_type(token_t* token);
+
+/**
+ * 
+ * @function ast_layout_attribute_type_to_name
+ * @brief Convert AST layout attribute type to name
+ * @params {ast_layout_attribute_type_t} type - Layout Attribute Type
+ * @returns {char*} name - Name
+ * 
+ */
+char* ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type);
 
 #endif

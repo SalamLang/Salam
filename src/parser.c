@@ -178,33 +178,13 @@ ast_block_t* parser_parse_block(lexer_t* lexer, ast_block_type_t type, ast_type_
  */
 ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer)
 {	
-	token_t* token = PARSER_CURRENT;
-	expect(lexer, TOKEN_IDENTIFIER);
-
-	ast_layout_node_type_t type = AST_NODE_LAYOUT_NODE_TYPE_ERROR;
-	if (strcmp(token->data.string, "div") == 0) {
-		type = AST_NODE_LAYOUT_NODE_TYPE_DIV;
-	}
-	else if (strcmp(token->data.string, "form") == 0) {
-		type = AST_NODE_LAYOUT_NODE_TYPE_FORM;
-	}
-	else if (strcmp(token->data.string, "button") == 0) {
-		type = AST_NODE_LAYOUT_NODE_TYPE_BUTTON;
-	}
-	else if (strcmp(token->data.string, "paragraph") == 0) {
-		type = AST_NODE_LAYOUT_NODE_TYPE_PARAGRAPH;
-	}
-	else {
-		error(2, "Unknown layout node type %s at line %d, column %d", token->data.string, token->location.end_line, token->location.end_column);
-	}
+	ast_layout_node_type_t type = token_to_ast_layout_node_type(PARSER_CURRENT);
+	PARSER_NEXT;
 
 	ast_layout_node_t* node = ast_layout_node_create(type);
 
 	parser_parse_layout_block(node->block, lexer, AST_NODE_TYPE_LAYOUT);
 	
-	printf("========================\n==========================>>>>>");
-	token->print(token);
-
 	return node;
 }
 
@@ -243,9 +223,12 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
 		}
 	}
 
-	ast_layout_attribute_t* attribute = ast_layout_attribute_create(token->data.string, values);
+	
+	ast_layout_attribute_type_t type = token_to_ast_layout_attribute_type(token);
+	ast_layout_attribute_t* attribute = ast_layout_attribute_create(type, token->data.string, values);
+	char* key = ast_layout_attribute_type_to_name(type);
 
-	hashmap_put(cast(hashmap_t*, block->attributes), token->data.string, attribute);
+	hashmap_put(cast(hashmap_t*, block->attributes), key, attribute);
 }
 
 /**

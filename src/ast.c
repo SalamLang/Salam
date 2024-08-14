@@ -88,14 +88,16 @@ ast_layout_block_t* ast_layout_block_create(ast_type_t parent_type)
  * 
  * @function ast_layout_attribute_create
  * @brief Create a new AST node layout attribute
+ * @paramss {ast_layout_attribute_type_t} type - Type of the layout attribute
  * @paramss {const char*} key - Key of the attribute
  * @paramss {array_t*} values - Values of the attribute
  * @returns {ast_layout_attribute_t*} - Pointer to the created AST node layout attribute
  * 
  */
-ast_layout_attribute_t* ast_layout_attribute_create(char* key, array_t* values)
+ast_layout_attribute_t* ast_layout_attribute_create(ast_layout_attribute_type_t type, char* key, array_t* values)
 {
 	ast_layout_attribute_t* attribute = memory_allocate(sizeof(ast_layout_attribute_t));
+	attribute->type = type;
 	attribute->key = strdup(key);
 	attribute->values = values;
 	attribute->isStyle = false;
@@ -399,5 +401,298 @@ void ast_destroy(ast_t* ast)
 		ast->layout->destroy(ast->layout);
 
 		memory_destroy(ast);
+	}
+}
+
+/**
+ * 
+ * @function name_to_ast_layout_node_type
+ * @brief Convert name to AST layout node type
+ * @params {char*} name - Name
+ * @returns {ast_layout_node_type_t} type - Layout Node Type
+ * 
+ */
+ast_layout_node_type_t name_to_ast_layout_node_type(char* name)
+{
+	ast_layout_node_type_t type = AST_LAYOUT_NODE_TYPE_ERROR;
+
+	if (strcmp(name, "paragraph") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_PARAGRAPH;
+	}
+	else if (strcmp(name, "paragraph_raw") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_PARAGRAPH_RAW;
+	}
+	else if (strcmp(name, "button") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_BUTTON;
+	}
+	else if (strcmp(name, "input") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_INPUT;
+	}
+	else if (strcmp(name, "textarea") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_TEXTAREA;
+	}
+	else if (strcmp(name, "span") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_SPAN;
+	}
+	else if (strcmp(name, "label") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_LABEL;
+	}
+	else if (strcmp(name, "header") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_HEADER;
+	}
+	else if (strcmp(name, "ul") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_UL;
+	}
+	else if (strcmp(name, "ol") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_OL;
+	}
+	else if (strcmp(name, "li") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_LI;
+	}
+	else if (strcmp(name, "link") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_LINK;
+	}
+	else if (strcmp(name, "img") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_IMG;
+	}
+	else if (strcmp(name, "table") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_TABLE;
+	}
+	else if (strcmp(name, "tr") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_TABLE_TR;
+	}
+	else if (strcmp(name, "td") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_TABLE_TD;
+	}
+	else if (strcmp(name, "video") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_VIDEO;
+	}
+	else if (strcmp(name, "audio") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_AUDIO;
+	}
+	else if (strcmp(name, "form") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_FORM;
+	}
+	else if (strcmp(name, "box") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_DIV;
+	}
+
+	return type;
+}
+
+/**
+ * 
+ * @function token_to_ast_layout_node_type
+ * @brief Convert token to AST layout node type
+ * @params {token_t*} token - Token
+ * @returns {ast_layout_node_type_t} type - Layout Node Type
+ * 
+ */
+ast_layout_node_type_t token_to_ast_layout_node_type(token_t* token)
+{
+	if (token->type != TOKEN_IDENTIFIER) {
+		error(2, "Expected token type to be identifier as layout node type, got %s at line %d, column %d", token_name(token->type), token->location.end_line, token->location.end_column);
+	}
+	
+	ast_layout_node_type_t type = name_to_ast_layout_node_type(token->data.string);
+
+	if (type == AST_LAYOUT_NODE_TYPE_ERROR) {
+		error(2, "Unknown layout node type %s at line %d, column %d", token->data.string, token->location.end_line, token->location.end_column);
+	}
+
+	return type;
+}
+
+/**
+ * 
+ * @function ast_layout_node_type_to_name
+ * @brief Convert AST layout attribute type to name
+ * @params {ast_layout_node_type_t} type - Layout Attribute Type
+ * @returns {char*} name - Name
+ * 
+ */
+char* ast_layout_node_type_to_name(ast_layout_node_type_t type)
+{
+	switch (type) {
+		case AST_LAYOUT_NODE_TYPE_PARAGRAPH:
+			return "paragraph";
+		case AST_LAYOUT_NODE_TYPE_PARAGRAPH_RAW:
+			return "paragraph_raw";
+		case AST_LAYOUT_NODE_TYPE_BUTTON:
+			return "button";
+		case AST_LAYOUT_NODE_TYPE_INPUT:
+			return "input";
+		case AST_LAYOUT_NODE_TYPE_TEXTAREA:
+			return "textarea";
+		case AST_LAYOUT_NODE_TYPE_SPAN:
+			return "span";
+		case AST_LAYOUT_NODE_TYPE_LABEL:
+			return "label";
+		case AST_LAYOUT_NODE_TYPE_HEADER:
+			return "header";
+		case AST_LAYOUT_NODE_TYPE_UL:
+			return "ul";
+		case AST_LAYOUT_NODE_TYPE_OL:
+			return "ol";
+		case AST_LAYOUT_NODE_TYPE_LI:
+			return "li";
+		case AST_LAYOUT_NODE_TYPE_LINK:
+			return "a";
+		case AST_LAYOUT_NODE_TYPE_IMG:
+			return "img";
+		case AST_LAYOUT_NODE_TYPE_TABLE:
+			return "table";
+		case AST_LAYOUT_NODE_TYPE_TABLE_TR:
+			return "tr";
+		case AST_LAYOUT_NODE_TYPE_TABLE_TD:
+			return "td";
+		case AST_LAYOUT_NODE_TYPE_VIDEO:
+			return "video";
+		case AST_LAYOUT_NODE_TYPE_AUDIO:
+			return "audio";
+		case AST_LAYOUT_NODE_TYPE_FORM:
+			return "form";
+		case AST_LAYOUT_NODE_TYPE_DIV:
+			return "box";
+		default:
+		case AST_LAYOUT_NODE_TYPE_ERROR:
+			return "error";
+	}
+}
+
+/**
+ * 
+ * @function name_to_ast_layout_node_type
+ * @brief Convert name to AST layout node type
+ * @params {char*} name - Name
+ * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
+ * 
+ */
+ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name)
+{
+	ast_layout_attribute_type_t type = AST_LAYOUT_ATTRIBUTE_TYPE_ERROR;
+
+	if (strcmp(name, "class") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_CLASS;
+	}
+	else if (strcmp(name, "id") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_ID;
+	}
+	else if (strcmp(name, "style") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE;
+	}
+	else if (strcmp(name, "content") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT;
+	}
+	else if (strcmp(name, "src") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_SRC;
+	}
+	else if (strcmp(name, "dir") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_DIR;
+	}
+	else if (strcmp(name, "lang") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_LANG;
+	}
+	else if (strcmp(name, "title") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_TITLE;
+	}
+	else if (strcmp(name, "alt") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_ALT;
+	}
+	else if (strcmp(name, "author") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR;
+	}
+	else if (strcmp(name, "description") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION;
+	}
+	else if (strcmp(name, "keywords") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS;
+	}
+	else if (strcmp(name, "icon") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_ICON;
+	}
+	else if (strcmp(name, "name") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_NAME;
+	}
+	else if (strcmp(name, "charset") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET;
+	}
+	else if (strcmp(name, "type") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_TYPE;
+	}
+
+	return type;
+}
+
+/**
+ * 
+ * @function token_to_ast_layout_attribute_type
+ * @brief Convert token to AST layout attribute type
+ * @params {token_t*} token - Token
+ * @returns {ast_layout_node_type_t} type - Layout Node Type
+ * 
+ */
+ast_layout_attribute_type_t token_to_ast_layout_attribute_type(token_t* token)
+{
+	if (token->type != TOKEN_IDENTIFIER) {
+		error(2, "Expected token type to be identifier as layout attribute type, got %s at line %d, column %d", token_name(token->type), token->location.end_line, token->location.end_column);
+	}
+	
+	ast_layout_attribute_type_t type = name_to_ast_layout_attribute_type(token->data.string);
+
+	if (type == AST_LAYOUT_ATTRIBUTE_TYPE_ERROR) {
+		error(2, "Unknown layout attribute type %s at line %d, column %d", token->data.string, token->location.end_line, token->location.end_column);
+	}
+
+	return type;
+}
+
+/**
+ * 
+ * @function ast_layout_attribute_type_to_name
+ * @brief Convert AST layout attribute type to name
+ * @params {ast_layout_attribute_type_t} type - Layout Attribute Type
+ * @returns {char*} name - Name
+ * 
+ */
+char* ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type)
+{
+	switch (type) {
+		case AST_LAYOUT_ATTRIBUTE_TYPE_CLASS:
+			return "class";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_ID:
+			return "id";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE:
+			return "style";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT:
+			return "content";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_SRC:
+			return "src";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_DIR:
+			return "dir";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_LANG:
+			return "lang";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_TITLE:
+			return "title";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_ALT:
+			return "alt";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR:
+			return "author";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION:
+			return "description";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS:
+			return "keywords";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_ICON:
+			return "icon";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_NAME:
+			return "name";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET:
+			return "charset";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_TYPE:
+			return "kind";
+
+		default:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_ERROR:
+			return "error";
 	}
 }

@@ -7,7 +7,11 @@ layout {
     // test: 110, 220, 330
     // age: 1, 2, 3, 42
 
-    div {
-        content: "Heymate!"
+    box {
+        content: "Hey, mate!"
+
+        box {
+            content: "Hey sub, mate!", 13, 4334
+        }
     }
 } //dfgdgdfg

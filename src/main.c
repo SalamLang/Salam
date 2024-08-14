@@ -13,6 +13,7 @@
 
 void doargs(int argc, char** argv)
 {
+    DEBUG_ME;
     if (argc < 2) {
         error(1, "Usage: %s <file>\n", argv[0]);
     }
@@ -72,6 +73,7 @@ void doargs(int argc, char** argv)
 
 int main(int argc, char** argv)
 {
+    DEBUG_ME;
     doargs(argc, argv);
 
     return 0;

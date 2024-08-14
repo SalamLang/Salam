@@ -261,7 +261,7 @@ typedef struct ast_value_type_t {
 
 typedef struct ast_function_t {
     char* name;
-    array_t* parameters;
+    array_function_parameter_t* parameters;
     ast_block_t* block;
     ast_value_type_t* return_type;
 
@@ -332,15 +332,18 @@ typedef union {
 typedef struct ast_t {
     ast_type_t type;
     location_t location;
+    ast_union_t data;
 
     void (*destroy)(void* node);
     void (*print)(void* node);
-
-    ast_union_t data;
 } ast_node_t;
 
 typedef struct {
     ast_layout_t* layout;
+    array_function_t* functions;
+
+    void (*destroy)(void* node);
+    void (*print)(void* node);
 } ast_t;
 
 /**
@@ -687,5 +690,15 @@ char* ast_type_name(ast_value_type_t* type);
  * 
  */
 void ast_type_destroy(ast_value_type_t* type);
+
+/**
+ * 
+ * @function ast_print
+ * @brief Print the AST
+ * @params {ast_t*} ast - AST
+ * @returns {void}
+ * 
+ */
+void ast_print(ast_t* ast);
 
 #endif

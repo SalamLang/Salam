@@ -179,7 +179,6 @@ void generator_identifier_init(generator_identifier_t* gen);
  */
 char* generator_identifier_get(generator_identifier_t* gen);
 
-
 /**
  * 
  * @function generator_identifier_destroy

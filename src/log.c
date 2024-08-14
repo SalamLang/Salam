@@ -9,6 +9,7 @@
  */
 void panic(const char* message, ...)
 {
+    DEBUG_ME;
     va_list args;
     va_start(args, message);
     fprintf(stderr, "Panic error: ");
@@ -28,6 +29,7 @@ void panic(const char* message, ...)
  */
 void error(int code, const char* message, ...)
 {
+    DEBUG_ME;
     va_list args;
     va_start(args, message);
     fprintf(stderr, "Error: ");
@@ -46,6 +48,7 @@ void error(int code, const char* message, ...)
  */
 void warning(const char* message, ...)
 {
+    DEBUG_ME;
     va_list args;
     va_start(args, message);
     fprintf(stderr, "Warning: ");

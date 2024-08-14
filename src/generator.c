@@ -10,6 +10,7 @@
  */
 generator_t* generator_create(ast_t* ast)
 {
+    DEBUG_ME;
     if (ast == NULL) {
         error(2, "AST tree is NULL and not correct!");
     }
@@ -39,6 +40,7 @@ generator_t* generator_create(ast_t* ast)
  */
 void generator_destroy(generator_t* generator)
 {
+    DEBUG_ME;
     if (generator != NULL) {
         if (generator->html != NULL) {
             generator->html->destroy(generator->html);
@@ -70,6 +72,7 @@ void generator_destroy(generator_t* generator)
  */
 void generator_debug(generator_t* generator)
 {
+    DEBUG_ME;
     if (generator == NULL) {
         printf("generator is NULL\n");
         return;
@@ -99,6 +102,7 @@ void generator_debug(generator_t* generator)
  */
 void generator_save(generator_t* generator)
 {
+    DEBUG_ME;
     if (generator == NULL) {
         return;
     }
@@ -127,6 +131,7 @@ void generator_save(generator_t* generator)
  */
 void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html)
 {
+    DEBUG_ME;
     // LANG
     ast_layout_attribute_t* html_lang = hashmap_get(cast(hashmap_t*, layout_block->attributes), "lang");
     char* html_lang_value = NULL;
@@ -195,6 +200,7 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
  */
 string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_block_t* block)
 {
+    DEBUG_ME;
     size_t html_attributes_length = 0;
     size_t css_attributes_length = 0;
 
@@ -313,6 +319,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
  */
 char* generator_code_layout_style_value(ast_layout_attribute_t* attribute, ast_layout_node_type_t parent_node_type)
 {
+    DEBUG_ME;
     char* values_str = array_string_token(attribute->values, ", ");
 
     if (parent_node_type == AST_LAYOUT_NODE_TYPE_TABLE) {}
@@ -330,6 +337,7 @@ char* generator_code_layout_style_value(ast_layout_attribute_t* attribute, ast_l
  */
 char* generator_code_layout_style_name(ast_layout_attribute_type_t type)
 {
+    DEBUG_ME;
 	switch (type) {
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND:
 			return  "background";
@@ -525,6 +533,7 @@ char* generator_code_layout_style_name(ast_layout_attribute_type_t type)
 
 char* generator_code_layout_node_type(ast_layout_node_type_t type)
 {
+    DEBUG_ME;
     switch (type) {
         case AST_LAYOUT_NODE_TYPE_LINK: return "link";
         case AST_LAYOUT_NODE_TYPE_SCRIPT: return "script";
@@ -619,6 +628,7 @@ char* generator_code_layout_node_type(ast_layout_node_type_t type)
  */
 string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 {
+    DEBUG_ME;
     string_t* html = string_create(1024);
 
     for (size_t i = 0; i < children->length; i++) {
@@ -684,6 +694,7 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
  */
 void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layout_block, string_t* body)
 {
+    DEBUG_ME;
     if (layout_block != NULL) {
         validate_layout_mainbody(layout_block);
     }
@@ -731,6 +742,7 @@ void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layo
  */
 void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 {
+    DEBUG_ME;
     if (head == NULL) return;
 
     char* value = NULL;
@@ -818,6 +830,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
  */
 void generator_code_head(ast_layout_block_t* block, string_t* head)
 {
+    DEBUG_ME;
     if (head == NULL) return;
     else if (block == NULL) return;
 
@@ -854,6 +867,7 @@ void generator_code_head(ast_layout_block_t* block, string_t* head)
  */
 void generator_code(generator_t* generator)
 {
+    DEBUG_ME;
     if (generator->ast == NULL) {
         error(2, "AST tree is NULL and is not valid!");
     }
@@ -917,6 +931,7 @@ void generator_code(generator_t* generator)
  */
 void generator_identifier_init(generator_identifier_t* gen)
 {
+    DEBUG_ME;
 	gen->current = memory_allocate(2);
 
 	if (gen->current) {
@@ -934,6 +949,7 @@ void generator_identifier_init(generator_identifier_t* gen)
  */
 char* generator_identifier_get(generator_identifier_t* gen)
 {
+    DEBUG_ME;
 	int length = strlen(gen->current);
 	char *identifier = memory_allocate(length + 1);
 	strcpy(identifier, gen->current);
@@ -971,6 +987,7 @@ char* generator_identifier_get(generator_identifier_t* gen)
  */
 void generator_identifier_destroy(generator_identifier_t* gen)
 {
+    DEBUG_ME;
 	if (gen == NULL) return;
 
 	if (gen->current != NULL) free(gen->current);

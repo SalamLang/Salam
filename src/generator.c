@@ -283,9 +283,9 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
             size_t tag_length = strlen(tag);
 
             string_append_str(html_attributes, "class=");
-            if (tag_length > 0) string_append_char(html_attributes, '\"');
+            if (tag_length > 1) string_append_char(html_attributes, '\"');
             string_append_str(html_attributes, tag);
-            if (tag_length > 0) string_append_char(html_attributes, '\"');
+            if (tag_length > 1) string_append_char(html_attributes, '\"');
 
             string_append_char(generator->css, '.');
             string_append_str(generator->css, tag);
@@ -698,10 +698,20 @@ void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layo
     body_attrs->destroy(body_attrs);
     string_append_str(body_tag, ">");
 
+    char* body_text_content = layout_block->text_content;
+    size_t body_text_content_length = body_text_content != NULL ? strlen(body_text_content) : 0;
+
     string_t* body_child = generator_code_layout_block(generator, layout_block->children);
-    if (body_child->length > 0) string_append_char(body_tag, '\n');
-    string_append(body_content, body_child);
-    body_child->destroy(body_child);
+    if (body_child->length > 0 || body_text_content_length > 0) string_append_char(body_tag, '\n');
+
+    // text content
+    if (body_text_content != NULL && body_text_content_length > 0) string_append_str(body_content, body_text_content);
+
+    // node content
+    if (body_child->length > 0 && body_text_content != NULL && body_text_content_length > 0) string_append_char(body_content, '\n');
+    if (body_child->length > 0) string_append(body_content, body_child);
+
+    if (body_child != NULL) body_child->destroy(body_child);
 
     string_append(body_tag, body_content);
     string_append_str(body_tag, "</body>\n");
@@ -871,7 +881,7 @@ void generator_code(generator_t* generator)
             string_append_str(html, "<meta charset=\"UTF-8\">\n");
 
             string_append(html, head);
-
+            
             if (generator->inlineCSS == true && generator->css != NULL && generator->css->length > 0) {
                 string_append_str(html, "<style>\n");
                 string_append(html, generator->css);

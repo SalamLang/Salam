@@ -21,6 +21,7 @@ typedef array_t array_token_t;
 typedef array_t array_node_t;
 typedef array_t array_node_layout_t;
 typedef array_t array_layout_attribute_t;
+typedef array_t array_function_parameter_t;
 
 #include "memory.h"
 #include "ast.h"
@@ -226,5 +227,25 @@ void array_layout_node_print(array_node_layout_t* node);
  * 
  */
 void array_layout_node_destroy(array_node_layout_t* array);
+
+/**
+ * 
+ * @function array_function_parameter_print
+ * @brief Print the function parameter array
+ * @params {array_function_parameter_t*} array - Function parameter array
+ * @returns {void}
+ * 
+ */
+void array_function_parameter_print(array_function_parameter_t* array);
+
+/**
+ * 
+ * @function array_function_parameter_destroy
+ * @brief Free the function parameter array memory
+ * @params {array_function_parameter_t*} array - Function parameter array
+ * @returns {void}
+ * 
+ */
+void array_function_parameter_destroy(array_function_parameter_t* array);
 
 #endif

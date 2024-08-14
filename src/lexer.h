@@ -85,7 +85,7 @@ typedef struct {
 static const keyword_t keywords[] = {
     {"layout", TOKEN_LAYOUT},
     {"import", TOKEN_IMPORT},
-    {"function", TOKEN_FUNCTION},
+    {"fn", TOKEN_FUNCTION},
     {"return", TOKEN_RETURN},
     {"if", TOKEN_IF},
     {"else", TOKEN_ELSE},

@@ -156,4 +156,14 @@ void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexe
  */
 ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer);
 
+/**
+ * 
+ * @function parser_parse_function
+ * @brief Parse the function
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {ast_node_t*} - AST node
+ * 
+ */
+ast_node_t* parser_parse_function(lexer_t* lexer);
+
 #endif

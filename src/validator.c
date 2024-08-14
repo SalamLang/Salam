@@ -61,10 +61,11 @@ bool is_attribute_type_in_array(ast_layout_attribute_type_t type, ast_layout_att
  * @brief Check if the token belongs to the AST layout node
  * @params {ast_layout_block_t*} block - AST layout block node
  * @params {ast_layout_attribute_type_t} attribute_key_type - Attribute key type
+ * @params {ast_layout_attribute_t*} attribute - AST layout attribute
  * @returns {bool} - True if the token belongs to the AST layout node, false otherwise
  * 
  */
-bool token_belongs_to_ast_layout_node(ast_layout_block_t* block, ast_layout_attribute_type_t attribute_key_type)
+bool token_belongs_to_ast_layout_node(ast_layout_block_t* block, ast_layout_attribute_type_t attribute_key_type, ast_layout_attribute_t* attribute)
 {
     if (block->parent_type != AST_NODE_TYPE_LAYOUT) {
         error(2, "Block parent type is not a layout node");
@@ -76,7 +77,12 @@ bool token_belongs_to_ast_layout_node(ast_layout_block_t* block, ast_layout_attr
     else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
         return true;
     }
+    else if (is_style_attribute(attribute_key_type)) {
+        attribute->isStyle = true;
+        return true;
+    }
     else if (is_attribute_type_a_style(attribute_key_type)) {
+        // attribute->isStyle = false;
         return true;
     }
 
@@ -185,21 +191,15 @@ void validate_layout_mainbody(ast_layout_block_t* block)
 
 /**
  * 
- * @function is_attribute_type_a_style
- * @brief Check if the attribute type is a style
+ * @function is_style_attribute
+ * @brief Check if the attribute type is a CSS attribute
  * @params {ast_layout_attribute_type_t} type - Attribute type
  * @returns {bool} - True if the attribute type is a style, false otherwise
  * 
  */
-bool is_attribute_type_a_style(ast_layout_attribute_type_t type)
+bool is_style_attribute(ast_layout_attribute_type_t type)
 {
     switch (type) {
-        // general attributes for naming and styling
-        case AST_LAYOUT_ATTRIBUTE_TYPE_CLASS:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_ID:
-            return true;
-
-        // css attributes
         case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND:
         case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR:
         case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT:
@@ -296,5 +296,26 @@ bool is_attribute_type_a_style(ast_layout_attribute_type_t type)
 
         default:
             return false;
+    }
+}
+
+/**
+ * 
+ * @function is_attribute_type_a_style
+ * @brief Check if the attribute type is a style
+ * @params {ast_layout_attribute_type_t} type - Attribute type
+ * @returns {bool} - True if the attribute type is a style, false otherwise
+ * 
+ */
+bool is_attribute_type_a_style(ast_layout_attribute_type_t type)
+{
+    switch (type) {
+        // general attributes for naming and styling
+        case AST_LAYOUT_ATTRIBUTE_TYPE_CLASS:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_ID:
+            return true;
+
+        default:
+            return is_style_attribute(type);
     }
 }

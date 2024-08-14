@@ -73,7 +73,14 @@ bool token_belongs_to_ast_layout_node(ast_layout_block_t* block, ast_layout_attr
     if (is_layout_node_a_single_tag(block->parent_node_type) && attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
         return false;
     }
+    else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
+        return true;
+    }
+    else if (is_attribute_type_a_style(attribute_key_type)) {
+        return true;
+    }
 
+    // LAYOUT
     if (block->parent_node_type == AST_LAYOUT_NODE_TYPE_NONE) {
         ast_layout_attribute_type_t valid_attributes[] = {
             AST_LAYOUT_ATTRIBUTE_TYPE_TITLE,
@@ -84,6 +91,18 @@ bool token_belongs_to_ast_layout_node(ast_layout_block_t* block, ast_layout_attr
             AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
             AST_LAYOUT_ATTRIBUTE_TYPE_DIR,
             AST_LAYOUT_ATTRIBUTE_TYPE_LANG,
+        };
+
+        size_t valid_attributes_size = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
+
+        if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_size)) {
+            return true;
+        }
+    }
+    // IMG
+    else if (block->parent_node_type == AST_LAYOUT_NODE_TYPE_IMG) {
+        ast_layout_attribute_type_t valid_attributes[] = {
+            AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
         };
 
         size_t valid_attributes_size = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
@@ -161,5 +180,121 @@ void validate_layout_mainbody(ast_layout_block_t* block)
 				}
 			}
 		}
+    }
+}
+
+/**
+ * 
+ * @function is_attribute_type_a_style
+ * @brief Check if the attribute type is a style
+ * @params {ast_layout_attribute_type_t} type - Attribute type
+ * @returns {bool} - True if the attribute type is a style, false otherwise
+ * 
+ */
+bool is_attribute_type_a_style(ast_layout_attribute_type_t type)
+{
+    switch (type) {
+        // general attributes for naming and styling
+        case AST_LAYOUT_ATTRIBUTE_TYPE_CLASS:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_ID:
+            return true;
+
+        // css attributes
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_FAMILY:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_SIZE:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_STYLE:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_WEIGHT:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_HEIGHT:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_WIDTH:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_LEFT:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_RIGHT:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_TOP:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_BOTTOM:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_LEFT:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_RIGHT:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_TOP:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_BOTTOM:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_TRANSFORM:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VERTICAL_ALIGN:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VISIBILITY:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_Z_INDEX:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_POSITION:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TOP:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_RIGHT:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BOTTOM:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_LEFT:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_COLOR:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_STYLE:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_WIDTH:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_RADIUS:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLOAT:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CLEAR:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OVERFLOW:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_OVERFLOW:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_WHITE_SPACE:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CURSOR:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FILTER:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OPACITY:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TRANSFORM:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TRANSITION:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ANIMATION:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BOX_SHADOW:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_SHADOW:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE_COLOR:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE_STYLE:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE_WIDTH:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_COLOR:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_IMAGE:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_REPEAT:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_POSITION:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_SIZE:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_ATTACHMENT:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_CLIP:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_ORIGIN:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_BLEND_MODE:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_DISPLAY:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_DIRECTION:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_WRAP:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_FLOW:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_GROW:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_SHRINK:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_BASIS:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_JUSTIFY_CONTENT:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_ITEMS:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_SELF:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_CONTENT:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ORDER:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_GRID:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FILL:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_WIDTH:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_LINECAP:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_LINEJOIN:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_DASHARRAY:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_DASHOFFSET:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FILL_OPACITY:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_OPACITY:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_SHAPE_RENDERING:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_RENDERING:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_IMAGE_RENDERING:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR_INTERPOLATION:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR_RENDERING:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VECTOR_EFFECT:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MASK:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CLIP_PATH:
+            return true;
+
+        default:
+            return false;
     }
 }

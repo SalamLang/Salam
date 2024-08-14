@@ -66,6 +66,11 @@ void ast_node_destroy(ast_node_t* value)
 				value->data.layout->destroy(value->data.layout);
 				break;
 			
+			case AST_NODE_TYPE_IF:
+			case AST_NODE_TYPE_ELSE_IF:
+				value->data.ifclause->destroy(value->data.ifclause);
+				break;
+			
 			case AST_NODE_TYPE_ERROR:
 				break;
 		}
@@ -320,9 +325,119 @@ ast_block_t* ast_block_create(ast_block_type_t type, ast_type_t parent_type)
 	ast_block_t* block = malloc(sizeof(ast_block_t));
 	block->type = type;
 	block->parent_type = parent_type;
+
 	block->children = array_create(sizeof(ast_node_t*), 4);
+	block->children->destroy = cast(void (*)(void*), array_node_destroy);
+	block->children->print = cast(void (*)(void*), array_node_print);
+
+	block->print = cast(void (*)(void*), ast_block_print);
+	block->destroy = cast(void (*)(void*), ast_block_destroy);
 
 	return block;
+}
+
+/**
+ * 
+ * @function ast_if_create
+ * @brief Create a new AST node if
+ * @params {ast_value_t*} condition - Condition of the if
+ * @returns {ast_if_t*} - Pointer to the created AST node if
+ * 
+ */
+ast_if_t* ast_if_create(ast_value_t* condition)
+{
+	DEBUG_ME;
+	ast_if_t* node = memory_allocate(sizeof(ast_if_t));
+	node->condition = condition;
+	node->block = ast_block_create(AST_NODE_BLOCK_TYPE_IF, AST_NODE_TYPE_FUNCTION); // TODO???
+	node->block->destroy = cast(void (*)(void*), ast_block_destroy);
+	node->block->print = cast(void (*)(void*), ast_block_print);
+
+	node->else_blocks = array_create(sizeof(ast_if_t*), 16); // Can be NULL for sub else if
+	node->else_blocks->destroy = cast(void (*)(void*), array_if_destroy);
+	node->else_blocks->print = cast(void (*)(void*), array_if_print);
+
+	node->print = cast(void (*)(void*), ast_if_print);
+	node->destroy = cast(void (*)(void*), ast_if_destroy);
+
+	return node;
+}
+
+/**
+ * 
+ * @function ast_elseif_create
+ * @brief Create a new AST node else if
+ * @returns {ast_if_t*} - Pointer to the created AST node else if
+ * 
+ */
+ast_if_t* ast_elseif_create()
+{
+	DEBUG_ME;
+	ast_if_t* node = memory_allocate(sizeof(ast_if_t));
+	node->condition = NULL;
+	node->block = ast_block_create(AST_NODE_BLOCK_TYPE_IF, AST_NODE_TYPE_FUNCTION); // TODO???
+	node->block->destroy = cast(void (*)(void*), ast_block_destroy);
+	node->block->print = cast(void (*)(void*), ast_block_print);
+
+	node->else_blocks = NULL;
+	node->print = cast(void (*)(void*), ast_if_print);
+	node->destroy = cast(void (*)(void*), ast_if_destroy);
+
+	return node;
+}
+
+/**
+ * 
+ * @function ast_if_create
+ * @brief Create a new AST node if
+ * @returns {ast_if_t*} - Pointer to the created AST node if
+ * 
+ */
+void ast_if_print(ast_if_t* node)
+{
+	DEBUG_ME;
+	printf("If\n");
+
+	if (node->condition != NULL) {
+		printf("Condition\n");
+		node->condition->print(node->condition);
+	}
+
+	if (node->else_blocks != NULL) {
+		printf("Else Blocks\n");
+		node->else_blocks->print(node->else_blocks);
+	}
+
+	printf("Block\n");
+	node->block->print(node->block);
+}
+
+/**
+ * 
+ * @function ast_if_destroy
+ * @brief Free the AST if node
+ * @params {ast_if_t*} node - AST if node
+ * @returns {void}
+ * 
+ */
+void ast_if_destroy(ast_if_t* node)
+{
+	DEBUG_ME;
+	if (node != NULL) {
+		if (node->condition != NULL) {
+			node->condition->destroy(node->condition);
+		}
+
+		if (node->block != NULL) {
+			node->block->destroy(node->block);
+		}
+
+		if (node->else_blocks != NULL) {
+			node->else_blocks->destroy(node->else_blocks);
+		}
+
+		memory_destroy(node);
+	}
 }
 
 /**
@@ -729,19 +844,66 @@ void ast_node_print(ast_node_t* node)
 		case AST_NODE_TYPE_FUNCTION:
 			printf("Function\n");
 			break;
+		
 		case AST_NODE_TYPE_BLOCK:
 			printf("Block\n");
 			break;
+
 		case AST_NODE_TYPE_IMPORT:
 			printf("Import\n");
 			break;
+
 		case AST_NODE_TYPE_LAYOUT:
 			printf("Layout\n");
 			break;
+		
+		case AST_NODE_TYPE_IF:
+			printf("If\n");
+			break;
+		
+		case AST_NODE_TYPE_ELSE_IF:
+			printf("Else If\n");
+			break;
+		
 		case AST_NODE_TYPE_ERROR:
 			printf("Error\n");
 			break;
 	}
+}
+
+/**
+ * 
+ * @function ast_block_type_name
+ * @brief Print the AST block type
+ * @params {ast_block_type_t} type - AST block type
+ * @returns {char*} - Name of the AST block type
+ */
+char* ast_block_type_name(ast_block_type_t type)
+{
+    DEBUG_ME;
+	switch (type) {
+		case AST_NODE_BLOCK_TYPE_LAYOUT:
+			printf("Layout\n");
+			break;
+
+		case AST_NODE_BLOCK_TYPE_FUNCTION:
+			printf("Function\n");
+			break;
+
+		case AST_NODE_BLOCK_TYPE_IF:
+			printf("If\n");
+			break;
+
+		case AST_NODE_BLOCK_TYPE_ELSE_IF:
+			printf("Else If\n");
+			break;
+		
+		case AST_NODE_BLOCK_TYPE_ERROR:
+			printf("Error\n");
+			break;
+	}
+
+	return "unknown block";
 }
 
 /**
@@ -1632,4 +1794,73 @@ void ast_print(ast_t* ast)
 	printf("AST Functions: ");
 	if (ast->functions != NULL) ast->functions->print(ast->functions);
 	else printf("NULL\n");
+}
+
+/**
+ * 
+ * @function ast_value_create
+ * @brief Create a new AST value
+ * @params {ast_value_type_t*} type - Value type
+ * @returns {ast_value_t*} - Pointer to the created AST value
+ * 
+ */
+ast_value_t* ast_value_create(ast_value_type_t* type)
+{
+	DEBUG_ME;
+	ast_value_t* value = memory_allocate(sizeof(ast_value_t));
+	value->type = type;
+	value->data = NULL;
+	value->destroy = cast(void (*)(void*), ast_value_destroy);
+	value->print = cast(void (*)(void*), ast_value_print);
+	return value;
+}
+
+/**
+ * 
+ * @function ast_value_destroy
+ * @brief Free the AST value
+ * @params {ast_value_t*} value - AST Value
+ * @returns {void}
+ * 
+ */
+void ast_value_destroy(ast_value_t* value)
+{
+	DEBUG_ME;
+	if (value != NULL) {
+		if (value->data != NULL) {
+			value->type->destroy(value->data);
+		}
+
+		memory_destroy(value);
+	}
+}
+
+/**
+ * 
+ * @function ast_value_print
+ * @brief Print the AST value
+ * @params {ast_value_t*} value - AST Value
+ * @returns {void}
+ * 
+ */
+void ast_value_print(ast_value_t* value)
+{
+	DEBUG_ME;
+	printf("Value\n");
+	printf("Value Type:\n");
+
+	if (value->type != NULL) {
+		value->type->print(value->type);
+	}
+	else {
+		printf("NULL\n");
+	}
+
+	printf("Value Data:\n");
+	if (value->data != NULL) {
+		printf("%s\n", value->data); // TODO: change to use a union
+	}
+	else {
+		printf("NULL\n");
+	}
 }

@@ -86,6 +86,17 @@ void* hashmap_get(hashmap_t *map, const char *key);
 
 /**
  * 
+ * @function hashmap_has
+ * @brief Check if the hashmap has a key
+ * @params {hashmap_t*} map
+ * @params {const char*} key
+ * @returns {bool}
+ * 
+ */
+bool hashmap_has(hashmap_t *map, const char *key);
+
+/**
+ * 
  * @function hashmap_remove
  * @brief Remove a key-value pair from the hashmap
  * @params {hashmap_t*} map

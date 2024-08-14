@@ -329,4 +329,34 @@ void lexer_lex_number(lexer_t* lexer);
  */
 void lexer_lex_string(lexer_t* lexer);
 
+/**
+ * 
+ * @function int2string
+ * @brief Convert an integer to a string
+ * @params {int} value - Integer value
+ * @returns {char*}
+ * 
+ */
+char* int2string(int value);
+
+/**
+ * 
+ * @function float2string
+ * @brief Convert a float to a string
+ * @params {float} value - Float value
+ * @returns {char*}
+ * 
+ */
+char* float2string(float value);
+
+/**
+ * 
+ * @function double2string
+ * @brief Convert a double to a string
+ * @params {double} value - Double value
+ * @returns {char*}
+ * 
+ */
+char* double2string(double value);
+
 #endif

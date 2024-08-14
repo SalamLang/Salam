@@ -11,6 +11,8 @@
 #include "hashmap.h"
 
 typedef enum {
+    AST_NODE_TYPE_IF,
+    AST_NODE_TYPE_ELSE_IF,
     AST_NODE_TYPE_BLOCK,
     AST_NODE_TYPE_IMPORT,
     AST_NODE_TYPE_FUNCTION,
@@ -21,6 +23,8 @@ typedef enum {
 typedef enum {
     AST_NODE_BLOCK_TYPE_LAYOUT,
     AST_NODE_BLOCK_TYPE_FUNCTION,
+    AST_NODE_BLOCK_TYPE_IF,
+    AST_NODE_BLOCK_TYPE_ELSE_IF,
     AST_NODE_BLOCK_TYPE_ERROR,
 } ast_block_type_t;
 
@@ -222,8 +226,9 @@ struct ast_t;
 
 typedef struct {
     ast_block_type_t type;
-    array_node_t* children;
     ast_type_t parent_type;
+
+    array_node_t* children;
 
     void (*destroy)(void* node);
     void (*print)(void* node);
@@ -268,6 +273,23 @@ typedef struct ast_function_t {
     void (*destroy)(void* node);
     void (*print)(void* node);
 } ast_function_t;
+
+typedef struct ast_value_t {
+    char* data;
+    ast_value_type_t* type;
+
+    void (*destroy)(void* node);
+    void (*print)(void* node);
+} ast_value_t;
+
+typedef struct ast_if_t {
+    ast_value_t* condition;
+    ast_block_t* block;
+    array_block_t* else_blocks; // NULLABLE for else if blocks
+
+    void (*destroy)(void* node);
+    void (*print)(void* node);
+} ast_if_t; 
 
 typedef struct ast_layout_block_t {
     ast_block_type_t type;
@@ -324,9 +346,9 @@ typedef union {
     ast_block_t* block;
     ast_import_t* import;
     ast_function_t* function;
+    ast_if_t* ifclause;
+
     ast_layout_t* layout;
-    ast_layout_block_t* layout_block;
-    ast_layout_node_t* layout_node;
 } ast_union_t;
 
 typedef struct ast_t {
@@ -730,5 +752,82 @@ void ast_block_print(ast_block_t* block);
  * 
  */
 void ast_block_destroy(ast_block_t* block);
+
+/**
+ * 
+ * @function ast_if_create
+ * @brief Create a new AST node if
+ * @returns {ast_if_t*} - Pointer to the created AST node if
+ * 
+ */
+void ast_if_print(ast_if_t* node);
+
+/**
+ * 
+ * @function ast_elseif_create
+ * @brief Create a new AST node else if
+ * @returns {ast_if_t*} - Pointer to the created AST node else if
+ * 
+ */
+ast_if_t* ast_elseif_create();
+
+/**
+ * 
+ * @function ast_if_destroy
+ * @brief Free the AST if node
+ * @params {ast_if_t*} node - AST if node
+ * @returns {void}
+ * 
+ */
+void ast_if_destroy(ast_if_t* node);
+
+/**
+ * 
+ * @function ast_if_create
+ * @brief Create a new AST node if
+ * @params {ast_value_t*} condition - Condition of the if
+ * @returns {ast_if_t*} - Pointer to the created AST node if
+ * 
+ */
+ast_if_t* ast_if_create(ast_value_t* condition);
+
+/**
+ * 
+ * @function ast_value_create
+ * @brief Create a new AST value
+ * @params {ast_value_type_t*} type - Value type
+ * @returns {ast_value_t*} - Pointer to the created AST value
+ * 
+ */
+ast_value_t* ast_value_create(ast_value_type_t* type);
+
+/**
+ * 
+ * @function ast_value_print
+ * @brief Print the AST value
+ * @params {ast_value_t*} value - AST Value
+ * @returns {void}
+ * 
+ */
+void ast_value_print(ast_value_t* value);
+
+/**
+ * 
+ * @function ast_value_destroy
+ * @brief Free the AST value
+ * @params {ast_value_t*} value - AST Value
+ * @returns {void}
+ * 
+ */
+void ast_value_destroy(ast_value_t* value);
+
+/**
+ * 
+ * @function ast_block_type_name
+ * @brief Print the AST block type
+ * @params {ast_block_type_t} type - AST block type
+ * @returns {char*} - Name of the AST block type
+ */
+char* ast_block_type_name(ast_block_type_t type);
 
 #endif

@@ -14,10 +14,7 @@ typedef enum {
     AST_NODE_TYPE_BLOCK,
     AST_NODE_TYPE_IMPORT,
     AST_NODE_TYPE_FUNCTION,
-    AST_NODE_TYPE_FUNCTION_ERROR,
     AST_NODE_TYPE_LAYOUT,
-    AST_NODE_TYPE_LAYOUT_BLOCK,
-    AST_NODE_TYPE_LAYOUT_NODE,
     AST_NODE_TYPE_ERROR,
 } ast_type_t;
 
@@ -102,6 +99,7 @@ typedef enum {
     AST_LAYOUT_NODE_TYPE_SCRIPT,
     AST_LAYOUT_NODE_TYPE_STYLE,
 
+    AST_LAYOUT_NODE_TYPE_NONE,
     AST_LAYOUT_NODE_TYPE_ERROR,
 } ast_layout_node_type_t;
 
@@ -153,7 +151,9 @@ typedef struct ast_function_t {
 } ast_function_t;
 
 typedef struct ast_layout_block_t {
+    ast_block_type_t type;
     ast_type_t parent_type;
+    ast_layout_node_type_t parent_node_type;
     char* text_content;
 
     struct hashmap_t* attributes;
@@ -170,6 +170,7 @@ typedef struct ast_layout_attribute_t {
     array_t* values;
     bool isStyle;
     bool isContent;
+    bool ignoreMe;
 
     void (*destroy)(void* node);
     void (*print)(void* node);
@@ -216,20 +217,9 @@ typedef struct {
 
 /**
  * 
- * @function ast_node_create
- * @brief Create a new AST node
- * @params {ast_type_t} type - Type of the AST node
- * @params {location_t} location - Location of the AST node
- * @returns {ast_node_t*} - Pointer to the created AST node
- * 
- */
-ast_node_t* ast_node_create(ast_type_t type, location_t location);
-
-/**
- * 
  * @function ast_layout_node_print
  * @beief Print the AST layout node
- * @paramss {ast_layout_node_t*} value - AST layout node
+ * @params {ast_layout_node_t*} value - AST layout node
  * @returns {void}
  * 
  */
@@ -239,7 +229,7 @@ void ast_layout_node_print(ast_layout_node_t* value);
  * 
  * @function ast_layout_node_destroy
  * @brief Free the AST node layout attribute
- * @paramss {ast_layout_node_t*} value - AST layout node
+ * @params {ast_layout_node_t*} value - AST layout node
  * @returns {void}
  * 
  */
@@ -258,11 +248,22 @@ ast_layout_t* ast_layout_create();
  * 
  * @function ast_layout_destroy
  * @brief Create a new AST node layout attribute
- * @paramss {ast_layout_t*} value - AST layout node
+ * @params {ast_layout_t*} value - AST layout node
  * @returns {void}
  * 
  */
 void ast_layout_destroy(ast_layout_t* value);
+
+/**
+ * 
+ * @function ast_node_create
+ * @brief Create a new AST node
+ * @params {ast_type_t} type - Type of the AST node
+ * @params {location_t} location - Location of the AST node
+ * @returns {ast_node_t*} - Pointer to the created AST node
+ * 
+ */
+ast_node_t* ast_node_create(ast_type_t type, location_t location);
 
 /**
  * 
@@ -316,17 +317,19 @@ void ast_destroy(ast_t* ast);
 /**
  * 
  * @function ast_layout_block_create
- * @brief Create a new AST node layout attribute
+ * @brief Create a new AST node layout block
+ * @params {ast_type_t} node_type - Node type
+ * @params {ast_layout_node_type_t} layout_node_type - Layout node type
  * @returns {ast_layout_block_t*} - Pointer to the created AST node layout block
  * 
  */
-ast_layout_block_t* ast_layout_block_create();
+ast_layout_block_t* ast_layout_block_create(ast_type_t node_type, ast_layout_node_type_t layout_node_type);
 
 /**
  * 
  * @function ast_layout_block_print
  * @brief Free the AST node layout block
- * @paramss {ast_layout_block_t*} value - AST layout block
+ * @params {ast_layout_block_t*} value - AST layout block
  * @returns {void}
  * 
  */
@@ -336,7 +339,7 @@ void ast_layout_block_print(ast_layout_block_t* value);
  * 
  * @function ast_layout_block_destroy
  * @brief Free the AST node layout block
- * @paramss {ast_layout_block_t*} value - AST layout block
+ * @params {ast_layout_block_t*} value - AST layout block
  * @returns {void}
  * 
  */
@@ -346,17 +349,27 @@ void ast_layout_block_destroy(ast_layout_block_t* value);
  * 
  * @function ast_layout_node_create
  * @brief Create a new AST node layout attribute
- * @paramss {ast_layout_node_type_t} type - Type of the layout node
+ * @params {ast_layout_node_type_t} layout_node_type - Layout node type
+ * @params {ast_layout_block_t*} parent_block - Parent block
  * @returns {ast_layout_node_t*} - Pointer to the created AST node layout attribute
  * 
  */
-ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t type);
+ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t layout_node_type, ast_layout_block_t* parent_block);
+
+/**
+ * 
+ * @function ast_block_create
+ * @brief Create a new AST block node
+ * @returns {ast_block_t*} - AST block node
+ * 
+ */
+ast_block_t* ast_block_create();
 
 /**
  * 
  * @function ast_layout_attribute_destroy
  * @brief Create a new AST node layout attribute
- * @paramss {ast_layout_attribute_t*} value - AST layout attribute
+ * @params {ast_layout_attribute_t*} value - AST layout attribute
  * @returns {void}
  * 
  */
@@ -366,7 +379,7 @@ void ast_layout_attribute_destroy(ast_layout_attribute_t* value);
  * 
  * @function ast_layout_attribute_print
  * @brief Print the AST layout attribute
- * @paramss {ast_layout_attribute_t*} value - AST layout attribute
+ * @params {ast_layout_attribute_t*} value - AST layout attribute
  * @returns {void}
  * 
  */
@@ -386,9 +399,9 @@ void ast_layout_print(ast_layout_t* value);
  * 
  * @function ast_layout_attribute_create
  * @brief Create a new AST node layout attribute
- * @paramss {ast_layout_attribute_type_t} type - Type of the layout attribute
- * @paramss {const char*} key - Key of the attribute
- * @paramss {array_t*} values - Values of the attribute
+ * @params {ast_layout_attribute_type_t} type - Type of the layout attribute
+ * @params {const char*} key - Key of the attribute
+ * @params {array_t*} values - Values of the attribute
  * @returns {ast_layout_attribute_t*} - Pointer to the created AST node layout attribute
  * 
  */
@@ -439,10 +452,11 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name);
  * @function token_to_ast_layout_attribute_type
  * @brief Convert token to AST layout attribute type
  * @params {token_t*} token - Token
+ * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @returns {ast_layout_node_type_t} type - Layout Node Type
  * 
  */
-ast_layout_attribute_type_t token_to_ast_layout_attribute_type(token_t* token);
+ast_layout_attribute_type_t token_to_ast_layout_attribute_type(token_t* token, ast_layout_node_type_t parent_node_type);
 
 /**
  * 

@@ -7,7 +7,7 @@
 #include <string.h>
 #include <stdbool.h>
 
-typedef struct {
+typedef struct array_t {
     void** data;
     size_t length;
     size_t capacity;

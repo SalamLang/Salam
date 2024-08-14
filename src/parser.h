@@ -73,15 +73,6 @@ void unknown_scope(lexer_t* lexer, char* scope);
 
 /**
  * 
- * @function ast_layout_create
- * @brief Create a new AST layout node
- * @returns {ast_layout_t*} - AST layout node
- * 
- */
-ast_layout_block_t* ast_layout_block_create();
-
-/**
- * 
  * @function parser_parse_block
  * @brief Parse the block
  * @params {lexer_t*} lexer - Lexer
@@ -94,43 +85,15 @@ ast_block_t* parser_parse_block(lexer_t* lexer, ast_block_type_t type, ast_type_
 
 /**
  * 
- * @function ast_block_create
- * @brief Create a new AST block node
- * @returns {ast_block_t*} - AST block node
- * 
- */
-ast_block_t* ast_block_create();
-
-/**
- * 
- * @function ast_layout_node_create
- * @brief Create a new AST layout node
- * @params {ast_layout_node_type_t} type - Type of the layout node
- * @returns {ast_layout_node_t*} - AST layout node
- * 
- */
-ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t type);
-
-/**
- * 
- * @function parser_parse_layout_node
- * @brief Parsing layout node
- * @returns {ast_layout_node_t*} - AST layout node
- * 
- */
-ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer);
-
-/**
- * 
  * @function parser_parse_layout_block
  * @brief Parse the block
- * @params {ast_layout_block_t*} - AST layout block node
+ * @params {ast_layout_block_t*} block - AST layout block
  * @params {lexer_t*} lexer - Lexer
  * @params {ast_type_t} block_parent_type - Block parent type
  * @returns {void}
  * 
  */
-void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer, ast_type_t block_parent_type);
+void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer);
 
 /**
  * 
@@ -174,17 +137,6 @@ ast_node_t* parser_layout(lexer_t* lexer);
 
 /**
  * 
- * @function parser_parse_layout_block_attribute
- * @brief Parse the block attribute
- * @params {ast_layout_block_t*} block - AST layout block node
- * @params {lexer_t*} lexer - Lexer
- * @returns {void}
- * 
- */
-void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lexer);
-
-/**
- * 
  * @function parser_parse_layout_block_children
  * @brief Parse the block children
  * @params {ast_layout_block_t*} block - AST layout block node
@@ -193,5 +145,16 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
  * 
  */
 void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexer);
+
+/**
+ * 
+ * @function parser_parse_layout_node
+ * @brief Parsing layout node
+ * @params {ast_layout_node_type_t} parent_node_type - Parent node type
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {ast_layout_node_t*} - AST layout node
+ * 
+ */
+ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer, ast_layout_block_t* block);
 
 #endif

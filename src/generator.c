@@ -172,9 +172,6 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 
     if (html_lang_value != NULL) memory_destroy(html_lang_value);
     if (html_dir_value != NULL) memory_destroy(html_dir_value);
-
-    if (html_dir != NULL) html_dir->destroy(html_dir);
-    if (html_lang != NULL) html_lang->destroy(html_lang);
 }
 
 /**
@@ -202,6 +199,10 @@ string_t* generator_code_layout_attributes(ast_layout_block_t* block)
 
                 while (entry) {
                     ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
+                    if (attribute == NULL) {
+                        entry = entry->next;
+                        continue;
+                    }
 
                     if (attribute->ignoreMe == true || attribute->isContent == true || attribute->isStyle == true) {}
                     else {
@@ -653,7 +654,9 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
  */
 void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layout_block, string_t* body)
 {
-    validate_layout_mainbody(layout_block);
+    if (layout_block == NULL) {
+        validate_layout_mainbody(layout_block);
+    }
     
     string_t* body_tag = string_create(1024);
     string_t* body_content = string_create(1024);
@@ -695,11 +698,8 @@ void generator_code(generator_t* generator)
 
     if (generator->ast->layout != NULL) {
         ast_layout_t* layout = ast->layout;
-        ast_layout_block_t* layout_block = NULL;
 
         if (layout->block != NULL) {
-            layout_block = layout->block;
-
             string_t* head = string_create(1024);
             string_t* body = string_create(1024);
             string_t* html = string_create(1024);
@@ -707,7 +707,7 @@ void generator_code(generator_t* generator)
             string_append_str(html, "<!doctype html>\n");
             string_append_str(html, "<html");
 
-            generator_code_layout_html(layout_block, html);
+            generator_code_layout_html(layout->block, html);
 
             string_append_str(html, ">\n");
 
@@ -717,7 +717,7 @@ void generator_code(generator_t* generator)
             string_append(html, head);
             string_append_str(html, "</head>\n");
 
-            generator_code_layout_body(generator, layout_block, body);
+            generator_code_layout_body(generator, layout->block, body);
 
             string_append(html, body);
 

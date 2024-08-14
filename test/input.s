@@ -1,5 +1,5 @@
 layout {
-    dir: "dgdfg"
+    dir: "ltr"
     title: "my site name"
     description: "desc"
     author: "Max Base"

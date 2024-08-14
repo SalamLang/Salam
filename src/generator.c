@@ -1,12 +1,12 @@
 #include "generator.h"
 
 /**
- * 
+ *
  * @function generator_create
  * @brief Create a generator
  * @params {ast_t*} ast - AST tree
  * @returns {generator_t*}
- * 
+ *
  */
 generator_t* generator_create(ast_t* ast)
 {
@@ -24,12 +24,12 @@ generator_t* generator_create(ast_t* ast)
 }
 
 /**
- * 
+ *
  * @function generator_destroy
  * @brief Destroy a generator
  * @params {generator_t*} generator
  * @returns {void}
- * 
+ *
  */
 void generator_destroy(generator_t* generator)
 {
@@ -51,12 +51,12 @@ void generator_destroy(generator_t* generator)
 }
 
 /**
- * 
+ *
  * @function generator_debug
  * @brief Debug the generator
  * @params {generator_t*} generator - Generator
  * @returns {void}
- * 
+ *
  */
 void generator_debug(generator_t* generator)
 {
@@ -80,12 +80,12 @@ void generator_debug(generator_t* generator)
 }
 
 /**
- * 
+ *
  * @function generator_save
  * @brief Save the generator
  * @params {generator_t*} generator - Generator
  * @returns {void}
- * 
+ *
  */
 void generator_save(generator_t* generator)
 {
@@ -107,13 +107,13 @@ void generator_save(generator_t* generator)
 }
 
 /**
- * 
+ *
  * @function generator_code_layout_html
  * @brief Generate the HTML code for the layout block
  * @params {ast_layout_block_t*} layout_block - Layout block
  * @params {string_t*} html - HTML string
  * @returns {void}
- * 
+ *
  */
 void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html)
 {
@@ -157,18 +157,18 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 
     if (html_lang_value != NULL) memory_destroy(html_lang_value);
     if (html_dir_value != NULL) memory_destroy(html_dir_value);
-    
+
     if (html_dir != NULL) html_dir->destroy(html_dir);
     if (html_lang != NULL) html_lang->destroy(html_lang);
 }
 
 /**
- * 
+ *
  * @function generator_code_layout_attributes
  * @brief Generate the HTML code for the layout block attributes
  * @params {ast_layout_block_t*} block - Layout block
  * @returns {string_t*}
- * 
+ *
  */
 string_t* generator_code_layout_attributes(ast_layout_block_t* block)
 {
@@ -178,7 +178,7 @@ string_t* generator_code_layout_attributes(ast_layout_block_t* block)
     if (block != NULL) {
         if (block->attributes != NULL) {
             hashmap_t* attributes = cast(hashmap_t*, block->attributes);
-            
+
             for (size_t i = 0; i < attributes->capacity; i++) {
                 hashmap_entry_t *entry = attributes->data[i];
 
@@ -213,14 +213,95 @@ string_t* generator_code_layout_attributes(ast_layout_block_t* block)
     return html_attributes;
 }
 
+char* generator_code_layout_node_type(ast_layout_node_type_t type)
+{
+    switch (type) {
+        case AST_LAYOUT_NODE_TYPE_LINK: return "link";
+        case AST_LAYOUT_NODE_TYPE_SCRIPT: return "script";
+        case AST_LAYOUT_NODE_TYPE_STYLE: return "style";
+        case AST_LAYOUT_NODE_TYPE_DIV: return "div";
+        case AST_LAYOUT_NODE_TYPE_HEADER: return "header";
+        case AST_LAYOUT_NODE_TYPE_FOOTER: return "footer";
+        case AST_LAYOUT_NODE_TYPE_NAV: return "nav";
+        case AST_LAYOUT_NODE_TYPE_MAIN: return "main";
+        case AST_LAYOUT_NODE_TYPE_SECTION: return "section";
+        case AST_LAYOUT_NODE_TYPE_ARTICLE: return "article";
+        case AST_LAYOUT_NODE_TYPE_ASIDE: return "aside";
+        case AST_LAYOUT_NODE_TYPE_PARAGRAPH: return "p";
+        case AST_LAYOUT_NODE_TYPE_UL: return "ul";
+        case AST_LAYOUT_NODE_TYPE_OL: return "ol";
+        case AST_LAYOUT_NODE_TYPE_LI: return "li";
+        case AST_LAYOUT_NODE_TYPE_IMG: return "img";
+        case AST_LAYOUT_NODE_TYPE_TABLE: return "table";
+        case AST_LAYOUT_NODE_TYPE_TABLE_TR: return "tr";
+        case AST_LAYOUT_NODE_TYPE_TABLE_TD: return "td";
+        case AST_LAYOUT_NODE_TYPE_TABLE_TH: return "th";
+        case AST_LAYOUT_NODE_TYPE_FORM: return "form";
+        case AST_LAYOUT_NODE_TYPE_INPUT: return "input";
+        case AST_LAYOUT_NODE_TYPE_BUTTON: return "button";
+        case AST_LAYOUT_NODE_TYPE_TEXTAREA: return "textarea";
+        case AST_LAYOUT_NODE_TYPE_SELECT: return "select";
+        case AST_LAYOUT_NODE_TYPE_OPTION: return "option";
+        case AST_LAYOUT_NODE_TYPE_LABEL: return "label";
+        case AST_LAYOUT_NODE_TYPE_IFRAME: return "iframe";
+        case AST_LAYOUT_NODE_TYPE_CANVAS: return "canvas";
+        case AST_LAYOUT_NODE_TYPE_AUDIO: return "audio";
+        case AST_LAYOUT_NODE_TYPE_VIDEO: return "video";
+        case AST_LAYOUT_NODE_TYPE_BLOCKQUOTE: return "blockquote";
+        case AST_LAYOUT_NODE_TYPE_PRE: return "pre";
+        case AST_LAYOUT_NODE_TYPE_CODE: return "code";
+        case AST_LAYOUT_NODE_TYPE_BR: return "br";
+        case AST_LAYOUT_NODE_TYPE_HR: return "hr";
+        case AST_LAYOUT_NODE_TYPE_SPAN: return "span";
+        case AST_LAYOUT_NODE_TYPE_STRONG: return "strong";
+        case AST_LAYOUT_NODE_TYPE_EM: return "em";
+        case AST_LAYOUT_NODE_TYPE_ITALIC: return "i";
+        case AST_LAYOUT_NODE_TYPE_BOLD: return "b";
+        case AST_LAYOUT_NODE_TYPE_UNDERLINE: return "u";
+        case AST_LAYOUT_NODE_TYPE_S: return "s";
+        case AST_LAYOUT_NODE_TYPE_SMALL: return "small";
+        case AST_LAYOUT_NODE_TYPE_BIG: return "big";
+        case AST_LAYOUT_NODE_TYPE_SUB: return "sub";
+        case AST_LAYOUT_NODE_TYPE_SUP: return "sup";
+        case AST_LAYOUT_NODE_TYPE_CENTER: return "center";
+        case AST_LAYOUT_NODE_TYPE_DEL: return "del";
+        case AST_LAYOUT_NODE_TYPE_INS: return "ins";
+        case AST_LAYOUT_NODE_TYPE_MARK: return "mark";
+        case AST_LAYOUT_NODE_TYPE_Q: return "q";
+        case AST_LAYOUT_NODE_TYPE_CITE: return "cite";
+        case AST_LAYOUT_NODE_TYPE_DFN: return "dfn";
+        case AST_LAYOUT_NODE_TYPE_ADDRESS: return "address";
+        case AST_LAYOUT_NODE_TYPE_TIME: return "time";
+        case AST_LAYOUT_NODE_TYPE_PROGRESS: return "progress";
+        case AST_LAYOUT_NODE_TYPE_METER: return "meter";
+        case AST_LAYOUT_NODE_TYPE_DETAILS: return "details";
+        case AST_LAYOUT_NODE_TYPE_SUMMARY: return "summary";
+        case AST_LAYOUT_NODE_TYPE_DIALOG: return "dialog";
+        case AST_LAYOUT_NODE_TYPE_MENU: return "menu";
+        case AST_LAYOUT_NODE_TYPE_MENUITEM: return "menuitem";
+        case AST_LAYOUT_NODE_TYPE_COMMAND: return "command";
+        case AST_LAYOUT_NODE_TYPE_LEGEND: return "legend";
+        case AST_LAYOUT_NODE_TYPE_FIELDSET: return "fieldset";
+        case AST_LAYOUT_NODE_TYPE_CAPTION: return "caption";
+        case AST_LAYOUT_NODE_TYPE_COL: return "col";
+        case AST_LAYOUT_NODE_TYPE_COLGROUP: return "colgroup";
+        case AST_LAYOUT_NODE_TYPE_TABLE_HEADER: return "thead";
+        case AST_LAYOUT_NODE_TYPE_TABLE_BODY: return "tbody";
+        case AST_LAYOUT_NODE_TYPE_TABLE_FOOTER: return "tfoot";
+        
+        case AST_LAYOUT_NODE_TYPE_PARAGRAPH_RAW:
+        case AST_LAYOUT_NODE_TYPE_ERROR: return "";
+    }
+}
+
 /**
- * 
+ *
  * @function generator_code_layout_block
  * @brief Generate the HTML code for the layout block
  * @params {generator_t*} generator - Generator
  * @params {array_t*} children - Children
  * @returns {string_t*}
- * 
+ *
  */
 string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 {
@@ -231,8 +312,10 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 
         string_t* layout_block_str = string_create(1024);
         string_t* node_attrs_str = generator_code_layout_attributes(node->block);
+        char* node_name = ast_layout_node_type_to_name(node->type);
 
-        string_append_str(layout_block_str, "<TAG");
+        string_append_char(layout_block_str, '<');
+        string_append_str(layout_block_str, node_name);
         if (node_attrs_str->length > 0) {
             string_append_char(layout_block_str, ' ');
             string_append(layout_block_str, node_attrs_str);
@@ -241,12 +324,18 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
         string_append_str(layout_block_str, ">");
 
         if (node->block->children->length > 0 || node->block->text_content != NULL) {
-            string_append_char(layout_block_str, '\n');
-
             if (node->block->text_content != NULL) {
-                string_append_str(layout_block_str, "{");
-                string_append_str(layout_block_str, node->block->text_content);
-                string_append_str(layout_block_str, "}");
+                // string_append_char(layout_block_str, '{');
+                if (node->block->children->length == 0 && strchr(node->block->text_content, '\n') == NULL) {
+                    string_append_str(layout_block_str, node->block->text_content);
+                    // string_append_char(layout_block_str, '}');
+                }
+                else {
+                    string_append_char(layout_block_str, '\n');
+                    string_append_str(layout_block_str, node->block->text_content);
+                    // string_append_char(layout_block_str, '}');
+                    string_append_char(layout_block_str, '\n');
+                }
             }
 
             if (node->block->children->length > 0) {
@@ -258,7 +347,9 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 
         }
 
-        string_append_str(layout_block_str, "</TAG>\n");
+        string_append_str(layout_block_str, "</");
+        string_append_str(layout_block_str, node_name);
+        string_append_str(layout_block_str, ">\n");
 
         string_append(html, layout_block_str);
 
@@ -283,7 +374,7 @@ void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layo
     string_t* body_child = generator_code_layout_block(generator, layout_block->children);
     if (body_child->length > 0) string_append_char(body_tag, '\n');
     string_append(body_content, body_child);
-    body_child->destroy(body_child);     
+    body_child->destroy(body_child);
 
     string_append(body_tag, body_content);
     string_append_str(body_tag, "</body>\n");
@@ -294,11 +385,11 @@ void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layo
 }
 
 /**
- * 
+ *
  * @function generator_code
  * @params {generator_t*} generator - Generator
  * @returns {void}
- * 
+ *
  */
 void generator_code(generator_t* generator)
 {

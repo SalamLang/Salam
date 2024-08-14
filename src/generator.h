@@ -8,6 +8,7 @@
 #include "string.h"
 #include "file.h"
 #include "ast.h"
+#include "validator.h"
 
 typedef struct {
 	ast_t* ast;
@@ -97,5 +98,16 @@ string_t* generator_code_layout_attributes(ast_layout_block_t* block);
  *
  */
 string_t* generator_code_layout_block(generator_t* generator, array_t* children);
+
+/**
+ * 
+ * @function generator_code_layout_body
+ * @params {generator_t*} generator - Generator
+ * @params {ast_layout_block_t*} layout_block - Layout block
+ * @params {string_t*} body - Body
+ * @returns {void}
+ * 
+ */
+void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layout_block, string_t* body);
 
 #endif

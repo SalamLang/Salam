@@ -140,7 +140,7 @@ void* hashmap_get(hashmap_t *map, const char *key)
 	unsigned long hash = hash_function(key);
 	size_t index = hash % map->capacity;
 	hashmap_entry_t *entry = map->data[index];
-
+	
 	while (entry != NULL) {
 		if (strcmp(entry->key, key) == 0) return entry->value;
 
@@ -305,7 +305,7 @@ void hashmap_print_custom(hashmap_t* map, void (*print_fn)(void*))
  * 
  * @function hashmap_print_layout_attribute
  * @brief Print the hashmap of layout attributes
- * @paramss {ast_layout_attribute_t*} map - The hashmap to print
+ * @params {ast_layout_attribute_t*} map - The hashmap to print
  * @returns {void}
  * 
  */

@@ -39,7 +39,7 @@ void ast_node_destroy(ast_node_t* value)
  * 
  * @function ast_layout_attribute_print
  * @brief Print the AST layout attribute
- * @paramss {ast_layout_attribute_t*} value - AST layout attribute
+ * @params {ast_layout_attribute_t*} value - AST layout attribute
  * @returns {void}
  * 
  */
@@ -55,15 +55,17 @@ void ast_layout_attribute_print(ast_layout_attribute_t* value)
  * 
  * @function ast_layout_block_create
  * @brief Create a new AST node layout block
- * @paramss {ast_type_t} parent_type - Parent token type
+ * @params {ast_type_t} node_type - Node type
+ * @params {ast_layout_node_type_t} layout_node_type - Layout node type
  * @returns {ast_layout_block_t*} - Pointer to the created AST node layout block
  * 
  */
-ast_layout_block_t* ast_layout_block_create(ast_type_t parent_type)
+ast_layout_block_t* ast_layout_block_create(ast_type_t node_type, ast_layout_node_type_t layout_node_type)
 {
 	ast_layout_block_t* block = memory_allocate(sizeof(ast_layout_block_t));
-
-	block->parent_type = parent_type;
+	block->type = AST_NODE_BLOCK_TYPE_LAYOUT;
+	block->parent_type = node_type;
+	block->parent_node_type = layout_node_type;
 	block->text_content = NULL;
 
 	block->attributes = cast(struct hashmap_t*, hashmap_create(16));
@@ -88,9 +90,9 @@ ast_layout_block_t* ast_layout_block_create(ast_type_t parent_type)
  * 
  * @function ast_layout_attribute_create
  * @brief Create a new AST node layout attribute
- * @paramss {ast_layout_attribute_type_t} type - Type of the layout attribute
- * @paramss {const char*} key - Key of the attribute
- * @paramss {array_t*} values - Values of the attribute
+ * @params {ast_layout_attribute_type_t} type - Type of the layout attribute
+ * @params {const char*} key - Key of the attribute
+ * @params {array_t*} values - Values of the attribute
  * @returns {ast_layout_attribute_t*} - Pointer to the created AST node layout attribute
  * 
  */
@@ -102,6 +104,7 @@ ast_layout_attribute_t* ast_layout_attribute_create(ast_layout_attribute_type_t 
 	attribute->values = values;
 	attribute->isStyle = false;
 	attribute->isContent = false;
+	attribute->ignoreMe = false;
 
 	attribute->print = cast(void (*)(void*), ast_layout_attribute_print);
 	attribute->destroy = cast(void (*)(void*), ast_layout_attribute_destroy);
@@ -113,7 +116,7 @@ ast_layout_attribute_t* ast_layout_attribute_create(ast_layout_attribute_type_t 
  * 
  * @function ast_layout_attribute_destroy
  * @brief Destroy the AST layout attribute
- * @paramss {ast_layout_attribute_t*} value - AST layout attribute
+ * @params {ast_layout_attribute_t*} value - AST layout attribute
  * @returns {void}
  * 
  */
@@ -136,7 +139,7 @@ void ast_layout_attribute_destroy(ast_layout_attribute_t* value)
  * 
  * @function ast_layout_block_destroy
  * @brief Free the AST node layout block
- * @paramss {ast_layout_block_t*} value - AST layout block
+ * @params {ast_layout_block_t*} value - AST layout block
  * @returns {void}
  * 
  */
@@ -174,7 +177,7 @@ void ast_layout_block_destroy(ast_layout_block_t* value)
  * 
  * @function ast_layout_block_print
  * @brief Free the AST node layout block
- * @paramss {ast_layout_block_t*} value - AST layout block
+ * @params {ast_layout_block_t*} value - AST layout block
  * @returns {void}
  * 
  */
@@ -203,16 +206,17 @@ void ast_layout_block_print(ast_layout_block_t* value)
  * 
  * @function ast_layout_node_create
  * @brief Create a new AST node layout attribute
- * @paramss {ast_layout_node_type_t} type - Type of the layout node
+ * @params {ast_layout_node_type_t} layout_node_type - Layout node type
+ * @params {ast_layout_block_t*} parent_block - Parent block
  * @returns {ast_layout_node_t*} - Pointer to the created AST node layout attribute
  * 
  */
-ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t type)
+ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t layout_node_type, ast_layout_block_t* parent_block)
 {
 	ast_layout_node_t* node = memory_allocate(sizeof(ast_layout_node_t));
 	node->tag = NULL;
-	node->type = type;
-	node->block = ast_layout_block_create(AST_NODE_TYPE_LAYOUT_NODE);
+	node->type = layout_node_type;
+	node->block = ast_layout_block_create(parent_block->parent_type, parent_block->parent_node_type);
 	
 	node->print = cast(void (*)(void*), ast_layout_node_print);
 	node->destroy = cast(void (*)(void*), ast_layout_node_destroy);
@@ -224,7 +228,7 @@ ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t type)
  * 
  * @function ast_layout_node_print
  * @beief Print the AST layout node
- * @paramss {ast_layout_node_t*} value - AST layout node
+ * @params {ast_layout_node_t*} value - AST layout node
  * @returns {void}
  * 
  */
@@ -238,7 +242,7 @@ void ast_layout_node_print(ast_layout_node_t* value)
  * 
  * @function ast_layout_node_destroy
  * @brief Free the AST node layout attribute
- * @paramss {ast_layout_node_t*} value - AST layout node
+ * @params {ast_layout_node_t*} value - AST layout node
  * @returns {void}
  * 
  */
@@ -268,8 +272,8 @@ void ast_layout_node_destroy(ast_layout_node_t* value)
 ast_layout_t* ast_layout_create()
 {
 	ast_layout_t* node = memory_allocate(sizeof(ast_layout_t));
-	
-	node->block = ast_layout_block_create(AST_NODE_TYPE_LAYOUT);
+
+	node->block = ast_layout_block_create(AST_NODE_TYPE_LAYOUT, AST_LAYOUT_NODE_TYPE_NONE);
 	node->print = cast(void (*)(void*), ast_layout_print);
 	node->destroy = cast(void (*)(void*), ast_layout_destroy);
 
@@ -280,7 +284,7 @@ ast_layout_t* ast_layout_create()
  * 
  * @function ast_layout_destroy
  * @brief Create a new AST node layout attribute
- * @paramss {ast_layout_t*} value - AST layout node
+ * @params {ast_layout_t*} value - AST layout node
  * @returns {void}
  * 
  */
@@ -324,9 +328,6 @@ void ast_node_print(ast_node_t* node)
 		case AST_NODE_TYPE_FUNCTION:
 			printf("Function\n");
 			break;
-		case AST_NODE_TYPE_FUNCTION_ERROR:
-			printf("Function Error\n");
-			break;
 		case AST_NODE_TYPE_BLOCK:
 			printf("Block\n");
 			break;
@@ -335,12 +336,6 @@ void ast_node_print(ast_node_t* node)
 			break;
 		case AST_NODE_TYPE_LAYOUT:
 			printf("Layout\n");
-			break;
-		case AST_NODE_TYPE_LAYOUT_BLOCK:
-			printf("Layout Block\n");
-			break;
-		case AST_NODE_TYPE_LAYOUT_NODE:
-			printf("Layout Node\n");
 			break;
 		case AST_NODE_TYPE_ERROR:
 			printf("Error\n");
@@ -497,7 +492,7 @@ ast_layout_node_type_t token_to_ast_layout_node_type(token_t* token)
 	ast_layout_node_type_t type = name_to_ast_layout_node_type(token->data.string);
 
 	if (type == AST_LAYOUT_NODE_TYPE_ERROR) {
-		error(2, "Unknown layout node type %s at line %d, column %d", token->data.string, token->location.end_line, token->location.end_column);
+		error(2, "Unknown layout node '%s' at line %d, column %d", token->data.string, token->location.end_line, token->location.end_column);
 	}
 
 	return type;
@@ -514,50 +509,85 @@ ast_layout_node_type_t token_to_ast_layout_node_type(token_t* token)
 char* ast_layout_node_type_to_name(ast_layout_node_type_t type)
 {
 	switch (type) {
-		case AST_LAYOUT_NODE_TYPE_PARAGRAPH:
-			return "paragraph";
-		case AST_LAYOUT_NODE_TYPE_PARAGRAPH_RAW:
-			return "paragraph_raw";
-		case AST_LAYOUT_NODE_TYPE_BUTTON:
-			return "button";
-		case AST_LAYOUT_NODE_TYPE_INPUT:
-			return "input";
-		case AST_LAYOUT_NODE_TYPE_TEXTAREA:
-			return "textarea";
-		case AST_LAYOUT_NODE_TYPE_SPAN:
-			return "span";
-		case AST_LAYOUT_NODE_TYPE_LABEL:
-			return "label";
-		case AST_LAYOUT_NODE_TYPE_HEADER:
-			return "header";
-		case AST_LAYOUT_NODE_TYPE_UL:
-			return "ul";
-		case AST_LAYOUT_NODE_TYPE_OL:
-			return "ol";
-		case AST_LAYOUT_NODE_TYPE_LI:
-			return "li";
-		case AST_LAYOUT_NODE_TYPE_LINK:
-			return "a";
-		case AST_LAYOUT_NODE_TYPE_IMG:
-			return "img";
-		case AST_LAYOUT_NODE_TYPE_TABLE:
-			return "table";
-		case AST_LAYOUT_NODE_TYPE_TABLE_TR:
-			return "tr";
-		case AST_LAYOUT_NODE_TYPE_TABLE_TD:
-			return "td";
-		case AST_LAYOUT_NODE_TYPE_VIDEO:
-			return "video";
-		case AST_LAYOUT_NODE_TYPE_AUDIO:
-			return "audio";
-		case AST_LAYOUT_NODE_TYPE_FORM:
-			return "form";
-		case AST_LAYOUT_NODE_TYPE_DIV:
-			return "box";
-		default:
-		case AST_LAYOUT_NODE_TYPE_ERROR:
-			return "error";
+		case AST_LAYOUT_NODE_TYPE_PARAGRAPH: return "paragraph";
+		case AST_LAYOUT_NODE_TYPE_PARAGRAPH_RAW: return "paragraph_raw";
+		case AST_LAYOUT_NODE_TYPE_BUTTON: return "button";
+		case AST_LAYOUT_NODE_TYPE_INPUT: return "input";
+		case AST_LAYOUT_NODE_TYPE_TEXTAREA: return "textarea";
+		case AST_LAYOUT_NODE_TYPE_SPAN: return "span";
+		case AST_LAYOUT_NODE_TYPE_LABEL: return "label";
+		case AST_LAYOUT_NODE_TYPE_HEADER: return "header";
+		case AST_LAYOUT_NODE_TYPE_FOOTER: return "footer";
+		case AST_LAYOUT_NODE_TYPE_NAV: return "nav";
+		case AST_LAYOUT_NODE_TYPE_MAIN: return "main";
+		case AST_LAYOUT_NODE_TYPE_SECTION: return "section";
+		case AST_LAYOUT_NODE_TYPE_ARTICLE: return "article";
+		case AST_LAYOUT_NODE_TYPE_ASIDE: return "aside";
+		case AST_LAYOUT_NODE_TYPE_SELECT: return "select";
+		case AST_LAYOUT_NODE_TYPE_OPTION: return "option";
+		case AST_LAYOUT_NODE_TYPE_IFRAME: return "iframe";
+		case AST_LAYOUT_NODE_TYPE_CANVAS: return "canvas";
+		case AST_LAYOUT_NODE_TYPE_BLOCKQUOTE: return "blockquote";
+		case AST_LAYOUT_NODE_TYPE_PRE: return "pre";
+		case AST_LAYOUT_NODE_TYPE_CODE: return "code";
+		case AST_LAYOUT_NODE_TYPE_BR: return "br";
+		case AST_LAYOUT_NODE_TYPE_HR: return "hr";
+		case AST_LAYOUT_NODE_TYPE_STRONG: return "strong";
+		case AST_LAYOUT_NODE_TYPE_EM: return "em";
+		case AST_LAYOUT_NODE_TYPE_ITALIC: return "italic";
+		case AST_LAYOUT_NODE_TYPE_BOLD: return "bold";
+		case AST_LAYOUT_NODE_TYPE_UNDERLINE: return "underline";
+		case AST_LAYOUT_NODE_TYPE_S: return "s";
+		case AST_LAYOUT_NODE_TYPE_SMALL: return "small";
+		case AST_LAYOUT_NODE_TYPE_BIG: return "big";
+		case AST_LAYOUT_NODE_TYPE_SUB: return "sub";
+		case AST_LAYOUT_NODE_TYPE_SUP: return "sup";
+		case AST_LAYOUT_NODE_TYPE_CENTER: return "center";
+		case AST_LAYOUT_NODE_TYPE_DEL: return "del";
+		case AST_LAYOUT_NODE_TYPE_INS: return "ins";
+		case AST_LAYOUT_NODE_TYPE_MARK: return "mark";
+		case AST_LAYOUT_NODE_TYPE_Q: return "q";
+		case AST_LAYOUT_NODE_TYPE_CITE: return "cite";
+		case AST_LAYOUT_NODE_TYPE_DFN: return "dfn";
+		case AST_LAYOUT_NODE_TYPE_ADDRESS: return "address";
+		case AST_LAYOUT_NODE_TYPE_TIME: return "time";
+		case AST_LAYOUT_NODE_TYPE_PROGRESS: return "progress";
+		case AST_LAYOUT_NODE_TYPE_METER: return "meter";
+		case AST_LAYOUT_NODE_TYPE_DETAILS: return "details";
+		case AST_LAYOUT_NODE_TYPE_SUMMARY: return "summary";
+		case AST_LAYOUT_NODE_TYPE_DIALOG: return "dialog";
+		case AST_LAYOUT_NODE_TYPE_MENU: return "menu";
+		case AST_LAYOUT_NODE_TYPE_MENUITEM: return "menuitem";
+		case AST_LAYOUT_NODE_TYPE_COMMAND: return "command";
+		case AST_LAYOUT_NODE_TYPE_LEGEND: return "legent";
+		case AST_LAYOUT_NODE_TYPE_FIELDSET: return "fieldset";
+		case AST_LAYOUT_NODE_TYPE_CAPTION: return "caption";
+		case AST_LAYOUT_NODE_TYPE_COL: return "col";
+		case AST_LAYOUT_NODE_TYPE_COLGROUP: return "colgroup";
+		case AST_LAYOUT_NODE_TYPE_TABLE_HEADER: return "thead";
+		case AST_LAYOUT_NODE_TYPE_TABLE_BODY: return "tbody";
+		case AST_LAYOUT_NODE_TYPE_TABLE_FOOTER: return "tfoot";
+		case AST_LAYOUT_NODE_TYPE_UL: return "ul";
+		case AST_LAYOUT_NODE_TYPE_OL: return "ol";
+		case AST_LAYOUT_NODE_TYPE_LI: return "li";
+		case AST_LAYOUT_NODE_TYPE_LINK: return "a";
+		case AST_LAYOUT_NODE_TYPE_IMG: return "img";
+		case AST_LAYOUT_NODE_TYPE_TABLE: return "table";
+		case AST_LAYOUT_NODE_TYPE_TABLE_TR: return "tr";
+		case AST_LAYOUT_NODE_TYPE_TABLE_TD: return "td";
+		case AST_LAYOUT_NODE_TYPE_TABLE_TH: return "th";
+		case AST_LAYOUT_NODE_TYPE_VIDEO: return "video";
+		case AST_LAYOUT_NODE_TYPE_AUDIO: return "audio";
+		case AST_LAYOUT_NODE_TYPE_FORM: return "form";
+		case AST_LAYOUT_NODE_TYPE_DIV: return "div";
+		case AST_LAYOUT_NODE_TYPE_SCRIPT: return "script";
+		case AST_LAYOUT_NODE_TYPE_STYLE: return "style";
+		
+		case AST_LAYOUT_NODE_TYPE_NONE: return "layout";
+		case AST_LAYOUT_NODE_TYPE_ERROR: return "error";
 	}
+
+	return "error!!!";
 }
 
 /**
@@ -629,11 +659,14 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name)
  * @function token_to_ast_layout_attribute_type
  * @brief Convert token to AST layout attribute type
  * @params {token_t*} token - Token
+ * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @returns {ast_layout_node_type_t} type - Layout Node Type
  * 
  */
-ast_layout_attribute_type_t token_to_ast_layout_attribute_type(token_t* token)
+ast_layout_attribute_type_t token_to_ast_layout_attribute_type(token_t* token, ast_layout_node_type_t parent_node_type)
 {
+	char* layout_element_name = ast_layout_node_type_to_name(parent_node_type);
+
 	if (token->type != TOKEN_IDENTIFIER) {
 		error(2, "Expected token type to be identifier as layout attribute type, got %s at line %d, column %d", token_name(token->type), token->location.end_line, token->location.end_column);
 	}
@@ -641,7 +674,7 @@ ast_layout_attribute_type_t token_to_ast_layout_attribute_type(token_t* token)
 	ast_layout_attribute_type_t type = name_to_ast_layout_attribute_type(token->data.string);
 
 	if (type == AST_LAYOUT_ATTRIBUTE_TYPE_ERROR) {
-		error(2, "Unknown layout attribute type %s at line %d, column %d", token->data.string, token->location.end_line, token->location.end_column);
+		error(2, "Unknown layout attribute '%s' at line %d, column %d for '%s' element", token->data.string, token->location.end_line, token->location.end_column, layout_element_name);
 	}
 
 	return type;

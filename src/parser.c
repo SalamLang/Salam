@@ -146,24 +146,6 @@ ast_block_t* parser_parse_block(lexer_t* lexer, ast_block_type_t type, ast_type_
 
 	expect(lexer, TOKEN_LEFT_BRACE);
 
-	// while (PARSER_CURRENT->type != TOKEN_RIGHT_BRACE) {
-	//     ast_node_t* child = ast_node_create(AST_NODE_TYPE_ERROR, PARSER_CURRENT->location);
-
-	//     if (match(lexer, TOKEN_LAYOUT)) {
-	//         child = parser_parse_layout(lexer);
-	//     }
-	//     else {
-	//         unknown(lexer);
-	//     }
-
-	//     // if (block_parent_type == AST_NODE_TYPE_LAYOUT) {
-	//     //     array_push(node->children, child);
-	//     // }
-	//     // else {
-	//     //     array_push(node->children, child);
-	//     // }
-	// }
-
 	expect(lexer, TOKEN_RIGHT_BRACE);
 
 	return block;
@@ -173,17 +155,19 @@ ast_block_t* parser_parse_block(lexer_t* lexer, ast_block_type_t type, ast_type_
  * 
  * @function parser_parse_layout_node
  * @brief Parsing layout node
+ * @params {ast_layout_node_type_t} parent_node_type - Parent node type
+ * @params {lexer_t*} lexer - Lexer
  * @returns {ast_layout_node_t*} - AST layout node
  * 
  */
-ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer)
+ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer, ast_layout_block_t* block)
 {	
 	ast_layout_node_type_t type = token_to_ast_layout_node_type(PARSER_CURRENT);
 	PARSER_NEXT;
 
-	ast_layout_node_t* node = ast_layout_node_create(type);
+	ast_layout_node_t* node = ast_layout_node_create(type, block);
 
-	parser_parse_layout_block(node->block, lexer, AST_NODE_TYPE_LAYOUT);
+	parser_parse_layout_block(node->block, lexer);
 	
 	return node;
 }
@@ -224,11 +208,17 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
 	}
 
 	
-	ast_layout_attribute_type_t type = token_to_ast_layout_attribute_type(token);
-	ast_layout_attribute_t* attribute = ast_layout_attribute_create(type, token->data.string, values);
-	char* key = ast_layout_attribute_type_to_name(type);
+	ast_layout_attribute_type_t attribute_key_type = token_to_ast_layout_attribute_type(token, block->parent_node_type);
+	token->print(token);
 
-	hashmap_put(cast(hashmap_t*, block->attributes), key, attribute);
+	if (!token_belongs_to_ast_layout_node(block,  attribute_key_type)) {
+		error(2, "Attribute '%s' does not belong to node '%s' at line %d, column %d", token_value(token), ast_layout_node_type_to_name(block->parent_node_type), token->location.end_line, token->location.end_column);
+	}
+
+	ast_layout_attribute_t* attribute = ast_layout_attribute_create(attribute_key_type, token->data.string, values);
+	char* attribute_key_name = ast_layout_attribute_type_to_name(attribute_key_type);
+
+	hashmap_put(cast(hashmap_t*, block->attributes), attribute_key_name, attribute);
 }
 
 /**
@@ -242,7 +232,7 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
  */
 void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexer)
 {
-	ast_layout_node_t* node = parser_parse_layout_node(lexer);
+	ast_layout_node_t* node = parser_parse_layout_node(lexer, block);
 
 	array_push(block->children, node);
 }
@@ -251,16 +241,14 @@ void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexe
  * 
  * @function parser_parse_layout_block
  * @brief Parse the block
- * @params {ast_layout_block_t*} - AST layout block node
+ * @params {ast_layout_block_t*} block - AST layout block
  * @params {lexer_t*} lexer - Lexer
  * @params {ast_type_t} block_parent_type - Block parent type
  * @returns {void}
  * 
  */
-void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer, ast_type_t block_parent_type)
+void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer)
 {
-	block->parent_type = block_parent_type;
-
 	expect(lexer, TOKEN_LEFT_BRACE);
 
 	while (PARSER_CURRENT->type != TOKEN_RIGHT_BRACE) {
@@ -296,7 +284,7 @@ ast_node_t* parser_parse_layout(lexer_t* lexer)
 
 	node->data.layout = ast_layout_create();
 
-	parser_parse_layout_block(node->data.layout->block, lexer, AST_NODE_TYPE_LAYOUT);
+	parser_parse_layout_block(node->data.layout->block, lexer);
 
 	return node;
 }

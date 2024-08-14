@@ -153,6 +153,8 @@ bool is_layout_node_a_single_tag(ast_layout_node_type_t type)
  */
 void validate_layout_mainbody(ast_layout_block_t* block)
 {
+    if (block == NULL) return true;
+    
     ast_layout_attribute_type_t valid_attributes[] = {
         AST_LAYOUT_ATTRIBUTE_TYPE_TITLE,
         AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION,

@@ -310,12 +310,11 @@ bool is_style_attribute(ast_layout_attribute_type_t type)
 bool is_attribute_type_a_style(ast_layout_attribute_type_t type)
 {
     switch (type) {
-        // general attributes for naming and styling
         case AST_LAYOUT_ATTRIBUTE_TYPE_CLASS:
         case AST_LAYOUT_ATTRIBUTE_TYPE_ID:
             return true;
 
         default:
-            return is_style_attribute(type);
+            return false;
     }
 }

@@ -19,6 +19,12 @@ generator_t* generator_create(ast_t* ast)
     generator->html = string_create(4096);
     generator->css = string_create(4096);
     generator->js = string_create(4096);
+    generator->inlineCSS = true;
+    generator->inlineJS = true;
+
+    generator->identifier = malloc(sizeof(generator_identifier_t));
+
+    generator_identifier_init(generator->identifier);
 
     return generator;
 }
@@ -44,6 +50,10 @@ void generator_destroy(generator_t* generator)
 
         if (generator->js != NULL) {
             generator->js->destroy(generator->js);
+        }
+
+        if (generator->identifier != NULL) {
+            generator_identifier_destroy(generator->identifier);
         }
 
         memory_destroy(generator);
@@ -178,11 +188,12 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
  *
  * @function generator_code_layout_attributes
  * @brief Generate the HTML code for the layout block attributes
+ * @params {generator_t} generator - Generator
  * @params {ast_layout_block_t*} block - Layout block
  * @returns {string_t*}
  *
  */
-string_t* generator_code_layout_attributes(ast_layout_block_t* block)
+string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_block_t* block)
 {
     size_t html_attributes_length = 0;
     size_t css_attributes_length = 0;
@@ -262,9 +273,28 @@ string_t* generator_code_layout_attributes(ast_layout_block_t* block)
     if (css_attributes_length > 0 && css_attributes->length > 0) {
         if (html_attributes_length > 0 && html_attributes->length > 0) string_append_char(html_attributes, ' ');
 
-        string_append_str(html_attributes, "style=\"");
-        string_append(html_attributes, css_attributes);
-        string_append_str(html_attributes, "\"");
+        if (generator->inlineCSS == true) {
+            string_append_str(html_attributes, "style=\"");
+            string_append(html_attributes, css_attributes);
+            string_append_str(html_attributes, "\"");
+        }
+        else {
+            char* tag = generator_identifier_get(generator->identifier);
+            size_t tag_length = strlen(tag);
+
+            string_append_str(html_attributes, "class=");
+            if (tag_length > 0) string_append_char(html_attributes, '\"');
+            string_append_str(html_attributes, tag);
+            if (tag_length > 0) string_append_char(html_attributes, '\"');
+
+            string_append_char(generator->css, '.');
+            string_append_str(generator->css, tag);
+            string_append_char(generator->css, '{');
+            string_append(generator->css, css_attributes);
+            string_append_char(generator->css, '}');
+
+            if (tag != NULL) memory_destroy(tag);
+        }
     }
 
     if (css_attributes != NULL) css_attributes->destroy(css_attributes);
@@ -595,7 +625,7 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
         ast_layout_node_t* node = array_get(children, i);
 
         string_t* layout_block_str = string_create(1024);
-        string_t* node_attrs_str = generator_code_layout_attributes(node->block);
+        string_t* node_attrs_str = generator_code_layout_attributes(generator, node->block);
         char* node_name = ast_layout_node_type_to_name(node->type);
 
         string_append_char(layout_block_str, '<');
@@ -654,7 +684,7 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
  */
 void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layout_block, string_t* body)
 {
-    if (layout_block == NULL) {
+    if (layout_block != NULL) {
         validate_layout_mainbody(layout_block);
     }
     
@@ -662,7 +692,7 @@ void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layo
     string_t* body_content = string_create(1024);
 
     string_append_str(body_tag, "<body");
-    string_t* body_attrs = generator_code_layout_attributes(layout_block);
+    string_t* body_attrs = generator_code_layout_attributes(generator, layout_block);
     if (body_attrs->length > 0) string_append_char(body_tag, ' ');
     string_append(body_tag, body_attrs);
     body_attrs->destroy(body_attrs);
@@ -679,6 +709,130 @@ void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layo
     string_set(body, body_tag);
     body_tag->destroy(body_tag);
     body_content->destroy(body_content);
+}
+
+/**
+ * 
+ * @function generator_code_head_item
+ * @params {ast_layout_attribute_t*} attribute - Attribute
+ * @params {string_t*} head - Head
+ * @returns {void}
+ * 
+ */
+void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
+{
+    if (head == NULL) return;
+
+    char* value = NULL;
+
+    switch (attribute->type) {
+        case AST_LAYOUT_ATTRIBUTE_TYPE_TITLE:
+            value = array_string_token(attribute->values, ", ");
+
+            string_append_str(head, "<title>");
+            string_append_str(head, value);
+            string_append_str(head, "</title>");
+            string_append_char(head, '\n');
+            break;
+        
+        case AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR:
+            value = array_string_token(attribute->values, ", ");
+
+            string_append_str(head, "<meta name=\"author\" content=\"");
+            string_append_str(head, value);
+            string_append_str(head, "\">");
+            string_append_char(head, '\n');
+            break;
+
+        case AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION:
+            value = array_string_token(attribute->values, ", ");
+
+            string_append_str(head, "<meta name=\"description\" content=\"");
+            string_append_str(head, value);
+            string_append_str(head, "\">");
+            string_append_char(head, '\n');
+            break;
+        
+        case AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS:
+            value = array_string_token(attribute->values, ", ");
+
+            string_append_str(head, "<meta name=\"keywords\" content=\"");
+            string_append_str(head, value);
+            string_append_str(head, "\">");
+            string_append_char(head, '\n');
+            break;
+        
+        case AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET:
+            value = array_string_token(attribute->values, ", ");
+
+            string_append_str(head, "<meta charset=\"");
+            string_append_str(head, value);
+            string_append_str(head, "\">");
+            string_append_char(head, '\n');
+            break;
+        
+        case AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT:
+            value = array_string_token(attribute->values, ", ");
+
+            string_append_str(head, "<meta name=\"viewport\" content=\"");
+            string_append_str(head, value);
+            string_append_str(head, "\">");
+            string_append_char(head, '\n');
+            break;
+        
+        case AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH:
+            value = array_string_token(attribute->values, ", ");
+
+            string_append_str(head, "<meta http-equiv=\"refresh\" content=\"");
+            string_append_str(head, value);
+            string_append_str(head, "\">");
+            string_append_char(head, '\n');
+            break;
+
+        default:
+            break;
+    }
+
+    if (value != NULL) {
+        memory_destroy(value);
+    }
+}
+
+/**
+ * 
+ * @function generator_code_head
+ * @params {ast_layout_block_t*} layout_block - Layout block
+ * @params {string_t*} head - Head
+ * @returns {void}
+ * 
+ */
+void generator_code_head(ast_layout_block_t* block, string_t* head)
+{
+    if (head == NULL) return;
+    else if (block == NULL) return;
+
+    size_t html_tags_length = 0;
+
+    if (block->attributes != NULL) {
+        hashmap_t* attributes = cast(hashmap_t*, block->attributes);
+
+        for (size_t i = 0; i < attributes->capacity; i++) {
+            hashmap_entry_t *entry = attributes->data[i];
+
+            while (entry) {
+                ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
+
+                if (attribute->isStyle == true || attribute->isContent == true) {}
+                else {
+                    generator_code_head_item(attribute, head);
+
+                    html_tags_length++;
+                }
+                
+                entry = entry->next;
+            }
+        }
+    }
 }
 
 /**
@@ -704,6 +858,8 @@ void generator_code(generator_t* generator)
             string_t* body = string_create(1024);
             string_t* html = string_create(1024);
 
+            generator_code_head(layout->block, head);
+
             string_append_str(html, "<!doctype html>\n");
             string_append_str(html, "<html");
 
@@ -715,6 +871,16 @@ void generator_code(generator_t* generator)
             string_append_str(html, "<meta charset=\"UTF-8\">\n");
 
             string_append(html, head);
+
+            if (generator->inlineCSS == true && generator->css != NULL && generator->css->length > 0) {
+                string_append_str(html, "<style>\n");
+                string_append(html, generator->css);
+                string_append_str(html, "</style>\n");
+            }
+            else {
+                string_append_str(html, "<link rel=\"stylesheet\" href=\"style.css\">\n");
+            }
+
             string_append_str(html, "</head>\n");
 
             generator_code_layout_body(generator, layout->block, body);
@@ -730,4 +896,74 @@ void generator_code(generator_t* generator)
             string_destroy(html);
         }
     }
+}
+
+/**
+ * 
+ * @function generator_identifier_init
+ * @params {generator_identifier_t*} gen - Generator Identifier
+ * @returns {void}
+ * 
+ */
+void generator_identifier_init(generator_identifier_t* gen)
+{
+	gen->current = memory_allocate(2);
+
+	if (gen->current) {
+		gen->current[0] = 'a';
+		gen->current[1] = '\0';
+	}
+}
+
+/**
+ * 
+ * @function generator_identifier_get
+ * @params {generator_identifier_t*} gen - Generator Identifier
+ * @returns {char*} identifier - Identifier
+ * 
+ */
+char* generator_identifier_get(generator_identifier_t* gen)
+{
+	int length = strlen(gen->current);
+	char *identifier = memory_allocate(length + 1);
+	strcpy(identifier, gen->current);
+
+	for (int i = length - 1; i >= 0; i--) {
+		if (gen->current[i] < 'z') {
+			gen->current[i]++;
+			return identifier;
+		}
+
+		gen->current[i] = 'a';
+
+		if (i == 0) {
+			char *new_current = memory_allocate(length + 2);
+
+            memset(new_current, 'a', length + 1);
+
+            new_current[length + 1] = '\0';
+
+            free(gen->current);
+
+            gen->current = new_current;
+		}
+	}
+
+	return identifier;
+}
+
+/**
+ * 
+ * @function generator_identifier_destroy
+ * @params {generator_identifier_t*} gen - Generator Identifier
+ * @returns {void}
+ * 
+ */
+void generator_identifier_destroy(generator_identifier_t* gen)
+{
+	if (gen == NULL) return;
+
+	if (gen->current != NULL) free(gen->current);
+
+	free(gen);
 }

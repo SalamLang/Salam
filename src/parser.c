@@ -133,15 +133,13 @@ token_t* parser_parse_value(lexer_t* lexer)
  * @function parser_parse_block
  * @brief Parse the block
  * @params {lexer_t*} lexer - Lexer
- * @params {ast_block_type_t} type - Block type
- * @params {ast_type_t} block_parent_type - Block parent type
- * @returns {ast_block_t*} - AST block node
+ * @params {ast_block_t*} block - AST Block
+ * @returns {void}
  * 
  */
-ast_block_t* parser_parse_block(lexer_t* lexer, ast_block_type_t type, ast_type_t block_parent_type)
+void parser_parse_block(lexer_t* lexer, ast_block_t* block)
 {
     DEBUG_ME;
-	ast_block_t* block = ast_block_create(type, block_parent_type);
 
 	expect(lexer, TOKEN_LEFT_BRACE);
 
@@ -157,8 +155,6 @@ ast_block_t* parser_parse_block(lexer_t* lexer, ast_block_type_t type, ast_type_
 	}
 
 	expect(lexer, TOKEN_RIGHT_BRACE);
-
-	return block;
 }
 
 /**
@@ -361,8 +357,6 @@ ast_node_t* parser_parse_function(lexer_t* lexer)
 	expect(lexer, TOKEN_IDENTIFIER);
 	node->data.function = ast_function_create(function_name->data.string);
 
-	PARSER_CURRENT->print(PARSER_CURRENT);
-
 	// Optional ()
 	if (match(lexer, TOKEN_LEFT_PAREN)) {
 		PARSER_NEXT; // Eat the left parenthesis token
@@ -370,7 +364,7 @@ ast_node_t* parser_parse_function(lexer_t* lexer)
 		expect(lexer, TOKEN_RIGHT_PAREN);
 	}
 
-	parser_parse_block(lexer, AST_NODE_BLOCK_TYPE_FUNCTION, AST_NODE_TYPE_BLOCK);
+	parser_parse_block(lexer, node->data.function->block);
 
 	return node;
 }
@@ -432,9 +426,7 @@ ast_node_t* parser_parse_if(lexer_t* lexer)
 	node->data.ifclause = ast_if_create(condition);
 
 
-	node->data.ifclause->block = parser_parse_block(lexer, AST_NODE_BLOCK_TYPE_IF, AST_NODE_TYPE_BLOCK);
-
-	size_t else_if_count = 0;
+	parser_parse_block(lexer, node->data.ifclause->block);
 
 	// Optional else and then one or more if or else if
 	while (true) {
@@ -445,11 +437,10 @@ ast_node_t* parser_parse_if(lexer_t* lexer)
 
 				ast_node_t* else_if = ast_node_create(AST_NODE_TYPE_ELSE_IF, PARSER_CURRENT->location);
 				
-				else_if->data.ifclause = ast_elseif_create(NULL);
-				else_if->data.ifclause->block = parser_parse_block(lexer, AST_NODE_BLOCK_TYPE_ELSE_IF, AST_NODE_TYPE_ELSE_IF);
+				else_if->data.ifclause = ast_else_create();
+				parser_parse_block(lexer, else_if->data.ifclause->block);
 
 				array_push(node->data.ifclause->else_blocks, else_if);
-				else_if_count++;
 
 				break; // Stop the loop, this is the last else
 			}
@@ -463,10 +454,9 @@ ast_node_t* parser_parse_if(lexer_t* lexer)
 				ast_value_t* condition = parser_parse_expression(lexer);
 				else_if->data.ifclause = ast_elseif_create(condition);
 
-				else_if->data.ifclause->block = parser_parse_block(lexer, AST_NODE_BLOCK_TYPE_ELSE_IF, AST_NODE_TYPE_ELSE_IF);
+				parser_parse_block(lexer, else_if->data.ifclause->block);
 
 				array_push(node->data.ifclause->else_blocks, else_if);
-				else_if_count++;
 			}
 			else {
 				error(2, "Expected a block or an else if at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));

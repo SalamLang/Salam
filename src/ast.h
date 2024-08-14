@@ -236,11 +236,34 @@ typedef struct ast_import_t {
     void (*print)(void* node);
 } ast_import_t;
 
+typedef enum ast_value_kind_t {
+    AST_TYPE_KIND_VOID,
+    AST_TYPE_KIND_INT,
+    AST_TYPE_KIND_FLOAT,
+    // AST_TYPE_KIND_DOUBLE,
+    AST_TYPE_KIND_CHAR,
+    AST_TYPE_KIND_STRING,
+    AST_TYPE_KIND_BOOL,
+    AST_TYPE_KIND_STRUCT,
+    AST_TYPE_KIND_ENUM,
+    AST_TYPE_KIND_POINTER,
+    AST_TYPE_KIND_ARRAY,
+    AST_TYPE_KIND_FUNCTION,
+} ast_value_kind_t;
+
+typedef struct ast_value_type_t {
+    ast_value_kind_t kind;
+    location_t location;
+
+    void (*destroy)(void* node);
+    void (*print)(void* node);
+} ast_value_type_t;
+
 typedef struct ast_function_t {
     char* name;
     array_t* parameters;
     ast_block_t* block;
-    ast_value_type_kind_t* return_type;
+    ast_value_type_t* return_type;
 
     void (*destroy)(void* node);
     void (*print)(void* node);
@@ -288,32 +311,10 @@ typedef struct ast_layout_node_t {
     void (*print)(void* node);
 } ast_layout_node_t;
 
-typedef enum ast_value_type_kind_t {
-    AST_TYPE_KIND_VOID,
-    AST_TYPE_KIND_INT,
-    AST_TYPE_KIND_FLOAT,
-    // AST_TYPE_KIND_DOUBLE,
-    AST_TYPE_KIND_CHAR,
-    AST_TYPE_KIND_STRING,
-    AST_TYPE_KIND_BOOL,
-    AST_TYPE_KIND_STRUCT,
-    AST_TYPE_KIND_ENUM,
-    AST_TYPE_KIND_POINTER,
-    AST_TYPE_KIND_ARRAY,
-    AST_TYPE_KIND_FUNCTION,
-} ast_value_type_kind_t;
-
-typedef struct ast_value_type_kind_t {
-    ast_value_type_kind_t kind;
-    location_t location;
-
-    void (*destroy)(void* node);
-    void (*print)(void* node);
-} ast_value_type_kind_t;
 
 typedef struct ast_function_parameter_t {
     char* name;
-    ast_value_type_kind_t* type;
+    ast_value_type_t* type;
 
     void (*destroy)(void* node);
     void (*print)(void* node);
@@ -651,40 +652,40 @@ void ast_function_destroy(ast_function_t* value);
  * 
  * @function ast_type_create
  * @brief Create a new AST value type
- * @params {ast_value_type_kind_t} kind - Kind of the value type
- * @returns {ast_value_type_kind_t*} - Pointer to the created AST value type
+ * @params {ast_value_kind_t} kind - Kind of the value type
+ * @returns {ast_value_type_t*} - Pointer to the created AST value type
  * 
  */
-ast_value_type_kind_t* ast_type_create(ast_value_type_kind_t kind);
+ast_value_type_t* ast_type_create(ast_value_kind_t kind);
 
 /**
  * 
  * @function ast_type_print
  * @brief Print the AST value type
- * @params {ast_value_type_kind_t*} type - AST value type
+ * @params {ast_value_type_t*} type - AST value type
  * @returns {void}
  * 
  */
-void ast_type_print(ast_value_type_kind_t* type);
+void ast_type_print(ast_value_type_t* type);
 
 /**
  * 
  * @function ast_type_name
  * @brief Get the name of the AST value type
- * @params {ast_value_type_kind_t*} type - AST value type
+ * @params {ast_value_type_t*} type - AST value type
  * @returns {char*} - Name of the AST value type
  * 
  */
-char* ast_type_name(ast_value_type_kind_t* type);
+char* ast_type_name(ast_value_type_t* type);
 
 /**
  * 
  * @function ast_type_destroy
  * @brief Free the AST value type
- * @params {ast_value_type_kind_t*} type - AST value type
+ * @params {ast_value_type_t*} type - AST value type
  * @returns {void}
  * 
  */
-void ast_type_destroy(ast_value_type_kind_t* type);
+void ast_type_destroy(ast_value_type_t* type);
 
 #endif

@@ -358,6 +358,16 @@ void ast_layout_node_print(ast_layout_node_t* value);
 
 /**
  * 
+ * @function ast_node_destroy_notall
+ * @brief Free the AST node (not all)
+ * @params {ast_node_t*} value - AST node
+ * @returns {void}
+ * 
+ */
+void ast_node_destroy_notall(ast_node_t* value);
+
+/**
+ * 
  * @function ast_layout_node_destroy
  * @brief Free the AST node layout attribute
  * @params {ast_layout_node_t*} value - AST layout node
@@ -700,5 +710,25 @@ void ast_type_destroy(ast_value_type_t* type);
  * 
  */
 void ast_print(ast_t* ast);
+
+/**
+ * 
+ * @function ast_block_print
+ * @brief Print the AST block node
+ * @params {ast_block_t*} block - AST block node
+ * @returns {void}
+ * 
+ */
+void ast_block_print(ast_block_t* block);
+
+/**
+ * 
+ * @function ast_block_destroy
+ * @brief Free the AST block node
+ * @params {ast_block_t*} block - AST block node
+ * @returns {void}
+ * 
+ */
+void ast_block_destroy(ast_block_t* block);
 
 #endif

@@ -336,9 +336,9 @@ ast_node_t* parser_parse_function(lexer_t* lexer)
 
 	PARSER_NEXT; // Eat the function token
 
+	token_t* function_name = PARSER_CURRENT;
 	expect(lexer, TOKEN_IDENTIFIER);
-
-	node->data.function = ast_function_create(PARSER_CURRENT->data.string);
+	node->data.function = ast_function_create(function_name->data.string);
 
 	PARSER_CURRENT->print(PARSER_CURRENT);
 
@@ -411,7 +411,7 @@ ast_t* parser_parse(lexer_t* lexer)
 		}
 		else if (node->type == AST_NODE_TYPE_FUNCTION) {
 			array_push(ast->functions, node->data.function);
-			// node->destroy(node);
+			ast_node_destroy_notall(node);
 		}
 	}
 

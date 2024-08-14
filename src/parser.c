@@ -215,8 +215,13 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
 	}
 
 	char* attribute_key_name = ast_layout_attribute_type_to_name(attribute_key_type);
-
-	hashmap_put(cast(hashmap_t*, block->attributes), attribute_key_name, attribute);
+	
+    if (is_style_attribute(attribute_key_type)) {
+		hashmap_put(cast(hashmap_t*, block->styles), attribute_key_name, attribute);
+	}
+	else {
+		hashmap_put(cast(hashmap_t*, block->attributes), attribute_key_name, attribute);
+	}
 }
 
 /**

@@ -170,19 +170,19 @@ void token_print(token_t* token)
     printf("Token ");
     switch (token->type) {
         case TOKEN_EOF:
-            printf("EOF\n");
+            printf("EOF");
             break;
         case TOKEN_IDENTIFIER:
-            printf("IDENTIFIER: '%s' (%zu)\n", token->data.string, strlen(token->data.string));
+            printf("IDENTIFIER: '%s' (%zu)", token->data.string, strlen(token->data.string));
             break;
         case TOKEN_NUMBER_FLOAT:
-            printf("NUMBER_FLOAT: %f\n", token->data.number_float);
+            printf("NUMBER_FLOAT: %f", token->data.number_float);
             break;
         case TOKEN_NUMBER_INT:
-            printf("NUMBER_INT: %d\n", token->data.number_int);
+            printf("NUMBER_INT: %d", token->data.number_int);
             break;
         case TOKEN_STRING:
-            printf("STRING: '%s' (%zu)\n", token->data.string, strlen(token->data.string));
+            printf("STRING: '%s' (%zu)", token->data.string, strlen(token->data.string));
             break;
         case TOKEN_LEFT_BRACE:
         case TOKEN_RIGHT_BRACE:
@@ -202,65 +202,68 @@ void token_print(token_t* token)
         case TOKEN_LESS:
         case TOKEN_GREATER:
         case TOKEN_NOT:
-            printf("SYMBOL: '%c'\n", token->type);
+            printf("SYMBOL: '%c'", token->type);
             break;
         
-        case TOKEN_NOT_EQUAL: printf("SYMBOL: '!='\n"); break;
-        case TOKEN_EQUAL: printf("SYMBOL: '=='\n"); break;
-        case TOKEN_AND_AND: printf("SYMBOL: '&&'\n"); break;
-        case TOKEN_OR_OR: printf("SYMBOL: '||'\n"); break;
-        case TOKEN_AND_BIT: printf("SYMBOL: '&'\n"); break;
-        case TOKEN_OR_BIT: printf("SYMBOL: '|'\n"); break;
-        case TOKEN_LESS_EQUAL: printf("SYMBOL: '<='\n"); break;
-        case TOKEN_GREATER_EQUAL: printf("SYMBOL: '>='\n"); break;
+        case TOKEN_NOT_EQUAL: printf("SYMBOL: '!='"); break;
+        case TOKEN_EQUAL: printf("SYMBOL: '=='"); break;
+        case TOKEN_AND_AND: printf("SYMBOL: '&&'"); break;
+        case TOKEN_OR_OR: printf("SYMBOL: '||'"); break;
+        case TOKEN_AND_BIT: printf("SYMBOL: '&'"); break;
+        case TOKEN_OR_BIT: printf("SYMBOL: '|'"); break;
+        case TOKEN_LESS_EQUAL: printf("SYMBOL: '<='"); break;
+        case TOKEN_GREATER_EQUAL: printf("SYMBOL: '>='"); break;
 
-        case TOKEN_INCREMENT: printf("SYMBOL: '++\n"); break;
-        case TOKEN_DECREMENT: printf("SYMBOL: '--'\n"); break;
+        case TOKEN_INCREMENT: printf("SYMBOL: '++"); break;
+        case TOKEN_DECREMENT: printf("SYMBOL: '--'"); break;
 
-        case TOKEN_SHIFT_LEFT: printf("SYMBOL: '>>'\n"); break;
-        case TOKEN_SHIFT_RIGHT: printf("SYMBOL: '<<'\n"); break;
-        case TOKEN_SHIFT_LEFT_ASSIGN: printf("SYMBOL: '>>='\n"); break;
-        case TOKEN_SHIFT_RIGHT_ASSIGN: printf("SYMBOL: '<<='\n"); break;
+        case TOKEN_SHIFT_LEFT: printf("SYMBOL: '>>'"); break;
+        case TOKEN_SHIFT_RIGHT: printf("SYMBOL: '<<'"); break;
+        case TOKEN_SHIFT_LEFT_ASSIGN: printf("SYMBOL: '>>='"); break;
+        case TOKEN_SHIFT_RIGHT_ASSIGN: printf("SYMBOL: '<<='"); break;
 
         case TOKEN_BOOLEAN:
-            printf("BOOLEAN: %s\n", token->data.boolean ? "true" : "false");
+            printf("BOOLEAN: %s", token->data.boolean ? "true" : "false");
             break;
         case TOKEN_ERROR:
-            printf("ERROR\n");
+            printf("ERROR");
             break;
         case TOKEN_LAYOUT:
-            printf("LAYOUT\n");
+            printf("LAYOUT");
             break;
         case TOKEN_IMPORT:
-            printf("IMPORT\n");
+            printf("IMPORT");
             break;
         case TOKEN_FUNCTION:
-            printf("FUNCTION\n");
+            printf("FUNCTION");
             break;
         case TOKEN_RETURN:
-            printf("RETURN\n");
+            printf("RETURN");
             break;
         case TOKEN_IF:
-            printf("IF\n");
+            printf("IF");
             break;
         case TOKEN_ELSE:
-            printf("ELSE\n");
+            printf("ELSE");
             break;
         case TOKEN_WHILE:
-            printf("WHILE\n");
+            printf("WHILE");
             break;
         case TOKEN_FOR:
-            printf("FOR\n");
+            printf("FOR");
             break;
         case TOKEN_BREAK:
-            printf("BREAK\n");
+            printf("BREAK");
             break;
         case TOKEN_CONTINUE:
-            printf("CONTINUE\n");
+            printf("CONTINUE");
             break;
         default:
-            printf("UNKNOWN\n");
+            printf("UNKNOWN");
     }
+
+    printf(" at ");
+    location_print(token->location);
 }
 
 /**

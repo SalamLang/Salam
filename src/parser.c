@@ -155,12 +155,11 @@ ast_block_t* parser_parse_block(lexer_t* lexer, ast_block_type_t type, ast_type_
  * 
  * @function parser_parse_layout_node
  * @brief Parsing layout node
- * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @params {lexer_t*} lexer - Lexer
  * @returns {ast_layout_node_t*} - AST layout node
  * 
  */
-ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer, ast_layout_block_t* block)
+ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer)
 {	
 	ast_layout_node_type_t type = token_to_ast_layout_node_type(PARSER_CURRENT);
 	PARSER_NEXT;
@@ -210,11 +209,11 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
 	ast_layout_attribute_type_t attribute_key_type = token_to_ast_layout_attribute_type(token, block->parent_node_type);
 	token->print(token);
 
-	if (!token_belongs_to_ast_layout_node(block,  attribute_key_type)) {
+	ast_layout_attribute_t* attribute = ast_layout_attribute_create(attribute_key_type, token->data.string, values);
+	if (!token_belongs_to_ast_layout_node(block,  attribute_key_type, attribute)) {
 		error(2, "Attribute '%s' does not belong to node '%s' at line %d, column %d", token_value(token), ast_layout_node_type_to_name(block->parent_node_type), token->location.end_line, token->location.end_column);
 	}
 
-	ast_layout_attribute_t* attribute = ast_layout_attribute_create(attribute_key_type, token->data.string, values);
 	char* attribute_key_name = ast_layout_attribute_type_to_name(attribute_key_type);
 
 	hashmap_put(cast(hashmap_t*, block->attributes), attribute_key_name, attribute);
@@ -231,7 +230,7 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
  */
 void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexer)
 {
-	ast_layout_node_t* node = parser_parse_layout_node(lexer, block);
+	ast_layout_node_t* node = parser_parse_layout_node(lexer);
 
 	array_push(block->children, node);
 }

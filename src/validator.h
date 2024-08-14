@@ -38,10 +38,11 @@ bool is_attribute_type_in_array(ast_layout_attribute_type_t type, ast_layout_att
  * @brief Check if the token belongs to the AST layout node
  * @params {ast_layout_block_t*} block - AST layout block node
  * @params {ast_layout_attribute_type_t} attribute_key_type - Attribute key type
+ * @params {ast_layout_attribute_t*} attribute - AST layout attribute
  * @returns {bool} - True if the token belongs to the AST layout node, false otherwise
  * 
  */
-bool token_belongs_to_ast_layout_node(ast_layout_block_t* block, ast_layout_attribute_type_t attribute_key_type);
+bool token_belongs_to_ast_layout_node(ast_layout_block_t* block, ast_layout_attribute_type_t attribute_key_type, ast_layout_attribute_t* attribute);
 
 /**
  * 
@@ -72,5 +73,15 @@ bool is_layout_node_a_single_tag(ast_layout_node_type_t type);
  * 
  */
 bool is_attribute_type_a_style(ast_layout_attribute_type_t type);
+
+/**
+ * 
+ * @function is_style_attribute
+ * @brief Check if the attribute type is a CSS attribute
+ * @params {ast_layout_attribute_type_t} type - Attribute type
+ * @returns {bool} - True if the attribute type is a style, false otherwise
+ * 
+ */
+bool is_style_attribute(ast_layout_attribute_type_t type);
 
 #endif

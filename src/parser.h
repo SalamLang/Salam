@@ -150,11 +150,10 @@ void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexe
  * 
  * @function parser_parse_layout_node
  * @brief Parsing layout node
- * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @params {lexer_t*} lexer - Lexer
  * @returns {ast_layout_node_t*} - AST layout node
  * 
  */
-ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer, ast_layout_block_t* block);
+ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer);
 
 #endif

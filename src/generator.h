@@ -110,4 +110,25 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
  */
 void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layout_block, string_t* body);
 
+/**
+ * 
+ * @function generator_code_layout_style_name
+ * @brief Convert AST layout attribute type to CSS attribute name
+ * @params {ast_layout_attribute_type_t} type - Layout Attribute Type
+ * @returns {char*} name - Name
+ * 
+ */
+char* generator_code_layout_style_name(ast_layout_attribute_type_t type);
+
+/**
+ * 
+ * @function generator_code_layout_style_value
+ * @brief Convert AST layout attribute values to CSS attribute values
+ * @params {ast_layout_attribute_t*} attribute - Layout Attribute
+ * @params {ast_layout_node_type_t} parent_node_type - Parent Node Type
+ * @returns {char*} values_str - Values
+ * 
+ */
+char* generator_code_layout_style_value(ast_layout_attribute_t* attribute, ast_layout_node_type_t parent_node_type);
+
 #endif

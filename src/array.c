@@ -12,6 +12,7 @@
  */
 array_t* array_create(size_t element_capacity, size_t capacity)
 {
+    DEBUG_ME;
     array_t* array = memory_allocate(sizeof(array_t));
     array->length = 0;
     array->capacity = capacity;
@@ -36,6 +37,7 @@ array_t* array_create(size_t element_capacity, size_t capacity)
  */
 void array_init(array_t* array, size_t capacity, size_t element_capacity)
 {
+    DEBUG_ME;
     array->length = 0;
     array->capacity = capacity;
     array->element_capacity = element_capacity;
@@ -53,6 +55,7 @@ void array_init(array_t* array, size_t capacity, size_t element_capacity)
  */
 bool array_push(array_t* array, void* element)
 {
+    DEBUG_ME;
     if (array->length >= array->capacity) {
         array->capacity *= 2;
         array->data = memory_reallocate(array->data, array->element_capacity * array->capacity);
@@ -74,6 +77,7 @@ bool array_push(array_t* array, void* element)
  */
 bool array_pop(array_t* array, void* element)
 {
+    DEBUG_ME;
     if (array->length == 0) {
         return false;
     }
@@ -94,6 +98,7 @@ bool array_pop(array_t* array, void* element)
  */
 void array_resize(array_t* array, size_t new_capacity)
 {
+    DEBUG_ME;
     array->capacity = new_capacity;
     array->data = memory_reallocate(array->data, array->element_capacity * new_capacity);
 }
@@ -109,6 +114,7 @@ void array_resize(array_t* array, size_t new_capacity)
  */
 void* array_get(array_t* array, size_t index)
 {
+    DEBUG_ME;
     if (index >= array->length) {
         return NULL;
     }
@@ -126,6 +132,7 @@ void* array_get(array_t* array, size_t index)
  */
 void array_destroy(array_t* array)
 {
+    DEBUG_ME;
     if (array != NULL) {
         memory_destroy(array->data);
 
@@ -148,6 +155,7 @@ void array_destroy(array_t* array)
  */
 char* array_string(array_t* array, char* sepertor)
 {
+    DEBUG_ME;
     if (array == NULL || array->length == 0) {
         return strdup("");
     }
@@ -182,6 +190,7 @@ char* array_string(array_t* array, char* sepertor)
  */
 char* array_string_token(array_t* array, char* sepertor)
 {
+    DEBUG_ME;
     if (array == NULL || array->length == 0) {
         return strdup("");
     }
@@ -213,6 +222,7 @@ char* array_string_token(array_t* array, char* sepertor)
  */
 void array_destroy_custom(array_t* array, void (*free_fn)(void*))
 {
+    DEBUG_ME;
     if (array != NULL) {
         if (array->data != NULL) {
             if (free_fn != NULL) {
@@ -244,6 +254,7 @@ void array_destroy_custom(array_t* array, void (*free_fn)(void*))
  */
 void array_print(array_t* array)
 {
+    DEBUG_ME;
     printf("Array: %zu\n", array->length);
 
     for (size_t i = 0; i < array->length; i++) {
@@ -261,6 +272,7 @@ void array_print(array_t* array)
  */
 void array_token_print(array_token_t* array)
 {
+    DEBUG_ME;
     printf("Token array: %zu\n", array->length);
 
     for (size_t i = 0; i < array->length; i++) {
@@ -281,6 +293,7 @@ void array_token_print(array_token_t* array)
  */
 void array_node_print(array_node_t* array)
 {
+    DEBUG_ME;
     printf("Node array: %zu\n", array->length);
 
     for (size_t i = 0; i < array->length; i++) {
@@ -300,6 +313,7 @@ void array_node_print(array_node_t* array)
  */
 void array_layout_attribute_print(array_layout_attribute_t* array)
 {
+    DEBUG_ME;
     printf("Attribute array: %zu\n", array->length);
 
     if (array->length == 0) {
@@ -325,6 +339,7 @@ void array_layout_attribute_print(array_layout_attribute_t* array)
  */
 size_t array_capacity(array_t* array)
 {
+    DEBUG_ME;
     return array->capacity;
 }
 
@@ -338,6 +353,7 @@ size_t array_capacity(array_t* array)
  */
 size_t array_length(array_t* array)
 {
+    DEBUG_ME;
     return array->length;
 }
 
@@ -351,6 +367,7 @@ size_t array_length(array_t* array)
  */
 void array_token_destroy(array_token_t* array)
 {
+    DEBUG_ME;
     if (array != NULL) {
         for (size_t i = 0; i < array->length; i++) {
             token_t* token = array_get(array, i);
@@ -374,7 +391,7 @@ void array_token_destroy(array_token_t* array)
  */
 void array_layout_node_destroy(array_node_layout_t* array)
 {
-    printf("array_layout_node_destroy\n");
+    DEBUG_ME;
     if (array != NULL) {
         if (array->data != NULL) {
             for (size_t i = 0; i < array->length; i++) {
@@ -409,7 +426,7 @@ void array_layout_node_destroy(array_node_layout_t* array)
  */
 void array_layout_node_print(array_node_layout_t* array)
 {
-    printf("array_layout_node_print\n");
+    DEBUG_ME;
     printf("Node array: %zu\n", array->length);
 
     for (size_t i = 0; i < array->length; i++) {
@@ -434,6 +451,7 @@ void array_layout_node_print(array_node_layout_t* array)
  */
 void array_function_parameter_print(array_function_parameter_t* array)
 {
+    DEBUG_ME;
     printf("Function parameter array: %zu\n", array->length);
 
     for (size_t i = 0; i < array->length; i++) {
@@ -454,6 +472,7 @@ void array_function_parameter_print(array_function_parameter_t* array)
  */
 void array_function_parameter_destroy(array_function_parameter_t* array)
 {
+    DEBUG_ME;
     if (array != NULL) {
         if (array->data != NULL) {
             for (size_t i = 0; i < array->length; i++) {
@@ -472,5 +491,57 @@ void array_function_parameter_destroy(array_function_parameter_t* array)
         array->element_capacity = 0;
 
         memory_destroy(array);
+    }
+}
+
+/**
+ * 
+ * @function array_function_destroy
+ * @brief Free the function array memory
+ * @params {array_function_t*} array - Function array
+ * @returns {void}
+ */
+void array_function_destroy(array_function_t* array)
+{
+    DEBUG_ME;
+    if (array != NULL) {
+        if (array->data != NULL) {
+            for (size_t i = 0; i < array->length; i++) {
+                ast_function_t* function = array_get(array, i);
+                
+                if (function != NULL) {
+                    function->destroy(function);
+                }
+            }
+
+            memory_destroy(array->data);
+        }
+
+        array->capacity = 0;
+        array->length = 0;
+        array->element_capacity = 0;
+
+        memory_destroy(array);
+    }
+}
+
+/**
+ * 
+ * @function array_function_print
+ * @brief Print the function array
+ * @params {array_function_t*} array - Function array
+ * @returns {void}
+ * 
+ */
+void array_function_print(array_function_t* array)
+{
+    DEBUG_ME;
+    printf("Function array: %zu\n", array->length);
+
+    for (size_t i = 0; i < array->length; i++) {
+        printf("\t");
+        ast_function_t* function = array_get(array, i);
+
+        function->print(function);
     }
 }

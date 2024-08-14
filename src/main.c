@@ -69,6 +69,8 @@ void doargs(int argc, char** argv)
     memory_destroy(content);
 
     printf("end content destroy\n");
+
+    printf("END SUCCESS\n");
 }
 
 int main(int argc, char** argv)

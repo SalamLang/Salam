@@ -1,6 +1,7 @@
 fn main {
-    
+    if 123 {}
 }
+
 layout {
     dir: "ltr"
     title: "my site name"
@@ -12,11 +13,13 @@ layout {
     margin-top: "40px"
 
     content: "In the name of god!"
+    //content: "In the name of god!2222"
 
     box {
         content: "Hey, mate!"
         display: flex
         flex-direction: column
+        //flex-direction: row
 
         span {
             background: green

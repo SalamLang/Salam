@@ -119,7 +119,9 @@ typedef enum {
     AST_LAYOUT_ATTRIBUTE_TYPE_ICON,
     AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
     AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
-
+    AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH,
+    AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT,
+    
     AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND,
     AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR,
     AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT,
@@ -543,12 +545,13 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name);
  * 
  * @function token_to_ast_layout_attribute_type
  * @brief Convert token to AST layout attribute type
+ * @params {char*} name - Name
  * @params {token_t*} token - Token
  * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @returns {ast_layout_node_type_t} type - Layout Node Type
  * 
  */
-ast_layout_attribute_type_t token_to_ast_layout_attribute_type(token_t* token, ast_layout_node_type_t parent_node_type);
+ast_layout_attribute_type_t token_to_ast_layout_attribute_type(char* name, token_t* token, ast_layout_node_type_t parent_node_type);
 
 /**
  * 

@@ -97,6 +97,9 @@ bool token_belongs_to_ast_layout_node(ast_layout_block_t* block, ast_layout_attr
             AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
             AST_LAYOUT_ATTRIBUTE_TYPE_DIR,
             AST_LAYOUT_ATTRIBUTE_TYPE_LANG,
+            AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT,
+            AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH,
+            AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
         };
 
         size_t valid_attributes_size = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
@@ -153,8 +156,8 @@ bool is_layout_node_a_single_tag(ast_layout_node_type_t type)
  */
 void validate_layout_mainbody(ast_layout_block_t* block)
 {
-    if (block == NULL) return true;
-    
+    if (block == NULL) return;
+
     ast_layout_attribute_type_t valid_attributes[] = {
         AST_LAYOUT_ATTRIBUTE_TYPE_TITLE,
         AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION,

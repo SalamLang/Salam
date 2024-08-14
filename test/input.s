@@ -5,10 +5,15 @@ layout {
     author: "Max Base"
 
     background: red
+    color: white
+    margin-top: "40px"
 
     box {
         content: "Hey, mate!"
-        box {
+
+        span {
+            background: green
+            color: white
             content: "Hey, mate!"
         }
     }

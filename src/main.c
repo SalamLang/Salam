@@ -37,6 +37,8 @@ void doargs(int argc, char** argv)
     printf("end ast debug\n");
 
     generator_t* generator = generator_create(ast);
+    generator->inlineCSS = false;
+    generator->inlineJS = false;
 
     printf("generate code\n");
 

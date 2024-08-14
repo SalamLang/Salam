@@ -932,23 +932,20 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name)
  * 
  * @function token_to_ast_layout_attribute_type
  * @brief Convert token to AST layout attribute type
+ * @params {char*} name - Name
  * @params {token_t*} token - Token
  * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @returns {ast_layout_node_type_t} type - Layout Node Type
  * 
  */
-ast_layout_attribute_type_t token_to_ast_layout_attribute_type(token_t* token, ast_layout_node_type_t parent_node_type)
+ast_layout_attribute_type_t token_to_ast_layout_attribute_type(char* name, token_t* token, ast_layout_node_type_t parent_node_type)
 {
 	char* layout_element_name = ast_layout_node_type_to_name(parent_node_type);
-
-	if (token->type != TOKEN_IDENTIFIER) {
-		error(2, "Expected token type to be identifier as layout attribute type, got %s at line %d, column %d", token_name(token->type), token->location.end_line, token->location.end_column);
-	}
-	
-	ast_layout_attribute_type_t type = name_to_ast_layout_attribute_type(token->data.string);
+		
+	ast_layout_attribute_type_t type = name_to_ast_layout_attribute_type(name);
 
 	if (type == AST_LAYOUT_ATTRIBUTE_TYPE_ERROR) {
-		error(2, "Unknown layout attribute '%s' at line %d, column %d for '%s' element", token->data.string, token->location.end_line, token->location.end_column, layout_element_name);
+		error(2, "Unknown layout attribute '%s' at line %d, column %d for '%s' element", name, token->location.end_line, token->location.end_column, layout_element_name);
 	}
 
 	return type;
@@ -985,6 +982,10 @@ char* ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type)
 			return "author";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION:
 			return "description";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT:
+			return "viewport";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH:
+			return "refresh";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS:
 			return "keywords";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_ICON:

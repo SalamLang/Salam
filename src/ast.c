@@ -349,7 +349,8 @@ ast_if_t* ast_if_create(ast_value_t* condition)
 	DEBUG_ME;
 	ast_if_t* node = memory_allocate(sizeof(ast_if_t));
 	node->condition = condition;
-	node->block = ast_block_create(AST_NODE_BLOCK_TYPE_IF, AST_NODE_TYPE_FUNCTION); // TODO???
+
+	node->block = ast_block_create(AST_NODE_BLOCK_TYPE_IF, AST_NODE_TYPE_IF); // TODO???
 	node->block->destroy = cast(void (*)(void*), ast_block_destroy);
 	node->block->print = cast(void (*)(void*), ast_block_print);
 
@@ -367,15 +368,39 @@ ast_if_t* ast_if_create(ast_value_t* condition)
  * 
  * @function ast_elseif_create
  * @brief Create a new AST node else if
+ * @params {ast_value_t*} condition - Condition of the else if
  * @returns {ast_if_t*} - Pointer to the created AST node else if
  * 
  */
-ast_if_t* ast_elseif_create()
+ast_if_t* ast_elseif_create(ast_value_t* condition)
+{
+	DEBUG_ME;
+	ast_if_t* node = memory_allocate(sizeof(ast_if_t));
+	node->condition = condition;
+	node->block = ast_block_create(AST_NODE_BLOCK_TYPE_IF, AST_NODE_TYPE_ELSE_IF); // TODO???
+	node->block->destroy = cast(void (*)(void*), ast_block_destroy);
+	node->block->print = cast(void (*)(void*), ast_block_print);
+
+	node->else_blocks = NULL;
+	node->print = cast(void (*)(void*), ast_if_print);
+	node->destroy = cast(void (*)(void*), ast_if_destroy);
+
+	return node;
+}
+
+/**
+ * 
+ * @function ast_else_create
+ * @brief Create a new AST node else
+ * @returns {ast_if_t*} - Pointer to the created AST node else
+ * 
+ */
+ast_if_t* ast_else_create()
 {
 	DEBUG_ME;
 	ast_if_t* node = memory_allocate(sizeof(ast_if_t));
 	node->condition = NULL;
-	node->block = ast_block_create(AST_NODE_BLOCK_TYPE_IF, AST_NODE_TYPE_FUNCTION); // TODO???
+	node->block = ast_block_create(AST_NODE_BLOCK_TYPE_ELSE_IF, AST_NODE_TYPE_ELSE_IF); // TODO???
 	node->block->destroy = cast(void (*)(void*), ast_block_destroy);
 	node->block->print = cast(void (*)(void*), ast_block_print);
 
@@ -1810,6 +1835,7 @@ ast_value_t* ast_value_create(ast_value_type_t* type)
 	ast_value_t* value = memory_allocate(sizeof(ast_value_t));
 	value->type = type;
 	value->data = NULL;
+	
 	value->destroy = cast(void (*)(void*), ast_value_destroy);
 	value->print = cast(void (*)(void*), ast_value_print);
 	return value;
@@ -1827,8 +1853,13 @@ void ast_value_destroy(ast_value_t* value)
 {
 	DEBUG_ME;
 	if (value != NULL) {
-		if (value->data != NULL) {
-			value->type->destroy(value->data);
+		if (value->type) {
+			value->type->destroy(value->type);
+		}
+
+		if (value->data) {
+			memory_destroy(value->data); // TODO
+			// value->data->destroy(value->data);
 		}
 
 		memory_destroy(value);

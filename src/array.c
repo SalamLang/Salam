@@ -395,14 +395,11 @@ void array_layout_node_destroy(array_node_layout_t* array)
     if (array != NULL) {
         if (array->data != NULL) {
             for (size_t i = 0; i < array->length; i++) {
-                printf("array_layout_node_destroy->node\n");
                 ast_layout_node_t* node = array_get(array, i);
-                printf("array_layout_node_destroy->node (after)\n");
+
                 if (node != NULL) {
-                    printf("array_layout_node_destroy->node->destroy\n");
                     node->destroy(node);
                 }
-                printf("array_layout_node_destroy->node->destroy (after)\n");
             }
 
             memory_destroy(array->data);

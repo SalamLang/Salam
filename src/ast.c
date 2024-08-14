@@ -647,6 +647,284 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name)
 		type = AST_LAYOUT_ATTRIBUTE_TYPE_TYPE;
 	}
 
+	// css attributes
+	else if (strcmp(name, "background") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND;
+	}
+	else if (strcmp(name, "color") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR;
+	}
+	else if (strcmp(name, "font") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT;
+	}
+	else if (strcmp(name, "font-family") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_FAMILY;
+	}
+	else if (strcmp(name, "font-size") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_SIZE;
+	}
+	else if (strcmp(name, "font-style") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_STYLE;
+	}
+	else if (strcmp(name, "font-weight") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_WEIGHT;
+	}
+	else if (strcmp(name, "height") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_HEIGHT;
+	}
+	else if (strcmp(name, "width") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_WIDTH;
+	}
+	else if (strcmp(name, "margin") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN;
+	}
+	else if (strcmp(name, "margin-left") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_LEFT;
+	}
+	else if (strcmp(name, "margin-right") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_RIGHT;
+	}
+	else if (strcmp(name, "margin-top") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_TOP;
+	}
+	else if (strcmp(name, "margin-bottom") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_BOTTOM;
+	}
+	else if (strcmp(name, "padding") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING;
+	}
+	else if (strcmp(name, "padding-left") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_LEFT;
+	}
+	else if (strcmp(name, "padding-right") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_RIGHT;
+	}
+	else if (strcmp(name, "padding-top") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_TOP;
+	}
+	else if (strcmp(name, "padding-bottom") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_BOTTOM;
+	}
+	else if (strcmp(name, "text-align") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN;
+	}
+	else if (strcmp(name, "text-decoration") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION;
+	}
+	else if (strcmp(name, "text-transform") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_TRANSFORM;
+	}
+	else if (strcmp(name, "vertical-align") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VERTICAL_ALIGN;
+	}
+	else if (strcmp(name, "visibility") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VISIBILITY;
+	}
+	else if (strcmp(name, "z-index") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_Z_INDEX;
+	}
+	else if (strcmp(name, "position") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_POSITION;
+	}
+	else if (strcmp(name, "top") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TOP;
+	}
+	else if (strcmp(name, "right") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_RIGHT;
+	}
+	else if (strcmp(name, "bottom") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BOTTOM;
+	}
+	else if (strcmp(name, "left") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_LEFT;
+	}
+	else if (strcmp(name, "border") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER;
+	}
+	else if (strcmp(name, "border-color") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_COLOR;
+	}
+	else if (strcmp(name, "border-style") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_STYLE;
+	}
+	else if (strcmp(name, "border-width") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_WIDTH;
+	}
+	else if (strcmp(name, "border-radius") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_RADIUS;
+	}
+	else if (strcmp(name, "float") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLOAT;
+	}
+	else if (strcmp(name, "clear") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CLEAR;
+	}
+	else if (strcmp(name, "overflow") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OVERFLOW;
+	}
+	else if (strcmp(name, "text-overflow") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_OVERFLOW;
+	}
+	else if (strcmp(name, "white-space") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_WHITE_SPACE;
+	}
+	else if (strcmp(name, "cursor") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CURSOR;
+	}
+	else if (strcmp(name, "filter") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FILTER;
+	}
+	else if (strcmp(name, "opacity") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OPACITY;
+	}
+	else if (strcmp(name, "transform") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TRANSFORM;
+	}
+	else if (strcmp(name, "transition") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TRANSITION;
+	}
+	else if (strcmp(name, "animation") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ANIMATION;
+	}
+	else if (strcmp(name, "box-shadow") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BOX_SHADOW;
+	}
+	else if (strcmp(name, "text-shadow") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_SHADOW;
+	}
+	else if (strcmp(name, "outline") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE;
+	}
+	else if (strcmp(name, "outline-color") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE_COLOR;
+	}
+	else if (strcmp(name, "outline-style") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE_STYLE;
+	}
+	else if (strcmp(name, "outline-width") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE_WIDTH;
+	}
+	else if (strcmp(name, "background-color") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_COLOR;
+	}
+	else if (strcmp(name, "background-image") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_IMAGE;
+	}
+	else if (strcmp(name, "background-repeat") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_REPEAT;
+	}
+	else if (strcmp(name, "background-position") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_POSITION;
+	}
+	else if (strcmp(name, "background-size") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_SIZE;
+	}
+	else if (strcmp(name, "background-attachment") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_ATTACHMENT;
+	}
+	else if (strcmp(name, "background-clip") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_CLIP;
+	}
+	else if (strcmp(name, "background-origin") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_ORIGIN;
+	}
+	else if (strcmp(name, "background-blend-mode") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_BLEND_MODE;
+	}
+	else if (strcmp(name, "display") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_DISPLAY;
+	}
+	else if (strcmp(name, "flex") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX;
+	}
+	else if (strcmp(name, "flex-direction") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_DIRECTION;
+	}
+	else if (strcmp(name, "flex-wrap") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_WRAP;
+	}
+	else if (strcmp(name, "flex-flow") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_FLOW;
+	}
+	else if (strcmp(name, "flex-grow") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_GROW;
+	}
+	else if (strcmp(name, "flex-shrink") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_SHRINK;
+	}
+	else if (strcmp(name, "flex-basis") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_BASIS;
+	}
+	else if (strcmp(name, "justify-content") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_JUSTIFY_CONTENT;
+	}
+	else if (strcmp(name, "align-items") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_ITEMS;
+	}
+	else if (strcmp(name, "align-self") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_SELF;
+	}
+	else if (strcmp(name, "align-content") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_CONTENT;
+	}
+	else if (strcmp(name, "order") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ORDER;
+	}
+	else if (strcmp(name, "grid") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_GRID;
+	}
+	else if (strcmp(name, "fill") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FILL;
+	}
+	else if (strcmp(name, "stroke") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE;
+	}
+	else if (strcmp(name, "stroke-width") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_WIDTH;
+	}
+	else if (strcmp(name, "stroke-linecap") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_LINECAP;
+	}
+	else if (strcmp(name, "stroke-linejoin") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_LINEJOIN;
+	}
+	else if (strcmp(name, "stroke-dasharray") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_DASHARRAY;
+	}
+	else if (strcmp(name, "stroke-dashoffset") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_DASHOFFSET;
+	}
+	else if (strcmp(name, "fill-opacity") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FILL_OPACITY;
+	}
+	else if (strcmp(name, "stroke-opacity") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_OPACITY;
+	}
+	else if (strcmp(name, "shape-rendering") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_SHAPE_RENDERING;
+	}
+	else if (strcmp(name, "text-rendering") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_RENDERING;
+	}
+	else if (strcmp(name, "image-rendering") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_IMAGE_RENDERING;
+	}
+	else if (strcmp(name, "color-interpolation") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR_INTERPOLATION;
+	}
+	else if (strcmp(name, "color-rendering") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR_RENDERING;
+	}
+	else if (strcmp(name, "vector-effect") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VECTOR_EFFECT;
+	}
+	else if (strcmp(name, "mask") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MASK;
+	}
+	else if (strcmp(name, "clip-path") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CLIP_PATH;
+	}
+
 	return type;
 }
 
@@ -902,8 +1180,9 @@ char* ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type)
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CLIP_PATH: 
 			return  "clip-path";
 		
-		default:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_ERROR:
 			return "error";
 	}
+
+	return "error???";
 }

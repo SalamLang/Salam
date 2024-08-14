@@ -20,4 +20,47 @@
  */
 void validate_layout_block(ast_layout_block_t* block);
 
+/**
+ * 
+ * @function is_attribute_type_in_array
+ * @brief Check if the attribute type is in the array
+ * @params {ast_layout_attribute_type_t} type - Attribute type
+ * @params {ast_layout_attribute_type_t*} array - Array of attribute types
+ * @params {size_t} array_size - Array size
+ * @returns {bool} - True if the attribute type is in the array, false otherwise
+ * 
+ */
+bool is_attribute_type_in_array(ast_layout_attribute_type_t type, ast_layout_attribute_type_t* array, size_t array_size);
+
+/**
+ * 
+ * @function token_belongs_to_ast_layout_node
+ * @brief Check if the token belongs to the AST layout node
+ * @params {ast_layout_block_t*} block - AST layout block node
+ * @params {ast_layout_attribute_type_t} attribute_key_type - Attribute key type
+ * @returns {bool} - True if the token belongs to the AST layout node, false otherwise
+ * 
+ */
+bool token_belongs_to_ast_layout_node(ast_layout_block_t* block, ast_layout_attribute_type_t attribute_key_type);
+
+/**
+ * 
+ * @function validate_layout_mainbody
+ * @brief Validate the layout mainbody
+ * @params {ast_layout_block_t*} block - Layout block
+ * @returns {void}
+ * 
+ */
+void validate_layout_mainbody(ast_layout_block_t* block);
+
+/**
+ * 
+ * @function is_layout_node_a_single_tag
+ * @brief Check if the layout node is a single tag
+ * @params {ast_layout_node_type_t} type - Layout node type
+ * @returns {bool} - True if the layout node is a single tag, false otherwise
+ * 
+ */
+bool is_layout_node_a_single_tag(ast_layout_node_type_t type);
+
 #endif

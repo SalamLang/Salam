@@ -185,7 +185,8 @@ string_t* generator_code_layout_attributes(ast_layout_block_t* block)
                 while (entry) {
                     ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
 
-                    if (attribute->isContent != true && attribute->isStyle != true) {
+                    if (attribute->ignoreMe == true || attribute->isContent == true || attribute->isStyle == true) {}
+                    else {
                         array_t* attribute_values = cast(array_t*, attribute->values);
                         char* attribute_values_str = array_string_token(attribute_values, ", ");
                         size_t attribute_value_length = strlen(attribute_values_str);
@@ -203,6 +204,7 @@ string_t* generator_code_layout_attributes(ast_layout_block_t* block)
 
                         html_attributes_capacity++;
                     }
+                    
                     entry = entry->next;
                 }
             }
@@ -290,8 +292,12 @@ char* generator_code_layout_node_type(ast_layout_node_type_t type)
         case AST_LAYOUT_NODE_TYPE_TABLE_FOOTER: return "tfoot";
         
         case AST_LAYOUT_NODE_TYPE_PARAGRAPH_RAW:
-        case AST_LAYOUT_NODE_TYPE_ERROR: return "";
+        case AST_LAYOUT_NODE_TYPE_NONE:
+        case AST_LAYOUT_NODE_TYPE_ERROR:
+            return "";
     }
+
+    return "error?";
 }
 
 /**
@@ -359,8 +365,19 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
     return html;
 }
 
+/**
+ * 
+ * @function generator_code_layout_body
+ * @params {generator_t*} generator - Generator
+ * @params {ast_layout_block_t*} layout_block - Layout block
+ * @params {string_t*} body - Body
+ * @returns {void}
+ * 
+ */
 void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layout_block, string_t* body)
 {
+    validate_layout_mainbody(layout_block);
+    
     string_t* body_tag = string_create(1024);
     string_t* body_content = string_create(1024);
 

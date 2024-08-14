@@ -182,12 +182,36 @@ ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer)
  */
 void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lexer)
 {
-	token_t* token = PARSER_CURRENT;
+	// token
 	array_t* values = array_create(sizeof(token_t*), 1);
 	values->destroy = cast(void (*)(void*), array_token_destroy);
 
+	token_t* name_token = PARSER_CURRENT;
+	string_t* name = string_create(16);
+	string_append_str(name, token_value(PARSER_CURRENT));
 	PARSER_NEXT; // Eating the identifier token
-	PARSER_NEXT; // Eating the colon token
+
+	while (match(lexer, TOKEN_MINUS)) {
+		PARSER_NEXT; // Eating the minus token
+		string_append_char(name, '-');
+
+		if (match(lexer, TOKEN_IDENTIFIER)) {
+			string_append_str(name, token_value(PARSER_CURRENT));
+			name_token = PARSER_CURRENT;
+			PARSER_NEXT; // Eating the identifier token
+		}
+		else {
+			error(2, "Expected an identifier after the dash in the attribute name at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
+			break;
+		}
+	}
+
+	if (match(lexer, TOKEN_COLON)) {
+		PARSER_NEXT; // Eating the left brace token
+	}
+	else {
+		error(2, "Expected a colon after the attribute name at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
+	}
 
 	token_t* value = parser_parse_value(lexer);
 
@@ -206,12 +230,11 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
 		}
 	}
 
-	ast_layout_attribute_type_t attribute_key_type = token_to_ast_layout_attribute_type(token, block->parent_node_type);
-	token->print(token);
+	ast_layout_attribute_type_t attribute_key_type = token_to_ast_layout_attribute_type(name->data, name_token, block->parent_node_type);
 
-	ast_layout_attribute_t* attribute = ast_layout_attribute_create(attribute_key_type, token->data.string, values);
+	ast_layout_attribute_t* attribute = ast_layout_attribute_create(attribute_key_type, name->data, values);
 	if (!token_belongs_to_ast_layout_node(block,  attribute_key_type, attribute)) {
-		error(2, "Attribute '%s' does not belong to node '%s' at line %d, column %d", token_value(token), ast_layout_node_type_to_name(block->parent_node_type), token->location.end_line, token->location.end_column);
+		error(2, "Attribute '%s' does not belong to node '%s' at line %d, column %d", name, ast_layout_node_type_to_name(block->parent_node_type), name_token->location.end_line, name_token->location.end_column);
 	}
 
 	char* attribute_key_name = ast_layout_attribute_type_to_name(attribute_key_type);
@@ -222,6 +245,8 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
 	else {
 		hashmap_put(cast(hashmap_t*, block->attributes), attribute_key_name, attribute);
 	}
+
+	if (name != NULL) name->destroy(name);
 }
 
 /**
@@ -255,7 +280,7 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer)
 	expect(lexer, TOKEN_LEFT_BRACE);
 
 	while (PARSER_CURRENT->type != TOKEN_RIGHT_BRACE) {
-		if (match(lexer, TOKEN_IDENTIFIER) && match_next(lexer, TOKEN_COLON)) {
+		if (match(lexer, TOKEN_IDENTIFIER) && (match_next(lexer, TOKEN_COLON) || match_next(lexer, TOKEN_MINUS))) {
 			parser_parse_layout_block_attribute(block, lexer);
 		}
 		else if (match(lexer, TOKEN_IDENTIFIER) && match_next(lexer, TOKEN_LEFT_BRACE)) {

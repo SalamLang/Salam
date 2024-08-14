@@ -20,7 +20,7 @@
  */
 bool is_char_digit(char c)
 {
-    return c >= '0' && c <= '9';
+	return c >= '0' && c <= '9';
 }
 
 /**
@@ -33,7 +33,7 @@ bool is_char_digit(char c)
  */
 bool is_char_alpha(char c)
 {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 }
 
 /**
@@ -46,7 +46,7 @@ bool is_char_alpha(char c)
  */
 bool is_char_alnum(char c)
 {
-    return is_char_alpha(c) || is_char_digit(c);
+	return is_char_alpha(c) || is_char_digit(c);
 }
 
 /**
@@ -59,7 +59,7 @@ bool is_char_alnum(char c)
  */
 bool is_char_whitespace(char c)
 {
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
 /**
@@ -72,7 +72,7 @@ bool is_char_whitespace(char c)
  */
 void location_print(location_t location)
 {
-    printf("Location: %zu:%zu - %zu:%zu\n", location.start_line, location.start_column, location.end_line, location.end_column);
+	printf("Location: %zu:%zu - %zu:%zu\n", location.start_line, location.start_column, location.end_line, location.end_column);
 }
 /**
  * 
@@ -85,15 +85,15 @@ void location_print(location_t location)
  */
 token_t* token_create(token_type_t type, location_t location)
 {
-    token_t* token = memory_allocate(sizeof(token_t));
-    token->type = type;
-    token->location = location;
-    token->data_type = TOKEN_ERROR;
-    token->name = cast(char* (*)(token_type_t), token_name);
-    token->value = cast(char* (*)(void*), token_value);
-    token->print = cast(void (*)(void*), token_print);
-    token->destroy = cast(void (*)(void*), token_destroy);
-    return token;
+	token_t* token = memory_allocate(sizeof(token_t));
+	token->type = type;
+	token->location = location;
+	token->data_type = TOKEN_ERROR;
+	token->name = cast(char* (*)(token_type_t), token_name);
+	token->value = cast(char* (*)(void*), token_value);
+	token->print = cast(void (*)(void*), token_print);
+	token->destroy = cast(void (*)(void*), token_destroy);
+	return token;
 }
 
 /**
@@ -106,34 +106,34 @@ token_t* token_create(token_type_t type, location_t location)
  */
 token_t* token_copy(token_t* token)
 {
-    token_t* copy = token_create(token->type, token->location);
-    copy->data_type = token->data_type;
+	token_t* copy = token_create(token->type, token->location);
+	copy->data_type = token->data_type;
 
-    switch (token->data_type) {
-        case TOKEN_NUMBER_INT:
-            copy->data.number_int = token->data.number_int;
-            break;
-        
-        case TOKEN_NUMBER_FLOAT:
-            copy->data.number_float = token->data.number_float;
-            break;
-        
-        case TOKEN_STRING:
-        case TOKEN_IDENTIFIER:
-            if (token->data.string != NULL) {
-                copy->data.string = strdup(token->data.string);
-            }
-            break;
-        
-        case TOKEN_BOOLEAN:
-            copy->data.boolean = token->data.boolean;
-            break;
-        
-        default:
-            break;
-    }
+	switch (token->data_type) {
+		case TOKEN_NUMBER_INT:
+			copy->data.number_int = token->data.number_int;
+			break;
+		
+		case TOKEN_NUMBER_FLOAT:
+			copy->data.number_float = token->data.number_float;
+			break;
+		
+		case TOKEN_STRING:
+		case TOKEN_IDENTIFIER:
+			if (token->data.string != NULL) {
+				copy->data.string = strdup(token->data.string);
+			}
+			break;
+		
+		case TOKEN_BOOLEAN:
+			copy->data.boolean = token->data.boolean;
+			break;
+		
+		default:
+			break;
+	}
 
-    return copy;
+	return copy;
 }
 
 /**
@@ -146,15 +146,15 @@ token_t* token_copy(token_t* token)
  */
 void token_destroy(token_t* token)
 {
-    if (token != NULL) {
-        if (token->data_type == TOKEN_STRING || token->data_type == TOKEN_IDENTIFIER) {
-            if (token->data.string != NULL) {
-                memory_destroy(token->data.string);
-            }
-        }
+	if (token != NULL) {
+		if (token->data_type == TOKEN_STRING || token->data_type == TOKEN_IDENTIFIER) {
+			if (token->data.string != NULL) {
+				memory_destroy(token->data.string);
+			}
+		}
 
-        memory_destroy(token);
-    }
+		memory_destroy(token);
+	}
 }
 
 /**
@@ -167,103 +167,103 @@ void token_destroy(token_t* token)
  */
 void token_print(token_t* token)
 {
-    printf("Token ");
-    switch (token->type) {
-        case TOKEN_EOF:
-            printf("EOF");
-            break;
-        case TOKEN_IDENTIFIER:
-            printf("IDENTIFIER: '%s' (%zu)", token->data.string, strlen(token->data.string));
-            break;
-        case TOKEN_NUMBER_FLOAT:
-            printf("NUMBER_FLOAT: %f", token->data.number_float);
-            break;
-        case TOKEN_NUMBER_INT:
-            printf("NUMBER_INT: %d", token->data.number_int);
-            break;
-        case TOKEN_STRING:
-            printf("STRING: '%s' (%zu)", token->data.string, strlen(token->data.string));
-            break;
-        case TOKEN_LEFT_BRACE:
-        case TOKEN_RIGHT_BRACE:
-        case TOKEN_LEFT_BRACKET:
-        case TOKEN_RIGHT_BRACKET:
-        case TOKEN_COLON:
-        case TOKEN_COMMA:
-        case TOKEN_LEFT_PAREN:
-        case TOKEN_RIGHT_PAREN:
-        case TOKEN_PLUS:
-        case TOKEN_MINUS:
-        case TOKEN_MULTIPLY:
-        case TOKEN_DIVIDE:
-        case TOKEN_MOD:
-        case TOKEN_POWER:
-        case TOKEN_ASSIGN:
-        case TOKEN_LESS:
-        case TOKEN_GREATER:
-        case TOKEN_NOT:
-            printf("SYMBOL: '%c'", token->type);
-            break;
-        
-        case TOKEN_NOT_EQUAL: printf("SYMBOL: '!='"); break;
-        case TOKEN_EQUAL: printf("SYMBOL: '=='"); break;
-        case TOKEN_AND_AND: printf("SYMBOL: '&&'"); break;
-        case TOKEN_OR_OR: printf("SYMBOL: '||'"); break;
-        case TOKEN_AND_BIT: printf("SYMBOL: '&'"); break;
-        case TOKEN_OR_BIT: printf("SYMBOL: '|'"); break;
-        case TOKEN_LESS_EQUAL: printf("SYMBOL: '<='"); break;
-        case TOKEN_GREATER_EQUAL: printf("SYMBOL: '>='"); break;
+	printf("Token ");
+	switch (token->type) {
+		case TOKEN_EOF:
+			printf("EOF");
+			break;
+		case TOKEN_IDENTIFIER:
+			printf("IDENTIFIER: '%s' (%zu)", token->data.string, strlen(token->data.string));
+			break;
+		case TOKEN_NUMBER_FLOAT:
+			printf("NUMBER_FLOAT: %f", token->data.number_float);
+			break;
+		case TOKEN_NUMBER_INT:
+			printf("NUMBER_INT: %d", token->data.number_int);
+			break;
+		case TOKEN_STRING:
+			printf("STRING: '%s' (%zu)", token->data.string, strlen(token->data.string));
+			break;
+		case TOKEN_LEFT_BRACE:
+		case TOKEN_RIGHT_BRACE:
+		case TOKEN_LEFT_BRACKET:
+		case TOKEN_RIGHT_BRACKET:
+		case TOKEN_COLON:
+		case TOKEN_COMMA:
+		case TOKEN_LEFT_PAREN:
+		case TOKEN_RIGHT_PAREN:
+		case TOKEN_PLUS:
+		case TOKEN_MINUS:
+		case TOKEN_MULTIPLY:
+		case TOKEN_DIVIDE:
+		case TOKEN_MOD:
+		case TOKEN_POWER:
+		case TOKEN_ASSIGN:
+		case TOKEN_LESS:
+		case TOKEN_GREATER:
+		case TOKEN_NOT:
+			printf("SYMBOL: '%c'", token->type);
+			break;
+		
+		case TOKEN_NOT_EQUAL: printf("SYMBOL: '!='"); break;
+		case TOKEN_EQUAL: printf("SYMBOL: '=='"); break;
+		case TOKEN_AND_AND: printf("SYMBOL: '&&'"); break;
+		case TOKEN_OR_OR: printf("SYMBOL: '||'"); break;
+		case TOKEN_AND_BIT: printf("SYMBOL: '&'"); break;
+		case TOKEN_OR_BIT: printf("SYMBOL: '|'"); break;
+		case TOKEN_LESS_EQUAL: printf("SYMBOL: '<='"); break;
+		case TOKEN_GREATER_EQUAL: printf("SYMBOL: '>='"); break;
 
-        case TOKEN_INCREMENT: printf("SYMBOL: '++"); break;
-        case TOKEN_DECREMENT: printf("SYMBOL: '--'"); break;
+		case TOKEN_INCREMENT: printf("SYMBOL: '++"); break;
+		case TOKEN_DECREMENT: printf("SYMBOL: '--'"); break;
 
-        case TOKEN_SHIFT_LEFT: printf("SYMBOL: '>>'"); break;
-        case TOKEN_SHIFT_RIGHT: printf("SYMBOL: '<<'"); break;
-        case TOKEN_SHIFT_LEFT_ASSIGN: printf("SYMBOL: '>>='"); break;
-        case TOKEN_SHIFT_RIGHT_ASSIGN: printf("SYMBOL: '<<='"); break;
+		case TOKEN_SHIFT_LEFT: printf("SYMBOL: '>>'"); break;
+		case TOKEN_SHIFT_RIGHT: printf("SYMBOL: '<<'"); break;
+		case TOKEN_SHIFT_LEFT_ASSIGN: printf("SYMBOL: '>>='"); break;
+		case TOKEN_SHIFT_RIGHT_ASSIGN: printf("SYMBOL: '<<='"); break;
 
-        case TOKEN_BOOLEAN:
-            printf("BOOLEAN: %s", token->data.boolean ? "true" : "false");
-            break;
-        case TOKEN_ERROR:
-            printf("ERROR");
-            break;
-        case TOKEN_LAYOUT:
-            printf("LAYOUT");
-            break;
-        case TOKEN_IMPORT:
-            printf("IMPORT");
-            break;
-        case TOKEN_FUNCTION:
-            printf("FUNCTION");
-            break;
-        case TOKEN_RETURN:
-            printf("RETURN");
-            break;
-        case TOKEN_IF:
-            printf("IF");
-            break;
-        case TOKEN_ELSE:
-            printf("ELSE");
-            break;
-        case TOKEN_WHILE:
-            printf("WHILE");
-            break;
-        case TOKEN_FOR:
-            printf("FOR");
-            break;
-        case TOKEN_BREAK:
-            printf("BREAK");
-            break;
-        case TOKEN_CONTINUE:
-            printf("CONTINUE");
-            break;
-        default:
-            printf("UNKNOWN");
-    }
+		case TOKEN_BOOLEAN:
+			printf("BOOLEAN: %s", token->data.boolean ? "true" : "false");
+			break;
+		case TOKEN_ERROR:
+			printf("ERROR");
+			break;
+		case TOKEN_LAYOUT:
+			printf("LAYOUT");
+			break;
+		case TOKEN_IMPORT:
+			printf("IMPORT");
+			break;
+		case TOKEN_FUNCTION:
+			printf("FUNCTION");
+			break;
+		case TOKEN_RETURN:
+			printf("RETURN");
+			break;
+		case TOKEN_IF:
+			printf("IF");
+			break;
+		case TOKEN_ELSE:
+			printf("ELSE");
+			break;
+		case TOKEN_WHILE:
+			printf("WHILE");
+			break;
+		case TOKEN_FOR:
+			printf("FOR");
+			break;
+		case TOKEN_BREAK:
+			printf("BREAK");
+			break;
+		case TOKEN_CONTINUE:
+			printf("CONTINUE");
+			break;
+		default:
+			printf("UNKNOWN");
+	}
 
-    printf(" at ");
-    location_print(token->location);
+	printf(" at ");
+	location_print(token->location);
 }
 
 /**
@@ -276,111 +276,111 @@ void token_print(token_t* token)
  */
 char* token_name(token_type_t type)
 {
-    switch (type) {
-        case TOKEN_EOF:
-            return "EOF";
-        case TOKEN_IDENTIFIER:
-            return "IDENTIFIER";
-        case TOKEN_STRING:
-            return "STRING";
-        case TOKEN_NUMBER_INT:
-            return "NUMBER_INT";
-        case TOKEN_LEFT_BRACE:
-            return "LEFT_BRACE";
-        case TOKEN_RIGHT_BRACE:
-            return "RIGHT_BRACE";
-        case TOKEN_LEFT_BRACKET:
-            return "LEFT_BRACKET";
-        case TOKEN_RIGHT_BRACKET:
-            return "RIGHT_BRACKET";
-        case TOKEN_COLON:
-            return "COLON";
-        case TOKEN_COMMA:
-            return "COMMA";
-        case TOKEN_LEFT_PAREN:
-            return "LEFT_PAREN";
-        case TOKEN_RIGHT_PAREN:
-            return "RIGHT_PAREN";
-        case TOKEN_NUMBER_FLOAT:
-            return "NUMBER_FLOAT";
-        case TOKEN_BOOLEAN:
-            return "BOOLEAN";
-        case TOKEN_PLUS:
-            return "PLUS";
-        case TOKEN_MINUS:
-            return "MINUS";
-        case TOKEN_MULTIPLY:
-            return "MULTIPLY";
-        case TOKEN_DIVIDE:
-            return "DIVIDE";
-        case TOKEN_MOD:
-            return "MOD";
-        case TOKEN_POWER:
-            return "POWER";
-        case TOKEN_ASSIGN:
-            return "ASSIGN";
-        case TOKEN_LESS:
-            return "LESS";
-        case TOKEN_GREATER:
-            return "GREATER";
-        case TOKEN_NOT:
-            return "NOT";
-        case TOKEN_NOT_EQUAL:
-            return "NOT_EQUAL";
-        case TOKEN_EQUAL:
-            return "EQUAL";
-        case TOKEN_AND_AND:
-            return "AND_AND";
-        case TOKEN_OR_OR:
-            return "OR_OR";
-        case TOKEN_AND_BIT:
-            return "AND_BIT";
-        case TOKEN_OR_BIT:
-            return "OR_BIT";
-        case TOKEN_LESS_EQUAL:
-            return "LESS_EQUAL";
-        case TOKEN_GREATER_EQUAL:
-            return "GREATER_EQUAL";
-        case TOKEN_INCREMENT:
-            return "INCREMENT";
-        case TOKEN_DECREMENT:
-            return "DECREMENT";
+	switch (type) {
+		case TOKEN_EOF:
+			return "EOF";
+		case TOKEN_IDENTIFIER:
+			return "IDENTIFIER";
+		case TOKEN_STRING:
+			return "STRING";
+		case TOKEN_NUMBER_INT:
+			return "NUMBER_INT";
+		case TOKEN_LEFT_BRACE:
+			return "LEFT_BRACE";
+		case TOKEN_RIGHT_BRACE:
+			return "RIGHT_BRACE";
+		case TOKEN_LEFT_BRACKET:
+			return "LEFT_BRACKET";
+		case TOKEN_RIGHT_BRACKET:
+			return "RIGHT_BRACKET";
+		case TOKEN_COLON:
+			return "COLON";
+		case TOKEN_COMMA:
+			return "COMMA";
+		case TOKEN_LEFT_PAREN:
+			return "LEFT_PAREN";
+		case TOKEN_RIGHT_PAREN:
+			return "RIGHT_PAREN";
+		case TOKEN_NUMBER_FLOAT:
+			return "NUMBER_FLOAT";
+		case TOKEN_BOOLEAN:
+			return "BOOLEAN";
+		case TOKEN_PLUS:
+			return "PLUS";
+		case TOKEN_MINUS:
+			return "MINUS";
+		case TOKEN_MULTIPLY:
+			return "MULTIPLY";
+		case TOKEN_DIVIDE:
+			return "DIVIDE";
+		case TOKEN_MOD:
+			return "MOD";
+		case TOKEN_POWER:
+			return "POWER";
+		case TOKEN_ASSIGN:
+			return "ASSIGN";
+		case TOKEN_LESS:
+			return "LESS";
+		case TOKEN_GREATER:
+			return "GREATER";
+		case TOKEN_NOT:
+			return "NOT";
+		case TOKEN_NOT_EQUAL:
+			return "NOT_EQUAL";
+		case TOKEN_EQUAL:
+			return "EQUAL";
+		case TOKEN_AND_AND:
+			return "AND_AND";
+		case TOKEN_OR_OR:
+			return "OR_OR";
+		case TOKEN_AND_BIT:
+			return "AND_BIT";
+		case TOKEN_OR_BIT:
+			return "OR_BIT";
+		case TOKEN_LESS_EQUAL:
+			return "LESS_EQUAL";
+		case TOKEN_GREATER_EQUAL:
+			return "GREATER_EQUAL";
+		case TOKEN_INCREMENT:
+			return "INCREMENT";
+		case TOKEN_DECREMENT:
+			return "DECREMENT";
 
-        case TOKEN_SHIFT_LEFT:
-            return "SHIFT_LEFT";
-        case TOKEN_SHIFT_RIGHT:
-            return "SHIFT_RIGHT";
-        case TOKEN_SHIFT_LEFT_ASSIGN:
-            return "SHIFT_LEFT_ASSIGN";
-        case TOKEN_SHIFT_RIGHT_ASSIGN:
-            return "SHIFT_RIGHT_ASSIGN";
+		case TOKEN_SHIFT_LEFT:
+			return "SHIFT_LEFT";
+		case TOKEN_SHIFT_RIGHT:
+			return "SHIFT_RIGHT";
+		case TOKEN_SHIFT_LEFT_ASSIGN:
+			return "SHIFT_LEFT_ASSIGN";
+		case TOKEN_SHIFT_RIGHT_ASSIGN:
+			return "SHIFT_RIGHT_ASSIGN";
 
-        // Keywords
-        case TOKEN_LAYOUT:
-            return "LAYOUT";
-        case TOKEN_IMPORT:
-            return "IMPORT";
-        case TOKEN_FUNCTION:
-            return "FUNCTION";
-        case TOKEN_RETURN:
-            return "RETURN";
-        case TOKEN_IF:
-            return "IF";
-        case TOKEN_ELSE:
-            return "ELSE";
-        case TOKEN_WHILE:
-            return "WHILE";
-        case TOKEN_FOR:
-            return "FOR";
-        case TOKEN_BREAK:
-            return "BREAK";
-        case TOKEN_CONTINUE:
-            return "CONTINUE";
+		// Keywords
+		case TOKEN_LAYOUT:
+			return "LAYOUT";
+		case TOKEN_IMPORT:
+			return "IMPORT";
+		case TOKEN_FUNCTION:
+			return "FUNCTION";
+		case TOKEN_RETURN:
+			return "RETURN";
+		case TOKEN_IF:
+			return "IF";
+		case TOKEN_ELSE:
+			return "ELSE";
+		case TOKEN_WHILE:
+			return "WHILE";
+		case TOKEN_FOR:
+			return "FOR";
+		case TOKEN_BREAK:
+			return "BREAK";
+		case TOKEN_CONTINUE:
+			return "CONTINUE";
 
-        case TOKEN_ERROR:
-            return "ERROR";
-    }
-    return "UNKNOWN";
+		case TOKEN_ERROR:
+			return "ERROR";
+	}
+	return "UNKNOWN";
 }
 
 /**
@@ -393,27 +393,27 @@ char* token_name(token_type_t type)
  */
 char* token_value(token_t* token)
 {
-    static char buffer[256];
+	static char buffer[256];
 
-    switch (token->data_type) {
-        case TOKEN_NUMBER_INT:
-            snprintf(buffer, sizeof(buffer), "%d", token->data.number_int);
-            return buffer;
+	switch (token->data_type) {
+		case TOKEN_NUMBER_INT:
+			snprintf(buffer, sizeof(buffer), "%d", token->data.number_int);
+			return buffer;
 
-        case TOKEN_NUMBER_FLOAT:
-            snprintf(buffer, sizeof(buffer), "%f", token->data.number_float);
-            return buffer;
+		case TOKEN_NUMBER_FLOAT:
+			snprintf(buffer, sizeof(buffer), "%f", token->data.number_float);
+			return buffer;
 
-        case TOKEN_STRING:
-        case TOKEN_IDENTIFIER:
-            return token->data.string;
+		case TOKEN_STRING:
+		case TOKEN_IDENTIFIER:
+			return token->data.string;
 
-        case TOKEN_BOOLEAN:
-            return token->data.boolean ? "true" : "false";
+		case TOKEN_BOOLEAN:
+			return token->data.boolean ? "true" : "false";
 
-        default:
-            return "UNKNOWN";
-    }
+		default:
+			return "UNKNOWN";
+	}
 }
 
 /**
@@ -427,15 +427,15 @@ char* token_value(token_t* token)
  */
 lexer_t* lexer_create(const char* file_path, char* source)
 {
-    lexer_t* lexer = memory_allocate(sizeof(lexer_t));
-    lexer->file_path = file_path;
-    lexer->source = source;
-    lexer->index = 0;
-    lexer->line = 1;
-    lexer->column = 1;
-    lexer->tokens = array_create(sizeof(token_t*), 10);
-    lexer->token_index = 0;
-    return lexer;
+	lexer_t* lexer = memory_allocate(sizeof(lexer_t));
+	lexer->file_path = file_path;
+	lexer->source = source;
+	lexer->index = 0;
+	lexer->line = 1;
+	lexer->column = 1;
+	lexer->tokens = array_create(sizeof(token_t*), 10);
+	lexer->token_index = 0;
+	return lexer;
 }
 
 /**
@@ -448,11 +448,11 @@ lexer_t* lexer_create(const char* file_path, char* source)
  */
 void lexer_destroy(lexer_t* lexer)
 {
-    if (lexer != NULL) {
-        array_destroy_custom(lexer->tokens, cast(void (*)(void*), token_destroy));
-        
-        memory_destroy(lexer);
-    }
+	if (lexer != NULL) {
+		array_destroy_custom(lexer->tokens, cast(void (*)(void*), token_destroy));
+		
+		memory_destroy(lexer);
+	}
 }
 
 /**
@@ -465,16 +465,16 @@ void lexer_destroy(lexer_t* lexer)
  */
 void lexer_debug(lexer_t* lexer)
 {
-    printf("============= START LEXER DEBUG =============\n");
+	printf("============= START LEXER DEBUG =============\n");
 
-    printf("Lexer source: %s\n", lexer->source == NULL ? "REPL" : lexer->source);
-    printf("Lexer index: %zu\n", lexer->index);
-    printf("Lexer line: %zu\n", lexer->line);
-    printf("Lexer column: %zu\n", lexer->column);
+	printf("Lexer source: %s\n", lexer->source == NULL ? "REPL" : lexer->source);
+	printf("Lexer index: %zu\n", lexer->index);
+	printf("Lexer line: %zu\n", lexer->line);
+	printf("Lexer column: %zu\n", lexer->column);
 
-    array_token_print(lexer->tokens);
+	array_token_print(lexer->tokens);
 
-    printf("============= END LEXER DEBUG =============\n");
+	printf("============= END LEXER DEBUG =============\n");
 }
 
 /**
@@ -487,49 +487,49 @@ void lexer_debug(lexer_t* lexer)
  */
 void lexer_lex_number(lexer_t* lexer)
 {
-    char* buffer = memory_allocate(256);
-    size_t index = 0;
-    buffer[index++] = LEXER_CURRENT_PREV;
+	char* buffer = memory_allocate(256);
+	size_t index = 0;
+	buffer[index++] = LEXER_CURRENT_PREV;
 
-    while (is_char_digit(LEXER_CURRENT)) {
-        buffer[index++] = LEXER_CURRENT;
-        LEXER_NEXT;
-        LEXER_NEXT_COLUMN;
-    }
+	while (is_char_digit(LEXER_CURRENT)) {
+		buffer[index++] = LEXER_CURRENT;
+		LEXER_NEXT;
+		LEXER_NEXT_COLUMN;
+	}
 
-    if (LEXER_CURRENT == '.') {
-        buffer[index++] = LEXER_CURRENT;
-        LEXER_NEXT;
-        LEXER_NEXT_COLUMN;
+	if (LEXER_CURRENT == '.') {
+		buffer[index++] = LEXER_CURRENT;
+		LEXER_NEXT;
+		LEXER_NEXT_COLUMN;
 
-        while (is_char_digit(LEXER_CURRENT)) {
-            buffer[index++] = LEXER_CURRENT;
-            LEXER_NEXT;
-            LEXER_NEXT_COLUMN;
-        }
+		while (is_char_digit(LEXER_CURRENT)) {
+			buffer[index++] = LEXER_CURRENT;
+			LEXER_NEXT;
+			LEXER_NEXT_COLUMN;
+		}
 
-        buffer[index] = '\0';
+		buffer[index] = '\0';
 
-        token_t* token = token_create(TOKEN_NUMBER_FLOAT, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-        token->data_type = TOKEN_NUMBER_FLOAT;
-        token->data.number_float = atof(buffer);
-        LEXER_PUSH_TOKEN(token);
+		token_t* token = token_create(TOKEN_NUMBER_FLOAT, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+		token->data_type = TOKEN_NUMBER_FLOAT;
+		token->data.number_float = atof(buffer);
+		LEXER_PUSH_TOKEN(token);
 
-        if (buffer != NULL) {
-            memory_destroy(buffer);
-        }
-    } else {
-        buffer[index] = '\0';
+		if (buffer != NULL) {
+			memory_destroy(buffer);
+		}
+	} else {
+		buffer[index] = '\0';
 
-        token_t* token = token_create(TOKEN_NUMBER_INT, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-        token->data_type = TOKEN_NUMBER_INT;
-        token->data.number_int = atoi(buffer);
-        LEXER_PUSH_TOKEN(token);
+		token_t* token = token_create(TOKEN_NUMBER_INT, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+		token->data_type = TOKEN_NUMBER_INT;
+		token->data.number_int = atoi(buffer);
+		LEXER_PUSH_TOKEN(token);
 
-        if (buffer != NULL) {
-            memory_destroy(buffer);
-        }
-    }
+		if (buffer != NULL) {
+			memory_destroy(buffer);
+		}
+	}
 }
 
 /**
@@ -542,13 +542,13 @@ void lexer_lex_number(lexer_t* lexer)
  */
 bool is_keyword(const char* string)
 {
-    for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
-        if (strcmp(string, keywords[i].name) == 0) {
-            return true;
-        }
-    }
+	for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
+		if (strcmp(string, keywords[i].name) == 0) {
+			return true;
+		}
+	}
 
-    return false;
+	return false;
 }
 
 /**
@@ -561,13 +561,13 @@ bool is_keyword(const char* string)
  */
 token_type_t type_keyword(const char* string)
 {
-    for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
-        if (strcmp(string, keywords[i].name) == 0) {
-            return keywords[i].type;
-        }
-    }
+	for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
+		if (strcmp(string, keywords[i].name) == 0) {
+			return keywords[i].type;
+		}
+	}
 
-    return TOKEN_IDENTIFIER;
+	return TOKEN_IDENTIFIER;
 }
 
 /**
@@ -580,24 +580,24 @@ token_type_t type_keyword(const char* string)
  */
 void lexer_lex_identifier(lexer_t* lexer)
 {
-    char* buffer = memory_allocate(256);
-    size_t index = 0;
-    buffer[index++] = LEXER_CURRENT_PREV;
+	char* buffer = memory_allocate(256);
+	size_t index = 0;
+	buffer[index++] = LEXER_CURRENT_PREV;
 
-    while (isalnum(LEXER_CURRENT) || LEXER_CURRENT == '_') {
-        buffer[index++] = LEXER_CURRENT;
-        LEXER_NEXT;
-        LEXER_NEXT_COLUMN;
-    }
+	while (isalnum(LEXER_CURRENT) || LEXER_CURRENT == '_') {
+		buffer[index++] = LEXER_CURRENT;
+		LEXER_NEXT;
+		LEXER_NEXT_COLUMN;
+	}
 
-    buffer[index] = '\0';
+	buffer[index] = '\0';
 
-    token_type_t type = type_keyword(buffer);
+	token_type_t type = type_keyword(buffer);
 
-    token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-    token->data_type = TOKEN_IDENTIFIER;
-    token->data.string = buffer;
-    LEXER_PUSH_TOKEN(token);
+	token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+	token->data_type = TOKEN_IDENTIFIER;
+	token->data.string = buffer;
+	LEXER_PUSH_TOKEN(token);
 }
 
 /**
@@ -610,24 +610,24 @@ void lexer_lex_identifier(lexer_t* lexer)
  */
 void lexer_lex_string(lexer_t* lexer)
 {
-    // Opening quote is already consumed
-    char* buffer = memory_allocate(256);
-    size_t index = 0;
+	// Opening quote is already consumed
+	char* buffer = memory_allocate(256);
+	size_t index = 0;
 
-    while (LEXER_CURRENT != '"' && LEXER_CURRENT != '\0') {
-        buffer[index++] = LEXER_CURRENT;
-        LEXER_NEXT;
-        LEXER_NEXT_COLUMN;
-    }
+	while (LEXER_CURRENT != '"' && LEXER_CURRENT != '\0') {
+		buffer[index++] = LEXER_CURRENT;
+		LEXER_NEXT;
+		LEXER_NEXT_COLUMN;
+	}
 
-    buffer[index] = '\0';
+	buffer[index] = '\0';
 
-    LEXER_NEXT; // Eating the closing quote
+	LEXER_NEXT; // Eating the closing quote
 
-    token_t* token = token_create(TOKEN_STRING, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-    token->data_type = TOKEN_STRING;
-    token->data.string = buffer;
-    LEXER_PUSH_TOKEN(token);
+	token_t* token = token_create(TOKEN_STRING, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+	token->data_type = TOKEN_STRING;
+	token->data.string = buffer;
+	LEXER_PUSH_TOKEN(token);
 }
 
 /**
@@ -640,85 +640,85 @@ void lexer_lex_string(lexer_t* lexer)
  */
 void lexer_lex(lexer_t* lexer)
 {
-    while (LEXER_CURRENT != '\0') {
-        LEXER_NEXT;
-        LEXER_NEXT_COLUMN;
+	while (LEXER_CURRENT != '\0') {
+		LEXER_NEXT;
+		LEXER_NEXT_COLUMN;
 
-        char c = LEXER_CURRENT_PREV;
+		char c = LEXER_CURRENT_PREV;
 
-        switch (c) {
-            case '\0': // End of file
-            case -1: // End of file
-                goto gotoend;
-                break;
-            
-            case '\n': // New line
-                LEXER_NEXT_LINE;
-                LEXER_ZERO_COLUMN;
-                continue;
-            
-            case '\a': // Alert
-            case '\b': // Backspace
-            case '\f': // Form feed
-            case '\r': // Carriage return
-            case '\t': // Horizontal tab
-            case '\v': // Vertical tab
-            case ' ': // Space
-                continue;
+		switch (c) {
+			case '\0': // End of file
+			case -1: // End of file
+				goto gotoend;
+				break;
+			
+			case '\n': // New line
+				LEXER_NEXT_LINE;
+				LEXER_ZERO_COLUMN;
+				continue;
+			
+			case '\a': // Alert
+			case '\b': // Backspace
+			case '\f': // Form feed
+			case '\r': // Carriage return
+			case '\t': // Horizontal tab
+			case '\v': // Vertical tab
+			case ' ': // Space
+				continue;
 
-            case '{':
-            case '}':
-            case '[':
-            case ']':
-            case ':':
-            case ',':
-            case '(':
-            case ')':
-            case '+':
-            case '-':
-            case '*':
-            case '/':
-            case '%':
-            case '^':
-            case '=':
-            case '<':
-            case '>':
-            case '!':
-                if (LEXER_CURRENT == '/') {
-                    LEXER_NEXT;
-                    LEXER_NEXT_COLUMN;
+			case '{':
+			case '}':
+			case '[':
+			case ']':
+			case ':':
+			case ',':
+			case '(':
+			case ')':
+			case '+':
+			case '-':
+			case '*':
+			case '/':
+			case '%':
+			case '^':
+			case '=':
+			case '<':
+			case '>':
+			case '!':
+				if (LEXER_CURRENT == '/') {
+					LEXER_NEXT;
+					LEXER_NEXT_COLUMN;
 
-                    while (LEXER_CURRENT != '\n' && LEXER_CURRENT != '\0') {
-                        LEXER_NEXT;
-                        LEXER_NEXT_COLUMN;
-                    }
-                }
-                else {
-                    token_t* token = token_create(c, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-                    LEXER_PUSH_TOKEN(token);
-                }
-                continue;
-            case '"':
-                lexer_lex_string(lexer);
-                continue;
-            
-            case '0': case '1': case '2': case '3': case '4':
-            case '5': case '6': case '7': case '8': case '9':
-                lexer_lex_number(lexer);
-                continue;
+					while (LEXER_CURRENT != '\n' && LEXER_CURRENT != '\0') {
+						LEXER_NEXT;
+						LEXER_NEXT_COLUMN;
+					}
+				}
+				else {
+					token_t* token = token_create(c, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+					LEXER_PUSH_TOKEN(token);
+				}
+				continue;
+			case '"':
+				lexer_lex_string(lexer);
+				continue;
+			
+			case '0': case '1': case '2': case '3': case '4':
+			case '5': case '6': case '7': case '8': case '9':
+				lexer_lex_number(lexer);
+				continue;
 
-            default:
-                if (is_char_alpha(LEXER_CURRENT_PREV) || LEXER_CURRENT_PREV == '_') {
-                    lexer_lex_identifier(lexer);
-                } else {
-                    token_t* token = token_create(TOKEN_ERROR, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-                    LEXER_PUSH_TOKEN(token);
-                }
-                continue;
-        }
-    }
-    
-    gotoend:
-    token_t* token = token_create(TOKEN_EOF, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-    LEXER_PUSH_TOKEN(token);
+			default:
+				if (is_char_alpha(LEXER_CURRENT_PREV) || LEXER_CURRENT_PREV == '_') {
+					lexer_lex_identifier(lexer);
+				} else {
+					token_t* token = token_create(TOKEN_ERROR, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+					LEXER_PUSH_TOKEN(token);
+				}
+				continue;
+		}
+	}
+	
+	gotoend:
+	token_t* token = token_create(TOKEN_EOF, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+	LEXER_PUSH_TOKEN(token);
 }

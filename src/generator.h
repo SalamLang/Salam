@@ -10,12 +10,21 @@
 #include "ast.h"
 #include "validator.h"
 
-typedef struct {
+typedef struct generator_identifier_t {
+	char *current;
+} generator_identifier_t;
+
+typedef struct generator_t {
 	ast_t* ast;
 
 	string_t* html;
 	string_t* css;
 	string_t* js;
+
+	bool inlineCSS;
+	bool inlineJS;
+
+	generator_identifier_t* identifier;
 } generator_t;
 
 /**
@@ -82,11 +91,12 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
  *
  * @function generator_code_layout_attributes
  * @brief Generate the HTML code for the layout block attributes
+ * @params {generator_t} generator - Generator
  * @params {ast_layout_block_t*} block - Layout block
  * @returns {string_t*}
  *
  */
-string_t* generator_code_layout_attributes(ast_layout_block_t* block);
+string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_block_t* block);
 
 /**
  *
@@ -130,5 +140,53 @@ char* generator_code_layout_style_name(ast_layout_attribute_type_t type);
  * 
  */
 char* generator_code_layout_style_value(ast_layout_attribute_t* attribute, ast_layout_node_type_t parent_node_type);
+
+/**
+ * 
+ * @function generator_code_head
+ * @params {ast_layout_block_t*} layout_block - Layout block
+ * @params {string_t*} head - Head
+ * @returns {void}
+ * 
+ */
+void generator_code_head(ast_layout_block_t* layout_block, string_t* head);
+
+/**
+ * 
+ * @function generator_code_head_item
+ * @params {ast_layout_attribute_t*} attribute - Attribute
+ * @params {string_t*} head - Head
+ * @returns {void}
+ * 
+ */
+void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head);
+
+/**
+ * 
+ * @function generator_identifier_init
+ * @params {generator_identifier_t*} gen - Generator Identifier
+ * @returns {void}
+ * 
+ */
+void generator_identifier_init(generator_identifier_t* gen);
+
+/**
+ * 
+ * @function generator_identifier_get
+ * @params {generator_identifier_t*} gen - Generator Identifier
+ * @returns {char*} identifier - Identifier
+ * 
+ */
+char* generator_identifier_get(generator_identifier_t* gen);
+
+
+/**
+ * 
+ * @function generator_identifier_destroy
+ * @params {generator_identifier_t*} gen - Generator Identifier
+ * @returns {void}
+ * 
+ */
+void generator_identifier_destroy(generator_identifier_t* gen);
 
 #endif

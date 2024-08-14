@@ -76,12 +76,11 @@ void unknown_scope(lexer_t* lexer, char* scope);
  * @function parser_parse_block
  * @brief Parse the block
  * @params {lexer_t*} lexer - Lexer
- * @params {ast_block_type_t} type - Block type
- * @params {ast_type_t} block_parent_type - Block parent type
+ * @params {ast_block_t*} block - AST Block
  * @returns {ast_block_t*} - AST block node
  * 
  */
-ast_block_t* parser_parse_block(lexer_t* lexer, ast_block_type_t type, ast_type_t block_parent_type);
+void parser_parse_block(lexer_t* lexer, ast_block_t* block);
 
 /**
  * 

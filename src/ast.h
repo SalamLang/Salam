@@ -766,10 +766,11 @@ void ast_if_print(ast_if_t* node);
  * 
  * @function ast_elseif_create
  * @brief Create a new AST node else if
+ * @params {ast_value_t*} condition - Condition of the else if
  * @returns {ast_if_t*} - Pointer to the created AST node else if
  * 
  */
-ast_if_t* ast_elseif_create();
+ast_if_t* ast_elseif_create(ast_value_t* condition);
 
 /**
  * 
@@ -829,5 +830,14 @@ void ast_value_destroy(ast_value_t* value);
  * @returns {char*} - Name of the AST block type
  */
 char* ast_block_type_name(ast_block_type_t type);
+
+/**
+ * 
+ * @function ast_else_create
+ * @brief Create a new AST node else
+ * @returns {ast_if_t*} - Pointer to the created AST node else
+ * 
+ */
+ast_if_t* ast_else_create();
 
 #endif

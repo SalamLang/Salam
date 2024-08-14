@@ -23,6 +23,22 @@ ast_node_t* ast_node_create(ast_type_t type, location_t location)
 
 /**
  * 
+ * @function ast_node_destroy_notall
+ * @brief Free the AST node (not all)
+ * @params {ast_node_t*} value - AST node
+ * @returns {void}
+ * 
+ */
+void ast_node_destroy_notall(ast_node_t* value)
+{
+	DEBUG_ME;
+	if (value != NULL) {
+		memory_destroy(value);
+	}
+}
+
+/**
+ * 
  * @function ast_node_destroy
  * @brief Free the AST node
  * @params {ast_node_t*} value - AST node
@@ -33,6 +49,27 @@ void ast_node_destroy(ast_node_t* value)
 {
     DEBUG_ME;
 	if (value != NULL) {
+		switch (value->type) {
+			case AST_NODE_TYPE_IMPORT:
+				value->data.import->destroy(value->data.import);
+				break;
+			
+			case AST_NODE_TYPE_FUNCTION:
+				value->data.function->destroy(value->data.function);
+				break;
+			
+			case AST_NODE_TYPE_BLOCK:
+				value->data.block->destroy(value->data.block);
+				break;
+			
+			case AST_NODE_TYPE_LAYOUT:
+				value->data.layout->destroy(value->data.layout);
+				break;
+			
+			case AST_NODE_TYPE_ERROR:
+				break;
+		}
+
 		memory_destroy(value);
 	}
 }
@@ -300,7 +337,7 @@ ast_function_t* ast_function_create(char* name)
 {
     DEBUG_ME;
 	ast_function_t* node = memory_allocate(sizeof(ast_function_t));
-	node->name = name;
+	node->name = strdup(name);
 
 	node->return_type = ast_type_create(AST_TYPE_KIND_VOID);
 
@@ -309,12 +346,56 @@ ast_function_t* ast_function_create(char* name)
 	node->parameters->print = cast(void (*)(void*), array_function_parameter_print);
 
 	node->block = ast_block_create(AST_NODE_BLOCK_TYPE_FUNCTION, AST_NODE_TYPE_FUNCTION);
+	node->block->destroy = cast(void (*)(void*), ast_block_destroy);
+	node->block->print = cast(void (*)(void*), ast_block_print);
 
 	node->print = cast(void (*)(void*), ast_function_print);
 	node->destroy = cast(void (*)(void*), ast_function_destroy);
 
 	return node;
 }
+
+/**
+ * 
+ * @function ast_block_print
+ * @brief Print the AST block node
+ * @params {ast_block_t*} block - AST block node
+ * @returns {void}
+ * 
+ */
+void ast_block_print(ast_block_t* block)
+{
+	DEBUG_ME;
+	size_t children_capacity = array_length(block->children);
+
+	printf("Block: %zu\n", children_capacity);
+	for (size_t i = 0; i < children_capacity; i++) {
+		ast_node_t* node = cast(ast_node_t*, array_get(block->children, i));
+
+		node->print(node);
+	}
+}
+
+/**
+ * 
+ * @function ast_block_destroy
+ * @brief Free the AST block node
+ * @params {ast_block_t*} block - AST block node
+ * @returns {void}
+ * 
+ */
+void ast_block_destroy(ast_block_t* block)
+{
+	DEBUG_ME;
+	if (block != NULL) {
+		if (block->children != NULL) {
+			block->children->destroy(block->children);
+		}
+
+		memory_destroy(block);
+	}
+}
+
 
 /**
  * 
@@ -558,22 +639,27 @@ void ast_function_destroy(ast_function_t* value)
 {
     DEBUG_ME;
 	if (value != NULL) {
+	    DEBUG_ME;
 		if (value->name != NULL) {
 			memory_destroy(value->name);
 		}
 
+	    DEBUG_ME;
 		if (value->parameters != NULL) {
 			value->parameters->destroy(value->parameters);
 		}
 
+	    DEBUG_ME;
 		if (value->return_type != NULL) {
 			value->return_type->destroy(value->return_type);
 		}
 
+	    DEBUG_ME;
 		if (value->block != NULL) {
 			value->block->destroy(value->block);
 		}
 
+	    DEBUG_ME;
 		memory_destroy(value);
 	}
 }

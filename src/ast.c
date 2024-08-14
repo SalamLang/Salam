@@ -320,22 +320,36 @@ char* ast_type_name(ast_value_type_t* type)
 	switch (type->kind) {
 		case AST_TYPE_KIND_VOID:
 			return "void";
-			break;
+
 		case AST_TYPE_KIND_INT:
 			return "int";
-			break;
+
 		case AST_TYPE_KIND_FLOAT:
 			return "float";
-			break;
+
 		case AST_TYPE_KIND_CHAR:
 			return "char";
-			break;
+
 		case AST_TYPE_KIND_STRING:
 			return "string";
-			break;
+
 		case AST_TYPE_KIND_BOOL:
 			return "bool";
-			break;
+
+		case AST_TYPE_KIND_STRUCT:
+			return "struct";
+		
+		case AST_TYPE_KIND_ENUM:
+			return "enum";
+		
+		case AST_TYPE_KIND_ARRAY:
+			return "array";
+		
+		case AST_TYPE_KIND_POINTER:
+			return "pointer";
+		
+		case AST_TYPE_KIND_FUNCTION:
+			return "function";
 	}
 
 	return "unknown";
@@ -383,6 +397,31 @@ void ast_type_print(ast_value_type_t* type)
 			printf("bool");
 			printf("\n");
 			return;
+		
+		case AST_TYPE_KIND_STRUCT:
+			printf("struct");
+			printf("\n");
+			return;
+		
+		case AST_TYPE_KIND_ENUM:
+			printf("enum");
+			printf("\n");
+			return;
+		
+		case AST_TYPE_KIND_ARRAY:
+			printf("array");
+			printf("\n");
+			return;
+		
+		case AST_TYPE_KIND_POINTER:
+			printf("pointer");
+			printf("\n");
+			return;
+		
+		case AST_TYPE_KIND_FUNCTION:
+			printf("function");
+			printf("\n");
+			return;
 	}
 	
 	printf("unknown type");
@@ -393,11 +432,11 @@ void ast_type_print(ast_value_type_t* type)
  * 
  * @function ast_type_create
  * @brief Create a new AST value type
- * @params {ast_value_type_kind_t} kind - Kind of the value type
+ * @params {ast_value_kind_t} kind - Kind of the value type
  * @returns {ast_value_type_t*} - Pointer to the created AST value type
  * 
  */
-ast_value_type_t* ast_type_create(ast_value_type_kind_t kind)
+ast_value_type_t* ast_type_create(ast_value_kind_t kind)
 {
 	ast_value_type_t* type = memory_allocate(sizeof(ast_value_type_t));
 	type->kind = kind;

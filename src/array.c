@@ -423,3 +423,54 @@ void array_layout_node_print(array_node_layout_t* array)
         }
     }
 }
+
+/**
+ * 
+ * @function array_function_parameter_print
+ * @brief Print the function parameter array
+ * @params {array_function_parameter_t*} array - Function parameter array
+ * @returns {void}
+ * 
+ */
+void array_function_parameter_print(array_function_parameter_t* array)
+{
+    printf("Function parameter array: %zu\n", array->length);
+
+    for (size_t i = 0; i < array->length; i++) {
+        printf("\t");
+        ast_function_parameter_t* parameter = array_get(array, i);
+
+        parameter->print(parameter);
+    }
+}
+
+/**
+ * 
+ * @function array_function_parameter_destroy
+ * @brief Free the function parameter array memory
+ * @params {array_function_parameter_t*} array - Function parameter array
+ * @returns {void}
+ * 
+ */
+void array_function_parameter_destroy(array_function_parameter_t* array)
+{
+    if (array != NULL) {
+        if (array->data != NULL) {
+            for (size_t i = 0; i < array->length; i++) {
+                ast_function_parameter_t* parameter = array_get(array, i);
+                
+                if (parameter != NULL) {
+                    parameter->destroy(parameter);
+                }
+            }
+
+            memory_destroy(array->data);
+        }
+
+        array->capacity = 0;
+        array->length = 0;
+        array->element_capacity = 0;
+
+        memory_destroy(array);
+    }
+}

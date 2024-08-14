@@ -166,4 +166,14 @@ ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer);
  */
 ast_node_t* parser_parse_function(lexer_t* lexer);
 
+/**
+ * 
+ * @function parser_parse_value
+ * @brief Parse the value
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {token_t*} - Token
+ * 
+ */
+token_t* parser_parse_value(lexer_t* lexer);
+
 #endif

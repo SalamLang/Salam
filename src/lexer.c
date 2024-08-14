@@ -20,6 +20,7 @@
  */
 bool is_char_digit(char c)
 {
+    DEBUG_ME;
 	return c >= '0' && c <= '9';
 }
 
@@ -33,6 +34,7 @@ bool is_char_digit(char c)
  */
 bool is_char_alpha(char c)
 {
+    DEBUG_ME;
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 }
 
@@ -46,6 +48,7 @@ bool is_char_alpha(char c)
  */
 bool is_char_alnum(char c)
 {
+    DEBUG_ME;
 	return is_char_alpha(c) || is_char_digit(c);
 }
 
@@ -59,6 +62,7 @@ bool is_char_alnum(char c)
  */
 bool is_char_whitespace(char c)
 {
+    DEBUG_ME;
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
@@ -72,6 +76,7 @@ bool is_char_whitespace(char c)
  */
 void location_print(location_t location)
 {
+    DEBUG_ME;
 	printf("Location: %zu:%zu - %zu:%zu\n", location.start_line, location.start_column, location.end_line, location.end_column);
 }
 /**
@@ -85,6 +90,7 @@ void location_print(location_t location)
  */
 token_t* token_create(token_type_t type, location_t location)
 {
+    DEBUG_ME;
 	token_t* token = memory_allocate(sizeof(token_t));
 	token->type = type;
 	token->location = location;
@@ -106,6 +112,7 @@ token_t* token_create(token_type_t type, location_t location)
  */
 token_t* token_copy(token_t* token)
 {
+    DEBUG_ME;
 	token_t* copy = token_create(token->type, token->location);
 	copy->data_type = token->data_type;
 
@@ -146,6 +153,7 @@ token_t* token_copy(token_t* token)
  */
 void token_destroy(token_t* token)
 {
+    DEBUG_ME;
 	if (token != NULL) {
 		if (token->data_type == TOKEN_STRING || token->data_type == TOKEN_IDENTIFIER) {
 			if (token->data.string != NULL) {
@@ -167,6 +175,7 @@ void token_destroy(token_t* token)
  */
 void token_print(token_t* token)
 {
+    DEBUG_ME;
 	printf("Token ");
 	switch (token->type) {
 		case TOKEN_EOF:
@@ -276,6 +285,7 @@ void token_print(token_t* token)
  */
 char* token_name(token_type_t type)
 {
+    DEBUG_ME;
 	switch (type) {
 		case TOKEN_EOF:
 			return "EOF";
@@ -380,6 +390,7 @@ char* token_name(token_type_t type)
 		case TOKEN_ERROR:
 			return "ERROR";
 	}
+
 	return "UNKNOWN";
 }
 
@@ -393,6 +404,7 @@ char* token_name(token_type_t type)
  */
 char* token_value(token_t* token)
 {
+    DEBUG_ME;
 	static char buffer[256];
 
 	switch (token->data_type) {
@@ -427,6 +439,7 @@ char* token_value(token_t* token)
  */
 lexer_t* lexer_create(const char* file_path, char* source)
 {
+    DEBUG_ME;
 	lexer_t* lexer = memory_allocate(sizeof(lexer_t));
 	lexer->file_path = file_path;
 	lexer->source = source;
@@ -448,6 +461,7 @@ lexer_t* lexer_create(const char* file_path, char* source)
  */
 void lexer_destroy(lexer_t* lexer)
 {
+    DEBUG_ME;
 	if (lexer != NULL) {
 		array_destroy_custom(lexer->tokens, cast(void (*)(void*), token_destroy));
 		
@@ -465,6 +479,7 @@ void lexer_destroy(lexer_t* lexer)
  */
 void lexer_debug(lexer_t* lexer)
 {
+    DEBUG_ME;
 	printf("============= START LEXER DEBUG =============\n");
 
 	printf("Lexer source: %s\n", lexer->source == NULL ? "REPL" : lexer->source);
@@ -487,6 +502,7 @@ void lexer_debug(lexer_t* lexer)
  */
 void lexer_lex_number(lexer_t* lexer)
 {
+    DEBUG_ME;
 	char* buffer = memory_allocate(256);
 	size_t index = 0;
 	buffer[index++] = LEXER_CURRENT_PREV;
@@ -542,6 +558,7 @@ void lexer_lex_number(lexer_t* lexer)
  */
 bool is_keyword(const char* string)
 {
+    DEBUG_ME;
 	for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
 		if (strcmp(string, keywords[i].name) == 0) {
 			return true;
@@ -561,6 +578,7 @@ bool is_keyword(const char* string)
  */
 token_type_t type_keyword(const char* string)
 {
+    DEBUG_ME;
 	for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
 		if (strcmp(string, keywords[i].name) == 0) {
 			return keywords[i].type;
@@ -580,6 +598,7 @@ token_type_t type_keyword(const char* string)
  */
 void lexer_lex_identifier(lexer_t* lexer)
 {
+    DEBUG_ME;
 	char* buffer = memory_allocate(256);
 	size_t index = 0;
 	buffer[index++] = LEXER_CURRENT_PREV;
@@ -610,6 +629,7 @@ void lexer_lex_identifier(lexer_t* lexer)
  */
 void lexer_lex_string(lexer_t* lexer)
 {
+    DEBUG_ME;
 	// Opening quote is already consumed
 	char* buffer = memory_allocate(256);
 	size_t index = 0;
@@ -640,6 +660,7 @@ void lexer_lex_string(lexer_t* lexer)
  */
 void lexer_lex(lexer_t* lexer)
 {
+    DEBUG_ME;
 	while (LEXER_CURRENT != '\0') {
 		LEXER_NEXT;
 		LEXER_NEXT_COLUMN;

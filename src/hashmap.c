@@ -157,6 +157,31 @@ void* hashmap_get(hashmap_t *map, const char *key)
 
 /**
  * 
+ * @function hashmap_has
+ * @brief Check if the hashmap has a key
+ * @params {hashmap_t*} map
+ * @params {const char*} key
+ * @returns {bool}
+ * 
+ */
+bool hashmap_has(hashmap_t *map, const char *key)
+{
+	DEBUG_ME;
+	unsigned long hash = hash_function(key);
+	size_t index = hash % map->capacity;
+	hashmap_entry_t *entry = map->data[index];
+	
+	while (entry != NULL) {
+		if (strcmp(entry->key, key) == 0) return true;
+
+		entry = entry->next;
+	}
+
+	return false;
+}
+
+/**
+ * 
  * @function hashmap_remove
  * @brief Remove a key-value pair from the hashmap
  * @params {hashmap_t*} map

@@ -27,10 +27,6 @@ void validate_layout_block(ast_layout_block_t* block)
         else {
             if (content != NULL) memory_destroy(content);
         }
-
-        // ast_layout_node_t* text = ast_layout_node_create(AST_LAYOUT_NODE_TYPE_PARAGRAPH_RAW);
-        // hashmap_put(cast(hashmap_t*, text->block->attributes), "content", values);
-        // array_push(block->children, text);
     }
 }
 

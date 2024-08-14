@@ -396,6 +396,54 @@ char* token_name(token_type_t type)
 
 /**
  * 
+ * @function int2string
+ * @brief Convert an integer to a string
+ * @params {int} value - Integer value
+ * @returns {char*}
+ * 
+ */
+char* int2string(int value)
+{
+	DEBUG_ME;
+	static char buffer[256];
+	snprintf(buffer, sizeof(buffer), "%d", value);
+	return buffer;
+}
+
+/**
+ * 
+ * @function float2string
+ * @brief Convert a float to a string
+ * @params {float} value - Float value
+ * @returns {char*}
+ * 
+ */
+char* float2string(float value)
+{
+	DEBUG_ME;
+	static char buffer[256];
+	snprintf(buffer, sizeof(buffer), "%f", value);
+	return buffer;
+}
+
+/**
+ * 
+ * @function double2string
+ * @brief Convert a double to a string
+ * @params {double} value - Double value
+ * @returns {char*}
+ * 
+ */
+char* double2string(double value)
+{
+	DEBUG_ME;
+	static char buffer[256];
+	snprintf(buffer, sizeof(buffer), "%f", value);
+	return buffer;
+}
+
+/**
+ * 
  * @function token_value
  * @brief Get the value of a token 
  * @params {token_t*} Token

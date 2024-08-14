@@ -285,6 +285,38 @@ void array_token_print(array_token_t* array)
 
 /**
  * 
+ * @function array_node_destroy
+ * @brief Free the node array memory
+ * @params {array_node_t*} array - Node array
+ * @returns {void}
+ * 
+ */
+void array_node_destroy(array_node_t* array)
+{
+    DEBUG_ME;
+    if (array != NULL) {
+        if (array->data != NULL) {
+            for (size_t i = 0; i < array->length; i++) {
+                ast_node_t* node = array_get(array, i);
+                
+                if (node != NULL) {
+                    node->destroy(node);
+                }
+            }
+
+            memory_destroy(array->data);
+        }
+
+        array->capacity = 0;
+        array->length = 0;
+        array->element_capacity = 0;
+
+        memory_destroy(array);
+    }
+}
+
+/**
+ * 
  * @function array_node_print
  * @brief Print the node array
  * @params {array_node_t*} array - Node array
@@ -383,7 +415,7 @@ void array_token_destroy(array_token_t* array)
 
 /**
  * 
- * @function array_node_destroy
+ * @function array_layout_node_destroy
  * @brief Free the node array memory
  * @params {array_node_t*} array - Node array
  * @returns {void}
@@ -540,5 +572,58 @@ void array_function_print(array_function_t* array)
         ast_function_t* function = array_get(array, i);
 
         function->print(function);
+    }
+}
+
+/**
+ * 
+ * @function array_if_destroy
+ * @brief Free the if array memory
+ * @params {array_if_t*} array - If array
+ * @returns {void}
+ * 
+ */
+void array_if_destroy(array_if_t* array)
+{
+    DEBUG_ME;
+    if (array != NULL) {
+        if (array->data != NULL) {
+            for (size_t i = 0; i < array->length; i++) {
+                ast_if_t* if_statement = array_get(array, i);
+                
+                if (if_statement != NULL) {
+                    if_statement->destroy(if_statement);
+                }
+            }
+
+            memory_destroy(array->data);
+        }
+
+        array->capacity = 0;
+        array->length = 0;
+        array->element_capacity = 0;
+
+        memory_destroy(array);
+    }
+}
+
+/**
+ * 
+ * @function array_if_print
+ * @brief Print the if array
+ * @params {array_if_t*} array - If array
+ * @returns {void}
+ * 
+ */
+void array_if_print(array_if_t* array)
+{
+    DEBUG_ME;
+    printf("If array: %zu\n", array->length);
+
+    for (size_t i = 0; i < array->length; i++) {
+        printf("\t");
+        ast_if_t* if_statement = array_get(array, i);
+
+        if_statement->print(if_statement);
     }
 }

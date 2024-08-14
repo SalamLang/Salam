@@ -639,27 +639,22 @@ void ast_function_destroy(ast_function_t* value)
 {
     DEBUG_ME;
 	if (value != NULL) {
-	    DEBUG_ME;
 		if (value->name != NULL) {
 			memory_destroy(value->name);
 		}
 
-	    DEBUG_ME;
 		if (value->parameters != NULL) {
 			value->parameters->destroy(value->parameters);
 		}
 
-	    DEBUG_ME;
 		if (value->return_type != NULL) {
 			value->return_type->destroy(value->return_type);
 		}
 
-	    DEBUG_ME;
 		if (value->block != NULL) {
 			value->block->destroy(value->block);
 		}
 
-	    DEBUG_ME;
 		memory_destroy(value);
 	}
 }

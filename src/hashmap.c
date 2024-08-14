@@ -12,6 +12,7 @@
  */
 unsigned long hash_function(const char* str)
 {
+    DEBUG_ME;
 	unsigned long hash = 5381;
 	int c;
 
@@ -32,6 +33,7 @@ unsigned long hash_function(const char* str)
  */
 hashmap_t* hashmap_create(size_t capacity)
 {
+    DEBUG_ME;
 	hashmap_t *map = memory_allocate(sizeof(hashmap_t));
 
 	map->capacity = capacity;
@@ -56,6 +58,7 @@ hashmap_t* hashmap_create(size_t capacity)
  */
 void hashmap_put(hashmap_t *map, const char *key, void *value)
 {
+    DEBUG_ME;
 	hashmap_put_custom(map, key, value, free);
 }
 
@@ -72,6 +75,7 @@ void hashmap_put(hashmap_t *map, const char *key, void *value)
  */
 void hashmap_put_custom(hashmap_t *map, const char *key, void *value, void (*free_fn)(void*))
 {
+    DEBUG_ME;
 	unsigned long hash = hash_function(key);
 
 	size_t index = hash % map->capacity;
@@ -137,6 +141,7 @@ void hashmap_put_custom(hashmap_t *map, const char *key, void *value, void (*fre
  */
 void* hashmap_get(hashmap_t *map, const char *key)
 {
+    DEBUG_ME;
 	unsigned long hash = hash_function(key);
 	size_t index = hash % map->capacity;
 	hashmap_entry_t *entry = map->data[index];
@@ -160,6 +165,7 @@ void* hashmap_get(hashmap_t *map, const char *key)
  */
 void* hashmap_remove(hashmap_t *map, const char *key)
 {
+    DEBUG_ME;
 	unsigned long hash = hash_function(key);
 
 	size_t index = hash % map->capacity;
@@ -205,6 +211,7 @@ void* hashmap_remove(hashmap_t *map, const char *key)
  */
 void hashmap_destroy(hashmap_t *map)
 {
+    DEBUG_ME;
 	return hashmap_destroy_custom(map, free);
 }
 
@@ -219,6 +226,7 @@ void hashmap_destroy(hashmap_t *map)
  */
 void hashmap_destroy_custom(hashmap_t *map, void (*free_fn)(void*))
 {
+    DEBUG_ME;
 	printf("hashmap_destroy_custom...\n");
 	if (map != NULL) {
 		if (map->data != NULL) {
@@ -257,6 +265,7 @@ void hashmap_destroy_custom(hashmap_t *map, void (*free_fn)(void*))
  */
 void hashmap_print(hashmap_t *map)
 {
+    DEBUG_ME;
 	printf("Hashmap Size: %zu\n", map->length);
 	// printf("Hashmap Capacity: %zu\n", map->capacity);
 	printf("Hashmap Contents:\n");
@@ -282,6 +291,7 @@ void hashmap_print(hashmap_t *map)
  */
 void hashmap_print_custom(hashmap_t* map, void (*print_fn)(void*))
 {
+    DEBUG_ME;
 	printf("Hashmap array: %zu\n", map->length);
 	if (map->length == 0) {
 		printf("Hashmap is empty\n");
@@ -311,6 +321,7 @@ void hashmap_print_custom(hashmap_t* map, void (*print_fn)(void*))
  */
 void hashmap_print_layout_attribute(hashmap_attribute_t* map)
 {
+    DEBUG_ME;
 	printf("Hashmap length: %zu\n", map->length);
 	if (map->length == 0) {
 		printf("Hashmap is empty\n");
@@ -340,6 +351,7 @@ void hashmap_print_layout_attribute(hashmap_attribute_t* map)
  */
 void hashmap_destroy_layout_attribute(hashmap_attribute_t *map)
 {
+    DEBUG_ME;
 	if (map != NULL) {
 		if (map->data != NULL) {
 			for (size_t i = 0; i < map->capacity; i++) {

@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <stdarg.h>
 
+#include "base.h"
+
 /**
  * @function panic
  * @brief Print a panic error message and exit the program

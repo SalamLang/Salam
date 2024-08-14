@@ -11,6 +11,7 @@
  */
 char* file_reads(const char* path, size_t* size)
 {
+    DEBUG_ME;
     FILE* file = fopen(path, "r");
     if (file == NULL) {
         panic("Failed to open file");
@@ -43,6 +44,7 @@ char* file_reads(const char* path, size_t* size)
  */
 bool file_writes(const char* path, const char* content)
 {
+    DEBUG_ME;
     FILE* file = fopen(path, "w");
     if (file == NULL) {
         panic("Failed to open file");
@@ -67,6 +69,7 @@ bool file_writes(const char* path, const char* content)
  */
 bool file_exists(const char* path)
 {
+    DEBUG_ME;
     FILE* file = fopen(path, "r");
     if (file == NULL) {
         return false;
@@ -87,6 +90,7 @@ bool file_exists(const char* path)
  */
 bool file_remove(const char* path)
 {
+    DEBUG_ME;
     if (remove(path) != 0) {
         return false;
     }
@@ -105,6 +109,7 @@ bool file_remove(const char* path)
  */
 bool file_copy(const char* source, const char* destination)
 {
+    DEBUG_ME;
     char* content;
     size_t size;
 
@@ -129,6 +134,7 @@ bool file_copy(const char* source, const char* destination)
  */
 bool file_move(const char* source, const char* destination)
 {
+    DEBUG_ME;
     if (rename(source, destination) != 0) {
         return false;
     }
@@ -146,6 +152,7 @@ bool file_move(const char* source, const char* destination)
  */
 char* file_get_name(const char* path)
 {
+    DEBUG_ME;
     const char* last_slash = strrchr(path, '/');
     const char* last_backslash = strrchr(path, '\\');
     const char* last = last_slash > last_backslash ? last_slash : last_backslash;
@@ -167,6 +174,7 @@ char* file_get_name(const char* path)
  */
 char* file_get_extension(const char* path)
 {
+    DEBUG_ME;
     const char* last_dot = strrchr(path, '.');
 
     if (last_dot == NULL) {
@@ -186,6 +194,7 @@ char* file_get_extension(const char* path)
  */
 char* file_get_directory(const char* path)
 {
+    DEBUG_ME;
     const char* last_slash = strrchr(path, '/');
     const char* last_backslash = strrchr(path, '\\');
     const char* last = last_slash > last_backslash ? last_slash : last_backslash;
@@ -212,6 +221,7 @@ char* file_get_directory(const char* path)
  */
 char* file_get_absolute(const char* path)
 {
+    DEBUG_ME;
     if (!path) {
         return NULL;
     }
@@ -283,6 +293,7 @@ char* file_get_absolute(const char* path)
  */
 long file_get_capacity(const char* path)
 {
+    DEBUG_ME;
     struct stat st;
     stat(path, &st);
 
@@ -299,6 +310,7 @@ long file_get_capacity(const char* path)
  */
 time_t file_get_modified(const char* path)
 {
+    DEBUG_ME;
     struct stat st;
     stat(path, &st);
 

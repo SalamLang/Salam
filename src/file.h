@@ -8,6 +8,7 @@
 #include <time.h>
 #include <stdlib.h>
 
+#include "base.h"
 #include "memory.h"
 #include "log.h"
 

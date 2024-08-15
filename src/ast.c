@@ -143,6 +143,55 @@ ast_layout_block_t* ast_layout_block_create(ast_type_t node_type, ast_layout_nod
 
 /**
  * 
+ * @function ast_layout_attribute_value_create
+ * @brief Create a new AST node layout attribute value
+ * @params {char*} value - Value of the attribute
+ * @returns {ast_layout_attribute_value_t*} - Pointer to the created AST node layout attribute value
+ * 
+ */
+ast_layout_attribute_value_t* ast_layout_attribute_value_create(char* value)
+{
+	DEBUG_ME;
+	size_t value_length = strlen(value);
+	ast_layout_attribute_value_t* res = memory_allocate(value_length * sizeof(ast_layout_attribute_value_t));
+	
+	strdup(res, value);
+
+	return res;
+}
+
+/**
+ * 
+ * @function ast_layout_attribute_value_destroy
+ * @brief Free the AST layout attribute value
+ * @params {ast_layout_attribute_value_t*} value - AST layout attribute value
+ * @returns {void}
+ * 
+ */
+void ast_layout_attribute_value_destroy(ast_layout_attribute_value_t* value)
+{
+	DEBUG_ME;
+	if (value != NULL) {
+		memory_destroy(value);
+	}
+}
+
+/**
+ * 
+ * @function ast_layout_attribute_value_print
+ * @brief Print the AST layout attribute value
+ * @params {ast_layout_attribute_value_t*} value - AST layout attribute value
+ * @returns {void}
+ * 
+ */
+void ast_layout_attribute_value_print(ast_layout_attribute_value_t* value)
+{
+	DEBUG_ME;
+	printf("Value: %s\n", value);
+}
+
+/**
+ * 
  * @function ast_layout_attribute_create
  * @brief Create a new AST node layout attribute
  * @params {ast_layout_attribute_type_t} type - Type of the layout attribute

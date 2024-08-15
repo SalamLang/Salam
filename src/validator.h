@@ -9,6 +9,7 @@
 #include "ast.h"
 #include "hashmap.h"
 #include "parser.h"
+#include "generator.h"
 
 /**
  * 
@@ -106,10 +107,11 @@ bool is_style_attribute(ast_layout_attribute_type_t type);
  * @brief Validate the style value
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
  * @params {char*} values_str - Values string
+ * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @returns {bool} - True if the style value is valid, false otherwise
  * 
  */
-bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str);
+bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type);
 
 /**
  * 
@@ -117,10 +119,11 @@ bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str);
  * @brief Validate the style value size
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
  * @params {char*} values_str - Values string
+ * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @returns {bool} - True if the style value is valid, false otherwise
  * 
  */
-bool validate_style_value_size(ast_layout_attribute_t* attribute, char* values_str);
+bool validate_style_value_size(ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type);
 
 /**
  * 
@@ -202,5 +205,29 @@ bool has_css_size_prefix(char* css_value, char** css_output_value);
  * 
  */
 char* attribute_css_size_value(char* attribute_value);
+
+/**
+ * 
+ * @function validate_style_value_sizes
+ * @brief Validate the style value sizes
+ * @params {ast_layout_attribute_t*} attribute - Layout attribute
+ * @params {char*} values_str - Values string
+ * @params {ast_layout_node_type_t} parent_node_type - Parent node type
+ * @returns {bool} - True if the style value is valid, false otherwise
+ * 
+ */
+bool validate_style_value_sizes(ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type);
+
+/**
+ * 
+ * @function validate_style_value_color
+ * @brief Validate the style value color
+ * @params {ast_layout_attribute_t*} attribute - Layout attribute
+ * @params {char*} values_str - Values string
+ * @params {ast_layout_node_type_t} parent_node_type - Parent node type
+ * @returns {bool} - True if the style value is valid, false otherwise
+ * 
+ */
+bool validate_style_value_color(ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type);
 
 #endif

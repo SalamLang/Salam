@@ -153,9 +153,13 @@ ast_layout_attribute_value_t* ast_layout_attribute_value_create(char* value)
 {
 	DEBUG_ME;
 	size_t value_length = strlen(value);
-	ast_layout_attribute_value_t* res = memory_allocate(value_length * sizeof(ast_layout_attribute_value_t));
-	
-	strdup(res, value);
+	ast_layout_attribute_value_t* res = memory_allocate(sizeof(ast_layout_attribute_value_t));
+
+	res->data = memory_allocate(value_length + 1);
+	strcpy(res->data, value);
+
+	res->print = cast(void (*)(void*), ast_layout_attribute_value_print);
+	res->destroy = cast(void (*)(void*), ast_layout_attribute_value_destroy);
 
 	return res;
 }
@@ -172,6 +176,10 @@ void ast_layout_attribute_value_destroy(ast_layout_attribute_value_t* value)
 {
 	DEBUG_ME;
 	if (value != NULL) {
+		if (value->data != NULL) {
+			memory_destroy(value->data);
+		}
+		
 		memory_destroy(value);
 	}
 }
@@ -187,7 +195,7 @@ void ast_layout_attribute_value_destroy(ast_layout_attribute_value_t* value)
 void ast_layout_attribute_value_print(ast_layout_attribute_value_t* value)
 {
 	DEBUG_ME;
-	printf("Value: %s\n", value);
+	printf("Value: %s\n", value->data);
 }
 
 /**
@@ -1867,6 +1875,12 @@ char* ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type)
 			return  "text-align";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION:
 			return  "text-decoration";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE:
+			return  "text-decoration-line";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE:
+			return  "text-decoration-style";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR:
+			return  "text-decoration-color";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_TRANSFORM:
 			return  "text-transform";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VERTICAL_ALIGN:
@@ -2115,3 +2129,59 @@ void ast_value_print(ast_value_t* value)
 		printf("NULL\n");
 	}
 }
+
+/**
+ * 
+ * @function ast_layout_value_create
+ * @brief Create a new AST layout value
+ * @params {char*} value - Value
+ * @returns {ast_layout_value_t*} - Pointer to the created AST layout value
+ * 
+ */
+ast_layout_value_t* ast_layout_value_create(char* data)
+{
+	DEBUG_ME;
+	ast_layout_value_t* value = memory_allocate(sizeof(ast_layout_value_t));
+	value->data = data;
+	
+	value->destroy = cast(void (*)(void*), ast_layout_value_destroy);
+	value->print = cast(void (*)(void*), ast_layout_value_print);
+
+	return value;
+}
+
+/**
+ * 
+ * @function ast_layout_value_print
+ * @brief Print the AST layout value
+ * @params {ast_layout_value_t*} value - AST Layout Value
+ * @returns {void}
+ * 
+ */
+void ast_layout_value_print(ast_layout_value_t* value)
+{
+	DEBUG_ME;
+	printf("Value\n");
+	printf("Value Type: %s\n", value->data);
+}
+
+/**
+ * 
+ * @function ast_layout_value_destroy
+ * @brief Free the AST layout value
+ * @params {ast_layout_value_t*} value - AST Layout Value
+ * @returns {void}
+ * 
+ */
+void ast_layout_value_destroy(ast_layout_value_t* value)
+{
+	DEBUG_ME;
+	if (value != NULL) {
+		if (value->data != NULL) {
+			memory_destroy(value->data);
+		}
+
+		memory_destroy(value);
+	}
+}
+

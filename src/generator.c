@@ -20,8 +20,8 @@ generator_t* generator_create(ast_t* ast)
 	generator->html = string_create(4096);
 	generator->css = string_create(4096);
 	generator->js = string_create(4096);
-	generator->inlineCSS = true;
-	generator->inlineJS = true;
+	generator->inlineCSS = false;
+	generator->inlineJS = false;
 
 	generator->identifier = malloc(sizeof(generator_identifier_t));
 
@@ -137,7 +137,7 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 	char* html_lang_value = NULL;
 	string_append_str(html, " lang=\"");
 	if (html_lang != NULL) {
-		char* values = array_string_token(html_lang->values, 0);
+		char* values = array_layout_attribute_value_string(html_lang->values, ", ");
 		html_lang_value = string_lower_str(values);
 		
 		if (values != NULL) memory_destroy(values);
@@ -163,7 +163,7 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 	char* html_dir_value = NULL;
 	string_append_str(html, " dir=\"");
 	if (html_dir != NULL) {
-		char* values = array_string_token(html_dir->values, 0);
+		char* values = array_layout_attribute_value_string(html_dir->values, 0);
 		html_dir_value = string_lower_str(values);
 
 		if (values != NULL) memory_destroy(values);
@@ -224,7 +224,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 					if (attribute->ignoreMe == true || attribute->isContent == true || attribute->isStyle == true) {}
 					else {
 						array_t* attribute_values = cast(array_t*, attribute->values);
-						char* attribute_values_str = array_string_token(attribute_values, ", ");
+						char* attribute_values_str = array_layout_attribute_value_string(attribute_values, ", ");
 						size_t attribute_value_length = strlen(attribute_values_str);
 
 						if (html_attributes_length != 0) string_append_char(html_attributes, ' ');
@@ -320,7 +320,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 char* generator_code_layout_style_value(ast_layout_attribute_t* attribute, ast_layout_node_type_t parent_node_type)
 {
 	DEBUG_ME;
-	char* values_str = array_string_token(attribute->values, ", ");
+	char* values_str = array_layout_attribute_value_string(attribute->values, ", ");
 	size_t values_str_length = strlen(values_str);
 
 	char* attribute_css_name = generator_code_layout_style_name(attribute->type);
@@ -919,7 +919,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 
 	switch (attribute->type) {
 		case AST_LAYOUT_ATTRIBUTE_TYPE_TITLE:
-			value = array_string_token(attribute->values, ", ");
+			value = array_layout_attribute_value_string(attribute->values, ", ");
 
 			string_append_str(head, "<title>");
 			string_append_str(head, value);
@@ -928,7 +928,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 			break;
 		
 		case AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR:
-			value = array_string_token(attribute->values, ", ");
+			value = array_layout_attribute_value_string(attribute->values, ", ");
 
 			string_append_str(head, "<meta name=\"author\" content=\"");
 			string_append_str(head, value);
@@ -937,7 +937,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 			break;
 
 		case AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION:
-			value = array_string_token(attribute->values, ", ");
+			value = array_layout_attribute_value_string(attribute->values, ", ");
 
 			string_append_str(head, "<meta name=\"description\" content=\"");
 			string_append_str(head, value);
@@ -946,7 +946,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 			break;
 		
 		case AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS:
-			value = array_string_token(attribute->values, ", ");
+			value = array_layout_attribute_value_string(attribute->values, ", ");
 
 			string_append_str(head, "<meta name=\"keywords\" content=\"");
 			string_append_str(head, value);
@@ -955,7 +955,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 			break;
 		
 		case AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET:
-			value = array_string_token(attribute->values, ", ");
+			value = array_layout_attribute_value_string(attribute->values, ", ");
 
 			string_append_str(head, "<meta charset=\"");
 			string_append_str(head, value);
@@ -964,7 +964,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 			break;
 		
 		case AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT:
-			value = array_string_token(attribute->values, ", ");
+			value = array_layout_attribute_value_string(attribute->values, ", ");
 
 			string_append_str(head, "<meta name=\"viewport\" content=\"");
 			string_append_str(head, value);
@@ -973,7 +973,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 			break;
 		
 		case AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH:
-			value = array_string_token(attribute->values, ", ");
+			value = array_layout_attribute_value_string(attribute->values, ", ");
 
 			string_append_str(head, "<meta http-equiv=\"refresh\" content=\"");
 			string_append_str(head, value);

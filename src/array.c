@@ -60,7 +60,7 @@ bool array_push(array_t* array, void* element)
         array->capacity *= 2;
         array->data = memory_reallocate(array->data, array->element_capacity * array->capacity);
     }
-
+    
     array->data[array->length++] = element;
 
     return true;
@@ -760,59 +760,66 @@ array_value_t* array_value_create(size_t capacity)
 
 /**
  * 
- * @function array_attribute_value_create
+ * @function array_layout_attribute_value_create
  * @brief Create a new attribute value array
  * @params {size_t} capacity - Initial capacity of the array
- * @returns {array_attribute_value_t*} - Pointer to the created array
+ * @returns {array_layout_attribute_value_t*} - Pointer to the created array
  * 
  */
-array_attribute_value_t* array_attribute_value_create(size_t capacity)
+array_layout_attribute_value_t* array_layout_attribute_value_create(size_t capacity)
 {
     DEBUG_ME;
-    array_value_t* array = array_create(capacity);
-    array->destroy = cast(void (*)(void*), array_attribute_value_destroy);
-    array->print = cast(void (*)(void*), array_attribute_value_print);
+    array_layout_attribute_value_t* array = array_create(sizeof(ast_layout_attribute_value_t*), capacity);
+
+    array->destroy = cast(void (*)(void*), array_layout_attribute_value_destroy);
+    array->print = cast(void (*)(void*), array_layout_attribute_value_print);
 
     return array;
 }
 
 /**
  * 
- * @function array_attribute_value_print
+ * @function array_layout_attribute_value_print
  * @brief Print the attribute value array
- * @params {array_attribute_value_t*} array - Attribute value array
+ * @params {array_layout_attribute_value_t*} array - Attribute value array
  * @returns {void}
  * 
  */
-void array_attribute_value_print(array_attribute_value_t* array)
+void array_layout_attribute_value_print(array_layout_attribute_value_t* array)
 {
     DEBUG_ME;
     printf("Attribute value array: %zu\n", array->length);
 
     for (size_t i = 0; i < array->length; i++) {
         printf("\t");
-        ast_attribute_value_t* value = array_get(array, i);
-
-        value->print(value);
+        ast_layout_attribute_value_t* value = array_get(array, i);
+        
+        if (value == NULL) {
+            printf("NULL\n");
+            continue;
+        }
+        else {
+            value->print(value);
+        }
     }
 }
 
 /**
  * 
- * @function array_attribute_value_destroy
+ * @function array_layout_attribute_value_destroy
  * @brief Free the attribute value array memory
- * @params {array_attribute_value_t*} array - Attribute value array
+ * @params {array_layout_attribute_value_t*} array - Attribute value array
  * @returns {void}
  * 
  */
-void array_attribute_value_destroy(array_attribute_value_t* array)
+void array_layout_attribute_value_destroy(array_layout_attribute_value_t* array)
 {
     DEBUG_ME;
     if (array != NULL) {
         if (array->data != NULL) {
             for (size_t i = 0; i < array->length; i++) {
-                ast_attribute_value_t* value = array_get(array, i);
-                
+                ast_layout_attribute_value_t* value = array_get(array, i);
+
                 if (value != NULL) {
                     value->destroy(value);
                 }
@@ -827,4 +834,39 @@ void array_attribute_value_destroy(array_attribute_value_t* array)
 
         memory_destroy(array);
     }
+}
+
+/**
+ * 
+ * @function array_layout_attribute_value_string
+ * @brief Convert the attribute value array to a string
+ * @params {array_layout_attribute_value_t*} array - Array
+ * @params {char*} seperator - Separator
+ * @returns {char*} - String
+ * 
+ */
+char* array_layout_attribute_value_string(array_layout_attribute_value_t* array, char* seperator)
+{
+    DEBUG_ME;
+    if (array == NULL || array->length == 0) {
+        return strdup("");
+    }
+
+    string_t* str = string_create(16);
+    for (size_t i = 0; i < array->length; i++) {
+        ast_layout_attribute_value_t* value = array_get(array, i);
+
+        if (value != NULL) {
+            string_append_str(str, value->data); // TODO
+            
+            if (seperator != NULL && i < array->length - 1) {
+                string_append_str(str, seperator);
+            }
+        }
+    }
+
+    char* buffer = strdup(str->data);
+    string_destroy(str);
+
+    return buffer;
 }

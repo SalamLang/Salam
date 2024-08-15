@@ -393,7 +393,20 @@ typedef struct {
     void (*print)(void* node);
 } ast_t;
 
-typedef char ast_layout_attribute_value_t;
+typedef struct ast_layout_attribute_value_t {
+    char* data;
+
+    void (*destroy)(void* node);
+    void (*print)(void* node);
+} ast_layout_attribute_value_t;
+
+typedef struct ast_layout_value_t {
+    char* data;
+    ast_value_type_t* type;
+
+    void (*destroy)(void* node);
+    void (*print)(void* node);
+} ast_layout_value_t;
 
 /**
  * 
@@ -957,5 +970,35 @@ void ast_layout_attribute_value_destroy(ast_layout_attribute_value_t* value);
  * 
  */
 ast_layout_attribute_value_t* ast_layout_attribute_value_create(char* value);
+
+/**
+ * 
+ * @function ast_layout_value_print
+ * @brief Print the AST layout value
+ * @params {ast_layout_value_t*} value - AST Layout Value
+ * @returns {void}
+ * 
+ */
+void ast_layout_value_print(ast_layout_value_t* value);
+
+/**
+ * 
+ * @function ast_layout_value_destroy
+ * @brief Free the AST layout value
+ * @params {ast_layout_value_t*} value - AST Layout Value
+ * @returns {void}
+ * 
+ */
+void ast_layout_value_destroy(ast_layout_value_t* value);
+
+/**
+ * 
+ * @function ast_layout_value_create
+ * @brief Create a new AST layout value
+ * @params {char*} value - Value
+ * @returns {ast_layout_value_t*} - Pointer to the created AST layout value
+ * 
+ */
+ast_layout_value_t* ast_layout_value_create(char* value);
 
 #endif

@@ -39,6 +39,7 @@ size_t valid_layout_attributes_length = sizeof(valid_layout_attributes) / sizeof
  */
 bool has_css_size_prefix(char* css_value, char** css_output_value)
 {
+	DEBUG_ME;
 	const char* prefixes[] = {"px", "em", "rem", "vw", "vh", "%", "cm", "mm", "in", "pt", "pc", "ex", "ch", "vmin", "vmax"};
 	int num_prefixes = sizeof(prefixes) / sizeof(prefixes[0]);
 
@@ -121,6 +122,7 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
  */
 char* normalise_css_size(char* attribute_value)
 {
+	DEBUG_ME;
 	if (!string_is_number(attribute_value) == true) return attribute_value;
 
 	int value_length = strlen(attribute_value) + 3;
@@ -142,6 +144,7 @@ char* normalise_css_size(char* attribute_value)
  */
 char* attribute_css_multiple_size_value(array_t* attribute_values)
 {
+	DEBUG_ME;
 	if (attribute_values == NULL || attribute_values->length == 0) return NULL;
 
 	if (attribute_values->length == 1) {
@@ -187,6 +190,7 @@ char* attribute_css_multiple_size_value(array_t* attribute_values)
  */
 char* attribute_css_size_value(char* attribute_value)
 {
+	DEBUG_ME;
 	int attribute_value_length = strlen(attribute_value) + 5;
 
 	char* res = memory_allocate(attribute_value_length * sizeof(char));
@@ -208,6 +212,7 @@ char* attribute_css_size_value(char* attribute_value)
  */
 bool is_english_digit(wchar_t ch)
 {
+	DEBUG_ME;
 	// 0123456789
 	return ch >= L'0' && ch <= L'9';
 }
@@ -222,6 +227,7 @@ bool is_english_digit(wchar_t ch)
  */
 bool is_persian_digit(wchar_t ch)
 {
+	DEBUG_ME;
 	// ۰۱۲۳۴۵۶۷۸۹
 	return ch >= 0x06F0 && ch <= 0x06F9;
 	// return ch >= '۰' && ch <= '۹';
@@ -237,6 +243,7 @@ bool is_persian_digit(wchar_t ch)
  */
 bool is_arabic_digit(wchar_t ch)
 {
+	DEBUG_ME;
 	// ٠١٢٣٤٥٦٧٨٩
 	return ch >= 0x0660 && ch <= 0x0669;
 }
@@ -251,6 +258,7 @@ bool is_arabic_digit(wchar_t ch)
  */
 bool string_is_number(const char* value)
 {
+	DEBUG_ME;
 	size_t len = mbstowcs(NULL, value, 0);
 	if (len == (size_t)-1) return false;
 
@@ -295,6 +303,7 @@ bool string_is_number(const char* value)
  */
 void validate_layout_block(ast_layout_block_t* block)
 {
+	DEBUG_ME;
 	hashmap_t* attributes = cast(hashmap_t*, block->attributes);
 
 	ast_layout_attribute_t* attribute_content = hashmap_get(attributes, "content");
@@ -327,6 +336,7 @@ void validate_layout_block(ast_layout_block_t* block)
  */
 bool is_attribute_type_in_array(ast_layout_attribute_type_t type, ast_layout_attribute_type_t* array, size_t array_size)
 {
+	DEBUG_ME;
 	for (size_t i = 0; i < array_size; i++) {
 		if (array[i] == type) {
 			return true;
@@ -348,6 +358,7 @@ bool is_attribute_type_in_array(ast_layout_attribute_type_t type, ast_layout_att
  */
 bool token_belongs_to_ast_layout_node(ast_layout_block_t* block, ast_layout_attribute_type_t attribute_key_type, ast_layout_attribute_t* attribute)
 {
+	DEBUG_ME;
 	if (block->parent_type != AST_NODE_TYPE_LAYOUT) {
 		error(2, "Block parent type is not a layout node");
 	}
@@ -399,6 +410,7 @@ bool token_belongs_to_ast_layout_node(ast_layout_block_t* block, ast_layout_attr
  */
 bool is_layout_node_a_single_tag(ast_layout_node_type_t type)
 {
+	DEBUG_ME;
 	switch (type) {
 		case AST_LAYOUT_NODE_TYPE_PARAGRAPH_RAW:
 		case AST_LAYOUT_NODE_TYPE_INPUT:
@@ -421,6 +433,7 @@ bool is_layout_node_a_single_tag(ast_layout_node_type_t type)
  */
 void validate_layout_mainbody(ast_layout_block_t* block)
 {
+	DEBUG_ME;
 	if (block != NULL) {
 		if (block->attributes != NULL) {
 			if (block->attributes->data != NULL) {
@@ -456,6 +469,7 @@ void validate_layout_mainbody(ast_layout_block_t* block)
  */
 bool is_style_attribute(ast_layout_attribute_type_t type)
 {
+	DEBUG_ME;
 	switch (type) {
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR:
@@ -569,6 +583,7 @@ bool is_style_attribute(ast_layout_attribute_type_t type)
  */
 bool is_attribute_type_a_style(ast_layout_attribute_type_t type)
 {
+	DEBUG_ME;
 	switch (type) {
 		case AST_LAYOUT_ATTRIBUTE_TYPE_CLASS:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_ID:
@@ -591,6 +606,7 @@ bool is_attribute_type_a_style(ast_layout_attribute_type_t type)
  */
 bool validate_style_value_color(ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type)
 {
+	DEBUG_ME;
 	size_t values_str_length = strlen(values_str);
 	char* attribute_css_name = generator_code_layout_style_name(attribute->type);
 	char* element_name = generator_code_layout_node_type(parent_node_type);
@@ -627,6 +643,7 @@ bool validate_style_value_color(ast_layout_attribute_t* attribute, char* values_
  */
 bool validate_style_value_size(ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type)
 {
+	DEBUG_ME;
 	size_t values_str_length = strlen(values_str);
 	char* attribute_css_name = generator_code_layout_style_name(attribute->type);
 	char* element_name = generator_code_layout_node_type(parent_node_type);
@@ -658,6 +675,7 @@ bool validate_style_value_size(ast_layout_attribute_t* attribute, char* values_s
  */
 bool validate_style_value_sizes(ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type)
 {
+	DEBUG_ME;
 	size_t values_str_length = strlen(values_str);
 	char* attribute_css_name = generator_code_layout_style_name(attribute->type);
 	char* element_name = generator_code_layout_node_type(parent_node_type);

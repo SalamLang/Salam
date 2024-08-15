@@ -1557,8 +1557,14 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name)
 	else if (strcmp(name, "padding-bottom") == 0) {
 		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_BOTTOM;
 	}
+	else if (strcmp(name, "text-emphasis-color") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_COLOR;
+	}
 	else if (strcmp(name, "text-align") == 0) {
 		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN;
+	}
+	else if (strcmp(name, "text-align-last") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN_LAST;
 	}
 	else if (strcmp(name, "text-decoration") == 0) {
 		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION;
@@ -1692,6 +1698,12 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name)
 	else if (strcmp(name, "flex-direction") == 0) {
 		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_DIRECTION;
 	}
+	else if (strcmp(name, "text-anchor") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ANCHOR;
+	}
+	else if (strcmp(name, "text-combine-upright") == 0) {
+		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_COMBINE_UPRIGHT;
+	}
 	else if (strcmp(name, "flex-wrap") == 0) {
 		type = AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_WRAP;
 	}
@@ -1818,6 +1830,10 @@ char* ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type)
 	switch (type) {
 		case AST_LAYOUT_ATTRIBUTE_TYPE_CLASS:
 			return "class";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_COLOR:
+			return "text-emphasis-color";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_THICKNESS:
+			return "text-decoration-thickness";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_ID:
 			return "id";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT:
@@ -1892,14 +1908,24 @@ char* ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type)
 			return  "padding-bottom";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN:
 			return  "text-align";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN_LAST:
+			return "text-align-last";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION:
 			return  "text-decoration";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE:
 			return  "text-decoration-line";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE:
 			return  "text-decoration-style";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_POSITION:
+			return  "text-emphasis-position";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_STYLE:
+			return  "text-emphasis-style";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR:
 			return  "text-decoration-color";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_SKIP:
+			return "text-decoration-skip";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_SKIP_INK:
+			return "text-decoration-skip-ink";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_TRANSFORM:
 			return  "text-transform";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VERTICAL_ALIGN:
@@ -1986,6 +2012,10 @@ char* ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type)
 			return  "flex";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_DIRECTION:
 			return  "flex-direction";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ANCHOR:
+			return  "text-anchor";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_COMBINE_UPRIGHT:
+			return "text-combine-upright";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_WRAP:
 			return  "flex-wrap";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_FLOW:

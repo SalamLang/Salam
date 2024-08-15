@@ -235,4 +235,53 @@ array_value_t* parser_parse_expressions_maybe(lexer_t* lexer);
  */
 ast_layout_attribute_value_t* parser_parse_layout_value(lexer_t* lexer);
 
+/**
+ * 
+ * @function is_begin_block_token
+ * @brief Check if the token is a begin block
+ * @params {token_t*} token - Token
+ * @returns {bool}
+ * 
+ */
+bool is_begin_block_token(token_t* token);
+
+/**
+ * 
+ * @function is_end_block_token
+ * @brief Check if the token is an end block
+ * @params {token_t*} token - Token
+ * @returns {bool}
+ * 
+ */
+bool is_end_block_token(token_t* token);
+
+/**
+ * 
+ * @function expect_open_block
+ * @brief Expect an open block
+ * @returns {void}
+ * 
+ */
+void expect_open_block(lexer_t* lexer);
+
+/**
+ * 
+ * @function match_next_open_block
+ * @brief Match the next open block
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {bool}
+ * 
+ */
+bool match_next_open_block(lexer_t* lexer);
+
+/**
+ * 
+ * @function match_next_close_block
+ * @brief Match the next close block
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {bool}
+ * 
+ */
+bool match_next_close_block(lexer_t* lexer);
+
 #endif

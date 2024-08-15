@@ -422,15 +422,33 @@ char* generator_code_layout_style_name(ast_layout_attribute_type_t type)
 			
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_BOTTOM:
 			return  "padding-bottom";
+		
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_COLOR:
+			return  "text-emphasis-color";
 
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN:
 			return  "text-align";
 
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR:
 			return  "text-decoration-color";
+		
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_SKIP:
+			return  "text-decoration-skip";
+		
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_SKIP_INK:
+			return  "text-decoration-skip-ink";
 
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE:
 			return  "text-decoration-style";
+		
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_POSITION:
+			return  "text-emphasis-position";
+		
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_STYLE:
+			return  "text-emphasis-style";
+		
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_THICKNESS:
+			return  "text-decoration-thickness";
 
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE:
 			return  "text-decoration-line";

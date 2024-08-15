@@ -909,6 +909,15 @@ void generator_code(generator_t* generator)
 
 			string_append(html, body);
 
+			if (generator->inlineJS == true && generator->js != NULL && generator->js->length > 0) {
+				string_append_str(html, "<script>\n");
+				string_append(html, generator->js);
+				string_append_str(html, "</script>\n");
+			}
+			else {
+				string_append_str(html, "<script src=\"script.js\"></script>\n");
+			}
+
 			string_append_str(html, "</html>");
 
 			string_set(generator->html, html);
@@ -1012,6 +1021,10 @@ string_t* generator_code_type(generator_t* generator, ast_value_type_t* type)
 			string_append_str(code, "void");
 			return code;
 		
+		case AST_TYPE_KIND_NULL:
+			string_append_str(code, "null");
+			return code;
+		
 		case AST_TYPE_KIND_INT:
 			string_append_str(code, "int");
 			return code;
@@ -1083,6 +1096,8 @@ string_t* generator_code_value(generator_t* generator, ast_value_t* value)
 	DEBUG_ME;
 	string_t* code = string_create(1024);
 
+	if (generator) {}
+
 	if (value == NULL) {
 		error(2, "Value is NULL in value statement");
 		return code;
@@ -1096,67 +1111,61 @@ string_t* generator_code_value(generator_t* generator, ast_value_t* value)
 		switch (value->type->kind) {
 			case AST_TYPE_KIND_VOID:
 				string_append_str(code, value->data);
-				break;
+				return code;
 			
 			case AST_TYPE_KIND_INT:
 				string_append_str(code, value->data);
-				break;
+				return code;
 
 			case AST_TYPE_KIND_FLOAT:
 				string_append_str(code, value->data);
-				break;
+				return code;
 
 			// case AST_TYPE_KIND_DOUBLE:
 			// 	string_append_str(code, value->data);
-			// 	break;
+			// 	return code;
 
 			case AST_TYPE_KIND_CHAR:
 				string_append_str(code, value->data);
-				break;
+				return code;
 
 			case AST_TYPE_KIND_NULL:
 				string_append_str(code, value->data);
-				break;
+				return code;
 
 			case AST_TYPE_KIND_STRING:
 				string_append_char(code, '"');
 				string_append_str(code, value->data);
 				string_append_char(code, '"');
-				break;
+				return code;
 
 			case AST_TYPE_KIND_BOOL:
 				string_append_str(code, value->data);
-				break;
+				return code;
 
 			case AST_TYPE_KIND_STRUCT:
 				string_append_str(code, value->data);
-				break;
+				return code;
 
 			case AST_TYPE_KIND_ENUM:
 				string_append_str(code, value->data);
-				break;
+				return code;
 
 			case AST_TYPE_KIND_POINTER:
 				string_append_str(code, value->data);
-				break;
+				return code;
 
 			case AST_TYPE_KIND_ARRAY:
 				string_append_str(code, value->data);
-				break;
+				return code;
 
 			case AST_TYPE_KIND_FUNCTION:
 				string_append_str(code, value->data);
-				break;
+				return code;
 		}
-
-		// string_append_char(code, '(');
-
-		// string_t* code_type = generator_code_type(generator, value->type);
-		// string_append(code, code_type);
-		// if (code_type != NULL) code_type->destroy(code_type);
-
-		// string_append_char(code, ')');
 	}
+
+	string_append_str(code, "unknown value");
 
 	return code;
 }

@@ -15,9 +15,10 @@ ast_node_t* ast_node_create(ast_type_t type, location_t location)
 	ast_node_t* node = memory_allocate(sizeof(ast_node_t));
 	node->type = type;
 	node->location = location;
+
 	node->print = cast(void (*)(void*), ast_node_print);
 	node->destroy = cast(void (*)(void*), ast_node_destroy);
-
+	
 	return node;
 }
 
@@ -1834,18 +1835,20 @@ void ast_print(ast_t* ast)
  * @function ast_value_create
  * @brief Create a new AST value
  * @params {ast_value_type_t*} type - Value type
+ * @params {void*} data - Value data
  * @returns {ast_value_t*} - Pointer to the created AST value
  * 
  */
-ast_value_t* ast_value_create(ast_value_type_t* type)
+ast_value_t* ast_value_create(ast_value_type_t* type, void* data)
 {
 	DEBUG_ME;
 	ast_value_t* value = memory_allocate(sizeof(ast_value_t));
 	value->type = type;
-	value->data = NULL;
+	value->data = data;
 	
 	value->destroy = cast(void (*)(void*), ast_value_destroy);
 	value->print = cast(void (*)(void*), ast_value_print);
+
 	return value;
 }
 

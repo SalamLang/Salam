@@ -26,6 +26,7 @@ typedef array_t array_function_t;
 typedef array_t array_block_t;
 typedef array_t array_if_t;
 typedef array_t array_value_t;
+typedef array_t array_attribute_value_t;
 
 #include "memory.h"
 #include "ast.h"
@@ -350,5 +351,35 @@ void array_block_destroy(array_block_t* array);
  * 
  */
 array_value_t* array_value_create(size_t capacity);
+
+/**
+ * 
+ * @function array_attribute_value_destroy
+ * @brief Free the attribute value array memory
+ * @params {array_attribute_value_t*} array - Attribute value array
+ * @returns {void}
+ * 
+ */
+void array_attribute_value_destroy(array_attribute_value_t* array);
+
+/**
+ * 
+ * @function array_attribute_value_print
+ * @brief Print the attribute value array
+ * @params {array_attribute_value_t*} array - Attribute value array
+ * @returns {void}
+ * 
+ */
+void array_attribute_value_print(array_attribute_value_t* array);
+
+/**
+ * 
+ * @function array_attribute_value_create
+ * @brief Create a new attribute value array
+ * @params {size_t} capacity - Initial capacity of the array
+ * @returns {array_attribute_value_t*} - Pointer to the created array
+ * 
+ */
+array_attribute_value_t* array_attribute_value_create(size_t capacity);
 
 #endif

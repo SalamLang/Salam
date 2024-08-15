@@ -757,3 +757,74 @@ array_value_t* array_value_create(size_t capacity)
     
     return array;
 }
+
+/**
+ * 
+ * @function array_attribute_value_create
+ * @brief Create a new attribute value array
+ * @params {size_t} capacity - Initial capacity of the array
+ * @returns {array_attribute_value_t*} - Pointer to the created array
+ * 
+ */
+array_attribute_value_t* array_attribute_value_create(size_t capacity)
+{
+    DEBUG_ME;
+    array_value_t* array = array_create(capacity);
+    array->destroy = cast(void (*)(void*), array_attribute_value_destroy);
+    array->print = cast(void (*)(void*), array_attribute_value_print);
+
+    return array;
+}
+
+/**
+ * 
+ * @function array_attribute_value_print
+ * @brief Print the attribute value array
+ * @params {array_attribute_value_t*} array - Attribute value array
+ * @returns {void}
+ * 
+ */
+void array_attribute_value_print(array_attribute_value_t* array)
+{
+    DEBUG_ME;
+    printf("Attribute value array: %zu\n", array->length);
+
+    for (size_t i = 0; i < array->length; i++) {
+        printf("\t");
+        ast_attribute_value_t* value = array_get(array, i);
+
+        value->print(value);
+    }
+}
+
+/**
+ * 
+ * @function array_attribute_value_destroy
+ * @brief Free the attribute value array memory
+ * @params {array_attribute_value_t*} array - Attribute value array
+ * @returns {void}
+ * 
+ */
+void array_attribute_value_destroy(array_attribute_value_t* array)
+{
+    DEBUG_ME;
+    if (array != NULL) {
+        if (array->data != NULL) {
+            for (size_t i = 0; i < array->length; i++) {
+                ast_attribute_value_t* value = array_get(array, i);
+                
+                if (value != NULL) {
+                    value->destroy(value);
+                }
+            }
+
+            memory_destroy(array->data);
+        }
+
+        array->capacity = 0;
+        array->length = 0;
+        array->element_capacity = 0;
+
+        memory_destroy(array);
+    }
+}

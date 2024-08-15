@@ -723,7 +723,6 @@ void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layo
 	if (body_child != NULL) body_child->destroy(body_child);
 
 	string_append(body_tag, body_content);
-	string_append_str(body_tag, "</body>\n");
 
 	string_set(body, body_tag);
 	body_tag->destroy(body_tag);
@@ -917,6 +916,8 @@ void generator_code(generator_t* generator)
 			else {
 				string_append_str(html, "<script src=\"script.js\"></script>\n");
 			}
+			
+			string_append_str(html, "</body>\n");
 
 			string_append_str(html, "</html>");
 

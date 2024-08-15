@@ -1762,6 +1762,8 @@ char* ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type)
 			return "description";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT:
 			return "viewport";
+		case AST_LAYOUT_ATTRIBUTE_TYPE_VALUE:
+			return "value";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH:
 			return "refresh";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS:

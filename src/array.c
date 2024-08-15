@@ -627,3 +627,114 @@ void array_if_print(array_if_t* array)
         if_statement->print(if_statement);
     }
 }
+
+/**
+ * 
+ * @function array_value_print
+ * @brief Print the value array
+ * @params {array_value_t*} array - Value array
+ * @returns {void}
+ * 
+ */
+void array_value_print(array_value_t* array)
+{
+    DEBUG_ME;
+    printf("Value array: %zu\n", array->length);
+
+    for (size_t i = 0; i < array->length; i++) {
+        printf("\t");
+        ast_value_t* value = array_get(array, i);
+
+        value->print(value);
+    }
+}
+
+/**
+ * 
+ * @function array_value_destroy
+ * @brief Free the value array memory
+ * @params {array_value_t*} array - Value array
+ * @returns {void}
+ * 
+ */
+void array_value_destroy(array_value_t* array)
+{
+    DEBUG_ME;
+    if (array != NULL) {
+        if (array->data != NULL) {
+            for (size_t i = 0; i < array->length; i++) {
+                ast_value_t* value = array_get(array, i);
+                
+                if (value != NULL) {
+                    value->destroy(value);
+                }
+            }
+
+            memory_destroy(array->data);
+        }
+
+        array->capacity = 0;
+        array->length = 0;
+        array->element_capacity = 0;
+
+        memory_destroy(array);
+    }
+}
+
+/**
+ * 
+ * @function array_block_destroy
+ * @brief Free the block array memory
+ * @params {array_block_t*} array - Block array
+ * @returns {void}
+ * 
+ */
+void array_block_destroy(array_block_t* array)
+{
+    DEBUG_ME;
+    if (array != NULL) {
+        if (array->data != NULL) {
+            for (size_t i = 0; i < array->length; i++) {
+                ast_block_t* block = array_get(array, i);
+                
+                if (block != NULL) {
+                    block->destroy(block);
+                }
+            }
+
+            memory_destroy(array->data);
+        }
+
+        array->capacity = 0;
+        array->length = 0;
+        array->element_capacity = 0;
+
+        memory_destroy(array);
+    }
+}
+
+/**
+ * 
+ * @function array_block_print
+ * @brief Print the block array
+ * @params {array_block_t*} array - Block array
+ * @returns {void}
+ * 
+ */
+void array_block_print(array_block_t* array)
+{
+    DEBUG_ME;
+    if (array == NULL) {
+        printf("Block array is NULL\n");
+        return;
+    }
+    
+    printf("Block array: %zu\n", array->length);
+
+    for (size_t i = 0; i < array->length; i++) {
+        printf("\t");
+        ast_block_t* block = array_get(array, i);
+
+        block->print(block);
+    }
+}

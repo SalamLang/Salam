@@ -372,6 +372,37 @@ ast_node_t* parser_parse_function(lexer_t* lexer)
 
 /**
  * 
+ * @function parser_parse_expressions
+ * @brief Parse the expressions
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {array_value_t*} - Array of AST values
+ * 
+ */
+array_value_t* parser_parse_expressions(lexer_t* lexer)
+{
+	DEBUG_ME;
+	array_value_t* values = array_create(sizeof(ast_value_t*), 1);
+	values->destroy = cast(void (*)(void*), ast_value_destroy);
+
+	ast_value_t* value = parser_parse_expression(lexer);
+	array_push(values, value);
+
+	while (match(lexer, TOKEN_COMMA)) {
+		PARSER_NEXT; // Eat the comma token
+
+		ast_value_t* new_value = parser_parse_expression(lexer);
+		if (new_value == NULL) {
+			error(2, "Expected an expression at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
+		}
+
+		array_push(values, new_value);
+	}
+
+	return values;
+}
+
+/**
+ * 
  * @function parser_parse_expression
  * @brief Parse the expression
  * @params {lexer_t*} lexer - Lexer
@@ -382,52 +413,49 @@ ast_value_t* parser_parse_expression(lexer_t* lexer)
 {
 	DEBUG_ME;
 	token_t* token = PARSER_CURRENT;
-		PARSER_NEXT;
-		return NULL;
 
+	ast_value_type_t* type = NULL;
+	ast_value_t* value = NULL;
+	char* data = memory_allocate(16 * sizeof(char));
+	
 	if (match(lexer, TOKEN_IDENTIFIER)) {
 		PARSER_NEXT;
-		char* data = memory_allocate(16 * sizeof(char));
-		strcpy(data, "string");
+		strcpy(data, token->data.string);
 
-		ast_value_type_t* type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
-		ast_value_t* value = ast_value_create(type, data);
+		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		value = ast_value_create(type, data);
 		return value;
 	}
 	else if (match(lexer, TOKEN_STRING)) {
 		PARSER_NEXT;
-		char* data = memory_allocate(16 * sizeof(char));
-		strcpy(data, "string");
+		strcpy(data, token->data.string);
 
-		ast_value_type_t* type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
-		ast_value_t* value = ast_value_create(type, data);
+		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		value = ast_value_create(type, data);
 		return value;
 	}
 	else if (match(lexer, TOKEN_NUMBER_INT)) {
 		PARSER_NEXT;
-		char* data = memory_allocate(16 * sizeof(char));
-		strcpy(data, "i1");
+		strcpy(data, int2string(token->data.number_int));
 
-		ast_value_type_t* type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
-		ast_value_t* value = ast_value_create(type, data);
+		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		value = ast_value_create(type, data);
 		return value;
 	}
 	else if (match(lexer, TOKEN_NUMBER_FLOAT)) {
 		PARSER_NEXT;
-		char* data = memory_allocate(16 * sizeof(char));
-		strcpy(data, "f1");
+		strcpy(data, float2string(token->data.number_float));
 
-		ast_value_type_t* type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
-		ast_value_t* value = ast_value_create(type, data);
+		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		value = ast_value_create(type, data);
 		return value;
 	}
 	else if (match(lexer, TOKEN_BOOLEAN)) {
 		PARSER_NEXT;
-		char* data = memory_allocate(16 * sizeof(char));
 		strcpy(data, token->data.boolean ? "true" : "false");
 
-		ast_value_type_t* type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
-		ast_value_t* value = ast_value_create(type, data);
+		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		value = ast_value_create(type, data);
 		return value;
 	}
 	else {
@@ -435,6 +463,27 @@ ast_value_t* parser_parse_expression(lexer_t* lexer)
 	}
 
 	return NULL;
+}
+
+/**
+ * 
+ * @function parser_parse_return
+ * @brief Parse the return
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {ast_node_t*} - AST node
+ * 
+ */
+ast_node_t* parser_parse_return(lexer_t* lexer)
+{
+	DEBUG_ME;
+	ast_node_t* node = ast_node_create(AST_NODE_TYPE_RETURN, PARSER_CURRENT->location);
+
+	PARSER_NEXT; // Eat the return token
+
+	array_value_t* values = parser_parse_expressions(lexer);
+	node->data.returns = ast_return_create(values);
+
+	return node;
 }
 
 /**
@@ -518,6 +567,9 @@ ast_node_t* parser_parse_node(lexer_t* lexer)
 	}
 	else if (match(lexer, TOKEN_IF)) {
 		return parser_parse_if(lexer);
+	}
+	else if (match(lexer, TOKEN_RETURN)) {
+		return parser_parse_return(lexer);
 	}
 	
 	unknown_scope(lexer, "node");

@@ -25,6 +25,7 @@ typedef array_t array_function_parameter_t;
 typedef array_t array_function_t;
 typedef array_t array_block_t;
 typedef array_t array_if_t;
+typedef array_t array_value_t;
 
 #include "memory.h"
 #include "ast.h"
@@ -299,5 +300,45 @@ void array_if_destroy(array_if_t* array);
  * 
  */
 void array_if_print(array_if_t* array);
+
+/**
+ * 
+ * @function array_value_print
+ * @brief Print the value array
+ * @params {array_value_t*} array - Value array
+ * @returns {void}
+ * 
+ */
+void array_value_print(array_value_t* array);
+
+/**
+ * 
+ * @function array_value_destroy
+ * @brief Free the value array memory
+ * @params {array_value_t*} array - Value array
+ * @returns {void}
+ * 
+ */
+void array_value_destroy(array_value_t* array);
+
+/**
+ * 
+ * @function array_block_print
+ * @brief Print the block array
+ * @params {array_block_t*} array - Block array
+ * @returns {void}
+ * 
+ */
+void array_block_print(array_block_t* array);
+
+/**
+ * 
+ * @function array_block_destroy
+ * @brief Free the block array memory
+ * @params {array_block_t*} array - Block array
+ * @returns {void}
+ * 
+ */
+void array_block_destroy(array_block_t* array);
 
 #endif

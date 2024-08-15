@@ -1,5 +1,11 @@
 fn main {
-    if 123 {}
+    if 1 {
+        if 2 {
+            if 3 {
+                return 333
+            }
+        }
+    }
 }
 
 layout {

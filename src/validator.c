@@ -298,18 +298,19 @@ void validate_layout_block(ast_layout_block_t* block)
 	hashmap_t* attributes = cast(hashmap_t*, block->attributes);
 
 	ast_layout_attribute_t* attribute_content = hashmap_get(attributes, "content");
+
 	if (attribute_content != NULL) {
 		attribute_content->isContent = true;
+
 		array_layout_attribute_value_t* values = cast(array_layout_attribute_value_t*, attribute_content->values);
-		values->print(values);
+
 		char* content = array_layout_attribute_value_string(values, ", ");
 
-		if (values->length > 0 && strlen(content) > 0) {
-			printf("content: %s\n", content);
-			block->text_content = content;
+		if (values->length == 0 || content != NULL || strlen(content) > 0) {
+			if (content != NULL) memory_destroy(content);
 		}
 		else {
-			if (content != NULL) memory_destroy(content);
+			block->text_content = content;
 		}
 	}
 }
@@ -642,47 +643,6 @@ bool validate_style_value_size(ast_layout_attribute_t* attribute, char* values_s
 	attribute->final_key = attribute_css_name;
 	attribute->final_value = attribute_css_size_value(values_str);
 
-    // free(values_str);  // Free the old memory before reassigning
-	// values_str = NULL;
-    // values_str = new_values_str;
-
-	// values_str = attribute_css_size_value(values_str);
-
-	// size_t new_value_length = new_value == NULL ? 0 : strlen(new_value);
-
-	// if (new_value_length == 0) {
-	// 	if (new_value != NULL) free(new_value);
-		
-	// 	error(2, "Size value for attribute '%s' is invalid in the '%s' element", attribute_css_name, element_name);
-
-	// 	return false;
-	// }
-
-	// printf("-->%zu\n", values_str_length);
-	// printf("-->%zu\n", new_value_length);
-
-	// memory_destroy(values_str);
-	// values_str = memory_allocate((new_value_length + 1) * sizeof(char));
-
-    // if (values_str_length < new_value_length) {
-    //     // Allocate additional byte for null terminator
-    //     values_str = memory_reallocate(values_str, (new_value_length + 1) * sizeof(char));
-    // }
-
-	// values_str = new_value;
-
-    // strcpy(values_str, new_value);
-
-    // if (new_value != NULL) memory_destroy(new_value);
-
-	// new_value = memory_allocate((values_str_length + 1) * sizeof(char));
-	// strcpy(new_value, values_str);
-
-    // if (values_str != NULL) memory_destroy(values_str);
-	// values_str = strdup(new_value);
-
-	// *output_values_str = new_value;
-
 	return true;
 }
 
@@ -734,6 +694,13 @@ bool validate_style_value_sizes(ast_layout_attribute_t* attribute, char* values_
  */
 bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type)
 {
+	DEBUG_ME;
+	printf("=============================================\n=============================================\n=============================================\n");
+	attribute->print(attribute);
+	if (values_str == NULL) {
+		printf("is null\n");
+	}
+	printf("---->%s\n", values_str);
 	// Global values
 	if (strcmp(values_str, "inherit") == 0) return true;
 	else if (strcmp(values_str, "initial") == 0) return true;
@@ -904,25 +871,6 @@ bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, a
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_LEFT:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BOTTOM:
 			return validate_style_value_size(attribute, values_str, parent_node_type);
-			// new_values_str = memory_allocate(300);
-			// printf(".......\n");
-			// bool res = validate_style_value_size(attribute, values_str, parent_node_type);
-			// // printf("output_values_str: %s\n", new_values_str);
-
-			// if (res) {
-			// 	// change values_str which has been passed by reference to this function
-			// 	// values_str = memory_reallocate(values_str, (strlen(output_values_str) + 1) * sizeof(char));
-			// 	// strcpy(values_str, output_values_str);
-			// 	printf("values_str: %s\n", values_str);
-			// 	// printf("output_values_str: %s\n", new_values_str);
-			// }
-			// else {
-			// 	// if (new_values_str != NULL) memory_destroy(new_values_str);
-
-			// 	return false;
-			// }
-			// return res;
-			break;
 
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING:

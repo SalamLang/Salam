@@ -20,8 +20,11 @@ generator_t* generator_create(ast_t* ast)
 	generator->html = string_create(4096);
 	generator->css = string_create(4096);
 	generator->js = string_create(4096);
-	generator->inlineCSS = true;// false;
-	generator->inlineJS = true;// false;
+
+	generator->inlineCSS = true;
+	generator->inlineJS = true;
+	generator->inlineCSS = false;
+	generator->inlineJS = false;
 
 	generator->identifier = malloc(sizeof(generator_identifier_t));
 
@@ -225,7 +228,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 					else {
 						array_t* attribute_values = cast(array_t*, attribute->values);
 						char* attribute_values_str = array_layout_attribute_value_string(attribute_values, ", ");
-						size_t attribute_value_length = strlen(attribute_values_str);
+						size_t attribute_value_length = attribute_values_str == NULL ? 0 : strlen(attribute_values_str);
 
 						if (html_attributes_length != 0) string_append_char(html_attributes, ' ');
 
@@ -269,7 +272,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 						string_append_str(css_attributes, ":");
 						string_append_str(css_attributes, attribute_css_value);
 
-						if (attribute_css_value != NULL) memory_destroy(attribute_css_value);
+						// if (attribute_css_value != NULL) memory_destroy(attribute_css_value);
 
 						css_attributes_length++;
 					}
@@ -329,8 +332,6 @@ char* generator_code_layout_style_value(ast_layout_attribute_t* attribute, ast_l
 
 	char* attribute_css_name = generator_code_layout_style_name(attribute->type);
 	
-	if (values_str != NULL) memory_destroy(values_str);
-
 	// 'Value=...' attribute allowed to be empty, but all other attributes must have a value (not empty)
 	if ((attribute->values->length == 0 || values_str_length == 0) && attribute->type != AST_LAYOUT_ATTRIBUTE_TYPE_VALUE) {
 
@@ -343,6 +344,8 @@ char* generator_code_layout_style_value(ast_layout_attribute_t* attribute, ast_l
 	if (isValid == false) {
 		error(2, "Invalid value for '%s' attribute in '%s' element!", attribute_css_name, generator_code_layout_node_type(parent_node_type));
 	}
+	
+	if (values_str != NULL) memory_destroy(values_str);
 
 	return attribute->final_value;
 }
@@ -361,194 +364,289 @@ char* generator_code_layout_style_name(ast_layout_attribute_type_t type)
 	switch (type) {
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND:
 			return  "background";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR:
 			return  "color";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT:
 			return  "font";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_FAMILY:
 			return  "font-family";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_SIZE:
 			return  "font-size";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_STYLE:
 			return  "font-style";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_WEIGHT:
 			return  "font-weight";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_HEIGHT:
 			return  "height";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_WIDTH:
 			return  "width";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN:
 			return  "margin";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_LEFT:
 			return  "margin-left";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_RIGHT:
 			return  "margin-right";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_TOP:
 			return  "margin-top";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_BOTTOM:
 			return  "margin-bottom";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING:
 			return  "padding";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_LEFT:
 			return  "padding-left";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_RIGHT:
 			return  "padding-right";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_TOP:
 			return  "padding-top";
+			
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_BOTTOM:
 			return  "padding-bottom";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN:
 			return  "text-align";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR:
 			return  "text-decoration-color";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE:
 			return  "text-decoration-style";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE:
 			return  "text-decoration-line";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION:
 			return  "text-decoration";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_TRANSFORM:
 			return  "text-transform";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VERTICAL_ALIGN:
 			return  "vertical-align";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VISIBILITY:
 			return  "visibility";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_Z_INDEX:
 			return  "z-index";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_POSITION:
 			return  "position";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TOP:
 			return  "top";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_RIGHT:
 			return  "right";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BOTTOM:
 			return  "bottom";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_LEFT:
 			return  "left";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER:
 			return  "border";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_COLOR:
 			return  "border-color";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_STYLE:
 			return  "border-style";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_WIDTH:
 			return  "border-width";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_RADIUS:
 			return  "border-radius";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLOAT:
 			return  "float";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CLEAR:
 			return  "clear";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OVERFLOW:
 			return  "overflow";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_OVERFLOW:
 			return  "text-overflow";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_WHITE_SPACE:
 			return  "white-space";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CURSOR:
 			return  "cursor";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FILTER:
 			return  "filter";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OPACITY:
 			return  "opacity";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TRANSFORM:
 			return  "transform";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TRANSITION:
 			return  "transition";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ANIMATION:
 			return  "animation";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BOX_SHADOW:
 			return  "box-shadow";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_SHADOW:
 			return  "text-shadow";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE:
 			return  "outline";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE_COLOR:
 			return  "outline-color";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE_STYLE:
 			return  "outline-style";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE_WIDTH:
 			return  "outline-width";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_COLOR:
 			return  "background-color";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_IMAGE:
 			return  "background-image";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_REPEAT:
 			return  "background-repeat";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_POSITION:
 			return  "background-position";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_SIZE:
 			return  "background-size";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_ATTACHMENT:
 			return  "background-attachment";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_CLIP:
 			return  "background-clip";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_ORIGIN:
 			return  "background-origin";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_BLEND_MODE:
 			return  "background-blend-mode";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_DISPLAY:
 			return  "display";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX:
 			return  "flex";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_DIRECTION:
 			return  "flex-direction";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_WRAP:
 			return  "flex-wrap";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_FLOW:
 			return  "flex-flow";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_GROW:
 			return  "flex-grow";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_SHRINK:
 			return  "flex-shrink";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_BASIS:
 			return  "flex-basis";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_JUSTIFY_CONTENT:
 			return  "justify-content";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_ITEMS:
 			return  "align-items";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_SELF:
 			return  "align-self";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_CONTENT:
 			return  "align-content";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ORDER:
 			return  "order";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_GRID:
 			return  "grid";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FILL:
 			return  "fill";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE:
 			return  "stroke";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_WIDTH:
 			return  "stroke-width";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_LINECAP:
 			return  "stroke-linecap";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_LINEJOIN:
 			return  "stroke-linejoin";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_DASHARRAY:
 			return  "stroke-dasharray";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_DASHOFFSET:
 			return  "stroke-dashoffset";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FILL_OPACITY:
 			return  "fill-opacity";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_OPACITY:
 			return  "stroke-opacity";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_SHAPE_RENDERING:
 			return  "shape-rendering";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_RENDERING:
 			return  "text-rendering";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_IMAGE_RENDERING:
 			return  "image-rendering";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR_INTERPOLATION:
 			return  "color-interpolation";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR_RENDERING:
 			return  "color-rendering";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VECTOR_EFFECT:
 			return  "vector-effect";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MASK:
 			return  "mask";
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CLIP_PATH:
 			return  "clip-path";
+			
 		case AST_LAYOUT_ATTRIBUTE_TYPE_ERROR:
 			return "error";
 		
@@ -1058,6 +1156,8 @@ void generator_code(generator_t* generator)
 			string_t* body = string_create(1024);
 			string_t* html = string_create(1024);
 
+			generator_code_layout_body(generator, layout->block, body);
+
 			generator_code_head(layout->block, head);
 
 			string_append_str(html, "<!doctype html>\n");
@@ -1073,6 +1173,7 @@ void generator_code(generator_t* generator)
 			string_append(html, head);
 
 			if (generator->css != NULL && generator->css->length > 0) {
+				printf("it seems we have some css code\n");
 				if (generator->inlineCSS == true) {
 					string_append_str(html, "<style>\n");
 					string_append(html, generator->css);
@@ -1082,14 +1183,16 @@ void generator_code(generator_t* generator)
 					string_append_str(html, "<link rel=\"stylesheet\" href=\"style.css\">\n");
 				}
 			}
+			else {
+				printf("no css code\n");
+			}
 
 			string_append_str(html, "</head>\n");
-
-			generator_code_layout_body(generator, layout->block, body);
 
 			string_append(html, body);
 
 			if (generator->js != NULL && generator->js->length > 0) {
+				printf("it seems we have some js code\n");
 				if (generator->inlineJS == true) {
 					string_append_str(html, "<script>\n");
 					string_append(html, generator->js);
@@ -1098,6 +1201,9 @@ void generator_code(generator_t* generator)
 				else {
 					string_append_str(html, "<script src=\"script.js\"></script>\n");
 				}
+			}
+			else {
+				printf("no js code\n");
 			}
 			
 			string_append_str(html, "</body>\n");

@@ -7,17 +7,17 @@
  * @type {ast_layout_attribute_type_t[]}
  */
 ast_layout_attribute_type_t valid_layout_attributes[] = {
-    AST_LAYOUT_ATTRIBUTE_TYPE_TITLE,
-    AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION,
-    AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR,
-    AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS,
-    AST_LAYOUT_ATTRIBUTE_TYPE_ICON,
-    AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
-    AST_LAYOUT_ATTRIBUTE_TYPE_DIR,
-    AST_LAYOUT_ATTRIBUTE_TYPE_LANG,
-    AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT,
-    AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH,
-    AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
+	AST_LAYOUT_ATTRIBUTE_TYPE_TITLE,
+	AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION,
+	AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR,
+	AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS,
+	AST_LAYOUT_ATTRIBUTE_TYPE_ICON,
+	AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
+	AST_LAYOUT_ATTRIBUTE_TYPE_DIR,
+	AST_LAYOUT_ATTRIBUTE_TYPE_LANG,
+	AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT,
+	AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH,
+	AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
 };
 
 /**
@@ -295,24 +295,24 @@ bool string_is_number(const char* value)
  */
 void validate_layout_block(ast_layout_block_t* block)
 {
-    hashmap_t* attributes = cast(hashmap_t*, block->attributes);
+	hashmap_t* attributes = cast(hashmap_t*, block->attributes);
 
-    ast_layout_attribute_t* attribute_content = hashmap_get(attributes, "content");
-    if (attribute_content != NULL) {
-        attribute_content->isContent = true;
+	ast_layout_attribute_t* attribute_content = hashmap_get(attributes, "content");
+	if (attribute_content != NULL) {
+		attribute_content->isContent = true;
 
-        array_t* values = cast(array_t*, attribute_content->values);
-        values->print(values);
-        char* content = array_string_token(values, ", ");
+		array_t* values = cast(array_t*, attribute_content->values);
+		values->print(values);
+		char* content = array_string_token(values, ", ");
 
-        if (values->length > 0 && strlen(content) > 0) {
-            printf("content: %s\n", content);
-            block->text_content = content;
-        }
-        else {
-            if (content != NULL) memory_destroy(content);
-        }
-    }
+		if (values->length > 0 && strlen(content) > 0) {
+			printf("content: %s\n", content);
+			block->text_content = content;
+		}
+		else {
+			if (content != NULL) memory_destroy(content);
+		}
+	}
 }
 
 /**
@@ -327,13 +327,13 @@ void validate_layout_block(ast_layout_block_t* block)
  */
 bool is_attribute_type_in_array(ast_layout_attribute_type_t type, ast_layout_attribute_type_t* array, size_t array_size)
 {
-    for (size_t i = 0; i < array_size; i++) {
-        if (array[i] == type) {
-            return true;
-        }
-    }
-    
-    return false;
+	for (size_t i = 0; i < array_size; i++) {
+		if (array[i] == type) {
+			return true;
+		}
+	}
+	
+	return false;
 }
 
 /**
@@ -348,45 +348,45 @@ bool is_attribute_type_in_array(ast_layout_attribute_type_t type, ast_layout_att
  */
 bool token_belongs_to_ast_layout_node(ast_layout_block_t* block, ast_layout_attribute_type_t attribute_key_type, ast_layout_attribute_t* attribute)
 {
-    if (block->parent_type != AST_NODE_TYPE_LAYOUT) {
-        error(2, "Block parent type is not a layout node");
-    }
+	if (block->parent_type != AST_NODE_TYPE_LAYOUT) {
+		error(2, "Block parent type is not a layout node");
+	}
 
-    if (is_layout_node_a_single_tag(block->parent_node_type) && attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
-        return false;
-    }
-    else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
-        return true;
-    }
-    else if (is_style_attribute(attribute_key_type)) {
-        attribute->isStyle = true;
-        return true;
-    }
-    else if (is_attribute_type_a_style(attribute_key_type)) {
-        // attribute->isStyle = false;
-        return true;
-    }
+	if (is_layout_node_a_single_tag(block->parent_node_type) && attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
+		return false;
+	}
+	else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
+		return true;
+	}
+	else if (is_style_attribute(attribute_key_type)) {
+		attribute->isStyle = true;
+		return true;
+	}
+	else if (is_attribute_type_a_style(attribute_key_type)) {
+		// attribute->isStyle = false;
+		return true;
+	}
 
-    // LAYOUT
-    if (block->parent_node_type == AST_LAYOUT_NODE_TYPE_NONE) {
-        if (is_attribute_type_in_array(attribute_key_type, valid_layout_attributes, valid_layout_attributes_length)) {
-            return true;
-        }
-    }
-    // IMG
-    else if (block->parent_node_type == AST_LAYOUT_NODE_TYPE_IMG) {
-        ast_layout_attribute_type_t valid_attributes[] = {
-            AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
-        };
+	// LAYOUT
+	if (block->parent_node_type == AST_LAYOUT_NODE_TYPE_NONE) {
+		if (is_attribute_type_in_array(attribute_key_type, valid_layout_attributes, valid_layout_attributes_length)) {
+			return true;
+		}
+	}
+	// IMG
+	else if (block->parent_node_type == AST_LAYOUT_NODE_TYPE_IMG) {
+		ast_layout_attribute_type_t valid_attributes[] = {
+			AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
+		};
 
-        size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
+		size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
 
-        if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
-            return true;
-        }
-    }
+		if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+			return true;
+		}
+	}
 
-    return false;
+	return false;
 }
 
 /**
@@ -399,16 +399,16 @@ bool token_belongs_to_ast_layout_node(ast_layout_block_t* block, ast_layout_attr
  */
 bool is_layout_node_a_single_tag(ast_layout_node_type_t type)
 {
-    switch (type) {
-        case AST_LAYOUT_NODE_TYPE_PARAGRAPH_RAW:
-        case AST_LAYOUT_NODE_TYPE_INPUT:
-        case AST_LAYOUT_NODE_TYPE_BR:
-        case AST_LAYOUT_NODE_TYPE_HR:
-            return true;
+	switch (type) {
+		case AST_LAYOUT_NODE_TYPE_PARAGRAPH_RAW:
+		case AST_LAYOUT_NODE_TYPE_INPUT:
+		case AST_LAYOUT_NODE_TYPE_BR:
+		case AST_LAYOUT_NODE_TYPE_HR:
+			return true;
 
-        default:
-            return false;
-    }
+		default:
+			return false;
+	}
 }
 
 /**
@@ -421,29 +421,29 @@ bool is_layout_node_a_single_tag(ast_layout_node_type_t type)
  */
 void validate_layout_mainbody(ast_layout_block_t* block)
 {
-    if (block != NULL) {
-        if (block->attributes != NULL) {
-            if (block->attributes->data != NULL) {
-                size_t attributes_capacity = block->attributes->capacity;
+	if (block != NULL) {
+		if (block->attributes != NULL) {
+			if (block->attributes->data != NULL) {
+				size_t attributes_capacity = block->attributes->capacity;
 
-                for (size_t i = 0; i < attributes_capacity; i++) {
-                    hashmap_entry_t *entry = block->attributes->data[i];
+				for (size_t i = 0; i < attributes_capacity; i++) {
+					hashmap_entry_t *entry = block->attributes->data[i];
 
-                    while (entry) {
-                        char* attribute_key = entry->key;
-                        ast_layout_attribute_type_t attribute_key_type = name_to_ast_layout_attribute_type(attribute_key);
-                        ast_layout_attribute_t* attribute_value = entry->value;
-                        
-                        if (is_attribute_type_in_array(attribute_key_type, valid_layout_attributes, valid_layout_attributes_length)) {
-                            attribute_value->ignoreMe = true;
-                        }
+					while (entry) {
+						char* attribute_key = entry->key;
+						ast_layout_attribute_type_t attribute_key_type = name_to_ast_layout_attribute_type(attribute_key);
+						ast_layout_attribute_t* attribute_value = entry->value;
+						
+						if (is_attribute_type_in_array(attribute_key_type, valid_layout_attributes, valid_layout_attributes_length)) {
+							attribute_value->ignoreMe = true;
+						}
 
-                        entry = entry->next;
-                    }
-                }
-            }
-        }
-    }
+						entry = entry->next;
+					}
+				}
+			}
+		}
+	}
 }
 
 /**
@@ -456,104 +456,104 @@ void validate_layout_mainbody(ast_layout_block_t* block)
  */
 bool is_style_attribute(ast_layout_attribute_type_t type)
 {
-    switch (type) {
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_FAMILY:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_SIZE:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_STYLE:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_WEIGHT:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_HEIGHT:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_WIDTH:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_LEFT:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_RIGHT:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_TOP:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_BOTTOM:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_LEFT:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_RIGHT:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_TOP:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_BOTTOM:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_TRANSFORM:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VERTICAL_ALIGN:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VISIBILITY:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_Z_INDEX:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_POSITION:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TOP:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_RIGHT:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BOTTOM:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_LEFT:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_COLOR:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_STYLE:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_WIDTH:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_RADIUS:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLOAT:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CLEAR:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OVERFLOW:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_OVERFLOW:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_WHITE_SPACE:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CURSOR:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FILTER:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OPACITY:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TRANSFORM:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TRANSITION:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ANIMATION:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BOX_SHADOW:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_SHADOW:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE_COLOR:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE_STYLE:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE_WIDTH:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_COLOR:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_IMAGE:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_REPEAT:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_POSITION:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_SIZE:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_ATTACHMENT:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_CLIP:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_ORIGIN:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_BLEND_MODE:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_DISPLAY:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_DIRECTION:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_WRAP:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_FLOW:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_GROW:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_SHRINK:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_BASIS:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_JUSTIFY_CONTENT:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_ITEMS:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_SELF:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_CONTENT:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ORDER:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_GRID:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FILL:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_WIDTH:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_LINECAP:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_LINEJOIN:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_DASHARRAY:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_DASHOFFSET:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FILL_OPACITY:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_OPACITY:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_SHAPE_RENDERING:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_RENDERING:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_IMAGE_RENDERING:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR_INTERPOLATION:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR_RENDERING:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VECTOR_EFFECT:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MASK:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CLIP_PATH:
-            return true;
+	switch (type) {
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_FAMILY:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_SIZE:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_STYLE:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_WEIGHT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_HEIGHT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_WIDTH:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_LEFT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_RIGHT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_TOP:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_BOTTOM:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_LEFT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_RIGHT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_TOP:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_BOTTOM:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_TRANSFORM:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VERTICAL_ALIGN:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VISIBILITY:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_Z_INDEX:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_POSITION:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TOP:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_RIGHT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BOTTOM:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_LEFT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_COLOR:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_STYLE:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_WIDTH:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_RADIUS:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLOAT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CLEAR:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OVERFLOW:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_OVERFLOW:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_WHITE_SPACE:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CURSOR:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FILTER:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OPACITY:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TRANSFORM:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TRANSITION:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ANIMATION:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BOX_SHADOW:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_SHADOW:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE_COLOR:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE_STYLE:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE_WIDTH:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_COLOR:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_IMAGE:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_REPEAT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_POSITION:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_SIZE:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_ATTACHMENT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_CLIP:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_ORIGIN:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_BLEND_MODE:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_DISPLAY:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_DIRECTION:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_WRAP:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_FLOW:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_GROW:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_SHRINK:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_BASIS:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_JUSTIFY_CONTENT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_ITEMS:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_SELF:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_CONTENT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ORDER:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_GRID:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FILL:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_WIDTH:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_LINECAP:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_LINEJOIN:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_DASHARRAY:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_DASHOFFSET:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FILL_OPACITY:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_OPACITY:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_SHAPE_RENDERING:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_RENDERING:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_IMAGE_RENDERING:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR_INTERPOLATION:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR_RENDERING:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VECTOR_EFFECT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MASK:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CLIP_PATH:
+			return true;
 
-        default:
-            return false;
-    }
+		default:
+			return false;
+	}
 }
 
 /**
@@ -566,14 +566,50 @@ bool is_style_attribute(ast_layout_attribute_type_t type)
  */
 bool is_attribute_type_a_style(ast_layout_attribute_type_t type)
 {
-    switch (type) {
-        case AST_LAYOUT_ATTRIBUTE_TYPE_CLASS:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_ID:
-            return true;
+	switch (type) {
+		case AST_LAYOUT_ATTRIBUTE_TYPE_CLASS:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_ID:
+			return true;
 
-        default:
-            return false;
-    }
+		default:
+			return false;
+	}
+}
+
+/**
+ * 
+ * @function validate_style_value_color
+ * @brief Validate the style value color
+ * @params {ast_layout_attribute_t*} attribute - Layout attribute
+ * @params {char*} values_str - Values string
+ * @params {ast_layout_node_type_t} parent_node_type - Parent node type
+ * @returns {bool} - True if the style value is valid, false otherwise
+ * 
+ */
+bool validate_style_value_color(ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type)
+{
+	size_t values_str_length = strlen(values_str);
+	char* attribute_css_name = generator_code_layout_style_name(attribute->type);
+	char* element_name = generator_code_layout_node_type(parent_node_type);
+
+	if (values_str_length == 0) {
+		error(2, "Color value for attribute '%s' is missing in the '%s' element", attribute_css_name, element_name);
+		return false;
+	}
+	else if (strcmp(values_str, "red") == 0) return true;
+	else if (strcmp(values_str, "white") == 0) return true;
+	else if (strcmp(values_str, "black") == 0) return true;
+	else if (strcmp(values_str, "orange") == 0) return true;
+	else if (strcmp(values_str, "yellow") == 0) return true;
+	else if (strcmp(values_str, "green") == 0) return true;
+	else if (strcmp(values_str, "blue") == 0) return true;
+	else if (strcmp(values_str, "pink") == 0) return true;
+	else if (strcmp(values_str, "gray") == 0) return true;
+	else {
+		error(2, "Color value for attribute '%s' is invalid in the '%s' element", attribute_css_name, element_name);
+	}
+
+	return false;
 }
 
 /**
@@ -582,15 +618,81 @@ bool is_attribute_type_a_style(ast_layout_attribute_type_t type)
  * @brief Validate the style value size
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
  * @params {char*} values_str - Values string
+ * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @returns {bool} - True if the style value is valid, false otherwise
  * 
  */
-bool validate_style_value_size(ast_layout_attribute_t* attribute, char* values_str)
+bool validate_style_value_size(ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type)
 {
-    if (attribute) {}
-    if (values_str) {}
+	size_t values_str_length = strlen(values_str);
+	char* attribute_css_name = generator_code_layout_style_name(attribute->type);
+	char* element_name = generator_code_layout_node_type(parent_node_type);
 
-    return true;
+	if (attribute->values->length < 1) {
+		error(2, "Size value for attribute '%s' is missing in the '%s' element", attribute_css_name, element_name);
+		return false;
+	}
+	else if (attribute->values->length > 1) {
+		error(2, "Size value for attribute '%s' is too many in the '%s' element, it should be only one", attribute_css_name, element_name);
+		return false;
+	}
+
+	char* new_value = attribute_css_size_value(values_str);
+	size_t new_value_length = new_value == NULL ? 0 : strlen(new_value);
+
+	if (new_value_length == 0) {
+		if (new_value != NULL) free(new_value);
+		
+		error(2, "Size value for attribute '%s' is invalid in the '%s' element", attribute_css_name, element_name);
+
+		return false;
+	}
+
+	if (values_str_length < new_value_length) {
+		values_str = memory_reallocate(values_str, new_value_length * sizeof(char));
+	}
+	
+	strcpy(values_str, new_value);
+
+	if (new_value != NULL) memory_destroy(new_value);
+
+	return true;
+}
+
+/**
+ * 
+ * @function validate_style_value_sizes
+ * @brief Validate the style value sizes
+ * @params {ast_layout_attribute_t*} attribute - Layout attribute
+ * @params {char*} values_str - Values string
+ * @params {ast_layout_node_type_t} parent_node_type - Parent node type
+ * @returns {bool} - True if the style value is valid, false otherwise
+ * 
+ */
+bool validate_style_value_sizes(ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type)
+{
+	size_t values_str_length = strlen(values_str);
+	char* attribute_css_name = generator_code_layout_style_name(attribute->type);
+	char* element_name = generator_code_layout_node_type(parent_node_type);
+
+	char* new_value = attribute_css_multiple_size_value(attribute->values);
+	size_t new_value_length = new_value == NULL ? 0 : strlen(new_value);
+
+	if (new_value_length == 0) {
+		if (new_value != NULL) free(new_value);
+		
+		error(2, "Size value for attribute '%s' is invalid in the '%s' element", attribute_css_name, element_name);
+
+		return false;
+	}
+
+	if (values_str_length < new_value_length) {
+		values_str = memory_reallocate(values_str, new_value_length * sizeof(char));
+	}
+	
+	strcpy(values_str, new_value);
+
+	return true;
 }
 
 /**
@@ -599,22 +701,48 @@ bool validate_style_value_size(ast_layout_attribute_t* attribute, char* values_s
  * @brief Validate the style value
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
  * @params {char*} values_str - Values string
+ * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @returns {bool} - True if the style value is valid, false otherwise
  * 
  */
-bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str)
+bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type)
 {
-    switch (attribute->type) {
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT:
-            return true;
-        
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_FAMILY:
-            return true;
-        
-        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_SIZE:
-            return validate_style_value_size(attribute, values_str);
-        
-        default:
-            return false;
-    }
+	switch (attribute->type) {
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT:
+			return true;
+		
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_FAMILY:
+			return true;
+		
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_COLOR:
+			return validate_style_value_color(attribute, values_str, parent_node_type);
+
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_DIRECTION:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_DISPLAY:
+			return true;
+
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_SIZE:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_TOP:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_RIGHT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_LEFT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_BOTTOM:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_TOP:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_RIGHT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_LEFT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_BOTTOM:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TOP:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_RIGHT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_LEFT:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BOTTOM:
+			return validate_style_value_size(attribute, values_str, parent_node_type);
+		
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING:
+			return validate_style_value_sizes(attribute, values_str, parent_node_type);
+
+		default:
+			return false;
+	}
 }

@@ -1,4 +1,4 @@
-#ifndef aGENERATOR_H_
+#ifndef _GENERATOR_H_
 #define _GENERATOR_H_
 
 #include <stddef.h>

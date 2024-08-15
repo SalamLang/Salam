@@ -147,6 +147,7 @@ void parser_parse_block(lexer_t* lexer, ast_block_t* block)
 		ast_node_t* node = parser_parse_node(lexer);
 
 		if (node == NULL) {
+			error(2, "Expected a node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
 			continue;
 		}
 		else {
@@ -380,46 +381,60 @@ ast_node_t* parser_parse_function(lexer_t* lexer)
 ast_value_t* parser_parse_expression(lexer_t* lexer)
 {
 	DEBUG_ME;
-	ast_value_t* value = NULL;
 	token_t* token = PARSER_CURRENT;
-	ast_value_type_t* type = NULL;
+		PARSER_NEXT;
+		return NULL;
 
 	if (match(lexer, TOKEN_IDENTIFIER)) {
 		PARSER_NEXT;
-		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
-		value = ast_value_create(type);
-		value->data = strdup(token->data.string);
+		char* data = memory_allocate(16 * sizeof(char));
+		strcpy(data, "string");
+
+		ast_value_type_t* type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		ast_value_t* value = ast_value_create(type, data);
+		return value;
 	}
 	else if (match(lexer, TOKEN_STRING)) {
 		PARSER_NEXT;
-		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
-		value = ast_value_create(type);
-		value->data = strdup(token->data.string);
+		char* data = memory_allocate(16 * sizeof(char));
+		strcpy(data, "string");
+
+		ast_value_type_t* type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		ast_value_t* value = ast_value_create(type, data);
+		return value;
 	}
 	else if (match(lexer, TOKEN_NUMBER_INT)) {
 		PARSER_NEXT;
-		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
-		value = ast_value_create(type);
-		value->data = strdup(int2string(token->data.number_int));
+		char* data = memory_allocate(16 * sizeof(char));
+		strcpy(data, "i1");
+
+		ast_value_type_t* type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		ast_value_t* value = ast_value_create(type, data);
+		return value;
 	}
 	else if (match(lexer, TOKEN_NUMBER_FLOAT)) {
 		PARSER_NEXT;
-		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
-		value = ast_value_create(type);
-		value->data = strdup(float2string(token->data.number_float));
+		char* data = memory_allocate(16 * sizeof(char));
+		strcpy(data, "f1");
+
+		ast_value_type_t* type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		ast_value_t* value = ast_value_create(type, data);
+		return value;
 	}
 	else if (match(lexer, TOKEN_BOOLEAN)) {
 		PARSER_NEXT;
-		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
-		value = ast_value_create(type);
-		value->data = token->data.boolean ? strdup("true") : strdup("false");
+		char* data = memory_allocate(16 * sizeof(char));
+		strcpy(data, token->data.boolean ? "true" : "false");
+
+		ast_value_type_t* type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		ast_value_t* value = ast_value_create(type, data);
+		return value;
 	}
-	
-	if (value == NULL || value->data == NULL) {
+	else {
 		error(2, "Expected an expression at line %d, column %d, but got %s", token->location.end_line, token->location.end_column, token_name(token->type));
 	}
 
-	return value;
+	return NULL;
 }
 
 /**
@@ -528,21 +543,26 @@ ast_t* parser_parse(lexer_t* lexer)
 
 		ast_node_t* node = parser_parse_node(lexer);
 		if (node == NULL) {
+			error(2, "Expected a node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
 			continue;
 		}
 		else if (node->type == AST_NODE_TYPE_LAYOUT) {
+			// Free the previous layout if it exists
 			if (ast->layout != NULL) {
 				ast_layout_destroy(ast->layout);
 			}
 
+			// Set the layout
 			ast->layout = node->data.layout;
 			
+			// Free the node as we don't need it anymore, we just need layout node
 			if (node != NULL) {
 				memory_destroy(node);
 			}
 		}
 		else if (node->type == AST_NODE_TYPE_FUNCTION) {
 			array_push(ast->functions, node->data.function);
+
 			ast_node_destroy_notall(node);
 		}
 	}

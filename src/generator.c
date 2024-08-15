@@ -10,24 +10,24 @@
  */
 generator_t* generator_create(ast_t* ast)
 {
-    DEBUG_ME;
-    if (ast == NULL) {
-        error(2, "AST tree is NULL and not correct!");
-    }
+	DEBUG_ME;
+	if (ast == NULL) {
+		error(2, "AST tree is NULL and not correct!");
+	}
 
-    generator_t* generator = memory_allocate(sizeof(generator_t));
-    generator->ast = ast;
-    generator->html = string_create(4096);
-    generator->css = string_create(4096);
-    generator->js = string_create(4096);
-    generator->inlineCSS = true;
-    generator->inlineJS = true;
+	generator_t* generator = memory_allocate(sizeof(generator_t));
+	generator->ast = ast;
+	generator->html = string_create(4096);
+	generator->css = string_create(4096);
+	generator->js = string_create(4096);
+	generator->inlineCSS = true;
+	generator->inlineJS = true;
 
-    generator->identifier = malloc(sizeof(generator_identifier_t));
+	generator->identifier = malloc(sizeof(generator_identifier_t));
 
-    generator_identifier_init(generator->identifier);
+	generator_identifier_init(generator->identifier);
 
-    return generator;
+	return generator;
 }
 
 /**
@@ -40,26 +40,26 @@ generator_t* generator_create(ast_t* ast)
  */
 void generator_destroy(generator_t* generator)
 {
-    DEBUG_ME;
-    if (generator != NULL) {
-        if (generator->html != NULL) {
-            generator->html->destroy(generator->html);
-        }
+	DEBUG_ME;
+	if (generator != NULL) {
+		if (generator->html != NULL) {
+			generator->html->destroy(generator->html);
+		}
 
-        if (generator->css != NULL) {
-            generator->css->destroy(generator->css);
-        }
+		if (generator->css != NULL) {
+			generator->css->destroy(generator->css);
+		}
 
-        if (generator->js != NULL) {
-            generator->js->destroy(generator->js);
-        }
+		if (generator->js != NULL) {
+			generator->js->destroy(generator->js);
+		}
 
-        if (generator->identifier != NULL) {
-            generator_identifier_destroy(generator->identifier);
-        }
+		if (generator->identifier != NULL) {
+			generator_identifier_destroy(generator->identifier);
+		}
 
-        memory_destroy(generator);
-    }
+		memory_destroy(generator);
+	}
 }
 
 /**
@@ -72,23 +72,23 @@ void generator_destroy(generator_t* generator)
  */
 void generator_debug(generator_t* generator)
 {
-    DEBUG_ME;
-    if (generator == NULL) {
-        printf("generator is NULL\n");
-        return;
-    }
+	DEBUG_ME;
+	if (generator == NULL) {
+		printf("generator is NULL\n");
+		return;
+	}
 
-    printf("generator->html: ");
-    if (generator->html != NULL) generator->html->print(generator->html);
-    else printf("NULL\n");
+	printf("generator->html: ");
+	if (generator->html != NULL) generator->html->print(generator->html);
+	else printf("NULL\n");
 
-    printf("generator->css: ");
-    if (generator->css != NULL) generator->css->print(generator->css);
-    else printf("NULL\n");
+	printf("generator->css: ");
+	if (generator->css != NULL) generator->css->print(generator->css);
+	else printf("NULL\n");
 
-    printf("generator->js: ");
-    if (generator->js != NULL) generator->js->print(generator->js);
-    else printf("NULL\n");
+	printf("generator->js: ");
+	if (generator->js != NULL) generator->js->print(generator->js);
+	else printf("NULL\n");
 
 }
 
@@ -102,22 +102,22 @@ void generator_debug(generator_t* generator)
  */
 void generator_save(generator_t* generator)
 {
-    DEBUG_ME;
-    if (generator == NULL) {
-        return;
-    }
+	DEBUG_ME;
+	if (generator == NULL) {
+		return;
+	}
 
-    if (generator->html != NULL) {
-        file_writes("index.html", generator->html->data);
-    }
+	if (generator->html != NULL) {
+		file_writes("index.html", generator->html->data);
+	}
 
-    if (generator->css != NULL) {
-        file_writes("style.css", generator->css->data);
-    }
+	if (generator->css != NULL) {
+		file_writes("style.css", generator->css->data);
+	}
 
-    if (generator->js != NULL) {
-        file_writes("script.js", generator->js->data);
-    }
+	if (generator->js != NULL) {
+		file_writes("script.js", generator->js->data);
+	}
 }
 
 /**
@@ -131,62 +131,62 @@ void generator_save(generator_t* generator)
  */
 void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html)
 {
-    DEBUG_ME;
-    // LANG
-    ast_layout_attribute_t* html_lang = hashmap_get(cast(hashmap_t*, layout_block->attributes), "lang");
-    char* html_lang_value = NULL;
-    string_append_str(html, " lang=\"");
-    if (html_lang != NULL) {
-        char* values = array_string_token(html_lang->values, 0);
-        html_lang_value = string_lower_str(values);
-        
-        if (values != NULL) memory_destroy(values);
-    }
-    if (html_lang_value == NULL || strcmp(html_lang_value, "") == 0) {
-        string_append_str(html, "fa-IR"); // default
-    }
-    else if (strcmp(html_lang_value, "fa") == 0 || strcmp(html_lang_value, "fa-ir") == 0 || strcmp(html_lang_value, "fa_ir") == 0) {
-        string_append_str(html, "fa-IR");
-    }
-    else if (strcmp(html_lang_value, "en") == 0 || strcmp(html_lang_value, "en-us") == 0 || strcmp(html_lang_value, "en_us") == 0) {
-        string_append_str(html, "en-US");
-    }
-    else {
-        if (html_lang_value != NULL) memory_destroy(html_lang_value);
+	DEBUG_ME;
+	// LANG
+	ast_layout_attribute_t* html_lang = hashmap_get(cast(hashmap_t*, layout_block->attributes), "lang");
+	char* html_lang_value = NULL;
+	string_append_str(html, " lang=\"");
+	if (html_lang != NULL) {
+		char* values = array_string_token(html_lang->values, 0);
+		html_lang_value = string_lower_str(values);
+		
+		if (values != NULL) memory_destroy(values);
+	}
+	if (html_lang_value == NULL || strcmp(html_lang_value, "") == 0) {
+		string_append_str(html, "fa-IR"); // default
+	}
+	else if (strcmp(html_lang_value, "fa") == 0 || strcmp(html_lang_value, "fa-ir") == 0 || strcmp(html_lang_value, "fa_ir") == 0) {
+		string_append_str(html, "fa-IR");
+	}
+	else if (strcmp(html_lang_value, "en") == 0 || strcmp(html_lang_value, "en-us") == 0 || strcmp(html_lang_value, "en_us") == 0) {
+		string_append_str(html, "en-US");
+	}
+	else {
+		if (html_lang_value != NULL) memory_destroy(html_lang_value);
 
-        error(2, "Invalid value for lang attribute in layout block!");
-    }
-    string_append_str(html, "\"");
+		error(2, "Invalid value for lang attribute in layout block!");
+	}
+	string_append_str(html, "\"");
 
-    // DIR
-    ast_layout_attribute_t* html_dir = hashmap_get(cast(hashmap_t*, layout_block->attributes), "dir");
-    char* html_dir_value = NULL;
-    string_append_str(html, " dir=\"");
-    if (html_dir != NULL) {
-        char* values = array_string_token(html_dir->values, 0);
-        html_dir_value = string_lower_str(values);
+	// DIR
+	ast_layout_attribute_t* html_dir = hashmap_get(cast(hashmap_t*, layout_block->attributes), "dir");
+	char* html_dir_value = NULL;
+	string_append_str(html, " dir=\"");
+	if (html_dir != NULL) {
+		char* values = array_string_token(html_dir->values, 0);
+		html_dir_value = string_lower_str(values);
 
-        if (values != NULL) memory_destroy(values);
-    }
-    if (html_dir_value == NULL || strcmp(html_dir_value, "") == 0) {
-        string_append_str(html, "rtl"); // default
-    }
-    else if (strcmp(html_dir_value, "ltr") == 0) {
-        string_append_str(html, "ltr");
-    }
-    else if (strcmp(html_dir_value, "rtl") == 0) {
-        string_append_str(html, "rtl");
-    }
-    else {
-        if (html_lang_value != NULL) memory_destroy(html_lang_value);
-        if (html_dir_value != NULL) memory_destroy(html_dir_value);
+		if (values != NULL) memory_destroy(values);
+	}
+	if (html_dir_value == NULL || strcmp(html_dir_value, "") == 0) {
+		string_append_str(html, "rtl"); // default
+	}
+	else if (strcmp(html_dir_value, "ltr") == 0) {
+		string_append_str(html, "ltr");
+	}
+	else if (strcmp(html_dir_value, "rtl") == 0) {
+		string_append_str(html, "rtl");
+	}
+	else {
+		if (html_lang_value != NULL) memory_destroy(html_lang_value);
+		if (html_dir_value != NULL) memory_destroy(html_dir_value);
 
-        error(2, "Invalid value for dir attribute in layout block!");
-    }
-    string_append_str(html, "\"");
+		error(2, "Invalid value for dir attribute in layout block!");
+	}
+	string_append_str(html, "\"");
 
-    if (html_lang_value != NULL) memory_destroy(html_lang_value);
-    if (html_dir_value != NULL) memory_destroy(html_dir_value);
+	if (html_lang_value != NULL) memory_destroy(html_lang_value);
+	if (html_dir_value != NULL) memory_destroy(html_dir_value);
 }
 
 /**
@@ -200,112 +200,112 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
  */
 string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_block_t* block)
 {
-    DEBUG_ME;
-    size_t html_attributes_length = 0;
-    size_t css_attributes_length = 0;
+	DEBUG_ME;
+	size_t html_attributes_length = 0;
+	size_t css_attributes_length = 0;
 
-    string_t* html_attributes = string_create(1024);
-    string_t* css_attributes = string_create(1024);
+	string_t* html_attributes = string_create(1024);
+	string_t* css_attributes = string_create(1024);
 
-    if (block != NULL) {
-        if (block->attributes != NULL) {
-            hashmap_t* attributes = cast(hashmap_t*, block->attributes);
+	if (block != NULL) {
+		if (block->attributes != NULL) {
+			hashmap_t* attributes = cast(hashmap_t*, block->attributes);
 
-            for (size_t i = 0; i < attributes->capacity; i++) {
-                hashmap_entry_t *entry = attributes->data[i];
+			for (size_t i = 0; i < attributes->capacity; i++) {
+				hashmap_entry_t *entry = attributes->data[i];
 
-                while (entry) {
-                    ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
-                    if (attribute == NULL) {
-                        entry = entry->next;
-                        continue;
-                    }
+				while (entry) {
+					ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
+					if (attribute == NULL) {
+						entry = entry->next;
+						continue;
+					}
 
-                    if (attribute->ignoreMe == true || attribute->isContent == true || attribute->isStyle == true) {}
-                    else {
-                        array_t* attribute_values = cast(array_t*, attribute->values);
-                        char* attribute_values_str = array_string_token(attribute_values, ", ");
-                        size_t attribute_value_length = strlen(attribute_values_str);
+					if (attribute->ignoreMe == true || attribute->isContent == true || attribute->isStyle == true) {}
+					else {
+						array_t* attribute_values = cast(array_t*, attribute->values);
+						char* attribute_values_str = array_string_token(attribute_values, ", ");
+						size_t attribute_value_length = strlen(attribute_values_str);
 
-                        if (html_attributes_length != 0) string_append_char(html_attributes, ' ');
+						if (html_attributes_length != 0) string_append_char(html_attributes, ' ');
 
-                        string_append_str(html_attributes, entry->key);
-                        string_append_str(html_attributes, "=");
+						string_append_str(html_attributes, entry->key);
+						string_append_str(html_attributes, "=");
 
-                        if (attribute_value_length > 1) string_append_str(html_attributes, "\"");
-                        string_append_str(html_attributes, attribute_values_str);
-                        if (attribute_value_length > 1) string_append_str(html_attributes, "\"");
+						if (attribute_value_length > 1) string_append_str(html_attributes, "\"");
+						string_append_str(html_attributes, attribute_values_str);
+						if (attribute_value_length > 1) string_append_str(html_attributes, "\"");
 
-                        if (attribute_values_str != NULL) memory_destroy(attribute_values_str);
+						if (attribute_values_str != NULL) memory_destroy(attribute_values_str);
 
-                        html_attributes_length++;
-                    }
-                    
-                    entry = entry->next;
-                }
-            }
-        }
+						html_attributes_length++;
+					}
+					
+					entry = entry->next;
+				}
+			}
+		}
 
-        if (block->styles != NULL) {
-            hashmap_t* styles = cast(hashmap_t*, block->styles);
+		if (block->styles != NULL) {
+			hashmap_t* styles = cast(hashmap_t*, block->styles);
 
-            for (size_t i = 0; i < styles->capacity; i++) {
-                hashmap_entry_t *entry = styles->data[i];
+			for (size_t i = 0; i < styles->capacity; i++) {
+				hashmap_entry_t *entry = styles->data[i];
 
-                while (entry) {
-                    ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
+				while (entry) {
+					ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
 
-                    if (attribute->isStyle == false) {}
-                    else {
-                        char* attribute_css_name = generator_code_layout_style_name(attribute->type);
-                        char* attribute_css_value = generator_code_layout_style_value(attribute, block->parent_node_type);
+					if (attribute->isStyle == false) {}
+					else {
+						char* attribute_css_name = generator_code_layout_style_name(attribute->type);
+						char* attribute_css_value = generator_code_layout_style_value(attribute, block->parent_node_type);
 
-                        if (css_attributes_length != 0) string_append_char(css_attributes, ';');
-                        string_append_str(css_attributes, attribute_css_name);
-                        string_append_str(css_attributes, ":");
-                        string_append_str(css_attributes, attribute_css_value);
+						if (css_attributes_length != 0) string_append_char(css_attributes, ';');
+						string_append_str(css_attributes, attribute_css_name);
+						string_append_str(css_attributes, ":");
+						string_append_str(css_attributes, attribute_css_value);
 
-                        if (attribute_css_value != NULL) memory_destroy(attribute_css_value);
+						if (attribute_css_value != NULL) memory_destroy(attribute_css_value);
 
-                        css_attributes_length++;
-                    }
-                    
-                    entry = entry->next;
-                }
-            }
-        }
-    }
+						css_attributes_length++;
+					}
+					
+					entry = entry->next;
+				}
+			}
+		}
+	}
 
-    if (css_attributes_length > 0 && css_attributes->length > 0) {
-        if (html_attributes_length > 0 && html_attributes->length > 0) string_append_char(html_attributes, ' ');
+	if (css_attributes_length > 0 && css_attributes->length > 0) {
+		if (html_attributes_length > 0 && html_attributes->length > 0) string_append_char(html_attributes, ' ');
 
-        if (generator->inlineCSS == true) {
-            string_append_str(html_attributes, "style=\"");
-            string_append(html_attributes, css_attributes);
-            string_append_str(html_attributes, "\"");
-        }
-        else {
-            char* tag = generator_identifier_get(generator->identifier);
-            size_t tag_length = strlen(tag);
+		if (generator->inlineCSS == true) {
+			string_append_str(html_attributes, "style=\"");
+			string_append(html_attributes, css_attributes);
+			string_append_str(html_attributes, "\"");
+		}
+		else {
+			char* tag = generator_identifier_get(generator->identifier);
+			size_t tag_length = strlen(tag);
 
-            string_append_str(html_attributes, "class=");
-            if (tag_length > 1) string_append_char(html_attributes, '\"');
-            string_append_str(html_attributes, tag);
-            if (tag_length > 1) string_append_char(html_attributes, '\"');
+			string_append_str(html_attributes, "class=");
+			if (tag_length > 1) string_append_char(html_attributes, '\"');
+			string_append_str(html_attributes, tag);
+			if (tag_length > 1) string_append_char(html_attributes, '\"');
 
-            string_append_char(generator->css, '.');
-            string_append_str(generator->css, tag);
-            string_append_char(generator->css, '{');
-            string_append(generator->css, css_attributes);
-            string_append_char(generator->css, '}');
+			string_append_char(generator->css, '.');
+			string_append_str(generator->css, tag);
+			string_append_char(generator->css, '{');
+			string_append(generator->css, css_attributes);
+			string_append_char(generator->css, '}');
 
-            if (tag != NULL) memory_destroy(tag);
-        }
-    }
+			if (tag != NULL) memory_destroy(tag);
+		}
+	}
 
-    if (css_attributes != NULL) css_attributes->destroy(css_attributes);
+	if (css_attributes != NULL) css_attributes->destroy(css_attributes);
 
-    return html_attributes;
+	return html_attributes;
 }
 
 /**
@@ -319,12 +319,12 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
  */
 char* generator_code_layout_style_value(ast_layout_attribute_t* attribute, ast_layout_node_type_t parent_node_type)
 {
-    DEBUG_ME;
-    char* values_str = array_string_token(attribute->values, ", ");
+	DEBUG_ME;
+	char* values_str = array_string_token(attribute->values, ", ");
 
-    if (parent_node_type == AST_LAYOUT_NODE_TYPE_TABLE) {}
+	if (parent_node_type == AST_LAYOUT_NODE_TYPE_TABLE) {}
 
-    return values_str;
+	return values_str;
 }
 
 /**
@@ -337,7 +337,7 @@ char* generator_code_layout_style_value(ast_layout_attribute_t* attribute, ast_l
  */
 char* generator_code_layout_style_name(ast_layout_attribute_type_t type)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	switch (type) {
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND:
 			return  "background";
@@ -525,96 +525,96 @@ char* generator_code_layout_style_name(ast_layout_attribute_type_t type)
 			return  "clip-path";
 		case AST_LAYOUT_ATTRIBUTE_TYPE_ERROR:
 			return "error";
-        
-        default:
-            return "error????";
+		
+		default:
+			return "error????";
 	}
 }
 
 char* generator_code_layout_node_type(ast_layout_node_type_t type)
 {
-    DEBUG_ME;
-    switch (type) {
-        case AST_LAYOUT_NODE_TYPE_LINK: return "link";
-        case AST_LAYOUT_NODE_TYPE_SCRIPT: return "script";
-        case AST_LAYOUT_NODE_TYPE_STYLE: return "style";
-        case AST_LAYOUT_NODE_TYPE_DIV: return "div";
-        case AST_LAYOUT_NODE_TYPE_HEADER: return "header";
-        case AST_LAYOUT_NODE_TYPE_FOOTER: return "footer";
-        case AST_LAYOUT_NODE_TYPE_NAV: return "nav";
-        case AST_LAYOUT_NODE_TYPE_MAIN: return "main";
-        case AST_LAYOUT_NODE_TYPE_SECTION: return "section";
-        case AST_LAYOUT_NODE_TYPE_ARTICLE: return "article";
-        case AST_LAYOUT_NODE_TYPE_ASIDE: return "aside";
-        case AST_LAYOUT_NODE_TYPE_PARAGRAPH: return "p";
-        case AST_LAYOUT_NODE_TYPE_UL: return "ul";
-        case AST_LAYOUT_NODE_TYPE_OL: return "ol";
-        case AST_LAYOUT_NODE_TYPE_LI: return "li";
-        case AST_LAYOUT_NODE_TYPE_IMG: return "img";
-        case AST_LAYOUT_NODE_TYPE_TABLE: return "table";
-        case AST_LAYOUT_NODE_TYPE_TABLE_TR: return "tr";
-        case AST_LAYOUT_NODE_TYPE_TABLE_TD: return "td";
-        case AST_LAYOUT_NODE_TYPE_TABLE_TH: return "th";
-        case AST_LAYOUT_NODE_TYPE_FORM: return "form";
-        case AST_LAYOUT_NODE_TYPE_INPUT: return "input";
-        case AST_LAYOUT_NODE_TYPE_BUTTON: return "button";
-        case AST_LAYOUT_NODE_TYPE_TEXTAREA: return "textarea";
-        case AST_LAYOUT_NODE_TYPE_SELECT: return "select";
-        case AST_LAYOUT_NODE_TYPE_OPTION: return "option";
-        case AST_LAYOUT_NODE_TYPE_LABEL: return "label";
-        case AST_LAYOUT_NODE_TYPE_IFRAME: return "iframe";
-        case AST_LAYOUT_NODE_TYPE_CANVAS: return "canvas";
-        case AST_LAYOUT_NODE_TYPE_AUDIO: return "audio";
-        case AST_LAYOUT_NODE_TYPE_VIDEO: return "video";
-        case AST_LAYOUT_NODE_TYPE_BLOCKQUOTE: return "blockquote";
-        case AST_LAYOUT_NODE_TYPE_PRE: return "pre";
-        case AST_LAYOUT_NODE_TYPE_CODE: return "code";
-        case AST_LAYOUT_NODE_TYPE_BR: return "br";
-        case AST_LAYOUT_NODE_TYPE_HR: return "hr";
-        case AST_LAYOUT_NODE_TYPE_SPAN: return "span";
-        case AST_LAYOUT_NODE_TYPE_STRONG: return "strong";
-        case AST_LAYOUT_NODE_TYPE_EM: return "em";
-        case AST_LAYOUT_NODE_TYPE_ITALIC: return "i";
-        case AST_LAYOUT_NODE_TYPE_BOLD: return "b";
-        case AST_LAYOUT_NODE_TYPE_UNDERLINE: return "u";
-        case AST_LAYOUT_NODE_TYPE_S: return "s";
-        case AST_LAYOUT_NODE_TYPE_SMALL: return "small";
-        case AST_LAYOUT_NODE_TYPE_BIG: return "big";
-        case AST_LAYOUT_NODE_TYPE_SUB: return "sub";
-        case AST_LAYOUT_NODE_TYPE_SUP: return "sup";
-        case AST_LAYOUT_NODE_TYPE_CENTER: return "center";
-        case AST_LAYOUT_NODE_TYPE_DEL: return "del";
-        case AST_LAYOUT_NODE_TYPE_INS: return "ins";
-        case AST_LAYOUT_NODE_TYPE_MARK: return "mark";
-        case AST_LAYOUT_NODE_TYPE_Q: return "q";
-        case AST_LAYOUT_NODE_TYPE_CITE: return "cite";
-        case AST_LAYOUT_NODE_TYPE_DFN: return "dfn";
-        case AST_LAYOUT_NODE_TYPE_ADDRESS: return "address";
-        case AST_LAYOUT_NODE_TYPE_TIME: return "time";
-        case AST_LAYOUT_NODE_TYPE_PROGRESS: return "progress";
-        case AST_LAYOUT_NODE_TYPE_METER: return "meter";
-        case AST_LAYOUT_NODE_TYPE_DETAILS: return "details";
-        case AST_LAYOUT_NODE_TYPE_SUMMARY: return "summary";
-        case AST_LAYOUT_NODE_TYPE_DIALOG: return "dialog";
-        case AST_LAYOUT_NODE_TYPE_MENU: return "menu";
-        case AST_LAYOUT_NODE_TYPE_MENUITEM: return "menuitem";
-        case AST_LAYOUT_NODE_TYPE_COMMAND: return "command";
-        case AST_LAYOUT_NODE_TYPE_LEGEND: return "legend";
-        case AST_LAYOUT_NODE_TYPE_FIELDSET: return "fieldset";
-        case AST_LAYOUT_NODE_TYPE_CAPTION: return "caption";
-        case AST_LAYOUT_NODE_TYPE_COL: return "col";
-        case AST_LAYOUT_NODE_TYPE_COLGROUP: return "colgroup";
-        case AST_LAYOUT_NODE_TYPE_TABLE_HEADER: return "thead";
-        case AST_LAYOUT_NODE_TYPE_TABLE_BODY: return "tbody";
-        case AST_LAYOUT_NODE_TYPE_TABLE_FOOTER: return "tfoot";
-        
-        case AST_LAYOUT_NODE_TYPE_PARAGRAPH_RAW:
-        case AST_LAYOUT_NODE_TYPE_NONE:
-        case AST_LAYOUT_NODE_TYPE_ERROR:
-            return "";
-    }
+	DEBUG_ME;
+	switch (type) {
+		case AST_LAYOUT_NODE_TYPE_LINK: return "link";
+		case AST_LAYOUT_NODE_TYPE_SCRIPT: return "script";
+		case AST_LAYOUT_NODE_TYPE_STYLE: return "style";
+		case AST_LAYOUT_NODE_TYPE_DIV: return "div";
+		case AST_LAYOUT_NODE_TYPE_HEADER: return "header";
+		case AST_LAYOUT_NODE_TYPE_FOOTER: return "footer";
+		case AST_LAYOUT_NODE_TYPE_NAV: return "nav";
+		case AST_LAYOUT_NODE_TYPE_MAIN: return "main";
+		case AST_LAYOUT_NODE_TYPE_SECTION: return "section";
+		case AST_LAYOUT_NODE_TYPE_ARTICLE: return "article";
+		case AST_LAYOUT_NODE_TYPE_ASIDE: return "aside";
+		case AST_LAYOUT_NODE_TYPE_PARAGRAPH: return "p";
+		case AST_LAYOUT_NODE_TYPE_UL: return "ul";
+		case AST_LAYOUT_NODE_TYPE_OL: return "ol";
+		case AST_LAYOUT_NODE_TYPE_LI: return "li";
+		case AST_LAYOUT_NODE_TYPE_IMG: return "img";
+		case AST_LAYOUT_NODE_TYPE_TABLE: return "table";
+		case AST_LAYOUT_NODE_TYPE_TABLE_TR: return "tr";
+		case AST_LAYOUT_NODE_TYPE_TABLE_TD: return "td";
+		case AST_LAYOUT_NODE_TYPE_TABLE_TH: return "th";
+		case AST_LAYOUT_NODE_TYPE_FORM: return "form";
+		case AST_LAYOUT_NODE_TYPE_INPUT: return "input";
+		case AST_LAYOUT_NODE_TYPE_BUTTON: return "button";
+		case AST_LAYOUT_NODE_TYPE_TEXTAREA: return "textarea";
+		case AST_LAYOUT_NODE_TYPE_SELECT: return "select";
+		case AST_LAYOUT_NODE_TYPE_OPTION: return "option";
+		case AST_LAYOUT_NODE_TYPE_LABEL: return "label";
+		case AST_LAYOUT_NODE_TYPE_IFRAME: return "iframe";
+		case AST_LAYOUT_NODE_TYPE_CANVAS: return "canvas";
+		case AST_LAYOUT_NODE_TYPE_AUDIO: return "audio";
+		case AST_LAYOUT_NODE_TYPE_VIDEO: return "video";
+		case AST_LAYOUT_NODE_TYPE_BLOCKQUOTE: return "blockquote";
+		case AST_LAYOUT_NODE_TYPE_PRE: return "pre";
+		case AST_LAYOUT_NODE_TYPE_CODE: return "code";
+		case AST_LAYOUT_NODE_TYPE_BR: return "br";
+		case AST_LAYOUT_NODE_TYPE_HR: return "hr";
+		case AST_LAYOUT_NODE_TYPE_SPAN: return "span";
+		case AST_LAYOUT_NODE_TYPE_STRONG: return "strong";
+		case AST_LAYOUT_NODE_TYPE_EM: return "em";
+		case AST_LAYOUT_NODE_TYPE_ITALIC: return "i";
+		case AST_LAYOUT_NODE_TYPE_BOLD: return "b";
+		case AST_LAYOUT_NODE_TYPE_UNDERLINE: return "u";
+		case AST_LAYOUT_NODE_TYPE_S: return "s";
+		case AST_LAYOUT_NODE_TYPE_SMALL: return "small";
+		case AST_LAYOUT_NODE_TYPE_BIG: return "big";
+		case AST_LAYOUT_NODE_TYPE_SUB: return "sub";
+		case AST_LAYOUT_NODE_TYPE_SUP: return "sup";
+		case AST_LAYOUT_NODE_TYPE_CENTER: return "center";
+		case AST_LAYOUT_NODE_TYPE_DEL: return "del";
+		case AST_LAYOUT_NODE_TYPE_INS: return "ins";
+		case AST_LAYOUT_NODE_TYPE_MARK: return "mark";
+		case AST_LAYOUT_NODE_TYPE_Q: return "q";
+		case AST_LAYOUT_NODE_TYPE_CITE: return "cite";
+		case AST_LAYOUT_NODE_TYPE_DFN: return "dfn";
+		case AST_LAYOUT_NODE_TYPE_ADDRESS: return "address";
+		case AST_LAYOUT_NODE_TYPE_TIME: return "time";
+		case AST_LAYOUT_NODE_TYPE_PROGRESS: return "progress";
+		case AST_LAYOUT_NODE_TYPE_METER: return "meter";
+		case AST_LAYOUT_NODE_TYPE_DETAILS: return "details";
+		case AST_LAYOUT_NODE_TYPE_SUMMARY: return "summary";
+		case AST_LAYOUT_NODE_TYPE_DIALOG: return "dialog";
+		case AST_LAYOUT_NODE_TYPE_MENU: return "menu";
+		case AST_LAYOUT_NODE_TYPE_MENUITEM: return "menuitem";
+		case AST_LAYOUT_NODE_TYPE_COMMAND: return "command";
+		case AST_LAYOUT_NODE_TYPE_LEGEND: return "legend";
+		case AST_LAYOUT_NODE_TYPE_FIELDSET: return "fieldset";
+		case AST_LAYOUT_NODE_TYPE_CAPTION: return "caption";
+		case AST_LAYOUT_NODE_TYPE_COL: return "col";
+		case AST_LAYOUT_NODE_TYPE_COLGROUP: return "colgroup";
+		case AST_LAYOUT_NODE_TYPE_TABLE_HEADER: return "thead";
+		case AST_LAYOUT_NODE_TYPE_TABLE_BODY: return "tbody";
+		case AST_LAYOUT_NODE_TYPE_TABLE_FOOTER: return "tfoot";
+		
+		case AST_LAYOUT_NODE_TYPE_PARAGRAPH_RAW:
+		case AST_LAYOUT_NODE_TYPE_NONE:
+		case AST_LAYOUT_NODE_TYPE_ERROR:
+			return "";
+	}
 
-    return "error?";
+	return "error?";
 }
 
 /**
@@ -628,59 +628,59 @@ char* generator_code_layout_node_type(ast_layout_node_type_t type)
  */
 string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 {
-    DEBUG_ME;
-    string_t* html = string_create(1024);
+	DEBUG_ME;
+	string_t* html = string_create(1024);
 
-    for (size_t i = 0; i < children->length; i++) {
-        ast_layout_node_t* node = array_get(children, i);
+	for (size_t i = 0; i < children->length; i++) {
+		ast_layout_node_t* node = array_get(children, i);
 
-        string_t* layout_block_str = string_create(1024);
-        string_t* node_attrs_str = generator_code_layout_attributes(generator, node->block);
-        char* node_name = ast_layout_node_type_to_name(node->type);
+		string_t* layout_block_str = string_create(1024);
+		string_t* node_attrs_str = generator_code_layout_attributes(generator, node->block);
+		char* node_name = ast_layout_node_type_to_name(node->type);
 
-        string_append_char(layout_block_str, '<');
-        string_append_str(layout_block_str, node_name);
-        if (node_attrs_str->length > 0) {
-            string_append_char(layout_block_str, ' ');
-            string_append(layout_block_str, node_attrs_str);
-        }
-        if (node_attrs_str != NULL) node_attrs_str->destroy(node_attrs_str);
-        string_append_str(layout_block_str, ">");
+		string_append_char(layout_block_str, '<');
+		string_append_str(layout_block_str, node_name);
+		if (node_attrs_str->length > 0) {
+			string_append_char(layout_block_str, ' ');
+			string_append(layout_block_str, node_attrs_str);
+		}
+		if (node_attrs_str != NULL) node_attrs_str->destroy(node_attrs_str);
+		string_append_str(layout_block_str, ">");
 
-        if (node->block->children->length > 0 || node->block->text_content != NULL) {
-            if (node->block->text_content != NULL) {
-                // string_append_char(layout_block_str, '{');
-                if (node->block->children->length == 0 && strchr(node->block->text_content, '\n') == NULL) {
-                    string_append_str(layout_block_str, node->block->text_content);
-                    // string_append_char(layout_block_str, '}');
-                }
-                else {
-                    string_append_char(layout_block_str, '\n');
-                    string_append_str(layout_block_str, node->block->text_content);
-                    // string_append_char(layout_block_str, '}');
-                    string_append_char(layout_block_str, '\n');
-                }
-            }
+		if (node->block->children->length > 0 || node->block->text_content != NULL) {
+			if (node->block->text_content != NULL) {
+				// string_append_char(layout_block_str, '{');
+				if (node->block->children->length == 0 && strchr(node->block->text_content, '\n') == NULL) {
+					string_append_str(layout_block_str, node->block->text_content);
+					// string_append_char(layout_block_str, '}');
+				}
+				else {
+					string_append_char(layout_block_str, '\n');
+					string_append_str(layout_block_str, node->block->text_content);
+					// string_append_char(layout_block_str, '}');
+					string_append_char(layout_block_str, '\n');
+				}
+			}
 
-            if (node->block->children->length > 0) {
-                string_t* layout_block_children = generator_code_layout_block(generator, node->block->children);
+			if (node->block->children->length > 0) {
+				string_t* layout_block_children = generator_code_layout_block(generator, node->block->children);
 
-                if (layout_block_children->length > 0) string_append(layout_block_str, layout_block_children);
-                if (layout_block_children != NULL) layout_block_children->destroy(layout_block_children);
-            }
+				if (layout_block_children->length > 0) string_append(layout_block_str, layout_block_children);
+				if (layout_block_children != NULL) layout_block_children->destroy(layout_block_children);
+			}
 
-        }
+		}
 
-        string_append_str(layout_block_str, "</");
-        string_append_str(layout_block_str, node_name);
-        string_append_str(layout_block_str, ">\n");
+		string_append_str(layout_block_str, "</");
+		string_append_str(layout_block_str, node_name);
+		string_append_str(layout_block_str, ">\n");
 
-        string_append(html, layout_block_str);
+		string_append(html, layout_block_str);
 
-        if (layout_block_str != NULL) layout_block_str->destroy(layout_block_str);
-    }
+		if (layout_block_str != NULL) layout_block_str->destroy(layout_block_str);
+	}
 
-    return html;
+	return html;
 }
 
 /**
@@ -694,42 +694,42 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
  */
 void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layout_block, string_t* body)
 {
-    DEBUG_ME;
-    if (layout_block != NULL) {
-        validate_layout_mainbody(layout_block);
-    }
-    
-    string_t* body_tag = string_create(1024);
-    string_t* body_content = string_create(1024);
+	DEBUG_ME;
+	if (layout_block != NULL) {
+		validate_layout_mainbody(layout_block);
+	}
+	
+	string_t* body_tag = string_create(1024);
+	string_t* body_content = string_create(1024);
 
-    string_append_str(body_tag, "<body");
-    string_t* body_attrs = generator_code_layout_attributes(generator, layout_block);
-    if (body_attrs->length > 0) string_append_char(body_tag, ' ');
-    string_append(body_tag, body_attrs);
-    body_attrs->destroy(body_attrs);
-    string_append_str(body_tag, ">");
+	string_append_str(body_tag, "<body");
+	string_t* body_attrs = generator_code_layout_attributes(generator, layout_block);
+	if (body_attrs->length > 0) string_append_char(body_tag, ' ');
+	string_append(body_tag, body_attrs);
+	body_attrs->destroy(body_attrs);
+	string_append_str(body_tag, ">");
 
-    char* body_text_content = layout_block->text_content;
-    size_t body_text_content_length = body_text_content != NULL ? strlen(body_text_content) : 0;
+	char* body_text_content = layout_block->text_content;
+	size_t body_text_content_length = body_text_content != NULL ? strlen(body_text_content) : 0;
 
-    string_t* body_child = generator_code_layout_block(generator, layout_block->children);
-    if (body_child->length > 0 || body_text_content_length > 0) string_append_char(body_tag, '\n');
+	string_t* body_child = generator_code_layout_block(generator, layout_block->children);
+	if (body_child->length > 0 || body_text_content_length > 0) string_append_char(body_tag, '\n');
 
-    // text content
-    if (body_text_content != NULL && body_text_content_length > 0) string_append_str(body_content, body_text_content);
+	// text content
+	if (body_text_content != NULL && body_text_content_length > 0) string_append_str(body_content, body_text_content);
 
-    // node content
-    if (body_child->length > 0 && body_text_content != NULL && body_text_content_length > 0) string_append_char(body_content, '\n');
-    if (body_child->length > 0) string_append(body_content, body_child);
+	// node content
+	if (body_child->length > 0 && body_text_content != NULL && body_text_content_length > 0) string_append_char(body_content, '\n');
+	if (body_child->length > 0) string_append(body_content, body_child);
 
-    if (body_child != NULL) body_child->destroy(body_child);
+	if (body_child != NULL) body_child->destroy(body_child);
 
-    string_append(body_tag, body_content);
-    string_append_str(body_tag, "</body>\n");
+	string_append(body_tag, body_content);
+	string_append_str(body_tag, "</body>\n");
 
-    string_set(body, body_tag);
-    body_tag->destroy(body_tag);
-    body_content->destroy(body_content);
+	string_set(body, body_tag);
+	body_tag->destroy(body_tag);
+	body_content->destroy(body_content);
 }
 
 /**
@@ -742,82 +742,82 @@ void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layo
  */
 void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 {
-    DEBUG_ME;
-    if (head == NULL) return;
+	DEBUG_ME;
+	if (head == NULL) return;
 
-    char* value = NULL;
+	char* value = NULL;
 
-    switch (attribute->type) {
-        case AST_LAYOUT_ATTRIBUTE_TYPE_TITLE:
-            value = array_string_token(attribute->values, ", ");
+	switch (attribute->type) {
+		case AST_LAYOUT_ATTRIBUTE_TYPE_TITLE:
+			value = array_string_token(attribute->values, ", ");
 
-            string_append_str(head, "<title>");
-            string_append_str(head, value);
-            string_append_str(head, "</title>");
-            string_append_char(head, '\n');
-            break;
-        
-        case AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR:
-            value = array_string_token(attribute->values, ", ");
+			string_append_str(head, "<title>");
+			string_append_str(head, value);
+			string_append_str(head, "</title>");
+			string_append_char(head, '\n');
+			break;
+		
+		case AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR:
+			value = array_string_token(attribute->values, ", ");
 
-            string_append_str(head, "<meta name=\"author\" content=\"");
-            string_append_str(head, value);
-            string_append_str(head, "\">");
-            string_append_char(head, '\n');
-            break;
+			string_append_str(head, "<meta name=\"author\" content=\"");
+			string_append_str(head, value);
+			string_append_str(head, "\">");
+			string_append_char(head, '\n');
+			break;
 
-        case AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION:
-            value = array_string_token(attribute->values, ", ");
+		case AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION:
+			value = array_string_token(attribute->values, ", ");
 
-            string_append_str(head, "<meta name=\"description\" content=\"");
-            string_append_str(head, value);
-            string_append_str(head, "\">");
-            string_append_char(head, '\n');
-            break;
-        
-        case AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS:
-            value = array_string_token(attribute->values, ", ");
+			string_append_str(head, "<meta name=\"description\" content=\"");
+			string_append_str(head, value);
+			string_append_str(head, "\">");
+			string_append_char(head, '\n');
+			break;
+		
+		case AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS:
+			value = array_string_token(attribute->values, ", ");
 
-            string_append_str(head, "<meta name=\"keywords\" content=\"");
-            string_append_str(head, value);
-            string_append_str(head, "\">");
-            string_append_char(head, '\n');
-            break;
-        
-        case AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET:
-            value = array_string_token(attribute->values, ", ");
+			string_append_str(head, "<meta name=\"keywords\" content=\"");
+			string_append_str(head, value);
+			string_append_str(head, "\">");
+			string_append_char(head, '\n');
+			break;
+		
+		case AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET:
+			value = array_string_token(attribute->values, ", ");
 
-            string_append_str(head, "<meta charset=\"");
-            string_append_str(head, value);
-            string_append_str(head, "\">");
-            string_append_char(head, '\n');
-            break;
-        
-        case AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT:
-            value = array_string_token(attribute->values, ", ");
+			string_append_str(head, "<meta charset=\"");
+			string_append_str(head, value);
+			string_append_str(head, "\">");
+			string_append_char(head, '\n');
+			break;
+		
+		case AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT:
+			value = array_string_token(attribute->values, ", ");
 
-            string_append_str(head, "<meta name=\"viewport\" content=\"");
-            string_append_str(head, value);
-            string_append_str(head, "\">");
-            string_append_char(head, '\n');
-            break;
-        
-        case AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH:
-            value = array_string_token(attribute->values, ", ");
+			string_append_str(head, "<meta name=\"viewport\" content=\"");
+			string_append_str(head, value);
+			string_append_str(head, "\">");
+			string_append_char(head, '\n');
+			break;
+		
+		case AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH:
+			value = array_string_token(attribute->values, ", ");
 
-            string_append_str(head, "<meta http-equiv=\"refresh\" content=\"");
-            string_append_str(head, value);
-            string_append_str(head, "\">");
-            string_append_char(head, '\n');
-            break;
+			string_append_str(head, "<meta http-equiv=\"refresh\" content=\"");
+			string_append_str(head, value);
+			string_append_str(head, "\">");
+			string_append_char(head, '\n');
+			break;
 
-        default:
-            break;
-    }
+		default:
+			break;
+	}
 
-    if (value != NULL) {
-        memory_destroy(value);
-    }
+	if (value != NULL) {
+		memory_destroy(value);
+	}
 }
 
 /**
@@ -830,32 +830,32 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
  */
 void generator_code_head(ast_layout_block_t* block, string_t* head)
 {
-    DEBUG_ME;
-    if (head == NULL) return;
-    else if (block == NULL) return;
+	DEBUG_ME;
+	if (head == NULL) return;
+	else if (block == NULL) return;
 
-    size_t html_tags_length = 0;
+	size_t html_tags_length = 0;
 
-    if (block->attributes != NULL) {
-        hashmap_t* attributes = cast(hashmap_t*, block->attributes);
+	if (block->attributes != NULL) {
+		hashmap_t* attributes = cast(hashmap_t*, block->attributes);
 
-        for (size_t i = 0; i < attributes->capacity; i++) {
-            hashmap_entry_t *entry = attributes->data[i];
+		for (size_t i = 0; i < attributes->capacity; i++) {
+			hashmap_entry_t *entry = attributes->data[i];
 
-            while (entry) {
-                ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
+			while (entry) {
+				ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
 
-                if (attribute->isStyle == true || attribute->isContent == true) {}
-                else {
-                    generator_code_head_item(attribute, head);
+				if (attribute->isStyle == true || attribute->isContent == true) {}
+				else {
+					generator_code_head_item(attribute, head);
 
-                    html_tags_length++;
-                }
-                
-                entry = entry->next;
-            }
-        }
-    }
+					html_tags_length++;
+				}
+				
+				entry = entry->next;
+			}
+		}
+	}
 }
 
 /**
@@ -867,61 +867,61 @@ void generator_code_head(ast_layout_block_t* block, string_t* head)
  */
 void generator_code(generator_t* generator)
 {
-    DEBUG_ME;
-    if (generator->ast == NULL) {
-        error(2, "AST tree is NULL and is not valid!");
-    }
+	DEBUG_ME;
+	if (generator->ast == NULL) {
+		error(2, "AST tree is NULL and is not valid!");
+	}
 
-    ast_t* ast = generator->ast;
+	ast_t* ast = generator->ast;
 
-    if (generator->ast->layout != NULL) {
-        ast_layout_t* layout = ast->layout;
+	if (generator->ast->layout != NULL) {
+		ast_layout_t* layout = ast->layout;
 
-        if (layout->block != NULL) {
-            string_t* head = string_create(1024);
-            string_t* body = string_create(1024);
-            string_t* html = string_create(1024);
+		if (layout->block != NULL) {
+			string_t* head = string_create(1024);
+			string_t* body = string_create(1024);
+			string_t* html = string_create(1024);
 
-            generator_code_head(layout->block, head);
+			generator_code_head(layout->block, head);
 
-            string_append_str(html, "<!doctype html>\n");
-            string_append_str(html, "<html");
+			string_append_str(html, "<!doctype html>\n");
+			string_append_str(html, "<html");
 
-            generator_code_layout_html(layout->block, html);
+			generator_code_layout_html(layout->block, html);
 
-            string_append_str(html, ">\n");
+			string_append_str(html, ">\n");
 
-            string_append_str(html, "<head>\n");
-            string_append_str(html, "<meta charset=\"UTF-8\">\n");
+			string_append_str(html, "<head>\n");
+			string_append_str(html, "<meta charset=\"UTF-8\">\n");
 
-            string_append(html, head);
-            
-            if (generator->inlineCSS == true && generator->css != NULL && generator->css->length > 0) {
-                string_append_str(html, "<style>\n");
-                string_append(html, generator->css);
-                string_append_str(html, "</style>\n");
-            }
-            else {
-                string_append_str(html, "<link rel=\"stylesheet\" href=\"style.css\">\n");
-            }
+			string_append(html, head);
+			
+			if (generator->inlineCSS == true && generator->css != NULL && generator->css->length > 0) {
+				string_append_str(html, "<style>\n");
+				string_append(html, generator->css);
+				string_append_str(html, "</style>\n");
+			}
+			else {
+				string_append_str(html, "<link rel=\"stylesheet\" href=\"style.css\">\n");
+			}
 
-            string_append_str(html, "</head>\n");
+			string_append_str(html, "</head>\n");
 
-            generator_code_layout_body(generator, layout->block, body);
+			generator_code_layout_body(generator, layout->block, body);
 
-            string_append(html, body);
+			string_append(html, body);
 
-            string_append_str(html, "</html>");
+			string_append_str(html, "</html>");
 
-            string_set(generator->html, html);
+			string_set(generator->html, html);
 
-            string_destroy(head);
-            string_destroy(body);
-            string_destroy(html);
-        }
-    }
+			string_destroy(head);
+			string_destroy(body);
+			string_destroy(html);
+		}
+	}
 
-    generator_code_functions(generator);
+	generator_code_functions(generator);
 }
 
 /**
@@ -935,52 +935,52 @@ void generator_code(generator_t* generator)
  */
 string_t* generator_code_node(generator_t* generator, ast_node_t* node)
 {
-    DEBUG_ME;
-    string_t* code = string_create(1024);
+	DEBUG_ME;
+	string_t* code = string_create(1024);
 
-    switch (node->type) {
-        case AST_NODE_TYPE_ERROR:
-            break;
+	switch (node->type) {
+		case AST_NODE_TYPE_ERROR:
+			break;
 
-        case AST_NODE_TYPE_IMPORT:
-            break;
-        
-        case AST_NODE_TYPE_LAYOUT:
-            break;
-        
-        case AST_NODE_TYPE_BLOCK:
-            string_t* block_code = generator_code_block(generator, cast(ast_block_t*, node));
+		case AST_NODE_TYPE_IMPORT:
+			break;
+		
+		case AST_NODE_TYPE_LAYOUT:
+			break;
+		
+		case AST_NODE_TYPE_BLOCK:
+			string_t* block_code = generator_code_block(generator, node->data.block);
 
-            if (block_code != NULL) {
-                string_append(code, block_code);
+			if (block_code != NULL) {
+				string_append(code, block_code);
 
-                block_code->destroy(block_code);
-            }
-            break;
+				block_code->destroy(block_code);
+			}
+			break;
 
-        case AST_NODE_TYPE_FUNCTION:
-            string_t* function_code = generator_code_function(generator, cast(ast_function_t*, node));
+		case AST_NODE_TYPE_FUNCTION:
+			string_t* function_code = generator_code_function(generator, node->data.function);
 
-            if (function_code != NULL) {
-                string_append(code, function_code);
+			if (function_code != NULL) {
+				string_append(code, function_code);
 
-                function_code->destroy(function_code);
-            }
-            break;
-        
-        case AST_NODE_TYPE_IF:
-        case AST_NODE_TYPE_ELSE_IF:
-            string_t* if_code = generator_code_if(generator, cast(ast_if_t*, node));
+				function_code->destroy(function_code);
+			}
+			break;
+		
+		case AST_NODE_TYPE_IF:
+		case AST_NODE_TYPE_ELSE_IF:
+			string_t* if_code = generator_code_if(generator, node->data.ifclause);
 
-            if (if_code != NULL) {
-                string_append(code, if_code);
+			if (if_code != NULL) {
+				string_append(code, if_code);
 
-                if_code->destroy(if_code);
-            }
-            break;
-    }
+				if_code->destroy(if_code);
+			}
+			break;
+	}
 
-    return code;
+	return code;
 }
 
 /**
@@ -994,71 +994,71 @@ string_t* generator_code_node(generator_t* generator, ast_node_t* node)
  */
 string_t* generator_code_type(generator_t* generator, ast_value_type_t* type)
 {
-    DEBUG_ME;
-    string_t* code = string_create(1024);
+	DEBUG_ME;
+	string_t* code = string_create(1024);
 
-    if (generator) {}
+	if (generator) {}
 
-    switch (type->kind) {
-        case AST_TYPE_KIND_VOID:
-            string_append_str(code, "void");
-            return code;
-        
-        case AST_TYPE_KIND_INT:
-            string_append_str(code, "int");
-            return code;
-        
-        case AST_TYPE_KIND_FLOAT:
-            string_append_str(code, "float");
-            return code;
-        
-        // case AST_TYPE_KIND_DOUBLE:
-        //     string_append_str(code, "double");
-        //     return code;
-        
-        case AST_TYPE_KIND_CHAR:
-            string_append_str(code, "char");
-            return code;
-        
-        case AST_TYPE_KIND_STRING:
-            string_append_str(code, "string");
-            return code;
-        
-        case AST_TYPE_KIND_BOOL:
-            string_append_str(code, "bool");
-            return code;
-        
-        case AST_TYPE_KIND_ARRAY:
-            string_append_str(code, "array");
-            return code;
-        
-        // case AST_TYPE_KIND_MAP:
-        //     string_append_str(code, "map");
-        //     return code;
-        
-        case AST_TYPE_KIND_STRUCT:
-            string_append_str(code, "struct");
-            return code;
-        
-        case AST_TYPE_KIND_ENUM:
-            string_append_str(code, "enum");
-            return code;
-        
-        // case AST_TYPE_KIND_UNION:
-        //     string_append_str(code, "union");
-        //     return code;
+	switch (type->kind) {
+		case AST_TYPE_KIND_VOID:
+			string_append_str(code, "void");
+			return code;
+		
+		case AST_TYPE_KIND_INT:
+			string_append_str(code, "int");
+			return code;
+		
+		case AST_TYPE_KIND_FLOAT:
+			string_append_str(code, "float");
+			return code;
+		
+		// case AST_TYPE_KIND_DOUBLE:
+		//     string_append_str(code, "double");
+		//     return code;
+		
+		case AST_TYPE_KIND_CHAR:
+			string_append_str(code, "char");
+			return code;
+		
+		case AST_TYPE_KIND_STRING:
+			string_append_str(code, "string");
+			return code;
+		
+		case AST_TYPE_KIND_BOOL:
+			string_append_str(code, "bool");
+			return code;
+		
+		case AST_TYPE_KIND_ARRAY:
+			string_append_str(code, "array");
+			return code;
+		
+		// case AST_TYPE_KIND_MAP:
+		//     string_append_str(code, "map");
+		//     return code;
+		
+		case AST_TYPE_KIND_STRUCT:
+			string_append_str(code, "struct");
+			return code;
+		
+		case AST_TYPE_KIND_ENUM:
+			string_append_str(code, "enum");
+			return code;
+		
+		// case AST_TYPE_KIND_UNION:
+		//     string_append_str(code, "union");
+		//     return code;
 
-        case AST_TYPE_KIND_POINTER:
-            string_append_str(code, "pointer");
-            return code;
-        
-        case AST_TYPE_KIND_FUNCTION:
-            string_append_str(code, "function");
-            return code;
-    }
+		case AST_TYPE_KIND_POINTER:
+			string_append_str(code, "pointer");
+			return code;
+		
+		case AST_TYPE_KIND_FUNCTION:
+			string_append_str(code, "function");
+			return code;
+	}
 
-    string_append_str(code, "unknown type");
-    return code;
+	string_append_str(code, "unknown type");
+	return code;
 }
 
 /**
@@ -1072,37 +1072,40 @@ string_t* generator_code_type(generator_t* generator, ast_value_type_t* type)
  */
 string_t* generator_code_value(generator_t* generator, ast_value_t* value)
 {
-    DEBUG_ME;
-    string_t* code = string_create(1024);
+	DEBUG_ME;
+	string_t* code = string_create(1024);
 
-    DEBUG_ME;
-    if (value == NULL) {
-        string_append_str(code, "NULL value");
-        return code;
-    }
+	DEBUG_ME;
+	if (value == NULL) {
+		DEBUG_ME;
+		string_append_str(code, "NULL value");
+		return code;
+	}
+	
+	DEBUG_ME;
+	if (value->data != NULL) {
+		DEBUG_ME;
+		string_append_str(code, value->data);
+	}
+	else {
+		DEBUG_ME;
+		string_append_str(code, "NULL value data");
+	}
 
-    DEBUG_ME;
-    if (value->data == NULL) {
-        DEBUG_ME;
-        string_append_str(code, "NULL value data");
-    }
-    else {
-        DEBUG_ME;
-        string_append_str(code, value->data);
-    }
+	if (value->type != NULL) {
+		DEBUG_ME;
+		string_append_char(code, '(');
 
-    DEBUG_ME;
-    string_append_char(code, '(');
+		DEBUG_ME;
+		string_t* code_type = generator_code_type(generator, value->type);
+		string_append(code, code_type);
+		if (code_type != NULL) code_type->destroy(code_type);
 
-    DEBUG_ME;
-    string_t* code_type = generator_code_type(generator, value->type);
-    string_append(code, code_type);
-    code_type->destroy(code_type);
+		DEBUG_ME;
+		string_append_char(code, ')');
+	}
 
-    DEBUG_ME;
-    string_append_char(code, ')');
-
-    return code;
+	return code;
 }
 
 /**
@@ -1116,57 +1119,56 @@ string_t* generator_code_value(generator_t* generator, ast_value_t* value)
  */
 string_t* generator_code_if(generator_t* generator, ast_if_t* ifclause)
 {
-    DEBUG_ME;
-    string_t* code = string_create(1024);
+	DEBUG_ME;
+	string_t* code = string_create(1024);
 
-    if (ifclause->condition) {
-        string_t* condition_code = generator_code_value(generator, ifclause->condition);
-        
-        string_append_str(code, "if (");
-        string_append(code, condition_code);
-        string_append_str(code, ") ");
+	if (ifclause->condition != NULL) {
+		string_t* condition_code = generator_code_value(generator, ifclause->condition);
 
-        if (condition_code != NULL) {
-            condition_code->destroy(condition_code);
-        }
-    }
+		if (condition_code == NULL) {
+			error(2, "Error generating code for if clause condition");
+		}
 
-    string_append_char(code, '{');
-    string_append_char(code, '\n');
+		string_append_str(code, "if (");
+		string_append(code, condition_code);
+		string_append_str(code, ") ");
 
-    string_t* block_code = generator_code_block(generator, ifclause->block);
+		if (condition_code != NULL) {
+			condition_code->destroy(condition_code);
+		}
+	}
 
-    if (block_code != NULL) {
-        string_append(code, block_code);
+	string_t* block_code = generator_code_block(generator, ifclause->block);
 
-        block_code->destroy(block_code);
-    }
+	if (block_code != NULL) {
+		string_append(code, block_code);
 
-    string_append_str(code, "}\n");
+		block_code->destroy(block_code);
+	}
 
-    if (ifclause->else_blocks != NULL) {
-        size_t elseif_length = ifclause->else_blocks->length;
+	if (ifclause->else_blocks != NULL) {
+		size_t elseif_length = ifclause->else_blocks->length;
 
-        if (elseif_length > 0) {
-            for (size_t i = 0; i < elseif_length; i++) {
-                ast_if_t* else_if = array_get(ifclause->else_blocks, i);
+		if (elseif_length > 0) {
+			for (size_t i = 0; i < elseif_length; i++) {
+				ast_if_t* else_if = array_get(ifclause->else_blocks, i);
 
-                string_t* else_if_code = generator_code_if(generator, else_if);
+				string_t* else_if_code = generator_code_if(generator, else_if);
 
-                if (else_if_code != NULL) {
-                    if (i != elseif_length - 1) {
-                        string_append_str(code, "else ");
-                    }
+				if (else_if_code != NULL) {
+					if (i != elseif_length - 1) {
+						string_append_str(code, "else ");
+					}
 
-                    string_append(code, else_if_code);
+					string_append(code, else_if_code);
 
-                    else_if_code->destroy(else_if_code);
-                }
-            }
-        }
-    }
+					else_if_code->destroy(else_if_code);
+				}
+			}
+		}
+	}
 
-    return code;
+	return code;
 }
 
 /**
@@ -1180,26 +1182,26 @@ string_t* generator_code_if(generator_t* generator, ast_if_t* ifclause)
  */
 string_t* generator_code_block(generator_t* generator, ast_block_t* block)
 {
-    DEBUG_ME;
-    string_t* code = string_create(1024);
+	DEBUG_ME;
+	string_t* code = string_create(1024);
 
-    if (block != NULL) {
-        for (size_t i = 0; i < block->children->length; i++) {
-            ast_node_t* node = array_get(block->children, i);
+	if (block != NULL) {
+		for (size_t i = 0; i < block->children->length; i++) {
+			ast_node_t* node = array_get(block->children, i);
 
-            if (node != NULL) {
-                string_t* node_code = generator_code_node(generator, node);
+			if (node != NULL) {
+				string_t* node_code = generator_code_node(generator, node);
 
-                if (node_code != NULL) {
-                    string_append(code, node_code);
+				if (node_code != NULL) {
+					string_append(code, node_code);
 
-                    node_code->destroy(node_code);
-                }
-            }
-        }
-    }
+					node_code->destroy(node_code);
+				}
+			}
+		}
+	}
 
-    return code;
+	return code;
 }
 
 /**
@@ -1213,24 +1215,24 @@ string_t* generator_code_block(generator_t* generator, ast_block_t* block)
  */
 string_t* generator_code_function(generator_t* generator, ast_function_t* function)
 {
-    DEBUG_ME;
-    string_t* code = string_create(1024);
+	DEBUG_ME;
+	string_t* code = string_create(1024);
 
-    string_append_str(code, "function ");
-    string_append_str(code, function->name);
-    string_append_char(code, '(');
-    string_append_char(code, ')');
-    string_append_char(code, '{');
-    string_append_char(code, '\n');
+	string_append_str(code, "function ");
+	string_append_str(code, function->name);
+	string_append_char(code, '(');
+	string_append_char(code, ')');
+	string_append_char(code, '{');
+	string_append_char(code, '\n');
 
-    string_t* code_block = generator_code_block(generator, function->block);
-    string_append(code, code_block);
-    code_block->destroy(code_block);
+	string_t* code_block = generator_code_block(generator, function->block);
+	string_append(code, code_block);
+	code_block->destroy(code_block);
 
-    string_append_char(code, '}');
-    string_append_char(code, '\n');
+	string_append_char(code, '}');
+	string_append_char(code, '\n');
 
-    return code;
+	return code;
 }
 
 /**
@@ -1243,22 +1245,22 @@ string_t* generator_code_function(generator_t* generator, ast_function_t* functi
  */
 void generator_code_functions(generator_t* generator)
 {
-    DEBUG_ME;
-    if (generator != NULL && generator->ast != NULL && generator->ast->functions != NULL && generator->ast->functions->data != NULL && generator->ast->functions->length > 0) {
-        for (size_t i = 0; i < generator->ast->functions->length; i++) {
-            ast_function_t* function = array_get(generator->ast->functions, i);
+	DEBUG_ME;
+	if (generator != NULL && generator->ast != NULL && generator->ast->functions != NULL && generator->ast->functions->data != NULL && generator->ast->functions->length > 0) {
+		for (size_t i = 0; i < generator->ast->functions->length; i++) {
+			ast_function_t* function = array_get(generator->ast->functions, i);
 
-            if (function != NULL) {
-                string_t* function_code = generator_code_function(generator, function);
+			if (function != NULL) {
+				string_t* function_code = generator_code_function(generator, function);
 
-                if (function_code != NULL) {
-                    string_append(generator->js, function_code);
+				if (function_code != NULL) {
+					string_append(generator->js, function_code);
 
-                    function_code->destroy(function_code);
-                }
-            }
-        }
-    }
+					function_code->destroy(function_code);
+				}
+			}
+		}
+	}
 }
 
 /**
@@ -1270,7 +1272,7 @@ void generator_code_functions(generator_t* generator)
  */
 void generator_identifier_init(generator_identifier_t* gen)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	gen->current = memory_allocate(2);
 
 	if (gen->current) {
@@ -1288,16 +1290,16 @@ void generator_identifier_init(generator_identifier_t* gen)
  */
 char* generator_identifier_get(generator_identifier_t* gen)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	int length = strlen(gen->current);
 	char *identifier = memory_allocate(length + 1);
-    
+
 	strcpy(identifier, gen->current);
 
 	for (int i = length - 1; i >= 0; i--) {
 		if (gen->current[i] < 'z') {
 			gen->current[i]++;
-            
+			
 			return identifier;
 		}
 
@@ -1306,13 +1308,13 @@ char* generator_identifier_get(generator_identifier_t* gen)
 		if (i == 0) {
 			char *new_current = memory_allocate(length + 2);
 
-            memset(new_current, 'a', length + 1);
+			memset(new_current, 'a', length + 1);
 
-            new_current[length + 1] = '\0';
+			new_current[length + 1] = '\0';
 
-            free(gen->current);
+			free(gen->current);
 
-            gen->current = new_current;
+			gen->current = new_current;
 		}
 	}
 
@@ -1328,10 +1330,10 @@ char* generator_identifier_get(generator_identifier_t* gen)
  */
 void generator_identifier_destroy(generator_identifier_t* gen)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	if (gen == NULL) return;
 
 	if (gen->current != NULL) free(gen->current);
-
+	
 	free(gen);
 }

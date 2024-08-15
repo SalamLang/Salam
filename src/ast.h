@@ -798,10 +798,11 @@ ast_if_t* ast_if_create(ast_value_t* condition);
  * @function ast_value_create
  * @brief Create a new AST value
  * @params {ast_value_type_t*} type - Value type
+ * @params {void*} data - Value data
  * @returns {ast_value_t*} - Pointer to the created AST value
  * 
  */
-ast_value_t* ast_value_create(ast_value_type_t* type);
+ast_value_t* ast_value_create(ast_value_type_t* type, void* data);
 
 /**
  * 

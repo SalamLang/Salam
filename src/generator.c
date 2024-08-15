@@ -996,6 +996,16 @@ string_t* generator_code_node(generator_t* generator, ast_node_t* node)
 				return_code->destroy(return_code);
 			}
 			break;
+
+		case AST_NODE_TYPE_PRINT:
+			string_t* print_code = generator_code_print(generator, node->data.print);
+
+			if (print_code != NULL) {
+				string_append(code, print_code);
+
+				print_code->destroy(print_code);
+			}
+			break;
 	}
 
 	return code;
@@ -1210,6 +1220,47 @@ string_t* generator_code_values(generator_t* generator, array_t* values)
 
 /**
  * 
+ * @function generator_code_print
+ * @brief Generate the code for the print
+ * @params {generator_t*} generator - Generator
+ * @params {ast_print_t*} print - Print
+ * @returns {string_t*} code - Code
+ * 
+ */
+string_t* generator_code_print(generator_t* generator, ast_print_t* print)
+{
+	DEBUG_ME;
+	string_t* code = string_create(1024);
+
+	if (print->values == NULL) {
+		error(2, "Print values are NULL in print statement");
+	}
+
+	if (print->values->length == 0) {
+		error(2, "Print values length is 0 in print statement");
+	}
+
+	string_t* values_code = generator_code_values(generator, print->values);
+
+	if (values_code == NULL) {
+		error(2, "Error generating code for print values in print statement");
+	}
+
+	// string_append_str(code, "print");
+	string_append_str(code, "console.log");
+	string_append_char(code, '(');
+	string_append(code, values_code);
+	string_append_char(code, ')');
+	string_append_char(code, ';');
+	string_append_char(code, '\n');
+
+	values_code->destroy(values_code);
+
+	return code;
+}
+
+/**
+ * 
  * @function generator_code_return
  * @brief Generate the code for the return
  * @params {generator_t*} generator - Generator
@@ -1237,8 +1288,10 @@ string_t* generator_code_return(generator_t* generator, ast_return_t* returns)
 			error(2, "Error generating code for return values in return statement");
 		}
 
-		string_append_str(code, "return ");
+		string_append_str(code, "return");
+		string_append_char(code, '(');
 		string_append(code, values_code);
+		string_append_char(code, ')');
 		string_append_char(code, ';');
 		string_append_char(code, '\n');
 

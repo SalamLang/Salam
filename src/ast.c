@@ -75,7 +75,11 @@ void ast_node_destroy(ast_node_t* value)
 			case AST_NODE_TYPE_ELSE_IF:
 				value->data.ifclause->destroy(value->data.ifclause);
 				break;
-			
+
+			case AST_NODE_TYPE_PRINT:
+				value->data.print->destroy(value->data.print);
+				break;
+
 			case AST_NODE_TYPE_ERROR:
 				break;
 		}
@@ -339,6 +343,66 @@ ast_block_t* ast_block_create(ast_block_type_t type, ast_type_t parent_type)
 	block->destroy = cast(void (*)(void*), ast_block_destroy);
 
 	return block;
+}
+
+/**
+ * 
+ * @function ast_print_create
+ * @brief Create a new AST node print
+ * @params {array_value_t*} values - Values of the print
+ * @returns {ast_print_t*} - Pointer to the created AST node if
+ * 
+ */
+ast_print_t* ast_print_create(array_value_t* values)
+{
+	DEBUG_ME;
+	ast_print_t* node = memory_allocate(sizeof(ast_print_t));
+
+	node->values = values;
+
+	node->print = cast(void (*)(void*), ast_print_print);
+	node->destroy = cast(void (*)(void*), ast_print_destroy);
+
+	return node;
+}
+
+/**
+ * 
+ * @function ast_print_print
+ * @brief Print the AST print node
+ * @params {ast_print_t*} node - AST print node
+ * @returns {void}
+ * 
+ */
+void ast_print_print(ast_print_t* node)
+{
+	DEBUG_ME;
+	printf("Print\n");
+
+	if (node->values != NULL) {
+		printf("Values\n");
+		node->values->print(node->values);
+	}
+}
+
+/**
+ * 
+ * @function ast_print_destroy
+ * @brief Free the AST print node
+ * @params {ast_print_t*} node - AST print node
+ * @returns {void}
+ * 
+ */
+void ast_print_destroy(ast_print_t* node)
+{
+	DEBUG_ME;
+	if (node != NULL) {
+		if (node->values != NULL) {
+			node->values->destroy(node->values);
+		}
+
+		memory_destroy(node);
+	}
 }
 
 /**
@@ -980,7 +1044,11 @@ void ast_node_print(ast_node_t* node)
 		case AST_NODE_TYPE_IF:
 			printf("If\n");
 			break;
-		
+
+		case AST_NODE_TYPE_PRINT:
+			printf("Print\n");
+			break;
+
 		case AST_NODE_TYPE_RETURN:
 			printf("Return\n");
 			break;

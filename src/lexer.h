@@ -393,5 +393,4 @@ char* location_string(location_t location);
  */
 char* token_string(token_t* token);
 
-
 #endif

@@ -940,26 +940,19 @@ void lexer_lex_string(lexer_t* lexer)
 	char* buffer = memory_allocate(256);
 	size_t index = 0;
 
-	printf("first %c\n", LEXER_CURRENT);
-
 	while (LEXER_CURRENT != '"' && LEXER_CURRENT != '\0') {
-		printf("iterate %c\n", LEXER_CURRENT);
 		buffer[index++] = LEXER_CURRENT;
 		LEXER_NEXT;
 		LEXER_NEXT_COLUMN;
 	}
-	printf("after loop %c\n", LEXER_CURRENT);
 
 	buffer[index] = '\0';
 
 	if (LEXER_CURRENT != '\"') {
 		error(2, "Unterminated string value at line %zu, column %zu", lexer->line, lexer->column);
 	}
-	printf("after if %c\n", LEXER_CURRENT);
 
 	LEXER_NEXT;
-
-	printf("after plus %c\n", LEXER_CURRENT);
 
 	token_t* token = token_create(TOKEN_STRING, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
 	token->data_type = TOKEN_STRING;
@@ -979,7 +972,6 @@ void lexer_lex(lexer_t* lexer)
 {
     DEBUG_ME;
 	while (LEXER_CURRENT != '\0') {
-		printf("Current: %c\n", LEXER_CURRENT);
 		LEXER_NEXT;
 		LEXER_NEXT_COLUMN;
 

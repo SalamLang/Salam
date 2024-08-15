@@ -332,6 +332,8 @@ typedef struct ast_layout_attribute_t {
     ast_layout_attribute_type_t type;
     char* key;
     array_t* values;
+    char* final_key;
+    char* final_value;
     bool isStyle;
     bool isContent;
     bool ignoreMe;

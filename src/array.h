@@ -393,4 +393,14 @@ array_layout_attribute_value_t* array_layout_attribute_value_create(size_t capac
  */
 char* array_layout_attribute_value_string(array_layout_attribute_value_t* array, char* seperator);
 
+/**
+ * 
+ * @function array_layout_attribute_value_first_string
+ * @brief Get the first string from the attribute value array
+ * @params {array_layout_attribute_value_t*} array - Array
+ * @returns {char*} - String
+ * 
+ */
+char* array_layout_attribute_value_first_string(array_layout_attribute_value_t* array);
+
 #endif

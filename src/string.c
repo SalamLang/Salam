@@ -10,6 +10,7 @@
  */
 string_t* string_create(size_t initial_capacity)
 {
+	DEBUG_ME;
 	string_t* str = memory_allocate(sizeof(string_t));
 	
 	str->capacity = initial_capacity;
@@ -35,6 +36,7 @@ string_t* string_create(size_t initial_capacity)
  */
 void string_append_char_begin(string_t* str, char c)
 {
+	DEBUG_ME;
 	if (str->length + 1 >= str->capacity) {
 		str->capacity *= 2;
 		str->data = memory_reallocate(str->data, str->capacity * sizeof(char));
@@ -57,6 +59,7 @@ void string_append_char_begin(string_t* str, char c)
  */
 void string_append_str_begin(string_t* str, const char* prefix)
 {
+	DEBUG_ME;
 	size_t prefix_len = strlen(prefix);
 
 	while (str->length + prefix_len >= str->capacity) {
@@ -81,6 +84,7 @@ void string_append_str_begin(string_t* str, const char* prefix)
  */
 void string_append_char(string_t* str, char c)
 {
+	DEBUG_ME;
 	if (str->length + 1 >= str->capacity) {
 		str->capacity *= 2;
 		str->data = memory_reallocate(str->data, str->capacity * sizeof(char));
@@ -102,6 +106,7 @@ void string_append_char(string_t* str, char c)
  */
 void string_append_str(string_t* str, const char* suffix)
 {
+	DEBUG_ME;
 	size_t suffix_len = strlen(suffix);
 	if (suffix_len == 0) return;
 
@@ -125,6 +130,7 @@ void string_append_str(string_t* str, const char* suffix)
  */
 void string_destroy(string_t* str)
 {
+	DEBUG_ME;
 	if (str != NULL) {
 		if (str->data != NULL) {
 			memory_destroy(str->data);
@@ -148,6 +154,7 @@ void string_destroy(string_t* str)
  */
 void string_print(string_t* str)
 {
+	DEBUG_ME;
 	if (str == NULL || str->data == NULL) printf("NULL\n");
 	else printf("%s\n", str->data);
 }
@@ -163,6 +170,7 @@ void string_print(string_t* str)
  */
 void string_append(string_t* str, string_t* value)
 {
+	DEBUG_ME;
 	if (value->length == 0) return;
 
 	string_append_str(str, value->data);
@@ -179,6 +187,7 @@ void string_append(string_t* str, string_t* value)
  */
 void string_set(string_t* str, string_t* value)
 {
+	DEBUG_ME;
 	return string_append_str(str, value->data);
 }
 
@@ -193,6 +202,7 @@ void string_set(string_t* str, string_t* value)
  */
 void string_set_str(string_t* str, const char* value)
 {
+	DEBUG_ME;
 	return string_append_str(str, value);
 }
 
@@ -206,6 +216,7 @@ void string_set_str(string_t* str, const char* value)
  */
 char* string_lower_str(const char* str)
 {
+	DEBUG_ME;
 	char* buffer = strdup(str);
 
 	for (size_t i = 0; i < strlen(buffer); i++) {
@@ -225,6 +236,7 @@ char* string_lower_str(const char* str)
  */
 char* string_upper_str(const char* str)
 {
+	DEBUG_ME;
 	char* buffer = strdup(str);
 
 	for (size_t i = 0; i < strlen(buffer); i++) {
@@ -246,6 +258,7 @@ char* string_upper_str(const char* str)
  */
 char* replace_all_substrings(const char* str, const char* old_substr, const char* new_substr)
 {
+	DEBUG_ME;
 	if (str == NULL || old_substr == NULL || new_substr == NULL) return NULL;
 
 	size_t str_len = strlen(str);

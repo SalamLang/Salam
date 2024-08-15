@@ -219,6 +219,9 @@ ast_layout_attribute_t* ast_layout_attribute_create(ast_layout_attribute_type_t 
 	attribute->isContent = false;
 	attribute->ignoreMe = false;
 
+	attribute->final_key = NULL;
+	attribute->final_value = NULL;
+
 	attribute->print = cast(void (*)(void*), ast_layout_attribute_print);
 	attribute->destroy = cast(void (*)(void*), ast_layout_attribute_destroy);
 
@@ -239,6 +242,14 @@ void ast_layout_attribute_destroy(ast_layout_attribute_t* value)
 	if (value != NULL) {
 		if (value->key != NULL) {
 			memory_destroy(value->key);
+		}
+
+		if (value->final_key != NULL) {
+			memory_destroy(value->final_key);
+		}
+
+		if (value->final_value != NULL) {
+			memory_destroy(value->final_value);
 		}
 
 		if (value->values != NULL) {

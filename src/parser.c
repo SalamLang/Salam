@@ -369,20 +369,31 @@ ast_node_t* parser_parse_function(lexer_t* lexer)
 	return node;
 }
 
+/**
+ * 
+ * @function parser_parse_expression
+ * @brief Parse the expression
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {ast_value_t*} - AST value
+ * 
+ */
 ast_value_t* parser_parse_expression(lexer_t* lexer)
 {
+	DEBUG_ME;
 	ast_value_t* value = NULL;
-
 	token_t* token = PARSER_CURRENT;
+
+	token->print(token);
+
 	if (match(lexer, TOKEN_IDENTIFIER)) {
 		PARSER_NEXT;
 		value = ast_value_create(ast_type_create(AST_TYPE_KIND_STRING));
-		value->data = token->data.string;
+		value->data = strdup(token->data.string);
 	}
 	else if (match(lexer, TOKEN_STRING)) {
 		PARSER_NEXT;
 		value = ast_value_create(ast_type_create(AST_TYPE_KIND_STRING));
-		value->data = token->data.string;
+		value->data = strdup(token->data.string);
 	}
 	else if (match(lexer, TOKEN_NUMBER_INT)) {
 		PARSER_NEXT;
@@ -397,10 +408,13 @@ ast_value_t* parser_parse_expression(lexer_t* lexer)
 	else if (match(lexer, TOKEN_BOOLEAN)) {
 		PARSER_NEXT;
 		value = ast_value_create(ast_type_create(AST_TYPE_KIND_STRING));
-		value->data = token->data.boolean ? "true" : "false";
+		value->data = token->data.boolean ? strdup("true") : strdup("false");
+	}
+	else {
+		value->data = NULL;
 	}
 	
-	if (value == NULL) {
+	if (value == NULL || value->data) {
 		error(2, "Expected an expression at line %d, column %d, but got %s", token->location.end_line, token->location.end_column, token_name(token->type));
 	}
 

@@ -286,4 +286,15 @@ string_t* generator_code_return(generator_t* generator, ast_return_t* returns);
  */
 string_t* generator_code_values(generator_t* generator, array_t* values);
 
+/**
+ * 
+ * @function generator_code_print
+ * @brief Generate the code for the print
+ * @params {generator_t*} generator - Generator
+ * @params {ast_print_t*} print - Print
+ * @returns {string_t*} code - Code
+ * 
+ */
+string_t* generator_code_print(generator_t* generator, ast_print_t* print);
+
 #endif

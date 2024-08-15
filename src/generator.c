@@ -1291,11 +1291,13 @@ char* generator_identifier_get(generator_identifier_t* gen)
     DEBUG_ME;
 	int length = strlen(gen->current);
 	char *identifier = memory_allocate(length + 1);
+    
 	strcpy(identifier, gen->current);
 
 	for (int i = length - 1; i >= 0; i--) {
 		if (gen->current[i] < 'z') {
 			gen->current[i]++;
+            
 			return identifier;
 		}
 

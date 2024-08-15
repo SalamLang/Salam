@@ -382,39 +382,40 @@ ast_value_t* parser_parse_expression(lexer_t* lexer)
 	DEBUG_ME;
 	ast_value_t* value = NULL;
 	token_t* token = PARSER_CURRENT;
-
-	token->print(token);
+	ast_value_type_t* type = NULL;
 
 	if (match(lexer, TOKEN_IDENTIFIER)) {
 		PARSER_NEXT;
-		value = ast_value_create(ast_type_create(AST_TYPE_KIND_STRING));
+		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		value = ast_value_create(type);
 		value->data = strdup(token->data.string);
 	}
 	else if (match(lexer, TOKEN_STRING)) {
 		PARSER_NEXT;
-		value = ast_value_create(ast_type_create(AST_TYPE_KIND_STRING));
+		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		value = ast_value_create(type);
 		value->data = strdup(token->data.string);
 	}
 	else if (match(lexer, TOKEN_NUMBER_INT)) {
 		PARSER_NEXT;
-		value = ast_value_create(ast_type_create(AST_TYPE_KIND_STRING));
+		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		value = ast_value_create(type);
 		value->data = strdup(int2string(token->data.number_int));
 	}
 	else if (match(lexer, TOKEN_NUMBER_FLOAT)) {
 		PARSER_NEXT;
-		value = ast_value_create(ast_type_create(AST_TYPE_KIND_STRING));
+		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		value = ast_value_create(type);
 		value->data = strdup(float2string(token->data.number_float));
 	}
 	else if (match(lexer, TOKEN_BOOLEAN)) {
 		PARSER_NEXT;
-		value = ast_value_create(ast_type_create(AST_TYPE_KIND_STRING));
+		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		value = ast_value_create(type);
 		value->data = token->data.boolean ? strdup("true") : strdup("false");
 	}
-	else {
-		value->data = NULL;
-	}
 	
-	if (value == NULL || value->data) {
+	if (value == NULL || value->data == NULL) {
 		error(2, "Expected an expression at line %d, column %d, but got %s", token->location.end_line, token->location.end_column, token_name(token->type));
 	}
 
@@ -439,14 +440,13 @@ ast_node_t* parser_parse_if(lexer_t* lexer)
 	ast_value_t* condition = parser_parse_expression(lexer);
 	node->data.ifclause = ast_if_create(condition);
 
-
 	parser_parse_block(lexer, node->data.ifclause->block);
 
 	// Optional else and then one or more if or else if
 	while (true) {
 		if (match(lexer, TOKEN_ELSE)) {
 			// else {} and stop
-			if (match(lexer, TOKEN_LEFT_BRACE)) {
+			if (match_next(lexer, TOKEN_LEFT_BRACE)) {
 				PARSER_NEXT; // Eat the else token
 
 				ast_node_t* else_if = ast_node_create(AST_NODE_TYPE_ELSE_IF, PARSER_CURRENT->location);
@@ -459,7 +459,7 @@ ast_node_t* parser_parse_if(lexer_t* lexer)
 				break; // Stop the loop, this is the last else
 			}
 			// else if {}
-			else if (match(lexer, TOKEN_IF)) {
+			else if (match_next(lexer, TOKEN_IF)) {
 				PARSER_NEXT; // Eat the else token
 
 				ast_node_t* else_if = ast_node_create(AST_NODE_TYPE_IF, PARSER_CURRENT->location);

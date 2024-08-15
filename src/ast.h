@@ -688,10 +688,11 @@ void ast_function_destroy(ast_function_t* value);
  * @function ast_type_create
  * @brief Create a new AST value type
  * @params {ast_value_kind_t} kind - Kind of the value type
+ * @params {location_t} location - Location of the value type
  * @returns {ast_value_type_t*} - Pointer to the created AST value type
  * 
  */
-ast_value_type_t* ast_type_create(ast_value_kind_t kind);
+ast_value_type_t* ast_type_create(ast_value_kind_t kind, location_t location);
 
 /**
  * 

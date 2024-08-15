@@ -377,11 +377,13 @@ ast_if_t* ast_elseif_create(ast_value_t* condition)
 	DEBUG_ME;
 	ast_if_t* node = memory_allocate(sizeof(ast_if_t));
 	node->condition = condition;
+
 	node->block = ast_block_create(AST_NODE_BLOCK_TYPE_IF, AST_NODE_TYPE_ELSE_IF); // TODO???
 	node->block->destroy = cast(void (*)(void*), ast_block_destroy);
 	node->block->print = cast(void (*)(void*), ast_block_print);
 
 	node->else_blocks = NULL;
+
 	node->print = cast(void (*)(void*), ast_if_print);
 	node->destroy = cast(void (*)(void*), ast_if_destroy);
 
@@ -399,12 +401,15 @@ ast_if_t* ast_else_create()
 {
 	DEBUG_ME;
 	ast_if_t* node = memory_allocate(sizeof(ast_if_t));
+
 	node->condition = NULL;
+
 	node->block = ast_block_create(AST_NODE_BLOCK_TYPE_ELSE_IF, AST_NODE_TYPE_ELSE_IF); // TODO???
 	node->block->destroy = cast(void (*)(void*), ast_block_destroy);
 	node->block->print = cast(void (*)(void*), ast_block_print);
 
 	node->else_blocks = NULL;
+
 	node->print = cast(void (*)(void*), ast_if_print);
 	node->destroy = cast(void (*)(void*), ast_if_destroy);
 
@@ -479,7 +484,8 @@ ast_function_t* ast_function_create(char* name)
 	ast_function_t* node = memory_allocate(sizeof(ast_function_t));
 	node->name = strdup(name);
 
-	node->return_type = ast_type_create(AST_TYPE_KIND_VOID);
+	location_t return_location = { 0, 0, 0, 0, 0, 0 }; // TODO: Fix this
+	node->return_type = ast_type_create(AST_TYPE_KIND_VOID, return_location);
 
 	node->parameters = array_create(sizeof(ast_function_parameter_t*), 16);
 	node->parameters->destroy = cast(void (*)(void*), array_function_parameter_destroy);
@@ -665,14 +671,16 @@ void ast_type_print(ast_value_type_t* type)
  * @function ast_type_create
  * @brief Create a new AST value type
  * @params {ast_value_kind_t} kind - Kind of the value type
+ * @params {location_t} location - Location of the value type
  * @returns {ast_value_type_t*} - Pointer to the created AST value type
  * 
  */
-ast_value_type_t* ast_type_create(ast_value_kind_t kind)
+ast_value_type_t* ast_type_create(ast_value_kind_t kind, location_t location)
 {
     DEBUG_ME;
 	ast_value_type_t* type = memory_allocate(sizeof(ast_value_type_t));
 	type->kind = kind;
+	type->location = location;
 
 	type->print = cast(void (*)(void*), ast_type_print);
 	type->destroy = cast(void (*)(void*), ast_type_destroy);

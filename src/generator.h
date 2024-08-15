@@ -264,4 +264,26 @@ string_t* generator_code_value(generator_t* generator, ast_value_t* value);
  */
 string_t* generator_code_type(generator_t* generator, ast_value_type_t* type);
 
+/**
+ * 
+ * @function generator_code_return
+ * @brief Generate the code for the return
+ * @params {generator_t*} generator - Generator
+ * @params {ast_return_t*} returns - Returns
+ * @returns {string_t*} code - Code
+ * 
+ */
+string_t* generator_code_return(generator_t* generator, ast_return_t* returns);
+
+/**
+ * 
+ * @function generator_code_values
+ * @brief Generate the code for the values
+ * @params {generator_t*} generator - Generator
+ * @params {array_t*} values - Values
+ * @returns {string_t*} code - Code
+ * 
+ */
+string_t* generator_code_values(generator_t* generator, array_t* values);
+
 #endif

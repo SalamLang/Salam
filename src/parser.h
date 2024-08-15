@@ -195,4 +195,24 @@ ast_node_t* parser_parse_if(lexer_t* lexer);
  */
 ast_value_t* parser_parse_expression(lexer_t* lexer);
 
+/**
+ * 
+ * @function parser_parse_return
+ * @brief Parse the return
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {ast_node_t*} - AST node
+ * 
+ */
+ast_node_t* parser_parse_return(lexer_t* lexer);
+
+/**
+ * 
+ * @function parser_parse_expressions
+ * @brief Parse the expressions
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {array_value_t*} - Array of AST values
+ * 
+ */
+array_value_t* parser_parse_expressions(lexer_t* lexer);
+
 #endif

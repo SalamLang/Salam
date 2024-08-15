@@ -20,8 +20,8 @@ generator_t* generator_create(ast_t* ast)
 	generator->html = string_create(4096);
 	generator->css = string_create(4096);
 	generator->js = string_create(4096);
-	generator->inlineCSS = false;
-	generator->inlineJS = false;
+	generator->inlineCSS = true;// false;
+	generator->inlineJS = true;// false;
 
 	generator->identifier = malloc(sizeof(generator_identifier_t));
 
@@ -260,6 +260,10 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 						char* attribute_css_name = generator_code_layout_style_name(attribute->type);
 						char* attribute_css_value = generator_code_layout_style_value(attribute, block->parent_node_type);
 
+						if (attribute_css_value == NULL) {
+							error(2, "Empty value for '%s' attribute in '%s' element!", attribute_css_name, generator_code_layout_node_type(block->parent_node_type));
+						}
+
 						if (css_attributes_length != 0) string_append_char(css_attributes, ';');
 						string_append_str(css_attributes, attribute_css_name);
 						string_append_str(css_attributes, ":");
@@ -321,24 +325,26 @@ char* generator_code_layout_style_value(ast_layout_attribute_t* attribute, ast_l
 {
 	DEBUG_ME;
 	char* values_str = array_layout_attribute_value_string(attribute->values, ", ");
-	size_t values_str_length = strlen(values_str);
+	size_t values_str_length = values_str == NULL ? 0 : strlen(values_str);
 
 	char* attribute_css_name = generator_code_layout_style_name(attribute->type);
+	
+	if (values_str != NULL) memory_destroy(values_str);
 
 	// 'Value=...' attribute allowed to be empty, but all other attributes must have a value (not empty)
-	if ((values_str_length == 0 || attribute->values->length == 0) && attribute->type != AST_LAYOUT_ATTRIBUTE_TYPE_VALUE) {
-		if (values_str != NULL) memory_destroy(values_str);
+	if ((attribute->values->length == 0 || values_str_length == 0) && attribute->type != AST_LAYOUT_ATTRIBUTE_TYPE_VALUE) {
 
 		error(2, "Empty value for '%s' attribute in '%s' element!", attribute_css_name, generator_code_layout_node_type(parent_node_type));
 	}
-	// Invalid value for '...' attribute in '...' element in case if not stopped by the condition
-	else if (validate_style_value(attribute, values_str, parent_node_type) == false) {
-		if (values_str != NULL) memory_destroy(values_str);
 
+	bool isValid = validate_style_value(attribute, values_str, parent_node_type);
+
+	// Invalid value for '...' attribute in '...' element in case if not stopped by the condition
+	if (isValid == false) {
 		error(2, "Invalid value for '%s' attribute in '%s' element!", attribute_css_name, generator_code_layout_node_type(parent_node_type));
 	}
 
-	return values_str;
+	return attribute->final_value;
 }
 
 /**
@@ -1065,14 +1071,16 @@ void generator_code(generator_t* generator)
 			string_append_str(html, "<meta charset=\"UTF-8\">\n");
 
 			string_append(html, head);
-			
-			if (generator->inlineCSS == true && generator->css != NULL && generator->css->length > 0) {
-				string_append_str(html, "<style>\n");
-				string_append(html, generator->css);
-				string_append_str(html, "</style>\n");
-			}
-			else {
-				string_append_str(html, "<link rel=\"stylesheet\" href=\"style.css\">\n");
+
+			if (generator->css != NULL && generator->css->length > 0) {
+				if (generator->inlineCSS == true) {
+					string_append_str(html, "<style>\n");
+					string_append(html, generator->css);
+					string_append_str(html, "</style>\n");
+				}
+				else {
+					string_append_str(html, "<link rel=\"stylesheet\" href=\"style.css\">\n");
+				}
 			}
 
 			string_append_str(html, "</head>\n");
@@ -1081,13 +1089,15 @@ void generator_code(generator_t* generator)
 
 			string_append(html, body);
 
-			if (generator->inlineJS == true && generator->js != NULL && generator->js->length > 0) {
-				string_append_str(html, "<script>\n");
-				string_append(html, generator->js);
-				string_append_str(html, "</script>\n");
-			}
-			else {
-				string_append_str(html, "<script src=\"script.js\"></script>\n");
+			if (generator->js != NULL && generator->js->length > 0) {
+				if (generator->inlineJS == true) {
+					string_append_str(html, "<script>\n");
+					string_append(html, generator->js);
+					string_append_str(html, "</script>\n");
+				}
+				else {
+					string_append_str(html, "<script src=\"script.js\"></script>\n");
+				}
 			}
 			
 			string_append_str(html, "</body>\n");

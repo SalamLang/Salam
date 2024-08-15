@@ -870,3 +870,34 @@ char* array_layout_attribute_value_string(array_layout_attribute_value_t* array,
 
     return buffer;
 }
+
+/**
+ * 
+ * @function array_layout_attribute_value_first_string
+ * @brief Get the first string from the attribute value array
+ * @params {array_layout_attribute_value_t*} array - Array
+ * @returns {char*} - String
+ * 
+ */
+char* array_layout_attribute_value_first_string(array_layout_attribute_value_t* array)
+{
+    DEBUG_ME;
+    if (array == NULL || array->length == 0) {
+        return strdup("");
+    }
+
+    string_t* str = string_create(16);
+    for (size_t i = 0; i < array->length; i++) {
+        ast_layout_attribute_value_t* value = array_get(array, i);
+
+        if (value != NULL) {
+            string_append_str(str, value->data); // TODO
+            break;
+        }
+    }
+
+    char* buffer = strdup(str->data);
+    string_destroy(str);
+
+    return buffer;
+}

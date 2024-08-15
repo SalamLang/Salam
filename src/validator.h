@@ -107,6 +107,7 @@ bool is_style_attribute(ast_layout_attribute_type_t type);
  * @brief Validate the style value
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
  * @params {char*} values_str - Values string
+ * @params {char*} new_values_str - New values string
  * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @returns {bool} - True if the style value is valid, false otherwise
  * 
@@ -119,6 +120,7 @@ bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, a
  * @brief Validate the style value size
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
  * @params {char*} values_str - Values string
+ * @params {char**} output_values_str - Output values string
  * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @returns {bool} - True if the style value is valid, false otherwise
  * 

@@ -16,6 +16,7 @@ typedef enum {
     AST_NODE_TYPE_BLOCK,
     AST_NODE_TYPE_RETURN,
     AST_NODE_TYPE_IMPORT,
+    AST_NODE_TYPE_PRINT,
     AST_NODE_TYPE_FUNCTION,
     AST_NODE_TYPE_LAYOUT,
     AST_NODE_TYPE_ERROR,
@@ -301,6 +302,13 @@ typedef struct ast_return_t {
     void (*print)(void* node);
 } ast_return_t;
 
+typedef struct ast_print_t {
+    array_value_t* values;
+
+    void (*destroy)(void* node);
+    void (*print)(void* node);
+} ast_print_t;
+
 typedef struct ast_layout_block_t {
     ast_block_type_t type;
     ast_type_t parent_type;
@@ -358,6 +366,7 @@ typedef union {
     ast_function_t* function;
     ast_if_t* ifclause;
     ast_return_t* returns;
+    ast_print_t* print;
 
     ast_layout_t* layout;
 } ast_union_t;
@@ -881,5 +890,35 @@ void ast_return_destroy(ast_return_t* node);
  * 
  */
 ast_return_t* ast_return_create(array_value_t* values);
+
+/**
+ * 
+ * @function ast_print_create
+ * @brief Create a new AST node print
+ * @params {array_value_t*} values - Values of the print
+ * @returns {ast_print_t*} - Pointer to the created AST node if
+ * 
+ */
+ast_print_t* ast_print_create(array_value_t* values);
+
+/**
+ * 
+ * @function ast_print_destroy
+ * @brief Free the AST print node
+ * @params {ast_print_t*} node - AST print node
+ * @returns {void}
+ * 
+ */
+void ast_print_destroy(ast_print_t* node);
+
+/**
+ * 
+ * @function ast_print_print
+ * @brief Print the AST print node
+ * @params {ast_print_t*} node - AST print node
+ * @returns {void}
+ * 
+ */
+void ast_print_print(ast_print_t* node);
 
 #endif

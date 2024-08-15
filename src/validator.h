@@ -12,6 +12,22 @@
 
 /**
  * 
+ * @var valid_layout_attributes
+ * @brief Valid layout attributes
+ * @type {ast_layout_attribute_type_t[]}
+ */
+extern ast_layout_attribute_type_t valid_layout_attributes[];
+
+/**
+ * 
+ * @var valid_layout_attributes_length
+ * @brief Valid layout attributes length
+ * @type {size_t}
+ */
+extern size_t valid_layout_attributes_length;
+
+/**
+ * 
  * @function validate_layout_block
  * @brief Validate and modify the layout block
  * @params {ast_layout_block_t*} block - Layout block

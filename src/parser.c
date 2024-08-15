@@ -372,6 +372,33 @@ ast_node_t* parser_parse_function(lexer_t* lexer)
 
 /**
  * 
+ * @function parser_parse_expressions_maybe
+ * @brief Parse the expressions maybe
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {array_value_t*} - Array of AST values
+ * 
+ */
+array_value_t* parser_parse_expressions_maybe(lexer_t* lexer)
+{
+	DEBUG_ME;
+	if (
+		match(lexer, TOKEN_NUMBER_FLOAT) ||
+		match(lexer, TOKEN_NUMBER_INT) ||
+		match(lexer, TOKEN_STRING) ||
+		match(lexer, TOKEN_PLUS) ||
+		match(lexer, TOKEN_IDENTIFIER) ||
+		match(lexer, TOKEN_MINUS)
+		// TODO: add mroe types
+	) {
+		return parser_parse_expressions(lexer);
+	}
+
+	return array_value_create(1);
+	// return NULL;
+}
+
+/**
+ * 
  * @function parser_parse_expressions
  * @brief Parse the expressions
  * @params {lexer_t*} lexer - Lexer
@@ -462,6 +489,27 @@ ast_value_t* parser_parse_expression(lexer_t* lexer)
 	}
 
 	return NULL;
+}
+
+/**
+ * 
+ * @function parser_parse_print
+ * @brief Parse the print
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {ast_node_t*} - AST node
+ * 
+ */
+ast_node_t* parser_parse_print(lexer_t* lexer)
+{
+	DEBUG_ME;
+	ast_node_t* node = ast_node_create(AST_NODE_TYPE_PRINT, PARSER_CURRENT->location);
+
+	PARSER_NEXT; // Eat the print token
+
+	array_value_t* values = parser_parse_expressions_maybe(lexer);
+	node->data.print = ast_print_create(values);
+
+	return node;
 }
 
 /**
@@ -570,6 +618,9 @@ ast_node_t* parser_parse_node(lexer_t* lexer)
 	else if (match(lexer, TOKEN_RETURN)) {
 		return parser_parse_return(lexer);
 	}
+	else if (match(lexer, TOKEN_PRINT)) {
+		return parser_parse_print(lexer);
+	}
 	
 	unknown_scope(lexer, "node");
 
@@ -593,6 +644,7 @@ ast_t* parser_parse(lexer_t* lexer)
 		if (PARSER_CURRENT->type == TOKEN_EOF) break;
 
 		ast_node_t* node = parser_parse_node(lexer);
+
 		if (node == NULL) {
 			error(2, "Expected a node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
 			continue;

@@ -215,4 +215,14 @@ ast_node_t* parser_parse_return(lexer_t* lexer);
  */
 array_value_t* parser_parse_expressions(lexer_t* lexer);
 
+/**
+ * 
+ * @function parser_parse_expressions_maybe
+ * @brief Parse the expressions maybe
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {array_value_t*} - Array of AST values
+ * 
+ */
+array_value_t* parser_parse_expressions_maybe(lexer_t* lexer);
+
 #endif

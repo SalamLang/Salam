@@ -330,6 +330,8 @@ typedef struct ast_layout_block_t {
 
 typedef struct ast_layout_attribute_t {
     ast_layout_attribute_type_t type;
+    location_t key_location;
+    location_t value_location;
     char* key;
     array_t* values;
     char* final_key;
@@ -608,10 +610,12 @@ void ast_layout_print(ast_layout_t* value);
  * @params {ast_layout_attribute_type_t} type - Type of the layout attribute
  * @params {const char*} key - Key of the attribute
  * @params {array_t*} values - Values of the attribute
+ * @params {location_t} last_name - Last name of the attribute
+ * @params {location_t} first_value - First value of the attribute
  * @returns {ast_layout_attribute_t*} - Pointer to the created AST node layout attribute
  * 
  */
-ast_layout_attribute_t* ast_layout_attribute_create(ast_layout_attribute_type_t type, char* key, array_t* values);
+ast_layout_attribute_t* ast_layout_attribute_create(ast_layout_attribute_type_t type, char* key, array_t* values, location_t last_name, location_t first_value);
 
 /**
  * 

@@ -115,17 +115,39 @@ bool match_prev(lexer_t* lexer, token_type_t token_type)
  * @function parser_parse_value
  * @brief Parse the value
  * @params {lexer_t*} lexer - Lexer
- * @returns {token_t*} - Token
+ * @returns {ast_layout_value_t*} - AST Layout value
  * 
  */
-token_t* parser_parse_value(lexer_t* lexer)
+ast_layout_value_t* parser_parse_value(lexer_t* lexer)
 {
     DEBUG_ME;
 	token_t* token = PARSER_CURRENT;
 
 	PARSER_NEXT;
 
-	return token;
+	ast_layout_value_t* value = ast_layout_value_create(token_value(token));
+
+	return value;
+}
+
+/**
+ * 
+ * @function parser_parse_layout_value
+ * @brief Parse the layout value
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {ast_layout_attribute_value_t*} - AST Layout attribute value
+ * 
+ */
+ast_layout_attribute_value_t* parser_parse_layout_value(lexer_t* lexer)
+{
+    DEBUG_ME;
+	token_t* token = PARSER_CURRENT;
+
+	PARSER_NEXT;
+	
+	ast_layout_attribute_value_t* value = ast_layout_attribute_value_create(token_value(token));
+
+	return value;
 }
 
 /**
@@ -192,8 +214,7 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
 {
     DEBUG_ME;
 	// token
-	array_t* values = array_create(sizeof(token_t*), 1);
-	values->destroy = cast(void (*)(void*), array_token_destroy);
+	array_t* values = array_layout_attribute_value_create(1);
 
 	token_t* name_token = PARSER_CURRENT;
 	string_t* name = string_create(16);
@@ -222,20 +243,19 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
 		error(2, "Expected a colon after the attribute name at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
 	}
 
-	token_t* value = parser_parse_value(lexer);
+	ast_layout_attribute_value_t* value = parser_parse_layout_value(lexer);
 
-	token_t* value_copy = token_copy(value);
-
-	array_push(values, value_copy);
+	array_push(values, value);
 
 	if (match(lexer, TOKEN_COMMA)) {
 		while (match(lexer, TOKEN_COMMA)) {
 			PARSER_NEXT; // Eating the comma token
 
-			token_t* new_value = parser_parse_value(lexer);
+			ast_layout_attribute_value_t* new_value = parser_parse_layout_value(lexer);
 
-			token_t* new_value_copy = token_copy(new_value);
-			array_push(values, new_value_copy);
+			if (new_value != NULL) {
+				array_push(values, new_value);
+			}
 		}
 	}
 

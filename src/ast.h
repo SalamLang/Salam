@@ -151,6 +151,9 @@ typedef enum {
     AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_BOTTOM,
     AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN,
     AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION,
+    AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE,
+    AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE,
+    AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR,
     AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_TRANSFORM,
     AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VERTICAL_ALIGN,
     AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VISIBILITY,
@@ -389,6 +392,8 @@ typedef struct {
     void (*destroy)(void* node);
     void (*print)(void* node);
 } ast_t;
+
+typedef char ast_layout_attribute_value_t;
 
 /**
  * 
@@ -922,5 +927,35 @@ void ast_print_destroy(ast_print_t* node);
  * 
  */
 void ast_print_print(ast_print_t* node);
+
+/**
+ * 
+ * @function ast_layout_attribute_value_print
+ * @brief Print the AST layout attribute value
+ * @params {ast_layout_attribute_value_t*} value - AST layout attribute value
+ * @returns {void}
+ * 
+ */
+void ast_layout_attribute_value_print(ast_layout_attribute_value_t* value);
+
+/**
+ * 
+ * @function ast_layout_attribute_value_destroy
+ * @brief Free the AST layout attribute value
+ * @params {ast_layout_attribute_value_t*} value - AST layout attribute value
+ * @returns {void}
+ * 
+ */
+void ast_layout_attribute_value_destroy(ast_layout_attribute_value_t* value);
+
+/**
+ * 
+ * @function ast_layout_attribute_value_create
+ * @brief Create a new AST node layout attribute value
+ * @params {char*} value - Value of the attribute
+ * @returns {ast_layout_attribute_value_t*} - Pointer to the created AST node layout attribute value
+ * 
+ */
+ast_layout_attribute_value_t* ast_layout_attribute_value_create(char* value);
 
 #endif

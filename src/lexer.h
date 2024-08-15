@@ -5,6 +5,7 @@
 #include <stdbool.h>
 
 #include "base.h"
+#include "file.h"
 
 typedef struct {
     size_t index;
@@ -360,5 +361,37 @@ char* float2string(float value);
  * 
  */
 char* double2string(double value);
+
+/**
+ * 
+ * @function lexer_save
+ * @brief Saving the lexer state
+ * @params {lexer_t*} lexer - Lexer state
+ * @params {const char*} tokens_output - Tokens output file
+ * @returns {void}
+ * 
+ */
+void lexer_save(lexer_t* lexer, const char* tokens_output);
+
+/**
+ * 
+ * @function location_string
+ * @brief Get the string representation of a location
+ * @params {location_t} location - Location
+ * @returns {char*}
+ * 
+ */
+char* location_string(location_t location);
+
+/**
+ * 
+ * @function token_string
+ * @brief Get the name & value of a token as a string
+ * @params {token_t*} token - Token
+ * @returns {char*} - String representation of the token
+ * 
+ */
+char* token_string(token_t* token);
+
 
 #endif

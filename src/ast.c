@@ -244,9 +244,9 @@ void ast_layout_attribute_destroy(ast_layout_attribute_t* value)
 			memory_destroy(value->key);
 		}
 
-		if (value->final_key != NULL) {
-			memory_destroy(value->final_key);
-		}
+		// if (value->final_key != NULL) {
+		// 	memory_destroy(value->final_key);
+		// }
 
 		if (value->final_value != NULL) {
 			memory_destroy(value->final_value);

@@ -301,8 +301,13 @@ void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexe
 {
     DEBUG_ME;
 	ast_layout_node_t* node = parser_parse_layout_node(lexer);
-
-	array_push(block->children, node);
+	
+	if (node != NULL) {
+		array_push(block->children, node);
+	}
+	else {
+		error(2, "Expected a layout node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
+	}
 }
 
 /**
@@ -641,8 +646,11 @@ ast_node_t* parser_parse_node(lexer_t* lexer)
 	else if (match(lexer, TOKEN_PRINT)) {
 		return parser_parse_print(lexer);
 	}
-	
-	unknown_scope(lexer, "node");
+	else {
+		error(2, "Unknown token type '%s' at line %d, column %d", token_name(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
+	}
+
+	// unknown_scope(lexer, "node");
 
 	return NULL;
 }

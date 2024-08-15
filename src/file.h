@@ -36,6 +36,17 @@ bool file_writes(const char* path, const char* content);
 
 /**
  * 
+ * @function file_appends
+ * @brief Appending content to a file
+ * @params {char*} path - Path of file
+ * @params {char*} content - Content of file
+ * @returns {bool}
+ * 
+ */
+bool file_appends(const char* path, const char* content);
+
+/**
+ * 
  * @function file_exists
  * @berif Check if a file exists
  * @params {char*} path - Path of file

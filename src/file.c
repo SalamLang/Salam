@@ -316,3 +316,29 @@ time_t file_get_modified(const char* path)
 
     return st.st_mtime;
 }
+
+/**
+ * 
+ * @function file_appends
+ * @brief Appending content to a file
+ * @params {char*} path - Path of file
+ * @params {char*} content - Content of file
+ * @returns {bool}
+ * 
+ */
+bool file_appends(const char* path, const char* content)
+{
+    DEBUG_ME;
+    FILE* file = fopen(path, "a");
+    if (file == NULL) {
+        panic("Failed to open file");
+    }
+
+    size_t size = strlen(content);
+
+    fwrite(content, 1, size, file);
+
+    fclose(file);
+
+    return true;
+}

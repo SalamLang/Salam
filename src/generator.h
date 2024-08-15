@@ -65,7 +65,7 @@ void generator_debug(generator_t* generator);
  * @returns {void}
  *
  */
-void generator_save(generator_t* generator);
+void generator_save(generator_t* generator, const char* html_output, const char* css_output, const char* js_output);
 
 /**
  *

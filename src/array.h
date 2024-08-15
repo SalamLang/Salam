@@ -341,4 +341,14 @@ void array_block_print(array_block_t* array);
  */
 void array_block_destroy(array_block_t* array);
 
+/**
+ * 
+ * @function array_value_create
+ * @brief Create a new value array
+ * @params {size_t} capacity - Initial capacity of the array
+ * @returns {array_value_t*} - Pointer to the created array
+ * 
+ */
+array_value_t* array_value_create(size_t capacity);
+
 #endif

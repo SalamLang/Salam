@@ -1083,34 +1083,79 @@ string_t* generator_code_value(generator_t* generator, ast_value_t* value)
 	DEBUG_ME;
 	string_t* code = string_create(1024);
 
-	DEBUG_ME;
 	if (value == NULL) {
-		DEBUG_ME;
-		string_append_str(code, "NULL value");
+		error(2, "Value is NULL in value statement");
 		return code;
 	}
-	
-	DEBUG_ME;
-	if (value->data != NULL) {
-		DEBUG_ME;
-		string_append_str(code, value->data);
-	}
-	else {
-		DEBUG_ME;
-		string_append_str(code, "NULL value data");
+	else if (value->data == NULL) {
+		error(2, "Value data is NULL in value statement");
+		return code;
 	}
 
 	if (value->type != NULL) {
-		DEBUG_ME;
-		string_append_char(code, '(');
+		switch (value->type->kind) {
+			case AST_TYPE_KIND_VOID:
+				string_append_str(code, value->data);
+				break;
+			
+			case AST_TYPE_KIND_INT:
+				string_append_str(code, value->data);
+				break;
 
-		DEBUG_ME;
-		string_t* code_type = generator_code_type(generator, value->type);
-		string_append(code, code_type);
-		if (code_type != NULL) code_type->destroy(code_type);
+			case AST_TYPE_KIND_FLOAT:
+				string_append_str(code, value->data);
+				break;
 
-		DEBUG_ME;
-		string_append_char(code, ')');
+			// case AST_TYPE_KIND_DOUBLE:
+			// 	string_append_str(code, value->data);
+			// 	break;
+
+			case AST_TYPE_KIND_CHAR:
+				string_append_str(code, value->data);
+				break;
+
+			case AST_TYPE_KIND_NULL:
+				string_append_str(code, value->data);
+				break;
+
+			case AST_TYPE_KIND_STRING:
+				string_append_char(code, '"');
+				string_append_str(code, value->data);
+				string_append_char(code, '"');
+				break;
+
+			case AST_TYPE_KIND_BOOL:
+				string_append_str(code, value->data);
+				break;
+
+			case AST_TYPE_KIND_STRUCT:
+				string_append_str(code, value->data);
+				break;
+
+			case AST_TYPE_KIND_ENUM:
+				string_append_str(code, value->data);
+				break;
+
+			case AST_TYPE_KIND_POINTER:
+				string_append_str(code, value->data);
+				break;
+
+			case AST_TYPE_KIND_ARRAY:
+				string_append_str(code, value->data);
+				break;
+
+			case AST_TYPE_KIND_FUNCTION:
+				string_append_str(code, value->data);
+				break;
+		}
+
+		// string_append_char(code, '(');
+
+		// string_t* code_type = generator_code_type(generator, value->type);
+		// string_append(code, code_type);
+		// if (code_type != NULL) code_type->destroy(code_type);
+
+		// string_append_char(code, ')');
 	}
 
 	return code;
@@ -1167,15 +1212,27 @@ string_t* generator_code_return(generator_t* generator, ast_return_t* returns)
 	DEBUG_ME;
 	string_t* code = string_create(1024);
 
-	if (returns->values != NULL) {
+	if (returns->values == NULL) {
+		error(2, "Return values are NULL in return statement");
+	}
+
+	if (returns->values->length == 0) {
+		string_append_str(code, "return;");
+		string_append_char(code, '\n');
+	}
+	else {
 		string_t* values_code = generator_code_values(generator, returns->values);
 
-		if (values_code != NULL) {
-			string_append_str(code, "return ");
-			string_append(code, values_code);
-
-			values_code->destroy(values_code);
+		if (values_code == NULL) {
+			error(2, "Error generating code for return values in return statement");
 		}
+
+		string_append_str(code, "return ");
+		string_append(code, values_code);
+		string_append_char(code, ';');
+		string_append_char(code, '\n');
+
+		values_code->destroy(values_code);
 	}
 
 	return code;

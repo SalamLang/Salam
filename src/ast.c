@@ -67,6 +67,10 @@ void ast_node_destroy(ast_node_t* value)
 				value->data.layout->destroy(value->data.layout);
 				break;
 			
+			case AST_NODE_TYPE_RETURN:
+				value->data.returns->destroy(value->data.returns);
+				break;
+			
 			case AST_NODE_TYPE_IF:
 			case AST_NODE_TYPE_ELSE_IF:
 				value->data.ifclause->destroy(value->data.ifclause);
@@ -339,6 +343,65 @@ ast_block_t* ast_block_create(ast_block_type_t type, ast_type_t parent_type)
 
 /**
  * 
+ * @function ast_return_create
+ * @brief Create a new AST node return
+ * @params {array_value_t*} values - Values of the return
+ * @returns {ast_return_t*} - Pointer to the created AST node if
+ * 
+ */
+ast_return_t* ast_return_create(array_value_t* values)
+{
+	DEBUG_ME;
+	ast_return_t* node = memory_allocate(sizeof(ast_return_t));
+
+	node->values = values;
+
+	node->print = cast(void (*)(void*), ast_if_print);
+	node->destroy = cast(void (*)(void*), ast_if_destroy);
+
+	return node;
+}
+
+/**
+ * 
+ * @function ast_return_print
+ * @brief Print the AST return node
+ * @params {ast_return_t*} node - AST return node
+ * @returns {void}
+ */
+void ast_return_print(ast_return_t* node)
+{
+	DEBUG_ME;
+	printf("Return\n");
+
+	if (node->values != NULL) {
+		printf("Values\n");
+		node->values->print(node->values);
+	}
+}
+
+/**
+ * 
+ * @function ast_return_destroy
+ * @brief Free the AST return node
+ * @params {ast_return_t*} node - AST return node
+ * @returns {void}
+ * 
+ */
+void ast_return_destroy(ast_return_t* node)
+{
+	DEBUG_ME;
+	if (node != NULL) {
+		if (node->values != NULL) {
+			node->values->destroy(node->values);
+		}
+
+		memory_destroy(node);
+	}
+}
+
+/**
+ * 
  * @function ast_if_create
  * @brief Create a new AST node if
  * @params {ast_value_t*} condition - Condition of the if
@@ -429,18 +492,29 @@ void ast_if_print(ast_if_t* node)
 	DEBUG_ME;
 	printf("If\n");
 
+	printf("Condition\n");
 	if (node->condition != NULL) {
-		printf("Condition\n");
 		node->condition->print(node->condition);
 	}
+	else {
+		printf("NULL\n");
+	}
 
+	printf("Else Blocks\n");
 	if (node->else_blocks != NULL) {
-		printf("Else Blocks\n");
 		node->else_blocks->print(node->else_blocks);
+	}
+	else {
+		printf("NULL\n");
 	}
 
 	printf("Block\n");
-	node->block->print(node->block);
+	if (node->block != NULL) {
+		node->block->print(node->block);
+	}
+	else {
+		printf("NULL\n");
+	}
 }
 
 /**
@@ -455,18 +529,22 @@ void ast_if_destroy(ast_if_t* node)
 {
 	DEBUG_ME;
 	if (node != NULL) {
+		DEBUG_ME;
 		if (node->condition != NULL) {
 			node->condition->destroy(node->condition);
 		}
 
+		DEBUG_ME;
 		if (node->block != NULL) {
 			node->block->destroy(node->block);
 		}
 
+		DEBUG_ME;
 		if (node->else_blocks != NULL) {
 			node->else_blocks->destroy(node->else_blocks);
 		}
 
+		DEBUG_ME;
 		memory_destroy(node);
 	}
 }
@@ -893,6 +971,10 @@ void ast_node_print(ast_node_t* node)
 		
 		case AST_NODE_TYPE_IF:
 			printf("If\n");
+			break;
+		
+		case AST_NODE_TYPE_RETURN:
+			printf("Return\n");
 			break;
 		
 		case AST_NODE_TYPE_ELSE_IF:

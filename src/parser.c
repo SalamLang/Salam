@@ -236,13 +236,6 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
 		}
 	}
 
-	if (match(lexer, TOKEN_COLON)) {
-		PARSER_NEXT; // Eating the left brace token
-	}
-	else {
-		error(2, "Expected a colon after the attribute name at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
-	}
-
 	token_t* first_value = PARSER_CURRENT;
 	ast_layout_attribute_value_t* value = parser_parse_layout_value(lexer);
 
@@ -327,11 +320,11 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer)
 	expect(lexer, TOKEN_LEFT_BRACE);
 
 	while (PARSER_CURRENT->type != TOKEN_RIGHT_BRACE) {
-		if (match(lexer, TOKEN_IDENTIFIER) && (match_next(lexer, TOKEN_COLON) || match_next(lexer, TOKEN_MINUS))) {
-			parser_parse_layout_block_attribute(block, lexer);
-		}
-		else if (match(lexer, TOKEN_IDENTIFIER) && match_next(lexer, TOKEN_LEFT_BRACE)) {
+		if (match(lexer, TOKEN_IDENTIFIER) && match_next(lexer, TOKEN_LEFT_BRACE)) {
 			parser_parse_layout_block_children(block, lexer);
+		}
+		else if (match(lexer, TOKEN_IDENTIFIER)) {
+			parser_parse_layout_block_attribute(block, lexer);
 		}
 		else {
 			unknown_scope(lexer, "layout block");

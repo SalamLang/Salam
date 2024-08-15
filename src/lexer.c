@@ -98,6 +98,7 @@ token_t* token_create(token_type_t type, location_t location)
 
 	token->name = cast(char* (*)(token_type_t), token_name);
 	token->value = cast(char* (*)(void*), token_value);
+
 	token->print = cast(void (*)(void*), token_print);
 	token->destroy = cast(void (*)(void*), token_destroy);
 		

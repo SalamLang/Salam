@@ -771,8 +771,8 @@ array_layout_attribute_value_t* array_layout_attribute_value_create(size_t capac
     DEBUG_ME;
     array_layout_attribute_value_t* array = array_create(sizeof(ast_layout_attribute_value_t*), capacity);
 
-    array->destroy = cast(void (*)(void*), array_layout_attribute_value_destroy);
     array->print = cast(void (*)(void*), array_layout_attribute_value_print);
+    array->destroy = cast(void (*)(void*), array_layout_attribute_value_destroy);
 
     return array;
 }

@@ -28,7 +28,7 @@ layout {
     box {
         content: "Hey, mate!"
         display: flex
-        flex-direction: column
+        flex-direction: column2
         //flex-direction: row
 
         span {

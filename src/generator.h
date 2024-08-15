@@ -297,4 +297,14 @@ string_t* generator_code_values(generator_t* generator, array_t* values);
  */
 string_t* generator_code_print(generator_t* generator, ast_print_t* print);
 
+/**
+ * 
+ * @function generator_code_layout_node_type
+ * @brief Convert AST layout node type to HTML node name
+ * @params {ast_layout_node_type_t} type - Layout Node Type
+ * @returns {char*} name - Name
+ * 
+ */
+char* generator_code_layout_node_type(ast_layout_node_type_t type);
+
 #endif

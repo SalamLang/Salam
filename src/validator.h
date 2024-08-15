@@ -100,4 +100,107 @@ bool is_attribute_type_a_style(ast_layout_attribute_type_t type);
  */
 bool is_style_attribute(ast_layout_attribute_type_t type);
 
+/**
+ * 
+ * @function validate_style_value
+ * @brief Validate the style value
+ * @params {ast_layout_attribute_t*} attribute - Layout attribute
+ * @params {char*} values_str - Values string
+ * @returns {bool} - True if the style value is valid, false otherwise
+ * 
+ */
+bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str);
+
+/**
+ * 
+ * @function validate_style_value_size
+ * @brief Validate the style value size
+ * @params {ast_layout_attribute_t*} attribute - Layout attribute
+ * @params {char*} values_str - Values string
+ * @returns {bool} - True if the style value is valid, false otherwise
+ * 
+ */
+bool validate_style_value_size(ast_layout_attribute_t* attribute, char* values_str);
+
+/**
+ * 
+ * @function string_is_number
+ * @brief Check if the string is a number
+ * @params {const char*} value - Value
+ * @returns {bool} - True if the string is a number, false otherwise
+ * 
+ */
+bool string_is_number(const char* value);
+
+/**
+ * 
+ * @function is_english_digit
+ * @brief Check if the character is an English digit
+ * @params {wchar_t} ch - Character
+ * @returns {bool} - True if the character is an English digit, false otherwise
+ * 
+ */
+bool is_english_digit(wchar_t ch);
+
+/**
+ * 
+ * @function is_persian_digit
+ * @brief Check if the character is a Persian digit
+ * @params {wchar_t} ch - Character
+ * @returns {bool} - True if the character is a Persian digit, false otherwise
+ * 
+ */
+bool is_persian_digit(wchar_t ch);
+
+/**
+ * 
+ * @function is_arabic_digit
+ * @brief Check if the character is an Arabic digit
+ * @params {wchar_t} ch - Character
+ * @returns {bool} - True if the character is an Arabic digit, false otherwise
+ * 
+ */
+bool is_arabic_digit(wchar_t ch);
+
+/**
+ * 
+ * @function normalise_css_size
+ * @brief Normalise the CSS size
+ * @params {char*} attribute_value - Attribute value
+ * @returns {char*} - Normalised CSS size
+ * 
+ */
+char* normalise_css_size(char* attribute_value);
+
+/**
+ * 
+ * @function attribute_css_multiple_size_value
+ * @brief Convert the attribute values to a CSS size value
+ * @params {array_t*} attribute_values - Attribute values
+ * @returns {char*} - CSS size value
+ * 
+ */
+char* attribute_css_multiple_size_value(array_t* attribute_values);
+
+/**
+ * 
+ * @function has_css_size_prefix
+ * @brief Check if the CSS value has a size prefix
+ * @params {char*} css_value - CSS value
+ * @params {char**} css_output_value - CSS output value
+ * @returns {bool} - True if the CSS value has a size prefix, false otherwise
+ * 
+ */
+bool has_css_size_prefix(char* css_value, char** css_output_value);
+
+/**
+ * 
+ * @function attribute_css_size_value
+ * @brief Convert the attribute value to a CSS size value
+ * @params {char*} attribute_value - Attribute value
+ * @returns {char*} - CSS size value
+ * 
+ */
+char* attribute_css_size_value(char* attribute_value);
+
 #endif

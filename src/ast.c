@@ -99,10 +99,11 @@ void ast_node_destroy(ast_node_t* value)
 void ast_layout_attribute_print(ast_layout_attribute_t* value)
 {
     DEBUG_ME;
-	printf("Attribute: %s\n", value->key);
-	array_t* values = value->values;
+	printf("Layout Attribute: %s\n", value->key);
+	printf("Value(s): ");
 
-	values->print(values);
+	if (value->values == NULL) printf("NULL\n");
+	else value->values->print(value->values);
 }
 
 /**
@@ -215,8 +216,10 @@ ast_layout_attribute_t* ast_layout_attribute_create(ast_layout_attribute_type_t 
     DEBUG_ME;
 	ast_layout_attribute_t* attribute = memory_allocate(sizeof(ast_layout_attribute_t));
 	attribute->type = type;
+
 	attribute->key = strdup(key);
 	attribute->values = values;
+
 	attribute->isStyle = false;
 	attribute->isContent = false;
 	attribute->ignoreMe = false;
@@ -249,9 +252,9 @@ void ast_layout_attribute_destroy(ast_layout_attribute_t* value)
 			memory_destroy(value->key);
 		}
 
-		// if (value->final_key != NULL) {
-		// 	memory_destroy(value->final_key);
-		// }
+		if (value->final_key != NULL) {
+			memory_destroy(value->final_key);
+		}
 
 		if (value->final_value != NULL) {
 			memory_destroy(value->final_value);

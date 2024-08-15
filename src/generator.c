@@ -166,7 +166,7 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 	char* html_dir_value = NULL;
 	string_append_str(html, " dir=\"");
 	if (html_dir != NULL) {
-		char* values = array_layout_attribute_value_string(html_dir->values, 0);
+		char* values = array_layout_attribute_value_string(html_dir->values, ", ");
 		html_dir_value = string_lower_str(values);
 
 		if (values != NULL) memory_destroy(values);
@@ -226,13 +226,12 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 
 					if (attribute->ignoreMe == true || attribute->isContent == true || attribute->isStyle == true) {}
 					else {
-						array_t* attribute_values = cast(array_t*, attribute->values);
-						char* attribute_values_str = array_layout_attribute_value_string(attribute_values, ", ");
+						char* attribute_values_str = attribute->final_value != NULL ? attribute->final_value : array_layout_attribute_value_string(attribute->values, ", ");
 						size_t attribute_value_length = attribute_values_str == NULL ? 0 : strlen(attribute_values_str);
 
 						if (html_attributes_length != 0) string_append_char(html_attributes, ' ');
 
-						string_append_str(html_attributes, entry->key);
+						string_append_str(html_attributes, attribute->final_key == NULL ? entry->key : attribute->final_key);
 						string_append_str(html_attributes, "=");
 
 						if (attribute_value_length > 1) string_append_str(html_attributes, "\"");
@@ -264,7 +263,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 						char* attribute_css_value = generator_code_layout_style_value(attribute, block->parent_node_type);
 
 						if (attribute_css_value == NULL) {
-							error(2, "Empty value for '%s' attribute in '%s' element at line %zu column %zu!", attribute_css_name, generator_code_layout_node_type(block->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
+							error(2, "Someting went wrong with the style value for '%s' attribute in '%s' element!", attribute_css_name, generator_code_layout_node_type(block->parent_node_type));
 						}
 
 						if (css_attributes_length != 0) string_append_char(css_attributes, ';');
@@ -332,6 +331,8 @@ char* generator_code_layout_style_value(ast_layout_attribute_t* attribute, ast_l
 	
 	// 'Value=...' attribute allowed to be empty, but all other attributes must have a value (not empty)
 	if ((attribute->values->length == 0 || values_str_length == 0) && attribute->type != AST_LAYOUT_ATTRIBUTE_TYPE_VALUE) {
+		if (values_str != NULL) memory_destroy(values_str);
+
 		error(2, "Empty value for '%s' attribute in '%s' element at line %zu column %zu!", attribute_css_name, generator_code_layout_node_type(parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
 	}
 
@@ -342,7 +343,13 @@ char* generator_code_layout_style_value(ast_layout_attribute_t* attribute, ast_l
 		error(2, "Invalid value for '%s' attribute in '%s' element at line %zu column %zu!", attribute_css_name, generator_code_layout_node_type(parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
 	}
 	
+	if (attribute->final_value == NULL) {
+		attribute->final_value = strdup(values_str);
+	}
+
 	if (values_str != NULL) memory_destroy(values_str);
+
+	printf("final value: %s\n", attribute->final_value);
 
 	return attribute->final_value;
 }
@@ -923,7 +930,6 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 
 		if (node->block->children->length > 0 || node->block->text_content != NULL) {
 			if (node->block->text_content != NULL) {
-				// string_append_char(layout_block_str, '{');
 				if (node->block->children->length == 0 && strchr(node->block->text_content, '\n') == NULL) {
 					string_append_str(layout_block_str, node->block->text_content);
 				}
@@ -1145,22 +1151,29 @@ void generator_code(generator_t* generator)
 
 	ast_t* ast = generator->ast;
 
-	if (generator->ast->layout != NULL) {
-		ast_layout_t* layout = ast->layout;
+	// Process functions
+	if (generator->ast->functions != NULL) {
+		generator_code_functions(generator);
+	}
 
-		if (layout->block != NULL) {
+	// Process layout
+	if (generator->ast->layout != NULL) {
+		if (ast->layout->block != NULL) {
 			string_t* head = string_create(1024);
 			string_t* body = string_create(1024);
 			string_t* html = string_create(1024);
 
-			generator_code_layout_body(generator, layout->block, body);
+			// Process the layout block 
+			generator_code_layout_body(generator, ast->layout->block, body);
 
-			generator_code_head(layout->block, head);
+			// Process the head block
+			generator_code_head(ast->layout->block, head);
 
+			// Generate the HTML code
 			string_append_str(html, "<!doctype html>\n");
 			string_append_str(html, "<html");
 
-			generator_code_layout_html(layout->block, html);
+			generator_code_layout_html(ast->layout->block, html);
 
 			string_append_str(html, ">\n");
 
@@ -1170,7 +1183,6 @@ void generator_code(generator_t* generator)
 			string_append(html, head);
 
 			if (generator->css != NULL && generator->css->length > 0) {
-				printf("it seems we have some css code\n");
 				if (generator->inlineCSS == true) {
 					string_append_str(html, "<style>\n");
 					string_append(html, generator->css);
@@ -1180,16 +1192,12 @@ void generator_code(generator_t* generator)
 					string_append_str(html, "<link rel=\"stylesheet\" href=\"style.css\">\n");
 				}
 			}
-			else {
-				printf("no css code\n");
-			}
 
 			string_append_str(html, "</head>\n");
 
 			string_append(html, body);
 
 			if (generator->js != NULL && generator->js->length > 0) {
-				printf("it seems we have some js code\n");
 				if (generator->inlineJS == true) {
 					string_append_str(html, "<script>\n");
 					string_append(html, generator->js);
@@ -1199,12 +1207,8 @@ void generator_code(generator_t* generator)
 					string_append_str(html, "<script src=\"script.js\"></script>\n");
 				}
 			}
-			else {
-				printf("no js code\n");
-			}
 			
 			string_append_str(html, "</body>\n");
-
 			string_append_str(html, "</html>");
 
 			string_set(generator->html, html);
@@ -1214,8 +1218,6 @@ void generator_code(generator_t* generator)
 			string_destroy(html);
 		}
 	}
-
-	generator_code_functions(generator);
 }
 
 /**

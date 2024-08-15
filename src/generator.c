@@ -332,13 +332,11 @@ char* generator_code_layout_style_value(ast_layout_attribute_t* attribute, ast_l
 		error(2, "Empty value for '%s' attribute in '%s' element!", attribute_css_name, generator_code_layout_node_type(parent_node_type));
 	}
 	// Invalid value for '...' attribute in '...' element in case if not stopped by the condition
-	else if (validate_style_value(attribute, values_str) == false) {
+	else if (validate_style_value(attribute, values_str, parent_node_type) == false) {
 		if (values_str != NULL) memory_destroy(values_str);
 
 		error(2, "Invalid value for '%s' attribute in '%s' element!", attribute_css_name, generator_code_layout_node_type(parent_node_type));
 	}
-
-	if (values_str != NULL) memory_destroy(values_str);
 
 	return values_str;
 }

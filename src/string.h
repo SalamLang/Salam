@@ -145,4 +145,16 @@ char* string_lower_str(const char* str);
  */
 char* string_upper_str(const char* str);
 
+/**
+ * 
+ * @function replace_all_substrings
+ * @brief Replace all substrings in a string
+ * @params {const char*} str - String
+ * @params {const char*} old_substr - Old substring
+ * @params {const char*} new_substr - New substring
+ * @returns {char*} - New string
+ * 
+ */
+char* replace_all_substrings(const char* str, const char* old_substr, const char* new_substr);
+
 #endif

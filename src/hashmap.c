@@ -358,8 +358,10 @@ void hashmap_print_layout_attribute(hashmap_attribute_t* map)
 
 		while (entry) {
 			printf("[%zu] Key: %s, Value: ", i, entry->key);
-			ast_layout_attribute_t* layout_attribute = cast(ast_layout_attribute_t*, entry->value);
-			layout_attribute->print(layout_attribute);
+			ast_layout_attribute_t* layout_attribute = entry->value;
+
+			if (layout_attribute != NULL) layout_attribute->print(layout_attribute);
+			else printf("NULL\n");
 
 			entry = entry->next;
 		}

@@ -304,22 +304,26 @@ bool string_is_number(const char* value)
 void validate_layout_block(ast_layout_block_t* block)
 {
 	DEBUG_ME;
-	hashmap_t* attributes = cast(hashmap_t*, block->attributes);
+	hashmap_attribute_t* attributes = block->attributes;
 
 	ast_layout_attribute_t* attribute_content = hashmap_get(attributes, "content");
 
 	if (attribute_content != NULL) {
 		attribute_content->isContent = true;
 
-		array_layout_attribute_value_t* values = cast(array_layout_attribute_value_t*, attribute_content->values);
+		array_layout_attribute_value_t* values = attribute_content->values;
 
-		char* content = array_layout_attribute_value_string(values, ", ");
+		if (values->length > 0) {
+			char* content = array_layout_attribute_value_string(values, ", ");
 
-		if (values->length == 0 || content != NULL || strlen(content) > 0) {
-			if (content != NULL) memory_destroy(content);
-		}
-		else {
-			block->text_content = content;
+			if (content != NULL) {
+				if (strlen(content) > 0) {
+					block->text_content = content;
+				}
+				else {
+					if (content != NULL) memory_destroy(content);
+				}
+			}
 		}
 	}
 }
@@ -644,7 +648,6 @@ bool validate_style_value_color(ast_layout_attribute_t* attribute, char* values_
 bool validate_style_value_size(ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type)
 {
 	DEBUG_ME;
-	size_t values_str_length = strlen(values_str);
 	char* attribute_css_name = generator_code_layout_style_name(attribute->type);
 	char* element_name = generator_code_layout_node_type(parent_node_type);
 
@@ -657,7 +660,7 @@ bool validate_style_value_size(ast_layout_attribute_t* attribute, char* values_s
 		return false;
 	}
 
-	attribute->final_key = attribute_css_name;
+	attribute->final_key = strdup(attribute_css_name);
 	attribute->final_value = attribute_css_size_value(values_str);
 
 	return true;

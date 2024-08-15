@@ -121,7 +121,7 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
  */
 char* normalise_css_size(char* attribute_value)
 {
-	if (!string_is_number(attribute_value)) return attribute_value;
+	if (!string_is_number(attribute_value) == true) return attribute_value;
 
 	int value_length = strlen(attribute_value) + 3;
 
@@ -193,7 +193,7 @@ char* attribute_css_size_value(char* attribute_value)
 
 	strcpy(res, attribute_value);
 
-	if (string_is_number(attribute_value)) strcat(res, "px");
+	if (string_is_number(attribute_value) == true) strcat(res, "px");
 
 	return res;
 }
@@ -300,10 +300,9 @@ void validate_layout_block(ast_layout_block_t* block)
 	ast_layout_attribute_t* attribute_content = hashmap_get(attributes, "content");
 	if (attribute_content != NULL) {
 		attribute_content->isContent = true;
-
-		array_t* values = cast(array_t*, attribute_content->values);
+		array_layout_attribute_value_t* values = cast(array_layout_attribute_value_t*, attribute_content->values);
 		values->print(values);
-		char* content = array_string_token(values, ", ");
+		char* content = array_layout_attribute_value_string(values, ", ");
 
 		if (values->length > 0 && strlen(content) > 0) {
 			printf("content: %s\n", content);
@@ -717,6 +716,8 @@ bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, a
 	else if (strcmp(values_str, "revert-layer") == 0) return true;
 	else if (strcmp(values_str, "unset") == 0) return true;
 
+	char* element_name = generator_code_layout_node_type(parent_node_type);
+
 	switch (attribute->type) {
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND:
 			return true;
@@ -732,32 +733,45 @@ bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, a
 			return true;
 		
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_STYLE:
-			if (strcmp(values_str, "normal") == 0) return true;
+			if (attribute->values->length > 1) {
+				error(2, "Font weight value is too many in '%s' element", element_name);
+				return false;
+			}
+			else if (strcmp(values_str, "normal") == 0) return true;
 			else if (strcmp(values_str, "italic") == 0) return true;
 			else if (strcmp(values_str, "oblique") == 0) return true;
 			else if (strcmp(values_str, "oblique 10deg") == 0) return true;
 			else return false;
-		
+			break;
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_WEIGHT:
-			if (strcmp(values_str, "normal") == 0) return true;
+			if (attribute->values->length > 1) {
+				error(2, "Font weight value is too many in '%s' element", element_name);
+				return false;
+			}
+			else if (strcmp(values_str, "normal") == 0) return true;
 			else if (strcmp(values_str, "bold") == 0) return true;
 			else if (strcmp(values_str, "lighter") == 0) return true;
 			else if (strcmp(values_str, "bolder") == 0) return true;
-			else if (string_is_number(values_str)) {
+			else if (string_is_number(values_str) == true) {
 				int value = atoi(values_str);
 				if (value >= 1 && value <= 1000) return true;
 				else {
 					error(2, "Font weight value is invalid, it should be between 1 and 1000");
 				}
 			}
+
 			else return false;
+			break;
 		
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_DIRECTION:
 			if (strcmp(values_str, "row") == 0) return true;
 			else if (strcmp(values_str, "row-reverse") == 0) return true;
 			else if (strcmp(values_str, "column") == 0) return true;
 			else if (strcmp(values_str, "column-reverse") == 0) return true;
+
 			else return false;
+			break;
 
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_DISPLAY:
 			// precomposed values
@@ -785,6 +799,7 @@ bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, a
 			else if (strcmp(values_str, "inline grid") == 0) return true;
 
 			else return false;
+			break;
 		
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN:
 			if (strcmp(values_str, "start") == 0) return true;
@@ -799,6 +814,7 @@ bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, a
 			else if (strcmp(values_str, "-webkit-center") == 0) return true;
 
 			else return false;
+			break;
 		
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE:
 			if (strcmp(values_str, "none") == 0) return true;
@@ -808,6 +824,7 @@ bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, a
 			else if (strcmp(values_str, "blink") == 0) return true;
 
 			else return false;
+			break;
 
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR:
 			return validate_style_value_color(attribute, values_str, parent_node_type);
@@ -820,30 +837,31 @@ bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, a
 			else if (strcmp(values_str, "wavy") == 0) return true;
 
 			else return false;
+			break;
 			
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION:
-			ast_layout_attribute_type_t sub_types[] = {
-				AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE,
-				AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE,
-				AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR,
-			};
-			size_t sub_types_length = sizeof(sub_types) / sizeof(sub_types[0]);
-			hashmap_t* sub_groups = hashmap_create(sub_types_length);
+			// ast_layout_attribute_type_t sub_types[] = {
+			// 	AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE,
+			// 	AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE,
+			// 	AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR,
+			// };
+			// size_t sub_types_length = sizeof(sub_types) / sizeof(sub_types[0]);
+			// hashmap_t* sub_groups = hashmap_create(sub_types_length);
 
-			for (size_t i = 0; i < attribute->values->length; i++) {
-				char* value = attribute->values->data[i];
+			// for (size_t i = 0; i < attribute->values->length; i++) {
+			// 	ast_* value = attribute->values->data[i];
+			// }
 
-				
-			}
-
-			if (attribute->values == 1) {
-				if (strcmp(values_str, "none") == 0) return true;
-				else if (strcmp(values_str, "underline") == 0) return true;
-				else if (strcmp(values_str, "overline") == 0) return true;
-				else if (strcmp(values_str, "line-through") == 0) return true;
-				else if (strcmp(values_str, "blink") == 0) return true;
-			}
-			else return false;
+			// if (attribute->values == 1) {
+			// 	if (strcmp(values_str, "none") == 0) return true;
+			// 	else if (strcmp(values_str, "underline") == 0) return true;
+			// 	else if (strcmp(values_str, "overline") == 0) return true;
+			// 	else if (strcmp(values_str, "line-through") == 0) return true;
+			// 	else if (strcmp(values_str, "blink") == 0) return true;
+			// }
+			// else return false;
+			return false;
+			break;
 
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_WIDTH:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_HEIGHT:
@@ -869,4 +887,6 @@ bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, a
 		default:
 			return false;
 	}
+
+	return false;
 }

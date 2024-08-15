@@ -95,10 +95,12 @@ token_t* token_create(token_type_t type, location_t location)
 	token->type = type;
 	token->location = location;
 	token->data_type = TOKEN_ERROR;
+
 	token->name = cast(char* (*)(token_type_t), token_name);
 	token->value = cast(char* (*)(void*), token_value);
 	token->print = cast(void (*)(void*), token_print);
 	token->destroy = cast(void (*)(void*), token_destroy);
+		
 	return token;
 }
 
@@ -754,7 +756,11 @@ void lexer_lex_string(lexer_t* lexer)
 
 	buffer[index] = '\0';
 
-	LEXER_NEXT; // Eating the closing quote
+	if (LEXER_CURRENT != '\"') {
+		error(2, "Unterminated string value at line %zu, column %zu", lexer->line, lexer->column);
+	}
+
+	LEXER_CURRENT++;
 
 	token_t* token = token_create(TOKEN_STRING, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
 	token->data_type = TOKEN_STRING;
@@ -774,6 +780,7 @@ void lexer_lex(lexer_t* lexer)
 {
     DEBUG_ME;
 	while (LEXER_CURRENT != '\0') {
+		printf("Current: %c\n", LEXER_CURRENT);
 		LEXER_NEXT;
 		LEXER_NEXT_COLUMN;
 

@@ -234,39 +234,55 @@ void token_print(token_t* token)
 		case TOKEN_BOOLEAN:
 			printf("BOOLEAN: %s", token->data.boolean ? "true" : "false");
 			break;
+
 		case TOKEN_ERROR:
 			printf("ERROR");
 			break;
+
 		case TOKEN_LAYOUT:
 			printf("LAYOUT");
 			break;
+
 		case TOKEN_IMPORT:
 			printf("IMPORT");
 			break;
+
 		case TOKEN_FUNCTION:
 			printf("FUNCTION");
 			break;
+			
 		case TOKEN_RETURN:
 			printf("RETURN");
 			break;
+
 		case TOKEN_IF:
 			printf("IF");
 			break;
+
 		case TOKEN_ELSE:
 			printf("ELSE");
 			break;
+
+		case TOKEN_PRINT:
+			printf("PRINT");
+			break;
+		
 		case TOKEN_WHILE:
 			printf("WHILE");
 			break;
+
 		case TOKEN_FOR:
 			printf("FOR");
 			break;
+
 		case TOKEN_BREAK:
 			printf("BREAK");
 			break;
+
 		case TOKEN_CONTINUE:
 			printf("CONTINUE");
 			break;
+
 		default:
 			printf("UNKNOWN");
 	}
@@ -289,101 +305,149 @@ char* token_name(token_type_t type)
 	switch (type) {
 		case TOKEN_EOF:
 			return "EOF";
+
 		case TOKEN_IDENTIFIER:
 			return "IDENTIFIER";
+
 		case TOKEN_STRING:
 			return "STRING";
+			
 		case TOKEN_NUMBER_INT:
 			return "NUMBER_INT";
+
 		case TOKEN_LEFT_BRACE:
 			return "LEFT_BRACE";
+
 		case TOKEN_RIGHT_BRACE:
 			return "RIGHT_BRACE";
+
 		case TOKEN_LEFT_BRACKET:
 			return "LEFT_BRACKET";
+
 		case TOKEN_RIGHT_BRACKET:
 			return "RIGHT_BRACKET";
+
 		case TOKEN_COLON:
 			return "COLON";
+
 		case TOKEN_COMMA:
 			return "COMMA";
+
 		case TOKEN_LEFT_PAREN:
 			return "LEFT_PAREN";
+
 		case TOKEN_RIGHT_PAREN:
 			return "RIGHT_PAREN";
+
 		case TOKEN_NUMBER_FLOAT:
 			return "NUMBER_FLOAT";
+
 		case TOKEN_BOOLEAN:
 			return "BOOLEAN";
+
 		case TOKEN_PLUS:
 			return "PLUS";
+
 		case TOKEN_MINUS:
 			return "MINUS";
+			
 		case TOKEN_MULTIPLY:
 			return "MULTIPLY";
+
 		case TOKEN_DIVIDE:
 			return "DIVIDE";
+
 		case TOKEN_MOD:
 			return "MOD";
+
 		case TOKEN_POWER:
 			return "POWER";
+
 		case TOKEN_ASSIGN:
 			return "ASSIGN";
+
 		case TOKEN_LESS:
 			return "LESS";
+			
 		case TOKEN_GREATER:
 			return "GREATER";
+
 		case TOKEN_NOT:
 			return "NOT";
+
 		case TOKEN_NOT_EQUAL:
 			return "NOT_EQUAL";
+
 		case TOKEN_EQUAL:
 			return "EQUAL";
+
 		case TOKEN_AND_AND:
 			return "AND_AND";
+
 		case TOKEN_OR_OR:
 			return "OR_OR";
+
 		case TOKEN_AND_BIT:
 			return "AND_BIT";
+
 		case TOKEN_OR_BIT:
 			return "OR_BIT";
+
 		case TOKEN_LESS_EQUAL:
 			return "LESS_EQUAL";
+
 		case TOKEN_GREATER_EQUAL:
 			return "GREATER_EQUAL";
+
 		case TOKEN_INCREMENT:
 			return "INCREMENT";
+
 		case TOKEN_DECREMENT:
 			return "DECREMENT";
 
 		case TOKEN_SHIFT_LEFT:
 			return "SHIFT_LEFT";
+
 		case TOKEN_SHIFT_RIGHT:
 			return "SHIFT_RIGHT";
+
 		case TOKEN_SHIFT_LEFT_ASSIGN:
 			return "SHIFT_LEFT_ASSIGN";
+
 		case TOKEN_SHIFT_RIGHT_ASSIGN:
 			return "SHIFT_RIGHT_ASSIGN";
 
 		// Keywords
 		case TOKEN_LAYOUT:
 			return "LAYOUT";
+
 		case TOKEN_IMPORT:
 			return "IMPORT";
+
 		case TOKEN_FUNCTION:
 			return "FUNCTION";
+
 		case TOKEN_RETURN:
 			return "RETURN";
+
 		case TOKEN_IF:
 			return "IF";
+
 		case TOKEN_ELSE:
 			return "ELSE";
+
+		case TOKEN_PRINT:
+			return "PRINT";
+
 		case TOKEN_WHILE:
 			return "WHILE";
+
 		case TOKEN_FOR:
 			return "FOR";
+
 		case TOKEN_BREAK:
 			return "BREAK";
+
 		case TOKEN_CONTINUE:
 			return "CONTINUE";
 

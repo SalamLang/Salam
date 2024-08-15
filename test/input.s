@@ -1,7 +1,11 @@
 fn main {
+    print "Hey", 123, 3.14
+
     if 1 {
         if 2 {
             if 3 {
+                print 123
+                
                 return 333
             }
         }

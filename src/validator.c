@@ -1,6 +1,34 @@
 #include "validator.h"
 
 /**
+ * 
+ * @var valid_layout_attributes
+ * @brief Valid layout attributes
+ * @type {ast_layout_attribute_type_t[]}
+ */
+ast_layout_attribute_type_t valid_layout_attributes[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_TITLE,
+    AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION,
+    AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR,
+    AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS,
+    AST_LAYOUT_ATTRIBUTE_TYPE_ICON,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
+    AST_LAYOUT_ATTRIBUTE_TYPE_DIR,
+    AST_LAYOUT_ATTRIBUTE_TYPE_LANG,
+    AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT,
+    AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
+};
+
+/**
+ * 
+ * @var valid_layout_attributes_length
+ * @brief Valid layout attributes length
+ * @type {size_t}
+ */
+size_t valid_layout_attributes_length = sizeof(valid_layout_attributes) / sizeof(valid_layout_attributes[0]);
+
+/**
  *
  * @function validate_layout_block
  * @brief Validate and modify the layout block
@@ -84,23 +112,7 @@ bool token_belongs_to_ast_layout_node(ast_layout_block_t* block, ast_layout_attr
 
     // LAYOUT
     if (block->parent_node_type == AST_LAYOUT_NODE_TYPE_NONE) {
-        ast_layout_attribute_type_t valid_attributes[] = {
-            AST_LAYOUT_ATTRIBUTE_TYPE_TITLE,
-            AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION,
-            AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR,
-            AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS,
-            AST_LAYOUT_ATTRIBUTE_TYPE_ICON,
-            AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
-            AST_LAYOUT_ATTRIBUTE_TYPE_DIR,
-            AST_LAYOUT_ATTRIBUTE_TYPE_LANG,
-            AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT,
-            AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH,
-            AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
-        };
-
-        size_t valid_attributes_size = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
-
-        if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_size)) {
+        if (is_attribute_type_in_array(attribute_key_type, valid_layout_attributes, valid_layout_attributes_length)) {
             return true;
         }
     }
@@ -110,9 +122,9 @@ bool token_belongs_to_ast_layout_node(ast_layout_block_t* block, ast_layout_attr
             AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
         };
 
-        size_t valid_attributes_size = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
+        size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
 
-        if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_size)) {
+        if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
             return true;
         }
     }
@@ -152,41 +164,28 @@ bool is_layout_node_a_single_tag(ast_layout_node_type_t type)
  */
 void validate_layout_mainbody(ast_layout_block_t* block)
 {
-    if (block == NULL) return;
+    if (block != NULL) {
+        if (block->attributes != NULL) {
+            if (block->attributes->data != NULL) {
+                size_t attributes_capacity = block->attributes->capacity;
 
-    ast_layout_attribute_type_t valid_attributes[] = {
-        AST_LAYOUT_ATTRIBUTE_TYPE_TITLE,
-        AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION,
-        AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR,
-        AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS,
-        AST_LAYOUT_ATTRIBUTE_TYPE_ICON,
-        AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
-        AST_LAYOUT_ATTRIBUTE_TYPE_DIR,
-        AST_LAYOUT_ATTRIBUTE_TYPE_LANG,
-    };
-    size_t valid_attributes_size = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
+                for (size_t i = 0; i < attributes_capacity; i++) {
+                    hashmap_entry_t *entry = block->attributes->data[i];
 
-    if (block->attributes != NULL) {
-		if (block->attributes->data != NULL) {
+                    while (entry) {
+                        char* attribute_key = entry->key;
+                        ast_layout_attribute_type_t attribute_key_type = name_to_ast_layout_attribute_type(attribute_key);
+                        ast_layout_attribute_t* attribute_value = entry->value;
+                        
+                        if (is_attribute_type_in_array(attribute_key_type, valid_layout_attributes, valid_layout_attributes_length)) {
+                            attribute_value->ignoreMe = true;
+                        }
 
-            size_t attributes_capacity = block->attributes->capacity;
-
-			for (size_t i = 0; i < attributes_capacity; i++) {
-				hashmap_entry_t *entry = block->attributes->data[i];
-
-				while (entry) {
-                    char* attribute_key = entry->key;
-                    ast_layout_attribute_type_t attribute_key_type = name_to_ast_layout_attribute_type(attribute_key);
-                    ast_layout_attribute_t* attribute_value = entry->value;
-                    
-                    if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_size)) {
-                        attribute_value->ignoreMe = true;
+                        entry = entry->next;
                     }
-
-        			entry = entry->next;
-				}
-			}
-		}
+                }
+            }
+        }
     }
 }
 

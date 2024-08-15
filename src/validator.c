@@ -29,6 +29,263 @@ ast_layout_attribute_type_t valid_layout_attributes[] = {
 size_t valid_layout_attributes_length = sizeof(valid_layout_attributes) / sizeof(valid_layout_attributes[0]);
 
 /**
+ * 
+ * @function has_css_size_prefix
+ * @brief Check if the CSS value has a size prefix
+ * @params {char*} css_value - CSS value
+ * @params {char**} css_output_value - CSS output value
+ * @returns {bool} - True if the CSS value has a size prefix, false otherwise
+ * 
+ */
+bool has_css_size_prefix(char* css_value, char** css_output_value)
+{
+	const char* prefixes[] = {"px", "em", "rem", "vw", "vh", "%", "cm", "mm", "in", "pt", "pc", "ex", "ch", "vmin", "vmax"};
+	int num_prefixes = sizeof(prefixes) / sizeof(prefixes[0]);
+
+	const char* persian_prefixes[] = {"پیکسل", "ای ام", "رایم", "ویو ویدث", "ویو هایت", "درصد", "سانتیمتر", "میلیمتر", "اینچ", "پوینت", "پیکا", "اکس", "سی اچ", "وی مین", "وی مکس"};
+	int num_persian_prefixes = sizeof(persian_prefixes) / sizeof(persian_prefixes[0]);
+
+	size_t len = strlen(css_value);
+	if (len == 0) {
+		*css_output_value = NULL;
+
+		return false;
+	}
+
+	string_t* buffer = string_create(len);
+
+	size_t i = 0;
+	if (css_value[i] == '-' || css_value[i] == '+') {
+		if (css_value[i] == '-') string_append_char(buffer, css_value[i]);
+
+		i++;
+	}
+
+	if (!isdigit(css_value[i])) {
+		*css_output_value = NULL;
+
+		return false;
+	}
+
+	bool decimal_point_found = false;
+	while (i < len && (isdigit(css_value[i]) || (css_value[i] == '.' && !decimal_point_found))) {
+		if (css_value[i] == '.') {
+			string_append_char(buffer, css_value[i]);
+			decimal_point_found = true;
+		}
+		else {
+			string_append_char(buffer, css_value[i]);
+		}
+
+		i++;
+	}
+
+	while (i < len && isspace(css_value[i])) i++;
+
+	for (int j = 0; j < num_prefixes; j++) {
+		size_t prefix_len = strlen(prefixes[j]);
+		if (len - i == prefix_len && strncmp(css_value + i, prefixes[j], prefix_len) == 0) {
+			string_append_str(buffer, prefixes[j]);
+			*css_output_value = strdup(buffer->data);
+
+			string_destroy(buffer);
+
+			return true;
+		}
+	}
+
+	for (int j = 0; j < num_persian_prefixes; j++) {
+		size_t prefix_len = strlen(persian_prefixes[j]);
+		if (len - i == prefix_len && strncmp(css_value + i, persian_prefixes[j], prefix_len) == 0) {
+			string_append_str(buffer, prefixes[j]);
+			*css_output_value = strdup(buffer->data);
+
+			string_destroy(buffer);
+
+			return true;
+		}
+	}
+
+	*css_output_value = NULL;
+
+	return false;
+}
+
+/**
+ * 
+ * @function normalise_css_size
+ * @brief Normalise the CSS size
+ * @params {char*} attribute_value - Attribute value
+ * @returns {char*} - Normalised CSS size
+ * 
+ */
+char* normalise_css_size(char* attribute_value)
+{
+	if (!string_is_number(attribute_value)) return attribute_value;
+
+	int value_length = strlen(attribute_value) + 3;
+
+	char* res = memory_reallocate(attribute_value, value_length * sizeof(char));
+
+	strcat(res, "px");
+
+	return res;
+}
+
+/**
+ * 
+ * @function attribute_css_multiple_size_value
+ * @brief Convert the attribute values to a CSS size value
+ * @params {array_t*} attribute_values - Attribute values
+ * @returns {char*} - CSS size value
+ * 
+ */
+char* attribute_css_multiple_size_value(array_t* attribute_values)
+{
+	if (attribute_values == NULL || attribute_values->length == 0) return NULL;
+
+	if (attribute_values->length == 1) {
+		char* value = strdup(attribute_values->data[0]);
+		value = normalise_css_size(value);
+
+		return value;
+	}
+
+	string_t* buffer = string_create(10);
+
+	for (size_t i = 0; i < attribute_values->length; i++) {
+		char* value = strdup(attribute_values->data[i]);
+		value = normalise_css_size(value);
+
+		char* out_value;
+		if (!has_css_size_prefix(value, &out_value)) return NULL;
+
+		if (value != NULL) free(value);
+
+		if (out_value != NULL) {
+			string_append_str(buffer, out_value);
+
+			if (out_value != NULL) free(out_value);
+
+			if (i != attribute_values->length - 1) string_append_char(buffer, ' ');
+		}
+	}
+
+	char* buf = strdup(buffer->data);
+	string_destroy(buffer);
+
+	return buf;
+}
+
+/**
+ * 
+ * @function attribute_css_size_value
+ * @brief Convert the attribute value to a CSS size value
+ * @params {char*} attribute_value - Attribute value
+ * @returns {char*} - CSS size value
+ * 
+ */
+char* attribute_css_size_value(char* attribute_value)
+{
+	int attribute_value_length = strlen(attribute_value) + 5;
+
+	char* res = memory_allocate(attribute_value_length * sizeof(char));
+
+	strcpy(res, attribute_value);
+
+	if (string_is_number(attribute_value)) strcat(res, "px");
+
+	return res;
+}
+
+/**
+ * 
+ * @function is_english_digit
+ * @brief Check if the character is an English digit
+ * @params {wchar_t} ch - Character
+ * @returns {bool} - True if the character is an English digit, false otherwise
+ * 
+ */
+bool is_english_digit(wchar_t ch)
+{
+	// 0123456789
+	return ch >= L'0' && ch <= L'9';
+}
+
+/**
+ * 
+ * @function is_persian_digit
+ * @brief Check if the character is a Persian digit
+ * @params {wchar_t} ch - Character
+ * @returns {bool} - True if the character is a Persian digit, false otherwise
+ * 
+ */
+bool is_persian_digit(wchar_t ch)
+{
+	// ۰۱۲۳۴۵۶۷۸۹
+	return ch >= 0x06F0 && ch <= 0x06F9;
+	// return ch >= '۰' && ch <= '۹';
+}
+
+/**
+ * 
+ * @function is_arabic_digit
+ * @brief Check if the character is an Arabic digit
+ * @params {wchar_t} ch - Character
+ * @returns {bool} - True if the character is an Arabic digit, false otherwise
+ * 
+ */
+bool is_arabic_digit(wchar_t ch)
+{
+	// ٠١٢٣٤٥٦٧٨٩
+	return ch >= 0x0660 && ch <= 0x0669;
+}
+
+/**
+ * 
+ * @function string_is_number
+ * @brief Check if the string is a number
+ * @params {const char*} value - Value
+ * @returns {bool} - True if the string is a number, false otherwise
+ * 
+ */
+bool string_is_number(const char* value)
+{
+	size_t len = mbstowcs(NULL, value, 0);
+	if (len == (size_t)-1) return false;
+
+	wchar_t* wvalue = memory_allocate(sizeof(wchar_t) * (len + 1));
+	mbstowcs(wvalue, value, len + 1);
+
+	if (wvalue[0] == L'\0') {
+		free(wvalue);
+
+		return false;
+	}
+
+	size_t start = 0;
+	if (wvalue[0] == L'+' || wvalue[0] == L'-') start = 1;
+
+	if (start == 1 && wvalue[1] == L'\0') {
+		free(wvalue);
+
+		return false;
+	}
+
+	for (size_t i = start; wvalue[i] != L'\0'; i++) {
+		if (!(is_english_digit(wvalue[i]) || is_persian_digit(wvalue[i]) || is_arabic_digit(wvalue[i]))) {
+			free(wvalue);
+
+			return false;
+		}
+	}
+
+	free(wvalue);
+
+	return true;
+}
+
+/**
  *
  * @function validate_layout_block
  * @brief Validate and modify the layout block
@@ -314,6 +571,49 @@ bool is_attribute_type_a_style(ast_layout_attribute_type_t type)
         case AST_LAYOUT_ATTRIBUTE_TYPE_ID:
             return true;
 
+        default:
+            return false;
+    }
+}
+
+/**
+ * 
+ * @function validate_style_value_size
+ * @brief Validate the style value size
+ * @params {ast_layout_attribute_t*} attribute - Layout attribute
+ * @params {char*} values_str - Values string
+ * @returns {bool} - True if the style value is valid, false otherwise
+ * 
+ */
+bool validate_style_value_size(ast_layout_attribute_t* attribute, char* values_str)
+{
+    if (attribute) {}
+    if (values_str) {}
+
+    return true;
+}
+
+/**
+ * 
+ * @function validate_style_value
+ * @brief Validate the style value
+ * @params {ast_layout_attribute_t*} attribute - Layout attribute
+ * @params {char*} values_str - Values string
+ * @returns {bool} - True if the style value is valid, false otherwise
+ * 
+ */
+bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str)
+{
+    switch (attribute->type) {
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT:
+            return true;
+        
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_FAMILY:
+            return true;
+        
+        case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_SIZE:
+            return validate_style_value_size(attribute, values_str);
+        
         default:
             return false;
     }

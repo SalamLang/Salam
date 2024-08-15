@@ -652,12 +652,10 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 				// string_append_char(layout_block_str, '{');
 				if (node->block->children->length == 0 && strchr(node->block->text_content, '\n') == NULL) {
 					string_append_str(layout_block_str, node->block->text_content);
-					// string_append_char(layout_block_str, '}');
 				}
 				else {
 					string_append_char(layout_block_str, '\n');
 					string_append_str(layout_block_str, node->block->text_content);
-					// string_append_char(layout_block_str, '}');
 					string_append_char(layout_block_str, '\n');
 				}
 			}
@@ -978,6 +976,16 @@ string_t* generator_code_node(generator_t* generator, ast_node_t* node)
 				if_code->destroy(if_code);
 			}
 			break;
+
+		case AST_NODE_TYPE_RETURN:
+			string_t* return_code = generator_code_return(generator, node->data.returns);
+
+			if (return_code != NULL) {
+				string_append(code, return_code);
+
+				return_code->destroy(return_code);
+			}
+			break;
 	}
 
 	return code;
@@ -1110,6 +1118,71 @@ string_t* generator_code_value(generator_t* generator, ast_value_t* value)
 
 /**
  * 
+ * @function generator_code_values
+ * @brief Generate the code for the values
+ * @params {generator_t*} generator - Generator
+ * @params {array_t*} values - Values
+ * @returns {string_t*} code - Code
+ * 
+ */
+string_t* generator_code_values(generator_t* generator, array_t* values)
+{
+	DEBUG_ME;
+	string_t* code = string_create(1024);
+
+	if (values != NULL) {
+		for (size_t i = 0; i < values->length; i++) {
+			ast_value_t* value = array_get(values, i);
+
+			if (value != NULL) {
+				string_t* value_code = generator_code_value(generator, value);
+
+				if (value_code != NULL) {
+					string_append(code, value_code);
+
+					if (i != values->length - 1) {
+						string_append_str(code, ", ");
+					}
+
+					value_code->destroy(value_code);
+				}
+			}
+		}
+	}
+
+	return code;
+}
+
+/**
+ * 
+ * @function generator_code_return
+ * @brief Generate the code for the return
+ * @params {generator_t*} generator - Generator
+ * @params {ast_return_t*} returns - Returns
+ * @returns {string_t*} code - Code
+ * 
+ */
+string_t* generator_code_return(generator_t* generator, ast_return_t* returns)
+{
+	DEBUG_ME;
+	string_t* code = string_create(1024);
+
+	if (returns->values != NULL) {
+		string_t* values_code = generator_code_values(generator, returns->values);
+
+		if (values_code != NULL) {
+			string_append_str(code, "return ");
+			string_append(code, values_code);
+
+			values_code->destroy(values_code);
+		}
+	}
+
+	return code;
+}
+
+/**
+ * 
  * @function generator_code_if
  * @brief Generate the code for the if clause
  * @params {generator_t*} generator - Generator
@@ -1185,6 +1258,9 @@ string_t* generator_code_block(generator_t* generator, ast_block_t* block)
 	DEBUG_ME;
 	string_t* code = string_create(1024);
 
+	string_append_char(code, '{');
+	string_append_char(code, '\n');
+
 	if (block != NULL) {
 		for (size_t i = 0; i < block->children->length; i++) {
 			ast_node_t* node = array_get(block->children, i);
@@ -1200,6 +1276,9 @@ string_t* generator_code_block(generator_t* generator, ast_block_t* block)
 			}
 		}
 	}
+
+	string_append_char(code, '}');
+	string_append_char(code, '\n');
 
 	return code;
 }
@@ -1222,15 +1301,10 @@ string_t* generator_code_function(generator_t* generator, ast_function_t* functi
 	string_append_str(code, function->name);
 	string_append_char(code, '(');
 	string_append_char(code, ')');
-	string_append_char(code, '{');
-	string_append_char(code, '\n');
 
 	string_t* code_block = generator_code_block(generator, function->block);
 	string_append(code, code_block);
 	code_block->destroy(code_block);
-
-	string_append_char(code, '}');
-	string_append_char(code, '\n');
 
 	return code;
 }

@@ -14,6 +14,7 @@ typedef enum {
     AST_NODE_TYPE_IF,
     AST_NODE_TYPE_ELSE_IF,
     AST_NODE_TYPE_BLOCK,
+    AST_NODE_TYPE_RETURN,
     AST_NODE_TYPE_IMPORT,
     AST_NODE_TYPE_FUNCTION,
     AST_NODE_TYPE_LAYOUT,
@@ -291,6 +292,14 @@ typedef struct ast_if_t {
     void (*print)(void* node);
 } ast_if_t; 
 
+
+typedef struct ast_return_t {
+    array_value_t* values;
+
+    void (*destroy)(void* node);
+    void (*print)(void* node);
+} ast_return_t;
+
 typedef struct ast_layout_block_t {
     ast_block_type_t type;
     ast_type_t parent_type;
@@ -347,6 +356,7 @@ typedef union {
     ast_import_t* import;
     ast_function_t* function;
     ast_if_t* ifclause;
+    ast_return_t* returns;
 
     ast_layout_t* layout;
 } ast_union_t;
@@ -841,5 +851,34 @@ char* ast_block_type_name(ast_block_type_t type);
  * 
  */
 ast_if_t* ast_else_create();
+
+/**
+ * 
+ * @function ast_return_print
+ * @brief Print the AST return node
+ * @params {ast_return_t*} node - AST return node
+ * @returns {void}
+ */
+void ast_return_print(ast_return_t* node);
+
+/**
+ * 
+ * @function ast_return_destroy
+ * @brief Free the AST return node
+ * @params {ast_return_t*} node - AST return node
+ * @returns {void}
+ * 
+ */
+void ast_return_destroy(ast_return_t* node);
+
+/**
+ * 
+ * @function ast_return_create
+ * @brief Create a new AST node return
+ * @params {array_value_t*} values - Values of the return
+ * @returns {ast_return_t*} - Pointer to the created AST node if
+ * 
+ */
+ast_return_t* ast_return_create(array_value_t* values);
 
 #endif

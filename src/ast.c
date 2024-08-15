@@ -205,10 +205,12 @@ void ast_layout_attribute_value_print(ast_layout_attribute_value_t* value)
  * @params {ast_layout_attribute_type_t} type - Type of the layout attribute
  * @params {const char*} key - Key of the attribute
  * @params {array_t*} values - Values of the attribute
+ * @params {location_t} last_name - Last name of the attribute
+ * @params {location_t} first_value - First value of the attribute
  * @returns {ast_layout_attribute_t*} - Pointer to the created AST node layout attribute
  * 
  */
-ast_layout_attribute_t* ast_layout_attribute_create(ast_layout_attribute_type_t type, char* key, array_t* values)
+ast_layout_attribute_t* ast_layout_attribute_create(ast_layout_attribute_type_t type, char* key, array_t* values, location_t last_name, location_t first_value)
 {
     DEBUG_ME;
 	ast_layout_attribute_t* attribute = memory_allocate(sizeof(ast_layout_attribute_t));
@@ -218,6 +220,9 @@ ast_layout_attribute_t* ast_layout_attribute_create(ast_layout_attribute_type_t 
 	attribute->isStyle = false;
 	attribute->isContent = false;
 	attribute->ignoreMe = false;
+
+	attribute->key_location = last_name;
+	attribute->value_location = first_value;
 
 	attribute->final_key = NULL;
 	attribute->final_value = NULL;

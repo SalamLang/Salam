@@ -264,15 +264,13 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 						char* attribute_css_value = generator_code_layout_style_value(attribute, block->parent_node_type);
 
 						if (attribute_css_value == NULL) {
-							error(2, "Empty value for '%s' attribute in '%s' element!", attribute_css_name, generator_code_layout_node_type(block->parent_node_type));
+							error(2, "Empty value for '%s' attribute in '%s' element at line %zu column %zu!", attribute_css_name, generator_code_layout_node_type(block->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
 						}
 
 						if (css_attributes_length != 0) string_append_char(css_attributes, ';');
 						string_append_str(css_attributes, attribute_css_name);
 						string_append_str(css_attributes, ":");
 						string_append_str(css_attributes, attribute_css_value);
-
-						// if (attribute_css_value != NULL) memory_destroy(attribute_css_value);
 
 						css_attributes_length++;
 					}
@@ -334,15 +332,14 @@ char* generator_code_layout_style_value(ast_layout_attribute_t* attribute, ast_l
 	
 	// 'Value=...' attribute allowed to be empty, but all other attributes must have a value (not empty)
 	if ((attribute->values->length == 0 || values_str_length == 0) && attribute->type != AST_LAYOUT_ATTRIBUTE_TYPE_VALUE) {
-
-		error(2, "Empty value for '%s' attribute in '%s' element!", attribute_css_name, generator_code_layout_node_type(parent_node_type));
+		error(2, "Empty value for '%s' attribute in '%s' element at line %zu column %zu!", attribute_css_name, generator_code_layout_node_type(parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
 	}
 
 	bool isValid = validate_style_value(attribute, values_str, parent_node_type);
 
 	// Invalid value for '...' attribute in '...' element in case if not stopped by the condition
 	if (isValid == false) {
-		error(2, "Invalid value for '%s' attribute in '%s' element!", attribute_css_name, generator_code_layout_node_type(parent_node_type));
+		error(2, "Invalid value for '%s' attribute in '%s' element at line %zu column %zu!", attribute_css_name, generator_code_layout_node_type(parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
 	}
 	
 	if (values_str != NULL) memory_destroy(values_str);

@@ -856,7 +856,7 @@ char* array_layout_attribute_value_string(array_layout_attribute_value_t* array,
     for (size_t i = 0; i < array->length; i++) {
         ast_layout_attribute_value_t* value = array_get(array, i);
 
-        if (value != NULL) {
+        if (value != NULL && value->data != NULL) { // TODO
             string_append_str(str, value->data); // TODO
             
             if (seperator != NULL && i < array->length - 1) {

@@ -640,6 +640,9 @@ char* ast_type_name(ast_value_type_t* type)
 		case AST_TYPE_KIND_INT:
 			return "int";
 
+		case AST_TYPE_KIND_NULL:
+			return "null";
+
 		case AST_TYPE_KIND_FLOAT:
 			return "float";
 
@@ -692,6 +695,11 @@ void ast_type_print(ast_value_type_t* type)
 
 		case AST_TYPE_KIND_INT:
 			printf("int");
+			printf("\n");
+			return;
+		
+		case AST_TYPE_KIND_NULL:
+			printf("null");
 			printf("\n");
 			return;
 

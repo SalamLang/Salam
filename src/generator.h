@@ -188,4 +188,80 @@ char* generator_identifier_get(generator_identifier_t* gen);
  */
 void generator_identifier_destroy(generator_identifier_t* gen);
 
+/**
+ * 
+ * @function generator_code_functions
+ * @brief Generate the code for the functions
+ * @params {generator_t*} generator - Generator
+ * @returns {void}
+ * 
+ */
+void generator_code_functions(generator_t* generator);
+
+/**
+ * 
+ * @function generator_code_function
+ * @brief Generate the code for the function
+ * @params {generator_t*} generator - Generator
+ * @params {ast_function_t*} function - Function
+ * @returns {string_t*} code - Code
+ * 
+ */
+string_t* generator_code_function(generator_t* generator, ast_function_t* function);
+
+/**
+ * 
+ * @function generator_code_block
+ * @brief Generate the code for the block
+ * @params {generator_t*} generator - Generator
+ * @params {ast_block_t*} block - Block
+ * @returns {string_t*} code - Code
+ * 
+ */
+string_t* generator_code_block(generator_t* generator, ast_block_t* block);
+
+/**
+ * 
+ * @function generator_code_node
+ * @brief Generate the code for the node
+ * @params {generator_t*} generator - Generator
+ * @params {ast_node_t*} node - Node
+ * @returns {string_t*} code - Code
+ * 
+ */
+string_t* generator_code_node(generator_t* generator, ast_node_t* node);
+
+/**
+ * 
+ * @function generator_code_if
+ * @brief Generate the code for the if clause
+ * @params {generator_t*} generator - Generator
+ * @params {ast_if_t*} ifclause - If clause
+ * @returns {string_t*} code - Code
+ * 
+ */
+string_t* generator_code_if(generator_t* generator, ast_if_t* ifclause);
+
+/**
+ * 
+ * @function generator_code_value
+ * @brief Generate the code for the value
+ * @params {generator_t*} generator - Generator
+ * @params {ast_value_t*} value - Value
+ * @returns {string_t*} code - Code
+ * 
+ */
+string_t* generator_code_value(generator_t* generator, ast_value_t* value);
+
+/**
+ * 
+ * @function generator_code_type
+ * @brief Generate the code for the type
+ * @params {generator_t*} generator - Generator
+ * @params {ast_value_type_t*} type - Type
+ * @returns {string_t*} code - Code
+ * 
+ */
+string_t* generator_code_type(generator_t* generator, ast_value_type_t* type);
+
 #endif

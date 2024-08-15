@@ -185,4 +185,14 @@ token_t* parser_parse_value(lexer_t* lexer);
  */
 ast_node_t* parser_parse_if(lexer_t* lexer);
 
+/**
+ * 
+ * @function parser_parse_expression
+ * @brief Parse the expression
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {ast_value_t*} - AST value
+ * 
+ */
+ast_value_t* parser_parse_expression(lexer_t* lexer);
+
 #endif

@@ -1853,11 +1853,11 @@ void ast_value_destroy(ast_value_t* value)
 {
 	DEBUG_ME;
 	if (value != NULL) {
-		if (value->type) {
+		if (value->type != NULL) {
 			value->type->destroy(value->type);
 		}
 
-		if (value->data) {
+		if (value->data != NULL) {
 			memory_destroy(value->data); // TODO
 			// value->data->destroy(value->data);
 		}

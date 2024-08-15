@@ -737,7 +737,10 @@ void lexer_save(lexer_t* lexer, const char* tokens_output)
 	file_appends(tokens_output, "Tokens:\n");
 	file_appends(tokens_output, "Lexer source: ");
 	file_appends(tokens_output, lexer->source == NULL ? "REPL" : lexer->source);
+
 	file_appends(tokens_output, "\n");
+	file_appends(tokens_output, "\n");
+
 	file_appends(tokens_output, "Lexer index: ");
 	file_appends(tokens_output, int2string(lexer->index));
 	file_appends(tokens_output, "\n");
@@ -746,6 +749,8 @@ void lexer_save(lexer_t* lexer, const char* tokens_output)
 	file_appends(tokens_output, "\n");
 	file_appends(tokens_output, "Lexer column: ");
 	file_appends(tokens_output, int2string(lexer->column));
+
+	file_appends(tokens_output, "\n");
 	file_appends(tokens_output, "\n");
 
     for (size_t i = 0; i < lexer->tokens->length; i++) {

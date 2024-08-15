@@ -494,11 +494,18 @@ bool is_style_attribute(ast_layout_attribute_type_t type)
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_RIGHT:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_TOP:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_BOTTOM:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_COLOR:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN_LAST:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_POSITION:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_STYLE:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_THICKNESS:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_SKIP:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_SKIP_INK:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_TRANSFORM:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VERTICAL_ALIGN:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VISIBILITY:
@@ -542,6 +549,8 @@ bool is_style_attribute(ast_layout_attribute_type_t type)
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_DISPLAY:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_DIRECTION:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ANCHOR:
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_COMBINE_UPRIGHT:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_WRAP:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_FLOW:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_GROW:
@@ -786,6 +795,20 @@ bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, a
 			else return false;
 			break;
 
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_COMBINE_UPRIGHT:
+			if (strcmp(values_str, "none") == 0) return true;
+			else if (strcmp(values_str, "all") == 0) return true;
+
+			else return false;
+			break;
+
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ANCHOR:
+			if (strcmp(values_str, "start") == 0) return true;
+			else if (strcmp(values_str, "middle") == 0) return true;
+			else if (strcmp(values_str, "end") == 0) return true;
+
+			else return false;
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_DISPLAY:
 			// precomposed values
 			if (strcmp(values_str, "block") == 0) return true;
@@ -814,6 +837,17 @@ bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, a
 			else return false;
 			break;
 		
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN_LAST:
+			if (strcmp(values_str, "auto") == 0) return true;
+			else if (strcmp(values_str, "start") == 0) return true;
+			else if (strcmp(values_str, "end") == 0) return true;
+			else if (strcmp(values_str, "left") == 0) return true;
+			else if (strcmp(values_str, "right") == 0) return true;
+			else if (strcmp(values_str, "center") == 0) return true;
+			else if (strcmp(values_str, "justify") == 0) return true;
+
+			else return false;
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN:
 			if (strcmp(values_str, "start") == 0) return true;
 			else if (strcmp(values_str, "end") == 0) return true;
@@ -842,6 +876,37 @@ bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, a
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR:
 			return validate_style_value_color(attribute, values_str, parent_node_type);
 		
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_THICKNESS:
+			if (strcmp(values_str, "auto") == 0) return true;
+			else if (strcmp(values_str, "from-font") == 0) return true;
+			else if (string_is_number(values_str) == true) return true;
+			// TODO: handling % or numbers with units
+
+			else return false;
+			break;
+
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_SKIP:
+			if (strcmp(values_str, "none") == 0) return true;
+			else if (strcmp(values_str, "objects") == 0) return true;
+			else if (strcmp(values_str, "spaces") == 0) return true;
+			else if (strcmp(values_str, "edges") == 0) return true;
+			else if (strcmp(values_str, "box-decoration") == 0) return true;
+
+			else return false;
+			break;
+
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_SKIP_INK:
+			if (strcmp(values_str, "none") == 0) return true;
+			else if (strcmp(values_str, "auto") == 0) return true;
+			else if (strcmp(values_str, "all") == 0) return true;
+
+			else return false;
+			break;
+		
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_COLOR:
+			if (strcmp(values_str, "currentcolor") == 0) return true;
+			else return validate_style_value_color(attribute, values_str, parent_node_type);
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE:
 			if (strcmp(values_str, "solid") == 0) return true;
 			else if (strcmp(values_str, "double") == 0) return true;
@@ -851,7 +916,32 @@ bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, a
 
 			else return false;
 			break;
-			
+		
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_POSITION:
+			if (strcmp(values_str, "over right") == 0) return true;
+			else if (strcmp(values_str, "over left") == 0) return true;
+			else if (strcmp(values_str, "under right") == 0) return true;
+			else if (strcmp(values_str, "under left") == 0) return true;
+			else if (strcmp(values_str, "left over") == 0) return true;
+			else if (strcmp(values_str, "right under") == 0) return true;
+			else if (strcmp(values_str, "left under") == 0) return true;
+
+			else return false;
+			break; 
+
+		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_STYLE:
+			if (strcmp(values_str, "none") == 0) return true;
+			else if (strcmp(values_str, "filled") == 0) return true;
+			else if (strcmp(values_str, "open") == 0) return true;
+			else if (strcmp(values_str, "dot") == 0) return true;
+			else if (strcmp(values_str, "circle") == 0) return true;
+			else if (strcmp(values_str, "double-circle") == 0) return true;
+			else if (strcmp(values_str, "triangle") == 0) return true;
+			else if (strcmp(values_str, "filled sesame") == 0) return true;
+			else if (strcmp(values_str, "open sesame") == 0) return true;
+			else return true; // TODO: allow string?
+			break;
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION:
 			// ast_layout_attribute_type_t sub_types[] = {
 			// 	AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE,

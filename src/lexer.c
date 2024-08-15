@@ -183,18 +183,23 @@ void token_print(token_t* token)
 		case TOKEN_EOF:
 			printf("EOF");
 			break;
+		
 		case TOKEN_IDENTIFIER:
 			printf("IDENTIFIER: '%s' (%zu)", token->data.string, strlen(token->data.string));
 			break;
+		
 		case TOKEN_NUMBER_FLOAT:
 			printf("NUMBER_FLOAT: %f", token->data.number_float);
 			break;
+		
 		case TOKEN_NUMBER_INT:
 			printf("NUMBER_INT: %d", token->data.number_int);
 			break;
+		
 		case TOKEN_STRING:
 			printf("STRING: '%s' (%zu)", token->data.string, strlen(token->data.string));
 			break;
+		
 		case TOKEN_LEFT_BRACE:
 		case TOKEN_RIGHT_BRACE:
 		case TOKEN_LEFT_BRACKET:
@@ -287,10 +292,142 @@ void token_print(token_t* token)
 
 		default:
 			printf("UNKNOWN");
+			break;
 	}
 
 	printf(" at ");
 	location_print(token->location);
+}
+
+/**
+ * 
+ * @function token_string
+ * @brief Get the name & value of a token as a string
+ * @params {token_t*} token - Token
+ * @returns {char*} - String representation of the token
+ * 
+ */
+char* token_string(token_t* token)
+{
+    static char buffer[256];
+
+    switch (token->type) {
+        case TOKEN_EOF:
+            sprintf(buffer, "EOF");
+            break;
+
+        case TOKEN_IDENTIFIER:
+            sprintf(buffer, "IDENTIFIER: '%s' (%zu)", token->data.string, strlen(token->data.string));
+            break;
+
+        case TOKEN_NUMBER_FLOAT:
+            sprintf(buffer, "NUMBER_FLOAT: %f", token->data.number_float);
+            break;
+
+        case TOKEN_NUMBER_INT:
+            sprintf(buffer, "NUMBER_INT: %d", token->data.number_int);
+            break;
+
+        case TOKEN_STRING:
+            sprintf(buffer, "STRING: '%s' (%zu)", token->data.string, strlen(token->data.string));
+            break;
+
+        case TOKEN_LEFT_BRACE:
+        case TOKEN_RIGHT_BRACE:
+        case TOKEN_LEFT_BRACKET:
+        case TOKEN_RIGHT_BRACKET:
+        case TOKEN_COLON:
+        case TOKEN_COMMA:
+        case TOKEN_LEFT_PAREN:
+        case TOKEN_RIGHT_PAREN:
+        case TOKEN_PLUS:
+        case TOKEN_MINUS:
+        case TOKEN_MULTIPLY:
+        case TOKEN_DIVIDE:
+        case TOKEN_MOD:
+        case TOKEN_POWER:
+        case TOKEN_ASSIGN:
+        case TOKEN_LESS:
+        case TOKEN_GREATER:
+        case TOKEN_NOT:
+            sprintf(buffer, "SYMBOL: '%c'", token->type);
+            break;
+
+        case TOKEN_NOT_EQUAL: sprintf(buffer, "SYMBOL: '!='"); break;
+        case TOKEN_EQUAL: sprintf(buffer, "SYMBOL: '=='"); break;
+        case TOKEN_AND_AND: sprintf(buffer, "SYMBOL: '&&'"); break;
+        case TOKEN_OR_OR: sprintf(buffer, "SYMBOL: '||'"); break;
+        case TOKEN_AND_BIT: sprintf(buffer, "SYMBOL: '&'"); break;
+        case TOKEN_OR_BIT: sprintf(buffer, "SYMBOL: '|'"); break;
+        case TOKEN_LESS_EQUAL: sprintf(buffer, "SYMBOL: '<='"); break;
+        case TOKEN_GREATER_EQUAL: sprintf(buffer, "SYMBOL: '>='"); break;
+
+        case TOKEN_INCREMENT: sprintf(buffer, "SYMBOL: '++'"); break;
+        case TOKEN_DECREMENT: sprintf(buffer, "SYMBOL: '--'"); break;
+
+        case TOKEN_SHIFT_LEFT: sprintf(buffer, "SYMBOL: '>>'"); break;
+        case TOKEN_SHIFT_RIGHT: sprintf(buffer, "SYMBOL: '<<'"); break;
+        case TOKEN_SHIFT_LEFT_ASSIGN: sprintf(buffer, "SYMBOL: '>>='"); break;
+        case TOKEN_SHIFT_RIGHT_ASSIGN: sprintf(buffer, "SYMBOL: '<<='"); break;
+
+        case TOKEN_BOOLEAN:
+            sprintf(buffer, "BOOLEAN: %s", token->data.boolean ? "true" : "false");
+            break;
+
+        case TOKEN_ERROR:
+            sprintf(buffer, "ERROR");
+            break;
+
+        case TOKEN_LAYOUT:
+            sprintf(buffer, "LAYOUT");
+            break;
+
+        case TOKEN_IMPORT:
+            sprintf(buffer, "IMPORT");
+            break;
+
+        case TOKEN_FUNCTION:
+            sprintf(buffer, "FUNCTION");
+            break;
+
+        case TOKEN_RETURN:
+            sprintf(buffer, "RETURN");
+            break;
+
+        case TOKEN_IF:
+            sprintf(buffer, "IF");
+            break;
+
+        case TOKEN_ELSE:
+            sprintf(buffer, "ELSE");
+            break;
+
+        case TOKEN_PRINT:
+            sprintf(buffer, "PRINT");
+            break;
+
+        case TOKEN_WHILE:
+            sprintf(buffer, "WHILE");
+            break;
+
+        case TOKEN_FOR:
+            sprintf(buffer, "FOR");
+            break;
+
+        case TOKEN_BREAK:
+            sprintf(buffer, "BREAK");
+            break;
+
+        case TOKEN_CONTINUE:
+            sprintf(buffer, "CONTINUE");
+            break;
+
+        default:
+            sprintf(buffer, "UNKNOWN");
+            break;
+    }
+
+    return buffer;
 }
 
 /**
@@ -585,6 +722,45 @@ void lexer_destroy(lexer_t* lexer)
 
 /**
  * 
+ * @function lexer_save
+ * @brief Saving the lexer state
+ * @params {lexer_t*} lexer - Lexer state
+ * @params {const char*} tokens_output - Tokens output file
+ * @returns {void}
+ * 
+ */
+void lexer_save(lexer_t* lexer, const char* tokens_output)
+{
+    DEBUG_ME;
+	file_writes(tokens_output, "");
+
+	file_appends(tokens_output, "Tokens:\n");
+	file_appends(tokens_output, "Lexer source: ");
+	file_appends(tokens_output, lexer->source == NULL ? "REPL" : lexer->source);
+	file_appends(tokens_output, "\n");
+	file_appends(tokens_output, "Lexer index: ");
+	file_appends(tokens_output, int2string(lexer->index));
+	file_appends(tokens_output, "\n");
+	file_appends(tokens_output, "Lexer line: ");
+	file_appends(tokens_output, int2string(lexer->line));
+	file_appends(tokens_output, "\n");
+	file_appends(tokens_output, "Lexer column: ");
+	file_appends(tokens_output, int2string(lexer->column));
+	file_appends(tokens_output, "\n");
+
+    for (size_t i = 0; i < lexer->tokens->length; i++) {
+        printf("\t");
+        token_t* token = array_get(lexer->tokens, i);
+
+		file_appends(tokens_output, token_string(token));
+		file_appends(tokens_output, " at ");
+		file_appends(tokens_output, location_string(token->location));
+		file_appends(tokens_output, "\n");
+    }
+}
+
+/**
+ * 
  * @function lexer_debug
  * @brief Debugging the lexer state
  * @params {lexer_t*} lexer - Lexer state
@@ -604,6 +780,22 @@ void lexer_debug(lexer_t* lexer)
 	array_token_print(lexer->tokens);
 
 	printf("============= END LEXER DEBUG =============\n");
+}
+
+/**
+ * 
+ * @function location_string
+ * @brief Get the string representation of a location
+ * @params {location_t} location - Location
+ * @returns {char*}
+ * 
+ */
+char* location_string(location_t location)
+{
+	DEBUG_ME;
+	static char buffer[256];
+	snprintf(buffer, sizeof(buffer), "%zu:%zu - %zu:%zu", location.start_line, location.start_column, location.end_line, location.end_column);
+	return buffer;
 }
 
 /**
@@ -748,19 +940,26 @@ void lexer_lex_string(lexer_t* lexer)
 	char* buffer = memory_allocate(256);
 	size_t index = 0;
 
+	printf("first %c\n", LEXER_CURRENT);
+
 	while (LEXER_CURRENT != '"' && LEXER_CURRENT != '\0') {
+		printf("iterate %c\n", LEXER_CURRENT);
 		buffer[index++] = LEXER_CURRENT;
 		LEXER_NEXT;
 		LEXER_NEXT_COLUMN;
 	}
+	printf("after loop %c\n", LEXER_CURRENT);
 
 	buffer[index] = '\0';
 
 	if (LEXER_CURRENT != '\"') {
 		error(2, "Unterminated string value at line %zu, column %zu", lexer->line, lexer->column);
 	}
+	printf("after if %c\n", LEXER_CURRENT);
 
-	LEXER_CURRENT++;
+	LEXER_NEXT;
+
+	printf("after plus %c\n", LEXER_CURRENT);
 
 	token_t* token = token_create(TOKEN_STRING, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
 	token->data_type = TOKEN_STRING;
@@ -851,6 +1050,11 @@ void lexer_lex(lexer_t* lexer)
 				if (is_char_alpha(LEXER_CURRENT_PREV) || LEXER_CURRENT_PREV == '_') {
 					lexer_lex_identifier(lexer);
 				} else {
+					printf("--->1 %c\n", LEXER_CURRENT_PREV);
+					printf("--->2 %c\n", LEXER_CURRENT);
+
+					printf("--->3 %d\n", LEXER_CURRENT_PREV);
+					printf("--->4 %d\n", LEXER_CURRENT);
 					token_t* token = token_create(TOKEN_ERROR, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
 					LEXER_PUSH_TOKEN(token);
 				}

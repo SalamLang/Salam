@@ -13,6 +13,82 @@
 
 /**
  * 
+ * @function is_begin_block_token
+ * @brief Check if the token is a begin block
+ * @params {token_t*} token - Token
+ * @returns {bool}
+ * 
+ */
+bool is_begin_block_token(token_t* token)
+{
+	return token->type == TOKEN_LEFT_BRACE;
+}
+
+/**
+ * 
+ * @function is_close_block_token
+ * @brief Check if the token is an end block
+ * @params {token_t*} token - Token
+ * @returns {bool}
+ * 
+ */
+bool is_close_block_token(token_t* token)
+{
+	return token->type == TOKEN_RIGHT_BRACE;
+}
+
+/**
+ * 
+ * @function expect_open_block
+ * @brief Expect an open block
+ * @returns {void}
+ * 
+ */
+void expect_open_block(lexer_t* lexer)
+{
+	expect(lexer, TOKEN_LEFT_BRACE);
+}
+
+/**
+ * 
+ * @function expect_open_block
+ * @brief Expect an open block
+ * @returns {void}
+ * 
+ */
+void expect_close_block(lexer_t* lexer)
+{
+	expect(lexer, TOKEN_RIGHT_BRACE);
+}
+
+/**
+ * 
+ * @function match_next_open_block
+ * @brief Match the next open block
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {bool}
+ * 
+ */
+bool match_next_open_block(lexer_t* lexer)
+{
+	return match_next(lexer, TOKEN_LEFT_BRACE);
+}
+
+/**
+ * 
+ * @function match_next_close_block
+ * @brief Match the next close block
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {bool}
+ * 
+ */
+bool match_next_close_block(lexer_t* lexer)
+{
+	return match_next(lexer, TOKEN_RIGHT_BRACE);
+}
+
+/**
+ * 
  * @function match
  * @brief Match the token type
  * @params {lexer_t*} lexer - Lexer
@@ -162,8 +238,8 @@ ast_layout_attribute_value_t* parser_parse_layout_value(lexer_t* lexer)
 void parser_parse_block(lexer_t* lexer, ast_block_t* block)
 {
     DEBUG_ME;
-
-	expect(lexer, TOKEN_LEFT_BRACE);
+	
+	expect_open_block(lexer);
 
 	while (PARSER_CURRENT->type != TOKEN_RIGHT_BRACE) {
 		ast_node_t* node = parser_parse_node(lexer);
@@ -177,7 +253,7 @@ void parser_parse_block(lexer_t* lexer, ast_block_t* block)
 		}
 	}
 
-	expect(lexer, TOKEN_RIGHT_BRACE);
+	expect_close_block(lexer);
 }
 
 /**
@@ -317,10 +393,10 @@ void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexe
 void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer)
 {
     DEBUG_ME;
-	expect(lexer, TOKEN_LEFT_BRACE);
+	expect_open_block(lexer);
 
 	while (PARSER_CURRENT->type != TOKEN_RIGHT_BRACE) {
-		if (match(lexer, TOKEN_IDENTIFIER) && match_next(lexer, TOKEN_LEFT_BRACE)) {
+		if (match(lexer, TOKEN_IDENTIFIER) && match_next_open_block(lexer)) {
 			parser_parse_layout_block_children(block, lexer);
 		}
 		else if (match(lexer, TOKEN_IDENTIFIER)) {
@@ -331,7 +407,7 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer)
 		}
 	}
 
-	expect(lexer, TOKEN_RIGHT_BRACE);
+	expect_close_block(lexer);
 
 	validate_layout_block(block);
 }
@@ -576,7 +652,7 @@ ast_node_t* parser_parse_if(lexer_t* lexer)
 	while (true) {
 		if (match(lexer, TOKEN_ELSE)) {
 			// else {} and stop
-			if (match_next(lexer, TOKEN_LEFT_BRACE)) {
+			if (match_next_open_block(lexer)) {
 				PARSER_NEXT; // Eat the else token
 
 				ast_node_t* else_if = ast_node_create(AST_NODE_TYPE_ELSE_IF, PARSER_CURRENT->location);

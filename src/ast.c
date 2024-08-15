@@ -356,8 +356,8 @@ ast_return_t* ast_return_create(array_value_t* values)
 
 	node->values = values;
 
-	node->print = cast(void (*)(void*), ast_if_print);
-	node->destroy = cast(void (*)(void*), ast_if_destroy);
+	node->print = cast(void (*)(void*), ast_return_print);
+	node->destroy = cast(void (*)(void*), ast_return_destroy);
 
 	return node;
 }

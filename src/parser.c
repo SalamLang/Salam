@@ -381,8 +381,7 @@ ast_node_t* parser_parse_function(lexer_t* lexer)
 array_value_t* parser_parse_expressions(lexer_t* lexer)
 {
 	DEBUG_ME;
-	array_value_t* values = array_create(sizeof(ast_value_t*), 1);
-	values->destroy = cast(void (*)(void*), ast_value_destroy);
+	array_value_t* values = array_value_create(1);
 
 	ast_value_t* value = parser_parse_expression(lexer);
 	array_push(values, value);

@@ -4,12 +4,12 @@ fn main {
 
 layout {
 	title "my site name"
-	
 	background yellow
-
-	text-decoration "red", "overline"
+	text-decoration "overline", "red"
+	padding 10
 
 	bold {
 		content "Hey there!"
 	}
+	content "In the name of god!"
 }

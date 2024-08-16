@@ -123,11 +123,13 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 char* normalise_css_size(char* attribute_value)
 {
 	DEBUG_ME;
-	if (!string_is_number(attribute_value) == true) return attribute_value;
+	if (!string_is_number(attribute_value) == true) {
+		return strdup(attribute_value);
+	}
 
 	int value_length = strlen(attribute_value) + 3;
 
-	char* res = memory_reallocate(attribute_value, value_length * sizeof(char));
+	char* res = memory_allocate(value_length * sizeof(char));
 
 	strcat(res, "px");
 
@@ -149,20 +151,23 @@ char* attribute_css_multiple_size_value(array_t* attribute_values)
 
 	if (attribute_values->length == 1) {
 		char* value = strdup(attribute_values->data[0]);
-		value = normalise_css_size(value);
+		char* value_normal = normalise_css_size(value);
 
-		return value;
+		memory_destroy(value);
+
+		return value_normal;
 	}
 
 	string_t* buffer = string_create(10);
 
 	for (size_t i = 0; i < attribute_values->length; i++) {
 		char* value = strdup(attribute_values->data[i]);
-		value = normalise_css_size(value);
+		char* value_normal = normalise_css_size(value);
 
 		char* out_value;
-		if (!has_css_size_prefix(value, &out_value)) return NULL;
+		if (!has_css_size_prefix(value_normal, &out_value)) return NULL;
 
+		if (value_normal != NULL) free(value_normal);
 		if (value != NULL) free(value);
 
 		if (out_value != NULL) {
@@ -723,6 +728,8 @@ bool validate_style_value_sizes(ast_layout_attribute_t* attribute, char* values_
 	
 	strcpy(values_str, new_value);
 
+	if (new_value != NULL) free(new_value);
+	
 	return true;
 }
 

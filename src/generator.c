@@ -378,7 +378,7 @@ void generator_code_layout_style_value(hashmap_t* styles, hashmap_t* new_styles,
 	}
 
 	if (attribute->final_value == NULL) {
-		attribute->final_value = "fff";
+		attribute->final_value = strdup("123");//attribute->values->data[0]->data.string_value);
 	}
 }
 

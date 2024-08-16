@@ -132,6 +132,10 @@ ast_layout_block_t* ast_layout_block_create(ast_type_t node_type, ast_layout_nod
 	cast(hashmap_t*, block->styles)->print = cast(void (*)(void*), hashmap_print_layout_attribute);
 	cast(hashmap_t*, block->styles)->destroy = cast(void (*)(void*), hashmap_destroy_layout_attribute);
 
+	block->new_styles = hashmap_create_layout_attribute(16);
+	cast(hashmap_t*, block->new_styles)->print = cast(void (*)(void*), hashmap_print_layout_attribute);
+	cast(hashmap_t*, block->new_styles)->destroy = cast(void (*)(void*), hashmap_destroy_layout_attribute);
+
 	block->children = array_create(sizeof(ast_layout_node_t*), 16);
 	block->children->print = cast(void (*)(void*), array_layout_node_print);
 	block->children->destroy = cast(void (*)(void*), array_layout_node_destroy);
@@ -324,9 +328,10 @@ void ast_layout_block_destroy(ast_layout_block_t* value)
 {
     DEBUG_ME;
 	if (value != NULL) {
+		array_t* children = value->children;
 		hashmap_t* attributes = cast(hashmap_t*, value->attributes);
 		hashmap_t* styles = cast(hashmap_t*, value->styles);
-		array_t* children = value->children;
+		hashmap_t* new_styles = cast(hashmap_t*, value->new_styles);
 		
 		if (attributes != NULL) {
 			attributes->destroy(attributes);
@@ -334,6 +339,10 @@ void ast_layout_block_destroy(ast_layout_block_t* value)
 
 		if (styles != NULL) {
 			styles->destroy(styles);
+		}
+
+		if (new_styles != NULL) {
+			new_styles->destroy(new_styles);
 		}
 
 		if (value->text_content != NULL) {

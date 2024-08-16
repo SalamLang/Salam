@@ -193,6 +193,50 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 }
 
 /**
+ * 
+ * @function generator_code_layout_style
+ * @brief Generate the CSS code for the layout block
+ * @params {hashmap_attribute_t*} styles - Styles
+ * @params {ast_layout_block_t*} block - Layout block
+ * @params {size_t*} css_attributes_length - CSS attributes length
+ * @returns {string_t*}
+ * 
+ */
+string_t* generator_code_layout_style(hashmap_attribute_t* styles, ast_layout_block_t* block, size_t* css_attributes_length)
+{
+	string_t* code = string_create(1024);
+
+	if (styles != NULL) {
+		for (size_t i = 0; i < styles->capacity; i++) {
+			hashmap_entry_t *entry = styles->data[i];
+
+			while (entry) {
+				ast_layout_attribute_t* attribute = entry->value;
+				
+				generator_code_layout_style_value(block->styles, block->new_styles, attribute, block->parent_node_type);
+
+				if (attribute->isStyle == false || attribute->ignoreMe == true) {}
+				else {
+					if (attribute->final_value == NULL) {
+						error(2, "Someting went wrong with the style value for '%s' attribute in '%s' element!", attribute->final_key, generator_code_layout_node_type(block->parent_node_type));
+					}
+
+					if (*css_attributes_length != 0) string_append_char(code, ';');
+					string_append_str(code, attribute->final_key);
+					string_append_str(code, ":");
+					string_append_str(code, attribute->final_value);
+
+					(*css_attributes_length)++;
+				}
+				
+				entry = entry->next;
+			}
+		}
+	}
+
+	return code;
+}
+/**
  *
  * @function generator_code_layout_attributes
  * @brief Generate the HTML code for the layout block attributes
@@ -248,68 +292,29 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 			}
 		}
 
-		if (block->styles != NULL) {
-			hashmap_t* styles = cast(hashmap_t*, block->styles);
-			hashmap_t* new_styles = hashmap_create_layout_attribute(1);
+		string_t* this_style = generator_code_layout_style(block->styles, block, &css_attributes_length);
+		string_append(css_attributes, this_style);
+		string_destroy(this_style);
+		
+		// New styles
+		for (size_t i = 0; i < block->new_styles->capacity; i++) {
+			hashmap_entry_t *entry = block->new_styles->data[i];
 
-			for (size_t i = 0; i < styles->capacity; i++) {
-				hashmap_entry_t *entry = styles->data[i];
+			while (entry) {
+				ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
+				if (attribute == NULL) {}
+				else if (attribute->isStyle == false || attribute->ignoreMe == true) {}
+				else {
+					if (css_attributes_length != 0) string_append_char(css_attributes, ';');
+					string_append_str(css_attributes, attribute->final_key);
+					string_append_str(css_attributes, ":");
+					string_append_str(css_attributes, attribute->final_value);
 
-				while (entry) {
-					ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
-
-					if (attribute->isStyle == false) {}
-					else {
-						generator_code_layout_style_value(styles, new_styles, attribute, block->parent_node_type);
-
-						if (attribute->ignoreMe == true) {
-							entry = entry->next;
-							continue;
-						}
-
-						if (attribute->final_value == NULL) {
-							error(2, "Someting went wrong with the style value for '%s' attribute in '%s' element!", attribute->final_key, generator_code_layout_node_type(block->parent_node_type));
-						}
-
-						if (css_attributes_length != 0) string_append_char(css_attributes, ';');
-						string_append_str(css_attributes, attribute->final_key);
-						string_append_str(css_attributes, ":");
-						string_append_str(css_attributes, attribute->final_value);
-
-						css_attributes_length++;
-					}
-					
-					entry = entry->next;
+					css_attributes_length++;
 				}
+				
+				entry = entry->next;
 			}
-
-			// New styles
-			for (size_t i = 0; i < new_styles->capacity; i++) {
-				hashmap_entry_t *entry = new_styles->data[i];
-
-				while (entry) {
-					ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
-					if (attribute == NULL) {}
-					else if (attribute->isStyle == false || attribute->ignoreMe == true) {}
-					else {
-						attribute->print(attribute);
-						if (attribute->final_value == NULL) {
-							error(2, "Someting went wrong with the sub-style value for '%s' attribute in '%s' element!", attribute->final_key, generator_code_layout_node_type(block->parent_node_type));
-						}
-
-						if (css_attributes_length != 0) string_append_char(css_attributes, ';');
-						string_append_str(css_attributes, attribute->final_key);
-						string_append_str(css_attributes, ":");
-						string_append_str(css_attributes, attribute->final_value);
-
-						css_attributes_length++;
-					}
-					
-					entry = entry->next;
-				}
-			}
-
-			if (new_styles != NULL) new_styles->destroy(new_styles);
 		}
 	}
 

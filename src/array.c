@@ -810,7 +810,7 @@ array_value_t* array_value_copy(array_value_t* values)
     for (size_t i = 0; i < values->length; i++) {
         ast_value_t* value = values->data[i];
 
-        array_push(copy, ast_layout_attribute_value_copy(value));
+        array_push(copy, ast_value_copy(value));
     }
 
     return copy;

@@ -51,11 +51,16 @@ typedef struct {
                                 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
 
 #define MY_MACRO(...) MY_MACRO_CHOOSER(NUM_ARGS(__VA_ARGS__))(__VA_ARGS__)
+
 #define MY_MACRO_CHOOSER(N) MY_MACRO_##N
-#define MY_MACRO_1(param1) printf("param1: %s\n", param1)
-#define MY_MACRO_2(param1, param2) printf("param1: %s, param2: %s\n", param1, param2)
 
+#define MY_MACRO_3(TOKEN_TYPE, TOKEN_CHAR) TOKEN_TYPE = \'TOKEN_CHAR\'
 
+#define MY_MACRO_4(param1, param2) printf("param1: %s, param2: %s\n", param1, param2)
+
+#define ADD_KEYWORD(token, name, value) {token, name, value}
+
+#define ADD_TOKEN(token, name, input) {token, name, input}
 
 typedef enum {
 } token_type_t;

@@ -659,6 +659,10 @@ bool validate_style_value_sizes(ast_layout_attribute_t* attribute)
 
 		return value_normal;
 	}
+
+	// attribute->final_value = memory_allocate(20 * sizeof(char));
+	// strcpy(attribute->final_value, "val");
+
 	return true;
 
 	// string_t* buffer = string_create(10);
@@ -703,6 +707,9 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 	DEBUG_ME;
 	ast_value_t* first = attribute->values->data[0];
 	char *value = first->data.string_value;
+
+	if (new_styles) {}
+	if (styles) {}
 
 	if (attribute->values->length < 1) {
 		error(2, "Style value is missing in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));

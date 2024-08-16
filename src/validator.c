@@ -943,17 +943,17 @@ bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, a
 			break;
 
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION:
-			// ast_layout_attribute_type_t sub_types[] = {
-			// 	AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE,
-			// 	AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE,
-			// 	AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR,
-			// };
-			// size_t sub_types_length = sizeof(sub_types) / sizeof(sub_types[0]);
-			// hashmap_t* sub_groups = hashmap_create(sub_types_length);
+			ast_layout_attribute_type_t sub_types[] = {
+				AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE,
+				AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE,
+				AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR,
+			};
+			size_t sub_types_length = sizeof(sub_types) / sizeof(sub_types[0]);
+			hashmap_t* sub_groups = hashmap_create(sub_types_length);
 
-			// for (size_t i = 0; i < attribute->values->length; i++) {
-			// 	ast_* value = attribute->values->data[i];
-			// }
+			for (size_t i = 0; i < attribute->values->length; i++) {
+				array_layout_attribute_value_t* _values = 
+			}
 
 			// if (attribute->values == 1) {
 			// 	if (strcmp(values_str, "none") == 0) return true;

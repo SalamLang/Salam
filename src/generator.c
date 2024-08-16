@@ -140,7 +140,7 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 	char* html_lang_value = NULL;
 	string_append_str(html, " lang=\"");
 	if (html_lang != NULL) {
-		char* values = array_layout_attribute_value_string(html_lang->values, ", ");
+		char* values = array_value_string(html_lang->values, ", ");
 		html_lang_value = string_lower_str(values);
 		
 		if (values != NULL) memory_destroy(values);
@@ -166,7 +166,7 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 	char* html_dir_value = NULL;
 	string_append_str(html, " dir=\"");
 	if (html_dir != NULL) {
-		char* values = array_layout_attribute_value_string(html_dir->values, ", ");
+		char* values = array_value_string(html_dir->values, ", ");
 		html_dir_value = string_lower_str(values);
 
 		if (values != NULL) memory_destroy(values);
@@ -270,7 +270,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 
 					if (attribute->ignoreMe == true || attribute->isContent == true || attribute->isStyle == true) {}
 					else {
-						char* attribute_values_str = attribute->final_value != NULL ? attribute->final_value : array_layout_attribute_value_string(attribute->values, ", ");
+						char* attribute_values_str = attribute->final_value != NULL ? attribute->final_value : array_value_string(attribute->values, ", ");
 						size_t attribute_value_length = attribute_values_str == NULL ? 0 : strlen(attribute_values_str);
 
 						if (html_attributes_length != 0) string_append_char(html_attributes, ' ');
@@ -364,34 +364,22 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 void generator_code_layout_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, ast_layout_node_type_t parent_node_type)
 {
 	DEBUG_ME;
-	char* values_str = array_layout_attribute_value_string(attribute->values, ", ");
-	size_t values_str_length = values_str == NULL ? 0 : strlen(values_str);
-
-	char* attribute_css_name = generator_code_layout_style_name(attribute->type);
-	
-	// 'Value=...' attribute allowed to be empty, but all other attributes must have a value (not empty)
-	if ((attribute->values->length == 0 || values_str_length == 0) && attribute->type != AST_LAYOUT_ATTRIBUTE_TYPE_VALUE) {
-		if (values_str != NULL) memory_destroy(values_str);
-
-		error(2, "Empty value for '%s' attribute in '%s' element at line %zu column %zu!", attribute_css_name, generator_code_layout_node_type(parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
-	}
-
-	bool isValid = validate_style_value(styles, new_styles, attribute, values_str, parent_node_type);
+	bool isValid = validate_style_value(styles, new_styles, attribute);
 
 	// Invalid value for '...' attribute in '...' element in case if not stopped by the condition
 	if (isValid == false) {
-		error(2, "Invalid value for '%s' attribute in '%s' element at line %zu column %zu!", attribute_css_name, generator_code_layout_node_type(parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
+		error(2, "Invalid value for '%s' attribute in '%s' element at line %zu column %zu!", attribute->key, generator_code_layout_node_type(parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
+		
+		return;
 	}
 	
 	if (attribute->final_key == NULL) {
-		attribute->final_key = strdup(attribute_css_name);
+		attribute->final_key = strdup(attribute->key);
 	}
 
 	if (attribute->final_value == NULL) {
-		attribute->final_value = strdup(values_str);
+		attribute->final_value = "fff";
 	}
-
-	if (values_str != NULL) memory_destroy(values_str);
 }
 
 /**
@@ -1084,7 +1072,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 
 	switch (attribute->type) {
 		case AST_LAYOUT_ATTRIBUTE_TYPE_TITLE:
-			value = array_layout_attribute_value_string(attribute->values, ", ");
+			value = array_value_string(attribute->values, ", ");
 
 			string_append_str(head, "<title>");
 			string_append_str(head, value);
@@ -1093,7 +1081,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 			break;
 		
 		case AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR:
-			value = array_layout_attribute_value_string(attribute->values, ", ");
+			value = array_value_string(attribute->values, ", ");
 
 			string_append_str(head, "<meta name=\"author\" content=\"");
 			string_append_str(head, value);
@@ -1102,7 +1090,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 			break;
 
 		case AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION:
-			value = array_layout_attribute_value_string(attribute->values, ", ");
+			value = array_value_string(attribute->values, ", ");
 
 			string_append_str(head, "<meta name=\"description\" content=\"");
 			string_append_str(head, value);
@@ -1111,7 +1099,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 			break;
 		
 		case AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS:
-			value = array_layout_attribute_value_string(attribute->values, ", ");
+			value = array_value_string(attribute->values, ", ");
 
 			string_append_str(head, "<meta name=\"keywords\" content=\"");
 			string_append_str(head, value);
@@ -1120,7 +1108,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 			break;
 		
 		case AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET:
-			value = array_layout_attribute_value_string(attribute->values, ", ");
+			value = array_value_string(attribute->values, ", ");
 
 			string_append_str(head, "<meta charset=\"");
 			string_append_str(head, value);
@@ -1129,7 +1117,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 			break;
 		
 		case AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT:
-			value = array_layout_attribute_value_string(attribute->values, ", ");
+			value = array_value_string(attribute->values, ", ");
 
 			string_append_str(head, "<meta name=\"viewport\" content=\"");
 			string_append_str(head, value);
@@ -1138,7 +1126,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 			break;
 		
 		case AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH:
-			value = array_layout_attribute_value_string(attribute->values, ", ");
+			value = array_value_string(attribute->values, ", ");
 
 			string_append_str(head, "<meta http-equiv=\"refresh\" content=\"");
 			string_append_str(head, value);
@@ -1457,67 +1445,64 @@ string_t* generator_code_value(generator_t* generator, ast_value_t* value)
 
 	if (value == NULL) {
 		error(2, "Value is NULL in value statement");
-		return code;
-	}
-	else if (value->data == NULL) {
-		error(2, "Value data is NULL in value statement");
+
 		return code;
 	}
 
 	if (value->type != NULL) {
 		switch (value->type->kind) {
 			case AST_TYPE_KIND_VOID:
-				string_append_str(code, value->data);
+				string_append_str(code, "VOID");
 				return code;
 			
 			case AST_TYPE_KIND_INT:
-				string_append_str(code, value->data);
+				string_append_str(code, int2string(value->data.int_value));
 				return code;
 
 			case AST_TYPE_KIND_FLOAT:
-				string_append_str(code, value->data);
+				string_append_str(code, float2string(value->data.float_value));
 				return code;
 
 			// case AST_TYPE_KIND_DOUBLE:
-			// 	string_append_str(code, value->data);
+			// 	string_append_str(code, value->double_value);
 			// 	return code;
 
 			case AST_TYPE_KIND_CHAR:
-				string_append_str(code, value->data);
+				string_append_char(code, value->data.char_value);
 				return code;
 
 			case AST_TYPE_KIND_NULL:
-				string_append_str(code, value->data);
+				string_append_str(code, "NULL");
 				return code;
 
 			case AST_TYPE_KIND_STRING:
 				string_append_char(code, '"');
-				string_append_str(code, value->data);
+				string_append_str(code, value->data.string_value);
 				string_append_char(code, '"');
 				return code;
 
 			case AST_TYPE_KIND_BOOL:
-				string_append_str(code, value->data);
+				string_append_str(code, value->data.bool_value ? "true" : "false");
 				return code;
 
 			case AST_TYPE_KIND_STRUCT:
-				string_append_str(code, value->data);
+				string_append_str(code, "STRUCT");
 				return code;
 
 			case AST_TYPE_KIND_ENUM:
-				string_append_str(code, value->data);
+				string_append_str(code, "ENUM");
 				return code;
 
 			case AST_TYPE_KIND_POINTER:
-				string_append_str(code, value->data);
+				string_append_str(code, "POINTER");
 				return code;
 
 			case AST_TYPE_KIND_ARRAY:
-				string_append_str(code, value->data);
+				string_append_str(code, "ARRAY");
 				return code;
 
 			case AST_TYPE_KIND_FUNCTION:
-				string_append_str(code, value->data);
+				string_append_str(code, "FUNCTION");
 				return code;
 		}
 	}
@@ -1580,10 +1565,6 @@ string_t* generator_code_print(generator_t* generator, ast_print_t* print)
 
 	if (print->values == NULL) {
 		error(2, "Print values are NULL in print statement");
-	}
-
-	if (print->values->length == 0) {
-		error(2, "Print values length is 0 in print statement");
 	}
 
 	string_t* values_code = generator_code_values(generator, print->values);

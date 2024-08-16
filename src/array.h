@@ -26,7 +26,6 @@ typedef array_t array_function_t;
 typedef array_t array_block_t;
 typedef array_t array_if_t;
 typedef array_t array_value_t;
-typedef array_t array_layout_attribute_value_t;
 
 #include "memory.h"
 #include "ast.h"
@@ -354,63 +353,53 @@ array_value_t* array_value_create(size_t capacity);
 
 /**
  * 
- * @function array_layout_attribute_value_destroy
+ * @function array_value_destroy
  * @brief Free the attribute value array memory
- * @params {array_layout_attribute_value_t*} array - Attribute value array
+ * @params {array_value_t*} array - Attribute value array
  * @returns {void}
  * 
  */
-void array_layout_attribute_value_destroy(array_layout_attribute_value_t* array);
+void array_value_destroy(array_value_t* array);
 
 /**
  * 
- * @function array_layout_attribute_value_print
+ * @function array_value_print
  * @brief Print the attribute value array
- * @params {array_layout_attribute_value_t*} array - Attribute value array
+ * @params {array_value_t*} array - Attribute value array
  * @returns {void}
  * 
  */
-void array_layout_attribute_value_print(array_layout_attribute_value_t* array);
+void array_value_print(array_value_t* array);
 
 /**
  * 
- * @function array_layout_attribute_value_create
- * @brief Create a new attribute value array
- * @params {size_t} capacity - Initial capacity of the array
- * @returns {array_layout_attribute_value_t*} - Pointer to the created array
- * 
- */
-array_layout_attribute_value_t* array_layout_attribute_value_create(size_t capacity);
-
-/**
- * 
- * @function array_layout_attribute_value_string
+ * @function array_value_string
  * @brief Convert the attribute value array to a string
- * @params {array_layout_attribute_value_t*} array - Array
+ * @params {array_value_t*} array - Array
  * @params {char*} seperator - Separator
  * @returns {char*} - String
  * 
  */
-char* array_layout_attribute_value_string(array_layout_attribute_value_t* array, char* seperator);
+char* array_value_string(array_value_t* array, char* seperator);
 
 /**
  * 
- * @function array_layout_attribute_value_first_string
+ * @function array_value_first_string
  * @brief Get the first string from the attribute value array
- * @params {array_layout_attribute_value_t*} array - Array
+ * @params {array_value_t*} array - Array
  * @returns {char*} - String
  * 
  */
-char* array_layout_attribute_value_first_string(array_layout_attribute_value_t* array);
+char* array_value_first_string(array_value_t* array);
 
 /**
  * 
- * @function array_layout_attribute_value_copy
+ * @function array_value_copy
  * @brief Copy the attribute value array
- * @params {array_layout_attribute_value_t*} values - Array
- * @returns {array_layout_attribute_value_t*} - Copied array
+ * @params {array_value_t*} values - Array
+ * @returns {array_value_t*} - Copied array
  * 
  */
-array_layout_attribute_value_t* array_layout_attribute_value_copy(array_layout_attribute_value_t* values);
+array_value_t* array_value_copy(array_value_t* values);
 
 #endif

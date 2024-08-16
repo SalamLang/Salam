@@ -28,7 +28,6 @@ typedef struct {
     alias_mapping_t alias_mappings[10];
 } validator_layout_css_t;
 
-
 validator_layout_css_t css_attributes[] = {
     {"color", AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR, 1, -1, VALIDATOR_LAYOUT_CSS_FILTER_COLOR, {"red", "green", "blue"}, {[0] = ""}},
     {"رنگ", AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR, 1, -1, VALIDATOR_LAYOUT_CSS_FILTER_COLOR, {"قرمز", "سبز", "آبی", "ابی"}, {[0] = ""}},

@@ -140,7 +140,6 @@ void string_destroy(string_t* str)
 		str->length = 0;
 
 		memory_destroy(str);
-		str = NULL;
 	}
 }
 

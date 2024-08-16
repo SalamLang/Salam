@@ -209,7 +209,7 @@ void array_print(array_t* array);
  * @returns {char*} - String
  * 
  */
-char* array_string(array_t* array, char* sepertor);
+char* array_stringify(array_t* array, char* sepertor);
 
 /**
  * 
@@ -380,7 +380,7 @@ void array_value_print(array_value_t* array);
  * @returns {char*} - String
  * 
  */
-char* array_value_string(array_value_t* array, char* seperator);
+char* array_value_stringify(array_value_t* array, char* seperator);
 
 /**
  * 
@@ -390,7 +390,7 @@ char* array_value_string(array_value_t* array, char* seperator);
  * @returns {char*} - String
  * 
  */
-char* array_value_first_string(array_value_t* array);
+char* array_value_first_stringify(array_value_t* array);
 
 /**
  * 
@@ -411,6 +411,6 @@ array_value_t* array_value_copy(array_value_t* values);
  * @returns {char*} - String
  * 
  */
-char* array_value_string(array_value_t* array, char* seperator);
+char* array_value_stringify(array_value_t* array, char* seperator);
 
 #endif

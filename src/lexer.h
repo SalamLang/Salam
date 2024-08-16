@@ -18,89 +18,58 @@ typedef struct {
     size_t end_column;
 } location_t;
 
-typedef enum {
-    TOKEN_EOF = -1,
-    TOKEN_LEFT_BRACE = '{',
-    TOKEN_RIGHT_BRACE = '}',
-    TOKEN_LEFT_BRACKET = '[',
-    TOKEN_RIGHT_BRACKET = ']',
-    TOKEN_COLON = ':',
-    TOKEN_COMMA = ',',
-    TOKEN_LEFT_PAREN = '(',
-    TOKEN_RIGHT_PAREN = ')',
-
-    TOKEN_PLUS = '+',
-    TOKEN_MINUS = '-',
-    TOKEN_MULTIPLY = '*',
-    TOKEN_DIVIDE = '/',
-    TOKEN_MOD = '%',
-    TOKEN_POWER = '^',
-    TOKEN_ASSIGN = '=',
-    TOKEN_LESS = '<',
-    TOKEN_GREATER = '>',
-    TOKEN_NOT = '!',
-
-    TOKEN_NOT_EQUAL = 300,
-    TOKEN_EQUAL,
-    TOKEN_AND_AND,
-    TOKEN_OR_OR,
-    TOKEN_AND_BIT,
-    TOKEN_OR_BIT,
-    TOKEN_LESS_EQUAL,
-    TOKEN_GREATER_EQUAL,
-
-    TOKEN_INCREMENT,
-    TOKEN_DECREMENT,
-
-    TOKEN_SHIFT_LEFT,
-    TOKEN_SHIFT_RIGHT,
-    TOKEN_SHIFT_LEFT_ASSIGN,
-    TOKEN_SHIFT_RIGHT_ASSIGN,
-
-    TOKEN_IDENTIFIER,
-    TOKEN_STRING,
-    TOKEN_NUMBER_INT,
-    TOKEN_NUMBER_FLOAT,
-    TOKEN_BOOLEAN,
-
-    // Keywords
-    TOKEN_LAYOUT,
-    TOKEN_IMPORT,
-    TOKEN_FUNCTION,
-    TOKEN_RETURN,
-    TOKEN_PRINT,
-    TOKEN_IF,
-    TOKEN_ELSE,
-    TOKEN_WHILE,
-    TOKEN_FOR,
-    TOKEN_BREAK,
-    TOKEN_CONTINUE,
-
-    TOKEN_ERROR,
-} token_type_t;
+typedef struct {
+    token_type_t token;
+    const char *name;
+} token_name_t;
 
 typedef struct {
     const char* name;
     token_type_t type;
 } keyword_t;
 
-static const keyword_t keywords[] = {
-    {"layout", TOKEN_LAYOUT},
-    {"import", TOKEN_IMPORT},
-    {"fn", TOKEN_FUNCTION},
-    {"return", TOKEN_RETURN},
-    {"if", TOKEN_IF},
-    {"print", TOKEN_PRINT},
-    {"else", TOKEN_ELSE},
-    {"while", TOKEN_WHILE},
-    {"for", TOKEN_FOR},
-    {"break", TOKEN_BREAK},
-    {"continue", TOKEN_CONTINUE},
-    {"true", TOKEN_BOOLEAN},
-    {"false", TOKEN_BOOLEAN},
+#define _NUM_ARGS(X100, X99, X98, X97, X96, X95, X94, X93, X92, X91, \
+                  X90, X89, X88, X87, X86, X85, X84, X83, X82, X81, \
+                  X80, X79, X78, X77, X76, X75, X74, X73, X72, X71, \
+                  X70, X69, X68, X67, X66, X65, X64, X63, X62, X61, \
+                  X60, X59, X58, X57, X56, X55, X54, X53, X52, X51, \
+                  X50, X49, X48, X47, X46, X45, X44, X43, X42, X41, \
+                  X40, X39, X38, X37, X36, X35, X34, X33, X32, X31, \
+                  X30, X29, X28, X27, X26, X25, X24, X23, X22, X21, \
+                  X20, X19, X18, X17, X16, X15, X14, X13, X12, X11, \
+                  X10, X9, X8, X7, X6, X5, X4, X3, X2, X1, N, ...) N
+
+#define NUM_ARGS(...) _NUM_ARGS(__VA_ARGS__, 100, 99, 98, 97, 96, 95, \
+                                94, 93, 92, 91, 90, 89, 88, 87, 86, 85, \
+                                84, 83, 82, 81, 80, 79, 78, 77, 76, 75, \
+                                74, 73, 72, 71, 70, 69, 68, 67, 66, 65, \
+                                64, 63, 62, 61, 60, 59, 58, 57, 56, 55, \
+                                54, 53, 52, 51, 50, 49, 48, 47, 46, 45, \
+                                44, 43, 42, 41, 40, 39, 38, 37, 36, 35, \
+                                34, 33, 32, 31, 30, 29, 28, 27, 26, 25, \
+                                24, 23, 22, 21, 20, 19, 18, 17, 16, 15, \
+                                14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
+
+#define MY_MACRO(...) MY_MACRO_CHOOSER(NUM_ARGS(__VA_ARGS__))(__VA_ARGS__)
+#define MY_MACRO_CHOOSER(N) MY_MACRO_##N
+#define MY_MACRO_1(param1) printf("param1: %s\n", param1)
+#define MY_MACRO_2(param1, param2) printf("param1: %s, param2: %s\n", param1, param2)
+
+
+
+typedef enum {
+} token_type_t;
+
+token_name_t token_names[] = {
+
 };
 
-typedef struct {
+static const keyword_t keywords[] = {
+};
+
+struct token_t;
+
+typedef struct token_t {
     token_type_t type;
     location_t location;
 
@@ -112,10 +81,11 @@ typedef struct {
         bool boolean;
     } data;
 
-    void (*print)(void*);
-    void (*destroy)(void*);
+    void (*print)(struct token_t*);
+    void (*destroy)(struct token_t*);
     char* (*name)(token_type_t);
-    char* (*value)(void*);
+    char* (*stringify)(struct token_t*);
+    char* (*value_stringify)(struct token_t*);
 } token_t;
 
 #include "array.h"
@@ -142,43 +112,13 @@ bool is_char_digit(char c);
 
 /**
  * 
- * @function is_keyword
- * @brief Check if a string is a keyword
+ * @function type_keyword
+ * @brief Check if a string is a keyword then return the token type
  * @params {const char*} string - String
  * @returns {bool}
  * 
  */
 token_type_t type_keyword(const char* string);
-
-/**
- * 
- * @function is_char_alpha
- * @brief Check if a character is an alphabet
- * @params {char} c - Character
- * @returns {bool}
- * 
- */
-bool is_char_alpha(char c);
-
-/**
- * 
- * @function is_char_alnum
- * @brief Check if a character is an alphabet or a digit
- * @params {char} c - Character
- * @returns {bool}
- * 
- */
-bool is_char_alnum(char c);
-
-/**
- * 
- * @function is_char_whitespace
- * @brief Check if a character is a whitespace
- * @params {char} c - Character
- * @returns {bool}
- * 
- */
-bool is_char_whitespace(char c);
 
 /**
  * 
@@ -229,7 +169,7 @@ char* token_name(token_type_t type);
  * @returns {char*}
  * 
  */
-char* token_value(token_t* token);
+char* token_value_stringify(token_t* token);
 
 /**
  * 
@@ -330,37 +270,8 @@ void lexer_lex_number(lexer_t* lexer);
  * @returns {void}
  * 
  */
-void lexer_lex_string(lexer_t* lexer);
+void lexer_lex_stringify(lexer_t* lexer);
 
-/**
- * 
- * @function int2string
- * @brief Convert an integer to a string
- * @params {int} value - Integer value
- * @returns {char*}
- * 
- */
-char* int2string(int value);
-
-/**
- * 
- * @function float2string
- * @brief Convert a float to a string
- * @params {float} value - Float value
- * @returns {char*}
- * 
- */
-char* float2string(float value);
-
-/**
- * 
- * @function double2string
- * @brief Convert a double to a string
- * @params {double} value - Double value
- * @returns {char*}
- * 
- */
-char* double2string(double value);
 
 /**
  * 
@@ -381,16 +292,36 @@ void lexer_save(lexer_t* lexer, const char* tokens_output);
  * @returns {char*}
  * 
  */
-char* location_string(location_t location);
+char* location_stringify(location_t location);
 
 /**
  * 
- * @function token_string
- * @brief Get the name & value of a token as a string
+ * @function token_stringify
+ * @brief Get the name & value & location of a token as a string
  * @params {token_t*} token - Token
  * @returns {char*} - String representation of the token
  * 
  */
-char* token_string(token_t* token);
+char* token_stringify(token_t* token);
+
+/**
+ * 
+ * @function location_print
+ * @brief Print a location
+ * @params {location_t} location - Location
+ * @returns {void}
+ * 
+ */
+void location_print(location_t location);
+
+/**
+ * 
+ * @function token_type_stringify
+ * @brief Get the name of a token type
+ * @params {token_type_t} token - Token type
+ * @returns {char*}
+ * 
+ */
+const char* token_type_stringify(token_type_t token);
 
 #endif

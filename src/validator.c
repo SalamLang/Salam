@@ -584,10 +584,9 @@ bool validate_style_value_color(ast_layout_attribute_t* attribute)
 {
 	DEBUG_ME;
 	ast_value_t* first = attribute->values->data[0];
+	char* value = first->data.string_value;
 
 	if (first->type->kind == AST_TYPE_KIND_STRING) {
-		char* value = first->data.string_value;
-
 		if (strcmp(value, "red") == 0) return true;
 		else if (strcmp(value, "white") == 0) return true;
 		else if (strcmp(value, "black") == 0) return true;
@@ -613,31 +612,32 @@ bool validate_style_value_color(ast_layout_attribute_t* attribute)
 bool validate_style_value_size(ast_layout_attribute_t* attribute)
 {
 	DEBUG_ME;
-	ast_value_t* first = attribute->values->data[0];
-	if (first->type->kind == AST_TYPE_KIND_INT) {
-		first->type->kind = AST_TYPE_KIND_STRING;
-		first->data.string_value = memory_allocate(20 * sizeof(char));
-		sprintf(first->data.string_value, "%dpx", first->data.int_value);
+	return true;
+	// ast_value_t* first = attribute->values->data[0];
+	// if (first->type->kind == AST_TYPE_KIND_INT) {
+	// 	first->type->kind = AST_TYPE_KIND_STRING;
+	// 	first->data.string_value = memory_allocate(20 * sizeof(char));
+	// 	sprintf(first->data.string_value, "%dpx", first->data.int_value);
 
-		return true;
-	}
-	else if (first->type->kind == AST_TYPE_KIND_FLOAT) {
-		first->type->kind = AST_TYPE_KIND_STRING;
-		first->data.string_value = memory_allocate(20 * sizeof(char));
-		sprintf(first->data.string_value, "%fpx", first->data.float_value);
+	// 	return true;
+	// }
+	// else if (first->type->kind == AST_TYPE_KIND_FLOAT) {
+	// 	first->type->kind = AST_TYPE_KIND_STRING;
+	// 	first->data.string_value = memory_allocate(20 * sizeof(char));
+	// 	sprintf(first->data.string_value, "%fpx", first->data.float_value);
 
-		return true;
-	}
-	else if (first->type->kind == AST_TYPE_KIND_STRING) {
-		char* out_value;
-		if (!has_css_size_prefix(first->data.string_value, &out_value)) return false;
+	// 	return true;
+	// }
+	// else if (first->type->kind == AST_TYPE_KIND_STRING) {
+	// 	char* out_value;
+	// 	if (!has_css_size_prefix(first->data.string_value, &out_value)) return false;
 
-		if (out_value != NULL) free(out_value);
+	// 	if (out_value != NULL) free(out_value);
 
-		return true;
-	}
+	// 	return true;
+	// }
 
-	return false;
+	// return false;
 }
 
 /**
@@ -657,32 +657,33 @@ bool validate_style_value_sizes(ast_layout_attribute_t* attribute)
 
 		return value_normal;
 	}
-
-	string_t* buffer = string_create(10);
-
-	for (size_t i = 0; i < attribute->values->length; i++) {
-		ast_value_t* value = attribute->values->data[0];
-		char* value_normal = normalise_css_size(value->data);
-
-		char* out_value;
-		if (!has_css_size_prefix(value_normal, &out_value)) return NULL;
-
-		if (value_normal != NULL) free(value_normal);
-
-		if (out_value == NULL) {
-			return false;
-		}
-		string_append_str(buffer, out_value);
-
-		if (out_value != NULL) free(out_value);
-
-		if (i != attribute->values->length - 1) string_append_char(buffer, ' ');
-	}
-
-	attribute->final_value = strdup(buffer->data);
-	string_destroy(buffer);
-
 	return true;
+
+	// string_t* buffer = string_create(10);
+
+	// for (size_t i = 0; i < attribute->values->length; i++) {
+	// 	ast_value_t* value = attribute->values->data[0];
+	// 	char* value_normal = normalise_css_size(value->data);
+
+	// 	char* out_value;
+	// 	if (!has_css_size_prefix(value_normal, &out_value)) return NULL;
+
+	// 	if (value_normal != NULL) free(value_normal);
+
+	// 	if (out_value == NULL) {
+	// 		return false;
+	// 	}
+	// 	string_append_str(buffer, out_value);
+
+	// 	if (out_value != NULL) free(out_value);
+
+	// 	if (i != attribute->values->length - 1) string_append_char(buffer, ' ');
+	// }
+
+	// attribute->final_value = strdup(buffer->data);
+	// string_destroy(buffer);
+
+	// return true;
 }
 
 /**
@@ -699,24 +700,25 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 {
 	DEBUG_ME;
 	ast_value_t* first = attribute->values->data[0];
+	char *value = first->data.string_value;
 
 	if (attribute->values->length < 1) {
 		error(2, "Style value is missing in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
 		
 		return false;
 	}
-	else if (strlen(first->data) == 0) {
+	else if (first->type->kind == AST_TYPE_KIND_STRING && strlen(first->data.string_value) == 0) {
 		error(2, "Empty value for '%s' attribute in '%s' element is not allowed at line %zu column %zu!", attribute->key, generator_code_layout_node_type(attribute->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
 
 		return false;
 	}
 	// Global values
-	else if (attribute->values->length == 1) {
-		if (strcmp(first->data, "inherit") == 0) return true;
-		else if (strcmp(first->data, "initial") == 0) return true;
-		else if (strcmp(first->data, "revert") == 0) return true;
-		else if (strcmp(first->data, "revert-layer") == 0) return true;
-		else if (strcmp(first->data, "unset") == 0) return true;
+	else if (first->type->kind == AST_TYPE_KIND_STRING && attribute->values->length == 1) {
+		if (strcmp(value, "inherit") == 0) return true;
+		else if (strcmp(value, "initial") == 0) return true;
+		else if (strcmp(value, "revert") == 0) return true;
+		else if (strcmp(value, "revert-layer") == 0) return true;
+		else if (strcmp(value, "unset") == 0) return true;
 	}
 
 	switch (attribute->type) {
@@ -742,10 +744,11 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 				error(2, "Font weight value is too many in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
 				return false;
 			}
-			else if (strcmp(first->data, "normal") == 0) return true;
-			else if (strcmp(first->data, "italic") == 0) return true;
-			else if (strcmp(first->data, "oblique") == 0) return true;
-			else if (strcmp(first->data, "oblique 10deg") == 0) return true;
+			
+			if (strcmp(value, "normal") == 0) return true;
+			else if (strcmp(value, "italic") == 0) return true;
+			else if (strcmp(value, "oblique") == 0) return true;
+			else if (strcmp(value, "oblique 10deg") == 0) return true;
 			else return false;
 			break;
 
@@ -754,12 +757,13 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 				error(2, "Font weight value is too many in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
 				return false;
 			}
-			else if (strcmp(first->data, "normal") == 0) return true;
-			else if (strcmp(first->data, "bold") == 0) return true;
-			else if (strcmp(first->data, "lighter") == 0) return true;
-			else if (strcmp(first->data, "bolder") == 0) return true;
-			else if (string_is_number(first->data) == true) {
-				int value = atoi(first->data);
+
+			if (strcmp(value, "normal") == 0) return true;
+			else if (strcmp(value, "bold") == 0) return true;
+			else if (strcmp(value, "lighter") == 0) return true;
+			else if (strcmp(value, "bolder") == 0) return true;
+			else if (string_is_number(value) == true) {
+				int value = atoi(value);
 				if (value >= 1 && value <= 1000) return true;
 				else {
 					error(2, "Font weight value is invalid, it should be between 1 and 1000");
@@ -769,266 +773,84 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 			else return false;
 			break;
 		
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_DIRECTION:
-			if (strcmp(first->data, "row") == 0) return true;
-			else if (strcmp(first->data, "row-reverse") == 0) return true;
-			else if (strcmp(first->data, "column") == 0) return true;
-			else if (strcmp(first->data, "column-reverse") == 0) return true;
 
-			else return false;
-			break;
+		// case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION:
+		// 	ast_layout_attribute_type_t sub_types[] = {
+		// 		AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE,
+		// 		AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE,
+		// 		AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR,
+		// 	}; // one value should applied, we allow multiple value but only one value for each group, and user can leave the other groups empty (if he want)
+		// 	size_t sub_types_length = sizeof(sub_types) / sizeof(sub_types[0]);
+		// 	hashmap_t* sub_groups = hashmap_create_layout_attribute(1);
 
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_COMBINE_UPRIGHT:
-			if (strcmp(first->data, "none") == 0) return true;
-			else if (strcmp(first->data, "all") == 0) return true;
+		// 	for (size_t i = 0; i < attribute->values->length; i++) {
+		// 		bool _res = false;
 
-			else return false;
-			break;
+		// 		ast_value_t* _value = attribute->values->data[i];
 
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ANCHOR:
-			if (strcmp(first->data, "start") == 0) return true;
-			else if (strcmp(first->data, "middle") == 0) return true;
-			else if (strcmp(first->data, "end") == 0) return true;
+		// 		for (size_t j = 0; j < sub_types_length; j++) {
+		// 			char* _key = ast_layout_attribute_type_to_name(sub_types[j]);
 
-			else return false;
+		// 			if (hashmap_has(sub_groups, _key) == true) {
+		// 				continue;
+		// 			}
 
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_DISPLAY:
-			// precomposed values
-			if (strcmp(first->data, "block") == 0) return true;
-			else if (strcmp(first->data, "inline") == 0) return true;
-			else if (strcmp(first->data, "inline-block") == 0) return true;
-			else if (strcmp(first->data, "flex") == 0) return true;
-			else if (strcmp(first->data, "inline-flex") == 0) return true;
-			else if (strcmp(first->data, "grid") == 0) return true;
-			else if (strcmp(first->data, "inline-grid") == 0) return true;
-			else if (strcmp(first->data, "flow-root") == 0) return true;
+		// 			array_value_t* _values = array_value_create(1);
+		// 			array_push(_values, ast_value_copy(_value));
 
-			// box generation
-			else if (strcmp(first->data, "none") == 0) return true;
-			else if (strcmp(first->data, "contents") == 0) return true;
+		// 			char* _values_str = array_value_string(_values, ", ");
 
-			// multi-keyword syntax
-			else if (strcmp(first->data, "block flex") == 0) return true;
-			else if (strcmp(first->data, "block flow") == 0) return true;
-			else if (strcmp(first->data, "block flow-root") == 0) return true;
-			else if (strcmp(first->data, "block grid") == 0) return true;
-			else if (strcmp(first->data, "inline flex") == 0) return true;
-			else if (strcmp(first->data, "inline flow") == 0) return true;
-			else if (strcmp(first->data, "inline flow-root") == 0) return true;
-			else if (strcmp(first->data, "inline grid") == 0) return true;
+		// 			ast_layout_attribute_t* _attribute = ast_layout_attribute_create(sub_types[j], _key, _values, attribute->parent_node_type, attribute->key_location, attribute->value_location);
+		// 			_attribute->isStyle = attribute->isStyle;
+		// 			_attribute->isContent = attribute->isContent;
+		// 			_attribute->final_key = strdup(_key);
+		// 			_attribute->final_value = strdup(_values_str);
 
-			else return false;
-			break;
-		
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN_LAST:
-			if (strcmp(first->data, "auto") == 0) return true;
-			else if (strcmp(first->data, "start") == 0) return true;
-			else if (strcmp(first->data, "end") == 0) return true;
-			else if (strcmp(first->data, "left") == 0) return true;
-			else if (strcmp(first->data, "right") == 0) return true;
-			else if (strcmp(first->data, "center") == 0) return true;
-			else if (strcmp(first->data, "justify") == 0) return true;
-
-			else return false;
-
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN:
-			if (strcmp(first->data, "start") == 0) return true;
-			else if (strcmp(first->data, "end") == 0) return true;
-			else if (strcmp(first->data, "left") == 0) return true;
-			else if (strcmp(first->data, "right") == 0) return true;
-			else if (strcmp(first->data, "center") == 0) return true;
-			else if (strcmp(first->data, "justify") == 0) return true;
-			else if (strcmp(first->data, "justify-all") == 0) return true;
-			else if (strcmp(first->data, "match-parent") == 0) return true;
-			else if (strcmp(first->data, "-moz-center") == 0) return true;
-			else if (strcmp(first->data, "-webkit-center") == 0) return true;
-
-			else return false;
-			break;
-		
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE:
-			if (strcmp(first->data, "none") == 0) return true;
-			else if (strcmp(first->data, "underline") == 0) return true;
-			else if (strcmp(first->data, "overline") == 0) return true;
-			else if (strcmp(first->data, "line-through") == 0) return true;
-			else if (strcmp(first->data, "blink") == 0) return true;
-
-			else return false;
-			break;
-
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR:
-			return validate_style_value_color(attribute);
-		
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_THICKNESS:
-			if (strcmp(first->data, "auto") == 0) return true;
-			else if (strcmp(first->data, "from-font") == 0) return true;
-			else if (string_is_number(first->data) == true) return true;
-			// TODO: handling % or numbers with units
-
-			else return false;
-			break;
-
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_SKIP:
-			if (strcmp(first->data, "none") == 0) return true;
-			else if (strcmp(first->data, "objects") == 0) return true;
-			else if (strcmp(first->data, "spaces") == 0) return true;
-			else if (strcmp(first->data, "edges") == 0) return true;
-			else if (strcmp(first->data, "box-decoration") == 0) return true;
-
-			else return false;
-			break;
-
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_SKIP_INK:
-			if (attribute->values->length == 1) {
-				if (first->type->kind == AST_TYPE_KIND_STRING) {
-					char* value = first->data.string_value;
-
-					if (strcmp(value, "none") == 0) return true;
-					else if (strcmp(value, "auto") == 0) return true;
-					else if (strcmp(value, "all") == 0) return true;
-				}
-			}
-
-			return false;
-			break;
-		
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_COLOR:
-			if (first->type->kind == AST_TYPE_KIND_STRING) {
-				char* value = first->data.string_value;
-
-				if (strcmp(value, "currentcolor") == 0) return true;
-				else return validate_style_value_color(attribute);
-			}
-
-			return false;
-			break;
-
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE:
-			if (first->type->kind == AST_TYPE_KIND_STRING) {
-				char* value = first->data.string_value;
-
-				if (strcmp(value, "solid") == 0) return true;
-				else if (strcmp(value, "double") == 0) return true;
-				else if (strcmp(value, "dotted") == 0) return true;
-				else if (strcmp(value, "dashed") == 0) return true;
-				else if (strcmp(value, "wavy") == 0) return true;
-			}
-			
-			return false;
-			break;
-		
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_POSITION:
-			if (first->type->kind == AST_TYPE_KIND_STRING) {
-				char* value = first->data.string_value;
-
-				if (strcmp(value, "over right") == 0) return true;
-				else if (strcmp(value, "over left") == 0) return true;
-				else if (strcmp(value, "under right") == 0) return true;
-				else if (strcmp(value, "under left") == 0) return true;
-				else if (strcmp(value, "left over") == 0) return true;
-				else if (strcmp(value, "right under") == 0) return true;
-				else if (strcmp(value, "left under") == 0) return true;
-			}
-
-			return false;
-			break; 
-
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_STYLE:
-			if (first->type->kind == AST_TYPE_KIND_STRING) {
-				char* value = first->data.string_value;
-
-				if (strcmp(value, "none") == 0) return true;
-				else if (strcmp(value, "filled") == 0) return true;
-				else if (strcmp(value, "open") == 0) return true;
-				else if (strcmp(value, "dot") == 0) return true;
-				else if (strcmp(value, "circle") == 0) return true;
-				else if (strcmp(value, "double-circle") == 0) return true;
-				else if (strcmp(value, "triangle") == 0) return true;
-				else if (strcmp(value, "filled sesame") == 0) return true;
-				else if (strcmp(value, "open sesame") == 0) return true;
-				// TODO: allow string?
-			}
-
-			return false;
-			break;
-
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION:
-			ast_layout_attribute_type_t sub_types[] = {
-				AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE,
-				AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE,
-				AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR,
-			}; // one value should applied, we allow multiple value but only one value for each group, and user can leave the other groups empty (if he want)
-			size_t sub_types_length = sizeof(sub_types) / sizeof(sub_types[0]);
-			hashmap_t* sub_groups = hashmap_create_layout_attribute(1);
-
-			for (size_t i = 0; i < attribute->values->length; i++) {
-				bool _res = false;
-
-				ast_value_t* _value = attribute->values->data[i];
-
-				for (size_t j = 0; j < sub_types_length; j++) {
-					char* _key = ast_layout_attribute_type_to_name(sub_types[j]);
-
-					if (hashmap_has(sub_groups, _key) == true) {
-						continue;
-					}
-
-					array_value_t* _values = array_value_create(1);
-					array_push(_values, ast_layout_attribute_value_copy(_value));
-
-					char* _values_str = array_value_string(_values, ", ");
-
-					ast_layout_attribute_t* _attribute = ast_layout_attribute_create(sub_types[j], _key, _values, attribute->parent_node_type, attribute->key_location, attribute->value_location);
-					_attribute->isStyle = attribute->isStyle;
-					_attribute->isContent = attribute->isContent;
-					_attribute->final_key = strdup(_key);
-					_attribute->final_value = strdup(_values_str);
-
-					bool sub_res = validate_style_value(styles, new_styles, _attribute);
+		// 			bool sub_res = validate_style_value(styles, new_styles, _attribute);
 					
-					if (_values_str != NULL) memory_destroy(_values_str);
+		// 			if (_values_str != NULL) memory_destroy(_values_str);
 
-					if (sub_res == true) {
-						_res = true;
-						hashmap_put(sub_groups, _key, _attribute);
-						break;
-					}
-					else {
-						_attribute->destroy(_attribute);
-					}
-				}
+		// 			if (sub_res == true) {
+		// 				_res = true;
+		// 				hashmap_put(sub_groups, _key, _attribute);
+		// 				break;
+		// 			}
+		// 			else {
+		// 				_attribute->destroy(_attribute);
+		// 			}
+		// 		}
 
-				if (_res == false) {
-					error(2, "Text decoration value is invalid in the '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
-				}
-			}
+		// 		if (_res == false) {
+		// 			error(2, "Text decoration value is invalid in the '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
+		// 		}
+		// 	}
 
-			if (attribute->values->length > 0) {
-				attribute->ignoreMe = true;
+		// 	if (attribute->values->length > 0) {
+		// 		attribute->ignoreMe = true;
 
-				for (size_t i = 0; i < sub_groups->capacity; i++) {
-					hashmap_entry_t *entry = sub_groups->data[i];
+		// 		for (size_t i = 0; i < sub_groups->capacity; i++) {
+		// 			hashmap_entry_t *entry = sub_groups->data[i];
 
-					while (entry) {
-						ast_layout_attribute_t* atr = entry->value;
-						ast_layout_attribute_t* atr_copy = ast_layout_attribute_copy(atr);
-						atr_copy->ignoreMe = false;
-						atr_copy->isStyle = true;
+		// 			while (entry) {
+		// 				ast_layout_attribute_t* atr = entry->value;
+		// 				ast_layout_attribute_t* atr_copy = ast_layout_attribute_copy(atr);
+		// 				atr_copy->ignoreMe = false;
+		// 				atr_copy->isStyle = true;
 
-						hashmap_put(new_styles, entry->key, atr_copy);
+		// 				hashmap_put(new_styles, entry->key, atr_copy);
 
-						entry = entry->next;
-					}
-				}
+		// 				entry = entry->next;
+		// 			}
+		// 		}
 
-				sub_groups->destroy(sub_groups);
+		// 		sub_groups->destroy(sub_groups);
 
-				return true;
-			}
+		// 		return true;
+		// 	}
 
-			sub_groups->destroy(sub_groups);
-			return false;
-			break;
+		// 	sub_groups->destroy(sub_groups);
+		// 	return false;
+		// 	break;
 
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_WIDTH:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_HEIGHT:
@@ -1049,8 +871,8 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 				error(2, "Size value for attribute '%s' is too many in the '%s' element, it should be only one", attribute->key, generator_code_layout_node_type(attribute->parent_node_type));
 				return false;
 			}
-
-			return validate_style_value_size(attribute);
+			// return validate_style_value_size(attribute);
+			return true;
 
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING:
@@ -1063,7 +885,8 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 				return false;
 			}
 
-			return validate_style_value_sizes(attribute);
+			// return validate_style_value_sizes(attribute);
+			return false;
 
 		default:
 			return false;

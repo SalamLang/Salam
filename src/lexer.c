@@ -12,17 +12,46 @@
 
 /**
  * 
- * @function location_print
- * @brief Print a location
- * @params {location_t} location - Location
- * @returns {void}
+ * @variable token_names
+ * @brief Token names
+ * @type {token_name_t[]}
  * 
  */
-void location_print(location_t location)
-{
-    DEBUG_ME;
-	printf("Location: %zu:%zu - %zu:%zu\n", location.start_line, location.start_column, location.end_line, location.end_column);
-}
+token_name_t token_names[] = {
+    #undef ADD_TOKEN
+    #undef ADD_CHAR_TOKEN
+    #undef ADD_KEYWORD
+    #undef ADD_KEYWORD_HIDE
+
+    #define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE) {TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, -1},
+    #define ADD_CHAR_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR) {TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR},
+    #define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) {TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, -1},
+    #define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) {TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, -1},
+
+    #include "token.h"
+};
+
+/**
+ * 
+ * @variable keywords
+ * @brief Keywords
+ * @type {keyword_t[]}
+ * 
+ */
+const keyword_t keywords[] = {
+    #undef ADD_TOKEN
+    #undef ADD_CHAR_TOKEN
+    #undef ADD_KEYWORD
+    #undef ADD_KEYWORD_HIDE
+
+    #define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE) 
+    #define ADD_CHAR_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR) 
+    #define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) {TOKEN_VALUE_LENGTH, TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE},
+    #define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) {TOKEN_VALUE_LENGTH, TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE},
+
+    #include "token.h"
+};
+
 /**
  * 
  * @function token_create
@@ -40,12 +69,12 @@ token_t* token_create(token_type_t type, location_t location)
 	token->location = location;
 	token->data_type = TOKEN_ERROR;
 
-	token->name = cast(char* (*)(token_type_t), token_name);
-	token->value_stringify = cast(char* (*)(token_t*), token_value_stringify);
+	token->name = token_name;
+	token->value_stringify = token_value_stringify;
 
-	token->print = cast(void (*)(token_t*), token_print);
-	token->stringify = cast(void (*)(token_t*), token_stringify);
-	token->destroy = cast(void (*)(token_t*), token_destroy);
+	token->print = token_print;
+	token->stringify = token_stringify;
+	token->destroy = token_destroy;
 		
 	return token;
 }

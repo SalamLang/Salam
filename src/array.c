@@ -153,7 +153,7 @@ void array_destroy(array_t* array)
  * @returns {char*} - String
  * 
  */
-char* array_string(array_t* array, char* sepertor)
+char* array_stringify(array_t* array, char* sepertor)
 {
     DEBUG_ME;
     if (array == NULL || array->length == 0) {
@@ -198,7 +198,7 @@ char* array_string_token(array_t* array, char* sepertor)
     string_t* str = string_create(16);
     for (size_t i = 0; i < array->length; i++) {
         token_t* token = array_get(array, i);
-        string_append_str(str, token_value(token));
+        string_append_str(str, token_value_stringify(token));
 
         if (i < array->length - 1) {
             string_append_str(str, sepertor);
@@ -772,7 +772,7 @@ void array_value_print(array_value_t* array)
  * @returns {char*} - String
  * 
  */
-char* array_value_first_string(array_value_t* array)
+char* array_value_first_stringify(array_value_t* array)
 {
     DEBUG_ME;
     if (array == NULL || array->length == 0) {
@@ -804,7 +804,7 @@ char* array_value_first_string(array_value_t* array)
  * @returns {char*} - String
  * 
  */
-char* array_value_string(array_value_t* array, char* seperator)
+char* array_value_stringify(array_value_t* array, char* seperator)
 {
     DEBUG_ME;
     if (array == NULL || array->length == 0) {

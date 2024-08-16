@@ -115,7 +115,7 @@ void expect(lexer_t* lexer, token_type_t token_type)
 {
 	DEBUG_ME;
 	if (PARSER_CURRENT->type != token_type) {
-		error(2, "Expected token type %s, got %s at line %d, column %d", token_name(token_type), token_name(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
+		error_parser(2, "Expected token type %s, got %s at line %d, column %d", token_name(token_type), token_name(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
 	}
 
 	PARSER_NEXT;
@@ -132,7 +132,7 @@ void expect(lexer_t* lexer, token_type_t token_type)
 void unknown(lexer_t* lexer)
 {
 	DEBUG_ME;
-	error(2, "Unexpected token type %s at line %d, column %d", token_name(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
+	error_parser(2, "Unexpected token type %s at line %d, column %d", token_name(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
 }
 
 /**
@@ -147,7 +147,7 @@ void unknown(lexer_t* lexer)
 void unknown_scope(lexer_t* lexer, char* scope)
 {
 	DEBUG_ME;
-	error(2, "Unknown token type %s in scope %s at line %zu, column %zu\n", token_name(PARSER_CURRENT->type), scope, PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
+	error_parser(2, "Unknown token type %s in scope %s at line %zu, column %zu\n", token_name(PARSER_CURRENT->type), scope, PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
 }
 
 /**
@@ -203,7 +203,7 @@ ast_value_t* parser_parse_value(lexer_t* lexer)
 
 	ast_value_type_t* type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
 
-	ast_value_t* value = ast_value_create(type, token_value(token));
+	ast_value_t* value = ast_value_create(type, token_value_stringify(token));
 
 	return value;
 }
@@ -224,7 +224,7 @@ ast_value_t* parser_parse_layout_value(lexer_t* lexer)
 	PARSER_NEXT;
 
 	ast_value_type_t* type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
-	ast_value_t* value = ast_value_create(type, token_value(token));
+	ast_value_t* value = ast_value_create(type, token_value_stringify(token));
 
 	return value;
 }
@@ -248,7 +248,7 @@ void parser_parse_block(lexer_t* lexer, ast_block_t* block)
 		ast_node_t* node = parser_parse_node(lexer);
 
 		if (node == NULL) {
-			error(2, "Expected a node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
+			error_parser(2, "Expected a node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
 			continue;
 		}
 		else {
@@ -297,7 +297,7 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
 
 	token_t* last_name = PARSER_CURRENT;
 	string_t* name = string_create(16);
-	string_append_str(name, token_value(PARSER_CURRENT));
+	string_append_str(name, token_value_stringify(PARSER_CURRENT));
 	PARSER_NEXT; // Eating the identifier token
 
 	while (match(lexer, TOKEN_MINUS)) {
@@ -305,12 +305,12 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
 		string_append_char(name, '-');
 
 		if (match(lexer, TOKEN_IDENTIFIER)) {
-			string_append_str(name, token_value(PARSER_CURRENT));
+			string_append_str(name, token_value_stringify(PARSER_CURRENT));
 			last_name = PARSER_CURRENT;
 			PARSER_NEXT; // Eating the identifier token
 		}
 		else {
-			error(2, "Expected an identifier after the dash in the attribute name at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
+			error_parser(2, "Expected an identifier after the dash in the attribute name at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
 			break;
 		}
 	}
@@ -336,14 +336,14 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
 
 	ast_layout_attribute_t* attribute = ast_layout_attribute_create(attribute_key_type, name->data, values, block->parent_node_type, last_name->location, first_value->location);
 	if (!token_belongs_to_ast_layout_node(attribute_key_type, attribute)) {
-		error(2, "Attribute '%s' does not belong to node '%s' at line %d, column %d", name, ast_layout_node_type_to_name(block->parent_node_type), last_name->location.end_line, last_name->location.end_column);
+		error_parser(2, "Attribute '%s' does not belong to node '%s' at line %d, column %d", name, ast_layout_node_type_to_name(block->parent_node_type), last_name->location.end_line, last_name->location.end_column);
 	}
 
 	char* attribute_key_name = ast_layout_attribute_type_to_name(attribute_key_type);
 	
 	if (is_style_attribute(attribute_key_type)) {
 		if (hashmap_has(cast(hashmap_t*, block->styles), attribute_key_name)) {
-			error(2, "Style attribute '%s' already defined in the '%s' block at line %d, column %d", attribute_key_name, ast_layout_node_type_to_name(block->parent_node_type), last_name->location.end_line, last_name->location.end_column);
+			error_parser(2, "Style attribute '%s' already defined in the '%s' block at line %d, column %d", attribute_key_name, ast_layout_node_type_to_name(block->parent_node_type), last_name->location.end_line, last_name->location.end_column);
 		}
 		else {
 			hashmap_put(cast(hashmap_t*, block->styles), attribute_key_name, attribute);
@@ -351,7 +351,7 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
 	}
 	else {
 		if (hashmap_has(cast(hashmap_t*, block->attributes), attribute_key_name)) {
-			error(2, "Attribute '%s' already defined in the '%s' block at line %d, column %d", attribute_key_name, ast_layout_node_type_to_name(block->parent_node_type), last_name->location.end_line, last_name->location.end_column);
+			error_parser(2, "Attribute '%s' already defined in the '%s' block at line %d, column %d", attribute_key_name, ast_layout_node_type_to_name(block->parent_node_type), last_name->location.end_line, last_name->location.end_column);
 		}
 		else {
 			hashmap_put(cast(hashmap_t*, block->attributes), attribute_key_name, attribute);
@@ -379,7 +379,7 @@ void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexe
 		array_push(block->children, node);
 	}
 	else {
-		error(2, "Expected a layout node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
+		error_parser(2, "Expected a layout node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
 	}
 }
 
@@ -516,7 +516,7 @@ array_value_t* parser_parse_expressions(lexer_t* lexer)
 
 		ast_value_t* new_value = parser_parse_expression(lexer);
 		if (new_value == NULL) {
-			error(2, "Expected an expression at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
+			error_parser(2, "Expected an expression at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
 		}
 
 		array_push(values, new_value);
@@ -586,7 +586,7 @@ ast_value_t* parser_parse_expression(lexer_t* lexer)
 		return value;
 	}
 	else {
-		error(2, "Expected an expression at line %d, column %d, but got %s", token->location.end_line, token->location.end_column, token_name(token->type));
+		error_parser(2, "Expected an expression at line %d, column %d, but got %s", token->location.end_line, token->location.end_column, token_name(token->type));
 	}
 
 	return NULL;
@@ -685,7 +685,7 @@ ast_node_t* parser_parse_if(lexer_t* lexer)
 				array_push(node->data.ifclause->else_blocks, else_if);
 			}
 			else {
-				error(2, "Expected a block or an else if at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
+				error_parser(2, "Expected a block or an else if at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
 			}
 		}
 		else {
@@ -723,7 +723,7 @@ ast_node_t* parser_parse_node(lexer_t* lexer)
 		return parser_parse_print(lexer);
 	}
 	else {
-		error(2, "Unknown token type '%s' at line %d, column %d", token_name(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
+		error_parser(2, "Unknown token type '%s' at line %d, column %d", token_name(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
 	}
 
 	// unknown_scope(lexer, "node");
@@ -750,7 +750,7 @@ ast_t* parser_parse(lexer_t* lexer)
 		ast_node_t* node = parser_parse_node(lexer);
 
 		if (node == NULL) {
-			error(2, "Expected a node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
+			error_parser(2, "Expected a node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
 			continue;
 		}
 		else if (node->type == AST_NODE_TYPE_LAYOUT) {

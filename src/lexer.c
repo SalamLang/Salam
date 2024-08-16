@@ -12,62 +12,6 @@
 
 /**
  * 
- * @function is_char_digit
- * @brief Check if a character is a digit
- * @params {char} c - Character
- * @returns {bool}
- * 
- */
-bool is_char_digit(char c)
-{
-    DEBUG_ME;
-	return c >= '0' && c <= '9';
-}
-
-/**
- * 
- * @function is_char_alpha
- * @brief Check if a character is an alphabet
- * @params {char} c - Character
- * @returns {bool}
- * 
- */
-bool is_char_alpha(char c)
-{
-    DEBUG_ME;
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
-}
-
-/**
- * 
- * @function is_char_alnum
- * @brief Check if a character is an alphabet or a digit
- * @params {char} c - Character
- * @returns {bool}
- * 
- */
-bool is_char_alnum(char c)
-{
-    DEBUG_ME;
-	return is_char_alpha(c) || is_char_digit(c);
-}
-
-/**
- * 
- * @function is_char_whitespace
- * @brief Check if a character is a whitespace
- * @params {char} c - Character
- * @returns {bool}
- * 
- */
-bool is_char_whitespace(char c)
-{
-    DEBUG_ME;
-	return c == ' ' || c == '\t' || c == '\n' || c == '\r';
-}
-
-/**
- * 
  * @function location_print
  * @brief Print a location
  * @params {location_t} location - Location
@@ -97,10 +41,11 @@ token_t* token_create(token_type_t type, location_t location)
 	token->data_type = TOKEN_ERROR;
 
 	token->name = cast(char* (*)(token_type_t), token_name);
-	token->value = cast(char* (*)(void*), token_value);
+	token->value_stringify = cast(char* (*)(token_t*), token_value_stringify);
 
-	token->print = cast(void (*)(void*), token_print);
-	token->destroy = cast(void (*)(void*), token_destroy);
+	token->print = cast(void (*)(token_t*), token_print);
+	token->stringify = cast(void (*)(token_t*), token_stringify);
+	token->destroy = cast(void (*)(token_t*), token_destroy);
 		
 	return token;
 }
@@ -170,6 +115,47 @@ void token_destroy(token_t* token)
 
 /**
  * 
+ * @function token_type_stringify
+ * @brief Get the name of a token type
+ * @params {token_type_t} token - Token type
+ * @returns {char*}
+ * 
+ */
+const char* token_type_stringify(token_type_t token)
+{
+	DEBUG_ME;
+    for (size_t i = 0; i < sizeof(token_names) / sizeof(token_names[0]); ++i) {
+        if (token_names[i].token == token) {
+            return token_names[i].name;
+        }
+    }
+
+    return "UNKNOWN";
+}
+
+/**
+ * 
+ * @function token_stringify
+ * @brief Get the name & value & location of a token as a string
+ * @params {token_t*} token - Token
+ * @returns {char*} - String representation of the token
+ * 
+ */
+char* token_stringify(token_t* token)
+{
+	DEBUG_ME;
+	static char buffer[1024];
+	const char* type = token_type_stringify(token->type);
+	const char* value = token_value_stringify(token);
+	const char* location = location_stringify(token->location);
+
+	snprintf(buffer, sizeof(buffer), "%s: %s at %s", type, value, location);
+
+	return buffer;
+}
+
+/**
+ * 
  * @function token_print
  * @brief Print a token
  * @params {token_t*} token - Token
@@ -179,256 +165,7 @@ void token_destroy(token_t* token)
 void token_print(token_t* token)
 {
     DEBUG_ME;
-	printf("Token ");
-	switch (token->type) {
-		case TOKEN_EOF:
-			printf("EOF");
-			break;
-		
-		case TOKEN_IDENTIFIER:
-			printf("IDENTIFIER: '%s' (%zu)", token->data.string, strlen(token->data.string));
-			break;
-		
-		case TOKEN_NUMBER_FLOAT:
-			printf("NUMBER_FLOAT: %f", token->data.number_float);
-			break;
-		
-		case TOKEN_NUMBER_INT:
-			printf("NUMBER_INT: %d", token->data.number_int);
-			break;
-		
-		case TOKEN_STRING:
-			printf("STRING: '%s' (%zu)", token->data.string, strlen(token->data.string));
-			break;
-		
-		case TOKEN_LEFT_BRACE:
-		case TOKEN_RIGHT_BRACE:
-		case TOKEN_LEFT_BRACKET:
-		case TOKEN_RIGHT_BRACKET:
-		case TOKEN_COLON:
-		case TOKEN_COMMA:
-		case TOKEN_LEFT_PAREN:
-		case TOKEN_RIGHT_PAREN:
-		case TOKEN_PLUS:
-		case TOKEN_MINUS:
-		case TOKEN_MULTIPLY:
-		case TOKEN_DIVIDE:
-		case TOKEN_MOD:
-		case TOKEN_POWER:
-		case TOKEN_ASSIGN:
-		case TOKEN_LESS:
-		case TOKEN_GREATER:
-		case TOKEN_NOT:
-			printf("SYMBOL: '%c'", token->type);
-			break;
-		
-		case TOKEN_NOT_EQUAL: printf("SYMBOL: '!='"); break;
-		case TOKEN_EQUAL: printf("SYMBOL: '=='"); break;
-		case TOKEN_AND_AND: printf("SYMBOL: '&&'"); break;
-		case TOKEN_OR_OR: printf("SYMBOL: '||'"); break;
-		case TOKEN_AND_BIT: printf("SYMBOL: '&'"); break;
-		case TOKEN_OR_BIT: printf("SYMBOL: '|'"); break;
-		case TOKEN_LESS_EQUAL: printf("SYMBOL: '<='"); break;
-		case TOKEN_GREATER_EQUAL: printf("SYMBOL: '>='"); break;
-
-		case TOKEN_INCREMENT: printf("SYMBOL: '++"); break;
-		case TOKEN_DECREMENT: printf("SYMBOL: '--'"); break;
-
-		case TOKEN_SHIFT_LEFT: printf("SYMBOL: '>>'"); break;
-		case TOKEN_SHIFT_RIGHT: printf("SYMBOL: '<<'"); break;
-		case TOKEN_SHIFT_LEFT_ASSIGN: printf("SYMBOL: '>>='"); break;
-		case TOKEN_SHIFT_RIGHT_ASSIGN: printf("SYMBOL: '<<='"); break;
-
-		case TOKEN_BOOLEAN:
-			printf("BOOLEAN: %s", token->data.boolean ? "true" : "false");
-			break;
-
-		case TOKEN_ERROR:
-			printf("ERROR");
-			break;
-
-		case TOKEN_LAYOUT:
-			printf("LAYOUT");
-			break;
-
-		case TOKEN_IMPORT:
-			printf("IMPORT");
-			break;
-
-		case TOKEN_FUNCTION:
-			printf("FUNCTION");
-			break;
-			
-		case TOKEN_RETURN:
-			printf("RETURN");
-			break;
-
-		case TOKEN_IF:
-			printf("IF");
-			break;
-
-		case TOKEN_ELSE:
-			printf("ELSE");
-			break;
-
-		case TOKEN_PRINT:
-			printf("PRINT");
-			break;
-		
-		case TOKEN_WHILE:
-			printf("WHILE");
-			break;
-
-		case TOKEN_FOR:
-			printf("FOR");
-			break;
-
-		case TOKEN_BREAK:
-			printf("BREAK");
-			break;
-
-		case TOKEN_CONTINUE:
-			printf("CONTINUE");
-			break;
-
-		default:
-			printf("UNKNOWN");
-			break;
-	}
-
-	printf(" at ");
-	location_print(token->location);
-}
-
-/**
- * 
- * @function token_string
- * @brief Get the name & value of a token as a string
- * @params {token_t*} token - Token
- * @returns {char*} - String representation of the token
- * 
- */
-char* token_string(token_t* token)
-{
-    static char buffer[256];
-
-    switch (token->type) {
-        case TOKEN_EOF:
-            sprintf(buffer, "EOF");
-            break;
-
-        case TOKEN_IDENTIFIER:
-            sprintf(buffer, "IDENTIFIER: '%s' (%zu)", token->data.string, strlen(token->data.string));
-            break;
-
-        case TOKEN_NUMBER_FLOAT:
-            sprintf(buffer, "NUMBER_FLOAT: %f", token->data.number_float);
-            break;
-
-        case TOKEN_NUMBER_INT:
-            sprintf(buffer, "NUMBER_INT: %d", token->data.number_int);
-            break;
-
-        case TOKEN_STRING:
-            sprintf(buffer, "STRING: '%s' (%zu)", token->data.string, strlen(token->data.string));
-            break;
-
-        case TOKEN_LEFT_BRACE:
-        case TOKEN_RIGHT_BRACE:
-        case TOKEN_LEFT_BRACKET:
-        case TOKEN_RIGHT_BRACKET:
-        case TOKEN_COLON:
-        case TOKEN_COMMA:
-        case TOKEN_LEFT_PAREN:
-        case TOKEN_RIGHT_PAREN:
-        case TOKEN_PLUS:
-        case TOKEN_MINUS:
-        case TOKEN_MULTIPLY:
-        case TOKEN_DIVIDE:
-        case TOKEN_MOD:
-        case TOKEN_POWER:
-        case TOKEN_ASSIGN:
-        case TOKEN_LESS:
-        case TOKEN_GREATER:
-        case TOKEN_NOT:
-            sprintf(buffer, "SYMBOL: '%c'", token->type);
-            break;
-
-        case TOKEN_NOT_EQUAL: sprintf(buffer, "SYMBOL: '!='"); break;
-        case TOKEN_EQUAL: sprintf(buffer, "SYMBOL: '=='"); break;
-        case TOKEN_AND_AND: sprintf(buffer, "SYMBOL: '&&'"); break;
-        case TOKEN_OR_OR: sprintf(buffer, "SYMBOL: '||'"); break;
-        case TOKEN_AND_BIT: sprintf(buffer, "SYMBOL: '&'"); break;
-        case TOKEN_OR_BIT: sprintf(buffer, "SYMBOL: '|'"); break;
-        case TOKEN_LESS_EQUAL: sprintf(buffer, "SYMBOL: '<='"); break;
-        case TOKEN_GREATER_EQUAL: sprintf(buffer, "SYMBOL: '>='"); break;
-
-        case TOKEN_INCREMENT: sprintf(buffer, "SYMBOL: '++'"); break;
-        case TOKEN_DECREMENT: sprintf(buffer, "SYMBOL: '--'"); break;
-
-        case TOKEN_SHIFT_LEFT: sprintf(buffer, "SYMBOL: '>>'"); break;
-        case TOKEN_SHIFT_RIGHT: sprintf(buffer, "SYMBOL: '<<'"); break;
-        case TOKEN_SHIFT_LEFT_ASSIGN: sprintf(buffer, "SYMBOL: '>>='"); break;
-        case TOKEN_SHIFT_RIGHT_ASSIGN: sprintf(buffer, "SYMBOL: '<<='"); break;
-
-        case TOKEN_BOOLEAN:
-            sprintf(buffer, "BOOLEAN: %s", token->data.boolean ? "true" : "false");
-            break;
-
-        case TOKEN_ERROR:
-            sprintf(buffer, "ERROR");
-            break;
-
-        case TOKEN_LAYOUT:
-            sprintf(buffer, "LAYOUT");
-            break;
-
-        case TOKEN_IMPORT:
-            sprintf(buffer, "IMPORT");
-            break;
-
-        case TOKEN_FUNCTION:
-            sprintf(buffer, "FUNCTION");
-            break;
-
-        case TOKEN_RETURN:
-            sprintf(buffer, "RETURN");
-            break;
-
-        case TOKEN_IF:
-            sprintf(buffer, "IF");
-            break;
-
-        case TOKEN_ELSE:
-            sprintf(buffer, "ELSE");
-            break;
-
-        case TOKEN_PRINT:
-            sprintf(buffer, "PRINT");
-            break;
-
-        case TOKEN_WHILE:
-            sprintf(buffer, "WHILE");
-            break;
-
-        case TOKEN_FOR:
-            sprintf(buffer, "FOR");
-            break;
-
-        case TOKEN_BREAK:
-            sprintf(buffer, "BREAK");
-            break;
-
-        case TOKEN_CONTINUE:
-            sprintf(buffer, "CONTINUE");
-            break;
-
-        default:
-            sprintf(buffer, "UNKNOWN");
-            break;
-    }
-
-    return buffer;
+	printf("Token: %s\n", token_stringify(token));
 }
 
 /**
@@ -557,7 +294,6 @@ char* token_name(token_type_t type)
 		case TOKEN_SHIFT_RIGHT_ASSIGN:
 			return "SHIFT_RIGHT_ASSIGN";
 
-		// Keywords
 		case TOKEN_LAYOUT:
 			return "LAYOUT";
 
@@ -600,61 +336,13 @@ char* token_name(token_type_t type)
 
 /**
  * 
- * @function int2string
- * @brief Convert an integer to a string
- * @params {int} value - Integer value
- * @returns {char*}
- * 
- */
-char* int2string(int value)
-{
-	DEBUG_ME;
-	static char buffer[256];
-	snprintf(buffer, sizeof(buffer), "%d", value);
-	return buffer;
-}
-
-/**
- * 
- * @function float2string
- * @brief Convert a float to a string
- * @params {float} value - Float value
- * @returns {char*}
- * 
- */
-char* float2string(float value)
-{
-	DEBUG_ME;
-	static char buffer[256];
-	snprintf(buffer, sizeof(buffer), "%f", value);
-	return buffer;
-}
-
-/**
- * 
- * @function double2string
- * @brief Convert a double to a string
- * @params {double} value - Double value
- * @returns {char*}
- * 
- */
-char* double2string(double value)
-{
-	DEBUG_ME;
-	static char buffer[256];
-	snprintf(buffer, sizeof(buffer), "%f", value);
-	return buffer;
-}
-
-/**
- * 
- * @function token_value
+ * @function token_value_stringify
  * @brief Get the value of a token 
  * @params {token_t*} Token
  * @returns {char*}
  * 
  */
-char* token_value(token_t* token)
+char* token_value_stringify(token_t* token)
 {
     DEBUG_ME;
 	static char buffer[256];
@@ -662,10 +350,12 @@ char* token_value(token_t* token)
 	switch (token->data_type) {
 		case TOKEN_NUMBER_INT:
 			snprintf(buffer, sizeof(buffer), "%d", token->data.number_int);
+
 			return buffer;
 
 		case TOKEN_NUMBER_FLOAT:
 			snprintf(buffer, sizeof(buffer), "%f", token->data.number_float);
+
 			return buffer;
 
 		case TOKEN_STRING:
@@ -700,6 +390,7 @@ lexer_t* lexer_create(const char* file_path, char* source)
 	lexer->column = 1;
 	lexer->tokens = array_create(sizeof(token_t*), 10);
 	lexer->token_index = 0;
+
 	return lexer;
 }
 
@@ -758,9 +449,9 @@ void lexer_save(lexer_t* lexer, const char* tokens_output)
         printf("\t");
         token_t* token = array_get(lexer->tokens, i);
 
-		file_appends(tokens_output, token_string(token));
+		file_appends(tokens_output, token_stringify(token));
 		file_appends(tokens_output, " at ");
-		file_appends(tokens_output, location_string(token->location));
+		file_appends(tokens_output, location_stringify(token->location));
 		file_appends(tokens_output, "\n");
     }
 }
@@ -796,12 +487,27 @@ void lexer_debug(lexer_t* lexer)
  * @returns {char*}
  * 
  */
-char* location_string(location_t location)
+char* location_stringify(location_t location)
 {
 	DEBUG_ME;
 	static char buffer[256];
 	snprintf(buffer, sizeof(buffer), "%zu:%zu - %zu:%zu", location.start_line, location.start_column, location.end_line, location.end_column);
+
 	return buffer;
+}
+
+/**
+ * 
+ * @function location_print
+ * @brief Print a location
+ * @params {location_t} location - Location
+ * @returns {void}
+ * 
+ */
+void location_print(location_t location)
+{
+	DEBUG_ME;
+	printf("Location: %s\n", location_stringify(location));
 }
 
 /**
@@ -882,8 +588,8 @@ bool is_keyword(const char* string)
 
 /**
  * 
- * @function is_keyword
- * @brief Check if a string is a keyword
+ * @function type_keyword
+ * @brief Check if a string is a keyword then return the token type
  * @params {const char*} string - String
  * @returns {bool}
  * 
@@ -939,7 +645,7 @@ void lexer_lex_identifier(lexer_t* lexer)
  * @returns {void}
  * 
  */
-void lexer_lex_string(lexer_t* lexer)
+void lexer_lex_stringify(lexer_t* lexer)
 {
     DEBUG_ME;
 	// Opening quote is already consumed
@@ -955,7 +661,7 @@ void lexer_lex_string(lexer_t* lexer)
 	buffer[index] = '\0';
 
 	if (LEXER_CURRENT != '\"') {
-		error(2, "Unterminated string value at line %zu, column %zu", lexer->line, lexer->column);
+		error_lexer(2, "Unterminated string value at line %zu, column %zu", lexer->line, lexer->column);
 	}
 
 	LEXER_NEXT;
@@ -1036,7 +742,7 @@ void lexer_lex(lexer_t* lexer)
 				}
 				continue;
 			case '"':
-				lexer_lex_string(lexer);
+				lexer_lex_stringify(lexer);
 				continue;
 			
 			case '0': case '1': case '2': case '3': case '4':
@@ -1048,13 +754,9 @@ void lexer_lex(lexer_t* lexer)
 				if (is_char_alpha(LEXER_CURRENT_PREV) || LEXER_CURRENT_PREV == '_') {
 					lexer_lex_identifier(lexer);
 				} else {
-					printf("--->1 %c\n", LEXER_CURRENT_PREV);
-					printf("--->2 %c\n", LEXER_CURRENT);
-
-					printf("--->3 %d\n", LEXER_CURRENT_PREV);
-					printf("--->4 %d\n", LEXER_CURRENT);
-					token_t* token = token_create(TOKEN_ERROR, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-					LEXER_PUSH_TOKEN(token);
+					error_lexer(1, "Unknown character '%c' at line %zu, column %zu", LEXER_CURRENT_PREV, lexer->line, lexer->column);
+					// token_t* token = token_create(TOKEN_ERROR, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+					// LEXER_PUSH_TOKEN(token);
 				}
 				continue;
 		}

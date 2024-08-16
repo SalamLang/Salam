@@ -203,7 +203,7 @@ void* hashmap_remove(hashmap_t *map, const char *key)
 
 			void *value = entry->value;
 
-			// TODO: Do we need to free the value or not?
+			// TODO: Do we need to destroy the value or not?
 
 			if (entry != NULL) {
 				if (entry->key != NULL) {

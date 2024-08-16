@@ -300,3 +300,57 @@ char* replace_all_substrings(const char* str, const char* old_substr, const char
 
 	return result;
 }
+
+/**
+ * 
+ * @function string_is
+ * @brief Check if two strings are equal
+ * @params {string_t*} str1 - String 1
+ * @params {const char*} str2 - String 2
+ * @returns {bool}
+ * 
+ */
+bool string_is(string_t* str1, const char* str2)
+{
+	DEBUG_ME;
+	if (str1 == NULL || str2 == NULL) return false;
+	if (str1->length != strlen(str2)) return false;
+
+	return strcmp(str1->data, str2) == 0;
+}
+
+/**
+ * 
+ * @function string_equals
+ * @brief Check if two strings are equal
+ * @params {string_t*} str1 - String 1
+ * @params {string_t*} str2 - String 2
+ * @returns {bool}
+ * 
+ */
+bool string_equals(string_t* str1, string_t* str2)
+{
+	DEBUG_ME;
+	if (str1 == NULL || str2 == NULL) return false;
+	if (str1->length != str2->length) return false;
+
+	return strcmp(str1->data, str2->data) == 0;
+}
+
+/**
+ * 
+ * @function string_compare
+ * @brief Compare two strings
+ * @params {string_t*} str1 - String 1
+ * @params {string_t*} str2 - String 2
+ * @returns {bool}
+ * 
+ */
+bool string_compare(string_t* str1, string_t* str2)
+{
+	DEBUG_ME;
+	if (str1 == NULL || str2 == NULL) return false;
+	if (str1->length != str2->length) return false;
+
+	return strcmp(str1->data, str2->data) < 0;
+}

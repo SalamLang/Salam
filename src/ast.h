@@ -331,6 +331,7 @@ typedef struct ast_layout_block_t {
 
     struct hashmap_t* attributes;
     struct hashmap_t* styles;
+    struct hashmap_t* new_styles;
     array_node_layout_t* children;
 
     void (*destroy)(void* node);

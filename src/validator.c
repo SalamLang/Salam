@@ -326,6 +326,20 @@ void validate_layout_block(ast_layout_block_t* block)
 			}
 		}
 	}
+
+	// if (block->styles != NULL) {
+	// 	hashmap_attribute_t* new_styles = hashmap_create_layout_attribute(1);
+
+	// 	for (size_t i = 0; i < block->styles->capacity; i++) {
+	// 		hashmap_entry_t *entry = block->styles->data[i];
+
+	// 		while (entry) {
+	// 			ast_layout_attribute_t* attribute = entry->value;
+				
+	// 			generator_code_layout_style_value(block->styles, block->new_styles, attribute, block->parent_node_type);
+	// 		}
+	// 	}
+	// }
 }
 
 /**

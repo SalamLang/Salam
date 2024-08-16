@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdbool.h>
 
 #include "base.h"
 #include "memory.h"
@@ -156,5 +157,38 @@ char* string_upper_str(const char* str);
  * 
  */
 char* replace_all_substrings(const char* str, const char* old_substr, const char* new_substr);
+
+/**
+ * 
+ * @function string_is
+ * @brief Check if two strings are equal
+ * @params {string_t*} str1 - String 1
+ * @params {const char*} str2 - String 2
+ * @returns {bool}
+ * 
+ */
+bool string_is(string_t* str1, const char* str2);
+
+/**
+ * 
+ * @function string_equals
+ * @brief Check if two strings are equal
+ * @params {string_t*} str1 - String 1
+ * @params {string_t*} str2 - String 2
+ * @returns {bool}
+ * 
+ */
+bool string_equals(string_t* str1, string_t* str2);
+
+/**
+ * 
+ * @function string_compare
+ * @brief Compare two strings
+ * @params {string_t*} str1 - String 1
+ * @params {string_t*} str2 - String 2
+ * @returns {bool}
+ * 
+ */
+bool string_compare(string_t* str1, string_t* str2);
 
 #endif

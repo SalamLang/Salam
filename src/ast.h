@@ -315,7 +315,6 @@ typedef struct ast_if_t {
     void (*print)(void* node);
 } ast_if_t; 
 
-
 typedef struct ast_return_t {
     array_value_t* values;
 
@@ -382,7 +381,6 @@ typedef struct ast_layout_node_t {
     void (*destroy)(void* node);
     void (*print)(void* node);
 } ast_layout_node_t;
-
 
 typedef struct ast_function_parameter_t {
     char* name;
@@ -767,7 +765,7 @@ void ast_value_type_print(ast_value_type_t* type);
  * @returns {char*} - Name of the AST value type
  * 
  */
-char* ast_type_name(ast_value_type_t* type);
+char* ast_value_type_name(ast_value_type_t* type);
 
 /**
  * 

@@ -40,9 +40,6 @@ void doargs(int argc, char** argv)
 
 	printf("end ast debug\n");
 
-
-
-
 	generator_t* generator = generator_create(ast);
 
 	printf("generate code\n");
@@ -59,9 +56,6 @@ void doargs(int argc, char** argv)
 
 	printf("generate destroy\n");
 	generator_destroy(generator);
-
-	
-
 
 	printf("ast destroy\n");
 
@@ -84,14 +78,13 @@ int main(int argc, char** argv)
 {
 	DEBUG_ME;
 
-	array_value_t* values = array_value_create(1);
-	array_push(values, "12px");
-	ast_layout_attribute_t* attribute = ast_layout_attribute_create(AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_SIZE, "font-size", values, AST_LAYOUT_NODE_TYPE_DIV, (location_t){0, 0, 0, 0, 0, 0}, (location_t){0, 0, 0, 0, 0, 0});
-	bool res = validate_style_value_size(attribute);
-	printf("validate style value size: %d\n", res);
-	attribute->print(attribute);
+	// array_value_t* values = array_value_create(1);
+	// array_push(values, "12px");
+	// ast_layout_attribute_t* attribute = ast_layout_attribute_create(AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_SIZE, "font-size", values, AST_LAYOUT_NODE_TYPE_DIV, (location_t){0, 0, 0, 0, 0, 0}, (location_t){0, 0, 0, 0, 0, 0});
+	// bool res = validate_style_value_size(attribute);
+	// printf("validate style value size: %d\n", res);
+	// attribute->print(attribute);
 
-	return 0;
 	doargs(argc, argv);
 
 	return 0;

@@ -260,22 +260,21 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 
 					if (attribute->isStyle == false) {}
 					else {
-						char* attribute_css_name = generator_code_layout_style_name(attribute->type);
-						char* attribute_css_value = generator_code_layout_style_value(styles, new_styles, attribute, block->parent_node_type);
+						generator_code_layout_style_value(styles, new_styles, attribute, block->parent_node_type);
 
 						if (attribute->ignoreMe == true) {
 							entry = entry->next;
 							continue;
 						}
 
-						if (attribute_css_value == NULL) {
-							error(2, "Someting went wrong with the style value for '%s' attribute in '%s' element!", attribute_css_name, generator_code_layout_node_type(block->parent_node_type));
+						if (attribute->final_value == NULL) {
+							error(2, "Someting went wrong with the style value for '%s' attribute in '%s' element!", attribute->final_key, generator_code_layout_node_type(block->parent_node_type));
 						}
 
 						if (css_attributes_length != 0) string_append_char(css_attributes, ';');
-						string_append_str(css_attributes, attribute_css_name);
+						string_append_str(css_attributes, attribute->final_key);
 						string_append_str(css_attributes, ":");
-						string_append_str(css_attributes, attribute_css_value);
+						string_append_str(css_attributes, attribute->final_value);
 
 						css_attributes_length++;
 					}
@@ -285,21 +284,14 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 			}
 
 			// New styles
-			printf("New styles length: %zu\n", new_styles->length);
 			for (size_t i = 0; i < new_styles->capacity; i++) {
 				hashmap_entry_t *entry = new_styles->data[i];
 
 				while (entry) {
-					printf("inside entry iterate...\n");
 					ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
-					if (attribute == NULL) {
-						printf("is null so ignore\n");
-					}
-					else if (attribute->isStyle == false || attribute->ignoreMe == true) {
-						printf("ignore it...\n");
-					}
+					if (attribute == NULL) {}
+					else if (attribute->isStyle == false || attribute->ignoreMe == true) {}
 					else {
-						printf("okay printing...\n");
 						attribute->print(attribute);
 						if (attribute->final_value == NULL) {
 							error(2, "Someting went wrong with the sub-style value for '%s' attribute in '%s' element!", attribute->final_key, generator_code_layout_node_type(block->parent_node_type));
@@ -361,10 +353,10 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
  * @params {hashmap_t*} new_styles - New Styles
  * @params {ast_layout_attribute_t*} attribute - Layout Attribute
  * @params {ast_layout_node_type_t} parent_node_type - Parent Node Type
- * @returns {char*} values_str - Values
+ * @returns {void}
  * 
  */
-char* generator_code_layout_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, ast_layout_node_type_t parent_node_type)
+void generator_code_layout_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, ast_layout_node_type_t parent_node_type)
 {
 	DEBUG_ME;
 	char* values_str = array_layout_attribute_value_string(attribute->values, ", ");
@@ -386,13 +378,15 @@ char* generator_code_layout_style_value(hashmap_t* styles, hashmap_t* new_styles
 		error(2, "Invalid value for '%s' attribute in '%s' element at line %zu column %zu!", attribute_css_name, generator_code_layout_node_type(parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
 	}
 	
+	if (attribute->final_key == NULL) {
+		attribute->final_key = strdup(attribute_css_name);
+	}
+
 	if (attribute->final_value == NULL) {
 		attribute->final_value = strdup(values_str);
 	}
 
 	if (values_str != NULL) memory_destroy(values_str);
-
-	return attribute->final_value;
 }
 
 /**

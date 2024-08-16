@@ -31,7 +31,7 @@ void* memory_callocate(size_t count, size_t size)
 {
     void* ptr = calloc(count, size);
     if (ptr == NULL) {
-        panic("Failed to allocate memory");
+        panic("Failed to callocate memory");
     }
 
     return ptr;
@@ -48,7 +48,7 @@ void* memory_callocate(size_t count, size_t size)
 void memory_destroy(void* ptr)
 {
     if (ptr == NULL) {
-        panic("Failed to free memory");
+        panic("Failed to destroy memory");
     }
 
     free(ptr);

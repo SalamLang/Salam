@@ -47,7 +47,7 @@ bool file_writes(const char* path, const char* content)
     DEBUG_ME;
     FILE* file = fopen(path, "w");
     if (file == NULL) {
-        panic("Failed to open file");
+        panic("Failed to write file");
     }
 
     size_t size = strlen(content);
@@ -331,7 +331,7 @@ bool file_appends(const char* path, const char* content)
     DEBUG_ME;
     FILE* file = fopen(path, "a");
     if (file == NULL) {
-        panic("Failed to open file");
+        panic("Failed to append file");
     }
 
     size_t size = strlen(content);

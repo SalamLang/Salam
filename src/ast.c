@@ -1336,6 +1336,9 @@ ast_layout_node_type_t name_to_ast_layout_node_type(char* name)
 	else if (strcmp(name, "span") == 0) {
 		type = AST_LAYOUT_NODE_TYPE_SPAN;
 	}
+	else if (strcmp(name, "bold") == 0) {
+		type = AST_LAYOUT_NODE_TYPE_BOLD;
+	}
 	else if (strcmp(name, "label") == 0) {
 		type = AST_LAYOUT_NODE_TYPE_LABEL;
 	}
@@ -1444,7 +1447,7 @@ char* ast_layout_node_type_to_name(ast_layout_node_type_t type)
 		case AST_LAYOUT_NODE_TYPE_STRONG: return "strong";
 		case AST_LAYOUT_NODE_TYPE_EM: return "em";
 		case AST_LAYOUT_NODE_TYPE_ITALIC: return "italic";
-		case AST_LAYOUT_NODE_TYPE_BOLD: return "bold";
+		case AST_LAYOUT_NODE_TYPE_BOLD: return "b";
 		case AST_LAYOUT_NODE_TYPE_UNDERLINE: return "underline";
 		case AST_LAYOUT_NODE_TYPE_S: return "s";
 		case AST_LAYOUT_NODE_TYPE_SMALL: return "small";

@@ -84,7 +84,6 @@ void hashmap_put_custom(hashmap_t *map, const char *key, void *value, void (*fre
 	while (entry != NULL) {
 		if (strcmp(entry->key, key) == 0) {
 			if (free_fn != NULL) free_fn(entry->value);
-			entry->value = NULL;
 
 			entry->value = value;
 
@@ -370,7 +369,7 @@ void hashmap_print_layout_attribute(hashmap_attribute_t* map)
 
 /**
  * 
- * @function hashmap_create_layout_attribute
+ * @function hashmap_destroy_layout_attribute
  * @brief Destroy the hashmap of layout attributes
  * @params {hashmap_attribute_t*} map
  * @returns {void}
@@ -390,7 +389,9 @@ void hashmap_destroy_layout_attribute(hashmap_attribute_t *map)
 					memory_destroy(entry->key);
 
 					ast_layout_attribute_t* layout_attribute = cast(ast_layout_attribute_t*, entry->value);
-					layout_attribute->destroy(layout_attribute);
+					if (layout_attribute != NULL) {
+						layout_attribute->destroy(layout_attribute);
+					}
 
 					memory_destroy(entry);
 
@@ -403,4 +404,22 @@ void hashmap_destroy_layout_attribute(hashmap_attribute_t *map)
 
 		memory_destroy(map);
 	}
+}
+
+/**
+ * 
+ * @function hashmap_create_layout_attribute
+ * @brief Create a new hashmap of layout attributes
+ * @params {size_t} capacity
+ * @returns {hashmap_attribute_t*}
+ * 
+ */
+hashmap_attribute_t* hashmap_create_layout_attribute(size_t capacity)
+{
+	hashmap_attribute_t* map = cast(struct hashmap_t*, hashmap_create(capacity));
+
+	map->print = cast(void (*)(void*), hashmap_print_layout_attribute);
+	map->destroy = cast(void (*)(void*), hashmap_destroy_layout_attribute);
+
+	return map;
 }

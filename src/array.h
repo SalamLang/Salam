@@ -403,4 +403,14 @@ char* array_layout_attribute_value_string(array_layout_attribute_value_t* array,
  */
 char* array_layout_attribute_value_first_string(array_layout_attribute_value_t* array);
 
+/**
+ * 
+ * @function array_layout_attribute_value_copy
+ * @brief Copy the attribute value array
+ * @params {array_layout_attribute_value_t*} values - Array
+ * @returns {array_layout_attribute_value_t*} - Copied array
+ * 
+ */
+array_layout_attribute_value_t* array_layout_attribute_value_copy(array_layout_attribute_value_t* values);
+
 #endif

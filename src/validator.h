@@ -105,14 +105,15 @@ bool is_style_attribute(ast_layout_attribute_type_t type);
  * 
  * @function validate_style_value
  * @brief Validate the style value
+ * @params {hashmap_t*} styles - Styles
+ * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
  * @params {char*} values_str - Values string
- * @params {char*} new_values_str - New values string
  * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @returns {bool} - True if the style value is valid, false otherwise
  * 
  */
-bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type);
+bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type);
 
 /**
  * 

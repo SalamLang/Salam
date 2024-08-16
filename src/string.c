@@ -354,3 +354,185 @@ bool string_compare(string_t* str1, string_t* str2)
 
 	return strcmp(str1->data, str2->data) < 0;
 }
+
+/**
+ * 
+ * @function is_utf8_continuation_byte
+ * @brief Check if a byte is a UTF-8 continuation byte
+ * @params {char} c The byte to check
+ * @returns {bool} True if the byte is a continuation byte, false otherwise
+ * 
+ */
+bool is_utf8_continuation_byte(char c)
+{
+	return (c & 0xC0) == 0x80;
+}
+
+/**
+ * 
+ * @function is_valid_utf8
+ * @brief Check if a string is a valid UTF-8 sequence
+ * @params {const char*} str The string to check
+ * @returns {bool} True if the string is a valid UTF-8 sequence, false otherwise
+ * 
+ */
+bool is_valid_utf8(const char *str)
+{
+	const unsigned char *bytes = (const unsigned char *)str;
+
+	while (*bytes) {
+		if (*bytes <= 0x7F) {
+			// ASCII byte
+			bytes += 1;
+		}
+		else if ((*bytes & 0xE0) == 0xC0) {
+			// 2-byte sequence
+			if ((bytes[1] & 0xC0) != 0x80) return false;
+			bytes += 2;
+		}
+		else if ((*bytes & 0xF0) == 0xE0) {
+			// 3-byte sequence
+			if ((bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80) return false;
+			bytes += 3;
+		}
+		else if ((*bytes & 0xF8) == 0xF0) {
+			// 4-byte sequence
+			if ((bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80 || (bytes[3] & 0xC0) != 0x80) return false;
+			bytes += 4;
+		}
+		else {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+/**
+ * 
+ * @function is_schar_alpha
+ * @brief Check if a UTF-8 character is alphabetic
+ * @params {const char*} c Pointer to the UTF-8 character
+ * @returns {bool} True if the character is alphabetic, false otherwise
+ * 
+ */
+bool is_schar_alpha(const char* c)
+{
+	DEBUG_ME;
+	wchar_t wc;
+	int len = mbtowc(&wc, c, MB_CUR_MAX);
+
+	if (len <= 0) {
+		return false;
+	}
+
+	return iswalpha(wc);
+}
+
+/**
+ * 
+ * @function is_char_digit
+ * @brief Check if a character is a digit
+ * @params {char} c - Character
+ * @returns {bool}
+ * 
+ */
+bool is_char_digit(char c)
+{
+    DEBUG_ME;
+	return c >= '0' && c <= '9';
+}
+
+/**
+ * 
+ * @function is_char_alpha
+ * @brief Check if a character is an alphabet
+ * @params {char} c - Character
+ * @returns {bool}
+ * 
+ */
+bool is_char_alpha(const char c)
+{
+    DEBUG_ME;
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+/**
+ * 
+ * @function is_char_alnum
+ * @brief Check if a character is an alphabet or a digit
+ * @params {char} c - Character
+ * @returns {bool}
+ * 
+ */
+bool is_char_alnum(char c)
+{
+    DEBUG_ME;
+	return is_char_alpha(c) || is_char_digit(c);
+}
+
+/**
+ * 
+ * @function is_char_whitespace
+ * @brief Check if a character is a whitespace
+ * @params {char} c - Character
+ * @returns {bool}
+ * 
+ */
+bool is_char_whitespace(char c)
+{
+    DEBUG_ME;
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+
+/**
+ * 
+ * @function int2string
+ * @brief Convert an integer to a string
+ * @params {int} value - Integer value
+ * @returns {char*}
+ * 
+ */
+char* int2string(int value)
+{
+	DEBUG_ME;
+	static char buffer[256];
+	snprintf(buffer, sizeof(buffer), "%d", value);
+
+	return buffer;
+}
+
+/**
+ * 
+ * @function float2string
+ * @brief Convert a float to a string
+ * @params {float} value - Float value
+ * @returns {char*}
+ * 
+ */
+char* float2string(float value)
+{
+	DEBUG_ME;
+	static char buffer[256];
+	snprintf(buffer, sizeof(buffer), "%f", value);
+
+	return buffer;
+}
+
+/**
+ * 
+ * @function double2string
+ * @brief Convert a double to a string
+ * @params {double} value - Double value
+ * @returns {char*}
+ * 
+ */
+char* double2string(double value)
+{
+	DEBUG_ME;
+	static char buffer[256];
+	snprintf(buffer, sizeof(buffer), "%f", value);
+	
+	return buffer;
+}

@@ -638,7 +638,7 @@ bool validate_style_value_color(ast_layout_attribute_t* attribute, char* values_
 	else if (strcmp(values_str, "pink") == 0) return true;
 	else if (strcmp(values_str, "gray") == 0) return true;
 	else {
-		error(2, "Color value for attribute '%s' is invalid in the '%s' element", attribute_css_name, element_name);
+		error(2, "Color value '%s' for attribute '%s' is invalid in the '%s' element", values_str, attribute_css_name, element_name);
 	}
 
 	return false;
@@ -716,21 +716,17 @@ bool validate_style_value_sizes(ast_layout_attribute_t* attribute, char* values_
  * 
  * @function validate_style_value
  * @brief Validate the style value
+ * @params {hashmap_t*} styles - Styles
+ * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
  * @params {char*} values_str - Values string
  * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @returns {bool} - True if the style value is valid, false otherwise
  * 
  */
-bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type)
+bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type)
 {
 	DEBUG_ME;
-	printf("=============================================\n=============================================\n=============================================\n");
-	attribute->print(attribute);
-	if (values_str == NULL) {
-		printf("is null\n");
-	}
-	printf("---->%s\n", values_str);
 	// Global values
 	if (strcmp(values_str, "inherit") == 0) return true;
 	else if (strcmp(values_str, "initial") == 0) return true;
@@ -947,22 +943,96 @@ bool validate_style_value(ast_layout_attribute_t* attribute, char* values_str, a
 				AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE,
 				AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE,
 				AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR,
-			};
+			}; // one value should applied, we allow multiple value but only one value for each group, and user can leave the other groups empty (if he want)
 			size_t sub_types_length = sizeof(sub_types) / sizeof(sub_types[0]);
-			hashmap_t* sub_groups = hashmap_create(sub_types_length);
+			printf("sub_types_length: %zu\n", sub_types_length);
+			hashmap_t* sub_groups = hashmap_create_layout_attribute(1);
 
 			for (size_t i = 0; i < attribute->values->length; i++) {
-				array_layout_attribute_value_t* _values = 
+				printf(">>>>>>>>>>>>>>>>> check sub value.... %zu\n", i);
+				bool _res = false;
+
+				ast_layout_attribute_value_t* _value = attribute->values->data[i];
+
+				for (size_t j = 0; j < sub_types_length; j++) {
+					printf("================== %zu\n", j);
+					char* _key = ast_layout_attribute_type_to_name(sub_types[i]);
+					printf("%s\n", _key);
+
+					if (hashmap_has(sub_groups, _key) == true) {
+						continue;
+					}
+
+					array_layout_attribute_value_t* _values = array_layout_attribute_value_create(1);
+					array_push(_values, ast_layout_attribute_value_copy(_value));
+
+					printf("_values: ");
+					_values->print(_values);
+
+					char* _values_str = array_layout_attribute_value_string(_values, ", ");
+
+					ast_layout_attribute_t* _attribute = ast_layout_attribute_create(sub_types[j], _key, _values, attribute->key_location, attribute->value_location);
+					_attribute->isStyle = attribute->isStyle;
+					_attribute->isContent = attribute->isContent;
+					_attribute->final_key = strdup(_key);
+					_attribute->final_value = strdup(_values_str);
+
+					printf("_key: %s\n", _key);
+					printf("_values_str: %s\n", _values_str);
+
+					bool sub_res = validate_style_value(styles, new_styles, _attribute, _values_str, parent_node_type);
+					printf("sub_res: %s\n", sub_res ? "true" : "false");
+
+					if (sub_res == true) {
+						_res = true;
+						hashmap_put(sub_groups, _key, _attribute);
+						// array_layout_attribute_value_copy(_values));
+						// hashmap_put(sub_groups, _key, _values);
+
+						if (_values_str != NULL) memory_destroy(_values_str);
+						// _attribute->destroy(_attribute);
+						break;
+					}
+					else {
+						if (_values_str != NULL) memory_destroy(_values_str);
+						_attribute->destroy(_attribute);
+					}
+				}
+
+				if (_res == false) {
+					error(2, "Text decoration value is invalid in the '%s' element", element_name);
+				}
 			}
 
-			// if (attribute->values == 1) {
-			// 	if (strcmp(values_str, "none") == 0) return true;
-			// 	else if (strcmp(values_str, "underline") == 0) return true;
-			// 	else if (strcmp(values_str, "overline") == 0) return true;
-			// 	else if (strcmp(values_str, "line-through") == 0) return true;
-			// 	else if (strcmp(values_str, "blink") == 0) return true;
-			// }
-			// else return false;
+			if (attribute->values->length > 0) {
+				attribute->ignoreMe = true;
+
+				for (size_t i = 0; i < sub_groups->capacity; i++) {
+					hashmap_entry_t *entry = sub_groups->data[i];
+
+					while (entry) {
+						printf("copy %s from sub_groups to main styles\n", entry->key);
+						ast_layout_attribute_t* atr = entry->value;
+						ast_layout_attribute_t* atr_copy = ast_layout_attribute_copy(atr);
+						atr_copy->ignoreMe = false;
+						atr_copy->isStyle = true;
+
+						printf("before put hashmap...\n");
+						hashmap_put(new_styles, entry->key, atr_copy);
+						printf("after put hashmap...\n");
+
+						entry = entry->next;
+					}
+				}
+
+				printf("ignore this attribute %s %s\n", attribute->key, attribute->ignoreMe ? "yes" : "no");
+
+				sub_groups->destroy(sub_groups);
+
+				return true;
+			}
+
+			sub_groups->destroy(sub_groups);
 			return false;
 			break;
 

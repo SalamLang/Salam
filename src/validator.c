@@ -270,7 +270,7 @@ void validate_layout_block(ast_layout_block_t* block)
 		array_value_t* values = attribute_content->values;
 
 		if (values->length > 0) {
-			char* content = array_value_string(values, ", ");
+			char* content = array_value_stringify(values, ", ");
 
 			if (content != NULL) {
 				if (strlen(content) > 0) {
@@ -807,7 +807,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 		// 			array_value_t* _values = array_value_create(1);
 		// 			array_push(_values, ast_value_copy(_value));
 
-		// 			char* _values_str = array_value_string(_values, ", ");
+		// 			char* _values_str = array_value_stringify(_values, ", ");
 
 		// 			ast_layout_attribute_t* _attribute = ast_layout_attribute_create(sub_types[j], _key, _values, attribute->parent_node_type, attribute->key_location, attribute->value_location);
 		// 			_attribute->isStyle = attribute->isStyle;

@@ -1,4 +1,7 @@
 #include <stdio.h>
+#include <wchar.h>
+#include <wctype.h>
+#include <locale.h>
 #include <stdlib.h>
 
 #include "base.h"
@@ -77,6 +80,7 @@ void doargs(int argc, char** argv)
 int main(int argc, char** argv)
 {
 	DEBUG_ME;
+    setlocale(LC_ALL, "");
 
 	// array_value_t* values = array_value_create(1);
 	// array_push(values, "12px");

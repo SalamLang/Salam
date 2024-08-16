@@ -4,9 +4,8 @@ fn main {
 
 layout {
 	title "my site name"
-	background yellow
-	text-decoration "overline", "red"
-	padding 10
+	//text-decoration "overline", "red"
+	//padding 10
 
 	bold {
 		content "Hey there!"

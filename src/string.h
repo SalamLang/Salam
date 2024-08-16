@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <wctype.h>
 #include <stdbool.h>
 
 #include "base.h"
@@ -190,5 +191,95 @@ bool string_equals(string_t* str1, string_t* str2);
  * 
  */
 bool string_compare(string_t* str1, string_t* str2);
+
+/**
+ * 
+ * @function is_utf8_continuation_byte
+ * @brief Check if a byte is a UTF-8 continuation byte
+ * @params {char} c The byte to check
+ * @returns {bool} True if the byte is a continuation byte, false otherwise
+ * 
+ */
+bool is_utf8_continuation_byte(char c);
+
+/**
+ * 
+ * @function is_valid_utf8
+ * @brief Check if a string is a valid UTF-8 sequence
+ * @params {const char*} str The string to check
+ * @returns {bool} True if the string is a valid UTF-8 sequence, false otherwise
+ * 
+ */
+bool is_valid_utf8(const char *str);
+
+/**
+ * 
+ * @function is_char_alpha
+ * @brief Check if a character is an alphabet
+ * @params {char} c - Character
+ * @returns {bool} True if the character is alphabetic, false otherwise
+ * 
+ */
+bool is_char_alpha(const char c);
+
+/**
+ * 
+ * @function is_schar_alpha
+ * @brief Check if a character is an alphabet
+ * @params {char} c - Character
+ * @returns {bool}
+ * 
+ */
+bool is_schar_alpha(const char* c);
+
+/**
+ * 
+ * @function is_char_alnum
+ * @brief Check if a character is an alphabet or a digit
+ * @params {char} c - Character
+ * @returns {bool}
+ * 
+ */
+bool is_char_alnum(char c);
+
+/**
+ * 
+ * @function is_char_whitespace
+ * @brief Check if a character is a whitespace
+ * @params {char} c - Character
+ * @returns {bool}
+ * 
+ */
+bool is_char_whitespace(char c);
+
+/**
+ * 
+ * @function int2string
+ * @brief Convert an integer to a string
+ * @params {int} value - Integer value
+ * @returns {char*}
+ * 
+ */
+char* int2string(int value);
+
+/**
+ * 
+ * @function float2string
+ * @brief Convert a float to a string
+ * @params {float} value - Float value
+ * @returns {char*}
+ * 
+ */
+char* float2string(float value);
+
+/**
+ * 
+ * @function double2string
+ * @brief Convert a double to a string
+ * @params {double} value - Double value
+ * @returns {char*}
+ * 
+ */
+char* double2string(double value);
 
 #endif

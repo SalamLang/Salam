@@ -170,10 +170,10 @@ ast_node_t* parser_parse_function(lexer_t* lexer);
  * @function parser_parse_value
  * @brief Parse the value
  * @params {lexer_t*} lexer - Lexer
- * @returns {ast_layout_value_t*} - AST Layout value
+ * @returns {ast_value_t*} - AST Layout value
  * 
  */
-ast_layout_value_t* parser_parse_value(lexer_t* lexer);
+ast_value_t* parser_parse_value(lexer_t* lexer);
 
 /**
  * 

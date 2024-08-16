@@ -148,75 +148,47 @@ ast_layout_block_t* ast_layout_block_create(ast_type_t node_type, ast_layout_nod
 
 /**
  * 
- * @function ast_layout_attribute_value_create
+ * @function ast_value_create
  * @brief Create a new AST node layout attribute value
- * @params {char*} value - Value of the attribute
+ * @params {ast_value_type_t*} type - Type of the layout attribute value
+ * @params {void*} value - Value of the layout attribute value
  * @returns {ast_value_t*} - Pointer to the created AST node layout attribute value
  * 
  */
-ast_value_t* ast_layout_attribute_value_create(char* value)
+ast_value_t* ast_value_create(ast_value_type_t* type, void* value)
 {
 	DEBUG_ME;
 	size_t value_length = strlen(value);
 	ast_value_t* res = memory_allocate(sizeof(ast_value_t));
 
-	res->string = string_create(10);
-	// res->data = memory_allocate(value_length + 1);
-	strcpy(res->data, value);
+	res->type = type;
 
-	res->print = cast(void (*)(void*), ast_layout_attribute_value_print);
-	res->destroy = cast(void (*)(void*), ast_layout_attribute_value_destroy);
-	// res->get_data = cast(char* (*)(void*), ast_layout_attribute_value_data);
+	res->data.string_value = memory_allocate(value_length * sizeof(char));
+	strcpy(res->data.string_value, value);
+
+	res->print = cast(void (*)(void*), ast_value_print);
+	res->destroy = cast(void (*)(void*), ast_value_destroy);
+	res->get_data = cast(char* (*)(void*), ast_value_data);
 
 	return res;
 }
 
 /**
  * 
- * @function ast_layout_attribute_value_data
+ * @function ast_value_data
  * @brief Get the string of the AST layout attribute value
  * @params {ast_value_t*} value - AST layout attribute value
  * @returns {char*} - String of the AST layout attribute value
  * 
  */
-char* ast_layout_attribute_value_data(ast_value_t* value)
+char* ast_value_data(ast_value_t* value)
 {
 	DEBUG_ME;
-	return value->data;
-}
-
-/**
- * 
- * @function ast_layout_attribute_value_destroy
- * @brief Free the AST layout attribute value
- * @params {ast_value_t*} value - AST layout attribute value
- * @returns {void}
- * 
- */
-void ast_layout_attribute_value_destroy(ast_value_t* value)
-{
-	DEBUG_ME;
-	if (value != NULL) {
-		if (value->data != NULL) {
-			memory_destroy(value->data);
-		}
-		
-		memory_destroy(value);
+	if (value->type->kind == AST_TYPE_KIND_STRING) {
+		return value->data.string_value;
 	}
-}
 
-/**
- * 
- * @function ast_layout_attribute_value_print
- * @brief Print the AST layout attribute value
- * @params {ast_value_t*} value - AST layout attribute value
- * @returns {void}
- * 
- */
-void ast_layout_attribute_value_print(ast_value_t* value)
-{
-	DEBUG_ME;
-	printf("Value: %s\n", value->data);
+	return "other value";
 }
 
 /**
@@ -764,7 +736,7 @@ ast_function_t* ast_function_create(char* name)
 	node->name = strdup(name);
 
 	location_t return_location = { 0, 0, 0, 0, 0, 0 }; // TODO: Fix this
-	node->return_type = ast_type_create(AST_TYPE_KIND_VOID, return_location);
+	node->return_type = ast_value_type_create(AST_TYPE_KIND_VOID, return_location);
 
 	node->parameters = array_create(sizeof(ast_function_parameter_t*), 16);
 
@@ -832,7 +804,7 @@ void ast_block_destroy(ast_block_t* block)
  * @returns {char*} - Name of the AST value type
  * 
  */
-char* ast_type_name(ast_value_type_t* type)
+char* ast_value_type_name(ast_value_type_t* type)
 {
     DEBUG_ME;
 	switch (type->kind) {
@@ -878,114 +850,50 @@ char* ast_type_name(ast_value_type_t* type)
 
 /**
  * 
- * @function ast_type_print
+ * @function ast_value_type_print
  * @brief Print the AST value type
  * @params {ast_value_type_t*} type - AST value type
  * @returns {void}
  * 
  */
-void ast_type_print(ast_value_type_t* type)
+void ast_value_type_print(ast_value_type_t* type)
 {
     DEBUG_ME;
-	printf("Type: ");
-
-	switch (type->kind) {
-		case AST_TYPE_KIND_VOID:
-			printf("void");
-			printf("\n");
-			return;
-
-		case AST_TYPE_KIND_INT:
-			printf("int");
-			printf("\n");
-			return;
-		
-		case AST_TYPE_KIND_NULL:
-			printf("null");
-			printf("\n");
-			return;
-
-		case AST_TYPE_KIND_FLOAT:
-			printf("float");
-			printf("\n");
-			return;
-
-		case AST_TYPE_KIND_CHAR:
-			printf("char");
-			printf("\n");
-			return;
-
-		case AST_TYPE_KIND_STRING:
-			printf("string");
-			printf("\n");
-			return;
-
-		case AST_TYPE_KIND_BOOL:
-			printf("bool");
-			printf("\n");
-			return;
-		
-		case AST_TYPE_KIND_STRUCT:
-			printf("struct");
-			printf("\n");
-			return;
-		
-		case AST_TYPE_KIND_ENUM:
-			printf("enum");
-			printf("\n");
-			return;
-		
-		case AST_TYPE_KIND_ARRAY:
-			printf("array");
-			printf("\n");
-			return;
-		
-		case AST_TYPE_KIND_POINTER:
-			printf("pointer");
-			printf("\n");
-			return;
-		
-		case AST_TYPE_KIND_FUNCTION:
-			printf("function");
-			printf("\n");
-			return;
-	}
-	
-	printf("unknown type");
-	printf("\n");
+	printf("Type:\n");
+	printf("%s\n", ast_type_name(type));
 }
 
 /**
  * 
- * @function ast_type_create
+ * @function ast_value_type_create
  * @brief Create a new AST value type
  * @params {ast_value_kind_t} kind - Kind of the value type
  * @params {location_t} location - Location of the value type
  * @returns {ast_value_type_t*} - Pointer to the created AST value type
  * 
  */
-ast_value_type_t* ast_type_create(ast_value_kind_t kind, location_t location)
+ast_value_type_t* ast_value_type_create(ast_value_kind_t kind, location_t location)
 {
     DEBUG_ME;
 	ast_value_type_t* type = memory_allocate(sizeof(ast_value_type_t));
 	type->kind = kind;
 	type->location = location;
 
-	type->print = cast(void (*)(void*), ast_type_print);
-	type->destroy = cast(void (*)(void*), ast_type_destroy);
+	type->print = cast(void (*)(void*), ast_value_type_print);
+	type->destroy = cast(void (*)(void*), ast_value_type_destroy);
 
 	return type;	
 }
 
 /**
  * 
- * @function ast_type_destroy
+ * @function ast_value_type_destroy
  * @brief Free the AST value type
  * @params {ast_value_type_t*} type - AST value type
  * @returns {void}
  * 
  */
-void ast_type_destroy(ast_value_type_t* type)
+void ast_value_type_destroy(ast_value_type_t* type)
 {
     DEBUG_ME;
 	if (type != NULL) {
@@ -2291,28 +2199,6 @@ void ast_print(ast_t* ast)
 
 /**
  * 
- * @function ast_value_create
- * @brief Create a new AST value
- * @params {ast_value_type_t*} type - Value type
- * @params {void*} data - Value data
- * @returns {ast_value_t*} - Pointer to the created AST value
- * 
- */
-ast_value_t* ast_value_create(ast_value_type_t* type, void* data)
-{
-	DEBUG_ME;
-	ast_value_t* value = memory_allocate(sizeof(ast_value_t));
-	value->type = type;
-	value->data = data;
-	
-	value->print = cast(void (*)(void*), ast_value_print);
-	value->destroy = cast(void (*)(void*), ast_value_destroy);
-
-	return value;
-}
-
-/**
- * 
  * @function ast_value_destroy
  * @brief Free the AST value
  * @params {ast_value_t*} value - AST Value
@@ -2327,9 +2213,8 @@ void ast_value_destroy(ast_value_t* value)
 			value->type->destroy(value->type);
 		}
 
-		if (value->data != NULL) {
-			memory_destroy(value->data); // TODO
-			// value->data->destroy(value->data);
+		if (value->data.string_value != NULL) {
+			memory_destroy(value->data.string_value);
 		}
 
 		memory_destroy(value);
@@ -2358,8 +2243,8 @@ void ast_value_print(ast_value_t* value)
 	}
 
 	printf("Value Data:\n");
-	if (value->data != NULL) {
-		printf("%s\n", value->data); // TODO: change to use a union
+	if (value->data.string_value != NULL) {
+		printf("%s\n", value->data.string_value);
 	}
 	else {
 		printf("NULL\n");
@@ -2368,71 +2253,33 @@ void ast_value_print(ast_value_t* value)
 
 /**
  * 
- * @function ast_layout_value_create
- * @brief Create a new AST layout value
- * @params {char*} value - Value
- * @returns {ast_layout_value_t*} - Pointer to the created AST layout value
- * 
- */
-ast_layout_value_t* ast_layout_value_create(char* data)
-{
-	DEBUG_ME;
-	ast_layout_value_t* value = memory_allocate(sizeof(ast_layout_value_t));
-	value->data = data;
-	
-	value->print = cast(void (*)(void*), ast_layout_value_print);
-	value->destroy = cast(void (*)(void*), ast_layout_value_destroy);
-
-	return value;
-}
-
-/**
- * 
- * @function ast_layout_value_print
- * @brief Print the AST layout value
- * @params {ast_layout_value_t*} value - AST Layout Value
- * @returns {void}
- * 
- */
-void ast_layout_value_print(ast_layout_value_t* value)
-{
-	DEBUG_ME;
-	printf("Value\n");
-	printf("Value Type: %s\n", value->data);
-}
-
-/**
- * 
- * @function ast_layout_value_destroy
- * @brief Free the AST layout value
- * @params {ast_layout_value_t*} value - AST Layout Value
- * @returns {void}
- * 
- */
-void ast_layout_value_destroy(ast_layout_value_t* value)
-{
-	DEBUG_ME;
-	if (value != NULL) {
-		if (value->data != NULL) {
-			memory_destroy(value->data);
-		}
-
-		memory_destroy(value);
-	}
-}
-
-/**
- * 
- * @function ast_layout_attribute_value_copy
+ * @function ast_value_copy
  * @brief Copy the AST layout attribute value
  * @params {ast_value_t*} value - AST Layout Attribute Value
  * @returns {ast_value_t*} - Copied AST Layout Attribute Value
  * 
  */
-ast_value_t* ast_layout_attribute_value_copy(ast_value_t* value)
+ast_value_t* ast_value_copy(ast_value_t* value)
 {
 	DEBUG_ME;
-	ast_value_t* copy = ast_layout_attribute_value_create(value->data);
+	ast_value_type_t* type = ast_value_type_copy(value->type);
+	ast_value_t* copy = ast_value_create(type, value->data.string_value);
+
+	return copy;
+}
+
+/**
+ * 
+ * @function ast_value_type_copy
+ * @brief Copy the AST layout attribute value type
+ * @params {ast_value_type_t*} type - AST Layout Attribute Value Type
+ * @returns {ast_value_type_t*} - Copied AST Layout Attribute Value Type
+ * 
+ */
+ast_value_type_t* ast_value_type_copy(ast_value_type_t* type)
+{
+	DEBUG_ME;
+	ast_value_type_t* copy = ast_value_type_create(type->kind, type->location);
 
 	return copy;
 }

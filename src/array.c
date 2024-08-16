@@ -849,6 +849,7 @@ char* array_layout_attribute_value_string(array_layout_attribute_value_t* array,
 {
     DEBUG_ME;
     if (array == NULL || array->length == 0) {
+        printf("Array is empty!!!\n");
         return strdup("");
     }
 
@@ -900,4 +901,25 @@ char* array_layout_attribute_value_first_string(array_layout_attribute_value_t* 
     string_destroy(str);
 
     return buffer;
+}
+
+/**
+ * 
+ * @function array_layout_attribute_value_copy
+ * @brief Copy the attribute value array
+ * @params {array_layout_attribute_value_t*} values - Array
+ * @returns {array_layout_attribute_value_t*} - Copied array
+ * 
+ */
+array_layout_attribute_value_t* array_layout_attribute_value_copy(array_layout_attribute_value_t* values)
+{
+    array_layout_attribute_value_t* copy = array_layout_attribute_value_create(values->length);
+
+    for (size_t i = 0; i < values->length; i++) {
+        ast_layout_attribute_value_t* value = values->data[i];
+
+        array_push(copy, ast_layout_attribute_value_copy(value));
+    }
+
+    return copy;
 }

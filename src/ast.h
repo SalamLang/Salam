@@ -420,14 +420,6 @@ typedef struct {
     void (*print)(void* node);
 } ast_t;
 
-typedef struct ast_layout_value_t {
-    char* data;
-    ast_value_type_t* type;
-
-    void (*destroy)(void* node);
-    void (*print)(void* node);
-} ast_layout_value_t;
-
 /**
  * 
  * @function ast_layout_node_print
@@ -748,28 +740,28 @@ void ast_function_destroy(ast_function_t* value);
 
 /**
  * 
- * @function ast_type_create
+ * @function ast_value_type_create
  * @brief Create a new AST value type
  * @params {ast_value_kind_t} kind - Kind of the value type
  * @params {location_t} location - Location of the value type
  * @returns {ast_value_type_t*} - Pointer to the created AST value type
  * 
  */
-ast_value_type_t* ast_type_create(ast_value_kind_t kind, location_t location);
+ast_value_type_t* ast_value_type_create(ast_value_kind_t kind, location_t location);
 
 /**
  * 
- * @function ast_type_print
+ * @function ast_value_type_print
  * @brief Print the AST value type
  * @params {ast_value_type_t*} type - AST value type
  * @returns {void}
  * 
  */
-void ast_type_print(ast_value_type_t* type);
+void ast_value_type_print(ast_value_type_t* type);
 
 /**
  * 
- * @function ast_type_name
+ * @function ast_value_type_name
  * @brief Get the name of the AST value type
  * @params {ast_value_type_t*} type - AST value type
  * @returns {char*} - Name of the AST value type
@@ -779,13 +771,13 @@ char* ast_type_name(ast_value_type_t* type);
 
 /**
  * 
- * @function ast_type_destroy
+ * @function ast_value_type_destroy
  * @brief Free the AST value type
  * @params {ast_value_type_t*} type - AST value type
  * @returns {void}
  * 
  */
-void ast_type_destroy(ast_value_type_t* type);
+void ast_value_type_destroy(ast_value_type_t* type);
 
 /**
  * 
@@ -966,83 +958,53 @@ void ast_print_print(ast_print_t* node);
 
 /**
  * 
- * @function ast_layout_attribute_value_print
+ * @function ast_value_print
  * @brief Print the AST layout attribute value
  * @params {ast_value_t*} value - AST layout attribute value
  * @returns {void}
  * 
  */
-void ast_layout_attribute_value_print(ast_value_t* value);
+void ast_value_print(ast_value_t* value);
 
 /**
  * 
- * @function ast_layout_attribute_value_destroy
+ * @function ast_value_destroy
  * @brief Free the AST layout attribute value
  * @params {ast_value_t*} value - AST layout attribute value
  * @returns {void}
  * 
  */
-void ast_layout_attribute_value_destroy(ast_value_t* value);
+void ast_value_destroy(ast_value_t* value);
 
 /**
  * 
- * @function ast_layout_attribute_value_create
- * @brief Create a new AST node layout attribute value
- * @params {char*} value - Value of the attribute
- * @returns {ast_value_t*} - Pointer to the created AST node layout attribute value
- * 
- */
-ast_value_t* ast_layout_attribute_value_create(char* value);
-
-/**
- * 
- * @function ast_layout_value_print
+ * @function ast_value_print
  * @brief Print the AST layout value
- * @params {ast_layout_value_t*} value - AST Layout Value
+ * @params {ast_value_t*} value - AST Layout Value
  * @returns {void}
  * 
  */
-void ast_layout_value_print(ast_layout_value_t* value);
+void ast_value_print(ast_value_t* value);
 
 /**
  * 
- * @function ast_layout_value_destroy
- * @brief Free the AST layout value
- * @params {ast_layout_value_t*} value - AST Layout Value
- * @returns {void}
- * 
- */
-void ast_layout_value_destroy(ast_layout_value_t* value);
-
-/**
- * 
- * @function ast_layout_value_create
- * @brief Create a new AST layout value
- * @params {char*} value - Value
- * @returns {ast_layout_value_t*} - Pointer to the created AST layout value
- * 
- */
-ast_layout_value_t* ast_layout_value_create(char* value);
-
-/**
- * 
- * @function ast_layout_attribute_value_data
+ * @function ast_value_data
  * @brief Get the string of the AST layout attribute value
  * @params {ast_value_t*} value - AST layout attribute value
  * @returns {char*} - String of the AST layout attribute value
  * 
  */
-char* ast_layout_attribute_value_data(ast_value_t* value);
+char* ast_value_data(ast_value_t* value);
 
 /**
  * 
- * @function ast_layout_attribute_value_copy
+ * @function ast_value_copy
  * @brief Copy the AST layout attribute value
  * @params {ast_value_t*} value - AST Layout Attribute Value
  * @returns {ast_value_t*} - Copied AST Layout Attribute Value
  * 
  */
-ast_value_t* ast_layout_attribute_value_copy(ast_value_t* value);
+ast_value_t* ast_value_copy(ast_value_t* value);
 
 /**
  * 
@@ -1053,5 +1015,15 @@ ast_value_t* ast_layout_attribute_value_copy(ast_value_t* value);
  * 
  */
 ast_layout_attribute_t* ast_layout_attribute_copy(ast_layout_attribute_t* value);
+
+/**
+ * 
+ * @function ast_value_type_copy
+ * @brief Copy the AST layout attribute value type
+ * @params {ast_value_type_t*} type - AST Layout Attribute Value Type
+ * @returns {ast_value_type_t*} - Copied AST Layout Attribute Value Type
+ * 
+ */
+ast_value_type_t* ast_value_type_copy(ast_value_type_t* type);
 
 #endif

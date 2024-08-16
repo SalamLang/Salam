@@ -191,17 +191,19 @@ bool match_prev(lexer_t* lexer, token_type_t token_type)
  * @function parser_parse_value
  * @brief Parse the value
  * @params {lexer_t*} lexer - Lexer
- * @returns {ast_layout_value_t*} - AST Layout value
+ * @returns {ast_value_t*} - AST Layout value
  * 
  */
-ast_layout_value_t* parser_parse_value(lexer_t* lexer)
+ast_value_t* parser_parse_value(lexer_t* lexer)
 {
 	DEBUG_ME;
 	token_t* token = PARSER_CURRENT;
 
 	PARSER_NEXT;
 
-	ast_layout_value_t* value = ast_layout_value_create(token_value(token));
+	ast_value_type_t* type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
+
+	ast_value_t* value = ast_value_create(type, token_value(token));
 
 	return value;
 }
@@ -220,8 +222,9 @@ ast_value_t* parser_parse_layout_value(lexer_t* lexer)
 	token_t* token = PARSER_CURRENT;
 
 	PARSER_NEXT;
-	
-	ast_value_t* value = ast_layout_attribute_value_create(token_value(token));
+
+	ast_value_type_t* type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
+	ast_value_t* value = ast_value_create(type, token_value(token));
 
 	return value;
 }
@@ -543,7 +546,7 @@ ast_value_t* parser_parse_expression(lexer_t* lexer)
 		PARSER_NEXT;
 		strcpy(data, token->data.string);
 
-		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
 		value = ast_value_create(type, data);
 		return value;
 	}
@@ -551,7 +554,7 @@ ast_value_t* parser_parse_expression(lexer_t* lexer)
 		PARSER_NEXT;
 		strcpy(data, token->data.string);
 
-		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
 		value = ast_value_create(type, data);
 		return value;
 	}
@@ -559,7 +562,7 @@ ast_value_t* parser_parse_expression(lexer_t* lexer)
 		PARSER_NEXT;
 		strcpy(data, int2string(token->data.number_int));
 
-		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
 		value = ast_value_create(type, data);
 		return value;
 	}
@@ -567,7 +570,7 @@ ast_value_t* parser_parse_expression(lexer_t* lexer)
 		PARSER_NEXT;
 		strcpy(data, float2string(token->data.number_float));
 
-		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
 		value = ast_value_create(type, data);
 		return value;
 	}
@@ -575,7 +578,7 @@ ast_value_t* parser_parse_expression(lexer_t* lexer)
 		PARSER_NEXT;
 		strcpy(data, token->data.boolean ? "true" : "false");
 
-		type = ast_type_create(AST_TYPE_KIND_STRING, token->location);
+		type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
 		value = ast_value_create(type, data);
 		return value;
 	}

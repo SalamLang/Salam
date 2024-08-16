@@ -956,7 +956,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 
 				for (size_t j = 0; j < sub_types_length; j++) {
 					printf("================== %zu\n", j);
-					char* _key = ast_layout_attribute_type_to_name(sub_types[i]);
+					char* _key = ast_layout_attribute_type_to_name(sub_types[j]);
 					printf("%s\n", _key);
 
 					if (hashmap_has(sub_groups, _key) == true) {

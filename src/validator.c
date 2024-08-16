@@ -612,6 +612,8 @@ bool validate_style_value_color(ast_layout_attribute_t* attribute)
 bool validate_style_value_size(ast_layout_attribute_t* attribute)
 {
 	DEBUG_ME;
+	if (attribute) {}
+
 	return true;
 	// ast_value_t* first = attribute->values->data[0];
 	// if (first->type->kind == AST_TYPE_KIND_INT) {
@@ -763,8 +765,8 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 			else if (strcmp(value, "lighter") == 0) return true;
 			else if (strcmp(value, "bolder") == 0) return true;
 			else if (string_is_number(value) == true) {
-				int value = atoi(value);
-				if (value >= 1 && value <= 1000) return true;
+				int value_int = atoi(value);
+				if (value_int >= 1 && value_int <= 1000) return true;
 				else {
 					error(2, "Font weight value is invalid, it should be between 1 and 1000");
 				}

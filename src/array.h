@@ -402,4 +402,15 @@ char* array_value_first_string(array_value_t* array);
  */
 array_value_t* array_value_copy(array_value_t* values);
 
+/**
+ * 
+ * @function array_value_string
+ * @brief Convert the attribute value array to a string
+ * @params {array_value_t*} array - Array
+ * @params {char*} seperator - Separator
+ * @returns {char*} - String
+ * 
+ */
+char* array_value_string(array_value_t* array, char* seperator);
+
 #endif

@@ -797,6 +797,41 @@ char* array_value_first_string(array_value_t* array)
 
 /**
  * 
+ * @function array_value_string
+ * @brief Convert the attribute value array to a string
+ * @params {array_value_t*} array - Array
+ * @params {char*} seperator - Separator
+ * @returns {char*} - String
+ * 
+ */
+char* array_value_string(array_value_t* array, char* seperator)
+{
+    DEBUG_ME;
+    if (array == NULL || array->length == 0) {
+        return strdup("");
+    }
+
+    string_t* str = string_create(16);
+    for (size_t i = 0; i < array->length; i++) {
+        ast_value_t* value = array_get(array, i);
+
+        if (value != NULL) {
+            string_append_str(str, value->get_data(value));
+            
+            if (i < array->length - 1) {
+                string_append_str(str, seperator);
+            }
+        }
+    }
+
+    char* buffer = strdup(str->data);
+    string_destroy(str);
+
+    return buffer;
+}
+
+/**
+ * 
  * @function array_value_copy
  * @brief Copy the attribute value array
  * @params {array_value_t*} values - Array

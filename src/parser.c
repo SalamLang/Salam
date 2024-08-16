@@ -540,46 +540,49 @@ ast_value_t* parser_parse_expression(lexer_t* lexer)
 
 	ast_value_type_t* type = NULL;
 	ast_value_t* value = NULL;
-	char* data = memory_allocate(16 * sizeof(char));
 	
 	if (match(lexer, TOKEN_IDENTIFIER)) {
 		PARSER_NEXT;
-		strcpy(data, token->data.string);
 
 		type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
-		value = ast_value_create(type, data);
+		value = ast_value_create(type, token->data.string);
+
+
 		return value;
 	}
 	else if (match(lexer, TOKEN_STRING)) {
 		PARSER_NEXT;
-		strcpy(data, token->data.string);
 
 		type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
-		value = ast_value_create(type, data);
+		value = ast_value_create(type, token->data.string);
+
 		return value;
 	}
 	else if (match(lexer, TOKEN_NUMBER_INT)) {
 		PARSER_NEXT;
-		strcpy(data, int2string(token->data.number_int));
 
-		type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
-		value = ast_value_create(type, data);
+		type = ast_value_type_create(AST_TYPE_KIND_INT, token->location);
+		value = ast_value_create(type, NULL);
+		value->data.int_value = token->data.number_int;
+
 		return value;
 	}
 	else if (match(lexer, TOKEN_NUMBER_FLOAT)) {
 		PARSER_NEXT;
-		strcpy(data, float2string(token->data.number_float));
 
 		type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
-		value = ast_value_create(type, data);
+		value = ast_value_create(type, NULL);
+		value->data.float_value = token->data.number_float;
+
 		return value;
 	}
 	else if (match(lexer, TOKEN_BOOLEAN)) {
 		PARSER_NEXT;
-		strcpy(data, token->data.boolean ? "true" : "false");
 
 		type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
-		value = ast_value_create(type, data);
+		value = ast_value_create(type, NULL);
+		value->data.bool_value = token->data.boolean;
+
 		return value;
 	}
 	else {

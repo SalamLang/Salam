@@ -163,8 +163,11 @@ ast_value_t* ast_value_create(ast_value_type_t* type, void* value)
 
 	res->type = type;
 
-	res->data.string_value = memory_allocate(value_length * sizeof(char));
-	strcpy(res->data.string_value, value);
+	if (type->kind == AST_TYPE_KIND_STRING) {
+		size_t value_size = value_length < 1 ? 1 : value_length + 1;
+		res->data.string_value = memory_allocate(value_size);
+		memcpy(res->data.string_value, value, value_size);
+	}
 
 	res->print = cast(void (*)(void*), ast_value_print);
 	res->destroy = cast(void (*)(void*), ast_value_destroy);
@@ -258,7 +261,6 @@ ast_layout_attribute_t* ast_layout_attribute_copy(ast_layout_attribute_t* value)
 
 	return copy;
 }
-
 
 /**
  * 
@@ -795,10 +797,9 @@ void ast_block_destroy(ast_block_t* block)
 	}
 }
 
-
 /**
  * 
- * @function ast_type_name
+ * @function ast_value_type_name
  * @brief Get the name of the AST value type
  * @params {ast_value_type_t*} type - AST value type
  * @returns {char*} - Name of the AST value type
@@ -860,7 +861,7 @@ void ast_value_type_print(ast_value_type_t* type)
 {
     DEBUG_ME;
 	printf("Type:\n");
-	printf("%s\n", ast_type_name(type));
+	printf("%s\n", ast_value_type_name(type));
 }
 
 /**

@@ -151,34 +151,35 @@ ast_layout_block_t* ast_layout_block_create(ast_type_t node_type, ast_layout_nod
  * @function ast_layout_attribute_value_create
  * @brief Create a new AST node layout attribute value
  * @params {char*} value - Value of the attribute
- * @returns {ast_layout_attribute_value_t*} - Pointer to the created AST node layout attribute value
+ * @returns {ast_value_t*} - Pointer to the created AST node layout attribute value
  * 
  */
-ast_layout_attribute_value_t* ast_layout_attribute_value_create(char* value)
+ast_value_t* ast_layout_attribute_value_create(char* value)
 {
 	DEBUG_ME;
 	size_t value_length = strlen(value);
-	ast_layout_attribute_value_t* res = memory_allocate(sizeof(ast_layout_attribute_value_t));
+	ast_value_t* res = memory_allocate(sizeof(ast_value_t));
 
-	res->data = memory_allocate(value_length + 1);
+	res->string = string_create(10);
+	// res->data = memory_allocate(value_length + 1);
 	strcpy(res->data, value);
 
 	res->print = cast(void (*)(void*), ast_layout_attribute_value_print);
 	res->destroy = cast(void (*)(void*), ast_layout_attribute_value_destroy);
-	res->string = cast(char* (*)(void*), ast_layout_attribute_value_string);
+	// res->get_data = cast(char* (*)(void*), ast_layout_attribute_value_data);
 
 	return res;
 }
 
 /**
  * 
- * @function ast_layout_attribute_value_string
+ * @function ast_layout_attribute_value_data
  * @brief Get the string of the AST layout attribute value
- * @params {ast_layout_attribute_value_t*} value - AST layout attribute value
+ * @params {ast_value_t*} value - AST layout attribute value
  * @returns {char*} - String of the AST layout attribute value
  * 
  */
-char* ast_layout_attribute_value_string(ast_layout_attribute_value_t* value)
+char* ast_layout_attribute_value_data(ast_value_t* value)
 {
 	DEBUG_ME;
 	return value->data;
@@ -188,11 +189,11 @@ char* ast_layout_attribute_value_string(ast_layout_attribute_value_t* value)
  * 
  * @function ast_layout_attribute_value_destroy
  * @brief Free the AST layout attribute value
- * @params {ast_layout_attribute_value_t*} value - AST layout attribute value
+ * @params {ast_value_t*} value - AST layout attribute value
  * @returns {void}
  * 
  */
-void ast_layout_attribute_value_destroy(ast_layout_attribute_value_t* value)
+void ast_layout_attribute_value_destroy(ast_value_t* value)
 {
 	DEBUG_ME;
 	if (value != NULL) {
@@ -208,11 +209,11 @@ void ast_layout_attribute_value_destroy(ast_layout_attribute_value_t* value)
  * 
  * @function ast_layout_attribute_value_print
  * @brief Print the AST layout attribute value
- * @params {ast_layout_attribute_value_t*} value - AST layout attribute value
+ * @params {ast_value_t*} value - AST layout attribute value
  * @returns {void}
  * 
  */
-void ast_layout_attribute_value_print(ast_layout_attribute_value_t* value)
+void ast_layout_attribute_value_print(ast_value_t* value)
 {
 	DEBUG_ME;
 	printf("Value: %s\n", value->data);
@@ -224,17 +225,20 @@ void ast_layout_attribute_value_print(ast_layout_attribute_value_t* value)
  * @brief Create a new AST node layout attribute
  * @params {ast_layout_attribute_type_t} type - Type of the layout attribute
  * @params {const char*} key - Key of the attribute
- * @params {array_layout_attribute_value_t*} values - Values of the attribute
+ * @params {array_value_t*} values - Values of the attribute
+ * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @params {location_t} last_name - Last name of the attribute
  * @params {location_t} first_value - First value of the attribute
  * @returns {ast_layout_attribute_t*} - Pointer to the created AST node layout attribute
  * 
  */
-ast_layout_attribute_t* ast_layout_attribute_create(ast_layout_attribute_type_t type, char* key, array_layout_attribute_value_t* values, location_t last_name, location_t first_value)
+ast_layout_attribute_t* ast_layout_attribute_create(ast_layout_attribute_type_t type, char* key, array_value_t* values, ast_layout_node_type_t parent_node_type, location_t last_name, location_t first_value)
 {
     DEBUG_ME;
 	ast_layout_attribute_t* attribute = memory_allocate(sizeof(ast_layout_attribute_t));
 	attribute->type = type;
+
+	attribute->parent_node_type = parent_node_type;
 
 	attribute->key = strdup(key);
 	attribute->values = values;
@@ -266,7 +270,7 @@ ast_layout_attribute_t* ast_layout_attribute_create(ast_layout_attribute_type_t 
 ast_layout_attribute_t* ast_layout_attribute_copy(ast_layout_attribute_t* value)
 {
 	DEBUG_ME;
-	ast_layout_attribute_t* copy = ast_layout_attribute_create(value->type, value->key, array_layout_attribute_value_copy(value->values), value->key_location, value->value_location);
+	ast_layout_attribute_t* copy = ast_layout_attribute_create(value->type, value->key, array_value_copy(value->values), value->parent_node_type, value->key_location, value->value_location);
 	
 	copy->isStyle = value->isStyle;
 	copy->isContent = value->isContent;
@@ -2421,14 +2425,14 @@ void ast_layout_value_destroy(ast_layout_value_t* value)
  * 
  * @function ast_layout_attribute_value_copy
  * @brief Copy the AST layout attribute value
- * @params {ast_layout_attribute_value_t*} value - AST Layout Attribute Value
- * @returns {ast_layout_attribute_value_t*} - Copied AST Layout Attribute Value
+ * @params {ast_value_t*} value - AST Layout Attribute Value
+ * @returns {ast_value_t*} - Copied AST Layout Attribute Value
  * 
  */
-ast_layout_attribute_value_t* ast_layout_attribute_value_copy(ast_layout_attribute_value_t* value)
+ast_value_t* ast_layout_attribute_value_copy(ast_value_t* value)
 {
 	DEBUG_ME;
-	ast_layout_attribute_value_t* copy = ast_layout_attribute_value_create(value->data);
+	ast_value_t* copy = ast_layout_attribute_value_create(value->data);
 
 	return copy;
 }

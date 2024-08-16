@@ -53,13 +53,12 @@ bool is_attribute_type_in_array(ast_layout_attribute_type_t type, ast_layout_att
  * 
  * @function token_belongs_to_ast_layout_node
  * @brief Check if the token belongs to the AST layout node
- * @params {ast_layout_block_t*} block - AST layout block node
  * @params {ast_layout_attribute_type_t} attribute_key_type - Attribute key type
  * @params {ast_layout_attribute_t*} attribute - AST layout attribute
  * @returns {bool} - True if the token belongs to the AST layout node, false otherwise
  * 
  */
-bool token_belongs_to_ast_layout_node(ast_layout_block_t* block, ast_layout_attribute_type_t attribute_key_type, ast_layout_attribute_t* attribute);
+bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_type, ast_layout_attribute_t* attribute);
 
 /**
  * 
@@ -108,25 +107,20 @@ bool is_style_attribute(ast_layout_attribute_type_t type);
  * @params {hashmap_t*} styles - Styles
  * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
- * @params {char*} values_str - Values string
- * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @returns {bool} - True if the style value is valid, false otherwise
  * 
  */
-bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type);
+bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute);
 
 /**
  * 
  * @function validate_style_value_size
  * @brief Validate the style value size
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
- * @params {char*} values_str - Values string
- * @params {char**} output_values_str - Output values string
- * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @returns {bool} - True if the style value is valid, false otherwise
  * 
  */
-bool validate_style_value_size(ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type);
+bool validate_style_value_size(ast_layout_attribute_t* attribute);
 
 /**
  * 
@@ -180,16 +174,6 @@ char* normalise_css_size(char* attribute_value);
 
 /**
  * 
- * @function attribute_css_multiple_size_value
- * @brief Convert the attribute values to a CSS size value
- * @params {array_t*} attribute_values - Attribute values
- * @returns {char*} - CSS size value
- * 
- */
-char* attribute_css_multiple_size_value(array_t* attribute_values);
-
-/**
- * 
  * @function has_css_size_prefix
  * @brief Check if the CSS value has a size prefix
  * @params {char*} css_value - CSS value
@@ -214,23 +198,19 @@ char* attribute_css_size_value(char* attribute_value);
  * @function validate_style_value_sizes
  * @brief Validate the style value sizes
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
- * @params {char*} values_str - Values string
- * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @returns {bool} - True if the style value is valid, false otherwise
  * 
  */
-bool validate_style_value_sizes(ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type);
+bool validate_style_value_sizes(ast_layout_attribute_t* attribute);
 
 /**
  * 
  * @function validate_style_value_color
  * @brief Validate the style value color
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
- * @params {char*} values_str - Values string
- * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @returns {bool} - True if the style value is valid, false otherwise
  * 
  */
-bool validate_style_value_color(ast_layout_attribute_t* attribute, char* values_str, ast_layout_node_type_t parent_node_type);
+bool validate_style_value_color(ast_layout_attribute_t* attribute);
 
 #endif

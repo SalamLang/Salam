@@ -630,27 +630,6 @@ void array_if_print(array_if_t* array)
 
 /**
  * 
- * @function array_value_print
- * @brief Print the value array
- * @params {array_value_t*} array - Value array
- * @returns {void}
- * 
- */
-void array_value_print(array_value_t* array)
-{
-    DEBUG_ME;
-    printf("Value array: %zu\n", array->length);
-
-    for (size_t i = 0; i < array->length; i++) {
-        printf("\t");
-        ast_value_t* value = array_get(array, i);
-
-        value->print(value);
-    }
-}
-
-/**
- * 
  * @function array_value_destroy
  * @brief Free the value array memory
  * @params {array_value_t*} array - Value array
@@ -760,39 +739,20 @@ array_value_t* array_value_create(size_t capacity)
 
 /**
  * 
- * @function array_layout_attribute_value_create
- * @brief Create a new attribute value array
- * @params {size_t} capacity - Initial capacity of the array
- * @returns {array_layout_attribute_value_t*} - Pointer to the created array
- * 
- */
-array_layout_attribute_value_t* array_layout_attribute_value_create(size_t capacity)
-{
-    DEBUG_ME;
-    array_layout_attribute_value_t* array = array_create(sizeof(ast_layout_attribute_value_t*), capacity);
-
-    array->print = cast(void (*)(void*), array_layout_attribute_value_print);
-    array->destroy = cast(void (*)(void*), array_layout_attribute_value_destroy);
-
-    return array;
-}
-
-/**
- * 
- * @function array_layout_attribute_value_print
- * @brief Print the attribute value array
- * @params {array_layout_attribute_value_t*} array - Attribute value array
+ * @function array_value_print
+ * @brief Print the value array
+ * @params {array_value_t*} array - Value array
  * @returns {void}
  * 
  */
-void array_layout_attribute_value_print(array_layout_attribute_value_t* array)
+void array_value_print(array_value_t* array)
 {
     DEBUG_ME;
-    printf("Attribute value array: %zu\n", array->length);
+    printf("Value array: %zu\n", array->length);
 
     for (size_t i = 0; i < array->length; i++) {
         printf("\t");
-        ast_layout_attribute_value_t* value = array_get(array, i);
+        ast_value_t* value = array_get(array, i);
         
         if (value == NULL) {
             printf("NULL\n");
@@ -806,81 +766,13 @@ void array_layout_attribute_value_print(array_layout_attribute_value_t* array)
 
 /**
  * 
- * @function array_layout_attribute_value_destroy
- * @brief Free the attribute value array memory
- * @params {array_layout_attribute_value_t*} array - Attribute value array
- * @returns {void}
- * 
- */
-void array_layout_attribute_value_destroy(array_layout_attribute_value_t* array)
-{
-    DEBUG_ME;
-    if (array != NULL) {
-        if (array->data != NULL) {
-            for (size_t i = 0; i < array->length; i++) {
-                ast_layout_attribute_value_t* value = array_get(array, i);
-
-                if (value != NULL) {
-                    value->destroy(value);
-                }
-            }
-
-            memory_destroy(array->data);
-        }
-
-        array->capacity = 0;
-        array->length = 0;
-        array->element_capacity = 0;
-
-        memory_destroy(array);
-    }
-}
-
-/**
- * 
- * @function array_layout_attribute_value_string
- * @brief Convert the attribute value array to a string
- * @params {array_layout_attribute_value_t*} array - Array
- * @params {char*} seperator - Separator
+ * @function array_value_first_string
+ * @brief Get the first string from the value array
+ * @params {array_value_t*} array - Array
  * @returns {char*} - String
  * 
  */
-char* array_layout_attribute_value_string(array_layout_attribute_value_t* array, char* seperator)
-{
-    DEBUG_ME;
-    if (array == NULL || array->length == 0) {
-        printf("Array is empty!!!\n");
-        return strdup("");
-    }
-
-    string_t* str = string_create(16);
-    for (size_t i = 0; i < array->length; i++) {
-        ast_layout_attribute_value_t* value = array_get(array, i);
-
-        if (value != NULL && value->data != NULL) { // TODO
-            string_append_str(str, value->data); // TODO
-            
-            if (seperator != NULL && i < array->length - 1) {
-                string_append_str(str, seperator);
-            }
-        }
-    }
-
-    char* buffer = strdup(str->data);
-    string_destroy(str);
-
-    return buffer;
-}
-
-/**
- * 
- * @function array_layout_attribute_value_first_string
- * @brief Get the first string from the attribute value array
- * @params {array_layout_attribute_value_t*} array - Array
- * @returns {char*} - String
- * 
- */
-char* array_layout_attribute_value_first_string(array_layout_attribute_value_t* array)
+char* array_value_first_string(array_value_t* array)
 {
     DEBUG_ME;
     if (array == NULL || array->length == 0) {
@@ -889,10 +781,10 @@ char* array_layout_attribute_value_first_string(array_layout_attribute_value_t* 
 
     string_t* str = string_create(16);
     for (size_t i = 0; i < array->length; i++) {
-        ast_layout_attribute_value_t* value = array_get(array, i);
+        ast_value_t* value = array_get(array, i);
 
         if (value != NULL) {
-            string_append_str(str, value->data); // TODO
+            string_append_str(str, value->get_data(value));
             break;
         }
     }
@@ -905,18 +797,18 @@ char* array_layout_attribute_value_first_string(array_layout_attribute_value_t* 
 
 /**
  * 
- * @function array_layout_attribute_value_copy
+ * @function array_value_copy
  * @brief Copy the attribute value array
- * @params {array_layout_attribute_value_t*} values - Array
- * @returns {array_layout_attribute_value_t*} - Copied array
+ * @params {array_value_t*} values - Array
+ * @returns {array_value_t*} - Copied array
  * 
  */
-array_layout_attribute_value_t* array_layout_attribute_value_copy(array_layout_attribute_value_t* values)
+array_value_t* array_value_copy(array_value_t* values)
 {
-    array_layout_attribute_value_t* copy = array_layout_attribute_value_create(values->length);
+    array_value_t* copy = array_value_create(values->length);
 
     for (size_t i = 0; i < values->length; i++) {
-        ast_layout_attribute_value_t* value = values->data[i];
+        ast_value_t* value = values->data[i];
 
         array_push(copy, ast_layout_attribute_value_copy(value));
     }

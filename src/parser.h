@@ -230,10 +230,10 @@ array_value_t* parser_parse_expressions_maybe(lexer_t* lexer);
  * @function parser_parse_layout_value
  * @brief Parse the layout value
  * @params {lexer_t*} lexer - Lexer
- * @returns {ast_layout_attribute_value_t*} - AST Layout attribute value
+ * @returns {ast_value_t*} - AST Layout attribute value
  * 
  */
-ast_layout_attribute_value_t* parser_parse_layout_value(lexer_t* lexer);
+ast_value_t* parser_parse_layout_value(lexer_t* lexer);
 
 /**
  * 

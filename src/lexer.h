@@ -18,16 +18,6 @@ typedef struct {
     size_t end_column;
 } location_t;
 
-typedef struct {
-    token_type_t token;
-    const char *name;
-} token_name_t;
-
-typedef struct {
-    const char* name;
-    token_type_t type;
-} keyword_t;
-
 #define _NUM_ARGS(X100, X99, X98, X97, X96, X95, X94, X93, X92, X91, \
                   X90, X89, X88, X87, X86, X85, X84, X83, X82, X81, \
                   X80, X79, X78, X77, X76, X75, X74, X73, X72, X71, \
@@ -50,27 +40,54 @@ typedef struct {
                                 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, \
                                 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
 
-#define MY_MACRO(...) MY_MACRO_CHOOSER(NUM_ARGS(__VA_ARGS__))(__VA_ARGS__)
+#define ADD_TOKEN(...) ADD_TOKEN_CHOOSER(NUM_ARGS(__VA_ARGS__))(__VA_ARGS__)
 
-#define MY_MACRO_CHOOSER(N) MY_MACRO_##N
-
-#define MY_MACRO_3(TOKEN_TYPE, TOKEN_CHAR) TOKEN_TYPE = \'TOKEN_CHAR\'
-
-#define MY_MACRO_4(param1, param2) printf("param1: %s, param2: %s\n", param1, param2)
-
-#define ADD_KEYWORD(token, name, value) {token, name, value}
-
-#define ADD_TOKEN(token, name, input) {token, name, input}
+#define ADD_TOKEN_CHOOSER(N) ADD_TOKEN_##N
 
 typedef enum {
+    #undef ADD_TOKEN
+    #undef ADD_CHAR_TOKEN
+    #undef ADD_KEYWORD
+    #undef ADD_KEYWORD_HIDE
+    
+    #define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE) TOKEN_TYPE,
+    #define ADD_CHAR_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR) TOKEN_TYPE,
+    #define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) TOKEN_TYPE,
+    #define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) 
+    #include "token.h"
 } token_type_t;
 
-token_name_t token_names[] = {
+typedef struct {
+    token_type_t token;
+    const char *name; // upper case
+    const char *keyword; // end-user input
+    int code; // -1 for non-char tokens
+} token_name_t;
 
-};
+typedef struct {
+    size_t length;
+    token_type_t type;
+    const char* name; // upper case
+    const char* keyword; // end-user input
+} keyword_t;
 
-static const keyword_t keywords[] = {
-};
+/**
+ * 
+ * @variable token_names
+ * @brief Token names
+ * @type {token_name_t[]}
+ * 
+ */
+extern token_name_t token_names[];
+
+/**
+ * 
+ * @variable keywords
+ * @brief Keywords
+ * @type {keyword_t[]}
+ * 
+ */
+extern const keyword_t keywords[];
 
 struct token_t;
 
@@ -308,16 +325,6 @@ char* location_stringify(location_t location);
  * 
  */
 char* token_stringify(token_t* token);
-
-/**
- * 
- * @function location_print
- * @brief Print a location
- * @params {location_t} location - Location
- * @returns {void}
- * 
- */
-void location_print(location_t location);
 
 /**
  * 

@@ -90,14 +90,14 @@ void hashmap_put_custom(hashmap_t* map, const char* key, void* value, void (*fre
 			return;
 		}
 
-		entry = entry->next;
+		entry = cast(hashmap_entry_t*, entry->next);
 	}
 
 	hashmap_entry_t* new_entry = memory_allocate(sizeof(hashmap_entry_t));
 
 	new_entry->key = strdup(key);
 	new_entry->value = value;
-	new_entry->next = map->data[index];
+	new_entry->next = cast(struct hashmap_entry_t*, map->data[index]);
 
 	map->data[index] = new_entry;
 
@@ -111,10 +111,10 @@ void hashmap_put_custom(hashmap_t* map, const char* key, void* value, void (*fre
 			hashmap_entry_t* entry = map->data[i];
 
 			while (entry) {
-				hashmap_entry_t* next = entry->next;
+				hashmap_entry_t* next = cast(hashmap_entry_t*, entry->next);
 				unsigned long new_index = hash_function(entry->key) % new_length;
 
-				entry->next = new_data[new_index];
+				entry->next = cast(struct hashmap_entry_t*, new_data[new_index]);
 				new_data[new_index] = entry;
 				entry = next;
 			}
@@ -148,7 +148,7 @@ void* hashmap_get(hashmap_t* map, const char* key)
 	while (entry != NULL) {
 		if (strcmp(entry->key, key) == 0) return entry->value;
 
-		entry = entry->next;
+		entry = cast(hashmap_entry_t*, entry->next);
 	}
 
 	return NULL;
@@ -173,7 +173,7 @@ bool hashmap_has(hashmap_t* map, const char* key)
 	while (entry != NULL) {
 		if (strcmp(entry->key, key) == 0) return true;
 
-		entry = entry->next;
+		entry = cast(hashmap_entry_t*, entry->next);
 	}
 
 	return false;
@@ -198,7 +198,7 @@ void* hashmap_remove(hashmap_t* map, const char* key)
 
 	while (entry != NULL) {
 		if (strcmp(entry->key, key) == 0) {
-			if (prev == NULL) map->data[index] = entry->next;
+			if (prev == NULL) map->data[index] = cast(hashmap_entry_t*, entry->next);
 			else prev->next = entry->next;
 
 			void* value = entry->value;
@@ -219,7 +219,7 @@ void* hashmap_remove(hashmap_t* map, const char* key)
 		}
 
 		prev = entry;
-		entry = entry->next;
+		entry = cast(hashmap_entry_t*, entry->next);
 	}
 
 	return NULL;
@@ -258,7 +258,7 @@ void hashmap_destroy_custom(hashmap_t* map, void (*free_fn)(void*))
 				hashmap_entry_t* entry = map->data[i];
 
 				while (entry) {
-					hashmap_entry_t* next = entry->next;
+					hashmap_entry_t* next = cast(hashmap_entry_t*, entry->next);
 
 					memory_destroy(entry->key);
 
@@ -299,7 +299,7 @@ void hashmap_print(hashmap_t* map)
 
 		while (entry) {
 			printf("[%zu] Key: %s, Value: %p\n", i, entry->key, entry->value);
-			entry = entry->next;
+			entry = cast(hashmap_entry_t*, entry->next);
 		}
 	}
 }
@@ -330,7 +330,7 @@ void hashmap_print_custom(hashmap_t* map, void (*print_fn)(void*))
 			print_fn(entry->value);
 			printf("\n");
 
-			entry = entry->next;
+			entry = cast(hashmap_entry_t*, entry->next);
 		}
 	}
 }
@@ -362,7 +362,7 @@ void hashmap_print_layout_attribute(hashmap_attribute_t* map)
 			if (layout_attribute != NULL) layout_attribute->print(layout_attribute);
 			else printf("NULL\n");
 
-			entry = entry->next;
+			entry = cast(hashmap_entry_t*, entry->next);
 		}
 	}
 }
@@ -384,7 +384,7 @@ void hashmap_destroy_layout_attribute(hashmap_attribute_t* map)
 				hashmap_entry_t* entry = map->data[i];
 
 				while (entry) {
-					hashmap_entry_t* next = entry->next;
+					hashmap_entry_t* next = cast(hashmap_entry_t*, entry->next);
 
 					memory_destroy(entry->key);
 

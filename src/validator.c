@@ -257,13 +257,13 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 	}
 
 	// LAYOUT
-	if (attribute->parent_node_type == AST_LAYOUT_NODE_TYPE_NONE) {
+	if (attribute->parent_node_type == AST_LAYOUT_TYPE_NONE) {
 		if (is_attribute_type_in_array(attribute_key_type, valid_layout_attributes, valid_layout_attributes_length)) {
 			return true;
 		}
 	}
 	// IMG
-	else if (attribute->parent_node_type == AST_LAYOUT_NODE_TYPE_IMG) {
+	else if (attribute->parent_node_type == AST_LAYOUT_TYPE_IMG) {
 		ast_layout_attribute_type_t valid_attributes[] = {
 			AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
 		};
@@ -290,10 +290,10 @@ bool is_layout_node_a_single_tag(ast_layout_node_type_t type)
 {
 	DEBUG_ME;
 	switch (type) {
-		case AST_LAYOUT_NODE_TYPE_PARAGRAPH_RAW:
-		case AST_LAYOUT_NODE_TYPE_INPUT:
-		case AST_LAYOUT_NODE_TYPE_BR:
-		case AST_LAYOUT_NODE_TYPE_HR:
+		case AST_LAYOUT_TYPE_PARAGRAPH_RAW:
+		case AST_LAYOUT_TYPE_INPUT:
+		case AST_LAYOUT_TYPE_BR:
+		case AST_LAYOUT_TYPE_HR:
 			return true;
 
 		default:

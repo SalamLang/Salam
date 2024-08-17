@@ -9,10 +9,7 @@
 #include "file.h"
 #include "ast.h"
 #include "validator.h"
-
-typedef struct generator_identifier_t {
-	char *current;
-} generator_identifier_t;
+#include "generator_identifier.h"
 
 typedef struct generator_t {
 	ast_t* ast;
@@ -162,33 +159,6 @@ void generator_code_head(ast_layout_block_t* layout_block, string_t* head);
  * 
  */
 void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head);
-
-/**
- * 
- * @function generator_identifier_init
- * @params {generator_identifier_t*} gen - Generator Identifier
- * @returns {void}
- * 
- */
-void generator_identifier_init(generator_identifier_t* gen);
-
-/**
- * 
- * @function generator_identifier_get
- * @params {generator_identifier_t*} gen - Generator Identifier
- * @returns {char*} identifier - Identifier
- * 
- */
-char* generator_identifier_get(generator_identifier_t* gen);
-
-/**
- * 
- * @function generator_identifier_destroy
- * @params {generator_identifier_t*} gen - Generator Identifier
- * @returns {void}
- * 
- */
-void generator_identifier_destroy(generator_identifier_t* gen);
 
 /**
  * 

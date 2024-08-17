@@ -15,6 +15,7 @@ char* file_reads(const char* path, size_t* size)
     FILE* file = fopen(path, "r");
     if (file == NULL) {
         panic("Failed to open file");
+        return false;
     }
 
     fseek(file, 0, SEEK_END);
@@ -48,6 +49,7 @@ bool file_writes(const char* path, const char* content)
     FILE* file = fopen(path, "w");
     if (file == NULL) {
         panic("Failed to write file");
+        return false;
     }
 
     size_t size = strlen(content);
@@ -332,6 +334,7 @@ bool file_appends(const char* path, const char* content)
     FILE* file = fopen(path, "a");
     if (file == NULL) {
         panic("Failed to append file");
+        return false;
     }
 
     size_t size = strlen(content);

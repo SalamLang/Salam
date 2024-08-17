@@ -4,8 +4,8 @@ typedef enum {
 } ast_layout_attribute_type_t;
 
 typedef enum {
-    AST_LAYOUT_NODE_TYPE_TAG,
-    AST_LAYOUT_NODE_TYPE_ATTRIBUTE
+    AST_LAYOUT_TYPE_TAG,
+    AST_LAYOUT_TYPE_ATTRIBUTE
 } ast_layout_node_type_t;
 
 typedef struct {

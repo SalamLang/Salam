@@ -108,16 +108,13 @@ char* normalise_css_size(char* attribute_value)
 {
 	DEBUG_ME;
 	if (!string_is_number(attribute_value) == true) {
-		printf("normalise_css_size - value is not number\n");
 		return strdup(attribute_value);
 	}
 
-	printf("1\n");
 	size_t value_length = strlen(attribute_value) + 3;
-	printf("size is %zu\n", value_length);
-	printf("2\n");
 
 	char* res = memory_allocate(value_length * sizeof(char));
+
 	snprintf(res, value_length, "%spx", attribute_value);
 
 	return res;
@@ -501,48 +498,35 @@ bool validate_style_value_size(hashmap_t* styles, hashmap_t* new_styles, ast_lay
 
 	ast_value_t* first = attribute->values->data[0];
 	if (first->type->kind == AST_TYPE_KIND_INT) {
-		printf("size value is int\n");
-
 		attribute->final_value = memory_allocate(20 * sizeof(char));
 		snprintf(attribute->final_value, 20, "%dpx", first->data.int_value);
 
 		return true;
 	}
 	else if (first->type->kind == AST_TYPE_KIND_FLOAT) {
-		printf("size value is float\n");
-
 		attribute->final_value = memory_allocate(20 * sizeof(char));
 		snprintf(attribute->final_value, 20, "%fpx", first->data.float_value);
 
 		return true;
 	}
 	else if (first->type->kind == AST_TYPE_KIND_STRING) {
-		printf("size value is string\n");
-
-		printf("first value is %s\n", first->data.string_value);
 		char* buffer = normalise_css_size(first->data.string_value);
-		printf("buffer value is %s\n", buffer);
-		printf("buffer value is %s\n", buffer);
 
 		char* out_value;
 		if (!has_css_size_prefix(buffer, &out_value)) {
-			printf("xx\n");
 			if (out_value != NULL) memory_destroy(out_value);
+
 			memory_destroy(buffer);
 
 			return false;
 		}
 
-		printf("output size is %s\n", out_value);
-
 		attribute->final_value = strdup(out_value);
 		memory_destroy(buffer);
-		if (out_value != NULL) memory_destroy(out_value);
+		memory_destroy(out_value);
 
 		return true;
 	}
-
-	printf("hhh\n");
 
 	return false;
 }

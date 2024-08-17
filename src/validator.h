@@ -11,6 +11,11 @@
 #include "parser.h"
 #include "generator.h"
 
+typedef struct {
+    const char* input;
+    const char* output;
+} ast_layout_attribute_style_pair_t;
+
 /**
  * 
  * @var valid_layout_attributes
@@ -114,16 +119,6 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 
 /**
  * 
- * @function validate_style_value_size
- * @brief Validate the style value size
- * @params {ast_layout_attribute_t*} attribute - Layout attribute
- * @returns {bool} - True if the style value is valid, false otherwise
- * 
- */
-bool validate_style_value_size(ast_layout_attribute_t* attribute);
-
-/**
- * 
  * @function normalise_css_size
  * @brief Normalise the CSS size
  * @params {char*} attribute_value - Attribute value
@@ -157,20 +152,36 @@ char* attribute_css_size_value(char* attribute_value);
  * 
  * @function validate_style_value_sizes
  * @brief Validate the style value sizes
+ * @params {hashmap_t*} styles - Styles
+ * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
  * @returns {bool} - True if the style value is valid, false otherwise
  * 
  */
-bool validate_style_value_sizes(ast_layout_attribute_t* attribute);
+bool validate_style_value_sizes(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute);
 
 /**
  * 
  * @function validate_style_value_color
  * @brief Validate the style value color
+ * @params {hashmap_t*} styles - Styles
+ * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
  * @returns {bool} - True if the style value is valid, false otherwise
  * 
  */
-bool validate_style_value_color(ast_layout_attribute_t* attribute);
+bool validate_style_value_color3(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, ast_layout_attribute_style_pair_t* ALLOWED_VALUES);
+
+/**
+ * 
+ * @function validate_style_value_size
+ * @brief Validate the style value size
+ * @params {hashmap_t*} styles - Styles
+ * @params {hashmap_t*} new_styles - New styles
+ * @params {ast_layout_attribute_t*} attribute - Layout attribute
+ * @returns {bool} - True if the style value is valid, false otherwise
+ * 
+ */
+// bool validate_style_value_size(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, int FILTER, void* ALLOWED_VALUES, void* SUBTAGS);
 
 #endif

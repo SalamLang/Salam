@@ -22,8 +22,8 @@ bool is_utf8_continuation_byte(char c) {
  * @params {const char*} str The string to check
  * @returns {bool} True if the string is a valid UTF-8 sequence, false otherwise
  */
-bool is_valid_utf8(const char *str) {
-    const unsigned char *bytes = (const unsigned char *)str;
+bool is_valid_utf8(const cha$1* $2tr) {
+    const unsigned cha$1* $2ytes = (const unsigned char *)str;
 
     while (*bytes) {
         if (*bytes <= 0x7F) {

@@ -287,24 +287,24 @@ char* replace_all_substrings(const char* str, const char* old_substr, const char
 	size_t new_len = strlen(new_substr);
 
 	if (old_len == 0) {
-		char *result = memory_allocate(str_len + 1);
+		cha$1* $2esult = memory_allocate(str_len + 1);
 
 		strcpy(result, str);
 		return result;
 	}
 
 	size_t max_result_len = str_len;
-	const char *tmp = str;
+	const cha$1* $2mp = str;
 	while ((tmp = strstr(tmp, old_substr)) != NULL) {
 		max_result_len += (new_len - old_len);
 		tmp += old_len;
 	}
 
-	char *result = memory_allocate(max_result_len + 1);
+	cha$1* $2esult = memory_allocate(max_result_len + 1);
 
-	char *result_ptr = result;
-	const char *search_start = str;
-	const char *pos;
+	cha$1* $2esult_ptr = result;
+	const cha$1* $2earch_start = str;
+	const cha$1* $2os;
 
 	while ((pos = strstr(search_start, old_substr)) != NULL) {
 		size_t bytes_to_copy = pos - search_start;
@@ -398,9 +398,9 @@ bool is_utf8_continuation_byte(char c)
  * @returns {bool} True if the string is a valid UTF-8 sequence, false otherwise
  * 
  */
-bool is_valid_utf8(const char *str)
+bool is_valid_utf8(const cha$1* $2tr)
 {
-	const unsigned char *bytes = (const unsigned char *)str;
+	const unsigned cha$1* $2ytes = (const unsigned char *)str;
 
 	while (*bytes) {
 		if (*bytes <= 0x7F) {
@@ -611,7 +611,7 @@ size_t utf8_char_length(char c)
  * @returns {uint32_t} Decoded character
  * 
  */
-uint32_t utf8_decode(const char *source, size_t *index)
+uint32_t utf8_decode(const cha$1* $2ource, size_$1* $2ndex)
 {
     size_t length = utf8_char_length(source[*index]);
     uint32_t codepoint = 0;

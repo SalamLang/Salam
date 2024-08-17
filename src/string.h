@@ -212,7 +212,7 @@ bool is_utf8_continuation_byte(char c);
  * @returns {bool} True if the string is a valid UTF-8 sequence, false otherwise
  * 
  */
-bool is_valid_utf8(const char *str);
+bool is_valid_utf8(const cha$1* $2tr);
 
 /**
  * 
@@ -313,7 +313,7 @@ size_t utf8_char_length(char c);
  * @returns {uint32_t} Decoded character
  * 
  */
-uint32_t utf8_decode(const char *source, size_t *index);
+uint32_t utf8_decode(const cha$1* $2ource, size_$1* $2ndex);
 
 /**
  * 

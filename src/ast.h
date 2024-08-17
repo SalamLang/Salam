@@ -390,7 +390,7 @@ typedef struct ast_function_parameter_t {
     void (*print)(void* node);
 } ast_function_parameter_t;
 
-typedef union {
+typedef union ast_union_t {
     ast_block_t* block;
     ast_import_t* import;
     ast_function_t* function;
@@ -401,7 +401,7 @@ typedef union {
     ast_layout_t* layout;
 } ast_union_t;
 
-typedef struct ast_t {
+typedef struct ast_node_t {
     ast_type_t type;
     location_t location;
     ast_union_t data;
@@ -410,7 +410,7 @@ typedef struct ast_t {
     void (*print)(void* node);
 } ast_node_t;
 
-typedef struct {
+typedef struct ast_t {
     ast_layout_t* layout;
     array_function_t* functions;
 

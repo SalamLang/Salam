@@ -124,7 +124,7 @@ typedef union ast_union_t {
     ast_return_t* returns;
     ast_print_t* print;
 
-    ast_layout_t* layout;
+    struct ast_layout_t* layout;
 } ast_union_t;
 
 typedef struct ast_node_t {
@@ -137,7 +137,7 @@ typedef struct ast_node_t {
 } ast_node_t;
 
 typedef struct ast_t {
-    ast_layout_t* layout;
+    struct ast_layout_t* layout;
     array_function_t* functions;
 
     void (*destroy)(void* node);

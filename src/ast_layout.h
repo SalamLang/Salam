@@ -14,9 +14,13 @@ typedef enum {
 
 typedef enum {
     #undef ADD_LAYOUT_ATTRIBUTE_TYPE
-    #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER) TYPE,
+    #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
+    #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) TYPE,
+    #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) TYPE,
 
     #include "ast_layout_attribute_type.h"
+    
+    #include "ast_layout_attribute_style_type.h"
 } ast_layout_attribute_type_t;
 
 typedef struct ast_layout_block_t {
@@ -229,16 +233,6 @@ char* ast_layout_node_type_to_name(ast_layout_node_type_t type);
 
 /**
  * 
- * @function name_to_ast_layout_node_type
- * @brief Convert name to AST layout node type
- * @params {char*} name - Name
- * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
- * 
- */
-ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name);
-
-/**
- * 
  * @function token_to_ast_layout_attribute_type
  * @brief Convert token to AST layout attribute type
  * @params {char*} name - Name
@@ -268,5 +262,25 @@ char* ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type);
  * 
  */
 ast_layout_attribute_t* ast_layout_attribute_copy(ast_layout_attribute_t* value);
+
+/**
+ * 
+ * @function name_to_ast_layout_node_type
+ * @brief Convert attribute name to AST layout node type
+ * @params {char*} name - Name
+ * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
+ * 
+ */
+ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name);
+
+/**
+ * 
+ * @function name_to_ast_layout_attribute_style_type
+ * @brief Convert style attribute name to AST layout node type
+ * @params {char*} name - Name
+ * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
+ * 
+ */
+ast_layout_attribute_type_t name_to_ast_layout_attribute_style_type(char* name);
 
 #endif

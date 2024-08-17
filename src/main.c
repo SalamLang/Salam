@@ -37,34 +37,34 @@ void doargs(int argc, char** argv)
 
 	lexer_save(lexer, "tokens.txt");
 
-	// ast_t* ast = parser_parse(lexer);
+	ast_t* ast = parser_parse(lexer);
 	
-	// ast_debug(ast);
+	ast_debug(ast);
 
-	// printf("end ast debug\n");
+	printf("end ast debug\n");
 
-	// generator_t* generator = generator_create(ast);
+	generator_t* generator = generator_create(ast);
 
-	// printf("generate code\n");
+	printf("generate code\n");
 
-	// generator_code(generator);
+	generator_code(generator);
 
-	// printf("generate debug\n");
+	printf("generate debug\n");
 
-	// generator_debug(generator);
+	generator_debug(generator);
 
-	// printf("generate save\n");
+	printf("generate save\n");
 
-	// generator_save(generator, "index.html", "style.css", "script.js");
+	generator_save(generator, "../out/index.html", "../out/style.css", "../out/script.js");
 
-	// printf("generate destroy\n");
-	// generator_destroy(generator);
+	printf("generate destroy\n");
+	generator_destroy(generator);
 
-	// printf("ast destroy\n");
+	printf("ast destroy\n");
 
-	// ast_destroy(ast);
+	ast_destroy(ast);
 
-	// printf("end ast destroy\n");
+	printf("end ast destroy\n");
 
 	lexer_destroy(lexer);
 

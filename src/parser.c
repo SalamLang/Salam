@@ -46,7 +46,7 @@ bool is_close_block_token(token_t* token)
  */
 void expect_open_block(lexer_t* lexer)
 {
-	expect(lexer, TOKEN_LEFT_BRACE);
+	expect(lexer, TOKEN_TYPE_OPEN_BLOCK);
 }
 
 /**
@@ -58,7 +58,7 @@ void expect_open_block(lexer_t* lexer)
  */
 void expect_close_block(lexer_t* lexer)
 {
-	expect(lexer, TOKEN_RIGHT_BRACE);
+	expect(lexer, TOKEN_TYPE_CLOSE_BLOCK);
 }
 
 /**

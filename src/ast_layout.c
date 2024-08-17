@@ -582,11 +582,14 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_style_type(char* name)
 
     #undef ADD_LAYOUT_ATTRIBUTE_TYPE
     #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
+    #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
+
 	#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) 
 	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
 
 	if (false) {}
-	#include "ast_layout_attribute_type.h"
+	#include "ast_layout_attribute_style_type.h"
 
 	return type;
 }
@@ -626,10 +629,17 @@ ast_layout_attribute_type_t token_to_ast_layout_attribute_type(char* name, token
 char* ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type)
 {
     DEBUG_ME;
+	switch (type) {
 		#undef ADD_LAYOUT_ATTRIBUTE_TYPE
-		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER) case TYPE: return NAME_LOWER;
+		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
+		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
+
+		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) case TYPE: return NAME_LOWER;
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) case TYPE: return NAME_LOWER;
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) 
 
 		#include "ast_layout_attribute_type.h"
+		#include "ast_layout_attribute_style_type.h"
 	}
 
 	return "error???";

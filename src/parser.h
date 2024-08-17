@@ -4,7 +4,7 @@
 #include "base.h"
 #include "ast.h"
 #include "lexer.h"
-// #include "validator.h"
+#include "validator.h"
 
 /**
  * 

@@ -105,10 +105,9 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
  * @params {hashmap_t*} styles - Styles
  * @params {hashmap_t*} new_styles - New Styles
  * @params {ast_layout_attribute_t*} attribute - Layout Attribute
- * @params {ast_layout_node_type_t} parent_node_type - Parent Node Type
  * @returns {void}
  * 
  */
-void generator_code_layout_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, ast_layout_node_type_t parent_node_type);
+void generator_code_layout_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute);
 
 #endif

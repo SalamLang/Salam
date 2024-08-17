@@ -400,12 +400,12 @@ string_t* generator_code_layout_style(hashmap_attribute_t* styles, ast_layout_bl
 			while (entry) {
 				ast_layout_attribute_t* attribute = entry->value;
 				
-				generator_code_layout_style_value(block->styles, block->new_styles, attribute, block->parent_node_type);
+				generator_code_layout_style_value(block->styles, block->new_styles, attribute);
 
 				if (attribute->isStyle == false || attribute->ignoreMe == true) {}
 				else {
 					if (attribute->final_value == NULL) {
-						error_generator(2, "Someting went wrong with the style value for '%s' attribute in '%s' element!", attribute->final_key, generator_code_layout_node_type(block->parent_node_type));
+						error_generator(2, "Someting went wrong with the style value for '%s' attribute in '%s' element!", attribute->final_key, ast_layout_node_type_to_enduser_name(block->parent_node_type));
 					}
 
 					if (*css_attributes_length != 0) string_append_char(code, ';');
@@ -544,18 +544,18 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
  * @params {hashmap_t*} styles - Styles
  * @params {hashmap_t*} new_styles - New Styles
  * @params {ast_layout_attribute_t*} attribute - Layout Attribute
- * @params {ast_layout_node_type_t} parent_node_type - Parent Node Type
  * @returns {void}
  * 
  */
-void generator_code_layout_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, ast_layout_node_type_t parent_node_type)
+void generator_code_layout_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute)
 {
 	DEBUG_ME;
 	bool isValid = validate_style_value(styles, new_styles, attribute);
 	
 	// Invalid value for '...' attribute in '...' element in case if not stopped by the condition
 	if (isValid == false) {
-		error_generator(2, "Invalid value for '%s' attribute in '%s' element at line %zu column %zu!", attribute->key, generator_code_layout_node_type(parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
+		printf("%d\n", attribute->parent_node_type);
+		error_generator(2, "Invalid value for '%s' attribute in '%s' element at line %zu column %zu!", attribute->key, ast_layout_node_type_to_enduser_name(attribute->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
 		
 		return;
 	}
@@ -583,7 +583,7 @@ char* generator_code_layout_style_name(ast_layout_attribute_type_t type)
 	switch (type) {
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
-		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) case TYPE: return GENERATED_NAME;
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) case TYPE: return GENERATED_NAME;
 		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) 
 
 	    #include "ast_layout_attribute_style_type.h"

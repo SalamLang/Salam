@@ -94,5 +94,5 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DIV, "DIV", "div", "div", "div")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LINK, "LINK", "link", "a", "a")
 
 // Utility Elements
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_NONE, "NONE", "none", "", "")
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ERROR, "ERROR", "error", "", "")
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_NONE, "NONE", "none", "layout", "layout")
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ERROR, "ERROR", "error", "error", "error")

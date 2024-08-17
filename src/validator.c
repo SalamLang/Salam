@@ -621,12 +621,12 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 	if (styles) {}
 
 	if (attribute->values->length < 1) {
-		error(2, "Style value is missing in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
+		error_validator(2, "Style value is missing in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
 		
 		return false;
 	}
 	else if (first->type->kind == AST_TYPE_KIND_STRING && strlen(first->data.string_value) == 0) {
-		error(2, "Empty value for '%s' attribute in '%s' element is not allowed at line %zu column %zu!", attribute->key, generator_code_layout_node_type(attribute->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
+		error_validator(2, "Empty value for '%s' attribute in '%s' element is not allowed at line %zu column %zu!", attribute->key, generator_code_layout_node_type(attribute->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
 
 		return false;
 	}
@@ -646,7 +646,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_COLOR:
 			if (attribute->values->length > 1) {
-				error(2, "Color value is too many in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
+				error_validator(2, "Color value is too many in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
 				return false;
 			}
 			return validate_style_value_color(attribute);
@@ -659,7 +659,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 		
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_STYLE:
 			if (attribute->values->length > 1) {
-				error(2, "Font weight value is too many in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
+				error_validator(2, "Font weight value is too many in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
 				return false;
 			}
 			
@@ -672,7 +672,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_WEIGHT:
 			if (attribute->values->length > 1) {
-				error(2, "Font weight value is too many in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
+				error_validator(2, "Font weight value is too many in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
 				return false;
 			}
 
@@ -684,7 +684,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 				int value_int = atoi(value);
 				if (value_int >= 1 && value_int <= 1000) return true;
 				else {
-					error(2, "Font weight value is invalid, it should be between 1 and 1000");
+					error_validator(2, "Font weight value is invalid, it should be between 1 and 1000");
 				}
 			}
 
@@ -739,7 +739,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 		// 		}
 
 		// 		if (_res == false) {
-		// 			error(2, "Text decoration value is invalid in the '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
+		// 			error_validator(2, "Text decoration value is invalid in the '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
 		// 		}
 		// 	}
 
@@ -786,7 +786,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_LEFT:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BOTTOM:
 			if (attribute->values->length > 1) {
-				error(2, "Size value for attribute '%s' is too many in the '%s' element, it should be only one", attribute->key, generator_code_layout_node_type(attribute->parent_node_type));
+				error_validator(2, "Size value for attribute '%s' is too many in the '%s' element, it should be only one", attribute->key, generator_code_layout_node_type(attribute->parent_node_type));
 				return false;
 			}
 			// return validate_style_value_size(attribute);
@@ -795,11 +795,11 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN:
 		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING:
 			if (attribute->values->length == 3) {
-				error(2, "Number of size value for attribute '%s' is invalid in the '%s' element, it should be one, two or four", attribute->key, generator_code_layout_node_type(attribute->parent_node_type));
+				error_validator(2, "Number of size value for attribute '%s' is invalid in the '%s' element, it should be one, two or four", attribute->key, generator_code_layout_node_type(attribute->parent_node_type));
 				return false;
 			}
 			else if (attribute->values->length > 4) {
-				error(2, "Size value for attribute '%s' is too many in the '%s' element, it should be only one", attribute->key, generator_code_layout_node_type(attribute->parent_node_type));
+				error_validator(2, "Size value for attribute '%s' is too many in the '%s' element, it should be only one", attribute->key, generator_code_layout_node_type(attribute->parent_node_type));
 				return false;
 			}
 

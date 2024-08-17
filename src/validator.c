@@ -90,6 +90,8 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 	}
 
 	*css_output_value = NULL;
+	
+	string_destroy(buffer);
 
 	return false;
 }
@@ -497,17 +499,17 @@ bool validate_style_value_size(hashmap_t* styles, hashmap_t* new_styles, ast_lay
 	ast_value_t* first = attribute->values->data[0];
 	if (first->type->kind == AST_TYPE_KIND_INT) {
 		first->type->kind = AST_TYPE_KIND_STRING;
-		first->data.string_value = memory_allocate(20 * sizeof(char));
 
-		sprintf(first->data.string_value, "%dpx", first->data.int_value);
+		attribute->final_value = memory_allocate(20 * sizeof(char));
+		snprintf(attribute->final_value, 20, "%dpx", first->data.int_value);
 
 		return true;
 	}
 	else if (first->type->kind == AST_TYPE_KIND_FLOAT) {
 		first->type->kind = AST_TYPE_KIND_STRING;
-		first->data.string_value = memory_allocate(20 * sizeof(char));
 
-		sprintf(first->data.string_value, "%fpx", first->data.float_value);
+		attribute->final_value = memory_allocate(20 * sizeof(char));
+		snprintf(attribute->final_value, 20, "%fpx", first->data.float_value);
 
 		return true;
 	}
@@ -515,7 +517,8 @@ bool validate_style_value_size(hashmap_t* styles, hashmap_t* new_styles, ast_lay
 		char* out_value;
 		if (!has_css_size_prefix(first->data.string_value, &out_value)) return false;
 
-		if (out_value != NULL) free(out_value);
+		attribute->final_value = out_value;
+		// if (out_value != NULL) free(out_value);
 
 		return true;
 	}
@@ -600,6 +603,10 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 			else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING) { \
 				size_t allowed_values_count2 = (ALLOWED_VALUES == NULL) ? 0 : sizeof(ALLOWED_VALUES) / sizeof(ALLOWED_VALUES[0]); \
 				return validate_style_value_string(styles, new_styles, attribute, NULL, NULL, ALLOWED_VALUES, allowed_values_count2); \
+			} \
+			else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE) { \
+				size_t allowed_values_count2 = (ALLOWED_VALUES == NULL) ? 0 : sizeof(ALLOWED_VALUES) / sizeof(ALLOWED_VALUES[0]); \
+				return validate_style_value_size(styles, new_styles, attribute, NULL, NULL, ALLOWED_VALUES, allowed_values_count2); \
 			} \
 			return false;
 

@@ -19,7 +19,7 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 
 		string_t* layout_block_str = string_create(1024);
 		string_t* node_attrs_str = generator_code_layout_attributes(generator, node->block);
-		char* node_name = ast_layout_node_type_to_name(node->type);
+		char* node_name = generator_code_layout_node_type(node->type);
 
 		string_append_char(layout_block_str, '<');
 		string_append_str(layout_block_str, node_name);

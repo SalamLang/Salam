@@ -335,4 +335,24 @@ bool is_wchar_alpha(uint32_t codepoint);
  */
 bool is_wchar_digit(uint32_t codepoint);
 
+/**
+ * 
+ * @function convert_to_english_digit
+ * @brief Convert a wide character to an English digit
+ * @params {wchar_t} ch - Wide character
+ * @returns {char} English digit
+ * 
+ */
+char convert_to_english_digit(wchar_t ch);
+
+/**
+ * 
+ * @function string_number2number
+ * @brief Convert digits in a string to English digits
+ * @params {char*} str - Input string
+ * @returns {void}
+ * 
+ */
+void string_number2number(char* str);
+
 #endif

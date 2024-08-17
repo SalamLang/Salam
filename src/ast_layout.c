@@ -575,8 +575,6 @@ ast_layout_attribute_type_t token_to_ast_layout_attribute_type(char* name, token
     DEBUG_ME;		
 	ast_layout_attribute_type_t type = enduser_name_to_ast_layout_attribute_type(name);
 
-	printf("%s\n", name);
-
 	if (type == AST_LAYOUT_ATTRIBUTE_TYPE_ERROR) {
 		error_ast(2, "Unknown layout attribute '%s' at line %d, column %d for '%s' element", name, token->location.end_line, token->location.end_column, ast_layout_node_type_to_enduser_name(parent_node_type));
 	}

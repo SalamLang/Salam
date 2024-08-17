@@ -603,57 +603,67 @@ wchar_t read_token(lexer_t* lexer, int* char_size)
  * @function lexer_lex_number
  * @brief Lexing a number
  * @params {lexer_t*} lexer - Lexer state
+ * @params {int} char_size - Character size
  * @returns {void}
  * 
  */
-void lexer_lex_number(lexer_t* lexer)
+void lexer_lex_number(lexer_t* lexer, int char_size)
 {
     DEBUG_ME;
-	char* buffer = memory_allocate(256);
-	size_t index = 0;
-	buffer[index++] = LEXER_CURRENT_PREV;
+    char* buffer = memory_allocate(256);
 
-	while (is_char_digit(LEXER_CURRENT)) {
-		buffer[index++] = LEXER_CURRENT;
-		LEXER_NEXT;
-		LEXER_NEXT_COLUMN;
-	}
+    size_t index = 0;
+    wchar_t wc;
 
-	if (LEXER_CURRENT == '.') {
-		buffer[index++] = LEXER_CURRENT;
-		LEXER_NEXT;
-		LEXER_NEXT_COLUMN;
+    for (int i = 0; i < char_size; i++) {
+		buffer[index++] = lexer->source[lexer->index - char_size + i];
+    }
 
-		while (is_char_digit(LEXER_CURRENT)) {
-			buffer[index++] = LEXER_CURRENT;
-			LEXER_NEXT;
-			LEXER_NEXT_COLUMN;
-		}
+    int wcl = 0;
+    bool is_float = false;
 
-		buffer[index] = '\0';
+    while (LEXER_CURRENT != '\0') {
+        wc = read_token(lexer, &wcl);
 
-		token_t* token = token_create(TOKEN_NUMBER_FLOAT, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-		token->data_type = TOKEN_NUMBER_FLOAT;
-		token->data.number_float = atof(buffer);
+        if (!is_wchar_digit(wc) && wc != L'.') {
+            break;
+        }
 
-		LEXER_PUSH_TOKEN(token);
+        if (wc == L'.') {
+            if (is_float) {
+                break;
+            }
+            is_float = true;
+        }
 
-		if (buffer != NULL) {
-			memory_destroy(buffer);
-		}
-	} else {
-		buffer[index] = '\0';
+        buffer[index++] = convert_to_english_digit(wc);
+    }
 
-		token_t* token = token_create(TOKEN_NUMBER_INT, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-		token->data_type = TOKEN_NUMBER_INT;
-		token->data.number_int = atoi(buffer);
+    buffer[index] = '\0';
 
-		LEXER_PUSH_TOKEN(token);
+	printf("Buffer: %s\n", buffer);
 
-		if (buffer != NULL) {
-			memory_destroy(buffer);
-		}
-	}
+	string_number2number(buffer);
+
+	printf("New Buffer: %s\n", buffer);
+
+    LEXER_PREV;
+
+    token_type_t type = is_float ? TOKEN_NUMBER_FLOAT : TOKEN_NUMBER_INT;
+    token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+    token->data_type = type;
+    
+    if (is_float) {
+        token->data.number_float = atof(buffer);
+    } else {
+        token->data.number_int = atoi(buffer);
+    }
+
+    LEXER_PUSH_TOKEN(token);
+
+    if (buffer != NULL) {
+        memory_destroy(buffer);
+    }
 }
 
 /**
@@ -742,9 +752,7 @@ void lexer_lex_identifier(lexer_t* lexer, int char_size)
 
 	buffer[index] = '\0';
 
-	printf("Buffer: %s\n", buffer);
 	LEXER_PREV;
-	printf("-->%c\n", LEXER_CURRENT);
 
     token_type_t type = type_keyword(buffer);
     token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
@@ -869,12 +877,12 @@ void lexer_lex(lexer_t* lexer)
 			
 			case '0': case '1': case '2': case '3': case '4':
 			case '5': case '6': case '7': case '8': case '9':
-				lexer_lex_number(lexer);
+				lexer_lex_number(lexer, wcl);
 				continue;
 
 			default:
-				if (is_persian_digit(wc) || is_arabic_digit(wc)) {
-					lexer_lex_number(lexer);
+				if (is_wchar_digit(wc)) {
+					lexer_lex_number(lexer, wcl);
 				}
 				else if (c == '_' || is_wchar_alpha(wc) || is_char_alpha(c)) {
 					lexer_lex_identifier(lexer, wcl);

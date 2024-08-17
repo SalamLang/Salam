@@ -5,10 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct hashmap_t;
-
 #include "memory.h"
 #include "array.h"
+
+struct hashmap_t;
 
 typedef struct hashmap_entry {
 	char *key;

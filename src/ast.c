@@ -51,36 +51,36 @@ void ast_node_destroy(ast_node_t* value)
     DEBUG_ME;
 	if (value != NULL) {
 		switch (value->type) {
-			case AST_NODE_TYPE_IMPORT:
+			case AST_TYPE_IMPORT:
 				value->data.import->destroy(value->data.import);
 				break;
 			
-			case AST_NODE_TYPE_FUNCTION:
+			case AST_TYPE_FUNCTION:
 				value->data.function->destroy(value->data.function);
 				break;
 			
-			case AST_NODE_TYPE_BLOCK:
+			case AST_TYPE_BLOCK:
 				value->data.block->destroy(value->data.block);
 				break;
 			
-			case AST_NODE_TYPE_LAYOUT:
+			case AST_TYPE_LAYOUT:
 				value->data.layout->destroy(value->data.layout);
 				break;
 			
-			case AST_NODE_TYPE_RETURN:
+			case AST_TYPE_RETURN:
 				value->data.returns->destroy(value->data.returns);
 				break;
 			
-			case AST_NODE_TYPE_IF:
-			case AST_NODE_TYPE_ELSE_IF:
+			case AST_TYPE_IF:
+			case AST_TYPE_ELSE_IF:
 				value->data.ifclause->destroy(value->data.ifclause);
 				break;
 
-			case AST_NODE_TYPE_PRINT:
+			case AST_TYPE_PRINT:
 				value->data.print->destroy(value->data.print);
 				break;
 
-			case AST_NODE_TYPE_ERROR:
+			case AST_TYPE_ERROR:
 				break;
 		}
 
@@ -119,7 +119,7 @@ ast_layout_block_t* ast_layout_block_create(ast_type_t node_type, ast_layout_nod
 {
     DEBUG_ME;
 	ast_layout_block_t* block = memory_allocate(sizeof(ast_layout_block_t));
-	block->type = AST_NODE_BLOCK_TYPE_LAYOUT;
+	block->type = AST_BLOCK_TYPE_LAYOUT;
 	block->parent_type = node_type;
 	block->parent_node_type = layout_node_type;
 	block->text_content = NULL;
@@ -379,7 +379,7 @@ ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t layout_node_typ
 	ast_layout_node_t* node = memory_allocate(sizeof(ast_layout_node_t));
 	node->tag = NULL;
 	node->type = layout_node_type;
-	node->block = ast_layout_block_create(AST_NODE_TYPE_LAYOUT, layout_node_type);
+	node->block = ast_layout_block_create(AST_TYPE_LAYOUT, layout_node_type);
 	
 	node->print = cast(void (*)(void*), ast_layout_node_print);
 	node->destroy = cast(void (*)(void*), ast_layout_node_destroy);
@@ -586,7 +586,7 @@ ast_if_t* ast_if_create(ast_value_t* condition)
 	ast_if_t* node = memory_allocate(sizeof(ast_if_t));
 	node->condition = condition;
 
-	node->block = ast_block_create(AST_NODE_BLOCK_TYPE_IF, AST_NODE_TYPE_IF); // TODO???
+	node->block = ast_block_create(AST_BLOCK_TYPE_IF, AST_TYPE_IF); // TODO???
 
 	node->block->print = cast(void (*)(void*), ast_block_print);
 	node->block->destroy = cast(void (*)(void*), ast_block_destroy);
@@ -616,7 +616,7 @@ ast_if_t* ast_elseif_create(ast_value_t* condition)
 	ast_if_t* node = memory_allocate(sizeof(ast_if_t));
 	node->condition = condition;
 
-	node->block = ast_block_create(AST_NODE_BLOCK_TYPE_IF, AST_NODE_TYPE_ELSE_IF); // TODO???
+	node->block = ast_block_create(AST_BLOCK_TYPE_IF, AST_TYPE_ELSE_IF); // TODO???
 	node->block->print = cast(void (*)(void*), ast_block_print);
 	node->block->destroy = cast(void (*)(void*), ast_block_destroy);
 
@@ -642,7 +642,7 @@ ast_if_t* ast_else_create()
 
 	node->condition = NULL;
 
-	node->block = ast_block_create(AST_NODE_BLOCK_TYPE_ELSE_IF, AST_NODE_TYPE_ELSE_IF); // TODO???
+	node->block = ast_block_create(AST_BLOCK_TYPE_ELSE_IF, AST_TYPE_ELSE_IF); // TODO???
 	node->block->print = cast(void (*)(void*), ast_block_print);
 	node->block->destroy = cast(void (*)(void*), ast_block_destroy);
 
@@ -745,7 +745,7 @@ ast_function_t* ast_function_create(char* name)
 	node->parameters->print = cast(void (*)(void*), array_function_parameter_print);
 	node->parameters->destroy = cast(void (*)(void*), array_function_parameter_destroy);
 
-	node->block = ast_block_create(AST_NODE_BLOCK_TYPE_FUNCTION, AST_NODE_TYPE_FUNCTION);
+	node->block = ast_block_create(AST_BLOCK_TYPE_FUNCTION, AST_TYPE_FUNCTION);
 
 	node->block->print = cast(void (*)(void*), ast_block_print);
 	node->block->destroy = cast(void (*)(void*), ast_block_destroy);
@@ -809,41 +809,10 @@ char* ast_value_type_name(ast_value_type_t* type)
 {
     DEBUG_ME;
 	switch (type->kind) {
-		case AST_TYPE_KIND_VOID:
-			return "void";
+		#undef ADD_VALUE_KIND
+		#define ADD_VALUE_KIND(TYPE, NAME, NAME_LOWER) case TYPE: return NAME;
 
-		case AST_TYPE_KIND_INT:
-			return "int";
-
-		case AST_TYPE_KIND_NULL:
-			return "null";
-
-		case AST_TYPE_KIND_FLOAT:
-			return "float";
-
-		case AST_TYPE_KIND_CHAR:
-			return "char";
-
-		case AST_TYPE_KIND_STRING:
-			return "string";
-
-		case AST_TYPE_KIND_BOOL:
-			return "bool";
-
-		case AST_TYPE_KIND_STRUCT:
-			return "struct";
-		
-		case AST_TYPE_KIND_ENUM:
-			return "enum";
-		
-		case AST_TYPE_KIND_ARRAY:
-			return "array";
-		
-		case AST_TYPE_KIND_POINTER:
-			return "pointer";
-		
-		case AST_TYPE_KIND_FUNCTION:
-			return "function";
+		#include "ast_value_kind.h"
 	}
 
 	return "unknown";
@@ -1017,7 +986,7 @@ ast_layout_t* ast_layout_create()
     DEBUG_ME;
 	ast_layout_t* node = memory_allocate(sizeof(ast_layout_t));
 
-	node->block = ast_layout_block_create(AST_NODE_TYPE_LAYOUT, AST_LAYOUT_NODE_TYPE_NONE);
+	node->block = ast_layout_block_create(AST_TYPE_LAYOUT, AST_LAYOUT_TYPE_NONE);
 
 	node->print = cast(void (*)(void*), ast_layout_print);
 	node->destroy = cast(void (*)(void*), ast_layout_destroy);
@@ -1073,39 +1042,39 @@ void ast_node_print(ast_node_t* node)
 {
     DEBUG_ME;
 	switch (node->type) {
-		case AST_NODE_TYPE_FUNCTION:
+		case AST_TYPE_FUNCTION:
 			printf("Function\n");
 			break;
 		
-		case AST_NODE_TYPE_BLOCK:
+		case AST_TYPE_BLOCK:
 			printf("Block\n");
 			break;
 
-		case AST_NODE_TYPE_IMPORT:
+		case AST_TYPE_IMPORT:
 			printf("Import\n");
 			break;
 
-		case AST_NODE_TYPE_LAYOUT:
+		case AST_TYPE_LAYOUT:
 			printf("Layout\n");
 			break;
 		
-		case AST_NODE_TYPE_IF:
+		case AST_TYPE_IF:
 			printf("If\n");
 			break;
 
-		case AST_NODE_TYPE_PRINT:
+		case AST_TYPE_PRINT:
 			printf("Print\n");
 			break;
 
-		case AST_NODE_TYPE_RETURN:
+		case AST_TYPE_RETURN:
 			printf("Return\n");
 			break;
 		
-		case AST_NODE_TYPE_ELSE_IF:
+		case AST_TYPE_ELSE_IF:
 			printf("Else If\n");
 			break;
 		
-		case AST_NODE_TYPE_ERROR:
+		case AST_TYPE_ERROR:
 			printf("Error\n");
 			break;
 	}
@@ -1122,23 +1091,23 @@ char* ast_block_type_name(ast_block_type_t type)
 {
     DEBUG_ME;
 	switch (type) {
-		case AST_NODE_BLOCK_TYPE_LAYOUT:
+		case AST_BLOCK_TYPE_LAYOUT:
 			printf("Layout\n");
 			break;
 
-		case AST_NODE_BLOCK_TYPE_FUNCTION:
+		case AST_BLOCK_TYPE_FUNCTION:
 			printf("Function\n");
 			break;
 
-		case AST_NODE_BLOCK_TYPE_IF:
+		case AST_BLOCK_TYPE_IF:
 			printf("If\n");
 			break;
 
-		case AST_NODE_BLOCK_TYPE_ELSE_IF:
+		case AST_BLOCK_TYPE_ELSE_IF:
 			printf("Else If\n");
 			break;
 		
-		case AST_NODE_BLOCK_TYPE_ERROR:
+		case AST_BLOCK_TYPE_ERROR:
 			printf("Error\n");
 			break;
 	}
@@ -1229,70 +1198,70 @@ void ast_destroy(ast_t* ast)
 ast_layout_node_type_t name_to_ast_layout_node_type(char* name)
 {
     DEBUG_ME;
-	ast_layout_node_type_t type = AST_LAYOUT_NODE_TYPE_ERROR;
+	ast_layout_node_type_t type = AST_LAYOUT_TYPE_ERROR;
 
 	if (strcmp(name, "paragraph") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_PARAGRAPH;
+		type = AST_LAYOUT_TYPE_PARAGRAPH;
 	}
 	else if (strcmp(name, "paragraph_raw") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_PARAGRAPH_RAW;
+		type = AST_LAYOUT_TYPE_PARAGRAPH_RAW;
 	}
 	else if (strcmp(name, "button") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_BUTTON;
+		type = AST_LAYOUT_TYPE_BUTTON;
 	}
 	else if (strcmp(name, "input") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_INPUT;
+		type = AST_LAYOUT_TYPE_INPUT;
 	}
 	else if (strcmp(name, "textarea") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_TEXTAREA;
+		type = AST_LAYOUT_TYPE_TEXTAREA;
 	}
 	else if (strcmp(name, "span") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_SPAN;
+		type = AST_LAYOUT_TYPE_SPAN;
 	}
 	else if (strcmp(name, "bold") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_BOLD;
+		type = AST_LAYOUT_TYPE_BOLD;
 	}
 	else if (strcmp(name, "label") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_LABEL;
+		type = AST_LAYOUT_TYPE_LABEL;
 	}
 	else if (strcmp(name, "header") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_HEADER;
+		type = AST_LAYOUT_TYPE_HEADER;
 	}
 	else if (strcmp(name, "ul") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_UL;
+		type = AST_LAYOUT_TYPE_UL;
 	}
 	else if (strcmp(name, "ol") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_OL;
+		type = AST_LAYOUT_TYPE_OL;
 	}
 	else if (strcmp(name, "li") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_LI;
+		type = AST_LAYOUT_TYPE_LI;
 	}
 	else if (strcmp(name, "link") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_LINK;
+		type = AST_LAYOUT_TYPE_LINK;
 	}
 	else if (strcmp(name, "img") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_IMG;
+		type = AST_LAYOUT_TYPE_IMG;
 	}
 	else if (strcmp(name, "table") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_TABLE;
+		type = AST_LAYOUT_TYPE_TABLE;
 	}
 	else if (strcmp(name, "tr") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_TABLE_TR;
+		type = AST_LAYOUT_TYPE_TABLE_TR;
 	}
 	else if (strcmp(name, "td") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_TABLE_TD;
+		type = AST_LAYOUT_TYPE_TABLE_TD;
 	}
 	else if (strcmp(name, "video") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_VIDEO;
+		type = AST_LAYOUT_TYPE_VIDEO;
 	}
 	else if (strcmp(name, "audio") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_AUDIO;
+		type = AST_LAYOUT_TYPE_AUDIO;
 	}
 	else if (strcmp(name, "form") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_FORM;
+		type = AST_LAYOUT_TYPE_FORM;
 	}
 	else if (strcmp(name, "box") == 0) {
-		type = AST_LAYOUT_NODE_TYPE_DIV;
+		type = AST_LAYOUT_TYPE_DIV;
 	}
 
 	return type;
@@ -1315,7 +1284,7 @@ ast_layout_node_type_t token_to_ast_layout_node_type(token_t* token)
 	
 	ast_layout_node_type_t type = name_to_ast_layout_node_type(token->data.string);
 
-	if (type == AST_LAYOUT_NODE_TYPE_ERROR) {
+	if (type == AST_LAYOUT_TYPE_ERROR) {
 		error(2, "Unknown layout node '%s' at line %d, column %d", token->data.string, token->location.end_line, token->location.end_column);
 	}
 
@@ -1334,82 +1303,82 @@ char* ast_layout_node_type_to_name(ast_layout_node_type_t type)
 {
     DEBUG_ME;
 	switch (type) {
-		case AST_LAYOUT_NODE_TYPE_PARAGRAPH: return "paragraph";
-		case AST_LAYOUT_NODE_TYPE_PARAGRAPH_RAW: return "paragraph_raw";
-		case AST_LAYOUT_NODE_TYPE_BUTTON: return "button";
-		case AST_LAYOUT_NODE_TYPE_INPUT: return "input";
-		case AST_LAYOUT_NODE_TYPE_TEXTAREA: return "textarea";
-		case AST_LAYOUT_NODE_TYPE_SPAN: return "span";
-		case AST_LAYOUT_NODE_TYPE_LABEL: return "label";
-		case AST_LAYOUT_NODE_TYPE_HEADER: return "header";
-		case AST_LAYOUT_NODE_TYPE_FOOTER: return "footer";
-		case AST_LAYOUT_NODE_TYPE_NAV: return "nav";
-		case AST_LAYOUT_NODE_TYPE_MAIN: return "main";
-		case AST_LAYOUT_NODE_TYPE_SECTION: return "section";
-		case AST_LAYOUT_NODE_TYPE_ARTICLE: return "article";
-		case AST_LAYOUT_NODE_TYPE_ASIDE: return "aside";
-		case AST_LAYOUT_NODE_TYPE_SELECT: return "select";
-		case AST_LAYOUT_NODE_TYPE_OPTION: return "option";
-		case AST_LAYOUT_NODE_TYPE_IFRAME: return "iframe";
-		case AST_LAYOUT_NODE_TYPE_CANVAS: return "canvas";
-		case AST_LAYOUT_NODE_TYPE_BLOCKQUOTE: return "blockquote";
-		case AST_LAYOUT_NODE_TYPE_PRE: return "pre";
-		case AST_LAYOUT_NODE_TYPE_CODE: return "code";
-		case AST_LAYOUT_NODE_TYPE_BR: return "br";
-		case AST_LAYOUT_NODE_TYPE_HR: return "hr";
-		case AST_LAYOUT_NODE_TYPE_STRONG: return "strong";
-		case AST_LAYOUT_NODE_TYPE_EM: return "em";
-		case AST_LAYOUT_NODE_TYPE_ITALIC: return "italic";
-		case AST_LAYOUT_NODE_TYPE_BOLD: return "b";
-		case AST_LAYOUT_NODE_TYPE_UNDERLINE: return "underline";
-		case AST_LAYOUT_NODE_TYPE_S: return "s";
-		case AST_LAYOUT_NODE_TYPE_SMALL: return "small";
-		case AST_LAYOUT_NODE_TYPE_BIG: return "big";
-		case AST_LAYOUT_NODE_TYPE_SUB: return "sub";
-		case AST_LAYOUT_NODE_TYPE_SUP: return "sup";
-		case AST_LAYOUT_NODE_TYPE_CENTER: return "center";
-		case AST_LAYOUT_NODE_TYPE_DEL: return "del";
-		case AST_LAYOUT_NODE_TYPE_INS: return "ins";
-		case AST_LAYOUT_NODE_TYPE_MARK: return "mark";
-		case AST_LAYOUT_NODE_TYPE_Q: return "q";
-		case AST_LAYOUT_NODE_TYPE_CITE: return "cite";
-		case AST_LAYOUT_NODE_TYPE_DFN: return "dfn";
-		case AST_LAYOUT_NODE_TYPE_ADDRESS: return "address";
-		case AST_LAYOUT_NODE_TYPE_TIME: return "time";
-		case AST_LAYOUT_NODE_TYPE_PROGRESS: return "progress";
-		case AST_LAYOUT_NODE_TYPE_METER: return "meter";
-		case AST_LAYOUT_NODE_TYPE_DETAILS: return "details";
-		case AST_LAYOUT_NODE_TYPE_SUMMARY: return "summary";
-		case AST_LAYOUT_NODE_TYPE_DIALOG: return "dialog";
-		case AST_LAYOUT_NODE_TYPE_MENU: return "menu";
-		case AST_LAYOUT_NODE_TYPE_MENUITEM: return "menuitem";
-		case AST_LAYOUT_NODE_TYPE_COMMAND: return "command";
-		case AST_LAYOUT_NODE_TYPE_LEGEND: return "legent";
-		case AST_LAYOUT_NODE_TYPE_FIELDSET: return "fieldset";
-		case AST_LAYOUT_NODE_TYPE_CAPTION: return "caption";
-		case AST_LAYOUT_NODE_TYPE_COL: return "col";
-		case AST_LAYOUT_NODE_TYPE_COLGROUP: return "colgroup";
-		case AST_LAYOUT_NODE_TYPE_TABLE_HEADER: return "thead";
-		case AST_LAYOUT_NODE_TYPE_TABLE_BODY: return "tbody";
-		case AST_LAYOUT_NODE_TYPE_TABLE_FOOTER: return "tfoot";
-		case AST_LAYOUT_NODE_TYPE_UL: return "ul";
-		case AST_LAYOUT_NODE_TYPE_OL: return "ol";
-		case AST_LAYOUT_NODE_TYPE_LI: return "li";
-		case AST_LAYOUT_NODE_TYPE_LINK: return "a";
-		case AST_LAYOUT_NODE_TYPE_IMG: return "img";
-		case AST_LAYOUT_NODE_TYPE_TABLE: return "table";
-		case AST_LAYOUT_NODE_TYPE_TABLE_TR: return "tr";
-		case AST_LAYOUT_NODE_TYPE_TABLE_TD: return "td";
-		case AST_LAYOUT_NODE_TYPE_TABLE_TH: return "th";
-		case AST_LAYOUT_NODE_TYPE_VIDEO: return "video";
-		case AST_LAYOUT_NODE_TYPE_AUDIO: return "audio";
-		case AST_LAYOUT_NODE_TYPE_FORM: return "form";
-		case AST_LAYOUT_NODE_TYPE_DIV: return "div";
-		case AST_LAYOUT_NODE_TYPE_SCRIPT: return "script";
-		case AST_LAYOUT_NODE_TYPE_STYLE: return "style";
+		case AST_LAYOUT_TYPE_PARAGRAPH: return "paragraph";
+		case AST_LAYOUT_TYPE_PARAGRAPH_RAW: return "paragraph_raw";
+		case AST_LAYOUT_TYPE_BUTTON: return "button";
+		case AST_LAYOUT_TYPE_INPUT: return "input";
+		case AST_LAYOUT_TYPE_TEXTAREA: return "textarea";
+		case AST_LAYOUT_TYPE_SPAN: return "span";
+		case AST_LAYOUT_TYPE_LABEL: return "label";
+		case AST_LAYOUT_TYPE_HEADER: return "header";
+		case AST_LAYOUT_TYPE_FOOTER: return "footer";
+		case AST_LAYOUT_TYPE_NAV: return "nav";
+		case AST_LAYOUT_TYPE_MAIN: return "main";
+		case AST_LAYOUT_TYPE_SECTION: return "section";
+		case AST_LAYOUT_TYPE_ARTICLE: return "article";
+		case AST_LAYOUT_TYPE_ASIDE: return "aside";
+		case AST_LAYOUT_TYPE_SELECT: return "select";
+		case AST_LAYOUT_TYPE_OPTION: return "option";
+		case AST_LAYOUT_TYPE_IFRAME: return "iframe";
+		case AST_LAYOUT_TYPE_CANVAS: return "canvas";
+		case AST_LAYOUT_TYPE_BLOCKQUOTE: return "blockquote";
+		case AST_LAYOUT_TYPE_PRE: return "pre";
+		case AST_LAYOUT_TYPE_CODE: return "code";
+		case AST_LAYOUT_TYPE_BR: return "br";
+		case AST_LAYOUT_TYPE_HR: return "hr";
+		case AST_LAYOUT_TYPE_STRONG: return "strong";
+		case AST_LAYOUT_TYPE_EM: return "em";
+		case AST_LAYOUT_TYPE_ITALIC: return "italic";
+		case AST_LAYOUT_TYPE_BOLD: return "b";
+		case AST_LAYOUT_TYPE_UNDERLINE: return "underline";
+		case AST_LAYOUT_TYPE_S: return "s";
+		case AST_LAYOUT_TYPE_SMALL: return "small";
+		case AST_LAYOUT_TYPE_BIG: return "big";
+		case AST_LAYOUT_TYPE_SUB: return "sub";
+		case AST_LAYOUT_TYPE_SUP: return "sup";
+		case AST_LAYOUT_TYPE_CENTER: return "center";
+		case AST_LAYOUT_TYPE_DEL: return "del";
+		case AST_LAYOUT_TYPE_INS: return "ins";
+		case AST_LAYOUT_TYPE_MARK: return "mark";
+		case AST_LAYOUT_TYPE_Q: return "q";
+		case AST_LAYOUT_TYPE_CITE: return "cite";
+		case AST_LAYOUT_TYPE_DFN: return "dfn";
+		case AST_LAYOUT_TYPE_ADDRESS: return "address";
+		case AST_LAYOUT_TYPE_TIME: return "time";
+		case AST_LAYOUT_TYPE_PROGRESS: return "progress";
+		case AST_LAYOUT_TYPE_METER: return "meter";
+		case AST_LAYOUT_TYPE_DETAILS: return "details";
+		case AST_LAYOUT_TYPE_SUMMARY: return "summary";
+		case AST_LAYOUT_TYPE_DIALOG: return "dialog";
+		case AST_LAYOUT_TYPE_MENU: return "menu";
+		case AST_LAYOUT_TYPE_MENUITEM: return "menuitem";
+		case AST_LAYOUT_TYPE_COMMAND: return "command";
+		case AST_LAYOUT_TYPE_LEGEND: return "legent";
+		case AST_LAYOUT_TYPE_FIELDSET: return "fieldset";
+		case AST_LAYOUT_TYPE_CAPTION: return "caption";
+		case AST_LAYOUT_TYPE_COL: return "col";
+		case AST_LAYOUT_TYPE_COLGROUP: return "colgroup";
+		case AST_LAYOUT_TYPE_TABLE_HEADER: return "thead";
+		case AST_LAYOUT_TYPE_TABLE_BODY: return "tbody";
+		case AST_LAYOUT_TYPE_TABLE_FOOTER: return "tfoot";
+		case AST_LAYOUT_TYPE_UL: return "ul";
+		case AST_LAYOUT_TYPE_OL: return "ol";
+		case AST_LAYOUT_TYPE_LI: return "li";
+		case AST_LAYOUT_TYPE_LINK: return "a";
+		case AST_LAYOUT_TYPE_IMG: return "img";
+		case AST_LAYOUT_TYPE_TABLE: return "table";
+		case AST_LAYOUT_TYPE_TABLE_TR: return "tr";
+		case AST_LAYOUT_TYPE_TABLE_TD: return "td";
+		case AST_LAYOUT_TYPE_TABLE_TH: return "th";
+		case AST_LAYOUT_TYPE_VIDEO: return "video";
+		case AST_LAYOUT_TYPE_AUDIO: return "audio";
+		case AST_LAYOUT_TYPE_FORM: return "form";
+		case AST_LAYOUT_TYPE_DIV: return "div";
+		case AST_LAYOUT_TYPE_SCRIPT: return "script";
+		case AST_LAYOUT_TYPE_STYLE: return "style";
 		
-		case AST_LAYOUT_NODE_TYPE_NONE: return "layout";
-		case AST_LAYOUT_NODE_TYPE_ERROR: return "error";
+		case AST_LAYOUT_TYPE_NONE: return "layout";
+		case AST_LAYOUT_TYPE_ERROR: return "error";
 	}
 
 	return "error!!!";

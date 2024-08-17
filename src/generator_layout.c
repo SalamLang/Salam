@@ -1,6 +1,5 @@
 #include "generator_layout.h"
 
-
 /**
  *
  * @function generator_code_layout_block
@@ -917,227 +916,227 @@ char* generator_code_layout_node_type(ast_layout_node_type_t type)
 {
 	DEBUG_ME;
 	switch (type) {
-		case AST_LAYOUT_NODE_TYPE_LINK:
+		case AST_LAYOUT_TYPE_LINK:
 			return "link";
 
-		case AST_LAYOUT_NODE_TYPE_SCRIPT:
+		case AST_LAYOUT_TYPE_SCRIPT:
 			return "script";
 
-		case AST_LAYOUT_NODE_TYPE_STYLE:
+		case AST_LAYOUT_TYPE_STYLE:
 			return "style";
 
-		case AST_LAYOUT_NODE_TYPE_DIV:
+		case AST_LAYOUT_TYPE_DIV:
 			return "div";
 
-		case AST_LAYOUT_NODE_TYPE_HEADER:
+		case AST_LAYOUT_TYPE_HEADER:
 			return "header";
 
-		case AST_LAYOUT_NODE_TYPE_FOOTER:
+		case AST_LAYOUT_TYPE_FOOTER:
 			return "footer";
 
-		case AST_LAYOUT_NODE_TYPE_NAV:
+		case AST_LAYOUT_TYPE_NAV:
 			return "nav";
 
-		case AST_LAYOUT_NODE_TYPE_MAIN:
+		case AST_LAYOUT_TYPE_MAIN:
 			return "main";
 
-		case AST_LAYOUT_NODE_TYPE_SECTION:
+		case AST_LAYOUT_TYPE_SECTION:
 			return "section";
 
-		case AST_LAYOUT_NODE_TYPE_ARTICLE:
+		case AST_LAYOUT_TYPE_ARTICLE:
 			return "article";
 
-		case AST_LAYOUT_NODE_TYPE_ASIDE:
+		case AST_LAYOUT_TYPE_ASIDE:
 			return "aside";
 
-		case AST_LAYOUT_NODE_TYPE_PARAGRAPH:
+		case AST_LAYOUT_TYPE_PARAGRAPH:
 			return "p";
 
-		case AST_LAYOUT_NODE_TYPE_UL:
+		case AST_LAYOUT_TYPE_UL:
 			return "ul";
 
-		case AST_LAYOUT_NODE_TYPE_OL:
+		case AST_LAYOUT_TYPE_OL:
 			return "ol";
 
-		case AST_LAYOUT_NODE_TYPE_LI:
+		case AST_LAYOUT_TYPE_LI:
 			return "li";
 
-		case AST_LAYOUT_NODE_TYPE_IMG:
+		case AST_LAYOUT_TYPE_IMG:
 			return "img";
 
-		case AST_LAYOUT_NODE_TYPE_TABLE:
+		case AST_LAYOUT_TYPE_TABLE:
 			return "table";
 
-		case AST_LAYOUT_NODE_TYPE_TABLE_TR:
+		case AST_LAYOUT_TYPE_TABLE_TR:
 			return "tr";
 
-		case AST_LAYOUT_NODE_TYPE_TABLE_TD:
+		case AST_LAYOUT_TYPE_TABLE_TD:
 			return "td";
 
-		case AST_LAYOUT_NODE_TYPE_TABLE_TH:
+		case AST_LAYOUT_TYPE_TABLE_TH:
 			return "th";
 
-		case AST_LAYOUT_NODE_TYPE_FORM:
+		case AST_LAYOUT_TYPE_FORM:
 			return "form";
 
-		case AST_LAYOUT_NODE_TYPE_INPUT:
+		case AST_LAYOUT_TYPE_INPUT:
 			return "input";
 
-		case AST_LAYOUT_NODE_TYPE_BUTTON:
+		case AST_LAYOUT_TYPE_BUTTON:
 			return "button";
 
-		case AST_LAYOUT_NODE_TYPE_TEXTAREA:
+		case AST_LAYOUT_TYPE_TEXTAREA:
 			return "textarea";
 
-		case AST_LAYOUT_NODE_TYPE_SELECT:
+		case AST_LAYOUT_TYPE_SELECT:
 			return "select";
 
-		case AST_LAYOUT_NODE_TYPE_OPTION:
+		case AST_LAYOUT_TYPE_OPTION:
 			return "option";
 
-		case AST_LAYOUT_NODE_TYPE_LABEL:
+		case AST_LAYOUT_TYPE_LABEL:
 			return "label";
 
-		case AST_LAYOUT_NODE_TYPE_IFRAME:
+		case AST_LAYOUT_TYPE_IFRAME:
 			return "iframe";
 
-		case AST_LAYOUT_NODE_TYPE_CANVAS:
+		case AST_LAYOUT_TYPE_CANVAS:
 			return "canvas";
 
-		case AST_LAYOUT_NODE_TYPE_AUDIO:
+		case AST_LAYOUT_TYPE_AUDIO:
 			return "audio";
 
-		case AST_LAYOUT_NODE_TYPE_VIDEO:
+		case AST_LAYOUT_TYPE_VIDEO:
 			return "video";
 
-		case AST_LAYOUT_NODE_TYPE_BLOCKQUOTE:
+		case AST_LAYOUT_TYPE_BLOCKQUOTE:
 			return "blockquote";
 
-		case AST_LAYOUT_NODE_TYPE_PRE:
+		case AST_LAYOUT_TYPE_PRE:
 			return "pre";
 
-		case AST_LAYOUT_NODE_TYPE_CODE:
+		case AST_LAYOUT_TYPE_CODE:
 			return "code";
 
-		case AST_LAYOUT_NODE_TYPE_BR:
+		case AST_LAYOUT_TYPE_BR:
 			return "br";
 
-		case AST_LAYOUT_NODE_TYPE_HR:
+		case AST_LAYOUT_TYPE_HR:
 			return "hr";
 
-		case AST_LAYOUT_NODE_TYPE_SPAN:
+		case AST_LAYOUT_TYPE_SPAN:
 			return "span";
 
-		case AST_LAYOUT_NODE_TYPE_STRONG:
+		case AST_LAYOUT_TYPE_STRONG:
 			return "strong";
 
-		case AST_LAYOUT_NODE_TYPE_EM:
+		case AST_LAYOUT_TYPE_EM:
 			return "em";
 
-		case AST_LAYOUT_NODE_TYPE_ITALIC:
+		case AST_LAYOUT_TYPE_ITALIC:
 			return "i";
 
-		case AST_LAYOUT_NODE_TYPE_BOLD:
+		case AST_LAYOUT_TYPE_BOLD:
 			return "b";
 
-		case AST_LAYOUT_NODE_TYPE_UNDERLINE:
+		case AST_LAYOUT_TYPE_UNDERLINE:
 			return "u";
 
-		case AST_LAYOUT_NODE_TYPE_S:
+		case AST_LAYOUT_TYPE_S:
 			return "s";
 
-		case AST_LAYOUT_NODE_TYPE_SMALL:
+		case AST_LAYOUT_TYPE_SMALL:
 			return "small";
 
-		case AST_LAYOUT_NODE_TYPE_BIG:
+		case AST_LAYOUT_TYPE_BIG:
 			return "big";
 
-		case AST_LAYOUT_NODE_TYPE_SUB:
+		case AST_LAYOUT_TYPE_SUB:
 			return "sub";
 
-		case AST_LAYOUT_NODE_TYPE_SUP:
+		case AST_LAYOUT_TYPE_SUP:
 			return "sup";
 
-		case AST_LAYOUT_NODE_TYPE_CENTER:
+		case AST_LAYOUT_TYPE_CENTER:
 			return "center";
 
-		case AST_LAYOUT_NODE_TYPE_DEL:
+		case AST_LAYOUT_TYPE_DEL:
 			return "del";
 
-		case AST_LAYOUT_NODE_TYPE_INS:
+		case AST_LAYOUT_TYPE_INS:
 			return "ins";
 
-		case AST_LAYOUT_NODE_TYPE_MARK:
+		case AST_LAYOUT_TYPE_MARK:
 			return "mark";
 
-		case AST_LAYOUT_NODE_TYPE_Q:
+		case AST_LAYOUT_TYPE_Q:
 			return "q";
 
-		case AST_LAYOUT_NODE_TYPE_CITE:
+		case AST_LAYOUT_TYPE_CITE:
 			return "cite";
 
-		case AST_LAYOUT_NODE_TYPE_DFN:
+		case AST_LAYOUT_TYPE_DFN:
 			return "dfn";
 
-		case AST_LAYOUT_NODE_TYPE_ADDRESS:
+		case AST_LAYOUT_TYPE_ADDRESS:
 			return "address";
 
-		case AST_LAYOUT_NODE_TYPE_TIME:
+		case AST_LAYOUT_TYPE_TIME:
 			return "time";
 
-		case AST_LAYOUT_NODE_TYPE_PROGRESS:
+		case AST_LAYOUT_TYPE_PROGRESS:
 			return "progress";
 
-		case AST_LAYOUT_NODE_TYPE_METER:
+		case AST_LAYOUT_TYPE_METER:
 			return "meter";
 
-		case AST_LAYOUT_NODE_TYPE_DETAILS:
+		case AST_LAYOUT_TYPE_DETAILS:
 			return "details";
 
-		case AST_LAYOUT_NODE_TYPE_SUMMARY:
+		case AST_LAYOUT_TYPE_SUMMARY:
 			return "summary";
 
-		case AST_LAYOUT_NODE_TYPE_DIALOG:
+		case AST_LAYOUT_TYPE_DIALOG:
 			return "dialog";
 
-		case AST_LAYOUT_NODE_TYPE_MENU:
+		case AST_LAYOUT_TYPE_MENU:
 			return "menu";
 
-		case AST_LAYOUT_NODE_TYPE_MENUITEM:
+		case AST_LAYOUT_TYPE_MENUITEM:
 			return "menuitem";
 
-		case AST_LAYOUT_NODE_TYPE_COMMAND:
+		case AST_LAYOUT_TYPE_COMMAND:
 			return "command";
 
-		case AST_LAYOUT_NODE_TYPE_LEGEND:
+		case AST_LAYOUT_TYPE_LEGEND:
 			return "legend";
 
-		case AST_LAYOUT_NODE_TYPE_FIELDSET:
+		case AST_LAYOUT_TYPE_FIELDSET:
 			return "fieldset";
 
-		case AST_LAYOUT_NODE_TYPE_CAPTION:
+		case AST_LAYOUT_TYPE_CAPTION:
 			return "caption";
 
-		case AST_LAYOUT_NODE_TYPE_COL:
+		case AST_LAYOUT_TYPE_COL:
 			return "col";
 
-		case AST_LAYOUT_NODE_TYPE_COLGROUP:
+		case AST_LAYOUT_TYPE_COLGROUP:
 			return "colgroup";
 
-		case AST_LAYOUT_NODE_TYPE_TABLE_HEADER:
+		case AST_LAYOUT_TYPE_TABLE_HEADER:
 			return "thead";
 
-		case AST_LAYOUT_NODE_TYPE_TABLE_BODY:
+		case AST_LAYOUT_TYPE_TABLE_BODY:
 			return "tbody";
 
-		case AST_LAYOUT_NODE_TYPE_TABLE_FOOTER:
+		case AST_LAYOUT_TYPE_TABLE_FOOTER:
 			return "tfoot";
 		
-		case AST_LAYOUT_NODE_TYPE_NONE:
+		case AST_LAYOUT_TYPE_NONE:
 			return "layout";
 		
-		case AST_LAYOUT_NODE_TYPE_PARAGRAPH_RAW:
-		case AST_LAYOUT_NODE_TYPE_ERROR:
+		case AST_LAYOUT_TYPE_PARAGRAPH_RAW:
+		case AST_LAYOUT_TYPE_ERROR:
 			return "";
 	}
 

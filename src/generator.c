@@ -138,16 +138,16 @@ string_t* generator_code_node(generator_t* generator, ast_node_t* node)
 	string_t* code = string_create(1024);
 
 	switch (node->type) {
-		case AST_NODE_TYPE_ERROR:
+		case AST_TYPE_ERROR:
 			break;
 
-		case AST_NODE_TYPE_IMPORT:
+		case AST_TYPE_IMPORT:
 			break;
 		
-		case AST_NODE_TYPE_LAYOUT:
+		case AST_TYPE_LAYOUT:
 			break;
 		
-		case AST_NODE_TYPE_BLOCK:
+		case AST_TYPE_BLOCK:
 			string_t* block_code = generator_code_block(generator, node->data.block);
 
 			if (block_code != NULL) {
@@ -157,7 +157,7 @@ string_t* generator_code_node(generator_t* generator, ast_node_t* node)
 			}
 			break;
 
-		case AST_NODE_TYPE_FUNCTION:
+		case AST_TYPE_FUNCTION:
 			string_t* function_code = generator_code_function(generator, node->data.function);
 
 			if (function_code != NULL) {
@@ -167,8 +167,8 @@ string_t* generator_code_node(generator_t* generator, ast_node_t* node)
 			}
 			break;
 		
-		case AST_NODE_TYPE_IF:
-		case AST_NODE_TYPE_ELSE_IF:
+		case AST_TYPE_IF:
+		case AST_TYPE_ELSE_IF:
 			string_t* if_code = generator_code_if(generator, node->data.ifclause);
 
 			if (if_code != NULL) {
@@ -178,7 +178,7 @@ string_t* generator_code_node(generator_t* generator, ast_node_t* node)
 			}
 			break;
 
-		case AST_NODE_TYPE_RETURN:
+		case AST_TYPE_RETURN:
 			string_t* return_code = generator_code_return(generator, node->data.returns);
 
 			if (return_code != NULL) {
@@ -188,7 +188,7 @@ string_t* generator_code_node(generator_t* generator, ast_node_t* node)
 			}
 			break;
 
-		case AST_NODE_TYPE_PRINT:
+		case AST_TYPE_PRINT:
 			string_t* print_code = generator_code_print(generator, node->data.print);
 
 			if (print_code != NULL) {
@@ -234,10 +234,6 @@ string_t* generator_code_type(generator_t* generator, ast_value_type_t* type)
 		case AST_TYPE_KIND_FLOAT:
 			string_append_str(code, "float");
 			return code;
-		
-		// case AST_TYPE_KIND_DOUBLE:
-		//     string_append_str(code, "double");
-		//     return code;
 		
 		case AST_TYPE_KIND_CHAR:
 			string_append_str(code, "char");
@@ -319,10 +315,6 @@ string_t* generator_code_value(generator_t* generator, ast_value_t* value)
 			case AST_TYPE_KIND_FLOAT:
 				string_append_str(code, float2string(value->data.float_value));
 				return code;
-
-			// case AST_TYPE_KIND_DOUBLE:
-			// 	string_append_str(code, value->double_value);
-			// 	return code;
 
 			case AST_TYPE_KIND_CHAR:
 				string_append_char(code, value->data.char_value);

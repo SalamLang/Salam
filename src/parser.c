@@ -173,6 +173,11 @@ ast_value_t* parser_parse_value(lexer_t* lexer)
 
 	PARSER_NEXT;
 
+	if (token->type == TOKEN_IDENTIFIER) {
+		// TODO
+		error_parser(2, "Identifier '%s' is not defined at line %d, column %d", token->data.string, token->location.end_line, token->location.end_column);
+	}
+
 	ast_value_type_t* type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
 
 	ast_value_t* value = ast_value_create(type, token_value_stringify(token));
@@ -191,14 +196,7 @@ ast_value_t* parser_parse_value(lexer_t* lexer)
 ast_value_t* parser_parse_layout_value(lexer_t* lexer)
 {
 	DEBUG_ME;
-	token_t* token = PARSER_CURRENT;
-
-	PARSER_NEXT;
-
-	ast_value_type_t* type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
-	ast_value_t* value = ast_value_create(type, token_value_stringify(token));
-
-	return value;
+	return parser_parse_value(lexer);
 }
 
 /**

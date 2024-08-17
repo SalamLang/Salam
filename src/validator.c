@@ -25,7 +25,7 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 	const char* prefixes[] = {"px", "em", "rem", "vw", "vh", "%", "cm", "mm", "in", "pt", "pc", "ex", "ch", "vmin", "vmax"};
 	int num_prefixes = sizeof(prefixes) / sizeof(prefixes[0]);
 
-	const char* persian_prefixes[] = {"پیکسل", "ای ام", "رایم", "ویو ویدث", "ویو هایت", "درصد", "سانتیمتر", "میلیمتر", "اینچ", "پوینت", "پیکا", "اکس", "سی اچ", "وی مین", "وی مکس"};
+	const char* persian_prefixes[] = {"پیکسل", "ای ام", "رایم", "ویو ویدث", "ویو هایت", "درصد", "سانتیمتر", "سانتی متر", "میلیمتر", "اینچ", "پوینت", "پیکا", "اکس", "سی اچ", "وی مین", "وی مکس"};
 	int num_persian_prefixes = sizeof(persian_prefixes) / sizeof(persian_prefixes[0]);
 
 	size_t len = strlen(css_value);
@@ -46,6 +46,7 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 
 	if (!isdigit(css_value[i])) {
 		*css_output_value = NULL;
+		string_destroy(buffer);
 
 		return false;
 	}

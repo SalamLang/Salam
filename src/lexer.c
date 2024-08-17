@@ -5,9 +5,17 @@
 #define LEXER_CURRENT_NEXT (lexer->source[lexer->index + 1])
 #define LEXER_NEXT lexer->index++
 #define LEXER_PREV lexer->index--
+
 #define LEXER_NEXT_LINE lexer->line++
 #define LEXER_NEXT_COLUMN lexer->column++
-#define LEXER_ZERO_COLUMN lexer->column = 0;
+#define LEXER_ZERO_COLUMN lexer->column = 0
+
+#define LEXER_CURRENT_UTF8 (utf8_decode(lexer->source, &lexer->index))
+#define LEXER_CURRENT_PREV_UTF8 (utf8_decode(lexer->source, &lexer->index - 1))
+#define LEXER_CURRENT_NEXT_UTF8 (utf8_decode(lexer->source, &lexer->index + 1))
+#define LEXER_NEXT_UTF8 lexer->index += utf8_char_length(lexer->source[lexer->index])
+#define LEXER_PREV_UTF8 lexer->index -= utf8_char_length(lexer->source[lexer->index])
+
 #define LEXER_PUSH_TOKEN(TOKEN) array_push(lexer->tokens, TOKEN)
 
 /**
@@ -153,13 +161,19 @@ void token_destroy(token_t* token)
 const char* token_type_stringify(token_type_t type)
 {
 	DEBUG_ME;
-	// switch (type) {
-		for (size_t i = 0; i < sizeof(token_names) / sizeof(token_names[0]); ++i) {
-			if (token_names[i].token == token) {
-				return token_names[i].name;
-			}
-		}
-	// }
+	switch (type) {
+		#undef ADD_TOKEN
+		#undef ADD_CHAR_TOKEN
+		#undef ADD_KEYWORD
+		#undef ADD_KEYWORD_HIDE
+
+		#define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE) case TOKEN_TYPE: return TOKEN_NAME;
+		#define ADD_CHAR_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR) case TOKEN_TYPE: return TOKEN_NAME;
+		#define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) case TOKEN_TYPE: return TOKEN_NAME;
+		#define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH)
+
+		#include "token.h"
+	}
 
     return TOKEN_NAME_UNKNOWN;
 }
@@ -187,25 +201,6 @@ token_type_t token_char_type(char c)
 		#define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH)
 
 		#include "token.h"
-	}
-
-	return TOKEN_ERROR;
-}
-
-/**
- * 
- * @function token_string_type
- * @brief Get the type of a string
- * @params {const char*} s - String
- * @returns {token_type_t}
- * 
- */
-token_type_t token_string_type(const char* s)
-{
-	for (size_t i = 0; i < sizeof(token_names) / sizeof(token_names[0]); ++i) {
-		if (token_names[i].keyword == s) {
-			return token_names[i].token;
-		}
 	}
 
 	return TOKEN_ERROR;
@@ -243,7 +238,8 @@ char* token_stringify(token_t* token)
 void token_print(token_t* token)
 {
     DEBUG_ME;
-	printf("Token: %s\n", token_stringify(token));
+	printf("Token: ");
+	printf("%s\n", token_stringify(token));
 }
 
 /**
@@ -483,6 +479,35 @@ void location_print(location_t location)
 
 /**
  * 
+ * @function read_token
+ * @brief Reading a token
+ * @params {lexer_t*} lexer - Lexer state
+ * @returns {wchar_t}
+ * 
+ */
+wchar_t read_token(lexer_t* lexer)
+{
+	wchar_t current_char;
+	int char_size = mbtowc(&current_char, &lexer->source[lexer->index], MB_CUR_MAX);
+	if (char_size < 0) {
+		error_lexer(2, "Failed to read unicode character at line %zu, column %zu", lexer->line, lexer->column);
+	}
+
+	if (current_char == '\n') {
+		lexer->line++;
+		lexer->column = 0;
+	}
+	else {
+		lexer->column += char_size;
+	}
+
+	lexer->index += char_size;
+
+	return current_char;
+}
+
+/**
+ * 
  * @function lexer_lex_number
  * @brief Lexing a number
  * @params {lexer_t*} lexer - Lexer state
@@ -592,26 +617,30 @@ token_type_t type_keyword(const char* string)
 void lexer_lex_identifier(lexer_t* lexer)
 {
     DEBUG_ME;
-	char* buffer = memory_allocate(256);
-	size_t index = 0;
-	buffer[index++] = LEXER_CURRENT_PREV;
+    char* buffer = memory_allocate(256);
+    size_t index = 0;
+    size_t start_index = lexer->index;
 
-	while (isalnum(LEXER_CURRENT) || LEXER_CURRENT == '_') {
-		buffer[index++] = LEXER_CURRENT;
-		LEXER_NEXT;
-		LEXER_NEXT_COLUMN;
-	}
+    uint32_t codepoint = LEXER_CURRENT_UTF8;
+    while (is_char_alpha(codepoint) || is_char_digit(codepoint) || codepoint == '_') {
+        size_t char_length = utf8_char_length(lexer->source[start_index]);
+        for (size_t i = 0; i < char_length; i++) {
+            buffer[index++] = lexer->source[start_index + i];
+        }
+        start_index = lexer->index;
+        codepoint = LEXER_CURRENT_UTF8;
+    }
 
-	buffer[index] = '\0';
+    buffer[index] = '\0';
+    lexer->index = start_index;
 
-	token_type_t type = type_keyword(buffer);
+    token_type_t type = type_keyword(buffer);
+    token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+    token->data_type = TOKEN_IDENTIFIER;
+    token->data.string = buffer;
+    token->print(token);
 
-	token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-	token->data_type = TOKEN_IDENTIFIER;
-	token->data.string = buffer;
-	token->print(token);
-
-	LEXER_PUSH_TOKEN(token);
+    LEXER_PUSH_TOKEN(token);
 }
 
 /**
@@ -622,7 +651,7 @@ void lexer_lex_identifier(lexer_t* lexer)
  * @returns {void}
  * 
  */
-void lexer_lex_stringify(lexer_t* lexer)
+void lexer_lex_string(lexer_t* lexer)
 {
     DEBUG_ME;
 	// Opening quote is already consumed
@@ -661,11 +690,14 @@ void lexer_lex_stringify(lexer_t* lexer)
 void lexer_lex(lexer_t* lexer)
 {
     DEBUG_ME;
-	while (LEXER_CURRENT != '\0') {
+	char c;
+	wchar_t wc;
+
+	while ((c = LEXER_CURRENT) && c != '\0') {
+		wc = LEXER_CURRENT_UTF8;
+
 		LEXER_NEXT;
 		LEXER_NEXT_COLUMN;
-
-		char c = LEXER_CURRENT_PREV;
 
 		switch (c) {
 			case '\0': // End of file
@@ -722,7 +754,7 @@ void lexer_lex(lexer_t* lexer)
 				}
 				continue;
 			case '"':
-				lexer_lex_stringify(lexer);
+				lexer_lex_string(lexer);
 				continue;
 			
 			case '0': case '1': case '2': case '3': case '4':
@@ -731,12 +763,14 @@ void lexer_lex(lexer_t* lexer)
 				continue;
 
 			default:
-				if (is_char_alpha(LEXER_CURRENT_PREV) || LEXER_CURRENT_PREV == '_') {
+				if (is_persian_digit(wc) || is_arabic_digit(wc)) {
+					lexer_lex_number(lexer);
+				}
+				else if (c == '_' || is_wchar_alpha(LEXER_CURRENT_PREV) || is_char_alpha(LEXER_CURRENT_PREV)) {
 					lexer_lex_identifier(lexer);
-				} else {
+				}
+				else {
 					error_lexer(1, "Unknown character '%c' at line %zu, column %zu", LEXER_CURRENT_PREV, lexer->line, lexer->column);
-					// token_t* token = token_create(TOKEN_ERROR, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-					// LEXER_PUSH_TOKEN(token);
 				}
 				continue;
 		}

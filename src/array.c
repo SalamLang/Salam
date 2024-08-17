@@ -275,8 +275,10 @@ void array_token_print(array_token_t* array)
     DEBUG_ME;
     printf("Array Token: ");
     printf("%zu\n", array->length);
+    char* str = array_token_stringify(array);
 
-    printf("%s\n", array_token_stringify(array));
+    printf("%s\n", str);
+    memory_destroy(str);
 }
 
 /**
@@ -295,20 +297,20 @@ char* array_token_stringify(array_token_t* array)
         return strdup("Token array is empty");
     }
 
-    string_t* str = string_create(5 * array->length);
+    string_t* str = string_create(20);
+
     for (size_t i = 0; i < array->length; i++) {
         token_t* token = array_get(array, i);
-        string_append_str(str, token->value_stringify(token));
+        char* token_str = token->stringify(token);
+
+        string_append_str(str, token_str);
 
         if (i < array->length - 1) {
             string_append_str(str, ", ");
         }
     }
 
-    char* buffer = strdup(str->data);
-    string_destroy(str);
-
-    return buffer;
+    return string_destroy_and_get(str);
 }
 
 /**

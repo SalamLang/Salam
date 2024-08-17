@@ -231,51 +231,39 @@ void generator_code_head(ast_layout_block_t* block, string_t* head)
 					html_tags_length++;
 				}
 				
-				entry = entry->next;
+				entry = cast(hashmap_entry_t*, entry->next);
 			}
 		}
 	}
 }
 
 /**
- *
- * @function generator_code
+ * 
+ * @function generator_code_layout
+ * @brief Generate code for AST layout
  * @params {generator_t*} generator - Generator
  * @returns {void}
- *
+ * 
  */
-void generator_code(generator_t* generator)
+void generator_code_layout(generator_t* generator)
 {
-	DEBUG_ME;
-	if (generator->ast == NULL) {
-		error_generator(2, "AST tree is NULL and is not valid!");
-	}
-
-	ast_t* ast = generator->ast;
-
-	// Process functions
-	if (generator->ast->functions != NULL) {
-		generator_code_functions(generator);
-	}
-
-	// Process layout
 	if (generator->ast->layout != NULL) {
-		if (ast->layout->block != NULL) {
+		if (generator->ast->layout->block != NULL) {
 			string_t* head = string_create(1024);
 			string_t* body = string_create(1024);
 			string_t* html = string_create(1024);
 
 			// Process the layout block 
-			generator_code_layout_body(generator, ast->layout->block, body);
+			generator_code_layout_body(generator, generator->ast->layout->block, body);
 
 			// Process the head block
-			generator_code_head(ast->layout->block, head);
+			generator_code_head(generator->ast->layout->block, head);
 
 			// Generate the HTML code
 			string_append_str(html, "<!doctype html>\n");
 			string_append_str(html, "<html");
 
-			generator_code_layout_html(ast->layout->block, html);
+			generator_code_layout_html(generator->ast->layout->block, html);
 
 			string_append_str(html, ">\n");
 
@@ -428,7 +416,7 @@ string_t* generator_code_layout_style(hashmap_attribute_t* styles, ast_layout_bl
 					(*css_attributes_length)++;
 				}
 				
-				entry = entry->next;
+				entry  = cast(hashmap_entry_t*, entry->next);
 			}
 		}
 	}
@@ -463,7 +451,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 				while (entry) {
 					ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
 					if (attribute == NULL) {
-						entry = entry->next;
+						entry  = cast(hashmap_entry_t*, entry->next);
 						continue;
 					}
 
@@ -486,7 +474,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 						html_attributes_length++;
 					}
 					
-					entry = entry->next;
+					entry  = cast(hashmap_entry_t*, entry->next);
 				}
 			}
 		}
@@ -512,7 +500,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 					css_attributes_length++;
 				}
 				
-				entry = entry->next;
+				entry  = cast(hashmap_entry_t*, entry->next);
 			}
 		}
 	}
@@ -577,7 +565,7 @@ void generator_code_layout_style_value(hashmap_t* styles, hashmap_t* new_styles,
 	}
 
 	if (attribute->final_value == NULL) {
-		attribute->final_value = strdup("123");//attribute->values->data[0]->data.string_value);
+		attribute->final_value = strdup(cast(ast_value_t*, attribute->values->data[0])->data.string_value);
 	}
 }
 
@@ -593,15 +581,20 @@ char* generator_code_layout_style_name(ast_layout_attribute_type_t type)
 {
 	DEBUG_ME;
 	switch (type) {
-		#undef ADD_LAYOUT_TYPE
-		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) case TYPE: return GENERATED_NAME;
+		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
+		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) case TYPE: return GENERATED_NAME;
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) 
 
-		if (false) {}
-		#include "ast_layout_type.h"
+	    #include "ast_layout_attribute_style_type.h"
 
-		default:
-			return "error????";
+		#undef ADD_LAYOUT_ATTRIBUTE_TYPE
+		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) case TYPE: return "ERROR";
+		
+	    #include "ast_layout_attribute_type.h"
 	}
+
+	return "error????";
 }
 
 /**
@@ -619,7 +612,6 @@ char* generator_code_layout_node_type(ast_layout_node_type_t type)
 		#undef ADD_LAYOUT_TYPE
 		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) case TYPE: return GENERATED_NAME;
 
-		if (false) {}
 		#include "ast_layout_type.h"
 	}
 

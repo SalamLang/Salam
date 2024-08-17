@@ -34,7 +34,7 @@ unsigned long hash_function(const char* str)
 hashmap_t* hashmap_create(size_t capacity)
 {
     DEBUG_ME;
-	hashmap_$1* $2ap = memory_allocate(sizeof(hashmap_t));
+	hashmap_t* map = memory_allocate(sizeof(hashmap_t));
 
 	map->capacity = capacity;
 	map->length = 0;
@@ -56,7 +56,7 @@ hashmap_t* hashmap_create(size_t capacity)
  * @returns {void}
  * 
  */
-void hashmap_put(hashmap_$1* $2ap, const cha$1* $2ey, voi$1* $2alue)
+void hashmap_put(hashmap_t* map, const char* key, void* value)
 {
     DEBUG_ME;
 	hashmap_put_custom(map, key, value, free);
@@ -73,13 +73,13 @@ void hashmap_put(hashmap_$1* $2ap, const cha$1* $2ey, voi$1* $2alue)
  * @returns {void}
  * 
  */
-void hashmap_put_custom(hashmap_$1* $2ap, const cha$1* $2ey, voi$1* $2alue, void (*free_fn)(void*))
+void hashmap_put_custom(hashmap_t* map, const char* key, void* value, void (*free_fn)(void*))
 {
     DEBUG_ME;
 	unsigned long hash = hash_function(key);
 
 	size_t index = hash % map->capacity;
-	hashmap_entry_$1* $2ntry = map->data[index];
+	hashmap_entry_t* entry = map->data[index];
 
 	while (entry != NULL) {
 		if (strcmp(entry->key, key) == 0) {
@@ -93,7 +93,7 @@ void hashmap_put_custom(hashmap_$1* $2ap, const cha$1* $2ey, voi$1* $2alue, void
 		entry = entry->next;
 	}
 
-	hashmap_entry_$1* $2ew_entry = memory_allocate(sizeof(hashmap_entry_t));
+	hashmap_entry_t* new_entry = memory_allocate(sizeof(hashmap_entry_t));
 
 	new_entry->key = strdup(key);
 	new_entry->value = value;
@@ -108,10 +108,10 @@ void hashmap_put_custom(hashmap_$1* $2ap, const cha$1* $2ey, voi$1* $2alue, void
 		hashmap_entry_t **new_data = (hashmap_entry_t**) memory_callocate(new_length, sizeof(hashmap_entry_t*));
 
 		for (size_t i = 0; i < map->capacity; i++) {
-			hashmap_entry_$1* $2ntry = map->data[i];
+			hashmap_entry_t* entry = map->data[i];
 
 			while (entry) {
-				hashmap_entry_$1* $2ext = entry->next;
+				hashmap_entry_t* next = entry->next;
 				unsigned long new_index = hash_function(entry->key) % new_length;
 
 				entry->next = new_data[new_index];
@@ -138,12 +138,12 @@ void hashmap_put_custom(hashmap_$1* $2ap, const cha$1* $2ey, voi$1* $2alue, void
  * @returns {void*}
  * 
  */
-void* hashmap_get(hashmap_$1* $2ap, const cha$1* $2ey)
+void* hashmap_get(hashmap_t* map, const char* key)
 {
     DEBUG_ME;
 	unsigned long hash = hash_function(key);
 	size_t index = hash % map->capacity;
-	hashmap_entry_$1* $2ntry = map->data[index];
+	hashmap_entry_t* entry = map->data[index];
 	
 	while (entry != NULL) {
 		if (strcmp(entry->key, key) == 0) return entry->value;
@@ -163,12 +163,12 @@ void* hashmap_get(hashmap_$1* $2ap, const cha$1* $2ey)
  * @returns {bool}
  * 
  */
-bool hashmap_has(hashmap_$1* $2ap, const cha$1* $2ey)
+bool hashmap_has(hashmap_t* map, const char* key)
 {
 	DEBUG_ME;
 	unsigned long hash = hash_function(key);
 	size_t index = hash % map->capacity;
-	hashmap_entry_$1* $2ntry = map->data[index];
+	hashmap_entry_t* entry = map->data[index];
 	
 	while (entry != NULL) {
 		if (strcmp(entry->key, key) == 0) return true;
@@ -187,21 +187,21 @@ bool hashmap_has(hashmap_$1* $2ap, const cha$1* $2ey)
  * @params {const char*} key
  * @returns {void*}
  */
-void* hashmap_remove(hashmap_$1* $2ap, const cha$1* $2ey)
+void* hashmap_remove(hashmap_t* map, const char* key)
 {
     DEBUG_ME;
 	unsigned long hash = hash_function(key);
 
 	size_t index = hash % map->capacity;
-	hashmap_entry_$1* $2ntry = map->data[index];
-	hashmap_entry_$1* $2rev = NULL;
+	hashmap_entry_t* entry = map->data[index];
+	hashmap_entry_t* prev = NULL;
 
 	while (entry != NULL) {
 		if (strcmp(entry->key, key) == 0) {
 			if (prev == NULL) map->data[index] = entry->next;
 			else prev->next = entry->next;
 
-			voi$1* $2alue = entry->value;
+			void* value = entry->value;
 
 			// TODO: Do we need to destroy the value or not?
 
@@ -233,7 +233,7 @@ void* hashmap_remove(hashmap_$1* $2ap, const cha$1* $2ey)
  * @returns {void}
  * 
  */
-void hashmap_destroy(hashmap_$1* $2ap)
+void hashmap_destroy(hashmap_t* map)
 {
     DEBUG_ME;
 	return hashmap_destroy_custom(map, free);
@@ -248,17 +248,17 @@ void hashmap_destroy(hashmap_$1* $2ap)
  * @returns {void}
  * 
  */
-void hashmap_destroy_custom(hashmap_$1* $2ap, void (*free_fn)(void*))
+void hashmap_destroy_custom(hashmap_t* map, void (*free_fn)(void*))
 {
     DEBUG_ME;
 	printf("hashmap_destroy_custom...\n");
 	if (map != NULL) {
 		if (map->data != NULL) {
 			for (size_t i = 0; i < map->capacity; i++) {
-				hashmap_entry_$1* $2ntry = map->data[i];
+				hashmap_entry_t* entry = map->data[i];
 
 				while (entry) {
-					hashmap_entry_$1* $2ext = entry->next;
+					hashmap_entry_t* next = entry->next;
 
 					memory_destroy(entry->key);
 
@@ -287,7 +287,7 @@ void hashmap_destroy_custom(hashmap_$1* $2ap, void (*free_fn)(void*))
  * @returns {void}
  * 
  */
-void hashmap_print(hashmap_$1* $2ap)
+void hashmap_print(hashmap_t* map)
 {
     DEBUG_ME;
 	printf("Hashmap Size: %zu\n", map->length);
@@ -295,7 +295,7 @@ void hashmap_print(hashmap_$1* $2ap)
 	printf("Hashmap Contents:\n");
 
 	for (size_t i = 0; i < map->capacity; i++) {
-		hashmap_entry_$1* $2ntry = map->data[i];
+		hashmap_entry_t* entry = map->data[i];
 
 		while (entry) {
 			printf("[%zu] Key: %s, Value: %p\n", i, entry->key, entry->value);
@@ -323,7 +323,7 @@ void hashmap_print_custom(hashmap_t* map, void (*print_fn)(void*))
 	}
 
 	for (size_t i = 0; i < map->capacity; i++) {
-		hashmap_entry_$1* $2ntry = map->data[i];
+		hashmap_entry_t* entry = map->data[i];
 
 		while (entry) {
 			printf("[%zu] Key: %s, Value: ", i, entry->key);
@@ -353,7 +353,7 @@ void hashmap_print_layout_attribute(hashmap_attribute_t* map)
 	}
 
 	for (size_t i = 0; i < map->capacity; i++) {
-		hashmap_entry_$1* $2ntry = map->data[i];
+		hashmap_entry_t* entry = map->data[i];
 
 		while (entry) {
 			printf("[%zu] Key: %s, Value: ", i, entry->key);
@@ -375,16 +375,16 @@ void hashmap_print_layout_attribute(hashmap_attribute_t* map)
  * @returns {void}
  * 
  */
-void hashmap_destroy_layout_attribute(hashmap_attribute_$1* $2ap)
+void hashmap_destroy_layout_attribute(hashmap_attribute_t* map)
 {
     DEBUG_ME;
 	if (map != NULL) {
 		if (map->data != NULL) {
 			for (size_t i = 0; i < map->capacity; i++) {
-				hashmap_entry_$1* $2ntry = map->data[i];
+				hashmap_entry_t* entry = map->data[i];
 
 				while (entry) {
-					hashmap_entry_$1* $2ext = entry->next;
+					hashmap_entry_t* next = entry->next;
 
 					memory_destroy(entry->key);
 

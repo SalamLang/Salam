@@ -11,9 +11,9 @@
 struct hashmap_t;
 
 typedef struct hashmap_entry {
-	cha$1* $2ey;
-	voi$1* $2alue;
-	struct hashmap_entr$1* $2ext;
+	char* key;
+	void* value;
+	struct hashmap_entry_t* next;
 } hashmap_entry_t;
 
 typedef struct hashmap_t {
@@ -59,7 +59,7 @@ hashmap_t* hashmap_create(size_t size);
  * @returns {void}
  * 
  */
-void hashmap_put(hashmap_$1* $2ap, const cha$1* $2ey, voi$1* $2alue);
+void hashmap_put(hashmap_t* map, const char* key, void* value);
 
 /**
  * 
@@ -72,7 +72,7 @@ void hashmap_put(hashmap_$1* $2ap, const cha$1* $2ey, voi$1* $2alue);
  * @returns {void}
  * 
  */
-void hashmap_put_custom(hashmap_$1* $2ap, const cha$1* $2ey, voi$1* $2alue, void (*free_fn)(void*));
+void hashmap_put_custom(hashmap_t* map, const char* key, void* value, void (*free_fn)(void*));
 
 /**
  * 
@@ -83,7 +83,7 @@ void hashmap_put_custom(hashmap_$1* $2ap, const cha$1* $2ey, voi$1* $2alue, void
  * @returns {void*}
  * 
  */
-void* hashmap_get(hashmap_$1* $2ap, const cha$1* $2ey);
+void* hashmap_get(hashmap_t* map, const char* key);
 
 /**
  * 
@@ -94,7 +94,7 @@ void* hashmap_get(hashmap_$1* $2ap, const cha$1* $2ey);
  * @returns {bool}
  * 
  */
-bool hashmap_has(hashmap_$1* $2ap, const cha$1* $2ey);
+bool hashmap_has(hashmap_t* map, const char* key);
 
 /**
  * 
@@ -104,7 +104,7 @@ bool hashmap_has(hashmap_$1* $2ap, const cha$1* $2ey);
  * @params {const char*} key
  * @returns {void*}
  */
-void* hashmap_remove(hashmap_$1* $2ap, const cha$1* $2ey);
+void* hashmap_remove(hashmap_t* map, const char* key);
 
 /**
  * 
@@ -114,7 +114,7 @@ void* hashmap_remove(hashmap_$1* $2ap, const cha$1* $2ey);
  * @returns {void}
  * 
  */
-void hashmap_destroy(hashmap_$1* $2ap);
+void hashmap_destroy(hashmap_t* map);
 
 /**
  * 
@@ -124,7 +124,7 @@ void hashmap_destroy(hashmap_$1* $2ap);
  * @returns {void}
  * 
  */
-void hashmap_destroy_custom(hashmap_$1* $2ap, void (*free_fn)(void*));
+void hashmap_destroy_custom(hashmap_t* map, void (*free_fn)(void*));
 
 /**
  * 
@@ -134,7 +134,7 @@ void hashmap_destroy_custom(hashmap_$1* $2ap, void (*free_fn)(void*));
  * @returns {void}
  * 
  */
-void hashmap_print(hashmap_$1* $2ap);
+void hashmap_print(hashmap_t* map);
 
 /**
  * 
@@ -165,7 +165,7 @@ void hashmap_print_layout_attribute(hashmap_attribute_t* map);
  * @returns {void}
  * 
  */
-void hashmap_destroy_layout_attribute(hashmap_attribute_$1* $2ap);
+void hashmap_destroy_layout_attribute(hashmap_attribute_t* map);
 
 /**
  * 

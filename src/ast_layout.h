@@ -7,7 +7,7 @@
 
 typedef enum {
     #undef ADD_LAYOUT_TYPE
-    #define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER) TYPE,
+    #define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) TYPE,
 
     #include "ast_layout_type.h"
 } ast_layout_node_type_t;
@@ -17,7 +17,8 @@ typedef enum {
     #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
     #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) TYPE,
     #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) TYPE,
-
+    #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) 
+    
     #include "ast_layout_attribute_type.h"
     
     #include "ast_layout_attribute_style_type.h"

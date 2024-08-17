@@ -59,8 +59,8 @@ typedef enum {
 
 typedef struct {
     token_type_t token;
-    const cha$1* $2ame; // upper case
-    const cha$1* $2eyword; // end-user input
+    const char* name; // upper case
+    const char* keyword; // end-user input
     int code; // -1 for non-char tokens
 } token_name_t;
 
@@ -116,7 +116,7 @@ typedef struct token_t {
 
 typedef struct {
     const char* file_path; // NULL if source is REPL
-    cha$1* $2ource;
+    char* source;
     size_t index;
     size_t line;
     size_t column;

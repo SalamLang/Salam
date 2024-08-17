@@ -145,6 +145,28 @@ void string_destroy(string_t* str)
 
 /**
  * 
+ * @function string_destroy_and_get
+ * @brief Free a string and return the string data
+ * @params {string_t*} str - String
+ * @returns {char*}
+ * 
+ */
+char* string_destroy_and_get(string_t* str)
+{
+	DEBUG_ME;
+	char* res = strdup(str->data);
+	string_destroy(str);
+	
+	if (res == NULL) {
+		error(2, "Failed to allocate memory for string data");
+		return NULL;
+	}
+	
+	return res;
+}
+
+/**
+ * 
  * @function string_print
  * @brief Print a string
  * @params {string_t*} str - String
@@ -485,6 +507,31 @@ bool is_char_whitespace(char c)
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
+/**
+ * 
+ * @function is_wchar_alpha
+ * @brief Check if a wide character is alphabetic
+ * @params {uint32_t} codepoint - Wide character
+ * @returns {bool} True if the character is alphabetic, false otherwise
+ * 
+ */
+bool is_wchar_alpha(uint32_t codepoint)
+{
+    return iswalpha(codepoint);
+}
+
+/**
+ * 
+ * @function is_wchar_digits
+ * @brief Check if a wide character is a digit
+ * @params {uint32_t} codepoint - Wide character
+ * @returns {bool} True if the character is a digit, false otherwise
+ * 
+ */
+bool is_wchar_digit(uint32_t codepoint)
+{
+    return iswdigit(codepoint);
+}
 
 /**
  * 
@@ -535,4 +582,61 @@ char* double2string(double value)
 	snprintf(buffer, sizeof(buffer), "%f", value);
 	
 	return buffer;
+}
+
+/**
+ * 
+ * @function utf8_char_length
+ * @brief Get the length of a UTF-8 character
+ * @params {char} c - UTF-8 character
+ * @returns {size_t} Length of the character
+ * 
+ */
+size_t utf8_char_length(char c)
+{
+    if ((c & 0x80) == 0) return 1; // 0xxxxxxx
+	else if ((c & 0xE0) == 0xC0) return 2; // 110xxxxx
+    else if ((c & 0xF0) == 0xE0) return 3; // 1110xxxx
+    else if ((c & 0xF8) == 0xF0) return 4; // 11110xxx
+
+    return 0; // Invalid UTF-8
+}
+
+/**
+ * 
+ * @function utf8_decode
+ * @brief Decode a UTF-8 character
+ * @params {const char*} source - Source string
+ * @params {size_t*} index - Index of the character
+ * @returns {uint32_t} Decoded character
+ * 
+ */
+uint32_t utf8_decode(const char *source, size_t *index)
+{
+    size_t length = utf8_char_length(source[*index]);
+    uint32_t codepoint = 0;
+    
+    switch (length) {
+        case 1:
+            codepoint = source[*index];
+            break;
+        case 2:
+            codepoint = ((source[*index] & 0x1F) << 6) |
+                        (source[*index + 1] & 0x3F);
+            break;
+        case 3:
+            codepoint = ((source[*index] & 0x0F) << 12) |
+                        ((source[*index + 1] & 0x3F) << 6) |
+                        (source[*index + 2] & 0x3F);
+            break;
+        case 4:
+            codepoint = ((source[*index] & 0x07) << 18) |
+                        ((source[*index + 1] & 0x3F) << 12) |
+                        ((source[*index + 2] & 0x3F) << 6) |
+                        (source[*index + 3] & 0x3F);
+            break;
+    }
+    
+    *index += length;
+    return codepoint;
 }

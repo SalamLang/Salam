@@ -6,6 +6,8 @@
 #include <string.h>
 #include <ctype.h>
 #include <wctype.h>
+#include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>
 
 #include "base.h"
@@ -281,5 +283,56 @@ char* float2string(float value);
  * 
  */
 char* double2string(double value);
+
+/**
+ * 
+ * @function string_destroy_and_get
+ * @brief Free a string and return the string data
+ * @params {string_t*} str - String
+ * @returns {char*}
+ * 
+ */
+char* string_destroy_and_get(string_t* str);
+
+/**
+ * 
+ * @function utf8_char_length
+ * @brief Get the length of a UTF-8 character
+ * @params {char} c - UTF-8 character
+ * @returns {size_t} Length of the character
+ * 
+ */
+size_t utf8_char_length(char c);
+
+/**
+ * 
+ * @function utf8_decode
+ * @brief Decode a UTF-8 character
+ * @params {const char*} source - Source string
+ * @params {size_t*} index - Index of the character
+ * @returns {uint32_t} Decoded character
+ * 
+ */
+uint32_t utf8_decode(const char *source, size_t *index);
+
+/**
+ * 
+ * @function is_wchar_alpha
+ * @brief Check if a wide character is alphabetic
+ * @params {uint32_t} codepoint - Wide character
+ * @returns {bool} True if the character is alphabetic, false otherwise
+ * 
+ */
+bool is_wchar_alpha(uint32_t codepoint);
+
+/**
+ * 
+ * @function is_wchar_digit
+ * @brief Check if a wide character is a digit
+ * @params {uint32_t} codepoint - Wide character
+ * @returns {bool} True if the character is a digit, false otherwise
+ * 
+ */
+bool is_wchar_digit(uint32_t codepoint);
 
 #endif

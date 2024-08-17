@@ -1,5 +1,33 @@
 #include "ast_layout.h"
 
+typedef struct {
+    int type;                      // Attribute type identifier
+    const char *style_name;        // Name of the style (e.g., "STYLE_BACKGROUND")
+    const char *style_key;         // Key for the style (e.g., "style_background")
+    const char *style_css_name;    // CSS name (e.g., "style-background")
+    const char *css_property;      // CSS property (e.g., "background")
+    int filter_type;               // Filter type for the style
+    const char *values[];          // Array of possible values (if any)
+    const int substyles[];         // Array of substyles (if any)
+} LayoutAttributeStyleType;
+
+LayoutAttributeStyleType style_attributes[] = {
+	#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(type, name, key, css_name, css_property, filter_type, values, substyles) \
+		{ \
+			type, \
+			name, \
+			key, \
+			css_name, \
+			css_property, \
+			filter_type, \
+			values, \
+			substyles \
+		}
+	
+	#include "ast_layout_attribute_style_type.h"
+};
+
 /**
  * 
  * @function ast_layout_attribute_print
@@ -359,69 +387,33 @@ ast_layout_node_type_t name_to_ast_layout_node_type(char* name)
     DEBUG_ME;
 	ast_layout_node_type_t type = AST_LAYOUT_TYPE_ERROR;
 
-	if (strcmp(name, "paragraph") == 0) {
-		type = AST_LAYOUT_TYPE_PARAGRAPH;
-	}
-	else if (strcmp(name, "paragraph_raw") == 0) {
-		type = AST_LAYOUT_TYPE_PARAGRAPH_RAW;
-	}
-	else if (strcmp(name, "button") == 0) {
-		type = AST_LAYOUT_TYPE_BUTTON;
-	}
-	else if (strcmp(name, "input") == 0) {
-		type = AST_LAYOUT_TYPE_INPUT;
-	}
-	else if (strcmp(name, "textarea") == 0) {
-		type = AST_LAYOUT_TYPE_TEXTAREA;
-	}
-	else if (strcmp(name, "span") == 0) {
-		type = AST_LAYOUT_TYPE_SPAN;
-	}
-	else if (strcmp(name, "bold") == 0) {
-		type = AST_LAYOUT_TYPE_BOLD;
-	}
-	else if (strcmp(name, "label") == 0) {
-		type = AST_LAYOUT_TYPE_LABEL;
-	}
-	else if (strcmp(name, "header") == 0) {
-		type = AST_LAYOUT_TYPE_HEADER;
-	}
-	else if (strcmp(name, "ul") == 0) {
-		type = AST_LAYOUT_TYPE_UL;
-	}
-	else if (strcmp(name, "ol") == 0) {
-		type = AST_LAYOUT_TYPE_OL;
-	}
-	else if (strcmp(name, "li") == 0) {
-		type = AST_LAYOUT_TYPE_LI;
-	}
-	else if (strcmp(name, "link") == 0) {
-		type = AST_LAYOUT_TYPE_LINK;
-	}
-	else if (strcmp(name, "img") == 0) {
-		type = AST_LAYOUT_TYPE_IMG;
-	}
-	else if (strcmp(name, "table") == 0) {
-		type = AST_LAYOUT_TYPE_TABLE;
-	}
-	else if (strcmp(name, "tr") == 0) {
-		type = AST_LAYOUT_TYPE_TABLE_TR;
-	}
-	else if (strcmp(name, "td") == 0) {
-		type = AST_LAYOUT_TYPE_TABLE_TD;
-	}
-	else if (strcmp(name, "video") == 0) {
-		type = AST_LAYOUT_TYPE_VIDEO;
-	}
-	else if (strcmp(name, "audio") == 0) {
-		type = AST_LAYOUT_TYPE_AUDIO;
-	}
-	else if (strcmp(name, "form") == 0) {
-		type = AST_LAYOUT_TYPE_FORM;
-	}
-	else if (strcmp(name, "box") == 0) {
-		type = AST_LAYOUT_TYPE_DIV;
-	}
+    #undef ADD_LAYOUT_TYPE
+	#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME) == 0) type = TYPE;
+
+	if (false) {}
+	#include "ast_layout_type.h"
+
+	return type;
+}
+
+/**
+ * 
+ * @function enduser_name_to_ast_layout_node_type
+ * @brief Convert enduser name to AST layout node type
+ * @params {char*} name - Name
+ * @returns {ast_layout_node_type_t} type - Layout Node Type
+ * 
+ */
+ast_layout_node_type_t enduser_name_to_ast_layout_node_type(char* name)
+{
+    DEBUG_ME;
+	ast_layout_node_type_t type = AST_LAYOUT_TYPE_ERROR;
+
+    #undef ADD_LAYOUT_TYPE
+	#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, ENDUSER_NAME) == 0) type = TYPE;
+
+	if (false) {}
+	#include "ast_layout_type.h"
 
 	return type;
 }
@@ -438,13 +430,13 @@ ast_layout_node_type_t token_to_ast_layout_node_type(token_t* token)
 {
     DEBUG_ME;
 	if (token->type != TOKEN_IDENTIFIER) {
-		error(2, "Expected token type to be identifier as layout node type, got %s at line %d, column %d", token_name(token->type), token->location.end_line, token->location.end_column);
+		error_ast(2, "Expected token type to be identifier as layout node type, got %s at line %d, column %d", token_name(token->type), token->location.end_line, token->location.end_column);
 	}
 	
 	ast_layout_node_type_t type = name_to_ast_layout_node_type(token->data.string);
 
 	if (type == AST_LAYOUT_TYPE_ERROR) {
-		error(2, "Unknown layout node '%s' at line %d, column %d", token->data.string, token->location.end_line, token->location.end_column);
+		error_ast(2, "Unknown layout node '%s' at line %d, column %d", token->data.string, token->location.end_line, token->location.end_column);
 	}
 
 	return type;
@@ -462,82 +454,31 @@ char* ast_layout_node_type_to_name(ast_layout_node_type_t type)
 {
     DEBUG_ME;
 	switch (type) {
-		case AST_LAYOUT_TYPE_PARAGRAPH: return "paragraph";
-		case AST_LAYOUT_TYPE_PARAGRAPH_RAW: return "paragraph_raw";
-		case AST_LAYOUT_TYPE_BUTTON: return "button";
-		case AST_LAYOUT_TYPE_INPUT: return "input";
-		case AST_LAYOUT_TYPE_TEXTAREA: return "textarea";
-		case AST_LAYOUT_TYPE_SPAN: return "span";
-		case AST_LAYOUT_TYPE_LABEL: return "label";
-		case AST_LAYOUT_TYPE_HEADER: return "header";
-		case AST_LAYOUT_TYPE_FOOTER: return "footer";
-		case AST_LAYOUT_TYPE_NAV: return "nav";
-		case AST_LAYOUT_TYPE_MAIN: return "main";
-		case AST_LAYOUT_TYPE_SECTION: return "section";
-		case AST_LAYOUT_TYPE_ARTICLE: return "article";
-		case AST_LAYOUT_TYPE_ASIDE: return "aside";
-		case AST_LAYOUT_TYPE_SELECT: return "select";
-		case AST_LAYOUT_TYPE_OPTION: return "option";
-		case AST_LAYOUT_TYPE_IFRAME: return "iframe";
-		case AST_LAYOUT_TYPE_CANVAS: return "canvas";
-		case AST_LAYOUT_TYPE_BLOCKQUOTE: return "blockquote";
-		case AST_LAYOUT_TYPE_PRE: return "pre";
-		case AST_LAYOUT_TYPE_CODE: return "code";
-		case AST_LAYOUT_TYPE_BR: return "br";
-		case AST_LAYOUT_TYPE_HR: return "hr";
-		case AST_LAYOUT_TYPE_STRONG: return "strong";
-		case AST_LAYOUT_TYPE_EM: return "em";
-		case AST_LAYOUT_TYPE_ITALIC: return "italic";
-		case AST_LAYOUT_TYPE_BOLD: return "b";
-		case AST_LAYOUT_TYPE_UNDERLINE: return "underline";
-		case AST_LAYOUT_TYPE_S: return "s";
-		case AST_LAYOUT_TYPE_SMALL: return "small";
-		case AST_LAYOUT_TYPE_BIG: return "big";
-		case AST_LAYOUT_TYPE_SUB: return "sub";
-		case AST_LAYOUT_TYPE_SUP: return "sup";
-		case AST_LAYOUT_TYPE_CENTER: return "center";
-		case AST_LAYOUT_TYPE_DEL: return "del";
-		case AST_LAYOUT_TYPE_INS: return "ins";
-		case AST_LAYOUT_TYPE_MARK: return "mark";
-		case AST_LAYOUT_TYPE_Q: return "q";
-		case AST_LAYOUT_TYPE_CITE: return "cite";
-		case AST_LAYOUT_TYPE_DFN: return "dfn";
-		case AST_LAYOUT_TYPE_ADDRESS: return "address";
-		case AST_LAYOUT_TYPE_TIME: return "time";
-		case AST_LAYOUT_TYPE_PROGRESS: return "progress";
-		case AST_LAYOUT_TYPE_METER: return "meter";
-		case AST_LAYOUT_TYPE_DETAILS: return "details";
-		case AST_LAYOUT_TYPE_SUMMARY: return "summary";
-		case AST_LAYOUT_TYPE_DIALOG: return "dialog";
-		case AST_LAYOUT_TYPE_MENU: return "menu";
-		case AST_LAYOUT_TYPE_MENUITEM: return "menuitem";
-		case AST_LAYOUT_TYPE_COMMAND: return "command";
-		case AST_LAYOUT_TYPE_LEGEND: return "legent";
-		case AST_LAYOUT_TYPE_FIELDSET: return "fieldset";
-		case AST_LAYOUT_TYPE_CAPTION: return "caption";
-		case AST_LAYOUT_TYPE_COL: return "col";
-		case AST_LAYOUT_TYPE_COLGROUP: return "colgroup";
-		case AST_LAYOUT_TYPE_TABLE_HEADER: return "thead";
-		case AST_LAYOUT_TYPE_TABLE_BODY: return "tbody";
-		case AST_LAYOUT_TYPE_TABLE_FOOTER: return "tfoot";
-		case AST_LAYOUT_TYPE_UL: return "ul";
-		case AST_LAYOUT_TYPE_OL: return "ol";
-		case AST_LAYOUT_TYPE_LI: return "li";
-		case AST_LAYOUT_TYPE_LINK: return "a";
-		case AST_LAYOUT_TYPE_IMG: return "img";
-		case AST_LAYOUT_TYPE_TABLE: return "table";
-		case AST_LAYOUT_TYPE_TABLE_TR: return "tr";
-		case AST_LAYOUT_TYPE_TABLE_TD: return "td";
-		case AST_LAYOUT_TYPE_TABLE_TH: return "th";
-		case AST_LAYOUT_TYPE_VIDEO: return "video";
-		case AST_LAYOUT_TYPE_AUDIO: return "audio";
-		case AST_LAYOUT_TYPE_FORM: return "form";
-		case AST_LAYOUT_TYPE_DIV: return "div";
-		case AST_LAYOUT_TYPE_SCRIPT: return "script";
-		case AST_LAYOUT_TYPE_STYLE: return "style";
-		
-		case AST_LAYOUT_TYPE_NONE: return "layout";
-		case AST_LAYOUT_TYPE_ERROR: return "error";
+		#undef ADD_LAYOUT_TYPE
+		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return NAME;
+
+		#include "ast_layout_type.h"
+	}
+
+	return "error!!!";
+}
+
+/**
+ * 
+ * @function ast_layout_node_type_to_enduser_name
+ * @brief Convert AST layout attribute type to enduser name
+ * @params {ast_layout_node_type_t} type - Layout Attribute Type
+ * @returns {char*} name - Name
+ * 
+ */
+char* ast_layout_node_type_to_enduser_name(ast_layout_node_type_t type)
+{
+    DEBUG_ME;
+	switch (type) {
+		#undef ADD_LAYOUT_TYPE
+		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return ENDUSER_NAME;
+
+		#include "ast_layout_type.h"
 	}
 
 	return "error!!!";
@@ -558,8 +499,33 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name)
 
     #undef ADD_LAYOUT_ATTRIBUTE_TYPE
     #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
-	#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
-	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
+	#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
+
+	if (false) {}
+	#include "ast_layout_attribute_type.h"
+	#include "ast_layout_attribute_style_type.h"
+
+	return type;
+}
+
+/**
+ * 
+ * @function enduser_name_to_ast_layout_attribute_type
+ * @brief Convert enduser attribute name to AST layout node type
+ * @params {char*} name - Name
+ * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
+ * 
+ */
+ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_type(char* name)
+{
+    DEBUG_ME;
+	ast_layout_attribute_type_t type = AST_LAYOUT_ATTRIBUTE_TYPE_ERROR;
+
+    #undef ADD_LAYOUT_ATTRIBUTE_TYPE
+    #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
+	#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, ENDUSER_NAME) == 0) type = TYPE;
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, ENDUSER_NAME) == 0) type = TYPE;
 
 	if (false) {}
 	#include "ast_layout_attribute_type.h"
@@ -585,9 +551,36 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_style_type(char* name)
     #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
     #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
 
-	#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) 
-	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
-	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
+	#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
+
+	if (false) {}
+	#include "ast_layout_attribute_style_type.h"
+
+	return type;
+}
+
+/**
+ * 
+ * @function enduser_name_to_ast_layout_attribute_style_type
+ * @brief Convert style end-user attribute name to AST layout node type
+ * @params {char*} name - Name
+ * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
+ * 
+ */
+ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_style_type(char* name)
+{
+    DEBUG_ME;
+	ast_layout_attribute_type_t type = AST_LAYOUT_ATTRIBUTE_TYPE_ERROR;
+
+    #undef ADD_LAYOUT_ATTRIBUTE_TYPE
+    #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
+    #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
+
+	#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
 
 	if (false) {}
 	#include "ast_layout_attribute_style_type.h"
@@ -610,10 +603,12 @@ ast_layout_attribute_type_t token_to_ast_layout_attribute_type(char* name, token
     DEBUG_ME;
 	char* layout_element_name = ast_layout_node_type_to_name(parent_node_type);
 		
-	ast_layout_attribute_type_t type = name_to_ast_layout_attribute_type(name);
+	ast_layout_attribute_type_t type = enduser_name_to_ast_layout_attribute_type(name);
+
+	printf("%s\n", name);
 
 	if (type == AST_LAYOUT_ATTRIBUTE_TYPE_ERROR) {
-		error(2, "Unknown layout attribute '%s' at line %d, column %d for '%s' element", name, token->location.end_line, token->location.end_column, layout_element_name);
+		error_ast(2, "Unknown layout attribute '%s' at line %d, column %d for '%s' element", name, token->location.end_line, token->location.end_column, layout_element_name);
 	}
 
 	return type;
@@ -635,9 +630,9 @@ char* ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type)
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
 
-		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) case TYPE: return NAME_LOWER;
-		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) case TYPE: return NAME_LOWER;
-		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) 
+		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return NAME_LOWER;
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return NAME_LOWER;
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
 
 		#include "ast_layout_attribute_type.h"
 		#include "ast_layout_attribute_style_type.h"

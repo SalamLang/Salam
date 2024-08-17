@@ -29,7 +29,7 @@ char* generator_identifier_get(generator_identifier_t* gen)
 {
 	DEBUG_ME;
 	int length = strlen(gen->current);
-	cha$1* $2dentifier = memory_allocate(length + 1);
+	char* identifier = memory_allocate(length + 1);
 
 	strcpy(identifier, gen->current);
 
@@ -43,7 +43,7 @@ char* generator_identifier_get(generator_identifier_t* gen)
 		gen->current[i] = 'a';
 
 		if (i == 0) {
-			cha$1* $2ew_current = memory_allocate(length + 2);
+			char* new_current = memory_allocate(length + 2);
 
 			memset(new_current, 'a', length + 1);
 

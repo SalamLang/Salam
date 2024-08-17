@@ -196,7 +196,7 @@ void validate_layout_block(ast_layout_block_t* block)
 	// 	hashmap_attribute_t* new_styles = hashmap_create_layout_attribute(1);
 
 	// 	for (size_t i = 0; i < block->styles->capacity; i++) {
-	// 		hashmap_entry_t *entry = block->styles->data[i];
+	// 		hashmap_entry_$1* $2ntry = block->styles->data[i];
 
 	// 		while (entry) {
 	// 			ast_layout_attribute_t* attribute = entry->value;
@@ -318,7 +318,7 @@ void validate_layout_mainbody(ast_layout_block_t* block)
 				size_t attributes_capacity = block->attributes->capacity;
 
 				for (size_t i = 0; i < attributes_capacity; i++) {
-					hashmap_entry_t *entry = block->attributes->data[i];
+					hashmap_entry_$1* $2ntry = block->attributes->data[i];
 
 					while (entry) {
 						char* attribute_key = entry->key;
@@ -615,7 +615,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 {
 	DEBUG_ME;
 	ast_value_t* first = attribute->values->data[0];
-	char *value = first->data.string_value;
+	cha$1* $2alue = first->data.string_value;
 
 	if (new_styles) {}
 	if (styles) {}
@@ -747,7 +747,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 		// 		attribute->ignoreMe = true;
 
 		// 		for (size_t i = 0; i < sub_groups->capacity; i++) {
-		// 			hashmap_entry_t *entry = sub_groups->data[i];
+		// 			hashmap_entry_$1* $2ntry = sub_groups->data[i];
 
 		// 			while (entry) {
 		// 				ast_layout_attribute_t* atr = entry->value;

@@ -22,79 +22,130 @@ size_t valid_layout_attributes_length = sizeof(valid_layout_attributes) / sizeof
 bool has_css_size_prefix(char* css_value, char** css_output_value)
 {
 	DEBUG_ME;
-	const char* prefixes[] = {"px", "em", "rem", "vw", "vh", "%", "cm", "mm", "in", "pt", "pc", "ex", "ch", "vmin", "vmax"};
-	int num_prefixes = sizeof(prefixes) / sizeof(prefixes[0]);
+    const char* prefixes[] = {
+        "px", "pixel", "pixels",
+        "em", "em",
+		"rem",
+        "vw", "viewport width", "viewport width",
+        "vh", "viewport height", "viewport height",
+        "%",
+        "cm", "centimeter", "centimeters",
+        "mm", "millimeter", "millimeters",
+        "in", "inch", "inches",
+        "pt", "point", "points",
+        "pc", "pica", "picas",
+        "ex",
+        "ch",
+        "vmin", "viewport minimum",
+        "vmax", "viewport maximum"
+    };
 
-	const char* persian_prefixes[] = {"پیکسل", "ای ام", "رایم", "ویو ویدث", "ویو هایت", "درصد", "سانتیمتر", "سانتی متر", "میلیمتر", "اینچ", "پوینت", "پیکا", "اکس", "سی اچ", "وی مین", "وی مکس"};
-	int num_persian_prefixes = sizeof(persian_prefixes) / sizeof(persian_prefixes[0]);
+    const char* persian_prefixes[] = {
+        "پیکسل", "پیکسل‌ها", "پیکسلها",
+        "ای ام", "ایم",
+        "رایم",
+        "ویو ویدث", "ویو ویدت", "ویویدث",
+        "ویو هایت", "ویو هایت", "وی هایت",
+        "درصد",
+        "سانتیمتر", "سانتی متر", "سانت",
+        "میلیمتر", "میلی متر", "میلیم",
+        "اینچ", "اینچ", "اینچ",
+        "پوینت", "پوینت‌ها", "پوینتها",
+        "پیکا", "پیکاها", "پیکاها",
+        "اکس",
+        "سی اچ",
+        "وی مین", "وی مینیمم",
+        "وی مکس", "وی ماکسیمم"
+    };
 
-	size_t len = strlen(css_value);
-	if (len == 0) {
-		*css_output_value = NULL;
+    const char* generated_prefixes[] = {
+        "px", "px", "px",
+        "em", "em",
+		"rem",
+        "vw", "vw", "vw",
+        "vh", "vh", "vh",
+        "%",
+        "cm", "cm", "cm",
+        "mm", "mm", "mm",
+        "in", "in", "in",
+        "pt", "pt", "pt",
+        "pc", "pc", "pc",
+        "ex",
+        "ch",
+        "vmin", "vmin",
+        "vmax", "vmax"
+    };
 
-		return false;
-	}
+    int num_prefixes = sizeof(prefixes) / sizeof(prefixes[0]);
+    int num_persian_prefixes = sizeof(persian_prefixes) / sizeof(persian_prefixes[0]);
+    int num_generated_prefixes = sizeof(generated_prefixes) / sizeof(generated_prefixes[0]);
 
-	string_t* buffer = string_create(len);
+    size_t len = strlen(css_value);
+    if (len == 0) {
+        *css_output_value = NULL;
+        return false;
+    }
 
-	size_t i = 0;
-	if (css_value[i] == '-' || css_value[i] == '+') {
-		if (css_value[i] == '-') string_append_char(buffer, css_value[i]);
+    string_t* buffer = string_create(len + 1);
 
-		i++;
-	}
+    size_t i = 0;
+    if (css_value[i] == '-' || css_value[i] == '+') {
+        if (css_value[i] == '-') string_append_char(buffer, css_value[i]);
+        i++;
+    }
 
-	if (!isdigit(css_value[i])) {
-		*css_output_value = NULL;
-		string_destroy(buffer);
+    if (!isdigit(css_value[i])) {
+        *css_output_value = NULL;
 
-		return false;
-	}
+        string_destroy(buffer);
 
-	bool decimal_point_found = false;
-	while (i < len && (isdigit(css_value[i]) || (css_value[i] == '.' && !decimal_point_found))) {
-		if (css_value[i] == '.') {
-			string_append_char(buffer, css_value[i]);
-			decimal_point_found = true;
-		}
-		else {
-			string_append_char(buffer, css_value[i]);
-		}
+        return false;
+    }
 
-		i++;
-	}
+    bool decimal_point_found = false;
+    while (i < len && (isdigit(css_value[i]) || (css_value[i] == '.' && !decimal_point_found))) {
+        if (css_value[i] == '.') {
+            string_append_char(buffer, css_value[i]);
+            decimal_point_found = true;
+        } else {
+            string_append_char(buffer, css_value[i]);
+        }
+        i++;
+    }
 
-	while (i < len && isspace(css_value[i])) i++;
+    while (i < len && isspace(css_value[i])) i++;
 
-	for (int j = 0; j < num_prefixes; j++) {
-		size_t prefix_len = strlen(prefixes[j]);
-		if (len - i == prefix_len && strncmp(css_value + i, prefixes[j], prefix_len) == 0) {
-			string_append_str(buffer, prefixes[j]);
-			*css_output_value = strdup(buffer->data);
+    for (int j = 0; j < num_prefixes; j++) {
+        size_t prefix_len = strlen(prefixes[j]);
+        if (len - i == prefix_len && strncmp(css_value + i, prefixes[j], prefix_len) == 0) {
+            string_append_str(buffer, generated_prefixes[j]);
 
-			string_destroy(buffer);
+            *css_output_value = strdup(buffer->data);
 
-			return true;
-		}
-	}
+            string_destroy(buffer);
 
-	for (int j = 0; j < num_persian_prefixes; j++) {
-		size_t prefix_len = strlen(persian_prefixes[j]);
-		if (len - i == prefix_len && strncmp(css_value + i, persian_prefixes[j], prefix_len) == 0) {
-			string_append_str(buffer, prefixes[j]);
-			*css_output_value = strdup(buffer->data);
+            return true;
+        }
+    }
 
-			string_destroy(buffer);
+    for (int j = 0; j < num_persian_prefixes; j++) {
+        size_t prefix_len = strlen(persian_prefixes[j]);
+        if (len - i == prefix_len && strncmp(css_value + i, persian_prefixes[j], prefix_len) == 0) {
+            string_append_str(buffer, generated_prefixes[j]);
 
-			return true;
-		}
-	}
+            *css_output_value = strdup(buffer->data);
 
-	*css_output_value = NULL;
-	
-	string_destroy(buffer);
+            string_destroy(buffer);
 
-	return false;
+            return true;
+        }
+    }
+
+    *css_output_value = NULL;
+
+    string_destroy(buffer);
+
+    return false;
 }
 
 /**

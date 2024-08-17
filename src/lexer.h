@@ -282,10 +282,11 @@ void lexer_lex_identifier(lexer_t* lexer, int wcl);
  * @function lexer_lex_number
  * @brief Lexing a number
  * @params {lexer_t*} lexer - Lexer state
+ * @params {int} char_size - Character size
  * @returns {void}
  * 
  */
-void lexer_lex_number(lexer_t* lexer);
+void lexer_lex_number(lexer_t* lexer, int char_size);
 
 /**
  * 

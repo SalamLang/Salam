@@ -396,7 +396,7 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer)
 ast_node_t* parser_parse_layout(lexer_t* lexer)
 {
 	DEBUG_ME;
-	ast_node_t* node = ast_node_create(AST_NODE_TYPE_LAYOUT, PARSER_CURRENT->location);
+	ast_node_t* node = ast_node_create(AST_TYPE_LAYOUT, PARSER_CURRENT->location);
 
 	PARSER_NEXT; // Eat the layout token
 
@@ -418,7 +418,7 @@ ast_node_t* parser_parse_layout(lexer_t* lexer)
 ast_node_t* parser_parse_function(lexer_t* lexer)
 {
 	DEBUG_ME;
-	ast_node_t* node = ast_node_create(AST_NODE_TYPE_FUNCTION, PARSER_CURRENT->location);
+	ast_node_t* node = ast_node_create(AST_TYPE_FUNCTION, PARSER_CURRENT->location);
 
 	PARSER_NEXT; // Eat the function token
 
@@ -573,7 +573,7 @@ ast_value_t* parser_parse_expression(lexer_t* lexer)
 ast_node_t* parser_parse_print(lexer_t* lexer)
 {
 	DEBUG_ME;
-	ast_node_t* node = ast_node_create(AST_NODE_TYPE_PRINT, PARSER_CURRENT->location);
+	ast_node_t* node = ast_node_create(AST_TYPE_PRINT, PARSER_CURRENT->location);
 
 	PARSER_NEXT; // Eat the print token
 
@@ -594,7 +594,7 @@ ast_node_t* parser_parse_print(lexer_t* lexer)
 ast_node_t* parser_parse_return(lexer_t* lexer)
 {
 	DEBUG_ME;
-	ast_node_t* node = ast_node_create(AST_NODE_TYPE_RETURN, PARSER_CURRENT->location);
+	ast_node_t* node = ast_node_create(AST_TYPE_RETURN, PARSER_CURRENT->location);
 
 	PARSER_NEXT; // Eat the return token
 
@@ -615,7 +615,7 @@ ast_node_t* parser_parse_return(lexer_t* lexer)
 ast_node_t* parser_parse_if(lexer_t* lexer)
 {
 	DEBUG_ME;
-	ast_node_t* node = ast_node_create(AST_NODE_TYPE_IF, PARSER_CURRENT->location);
+	ast_node_t* node = ast_node_create(AST_TYPE_IF, PARSER_CURRENT->location);
 
 	PARSER_NEXT; // Eat the if token
 
@@ -631,7 +631,7 @@ ast_node_t* parser_parse_if(lexer_t* lexer)
 			if (match_next_open_block(lexer)) {
 				PARSER_NEXT; // Eat the else token
 
-				ast_node_t* else_if = ast_node_create(AST_NODE_TYPE_ELSE_IF, PARSER_CURRENT->location);
+				ast_node_t* else_if = ast_node_create(AST_TYPE_ELSE_IF, PARSER_CURRENT->location);
 				
 				else_if->data.ifclause = ast_else_create();
 				parser_parse_block(lexer, else_if->data.ifclause->block);
@@ -644,7 +644,7 @@ ast_node_t* parser_parse_if(lexer_t* lexer)
 			else if (match_next(lexer, TOKEN_IF)) {
 				PARSER_NEXT; // Eat the else token
 
-				ast_node_t* else_if = ast_node_create(AST_NODE_TYPE_IF, PARSER_CURRENT->location);
+				ast_node_t* else_if = ast_node_create(AST_TYPE_IF, PARSER_CURRENT->location);
 				PARSER_NEXT; // Eat the sub if token
 				
 				ast_value_t* condition = parser_parse_expression(lexer);
@@ -721,7 +721,7 @@ ast_t* parser_parse(lexer_t* lexer)
 			error_parser(2, "Expected a node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
 			continue;
 		}
-		else if (node->type == AST_NODE_TYPE_LAYOUT) {
+		else if (node->type == AST_TYPE_LAYOUT) {
 			// Free the previous layout if it exists
 			if (ast->layout != NULL) {
 				ast_layout_destroy(ast->layout);
@@ -735,7 +735,7 @@ ast_t* parser_parse(lexer_t* lexer)
 				memory_destroy(node);
 			}
 		}
-		else if (node->type == AST_NODE_TYPE_FUNCTION) {
+		else if (node->type == AST_TYPE_FUNCTION) {
 			array_push(ast->functions, node->data.function);
 
 			ast_node_destroy_notall(node);

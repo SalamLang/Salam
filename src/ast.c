@@ -696,41 +696,10 @@ void ast_node_print(ast_node_t* node)
 {
     DEBUG_ME;
 	switch (node->type) {
-		case AST_TYPE_FUNCTION:
-			printf("Function\n");
-			break;
-		
-		case AST_TYPE_BLOCK:
-			printf("Block\n");
-			break;
+		#undef ADD_TYPE
+		#define ADD_TYPE(TYPE, NAME, NAME_LOWER) case TYPE: printf("%s\n", NAME); break;
 
-		case AST_TYPE_IMPORT:
-			printf("Import\n");
-			break;
-
-		case AST_TYPE_LAYOUT:
-			printf("Layout\n");
-			break;
-		
-		case AST_TYPE_IF:
-			printf("If\n");
-			break;
-
-		case AST_TYPE_PRINT:
-			printf("Print\n");
-			break;
-
-		case AST_TYPE_RETURN:
-			printf("Return\n");
-			break;
-		
-		case AST_TYPE_ELSE_IF:
-			printf("Else If\n");
-			break;
-		
-		case AST_TYPE_ERROR:
-			printf("Error\n");
-			break;
+		#include "ast_type.h"
 	}
 }
 
@@ -745,25 +714,8 @@ char* ast_block_type_name(ast_block_type_t type)
 {
     DEBUG_ME;
 	switch (type) {
-		case AST_BLOCK_TYPE_LAYOUT:
-			printf("Layout\n");
-			break;
-
-		case AST_BLOCK_TYPE_FUNCTION:
-			printf("Function\n");
-			break;
-
-		case AST_BLOCK_TYPE_IF:
-			printf("If\n");
-			break;
-
-		case AST_BLOCK_TYPE_ELSE_IF:
-			printf("Else If\n");
-			break;
-		
-		case AST_BLOCK_TYPE_ERROR:
-			printf("Error\n");
-			break;
+		#undef ADD_BLOCK_TYPE
+		#define ADD_BLOCK_TYPE(TYPE, NAME, NAME_LOWER) case TYPE: printf("%s\n", NAME); break;
 	}
 
 	return "unknown block";

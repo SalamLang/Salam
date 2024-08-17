@@ -742,6 +742,10 @@ void lexer_lex_identifier(lexer_t* lexer, int char_size)
 
 	buffer[index] = '\0';
 
+	printf("Buffer: %s\n", buffer);
+	LEXER_PREV;
+	printf("-->%c\n", LEXER_CURRENT);
+
     token_type_t type = type_keyword(buffer);
     token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
     token->data_type = TOKEN_IDENTIFIER;

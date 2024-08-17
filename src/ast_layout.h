@@ -1,6 +1,9 @@
 #ifndef _AST_LAYOUT_H_
 #define _AST_LAYOUT_H_
 
+#include <string.h>
+#include <stdbool.h>
+
 #include "base.h"
 #include "memory.h"
 #include "ast.h"

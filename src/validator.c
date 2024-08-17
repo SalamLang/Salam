@@ -349,110 +349,10 @@ bool is_style_attribute(ast_layout_attribute_type_t type)
 {
 	DEBUG_ME;
 	switch (type) {
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_FAMILY:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_SIZE:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_STYLE:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_WEIGHT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_HEIGHT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_WIDTH:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_LEFT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_RIGHT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_TOP:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_BOTTOM:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_LEFT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_RIGHT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_TOP:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_BOTTOM:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_COLOR:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ALIGN_LAST:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_POSITION:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_EMPHASIS_STYLE:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_THICKNESS:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_SKIP:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_SKIP_INK:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_TRANSFORM:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VERTICAL_ALIGN:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VISIBILITY:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_Z_INDEX:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_POSITION:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TOP:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_RIGHT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BOTTOM:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_LEFT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_COLOR:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_STYLE:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_WIDTH:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BORDER_RADIUS:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLOAT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CLEAR:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OVERFLOW:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_OVERFLOW:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_WHITE_SPACE:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CURSOR:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FILTER:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OPACITY:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TRANSFORM:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TRANSITION:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ANIMATION:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BOX_SHADOW:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_SHADOW:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE_COLOR:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE_STYLE:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_OUTLINE_WIDTH:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_COLOR:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_IMAGE:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_REPEAT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_POSITION:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_SIZE:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_ATTACHMENT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_CLIP:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_ORIGIN:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_BLEND_MODE:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_DISPLAY:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_DIRECTION:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_ANCHOR:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_COMBINE_UPRIGHT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_WRAP:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_FLOW:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_GROW:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_SHRINK:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLEX_BASIS:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_JUSTIFY_CONTENT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_ITEMS:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_SELF:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_CONTENT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ORDER:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_GRID:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FILL:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_WIDTH:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_LINECAP:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_LINEJOIN:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_DASHARRAY:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_DASHOFFSET:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FILL_OPACITY:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_STROKE_OPACITY:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_SHAPE_RENDERING:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_RENDERING:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_IMAGE_RENDERING:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR_INTERPOLATION:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR_RENDERING:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_VECTOR_EFFECT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MASK:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_CLIP_PATH:
+		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) case TYPE:
+
+		#include "ast_layout_attribute_style_type.h"
 			return true;
 
 		default:
@@ -632,183 +532,183 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 	}
 	// Global values
 	else if (first->type->kind == AST_TYPE_KIND_STRING && attribute->values->length == 1) {
-		if (strcmp(value, "inherit") == 0) return true;
-		else if (strcmp(value, "initial") == 0) return true;
-		else if (strcmp(value, "revert") == 0) return true;
-		else if (strcmp(value, "revert-layer") == 0) return true;
-		else if (strcmp(value, "unset") == 0) return true;
+		if (false) {}
+		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(ENDUSER_NAME, GENERATED_NAME) else if (strcmp(value, ENDUSER_NAME) == 0) return true;
+
+		#include "ast_layout_attribute_style_global.h"
 	}
 
-	switch (attribute->type) {
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND:
-			return true;
+	// switch (attribute->type) {
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND:
+	// 		return true;
 
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_COLOR:
-			if (attribute->values->length > 1) {
-				error_validator(2, "Color value is too many in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
-				return false;
-			}
-			return validate_style_value_color(attribute);
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR:
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_COLOR:
+	// 		if (attribute->values->length > 1) {
+	// 			error_validator(2, "Color value is too many in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
+	// 			return false;
+	// 		}
+	// 		return validate_style_value_color(attribute);
 
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT:
-			return true;
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT:
+	// 		return true;
 		
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_FAMILY:
-			return true;
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_FAMILY:
+	// 		return true;
 		
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_STYLE:
-			if (attribute->values->length > 1) {
-				error_validator(2, "Font weight value is too many in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
-				return false;
-			}
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_STYLE:
+	// 		if (attribute->values->length > 1) {
+	// 			error_validator(2, "Font weight value is too many in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
+	// 			return false;
+	// 		}
 			
-			if (strcmp(value, "normal") == 0) return true;
-			else if (strcmp(value, "italic") == 0) return true;
-			else if (strcmp(value, "oblique") == 0) return true;
-			else if (strcmp(value, "oblique 10deg") == 0) return true;
-			else return false;
-			break;
+	// 		if (strcmp(value, "normal") == 0) return true;
+	// 		else if (strcmp(value, "italic") == 0) return true;
+	// 		else if (strcmp(value, "oblique") == 0) return true;
+	// 		else if (strcmp(value, "oblique 10deg") == 0) return true;
+	// 		else return false;
+	// 		break;
 
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_WEIGHT:
-			if (attribute->values->length > 1) {
-				error_validator(2, "Font weight value is too many in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
-				return false;
-			}
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_WEIGHT:
+	// 		if (attribute->values->length > 1) {
+	// 			error_validator(2, "Font weight value is too many in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
+	// 			return false;
+	// 		}
 
-			if (strcmp(value, "normal") == 0) return true;
-			else if (strcmp(value, "bold") == 0) return true;
-			else if (strcmp(value, "lighter") == 0) return true;
-			else if (strcmp(value, "bolder") == 0) return true;
-			else if (string_is_number(value) == true) {
-				int value_int = atoi(value);
-				if (value_int >= 1 && value_int <= 1000) return true;
-				else {
-					error_validator(2, "Font weight value is invalid, it should be between 1 and 1000");
-				}
-			}
+	// 		if (strcmp(value, "normal") == 0) return true;
+	// 		else if (strcmp(value, "bold") == 0) return true;
+	// 		else if (strcmp(value, "lighter") == 0) return true;
+	// 		else if (strcmp(value, "bolder") == 0) return true;
+	// 		else if (string_is_number(value) == true) {
+	// 			int value_int = atoi(value);
+	// 			if (value_int >= 1 && value_int <= 1000) return true;
+	// 			else {
+	// 				error_validator(2, "Font weight value is invalid, it should be between 1 and 1000");
+	// 			}
+	// 		}
 
-			else return false;
-			break;
+	// 		else return false;
+	// 		break;
 		
 
-		// case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION:
-		// 	ast_layout_attribute_type_t sub_types[] = {
-		// 		AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE,
-		// 		AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE,
-		// 		AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR,
-		// 	}; // one value should applied, we allow multiple value but only one value for each group, and user can leave the other groups empty (if he want)
-		// 	size_t sub_types_length = sizeof(sub_types) / sizeof(sub_types[0]);
-		// 	hashmap_t* sub_groups = hashmap_create_layout_attribute(1);
+	// 	// case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION:
+	// 	// 	ast_layout_attribute_type_t sub_types[] = {
+	// 	// 		AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE,
+	// 	// 		AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE,
+	// 	// 		AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR,
+	// 	// 	}; // one value should applied, we allow multiple value but only one value for each group, and user can leave the other groups empty (if he want)
+	// 	// 	size_t sub_types_length = sizeof(sub_types) / sizeof(sub_types[0]);
+	// 	// 	hashmap_t* sub_groups = hashmap_create_layout_attribute(1);
 
-		// 	for (size_t i = 0; i < attribute->values->length; i++) {
-		// 		bool _res = false;
+	// 	// 	for (size_t i = 0; i < attribute->values->length; i++) {
+	// 	// 		bool _res = false;
 
-		// 		ast_value_t* _value = attribute->values->data[i];
+	// 	// 		ast_value_t* _value = attribute->values->data[i];
 
-		// 		for (size_t j = 0; j < sub_types_length; j++) {
-		// 			char* _key = ast_layout_attribute_type_to_name(sub_types[j]);
+	// 	// 		for (size_t j = 0; j < sub_types_length; j++) {
+	// 	// 			char* _key = ast_layout_attribute_type_to_name(sub_types[j]);
 
-		// 			if (hashmap_has(sub_groups, _key) == true) {
-		// 				continue;
-		// 			}
+	// 	// 			if (hashmap_has(sub_groups, _key) == true) {
+	// 	// 				continue;
+	// 	// 			}
 
-		// 			array_value_t* _values = array_value_create(1);
-		// 			array_push(_values, ast_value_copy(_value));
+	// 	// 			array_value_t* _values = array_value_create(1);
+	// 	// 			array_push(_values, ast_value_copy(_value));
 
-		// 			char* _values_str = array_value_stringify(_values, ", ");
+	// 	// 			char* _values_str = array_value_stringify(_values, ", ");
 
-		// 			ast_layout_attribute_t* _attribute = ast_layout_attribute_create(sub_types[j], _key, _values, attribute->parent_node_type, attribute->key_location, attribute->value_location);
-		// 			_attribute->isStyle = attribute->isStyle;
-		// 			_attribute->isContent = attribute->isContent;
-		// 			_attribute->final_key = strdup(_key);
-		// 			_attribute->final_value = strdup(_values_str);
+	// 	// 			ast_layout_attribute_t* _attribute = ast_layout_attribute_create(sub_types[j], _key, _values, attribute->parent_node_type, attribute->key_location, attribute->value_location);
+	// 	// 			_attribute->isStyle = attribute->isStyle;
+	// 	// 			_attribute->isContent = attribute->isContent;
+	// 	// 			_attribute->final_key = strdup(_key);
+	// 	// 			_attribute->final_value = strdup(_values_str);
 
-		// 			bool sub_res = validate_style_value(styles, new_styles, _attribute);
+	// 	// 			bool sub_res = validate_style_value(styles, new_styles, _attribute);
 					
-		// 			if (_values_str != NULL) memory_destroy(_values_str);
+	// 	// 			if (_values_str != NULL) memory_destroy(_values_str);
 
-		// 			if (sub_res == true) {
-		// 				_res = true;
-		// 				hashmap_put(sub_groups, _key, _attribute);
-		// 				break;
-		// 			}
-		// 			else {
-		// 				_attribute->destroy(_attribute);
-		// 			}
-		// 		}
+	// 	// 			if (sub_res == true) {
+	// 	// 				_res = true;
+	// 	// 				hashmap_put(sub_groups, _key, _attribute);
+	// 	// 				break;
+	// 	// 			}
+	// 	// 			else {
+	// 	// 				_attribute->destroy(_attribute);
+	// 	// 			}
+	// 	// 		}
 
-		// 		if (_res == false) {
-		// 			error_validator(2, "Text decoration value is invalid in the '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
-		// 		}
-		// 	}
+	// 	// 		if (_res == false) {
+	// 	// 			error_validator(2, "Text decoration value is invalid in the '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
+	// 	// 		}
+	// 	// 	}
 
-		// 	if (attribute->values->length > 0) {
-		// 		attribute->ignoreMe = true;
+	// 	// 	if (attribute->values->length > 0) {
+	// 	// 		attribute->ignoreMe = true;
 
-		// 		for (size_t i = 0; i < sub_groups->capacity; i++) {
-		// 			hashmap_entry_t* entry = sub_groups->data[i];
+	// 	// 		for (size_t i = 0; i < sub_groups->capacity; i++) {
+	// 	// 			hashmap_entry_t* entry = sub_groups->data[i];
 
-		// 			while (entry) {
-		// 				ast_layout_attribute_t* atr = entry->value;
-		// 				ast_layout_attribute_t* atr_copy = ast_layout_attribute_copy(atr);
-		// 				atr_copy->ignoreMe = false;
-		// 				atr_copy->isStyle = true;
+	// 	// 			while (entry) {
+	// 	// 				ast_layout_attribute_t* atr = entry->value;
+	// 	// 				ast_layout_attribute_t* atr_copy = ast_layout_attribute_copy(atr);
+	// 	// 				atr_copy->ignoreMe = false;
+	// 	// 				atr_copy->isStyle = true;
 
-		// 				hashmap_put(new_styles, entry->key, atr_copy);
+	// 	// 				hashmap_put(new_styles, entry->key, atr_copy);
 
-		// 				entry = cast(hashmap_entry_t*, entry->next);
-		// 			}
-		// 		}
+	// 	// 				entry = cast(hashmap_entry_t*, entry->next);
+	// 	// 			}
+	// 	// 		}
 
-		// 		sub_groups->destroy(sub_groups);
+	// 	// 		sub_groups->destroy(sub_groups);
 
-		// 		return true;
-		// 	}
+	// 	// 		return true;
+	// 	// 	}
 
-		// 	sub_groups->destroy(sub_groups);
-		// 	return false;
-		// 	break;
+	// 	// 	sub_groups->destroy(sub_groups);
+	// 	// 	return false;
+	// 	// 	break;
 
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_WIDTH:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_HEIGHT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_SIZE:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_TOP:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_RIGHT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_LEFT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_BOTTOM:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_TOP:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_RIGHT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_LEFT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_BOTTOM:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TOP:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_RIGHT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_LEFT:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BOTTOM:
-			if (attribute->values->length > 1) {
-				error_validator(2, "Size value for attribute '%s' is too many in the '%s' element, it should be only one", attribute->key, generator_code_layout_node_type(attribute->parent_node_type));
-				return false;
-			}
-			// return validate_style_value_size(attribute);
-			return true;
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_WIDTH:
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_HEIGHT:
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_SIZE:
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_TOP:
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_RIGHT:
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_LEFT:
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_BOTTOM:
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_TOP:
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_RIGHT:
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_LEFT:
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_BOTTOM:
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TOP:
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_RIGHT:
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_LEFT:
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BOTTOM:
+	// 		if (attribute->values->length > 1) {
+	// 			error_validator(2, "Size value for attribute '%s' is too many in the '%s' element, it should be only one", attribute->key, generator_code_layout_node_type(attribute->parent_node_type));
+	// 			return false;
+	// 		}
+	// 		// return validate_style_value_size(attribute);
+	// 		return true;
 
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN:
-		case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING:
-			if (attribute->values->length == 3) {
-				error_validator(2, "Number of size value for attribute '%s' is invalid in the '%s' element, it should be one, two or four", attribute->key, generator_code_layout_node_type(attribute->parent_node_type));
-				return false;
-			}
-			else if (attribute->values->length > 4) {
-				error_validator(2, "Size value for attribute '%s' is too many in the '%s' element, it should be only one", attribute->key, generator_code_layout_node_type(attribute->parent_node_type));
-				return false;
-			}
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN:
+	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING:
+	// 		if (attribute->values->length == 3) {
+	// 			error_validator(2, "Number of size value for attribute '%s' is invalid in the '%s' element, it should be one, two or four", attribute->key, generator_code_layout_node_type(attribute->parent_node_type));
+	// 			return false;
+	// 		}
+	// 		else if (attribute->values->length > 4) {
+	// 			error_validator(2, "Size value for attribute '%s' is too many in the '%s' element, it should be only one", attribute->key, generator_code_layout_node_type(attribute->parent_node_type));
+	// 			return false;
+	// 		}
 
-			// return validate_style_value_sizes(attribute);
-			return false;
+	// 		// return validate_style_value_sizes(attribute);
+	// 		return false;
 
-		default:
-			return false;
-	}
+	// 	default:
+	// 		return false;
+	// }
 
 	return false;
 }

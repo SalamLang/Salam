@@ -1,33 +1,5 @@
 #include "ast_layout.h"
 
-typedef struct {
-    int type;                      // Attribute type identifier
-    const char *style_name;        // Name of the style (e.g., "STYLE_BACKGROUND")
-    const char *style_key;         // Key for the style (e.g., "style_background")
-    const char *style_css_name;    // CSS name (e.g., "style-background")
-    const char *css_property;      // CSS property (e.g., "background")
-    int filter_type;               // Filter type for the style
-    const char *values[];          // Array of possible values (if any)
-    const int substyles[];         // Array of substyles (if any)
-} LayoutAttributeStyleType;
-
-LayoutAttributeStyleType style_attributes[] = {
-	#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
-	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(type, name, key, css_name, css_property, filter_type, values, substyles) \
-		{ \
-			type, \
-			name, \
-			key, \
-			css_name, \
-			css_property, \
-			filter_type, \
-			values, \
-			substyles \
-		}
-	
-	#include "ast_layout_attribute_style_type.h"
-};
-
 /**
  * 
  * @function ast_layout_attribute_print
@@ -500,7 +472,7 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name)
     #undef ADD_LAYOUT_ATTRIBUTE_TYPE
     #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
 	#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
-	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
 
 	if (false) {}
 	#include "ast_layout_attribute_type.h"
@@ -525,7 +497,7 @@ ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_type(char* name
     #undef ADD_LAYOUT_ATTRIBUTE_TYPE
     #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
 	#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, ENDUSER_NAME) == 0) type = TYPE;
-	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, ENDUSER_NAME) == 0) type = TYPE;
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) else if (strcmp(name, ENDUSER_NAME) == 0) type = TYPE;
 
 	if (false) {}
 	#include "ast_layout_attribute_type.h"
@@ -552,8 +524,8 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_style_type(char* name)
     #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
 
 	#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
-	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
-	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
 
 	if (false) {}
 	#include "ast_layout_attribute_style_type.h"
@@ -579,8 +551,8 @@ ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_style_type(char
     #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
 
 	#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
-	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
-	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) else if (strcmp(name, NAME_LOWER) == 0) type = TYPE;
 
 	if (false) {}
 	#include "ast_layout_attribute_style_type.h"
@@ -631,8 +603,8 @@ char* ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type)
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
 
 		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return NAME_LOWER;
-		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return NAME_LOWER;
-		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) case TYPE: return NAME_LOWER;
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) 
 
 		#include "ast_layout_attribute_type.h"
 		#include "ast_layout_attribute_style_type.h"

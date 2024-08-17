@@ -1,0 +1,5 @@
+ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE("inherit", "inherit")
+ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE("initial", "initial")
+ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE("revert", "revert")
+ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE("revert-layer", "revert-layer")
+ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE("unset", "unset")

@@ -552,7 +552,7 @@ void generator_code_layout_style_value(hashmap_t* styles, hashmap_t* new_styles,
 {
 	DEBUG_ME;
 	bool isValid = validate_style_value(styles, new_styles, attribute);
-
+	
 	// Invalid value for '...' attribute in '...' element in case if not stopped by the condition
 	if (isValid == false) {
 		error_generator(2, "Invalid value for '%s' attribute in '%s' element at line %zu column %zu!", attribute->key, generator_code_layout_node_type(parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
@@ -583,13 +583,13 @@ char* generator_code_layout_style_name(ast_layout_attribute_type_t type)
 	switch (type) {
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
-		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) case TYPE: return GENERATED_NAME;
-		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) 
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return GENERATED_NAME;
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
 
 	    #include "ast_layout_attribute_style_type.h"
 
 		#undef ADD_LAYOUT_ATTRIBUTE_TYPE
-		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) case TYPE: return "ERROR";
+		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return "ERROR";
 		
 	    #include "ast_layout_attribute_type.h"
 	}

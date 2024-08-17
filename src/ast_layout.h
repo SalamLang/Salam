@@ -18,14 +18,21 @@ typedef enum {
 typedef enum {
     #undef ADD_LAYOUT_ATTRIBUTE_TYPE
     #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
-    #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) TYPE,
-    #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) TYPE,
-    #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) 
+    #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) TYPE,
+    #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) TYPE,
+    #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
     
     #include "ast_layout_attribute_type.h"
     
     #include "ast_layout_attribute_style_type.h"
 } ast_layout_attribute_type_t;
+
+typedef enum {
+    #undef ADD_AST_LAYOUT_ATTRIBUTE_STYLE_FILTER
+    #define ADD_AST_LAYOUT_ATTRIBUTE_STYLE_FILTER(TYPE, NAME, NAME_LOWER) TYPE,
+
+    #include "ast_layout_attribute_style_filter.h"
+} ast_layout_attribute_style_filter_t;
 
 typedef struct ast_layout_block_t {
     ast_block_type_t type;
@@ -217,6 +224,16 @@ ast_layout_node_type_t name_to_ast_layout_node_type(char* name);
 
 /**
  * 
+ * @function enduser_name_to_ast_layout_attribute_type
+ * @brief Convert enduser attribute name to AST layout node type
+ * @params {char*} name - Name
+ * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
+ * 
+ */
+ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_type(char* name);
+
+/**
+ * 
  * @function token_to_ast_layout_node_type
  * @brief Convert token to AST layout node type
  * @params {token_t*} token - Token
@@ -286,5 +303,35 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name);
  * 
  */
 ast_layout_attribute_type_t name_to_ast_layout_attribute_style_type(char* name);
+
+/**
+ * 
+ * @function enduser_name_to_ast_layout_attribute_style_type
+ * @brief Convert style end-user attribute name to AST layout node type
+ * @params {char*} name - Name
+ * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
+ * 
+ */
+ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_style_type(char* name);
+
+/**
+ * 
+ * @function ast_layout_node_type_to_enduser_name
+ * @brief Convert AST layout attribute type to enduser name
+ * @params {ast_layout_node_type_t} type - Layout Attribute Type
+ * @returns {char*} name - Name
+ * 
+ */
+char* ast_layout_node_type_to_enduser_name(ast_layout_node_type_t type);
+
+/**
+ * 
+ * @function enduser_name_to_ast_layout_node_type
+ * @brief Convert enduser name to AST layout node type
+ * @params {char*} name - Name
+ * @returns {ast_layout_node_type_t} type - Layout Node Type
+ * 
+ */
+ast_layout_node_type_t enduser_name_to_ast_layout_node_type(char* name);
 
 #endif

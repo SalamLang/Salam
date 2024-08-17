@@ -14,6 +14,7 @@ typedef struct array_t {
     size_t element_capacity;
 
     void (*print)(void* node);
+    char* (*stringify)(void*);
     void (*destroy)(void* node);
 } array_t;
 
@@ -412,5 +413,15 @@ array_value_t* array_value_copy(array_value_t* values);
  * 
  */
 char* array_value_stringify(array_value_t* array, char* seperator);
+
+/**
+ * 
+ * @function array_token_stringify
+ * @brief Convert the token array to a string
+ * @params {array_token_t*} array - Token array
+ * @returns {char*} - String
+ * 
+ */
+char* array_token_stringify(array_token_t* array);
 
 #endif

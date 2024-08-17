@@ -40,7 +40,7 @@ typedef struct {
                                 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, \
                                 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
 
-#define ADD_TOKEN(...) ADD_TOKEN_CHOOSER(NUM_ARGS(__VA_ARGS__))(__VA_ARGS__)
+#define ADD_TOKEN_TEST(...) ADD_TOKEN_CHOOSER(NUM_ARGS(__VA_ARGS__))(__VA_ARGS__)
 
 #define ADD_TOKEN_CHOOSER(N) ADD_TOKEN_##N
 
@@ -118,7 +118,7 @@ typedef struct {
     size_t index;
     size_t line;
     size_t column;
-    array_t* tokens;
+    array_token_t* tokens;
     size_t token_index; // For parsing purposes
 } lexer_t;
 
@@ -335,5 +335,35 @@ char* token_stringify(token_t* token);
  * 
  */
 const char* token_type_stringify(token_type_t token);
+
+/**
+ * 
+ * @function token_char_type
+ * @brief Get the type of a character
+ * @params {char} c - Character
+ * @returns {token_type_t}
+ * 
+ */
+token_type_t token_char_type(char c);
+
+/**
+ * 
+ * @function token_string_type
+ * @brief Get the type of a string
+ * @params {const char*} s - String
+ * @returns {token_type_t}
+ * 
+ */
+token_type_t token_string_type(const char* s);
+
+/**
+ * 
+ * @function token_type_keyword
+ * @brief Get the keyword of a token type
+ * @params {token_type_t} Token type
+ * @returns {char*}
+ * 
+ */
+char* token_type_keyword(token_type_t type);
 
 #endif

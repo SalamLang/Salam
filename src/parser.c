@@ -121,34 +121,6 @@ void expect(lexer_t* lexer, token_type_t token_type)
 	PARSER_NEXT;
 }
 
-/**
- * 
- * @function unknown
- * @brief Unknown token type
- * @params {lexer_t*} lexer - Lexer
- * @returns {void}
- * 
- */
-void unknown(lexer_t* lexer)
-{
-	DEBUG_ME;
-	error_parser(2, "Unexpected token type %s at line %d, column %d", token_name(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
-}
-
-/**
- * 
- * @function unknown_scope
- * @brief Unknown token type in a specific scope
- * @params {lexer_t*} lexer - Lexer
- * @params {char*} scope - Scope
- * @returns {void}
- * 
- */
-void unknown_scope(lexer_t* lexer, char* scope)
-{
-	DEBUG_ME;
-	error_parser(2, "Unknown token type %s in scope %s at line %zu, column %zu\n", token_name(PARSER_CURRENT->type), scope, PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
-}
 
 /**
  * 
@@ -406,7 +378,7 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer)
 			parser_parse_layout_block_attribute(block, lexer);
 		}
 		else {
-			unknown_scope(lexer, "layout block");
+			error_parser(2, "Unknown token '%s' inside a layout block at line %d, column %d", token_name(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
 		}
 	}
 
@@ -723,10 +695,8 @@ ast_node_t* parser_parse_node(lexer_t* lexer)
 		return parser_parse_print(lexer);
 	}
 	else {
-		error_parser(2, "Unknown token type '%s' at line %d, column %d", token_name(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
+		error_parser(2, "Unknown token '%s' as statement at line %d, column %d", token_name(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
 	}
-
-	// unknown_scope(lexer, "node");
 
 	return NULL;
 }

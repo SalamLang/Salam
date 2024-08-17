@@ -13,6 +13,7 @@ void panic(const char* message, ...)
 {
     DEBUG_ME;
     va_list args;
+
     va_start(args, message);
     fprintf(stderr, "Panic error: ");
     vfprintf(stderr, message, args);
@@ -34,8 +35,9 @@ void panic(const char* message, ...)
  */
 void error(int code, const char* message, ...)
 {
-    // DEBUG_ME;
+    DEBUG_ME;
     va_list args;
+
     va_start(args, message);
     fprintf(stderr, "Error: ");
     vfprintf(stderr, message, args);
@@ -58,9 +60,15 @@ void error(int code, const char* message, ...)
 void error_generator(int code, const char* message, ...)
 {
     DEBUG_ME;
-    fprintf(stderr, "Generator ");
+    va_list args;
 
-    error(code, message);
+    va_start(args, message);
+    fprintf(stderr, "Generator Error: ");
+    vfprintf(stderr, message, args);
+    va_end(args);
+    fprintf(stderr, "\n");
+
+    exit(code);
 }
 
 /**
@@ -75,10 +83,15 @@ void error_generator(int code, const char* message, ...)
  */
 void error_parser(int code, const char* message, ...)
 {
-    DEBUG_ME;
-    fprintf(stderr, "Parser ");
+    va_list args;
 
-    error(code, message);
+    va_start(args, message);
+    fprintf(stderr, "Parser Error: ");
+    vfprintf(stderr, message, args);
+    va_end(args);
+    fprintf(stderr, "\n");
+
+    exit(code);
 }
 
 /**
@@ -93,10 +106,15 @@ void error_parser(int code, const char* message, ...)
  */
 void error_lexer(int code, const char* message, ...)
 {
-    DEBUG_ME;
-    fprintf(stderr, "Lexer ");
+    va_list args;
 
-    error(code, message);
+    va_start(args, message);
+    fprintf(stderr, "Lexer Error: ");
+    vfprintf(stderr, message, args);
+    va_end(args);
+    fprintf(stderr, "\n");
+
+    exit(code);
 }
 
 /**
@@ -111,10 +129,15 @@ void error_lexer(int code, const char* message, ...)
  */
 void error_ast(int code, const char* message, ...)
 {
-    DEBUG_ME;
-    fprintf(stderr, "AST ");
+    va_list args;
 
-    error(code, message);
+    va_start(args, message);
+    fprintf(stderr, "AST Error: ");
+    vfprintf(stderr, message, args);
+    va_end(args);
+    fprintf(stderr, "\n");
+
+    exit(code);
 }
 
 /**
@@ -129,10 +152,15 @@ void error_ast(int code, const char* message, ...)
  */
 void error_validator(int code, const char* message, ...)
 {
-    DEBUG_ME;
-    fprintf(stderr, "Validator ");
+    va_list args;
 
-    error(code, message);
+    va_start(args, message);
+    fprintf(stderr, "Validator Error: ");
+    vfprintf(stderr, message, args);
+    va_end(args);
+    fprintf(stderr, "\n");
+
+    exit(code);
 }
 
 /**
@@ -147,10 +175,15 @@ void error_validator(int code, const char* message, ...)
  */
 void error_interpreter(int code, const char* message, ...)
 {
-    DEBUG_ME;
-    fprintf(stderr, "Interpreter ");
+    va_list args;
 
-    error(code, message);
+    va_start(args, message);
+    fprintf(stderr, "Interpreter Error: ");
+    vfprintf(stderr, message, args);
+    va_end(args);
+    fprintf(stderr, "\n");
+
+    exit(code);
 }
 
 /**
@@ -164,8 +197,9 @@ void error_interpreter(int code, const char* message, ...)
  */
 void warning(const char* message, ...)
 {
-    // DEBUG_ME;
+    DEBUG_ME;
     va_list args;
+
     va_start(args, message);
     fprintf(stderr, "Warning: ");
     vfprintf(stderr, message, args);
@@ -185,9 +219,13 @@ void warning(const char* message, ...)
 void warning_generator(const char* message, ...)
 {
     DEBUG_ME;
-    fprintf(stderr, "Generator ");
+    va_list args;
 
-    warning(message);
+    va_start(args, message);
+    fprintf(stderr, "Generator Warning: ");
+    vfprintf(stderr, message, args);
+    va_end(args);
+    fprintf(stderr, "\n");
 }
 
 /**
@@ -202,9 +240,13 @@ void warning_generator(const char* message, ...)
 void warning_parser(const char* message, ...)
 {
     DEBUG_ME;
-    fprintf(stderr, "Parser ");
+    va_list args;
 
-    warning(message);
+    va_start(args, message);
+    fprintf(stderr, "Parser Warning: ");
+    vfprintf(stderr, message, args);
+    va_end(args);
+    fprintf(stderr, "\n");
 }
 
 /**
@@ -219,9 +261,13 @@ void warning_parser(const char* message, ...)
 void warning_lexer(const char* message, ...)
 {
     DEBUG_ME;
-    fprintf(stderr, "Lexer ");
+    va_list args;
 
-    warning(message);
+    va_start(args, message);
+    fprintf(stderr, "Lexer Warning: ");
+    vfprintf(stderr, message, args);
+    va_end(args);
+    fprintf(stderr, "\n");
 }
 
 /**
@@ -236,9 +282,13 @@ void warning_lexer(const char* message, ...)
 void warning_ast(const char* message, ...)
 {
     DEBUG_ME;
-    fprintf(stderr, "AST ");
+    va_list args;
 
-    warning(message);
+    va_start(args, message);
+    fprintf(stderr, "AST Warning: ");
+    vfprintf(stderr, message, args);
+    va_end(args);
+    fprintf(stderr, "\n");
 }
 
 /**
@@ -253,9 +303,13 @@ void warning_ast(const char* message, ...)
 void warning_validator(const char* message, ...)
 {
     DEBUG_ME;
-    fprintf(stderr, "Validator ");
+    va_list args;
 
-    warning(message);
+    va_start(args, message);
+    fprintf(stderr, "Validator Warning: ");
+    vfprintf(stderr, message, args);
+    va_end(args);
+    fprintf(stderr, "\n");
 }
 
 /**
@@ -270,7 +324,11 @@ void warning_validator(const char* message, ...)
 void warning_interpreter(const char* message, ...)
 {
     DEBUG_ME;
-    fprintf(stderr, "Interpreter ");
+    va_list args;
 
-    warning(message);
+    va_start(args, message);
+    fprintf(stderr, "Interpreter Warning: ");
+    vfprintf(stderr, message, args);
+    va_end(args);
+    fprintf(stderr, "\n");
 }

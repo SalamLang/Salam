@@ -52,27 +52,6 @@ void expect(lexer_t* lexer, token_type_t token_type);
 
 /**
  * 
- * @function unknown
- * @brief Unknown token type
- * @params {lexer_t*} lexer - Lexer
- * @returns {void}
- * 
- */
-void unknown(lexer_t* lexer);
-
-/**
- * 
- * @function unknown_scope
- * @brief Unknown token type in a specific scope
- * @params {lexer_t*} lexer - Lexer
- * @params {char*} scope - Scope
- * @returns {void}
- * 
- */
-void unknown_scope(lexer_t* lexer, char* scope);
-
-/**
- * 
  * @function parser_parse_block
  * @brief Parse the block
  * @params {lexer_t*} lexer - Lexer

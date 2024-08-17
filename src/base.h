@@ -22,5 +22,5 @@
 #define BRIGHT_CYAN "\033[96m"
 #define BRIGHT_WHITE "\033[97m"
 
-#define DEBUG_ME printf(GRAY "DEBUG: %s:%d in %s function\n" RESET, __FILE__, __LINE__, __func__)
+#define DEBUG_ME printf(GRAY "DEBUG: %s:%d in %s\n" RESET, __FILE__, __LINE__, __func__)
 // #define DEBUG_ME

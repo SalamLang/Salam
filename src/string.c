@@ -167,7 +167,7 @@ void string_print(string_t* str)
  * @returns {void}
  * 
  */
-void string_append(string_t* str, string_t* value)
+void string_append(string_t* str, const string_t* value)
 {
 	DEBUG_ME;
 	if (value->length == 0) return;

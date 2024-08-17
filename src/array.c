@@ -273,14 +273,42 @@ void array_print(array_t* array)
 void array_token_print(array_token_t* array)
 {
     DEBUG_ME;
-    printf("Token array: %zu\n", array->length);
+    printf("Array Token: ");
+    printf("%zu\n", array->length);
 
-    for (size_t i = 0; i < array->length; i++) {
-        printf("\t");
-        token_t* token = array_get(array, i);
+    printf("%s\n", array_token_stringify(array));
+}
 
-        token->print(token);
+/**
+ * 
+ * @function array_token_stringify
+ * @brief Convert the token array to a string
+ * @params {array_token_t*} array - Token array
+ * @params {char*} seperator - Separator
+ * @returns {char*} - String
+ * 
+ */
+char* array_token_stringify(array_token_t* array)
+{
+    DEBUG_ME;
+    if (array == NULL || array->length == 0) {
+        return strdup("Token array is empty");
     }
+
+    string_t* str = string_create(5 * array->length);
+    for (size_t i = 0; i < array->length; i++) {
+        token_t* token = array_get(array, i);
+        string_append_str(str, token->value_stringify(token));
+
+        if (i < array->length - 1) {
+            string_append_str(str, ", ");
+        }
+    }
+
+    char* buffer = strdup(str->data);
+    string_destroy(str);
+
+    return buffer;
 }
 
 /**
@@ -346,7 +374,8 @@ void array_node_print(array_node_t* array)
 void array_layout_attribute_print(array_layout_attribute_t* array)
 {
     DEBUG_ME;
-    printf("Attribute array: %zu\n", array->length);
+    printf("Attribute array: ");
+    printf("%zu\n", array->length);
 
     if (array->length == 0) {
 		printf("Array is empty\n");

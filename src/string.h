@@ -120,12 +120,12 @@ void string_set_str(string_t* str, const char* value);
  * 
  * @function string_append
  * @brief Append a string to the end of the string
- * @params {string_t*} str - String
+ * @params {c*} str - String
  * @params {string_t*} value - Value
  * @returns {void}
  * 
  */
-void string_append(string_t* str, string_t* value);
+void string_append(string_t* str, const string_t* value);
 
 /**
  * 

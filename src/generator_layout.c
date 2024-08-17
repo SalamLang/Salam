@@ -583,8 +583,8 @@ char* generator_code_layout_style_name(ast_layout_attribute_type_t type)
 	switch (type) {
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
-		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return GENERATED_NAME;
-		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) case TYPE: return GENERATED_NAME;
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) 
 
 	    #include "ast_layout_attribute_style_type.h"
 
@@ -610,7 +610,7 @@ char* generator_code_layout_node_type(ast_layout_node_type_t type)
 	DEBUG_ME;
 	switch (type) {
 		#undef ADD_LAYOUT_TYPE
-		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) case TYPE: return GENERATED_NAME;
+		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return GENERATED_NAME;
 
 		#include "ast_layout_type.h"
 	}

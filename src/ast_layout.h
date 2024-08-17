@@ -10,7 +10,7 @@
 
 typedef enum {
     #undef ADD_LAYOUT_TYPE
-    #define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME) TYPE,
+    #define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) TYPE,
 
     #include "ast_layout_type.h"
 } ast_layout_node_type_t;
@@ -19,8 +19,8 @@ typedef enum {
     #undef ADD_LAYOUT_ATTRIBUTE_TYPE
     #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
     #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) TYPE,
-    #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) TYPE,
-    #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
+    #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) TYPE,
+    #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) 
     
     #include "ast_layout_attribute_type.h"
     
@@ -86,6 +86,17 @@ typedef struct ast_layout_node_t {
     void (*destroy)(void* node);
     void (*print)(void* node);
 } ast_layout_node_t;
+
+typedef struct {
+    int type;                      // Attribute type identifier
+    const char *style_name;        // Name of the style (e.g., "STYLE_BACKGROUND")
+    const char *style_key;         // Key for the style (e.g., "style_background")
+    const char *style_css_name;    // CSS name (e.g., "style-background")
+    const char *css_property;      // CSS property (e.g., "background")
+    int filter_type;               // Filter type for the style
+    const char **values;           // Pointer to array of possible values (if any)
+    const int *substyles;          // Pointer to array of substyles (if any)
+} LayoutAttributeStyleType;
 
 /**
  * 

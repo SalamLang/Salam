@@ -46,8 +46,8 @@ const keyword_t keywords[] = {
 
     #define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE) 
     #define ADD_CHAR_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR) 
-    #define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) {TOKEN_VALUE_LENGTH, TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE},
-    #define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) {TOKEN_VALUE_LENGTH, TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE},
+    #define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) {.length=TOKEN_VALUE_LENGTH, .type=TOKEN_TYPE, .name=TOKEN_NAME, .keyword=TOKEN_VALUE},
+    #define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) {.length=TOKEN_VALUE_LENGTH, .type=TOKEN_TYPE, .name=TOKEN_NAME, .keyword=TOKEN_VALUE},
 
     #include "token.h"
 };
@@ -146,20 +146,69 @@ void token_destroy(token_t* token)
  * 
  * @function token_type_stringify
  * @brief Get the name of a token type
- * @params {token_type_t} token - Token type
+ * @params {token_type_t} type - Token type
  * @returns {char*}
  * 
  */
-const char* token_type_stringify(token_type_t token)
+const char* token_type_stringify(token_type_t type)
 {
 	DEBUG_ME;
-    for (size_t i = 0; i < sizeof(token_names) / sizeof(token_names[0]); ++i) {
-        if (token_names[i].token == token) {
-            return token_names[i].name;
-        }
-    }
+	// switch (type) {
+		for (size_t i = 0; i < sizeof(token_names) / sizeof(token_names[0]); ++i) {
+			if (token_names[i].token == token) {
+				return token_names[i].name;
+			}
+		}
+	// }
 
-    return "UNKNOWN";
+    return TOKEN_NAME_UNKNOWN;
+}
+
+/**
+ * 
+ * @function token_char_type
+ * @brief Get the type of a character
+ * @params {char} c - Character
+ * @returns {token_type_t}
+ * 
+ */
+token_type_t token_char_type(char c)
+{
+	DEBUG_ME;
+	switch (c) {
+		#undef ADD_TOKEN
+		#undef ADD_CHAR_TOKEN
+		#undef ADD_KEYWORD
+		#undef ADD_KEYWORD_HIDE
+
+		#define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE) 
+		#define ADD_CHAR_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR) case TOKEN_CHAR: return TOKEN_TYPE;
+		#define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) 
+		#define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH)
+
+		#include "token.h"
+	}
+
+	return TOKEN_ERROR;
+}
+
+/**
+ * 
+ * @function token_string_type
+ * @brief Get the type of a string
+ * @params {const char*} s - String
+ * @returns {token_type_t}
+ * 
+ */
+token_type_t token_string_type(const char* s)
+{
+	for (size_t i = 0; i < sizeof(token_names) / sizeof(token_names[0]); ++i) {
+		if (token_names[i].keyword == s) {
+			return token_names[i].token;
+		}
+	}
+
+	return TOKEN_ERROR;
 }
 
 /**
@@ -209,158 +258,48 @@ char* token_name(token_type_t type)
 {
     DEBUG_ME;
 	switch (type) {
-		case TOKEN_EOF:
-			return "EOF";
+		#undef ADD_TOKEN
+		#undef ADD_CHAR_TOKEN
+		#undef ADD_KEYWORD
+		#undef ADD_KEYWORD_HIDE
 
-		case TOKEN_IDENTIFIER:
-			return "IDENTIFIER";
+		#define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE) case TOKEN_TYPE: return TOKEN_NAME;
+		#define ADD_CHAR_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR) case TOKEN_TYPE: return TOKEN_NAME;
+		#define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) case TOKEN_TYPE: return TOKEN_NAME;
+		#define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) 
 
-		case TOKEN_STRING:
-			return "STRING";
-			
-		case TOKEN_NUMBER_INT:
-			return "NUMBER_INT";
-
-		case TOKEN_LEFT_BRACE:
-			return "LEFT_BRACE";
-
-		case TOKEN_RIGHT_BRACE:
-			return "RIGHT_BRACE";
-
-		case TOKEN_LEFT_BRACKET:
-			return "LEFT_BRACKET";
-
-		case TOKEN_RIGHT_BRACKET:
-			return "RIGHT_BRACKET";
-
-		case TOKEN_COLON:
-			return "COLON";
-
-		case TOKEN_COMMA:
-			return "COMMA";
-
-		case TOKEN_LEFT_PAREN:
-			return "LEFT_PAREN";
-
-		case TOKEN_RIGHT_PAREN:
-			return "RIGHT_PAREN";
-
-		case TOKEN_NUMBER_FLOAT:
-			return "NUMBER_FLOAT";
-
-		case TOKEN_BOOLEAN:
-			return "BOOLEAN";
-
-		case TOKEN_PLUS:
-			return "PLUS";
-
-		case TOKEN_MINUS:
-			return "MINUS";
-			
-		case TOKEN_MULTIPLY:
-			return "MULTIPLY";
-
-		case TOKEN_DIVIDE:
-			return "DIVIDE";
-
-		case TOKEN_MOD:
-			return "MOD";
-
-		case TOKEN_POWER:
-			return "POWER";
-
-		case TOKEN_ASSIGN:
-			return "ASSIGN";
-
-		case TOKEN_LESS:
-			return "LESS";
-			
-		case TOKEN_GREATER:
-			return "GREATER";
-
-		case TOKEN_NOT:
-			return "NOT";
-
-		case TOKEN_NOT_EQUAL:
-			return "NOT_EQUAL";
-
-		case TOKEN_EQUAL:
-			return "EQUAL";
-
-		case TOKEN_AND_AND:
-			return "AND_AND";
-
-		case TOKEN_OR_OR:
-			return "OR_OR";
-
-		case TOKEN_AND_BIT:
-			return "AND_BIT";
-
-		case TOKEN_OR_BIT:
-			return "OR_BIT";
-
-		case TOKEN_LESS_EQUAL:
-			return "LESS_EQUAL";
-
-		case TOKEN_GREATER_EQUAL:
-			return "GREATER_EQUAL";
-
-		case TOKEN_INCREMENT:
-			return "INCREMENT";
-
-		case TOKEN_DECREMENT:
-			return "DECREMENT";
-
-		case TOKEN_SHIFT_LEFT:
-			return "SHIFT_LEFT";
-
-		case TOKEN_SHIFT_RIGHT:
-			return "SHIFT_RIGHT";
-
-		case TOKEN_SHIFT_LEFT_ASSIGN:
-			return "SHIFT_LEFT_ASSIGN";
-
-		case TOKEN_SHIFT_RIGHT_ASSIGN:
-			return "SHIFT_RIGHT_ASSIGN";
-
-		case TOKEN_LAYOUT:
-			return "LAYOUT";
-
-		case TOKEN_IMPORT:
-			return "IMPORT";
-
-		case TOKEN_FUNCTION:
-			return "FUNCTION";
-
-		case TOKEN_RETURN:
-			return "RETURN";
-
-		case TOKEN_IF:
-			return "IF";
-
-		case TOKEN_ELSE:
-			return "ELSE";
-
-		case TOKEN_PRINT:
-			return "PRINT";
-
-		case TOKEN_WHILE:
-			return "WHILE";
-
-		case TOKEN_FOR:
-			return "FOR";
-
-		case TOKEN_BREAK:
-			return "BREAK";
-
-		case TOKEN_CONTINUE:
-			return "CONTINUE";
-
-		case TOKEN_ERROR:
-			return "ERROR";
+		#include "token.h"
 	}
 
-	return "UNKNOWN";
+	return TOKEN_NAME_UNKNOWN;
+}
+
+/**
+ * 
+ * @function token_type_keyword
+ * @brief Get the keyword of a token type
+ * @params {token_type_t} Token type
+ * @returns {char*}
+ * 
+ */
+char* token_type_keyword(token_type_t type)
+{
+	DEBUG_ME;
+	switch (type) {
+		#undef ADD_TOKEN
+		#undef ADD_CHAR_TOKEN
+		#undef ADD_KEYWORD
+		#undef ADD_KEYWORD_HIDE
+
+		#define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE) case TOKEN_TYPE: return TOKEN_VALUE;
+		#define ADD_CHAR_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR) case TOKEN_TYPE: return TOKEN_VALUE;
+		#define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) case TOKEN_TYPE: return TOKEN_VALUE;
+		#define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) 
+
+		#include "token.h"
+	}
+
+	return TOKEN_NAME_UNKNOWN;
 }
 
 /**
@@ -374,7 +313,7 @@ char* token_name(token_type_t type)
 char* token_value_stringify(token_t* token)
 {
     DEBUG_ME;
-	static char buffer[256];
+	static char buffer[1024];
 
 	switch (token->data_type) {
 		case TOKEN_NUMBER_INT:
@@ -392,10 +331,10 @@ char* token_value_stringify(token_t* token)
 			return token->data.string;
 
 		case TOKEN_BOOLEAN:
-			return token->data.boolean ? "true" : "false";
+			return token->data.boolean ? TOKEN_BOOL_TRUE : TOKEN_BOOL_FALSE;
 
 		default:
-			return "UNKNOWN";
+			return token_type_keyword(token->type);
 	}
 }
 
@@ -412,12 +351,18 @@ lexer_t* lexer_create(const char* file_path, char* source)
 {
     DEBUG_ME;
 	lexer_t* lexer = memory_allocate(sizeof(lexer_t));
+
 	lexer->file_path = file_path;
 	lexer->source = source;
 	lexer->index = 0;
 	lexer->line = 1;
 	lexer->column = 1;
+
 	lexer->tokens = array_create(sizeof(token_t*), 10);
+	lexer->tokens->print = cast(void (*)(void*), array_token_print);
+	lexer->tokens->stringify = cast(char* (*)(void*), array_token_stringify);
+	lexer->tokens->destroy = cast(void (*)(void*), array_token_destroy);
+
 	lexer->token_index = 0;
 
 	return lexer;
@@ -475,12 +420,9 @@ void lexer_save(lexer_t* lexer, const char* tokens_output)
 	file_appends(tokens_output, "\n");
 
     for (size_t i = 0; i < lexer->tokens->length; i++) {
-        printf("\t");
         token_t* token = array_get(lexer->tokens, i);
 
 		file_appends(tokens_output, token_stringify(token));
-		file_appends(tokens_output, " at ");
-		file_appends(tokens_output, location_stringify(token->location));
 		file_appends(tokens_output, "\n");
     }
 }
@@ -503,7 +445,7 @@ void lexer_debug(lexer_t* lexer)
 	printf("Lexer line: %zu\n", lexer->line);
 	printf("Lexer column: %zu\n", lexer->column);
 
-	array_token_print(lexer->tokens);
+	lexer->tokens->print(lexer->tokens);
 
 	printf("============= END LEXER DEBUG =============\n");
 }
@@ -576,6 +518,7 @@ void lexer_lex_number(lexer_t* lexer)
 		token_t* token = token_create(TOKEN_NUMBER_FLOAT, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
 		token->data_type = TOKEN_NUMBER_FLOAT;
 		token->data.number_float = atof(buffer);
+
 		LEXER_PUSH_TOKEN(token);
 
 		if (buffer != NULL) {
@@ -587,6 +530,7 @@ void lexer_lex_number(lexer_t* lexer)
 		token_t* token = token_create(TOKEN_NUMBER_INT, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
 		token->data_type = TOKEN_NUMBER_INT;
 		token->data.number_int = atoi(buffer);
+
 		LEXER_PUSH_TOKEN(token);
 
 		if (buffer != NULL) {
@@ -606,8 +550,9 @@ void lexer_lex_number(lexer_t* lexer)
 bool is_keyword(const char* string)
 {
     DEBUG_ME;
+	size_t length = strlen(string);
 	for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
-		if (strcmp(string, keywords[i].name) == 0) {
+		if (keywords[i].length == length && strcmp(string, keywords[i].keyword) == 0) {
 			return true;
 		}
 	}
@@ -626,8 +571,9 @@ bool is_keyword(const char* string)
 token_type_t type_keyword(const char* string)
 {
     DEBUG_ME;
+	size_t length = strlen(string);
 	for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
-		if (strcmp(string, keywords[i].name) == 0) {
+		if (keywords[i].length == length && strcmp(string, keywords[i].keyword) == 0) {
 			return keywords[i].type;
 		}
 	}
@@ -663,6 +609,8 @@ void lexer_lex_identifier(lexer_t* lexer)
 	token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
 	token->data_type = TOKEN_IDENTIFIER;
 	token->data.string = buffer;
+	token->print(token);
+
 	LEXER_PUSH_TOKEN(token);
 }
 
@@ -698,6 +646,7 @@ void lexer_lex_stringify(lexer_t* lexer)
 	token_t* token = token_create(TOKEN_STRING, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
 	token->data_type = TOKEN_STRING;
 	token->data.string = buffer;
+	
 	LEXER_PUSH_TOKEN(token);
 }
 
@@ -766,7 +715,9 @@ void lexer_lex(lexer_t* lexer)
 					}
 				}
 				else {
-					token_t* token = token_create(c, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+					token_type_t type = token_char_type(c);
+					token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+
 					LEXER_PUSH_TOKEN(token);
 				}
 				continue;
@@ -793,5 +744,6 @@ void lexer_lex(lexer_t* lexer)
 	
 	gotoend:
 	token_t* token = token_create(TOKEN_EOF, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+	
 	LEXER_PUSH_TOKEN(token);
 }

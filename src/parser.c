@@ -286,7 +286,7 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
 		}
 	}
 
-	expect(lexer, TOKEN_COLON);
+	expect(lexer, TOKEN_ASSIGN);
 
 	token_t* first_value = PARSER_CURRENT;
 	ast_value_t* value = parser_parse_layout_value(lexer);

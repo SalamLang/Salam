@@ -124,46 +124,6 @@ bool validate_style_value_size(ast_layout_attribute_t* attribute);
 
 /**
  * 
- * @function string_is_number
- * @brief Check if the string is a number
- * @params {const char*} value - Value
- * @returns {bool} - True if the string is a number, false otherwise
- * 
- */
-bool string_is_number(const char* value);
-
-/**
- * 
- * @function is_english_digit
- * @brief Check if the character is an English digit
- * @params {wchar_t} ch - Character
- * @returns {bool} - True if the character is an English digit, false otherwise
- * 
- */
-bool is_english_digit(wchar_t ch);
-
-/**
- * 
- * @function is_persian_digit
- * @brief Check if the character is a Persian digit
- * @params {wchar_t} ch - Character
- * @returns {bool} - True if the character is a Persian digit, false otherwise
- * 
- */
-bool is_persian_digit(wchar_t ch);
-
-/**
- * 
- * @function is_arabic_digit
- * @brief Check if the character is an Arabic digit
- * @params {wchar_t} ch - Character
- * @returns {bool} - True if the character is an Arabic digit, false otherwise
- * 
- */
-bool is_arabic_digit(wchar_t ch);
-
-/**
- * 
  * @function normalise_css_size
  * @brief Normalise the CSS size
  * @params {char*} attribute_value - Attribute value

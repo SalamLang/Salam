@@ -62,6 +62,97 @@ const keyword_t keywords[] = {
 
 /**
  * 
+ * @function is_english_digit
+ * @brief Check if the character is an English digit
+ * @params {wchar_t} ch - Character
+ * @returns {bool} - True if the character is an English digit, false otherwise
+ * 
+ */
+bool is_english_digit(wchar_t ch)
+{
+	DEBUG_ME;
+	// 0123456789
+	return ch >= L'0' && ch <= L'9';
+}
+
+/**
+ * 
+ * @function is_persian_digit
+ * @brief Check if the character is a Persian digit
+ * @params {wchar_t} ch - Character
+ * @returns {bool} - True if the character is a Persian digit, false otherwise
+ * 
+ */
+bool is_persian_digit(wchar_t ch)
+{
+	DEBUG_ME;
+	// ۰۱۲۳۴۵۶۷۸۹
+	return ch >= 0x06F0 && ch <= 0x06F9;
+	// return ch >= '۰' && ch <= '۹';
+}
+
+/**
+ * 
+ * @function is_arabic_digit
+ * @brief Check if the character is an Arabic digit
+ * @params {wchar_t} ch - Character
+ * @returns {bool} - True if the character is an Arabic digit, false otherwise
+ * 
+ */
+bool is_arabic_digit(wchar_t ch)
+{
+	DEBUG_ME;
+	// ٠١٢٣٤٥٦٧٨٩
+	return ch >= 0x0660 && ch <= 0x0669;
+}
+
+/**
+ * 
+ * @function string_is_number
+ * @brief Check if the string is a number
+ * @params {const char*} value - Value
+ * @returns {bool} - True if the string is a number, false otherwise
+ * 
+ */
+bool string_is_number(const char* value)
+{
+	DEBUG_ME;
+	size_t len = mbstowcs(NULL, value, 0);
+	if (len == (size_t)-1) return false;
+
+	wchar_t* wvalue = memory_allocate(sizeof(wchar_t) * (len + 1));
+	mbstowcs(wvalue, value, len + 1);
+
+	if (wvalue[0] == L'\0') {
+		free(wvalue);
+
+		return false;
+	}
+
+	size_t start = 0;
+	if (wvalue[0] == L'+' || wvalue[0] == L'-') start = 1;
+
+	if (start == 1 && wvalue[1] == L'\0') {
+		free(wvalue);
+
+		return false;
+	}
+
+	for (size_t i = start; wvalue[i] != L'\0'; i++) {
+		if (!(is_english_digit(wvalue[i]) || is_persian_digit(wvalue[i]) || is_arabic_digit(wvalue[i]))) {
+			free(wvalue);
+
+			return false;
+		}
+	}
+
+	free(wvalue);
+
+	return true;
+}
+
+/**
+ * 
  * @function token_create
  * @brief Creating a new token
  * @params {token_type_t} type - Token type
@@ -482,14 +573,15 @@ void location_print(location_t location)
  * @function read_token
  * @brief Reading a token
  * @params {lexer_t*} lexer - Lexer state
+ * @params {int*} char_size - Character size
  * @returns {wchar_t}
  * 
  */
-wchar_t read_token(lexer_t* lexer)
+wchar_t read_token(lexer_t* lexer, int* char_size)
 {
 	wchar_t current_char;
-	int char_size = mbtowc(&current_char, &lexer->source[lexer->index], MB_CUR_MAX);
-	if (char_size < 0) {
+	*char_size = mbtowc(&current_char, &lexer->source[lexer->index], MB_CUR_MAX);
+	if (*char_size < 0) {
 		error_lexer(2, "Failed to read unicode character at line %zu, column %zu", lexer->line, lexer->column);
 	}
 
@@ -498,10 +590,10 @@ wchar_t read_token(lexer_t* lexer)
 		lexer->column = 0;
 	}
 	else {
-		lexer->column += char_size;
+		lexer->column += *char_size;
 	}
 
-	lexer->index += char_size;
+	lexer->index += *char_size;
 
 	return current_char;
 }
@@ -611,28 +703,44 @@ token_type_t type_keyword(const char* string)
  * @function lexer_lex_identifier
  * @brief Lexing an identifier
  * @params {lexer_t*} lexer - Lexer state
+ * @params {int} wcl - Wide character length
  * @returns {void}
  * 
  */
-void lexer_lex_identifier(lexer_t* lexer)
+void lexer_lex_identifier(lexer_t* lexer, int char_size)
 {
-    DEBUG_ME;
+	DEBUG_ME;
     char* buffer = memory_allocate(256);
-    size_t index = 0;
-    size_t start_index = lexer->index;
 
-    uint32_t codepoint = LEXER_CURRENT_UTF8;
-    while (is_char_alpha(codepoint) || is_char_digit(codepoint) || codepoint == '_') {
-        size_t char_length = utf8_char_length(lexer->source[start_index]);
-        for (size_t i = 0; i < char_length; i++) {
-            buffer[index++] = lexer->source[start_index + i];
+    // size_t start_index = lexer->index;
+    // size_t start_line = lexer->line;
+    // size_t start_column = lexer->column;
+
+	size_t index = 0;
+	wchar_t wc;
+
+	for (int i = 0; i < char_size; i++) {
+		buffer[index++] = lexer->source[lexer->index - char_size + i];
+	}
+
+	int wcl = 0;
+
+	while (LEXER_CURRENT != '\0') {
+        wc = read_token(lexer, &wcl);
+
+        if (!is_wchar_alpha(wc)) {
+            break;
         }
-        start_index = lexer->index;
-        codepoint = LEXER_CURRENT_UTF8;
+
+        int len = wctomb(&buffer[index], wc);
+        if (len <= 0) {
+            break;
+        }
+
+        index += len;
     }
 
-    buffer[index] = '\0';
-    lexer->index = start_index;
+	buffer[index] = '\0';
 
     token_type_t type = type_keyword(buffer);
     token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
@@ -692,12 +800,10 @@ void lexer_lex(lexer_t* lexer)
     DEBUG_ME;
 	char c;
 	wchar_t wc;
+	int wcl = 0;
 
 	while ((c = LEXER_CURRENT) && c != '\0') {
-		wc = LEXER_CURRENT_UTF8;
-
-		LEXER_NEXT;
-		LEXER_NEXT_COLUMN;
+		wc = read_token(lexer, &wcl);
 
 		switch (c) {
 			case '\0': // End of file
@@ -766,11 +872,11 @@ void lexer_lex(lexer_t* lexer)
 				if (is_persian_digit(wc) || is_arabic_digit(wc)) {
 					lexer_lex_number(lexer);
 				}
-				else if (c == '_' || is_wchar_alpha(LEXER_CURRENT_PREV) || is_char_alpha(LEXER_CURRENT_PREV)) {
-					lexer_lex_identifier(lexer);
+				else if (c == '_' || is_wchar_alpha(wc) || is_char_alpha(c)) {
+					lexer_lex_identifier(lexer, wcl);
 				}
 				else {
-					error_lexer(1, "Unknown character '%c' at line %zu, column %zu", LEXER_CURRENT_PREV, lexer->line, lexer->column);
+					error_lexer(1, "Unknown character '%lc' at line %zu, column %zu", wc, lexer->line, lexer->column);
 				}
 				continue;
 		}

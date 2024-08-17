@@ -632,3 +632,25 @@ void generator_code_functions(generator_t* generator)
 		}
 	}
 }
+
+/**
+ *
+ * @function generator_code
+ * @brief Generate code from AST
+ * @params {generator_t*} generator - Generator
+ * @returns {void}
+ *
+ */
+void generator_code(generator_t* generator)
+{
+	DEBUG_ME;
+	if (generator->ast == NULL) {
+		error_generator(2, "AST tree is NULL and is not valid!");
+	}
+
+	if (generator->ast->functions != NULL) {
+		generator_code_functions(generator);
+	}
+
+	generator_code_layout(generator);
+}

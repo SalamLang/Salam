@@ -329,7 +329,7 @@ void validate_layout_mainbody(ast_layout_block_t* block)
 							attribute_value->ignoreMe = true;
 						}
 
-						entry = entry->next;
+						entry = cast(hashmap_entry_t*, entry->next);
 					}
 				}
 			}
@@ -757,7 +757,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 
 		// 				hashmap_put(new_styles, entry->key, atr_copy);
 
-		// 				entry = entry->next;
+		// 				entry = cast(hashmap_entry_t*, entry->next);
 		// 			}
 		// 		}
 

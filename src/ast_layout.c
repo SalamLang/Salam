@@ -563,6 +563,7 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name)
 
 	if (false) {}
 	#include "ast_layout_attribute_type.h"
+	#include "ast_layout_attribute_style_type.h"
 
 	return type;
 }

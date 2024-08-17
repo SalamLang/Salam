@@ -219,7 +219,7 @@ void generator_code_head(ast_layout_block_t* block, string_t* head)
 		hashmap_t* attributes = cast(hashmap_t*, block->attributes);
 
 		for (size_t i = 0; i < attributes->capacity; i++) {
-			hashmap_entry_$1* $2ntry = attributes->data[i];
+			hashmap_entry_t* entry = attributes->data[i];
 
 			while (entry) {
 				ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
@@ -407,7 +407,7 @@ string_t* generator_code_layout_style(hashmap_attribute_t* styles, ast_layout_bl
 
 	if (styles != NULL) {
 		for (size_t i = 0; i < styles->capacity; i++) {
-			hashmap_entry_$1* $2ntry = styles->data[i];
+			hashmap_entry_t* entry = styles->data[i];
 
 			while (entry) {
 				ast_layout_attribute_t* attribute = entry->value;
@@ -458,7 +458,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 			hashmap_t* attributes = cast(hashmap_t*, block->attributes);
 
 			for (size_t i = 0; i < attributes->capacity; i++) {
-				hashmap_entry_$1* $2ntry = attributes->data[i];
+				hashmap_entry_t* entry = attributes->data[i];
 
 				while (entry) {
 					ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
@@ -497,7 +497,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 		
 		// New styles
 		for (size_t i = 0; i < block->new_styles->capacity; i++) {
-			hashmap_entry_$1* $2ntry = block->new_styles->data[i];
+			hashmap_entry_t* entry = block->new_styles->data[i];
 
 			while (entry) {
 				ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);

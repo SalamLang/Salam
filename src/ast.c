@@ -716,6 +716,8 @@ char* ast_block_type_name(ast_block_type_t type)
 	switch (type) {
 		#undef ADD_BLOCK_TYPE
 		#define ADD_BLOCK_TYPE(TYPE, NAME, NAME_LOWER) case TYPE: printf("%s\n", NAME); break;
+
+		#include "ast_block_type.h"
 	}
 
 	return "unknown block";

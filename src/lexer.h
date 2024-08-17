@@ -71,6 +71,8 @@ typedef struct {
     const char* keyword; // end-user input
 } keyword_t;
 
+#include "validator.h"
+
 /**
  * 
  * @variable token_names
@@ -292,7 +294,7 @@ void lexer_lex_number(lexer_t* lexer);
  * @returns {void}
  * 
  */
-void lexer_lex_stringify(lexer_t* lexer);
+void lexer_lex_string(lexer_t* lexer);
 
 
 /**
@@ -330,11 +332,11 @@ char* token_stringify(token_t* token);
  * 
  * @function token_type_stringify
  * @brief Get the name of a token type
- * @params {token_type_t} token - Token type
+ * @params {token_type_t} type - Token type
  * @returns {char*}
  * 
  */
-const char* token_type_stringify(token_type_t token);
+const char* token_type_stringify(token_type_t type);
 
 /**
  * 
@@ -348,16 +350,6 @@ token_type_t token_char_type(char c);
 
 /**
  * 
- * @function token_string_type
- * @brief Get the type of a string
- * @params {const char*} s - String
- * @returns {token_type_t}
- * 
- */
-token_type_t token_string_type(const char* s);
-
-/**
- * 
  * @function token_type_keyword
  * @brief Get the keyword of a token type
  * @params {token_type_t} Token type
@@ -365,5 +357,15 @@ token_type_t token_string_type(const char* s);
  * 
  */
 char* token_type_keyword(token_type_t type);
+
+/**
+ * 
+ * @function read_token
+ * @brief Reading a token
+ * @params {lexer_t*} lexer - Lexer state
+ * @returns {wchar_t}
+ * 
+ */
+wchar_t read_token(lexer_t* lexer);
 
 #endif

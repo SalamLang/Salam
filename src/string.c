@@ -530,7 +530,65 @@ bool is_wchar_alpha(uint32_t codepoint)
  */
 bool is_wchar_digit(uint32_t codepoint)
 {
-    return iswdigit(codepoint);
+	return is_english_digit(codepoint) || is_persian_digit(codepoint) || is_arabic_digit(codepoint) || iswdigit(codepoint);
+}
+
+/**
+ * 
+ * @function convert_to_english_digit
+ * @brief Convert a wide character to an English digit
+ * @params {wchar_t} ch - Wide character
+ * @returns {char} English digit
+ * 
+ */
+char convert_to_english_digit(wchar_t ch)
+{
+    if (is_english_digit(ch)) {
+        return (char)ch;
+    } else if (is_persian_digit(ch)) {
+        return '0' + (ch - 0x06F0);
+    } else if (is_arabic_digit(ch)) {
+        return '0' + (ch - 0x0660);
+    }
+    return ch;
+}
+
+/**
+ * 
+ * @function string_number2number
+ * @brief Convert digits in a string to English digits
+ * @params {char*} str - Input string
+ * @returns {void}
+ * 
+ */
+void string_number2number(char* str)
+{
+    if (str == NULL) {
+        return;
+    }
+
+    size_t len = strlen(str);
+    wchar_t wc;
+    int wcl;
+    char* temp_str = (char*)malloc((len + 1) * sizeof(char));
+
+    char* src_ptr = str;
+    char* dest_ptr = temp_str;
+
+    while (*src_ptr != '\0') {
+        wcl = mbtowc(&wc, src_ptr, MB_CUR_MAX);
+        if (wcl <= 0) {
+            // Error or end of multibyte sequence
+            break;
+        }
+        *dest_ptr = convert_to_english_digit(wc);
+        src_ptr += wcl;
+        dest_ptr++;
+    }
+
+    *dest_ptr = '\0';
+    strcpy(str, temp_str);
+    free(temp_str);
 }
 
 /**

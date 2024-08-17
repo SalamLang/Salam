@@ -12,7 +12,8 @@
  * @params {char} c The byte to check
  * @returns {bool} True if the byte is a continuation byte, false otherwise
  */
-bool is_utf8_continuation_byte(char c) {
+bool is_utf8_continuation_byte(char c)
+{
     return (c & 0xC0) == 0x80;
 }
 
@@ -22,26 +23,31 @@ bool is_utf8_continuation_byte(char c) {
  * @params {const char*} str The string to check
  * @returns {bool} True if the string is a valid UTF-8 sequence, false otherwise
  */
-bool is_valid_utf8(const char* str) {
+bool is_valid_utf8(const char* str)
+{
     const unsigned char* bytes = (const unsigned char *)str;
 
     while (*bytes) {
         if (*bytes <= 0x7F) {
             // ASCII byte
             bytes += 1;
-        } else if ((*bytes & 0xE0) == 0xC0) {
+        }
+        else if ((*bytes & 0xE0) == 0xC0) {
             // 2-byte sequence
             if ((bytes[1] & 0xC0) != 0x80) return false;
             bytes += 2;
-        } else if ((*bytes & 0xF0) == 0xE0) {
+        }
+        else if ((*bytes & 0xF0) == 0xE0) {
             // 3-byte sequence
             if ((bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80) return false;
             bytes += 3;
-        } else if ((*bytes & 0xF8) == 0xF0) {
+        }
+        else if ((*bytes & 0xF8) == 0xF0) {
             // 4-byte sequence
             if ((bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80 || (bytes[3] & 0xC0) != 0x80) return false;
             bytes += 4;
-        } else {
+        }
+        else {
             return false;
         }
     }
@@ -55,7 +61,8 @@ bool is_valid_utf8(const char* str) {
  * @params {const char*} c Pointer to the UTF-8 character
  * @returns {bool} True if the character is alphabetic, false otherwise
  */
-bool is_schar_alpha(const char* c) {
+bool is_schar_alpha(const char* c)
+{
     wchar_t wc;
     int len = mbtowc(&wc, c, MB_CUR_MAX);
 
@@ -72,7 +79,8 @@ bool is_schar_alpha(const char* c) {
  * @params {char} c - Character
  * @returns {bool}
  */
-bool is_char_digit(char c) {
+bool is_char_digit(char c)
+{
     return c >= '0' && c <= '9';
 }
 
@@ -82,7 +90,8 @@ bool is_char_digit(char c) {
  * @params {char} c - Character
  * @returns {bool}
  */
-bool is_char_alpha(const char c) {
+bool is_char_alpha(const char c)
+{
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 }
 
@@ -92,7 +101,8 @@ bool is_char_alpha(const char c) {
  * @params {char} c - Character
  * @returns {bool}
  */
-bool is_char_alnum(char c) {
+bool is_char_alnum(char c)
+{
     return is_char_alpha(c) || is_char_digit(c);
 }
 
@@ -102,7 +112,8 @@ bool is_char_alnum(char c) {
  * @params {char} c - Character
  * @returns {bool}
  */
-bool is_char_whitespace(char c) {
+bool is_char_whitespace(char c)
+{
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
@@ -112,7 +123,8 @@ bool is_char_whitespace(char c) {
  * @params {uint32_t} codepoint - Wide character
  * @returns {bool} True if the character is alphabetic, false otherwise
  */
-bool is_wchar_alpha(uint32_t codepoint) {
+bool is_wchar_alpha(uint32_t codepoint)
+{
     return iswalpha(codepoint);
 }
 
@@ -122,7 +134,8 @@ bool is_wchar_alpha(uint32_t codepoint) {
  * @params {uint32_t} codepoint - Wide character
  * @returns {bool} True if the character is a digit, false otherwise
  */
-bool is_wchar_digit(uint32_t codepoint) {
+bool is_wchar_digit(uint32_t codepoint)
+{
     return iswdigit(codepoint);
 }
 

@@ -20,6 +20,19 @@ ast_layout_attribute_type_t valid_layout_attributes[] = {
 	AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
 };
 
+const ast_layout_attribute_style_pair_t allowed_background_colors[] = {
+    {"red", "red_output"},
+    {"white", "white_output"},
+    {"black", "black_output"},
+    {"orange", "orange_output"},
+    {"yellow", "yellow_output"},
+    {"green", "green_output"},
+    {"blue", "blue_output"},
+    {"pink", "pink_output"},
+    {"gray", "gray_output"},
+	{"", ""},
+};
+
 /**
  * 
  * @var valid_layout_attributes_length
@@ -350,7 +363,7 @@ bool is_style_attribute(ast_layout_attribute_type_t type)
 	DEBUG_ME;
 	switch (type) {
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
-		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) case TYPE:
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) case TYPE:
 
 		#include "ast_layout_attribute_style_type.h"
 			return true;
@@ -381,46 +394,129 @@ bool is_attribute_type_a_style(ast_layout_attribute_type_t type)
 	}
 }
 
+
+// bool validate_style_value_string(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, void** ALLOWED_VALUES, void** SUBTAGS)
+// {
+// 	if (styles) {}
+// 	if (new_styles) {}
+// 	if (attribute) {}
+// 	if (ALLOWED_VALUES) {}
+// 	if (SUBTAGS) {}
+// }
+
 /**
  * 
  * @function validate_style_value_color
  * @brief Validate the style value color
+ * @params {hashmap_t*} styles - Styles
+ * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
  * @returns {bool} - True if the style value is valid, false otherwise
  * 
  */
-bool validate_style_value_color(ast_layout_attribute_t* attribute)
+bool validate_style_value_color(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, ast_layout_attribute_style_pair_t* allowed_values, size_t allowed_values_count)
 {
-	DEBUG_ME;
-	ast_value_t* first = attribute->values->data[0];
-	char* value = first->data.string_value;
+    DEBUG_ME;
 
-	if (first->type->kind == AST_TYPE_KIND_STRING) {
-		if (strcmp(value, "red") == 0) return true;
-		else if (strcmp(value, "white") == 0) return true;
-		else if (strcmp(value, "black") == 0) return true;
-		else if (strcmp(value, "orange") == 0) return true;
-		else if (strcmp(value, "yellow") == 0) return true;
-		else if (strcmp(value, "green") == 0) return true;
-		else if (strcmp(value, "blue") == 0) return true;
-		else if (strcmp(value, "pink") == 0) return true;
-		else if (strcmp(value, "gray") == 0) return true;
+	if (styles) {}
+	if (new_styles) {}
+
+    if (attribute->values == NULL || attribute->values->data == NULL || attribute->values->data[0] == NULL) {
+        return false;
+    }
+
+    ast_value_t* first = attribute->values->data[0];
+
+    if (first->type->kind == AST_TYPE_KIND_STRING) {
+        char* value = first->data.string_value;
+
+        if (allowed_values == NULL || allowed_values_count == 0) {
+            return false;
+        }
+
+        for (size_t i = 0; i < allowed_values_count; ++i) {
+            if (strcmp(value, allowed_values[i].input) == 0) {
+				attribute->final_value = strdup(allowed_values[i].output);
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+bool validate_style_value_color3(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, ast_layout_attribute_style_pair_t* ALLOWED_VALUES)
+{
+    DEBUG_ME;
+
+    // if (attribute->values == NULL || attribute->values->data == NULL || attribute->values->data[0] == NULL) {
+    //     return false;
+    // }
+
+	printf("number of attr args: %zu\n", attribute->values->length);
+    ast_value_t* first = attribute->values->data[0];
+
+	if (ALLOWED_VALUES != NULL) {
+		printf("going to check allowed values\n");
+		if (first->type->kind == AST_TYPE_KIND_STRING) {
+			printf("okay value is string\n");
+			char* value = first->data.string_value;
+			printf("value is %s\n", value);
+
+
+// const ast_layout_attribute_style_pair_t allowed_background_colors[] = {
+//     {"red", "red_output"},
+//     {"white", "white_output"},
+//     {"black", "black_output"},
+//     {"orange", "orange_output"},
+//     {"yellow", "yellow_output"},
+//     {"green", "green_output"},
+//     {"blue", "blue_output"},
+//     {"pink", "pink_output"},
+//     {"gray", "gray_output"},
+// 	{"", ""},
+// };
+
+			size_t i = 0;
+			while (true) {
+				printf("----checking %zu\n", i);
+				if (strcmp(allowed_background_colors[i].input, "") == 0) {
+					break;
+				}
+
+				printf("compare %s -> %s\n", allowed_background_colors[i].input);
+				printf("-->%s\n", value);
+
+				if (strcmp(value, allowed_background_colors[i].input) == 0) {
+					attribute->final_value = strdup(allowed_background_colors[i].output);
+					// attribute->final_value = memory_allocate(strlen(allowed_background_colors[i].output) * sizeof(char));
+					// strcpy(attribute->final_value, allowed_background_colors[i].output);
+					return true;
+				}
+				i++;
+			}
+		}
 	}
 
-	return false;
+    return false;
 }
 
 /**
  * 
  * @function validate_style_value_size
  * @brief Validate the style value size
+ * @params {hashmap_t*} styles - Styles
+ * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
  * @returns {bool} - True if the style value is valid, false otherwise
  * 
  */
-bool validate_style_value_size(ast_layout_attribute_t* attribute)
+/*
+bool validate_style_value_size(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, int FILTER, void* ALLOWED_VALUES, void* SUBTAGS)
 {
 	DEBUG_ME;
+	if (styles) {}
+	if (new_styles) {}
 	if (attribute) {}
 
 	return true;
@@ -450,24 +546,31 @@ bool validate_style_value_size(ast_layout_attribute_t* attribute)
 
 	// return false;
 }
+*/
 
 /**
  * 
  * @function validate_style_value_sizes
  * @brief Validate the style value sizes
+ * @params {hashmap_t*} styles - Styles
+ * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
  * @returns {bool} - True if the style value is valid, false otherwise
  * 
  */
-bool validate_style_value_sizes(ast_layout_attribute_t* attribute)
+bool validate_style_value_sizes(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute)
 {
 	DEBUG_ME;
-	if (attribute->values->length == 1) {
-		ast_value_t* first = attribute->values->data[0];
-		char* value_normal = normalise_css_size(first->data.string_value);
+	if (styles) {}
+	if (new_styles) {}
+	if (attribute) {}
 
-		return value_normal;
-	}
+	// if (attribute->values->length == 1) {
+	// 	ast_value_t* first = attribute->values->data[0];
+	// 	char* value_normal = normalise_css_size(first->data.string_value);
+
+	// 	return value_normal;
+	// }
 
 	// attribute->final_value = memory_allocate(20 * sizeof(char));
 	// strcpy(attribute->final_value, "val");
@@ -521,12 +624,12 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 	if (styles) {}
 
 	if (attribute->values->length < 1) {
-		error_validator(2, "Style value is missing in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
+		error_validator(2, "Style value is missing in '%s' element", ast_layout_node_type_to_enduser_name(attribute->parent_node_type));
 		
 		return false;
 	}
 	else if (first->type->kind == AST_TYPE_KIND_STRING && strlen(first->data.string_value) == 0) {
-		error_validator(2, "Empty value for '%s' attribute in '%s' element is not allowed at line %zu column %zu!", attribute->key, generator_code_layout_node_type(attribute->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
+		error_validator(2, "Empty value for '%s' attribute in '%s' element is not allowed at line %zu column %zu!", attribute->key, ast_layout_node_type_to_enduser_name(attribute->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
 
 		return false;
 	}
@@ -534,181 +637,40 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 	else if (first->type->kind == AST_TYPE_KIND_STRING && attribute->values->length == 1) {
 		if (false) {}
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
-		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(ENDUSER_NAME, GENERATED_NAME) else if (strcmp(value, ENDUSER_NAME) == 0) return true;
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(GENERATED_NAME, ENDUSER_NAME) else if (strcmp(value, ENDUSER_NAME) == 0) return true;
 
 		#include "ast_layout_attribute_style_global.h"
 	}
 
-	// switch (attribute->type) {
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND:
-	// 		return true;
+	DEBUG_ME;
+	printf("Attr Type: %s\n", ast_layout_attribute_type_to_name(attribute->type));
+	attribute->print(attribute);
 
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_COLOR:
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND_COLOR:
-	// 		if (attribute->values->length > 1) {
-	// 			error_validator(2, "Color value is too many in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
-	// 			return false;
-	// 		}
-	// 		return validate_style_value_color(attribute);
+	switch (attribute->type) {
 
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT:
-	// 		return true;
-		
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_FAMILY:
-	// 		return true;
-		
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_STYLE:
-	// 		if (attribute->values->length > 1) {
-	// 			error_validator(2, "Font weight value is too many in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
-	// 			return false;
-	// 		}
-			
-	// 		if (strcmp(value, "normal") == 0) return true;
-	// 		else if (strcmp(value, "italic") == 0) return true;
-	// 		else if (strcmp(value, "oblique") == 0) return true;
-	// 		else if (strcmp(value, "oblique 10deg") == 0) return true;
-	// 		else return false;
-	// 		break;
+		// case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BACKGROUND:
+		// 	attribute->final_key = strdup("background");
+		// 	return true;
+		// 	break;
 
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_WEIGHT:
-	// 		if (attribute->values->length > 1) {
-	// 			error_validator(2, "Font weight value is too many in '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
-	// 			return false;
-	// 		}
+		#undef ADD_LAYOUT_ATTRIBUTE_TYPE
+		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return false;
 
-	// 		if (strcmp(value, "normal") == 0) return true;
-	// 		else if (strcmp(value, "bold") == 0) return true;
-	// 		else if (strcmp(value, "lighter") == 0) return true;
-	// 		else if (strcmp(value, "bolder") == 0) return true;
-	// 		else if (string_is_number(value) == true) {
-	// 			int value_int = atoi(value);
-	// 			if (value_int >= 1 && value_int <= 1000) return true;
-	// 			else {
-	// 				error_validator(2, "Font weight value is invalid, it should be between 1 and 1000");
-	// 			}
-	// 		}
+		#include "ast_layout_attribute_type.h"
 
-	// 		else return false;
-	// 		break;
-		
+		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
+		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) 
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) case TYPE: \
+			attribute->final_key = strdup(GENERATED_NAME); \
+			if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR) {\
+				size_t allowed_values_count = (ALLOWED_VALUES == NULL) ? 0 : sizeof(ALLOWED_VALUES) / sizeof(ALLOWED_VALUES[0]); \
+				return validate_style_value_color(styles, new_styles, attribute, ALLOWED_VALUES, allowed_values_count);\
+			}\
+			return false;
 
-	// 	// case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION:
-	// 	// 	ast_layout_attribute_type_t sub_types[] = {
-	// 	// 		AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_LINE,
-	// 	// 		AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_STYLE,
-	// 	// 		AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_DECORATION_COLOR,
-	// 	// 	}; // one value should applied, we allow multiple value but only one value for each group, and user can leave the other groups empty (if he want)
-	// 	// 	size_t sub_types_length = sizeof(sub_types) / sizeof(sub_types[0]);
-	// 	// 	hashmap_t* sub_groups = hashmap_create_layout_attribute(1);
-
-	// 	// 	for (size_t i = 0; i < attribute->values->length; i++) {
-	// 	// 		bool _res = false;
-
-	// 	// 		ast_value_t* _value = attribute->values->data[i];
-
-	// 	// 		for (size_t j = 0; j < sub_types_length; j++) {
-	// 	// 			char* _key = ast_layout_attribute_type_to_name(sub_types[j]);
-
-	// 	// 			if (hashmap_has(sub_groups, _key) == true) {
-	// 	// 				continue;
-	// 	// 			}
-
-	// 	// 			array_value_t* _values = array_value_create(1);
-	// 	// 			array_push(_values, ast_value_copy(_value));
-
-	// 	// 			char* _values_str = array_value_stringify(_values, ", ");
-
-	// 	// 			ast_layout_attribute_t* _attribute = ast_layout_attribute_create(sub_types[j], _key, _values, attribute->parent_node_type, attribute->key_location, attribute->value_location);
-	// 	// 			_attribute->isStyle = attribute->isStyle;
-	// 	// 			_attribute->isContent = attribute->isContent;
-	// 	// 			_attribute->final_key = strdup(_key);
-	// 	// 			_attribute->final_value = strdup(_values_str);
-
-	// 	// 			bool sub_res = validate_style_value(styles, new_styles, _attribute);
-					
-	// 	// 			if (_values_str != NULL) memory_destroy(_values_str);
-
-	// 	// 			if (sub_res == true) {
-	// 	// 				_res = true;
-	// 	// 				hashmap_put(sub_groups, _key, _attribute);
-	// 	// 				break;
-	// 	// 			}
-	// 	// 			else {
-	// 	// 				_attribute->destroy(_attribute);
-	// 	// 			}
-	// 	// 		}
-
-	// 	// 		if (_res == false) {
-	// 	// 			error_validator(2, "Text decoration value is invalid in the '%s' element", generator_code_layout_node_type(attribute->parent_node_type));
-	// 	// 		}
-	// 	// 	}
-
-	// 	// 	if (attribute->values->length > 0) {
-	// 	// 		attribute->ignoreMe = true;
-
-	// 	// 		for (size_t i = 0; i < sub_groups->capacity; i++) {
-	// 	// 			hashmap_entry_t* entry = sub_groups->data[i];
-
-	// 	// 			while (entry) {
-	// 	// 				ast_layout_attribute_t* atr = entry->value;
-	// 	// 				ast_layout_attribute_t* atr_copy = ast_layout_attribute_copy(atr);
-	// 	// 				atr_copy->ignoreMe = false;
-	// 	// 				atr_copy->isStyle = true;
-
-	// 	// 				hashmap_put(new_styles, entry->key, atr_copy);
-
-	// 	// 				entry = cast(hashmap_entry_t*, entry->next);
-	// 	// 			}
-	// 	// 		}
-
-	// 	// 		sub_groups->destroy(sub_groups);
-
-	// 	// 		return true;
-	// 	// 	}
-
-	// 	// 	sub_groups->destroy(sub_groups);
-	// 	// 	return false;
-	// 	// 	break;
-
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_WIDTH:
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_HEIGHT:
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_SIZE:
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_TOP:
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_RIGHT:
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_LEFT:
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN_BOTTOM:
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_TOP:
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_RIGHT:
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_LEFT:
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING_BOTTOM:
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TOP:
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_RIGHT:
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_LEFT:
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_BOTTOM:
-	// 		if (attribute->values->length > 1) {
-	// 			error_validator(2, "Size value for attribute '%s' is too many in the '%s' element, it should be only one", attribute->key, generator_code_layout_node_type(attribute->parent_node_type));
-	// 			return false;
-	// 		}
-	// 		// return validate_style_value_size(attribute);
-	// 		return true;
-
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_MARGIN:
-	// 	case AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_PADDING:
-	// 		if (attribute->values->length == 3) {
-	// 			error_validator(2, "Number of size value for attribute '%s' is invalid in the '%s' element, it should be one, two or four", attribute->key, generator_code_layout_node_type(attribute->parent_node_type));
-	// 			return false;
-	// 		}
-	// 		else if (attribute->values->length > 4) {
-	// 			error_validator(2, "Size value for attribute '%s' is too many in the '%s' element, it should be only one", attribute->key, generator_code_layout_node_type(attribute->parent_node_type));
-	// 			return false;
-	// 		}
-
-	// 		// return validate_style_value_sizes(attribute);
-	// 		return false;
-
-	// 	default:
-	// 		return false;
-	// }
+		#include "ast_layout_attribute_style_type.h"
+	}
 
 	return false;
 }

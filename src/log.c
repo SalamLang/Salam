@@ -83,6 +83,7 @@ void error_generator(int code, const char* message, ...)
  */
 void error_parser(int code, const char* message, ...)
 {
+	DEBUG_ME;
     va_list args;
 
     va_start(args, message);
@@ -106,6 +107,7 @@ void error_parser(int code, const char* message, ...)
  */
 void error_lexer(int code, const char* message, ...)
 {
+	DEBUG_ME;
     va_list args;
 
     va_start(args, message);
@@ -129,6 +131,7 @@ void error_lexer(int code, const char* message, ...)
  */
 void error_ast(int code, const char* message, ...)
 {
+	DEBUG_ME;
     va_list args;
 
     va_start(args, message);
@@ -152,6 +155,7 @@ void error_ast(int code, const char* message, ...)
  */
 void error_validator(int code, const char* message, ...)
 {
+	DEBUG_ME;
     va_list args;
 
     va_start(args, message);
@@ -175,6 +179,7 @@ void error_validator(int code, const char* message, ...)
  */
 void error_interpreter(int code, const char* message, ...)
 {
+	DEBUG_ME;
     va_list args;
 
     va_start(args, message);

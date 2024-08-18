@@ -871,6 +871,7 @@ char* array_value_stringify(array_value_t* array, char* seperator)
  */
 array_value_t* array_value_copy(array_value_t* values)
 {
+	DEBUG_ME;
     array_value_t* copy = array_value_create(values->length);
 
     for (size_t i = 0; i < values->length; i++) {

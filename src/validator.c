@@ -107,7 +107,8 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
         if (css_value[i] == '.') {
             string_append_char(buffer, css_value[i]);
             decimal_point_found = true;
-        } else {
+        }
+		else {
             string_append_char(buffer, css_value[i]);
         }
         i++;
@@ -222,7 +223,9 @@ void validate_layout_block(ast_layout_block_t* block)
 					block->text_content = content;
 				}
 				else {
-					if (content != NULL) memory_destroy(content);
+					if (content != NULL) {
+						memory_destroy(content);
+					}
 				}
 			}
 		}
@@ -566,7 +569,9 @@ bool validate_style_value_size(hashmap_t* styles, hashmap_t* new_styles, ast_lay
 
 		char* out_value;
 		if (!has_css_size_prefix(buffer, &out_value)) {
-			if (out_value != NULL) memory_destroy(out_value);
+			if (out_value != NULL) {
+				memory_destroy(out_value);
+			}
 
 			memory_destroy(buffer);
 

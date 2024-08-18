@@ -124,7 +124,7 @@ bool string_is_number(const char* value)
 	mbstowcs(wvalue, value, len + 1);
 
 	if (wvalue[0] == L'\0') {
-		free(wvalue);
+		memory_destroy(wvalue);
 
 		return false;
 	}
@@ -133,20 +133,20 @@ bool string_is_number(const char* value)
 	if (wvalue[0] == L'+' || wvalue[0] == L'-') start = 1;
 
 	if (start == 1 && wvalue[1] == L'\0') {
-		free(wvalue);
+		memory_destroy(wvalue);
 
 		return false;
 	}
 
 	for (size_t i = start; wvalue[i] != L'\0'; i++) {
 		if (!(is_english_digit(wvalue[i]) || is_persian_digit(wvalue[i]) || is_arabic_digit(wvalue[i]))) {
-			free(wvalue);
+			memory_destroy(wvalue);
 
 			return false;
 		}
 	}
 
-	free(wvalue);
+	memory_destroy(wvalue);
 
 	return true;
 }
@@ -658,7 +658,8 @@ void lexer_lex_number(lexer_t* lexer, int char_size)
     
     if (is_float) {
         token->data.number_float = atof(buffer);
-    } else {
+    }
+	else {
         token->data.number_int = atoi(buffer);
     }
 

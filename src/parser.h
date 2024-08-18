@@ -127,17 +127,20 @@ ast_node_t* parser_layout(lexer_t* lexer);
 void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexer, string_t* name, token_t* last_name);
 
 /**
- * 
+ *
  * @function parser_parse_layout_block_attribute
  * @brief Parse the block attribute
+ * @params {bool} onlyStyle - Only style
  * @params {ast_layout_block_t*} block - AST layout block node
+ * @params {hashmap_t*} normal - Normal hashmap
+ * @params {hashmap_t*} new - New hashmap
  * @params {lexer_t*} lexer - Lexer
  * @params {string_t*} name - Name of the attribute
  * @params {token_t*} last_name - Last token
  * @returns {void}
- * 
+ *
  */
-void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lexer, string_t* name, token_t* last_name);
+void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* block, hashmap_t* normal, hashmap_t* new, lexer_t* lexer, string_t* name, token_t* last_name);
 
 /**
  * 
@@ -279,5 +282,49 @@ bool match_next_open_block(lexer_t* lexer);
  * 
  */
 bool match_next_close_block(lexer_t* lexer);
+
+/**
+ * 
+ * @function parser_parse_layout_block_style_state
+ * @brief Parse the block style state
+ * @params {ast_layout_block_t*} block - AST layout block node
+ * @params {lexer_t*} lexer - Lexer
+ * @params {string_t*} name - Name of the attribute
+ * @params {token_t*} last_name - Last token
+ * @returns {void}
+ * 
+ */
+void parser_parse_layout_block_style_state(ast_layout_block_t* block, lexer_t* lexer, string_t* name, token_t* last_name);
+
+/**
+ *
+ * @function match_open_block
+ * @brief Match the open block
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {bool}
+ *
+ */
+bool match_open_block(lexer_t* lexer);
+
+/**
+ *
+ * @function match_close_block
+ * @brief Match the close block
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {bool}
+ *
+ */
+bool match_close_block(lexer_t* lexer);
+
+/**
+ * 
+ * @function parser_parse_layout_name
+ * @brief Parse the layout name
+ * @params {lexer_t*} lexer - Lexer
+ * @params {token_t**} last_name - Last token
+ * @returns {string_t*} - String
+ * 
+ */
+string_t* parser_parse_layout_name(lexer_t* lexer, token_t** last_name);
 
 #endif

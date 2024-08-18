@@ -136,10 +136,11 @@ char* generator_code_layout_attribute_style_state_type_to_name(ast_layout_attrib
  * @brief Generate the CSS code for the layout block pseudo elements
  * @params {generator_t*} generator - Generator
  * @params {ast_layout_block_t*} block - Layout block
+ * @params {size_t*} css_attributes_length - CSS attributes length
  * @returns {string_t*}
  * 
  */
-string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layout_block_t* block);
+string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layout_block_t* block, size_t* css_attributes_length);
 
 /**
  * 

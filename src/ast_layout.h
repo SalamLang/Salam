@@ -7,6 +7,7 @@
 #include "base.h"
 #include "memory.h"
 #include "ast.h"
+#include "hashmap.h"
 
 typedef enum {
     #undef ADD_LAYOUT_TYPE
@@ -50,7 +51,7 @@ typedef struct ast_layout_block_t {
 
     struct hashmap_t* attributes;
     ast_layout_style_state_t* styles;
-    struct hashmap_t* state_styles;
+    struct hashmap_t* states;
 
     array_node_layout_t* children;
 

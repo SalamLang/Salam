@@ -413,6 +413,7 @@ void hashmap_destroy_layout_attribute(hashmap_attribute_t* map)
  */
 hashmap_attribute_t* hashmap_create_layout_attribute(size_t capacity)
 {
+	DEBUG_ME;
 	hashmap_attribute_t* map = cast(struct hashmap_t*, hashmap_create(capacity));
 
 	map->print = cast(void (*)(void*), hashmap_print_layout_attribute);
@@ -431,6 +432,7 @@ hashmap_attribute_t* hashmap_create_layout_attribute(size_t capacity)
  */
 hashmap_attribute_t* hashmap_create_layout_attribute_style_state(size_t capacity)
 {
+	DEBUG_ME;
 	hashmap_attribute_t* map = cast(struct hashmap_t*, hashmap_create(capacity));
 
 	map->print = cast(void (*)(void*), hashmap_print_layout_attribute_style_state);
@@ -449,6 +451,7 @@ hashmap_attribute_t* hashmap_create_layout_attribute_style_state(size_t capacity
  */
 void hashmap_print_layout_attribute_style_state(hashmap_attribute_t* map)
 {
+	DEBUG_ME;
 	printf("Hashmap style states length: %zu\n", map->length);
 	if (map->length == 0) {
 		printf("Hashmap style states is empty\n");
@@ -466,6 +469,7 @@ void hashmap_print_layout_attribute_style_state(hashmap_attribute_t* map)
  */
 void hashmap_destroy_layout_attribute_style_state(hashmap_attribute_t* map)
 {
+	DEBUG_ME;
 	if (map != NULL) {
 		if (map->data != NULL) {
 			for (size_t i = 0; i < map->capacity; i++) {

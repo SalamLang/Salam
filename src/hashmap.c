@@ -364,8 +364,12 @@ void hashmap_print_layout_attribute(hashmap_layout_attribute_t* map)
 			printf("[%zu] Key: %s, Value: ", i, entry->key);
 			ast_layout_attribute_t* layout_attribute = entry->value;
 
-			if (layout_attribute != NULL) layout_attribute->print(layout_attribute);
-			else printf("NULL\n");
+			if (layout_attribute != NULL) {
+				layout_attribute->print(layout_attribute);
+			}
+			else {
+				printf("NULL\n");
+			}
 
 			entry = cast(hashmap_entry_t*, entry->next);
 		}
@@ -488,14 +492,12 @@ void hashmap_destroy_layout_attribute_style_state(hashmap_layout_attribute_t* ma
 					hashmap_entry_t* next = cast(hashmap_entry_t*, entry->next);
 
 					if (entry->key != NULL) {
-						printf("style state - delete %s entry\n", entry->key);
 						memory_destroy(entry->key);
 					}
 
 					ast_layout_style_state_t* value = entry->value;
 					if (value != NULL) {
 						value->print(value);
-						printf(".\n");
 						value->destroy(value);
 					}
 

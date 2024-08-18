@@ -20,20 +20,160 @@ ast_layout_attribute_type_t valid_layout_attributes[] = {
 
 // All possible values
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_color[] = {
+    {"بی‌رنگ", "transparent"},
     {"سیاه", "black"},
     {"سفید", "white"},
-    {"قرمز", "red"},
-    {"سبز", "green"},
-    {"آبی", "blue"},
-    {"زرد", "yellow"},
-    {"خاکستری", "gray"},
-    {"بی‌رنگ", "transparent"},
-    {"قهوه‌ای", "brown"},
-    {"نارنجی", "orange"},
     {"صورتی", "pink"},
     {"بنفش", "purple"},
-    {"نقره‌ای", "silver"},
+    {"قرمز", "red"},
+    {"سبز", "green"},
+    {"زرد", "yellow"},
+    {"ابی", "blue"},
+    {"آبی", "blue"},
+    {"قهوه‌ای", "brown"},
+    {"قهوه ای", "brown"},
+    {"نارنجی", "orange"},
+    {"خاکستری", "gray"},
+    {"طوسی", "silver"},
     {"طلایی", "gold"},
+    {"بژ", "beige"},
+    {"زیتونی", "olive"},
+    {"لاجوردی", "navy"},
+    {"فیروزه‌ای", "turquoise"},
+    {"فیروزه ای", "turquoise"},
+    {"نیلی", "indigo"},
+    {"خرمایی", "crimson"},
+    {"قرمز تیره", "darkred"},
+    {"صورتی تیره", "deeppink"},
+    {"آتشین", "firebrick"},
+    {"صورتی داغ", "hotpink"},
+    {"قرمز هندی", "indianred"},
+    {"اسطوخودوسی", "lavenderblush"},
+    {"مرجانی روشن", "lightcoral"},
+    {"صورتی روشن", "lightpink"},
+    {"زرشکی", "maroon"},
+    {"رز مه آلود", "mistyrose"},
+    {"قرمز بنفش کم", "palevioletred"},
+    {"پوست", "bisque"},
+    {"مرجانی", "coral"},
+    {"نارنجی تیره", "darkorange"},
+    {"سالمون تیره", "darksalmon"},
+    {"سالمون روشن", "lightsalmon"},
+    {"نارنجی قرمز", "orangered"},
+    {"خامه پاپایا", "papayawhip"},
+    {"هلو", "peachpuff"},
+    {"سالمون", "salmon"},
+    {"گوجه فرنگی", "tomato"},
+    {"خمیر ذرت", "cornsilk"},
+    {"طلایی تیره", "darkgoldenrod"},
+    {"خاکی تیره", "darkkhaki"},
+    {"طلایی روشن", "lightgoldenrodyellow"},
+    {"زرد روشن", "lightyellow"},
+    {"خاکی", "khaki"},
+    {"پرتقالی کم", "palegoldenrod"},
+    {"زرد کم", "palegoldenrod"},
+    {"سبز دریایی", "aquamarine"},
+    {"چارتوز", "chartreuse"},
+    {"سبز تیره", "darkgreen"},
+    {"زیتونی تیره", "darkolivegreen"},
+    {"سبز دریایی تیره", "darkseagreen"},
+    {"خاکستری تیره", "darkslategray"},
+    {"خاکستری تیره", "darkslategrey"},
+    {"سبز جنگلی", "forestgreen"},
+    {"زرد سبز", "greenyellow"},
+    {"شهد", "honeydew"},
+    {"سبز چمنی", "lawngreen"},
+    {"سبز روشن", "lightgreen"},
+    {"سبز دریایی روشن", "lightseagreen"},
+    {"لیمو سبز", "lime"},
+    {"لیمو سبز روشن", "limegreen"},
+    {"آب دریایی میانه", "mediumaquamarine"},
+    {"سبز دریایی میانه", "mediumseagreen"},
+    {"سبز بهاری میانه", "mediumspringgreen"},
+    {"سبز زیتونی تیره", "olivedrab"},
+    {"سبز کم", "palegreen"},
+    {"سبز دریایی", "seagreen"},
+    {"سبز بهاری", "springgreen"},
+    {"فیروزه ای", "teal"},
+    {"سبز زرد", "yellowgreen"},
+    {"آبی آسمانی روشن", "aliceblue"},
+    {"آبی", "aqua"},
+    {"آبی روشن", "azure"},
+    {"آبی", "blue"},
+    {"آبی کاپیتان", "cadetblue"},
+    {"آبی گل گندم", "cornflowerblue"},
+    {"آبی آسمانی تیره", "darkcyan"},
+    {"فیروزه ای تیره", "darkturquoise"},
+    {"آبی آسمانی عمیق", "deepskyblue"},
+    {"آبی آسمانی داج", "dodgerblue"},
+    {"آبی روشن", "lightblue"},
+    {"فیروزه ای روشن", "lightcyan"},
+    {"آبی آسمانی روشن", "lightskyblue"},
+    {"آبی فولادی روشن", "lightsteelblue"},
+    {"آبی میانه", "mediumblue"},
+    {"فیروزه ای میانه", "mediumturquoise"},
+    {"آبی نیمه شب", "midnightblue"},
+    {"نیلی", "navy"},
+    {"آبی روشن", "paleturquoise"},
+    {"آبی پودری", "powderblue"},
+    {"آبی سلطنتی", "royalblue"},
+    {"آبی آسمانی", "skyblue"},
+    {"آبی فولادی", "steelblue"},
+    {"آبی بنفش", "blueviolet"},
+    {"ارغوانی تیره", "darkmagenta"},
+    {"بنفش ارکیده تیره", "darkorchid"},
+    {"آبی ارغوانی تیره", "darkslateblue"},
+    {"بنفش تیره", "darkviolet"},
+    {"سرخابی", "fuchsia"},
+    {"نیلی", "indigo"},
+    {"اسطوخودوس", "lavender"},
+    {"ارکیده میانه", "mediumorchid"},
+    {"ارغوانی میانه", "mediumpurple"},
+    {"آبی ارغوانی میانه", "mediumslateblue"},
+    {"قرمز بنفش میانه", "mediumvioletred"},
+    {"ارکیده", "orchid"},
+    {"آلو", "plum"},
+    {"بنفش", "purple"},
+    {"بنفش ربکا", "rebeccapurple"},
+    {"آبی تخته سنگ", "slateblue"},
+    {"خار مریم", "thistle"},
+    {"بنفش", "violet"},
+    {"سفید قدیمی", "antiquewhite"},
+    {"بادام سفید شده", "blanchedalmond"},
+    {"چوب بری", "burlywood"},
+    {"شکلاتی", "chocolate"},
+    {"کتان", "linen"},
+    {"موکاسین", "moccasin"},
+    {"سفید ناواجو", "navajowhite"},
+    {"توری قدیمی", "oldlace"},
+    {"پرو", "peru"},
+    {"قهوه ای گل رز", "rosybrown"},
+    {"قهوه ای زین اسب", "saddlebrown"},
+    {"قهوه ای شنی", "sandybrown"},
+    {"سیه نا", "sienna"},
+    {"حنا", "tan"},
+    {"گندمی", "wheat"},
+    {"خاکستری تیره", "darkgray"},
+    {"خاکستری کم", "darkgrey"},
+    {"خاکستری کم", "dimgray"},
+    {"خاکستری کم", "dimgrey"},
+    {"گل سفید", "floralwhite"},
+    {"خاکستری روشن", "gainsboro"},
+    {"خاکستری سفید", "ghostwhite"},
+    {"خاکستری", "gray"},
+    {"خاکستری", "grey"},
+    {"خاکستری کم", "lightgray"},قب
+    {"خاکستری کم", "lightgrey"},
+    {"خاکستری تخته سنگی روشن", "lightslategray"},
+    {"خاکستری تخته سنگی روشن", "lightslategrey"},
+    {"نعنایی", "mintcream"},
+    {"صدف", "seashell"},
+    {"خاکستری نقره ای", "silver"},
+    {"خاکستری تخته سنگی", "slategray"},
+    {"خاکستری تخته سنگی", "slategrey"},
+    {"برفی", "snow"},
+    {"سفید دودی", "whitesmoke"},
+    {"بی‌رنگ", "transparent"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_width[] = {
@@ -48,19 +188,6 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_height[] = {
     {"حداکثر محتوا", "max-content"},
     {"حداقل محتوا", "min-content"},
     {"فیت", "fit-content"},
-    {NULL, NULL},
-};
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_accent_color[] = {
-    {"سیاه", "black"},
-    {"سفید", "white"},
-    {"قرمز", "red"},
-    {"سبز", "green"},
-    {"آبی", "blue"},
-    {"زرد", "yellow"},
-    {"آبی تیره", "darkblue"},
-    {"سبز تیره", "darkgreen"},
-    {"خاکستری", "gray"},
-    {"بدون رنگ", "transparent"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_appearance[] = {
@@ -121,17 +248,6 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_background
     {"کل عنصر", "border-box"},
     {NULL, NULL},
 };
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_background_color[] = {
-    {"سفید", "white"},
-    {"سیاه", "black"},
-    {"قرمز", "red"},
-    {"سبز", "green"},
-    {"آبی", "blue"},
-    {"زرد", "yellow"},
-    {"خاکستری", "gray"},
-    {"بی‌رنگ", "transparent"},
-    {NULL, NULL},
-};
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_background_origin[] = {
     {"محتوا", "content-box"},
     {"حاشیه", "padding-box"},
@@ -163,16 +279,6 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_background
     {"مناسب با محتوا", "contain"},
     {NULL, NULL},
 };
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_block_end_color[] = {
-    {"سفید", "white"},
-    {"سیاه", "black"},
-    {"قرمز", "red"},
-    {"سبز", "green"},
-    {"آبی", "blue"},
-    {"خاکستری", "gray"},
-    {"بی‌رنگ", "transparent"},
-    {NULL, NULL},
-};
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_block_end_style[] = {
     {"پیوسته", "solid"},
     {"خط‌چین", "dashed"},
@@ -185,16 +291,6 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_blo
     {"خودکار", "auto"},
     {NULL, NULL},
 };
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_block_start_color[] = {
-    {"سفید", "white"},
-    {"سیاه", "black"},
-    {"قرمز", "red"},
-    {"سبز", "green"},
-    {"آبی", "blue"},
-    {"خاکستری", "gray"},
-    {"بی‌رنگ", "transparent"},
-    {NULL, NULL},
-};
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_block_start_style[] = {
     {"پیوسته", "solid"},
     {"خط‌چین", "dashed"},
@@ -205,16 +301,6 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_blo
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_block_start_width[] = {
     {"خودکار", "auto"},
-    {NULL, NULL},
-};
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_bottom_color[] = {
-    {"سفید", "white"},
-    {"سیاه", "black"},
-    {"قرمز", "red"},
-    {"سبز", "green"},
-    {"آبی", "blue"},
-    {"خاکستری", "gray"},
-    {"بی‌رنگ", "transparent"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_bottom_left_radius[] = {
@@ -270,16 +356,6 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_ima
     {"خودکار", "auto"},
     {NULL, NULL},
 };
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_inline_end_color[] = {
-    {"سفید", "white"},
-    {"سیاه", "black"},
-    {"قرمز", "red"},
-    {"سبز", "green"},
-    {"آبی", "blue"},
-    {"خاکستری", "gray"},
-    {"بی‌رنگ", "transparent"},
-    {NULL, NULL},
-};
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_inline_end_style[] = {
     {"پیوسته", "solid"},
     {"خط‌چین", "dashed"},
@@ -289,16 +365,6 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_inl
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_inline_end_width[] = {
-    {NULL, NULL},
-};
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_inline_start_color[] = {
-    {"سفید", "white"},
-    {"سیاه", "black"},
-    {"قرمز", "red"},
-    {"سبز", "green"},
-    {"آبی", "blue"},
-    {"خاکستری", "gray"},
-    {"بی‌رنگ", "transparent"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_inline_start_style[] = {
@@ -312,16 +378,6 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_inl
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_inline_start_width[] = {
     {NULL, NULL},
 };
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_left_color[] = {
-    {"سفید", "white"},
-    {"سیاه", "black"},
-    {"قرمز", "red"},
-    {"سبز", "green"},
-    {"آبی", "blue"},
-    {"خاکستری", "gray"},
-    {"بی‌رنگ", "transparent"},
-    {NULL, NULL},
-};
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_left_style[] = {
     {"پیوسته", "solid"},
     {"خط‌چین", "dashed"},
@@ -331,16 +387,6 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_lef
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_left_width[] = {
-    {NULL, NULL},
-};
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_right_color[] = {
-    {"سفید", "white"},
-    {"سیاه", "black"},
-    {"قرمز", "red"},
-    {"سبز", "green"},
-    {"آبی", "blue"},
-    {"خاکستری", "gray"},
-    {"بی‌رنگ", "transparent"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_right_style[] = {
@@ -361,16 +407,6 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_sta
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_start_start_radius[] = {
-    {NULL, NULL},
-};
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_top_color[] = {
-    {"سفید", "white"},
-    {"سیاه", "black"},
-    {"قرمز", "red"},
-    {"سبز", "green"},
-    {"آبی", "blue"},
-    {"خاکستری", "gray"},
-    {"بی‌رنگ", "transparent"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_top_left_radius[] = {
@@ -425,16 +461,6 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_caption_si
     {"پایین", "bottom"},
     {NULL, NULL},
 };
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_caret_color[] = {
-    {"سیاه", "black"},
-    {"سفید", "white"},
-    {"قرمز", "red"},
-    {"سبز", "green"},
-    {"آبی", "blue"},
-    {"خاکستری", "gray"},
-    {"بی‌رنگ", "transparent"},
-    {NULL, NULL},
-};
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_clear[] = {
     {"هیچ", "none"},
     {"چپ", "left"},
@@ -453,16 +479,6 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_clip_path[
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_clip_rule[] = {
     {"تازه", "nonzero"},
     {"یکسان", "evenodd"},
-    {NULL, NULL},
-};
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_color[] = {
-    {"سیاه", "black"},
-    {"سفید", "white"},
-    {"قرمز", "red"},
-    {"سبز", "green"},
-    {"آبی", "blue"},
-    {"خاکستری", "gray"},
-    {"بی‌رنگ", "transparent"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_color_interpolation[] = {
@@ -493,16 +509,6 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_column_fil
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_column_gap[] = {
-    {NULL, NULL},
-};
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_column_rule_color[] = {
-    {"سیاه", "black"},
-    {"سفید", "white"},
-    {"قرمز", "red"},
-    {"سبز", "green"},
-    {"آبی", "blue"},
-    {"خاکستری", "gray"},
-    {"بی‌رنگ", "transparent"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_column_rule_style[] = {

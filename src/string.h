@@ -12,6 +12,7 @@
 
 #include "base.h"
 #include "memory.h"
+#include "lexer.h"
 
 typedef struct {
 	size_t capacity;

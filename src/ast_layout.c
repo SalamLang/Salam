@@ -1,12 +1,12 @@
 #include "ast_layout.h"
 
 /**
- * 
+ *
  * @function ast_layout_attribute_print
  * @brief Print the AST layout attribute
  * @params {ast_layout_attribute_t*} value - AST layout attribute
  * @returns {void}
- * 
+ *
  */
 void ast_layout_attribute_print(ast_layout_attribute_t* value)
 {
@@ -19,13 +19,13 @@ void ast_layout_attribute_print(ast_layout_attribute_t* value)
 }
 
 /**
- * 
+ *
  * @function ast_layout_block_create
  * @brief Create a new AST node layout block
  * @params {ast_type_t} node_type - Node type
  * @params {ast_layout_node_type_t} layout_node_type - Layout node type
  * @returns {ast_layout_block_t*} - Pointer to the created AST node layout block
- * 
+ *
  */
 ast_layout_block_t* ast_layout_block_create(ast_type_t node_type, ast_layout_node_type_t layout_node_type)
 {
@@ -36,17 +36,11 @@ ast_layout_block_t* ast_layout_block_create(ast_type_t node_type, ast_layout_nod
 	block->parent_node_type = layout_node_type;
 	block->text_content = NULL;
 
-	block->attributes = cast(struct hashmap_t*, hashmap_create(16));
-	cast(hashmap_t*, block->attributes)->print = cast(void (*)(void*), hashmap_print_layout_attribute);
-	cast(hashmap_t*, block->attributes)->destroy = cast(void (*)(void*), hashmap_destroy_layout_attribute);
+	block->attributes = cast(struct hashmap_t*, hashmap_create(3));
 
-	block->styles = hashmap_create_layout_attribute(16);
-	cast(hashmap_t*, block->styles)->print = cast(void (*)(void*), hashmap_print_layout_attribute);
-	cast(hashmap_t*, block->styles)->destroy = cast(void (*)(void*), hashmap_destroy_layout_attribute);
+	block->styles = ast_layout_style_state_create();
 
-	block->new_styles = hashmap_create_layout_attribute(16);
-	cast(hashmap_t*, block->new_styles)->print = cast(void (*)(void*), hashmap_print_layout_attribute);
-	cast(hashmap_t*, block->new_styles)->destroy = cast(void (*)(void*), hashmap_destroy_layout_attribute);
+	block->state_styles = hashmap_create_layout_attribute_style_state(1);
 
 	block->children = array_create(sizeof(ast_layout_node_t*), 16);
 	block->children->print = cast(void (*)(void*), array_layout_node_print);
@@ -59,7 +53,7 @@ ast_layout_block_t* ast_layout_block_create(ast_type_t node_type, ast_layout_nod
 }
 
 /**
- * 
+ *
  * @function ast_layout_attribute_create
  * @brief Create a new AST node layout attribute
  * @params {ast_layout_attribute_type_t} type - Type of the layout attribute
@@ -69,7 +63,7 @@ ast_layout_block_t* ast_layout_block_create(ast_type_t node_type, ast_layout_nod
  * @params {location_t} last_name - Last name of the attribute
  * @params {location_t} first_value - First value of the attribute
  * @returns {ast_layout_attribute_t*} - Pointer to the created AST node layout attribute
- * 
+ *
  */
 ast_layout_attribute_t* ast_layout_attribute_create(ast_layout_attribute_type_t type, char* key, array_value_t* values, ast_layout_node_type_t parent_node_type, location_t last_name, location_t first_value)
 {
@@ -99,18 +93,18 @@ ast_layout_attribute_t* ast_layout_attribute_create(ast_layout_attribute_type_t 
 }
 
 /**
- * 
+ *
  * @function ast_layout_attribute_copy
  * @brief Copy the AST layout attribute
  * @params {ast_layout_attribute_t*} value - AST layout attribute
  * @returns {ast_layout_attribute_t*} - Pointer to the copied AST layout attribute
- * 
+ *
  */
 ast_layout_attribute_t* ast_layout_attribute_copy(ast_layout_attribute_t* value)
 {
 	DEBUG_ME;
 	ast_layout_attribute_t* copy = ast_layout_attribute_create(value->type, value->key, array_value_copy(value->values), value->parent_node_type, value->key_location, value->value_location);
-	
+
 	copy->isStyle = value->isStyle;
 	copy->isContent = value->isContent;
 	copy->ignoreMe = value->ignoreMe;
@@ -127,12 +121,12 @@ ast_layout_attribute_t* ast_layout_attribute_copy(ast_layout_attribute_t* value)
 }
 
 /**
- * 
+ *
  * @function ast_layout_attribute_destroy
  * @brief Destroy the AST layout attribute
  * @params {ast_layout_attribute_t*} value - AST layout attribute
  * @returns {void}
- * 
+ *
  */
 void ast_layout_attribute_destroy(ast_layout_attribute_t* value)
 {
@@ -153,18 +147,18 @@ void ast_layout_attribute_destroy(ast_layout_attribute_t* value)
 		if (value->values != NULL) {
 			value->values->destroy(value->values);
 		}
-		
+
 		memory_destroy(value);
 	}
 }
 
 /**
- * 
+ *
  * @function ast_layout_block_destroy
  * @brief Free the AST node layout block
  * @params {ast_layout_block_t*} value - AST layout block
  * @returns {void}
- * 
+ *
  */
 void ast_layout_block_destroy(ast_layout_block_t* value)
 {
@@ -172,9 +166,9 @@ void ast_layout_block_destroy(ast_layout_block_t* value)
 	if (value != NULL) {
 		array_t* children = value->children;
 		hashmap_t* attributes = cast(hashmap_t*, value->attributes);
-		hashmap_t* styles = cast(hashmap_t*, value->styles);
-		hashmap_t* new_styles = cast(hashmap_t*, value->new_styles);
-		
+		ast_layout_style_state_t* styles = cast(hashmap_t*, value->styles);
+		hashmap_t* state_styles = cast(hashmap_t*, value->state_styles);
+
 		if (attributes != NULL) {
 			attributes->destroy(attributes);
 		}
@@ -183,8 +177,8 @@ void ast_layout_block_destroy(ast_layout_block_t* value)
 			styles->destroy(styles);
 		}
 
-		if (new_styles != NULL) {
-			new_styles->destroy(new_styles);
+		if (state_styles != NULL) {
+			state_styles->destroy(state_styles);
 		}
 
 		if (value->text_content != NULL) {
@@ -200,12 +194,12 @@ void ast_layout_block_destroy(ast_layout_block_t* value)
 }
 
 /**
- * 
+ *
  * @function ast_layout_block_print
  * @brief Free the AST node layout block
  * @params {ast_layout_block_t*} value - AST layout block
  * @returns {void}
- * 
+ *
  */
 void ast_layout_block_print(ast_layout_block_t* value)
 {
@@ -230,12 +224,12 @@ void ast_layout_block_print(ast_layout_block_t* value)
 }
 
 /**
- * 
+ *
  * @function ast_layout_node_create
  * @brief Create a new AST node layout attribute
  * @params {ast_layout_node_type_t} layout_node_type - Layout node type
  * @returns {ast_layout_node_t*} - Pointer to the created AST node layout attribute
- * 
+ *
  */
 ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t layout_node_type)
 {
@@ -244,7 +238,7 @@ ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t layout_node_typ
 	node->tag = NULL;
 	node->type = layout_node_type;
 	node->block = ast_layout_block_create(AST_TYPE_LAYOUT, layout_node_type);
-	
+
 	node->print = cast(void (*)(void*), ast_layout_node_print);
 	node->destroy = cast(void (*)(void*), ast_layout_node_destroy);
 
@@ -252,12 +246,12 @@ ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t layout_node_typ
 }
 
 /**
- * 
+ *
  * @function ast_layout_node_print
  * @beief Print the AST layout node
  * @params {ast_layout_node_t*} value - AST layout node
  * @returns {void}
- * 
+ *
  */
 void ast_layout_node_print(ast_layout_node_t* value)
 {
@@ -267,12 +261,12 @@ void ast_layout_node_print(ast_layout_node_t* value)
 }
 
 /**
- * 
+ *
  * @function ast_layout_node_destroy
  * @brief Free the AST node layout attribute
  * @params {ast_layout_node_t*} value - AST layout node
  * @returns {void}
- * 
+ *
  */
 void ast_layout_node_destroy(ast_layout_node_t* value)
 {
@@ -291,11 +285,11 @@ void ast_layout_node_destroy(ast_layout_node_t* value)
 }
 
 /**
- * 
+ *
  * @function ast_layout_create
  * @brief Create a new AST node layout attribute
  * @returns {ast_layout_attribute_t*} - Pointer to the created AST node layout attribute
- * 
+ *
  */
 ast_layout_t* ast_layout_create()
 {
@@ -311,12 +305,12 @@ ast_layout_t* ast_layout_create()
 }
 
 /**
- * 
+ *
  * @function ast_layout_destroy
  * @brief Create a new AST node layout attribute
  * @params {ast_layout_t*} value - AST layout node
  * @returns {void}
- * 
+ *
  */
 void ast_layout_destroy(ast_layout_t* value)
 {
@@ -331,12 +325,12 @@ void ast_layout_destroy(ast_layout_t* value)
 }
 
 /**
- * 
+ *
  * @function ast_layout_print
  * @brief Print the AST layout
  * @params {ast_layout_t*} value - AST layout
  * @returns {void}
- * 
+ *
  */
 void ast_layout_print(ast_layout_t* value)
 {
@@ -346,12 +340,12 @@ void ast_layout_print(ast_layout_t* value)
 }
 
 /**
- * 
+ *
  * @function name_to_ast_layout_node_type
  * @brief Convert name to AST layout node type
  * @params {char*} name - Name
  * @returns {ast_layout_node_type_t} type - Layout Node Type
- * 
+ *
  */
 ast_layout_node_type_t name_to_ast_layout_node_type(char* name)
 {
@@ -368,12 +362,12 @@ ast_layout_node_type_t name_to_ast_layout_node_type(char* name)
 }
 
 /**
- * 
+ *
  * @function enduser_name_to_ast_layout_node_type
  * @brief Convert enduser name to AST layout node type
  * @params {char*} name - Name
  * @returns {ast_layout_node_type_t} type - Layout Node Type
- * 
+ *
  */
 ast_layout_node_type_t enduser_name_to_ast_layout_node_type(char* name)
 {
@@ -390,12 +384,12 @@ ast_layout_node_type_t enduser_name_to_ast_layout_node_type(char* name)
 }
 
 /**
- * 
+ *
  * @function token_to_ast_layout_node_type
  * @brief Convert token to AST layout node type
  * @params {token_t*} token - Token
  * @returns {ast_layout_node_type_t} type - Layout Node Type
- * 
+ *
  */
 ast_layout_node_type_t token_to_ast_layout_node_type(token_t* token)
 {
@@ -403,7 +397,7 @@ ast_layout_node_type_t token_to_ast_layout_node_type(token_t* token)
 	if (token->type != TOKEN_IDENTIFIER) {
 		error_ast(2, "Expected token type to be identifier as layout node type, got %s at line %d, column %d", token_name(token->type), token->location.end_line, token->location.end_column);
 	}
-	
+
 	ast_layout_node_type_t type = enduser_name_to_ast_layout_node_type(token->data.string);
 
 	if (type == AST_LAYOUT_TYPE_ERROR) {
@@ -414,12 +408,12 @@ ast_layout_node_type_t token_to_ast_layout_node_type(token_t* token)
 }
 
 /**
- * 
+ *
  * @function ast_layout_node_type_to_name
  * @brief Convert AST layout attribute type to name
  * @params {ast_layout_node_type_t} type - Layout Attribute Type
  * @returns {char*} name - Name
- * 
+ *
  */
 char* ast_layout_node_type_to_name(ast_layout_node_type_t type)
 {
@@ -435,12 +429,12 @@ char* ast_layout_node_type_to_name(ast_layout_node_type_t type)
 }
 
 /**
- * 
+ *
  * @function ast_layout_node_type_to_enduser_name
  * @brief Convert AST layout attribute type to enduser name
  * @params {ast_layout_node_type_t} type - Layout Attribute Type
  * @returns {char*} name - Name
- * 
+ *
  */
 char* ast_layout_node_type_to_enduser_name(ast_layout_node_type_t type)
 {
@@ -459,12 +453,12 @@ char* ast_layout_node_type_to_enduser_name(ast_layout_node_type_t type)
 }
 
 /**
- * 
+ *
  * @function name_to_ast_layout_node_type
  * @brief Convert attribute name to AST layout node type
  * @params {char*} name - Name
  * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
- * 
+ *
  */
 ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name)
 {
@@ -477,7 +471,7 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name)
 
 	#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME_LOWER) == 0) { type = TYPE; return type; }
 	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) else if (strcmp(name, NAME_LOWER) == 0) { type = TYPE; return type; }
-	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) 
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS)
 
 	if (false) {}
 	#include "ast_layout_attribute_type.h"
@@ -487,12 +481,12 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name)
 }
 
 /**
- * 
+ *
  * @function enduser_name_to_ast_layout_attribute_type
  * @brief Convert enduser attribute name to AST layout node type
  * @params {char*} name - Name
  * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
- * 
+ *
  */
 ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_type(char* name)
 {
@@ -505,7 +499,7 @@ ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_type(char* name
 
 	#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
 	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
-	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) 
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS)
 
 	if (false) {}
 	#include "ast_layout_attribute_type.h"
@@ -515,12 +509,131 @@ ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_type(char* name
 }
 
 /**
+ *
+ * @function name_to_ast_layout_attribute_style_state_type
+ * @brief Convert state type name to AST layout node type
+ * @params {char*} name - Name
+ * @returns {ast_layout_attribute_style_state_type} type - Layout Attribute Style State Type
+ *
+ */
+ast_layout_attribute_style_state_type name_to_ast_layout_attribute_style_state_type(char* name)
+{
+	DEBUG_ME;
+	ast_layout_attribute_style_state_type type = AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR;
+
+    #undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
+
+    #define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME) else if (strcmp(name, NAME) == 0) { type = TYPE; return type; }
+
+	if (false) {}
+	#include "ast_layout_attribute_style_state_type.h"
+
+	return type;
+}
+
+/**
  * 
+ * @function ast_layout_style_state_create
+ * @brief Create a new AST layout style state
+ * @returns {ast_layout_style_state_t*} - Pointer to the created AST layout style state
+ * 
+ */
+ast_layout_style_state_t* ast_layout_style_state_create()
+{
+	ast_layout_style_state_t* ast = memory_allocate(sizeof(ast_layout_style_state_t));
+
+	ast->normal = hashmap_create_layout_attribute(2);
+	ast->new = hashmap_create_layout_attribute(1);
+
+	ast->print = cast(void (*)(void*), ast_layout_style_state_print);
+	ast->destroy = cast(void (*)(void*), ast_layout_style_state_destroy);
+
+	return ast;
+}
+
+/**
+ * 
+ * @function ast_layout_style_state_destroy
+ * @brief Destroy the AST layout style state
+ * @params {ast_layout_style_state_t*} ast - AST layout style state
+ * @returns {void}
+ * 
+ */
+void ast_layout_style_state_destroy(ast_layout_style_state_t* ast)
+{
+	if (ast != NULL) {
+		if (ast->normal != NULL) {
+			ast->normal->destroy(ast->normal);
+		}
+
+		if (ast->new != NULL) {
+			ast->new->destroy(ast->new);
+		}
+
+		memory_destroy(ast);
+	}
+}
+
+/**
+ * 
+ * @function ast_layout_style_state_print
+ * @brief Print the AST layout style state
+ * @params {ast_layout_style_state_t*} ast - AST layout style state
+ * @returns {void}
+ * 
+ */
+void ast_layout_style_state_print(ast_layout_style_state_t* ast)
+{
+	printf("Style State\n");
+
+	if (ast->normal != NULL) {
+		printf("Normal\n");
+		ast->normal->print(ast->normal);
+	}
+	else {
+		printf("Normal: NULL\n");
+	}
+
+	if (ast->new != NULL) {
+		printf("New\n");
+		ast->new->print(ast->new);
+	}
+	else {
+		printf("New: NULL\n");
+	}
+}
+
+
+/**
+ *
+ * @function enduser_name_to_ast_layout_attribute_style_state_type
+ * @brief Convert state type enduser name to AST layout node type
+ * @params {char*} name - Name
+ * @returns {ast_layout_attribute_style_state_type} type - Layout Attribute Style State Type
+ *
+ */
+ast_layout_attribute_style_state_type enduser_name_to_ast_layout_attribute_style_state_type(char* name)
+{
+	DEBUG_ME;
+	ast_layout_attribute_style_state_type type = AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR;
+
+    #undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
+
+    #define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
+
+	if (false) {}
+	#include "ast_layout_attribute_style_state_type.h"
+
+	return type;
+}
+
+/**
+ *
  * @function name_to_ast_layout_attribute_style_type
  * @brief Convert style attribute name to AST layout node type
  * @params {char*} name - Name
  * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
- * 
+ *
  */
 ast_layout_attribute_type_t name_to_ast_layout_attribute_style_type(char* name)
 {
@@ -531,7 +644,7 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_style_type(char* name)
     #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
     #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
 
-	#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
+	#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME)
 	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) else if (strcmp(name, NAME_LOWER) == 0) { type = TYPE; return type; }
 	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) else if (strcmp(name, NAME_LOWER) == 0) { type = TYPE; return type; }
 
@@ -542,12 +655,12 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_style_type(char* name)
 }
 
 /**
- * 
+ *
  * @function enduser_name_to_ast_layout_attribute_style_type
  * @brief Convert style end-user attribute name to AST layout node type
  * @params {char*} name - Name
  * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
- * 
+ *
  */
 ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_style_type(char* name)
 {
@@ -558,7 +671,7 @@ ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_style_type(char
     #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
     #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
 
-	#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
+	#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME)
 	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
 	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
 
@@ -569,18 +682,18 @@ ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_style_type(char
 }
 
 /**
- * 
+ *
  * @function token_to_ast_layout_attribute_type
  * @brief Convert token to AST layout attribute type
  * @params {char*} name - Name
  * @params {token_t*} token - Token
  * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @returns {ast_layout_node_type_t} type - Layout Node Type
- * 
+ *
  */
 ast_layout_attribute_type_t token_to_ast_layout_attribute_type(char* name, token_t* token, ast_layout_node_type_t parent_node_type)
 {
-    DEBUG_ME;		
+    DEBUG_ME;
 	ast_layout_attribute_type_t type = enduser_name_to_ast_layout_attribute_type(name);
 
 	if (type == AST_LAYOUT_ATTRIBUTE_TYPE_ERROR) {
@@ -591,12 +704,12 @@ ast_layout_attribute_type_t token_to_ast_layout_attribute_type(char* name, token
 }
 
 /**
- * 
+ *
  * @function ast_layout_attribute_type_to_name
  * @brief Convert AST layout attribute type to name
  * @params {ast_layout_attribute_type_t} type - Layout Attribute Type
  * @returns {char*} name - Name
- * 
+ *
  */
 char* ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type)
 {
@@ -608,7 +721,7 @@ char* ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type)
 
 		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return NAME_LOWER;
 		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) case TYPE: return NAME_LOWER;
-		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) 
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS)
 
 		#include "ast_layout_attribute_type.h"
 		#include "ast_layout_attribute_style_type.h"

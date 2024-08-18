@@ -251,7 +251,6 @@ void hashmap_destroy(hashmap_t* map)
 void hashmap_destroy_custom(hashmap_t* map, void (*free_fn)(void*))
 {
     DEBUG_ME;
-	printf("hashmap_destroy_custom...\n");
 	if (map != NULL) {
 		if (map->data != NULL) {
 			for (size_t i = 0; i < map->capacity; i++) {
@@ -262,9 +261,7 @@ void hashmap_destroy_custom(hashmap_t* map, void (*free_fn)(void*))
 
 					memory_destroy(entry->key);
 
-					printf("hashmap_destroy_custom 2222...\n");
 					free_fn(entry->value);
-					printf("hashmap_destroy_custom 3333...\n");
 
 					memory_destroy(entry);
 
@@ -422,4 +419,76 @@ hashmap_attribute_t* hashmap_create_layout_attribute(size_t capacity)
 	map->destroy = cast(void (*)(void*), hashmap_destroy_layout_attribute);
 
 	return map;
+}
+
+/**
+ * 
+ * @function hashmap_create_layout_attribute_style_state
+ * @brief Create a new hashmap of layout style state attributes
+ * @params {size_t} capacity
+ * @returns {hashmap_attribute_t*}
+ * 
+ */
+hashmap_attribute_t* hashmap_create_layout_attribute_style_state(size_t capacity)
+{
+	hashmap_attribute_t* map = cast(struct hashmap_t*, hashmap_create(capacity));
+
+	map->print = cast(void (*)(void*), hashmap_print_layout_attribute_style_state);
+	map->destroy = cast(void (*)(void*), hashmap_destroy_layout_attribute_style_state);
+
+	return map;
+}
+
+/**
+ * 
+ * @function hashmap_print_layout_attribute_style_state
+ * @brief Print the hashmap of layout style state attributes
+ * @params {hashmap_attribute_t*} map
+ * @returns {void}
+ * 
+ */
+void hashmap_print_layout_attribute_style_state(hashmap_attribute_t* map)
+{
+	printf("Hashmap style states length: %zu\n", map->length);
+	if (map->length == 0) {
+		printf("Hashmap style states is empty\n");
+		return;
+	}
+}
+
+/**
+ * 
+ * @function hashmap_destroy_layout_attribute_style_state
+ * @brief Destroy the hashmap of layout style state attributes
+ * @params {hashmap_attribute_t*} map
+ * @returns {void}
+ * 
+ */
+void hashmap_destroy_layout_attribute_style_state(hashmap_attribute_t* map)
+{
+	if (map != NULL) {
+		if (map->data != NULL) {
+			for (size_t i = 0; i < map->capacity; i++) {
+				hashmap_entry_t* entry = map->data[i];
+
+				while (entry) {
+					memory_destroy(entry->key);
+
+					hashmap_attribute_t* entry_value = entry->value;
+
+					if (entry_value != NULL) {
+						entry_value->destroy(entry_value);
+					}
+
+					memory_destroy(entry);
+
+					entry = cast(hashmap_entry_t*, entry->next);
+				}
+			}
+
+			memory_destroy(map->data);
+		}
+
+		memory_destroy(map);
+	}
 }

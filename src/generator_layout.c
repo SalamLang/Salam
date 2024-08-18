@@ -31,6 +31,8 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 		string_append_str(layout_block_str, ">");
 
 		if (node->block->children->length > 0 || node->block->text_content != NULL) {
+			bool has_content = false;
+
 			if (node->block->text_content != NULL) {
 				if (node->block->children->length == 0 && strchr(node->block->text_content, '\n') == NULL) {
 					string_append_str(layout_block_str, node->block->text_content);
@@ -39,16 +41,26 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 					string_append_char(layout_block_str, '\n');
 					string_append_str(layout_block_str, node->block->text_content);
 					string_append_char(layout_block_str, '\n');
+
+					has_content = true;
 				}
 			}
 
 			if (node->block->children->length > 0) {
 				string_t* layout_block_children = generator_code_layout_block(generator, node->block->children);
 
-				if (layout_block_children->length > 0) string_append(layout_block_str, layout_block_children);
-				if (layout_block_children != NULL) layout_block_children->destroy(layout_block_children);
-			}
+				if (has_content == false) {
+					string_append_char(layout_block_str, '\n');
+				}
 
+				if (layout_block_children->length > 0) {
+					string_append(layout_block_str, layout_block_children);
+				}
+
+				if (layout_block_children != NULL) {
+					layout_block_children->destroy(layout_block_children);
+				}
+			}
 		}
 
 		string_append_str(layout_block_str, "</");
@@ -64,13 +76,13 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 }
 
 /**
- * 
+ *
  * @function generator_code_layout_body
  * @params {generator_t*} generator - Generator
  * @params {ast_layout_block_t*} layout_block - Layout block
  * @params {string_t*} body - Body
  * @returns {void}
- * 
+ *
  */
 void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layout_block, string_t* body)
 {
@@ -112,12 +124,12 @@ void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layo
 }
 
 /**
- * 
+ *
  * @function generator_code_head_item
  * @params {ast_layout_attribute_t*} attribute - Attribute
  * @params {string_t*} head - Head
  * @returns {void}
- * 
+ *
  */
 void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 {
@@ -135,7 +147,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 			string_append_str(head, "</title>");
 			string_append_char(head, '\n');
 			break;
-		
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR:
 			value = array_value_stringify(attribute->values, ", ");
 
@@ -153,7 +165,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 			string_append_str(head, "\">");
 			string_append_char(head, '\n');
 			break;
-		
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS:
 			value = array_value_stringify(attribute->values, ", ");
 
@@ -162,7 +174,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 			string_append_str(head, "\">");
 			string_append_char(head, '\n');
 			break;
-		
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET:
 			value = array_value_stringify(attribute->values, ", ");
 
@@ -171,7 +183,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 			string_append_str(head, "\">");
 			string_append_char(head, '\n');
 			break;
-		
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT:
 			value = array_value_stringify(attribute->values, ", ");
 
@@ -180,7 +192,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 			string_append_str(head, "\">");
 			string_append_char(head, '\n');
 			break;
-		
+
 		case AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH:
 			value = array_value_stringify(attribute->values, ", ");
 
@@ -200,12 +212,12 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 }
 
 /**
- * 
+ *
  * @function generator_code_head
  * @params {ast_layout_block_t*} layout_block - Layout block
  * @params {string_t*} head - Head
  * @returns {void}
- * 
+ *
  */
 void generator_code_head(ast_layout_block_t* block, string_t* head)
 {
@@ -230,7 +242,7 @@ void generator_code_head(ast_layout_block_t* block, string_t* head)
 
 					html_tags_length++;
 				}
-				
+
 				entry = cast(hashmap_entry_t*, entry->next);
 			}
 		}
@@ -238,12 +250,12 @@ void generator_code_head(ast_layout_block_t* block, string_t* head)
 }
 
 /**
- * 
+ *
  * @function generator_code_layout
  * @brief Generate code for AST layout
  * @params {generator_t*} generator - Generator
  * @returns {void}
- * 
+ *
  */
 void generator_code_layout(generator_t* generator)
 {
@@ -253,7 +265,7 @@ void generator_code_layout(generator_t* generator)
 			string_t* body = string_create(1024);
 			string_t* html = string_create(1024);
 
-			// Process the layout block 
+			// Process the layout block
 			generator_code_layout_body(generator, generator->ast->layout->block, body);
 
 			// Process the head block
@@ -297,7 +309,7 @@ void generator_code_layout(generator_t* generator)
 					string_append_str(html, "<script src=\"script.js\"></script>\n");
 				}
 			}
-			
+
 			string_append_str(html, "</body>\n");
 			string_append_str(html, "</html>");
 
@@ -329,7 +341,7 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 	if (html_lang != NULL) {
 		char* values = array_value_stringify(html_lang->values, ", ");
 		html_lang_value = string_lower_str(values);
-		
+
 		if (values != NULL) memory_destroy(values);
 	}
 	if (html_lang_value == NULL || strcmp(html_lang_value, "") == 0) {
@@ -380,14 +392,14 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 }
 
 /**
- * 
+ *
  * @function generator_code_layout_style
  * @brief Generate the CSS code for the layout block
  * @params {hashmap_attribute_t*} styles - Styles
  * @params {ast_layout_block_t*} block - Layout block
  * @params {size_t*} css_attributes_length - CSS attributes length
  * @returns {string_t*}
- * 
+ *
  */
 string_t* generator_code_layout_style(hashmap_attribute_t* styles, ast_layout_block_t* block, size_t* css_attributes_length)
 {
@@ -399,8 +411,8 @@ string_t* generator_code_layout_style(hashmap_attribute_t* styles, ast_layout_bl
 
 			while (entry) {
 				ast_layout_attribute_t* attribute = entry->value;
-				
-				generator_code_layout_style_value(block->styles, block->new_styles, attribute);
+
+				generator_code_layout_style_value(block->styles->normal, block->styles->new, attribute);
 
 				if (attribute->isStyle == false || attribute->ignoreMe == true) {}
 				else {
@@ -415,7 +427,7 @@ string_t* generator_code_layout_style(hashmap_attribute_t* styles, ast_layout_bl
 
 					(*css_attributes_length)++;
 				}
-				
+
 				entry  = cast(hashmap_entry_t*, entry->next);
 			}
 		}
@@ -473,19 +485,19 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 
 						html_attributes_length++;
 					}
-					
+
 					entry  = cast(hashmap_entry_t*, entry->next);
 				}
 			}
 		}
 
-		string_t* this_style = generator_code_layout_style(block->styles, block, &css_attributes_length);
+		string_t* this_style = generator_code_layout_style(block->styles->normal, block, &css_attributes_length);
 		string_append(css_attributes, this_style);
 		string_destroy(this_style);
-		
+
 		// New styles
-		for (size_t i = 0; i < block->new_styles->capacity; i++) {
-			hashmap_entry_t* entry = block->new_styles->data[i];
+		for (size_t i = 0; i < block->styles->new->capacity; i++) {
+			hashmap_entry_t* entry = block->styles->new->data[i];
 
 			while (entry) {
 				ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
@@ -499,7 +511,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 
 					css_attributes_length++;
 				}
-				
+
 				entry  = cast(hashmap_entry_t*, entry->next);
 			}
 		}
@@ -538,28 +550,28 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 }
 
 /**
- * 
+ *
  * @function generator_code_layout_style_value
  * @brief Convert AST layout attribute values to CSS attribute values
  * @params {hashmap_t*} styles - Styles
  * @params {hashmap_t*} new_styles - New Styles
  * @params {ast_layout_attribute_t*} attribute - Layout Attribute
  * @returns {void}
- * 
+ *
  */
 void generator_code_layout_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute)
 {
 	DEBUG_ME;
 	bool isValid = validate_style_value(styles, new_styles, attribute);
-	
+
 	// Invalid value for '...' attribute in '...' element in case if not stopped by the condition
 	if (isValid == false) {
 		printf("%d\n", attribute->parent_node_type);
 		error_generator(2, "Invalid value for '%s' attribute in '%s' element at line %zu column %zu!", attribute->key, ast_layout_node_type_to_enduser_name(attribute->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
-		
+
 		return;
 	}
-	
+
 	if (attribute->final_key == NULL) {
 		attribute->final_key = strdup(attribute->key);
 	}
@@ -570,12 +582,12 @@ void generator_code_layout_style_value(hashmap_t* styles, hashmap_t* new_styles,
 }
 
 /**
- * 
+ *
  * @function generator_code_layout_style_name
  * @brief Convert AST layout attribute type to CSS attribute name
  * @params {ast_layout_attribute_type_t} type - Layout Attribute Type
  * @returns {char*} name - Name
- * 
+ *
  */
 char* generator_code_layout_style_name(ast_layout_attribute_type_t type)
 {
@@ -584,13 +596,13 @@ char* generator_code_layout_style_name(ast_layout_attribute_type_t type)
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
 		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) case TYPE: return GENERATED_NAME;
-		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) 
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS)
 
 	    #include "ast_layout_attribute_style_type.h"
 
 		#undef ADD_LAYOUT_ATTRIBUTE_TYPE
 		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return "ERROR";
-		
+
 	    #include "ast_layout_attribute_type.h"
 	}
 
@@ -598,12 +610,12 @@ char* generator_code_layout_style_name(ast_layout_attribute_type_t type)
 }
 
 /**
- * 
+ *
  * @function generator_code_layout_node_type
  * @brief Convert AST layout node type to HTML node name
  * @params {ast_layout_node_type_t} type - Layout Node Type
  * @returns {char*} name - Name
- * 
+ *
  */
 char* generator_code_layout_node_type(ast_layout_node_type_t type)
 {
@@ -616,4 +628,48 @@ char* generator_code_layout_node_type(ast_layout_node_type_t type)
 	}
 
 	return "error?";
+}
+
+/**
+ *
+ * @function generator_code_layout_attribute_style_state_type_to_enduser_name
+ * @brief Convert style attribute state type to enduser name
+ * @params {ast_layout_attribute_style_state_type} type - Style Attribute State Type
+ * @returns {char*} name - Name
+ *
+ */
+char* generator_code_layout_attribute_style_state_type_to_enduser_name(ast_layout_attribute_style_state_type type)
+{
+	DEBUG_ME;
+	switch (type) {
+		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
+
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME) case TYPE: return ENDUSER_NAME;
+
+		#include "ast_layout_attribute_style_state_type.h"
+	}
+
+	return "uknown style state endusername";
+}
+
+/**
+ *
+ * @function generator_code_layout_attribute_style_state_type_to_name
+ * @brief Convert style attribute state type to name
+ * @params {ast_layout_attribute_style_state_type} type - Style Attribute State Type
+ * @returns {char*} name - Name
+ *
+ */
+char* generator_code_layout_attribute_style_state_type_to_name(ast_layout_attribute_style_state_type type)
+{
+	DEBUG_ME;
+	switch (type) {
+		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
+
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME) case TYPE: return NAME;
+
+		#include "ast_layout_attribute_style_state_type.h"
+	}
+
+	return "uknown style state name";
 }

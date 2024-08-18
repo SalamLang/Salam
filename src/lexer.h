@@ -2,6 +2,8 @@
 #define _LEXER_H_
 
 #include <stdio.h>
+#include <wchar.h>
+#include <errno.h>
 #include <stdbool.h>
 
 #include "base.h"

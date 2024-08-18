@@ -593,8 +593,10 @@ void string_number2number(char* str)
     }
 
     *dest_ptr = '\0';
+	
     strcpy(str, temp_str);
-    free(temp_str);
+
+    memory_destroy(temp_str);
 }
 
 /**

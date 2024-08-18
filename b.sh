@@ -15,19 +15,19 @@ clear
 
 # Check if the virtual environment activation script exists
 if [ -f /opt/venv/bin/activate ]; then
-    # Activate the virtual environment
-    source /opt/venv/bin/activate
-    echo "Virtual environment activated."
+	# Activate the virtual environment
+	source /opt/venv/bin/activate
+	echo "Virtual environment activated."
 else
-    echo "Virtual environment not found."
+	echo "Virtual environment not found."
 fi
 
 # Source Emscripten environment
 if [ -f /opt/emsdk/emsdk_env.sh ]; then
-    source /opt/emsdk/emsdk_env.sh
-    echo "Emscripten environment activated."
+	source /opt/emsdk/emsdk_env.sh
+	echo "Emscripten environment activated."
 else
-    echo "Emscripten environment not found."
+	echo "Emscripten environment not found."
 fi
 
 # Delete file
@@ -85,8 +85,8 @@ fi
 # }"
 
 if command -v pre-commit &> /dev/null; then
-    echo "Running pre-commit..."
-    pre-commit run --all-files
+	echo "Running pre-commit..."
+	pre-commit run --all-files
 else
-    echo "pre-commit is not installed."
+	echo "pre-commit is not installed."
 fi

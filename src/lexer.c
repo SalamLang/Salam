@@ -416,6 +416,9 @@ char* token_value_stringify(token_t* token)
 		case TOKEN_STRING:
 		case TOKEN_IDENTIFIER:
 			return token->data.string;
+			// snprintf(buffer, sizeof(buffer), "%s", token->data.string);
+
+			// return buffer;
 
 		case TOKEN_BOOLEAN:
 			return token->data.boolean ? TOKEN_BOOL_TRUE : TOKEN_BOOL_FALSE;
@@ -586,8 +589,8 @@ wchar_t read_token(lexer_t* lexer, int* char_size)
 	}
 
 	if (current_char == '\n') {
-		lexer->line++;
-		lexer->column = 0;
+		LEXER_NEXT_LINE;
+		LEXER_ZERO_COLUMN;
 	}
 	else {
 		lexer->column += *char_size;
@@ -668,27 +671,6 @@ void lexer_lex_number(lexer_t* lexer, int char_size)
 
 /**
  * 
- * @function is_keyword
- * @brief Check if a string is a keyword
- * @params {const char*} string - String
- * @returns {bool}
- * 
- */
-bool is_keyword(const char* string)
-{
-    DEBUG_ME;
-	size_t length = strlen(string);
-	for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
-		if (keywords[i].length == length && strcmp(string, keywords[i].keyword) == 0) {
-			return true;
-		}
-	}
-
-	return false;
-}
-
-/**
- * 
  * @function type_keyword
  * @brief Check if a string is a keyword then return the token type
  * @params {const char*} string - String
@@ -700,6 +682,8 @@ token_type_t type_keyword(const char* string)
     DEBUG_ME;
 	size_t length = strlen(string);
 	for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
+		printf("type_keyword => %zu - %zu and %s - %s\n", length, keywords[i].length, string, keywords[i].keyword);
+		
 		if (keywords[i].length == length && strcmp(string, keywords[i].keyword) == 0) {
 			return keywords[i].type;
 		}

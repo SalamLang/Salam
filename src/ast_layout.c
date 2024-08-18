@@ -382,7 +382,7 @@ ast_layout_node_type_t enduser_name_to_ast_layout_node_type(char* name)
 	ast_layout_node_type_t type = AST_LAYOUT_TYPE_ERROR;
 
     #undef ADD_LAYOUT_TYPE
-	#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, ENDUSER_NAME) == 0) type = TYPE;
+	#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
 
 	if (false) {}
 	#include "ast_layout_type.h"
@@ -405,7 +405,7 @@ ast_layout_node_type_t token_to_ast_layout_node_type(token_t* token)
 		error_ast(2, "Expected token type to be identifier as layout node type, got %s at line %d, column %d", token_name(token->type), token->location.end_line, token->location.end_column);
 	}
 	
-	ast_layout_node_type_t type = name_to_ast_layout_node_type(token->data.string);
+	ast_layout_node_type_t type = enduser_name_to_ast_layout_node_type(token->data.string);
 
 	if (type == AST_LAYOUT_TYPE_ERROR) {
 		error_ast(2, "Unknown layout node '%s' at line %d, column %d", token->data.string, token->location.end_line, token->location.end_column);

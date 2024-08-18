@@ -248,16 +248,6 @@ void lexer_debug(lexer_t* lexer);
 
 /**
  * 
- * @function is_keyword
- * @brief Check if a string is a keyword
- * @params {const char*} string - String
- * @returns {bool}
- * 
- */
-bool is_keyword(const char* string);
-
-/**
- * 
  * @function lexer_lex
  * @brief Lexing the source code
  * @params {lexer_t*} lexer - Lexer state

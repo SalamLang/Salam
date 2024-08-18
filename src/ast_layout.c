@@ -164,29 +164,24 @@ void ast_layout_block_destroy(ast_layout_block_t* value)
 {
     DEBUG_ME;
 	if (value != NULL) {
-		array_t* children = value->children;
-		hashmap_t* attributes = cast(hashmap_t*, value->attributes);
-		ast_layout_style_state_t* styles = cast(hashmap_t*, value->styles);
-		hashmap_t* state_styles = cast(hashmap_t*, value->state_styles);
-
-		if (attributes != NULL) {
-			attributes->destroy(attributes);
+		if (value->attributes != NULL) {
+			value->attributes->destroy(value->attributes);
 		}
 
-		if (styles != NULL) {
-			styles->destroy(styles);
+		if (value->styles != NULL) {
+			value->styles->destroy(value->styles);
 		}
 
-		if (state_styles != NULL) {
-			state_styles->destroy(state_styles);
+		if (value->state_styles != NULL) {
+			value->state_styles->destroy(value->state_styles);
 		}
 
 		if (value->text_content != NULL) {
 			memory_destroy(value->text_content);
 		}
 
-		if (children != NULL) {
-			children->destroy(children);
+		if (value->children != NULL) {
+			value->children->destroy(value->children);
 		}
 
 		memory_destroy(value);
@@ -540,6 +535,7 @@ ast_layout_attribute_style_state_type name_to_ast_layout_attribute_style_state_t
  */
 ast_layout_style_state_t* ast_layout_style_state_create()
 {
+	DEBUG_ME;
 	ast_layout_style_state_t* ast = memory_allocate(sizeof(ast_layout_style_state_t));
 
 	ast->normal = hashmap_create_layout_attribute(2);
@@ -561,6 +557,7 @@ ast_layout_style_state_t* ast_layout_style_state_create()
  */
 void ast_layout_style_state_destroy(ast_layout_style_state_t* ast)
 {
+	DEBUG_ME;
 	if (ast != NULL) {
 		if (ast->normal != NULL) {
 			ast->normal->destroy(ast->normal);
@@ -584,6 +581,7 @@ void ast_layout_style_state_destroy(ast_layout_style_state_t* ast)
  */
 void ast_layout_style_state_print(ast_layout_style_state_t* ast)
 {
+	DEBUG_ME;
 	printf("Style State\n");
 
 	if (ast->normal != NULL) {
@@ -602,7 +600,6 @@ void ast_layout_style_state_print(ast_layout_style_state_t* ast)
 		printf("New: NULL\n");
 	}
 }
-
 
 /**
  *

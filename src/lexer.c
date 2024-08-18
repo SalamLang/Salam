@@ -582,23 +582,30 @@ void location_print(location_t location)
  */
 wchar_t read_token(lexer_t* lexer, int* char_size)
 {
-	wchar_t current_char;
-	*char_size = mbtowc(&current_char, &lexer->source[lexer->index], MB_CUR_MAX);
-	if (*char_size < 0) {
-		error_lexer(2, "Failed to read unicode character at line %zu, column %zu", lexer->line, lexer->column);
-	}
+    wchar_t current_char;
+    mbstate_t state;
+    memset(&state, 0, sizeof state);
 
-	if (current_char == '\n') {
-		LEXER_NEXT_LINE;
-		LEXER_ZERO_COLUMN;
-	}
+    *char_size = mbrtowc(&current_char, &lexer->source[lexer->index], MB_CUR_MAX, &state);
+
+    if (*char_size <= 0) {
+        if (*char_size == 0 || (errno == EILSEQ || errno == EINVAL)) {
+            error_lexer(2, "Failed to read unicode character at line %zu, column %zu", lexer->line, lexer->column);
+            *char_size = 1;
+        }
+    }
+
+    if (current_char == L'\n') {
+        LEXER_NEXT_LINE;
+        LEXER_ZERO_COLUMN;
+    }
 	else {
-		lexer->column += *char_size;
-	}
+        lexer->column += *char_size;
+    }
 
-	lexer->index += *char_size;
+    lexer->index += *char_size;
 
-	return current_char;
+    return current_char;
 }
 
 /**
@@ -707,10 +714,6 @@ void lexer_lex_identifier(lexer_t* lexer, int char_size)
 	DEBUG_ME;
     char* buffer = memory_allocate(256);
 
-    // size_t start_index = lexer->index;
-    // size_t start_line = lexer->line;
-    // size_t start_column = lexer->column;
-
 	size_t index = 0;
 	wchar_t wc;
 
@@ -736,6 +739,8 @@ void lexer_lex_identifier(lexer_t* lexer, int char_size)
     }
 
 	buffer[index] = '\0';
+
+	printf("identifier value: %s\n", buffer);
 
 	LEXER_PREV;
 

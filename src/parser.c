@@ -301,42 +301,23 @@ void parser_parse_layout_block_style_state(ast_layout_block_t* block, lexer_t* l
 
 	expect_open_block(lexer);
 
-	printf("==>%s\n", name->data);
-
 	if (hashmap_has(block->states, name->data) == true) {
 		error_parser(2, "Style state '%s' already defined in the '%s' block at line %d, column %d", name->data, ast_layout_node_type_to_enduser_name(block->parent_node_type), last_name->location.end_line, last_name->location.end_column);
 	}
 
 	ast_layout_style_state_t* state_styles = ast_layout_style_state_create();
 
-	// while (PARSER_CURRENT->type != TOKEN_TYPE_CLOSE_BLOCK) {
-	// 	printf("check and appending...\n");
-	// 	PARSER_CURRENT->print(PARSER_CURRENT);
+	while (PARSER_CURRENT->type != TOKEN_TYPE_CLOSE_BLOCK) {
+		token_t* last_name2 = PARSER_CURRENT;
+		string_t* name2 = parser_parse_layout_name(lexer, &last_name2);
 
-	// 	token_t* last_name2 = PARSER_CURRENT;
-	// 	string_t* name2 = parser_parse_layout_name(lexer, &last_name2);
+		PARSER_CURRENT->print(PARSER_CURRENT);
 
-	// 	printf("sub style attr: %s\n", name2->data);
+		parser_parse_layout_block_attribute(true, block, state_styles->normal, lexer, name2, last_name2);
+	}
 
-	// 	PARSER_CURRENT->print(PARSER_CURRENT);
-
-	// 	parser_parse_layout_block_attribute(true, block, state_styles->normal, lexer, name2, last_name2);
-	// 	printf("append\n");
-	// }
-
-	printf("save inside hashmap - %s\n", name->data);
-
-	// printf("style_state: ");
-	// style_state->print(style_state);
-	// style_state->destroy(style_state);
 
 	hashmap_put(block->states, name->data, state_styles);
-	printf("saved\n");
-
-	// exit(2);
-
-	printf("------------------->\n");
-	PARSER_CURRENT->print(PARSER_CURRENT);
 
 	expect_close_block(lexer);
 

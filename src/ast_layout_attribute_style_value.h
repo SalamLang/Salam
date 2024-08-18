@@ -719,9 +719,6 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_optic
     {"غیر سازگار", "none"},
     {NULL, NULL},
 };
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_size[] = {
-    {NULL, NULL},
-};
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_stretch[] = {
     {"پهن", "ultra-condensed"},
     {"متوسط", "normal"},

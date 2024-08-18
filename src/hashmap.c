@@ -492,7 +492,7 @@ void hashmap_destroy_layout_attribute_style_state(hashmap_layout_attribute_t* ma
 						memory_destroy(entry->key);
 					}
 
-					hashmap_layout_attribute_t* value = cast(hashmap_layout_attribute_t*, entry->value);
+					ast_layout_style_state_t* value = entry->value;
 					if (value != NULL) {
 						value->print(value);
 						printf(".\n");

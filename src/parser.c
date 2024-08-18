@@ -210,7 +210,7 @@ void parser_parse_block(lexer_t* lexer, ast_block_t* block)
 	
 	expect_open_block(lexer);
 
-	while (PARSER_CURRENT->type != TOKEN_RIGHT_BRACE) {
+	while (PARSER_CURRENT->type != TOKEN_TYPE_CLOSE_BLOCK) {
 		ast_node_t* node = parser_parse_node(lexer);
 
 		if (node == NULL) {
@@ -371,11 +371,15 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer)
 	DEBUG_ME;
 	expect_open_block(lexer);
 
-	while (PARSER_CURRENT->type != TOKEN_RIGHT_BRACE) {
-		if (match(lexer, TOKEN_IDENTIFIER) && match_next_open_block(lexer)) {
+	while (PARSER_CURRENT->type != TOKEN_TYPE_CLOSE_BLOCK) {
+		printf("TOKEN: %s\n", token_name(PARSER_CURRENT->type));
+
+		if (match(lexer, TOKEN_IDENTIFIER) && enduser_name_to_ast_layout_node_type(PARSER_CURRENT->data.string) != AST_LAYOUT_TYPE_ERROR) {
+			printf("MATCHED BLOCK\n");
 			parser_parse_layout_block_children(block, lexer);
 		}
 		else if (match(lexer, TOKEN_IDENTIFIER)) {
+			printf("MATCHED ATTRIBUTE\n");
 			parser_parse_layout_block_attribute(block, lexer);
 		}
 		else {

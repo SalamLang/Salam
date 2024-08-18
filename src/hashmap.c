@@ -1,7 +1,5 @@
 #include "hashmap.h"
 
-#include <string.h>
-
 /**
  * 
  * @function hash_function
@@ -83,7 +81,9 @@ void hashmap_put_custom(hashmap_t* map, const char* key, void* value, void (*fre
 
 	while (entry != NULL) {
 		if (strcmp(entry->key, key) == 0) {
-			if (free_fn != NULL) free_fn(entry->value);
+			if (free_fn != NULL) {
+				free_fn(entry->value);
+			}
 
 			entry->value = value;
 
@@ -146,7 +146,9 @@ void* hashmap_get(hashmap_t* map, const char* key)
 	hashmap_entry_t* entry = map->data[index];
 	
 	while (entry != NULL) {
-		if (strcmp(entry->key, key) == 0) return entry->value;
+		if (strcmp(entry->key, key) == 0) {
+			return entry->value;
+		}
 
 		entry = cast(hashmap_entry_t*, entry->next);
 	}
@@ -171,7 +173,9 @@ bool hashmap_has(hashmap_t* map, const char* key)
 	hashmap_entry_t* entry = map->data[index];
 	
 	while (entry != NULL) {
-		if (strcmp(entry->key, key) == 0) return true;
+		if (strcmp(entry->key, key) == 0) {
+			return true;
+		}
 
 		entry = cast(hashmap_entry_t*, entry->next);
 	}
@@ -198,8 +202,12 @@ void* hashmap_remove(hashmap_t* map, const char* key)
 
 	while (entry != NULL) {
 		if (strcmp(entry->key, key) == 0) {
-			if (prev == NULL) map->data[index] = cast(hashmap_entry_t*, entry->next);
-			else prev->next = entry->next;
+			if (prev == NULL) {
+				map->data[index] = cast(hashmap_entry_t*, entry->next);
+			}
+			else {
+				prev->next = entry->next;
+			}
 
 			void* value = entry->value;
 
@@ -453,6 +461,7 @@ void hashmap_print_layout_attribute_style_state(hashmap_attribute_t* map)
 {
 	DEBUG_ME;
 	printf("Hashmap style states length: %zu\n", map->length);
+
 	if (map->length == 0) {
 		printf("Hashmap style states is empty\n");
 		return;

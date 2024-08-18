@@ -133,14 +133,13 @@ void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexe
  * @params {bool} onlyStyle - Only style
  * @params {ast_layout_block_t*} block - AST layout block node
  * @params {hashmap_t*} normal - Normal hashmap
- * @params {hashmap_t*} new - New hashmap
  * @params {lexer_t*} lexer - Lexer
  * @params {string_t*} name - Name of the attribute
  * @params {token_t*} last_name - Last token
  * @returns {void}
  *
  */
-void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* block, hashmap_t* normal, hashmap_t* new, lexer_t* lexer, string_t* name, token_t* last_name);
+void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* block, hashmap_t* normal, lexer_t* lexer, string_t* name, token_t* last_name);
 
 /**
  * 

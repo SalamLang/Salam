@@ -348,7 +348,7 @@ void hashmap_print_custom(hashmap_t* map, void (*print_fn)(void*))
  * @returns {void}
  * 
  */
-void hashmap_print_layout_attribute(hashmap_attribute_t* map)
+void hashmap_print_layout_attribute(hashmap_layout_attribute_t* map)
 {
     DEBUG_ME;
 	printf("Hashmap length: %zu\n", map->length);
@@ -376,11 +376,11 @@ void hashmap_print_layout_attribute(hashmap_attribute_t* map)
  * 
  * @function hashmap_destroy_layout_attribute
  * @brief Destroy the hashmap of layout attributes
- * @params {hashmap_attribute_t*} map
+ * @params {hashmap_layout_attribute_t*} map
  * @returns {void}
  * 
  */
-void hashmap_destroy_layout_attribute(hashmap_attribute_t* map)
+void hashmap_destroy_layout_attribute(hashmap_layout_attribute_t* map)
 {
     DEBUG_ME;
 	if (map != NULL) {
@@ -416,13 +416,13 @@ void hashmap_destroy_layout_attribute(hashmap_attribute_t* map)
  * @function hashmap_create_layout_attribute
  * @brief Create a new hashmap of layout attributes
  * @params {size_t} capacity
- * @returns {hashmap_attribute_t*}
+ * @returns {hashmap_layout_attribute_t*}
  * 
  */
-hashmap_attribute_t* hashmap_create_layout_attribute(size_t capacity)
+hashmap_layout_attribute_t* hashmap_create_layout_attribute(size_t capacity)
 {
 	DEBUG_ME;
-	hashmap_attribute_t* map = cast(struct hashmap_t*, hashmap_create(capacity));
+	hashmap_layout_attribute_t* map = cast(struct hashmap_t*, hashmap_create(capacity));
 
 	map->print = cast(void (*)(void*), hashmap_print_layout_attribute);
 	map->destroy = cast(void (*)(void*), hashmap_destroy_layout_attribute);
@@ -435,13 +435,13 @@ hashmap_attribute_t* hashmap_create_layout_attribute(size_t capacity)
  * @function hashmap_create_layout_attribute_style_state
  * @brief Create a new hashmap of layout style state attributes
  * @params {size_t} capacity
- * @returns {hashmap_attribute_t*}
+ * @returns {hashmap_layout_attribute_state_style_t*}
  * 
  */
-hashmap_attribute_t* hashmap_create_layout_attribute_style_state(size_t capacity)
+hashmap_layout_attribute_state_style_t* hashmap_create_layout_attribute_style_state(size_t capacity)
 {
 	DEBUG_ME;
-	hashmap_attribute_t* map = cast(struct hashmap_t*, hashmap_create(capacity));
+	hashmap_layout_attribute_state_style_t* map = hashmap_create(capacity);
 
 	map->print = cast(void (*)(void*), hashmap_print_layout_attribute_style_state);
 	map->destroy = cast(void (*)(void*), hashmap_destroy_layout_attribute_style_state);
@@ -453,11 +453,11 @@ hashmap_attribute_t* hashmap_create_layout_attribute_style_state(size_t capacity
  * 
  * @function hashmap_print_layout_attribute_style_state
  * @brief Print the hashmap of layout style state attributes
- * @params {hashmap_attribute_t*} map
+ * @params {hashmap_layout_attribute_t*} map
  * @returns {void}
  * 
  */
-void hashmap_print_layout_attribute_style_state(hashmap_attribute_t* map)
+void hashmap_print_layout_attribute_style_state(hashmap_layout_attribute_t* map)
 {
 	DEBUG_ME;
 	printf("Hashmap style states length: %zu\n", map->length);
@@ -472,11 +472,11 @@ void hashmap_print_layout_attribute_style_state(hashmap_attribute_t* map)
  * 
  * @function hashmap_destroy_layout_attribute_style_state
  * @brief Destroy the hashmap of layout style state attributes
- * @params {hashmap_attribute_t*} map
+ * @params {hashmap_layout_attribute_t*} map
  * @returns {void}
  * 
  */
-void hashmap_destroy_layout_attribute_style_state(hashmap_attribute_t* map)
+void hashmap_destroy_layout_attribute_style_state(hashmap_layout_attribute_t* map)
 {
 	DEBUG_ME;
 	if (map != NULL) {
@@ -485,17 +485,86 @@ void hashmap_destroy_layout_attribute_style_state(hashmap_attribute_t* map)
 				hashmap_entry_t* entry = map->data[i];
 
 				while (entry) {
-					memory_destroy(entry->key);
+					hashmap_entry_t* next = cast(hashmap_entry_t*, entry->next);
 
-					hashmap_attribute_t* entry_value = entry->value;
+					if (entry->key != NULL) {
+						printf("style state - delete %s entry\n", entry->key);
+						memory_destroy(entry->key);
+					}
 
-					if (entry_value != NULL) {
-						entry_value->destroy(entry_value);
+					hashmap_layout_attribute_t* value = cast(hashmap_layout_attribute_t*, entry->value);
+					if (value != NULL) {
+						value->print(value);
+						printf(".\n");
+						value->destroy(value);
 					}
 
 					memory_destroy(entry);
 
-					entry = cast(hashmap_entry_t*, entry->next);
+					entry = next;
+				}
+			}
+
+			memory_destroy(map->data);
+		}
+
+		memory_destroy(map);
+	}
+}
+
+/**
+ * 
+ * @function hashmap_layout_attribute_print
+ * @brief Print the hashmap of layout attributes
+ * @params {hashmap_layout_attribute_t*} map
+ * @returns {void}
+ * 
+ */
+void hashmap_layout_attribute_print(hashmap_layout_attribute_t* map)
+{
+	DEBUG_ME;
+	printf("Hashmap layout attributes length: %zu\n", map->length);
+
+	if (map->length == 0) {
+		printf("Hashmap layout attributes is empty\n");
+		return;
+	}
+}
+
+/**
+ * 
+ * @function hashmap_layout_attribute_destroy
+ * @brief Destroy the hashmap of layout attributes
+ * @params {hashmap_layout_attribute_t*} map
+ * @returns {void}
+ * 
+ */
+void hashmap_layout_attribute_destroy(hashmap_layout_attribute_t* map)
+{
+	DEBUG_ME;
+	if (map != NULL) {
+		if (map->data != NULL) {
+			for (size_t i = 0; i < map->capacity; i++) {
+				hashmap_entry_t* entry = map->data[i];
+
+				while (entry) {
+					hashmap_entry_t* next = cast(hashmap_entry_t*, entry->next);
+
+					if (entry->key != NULL) {
+						printf("hashmap attribute -> entry key is.....: %s\n", entry->key);
+						memory_destroy(entry->key);
+					}
+
+					hashmap_layout_attribute_t* value = cast(hashmap_layout_attribute_t*, entry->value);
+					if (value != NULL) {
+						printf("xxxxxxxxxxxxxxxxxx\n"); // TODO: delete log
+						value->print(value);
+						value->destroy(value);
+					}
+
+					memory_destroy(entry);
+
+					entry = next;
 				}
 			}
 

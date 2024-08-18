@@ -549,7 +549,7 @@ void hashmap_layout_attribute_destroy(hashmap_layout_attribute_t* map)
 				hashmap_entry_t* entry = map->data[i];
 
 				while (entry) {
-					hashmap_entry_t* next = entry->next;
+					hashmap_entry_t* next = cast(hashmap_entry_t*, entry->next);
 
 					if (entry->key != NULL) {
 						memory_destroy(entry->key);
@@ -561,7 +561,7 @@ void hashmap_layout_attribute_destroy(hashmap_layout_attribute_t* map)
 					}
 
 					memory_destroy(entry);
-
+					
 					entry = next;
 				}
 			}
@@ -573,6 +573,14 @@ void hashmap_layout_attribute_destroy(hashmap_layout_attribute_t* map)
 	}
 }
 
+/**
+ * 
+ * @function hashmap_has_any_sub_value_layout_attribute_style_state
+ * @brief Check if the hashmap has any sub value layout attribute style state
+ * @params {hashmap_layout_attribute_t*} map
+ * @returns {bool}
+ * 
+ */
 bool hashmap_has_any_sub_value_layout_attribute_style_state(hashmap_layout_attribute_t* map)
 {
 	DEBUG_ME;
@@ -600,6 +608,14 @@ bool hashmap_has_any_sub_value_layout_attribute_style_state(hashmap_layout_attri
 	return false;
 }
 
+/**
+ * 
+ * @function hashmap_has_any_sub_value_layout_attribute
+ * @brief Check if the hashmap has any sub value layout attribute
+ * @params {hashmap_layout_attribute_t*} map
+ * @returns {bool}
+ * 
+ */
 bool hashmap_layout_attribute_has_any_sub_value(hashmap_layout_attribute_t* map)
 {
 	DEBUG_ME;

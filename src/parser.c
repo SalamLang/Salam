@@ -111,7 +111,7 @@ void expect(lexer_t* lexer, token_type_t token_type)
 {
 	DEBUG_ME;
 	if (PARSER_CURRENT->type != token_type) {
-		error_parser(2, "Expected token type %s, got %s at line %d, column %d", token_name(token_type), token_name(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
+		error_parser(2, "Expected token type %s, got %s at line %d, column %d", token_type_keyword(token_type), token_type_keyword(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
 	}
 
 	PARSER_NEXT;
@@ -214,7 +214,7 @@ void parser_parse_block(lexer_t* lexer, ast_block_t* block)
 		ast_node_t* node = parser_parse_node(lexer);
 
 		if (node == NULL) {
-			error_parser(2, "Expected a node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
+			error_parser(2, "Expected a node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_type_keyword(PARSER_CURRENT->type));
 			continue;
 		}
 		else {
@@ -230,14 +230,21 @@ void parser_parse_block(lexer_t* lexer, ast_block_t* block)
  * @function parser_parse_layout_node
  * @brief Parsing layout node
  * @params {lexer_t*} lexer - Lexer
+ * @params {string_t*} name - Name of the node
+ * @params {token_t*} last_name - Last token
  * @returns {ast_layout_node_t*} - AST layout node
  * 
  */
-ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer)
+ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer, string_t* name, token_t* last_name)
 {
 	DEBUG_ME;
-	ast_layout_node_type_t type = token_to_ast_layout_node_type(PARSER_CURRENT);
-	PARSER_NEXT;
+	ast_layout_node_type_t type = enduser_name_to_ast_layout_node_type(name->data);
+
+	if (last_name) {}
+
+	if (type == AST_LAYOUT_TYPE_ERROR) {
+		error_ast(2, "Unknown layout node '%s' at line %d, column %d", name, last_name->location.end_line, last_name->location.end_column);
+	}
 
 	ast_layout_node_t* node = ast_layout_node_create(type);
 
@@ -252,40 +259,22 @@ ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer)
  * @brief Parse the block attribute
  * @params {ast_layout_block_t*} block - AST layout block node
  * @params {lexer_t*} lexer - Lexer
+ * @params {string_t*} name - Name of the attribute
+ * @params {token_t*} last_name - Last token
  * @returns {void}
  * 
  */
-void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lexer)
+void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lexer, string_t* name, token_t* last_name)
 {
 	DEBUG_ME;
 	// token
 	array_value_t* values = array_value_create(1);
 
-	token_t* last_name = PARSER_CURRENT;
-	string_t* name = string_create(16);
-	string_append_str(name, token_value_stringify(PARSER_CURRENT));
-	PARSER_NEXT; // Eating the identifier token
+	if (match(lexer, TOKEN_COLON)) {
+		values->destroy(values);
 
-	while (match(lexer, TOKEN_MINUS) || match(lexer, TOKEN_IDENTIFIER)) {
-		if (PARSER_CURRENT->type == TOKEN_MINUS) {
-			PARSER_NEXT; // Eating the minus token
-			string_append_char(name, '-');
-		}
-		else {
-			string_append_char(name, ' ');
-		}
-
-		if (match(lexer, TOKEN_IDENTIFIER)) {
-			string_append_str(name, token_value_stringify(PARSER_CURRENT));
-			last_name = PARSER_CURRENT;
-			PARSER_NEXT; // Eating the identifier token
-		}
-		else {
-			error_parser(2, "Expected an identifier after the dash in the attribute name at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
-			break;
-		}
+		error_parser(2, "Nonsupported layout element '%s' at line %d, column %d", name->data, last_name->location.end_line, last_name->location.end_column);
 	}
-
 	expect(lexer, TOKEN_ASSIGN);
 
 	token_t* first_value = PARSER_CURRENT;
@@ -340,19 +329,23 @@ void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lex
  * @brief Parse the block children
  * @params {ast_layout_block_t*} block - AST layout block node
  * @params {lexer_t*} lexer - Lexer
+ * @params {string_t*} name - Name of the attribute
+ * @params {token_t*} last_name - Last token
  * @returns {void}
  * 
  */
-void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexer)
+void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexer, string_t* name, token_t* last_name)
 {
 	DEBUG_ME;
-	ast_layout_node_t* node = parser_parse_layout_node(lexer);
+	ast_layout_node_t* node = parser_parse_layout_node(lexer, name, last_name);
+
+	string_destroy(name);
 	
 	if (node != NULL) {
 		array_push(block->children, node);
 	}
 	else {
-		error_parser(2, "Expected a layout node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
+		error_parser(2, "Expected a layout node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_type_keyword(PARSER_CURRENT->type));
 	}
 }
 
@@ -372,18 +365,51 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer)
 	expect_open_block(lexer);
 
 	while (PARSER_CURRENT->type != TOKEN_TYPE_CLOSE_BLOCK) {
-		printf("TOKEN: %s\n", token_name(PARSER_CURRENT->type));
+		if (match(lexer, TOKEN_IDENTIFIER)) {
+			token_t* last_name = PARSER_CURRENT;
+			string_t* name = string_create(16);
+			
+			string_append_str(name, token_value_stringify(PARSER_CURRENT));
 
-		if (match(lexer, TOKEN_IDENTIFIER) && enduser_name_to_ast_layout_node_type(PARSER_CURRENT->data.string) != AST_LAYOUT_TYPE_ERROR) {
-			printf("MATCHED BLOCK\n");
-			parser_parse_layout_block_children(block, lexer);
-		}
-		else if (match(lexer, TOKEN_IDENTIFIER)) {
-			printf("MATCHED ATTRIBUTE\n");
-			parser_parse_layout_block_attribute(block, lexer);
+			PARSER_NEXT; // Eating the identifier token
+
+			while (match(lexer, TOKEN_MINUS) || match(lexer, TOKEN_IDENTIFIER)) {
+				if (PARSER_CURRENT->type == TOKEN_MINUS) {
+					PARSER_NEXT; // Eating the minus token
+
+					string_append_char(name, '-');
+				}
+				else {
+					string_append_char(name, ' ');
+				}
+
+				if (match(lexer, TOKEN_IDENTIFIER)) {
+					string_append_str(name, token_value_stringify(PARSER_CURRENT));
+					last_name = PARSER_CURRENT;
+
+					PARSER_NEXT; // Eating the identifier token
+				}
+				else {
+					error_parser(2, "Expected an identifier after the dash in the attribute name at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_type_keyword(PARSER_CURRENT->type));
+					break;
+				}
+			}
+
+			if (enduser_name_to_ast_layout_node_type(name->data) != AST_LAYOUT_TYPE_ERROR) {
+				parser_parse_layout_block_children(block, lexer, name, last_name);
+			}
+			else if (enduser_name_to_ast_layout_attribute_type(name->data) != AST_LAYOUT_ATTRIBUTE_TYPE_ERROR) {
+				parser_parse_layout_block_attribute(block, lexer, name, last_name);
+			}
+			else {
+				string_destroy(name);
+
+				error_parser(2, "Unknown token '%s' after the identifier '%s' in a layout block at line %d, column %d", token_type_keyword(PARSER_CURRENT->type), name->data, PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
+				return;
+			}
 		}
 		else {
-			error_parser(2, "Unknown token '%s' inside a layout block at line %d, column %d", token_name(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
+			error_parser(2, "Unknown token '%s' inside a layout block it should be name of an element or an attribute at line %d, column %d", token_type_keyword(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
 		}
 	}
 
@@ -493,7 +519,7 @@ array_value_t* parser_parse_expressions(lexer_t* lexer)
 
 		ast_value_t* new_value = parser_parse_expression(lexer);
 		if (new_value == NULL) {
-			error_parser(2, "Expected an expression at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
+			error_parser(2, "Expected an expression at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_type_keyword(PARSER_CURRENT->type));
 		}
 
 		array_push(values, new_value);
@@ -563,7 +589,7 @@ ast_value_t* parser_parse_expression(lexer_t* lexer)
 		return value;
 	}
 	else {
-		error_parser(2, "Expected an expression at line %d, column %d, but got %s", token->location.end_line, token->location.end_column, token_name(token->type));
+		error_parser(2, "Expected an expression at line %d, column %d, but got %s", token->location.end_line, token->location.end_column, token_type_keyword(token->type));
 	}
 
 	return NULL;
@@ -662,7 +688,7 @@ ast_node_t* parser_parse_if(lexer_t* lexer)
 				array_push(node->data.ifclause->else_blocks, else_if);
 			}
 			else {
-				error_parser(2, "Expected a block or an else if at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
+				error_parser(2, "Expected a block or an else if at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_type_keyword(PARSER_CURRENT->type));
 			}
 		}
 		else {
@@ -700,7 +726,7 @@ ast_node_t* parser_parse_node(lexer_t* lexer)
 		return parser_parse_print(lexer);
 	}
 	else {
-		error_parser(2, "Unknown token '%s' as statement at line %d, column %d", token_name(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
+		error_parser(2, "Unknown token '%s' as statement at line %d, column %d", token_type_keyword(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
 	}
 
 	return NULL;
@@ -725,7 +751,7 @@ ast_t* parser_parse(lexer_t* lexer)
 		ast_node_t* node = parser_parse_node(lexer);
 
 		if (node == NULL) {
-			error_parser(2, "Expected a node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_name(PARSER_CURRENT->type));
+			error_parser(2, "Expected a node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_type_keyword(PARSER_CURRENT->type));
 			continue;
 		}
 		else if (node->type == AST_TYPE_LAYOUT) {

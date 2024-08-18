@@ -119,20 +119,37 @@ ast_node_t* parser_layout(lexer_t* lexer);
  * @brief Parse the block children
  * @params {ast_layout_block_t*} block - AST layout block node
  * @params {lexer_t*} lexer - Lexer
+ * @params {string_t*} name - Name of the attribute
+ * @params {token_t*} last_name - Last token
  * @returns {void}
  * 
  */
-void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexer);
+void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexer, string_t* name, token_t* last_name);
+
+/**
+ * 
+ * @function parser_parse_layout_block_attribute
+ * @brief Parse the block attribute
+ * @params {ast_layout_block_t*} block - AST layout block node
+ * @params {lexer_t*} lexer - Lexer
+ * @params {string_t*} name - Name of the attribute
+ * @params {token_t*} last_name - Last token
+ * @returns {void}
+ * 
+ */
+void parser_parse_layout_block_attribute(ast_layout_block_t* block, lexer_t* lexer, string_t* name, token_t* last_name);
 
 /**
  * 
  * @function parser_parse_layout_node
  * @brief Parsing layout node
  * @params {lexer_t*} lexer - Lexer
+ * @params {string_t*} name - Name of the node
+ * @params {token_t*} last_name - Last token
  * @returns {ast_layout_node_t*} - AST layout node
  * 
  */
-ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer);
+ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer, string_t* name, token_t* last_name);
 
 /**
  * 

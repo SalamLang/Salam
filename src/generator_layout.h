@@ -65,7 +65,7 @@ void generator_code_layout(generator_t* generator);
 
 /**
  *
- * @function generator_code_layout_style
+ * @function generator_code_layout_styles
  * @brief Generate the CSS code for the layout block
  * @params {hashmap_layout_attribute_t*} styles - Styles
  * @params {ast_layout_block_t*} block - Layout block
@@ -73,7 +73,7 @@ void generator_code_layout(generator_t* generator);
  * @returns {string_t*}
  *
  */
-string_t* generator_code_layout_style(hashmap_layout_attribute_t* styles, ast_layout_block_t* block, size_t* css_attributes_length);
+string_t* generator_code_layout_styles(hashmap_layout_attribute_t* styles, ast_layout_block_t* block, size_t* css_attributes_length);
 
 
 /**
@@ -140,5 +140,35 @@ char* generator_code_layout_attribute_style_state_type_to_name(ast_layout_attrib
  * 
  */
 string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layout_block_t* block);
+
+/**
+ * 
+ * @function generator_code_layout_attribute_style_state_enduser_name_to_type
+ * @brief Convert style attribute state enduser name to type
+ * @params {char*} name - Name
+ * @returns {ast_layout_attribute_style_state_type} type - Type
+ * 
+ */
+ast_layout_attribute_style_state_type generator_code_layout_attribute_style_state_enduser_name_to_type(char* name);
+
+/**
+ * 
+ * @function generator_code_layout_attribute_style_state_name_to_type
+ * @brief Convert style attribute state name to type
+ * @params {char*} name - Name
+ * @returns {ast_layout_attribute_style_state_type} type - Type
+ * 
+ */
+ast_layout_attribute_style_state_type generator_code_layout_attribute_style_state_name_to_type(char* name);
+
+/**
+ * 
+ * @function generator_code_layout_attribute_style_state_type_to_generated_name
+ * @brief Convert style attribute state type to generated name
+ * @params {ast_layout_attribute_style_state_type} type - Style Attribute State Type
+ * @returns {char*} name - Name
+ * 
+ */
+char* generator_code_layout_attribute_style_state_type_to_generated_name(ast_layout_attribute_style_state_type type);
 
 #endif

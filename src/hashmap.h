@@ -227,4 +227,24 @@ void hashmap_layout_attribute_print(hashmap_layout_attribute_t* map);
  */
 void hashmap_layout_attribute_destroy(hashmap_layout_attribute_t* map);
 
+/**
+ * 
+ * @function hashmap_has_any_sub_value_layout_attribute_style_state
+ * @brief Check if the hashmap has any sub value layout attribute style state
+ * @params {hashmap_layout_attribute_t*} map
+ * @returns {bool}
+ * 
+ */
+bool hashmap_has_any_sub_value_layout_attribute_style_state(hashmap_layout_attribute_t* map);
+
+/**
+ * 
+ * @function hashmap_has_any_sub_value_layout_attribute
+ * @brief Check if the hashmap has any sub value layout attribute
+ * @params {hashmap_layout_attribute_t*} map
+ * @returns {bool}
+ * 
+ */
+bool hashmap_layout_attribute_has_any_sub_value(hashmap_layout_attribute_t* map);
+
 #endif

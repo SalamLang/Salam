@@ -14,29 +14,36 @@ string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layo
 	DEBUG_ME;
 	string_t* css = string_create(1024);
 
+	if (generator) {}
+
 	if (block != NULL) {
 		if (block->states != NULL) {
 			for (size_t i = 0; i < block->states->capacity; i++) {
 				hashmap_entry_t* entry = block->states->data[i];
 
 				while (entry) {
-					ast_layout_pseudo_element_t* pseudo_element = cast(ast_layout_pseudo_element_t*, entry->value);
+					hashmap_entry_t* next = cast(hashmap_entry_t*, entry->next);
 
-					if (pseudo_element->styles != NULL) {
-						string_t* pseudo_element_styles = generator_code_layout_style(pseudo_element->styles, block, NULL);
+					ast_layout_style_state_t* pseudo_element = entry->value;
 
-						if (pseudo_element_styles->length > 0) {
-							string_append_str(css, ".");
-							string_append_str(css, block->);
-							string_append_str(css, "{");
+					if (pseudo_element->normal != NULL) {
+						string_t* pseudo_element_styles = generator_code_layout_styles(pseudo_element->normal, block, NULL);
+						ast_layout_attribute_style_state_type type = generator_code_layout_attribute_style_state_enduser_name_to_type(entry->key);
+
+						if (pseudo_element_styles->length > 0 && type != AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR) {
+							string_append_char(css, '.');
+							string_append_str(css, block->tag);
+							string_append_char(css, ':');
+							string_append_str(css, generator_code_layout_attribute_style_state_type_to_generated_name(type));
+							string_append_char(css, '{');
 							string_append(css, pseudo_element_styles);
-							string_append_str(css, "}\n");
+							string_append_char(css, '}');
 						}
 
 						if (pseudo_element_styles != NULL) pseudo_element_styles->destroy(pseudo_element_styles);
 					}
 
-					entry = cast(hashmap_entry_t*, entry->next);
+					entry = next;
 				}
 			}
 		}
@@ -74,12 +81,6 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 		}
 		if (node_attrs_str != NULL) node_attrs_str->destroy(node_attrs_str);
 		string_append_str(layout_block_str, ">");
-
-		string_t* generated_css_for_pseudo_elements = generator_code_layout_pseudo_elements(generator, node->block);
-
-		string_append(generator->css, generated_css_for_pseudo_elements);
-
-		string_destroy(generated_css_for_pseudo_elements);
 
 		if (node->block->children->length > 0 || node->block->text_content != NULL) {
 			bool has_content = false;
@@ -466,7 +467,7 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
  * @returns {string_t*}
  *
  */
-string_t* generator_code_layout_style(hashmap_layout_attribute_t* styles, ast_layout_block_t* block, size_t* css_attributes_length)
+string_t* generator_code_layout_styles(hashmap_layout_attribute_t* styles, ast_layout_block_t* block, size_t* css_attributes_length)
 {
 	string_t* code = string_create(1024);
 
@@ -558,7 +559,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 			}
 		}
 
-		string_t* this_style = generator_code_layout_style(block->styles->normal, block, &css_attributes_length);
+		string_t* this_style = generator_code_layout_styles(block->styles->normal, block, &css_attributes_length);
 		string_append(css_attributes, this_style);
 		string_destroy(this_style);
 
@@ -597,7 +598,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 				}
 
 				string_t* pseudo_elements = generator_code_layout_pseudo_elements(generator, block);
-				string_append_char(generator->css, pseudo_elements);
+				string_append(generator->css, pseudo_elements);
 				string_destroy(pseudo_elements);
 			}
 			string_append_str(html_attributes, "style=\"");
@@ -758,4 +759,72 @@ char* generator_code_layout_attribute_style_state_type_to_name(ast_layout_attrib
 	}
 
 	return "uknown style state name";
+}
+
+/**
+ * 
+ * @function generator_code_layout_attribute_style_state_enduser_name_to_type
+ * @brief Convert style attribute state enduser name to type
+ * @params {char*} name - Name
+ * @returns {ast_layout_attribute_style_state_type} type - Type
+ * 
+ */
+ast_layout_attribute_style_state_type generator_code_layout_attribute_style_state_enduser_name_to_type(char* name)
+{
+	DEBUG_ME;
+	if (name == NULL) {
+		return AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR;
+	}
+
+	#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME) if (strcmp(name, ENDUSER_NAME) == 0) return TYPE;
+
+	#include "ast_layout_attribute_style_state_type.h"
+
+	return AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR;
+}
+
+/**
+ * 
+ * @function generator_code_layout_attribute_style_state_type_to_generated_name
+ * @brief Convert style attribute state type to generated name
+ * @params {ast_layout_attribute_style_state_type} type - Style Attribute State Type
+ * @returns {char*} name - Name
+ * 
+ */
+char* generator_code_layout_attribute_style_state_type_to_generated_name(ast_layout_attribute_style_state_type type)
+{
+	DEBUG_ME;
+	switch (type) {
+		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
+
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME) case TYPE: return GENERATED_NAME;
+
+		#include "ast_layout_attribute_style_state_type.h"
+	}
+
+	return "uknown style state generated name";
+}
+
+/**
+ * 
+ * @function generator_code_layout_attribute_style_state_name_to_type
+ * @brief Convert style attribute state name to type
+ * @params {char*} name - Name
+ * @returns {ast_layout_attribute_style_state_type} type - Type
+ * 
+ */
+ast_layout_attribute_style_state_type generator_code_layout_attribute_style_state_name_to_type(char* name)
+{
+	DEBUG_ME;
+	if (name == NULL) {
+		return AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR;
+	}
+
+	#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME) if (strcmp(name, NAME) == 0) return TYPE;
+
+	#include "ast_layout_attribute_style_state_type.h"
+
+	return AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR;
 }

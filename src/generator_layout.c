@@ -6,18 +6,20 @@
  * @brief Generate the CSS code for the layout block pseudo elements
  * @params {generator_t*} generator - Generator
  * @params {ast_layout_block_t*} block - Layout block
+ * @params {size_t*} css_attributes_length - CSS attributes length
  * @returns {string_t*}
  * 
  */
-string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layout_block_t* block)
+string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layout_block_t* block, size_t* css_attributes_length)
 {
 	DEBUG_ME;
-	string_t* css = string_create(1024);
 
 	if (generator) {}
 
 	if (block != NULL) {
 		if (block->states != NULL) {
+			string_t* css = string_create(1024);
+
 			for (size_t i = 0; i < block->states->capacity; i++) {
 				hashmap_entry_t* entry = block->states->data[i];
 
@@ -38,18 +40,22 @@ string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layo
 							string_append_char(css, '{');
 							string_append(css, pseudo_element_styles);
 							string_append_char(css, '}');
-						}
 
-						if (pseudo_element_styles != NULL) pseudo_element_styles->destroy(pseudo_element_styles);
+							if (css_attributes_length != NULL) {
+								(*css_attributes_length)++;
+							}
+						}
 					}
 
 					entry = next;
 				}
 			}
+
+			return css;
 		}
 	}
 
-	return css;
+	return NULL;
 }
 
 /**
@@ -486,12 +492,17 @@ string_t* generator_code_layout_styles(hashmap_layout_attribute_t* styles, ast_l
 						error_generator(2, "Someting went wrong with the style value for '%s' attribute in '%s' element!", attribute->final_key, ast_layout_node_type_to_enduser_name(block->parent_node_type));
 					}
 
-					if (*css_attributes_length != 0) string_append_char(code, ';');
+					if (css_attributes_length != NULL && *css_attributes_length != 0) {
+						string_append_char(code, ';');
+					}
+
 					string_append_str(code, attribute->final_key);
 					string_append_str(code, ":");
 					string_append_str(code, attribute->final_value);
 
-					(*css_attributes_length)++;
+					if (css_attributes_length != NULL) {
+						(*css_attributes_length)++;
+					}
 				}
 
 				entry  = cast(hashmap_entry_t*, entry->next);
@@ -588,43 +599,42 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 	if (css_attributes_length > 0 && css_attributes->length > 0) {
 		if (html_attributes_length > 0 && html_attributes->length > 0) string_append_char(html_attributes, ' ');
 
-		char* tag = NULL;
-
 		if (generator->inlineCSS == true) {
 			if (hashmap_has_any_sub_value_layout_attribute_style_state(block->states) == true) {
 				if (block->tag == NULL) {
-					tag = generator_identifier_get(generator->identifier);
-					block->tag = tag; // We will free its memory in the block_layout_destroy function
+					block->tag = generator_identifier_get(generator->identifier); // We will free its memory in the block_layout_destroy function
 				}
-
-				string_t* pseudo_elements = generator_code_layout_pseudo_elements(generator, block);
-				string_append(generator->css, pseudo_elements);
-				string_destroy(pseudo_elements);
 			}
 			string_append_str(html_attributes, "style=\"");
 			string_append(html_attributes, css_attributes);
 			string_append_str(html_attributes, "\"");
 		}
 		else {
-			char* tag = generator_identifier_get(generator->identifier);
-			block->tag = tag; // We will free its memory in the block_layout_destroy function
+			block->tag = generator_identifier_get(generator->identifier); // We will free its memory in the block_layout_destroy function
 
 			string_append_char(generator->css, '.');
-			string_append_str(generator->css, tag);
+			string_append_str(generator->css, block->tag);
 			string_append_char(generator->css, '{');
 			string_append(generator->css, css_attributes);
 			string_append_char(generator->css, '}');
 		}
 
-		if (tag != NULL) {
-			size_t tag_length = strlen(tag);
+		string_t* pseudo_elements = generator_code_layout_pseudo_elements(generator, block, &css_attributes_length);
+
+		if (pseudo_elements != NULL) {
+			string_append(generator->css, pseudo_elements);
+			string_destroy(pseudo_elements);
+		}
+
+		if (block->tag != NULL) {
+			size_t tag_length = strlen(block->tag);
 
 			string_append_str(html_attributes, "class=");
 			if (tag_length > 1) {
 				string_append_char(html_attributes, '\"');
 			}
 
-			string_append_str(html_attributes, tag);
+			string_append_str(html_attributes, block->tag);
 			if (tag_length > 1) {
 				string_append_char(html_attributes, '\"');
 			}

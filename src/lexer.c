@@ -586,12 +586,22 @@ wchar_t read_token(lexer_t* lexer, int* char_size)
     mbstate_t state;
     memset(&state, 0, sizeof state);
 
+    if (lexer->source[lexer->index] == '\0') {
+        *char_size = 0;
+        return L'\0';
+    }
+
     *char_size = mbrtowc(&current_char, &lexer->source[lexer->index], MB_CUR_MAX, &state);
 
     if (*char_size <= 0) {
-        if (*char_size == 0 || (errno == EILSEQ || errno == EINVAL)) {
-            error_lexer(2, "Failed to read unicode character at line %zu, column %zu", lexer->line, lexer->column);
-            *char_size = 1;
+        if (*char_size == 0) {
+            return L'\0';
+        }
+		else if (errno == EILSEQ) {
+            error_lexer(2, "Invalid multibyte sequence at line %zu, column %zu", lexer->line, lexer->column);
+        }
+		else if (errno == EINVAL) {
+            error_lexer(2, "Incomplete multibyte sequence at line %zu, column %zu", lexer->line, lexer->column);
         }
     }
 

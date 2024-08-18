@@ -256,17 +256,15 @@ void parser_parse_block(lexer_t* lexer, ast_block_t* block)
  * @function parser_parse_layout_node
  * @brief Parsing layout node
  * @params {lexer_t*} lexer - Lexer
- * @params {string_t*} name - Name of the node
+ * @params {char*} name - Name of the node
  * @params {token_t*} last_name - Last token
  * @returns {ast_layout_node_t*} - AST layout node
  *
  */
-ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer, string_t* name, token_t* last_name)
+ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer, char* name, token_t* last_name)
 {
 	DEBUG_ME;
-	ast_layout_node_type_t type = enduser_name_to_ast_layout_node_type(name->data);
-
-	if (last_name) {}
+	ast_layout_node_type_t type = enduser_name_to_ast_layout_node_type(name);
 
 	if (type == AST_LAYOUT_TYPE_ERROR) {
 		error_ast(2, "Unknown layout node '%s' at line %d, column %d", name, last_name->location.end_line, last_name->location.end_column);
@@ -285,24 +283,24 @@ ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer, string_t* name, toke
  * @brief Parse the block style state
  * @params {ast_layout_block_t*} block - AST layout block node
  * @params {lexer_t*} lexer - Lexer
- * @params {string_t*} name - Name of the attribute
+ * @params {char*} name - Name of the attribute
  * @params {token_t*} last_name - Last token
  * @returns {void}
  * 
  */
-void parser_parse_layout_block_style_state(ast_layout_block_t* block, lexer_t* lexer, string_t* name, token_t* last_name)
+void parser_parse_layout_block_style_state(ast_layout_block_t* block, lexer_t* lexer, char* name, token_t* last_name)
 {
 	DEBUG_ME;
-	ast_layout_attribute_style_state_type style_state_type = enduser_name_to_ast_layout_attribute_style_state_type(name->data);
+	ast_layout_attribute_style_state_type style_state_type = enduser_name_to_ast_layout_attribute_style_state_type(name);
 
 	if (style_state_type == AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR) {
-		error_parser(2, "Unknown style state '%s' at line %d, column %d", name->data, last_name->location.end_line, last_name->location.end_column);
+		error_parser(2, "Unknown style state '%s' at line %d, column %d", name, last_name->location.end_line, last_name->location.end_column);
 	}
 
 	expect_open_block(lexer);
 
-	if (hashmap_has(block->states, name->data) == true) {
-		error_parser(2, "Style state '%s' already defined in the '%s' block at line %d, column %d", name->data, ast_layout_node_type_to_enduser_name(block->parent_node_type), last_name->location.end_line, last_name->location.end_column);
+	if (hashmap_has(block->states, name) == true) {
+		error_parser(2, "Style state '%s' already defined in the '%s' block at line %d, column %d", name, ast_layout_node_type_to_enduser_name(block->parent_node_type), last_name->location.end_line, last_name->location.end_column);
 	}
 
 	ast_layout_style_state_t* state_styles = ast_layout_style_state_create();
@@ -313,15 +311,14 @@ void parser_parse_layout_block_style_state(ast_layout_block_t* block, lexer_t* l
 
 		PARSER_CURRENT->print(PARSER_CURRENT);
 
-		parser_parse_layout_block_attribute(true, block, state_styles->normal, lexer, name2, last_name2);
+		parser_parse_layout_block_attribute(true, block, state_styles->normal, lexer, name2->data, last_name2);
+
+		string_destroy(name2);
 	}
 
-
-	hashmap_put(block->states, name->data, state_styles);
+	hashmap_put(block->states, name, state_styles);
 
 	expect_close_block(lexer);
-
-	string_destroy(name);
 }
 
 array_value_t* parser_parse_layout_values(lexer_t* lexer)
@@ -355,26 +352,26 @@ array_value_t* parser_parse_layout_values(lexer_t* lexer)
  * @params {ast_layout_block_t*} block - AST layout block node
  * @params {hashmap_t*} normal - Normal hashmap
  * @params {lexer_t*} lexer - Lexer
- * @params {string_t*} name - Name of the attribute
+ * @params {char*} name - Name of the attribute
  * @params {token_t*} last_name - Last token
  * @returns {void}
  *
  */
-void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* block, hashmap_t* normal, lexer_t* lexer, string_t* name, token_t* last_name)
+void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* block, hashmap_t* normal, lexer_t* lexer, char* name, token_t* last_name)
 {
 	DEBUG_ME;
 	token_t* first_value = PARSER_CURRENT; // TODO
 
 	if (match(lexer, TOKEN_TYPE_OPEN_BLOCK)) {
-		error_parser(2, "Nonsupported layout element '%s' at line %d, column %d", name->data, last_name->location.end_line, last_name->location.end_column);
+		error_parser(2, "Nonsupported layout element '%s' at line %d, column %d", name, last_name->location.end_line, last_name->location.end_column);
 	}
 	expect(lexer, TOKEN_ASSIGN);
 
 	array_value_t* values = parser_parse_layout_values(lexer);
 
-	ast_layout_attribute_type_t attribute_key_type = token_to_ast_layout_attribute_type(name->data, last_name, block->parent_node_type);
+	ast_layout_attribute_type_t attribute_key_type = token_to_ast_layout_attribute_type(name, last_name, block->parent_node_type);
 
-	ast_layout_attribute_t* attribute = ast_layout_attribute_create(attribute_key_type, name->data, values, block->parent_node_type, last_name->location, first_value->location);
+	ast_layout_attribute_t* attribute = ast_layout_attribute_create(attribute_key_type, name, values, block->parent_node_type, last_name->location, first_value->location);
 	if (!token_belongs_to_ast_layout_node(attribute_key_type, attribute)) {
 		attribute->destroy(attribute);
 
@@ -414,17 +411,15 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* blo
  * @brief Parse the block children
  * @params {ast_layout_block_t*} block - AST layout block node
  * @params {lexer_t*} lexer - Lexer
- * @params {string_t*} name - Name of the attribute
+ * @params {char*} name - Name of the attribute
  * @params {token_t*} last_name - Last token
  * @returns {void}
  *
  */
-void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexer, string_t* name, token_t* last_name)
+void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexer, char* name, token_t* last_name)
 {
 	DEBUG_ME;
 	ast_layout_node_t* node = parser_parse_layout_node(lexer, name, last_name);
-
-	string_destroy(name);
 
 	if (node != NULL) {
 		array_push(block->children, node);
@@ -498,21 +493,21 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer)
 			string_t* name = parser_parse_layout_name(lexer, &last_name);
 
 			if (enduser_name_to_ast_layout_node_type(name->data) != AST_LAYOUT_TYPE_ERROR) {
-				parser_parse_layout_block_children(block, lexer, name, last_name);
+				parser_parse_layout_block_children(block, lexer, name->data, last_name);
+
+				string_destroy(name);
 			}
 			else if (block->states != NULL && enduser_name_to_ast_layout_attribute_style_state_type(name->data) != AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR) {
-				parser_parse_layout_block_style_state(block, lexer, name, last_name);
+				parser_parse_layout_block_style_state(block, lexer, name->data, last_name);
 
-				// string_destroy(name);
+				string_destroy(name);
 			}
 			else if (enduser_name_to_ast_layout_attribute_type(name->data) != AST_LAYOUT_ATTRIBUTE_TYPE_ERROR) {
-				parser_parse_layout_block_attribute(false, block, block->styles->normal, lexer, name, last_name);
+				parser_parse_layout_block_attribute(false, block, block->styles->normal, lexer, name->data, last_name);
 
-				// string_destroy(name);
+				string_destroy(name);
 			}
 			else {
-				// string_destroy(name);
-
 				error_parser(2, "The '%s' is not a valid layout node, style state or attribute at line %d, column %d", name->data, last_name->location.end_line, last_name->location.end_column);
 				return;
 			}

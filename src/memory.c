@@ -32,6 +32,7 @@ void* memory_callocate(size_t count, size_t size)
 {
 	DEBUG_ME;
     void* ptr = calloc(count, size);
+
     if (ptr == NULL) {
         panic("Failed to callocate memory");
     }
@@ -72,6 +73,7 @@ void* memory_reallocate(void* ptr, size_t size)
 {
 	DEBUG_ME;
     void* new_ptr = realloc(ptr, size);
+
     if (new_ptr == NULL) {
         panic("Failed to reallocate memory");
     }
@@ -203,6 +205,7 @@ void* memory_duplicate(void* ptr, size_t size)
 {
 	DEBUG_ME;
     void* new_ptr = memory_allocate(size);
+    
     memory_copy(new_ptr, ptr, size);
 
     return new_ptr;

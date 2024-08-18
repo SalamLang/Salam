@@ -44,6 +44,7 @@ typedef struct ast_layout_style_state_t {
 } ast_layout_style_state_t;
 
 typedef struct ast_layout_block_t {
+    char* tag;
     ast_block_type_t type;
     ast_type_t parent_type;
     ast_layout_node_type_t parent_node_type;
@@ -411,5 +412,25 @@ void ast_layout_style_state_print(ast_layout_style_state_t* ast);
  * 
  */
 ast_layout_style_state_t* ast_layout_style_state_create();
+
+/**
+ * 
+ * @function ast_layout_attribute_style_state_has_any_sub_value
+ * @brief Check if the AST layout style state has any sub value
+ * @params {ast_layout_style_state_t*} value - AST layout style state
+ * @returns {bool} - True if the AST layout style state has any sub value, false otherwise
+ * 
+ */
+bool ast_layout_style_state_has_any_sub_value(ast_layout_style_state_t* value);
+
+/**
+ * 
+ * @function ast_layout_attribute_has_any_sub_value
+ * @brief Check if the AST layout attribute has any sub value
+ * @params {ast_layout_attribute_t*} value - AST layout attribute
+ * @returns {bool} - True if the AST layout attribute has any sub value, false otherwise
+ * 
+ */
+bool ast_layout_attribute_has_any_sub_value(ast_layout_attribute_t* value);
 
 #endif

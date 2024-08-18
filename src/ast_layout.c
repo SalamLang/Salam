@@ -35,6 +35,7 @@ ast_layout_block_t* ast_layout_block_create(ast_type_t node_type, ast_layout_nod
 {
     DEBUG_ME;
 	ast_layout_block_t* block = memory_allocate(sizeof(ast_layout_block_t));
+	block->tag = NULL;
 	block->type = AST_BLOCK_TYPE_LAYOUT;
 	block->parent_type = node_type;
 	block->parent_node_type = layout_node_type;
@@ -174,6 +175,10 @@ void ast_layout_block_destroy(ast_layout_block_t* value)
 
 		if (value->styles != NULL) {
 			value->styles->destroy(value->styles);
+		}
+
+		if (value->tag != NULL) {
+			memory_destroy(value->tag);
 		}
 
 		if (value->states != NULL) {
@@ -734,4 +739,44 @@ char* ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type)
 	}
 
 	return "error???";
+}
+
+/**
+ * 
+ * @function ast_layout_attribute_style_state_has_any_sub_value
+ * @brief Check if the AST layout style state has any sub value
+ * @params {ast_layout_style_state_t*} value - AST layout style state
+ * @returns {bool} - True if the AST layout style state has any sub value, false otherwise
+ * 
+ */
+bool ast_layout_style_state_has_any_sub_value(ast_layout_style_state_t* value)
+{
+	DEBUG_ME;
+	if (value->normal->length > 0) {
+		return hashmap_layout_attribute_has_any_sub_value(value->normal);
+	}
+
+	if (value->new->length > 0) {
+		return hashmap_layout_attribute_has_any_sub_value(value->new);
+	}
+
+	return false;
+}
+
+/**
+ * 
+ * @function ast_layout_attribute_has_any_sub_value
+ * @brief Check if the AST layout attribute has any sub value
+ * @params {ast_layout_attribute_t*} value - AST layout attribute
+ * @returns {bool} - True if the AST layout attribute has any sub value, false otherwise
+ * 
+ */
+bool ast_layout_attribute_has_any_sub_value(ast_layout_attribute_t* value)
+{
+	DEBUG_ME;
+	if (value->values != NULL && value->values->length > 0 && value->final_key != NULL && value->final_value != NULL) {
+		return true;
+	}
+
+	return false;
 }

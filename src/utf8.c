@@ -14,6 +14,7 @@
  */
 bool is_utf8_continuation_byte(char c)
 {
+	DEBUG_ME;
     return (c & 0xC0) == 0x80;
 }
 
@@ -25,6 +26,7 @@ bool is_utf8_continuation_byte(char c)
  */
 bool is_valid_utf8(const char* str)
 {
+	DEBUG_ME;
     const unsigned char* bytes = (const unsigned char *)str;
 
     while (*bytes) {
@@ -63,6 +65,7 @@ bool is_valid_utf8(const char* str)
  */
 bool is_schar_alpha(const char* c)
 {
+	DEBUG_ME;
     wchar_t wc;
     int len = mbtowc(&wc, c, MB_CUR_MAX);
 
@@ -81,6 +84,7 @@ bool is_schar_alpha(const char* c)
  */
 bool is_char_digit(char c)
 {
+	DEBUG_ME;
     return c >= '0' && c <= '9';
 }
 
@@ -92,6 +96,7 @@ bool is_char_digit(char c)
  */
 bool is_char_alpha(const char c)
 {
+	DEBUG_ME;
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 }
 
@@ -103,6 +108,7 @@ bool is_char_alpha(const char c)
  */
 bool is_char_alnum(char c)
 {
+	DEBUG_ME;
     return is_char_alpha(c) || is_char_digit(c);
 }
 
@@ -114,6 +120,7 @@ bool is_char_alnum(char c)
  */
 bool is_char_whitespace(char c)
 {
+	DEBUG_ME;
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
@@ -125,6 +132,7 @@ bool is_char_whitespace(char c)
  */
 bool is_wchar_alpha(uint32_t codepoint)
 {
+	DEBUG_ME;
     return iswalpha(codepoint);
 }
 
@@ -136,11 +144,13 @@ bool is_wchar_alpha(uint32_t codepoint)
  */
 bool is_wchar_digit(uint32_t codepoint)
 {
+	DEBUG_ME;
     return iswdigit(codepoint);
 }
 
 wchar_t read_token(const char* input, int* index)
 {
+	DEBUG_ME;
 	wchar_t current_char;
 	int char_size = mbtowc(&current_char, &input[*index], MB_CUR_MAX);
 	if (char_size < 0) {
@@ -157,6 +167,7 @@ wchar_t read_token(const char* input, int* index)
 
 void lexer(const char* input)
 {
+	DEBUG_ME;
     int index = 0;
 
 	while (input[index] != 0) {

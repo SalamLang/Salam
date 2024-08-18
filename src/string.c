@@ -517,6 +517,7 @@ bool is_char_whitespace(char c)
  */
 bool is_wchar_alpha(uint32_t codepoint)
 {
+	DEBUG_ME;
     return iswalpha(codepoint);
 }
 
@@ -543,13 +544,17 @@ bool is_wchar_digit(uint32_t codepoint)
  */
 char convert_to_english_digit(wchar_t ch)
 {
+	DEBUG_ME;
     if (is_english_digit(ch)) {
         return (char)ch;
-    } else if (is_persian_digit(ch)) {
+    }
+	else if (is_persian_digit(ch)) {
         return '0' + (ch - 0x06F0);
-    } else if (is_arabic_digit(ch)) {
+    }
+	else if (is_arabic_digit(ch)) {
         return '0' + (ch - 0x0660);
     }
+
     return ch;
 }
 
@@ -563,6 +568,7 @@ char convert_to_english_digit(wchar_t ch)
  */
 void string_number2number(char* str)
 {
+	DEBUG_ME;
     if (str == NULL) {
         return;
     }
@@ -652,6 +658,7 @@ char* double2string(double value)
  */
 size_t utf8_char_length(char c)
 {
+	DEBUG_ME;
     if ((c & 0x80) == 0) return 1; // 0xxxxxxx
 	else if ((c & 0xE0) == 0xC0) return 2; // 110xxxxx
     else if ((c & 0xF0) == 0xE0) return 3; // 1110xxxx
@@ -671,6 +678,7 @@ size_t utf8_char_length(char c)
  */
 uint32_t utf8_decode(const char* source, size_t* index)
 {
+	DEBUG_ME;
     size_t length = utf8_char_length(source[*index]);
     uint32_t codepoint = 0;
     

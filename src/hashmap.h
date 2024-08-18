@@ -26,9 +26,9 @@ typedef struct hashmap_t {
 } hashmap_t;
 
 typedef hashmap_t hashmap_array_t;
-typedef hashmap_t hashmap_attribute_t; // TODO: i am not sure what is this, maybe we can delete or rename?
 typedef hashmap_t hashmap_layout_attribute_t;
 typedef hashmap_t hashmap_layout_attribute_state_style_t;
+
 /**
  *
  * @function hash_function
@@ -155,56 +155,76 @@ void hashmap_print_custom(hashmap_t* map, void (*print_fn)(void*));
  * @returns {void}
  *
  */
-void hashmap_print_layout_attribute(hashmap_attribute_t* map);
+void hashmap_print_layout_attribute(hashmap_layout_attribute_t* map);
 
 /**
  *
  * @function hashmap_destroy_layout_attribute
  * @brief Destroy the hashmap of layout attributes
- * @params {hashmap_attribute_t*} map
+ * @params {hashmap_layout_attribute_t*} map
  * @returns {void}
  *
  */
-void hashmap_destroy_layout_attribute(hashmap_attribute_t* map);
+void hashmap_destroy_layout_attribute(hashmap_layout_attribute_t* map);
 
 /**
  *
  * @function hashmap_create_layout_attribute
  * @brief Create a new hashmap of layout attributes
  * @params {size_t} capacity
- * @returns {hashmap_attribute_t*}
+ * @returns {hashmap_layout_attribute_t*}
  *
  */
-hashmap_attribute_t* hashmap_create_layout_attribute(size_t capacity);
+hashmap_layout_attribute_t* hashmap_create_layout_attribute(size_t capacity);
 
 /**
  * 
  * @function hashmap_destroy_layout_attribute_style_state
  * @brief Destroy the hashmap of layout style state attributes
- * @params {hashmap_attribute_t*} map
+ * @params {hashmap_layout_attribute_t*} map
  * @returns {void}
  * 
  */
-void hashmap_destroy_layout_attribute_style_state(hashmap_attribute_t* map);
+void hashmap_destroy_layout_attribute_style_state(hashmap_layout_attribute_t* map);
 
 /**
  * 
  * @function hashmap_print_layout_attribute_style_state
  * @brief Print the hashmap of layout style state attributes
- * @params {hashmap_attribute_t*} map
+ * @params {hashmap_layout_attribute_t*} map
  * @returns {void}
  * 
  */
-void hashmap_print_layout_attribute_style_state(hashmap_attribute_t* map);
+void hashmap_print_layout_attribute_style_state(hashmap_layout_attribute_t* map);
 
 /**
  * 
  * @function hashmap_create_layout_attribute_style_state
  * @brief Create a new hashmap of layout style state attributes
  * @params {size_t} capacity
- * @returns {hashmap_attribute_t*}
+ * @returns {hashmap_layout_attribute_state_style_t*}
  * 
  */
-hashmap_attribute_t* hashmap_create_layout_attribute_style_state(size_t capacity);
+hashmap_layout_attribute_state_style_t* hashmap_create_layout_attribute_style_state(size_t capacity);
+
+/**
+ * 
+ * @function hashmap_layout_attribute_print
+ * @brief Print the hashmap of layout attributes
+ * @params {hashmap_layout_attribute_t*} map
+ * @returns {void}
+ * 
+ */
+void hashmap_layout_attribute_print(hashmap_layout_attribute_t* map);
+
+/**
+ * 
+ * @function hashmap_layout_attribute_destroy
+ * @brief Destroy the hashmap of layout attributes
+ * @params {hashmap_layout_attribute_t*} map
+ * @returns {void}
+ * 
+ */
+void hashmap_layout_attribute_destroy(hashmap_layout_attribute_t* map);
 
 #endif

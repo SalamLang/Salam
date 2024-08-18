@@ -303,11 +303,11 @@ void parser_parse_layout_block_style_state(ast_layout_block_t* block, lexer_t* l
 
 	printf("==>%s\n", name->data);
 
-	if (hashmap_has(block->state_styles, name->data)) {
+	if (hashmap_has(block->states, name->data) == true) {
 		error_parser(2, "Style state '%s' already defined in the '%s' block at line %d, column %d", name->data, ast_layout_node_type_to_enduser_name(block->parent_node_type), last_name->location.end_line, last_name->location.end_column);
 	}
 
-	ast_layout_style_state_t* style_state = ast_layout_style_state_create();
+	ast_layout_style_state_t* state_styles = ast_layout_style_state_create(style_state_type);
 
 	while (PARSER_CURRENT->type != TOKEN_TYPE_CLOSE_BLOCK) {
 		printf("check and appending...\n");
@@ -320,15 +320,27 @@ void parser_parse_layout_block_style_state(ast_layout_block_t* block, lexer_t* l
 
 		PARSER_CURRENT->print(PARSER_CURRENT);
 
-		parser_parse_layout_block_attribute(true, block, style_state->normal, style_state->new, lexer, name2, last_name2);
+		parser_parse_layout_block_attribute(true, block, state_styles->normal, lexer, name2, last_name2);
 		printf("append\n");
 	}
 
 	printf("save inside hashmap - %s\n", name->data);
-	hashmap_put(block->state_styles, name->data, style_state);
+
+	// printf("style_state: ");
+	// style_state->print(style_state);
+	// style_state->destroy(style_state);
+
+	hashmap_put(block->states, name->data, state_styles);
 	printf("saved\n");
 
+	// exit(2);
+
+	printf("------------------->\n");
+	PARSER_CURRENT->print(PARSER_CURRENT);
+
 	expect_close_block(lexer);
+
+	string_destroy(name);
 }
 
 array_value_t* parser_parse_layout_values(lexer_t* lexer)
@@ -361,20 +373,17 @@ array_value_t* parser_parse_layout_values(lexer_t* lexer)
  * @params {bool} onlyStyle - Only style
  * @params {ast_layout_block_t*} block - AST layout block node
  * @params {hashmap_t*} normal - Normal hashmap
- * @params {hashmap_t*} new - New hashmap
  * @params {lexer_t*} lexer - Lexer
  * @params {string_t*} name - Name of the attribute
  * @params {token_t*} last_name - Last token
  * @returns {void}
  *
  */
-void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* block, hashmap_t* normal, hashmap_t* new, lexer_t* lexer, string_t* name, token_t* last_name)
+void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* block, hashmap_t* normal, lexer_t* lexer, string_t* name, token_t* last_name)
 {
 	DEBUG_ME;
 	token_t* first_value = PARSER_CURRENT; // TODO
 
-	if (new) {}
-	
 	if (match(lexer, TOKEN_TYPE_OPEN_BLOCK)) {
 		error_parser(2, "Nonsupported layout element '%s' at line %d, column %d", name->data, last_name->location.end_line, last_name->location.end_column);
 	}
@@ -392,25 +401,25 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* blo
 	}
 
 	char* attribute_key_name = ast_layout_attribute_type_to_name(attribute_key_type);
-
+	
 	if (is_style_attribute(attribute_key_type)) {
-		if (hashmap_has(cast(hashmap_t*, normal), attribute_key_name)) {
+		if (hashmap_has(normal, attribute_key_name)) {
 			// attribute->destroy(attribute);
 
 			error_parser(2, "Style attribute '%s' already defined in the '%s' block at line %d, column %d", attribute_key_name, ast_layout_node_type_to_enduser_name(block->parent_node_type), last_name->location.end_line, last_name->location.end_column);
 		}
 		else {
-			hashmap_put(cast(hashmap_t*, normal), attribute_key_name, attribute);
+			hashmap_put(normal, attribute_key_name, attribute);
 		}
 	}
 	else if (onlyStyle != true) {
-		if (hashmap_has(cast(hashmap_t*, block->attributes), attribute_key_name)) {
+		if (hashmap_has(block->attributes, attribute_key_name)) {
 			// attribute->destroy(attribute);
 
 			error_parser(2, "Attribute '%s' already defined in the '%s' block at line %d, column %d", attribute_key_name, ast_layout_node_type_to_enduser_name(block->parent_node_type), last_name->location.end_line, last_name->location.end_column);
 		}
 		else {
-			hashmap_put(cast(hashmap_t*, block->attributes), attribute_key_name, attribute);
+			hashmap_put(block->attributes, attribute_key_name, attribute);
 		}
 	}
 	else {
@@ -455,6 +464,7 @@ void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexe
  */
 string_t* parser_parse_layout_name(lexer_t* lexer, token_t** last_name)
 {
+	DEBUG_ME;
 	string_t* name = string_create(16);
 
 	string_append_str(name, token_value_stringify(PARSER_CURRENT));
@@ -478,9 +488,7 @@ string_t* parser_parse_layout_name(lexer_t* lexer, token_t** last_name)
 			PARSER_NEXT; // Eating the identifier token
 		}
 		else {
-			string_destroy(name);
-
-			error_parser(2, "Expected an identifier after the dash in the attribute name at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_type_keyword(PARSER_CURRENT->type));
+			error_parser(2, "Expected an identifier after the dash in the attribute name '%s' at line %d, column %d, but got %s", name->data, PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_type_keyword(PARSER_CURRENT->type));
 			break;
 		}
 	}
@@ -511,20 +519,20 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer)
 			if (enduser_name_to_ast_layout_node_type(name->data) != AST_LAYOUT_TYPE_ERROR) {
 				parser_parse_layout_block_children(block, lexer, name, last_name);
 			}
-			else if (enduser_name_to_ast_layout_attribute_style_state_type(name->data) != AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR) {
+			else if (block->states != NULL && enduser_name_to_ast_layout_attribute_style_state_type(name->data) != AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR) {
 				parser_parse_layout_block_style_state(block, lexer, name, last_name);
 
 				// string_destroy(name);
 			}
 			else if (enduser_name_to_ast_layout_attribute_type(name->data) != AST_LAYOUT_ATTRIBUTE_TYPE_ERROR) {
-				parser_parse_layout_block_attribute(false, block, block->styles->normal, block->styles->new, lexer, name, last_name);
+				parser_parse_layout_block_attribute(false, block, block->styles->normal, lexer, name, last_name);
 
 				// string_destroy(name);
 			}
 			else {
 				// string_destroy(name);
 
-				error_parser(2, "Unknown token '%s' after the identifier '%s' in a layout block at line %d, column %d", token_type_keyword(PARSER_CURRENT->type), name->data, PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
+				error_parser(2, "The '%s' is not a valid layout node, style state or attribute at line %d, column %d", name->data, last_name->location.end_line, last_name->location.end_column);
 				return;
 			}
 		}
@@ -533,9 +541,9 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer)
 		}
 	}
 
-	expect_close_block(lexer);
-
 	validate_layout_block(block);
+
+	expect_close_block(lexer);
 }
 
 /**

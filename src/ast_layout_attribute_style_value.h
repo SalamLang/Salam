@@ -18,6 +18,10 @@ ast_layout_attribute_type_t valid_layout_attributes[] = {
 	AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
 };
 
+const ast_layout_attribute_style_pair_t ast_layout_allowed_style_novalue[] = {
+    {NULL, NULL},
+};
+
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_color[] = {
     {"قرمز", "red"},
     {"سفید", "white"},
@@ -28,6 +32,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_color[] = {
     {"آبی", "blue"},
     {"ابی", "blue"},
     {"صورتی", "pink"},
+    {NULL, NULL},
 };
 
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_display[] = {
@@ -44,4 +49,5 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_display[] = {
     {"نمایش-سطر-جدول", "table-row"},
     {"نمایش-ستون-جدول", "table-column"},
     {"نمایش-سلول-جدول", "table-cell"},
+    {NULL, NULL},
 };

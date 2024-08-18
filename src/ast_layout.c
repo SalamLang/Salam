@@ -44,7 +44,7 @@ ast_layout_block_t* ast_layout_block_create(ast_type_t node_type, ast_layout_nod
 
 	block->styles = ast_layout_style_state_create();
 
-	block->state_styles = hashmap_create_layout_attribute_style_state(1);
+	block->states = hashmap_create_layout_attribute_style_state(1);
 
 	block->children = array_create(sizeof(ast_layout_node_t*), 16);
 	block->children->print = cast(void (*)(void*), array_layout_node_print);
@@ -176,8 +176,8 @@ void ast_layout_block_destroy(ast_layout_block_t* value)
 			value->styles->destroy(value->styles);
 		}
 
-		if (value->state_styles != NULL) {
-			value->state_styles->destroy(value->state_styles);
+		if (value->states != NULL) {
+			value->states->destroy(value->states);
 		}
 
 		if (value->text_content != NULL) {
@@ -440,12 +440,13 @@ char* ast_layout_node_type_to_enduser_name(ast_layout_node_type_t type)
     DEBUG_ME;
 	switch (type) {
 		#undef ADD_LAYOUT_TYPE
-	    #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
+	    // #undef ADD_LAYOUT_ATTRIBUTE_TYPE
 
 		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return ENDUSER_NAME;
-		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return ENDUSER_NAME;
+		// #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return ENDUSER_NAME;
 
 		#include "ast_layout_type.h"
+		// #include "ast_layout_attribute_type.h"
 	}
 
 	return "error!!!";
@@ -542,7 +543,7 @@ ast_layout_style_state_t* ast_layout_style_state_create()
 	DEBUG_ME;
 	ast_layout_style_state_t* ast = memory_allocate(sizeof(ast_layout_style_state_t));
 
-	ast->normal = hashmap_create_layout_attribute(2);
+	ast->normal = hashmap_create_layout_attribute(1);
 	ast->new = hashmap_create_layout_attribute(1);
 
 	ast->print = cast(void (*)(void*), ast_layout_style_state_print);
@@ -587,21 +588,25 @@ void ast_layout_style_state_print(ast_layout_style_state_t* ast)
 {
 	DEBUG_ME;
 	printf("Style State\n");
+	if (ast != NULL) {
+		if (ast->normal != NULL) {
+			printf("Normal\n");
+			ast->normal->print(ast->normal);
+		}
+		else {
+			printf("Normal: NULL\n");
+		}
 
-	if (ast->normal != NULL) {
-		printf("Normal\n");
-		ast->normal->print(ast->normal);
+		if (ast->new != NULL) {
+			printf("New\n");
+			ast->new->print(ast->new);
+		}
+		else {
+			printf("New: NULL\n");
+		}
 	}
 	else {
-		printf("Normal: NULL\n");
-	}
-
-	if (ast->new != NULL) {
-		printf("New\n");
-		ast->new->print(ast->new);
-	}
-	else {
-		printf("New: NULL\n");
+		printf("NULL\n");
 	}
 }
 

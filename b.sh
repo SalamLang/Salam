@@ -84,7 +84,7 @@ fi
 #     نمایش \"سلام، دنیا\"
 # }"
 
-if command -v pre-commit &> /dev/null; then
+if command -v pre-commit &>/dev/null; then
 	echo "Running pre-commit..."
 	pre-commit run --all-files
 else

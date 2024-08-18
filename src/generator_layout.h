@@ -130,4 +130,15 @@ char* generator_code_layout_attribute_style_state_type_to_enduser_name(ast_layou
  */
 char* generator_code_layout_attribute_style_state_type_to_name(ast_layout_attribute_style_state_type type);
 
+/**
+ * 
+ * @function generator_code_layout_pseudo_elements
+ * @brief Generate the CSS code for the layout block pseudo elements
+ * @params {generator_t*} generator - Generator
+ * @params {ast_layout_block_t*} block - Layout block
+ * @returns {string_t*}
+ * 
+ */
+string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layout_block_t* block);
+
 #endif

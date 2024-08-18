@@ -1,6 +1,51 @@
 #include "generator_layout.h"
 
 /**
+ * 
+ * @function generator_code_layout_pseudo_elements
+ * @brief Generate the CSS code for the layout block pseudo elements
+ * @params {generator_t*} generator - Generator
+ * @params {ast_layout_block_t*} block - Layout block
+ * @returns {string_t*}
+ * 
+ */
+string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layout_block_t* block)
+{
+	DEBUG_ME;
+	string_t* css = string_create(1024);
+
+	if (block != NULL) {
+		if (block->states != NULL) {
+			for (size_t i = 0; i < block->states->capacity; i++) {
+				hashmap_entry_t* entry = block->states->data[i];
+
+				while (entry) {
+					ast_layout_pseudo_element_t* pseudo_element = cast(ast_layout_pseudo_element_t*, entry->value);
+
+					if (pseudo_element->styles != NULL) {
+						string_t* pseudo_element_styles = generator_code_layout_style(pseudo_element->styles, block, NULL);
+
+						if (pseudo_element_styles->length > 0) {
+							string_append_str(css, ".");
+							string_append_str(css, block->);
+							string_append_str(css, "{");
+							string_append(css, pseudo_element_styles);
+							string_append_str(css, "}\n");
+						}
+
+						if (pseudo_element_styles != NULL) pseudo_element_styles->destroy(pseudo_element_styles);
+					}
+
+					entry = cast(hashmap_entry_t*, entry->next);
+				}
+			}
+		}
+	}
+
+	return css;
+}
+
+/**
  *
  * @function generator_code_layout_block
  * @brief Generate the HTML code for the layout block
@@ -29,6 +74,12 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 		}
 		if (node_attrs_str != NULL) node_attrs_str->destroy(node_attrs_str);
 		string_append_str(layout_block_str, ">");
+
+		string_t* generated_css_for_pseudo_elements = generator_code_layout_pseudo_elements(generator, node->block);
+
+		string_append(generator->css, generated_css_for_pseudo_elements);
+
+		string_destroy(generated_css_for_pseudo_elements);
 
 		if (node->block->children->length > 0 || node->block->text_content != NULL) {
 			bool has_content = false;
@@ -536,28 +587,45 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 	if (css_attributes_length > 0 && css_attributes->length > 0) {
 		if (html_attributes_length > 0 && html_attributes->length > 0) string_append_char(html_attributes, ' ');
 
+		char* tag = NULL;
+
 		if (generator->inlineCSS == true) {
+			if (hashmap_has_any_sub_value_layout_attribute_style_state(block->states) == true) {
+				if (block->tag == NULL) {
+					tag = generator_identifier_get(generator->identifier);
+					block->tag = tag; // We will free its memory in the block_layout_destroy function
+				}
+
+				string_t* pseudo_elements = generator_code_layout_pseudo_elements(generator, block);
+				string_append_char(generator->css, pseudo_elements);
+				string_destroy(pseudo_elements);
+			}
 			string_append_str(html_attributes, "style=\"");
 			string_append(html_attributes, css_attributes);
 			string_append_str(html_attributes, "\"");
 		}
 		else {
 			char* tag = generator_identifier_get(generator->identifier);
-			size_t tag_length = strlen(tag);
-
-			string_append_str(html_attributes, "class=");
-			if (tag_length > 1) string_append_char(html_attributes, '\"');
-			string_append_str(html_attributes, tag);
-			if (tag_length > 1) string_append_char(html_attributes, '\"');
+			block->tag = tag; // We will free its memory in the block_layout_destroy function
 
 			string_append_char(generator->css, '.');
 			string_append_str(generator->css, tag);
 			string_append_char(generator->css, '{');
 			string_append(generator->css, css_attributes);
 			string_append_char(generator->css, '}');
+		}
 
-			if (tag != NULL) {
-				memory_destroy(tag);
+		if (tag != NULL) {
+			size_t tag_length = strlen(tag);
+
+			string_append_str(html_attributes, "class=");
+			if (tag_length > 1) {
+				string_append_char(html_attributes, '\"');
+			}
+
+			string_append_str(html_attributes, tag);
+			if (tag_length > 1) {
+				string_append_char(html_attributes, '\"');
 			}
 		}
 	}

@@ -497,7 +497,6 @@ void hashmap_destroy_layout_attribute_style_state(hashmap_layout_attribute_t* ma
 
 					ast_layout_style_state_t* value = entry->value;
 					if (value != NULL) {
-						value->print(value);
 						value->destroy(value);
 					}
 
@@ -550,17 +549,14 @@ void hashmap_layout_attribute_destroy(hashmap_layout_attribute_t* map)
 				hashmap_entry_t* entry = map->data[i];
 
 				while (entry) {
-					hashmap_entry_t* next = cast(hashmap_entry_t*, entry->next);
+					hashmap_entry_t* next = entry->next;
 
 					if (entry->key != NULL) {
-						printf("hashmap attribute -> entry key is.....: %s\n", entry->key);
 						memory_destroy(entry->key);
 					}
 
-					hashmap_layout_attribute_t* value = cast(hashmap_layout_attribute_t*, entry->value);
+					hashmap_layout_attribute_t* value = entry->value;
 					if (value != NULL) {
-						printf("xxxxxxxxxxxxxxxxxx\n"); // TODO: delete log
-						value->print(value);
 						value->destroy(value);
 					}
 
@@ -575,4 +571,58 @@ void hashmap_layout_attribute_destroy(hashmap_layout_attribute_t* map)
 
 		memory_destroy(map);
 	}
+}
+
+bool hashmap_has_any_sub_value_layout_attribute_style_state(hashmap_layout_attribute_t* map)
+{
+	DEBUG_ME;
+	if (map != NULL) {
+		if (map->data != NULL) {
+			for (size_t i = 0; i < map->capacity; i++) {
+				hashmap_entry_t* entry = map->data[i];
+
+				while (entry) {
+					hashmap_entry_t* next = cast(hashmap_entry_t*, entry->next);
+
+					ast_layout_style_state_t* value = entry->value;
+					if (value != NULL) {
+						if (ast_layout_style_state_has_any_sub_value(value)) {
+							return true;
+						}
+					}
+
+					entry = next;
+				}
+			}
+		}
+	}
+
+	return false;
+}
+
+bool hashmap_layout_attribute_has_any_sub_value(hashmap_layout_attribute_t* map)
+{
+	DEBUG_ME;
+	if (map != NULL) {
+		if (map->data != NULL) {
+			for (size_t i = 0; i < map->capacity; i++) {
+				hashmap_entry_t* entry = map->data[i];
+
+				while (entry) {
+					hashmap_entry_t* next = cast(hashmap_entry_t*, entry->next);
+
+					ast_layout_attribute_t* value = entry->value;
+					if (value != NULL) {
+						if (ast_layout_attribute_has_any_sub_value(value)) {
+							return true;
+						}
+					}
+
+					entry = next;
+				}
+			}
+		}
+	}
+
+	return false;
 }

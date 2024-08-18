@@ -624,9 +624,6 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 	ast_value_t* first = attribute->values->data[0];
 	char* value = first->data.string_value;
 
-	if (new_styles) {}
-	if (styles) {}
-
 	if (attribute->values->length < 1) {
 		error_validator(2, "Style value is missing in '%s' element", ast_layout_node_type_to_enduser_name(attribute->parent_node_type));
 		
@@ -641,6 +638,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 	else if (first->type->kind == AST_TYPE_KIND_STRING && attribute->values->length == 1) {
 		if (false) {}
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
+
 		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(GENERATED_NAME, ENDUSER_NAME) else if (strcmp(value, ENDUSER_NAME) == 0) return true;
 
 		#include "ast_layout_attribute_style_global.h"
@@ -648,12 +646,14 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 
 	switch (attribute->type) {
 		#undef ADD_LAYOUT_ATTRIBUTE_TYPE
+
 		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return false;
 
 		#include "ast_layout_attribute_type.h"
 
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
+
 		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) 
 		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) case TYPE: \
 			{ \
@@ -663,10 +663,10 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 					return validate_style_value_color(styles, new_styles, attribute, ast_layout_allowed_style_color, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING) { \
-					return validate_style_value_string(styles, new_styles, attribute, NULL, 0, values); \
+					return validate_style_value_string(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE) { \
-					return validate_style_value_size(styles, new_styles, attribute, NULL, 0, values); \
+					return validate_style_value_size(styles, new_styles, attribute, NULL, values); \
 				} \
 			}\
 			return false; \

@@ -547,7 +547,6 @@ bool validate_style_value_size(hashmap_t* styles, hashmap_t* new_styles, ast_lay
 	DEBUG_ME;
 	if (styles) {}
 	if (new_styles) {}
-	if (attribute) {}
 	if (allowed_values1) {}
 	if (allowed_values2) {}
 

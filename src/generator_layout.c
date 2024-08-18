@@ -342,7 +342,9 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 		char* values = array_value_stringify(html_lang->values, ", ");
 		html_lang_value = string_lower_str(values);
 
-		if (values != NULL) memory_destroy(values);
+		if (values != NULL) {
+			memory_destroy(values);
+		}
 	}
 	if (html_lang_value == NULL || strcmp(html_lang_value, "") == 0) {
 		string_append_str(html, "fa-IR"); // default
@@ -354,7 +356,9 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 		string_append_str(html, "en-US");
 	}
 	else {
-		if (html_lang_value != NULL) memory_destroy(html_lang_value);
+		if (html_lang_value != NULL) {
+			memory_destroy(html_lang_value);
+		}
 
 		error_generator(2, "Invalid value for lang attribute in layout block!");
 	}
@@ -368,7 +372,9 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 		char* values = array_value_stringify(html_dir->values, ", ");
 		html_dir_value = string_lower_str(values);
 
-		if (values != NULL) memory_destroy(values);
+		if (values != NULL) {
+			memory_destroy(values);
+		}
 	}
 	if (html_dir_value == NULL || strcmp(html_dir_value, "") == 0) {
 		string_append_str(html, "rtl"); // default
@@ -380,15 +386,23 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 		string_append_str(html, "rtl");
 	}
 	else {
-		if (html_lang_value != NULL) memory_destroy(html_lang_value);
-		if (html_dir_value != NULL) memory_destroy(html_dir_value);
+		if (html_lang_value != NULL) {
+			memory_destroy(html_lang_value);
+		}
+		if (html_dir_value != NULL) {
+			memory_destroy(html_dir_value);
+		}
 
 		error_generator(2, "Invalid value for dir attribute in layout block!");
 	}
 	string_append_str(html, "\"");
 
-	if (html_lang_value != NULL) memory_destroy(html_lang_value);
-	if (html_dir_value != NULL) memory_destroy(html_dir_value);
+	if (html_lang_value != NULL) {
+		memory_destroy(html_lang_value);
+	}
+	if (html_dir_value != NULL) {
+		memory_destroy(html_dir_value);
+	}
 }
 
 /**
@@ -481,7 +495,9 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 						string_append_str(html_attributes, attribute_values_str);
 						if (attribute_value_length > 1) string_append_str(html_attributes, "\"");
 
-						if (attribute_values_str != NULL) memory_destroy(attribute_values_str);
+						if (attribute_values_str != NULL) {
+							memory_destroy(attribute_values_str);
+						}
 
 						html_attributes_length++;
 					}
@@ -540,7 +556,9 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 			string_append(generator->css, css_attributes);
 			string_append_char(generator->css, '}');
 
-			if (tag != NULL) memory_destroy(tag);
+			if (tag != NULL) {
+				memory_destroy(tag);
+			}
 		}
 	}
 

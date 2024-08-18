@@ -49,7 +49,7 @@ char* generator_identifier_get(generator_identifier_t* gen)
 
 			new_current[length + 1] = '\0';
 
-			free(gen->current);
+			memory_destroy(gen->current);
 
 			gen->current = new_current;
 		}
@@ -68,9 +68,11 @@ char* generator_identifier_get(generator_identifier_t* gen)
 void generator_identifier_destroy(generator_identifier_t* gen)
 {
 	DEBUG_ME;
-	if (gen == NULL) return;
-
-	if (gen->current != NULL) free(gen->current);
-	
-	free(gen);
+	if (gen != NULL) {
+		if (gen->current != NULL) {
+			memory_destroy(gen->current);
+		}
+		
+		memory_destroy(gen);
+	}
 }

@@ -14,8 +14,12 @@ void ast_layout_attribute_print(ast_layout_attribute_t* value)
 	printf("Layout Attribute: %s\n", value->key);
 	printf("Value(s): ");
 
-	if (value->values == NULL) printf("NULL\n");
-	else value->values->print(value->values);
+	if (value->values == NULL) {
+		printf("NULL\n");
+	}
+	else {
+		value->values->print(value->values);
+	}
 }
 
 /**
@@ -348,7 +352,7 @@ ast_layout_node_type_t name_to_ast_layout_node_type(char* name)
 	ast_layout_node_type_t type = AST_LAYOUT_TYPE_ERROR;
 
     #undef ADD_LAYOUT_TYPE
-	#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME) == 0) type = TYPE;
+	#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME) == 0) { type = TYPE; return type; }
 
 	if (false) {}
 	#include "ast_layout_type.h"

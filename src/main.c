@@ -82,13 +82,6 @@ int main(int argc, char** argv)
 	DEBUG_ME;
     setlocale(LC_ALL, "");
 
-	// array_value_t* values = array_value_create(1);
-	// array_push(values, "12px");
-	// ast_layout_attribute_t* attribute = ast_layout_attribute_create(AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_SIZE, "font-size", values, AST_LAYOUT_TYPE_DIV, (location_t){0, 0, 0, 0, 0, 0}, (location_t){0, 0, 0, 0, 0, 0});
-	// bool res = validate_style_value_size(attribute);
-	// printf("validate style value size: %d\n", res);
-	// attribute->print(attribute);
-
 	doargs(argc, argv);
 
 	return 0;

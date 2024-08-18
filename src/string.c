@@ -176,8 +176,12 @@ char* string_destroy_and_get(string_t* str)
 void string_print(string_t* str)
 {
 	DEBUG_ME;
-	if (str == NULL || str->data == NULL) printf("NULL\n");
-	else printf("%s\n", str->data);
+	if (str == NULL || str->data == NULL) {
+		printf("NULL\n");
+	}
+	else {
+		printf("%s\n", str->data);
+	}
 }
 
 /**
@@ -192,7 +196,9 @@ void string_print(string_t* str)
 void string_append(string_t* str, const string_t* value)
 {
 	DEBUG_ME;
-	if (value->length == 0) return;
+	if (value->length == 0) {
+		return;
+	}
 
 	string_append_str(str, value->data);
 }

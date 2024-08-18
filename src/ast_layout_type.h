@@ -2,6 +2,7 @@
 
 // Paragraph Types
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PARAGRAPH, "PARAGRAPH", "paragraph", "p", "پراراگراف")
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PARAGRAPH_RAW, "PARAGRAPH_RAW", "paragraph_raw", "", "")
 
 // Form Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BUTTON, "BUTTON", "button", "button", "دکمه")
@@ -94,7 +95,6 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_STYLE, "STYLE", "style", "style", "استایل"
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DIV, "DIV", "div", "div", "جعبه")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LINK, "LINK", "link", "a", "لینک")
 
-// // Utility Elements
+// Utility Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_NONE, "NONE", "none", "layout", "")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ERROR, "ERROR", "error", "error", "")
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PARAGRAPH_RAW, "PARAGRAPH_RAW", "paragraph_raw", "", "")

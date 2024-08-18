@@ -654,15 +654,15 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 			attribute->final_key = strdup(GENERATED_NAME); \
 			if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR) { \
 				size_t allowed_values_count1 = (ast_layout_allowed_style_color == NULL) ? 0 : sizeof(ast_layout_allowed_style_color) / sizeof(ast_layout_allowed_style_color[0]); \
-				size_t allowed_values_count2 = (ALLOWED_VALUES == NULL) ? 0 : sizeof(ALLOWED_VALUES) / sizeof(ALLOWED_VALUES[0]); \
+				size_t allowed_values_count2 = (ALLOWED_VALUES == NULL) ? 0 : (sizeof(ALLOWED_VALUES) / sizeof(ALLOWED_VALUES[0])); \
 				return validate_style_value_color(styles, new_styles, attribute, ast_layout_allowed_style_color, allowed_values_count1, ALLOWED_VALUES, allowed_values_count2); \
 			} \
 			else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING) { \
-				size_t allowed_values_count2 = (ALLOWED_VALUES == NULL) ? 0 : sizeof(ALLOWED_VALUES) / sizeof(ALLOWED_VALUES[0]); \
+				size_t allowed_values_count2 = (ALLOWED_VALUES == NULL) ? 0 : (sizeof(ALLOWED_VALUES) / sizeof(ALLOWED_VALUES[0])); \
 				return validate_style_value_string(styles, new_styles, attribute, NULL, NULL, ALLOWED_VALUES, allowed_values_count2); \
 			} \
 			else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE) { \
-				size_t allowed_values_count2 = (ALLOWED_VALUES == NULL) ? 0 : sizeof(ALLOWED_VALUES) / sizeof(ALLOWED_VALUES[0]); \
+				size_t allowed_values_count2 = (ALLOWED_VALUES == NULL) ? 0 : (sizeof(ALLOWED_VALUES) / sizeof(ALLOWED_VALUES[0])); \
 				return validate_style_value_size(styles, new_styles, attribute, NULL, NULL, ALLOWED_VALUES, allowed_values_count2); \
 			} \
 			return false;

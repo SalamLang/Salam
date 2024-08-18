@@ -853,18 +853,22 @@ void ast_value_print(ast_value_t* value)
 {
 	DEBUG_ME;
 	printf("Value\n");
-	printf("Value Type:\n");
+	if (value != NULL) {
+		printf("Value Type:\n");
+		if (value->type != NULL) {
+			value->type->print(value->type);
+		}
+		else {
+			printf("NULL\n");
+		}
 
-	if (value->type != NULL) {
-		value->type->print(value->type);
-	}
-	else {
-		printf("NULL\n");
-	}
-
-	printf("Value Data:\n");
-	if (value->data.string_value != NULL) {
-		printf("%s\n", value->data.string_value);
+		printf("Value Data:\n");
+		if (value->data.string_value != NULL) {
+			printf("%s\n", value->data.string_value);
+		}
+		else {
+			printf("NULL\n");
+		}
 	}
 	else {
 		printf("NULL\n");

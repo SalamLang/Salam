@@ -1,7 +1,8 @@
 INPUT_FILE = ../test/input.s
 
 CC = gcc
-CFLAGS = -g -Walloca -Wextra -Wall -fsanitize=address,undefined
+# CFLAGS = -g -Walloca -Wextra -Wall -fsanitize=address,undefined
+CFLAGS =
 # -std=c11
 
 TARGET = main

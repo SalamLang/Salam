@@ -22,131 +22,135 @@ size_t valid_layout_attributes_length = sizeof(valid_layout_attributes) / sizeof
 bool has_css_size_prefix(char* css_value, char** css_output_value)
 {
 	DEBUG_ME;
-    const char* prefixes[] = {
-        "px", "pixel", "pixels",
-        "em", "em",
+	const char* prefixes[] = {
+		"px", "pixel", "pixels",
+		"em", "em",
 		"rem",
-        "vw", "viewport width", "viewport width",
-        "vh", "viewport height", "viewport height",
-        "%",
-        "cm", "centimeter", "centimeters",
-        "mm", "millimeter", "millimeters",
-        "in", "inch", "inches",
-        "pt", "point", "points",
-        "pc", "pica", "picas",
-        "ex",
-        "ch",
-        "vmin", "viewport minimum",
-        "vmax", "viewport maximum"
-    };
+		"vw", "viewport width", "viewport width",
+		"vh", "viewport height", "viewport height",
+		"%",
+		"cm", "centimeter", "centimeters",
+		"mm", "millimeter", "millimeters",
+		"in", "inch", "inches",
+		"pt", "point", "points",
+		"pc", "pica", "picas",
+		"ex",
+		"ch",
+		"vmin", "viewport minimum",
+		"vmax", "viewport maximum"
+	};
 
-    const char* persian_prefixes[] = {
-        "پیکسل", "پیکسل‌ها", "پیکسلها",
-        "ای ام", "ایم",
-        "رایم",
-        "ویو ویدث", "ویو ویدت", "ویویدث",
-        "ویو هایت", "ویو هایت", "وی هایت",
-        "درصد",
-        "سانتیمتر", "سانتی متر", "سانت",
-        "میلیمتر", "میلی متر", "میلیم",
-        "اینچ", "اینچ", "اینچ",
-        "پوینت", "پوینت‌ها", "پوینتها",
-        "پیکا", "پیکاها", "پیکاها",
-        "اکس",
-        "سی اچ",
-        "وی مین", "وی مینیمم",
-        "وی مکس", "وی ماکسیمم"
-    };
+	const char* persian_prefixes[] = {
+		"پیکسل", "پیکسل‌ها", "پیکسلها",
+		"ای ام", "ایم",
+		"رایم",
+		"ویو ویدث", "ویو ویدت", "ویویدث",
+		"ویو هایت", "ویو هایت", "وی هایت",
+		"درصد",
+		"سانتیمتر", "سانتی متر", "سانت",
+		"میلیمتر", "میلی متر", "میلیم",
+		"اینچ", "اینچ", "اینچ",
+		"پوینت", "پوینت‌ها", "پوینتها",
+		"پیکا", "پیکاها", "پیکاها",
+		"اکس",
+		"سی اچ",
+		"وی مین", "وی مینیمم",
+		"وی مکس", "وی ماکسیمم"
+	};
 
-    const char* generated_prefixes[] = {
-        "px", "px", "px",
-        "em", "em",
+	const char* generated_prefixes[] = {
+		"px", "px", "px",
+		"em", "em",
 		"rem",
-        "vw", "vw", "vw",
-        "vh", "vh", "vh",
-        "%",
-        "cm", "cm", "cm",
-        "mm", "mm", "mm",
-        "in", "in", "in",
-        "pt", "pt", "pt",
-        "pc", "pc", "pc",
-        "ex",
-        "ch",
-        "vmin", "vmin",
-        "vmax", "vmax"
-    };
+		"vw", "vw", "vw",
+		"vh", "vh", "vh",
+		"%",
+		"cm", "cm", "cm",
+		"mm", "mm", "mm",
+		"in", "in", "in",
+		"pt", "pt", "pt",
+		"pc", "pc", "pc",
+		"ex",
+		"ch",
+		"vmin", "vmin",
+		"vmax", "vmax"
+	};
 
-    int num_prefixes = sizeof(prefixes) / sizeof(prefixes[0]);
-    int num_persian_prefixes = sizeof(persian_prefixes) / sizeof(persian_prefixes[0]);
-    // int num_generated_prefixes = sizeof(generated_prefixes) / sizeof(generated_prefixes[0]);
+	int num_prefixes = sizeof(prefixes) / sizeof(prefixes[0]);
+	int num_persian_prefixes = sizeof(persian_prefixes) / sizeof(persian_prefixes[0]);
 
-    size_t len = strlen(css_value);
-    if (len == 0) {
-        *css_output_value = NULL;
-        return false;
-    }
+	size_t len = strlen(css_value);
+	if (len == 0) {
+		*css_output_value = NULL;
 
-    string_t* buffer = string_create(len + 1);
+		return false;
+	}
 
-    size_t i = 0;
-    if (css_value[i] == '-' || css_value[i] == '+') {
-        if (css_value[i] == '-') string_append_char(buffer, css_value[i]);
-        i++;
-    }
+	string_t* buffer = string_create(len + 1);
 
-    if (!isdigit(css_value[i])) {
-        *css_output_value = NULL;
+	size_t i = 0;
+	if (css_value[i] == '-' || css_value[i] == '+') {
+		if (css_value[i] == '-') {
+			string_append_char(buffer, css_value[i]);
+		}
 
-        string_destroy(buffer);
+		i++;
+	}
 
-        return false;
-    }
+	if (!isdigit(css_value[i])) {
+		*css_output_value = NULL;
 
-    bool decimal_point_found = false;
-    while (i < len && (isdigit(css_value[i]) || (css_value[i] == '.' && !decimal_point_found))) {
-        if (css_value[i] == '.') {
-            string_append_char(buffer, css_value[i]);
-            decimal_point_found = true;
-        }
+		string_destroy(buffer);
+
+		return false;
+	}
+
+	bool decimal_point_found = false;
+	while (i < len && (isdigit(css_value[i]) || (css_value[i] == '.' && !decimal_point_found))) {
+		if (css_value[i] == '.') {
+			string_append_char(buffer, css_value[i]);
+			decimal_point_found = true;
+		}
 		else {
-            string_append_char(buffer, css_value[i]);
-        }
-        i++;
-    }
+			string_append_char(buffer, css_value[i]);
+		}
 
-    while (i < len && isspace(css_value[i])) i++;
+		i++;
+	}
 
-    for (int j = 0; j < num_prefixes; j++) {
-        size_t prefix_len = strlen(prefixes[j]);
-        if (len - i == prefix_len && strncmp(css_value + i, prefixes[j], prefix_len) == 0) {
-            string_append_str(buffer, generated_prefixes[j]);
+	while (i < len && isspace(css_value[i])) i++;
 
-            *css_output_value = strdup(buffer->data);
+	for (int j = 0; j < num_prefixes; j++) {
+		size_t prefix_len = strlen(prefixes[j]);
+		if (len - i == prefix_len && strncmp(css_value + i, prefixes[j], prefix_len) == 0) {
+			string_append_str(buffer, generated_prefixes[j]);
 
-            string_destroy(buffer);
+			*css_output_value = strdup(buffer->data);
 
-            return true;
-        }
-    }
+			string_destroy(buffer);
 
-    for (int j = 0; j < num_persian_prefixes; j++) {
-        size_t prefix_len = strlen(persian_prefixes[j]);
-        if (len - i == prefix_len && strncmp(css_value + i, persian_prefixes[j], prefix_len) == 0) {
-            string_append_str(buffer, generated_prefixes[j]);
+			return true;
+		}
+	}
 
-            *css_output_value = strdup(buffer->data);
+	for (int j = 0; j < num_persian_prefixes; j++) {
+		size_t prefix_len = strlen(persian_prefixes[j]);
+		if (len - i == prefix_len && strncmp(css_value + i, persian_prefixes[j], prefix_len) == 0) {
+			string_append_str(buffer, generated_prefixes[j]);
 
-            string_destroy(buffer);
+			*css_output_value = strdup(buffer->data);
 
-            return true;
-        }
-    }
+			string_destroy(buffer);
 
-    *css_output_value = NULL;
+			return true;
+		}
+	}
 
-    string_destroy(buffer);
+	*css_output_value = NULL;
 
-    return false;
+	string_destroy(buffer);
+
+	return false;
 }
 
 /**
@@ -190,7 +194,9 @@ char* attribute_css_size_value(char* attribute_value)
 
 	strcpy(res, attribute_value);
 
-	if (string_is_number(attribute_value) == true) strcat(res, "px");
+	if (string_is_number(attribute_value) == true) {
+		strcat(res, "px");
+	}
 
 	return res;
 }
@@ -230,20 +236,6 @@ void validate_layout_block(ast_layout_block_t* block)
 			}
 		}
 	}
-
-	// if (block->styles != NULL) {
-	// 	hashmap_layout_attribute_t* new_styles = hashmap_create_layout_attribute(1);
-
-	// 	for (size_t i = 0; i < block->styles->capacity; i++) {
-	// 		hashmap_entry_t* entry = block->styles->data[i];
-
-	// 		while (entry) {
-	// 			ast_layout_attribute_t* attribute = entry->value;
-				
-	// 			generator_code_layout_style_value(block->styles, block->styles.new, attribute, block->parent_node_type);
-	// 		}
-	// 	}
-	// }
 }
 
 /**
@@ -288,10 +280,10 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 	}
 	else if (is_style_attribute(attribute_key_type)) {
 		attribute->isStyle = true;
+
 		return true;
 	}
 	else if (is_attribute_type_a_style(attribute_key_type)) {
-		// attribute->isStyle = false;
 		return true;
 	}
 
@@ -434,79 +426,24 @@ bool is_attribute_type_a_style(ast_layout_attribute_type_t type)
  */
 bool validate_style_value_string(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, const ast_layout_attribute_style_pair_t* allowed_values1, const ast_layout_attribute_style_pair_t* allowed_values2)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	if (styles) {}
 	if (new_styles) {}
 
-    if (attribute->values == NULL || attribute->values->data == NULL || attribute->values->data[0] == NULL) {
-        return false;
-    }
+	if (attribute->values == NULL || attribute->values->data == NULL || attribute->values->data[0] == NULL) {
+		return false;
+	}
 
-    ast_value_t* first = attribute->values->data[0];
+	ast_value_t* first = attribute->values->data[0];
 
-    if (first->type->kind == AST_TYPE_KIND_STRING) {
-        char* value = first->data.string_value;
+	if (first->type->kind == AST_TYPE_KIND_STRING) {
+		char* value = first->data.string_value;
 
-		if (strlen(value) == 0) return false;
+		if (strlen(value) == 0) {
+			return false;
+		}
 
-        if (allowed_values2 != NULL) {
-			size_t i = 0;
-			while (allowed_values2[i].input != NULL) {
-				if (strcmp(value, allowed_values2[i].input) == 0) {
-					attribute->final_value = strdup(allowed_values2[i].output);
-
-					return true;
-				}
-				i++;
-			}
-        }
-
-        if (allowed_values1 != NULL) {
-			size_t i = 0;
-			while (allowed_values1[i].input != NULL) {
-				if (strcmp(value, allowed_values1[i].input) == 0) {
-					attribute->final_value = strdup(allowed_values1[i].output);
-
-					return true;
-				}
-				i++;
-			}
-        }
-    }
-
-    return false;
-}
-
-/**
- * 
- * @function validate_style_value_color
- * @brief Validate the style value color
- * @params {hashmap_t*} styles - Styles
- * @params {hashmap_t*} new_styles - New styles
- * @params {ast_layout_attribute_t*} attribute - Layout attribute
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed values 1
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed values 2
- * @returns {bool} - True if the style value is valid, false otherwise
- * 
- */
-bool validate_style_value_color(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, const ast_layout_attribute_style_pair_t* allowed_values1, const ast_layout_attribute_style_pair_t* allowed_values2)
-{
-    DEBUG_ME;
-	if (styles) {}
-	if (new_styles) {}
-
-    if (attribute->values == NULL || attribute->values->data == NULL || attribute->values->data[0] == NULL) {
-        return false;
-    }
-
-    ast_value_t* first = attribute->values->data[0];
-
-    if (first->type->kind == AST_TYPE_KIND_STRING) {
-        char* value = first->data.string_value;
-
-		if (strlen(value) == 0) return false;
-
-        if (allowed_values2 != NULL) {
+		if (allowed_values2 != NULL) {
 			size_t i = 0;
 			while (allowed_values2[i].input != NULL) {
 				if (strcmp(value, allowed_values2[i].input) == 0) {
@@ -528,10 +465,69 @@ bool validate_style_value_color(hashmap_t* styles, hashmap_t* new_styles, ast_la
 				}
 				i++;
 			}
-        }
-    }
+		}
+	}
 
-    return false;
+	return false;
+}
+
+/**
+ * 
+ * @function validate_style_value_color
+ * @brief Validate the style value color
+ * @params {hashmap_t*} styles - Styles
+ * @params {hashmap_t*} new_styles - New styles
+ * @params {ast_layout_attribute_t*} attribute - Layout attribute
+ * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed values 1
+ * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed values 2
+ * @returns {bool} - True if the style value is valid, false otherwise
+ * 
+ */
+bool validate_style_value_color(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, const ast_layout_attribute_style_pair_t* allowed_values1, const ast_layout_attribute_style_pair_t* allowed_values2)
+{
+	DEBUG_ME;
+	if (styles) {}
+	if (new_styles) {}
+
+	if (attribute->values == NULL || attribute->values->data == NULL || attribute->values->data[0] == NULL) {
+		return false;
+	}
+
+	ast_value_t* first = attribute->values->data[0];
+
+	if (first->type->kind == AST_TYPE_KIND_STRING) {
+		char* value = first->data.string_value;
+
+		if (strlen(value) == 0) {
+			return false;
+		}
+
+		if (allowed_values2 != NULL) {
+			size_t i = 0;
+			while (allowed_values2[i].input != NULL) {
+				if (strcmp(value, allowed_values2[i].input) == 0) {
+					attribute->final_value = strdup(allowed_values2[i].output);
+					
+					return true;
+				}
+				i++;
+			}
+		}
+
+		if (allowed_values1 != NULL) {
+			size_t i = 0;
+			while (allowed_values1[i].input != NULL) {
+				if (strcmp(value, allowed_values1[i].input) == 0) {
+					attribute->final_value = strdup(allowed_values1[i].output);
+
+					return true;
+				}
+				i++;
+			}
+		}
+	}
+
+	return false;
 }
 
 /**
@@ -569,13 +565,13 @@ bool validate_style_value_integer(hashmap_t* styles, hashmap_t* new_styles, ast_
 		return true;
 	}
 	else if (first->type->kind == AST_TYPE_KIND_STRING) {
-        char* value = first->data.string_value;
+		char* value = first->data.string_value;
 
 		if (strlen(value) == 0) {
 			return false;
 		}
 
-        if (allowed_values2 != NULL) {
+		if (allowed_values2 != NULL) {
 			size_t i = 0;
 			while (allowed_values2[i].input != NULL) {
 				if (strcmp(value, allowed_values2[i].input) == 0) {
@@ -599,7 +595,7 @@ bool validate_style_value_integer(hashmap_t* styles, hashmap_t* new_styles, ast_
 
 				i++;
 			}
-        }
+		}
 
 		if (string_is_number(value)) {
 			return true;
@@ -660,13 +656,13 @@ bool validate_style_value_percentage(hashmap_t* styles, hashmap_t* new_styles, a
 		}
 	}
 	else if (first->type->kind == AST_TYPE_KIND_STRING) {
-        char* value = first->data.string_value;
+		char* value = first->data.string_value;
 
 		if (strlen(value) == 0) {
 			return false;
 		}
 
-        if (allowed_values2 != NULL) {
+		if (allowed_values2 != NULL) {
 			size_t i = 0;
 			while (allowed_values2[i].input != NULL) {
 				if (strcmp(value, allowed_values2[i].input) == 0) {
@@ -690,7 +686,7 @@ bool validate_style_value_percentage(hashmap_t* styles, hashmap_t* new_styles, a
 
 				i++;
 			}
-        }
+		}
 
 		// if (string_is_number(value)) {
 		// }
@@ -819,7 +815,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 		if (false) {}
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
 
-		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(GENERATED_NAME, ENDUSER_NAME) else if (strcmp(value, ENDUSER_NAME) == 0) return true;
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(GENERATED_NAME, ENDUSER_NAME) else if (strcmp(value, ENDUSER_NAME) == 0) { return true; }
 
 		#include "ast_layout_attribute_style_global.h"
 	}

@@ -84,6 +84,28 @@ bool file_exists(const char* path)
 
 /**
  * 
+ * @function directory_create
+ * @berif Create a directory
+ * @params {char*} path - Path of directory
+ * @returns {bool}
+ * 
+ */
+bool directory_exists(const char* path)
+{
+    DEBUG_ME;
+    struct stat st;
+    
+    if (stat(path, &st) == 0) {
+        if (st.st_mode & S_IFDIR) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * 
  * @function file_remove
  * @berif Remove a file
  * @params {char*} path - Path of file

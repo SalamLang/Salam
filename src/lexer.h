@@ -285,11 +285,11 @@ void lexer_lex_number(lexer_t* lexer, int char_size);
  * @function lexer_lex_string
  * @brief Lexing a string
  * @params {lexer_t*} lexer - Lexer state
+ * @params {int} type - String type (0 = english strings, 1= persian strings)
  * @returns {void}
  * 
  */
-void lexer_lex_string(lexer_t* lexer);
-
+void lexer_lex_string(lexer_t* lexer, int type);
 
 /**
  * 

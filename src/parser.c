@@ -379,10 +379,8 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* blo
 	array_value_t* values = parser_parse_layout_values(lexer);
 
 	ast_layout_attribute_type_t attribute_key_type = token_to_ast_layout_attribute_type(name, last_name, block->parent_node_type);
-
-	token_t* new_last_name = PARSER_CURRENT; // TODO
-
-	ast_layout_attribute_t* attribute = ast_layout_attribute_create(attribute_key_type, name, values, block->parent_node_type, new_last_name->location, first_value->location);
+	
+	ast_layout_attribute_t* attribute = ast_layout_attribute_create(attribute_key_type, name, values, block->parent_node_type, PARSER_CURRENT->location, first_value->location);
 	if (!token_belongs_to_ast_layout_node(attribute_key_type, attribute)) {
 		attribute->destroy(attribute);
 		values->destroy(values);
@@ -401,8 +399,6 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* blo
 		}
 		else {
 			hashmap_put(normal, attribute_key_name, attribute);
-
-			// values->destroy(values);
 		}
 	}
 	else if (onlyStyle != true) {
@@ -414,8 +410,6 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* blo
 		}
 		else {
 			hashmap_put(block->attributes, attribute_key_name, attribute);
-
-			// values->destroy(values);
 		}
 	}
 	else {

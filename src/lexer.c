@@ -851,7 +851,7 @@ void lexer_lex_string(lexer_t* lexer, int type)
 		string_destroy(value);
 
 		error_lexer(2, "Unterminated string value at line %zu, column %zu", lexer->line, lexer->column);
-		
+
 		return;
 	}
 
@@ -860,7 +860,7 @@ void lexer_lex_string(lexer_t* lexer, int type)
 	token_t* token = token_create(TOKEN_STRING, (location_t){lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
 	token->data_type = TOKEN_STRING;
 	token->data.string = strdup(value->data);
-
+	
 	string_destroy(value);
 
 	LEXER_PUSH_TOKEN(token);

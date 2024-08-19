@@ -147,4 +147,14 @@ long file_get_capacity(const char* path);
  */
 time_t file_get_modified(const char* path);
 
+/**
+ * 
+ * @function directory_create
+ * @berif Create a directory
+ * @params {char*} path - Path of directory
+ * @returns {bool}
+ * 
+ */
+bool directory_exists(const char* path);
+
 #endif

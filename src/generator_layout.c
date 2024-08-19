@@ -29,7 +29,7 @@ string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layo
 					ast_layout_style_state_t* pseudo_element = entry->value;
 
 					if (pseudo_element->normal != NULL) {
-						string_t* pseudo_element_styles = generator_code_layout_styles(pseudo_element->normal, block, NULL);
+						string_t* pseudo_element_styles = generator_code_layout_styles(pseudo_element->normal, block, css_attributes_length);
 						ast_layout_attribute_style_state_type type = generator_code_layout_attribute_style_state_enduser_name_to_type(entry->key);
 
 						if (pseudo_element_styles->length > 0 && type != AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR) {
@@ -154,7 +154,9 @@ void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layo
 
 	string_append_str(body_tag, "<body");
 	string_t* body_attrs = generator_code_layout_attributes(generator, layout_block);
-	if (body_attrs->length > 0) string_append_char(body_tag, ' ');
+	if (body_attrs->length > 0) {
+		string_append_char(body_tag, ' ');
+	}
 	string_append(body_tag, body_attrs);
 	body_attrs->destroy(body_attrs);
 	string_append_str(body_tag, ">");
@@ -163,14 +165,22 @@ void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layo
 	size_t body_text_content_length = body_text_content != NULL ? strlen(body_text_content) : 0;
 
 	string_t* body_child = generator_code_layout_block(generator, layout_block->children);
-	if (body_child->length > 0 || body_text_content_length > 0) string_append_char(body_tag, '\n');
+	if (body_child->length > 0 || body_text_content_length > 0) {
+		string_append_char(body_tag, '\n');
+	}
 
 	// text content
-	if (body_text_content != NULL && body_text_content_length > 0) string_append_str(body_content, body_text_content);
+	if (body_text_content != NULL && body_text_content_length > 0) {
+		string_append_str(body_content, body_text_content);
+	}
 
 	// node content
-	if (body_child->length > 0 && body_text_content != NULL && body_text_content_length > 0) string_append_char(body_content, '\n');
-	if (body_child->length > 0) string_append(body_content, body_child);
+	if (body_child->length > 0 && body_text_content != NULL && body_text_content_length > 0) {
+		string_append_char(body_content, '\n');
+	}
+	if (body_child->length > 0) {
+		string_append(body_content, body_child);
+	}
 
 	if (body_child != NULL) body_child->destroy(body_child);
 
@@ -192,7 +202,9 @@ void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layo
 void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 {
 	DEBUG_ME;
-	if (head == NULL) return;
+	if (head == NULL) {
+		return;
+	}
 
 	char* value = NULL;
 
@@ -280,8 +292,12 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 void generator_code_head(ast_layout_block_t* block, string_t* head)
 {
 	DEBUG_ME;
-	if (head == NULL) return;
-	else if (block == NULL) return;
+	if (head == NULL) {
+		return;
+	}
+	else if (block == NULL) {
+		return;
+	}
 
 	size_t html_tags_length = 0;
 
@@ -476,6 +492,7 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
  */
 string_t* generator_code_layout_styles(hashmap_layout_attribute_t* styles, ast_layout_block_t* block, size_t* css_attributes_length)
 {
+	size_t css_attributes_length_local = 0;
 	string_t* code = string_create(1024);
 
 	if (styles != NULL) {
@@ -493,7 +510,7 @@ string_t* generator_code_layout_styles(hashmap_layout_attribute_t* styles, ast_l
 						error_generator(2, "Someting went wrong with the style value for '%s' attribute in '%s' element!", attribute->final_key, ast_layout_node_type_to_enduser_name(block->parent_node_type));
 					}
 
-					if (css_attributes_length != NULL && *css_attributes_length != 0) {
+					if (css_attributes_length_local != 0) {
 						string_append_char(code, ';');
 					}
 
@@ -504,6 +521,8 @@ string_t* generator_code_layout_styles(hashmap_layout_attribute_t* styles, ast_l
 					if (css_attributes_length != NULL) {
 						(*css_attributes_length)++;
 					}
+					
+					css_attributes_length_local++;
 				}
 
 				entry  = cast(hashmap_entry_t*, entry->next);
@@ -550,14 +569,20 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 						char* attribute_values_str = attribute->final_value != NULL ? attribute->final_value : array_value_stringify(attribute->values, ", ");
 						size_t attribute_value_length = attribute_values_str == NULL ? 0 : strlen(attribute_values_str);
 
-						if (html_attributes_length != 0) string_append_char(html_attributes, ' ');
+						if (html_attributes_length != 0) {
+							string_append_char(html_attributes, ' ');
+						}
 
 						string_append_str(html_attributes, attribute->final_key == NULL ? entry->key : attribute->final_key);
 						string_append_str(html_attributes, "=");
 
-						if (attribute_value_length > 1) string_append_str(html_attributes, "\"");
+						if (attribute_value_length > 1) {
+							string_append_str(html_attributes, "\"");
+						}
 						string_append_str(html_attributes, attribute_values_str);
-						if (attribute_value_length > 1) string_append_str(html_attributes, "\"");
+						if (attribute_value_length > 1) {
+							string_append_str(html_attributes, "\"");
+						}
 
 						if (attribute_values_str != NULL) {
 							memory_destroy(attribute_values_str);
@@ -584,7 +609,9 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 				if (attribute == NULL) {}
 				else if (attribute->isStyle == false || attribute->ignoreMe == true) {}
 				else {
-					if (css_attributes_length != 0) string_append_char(css_attributes, ';');
+					if (css_attributes_length != 0) {
+						string_append_char(css_attributes, ';');
+					}
 					string_append_str(css_attributes, attribute->final_key);
 					string_append_str(css_attributes, ":");
 					string_append_str(css_attributes, attribute->final_value);
@@ -598,7 +625,9 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 	}
 
 	if (css_attributes_length > 0 && css_attributes->length > 0) {
-		if (html_attributes_length > 0 && html_attributes->length > 0) string_append_char(html_attributes, ' ');
+		if (html_attributes_length > 0 && html_attributes->length > 0) {
+			string_append_char(html_attributes, ' ');
+		}
 
 		bool has_substate = false;
 
@@ -804,7 +833,7 @@ ast_layout_attribute_style_state_type generator_code_layout_attribute_style_stat
 	}
 
 	#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
-	#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME) if (strcmp(name, ENDUSER_NAME) == 0) return TYPE;
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME) if (strcmp(name, ENDUSER_NAME) == 0) { return TYPE; }
 
 	#include "ast_layout_attribute_style_state_type.h"
 
@@ -849,7 +878,7 @@ ast_layout_attribute_style_state_type generator_code_layout_attribute_style_stat
 	}
 
 	#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
-	#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME) if (strcmp(name, NAME) == 0) return TYPE;
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME) if (strcmp(name, NAME) == 0) { return TYPE; }
 
 	#include "ast_layout_attribute_style_state_type.h"
 

@@ -132,7 +132,9 @@ void string_append_str(string_t* str, const char* suffix)
 {
 	DEBUG_ME;
 	size_t suffix_len = strlen(suffix);
-	if (suffix_len == 0) return;
+	if (suffix_len == 0) {
+		return;
+	}
 
 	while (str->length + suffix_len >= str->capacity) {
 		str->capacity *= 2;
@@ -310,7 +312,9 @@ char* string_upper_str(const char* str)
 char* replace_all_substrings(const char* str, const char* old_substr, const char* new_substr)
 {
 	DEBUG_ME;
-	if (str == NULL || old_substr == NULL || new_substr == NULL) return NULL;
+	if (str == NULL || old_substr == NULL || new_substr == NULL) {
+		return NULL;
+	}
 
 	size_t str_len = strlen(str);
 	size_t old_len = strlen(old_substr);
@@ -365,8 +369,13 @@ char* replace_all_substrings(const char* str, const char* old_substr, const char
 bool string_is(string_t* str1, const char* str2)
 {
 	DEBUG_ME;
-	if (str1 == NULL || str2 == NULL) return false;
-	if (str1->length != strlen(str2)) return false;
+	if (str1 == NULL || str2 == NULL) {
+		return false;
+	}
+
+	if (str1->length != strlen(str2)) {
+		return false;
+	}
 
 	return strcmp(str1->data, str2) == 0;
 }
@@ -383,8 +392,12 @@ bool string_is(string_t* str1, const char* str2)
 bool string_equals(string_t* str1, string_t* str2)
 {
 	DEBUG_ME;
-	if (str1 == NULL || str2 == NULL) return false;
-	if (str1->length != str2->length) return false;
+	if (str1 == NULL || str2 == NULL) {
+		return false;
+	}
+	else if (str1->length != str2->length) {
+		return false;
+	}
 
 	return strcmp(str1->data, str2->data) == 0;
 }
@@ -401,8 +414,13 @@ bool string_equals(string_t* str1, string_t* str2)
 bool string_compare(string_t* str1, string_t* str2)
 {
 	DEBUG_ME;
-	if (str1 == NULL || str2 == NULL) return false;
-	if (str1->length != str2->length) return false;
+	if (str1 == NULL || str2 == NULL) {
+		return false;
+	}
+
+	if (str1->length != str2->length) {
+		return false;
+	}
 
 	return strcmp(str1->data, str2->data) < 0;
 }
@@ -439,17 +457,26 @@ bool is_valid_utf8(const char* str)
 		}
 		else if ((*bytes & 0xE0) == 0xC0) {
 			// 2-byte sequence
-			if ((bytes[1] & 0xC0) != 0x80) return false;
+			if ((bytes[1] & 0xC0) != 0x80) {
+				return false;
+			}
+
 			bytes += 2;
 		}
 		else if ((*bytes & 0xF0) == 0xE0) {
 			// 3-byte sequence
-			if ((bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80) return false;
+			if ((bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80) {
+				return false;
+			}
+
 			bytes += 3;
 		}
 		else if ((*bytes & 0xF8) == 0xF0) {
 			// 4-byte sequence
-			if ((bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80 || (bytes[3] & 0xC0) != 0x80) return false;
+			if ((bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80 || (bytes[3] & 0xC0) != 0x80) {
+				return false;
+			}
+
 			bytes += 4;
 		}
 		else {
@@ -691,10 +718,18 @@ char* double2string(double value)
 size_t utf8_char_length(char c)
 {
 	DEBUG_ME;
-    if ((c & 0x80) == 0) return 1; // 0xxxxxxx
-	else if ((c & 0xE0) == 0xC0) return 2; // 110xxxxx
-    else if ((c & 0xF0) == 0xE0) return 3; // 1110xxxx
-    else if ((c & 0xF8) == 0xF0) return 4; // 11110xxx
+    if ((c & 0x80) == 0) {
+		return 1; // 0xxxxxxx
+	}
+	else if ((c & 0xE0) == 0xC0) {
+		return 2; // 110xxxxx
+	}
+    else if ((c & 0xF0) == 0xE0) {
+		return 3; // 1110xxxx
+	}
+    else if ((c & 0xF8) == 0xF0) {
+		return 4; // 11110xxx
+	}
 
     return 0; // Invalid UTF-8
 }

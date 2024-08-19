@@ -393,7 +393,7 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* blo
 	if (is_style_attribute(attribute_key_type)) {
 		if (hashmap_has(normal, attribute_key_name)) {
 			attribute->destroy(attribute);
-			values->destroy(values);
+			// values->destroy(values);
 
 			error_parser(2, "Style attribute '%s' already defined in the '%s' block at line %d, column %d", attribute_key_name, ast_layout_node_type_to_enduser_name(block->parent_node_type), last_name->location.end_line, last_name->location.end_column);
 		}
@@ -404,7 +404,7 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* blo
 	else if (onlyStyle != true) {
 		if (hashmap_has(block->attributes, attribute_key_name)) {
 			attribute->destroy(attribute);
-			values->destroy(values);
+			// values->destroy(values);
 
 			error_parser(2, "Attribute '%s' already defined in the '%s' block at line %d, column %d", attribute_key_name, ast_layout_node_type_to_enduser_name(block->parent_node_type), last_name->location.end_line, last_name->location.end_column);
 		}
@@ -864,7 +864,7 @@ ast_t* parser_parse(lexer_t* lexer)
 	DEBUG_ME;
 	ast_t* ast = ast_create();
 
-	while (lexer->token_index < lexer->tokens->capacity) {
+	while (lexer->token_index < lexer->tokens->length) {
 		if (PARSER_CURRENT->type == TOKEN_EOF) break;
 
 		ast_node_t* node = parser_parse_node(lexer);

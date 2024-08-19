@@ -80,19 +80,31 @@ void generator_debug(generator_t* generator)
 		printf("generator is NULL\n");
 		return;
 	}
+	else {
+		printf("generator->html: ");
+		if (generator->html != NULL) {
+			generator->html->print(generator->html);
+		}
+		else {
+			printf("NULL\n");
+		}
 
-	printf("generator->html: ");
-	if (generator->html != NULL) generator->html->print(generator->html);
-	else printf("NULL\n");
+		printf("generator->css: ");
+		if (generator->css != NULL) {
+			generator->css->print(generator->css);
+		}
+		else {
+			printf("NULL\n");
+		}
 
-	printf("generator->css: ");
-	if (generator->css != NULL) generator->css->print(generator->css);
-	else printf("NULL\n");
-
-	printf("generator->js: ");
-	if (generator->js != NULL) generator->js->print(generator->js);
-	else printf("NULL\n");
-
+		printf("generator->js: ");
+		if (generator->js != NULL) {
+			generator->js->print(generator->js);
+		}
+		else {
+			printf("NULL\n");
+		}
+	}
 }
 
 /**
@@ -109,17 +121,18 @@ void generator_save(generator_t* generator, const char* html_output, const char*
 	if (generator == NULL) {
 		return;
 	}
+	else {
+		if (generator->html != NULL) {
+			file_writes(html_output, generator->html->data);
+		}
 
-	if (generator->html != NULL) {
-		file_writes(html_output, generator->html->data);
-	}
+		if (generator->css != NULL) {
+			file_writes(css_output, generator->css->data);
+		}
 
-	if (generator->css != NULL) {
-		file_writes(css_output, generator->css->data);
-	}
-
-	if (generator->js != NULL) {
-		file_writes(js_output, generator->js->data);
+		if (generator->js != NULL) {
+			file_writes(js_output, generator->js->data);
+		}
 	}
 }
 

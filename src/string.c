@@ -773,3 +773,58 @@ uint32_t utf8_decode(const char* source, size_t* index)
     *index += length;
     return codepoint;
 }
+
+/**
+ * 
+ * @function utf8_strlen
+ * @brief Get the length of a UTF-8 string
+ * @params {const char*} str - UTF-8 string
+ * @returns {size_t} Length of the string
+ * 
+ */
+size_t utf8_strlen(const char *str)
+{
+    size_t len = 0;
+    mbstate_t state;
+    memset(&state, 0, sizeof(state));
+
+    while (*str) {
+        wchar_t wc;
+        int bytes = mbrtowc(&wc, str, MB_CUR_MAX, &state);
+
+        if (bytes > 0) {
+            str += bytes;
+            len++;
+        }
+		else if (bytes == -1) {
+            perror("mbrtowc");
+
+            exit(EXIT_FAILURE);
+        }
+		else {
+            break;
+        }
+    }
+
+    return len;
+}
+
+/**
+ * 
+ * @function mb2strlen
+ * @brief Get the length of a multibyte string
+ * @params {char*} identifier - Multibyte string
+ * @returns {size_t} Length of the string
+ * 
+ */
+size_t mb2strlen(char* identifier)
+{
+	size_t wcs_len = mbstowcs(NULL, identifier, 0);
+	if (wcs_len == (size_t)-1) {
+		printf("MESSAGE_LEXER_STRING_GET_LENGTH_UNICODE\n");
+		
+		exit(EXIT_FAILURE);
+	}
+
+	return wcs_len;
+}

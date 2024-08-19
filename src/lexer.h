@@ -263,22 +263,24 @@ void lexer_lex(lexer_t* lexer);
  * @function lexer_lex_identifier
  * @brief Lexing an identifier
  * @params {lexer_t*} lexer - Lexer state
- * @params {int} wcl - Word character length
+ * @params {wchar_t} wc - wide character
+ * @params {int} wcl - Wide character length
  * @returns {void}
  * 
  */
-void lexer_lex_identifier(lexer_t* lexer, int wcl);
+void lexer_lex_identifier(lexer_t* lexer, wchar_t* wc, int char_size);
 
 /**
  * 
  * @function lexer_lex_number
  * @brief Lexing a number
  * @params {lexer_t*} lexer - Lexer state
+ * @params {wchar_t} wc - wide character
  * @params {int} char_size - Character size
  * @returns {void}
  * 
  */
-void lexer_lex_number(lexer_t* lexer, int char_size);
+void lexer_lex_number(lexer_t* lexer, wchar_t wc, int char_size);
 
 /**
  * 
@@ -361,7 +363,7 @@ char* token_type_keyword(token_type_t type);
  * @returns {wchar_t}
  * 
  */
-wchar_t read_token(lexer_t* lexer, int* char_size);
+wchar_t read_token2(lexer_t* lexer, int* char_size);
 
 /**
  * 
@@ -413,5 +415,14 @@ bool string_is_number(const char* value);
  * 
  */
 bool string_is_percentage(const char* value, bool acceptSign);
+
+bool is_ident(wchar_t ch);
+
+bool is_number(wchar_t ch);
+
+bool is_alpha(wchar_t ch);
+
+// wchar_t read_token(lexer_t* lexer);
+wchar_t read_token(lexer_t* lexer, int* wcl);
 
 #endif

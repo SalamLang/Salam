@@ -55,8 +55,8 @@ void doargs(int argc, char** argv)
 
 	printf("generate save\n");
 
+	generator_save(generator, "index.html", "style.css", "script.js");
 	// generator_save(generator, "../out/index.html", "../out/style.css", "../out/script.js");
-	generator_save(generator, "../out/index.html", "../out/style.css", "../out/script.js");
 
 	printf("generate destroy\n");
 	generator_destroy(generator);

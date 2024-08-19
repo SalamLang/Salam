@@ -326,4 +326,14 @@ bool match_close_block(lexer_t* lexer);
  */
 string_t* parser_parse_layout_name(lexer_t* lexer, token_t** last_name);
 
+/**
+ * 
+ * @function parser_parse_layout_values
+ * @brief Parse the layout values
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {array_value_t*} - Array of AST values
+ * 
+ */
+array_value_t* parser_parse_layout_values(lexer_t* lexer);
+
 #endif

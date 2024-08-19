@@ -346,6 +346,7 @@ void generator_code_layout(generator_t* generator)
 				if (generator->inlineCSS == true) {
 					string_append_str(html, "<style>\n");
 					string_append(html, generator->css);
+					string_append_char(html, '\n');
 					string_append_str(html, "</style>\n");
 				}
 				else {
@@ -599,19 +600,22 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 	if (css_attributes_length > 0 && css_attributes->length > 0) {
 		if (html_attributes_length > 0 && html_attributes->length > 0) string_append_char(html_attributes, ' ');
 
-		if (generator->inlineCSS == true) {
-			if (hashmap_has_any_sub_value_layout_attribute_style_state(block->states) == true) {
-				if (block->tag == NULL) {
-					block->tag = generator_identifier_get(generator->identifier); // We will free its memory in the block_layout_destroy function
-				}
-			}
+		bool has_substate = false;
+
+		if (hashmap_has_any_sub_value_layout_attribute_style_state(block->states) == true) {
+			has_substate = true;
+		}
+
+		block->tag = generator_identifier_get(generator->identifier); // We will free its memory in the block_layout_destroy function
+
+		if (generator->inlineCSS == true && has_substate == false) {
 			string_append_str(html_attributes, "style=\"");
 			string_append(html_attributes, css_attributes);
 			string_append_str(html_attributes, "\"");
+
+			html_attributes_length++;
 		}
 		else {
-			block->tag = generator_identifier_get(generator->identifier); // We will free its memory in the block_layout_destroy function
-
 			string_append_char(generator->css, '.');
 			string_append_str(generator->css, block->tag);
 			string_append_char(generator->css, '{');
@@ -619,14 +623,11 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 			string_append_char(generator->css, '}');
 		}
 
-		string_t* pseudo_elements = generator_code_layout_pseudo_elements(generator, block, &css_attributes_length);
-
-		if (pseudo_elements != NULL) {
-			string_append(generator->css, pseudo_elements);
-			string_destroy(pseudo_elements);
-		}
-
 		if (block->tag != NULL) {
+			if (html_attributes_length > 0) {
+				string_append_char(html_attributes, ' ');
+			}
+
 			size_t tag_length = strlen(block->tag);
 
 			string_append_str(html_attributes, "class=");
@@ -635,8 +636,19 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 			}
 
 			string_append_str(html_attributes, block->tag);
+
 			if (tag_length > 1) {
 				string_append_char(html_attributes, '\"');
+			}
+			html_attributes_length++;
+		}
+
+		if (has_substate == true) {
+			string_t* pseudo_elements = generator_code_layout_pseudo_elements(generator, block, &css_attributes_length);
+
+			if (pseudo_elements != NULL) {
+				string_append(generator->css, pseudo_elements);
+				string_destroy(pseudo_elements);
 			}
 		}
 	}
@@ -719,7 +731,12 @@ char* generator_code_layout_node_type(ast_layout_node_type_t type)
 	DEBUG_ME;
 	switch (type) {
 		#undef ADD_LAYOUT_TYPE
+		#undef ADD_LAYOUT_TYPE_HIDE
+		#undef ADD_LAYOUT_TYPE_REPEAT
+
 		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return GENERATED_NAME;
+		#define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return GENERATED_NAME;
+		#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
 
 		#include "ast_layout_type.h"
 	}

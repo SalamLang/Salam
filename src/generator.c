@@ -23,8 +23,8 @@ generator_t* generator_create(ast_t* ast)
 
 	generator->inlineCSS = true;
 	generator->inlineJS = true;
-	generator->inlineCSS = false;
-	generator->inlineJS = false;
+	// generator->inlineCSS = false;
+	// generator->inlineJS = false;
 
 	generator->identifier = malloc(sizeof(generator_identifier_t));
 

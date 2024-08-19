@@ -63,6 +63,36 @@ const keyword_t keywords[] = {
 	#include "token.h"
 };
 
+wchar_t read_token(lexer_t* lexer, int* wcl)
+{
+	if (lexer->source[lexer->index] == '\0') {
+		return L'\0';
+	}
+
+	wchar_t current_char;
+	int char_size = mbtowc(&current_char, &lexer->source[lexer->index], MB_CUR_MAX);
+
+	if (char_size < 0) {
+		printf("%s\n", "MESSAGE_LEXER_TOKEN_READ_UNICODE");
+
+		exit(EXIT_FAILURE);
+		return 0;
+	}
+
+	if (current_char == '\n') {
+		lexer->line++;
+		lexer->column = 0;
+	}
+	else {
+		lexer->column += char_size;
+	}
+
+	lexer->index += char_size;
+	*wcl = char_size;
+
+	return current_char;
+}
+
 /**
  * 
  * @function is_english_digit
@@ -640,30 +670,54 @@ void location_print(location_t location)
  * @returns {wchar_t}
  * 
  */
-wchar_t read_token(lexer_t* lexer, int* char_size)
+wchar_t read_token2(lexer_t* lexer, int* char_size)
 {
-	wchar_t current_char;
-	mbstate_t state;
-	memset(&state, 0, sizeof state);
+	// wchar_t current_char;
+	// mbstate_t state;
+	// memset(&state, 0, sizeof state);
 
 	if (lexer->source[lexer->index] == '\0') {
-		*char_size = 0;
+		if (char_size != NULL) {
+			*char_size = 0;
+		}
+
 		return L'\0';
 	}
 
-	*char_size = mbrtowc(&current_char, &lexer->source[lexer->index], MB_CUR_MAX, &state);
+	wchar_t current_char;
+	*char_size = mbtowc(&current_char, &lexer->source[lexer->index], MB_CUR_MAX);
+	if (*char_size < 0) {
+		printf("%s\n", "MESSAGE_LEXER_TOKEN_READ_UNICODE");
 
-	if (*char_size <= 0) {
-		if (*char_size == 0) {
-			return L'\0';
-		}
-		else if (errno == EILSEQ) {
-			error_lexer(2, "Invalid multibyte sequence at line %zu, column %zu", lexer->line, lexer->column);
-		}
-		else if (errno == EINVAL) {
-			error_lexer(2, "Incomplete multibyte sequence at line %zu, column %zu", lexer->line, lexer->column);
-		}
+		exit(EXIT_FAILURE);
+		return 0;
 	}
+
+	// *char_size = mbrtowc(&current_char, &lexer->source[lexer->index], MB_CUR_MAX, &state);
+
+	// if (*char_size <= 0) {
+	// 	if (*char_size == 0) {
+	// 		return L'\0';
+	// 	}
+	// 	else if (errno == EILSEQ) {
+	// 		lexer->index++;
+	// 		return L'\0';
+	// 		printf("first\n");
+	// 		printf("%zu\n", lexer->index);
+	// 		printf("%c\n", lexer->source[lexer->index]);
+
+	// 		error_lexer(2, "Invalid multibyte sequence at line %zu, column %zu", lexer->line, lexer->column);
+	// 	}
+	// 	else if (errno == EINVAL) {
+	// 		lexer->index++;
+	// 		return L'\0';
+	// 		printf("second\n");
+	// 		printf("%zu\n", lexer->index);
+	// 		printf("%c\n", lexer->source[lexer->index]);
+
+	// 		error_lexer(2, "Incomplete multibyte sequence at line %zu, column %zu", lexer->line, lexer->column);
+	// 	}
+	// }
 
 	if (current_char == L'\n') {
 		LEXER_NEXT_LINE;
@@ -683,27 +737,29 @@ wchar_t read_token(lexer_t* lexer, int* char_size)
  * @function lexer_lex_number
  * @brief Lexing a number
  * @params {lexer_t*} lexer - Lexer state
+ * @params {wchar_t} wc - wide character
  * @params {int} char_size - Character size
  * @returns {void}
  * 
  */
-void lexer_lex_number(lexer_t* lexer, int char_size)
+void lexer_lex_number(lexer_t* lexer, wchar_t wc, int char_size)
 {
 	DEBUG_ME;
 	char* buffer = memory_allocate(256);
 
 	size_t index = 0;
-	wchar_t wc;
 
 	for (int i = 0; i < char_size; i++) {
 		buffer[index++] = lexer->source[lexer->index - char_size + i];
 	}
 
-	int wcl = 0;
 	bool is_float = false;
 
 	while (LEXER_CURRENT != '\0') {
-		wc = read_token(lexer, &wcl);
+		wc = read_token(lexer);
+		if (wc == L'\0') {
+			break;
+		}
 
 		if (!is_wchar_digit(wc) && wc != L'.') {
 			break;
@@ -775,52 +831,99 @@ token_type_t type_keyword(const char* string)
  * @function lexer_lex_identifier
  * @brief Lexing an identifier
  * @params {lexer_t*} lexer - Lexer state
+ * @params {wchar_t} wc - wide character
  * @params {int} wcl - Wide character length
  * @returns {void}
  * 
  */
-void lexer_lex_identifier(lexer_t* lexer, int char_size)
+
+
+bool is_ident(wchar_t ch)
 {
-	DEBUG_ME;
-	char* buffer = memory_allocate(256);
+	return is_alpha(ch) || is_number(ch);
+}
 
-	size_t index = 0;
-	wchar_t wc;
+bool is_number(wchar_t ch)
+{
+	return (ch >= L'۰' && ch <= L'۹') || (ch >= '0' && ch <= '9');
+}
 
-	for (int i = 0; i < char_size; i++) {
-		buffer[index++] = lexer->source[lexer->index - char_size + i];
-	}
+bool is_alpha(wchar_t ch)
+{
+	return (
+		(
+			(ch >= L'آ' || ch >= L'ا') && ch <= L'ی'
+		) ||
+		ch == L'ـ' ||
+		ch == L'_' ||
+		(ch >= 'a' && ch <= 'z') ||
+		(ch >= 'A' && ch <= 'Z')
+	)
+	&&
+	!(
+		ch == '+' ||
+		ch == '-' ||
+		ch == '*' ||
+		ch == '/' ||
+		ch == '=' ||
+		ch == '>' ||
+		ch == '<' ||
+		ch == ',' ||
+		ch == '(' ||
+		ch == ')' ||
+		ch == '{' ||
+		ch == '}'
+	);
+}
 
-	int wcl = 0;
+void lexer_lex_identifier(lexer_t* lexer, wchar_t* wc, int char_size)
+{
+	return;
+	// DEBUG_ME;
+	// char identifier[256];
 
-	while (LEXER_CURRENT != '\0') {
-		wc = read_token(lexer, &wcl);
+	// size_t i = 0;
+	// while (is_ident(*wc)) {
+	// 	int char_size = wctomb(&identifier[i], *wc);
+	// 	if (char_size < 0) {
+	// 		printf("%s\n", "MESSAGE_LEXER_IDENTIFIER_CONVERT_MULTIBYTE");
 
-		if (!is_wchar_alpha(wc)) {
-			break;
-		}
+	// 		exit(EXIT_FAILURE);
+	// 	}
+	// 	i += char_size;
+	// 	*wc = read_token(lexer, &char_size);
+	// }
+	// identifier[i] = 0;
 
-		int len = wctomb(&buffer[index], wc);
-		if (len <= 0) {
-			break;
-		}
+	// printf("lets start reading identifier - second char - LEXER_CURRENT: ");
+	// printf("'%c'\n", LEXER_CURRENT);
+	// printf("'%d'\n", LEXER_CURRENT);
 
-		index += len;
-	}
+	// printf("Buffer is: %s\n", identifier);
+	// printf("Buffer index is: %zu\n", i);
 
-	buffer[index] = '\0';
+	// // while (LEXER_CURRENT != '\0' && (is_char_alpha(LEXER_CURRENT) || is_utf8_continuation_byte(LEXER_CURRENT))) {
+	// // 	string_append_char(value, LEXER_CURRENT);
+	// // 	LEXER_NEXT;
+	// // }
 
-	printf("identifier value: %s\n", buffer);
+	// // printf("identifier value: %s\n", identifier);
 
-	LEXER_PREV;
+	// // LEXER_PREV;
 
-	token_type_t type = type_keyword(buffer);
-	token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-	token->data_type = TOKEN_IDENTIFIER;
-	token->data.string = buffer;
-	token->print(token);
+	// token_type_t type = type_keyword(identifier);
+	// token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+	// token->data_type = TOKEN_IDENTIFIER;
+	// token->data.string = strdup(identifier);
 
-	LEXER_PUSH_TOKEN(token);
+	// printf("print the new token which added to the push - inside reading token: ");
+	// token->print(token);
+
+	// printf("inside reading a token - LEXER_CURRENT: ");
+	// printf("'%c'\n", LEXER_CURRENT);
+	// printf("'%d'\n", LEXER_CURRENT);
+
+	// LEXER_PUSH_TOKEN(token);
 }
 
 /**
@@ -841,7 +944,7 @@ void lexer_lex_string(lexer_t* lexer, int type)
 	int wcl = 0;
 	wchar_t wc = read_token(lexer, &wcl);
 	
-	while (wc != '\0' && ((type == 0 && wc != '"') || (type == 1 && wc != L'»') || (type == 2 && wc == L'”'))) {
+	while (wc != L'\0' && ((type == 0 && wc != L'"') || (type == 1 && wc != L'»') || (type == 2 && wc == L'”'))) {
 		string_append_wchar(value, wc);
 
 		wc = read_token(lexer, &wcl);
@@ -854,6 +957,8 @@ void lexer_lex_string(lexer_t* lexer, int type)
 
 		return;
 	}
+
+	lexer->index -= wcl;
 
 	LEXER_NEXT;
 
@@ -880,14 +985,15 @@ void lexer_lex(lexer_t* lexer)
 	char c;
 	wchar_t wc;
 	int wcl = 0;
-
+	
 	while ((c = LEXER_CURRENT) && c != '\0') {
 		wc = read_token(lexer, &wcl);
-		printf("Current: %lc\n", wc);
+
 		printf("Current char: %c\n", c);
 		printf("Current char ascii: %d\n", c);
+		printf("Current: %lc\n", wc);
 
-		switch (c) {
+		switch (wc) {
 			// End of file
 			case 0:
 			case -1:
@@ -942,36 +1048,37 @@ void lexer_lex(lexer_t* lexer)
 					LEXER_PUSH_TOKEN(token);
 				}
 				continue;
-			
+
 			case '"':
 				lexer_lex_string(lexer, 0);
 				continue;
-			
+
+
 			case '0': case '1': case '2': case '3': case '4':
 			case '5': case '6': case '7': case '8': case '9':
-				lexer_lex_number(lexer, wcl);
+				lexer_lex_number(lexer, wc, wcl);
 				continue;
 			
-			default:
-				if (wc == L'«') {
-					lexer_lex_string(lexer, 1);
-				}
-				else if (wc == L'“') {
-					lexer_lex_string(lexer, 2);
-				}
-				else if (is_wchar_digit(wc)) {
-					lexer_lex_number(lexer, wcl);
-				}
-				else if (c == '_' || is_wchar_alpha(wc) || is_char_alpha(c)) {
-					lexer_lex_identifier(lexer, wcl);
-				}
-				else {
-					printf("-->%d\n", c);
-					printf("-->%c\n", c);
-					printf("-->%lc\n", wc);
-					error_lexer(1, "Unknown character '%lc' at line %zu, column %zu", wc, lexer->line, lexer->column);
-				}
-				continue;
+			// default:
+			// 	if (wc == L'«') {
+			// 		lexer_lex_string(lexer, 1);
+			// 	}
+			// 	else if (wc == L'“') {
+			// 		lexer_lex_string(lexer, 2);
+			// 	}
+			// 	// else if (is_wchar_digit(wc)) {
+			// 	// 	lexer_lex_number(lexer, wc, wcl);
+			// 	// }
+			// 	else if (c == '_' || is_wchar_alpha(wc) || is_char_alpha(c)) {
+			// 		lexer_lex_identifier(lexer, &wc, wcl);
+			// 	}
+			// 	else {
+			// 		printf("-->%d\n", c);
+			// 		printf("-->%c\n", c);
+			// 		printf("-->%lc\n", wc);
+			// 		error_lexer(1, "Unknown character '%lc' at line %zu, column %zu", wc, lexer->line, lexer->column);
+			// 	}
+			// 	continue;
 		}
 	}
 	

@@ -1,4 +1,5 @@
 INPUT_FILE = ../test/input.s
+INPUT_FILE = test2.salam
 
 CC = gcc
 CFLAGS =

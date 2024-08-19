@@ -820,7 +820,6 @@ void lexer_lex(lexer_t* lexer)
 		switch (c) {
 			case '\0': // End of file
 			case -1: // End of file
-				goto gotoend;
 				break;
 			
 			case '\n': // New line
@@ -894,7 +893,6 @@ void lexer_lex(lexer_t* lexer)
 		}
 	}
 	
-	gotoend:
 	token_t* token = token_create(TOKEN_EOF, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
 	
 	LEXER_PUSH_TOKEN(token);

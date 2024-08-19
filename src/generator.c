@@ -147,7 +147,7 @@ string_t* generator_code_node(generator_t* generator, ast_node_t* node)
 		case AST_TYPE_LAYOUT:
 			break;
 		
-		case AST_TYPE_BLOCK:
+		case AST_TYPE_BLOCK: {
 			string_t* block_code = generator_code_block(generator, node->data.block);
 
 			if (block_code != NULL) {
@@ -155,9 +155,10 @@ string_t* generator_code_node(generator_t* generator, ast_node_t* node)
 
 				block_code->destroy(block_code);
 			}
-			break;
+		}
+		break;
 
-		case AST_TYPE_FUNCTION:
+		case AST_TYPE_FUNCTION: {
 			string_t* function_code = generator_code_function(generator, node->data.function);
 
 			if (function_code != NULL) {
@@ -165,10 +166,11 @@ string_t* generator_code_node(generator_t* generator, ast_node_t* node)
 
 				function_code->destroy(function_code);
 			}
-			break;
+		}
+		break;
 		
 		case AST_TYPE_IF:
-		case AST_TYPE_ELSE_IF:
+		case AST_TYPE_ELSE_IF: {
 			string_t* if_code = generator_code_if(generator, node->data.ifclause);
 
 			if (if_code != NULL) {
@@ -176,9 +178,10 @@ string_t* generator_code_node(generator_t* generator, ast_node_t* node)
 
 				if_code->destroy(if_code);
 			}
-			break;
+		}
+		break;
 
-		case AST_TYPE_RETURN:
+		case AST_TYPE_RETURN: {
 			string_t* return_code = generator_code_return(generator, node->data.returns);
 
 			if (return_code != NULL) {
@@ -186,9 +189,10 @@ string_t* generator_code_node(generator_t* generator, ast_node_t* node)
 
 				return_code->destroy(return_code);
 			}
-			break;
+		}
+		break;
 
-		case AST_TYPE_PRINT:
+		case AST_TYPE_PRINT: {
 			string_t* print_code = generator_code_print(generator, node->data.print);
 
 			if (print_code != NULL) {
@@ -196,7 +200,8 @@ string_t* generator_code_node(generator_t* generator, ast_node_t* node)
 
 				print_code->destroy(print_code);
 			}
-			break;
+		}
+		break;
 	}
 
 	return code;

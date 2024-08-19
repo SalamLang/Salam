@@ -478,9 +478,6 @@ char* token_value_stringify(token_t* token)
 		case TOKEN_STRING:
 		case TOKEN_IDENTIFIER:
 			return token->data.string;
-			// snprintf(buffer, sizeof(buffer), "%s", token->data.string);
-
-			// return buffer;
 
 		case TOKEN_BOOLEAN:
 			return token->data.boolean ? TOKEN_BOOL_TRUE : TOKEN_BOOL_FALSE;
@@ -511,6 +508,7 @@ lexer_t* lexer_create(const char* file_path, char* source)
 	lexer->column = 1;
 
 	lexer->tokens = array_create(sizeof(token_t*), 10);
+	
 	lexer->tokens->print = cast(void (*)(void*), array_token_print);
 	lexer->tokens->stringify = cast(char* (*)(void*), array_token_stringify);
 	lexer->tokens->destroy = cast(void (*)(void*), array_token_destroy);
@@ -838,8 +836,6 @@ void lexer_lex_string(lexer_t* lexer, int type)
 {
 	DEBUG_ME;
 	// Opening quote is already consumed
-	size_t buffer_size = 256;
-	size_t index = 0;
 	string_t* value = string_create(25);
 
 	int wcl = 0;
@@ -895,7 +891,8 @@ void lexer_lex(lexer_t* lexer)
 			case -1:
 				break;
 			
-			case '\n': // New line
+			// New line
+			case '\n':
 				LEXER_NEXT_LINE;
 				LEXER_ZERO_COLUMN;
 				continue;
@@ -908,7 +905,7 @@ void lexer_lex(lexer_t* lexer)
 			case '\v': // Vertical tab
 			case ' ': // Space
 				continue;
-
+			
 			case '{':
 			case '}':
 			case '[':
@@ -943,6 +940,7 @@ void lexer_lex(lexer_t* lexer)
 					LEXER_PUSH_TOKEN(token);
 				}
 				continue;
+			
 			case '"':
 				lexer_lex_string(lexer, 0);
 				continue;
@@ -951,7 +949,7 @@ void lexer_lex(lexer_t* lexer)
 			case '5': case '6': case '7': case '8': case '9':
 				lexer_lex_number(lexer, wcl);
 				continue;
-
+			
 			default:
 				if (wc == L'«') {
 					lexer_lex_string(lexer, 1);

@@ -369,4 +369,24 @@ void string_number2number(char* str);
  */
 void string_append_wchar(string_t* str, wchar_t c);
 
+/**
+ * 
+ * @function utf8_strlen
+ * @brief Get the length of a UTF-8 string
+ * @params {const char*} str - UTF-8 string
+ * @returns {size_t} Length of the string
+ * 
+ */
+size_t utf8_strlen(const char *str);
+
+/**
+ * 
+ * @function mb2strlen
+ * @brief Get the length of a multibyte string
+ * @params {char*} identifier - Multibyte string
+ * @returns {size_t} Length of the string
+ * 
+ */
+size_t mb2strlen(char* identifier);
+
 #endif

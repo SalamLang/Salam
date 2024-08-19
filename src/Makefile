@@ -3,7 +3,7 @@ INPUT_FILE = test2.salam
 
 CC = gcc
 CFLAGS =
-CFLAGS = -g -Walloca -Wextra -Wall -fsanitize=address,undefined
+# CFLAGS = -g -Walloca -Wextra -Wall -fsanitize=address,undefined
 # -std=c11
 
 TARGET = main

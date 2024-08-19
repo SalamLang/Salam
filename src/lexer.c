@@ -69,6 +69,8 @@ wchar_t read_token(lexer_t* lexer, int* wcl)
 		return L'\0';
 	}
 
+	printf("read token: %zu\n", lexer->index);
+
 	wchar_t current_char;
 	int char_size = mbtowc(&current_char, &lexer->source[lexer->index], MB_CUR_MAX);
 
@@ -533,6 +535,7 @@ lexer_t* lexer_create(const char* file_path, char* source)
 
 	lexer->file_path = file_path;
 	lexer->source = source;
+	lexer->source_size = 0;
 	lexer->source_length = strlen(lexer->source);
 	lexer->index = 0;
 	lexer->line = 1;
@@ -543,6 +546,9 @@ lexer_t* lexer_create(const char* file_path, char* source)
 	lexer->tokens->print = cast(void (*)(void*), array_token_print);
 	lexer->tokens->stringify = cast(char* (*)(void*), array_token_stringify);
 	lexer->tokens->destroy = cast(void (*)(void*), array_token_destroy);
+
+	// printf("LEXER CREATE => %s\n", lexer->source);
+	// printf("LEXER CREATE => %zu\n", lexer->source_length);
 
 	lexer->token_index = 0;
 
@@ -797,19 +803,26 @@ void lexer_lex_identifier(lexer_t* lexer, wchar_t* wc, int char_size)
 
 	string_append_wchar(value, *wc);
 
+	printf("BEFORE LEX IDENTIFIER => %lc - %d\n", *wc, char_size);
+
 	wchar_t wcn;
 	int wcln;
 
 	while (LEXER_CURRENT != '\0') {
 		wcn = read_token(lexer, &wcln);
 
+		printf("ITERATE LEX IDENTIFIER => %lc - %d\n", wcn, wcln);
+
 		if (!is_wchar_alpha(wcn)) {
 			lexer->index -= wcln;
+
 			break;
 		}
 
 		string_append_wchar(value, wcn);
 	}
+
+	printf("AFTER LEX IDENTIFIER => %lc\n", *wc);
 
 	token_type_t type = type_keyword(value->data);
 	token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
@@ -889,8 +902,7 @@ void lexer_lex(lexer_t* lexer)
 
 		switch (wc) {
 			// End of file
-			case 0:
-			case -1:
+			case '\0':
 				break;
 			
 			// New line

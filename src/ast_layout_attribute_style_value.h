@@ -627,9 +627,6 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_fill[] = {
     {"تصویر", "image"},
     {NULL, NULL},
 };
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_fill_opacity[] = {
-    {NULL, NULL},
-};
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_fill_rule[] = {
     {"تازه", "nonzero"},
     {"یکسان", "evenodd"},

@@ -401,6 +401,8 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* blo
 		}
 		else {
 			hashmap_put(normal, attribute_key_name, attribute);
+
+			// values->destroy(values);
 		}
 	}
 	else if (onlyStyle != true) {
@@ -412,6 +414,8 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* blo
 		}
 		else {
 			hashmap_put(block->attributes, attribute_key_name, attribute);
+
+			// values->destroy(values);
 		}
 	}
 	else {

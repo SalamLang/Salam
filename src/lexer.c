@@ -768,35 +768,42 @@ void lexer_lex_identifier(lexer_t* lexer, int char_size)
  * @function lexer_lex_string
  * @brief Lexing a string
  * @params {lexer_t*} lexer - Lexer state
+ * @params {int} type - String type (0 = english strings, 1= persian strings)
  * @returns {void}
  * 
  */
-void lexer_lex_string(lexer_t* lexer)
+void lexer_lex_string(lexer_t* lexer, int type)
 {
     DEBUG_ME;
-	// Opening quote is already consumed
-	char* buffer = memory_allocate(256);
-	size_t index = 0;
+    // Opening quote is already consumed
+    size_t buffer_size = 256;
+    size_t index = 0;
+	string_t* value = string_create(25);
 
-	while (LEXER_CURRENT != '"' && LEXER_CURRENT != '\0') {
-		buffer[index++] = LEXER_CURRENT;
-		LEXER_NEXT;
-		LEXER_NEXT_COLUMN;
-	}
-
-	buffer[index] = '\0';
-
-	if (LEXER_CURRENT != '\"') {
-		error_lexer(2, "Unterminated string value at line %zu, column %zu", lexer->line, lexer->column);
-	}
-
-	LEXER_NEXT;
-
-	token_t* token = token_create(TOKEN_STRING, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-	token->data_type = TOKEN_STRING;
-	token->data.string = buffer;
+    int wcl = 0;
+    wchar_t wc = read_token(lexer, &wcl);
 	
-	LEXER_PUSH_TOKEN(token);
+	while (wc != '\0' && ((type == 0 && wc != '"') || (type == 1 && wc != L'»'))) {
+		string_append_wchar(value, wc);
+
+        wc = read_token(lexer, &wcl);
+    }
+
+    if ((type == 0 && wc != L'"') || (type == 1 && wc != L'»')) {
+        error_lexer(2, "Unterminated string value at line %zu, column %zu", lexer->line, lexer->column);
+        string_destroy(value);
+        return;
+    }
+
+    LEXER_NEXT;
+
+    token_t* token = token_create(TOKEN_STRING, (location_t){lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+    token->data_type = TOKEN_STRING;
+    token->data.string = strdup(value->data);
+
+	string_destroy(value);
+
+    LEXER_PUSH_TOKEN(token);
 }
 
 /**
@@ -871,7 +878,7 @@ void lexer_lex(lexer_t* lexer)
 				}
 				continue;
 			case '"':
-				lexer_lex_string(lexer);
+				lexer_lex_string(lexer, 0);
 				continue;
 			
 			case '0': case '1': case '2': case '3': case '4':
@@ -880,13 +887,19 @@ void lexer_lex(lexer_t* lexer)
 				continue;
 
 			default:
-				if (is_wchar_digit(wc)) {
+				if (wc == L'«') {
+					lexer_lex_string(lexer, 1);
+				}
+				else if (is_wchar_digit(wc)) {
 					lexer_lex_number(lexer, wcl);
 				}
 				else if (c == '_' || is_wchar_alpha(wc) || is_char_alpha(c)) {
 					lexer_lex_identifier(lexer, wcl);
 				}
 				else {
+					printf("-->%d\n", c);
+					printf("-->%c\n", c);
+					printf("-->%lc\n", wc);
 					error_lexer(1, "Unknown character '%lc' at line %zu, column %zu", wc, lexer->line, lexer->column);
 				}
 				continue;

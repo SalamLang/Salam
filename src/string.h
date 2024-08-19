@@ -2,9 +2,11 @@
 #define _STRING_H_
 
 #include <stdio.h>
+#include <wchar.h>
+#include <ctype.h>
+#include <locale.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 #include <wctype.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -355,5 +357,16 @@ char convert_to_english_digit(wchar_t ch);
  * 
  */
 void string_number2number(char* str);
+
+/**
+ * 
+ * @function string_append_wchar
+ * @brief Append a wide character to the end of the string
+ * @params {string_t*} str - String
+ * @params {wchar_t} c - Wide character
+ * @returns {void}
+ * 
+ */
+void string_append_wchar(string_t* str, wchar_t c);
 
 #endif

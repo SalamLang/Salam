@@ -9,6 +9,7 @@
 #include "generator.h"
 #include "ast.h"
 #include "ast_layout.h"
+#include "string.h"
 
 /**
  *
@@ -131,44 +132,44 @@ char* generator_code_layout_attribute_style_state_type_to_enduser_name(ast_layou
 char* generator_code_layout_attribute_style_state_type_to_name(ast_layout_attribute_style_state_type type);
 
 /**
- * 
+ *
  * @function generator_code_layout_pseudo_elements
  * @brief Generate the CSS code for the layout block pseudo elements
  * @params {generator_t*} generator - Generator
  * @params {ast_layout_block_t*} block - Layout block
  * @params {size_t*} css_attributes_length - CSS attributes length
  * @returns {string_t*}
- * 
+ *
  */
 string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layout_block_t* block, size_t* css_attributes_length);
 
 /**
- * 
+ *
  * @function generator_code_layout_attribute_style_state_enduser_name_to_type
  * @brief Convert style attribute state enduser name to type
  * @params {char*} name - Name
  * @returns {ast_layout_attribute_style_state_type} type - Type
- * 
+ *
  */
 ast_layout_attribute_style_state_type generator_code_layout_attribute_style_state_enduser_name_to_type(char* name);
 
 /**
- * 
+ *
  * @function generator_code_layout_attribute_style_state_name_to_type
  * @brief Convert style attribute state name to type
  * @params {char*} name - Name
  * @returns {ast_layout_attribute_style_state_type} type - Type
- * 
+ *
  */
 ast_layout_attribute_style_state_type generator_code_layout_attribute_style_state_name_to_type(char* name);
 
 /**
- * 
+ *
  * @function generator_code_layout_attribute_style_state_type_to_generated_name
  * @brief Convert style attribute state type to generated name
  * @params {ast_layout_attribute_style_state_type} type - Style Attribute State Type
  * @returns {char*} name - Name
- * 
+ *
  */
 char* generator_code_layout_attribute_style_state_type_to_generated_name(ast_layout_attribute_style_state_type type);
 

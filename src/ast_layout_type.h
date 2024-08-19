@@ -17,10 +17,10 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FORM, "FORM", "form", "form", "فرم")
 
 // Text Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SPAN, "SPAN", "span", "span", "قطعه")
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_STRONG, "STRONG", "strong", "strong", "پررنگ پیشرفته")
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_STRONG, "STRONG", "strong", "strong", "درشت مهم")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_EM, "EM", "em", "em", "اتیالیک پیشرفته")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ITALIC, "ITALIC", "italic", "i", "ایتالیک")
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BOLD, "BOLD", "bold", "b", "پررنگ")
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BOLD, "BOLD", "bold", "b", "درشت")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_UNDERLINE, "UNDERLINE", "underline", "u", "زیرخط")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SMALL, "SMALL", "small", "small", "کوچک")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BIG, "BIG", "big", "big", "بزرگ")
@@ -32,6 +32,7 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MARK, "MARK", "mark", "mark", "علامتگذا�
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_MARK, "MARK", "mark", "mark", "علامت گذاری")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_Q, "Q", "q", "q", "نقل قول")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_CITE, "CITE", "cite", "cite", "اثر")
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_CITE, "CITE", "cite", "cite", "نقل")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DFN, "DFN", "dfn", "dfn", "اصطلاح")
 
 // Sectioning Elements
@@ -79,8 +80,6 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_COLGROUP, "COLGROUP", "colgroup", "colgroup", "�
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BLOCKQUOTE, "BLOCKQUOTE", "blockquote", "blockquote", "نقل قول بلوکی")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PRE, "PRE", "pre", "pre", "متن پیش‌قالب‌بندی‌شده")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_CODE, "CODE", "code", "code", "کد")
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BR, "BR", "br", "br", "خط بعدی")
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_HR, "HR", "hr", "hr", "خط")
 // ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DEL, "DEL", "del", "del", "حذف شده")
 // ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_INS, "INS", "ins", "ins", "اضافه شده")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ADDRESS, "ADDRESS", "address", "address", "آدرس")
@@ -90,7 +89,7 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_METER, "METER", "meter", "meter", "سنجش")
 
 // Script and Style Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SCRIPT, "SCRIPT", "script", "script", "اسکریپت")
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_STYLE, "STYLE", "style", "style", "استایل")
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_STYLE, "STYLE", "style", "style", "ظاهر")
 
 // Special Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DIV, "DIV", "div", "div", "جعبه")
@@ -99,3 +98,7 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LINK, "LINK", "link", "a", "لینک")
 // Utility Elements
 ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_NONE, "NONE", "none", "layout", "صفحه")
 ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_ERROR, "ERROR", "error", "error", "خطا")
+
+// Single Elements
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BR, "BR", "br", "br", "خط بعدی")
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_HR, "HR", "hr", "hr", "خط")

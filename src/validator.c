@@ -536,6 +536,83 @@ bool validate_style_value_color(hashmap_t* styles, hashmap_t* new_styles, ast_la
 
 /**
  * 
+ * @function validate_style_value_integer
+ * @brief Validate the style value integer
+ * @params {hashmap_t*} styles - Styles
+ * @params {hashmap_t*} new_styles - New styles
+ * @params {ast_layout_attribute_t*} attribute - Layout attribute
+ * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed values 1
+ * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed values 2
+ * @returns {bool} - True if the style value is valid, false otherwise
+ * 
+ */
+bool validate_style_value_integer(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, const ast_layout_attribute_style_pair_t* allowed_values1, const ast_layout_attribute_style_pair_t* allowed_values2)
+{
+	DEBUG_ME;
+	if (styles) {}
+	if (new_styles) {}
+	if (allowed_values1) {}
+	if (allowed_values2) {}
+
+	ast_value_t* first = attribute->values->data[0];
+
+	if (first->type->kind == AST_TYPE_KIND_INT) {
+		attribute->final_value = memory_allocate(20 * sizeof(char));
+		snprintf(attribute->final_value, 20, "%d", first->data.int_value);
+
+		return true;
+	}
+	else if (first->type->kind == AST_TYPE_KIND_FLOAT) {
+		attribute->final_value = memory_allocate(20 * sizeof(char));
+		snprintf(attribute->final_value, 20, "%f", first->data.float_value);
+
+		return true;
+	}
+	else if (first->type->kind == AST_TYPE_KIND_STRING) {
+        char* value = first->data.string_value;
+
+		if (strlen(value) == 0) {
+			return false;
+		}
+
+        if (allowed_values2 != NULL) {
+			size_t i = 0;
+			while (allowed_values2[i].input != NULL) {
+				if (strcmp(value, allowed_values2[i].input) == 0) {
+					attribute->final_value = strdup(allowed_values2[i].output);
+
+					return true;
+				}
+
+				i++;
+			}
+		}
+
+		if (allowed_values1 != NULL) {
+			size_t i = 0;
+			while (allowed_values1[i].input != NULL) {
+				if (strcmp(value, allowed_values1[i].input) == 0) {
+					attribute->final_value = strdup(allowed_values1[i].output);
+
+					return true;
+				}
+
+				i++;
+			}
+        }
+
+		if (string_is_number(value)) {
+			return true;
+		}
+
+		return false;
+	}
+
+	return false;
+}
+
+/**
+ * 
  * @function validate_style_value_percentage
  * @brief Validate the style value percentage
  * @params {hashmap_t*} styles - Styles
@@ -773,6 +850,9 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_PERCENTAGE) { \
 					return validate_style_value_percentage(styles, new_styles, attribute, NULL, values); \
+				} \
+				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_INTEGER) { \
+					return validate_style_value_integer(styles, new_styles, attribute, NULL, values); \
 				} \
 			}\
 			return false;

@@ -557,15 +557,37 @@ bool validate_style_value_percentage(hashmap_t* styles, hashmap_t* new_styles, a
 	ast_value_t* first = attribute->values->data[0];
 
 	if (first->type->kind == AST_TYPE_KIND_INT) {
-		attribute->final_value = memory_allocate(20 * sizeof(char));
-		snprintf(attribute->final_value, 20, "%d", first->data.int_value);
+		if (first->data.int_value <= 0 || first->data.int_value >= 100) {
+			error_validator(2, "Percentage value must be between 0 and 100 for attribute '%s' in '%s' element at line %zu column %zu!", attribute->key, ast_layout_node_type_to_enduser_name(attribute->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
 
-		return true;
+			return false;
+		}
+		else {
+			attribute->final_value = memory_allocate(20 * sizeof(char));
+			snprintf(attribute->final_value, 20, "%.2f", first->data.int_value / 100.0);
+
+			return true;
+		}
+	}
+	else if (first->type->kind == AST_TYPE_KIND_FLOAT) {
+		if (first->data.float_value <= 0 || first->data.float_value >= 1) {
+			error_validator(2, "Percentage value must be between 0 and 100 for attribute '%s' in '%s' element at line %zu column %zu!", attribute->key, ast_layout_node_type_to_enduser_name(attribute->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
+
+			return false;
+		}
+		else {
+			attribute->final_value = memory_allocate(20 * sizeof(char));
+			snprintf(attribute->final_value, 20, "%.2f", first->data.float_value);
+
+			return true;
+		}
 	}
 	else if (first->type->kind == AST_TYPE_KIND_STRING) {
         char* value = first->data.string_value;
 
-		if (strlen(value) == 0) return false;
+		if (strlen(value) == 0) {
+			return false;
+		}
 
         if (allowed_values2 != NULL) {
 			size_t i = 0;
@@ -575,6 +597,7 @@ bool validate_style_value_percentage(hashmap_t* styles, hashmap_t* new_styles, a
 
 					return true;
 				}
+
 				i++;
 			}
 		}
@@ -587,18 +610,25 @@ bool validate_style_value_percentage(hashmap_t* styles, hashmap_t* new_styles, a
 
 					return true;
 				}
+
 				i++;
 			}
         }
 
-		if (string_is_number(value)) {
-			attribute->final_value = strdup(value);
+		// if (string_is_number(value)) {
+		// }
+		// else if (string_is_float(value)) {
+		// }
+		// else if (string_is_percentage(value, false)) {
+		// 	attribute->final_value = strdup(value);
+		// 
+		// 	return true;
+		// }
+		// else {
+		// 	return false;
+		// }
 
-			return true;
-		}
-		else {
-			return false;
-		}
+		return true; // TODO
 	}
 
 	return false;

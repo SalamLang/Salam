@@ -1,11 +1,11 @@
 #include "generator_identifier.h"
 
 /**
- * 
+ *
  * @function generator_identifier_init
  * @params {generator_identifier_t*} gen - Generator Identifier
  * @returns {void}
- * 
+ *
  */
 void generator_identifier_init(generator_identifier_t* gen)
 {
@@ -19,11 +19,11 @@ void generator_identifier_init(generator_identifier_t* gen)
 }
 
 /**
- * 
+ *
  * @function generator_identifier_get
  * @params {generator_identifier_t*} gen - Generator Identifier
  * @returns {char*} identifier - Identifier
- * 
+ *
  */
 char* generator_identifier_get(generator_identifier_t* gen)
 {
@@ -36,7 +36,7 @@ char* generator_identifier_get(generator_identifier_t* gen)
 	for (int i = length - 1; i >= 0; i--) {
 		if (gen->current[i] < 'z') {
 			gen->current[i]++;
-			
+
 			return identifier;
 		}
 
@@ -59,11 +59,11 @@ char* generator_identifier_get(generator_identifier_t* gen)
 }
 
 /**
- * 
+ *
  * @function generator_identifier_destroy
  * @params {generator_identifier_t*} gen - Generator Identifier
  * @returns {void}
- * 
+ *
  */
 void generator_identifier_destroy(generator_identifier_t* gen)
 {
@@ -72,7 +72,7 @@ void generator_identifier_destroy(generator_identifier_t* gen)
 		if (gen->current != NULL) {
 			memory_destroy(gen->current);
 		}
-		
+
 		memory_destroy(gen);
 	}
 }

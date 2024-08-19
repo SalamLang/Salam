@@ -3,7 +3,7 @@
 #include "ast_layout_attribute_style_value.h"
 
 /**
- * 
+ *
  * @var valid_layout_attributes_length
  * @brief Valid layout attributes length
  * @type {size_t}
@@ -11,13 +11,13 @@
 size_t valid_layout_attributes_length = sizeof(valid_layout_attributes) / sizeof(valid_layout_attributes[0]);
 
 /**
- * 
+ *
  * @function has_css_size_prefix
  * @brief Check if the CSS value has a size prefix
  * @params {char*} css_value - CSS value
  * @params {char**} css_output_value - CSS output value
  * @returns {bool} - True if the CSS value has a size prefix, false otherwise
- * 
+ *
  */
 bool has_css_size_prefix(char* css_value, char** css_output_value)
 {
@@ -121,7 +121,8 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 	while (i < len && isspace(css_value[i])) i++;
 
 	for (int j = 0; j < num_prefixes; j++) {
-		size_t prefix_len = strlen(prefixes[j]);
+		size_t prefix_len = strlen(prefixes[j]); // TODO: mb2strlen
+
 		if (len - i == prefix_len && strncmp(css_value + i, prefixes[j], prefix_len) == 0) {
 			string_append_str(buffer, generated_prefixes[j]);
 
@@ -134,7 +135,8 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 	}
 
 	for (int j = 0; j < num_persian_prefixes; j++) {
-		size_t prefix_len = strlen(persian_prefixes[j]);
+		size_t prefix_len = strlen(persian_prefixes[j]); // TODO: mb2strlen
+
 		if (len - i == prefix_len && strncmp(css_value + i, persian_prefixes[j], prefix_len) == 0) {
 			string_append_str(buffer, generated_prefixes[j]);
 
@@ -154,12 +156,12 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 }
 
 /**
- * 
+ *
  * @function normalise_css_size
  * @brief Normalise the CSS size
  * @params {char*} attribute_value - Attribute value
  * @returns {char*} - Normalised CSS size
- * 
+ *
  */
 char* normalise_css_size(char* attribute_value)
 {
@@ -168,7 +170,7 @@ char* normalise_css_size(char* attribute_value)
 		return strdup(attribute_value);
 	}
 
-	size_t value_length = strlen(attribute_value) + 3;
+	size_t value_length = strlen(attribute_value) + 3; // TODO: mb2strlen
 
 	char* res = memory_allocate(value_length * sizeof(char));
 
@@ -178,17 +180,17 @@ char* normalise_css_size(char* attribute_value)
 }
 
 /**
- * 
+ *
  * @function attribute_css_size_value
  * @brief Convert the attribute value to a CSS size value
  * @params {char*} attribute_value - Attribute value
  * @returns {char*} - CSS size value
- * 
+ *
  */
 char* attribute_css_size_value(char* attribute_value)
 {
 	DEBUG_ME;
-	int attribute_value_length = strlen(attribute_value) + 5;
+	int attribute_value_length = strlen(attribute_value) + 5; // mb2strlen
 
 	char* res = memory_allocate(attribute_value_length * sizeof(char));
 
@@ -239,14 +241,14 @@ void validate_layout_block(ast_layout_block_t* block)
 }
 
 /**
- * 
+ *
  * @function is_attribute_type_in_array
  * @brief Check if the attribute type is in the array
  * @params {ast_layout_attribute_type_t} type - Attribute type
  * @params {ast_layout_attribute_type_t*} array - Array of attribute types
  * @params {size_t} array_size - Array size
  * @returns {bool} - True if the attribute type is in the array, false otherwise
- * 
+ *
  */
 bool is_attribute_type_in_array(ast_layout_attribute_type_t type, ast_layout_attribute_type_t* array, size_t array_size)
 {
@@ -256,18 +258,18 @@ bool is_attribute_type_in_array(ast_layout_attribute_type_t type, ast_layout_att
 			return true;
 		}
 	}
-	
+
 	return false;
 }
 
 /**
- * 
+ *
  * @function token_belongs_to_ast_layout_node
  * @brief Check if the token belongs to the AST layout node
  * @params {ast_layout_attribute_type_t} attribute_key_type - Attribute key type
  * @params {ast_layout_attribute_t*} attribute - AST layout attribute
  * @returns {bool} - True if the token belongs to the AST layout node, false otherwise
- * 
+ *
  */
 bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_type, ast_layout_attribute_t* attribute)
 {
@@ -310,12 +312,12 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 }
 
 /**
- * 
+ *
  * @function is_layout_node_a_single_tag
  * @brief Check if the layout node is a single tag
  * @params {ast_layout_node_type_t} type - Layout node type
  * @returns {bool} - True if the layout node is a single tag, false otherwise
- * 
+ *
  */
 bool is_layout_node_a_single_tag(ast_layout_node_type_t type)
 {
@@ -333,12 +335,12 @@ bool is_layout_node_a_single_tag(ast_layout_node_type_t type)
 }
 
 /**
- * 
+ *
  * @function validate_layout_mainbody
  * @brief Validate the layout mainbody
  * @params {ast_layout_block_t*} block - Layout block
  * @returns {void}
- * 
+ *
  */
 void validate_layout_mainbody(ast_layout_block_t* block)
 {
@@ -355,7 +357,7 @@ void validate_layout_mainbody(ast_layout_block_t* block)
 						char* attribute_key = entry->key;
 						ast_layout_attribute_type_t attribute_key_type = name_to_ast_layout_attribute_type(attribute_key);
 						ast_layout_attribute_t* attribute_value = entry->value;
-						
+
 						if (is_attribute_type_in_array(attribute_key_type, valid_layout_attributes, valid_layout_attributes_length)) {
 							attribute_value->ignoreMe = true;
 						}
@@ -369,12 +371,12 @@ void validate_layout_mainbody(ast_layout_block_t* block)
 }
 
 /**
- * 
+ *
  * @function is_style_attribute
  * @brief Check if the attribute type is a CSS attribute
  * @params {ast_layout_attribute_type_t} type - Attribute type
  * @returns {bool} - True if the attribute type is a style, false otherwise
- * 
+ *
  */
 bool is_style_attribute(ast_layout_attribute_type_t type)
 {
@@ -392,12 +394,12 @@ bool is_style_attribute(ast_layout_attribute_type_t type)
 }
 
 /**
- * 
+ *
  * @function is_attribute_type_a_style
  * @brief Check if the attribute type is a style
  * @params {ast_layout_attribute_type_t} type - Attribute type
  * @returns {bool} - True if the attribute type is a style, false otherwise
- * 
+ *
  */
 bool is_attribute_type_a_style(ast_layout_attribute_type_t type)
 {
@@ -413,7 +415,7 @@ bool is_attribute_type_a_style(ast_layout_attribute_type_t type)
 }
 
 /**
- * 
+ *
  * @function validate_style_value_string
  * @brief Validate the style value string
  * @params {hashmap_t*} styles - Styles
@@ -422,7 +424,7 @@ bool is_attribute_type_a_style(ast_layout_attribute_type_t type)
  * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed values 1
  * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed values 2
  * @returns {bool} - True if the style value is valid, false otherwise
- * 
+ *
  */
 bool validate_style_value_string(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, const ast_layout_attribute_style_pair_t* allowed_values1, const ast_layout_attribute_style_pair_t* allowed_values2)
 {
@@ -472,7 +474,7 @@ bool validate_style_value_string(hashmap_t* styles, hashmap_t* new_styles, ast_l
 }
 
 /**
- * 
+ *
  * @function validate_style_value_color
  * @brief Validate the style value color
  * @params {hashmap_t*} styles - Styles
@@ -481,7 +483,7 @@ bool validate_style_value_string(hashmap_t* styles, hashmap_t* new_styles, ast_l
  * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed values 1
  * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed values 2
  * @returns {bool} - True if the style value is valid, false otherwise
- * 
+ *
  */
 bool validate_style_value_color(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, const ast_layout_attribute_style_pair_t* allowed_values1, const ast_layout_attribute_style_pair_t* allowed_values2)
 {
@@ -504,10 +506,11 @@ bool validate_style_value_color(hashmap_t* styles, hashmap_t* new_styles, ast_la
 
 		if (allowed_values2 != NULL) {
 			size_t i = 0;
+			
 			while (allowed_values2[i].input != NULL) {
 				if (strcmp(value, allowed_values2[i].input) == 0) {
 					attribute->final_value = strdup(allowed_values2[i].output);
-					
+
 					return true;
 				}
 				i++;
@@ -531,7 +534,7 @@ bool validate_style_value_color(hashmap_t* styles, hashmap_t* new_styles, ast_la
 }
 
 /**
- * 
+ *
  * @function validate_style_value_integer
  * @brief Validate the style value integer
  * @params {hashmap_t*} styles - Styles
@@ -540,7 +543,7 @@ bool validate_style_value_color(hashmap_t* styles, hashmap_t* new_styles, ast_la
  * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed values 1
  * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed values 2
  * @returns {bool} - True if the style value is valid, false otherwise
- * 
+ *
  */
 bool validate_style_value_integer(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, const ast_layout_attribute_style_pair_t* allowed_values1, const ast_layout_attribute_style_pair_t* allowed_values2)
 {
@@ -608,7 +611,7 @@ bool validate_style_value_integer(hashmap_t* styles, hashmap_t* new_styles, ast_
 }
 
 /**
- * 
+ *
  * @function validate_style_value_percentage
  * @brief Validate the style value percentage
  * @params {hashmap_t*} styles - Styles
@@ -617,7 +620,7 @@ bool validate_style_value_integer(hashmap_t* styles, hashmap_t* new_styles, ast_
  * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed values 1
  * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed values 2
  * @returns {bool} - True if the style value is valid, false otherwise
- * 
+ *
  */
 bool validate_style_value_percentage(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, const ast_layout_attribute_style_pair_t* allowed_values1, const ast_layout_attribute_style_pair_t* allowed_values2)
 {
@@ -694,7 +697,7 @@ bool validate_style_value_percentage(hashmap_t* styles, hashmap_t* new_styles, a
 		// }
 		// else if (string_is_percentage(value, false)) {
 		// 	attribute->final_value = strdup(value);
-		// 
+		//
 		// 	return true;
 		// }
 		// else {
@@ -708,7 +711,7 @@ bool validate_style_value_percentage(hashmap_t* styles, hashmap_t* new_styles, a
 }
 
 /**
- * 
+ *
  * @function validate_style_value_size
  * @brief Validate the style value size
  * @params {hashmap_t*} styles - Styles
@@ -717,7 +720,7 @@ bool validate_style_value_percentage(hashmap_t* styles, hashmap_t* new_styles, a
  * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed values 1
  * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed values 2
  * @returns {bool} - True if the style value is valid, false otherwise
- * 
+ *
  */
 bool validate_style_value_size(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, const ast_layout_attribute_style_pair_t* allowed_values1, const ast_layout_attribute_style_pair_t* allowed_values2)
 {
@@ -765,14 +768,14 @@ bool validate_style_value_size(hashmap_t* styles, hashmap_t* new_styles, ast_lay
 }
 
 /**
- * 
+ *
  * @function validate_style_value_sizes
  * @brief Validate the style value sizes
  * @params {hashmap_t*} styles - Styles
  * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
  * @returns {bool} - True if the style value is valid, false otherwise
- * 
+ *
  */
 bool validate_style_value_sizes(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute)
 {
@@ -785,14 +788,14 @@ bool validate_style_value_sizes(hashmap_t* styles, hashmap_t* new_styles, ast_la
 }
 
 /**
- * 
+ *
  * @function validate_style_value
  * @brief Validate the style value
  * @params {hashmap_t*} styles - Styles
  * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
  * @returns {bool} - True if the style value is valid, false otherwise
- * 
+ *
  */
 bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute)
 {
@@ -802,7 +805,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 
 	if (attribute->values->length < 1) {
 		error_validator(2, "Style value is missing in '%s' element", ast_layout_node_type_to_enduser_name(attribute->parent_node_type));
-		
+
 		return false;
 	}
 	else if (first->type->kind == AST_TYPE_KIND_STRING && strlen(first->data.string_value) == 0) {
@@ -841,6 +844,9 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING) { \
 					return validate_style_value_string(styles, new_styles, attribute, NULL, values); \
 				} \
+				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY) { \
+					return true; \
+				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE) { \
 					return validate_style_value_size(styles, new_styles, attribute, NULL, values); \
 				} \
@@ -852,7 +858,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 				} \
 			}\
 			return false;
-		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) 
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS)
 
 		#include "ast_layout_attribute_style_type.h"
 	}

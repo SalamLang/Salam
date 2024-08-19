@@ -22,11 +22,11 @@
 #define LEXER_PUSH_TOKEN(TOKEN) array_push(lexer->tokens, TOKEN)
 
 /**
- * 
+ *
  * @variable token_names
  * @brief Token names
  * @type {token_name_t[]}
- * 
+ *
  */
 token_name_t token_names[] = {
 	#undef ADD_TOKEN
@@ -43,11 +43,11 @@ token_name_t token_names[] = {
 };
 
 /**
- * 
+ *
  * @variable keywords
  * @brief Keywords
  * @type {keyword_t[]}
- * 
+ *
  */
 const keyword_t keywords[] = {
 	#undef ADD_TOKEN
@@ -55,8 +55,8 @@ const keyword_t keywords[] = {
 	#undef ADD_KEYWORD
 	#undef ADD_KEYWORD_HIDE
 
-	#define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE) 
-	#define ADD_CHAR_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR) 
+	#define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE)
+	#define ADD_CHAR_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR)
 	#define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) {.length=TOKEN_VALUE_LENGTH, .type=TOKEN_TYPE, .name=TOKEN_NAME, .keyword=TOKEN_VALUE},
 	#define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) {.length=TOKEN_VALUE_LENGTH, .type=TOKEN_TYPE, .name=TOKEN_NAME, .keyword=TOKEN_VALUE},
 
@@ -96,12 +96,12 @@ wchar_t read_token(lexer_t* lexer, int* wcl)
 }
 
 /**
- * 
+ *
  * @function is_english_digit
  * @brief Check if the character is an English digit
  * @params {wchar_t} ch - Character
  * @returns {bool} - True if the character is an English digit, false otherwise
- * 
+ *
  */
 bool is_english_digit(wchar_t ch)
 {
@@ -111,12 +111,12 @@ bool is_english_digit(wchar_t ch)
 }
 
 /**
- * 
+ *
  * @function is_persian_digit
  * @brief Check if the character is a Persian digit
  * @params {wchar_t} ch - Character
  * @returns {bool} - True if the character is a Persian digit, false otherwise
- * 
+ *
  */
 bool is_persian_digit(wchar_t ch)
 {
@@ -127,12 +127,12 @@ bool is_persian_digit(wchar_t ch)
 }
 
 /**
- * 
+ *
  * @function is_arabic_digit
  * @brief Check if the character is an Arabic digit
  * @params {wchar_t} ch - Character
  * @returns {bool} - True if the character is an Arabic digit, false otherwise
- * 
+ *
  */
 bool is_arabic_digit(wchar_t ch)
 {
@@ -142,13 +142,13 @@ bool is_arabic_digit(wchar_t ch)
 }
 
 /**
- * 
+ *
  * @function string_is_percentage
  * @brief Check if the string is a percentage
  * @params {const char*} value - Value
  * @params {bool} acceptSign - Accept sign
  * @returns {bool} - True if the string is a percentage
- * 
+ *
  */
 bool string_is_percentage(const char* value, bool acceptSign)
 {
@@ -197,12 +197,12 @@ bool string_is_percentage(const char* value, bool acceptSign)
 }
 
 /**
- * 
+ *
  * @function string_is_number
  * @brief Check if the string is a number
  * @params {const char*} value - Value
  * @returns {bool} - True if the string is a number, false otherwise
- * 
+ *
  */
 bool string_is_number(const char* value)
 {
@@ -246,13 +246,13 @@ bool string_is_number(const char* value)
 }
 
 /**
- * 
+ *
  * @function token_create
  * @brief Creating a new token
  * @params {token_type_t} type - Token type
  * @params {location_t} location - Token location
  * @returns {token_t*}
- * 
+ *
  */
 token_t* token_create(token_type_t type, location_t location)
 {
@@ -268,17 +268,17 @@ token_t* token_create(token_type_t type, location_t location)
 	token->print = token_print;
 	token->stringify = token_stringify;
 	token->destroy = token_destroy;
-		
+
 	return token;
 }
 
 /**
- * 
+ *
  * @function token_copy
  * @brief Copying a token
  * @params {token_t*} token - Token
  * @returns {token_t*}
- * 
+ *
  */
 token_t* token_copy(token_t* token)
 {
@@ -290,22 +290,22 @@ token_t* token_copy(token_t* token)
 		case TOKEN_NUMBER_INT:
 			copy->data.number_int = token->data.number_int;
 			break;
-		
+
 		case TOKEN_NUMBER_FLOAT:
 			copy->data.number_float = token->data.number_float;
 			break;
-		
+
 		case TOKEN_STRING:
 		case TOKEN_IDENTIFIER:
 			if (token->data.string != NULL) {
 				copy->data.string = strdup(token->data.string);
 			}
 			break;
-		
+
 		case TOKEN_BOOLEAN:
 			copy->data.boolean = token->data.boolean;
 			break;
-		
+
 		default:
 			break;
 	}
@@ -314,12 +314,12 @@ token_t* token_copy(token_t* token)
 }
 
 /**
- * 
+ *
  * @function token_destroy
  * @brief Destroying a token
  * @params {token_t*} token - Token
  * @returns {void}
- * 
+ *
  */
 void token_destroy(token_t* token)
 {
@@ -336,12 +336,12 @@ void token_destroy(token_t* token)
 }
 
 /**
- * 
+ *
  * @function token_type_stringify
  * @brief Get the name of a token type
  * @params {token_type_t} type - Token type
  * @returns {char*}
- * 
+ *
  */
 const char* token_type_stringify(token_type_t type)
 {
@@ -364,12 +364,12 @@ const char* token_type_stringify(token_type_t type)
 }
 
 /**
- * 
+ *
  * @function token_char_type
  * @brief Get the type of a character
  * @params {char} c - Character
  * @returns {token_type_t}
- * 
+ *
  */
 token_type_t token_char_type(char c)
 {
@@ -380,9 +380,9 @@ token_type_t token_char_type(char c)
 		#undef ADD_KEYWORD
 		#undef ADD_KEYWORD_HIDE
 
-		#define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE) 
+		#define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE)
 		#define ADD_CHAR_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR) case TOKEN_CHAR: return TOKEN_TYPE;
-		#define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) 
+		#define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH)
 		#define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH)
 
 		#include "token.h"
@@ -392,12 +392,12 @@ token_type_t token_char_type(char c)
 }
 
 /**
- * 
+ *
  * @function token_stringify
  * @brief Get the name & value & location of a token as a string
  * @params {token_t*} token - Token
  * @returns {char*} - String representation of the token
- * 
+ *
  */
 char* token_stringify(token_t* token)
 {
@@ -413,12 +413,12 @@ char* token_stringify(token_t* token)
 }
 
 /**
- * 
+ *
  * @function token_print
  * @brief Print a token
  * @params {token_t*} token - Token
  * @returns {void}
- * 
+ *
  */
 void token_print(token_t* token)
 {
@@ -428,12 +428,12 @@ void token_print(token_t* token)
 }
 
 /**
- * 
+ *
  * @function token_name
  * @brief Get the name of a token
  * @params {token_type_t} Token type
  * @returns {char*}
- * 
+ *
  */
 char* token_name(token_type_t type)
 {
@@ -447,7 +447,7 @@ char* token_name(token_type_t type)
 		#define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE) case TOKEN_TYPE: return TOKEN_NAME;
 		#define ADD_CHAR_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR) case TOKEN_TYPE: return TOKEN_NAME;
 		#define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) case TOKEN_TYPE: return TOKEN_NAME;
-		#define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) 
+		#define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH)
 
 		#include "token.h"
 	}
@@ -456,12 +456,12 @@ char* token_name(token_type_t type)
 }
 
 /**
- * 
+ *
  * @function token_type_keyword
  * @brief Get the keyword of a token type
  * @params {token_type_t} Token type
  * @returns {char*}
- * 
+ *
  */
 char* token_type_keyword(token_type_t type)
 {
@@ -475,7 +475,7 @@ char* token_type_keyword(token_type_t type)
 		#define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE) case TOKEN_TYPE: return TOKEN_VALUE;
 		#define ADD_CHAR_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR) case TOKEN_TYPE: return TOKEN_VALUE;
 		#define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) case TOKEN_TYPE: return TOKEN_VALUE;
-		#define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) 
+		#define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH)
 
 		#include "token.h"
 	}
@@ -484,12 +484,12 @@ char* token_type_keyword(token_type_t type)
 }
 
 /**
- * 
+ *
  * @function token_value_stringify
- * @brief Get the value of a token 
+ * @brief Get the value of a token
  * @params {token_t*} Token
  * @returns {char*}
- * 
+ *
  */
 char* token_value_stringify(token_t* token)
 {
@@ -520,13 +520,13 @@ char* token_value_stringify(token_t* token)
 }
 
 /**
- * 
+ *
  * @function lexer_create
  * @brief Creating a new lexer state
  * @params {char*} file_path - File path
  * @params {char*} source - Source code
  * @returns {lexer_t*}
- * 
+ *
  */
 lexer_t* lexer_create(const char* file_path, char* source)
 {
@@ -536,13 +536,14 @@ lexer_t* lexer_create(const char* file_path, char* source)
 	lexer->file_path = file_path;
 	lexer->source = source;
 	lexer->source_size = 0;
+	// lexer->source_length = mb2strlen(lexer->source);
 	lexer->source_length = strlen(lexer->source);
 	lexer->index = 0;
 	lexer->line = 1;
 	lexer->column = 1;
 
 	lexer->tokens = array_create(sizeof(token_t*), 10);
-	
+
 	lexer->tokens->print = cast(void (*)(void*), array_token_print);
 	lexer->tokens->stringify = cast(char* (*)(void*), array_token_stringify);
 	lexer->tokens->destroy = cast(void (*)(void*), array_token_destroy);
@@ -556,31 +557,31 @@ lexer_t* lexer_create(const char* file_path, char* source)
 }
 
 /**
- * 
+ *
  * @function lexer_destroy
  * @brief Destroying a lexer state
  * @params {lexer_t*} lexer - Lexer state
  * @returns {void}
- * 
+ *
  */
 void lexer_destroy(lexer_t* lexer)
 {
 	DEBUG_ME;
 	if (lexer != NULL) {
 		array_destroy_custom(lexer->tokens, cast(void (*)(void*), token_destroy));
-		
+
 		memory_destroy(lexer);
 	}
 }
 
 /**
- * 
+ *
  * @function lexer_save
  * @brief Saving the lexer state
  * @params {lexer_t*} lexer - Lexer state
  * @params {const char*} tokens_output - Tokens output file
  * @returns {void}
- * 
+ *
  */
 void lexer_save(lexer_t* lexer, const char* tokens_output)
 {
@@ -615,12 +616,12 @@ void lexer_save(lexer_t* lexer, const char* tokens_output)
 }
 
 /**
- * 
+ *
  * @function lexer_debug
  * @brief Debugging the lexer state
  * @params {lexer_t*} lexer - Lexer state
  * @returns {void}
- * 
+ *
  */
 void lexer_debug(lexer_t* lexer)
 {
@@ -638,12 +639,12 @@ void lexer_debug(lexer_t* lexer)
 }
 
 /**
- * 
+ *
  * @function location_string
  * @brief Get the string representation of a location
  * @params {location_t} location - Location
  * @returns {char*}
- * 
+ *
  */
 char* location_stringify(location_t location)
 {
@@ -655,12 +656,12 @@ char* location_stringify(location_t location)
 }
 
 /**
- * 
+ *
  * @function location_print
  * @brief Print a location
  * @params {location_t} location - Location
  * @returns {void}
- * 
+ *
  */
 void location_print(location_t location)
 {
@@ -669,14 +670,14 @@ void location_print(location_t location)
 }
 
 /**
- * 
+ *
  * @function lexer_lex_number
  * @brief Lexing a number
  * @params {lexer_t*} lexer - Lexer state
  * @params {wchar_t} wc - wide character
  * @params {int} char_size - Character size
  * @returns {void}
- * 
+ *
  */
 void lexer_lex_number(lexer_t* lexer, wchar_t wc, int wcl)
 {
@@ -712,7 +713,7 @@ void lexer_lex_number(lexer_t* lexer, wchar_t wc, int wcl)
 	token_type_t type = is_float ? TOKEN_NUMBER_FLOAT : TOKEN_NUMBER_INT;
 	token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
 	token->data_type = type;
-	
+
 	if (is_float) {
 		token->data.number_float = atof(value->data);
 	}
@@ -726,21 +727,23 @@ void lexer_lex_number(lexer_t* lexer, wchar_t wc, int wcl)
 }
 
 /**
- * 
+ *
  * @function type_keyword
  * @brief Check if a string is a keyword then return the token type
  * @params {const char*} string - String
  * @returns {bool}
- * 
+ *
  */
 token_type_t type_keyword(const char* string)
 {
 	DEBUG_ME;
-	size_t length = strlen(string);
+	// size_t length = strlen(string);
+
 	for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
-		printf("type_keyword => %zu - %zu and %s - %s\n", length, keywords[i].length, string, keywords[i].keyword);
-		
-		if (keywords[i].length == length && strcmp(string, keywords[i].keyword) == 0) {
+		printf("type_keyword => %zu - %zu and %s - %s\n", 0, keywords[i].length, string, keywords[i].keyword);
+
+		// if (keywords[i].length == length && strcmp(string, keywords[i].keyword) == 0) {
+		if (strcmp(string, keywords[i].keyword) == 0) {
 			return keywords[i].type;
 		}
 	}
@@ -787,14 +790,14 @@ bool is_alpha(wchar_t ch)
 }
 
 /**
- * 
+ *
  * @function lexer_lex_identifier
  * @brief Lexing an identifier
  * @params {lexer_t*} lexer - Lexer state
  * @params {wchar_t} wc - wide character
  * @params {int} wcl - Wide character length
  * @returns {void}
- * 
+ *
  */
 void lexer_lex_identifier(lexer_t* lexer, wchar_t* wc, int char_size)
 {
@@ -822,26 +825,31 @@ void lexer_lex_identifier(lexer_t* lexer, wchar_t* wc, int char_size)
 		string_append_wchar(value, wcn);
 	}
 
-	printf("AFTER LEX IDENTIFIER => %lc\n", *wc);
+	printf("AFTER LEX IDENTIFIER\n");
 
+	printf("1\n");
 	token_type_t type = type_keyword(value->data);
+	printf("2\n");
 	token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
 	token->data_type = TOKEN_IDENTIFIER;
+	printf("3\n");
 	token->data.string = strdup(value->data);
+	printf("4\n");
 
 	string_destroy(value);
+	printf("5\n");
 
 	LEXER_PUSH_TOKEN(token);
 }
 
 /**
- * 
+ *
  * @function lexer_lex_string
  * @brief Lexing a string
  * @params {lexer_t*} lexer - Lexer state
  * @params {int} type - String type (0 = english strings, 1= persian strings, 2= second persian strings)
  * @returns {void}
- * 
+ *
  */
 void lexer_lex_string(lexer_t* lexer, int type)
 {
@@ -851,13 +859,13 @@ void lexer_lex_string(lexer_t* lexer, int type)
 
 	int wcl = 0;
 	wchar_t wc = read_token(lexer, &wcl);
-	
+
 	while (wc != L'\0' && ((type == 0 && wc != L'"') || (type == 1 && wc != L'»') || (type == 2 && wc == L'”'))) {
 		string_append_wchar(value, wc);
 
 		wc = read_token(lexer, &wcl);
 	}
-	
+
 	if ((type == 0 && wc != L'"') || (type == 1 && wc != L'»') || (type == 2 && wc != L'”')) {
 		string_destroy(value);
 
@@ -869,19 +877,19 @@ void lexer_lex_string(lexer_t* lexer, int type)
 	token_t* token = token_create(TOKEN_STRING, (location_t){lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
 	token->data_type = TOKEN_STRING;
 	token->data.string = strdup(value->data);
-	
+
 	string_destroy(value);
 
 	LEXER_PUSH_TOKEN(token);
 }
 
 /**
- * 
+ *
  * @function lexer_lex
  * @brief Lexing the source code
  * @params {lexer_t*} lexer - Lexer state
  * @returns {void}
- * 
+ *
  */
 void lexer_lex(lexer_t* lexer)
 {
@@ -889,7 +897,7 @@ void lexer_lex(lexer_t* lexer)
 	char c;
 	wchar_t wc;
 	int wcl = 0;
-	
+
 	while ((c = LEXER_CURRENT) && c != '\0' && lexer->index < lexer->source_length) {
 		printf("%zu - %zu\n", lexer->index, lexer->source_length);
 
@@ -904,13 +912,13 @@ void lexer_lex(lexer_t* lexer)
 			// End of file
 			case '\0':
 				break;
-			
+
 			// New line
 			case '\n':
 				LEXER_NEXT_LINE;
 				LEXER_ZERO_COLUMN;
 				continue;
-			
+
 			case '\a': // Alert
 			case '\b': // Backspace
 			case '\f': // Form feed
@@ -919,7 +927,7 @@ void lexer_lex(lexer_t* lexer)
 			case '\v': // Vertical tab
 			case ' ': // Space
 				continue;
-			
+
 			case '{':
 			case '}':
 			case '[':
@@ -960,12 +968,12 @@ void lexer_lex(lexer_t* lexer)
 				lexer_lex_string(lexer, 0);
 				printf("end lexer_lex_string\n");
 				continue;
-			
+
 			case '0': case '1': case '2': case '3': case '4':
 			case '5': case '6': case '7': case '8': case '9':
 				lexer_lex_number(lexer, wc, wcl);
 				continue;
-			
+
 			default:
 				if (wc == L'«') {
 					printf("call lexer_lex_string\n");
@@ -989,8 +997,8 @@ void lexer_lex(lexer_t* lexer)
 				continue;
 		}
 	}
-	
+
 	token_t* token = token_create(TOKEN_EOF, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-	
+
 	LEXER_PUSH_TOKEN(token);
 }

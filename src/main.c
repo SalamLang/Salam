@@ -30,7 +30,10 @@ void doargs(int argc, char** argv)
 	size_t size = 0;
 	char* content = file_reads(path, &size);
 
+	printf("LEXER SIZE: %zu\n", size);
+
 	lexer_t* lexer = lexer_create(path, content);
+	lexer->source_size = size;
 	lexer_lex(lexer);
 
 	lexer_debug(lexer);
@@ -82,6 +85,8 @@ int main(int argc, char** argv)
 {
 	DEBUG_ME;
     setlocale(LC_ALL, "");
+    // setlocale(LC_ALL, "fa_IR.UTF-8");
+    // setlocale(LC_ALL, "en_US.UTF-8");
 
 	doargs(argc, argv);
 

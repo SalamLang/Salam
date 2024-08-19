@@ -832,7 +832,7 @@ void ast_value_destroy(ast_value_t* value)
 		if (value->type != NULL) {
 			value->type->destroy(value->type);
 		}
-
+		
 		if (value->data.string_value != NULL) {
 			memory_destroy(value->data.string_value);
 		}

@@ -2,7 +2,7 @@
 
 // Paragraph Types
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PARAGRAPH, "PARAGRAPH", "paragraph", "p", "پراراگراف")
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PARAGRAPH_RAW, "PARAGRAPH_RAW", "paragraph_raw", "", "")
+ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_PARAGRAPH_RAW, "PARAGRAPH_RAW", "paragraph_raw", "content", "محتوا")
 
 // Form Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BUTTON, "BUTTON", "button", "button", "دکمه")
@@ -29,6 +29,7 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SUP, "SUP", "sup", "sup", "رویین")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_S, "S", "s", "s", "s")
 // ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_CENTER, "CENTER", "center", "center", "مرکز")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MARK, "MARK", "mark", "mark", "علامتگذاری")
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_MARK, "MARK", "mark", "mark", "علامت گذاری")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_Q, "Q", "q", "q", "نقل قول")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_CITE, "CITE", "cite", "cite", "اثر")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DFN, "DFN", "dfn", "dfn", "اصطلاح")
@@ -96,5 +97,5 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DIV, "DIV", "div", "div", "جعبه")
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LINK, "LINK", "link", "a", "لینک")
 
 // Utility Elements
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_NONE, "NONE", "none", "layout", "")
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ERROR, "ERROR", "error", "error", "")
+ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_NONE, "NONE", "none", "layout", "صفحه")
+ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_ERROR, "ERROR", "error", "error", "خطا")

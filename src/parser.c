@@ -215,7 +215,8 @@ ast_value_t* parser_parse_value(lexer_t* lexer)
  * @returns {ast_value_t*} - AST Layout attribute value
  *
  */
-ast_value_t* parser_parse_layout_value(lexer_t* lexer)
+ast_value_t* 
+parser_parse_layout_value(lexer_t* lexer)
 {
 	DEBUG_ME;
 	return parser_parse_value(lexer);
@@ -321,6 +322,14 @@ void parser_parse_layout_block_style_state(ast_layout_block_t* block, lexer_t* l
 	expect_close_block(lexer);
 }
 
+/**
+ * 
+ * @function parser_parse_layout_values
+ * @brief Parse the layout values
+ * @params {lexer_t*} lexer - Lexer
+ * @returns {array_value_t*} - Array of AST values
+ * 
+ */
 array_value_t* parser_parse_layout_values(lexer_t* lexer)
 {
 	array_value_t* values = array_value_create(1);
@@ -371,9 +380,12 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* blo
 
 	ast_layout_attribute_type_t attribute_key_type = token_to_ast_layout_attribute_type(name, last_name, block->parent_node_type);
 
-	ast_layout_attribute_t* attribute = ast_layout_attribute_create(attribute_key_type, name, values, block->parent_node_type, last_name->location, first_value->location);
+	token_t* new_last_name = PARSER_CURRENT; // TODO
+
+	ast_layout_attribute_t* attribute = ast_layout_attribute_create(attribute_key_type, name, values, block->parent_node_type, new_last_name->location, first_value->location);
 	if (!token_belongs_to_ast_layout_node(attribute_key_type, attribute)) {
 		attribute->destroy(attribute);
+		values->destroy(values);
 
 		error_parser(2, "Attribute '%s' does not belong to node '%s' at line %d, column %d", name, ast_layout_node_type_to_enduser_name(block->parent_node_type), last_name->location.end_line, last_name->location.end_column);
 	}
@@ -382,7 +394,8 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* blo
 	
 	if (is_style_attribute(attribute_key_type)) {
 		if (hashmap_has(normal, attribute_key_name)) {
-			// attribute->destroy(attribute);
+			attribute->destroy(attribute);
+			values->destroy(values);
 
 			error_parser(2, "Style attribute '%s' already defined in the '%s' block at line %d, column %d", attribute_key_name, ast_layout_node_type_to_enduser_name(block->parent_node_type), last_name->location.end_line, last_name->location.end_column);
 		}
@@ -392,7 +405,8 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* blo
 	}
 	else if (onlyStyle != true) {
 		if (hashmap_has(block->attributes, attribute_key_name)) {
-			// attribute->destroy(attribute);
+			attribute->destroy(attribute);
+			values->destroy(values);
 
 			error_parser(2, "Attribute '%s' already defined in the '%s' block at line %d, column %d", attribute_key_name, ast_layout_node_type_to_enduser_name(block->parent_node_type), last_name->location.end_line, last_name->location.end_column);
 		}
@@ -401,6 +415,9 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* blo
 		}
 	}
 	else {
+		attribute->destroy(attribute);
+		values->destroy(values);
+		
 		error_parser(2, "Attribute '%s' is not a style attribute at line %d, column %d", attribute_key_name, last_name->location.end_line, last_name->location.end_column);
 	}
 }

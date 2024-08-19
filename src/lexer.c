@@ -3,16 +3,19 @@
 #define LEXER_CURRENT (lexer->source[lexer->index])
 #define LEXER_CURRENT_PREV (lexer->source[lexer->index - 1])
 #define LEXER_CURRENT_NEXT (lexer->source[lexer->index + 1])
+
 #define LEXER_NEXT lexer->index++
 #define LEXER_PREV lexer->index--
 
 #define LEXER_NEXT_LINE lexer->line++
 #define LEXER_NEXT_COLUMN lexer->column++
+
 #define LEXER_ZERO_COLUMN lexer->column = 0
 
 #define LEXER_CURRENT_UTF8 (utf8_decode(lexer->source, &lexer->index))
 #define LEXER_CURRENT_PREV_UTF8 (utf8_decode(lexer->source, &lexer->index - 1))
 #define LEXER_CURRENT_NEXT_UTF8 (utf8_decode(lexer->source, &lexer->index + 1))
+
 #define LEXER_NEXT_UTF8 lexer->index += utf8_char_length(lexer->source[lexer->index])
 #define LEXER_PREV_UTF8 lexer->index -= utf8_char_length(lexer->source[lexer->index])
 
@@ -882,10 +885,14 @@ void lexer_lex(lexer_t* lexer)
 
 	while ((c = LEXER_CURRENT) && c != '\0') {
 		wc = read_token(lexer, &wcl);
+		printf("Current: %lc\n", wc);
+		printf("Current char: %c\n", c);
+		printf("Current char ascii: %d\n", c);
 
 		switch (c) {
-			case '\0': // End of file
-			case -1: // End of file
+			// End of file
+			case 0:
+			case -1:
 				break;
 			
 			case '\n': // New line

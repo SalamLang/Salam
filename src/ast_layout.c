@@ -357,7 +357,12 @@ ast_layout_node_type_t name_to_ast_layout_node_type(char* name)
 	ast_layout_node_type_t type = AST_LAYOUT_TYPE_ERROR;
 
     #undef ADD_LAYOUT_TYPE
+	#undef ADD_LAYOUT_TYPE_HIDE
+	#undef ADD_LAYOUT_TYPE_REPEAT
+
 	#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME) == 0) { type = TYPE; return type; }
+	#define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME) == 0) { type = TYPE; return type; }
+	#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME) == 0) { type = TYPE; return type; }
 
 	if (false) {}
 	#include "ast_layout_type.h"
@@ -379,7 +384,12 @@ ast_layout_node_type_t enduser_name_to_ast_layout_node_type(char* name)
 	ast_layout_node_type_t type = AST_LAYOUT_TYPE_ERROR;
 
     #undef ADD_LAYOUT_TYPE
+	// #undef ADD_LAYOUT_TYPE_HIDE
+	#undef ADD_LAYOUT_TYPE_REPEAT
+
 	#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
+	// #define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
+	#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
 
 	if (false) {}
 	#include "ast_layout_type.h"
@@ -424,9 +434,17 @@ char* ast_layout_node_type_to_name(ast_layout_node_type_t type)
     DEBUG_ME;
 	switch (type) {
 		#undef ADD_LAYOUT_TYPE
+	    #undef ADD_LAYOUT_TYPE_HIDE
+		#undef ADD_LAYOUT_TYPE_REPEAT
+		// #undef ADD_LAYOUT_ATTRIBUTE_TYPE
+
 		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return NAME;
+		#define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return NAME;
+		#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
+		// #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return NAME;
 
 		#include "ast_layout_type.h"
+		// #include "ast_layout_attribute_type.h"
 	}
 
 	return "error!!!";
@@ -445,9 +463,13 @@ char* ast_layout_node_type_to_enduser_name(ast_layout_node_type_t type)
     DEBUG_ME;
 	switch (type) {
 		#undef ADD_LAYOUT_TYPE
-	    // #undef ADD_LAYOUT_ATTRIBUTE_TYPE
+	    #undef ADD_LAYOUT_TYPE_HIDE
+		#undef ADD_LAYOUT_TYPE_REPEAT
+		// #undef ADD_LAYOUT_ATTRIBUTE_TYPE
 
 		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return ENDUSER_NAME;
+		#define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return ENDUSER_NAME;
+		#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
 		// #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return ENDUSER_NAME;
 
 		#include "ast_layout_type.h"
@@ -774,7 +796,8 @@ bool ast_layout_style_state_has_any_sub_value(ast_layout_style_state_t* value)
 bool ast_layout_attribute_has_any_sub_value(ast_layout_attribute_t* value)
 {
 	DEBUG_ME;
-	if (value->values != NULL && value->values->length > 0 && value->final_key != NULL && value->final_value != NULL) {
+	// if (value->values != NULL && value->values->length > 0 && value->final_key != NULL && value->final_value != NULL) {
+	if (value->values != NULL && value->values->length > 0) {
 		return true;
 	}
 

@@ -761,7 +761,7 @@ array_value_t* array_value_create(size_t capacity)
 {
     DEBUG_ME;
     array_value_t* array = array_create(sizeof(ast_value_t*), capacity);
-
+    
     array->print = cast(void (*)(void*), array_value_print);
     array->destroy = cast(void (*)(void*), array_value_destroy);
     

@@ -1,13 +1,13 @@
 #include "ast.h"
 
 /**
- * 
+ *
  * @function ast_node_create
  * @brief Create a new AST node
  * @params {ast_type_t} type - Type of the AST node
  * @params {location_t} location - Location of the AST node
  * @returns {ast_node_t*} - Pointer to the created AST node
- * 
+ *
  */
 ast_node_t* ast_node_create(ast_type_t type, location_t location)
 {
@@ -18,17 +18,17 @@ ast_node_t* ast_node_create(ast_type_t type, location_t location)
 
 	node->print = cast(void (*)(void*), ast_node_print);
 	node->destroy = cast(void (*)(void*), ast_node_destroy);
-	
+
 	return node;
 }
 
 /**
- * 
+ *
  * @function ast_node_destroy_notall
  * @brief Free the AST node (not all)
  * @params {ast_node_t*} value - AST node
  * @returns {void}
- * 
+ *
  */
 void ast_node_destroy_notall(ast_node_t* value)
 {
@@ -39,12 +39,12 @@ void ast_node_destroy_notall(ast_node_t* value)
 }
 
 /**
- * 
+ *
  * @function ast_node_destroy
  * @brief Free the AST node
  * @params {ast_node_t*} value - AST node
  * @returns {void}
- * 
+ *
  */
 void ast_node_destroy(ast_node_t* value)
 {
@@ -54,23 +54,23 @@ void ast_node_destroy(ast_node_t* value)
 			case AST_TYPE_IMPORT:
 				value->data.import->destroy(value->data.import);
 				break;
-			
+
 			case AST_TYPE_FUNCTION:
 				value->data.function->destroy(value->data.function);
 				break;
-			
+
 			case AST_TYPE_BLOCK:
 				value->data.block->destroy(value->data.block);
 				break;
-			
+
 			case AST_TYPE_LAYOUT:
 				value->data.layout->destroy(value->data.layout);
 				break;
-			
+
 			case AST_TYPE_RETURN:
 				value->data.returns->destroy(value->data.returns);
 				break;
-			
+
 			case AST_TYPE_IF:
 			case AST_TYPE_ELSE_IF:
 				value->data.ifclause->destroy(value->data.ifclause);
@@ -89,13 +89,13 @@ void ast_node_destroy(ast_node_t* value)
 }
 
 /**
- * 
+ *
  * @function ast_value_create
  * @brief Create a new AST node layout attribute value
  * @params {ast_value_type_t*} type - Type of the layout attribute value
  * @params {void*} value - Value of the layout attribute value
  * @returns {ast_value_t*} - Pointer to the created AST node layout attribute value
- * 
+ *
  */
 ast_value_t* ast_value_create(ast_value_type_t* type, void* value)
 {
@@ -107,7 +107,9 @@ ast_value_t* ast_value_create(ast_value_type_t* type, void* value)
 
 	if (type->kind == AST_TYPE_KIND_STRING) {
 		size_t value_size = value_length < 1 ? 1 : value_length + 1;
+
 		res->data.string_value = memory_allocate(value_size);
+		
 		memcpy(res->data.string_value, value, value_size);
 	}
 
@@ -119,12 +121,12 @@ ast_value_t* ast_value_create(ast_value_type_t* type, void* value)
 }
 
 /**
- * 
+ *
  * @function ast_value_data
  * @brief Get the string of the AST layout attribute value
  * @params {ast_value_t*} value - AST layout attribute value
  * @returns {char*} - String of the AST layout attribute value
- * 
+ *
  */
 char* ast_value_data(ast_value_t* value)
 {
@@ -137,13 +139,13 @@ char* ast_value_data(ast_value_t* value)
 }
 
 /**
- * 
+ *
  * @function ast_block_create
  * @brief Create a new AST block node
  * @params {ast_block_type_t} type - Block type
  * @params {ast_type_t} parent_type - Parent type
  * @returns {ast_block_t*} - AST block node
- * 
+ *
  */
 ast_block_t* ast_block_create(ast_block_type_t type, ast_type_t parent_type)
 {
@@ -164,12 +166,12 @@ ast_block_t* ast_block_create(ast_block_type_t type, ast_type_t parent_type)
 }
 
 /**
- * 
+ *
  * @function ast_print_create
  * @brief Create a new AST node print
  * @params {array_value_t*} values - Values of the print
  * @returns {ast_print_t*} - Pointer to the created AST node if
- * 
+ *
  */
 ast_print_t* ast_print_create(array_value_t* values)
 {
@@ -185,12 +187,12 @@ ast_print_t* ast_print_create(array_value_t* values)
 }
 
 /**
- * 
+ *
  * @function ast_print_print
  * @brief Print the AST print node
  * @params {ast_print_t*} node - AST print node
  * @returns {void}
- * 
+ *
  */
 void ast_print_print(ast_print_t* node)
 {
@@ -204,12 +206,12 @@ void ast_print_print(ast_print_t* node)
 }
 
 /**
- * 
+ *
  * @function ast_print_destroy
  * @brief Free the AST print node
  * @params {ast_print_t*} node - AST print node
  * @returns {void}
- * 
+ *
  */
 void ast_print_destroy(ast_print_t* node)
 {
@@ -224,12 +226,12 @@ void ast_print_destroy(ast_print_t* node)
 }
 
 /**
- * 
+ *
  * @function ast_return_create
  * @brief Create a new AST node return
  * @params {array_value_t*} values - Values of the return
  * @returns {ast_return_t*} - Pointer to the created AST node if
- * 
+ *
  */
 ast_return_t* ast_return_create(array_value_t* values)
 {
@@ -245,7 +247,7 @@ ast_return_t* ast_return_create(array_value_t* values)
 }
 
 /**
- * 
+ *
  * @function ast_return_print
  * @brief Print the AST return node
  * @params {ast_return_t*} node - AST return node
@@ -263,12 +265,12 @@ void ast_return_print(ast_return_t* node)
 }
 
 /**
- * 
+ *
  * @function ast_return_destroy
  * @brief Free the AST return node
  * @params {ast_return_t*} node - AST return node
  * @returns {void}
- * 
+ *
  */
 void ast_return_destroy(ast_return_t* node)
 {
@@ -283,12 +285,12 @@ void ast_return_destroy(ast_return_t* node)
 }
 
 /**
- * 
+ *
  * @function ast_if_create
  * @brief Create a new AST node if
  * @params {ast_value_t*} condition - Condition of the if
  * @returns {ast_if_t*} - Pointer to the created AST node if
- * 
+ *
  */
 ast_if_t* ast_if_create(ast_value_t* condition)
 {
@@ -313,12 +315,12 @@ ast_if_t* ast_if_create(ast_value_t* condition)
 }
 
 /**
- * 
+ *
  * @function ast_elseif_create
  * @brief Create a new AST node else if
  * @params {ast_value_t*} condition - Condition of the else if
  * @returns {ast_if_t*} - Pointer to the created AST node else if
- * 
+ *
  */
 ast_if_t* ast_elseif_create(ast_value_t* condition)
 {
@@ -339,11 +341,11 @@ ast_if_t* ast_elseif_create(ast_value_t* condition)
 }
 
 /**
- * 
+ *
  * @function ast_else_create
  * @brief Create a new AST node else
  * @returns {ast_if_t*} - Pointer to the created AST node else
- * 
+ *
  */
 ast_if_t* ast_else_create()
 {
@@ -365,11 +367,11 @@ ast_if_t* ast_else_create()
 }
 
 /**
- * 
+ *
  * @function ast_if_create
  * @brief Create a new AST node if
  * @returns {ast_if_t*} - Pointer to the created AST node if
- * 
+ *
  */
 void ast_if_print(ast_if_t* node)
 {
@@ -402,12 +404,12 @@ void ast_if_print(ast_if_t* node)
 }
 
 /**
- * 
+ *
  * @function ast_if_destroy
  * @brief Free the AST if node
  * @params {ast_if_t*} node - AST if node
  * @returns {void}
- * 
+ *
  */
 void ast_if_destroy(ast_if_t* node)
 {
@@ -434,12 +436,12 @@ void ast_if_destroy(ast_if_t* node)
 }
 
 /**
- * 
+ *
  * @function ast_function_create
  * @brief Create a new AST node function
  * @params {char*} name - Name of the function
  * @returns {ast_function_t*} - Pointer to the created AST node function
- * 
+ *
  */
 ast_function_t* ast_function_create(char* name)
 {
@@ -467,12 +469,12 @@ ast_function_t* ast_function_create(char* name)
 }
 
 /**
- * 
+ *
  * @function ast_block_print
  * @brief Print the AST block node
  * @params {ast_block_t*} block - AST block node
  * @returns {void}
- * 
+ *
  */
 void ast_block_print(ast_block_t* block)
 {
@@ -488,12 +490,12 @@ void ast_block_print(ast_block_t* block)
 }
 
 /**
- * 
+ *
  * @function ast_block_destroy
  * @brief Free the AST block node
  * @params {ast_block_t*} block - AST block node
  * @returns {void}
- * 
+ *
  */
 void ast_block_destroy(ast_block_t* block)
 {
@@ -508,12 +510,12 @@ void ast_block_destroy(ast_block_t* block)
 }
 
 /**
- * 
+ *
  * @function ast_value_type_name
  * @brief Get the name of the AST value type
  * @params {ast_value_type_t*} type - AST value type
  * @returns {char*} - Name of the AST value type
- * 
+ *
  */
 char* ast_value_type_name(ast_value_type_t* type)
 {
@@ -529,12 +531,12 @@ char* ast_value_type_name(ast_value_type_t* type)
 }
 
 /**
- * 
+ *
  * @function ast_value_type_print
  * @brief Print the AST value type
  * @params {ast_value_type_t*} type - AST value type
  * @returns {void}
- * 
+ *
  */
 void ast_value_type_print(ast_value_type_t* type)
 {
@@ -544,13 +546,13 @@ void ast_value_type_print(ast_value_type_t* type)
 }
 
 /**
- * 
+ *
  * @function ast_value_type_create
  * @brief Create a new AST value type
  * @params {ast_value_kind_t} kind - Kind of the value type
  * @params {location_t} location - Location of the value type
  * @returns {ast_value_type_t*} - Pointer to the created AST value type
- * 
+ *
  */
 ast_value_type_t* ast_value_type_create(ast_value_kind_t kind, location_t location)
 {
@@ -562,16 +564,16 @@ ast_value_type_t* ast_value_type_create(ast_value_kind_t kind, location_t locati
 	type->print = cast(void (*)(void*), ast_value_type_print);
 	type->destroy = cast(void (*)(void*), ast_value_type_destroy);
 
-	return type;	
+	return type;
 }
 
 /**
- * 
+ *
  * @function ast_value_type_destroy
  * @brief Free the AST value type
  * @params {ast_value_type_t*} type - AST value type
  * @returns {void}
- * 
+ *
  */
 void ast_value_type_destroy(ast_value_type_t* type)
 {
@@ -582,12 +584,12 @@ void ast_value_type_destroy(ast_value_type_t* type)
 }
 
 /**
- * 
+ *
  * @function ast_function_parameter_print
  * @brief Print the AST function parameter
  * @params {ast_function_parameter_t*} value - AST function parameter
  * @returns {void}
- * 
+ *
  */
 void ast_function_parameter_print(ast_function_parameter_t* value)
 {
@@ -596,12 +598,12 @@ void ast_function_parameter_print(ast_function_parameter_t* value)
 }
 
 /**
- * 
+ *
  * @function ast_function_parameter_destroy
  * @brief Free the AST function parameter
  * @params {ast_function_parameter_t*} value - AST function parameter
  * @returns {void}
- * 
+ *
  */
 void ast_function_parameter_destroy(ast_function_parameter_t* value)
 {
@@ -616,12 +618,12 @@ void ast_function_parameter_destroy(ast_function_parameter_t* value)
 }
 
 /**
- * 
+ *
  * @function ast_function_print
  * @brief Print the AST function
  * @params {ast_function_t*} value - AST function
  * @returns {void}
- * 
+ *
  */
 void ast_function_print(ast_function_t* value)
 {
@@ -653,12 +655,12 @@ void ast_function_print(ast_function_t* value)
 }
 
 /**
- * 
+ *
  * @function ast_function_destroy
  * @brief Free the AST function
  * @params {ast_function_t*} value - AST function
  * @returns {void}
- * 
+ *
  */
 void ast_function_destroy(ast_function_t* value)
 {
@@ -685,12 +687,12 @@ void ast_function_destroy(ast_function_t* value)
 }
 
 /**
- * 
+ *
  * @function ast_node_print
  * @brief Print the AST node
  * @params {ast_node_t*} node - AST node
  * @returns {void}
- * 
+ *
  */
 void ast_node_print(ast_node_t* node)
 {
@@ -704,7 +706,7 @@ void ast_node_print(ast_node_t* node)
 }
 
 /**
- * 
+ *
  * @function ast_block_type_name
  * @brief Print the AST block type
  * @params {ast_block_type_t} type - AST block type
@@ -724,11 +726,11 @@ char* ast_block_type_name(ast_block_type_t type)
 }
 
 /**
- * 
+ *
  * @function ast_create
  * @brief Create a new AST
  * @returns {ast_t*} - Pointer to the created AST
- * 
+ *
  */
 ast_t* ast_create()
 {
@@ -742,17 +744,17 @@ ast_t* ast_create()
 
 	ast->print = cast(void (*)(void*), ast_print);
 	ast->destroy = cast(void (*)(void*), ast_destroy);
-	
+
 	return ast;
 }
 
 /**
- * 
+ *
  * @function ast_debug
  * @brief Debug the AST
  * @params {ast_t*} ast - AST
  * @returns {void}
- * 
+ *
  */
 void ast_debug(ast_t* ast)
 {
@@ -771,12 +773,12 @@ void ast_debug(ast_t* ast)
 }
 
 /**
- * 
+ *
  * @function ast_destroy
  * @brief Free the AST
  * @params {ast_t*} ast - AST
  * @returns {void}
- * 
+ *
  */
 void ast_destroy(ast_t* ast)
 {
@@ -796,12 +798,12 @@ void ast_destroy(ast_t* ast)
 }
 
 /**
- * 
+ *
  * @function ast_print
  * @brief Print the AST
  * @params {ast_t*} ast - AST
  * @returns {void}
- * 
+ *
  */
 void ast_print(ast_t* ast)
 {
@@ -818,12 +820,12 @@ void ast_print(ast_t* ast)
 }
 
 /**
- * 
+ *
  * @function ast_value_destroy
  * @brief Free the AST value
  * @params {ast_value_t*} value - AST Value
  * @returns {void}
- * 
+ *
  */
 void ast_value_destroy(ast_value_t* value)
 {
@@ -832,7 +834,7 @@ void ast_value_destroy(ast_value_t* value)
 		if (value->type != NULL) {
 			value->type->destroy(value->type);
 		}
-		
+
 		if (value->data.string_value != NULL) {
 			memory_destroy(value->data.string_value);
 		}
@@ -842,12 +844,12 @@ void ast_value_destroy(ast_value_t* value)
 }
 
 /**
- * 
+ *
  * @function ast_value_print
  * @brief Print the AST value
  * @params {ast_value_t*} value - AST Value
  * @returns {void}
- * 
+ *
  */
 void ast_value_print(ast_value_t* value)
 {
@@ -876,12 +878,12 @@ void ast_value_print(ast_value_t* value)
 }
 
 /**
- * 
+ *
  * @function ast_value_copy
  * @brief Copy the AST layout attribute value
  * @params {ast_value_t*} value - AST Layout Attribute Value
  * @returns {ast_value_t*} - Copied AST Layout Attribute Value
- * 
+ *
  */
 ast_value_t* ast_value_copy(ast_value_t* value)
 {
@@ -893,12 +895,12 @@ ast_value_t* ast_value_copy(ast_value_t* value)
 }
 
 /**
- * 
+ *
  * @function ast_value_type_copy
  * @brief Copy the AST layout attribute value type
  * @params {ast_value_type_t*} type - AST Layout Attribute Value Type
  * @returns {ast_value_type_t*} - Copied AST Layout Attribute Value Type
- * 
+ *
  */
 ast_value_type_t* ast_value_type_copy(ast_value_type_t* type)
 {

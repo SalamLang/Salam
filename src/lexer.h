@@ -403,4 +403,15 @@ bool is_arabic_digit(wchar_t ch);
  */
 bool string_is_number(const char* value);
 
+/**
+ * 
+ * @function string_is_percentage
+ * @brief Check if the string is a percentage
+ * @params {const char*} value - Value
+ * @params {bool} acceptSign - Accept sign
+ * @returns {bool} - True if the string is a percentage
+ * 
+ */
+bool string_is_percentage(const char* value, bool acceptSign);
+
 #endif

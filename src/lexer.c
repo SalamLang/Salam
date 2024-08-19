@@ -26,17 +26,17 @@
  * 
  */
 token_name_t token_names[] = {
-    #undef ADD_TOKEN
-    #undef ADD_CHAR_TOKEN
-    #undef ADD_KEYWORD
-    #undef ADD_KEYWORD_HIDE
+	#undef ADD_TOKEN
+	#undef ADD_CHAR_TOKEN
+	#undef ADD_KEYWORD
+	#undef ADD_KEYWORD_HIDE
 
-    #define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE) {TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, -1},
-    #define ADD_CHAR_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR) {TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR},
-    #define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) {TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, -1},
-    #define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) {TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, -1},
+	#define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE) {TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, -1},
+	#define ADD_CHAR_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR) {TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR},
+	#define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) {TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, -1},
+	#define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) {TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, -1},
 
-    #include "token.h"
+	#include "token.h"
 };
 
 /**
@@ -47,17 +47,17 @@ token_name_t token_names[] = {
  * 
  */
 const keyword_t keywords[] = {
-    #undef ADD_TOKEN
-    #undef ADD_CHAR_TOKEN
-    #undef ADD_KEYWORD
-    #undef ADD_KEYWORD_HIDE
+	#undef ADD_TOKEN
+	#undef ADD_CHAR_TOKEN
+	#undef ADD_KEYWORD
+	#undef ADD_KEYWORD_HIDE
 
-    #define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE) 
-    #define ADD_CHAR_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR) 
-    #define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) {.length=TOKEN_VALUE_LENGTH, .type=TOKEN_TYPE, .name=TOKEN_NAME, .keyword=TOKEN_VALUE},
-    #define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) {.length=TOKEN_VALUE_LENGTH, .type=TOKEN_TYPE, .name=TOKEN_NAME, .keyword=TOKEN_VALUE},
+	#define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE) 
+	#define ADD_CHAR_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR) 
+	#define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) {.length=TOKEN_VALUE_LENGTH, .type=TOKEN_TYPE, .name=TOKEN_NAME, .keyword=TOKEN_VALUE},
+	#define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) {.length=TOKEN_VALUE_LENGTH, .type=TOKEN_TYPE, .name=TOKEN_NAME, .keyword=TOKEN_VALUE},
 
-    #include "token.h"
+	#include "token.h"
 };
 
 /**
@@ -108,6 +108,61 @@ bool is_arabic_digit(wchar_t ch)
 
 /**
  * 
+ * @function string_is_percentage
+ * @brief Check if the string is a percentage
+ * @params {const char*} value - Value
+ * @params {bool} acceptSign - Accept sign
+ * @returns {bool} - True if the string is a percentage
+ * 
+ */
+bool string_is_percentage(const char* value, bool acceptSign)
+{
+	DEBUG_ME;
+	size_t len = mbstowcs(NULL, value, 0);
+	if (len == (size_t) -1) {
+		return false;
+	}
+
+	wchar_t* wvalue = memory_allocate(sizeof(wchar_t) * (len + 1));
+	mbstowcs(wvalue, value, len + 1);
+
+	if (wvalue[0] == L'\0') {
+		memory_destroy(wvalue);
+		return false;
+	}
+
+	size_t start = 0;
+	if (acceptSign == true) {
+		if (wvalue[0] == L'+' || wvalue[0] == L'-') {
+			start = 1;
+		}
+	}
+
+	if (start == 1 && wvalue[1] == L'\0') {
+		memory_destroy(wvalue);
+		return false;
+	}
+
+	size_t len_wvalue = wcslen(wvalue);
+
+	if (wvalue[len_wvalue - 1] != L'%') {
+		memory_destroy(wvalue);
+		return false;
+	}
+
+	for (size_t i = start; i < len_wvalue - 1; i++) {
+		if (!(is_english_digit(wvalue[i]) || is_persian_digit(wvalue[i]) || is_arabic_digit(wvalue[i]))) {
+			memory_destroy(wvalue);
+			return false;
+		}
+	}
+
+	memory_destroy(wvalue);
+	return true;
+}
+
+/**
+ * 
  * @function string_is_number
  * @brief Check if the string is a number
  * @params {const char*} value - Value
@@ -118,7 +173,9 @@ bool string_is_number(const char* value)
 {
 	DEBUG_ME;
 	size_t len = mbstowcs(NULL, value, 0);
-	if (len == (size_t)-1) return false;
+	if (len == (size_t) -1) {
+		return false;
+	}
 
 	wchar_t* wvalue = memory_allocate(sizeof(wchar_t) * (len + 1));
 	mbstowcs(wvalue, value, len + 1);
@@ -130,7 +187,9 @@ bool string_is_number(const char* value)
 	}
 
 	size_t start = 0;
-	if (wvalue[0] == L'+' || wvalue[0] == L'-') start = 1;
+	if (wvalue[0] == L'+' || wvalue[0] == L'-') {
+		start = 1;
+	}
 
 	if (start == 1 && wvalue[1] == L'\0') {
 		memory_destroy(wvalue);
@@ -162,7 +221,7 @@ bool string_is_number(const char* value)
  */
 token_t* token_create(token_type_t type, location_t location)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	token_t* token = memory_allocate(sizeof(token_t));
 	token->type = type;
 	token->location = location;
@@ -188,7 +247,7 @@ token_t* token_create(token_type_t type, location_t location)
  */
 token_t* token_copy(token_t* token)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	token_t* copy = token_create(token->type, token->location);
 	copy->data_type = token->data_type;
 
@@ -229,7 +288,7 @@ token_t* token_copy(token_t* token)
  */
 void token_destroy(token_t* token)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	if (token != NULL) {
 		if (token->data_type == TOKEN_STRING || token->data_type == TOKEN_IDENTIFIER) {
 			if (token->data.string != NULL) {
@@ -266,7 +325,7 @@ const char* token_type_stringify(token_type_t type)
 		#include "token.h"
 	}
 
-    return TOKEN_NAME_UNKNOWN;
+	return TOKEN_NAME_UNKNOWN;
 }
 
 /**
@@ -328,7 +387,7 @@ char* token_stringify(token_t* token)
  */
 void token_print(token_t* token)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	printf("Token: ");
 	printf("%s\n", token_stringify(token));
 }
@@ -343,7 +402,7 @@ void token_print(token_t* token)
  */
 char* token_name(token_type_t type)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	switch (type) {
 		#undef ADD_TOKEN
 		#undef ADD_CHAR_TOKEN
@@ -399,7 +458,7 @@ char* token_type_keyword(token_type_t type)
  */
 char* token_value_stringify(token_t* token)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	static char buffer[1024];
 
 	switch (token->data_type) {
@@ -439,7 +498,7 @@ char* token_value_stringify(token_t* token)
  */
 lexer_t* lexer_create(const char* file_path, char* source)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	lexer_t* lexer = memory_allocate(sizeof(lexer_t));
 
 	lexer->file_path = file_path;
@@ -468,7 +527,7 @@ lexer_t* lexer_create(const char* file_path, char* source)
  */
 void lexer_destroy(lexer_t* lexer)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	if (lexer != NULL) {
 		array_destroy_custom(lexer->tokens, cast(void (*)(void*), token_destroy));
 		
@@ -487,7 +546,7 @@ void lexer_destroy(lexer_t* lexer)
  */
 void lexer_save(lexer_t* lexer, const char* tokens_output)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	file_writes(tokens_output, "");
 
 	file_appends(tokens_output, "Tokens:\n");
@@ -509,12 +568,12 @@ void lexer_save(lexer_t* lexer, const char* tokens_output)
 	file_appends(tokens_output, "\n");
 	file_appends(tokens_output, "\n");
 
-    for (size_t i = 0; i < lexer->tokens->length; i++) {
-        token_t* token = array_get(lexer->tokens, i);
+	for (size_t i = 0; i < lexer->tokens->length; i++) {
+		token_t* token = array_get(lexer->tokens, i);
 
 		file_appends(tokens_output, token_stringify(token));
 		file_appends(tokens_output, "\n");
-    }
+	}
 }
 
 /**
@@ -527,7 +586,7 @@ void lexer_save(lexer_t* lexer, const char* tokens_output)
  */
 void lexer_debug(lexer_t* lexer)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	printf("============= START LEXER DEBUG =============\n");
 
 	printf("Lexer source: %s\n", lexer->source == NULL ? "REPL" : lexer->source);
@@ -582,40 +641,40 @@ void location_print(location_t location)
  */
 wchar_t read_token(lexer_t* lexer, int* char_size)
 {
-    wchar_t current_char;
-    mbstate_t state;
-    memset(&state, 0, sizeof state);
+	wchar_t current_char;
+	mbstate_t state;
+	memset(&state, 0, sizeof state);
 
-    if (lexer->source[lexer->index] == '\0') {
-        *char_size = 0;
-        return L'\0';
-    }
+	if (lexer->source[lexer->index] == '\0') {
+		*char_size = 0;
+		return L'\0';
+	}
 
-    *char_size = mbrtowc(&current_char, &lexer->source[lexer->index], MB_CUR_MAX, &state);
+	*char_size = mbrtowc(&current_char, &lexer->source[lexer->index], MB_CUR_MAX, &state);
 
-    if (*char_size <= 0) {
-        if (*char_size == 0) {
-            return L'\0';
-        }
+	if (*char_size <= 0) {
+		if (*char_size == 0) {
+			return L'\0';
+		}
 		else if (errno == EILSEQ) {
-            error_lexer(2, "Invalid multibyte sequence at line %zu, column %zu", lexer->line, lexer->column);
-        }
+			error_lexer(2, "Invalid multibyte sequence at line %zu, column %zu", lexer->line, lexer->column);
+		}
 		else if (errno == EINVAL) {
-            error_lexer(2, "Incomplete multibyte sequence at line %zu, column %zu", lexer->line, lexer->column);
-        }
-    }
+			error_lexer(2, "Incomplete multibyte sequence at line %zu, column %zu", lexer->line, lexer->column);
+		}
+	}
 
-    if (current_char == L'\n') {
-        LEXER_NEXT_LINE;
-        LEXER_ZERO_COLUMN;
-    }
+	if (current_char == L'\n') {
+		LEXER_NEXT_LINE;
+		LEXER_ZERO_COLUMN;
+	}
 	else {
-        lexer->column += *char_size;
-    }
+		lexer->column += *char_size;
+	}
 
-    lexer->index += *char_size;
+	lexer->index += *char_size;
 
-    return current_char;
+	return current_char;
 }
 
 /**
@@ -629,37 +688,37 @@ wchar_t read_token(lexer_t* lexer, int* char_size)
  */
 void lexer_lex_number(lexer_t* lexer, int char_size)
 {
-    DEBUG_ME;
-    char* buffer = memory_allocate(256);
+	DEBUG_ME;
+	char* buffer = memory_allocate(256);
 
-    size_t index = 0;
-    wchar_t wc;
+	size_t index = 0;
+	wchar_t wc;
 
-    for (int i = 0; i < char_size; i++) {
+	for (int i = 0; i < char_size; i++) {
 		buffer[index++] = lexer->source[lexer->index - char_size + i];
-    }
+	}
 
-    int wcl = 0;
-    bool is_float = false;
+	int wcl = 0;
+	bool is_float = false;
 
-    while (LEXER_CURRENT != '\0') {
-        wc = read_token(lexer, &wcl);
+	while (LEXER_CURRENT != '\0') {
+		wc = read_token(lexer, &wcl);
 
-        if (!is_wchar_digit(wc) && wc != L'.') {
-            break;
-        }
+		if (!is_wchar_digit(wc) && wc != L'.') {
+			break;
+		}
 
-        if (wc == L'.') {
-            if (is_float) {
-                break;
-            }
-            is_float = true;
-        }
+		if (wc == L'.') {
+			if (is_float) {
+				break;
+			}
+			is_float = true;
+		}
 
-        buffer[index++] = convert_to_english_digit(wc);
-    }
+		buffer[index++] = convert_to_english_digit(wc);
+	}
 
-    buffer[index] = '\0';
+	buffer[index] = '\0';
 
 	printf("Buffer: %s\n", buffer);
 
@@ -667,24 +726,24 @@ void lexer_lex_number(lexer_t* lexer, int char_size)
 
 	printf("New Buffer: %s\n", buffer);
 
-    LEXER_PREV;
+	LEXER_PREV;
 
-    token_type_t type = is_float ? TOKEN_NUMBER_FLOAT : TOKEN_NUMBER_INT;
-    token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-    token->data_type = type;
-    
-    if (is_float) {
-        token->data.number_float = atof(buffer);
-    }
+	token_type_t type = is_float ? TOKEN_NUMBER_FLOAT : TOKEN_NUMBER_INT;
+	token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+	token->data_type = type;
+	
+	if (is_float) {
+		token->data.number_float = atof(buffer);
+	}
 	else {
-        token->data.number_int = atoi(buffer);
-    }
+		token->data.number_int = atoi(buffer);
+	}
 
-    LEXER_PUSH_TOKEN(token);
+	LEXER_PUSH_TOKEN(token);
 
-    if (buffer != NULL) {
-        memory_destroy(buffer);
-    }
+	if (buffer != NULL) {
+		memory_destroy(buffer);
+	}
 }
 
 /**
@@ -697,7 +756,7 @@ void lexer_lex_number(lexer_t* lexer, int char_size)
  */
 token_type_t type_keyword(const char* string)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	size_t length = strlen(string);
 	for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
 		printf("type_keyword => %zu - %zu and %s - %s\n", length, keywords[i].length, string, keywords[i].keyword);
@@ -722,7 +781,7 @@ token_type_t type_keyword(const char* string)
 void lexer_lex_identifier(lexer_t* lexer, int char_size)
 {
 	DEBUG_ME;
-    char* buffer = memory_allocate(256);
+	char* buffer = memory_allocate(256);
 
 	size_t index = 0;
 	wchar_t wc;
@@ -734,19 +793,19 @@ void lexer_lex_identifier(lexer_t* lexer, int char_size)
 	int wcl = 0;
 
 	while (LEXER_CURRENT != '\0') {
-        wc = read_token(lexer, &wcl);
+		wc = read_token(lexer, &wcl);
 
-        if (!is_wchar_alpha(wc)) {
-            break;
-        }
+		if (!is_wchar_alpha(wc)) {
+			break;
+		}
 
-        int len = wctomb(&buffer[index], wc);
-        if (len <= 0) {
-            break;
-        }
+		int len = wctomb(&buffer[index], wc);
+		if (len <= 0) {
+			break;
+		}
 
-        index += len;
-    }
+		index += len;
+	}
 
 	buffer[index] = '\0';
 
@@ -754,13 +813,13 @@ void lexer_lex_identifier(lexer_t* lexer, int char_size)
 
 	LEXER_PREV;
 
-    token_type_t type = type_keyword(buffer);
-    token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-    token->data_type = TOKEN_IDENTIFIER;
-    token->data.string = buffer;
-    token->print(token);
+	token_type_t type = type_keyword(buffer);
+	token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+	token->data_type = TOKEN_IDENTIFIER;
+	token->data.string = buffer;
+	token->print(token);
 
-    LEXER_PUSH_TOKEN(token);
+	LEXER_PUSH_TOKEN(token);
 }
 
 /**
@@ -774,36 +833,36 @@ void lexer_lex_identifier(lexer_t* lexer, int char_size)
  */
 void lexer_lex_string(lexer_t* lexer, int type)
 {
-    DEBUG_ME;
-    // Opening quote is already consumed
-    size_t buffer_size = 256;
-    size_t index = 0;
+	DEBUG_ME;
+	// Opening quote is already consumed
+	size_t buffer_size = 256;
+	size_t index = 0;
 	string_t* value = string_create(25);
 
-    int wcl = 0;
-    wchar_t wc = read_token(lexer, &wcl);
+	int wcl = 0;
+	wchar_t wc = read_token(lexer, &wcl);
 	
 	while (wc != '\0' && ((type == 0 && wc != '"') || (type == 1 && wc != L'»'))) {
 		string_append_wchar(value, wc);
 
-        wc = read_token(lexer, &wcl);
-    }
+		wc = read_token(lexer, &wcl);
+	}
 
-    if ((type == 0 && wc != L'"') || (type == 1 && wc != L'»')) {
-        error_lexer(2, "Unterminated string value at line %zu, column %zu", lexer->line, lexer->column);
-        string_destroy(value);
-        return;
-    }
+	if ((type == 0 && wc != L'"') || (type == 1 && wc != L'»')) {
+		error_lexer(2, "Unterminated string value at line %zu, column %zu", lexer->line, lexer->column);
+		string_destroy(value);
+		return;
+	}
 
-    LEXER_NEXT;
+	LEXER_NEXT;
 
-    token_t* token = token_create(TOKEN_STRING, (location_t){lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
-    token->data_type = TOKEN_STRING;
-    token->data.string = strdup(value->data);
+	token_t* token = token_create(TOKEN_STRING, (location_t){lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+	token->data_type = TOKEN_STRING;
+	token->data.string = strdup(value->data);
 
 	string_destroy(value);
 
-    LEXER_PUSH_TOKEN(token);
+	LEXER_PUSH_TOKEN(token);
 }
 
 /**
@@ -816,7 +875,7 @@ void lexer_lex_string(lexer_t* lexer, int type)
  */
 void lexer_lex(lexer_t* lexer)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	char c;
 	wchar_t wc;
 	int wcl = 0;

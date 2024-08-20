@@ -503,7 +503,7 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer)
 	expect_open_block(lexer);
 
 	while (PARSER_CURRENT->type != TOKEN_TYPE_CLOSE_BLOCK) {
-		if (match(lexer, TOKEN_IDENTIFIER)) {
+		if (match(lexer, TOKEN_IDENTIFIER) || match(lexer, TOKEN_PRINT)) {
 			token_t* last_name = PARSER_CURRENT;
 			string_t* name = parser_parse_layout_name(lexer, &last_name);
 

@@ -267,11 +267,10 @@ void lexer_lex(lexer_t* lexer);
  * @brief Lexing an identifier
  * @params {lexer_t*} lexer - Lexer state
  * @params {wchar_t} wc - wide character
- * @params {int} wcl - Wide character length
  * @returns {void}
  * 
  */
-void lexer_lex_identifier(lexer_t* lexer, wchar_t* wc, int char_size);
+void lexer_lex_identifier(lexer_t* lexer, wchar_t* wc);
 
 /**
  * 
@@ -427,5 +426,25 @@ bool is_alpha(wchar_t ch);
 
 // wchar_t read_token(lexer_t* lexer);
 wchar_t read_token(lexer_t* lexer, int* wcl);
+
+/**
+ *
+ * @function string_is_integer
+ * @brief Check if the string is a integer
+ * @params {const char*} value - Value
+ * @returns {bool} - True if the string is a integer, false otherwise
+ *
+ */
+bool string_is_integer(const char* value);
+
+/**
+ *
+ * @function string_is_float
+ * @brief Check if the string is a float
+ * @params {const char*} value - Value
+ * @returns {bool} - True if the string is a float, false otherwise
+ *
+ */
+bool string_is_float(const char* value);
 
 #endif

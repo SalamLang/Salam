@@ -583,11 +583,11 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_display[] 
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_align_items[] = {
-    {"تراز بالا", "flex-start"},  // Align items to the start of the container (top)
-    {"تراز وسط", "center"},       // Align items to the center of the container
-    {"تراز پایین", "flex-end"},   // Align items to the end of the container (bottom)
-    {"کشش", "stretch"},           // Stretch items to fill the container
-    {"تراز خط مبنا", "baseline"}, // Align items to the container's baseline
+    {"شروع", "flex-start"},
+    {"وسط", "center"},
+    {"پایان", "flex-end"},
+    {"کشش", "stretch"},
+    {"خط مبنا", "baseline"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_empty_cells[] = {

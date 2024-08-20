@@ -196,6 +196,129 @@ bool string_is_percentage(const char* value, bool acceptSign)
 
 /**
  *
+ * @function string_is_integer
+ * @brief Check if the string is a integer
+ * @params {const char*} value - Value
+ * @returns {bool} - True if the string is a integer, false otherwise
+ *
+ */
+bool string_is_integer(const char* value)
+{
+	DEBUG_ME;
+	size_t len = mbstowcs(NULL, value, 0);
+	if (len == (size_t) -1) {
+		return false;
+	}
+
+	wchar_t* wvalue = memory_allocate(sizeof(wchar_t) * (len + 1));
+	mbstowcs(wvalue, value, len + 1);
+
+	if (wvalue[0] == L'\0') {
+		memory_destroy(wvalue);
+
+		return false;
+	}
+
+	size_t start = 0;
+	if (wvalue[0] == L'+' || wvalue[0] == L'-') {
+		start = 1;
+	}
+
+	if (start == 1 && wvalue[1] == L'\0') {
+		memory_destroy(wvalue);
+
+		return false;
+	}
+
+	size_t i;
+
+	for (i = start; wvalue[i] != L'\0'; i++) {
+		if (!(is_english_digit(wvalue[i]) || is_persian_digit(wvalue[i]) || is_arabic_digit(wvalue[i]))) {
+			memory_destroy(wvalue);
+
+			return false;
+		}
+	}
+
+	memory_destroy(wvalue);
+
+	if (i == start) {
+		return false;
+	}
+
+	return true;
+}
+
+/**
+ *
+ * @function string_is_float
+ * @brief Check if the string is a float
+ * @params {const char*} value - Value
+ * @returns {bool} - True if the string is a float, false otherwise
+ *
+ */
+bool string_is_float(const char* value)
+{
+	DEBUG_ME;
+	size_t len = mbstowcs(NULL, value, 0);
+	if (len == (size_t) -1) {
+		return false;
+	}
+
+	wchar_t* wvalue = memory_allocate(sizeof(wchar_t) * (len + 1));
+	mbstowcs(wvalue, value, len + 1);
+
+	if (wvalue[0] == L'\0') {
+		memory_destroy(wvalue);
+
+		return false;
+	}
+
+	size_t start = 0;
+	if (wvalue[0] == L'+' || wvalue[0] == L'-') {
+		start = 1;
+	}
+
+	if (start == 1 && wvalue[1] == L'\0') {
+		memory_destroy(wvalue);
+
+		return false;
+	}
+
+	bool hasDot = false;
+	size_t i;
+
+	for (i = start; wvalue[i] != L'\0'; i++) {
+		if (wvalue[i] == L'.') {
+			if (hasDot) {
+				memory_destroy(wvalue);
+
+				return false;
+			}
+
+			hasDot = true;
+		}
+		else if (!(is_english_digit(wvalue[i]) || is_persian_digit(wvalue[i]) || is_arabic_digit(wvalue[i]))) {
+			memory_destroy(wvalue);
+
+			return false;
+		}
+	}
+
+	memory_destroy(wvalue);
+
+	if (hasDot == false) {
+		return false;
+	}
+	else if (i == start) {
+		return false;
+	}
+
+	return true;
+}
+
+/**
+ *
  * @function string_is_number
  * @brief Check if the string is a number
  * @params {const char*} value - Value
@@ -230,7 +353,9 @@ bool string_is_number(const char* value)
 		return false;
 	}
 
-	for (size_t i = start; wvalue[i] != L'\0'; i++) {
+	size_t i;
+	
+	for (i = start; wvalue[i] != L'\0'; i++) {
 		if (!(is_english_digit(wvalue[i]) || is_persian_digit(wvalue[i]) || is_arabic_digit(wvalue[i]))) {
 			memory_destroy(wvalue);
 
@@ -239,6 +364,10 @@ bool string_is_number(const char* value)
 	}
 
 	memory_destroy(wvalue);
+
+	if (i == start) {
+		return false;
+	}
 
 	return true;
 }
@@ -787,11 +916,10 @@ bool is_alpha(wchar_t ch)
  * @brief Lexing an identifier
  * @params {lexer_t*} lexer - Lexer state
  * @params {wchar_t} wc - wide character
- * @params {int} wcl - Wide character length
  * @returns {void}
  *
  */
-void lexer_lex_identifier(lexer_t* lexer, wchar_t* wc, int char_size)
+void lexer_lex_identifier(lexer_t* lexer, wchar_t* wc)
 {
 	DEBUG_ME;
 	string_t* value = string_create(25);
@@ -957,7 +1085,7 @@ void lexer_lex(lexer_t* lexer)
 					lexer_lex_number(lexer, wc, wcl);
 				}
 				else if (c == '_' || is_wchar_alpha(wc) || is_char_alpha(c)) {
-					lexer_lex_identifier(lexer, &wc, wcl);
+					lexer_lex_identifier(lexer, &wc);
 				}
 				else {
 					error_lexer(1, "Unknown character '%lc' at line %zu, column %zu", wc, lexer->line, lexer->column);

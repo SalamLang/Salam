@@ -560,7 +560,7 @@ bool validate_style_value_color(hashmap_t* styles, hashmap_t* new_styles, ast_la
 
 		if (allowed_values2 != NULL) {
 			size_t i = 0;
-			
+
 			while (allowed_values2[i].input != NULL) {
 				if (strcmp(value, allowed_values2[i].input) == 0) {
 					attribute->final_value = strdup(allowed_values2[i].output);
@@ -856,7 +856,7 @@ bool validate_style_value_percentage(hashmap_t* styles, hashmap_t* new_styles, a
 		if (strlen(value) == 0) {
 			return false;
 		}
-		
+
 		if (allowed_values2 != NULL) {
 			size_t i = 0;
 			while (allowed_values2[i].input != NULL) {
@@ -1079,7 +1079,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 				} \
 			}\
 			return false;
-		
+
 		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS)
 
 		#include "ast_layout_attribute_style_type.h"

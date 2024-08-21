@@ -923,6 +923,13 @@ bool validate_style_value_size(hashmap_t* styles, hashmap_t* new_styles, ast_lay
 		return true;
 	}
 	else if (first->type->kind == AST_TYPE_KIND_STRING) {
+		if (strlen(first->data.string_value) == 0) {
+			return false;
+		}
+		else if (first->data.string_value[0] == '#') {
+			return true;
+		}
+
 		char* buffer = normalise_css_size(first->data.string_value);
 
 		char* out_value;

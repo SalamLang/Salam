@@ -215,7 +215,7 @@ ast_value_t* parser_parse_value(lexer_t* lexer)
  * @returns {ast_value_t*} - AST Layout attribute value
  *
  */
-ast_value_t* 
+ast_value_t*
 parser_parse_layout_value(lexer_t* lexer)
 {
 	DEBUG_ME;
@@ -279,7 +279,7 @@ ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer, char* name, token_t*
 }
 
 /**
- * 
+ *
  * @function parser_parse_layout_block_style_state
  * @brief Parse the block style state
  * @params {ast_layout_block_t*} block - AST layout block node
@@ -287,7 +287,7 @@ ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer, char* name, token_t*
  * @params {char*} name - Name of the attribute
  * @params {token_t*} last_name - Last token
  * @returns {void}
- * 
+ *
  */
 void parser_parse_layout_block_style_state(ast_layout_block_t* block, lexer_t* lexer, char* name, token_t* last_name)
 {
@@ -323,12 +323,12 @@ void parser_parse_layout_block_style_state(ast_layout_block_t* block, lexer_t* l
 }
 
 /**
- * 
+ *
  * @function parser_parse_layout_values
  * @brief Parse the layout values
  * @params {lexer_t*} lexer - Lexer
  * @returns {array_value_t*} - Array of AST values
- * 
+ *
  */
 array_value_t* parser_parse_layout_values(lexer_t* lexer)
 {
@@ -379,7 +379,7 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* blo
 	array_value_t* values = parser_parse_layout_values(lexer);
 
 	ast_layout_attribute_type_t attribute_key_type = token_to_ast_layout_attribute_type(name, last_name, block->parent_node_type);
-	
+
 	ast_layout_attribute_t* attribute = ast_layout_attribute_create(attribute_key_type, name, values, block->parent_node_type, PARSER_CURRENT->location, first_value->location);
 	if (!token_belongs_to_ast_layout_node(attribute_key_type, attribute)) {
 		attribute->destroy(attribute);
@@ -389,7 +389,7 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* blo
 	}
 
 	char* attribute_key_name = ast_layout_attribute_type_to_name(attribute_key_type);
-	
+
 	if (is_style_attribute(attribute_key_type)) {
 		if (hashmap_has(normal, attribute_key_name)) {
 			attribute->destroy(attribute);
@@ -415,7 +415,7 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* blo
 	else {
 		attribute->destroy(attribute);
 		values->destroy(values);
-		
+
 		error_parser(2, "Attribute '%s' is not a style attribute at line %d, column %d", attribute_key_name, last_name->location.end_line, last_name->location.end_column);
 	}
 }
@@ -445,13 +445,13 @@ void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexe
 }
 
 /**
- * 
+ *
  * @function parser_parse_layout_name
  * @brief Parse the layout name
  * @params {lexer_t*} lexer - Lexer
  * @params {token_t**} last_name - Last token
  * @returns {string_t*} - String
- * 
+ *
  */
 string_t* parser_parse_layout_name(lexer_t* lexer, token_t** last_name)
 {

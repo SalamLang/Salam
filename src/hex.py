@@ -12,7 +12,7 @@ import chardet
 # 			encoding = result['encoding']
 # 			confidence = result['confidence']
 # 			print(f"Detected encoding: {encoding} (confidence: {confidence})")
-			
+
 # 			if encoding:
 # 				text = content.decode(encoding)
 # 				print(f"Decoded text: {text}")

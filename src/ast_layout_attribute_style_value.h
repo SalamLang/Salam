@@ -1,5 +1,5 @@
 /**
- * 
+ *
  * @var valid_layout_attributes
  * @brief Valid layout attributes
  * @type {ast_layout_attribute_type_t[]}

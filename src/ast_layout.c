@@ -42,6 +42,8 @@ ast_layout_block_t* ast_layout_block_create(ast_type_t node_type, ast_layout_nod
 	block->text_content = NULL;
 
 	block->attributes = cast(struct hashmap_t*, hashmap_create(3));
+	// TODO
+	// 	block->attributes = cast(struct hashmap_t*, hashmap_create_layout_attribute(3));
 
 	block->styles = ast_layout_style_state_create();
 
@@ -150,7 +152,7 @@ void ast_layout_attribute_destroy(ast_layout_attribute_t* value)
 		}
 
 		if (value->values != NULL) {
-			value->values->destroy(value->values);
+			array_value_destroy(value->values);
 		}
 
 		memory_destroy(value);
@@ -170,11 +172,11 @@ void ast_layout_block_destroy(ast_layout_block_t* value)
     DEBUG_ME;
 	if (value != NULL) {
 		if (value->attributes != NULL) {
-			value->attributes->destroy(value->attributes);
+			hashmap_destroy_layout_attribute(value->attributes);
 		}
 
 		if (value->styles != NULL) {
-			value->styles->destroy(value->styles);
+			ast_layout_style_state_destroy(value->styles);
 		}
 
 		if (value->tag != NULL) {
@@ -182,7 +184,7 @@ void ast_layout_block_destroy(ast_layout_block_t* value)
 		}
 
 		if (value->states != NULL) {
-			value->states->destroy(value->states);
+			hashmap_destroy_layout_attribute_style_state(value->states);
 		}
 
 		if (value->text_content != NULL) {
@@ -190,7 +192,7 @@ void ast_layout_block_destroy(ast_layout_block_t* value)
 		}
 
 		if (value->children != NULL) {
-			value->children->destroy(value->children);
+			array_layout_node_destroy(value->children);
 		}
 
 		memory_destroy(value);
@@ -321,7 +323,7 @@ void ast_layout_destroy(ast_layout_t* value)
     DEBUG_ME;
 	if (value != NULL) {
 		if (value->block != NULL) {
-			value->block->destroy(value->block);
+			ast_layout_block_destroy(value->block);
 		}
 
 		memory_destroy(value);
@@ -469,7 +471,7 @@ char* ast_layout_node_type_to_enduser_name(ast_layout_node_type_t type)
 
 		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) case TYPE: return ENDUSER_NAME;
 		#define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) case TYPE: return ENDUSER_NAME;
-		#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER)
+		#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) 
 		// #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return ENDUSER_NAME;
 
 		#include "ast_layout_type.h"

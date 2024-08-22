@@ -687,7 +687,9 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 		}
 	}
 
-	if (css_attributes != NULL) css_attributes->destroy(css_attributes);
+	if (css_attributes != NULL) {
+		css_attributes->destroy(css_attributes);
+	}
 
 	return html_attributes;
 }

@@ -121,9 +121,14 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 			}
 		}
 
-		string_append_str(layout_block_str, "</");
-		string_append_str(layout_block_str, node_name);
-		string_append_str(layout_block_str, ">\n");
+		if (is_layout_node_a_single_tag(node->type) == false) {
+			string_append_str(layout_block_str, "</");
+			string_append_str(layout_block_str, node_name);
+			string_append_str(layout_block_str, ">\n");
+		}
+		else {
+			string_append_char(layout_block_str, '\n');
+		}
 
 		string_append(html, layout_block_str);
 

@@ -149,11 +149,11 @@ void array_destroy(array_t* array)
  * @function array_string
  * @brief Convert the array to a string
  * @params {array_t*} array - Array
- * @params {char*} sepertor - Separator
+ * @params {char*} separator - Separator
  * @returns {char*} - String
  * 
  */
-char* array_stringify(array_t* array, char* sepertor)
+char* array_stringify(array_t* array, char* separator)
 {
     DEBUG_ME;
     if (array == NULL || array->length == 0) {
@@ -168,7 +168,7 @@ char* array_stringify(array_t* array, char* sepertor)
             string_append_str(str, item);
             
             if (i < array->length - 1) {
-                string_append_str(str, sepertor);
+                string_append_str(str, separator);
             }
         }
     }
@@ -184,11 +184,11 @@ char* array_stringify(array_t* array, char* sepertor)
  * @function array_string_token
  * @brief Convert the token array to a string
  * @params {array_t*} array - Array
- * @params {char*} sepertor - Separator
+ * @params {char*} separator - Separator
  * @returns {char*} - String
  * 
  */
-char* array_string_token(array_t* array, char* sepertor)
+char* array_string_token(array_t* array, char* separator)
 {
     DEBUG_ME;
     if (array == NULL || array->length == 0) {
@@ -201,7 +201,7 @@ char* array_string_token(array_t* array, char* sepertor)
         string_append_str(str, token_value_stringify(token));
 
         if (i < array->length - 1) {
-            string_append_str(str, sepertor);
+            string_append_str(str, separator);
         }
     }
 
@@ -286,7 +286,7 @@ void array_token_print(array_token_t* array)
  * @function array_token_stringify
  * @brief Convert the token array to a string
  * @params {array_token_t*} array - Token array
- * @params {char*} seperator - Separator
+ * @params {char*} separator - Separator
  * @returns {char*} - String
  * 
  */
@@ -831,11 +831,11 @@ char* array_value_first_stringify(array_value_t* array)
  * @function array_value_string
  * @brief Convert the attribute value array to a string
  * @params {array_value_t*} array - Array
- * @params {char*} seperator - Separator
+ * @params {char*} separator - Separator
  * @returns {char*} - String
  * 
  */
-char* array_value_stringify(array_value_t* array, char* seperator)
+char* array_value_stringify(array_value_t* array, char* separator)
 {
     DEBUG_ME;
     if (array == NULL || array->length == 0) {
@@ -850,7 +850,7 @@ char* array_value_stringify(array_value_t* array, char* seperator)
             string_append_str(str, value->get_data(value));
             
             if (i < array->length - 1) {
-                string_append_str(str, seperator);
+                string_append_str(str, separator);
             }
         }
     }

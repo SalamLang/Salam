@@ -1072,18 +1072,33 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 				const ast_layout_attribute_style_pair_t *values = ALLOWED_VALUES; \
 				\
 				if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
 					return validate_style_value_color(styles, new_styles, attribute, ast_layout_allowed_style_color, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
 					return validate_style_value_string(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
 					return true; \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
 					return validate_style_value_size(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE_COLOR) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
 					return validate_style_value_size_color(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZES) { \
@@ -1093,30 +1108,93 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 					return validate_style_value_colors(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_PERCENTAGE) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
 					return validate_style_value_percentage(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZES_COLORS) { \
 					return validate_style_value_sizes_colors(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_INTEGER) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
 					return validate_style_value_integer(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_FLOAT) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
 					return validate_style_value_float(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_NUMBER) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
+					return validate_style_value_number(styles, new_styles, attribute, NULL, values); \
+				} \
+				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_POSITIVE_INTEGER) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
+					return validate_style_value_integer(styles, new_styles, attribute, NULL, values); \
+				} \
+				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_POSITIVE_FLOAT) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
+					return validate_style_value_float(styles, new_styles, attribute, NULL, values); \
+				} \
+				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_POSITIVE_NUMBER) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
+					return validate_style_value_number(styles, new_styles, attribute, NULL, values); \
+				} \
+				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_NEGATIVE_INTEGER) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
+					return validate_style_value_integer(styles, new_styles, attribute, NULL, values); \
+				} \
+				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_NEGATIVE_FLOAT) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
+					return validate_style_value_float(styles, new_styles, attribute, NULL, values); \
+				} \
+				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_NEGATIVE_NUMBER) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
 					return validate_style_value_number(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_TIME) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
 					return true; \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_PIXEL) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
 					return true; \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_GROUP) { \
 					return true; \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_POSITIVE_PERCENTAGE) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
+					return true; \
+				} \
+				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_NEGATIVE_PERCENTAGE) { \
+					if (attribute->values->length > 1) { \
+						return false; \
+					} \
 					return true; \
 				} \
 			}\

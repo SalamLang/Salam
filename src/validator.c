@@ -295,6 +295,18 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 			return true;
 		}
 	}
+	else if (attribute->parent_node_type == AST_LAYOUT_TYPE_INPUT) {
+		ast_layout_attribute_type_t valid_attributes[] = {
+			AST_LAYOUT_ATTRIBUTE_TYPE_PLACEHOLDER,
+			AST_LAYOUT_ATTRIBUTE_TYPE_VALUE,
+		};
+
+		size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
+
+		if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+			return true;
+		}
+	}
 	// IMG
 	else if (attribute->parent_node_type == AST_LAYOUT_TYPE_IMG) {
 		ast_layout_attribute_type_t valid_attributes[] = {
@@ -323,15 +335,18 @@ bool is_layout_node_a_single_tag(ast_layout_node_type_t type)
 {
 	DEBUG_ME;
 	switch (type) {
-		case AST_LAYOUT_TYPE_PARAGRAPH_RAW:
-		case AST_LAYOUT_TYPE_INPUT:
-		case AST_LAYOUT_TYPE_BR:
-		case AST_LAYOUT_TYPE_HR:
-			return true;
+		#undef ADD_LAYOUT_TYPE
+		#undef ADD_LAYOUT_TYPE_HIDE
+		#undef ADD_LAYOUT_TYPE_REPEAT
 
-		default:
-			return false;
+		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) case TYPE: return IS_MOTHER;
+		#define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) case TYPE: return IS_MOTHER;
+		#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) 
+
+		#include "ast_layout_type.h"
 	}
+
+	return false;
 }
 
 /**

@@ -1,9 +1,9 @@
 INPUT_FILE = ../test/input.s
-INPUT_FILE = test2.salam
+INPUT_FILE = ../test/test6.salam
 
 CC = gcc
 CFLAGS =
-# CFLAGS = -g -Walloca -Wextra -Wall -fsanitize=address,undefined
+CFLAGS = -g -Walloca -Wextra -Wall -fsanitize=address,undefined
 # -std=c11
 
 TARGET = main

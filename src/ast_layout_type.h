@@ -113,4 +113,5 @@ ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_ERROR, "ERROR", "error", "error", "خطا",
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BR, "BR", "br", "br", "خط بعدی", true)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_HR, "HR", "hr", "hr", "خط", true)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_INPUT, "INPUT", "input", "input", "ورودی", true)
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_IMG, "IMG", "img", "img", "عکس", true)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_IMG, "IMG", "img", "img", "تصویر", true)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_IMG, "IMG", "img", "img", "عکس", true)

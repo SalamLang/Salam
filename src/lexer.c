@@ -354,7 +354,7 @@ bool string_is_number(const char* value)
 	}
 
 	size_t i;
-	
+
 	for (i = start; wvalue[i] != L'\0'; i++) {
 		if (!(is_english_digit(wvalue[i]) || is_persian_digit(wvalue[i]) || is_arabic_digit(wvalue[i]))) {
 			memory_destroy(wvalue);

@@ -16,8 +16,8 @@ typedef enum {
 
     #define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) TYPE,
     #define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) TYPE,
-    #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
-    
+    #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME)
+
     #include "ast_layout_type.h"
 } ast_layout_node_type_t;
 
@@ -390,51 +390,51 @@ ast_layout_attribute_style_state_type name_to_ast_layout_attribute_style_state_t
 ast_layout_attribute_style_state_type enduser_name_to_ast_layout_attribute_style_state_type(char* name);
 
 /**
- * 
+ *
  * @function ast_layout_style_state_destroy
  * @brief Destroy the AST layout style state
  * @params {ast_layout_style_state_t*} ast - AST layout style state
  * @returns {void}
- * 
+ *
  */
 void ast_layout_style_state_destroy(ast_layout_style_state_t* ast);
 
 /**
- * 
+ *
  * @function ast_layout_style_state_print
  * @brief Print the AST layout style state
  * @params {ast_layout_style_state_t*} ast - AST layout style state
  * @returns {void}
- * 
+ *
  */
 void ast_layout_style_state_print(ast_layout_style_state_t* ast);
 
 /**
- * 
+ *
  * @function ast_layout_style_state_create
  * @brief Create a new AST layout style state
  * @returns {ast_layout_style_state_t*} - Pointer to the created AST layout style state
- * 
+ *
  */
 ast_layout_style_state_t* ast_layout_style_state_create();
 
 /**
- * 
+ *
  * @function ast_layout_attribute_style_state_has_any_sub_value
  * @brief Check if the AST layout style state has any sub value
  * @params {ast_layout_style_state_t*} value - AST layout style state
  * @returns {bool} - True if the AST layout style state has any sub value, false otherwise
- * 
+ *
  */
 bool ast_layout_style_state_has_any_sub_value(ast_layout_style_state_t* value);
 
 /**
- * 
+ *
  * @function ast_layout_attribute_has_any_sub_value
  * @brief Check if the AST layout attribute has any sub value
  * @params {ast_layout_attribute_t*} value - AST layout attribute
  * @returns {bool} - True if the AST layout attribute has any sub value, false otherwise
- * 
+ *
  */
 bool ast_layout_attribute_has_any_sub_value(ast_layout_attribute_t* value);
 

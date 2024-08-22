@@ -51,12 +51,12 @@ typedef enum {
     #undef ADD_CHAR_TOKEN
     #undef ADD_KEYWORD
     #undef ADD_KEYWORD_HIDE
-    
+
     #define ADD_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE) TOKEN_TYPE,
     #define ADD_CHAR_TOKEN(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_CHAR) TOKEN_TYPE,
     #define ADD_KEYWORD(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) TOKEN_TYPE,
-    #define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH) 
-    
+    #define ADD_KEYWORD_HIDE(TOKEN_TYPE, TOKEN_NAME, TOKEN_VALUE, TOKEN_VALUE_LENGTH)
+
     #include "token.h"
 } token_type_t;
 
@@ -77,20 +77,20 @@ typedef struct {
 // #include "validator.h"
 
 /**
- * 
+ *
  * @variable token_names
  * @brief Token names
  * @type {token_name_t[]}
- * 
+ *
  */
 extern token_name_t token_names[];
 
 /**
- * 
+ *
  * @variable keywords
  * @brief Keywords
  * @type {keyword_t[]}
- * 
+ *
  */
 extern const keyword_t keywords[];
 
@@ -130,291 +130,291 @@ typedef struct {
 } lexer_t;
 
 /**
- * 
+ *
  * @function is_char_digit
  * @brief Check if a character is a digit
  * @params {char} c - Character
  * @returns {bool}
- * 
+ *
  */
 bool is_char_digit(char c);
 
 /**
- * 
+ *
  * @function type_keyword
  * @brief Check if a string is a keyword then return the token type
  * @params {const char*} string - String
  * @returns {bool}
- * 
+ *
  */
 token_type_t type_keyword(const char* string);
 
 /**
- * 
+ *
  * @function location_print
  * @brief Print a location
  * @params {location_t} location - Location
  * @returns {void}
- * 
+ *
  */
 void location_print(location_t location);
 
 /**
- * 
+ *
  * @function token_create
  * @brief Creating a new token
  * @params {token_type_t} type - Token type
  * @params {location_t} location - Token location
  * @returns {token_t*}
- * 
+ *
  */
 token_t* token_create(token_type_t type, location_t location);
 
 /**
- * 
+ *
  * @function token_copy
  * @brief Copying a token
  * @params {token_t*} token - Token
  * @returns {token_t*}
- * 
+ *
  */
 token_t* token_copy(token_t* token);
 
 /**
- * 
+ *
  * @function token_name
  * @brief Get the name of a token
  * @params {token_type_t} Token type
  * @returns {char*}
- * 
+ *
  */
 char* token_name(token_type_t type);
 
 /**
- * 
+ *
  * @function token_value
- * @brief Get the value of a token 
+ * @brief Get the value of a token
  * @params {token_t*} token -
  * @returns {char*}
- * 
+ *
  */
 char* token_value_stringify(token_t* token);
 
 /**
- * 
+ *
  * @function token_destroy
  * @brief Destroying a token
  * @params {token_t*} token - Token
  * @returns {void}
- * 
+ *
  */
 void token_destroy(token_t* token);
 
 /**
- * 
+ *
  * @function token_print
  * @brief Print a token
  * @params {token_t*} token - Token
  * @returns {void}
- * 
+ *
  */
 void token_print(token_t* token);
 
 /**
- * 
+ *
  * @function lexer_create
  * @brief Creating a new lexer state
  * @params {const char*} file_path - File path
  * @params {char*} source - Source code
  * @returns {lexer_t*}
- * 
+ *
  */
 lexer_t* lexer_create(const char* file_path, char* source);
 
 /**
- * 
+ *
  * @function lexer_destroy
  * @brief Destroying a lexer state
  * @params {lexer_t*} lexer - Lexer state
  * @returns {void}
- * 
+ *
  */
 void lexer_destroy(lexer_t* lexer);
 
 /**
- * 
+ *
  * @function lexer_debug
  * @brief Debugging the lexer state
  * @params {lexer_t*} lexer - Lexer state
  * @returns {void}
- * 
+ *
  */
 void lexer_debug(lexer_t* lexer);
 
 /**
- * 
+ *
  * @function lexer_lex
  * @brief Lexing the source code
  * @params {lexer_t*} lexer - Lexer state
  * @returns {void}
- * 
+ *
  */
 void lexer_lex(lexer_t* lexer);
 
 /**
- * 
+ *
  * @function lexer_lex_identifier
  * @brief Lexing an identifier
  * @params {lexer_t*} lexer - Lexer state
  * @params {wchar_t} wc - wide character
  * @returns {void}
- * 
+ *
  */
 void lexer_lex_identifier(lexer_t* lexer, wchar_t* wc);
 
 /**
- * 
+ *
  * @function lexer_lex_number
  * @brief Lexing a number
  * @params {lexer_t*} lexer - Lexer state
  * @params {wchar_t} wc - wide character
  * @params {int} char_size - Character size
  * @returns {void}
- * 
+ *
  */
 void lexer_lex_number(lexer_t* lexer, wchar_t wc, int char_size);
 
 /**
- * 
+ *
  * @function lexer_lex_string
  * @brief Lexing a string
  * @params {lexer_t*} lexer - Lexer state
  * @params {int} type - String type (0 = english strings, 1= persian strings)
  * @returns {void}
- * 
+ *
  */
 void lexer_lex_string(lexer_t* lexer, int type);
 
 /**
- * 
+ *
  * @function lexer_save
  * @brief Saving the lexer state
  * @params {lexer_t*} lexer - Lexer state
  * @params {const char*} tokens_output - Tokens output file
  * @returns {void}
- * 
+ *
  */
 void lexer_save(lexer_t* lexer, const char* tokens_output);
 
 /**
- * 
+ *
  * @function location_string
  * @brief Get the string representation of a location
  * @params {location_t} location - Location
  * @returns {char*}
- * 
+ *
  */
 char* location_stringify(location_t location);
 
 /**
- * 
+ *
  * @function token_stringify
  * @brief Get the name & value & location of a token as a string
  * @params {token_t*} token - Token
  * @returns {char*} - String representation of the token
- * 
+ *
  */
 char* token_stringify(token_t* token);
 
 /**
- * 
+ *
  * @function token_type_stringify
  * @brief Get the name of a token type
  * @params {token_type_t} type - Token type
  * @returns {char*}
- * 
+ *
  */
 const char* token_type_stringify(token_type_t type);
 
 /**
- * 
+ *
  * @function token_char_type
  * @brief Get the type of a character
  * @params {char} c - Character
  * @returns {token_type_t}
- * 
+ *
  */
 token_type_t token_char_type(char c);
 
 /**
- * 
+ *
  * @function token_type_keyword
  * @brief Get the keyword of a token type
  * @params {token_type_t} Token type
  * @returns {char*}
- * 
+ *
  */
 char* token_type_keyword(token_type_t type);
 
 /**
- * 
+ *
  * @function read_token
  * @brief Reading a token
  * @params {lexer_t*} lexer - Lexer state
  * @params {int*} char_size - Character size
  * @returns {wchar_t}
- * 
+ *
  */
 wchar_t read_token2(lexer_t* lexer, int* char_size);
 
 /**
- * 
+ *
  * @function is_english_digit
  * @brief Check if the character is an English digit
  * @params {wchar_t} ch - Character
  * @returns {bool} - True if the character is an English digit, false otherwise
- * 
+ *
  */
 bool is_english_digit(wchar_t ch);
 
 /**
- * 
+ *
  * @function is_persian_digit
  * @brief Check if the character is a Persian digit
  * @params {wchar_t} ch - Character
  * @returns {bool} - True if the character is a Persian digit, false otherwise
- * 
+ *
  */
 bool is_persian_digit(wchar_t ch);
 
 /**
- * 
+ *
  * @function is_arabic_digit
  * @brief Check if the character is an Arabic digit
  * @params {wchar_t} ch - Character
  * @returns {bool} - True if the character is an Arabic digit, false otherwise
- * 
+ *
  */
 bool is_arabic_digit(wchar_t ch);
 
 /**
- * 
+ *
  * @function string_is_number
  * @brief Check if the string is a number
  * @params {const char*} value - Value
  * @returns {bool} - True if the string is a number, false otherwise
- * 
+ *
  */
 bool string_is_number(const char* value);
 
 /**
- * 
+ *
  * @function string_is_percentage
  * @brief Check if the string is a percentage
  * @params {const char*} value - Value
  * @params {bool} acceptSign - Accept sign
  * @returns {bool} - True if the string is a percentage
- * 
+ *
  */
 bool string_is_percentage(const char* value, bool acceptSign);
 

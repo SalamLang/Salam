@@ -39,4 +39,3 @@ validator_layout_css_t css_attributes[] = {
         [2] = "inline",
     }},
 };
-

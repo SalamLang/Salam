@@ -206,22 +206,22 @@ void array_print(array_t* array);
  * @function array_string
  * @brief Convert the array to a string
  * @params {array_t*} array - Array
- * @params {char*} sepertor - Separator
+ * @params {char*} separator - Separator
  * @returns {char*} - String
  * 
  */
-char* array_stringify(array_t* array, char* sepertor);
+char* array_stringify(array_t* array, char* separator);
 
 /**
  * 
  * @function array_string_token
  * @brief Convert the token array to a string
  * @params {array_t*} array - Array
- * @params {char*} sepertor - Separator
+ * @params {char*} separator - Separator
  * @returns {char*} - String
  * 
  */
-char* array_string_token(array_t* array, char* sepertor);
+char* array_string_token(array_t* array, char* separator);
 
 /**
  * 
@@ -377,11 +377,11 @@ void array_value_print(array_value_t* array);
  * @function array_value_string
  * @brief Convert the attribute value array to a string
  * @params {array_value_t*} array - Array
- * @params {char*} seperator - Separator
+ * @params {char*} separator - Separator
  * @returns {char*} - String
  * 
  */
-char* array_value_stringify(array_value_t* array, char* seperator);
+char* array_value_stringify(array_value_t* array, char* separator);
 
 /**
  * 
@@ -408,11 +408,11 @@ array_value_t* array_value_copy(array_value_t* values);
  * @function array_value_string
  * @brief Convert the attribute value array to a string
  * @params {array_value_t*} array - Array
- * @params {char*} seperator - Separator
+ * @params {char*} separator - Separator
  * @returns {char*} - String
  * 
  */
-char* array_value_stringify(array_value_t* array, char* seperator);
+char* array_value_stringify(array_value_t* array, char* separator);
 
 /**
  * 

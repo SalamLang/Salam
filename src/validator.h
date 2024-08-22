@@ -161,7 +161,7 @@ char* attribute_css_size_value(char* attribute_value);
  * @returns {bool} - True if the style value is valid, false otherwise
  *
  */
-bool validate_style_value_sizes(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, const ast_layout_attribute_style_pair_t* allowed_values1, const ast_layout_attribute_style_pair_t* allowed_values2);
+bool validate_style_value_sizes(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, const ast_layout_attribute_style_pair_t* allowed_values1, const ast_layout_attribute_style_pair_t* allowed_values2, bool length_124);
 
 /**
  *

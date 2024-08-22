@@ -360,9 +360,9 @@ ast_layout_node_type_t name_to_ast_layout_node_type(char* name)
 	#undef ADD_LAYOUT_TYPE_HIDE
 	#undef ADD_LAYOUT_TYPE_REPEAT
 
-	#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME) == 0) { type = TYPE; return type; }
-	#define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME) == 0) { type = TYPE; return type; }
-	#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, NAME) == 0) { type = TYPE; return type; }
+	#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) else if (strcmp(name, NAME) == 0) { type = TYPE; return type; }
+	#define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) else if (strcmp(name, NAME) == 0) { type = TYPE; return type; }
+	#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) else if (strcmp(name, NAME) == 0) { type = TYPE; return type; }
 
 	if (false) {}
 	#include "ast_layout_type.h"
@@ -387,9 +387,9 @@ ast_layout_node_type_t enduser_name_to_ast_layout_node_type(char* name)
 	// #undef ADD_LAYOUT_TYPE_HIDE
 	#undef ADD_LAYOUT_TYPE_REPEAT
 
-	#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
-	// #define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
-	#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
+	#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
+	// #define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
+	#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
 
 	if (false) {}
 	#include "ast_layout_type.h"
@@ -438,9 +438,9 @@ char* ast_layout_node_type_to_name(ast_layout_node_type_t type)
 		#undef ADD_LAYOUT_TYPE_REPEAT
 		// #undef ADD_LAYOUT_ATTRIBUTE_TYPE
 
-		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return NAME;
-		#define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return NAME;
-		#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME)
+		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) case TYPE: return NAME;
+		#define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) case TYPE: return NAME;
+		#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER)
 		// #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return NAME;
 
 		#include "ast_layout_type.h"
@@ -467,9 +467,9 @@ char* ast_layout_node_type_to_enduser_name(ast_layout_node_type_t type)
 		#undef ADD_LAYOUT_TYPE_REPEAT
 		// #undef ADD_LAYOUT_ATTRIBUTE_TYPE
 
-		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return ENDUSER_NAME;
-		#define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return ENDUSER_NAME;
-		#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME)
+		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) case TYPE: return ENDUSER_NAME;
+		#define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) case TYPE: return ENDUSER_NAME;
+		#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER)
 		// #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return ENDUSER_NAME;
 
 		#include "ast_layout_type.h"

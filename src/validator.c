@@ -1006,6 +1006,10 @@ bool validate_style_value_size(hashmap_t* styles, hashmap_t* new_styles, ast_lay
 			return false;
 		}
 
+		if (attribute->final_value != NULL) {
+			memory_destroy(attribute->final_value);
+		}
+
 		attribute->final_value = strdup(out_value);
 		memory_destroy(buffer);
 		memory_destroy(out_value);

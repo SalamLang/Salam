@@ -30,7 +30,7 @@ char* file_reads(const char* path, size_t* size) {
     if (content == NULL) {
         panic("Memory allocation failed");
     }
-    
+
     fread(content, 1, file_capacity, file);
     content[file_capacity] = '\0';
 
@@ -46,12 +46,12 @@ wchar_t* utf8_to_wide(const char* utf8, size_t length, size_t* wide_length) {
     if (buf_size == (size_t)-1) {
         panic("Conversion from UTF-8 to wide string failed");
     }
-    
+
     wchar_t* wide = (wchar_t*)malloc((buf_size + 1) * sizeof(wchar_t));
     if (wide == NULL) {
         panic("Memory allocation failed");
     }
-    
+
     size_t result = mbstowcs(wide, utf8, buf_size + 1);
     if (result == (size_t)-1) {
         panic("Conversion from UTF-8 to wide string failed");

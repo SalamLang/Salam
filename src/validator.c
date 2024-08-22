@@ -295,6 +295,7 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 			return true;
 		}
 	}
+	// INPUT
 	else if (attribute->parent_node_type == AST_LAYOUT_TYPE_INPUT) {
 		ast_layout_attribute_type_t valid_attributes[] = {
 			AST_LAYOUT_ATTRIBUTE_TYPE_PLACEHOLDER,
@@ -304,6 +305,26 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 		size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
 
 		if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+			return true;
+		}
+	}
+	// LINK
+	else if (attribute->parent_node_type == AST_LAYOUT_TYPE_LINK) {
+		ast_layout_attribute_type_t valid_attributes[] = {
+			AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
+		};
+
+		size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
+
+		if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+			// rename src to href
+			if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_SRC) {
+				if (attribute->final_key != NULL) {
+					memory_destroy(attribute->final_key);
+				}
+
+				attribute->final_key = strdup("href");
+			}
 			return true;
 		}
 	}
@@ -1004,12 +1025,19 @@ bool validate_style_value_size(hashmap_t* styles, hashmap_t* new_styles, ast_lay
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
  * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed values 1
  * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed values 2
+ * @params {bool} length_124 - Length 124
  * @returns {bool} - True if the style value is valid, false otherwise
  *
  */
-bool validate_style_value_sizes(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, const ast_layout_attribute_style_pair_t* allowed_values1, const ast_layout_attribute_style_pair_t* allowed_values2)
+bool validate_style_value_sizes(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, const ast_layout_attribute_style_pair_t* allowed_values1, const ast_layout_attribute_style_pair_t* allowed_values2, bool length_124)
 {
 	DEBUG_ME;
+
+	if (length_124 == true) {
+		if (attribute->values->length != 1 && attribute->values->length != 2 && attribute->values->length != 4) {
+			return false;
+		}
+	}
 
 	for (size_t i = 0; i < attribute->values->length; i++) {
 		if (validate_style_value_size(styles, new_styles, attribute, allowed_values1, allowed_values2) == false) {
@@ -1102,7 +1130,10 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 					return validate_style_value_size_color(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZES) { \
-					return validate_style_value_sizes(styles, new_styles, attribute, NULL, values); \
+					return validate_style_value_sizes(styles, new_styles, attribute, NULL, values, false); \
+				} \
+				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZES124) { \
+					return validate_style_value_sizes(styles, new_styles, attribute, NULL, values, true); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLORS) { \
 					return validate_style_value_colors(styles, new_styles, attribute, NULL, values); \

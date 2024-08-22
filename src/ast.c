@@ -786,7 +786,7 @@ void ast_destroy(ast_t* ast)
 	printf("ast_destroy\n");
 	if (ast != NULL) {
 		if (ast->layout != NULL) {
-			ast->layout->destroy(ast->layout);
+			ast_layout_destroy(ast->layout);
 		}
 
 		if (ast->functions != NULL) {

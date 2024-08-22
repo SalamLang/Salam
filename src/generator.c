@@ -137,13 +137,13 @@ void generator_save(generator_t* generator, const char* html_output, const char*
 }
 
 /**
- * 
+ *
  * @function generator_code_node
  * @brief Generate the code for the node
  * @params {generator_t*} generator - Generator
  * @params {ast_node_t*} node - Node
  * @returns {string_t*} code - Code
- * 
+ *
  */
 string_t* generator_code_node(generator_t* generator, ast_node_t* node)
 {
@@ -156,10 +156,10 @@ string_t* generator_code_node(generator_t* generator, ast_node_t* node)
 
 		case AST_TYPE_IMPORT:
 			break;
-		
+
 		case AST_TYPE_LAYOUT:
 			break;
-		
+
 		case AST_TYPE_BLOCK: {
 			string_t* block_code = generator_code_block(generator, node->data.block);
 
@@ -181,7 +181,7 @@ string_t* generator_code_node(generator_t* generator, ast_node_t* node)
 			}
 		}
 		break;
-		
+
 		case AST_TYPE_IF:
 		case AST_TYPE_ELSE_IF: {
 			string_t* if_code = generator_code_if(generator, node->data.ifclause);
@@ -221,13 +221,13 @@ string_t* generator_code_node(generator_t* generator, ast_node_t* node)
 }
 
 /**
- * 
+ *
  * @function generator_code_type
  * @brief Generate the code for the type
  * @params {generator_t*} generator - Generator
  * @params {ast_value_type_t*} type - Type
  * @returns {string_t*} code - Code
- * 
+ *
  */
 string_t* generator_code_type(generator_t* generator, ast_value_type_t* type)
 {
@@ -240,47 +240,47 @@ string_t* generator_code_type(generator_t* generator, ast_value_type_t* type)
 		case AST_TYPE_KIND_VOID:
 			string_append_str(code, "void");
 			return code;
-		
+
 		case AST_TYPE_KIND_NULL:
 			string_append_str(code, "null");
 			return code;
-		
+
 		case AST_TYPE_KIND_INT:
 			string_append_str(code, "int");
 			return code;
-		
+
 		case AST_TYPE_KIND_FLOAT:
 			string_append_str(code, "float");
 			return code;
-		
+
 		case AST_TYPE_KIND_CHAR:
 			string_append_str(code, "char");
 			return code;
-		
+
 		case AST_TYPE_KIND_STRING:
 			string_append_str(code, "string");
 			return code;
-		
+
 		case AST_TYPE_KIND_BOOL:
 			string_append_str(code, "bool");
 			return code;
-		
+
 		case AST_TYPE_KIND_ARRAY:
 			string_append_str(code, "array");
 			return code;
-		
+
 		// case AST_TYPE_KIND_MAP:
 		//     string_append_str(code, "map");
 		//     return code;
-		
+
 		case AST_TYPE_KIND_STRUCT:
 			string_append_str(code, "struct");
 			return code;
-		
+
 		case AST_TYPE_KIND_ENUM:
 			string_append_str(code, "enum");
 			return code;
-		
+
 		// case AST_TYPE_KIND_UNION:
 		//     string_append_str(code, "union");
 		//     return code;
@@ -288,7 +288,7 @@ string_t* generator_code_type(generator_t* generator, ast_value_type_t* type)
 		case AST_TYPE_KIND_POINTER:
 			string_append_str(code, "pointer");
 			return code;
-		
+
 		case AST_TYPE_KIND_FUNCTION:
 			string_append_str(code, "function");
 			return code;
@@ -299,13 +299,13 @@ string_t* generator_code_type(generator_t* generator, ast_value_type_t* type)
 }
 
 /**
- * 
+ *
  * @function generator_code_value
  * @brief Generate the code for the value
  * @params {generator_t*} generator - Generator
  * @params {ast_value_t*} value - Value
  * @returns {string_t*} code - Code
- * 
+ *
  */
 string_t* generator_code_value(generator_t* generator, ast_value_t* value)
 {
@@ -325,7 +325,7 @@ string_t* generator_code_value(generator_t* generator, ast_value_t* value)
 			case AST_TYPE_KIND_VOID:
 				string_append_str(code, "VOID");
 				return code;
-			
+
 			case AST_TYPE_KIND_INT:
 				string_append_str(code, int2string(value->data.int_value));
 				return code;
@@ -380,13 +380,13 @@ string_t* generator_code_value(generator_t* generator, ast_value_t* value)
 }
 
 /**
- * 
+ *
  * @function generator_code_values
  * @brief Generate the code for the values
  * @params {generator_t*} generator - Generator
  * @params {array_t*} values - Values
  * @returns {string_t*} code - Code
- * 
+ *
  */
 string_t* generator_code_values(generator_t* generator, array_t* values)
 {
@@ -417,13 +417,13 @@ string_t* generator_code_values(generator_t* generator, array_t* values)
 }
 
 /**
- * 
+ *
  * @function generator_code_print
  * @brief Generate the code for the print
  * @params {generator_t*} generator - Generator
  * @params {ast_print_t*} print - Print
  * @returns {string_t*} code - Code
- * 
+ *
  */
 string_t* generator_code_print(generator_t* generator, ast_print_t* print)
 {
@@ -454,13 +454,13 @@ string_t* generator_code_print(generator_t* generator, ast_print_t* print)
 }
 
 /**
- * 
+ *
  * @function generator_code_return
  * @brief Generate the code for the return
  * @params {generator_t*} generator - Generator
  * @params {ast_return_t*} returns - Returns
  * @returns {string_t*} code - Code
- * 
+ *
  */
 string_t* generator_code_return(generator_t* generator, ast_return_t* returns)
 {
@@ -496,13 +496,13 @@ string_t* generator_code_return(generator_t* generator, ast_return_t* returns)
 }
 
 /**
- * 
+ *
  * @function generator_code_if
  * @brief Generate the code for the if clause
  * @params {generator_t*} generator - Generator
  * @params {ast_if_t*} ifclause - If clause
  * @returns {string_t*} code - Code
- * 
+ *
  */
 string_t* generator_code_if(generator_t* generator, ast_if_t* ifclause)
 {
@@ -559,13 +559,13 @@ string_t* generator_code_if(generator_t* generator, ast_if_t* ifclause)
 }
 
 /**
- * 
+ *
  * @function generator_code_block
  * @brief Generate the code for the block
  * @params {generator_t*} generator - Generator
  * @params {ast_block_t*} block - Block
  * @returns {string_t*} code - Code
- * 
+ *
  */
 string_t* generator_code_block(generator_t* generator, ast_block_t* block)
 {
@@ -598,13 +598,13 @@ string_t* generator_code_block(generator_t* generator, ast_block_t* block)
 }
 
 /**
- * 
+ *
  * @function generator_code_function
  * @brief Generate the code for the function
  * @params {generator_t*} generator - Generator
  * @params {ast_function_t*} function - Function
  * @returns {string_t*} code - Code
- * 
+ *
  */
 string_t* generator_code_function(generator_t* generator, ast_function_t* function)
 {
@@ -624,12 +624,12 @@ string_t* generator_code_function(generator_t* generator, ast_function_t* functi
 }
 
 /**
- * 
+ *
  * @function generator_code_functions
  * @brief Generate the code for the functions
  * @params {generator_t*} generator - Generator
  * @returns {void}
- * 
+ *
  */
 void generator_code_functions(generator_t* generator)
 {

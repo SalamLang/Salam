@@ -109,7 +109,7 @@ ast_value_t* ast_value_create(ast_value_type_t* type, void* value)
 		size_t value_size = value_length < 1 ? 1 : value_length + 1;
 
 		res->data.string_value = memory_allocate(value_size);
-		
+
 		memcpy(res->data.string_value, value, value_size);
 	}
 

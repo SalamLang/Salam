@@ -2,13 +2,13 @@
 #include "array.h"
 
 /**
- * 
+ *
  * @function array_create
  * @brief Create a new array
  * @params {size_t} element_capacity - Size of each element
  * @params {size_t} capacity - Initial capacity of the array
  * @returns {array_t*} - Pointer to the created array
- * 
+ *
  */
 array_t* array_create(size_t element_capacity, size_t capacity)
 {
@@ -21,19 +21,19 @@ array_t* array_create(size_t element_capacity, size_t capacity)
 
     array->print = cast(void (*)(void*), array_print);
     array->destroy = cast(void (*)(void*), array_destroy);
-    
+
     return array;
 }
 
 /**
- * 
+ *
  * @function array_init
  * @brief Create a new array
  * @params {array_t*} array - Array to initialize
  * @params {size_t} capacity - Initial capacity of the array
  * @params {size_t} element_capacity - Size of each element
  * @returns {void}
- * 
+ *
  */
 void array_init(array_t* array, size_t capacity, size_t element_capacity)
 {
@@ -45,13 +45,13 @@ void array_init(array_t* array, size_t capacity, size_t element_capacity)
 }
 
 /**
- * 
+ *
  * @function array_push
  * @brief Push an element to the array
  * @params {array_t*} array - Array
  * @params {void*} element - Element to add
  * @returns {bool} - Success status
- * 
+ *
  */
 bool array_push(array_t* array, void* element)
 {
@@ -60,20 +60,20 @@ bool array_push(array_t* array, void* element)
         array->capacity *= 2;
         array->data = memory_reallocate(array->data, array->element_capacity * array->capacity);
     }
-    
+
     array->data[array->length++] = element;
 
     return true;
 }
 
 /**
- * 
+ *
  * @function array_pop
  * @brief Pop an element from the array
  * @params {array_t*} array - Array
  * @params {void*} element - Buffer to store the popped element
  * @returns {bool} - Success status
- * 
+ *
  */
 bool array_pop(array_t* array, void* element)
 {
@@ -88,13 +88,13 @@ bool array_pop(array_t* array, void* element)
 }
 
 /**
- * 
+ *
  * @function array_resize
  * @brief Resize the array to a new capacity
  * @params {array_t*} array - Array
  * @params {size_t} new_capacity - New capacity
  * @returns {void}
- * 
+ *
  */
 void array_resize(array_t* array, size_t new_capacity)
 {
@@ -104,13 +104,13 @@ void array_resize(array_t* array, size_t new_capacity)
 }
 
 /**
- * 
+ *
  * @function array_get
  * @brief Get an element from the array
  * @params {array_t*} array - Array
  * @params {size_t} index - Index of the element
  * @returns {void*} - Pointer to the element
- * 
+ *
  */
 void* array_get(array_t* array, size_t index)
 {
@@ -123,12 +123,12 @@ void* array_get(array_t* array, size_t index)
 }
 
 /**
- * 
+ *
  * @function array_destroy
  * @brief Free the array memory
  * @params {array_t*} array - Array
  * @returns {void}
- * 
+ *
  */
 void array_destroy(array_t* array)
 {
@@ -145,13 +145,13 @@ void array_destroy(array_t* array)
 }
 
 /**
- * 
+ *
  * @function array_string
  * @brief Convert the array to a string
  * @params {array_t*} array - Array
  * @params {char*} separator - Separator
  * @returns {char*} - String
- * 
+ *
  */
 char* array_stringify(array_t* array, char* separator)
 {
@@ -166,7 +166,7 @@ char* array_stringify(array_t* array, char* separator)
 
         if (item != NULL) {
             string_append_str(str, item);
-            
+
             if (i < array->length - 1) {
                 string_append_str(str, separator);
             }
@@ -180,13 +180,13 @@ char* array_stringify(array_t* array, char* separator)
 }
 
 /**
- * 
+ *
  * @function array_string_token
  * @brief Convert the token array to a string
  * @params {array_t*} array - Array
  * @params {char*} separator - Separator
  * @returns {char*} - String
- * 
+ *
  */
 char* array_string_token(array_t* array, char* separator)
 {
@@ -212,13 +212,13 @@ char* array_string_token(array_t* array, char* separator)
 }
 
 /**
- * 
+ *
  * @function array_destroy_custom
  * @brief Free the array memory
  * @params {array_t*} array - Array
  * @params {void (*free_fn)(void*)} free_fn - Custom free function
  * @returns {void}
- * 
+ *
  */
 void array_destroy_custom(array_t* array, void (*free_fn)(void*))
 {
@@ -232,7 +232,7 @@ void array_destroy_custom(array_t* array, void (*free_fn)(void*))
                     }
                 }
             }
-            
+
             memory_destroy(array->data);
         }
 
@@ -245,12 +245,12 @@ void array_destroy_custom(array_t* array, void (*free_fn)(void*))
 }
 
 /**
- * 
+ *
  * @function array_print
  * @brief Print the array
  * @params {array_t*} array - Array
  * @returns {void}
- * 
+ *
  */
 void array_print(array_t* array)
 {
@@ -263,12 +263,12 @@ void array_print(array_t* array)
 }
 
 /**
- * 
+ *
  * @function array_token_print
  * @brief Print the token array
  * @params {array_token_t*} array - Token array
  * @returns {void}
- * 
+ *
  */
 void array_token_print(array_token_t* array)
 {
@@ -282,13 +282,13 @@ void array_token_print(array_token_t* array)
 }
 
 /**
- * 
+ *
  * @function array_token_stringify
  * @brief Convert the token array to a string
  * @params {array_token_t*} array - Token array
  * @params {char*} separator - Separator
  * @returns {char*} - String
- * 
+ *
  */
 char* array_token_stringify(array_token_t* array)
 {
@@ -314,12 +314,12 @@ char* array_token_stringify(array_token_t* array)
 }
 
 /**
- * 
+ *
  * @function array_node_destroy
  * @brief Free the node array memory
  * @params {array_node_t*} array - Node array
  * @returns {void}
- * 
+ *
  */
 void array_node_destroy(array_node_t* array)
 {
@@ -328,7 +328,7 @@ void array_node_destroy(array_node_t* array)
         if (array->data != NULL) {
             for (size_t i = 0; i < array->length; i++) {
                 ast_node_t* node = array_get(array, i);
-                
+
                 if (node != NULL) {
                     node->destroy(node);
                 }
@@ -346,12 +346,12 @@ void array_node_destroy(array_node_t* array)
 }
 
 /**
- * 
+ *
  * @function array_node_print
  * @brief Print the node array
  * @params {array_node_t*} array - Node array
  * @returns {void}
- * 
+ *
  */
 void array_node_print(array_node_t* array)
 {
@@ -366,12 +366,12 @@ void array_node_print(array_node_t* array)
 }
 
 /**
- * 
+ *
  * @function array_layout_attribute_print
  * @brief Print the attribute array
  * @params {array_layout_attribute_t*} array - Attribute array
  * @returns {void}
- * 
+ *
  */
 void array_layout_attribute_print(array_layout_attribute_t* array)
 {
@@ -393,12 +393,12 @@ void array_layout_attribute_print(array_layout_attribute_t* array)
 }
 
 /**
- * 
+ *
  * @function array_capacity
  * @brief Get the size of the array
  * @params {array_t*} array - Array
  * @returns {size_t} - Size of the array
- * 
+ *
  */
 size_t array_capacity(array_t* array)
 {
@@ -407,12 +407,12 @@ size_t array_capacity(array_t* array)
 }
 
 /**
- * 
+ *
  * @function array_length
  * @brief Get the length of the array
  * @params {array_t*} array - Array
  * @returns {size_t} - Length of the array
- * 
+ *
  */
 size_t array_length(array_t* array)
 {
@@ -421,12 +421,12 @@ size_t array_length(array_t* array)
 }
 
 /**
- * 
+ *
  * @function array_token_destroy
  * @brief Free the token array memory
  * @params {array_token_t*} array - Token array
  * @returns {void}
- * 
+ *
  */
 void array_token_destroy(array_token_t* array)
 {
@@ -434,7 +434,7 @@ void array_token_destroy(array_token_t* array)
     if (array != NULL) {
         for (size_t i = 0; i < array->length; i++) {
             token_t* token = array_get(array, i);
-            
+
             if (token != NULL) {
                 token->destroy(token);
             }
@@ -445,12 +445,12 @@ void array_token_destroy(array_token_t* array)
 }
 
 /**
- * 
+ *
  * @function array_layout_node_destroy
  * @brief Free the node array memory
  * @params {array_node_t*} array - Node array
  * @returns {void}
- * 
+ *
  */
 void array_layout_node_destroy(array_node_layout_t* array)
 {
@@ -473,16 +473,16 @@ void array_layout_node_destroy(array_node_layout_t* array)
         array->element_capacity = 0;
 
         memory_destroy(array);
-    }    
+    }
 }
 
 /**
- * 
+ *
  * @function array_layout_attribute_print
  * @brief Print the attribute array
  * @params {array_layout_attribute_t*} array - Attribute array
  * @returns {void}
- * 
+ *
  */
 void array_layout_node_print(array_node_layout_t* array)
 {
@@ -502,12 +502,12 @@ void array_layout_node_print(array_node_layout_t* array)
 }
 
 /**
- * 
+ *
  * @function array_function_parameter_print
  * @brief Print the function parameter array
  * @params {array_function_parameter_t*} array - Function parameter array
  * @returns {void}
- * 
+ *
  */
 void array_function_parameter_print(array_function_parameter_t* array)
 {
@@ -523,12 +523,12 @@ void array_function_parameter_print(array_function_parameter_t* array)
 }
 
 /**
- * 
+ *
  * @function array_function_parameter_destroy
  * @brief Free the function parameter array memory
  * @params {array_function_parameter_t*} array - Function parameter array
  * @returns {void}
- * 
+ *
  */
 void array_function_parameter_destroy(array_function_parameter_t* array)
 {
@@ -537,7 +537,7 @@ void array_function_parameter_destroy(array_function_parameter_t* array)
         if (array->data != NULL) {
             for (size_t i = 0; i < array->length; i++) {
                 ast_function_parameter_t* parameter = array_get(array, i);
-                
+
                 if (parameter != NULL) {
                     parameter->destroy(parameter);
                 }
@@ -555,7 +555,7 @@ void array_function_parameter_destroy(array_function_parameter_t* array)
 }
 
 /**
- * 
+ *
  * @function array_function_destroy
  * @brief Free the function array memory
  * @params {array_function_t*} array - Function array
@@ -568,7 +568,7 @@ void array_function_destroy(array_function_t* array)
         if (array->data != NULL) {
             for (size_t i = 0; i < array->length; i++) {
                 ast_function_t* function = array_get(array, i);
-                
+
                 if (function != NULL) {
                     function->destroy(function);
                 }
@@ -586,12 +586,12 @@ void array_function_destroy(array_function_t* array)
 }
 
 /**
- * 
+ *
  * @function array_function_print
  * @brief Print the function array
  * @params {array_function_t*} array - Function array
  * @returns {void}
- * 
+ *
  */
 void array_function_print(array_function_t* array)
 {
@@ -607,12 +607,12 @@ void array_function_print(array_function_t* array)
 }
 
 /**
- * 
+ *
  * @function array_if_destroy
  * @brief Free the if array memory
  * @params {array_if_t*} array - If array
  * @returns {void}
- * 
+ *
  */
 void array_if_destroy(array_if_t* array)
 {
@@ -621,7 +621,7 @@ void array_if_destroy(array_if_t* array)
         if (array->data != NULL) {
             for (size_t i = 0; i < array->length; i++) {
                 ast_if_t* if_statement = array_get(array, i);
-                
+
                 if (if_statement != NULL) {
                     if_statement->destroy(if_statement);
                 }
@@ -639,12 +639,12 @@ void array_if_destroy(array_if_t* array)
 }
 
 /**
- * 
+ *
  * @function array_if_print
  * @brief Print the if array
  * @params {array_if_t*} array - If array
  * @returns {void}
- * 
+ *
  */
 void array_if_print(array_if_t* array)
 {
@@ -660,12 +660,12 @@ void array_if_print(array_if_t* array)
 }
 
 /**
- * 
+ *
  * @function array_value_destroy
  * @brief Free the value array memory
  * @params {array_value_t*} array - Value array
  * @returns {void}
- * 
+ *
  */
 void array_value_destroy(array_value_t* array)
 {
@@ -674,7 +674,7 @@ void array_value_destroy(array_value_t* array)
         if (array->data != NULL) {
             for (size_t i = 0; i < array->length; i++) {
                 ast_value_t* value = array_get(array, i);
-                
+
                 if (value != NULL) {
                     value->destroy(value);
                 }
@@ -692,12 +692,12 @@ void array_value_destroy(array_value_t* array)
 }
 
 /**
- * 
+ *
  * @function array_block_destroy
  * @brief Free the block array memory
  * @params {array_block_t*} array - Block array
  * @returns {void}
- * 
+ *
  */
 void array_block_destroy(array_block_t* array)
 {
@@ -706,7 +706,7 @@ void array_block_destroy(array_block_t* array)
         if (array->data != NULL) {
             for (size_t i = 0; i < array->length; i++) {
                 ast_block_t* block = array_get(array, i);
-                
+
                 if (block != NULL) {
                     block->destroy(block);
                 }
@@ -724,12 +724,12 @@ void array_block_destroy(array_block_t* array)
 }
 
 /**
- * 
+ *
  * @function array_block_print
  * @brief Print the block array
  * @params {array_block_t*} array - Block array
  * @returns {void}
- * 
+ *
  */
 void array_block_print(array_block_t* array)
 {
@@ -738,7 +738,7 @@ void array_block_print(array_block_t* array)
         printf("Block array is NULL\n");
         return;
     }
-    
+
     printf("Block array: %zu\n", array->length);
 
     for (size_t i = 0; i < array->length; i++) {
@@ -750,31 +750,31 @@ void array_block_print(array_block_t* array)
 }
 
 /**
- * 
+ *
  * @function array_value_create
  * @brief Create a new value array
  * @params {size_t} capacity - Initial capacity of the array
  * @returns {array_value_t*} - Pointer to the created array
- * 
+ *
  */
 array_value_t* array_value_create(size_t capacity)
 {
     DEBUG_ME;
     array_value_t* array = array_create(sizeof(ast_value_t*), capacity);
-    
+
     array->print = cast(void (*)(void*), array_value_print);
     array->destroy = cast(void (*)(void*), array_value_destroy);
-    
+
     return array;
 }
 
 /**
- * 
+ *
  * @function array_value_print
  * @brief Print the value array
  * @params {array_value_t*} array - Value array
  * @returns {void}
- * 
+ *
  */
 void array_value_print(array_value_t* array)
 {
@@ -784,7 +784,7 @@ void array_value_print(array_value_t* array)
     for (size_t i = 0; i < array->length; i++) {
         printf("\t");
         ast_value_t* value = array_get(array, i);
-        
+
         if (value == NULL) {
             printf("NULL\n");
             continue;
@@ -796,12 +796,12 @@ void array_value_print(array_value_t* array)
 }
 
 /**
- * 
+ *
  * @function array_value_first_string
  * @brief Get the first string from the value array
  * @params {array_value_t*} array - Array
  * @returns {char*} - String
- * 
+ *
  */
 char* array_value_first_stringify(array_value_t* array)
 {
@@ -827,13 +827,13 @@ char* array_value_first_stringify(array_value_t* array)
 }
 
 /**
- * 
+ *
  * @function array_value_string
  * @brief Convert the attribute value array to a string
  * @params {array_value_t*} array - Array
  * @params {char*} separator - Separator
  * @returns {char*} - String
- * 
+ *
  */
 char* array_value_stringify(array_value_t* array, char* separator)
 {
@@ -848,7 +848,7 @@ char* array_value_stringify(array_value_t* array, char* separator)
 
         if (value != NULL) {
             string_append_str(str, value->get_data(value));
-            
+
             if (i < array->length - 1) {
                 string_append_str(str, separator);
             }
@@ -862,12 +862,12 @@ char* array_value_stringify(array_value_t* array, char* separator)
 }
 
 /**
- * 
+ *
  * @function array_value_copy
  * @brief Copy the attribute value array
  * @params {array_value_t*} values - Array
  * @returns {array_value_t*} - Copied array
- * 
+ *
  */
 array_value_t* array_value_copy(array_value_t* values)
 {

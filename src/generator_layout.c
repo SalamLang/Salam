@@ -507,7 +507,7 @@ string_t* generator_code_layout_styles(hashmap_layout_attribute_t* styles, ast_l
 				if (attribute->isStyle == false || attribute->ignoreMe == true) {}
 				else {
 					if (attribute->final_value == NULL) {
-						error_generator(2, "Someting went wrong with the style value for '%s' attribute in '%s' element!", attribute->final_key, ast_layout_node_type_to_enduser_name(block->parent_node_type));
+						error_generator(2, "Something went wrong with the style value for '%s' attribute in '%s' element!", attribute->final_key, ast_layout_node_type_to_enduser_name(block->parent_node_type));
 					}
 
 					if (css_attributes_length_local != 0) {
@@ -792,7 +792,7 @@ char* generator_code_layout_attribute_style_state_type_to_enduser_name(ast_layou
 		#include "ast_layout_attribute_style_state_type.h"
 	}
 
-	return "uknown style state endusername";
+	return "unknown style state endusername";
 }
 
 /**
@@ -814,7 +814,7 @@ char* generator_code_layout_attribute_style_state_type_to_name(ast_layout_attrib
 		#include "ast_layout_attribute_style_state_type.h"
 	}
 
-	return "uknown style state name";
+	return "unknown style state name";
 }
 
 /**
@@ -859,7 +859,7 @@ char* generator_code_layout_attribute_style_state_type_to_generated_name(ast_lay
 		#include "ast_layout_attribute_style_state_type.h"
 	}
 
-	return "uknown style state generated name";
+	return "unknown style state generated name";
 }
 
 /**

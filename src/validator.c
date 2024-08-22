@@ -557,6 +557,9 @@ bool validate_style_value_color(hashmap_t* styles, hashmap_t* new_styles, ast_la
 		if (strlen(value) == 0) {
 			return false;
 		}
+		else if (value[0] == '#') {
+			return true;
+		}
 
 		if (allowed_values2 != NULL) {
 			size_t i = 0;
@@ -923,14 +926,38 @@ bool validate_style_value_size(hashmap_t* styles, hashmap_t* new_styles, ast_lay
 		return true;
 	}
 	else if (first->type->kind == AST_TYPE_KIND_STRING) {
-		if (strlen(first->data.string_value) == 0) {
+		char* value = first->data.string_value;
+		if (strlen(value) == 0) {
 			return false;
 		}
-		else if (first->data.string_value[0] == '#') {
-			return true;
+
+		if (allowed_values2 != NULL) {
+			size_t i = 0;
+			while (allowed_values2[i].input != NULL) {
+				if (strcmp(value, allowed_values2[i].input) == 0) {
+					attribute->final_value = strdup(allowed_values2[i].output);
+
+					return true;
+				}
+
+				i++;
+			}
 		}
 
-		char* buffer = normalise_css_size(first->data.string_value);
+		if (allowed_values1 != NULL) {
+			size_t i = 0;
+			while (allowed_values1[i].input != NULL) {
+				if (strcmp(value, allowed_values1[i].input) == 0) {
+					attribute->final_value = strdup(allowed_values1[i].output);
+
+					return true;
+				}
+
+				i++;
+			}
+		}
+
+		char* buffer = normalise_css_size(value);
 
 		char* out_value;
 		if (!has_css_size_prefix(buffer, &out_value)) {

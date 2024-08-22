@@ -1,0 +1,5 @@
+ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE("inherit", "ارث بری")
+ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE("initial", "ابتدایی")
+ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE("revert", "بازگردانی")
+ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE("revert-layer", "بازگردانی لایه")
+ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE("unset", "حذف شده")

@@ -4,14 +4,6 @@
 #include <string.h>
 #include <stdbool.h>
 
-#include "base.h"
-#include "memory.h"
-#include "ast.h"
-#include "array.h"
-#include "array_custom.h"
-#include "hashmap.h"
-#include "hashmap_custom.h"
-
 typedef enum {
     #undef ADD_LAYOUT_TYPE
     #undef ADD_LAYOUT_TYPE_HIDE
@@ -45,6 +37,13 @@ typedef enum {
 } ast_layout_attribute_type_t;
 
 #include "ast_layout_style.h"
+#include "base.h"
+#include "memory.h"
+#include "ast.h"
+#include "array.h"
+#include "array_custom.h"
+#include "hashmap.h"
+#include "hashmap_custom.h"
 
 typedef struct ast_layout_block_t {
     char* tag;
@@ -308,26 +307,6 @@ ast_layout_attribute_t* ast_layout_attribute_copy(ast_layout_attribute_t* value)
  *
  */
 ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char* name);
-
-/**
- *
- * @function name_to_ast_layout_attribute_style_type
- * @brief Convert style attribute name to AST layout node type
- * @params {char*} name - Name
- * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
- *
- */
-ast_layout_attribute_type_t name_to_ast_layout_attribute_style_type(char* name);
-
-/**
- *
- * @function enduser_name_to_ast_layout_attribute_style_type
- * @brief Convert style end-user attribute name to AST layout node type
- * @params {char*} name - Name
- * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
- *
- */
-ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_style_type(char* name);
 
 /**
  *

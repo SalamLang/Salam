@@ -72,7 +72,6 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer)
 	expect_close_block(lexer);
 }
 
-
 /**
  *
  * @function parser_parse_layout_name
@@ -149,7 +148,6 @@ void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexe
 	}
 }
 
-
 /**
  *
  * @function parser_parse_layout_block_attribute
@@ -212,8 +210,6 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* blo
 		error_parser(2, "Attribute '%s' is not a style attribute at line %d, column %d", attribute_key_name, last_name->location.end_line, last_name->location.end_column);
 	}
 }
-
-
 
 /**
  *

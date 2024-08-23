@@ -4,15 +4,6 @@
 #include <string.h>
 #include <stdbool.h>
 
-#include "base.h"
-#include "memory.h"
-#include "ast.h"
-#include "array.h"
-#include "array_custom.h"
-#include "hashmap.h"
-#include "hashmap_custom.h"
-#include "ast_layout.h"
-
 typedef enum {
     #undef ADD_LAYOUT_ATTRIBUTE_STYLE_FILTER
     #define ADD_LAYOUT_ATTRIBUTE_STYLE_FILTER(TYPE, NAME, NAME_LOWER) TYPE,
@@ -35,6 +26,16 @@ typedef enum ast_layout_attribute_style_state_type {
 
     #include "ast_layout_attribute_style_state_type.h"
 } ast_layout_attribute_style_state_type;
+
+
+#include "base.h"
+#include "memory.h"
+#include "array.h"
+#include "array_custom.h"
+#include "hashmap.h"
+#include "hashmap_custom.h"
+#include "ast.h"
+#include "ast_layout.h"
 
 /**
  *

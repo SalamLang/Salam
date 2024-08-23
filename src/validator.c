@@ -446,6 +446,8 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 						}
 					}
 					else {
+						printf("....\n");
+						value->print(value);
 						error_validator(2, "Invalid value for attribute '%s' in '%s' element at line %zu column %zu!", attribute->key, ast_layout_node_type_to_enduser_name(attribute->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
 
 						return false;
@@ -493,7 +495,7 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 				return true;
 			}
 
-			return false;
+			return true;
 		}
 	}
 	// INPUT

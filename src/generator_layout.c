@@ -269,8 +269,6 @@ void generator_code_head_meta_children(generator_t* generator, ast_layout_block_
 					while (entry) {
 						ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
 						
-						generator_code_layout_style_value(node_block->styles->normal, block->styles->new, attribute);
-
 						char* value = array_value_stringify(attribute->values, ", ");
 
 						string_append_str(generator->css, attribute->final_key == NULL ? entry->key : attribute->final_key); // TODO: Why name lowercase entry->key?

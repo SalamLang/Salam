@@ -224,7 +224,8 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_background
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_background_blend_mode[] = {
-    {"نرمال", "normal"},
+    {"عادی", "normal"},
+    {"معمولی", "normal"},
     {"سخت", "multiply"},
     {"افزودن", "screen"},
     {"حذف", "overlay"},
@@ -683,18 +684,21 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_stret
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_style[] = {
-    {"نرمال", "normal"},
+    {"عادی", "normal"},
+    {"معمولی", "normal"},
     {"خوب", "italic"},
     {"خمیده", "oblique"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_variant[] = {
-    {"نرمال", "normal"},
+    {"عادی", "normal"},
+    {"معمولی", "normal"},
     {"حرف‌های بزرگ", "small-caps"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_weight[] = {
-    {"نرمال", "normal"},
+    {"عادی", "normal"},
+    {"معمولی", "normal"},
     {"سنگین", "bold"},
     {"خیلی سنگین", "bolder"},
     {NULL, NULL},
@@ -1205,6 +1209,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_visibility
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_white_space[] = {
+    {"عادی", "normal"},
     {"معمولی", "normal"},
     {"بدون شکستن", "nowrap"},
     {"پیش قالب‌بندی شده", "pre"},
@@ -1216,6 +1221,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_white_spac
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_word_break[] = {
+    {"عادی", "normal"},
     {"معمولی", "normal"},
     {"بشکن", "break-all"},
     {"شکست کلمه", "keep-all"},

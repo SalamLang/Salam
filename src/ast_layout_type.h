@@ -118,3 +118,6 @@ ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_IMG, "IMG", "img", "img", "عکس", true)
 
 // Own/Custom Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FONT, "FONT", "font", "font", "فونت", true)
+
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA_MAX_WIDTH, "RESPONSIVE", "responsive", "@media only screen and (max-width:", "پذیرا حداکثر عرض", true)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA_MIN_WIDTH, "RESPONSIVE", "responsive", "@media only screen and (min-width:", "پذیرا حداقل عرض", true)

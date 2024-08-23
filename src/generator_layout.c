@@ -268,7 +268,7 @@ void generator_code_head_meta_children(generator_t* generator, ast_layout_block_
 
 						char* value = array_value_stringify(attribute->values, ", ");
 
-						string_append_str(generator->css, attribute->final_key == NULL ? entry->key : attribute->final_key);
+						string_append_str(generator->css, attribute->final_key == NULL ? entry->key : attribute->final_key); // TODO: Why name lowercase entry->key?
 						string_append_char(generator->css, ':');
 						string_append_str(generator->css, attribute->final_value == NULL ? value : attribute->final_value);
 
@@ -538,7 +538,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 							string_append_char(html_attributes, ' ');
 						}
 
-						string_append_str(html_attributes, attribute->final_key == NULL ? entry->key : attribute->final_key);
+						string_append_str(html_attributes, attribute->final_key == NULL ? entry->key : attribute->final_key); // TODO: Why name lowercase entry->key?
 						string_append_str(html_attributes, "=");
 
 						if (attribute_value_length > 1) {
@@ -679,4 +679,36 @@ char* generator_code_layout_node_type(ast_layout_node_type_t type)
 	}
 
 	return "error?";
+}
+
+/**
+ *
+ * @function generator_code_layout_attribute_name
+ * @brief Convert AST layout attribute type to HTML attribute name
+ * @params {ast_layout_attribute_type_t} type - Layout Attribute Type
+ * @returns {char*} name - Name
+ *
+ */
+char* generator_code_layout_attribute_name(ast_layout_attribute_type_t type)
+{
+	DEBUG_ME;
+	switch (type) {
+		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
+		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
+
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) case TYPE: return "ERROR";
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS)
+
+	    #include "ast_layout_attribute_style_type.h"
+		
+		#undef ADD_LAYOUT_ATTRIBUTE_TYPE
+		#undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
+
+		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return GENERATED_NAME;
+		#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
+
+	    #include "ast_layout_attribute_type.h"
+	}
+
+	return "error2????";
 }

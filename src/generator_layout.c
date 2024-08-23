@@ -381,11 +381,17 @@ void generator_code_layout(generator_t* generator)
 
 			string_append(html, head);
 
-			if (generator->css != NULL && generator->css->length > 0) {
+			if ((generator->css != NULL && generator->css->length > 0) || (generator->media_css != NULL && generator->media_css->length > 0)) {
 				if (generator->inlineCSS == true) {
 					string_append_str(html, "<style>\n");
-					string_append(html, generator->css);
-					string_append_char(html, '\n');
+					if (generator->css != NULL && generator->css->length > 0) {
+						string_append(html, generator->css);
+						string_append_char(html, '\n');
+					}
+					if (generator->media_css != NULL && generator->media_css->length > 0) {
+						string_append(html, generator->media_css);
+						string_append_char(html, '\n');
+					}
 					string_append_str(html, "</style>\n");
 				}
 				else {
@@ -621,7 +627,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 			ast_layout_attribute_t* media_max_height = hashmap_get(node_block->attributes, "responsive_max_height");
 			ast_layout_attribute_t* media_min_height = hashmap_get(node_block->attributes, "responsive_min_height");
 
-			string_append_str(generator->css, "@media only screen and(");
+			string_append_str(generator->media_css, "@media only screen and ("); // NOTE: WE HAVE TO HAVE A SPACE AFTER `AND`
 
 			size_t conditions = 0;
 			size_t media_queries_styles_length = 0;
@@ -639,11 +645,11 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 				}
 
 				if (conditions > 0) {
-					string_append_str(generator->css, " and ");
+					string_append_str(generator->media_css, " and ");
 				}
 
-				string_append_str(generator->css, "max-width: ");
-				string_append_str(generator->css, media_max_width->final_value);
+				string_append_str(generator->media_css, "max-width: ");
+				string_append_str(generator->media_css, media_max_width->final_value);
 
 				conditions++;
 			}
@@ -661,11 +667,11 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 				}
 
 				if (conditions > 0) {
-					string_append_str(generator->css, " and ");
+					string_append_str(generator->media_css, " and ");
 				}
 
-				string_append_str(generator->css, "min-width: ");
-				string_append_str(generator->css, media_min_width->final_value);
+				string_append_str(generator->media_css, "min-width: ");
+				string_append_str(generator->media_css, media_min_width->final_value);
 
 				conditions++;
 			}
@@ -683,10 +689,10 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 				}
 
 				if (conditions > 0) {
-					string_append_str(generator->css, " and ");
+					string_append_str(generator->media_css, " and ");
 				}
-				string_append_str(generator->css, "max-height: ");
-				string_append_str(generator->css, media_max_height->final_value);
+				string_append_str(generator->media_css, "max-height: ");
+				string_append_str(generator->media_css, media_max_height->final_value);
 
 				conditions++;
 			}
@@ -704,19 +710,19 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 				}
 
 				if (conditions > 0) {
-					string_append_str(generator->css, " and ");
+					string_append_str(generator->media_css, " and ");
 				}
-				string_append_str(generator->css, "min-height: ");
-				string_append_str(generator->css, media_min_height->final_value);
+				string_append_str(generator->media_css, "min-height: ");
+				string_append_str(generator->media_css, media_min_height->final_value);
 
 				conditions++;
 			}
 
-			string_append_char(generator->css, ')');
-			string_append_char(generator->css, '{');
-			string_append_char(generator->css, '#');
-			string_append_str(generator->css, block->tag);
-			string_append_char(generator->css, '{');
+			string_append_char(generator->media_css, ')');
+			string_append_char(generator->media_css, '{');
+			string_append_char(generator->media_css, '#');
+			string_append_str(generator->media_css, block->tag);
+			string_append_char(generator->media_css, '{');
 
 			// Media styles
 			size_t styles_normal_capacity = node_block->styles->normal->capacity;
@@ -732,12 +738,12 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 					else if (attribute->isStyle == false || attribute->ignoreMe == true) {}
 					else {
 						if (media_queries_styles_length != 0) {
-							string_append_char(generator->css, ';');
+							string_append_char(generator->media_css, ';');
 						}
-						string_append_str(generator->css, attribute->final_key == NULL ? attribute->key : attribute->final_key);
-						string_append_str(generator->css, ":");
+						string_append_str(generator->media_css, attribute->final_key == NULL ? attribute->key : attribute->final_key);
+						string_append_str(generator->media_css, ":");
 						char* value = attribute->final_value == NULL ? array_value_stringify(attribute->values, ", ") : strdup(attribute->final_value);
-						string_append_str(generator->css, value);
+						string_append_str(generator->media_css, value);
 						memory_destroy(value);
 
 						media_queries_styles_length++;
@@ -759,11 +765,11 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 					else if (attribute->isStyle == false || attribute->ignoreMe == true) {}
 					else {
 						if (media_queries_styles_length != 0) {
-							string_append_char(generator->css, ';');
+							string_append_char(generator->media_css, ';');
 						}
-						string_append_str(generator->css, attribute->final_key);
-						string_append_str(generator->css, ":");
-						string_append_str(generator->css, attribute->final_value);
+						string_append_str(generator->media_css, attribute->final_key);
+						string_append_str(generator->media_css, ":");
+						string_append_str(generator->media_css, attribute->final_value);
 
 						media_queries_styles_length++;
 					}
@@ -772,8 +778,8 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 				}
 			}
 
-			string_append_char(generator->css, '}');
-			string_append_char(generator->css, '}');
+			string_append_char(generator->media_css, '}');
+			string_append_char(generator->media_css, '}');
 
 			media_queries_length++;
 		}

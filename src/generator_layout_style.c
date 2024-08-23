@@ -79,7 +79,6 @@ string_t* generator_code_layout_styles(hashmap_layout_attribute_t* styles, ast_l
 
 	if (styles != NULL) {
 		size_t styles_capacity = styles->capacity;
-
 		for (size_t i = 0; i < styles_capacity; i++) {
 			hashmap_entry_t* entry = styles->data[i];
 

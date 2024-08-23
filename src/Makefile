@@ -1,5 +1,5 @@
-INPUT_FILE = ../test/input.s
-INPUT_FILE = ../test/test6.salam
+INPUT_FILE = ../example/input.s
+INPUT_FILE = ../example/test6.salam
 
 CC = gcc
 CFLAGS =

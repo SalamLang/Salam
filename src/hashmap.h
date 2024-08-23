@@ -5,9 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "memory.h"
-#include "array.h"
-
 struct hashmap_t;
 
 typedef struct hashmap_entry {
@@ -28,6 +25,10 @@ typedef struct hashmap_t {
 typedef hashmap_t hashmap_array_t;
 typedef hashmap_t hashmap_layout_attribute_t;
 typedef hashmap_t hashmap_layout_attribute_state_style_t;
+
+#include "memory.h"
+#include "array_custom.h"
+#include "array.h"
 
 /**
  *
@@ -60,19 +61,6 @@ hashmap_t* hashmap_create(size_t size);
  *
  */
 void hashmap_put(hashmap_t* map, const char* key, void* value);
-
-/**
- *
- * @function hashmap_put_array
- * @brief Put a key-value pair in the hashmap
- * @params {hashmap_t*} map
- * @params {const char*} key
- * @params {void*} value
- * @params {void (*free_fn)(void*)} free_fn
- * @returns {void}
- *
- */
-void hashmap_put_custom(hashmap_t* map, const char* key, void* value, void (*free_fn)(void*));
 
 /**
  *
@@ -118,16 +106,6 @@ void hashmap_destroy(hashmap_t* map);
 
 /**
  *
- * @function hashmap_destroy
- * @brief Free the hashmap memory
- * @params {hashmap_t*} map
- * @returns {void}
- *
- */
-void hashmap_destroy_custom(hashmap_t* map, void (*free_fn)(void*));
-
-/**
- *
  * @function hashmap_print
  * @brief Print the hashmap
  * @params {hashmap_t*} map
@@ -135,6 +113,29 @@ void hashmap_destroy_custom(hashmap_t* map, void (*free_fn)(void*));
  *
  */
 void hashmap_print(hashmap_t* map);
+
+/**
+ *
+ * @function hashmap_put_array
+ * @brief Put a key-value pair in the hashmap
+ * @params {hashmap_t*} map
+ * @params {const char*} key
+ * @params {void*} value
+ * @params {void (*free_fn)(void*)} free_fn
+ * @returns {void}
+ *
+ */
+void hashmap_put_custom(hashmap_t* map, const char* key, void* value, void (*free_fn)(void*));
+
+/**
+ *
+ * @function hashmap_destroy
+ * @brief Free the hashmap memory
+ * @params {hashmap_t*} map
+ * @returns {void}
+ *
+ */
+void hashmap_destroy_custom(hashmap_t* map, void (*free_fn)(void*));
 
 /**
  *
@@ -146,105 +147,5 @@ void hashmap_print(hashmap_t* map);
  *
  */
 void hashmap_print_custom(hashmap_t* map, void (*print_fn)(void*));
-
-/**
- *
- * @function hashmap_print_layout_attribute
- * @brief Print the hashmap of layout attributes
- * @params {ast_layout_attribute_t*} map - The hashmap to print
- * @returns {void}
- *
- */
-void hashmap_print_layout_attribute(hashmap_layout_attribute_t* map);
-
-/**
- *
- * @function hashmap_destroy_layout_attribute
- * @brief Destroy the hashmap of layout attributes
- * @params {hashmap_layout_attribute_t*} map
- * @returns {void}
- *
- */
-void hashmap_destroy_layout_attribute(hashmap_layout_attribute_t* map);
-
-/**
- *
- * @function hashmap_create_layout_attribute
- * @brief Create a new hashmap of layout attributes
- * @params {size_t} capacity
- * @returns {hashmap_layout_attribute_t*}
- *
- */
-hashmap_layout_attribute_t* hashmap_create_layout_attribute(size_t capacity);
-
-/**
- *
- * @function hashmap_destroy_layout_attribute_style_state
- * @brief Destroy the hashmap of layout style state attributes
- * @params {hashmap_layout_attribute_t*} map
- * @returns {void}
- *
- */
-void hashmap_destroy_layout_attribute_style_state(hashmap_layout_attribute_t* map);
-
-/**
- *
- * @function hashmap_print_layout_attribute_style_state
- * @brief Print the hashmap of layout style state attributes
- * @params {hashmap_layout_attribute_t*} map
- * @returns {void}
- *
- */
-void hashmap_print_layout_attribute_style_state(hashmap_layout_attribute_t* map);
-
-/**
- *
- * @function hashmap_create_layout_attribute_style_state
- * @brief Create a new hashmap of layout style state attributes
- * @params {size_t} capacity
- * @returns {hashmap_layout_attribute_state_style_t*}
- *
- */
-hashmap_layout_attribute_state_style_t* hashmap_create_layout_attribute_style_state(size_t capacity);
-
-/**
- *
- * @function hashmap_layout_attribute_print
- * @brief Print the hashmap of layout attributes
- * @params {hashmap_layout_attribute_t*} map
- * @returns {void}
- *
- */
-void hashmap_layout_attribute_print(hashmap_layout_attribute_t* map);
-
-/**
- *
- * @function hashmap_layout_attribute_destroy
- * @brief Destroy the hashmap of layout attributes
- * @params {hashmap_layout_attribute_t*} map
- * @returns {void}
- *
- */
-void hashmap_layout_attribute_destroy(hashmap_layout_attribute_t* map);
-
-/**
- *
- * @function hashmap_has_any_sub_value_layout_attribute_style_state
- * @brief Check if the hashmap has any sub value layout attribute style state
- * @params {hashmap_layout_attribute_t*} map
- * @returns {bool}
- *
- */
-bool hashmap_has_any_sub_value_layout_attribute_style_state(hashmap_layout_attribute_t* map);
-
-/**
- *
- * @function hashmap_has_any_sub_value_layout_attribute
- * @brief Check if the hashmap has any sub value layout attribute
- * @params {hashmap_layout_attribute_t*} map
- * @returns {bool}
- *
- */
-bool hashmap_layout_attribute_has_any_sub_value(hashmap_layout_attribute_t* map);
 
 #endif

@@ -7,7 +7,10 @@
 #include "base.h"
 #include "memory.h"
 #include "ast.h"
+#include "array.h"
+#include "array_custom.h"
 #include "hashmap.h"
+#include "hashmap_custom.h"
 
 typedef enum {
     #undef ADD_LAYOUT_TYPE

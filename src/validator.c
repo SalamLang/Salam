@@ -439,6 +439,23 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 				attribute->final_value = strdup(buffer->data);
 				string_destroy(buffer);
 			}
+			else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_FONT_STYLE) {
+				if (validate_style_value_string(NULL, NULL, attribute, ast_layout_allowed_style_list_font_style, NULL) == false) {
+					error_validator(2, "Invalid value for attribute '%s' in '%s' element at line %zu column %zu!", attribute->key, ast_layout_node_type_to_enduser_name(attribute->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
+
+					return false;
+				}
+			}
+			else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_FONT_WEIGHT) {
+				if (validate_style_value_size(NULL, NULL, attribute, ast_layout_allowed_style_list_font_weight, NULL) == false) {
+					error_validator(2, "Invalid value for attribute '%s' in '%s' element at line %zu column %zu!", attribute->key, ast_layout_node_type_to_enduser_name(attribute->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
+
+					return false;
+				}
+			}
+			else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_FONT_UNICODE_RANGE) {
+				// TODO: do more check layer
+			}
 
 			return true;
 		}

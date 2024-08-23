@@ -49,9 +49,13 @@ ast_layout_block_t* ast_layout_block_create(ast_type_t node_type, ast_layout_nod
 
 	block->states = hashmap_create_layout_attribute_style_state(1);
 
-	block->children = array_create(sizeof(ast_layout_node_t*), 16);
+	block->children = array_create(sizeof(ast_layout_node_t*), 3);
 	block->children->print = cast(void (*)(void*), array_layout_node_print);
 	block->children->destroy = cast(void (*)(void*), array_layout_node_destroy);
+
+	block->meta_children = array_create(sizeof(ast_layout_node_t*), 1);
+	block->meta_children->print = cast(void (*)(void*), array_layout_node_print);
+	block->meta_children->destroy = cast(void (*)(void*), array_layout_node_destroy);
 
 	block->print = cast(void (*)(void*), ast_layout_block_print);
 	block->destroy = cast(void (*)(void*), ast_layout_block_destroy);
@@ -185,6 +189,10 @@ void ast_layout_block_destroy(ast_layout_block_t* value)
 
 		if (value->children != NULL) {
 			array_layout_node_destroy(value->children);
+		}
+
+		if (value->meta_children != NULL) {
+			array_layout_node_destroy(value->meta_children);
 		}
 
 		if (value->text_content != NULL) {

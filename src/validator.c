@@ -1090,8 +1090,10 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 
 	switch (attribute->type) {
 		#undef ADD_LAYOUT_ATTRIBUTE_TYPE
+		#undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
 
 		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return false;
+		#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
 
 		#include "ast_layout_attribute_type.h"
 

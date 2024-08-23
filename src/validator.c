@@ -395,6 +395,7 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 						if (has_font_extension(value->data.string_value, &out_extention) && out_extention != NULL) {
 							string_append_str(buffer, "url('");
 							string_append_str(buffer, value->data.string_value);
+							string_append_char(buffer, '\'');
 							string_append_char(buffer, ')');
 
 							string_append_str(buffer, " format('");
@@ -439,7 +440,7 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 				}
 			}
 			else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_FONT_WEIGHT) {
-				if (validate_style_value_size(NULL, NULL, attribute, ast_layout_allowed_style_list_font_weight, NULL) == false) {
+				if (validate_style_value_integer(NULL, NULL, attribute, ast_layout_allowed_style_list_font_weight, NULL) == false) {
 					error_validator(2, "Invalid value for attribute '%s' in '%s' element at line %zu column %zu!", attribute->key, ast_layout_node_type_to_enduser_name(attribute->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
 
 					return false;

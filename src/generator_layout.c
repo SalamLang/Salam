@@ -462,14 +462,14 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 
 					if (attribute->ignoreMe == true || attribute->isContent == true || attribute->isStyle == true) {}
 					else {
-						char* attribute_values_str = attribute->final_value != NULL ? attribute->final_value : array_value_stringify(attribute->values, ", ");
-						size_t attribute_value_length = attribute_values_str == NULL ? 0 : strlen(attribute_values_str);
+						char* attribute_values_str = attribute->final_value;
+						size_t attribute_value_length = strlen(attribute_values_str);
 
 						if (html_attributes_length != 0) {
 							string_append_char(html_attributes, ' ');
 						}
 
-						string_append_str(html_attributes, attribute->final_key == NULL ? entry->key : attribute->final_key);
+						string_append_str(html_attributes, attribute->final_key);
 						string_append_str(html_attributes, "=");
 
 						if (attribute_value_length > 1) {
@@ -533,7 +533,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 
 		block->tag = generator_identifier_get(generator->identifier); // We will free its memory in the block_layout_destroy function
 
-		if (generator->inlineCSS == true && has_substate == false) {
+		if (generator->inlineCSS == true) {
 			string_append_str(html_attributes, "style=\"");
 			string_append(html_attributes, css_attributes);
 			string_append_str(html_attributes, "\"");
@@ -541,7 +541,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 			html_attributes_length++;
 		}
 		else {
-			string_append_char(generator->css, '.');
+			string_append_char(generator->css, '#');
 			string_append_str(generator->css, block->tag);
 			string_append_char(generator->css, '{');
 			string_append(generator->css, css_attributes);
@@ -555,7 +555,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 
 			size_t tag_length = strlen(block->tag);
 
-			string_append_str(html_attributes, "class=");
+			string_append_str(html_attributes, "id=");
 			if (tag_length > 1) {
 				string_append_char(html_attributes, '\"');
 			}

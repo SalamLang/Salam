@@ -48,12 +48,14 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 /**
  *
  * @function generator_code_head
+ * @brief Generate the code for the head
+ * @params {generator_t*} generator - Generator
  * @params {ast_layout_block_t*} layout_block - Layout block
  * @params {string_t*} head - Head
  * @returns {void}
  *
  */
-void generator_code_head(ast_layout_block_t* layout_block, string_t* head);
+void generator_code_head(generator_t* generator, ast_layout_block_t* block, string_t* head);
 
 /**
  *
@@ -99,5 +101,17 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
  *
  */
 string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_block_t* block);
+
+/**
+ *
+ * @function generator_code_head_meta_children
+ * @brief Generate the CSS/HTML code for meta children in the layout
+ * @params {generator_t*} generator - Generator
+ * @params {ast_layout_block_t*} block - Layout block
+ * @params {string_t*} head - Head
+ * @returns {void}
+ * 
+ */
+void generator_code_head_meta_children(generator_t* generator, ast_layout_block_t* block, string_t* head);
 
 #endif

@@ -647,16 +647,9 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_float[] = 
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font[] = {
-    {"خودکار", "auto"},
-    {"خانواده", "family"},
-    {"اندازه", "size"},
-    {"سبک", "style"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_family[] = {
-    {"سنس", "sans-serif"},
-    {"سریف", "serif"},
-    {"مونو", "monospace"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_feature_settings[] = {

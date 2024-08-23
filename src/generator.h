@@ -16,6 +16,7 @@ typedef struct generator_t {
 
 	string_t* html;
 	string_t* css;
+	string_t* media_css;
 	string_t* js;
 
 	bool inlineCSS;

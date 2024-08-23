@@ -16,7 +16,7 @@ def run_tests_in_directory(directory):
 
 	parent_layout_file = directory / "layout.salam"
 	if parent_layout_file.exists():
-		os.system(f"{salam_bin} {parent_layout_file}")
+		os.system(f"{salam_bin} {parent_layout_file} > /dev/null 2>&1")
 	else:
 		print(f"{parent_layout_file} does not exist. Skipping salam command.")
 
@@ -29,7 +29,13 @@ def compare_output_to_expected(directory):
 		print(f"Differences found in directory: {directory}")
 		for file in comparison.diff_files:
 			print(f" - {file} differs")
-	else:
+	
+	if comparison.right_only:
+		print(f"Warning: Extra files found in the output directory of {directory}:")
+		for file in comparison.right_only:
+			print(f" - {file}")
+	
+	if not comparison.diff_files and not comparison.right_only:
 		print(f"No differences found in directory: {directory}")
 
 def process_directory(directory):

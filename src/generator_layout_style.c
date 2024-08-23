@@ -19,7 +19,9 @@ string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layo
 		if (block->states != NULL) {
 			string_t* css = string_create(1024);
 
-			for (size_t i = 0; i < block->states->capacity; i++) {
+			size_t states_capacity = block->states->capacity;
+
+			for (size_t i = 0; i < states_capacity; i++) {
 				hashmap_entry_t* entry = block->states->data[i];
 
 				while (entry) {
@@ -76,7 +78,9 @@ string_t* generator_code_layout_styles(hashmap_layout_attribute_t* styles, ast_l
 	string_t* code = string_create(1024);
 
 	if (styles != NULL) {
-		for (size_t i = 0; i < styles->capacity; i++) {
+		size_t styles_capacity = styles->capacity;
+
+		for (size_t i = 0; i < styles_capacity; i++) {
 			hashmap_entry_t* entry = styles->data[i];
 
 			while (entry) {

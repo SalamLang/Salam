@@ -260,7 +260,9 @@ void generator_code_head_meta_children(generator_t* generator, ast_layout_block_
 				size_t attributes_length = attributes->length;
 				size_t attributes_append_length = 0;
 
-				for (size_t i = 0; i < attributes->capacity; i++) {
+				size_t attributes_capacity = attributes->capacity;
+				
+				for (size_t i = 0; i < attributes_capacity; i++) {
 					hashmap_entry_t* entry = attributes->data[i];
 
 					while (entry) {
@@ -315,8 +317,9 @@ void generator_code_head(generator_t* generator, ast_layout_block_t* block, stri
 
 	if (block->attributes != NULL) {
 		hashmap_t* attributes = cast(hashmap_t*, block->attributes);
+		size_t attribute_capacity = attributes->capacity;
 
-		for (size_t i = 0; i < attributes->capacity; i++) {
+		for (size_t i = 0; i < attribute_capacity; i++) {
 			hashmap_entry_t* entry = attributes->data[i];
 
 			while (entry) {
@@ -518,8 +521,9 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 	if (block != NULL) {
 		if (block->attributes != NULL) {
 			hashmap_t* attributes = cast(hashmap_t*, block->attributes);
+			size_t attributes_capacity = attributes->capacity;
 
-			for (size_t i = 0; i < attributes->capacity; i++) {
+			for (size_t i = 0; i < attributes_capacity; i++) {
 				hashmap_entry_t* entry = attributes->data[i];
 
 				while (entry) {
@@ -567,7 +571,9 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 		string_destroy(this_style);
 
 		// New styles
-		for (size_t i = 0; i < block->styles->new->capacity; i++) {
+		size_t styles_new_capacity = block->styles->new->capacity;
+
+		for (size_t i = 0; i < styles_new_capacity; i++) {
 			hashmap_entry_t* entry = block->styles->new->data[i];
 
 			while (entry) {
@@ -676,7 +682,8 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 			string_append_char(generator->css, '{');
 
 			// Media styles
-			for (size_t i = 0; i < node_block->styles->normal->capacity; i++) {
+			size_t styles_normal_capacity = node_block->styles->normal->capacity;
+			for (size_t i = 0; i < styles_normal_capacity; i++) {
 				hashmap_entry_t* entry = node_block->styles->normal->data[i];
 
 				while (entry) {
@@ -701,7 +708,9 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 			}
 
 			// Media new styles
-			for (size_t i = 0; i < node_block->styles->new->capacity; i++) {
+			size_t styles_new_capacity = node_block->styles->new->capacity;
+
+			for (size_t i = 0; i < styles_new_capacity; i++) {
 				hashmap_entry_t* entry = node_block->styles->new->data[i];
 
 				while (entry) {

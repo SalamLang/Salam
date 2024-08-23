@@ -257,6 +257,7 @@ void generator_code_head_meta_children(generator_t* generator, ast_layout_block_
 			if (node->type == AST_LAYOUT_TYPE_FONT) {
 				string_append_str(generator->css, "@font-face{");
 				hashmap_t* attributes = cast(hashmap_t*, node_block->attributes);
+				
 				size_t attributes_length = attributes->length;
 				size_t attributes_append_length = 0;
 
@@ -267,6 +268,8 @@ void generator_code_head_meta_children(generator_t* generator, ast_layout_block_
 
 					while (entry) {
 						ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
+						
+						generator_code_layout_style_value(node_block->styles->normal, block->styles->new, attribute);
 
 						char* value = array_value_stringify(attribute->values, ", ");
 
@@ -596,12 +599,14 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 		}
 	}
 
+	if ((block->meta_children != NULL && block->meta_children->length > 0) || block->styles->normal->length > 0 || block->styles->new->length > 0) {
+		if (block->tag == NULL) {
+			block->tag = generator_identifier_get(generator->identifier); // We will free its memory in the block_layout_destroy function
+		}
+	}
+
 	size_t media_queries_length = 0;
 	size_t meta_children_length = block->meta_children->length;
-
-	if (meta_children_length > 0 || css_attributes_length > 0 || css_attributes->length > 0) {
-		block->tag = generator_identifier_get(generator->identifier); // We will free its memory in the block_layout_destroy function
-	}
 
 	if (block->meta_children != NULL) {
 		for (size_t i = 0; i < meta_children_length; i++) {
@@ -616,63 +621,95 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 			ast_layout_attribute_t* media_max_height = hashmap_get(node_block->attributes, "responsive_max_height");
 			ast_layout_attribute_t* media_min_height = hashmap_get(node_block->attributes, "responsive_min_height");
 
-			string_append_str(generator->css, "@media (");
+			string_append_str(generator->css, "@media only screen and(");
 
 			size_t conditions = 0;
 			size_t media_queries_styles_length = 0;
 
 			if (media_max_width != NULL) {
-				char* value = array_value_stringify(media_max_width->values, ", ");
+				if (media_max_width->values->length > 1) {
+					error_generator(2, "The responsive_max_width attribute can only have one value!");
+
+					return NULL;
+				}
+				else if (validate_style_value_size(node_block->styles->normal, node_block->styles->new, media_max_width, NULL, NULL) == false) {
+					error_generator(2, "Invalid value for responsive_max_width attribute in layout block!");
+
+					return NULL;
+				}
 
 				if (conditions > 0) {
 					string_append_str(generator->css, " and ");
 				}
 
 				string_append_str(generator->css, "max-width: ");
-				string_append_str(generator->css, value);
-				conditions++;
+				string_append_str(generator->css, media_max_width->final_value);
 
-				memory_destroy(value);
+				conditions++;
 			}
 
 			if (media_min_width != NULL) {
-				char* value = array_value_stringify(media_min_width->values, ", ");
+				if (media_min_width->values->length > 1) {
+					error_generator(2, "The responsive_max_width attribute can only have one value!");
+
+					return NULL;
+				}
+				else if (validate_style_value_size(node_block->styles->normal, node_block->styles->new, media_min_width, NULL, NULL) == false) {
+					error_generator(2, "Invalid value for responsive_max_width attribute in layout block!");
+
+					return NULL;
+				}
 
 				if (conditions > 0) {
 					string_append_str(generator->css, " and ");
 				}
 
 				string_append_str(generator->css, "min-width: ");
-				string_append_str(generator->css, value);
-				conditions++;
+				string_append_str(generator->css, media_min_width->final_value);
 
-				memory_destroy(value);
+				conditions++;
 			}
 
 			if (media_max_height != NULL) {
-				char* value = array_value_stringify(media_max_height->values, ", ");
+				if (media_max_height->values->length > 1) {
+					error_generator(2, "The responsive_max_width attribute can only have one value!");
+
+					return NULL;
+				}
+				else if (validate_style_value_size(node_block->styles->normal, node_block->styles->new, media_max_height, NULL, NULL) == false) {
+					error_generator(2, "Invalid value for responsive_max_width attribute in layout block!");
+
+					return NULL;
+				}
 
 				if (conditions > 0) {
 					string_append_str(generator->css, " and ");
 				}
 				string_append_str(generator->css, "max-height: ");
-				string_append_str(generator->css, value);
-				conditions++;
+				string_append_str(generator->css, media_max_height->final_value);
 
-				memory_destroy(value);
+				conditions++;
 			}
 
 			if (media_min_height != NULL) {
-				char* value = array_value_stringify(media_min_height->values, ", ");
+				if (media_min_height->values->length > 1) {
+					error_generator(2, "The responsive_max_width attribute can only have one value!");
+
+					return NULL;
+				}
+				else if (validate_style_value_size(node_block->styles->normal, node_block->styles->new, media_min_height, NULL, NULL) == false) {
+					error_generator(2, "Invalid value for responsive_max_width attribute in layout block!");
+
+					return NULL;
+				}
 
 				if (conditions > 0) {
 					string_append_str(generator->css, " and ");
 				}
 				string_append_str(generator->css, "min-height: ");
-				string_append_str(generator->css, value);
-				conditions++;
+				string_append_str(generator->css, media_min_height->final_value);
 
-				memory_destroy(value);
+				conditions++;
 			}
 
 			string_append_char(generator->css, ')');
@@ -688,6 +725,9 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 
 				while (entry) {
 					ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
+
+					generator_code_layout_style_value(node_block->styles->normal, node_block->styles->new, attribute);
+					
 					if (attribute == NULL) {}
 					else if (attribute->isStyle == false || attribute->ignoreMe == true) {}
 					else {
@@ -732,7 +772,6 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 				}
 			}
 
-
 			string_append_char(generator->css, '}');
 			string_append_char(generator->css, '}');
 
@@ -751,7 +790,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 			has_substate = true;
 		}
 
-		if (generator->inlineCSS == true) {
+		if (generator->inlineCSS == true && media_queries_length == 0) {
 			string_append_str(html_attributes, "style=\"");
 			string_append(html_attributes, css_attributes);
 			string_append_str(html_attributes, "\"");
@@ -759,7 +798,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 			html_attributes_length++;
 		}
 		else {
-			string_append_char(generator->css, '.');
+			string_append_char(generator->css, '#');
 			string_append_str(generator->css, block->tag);
 			string_append_char(generator->css, '{');
 			string_append(generator->css, css_attributes);
@@ -847,7 +886,7 @@ char* generator_code_layout_attribute_name(ast_layout_attribute_type_t type)
 		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) case TYPE: return "ERROR";
 		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS)
 
-	    #include "ast_layout_attribute_style_type.h"
+		#include "ast_layout_attribute_style_type.h"
 		
 		#undef ADD_LAYOUT_ATTRIBUTE_TYPE
 		#undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
@@ -855,7 +894,7 @@ char* generator_code_layout_attribute_name(ast_layout_attribute_type_t type)
 		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return GENERATED_NAME;
 		#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
 
-	    #include "ast_layout_attribute_type.h"
+		#include "ast_layout_attribute_type.h"
 	}
 
 	return "error2????";

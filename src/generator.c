@@ -19,6 +19,7 @@ generator_t* generator_create(ast_t* ast)
 	generator->ast = ast;
 	generator->html = string_create(4096);
 	generator->css = string_create(4096);
+	generator->media_css = string_create(512);
 	generator->js = string_create(4096);
 
 	generator->inlineCSS = true;
@@ -47,6 +48,10 @@ void generator_destroy(generator_t* generator)
 	if (generator != NULL) {
 		if (generator->html != NULL) {
 			generator->html->destroy(generator->html);
+		}
+
+		if (generator->media_css != NULL) {
+			generator->media_css->destroy(generator->media_css);
 		}
 
 		if (generator->css != NULL) {
@@ -84,6 +89,14 @@ void generator_debug(generator_t* generator)
 		printf("generator->html: ");
 		if (generator->html != NULL) {
 			generator->html->print(generator->html);
+		}
+		else {
+			printf("NULL\n");
+		}
+
+		printf("generator->media_css: ");
+		if (generator->media_css != NULL) {
+			generator->media_css->print(generator->media_css);
 		}
 		else {
 			printf("NULL\n");
@@ -128,6 +141,7 @@ void generator_save(generator_t* generator, const char* html_output, const char*
 
 		if (generator->css != NULL) {
 			file_writes(css_output, generator->css->data);
+			file_appends(css_output, generator->media_css->data);
 		}
 
 		if (generator->js != NULL) {

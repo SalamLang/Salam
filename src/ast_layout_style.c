@@ -73,7 +73,7 @@ ast_layout_attribute_style_state_type enduser_name_to_ast_layout_attribute_style
     #undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
 
     #define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
-
+	
 	if (false) {}
 	#include "ast_layout_attribute_style_state_type.h"
 

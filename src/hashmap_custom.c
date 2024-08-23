@@ -17,7 +17,9 @@ void hashmap_print_layout_attribute(hashmap_layout_attribute_t* map)
 		return;
 	}
 
-	for (size_t i = 0; i < map->capacity; i++) {
+	size_t map_capacity = map->capacity;
+
+	for (size_t i = 0; i < map_capacity; i++) {
 		hashmap_entry_t* entry = map->data[i];
 
 		while (entry) {
@@ -49,7 +51,9 @@ void hashmap_destroy_layout_attribute(hashmap_layout_attribute_t* map)
     DEBUG_ME;
 	if (map != NULL) {
 		if (map->data != NULL) {
-			for (size_t i = 0; i < map->capacity; i++) {
+			size_t map_capacity = map->capacity;
+
+			for (size_t i = 0; i < map_capacity; i++) {
 				hashmap_entry_t* entry = map->data[i];
 
 				while (entry) {
@@ -145,7 +149,9 @@ void hashmap_destroy_layout_attribute_style_state(hashmap_layout_attribute_t* ma
 	DEBUG_ME;
 	if (map != NULL) {
 		if (map->data != NULL) {
-			for (size_t i = 0; i < map->capacity; i++) {
+			size_t map_capacity = map->capacity;
+
+			for (size_t i = 0; i < map_capacity; i++) {
 				hashmap_entry_t* entry = map->data[i];
 
 				while (entry) {
@@ -205,7 +211,9 @@ void hashmap_layout_attribute_destroy(hashmap_layout_attribute_t* map)
 	DEBUG_ME;
 	if (map != NULL) {
 		if (map->data != NULL) {
-			for (size_t i = 0; i < map->capacity; i++) {
+			size_t map_capacity = map->capacity;
+
+			for (size_t i = 0; i < map_capacity; i++) {
 				hashmap_entry_t* entry = map->data[i];
 
 				while (entry) {
@@ -246,7 +254,9 @@ bool hashmap_has_any_sub_value_layout_attribute_style_state(hashmap_layout_attri
 	DEBUG_ME;
 	if (map != NULL) {
 		if (map->data != NULL) {
-			for (size_t i = 0; i < map->capacity; i++) {
+			size_t map_capacity = map->capacity;
+
+			for (size_t i = 0; i < map_capacity; i++) {
 				hashmap_entry_t* entry = map->data[i];
 
 				while (entry) {
@@ -281,7 +291,9 @@ bool hashmap_layout_attribute_has_any_sub_value(hashmap_layout_attribute_t* map)
 	DEBUG_ME;
 	if (map != NULL) {
 		if (map->data != NULL) {
-			for (size_t i = 0; i < map->capacity; i++) {
+			size_t map_capacity = map->capacity;
+
+			for (size_t i = 0; i < map_capacity; i++) {
 				hashmap_entry_t* entry = map->data[i];
 
 				while (entry) {

@@ -746,7 +746,10 @@ char* generator_code_layout_style_name(ast_layout_attribute_type_t type)
 	    #include "ast_layout_attribute_style_type.h"
 
 		#undef ADD_LAYOUT_ATTRIBUTE_TYPE
+		#undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
+
 		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return "ERROR";
+		#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
 
 	    #include "ast_layout_attribute_type.h"
 	}

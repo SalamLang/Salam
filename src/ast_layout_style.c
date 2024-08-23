@@ -56,7 +56,6 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_style_type(char* name)
 	return type;
 }
 
-
 /**
  *
  * @function enduser_name_to_ast_layout_attribute_style_state_type
@@ -79,7 +78,6 @@ ast_layout_attribute_style_state_type enduser_name_to_ast_layout_attribute_style
 
 	return type;
 }
-
 
 /**
  *
@@ -114,7 +112,6 @@ void ast_layout_style_state_print(ast_layout_style_state_t* ast)
 		printf("NULL\n");
 	}
 }
-
 
 /**
  *

@@ -8,7 +8,7 @@ CFLAGS = -g -Walloca -Wextra -Wall -fsanitize=address,undefined
 
 TARGET = main
 
-SRCS = log.c file.c memory.c array.c parser.c generator.c generator_layout.c generator_identifier.c string.c validator.c hashmap.c hashmap_custom.c array_custom.c lexer.c ast.c ast_layout.c main.c
+SRCS = log.c file.c memory.c array.c parser.c generator.c generator_layout.c generator_layout_style.c generator_identifier.c string.c validator.c hashmap.c hashmap_custom.c array_custom.c lexer.c ast.c ast_layout.c main.c
 
 OBJS = $(SRCS:.c=.o)
 

@@ -116,6 +116,7 @@ typedef struct token_t {
 } token_t;
 
 #include "array.h"
+#include "array_custom.h"
 
 typedef struct {
     const char* file_path; // NULL if source is REPL

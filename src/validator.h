@@ -8,9 +8,12 @@
 #include "base.h"
 #include "ast.h"
 #include "hashmap.h"
+#include "hashmap_custom.h"
 #include "parser.h"
 #include "generator.h"
 #include "string.h"
+#include "array.h"
+#include "array_custom.h"
 
 typedef struct {
     const char* input;

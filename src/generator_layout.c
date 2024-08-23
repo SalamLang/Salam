@@ -740,6 +740,7 @@ char* generator_code_layout_style_name(ast_layout_attribute_type_t type)
 	switch (type) {
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
 		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
+
 		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) case TYPE: return GENERATED_NAME;
 		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS)
 
@@ -843,6 +844,7 @@ ast_layout_attribute_style_state_type generator_code_layout_attribute_style_stat
 	}
 
 	#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
+
 	#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME) if (strcmp(name, ENDUSER_NAME) == 0) { return TYPE; }
 
 	#include "ast_layout_attribute_style_state_type.h"
@@ -888,6 +890,7 @@ ast_layout_attribute_style_state_type generator_code_layout_attribute_style_stat
 	}
 
 	#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
+	
 	#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME) if (strcmp(name, NAME) == 0) { return TYPE; }
 
 	#include "ast_layout_attribute_style_state_type.h"

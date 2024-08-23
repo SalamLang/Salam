@@ -42,8 +42,6 @@ ast_layout_block_t* ast_layout_block_create(ast_type_t node_type, ast_layout_nod
 	block->text_content = NULL;
 
 	block->attributes = cast(struct hashmap_t*, hashmap_create(3));
-	// TODO
-	// 	block->attributes = cast(struct hashmap_t*, hashmap_create_layout_attribute(3));
 
 	block->styles = ast_layout_style_state_create();
 

@@ -119,5 +119,8 @@ ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_IMG, "IMG", "img", "img", "عکس", true)
 // Own/Custom Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FONT, "FONT", "font", "font", "فونت", true)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA_MAX_WIDTH, "RESPONSIVE", "responsive", "@media only screen and (max-width:", "پذیرا حداکثر عرض", true)
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA_MIN_WIDTH, "RESPONSIVE", "responsive", "@media only screen and (min-width:", "پذیرا حداقل عرض", true)
+// ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA_MAX_WIDTH, "RESPONSIVE_MAX_WIDTH", "responsive_max_width", "@media only screen and (max-width:", "پذیرا حداکثر عرض", true)
+// ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA_MIN_WIDTH, "RESPONSIVE_MIN_WIDTH", "responsive_min_width", "@media only screen and (min-width:", "پذیرا حداقل عرض", true)
+// ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA_MAX_HEIGHT, "RESPONSIVE_MAX_HEIGHT", "responsive_max_height", "@media only screen and (max-width:", "پذیرا حداکثر عرض", true)
+// ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA_MIN_HEIGHT, "RESPONSIVE_MIN_HEIGHT", "responsive_min_height", "@media only screen and (min-width:", "پذیرا حداقل عرض", true)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA, "RESPONSIVE", "responsive", "@media", "پذیرا", true)

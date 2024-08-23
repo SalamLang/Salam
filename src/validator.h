@@ -293,4 +293,14 @@ bool validate_style_value_float(hashmap_t* styles, hashmap_t* new_styles, ast_la
  */
 bool validate_style_value_number(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute, const ast_layout_attribute_style_pair_t* allowed_values1, const ast_layout_attribute_style_pair_t* allowed_values2);
 
+/**
+ * 
+ * @function has_font_extension
+ * @brief Check if the value has a font extension
+ * @params {char*} value - Value
+ * @returns {bool} - True if the value has a font extension, false otherwise
+ * 
+ */
+bool has_font_extension(char* value);
+
 #endif

@@ -225,7 +225,9 @@ void hashmap_put_custom(hashmap_t* map, const char* key, void* value, void (*fre
 		size_t new_length = map->capacity * 2;
 		hashmap_entry_t **new_data = (hashmap_entry_t**) memory_callocate(new_length, sizeof(hashmap_entry_t*));
 
-		for (size_t i = 0; i < map->capacity; i++) {
+		size_t map_capacity = map->capacity;
+
+		for (size_t i = 0; i < map_capacity; i++) {
 			hashmap_entry_t* entry = map->data[i];
 
 			while (entry) {
@@ -265,7 +267,9 @@ void hashmap_print_custom(hashmap_t* map, void (*print_fn)(void*))
 		return;
 	}
 
-	for (size_t i = 0; i < map->capacity; i++) {
+	size_t map_capacity = map->capacity;
+
+	for (size_t i = 0; i < map_capacity; i++) {
 		hashmap_entry_t* entry = map->data[i];
 
 		while (entry) {
@@ -293,7 +297,8 @@ void hashmap_print(hashmap_t* map)
 	// printf("Hashmap Capacity: %zu\n", map->capacity);
 	printf("Hashmap Contents:\n");
 
-	for (size_t i = 0; i < map->capacity; i++) {
+	size_t map_capacity = map->capacity;
+	for (size_t i = 0; i < map_capacity; i++) {
 		hashmap_entry_t* entry = map->data[i];
 
 		while (entry) {
@@ -317,7 +322,9 @@ void hashmap_destroy_custom(hashmap_t* map, void (*free_fn)(void*))
     DEBUG_ME;
 	if (map != NULL) {
 		if (map->data != NULL) {
-			for (size_t i = 0; i < map->capacity; i++) {
+			size_t map_capacity = map->capacity;
+
+			for (size_t i = 0; i < map_capacity; i++) {
 				hashmap_entry_t* entry = map->data[i];
 
 				while (entry) {

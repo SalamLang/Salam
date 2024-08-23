@@ -280,6 +280,7 @@ void generator_code_head(ast_layout_block_t* block, string_t* head)
  */
 void generator_code_layout(generator_t* generator)
 {
+	DEBUG_ME;
 	if (generator->ast->layout != NULL) {
 		if (generator->ast->layout->block != NULL) {
 			string_t* head = string_create(1024);

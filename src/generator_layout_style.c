@@ -13,7 +13,6 @@
 string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layout_block_t* block, size_t* css_attributes_length)
 {
 	DEBUG_ME;
-
 	if (generator) {}
 
 	if (block != NULL) {
@@ -45,6 +44,8 @@ string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layo
 								(*css_attributes_length)++;
 							}
 						}
+                        
+                        string_destroy(pseudo_element_styles);
 					}
 
 					entry = next;
@@ -70,6 +71,7 @@ string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layo
  */
 string_t* generator_code_layout_styles(hashmap_layout_attribute_t* styles, ast_layout_block_t* block, size_t* css_attributes_length)
 {
+    DEBUG_ME;
 	size_t css_attributes_length_local = 0;
 	string_t* code = string_create(1024);
 

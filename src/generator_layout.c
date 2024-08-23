@@ -744,7 +744,7 @@ char* generator_code_layout_style_name(ast_layout_attribute_type_t type)
 		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, FILTER, ALLOWED_VALUES, SUBTAGS)
 
 	    #include "ast_layout_attribute_style_type.h"
-
+		
 		#undef ADD_LAYOUT_ATTRIBUTE_TYPE
 		#undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
 

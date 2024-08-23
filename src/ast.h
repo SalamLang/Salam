@@ -62,6 +62,7 @@ typedef struct ast_value_type_t {
 } ast_value_type_t;
 
 #include "ast_layout.h"
+#include "ast_layout_style.h"
 
 typedef struct ast_function_t {
     char* name;

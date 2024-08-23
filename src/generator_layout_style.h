@@ -9,6 +9,7 @@
 #include "generator.h"
 #include "ast.h"
 #include "ast_layout.h"
+#include "ast_layout_style.h"
 #include "string.h"
 
 /**

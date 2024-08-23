@@ -364,7 +364,7 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 		size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
 
 		if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
-			attribute->final_key = generator_code_layout_attribute_name(attribute_key_type);
+			attribute->final_key = strdup(generator_code_layout_attribute_name(attribute_key_type));
 
 			// name
 			if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_NAME) {

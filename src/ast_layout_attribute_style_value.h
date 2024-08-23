@@ -1186,13 +1186,13 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition_timing_function[] = {
-    {"آسان", "ease"},
+    // {"آسان", "ease"},
     {"وارد شدن", "ease-in"},
-    {"آسان وارد شدن", "ease-in"},
+    // {"آسان وارد شدن", "ease-in"},
     {"خارج شدن", "ease-out"},
-    {"آسان خارج شدن", "ease-out"},
+    // {"آسان خارج شدن", "ease-out"},
     {"وارد و خارج شدن", "ease-in-out"},
-    {"آسان وارد و خارج شدن", "ease-in-out"},
+    // {"آسان وارد و خارج شدن", "ease-in-out"},
     {"خطی", "linear"},
     {NULL, NULL},
 };

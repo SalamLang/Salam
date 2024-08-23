@@ -178,7 +178,6 @@ void hashmap_put(hashmap_t* map, const char* key, void* value)
 	hashmap_put_custom(map, key, value, free);
 }
 
-
 /**
  *
  * @function hashmap_put_custom

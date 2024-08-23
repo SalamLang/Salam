@@ -221,7 +221,6 @@ char* generator_code_layout_attribute_style_state_type_to_name(ast_layout_attrib
 	return "unknown style state name";
 }
 
-
 /**
  *
  * @function generator_code_layout_attribute_style_state_enduser_name_to_type

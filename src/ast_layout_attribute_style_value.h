@@ -708,8 +708,10 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_varia
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_weight[] = {
     {"عادی", "normal"},
     {"معمولی", "normal"},
+    {"درشت", "bold"},
     {"سنگین", "bold"},
     {"خیلی سنگین", "bolder"},
+    {"خیلی درشت", "bolder"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_grid[] = {

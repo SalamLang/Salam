@@ -109,7 +109,7 @@ char* array_token_stringify(array_token_t* array)
         string_append_str(str, token_str);
 
         if (i < array->length - 1) {
-            string_append_str(str, ", ");
+            string_append_str(str, ",");
         }
     }
 

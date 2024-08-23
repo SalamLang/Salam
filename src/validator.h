@@ -298,9 +298,10 @@ bool validate_style_value_number(hashmap_t* styles, hashmap_t* new_styles, ast_l
  * @function has_font_extension
  * @brief Check if the value has a font extension
  * @params {char*} value - Value
+ * @params {char**} out_extention - Output extention
  * @returns {bool} - True if the value has a font extension, false otherwise
  * 
  */
-bool has_font_extension(char* value);
+bool has_font_extension(char* value, char** out_extention);
 
 #endif

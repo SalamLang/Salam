@@ -15,10 +15,11 @@ size_t valid_layout_attributes_length = sizeof(valid_layout_attributes) / sizeof
  * @function has_font_extension
  * @brief Check if the value has a font extension
  * @params {char*} value - Value
+ * @params {char**} out_extention - Output extention
  * @returns {bool} - True if the value has a font extension, false otherwise
  * 
  */
-bool has_font_extension(char* value)
+bool has_font_extension(char* value, char** out_extention)
 {
 	DEBUG_ME;
 	if (value == NULL) {
@@ -36,7 +37,7 @@ bool has_font_extension(char* value)
 		".woff",
 		".woff2",
 		".eot",
-		".svg"
+		".svg",
 	};
 
 	int num_prefixes = sizeof(prefixes) / sizeof(prefixes[0]);
@@ -44,7 +45,11 @@ bool has_font_extension(char* value)
 	for (int i = 0; i < num_prefixes; i++) {
 		size_t prefix_len = strlen(prefixes[i]); // TODO: mb2strlen
 
-		if (len - prefix_len != 0 && strcmp(value + len - prefix_len, prefixes[i]) == 0) {
+        if (len - prefix_len != 0 && strcasecmp(value + len - prefix_len, prefixes[i]) == 0) {
+			if (out_extention != NULL) {
+				*out_extention = strdup(prefixes[i] + 1);
+			}
+
 			return true;
 		}
 	}
@@ -342,6 +347,9 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 		ast_layout_attribute_type_t valid_attributes[] = {
 			AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
 			AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
+			AST_LAYOUT_ATTRIBUTE_TYPE_FONT_STYLE,
+			AST_LAYOUT_ATTRIBUTE_TYPE_FONT_WEIGHT,
+			AST_LAYOUT_ATTRIBUTE_TYPE_FONT_UNICODE_RANGE,
 		};
 
 		size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
@@ -381,15 +389,26 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 					ast_value_t* value = attribute->values->data[i];
 
 					if (value->type->kind == AST_TYPE_KIND_STRING) {
-						if (has_font_extension(value->data.string_value)) {
+						char* out_extention = NULL;
+
+						if (has_font_extension(value->data.string_value, &out_extention) && out_extention != NULL) {
 							string_append_str(buffer, "url('");
 							string_append_str(buffer, value->data.string_value);
-							string_append_str(buffer, "')");
+							string_append_char(buffer, ')');
+
+							string_append_str(buffer, " format('");
+							string_append_str(buffer, out_extention);
+							string_append_char(buffer, '\'');
+							string_append_char(buffer, ')');
 						}
 						else {
 							string_append_str(buffer, "local('");
 							string_append_str(buffer, value->data.string_value);
 							string_append_str(buffer, "')");
+						}
+
+						if (out_extention != NULL) {
+							memory_destroy(out_extention);
 						}
 
 						if (i < attribute->values->length - 1) {
@@ -1244,6 +1263,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 					return true; \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRINGS_ANY) { \
+					attribute->final_value = array_value_stringify(attribute->values, ","); \
 					return true; \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE) { \

@@ -351,6 +351,31 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 			return true;
 		}
 	}
+	// RESPONSIVE
+	else if (attribute->parent_node_type == AST_LAYOUT_TYPE_MEDIA) {
+		ast_layout_attribute_type_t valid_attributes[] = {
+			AST_LAYOUT_ATTRIBUTE_TYPE_RESPONSIVE_MAX_HEIGHT,
+			AST_LAYOUT_ATTRIBUTE_TYPE_RESPONSIVE_MIN_HEIGHT,
+			AST_LAYOUT_ATTRIBUTE_TYPE_RESPONSIVE_MAX_WIDTH,
+			AST_LAYOUT_ATTRIBUTE_TYPE_RESPONSIVE_MIN_WIDTH,
+		};
+		size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
+		
+		if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+			if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_RESPONSIVE_MAX_HEIGHT || attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_RESPONSIVE_MIN_HEIGHT || attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_RESPONSIVE_MAX_WIDTH || attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_RESPONSIVE_MIN_WIDTH) {
+				if (validate_style_value_size(NULL, NULL, attribute, NULL, NULL) == false) {
+					error_validator(2, "Invalid value for condition attribute '%s' in '%s' element at line %zu column %zu!", attribute->key, ast_layout_node_type_to_enduser_name(attribute->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
+
+					return false;
+				}
+
+				return true;
+			}
+			return true;
+		}
+
+		return false;
+	}
 	// FONT
 	else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FONT) {
 		ast_layout_attribute_type_t valid_attributes[] = {
@@ -381,6 +406,8 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 				}
 
 				attribute->final_key = strdup("font-family");
+				
+				return true;
 			}
 			// src
 			else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_SRC) {
@@ -431,6 +458,8 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 
 				attribute->final_value = strdup(buffer->data);
 				string_destroy(buffer);
+
+				return true;
 			}
 			else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_FONT_STYLE) {
 				if (validate_style_value_string(NULL, NULL, attribute, ast_layout_allowed_style_list_font_style, NULL) == false) {
@@ -438,6 +467,8 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 
 					return false;
 				}
+
+				return true;
 			}
 			else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_FONT_WEIGHT) {
 				if (validate_style_value_integer(NULL, NULL, attribute, ast_layout_allowed_style_list_font_weight, NULL) == false) {
@@ -445,6 +476,8 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 
 					return false;
 				}
+
+				return true;
 			}
 			else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_DISPLAY) {
 				if (validate_style_value_string(NULL, NULL, attribute, ast_layout_allowed_style_list_font_display, NULL) == false) {
@@ -452,12 +485,15 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 
 					return false;
 				}
+
+				return true;
 			}
 			else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_FONT_UNICODE_RANGE) {
 				// TODO: do more check layer
+				return true;
 			}
 
-			return true;
+			return false;
 		}
 	}
 	// INPUT

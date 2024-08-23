@@ -133,12 +133,15 @@ void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexe
 
 	if (node != NULL) {
 		if (node->type == AST_LAYOUT_TYPE_FONT) {
-			if (block->type != AST_BLOCK_TYPE_LAYOUT) {
+			if (block->parent_node_type != AST_LAYOUT_TYPE_NONE) {
 				error_parser(2, "Font node is not allowed in the '%s' block at line %d, column %d", ast_layout_node_type_to_enduser_name(block->parent_node_type), last_name->location.end_line, last_name->location.end_column);
 			}
 			
 			array_push(block->meta_children, node);
 		}
+        else if (node->type == AST_LAYOUT_TYPE_MEDIA) {
+			array_push(block->meta_children, node);
+        }
 		else {
 			array_push(block->children, node);
 		}
@@ -231,8 +234,8 @@ ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer, char* name, token_t*
 	}
 
 	ast_layout_node_t* node = ast_layout_node_create(type);
-
-	parser_parse_layout_block(node->block, lexer);
+    
+    parser_parse_layout_block(node->block, lexer);
 
 	return node;
 }

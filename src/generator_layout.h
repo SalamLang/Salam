@@ -114,4 +114,14 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
  */
 void generator_code_head_meta_children(generator_t* generator, ast_layout_block_t* block, string_t* head);
 
+/**
+ *
+ * @function generator_code_layout_attribute_name
+ * @brief Convert AST layout attribute type to HTML attribute name
+ * @params {ast_layout_attribute_type_t} type - Layout Attribute Type
+ * @returns {char*} name - Name
+ *
+ */
+char* generator_code_layout_attribute_name(ast_layout_attribute_type_t type);
+
 #endif

@@ -48,7 +48,7 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 
 			if (node->block->children->length > 0) {
 				string_t* layout_block_children = generator_code_layout_block(generator, node->block->children);
-
+				
 				if (has_content == false) {
 					string_append_char(layout_block_str, '\n');
 				}
@@ -590,7 +590,148 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 		}
 	}
 
-	if (css_attributes_length > 0 && css_attributes->length > 0) {
+	size_t media_queries_length = 0;
+	size_t meta_children_length = block->meta_children->length;
+
+	if (meta_children_length > 0 || css_attributes_length > 0 || css_attributes->length > 0) {
+		block->tag = generator_identifier_get(generator->identifier); // We will free its memory in the block_layout_destroy function
+	}
+
+	if (block->meta_children != NULL) {
+		for (size_t i = 0; i < meta_children_length; i++) {
+			ast_layout_node_t* node = block->meta_children->data[i];
+			ast_layout_block_t* node_block = node->block;
+
+			if (node->type != AST_LAYOUT_TYPE_MEDIA) {
+				continue;
+			}
+			ast_layout_attribute_t* media_max_width = hashmap_get(node_block->attributes, "responsive_max_width");
+			ast_layout_attribute_t* media_min_width = hashmap_get(node_block->attributes, "responsive_min_width");
+			ast_layout_attribute_t* media_max_height = hashmap_get(node_block->attributes, "responsive_max_height");
+			ast_layout_attribute_t* media_min_height = hashmap_get(node_block->attributes, "responsive_min_height");
+
+			string_append_str(generator->css, "@media (");
+
+			size_t conditions = 0;
+			size_t media_queries_styles_length = 0;
+
+			if (media_max_width != NULL) {
+				char* value = array_value_stringify(media_max_width->values, ", ");
+
+				if (conditions > 0) {
+					string_append_str(generator->css, " and ");
+				}
+
+				string_append_str(generator->css, "max-width: ");
+				string_append_str(generator->css, value);
+				conditions++;
+
+				memory_destroy(value);
+			}
+
+			if (media_min_width != NULL) {
+				char* value = array_value_stringify(media_min_width->values, ", ");
+
+				if (conditions > 0) {
+					string_append_str(generator->css, " and ");
+				}
+
+				string_append_str(generator->css, "min-width: ");
+				string_append_str(generator->css, value);
+				conditions++;
+
+				memory_destroy(value);
+			}
+
+			if (media_max_height != NULL) {
+				char* value = array_value_stringify(media_max_height->values, ", ");
+
+				if (conditions > 0) {
+					string_append_str(generator->css, " and ");
+				}
+				string_append_str(generator->css, "max-height: ");
+				string_append_str(generator->css, value);
+				conditions++;
+
+				memory_destroy(value);
+			}
+
+			if (media_min_height != NULL) {
+				char* value = array_value_stringify(media_min_height->values, ", ");
+
+				if (conditions > 0) {
+					string_append_str(generator->css, " and ");
+				}
+				string_append_str(generator->css, "min-height: ");
+				string_append_str(generator->css, value);
+				conditions++;
+
+				memory_destroy(value);
+			}
+
+			string_append_char(generator->css, ')');
+			string_append_char(generator->css, '{');
+			string_append_char(generator->css, '#');
+			string_append_str(generator->css, block->tag);
+			string_append_char(generator->css, '{');
+
+			// Media styles
+			for (size_t i = 0; i < node_block->styles->normal->capacity; i++) {
+				hashmap_entry_t* entry = node_block->styles->normal->data[i];
+
+				while (entry) {
+					ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
+					if (attribute == NULL) {}
+					else if (attribute->isStyle == false || attribute->ignoreMe == true) {}
+					else {
+						if (media_queries_styles_length != 0) {
+							string_append_char(generator->css, ';');
+						}
+						string_append_str(generator->css, attribute->final_key == NULL ? attribute->key : attribute->final_key);
+						string_append_str(generator->css, ":");
+						char* value = attribute->final_value == NULL ? array_value_stringify(attribute->values, ", ") : strdup(attribute->final_value);
+						string_append_str(generator->css, value);
+						memory_destroy(value);
+
+						media_queries_styles_length++;
+					}
+
+					entry  = cast(hashmap_entry_t*, entry->next);
+				}
+			}
+
+			// Media new styles
+			for (size_t i = 0; i < node_block->styles->new->capacity; i++) {
+				hashmap_entry_t* entry = node_block->styles->new->data[i];
+
+				while (entry) {
+					ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
+					if (attribute == NULL) {}
+					else if (attribute->isStyle == false || attribute->ignoreMe == true) {}
+					else {
+						if (media_queries_styles_length != 0) {
+							string_append_char(generator->css, ';');
+						}
+						string_append_str(generator->css, attribute->final_key);
+						string_append_str(generator->css, ":");
+						string_append_str(generator->css, attribute->final_value);
+
+						media_queries_styles_length++;
+					}
+
+					entry  = cast(hashmap_entry_t*, entry->next);
+				}
+			}
+
+
+			string_append_char(generator->css, '}');
+			string_append_char(generator->css, '}');
+
+			media_queries_length++;
+		}
+	}
+
+	if ((media_queries_length > 0 || css_attributes_length > 0) && css_attributes->length > 0) {
 		if (html_attributes_length > 0 && html_attributes->length > 0) {
 			string_append_char(html_attributes, ' ');
 		}
@@ -600,8 +741,6 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 		if (hashmap_has_any_sub_value_layout_attribute_style_state(block->states) == true) {
 			has_substate = true;
 		}
-
-		block->tag = generator_identifier_get(generator->identifier); // We will free its memory in the block_layout_destroy function
 
 		if (generator->inlineCSS == true) {
 			string_append_str(html_attributes, "style=\"");

@@ -7,8 +7,10 @@
 #include "base.h"
 #include "memory.h"
 #include "array.h"
+#include "array_custom.h"
 #include "lexer.h"
 #include "hashmap.h"
+// #include "hashmap_custom.h"
 #include "string.h"
 
 typedef enum {

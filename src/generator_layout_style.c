@@ -32,7 +32,7 @@ string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layo
 						ast_layout_attribute_style_state_type type = generator_code_layout_attribute_style_state_enduser_name_to_type(entry->key);
 
 						if (pseudo_element_styles->length > 0 && type != AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR) {
-							string_append_char(css, '.');
+							string_append_char(css, '#');
 							string_append_str(css, block->tag);
 							string_append_char(css, ':');
 							string_append_str(css, generator_code_layout_attribute_style_state_type_to_generated_name(type));
@@ -44,7 +44,7 @@ string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layo
 								(*css_attributes_length)++;
 							}
 						}
-                        
+
                         string_destroy(pseudo_element_styles);
 					}
 

@@ -362,6 +362,16 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 				}
 
 				attribute->final_key = strdup("font-family");
+				// string_t* buffer = string_create(10);
+				// string_append_char(buffer, '"');
+
+				// char* value_str = array_value_stringify(attribute->values, ", "); // TODO: we need to put , after finising the string, not inside the string.
+				// string_append_str(buffer, value_str);
+				// string_append_char(buffer, '"');
+
+				// memory_destroy(value_str);
+				// attribute->final_value = strdup(buffer->data);
+				// string_destroy(buffer);
 			}
 			// src
 			else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_SRC) {
@@ -1231,6 +1241,9 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					return true; \
+				} \
+				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRINGS_ANY) { \
 					return true; \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE) { \

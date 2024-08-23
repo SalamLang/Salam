@@ -230,13 +230,78 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
 
 /**
  *
+ * @function generator_code_head_meta_children
+ * @brief Generate the CSS/HTML code for meta children in the layout
+ * @params {generator_t*} generator - Generator
+ * @params {ast_layout_block_t*} block - Layout block
+ * @params {string_t*} head - Head
+ * @returns {void}
+ * 
+ */
+void generator_code_head_meta_children(generator_t* generator, ast_layout_block_t* block, string_t* head)
+{
+	DEBUG_ME;
+	if (head == NULL) {
+		return;
+	}
+	else if (block == NULL) {
+		return;
+	}
+
+	if (block->meta_children != NULL) {
+		size_t meta_children_length = block->meta_children->length;
+		for (size_t i = 0; i < meta_children_length; i++) {
+			ast_layout_node_t* node = array_get(block->meta_children, i);
+			ast_layout_block_t* node_block = node->block;
+
+			if (node->type == AST_LAYOUT_TYPE_FONT) {
+				string_append_str(generator->css, "@font-face{");
+				hashmap_t* attributes = cast(hashmap_t*, node_block->attributes);
+				size_t attributes_length = attributes->length;
+				size_t attributes_append_length = 0;
+
+				for (size_t i = 0; i < attributes->capacity; i++) {
+					hashmap_entry_t* entry = attributes->data[i];
+
+					while (entry) {
+						ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
+
+						char* value = array_value_stringify(attribute->values, ", ");
+
+						string_append_str(generator->css, attribute->final_key == NULL ? entry->key : attribute->final_key);
+						string_append_char(generator->css, ':');
+						string_append_str(generator->css, attribute->final_value == NULL ? value : attribute->final_value);
+
+						if (value != NULL) {
+							memory_destroy(value);
+						}
+						
+						if (attributes_append_length != attributes_length - 1) {
+							string_append_char(generator->css, ';');
+						}
+
+						entry = cast(hashmap_entry_t*, entry->next);
+						attributes_append_length++;
+					}
+				}
+
+				string_append_char(generator->css, '}');
+			}
+		}
+	}
+}
+
+/**
+ *
  * @function generator_code_head
+ * @brief Generate the code for the head
+ * @params {generator_t*} generator - Generator
  * @params {ast_layout_block_t*} layout_block - Layout block
  * @params {string_t*} head - Head
  * @returns {void}
  *
  */
-void generator_code_head(ast_layout_block_t* block, string_t* head)
+void generator_code_head(generator_t* generator, ast_layout_block_t* block, string_t* head)
 {
 	DEBUG_ME;
 	if (head == NULL) {
@@ -268,6 +333,10 @@ void generator_code_head(ast_layout_block_t* block, string_t* head)
 			}
 		}
 	}
+
+	if (block->meta_children != NULL) {
+		generator_code_head_meta_children(generator, block, head);
+	}
 }
 
 /**
@@ -291,7 +360,7 @@ void generator_code_layout(generator_t* generator)
 			generator_code_layout_body(generator, generator->ast->layout->block, body);
 
 			// Process the head block
-			generator_code_head(generator->ast->layout->block, head);
+			generator_code_head(generator, generator->ast->layout->block, head);
 
 			// Generate the HTML code
 			string_append_str(html, "<!doctype html>\n");

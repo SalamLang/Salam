@@ -66,6 +66,7 @@ typedef struct ast_layout_block_t {
     struct hashmap_t* states;
 
     array_node_layout_t* children;
+    array_node_layout_t* meta_children;
 
     void (*destroy)(void* node);
     void (*print)(void* node);

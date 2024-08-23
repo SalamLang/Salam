@@ -11,6 +11,48 @@
 size_t valid_layout_attributes_length = sizeof(valid_layout_attributes) / sizeof(valid_layout_attributes[0]);
 
 /**
+ * 
+ * @function has_font_extension
+ * @brief Check if the value has a font extension
+ * @params {char*} value - Value
+ * @returns {bool} - True if the value has a font extension, false otherwise
+ * 
+ */
+bool has_font_extension(char* value)
+{
+	DEBUG_ME;
+	if (value == NULL) {
+		return false;
+	}
+
+	size_t len = strlen(value);
+	if (len == 0) {
+		return false;
+	}
+
+	const char* prefixes[] = {
+		".ttf",
+		".otf",
+		".woff",
+		".woff2",
+		".eot",
+		".svg"
+	};
+
+	int num_prefixes = sizeof(prefixes) / sizeof(prefixes[0]);
+
+	for (int i = 0; i < num_prefixes; i++) {
+		size_t prefix_len = strlen(prefixes[i]); // TODO: mb2strlen
+
+		if (len - prefix_len != 0 && strcmp(value + len - prefix_len, prefixes[i]) == 0) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
  *
  * @function has_css_size_prefix
  * @brief Check if the CSS value has a size prefix
@@ -292,6 +334,74 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 	// LAYOUT
 	if (attribute->parent_node_type == AST_LAYOUT_TYPE_NONE) {
 		if (is_attribute_type_in_array(attribute_key_type, valid_layout_attributes, valid_layout_attributes_length)) {
+			return true;
+		}
+	}
+	// FONT
+	else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FONT) {
+		ast_layout_attribute_type_t valid_attributes[] = {
+			AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
+			AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
+		};
+
+		size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
+
+		if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+			// name
+			if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_NAME) {
+				ast_value_t* value = attribute->values->data[0];
+
+				if (value->type->kind == AST_TYPE_KIND_STRING && strlen(value->data.string_value) == 0) {
+					error_validator(2, "Invalid value for attribute '%s' in '%s' element at line %zu column %zu!", attribute->key, ast_layout_node_type_to_enduser_name(attribute->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
+
+					return false;
+				}
+
+				if (attribute->final_key != NULL) {
+					memory_destroy(attribute->final_key);
+				}
+
+				attribute->final_key = strdup("font-family");
+			}
+			// src
+			else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_SRC) {
+				string_t* buffer = string_create(10);
+
+				for (size_t i = 0; i < attribute->values->length; i++) {
+					ast_value_t* value = attribute->values->data[i];
+
+					if (value->type->kind == AST_TYPE_KIND_STRING) {
+						if (has_font_extension(value->data.string_value)) {
+							string_append_str(buffer, "url('");
+							string_append_str(buffer, value->data.string_value);
+							string_append_str(buffer, "')");
+						}
+						else {
+							string_append_str(buffer, "local('");
+							string_append_str(buffer, value->data.string_value);
+							string_append_str(buffer, "')");
+						}
+
+						if (i < attribute->values->length - 1) {
+							string_append_char(buffer, ',');
+							string_append_char(buffer, ' ');
+						}
+					}
+					else {
+						error_validator(2, "Invalid value for attribute '%s' in '%s' element at line %zu column %zu!", attribute->key, ast_layout_node_type_to_enduser_name(attribute->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
+
+						return false;
+					}
+				}
+
+				if (attribute->final_value != NULL) {
+					memory_destroy(attribute->final_value);
+				}
+
+				attribute->final_value = strdup(buffer->data);
+				string_destroy(buffer);
+			}
+
 			return true;
 		}
 	}

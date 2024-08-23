@@ -154,7 +154,7 @@ ast_block_t* ast_block_create(ast_block_type_t type, ast_type_t parent_type)
 
 	block->type = type;
 	block->parent_type = parent_type;
-
+	
 	block->children = array_create(sizeof(ast_node_t*), 4);
 
 	block->children->print = cast(void (*)(void*), array_node_print);

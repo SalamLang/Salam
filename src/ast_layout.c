@@ -35,6 +35,7 @@ ast_layout_block_t* ast_layout_block_create(ast_type_t node_type, ast_layout_nod
 {
     DEBUG_ME;
 	ast_layout_block_t* block = memory_allocate(sizeof(ast_layout_block_t));
+
 	block->tag = NULL;
 	block->type = AST_BLOCK_TYPE_LAYOUT;
 	block->parent_type = node_type;
@@ -125,7 +126,7 @@ ast_layout_attribute_t* ast_layout_attribute_copy(ast_layout_attribute_t* value)
 	if (value->final_value != NULL) {
 		copy->final_value = strdup(value->final_value);
 	}
-
+	
 	return copy;
 }
 
@@ -247,6 +248,7 @@ ast_layout_node_t* ast_layout_node_create(ast_layout_node_type_t layout_node_typ
 {
     DEBUG_ME;
 	ast_layout_node_t* node = memory_allocate(sizeof(ast_layout_node_t));
+	
 	node->tag = NULL;
 	node->type = layout_node_type;
 	node->block = ast_layout_block_create(AST_TYPE_LAYOUT, layout_node_type);

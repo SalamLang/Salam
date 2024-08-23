@@ -650,6 +650,15 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_float[] = 
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font[] = {
     {NULL, NULL},
 };
+const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_display[] = {
+    {"خودکار", "auto"},
+    {"بلوک", "block"},
+    {"تعویض", "swap"},
+    {"پشتیبانی", "fallback"},
+    {"اختیاری", "optional"},
+    {"دلخواه", "optional"},
+    {NULL, NULL},
+};
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_family[] = {
     {NULL, NULL},
 };

@@ -625,7 +625,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 
 			size_t tag_length = strlen(block->tag);
 
-			string_append_str(html_attributes, "class=");
+			string_append_str(html_attributes, "id=");
 			if (tag_length > 1) {
 				string_append_char(html_attributes, '\"');
 			}

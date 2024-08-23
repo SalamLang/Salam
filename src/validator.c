@@ -30,14 +30,23 @@ bool has_font_extension(char* value, char** out_extention)
 	if (len == 0) {
 		return false;
 	}
-
+	// Source: https://www.w3.org/TR/css-fonts-4/
 	const char* prefixes[] = {
-		".ttf",
-		".otf",
+		".otc", ".ttc",
+		".eot",
+		".ttf", ".otf",
+		".svg", ".svgz",
 		".woff",
 		".woff2",
-		".eot",
-		".svg",
+	};
+	const char* names[] = {
+		"collection", "collection",
+		"embedded-opentype",
+		"opentype", "opentye",
+		"svg", "svg",
+		"truetype",
+		"woff",
+		"woff2",
 	};
 
 	int num_prefixes = sizeof(prefixes) / sizeof(prefixes[0]);
@@ -47,7 +56,7 @@ bool has_font_extension(char* value, char** out_extention)
 
         if (len - prefix_len != 0 && strcasecmp(value + len - prefix_len, prefixes[i]) == 0) {
 			if (out_extention != NULL) {
-				*out_extention = strdup(prefixes[i] + 1);
+				*out_extention = strdup(names[i]);
 			}
 
 			return true;
@@ -1220,9 +1229,9 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 	// Global values
 	else if (first->type->kind == AST_TYPE_KIND_STRING && attribute->values->length == 1) {
 		if (false) {}
-		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
+		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE
 
-		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(GENERATED_NAME, ENDUSER_NAME) else if (strcmp(value, ENDUSER_NAME) == 0) { return true; }
+		#define ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE(GENERATED_NAME, ENDUSER_NAME) else if (strcmp(value, ENDUSER_NAME) == 0) { return true; }
 
 		#include "ast_layout_attribute_style_global.h"
 	}

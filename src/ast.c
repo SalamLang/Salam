@@ -151,6 +151,7 @@ ast_block_t* ast_block_create(ast_block_type_t type, ast_type_t parent_type)
 {
 	DEBUG_ME;
 	ast_block_t* block = malloc(sizeof(ast_block_t));
+
 	block->type = type;
 	block->parent_type = parent_type;
 
@@ -296,6 +297,7 @@ ast_if_t* ast_if_create(ast_value_t* condition)
 {
 	DEBUG_ME;
 	ast_if_t* node = memory_allocate(sizeof(ast_if_t));
+
 	node->condition = condition;
 
 	node->block = ast_block_create(AST_BLOCK_TYPE_IF, AST_TYPE_IF); // TODO???
@@ -326,6 +328,7 @@ ast_if_t* ast_elseif_create(ast_value_t* condition)
 {
 	DEBUG_ME;
 	ast_if_t* node = memory_allocate(sizeof(ast_if_t));
+	
 	node->condition = condition;
 
 	node->block = ast_block_create(AST_BLOCK_TYPE_IF, AST_TYPE_ELSE_IF); // TODO???

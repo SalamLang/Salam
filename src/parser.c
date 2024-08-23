@@ -136,7 +136,6 @@ void expect(lexer_t* lexer, token_type_t token_type)
 	PARSER_NEXT;
 }
 
-
 /**
  *
  * @function match_next

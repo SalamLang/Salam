@@ -794,7 +794,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 			has_substate = true;
 		}
 
-		if (generator->inlineCSS == true && media_queries_length == 0) {
+		if (generator->inlineCSS == true && (media_queries_length == 0 || has_substate == false)) {
 			string_append_str(html_attributes, "style=\"");
 			string_append(html_attributes, css_attributes);
 			string_append_str(html_attributes, "\"");

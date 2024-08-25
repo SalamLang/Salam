@@ -367,3 +367,29 @@ bool file_appends(const char* path, const char* content)
 
     return true;
 }
+
+/**
+ * 
+ * @function file_appends_wchar
+ * @brief Appending wide character to a file
+ * @params {char*} path - Path of file
+ * @params {wchar_t} wc - Wide character
+ * @returns {bool}
+ * 
+ */
+bool file_appends_wchar(const char* path, const wchar_t wc)
+{
+    char mb_str[16];
+    memset(mb_str, 0, sizeof(mb_str));
+
+    size_t len = wcrtomb(mb_str, wc, NULL);
+    if (len == (size_t)-1) {
+        fprintf(stderr, "Failed to convert wide character\n");
+        return false;
+    }
+
+    char error_message[256];
+    snprintf(error_message, sizeof(error_message), "character '%s'\n", mb_str);
+
+    return file_appends(path, error_message);
+}

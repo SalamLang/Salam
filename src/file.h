@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <stdlib.h>
+#include <limits.h>
 
 #include "base.h"
 #include "memory.h"
@@ -157,5 +158,16 @@ time_t file_get_modified(const char* path);
  *
  */
 bool directory_exists(const char* path);
+
+/**
+ * 
+ * @function file_appends_wchar
+ * @brief Appending wide character to a file
+ * @params {char*} path - Path of file
+ * @params {wchar_t} wc - Wide character
+ * @returns {bool}
+ * 
+ */
+bool file_appends_wchar(const char* path, const wchar_t wc);
 
 #endif

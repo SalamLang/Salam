@@ -3,6 +3,7 @@
 #include <wctype.h>
 #include <locale.h>
 #include <stdlib.h>
+#include <iconv.h>
 
 #include "base.h"
 #include "file.h"
@@ -15,6 +16,46 @@
 #include "generator.h"
 #include "validator.h"
 
+
+void handle_character(unsigned char c)
+{
+    if (c == 0xB5) {
+        printf("Encountered the micro sign (µ) at 0xB5\n");
+    } else {
+        printf("Valid character: %c\n", c);
+    }
+}
+
+/**
+ * 
+ * @function handle_invalid_char
+ * @brief Handle invalid characters in a string
+ * @params {const unsigned char*} str - The string to check
+ * @params {size_t} length - The length of the string
+ * @returns {void}
+ * 
+ */
+void handle_invalid_char(const unsigned char* str, size_t length)
+{
+    for (size_t i = 0; i < length; i++) {
+        if (str[i] == 0xEF && str[i + 1] == 0xBF && str[i + 2] == 0xBD) {
+            printf("Replacement character detected at byte %zu\n", i);
+            i += 2; // Skip over the replacement character sequence
+        } else {
+            printf("Valid byte: %02X\n", str[i]);
+        }
+    }
+}
+
+/**
+ * 
+ * @function doargs
+ * @brief Handle command line arguments
+ * @params {int} argc - Number of arguments
+ * @params {char**} argv - Array of arguments
+ * @returns {void}
+ * 
+ */
 void doargs(int argc, char** argv)
 {
 	DEBUG_ME;
@@ -31,6 +72,13 @@ void doargs(int argc, char** argv)
 	char* content = file_reads(path, &size);
 
 	printf("LEXER SIZE: %zu\n", size);
+
+	handle_invalid_char((const unsigned char*)content, size);
+
+    size_t length = sizeof(content) / sizeof(content[0]);
+    for (size_t i = 0; i < length; i++) {
+        handle_character(content[i]);
+    }
 
 	lexer_t* lexer = lexer_create(path, content);
 	lexer->source_size = size;
@@ -81,6 +129,15 @@ void doargs(int argc, char** argv)
 	printf("END SUCCESS\n");
 }
 
+/**
+ * 
+ * @function main
+ * @brief Main entry point
+ * @params {int} argc - Number of arguments
+ * @params {char**} argv - Array of arguments
+ * @returns {int}
+ * 
+ */
 int main(int argc, char** argv)
 {
 	DEBUG_ME;

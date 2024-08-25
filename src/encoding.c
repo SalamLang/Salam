@@ -1,75 +1,117 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <wchar.h>
 #include <locale.h>
-#include <iconv.h>
+#include <wchar.h>
+#include <stdint.h>
+#include <stdbool.h>
 #include <string.h>
 
-#define BUFFER_SIZE 1024
-
-// Function to convert UTF-8 to wide characters
-wchar_t* utf8_to_wchar(const char *utf8_text) {
-    iconv_t cd = iconv_open("WCHAR_T", "UTF-8");
-    if (cd == (iconv_t)-1) {
-        perror("iconv_open");
-        return NULL;
+bool file_appends(const char* path, const char* content) {
+    FILE* file = fopen(path, "a");
+    if (file == NULL) {
+        perror("fopen");
+        return false;
     }
 
-    size_t inbytesleft = strlen(utf8_text);
-    size_t outbytesleft = (inbytesleft + 1) * sizeof(wchar_t);
-    wchar_t *wtext = (wchar_t*)malloc(outbytesleft);
-    if (!wtext) {
-        perror("malloc");
-        iconv_close(cd);
-        return NULL;
-    }
+    size_t size = strlen(content);
 
-    char *inbuf = (char*)utf8_text;
-    char *outbuf = (char*)wtext;
+    fwrite(content, 1, size, file);
 
-    if (iconv(cd, &inbuf, &inbytesleft, &outbuf, &outbytesleft) == (size_t)-1) {
-        perror("iconv");
-        free(wtext);
-        iconv_close(cd);
-        return NULL;
-    }
+    fclose(file);
 
-    *outbuf = L'\0';
-    iconv_close(cd);
-
-    return wtext;
+    return true;
 }
 
-// Main function
+bool file_appends_utf8(const char* path, const unsigned char *bytes, size_t length) {
+    return file_appends(path, (const char*)bytes);
+}
+
+wchar_t utf8_to_wchar(const unsigned char *bytes, int *bytes_consumed) {
+    uint32_t codepoint = 0;
+    int length = 0;
+
+    unsigned char c1 = bytes[0];
+
+    if (c1 <= 0x7F) {
+        codepoint = c1;
+        length = 1;
+    } else if ((c1 & 0xE0) == 0xC0) {
+        if ((bytes[1] & 0xC0) != 0x80) {
+            length = 0;
+        } else {
+            codepoint = (c1 & 0x1F) << 6;
+            codepoint |= (bytes[1] & 0x3F);
+            length = 2;
+        }
+    } else if ((c1 & 0xF0) == 0xE0) {
+        if ((bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80) {
+            length = 0;
+        } else {
+            codepoint = (c1 & 0x0F) << 12;
+            codepoint |= (bytes[1] & 0x3F) << 6;
+            codepoint |= (bytes[2] & 0x3F);
+            length = 3;
+        }
+    } else if ((c1 & 0xF8) == 0xF0) {
+        if ((bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80 || (bytes[3] & 0xC0) != 0x80) {
+            length = 0;
+        } else {
+            codepoint = (c1 & 0x07) << 18;
+            codepoint |= (bytes[1] & 0x3F) << 12;
+            codepoint |= (bytes[2] & 0x3F) << 6;
+            codepoint |= (bytes[3] & 0x3F);
+            length = 4;
+        }
+    } else {
+        length = 0;
+    }
+
+    if (codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+        length = 0;
+    }
+
+    *bytes_consumed = length;
+    return (wchar_t)codepoint;
+}
+
+void print_utf8_as_wchars(const char *file_path) {
+    FILE *file = fopen(file_path, "rb");
+    if (!file) {
+        perror("fopen");
+        exit(EXIT_FAILURE);
+    }
+
+    setlocale(LC_CTYPE, "");
+
+    unsigned char buffer[4];
+    int bytes_consumed;
+
+    while (fread(buffer, 1, 1, file) == 1) {
+        if (buffer[0] <= 0x7F) {
+            putwchar(buffer[0]);
+            file_appends_utf8("windows-logs.txt", buffer, 1);
+        } else if ((buffer[0] & 0xE0) == 0xC0) {
+            fread(buffer + 1, 1, 1, file);
+            file_appends_utf8("windows-logs.txt", buffer, 2);
+        } else if ((buffer[0] & 0xF0) == 0xE0) {
+            fread(buffer + 1, 1, 2, file);
+            file_appends_utf8("windows-logs.txt", buffer, 3);
+        } else if ((buffer[0] & 0xF8) == 0xF0) {
+            fread(buffer + 1, 1, 3, file);
+            file_appends_utf8("windows-logs.txt", buffer, 4);
+        }
+    }
+
+    fclose(file);
+}
+
 int main(int argc, char *argv[]) {
     if (argc != 2) {
         wprintf(L"Usage: %s <file_path>\n", argv[0]);
         return 1;
     }
 
-    setlocale(LC_ALL, "");
+    print_utf8_as_wchars(argv[1]);
 
-    FILE *file = fopen(argv[1], "r");
-    if (!file) {
-        perror("fopen");
-        return 1;
-    }
-
-    char buffer[BUFFER_SIZE];
-    fread(buffer, 1, BUFFER_SIZE - 1, file);
-    fclose(file);
-    buffer[BUFFER_SIZE - 1] = '\0';  // Null-terminate the buffer
-
-    wchar_t *file_content = utf8_to_wchar(buffer);
-    if (!file_content) {
-        return 1;
-    }
-
-    // Print each wide character one by one
-    for (int i = 0; file_content[i] != L'\0'; ++i) {
-        wprintf(L"Character: %lc\n", file_content[i]);
-    }
-
-    free(file_content);
     return 0;
 }

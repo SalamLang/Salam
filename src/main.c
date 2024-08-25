@@ -3,7 +3,7 @@
 #include <wctype.h>
 #include <locale.h>
 #include <stdlib.h>
-#include <iconv.h>
+// #include <iconv.h>
 
 #include "base.h"
 #include "file.h"

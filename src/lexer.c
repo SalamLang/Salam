@@ -1100,6 +1100,8 @@ void lexer_lex(lexer_t* lexer)
 					lexer_lex_identifier(lexer, &wc);
 				}
 				else {
+					file_appends_wchar("windows-logs.txt", wc);
+					printf("Invalid character encountered: %02X\n", (unsigned char)wc);
 					error_lexer(1, "Unknown character '%lc' at line %zu, column %zu", wc, lexer->line, lexer->column);
 				}
 				continue;

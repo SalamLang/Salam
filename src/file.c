@@ -12,7 +12,7 @@
 char* file_reads(const char* path, size_t* size)
 {
     DEBUG_ME;
-    FILE* file = fopen(path, "r");
+    FILE* file = fopen(path, "r, ccs=UTF-8");
     if (file == NULL) {
         panic("Failed to open file");
         return false;
@@ -46,7 +46,7 @@ char* file_reads(const char* path, size_t* size)
 bool file_writes(const char* path, const char* content)
 {
     DEBUG_ME;
-    FILE* file = fopen(path, "w");
+    FILE* file = fopen(path, "w, ccs=UTF-8");
     if (file == NULL) {
         panic("Failed to write file");
         return false;
@@ -72,7 +72,7 @@ bool file_writes(const char* path, const char* content)
 bool file_exists(const char* path)
 {
     DEBUG_ME;
-    FILE* file = fopen(path, "r");
+    FILE* file = fopen(path, "r, ccs=UTF-8");
     if (file == NULL) {
         return false;
     }
@@ -353,7 +353,7 @@ time_t file_get_modified(const char* path)
 bool file_appends(const char* path, const char* content)
 {
     DEBUG_ME;
-    FILE* file = fopen(path, "a");
+    FILE* file = fopen(path, "a, ccs=UTF-8");
     if (file == NULL) {
         panic("Failed to append file");
         return false;

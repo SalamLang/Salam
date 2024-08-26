@@ -185,6 +185,7 @@ char* string_destroy_and_get(string_t* str)
 
 	if (res == NULL) {
 		error(2, "Failed to allocate memory for string data");
+
 		return NULL;
 	}
 
@@ -324,6 +325,7 @@ char* replace_all_substrings(const char* str, const char* old_substr, const char
 		char* result = memory_allocate(str_len + 1);
 
 		strcpy(result, str);
+
 		return result;
 	}
 
@@ -417,8 +419,7 @@ bool string_compare(string_t* str1, string_t* str2)
 	if (str1 == NULL || str2 == NULL) {
 		return false;
 	}
-
-	if (str1->length != str2->length) {
+	else if (str1->length != str2->length) {
 		return false;
 	}
 
@@ -635,7 +636,6 @@ bool is_utf8_digit(char* utf8)
     ) {
         return true;
     }
-
     // Arabic digits
     else if (
         strcmp(utf8, "٠") == 0 ||  // Arabic 0
@@ -651,7 +651,6 @@ bool is_utf8_digit(char* utf8)
     ) {
         return true;
     }
-
     // English digits
     else if (
         strcmp(utf8, "0") == 0 ||  // English 0
@@ -895,6 +894,7 @@ uint32_t utf8_decode(const char* source, size_t* index)
     }
 
     *index += length;
+	
     return codepoint;
 }
 

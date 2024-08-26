@@ -15,12 +15,13 @@ ast_layout_attribute_type_t valid_layout_attributes[] = {
 	AST_LAYOUT_ATTRIBUTE_TYPE_LANG,
 	AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT,
 	AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH,
-	AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
 };
 
 // All possible values
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_color[] = {
     {"بی‌رنگ", "transparent"},
+    {"بی رنگ", "transparent"},
+    {"شفاف", "transparent"},
     {"سیاه", "black"},
     {"سفید", "white"},
     {"صورتی", "pink"},
@@ -291,8 +292,11 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_blo
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_block_start_style[] = {
     {"پیوسته", "solid"},
     {"خط‌چین", "dashed"},
+    {"خط چین", "dashed"},
     {"نقطه‌چین", "dotted"},
+    {"نقطه چین", "dotted"},
     {"دوگانه", "double"},
+    {"دو گانه", "double"},
     {"پنهان", "none"},
     {NULL, NULL},
 };
@@ -303,21 +307,29 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_blo
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_bottom_style[] = {
     {"پیوسته", "solid"},
     {"خط‌چین", "dashed"},
+    {"خط چین", "dashed"},
     {"نقطه‌چین", "dotted"},
+    {"نقطه چین", "dotted"},
     {"دوگانه", "double"},
+    {"دو گانه", "double"},
     {"پنهان", "none"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_collapse[] = {
     {"بله", "collapse"},
+    {"اره", "collapse"},
     {"خیر", "separate"},
+    {"نه", "separate"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_image_repeat[] = {
     {"تکرار", "repeat"},
+    {"تکرارافقی", "repeat-x"},
     {"تکرار افقی", "repeat-x"},
     {"تکرار عمودی", "repeat-y"},
+    {"تکرارعمودی", "repeat-y"},
     {"بدون تکرار", "no-repeat"},
+    {"بدون‌تکرار", "no-repeat"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_image_source[] = {
@@ -335,40 +347,55 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_ima
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_inline_end_style[] = {
     {"پیوسته", "solid"},
     {"خط‌چین", "dashed"},
+    {"خط چین", "dashed"},
     {"نقطه‌چین", "dotted"},
+    {"نقطه‌ چین", "dotted"},
     {"دوگانه", "double"},
+    {"دو گانه", "double"},
     {"پنهان", "none"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_inline_start_style[] = {
     {"پیوسته", "solid"},
     {"خط‌چین", "dashed"},
+    {"خط چین", "dashed"},
     {"نقطه‌چین", "dotted"},
+    {"نقطه چین", "dotted"},
     {"دوگانه", "double"},
+    {"دو گانه", "double"},
     {"پنهان", "none"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_left_style[] = {
     {"پیوسته", "solid"},
     {"خط‌چین", "dashed"},
+    {"خط چین", "dashed"},
     {"نقطه‌چین", "dotted"},
+    {"نقطه چین", "dotted"},
     {"دوگانه", "double"},
+    {"دو گانه", "double"},
     {"پنهان", "none"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_right_style[] = {
     {"پیوسته", "solid"},
     {"خط‌چین", "dashed"},
+    {"خط چین", "dashed"},
     {"نقطه‌چین", "dotted"},
+    {"نقطه چین", "dotted"},
     {"دوگانه", "double"},
+    {"دو گانه", "double"},
     {"پنهان", "none"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_top_style[] = {
     {"پیوسته", "solid"},
     {"خط‌چین", "dashed"},
+    {"خط چین", "dashed"},
     {"نقطه‌چین", "dotted"},
+    {"نقطه چین", "dotted"},
     {"دوگانه", "double"},
+    {"دو گانه", "double"},
     {"پنهان", "none"},
     {NULL, NULL},
 };
@@ -412,6 +439,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_clear[] = 
     {"چپ", "left"},
     {"راست", "right"},
     {"هر دو", "both"},
+    {"هردو", "both"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_clip_path[] = {
@@ -419,6 +447,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_clip_path[
     {"دایره", "circle()"},
     {"مستطیل", "rect()"},
     {"پنج‌ضلعی", "polygon()"},
+    {"پنج‌ ضلعی", "polygon()"},
     {"مسیر", "path()"},
     {NULL, NULL},
 };
@@ -428,13 +457,13 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_clip_rule[
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_color_interpolation[] = {
-    {"سرویس", "auto"},
+    {"خودکار", "auto"},
     {"RGB", "srgb"},
     {"خطی", "linearRGB"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_color_interpolation_filters[] = {
-    {"سرویس", "auto"},
+    {"خودکار", "auto"},
     {"RGB", "srgb"},
     {"خطی", "linearRGB"},
     {NULL, NULL},
@@ -450,29 +479,34 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_column_cou
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_column_fill[] = {
-    {"نیمه", "auto"},
+    {"خودکار", "auto"},
     {"بلافاصله", "balance"},
+    {"بلا فاصله", "balance"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_column_rule_style[] = {
     {"پیوسته", "solid"},
     {"خط‌چین", "dashed"},
+    {"خط چین", "dashed"},
     {"نقطه‌چین", "dotted"},
+    {"نقطه‌ چین", "dotted"},
     {"دوگانه", "double"},
+    {"دو گانه", "double"},
     {"پنهان", "none"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_column_span[] = {
     {"یک ستون", "none"},
     {"بیش از یک ستون", "all"},
+    {"بیش از یک‌ستون", "all"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_contain[] = {
     {"خودکار", "auto"},
-    {"موارد", "content"},
-    {"حساب", "layout"},
-    {"سایز", "size"},
-    {"حساب و سایز", "layout size"},
+    {"محتوا", "content"},
+    {"لایه", "layout"},
+    {"اندازه", "size"},
+    {"لایه و اندازه", "layout size"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_contain_intrinsic_block_size[] = {
@@ -848,12 +882,19 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_outline_co
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_outline_style[] = {
     {"خط‌چین", "dashed"},
+    {"خط چین", "dashed"},
     {"خط‌دار", "dotted"},
+    {"خط دار", "dotted"},
     {"مستقیم", "solid"},
     {"دوگانه", "double"},
+    {"دو گانه", "double"},
     {"موجی", "groove"},
     {"فرورفته", "inset"},
+    {"فرو رفته", "inset"},
     {"برآمده", "outset"},
+    {"برامده", "outset"},
+    {"بر آمده", "outset"},
+    {"بر امده", "outset"},
     {"هیچ", "none"},
     {NULL, NULL},
 };
@@ -864,6 +905,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_outline_wi
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow[] = {
     {"پنهان", "hidden"},
     {"غیر فعال", "visible"},
+    {"غیرفعال", "visible"},
     {"چرخش", "scroll"},
     {"خودکار", "auto"},
     {NULL, NULL},
@@ -876,6 +918,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow_a
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow_block[] = {
     {"پنهان", "hidden"},
     {"غیر فعال", "visible"},
+    {"غیرفعال", "visible"},
     {"چرخش", "scroll"},
     {"خودکار", "auto"},
     {NULL, NULL},
@@ -883,6 +926,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow_b
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow_inline[] = {
     {"پنهان", "hidden"},
     {"غیر فعال", "visible"},
+    {"غیرفعال", "visible"},
     {"چرخش", "scroll"},
     {"خودکار", "auto"},
     {NULL, NULL},
@@ -895,6 +939,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow_w
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow_x[] = {
     {"پنهان", "hidden"},
     {"غیر فعال", "visible"},
+    {"غیرفعال", "visible"},
     {"چرخش", "scroll"},
     {"خودکار", "auto"},
     {NULL, NULL},
@@ -902,6 +947,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow_x
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow_y[] = {
     {"پنهان", "hidden"},
     {"غیر فعال", "visible"},
+    {"غیرفعال", "visible"},
     {"چرخش", "scroll"},
     {"خودکار", "auto"},
     {NULL, NULL},
@@ -943,29 +989,34 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_padding_to
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_page[] = {
+    {"خودکار", "auto"},
     {"بله", "auto"},
     {"خیر", "none"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_page_break_after[] = {
+    {"همیشه", "always"},
     {"بله", "always"},
     {"خیر", "auto"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_page_break_before[] = {
+    {"همیشه", "always"},
     {"بله", "always"},
     {"خیر", "auto"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_page_break_inside[] = {
+    {"خودکار", "auto"},
     {"بله", "auto"},
     {"خیر", "avoid"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_paint_order[] = {
     {"محتوا", "content"},
+    {"مرز", "border"},
     {"حاشیه", "border"},
-    {"پدینگ", "padding"},
+    {"فاصله", "padding"},
     {"همه", "all"},
     {NULL, NULL},
 };
@@ -997,6 +1048,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_place_self
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_pointer_events[] = {
     {"فعال", "auto"},
     {"غیرفعال", "none"},
+    {"غیر فعال", "none"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_position[] = {
@@ -1024,6 +1076,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_resize[] =
     {"عمودی", "vertical"},
     {"خودکار", "both"},
     {"غیرفعال", "none"},
+    {"غیر فعال", "none"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_right[] = {
@@ -1063,11 +1116,14 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_scroll_sna
     {"مرکز", "center"},
     {"راست", "end"},
     {"ترازبندی", "none"},
+    {"تراز بندی", "none"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_scroll_snap_type[] = {
     {"تک محور", "x"},
+    {"تک‌محور", "x"},
     {"دو محور", "y"},
+    {"دومحور", "y"},
     {"غیرفعال", "none"},
     {NULL, NULL},
 };
@@ -1082,6 +1138,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_text_align
     {"راست", "right"},
     {"مرکز", "center"},
     {"ترازبندی", "justify"},
+    {"تراز بندی", "justify"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_text_align_last[] = {
@@ -1089,6 +1146,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_text_align
     {"راست", "right"},
     {"مرکز", "center"},
     {"ترازبندی", "justify"},
+    {"تراز بندی", "justify"},
     {"خودکار", "auto"},
     {NULL, NULL},
 };
@@ -1122,6 +1180,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_unicode_bi
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_user_select[] = {
     {"اجازه", "auto"},
     {"غیرفعال", "none"},
+    {"غیر فعال", "none"},
     {"جلوگیری", "text"},
     {NULL, NULL},
 };
@@ -1161,6 +1220,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition
     {"تاخیر", "delay"},
     {"ویژگی", "property"},
     {"تابع زمان‌بندی", "timing-function"},
+    {"تابع زمان ‌بندی", "timing-function"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition_behavior[] = {
@@ -1171,11 +1231,13 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition_delay[] = {
     {"ثانیه", "s"},
     {"میلی‌ثانیه", "ms"},
+    {"میلی‌ ثانیه", "ms"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition_duration[] = {
     {"ثانیه", "s"},
     {"میلی‌ثانیه", "ms"},
+    {"میلی‌ ثانیه", "ms"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition_property[] = {
@@ -1186,13 +1248,9 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition_timing_function[] = {
-    // {"آسان", "ease"},
     {"وارد شدن", "ease-in"},
-    // {"آسان وارد شدن", "ease-in"},
     {"خارج شدن", "ease-out"},
-    // {"آسان خارج شدن", "ease-out"},
     {"وارد و خارج شدن", "ease-in-out"},
-    // {"آسان وارد و خارج شدن", "ease-in-out"},
     {"خطی", "linear"},
     {NULL, NULL},
 };
@@ -1241,8 +1299,8 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_word_break
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_writing_mode[] = {
     {"افقی", "horizontal-tb"},
-    {"عمودی", "vertical-rl"},
-    {"عمودی، از چپ به راست", "vertical-lr"},
+    {"عمودی از راست به چپ", "vertical-rl"},
+    {"عمودی از چپ به راست", "vertical-lr"},
     {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_zoom[] = {

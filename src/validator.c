@@ -30,6 +30,7 @@ bool has_font_extension(char* value, char** out_extension)
 	if (len == 0) {
 		return false;
 	}
+
 	// Source: https://www.w3.org/TR/css-fonts-4/
 	const char* prefixes[] = {
 		".otc", ".ttc",
@@ -129,7 +130,7 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 		"ex",
 		"ch",
 		"vmin", "vmin",
-		"vmax", "vmax"
+		"vmax", "vmax",
 	};
 
 	size_t num_prefixes = sizeof(prefixes) / sizeof(prefixes[0]);
@@ -165,6 +166,7 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 	while (i < len && (isdigit(css_value[i]) || (css_value[i] == '.' && !decimal_point_found))) {
 		if (css_value[i] == '.') {
 			string_append_char(buffer, css_value[i]);
+
 			decimal_point_found = true;
 		}
 		else {
@@ -371,6 +373,7 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 
 				return true;
 			}
+			
 			return true;
 		}
 
@@ -1179,6 +1182,7 @@ bool validate_style_value_size(hashmap_t* styles, hashmap_t* new_styles, ast_lay
 	}
 	else if (first->type->kind == AST_TYPE_KIND_STRING) {
 		char* value = first->data.string_value;
+		
 		if (strlen(value) == 0) {
 			return false;
 		}
@@ -1227,6 +1231,7 @@ bool validate_style_value_size(hashmap_t* styles, hashmap_t* new_styles, ast_lay
 		}
 
 		attribute->final_value = strdup(out_value);
+
 		memory_destroy(buffer);
 		memory_destroy(out_value);
 
@@ -1325,34 +1330,40 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return validate_style_value_color(styles, new_styles, attribute, ast_layout_allowed_style_color, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING) { \
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return validate_style_value_string(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY) { \
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return true; \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRINGS_ANY) { \
 					attribute->final_value = array_value_stringify(attribute->values, ","); \
+					\
 					return true; \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE) { \
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return validate_style_value_size(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE_COLOR) { \
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return validate_style_value_size_color(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZES) { \
@@ -1368,6 +1379,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return validate_style_value_percentage(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZES_COLORS) { \
@@ -1377,66 +1389,77 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return validate_style_value_integer(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_FLOAT) { \
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return validate_style_value_float(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_NUMBER) { \
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return validate_style_value_number(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_POSITIVE_INTEGER) { \
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return validate_style_value_integer(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_POSITIVE_FLOAT) { \
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return validate_style_value_float(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_POSITIVE_NUMBER) { \
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return validate_style_value_number(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_NEGATIVE_INTEGER) { \
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return validate_style_value_integer(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_NEGATIVE_FLOAT) { \
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return validate_style_value_float(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_NEGATIVE_NUMBER) { \
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return validate_style_value_number(styles, new_styles, attribute, NULL, values); \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_TIME) { \
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return true; \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_PIXEL) { \
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return true; \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_GROUP) { \
@@ -1446,15 +1469,18 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return true; \
 				} \
 				else if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_NEGATIVE_PERCENTAGE) { \
 					if (attribute->values->length > 1) { \
 						return false; \
 					} \
+					\
 					return true; \
 				} \
 			}\
+			\
 			return false;
 
 		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS)

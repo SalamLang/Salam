@@ -151,6 +151,7 @@ bool match_next(lexer_t* lexer, token_type_t token_type)
 	if (lexer->token_index + 1 >= lexer->tokens->capacity) {
 		return false;
 	}
+
 	return PARSER_CURRENT_NEXT->type == token_type;
 }
 
@@ -169,6 +170,7 @@ bool match_prev(lexer_t* lexer, token_type_t token_type)
 	if (lexer->token_index == 0) {
 		return false;
 	}
+
 	return PARSER_CURRENT_PREV->type == token_type;
 }
 
@@ -284,7 +286,6 @@ array_value_t* parser_parse_expressions_maybe(lexer_t* lexer)
 	}
 
 	return array_value_create(1);
-	// return NULL;
 }
 
 /**
@@ -419,7 +420,7 @@ ast_node_t* parser_parse_return(lexer_t* lexer)
 	ast_node_t* node = ast_node_create(AST_TYPE_RETURN, PARSER_CURRENT->location);
 
 	PARSER_NEXT; // Eat the return token
-
+	
 	array_value_t* values = parser_parse_expressions(lexer);
 	node->data.returns = ast_return_create(values);
 

@@ -251,62 +251,77 @@ string_t* generator_code_type(generator_t* generator, ast_value_type_t* type)
 	switch (type->kind) {
 		case AST_TYPE_KIND_VOID:
 			string_append_str(code, "void");
+
 			return code;
 
 		case AST_TYPE_KIND_NULL:
 			string_append_str(code, "null");
+			
 			return code;
 
 		case AST_TYPE_KIND_INT:
 			string_append_str(code, "int");
+
 			return code;
 
 		case AST_TYPE_KIND_FLOAT:
 			string_append_str(code, "float");
+
 			return code;
 
 		case AST_TYPE_KIND_CHAR:
 			string_append_str(code, "char");
+
 			return code;
 
 		case AST_TYPE_KIND_STRING:
 			string_append_str(code, "string");
+			
 			return code;
 
 		case AST_TYPE_KIND_BOOL:
 			string_append_str(code, "bool");
+
 			return code;
 
 		case AST_TYPE_KIND_ARRAY:
 			string_append_str(code, "array");
+
 			return code;
 
 		// case AST_TYPE_KIND_MAP:
 		//     string_append_str(code, "map");
+		// 
 		//     return code;
 
 		case AST_TYPE_KIND_STRUCT:
 			string_append_str(code, "struct");
+
 			return code;
 
 		case AST_TYPE_KIND_ENUM:
 			string_append_str(code, "enum");
+
 			return code;
 
 		// case AST_TYPE_KIND_UNION:
 		//     string_append_str(code, "union");
+		// 
 		//     return code;
 
 		case AST_TYPE_KIND_POINTER:
 			string_append_str(code, "pointer");
+
 			return code;
 
 		case AST_TYPE_KIND_FUNCTION:
 			string_append_str(code, "function");
+
 			return code;
 	}
 
 	string_append_str(code, "unknown type");
+	
 	return code;
 }
 

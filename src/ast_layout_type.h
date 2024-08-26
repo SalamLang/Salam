@@ -47,15 +47,19 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_WBR, "WBR", "wbr", "wbr", "شکستن کلمه",
 
 // Sectioning Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_HEADER, "HEADER", "header", "header", "سربخش", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_HEADER, "HEADER", "header", "header", "سر بخش", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FOOTER, "FOOTER", "footer", "footer", "پاصفحه", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_FOOTER, "FOOTER", "footer", "footer", "پا صفحه", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_NAV, "NAV", "nav", "nav", "ناوبری", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SECTION, "SECTION", "section", "section", "بخش", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ARTICLE, "ARTICLE", "article", "article", "مقاله", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ASIDE, "ASIDE", "aside", "aside", "جداگانه", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MAIN, "MAIN", "main", "main", "اصلی", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_HGROUP, "HGROUP", "hgroup", "hgroup", "گروه‌هدر", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_HGROUP, "HGROUP", "hgroup", "hgroup", "گروه هدر", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FIGURE, "FIGURE", "figure", "figure", "شکل", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FIGCAPTION, "FIGCAPTION", "figcaption", "figcaption", "زیرنویس شکل", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_FIGCAPTION, "FIGCAPTION", "figcaption", "figcaption", "زیر نویس شکل", false)
 
 // Multimedia Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_VIDEO, "VIDEO", "video", "video", "فیلم", false)
@@ -73,24 +77,33 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_COMMAND, "COMMAND", "command", "command", "فر�
 
 // List Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_UL, "UL", "ul", "ul", "لیست غیرمرتب", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_UL, "UL", "ul", "ul", "لیست غیر مرتب", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_OL, "OL", "ol", "ol", "لیست مرتب", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LI, "LI", "li", "li", "آیتم لیست", false)
 
 // Table Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE, "TABLE", "table", "table", "جدول", false)
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_HEADER, "TABLE_HEADER", "table_header", "thead", "سر جدول", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_HEADER, "TABLE_HEADER", "table_header", "thead", "سرجدول", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_TABLE_HEADER, "TABLE_HEADER", "table_header", "thead", "سر جدول", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_BODY, "TABLE_BODY", "table_body", "tbody", "بدنه جدول", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_FOOTER, "TABLE_FOOTER", "table_footer", "tfoot", "پاصفحه جدول", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_TABLE_FOOTER, "TABLE_FOOTER", "table_footer", "tfoot", "پا صفحه جدول", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_TR, "TABLE_TR", "table_tr", "tr", "ردیف", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_TD, "TABLE_TD", "table_td", "td", "سلول", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_TH, "TABLE_TH", "table_th", "th", "سرسلول", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_TABLE_TH, "TABLE_TH", "table_th", "th", "سر سلول", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_CAPTION, "CAPTION", "caption", "caption", "عنوان جدول", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_COL, "COL", "col", "col", "ستون", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_COLGROUP, "COLGROUP", "colgroup", "colgroup", "گروه ستون‌ها", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_COLGROUP, "COLGROUP", "colgroup", "colgroup", "گروه ستون‌ ها", false)
 
 // Miscellaneous Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BLOCKQUOTE, "BLOCKQUOTE", "blockquote", "blockquote", "نقل قول بلوکی", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BLOCKQUOTE, "BLOCKQUOTE", "blockquote", "blockquote", "نقل‌قول بلوکی", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PRE, "PRE", "pre", "pre", "متن پیش‌قالب‌بندی‌شده", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PRE, "PRE", "pre", "pre", "متن پیش‌ قالب‌بندی‌شده", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PRE, "PRE", "pre", "pre", "متن پیش‌ قالب‌ بندی‌شده", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PRE, "PRE", "pre", "pre", "متن پیش‌ قالب‌ بندی‌ شده", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_CODE, "CODE", "code", "code", "کد", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ADDRESS, "ADDRESS", "address", "address", "آدرس", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TIME, "TIME", "time", "time", "زمان", false)
@@ -124,3 +137,5 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FONT, "FONT", "font", "font", "فونت", true)
 // ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA_MAX_HEIGHT, "RESPONSIVE_MAX_HEIGHT", "responsive_max_height", "@media only screen and (max-width:", "پذیرا حداکثر عرض", true)
 // ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA_MIN_HEIGHT, "RESPONSIVE_MIN_HEIGHT", "responsive_min_height", "@media only screen and (min-width:", "پذیرا حداقل عرض", true)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA, "RESPONSIVE", "responsive", "@media", "پذیرا", true)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_MEDIA, "RESPONSIVE", "responsive", "@media", "واکنش پذیر", true)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_MEDIA, "RESPONSIVE", "responsive", "@media", "واکنش‌پذیر", true)

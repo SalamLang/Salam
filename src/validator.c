@@ -146,6 +146,7 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 	string_t* buffer = string_create(len + 1);
 
 	size_t i = 0;
+	
 	if (css_value[i] == '-' || css_value[i] == '+') {
 		if (css_value[i] == '-') {
 			string_append_char(buffer, css_value[i]);
@@ -450,7 +451,9 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 					}
 					else {
 						printf("....\n");
+
 						value->print(value);
+
 						error_validator(2, "Invalid value for attribute '%s' in '%s' element at line %zu column %zu!", attribute->key, ast_layout_node_type_to_enduser_name(attribute->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);
 
 						return false;
@@ -462,6 +465,7 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 				}
 
 				attribute->final_value = strdup(buffer->data);
+
 				string_destroy(buffer);
 
 				return true;
@@ -494,7 +498,7 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 				return true;
 			}
 			else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_FONT_UNICODE_RANGE) {
-				// TODO: do more check layer
+				// TODO: We need to do more check layer later! 
 				return true;
 			}
 
@@ -505,7 +509,6 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 	else if (attribute->parent_node_type == AST_LAYOUT_TYPE_TEXTAREA) {
 		ast_layout_attribute_type_t valid_attributes[] = {
 			AST_LAYOUT_ATTRIBUTE_TYPE_PLACEHOLDER,
-			// AST_LAYOUT_ATTRIBUTE_TYPE_VALUE,
 		};
 
 		size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
@@ -702,6 +705,7 @@ bool validate_style_value_string(hashmap_t* styles, hashmap_t* new_styles, ast_l
 
 		if (allowed_values2 != NULL) {
 			size_t i = 0;
+
 			while (allowed_values2[i].input != NULL) {
 				if (strcmp(value, allowed_values2[i].input) == 0) {
 					attribute->final_value = strdup(allowed_values2[i].output);
@@ -714,6 +718,7 @@ bool validate_style_value_string(hashmap_t* styles, hashmap_t* new_styles, ast_l
 
 		if (allowed_values1 != NULL) {
 			size_t i = 0;
+
 			while (allowed_values1[i].input != NULL) {
 				if (strcmp(value, allowed_values1[i].input) == 0) {
 					attribute->final_value = strdup(allowed_values1[i].output);
@@ -890,6 +895,7 @@ bool validate_style_value_integer(hashmap_t* styles, hashmap_t* new_styles, ast_
 
 		if (allowed_values2 != NULL) {
 			size_t i = 0;
+
 			while (allowed_values2[i].input != NULL) {
 				if (strcmp(value, allowed_values2[i].input) == 0) {
 					attribute->final_value = strdup(allowed_values2[i].output);
@@ -903,6 +909,7 @@ bool validate_style_value_integer(hashmap_t* styles, hashmap_t* new_styles, ast_
 
 		if (allowed_values1 != NULL) {
 			size_t i = 0;
+
 			while (allowed_values1[i].input != NULL) {
 				if (strcmp(value, allowed_values1[i].input) == 0) {
 					attribute->final_value = strdup(allowed_values1[i].output);
@@ -959,6 +966,7 @@ bool validate_style_value_number(hashmap_t* styles, hashmap_t* new_styles, ast_l
 
 		if (allowed_values2 != NULL) {
 			size_t i = 0;
+
 			while (allowed_values2[i].input != NULL) {
 				if (strcmp(value, allowed_values2[i].input) == 0) {
 					attribute->final_value = strdup(allowed_values2[i].output);
@@ -972,6 +980,7 @@ bool validate_style_value_number(hashmap_t* styles, hashmap_t* new_styles, ast_l
 
 		if (allowed_values1 != NULL) {
 			size_t i = 0;
+
 			while (allowed_values1[i].input != NULL) {
 				if (strcmp(value, allowed_values1[i].input) == 0) {
 					attribute->final_value = strdup(allowed_values1[i].output);
@@ -1028,6 +1037,7 @@ bool validate_style_value_float(hashmap_t* styles, hashmap_t* new_styles, ast_la
 
 		if (allowed_values2 != NULL) {
 			size_t i = 0;
+
 			while (allowed_values2[i].input != NULL) {
 				if (strcmp(value, allowed_values2[i].input) == 0) {
 					attribute->final_value = strdup(allowed_values2[i].output);
@@ -1041,6 +1051,7 @@ bool validate_style_value_float(hashmap_t* styles, hashmap_t* new_styles, ast_la
 
 		if (allowed_values1 != NULL) {
 			size_t i = 0;
+
 			while (allowed_values1[i].input != NULL) {
 				if (strcmp(value, allowed_values1[i].input) == 0) {
 					attribute->final_value = strdup(allowed_values1[i].output);
@@ -1117,6 +1128,7 @@ bool validate_style_value_percentage(hashmap_t* styles, hashmap_t* new_styles, a
 
 		if (allowed_values2 != NULL) {
 			size_t i = 0;
+
 			while (allowed_values2[i].input != NULL) {
 				if (strcmp(value, allowed_values2[i].input) == 0) {
 					attribute->final_value = strdup(allowed_values2[i].output);
@@ -1130,6 +1142,7 @@ bool validate_style_value_percentage(hashmap_t* styles, hashmap_t* new_styles, a
 
 		if (allowed_values1 != NULL) {
 			size_t i = 0;
+
 			while (allowed_values1[i].input != NULL) {
 				if (strcmp(value, allowed_values1[i].input) == 0) {
 					attribute->final_value = strdup(allowed_values1[i].output);
@@ -1189,6 +1202,7 @@ bool validate_style_value_size(hashmap_t* styles, hashmap_t* new_styles, ast_lay
 
 		if (allowed_values2 != NULL) {
 			size_t i = 0;
+
 			while (allowed_values2[i].input != NULL) {
 				if (strcmp(value, allowed_values2[i].input) == 0) {
 					attribute->final_value = strdup(allowed_values2[i].output);
@@ -1202,6 +1216,7 @@ bool validate_style_value_size(hashmap_t* styles, hashmap_t* new_styles, ast_lay
 
 		if (allowed_values1 != NULL) {
 			size_t i = 0;
+
 			while (allowed_values1[i].input != NULL) {
 				if (strcmp(value, allowed_values1[i].input) == 0) {
 					attribute->final_value = strdup(allowed_values1[i].output);

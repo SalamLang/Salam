@@ -49,9 +49,9 @@ bool has_font_extension(char* value, char** out_extention)
 		"woff2",
 	};
 
-	int num_prefixes = sizeof(prefixes) / sizeof(prefixes[0]);
+	size_t num_prefixes = sizeof(prefixes) / sizeof(prefixes[0]);
 
-	for (int i = 0; i < num_prefixes; i++) {
+	for (size_t i = 0; i < num_prefixes; i++) {
 		size_t prefix_len = strlen(prefixes[i]); // TODO: mb2strlen
 
         if (len - prefix_len != 0 && strcasecmp(value + len - prefix_len, prefixes[i]) == 0) {
@@ -176,7 +176,7 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 
 	while (i < len && isspace(css_value[i])) i++;
 
-	for (int j = 0; j < num_prefixes; j++) {
+	for (size_t j = 0; j < num_prefixes; j++) {
 		size_t prefix_len = strlen(prefixes[j]); // TODO: mb2strlen
 
 		if (len - i == prefix_len && strncmp(css_value + i, prefixes[j], prefix_len) == 0) {
@@ -190,7 +190,7 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 		}
 	}
 
-	for (int j = 0; j < num_persian_prefixes; j++) {
+	for (size_t j = 0; j < num_persian_prefixes; j++) {
 		size_t prefix_len = strlen(persian_prefixes[j]); // TODO: mb2strlen
 
 		if (len - i == prefix_len && strncmp(css_value + i, persian_prefixes[j], prefix_len) == 0) {

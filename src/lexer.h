@@ -269,23 +269,22 @@ void lexer_lex(lexer_t* lexer);
  * @function lexer_lex_identifier
  * @brief Lexing an identifier
  * @params {lexer_t*} lexer - Lexer state
- * @params {wchar_t} wc - wide character
+ * @params {char} uc - UTF8 character
  * @returns {void}
  *
  */
-void lexer_lex_identifier(lexer_t* lexer, wchar_t* wc);
+void lexer_lex_identifier(lexer_t* lexer, char* uc);
 
 /**
  *
  * @function lexer_lex_number
  * @brief Lexing a number
  * @params {lexer_t*} lexer - Lexer state
- * @params {wchar_t} wc - wide character
- * @params {int} char_size - Character size
+ * @params {char*} uc - UTF8 character
  * @returns {void}
  *
  */
-void lexer_lex_number(lexer_t* lexer, wchar_t wc, int char_size);
+void lexer_lex_number(lexer_t* lexer, char* uc);
 
 /**
  *
@@ -449,5 +448,17 @@ bool string_is_integer(const char* value);
  *
  */
 bool string_is_float(const char* value);
+
+/**
+ * 
+ * @function utf8_char_length
+ * @brief Get the UTF-8 character and return the length
+ * @params {char*} source - Source code
+ * @params {size_t*} index - Index of the current character in source string
+ * @params {size_t*} num_bytes - Number of bytes
+ * @returns {int}
+ * 
+ */
+char* char_utf8_decode(char* source, size_t* index, size_t* num_bytes);
 
 #endif

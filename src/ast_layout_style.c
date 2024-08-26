@@ -21,7 +21,7 @@ ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_style_type(char
 
 	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
 	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
-	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) 
+	#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS)
 
 	#include "ast_layout_attribute_style_type.h"
 
@@ -72,7 +72,7 @@ ast_layout_attribute_style_state_type enduser_name_to_ast_layout_attribute_style
     #undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
 
     #define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME) else if (strcmp(name, ENDUSER_NAME) == 0) { type = TYPE; return type; }
-	
+
 	if (false) {}
 	#include "ast_layout_attribute_style_state_type.h"
 

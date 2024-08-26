@@ -23,7 +23,7 @@ void print_utf8_characters(FILE *file)
 			continue;
 		}
 
-		for (int i = 1; i < num_bytes; ++i) {
+		for (size_t i = 1; i < num_bytes; ++i) {
 			int next_ch = fgetc(file);
 			if (next_ch == EOF || (next_ch & 0xC0) != 0x80) {
 				fprintf(stderr, "Invalid UTF-8 sequence detected.\n");

@@ -592,6 +592,86 @@ bool is_wchar_digit(uint32_t codepoint)
 }
 
 /**
+ * 
+ * @function is_utf8_alpha
+ * @brief Check if a UTF-8 string is an alphabet
+ * @params {char*} utf8 - UTF-8 string
+ * @returns {bool} True if the string is an alphabet, false otherwise
+ * 
+ */
+bool is_utf8_alpha(char* utf8)
+{
+	wchar_t wc;
+	int wcl = mbtowc(&wc, utf8, MB_CUR_MAX);
+	if (wcl <= 0) {
+		return false;
+	}
+
+	return iswalpha(wc);
+}
+
+/**
+ * 
+ * @function is_english_digit
+ * @brief Check if a UTF-8 string is an Persian/Arabic/English digit
+ * @params {char*} utf8 - UTF-8 string
+ * @returns {bool} True if the string is a Persian/Arabic/English digit, false otherwise
+ * 
+ */
+bool is_utf8_digit(char* utf8)
+{
+    // Persian digits
+    if (
+        strcmp(utf8, "۰") == 0 ||  // Persian 0
+        strcmp(utf8, "۱") == 0 ||  // Persian 1
+        strcmp(utf8, "۲") == 0 ||  // Persian 2
+        strcmp(utf8, "۳") == 0 ||  // Persian 3
+        strcmp(utf8, "۴") == 0 ||  // Persian 4
+        strcmp(utf8, "۵") == 0 ||  // Persian 5
+        strcmp(utf8, "۶") == 0 ||  // Persian 6
+        strcmp(utf8, "۷") == 0 ||  // Persian 7
+        strcmp(utf8, "۸") == 0 ||  // Persian 8
+        strcmp(utf8, "۹") == 0     // Persian 9
+    ) {
+        return true;
+    }
+
+    // Arabic digits
+    else if (
+        strcmp(utf8, "٠") == 0 ||  // Arabic 0
+        strcmp(utf8, "١") == 0 ||  // Arabic 1
+        strcmp(utf8, "٢") == 0 ||  // Arabic 2
+        strcmp(utf8, "٣") == 0 ||  // Arabic 3
+        strcmp(utf8, "٤") == 0 ||  // Arabic 4
+        strcmp(utf8, "٥") == 0 ||  // Arabic 5
+        strcmp(utf8, "٦") == 0 ||  // Arabic 6
+        strcmp(utf8, "٧") == 0 ||  // Arabic 7
+        strcmp(utf8, "٨") == 0 ||  // Arabic 8
+        strcmp(utf8, "٩") == 0     // Arabic 9
+    ) {
+        return true;
+    }
+
+    // English digits
+    else if (
+        strcmp(utf8, "0") == 0 ||  // English 0
+        strcmp(utf8, "1") == 0 ||  // English 1
+        strcmp(utf8, "2") == 0 ||  // English 2
+        strcmp(utf8, "3") == 0 ||  // English 3
+        strcmp(utf8, "4") == 0 ||  // English 4
+        strcmp(utf8, "5") == 0 ||  // English 5
+        strcmp(utf8, "6") == 0 ||  // English 6
+        strcmp(utf8, "7") == 0 ||  // English 7
+        strcmp(utf8, "8") == 0 ||  // English 8
+        strcmp(utf8, "9") == 0     // English 9
+    ) {
+        return true;
+    }
+
+    return false;
+}
+
+/**
  *
  * @function convert_to_english_digit
  * @brief Convert a wide character to an English digit
@@ -613,6 +693,50 @@ char convert_to_english_digit(wchar_t ch)
     }
 
     return ch;
+}
+
+/**
+ * 
+ * @function convert_utf8_to_english_digit
+ * @brief Convert a UTF-8 string to an English digit
+ * @params {char*} uc - UTF-8 string
+ * @returns {char} English digit
+ * 
+ */
+char convert_utf8_to_english_digit(char* uc)
+{
+	if (strcmp(uc, "۰") == 0 || strcmp(uc, "٠") == 0 || strcmp(uc, "0") == 0) {
+		return '0';
+	}
+	else if (strcmp(uc, "۱") == 0 || strcmp(uc, "١") == 0 || strcmp(uc, "1") == 0) {
+		return '1';
+	}
+	else if (strcmp(uc, "۲") == 0 || strcmp(uc, "٢") == 0 || strcmp(uc, "2") == 0) {
+		return '2';
+	}
+	else if (strcmp(uc, "۳") == 0 || strcmp(uc, "٣") == 0 || strcmp(uc, "3") == 0) {
+		return '3';
+	}
+	else if (strcmp(uc, "۴") == 0 || strcmp(uc, "٤") == 0 || strcmp(uc, "4") == 0) {
+		return '4';
+	}
+	else if (strcmp(uc, "۵") == 0 || strcmp(uc, "٥") == 0 || strcmp(uc, "5") == 0) {
+		return '5';
+	}
+	else if (strcmp(uc, "۶") == 0 || strcmp(uc, "٦") == 0 || strcmp(uc, "6") == 0) {
+		return '6';
+	}
+	else if (strcmp(uc, "۷") == 0 || strcmp(uc, "٧") == 0 || strcmp(uc, "7") == 0) {
+		return '7';
+	}
+	else if (strcmp(uc, "۸") == 0 || strcmp(uc, "٨") == 0 || strcmp(uc, "8") == 0) {
+		return '8';
+	}
+	else if (strcmp(uc, "۹") == 0 || strcmp(uc, "٩") == 0 || strcmp(uc, "9") == 0) {
+		return '9';
+	}
+
+	return '\0';
 }
 
 /**

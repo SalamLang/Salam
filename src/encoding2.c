@@ -90,7 +90,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Write code points and their wchar_t representation to the log file
-    for (int i = 0; i < index; i++) {
+    for (size_t i = 0; i < index; i++) {
         // Convert codepoint to wchar_t
         wchar_t wc = (wchar_t)codepoints[i];
         fprintf(log_file, "Codepoint: U+%04X, wchar_t: %lc\n", codepoints[i], wc);

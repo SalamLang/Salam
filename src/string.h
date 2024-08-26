@@ -389,4 +389,34 @@ size_t utf8_strlen(const char *str);
  */
 size_t mb2strlen(const char* identifier);
 
+/**
+ * 
+ * @function is_english_digit
+ * @brief Check if a UTF-8 string is an Persian/Arabic/English digit
+ * @params {char*} utf8 - UTF-8 string
+ * @returns {bool} True if the string is a Persian/Arabic/English digit, false otherwise
+ * 
+ */
+bool is_utf8_digit(char* utf8);
+
+/**
+ * 
+ * @function is_utf8_alpha
+ * @brief Check if a UTF-8 string is an alphabet
+ * @params {char*} utf8 - UTF-8 string
+ * @returns {bool} True if the string is an alphabet, false otherwise
+ * 
+ */
+bool is_utf8_alpha(char* utf8);
+
+/**
+ * 
+ * @function convert_utf8_to_english_digit
+ * @brief Convert a UTF-8 string to an English digit
+ * @params {char*} uc - UTF-8 string
+ * @returns {char} English digit
+ * 
+ */
+char convert_utf8_to_english_digit(char* uc);
+
 #endif

@@ -650,6 +650,7 @@ void ast_function_print(ast_function_t* value)
 	printf("Block: ");
 	if (value->block != NULL) {
 		printf("\n");
+
 		value->block->print(value->block);
 	}
 	else {
@@ -787,6 +788,7 @@ void ast_destroy(ast_t* ast)
 {
 	DEBUG_ME;
 	printf("ast_destroy\n");
+
 	if (ast != NULL) {
 		if (ast->layout != NULL) {
 			ast_layout_destroy(ast->layout);
@@ -814,12 +816,20 @@ void ast_print(ast_t* ast)
 	printf("AST\n");
 
 	printf("AST Layout: ");
-	if (ast->layout != NULL) ast->layout->print(ast->layout);
-	else printf("NULL\n");
+	if (ast->layout != NULL) {
+		ast->layout->print(ast->layout);
+	}
+	else {
+		printf("NULL\n");
+	}
 
 	printf("AST Functions: ");
-	if (ast->functions != NULL) ast->functions->print(ast->functions);
-	else printf("NULL\n");
+	if (ast->functions != NULL) {
+		ast->functions->print(ast->functions);
+	}
+	else {
+		printf("NULL\n");
+	}
 }
 
 /**
@@ -858,8 +868,10 @@ void ast_value_print(ast_value_t* value)
 {
 	DEBUG_ME;
 	printf("Value\n");
+
 	if (value != NULL) {
 		printf("Value Type:\n");
+
 		if (value->type != NULL) {
 			value->type->print(value->type);
 		}
@@ -892,6 +904,7 @@ ast_value_t* ast_value_copy(ast_value_t* value)
 {
 	DEBUG_ME;
 	ast_value_type_t* type = ast_value_type_copy(value->type);
+	
 	ast_value_t* copy = ast_value_create(type, value->data.string_value);
 
 	return copy;

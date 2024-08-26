@@ -11,15 +11,15 @@
 size_t valid_layout_attributes_length = sizeof(valid_layout_attributes) / sizeof(valid_layout_attributes[0]);
 
 /**
- * 
+ *
  * @function has_font_extension
  * @brief Check if the value has a font extension
  * @params {char*} value - Value
- * @params {char**} out_extention - Output extention
+ * @params {char**} out_extension - Output extension
  * @returns {bool} - True if the value has a font extension, false otherwise
- * 
+ *
  */
-bool has_font_extension(char* value, char** out_extention)
+bool has_font_extension(char* value, char** out_extension)
 {
 	DEBUG_ME;
 	if (value == NULL) {
@@ -55,8 +55,8 @@ bool has_font_extension(char* value, char** out_extention)
 		size_t prefix_len = strlen(prefixes[i]); // TODO: mb2strlen
 
         if (len - prefix_len != 0 && strcasecmp(value + len - prefix_len, prefixes[i]) == 0) {
-			if (out_extention != NULL) {
-				*out_extention = strdup(names[i]);
+			if (out_extension != NULL) {
+				*out_extension = strdup(names[i]);
 			}
 
 			return true;
@@ -360,7 +360,7 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 			AST_LAYOUT_ATTRIBUTE_TYPE_RESPONSIVE_MIN_WIDTH,
 		};
 		size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
-		
+
 		if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
 			if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_RESPONSIVE_MAX_HEIGHT || attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_RESPONSIVE_MIN_HEIGHT || attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_RESPONSIVE_MAX_WIDTH || attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_RESPONSIVE_MIN_WIDTH) {
 				if (validate_style_value_size(NULL, NULL, attribute, NULL, NULL) == false) {
@@ -406,7 +406,7 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 				}
 
 				attribute->final_key = strdup("font-family");
-				
+
 				return true;
 			}
 			// src
@@ -417,16 +417,16 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 					ast_value_t* value = attribute->values->data[i];
 
 					if (value->type->kind == AST_TYPE_KIND_STRING) {
-						char* out_extention = NULL;
+						char* out_extension = NULL;
 
-						if (has_font_extension(value->data.string_value, &out_extention) && out_extention != NULL) {
+						if (has_font_extension(value->data.string_value, &out_extension) && out_extension != NULL) {
 							string_append_str(buffer, "url('");
 							string_append_str(buffer, value->data.string_value);
 							string_append_char(buffer, '\'');
 							string_append_char(buffer, ')');
 
 							string_append_str(buffer, " format('");
-							string_append_str(buffer, out_extention);
+							string_append_str(buffer, out_extension);
 							string_append_char(buffer, '\'');
 							string_append_char(buffer, ')');
 						}
@@ -436,8 +436,8 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 							string_append_str(buffer, "')");
 						}
 
-						if (out_extention != NULL) {
-							memory_destroy(out_extention);
+						if (out_extension != NULL) {
+							memory_destroy(out_extension);
 						}
 
 						if (i < attribute->values->length - 1) {
@@ -565,7 +565,7 @@ bool is_layout_node_a_single_tag(ast_layout_node_type_t type)
 
 		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) case TYPE: return IS_MOTHER;
 		#define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) case TYPE: return IS_MOTHER;
-		#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) 
+		#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER)
 
 		#include "ast_layout_type.h"
 	}
@@ -1296,7 +1296,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 		#undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
 
 		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return false;
-		#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
+		#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME)
 
 		#include "ast_layout_attribute_type.h"
 

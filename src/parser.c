@@ -278,7 +278,7 @@ array_value_t* parser_parse_expressions_maybe(lexer_t* lexer)
 		match(lexer, TOKEN_PLUS) ||
 		match(lexer, TOKEN_IDENTIFIER) ||
 		match(lexer, TOKEN_MINUS)
-		// TODO: add mroe types
+		// TODO: add more types
 	) {
 		return parser_parse_expressions(lexer);
 	}

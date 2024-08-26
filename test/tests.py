@@ -16,7 +16,7 @@ COLOR_BLUE = "\033[94m"
 
 def run_tests_in_directory(directory):
 	output_dir = directory / "output"
-	
+
 	if "output" in directory.parts:
 		return
 
@@ -32,9 +32,9 @@ def run_tests_in_directory(directory):
 
 def compare_output_to_expected(directory):
 	global total_tests, passed_tests, failed_tests, warnings
-	
+
 	output_dir = directory / "output"
-	
+
 	comparison = filecmp.dircmp(directory, output_dir)
 
 	test_failed = False
@@ -56,14 +56,14 @@ def compare_output_to_expected(directory):
 		failed_tests += 1
 	else:
 		passed_tests += 1
-	
+
 	total_tests += 1
 
 def process_directory(directory):
 	salam_files = list(directory.glob("*.salam"))
 	if not salam_files:
 		return
-	
+
 	run_tests_in_directory(directory)
 	compare_output_to_expected(directory)
 
@@ -78,7 +78,7 @@ def iterate_directories(base_dir):
 if __name__ == "__main__":
 	current_directory = Path(os.getcwd())
 	iterate_directories(current_directory)
-	
+
 	print("\n--- Test Summary ---")
 	print(f"{COLOR_GREEN}Total test cases: {total_tests}{COLOR_RESET}")
 	print(f"{COLOR_GREEN}Passed test cases: {passed_tests}{COLOR_RESET}")

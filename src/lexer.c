@@ -1098,12 +1098,17 @@ char* char_utf8_decode(char* source, size_t* index, size_t* num_bytes)
 void lexer_lex(lexer_t* lexer)
 {
 	DEBUG_ME;
+
 	char c;
+	char* uc = NULL;
 
 	while ((c = LEXER_CURRENT) && c != '\0' && lexer->index < lexer->source_length) {
+		if (uc != NULL) {
+			memory_destroy(uc);
+		}
+
 		size_t num_bytes;
-		char* uc = char_utf8_decode(lexer->source, &lexer->index, &num_bytes);
-		printf("uc: %s\n", uc);
+		uc = char_utf8_decode(lexer->source, &lexer->index, &num_bytes);
 
 		switch (num_bytes) {
 			case 0:

@@ -33,7 +33,7 @@ char* generator_identifier_get(generator_identifier_t* gen)
 
 	strcpy(identifier, gen->current);
 
-	for (size_t i = length - 1; i >= 0; i--) {
+	for (int i = length - 1; i >= 0; i--) {
 		if (gen->current[i] < 'z') {
 			gen->current[i]++;
 
@@ -50,7 +50,7 @@ char* generator_identifier_get(generator_identifier_t* gen)
 			new_current[length + 1] = '\0';
 
 			memory_destroy(gen->current);
-			
+
 			gen->current = new_current;
 		}
 	}

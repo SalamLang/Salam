@@ -622,7 +622,8 @@ char* ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type)
 bool ast_layout_attribute_has_any_sub_value(ast_layout_attribute_t* value)
 {
 	DEBUG_ME;
-	// if (value->values != NULL && value->values->length > 0 && value->final_key != NULL && value->final_value != NULL) {
+	// value->final_key != NULL
+	// value->final_value != NULL
 	if (value->values != NULL && value->values->length > 0) {
 		return true;
 	}

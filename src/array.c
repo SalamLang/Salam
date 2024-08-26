@@ -83,6 +83,7 @@ bool array_pop(array_t* array, void* element)
 
     array->length--;
     memory_copy(element, (char*)array->data + (array->capacity * array->element_capacity), array->element_capacity);
+    
     return true;
 }
 

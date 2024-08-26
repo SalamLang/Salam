@@ -1,7 +1,7 @@
 // SIGNATURE: ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_SINGLE_TAG)
 
 // Paragraph Types
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PARAGRAPH, "PARAGRAPH", "paragraph", "p", "پراراگراف", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PARAGRAPH, "PARAGRAPH", "paragraph", "p", "پاراگراف", false)
 ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_PARAGRAPH_RAW, "PARAGRAPH_RAW", "paragraph_raw", "content", "محتوا", false)
 
 // Form Elements

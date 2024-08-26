@@ -135,6 +135,7 @@ bool string_is_percentage(const char* value, bool acceptSign)
 
 	if (wvalue[0] == L'\0') {
 		memory_destroy(wvalue);
+
 		return false;
 	}
 
@@ -147,6 +148,7 @@ bool string_is_percentage(const char* value, bool acceptSign)
 
 	if (start == 1 && wvalue[1] == L'\0') {
 		memory_destroy(wvalue);
+
 		return false;
 	}
 
@@ -154,17 +156,20 @@ bool string_is_percentage(const char* value, bool acceptSign)
 
 	if (wvalue[len_wvalue - 1] != L'%') {
 		memory_destroy(wvalue);
+
 		return false;
 	}
 
 	for (size_t i = start; i < len_wvalue - 1; i++) {
 		if (!(is_english_digit(wvalue[i]) || is_persian_digit(wvalue[i]) || is_arabic_digit(wvalue[i]))) {
 			memory_destroy(wvalue);
+
 			return false;
 		}
 	}
 
 	memory_destroy(wvalue);
+	
 	return true;
 }
 
@@ -989,13 +994,17 @@ char* char_utf8_decode(char* source, size_t* index, size_t* num_bytes)
 
 	if ((source[*index] & 0x80) == 0) {
 		bytes = 1;
-	} else if ((source[*index] & 0xE0) == 0xC0) {
+	}
+	else if ((source[*index] & 0xE0) == 0xC0) {
 		bytes = 2;
-	} else if ((source[*index] & 0xF0) == 0xE0) {
+	}
+	else if ((source[*index] & 0xF0) == 0xE0) {
 		bytes = 3;
-	} else if ((source[*index] & 0xF8) == 0xF0) {
+	}
+	else if ((source[*index] & 0xF8) == 0xF0) {
 		bytes = 4;
-	} else {
+	}
+	else {
 		bytes = 0;
 		if (num_bytes != NULL) {
 			*num_bytes = bytes;
@@ -1009,6 +1018,7 @@ char* char_utf8_decode(char* source, size_t* index, size_t* num_bytes)
 	}
 
 	utf8_char[bytes] = '\0';
+
 	*index += bytes;
 
 	if (num_bytes != NULL) {
@@ -1029,7 +1039,6 @@ char* char_utf8_decode(char* source, size_t* index, size_t* num_bytes)
 void lexer_lex(lexer_t* lexer)
 {
 	DEBUG_ME;
-
 	char c;
 	
 	while ((c = LEXER_CURRENT) && c != '\0' && lexer->index < lexer->source_length) {

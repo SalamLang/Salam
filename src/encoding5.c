@@ -30,7 +30,7 @@ void print_utf8_characters(const char *buffer, size_t size)
             break;
         }
 
-        for (int j = 1; j < num_bytes; ++j) {
+        for (size_t j = 1; j < num_bytes; ++j) {
             unsigned char next_ch = buffer[i + j];
             if ((next_ch & 0xC0) != 0x80) {
                 fprintf(stderr, "Invalid UTF-8 sequence detected.\n");

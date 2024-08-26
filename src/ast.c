@@ -154,7 +154,7 @@ ast_block_t* ast_block_create(ast_block_type_t type, ast_type_t parent_type)
 
 	block->type = type;
 	block->parent_type = parent_type;
-	
+
 	block->children = array_create(sizeof(ast_node_t*), 4);
 
 	block->children->print = cast(void (*)(void*), array_node_print);
@@ -328,7 +328,7 @@ ast_if_t* ast_elseif_create(ast_value_t* condition)
 {
 	DEBUG_ME;
 	ast_if_t* node = memory_allocate(sizeof(ast_if_t));
-	
+
 	node->condition = condition;
 
 	node->block = ast_block_create(AST_BLOCK_TYPE_IF, AST_TYPE_ELSE_IF); // TODO???

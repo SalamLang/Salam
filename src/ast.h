@@ -34,7 +34,7 @@ typedef struct {
     ast_type_t parent_type;
 
     array_node_t* children;
-    
+
     void (*destroy)(void* node);
     void (*print)(void* node);
 } ast_block_t;

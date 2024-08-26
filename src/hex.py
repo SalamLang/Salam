@@ -48,14 +48,11 @@ import chardet
 #     print(f"UnicodeDecodeError: {e}")
 
 
-
-
 # # try:
 # # 	text = codecs.decode(bytes(hexdump_bytes), 'utf-8')
 # # 	print(f"Decoded text: {text}")
 # # except UnicodeDecodeError as e:
 # # 	print(f"UnicodeDecodeError: {e}")
-
 
 
 # def analyze_file(filename):

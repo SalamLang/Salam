@@ -1,13 +1,13 @@
 #include "main.h"
 
 /**
- * 
+ *
  * @function doargs
  * @brief Handle command line arguments
  * @params {int} argc - Number of arguments
  * @params {char**} argv - Array of arguments
  * @returns {void}
- * 
+ *
  */
 void doargs(int argc, char** argv)
 {
@@ -75,13 +75,13 @@ void doargs(int argc, char** argv)
 }
 
 /**
- * 
+ *
  * @function main
  * @brief Main entry point
  * @params {int} argc - Number of arguments
  * @params {char**} argv - Array of arguments
  * @returns {int}
- * 
+ *
  */
 int main(int argc, char** argv)
 {

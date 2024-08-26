@@ -48,7 +48,7 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 
 			if (node->block->children->length > 0) {
 				string_t* layout_block_children = generator_code_layout_block(generator, node->block->children);
-				
+
 				if (has_content == false) {
 					string_append_char(layout_block_str, '\n');
 				}
@@ -236,7 +236,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
  * @params {ast_layout_block_t*} block - Layout block
  * @params {string_t*} head - Head
  * @returns {void}
- * 
+ *
  */
 void generator_code_head_meta_children(generator_t* generator, ast_layout_block_t* block, string_t* head)
 {
@@ -257,18 +257,18 @@ void generator_code_head_meta_children(generator_t* generator, ast_layout_block_
 			if (node->type == AST_LAYOUT_TYPE_FONT) {
 				string_append_str(generator->css, "@font-face{");
 				hashmap_t* attributes = cast(hashmap_t*, node_block->attributes);
-				
+
 				size_t attributes_length = attributes->length;
 				size_t attributes_append_length = 0;
 
 				size_t attributes_capacity = attributes->capacity;
-				
+
 				for (size_t i = 0; i < attributes_capacity; i++) {
 					hashmap_entry_t* entry = attributes->data[i];
 
 					while (entry) {
 						ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
-						
+
 						char* value = array_value_stringify(attribute->values, ", ");
 
 						string_append_str(generator->css, attribute->final_key == NULL ? entry->key : attribute->final_key); // TODO: Why name lowercase entry->key?
@@ -278,7 +278,7 @@ void generator_code_head_meta_children(generator_t* generator, ast_layout_block_
 						if (value != NULL) {
 							memory_destroy(value);
 						}
-						
+
 						if (attributes_append_length != attributes_length - 1) {
 							string_append_char(generator->css, ';');
 						}
@@ -731,7 +731,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 					ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
 
 					generator_code_layout_style_value(node_block->styles->normal, node_block->styles->new, attribute);
-					
+
 					if (attribute == NULL) {}
 					else if (attribute->isStyle == false || attribute->ignoreMe == true) {}
 					else {
@@ -864,7 +864,7 @@ char* generator_code_layout_node_type(ast_layout_node_type_t type)
 
 		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) case TYPE: return GENERATED_NAME;
 		#define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) case TYPE: return GENERATED_NAME;
-		#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) 
+		#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER)
 
 		#include "ast_layout_type.h"
 	}
@@ -891,12 +891,12 @@ char* generator_code_layout_attribute_name(ast_layout_attribute_type_t type)
 		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS)
 
 		#include "ast_layout_attribute_style_type.h"
-		
+
 		#undef ADD_LAYOUT_ATTRIBUTE_TYPE
 		#undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
 
 		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return GENERATED_NAME;
-		#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) 
+		#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME)
 
 		#include "ast_layout_attribute_type.h"
 	}

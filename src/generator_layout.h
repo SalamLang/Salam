@@ -111,7 +111,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
  * @params {ast_layout_block_t*} block - Layout block
  * @params {string_t*} head - Head
  * @returns {void}
- * 
+ *
  */
 void generator_code_head_meta_children(generator_t* generator, ast_layout_block_t* block, string_t* head);
 

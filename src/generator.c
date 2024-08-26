@@ -321,7 +321,7 @@ string_t* generator_code_type(generator_t* generator, ast_value_type_t* type)
 	}
 
 	string_append_str(code, "unknown type");
-	
+
 	return code;
 }
 
@@ -351,52 +351,64 @@ string_t* generator_code_value(generator_t* generator, ast_value_t* value)
 		switch (value->type->kind) {
 			case AST_TYPE_KIND_VOID:
 				string_append_str(code, "VOID");
+
 				return code;
 
 			case AST_TYPE_KIND_INT:
 				string_append_str(code, int2string(value->data.int_value));
+
 				return code;
 
 			case AST_TYPE_KIND_FLOAT:
 				string_append_str(code, float2string(value->data.float_value));
+
 				return code;
 
 			case AST_TYPE_KIND_CHAR:
 				string_append_char(code, value->data.char_value);
+
 				return code;
 
 			case AST_TYPE_KIND_NULL:
 				string_append_str(code, "NULL");
+
 				return code;
 
 			case AST_TYPE_KIND_STRING:
 				string_append_char(code, '"');
 				string_append_str(code, value->data.string_value);
 				string_append_char(code, '"');
+
 				return code;
 
 			case AST_TYPE_KIND_BOOL:
 				string_append_str(code, value->data.bool_value ? "true" : "false");
+
 				return code;
 
 			case AST_TYPE_KIND_STRUCT:
 				string_append_str(code, "STRUCT");
+
 				return code;
 
 			case AST_TYPE_KIND_ENUM:
 				string_append_str(code, "ENUM");
+
 				return code;
 
 			case AST_TYPE_KIND_POINTER:
 				string_append_str(code, "POINTER");
+
 				return code;
 
 			case AST_TYPE_KIND_ARRAY:
 				string_append_str(code, "ARRAY");
+
 				return code;
 
 			case AST_TYPE_KIND_FUNCTION:
 				string_append_str(code, "FUNCTION");
+				
 				return code;
 		}
 	}

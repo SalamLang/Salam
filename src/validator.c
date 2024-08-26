@@ -146,7 +146,7 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 	string_t* buffer = string_create(len + 1);
 
 	size_t i = 0;
-	
+
 	if (css_value[i] == '-' || css_value[i] == '+') {
 		if (css_value[i] == '-') {
 			string_append_char(buffer, css_value[i]);
@@ -1494,7 +1494,7 @@ bool validate_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_a
 					\
 					return true; \
 				} \
-			}\
+			} \
 			\
 			return false;
 

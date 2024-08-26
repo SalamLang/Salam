@@ -1207,8 +1207,6 @@ void lexer_lex(lexer_t* lexer)
 							lexer_lex_identifier(lexer, uc);
 						}
 						else {
-							file_appends("windows-logs.txt", uc);
-							printf("Invalid character encountered: %s\n", uc);
 							error_lexer(1, "Unknown character '%s' at line %zu, column %zu", uc, lexer->line, lexer->column);
 						
 							if (uc != NULL) {
@@ -1237,8 +1235,6 @@ void lexer_lex(lexer_t* lexer)
 					lexer_lex_identifier(lexer, uc);
 				}
 				else {
-					file_appends("windows-logs.txt", uc);
-					printf("Invalid character encountered: %s\n", uc);
 					error_lexer(1, "Unknown character '%s' at line %zu, column %zu", uc, lexer->line, lexer->column);
 
 					if (uc != NULL) {

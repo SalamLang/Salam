@@ -294,7 +294,7 @@ void hashmap_print(hashmap_t* map)
 {
     DEBUG_ME;
 	printf("Hashmap Size: %zu\n", map->length);
-	// printf("Hashmap Capacity: %zu\n", map->capacity);
+	printf("Hashmap Capacity: %zu\n", map->capacity);
 	printf("Hashmap Contents:\n");
 
 	size_t map_capacity = map->capacity;

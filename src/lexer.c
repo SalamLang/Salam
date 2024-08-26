@@ -1236,8 +1236,7 @@ void lexer_lex(lexer_t* lexer)
 				else if (c == '_' || is_utf8_alpha(uc) || is_char_alpha(c)) {
 					lexer_lex_identifier(lexer, uc);
 				}
-				else
-				{
+				else {
 					file_appends("windows-logs.txt", uc);
 					printf("Invalid character encountered: %s\n", uc);
 					error_lexer(1, "Unknown character '%s' at line %zu, column %zu", uc, lexer->line, lexer->column);

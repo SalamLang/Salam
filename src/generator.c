@@ -22,10 +22,10 @@ generator_t* generator_create(ast_t* ast)
 	generator->media_css = string_create(512);
 	generator->js = string_create(4096);
 
-	generator->inlineCSS = true;
-	generator->inlineJS = true;
-	// generator->inlineCSS = false;
-	// generator->inlineJS = false;
+	// generator->inlineCSS = true;
+	// generator->inlineJS = true;
+	generator->inlineCSS = false;
+	generator->inlineJS = false;
 
 	generator->identifier = malloc(sizeof(generator_identifier_t));
 

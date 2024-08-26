@@ -132,7 +132,6 @@ void generator_code_layout_style_value(hashmap_t* styles, hashmap_t* new_styles,
 
 	attribute->print(attribute);
 
-	// Invalid value for '...' attribute in '...' element in case if not stopped by the condition
 	if (isValid == false) {
 		printf("%d\n", attribute->parent_node_type);
 		error_generator(2, "Invalid value for '%s' attribute in '%s' element at line %zu column %zu!", attribute->key, ast_layout_node_type_to_enduser_name(attribute->parent_node_type), attribute->value_location.start_line, attribute->value_location.start_column);

@@ -449,7 +449,7 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 		}
 	}
 	if (html_lang_value == NULL || strcmp(html_lang_value, "") == 0) {
-		string_append_str(html, "fa-IR"); // default
+		string_append_str(html, "fa-IR");
 	}
 	else if (strcmp(html_lang_value, "fa") == 0 || strcmp(html_lang_value, "fa-ir") == 0 || strcmp(html_lang_value, "fa_ir") == 0) {
 		string_append_str(html, "fa-IR");
@@ -479,7 +479,7 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 		}
 	}
 	if (html_dir_value == NULL || strcmp(html_dir_value, "") == 0) {
-		string_append_str(html, "rtl"); // default
+		string_append_str(html, "rtl");
 	}
 	else if (strcmp(html_dir_value, "ltr") == 0) {
 		string_append_str(html, "ltr");

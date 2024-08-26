@@ -69,16 +69,7 @@ void doargs(int argc, char** argv)
 	}
 
 	size_t size = 0;
-	char* content = file_reads(path, &size);
-
-	printf("LEXER SIZE: %zu\n", size);
-
-	handle_invalid_char((const unsigned char*)content, size);
-
-    size_t length = sizeof(content) / sizeof(content[0]);
-    for (size_t i = 0; i < length; i++) {
-        handle_character(content[i]);
-    }
+	char* content = file_reads_binary(path, &size);
 
 	lexer_t* lexer = lexer_create(path, content);
 	lexer->source_size = size;

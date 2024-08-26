@@ -99,11 +99,11 @@ ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_COLGROUP, "COLGROUP", "colgroup", "colgro
 
 // Miscellaneous Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BLOCKQUOTE, "BLOCKQUOTE", "blockquote", "blockquote", "نقل قول بلوکی", false)
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BLOCKQUOTE, "BLOCKQUOTE", "blockquote", "blockquote", "نقل‌قول بلوکی", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_BLOCKQUOTE, "BLOCKQUOTE", "blockquote", "blockquote", "نقل‌قول بلوکی", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PRE, "PRE", "pre", "pre", "متن پیش‌قالب‌بندی‌شده", false)
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PRE, "PRE", "pre", "pre", "متن پیش‌ قالب‌بندی‌شده", false)
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PRE, "PRE", "pre", "pre", "متن پیش‌ قالب‌ بندی‌شده", false)
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PRE, "PRE", "pre", "pre", "متن پیش‌ قالب‌ بندی‌ شده", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_PRE, "PRE", "pre", "pre", "متن پیش‌ قالب‌بندی‌شده", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_PRE, "PRE", "pre", "pre", "متن پیش‌ قالب‌ بندی‌شده", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_PRE, "PRE", "pre", "pre", "متن پیش‌ قالب‌ بندی‌ شده", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_CODE, "CODE", "code", "code", "کد", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ADDRESS, "ADDRESS", "address", "address", "آدرس", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TIME, "TIME", "time", "time", "زمان", false)

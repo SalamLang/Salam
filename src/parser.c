@@ -371,7 +371,7 @@ ast_value_t* parser_parse_expression(lexer_t* lexer)
 	}
 	else if (match(lexer, TOKEN_BOOLEAN)) {
 		PARSER_NEXT;
-
+		
 		type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
 		value = ast_value_create(type, NULL);
 		value->data.bool_value = token->data.boolean;

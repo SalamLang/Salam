@@ -52,7 +52,7 @@ bool has_font_extension(char* value, char** out_extension)
 	size_t num_prefixes = sizeof(prefixes) / sizeof(prefixes[0]);
 
 	for (size_t i = 0; i < num_prefixes; i++) {
-		size_t prefix_len = strlen(prefixes[i]); // TODO: mb2strlen
+		size_t prefix_len = strlen(prefixes[i]);
 
         if (len - prefix_len != 0 && strcasecmp(value + len - prefix_len, prefixes[i]) == 0) {
 			if (out_extension != NULL) {
@@ -177,7 +177,7 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 	while (i < len && isspace(css_value[i])) i++;
 
 	for (size_t j = 0; j < num_prefixes; j++) {
-		size_t prefix_len = strlen(prefixes[j]); // TODO: mb2strlen
+		size_t prefix_len = strlen(prefixes[j]);
 
 		if (len - i == prefix_len && strncmp(css_value + i, prefixes[j], prefix_len) == 0) {
 			string_append_str(buffer, generated_prefixes[j]);
@@ -191,7 +191,7 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 	}
 
 	for (size_t j = 0; j < num_persian_prefixes; j++) {
-		size_t prefix_len = strlen(persian_prefixes[j]); // TODO: mb2strlen
+		size_t prefix_len = strlen(persian_prefixes[j]);
 
 		if (len - i == prefix_len && strncmp(css_value + i, persian_prefixes[j], prefix_len) == 0) {
 			string_append_str(buffer, generated_prefixes[j]);
@@ -226,7 +226,7 @@ char* normalise_css_size(char* attribute_value)
 		return strdup(attribute_value);
 	}
 
-	size_t value_length = strlen(attribute_value) + 3; // TODO: mb2strlen
+	size_t value_length = strlen(attribute_value) + 3;
 
 	char* res = memory_allocate(value_length * sizeof(char));
 

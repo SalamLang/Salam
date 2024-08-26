@@ -132,8 +132,8 @@ bool has_css_size_prefix(char* css_value, char** css_output_value)
 		"vmax", "vmax"
 	};
 
-	int num_prefixes = sizeof(prefixes) / sizeof(prefixes[0]);
-	int num_persian_prefixes = sizeof(persian_prefixes) / sizeof(persian_prefixes[0]);
+	size_t num_prefixes = sizeof(prefixes) / sizeof(prefixes[0]);
+	size_t num_persian_prefixes = sizeof(persian_prefixes) / sizeof(persian_prefixes[0]);
 
 	size_t len = strlen(css_value);
 	if (len == 0) {

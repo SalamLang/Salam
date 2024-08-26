@@ -1100,23 +1100,29 @@ void lexer_lex(lexer_t* lexer)
 	DEBUG_ME;
 
 	char c;
-	char* uc = NULL;
-
+	
 	while ((c = LEXER_CURRENT) && c != '\0' && lexer->index < lexer->source_length) {
-		if (uc != NULL) {
-			memory_destroy(uc);
-		}
-
 		size_t num_bytes;
-		uc = char_utf8_decode(lexer->source, &lexer->index, &num_bytes);
+		char* uc = char_utf8_decode(lexer->source, &lexer->index, &num_bytes);
 
 		switch (num_bytes) {
-			case 0:
+			case 0: {
+				if (uc != NULL) {
+					memory_destroy(uc);
+				}
+
 				error_lexer(3, "Invalid UTF-8 encoding detected at index %d", lexer->index);
-				break;
+			}
+			break;
 			
 			case 1: {
-				switch (uc[0]) {
+				char ucf = uc[0];
+
+				if (uc != NULL) {
+					memory_destroy(uc);
+				}
+
+				switch (ucf) {
 					// End of file
 					case '\0':
 						break;
@@ -1153,7 +1159,7 @@ void lexer_lex(lexer_t* lexer)
 					case '=':
 					case '<':
 					case '>':
-					case '!':
+					case '!':						
 						if (LEXER_CURRENT == '/') {
 							LEXER_NEXT;
 							LEXER_NEXT_COLUMN;
@@ -1192,11 +1198,12 @@ void lexer_lex(lexer_t* lexer)
 						continue;
 				}
 			}
+			break;
 
 			case 2:
 			case 3:
 			case 4:
-			default:
+			default: {
 				if (strcmp(uc, "«") == 0) {
 					lexer_lex_string(lexer, 1);
 				}
@@ -1214,8 +1221,14 @@ void lexer_lex(lexer_t* lexer)
 					file_appends("windows-logs.txt", uc);
 					printf("Invalid character encountered: %s\n", uc);
 					error_lexer(1, "Unknown character '%s' at line %zu, column %zu", uc, lexer->line, lexer->column);
+
+					if (uc != NULL) {
+						memory_destroy(uc);
+					}
 				}
 				continue;
+			}
+			break;
 		}
 	}
 

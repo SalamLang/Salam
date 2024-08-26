@@ -35,13 +35,13 @@ char* file_reads(const char* path, size_t* size)
 }
 
 /**
- * 
+ *
  * @function file_reads_binary
  * @brief Reading entire of a binary file
  * @params {char*} path - Path of file
  * @params {size_t*} size - Size of file
  * @returns {char*} - Content of file
- * 
+ *
  */
 char* file_reads_binary(const char* path, size_t* size)
 {
@@ -403,13 +403,13 @@ bool file_appends(const char* path, const char* content)
 }
 
 /**
- * 
+ *
  * @function file_appends_wchar
  * @brief Appending wide character to a file
  * @params {char*} path - Path of file
  * @params {wchar_t} wc - Wide character
  * @returns {bool}
- * 
+ *
  */
 bool file_appends_wchar(const char* path, const wchar_t wc)
 {

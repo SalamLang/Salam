@@ -50,7 +50,7 @@ char* generator_identifier_get(generator_identifier_t* gen)
 			new_current[length + 1] = '\0';
 
 			memory_destroy(gen->current);
-			
+
 			gen->current = new_current;
 		}
 	}

@@ -27,13 +27,13 @@ void handle_character(unsigned char c)
 }
 
 /**
- * 
+ *
  * @function handle_invalid_char
  * @brief Handle invalid characters in a string
  * @params {const unsigned char*} str - The string to check
  * @params {size_t} length - The length of the string
  * @returns {void}
- * 
+ *
  */
 void handle_invalid_char(const unsigned char* str, size_t length)
 {
@@ -48,13 +48,13 @@ void handle_invalid_char(const unsigned char* str, size_t length)
 }
 
 /**
- * 
+ *
  * @function doargs
  * @brief Handle command line arguments
  * @params {int} argc - Number of arguments
  * @params {char**} argv - Array of arguments
  * @returns {void}
- * 
+ *
  */
 void doargs(int argc, char** argv)
 {
@@ -121,13 +121,13 @@ void doargs(int argc, char** argv)
 }
 
 /**
- * 
+ *
  * @function main
  * @brief Main entry point
  * @params {int} argc - Number of arguments
  * @params {char**} argv - Array of arguments
  * @returns {int}
- * 
+ *
  */
 int main(int argc, char** argv)
 {

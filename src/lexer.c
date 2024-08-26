@@ -67,36 +67,6 @@ const keyword_t keywords[] = {
 	#include "token.h"
 };
 
-wchar_t read_token(lexer_t* lexer, int* wcl)
-{
-	if (lexer->source[lexer->index] == '\0') {
-		return L'\0';
-	}
-
-	wchar_t current_char;
-	int char_size = mbtowc(&current_char, &lexer->source[lexer->index], MB_CUR_MAX);
-
-	if (char_size < 0) {
-		printf("%s\n", "MESSAGE_LEXER_TOKEN_READ_UNICODE");
-
-		exit(EXIT_FAILURE);
-		return 0;
-	}
-
-	if (current_char == '\n') {
-		lexer->line++;
-		lexer->column = 0;
-	}
-	else {
-		lexer->column += char_size;
-	}
-
-	lexer->index += char_size;
-	*wcl = char_size;
-
-	return current_char;
-}
-
 /**
  *
  * @function is_english_digit
@@ -894,44 +864,6 @@ token_type_t type_keyword(const char* string)
 	}
 
 	return TOKEN_IDENTIFIER;
-}
-
-bool is_ident(wchar_t ch)
-{
-	return is_alpha(ch) || is_number(ch);
-}
-
-bool is_number(wchar_t ch)
-{
-	return (ch >= L'۰' && ch <= L'۹') || (ch >= '0' && ch <= '9');
-}
-
-bool is_alpha(wchar_t ch)
-{
-	return (
-		(
-			(ch >= L'آ' || ch >= L'ا') && ch <= L'ی'
-		) ||
-		ch == L'ـ' ||
-		ch == L'_' ||
-		(ch >= 'a' && ch <= 'z') ||
-		(ch >= 'A' && ch <= 'Z')
-	)
-	&&
-	!(
-		ch == '+' ||
-		ch == '-' ||
-		ch == '*' ||
-		ch == '/' ||
-		ch == '=' ||
-		ch == '>' ||
-		ch == '<' ||
-		ch == ',' ||
-		ch == '(' ||
-		ch == ')' ||
-		ch == '{' ||
-		ch == '}'
-	);
 }
 
 /**

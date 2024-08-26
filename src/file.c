@@ -16,6 +16,7 @@ char* file_reads(const char* path, size_t* size)
 	FILE* file = fopen(path, "r");
 	if (file == NULL) {
 		panic("Failed to open file");
+
 		return false;
 	}
 
@@ -50,6 +51,7 @@ char* file_reads_binary(const char* path, size_t* size)
 	FILE* file = fopen(path, "rb");
 	if (file == NULL) {
 		panic("Failed to open file");
+
 		return false;
 	}
 
@@ -85,6 +87,7 @@ bool file_writes(const char* path, const char* content)
 	FILE* file = fopen(path, "w");
 	if (file == NULL) {
 		panic("Failed to write file");
+
 		return false;
 	}
 
@@ -393,6 +396,7 @@ bool file_appends(const char* path, const char* content)
 	FILE* file = fopen(path, "a");
 	if (file == NULL) {
 		panic("Failed to append file");
+
 		return false;
 	}
 
@@ -422,6 +426,7 @@ bool file_appends_wchar(const char* path, const wchar_t wc)
 	size_t len = wcrtomb(mb_str, wc, NULL);
 	if (len == (size_t)-1) {
 		fprintf(stderr, "Failed to convert wide character\n");
+		
 		return false;
 	}
 

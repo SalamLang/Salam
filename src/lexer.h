@@ -420,9 +420,6 @@ bool string_is_number(const char* value);
  */
 bool string_is_percentage(const char* value, bool acceptSign);
 
-// wchar_t read_token(lexer_t* lexer);
-wchar_t read_token(lexer_t* lexer, int* wcl);
-
 /**
  *
  * @function string_is_integer

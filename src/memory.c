@@ -59,7 +59,6 @@ void memory_destroy(void* ptr)
 	ptr = NULL;
 }
 
-// memory related functions
 /**
  *
  * @function memory_rellacate

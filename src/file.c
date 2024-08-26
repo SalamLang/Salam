@@ -12,7 +12,7 @@
 char* file_reads(const char* path, size_t* size)
 {
 	DEBUG_ME;
-	// FILE* file = fopen(path, "r, ccs=UTF-8");
+	// ccs=UTF-8
 	FILE* file = fopen(path, "r");
 	if (file == NULL) {
 		panic("Failed to open file");
@@ -81,7 +81,7 @@ char* file_reads_binary(const char* path, size_t* size)
 bool file_writes(const char* path, const char* content)
 {
 	DEBUG_ME;
-	// FILE* file = fopen(path, "w, ccs=UTF-8");
+	// ccs=UTF-8
 	FILE* file = fopen(path, "w");
 	if (file == NULL) {
 		panic("Failed to write file");
@@ -108,7 +108,7 @@ bool file_writes(const char* path, const char* content)
 bool file_exists(const char* path)
 {
 	DEBUG_ME;
-	// FILE* file = fopen(path, "r, ccs=UTF-8");
+	// ccs=UTF-8
 	FILE* file = fopen(path, "r");
 	if (file == NULL) {
 		return false;

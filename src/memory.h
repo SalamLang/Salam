@@ -38,7 +38,6 @@ void* memory_callocate(size_t count, size_t size);
  */
 void memory_destroy(void* ptr);
 
-// memory related functions
 /**
  *
  * @function memory_rellacate

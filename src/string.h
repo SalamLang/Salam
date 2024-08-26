@@ -419,4 +419,14 @@ bool is_utf8_alpha(char* utf8);
  */
 char convert_utf8_to_english_digit(char* uc);
 
+/**
+ *
+ * @function mb2strlen
+ * @brief Get the length of a multibyte string
+ * @params {const char*} identifier - Multibyte string
+ * @returns {size_t} Length of the string
+ *
+ */
+size_t mb2strlen(const char* identifier);
+
 #endif

@@ -35,6 +35,40 @@ char* file_reads(const char* path, size_t* size)
 }
 
 /**
+ * 
+ * @function file_reads_binary
+ * @brief Reading entire of a binary file
+ * @params {char*} path - Path of file
+ * @params {size_t*} size - Size of file
+ * @returns {char*} - Content of file
+ * 
+ */
+char* file_reads_binary(const char* path, size_t* size)
+{
+    DEBUG_ME;
+    FILE* file = fopen(path, "rb");
+    if (file == NULL) {
+        panic("Failed to open file");
+        return false;
+    }
+
+    fseek(file, 0, SEEK_END);
+    size_t file_capacity = ftell(file);
+    if (size != NULL) {
+        *size = file_capacity;
+    }
+    fseek(file, 0, SEEK_SET);
+
+    char* content = (char*)memory_allocate(file_capacity + 1);
+    fread(content, 1, file_capacity, file);
+    content[file_capacity] = '\0';
+
+    fclose(file);
+
+    return content;
+}
+
+/**
  *
  * @function file_writes
  * @berif Writing content to a file

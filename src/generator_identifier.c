@@ -72,7 +72,7 @@ void generator_identifier_destroy(generator_identifier_t* gen)
 		if (gen->current != NULL) {
 			memory_destroy(gen->current);
 		}
-
+		
 		memory_destroy(gen);
 	}
 }

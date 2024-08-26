@@ -170,4 +170,15 @@ bool directory_exists(const char* path);
  */
 bool file_appends_wchar(const char* path, const wchar_t wc);
 
+/**
+ * 
+ * @function file_reads_binary
+ * @brief Reading entire of a binary file
+ * @params {char*} path - Path of file
+ * @params {size_t*} size - Size of file
+ * @returns {char*} - Content of file
+ * 
+ */
+char* file_reads_binary(const char* path, size_t* size);
+
 #endif

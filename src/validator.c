@@ -498,6 +498,19 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 			return true;
 		}
 	}
+	// TEXTAREA
+	else if (attribute->parent_node_type == AST_LAYOUT_TYPE_TEXTAREA) {
+		ast_layout_attribute_type_t valid_attributes[] = {
+			AST_LAYOUT_ATTRIBUTE_TYPE_PLACEHOLDER,
+			// AST_LAYOUT_ATTRIBUTE_TYPE_VALUE,
+		};
+
+		size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
+
+		if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+			return true;
+		}
+	}
 	// INPUT
 	else if (attribute->parent_node_type == AST_LAYOUT_TYPE_INPUT) {
 		ast_layout_attribute_type_t valid_attributes[] = {

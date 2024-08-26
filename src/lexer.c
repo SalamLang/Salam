@@ -1118,17 +1118,21 @@ void lexer_lex(lexer_t* lexer)
 			case 1: {
 				char ucf = uc[0];
 
-				if (uc != NULL) {
-					memory_destroy(uc);
-				}
-
 				switch (ucf) {
 					// End of file
 					case '\0':
+						if (uc != NULL) {
+							memory_destroy(uc);
+						}
+						
 						break;
 
 					// New line
 					case '\n':
+						if (uc != NULL) {
+							memory_destroy(uc);
+						}
+
 						LEXER_NEXT_LINE;
 						LEXER_ZERO_COLUMN;
 						continue;
@@ -1140,6 +1144,10 @@ void lexer_lex(lexer_t* lexer)
 					case '\t': // Horizontal tab
 					case '\v': // Vertical tab
 					case ' ': // Space
+						if (uc != NULL) {
+							memory_destroy(uc);
+						}
+						
 						continue;
 
 					case '{':
@@ -1159,7 +1167,11 @@ void lexer_lex(lexer_t* lexer)
 					case '=':
 					case '<':
 					case '>':
-					case '!':						
+					case '!':
+						if (uc != NULL) {
+							memory_destroy(uc);
+						}
+						
 						if (LEXER_CURRENT == '/') {
 							LEXER_NEXT;
 							LEXER_NEXT_COLUMN;
@@ -1178,6 +1190,10 @@ void lexer_lex(lexer_t* lexer)
 						continue;
 
 					case '"':
+						if (uc != NULL) {
+							memory_destroy(uc);
+						}
+						
 						lexer_lex_string(lexer, 0);
 						continue;
 
@@ -1187,13 +1203,17 @@ void lexer_lex(lexer_t* lexer)
 						continue;
 					
 					default:
-						if (c == '_' || is_utf8_alpha(uc) || is_char_alpha(c)) {
+						if (c == '_' || is_char_alpha(c)) {
 							lexer_lex_identifier(lexer, uc);
 						}
 						else {
 							file_appends("windows-logs.txt", uc);
 							printf("Invalid character encountered: %s\n", uc);
 							error_lexer(1, "Unknown character '%s' at line %zu, column %zu", uc, lexer->line, lexer->column);
+						
+							if (uc != NULL) {
+								memory_destroy(uc);
+							}
 						}
 						continue;
 				}

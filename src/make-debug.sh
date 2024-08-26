@@ -1,0 +1,22 @@
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c log.c -o log.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c file.c -o file.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c memory.c -o memory.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c array.c -o array.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c parser.c -o parser.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c parser_layout.c -o parser_layout.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c generator.c -o generator.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c generator_layout.c -o generator_layout.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c generator_layout_style.c -o generator_layout_style.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c generator_identifier.c -o generator_identifier.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c string.c -o string.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c validator.c -o validator.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c hashmap.c -o hashmap.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c hashmap_custom.c -o hashmap_custom.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c array_custom.c -o array_custom.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c lexer.c -o lexer.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c ast.c -o ast.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c ast_layout.c -o ast_layout.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c ast_layout_style.c -o ast_layout_style.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -c main.c -o main.o
+gcc -g -Walloca -Wextra -Wall -fsanitize=address,undefined -o main log.o file.o memory.o array.o parser.o parser_layout.o generator.o generator_layout.o generator_layout_style.o generator_identifier.o string.o validator.o hashmap.o hashmap_custom.o array_custom.o lexer.o ast.o ast_layout.o ast_layout_style.o main.o
+./main ../example/test6.salam

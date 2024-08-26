@@ -1,5 +1,4 @@
 #include "generator_layout_style.h"
-
 /**
  *
  * @function generator_code_layout_pseudo_elements

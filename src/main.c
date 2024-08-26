@@ -32,7 +32,6 @@ void doargs(int argc, char** argv)
 
 	lexer_save(lexer, "tokens.txt");
 
-	return;
 	ast_t* ast = parser_parse(lexer);
 
 	ast_debug(ast);

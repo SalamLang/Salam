@@ -810,38 +810,50 @@ void location_print(location_t location)
  * @function lexer_lex_number
  * @brief Lexing a number
  * @params {lexer_t*} lexer - Lexer state
- * @params {wchar_t} wc - wide character
- * @params {int} char_size - Character size
+ * @params {char*} uc - UTF8 character
  * @returns {void}
  *
  */
-void lexer_lex_number(lexer_t* lexer, wchar_t wc, int wcl)
+void lexer_lex_number(lexer_t* lexer, char* uc)
 {
 	DEBUG_ME;
 	string_t* value = string_create(25);
-	string_append_char(value, convert_to_english_digit(wc));
+	string_append_char(value, convert_utf8_to_english_digit(uc));
+
+	memory_destroy(uc);
 
 	bool is_float = false;
 
 	while (LEXER_CURRENT != '\0') {
-		wc = read_token(lexer, &wcl);
-		if (wc == L'\0') {
+		// size_t num_bytes;
+		uc = char_utf8_decode(lexer->source, &lexer->index, NULL);
+		if (strcmp(uc, "\0") == 0) {
+			memory_destroy(uc);
+
 			break;
 		}
 
-		if (!is_wchar_digit(wc) && wc != L'.') {
+		size_t is_dot = strcmp(uc, ".");
+
+		if (!is_utf8_digit(uc) && is_dot != 0) {
+			memory_destroy(uc);
+
 			break;
 		}
 
-		if (wc == L'.') {
+		if (is_dot == 0) {
 			if (is_float) {
+				memory_destroy(uc);
+
 				break;
 			}
 
 			is_float = true;
 		}
 
-		string_append_char(value, convert_to_english_digit(wc));
+		string_append_char(value, convert_utf8_to_english_digit(uc));
+
+		memory_destroy(uc);
 	}
 
 	LEXER_PREV;
@@ -927,30 +939,34 @@ bool is_alpha(wchar_t ch)
  * @function lexer_lex_identifier
  * @brief Lexing an identifier
  * @params {lexer_t*} lexer - Lexer state
- * @params {wchar_t} wc - wide character
+ * @params {char*} uc - UTF8 character
  * @returns {void}
  *
  */
-void lexer_lex_identifier(lexer_t* lexer, wchar_t* wc)
+void lexer_lex_identifier(lexer_t* lexer, char* uc)
 {
 	DEBUG_ME;
 	string_t* value = string_create(25);
 
-	string_append_wchar(value, *wc);
+	string_append_str(value, uc);
 
-	wchar_t wcn;
-	int wcln;
+	memory_destroy(uc);
 
 	while (LEXER_CURRENT != '\0') {
-		wcn = read_token(lexer, &wcln);
+		size_t num_bytes;
+		uc = char_utf8_decode(lexer->source, &lexer->index, &num_bytes);
 
-		if (!is_wchar_alpha(wcn)) {
-			lexer->index -= wcln;
+		if (!is_utf8_alpha(uc)) {
+			lexer->index -= num_bytes;
+
+			memory_destroy(uc);
 
 			break;
 		}
 
-		string_append_wchar(value, wcn);
+		string_append_str(value, uc);
+
+		memory_destroy(uc);
 	}
 
 	token_type_t type = type_keyword(value->data);
@@ -978,21 +994,39 @@ void lexer_lex_string(lexer_t* lexer, int type)
 	// Opening quote is already consumed
 	string_t* value = string_create(25);
 
-	int wcl = 0;
-	wchar_t wc = read_token(lexer, &wcl);
+	size_t num_bytes;
+	char* uc = char_utf8_decode(lexer->source, &lexer->index, &num_bytes);
 
-	while (wc != L'\0' && ((type == 0 && wc != L'"') || (type == 1 && wc != L'»') || (type == 2 && wc == L'”'))) {
-		string_append_wchar(value, wc);
+	while (
+		strcmp(uc, "\0") != 0 &&
+		(
+			(type == 0 && strcmp(uc, "\"") != 0)
+			||
+			(type == 1 && strcmp(uc, "»") != 0)
+			||
+			(type == 2 && strcmp(uc, "”") != 0)
+		)
+	) {
+		string_append_str(value, uc);
+		memory_destroy(uc);
 
-		wc = read_token(lexer, &wcl);
+		uc = char_utf8_decode(lexer->source, &lexer->index, &num_bytes);
 	}
 
-	if ((type == 0 && wc != L'"') || (type == 1 && wc != L'»') || (type == 2 && wc != L'”')) {
+	if ((type == 0 && strcmp(uc, "\"") != 0) || (type == 1 && strcmp(uc, "»") != 0) || (type == 2 && strcmp(uc, "”") != 0)) {
 		string_destroy(value);
+
+		if (uc != NULL) {
+			memory_destroy(uc);
+		}
 
 		error_lexer(2, "Unterminated string value at line %zu, column %zu", lexer->line, lexer->column);
 
 		return;
+	}
+
+	if (uc != NULL) {
+		memory_destroy(uc);
 	}
 
 	token_t* token = token_create(TOKEN_STRING, (location_t){lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
@@ -1002,6 +1036,55 @@ void lexer_lex_string(lexer_t* lexer, int type)
 	string_destroy(value);
 
 	LEXER_PUSH_TOKEN(token);
+}
+
+/**
+ * 
+ * @function utf8_char_length
+ * @brief Get the UTF-8 character and return the length
+ * @params {char*} source - Source code
+ * @params {size_t*} index - Index of the current character in source string
+ * @params {size_t*} num_bytes - Number of bytes
+ * @returns {int}
+ * 
+ */
+char* char_utf8_decode(char* source, size_t* index, size_t* num_bytes)
+{
+	DEBUG_ME;
+	char* utf8_char = memory_allocate(5);
+	utf8_char[0] = source[*index];
+
+	size_t bytes = 0;
+
+	if ((source[*index] & 0x80) == 0) {
+		bytes = 1;
+	} else if ((source[*index] & 0xE0) == 0xC0) {
+		bytes = 2;
+	} else if ((source[*index] & 0xF0) == 0xE0) {
+		bytes = 3;
+	} else if ((source[*index] & 0xF8) == 0xF0) {
+		bytes = 4;
+	} else {
+		bytes = 0;
+		if (num_bytes != NULL) {
+			*num_bytes = bytes;
+		}
+
+		error_lexer(3, "Invalid UTF-8 encoding detected at index %d", *index);
+	}
+
+	for (size_t i = 1; i < bytes; ++i) {
+		utf8_char[i] = source[*index + i];
+	}
+
+	utf8_char[bytes] = '\0';
+	*index += bytes;
+
+	if (num_bytes != NULL) {
+		*num_bytes = bytes;
+	}
+
+	return utf8_char;
 }
 
 /**
@@ -1016,93 +1099,116 @@ void lexer_lex(lexer_t* lexer)
 {
 	DEBUG_ME;
 	char c;
-	wchar_t wc;
-	int wcl = 0;
 
 	while ((c = LEXER_CURRENT) && c != '\0' && lexer->index < lexer->source_length) {
-		wc = read_token(lexer, &wcl);
+		size_t num_bytes;
+		char* uc = char_utf8_decode(lexer->source, &lexer->index, &num_bytes);
+		printf("uc: %s\n", uc);
 
-		switch (wc) {
-			// End of file
-			case '\0':
+		switch (num_bytes) {
+			case 0:
+				error_lexer(3, "Invalid UTF-8 encoding detected at index %d", lexer->index);
 				break;
+			
+			case 1: {
+				switch (uc[0]) {
+					// End of file
+					case '\0':
+						break;
 
-			// New line
-			case '\n':
-				LEXER_NEXT_LINE;
-				LEXER_ZERO_COLUMN;
-				continue;
+					// New line
+					case '\n':
+						LEXER_NEXT_LINE;
+						LEXER_ZERO_COLUMN;
+						continue;
 
-			case '\a': // Alert
-			case '\b': // Backspace
-			case '\f': // Form feed
-			case '\r': // Carriage return
-			case '\t': // Horizontal tab
-			case '\v': // Vertical tab
-			case ' ': // Space
-				continue;
+					case '\a': // Alert
+					case '\b': // Backspace
+					case '\f': // Form feed
+					case '\r': // Carriage return
+					case '\t': // Horizontal tab
+					case '\v': // Vertical tab
+					case ' ': // Space
+						continue;
 
-			case '{':
-			case '}':
-			case '[':
-			case ']':
-			case ':':
-			case ',':
-			case '(':
-			case ')':
-			case '+':
-			case '-':
-			case '*':
-			case '/':
-			case '%':
-			case '^':
-			case '=':
-			case '<':
-			case '>':
-			case '!':
-				if (LEXER_CURRENT == '/') {
-					LEXER_NEXT;
-					LEXER_NEXT_COLUMN;
+					case '{':
+					case '}':
+					case '[':
+					case ']':
+					case ':':
+					case ',':
+					case '(':
+					case ')':
+					case '+':
+					case '-':
+					case '*':
+					case '/':
+					case '%':
+					case '^':
+					case '=':
+					case '<':
+					case '>':
+					case '!':
+						if (LEXER_CURRENT == '/') {
+							LEXER_NEXT;
+							LEXER_NEXT_COLUMN;
 
-					while (LEXER_CURRENT != '\n' && LEXER_CURRENT != '\0') {
-						LEXER_NEXT;
-						LEXER_NEXT_COLUMN;
-					}
+							while (LEXER_CURRENT != '\n' && LEXER_CURRENT != '\0') {
+								LEXER_NEXT;
+								LEXER_NEXT_COLUMN;
+							}
+						}
+						else {
+							token_type_t type = token_char_type(c);
+							token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+
+							LEXER_PUSH_TOKEN(token);
+						}
+						continue;
+
+					case '"':
+						lexer_lex_string(lexer, 0);
+						continue;
+
+					case '0': case '1': case '2': case '3': case '4':
+					case '5': case '6': case '7': case '8': case '9':
+						lexer_lex_number(lexer, uc);
+						continue;
+					
+					default:
+						if (c == '_' || is_utf8_alpha(uc) || is_char_alpha(c)) {
+							lexer_lex_identifier(lexer, uc);
+						}
+						else {
+							file_appends("windows-logs.txt", uc);
+							printf("Invalid character encountered: %s\n", uc);
+							error_lexer(1, "Unknown character '%s' at line %zu, column %zu", uc, lexer->line, lexer->column);
+						}
+						continue;
 				}
-				else {
-					token_type_t type = token_char_type(c);
-					token_t* token = token_create(type, (location_t) {lexer->index, 1, lexer->line, lexer->column, lexer->line, lexer->column});
+			}
 
-					LEXER_PUSH_TOKEN(token);
-				}
-				continue;
-
-			case '"':
-				lexer_lex_string(lexer, 0);
-				continue;
-
-			case '0': case '1': case '2': case '3': case '4':
-			case '5': case '6': case '7': case '8': case '9':
-				lexer_lex_number(lexer, wc, wcl);
-				continue;
-
+			case 2:
+			case 3:
+			case 4:
 			default:
-				if (wc == L'«') {
+				if (strcmp(uc, "«") == 0) {
 					lexer_lex_string(lexer, 1);
 				}
-				else if (wc == L'“') {
+				else if (strcmp(uc, "“") == 0) {
 					lexer_lex_string(lexer, 2);
 				}
-				else if (is_wchar_digit(wc)) {
-					lexer_lex_number(lexer, wc, wcl);
+				else if (is_utf8_digit(uc)) {
+					lexer_lex_number(lexer, uc);
 				}
-				else if (c == '_' || is_wchar_alpha(wc) || is_char_alpha(c)) {
-					lexer_lex_identifier(lexer, &wc);
+				else if (c == '_' || is_utf8_alpha(uc) || is_char_alpha(c)) {
+					lexer_lex_identifier(lexer, uc);
 				}
-				else {
-					file_appends_wchar("windows-logs.txt", wc);
-					printf("Invalid character encountered: %02X\n", (unsigned char)wc);
-					error_lexer(1, "Unknown character '%lc' at line %zu, column %zu", wc, lexer->line, lexer->column);
+				else
+				{
+					file_appends("windows-logs.txt", uc);
+					printf("Invalid character encountered: %s\n", uc);
+					error_lexer(1, "Unknown character '%s' at line %zu, column %zu", uc, lexer->line, lexer->column);
 				}
 				continue;
 		}

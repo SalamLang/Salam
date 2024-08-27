@@ -9,24 +9,27 @@
  * @returns {char*} - String
  *
  */
-char* array_string_token(array_t* array, char* separator)
+char *array_string_token(array_t *array, char *separator)
 {
 	DEBUG_ME;
-	if (array == NULL || array->length == 0) {
+	if (array == NULL || array->length == 0)
+	{
 		return strdup("");
 	}
 
-	string_t* str = string_create(16);
-	for (size_t i = 0; i < array->length; i++) {
-		token_t* token = array_get(array, i);
+	string_t *str = string_create(16);
+	for (size_t i = 0; i < array->length; i++)
+	{
+		token_t *token = array_get(array, i);
 		string_append_str(str, token_value_stringify(token));
 
-		if (i < array->length - 1) {
+		if (i < array->length - 1)
+		{
 			string_append_str(str, separator);
 		}
 	}
 
-	char* buffer = strdup(str->data);
+	char *buffer = strdup(str->data);
 	string_destroy(str);
 
 	return buffer;
@@ -41,14 +44,19 @@ char* array_string_token(array_t* array, char* separator)
  * @returns {void}
  *
  */
-void array_destroy_custom(array_t* array, void (*free_fn)(void*))
+void array_destroy_custom(array_t *array, void (*free_fn)(void *))
 {
 	DEBUG_ME;
-	if (array != NULL) {
-		if (array->data != NULL) {
-			if (free_fn != NULL) {
-				for (size_t i = 0; i < array->length; i++) {
-					if (array->data[i] != NULL) {
+	if (array != NULL)
+	{
+		if (array->data != NULL)
+		{
+			if (free_fn != NULL)
+			{
+				for (size_t i = 0; i < array->length; i++)
+				{
+					if (array->data[i] != NULL)
+					{
 						free_fn(array->data[i]);
 					}
 				}
@@ -73,12 +81,12 @@ void array_destroy_custom(array_t* array, void (*free_fn)(void*))
  * @returns {void}
  *
  */
-void array_token_print(array_token_t* array)
+void array_token_print(array_token_t *array)
 {
 	DEBUG_ME;
 	printf("Array Token: ");
 	printf("%zu\n", array->length);
-	char* str = array_token_stringify(array);
+	char *str = array_token_stringify(array);
 
 	printf("%s\n", str);
 	memory_destroy(str);
@@ -93,22 +101,25 @@ void array_token_print(array_token_t* array)
  * @returns {char*} - String
  *
  */
-char* array_token_stringify(array_token_t* array)
+char *array_token_stringify(array_token_t *array)
 {
 	DEBUG_ME;
-	if (array == NULL || array->length == 0) {
+	if (array == NULL || array->length == 0)
+	{
 		return strdup("Token array is empty");
 	}
 
-	string_t* str = string_create(20);
+	string_t *str = string_create(20);
 
-	for (size_t i = 0; i < array->length; i++) {
-		token_t* token = array_get(array, i);
-		char* token_str = token->stringify(token);
+	for (size_t i = 0; i < array->length; i++)
+	{
+		token_t *token = array_get(array, i);
+		char *token_str = token->stringify(token);
 
 		string_append_str(str, token_str);
 
-		if (i < array->length - 1) {
+		if (i < array->length - 1)
+		{
 			string_append_str(str, ",");
 		}
 	}
@@ -124,15 +135,19 @@ char* array_token_stringify(array_token_t* array)
  * @returns {void}
  *
  */
-void array_node_destroy(array_node_t* array)
+void array_node_destroy(array_node_t *array)
 {
 	DEBUG_ME;
-	if (array != NULL) {
-		if (array->data != NULL) {
-			for (size_t i = 0; i < array->length; i++) {
-				ast_node_t* node = array_get(array, i);
+	if (array != NULL)
+	{
+		if (array->data != NULL)
+		{
+			for (size_t i = 0; i < array->length; i++)
+			{
+				ast_node_t *node = array_get(array, i);
 
-				if (node != NULL) {
+				if (node != NULL)
+				{
 					node->destroy(node);
 				}
 			}
@@ -156,14 +171,15 @@ void array_node_destroy(array_node_t* array)
  * @returns {void}
  *
  */
-void array_node_print(array_node_t* array)
+void array_node_print(array_node_t *array)
 {
 	DEBUG_ME;
 	printf("Node array: %zu\n", array->length);
 
-	for (size_t i = 0; i < array->length; i++) {
+	for (size_t i = 0; i < array->length; i++)
+	{
 		printf("\t");
-		ast_node_t* node = array_get(array, i);
+		ast_node_t *node = array_get(array, i);
 		node->print(node);
 	}
 }
@@ -176,20 +192,22 @@ void array_node_print(array_node_t* array)
  * @returns {void}
  *
  */
-void array_layout_attribute_print(array_layout_attribute_t* array)
+void array_layout_attribute_print(array_layout_attribute_t *array)
 {
 	DEBUG_ME;
 	printf("Attribute array: ");
 	printf("%zu\n", array->length);
 
-	if (array->length == 0) {
+	if (array->length == 0)
+	{
 		printf("Array is empty\n");
 		return;
 	}
 
-	for (size_t i = 0; i < array->length; i++) {
+	for (size_t i = 0; i < array->length; i++)
+	{
 		printf("\t");
-		ast_layout_attribute_t* attribute = array_get(array, i);
+		ast_layout_attribute_t *attribute = array_get(array, i);
 
 		attribute->print(attribute);
 	}
@@ -203,14 +221,17 @@ void array_layout_attribute_print(array_layout_attribute_t* array)
  * @returns {void}
  *
  */
-void array_token_destroy(array_token_t* array)
+void array_token_destroy(array_token_t *array)
 {
 	DEBUG_ME;
-	if (array != NULL) {
-		for (size_t i = 0; i < array->length; i++) {
-			token_t* token = array_get(array, i);
+	if (array != NULL)
+	{
+		for (size_t i = 0; i < array->length; i++)
+		{
+			token_t *token = array_get(array, i);
 
-			if (token != NULL) {
+			if (token != NULL)
+			{
 				token->destroy(token);
 			}
 		}
@@ -227,15 +248,19 @@ void array_token_destroy(array_token_t* array)
  * @returns {void}
  *
  */
-void array_layout_node_destroy(array_node_layout_t* array)
+void array_layout_node_destroy(array_node_layout_t *array)
 {
 	DEBUG_ME;
-	if (array != NULL) {
-		if (array->data != NULL) {
-			for (size_t i = 0; i < array->length; i++) {
-				ast_layout_node_t* node = array_get(array, i);
+	if (array != NULL)
+	{
+		if (array->data != NULL)
+		{
+			for (size_t i = 0; i < array->length; i++)
+			{
+				ast_layout_node_t *node = array_get(array, i);
 
-				if (node != NULL) {
+				if (node != NULL)
+				{
 					node->destroy(node);
 				}
 			}
@@ -259,18 +284,21 @@ void array_layout_node_destroy(array_node_layout_t* array)
  * @returns {void}
  *
  */
-void array_layout_node_print(array_node_layout_t* array)
+void array_layout_node_print(array_node_layout_t *array)
 {
 	DEBUG_ME;
 	printf("Node array: %zu\n", array->length);
 
-	for (size_t i = 0; i < array->length; i++) {
+	for (size_t i = 0; i < array->length; i++)
+	{
 		printf("\t");
-		ast_layout_node_t* node = cast(ast_layout_node_t*, array_get(cast(array_t*, array), i));
-		if (node != NULL) {
+		ast_layout_node_t *node = cast(ast_layout_node_t *, array_get(cast(array_t *, array), i));
+		if (node != NULL)
+		{
 			node->print(node);
 		}
-		else {
+		else
+		{
 			printf("NULL\n");
 		}
 	}
@@ -284,14 +312,15 @@ void array_layout_node_print(array_node_layout_t* array)
  * @returns {void}
  *
  */
-void array_function_parameter_print(array_function_parameter_t* array)
+void array_function_parameter_print(array_function_parameter_t *array)
 {
 	DEBUG_ME;
 	printf("Function parameter array: %zu\n", array->length);
 
-	for (size_t i = 0; i < array->length; i++) {
+	for (size_t i = 0; i < array->length; i++)
+	{
 		printf("\t");
-		ast_function_parameter_t* parameter = array_get(array, i);
+		ast_function_parameter_t *parameter = array_get(array, i);
 
 		parameter->print(parameter);
 	}
@@ -305,15 +334,19 @@ void array_function_parameter_print(array_function_parameter_t* array)
  * @returns {void}
  *
  */
-void array_function_parameter_destroy(array_function_parameter_t* array)
+void array_function_parameter_destroy(array_function_parameter_t *array)
 {
 	DEBUG_ME;
-	if (array != NULL) {
-		if (array->data != NULL) {
-			for (size_t i = 0; i < array->length; i++) {
-				ast_function_parameter_t* parameter = array_get(array, i);
+	if (array != NULL)
+	{
+		if (array->data != NULL)
+		{
+			for (size_t i = 0; i < array->length; i++)
+			{
+				ast_function_parameter_t *parameter = array_get(array, i);
 
-				if (parameter != NULL) {
+				if (parameter != NULL)
+				{
 					parameter->destroy(parameter);
 				}
 			}
@@ -336,15 +369,19 @@ void array_function_parameter_destroy(array_function_parameter_t* array)
  * @params {array_function_t*} array - Function array
  * @returns {void}
  */
-void array_function_destroy(array_function_t* array)
+void array_function_destroy(array_function_t *array)
 {
 	DEBUG_ME;
-	if (array != NULL) {
-		if (array->data != NULL) {
-			for (size_t i = 0; i < array->length; i++) {
-				ast_function_t* function = array_get(array, i);
+	if (array != NULL)
+	{
+		if (array->data != NULL)
+		{
+			for (size_t i = 0; i < array->length; i++)
+			{
+				ast_function_t *function = array_get(array, i);
 
-				if (function != NULL) {
+				if (function != NULL)
+				{
 					function->destroy(function);
 				}
 			}
@@ -368,14 +405,15 @@ void array_function_destroy(array_function_t* array)
  * @returns {void}
  *
  */
-void array_function_print(array_function_t* array)
+void array_function_print(array_function_t *array)
 {
 	DEBUG_ME;
 	printf("Function array: %zu\n", array->length);
 
-	for (size_t i = 0; i < array->length; i++) {
+	for (size_t i = 0; i < array->length; i++)
+	{
 		printf("\t");
-		ast_function_t* function = array_get(array, i);
+		ast_function_t *function = array_get(array, i);
 
 		function->print(function);
 	}
@@ -389,15 +427,19 @@ void array_function_print(array_function_t* array)
  * @returns {void}
  *
  */
-void array_if_destroy(array_if_t* array)
+void array_if_destroy(array_if_t *array)
 {
 	DEBUG_ME;
-	if (array != NULL) {
-		if (array->data != NULL) {
-			for (size_t i = 0; i < array->length; i++) {
-				ast_if_t* if_statement = array_get(array, i);
+	if (array != NULL)
+	{
+		if (array->data != NULL)
+		{
+			for (size_t i = 0; i < array->length; i++)
+			{
+				ast_if_t *if_statement = array_get(array, i);
 
-				if (if_statement != NULL) {
+				if (if_statement != NULL)
+				{
 					if_statement->destroy(if_statement);
 				}
 			}
@@ -421,14 +463,15 @@ void array_if_destroy(array_if_t* array)
  * @returns {void}
  *
  */
-void array_if_print(array_if_t* array)
+void array_if_print(array_if_t *array)
 {
 	DEBUG_ME;
 	printf("If array: %zu\n", array->length);
 
-	for (size_t i = 0; i < array->length; i++) {
+	for (size_t i = 0; i < array->length; i++)
+	{
 		printf("\t");
-		ast_if_t* if_statement = array_get(array, i);
+		ast_if_t *if_statement = array_get(array, i);
 
 		if_statement->print(if_statement);
 	}
@@ -442,15 +485,19 @@ void array_if_print(array_if_t* array)
  * @returns {void}
  *
  */
-void array_value_destroy(array_value_t* array)
+void array_value_destroy(array_value_t *array)
 {
 	DEBUG_ME;
-	if (array != NULL) {
-		if (array->data != NULL) {
-			for (size_t i = 0; i < array->length; i++) {
-				ast_value_t* value = array_get(array, i);
+	if (array != NULL)
+	{
+		if (array->data != NULL)
+		{
+			for (size_t i = 0; i < array->length; i++)
+			{
+				ast_value_t *value = array_get(array, i);
 
-				if (value != NULL) {
+				if (value != NULL)
+				{
 					value->destroy(value);
 				}
 			}
@@ -474,15 +521,19 @@ void array_value_destroy(array_value_t* array)
  * @returns {void}
  *
  */
-void array_block_destroy(array_block_t* array)
+void array_block_destroy(array_block_t *array)
 {
 	DEBUG_ME;
-	if (array != NULL) {
-		if (array->data != NULL) {
-			for (size_t i = 0; i < array->length; i++) {
-				ast_block_t* block = array_get(array, i);
+	if (array != NULL)
+	{
+		if (array->data != NULL)
+		{
+			for (size_t i = 0; i < array->length; i++)
+			{
+				ast_block_t *block = array_get(array, i);
 
-				if (block != NULL) {
+				if (block != NULL)
+				{
 					block->destroy(block);
 				}
 			}
@@ -506,19 +557,21 @@ void array_block_destroy(array_block_t* array)
  * @returns {void}
  *
  */
-void array_block_print(array_block_t* array)
+void array_block_print(array_block_t *array)
 {
 	DEBUG_ME;
-	if (array == NULL) {
+	if (array == NULL)
+	{
 		printf("Block array is NULL\n");
 		return;
 	}
 
 	printf("Block array: %zu\n", array->length);
 
-	for (size_t i = 0; i < array->length; i++) {
+	for (size_t i = 0; i < array->length; i++)
+	{
 		printf("\t");
-		ast_block_t* block = array_get(array, i);
+		ast_block_t *block = array_get(array, i);
 
 		block->print(block);
 	}
@@ -532,13 +585,13 @@ void array_block_print(array_block_t* array)
  * @returns {array_value_t*} - Pointer to the created array
  *
  */
-array_value_t* array_value_create(size_t capacity)
+array_value_t *array_value_create(size_t capacity)
 {
 	DEBUG_ME;
-	array_value_t* array = array_create(sizeof(ast_value_t*), capacity);
+	array_value_t *array = array_create(sizeof(ast_value_t *), capacity);
 
-	array->print = cast(void (*)(void*), array_value_print);
-	array->destroy = cast(void (*)(void*), array_value_destroy);
+	array->print = cast(void (*)(void *), array_value_print);
+	array->destroy = cast(void (*)(void *), array_value_destroy);
 
 	return array;
 }
@@ -551,20 +604,23 @@ array_value_t* array_value_create(size_t capacity)
  * @returns {void}
  *
  */
-void array_value_print(array_value_t* array)
+void array_value_print(array_value_t *array)
 {
 	DEBUG_ME;
 	printf("Value array: %zu\n", array->length);
 
-	for (size_t i = 0; i < array->length; i++) {
+	for (size_t i = 0; i < array->length; i++)
+	{
 		printf("\t");
-		ast_value_t* value = array_get(array, i);
+		ast_value_t *value = array_get(array, i);
 
-		if (value == NULL) {
+		if (value == NULL)
+		{
 			printf("NULL\n");
 			continue;
 		}
-		else {
+		else
+		{
 			value->print(value);
 		}
 	}
@@ -578,24 +634,27 @@ void array_value_print(array_value_t* array)
  * @returns {char*} - String
  *
  */
-char* array_value_first_stringify(array_value_t* array)
+char *array_value_first_stringify(array_value_t *array)
 {
 	DEBUG_ME;
-	if (array == NULL || array->length == 0) {
+	if (array == NULL || array->length == 0)
+	{
 		return strdup("");
 	}
 
-	string_t* str = string_create(16);
-	for (size_t i = 0; i < array->length; i++) {
-		ast_value_t* value = array_get(array, i);
+	string_t *str = string_create(16);
+	for (size_t i = 0; i < array->length; i++)
+	{
+		ast_value_t *value = array_get(array, i);
 
-		if (value != NULL) {
+		if (value != NULL)
+		{
 			string_append_str(str, value->get_data(value));
 			break;
 		}
 	}
 
-	char* buffer = strdup(str->data);
+	char *buffer = strdup(str->data);
 	string_destroy(str);
 
 	return buffer;
@@ -610,27 +669,31 @@ char* array_value_first_stringify(array_value_t* array)
  * @returns {char*} - String
  *
  */
-char* array_value_stringify(array_value_t* array, char* separator)
+char *array_value_stringify(array_value_t *array, char *separator)
 {
 	DEBUG_ME;
-	if (array == NULL || array->length == 0) {
+	if (array == NULL || array->length == 0)
+	{
 		return strdup("");
 	}
 
-	string_t* str = string_create(16);
-	for (size_t i = 0; i < array->length; i++) {
-		ast_value_t* value = array_get(array, i);
+	string_t *str = string_create(16);
+	for (size_t i = 0; i < array->length; i++)
+	{
+		ast_value_t *value = array_get(array, i);
 
-		if (value != NULL) {
+		if (value != NULL)
+		{
 			string_append_str(str, value->get_data(value));
 
-			if (i < array->length - 1) {
+			if (i < array->length - 1)
+			{
 				string_append_str(str, separator);
 			}
 		}
 	}
 
-	char* buffer = strdup(str->data);
+	char *buffer = strdup(str->data);
 	string_destroy(str);
 
 	return buffer;
@@ -644,13 +707,14 @@ char* array_value_stringify(array_value_t* array, char* separator)
  * @returns {array_value_t*} - Copied array
  *
  */
-array_value_t* array_value_copy(array_value_t* values)
+array_value_t *array_value_copy(array_value_t *values)
 {
 	DEBUG_ME;
-	array_value_t* copy = array_value_create(values->length);
+	array_value_t *copy = array_value_create(values->length);
 
-	for (size_t i = 0; i < values->length; i++) {
-		ast_value_t* value = values->data[i];
+	for (size_t i = 0; i < values->length; i++)
+	{
+		ast_value_t *value = values->data[i];
 
 		array_push(copy, ast_value_copy(value));
 	}

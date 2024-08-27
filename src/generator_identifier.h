@@ -5,8 +5,9 @@
 #include "memory.h"
 #include "string.h"
 
-typedef struct generator_identifier_t {
-	char* current;
+typedef struct generator_identifier_t
+{
+	char *current;
 } generator_identifier_t;
 
 /**
@@ -16,7 +17,7 @@ typedef struct generator_identifier_t {
  * @returns {void}
  *
  */
-void generator_identifier_init(generator_identifier_t* gen);
+void generator_identifier_init(generator_identifier_t *gen);
 
 /**
  *
@@ -25,7 +26,7 @@ void generator_identifier_init(generator_identifier_t* gen);
  * @returns {char*} identifier - Identifier
  *
  */
-char* generator_identifier_get(generator_identifier_t* gen);
+char *generator_identifier_get(generator_identifier_t *gen);
 
 /**
  *
@@ -34,6 +35,6 @@ char* generator_identifier_get(generator_identifier_t* gen);
  * @returns {void}
  *
  */
-void generator_identifier_destroy(generator_identifier_t* gen);
+void generator_identifier_destroy(generator_identifier_t *gen);
 
 #endif

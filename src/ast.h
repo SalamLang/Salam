@@ -13,139 +13,155 @@
 // #include "hashmap_custom.h"
 #include "string.h"
 
-typedef enum {
-    #undef ADD_TYPE
-    #define ADD_TYPE(TYPE, NAME, NAME_LOWER) TYPE,
+typedef enum
+{
+#undef ADD_TYPE
+#define ADD_TYPE(TYPE, NAME, NAME_LOWER) TYPE,
 
-    #include "ast_type.h"
+#include "ast_type.h"
 } ast_type_t;
 
-typedef enum {
-    #undef ADD_BLOCK_TYPE
-    #define ADD_BLOCK_TYPE(TYPE, NAME, NAME_LOWER) TYPE,
+typedef enum
+{
+#undef ADD_BLOCK_TYPE
+#define ADD_BLOCK_TYPE(TYPE, NAME, NAME_LOWER) TYPE,
 
-    #include "ast_block_type.h"
+#include "ast_block_type.h"
 } ast_block_type_t;
 
 struct ast_t;
 
-typedef struct {
-    ast_block_type_t type;
-    ast_type_t parent_type;
+typedef struct
+{
+	ast_block_type_t type;
+	ast_type_t parent_type;
 
-    array_node_t* children;
+	array_node_t *children;
 
-    void (*destroy)(void* node);
-    void (*print)(void* node);
+	void (*destroy)(void *node);
+	void (*print)(void *node);
 } ast_block_t;
 
-typedef struct ast_import_t {
-    array_t* path;
+typedef struct ast_import_t
+{
+	array_t *path;
 
-    void (*destroy)(void* node);
-    void (*print)(void* node);
+	void (*destroy)(void *node);
+	void (*print)(void *node);
 } ast_import_t;
 
-typedef enum ast_value_kind_t {
-    #undef ADD_VALUE_KIND
-    #define ADD_VALUE_KIND(TYPE, NAME, NAME_LOWER) TYPE,
+typedef enum ast_value_kind_t
+{
+#undef ADD_VALUE_KIND
+#define ADD_VALUE_KIND(TYPE, NAME, NAME_LOWER) TYPE,
 
-    #include "ast_value_kind.h"
+#include "ast_value_kind.h"
 } ast_value_kind_t;
 
-typedef struct ast_value_type_t {
-    ast_value_kind_t kind;
-    location_t location;
+typedef struct ast_value_type_t
+{
+	ast_value_kind_t kind;
+	location_t location;
 
-    void (*destroy)(void* node);
-    void (*print)(void* node);
+	void (*destroy)(void *node);
+	void (*print)(void *node);
 } ast_value_type_t;
 
 #include "ast_layout.h"
 #include "ast_layout_style.h"
 
-typedef struct ast_function_t {
-    char* name;
-    array_function_parameter_t* parameters;
-    ast_block_t* block;
-    ast_value_type_t* return_type;
+typedef struct ast_function_t
+{
+	char *name;
+	array_function_parameter_t *parameters;
+	ast_block_t *block;
+	ast_value_type_t *return_type;
 
-    void (*destroy)(void* node);
-    void (*print)(void* node);
+	void (*destroy)(void *node);
+	void (*print)(void *node);
 } ast_function_t;
 
-typedef struct ast_value_t {
-    ast_value_type_t* type;
-    union data {
-        int int_value;
-        float float_value;
-        char char_value;
-        bool bool_value;
-        char* string_value;
-    } data;
+typedef struct ast_value_t
+{
+	ast_value_type_t *type;
+	union data
+	{
+		int int_value;
+		float float_value;
+		char char_value;
+		bool bool_value;
+		char *string_value;
+	} data;
 
-    void (*destroy)(void* node);
-    void (*print)(void* node);
-    char* (*get_data)(void* node);
+	void (*destroy)(void *node);
+	void (*print)(void *node);
+	char *(*get_data)(void *node);
 } ast_value_t;
 
-typedef struct ast_if_t {
-    ast_value_t* condition;
-    ast_block_t* block;
-    array_block_t* else_blocks; // NULLABLE for else if blocks
+typedef struct ast_if_t
+{
+	ast_value_t *condition;
+	ast_block_t *block;
+	array_block_t *else_blocks; // NULLABLE for else if blocks
 
-    void (*destroy)(void* node);
-    void (*print)(void* node);
+	void (*destroy)(void *node);
+	void (*print)(void *node);
 } ast_if_t;
 
-typedef struct ast_return_t {
-    array_value_t* values;
+typedef struct ast_return_t
+{
+	array_value_t *values;
 
-    void (*destroy)(void* node);
-    void (*print)(void* node);
+	void (*destroy)(void *node);
+	void (*print)(void *node);
 } ast_return_t;
 
-typedef struct ast_print_t {
-    array_value_t* values;
+typedef struct ast_print_t
+{
+	array_value_t *values;
 
-    void (*destroy)(void* node);
-    void (*print)(void* node);
+	void (*destroy)(void *node);
+	void (*print)(void *node);
 } ast_print_t;
 
-typedef struct ast_function_parameter_t {
-    char* name;
-    ast_value_type_t* type;
+typedef struct ast_function_parameter_t
+{
+	char *name;
+	ast_value_type_t *type;
 
-    void (*destroy)(void* node);
-    void (*print)(void* node);
+	void (*destroy)(void *node);
+	void (*print)(void *node);
 } ast_function_parameter_t;
 
-typedef union ast_union_t {
-    ast_block_t* block;
-    ast_import_t* import;
-    ast_function_t* function;
-    ast_if_t* ifclause;
-    ast_return_t* returns;
-    ast_print_t* print;
+typedef union ast_union_t
+{
+	ast_block_t *block;
+	ast_import_t *import;
+	ast_function_t *function;
+	ast_if_t *ifclause;
+	ast_return_t *returns;
+	ast_print_t *print;
 
-    struct ast_layout_t* layout;
+	struct ast_layout_t *layout;
 } ast_union_t;
 
-typedef struct ast_node_t {
-    ast_type_t type;
-    location_t location;
-    ast_union_t data;
+typedef struct ast_node_t
+{
+	ast_type_t type;
+	location_t location;
+	ast_union_t data;
 
-    void (*destroy)(void* node);
-    void (*print)(void* node);
+	void (*destroy)(void *node);
+	void (*print)(void *node);
 } ast_node_t;
 
-typedef struct ast_t {
-    struct ast_layout_t* layout;
-    array_function_t* functions;
+typedef struct ast_t
+{
+	struct ast_layout_t *layout;
+	array_function_t *functions;
 
-    void (*destroy)(void* node);
-    void (*print)(void* node);
+	void (*destroy)(void *node);
+	void (*print)(void *node);
 } ast_t;
 
 /**
@@ -156,7 +172,7 @@ typedef struct ast_t {
  * @returns {void}
  *
  */
-void ast_node_destroy_notall(ast_node_t* value);
+void ast_node_destroy_notall(ast_node_t *value);
 
 /**
  *
@@ -167,7 +183,7 @@ void ast_node_destroy_notall(ast_node_t* value);
  * @returns {ast_node_t*} - Pointer to the created AST node
  *
  */
-ast_node_t* ast_node_create(ast_type_t type, location_t location);
+ast_node_t *ast_node_create(ast_type_t type, location_t location);
 
 /**
  *
@@ -177,7 +193,7 @@ ast_node_t* ast_node_create(ast_type_t type, location_t location);
  * @returns {void}
  *
  */
-void ast_node_print(ast_node_t* node);
+void ast_node_print(ast_node_t *node);
 
 /**
  *
@@ -187,7 +203,7 @@ void ast_node_print(ast_node_t* node);
  * @returns {void}
  *
  */
-void ast_node_destroy(ast_node_t* value);
+void ast_node_destroy(ast_node_t *value);
 
 /**
  *
@@ -196,7 +212,7 @@ void ast_node_destroy(ast_node_t* value);
  * @returns {ast_t*} - Pointer to the created AST
  *
  */
-ast_t* ast_create();
+ast_t *ast_create();
 
 /**
  *
@@ -206,7 +222,7 @@ ast_t* ast_create();
  * @returns {void}
  *
  */
-void ast_debug(ast_t* ast);
+void ast_debug(ast_t *ast);
 
 /**
  *
@@ -216,7 +232,7 @@ void ast_debug(ast_t* ast);
  * @returns {void}
  *
  */
-void ast_destroy(ast_t* ast);
+void ast_destroy(ast_t *ast);
 
 /**
  *
@@ -227,7 +243,7 @@ void ast_destroy(ast_t* ast);
  * @returns {ast_block_t*} - AST block node
  *
  */
-ast_block_t* ast_block_create(ast_block_type_t type, ast_type_t parent_type);
+ast_block_t *ast_block_create(ast_block_type_t type, ast_type_t parent_type);
 
 /**
  *
@@ -237,7 +253,7 @@ ast_block_t* ast_block_create(ast_block_type_t type, ast_type_t parent_type);
  * @returns {ast_function_t*} - Pointer to the created AST node function
  *
  */
-ast_function_t* ast_function_create(char* name);
+ast_function_t *ast_function_create(char *name);
 
 /**
  *
@@ -247,7 +263,7 @@ ast_function_t* ast_function_create(char* name);
  * @returns {void}
  *
  */
-void ast_function_parameter_destroy(ast_function_parameter_t* value);
+void ast_function_parameter_destroy(ast_function_parameter_t *value);
 
 /**
  *
@@ -257,7 +273,7 @@ void ast_function_parameter_destroy(ast_function_parameter_t* value);
  * @returns {void}
  *
  */
-void ast_function_parameter_print(ast_function_parameter_t* value);
+void ast_function_parameter_print(ast_function_parameter_t *value);
 
 /**
  *
@@ -267,7 +283,7 @@ void ast_function_parameter_print(ast_function_parameter_t* value);
  * @returns {void}
  *
  */
-void ast_function_print(ast_function_t* value);
+void ast_function_print(ast_function_t *value);
 
 /**
  *
@@ -277,7 +293,7 @@ void ast_function_print(ast_function_t* value);
  * @returns {void}
  *
  */
-void ast_function_destroy(ast_function_t* value);
+void ast_function_destroy(ast_function_t *value);
 
 /**
  *
@@ -288,7 +304,7 @@ void ast_function_destroy(ast_function_t* value);
  * @returns {ast_value_type_t*} - Pointer to the created AST value type
  *
  */
-ast_value_type_t* ast_value_type_create(ast_value_kind_t kind, location_t location);
+ast_value_type_t *ast_value_type_create(ast_value_kind_t kind, location_t location);
 
 /**
  *
@@ -298,7 +314,7 @@ ast_value_type_t* ast_value_type_create(ast_value_kind_t kind, location_t locati
  * @returns {void}
  *
  */
-void ast_value_type_print(ast_value_type_t* type);
+void ast_value_type_print(ast_value_type_t *type);
 
 /**
  *
@@ -308,7 +324,7 @@ void ast_value_type_print(ast_value_type_t* type);
  * @returns {char*} - Name of the AST value type
  *
  */
-char* ast_value_type_name(ast_value_type_t* type);
+char *ast_value_type_name(ast_value_type_t *type);
 
 /**
  *
@@ -318,7 +334,7 @@ char* ast_value_type_name(ast_value_type_t* type);
  * @returns {void}
  *
  */
-void ast_value_type_destroy(ast_value_type_t* type);
+void ast_value_type_destroy(ast_value_type_t *type);
 
 /**
  *
@@ -328,7 +344,7 @@ void ast_value_type_destroy(ast_value_type_t* type);
  * @returns {void}
  *
  */
-void ast_print(ast_t* ast);
+void ast_print(ast_t *ast);
 
 /**
  *
@@ -338,7 +354,7 @@ void ast_print(ast_t* ast);
  * @returns {void}
  *
  */
-void ast_block_print(ast_block_t* block);
+void ast_block_print(ast_block_t *block);
 
 /**
  *
@@ -348,7 +364,7 @@ void ast_block_print(ast_block_t* block);
  * @returns {void}
  *
  */
-void ast_block_destroy(ast_block_t* block);
+void ast_block_destroy(ast_block_t *block);
 
 /**
  *
@@ -357,7 +373,7 @@ void ast_block_destroy(ast_block_t* block);
  * @returns {ast_if_t*} - Pointer to the created AST node if
  *
  */
-void ast_if_print(ast_if_t* node);
+void ast_if_print(ast_if_t *node);
 
 /**
  *
@@ -367,7 +383,7 @@ void ast_if_print(ast_if_t* node);
  * @returns {ast_if_t*} - Pointer to the created AST node else if
  *
  */
-ast_if_t* ast_elseif_create(ast_value_t* condition);
+ast_if_t *ast_elseif_create(ast_value_t *condition);
 
 /**
  *
@@ -377,7 +393,7 @@ ast_if_t* ast_elseif_create(ast_value_t* condition);
  * @returns {void}
  *
  */
-void ast_if_destroy(ast_if_t* node);
+void ast_if_destroy(ast_if_t *node);
 
 /**
  *
@@ -387,7 +403,7 @@ void ast_if_destroy(ast_if_t* node);
  * @returns {ast_if_t*} - Pointer to the created AST node if
  *
  */
-ast_if_t* ast_if_create(ast_value_t* condition);
+ast_if_t *ast_if_create(ast_value_t *condition);
 
 /**
  *
@@ -398,7 +414,7 @@ ast_if_t* ast_if_create(ast_value_t* condition);
  * @returns {ast_value_t*} - Pointer to the created AST value
  *
  */
-ast_value_t* ast_value_create(ast_value_type_t* type, void* data);
+ast_value_t *ast_value_create(ast_value_type_t *type, void *data);
 
 /**
  *
@@ -408,7 +424,7 @@ ast_value_t* ast_value_create(ast_value_type_t* type, void* data);
  * @returns {void}
  *
  */
-void ast_value_print(ast_value_t* value);
+void ast_value_print(ast_value_t *value);
 
 /**
  *
@@ -418,7 +434,7 @@ void ast_value_print(ast_value_t* value);
  * @returns {void}
  *
  */
-void ast_value_destroy(ast_value_t* value);
+void ast_value_destroy(ast_value_t *value);
 
 /**
  *
@@ -427,7 +443,7 @@ void ast_value_destroy(ast_value_t* value);
  * @params {ast_block_type_t} type - AST block type
  * @returns {char*} - Name of the AST block type
  */
-char* ast_block_type_name(ast_block_type_t type);
+char *ast_block_type_name(ast_block_type_t type);
 
 /**
  *
@@ -436,7 +452,7 @@ char* ast_block_type_name(ast_block_type_t type);
  * @returns {ast_if_t*} - Pointer to the created AST node else
  *
  */
-ast_if_t* ast_else_create();
+ast_if_t *ast_else_create();
 
 /**
  *
@@ -445,7 +461,7 @@ ast_if_t* ast_else_create();
  * @params {ast_return_t*} node - AST return node
  * @returns {void}
  */
-void ast_return_print(ast_return_t* node);
+void ast_return_print(ast_return_t *node);
 
 /**
  *
@@ -455,7 +471,7 @@ void ast_return_print(ast_return_t* node);
  * @returns {void}
  *
  */
-void ast_return_destroy(ast_return_t* node);
+void ast_return_destroy(ast_return_t *node);
 
 /**
  *
@@ -465,7 +481,7 @@ void ast_return_destroy(ast_return_t* node);
  * @returns {ast_return_t*} - Pointer to the created AST node if
  *
  */
-ast_return_t* ast_return_create(array_value_t* values);
+ast_return_t *ast_return_create(array_value_t *values);
 
 /**
  *
@@ -475,7 +491,7 @@ ast_return_t* ast_return_create(array_value_t* values);
  * @returns {ast_print_t*} - Pointer to the created AST node if
  *
  */
-ast_print_t* ast_print_create(array_value_t* values);
+ast_print_t *ast_print_create(array_value_t *values);
 
 /**
  *
@@ -485,7 +501,7 @@ ast_print_t* ast_print_create(array_value_t* values);
  * @returns {void}
  *
  */
-void ast_print_destroy(ast_print_t* node);
+void ast_print_destroy(ast_print_t *node);
 
 /**
  *
@@ -495,7 +511,7 @@ void ast_print_destroy(ast_print_t* node);
  * @returns {void}
  *
  */
-void ast_print_print(ast_print_t* node);
+void ast_print_print(ast_print_t *node);
 
 /**
  *
@@ -505,7 +521,7 @@ void ast_print_print(ast_print_t* node);
  * @returns {void}
  *
  */
-void ast_value_print(ast_value_t* value);
+void ast_value_print(ast_value_t *value);
 
 /**
  *
@@ -515,7 +531,7 @@ void ast_value_print(ast_value_t* value);
  * @returns {void}
  *
  */
-void ast_value_destroy(ast_value_t* value);
+void ast_value_destroy(ast_value_t *value);
 
 /**
  *
@@ -525,7 +541,7 @@ void ast_value_destroy(ast_value_t* value);
  * @returns {void}
  *
  */
-void ast_value_print(ast_value_t* value);
+void ast_value_print(ast_value_t *value);
 
 /**
  *
@@ -535,7 +551,7 @@ void ast_value_print(ast_value_t* value);
  * @returns {char*} - String of the AST layout attribute value
  *
  */
-char* ast_value_data(ast_value_t* value);
+char *ast_value_data(ast_value_t *value);
 
 /**
  *
@@ -545,7 +561,7 @@ char* ast_value_data(ast_value_t* value);
  * @returns {ast_value_t*} - Copied AST Layout Attribute Value
  *
  */
-ast_value_t* ast_value_copy(ast_value_t* value);
+ast_value_t *ast_value_copy(ast_value_t *value);
 
 /**
  *
@@ -555,6 +571,6 @@ ast_value_t* ast_value_copy(ast_value_t* value);
  * @returns {ast_value_type_t*} - Copied AST Layout Attribute Value Type
  *
  */
-ast_value_type_t* ast_value_type_copy(ast_value_type_t* type);
+ast_value_type_t *ast_value_type_copy(ast_value_type_t *type);
 
 #endif

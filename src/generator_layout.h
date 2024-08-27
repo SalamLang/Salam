@@ -21,7 +21,7 @@
  * @returns {string_t*}
  *
  */
-string_t* generator_code_layout_block(generator_t* generator, array_t* children);
+string_t *generator_code_layout_block(generator_t *generator, array_t *children);
 /**
  *
  * @function generator_code_layout_body
@@ -31,7 +31,7 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
  * @returns {void}
  *
  */
-void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layout_block, string_t* body);
+void generator_code_layout_body(generator_t *generator, ast_layout_block_t *layout_block, string_t *body);
 
 /**
  *
@@ -41,7 +41,7 @@ void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layo
  * @returns {void}
  *
  */
-void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head);
+void generator_code_head_item(ast_layout_attribute_t *attribute, string_t *head);
 /**
  *
  * @function generator_code_head
@@ -52,7 +52,7 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
  * @returns {void}
  *
  */
-void generator_code_head(generator_t* generator, ast_layout_block_t* block, string_t* head);
+void generator_code_head(generator_t *generator, ast_layout_block_t *block, string_t *head);
 /**
  *
  * @function generator_code_layout
@@ -61,7 +61,7 @@ void generator_code_head(generator_t* generator, ast_layout_block_t* block, stri
  * @returns {void}
  *
  */
-void generator_code_layout(generator_t* generator);
+void generator_code_layout(generator_t *generator);
 /**
  *
  * @function generator_code_layout_styles
@@ -72,7 +72,7 @@ void generator_code_layout(generator_t* generator);
  * @returns {string_t*}
  *
  */
-string_t* generator_code_layout_styles(hashmap_layout_attribute_t* styles, ast_layout_block_t* block, size_t* css_attributes_length);
+string_t *generator_code_layout_styles(hashmap_layout_attribute_t *styles, ast_layout_block_t *block, size_t *css_attributes_length);
 
 /**
  *
@@ -83,7 +83,7 @@ string_t* generator_code_layout_styles(hashmap_layout_attribute_t* styles, ast_l
  * @returns {void}
  *
  */
-void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html);
+void generator_code_layout_html(ast_layout_block_t *layout_block, string_t *html);
 /**
  *
  * @function generator_code_layout_attributes
@@ -93,7 +93,7 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
  * @returns {string_t*}
  *
  */
-string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_block_t* block);
+string_t *generator_code_layout_attributes(generator_t *generator, ast_layout_block_t *block);
 /**
  *
  * @function generator_code_head_meta_children
@@ -104,7 +104,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
  * @returns {void}
  *
  */
-void generator_code_head_meta_children(generator_t* generator, ast_layout_block_t* block, string_t* head);
+void generator_code_head_meta_children(generator_t *generator, ast_layout_block_t *block, string_t *head);
 /**
  *
  * @function generator_code_layout_attribute_name
@@ -113,6 +113,6 @@ void generator_code_head_meta_children(generator_t* generator, ast_layout_block_
  * @returns {char*} name - Name
  *
  */
-char* generator_code_layout_attribute_name(ast_layout_attribute_type_t type);
+char *generator_code_layout_attribute_name(ast_layout_attribute_type_t type);
 
 #endif

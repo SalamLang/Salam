@@ -19,7 +19,7 @@
  * @returns {void}
  *
  */
-void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer);
+void parser_parse_layout_block(ast_layout_block_t *block, lexer_t *lexer);
 
 /**
  *
@@ -29,7 +29,7 @@ void parser_parse_layout_block(ast_layout_block_t* block, lexer_t* lexer);
  * @returns {ast_node_t*} - AST node
  *
  */
-ast_node_t* parser_parse_layout(lexer_t* lexer);
+ast_node_t *parser_parse_layout(lexer_t *lexer);
 
 /**
  *
@@ -39,7 +39,7 @@ ast_node_t* parser_parse_layout(lexer_t* lexer);
  * @returns {ast_node_t*} - AST node
  *
  */
-ast_node_t* parser_layout(lexer_t* lexer);
+ast_node_t *parser_layout(lexer_t *lexer);
 
 /**
  *
@@ -52,7 +52,7 @@ ast_node_t* parser_layout(lexer_t* lexer);
  * @returns {void}
  *
  */
-void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexer, char* name, token_t* last_name);
+void parser_parse_layout_block_children(ast_layout_block_t *block, lexer_t *lexer, char *name, token_t *last_name);
 
 /**
  *
@@ -67,7 +67,7 @@ void parser_parse_layout_block_children(ast_layout_block_t* block, lexer_t* lexe
  * @returns {void}
  *
  */
-void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* block, hashmap_t* normal, lexer_t* lexer, char* name, token_t* last_name);
+void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t *block, hashmap_t *normal, lexer_t *lexer, char *name, token_t *last_name);
 
 /**
  *
@@ -79,7 +79,7 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t* blo
  * @returns {ast_layout_node_t*} - AST layout node
  *
  */
-ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer, char* name, token_t* last_name);
+ast_layout_node_t *parser_parse_layout_node(lexer_t *lexer, char *name, token_t *last_name);
 
 /**
  *
@@ -89,7 +89,7 @@ ast_layout_node_t* parser_parse_layout_node(lexer_t* lexer, char* name, token_t*
  * @returns {ast_value_t*} - AST Layout attribute value
  *
  */
-ast_value_t* parser_parse_layout_value(lexer_t* lexer);
+ast_value_t *parser_parse_layout_value(lexer_t *lexer);
 
 /**
  *
@@ -102,8 +102,7 @@ ast_value_t* parser_parse_layout_value(lexer_t* lexer);
  * @returns {void}
  *
  */
-void parser_parse_layout_block_style_state(ast_layout_block_t* block, lexer_t* lexer, char* name, token_t* last_name);
-
+void parser_parse_layout_block_style_state(ast_layout_block_t *block, lexer_t *lexer, char *name, token_t *last_name);
 
 /**
  *
@@ -114,7 +113,7 @@ void parser_parse_layout_block_style_state(ast_layout_block_t* block, lexer_t* l
  * @returns {string_t*} - String
  *
  */
-string_t* parser_parse_layout_name(lexer_t* lexer, token_t** last_name);
+string_t *parser_parse_layout_name(lexer_t *lexer, token_t **last_name);
 
 /**
  *
@@ -124,6 +123,6 @@ string_t* parser_parse_layout_name(lexer_t* lexer, token_t** last_name);
  * @returns {array_value_t*} - Array of AST values
  *
  */
-array_value_t* parser_parse_layout_values(lexer_t* lexer);
+array_value_t *parser_parse_layout_values(lexer_t *lexer);
 
 #endif

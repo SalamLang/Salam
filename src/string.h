@@ -16,13 +16,14 @@
 #include "memory.h"
 #include "lexer.h"
 
-typedef struct {
+typedef struct
+{
 	size_t capacity;
 	size_t length;
-	char* data;
+	char *data;
 
-    void (*print)(void*);
-    void (*destroy)(void*);
+	void (*print)(void *);
+	void (*destroy)(void *);
 } string_t;
 
 /**
@@ -33,7 +34,7 @@ typedef struct {
  * @returns {string_t*}
  *
  */
-string_t* string_create(size_t initial_capacity);
+string_t *string_create(size_t initial_capacity);
 
 /**
  *
@@ -44,7 +45,7 @@ string_t* string_create(size_t initial_capacity);
  * @returns {void}
  *
  */
-void string_append_char_begin(string_t* str, char c);
+void string_append_char_begin(string_t *str, char c);
 
 /**
  *
@@ -55,7 +56,7 @@ void string_append_char_begin(string_t* str, char c);
  * @returns {void}
  *
  */
-void string_append_str_begin(string_t* str, const char* prefix);
+void string_append_str_begin(string_t *str, const char *prefix);
 
 /**
  *
@@ -66,7 +67,7 @@ void string_append_str_begin(string_t* str, const char* prefix);
  * @returns {void}
  *
  */
-void string_append_char(string_t* str, char c);
+void string_append_char(string_t *str, char c);
 
 /**
  *
@@ -77,7 +78,7 @@ void string_append_char(string_t* str, char c);
  * @returns {void}
  *
  */
-void string_append_str(string_t* str, const char* suffix);
+void string_append_str(string_t *str, const char *suffix);
 
 /**
  *
@@ -87,7 +88,7 @@ void string_append_str(string_t* str, const char* suffix);
  * @returns {void}
  *
  */
-void string_destroy(string_t* str);
+void string_destroy(string_t *str);
 
 /**
  *
@@ -97,7 +98,7 @@ void string_destroy(string_t* str);
  * @returns {void}
  *
  */
-void string_print(string_t* str);
+void string_print(string_t *str);
 
 /**
  *
@@ -108,7 +109,7 @@ void string_print(string_t* str);
  * @returns {void}
  *
  */
-void string_set(string_t* str, string_t* value);
+void string_set(string_t *str, string_t *value);
 
 /**
  *
@@ -119,7 +120,7 @@ void string_set(string_t* str, string_t* value);
  * @returns {void}
  *
  */
-void string_set_str(string_t* str, const char* value);
+void string_set_str(string_t *str, const char *value);
 
 /**
  *
@@ -130,7 +131,7 @@ void string_set_str(string_t* str, const char* value);
  * @returns {void}
  *
  */
-void string_append(string_t* str, const string_t* value);
+void string_append(string_t *str, const string_t *value);
 
 /**
  *
@@ -140,7 +141,7 @@ void string_append(string_t* str, const string_t* value);
  * @returns {char*} - Lowercase string
  *
  */
-char* string_lower_str(const char* str);
+char *string_lower_str(const char *str);
 
 /**
  *
@@ -150,7 +151,7 @@ char* string_lower_str(const char* str);
  * @returns {char*} - Uppercase string
  *
  */
-char* string_upper_str(const char* str);
+char *string_upper_str(const char *str);
 
 /**
  *
@@ -162,7 +163,7 @@ char* string_upper_str(const char* str);
  * @returns {char*} - New string
  *
  */
-char* replace_all_substrings(const char* str, const char* old_substr, const char* new_substr);
+char *replace_all_substrings(const char *str, const char *old_substr, const char *new_substr);
 
 /**
  *
@@ -173,7 +174,7 @@ char* replace_all_substrings(const char* str, const char* old_substr, const char
  * @returns {bool}
  *
  */
-bool string_is(string_t* str1, const char* str2);
+bool string_is(string_t *str1, const char *str2);
 
 /**
  *
@@ -184,7 +185,7 @@ bool string_is(string_t* str1, const char* str2);
  * @returns {bool}
  *
  */
-bool string_equals(string_t* str1, string_t* str2);
+bool string_equals(string_t *str1, string_t *str2);
 
 /**
  *
@@ -195,7 +196,7 @@ bool string_equals(string_t* str1, string_t* str2);
  * @returns {bool}
  *
  */
-bool string_compare(string_t* str1, string_t* str2);
+bool string_compare(string_t *str1, string_t *str2);
 
 /**
  *
@@ -215,7 +216,7 @@ bool is_utf8_continuation_byte(char c);
  * @returns {bool} True if the string is a valid UTF-8 sequence, false otherwise
  *
  */
-bool is_valid_utf8(const char* str);
+bool is_valid_utf8(const char *str);
 
 /**
  *
@@ -235,7 +236,7 @@ bool is_char_alpha(const char c);
  * @returns {bool}
  *
  */
-bool is_schar_alpha(const char* c);
+bool is_schar_alpha(const char *c);
 
 /**
  *
@@ -265,7 +266,7 @@ bool is_char_whitespace(char c);
  * @returns {char*}
  *
  */
-char* int2string(int value);
+char *int2string(int value);
 
 /**
  *
@@ -275,7 +276,7 @@ char* int2string(int value);
  * @returns {char*}
  *
  */
-char* float2string(float value);
+char *float2string(float value);
 
 /**
  *
@@ -285,7 +286,7 @@ char* float2string(float value);
  * @returns {char*}
  *
  */
-char* double2string(double value);
+char *double2string(double value);
 
 /**
  *
@@ -295,7 +296,7 @@ char* double2string(double value);
  * @returns {char*}
  *
  */
-char* string_destroy_and_get(string_t* str);
+char *string_destroy_and_get(string_t *str);
 
 /**
  *
@@ -316,7 +317,7 @@ size_t utf8_char_length(char c);
  * @returns {uint32_t} Decoded character
  *
  */
-uint32_t utf8_decode(const char* source, size_t* index);
+uint32_t utf8_decode(const char *source, size_t *index);
 
 /**
  *
@@ -356,7 +357,7 @@ char convert_to_english_digit(wchar_t ch);
  * @returns {void}
  *
  */
-void string_number2number(char* str);
+void string_number2number(char *str);
 
 /**
  *
@@ -367,7 +368,7 @@ void string_number2number(char* str);
  * @returns {void}
  *
  */
-void string_append_wchar(string_t* str, wchar_t c);
+void string_append_wchar(string_t *str, wchar_t c);
 
 /**
  *
@@ -387,37 +388,37 @@ size_t utf8_strlen(const char *str);
  * @returns {size_t} Length of the string
  *
  */
-size_t mb2strlen(const char* identifier);
+size_t mb2strlen(const char *identifier);
 
 /**
- * 
+ *
  * @function is_english_digit
  * @brief Check if a UTF-8 string is an Persian/Arabic/English digit
  * @params {char*} utf8 - UTF-8 string
  * @returns {bool} True if the string is a Persian/Arabic/English digit, false otherwise
- * 
+ *
  */
-bool is_utf8_digit(char* utf8);
+bool is_utf8_digit(char *utf8);
 
 /**
- * 
+ *
  * @function is_utf8_alpha
  * @brief Check if a UTF-8 string is an alphabet
  * @params {char*} utf8 - UTF-8 string
  * @returns {bool} True if the string is an alphabet, false otherwise
- * 
+ *
  */
-bool is_utf8_alpha(char* utf8);
+bool is_utf8_alpha(char *utf8);
 
 /**
- * 
+ *
  * @function convert_utf8_to_english_digit
  * @brief Convert a UTF-8 string to an English digit
  * @params {char*} uc - UTF-8 string
  * @returns {char} English digit
- * 
+ *
  */
-char convert_utf8_to_english_digit(char* uc);
+char convert_utf8_to_english_digit(char *uc);
 
 /**
  *
@@ -427,6 +428,6 @@ char convert_utf8_to_english_digit(char* uc);
  * @returns {size_t} Length of the string
  *
  */
-size_t mb2strlen(const char* identifier);
+size_t mb2strlen(const char *identifier);
 
 #endif

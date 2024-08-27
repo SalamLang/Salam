@@ -4,29 +4,31 @@
 #include <string.h>
 #include <stdbool.h>
 
-typedef enum {
-    #undef ADD_LAYOUT_ATTRIBUTE_STYLE_FILTER
-    #define ADD_LAYOUT_ATTRIBUTE_STYLE_FILTER(TYPE, NAME, NAME_LOWER) TYPE,
+typedef enum
+{
+#undef ADD_LAYOUT_ATTRIBUTE_STYLE_FILTER
+#define ADD_LAYOUT_ATTRIBUTE_STYLE_FILTER(TYPE, NAME, NAME_LOWER) TYPE,
 
-    #include "ast_layout_attribute_style_filter.h"
+#include "ast_layout_attribute_style_filter.h"
 } ast_layout_attribute_style_filter_t;
 
-typedef struct ast_layout_style_state_t {
-    struct hashmap_t* normal;
-    struct hashmap_t* new;
+typedef struct ast_layout_style_state_t
+{
+	struct hashmap_t *normal;
+	struct hashmap_t *new;
 
-    void (*destroy)(void* node);
-    void (*print)(void* node);
+	void (*destroy)(void *node);
+	void (*print)(void *node);
 } ast_layout_style_state_t;
 
-typedef enum ast_layout_attribute_style_state_type {
-    #undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
+typedef enum ast_layout_attribute_style_state_type
+{
+#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
 
-    #define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME) TYPE,
+#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME) TYPE,
 
-    #include "ast_layout_attribute_style_state_type.h"
+#include "ast_layout_attribute_style_state_type.h"
 } ast_layout_attribute_style_state_type;
-
 
 #include "base.h"
 #include "memory.h"
@@ -45,7 +47,7 @@ typedef enum ast_layout_attribute_style_state_type {
  * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
  *
  */
-ast_layout_attribute_type_t name_to_ast_layout_attribute_style_type(char* name);
+ast_layout_attribute_type_t name_to_ast_layout_attribute_style_type(char *name);
 
 /**
  *
@@ -55,7 +57,7 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_style_type(char* name);
  * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
  *
  */
-ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_style_type(char* name);
+ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_style_type(char *name);
 
 /**
  *
@@ -65,7 +67,7 @@ ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_style_type(char
  * @returns {ast_layout_attribute_style_state_type} type - Layout Attribute Style State Type
  *
  */
-ast_layout_attribute_style_state_type name_to_ast_layout_attribute_style_state_type(char* name);
+ast_layout_attribute_style_state_type name_to_ast_layout_attribute_style_state_type(char *name);
 
 /**
  *
@@ -75,7 +77,7 @@ ast_layout_attribute_style_state_type name_to_ast_layout_attribute_style_state_t
  * @returns {ast_layout_attribute_style_state_type} type - Layout Attribute Style State Type
  *
  */
-ast_layout_attribute_style_state_type enduser_name_to_ast_layout_attribute_style_state_type(char* name);
+ast_layout_attribute_style_state_type enduser_name_to_ast_layout_attribute_style_state_type(char *name);
 
 /**
  *
@@ -85,7 +87,7 @@ ast_layout_attribute_style_state_type enduser_name_to_ast_layout_attribute_style
  * @returns {void}
  *
  */
-void ast_layout_style_state_destroy(ast_layout_style_state_t* ast);
+void ast_layout_style_state_destroy(ast_layout_style_state_t *ast);
 
 /**
  *
@@ -95,7 +97,7 @@ void ast_layout_style_state_destroy(ast_layout_style_state_t* ast);
  * @returns {void}
  *
  */
-void ast_layout_style_state_print(ast_layout_style_state_t* ast);
+void ast_layout_style_state_print(ast_layout_style_state_t *ast);
 
 /**
  *
@@ -104,7 +106,7 @@ void ast_layout_style_state_print(ast_layout_style_state_t* ast);
  * @returns {ast_layout_style_state_t*} - Pointer to the created AST layout style state
  *
  */
-ast_layout_style_state_t* ast_layout_style_state_create();
+ast_layout_style_state_t *ast_layout_style_state_create();
 
 /**
  *
@@ -114,6 +116,6 @@ ast_layout_style_state_t* ast_layout_style_state_create();
  * @returns {bool} - True if the AST layout style state has any sub value, false otherwise
  *
  */
-bool ast_layout_style_state_has_any_sub_value(ast_layout_style_state_t* value);
+bool ast_layout_style_state_has_any_sub_value(ast_layout_style_state_t *value);
 
 #endif

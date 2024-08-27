@@ -7,15 +7,16 @@
 #include <string.h>
 #include <stdbool.h>
 
-typedef struct array_t {
-    void** data;
-    size_t length;
-    size_t capacity;
-    size_t element_capacity;
+typedef struct array_t
+{
+	void **data;
+	size_t length;
+	size_t capacity;
+	size_t element_capacity;
 
-    void (*print)(void* node);
-    char* (*stringify)(void*);
-    void (*destroy)(void* node);
+	void (*print)(void *node);
+	char *(*stringify)(void *);
+	void (*destroy)(void *node);
 } array_t;
 
 typedef array_t array_token_t;
@@ -43,7 +44,7 @@ typedef array_t array_value_t;
  * @returns {array_t*} - Pointer to the created array
  *
  */
-array_t* array_create(size_t element_capacity, size_t capacity);
+array_t *array_create(size_t element_capacity, size_t capacity);
 
 /**
  *
@@ -55,7 +56,7 @@ array_t* array_create(size_t element_capacity, size_t capacity);
  * @returns {void}
  *
  */
-void array_init(array_t* array, size_t capacity, size_t element_capacity);
+void array_init(array_t *array, size_t capacity, size_t element_capacity);
 
 /**
  *
@@ -66,7 +67,7 @@ void array_init(array_t* array, size_t capacity, size_t element_capacity);
  * @returns {bool} - Success status
  *
  */
-bool array_push(array_t* array, void* element);
+bool array_push(array_t *array, void *element);
 
 /**
  *
@@ -77,7 +78,7 @@ bool array_push(array_t* array, void* element);
  * @returns {bool} - Success status
  *
  */
-bool array_pop(array_t* array, void* element);
+bool array_pop(array_t *array, void *element);
 
 /**
  *
@@ -88,7 +89,7 @@ bool array_pop(array_t* array, void* element);
  * @returns {void}
  *
  */
-void array_resize(array_t* array, size_t new_capacity);
+void array_resize(array_t *array, size_t new_capacity);
 
 /**
  *
@@ -99,7 +100,7 @@ void array_resize(array_t* array, size_t new_capacity);
  * @returns {void*} - Pointer to the element
  *
  */
-void* array_get(array_t* array, size_t index);
+void *array_get(array_t *array, size_t index);
 
 /**
  *
@@ -109,7 +110,7 @@ void* array_get(array_t* array, size_t index);
  * @returns {void}
  *
  */
-void array_destroy(array_t* array);
+void array_destroy(array_t *array);
 
 /**
  *
@@ -119,7 +120,7 @@ void array_destroy(array_t* array);
  * @returns {size_t} - Size of the array
  *
  */
-size_t array_capacity(array_t* array);
+size_t array_capacity(array_t *array);
 
 /**
  *
@@ -129,7 +130,7 @@ size_t array_capacity(array_t* array);
  * @returns {size_t} - Length of the array
  *
  */
-size_t array_length(array_t* array);
+size_t array_length(array_t *array);
 
 /**
  *
@@ -139,7 +140,7 @@ size_t array_length(array_t* array);
  * @returns {void}
  *
  */
-void array_print(array_t* array);
+void array_print(array_t *array);
 
 /**
  *
@@ -150,6 +151,6 @@ void array_print(array_t* array);
  * @returns {char*} - String
  *
  */
-char* array_stringify(array_t* array, char* separator);
+char *array_stringify(array_t *array, char *separator);
 
 #endif

@@ -22,7 +22,7 @@
  * @returns {void}
  *
  */
-void generator_code_layout_style_value(hashmap_t* styles, hashmap_t* new_styles, ast_layout_attribute_t* attribute);
+void generator_code_layout_style_value(hashmap_t *styles, hashmap_t *new_styles, ast_layout_attribute_t *attribute);
 
 /**
  *
@@ -32,7 +32,7 @@ void generator_code_layout_style_value(hashmap_t* styles, hashmap_t* new_styles,
  * @returns {char*} name - Name
  *
  */
-char* generator_code_layout_attribute_style_state_type_to_enduser_name(ast_layout_attribute_style_state_type type);
+char *generator_code_layout_attribute_style_state_type_to_enduser_name(ast_layout_attribute_style_state_type type);
 
 /**
  *
@@ -42,7 +42,7 @@ char* generator_code_layout_attribute_style_state_type_to_enduser_name(ast_layou
  * @returns {char*} name - Name
  *
  */
-char* generator_code_layout_attribute_style_state_type_to_name(ast_layout_attribute_style_state_type type);
+char *generator_code_layout_attribute_style_state_type_to_name(ast_layout_attribute_style_state_type type);
 
 /**
  *
@@ -54,7 +54,7 @@ char* generator_code_layout_attribute_style_state_type_to_name(ast_layout_attrib
  * @returns {string_t*}
  *
  */
-string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layout_block_t* block, size_t* css_attributes_length);
+string_t *generator_code_layout_pseudo_elements(generator_t *generator, ast_layout_block_t *block, size_t *css_attributes_length);
 
 /**
  *
@@ -64,7 +64,7 @@ string_t* generator_code_layout_pseudo_elements(generator_t* generator, ast_layo
  * @returns {ast_layout_attribute_style_state_type} type - Type
  *
  */
-ast_layout_attribute_style_state_type generator_code_layout_attribute_style_state_enduser_name_to_type(char* name);
+ast_layout_attribute_style_state_type generator_code_layout_attribute_style_state_enduser_name_to_type(char *name);
 
 /**
  *
@@ -74,7 +74,7 @@ ast_layout_attribute_style_state_type generator_code_layout_attribute_style_stat
  * @returns {ast_layout_attribute_style_state_type} type - Type
  *
  */
-ast_layout_attribute_style_state_type generator_code_layout_attribute_style_state_name_to_type(char* name);
+ast_layout_attribute_style_state_type generator_code_layout_attribute_style_state_name_to_type(char *name);
 
 /**
  *
@@ -84,6 +84,6 @@ ast_layout_attribute_style_state_type generator_code_layout_attribute_style_stat
  * @returns {char*} name - Name
  *
  */
-char* generator_code_layout_attribute_style_state_type_to_generated_name(ast_layout_attribute_style_state_type type);
+char *generator_code_layout_attribute_style_state_type_to_generated_name(ast_layout_attribute_style_state_type type);
 
 #endif

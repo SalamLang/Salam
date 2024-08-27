@@ -8,11 +8,12 @@
  * @returns {void*}
  *
  */
-void* memory_allocate(size_t size)
+void *memory_allocate(size_t size)
 {
 	DEBUG_ME;
-	void* ptr = malloc(size);
-	if (ptr == NULL) {
+	void *ptr = malloc(size);
+	if (ptr == NULL)
+	{
 		panic("Failed to allocate memory");
 	}
 
@@ -28,12 +29,13 @@ void* memory_allocate(size_t size)
  * @returns {void*}
  *
  */
-void* memory_callocate(size_t count, size_t size)
+void *memory_callocate(size_t count, size_t size)
 {
 	DEBUG_ME;
-	void* ptr = calloc(count, size);
+	void *ptr = calloc(count, size);
 
-	if (ptr == NULL) {
+	if (ptr == NULL)
+	{
 		panic("Failed to callocate memory");
 	}
 
@@ -48,10 +50,11 @@ void* memory_callocate(size_t count, size_t size)
  * @returns {void}
  *
  */
-void memory_destroy(void* ptr)
+void memory_destroy(void *ptr)
 {
 	DEBUG_ME;
-	if (ptr == NULL) {
+	if (ptr == NULL)
+	{
 		panic("Failed to destroy memory");
 	}
 
@@ -68,12 +71,13 @@ void memory_destroy(void* ptr)
  * @returns {void*}
  *
  */
-void* memory_reallocate(void* ptr, size_t size)
+void *memory_reallocate(void *ptr, size_t size)
 {
 	DEBUG_ME;
-	void* new_ptr = realloc(ptr, size);
+	void *new_ptr = realloc(ptr, size);
 
-	if (new_ptr == NULL) {
+	if (new_ptr == NULL)
+	{
 		panic("Failed to reallocate memory");
 	}
 
@@ -89,7 +93,7 @@ void* memory_reallocate(void* ptr, size_t size)
  * @returns {void}
  *
  */
-void memory_zero(void* ptr, size_t size)
+void memory_zero(void *ptr, size_t size)
 {
 	DEBUG_ME;
 	memset(ptr, 0, size);
@@ -105,7 +109,7 @@ void memory_zero(void* ptr, size_t size)
  * @returns {void}
  *
  */
-void memory_copy(void* dest, const void* src, size_t size)
+void memory_copy(void *dest, const void *src, size_t size)
 {
 	DEBUG_ME;
 	memcpy(dest, src, size);
@@ -121,7 +125,7 @@ void memory_copy(void* dest, const void* src, size_t size)
  * @returns {int}
  *
  */
-int memory_compare(void* ptr1, void* ptr2, size_t size)
+int memory_compare(void *ptr1, void *ptr2, size_t size)
 {
 	DEBUG_ME;
 	return memcmp(ptr1, ptr2, size);
@@ -137,7 +141,7 @@ int memory_compare(void* ptr1, void* ptr2, size_t size)
  * @returns {void}
  *
  */
-void memory_set(void* ptr, int value, size_t size)
+void memory_set(void *ptr, int value, size_t size)
 {
 	DEBUG_ME;
 	memset(ptr, value, size);
@@ -153,17 +157,19 @@ void memory_set(void* ptr, int value, size_t size)
  * @returns {void}
  *
  */
-void memory_swap(void* ptr1, void* ptr2, size_t size)
+void memory_swap(void *ptr1, void *ptr2, size_t size)
 {
 	DEBUG_ME;
-	void* temp = memory_allocate(size);
+	void *temp = memory_allocate(size);
 
-	if (temp != NULL) {
+	if (temp != NULL)
+	{
 		memory_copy(temp, ptr1, size);
 		memory_copy(ptr1, ptr2, size);
 		memory_copy(ptr2, temp, size);
 
-		if (temp != NULL) {
+		if (temp != NULL)
+		{
 			memory_destroy(temp);
 		}
 	}
@@ -178,13 +184,14 @@ void memory_swap(void* ptr1, void* ptr2, size_t size)
  * @returns {void}
  *
  */
-void memory_reverse(void* ptr, size_t size)
+void memory_reverse(void *ptr, size_t size)
 {
 	DEBUG_ME;
 	size_t i = 0;
 	size_t j = size - 1;
 
-	while (i < j) {
+	while (i < j)
+	{
 		memory_swap(ptr + i, ptr + j, 1);
 		i++;
 		j--;
@@ -200,10 +207,10 @@ void memory_reverse(void* ptr, size_t size)
  * @returns {void*}
  *
  */
-void* memory_duplicate(void* ptr, size_t size)
+void *memory_duplicate(void *ptr, size_t size)
 {
 	DEBUG_ME;
-	void* new_ptr = memory_allocate(size);
+	void *new_ptr = memory_allocate(size);
 
 	memory_copy(new_ptr, ptr, size);
 

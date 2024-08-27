@@ -1,4 +1,4 @@
-#define cast(TYPE, VALUE) ((TYPE) VALUE)
+#define cast(TYPE, VALUE) ((TYPE)VALUE)
 
 #define _CRT_NONSTDC_NO_DEPRECATE
 

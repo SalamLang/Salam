@@ -8,32 +8,37 @@
  * @returns {void}
  *
  */
-void hashmap_print_layout_attribute(hashmap_layout_attribute_t* map)
+void hashmap_print_layout_attribute(hashmap_layout_attribute_t *map)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	printf("Hashmap length: %zu\n", map->length);
-	if (map->length == 0) {
+	if (map->length == 0)
+	{
 		printf("Hashmap is empty\n");
 		return;
 	}
 
 	size_t map_capacity = map->capacity;
 
-	for (size_t i = 0; i < map_capacity; i++) {
-		hashmap_entry_t* entry = map->data[i];
+	for (size_t i = 0; i < map_capacity; i++)
+	{
+		hashmap_entry_t *entry = map->data[i];
 
-		while (entry) {
+		while (entry)
+		{
 			printf("[%zu] Key: %s, Value: ", i, entry->key);
-			ast_layout_attribute_t* layout_attribute = entry->value;
+			ast_layout_attribute_t *layout_attribute = entry->value;
 
-			if (layout_attribute != NULL) {
+			if (layout_attribute != NULL)
+			{
 				layout_attribute->print(layout_attribute);
 			}
-			else {
+			else
+			{
 				printf("NULL\n");
 			}
 
-			entry = cast(hashmap_entry_t*, entry->next);
+			entry = cast(hashmap_entry_t *, entry->next);
 		}
 	}
 }
@@ -46,23 +51,28 @@ void hashmap_print_layout_attribute(hashmap_layout_attribute_t* map)
  * @returns {void}
  *
  */
-void hashmap_destroy_layout_attribute(hashmap_layout_attribute_t* map)
+void hashmap_destroy_layout_attribute(hashmap_layout_attribute_t *map)
 {
-    DEBUG_ME;
-	if (map != NULL) {
-		if (map->data != NULL) {
+	DEBUG_ME;
+	if (map != NULL)
+	{
+		if (map->data != NULL)
+		{
 			size_t map_capacity = map->capacity;
 
-			for (size_t i = 0; i < map_capacity; i++) {
-				hashmap_entry_t* entry = map->data[i];
+			for (size_t i = 0; i < map_capacity; i++)
+			{
+				hashmap_entry_t *entry = map->data[i];
 
-				while (entry) {
-					hashmap_entry_t* next = cast(hashmap_entry_t*, entry->next);
+				while (entry)
+				{
+					hashmap_entry_t *next = cast(hashmap_entry_t *, entry->next);
 
 					memory_destroy(entry->key);
 
-					ast_layout_attribute_t* layout_attribute = cast(ast_layout_attribute_t*, entry->value);
-					if (layout_attribute != NULL) {
+					ast_layout_attribute_t *layout_attribute = cast(ast_layout_attribute_t *, entry->value);
+					if (layout_attribute != NULL)
+					{
 						layout_attribute->destroy(layout_attribute);
 					}
 
@@ -87,13 +97,13 @@ void hashmap_destroy_layout_attribute(hashmap_layout_attribute_t* map)
  * @returns {hashmap_layout_attribute_t*}
  *
  */
-hashmap_layout_attribute_t* hashmap_create_layout_attribute(size_t capacity)
+hashmap_layout_attribute_t *hashmap_create_layout_attribute(size_t capacity)
 {
 	DEBUG_ME;
-	hashmap_layout_attribute_t* map = cast(struct hashmap_t*, hashmap_create(capacity));
+	hashmap_layout_attribute_t *map = cast(struct hashmap_t *, hashmap_create(capacity));
 
-	map->print = cast(void (*)(void*), hashmap_print_layout_attribute);
-	map->destroy = cast(void (*)(void*), hashmap_destroy_layout_attribute);
+	map->print = cast(void (*)(void *), hashmap_print_layout_attribute);
+	map->destroy = cast(void (*)(void *), hashmap_destroy_layout_attribute);
 
 	return map;
 }
@@ -106,13 +116,13 @@ hashmap_layout_attribute_t* hashmap_create_layout_attribute(size_t capacity)
  * @returns {hashmap_layout_attribute_state_style_t*}
  *
  */
-hashmap_layout_attribute_state_style_t* hashmap_create_layout_attribute_style_state(size_t capacity)
+hashmap_layout_attribute_state_style_t *hashmap_create_layout_attribute_style_state(size_t capacity)
 {
 	DEBUG_ME;
-	hashmap_layout_attribute_state_style_t* map = hashmap_create(capacity);
+	hashmap_layout_attribute_state_style_t *map = hashmap_create(capacity);
 
-	map->print = cast(void (*)(void*), hashmap_print_layout_attribute_style_state);
-	map->destroy = cast(void (*)(void*), hashmap_destroy_layout_attribute_style_state);
+	map->print = cast(void (*)(void *), hashmap_print_layout_attribute_style_state);
+	map->destroy = cast(void (*)(void *), hashmap_destroy_layout_attribute_style_state);
 
 	return map;
 }
@@ -125,12 +135,13 @@ hashmap_layout_attribute_state_style_t* hashmap_create_layout_attribute_style_st
  * @returns {void}
  *
  */
-void hashmap_print_layout_attribute_style_state(hashmap_layout_attribute_t* map)
+void hashmap_print_layout_attribute_style_state(hashmap_layout_attribute_t *map)
 {
 	DEBUG_ME;
 	printf("Hashmap style states length: %zu\n", map->length);
 
-	if (map->length == 0) {
+	if (map->length == 0)
+	{
 		printf("Hashmap style states is empty\n");
 		return;
 	}
@@ -144,25 +155,31 @@ void hashmap_print_layout_attribute_style_state(hashmap_layout_attribute_t* map)
  * @returns {void}
  *
  */
-void hashmap_destroy_layout_attribute_style_state(hashmap_layout_attribute_t* map)
+void hashmap_destroy_layout_attribute_style_state(hashmap_layout_attribute_t *map)
 {
 	DEBUG_ME;
-	if (map != NULL) {
-		if (map->data != NULL) {
+	if (map != NULL)
+	{
+		if (map->data != NULL)
+		{
 			size_t map_capacity = map->capacity;
 
-			for (size_t i = 0; i < map_capacity; i++) {
-				hashmap_entry_t* entry = map->data[i];
+			for (size_t i = 0; i < map_capacity; i++)
+			{
+				hashmap_entry_t *entry = map->data[i];
 
-				while (entry) {
-					hashmap_entry_t* next = cast(hashmap_entry_t*, entry->next);
+				while (entry)
+				{
+					hashmap_entry_t *next = cast(hashmap_entry_t *, entry->next);
 
-					if (entry->key != NULL) {
+					if (entry->key != NULL)
+					{
 						memory_destroy(entry->key);
 					}
 
-					ast_layout_style_state_t* value = entry->value;
-					if (value != NULL) {
+					ast_layout_style_state_t *value = entry->value;
+					if (value != NULL)
+					{
 						value->destroy(value);
 					}
 
@@ -187,12 +204,13 @@ void hashmap_destroy_layout_attribute_style_state(hashmap_layout_attribute_t* ma
  * @returns {void}
  *
  */
-void hashmap_layout_attribute_print(hashmap_layout_attribute_t* map)
+void hashmap_layout_attribute_print(hashmap_layout_attribute_t *map)
 {
 	DEBUG_ME;
 	printf("Hashmap layout attributes length: %zu\n", map->length);
 
-	if (map->length == 0) {
+	if (map->length == 0)
+	{
 		printf("Hashmap layout attributes is empty\n");
 		return;
 	}
@@ -206,25 +224,31 @@ void hashmap_layout_attribute_print(hashmap_layout_attribute_t* map)
  * @returns {void}
  *
  */
-void hashmap_layout_attribute_destroy(hashmap_layout_attribute_t* map)
+void hashmap_layout_attribute_destroy(hashmap_layout_attribute_t *map)
 {
 	DEBUG_ME;
-	if (map != NULL) {
-		if (map->data != NULL) {
+	if (map != NULL)
+	{
+		if (map->data != NULL)
+		{
 			size_t map_capacity = map->capacity;
 
-			for (size_t i = 0; i < map_capacity; i++) {
-				hashmap_entry_t* entry = map->data[i];
+			for (size_t i = 0; i < map_capacity; i++)
+			{
+				hashmap_entry_t *entry = map->data[i];
 
-				while (entry) {
-					hashmap_entry_t* next = cast(hashmap_entry_t*, entry->next);
+				while (entry)
+				{
+					hashmap_entry_t *next = cast(hashmap_entry_t *, entry->next);
 
-					if (entry->key != NULL) {
+					if (entry->key != NULL)
+					{
 						memory_destroy(entry->key);
 					}
 
-					hashmap_layout_attribute_t* value = entry->value;
-					if (value != NULL) {
+					hashmap_layout_attribute_t *value = entry->value;
+					if (value != NULL)
+					{
 						value->destroy(value);
 					}
 
@@ -249,22 +273,28 @@ void hashmap_layout_attribute_destroy(hashmap_layout_attribute_t* map)
  * @returns {bool}
  *
  */
-bool hashmap_has_any_sub_value_layout_attribute_style_state(hashmap_layout_attribute_t* map)
+bool hashmap_has_any_sub_value_layout_attribute_style_state(hashmap_layout_attribute_t *map)
 {
 	DEBUG_ME;
-	if (map != NULL) {
-		if (map->data != NULL) {
+	if (map != NULL)
+	{
+		if (map->data != NULL)
+		{
 			size_t map_capacity = map->capacity;
 
-			for (size_t i = 0; i < map_capacity; i++) {
-				hashmap_entry_t* entry = map->data[i];
+			for (size_t i = 0; i < map_capacity; i++)
+			{
+				hashmap_entry_t *entry = map->data[i];
 
-				while (entry) {
-					hashmap_entry_t* next = cast(hashmap_entry_t*, entry->next);
+				while (entry)
+				{
+					hashmap_entry_t *next = cast(hashmap_entry_t *, entry->next);
 
-					ast_layout_style_state_t* value = entry->value;
-					if (value != NULL) {
-						if (ast_layout_style_state_has_any_sub_value(value)) {
+					ast_layout_style_state_t *value = entry->value;
+					if (value != NULL)
+					{
+						if (ast_layout_style_state_has_any_sub_value(value))
+						{
 							return true;
 						}
 					}
@@ -286,22 +316,28 @@ bool hashmap_has_any_sub_value_layout_attribute_style_state(hashmap_layout_attri
  * @returns {bool}
  *
  */
-bool hashmap_layout_attribute_has_any_sub_value(hashmap_layout_attribute_t* map)
+bool hashmap_layout_attribute_has_any_sub_value(hashmap_layout_attribute_t *map)
 {
 	DEBUG_ME;
-	if (map != NULL) {
-		if (map->data != NULL) {
+	if (map != NULL)
+	{
+		if (map->data != NULL)
+		{
 			size_t map_capacity = map->capacity;
 
-			for (size_t i = 0; i < map_capacity; i++) {
-				hashmap_entry_t* entry = map->data[i];
+			for (size_t i = 0; i < map_capacity; i++)
+			{
+				hashmap_entry_t *entry = map->data[i];
 
-				while (entry) {
-					hashmap_entry_t* next = cast(hashmap_entry_t*, entry->next);
+				while (entry)
+				{
+					hashmap_entry_t *next = cast(hashmap_entry_t *, entry->next);
 
-					ast_layout_attribute_t* value = entry->value;
-					if (value != NULL) {
-						if (ast_layout_attribute_has_any_sub_value(value)) {
+					ast_layout_attribute_t *value = entry->value;
+					if (value != NULL)
+					{
+						if (ast_layout_attribute_has_any_sub_value(value))
+						{
 							return true;
 						}
 					}

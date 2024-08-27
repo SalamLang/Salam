@@ -15,7 +15,7 @@
  * @returns {void*}
  *
  */
-void* memory_allocate(size_t size);
+void *memory_allocate(size_t size);
 
 /**
  *
@@ -26,7 +26,7 @@ void* memory_allocate(size_t size);
  * @returns {void*}
  *
  */
-void* memory_callocate(size_t count, size_t size);
+void *memory_callocate(size_t count, size_t size);
 
 /**
  *
@@ -36,7 +36,7 @@ void* memory_callocate(size_t count, size_t size);
  * @returns {void}
  *
  */
-void memory_destroy(void* ptr);
+void memory_destroy(void *ptr);
 
 /**
  *
@@ -47,7 +47,7 @@ void memory_destroy(void* ptr);
  * @returns {void*}
  *
  */
-void* memory_reallocate(void* ptr, size_t size);
+void *memory_reallocate(void *ptr, size_t size);
 
 /**
  *
@@ -58,7 +58,7 @@ void* memory_reallocate(void* ptr, size_t size);
  * @returns {void}
  *
  */
-void memory_zero(void* ptr, size_t size);
+void memory_zero(void *ptr, size_t size);
 
 /**
  *
@@ -70,7 +70,7 @@ void memory_zero(void* ptr, size_t size);
  * @returns {void}
  *
  */
-void memory_copy(void* dest, const void* src, size_t size);
+void memory_copy(void *dest, const void *src, size_t size);
 
 /**
  *
@@ -82,7 +82,7 @@ void memory_copy(void* dest, const void* src, size_t size);
  * @returns {int}
  *
  */
-int memory_compare(void* ptr1, void* ptr2, size_t size);
+int memory_compare(void *ptr1, void *ptr2, size_t size);
 
 /**
  *
@@ -94,7 +94,7 @@ int memory_compare(void* ptr1, void* ptr2, size_t size);
  * @returns {void}
  *
  */
-void memory_set(void* ptr, int value, size_t size);
+void memory_set(void *ptr, int value, size_t size);
 
 /**
  *
@@ -106,7 +106,7 @@ void memory_set(void* ptr, int value, size_t size);
  * @returns {void}
  *
  */
-void memory_swap(void* ptr1, void* ptr2, size_t size);
+void memory_swap(void *ptr1, void *ptr2, size_t size);
 
 /**
  *
@@ -117,7 +117,7 @@ void memory_swap(void* ptr1, void* ptr2, size_t size);
  * @returns {void}
  *
  */
-void memory_reverse(void* ptr, size_t size);
+void memory_reverse(void *ptr, size_t size);
 
 /**
  *
@@ -128,6 +128,6 @@ void memory_reverse(void* ptr, size_t size);
  * @returns {void*}
  *
  */
-void* memory_duplicate(void* ptr, size_t size);
+void *memory_duplicate(void *ptr, size_t size);
 
 #endif

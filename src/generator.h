@@ -11,18 +11,19 @@
 #include "validator.h"
 #include "generator_identifier.h"
 
-typedef struct generator_t {
-	ast_t* ast;
+typedef struct generator_t
+{
+	ast_t *ast;
 
-	string_t* html;
-	string_t* css;
-	string_t* media_css;
-	string_t* js;
+	string_t *html;
+	string_t *css;
+	string_t *media_css;
+	string_t *js;
 
 	bool inlineCSS;
 	bool inlineJS;
 
-	generator_identifier_t* identifier;
+	generator_identifier_t *identifier;
 } generator_t;
 
 /**
@@ -33,7 +34,7 @@ typedef struct generator_t {
  * @returns {generator_t*}
  *
  */
-generator_t* generator_create(ast_t* ast);
+generator_t *generator_create(ast_t *ast);
 
 /**
  *
@@ -43,7 +44,7 @@ generator_t* generator_create(ast_t* ast);
  * @returns {void}
  *
  */
-void generator_destroy(generator_t* generator);
+void generator_destroy(generator_t *generator);
 
 /**
  *
@@ -53,7 +54,7 @@ void generator_destroy(generator_t* generator);
  * @returns {void}
  *
  */
-void generator_debug(generator_t* generator);
+void generator_debug(generator_t *generator);
 
 /**
  *
@@ -63,7 +64,7 @@ void generator_debug(generator_t* generator);
  * @returns {void}
  *
  */
-void generator_save(generator_t* generator, const char* html_output, const char* css_output, const char* js_output);
+void generator_save(generator_t *generator, const char *html_output, const char *css_output, const char *js_output);
 
 /**
  *
@@ -73,7 +74,7 @@ void generator_save(generator_t* generator, const char* html_output, const char*
  * @returns {void}
  *
  */
-void generator_code_functions(generator_t* generator);
+void generator_code_functions(generator_t *generator);
 
 /**
  *
@@ -84,7 +85,7 @@ void generator_code_functions(generator_t* generator);
  * @returns {string_t*} code - Code
  *
  */
-string_t* generator_code_function(generator_t* generator, ast_function_t* function);
+string_t *generator_code_function(generator_t *generator, ast_function_t *function);
 
 /**
  *
@@ -95,7 +96,7 @@ string_t* generator_code_function(generator_t* generator, ast_function_t* functi
  * @returns {string_t*} code - Code
  *
  */
-string_t* generator_code_block(generator_t* generator, ast_block_t* block);
+string_t *generator_code_block(generator_t *generator, ast_block_t *block);
 
 /**
  *
@@ -106,7 +107,7 @@ string_t* generator_code_block(generator_t* generator, ast_block_t* block);
  * @returns {string_t*} code - Code
  *
  */
-string_t* generator_code_node(generator_t* generator, ast_node_t* node);
+string_t *generator_code_node(generator_t *generator, ast_node_t *node);
 
 /**
  *
@@ -117,7 +118,7 @@ string_t* generator_code_node(generator_t* generator, ast_node_t* node);
  * @returns {string_t*} code - Code
  *
  */
-string_t* generator_code_if(generator_t* generator, ast_if_t* ifclause);
+string_t *generator_code_if(generator_t *generator, ast_if_t *ifclause);
 
 /**
  *
@@ -128,7 +129,7 @@ string_t* generator_code_if(generator_t* generator, ast_if_t* ifclause);
  * @returns {string_t*} code - Code
  *
  */
-string_t* generator_code_value(generator_t* generator, ast_value_t* value);
+string_t *generator_code_value(generator_t *generator, ast_value_t *value);
 
 /**
  *
@@ -139,7 +140,7 @@ string_t* generator_code_value(generator_t* generator, ast_value_t* value);
  * @returns {string_t*} code - Code
  *
  */
-string_t* generator_code_type(generator_t* generator, ast_value_type_t* type);
+string_t *generator_code_type(generator_t *generator, ast_value_type_t *type);
 
 /**
  *
@@ -150,7 +151,7 @@ string_t* generator_code_type(generator_t* generator, ast_value_type_t* type);
  * @returns {string_t*} code - Code
  *
  */
-string_t* generator_code_return(generator_t* generator, ast_return_t* returns);
+string_t *generator_code_return(generator_t *generator, ast_return_t *returns);
 
 /**
  *
@@ -161,7 +162,7 @@ string_t* generator_code_return(generator_t* generator, ast_return_t* returns);
  * @returns {string_t*} code - Code
  *
  */
-string_t* generator_code_values(generator_t* generator, array_t* values);
+string_t *generator_code_values(generator_t *generator, array_t *values);
 
 /**
  *
@@ -172,7 +173,7 @@ string_t* generator_code_values(generator_t* generator, array_t* values);
  * @returns {string_t*} code - Code
  *
  */
-string_t* generator_code_print(generator_t* generator, ast_print_t* print);
+string_t *generator_code_print(generator_t *generator, ast_print_t *print);
 
 /**
  *
@@ -182,7 +183,7 @@ string_t* generator_code_print(generator_t* generator, ast_print_t* print);
  * @returns {char*} name - Name
  *
  */
-char* generator_code_layout_node_type(ast_layout_node_type_t type);
+char *generator_code_layout_node_type(ast_layout_node_type_t type);
 
 /**
  *
@@ -194,7 +195,7 @@ char* generator_code_layout_node_type(ast_layout_node_type_t type);
  * @returns {string_t*}
  *
  */
-string_t* generator_code_layout_style(hashmap_layout_attribute_t* styles, ast_layout_block_t* block, size_t* css_attributes_length);
+string_t *generator_code_layout_style(hashmap_layout_attribute_t *styles, ast_layout_block_t *block, size_t *css_attributes_length);
 
 #include "generator_layout.h"
 
@@ -206,6 +207,6 @@ string_t* generator_code_layout_style(hashmap_layout_attribute_t* styles, ast_la
  * @returns {void}
  *
  */
-void generator_code(generator_t* generator);
+void generator_code(generator_t *generator);
 
 #endif

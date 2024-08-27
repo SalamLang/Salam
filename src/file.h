@@ -23,7 +23,7 @@
  * @returns {char*} - Content of file
  *
  */
-char* file_reads(const char* path, size_t* size);
+char *file_reads(const char *path, size_t *size);
 
 /**
  *
@@ -34,7 +34,7 @@ char* file_reads(const char* path, size_t* size);
  * @returns {bool}
  *
  */
-bool file_writes(const char* path, const char* content);
+bool file_writes(const char *path, const char *content);
 
 /**
  *
@@ -45,7 +45,7 @@ bool file_writes(const char* path, const char* content);
  * @returns {bool}
  *
  */
-bool file_appends(const char* path, const char* content);
+bool file_appends(const char *path, const char *content);
 
 /**
  *
@@ -55,7 +55,7 @@ bool file_appends(const char* path, const char* content);
  * @returns {bool}
  *
  */
-bool file_exists(const char* path);
+bool file_exists(const char *path);
 
 /**
  *
@@ -65,7 +65,7 @@ bool file_exists(const char* path);
  * @returns {bool}
  *
  */
-bool file_remove(const char* path);
+bool file_remove(const char *path);
 
 /**
  *
@@ -76,7 +76,7 @@ bool file_remove(const char* path);
  * @returns {bool}
  *
  */
-bool file_copy(const char* source, const char* destination);
+bool file_copy(const char *source, const char *destination);
 
 /**
  *
@@ -87,7 +87,7 @@ bool file_copy(const char* source, const char* destination);
  * @returns {bool}
  *
  */
-bool file_move(const char* source, const char* destination);
+bool file_move(const char *source, const char *destination);
 
 /**
  *
@@ -97,7 +97,7 @@ bool file_move(const char* source, const char* destination);
  * @returns {char*} - Name of file
  *
  */
-char* file_get_name(const char* path);
+char *file_get_name(const char *path);
 
 /**
  *
@@ -107,7 +107,7 @@ char* file_get_name(const char* path);
  * @returns {char*} - Extension of file
  *
  */
-char* file_get_extension(const char* path);
+char *file_get_extension(const char *path);
 
 /**
  *
@@ -117,7 +117,7 @@ char* file_get_extension(const char* path);
  * @returns {char*} - Directory of file
  *
  */
-char* file_get_directory(const char* path);
+char *file_get_directory(const char *path);
 
 /**
  *
@@ -127,7 +127,7 @@ char* file_get_directory(const char* path);
  * @returns {char*} - The resolved absolute path, or NULL if an error occurred.
  *
  */
-char* file_get_absolute(const char* path);
+char *file_get_absolute(const char *path);
 
 /**
  *
@@ -137,7 +137,7 @@ char* file_get_absolute(const char* path);
  * @returns {long} - Size of file
  *
  */
-long file_get_capacity(const char* path);
+long file_get_capacity(const char *path);
 
 /**
  *
@@ -147,7 +147,7 @@ long file_get_capacity(const char* path);
  * @returns {time_t} - Last modified time of file
  *
  */
-time_t file_get_modified(const char* path);
+time_t file_get_modified(const char *path);
 
 /**
  *
@@ -157,7 +157,7 @@ time_t file_get_modified(const char* path);
  * @returns {bool}
  *
  */
-bool directory_exists(const char* path);
+bool directory_exists(const char *path);
 
 /**
  *
@@ -168,7 +168,7 @@ bool directory_exists(const char* path);
  * @returns {bool}
  *
  */
-bool file_appends_wchar(const char* path, const wchar_t wc);
+bool file_appends_wchar(const char *path, const wchar_t wc);
 
 /**
  *
@@ -179,6 +179,6 @@ bool file_appends_wchar(const char* path, const wchar_t wc);
  * @returns {char*} - Content of file
  *
  */
-char* file_reads_binary(const char* path, size_t* size);
+char *file_reads_binary(const char *path, size_t *size);
 
 #endif

@@ -8,10 +8,10 @@
  * @returns {string_t*}
  *
  */
-string_t* string_create(size_t initial_capacity)
+string_t *string_create(size_t initial_capacity)
 {
 	DEBUG_ME;
-	string_t* str = memory_allocate(sizeof(string_t));
+	string_t *str = memory_allocate(sizeof(string_t));
 
 	str->capacity = initial_capacity;
 	str->length = 0;
@@ -19,8 +19,8 @@ string_t* string_create(size_t initial_capacity)
 	str->data = memory_allocate(initial_capacity * sizeof(char));
 	str->data[0] = '\0';
 
-	str->print = cast(void (*)(void*), string_print);
-	str->destroy = cast(void (*)(void*), string_destroy);
+	str->print = cast(void (*)(void *), string_print);
+	str->destroy = cast(void (*)(void *), string_destroy);
 
 	return str;
 }
@@ -34,10 +34,11 @@ string_t* string_create(size_t initial_capacity)
  * @returns {void}
  *
  */
-void string_append_char_begin(string_t* str, char c)
+void string_append_char_begin(string_t *str, char c)
 {
 	DEBUG_ME;
-	if (str->length + 1 >= str->capacity) {
+	if (str->length + 1 >= str->capacity)
+	{
 		str->capacity *= 2;
 		str->data = memory_reallocate(str->data, str->capacity * sizeof(char));
 	}
@@ -57,12 +58,13 @@ void string_append_char_begin(string_t* str, char c)
  * @returns {void}
  *
  */
-void string_append_str_begin(string_t* str, const char* prefix)
+void string_append_str_begin(string_t *str, const char *prefix)
 {
 	DEBUG_ME;
 	size_t prefix_len = strlen(prefix);
 
-	while (str->length + prefix_len >= str->capacity) {
+	while (str->length + prefix_len >= str->capacity)
+	{
 		str->capacity *= 2;
 		str->data = memory_reallocate(str->data, str->capacity * sizeof(char));
 	}
@@ -82,10 +84,11 @@ void string_append_str_begin(string_t* str, const char* prefix)
  * @returns {void}
  *
  */
-void string_append_char(string_t* str, char c)
+void string_append_char(string_t *str, char c)
 {
 	DEBUG_ME;
-	if (str->length + 1 >= str->capacity) {
+	if (str->length + 1 >= str->capacity)
+	{
 		str->capacity *= 2;
 		str->data = memory_reallocate(str->data, str->capacity * sizeof(char));
 	}
@@ -104,13 +107,14 @@ void string_append_char(string_t* str, char c)
  * @returns {void}
  *
  */
-void string_append_wchar(string_t* str, wchar_t c)
+void string_append_wchar(string_t *str, wchar_t c)
 {
 	DEBUG_ME;
 	char buffer[30];
 	int len = wctomb(buffer, c);
 
-	if (len <= 0) {
+	if (len <= 0)
+	{
 		error(2, "Failed to convert wide character to multibyte character");
 		return;
 	}
@@ -128,15 +132,17 @@ void string_append_wchar(string_t* str, wchar_t c)
  * @returns {void}
  *
  */
-void string_append_str(string_t* str, const char* suffix)
+void string_append_str(string_t *str, const char *suffix)
 {
 	DEBUG_ME;
 	size_t suffix_len = strlen(suffix);
-	if (suffix_len == 0) {
+	if (suffix_len == 0)
+	{
 		return;
 	}
 
-	while (str->length + suffix_len >= str->capacity) {
+	while (str->length + suffix_len >= str->capacity)
+	{
 		str->capacity *= 2;
 		str->data = memory_reallocate(str->data, str->capacity * sizeof(char));
 	}
@@ -154,11 +160,13 @@ void string_append_str(string_t* str, const char* suffix)
  * @returns {void}
  *
  */
-void string_destroy(string_t* str)
+void string_destroy(string_t *str)
 {
 	DEBUG_ME;
-	if (str != NULL) {
-		if (str->data != NULL) {
+	if (str != NULL)
+	{
+		if (str->data != NULL)
+		{
 			memory_destroy(str->data);
 		}
 
@@ -177,13 +185,14 @@ void string_destroy(string_t* str)
  * @returns {char*}
  *
  */
-char* string_destroy_and_get(string_t* str)
+char *string_destroy_and_get(string_t *str)
 {
 	DEBUG_ME;
-	char* res = strdup(str->data);
+	char *res = strdup(str->data);
 	string_destroy(str);
 
-	if (res == NULL) {
+	if (res == NULL)
+	{
 		error(2, "Failed to allocate memory for string data");
 
 		return NULL;
@@ -200,13 +209,15 @@ char* string_destroy_and_get(string_t* str)
  * @returns {void}
  *
  */
-void string_print(string_t* str)
+void string_print(string_t *str)
 {
 	DEBUG_ME;
-	if (str == NULL || str->data == NULL) {
+	if (str == NULL || str->data == NULL)
+	{
 		printf("NULL\n");
 	}
-	else {
+	else
+	{
 		printf("%s\n", str->data);
 	}
 }
@@ -220,10 +231,11 @@ void string_print(string_t* str)
  * @returns {void}
  *
  */
-void string_append(string_t* str, const string_t* value)
+void string_append(string_t *str, const string_t *value)
 {
 	DEBUG_ME;
-	if (value->length == 0) {
+	if (value->length == 0)
+	{
 		return;
 	}
 
@@ -239,7 +251,7 @@ void string_append(string_t* str, const string_t* value)
  * @returns {void}
  *
  */
-void string_set(string_t* str, string_t* value)
+void string_set(string_t *str, string_t *value)
 {
 	DEBUG_ME;
 	return string_append_str(str, value->data);
@@ -254,7 +266,7 @@ void string_set(string_t* str, string_t* value)
  * @returns {void}
  *
  */
-void string_set_str(string_t* str, const char* value)
+void string_set_str(string_t *str, const char *value)
 {
 	DEBUG_ME;
 	return string_append_str(str, value);
@@ -268,12 +280,13 @@ void string_set_str(string_t* str, const char* value)
  * @returns {char*} - Lowercase string
  *
  */
-char* string_lower_str(const char* str)
+char *string_lower_str(const char *str)
 {
 	DEBUG_ME;
-	char* buffer = strdup(str);
+	char *buffer = strdup(str);
 
-	for (size_t i = 0; i < strlen(buffer); i++) {
+	for (size_t i = 0; i < strlen(buffer); i++)
+	{
 		buffer[i] = tolower(buffer[i]);
 	}
 
@@ -288,12 +301,13 @@ char* string_lower_str(const char* str)
  * @returns {char*} - Uppercase string
  *
  */
-char* string_upper_str(const char* str)
+char *string_upper_str(const char *str)
 {
 	DEBUG_ME;
-	char* buffer = strdup(str);
+	char *buffer = strdup(str);
 
-	for (size_t i = 0; i < strlen(buffer); i++) {
+	for (size_t i = 0; i < strlen(buffer); i++)
+	{
 		buffer[i] = tolower(buffer[i]);
 	}
 
@@ -310,10 +324,11 @@ char* string_upper_str(const char* str)
  * @returns {char*} - New string
  *
  */
-char* replace_all_substrings(const char* str, const char* old_substr, const char* new_substr)
+char *replace_all_substrings(const char *str, const char *old_substr, const char *new_substr)
 {
 	DEBUG_ME;
-	if (str == NULL || old_substr == NULL || new_substr == NULL) {
+	if (str == NULL || old_substr == NULL || new_substr == NULL)
+	{
 		return NULL;
 	}
 
@@ -321,8 +336,9 @@ char* replace_all_substrings(const char* str, const char* old_substr, const char
 	size_t old_len = strlen(old_substr);
 	size_t new_len = strlen(new_substr);
 
-	if (old_len == 0) {
-		char* result = memory_allocate(str_len + 1);
+	if (old_len == 0)
+	{
+		char *result = memory_allocate(str_len + 1);
 
 		strcpy(result, str);
 
@@ -330,19 +346,21 @@ char* replace_all_substrings(const char* str, const char* old_substr, const char
 	}
 
 	size_t max_result_len = str_len;
-	const char* tmp = str;
-	while ((tmp = strstr(tmp, old_substr)) != NULL) {
+	const char *tmp = str;
+	while ((tmp = strstr(tmp, old_substr)) != NULL)
+	{
 		max_result_len += (new_len - old_len);
 		tmp += old_len;
 	}
 
-	char* result = memory_allocate(max_result_len + 1);
+	char *result = memory_allocate(max_result_len + 1);
 
-	char* result_ptr = result;
-	const char* search_start = str;
-	const char* pos;
+	char *result_ptr = result;
+	const char *search_start = str;
+	const char *pos;
 
-	while ((pos = strstr(search_start, old_substr)) != NULL) {
+	while ((pos = strstr(search_start, old_substr)) != NULL)
+	{
 		size_t bytes_to_copy = pos - search_start;
 
 		strncpy(result_ptr, search_start, bytes_to_copy);
@@ -368,14 +386,16 @@ char* replace_all_substrings(const char* str, const char* old_substr, const char
  * @returns {bool}
  *
  */
-bool string_is(string_t* str1, const char* str2)
+bool string_is(string_t *str1, const char *str2)
 {
 	DEBUG_ME;
-	if (str1 == NULL || str2 == NULL) {
+	if (str1 == NULL || str2 == NULL)
+	{
 		return false;
 	}
 
-	if (str1->length != strlen(str2)) {
+	if (str1->length != strlen(str2))
+	{
 		return false;
 	}
 
@@ -391,13 +411,15 @@ bool string_is(string_t* str1, const char* str2)
  * @returns {bool}
  *
  */
-bool string_equals(string_t* str1, string_t* str2)
+bool string_equals(string_t *str1, string_t *str2)
 {
 	DEBUG_ME;
-	if (str1 == NULL || str2 == NULL) {
+	if (str1 == NULL || str2 == NULL)
+	{
 		return false;
 	}
-	else if (str1->length != str2->length) {
+	else if (str1->length != str2->length)
+	{
 		return false;
 	}
 
@@ -413,13 +435,15 @@ bool string_equals(string_t* str1, string_t* str2)
  * @returns {bool}
  *
  */
-bool string_compare(string_t* str1, string_t* str2)
+bool string_compare(string_t *str1, string_t *str2)
 {
 	DEBUG_ME;
-	if (str1 == NULL || str2 == NULL) {
+	if (str1 == NULL || str2 == NULL)
+	{
 		return false;
 	}
-	else if (str1->length != str2->length) {
+	else if (str1->length != str2->length)
+	{
 		return false;
 	}
 
@@ -447,40 +471,49 @@ bool is_utf8_continuation_byte(char c)
  * @returns {bool} True if the string is a valid UTF-8 sequence, false otherwise
  *
  */
-bool is_valid_utf8(const char* str)
+bool is_valid_utf8(const char *str)
 {
-	const unsigned char* bytes = (const unsigned char *)str;
+	const unsigned char *bytes = (const unsigned char *)str;
 
-	while (*bytes) {
-		if (*bytes <= 0x7F) {
+	while (*bytes)
+	{
+		if (*bytes <= 0x7F)
+		{
 			// ASCII byte
 			bytes += 1;
 		}
-		else if ((*bytes & 0xE0) == 0xC0) {
+		else if ((*bytes & 0xE0) == 0xC0)
+		{
 			// 2-byte sequence
-			if ((bytes[1] & 0xC0) != 0x80) {
+			if ((bytes[1] & 0xC0) != 0x80)
+			{
 				return false;
 			}
 
 			bytes += 2;
 		}
-		else if ((*bytes & 0xF0) == 0xE0) {
+		else if ((*bytes & 0xF0) == 0xE0)
+		{
 			// 3-byte sequence
-			if ((bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80) {
+			if ((bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80)
+			{
 				return false;
 			}
 
 			bytes += 3;
 		}
-		else if ((*bytes & 0xF8) == 0xF0) {
+		else if ((*bytes & 0xF8) == 0xF0)
+		{
 			// 4-byte sequence
-			if ((bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80 || (bytes[3] & 0xC0) != 0x80) {
+			if ((bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80 || (bytes[3] & 0xC0) != 0x80)
+			{
 				return false;
 			}
 
 			bytes += 4;
 		}
-		else {
+		else
+		{
 			return false;
 		}
 	}
@@ -496,13 +529,14 @@ bool is_valid_utf8(const char* str)
  * @returns {bool} True if the character is alphabetic, false otherwise
  *
  */
-bool is_schar_alpha(const char* c)
+bool is_schar_alpha(const char *c)
 {
 	DEBUG_ME;
 	wchar_t wc;
 	int len = mbtowc(&wc, c, MB_CUR_MAX);
 
-	if (len <= 0) {
+	if (len <= 0)
+	{
 		return false;
 	}
 
@@ -593,18 +627,19 @@ bool is_wchar_digit(uint32_t codepoint)
 }
 
 /**
- * 
+ *
  * @function is_utf8_alpha
  * @brief Check if a UTF-8 string is an alphabet
  * @params {char*} utf8 - UTF-8 string
  * @returns {bool} True if the string is an alphabet, false otherwise
- * 
+ *
  */
-bool is_utf8_alpha(char* utf8)
+bool is_utf8_alpha(char *utf8)
 {
 	wchar_t wc;
 	int wcl = mbtowc(&wc, utf8, MB_CUR_MAX);
-	if (wcl <= 0) {
+	if (wcl <= 0)
+	{
 		return false;
 	}
 
@@ -612,58 +647,61 @@ bool is_utf8_alpha(char* utf8)
 }
 
 /**
- * 
+ *
  * @function is_english_digit
  * @brief Check if a UTF-8 string is an Persian/Arabic/English digit
  * @params {char*} utf8 - UTF-8 string
  * @returns {bool} True if the string is a Persian/Arabic/English digit, false otherwise
- * 
+ *
  */
-bool is_utf8_digit(char* utf8)
+bool is_utf8_digit(char *utf8)
 {
 	// Persian digits
 	if (
-		strcmp(utf8, "۰") == 0 ||  // Persian 0
-		strcmp(utf8, "۱") == 0 ||  // Persian 1
-		strcmp(utf8, "۲") == 0 ||  // Persian 2
-		strcmp(utf8, "۳") == 0 ||  // Persian 3
-		strcmp(utf8, "۴") == 0 ||  // Persian 4
-		strcmp(utf8, "۵") == 0 ||  // Persian 5
-		strcmp(utf8, "۶") == 0 ||  // Persian 6
-		strcmp(utf8, "۷") == 0 ||  // Persian 7
-		strcmp(utf8, "۸") == 0 ||  // Persian 8
-		strcmp(utf8, "۹") == 0     // Persian 9
-	) {
+		strcmp(utf8, "۰") == 0 || // Persian 0
+		strcmp(utf8, "۱") == 0 || // Persian 1
+		strcmp(utf8, "۲") == 0 || // Persian 2
+		strcmp(utf8, "۳") == 0 || // Persian 3
+		strcmp(utf8, "۴") == 0 || // Persian 4
+		strcmp(utf8, "۵") == 0 || // Persian 5
+		strcmp(utf8, "۶") == 0 || // Persian 6
+		strcmp(utf8, "۷") == 0 || // Persian 7
+		strcmp(utf8, "۸") == 0 || // Persian 8
+		strcmp(utf8, "۹") == 0	  // Persian 9
+	)
+	{
 		return true;
 	}
 	// Arabic digits
 	else if (
-		strcmp(utf8, "٠") == 0 ||  // Arabic 0
-		strcmp(utf8, "١") == 0 ||  // Arabic 1
-		strcmp(utf8, "٢") == 0 ||  // Arabic 2
-		strcmp(utf8, "٣") == 0 ||  // Arabic 3
-		strcmp(utf8, "٤") == 0 ||  // Arabic 4
-		strcmp(utf8, "٥") == 0 ||  // Arabic 5
-		strcmp(utf8, "٦") == 0 ||  // Arabic 6
-		strcmp(utf8, "٧") == 0 ||  // Arabic 7
-		strcmp(utf8, "٨") == 0 ||  // Arabic 8
-		strcmp(utf8, "٩") == 0     // Arabic 9
-	) {
+		strcmp(utf8, "٠") == 0 || // Arabic 0
+		strcmp(utf8, "١") == 0 || // Arabic 1
+		strcmp(utf8, "٢") == 0 || // Arabic 2
+		strcmp(utf8, "٣") == 0 || // Arabic 3
+		strcmp(utf8, "٤") == 0 || // Arabic 4
+		strcmp(utf8, "٥") == 0 || // Arabic 5
+		strcmp(utf8, "٦") == 0 || // Arabic 6
+		strcmp(utf8, "٧") == 0 || // Arabic 7
+		strcmp(utf8, "٨") == 0 || // Arabic 8
+		strcmp(utf8, "٩") == 0	  // Arabic 9
+	)
+	{
 		return true;
 	}
 	// English digits
 	else if (
-		strcmp(utf8, "0") == 0 ||  // English 0
-		strcmp(utf8, "1") == 0 ||  // English 1
-		strcmp(utf8, "2") == 0 ||  // English 2
-		strcmp(utf8, "3") == 0 ||  // English 3
-		strcmp(utf8, "4") == 0 ||  // English 4
-		strcmp(utf8, "5") == 0 ||  // English 5
-		strcmp(utf8, "6") == 0 ||  // English 6
-		strcmp(utf8, "7") == 0 ||  // English 7
-		strcmp(utf8, "8") == 0 ||  // English 8
-		strcmp(utf8, "9") == 0     // English 9
-	) {
+		strcmp(utf8, "0") == 0 || // English 0
+		strcmp(utf8, "1") == 0 || // English 1
+		strcmp(utf8, "2") == 0 || // English 2
+		strcmp(utf8, "3") == 0 || // English 3
+		strcmp(utf8, "4") == 0 || // English 4
+		strcmp(utf8, "5") == 0 || // English 5
+		strcmp(utf8, "6") == 0 || // English 6
+		strcmp(utf8, "7") == 0 || // English 7
+		strcmp(utf8, "8") == 0 || // English 8
+		strcmp(utf8, "9") == 0	  // English 9
+	)
+	{
 		return true;
 	}
 
@@ -681,13 +719,16 @@ bool is_utf8_digit(char* utf8)
 char convert_to_english_digit(wchar_t ch)
 {
 	DEBUG_ME;
-	if (is_english_digit(ch)) {
+	if (is_english_digit(ch))
+	{
 		return (char)ch;
 	}
-	else if (is_persian_digit(ch)) {
+	else if (is_persian_digit(ch))
+	{
 		return '0' + (ch - 0x06F0);
 	}
-	else if (is_arabic_digit(ch)) {
+	else if (is_arabic_digit(ch))
+	{
 		return '0' + (ch - 0x0660);
 	}
 
@@ -695,43 +736,53 @@ char convert_to_english_digit(wchar_t ch)
 }
 
 /**
- * 
+ *
  * @function convert_utf8_to_english_digit
  * @brief Convert a UTF-8 string to an English digit
  * @params {char*} uc - UTF-8 string
  * @returns {char} English digit
- * 
+ *
  */
-char convert_utf8_to_english_digit(char* uc)
+char convert_utf8_to_english_digit(char *uc)
 {
-	if (strcmp(uc, "۰") == 0 || strcmp(uc, "٠") == 0 || strcmp(uc, "0") == 0) {
+	if (strcmp(uc, "۰") == 0 || strcmp(uc, "٠") == 0 || strcmp(uc, "0") == 0)
+	{
 		return '0';
 	}
-	else if (strcmp(uc, "۱") == 0 || strcmp(uc, "١") == 0 || strcmp(uc, "1") == 0) {
+	else if (strcmp(uc, "۱") == 0 || strcmp(uc, "١") == 0 || strcmp(uc, "1") == 0)
+	{
 		return '1';
 	}
-	else if (strcmp(uc, "۲") == 0 || strcmp(uc, "٢") == 0 || strcmp(uc, "2") == 0) {
+	else if (strcmp(uc, "۲") == 0 || strcmp(uc, "٢") == 0 || strcmp(uc, "2") == 0)
+	{
 		return '2';
 	}
-	else if (strcmp(uc, "۳") == 0 || strcmp(uc, "٣") == 0 || strcmp(uc, "3") == 0) {
+	else if (strcmp(uc, "۳") == 0 || strcmp(uc, "٣") == 0 || strcmp(uc, "3") == 0)
+	{
 		return '3';
 	}
-	else if (strcmp(uc, "۴") == 0 || strcmp(uc, "٤") == 0 || strcmp(uc, "4") == 0) {
+	else if (strcmp(uc, "۴") == 0 || strcmp(uc, "٤") == 0 || strcmp(uc, "4") == 0)
+	{
 		return '4';
 	}
-	else if (strcmp(uc, "۵") == 0 || strcmp(uc, "٥") == 0 || strcmp(uc, "5") == 0) {
+	else if (strcmp(uc, "۵") == 0 || strcmp(uc, "٥") == 0 || strcmp(uc, "5") == 0)
+	{
 		return '5';
 	}
-	else if (strcmp(uc, "۶") == 0 || strcmp(uc, "٦") == 0 || strcmp(uc, "6") == 0) {
+	else if (strcmp(uc, "۶") == 0 || strcmp(uc, "٦") == 0 || strcmp(uc, "6") == 0)
+	{
 		return '6';
 	}
-	else if (strcmp(uc, "۷") == 0 || strcmp(uc, "٧") == 0 || strcmp(uc, "7") == 0) {
+	else if (strcmp(uc, "۷") == 0 || strcmp(uc, "٧") == 0 || strcmp(uc, "7") == 0)
+	{
 		return '7';
 	}
-	else if (strcmp(uc, "۸") == 0 || strcmp(uc, "٨") == 0 || strcmp(uc, "8") == 0) {
+	else if (strcmp(uc, "۸") == 0 || strcmp(uc, "٨") == 0 || strcmp(uc, "8") == 0)
+	{
 		return '8';
 	}
-	else if (strcmp(uc, "۹") == 0 || strcmp(uc, "٩") == 0 || strcmp(uc, "9") == 0) {
+	else if (strcmp(uc, "۹") == 0 || strcmp(uc, "٩") == 0 || strcmp(uc, "9") == 0)
+	{
 		return '9';
 	}
 
@@ -746,24 +797,27 @@ char convert_utf8_to_english_digit(char* uc)
  * @returns {void}
  *
  */
-void string_number2number(char* str)
+void string_number2number(char *str)
 {
 	DEBUG_ME;
-	if (str == NULL) {
+	if (str == NULL)
+	{
 		return;
 	}
 
 	size_t len = strlen(str);
 	wchar_t wc;
 	int wcl;
-	char* temp_str = (char*)malloc((len + 1) * sizeof(char));
+	char *temp_str = (char *)malloc((len + 1) * sizeof(char));
 
-	char* src_ptr = str;
-	char* dest_ptr = temp_str;
+	char *src_ptr = str;
+	char *dest_ptr = temp_str;
 
-	while (*src_ptr != '\0') {
+	while (*src_ptr != '\0')
+	{
 		wcl = mbtowc(&wc, src_ptr, MB_CUR_MAX);
-		if (wcl <= 0) {
+		if (wcl <= 0)
+		{
 			// Error or end of multibyte sequence
 			break;
 		}
@@ -787,7 +841,7 @@ void string_number2number(char* str)
  * @returns {char*}
  *
  */
-char* int2string(int value)
+char *int2string(int value)
 {
 	DEBUG_ME;
 	static char buffer[256];
@@ -804,7 +858,7 @@ char* int2string(int value)
  * @returns {char*}
  *
  */
-char* float2string(float value)
+char *float2string(float value)
 {
 	DEBUG_ME;
 	static char buffer[256];
@@ -821,7 +875,7 @@ char* float2string(float value)
  * @returns {char*}
  *
  */
-char* double2string(double value)
+char *double2string(double value)
 {
 	DEBUG_ME;
 	static char buffer[256];
@@ -841,16 +895,20 @@ char* double2string(double value)
 size_t utf8_char_length(char c)
 {
 	DEBUG_ME;
-	if ((c & 0x80) == 0) {
+	if ((c & 0x80) == 0)
+	{
 		return 1; // 0xxxxxxx
 	}
-	else if ((c & 0xE0) == 0xC0) {
+	else if ((c & 0xE0) == 0xC0)
+	{
 		return 2; // 110xxxxx
 	}
-	else if ((c & 0xF0) == 0xE0) {
+	else if ((c & 0xF0) == 0xE0)
+	{
 		return 3; // 1110xxxx
 	}
-	else if ((c & 0xF8) == 0xF0) {
+	else if ((c & 0xF8) == 0xF0)
+	{
 		return 4; // 11110xxx
 	}
 
@@ -866,35 +924,36 @@ size_t utf8_char_length(char c)
  * @returns {uint32_t} Decoded character
  *
  */
-uint32_t utf8_decode(const char* source, size_t* index)
+uint32_t utf8_decode(const char *source, size_t *index)
 {
 	DEBUG_ME;
 	size_t length = utf8_char_length(source[*index]);
 	uint32_t codepoint = 0;
 
-	switch (length) {
-		case 1:
-			codepoint = source[*index];
-			break;
-		case 2:
-			codepoint = ((source[*index] & 0x1F) << 6) |
-						(source[*index + 1] & 0x3F);
-			break;
-		case 3:
-			codepoint = ((source[*index] & 0x0F) << 12) |
-						((source[*index + 1] & 0x3F) << 6) |
-						(source[*index + 2] & 0x3F);
-			break;
-		case 4:
-			codepoint = ((source[*index] & 0x07) << 18) |
-						((source[*index + 1] & 0x3F) << 12) |
-						((source[*index + 2] & 0x3F) << 6) |
-						(source[*index + 3] & 0x3F);
-			break;
+	switch (length)
+	{
+	case 1:
+		codepoint = source[*index];
+		break;
+	case 2:
+		codepoint = ((source[*index] & 0x1F) << 6) |
+					(source[*index + 1] & 0x3F);
+		break;
+	case 3:
+		codepoint = ((source[*index] & 0x0F) << 12) |
+					((source[*index + 1] & 0x3F) << 6) |
+					(source[*index + 2] & 0x3F);
+		break;
+	case 4:
+		codepoint = ((source[*index] & 0x07) << 18) |
+					((source[*index + 1] & 0x3F) << 12) |
+					((source[*index + 2] & 0x3F) << 6) |
+					(source[*index + 3] & 0x3F);
+		break;
 	}
 
 	*index += length;
-	
+
 	return codepoint;
 }
 
@@ -912,20 +971,24 @@ size_t utf8_strlen(const char *str)
 	mbstate_t state;
 	memset(&state, 0, sizeof(state));
 
-	while (*str) {
+	while (*str)
+	{
 		wchar_t wc;
 		int bytes = mbrtowc(&wc, str, MB_CUR_MAX, &state);
 
-		if (bytes > 0) {
+		if (bytes > 0)
+		{
 			str += bytes;
 			len++;
 		}
-		else if (bytes == -1) {
+		else if (bytes == -1)
+		{
 			perror("mbrtowc");
 
 			exit(EXIT_FAILURE);
 		}
-		else {
+		else
+		{
 			break;
 		}
 	}
@@ -941,10 +1004,11 @@ size_t utf8_strlen(const char *str)
  * @returns {size_t} Length of the string
  *
  */
-size_t mb2strlen(const char* identifier)
+size_t mb2strlen(const char *identifier)
 {
 	size_t wcs_len = mbstowcs(NULL, identifier, 0);
-	if (wcs_len == (size_t)-1) {
+	if (wcs_len == (size_t)-1)
+	{
 		printf("MESSAGE_LEXER_STRING_GET_LENGTH_UNICODE\n");
 
 		exit(EXIT_FAILURE);

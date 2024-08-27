@@ -11,9 +11,9 @@
 #define PARSER_NEXT lexer->token_index++
 #define PARSER_PREV lexer->token_index--
 
-#define PARSER_CURRENT ((token_t*)lexer->tokens->data[lexer->token_index])
-#define PARSER_CURRENT_NEXT ((token_t*)lexer->tokens->data[lexer->token_index + 1])
-#define PARSER_CURRENT_PREV ((token_t*)lexer->tokens->data[lexer->token_index + 1])
+#define PARSER_CURRENT ((token_t *)lexer->tokens->data[lexer->token_index])
+#define PARSER_CURRENT_NEXT ((token_t *)lexer->tokens->data[lexer->token_index + 1])
+#define PARSER_CURRENT_PREV ((token_t *)lexer->tokens->data[lexer->token_index + 1])
 
 #include "parser_layout.h"
 
@@ -26,7 +26,7 @@
  * @returns {bool}
  *
  */
-bool match(lexer_t* lexer, token_type_t token_type);
+bool match(lexer_t *lexer, token_type_t token_type);
 
 /**
  *
@@ -37,7 +37,7 @@ bool match(lexer_t* lexer, token_type_t token_type);
  * @returns {bool}
  *
  */
-bool match_next(lexer_t* lexer, token_type_t token_type);
+bool match_next(lexer_t *lexer, token_type_t token_type);
 
 /**
  *
@@ -48,7 +48,7 @@ bool match_next(lexer_t* lexer, token_type_t token_type);
  * @returns {bool}
  *
  */
-bool match_prev(lexer_t* lexer, token_type_t token_type);
+bool match_prev(lexer_t *lexer, token_type_t token_type);
 
 /**
  *
@@ -59,7 +59,7 @@ bool match_prev(lexer_t* lexer, token_type_t token_type);
  * @returns {void}
  *
  */
-void expect(lexer_t* lexer, token_type_t token_type);
+void expect(lexer_t *lexer, token_type_t token_type);
 
 /**
  *
@@ -70,7 +70,7 @@ void expect(lexer_t* lexer, token_type_t token_type);
  * @returns {ast_block_t*} - AST block node
  *
  */
-void parser_parse_block(lexer_t* lexer, ast_block_t* block);
+void parser_parse_block(lexer_t *lexer, ast_block_t *block);
 
 /**
  *
@@ -80,7 +80,7 @@ void parser_parse_block(lexer_t* lexer, ast_block_t* block);
  * @returns {ast_node_t*} - AST node
  *
  */
-ast_node_t* parser_parse_node(lexer_t* lexer);
+ast_node_t *parser_parse_node(lexer_t *lexer);
 
 /**
  *
@@ -90,7 +90,7 @@ ast_node_t* parser_parse_node(lexer_t* lexer);
  * @returns {ast_t*} - AST
  *
  */
-ast_t* parser_parse(lexer_t* lexer);
+ast_t *parser_parse(lexer_t *lexer);
 
 /**
  *
@@ -100,7 +100,7 @@ ast_t* parser_parse(lexer_t* lexer);
  * @returns {ast_node_t*} - AST node
  *
  */
-ast_node_t* parser_parse_function(lexer_t* lexer);
+ast_node_t *parser_parse_function(lexer_t *lexer);
 
 /**
  *
@@ -110,7 +110,7 @@ ast_node_t* parser_parse_function(lexer_t* lexer);
  * @returns {ast_value_t*} - AST Layout value
  *
  */
-ast_value_t* parser_parse_value(lexer_t* lexer);
+ast_value_t *parser_parse_value(lexer_t *lexer);
 
 /**
  *
@@ -120,7 +120,7 @@ ast_value_t* parser_parse_value(lexer_t* lexer);
  * @returns {ast_node_t*} - AST node
  *
  */
-ast_node_t* parser_parse_if(lexer_t* lexer);
+ast_node_t *parser_parse_if(lexer_t *lexer);
 
 /**
  *
@@ -130,7 +130,7 @@ ast_node_t* parser_parse_if(lexer_t* lexer);
  * @returns {ast_value_t*} - AST value
  *
  */
-ast_value_t* parser_parse_expression(lexer_t* lexer);
+ast_value_t *parser_parse_expression(lexer_t *lexer);
 
 /**
  *
@@ -140,7 +140,7 @@ ast_value_t* parser_parse_expression(lexer_t* lexer);
  * @returns {ast_node_t*} - AST node
  *
  */
-ast_node_t* parser_parse_return(lexer_t* lexer);
+ast_node_t *parser_parse_return(lexer_t *lexer);
 
 /**
  *
@@ -150,7 +150,7 @@ ast_node_t* parser_parse_return(lexer_t* lexer);
  * @returns {array_value_t*} - Array of AST values
  *
  */
-array_value_t* parser_parse_expressions(lexer_t* lexer);
+array_value_t *parser_parse_expressions(lexer_t *lexer);
 
 /**
  *
@@ -160,7 +160,7 @@ array_value_t* parser_parse_expressions(lexer_t* lexer);
  * @returns {array_value_t*} - Array of AST values
  *
  */
-array_value_t* parser_parse_expressions_maybe(lexer_t* lexer);
+array_value_t *parser_parse_expressions_maybe(lexer_t *lexer);
 
 /**
  *
@@ -170,7 +170,7 @@ array_value_t* parser_parse_expressions_maybe(lexer_t* lexer);
  * @returns {bool}
  *
  */
-bool is_begin_block_token(token_t* token);
+bool is_begin_block_token(token_t *token);
 
 /**
  *
@@ -180,7 +180,7 @@ bool is_begin_block_token(token_t* token);
  * @returns {bool}
  *
  */
-bool is_end_block_token(token_t* token);
+bool is_end_block_token(token_t *token);
 
 /**
  *
@@ -189,7 +189,7 @@ bool is_end_block_token(token_t* token);
  * @returns {void}
  *
  */
-void expect_open_block(lexer_t* lexer);
+void expect_open_block(lexer_t *lexer);
 
 /**
  *
@@ -199,7 +199,7 @@ void expect_open_block(lexer_t* lexer);
  * @returns {bool}
  *
  */
-bool match_next_open_block(lexer_t* lexer);
+bool match_next_open_block(lexer_t *lexer);
 
 /**
  *
@@ -209,8 +209,7 @@ bool match_next_open_block(lexer_t* lexer);
  * @returns {bool}
  *
  */
-bool match_next_close_block(lexer_t* lexer);
-
+bool match_next_close_block(lexer_t *lexer);
 
 /**
  *
@@ -220,7 +219,7 @@ bool match_next_close_block(lexer_t* lexer);
  * @returns {bool}
  *
  */
-bool match_open_block(lexer_t* lexer);
+bool match_open_block(lexer_t *lexer);
 
 /**
  *
@@ -230,7 +229,7 @@ bool match_open_block(lexer_t* lexer);
  * @returns {bool}
  *
  */
-bool match_close_block(lexer_t* lexer);
+bool match_close_block(lexer_t *lexer);
 
 /**
  *
@@ -239,6 +238,6 @@ bool match_close_block(lexer_t* lexer);
  * @returns {void}
  *
  */
-void expect_close_block(lexer_t* lexer);
+void expect_close_block(lexer_t *lexer);
 
 #endif

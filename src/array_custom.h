@@ -23,7 +23,7 @@
  * @returns {void}
  *
  */
-void array_destroy_custom(array_t* array, void (*free_fn)(void*));
+void array_destroy_custom(array_t *array, void (*free_fn)(void *));
 
 /**
  *
@@ -33,7 +33,7 @@ void array_destroy_custom(array_t* array, void (*free_fn)(void*));
  * @returns {void}
  *
  */
-void array_token_print(array_token_t* array);
+void array_token_print(array_token_t *array);
 
 /**
  *
@@ -43,7 +43,7 @@ void array_token_print(array_token_t* array);
  * @returns {void}
  *
  */
-void array_node_destroy(array_node_t* array);
+void array_node_destroy(array_node_t *array);
 
 /**
  *
@@ -53,7 +53,7 @@ void array_node_destroy(array_node_t* array);
  * @returns {void}
  *
  */
-void array_node_print(array_node_t* array);
+void array_node_print(array_node_t *array);
 
 /**
  *
@@ -63,7 +63,7 @@ void array_node_print(array_node_t* array);
  * @returns {void}
  *
  */
-void array_token_destroy(array_token_t* array);
+void array_token_destroy(array_token_t *array);
 
 /**
  *
@@ -73,7 +73,7 @@ void array_token_destroy(array_token_t* array);
  * @returns {void}
  *
  */
-void array_layout_attribute_print(array_layout_attribute_t* array);
+void array_layout_attribute_print(array_layout_attribute_t *array);
 
 /**
  *
@@ -84,7 +84,7 @@ void array_layout_attribute_print(array_layout_attribute_t* array);
  * @returns {char*} - String
  *
  */
-char* array_string_token(array_t* array, char* separator);
+char *array_string_token(array_t *array, char *separator);
 
 /**
  *
@@ -94,7 +94,7 @@ char* array_string_token(array_t* array, char* separator);
  * @returns {void}
  *
  */
-void array_layout_node_print(array_node_layout_t* node);
+void array_layout_node_print(array_node_layout_t *node);
 
 /**
  *
@@ -104,7 +104,7 @@ void array_layout_node_print(array_node_layout_t* node);
  * @returns {void}
  *
  */
-void array_layout_node_destroy(array_node_layout_t* array);
+void array_layout_node_destroy(array_node_layout_t *array);
 
 /**
  *
@@ -114,7 +114,7 @@ void array_layout_node_destroy(array_node_layout_t* array);
  * @returns {void}
  *
  */
-void array_function_parameter_print(array_function_parameter_t* array);
+void array_function_parameter_print(array_function_parameter_t *array);
 
 /**
  *
@@ -124,7 +124,7 @@ void array_function_parameter_print(array_function_parameter_t* array);
  * @returns {void}
  *
  */
-void array_function_parameter_destroy(array_function_parameter_t* array);
+void array_function_parameter_destroy(array_function_parameter_t *array);
 
 /**
  *
@@ -134,7 +134,7 @@ void array_function_parameter_destroy(array_function_parameter_t* array);
  * @returns {void}
  *
  */
-void array_function_print(array_function_t* array);
+void array_function_print(array_function_t *array);
 
 /**
  *
@@ -143,7 +143,7 @@ void array_function_print(array_function_t* array);
  * @params {array_function_t*} array - Function array
  * @returns {void}
  */
-void array_function_destroy(array_function_t* array);
+void array_function_destroy(array_function_t *array);
 
 /**
  *
@@ -153,7 +153,7 @@ void array_function_destroy(array_function_t* array);
  * @returns {void}
  *
  */
-void array_if_destroy(array_if_t* array);
+void array_if_destroy(array_if_t *array);
 
 /**
  *
@@ -163,7 +163,7 @@ void array_if_destroy(array_if_t* array);
  * @returns {void}
  *
  */
-void array_if_print(array_if_t* array);
+void array_if_print(array_if_t *array);
 
 /**
  *
@@ -173,7 +173,7 @@ void array_if_print(array_if_t* array);
  * @returns {void}
  *
  */
-void array_value_print(array_value_t* array);
+void array_value_print(array_value_t *array);
 
 /**
  *
@@ -183,7 +183,7 @@ void array_value_print(array_value_t* array);
  * @returns {void}
  *
  */
-void array_value_destroy(array_value_t* array);
+void array_value_destroy(array_value_t *array);
 
 /**
  *
@@ -193,7 +193,7 @@ void array_value_destroy(array_value_t* array);
  * @returns {void}
  *
  */
-void array_block_print(array_block_t* array);
+void array_block_print(array_block_t *array);
 
 /**
  *
@@ -203,7 +203,7 @@ void array_block_print(array_block_t* array);
  * @returns {void}
  *
  */
-void array_block_destroy(array_block_t* array);
+void array_block_destroy(array_block_t *array);
 
 /**
  *
@@ -213,7 +213,7 @@ void array_block_destroy(array_block_t* array);
  * @returns {array_value_t*} - Pointer to the created array
  *
  */
-array_value_t* array_value_create(size_t capacity);
+array_value_t *array_value_create(size_t capacity);
 
 /**
  *
@@ -223,7 +223,7 @@ array_value_t* array_value_create(size_t capacity);
  * @returns {void}
  *
  */
-void array_value_destroy(array_value_t* array);
+void array_value_destroy(array_value_t *array);
 
 /**
  *
@@ -233,7 +233,7 @@ void array_value_destroy(array_value_t* array);
  * @returns {void}
  *
  */
-void array_value_print(array_value_t* array);
+void array_value_print(array_value_t *array);
 
 /**
  *
@@ -244,7 +244,7 @@ void array_value_print(array_value_t* array);
  * @returns {char*} - String
  *
  */
-char* array_value_stringify(array_value_t* array, char* separator);
+char *array_value_stringify(array_value_t *array, char *separator);
 
 /**
  *
@@ -254,7 +254,7 @@ char* array_value_stringify(array_value_t* array, char* separator);
  * @returns {char*} - String
  *
  */
-char* array_value_first_stringify(array_value_t* array);
+char *array_value_first_stringify(array_value_t *array);
 
 /**
  *
@@ -264,7 +264,7 @@ char* array_value_first_stringify(array_value_t* array);
  * @returns {array_value_t*} - Copied array
  *
  */
-array_value_t* array_value_copy(array_value_t* values);
+array_value_t *array_value_copy(array_value_t *values);
 
 /**
  *
@@ -275,7 +275,7 @@ array_value_t* array_value_copy(array_value_t* values);
  * @returns {char*} - String
  *
  */
-char* array_value_stringify(array_value_t* array, char* separator);
+char *array_value_stringify(array_value_t *array, char *separator);
 
 /**
  *
@@ -285,6 +285,6 @@ char* array_value_stringify(array_value_t* array, char* separator);
  * @returns {char*} - String
  *
  */
-char* array_token_stringify(array_token_t* array);
+char *array_token_stringify(array_token_t *array);
 
 #endif

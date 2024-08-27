@@ -9,19 +9,19 @@
  * @returns {array_t*} - Pointer to the created array
  *
  */
-array_t* array_create(size_t element_capacity, size_t capacity)
+array_t *array_create(size_t element_capacity, size_t capacity)
 {
-    DEBUG_ME;
-    array_t* array = memory_allocate(sizeof(array_t));
-    array->length = 0;
-    array->capacity = capacity;
-    array->element_capacity = element_capacity;
-    array->data = memory_allocate(array->element_capacity * array->capacity);
+	DEBUG_ME;
+	array_t *array = memory_allocate(sizeof(array_t));
+	array->length = 0;
+	array->capacity = capacity;
+	array->element_capacity = element_capacity;
+	array->data = memory_allocate(array->element_capacity * array->capacity);
 
-    array->print = cast(void (*)(void*), array_print);
-    array->destroy = cast(void (*)(void*), array_destroy);
+	array->print = cast(void (*)(void *), array_print);
+	array->destroy = cast(void (*)(void *), array_destroy);
 
-    return array;
+	return array;
 }
 
 /**
@@ -34,13 +34,13 @@ array_t* array_create(size_t element_capacity, size_t capacity)
  * @returns {void}
  *
  */
-void array_init(array_t* array, size_t capacity, size_t element_capacity)
+void array_init(array_t *array, size_t capacity, size_t element_capacity)
 {
-    DEBUG_ME;
-    array->length = 0;
-    array->capacity = capacity;
-    array->element_capacity = element_capacity;
-    array->data = memory_allocate(element_capacity * capacity);
+	DEBUG_ME;
+	array->length = 0;
+	array->capacity = capacity;
+	array->element_capacity = element_capacity;
+	array->data = memory_allocate(element_capacity * capacity);
 }
 
 /**
@@ -52,17 +52,18 @@ void array_init(array_t* array, size_t capacity, size_t element_capacity)
  * @returns {bool} - Success status
  *
  */
-bool array_push(array_t* array, void* element)
+bool array_push(array_t *array, void *element)
 {
-    DEBUG_ME;
-    if (array->length >= array->capacity) {
-        array->capacity *= 2;
-        array->data = memory_reallocate(array->data, array->element_capacity * array->capacity);
-    }
+	DEBUG_ME;
+	if (array->length >= array->capacity)
+	{
+		array->capacity *= 2;
+		array->data = memory_reallocate(array->data, array->element_capacity * array->capacity);
+	}
 
-    array->data[array->length++] = element;
+	array->data[array->length++] = element;
 
-    return true;
+	return true;
 }
 
 /**
@@ -74,17 +75,18 @@ bool array_push(array_t* array, void* element)
  * @returns {bool} - Success status
  *
  */
-bool array_pop(array_t* array, void* element)
+bool array_pop(array_t *array, void *element)
 {
-    DEBUG_ME;
-    if (array->length == 0) {
-        return false;
-    }
+	DEBUG_ME;
+	if (array->length == 0)
+	{
+		return false;
+	}
 
-    array->length--;
-    memory_copy(element, (char*)array->data + (array->capacity * array->element_capacity), array->element_capacity);
-    
-    return true;
+	array->length--;
+	memory_copy(element, (char *)array->data + (array->capacity * array->element_capacity), array->element_capacity);
+
+	return true;
 }
 
 /**
@@ -96,11 +98,11 @@ bool array_pop(array_t* array, void* element)
  * @returns {void}
  *
  */
-void array_resize(array_t* array, size_t new_capacity)
+void array_resize(array_t *array, size_t new_capacity)
 {
-    DEBUG_ME;
-    array->capacity = new_capacity;
-    array->data = memory_reallocate(array->data, array->element_capacity * new_capacity);
+	DEBUG_ME;
+	array->capacity = new_capacity;
+	array->data = memory_reallocate(array->data, array->element_capacity * new_capacity);
 }
 
 /**
@@ -112,14 +114,15 @@ void array_resize(array_t* array, size_t new_capacity)
  * @returns {void*} - Pointer to the element
  *
  */
-void* array_get(array_t* array, size_t index)
+void *array_get(array_t *array, size_t index)
 {
-    DEBUG_ME;
-    if (index >= array->length) {
-        return NULL;
-    }
+	DEBUG_ME;
+	if (index >= array->length)
+	{
+		return NULL;
+	}
 
-    return array->data[index];
+	return array->data[index];
 }
 
 /**
@@ -130,18 +133,19 @@ void* array_get(array_t* array, size_t index)
  * @returns {void}
  *
  */
-void array_destroy(array_t* array)
+void array_destroy(array_t *array)
 {
-    DEBUG_ME;
-    if (array != NULL) {
-        memory_destroy(array->data);
+	DEBUG_ME;
+	if (array != NULL)
+	{
+		memory_destroy(array->data);
 
-        array->capacity = 0;
-        array->length = 0;
-        array->element_capacity = 0;
+		array->capacity = 0;
+		array->length = 0;
+		array->element_capacity = 0;
 
-        memory_destroy(array);
-    }
+		memory_destroy(array);
+	}
 }
 
 /**
@@ -153,30 +157,34 @@ void array_destroy(array_t* array)
  * @returns {char*} - String
  *
  */
-char* array_stringify(array_t* array, char* separator)
+char *array_stringify(array_t *array, char *separator)
 {
-    DEBUG_ME;
-    if (array == NULL || array->length == 0) {
-        return strdup("");
-    }
+	DEBUG_ME;
+	if (array == NULL || array->length == 0)
+	{
+		return strdup("");
+	}
 
-    string_t* str = string_create(16);
-    for (size_t i = 0; i < array->length; i++) {
-        char* item = array_get(array, i);
+	string_t *str = string_create(16);
+	for (size_t i = 0; i < array->length; i++)
+	{
+		char *item = array_get(array, i);
 
-        if (item != NULL) {
-            string_append_str(str, item);
+		if (item != NULL)
+		{
+			string_append_str(str, item);
 
-            if (i < array->length - 1) {
-                string_append_str(str, separator);
-            }
-        }
-    }
+			if (i < array->length - 1)
+			{
+				string_append_str(str, separator);
+			}
+		}
+	}
 
-    char* buffer = strdup(str->data);
-    string_destroy(str);
+	char *buffer = strdup(str->data);
+	string_destroy(str);
 
-    return buffer;
+	return buffer;
 }
 
 /**
@@ -187,14 +195,15 @@ char* array_stringify(array_t* array, char* separator)
  * @returns {void}
  *
  */
-void array_print(array_t* array)
+void array_print(array_t *array)
 {
-    DEBUG_ME;
-    printf("Array: %zu\n", array->length);
+	DEBUG_ME;
+	printf("Array: %zu\n", array->length);
 
-    for (size_t i = 0; i < array->length; i++) {
-        printf("\t%p\n", array->data[i]);
-    }
+	for (size_t i = 0; i < array->length; i++)
+	{
+		printf("\t%p\n", array->data[i]);
+	}
 }
 
 /**
@@ -205,10 +214,10 @@ void array_print(array_t* array)
  * @returns {size_t} - Size of the array
  *
  */
-size_t array_capacity(array_t* array)
+size_t array_capacity(array_t *array)
 {
-    DEBUG_ME;
-    return array->capacity;
+	DEBUG_ME;
+	return array->capacity;
 }
 
 /**
@@ -219,8 +228,8 @@ size_t array_capacity(array_t* array)
  * @returns {size_t} - Length of the array
  *
  */
-size_t array_length(array_t* array)
+size_t array_length(array_t *array)
 {
-    DEBUG_ME;
-    return array->length;
+	DEBUG_ME;
+	return array->length;
 }

@@ -20,7 +20,7 @@
  * @returns {void}
  *
  */
-void panic(const char* message, ...);
+void panic(const char *message, ...);
 
 /**
  *
@@ -32,7 +32,7 @@ void panic(const char* message, ...);
  * @returns {void}
  *
  */
-void error(int code, const char* message, ...);
+void error(int code, const char *message, ...);
 
 /**
  *
@@ -44,7 +44,7 @@ void error(int code, const char* message, ...);
  * @returns {void}
  *
  */
-void error_generator(int code, const char* message, ...);
+void error_generator(int code, const char *message, ...);
 
 /**
  *
@@ -56,7 +56,7 @@ void error_generator(int code, const char* message, ...);
  * @returns {void}
  *
  */
-void error_parser(int code, const char* message, ...);
+void error_parser(int code, const char *message, ...);
 
 /**
  *
@@ -68,7 +68,7 @@ void error_parser(int code, const char* message, ...);
  * @returns {void}
  *
  */
-void error_lexer(int code, const char* message, ...);
+void error_lexer(int code, const char *message, ...);
 
 /**
  *
@@ -80,7 +80,7 @@ void error_lexer(int code, const char* message, ...);
  * @returns {void}
  *
  */
-void error_ast(int code, const char* message, ...);
+void error_ast(int code, const char *message, ...);
 
 /**
  *
@@ -92,7 +92,7 @@ void error_ast(int code, const char* message, ...);
  * @returns {void}
  *
  */
-void error_validator(int code, const char* message, ...);
+void error_validator(int code, const char *message, ...);
 
 /**
  *
@@ -104,7 +104,7 @@ void error_validator(int code, const char* message, ...);
  * @returns {void}
  *
  */
-void error_interpreter(int code, const char* message, ...);
+void error_interpreter(int code, const char *message, ...);
 
 /**
  *
@@ -115,7 +115,7 @@ void error_interpreter(int code, const char* message, ...);
  * @returns {void}
  *
  */
-void warning(const char* message, ...);
+void warning(const char *message, ...);
 
 /**
  *
@@ -126,7 +126,7 @@ void warning(const char* message, ...);
  * @returns {void}
  *
  */
-void warning_generator(const char* message, ...);
+void warning_generator(const char *message, ...);
 
 /**
  *
@@ -137,7 +137,7 @@ void warning_generator(const char* message, ...);
  * @returns {void}
  *
  */
-void warning_parser(const char* message, ...);
+void warning_parser(const char *message, ...);
 
 /**
  *
@@ -148,7 +148,7 @@ void warning_parser(const char* message, ...);
  * @returns {void}
  *
  */
-void warning_lexer(const char* message, ...);
+void warning_lexer(const char *message, ...);
 
 /**
  *
@@ -159,7 +159,7 @@ void warning_lexer(const char* message, ...);
  * @returns {void}
  *
  */
-void warning_ast(const char* message, ...);
+void warning_ast(const char *message, ...);
 
 /**
  *
@@ -170,7 +170,7 @@ void warning_ast(const char* message, ...);
  * @returns {void}
  *
  */
-void warning_validator(const char* message, ...);
+void warning_validator(const char *message, ...);
 
 /**
  *
@@ -181,6 +181,6 @@ void warning_validator(const char* message, ...);
  * @returns {void}
  *
  */
-void warning_interpreter(const char* message, ...);
+void warning_interpreter(const char *message, ...);
 
 #endif

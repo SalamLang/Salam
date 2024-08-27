@@ -9,35 +9,42 @@
  * @returns {string_t*}
  *
  */
-string_t* generator_code_layout_block(generator_t* generator, array_t* children)
+string_t *generator_code_layout_block(generator_t *generator, array_t *children)
 {
 	DEBUG_ME;
-	string_t* html = string_create(1024);
+	string_t *html = string_create(1024);
 
-	for (size_t i = 0; i < children->length; i++) {
-		ast_layout_node_t* node = array_get(children, i);
+	for (size_t i = 0; i < children->length; i++)
+	{
+		ast_layout_node_t *node = array_get(children, i);
 
-		string_t* layout_block_str = string_create(1024);
-		string_t* node_attrs_str = generator_code_layout_attributes(generator, node->block);
-		char* node_name = generator_code_layout_node_type(node->type);
+		string_t *layout_block_str = string_create(1024);
+		string_t *node_attrs_str = generator_code_layout_attributes(generator, node->block);
+		char *node_name = generator_code_layout_node_type(node->type);
 
 		string_append_char(layout_block_str, '<');
 		string_append_str(layout_block_str, node_name);
-		if (node_attrs_str->length > 0) {
+		if (node_attrs_str->length > 0)
+		{
 			string_append_char(layout_block_str, ' ');
 			string_append(layout_block_str, node_attrs_str);
 		}
-		if (node_attrs_str != NULL) node_attrs_str->destroy(node_attrs_str);
+		if (node_attrs_str != NULL)
+			node_attrs_str->destroy(node_attrs_str);
 		string_append_str(layout_block_str, ">");
 
-		if (node->block->children->length > 0 || node->block->text_content != NULL) {
+		if (node->block->children->length > 0 || node->block->text_content != NULL)
+		{
 			bool has_content = false;
 
-			if (node->block->text_content != NULL) {
-				if (node->block->children->length == 0 && strchr(node->block->text_content, '\n') == NULL) {
+			if (node->block->text_content != NULL)
+			{
+				if (node->block->children->length == 0 && strchr(node->block->text_content, '\n') == NULL)
+				{
 					string_append_str(layout_block_str, node->block->text_content);
 				}
-				else {
+				else
+				{
 					string_append_char(layout_block_str, '\n');
 					string_append_str(layout_block_str, node->block->text_content);
 					string_append_char(layout_block_str, '\n');
@@ -46,35 +53,42 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
 				}
 			}
 
-			if (node->block->children->length > 0) {
-				string_t* layout_block_children = generator_code_layout_block(generator, node->block->children);
+			if (node->block->children->length > 0)
+			{
+				string_t *layout_block_children = generator_code_layout_block(generator, node->block->children);
 
-				if (has_content == false) {
+				if (has_content == false)
+				{
 					string_append_char(layout_block_str, '\n');
 				}
 
-				if (layout_block_children->length > 0) {
+				if (layout_block_children->length > 0)
+				{
 					string_append(layout_block_str, layout_block_children);
 				}
 
-				if (layout_block_children != NULL) {
+				if (layout_block_children != NULL)
+				{
 					layout_block_children->destroy(layout_block_children);
 				}
 			}
 		}
 
-		if (is_layout_node_a_single_tag(node->type) == false) {
+		if (is_layout_node_a_single_tag(node->type) == false)
+		{
 			string_append_str(layout_block_str, "</");
 			string_append_str(layout_block_str, node_name);
 			string_append_str(layout_block_str, ">\n");
 		}
-		else {
+		else
+		{
 			string_append_char(layout_block_str, '\n');
 		}
 
 		string_append(html, layout_block_str);
 
-		if (layout_block_str != NULL) layout_block_str->destroy(layout_block_str);
+		if (layout_block_str != NULL)
+			layout_block_str->destroy(layout_block_str);
 	}
 
 	return html;
@@ -89,47 +103,54 @@ string_t* generator_code_layout_block(generator_t* generator, array_t* children)
  * @returns {void}
  *
  */
-void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layout_block, string_t* body)
+void generator_code_layout_body(generator_t *generator, ast_layout_block_t *layout_block, string_t *body)
 {
 	DEBUG_ME;
-	if (layout_block != NULL) {
+	if (layout_block != NULL)
+	{
 		validate_layout_mainbody(layout_block);
 	}
 
-	string_t* body_tag = string_create(1024);
-	string_t* body_content = string_create(1024);
+	string_t *body_tag = string_create(1024);
+	string_t *body_content = string_create(1024);
 
 	string_append_str(body_tag, "<body");
-	string_t* body_attrs = generator_code_layout_attributes(generator, layout_block);
-	if (body_attrs->length > 0) {
+	string_t *body_attrs = generator_code_layout_attributes(generator, layout_block);
+	if (body_attrs->length > 0)
+	{
 		string_append_char(body_tag, ' ');
 	}
 	string_append(body_tag, body_attrs);
 	body_attrs->destroy(body_attrs);
 	string_append_str(body_tag, ">");
 
-	char* body_text_content = layout_block->text_content;
+	char *body_text_content = layout_block->text_content;
 	size_t body_text_content_length = body_text_content != NULL ? strlen(body_text_content) : 0;
 
-	string_t* body_child = generator_code_layout_block(generator, layout_block->children);
-	if (body_child->length > 0 || body_text_content_length > 0) {
+	string_t *body_child = generator_code_layout_block(generator, layout_block->children);
+	if (body_child->length > 0 || body_text_content_length > 0)
+	{
 		string_append_char(body_tag, '\n');
 	}
 
 	// text content
-	if (body_text_content != NULL && body_text_content_length > 0) {
+	if (body_text_content != NULL && body_text_content_length > 0)
+	{
 		string_append_str(body_content, body_text_content);
 	}
 
 	// node content
-	if (body_child->length > 0 && body_text_content != NULL && body_text_content_length > 0) {
+	if (body_child->length > 0 && body_text_content != NULL && body_text_content_length > 0)
+	{
 		string_append_char(body_content, '\n');
 	}
-	if (body_child->length > 0) {
+	if (body_child->length > 0)
+	{
 		string_append(body_content, body_child);
 	}
 
-	if (body_child != NULL) body_child->destroy(body_child);
+	if (body_child != NULL)
+		body_child->destroy(body_child);
 
 	string_append(body_tag, body_content);
 
@@ -146,84 +167,87 @@ void generator_code_layout_body(generator_t* generator, ast_layout_block_t* layo
  * @returns {void}
  *
  */
-void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
+void generator_code_head_item(ast_layout_attribute_t *attribute, string_t *head)
 {
 	DEBUG_ME;
-	if (head == NULL) {
+	if (head == NULL)
+	{
 		return;
 	}
 
-	char* value = NULL;
+	char *value = NULL;
 
-	switch (attribute->type) {
-		case AST_LAYOUT_ATTRIBUTE_TYPE_TITLE:
-			value = array_value_stringify(attribute->values, ", ");
+	switch (attribute->type)
+	{
+	case AST_LAYOUT_ATTRIBUTE_TYPE_TITLE:
+		value = array_value_stringify(attribute->values, ", ");
 
-			string_append_str(head, "<title>");
-			string_append_str(head, value);
-			string_append_str(head, "</title>");
-			string_append_char(head, '\n');
-			break;
+		string_append_str(head, "<title>");
+		string_append_str(head, value);
+		string_append_str(head, "</title>");
+		string_append_char(head, '\n');
+		break;
 
-		case AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR:
-			value = array_value_stringify(attribute->values, ", ");
+	case AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR:
+		value = array_value_stringify(attribute->values, ", ");
 
-			string_append_str(head, "<meta name=\"author\" content=\"");
-			string_append_str(head, value);
-			string_append_str(head, "\">");
-			string_append_char(head, '\n');
-			break;
+		string_append_str(head, "<meta name=\"author\" content=\"");
+		string_append_str(head, value);
+		string_append_str(head, "\">");
+		string_append_char(head, '\n');
+		break;
 
-		case AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION:
-			value = array_value_stringify(attribute->values, ", ");
+	case AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION:
+		value = array_value_stringify(attribute->values, ", ");
 
-			string_append_str(head, "<meta name=\"description\" content=\"");
-			string_append_str(head, value);
-			string_append_str(head, "\">");
-			string_append_char(head, '\n');
-			break;
+		string_append_str(head, "<meta name=\"description\" content=\"");
+		string_append_str(head, value);
+		string_append_str(head, "\">");
+		string_append_char(head, '\n');
+		break;
 
-		case AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS:
-			value = array_value_stringify(attribute->values, ", ");
+	case AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS:
+		value = array_value_stringify(attribute->values, ", ");
 
-			string_append_str(head, "<meta name=\"keywords\" content=\"");
-			string_append_str(head, value);
-			string_append_str(head, "\">");
-			string_append_char(head, '\n');
-			break;
+		string_append_str(head, "<meta name=\"keywords\" content=\"");
+		string_append_str(head, value);
+		string_append_str(head, "\">");
+		string_append_char(head, '\n');
+		break;
 
-		case AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET:
-			value = array_value_stringify(attribute->values, ", ");
+	case AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET:
+		value = array_value_stringify(attribute->values, ", ");
 
-			string_append_str(head, "<meta charset=\"");
-			string_append_str(head, value);
-			string_append_str(head, "\">");
-			string_append_char(head, '\n');
-			break;
+		string_append_str(head, "<meta charset=\"");
+		string_append_str(head, value);
+		string_append_str(head, "\">");
+		string_append_char(head, '\n');
+		break;
 
-		case AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT:
-			value = array_value_stringify(attribute->values, ", ");
+	case AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT:
+		value = array_value_stringify(attribute->values, ", ");
 
-			string_append_str(head, "<meta name=\"viewport\" content=\"");
-			string_append_str(head, value);
-			string_append_str(head, "\">");
-			string_append_char(head, '\n');
-			break;
+		string_append_str(head, "<meta name=\"viewport\" content=\"");
+		string_append_str(head, value);
+		string_append_str(head, "\">");
+		string_append_char(head, '\n');
+		break;
 
-		case AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH:
-			value = array_value_stringify(attribute->values, ", ");
+	case AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH:
+		value = array_value_stringify(attribute->values, ", ");
 
-			string_append_str(head, "<meta http-equiv=\"refresh\" content=\"");
-			string_append_str(head, value);
-			string_append_str(head, "\">");
-			string_append_char(head, '\n');
-			break;
+		string_append_str(head, "<meta http-equiv=\"refresh\" content=\"");
+		string_append_str(head, value);
+		string_append_str(head, "\">");
+		string_append_char(head, '\n');
+		break;
 
-		default:
-			break;
+	default:
+		break;
 	}
 
-	if (value != NULL) {
+	if (value != NULL)
+	{
 		memory_destroy(value);
 	}
 }
@@ -238,52 +262,61 @@ void generator_code_head_item(ast_layout_attribute_t* attribute, string_t* head)
  * @returns {void}
  *
  */
-void generator_code_head_meta_children(generator_t* generator, ast_layout_block_t* block, string_t* head)
+void generator_code_head_meta_children(generator_t *generator, ast_layout_block_t *block, string_t *head)
 {
 	DEBUG_ME;
-	if (head == NULL) {
+	if (head == NULL)
+	{
 		return;
 	}
-	else if (block == NULL) {
+	else if (block == NULL)
+	{
 		return;
 	}
 
-	if (block->meta_children != NULL) {
+	if (block->meta_children != NULL)
+	{
 		size_t meta_children_length = block->meta_children->length;
-		for (size_t i = 0; i < meta_children_length; i++) {
-			ast_layout_node_t* node = array_get(block->meta_children, i);
-			ast_layout_block_t* node_block = node->block;
+		for (size_t i = 0; i < meta_children_length; i++)
+		{
+			ast_layout_node_t *node = array_get(block->meta_children, i);
+			ast_layout_block_t *node_block = node->block;
 
-			if (node->type == AST_LAYOUT_TYPE_FONT) {
+			if (node->type == AST_LAYOUT_TYPE_FONT)
+			{
 				string_append_str(generator->css, "@font-face{");
-				hashmap_t* attributes = cast(hashmap_t*, node_block->attributes);
+				hashmap_t *attributes = cast(hashmap_t *, node_block->attributes);
 
 				size_t attributes_length = attributes->length;
 				size_t attributes_append_length = 0;
 
 				size_t attributes_capacity = attributes->capacity;
 
-				for (size_t i = 0; i < attributes_capacity; i++) {
-					hashmap_entry_t* entry = attributes->data[i];
+				for (size_t i = 0; i < attributes_capacity; i++)
+				{
+					hashmap_entry_t *entry = attributes->data[i];
 
-					while (entry) {
-						ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
+					while (entry)
+					{
+						ast_layout_attribute_t *attribute = cast(ast_layout_attribute_t *, entry->value);
 
-						char* value = array_value_stringify(attribute->values, ", ");
+						char *value = array_value_stringify(attribute->values, ", ");
 
 						string_append_str(generator->css, attribute->final_key == NULL ? entry->key : attribute->final_key); // TODO: Why name lowercase entry->key?
 						string_append_char(generator->css, ':');
 						string_append_str(generator->css, attribute->final_value == NULL ? value : attribute->final_value);
 
-						if (value != NULL) {
+						if (value != NULL)
+						{
 							memory_destroy(value);
 						}
 
-						if (attributes_append_length != attributes_length - 1) {
+						if (attributes_append_length != attributes_length - 1)
+						{
 							string_append_char(generator->css, ';');
 						}
 
-						entry = cast(hashmap_entry_t*, entry->next);
+						entry = cast(hashmap_entry_t *, entry->next);
 						attributes_append_length++;
 					}
 				}
@@ -304,41 +337,50 @@ void generator_code_head_meta_children(generator_t* generator, ast_layout_block_
  * @returns {void}
  *
  */
-void generator_code_head(generator_t* generator, ast_layout_block_t* block, string_t* head)
+void generator_code_head(generator_t *generator, ast_layout_block_t *block, string_t *head)
 {
 	DEBUG_ME;
-	if (head == NULL) {
+	if (head == NULL)
+	{
 		return;
 	}
-	else if (block == NULL) {
+	else if (block == NULL)
+	{
 		return;
 	}
 
 	size_t html_tags_length = 0;
 
-	if (block->attributes != NULL) {
-		hashmap_t* attributes = cast(hashmap_t*, block->attributes);
+	if (block->attributes != NULL)
+	{
+		hashmap_t *attributes = cast(hashmap_t *, block->attributes);
 		size_t attribute_capacity = attributes->capacity;
 
-		for (size_t i = 0; i < attribute_capacity; i++) {
-			hashmap_entry_t* entry = attributes->data[i];
+		for (size_t i = 0; i < attribute_capacity; i++)
+		{
+			hashmap_entry_t *entry = attributes->data[i];
 
-			while (entry) {
-				ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
+			while (entry)
+			{
+				ast_layout_attribute_t *attribute = cast(ast_layout_attribute_t *, entry->value);
 
-				if (attribute->isStyle == true || attribute->isContent == true) {}
-				else {
+				if (attribute->isStyle == true || attribute->isContent == true)
+				{
+				}
+				else
+				{
 					generator_code_head_item(attribute, head);
 
 					html_tags_length++;
 				}
 
-				entry = cast(hashmap_entry_t*, entry->next);
+				entry = cast(hashmap_entry_t *, entry->next);
 			}
 		}
 	}
 
-	if (block->meta_children != NULL) {
+	if (block->meta_children != NULL)
+	{
 		generator_code_head_meta_children(generator, block, head);
 	}
 }
@@ -351,14 +393,16 @@ void generator_code_head(generator_t* generator, ast_layout_block_t* block, stri
  * @returns {void}
  *
  */
-void generator_code_layout(generator_t* generator)
+void generator_code_layout(generator_t *generator)
 {
 	DEBUG_ME;
-	if (generator->ast->layout != NULL) {
-		if (generator->ast->layout->block != NULL) {
-			string_t* head = string_create(1024);
-			string_t* body = string_create(1024);
-			string_t* html = string_create(1024);
+	if (generator->ast->layout != NULL)
+	{
+		if (generator->ast->layout->block != NULL)
+		{
+			string_t *head = string_create(1024);
+			string_t *body = string_create(1024);
+			string_t *html = string_create(1024);
 
 			// Process the layout block
 			generator_code_layout_body(generator, generator->ast->layout->block, body);
@@ -379,20 +423,25 @@ void generator_code_layout(generator_t* generator)
 
 			string_append(html, head);
 
-			if ((generator->css != NULL && generator->css->length > 0) || (generator->media_css != NULL && generator->media_css->length > 0)) {
-				if (generator->inlineCSS == true) {
+			if ((generator->css != NULL && generator->css->length > 0) || (generator->media_css != NULL && generator->media_css->length > 0))
+			{
+				if (generator->inlineCSS == true)
+				{
 					string_append_str(html, "<style>\n");
-					if (generator->css != NULL && generator->css->length > 0) {
+					if (generator->css != NULL && generator->css->length > 0)
+					{
 						string_append(html, generator->css);
 						string_append_char(html, '\n');
 					}
-					if (generator->media_css != NULL && generator->media_css->length > 0) {
+					if (generator->media_css != NULL && generator->media_css->length > 0)
+					{
 						string_append(html, generator->media_css);
 						string_append_char(html, '\n');
 					}
 					string_append_str(html, "</style>\n");
 				}
-				else {
+				else
+				{
 					string_append_str(html, "<link rel=\"stylesheet\" href=\"style.css\">\n");
 				}
 			}
@@ -401,13 +450,16 @@ void generator_code_layout(generator_t* generator)
 
 			string_append(html, body);
 
-			if (generator->js != NULL && generator->js->length > 0) {
-				if (generator->inlineJS == true) {
+			if (generator->js != NULL && generator->js->length > 0)
+			{
+				if (generator->inlineJS == true)
+				{
 					string_append_str(html, "<script>\n");
 					string_append(html, generator->js);
 					string_append_str(html, "</script>\n");
 				}
-				else {
+				else
+				{
 					string_append_str(html, "<script src=\"script.js\"></script>\n");
 				}
 			}
@@ -433,32 +485,39 @@ void generator_code_layout(generator_t* generator)
  * @returns {void}
  *
  */
-void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html)
+void generator_code_layout_html(ast_layout_block_t *layout_block, string_t *html)
 {
 	DEBUG_ME;
 	// LANG
-	ast_layout_attribute_t* html_lang = hashmap_get(cast(hashmap_t*, layout_block->attributes), "lang");
-	char* html_lang_value = NULL;
+	ast_layout_attribute_t *html_lang = hashmap_get(cast(hashmap_t *, layout_block->attributes), "lang");
+	char *html_lang_value = NULL;
 	string_append_str(html, " lang=\"");
-	if (html_lang != NULL) {
-		char* values = array_value_stringify(html_lang->values, ", ");
+	if (html_lang != NULL)
+	{
+		char *values = array_value_stringify(html_lang->values, ", ");
 		html_lang_value = string_lower_str(values);
 
-		if (values != NULL) {
+		if (values != NULL)
+		{
 			memory_destroy(values);
 		}
 	}
-	if (html_lang_value == NULL || strcmp(html_lang_value, "") == 0) {
+	if (html_lang_value == NULL || strcmp(html_lang_value, "") == 0)
+	{
 		string_append_str(html, "fa-IR");
 	}
-	else if (strcmp(html_lang_value, "fa") == 0 || strcmp(html_lang_value, "fa-ir") == 0 || strcmp(html_lang_value, "fa_ir") == 0) {
+	else if (strcmp(html_lang_value, "fa") == 0 || strcmp(html_lang_value, "fa-ir") == 0 || strcmp(html_lang_value, "fa_ir") == 0)
+	{
 		string_append_str(html, "fa-IR");
 	}
-	else if (strcmp(html_lang_value, "en") == 0 || strcmp(html_lang_value, "en-us") == 0 || strcmp(html_lang_value, "en_us") == 0) {
+	else if (strcmp(html_lang_value, "en") == 0 || strcmp(html_lang_value, "en-us") == 0 || strcmp(html_lang_value, "en_us") == 0)
+	{
 		string_append_str(html, "en-US");
 	}
-	else {
-		if (html_lang_value != NULL) {
+	else
+	{
+		if (html_lang_value != NULL)
+		{
 			memory_destroy(html_lang_value);
 		}
 
@@ -467,31 +526,39 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 	string_append_str(html, "\"");
 
 	// DIR
-	ast_layout_attribute_t* html_dir = hashmap_get(cast(hashmap_t*, layout_block->attributes), "dir");
-	char* html_dir_value = NULL;
+	ast_layout_attribute_t *html_dir = hashmap_get(cast(hashmap_t *, layout_block->attributes), "dir");
+	char *html_dir_value = NULL;
 	string_append_str(html, " dir=\"");
-	if (html_dir != NULL) {
-		char* values = array_value_stringify(html_dir->values, ", ");
+	if (html_dir != NULL)
+	{
+		char *values = array_value_stringify(html_dir->values, ", ");
 		html_dir_value = string_lower_str(values);
 
-		if (values != NULL) {
+		if (values != NULL)
+		{
 			memory_destroy(values);
 		}
 	}
-	if (html_dir_value == NULL || strcmp(html_dir_value, "") == 0) {
+	if (html_dir_value == NULL || strcmp(html_dir_value, "") == 0)
+	{
 		string_append_str(html, "rtl");
 	}
-	else if (strcmp(html_dir_value, "ltr") == 0) {
+	else if (strcmp(html_dir_value, "ltr") == 0)
+	{
 		string_append_str(html, "ltr");
 	}
-	else if (strcmp(html_dir_value, "rtl") == 0) {
+	else if (strcmp(html_dir_value, "rtl") == 0)
+	{
 		string_append_str(html, "rtl");
 	}
-	else {
-		if (html_lang_value != NULL) {
+	else
+	{
+		if (html_lang_value != NULL)
+		{
 			memory_destroy(html_lang_value);
 		}
-		if (html_dir_value != NULL) {
+		if (html_dir_value != NULL)
+		{
 			memory_destroy(html_dir_value);
 		}
 
@@ -499,10 +566,12 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
 	}
 	string_append_str(html, "\"");
 
-	if (html_lang_value != NULL) {
+	if (html_lang_value != NULL)
+	{
 		memory_destroy(html_lang_value);
 	}
-	if (html_dir_value != NULL) {
+	if (html_dir_value != NULL)
+	{
 		memory_destroy(html_dir_value);
 	}
 }
@@ -516,51 +585,63 @@ void generator_code_layout_html(ast_layout_block_t* layout_block, string_t* html
  * @returns {string_t*}
  *
  */
-string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_block_t* block)
+string_t *generator_code_layout_attributes(generator_t *generator, ast_layout_block_t *block)
 {
 	DEBUG_ME;
 	size_t html_attributes_length = 0;
 	size_t css_attributes_length = 0;
 
-	string_t* html_attributes = string_create(1024);
-	string_t* css_attributes = string_create(1024);
+	string_t *html_attributes = string_create(1024);
+	string_t *css_attributes = string_create(1024);
 
-	if (block != NULL) {
-		if (block->attributes != NULL) {
-			hashmap_t* attributes = cast(hashmap_t*, block->attributes);
+	if (block != NULL)
+	{
+		if (block->attributes != NULL)
+		{
+			hashmap_t *attributes = cast(hashmap_t *, block->attributes);
 			size_t attributes_capacity = attributes->capacity;
 
-			for (size_t i = 0; i < attributes_capacity; i++) {
-				hashmap_entry_t* entry = attributes->data[i];
+			for (size_t i = 0; i < attributes_capacity; i++)
+			{
+				hashmap_entry_t *entry = attributes->data[i];
 
-				while (entry) {
-					ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
-					if (attribute == NULL) {
-						entry  = cast(hashmap_entry_t*, entry->next);
+				while (entry)
+				{
+					ast_layout_attribute_t *attribute = cast(ast_layout_attribute_t *, entry->value);
+					if (attribute == NULL)
+					{
+						entry = cast(hashmap_entry_t *, entry->next);
 						continue;
 					}
 
-					if (attribute->ignoreMe == true || attribute->isContent == true || attribute->isStyle == true) {}
-					else {
-						char* attribute_values_str = attribute->final_value != NULL ? attribute->final_value : array_value_stringify(attribute->values, ", ");
+					if (attribute->ignoreMe == true || attribute->isContent == true || attribute->isStyle == true)
+					{
+					}
+					else
+					{
+						char *attribute_values_str = attribute->final_value != NULL ? attribute->final_value : array_value_stringify(attribute->values, ", ");
 						size_t attribute_value_length = attribute_values_str == NULL ? 0 : strlen(attribute_values_str);
 
-						if (html_attributes_length != 0) {
+						if (html_attributes_length != 0)
+						{
 							string_append_char(html_attributes, ' ');
 						}
 
 						string_append_str(html_attributes, attribute->final_key == NULL ? entry->key : attribute->final_key); // TODO: Why name lowercase entry->key?
 						string_append_str(html_attributes, "=");
 
-						if (attribute_value_length > 1) {
+						if (attribute_value_length > 1)
+						{
 							string_append_str(html_attributes, "\"");
 						}
 						string_append_str(html_attributes, attribute_values_str);
-						if (attribute_value_length > 1) {
+						if (attribute_value_length > 1)
+						{
 							string_append_str(html_attributes, "\"");
 						}
 
-						if (attribute_values_str != NULL) {
+						if (attribute_values_str != NULL)
+						{
 							memory_destroy(attribute_values_str);
 							attribute->final_value = NULL;
 						}
@@ -568,27 +649,35 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 						html_attributes_length++;
 					}
 
-					entry  = cast(hashmap_entry_t*, entry->next);
+					entry = cast(hashmap_entry_t *, entry->next);
 				}
 			}
 		}
 
-		string_t* this_style = generator_code_layout_styles(block->styles->normal, block, &css_attributes_length);
+		string_t *this_style = generator_code_layout_styles(block->styles->normal, block, &css_attributes_length);
 		string_append(css_attributes, this_style);
 		string_destroy(this_style);
 
 		// New styles
 		size_t styles_new_capacity = block->styles->new->capacity;
 
-		for (size_t i = 0; i < styles_new_capacity; i++) {
-			hashmap_entry_t* entry = block->styles->new->data[i];
+		for (size_t i = 0; i < styles_new_capacity; i++)
+		{
+			hashmap_entry_t *entry = block->styles->new->data[i];
 
-			while (entry) {
-				ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
-				if (attribute == NULL) {}
-				else if (attribute->isStyle == false || attribute->ignoreMe == true) {}
-				else {
-					if (css_attributes_length != 0) {
+			while (entry)
+			{
+				ast_layout_attribute_t *attribute = cast(ast_layout_attribute_t *, entry->value);
+				if (attribute == NULL)
+				{
+				}
+				else if (attribute->isStyle == false || attribute->ignoreMe == true)
+				{
+				}
+				else
+				{
+					if (css_attributes_length != 0)
+					{
 						string_append_char(css_attributes, ';');
 					}
 					string_append_str(css_attributes, attribute->final_key);
@@ -598,13 +687,15 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 					css_attributes_length++;
 				}
 
-				entry  = cast(hashmap_entry_t*, entry->next);
+				entry = cast(hashmap_entry_t *, entry->next);
 			}
 		}
 	}
 
-	if ((block->meta_children != NULL && block->meta_children->length > 0) || block->styles->normal->length > 0 || block->styles->new->length > 0) {
-		if (block->tag == NULL) {
+	if ((block->meta_children != NULL && block->meta_children->length > 0) || block->styles->normal->length > 0 || block->styles->new->length > 0)
+	{
+		if (block->tag == NULL)
+		{
 			block->tag = generator_identifier_get(generator->identifier); // We will free its memory in the block_layout_destroy function
 		}
 	}
@@ -612,37 +703,44 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 	size_t media_queries_length = 0;
 	size_t meta_children_length = block->meta_children->length;
 
-	if (block->meta_children != NULL) {
-		for (size_t i = 0; i < meta_children_length; i++) {
-			ast_layout_node_t* node = block->meta_children->data[i];
-			ast_layout_block_t* node_block = node->block;
+	if (block->meta_children != NULL)
+	{
+		for (size_t i = 0; i < meta_children_length; i++)
+		{
+			ast_layout_node_t *node = block->meta_children->data[i];
+			ast_layout_block_t *node_block = node->block;
 
-			if (node->type != AST_LAYOUT_TYPE_MEDIA) {
+			if (node->type != AST_LAYOUT_TYPE_MEDIA)
+			{
 				continue;
 			}
-			ast_layout_attribute_t* media_max_width = hashmap_get(node_block->attributes, "responsive_max_width");
-			ast_layout_attribute_t* media_min_width = hashmap_get(node_block->attributes, "responsive_min_width");
-			ast_layout_attribute_t* media_max_height = hashmap_get(node_block->attributes, "responsive_max_height");
-			ast_layout_attribute_t* media_min_height = hashmap_get(node_block->attributes, "responsive_min_height");
+			ast_layout_attribute_t *media_max_width = hashmap_get(node_block->attributes, "responsive_max_width");
+			ast_layout_attribute_t *media_min_width = hashmap_get(node_block->attributes, "responsive_min_width");
+			ast_layout_attribute_t *media_max_height = hashmap_get(node_block->attributes, "responsive_max_height");
+			ast_layout_attribute_t *media_min_height = hashmap_get(node_block->attributes, "responsive_min_height");
 
 			string_append_str(generator->media_css, "@media only screen and ("); // NOTE: WE HAVE TO HAVE A SPACE AFTER `AND`
 
 			size_t conditions = 0;
 			size_t media_queries_styles_length = 0;
 
-			if (media_max_width != NULL) {
-				if (media_max_width->values->length > 1) {
+			if (media_max_width != NULL)
+			{
+				if (media_max_width->values->length > 1)
+				{
 					error_generator(2, "The responsive_max_width attribute can only have one value!");
 
 					return NULL;
 				}
-				else if (validate_style_value_size(node_block->styles->normal, node_block->styles->new, media_max_width, NULL, NULL) == false) {
+				else if (validate_style_value_size(node_block->styles->normal, node_block->styles->new, media_max_width, NULL, NULL) == false)
+				{
 					error_generator(2, "Invalid value for responsive_max_width attribute in layout block!");
 
 					return NULL;
 				}
 
-				if (conditions > 0) {
+				if (conditions > 0)
+				{
 					string_append_str(generator->media_css, " and ");
 				}
 
@@ -652,19 +750,23 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 				conditions++;
 			}
 
-			if (media_min_width != NULL) {
-				if (media_min_width->values->length > 1) {
+			if (media_min_width != NULL)
+			{
+				if (media_min_width->values->length > 1)
+				{
 					error_generator(2, "The responsive_max_width attribute can only have one value!");
 
 					return NULL;
 				}
-				else if (validate_style_value_size(node_block->styles->normal, node_block->styles->new, media_min_width, NULL, NULL) == false) {
+				else if (validate_style_value_size(node_block->styles->normal, node_block->styles->new, media_min_width, NULL, NULL) == false)
+				{
 					error_generator(2, "Invalid value for responsive_max_width attribute in layout block!");
 
 					return NULL;
 				}
 
-				if (conditions > 0) {
+				if (conditions > 0)
+				{
 					string_append_str(generator->media_css, " and ");
 				}
 
@@ -674,19 +776,23 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 				conditions++;
 			}
 
-			if (media_max_height != NULL) {
-				if (media_max_height->values->length > 1) {
+			if (media_max_height != NULL)
+			{
+				if (media_max_height->values->length > 1)
+				{
 					error_generator(2, "The responsive_max_width attribute can only have one value!");
 
 					return NULL;
 				}
-				else if (validate_style_value_size(node_block->styles->normal, node_block->styles->new, media_max_height, NULL, NULL) == false) {
+				else if (validate_style_value_size(node_block->styles->normal, node_block->styles->new, media_max_height, NULL, NULL) == false)
+				{
 					error_generator(2, "Invalid value for responsive_max_width attribute in layout block!");
 
 					return NULL;
 				}
 
-				if (conditions > 0) {
+				if (conditions > 0)
+				{
 					string_append_str(generator->media_css, " and ");
 				}
 				string_append_str(generator->media_css, "max-height: ");
@@ -695,19 +801,23 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 				conditions++;
 			}
 
-			if (media_min_height != NULL) {
-				if (media_min_height->values->length > 1) {
+			if (media_min_height != NULL)
+			{
+				if (media_min_height->values->length > 1)
+				{
 					error_generator(2, "The responsive_max_width attribute can only have one value!");
 
 					return NULL;
 				}
-				else if (validate_style_value_size(node_block->styles->normal, node_block->styles->new, media_min_height, NULL, NULL) == false) {
+				else if (validate_style_value_size(node_block->styles->normal, node_block->styles->new, media_min_height, NULL, NULL) == false)
+				{
 					error_generator(2, "Invalid value for responsive_max_width attribute in layout block!");
 
 					return NULL;
 				}
 
-				if (conditions > 0) {
+				if (conditions > 0)
+				{
 					string_append_str(generator->media_css, " and ");
 				}
 				string_append_str(generator->media_css, "min-height: ");
@@ -724,45 +834,61 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 
 			// Media styles
 			size_t styles_normal_capacity = node_block->styles->normal->capacity;
-			for (size_t i = 0; i < styles_normal_capacity; i++) {
-				hashmap_entry_t* entry = node_block->styles->normal->data[i];
+			for (size_t i = 0; i < styles_normal_capacity; i++)
+			{
+				hashmap_entry_t *entry = node_block->styles->normal->data[i];
 
-				while (entry) {
-					ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
+				while (entry)
+				{
+					ast_layout_attribute_t *attribute = cast(ast_layout_attribute_t *, entry->value);
 
 					generator_code_layout_style_value(node_block->styles->normal, node_block->styles->new, attribute);
 
-					if (attribute == NULL) {}
-					else if (attribute->isStyle == false || attribute->ignoreMe == true) {}
-					else {
-						if (media_queries_styles_length != 0) {
+					if (attribute == NULL)
+					{
+					}
+					else if (attribute->isStyle == false || attribute->ignoreMe == true)
+					{
+					}
+					else
+					{
+						if (media_queries_styles_length != 0)
+						{
 							string_append_char(generator->media_css, ';');
 						}
 						string_append_str(generator->media_css, attribute->final_key == NULL ? attribute->key : attribute->final_key);
 						string_append_str(generator->media_css, ":");
-						char* value = attribute->final_value == NULL ? array_value_stringify(attribute->values, ", ") : strdup(attribute->final_value);
+						char *value = attribute->final_value == NULL ? array_value_stringify(attribute->values, ", ") : strdup(attribute->final_value);
 						string_append_str(generator->media_css, value);
 						memory_destroy(value);
 
 						media_queries_styles_length++;
 					}
 
-					entry  = cast(hashmap_entry_t*, entry->next);
+					entry = cast(hashmap_entry_t *, entry->next);
 				}
 			}
 
 			// Media new styles
 			size_t styles_new_capacity = node_block->styles->new->capacity;
 
-			for (size_t i = 0; i < styles_new_capacity; i++) {
-				hashmap_entry_t* entry = node_block->styles->new->data[i];
+			for (size_t i = 0; i < styles_new_capacity; i++)
+			{
+				hashmap_entry_t *entry = node_block->styles->new->data[i];
 
-				while (entry) {
-					ast_layout_attribute_t* attribute = cast(ast_layout_attribute_t*, entry->value);
-					if (attribute == NULL) {}
-					else if (attribute->isStyle == false || attribute->ignoreMe == true) {}
-					else {
-						if (media_queries_styles_length != 0) {
+				while (entry)
+				{
+					ast_layout_attribute_t *attribute = cast(ast_layout_attribute_t *, entry->value);
+					if (attribute == NULL)
+					{
+					}
+					else if (attribute->isStyle == false || attribute->ignoreMe == true)
+					{
+					}
+					else
+					{
+						if (media_queries_styles_length != 0)
+						{
 							string_append_char(generator->media_css, ';');
 						}
 						string_append_str(generator->media_css, attribute->final_key);
@@ -772,7 +898,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 						media_queries_styles_length++;
 					}
 
-					entry  = cast(hashmap_entry_t*, entry->next);
+					entry = cast(hashmap_entry_t *, entry->next);
 				}
 			}
 
@@ -783,25 +909,30 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 		}
 	}
 
-	if ((media_queries_length > 0 || css_attributes_length > 0) && css_attributes->length > 0) {
-		if (html_attributes_length > 0 && html_attributes->length > 0) {
+	if ((media_queries_length > 0 || css_attributes_length > 0) && css_attributes->length > 0)
+	{
+		if (html_attributes_length > 0 && html_attributes->length > 0)
+		{
 			string_append_char(html_attributes, ' ');
 		}
 
 		bool has_substate = false;
 
-		if (hashmap_has_any_sub_value_layout_attribute_style_state(block->states) == true) {
+		if (hashmap_has_any_sub_value_layout_attribute_style_state(block->states) == true)
+		{
 			has_substate = true;
 		}
 
-		if (generator->inlineCSS == true && (media_queries_length == 0 || has_substate == false)) {
+		if (generator->inlineCSS == true && (media_queries_length == 0 || has_substate == false))
+		{
 			string_append_str(html_attributes, "style=\"");
 			string_append(html_attributes, css_attributes);
 			string_append_str(html_attributes, "\"");
 
 			html_attributes_length++;
 		}
-		else {
+		else
+		{
 			string_append_char(generator->css, STYLE_STYLE_LINKING);
 			string_append_str(generator->css, block->tag);
 			string_append_char(generator->css, '{');
@@ -809,37 +940,44 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 			string_append_char(generator->css, '}');
 		}
 
-		if (block->tag != NULL) {
-			if (html_attributes_length > 0) {
+		if (block->tag != NULL)
+		{
+			if (html_attributes_length > 0)
+			{
 				string_append_char(html_attributes, ' ');
 			}
 
 			size_t tag_length = strlen(block->tag);
 
 			string_append_str(html_attributes, "id=");
-			if (tag_length > 1) {
+			if (tag_length > 1)
+			{
 				string_append_char(html_attributes, '\"');
 			}
 
 			string_append_str(html_attributes, block->tag);
 
-			if (tag_length > 1) {
+			if (tag_length > 1)
+			{
 				string_append_char(html_attributes, '\"');
 			}
 			html_attributes_length++;
 		}
 
-		if (has_substate == true) {
-			string_t* pseudo_elements = generator_code_layout_pseudo_elements(generator, block, &css_attributes_length);
+		if (has_substate == true)
+		{
+			string_t *pseudo_elements = generator_code_layout_pseudo_elements(generator, block, &css_attributes_length);
 
-			if (pseudo_elements != NULL) {
+			if (pseudo_elements != NULL)
+			{
 				string_append(generator->css, pseudo_elements);
 				string_destroy(pseudo_elements);
 			}
 		}
 	}
 
-	if (css_attributes != NULL) {
+	if (css_attributes != NULL)
+	{
 		css_attributes->destroy(css_attributes);
 	}
 
@@ -854,19 +992,24 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
  * @returns {char*} name - Name
  *
  */
-char* generator_code_layout_node_type(ast_layout_node_type_t type)
+char *generator_code_layout_node_type(ast_layout_node_type_t type)
 {
 	DEBUG_ME;
-	switch (type) {
-		#undef ADD_LAYOUT_TYPE
-		#undef ADD_LAYOUT_TYPE_HIDE
-		#undef ADD_LAYOUT_TYPE_REPEAT
+	switch (type)
+	{
+#undef ADD_LAYOUT_TYPE
+#undef ADD_LAYOUT_TYPE_HIDE
+#undef ADD_LAYOUT_TYPE_REPEAT
 
-		#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) case TYPE: return GENERATED_NAME;
-		#define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) case TYPE: return GENERATED_NAME;
-		#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER)
+#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) \
+	case TYPE:                                                                           \
+		return GENERATED_NAME;
+#define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER) \
+	case TYPE:                                                                                \
+		return GENERATED_NAME;
+#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, IS_MOTHER)
 
-		#include "ast_layout_type.h"
+#include "ast_layout_type.h"
 	}
 
 	return "error?";
@@ -880,25 +1023,30 @@ char* generator_code_layout_node_type(ast_layout_node_type_t type)
  * @returns {char*} name - Name
  *
  */
-char* generator_code_layout_attribute_name(ast_layout_attribute_type_t type)
+char *generator_code_layout_attribute_name(ast_layout_attribute_type_t type)
 {
 	DEBUG_ME;
-	switch (type) {
-		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
-		#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
+	switch (type)
+	{
+#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
+#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
 
-		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) case TYPE: return "ERROR";
-		#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS)
+#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) \
+	case TYPE:                                                                                                                 \
+		return "ERROR";
+#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS)
 
-		#include "ast_layout_attribute_style_type.h"
+#include "ast_layout_attribute_style_type.h"
 
-		#undef ADD_LAYOUT_ATTRIBUTE_TYPE
-		#undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
+#undef ADD_LAYOUT_ATTRIBUTE_TYPE
+#undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
 
-		#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) case TYPE: return GENERATED_NAME;
-		#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME)
+#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME) \
+	case TYPE:                                                                          \
+		return GENERATED_NAME;
+#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME)
 
-		#include "ast_layout_attribute_type.h"
+#include "ast_layout_attribute_type.h"
 	}
 
 	return "error2????";

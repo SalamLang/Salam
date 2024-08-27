@@ -17,7 +17,7 @@
  * @returns {void}
  *
  */
-void hashmap_print_layout_attribute(hashmap_layout_attribute_t* map);
+void hashmap_print_layout_attribute(hashmap_layout_attribute_t *map);
 
 /**
  *
@@ -27,7 +27,7 @@ void hashmap_print_layout_attribute(hashmap_layout_attribute_t* map);
  * @returns {void}
  *
  */
-void hashmap_destroy_layout_attribute(hashmap_layout_attribute_t* map);
+void hashmap_destroy_layout_attribute(hashmap_layout_attribute_t *map);
 
 /**
  *
@@ -37,7 +37,7 @@ void hashmap_destroy_layout_attribute(hashmap_layout_attribute_t* map);
  * @returns {hashmap_layout_attribute_t*}
  *
  */
-hashmap_layout_attribute_t* hashmap_create_layout_attribute(size_t capacity);
+hashmap_layout_attribute_t *hashmap_create_layout_attribute(size_t capacity);
 
 /**
  *
@@ -47,7 +47,7 @@ hashmap_layout_attribute_t* hashmap_create_layout_attribute(size_t capacity);
  * @returns {void}
  *
  */
-void hashmap_destroy_layout_attribute_style_state(hashmap_layout_attribute_t* map);
+void hashmap_destroy_layout_attribute_style_state(hashmap_layout_attribute_t *map);
 
 /**
  *
@@ -57,7 +57,7 @@ void hashmap_destroy_layout_attribute_style_state(hashmap_layout_attribute_t* ma
  * @returns {void}
  *
  */
-void hashmap_print_layout_attribute_style_state(hashmap_layout_attribute_t* map);
+void hashmap_print_layout_attribute_style_state(hashmap_layout_attribute_t *map);
 
 /**
  *
@@ -67,7 +67,7 @@ void hashmap_print_layout_attribute_style_state(hashmap_layout_attribute_t* map)
  * @returns {hashmap_layout_attribute_state_style_t*}
  *
  */
-hashmap_layout_attribute_state_style_t* hashmap_create_layout_attribute_style_state(size_t capacity);
+hashmap_layout_attribute_state_style_t *hashmap_create_layout_attribute_style_state(size_t capacity);
 
 /**
  *
@@ -77,7 +77,7 @@ hashmap_layout_attribute_state_style_t* hashmap_create_layout_attribute_style_st
  * @returns {void}
  *
  */
-void hashmap_layout_attribute_print(hashmap_layout_attribute_t* map);
+void hashmap_layout_attribute_print(hashmap_layout_attribute_t *map);
 
 /**
  *
@@ -87,7 +87,7 @@ void hashmap_layout_attribute_print(hashmap_layout_attribute_t* map);
  * @returns {void}
  *
  */
-void hashmap_layout_attribute_destroy(hashmap_layout_attribute_t* map);
+void hashmap_layout_attribute_destroy(hashmap_layout_attribute_t *map);
 
 /**
  *
@@ -97,7 +97,7 @@ void hashmap_layout_attribute_destroy(hashmap_layout_attribute_t* map);
  * @returns {bool}
  *
  */
-bool hashmap_has_any_sub_value_layout_attribute_style_state(hashmap_layout_attribute_t* map);
+bool hashmap_has_any_sub_value_layout_attribute_style_state(hashmap_layout_attribute_t *map);
 
 /**
  *
@@ -107,6 +107,6 @@ bool hashmap_has_any_sub_value_layout_attribute_style_state(hashmap_layout_attri
  * @returns {bool}
  *
  */
-bool hashmap_layout_attribute_has_any_sub_value(hashmap_layout_attribute_t* map);
+bool hashmap_layout_attribute_has_any_sub_value(hashmap_layout_attribute_t *map);
 
 #endif

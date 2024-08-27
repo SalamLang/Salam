@@ -718,7 +718,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 
 			string_append_char(generator->media_css, ')');
 			string_append_char(generator->media_css, '{');
-			string_append_char(generator->media_css, '#');
+			string_append_char(generator->media_css, STYLE_STYLE_LINKING);
 			string_append_str(generator->media_css, block->tag);
 			string_append_char(generator->media_css, '{');
 
@@ -802,7 +802,7 @@ string_t* generator_code_layout_attributes(generator_t* generator, ast_layout_bl
 			html_attributes_length++;
 		}
 		else {
-			string_append_char(generator->css, '#');
+			string_append_char(generator->css, STYLE_STYLE_LINKING);
 			string_append_str(generator->css, block->tag);
 			string_append_char(generator->css, '{');
 			string_append(generator->css, css_attributes);

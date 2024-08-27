@@ -519,7 +519,7 @@ bool is_schar_alpha(const char* c)
  */
 bool is_char_digit(char c)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	return c >= '0' && c <= '9';
 }
 
@@ -533,7 +533,7 @@ bool is_char_digit(char c)
  */
 bool is_char_alpha(const char c)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 }
 
@@ -547,7 +547,7 @@ bool is_char_alpha(const char c)
  */
 bool is_char_alnum(char c)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	return is_char_alpha(c) || is_char_digit(c);
 }
 
@@ -561,7 +561,7 @@ bool is_char_alnum(char c)
  */
 bool is_char_whitespace(char c)
 {
-    DEBUG_ME;
+	DEBUG_ME;
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
@@ -576,7 +576,7 @@ bool is_char_whitespace(char c)
 bool is_wchar_alpha(uint32_t codepoint)
 {
 	DEBUG_ME;
-    return iswalpha(codepoint);
+	return iswalpha(codepoint);
 }
 
 /**
@@ -621,53 +621,53 @@ bool is_utf8_alpha(char* utf8)
  */
 bool is_utf8_digit(char* utf8)
 {
-    // Persian digits
-    if (
-        strcmp(utf8, "۰") == 0 ||  // Persian 0
-        strcmp(utf8, "۱") == 0 ||  // Persian 1
-        strcmp(utf8, "۲") == 0 ||  // Persian 2
-        strcmp(utf8, "۳") == 0 ||  // Persian 3
-        strcmp(utf8, "۴") == 0 ||  // Persian 4
-        strcmp(utf8, "۵") == 0 ||  // Persian 5
-        strcmp(utf8, "۶") == 0 ||  // Persian 6
-        strcmp(utf8, "۷") == 0 ||  // Persian 7
-        strcmp(utf8, "۸") == 0 ||  // Persian 8
-        strcmp(utf8, "۹") == 0     // Persian 9
-    ) {
-        return true;
-    }
-    // Arabic digits
-    else if (
-        strcmp(utf8, "٠") == 0 ||  // Arabic 0
-        strcmp(utf8, "١") == 0 ||  // Arabic 1
-        strcmp(utf8, "٢") == 0 ||  // Arabic 2
-        strcmp(utf8, "٣") == 0 ||  // Arabic 3
-        strcmp(utf8, "٤") == 0 ||  // Arabic 4
-        strcmp(utf8, "٥") == 0 ||  // Arabic 5
-        strcmp(utf8, "٦") == 0 ||  // Arabic 6
-        strcmp(utf8, "٧") == 0 ||  // Arabic 7
-        strcmp(utf8, "٨") == 0 ||  // Arabic 8
-        strcmp(utf8, "٩") == 0     // Arabic 9
-    ) {
-        return true;
-    }
-    // English digits
-    else if (
-        strcmp(utf8, "0") == 0 ||  // English 0
-        strcmp(utf8, "1") == 0 ||  // English 1
-        strcmp(utf8, "2") == 0 ||  // English 2
-        strcmp(utf8, "3") == 0 ||  // English 3
-        strcmp(utf8, "4") == 0 ||  // English 4
-        strcmp(utf8, "5") == 0 ||  // English 5
-        strcmp(utf8, "6") == 0 ||  // English 6
-        strcmp(utf8, "7") == 0 ||  // English 7
-        strcmp(utf8, "8") == 0 ||  // English 8
-        strcmp(utf8, "9") == 0     // English 9
-    ) {
-        return true;
-    }
+	// Persian digits
+	if (
+		strcmp(utf8, "۰") == 0 ||  // Persian 0
+		strcmp(utf8, "۱") == 0 ||  // Persian 1
+		strcmp(utf8, "۲") == 0 ||  // Persian 2
+		strcmp(utf8, "۳") == 0 ||  // Persian 3
+		strcmp(utf8, "۴") == 0 ||  // Persian 4
+		strcmp(utf8, "۵") == 0 ||  // Persian 5
+		strcmp(utf8, "۶") == 0 ||  // Persian 6
+		strcmp(utf8, "۷") == 0 ||  // Persian 7
+		strcmp(utf8, "۸") == 0 ||  // Persian 8
+		strcmp(utf8, "۹") == 0     // Persian 9
+	) {
+		return true;
+	}
+	// Arabic digits
+	else if (
+		strcmp(utf8, "٠") == 0 ||  // Arabic 0
+		strcmp(utf8, "١") == 0 ||  // Arabic 1
+		strcmp(utf8, "٢") == 0 ||  // Arabic 2
+		strcmp(utf8, "٣") == 0 ||  // Arabic 3
+		strcmp(utf8, "٤") == 0 ||  // Arabic 4
+		strcmp(utf8, "٥") == 0 ||  // Arabic 5
+		strcmp(utf8, "٦") == 0 ||  // Arabic 6
+		strcmp(utf8, "٧") == 0 ||  // Arabic 7
+		strcmp(utf8, "٨") == 0 ||  // Arabic 8
+		strcmp(utf8, "٩") == 0     // Arabic 9
+	) {
+		return true;
+	}
+	// English digits
+	else if (
+		strcmp(utf8, "0") == 0 ||  // English 0
+		strcmp(utf8, "1") == 0 ||  // English 1
+		strcmp(utf8, "2") == 0 ||  // English 2
+		strcmp(utf8, "3") == 0 ||  // English 3
+		strcmp(utf8, "4") == 0 ||  // English 4
+		strcmp(utf8, "5") == 0 ||  // English 5
+		strcmp(utf8, "6") == 0 ||  // English 6
+		strcmp(utf8, "7") == 0 ||  // English 7
+		strcmp(utf8, "8") == 0 ||  // English 8
+		strcmp(utf8, "9") == 0     // English 9
+	) {
+		return true;
+	}
 
-    return false;
+	return false;
 }
 
 /**
@@ -681,17 +681,17 @@ bool is_utf8_digit(char* utf8)
 char convert_to_english_digit(wchar_t ch)
 {
 	DEBUG_ME;
-    if (is_english_digit(ch)) {
-        return (char)ch;
-    }
+	if (is_english_digit(ch)) {
+		return (char)ch;
+	}
 	else if (is_persian_digit(ch)) {
-        return '0' + (ch - 0x06F0);
-    }
+		return '0' + (ch - 0x06F0);
+	}
 	else if (is_arabic_digit(ch)) {
-        return '0' + (ch - 0x0660);
-    }
+		return '0' + (ch - 0x0660);
+	}
 
-    return ch;
+	return ch;
 }
 
 /**
@@ -749,34 +749,34 @@ char convert_utf8_to_english_digit(char* uc)
 void string_number2number(char* str)
 {
 	DEBUG_ME;
-    if (str == NULL) {
-        return;
-    }
+	if (str == NULL) {
+		return;
+	}
 
-    size_t len = strlen(str);
-    wchar_t wc;
-    int wcl;
-    char* temp_str = (char*)malloc((len + 1) * sizeof(char));
+	size_t len = strlen(str);
+	wchar_t wc;
+	int wcl;
+	char* temp_str = (char*)malloc((len + 1) * sizeof(char));
 
-    char* src_ptr = str;
-    char* dest_ptr = temp_str;
+	char* src_ptr = str;
+	char* dest_ptr = temp_str;
 
-    while (*src_ptr != '\0') {
-        wcl = mbtowc(&wc, src_ptr, MB_CUR_MAX);
-        if (wcl <= 0) {
-            // Error or end of multibyte sequence
-            break;
-        }
-        *dest_ptr = convert_to_english_digit(wc);
-        src_ptr += wcl;
-        dest_ptr++;
-    }
+	while (*src_ptr != '\0') {
+		wcl = mbtowc(&wc, src_ptr, MB_CUR_MAX);
+		if (wcl <= 0) {
+			// Error or end of multibyte sequence
+			break;
+		}
+		*dest_ptr = convert_to_english_digit(wc);
+		src_ptr += wcl;
+		dest_ptr++;
+	}
 
-    *dest_ptr = '\0';
+	*dest_ptr = '\0';
 
-    strcpy(str, temp_str);
+	strcpy(str, temp_str);
 
-    memory_destroy(temp_str);
+	memory_destroy(temp_str);
 }
 
 /**
@@ -841,20 +841,20 @@ char* double2string(double value)
 size_t utf8_char_length(char c)
 {
 	DEBUG_ME;
-    if ((c & 0x80) == 0) {
+	if ((c & 0x80) == 0) {
 		return 1; // 0xxxxxxx
 	}
 	else if ((c & 0xE0) == 0xC0) {
 		return 2; // 110xxxxx
 	}
-    else if ((c & 0xF0) == 0xE0) {
+	else if ((c & 0xF0) == 0xE0) {
 		return 3; // 1110xxxx
 	}
-    else if ((c & 0xF8) == 0xF0) {
+	else if ((c & 0xF8) == 0xF0) {
 		return 4; // 11110xxx
 	}
 
-    return 0; // Invalid UTF-8
+	return 0; // Invalid UTF-8
 }
 
 /**
@@ -869,33 +869,33 @@ size_t utf8_char_length(char c)
 uint32_t utf8_decode(const char* source, size_t* index)
 {
 	DEBUG_ME;
-    size_t length = utf8_char_length(source[*index]);
-    uint32_t codepoint = 0;
+	size_t length = utf8_char_length(source[*index]);
+	uint32_t codepoint = 0;
 
-    switch (length) {
-        case 1:
-            codepoint = source[*index];
-            break;
-        case 2:
-            codepoint = ((source[*index] & 0x1F) << 6) |
-                        (source[*index + 1] & 0x3F);
-            break;
-        case 3:
-            codepoint = ((source[*index] & 0x0F) << 12) |
-                        ((source[*index + 1] & 0x3F) << 6) |
-                        (source[*index + 2] & 0x3F);
-            break;
-        case 4:
-            codepoint = ((source[*index] & 0x07) << 18) |
-                        ((source[*index + 1] & 0x3F) << 12) |
-                        ((source[*index + 2] & 0x3F) << 6) |
-                        (source[*index + 3] & 0x3F);
-            break;
-    }
+	switch (length) {
+		case 1:
+			codepoint = source[*index];
+			break;
+		case 2:
+			codepoint = ((source[*index] & 0x1F) << 6) |
+						(source[*index + 1] & 0x3F);
+			break;
+		case 3:
+			codepoint = ((source[*index] & 0x0F) << 12) |
+						((source[*index + 1] & 0x3F) << 6) |
+						(source[*index + 2] & 0x3F);
+			break;
+		case 4:
+			codepoint = ((source[*index] & 0x07) << 18) |
+						((source[*index + 1] & 0x3F) << 12) |
+						((source[*index + 2] & 0x3F) << 6) |
+						(source[*index + 3] & 0x3F);
+			break;
+	}
 
-    *index += length;
+	*index += length;
 	
-    return codepoint;
+	return codepoint;
 }
 
 /**
@@ -908,29 +908,29 @@ uint32_t utf8_decode(const char* source, size_t* index)
  */
 size_t utf8_strlen(const char *str)
 {
-    size_t len = 0;
-    mbstate_t state;
-    memset(&state, 0, sizeof(state));
+	size_t len = 0;
+	mbstate_t state;
+	memset(&state, 0, sizeof(state));
 
-    while (*str) {
-        wchar_t wc;
-        int bytes = mbrtowc(&wc, str, MB_CUR_MAX, &state);
+	while (*str) {
+		wchar_t wc;
+		int bytes = mbrtowc(&wc, str, MB_CUR_MAX, &state);
 
-        if (bytes > 0) {
-            str += bytes;
-            len++;
-        }
+		if (bytes > 0) {
+			str += bytes;
+			len++;
+		}
 		else if (bytes == -1) {
-            perror("mbrtowc");
+			perror("mbrtowc");
 
-            exit(EXIT_FAILURE);
-        }
+			exit(EXIT_FAILURE);
+		}
 		else {
-            break;
-        }
-    }
+			break;
+		}
+	}
 
-    return len;
+	return len;
 }
 
 /**

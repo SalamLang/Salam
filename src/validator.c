@@ -383,7 +383,11 @@ bool is_attribute_type_in_array(ast_layout_attribute_type_t type, ast_layout_att
 bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_type, ast_layout_attribute_t *attribute)
 {
 	DEBUG_ME;
-	if (is_layout_node_a_single_tag(attribute->parent_node_type) && attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT)
+	if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_GROUP)
+	{
+		return true;
+	}
+	else if (is_layout_node_a_single_tag(attribute->parent_node_type) && attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT)
 	{
 		return false;
 	}

@@ -1016,3 +1016,49 @@ size_t mb2strlen(const char *identifier)
 
 	return wcs_len;
 }
+
+/**
+ *
+ * @function string_ends
+ * @brief Detect if a string ends with another string
+ * @params {const char*} source - Input string
+ * @params {const char*} search - Search string
+ * @returns {bool} ends with it or not
+ *
+ */
+bool string_ends(const char *source, const char *search)
+{
+	DEBUG_ME;
+	size_t source_len = strlen(source);
+	size_t search_len = strlen(search);
+
+	if (source_len < search_len)
+	{
+		return false;
+	}
+
+	return strcmp(source + source_len - search_len, search) == 0;
+}
+
+/**
+ *
+ * @function string_starts
+ * @brief Detect if a string starts with another string
+ * @params {const char*} source - Input string
+ * @params {const char*} search - Search string
+ * @returns {bool} ends with it or not
+ *
+ */
+bool string_starts(const char *source, const char *search)
+{
+	DEBUG_ME;
+	size_t source_len = strlen(source);
+	size_t search_len = strlen(search);
+
+	if (source_len < search_len)
+	{
+		return false;
+	}
+
+	return strncmp(source, search, search_len) == 0;
+}

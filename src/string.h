@@ -430,4 +430,26 @@ char convert_utf8_to_english_digit(char *uc);
  */
 size_t mb2strlen(const char *identifier);
 
+/**
+ *
+ * @function string_ends
+ * @brief Detect if a string ends with another string
+ * @params {const char*} source - Input string
+ * @params {const char*} search - Search string
+ * @returns {bool} ends with it or not
+ *
+ */
+bool string_ends(const char *source, const char *search);
+
+/**
+ *
+ * @function string_starts
+ * @brief Detect if a string starts with another string
+ * @params {const char*} source - Input string
+ * @params {const char*} search - Search string
+ * @returns {bool} ends with it or not
+ *
+ */
+bool string_starts(const char *source, const char *search);
+
 #endif

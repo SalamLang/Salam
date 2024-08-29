@@ -1062,3 +1062,27 @@ bool string_starts(const char *source, const char *search)
 
 	return strncmp(source, search, search_len) == 0;
 }
+
+/**
+ *
+ * @function string_create_from
+ * @brief Create a string from a substring
+ * @params {const char*} data - Data
+ * @params {size_t} start - Start index
+ * @params {size_t} end - End index
+ * @returns {string_t*}
+ *
+ */
+string_t *string_create_from(const char *data, size_t start, size_t end)
+{
+	DEBUG_ME;
+	size_t length = strlen(data);
+	string_t *name = string_create(length);
+
+	for (size_t i = start; i < end; i++)
+	{
+		string_append_char(name, data[i]);
+	}
+
+	return name;
+}

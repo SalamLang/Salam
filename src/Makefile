@@ -4,8 +4,7 @@ INPUT_FILE = ../example/testhover.salam
 
 CC = gcc
 CFLAGS =
-CFLAGS = -g -Walloca -Wextra -Wall -fsanitize=address,undefined
--std=c11
+# CFLAGS = -g -Walloca -Wextra -Wall -fsanitize=address,undefined -std=c11
 
 TARGET = main
 

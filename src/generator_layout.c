@@ -692,12 +692,22 @@ string_t *generator_code_layout_attributes(generator_t *generator, ast_layout_bl
 		}
 	}
 
-	if ((block->meta_children != NULL && block->meta_children->length > 0) || block->styles->normal->length > 0 || block->styles->new->length > 0)
+	bool has_substate = false;
+
+	if (hashmap_has_any_sub_value_layout_attribute_style_state(block->states) == true)
+	{
+		has_substate = true;
+		printf("hashmap_has_any_sub_value_layout_attribute_style_state\n");
+	}
+
+	if ((block->meta_children != NULL && block->meta_children->length > 0) || block->styles->normal->length > 0 || block->styles->new->length > 0 || has_substate == true)
 	{
 		if (block->tag == NULL)
 		{
 			block->tag = generator_identifier_get(generator->identifier); // We will free its memory in the block_layout_destroy function
 		}
+
+		printf("now we have tag for the element\n");
 	}
 
 	size_t media_queries_length = 0;
@@ -909,35 +919,31 @@ string_t *generator_code_layout_attributes(generator_t *generator, ast_layout_bl
 		}
 	}
 
-	if ((media_queries_length > 0 || css_attributes_length > 0) && css_attributes->length > 0)
+	if (((media_queries_length > 0 || css_attributes_length > 0) && css_attributes->length > 0) || has_substate == true)
 	{
 		if (html_attributes_length > 0 && html_attributes->length > 0)
 		{
 			string_append_char(html_attributes, ' ');
 		}
 
-		bool has_substate = false;
-
-		if (hashmap_has_any_sub_value_layout_attribute_style_state(block->states) == true)
+		if (css_attributes->length > 0)
 		{
-			has_substate = true;
-		}
+			if (generator->inlineCSS == true && (media_queries_length == 0 || has_substate == false))
+			{
+				string_append_str(html_attributes, "style=\"");
+				string_append(html_attributes, css_attributes);
+				string_append_str(html_attributes, "\"");
 
-		if (generator->inlineCSS == true && (media_queries_length == 0 || has_substate == false))
-		{
-			string_append_str(html_attributes, "style=\"");
-			string_append(html_attributes, css_attributes);
-			string_append_str(html_attributes, "\"");
-
-			html_attributes_length++;
-		}
-		else
-		{
-			string_append_char(generator->css, STYLE_STYLE_LINKING);
-			string_append_str(generator->css, block->tag);
-			string_append_char(generator->css, '{');
-			string_append(generator->css, css_attributes);
-			string_append_char(generator->css, '}');
+				html_attributes_length++;
+			}
+			else
+			{
+				string_append_char(generator->css, STYLE_STYLE_LINKING);
+				string_append_str(generator->css, block->tag);
+				string_append_char(generator->css, '{');
+				string_append(generator->css, css_attributes);
+				string_append_char(generator->css, '}');
+			}
 		}
 
 		if (block->tag != NULL)
@@ -949,7 +955,8 @@ string_t *generator_code_layout_attributes(generator_t *generator, ast_layout_bl
 
 			size_t tag_length = strlen(block->tag);
 
-			string_append_str(html_attributes, "id=");
+			// string_append_str(html_attributes, "id=");
+			string_append_str(html_attributes, "class=");
 			if (tag_length > 1)
 			{
 				string_append_char(html_attributes, '\"');

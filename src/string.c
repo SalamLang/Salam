@@ -1079,6 +1079,11 @@ string_t *string_create_from(const char *data, size_t start, size_t end)
 	size_t length = strlen(data);
 	string_t *name = string_create(length);
 
+	if (end > length)
+	{
+		return name;
+	}
+
 	for (size_t i = start; i < end; i++)
 	{
 		string_append_char(name, data[i]);

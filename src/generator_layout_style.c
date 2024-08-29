@@ -43,8 +43,18 @@ string_t *generator_code_layout_pseudo_elements(generator_t *generator, ast_layo
 						{
 							string_append_char(css, STYLE_STYLE_LINKING);
 							string_append_str(css, block->tag);
-							string_append_char(css, ':');
+
+							if (type != AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_GLOBAL)
+							{
+								string_append_char(css, ':');
+							}
+							else
+							{
+								string_append_char(css, ' ');
+							}
+
 							string_append_str(css, generator_code_layout_attribute_style_state_type_to_generated_name(type));
+
 							string_append_char(css, '{');
 							string_append(css, pseudo_element_styles);
 							string_append_char(css, '}');

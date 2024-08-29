@@ -64,7 +64,8 @@ void parser_parse_layout_block(ast_layout_block_t *block, lexer_t *lexer)
 			}
 			else
 			{
-				error_parser(2, "The '%s' is not a valid layout node, style state or attribute at line %d, column %d", name->data, last_name->location.end_line, last_name->location.end_column);
+				if error_parser (2, "The '%s' is not a valid layout node, style state or attribute at line %d, column %d", name->data, last_name->location.end_line, last_name->location.end_column)
+					;
 				return;
 			}
 		}

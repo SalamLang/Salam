@@ -858,8 +858,6 @@ void lexer_lex_number(lexer_t *lexer, char *uc)
 	string_t *value = string_create(25);
 	string_append_char(value, convert_utf8_to_english_digit(uc));
 
-	memory_destroy(uc);
-
 	bool is_float = false;
 
 	while (LEXER_CURRENT != '\0')
@@ -958,8 +956,6 @@ void lexer_lex_identifier(lexer_t *lexer, char *uc)
 	string_t *value = string_create(25);
 
 	string_append_str(value, uc);
-
-	memory_destroy(uc);
 
 	while (LEXER_CURRENT != '\0')
 	{
@@ -1244,6 +1240,11 @@ void lexer_lex(lexer_t *lexer)
 			case '8':
 			case '9':
 				lexer_lex_number(lexer, uc);
+
+				if (uc != NULL)
+				{
+					memory_destroy(uc);
+				}
 				continue;
 
 			default:
@@ -1254,11 +1255,11 @@ void lexer_lex(lexer_t *lexer)
 				else
 				{
 					error_lexer(1, "Unknown character '%s' at line %zu, column %zu", uc, lexer->line, lexer->column);
+				}
 
-					if (uc != NULL)
-					{
-						memory_destroy(uc);
-					}
+				if (uc != NULL)
+				{
+					memory_destroy(uc);
 				}
 				continue;
 			}
@@ -1289,11 +1290,11 @@ void lexer_lex(lexer_t *lexer)
 			else
 			{
 				error_lexer(1, "Unknown character '%s' at line %zu, column %zu", uc, lexer->line, lexer->column);
+			}
 
-				if (uc != NULL)
-				{
-					memory_destroy(uc);
-				}
+			if (uc != NULL)
+			{
+				memory_destroy(uc);
 			}
 			continue;
 		}

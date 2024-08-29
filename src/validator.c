@@ -943,7 +943,7 @@ bool validate_style_value_color(hashmap_t *styles, hashmap_t *new_styles, ast_la
 		{
 			return false;
 		}
-		else if (value[0] == STYLE_STYLE_LINKING)
+		else if (value[0] == '#')
 		{
 			return true;
 		}

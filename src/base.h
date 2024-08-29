@@ -26,3 +26,5 @@
 // #define DEBUG_ME
 
 #define STYLE_STYLE_LINKING '.'
+
+#define STYLE_STATE_ENDS_GROUP " گروه"

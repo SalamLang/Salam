@@ -2,26 +2,107 @@
 
 /**
  *
- * @function generator_code_layout_block
- * @brief Generate the HTML code for the layout block
+ * @function generator_code_layout_block_item
+ * @brief Generate the HTML code for the layout block item
  * @params {generator_t*} generator - Generator
- * @params {array_t*} children - Children
+ * @params {ast_layout_node_t*} node - Node
  * @returns {string_t*}
  *
  */
-string_t *generator_code_layout_block(generator_t *generator, array_t *children)
+string_t *generator_code_layout_block_item(generator_t *generator, ast_layout_node_t *node)
 {
-	DEBUG_ME;
-	string_t *html = string_create(1024);
+	string_t *layout_block_str = string_create(1024);
+	string_t *node_attrs_str = generator_code_layout_attributes(generator, node->block);
+	char *node_name = generator_code_layout_node_type(node->type);
 
-	for (size_t i = 0; i < children->length; i++)
+	if (node->type == AST_LAYOUT_TYPE_INCLUDE)
 	{
-		ast_layout_node_t *node = array_get(children, i);
+		hashmap_t *attributes = node->block->attributes;
+		ast_layout_attribute_t *src = hashmap_get(attributes, "src");
+		ast_layout_attribute_t *repeat = hashmap_get(attributes, "repeat");
+		ast_value_t *repeat_value = NULL;
+		ast_value_t *src_value = NULL;
+		size_t repeat_value_sizet = 1;
 
-		string_t *layout_block_str = string_create(1024);
-		string_t *node_attrs_str = generator_code_layout_attributes(generator, node->block);
-		char *node_name = generator_code_layout_node_type(node->type);
+		if (src == NULL)
+		{
+			error_generator(1, "Include node must have a 'src' attribute");
+		}
+		else if (src->values->length > 1)
+		{
+			error_generator(1, "Include node 'src' attribute must have only one value");
+		}
+		else if (repeat != NULL && repeat->values->length > 1)
+		{
+			error_generator(1, "Include node 'repeat' attribute must have only one value");
+		}
+		else if (repeat != NULL && repeat->values->length == 1)
+		{
+			repeat_value = array_get(repeat->values, 0);
 
+			if (repeat_value->type->kind != AST_TYPE_KIND_INT)
+			{
+				error_generator(1, "Include node 'repeat' attribute must be a integer");
+			}
+			else if (repeat_value->data.int_value < 1)
+			{
+				error_generator(1, "Include node 'repeat' attribute must be greater than 0");
+			}
+
+			repeat_value_sizet = repeat_value->data.int_value;
+		}
+
+		src_value = array_get(src->values, 0);
+		if (src_value->type->kind != AST_TYPE_KIND_STRING)
+		{
+			error_generator(1, "Include node 'src' attribute must be a string");
+		}
+
+		char *path = src_value->data.string_value;
+		printf("include path %s\n", path);
+
+		if (!file_exists(path))
+		{
+			error_generator(1, "Include file '%s' does not exist", path);
+		}
+
+		size_t size = 0;
+		char *content = file_reads_binary(path, &size);
+		lexer_t *lexer = lexer_create(path, content);
+		lexer->source_size = size;
+		lexer_lex(lexer);
+
+		lexer_save(lexer, "include-tokens.txt");
+
+		ast_t *ast = parser_parse(lexer);
+
+		if (ast->layout == NULL)
+		{
+			error_generator(1, "Include file '%s' does not have a layout block", path);
+		}
+		// else if (ast->layout->block->children->length == 0)
+		// {
+		// 	error_generator(1, "Include file '%s' layout block does not have any children", path);
+		// }
+		else
+		{
+			for (size_t i = 1; i <= repeat_value_sizet; i++)
+			{
+				if (ast->layout->block->text_content != NULL)
+				{
+					string_append_str(layout_block_str, ast->layout->block->text_content);
+				}
+
+				generator_code_layout_block(generator, ast->layout->block->children);
+			}
+		}
+
+		ast_destroy(ast);
+		lexer_destroy(lexer);
+		memory_destroy(content);
+	}
+	else
+	{
 		string_append_char(layout_block_str, '<');
 		string_append_str(layout_block_str, node_name);
 		if (node_attrs_str->length > 0)
@@ -84,11 +165,33 @@ string_t *generator_code_layout_block(generator_t *generator, array_t *children)
 		{
 			string_append_char(layout_block_str, '\n');
 		}
+	}
 
-		string_append(html, layout_block_str);
+	return layout_block_str;
+}
 
-		if (layout_block_str != NULL)
-			layout_block_str->destroy(layout_block_str);
+/**
+ *
+ * @function generator_code_layout_block
+ * @brief Generate the HTML code for the layout block
+ * @params {generator_t*} generator - Generator
+ * @params {array_t*} children - Children
+ * @returns {string_t*}
+ *
+ */
+string_t *generator_code_layout_block(generator_t *generator, array_t *children)
+{
+	DEBUG_ME;
+	string_t *html = string_create(1024);
+
+	for (size_t i = 0; i < children->length; i++)
+	{
+		ast_layout_node_t *node = array_get(children, i);
+		string_t *node_html = generator_code_layout_block_item(generator, node);
+
+		string_append(html, node_html);
+
+		string_destroy(node_html);
 	}
 
 	return html;

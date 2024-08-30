@@ -115,4 +115,15 @@ void generator_code_head_meta_children(generator_t *generator, ast_layout_block_
  */
 char *generator_code_layout_attribute_name(ast_layout_attribute_type_t type);
 
+/**
+ *
+ * @function generator_code_layout_block_item
+ * @brief Generate the HTML code for the layout block item
+ * @params {generator_t*} generator - Generator
+ * @params {ast_layout_node_t*} node - Node
+ * @returns {string_t*}
+ *
+ */
+string_t *generator_code_layout_block_item(generator_t *generator, ast_layout_node_t *node);
+
 #endif

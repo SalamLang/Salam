@@ -175,7 +175,7 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DIV, "DIV", "div", "div", "جعبه", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LINK, "LINK", "link", "a", "لینک", false)
 
 // Our Elements
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_INCLUDE, "INCLUDE", "include", "include", "فراخوانی", return)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_INCLUDE, "INCLUDE", "include", "include", "فراخوانی", true)
 
 // Utility Elements
 ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_NONE, "NONE", "none", "layout", "صفحه", false)

@@ -39,17 +39,32 @@ string_t *generator_code_layout_block_item(generator_t *generator, ast_layout_no
 		else if (repeat != NULL && repeat->values->length == 1)
 		{
 			repeat_value = array_get(repeat->values, 0);
+			repeat_value->print(repeat_value);
 
-			if (repeat_value->type->kind != AST_TYPE_KIND_INT)
+			if (repeat_value->type->kind == AST_TYPE_KIND_STRING)
+			{
+				if (string_is_integer(repeat_value->data.string_value) == false)
+				{
+					error_generator(1, "Include node 'repeat' attribute must be a integer");
+				}
+				else
+				{
+					repeat_value_sizet = atoi(repeat_value->data.string_value);
+				}
+			}
+			else if (repeat_value->type->kind == AST_TYPE_KIND_INT)
+			{
+				repeat_value_sizet = repeat_value->data.int_value;
+			}
+			else
 			{
 				error_generator(1, "Include node 'repeat' attribute must be a integer");
 			}
-			else if (repeat_value->data.int_value < 1)
-			{
-				error_generator(1, "Include node 'repeat' attribute must be greater than 0");
-			}
+		}
 
-			repeat_value_sizet = repeat_value->data.int_value;
+		if (repeat_value_sizet < 1)
+		{
+			error_generator(1, "Include node 'repeat' attribute must be greater than 0");
 		}
 
 		src_value = array_get(src->values, 0);
@@ -59,7 +74,6 @@ string_t *generator_code_layout_block_item(generator_t *generator, ast_layout_no
 		}
 
 		char *path = src_value->data.string_value;
-		printf("include path %s\n", path);
 
 		if (!file_exists(path))
 		{
@@ -93,7 +107,11 @@ string_t *generator_code_layout_block_item(generator_t *generator, ast_layout_no
 					string_append_str(layout_block_str, ast->layout->block->text_content);
 				}
 
-				generator_code_layout_block(generator, ast->layout->block->children);
+				string_t *block_code = generator_code_layout_block(generator, ast->layout->block->children);
+
+				string_append(layout_block_str, block_code);
+
+				string_destroy(block_code);
 			}
 		}
 
@@ -803,14 +821,18 @@ string_t *generator_code_layout_attributes(generator_t *generator, ast_layout_bl
 		printf("hashmap_has_any_sub_value_layout_attribute_style_state\n");
 	}
 
+	bool first_load = false;
+	if (block->tag != NULL)
+	{
+		first_load = true;
+	}
+
 	if ((block->meta_children != NULL && block->meta_children->length > 0) || block->styles->normal->length > 0 || block->styles->new->length > 0 || has_substate == true)
 	{
 		if (block->tag == NULL)
 		{
 			block->tag = generator_identifier_get(generator->identifier); // We will free its memory in the block_layout_destroy function
 		}
-
-		printf("now we have tag for the element\n");
 	}
 
 	size_t media_queries_length = 0;
@@ -877,8 +899,7 @@ string_t *generator_code_layout_attributes(generator_t *generator, ast_layout_bl
 
 					return NULL;
 				}
-
-				if (conditions > 0)
+				else if (conditions > 0)
 				{
 					string_append_str(generator->media_css, " and ");
 				}
@@ -903,11 +924,11 @@ string_t *generator_code_layout_attributes(generator_t *generator, ast_layout_bl
 
 					return NULL;
 				}
-
-				if (conditions > 0)
+				else if (conditions > 0)
 				{
 					string_append_str(generator->media_css, " and ");
 				}
+
 				string_append_str(generator->media_css, "max-height: ");
 				string_append_str(generator->media_css, media_max_height->final_value);
 
@@ -928,11 +949,11 @@ string_t *generator_code_layout_attributes(generator_t *generator, ast_layout_bl
 
 					return NULL;
 				}
-
-				if (conditions > 0)
+				else if (conditions > 0)
 				{
 					string_append_str(generator->media_css, " and ");
 				}
+
 				string_append_str(generator->media_css, "min-height: ");
 				string_append_str(generator->media_css, media_min_height->final_value);
 
@@ -969,6 +990,7 @@ string_t *generator_code_layout_attributes(generator_t *generator, ast_layout_bl
 						{
 							string_append_char(generator->media_css, ';');
 						}
+
 						string_append_str(generator->media_css, attribute->final_key == NULL ? attribute->key : attribute->final_key);
 						string_append_str(generator->media_css, ":");
 						char *value = attribute->final_value == NULL ? array_value_stringify(attribute->values, ", ") : strdup(attribute->final_value);
@@ -1004,6 +1026,7 @@ string_t *generator_code_layout_attributes(generator_t *generator, ast_layout_bl
 						{
 							string_append_char(generator->media_css, ';');
 						}
+
 						string_append_str(generator->media_css, attribute->final_key);
 						string_append_str(generator->media_css, ":");
 						string_append_str(generator->media_css, attribute->final_value);
@@ -1041,11 +1064,14 @@ string_t *generator_code_layout_attributes(generator_t *generator, ast_layout_bl
 			}
 			else
 			{
-				string_append_char(generator->css, STYLE_STYLE_LINKING);
-				string_append_str(generator->css, block->tag);
-				string_append_char(generator->css, '{');
-				string_append(generator->css, css_attributes);
-				string_append_char(generator->css, '}');
+				if (first_load)
+				{
+					string_append_char(generator->css, STYLE_STYLE_LINKING);
+					string_append_str(generator->css, block->tag);
+					string_append_char(generator->css, '{');
+					string_append(generator->css, css_attributes);
+					string_append_char(generator->css, '}');
+				}
 			}
 		}
 
@@ -1074,7 +1100,7 @@ string_t *generator_code_layout_attributes(generator_t *generator, ast_layout_bl
 			html_attributes_length++;
 		}
 
-		if (has_substate == true)
+		if (has_substate == true && first_load == true)
 		{
 			string_t *pseudo_elements = generator_code_layout_pseudo_elements(generator, block, &css_attributes_length);
 

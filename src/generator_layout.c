@@ -818,10 +818,10 @@ string_t *generator_code_layout_attributes(generator_t *generator, ast_layout_bl
 	if (hashmap_has_any_sub_value_layout_attribute_style_state(block->states) == true)
 	{
 		has_substate = true;
-		printf("hashmap_has_any_sub_value_layout_attribute_style_state\n");
 	}
 
 	bool first_load = true;
+
 	if (block->tag != NULL)
 	{
 		first_load = false;

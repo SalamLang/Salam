@@ -821,10 +821,10 @@ string_t *generator_code_layout_attributes(generator_t *generator, ast_layout_bl
 		printf("hashmap_has_any_sub_value_layout_attribute_style_state\n");
 	}
 
-	bool first_load = false;
+	bool first_load = true;
 	if (block->tag != NULL)
 	{
-		first_load = true;
+		first_load = false;
 	}
 
 	if ((block->meta_children != NULL && block->meta_children->length > 0) || block->styles->normal->length > 0 || block->styles->new->length > 0 || has_substate == true)

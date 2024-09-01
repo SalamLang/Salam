@@ -107,8 +107,10 @@ ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_ASIDE, "ASIDE", "aside", "aside", "جدا
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MAIN, "MAIN", "main", "main", "اصلی", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_HGROUP, "HGROUP", "hgroup", "hgroup", "گروه هدر", false)
-ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_HGROUP, "HGROUP", "hgroup", "hgroup", "گروه‌هدر", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_HGROUP, "HGROUP", "hgroup", "hgroup", "گروه سربخش", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_HGROUP, "HGROUP", "hgroup", "hgroup", "گروه‌سربخش", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_HGROUP, "HGROUP", "hgroup", "hgroup", "گروه‌سر بخش", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_HGROUP, "HGROUP", "hgroup", "hgroup", "گروه سر بخش", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FIGURE, "FIGURE", "figure", "figure", "شکل", false)
 
@@ -119,6 +121,7 @@ ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_FIGCAPTION, "FIGCAPTION", "figcaption", "
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_VIDEO, "VIDEO", "video", "video", "فیلم", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_AUDIO, "AUDIO", "audio", "audio", "اهنگ", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_AUDIO, "AUDIO", "audio", "audio", "آهنگ", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_IFRAME, "IFRAME", "iframe", "iframe", "سایت", false)
 
@@ -146,8 +149,8 @@ ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_UL, "UL", "ul", "ul", "اسامی غیر 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_OL, "OL", "ol", "ol", "اسامی مرتب", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LI, "LI", "li", "li", "مورد", false)
-ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_LI, "LI", "li", "li", "نوار دسترسی", false)
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_LI, "LI", "li", "li", "نواردسترسی", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_LI, "LI", "li", "li", "نوار دسترسی", false)
 
 // Table Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE, "TABLE", "table", "table", "جدول", false)

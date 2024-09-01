@@ -650,6 +650,20 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 			return true;
 		}
 	}
+	// SUBTITLE
+	else if (attribute->parent_node_type == AST_LAYOUT_TYPE_SUBTITLE)
+	{
+		ast_layout_attribute_type_t valid_attributes[] = {
+			AST_LAYOUT_ATTRIBUTE_TYPE_TYPE,
+		};
+
+		size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
+
+		if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length))
+		{
+			return true;
+		}
+	}
 	// IMG
 	else if (attribute->parent_node_type == AST_LAYOUT_TYPE_IMG)
 	{

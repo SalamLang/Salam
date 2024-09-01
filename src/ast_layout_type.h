@@ -8,6 +8,7 @@ ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_PARAGRAPH_RAW, "PARAGRAPH_RAW", "paragraph_
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BUTTON, "BUTTON", "button", "button", "دکمه", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TEXTAREA, "TEXTAREA", "textarea", "textarea", "ویرایشگرمتن", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_TEXTAREA, "TEXTAREA", "textarea", "textarea", "ویرایشگر متن", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LABEL, "LABEL", "label", "label", "برچسب", false)
 
@@ -23,7 +24,7 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FORM, "FORM", "form", "form", "فرم", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_OPTGROUP, "OPTGROUP", "optgroup", "optgroup", "گروه انتخاب", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DATALIST, "DATALIST", "datalist", "datalist", "داده لیست", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DATALIST, "DATALIST", "datalist", "datalist", "داده اسامی", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_OUTPUT, "OUTPUT", "output", "output", "خروجی", false)
 
@@ -34,13 +35,17 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SPAN, "SPAN", "span", "span", "قطعه", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_STRONG, "STRONG", "strong", "strong", "درشت مهم", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_EM, "EM", "em", "em", "اتیالیک پیشرفته", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_EM, "EM", "em", "em", "ایتالیک پیشرفته", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ITALIC, "ITALIC", "italic", "i", "ایتالیک", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BOLD, "BOLD", "bold", "b", "درشت", false)
 
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SUBTITLE, "SUBTITLE", "subtitle", "subtitle", "سرتیتر", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_SUBTITLE, "SUBTITLE", "subtitle", "subtitle", "سر تیتر", false)
+
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_UNDERLINE, "UNDERLINE", "underline", "u", "زیرخط", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_UNDERLINE, "UNDERLINE", "underline", "u", "زیر خط", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SMALL, "SMALL", "small", "small", "کوچک", false)
 
@@ -50,19 +55,23 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SUB, "SUB", "sub", "sub", "زیرین", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SUP, "SUP", "sup", "sup", "رویین", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_S, "S", "s", "s", "s", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_S, "S", "s", "s", "خط خورده", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MARK, "MARK", "mark", "mark", "علامتگذاری", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_MARK, "MARK", "mark", "mark", "علامت گذاری", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_Q, "Q", "q", "q", "نقل قول", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_Q, "Q", "q", "q", "نقل‌قول", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_CITE, "CITE", "cite", "cite", "اثر", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_CITE, "CITE", "cite", "cite", "ارجاع", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DFN, "DFN", "dfn", "dfn", "اصطلاح", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ABBR, "ABBR", "abbr", "abbr", "اختصار", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_KBD, "KBD", "kbd", "kbd", "ورودی کیبورد", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_KBD, "KBD", "kbd", "kbd", "ورودی صفحه نمایش", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_KBD, "KBD", "kbd", "kbd", "ورودی کیبورد", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SAMP, "SAMP", "samp", "samp", "نمونه", false)
 
@@ -94,11 +103,12 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SECTION, "SECTION", "section", "section", "بخ�
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ARTICLE, "ARTICLE", "article", "article", "مقاله", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ASIDE, "ASIDE", "aside", "aside", "جداگانه", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_ASIDE, "ASIDE", "aside", "aside", "جدا گانه", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MAIN, "MAIN", "main", "main", "اصلی", false)
-ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_HGROUP, "HGROUP", "hgroup", "hgroup", "گروه‌هدر", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_HGROUP, "HGROUP", "hgroup", "hgroup", "گروه هدر", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_HGROUP, "HGROUP", "hgroup", "hgroup", "گروه‌هدر", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FIGURE, "FIGURE", "figure", "figure", "شکل", false)
 
@@ -116,6 +126,7 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_CANVAS, "CANVAS", "canvas", "canvas", "گراف�
 
 // Interactive Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DETAILS, "DETAILS", "details", "details", "جزئیات", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_DETAILS, "DETAILS", "details", "details", "جزییات", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SUMMARY, "SUMMARY", "summary", "summary", "خلاصه", false)
 
@@ -124,44 +135,62 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DIALOG, "DIALOG", "dialog", "dialog", "دیال�
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MENU, "MENU", "menu", "menu", "منو", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MENUITEM, "MENUITEM", "menuitem", "menuitem", "آیتم منو", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_MENUITEM, "MENUITEM", "menuitem", "menuitem", "مورد منو", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_COMMAND, "COMMAND", "command", "command", "فرمان", false)
 
 // List Elements
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_UL, "UL", "ul", "ul", "لیست غیرمرتب", false)
-ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_UL, "UL", "ul", "ul", "لیست غیر مرتب", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_UL, "UL", "ul", "ul", "اسامی غیرمرتب", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_UL, "UL", "ul", "ul", "اسامی غیر مرتب", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_OL, "OL", "ol", "ol", "لیست مرتب", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_OL, "OL", "ol", "ol", "اسامی مرتب", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LI, "LI", "li", "li", "آیتم لیست", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LI, "LI", "li", "li", "مورد", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_LI, "LI", "li", "li", "نوار دسترسی", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_LI, "LI", "li", "li", "نواردسترسی", false)
 
 // Table Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE, "TABLE", "table", "table", "جدول", false)
+
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_HEADER, "TABLE_HEADER", "table_header", "thead", "سرجدول", false)
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_TABLE_HEADER, "TABLE_HEADER", "table_header", "thead", "سر جدول", false)
+
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_BODY, "TABLE_BODY", "table_body", "tbody", "بدنه جدول", false)
+
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_FOOTER, "TABLE_FOOTER", "table_footer", "tfoot", "پاصفحه جدول", false)
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_TABLE_FOOTER, "TABLE_FOOTER", "table_footer", "tfoot", "پا صفحه جدول", false)
+
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_TR, "TABLE_TR", "table_tr", "tr", "ردیف", false)
+
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_TD, "TABLE_TD", "table_td", "td", "سلول", false)
+
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_TH, "TABLE_TH", "table_th", "th", "سرسلول", false)
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_TABLE_TH, "TABLE_TH", "table_th", "th", "سر سلول", false)
+
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_CAPTION, "CAPTION", "caption", "caption", "عنوان جدول", false)
+
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_COL, "COL", "col", "col", "ستون", false)
+
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_COLGROUP, "COLGROUP", "colgroup", "colgroup", "گروه ستون‌ها", false)
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_COLGROUP, "COLGROUP", "colgroup", "colgroup", "گروه ستون‌ ها", false)
 
 // Miscellaneous Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BLOCKQUOTE, "BLOCKQUOTE", "blockquote", "blockquote", "نقل قول بلوکی", false)
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_BLOCKQUOTE, "BLOCKQUOTE", "blockquote", "blockquote", "نقل‌قول بلوکی", false)
+
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PRE, "PRE", "pre", "pre", "متن پیش‌قالب‌بندی‌شده", false)
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_PRE, "PRE", "pre", "pre", "متن پیش‌ قالب‌بندی‌شده", false)
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_PRE, "PRE", "pre", "pre", "متن پیش‌ قالب‌ بندی‌شده", false)
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_PRE, "PRE", "pre", "pre", "متن پیش‌ قالب‌ بندی‌ شده", false)
+
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_CODE, "CODE", "code", "code", "کد", false)
+
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ADDRESS, "ADDRESS", "address", "address", "آدرس", false)
+
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TIME, "TIME", "time", "time", "زمان", false)
+
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PROGRESS, "PROGRESS", "progress", "progress", "پیشرفت", false)
+
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_METER, "METER", "meter", "meter", "سنجش", false)
 
 // Script and Style Elements
@@ -177,11 +206,6 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LINK, "LINK", "link", "a", "لینک", false)
 // Our Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_INCLUDE, "INCLUDE", "include", "include", "فراخوانی", true)
 
-// Utility Elements
-ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_NONE, "NONE", "none", "layout", "صفحه", false)
-
-ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_ERROR, "ERROR", "error", "error", "خطا", false)
-
 // Single Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BR, "BR", "br", "br", "خط بعدی", true)
 
@@ -195,11 +219,11 @@ ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_IMG, "IMG", "img", "img", "عکس", true)
 // Own/Custom Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FONT, "FONT", "font", "font", "فونت", true)
 
-// ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA_MAX_WIDTH, "RESPONSIVE_MAX_WIDTH", "responsive_max_width", "@media only screen and (max-width:", "پذیرا حداکثر عرض", true)
-// ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA_MIN_WIDTH, "RESPONSIVE_MIN_WIDTH", "responsive_min_width", "@media only screen and (min-width:", "پذیرا حداقل عرض", true)
-// ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA_MAX_HEIGHT, "RESPONSIVE_MAX_HEIGHT", "responsive_max_height", "@media only screen and (max-width:", "پذیرا حداکثر عرض", true)
-// ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA_MIN_HEIGHT, "RESPONSIVE_MIN_HEIGHT", "responsive_min_height", "@media only screen and (min-width:", "پذیرا حداقل عرض", true)
-
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA, "RESPONSIVE", "responsive", "@media", "پذیرا", true)
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_MEDIA, "RESPONSIVE", "responsive", "@media", "واکنش پذیر", true)
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_MEDIA, "RESPONSIVE", "responsive", "@media", "واکنش‌پذیر", true)
+
+// Utility Elements
+ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_NONE, "NONE", "none", "layout", "صفحه", false)
+
+ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_ERROR, "ERROR", "error", "error", "خطا", false)

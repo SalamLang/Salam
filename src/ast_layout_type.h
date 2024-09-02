@@ -12,11 +12,12 @@ ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_TEXTAREA, "TEXTAREA", "textarea", "textar
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LABEL, "LABEL", "label", "label", "برچسب", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SELECT, "SELECT", "select", "select", "سلکت باکس", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SELECT, "SELECT", "select", "select", "فهرست کشویی", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_OPTION, "OPTION", "option", "option", "سلکت ایتم", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_OPTION, "OPTION", "option", "option", "مورد کشویی", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FIELDSET, "FIELDSET", "fieldset", "fieldset", "گروهبندی", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FIELDSET, "FIELDSET", "fieldset", "fieldset", "گروه‌بندی", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_FIELDSET, "FIELDSET", "fieldset", "fieldset", "گروه بندی", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LEGEND, "LEGEND", "legend", "legend", "عنوان گروه", false)
 

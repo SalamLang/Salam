@@ -100,7 +100,6 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_color[] = {
 	{"آبی آسمانی روشن", "aliceblue"},
 	{"آبی", "aqua"},
 	{"آبی روشن", "azure"},
-	{"آبی", "blue"},
 	{"آبی کاپیتان", "cadetblue"},
 	{"آبی گل گندم", "cornflowerblue"},
 	{"آبی آسمانی تیره", "darkcyan"},
@@ -170,7 +169,6 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_color[] = {
 	{"خاکستری تخته سنگی", "slategray"},
 	{"برفی", "snow"},
 	{"سفید دودی", "whitesmoke"},
-	{"بی‌رنگ", "transparent"},
 	{NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_width[] = {
@@ -742,10 +740,10 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_varia
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_weight[] = {
 	{"عادی", "normal"},
 	{"معمولی", "normal"},
-	{"درشت", "bold"},
+	{"ضخیم", "bold"},
 	{"سنگین", "bold"},
 	{"خیلی سنگین", "bolder"},
-	{"خیلی درشت", "bolder"},
+	{"خیلی ضخیم", "bolder"},
 	{NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_grid[] = {

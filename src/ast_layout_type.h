@@ -24,7 +24,7 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FORM, "FORM", "form", "form", "فرم", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_OPTGROUP, "OPTGROUP", "optgroup", "optgroup", "گروه انتخاب", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DATALIST, "DATALIST", "datalist", "datalist", "داده اسامی", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DATALIST, "DATALIST", "datalist", "datalist", "داده فهرست", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_OUTPUT, "OUTPUT", "output", "output", "خروجی", false)
 
@@ -143,10 +143,10 @@ ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_MENUITEM, "MENUITEM", "menuitem", "menuit
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_COMMAND, "COMMAND", "command", "command", "فرمان", false)
 
 // List Elements
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_UL, "UL", "ul", "ul", "اسامی غیرمرتب", false)
-ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_UL, "UL", "ul", "ul", "اسامی غیر مرتب", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_UL, "UL", "ul", "ul", "فهرست غیرمرتب", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_UL, "UL", "ul", "ul", "فهرست غیر مرتب", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_OL, "OL", "ol", "ol", "اسامی مرتب", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_OL, "OL", "ol", "ol", "فهرست مرتب", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LI, "LI", "li", "li", "مورد", false)
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_LI, "LI", "li", "li", "نواردسترسی", false)

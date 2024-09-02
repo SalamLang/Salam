@@ -33,13 +33,13 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_KEYGEN, "KEYGEN", "keygen", "keygen", "تولی�
 // Text Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SPAN, "SPAN", "span", "span", "قطعه", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_STRONG, "STRONG", "strong", "strong", "درشت مهم", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_STRONG, "STRONG", "strong", "strong", "ضخیم مهم", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_EM, "EM", "em", "em", "ایتالیک پیشرفته", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ITALIC, "ITALIC", "italic", "i", "ایتالیک", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BOLD, "BOLD", "bold", "b", "درشت", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BOLD, "BOLD", "bold", "b", "ضخیم", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SUBTITLE, "SUBTITLE", "subtitle", "subtitle", "سرتیتر", false)
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_SUBTITLE, "SUBTITLE", "subtitle", "subtitle", "سر تیتر", false)

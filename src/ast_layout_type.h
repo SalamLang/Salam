@@ -149,8 +149,6 @@ ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_UL, "UL", "ul", "ul", "فهرست غیر 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_OL, "OL", "ol", "ol", "فهرست مرتب", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LI, "LI", "li", "li", "مورد", false)
-ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_LI, "LI", "li", "li", "نواردسترسی", false)
-ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_LI, "LI", "li", "li", "نوار دسترسی", false)
 
 // Table Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE, "TABLE", "table", "table", "جدول", false)

@@ -219,9 +219,8 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_IMG, "IMG", "img", "img", "تصویر", true)
 // Own/Custom Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FONT, "FONT", "font", "font", "فونت", true)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA, "RESPONSIVE", "responsive", "@media", "پذیرا", true)
-ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_MEDIA, "RESPONSIVE", "responsive", "@media", "واکنش پذیر", true)
-ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_MEDIA, "RESPONSIVE", "responsive", "@media", "واکنش‌پذیر", true)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA, "RESPONSIVE", "responsive", "@media", "واکنش گرا", true)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_MEDIA, "RESPONSIVE", "responsive", "@media", "واکنش‌گرا", true)
 
 // Utility Elements
 ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_NONE, "NONE", "none", "layout", "صفحه", false)

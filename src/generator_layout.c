@@ -28,7 +28,6 @@ string_t *generator_code_layout_block_item(generator_t *generator, ast_layout_no
 	else if (repeat != NULL && repeat->values->length == 1)
 	{
 		repeat_value = array_get(repeat->values, 0);
-		repeat_value->print(repeat_value);
 
 		if (repeat_value->type->kind == AST_TYPE_KIND_STRING)
 		{

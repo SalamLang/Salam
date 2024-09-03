@@ -315,8 +315,6 @@ void parser_parse_layout_block_style_state(ast_layout_block_t *block, lexer_t *l
 		token_t *last_name2 = PARSER_CURRENT;
 		string_t *name2 = parser_parse_layout_name(lexer, &last_name2);
 
-		PARSER_CURRENT->print(PARSER_CURRENT);
-
 		parser_parse_layout_block_attribute(true, block, state_styles->normal, lexer, name2->data, last_name2);
 
 		string_destroy(name2);

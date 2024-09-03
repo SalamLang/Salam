@@ -158,8 +158,6 @@ void generator_code_layout_style_value(hashmap_t *styles, hashmap_t *new_styles,
 	DEBUG_ME;
 	bool isValid = validate_style_value(styles, new_styles, attribute);
 
-	attribute->print(attribute);
-
 	if (isValid == false)
 	{
 		printf("%d\n", attribute->parent_node_type);

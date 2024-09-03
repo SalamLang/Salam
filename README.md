@@ -8,7 +8,7 @@
 
 # Salam Language
 
-Salam is a new programming language for students and children. Everyone can learn programming and write code.
+Salam is a new programming language for local developers. Everyone can learn programming and write code.
 
 </div>
 

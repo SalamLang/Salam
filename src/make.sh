@@ -18,5 +18,7 @@ gcc -c ast.c -o ast.o
 gcc -c ast_layout.c -o ast_layout.o
 gcc -c ast_layout_style.c -o ast_layout_style.o
 gcc -c main.c -o main.o
+
 gcc -o main log.o file.o memory.o array.o parser.o parser_layout.o generator.o generator_layout.o generator_layout_style.o generator_identifier.o string.o validator.o hashmap.o hashmap_custom.o array_custom.o lexer.o ast.o ast_layout.o ast_layout_style.o main.o
+
 ./main ../example/test6.salam

@@ -831,8 +831,6 @@ void ast_debug(ast_t *ast)
 void ast_destroy(ast_t *ast)
 {
 	DEBUG_ME;
-	printf("ast_destroy\n");
-
 	if (ast != NULL)
 	{
 		if (ast->layout != NULL)

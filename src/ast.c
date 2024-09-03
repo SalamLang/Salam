@@ -436,25 +436,21 @@ void ast_if_destroy(ast_if_t *node)
 	DEBUG_ME;
 	if (node != NULL)
 	{
-		DEBUG_ME;
 		if (node->condition != NULL)
 		{
 			node->condition->destroy(node->condition);
 		}
 
-		DEBUG_ME;
 		if (node->block != NULL)
 		{
 			node->block->destroy(node->block);
 		}
 
-		DEBUG_ME;
 		if (node->else_blocks != NULL)
 		{
 			node->else_blocks->destroy(node->else_blocks);
 		}
 
-		DEBUG_ME;
 		memory_destroy(node);
 	}
 }

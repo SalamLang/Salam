@@ -396,6 +396,13 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 		(attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_SRC ||
 		 attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT))
 	{
+		attribute->ignoreMe = true;
+		return true;
+	}
+	else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT)
+	{
+		// TODO: add validation to only accepts positive integer
+		attribute->ignoreMe = true;
 		return true;
 	}
 	else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_GROUP)
@@ -420,6 +427,12 @@ bool token_belongs_to_ast_layout_node(ast_layout_attribute_type_t attribute_key_
 		{
 			return true;
 		}
+	}
+	// BR, HR
+	else if (attribute->parent_node_type == AST_LAYOUT_TYPE_BR || attribute->parent_node_type == AST_LAYOUT_TYPE_HR)
+	{
+		// TODO: Maybe later?
+		return true;
 	}
 	// RESPONSIVE
 	else if (attribute->parent_node_type == AST_LAYOUT_TYPE_MEDIA)

@@ -3,6 +3,7 @@ INPUT_FILE = ../example/test6.salam
 INPUT_FILE = ../example/testhover.salam
 INPUT_FILE = ../example/testgroup.salam
 INPUT_FILE = ../example/test-include.salam
+INPUT_FILE = ../example/repeat-block.salam
 
 CC = gcc
 CFLAGS =

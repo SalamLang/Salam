@@ -18,5 +18,7 @@ gcc  -c ast.c -o ast.wino
 gcc  -c ast_layout.c -o ast_layout.wino
 gcc  -c ast_layout_style.c -o ast_layout_style.wino
 gcc  -c main.c -o main.wino
+
 gcc  -o main log.wino file.wino memory.wino array.wino parser.wino parser_layout.wino generator.wino generator_layout.wino generator_layout_style.wino generator_identifier.wino string.wino validator.wino hashmap.wino hashmap_custom.wino array_custom.wino lexer.wino ast.wino ast_layout.wino ast_layout_style.wino main.wino
+
 main ../example/test6.salam

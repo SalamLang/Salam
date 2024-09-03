@@ -15,14 +15,51 @@ string_t *generator_code_layout_block_item(generator_t *generator, ast_layout_no
 	string_t *node_attrs_str = generator_code_layout_attributes(generator, node->block);
 	char *node_name = generator_code_layout_node_type(node->type);
 
+	hashmap_t *attributes = node->block->attributes;
+
+	size_t repeat_value_sizet = 1;
+	ast_layout_attribute_t *repeat = hashmap_get(attributes, "repeat");
+	ast_value_t *repeat_value = NULL;
+
+	if (repeat != NULL && repeat->values->length > 1)
+	{
+		error_generator(1, "Include node 'repeat' attribute must have only one value");
+	}
+	else if (repeat != NULL && repeat->values->length == 1)
+	{
+		repeat_value = array_get(repeat->values, 0);
+		repeat_value->print(repeat_value);
+
+		if (repeat_value->type->kind == AST_TYPE_KIND_STRING)
+		{
+			if (string_is_integer(repeat_value->data.string_value) == false)
+			{
+				error_generator(1, "Include node 'repeat' attribute must be a integer");
+			}
+			else
+			{
+				repeat_value_sizet = atoi(repeat_value->data.string_value);
+			}
+		}
+		else if (repeat_value->type->kind == AST_TYPE_KIND_INT)
+		{
+			repeat_value_sizet = repeat_value->data.int_value;
+		}
+		else
+		{
+			error_generator(1, "Include node 'repeat' attribute must be a integer");
+		}
+	}
+
+	if (repeat_value_sizet < 1)
+	{
+		error_generator(1, "Include node 'repeat' attribute must be greater than 0");
+	}
+
 	if (node->type == AST_LAYOUT_TYPE_INCLUDE)
 	{
-		hashmap_t *attributes = node->block->attributes;
 		ast_layout_attribute_t *src = hashmap_get(attributes, "src");
-		ast_layout_attribute_t *repeat = hashmap_get(attributes, "repeat");
-		ast_value_t *repeat_value = NULL;
 		ast_value_t *src_value = NULL;
-		size_t repeat_value_sizet = 1;
 
 		if (src == NULL)
 		{
@@ -31,40 +68,6 @@ string_t *generator_code_layout_block_item(generator_t *generator, ast_layout_no
 		else if (src->values->length > 1)
 		{
 			error_generator(1, "Include node 'src' attribute must have only one value");
-		}
-		else if (repeat != NULL && repeat->values->length > 1)
-		{
-			error_generator(1, "Include node 'repeat' attribute must have only one value");
-		}
-		else if (repeat != NULL && repeat->values->length == 1)
-		{
-			repeat_value = array_get(repeat->values, 0);
-			repeat_value->print(repeat_value);
-
-			if (repeat_value->type->kind == AST_TYPE_KIND_STRING)
-			{
-				if (string_is_integer(repeat_value->data.string_value) == false)
-				{
-					error_generator(1, "Include node 'repeat' attribute must be a integer");
-				}
-				else
-				{
-					repeat_value_sizet = atoi(repeat_value->data.string_value);
-				}
-			}
-			else if (repeat_value->type->kind == AST_TYPE_KIND_INT)
-			{
-				repeat_value_sizet = repeat_value->data.int_value;
-			}
-			else
-			{
-				error_generator(1, "Include node 'repeat' attribute must be a integer");
-			}
-		}
-
-		if (repeat_value_sizet < 1)
-		{
-			error_generator(1, "Include node 'repeat' attribute must be greater than 0");
 		}
 
 		src_value = array_get(src->values, 0);
@@ -86,7 +89,7 @@ string_t *generator_code_layout_block_item(generator_t *generator, ast_layout_no
 		lexer->source_size = size;
 		lexer_lex(lexer);
 
-		lexer_save(lexer, "include-tokens.txt");
+		// lexer_save(lexer, "include-tokens.txt");
 
 		ast_t *ast = parser_parse(lexer);
 
@@ -121,68 +124,74 @@ string_t *generator_code_layout_block_item(generator_t *generator, ast_layout_no
 	}
 	else
 	{
-		string_append_char(layout_block_str, '<');
-		string_append_str(layout_block_str, node_name);
-		if (node_attrs_str->length > 0)
+		for (size_t i = 1; i <= repeat_value_sizet; i++)
 		{
-			string_append_char(layout_block_str, ' ');
-			string_append(layout_block_str, node_attrs_str);
-		}
-		if (node_attrs_str != NULL)
-			node_attrs_str->destroy(node_attrs_str);
-		string_append_str(layout_block_str, ">");
-
-		if (node->block->children->length > 0 || node->block->text_content != NULL)
-		{
-			bool has_content = false;
-
-			if (node->block->text_content != NULL)
-			{
-				if (node->block->children->length == 0 && strchr(node->block->text_content, '\n') == NULL)
-				{
-					string_append_str(layout_block_str, node->block->text_content);
-				}
-				else
-				{
-					string_append_char(layout_block_str, '\n');
-					string_append_str(layout_block_str, node->block->text_content);
-					string_append_char(layout_block_str, '\n');
-
-					has_content = true;
-				}
-			}
-
-			if (node->block->children->length > 0)
-			{
-				string_t *layout_block_children = generator_code_layout_block(generator, node->block->children);
-
-				if (has_content == false)
-				{
-					string_append_char(layout_block_str, '\n');
-				}
-
-				if (layout_block_children->length > 0)
-				{
-					string_append(layout_block_str, layout_block_children);
-				}
-
-				if (layout_block_children != NULL)
-				{
-					layout_block_children->destroy(layout_block_children);
-				}
-			}
-		}
-
-		if (is_layout_node_a_single_tag(node->type) == false)
-		{
-			string_append_str(layout_block_str, "</");
+			string_append_char(layout_block_str, '<');
 			string_append_str(layout_block_str, node_name);
-			string_append_str(layout_block_str, ">\n");
+			if (node_attrs_str->length > 0)
+			{
+				string_append_char(layout_block_str, ' ');
+				string_append(layout_block_str, node_attrs_str);
+			}
+			string_append_str(layout_block_str, ">");
+
+			if (node->block->children->length > 0 || node->block->text_content != NULL)
+			{
+				bool has_content = false;
+
+				if (node->block->text_content != NULL)
+				{
+					if (node->block->children->length == 0 && strchr(node->block->text_content, '\n') == NULL)
+					{
+						string_append_str(layout_block_str, node->block->text_content);
+					}
+					else
+					{
+						string_append_char(layout_block_str, '\n');
+						string_append_str(layout_block_str, node->block->text_content);
+						string_append_char(layout_block_str, '\n');
+
+						has_content = true;
+					}
+				}
+
+				if (node->block->children->length > 0)
+				{
+					string_t *layout_block_children = generator_code_layout_block(generator, node->block->children);
+
+					if (has_content == false)
+					{
+						string_append_char(layout_block_str, '\n');
+					}
+
+					if (layout_block_children->length > 0)
+					{
+						string_append(layout_block_str, layout_block_children);
+					}
+
+					if (layout_block_children != NULL)
+					{
+						layout_block_children->destroy(layout_block_children);
+					}
+				}
+			}
+
+			if (is_layout_node_a_single_tag(node->type) == false)
+			{
+				string_append_str(layout_block_str, "</");
+				string_append_str(layout_block_str, node_name);
+				string_append_str(layout_block_str, ">\n");
+			}
+			else
+			{
+				string_append_char(layout_block_str, '\n');
+			}
 		}
-		else
-		{
-			string_append_char(layout_block_str, '\n');
-		}
+	}
+
+	if (node_attrs_str != NULL)
+	{
+		node_attrs_str->destroy(node_attrs_str);
 	}
 
 	return layout_block_str;

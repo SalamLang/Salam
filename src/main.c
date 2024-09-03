@@ -30,46 +30,46 @@ void doargs(int argc, char **argv)
 	lexer->source_size = size;
 	lexer_lex(lexer);
 
-	lexer_debug(lexer);
+	// lexer_debug(lexer);
 
-	lexer_save(lexer, "tokens.txt");
+	// lexer_save(lexer, "tokens.txt");
 
 	ast_t *ast = parser_parse(lexer);
 
-	ast_debug(ast);
+	// ast_debug(ast);
 
-	printf("end ast debug\n");
+	// printf("end ast debug\n");
 
 	generator_t *generator = generator_create(ast);
 
-	printf("generate code\n");
+	// printf("generate code\n");
 
 	generator_code(generator);
 
-	printf("generate debug\n");
+	// printf("generate debug\n");
 
-	generator_debug(generator);
+	// generator_debug(generator);
 
-	printf("generate save\n");
+	// printf("generate save\n");
 
 	generator_save(generator, argc > 2 ? argv[2] : "index.html", argc > 3 ? argv[3] : "style.css", argc > 4 ? argv[4] : "script.js");
 
-	printf("generate destroy\n");
+	// printf("generate destroy\n");
 	generator_destroy(generator);
 
-	printf("ast destroy\n");
+	// printf("ast destroy\n");
 
 	ast_destroy(ast);
 
-	printf("end ast destroy\n");
+	// printf("end ast destroy\n");
 
 	lexer_destroy(lexer);
 
-	printf("end lexer destroy\n");
+	// printf("end lexer destroy\n");
 
 	memory_destroy(content);
 
-	printf("end content destroy\n");
+	// printf("end content destroy\n");
 
 	printf("END SUCCESS\n");
 }

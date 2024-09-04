@@ -2,6 +2,92 @@
 
 /**
  *
+ * @function run
+ * @brief
+ */
+void run(bool isCode, const char *path, char *content)
+{
+
+	lexer_t *lexer = lexer_create(path, content);
+	lexer_lex(lexer);
+
+	// lexer_debug(lexer);
+
+	// lexer_save(lexer, "tokens.txt");
+
+	ast_t *ast = parser_parse(lexer);
+
+	// ast_debug(ast);
+
+	// printf("end ast debug\n");
+
+	generator_t *generator = generator_create(ast);
+
+	// printf("generate code\n");
+
+	generator_code(generator);
+
+	// printf("generate debug\n");
+
+	// generator_debug(generator);
+
+	// printf("generate save\n");
+
+	// generator_save(generator, argc > 2 ? argv[2] : "index.html", argc > 3 ? argv[3] : "style.css", argc > 4 ? argv[4] : "script.js");
+	generator_save(generator, "index.html", "style.css", "script.js");
+
+	if (isCode)
+	{
+		if (generator->css->length > 0 || generator->media_css->length > 0)
+		{
+			printf("<style>\n");
+
+			if (generator->css->length > 0)
+			{
+				printf("%s\n", generator->css->data);
+			}
+
+			if (generator->media_css->length > 0)
+			{
+				printf("%s\n", generator->media_css->data);
+			}
+
+			printf("</style>\n<!--next-->\n");
+		}
+
+		printf("%s", generator->html->data);
+
+		if (generator->js->length > 0)
+		{
+			printf("\n%s", generator->js->data);
+		}
+	}
+
+	// printf("generate destroy\n");
+	generator_destroy(generator);
+
+	// printf("ast destroy\n");
+
+	ast_destroy(ast);
+
+	// printf("end ast destroy\n");
+
+	lexer_destroy(lexer);
+
+	// printf("end lexer destroy\n");
+
+	memory_destroy(content);
+
+	// printf("end content destroy\n");
+
+	if (!isCode)
+	{
+		printf("END SUCCESS\n");
+	}
+}
+
+/**
+ *
  * @function doargs
  * @brief Handle command line arguments
  * @params {int} argc - Number of arguments
@@ -26,6 +112,18 @@ void doargs(int argc, char **argv)
 	}
 	else if (strcmp(path, "update") == 0)
 	{
+		printf("TODO: auto update feature...\n");
+	}
+	else if (strcmp(path, "code") == 0)
+	{
+		if (argc == 2)
+		{
+			error(1, "You need to pass filename as an extra input!\n");
+		}
+
+		char *content = argv[2];
+
+		run(true, "stdin", content);
 	}
 	else
 	{
@@ -34,55 +132,9 @@ void doargs(int argc, char **argv)
 			error(1, "File does not exist: %s\n", path);
 		}
 
-		size_t size = 0;
-		char *content = file_reads_binary(path, &size);
+		char *content = file_reads_binary(path, NULL);
 
-		lexer_t *lexer = lexer_create(path, content);
-		lexer->source_size = size;
-		lexer_lex(lexer);
-
-		// lexer_debug(lexer);
-
-		// lexer_save(lexer, "tokens.txt");
-
-		ast_t *ast = parser_parse(lexer);
-
-		// ast_debug(ast);
-
-		// printf("end ast debug\n");
-
-		generator_t *generator = generator_create(ast);
-
-		// printf("generate code\n");
-
-		generator_code(generator);
-
-		// printf("generate debug\n");
-
-		// generator_debug(generator);
-
-		// printf("generate save\n");
-
-		generator_save(generator, argc > 2 ? argv[2] : "index.html", argc > 3 ? argv[3] : "style.css", argc > 4 ? argv[4] : "script.js");
-
-		// printf("generate destroy\n");
-		generator_destroy(generator);
-
-		// printf("ast destroy\n");
-
-		ast_destroy(ast);
-
-		// printf("end ast destroy\n");
-
-		lexer_destroy(lexer);
-
-		// printf("end lexer destroy\n");
-
-		memory_destroy(content);
-
-		// printf("end content destroy\n");
-
-		printf("END SUCCESS\n");
+		run(false, path, content);
 	}
 }
 

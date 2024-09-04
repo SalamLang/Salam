@@ -711,7 +711,6 @@ lexer_t *lexer_create(const char *file_path, char *source)
 
 	lexer->file_path = file_path;
 	lexer->source = source;
-	lexer->source_size = 0;
 	lexer->source_length = strlen(lexer->source);
 	lexer->index = 0;
 	lexer->line = 1;

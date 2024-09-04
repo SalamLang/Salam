@@ -18,60 +18,72 @@ void doargs(int argc, char **argv)
 	}
 
 	const char *path = argv[1];
-	if (!file_exists(path))
+
+	if (strcmp(path, "version") == 0)
 	{
-		error(1, "File does not exist: %s\n", path);
+		printf("Salam %s\n", SALAM_VERSION);
+		exit(1);
 	}
+	else if (strcmp(path, "update") == 0)
+	{
+	}
+	else
+	{
+		if (!file_exists(path))
+		{
+			error(1, "File does not exist: %s\n", path);
+		}
 
-	size_t size = 0;
-	char *content = file_reads_binary(path, &size);
+		size_t size = 0;
+		char *content = file_reads_binary(path, &size);
 
-	lexer_t *lexer = lexer_create(path, content);
-	lexer->source_size = size;
-	lexer_lex(lexer);
+		lexer_t *lexer = lexer_create(path, content);
+		lexer->source_size = size;
+		lexer_lex(lexer);
 
-	// lexer_debug(lexer);
+		// lexer_debug(lexer);
 
-	// lexer_save(lexer, "tokens.txt");
+		// lexer_save(lexer, "tokens.txt");
 
-	ast_t *ast = parser_parse(lexer);
+		ast_t *ast = parser_parse(lexer);
 
-	// ast_debug(ast);
+		// ast_debug(ast);
 
-	// printf("end ast debug\n");
+		// printf("end ast debug\n");
 
-	generator_t *generator = generator_create(ast);
+		generator_t *generator = generator_create(ast);
 
-	// printf("generate code\n");
+		// printf("generate code\n");
 
-	generator_code(generator);
+		generator_code(generator);
 
-	// printf("generate debug\n");
+		// printf("generate debug\n");
 
-	// generator_debug(generator);
+		// generator_debug(generator);
 
-	// printf("generate save\n");
+		// printf("generate save\n");
 
-	generator_save(generator, argc > 2 ? argv[2] : "index.html", argc > 3 ? argv[3] : "style.css", argc > 4 ? argv[4] : "script.js");
+		generator_save(generator, argc > 2 ? argv[2] : "index.html", argc > 3 ? argv[3] : "style.css", argc > 4 ? argv[4] : "script.js");
 
-	// printf("generate destroy\n");
-	generator_destroy(generator);
+		// printf("generate destroy\n");
+		generator_destroy(generator);
 
-	// printf("ast destroy\n");
+		// printf("ast destroy\n");
 
-	ast_destroy(ast);
+		ast_destroy(ast);
 
-	// printf("end ast destroy\n");
+		// printf("end ast destroy\n");
 
-	lexer_destroy(lexer);
+		lexer_destroy(lexer);
 
-	// printf("end lexer destroy\n");
+		// printf("end lexer destroy\n");
 
-	memory_destroy(content);
+		memory_destroy(content);
 
-	// printf("end content destroy\n");
+		// printf("end content destroy\n");
 
-	printf("END SUCCESS\n");
+		printf("END SUCCESS\n");
+	}
 }
 
 /**

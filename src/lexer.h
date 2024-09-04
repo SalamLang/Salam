@@ -133,7 +133,6 @@ typedef struct
 	size_t index;
 	size_t line;
 	size_t column;
-	size_t source_size;
 	size_t source_length;
 	array_token_t *tokens;
 	size_t token_index; // For parsing purposes

@@ -85,7 +85,6 @@ string_t *generator_code_layout_block_item(generator_t *generator, ast_layout_no
 		size_t size = 0;
 		char *content = file_reads_binary(path, &size);
 		lexer_t *lexer = lexer_create(path, content);
-		lexer->source_size = size;
 		lexer_lex(lexer);
 
 		// lexer_save(lexer, "include-tokens.txt");

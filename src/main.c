@@ -55,11 +55,11 @@ void run(bool isCode, const char *path, char *content)
 			printf("</style>\n<!--next-->\n");
 		}
 
-		printf("%s", generator->html->data);
+		printf("%s\n", generator->html->data);
 
 		if (generator->js->length > 0)
 		{
-			printf("\n%s", generator->js->data);
+			printf("%s\n", generator->js->data);
 		}
 	}
 

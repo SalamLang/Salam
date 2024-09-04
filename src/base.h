@@ -28,3 +28,5 @@
 #define STYLE_STYLE_LINKING '.'
 
 #define STYLE_STATE_ENDS_GROUP " گروه"
+
+#define SALAM_VERSION "0.1"

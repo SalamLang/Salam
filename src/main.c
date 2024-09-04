@@ -52,7 +52,7 @@ void run(bool isCode, const char *path, char *content)
 				printf("%s\n", generator->media_css->data);
 			}
 
-			printf("</style>\n<!--next-->\n");
+			printf("</style>\n\n");
 		}
 
 		printf("%s\n", generator->html->data);

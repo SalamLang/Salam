@@ -6,7 +6,7 @@ if ! command -v emcc >/dev/null 2>&1; then
     exit 1
 fi
 
-OUTPUT_BASE="output"
+OUTPUT_BASE="salam-wa"
 
 sources=(
     "log.c"

@@ -3,8 +3,8 @@
 
 #include <stdbool.h>
 
-#include "base.h"
 #include "ast.h"
+#include "base.h"
 #include "lexer.h"
 #include "validator.h"
 
@@ -12,8 +12,10 @@
 #define PARSER_PREV lexer->token_index--
 
 #define PARSER_CURRENT ((token_t *)lexer->tokens->data[lexer->token_index])
-#define PARSER_CURRENT_NEXT ((token_t *)lexer->tokens->data[lexer->token_index + 1])
-#define PARSER_CURRENT_PREV ((token_t *)lexer->tokens->data[lexer->token_index + 1])
+#define PARSER_CURRENT_NEXT \
+    ((token_t *)lexer->tokens->data[lexer->token_index + 1])
+#define PARSER_CURRENT_PREV \
+    ((token_t *)lexer->tokens->data[lexer->token_index + 1])
 
 #include "parser_layout.h"
 

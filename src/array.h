@@ -1,22 +1,21 @@
 #ifndef _ARRAY_H_
 #define _ARRAY_H_
 
-#include <stdio.h>
 #include <ctype.h>
+#include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdbool.h>
 
-typedef struct array_t
-{
-	void **data;
-	size_t length;
-	size_t capacity;
-	size_t element_capacity;
+typedef struct array_t {
+    void **data;
+    size_t length;
+    size_t capacity;
+    size_t element_capacity;
 
-	void (*print)(void *node);
-	char *(*stringify)(void *);
-	void (*destroy)(void *node);
+    void (*print)(void *node);
+    char *(*stringify)(void *);
+    void (*destroy)(void *node);
 } array_t;
 
 typedef array_t array_token_t;
@@ -29,11 +28,11 @@ typedef array_t array_block_t;
 typedef array_t array_if_t;
 typedef array_t array_value_t;
 
-#include "memory.h"
 #include "ast.h"
-#include "lexer.h"
-#include "string.h"
 #include "base.h"
+#include "lexer.h"
+#include "memory.h"
+#include "string.h"
 
 /**
  *

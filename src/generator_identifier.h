@@ -5,9 +5,8 @@
 #include "memory.h"
 #include "string.h"
 
-typedef struct generator_identifier_t
-{
-	char *current;
+typedef struct generator_identifier_t {
+    char *current;
 } generator_identifier_t;
 
 /**

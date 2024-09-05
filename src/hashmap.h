@@ -7,30 +7,28 @@
 
 struct hashmap_t;
 
-typedef struct hashmap_entry
-{
-	char *key;
-	void *value;
-	struct hashmap_entry_t *next;
+typedef struct hashmap_entry {
+    char *key;
+    void *value;
+    struct hashmap_entry_t *next;
 } hashmap_entry_t;
 
-typedef struct hashmap_t
-{
-	hashmap_entry_t **data;
-	size_t capacity;
-	size_t length;
+typedef struct hashmap_t {
+    hashmap_entry_t **data;
+    size_t capacity;
+    size_t length;
 
-	void (*print)(void *node);
-	void (*destroy)(void *node);
+    void (*print)(void *node);
+    void (*destroy)(void *node);
 } hashmap_t;
 
 typedef hashmap_t hashmap_array_t;
 typedef hashmap_t hashmap_layout_attribute_t;
 typedef hashmap_t hashmap_layout_attribute_state_style_t;
 
-#include "memory.h"
-#include "array_custom.h"
 #include "array.h"
+#include "array_custom.h"
+#include "memory.h"
 
 /**
  *
@@ -127,7 +125,8 @@ void hashmap_print(hashmap_t *map);
  * @returns {void}
  *
  */
-void hashmap_put_custom(hashmap_t *map, const char *key, void *value, void (*free_fn)(void *));
+void hashmap_put_custom(hashmap_t *map, const char *key, void *value,
+                        void (*free_fn)(void *));
 
 /**
  *

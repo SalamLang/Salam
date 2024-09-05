@@ -9,17 +9,16 @@
  * @returns {ast_node_t*} - Pointer to the created AST node
  *
  */
-ast_node_t *ast_node_create(ast_type_t type, location_t location)
-{
-	DEBUG_ME;
-	ast_node_t *node = memory_allocate(sizeof(ast_node_t));
-	node->type = type;
-	node->location = location;
+ast_node_t *ast_node_create(ast_type_t type, location_t location) {
+    DEBUG_ME;
+    ast_node_t *node = memory_allocate(sizeof(ast_node_t));
+    node->type = type;
+    node->location = location;
 
-	node->print = cast(void (*)(void *), ast_node_print);
-	node->destroy = cast(void (*)(void *), ast_node_destroy);
+    node->print = cast(void (*)(void *), ast_node_print);
+    node->destroy = cast(void (*)(void *), ast_node_destroy);
 
-	return node;
+    return node;
 }
 
 /**
@@ -30,13 +29,11 @@ ast_node_t *ast_node_create(ast_type_t type, location_t location)
  * @returns {void}
  *
  */
-void ast_node_destroy_notall(ast_node_t *value)
-{
-	DEBUG_ME;
-	if (value != NULL)
-	{
-		memory_destroy(value);
-	}
+void ast_node_destroy_notall(ast_node_t *value) {
+    DEBUG_ME;
+    if (value != NULL) {
+        memory_destroy(value);
+    }
 }
 
 /**
@@ -47,48 +44,45 @@ void ast_node_destroy_notall(ast_node_t *value)
  * @returns {void}
  *
  */
-void ast_node_destroy(ast_node_t *value)
-{
-	DEBUG_ME;
-	if (value != NULL)
-	{
-		switch (value->type)
-		{
-		case AST_TYPE_IMPORT:
-			value->data.import->destroy(value->data.import);
-			break;
+void ast_node_destroy(ast_node_t *value) {
+    DEBUG_ME;
+    if (value != NULL) {
+        switch (value->type) {
+            case AST_TYPE_IMPORT:
+                value->data.import->destroy(value->data.import);
+                break;
 
-		case AST_TYPE_FUNCTION:
-			value->data.function->destroy(value->data.function);
-			break;
+            case AST_TYPE_FUNCTION:
+                value->data.function->destroy(value->data.function);
+                break;
 
-		case AST_TYPE_BLOCK:
-			value->data.block->destroy(value->data.block);
-			break;
+            case AST_TYPE_BLOCK:
+                value->data.block->destroy(value->data.block);
+                break;
 
-		case AST_TYPE_LAYOUT:
-			value->data.layout->destroy(value->data.layout);
-			break;
+            case AST_TYPE_LAYOUT:
+                value->data.layout->destroy(value->data.layout);
+                break;
 
-		case AST_TYPE_RETURN:
-			value->data.returns->destroy(value->data.returns);
-			break;
+            case AST_TYPE_RETURN:
+                value->data.returns->destroy(value->data.returns);
+                break;
 
-		case AST_TYPE_IF:
-		case AST_TYPE_ELSE_IF:
-			value->data.ifclause->destroy(value->data.ifclause);
-			break;
+            case AST_TYPE_IF:
+            case AST_TYPE_ELSE_IF:
+                value->data.ifclause->destroy(value->data.ifclause);
+                break;
 
-		case AST_TYPE_PRINT:
-			value->data.print->destroy(value->data.print);
-			break;
+            case AST_TYPE_PRINT:
+                value->data.print->destroy(value->data.print);
+                break;
 
-		case AST_TYPE_ERROR:
-			break;
-		}
+            case AST_TYPE_ERROR:
+                break;
+        }
 
-		memory_destroy(value);
-	}
+        memory_destroy(value);
+    }
 }
 
 /**
@@ -97,31 +91,30 @@ void ast_node_destroy(ast_node_t *value)
  * @brief Create a new AST node layout attribute value
  * @params {ast_value_type_t*} type - Type of the layout attribute value
  * @params {void*} value - Value of the layout attribute value
- * @returns {ast_value_t*} - Pointer to the created AST node layout attribute value
+ * @returns {ast_value_t*} - Pointer to the created AST node layout attribute
+ * value
  *
  */
-ast_value_t *ast_value_create(ast_value_type_t *type, void *value)
-{
-	DEBUG_ME;
-	size_t value_length = strlen(value);
-	ast_value_t *res = memory_allocate(sizeof(ast_value_t));
+ast_value_t *ast_value_create(ast_value_type_t *type, void *value) {
+    DEBUG_ME;
+    size_t value_length = strlen(value);
+    ast_value_t *res = memory_allocate(sizeof(ast_value_t));
 
-	res->type = type;
+    res->type = type;
 
-	if (type->kind == AST_TYPE_KIND_STRING)
-	{
-		size_t value_size = value_length < 1 ? 1 : value_length + 1;
+    if (type->kind == AST_TYPE_KIND_STRING) {
+        size_t value_size = value_length < 1 ? 1 : value_length + 1;
 
-		res->data.string_value = memory_allocate(value_size);
+        res->data.string_value = memory_allocate(value_size);
 
-		memcpy(res->data.string_value, value, value_size);
-	}
+        memcpy(res->data.string_value, value, value_size);
+    }
 
-	res->print = cast(void (*)(void *), ast_value_print);
-	res->destroy = cast(void (*)(void *), ast_value_destroy);
-	res->get_data = cast(char *(*)(void *), ast_value_data);
+    res->print = cast(void (*)(void *), ast_value_print);
+    res->destroy = cast(void (*)(void *), ast_value_destroy);
+    res->get_data = cast(char *(*)(void *), ast_value_data);
 
-	return res;
+    return res;
 }
 
 /**
@@ -132,15 +125,13 @@ ast_value_t *ast_value_create(ast_value_type_t *type, void *value)
  * @returns {char*} - String of the AST layout attribute value
  *
  */
-char *ast_value_data(ast_value_t *value)
-{
-	DEBUG_ME;
-	if (value->type->kind == AST_TYPE_KIND_STRING)
-	{
-		return value->data.string_value;
-	}
+char *ast_value_data(ast_value_t *value) {
+    DEBUG_ME;
+    if (value->type->kind == AST_TYPE_KIND_STRING) {
+        return value->data.string_value;
+    }
 
-	return "other value";
+    return "other value";
 }
 
 /**
@@ -152,23 +143,22 @@ char *ast_value_data(ast_value_t *value)
  * @returns {ast_block_t*} - AST block node
  *
  */
-ast_block_t *ast_block_create(ast_block_type_t type, ast_type_t parent_type)
-{
-	DEBUG_ME;
-	ast_block_t *block = malloc(sizeof(ast_block_t));
+ast_block_t *ast_block_create(ast_block_type_t type, ast_type_t parent_type) {
+    DEBUG_ME;
+    ast_block_t *block = malloc(sizeof(ast_block_t));
 
-	block->type = type;
-	block->parent_type = parent_type;
+    block->type = type;
+    block->parent_type = parent_type;
 
-	block->children = array_create(sizeof(ast_node_t *), 4);
+    block->children = array_create(sizeof(ast_node_t *), 4);
 
-	block->children->print = cast(void (*)(void *), array_node_print);
-	block->children->destroy = cast(void (*)(void *), array_node_destroy);
+    block->children->print = cast(void (*)(void *), array_node_print);
+    block->children->destroy = cast(void (*)(void *), array_node_destroy);
 
-	block->print = cast(void (*)(void *), ast_block_print);
-	block->destroy = cast(void (*)(void *), ast_block_destroy);
+    block->print = cast(void (*)(void *), ast_block_print);
+    block->destroy = cast(void (*)(void *), ast_block_destroy);
 
-	return block;
+    return block;
 }
 
 /**
@@ -179,17 +169,16 @@ ast_block_t *ast_block_create(ast_block_type_t type, ast_type_t parent_type)
  * @returns {ast_print_t*} - Pointer to the created AST node if
  *
  */
-ast_print_t *ast_print_create(array_value_t *values)
-{
-	DEBUG_ME;
-	ast_print_t *node = memory_allocate(sizeof(ast_print_t));
+ast_print_t *ast_print_create(array_value_t *values) {
+    DEBUG_ME;
+    ast_print_t *node = memory_allocate(sizeof(ast_print_t));
 
-	node->values = values;
+    node->values = values;
 
-	node->print = cast(void (*)(void *), ast_print_print);
-	node->destroy = cast(void (*)(void *), ast_print_destroy);
+    node->print = cast(void (*)(void *), ast_print_print);
+    node->destroy = cast(void (*)(void *), ast_print_destroy);
 
-	return node;
+    return node;
 }
 
 /**
@@ -200,16 +189,14 @@ ast_print_t *ast_print_create(array_value_t *values)
  * @returns {void}
  *
  */
-void ast_print_print(ast_print_t *node)
-{
-	DEBUG_ME;
-	printf("Print\n");
+void ast_print_print(ast_print_t *node) {
+    DEBUG_ME;
+    printf("Print\n");
 
-	if (node->values != NULL)
-	{
-		printf("Values\n");
-		node->values->print(node->values);
-	}
+    if (node->values != NULL) {
+        printf("Values\n");
+        node->values->print(node->values);
+    }
 }
 
 /**
@@ -220,18 +207,15 @@ void ast_print_print(ast_print_t *node)
  * @returns {void}
  *
  */
-void ast_print_destroy(ast_print_t *node)
-{
-	DEBUG_ME;
-	if (node != NULL)
-	{
-		if (node->values != NULL)
-		{
-			node->values->destroy(node->values);
-		}
+void ast_print_destroy(ast_print_t *node) {
+    DEBUG_ME;
+    if (node != NULL) {
+        if (node->values != NULL) {
+            node->values->destroy(node->values);
+        }
 
-		memory_destroy(node);
-	}
+        memory_destroy(node);
+    }
 }
 
 /**
@@ -242,17 +226,16 @@ void ast_print_destroy(ast_print_t *node)
  * @returns {ast_return_t*} - Pointer to the created AST node if
  *
  */
-ast_return_t *ast_return_create(array_value_t *values)
-{
-	DEBUG_ME;
-	ast_return_t *node = memory_allocate(sizeof(ast_return_t));
+ast_return_t *ast_return_create(array_value_t *values) {
+    DEBUG_ME;
+    ast_return_t *node = memory_allocate(sizeof(ast_return_t));
 
-	node->values = values;
+    node->values = values;
 
-	node->print = cast(void (*)(void *), ast_return_print);
-	node->destroy = cast(void (*)(void *), ast_return_destroy);
+    node->print = cast(void (*)(void *), ast_return_print);
+    node->destroy = cast(void (*)(void *), ast_return_destroy);
 
-	return node;
+    return node;
 }
 
 /**
@@ -262,16 +245,14 @@ ast_return_t *ast_return_create(array_value_t *values)
  * @params {ast_return_t*} node - AST return node
  * @returns {void}
  */
-void ast_return_print(ast_return_t *node)
-{
-	DEBUG_ME;
-	printf("Return\n");
+void ast_return_print(ast_return_t *node) {
+    DEBUG_ME;
+    printf("Return\n");
 
-	if (node->values != NULL)
-	{
-		printf("Values\n");
-		node->values->print(node->values);
-	}
+    if (node->values != NULL) {
+        printf("Values\n");
+        node->values->print(node->values);
+    }
 }
 
 /**
@@ -282,18 +263,15 @@ void ast_return_print(ast_return_t *node)
  * @returns {void}
  *
  */
-void ast_return_destroy(ast_return_t *node)
-{
-	DEBUG_ME;
-	if (node != NULL)
-	{
-		if (node->values != NULL)
-		{
-			node->values->destroy(node->values);
-		}
+void ast_return_destroy(ast_return_t *node) {
+    DEBUG_ME;
+    if (node != NULL) {
+        if (node->values != NULL) {
+            node->values->destroy(node->values);
+        }
 
-		memory_destroy(node);
-	}
+        memory_destroy(node);
+    }
 }
 
 /**
@@ -304,27 +282,27 @@ void ast_return_destroy(ast_return_t *node)
  * @returns {ast_if_t*} - Pointer to the created AST node if
  *
  */
-ast_if_t *ast_if_create(ast_value_t *condition)
-{
-	DEBUG_ME;
-	ast_if_t *node = memory_allocate(sizeof(ast_if_t));
+ast_if_t *ast_if_create(ast_value_t *condition) {
+    DEBUG_ME;
+    ast_if_t *node = memory_allocate(sizeof(ast_if_t));
 
-	node->condition = condition;
+    node->condition = condition;
 
-	node->block = ast_block_create(AST_BLOCK_TYPE_IF, AST_TYPE_IF); // TODO???
+    node->block = ast_block_create(AST_BLOCK_TYPE_IF, AST_TYPE_IF);  // TODO???
 
-	node->block->print = cast(void (*)(void *), ast_block_print);
-	node->block->destroy = cast(void (*)(void *), ast_block_destroy);
+    node->block->print = cast(void (*)(void *), ast_block_print);
+    node->block->destroy = cast(void (*)(void *), ast_block_destroy);
 
-	node->else_blocks = array_create(sizeof(ast_if_t *), 16); // Can be NULL for sub else if
+    node->else_blocks =
+        array_create(sizeof(ast_if_t *), 16);  // Can be NULL for sub else if
 
-	node->else_blocks->print = cast(void (*)(void *), array_if_print);
-	node->else_blocks->destroy = cast(void (*)(void *), array_if_destroy);
+    node->else_blocks->print = cast(void (*)(void *), array_if_print);
+    node->else_blocks->destroy = cast(void (*)(void *), array_if_destroy);
 
-	node->print = cast(void (*)(void *), ast_if_print);
-	node->destroy = cast(void (*)(void *), ast_if_destroy);
+    node->print = cast(void (*)(void *), ast_if_print);
+    node->destroy = cast(void (*)(void *), ast_if_destroy);
 
-	return node;
+    return node;
 }
 
 /**
@@ -335,23 +313,23 @@ ast_if_t *ast_if_create(ast_value_t *condition)
  * @returns {ast_if_t*} - Pointer to the created AST node else if
  *
  */
-ast_if_t *ast_elseif_create(ast_value_t *condition)
-{
-	DEBUG_ME;
-	ast_if_t *node = memory_allocate(sizeof(ast_if_t));
+ast_if_t *ast_elseif_create(ast_value_t *condition) {
+    DEBUG_ME;
+    ast_if_t *node = memory_allocate(sizeof(ast_if_t));
 
-	node->condition = condition;
+    node->condition = condition;
 
-	node->block = ast_block_create(AST_BLOCK_TYPE_IF, AST_TYPE_ELSE_IF); // TODO???
-	node->block->print = cast(void (*)(void *), ast_block_print);
-	node->block->destroy = cast(void (*)(void *), ast_block_destroy);
+    node->block =
+        ast_block_create(AST_BLOCK_TYPE_IF, AST_TYPE_ELSE_IF);  // TODO???
+    node->block->print = cast(void (*)(void *), ast_block_print);
+    node->block->destroy = cast(void (*)(void *), ast_block_destroy);
 
-	node->else_blocks = NULL;
+    node->else_blocks = NULL;
 
-	node->print = cast(void (*)(void *), ast_if_print);
-	node->destroy = cast(void (*)(void *), ast_if_destroy);
+    node->print = cast(void (*)(void *), ast_if_print);
+    node->destroy = cast(void (*)(void *), ast_if_destroy);
 
-	return node;
+    return node;
 }
 
 /**
@@ -361,23 +339,23 @@ ast_if_t *ast_elseif_create(ast_value_t *condition)
  * @returns {ast_if_t*} - Pointer to the created AST node else
  *
  */
-ast_if_t *ast_else_create()
-{
-	DEBUG_ME;
-	ast_if_t *node = memory_allocate(sizeof(ast_if_t));
+ast_if_t *ast_else_create() {
+    DEBUG_ME;
+    ast_if_t *node = memory_allocate(sizeof(ast_if_t));
 
-	node->condition = NULL;
+    node->condition = NULL;
 
-	node->block = ast_block_create(AST_BLOCK_TYPE_ELSE_IF, AST_TYPE_ELSE_IF); // TODO???
-	node->block->print = cast(void (*)(void *), ast_block_print);
-	node->block->destroy = cast(void (*)(void *), ast_block_destroy);
+    node->block =
+        ast_block_create(AST_BLOCK_TYPE_ELSE_IF, AST_TYPE_ELSE_IF);  // TODO???
+    node->block->print = cast(void (*)(void *), ast_block_print);
+    node->block->destroy = cast(void (*)(void *), ast_block_destroy);
 
-	node->else_blocks = NULL;
+    node->else_blocks = NULL;
 
-	node->print = cast(void (*)(void *), ast_if_print);
-	node->destroy = cast(void (*)(void *), ast_if_destroy);
+    node->print = cast(void (*)(void *), ast_if_print);
+    node->destroy = cast(void (*)(void *), ast_if_destroy);
 
-	return node;
+    return node;
 }
 
 /**
@@ -387,40 +365,30 @@ ast_if_t *ast_else_create()
  * @returns {ast_if_t*} - Pointer to the created AST node if
  *
  */
-void ast_if_print(ast_if_t *node)
-{
-	DEBUG_ME;
-	printf("If\n");
+void ast_if_print(ast_if_t *node) {
+    DEBUG_ME;
+    printf("If\n");
 
-	printf("Condition\n");
-	if (node->condition != NULL)
-	{
-		node->condition->print(node->condition);
-	}
-	else
-	{
-		printf("NULL\n");
-	}
+    printf("Condition\n");
+    if (node->condition != NULL) {
+        node->condition->print(node->condition);
+    } else {
+        printf("NULL\n");
+    }
 
-	printf("Else Blocks\n");
-	if (node->else_blocks != NULL)
-	{
-		node->else_blocks->print(node->else_blocks);
-	}
-	else
-	{
-		printf("NULL\n");
-	}
+    printf("Else Blocks\n");
+    if (node->else_blocks != NULL) {
+        node->else_blocks->print(node->else_blocks);
+    } else {
+        printf("NULL\n");
+    }
 
-	printf("Block\n");
-	if (node->block != NULL)
-	{
-		node->block->print(node->block);
-	}
-	else
-	{
-		printf("NULL\n");
-	}
+    printf("Block\n");
+    if (node->block != NULL) {
+        node->block->print(node->block);
+    } else {
+        printf("NULL\n");
+    }
 }
 
 /**
@@ -431,28 +399,23 @@ void ast_if_print(ast_if_t *node)
  * @returns {void}
  *
  */
-void ast_if_destroy(ast_if_t *node)
-{
-	DEBUG_ME;
-	if (node != NULL)
-	{
-		if (node->condition != NULL)
-		{
-			node->condition->destroy(node->condition);
-		}
+void ast_if_destroy(ast_if_t *node) {
+    DEBUG_ME;
+    if (node != NULL) {
+        if (node->condition != NULL) {
+            node->condition->destroy(node->condition);
+        }
 
-		if (node->block != NULL)
-		{
-			node->block->destroy(node->block);
-		}
+        if (node->block != NULL) {
+            node->block->destroy(node->block);
+        }
 
-		if (node->else_blocks != NULL)
-		{
-			node->else_blocks->destroy(node->else_blocks);
-		}
+        if (node->else_blocks != NULL) {
+            node->else_blocks->destroy(node->else_blocks);
+        }
 
-		memory_destroy(node);
-	}
+        memory_destroy(node);
+    }
 }
 
 /**
@@ -463,29 +426,31 @@ void ast_if_destroy(ast_if_t *node)
  * @returns {ast_function_t*} - Pointer to the created AST node function
  *
  */
-ast_function_t *ast_function_create(char *name)
-{
-	DEBUG_ME;
-	ast_function_t *node = memory_allocate(sizeof(ast_function_t));
-	node->name = strdup(name);
+ast_function_t *ast_function_create(char *name) {
+    DEBUG_ME;
+    ast_function_t *node = memory_allocate(sizeof(ast_function_t));
+    node->name = strdup(name);
 
-	location_t return_location = {0, 0, 0, 0, 0, 0}; // TODO: Fix this
-	node->return_type = ast_value_type_create(AST_TYPE_KIND_VOID, return_location);
+    location_t return_location = {0, 0, 0, 0, 0, 0};  // TODO: Fix this
+    node->return_type =
+        ast_value_type_create(AST_TYPE_KIND_VOID, return_location);
 
-	node->parameters = array_create(sizeof(ast_function_parameter_t *), 16);
+    node->parameters = array_create(sizeof(ast_function_parameter_t *), 16);
 
-	node->parameters->print = cast(void (*)(void *), array_function_parameter_print);
-	node->parameters->destroy = cast(void (*)(void *), array_function_parameter_destroy);
+    node->parameters->print =
+        cast(void (*)(void *), array_function_parameter_print);
+    node->parameters->destroy =
+        cast(void (*)(void *), array_function_parameter_destroy);
 
-	node->block = ast_block_create(AST_BLOCK_TYPE_FUNCTION, AST_TYPE_FUNCTION);
+    node->block = ast_block_create(AST_BLOCK_TYPE_FUNCTION, AST_TYPE_FUNCTION);
 
-	node->block->print = cast(void (*)(void *), ast_block_print);
-	node->block->destroy = cast(void (*)(void *), ast_block_destroy);
+    node->block->print = cast(void (*)(void *), ast_block_print);
+    node->block->destroy = cast(void (*)(void *), ast_block_destroy);
 
-	node->print = cast(void (*)(void *), ast_function_print);
-	node->destroy = cast(void (*)(void *), ast_function_destroy);
+    node->print = cast(void (*)(void *), ast_function_print);
+    node->destroy = cast(void (*)(void *), ast_function_destroy);
 
-	return node;
+    return node;
 }
 
 /**
@@ -496,18 +461,16 @@ ast_function_t *ast_function_create(char *name)
  * @returns {void}
  *
  */
-void ast_block_print(ast_block_t *block)
-{
-	DEBUG_ME;
-	size_t children_capacity = array_length(block->children);
+void ast_block_print(ast_block_t *block) {
+    DEBUG_ME;
+    size_t children_capacity = array_length(block->children);
 
-	printf("Block: %zu\n", children_capacity);
-	for (size_t i = 0; i < children_capacity; i++)
-	{
-		ast_node_t *node = cast(ast_node_t *, array_get(block->children, i));
+    printf("Block: %zu\n", children_capacity);
+    for (size_t i = 0; i < children_capacity; i++) {
+        ast_node_t *node = cast(ast_node_t *, array_get(block->children, i));
 
-		node->print(node);
-	}
+        node->print(node);
+    }
 }
 
 /**
@@ -518,18 +481,15 @@ void ast_block_print(ast_block_t *block)
  * @returns {void}
  *
  */
-void ast_block_destroy(ast_block_t *block)
-{
-	DEBUG_ME;
-	if (block != NULL)
-	{
-		if (block->children != NULL)
-		{
-			block->children->destroy(block->children);
-		}
+void ast_block_destroy(ast_block_t *block) {
+    DEBUG_ME;
+    if (block != NULL) {
+        if (block->children != NULL) {
+            block->children->destroy(block->children);
+        }
 
-		memory_destroy(block);
-	}
+        memory_destroy(block);
+    }
 }
 
 /**
@@ -540,20 +500,18 @@ void ast_block_destroy(ast_block_t *block)
  * @returns {char*} - Name of the AST value type
  *
  */
-char *ast_value_type_name(ast_value_type_t *type)
-{
-	DEBUG_ME;
-	switch (type->kind)
-	{
+char *ast_value_type_name(ast_value_type_t *type) {
+    DEBUG_ME;
+    switch (type->kind) {
 #undef ADD_VALUE_KIND
 #define ADD_VALUE_KIND(TYPE, NAME, NAME_LOWER) \
-	case TYPE:                                 \
-		return NAME;
+    case TYPE:                                 \
+        return NAME;
 
 #include "ast_value_kind.h"
-	}
+    }
 
-	return "unknown";
+    return "unknown";
 }
 
 /**
@@ -564,11 +522,10 @@ char *ast_value_type_name(ast_value_type_t *type)
  * @returns {void}
  *
  */
-void ast_value_type_print(ast_value_type_t *type)
-{
-	DEBUG_ME;
-	printf("Type:\n");
-	printf("%s\n", ast_value_type_name(type));
+void ast_value_type_print(ast_value_type_t *type) {
+    DEBUG_ME;
+    printf("Type:\n");
+    printf("%s\n", ast_value_type_name(type));
 }
 
 /**
@@ -580,17 +537,17 @@ void ast_value_type_print(ast_value_type_t *type)
  * @returns {ast_value_type_t*} - Pointer to the created AST value type
  *
  */
-ast_value_type_t *ast_value_type_create(ast_value_kind_t kind, location_t location)
-{
-	DEBUG_ME;
-	ast_value_type_t *type = memory_allocate(sizeof(ast_value_type_t));
-	type->kind = kind;
-	type->location = location;
+ast_value_type_t *ast_value_type_create(ast_value_kind_t kind,
+                                        location_t location) {
+    DEBUG_ME;
+    ast_value_type_t *type = memory_allocate(sizeof(ast_value_type_t));
+    type->kind = kind;
+    type->location = location;
 
-	type->print = cast(void (*)(void *), ast_value_type_print);
-	type->destroy = cast(void (*)(void *), ast_value_type_destroy);
+    type->print = cast(void (*)(void *), ast_value_type_print);
+    type->destroy = cast(void (*)(void *), ast_value_type_destroy);
 
-	return type;
+    return type;
 }
 
 /**
@@ -601,13 +558,11 @@ ast_value_type_t *ast_value_type_create(ast_value_kind_t kind, location_t locati
  * @returns {void}
  *
  */
-void ast_value_type_destroy(ast_value_type_t *type)
-{
-	DEBUG_ME;
-	if (type != NULL)
-	{
-		memory_destroy(type);
-	}
+void ast_value_type_destroy(ast_value_type_t *type) {
+    DEBUG_ME;
+    if (type != NULL) {
+        memory_destroy(type);
+    }
 }
 
 /**
@@ -618,10 +573,9 @@ void ast_value_type_destroy(ast_value_type_t *type)
  * @returns {void}
  *
  */
-void ast_function_parameter_print(ast_function_parameter_t *value)
-{
-	DEBUG_ME;
-	printf("Parameter: %s\n", value->name);
+void ast_function_parameter_print(ast_function_parameter_t *value) {
+    DEBUG_ME;
+    printf("Parameter: %s\n", value->name);
 }
 
 /**
@@ -632,18 +586,15 @@ void ast_function_parameter_print(ast_function_parameter_t *value)
  * @returns {void}
  *
  */
-void ast_function_parameter_destroy(ast_function_parameter_t *value)
-{
-	DEBUG_ME;
-	if (value != NULL)
-	{
-		if (value->name != NULL)
-		{
-			memory_destroy(value->name);
-		}
+void ast_function_parameter_destroy(ast_function_parameter_t *value) {
+    DEBUG_ME;
+    if (value != NULL) {
+        if (value->name != NULL) {
+            memory_destroy(value->name);
+        }
 
-		memory_destroy(value);
-	}
+        memory_destroy(value);
+    }
 }
 
 /**
@@ -654,37 +605,33 @@ void ast_function_parameter_destroy(ast_function_parameter_t *value)
  * @returns {void}
  *
  */
-void ast_function_print(ast_function_t *value)
-{
-	DEBUG_ME;
-	printf("Function: %s\n", value->name);
+void ast_function_print(ast_function_t *value) {
+    DEBUG_ME;
+    printf("Function: %s\n", value->name);
 
-	array_function_parameter_t *parameters = value->parameters;
-	size_t parameters_capacity = array_length(parameters);
+    array_function_parameter_t *parameters = value->parameters;
+    size_t parameters_capacity = array_length(parameters);
 
-	printf("Return Type: ");
-	value->return_type->print(value->return_type);
-	printf("\n");
+    printf("Return Type: ");
+    value->return_type->print(value->return_type);
+    printf("\n");
 
-	printf("Parameters: %zu\n", parameters_capacity);
-	for (size_t i = 0; i < parameters_capacity; i++)
-	{
-		ast_function_parameter_t *parameter = cast(ast_function_parameter_t *, array_get(parameters, i));
+    printf("Parameters: %zu\n", parameters_capacity);
+    for (size_t i = 0; i < parameters_capacity; i++) {
+        ast_function_parameter_t *parameter =
+            cast(ast_function_parameter_t *, array_get(parameters, i));
 
-		parameter->print(parameter);
-	}
+        parameter->print(parameter);
+    }
 
-	printf("Block: ");
-	if (value->block != NULL)
-	{
-		printf("\n");
+    printf("Block: ");
+    if (value->block != NULL) {
+        printf("\n");
 
-		value->block->print(value->block);
-	}
-	else
-	{
-		printf("NULL\n");
-	}
+        value->block->print(value->block);
+    } else {
+        printf("NULL\n");
+    }
 }
 
 /**
@@ -695,33 +642,27 @@ void ast_function_print(ast_function_t *value)
  * @returns {void}
  *
  */
-void ast_function_destroy(ast_function_t *value)
-{
-	DEBUG_ME;
-	if (value != NULL)
-	{
-		if (value->name != NULL)
-		{
-			memory_destroy(value->name);
-		}
+void ast_function_destroy(ast_function_t *value) {
+    DEBUG_ME;
+    if (value != NULL) {
+        if (value->name != NULL) {
+            memory_destroy(value->name);
+        }
 
-		if (value->parameters != NULL)
-		{
-			value->parameters->destroy(value->parameters);
-		}
+        if (value->parameters != NULL) {
+            value->parameters->destroy(value->parameters);
+        }
 
-		if (value->return_type != NULL)
-		{
-			value->return_type->destroy(value->return_type);
-		}
+        if (value->return_type != NULL) {
+            value->return_type->destroy(value->return_type);
+        }
 
-		if (value->block != NULL)
-		{
-			value->block->destroy(value->block);
-		}
+        if (value->block != NULL) {
+            value->block->destroy(value->block);
+        }
 
-		memory_destroy(value);
-	}
+        memory_destroy(value);
+    }
 }
 
 /**
@@ -732,19 +673,17 @@ void ast_function_destroy(ast_function_t *value)
  * @returns {void}
  *
  */
-void ast_node_print(ast_node_t *node)
-{
-	DEBUG_ME;
-	switch (node->type)
-	{
+void ast_node_print(ast_node_t *node) {
+    DEBUG_ME;
+    switch (node->type) {
 #undef ADD_TYPE
 #define ADD_TYPE(TYPE, NAME, NAME_LOWER) \
-	case TYPE:                           \
-		printf("%s\n", NAME);            \
-		break;
+    case TYPE:                           \
+        printf("%s\n", NAME);            \
+        break;
 
 #include "ast_type.h"
-	}
+    }
 }
 
 /**
@@ -754,21 +693,19 @@ void ast_node_print(ast_node_t *node)
  * @params {ast_block_type_t} type - AST block type
  * @returns {char*} - Name of the AST block type
  */
-char *ast_block_type_name(ast_block_type_t type)
-{
-	DEBUG_ME;
-	switch (type)
-	{
+char *ast_block_type_name(ast_block_type_t type) {
+    DEBUG_ME;
+    switch (type) {
 #undef ADD_BLOCK_TYPE
 #define ADD_BLOCK_TYPE(TYPE, NAME, NAME_LOWER) \
-	case TYPE:                                 \
-		printf("%s\n", NAME);                  \
-		break;
+    case TYPE:                                 \
+        printf("%s\n", NAME);                  \
+        break;
 
 #include "ast_block_type.h"
-	}
+    }
 
-	return "unknown block";
+    return "unknown block";
 }
 
 /**
@@ -778,20 +715,19 @@ char *ast_block_type_name(ast_block_type_t type)
  * @returns {ast_t*} - Pointer to the created AST
  *
  */
-ast_t *ast_create()
-{
-	DEBUG_ME;
-	ast_t *ast = memory_allocate(sizeof(ast_t));
-	ast->layout = NULL;
+ast_t *ast_create() {
+    DEBUG_ME;
+    ast_t *ast = memory_allocate(sizeof(ast_t));
+    ast->layout = NULL;
 
-	ast->functions = array_create(sizeof(ast_function_t *), 16);
-	ast->functions->print = cast(void (*)(void *), array_function_print);
-	ast->functions->destroy = cast(void (*)(void *), array_function_destroy);
+    ast->functions = array_create(sizeof(ast_function_t *), 16);
+    ast->functions->print = cast(void (*)(void *), array_function_print);
+    ast->functions->destroy = cast(void (*)(void *), array_function_destroy);
 
-	ast->print = cast(void (*)(void *), ast_print);
-	ast->destroy = cast(void (*)(void *), ast_destroy);
+    ast->print = cast(void (*)(void *), ast_print);
+    ast->destroy = cast(void (*)(void *), ast_destroy);
 
-	return ast;
+    return ast;
 }
 
 /**
@@ -802,22 +738,18 @@ ast_t *ast_create()
  * @returns {void}
  *
  */
-void ast_debug(ast_t *ast)
-{
-	DEBUG_ME;
-	printf("============= START AST DEBUG =============\n");
+void ast_debug(ast_t *ast) {
+    DEBUG_ME;
+    printf("============= START AST DEBUG =============\n");
 
-	printf("AST Layout\n");
-	if (ast->layout != NULL)
-	{
-		ast->layout->print(ast->layout);
-	}
-	else
-	{
-		printf("NULL\n");
-	}
+    printf("AST Layout\n");
+    if (ast->layout != NULL) {
+        ast->layout->print(ast->layout);
+    } else {
+        printf("NULL\n");
+    }
 
-	printf("============= END AST DEBUG =============\n");
+    printf("============= END AST DEBUG =============\n");
 }
 
 /**
@@ -828,23 +760,19 @@ void ast_debug(ast_t *ast)
  * @returns {void}
  *
  */
-void ast_destroy(ast_t *ast)
-{
-	DEBUG_ME;
-	if (ast != NULL)
-	{
-		if (ast->layout != NULL)
-		{
-			ast_layout_destroy(ast->layout);
-		}
+void ast_destroy(ast_t *ast) {
+    DEBUG_ME;
+    if (ast != NULL) {
+        if (ast->layout != NULL) {
+            ast_layout_destroy(ast->layout);
+        }
 
-		if (ast->functions != NULL)
-		{
-			ast->functions->destroy(ast->functions);
-		}
+        if (ast->functions != NULL) {
+            ast->functions->destroy(ast->functions);
+        }
 
-		memory_destroy(ast);
-	}
+        memory_destroy(ast);
+    }
 }
 
 /**
@@ -855,30 +783,23 @@ void ast_destroy(ast_t *ast)
  * @returns {void}
  *
  */
-void ast_print(ast_t *ast)
-{
-	DEBUG_ME;
-	printf("AST\n");
+void ast_print(ast_t *ast) {
+    DEBUG_ME;
+    printf("AST\n");
 
-	printf("AST Layout: ");
-	if (ast->layout != NULL)
-	{
-		ast->layout->print(ast->layout);
-	}
-	else
-	{
-		printf("NULL\n");
-	}
+    printf("AST Layout: ");
+    if (ast->layout != NULL) {
+        ast->layout->print(ast->layout);
+    } else {
+        printf("NULL\n");
+    }
 
-	printf("AST Functions: ");
-	if (ast->functions != NULL)
-	{
-		ast->functions->print(ast->functions);
-	}
-	else
-	{
-		printf("NULL\n");
-	}
+    printf("AST Functions: ");
+    if (ast->functions != NULL) {
+        ast->functions->print(ast->functions);
+    } else {
+        printf("NULL\n");
+    }
 }
 
 /**
@@ -889,23 +810,19 @@ void ast_print(ast_t *ast)
  * @returns {void}
  *
  */
-void ast_value_destroy(ast_value_t *value)
-{
-	DEBUG_ME;
-	if (value != NULL)
-	{
-		if (value->type != NULL)
-		{
-			value->type->destroy(value->type);
-		}
+void ast_value_destroy(ast_value_t *value) {
+    DEBUG_ME;
+    if (value != NULL) {
+        if (value->type != NULL) {
+            value->type->destroy(value->type);
+        }
 
-		if (value->data.string_value != NULL)
-		{
-			memory_destroy(value->data.string_value);
-		}
+        if (value->data.string_value != NULL) {
+            memory_destroy(value->data.string_value);
+        }
 
-		memory_destroy(value);
-	}
+        memory_destroy(value);
+    }
 }
 
 /**
@@ -916,38 +833,28 @@ void ast_value_destroy(ast_value_t *value)
  * @returns {void}
  *
  */
-void ast_value_print(ast_value_t *value)
-{
-	DEBUG_ME;
-	printf("Value\n");
+void ast_value_print(ast_value_t *value) {
+    DEBUG_ME;
+    printf("Value\n");
 
-	if (value != NULL)
-	{
-		printf("Value Type:\n");
+    if (value != NULL) {
+        printf("Value Type:\n");
 
-		if (value->type != NULL)
-		{
-			value->type->print(value->type);
-		}
-		else
-		{
-			printf("NULL\n");
-		}
+        if (value->type != NULL) {
+            value->type->print(value->type);
+        } else {
+            printf("NULL\n");
+        }
 
-		printf("Value Data:\n");
-		if (value->data.string_value != NULL)
-		{
-			printf("%s\n", value->data.string_value);
-		}
-		else
-		{
-			printf("NULL\n");
-		}
-	}
-	else
-	{
-		printf("NULL\n");
-	}
+        printf("Value Data:\n");
+        if (value->data.string_value != NULL) {
+            printf("%s\n", value->data.string_value);
+        } else {
+            printf("NULL\n");
+        }
+    } else {
+        printf("NULL\n");
+    }
 }
 
 /**
@@ -958,14 +865,13 @@ void ast_value_print(ast_value_t *value)
  * @returns {ast_value_t*} - Copied AST Layout Attribute Value
  *
  */
-ast_value_t *ast_value_copy(ast_value_t *value)
-{
-	DEBUG_ME;
-	ast_value_type_t *type = ast_value_type_copy(value->type);
+ast_value_t *ast_value_copy(ast_value_t *value) {
+    DEBUG_ME;
+    ast_value_type_t *type = ast_value_type_copy(value->type);
 
-	ast_value_t *copy = ast_value_create(type, value->data.string_value);
+    ast_value_t *copy = ast_value_create(type, value->data.string_value);
 
-	return copy;
+    return copy;
 }
 
 /**
@@ -976,10 +882,9 @@ ast_value_t *ast_value_copy(ast_value_t *value)
  * @returns {ast_value_type_t*} - Copied AST Layout Attribute Value Type
  *
  */
-ast_value_type_t *ast_value_type_copy(ast_value_type_t *type)
-{
-	DEBUG_ME;
-	ast_value_type_t *copy = ast_value_type_create(type->kind, type->location);
+ast_value_type_t *ast_value_type_copy(ast_value_type_t *type) {
+    DEBUG_ME;
+    ast_value_type_t *copy = ast_value_type_create(type->kind, type->location);
 
-	return copy;
+    return copy;
 }

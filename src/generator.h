@@ -4,26 +4,25 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "ast.h"
+#include "file.h"
+#include "generator_identifier.h"
 #include "memory.h"
 #include "string.h"
-#include "file.h"
-#include "ast.h"
 #include "validator.h"
-#include "generator_identifier.h"
 
-typedef struct generator_t
-{
-	ast_t *ast;
+typedef struct generator_t {
+    ast_t *ast;
 
-	string_t *html;
-	string_t *css;
-	string_t *media_css;
-	string_t *js;
+    string_t *html;
+    string_t *css;
+    string_t *media_css;
+    string_t *js;
 
-	bool inlineCSS;
-	bool inlineJS;
+    bool inlineCSS;
+    bool inlineJS;
 
-	generator_identifier_t *identifier;
+    generator_identifier_t *identifier;
 } generator_t;
 
 /**
@@ -64,7 +63,8 @@ void generator_debug(generator_t *generator);
  * @returns {void}
  *
  */
-void generator_save(generator_t *generator, const char *html_output, const char *css_output, const char *js_output);
+void generator_save(generator_t *generator, const char *html_output,
+                    const char *css_output, const char *js_output);
 
 /**
  *
@@ -85,7 +85,8 @@ void generator_code_functions(generator_t *generator);
  * @returns {string_t*} code - Code
  *
  */
-string_t *generator_code_function(generator_t *generator, ast_function_t *function);
+string_t *generator_code_function(generator_t *generator,
+                                  ast_function_t *function);
 
 /**
  *
@@ -195,7 +196,9 @@ char *generator_code_layout_node_type(ast_layout_node_type_t type);
  * @returns {string_t*}
  *
  */
-string_t *generator_code_layout_style(hashmap_layout_attribute_t *styles, ast_layout_block_t *block, size_t *css_attributes_length);
+string_t *generator_code_layout_style(hashmap_layout_attribute_t *styles,
+                                      ast_layout_block_t *block,
+                                      size_t *css_attributes_length);
 
 #include "generator_layout.h"
 

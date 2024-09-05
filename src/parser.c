@@ -566,7 +566,9 @@ ast_t *parser_parse(lexer_t *lexer)
 	while (lexer->token_index < lexer->tokens->length)
 	{
 		if (PARSER_CURRENT->type == TOKEN_EOF)
+		{
 			break;
+		}
 
 		ast_node_t *node = parser_parse_node(lexer);
 

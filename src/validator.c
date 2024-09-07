@@ -333,8 +333,13 @@ bool token_belongs_to_ast_layout_node(
     ast_layout_attribute_type_t attribute_key_type,
     ast_layout_attribute_t *attribute) {
     DEBUG_ME;
-    if (is_layout_node_a_single_tag(attribute->parent_node_type) &&
-        attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
+    // value attribute for input tag
+    if ((attribute->parent_node_type == AST_LAYOUT_TYPE_INPUT) &&
+        (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT)) {
+        attribute->final_key = string_strdup("value");
+        return true;
+    } else if (is_layout_node_a_single_tag(attribute->parent_node_type) &&
+               attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
         return false;
     } else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
         return true;

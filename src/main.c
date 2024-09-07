@@ -40,8 +40,6 @@ void run(bool isCode, const char *path, char *content, char *build_dir) {
 
     // printf("generate save\n");
 
-    // generator_save(generator, argc > 2 ? argv[2] : "index.html", argc > 3 ?
-    // argv[3] : "style.css", argc > 4 ? argv[4] : "script.js");
     generator_save(generator, "index.html", "style.css", "script.js");
 
     if (isCode) {

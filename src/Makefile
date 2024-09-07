@@ -5,6 +5,8 @@ INPUT_FILE = ../example/testgroup.salam
 INPUT_FILE = ../example/test-include.salam
 INPUT_FILE = ../example/repeat-block.salam
 
+OUTPUT_DIR = ../out/
+
 CC = gcc
 CFLAGS =
 # CFLAGS = -g -Walloca -Wextra -Wall -fsanitize=address,undefined -std=c11
@@ -24,7 +26,7 @@ $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 run: $(TARGET)
-	./$(TARGET) $(INPUT_FILE)
+	./$(TARGET) $(INPUT_FILE) $(OUTPUT_DIR) 
 
 clean:
 	rm -f $(OBJS) $(TARGET)

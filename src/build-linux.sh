@@ -39,4 +39,4 @@ gcc -o "$output" *.o
 # rm *.o
 
 # Run the executable with a provided argument
-./"$output" ../example/test6.salam
+./"$output" ../example/test6.salam ../out/

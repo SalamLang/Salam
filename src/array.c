@@ -156,7 +156,7 @@ void array_destroy(array_t *array) {
 char *array_stringify(array_t *array, char *separator) {
     DEBUG_ME;
     if (array == NULL || array->length == 0) {
-        return string_strdup("");
+        return NULL;
     }
 
     string_t *buf = string_create(16);

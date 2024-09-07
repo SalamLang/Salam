@@ -22,6 +22,7 @@ generator_t *generator_create(ast_t *ast)
 	generator->css = string_create(4096);
 	generator->media_css = string_create(512);
 	generator->js = string_create(4096);
+
 	generator->output_dir = string_create(256);
 
 	generator->inlineCSS = false;

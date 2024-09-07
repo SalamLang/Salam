@@ -5,7 +5,7 @@
  * @function run
  * @brief
  */
-void run(bool isCode, const char *path, char *content)
+void run(bool isCode, const char *path, char *content, char *build_dir)
 {
 
 	lexer_t *lexer = lexer_create(path, content);
@@ -22,6 +22,11 @@ void run(bool isCode, const char *path, char *content)
 	// printf("end ast debug\n");
 
 	generator_t *generator = generator_create(ast);
+
+	if (build_dir != NULL)
+	{
+		string_set_str(generator->output_dir, build_dir);
+	}
 
 	// printf("generate code\n");
 
@@ -123,7 +128,9 @@ void doargs(int argc, char **argv)
 
 		char *content = argv[2];
 
-		run(true, "stdin", content);
+		char *build_dir = argc > 3 ? argv[3] : NULL;
+
+		run(true, "stdin", content, build_dir);
 	}
 	else
 	{
@@ -134,7 +141,9 @@ void doargs(int argc, char **argv)
 
 		char *content = file_reads_binary(path, NULL);
 
-		run(false, path, content);
+		char *build_dir = argc > 2 ? argv[2] : NULL;
+
+		run(false, path, content, build_dir);
 	}
 }
 

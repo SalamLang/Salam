@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include  <string.h>
 
+#include "string.h"
+
 typedef struct array_t
 
 {

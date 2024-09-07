@@ -13,6 +13,7 @@
  */
 void run(bool isCode, const char *path, char *content, char *build_dir) {
     lexer_t *lexer = lexer_create(path, content);
+    lexer_lex(lexer);
 
     // lexer_debug(lexer);
 
@@ -34,13 +35,11 @@ void run(bool isCode, const char *path, char *content, char *build_dir) {
 
     // printf("generate code\n");
 
+    generator_code(generator);
+
     // printf("generate debug\n");
 
     // generator_debug(generator);
-
-    // printf("generate save\n");
-
-    generator_save(generator, "index.html", "style.css", "script.js");
 
     if (isCode) {
         if (generator->css->length > 0 || generator->media_css->length > 0) {
@@ -62,6 +61,9 @@ void run(bool isCode, const char *path, char *content, char *build_dir) {
         if (generator->js->length > 0) {
             printf("%s\n", generator->js->data);
         }
+    } else {
+        // printf("generate save\n");
+        generator_save(generator, "index.html", "style.css", "script.js");
     }
 
     // printf("generate destroy\n");
@@ -76,10 +78,6 @@ void run(bool isCode, const char *path, char *content, char *build_dir) {
     lexer_destroy(lexer);
 
     // printf("end lexer destroy\n");
-
-    memory_destroy(content);
-
-    // printf("end content destroy\n");
 
     if (!isCode) {
         printf("END SUCCESS\n");
@@ -128,6 +126,8 @@ void doargs(int argc, char **argv) {
         char *output_dir = argv[2];
 
         run(false, path, content, output_dir);
+
+        memory_destroy(content);
     }
 }
 

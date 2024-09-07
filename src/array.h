@@ -32,7 +32,7 @@ typedef array_t array_value_t;
 #include "base.h"
 #include "lexer.h"
 #include "memory.h"
-#include "string.h"
+#include "string_buffer.h"
 
 /**
  *

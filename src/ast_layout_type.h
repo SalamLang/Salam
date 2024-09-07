@@ -233,7 +233,7 @@ ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_TABLE_TH, "TABLE_TH", "table_th", "th",
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_CAPTION, "CAPTION", "caption", "caption",
                 "عنوان جدول", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_COL, "COL", "col", "col", "ستون", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_COL, "COL", "col", "th", "ستون", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_COLGROUP, "COLGROUP", "colgroup", "colgroup",
                 "گروه ستون‌ها", false)

@@ -4,25 +4,23 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "base.h"
-#include "memory.h"
 #include "array.h"
 #include "array_custom.h"
-#include "lexer.h"
+#include "base.h"
 #include "hashmap.h"
+#include "lexer.h"
+#include "memory.h"
 // #include "hashmap_custom.h"
 #include "string.h"
 
-typedef enum
-{
+typedef enum {
 #undef ADD_TYPE
 #define ADD_TYPE(TYPE, NAME, NAME_LOWER) TYPE,
 
 #include "ast_type.h"
 } ast_type_t;
 
-typedef enum
-{
+typedef enum {
 #undef ADD_BLOCK_TYPE
 #define ADD_BLOCK_TYPE(TYPE, NAME, NAME_LOWER) TYPE,
 
@@ -31,137 +29,123 @@ typedef enum
 
 struct ast_t;
 
-typedef struct
-{
-	ast_block_type_t type;
-	ast_type_t parent_type;
+typedef struct {
+    ast_block_type_t type;
+    ast_type_t parent_type;
 
-	array_node_t *children;
+    array_node_t *children;
 
-	void (*destroy)(void *node);
-	void (*print)(void *node);
+    void (*destroy)(void *node);
+    void (*print)(void *node);
 } ast_block_t;
 
-typedef struct ast_import_t
-{
-	array_t *path;
+typedef struct ast_import_t {
+    array_t *path;
 
-	void (*destroy)(void *node);
-	void (*print)(void *node);
+    void (*destroy)(void *node);
+    void (*print)(void *node);
 } ast_import_t;
 
-typedef enum ast_value_kind_t
-{
+typedef enum ast_value_kind_t {
 #undef ADD_VALUE_KIND
 #define ADD_VALUE_KIND(TYPE, NAME, NAME_LOWER) TYPE,
 
 #include "ast_value_kind.h"
 } ast_value_kind_t;
 
-typedef struct ast_value_type_t
-{
-	ast_value_kind_t kind;
-	location_t location;
+typedef struct ast_value_type_t {
+    ast_value_kind_t kind;
+    location_t location;
 
-	void (*destroy)(void *node);
-	void (*print)(void *node);
+    void (*destroy)(void *node);
+    void (*print)(void *node);
 } ast_value_type_t;
 
 #include "ast_layout.h"
 #include "ast_layout_style.h"
 
-typedef struct ast_function_t
-{
-	char *name;
-	array_function_parameter_t *parameters;
-	ast_block_t *block;
-	ast_value_type_t *return_type;
+typedef struct ast_function_t {
+    char *name;
+    array_function_parameter_t *parameters;
+    ast_block_t *block;
+    ast_value_type_t *return_type;
 
-	void (*destroy)(void *node);
-	void (*print)(void *node);
+    void (*destroy)(void *node);
+    void (*print)(void *node);
 } ast_function_t;
 
-typedef struct ast_value_t
-{
-	ast_value_type_t *type;
-	union data
-	{
-		int int_value;
-		float float_value;
-		char char_value;
-		bool bool_value;
-		char *string_value;
-	} data;
+typedef struct ast_value_t {
+    ast_value_type_t *type;
+    union data {
+        int int_value;
+        float float_value;
+        char char_value;
+        bool bool_value;
+        char *string_value;
+    } data;
 
-	void (*destroy)(void *node);
-	void (*print)(void *node);
-	char *(*get_data)(void *node);
+    void (*destroy)(void *node);
+    void (*print)(void *node);
+    char *(*get_data)(void *node);
 } ast_value_t;
 
-typedef struct ast_if_t
-{
-	ast_value_t *condition;
-	ast_block_t *block;
-	array_block_t *else_blocks; // NULLABLE for else if blocks
+typedef struct ast_if_t {
+    ast_value_t *condition;
+    ast_block_t *block;
+    array_block_t *else_blocks;  // NULLABLE for else if blocks
 
-	void (*destroy)(void *node);
-	void (*print)(void *node);
+    void (*destroy)(void *node);
+    void (*print)(void *node);
 } ast_if_t;
 
-typedef struct ast_return_t
-{
-	array_value_t *values;
+typedef struct ast_return_t {
+    array_value_t *values;
 
-	void (*destroy)(void *node);
-	void (*print)(void *node);
+    void (*destroy)(void *node);
+    void (*print)(void *node);
 } ast_return_t;
 
-typedef struct ast_print_t
-{
-	array_value_t *values;
+typedef struct ast_print_t {
+    array_value_t *values;
 
-	void (*destroy)(void *node);
-	void (*print)(void *node);
+    void (*destroy)(void *node);
+    void (*print)(void *node);
 } ast_print_t;
 
-typedef struct ast_function_parameter_t
-{
-	char *name;
-	ast_value_type_t *type;
+typedef struct ast_function_parameter_t {
+    char *name;
+    ast_value_type_t *type;
 
-	void (*destroy)(void *node);
-	void (*print)(void *node);
+    void (*destroy)(void *node);
+    void (*print)(void *node);
 } ast_function_parameter_t;
 
-typedef union ast_union_t
-{
-	ast_block_t *block;
-	ast_import_t *import;
-	ast_function_t *function;
-	ast_if_t *ifclause;
-	ast_return_t *returns;
-	ast_print_t *print;
+typedef union ast_union_t {
+    ast_block_t *block;
+    ast_import_t *import;
+    ast_function_t *function;
+    ast_if_t *ifclause;
+    ast_return_t *returns;
+    ast_print_t *print;
 
-	struct ast_layout_t *layout;
+    struct ast_layout_t *layout;
 } ast_union_t;
 
-typedef struct ast_node_t
-{
-	ast_type_t type;
-	location_t location;
-	ast_union_t data;
+typedef struct ast_node_t {
+    ast_type_t type;
+    location_t location;
+    ast_union_t data;
 
-	void (*destroy)(void *node);
-	void (*print)(void *node);
+    void (*destroy)(void *node);
+    void (*print)(void *node);
 } ast_node_t;
 
-typedef struct ast_t
-{
-	struct ast_layout_t *layout;
-	array_function_t *functions;
+typedef struct ast_t {
+    struct ast_layout_t *layout;
+    array_function_t *functions;
 
-	void (*destroy)(void *node);
-	void (*print)(void *node);
+    void (*destroy)(void *node);
+    void (*print)(void *node);
 } ast_t;
 
 /**
@@ -304,7 +288,8 @@ void ast_function_destroy(ast_function_t *value);
  * @returns {ast_value_type_t*} - Pointer to the created AST value type
  *
  */
-ast_value_type_t *ast_value_type_create(ast_value_kind_t kind, location_t location);
+ast_value_type_t *ast_value_type_create(ast_value_kind_t kind,
+                                        location_t location);
 
 /**
  *

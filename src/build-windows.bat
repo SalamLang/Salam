@@ -8,7 +8,7 @@ set sources=log.c file.c memory.c array.c parser.c parser_layout.c generator.c g
 
 REM Compile each source file into an object file
 for %%f in (%sources%) do (
-    gcc -c %%f -o %%~nf.wino
+    gcc -std=c11 -c %%f -o %%~nf.wino
 )
 
 REM Link all object files into the final executable

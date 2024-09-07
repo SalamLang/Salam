@@ -21,12 +21,10 @@ generator_t *generator_create(ast_t *ast) {
     generator->media_css = string_create(512);
     generator->js = string_create(4096);
 
+    generator->output_dir = string_create(256);
 
-
-  	generator->output_dir = string_create(256);
-
-  	generator->inlineCSS = false;
-  	generator->inlineJS = false;
+    generator->inlineCSS = false;
+    generator->inlineJS = false;
 
     // generator->inlineCSS = true;
     // generator->inlineJS = true;
@@ -126,49 +124,43 @@ void generator_debug(generator_t *generator) {
  *
  */
 
-void generator_save(generator_t *generator, const char *html_output, const char *css_output, const char *js_output)
-{
-	DEBUG_ME;
-	if (generator == NULL)
-	{
-		return;
-	}
-	else
-	{
-		if (generator->html != NULL)
-		{
-			string_t *html_output_file = string_create(24);
-			string_append(html_output_file, generator->output_dir);
-			string_append_str(html_output_file, html_output);
+void generator_save(generator_t *generator, const char *html_output,
+                    const char *css_output, const char *js_output) {
+    DEBUG_ME;
+    if (generator == NULL) {
+        return;
+    } else {
+        if (generator->html != NULL) {
+            string_t *html_output_file = string_create(24);
+            string_append(html_output_file, generator->output_dir);
+            string_append_str(html_output_file, html_output);
 
-			file_writes(html_output_file->data, generator->html->data);
+            file_writes(html_output_file->data, generator->html->data);
 
-			string_destroy(html_output_file);
-		}
+            string_destroy(html_output_file);
+        }
 
-		if (generator->css != NULL)
-		{
-			string_t *css_output_file = string_create(24);
-			string_append(css_output_file, generator->output_dir);
-			string_append_str(css_output_file, html_output);
+        if (generator->css != NULL) {
+            string_t *css_output_file = string_create(24);
+            string_append(css_output_file, generator->output_dir);
+            string_append_str(css_output_file, html_output);
 
-			file_writes(css_output_file->data, generator->css->data);
-			file_appends(css_output_file->data, generator->media_css->data);
+            file_writes(css_output_file->data, generator->css->data);
+            file_appends(css_output_file->data, generator->media_css->data);
 
-			string_destroy(css_output_file);
-		}
+            string_destroy(css_output_file);
+        }
 
-		if (generator->js != NULL)
-		{
-			string_t *js_output_file = string_create(24);
-			string_append(js_output_file, generator->output_dir);
-			string_append_str(js_output_file, html_output);
+        if (generator->js != NULL) {
+            string_t *js_output_file = string_create(24);
+            string_append(js_output_file, generator->output_dir);
+            string_append_str(js_output_file, html_output);
 
-			file_writes(js_output_file->data, generator->js->data);
+            file_writes(js_output_file->data, generator->js->data);
 
-			string_destroy(js_output_file);
-		}
-	}
+            string_destroy(js_output_file);
+        }
+    }
 }
 
 /**

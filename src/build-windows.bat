@@ -15,4 +15,4 @@ REM Link all object files into the final executable
 gcc -o %output% *.wino
 
 REM Run the executable with the provided argument
-%output% ..\example\test6.salam
+%output% ..\example\test6.salam ..\out\

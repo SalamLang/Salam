@@ -19,8 +19,12 @@ typedef struct generator_t {
     string_t *media_css;
     string_t *js;
 
-    bool inlineCSS;
-    bool inlineJS;
+
+  	string_t *output_dir;
+
+	  bool inlineCSS;
+	  bool inlineJS;
+
 
     generator_identifier_t *identifier;
 } generator_t;

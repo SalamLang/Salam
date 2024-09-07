@@ -1,14 +1,11 @@
 #ifndef _LOG_H_
 #define _LOG_H_
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdarg.h>
 
 #include "base.h"
-
-#include "log.h"
-
 #include "log.h"
 
 /**

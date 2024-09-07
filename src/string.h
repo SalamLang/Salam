@@ -1,29 +1,28 @@
 #ifndef _STRING_H_
 #define _STRING_H_
 
-#include <stdio.h>
-#include <wchar.h>
 #include <ctype.h>
 #include <locale.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 #include <wctype.h>
-#include <stdint.h>
-#include <stddef.h>
-#include <stdbool.h>
 
 #include "base.h"
-#include "memory.h"
 #include "lexer.h"
+#include "memory.h"
 
-typedef struct
-{
-	size_t capacity;
-	size_t length;
-	char *data;
+typedef struct {
+    size_t capacity;
+    size_t length;
+    char *data;
 
-	void (*print)(void *);
-	void (*destroy)(void *);
+    void (*print)(void *);
+    void (*destroy)(void *);
 } string_t;
 
 /**
@@ -163,7 +162,8 @@ char *string_upper_str(const char *str);
  * @returns {char*} - New string
  *
  */
-char *replace_all_substrings(const char *str, const char *old_substr, const char *new_substr);
+char *replace_all_substrings(const char *str, const char *old_substr,
+                             const char *new_substr);
 
 /**
  *
@@ -395,7 +395,8 @@ size_t mb2strlen(const char *identifier);
  * @function is_english_digit
  * @brief Check if a UTF-8 string is an Persian/Arabic/English digit
  * @params {char*} utf8 - UTF-8 string
- * @returns {bool} True if the string is a Persian/Arabic/English digit, false otherwise
+ * @returns {bool} True if the string is a Persian/Arabic/English digit, false
+ * otherwise
  *
  */
 bool is_utf8_digit(char *utf8);

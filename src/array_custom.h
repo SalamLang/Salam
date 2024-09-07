@@ -1,18 +1,18 @@
 #ifndef _ARRAY_CUSTOM_H_
 #define _ARRAY_CUSTOM_H_
 
-#include <stdio.h>
 #include <ctype.h>
+#include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdbool.h>
 
 #include "array.h"
-#include "memory.h"
 #include "ast.h"
-#include "lexer.h"
-#include "string.h"
 #include "base.h"
+#include "lexer.h"
+#include "memory.h"
+#include "string.h"
 
 /**
  *

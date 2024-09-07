@@ -12,7 +12,7 @@
 char *array_string_token(array_t *array, char *separator) {
     DEBUG_ME;
     if (array == NULL || array->length == 0) {
-        return string_strdup("");
+        return NULL;
     }
 
     string_t *str = string_create(16);
@@ -559,7 +559,7 @@ void array_value_print(array_value_t *array) {
 char *array_value_first_stringify(array_value_t *array) {
     DEBUG_ME;
     if (array == NULL || array->length == 0) {
-        return string_strdup("");
+        return NULL;
     }
 
     string_t *str = string_create(16);
@@ -590,7 +590,7 @@ char *array_value_first_stringify(array_value_t *array) {
 char *array_value_stringify(array_value_t *array, char *separator) {
     DEBUG_ME;
     if (array == NULL || array->length == 0) {
-        return string_strdup("");
+        return NULL;
     }
 
     string_t *str = string_create(16);

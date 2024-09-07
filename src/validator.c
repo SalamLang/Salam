@@ -47,9 +47,9 @@ bool has_font_extension(char *value, char **out_extension) {
         size_t prefix_len = strlen(prefixes[i]);
 
         if (len - prefix_len != 0 &&
-            strcasecmp(value + len - prefix_len, prefixes[i]) == 0) {
+            my_strcasecmp(value + len - prefix_len, prefixes[i]) == 0) {
             if (out_extension != NULL) {
-                *out_extension = strdup(names[i]);
+                *out_extension = string_strdup(names[i]);
             }
 
             return true;
@@ -184,7 +184,7 @@ bool has_css_size_prefix(char *css_value, char **css_output_value) {
             strncmp(css_value + i, prefixes[j], prefix_len) == 0) {
             string_append_str(buffer, generated_prefixes[j]);
 
-            *css_output_value = strdup(buffer->data);
+            *css_output_value = string_strdup(buffer->data);
 
             string_destroy(buffer);
 
@@ -199,7 +199,7 @@ bool has_css_size_prefix(char *css_value, char **css_output_value) {
             strncmp(css_value + i, persian_prefixes[j], prefix_len) == 0) {
             string_append_str(buffer, generated_prefixes[j]);
 
-            *css_output_value = strdup(buffer->data);
+            *css_output_value = string_strdup(buffer->data);
 
             string_destroy(buffer);
 
@@ -225,7 +225,7 @@ bool has_css_size_prefix(char *css_value, char **css_output_value) {
 char *normalise_css_size(char *attribute_value) {
     DEBUG_ME;
     if (!string_is_number(attribute_value) == true) {
-        return strdup(attribute_value);
+        return string_strdup(attribute_value);
     }
 
     size_t value_length = strlen(attribute_value) + 3;
@@ -430,7 +430,7 @@ bool token_belongs_to_ast_layout_node(
 
         if (is_attribute_type_in_array(attribute_key_type, valid_attributes,
                                        valid_attributes_length)) {
-            attribute->final_key = strdup(
+            attribute->final_key = string_strdup(
                 generator_code_layout_attribute_name(attribute_key_type));
 
             // name
@@ -455,7 +455,7 @@ bool token_belongs_to_ast_layout_node(
                     memory_destroy(attribute->final_key);
                 }
 
-                attribute->final_key = strdup("font-family");
+                attribute->final_key = string_strdup("font-family");
 
                 return true;
             }
@@ -513,7 +513,7 @@ bool token_belongs_to_ast_layout_node(
                     memory_destroy(attribute->final_value);
                 }
 
-                attribute->final_value = strdup(buffer->data);
+                attribute->final_value = string_strdup(buffer->data);
 
                 string_destroy(buffer);
 
@@ -630,7 +630,7 @@ bool token_belongs_to_ast_layout_node(
                     memory_destroy(attribute->final_key);
                 }
 
-                attribute->final_key = strdup("href");
+                attribute->final_key = string_strdup("href");
             }
             return true;
         }
@@ -825,7 +825,8 @@ bool validate_style_value_string(
 
             while (allowed_values2[i].input != NULL) {
                 if (strcmp(value, allowed_values2[i].input) == 0) {
-                    attribute->final_value = strdup(allowed_values2[i].output);
+                    attribute->final_value =
+                        string_strdup(allowed_values2[i].output);
 
                     return true;
                 }
@@ -838,7 +839,8 @@ bool validate_style_value_string(
 
             while (allowed_values1[i].input != NULL) {
                 if (strcmp(value, allowed_values1[i].input) == 0) {
-                    attribute->final_value = strdup(allowed_values1[i].output);
+                    attribute->final_value =
+                        string_strdup(allowed_values1[i].output);
 
                     return true;
                 }
@@ -960,7 +962,8 @@ bool validate_style_value_color(
 
             while (allowed_values2[i].input != NULL) {
                 if (strcmp(value, allowed_values2[i].input) == 0) {
-                    attribute->final_value = strdup(allowed_values2[i].output);
+                    attribute->final_value =
+                        string_strdup(allowed_values2[i].output);
 
                     return true;
                 }
@@ -972,7 +975,8 @@ bool validate_style_value_color(
             size_t i = 0;
             while (allowed_values1[i].input != NULL) {
                 if (strcmp(value, allowed_values1[i].input) == 0) {
-                    attribute->final_value = strdup(allowed_values1[i].output);
+                    attribute->final_value =
+                        string_strdup(allowed_values1[i].output);
 
                     return true;
                 }
@@ -1037,7 +1041,8 @@ bool validate_style_value_integer(
 
             while (allowed_values2[i].input != NULL) {
                 if (strcmp(value, allowed_values2[i].input) == 0) {
-                    attribute->final_value = strdup(allowed_values2[i].output);
+                    attribute->final_value =
+                        string_strdup(allowed_values2[i].output);
 
                     return true;
                 }
@@ -1051,7 +1056,8 @@ bool validate_style_value_integer(
 
             while (allowed_values1[i].input != NULL) {
                 if (strcmp(value, allowed_values1[i].input) == 0) {
-                    attribute->final_value = strdup(allowed_values1[i].output);
+                    attribute->final_value =
+                        string_strdup(allowed_values1[i].output);
 
                     return true;
                 }
@@ -1112,7 +1118,8 @@ bool validate_style_value_number(
 
             while (allowed_values2[i].input != NULL) {
                 if (strcmp(value, allowed_values2[i].input) == 0) {
-                    attribute->final_value = strdup(allowed_values2[i].output);
+                    attribute->final_value =
+                        string_strdup(allowed_values2[i].output);
 
                     return true;
                 }
@@ -1126,7 +1133,8 @@ bool validate_style_value_number(
 
             while (allowed_values1[i].input != NULL) {
                 if (strcmp(value, allowed_values1[i].input) == 0) {
-                    attribute->final_value = strdup(allowed_values1[i].output);
+                    attribute->final_value =
+                        string_strdup(allowed_values1[i].output);
 
                     return true;
                 }
@@ -1187,7 +1195,8 @@ bool validate_style_value_float(
 
             while (allowed_values2[i].input != NULL) {
                 if (strcmp(value, allowed_values2[i].input) == 0) {
-                    attribute->final_value = strdup(allowed_values2[i].output);
+                    attribute->final_value =
+                        string_strdup(allowed_values2[i].output);
 
                     return true;
                 }
@@ -1201,7 +1210,8 @@ bool validate_style_value_float(
 
             while (allowed_values1[i].input != NULL) {
                 if (strcmp(value, allowed_values1[i].input) == 0) {
-                    attribute->final_value = strdup(allowed_values1[i].output);
+                    attribute->final_value =
+                        string_strdup(allowed_values1[i].output);
 
                     return true;
                 }
@@ -1298,7 +1308,8 @@ bool validate_style_value_percentage(
 
             while (allowed_values2[i].input != NULL) {
                 if (strcmp(value, allowed_values2[i].input) == 0) {
-                    attribute->final_value = strdup(allowed_values2[i].output);
+                    attribute->final_value =
+                        string_strdup(allowed_values2[i].output);
 
                     return true;
                 }
@@ -1312,7 +1323,8 @@ bool validate_style_value_percentage(
 
             while (allowed_values1[i].input != NULL) {
                 if (strcmp(value, allowed_values1[i].input) == 0) {
-                    attribute->final_value = strdup(allowed_values1[i].output);
+                    attribute->final_value =
+                        string_strdup(allowed_values1[i].output);
 
                     return true;
                 }
@@ -1378,7 +1390,8 @@ bool validate_style_value_size(
 
             while (allowed_values2[i].input != NULL) {
                 if (strcmp(value, allowed_values2[i].input) == 0) {
-                    attribute->final_value = strdup(allowed_values2[i].output);
+                    attribute->final_value =
+                        string_strdup(allowed_values2[i].output);
 
                     return true;
                 }
@@ -1392,7 +1405,8 @@ bool validate_style_value_size(
 
             while (allowed_values1[i].input != NULL) {
                 if (strcmp(value, allowed_values1[i].input) == 0) {
-                    attribute->final_value = strdup(allowed_values1[i].output);
+                    attribute->final_value =
+                        string_strdup(allowed_values1[i].output);
 
                     return true;
                 }
@@ -1418,7 +1432,7 @@ bool validate_style_value_size(
             memory_destroy(attribute->final_value);
         }
 
-        attribute->final_value = strdup(out_value);
+        attribute->final_value = string_strdup(out_value);
 
         memory_destroy(buffer);
         memory_destroy(out_value);
@@ -1538,7 +1552,7 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
                                         GENERATED_NAME, FILTER,                \
                                         ALLOWED_VALUES, SUBTAGS)               \
     case TYPE: {                                                               \
-        attribute->final_key = strdup(GENERATED_NAME);                         \
+        attribute->final_key = string_strdup(GENERATED_NAME);                  \
         const ast_layout_attribute_style_pair_t *values = ALLOWED_VALUES;      \
                                                                                \
         if (FILTER == AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR) {               \

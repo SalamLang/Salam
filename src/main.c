@@ -5,9 +5,9 @@
  * @function run
  * @brief
  */
-void run(bool isCode, const char *path, char *content) {
-    lexer_t *lexer = lexer_create(path, content);
-    lexer_lex(lexer);
+
+void run(bool isCode, const char *path, char *content, char *build_dir)
+{
 
     // lexer_debug(lexer);
 
@@ -23,7 +23,13 @@ void run(bool isCode, const char *path, char *content) {
 
     // printf("generate code\n");
 
-    generator_code(generator);
+  	if (build_dir != NULL)
+	  {
+  		string_set_str(generator->output_dir, build_dir);
+  	}
+
+	  // printf("generate code\n");
+
 
     // printf("generate debug\n");
 
@@ -118,6 +124,7 @@ void doargs(int argc, char **argv) {
 
         run(false, path, content);
     }
+
 }
 
 /**

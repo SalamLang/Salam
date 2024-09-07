@@ -9,6 +9,11 @@
 #include <sys/stat.h>
 #include <time.h>
 
+#include <stdlib.h>
+#include <limits.h>
+#include <wchar.h>
+
+
 #include "base.h"
 #include "log.h"
 #include "memory.h"

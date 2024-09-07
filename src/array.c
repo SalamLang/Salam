@@ -1,5 +1,7 @@
 #include "array.h"
 
+#include "string_buffer.h"
+
 /**
  *
  * @function array_create

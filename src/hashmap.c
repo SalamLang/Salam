@@ -206,7 +206,7 @@ void hashmap_put_custom(hashmap_t *map, const char *key, void *value,
 
     hashmap_entry_t *new_entry = memory_allocate(sizeof(hashmap_entry_t));
 
-    new_entry->key = strdup(key);
+    new_entry->key = string_strdup(key);
     new_entry->value = value;
     new_entry->next = cast(struct hashmap_entry_t *, map->data[index]);
 

@@ -429,7 +429,7 @@ void ast_if_destroy(ast_if_t *node) {
 ast_function_t *ast_function_create(char *name) {
     DEBUG_ME;
     ast_function_t *node = memory_allocate(sizeof(ast_function_t));
-    node->name = strdup(name);
+    node->name = string_strdup(name);
 
     location_t return_location = {0, 0, 0, 0, 0, 0};  // TODO: Fix this
     node->return_type =

@@ -12,7 +12,7 @@
 char *array_string_token(array_t *array, char *separator) {
     DEBUG_ME;
     if (array == NULL || array->length == 0) {
-        return strdup("");
+        return string_strdup("");
     }
 
     string_t *str = string_create(16);
@@ -25,7 +25,7 @@ char *array_string_token(array_t *array, char *separator) {
         }
     }
 
-    char *buffer = strdup(str->data);
+    char *buffer = string_strdup(str->data);
     string_destroy(str);
 
     return buffer;
@@ -93,7 +93,7 @@ void array_token_print(array_token_t *array) {
 char *array_token_stringify(array_token_t *array) {
     DEBUG_ME;
     if (array == NULL || array->length == 0) {
-        return strdup("Token array is empty");
+        return string_strdup("Token array is empty");
     }
 
     string_t *str = string_create(20);
@@ -559,7 +559,7 @@ void array_value_print(array_value_t *array) {
 char *array_value_first_stringify(array_value_t *array) {
     DEBUG_ME;
     if (array == NULL || array->length == 0) {
-        return strdup("");
+        return string_strdup("");
     }
 
     string_t *str = string_create(16);
@@ -572,7 +572,7 @@ char *array_value_first_stringify(array_value_t *array) {
         }
     }
 
-    char *buffer = strdup(str->data);
+    char *buffer = string_strdup(str->data);
     string_destroy(str);
 
     return buffer;
@@ -590,7 +590,7 @@ char *array_value_first_stringify(array_value_t *array) {
 char *array_value_stringify(array_value_t *array, char *separator) {
     DEBUG_ME;
     if (array == NULL || array->length == 0) {
-        return strdup("");
+        return string_strdup("");
     }
 
     string_t *str = string_create(16);
@@ -606,7 +606,7 @@ char *array_value_stringify(array_value_t *array, char *separator) {
         }
     }
 
-    char *buffer = strdup(str->data);
+    char *buffer = string_strdup(str->data);
     string_destroy(str);
 
     return buffer;

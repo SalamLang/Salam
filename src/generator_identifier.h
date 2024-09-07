@@ -3,7 +3,7 @@
 
 #include "base.h"
 #include "memory.h"
-#include "string.h"
+#include "string_buffer.h"
 
 typedef struct generator_identifier_t {
     char *current;

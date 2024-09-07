@@ -11,7 +11,7 @@
 #include "lexer.h"
 #include "memory.h"
 // #include "hashmap_custom.h"
-#include "string.h"
+#include "string_buffer.h"
 
 typedef enum {
 #undef ADD_TYPE

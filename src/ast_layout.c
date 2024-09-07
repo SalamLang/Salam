@@ -88,7 +88,7 @@ ast_layout_attribute_t *ast_layout_attribute_create(
 
     attribute->parent_node_type = parent_node_type;
 
-    attribute->key = strdup(key);
+    attribute->key = string_strdup(key);
     attribute->values = values;
 
     attribute->isStyle = false;
@@ -128,11 +128,11 @@ ast_layout_attribute_t *ast_layout_attribute_copy(
     copy->ignoreMe = value->ignoreMe;
 
     if (value->final_key != NULL) {
-        copy->final_key = strdup(value->final_key);
+        copy->final_key = string_strdup(value->final_key);
     }
 
     if (value->final_value != NULL) {
-        copy->final_value = strdup(value->final_value);
+        copy->final_value = string_strdup(value->final_value);
     }
 
     return copy;

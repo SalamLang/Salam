@@ -131,7 +131,7 @@ bool directory_exists(const char *path) {
     struct stat st;
 
     if (stat(path, &st) == 0) {
-        if (st.st_mode & S_IFDIR) {
+        if (S_ISDIR(st.st_mode)) {
             return true;
         }
     }

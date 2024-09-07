@@ -159,7 +159,7 @@ void generator_save(generator_t *generator, const char *html_output, const char 
 		if (generator->html != NULL)
 		{
 			string_t *html_output_file = string_create(24);
-			string_append_str(html_output_file, generator->output_dir);
+			string_append(html_output_file, generator->output_dir);
 			string_append_str(html_output_file, html_output);
 
 			file_writes(html_output_file->data, generator->html->data);
@@ -170,7 +170,7 @@ void generator_save(generator_t *generator, const char *html_output, const char 
 		if (generator->css != NULL)
 		{
 			string_t *css_output_file = string_create(24);
-			string_append_str(css_output_file, generator->output_dir);
+			string_append(css_output_file, generator->output_dir);
 			string_append_str(css_output_file, html_output);
 
 			file_writes(css_output_file->data, generator->css->data);
@@ -182,7 +182,7 @@ void generator_save(generator_t *generator, const char *html_output, const char 
 		if (generator->js != NULL)
 		{
 			string_t *js_output_file = string_create(24);
-			string_append_str(js_output_file, generator->output_dir);
+			string_append(js_output_file, generator->output_dir);
 			string_append_str(js_output_file, html_output);
 
 			file_writes(js_output_file->data, generator->js->data);

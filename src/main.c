@@ -8,12 +8,12 @@
  * @params {const char*} path - Path of the file
  * @params {char*} content - Content of the file
  * @params {char*} build_dir - Build directory
- * @params {char*} output_dir - Output directory
  * @returns {void}
  *
  */
-void run(bool isCode, const char *path, char *content, char *build_dir,
-         char *output_dir) {
+void run(bool isCode, const char *path, char *content, char *build_dir) {
+    lexer_t *lexer = lexer_create(path, content);
+
     // lexer_debug(lexer);
 
     // lexer_save(lexer, "tokens.txt");

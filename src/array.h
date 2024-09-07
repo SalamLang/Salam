@@ -5,11 +5,9 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include  <string.h>
+#include <string.h>
 
-typedef struct array_t
-
-{
+typedef struct array_t {
     void **data;
     size_t length;
     size_t capacity;

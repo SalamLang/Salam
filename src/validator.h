@@ -13,7 +13,7 @@
 #include "hashmap.h"
 #include "hashmap_custom.h"
 #include "parser.h"
-#include "string.h"
+#include "string_buffer.h"
 
 typedef struct {
     const char *input;

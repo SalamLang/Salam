@@ -10,7 +10,7 @@
 #include "generator.h"
 #include "generator_layout_style.h"
 #include "memory.h"
-#include "string.h"
+#include "string_buffer.h"
 /**
  *
  * @function generator_code_layout_block

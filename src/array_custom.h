@@ -12,7 +12,7 @@
 #include "base.h"
 #include "lexer.h"
 #include "memory.h"
-#include "string.h"
+#include "string_buffer.h"
 
 /**
  *

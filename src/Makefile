@@ -13,7 +13,7 @@ CFLAGS =
 
 TARGET = salam
 
-SRCS = log.c file.c memory.c array.c parser.c parser_layout.c generator.c generator_layout.c generator_layout_style.c generator_identifier.c string.c validator.c hashmap.c hashmap_custom.c array_custom.c lexer.c ast.c ast_layout.c ast_layout_style.c main.c
+SRCS = log.c file.c memory.c array.c parser.c parser_layout.c generator.c generator_layout.c generator_layout_style.c generator_identifier.c string_buffer.c validator.c hashmap.c hashmap_custom.c array_custom.c lexer.c ast.c ast_layout.c ast_layout_style.c main.c
 
 OBJS = $(SRCS:.c=.o)
 
@@ -26,7 +26,7 @@ $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 run: $(TARGET)
-	./$(TARGET) $(INPUT_FILE) $(OUTPUT_DIR) 
+	./$(TARGET) $(INPUT_FILE) $(OUTPUT_DIR)
 
 clean:
 	rm -f $(OBJS) $(TARGET)

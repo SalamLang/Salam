@@ -8,7 +8,7 @@
 #include "file.h"
 #include "generator_identifier.h"
 #include "memory.h"
-#include "string.h"
+#include "string_buffer.h"
 #include "validator.h"
 
 typedef struct generator_t {
@@ -19,12 +19,10 @@ typedef struct generator_t {
     string_t *media_css;
     string_t *js;
 
+    string_t *output_dir;
 
-  	string_t *output_dir;
-
-	  bool inlineCSS;
-	  bool inlineJS;
-
+    bool inlineCSS;
+    bool inlineJS;
 
     generator_identifier_t *identifier;
 } generator_t;

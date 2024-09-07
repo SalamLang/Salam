@@ -9,33 +9,30 @@
  * @returns {char*} - Content of file
  *
  */
-char *file_reads(const char *path, size_t *size)
-{
-	DEBUG_ME;
-	// ccs=UTF-8
-	FILE *file = fopen(path, "r");
-	if (file == NULL)
-	{
-		panic("Failed to open file");
+char *file_reads(const char *path, size_t *size) {
+    DEBUG_ME;
+    // ccs=UTF-8
+    FILE *file = fopen(path, "r");
+    if (file == NULL) {
+        panic("Failed to open file");
 
-		return false;
-	}
+        return false;
+    }
 
-	fseek(file, 0, SEEK_END);
-	size_t file_capacity = ftell(file);
-	if (size != NULL)
-	{
-		*size = file_capacity;
-	}
-	fseek(file, 0, SEEK_SET);
+    fseek(file, 0, SEEK_END);
+    size_t file_capacity = ftell(file);
+    if (size != NULL) {
+        *size = file_capacity;
+    }
+    fseek(file, 0, SEEK_SET);
 
-	char *content = (char *)memory_allocate(file_capacity + 1);
-	fread(content, 1, file_capacity, file);
-	content[file_capacity] = '\0';
+    char *content = (char *)memory_allocate(file_capacity + 1);
+    fread(content, 1, file_capacity, file);
+    content[file_capacity] = '\0';
 
-	fclose(file);
+    fclose(file);
 
-	return content;
+    return content;
 }
 
 /**
@@ -47,32 +44,29 @@ char *file_reads(const char *path, size_t *size)
  * @returns {char*} - Content of file
  *
  */
-char *file_reads_binary(const char *path, size_t *size)
-{
-	DEBUG_ME;
-	FILE *file = fopen(path, "rb");
-	if (file == NULL)
-	{
-		panic("Failed to open file");
+char *file_reads_binary(const char *path, size_t *size) {
+    DEBUG_ME;
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        panic("Failed to open file");
 
-		return false;
-	}
+        return false;
+    }
 
-	fseek(file, 0, SEEK_END);
-	size_t file_capacity = ftell(file);
-	if (size != NULL)
-	{
-		*size = file_capacity;
-	}
-	fseek(file, 0, SEEK_SET);
+    fseek(file, 0, SEEK_END);
+    size_t file_capacity = ftell(file);
+    if (size != NULL) {
+        *size = file_capacity;
+    }
+    fseek(file, 0, SEEK_SET);
 
-	char *content = (char *)memory_allocate(file_capacity + 1);
-	fread(content, 1, file_capacity, file);
-	content[file_capacity] = '\0';
+    char *content = (char *)memory_allocate(file_capacity + 1);
+    fread(content, 1, file_capacity, file);
+    content[file_capacity] = '\0';
 
-	fclose(file);
+    fclose(file);
 
-	return content;
+    return content;
 }
 
 /**
@@ -84,25 +78,23 @@ char *file_reads_binary(const char *path, size_t *size)
  * @returns {bool}
  *
  */
-bool file_writes(const char *path, const char *content)
-{
-	DEBUG_ME;
-	// ccs=UTF-8
-	FILE *file = fopen(path, "w");
-	if (file == NULL)
-	{
-		panic("Failed to write file");
+bool file_writes(const char *path, const char *content) {
+    DEBUG_ME;
+    // ccs=UTF-8
+    FILE *file = fopen(path, "w");
+    if (file == NULL) {
+        panic("Failed to write file");
 
-		return false;
-	}
+        return false;
+    }
 
-	size_t size = strlen(content);
+    size_t size = strlen(content);
 
-	fwrite(content, 1, size, file);
+    fwrite(content, 1, size, file);
 
-	fclose(file);
+    fclose(file);
 
-	return true;
+    return true;
 }
 
 /**
@@ -113,19 +105,17 @@ bool file_writes(const char *path, const char *content)
  * @returns {bool}
  *
  */
-bool file_exists(const char *path)
-{
-	DEBUG_ME;
-	// ccs=UTF-8
-	FILE *file = fopen(path, "r");
-	if (file == NULL)
-	{
-		return false;
-	}
+bool file_exists(const char *path) {
+    DEBUG_ME;
+    // ccs=UTF-8
+    FILE *file = fopen(path, "r");
+    if (file == NULL) {
+        return false;
+    }
 
-	fclose(file);
+    fclose(file);
 
-	return true;
+    return true;
 }
 
 /**
@@ -136,20 +126,17 @@ bool file_exists(const char *path)
  * @returns {bool}
  *
  */
-bool directory_exists(const char *path)
-{
-	DEBUG_ME;
-	struct stat st;
+bool directory_exists(const char *path) {
+    DEBUG_ME;
+    struct stat st;
 
-	if (stat(path, &st) == 0)
-	{
-		if (st.st_mode & S_IFDIR)
-		{
-			return true;
-		}
-	}
+    if (stat(path, &st) == 0) {
+        if (st.st_mode & S_IFDIR) {
+            return true;
+        }
+    }
 
-	return false;
+    return false;
 }
 
 /**
@@ -160,15 +147,13 @@ bool directory_exists(const char *path)
  * @returns {bool}
  *
  */
-bool file_remove(const char *path)
-{
-	DEBUG_ME;
-	if (remove(path) != 0)
-	{
-		return false;
-	}
+bool file_remove(const char *path) {
+    DEBUG_ME;
+    if (remove(path) != 0) {
+        return false;
+    }
 
-	return true;
+    return true;
 }
 
 /**
@@ -180,21 +165,19 @@ bool file_remove(const char *path)
  * @returns {bool}
  *
  */
-bool file_copy(const char *source, const char *destination)
-{
-	DEBUG_ME;
-	char *content;
-	size_t size;
+bool file_copy(const char *source, const char *destination) {
+    DEBUG_ME;
+    char *content;
+    size_t size;
 
-	content = file_reads(source, &size);
-	file_writes(destination, content);
+    content = file_reads(source, &size);
+    file_writes(destination, content);
 
-	if (content != NULL)
-	{
-		memory_destroy(content);
-	}
+    if (content != NULL) {
+        memory_destroy(content);
+    }
 
-	return true;
+    return true;
 }
 
 /**
@@ -206,15 +189,13 @@ bool file_copy(const char *source, const char *destination)
  * @returns {bool}
  *
  */
-bool file_move(const char *source, const char *destination)
-{
-	DEBUG_ME;
-	if (rename(source, destination) != 0)
-	{
-		return false;
-	}
+bool file_move(const char *source, const char *destination) {
+    DEBUG_ME;
+    if (rename(source, destination) != 0) {
+        return false;
+    }
 
-	return true;
+    return true;
 }
 
 /**
@@ -225,19 +206,18 @@ bool file_move(const char *source, const char *destination)
  * @returns {char*} - Name of file
  *
  */
-char *file_get_name(const char *path)
-{
-	DEBUG_ME;
-	const char *last_slash = strrchr(path, '/');
-	const char *last_backslash = strrchr(path, '\\');
-	const char *last = last_slash > last_backslash ? last_slash : last_backslash;
+char *file_get_name(const char *path) {
+    DEBUG_ME;
+    const char *last_slash = strrchr(path, '/');
+    const char *last_backslash = strrchr(path, '\\');
+    const char *last =
+        last_slash > last_backslash ? last_slash : last_backslash;
 
-	if (last == NULL)
-	{
-		return (char *)path;
-	}
+    if (last == NULL) {
+        return (char *)path;
+    }
 
-	return (char *)(last + 1);
+    return (char *)(last + 1);
 }
 
 /**
@@ -248,17 +228,15 @@ char *file_get_name(const char *path)
  * @returns {char*} - Extension of file
  *
  */
-char *file_get_extension(const char *path)
-{
-	DEBUG_ME;
-	const char *last_dot = strrchr(path, '.');
+char *file_get_extension(const char *path) {
+    DEBUG_ME;
+    const char *last_dot = strrchr(path, '.');
 
-	if (last_dot == NULL)
-	{
-		return "";
-	}
+    if (last_dot == NULL) {
+        return "";
+    }
 
-	return (char *)(last_dot + 1);
+    return (char *)(last_dot + 1);
 }
 
 /**
@@ -269,24 +247,23 @@ char *file_get_extension(const char *path)
  * @returns {char*} - Directory of file
  *
  */
-char *file_get_directory(const char *path)
-{
-	DEBUG_ME;
-	const char *last_slash = strrchr(path, '/');
-	const char *last_backslash = strrchr(path, '\\');
-	const char *last = last_slash > last_backslash ? last_slash : last_backslash;
+char *file_get_directory(const char *path) {
+    DEBUG_ME;
+    const char *last_slash = strrchr(path, '/');
+    const char *last_backslash = strrchr(path, '\\');
+    const char *last =
+        last_slash > last_backslash ? last_slash : last_backslash;
 
-	if (last == NULL)
-	{
-		return "";
-	}
+    if (last == NULL) {
+        return "";
+    }
 
-	size_t size = last - path;
-	char *directory = memory_allocate(size + 1);
-	strncpy(directory, path, size);
-	directory[size] = '\0';
+    size_t size = last - path;
+    char *directory = memory_allocate(size + 1);
+    strncpy(directory, path, size);
+    directory[size] = '\0';
 
-	return directory;
+    return directory;
 }
 
 /**
@@ -297,81 +274,67 @@ char *file_get_directory(const char *path)
  * @returns {char*} - The resolved absolute path, or NULL if an error occurred.
  *
  */
-char *file_get_absolute(const char *path)
-{
-	DEBUG_ME;
-	if (!path)
-	{
-		return NULL;
-	}
+char *file_get_absolute(const char *path) {
+    DEBUG_ME;
+    if (!path) {
+        return NULL;
+    }
 
-	char *resolved_path = memory_allocate(4096);
-	if (!resolved_path)
-	{
-		return NULL;
-	}
+    char *resolved_path = memory_allocate(4096);
+    if (!resolved_path) {
+        return NULL;
+    }
 
-	char *ptr = resolved_path;
-	const char *src = path;
+    char *ptr = resolved_path;
+    const char *src = path;
 
-	if (*src == '/')
-	{
-		*ptr++ = '/';
-		src++;
-	}
+    if (*src == '/') {
+        *ptr++ = '/';
+        src++;
+    }
 
-	while (*src)
-	{
-		while (*src == '/')
-		{
-			src++;
-		}
+    while (*src) {
+        while (*src == '/') {
+            src++;
+        }
 
-		if (!*src)
-		{
-			break;
-		}
+        if (!*src) {
+            break;
+        }
 
-		if (*src == '.' && (src[1] == '/' || src[1] == '\0'))
-		{
-			src++;
-			continue;
-		}
+        if (*src == '.' && (src[1] == '/' || src[1] == '\0')) {
+            src++;
+            continue;
+        }
 
-		if (*src == '.' && src[1] == '.' && (src[2] == '/' || src[2] == '\0'))
-		{
-			src += 2;
+        if (*src == '.' && src[1] == '.' && (src[2] == '/' || src[2] == '\0')) {
+            src += 2;
 
-			if (ptr > resolved_path + 1)
-			{
-				ptr--;
-				while (ptr > resolved_path && *(ptr - 1) != '/')
-				{
-					ptr--;
-				}
-			}
-			continue;
-		}
+            if (ptr > resolved_path + 1) {
+                ptr--;
+                while (ptr > resolved_path && *(ptr - 1) != '/') {
+                    ptr--;
+                }
+            }
+            continue;
+        }
 
-		while (*src && *src != '/')
-		{
-			*ptr++ = *src++;
-		}
+        while (*src && *src != '/') {
+            *ptr++ = *src++;
+        }
 
-		if (*src)
-		{
-			*ptr++ = *src++;
-		}
-	}
+        if (*src) {
+            *ptr++ = *src++;
+        }
+    }
 
-	*ptr = '\0';
+    *ptr = '\0';
 
-	if (resolved_path[0] == '\0')
-	{
-		strcpy(resolved_path, "/");
-	}
+    if (resolved_path[0] == '\0') {
+        strcpy(resolved_path, "/");
+    }
 
-	return resolved_path;
+    return resolved_path;
 }
 
 /**
@@ -382,13 +345,12 @@ char *file_get_absolute(const char *path)
  * @returns {long} - Size of file
  *
  */
-long file_get_capacity(const char *path)
-{
-	DEBUG_ME;
-	struct stat st;
-	stat(path, &st);
+long file_get_capacity(const char *path) {
+    DEBUG_ME;
+    struct stat st;
+    stat(path, &st);
 
-	return st.st_size;
+    return st.st_size;
 }
 
 /**
@@ -399,13 +361,12 @@ long file_get_capacity(const char *path)
  * @returns {time_t} - Last modified time of file
  *
  */
-time_t file_get_modified(const char *path)
-{
-	DEBUG_ME;
-	struct stat st;
-	stat(path, &st);
+time_t file_get_modified(const char *path) {
+    DEBUG_ME;
+    struct stat st;
+    stat(path, &st);
 
-	return st.st_mtime;
+    return st.st_mtime;
 }
 
 /**
@@ -417,24 +378,22 @@ time_t file_get_modified(const char *path)
  * @returns {bool}
  *
  */
-bool file_appends(const char *path, const char *content)
-{
-	DEBUG_ME;
-	FILE *file = fopen(path, "a");
-	if (file == NULL)
-	{
-		panic("Failed to append file");
+bool file_appends(const char *path, const char *content) {
+    DEBUG_ME;
+    FILE *file = fopen(path, "a");
+    if (file == NULL) {
+        panic("Failed to append file");
 
-		return false;
-	}
+        return false;
+    }
 
-	size_t size = strlen(content);
+    size_t size = strlen(content);
 
-	fwrite(content, 1, size, file);
+    fwrite(content, 1, size, file);
 
-	fclose(file);
+    fclose(file);
 
-	return true;
+    return true;
 }
 
 /**
@@ -446,21 +405,19 @@ bool file_appends(const char *path, const char *content)
  * @returns {bool}
  *
  */
-bool file_appends_wchar(const char *path, const wchar_t wc)
-{
-	char mb_str[16];
-	memset(mb_str, 0, sizeof(mb_str));
+bool file_appends_wchar(const char *path, const wchar_t wc) {
+    char mb_str[16];
+    memset(mb_str, 0, sizeof(mb_str));
 
-	size_t len = wcrtomb(mb_str, wc, NULL);
-	if (len == (size_t)-1)
-	{
-		fprintf(stderr, "Failed to convert wide character\n");
+    size_t len = wcrtomb(mb_str, wc, NULL);
+    if (len == (size_t)-1) {
+        fprintf(stderr, "Failed to convert wide character\n");
 
-		return false;
-	}
+        return false;
+    }
 
-	char error_message[256];
-	snprintf(error_message, sizeof(error_message), "character '%s'\n", mb_str);
+    char error_message[256];
+    snprintf(error_message, sizeof(error_message), "character '%s'\n", mb_str);
 
-	return file_appends(path, error_message);
+    return file_appends(path, error_message);
 }

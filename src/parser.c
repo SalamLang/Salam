@@ -8,9 +8,8 @@
  * @returns {bool}
  *
  */
-bool is_begin_block_token(token_t *token)
-{
-	return token->type == TOKEN_LEFT_BRACE;
+bool is_begin_block_token(token_t *token) {
+    return token->type == TOKEN_LEFT_BRACE;
 }
 
 /**
@@ -21,9 +20,8 @@ bool is_begin_block_token(token_t *token)
  * @returns {bool}
  *
  */
-bool is_close_block_token(token_t *token)
-{
-	return token->type == TOKEN_RIGHT_BRACE;
+bool is_close_block_token(token_t *token) {
+    return token->type == TOKEN_RIGHT_BRACE;
 }
 
 /**
@@ -33,10 +31,7 @@ bool is_close_block_token(token_t *token)
  * @returns {void}
  *
  */
-void expect_open_block(lexer_t *lexer)
-{
-	expect(lexer, TOKEN_TYPE_OPEN_BLOCK);
-}
+void expect_open_block(lexer_t *lexer) { expect(lexer, TOKEN_TYPE_OPEN_BLOCK); }
 
 /**
  *
@@ -45,9 +40,8 @@ void expect_open_block(lexer_t *lexer)
  * @returns {void}
  *
  */
-void expect_close_block(lexer_t *lexer)
-{
-	expect(lexer, TOKEN_TYPE_CLOSE_BLOCK);
+void expect_close_block(lexer_t *lexer) {
+    expect(lexer, TOKEN_TYPE_CLOSE_BLOCK);
 }
 
 /**
@@ -58,9 +52,8 @@ void expect_close_block(lexer_t *lexer)
  * @returns {bool}
  *
  */
-bool match_next_open_block(lexer_t *lexer)
-{
-	return match_next(lexer, TOKEN_LEFT_BRACE);
+bool match_next_open_block(lexer_t *lexer) {
+    return match_next(lexer, TOKEN_LEFT_BRACE);
 }
 
 /**
@@ -71,9 +64,8 @@ bool match_next_open_block(lexer_t *lexer)
  * @returns {bool}
  *
  */
-bool match_open_block(lexer_t *lexer)
-{
-	return match(lexer, TOKEN_TYPE_OPEN_BLOCK);
+bool match_open_block(lexer_t *lexer) {
+    return match(lexer, TOKEN_TYPE_OPEN_BLOCK);
 }
 
 /**
@@ -84,9 +76,8 @@ bool match_open_block(lexer_t *lexer)
  * @returns {bool}
  *
  */
-bool match_close_block(lexer_t *lexer)
-{
-	return match(lexer, TOKEN_TYPE_CLOSE_BLOCK);
+bool match_close_block(lexer_t *lexer) {
+    return match(lexer, TOKEN_TYPE_CLOSE_BLOCK);
 }
 
 /**
@@ -97,9 +88,8 @@ bool match_close_block(lexer_t *lexer)
  * @returns {bool}
  *
  */
-bool match_next_close_block(lexer_t *lexer)
-{
-	return match_next(lexer, TOKEN_RIGHT_BRACE);
+bool match_next_close_block(lexer_t *lexer) {
+    return match_next(lexer, TOKEN_RIGHT_BRACE);
 }
 
 /**
@@ -111,10 +101,9 @@ bool match_next_close_block(lexer_t *lexer)
  * @returns {bool}
  *
  */
-bool match(lexer_t *lexer, token_type_t token_type)
-{
-	DEBUG_ME;
-	return PARSER_CURRENT->type == token_type;
+bool match(lexer_t *lexer, token_type_t token_type) {
+    DEBUG_ME;
+    return PARSER_CURRENT->type == token_type;
 }
 
 /**
@@ -126,15 +115,17 @@ bool match(lexer_t *lexer, token_type_t token_type)
  * @returns {void}
  *
  */
-void expect(lexer_t *lexer, token_type_t token_type)
-{
-	DEBUG_ME;
-	if (PARSER_CURRENT->type != token_type)
-	{
-		error_parser(2, "Expected token type %s, got %s at line %d, column %d", token_type_keyword(token_type), token_type_keyword(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
-	}
+void expect(lexer_t *lexer, token_type_t token_type) {
+    DEBUG_ME;
+    if (PARSER_CURRENT->type != token_type) {
+        error_parser(2, "Expected token type %s, got %s at line %d, column %d",
+                     token_type_keyword(token_type),
+                     token_type_keyword(PARSER_CURRENT->type),
+                     PARSER_CURRENT->location.end_line,
+                     PARSER_CURRENT->location.end_column);
+    }
 
-	PARSER_NEXT;
+    PARSER_NEXT;
 }
 
 /**
@@ -146,15 +137,13 @@ void expect(lexer_t *lexer, token_type_t token_type)
  * @returns {bool}
  *
  */
-bool match_next(lexer_t *lexer, token_type_t token_type)
-{
-	DEBUG_ME;
-	if (lexer->token_index + 1 >= lexer->tokens->capacity)
-	{
-		return false;
-	}
+bool match_next(lexer_t *lexer, token_type_t token_type) {
+    DEBUG_ME;
+    if (lexer->token_index + 1 >= lexer->tokens->capacity) {
+        return false;
+    }
 
-	return PARSER_CURRENT_NEXT->type == token_type;
+    return PARSER_CURRENT_NEXT->type == token_type;
 }
 
 /**
@@ -166,15 +155,13 @@ bool match_next(lexer_t *lexer, token_type_t token_type)
  * @returns {bool}
  *
  */
-bool match_prev(lexer_t *lexer, token_type_t token_type)
-{
-	DEBUG_ME;
-	if (lexer->token_index == 0)
-	{
-		return false;
-	}
+bool match_prev(lexer_t *lexer, token_type_t token_type) {
+    DEBUG_ME;
+    if (lexer->token_index == 0) {
+        return false;
+    }
 
-	return PARSER_CURRENT_PREV->type == token_type;
+    return PARSER_CURRENT_PREV->type == token_type;
 }
 
 /**
@@ -185,24 +172,25 @@ bool match_prev(lexer_t *lexer, token_type_t token_type)
  * @returns {ast_value_t*} - AST Layout value
  *
  */
-ast_value_t *parser_parse_value(lexer_t *lexer)
-{
-	DEBUG_ME;
-	token_t *token = PARSER_CURRENT;
+ast_value_t *parser_parse_value(lexer_t *lexer) {
+    DEBUG_ME;
+    token_t *token = PARSER_CURRENT;
 
-	PARSER_NEXT;
+    PARSER_NEXT;
 
-	if (token->type == TOKEN_IDENTIFIER)
-	{
-		// TODO
-		error_parser(2, "Identifier '%s' is not defined at line %d, column %d", token->data.string, token->location.end_line, token->location.end_column);
-	}
+    if (token->type == TOKEN_IDENTIFIER) {
+        // TODO
+        error_parser(2, "Identifier '%s' is not defined at line %d, column %d",
+                     token->data.string, token->location.end_line,
+                     token->location.end_column);
+    }
 
-	ast_value_type_t *type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
+    ast_value_type_t *type =
+        ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
 
-	ast_value_t *value = ast_value_create(type, token_value_stringify(token));
+    ast_value_t *value = ast_value_create(type, token_value_stringify(token));
 
-	return value;
+    return value;
 }
 
 /**
@@ -214,28 +202,26 @@ ast_value_t *parser_parse_value(lexer_t *lexer)
  * @returns {void}
  *
  */
-void parser_parse_block(lexer_t *lexer, ast_block_t *block)
-{
-	DEBUG_ME;
+void parser_parse_block(lexer_t *lexer, ast_block_t *block) {
+    DEBUG_ME;
 
-	expect_open_block(lexer);
+    expect_open_block(lexer);
 
-	while (PARSER_CURRENT->type != TOKEN_TYPE_CLOSE_BLOCK)
-	{
-		ast_node_t *node = parser_parse_node(lexer);
+    while (PARSER_CURRENT->type != TOKEN_TYPE_CLOSE_BLOCK) {
+        ast_node_t *node = parser_parse_node(lexer);
 
-		if (node == NULL)
-		{
-			error_parser(2, "Expected a node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_type_keyword(PARSER_CURRENT->type));
-			continue;
-		}
-		else
-		{
-			array_push(block->children, node);
-		}
-	}
+        if (node == NULL) {
+            error_parser(2, "Expected a node at line %d, column %d, but got %s",
+                         PARSER_CURRENT->location.end_line,
+                         PARSER_CURRENT->location.end_column,
+                         token_type_keyword(PARSER_CURRENT->type));
+            continue;
+        } else {
+            array_push(block->children, node);
+        }
+    }
 
-	expect_close_block(lexer);
+    expect_close_block(lexer);
 }
 
 /**
@@ -246,28 +232,27 @@ void parser_parse_block(lexer_t *lexer, ast_block_t *block)
  * @returns {ast_node_t*} - AST node
  *
  */
-ast_node_t *parser_parse_function(lexer_t *lexer)
-{
-	DEBUG_ME;
-	ast_node_t *node = ast_node_create(AST_TYPE_FUNCTION, PARSER_CURRENT->location);
+ast_node_t *parser_parse_function(lexer_t *lexer) {
+    DEBUG_ME;
+    ast_node_t *node =
+        ast_node_create(AST_TYPE_FUNCTION, PARSER_CURRENT->location);
 
-	PARSER_NEXT; // Eat the function token
+    PARSER_NEXT;  // Eat the function token
 
-	token_t *function_name = PARSER_CURRENT;
-	expect(lexer, TOKEN_IDENTIFIER);
-	node->data.function = ast_function_create(function_name->data.string);
+    token_t *function_name = PARSER_CURRENT;
+    expect(lexer, TOKEN_IDENTIFIER);
+    node->data.function = ast_function_create(function_name->data.string);
 
-	// Optional ()
-	if (match(lexer, TOKEN_LEFT_PAREN))
-	{
-		PARSER_NEXT; // Eat the left parenthesis token
+    // Optional ()
+    if (match(lexer, TOKEN_LEFT_PAREN)) {
+        PARSER_NEXT;  // Eat the left parenthesis token
 
-		expect(lexer, TOKEN_RIGHT_PAREN);
-	}
+        expect(lexer, TOKEN_RIGHT_PAREN);
+    }
 
-	parser_parse_block(lexer, node->data.function->block);
+    parser_parse_block(lexer, node->data.function->block);
 
-	return node;
+    return node;
 }
 
 /**
@@ -278,23 +263,17 @@ ast_node_t *parser_parse_function(lexer_t *lexer)
  * @returns {array_value_t*} - Array of AST values
  *
  */
-array_value_t *parser_parse_expressions_maybe(lexer_t *lexer)
-{
-	DEBUG_ME;
-	if (
-		match(lexer, TOKEN_NUMBER_FLOAT) ||
-		match(lexer, TOKEN_NUMBER_INT) ||
-		match(lexer, TOKEN_STRING) ||
-		match(lexer, TOKEN_PLUS) ||
-		match(lexer, TOKEN_IDENTIFIER) ||
-		match(lexer, TOKEN_MINUS)
-		// TODO: add more types
-	)
-	{
-		return parser_parse_expressions(lexer);
-	}
+array_value_t *parser_parse_expressions_maybe(lexer_t *lexer) {
+    DEBUG_ME;
+    if (match(lexer, TOKEN_NUMBER_FLOAT) || match(lexer, TOKEN_NUMBER_INT) ||
+        match(lexer, TOKEN_STRING) || match(lexer, TOKEN_PLUS) ||
+        match(lexer, TOKEN_IDENTIFIER) || match(lexer, TOKEN_MINUS)
+        // TODO: add more types
+    ) {
+        return parser_parse_expressions(lexer);
+    }
 
-	return array_value_create(1);
+    return array_value_create(1);
 }
 
 /**
@@ -305,28 +284,29 @@ array_value_t *parser_parse_expressions_maybe(lexer_t *lexer)
  * @returns {array_value_t*} - Array of AST values
  *
  */
-array_value_t *parser_parse_expressions(lexer_t *lexer)
-{
-	DEBUG_ME;
-	array_value_t *values = array_value_create(1);
+array_value_t *parser_parse_expressions(lexer_t *lexer) {
+    DEBUG_ME;
+    array_value_t *values = array_value_create(1);
 
-	ast_value_t *value = parser_parse_expression(lexer);
-	array_push(values, value);
+    ast_value_t *value = parser_parse_expression(lexer);
+    array_push(values, value);
 
-	while (match(lexer, TOKEN_COMMA))
-	{
-		PARSER_NEXT; // Eat the comma token
+    while (match(lexer, TOKEN_COMMA)) {
+        PARSER_NEXT;  // Eat the comma token
 
-		ast_value_t *new_value = parser_parse_expression(lexer);
-		if (new_value == NULL)
-		{
-			error_parser(2, "Expected an expression at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_type_keyword(PARSER_CURRENT->type));
-		}
+        ast_value_t *new_value = parser_parse_expression(lexer);
+        if (new_value == NULL) {
+            error_parser(
+                2, "Expected an expression at line %d, column %d, but got %s",
+                PARSER_CURRENT->location.end_line,
+                PARSER_CURRENT->location.end_column,
+                token_type_keyword(PARSER_CURRENT->type));
+        }
 
-		array_push(values, new_value);
-	}
+        array_push(values, new_value);
+    }
 
-	return values;
+    return values;
 }
 
 /**
@@ -337,68 +317,59 @@ array_value_t *parser_parse_expressions(lexer_t *lexer)
  * @returns {ast_value_t*} - AST value
  *
  */
-ast_value_t *parser_parse_expression(lexer_t *lexer)
-{
-	DEBUG_ME;
-	token_t *token = PARSER_CURRENT;
+ast_value_t *parser_parse_expression(lexer_t *lexer) {
+    DEBUG_ME;
+    token_t *token = PARSER_CURRENT;
 
-	ast_value_type_t *type = NULL;
-	ast_value_t *value = NULL;
+    ast_value_type_t *type = NULL;
+    ast_value_t *value = NULL;
 
-	if (match(lexer, TOKEN_IDENTIFIER))
-	{
-		PARSER_NEXT;
+    if (match(lexer, TOKEN_IDENTIFIER)) {
+        PARSER_NEXT;
 
-		type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
-		value = ast_value_create(type, token->data.string);
+        type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
+        value = ast_value_create(type, token->data.string);
 
-		return value;
-	}
-	else if (match(lexer, TOKEN_STRING))
-	{
-		PARSER_NEXT;
+        return value;
+    } else if (match(lexer, TOKEN_STRING)) {
+        PARSER_NEXT;
 
-		type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
-		value = ast_value_create(type, token->data.string);
+        type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
+        value = ast_value_create(type, token->data.string);
 
-		return value;
-	}
-	else if (match(lexer, TOKEN_NUMBER_INT))
-	{
-		PARSER_NEXT;
+        return value;
+    } else if (match(lexer, TOKEN_NUMBER_INT)) {
+        PARSER_NEXT;
 
-		type = ast_value_type_create(AST_TYPE_KIND_INT, token->location);
-		value = ast_value_create(type, NULL);
-		value->data.int_value = token->data.number_int;
+        type = ast_value_type_create(AST_TYPE_KIND_INT, token->location);
+        value = ast_value_create(type, NULL);
+        value->data.int_value = token->data.number_int;
 
-		return value;
-	}
-	else if (match(lexer, TOKEN_NUMBER_FLOAT))
-	{
-		PARSER_NEXT;
+        return value;
+    } else if (match(lexer, TOKEN_NUMBER_FLOAT)) {
+        PARSER_NEXT;
 
-		type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
-		value = ast_value_create(type, NULL);
-		value->data.float_value = token->data.number_float;
+        type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
+        value = ast_value_create(type, NULL);
+        value->data.float_value = token->data.number_float;
 
-		return value;
-	}
-	else if (match(lexer, TOKEN_BOOLEAN))
-	{
-		PARSER_NEXT;
+        return value;
+    } else if (match(lexer, TOKEN_BOOLEAN)) {
+        PARSER_NEXT;
 
-		type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
-		value = ast_value_create(type, NULL);
-		value->data.bool_value = token->data.boolean;
+        type = ast_value_type_create(AST_TYPE_KIND_STRING, token->location);
+        value = ast_value_create(type, NULL);
+        value->data.bool_value = token->data.boolean;
 
-		return value;
-	}
-	else
-	{
-		error_parser(2, "Expected an expression at line %d, column %d, but got %s", token->location.end_line, token->location.end_column, token_type_keyword(token->type));
-	}
+        return value;
+    } else {
+        error_parser(2,
+                     "Expected an expression at line %d, column %d, but got %s",
+                     token->location.end_line, token->location.end_column,
+                     token_type_keyword(token->type));
+    }
 
-	return NULL;
+    return NULL;
 }
 
 /**
@@ -409,17 +380,17 @@ ast_value_t *parser_parse_expression(lexer_t *lexer)
  * @returns {ast_node_t*} - AST node
  *
  */
-ast_node_t *parser_parse_print(lexer_t *lexer)
-{
-	DEBUG_ME;
-	ast_node_t *node = ast_node_create(AST_TYPE_PRINT, PARSER_CURRENT->location);
+ast_node_t *parser_parse_print(lexer_t *lexer) {
+    DEBUG_ME;
+    ast_node_t *node =
+        ast_node_create(AST_TYPE_PRINT, PARSER_CURRENT->location);
 
-	PARSER_NEXT; // Eat the print token
+    PARSER_NEXT;  // Eat the print token
 
-	array_value_t *values = parser_parse_expressions_maybe(lexer);
-	node->data.print = ast_print_create(values);
+    array_value_t *values = parser_parse_expressions_maybe(lexer);
+    node->data.print = ast_print_create(values);
 
-	return node;
+    return node;
 }
 
 /**
@@ -430,17 +401,17 @@ ast_node_t *parser_parse_print(lexer_t *lexer)
  * @returns {ast_node_t*} - AST node
  *
  */
-ast_node_t *parser_parse_return(lexer_t *lexer)
-{
-	DEBUG_ME;
-	ast_node_t *node = ast_node_create(AST_TYPE_RETURN, PARSER_CURRENT->location);
+ast_node_t *parser_parse_return(lexer_t *lexer) {
+    DEBUG_ME;
+    ast_node_t *node =
+        ast_node_create(AST_TYPE_RETURN, PARSER_CURRENT->location);
 
-	PARSER_NEXT; // Eat the return token
+    PARSER_NEXT;  // Eat the return token
 
-	array_value_t *values = parser_parse_expressions(lexer);
-	node->data.returns = ast_return_create(values);
+    array_value_t *values = parser_parse_expressions(lexer);
+    node->data.returns = ast_return_create(values);
 
-	return node;
+    return node;
 }
 
 /**
@@ -451,64 +422,62 @@ ast_node_t *parser_parse_return(lexer_t *lexer)
  * @returns {ast_node_t*} - AST node
  *
  */
-ast_node_t *parser_parse_if(lexer_t *lexer)
-{
-	DEBUG_ME;
-	ast_node_t *node = ast_node_create(AST_TYPE_IF, PARSER_CURRENT->location);
+ast_node_t *parser_parse_if(lexer_t *lexer) {
+    DEBUG_ME;
+    ast_node_t *node = ast_node_create(AST_TYPE_IF, PARSER_CURRENT->location);
 
-	PARSER_NEXT; // Eat the if token
+    PARSER_NEXT;  // Eat the if token
 
-	ast_value_t *condition = parser_parse_expression(lexer);
-	node->data.ifclause = ast_if_create(condition);
+    ast_value_t *condition = parser_parse_expression(lexer);
+    node->data.ifclause = ast_if_create(condition);
 
-	parser_parse_block(lexer, node->data.ifclause->block);
+    parser_parse_block(lexer, node->data.ifclause->block);
 
-	// Optional else and then one or more if or else if
-	while (true)
-	{
-		if (match(lexer, TOKEN_ELSE))
-		{
-			// else {} and stop
-			if (match_next_open_block(lexer))
-			{
-				PARSER_NEXT; // Eat the else token
+    // Optional else and then one or more if or else if
+    while (true) {
+        if (match(lexer, TOKEN_ELSE)) {
+            // else {} and stop
+            if (match_next_open_block(lexer)) {
+                PARSER_NEXT;  // Eat the else token
 
-				ast_node_t *else_if = ast_node_create(AST_TYPE_ELSE_IF, PARSER_CURRENT->location);
+                ast_node_t *else_if =
+                    ast_node_create(AST_TYPE_ELSE_IF, PARSER_CURRENT->location);
 
-				else_if->data.ifclause = ast_else_create();
-				parser_parse_block(lexer, else_if->data.ifclause->block);
+                else_if->data.ifclause = ast_else_create();
+                parser_parse_block(lexer, else_if->data.ifclause->block);
 
-				array_push(node->data.ifclause->else_blocks, else_if);
+                array_push(node->data.ifclause->else_blocks, else_if);
 
-				break; // Stop the loop, this is the last else
-			}
-			// else if {}
-			else if (match_next(lexer, TOKEN_IF))
-			{
-				PARSER_NEXT; // Eat the else token
+                break;  // Stop the loop, this is the last else
+            }
+            // else if {}
+            else if (match_next(lexer, TOKEN_IF)) {
+                PARSER_NEXT;  // Eat the else token
 
-				ast_node_t *else_if = ast_node_create(AST_TYPE_IF, PARSER_CURRENT->location);
-				PARSER_NEXT; // Eat the sub if token
+                ast_node_t *else_if =
+                    ast_node_create(AST_TYPE_IF, PARSER_CURRENT->location);
+                PARSER_NEXT;  // Eat the sub if token
 
-				ast_value_t *condition = parser_parse_expression(lexer);
-				else_if->data.ifclause = ast_elseif_create(condition);
+                ast_value_t *condition = parser_parse_expression(lexer);
+                else_if->data.ifclause = ast_elseif_create(condition);
 
-				parser_parse_block(lexer, else_if->data.ifclause->block);
+                parser_parse_block(lexer, else_if->data.ifclause->block);
 
-				array_push(node->data.ifclause->else_blocks, else_if);
-			}
-			else
-			{
-				error_parser(2, "Expected a block or an else if at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_type_keyword(PARSER_CURRENT->type));
-			}
-		}
-		else
-		{
-			break; // Stop the loop, no else or else if
-		}
-	}
+                array_push(node->data.ifclause->else_blocks, else_if);
+            } else {
+                error_parser(2,
+                             "Expected a block or an else if at line %d, "
+                             "column %d, but got %s",
+                             PARSER_CURRENT->location.end_line,
+                             PARSER_CURRENT->location.end_column,
+                             token_type_keyword(PARSER_CURRENT->type));
+            }
+        } else {
+            break;  // Stop the loop, no else or else if
+        }
+    }
 
-	return node;
+    return node;
 }
 
 /**
@@ -519,35 +488,26 @@ ast_node_t *parser_parse_if(lexer_t *lexer)
  * @returns {ast_node_t*} - AST node
  *
  */
-ast_node_t *parser_parse_node(lexer_t *lexer)
-{
-	DEBUG_ME;
-	if (match(lexer, TOKEN_LAYOUT))
-	{
-		return parser_parse_layout(lexer);
-	}
-	else if (match(lexer, TOKEN_FUNCTION))
-	{
-		return parser_parse_function(lexer);
-	}
-	else if (match(lexer, TOKEN_IF))
-	{
-		return parser_parse_if(lexer);
-	}
-	else if (match(lexer, TOKEN_RETURN))
-	{
-		return parser_parse_return(lexer);
-	}
-	else if (match(lexer, TOKEN_PRINT))
-	{
-		return parser_parse_print(lexer);
-	}
-	else
-	{
-		error_parser(2, "Unknown token '%s' as statement at line %d, column %d", token_type_keyword(PARSER_CURRENT->type), PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column);
-	}
+ast_node_t *parser_parse_node(lexer_t *lexer) {
+    DEBUG_ME;
+    if (match(lexer, TOKEN_LAYOUT)) {
+        return parser_parse_layout(lexer);
+    } else if (match(lexer, TOKEN_FUNCTION)) {
+        return parser_parse_function(lexer);
+    } else if (match(lexer, TOKEN_IF)) {
+        return parser_parse_if(lexer);
+    } else if (match(lexer, TOKEN_RETURN)) {
+        return parser_parse_return(lexer);
+    } else if (match(lexer, TOKEN_PRINT)) {
+        return parser_parse_print(lexer);
+    } else {
+        error_parser(2, "Unknown token '%s' as statement at line %d, column %d",
+                     token_type_keyword(PARSER_CURRENT->type),
+                     PARSER_CURRENT->location.end_line,
+                     PARSER_CURRENT->location.end_column);
+    }
 
-	return NULL;
+    return NULL;
 }
 
 /**
@@ -558,49 +518,43 @@ ast_node_t *parser_parse_node(lexer_t *lexer)
  * @returns {ast_t*} - AST
  *
  */
-ast_t *parser_parse(lexer_t *lexer)
-{
-	DEBUG_ME;
-	ast_t *ast = ast_create();
+ast_t *parser_parse(lexer_t *lexer) {
+    DEBUG_ME;
+    ast_t *ast = ast_create();
 
-	while (lexer->token_index < lexer->tokens->length)
-	{
-		if (PARSER_CURRENT->type == TOKEN_EOF)
-		{
-			break;
-		}
+    while (lexer->token_index < lexer->tokens->length) {
+        if (PARSER_CURRENT->type == TOKEN_EOF) {
+            break;
+        }
 
-		ast_node_t *node = parser_parse_node(lexer);
+        ast_node_t *node = parser_parse_node(lexer);
 
-		if (node == NULL)
-		{
-			error_parser(2, "Expected a node at line %d, column %d, but got %s", PARSER_CURRENT->location.end_line, PARSER_CURRENT->location.end_column, token_type_keyword(PARSER_CURRENT->type));
-			continue;
-		}
-		else if (node->type == AST_TYPE_LAYOUT)
-		{
-			// Free the previous layout if it exists
-			if (ast->layout != NULL)
-			{
-				ast_layout_destroy(ast->layout);
-			}
+        if (node == NULL) {
+            error_parser(2, "Expected a node at line %d, column %d, but got %s",
+                         PARSER_CURRENT->location.end_line,
+                         PARSER_CURRENT->location.end_column,
+                         token_type_keyword(PARSER_CURRENT->type));
+            continue;
+        } else if (node->type == AST_TYPE_LAYOUT) {
+            // Free the previous layout if it exists
+            if (ast->layout != NULL) {
+                ast_layout_destroy(ast->layout);
+            }
 
-			// Set the layout
-			ast->layout = node->data.layout;
+            // Set the layout
+            ast->layout = node->data.layout;
 
-			// Free the node as we don't need it anymore, we just need layout node
-			if (node != NULL)
-			{
-				memory_destroy(node);
-			}
-		}
-		else if (node->type == AST_TYPE_FUNCTION)
-		{
-			array_push(ast->functions, node->data.function);
+            // Free the node as we don't need it anymore, we just need layout
+            // node
+            if (node != NULL) {
+                memory_destroy(node);
+            }
+        } else if (node->type == AST_TYPE_FUNCTION) {
+            array_push(ast->functions, node->data.function);
 
-			ast_node_destroy_notall(node);
-		}
-	}
+            ast_node_destroy_notall(node);
+        }
+    }
 
-	return ast;
+    return ast;
 }

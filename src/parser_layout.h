@@ -3,11 +3,11 @@
 
 #include <stdbool.h>
 
-#include "base.h"
 #include "ast.h"
+#include "base.h"
 #include "lexer.h"
-#include "validator.h"
 #include "parser_layout.h"
+#include "validator.h"
 
 /**
  *
@@ -52,7 +52,9 @@ ast_node_t *parser_layout(lexer_t *lexer);
  * @returns {void}
  *
  */
-void parser_parse_layout_block_children(ast_layout_block_t *block, lexer_t *lexer, char *name, token_t *last_name);
+void parser_parse_layout_block_children(ast_layout_block_t *block,
+                                        lexer_t *lexer, char *name,
+                                        token_t *last_name);
 
 /**
  *
@@ -67,7 +69,10 @@ void parser_parse_layout_block_children(ast_layout_block_t *block, lexer_t *lexe
  * @returns {void}
  *
  */
-void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t *block, hashmap_t *normal, lexer_t *lexer, char *name, token_t *last_name);
+void parser_parse_layout_block_attribute(bool onlyStyle,
+                                         ast_layout_block_t *block,
+                                         hashmap_t *normal, lexer_t *lexer,
+                                         char *name, token_t *last_name);
 
 /**
  *
@@ -79,7 +84,8 @@ void parser_parse_layout_block_attribute(bool onlyStyle, ast_layout_block_t *blo
  * @returns {ast_layout_node_t*} - AST layout node
  *
  */
-ast_layout_node_t *parser_parse_layout_node(lexer_t *lexer, char *name, token_t *last_name);
+ast_layout_node_t *parser_parse_layout_node(lexer_t *lexer, char *name,
+                                            token_t *last_name);
 
 /**
  *
@@ -102,7 +108,9 @@ ast_value_t *parser_parse_layout_value(lexer_t *lexer);
  * @returns {void}
  *
  */
-void parser_parse_layout_block_style_state(ast_layout_block_t *block, lexer_t *lexer, char *name, token_t *last_name);
+void parser_parse_layout_block_style_state(ast_layout_block_t *block,
+                                           lexer_t *lexer, char *name,
+                                           token_t *last_name);
 
 /**
  *

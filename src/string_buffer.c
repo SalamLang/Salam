@@ -176,6 +176,10 @@ void string_append_wchar(string_t *str, wchar_t c) {
  */
 void string_append_str(string_t *str, const char *suffix) {
     DEBUG_ME;
+    if (suffix == NULL) {
+        return;
+    }
+
     size_t suffix_len = strlen(suffix);
     if (suffix_len == 0) {
         return;

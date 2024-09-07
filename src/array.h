@@ -7,8 +7,6 @@
 #include <string.h>
 #include <stdbool.h>
 
-#include "string.h"
-
 typedef struct array_t
 {
 	void **data;

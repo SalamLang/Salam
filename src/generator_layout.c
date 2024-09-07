@@ -111,14 +111,27 @@ string_t *generator_code_layout_block_item(generator_t *generator,
         for (size_t i = 1; i <= repeat_value_sizet; i++) {
             string_append_char(layout_block_str, '<');
             string_append_str(layout_block_str, node_name);
+
+            if (node->type == AST_LAYOUT_TYPE_INPUT &&
+                node->block->text_content != NULL) {
+                string_append_str(node_attrs_str, " value=\"");
+                string_append_str(
+                    node_attrs_str,
+                    node->block
+                        ->text_content);  // TODO: we need to bypass inner \"
+                string_append_str(node_attrs_str, "\"");
+            }
+
             if (node_attrs_str->length > 0) {
                 string_append_char(layout_block_str, ' ');
                 string_append(layout_block_str, node_attrs_str);
             }
+
             string_append_str(layout_block_str, ">");
 
             if (node->block->children->length > 0 ||
-                node->block->text_content != NULL) {
+                (node->block->text_content != NULL &&
+                 node->type != AST_LAYOUT_TYPE_INPUT)) {
                 bool has_content = false;
 
                 if (node->block->text_content != NULL) {
@@ -448,7 +461,7 @@ void generator_code_head(generator_t *generator, ast_layout_block_t *block,
         return;
     }
 
-    size_t html_tags_length = 0;
+    // size_t html_tags_length = 0;
 
     if (block->attributes != NULL) {
         hashmap_t *attributes = cast(hashmap_t *, block->attributes);
@@ -466,7 +479,7 @@ void generator_code_head(generator_t *generator, ast_layout_block_t *block,
                 } else {
                     generator_code_head_item(attribute, head);
 
-                    html_tags_length++;
+                    // html_tags_length++;
                 }
 
                 entry = cast(hashmap_entry_t *, entry->next);

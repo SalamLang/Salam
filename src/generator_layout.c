@@ -959,7 +959,7 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                         char *value =
                             attribute->final_value == NULL
                                 ? array_value_stringify(attribute->values, ", ")
-                                : strdup(attribute->final_value);
+                                : string_strdup(attribute->final_value);
                         string_append_str(generator->media_css, value);
                         memory_destroy(value);
 

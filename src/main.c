@@ -3,12 +3,17 @@
 /**
  *
  * @function run
- * @brief
+ * @brief Running the compiler with the given content and parameters
+ * @params {bool} isCode - Whether the content is code or file
+ * @params {const char*} path - Path of the file
+ * @params {char*} content - Content of the file
+ * @params {char*} build_dir - Build directory
+ * @params {char*} output_dir - Output directory
+ * @returns {void}
+ *
  */
-
-void run(bool isCode, const char *path, char *content, char *build_dir)
-{
-
+void run(bool isCode, const char *path, char *content, char *build_dir,
+         char *output_dir) {
     // lexer_debug(lexer);
 
     // lexer_save(lexer, "tokens.txt");
@@ -23,13 +28,11 @@ void run(bool isCode, const char *path, char *content, char *build_dir)
 
     // printf("generate code\n");
 
-  	if (build_dir != NULL)
-	  {
-  		string_set_str(generator->output_dir, build_dir);
-  	}
+    if (build_dir != NULL) {
+        string_set_str(generator->output_dir, build_dir);
+    }
 
-	  // printf("generate code\n");
-
+    // printf("generate code\n");
 
     // printf("generate debug\n");
 
@@ -114,7 +117,9 @@ void doargs(int argc, char **argv) {
 
         char *content = argv[2];
 
-        run(true, "stdin", content);
+        char *output_dir = argv[3];
+
+        run(true, "stdin", content, output_dir);
     } else {
         if (!file_exists(path)) {
             error(1, "File does not exist: %s\n", path);
@@ -122,9 +127,10 @@ void doargs(int argc, char **argv) {
 
         char *content = file_reads_binary(path, NULL);
 
-        run(false, path, content);
-    }
+        char *output_dir = argv[2];
 
+        run(false, path, content, output_dir);
+    }
 }
 
 /**

@@ -1179,11 +1179,6 @@ void lexer_lex(lexer_t *lexer) {
                         if (c == '_' || is_char_alpha(c)) {
                             lexer_lex_identifier(lexer, uc);
                         } else {
-                            printf("first mode\n");
-                            printf("str %s\n", uc);
-                            printf("strlen %zu\n", strlen(uc));
-                            printf("num bytes %zu\n", num_bytes);
-                            printf("is_utf8_alpha(uc) is: %s\n", is_utf8_alpha(uc) ? "true" : "false");
                             error_lexer(1,
                                         "Unknown character '%s' at line %zu, "
                                         "column %zu",
@@ -1210,8 +1205,6 @@ void lexer_lex(lexer_t *lexer) {
                 } else if (c == '_' || is_utf8_alpha(uc) || is_char_alpha(c)) {
                     lexer_lex_identifier(lexer, uc);
                 } else {
-                    printf("second mode\n");
-                    printf("is_utf8_alpha(uc) is: %s\n", is_utf8_alpha(uc) ? "true" : "false");
                     error_lexer(
                         1, "Unknown character '%s' at line %zu, column %zu", uc,
                         lexer->line, lexer->column);

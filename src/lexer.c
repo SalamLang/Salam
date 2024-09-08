@@ -1211,7 +1211,7 @@ void lexer_lex(lexer_t *lexer) {
                     lexer_lex_identifier(lexer, uc);
                 } else {
                     printf("second mode\n");
-w                    printf("is_utf8_alpha(uc) is: %s\n", is_utf8_alpha(uc) ? "true" : "false");
+                    printf("is_utf8_alpha(uc) is: %s\n", is_utf8_alpha(uc) ? "true" : "false");
                     error_lexer(
                         1, "Unknown character '%s' at line %zu, column %zu", uc,
                         lexer->line, lexer->column);

@@ -23,29 +23,31 @@ string_t *generator_code_layout_block_item(generator_t *generator,
     ast_value_t *repeat_value = NULL;
 
     if (repeat != NULL && repeat->values->length > 1) {
-        error_generator(
-            1, "Include node 'repeat' attribute must have only one value");
+        error_generator(1, "The 'repeat' attribute must have only one value");
     } else if (repeat != NULL && repeat->values->length == 1) {
         repeat_value = array_get(repeat->values, 0);
 
         if (repeat_value->type->kind == AST_TYPE_KIND_STRING) {
             if (string_is_integer(repeat_value->data.string_value) == false) {
                 error_generator(
-                    1, "Include node 'repeat' attribute must be a integer");
+                    1, "The 'repeat' attribute must be an integer value");
             } else {
                 repeat_value_sizet = atoi(repeat_value->data.string_value);
             }
         } else if (repeat_value->type->kind == AST_TYPE_KIND_INT) {
             repeat_value_sizet = repeat_value->data.int_value;
         } else {
-            error_generator(
-                1, "Include node 'repeat' attribute must be a integer");
+            error_generator(1,
+                            "The 'repeat' attribute must be an integer value");
         }
     }
 
     if (repeat_value_sizet < 1) {
+        error_generator(1,
+                        "The 'repeat' attribute value must be greater than 0");
+    } else if (repeat_value_sizet > 1000) {
         error_generator(
-            1, "Include node 'repeat' attribute must be greater than 0");
+            1, "The 'repeat' attribute value must be less or equal to 1000");
     }
 
     if (node->type == AST_LAYOUT_TYPE_INCLUDE) {

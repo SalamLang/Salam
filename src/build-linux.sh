@@ -15,7 +15,7 @@ sources=(
     "generator_layout.c"
     "generator_layout_style.c"
     "generator_identifier.c"
-    "string.c"
+    "string_buffer.c"
     "validator.c"
     "hashmap.c"
     "hashmap_custom.c"

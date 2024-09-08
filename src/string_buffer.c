@@ -1,4 +1,55 @@
-#include "string.h"
+#include "string_buffer.h"
+
+/**
+ *
+ * @function string_strdup
+ * @brief My wrapper for strdup function to support old compilers
+ * @params {const char*} source - Source string
+ * @returns {char*}
+ *
+ */
+char *string_strdup(const char *source) {
+    if (source == NULL) {
+        return NULL;
+    }
+
+    size_t len = strlen(source);
+    char *dest = memory_allocate(len + 1);
+
+    for (size_t i = 0; i < len; i++) {
+        dest[i] = source[i];
+    }
+
+    dest[len] = '\0';
+
+    return dest;
+}
+
+/**
+ *
+ * @function my_strcasecmp
+ * @brief Custom wrapper for strcasecmp function to support old compilers
+ * @params {const char*} s1 - First string
+ * @params {const char*} s2 - Second string
+ * @returns {int} - Comparison result
+ *
+ */
+int my_strcasecmp(const char *s1, const char *s2) {
+    if (s1 == NULL || s2 == NULL) {
+        // Handle NULL strings
+        if (s1 == NULL && s2 == NULL) return 0;
+        if (s1 == NULL) return -1;
+        return 1;
+    }
+
+    while (*s1 && *s2 &&
+           tolower((unsigned char)*s1) == tolower((unsigned char)*s2)) {
+        s1++;
+        s2++;
+    }
+
+    return tolower((unsigned char)*s1) - tolower((unsigned char)*s2);
+}
 
 /**
  *
@@ -125,6 +176,10 @@ void string_append_wchar(string_t *str, wchar_t c) {
  */
 void string_append_str(string_t *str, const char *suffix) {
     DEBUG_ME;
+    if (suffix == NULL) {
+        return;
+    }
+
     size_t suffix_len = strlen(suffix);
     if (suffix_len == 0) {
         return;
@@ -172,7 +227,7 @@ void string_destroy(string_t *str) {
  */
 char *string_destroy_and_get(string_t *str) {
     DEBUG_ME;
-    char *res = strdup(str->data);
+    char *res = string_strdup(str->data);
     string_destroy(str);
 
     if (res == NULL) {
@@ -257,7 +312,7 @@ void string_set_str(string_t *str, const char *value) {
  */
 char *string_lower_str(const char *str) {
     DEBUG_ME;
-    char *buffer = strdup(str);
+    char *buffer = string_strdup(str);
 
     for (size_t i = 0; i < strlen(buffer); i++) {
         buffer[i] = tolower(buffer[i]);
@@ -276,7 +331,7 @@ char *string_lower_str(const char *str) {
  */
 char *string_upper_str(const char *str) {
     DEBUG_ME;
-    char *buffer = strdup(str);
+    char *buffer = string_strdup(str);
 
     for (size_t i = 0; i < strlen(buffer); i++) {
         buffer[i] = tolower(buffer[i]);
@@ -568,13 +623,51 @@ bool is_wchar_digit(uint32_t codepoint) {
  *
  */
 bool is_utf8_alpha(char *utf8) {
-    wchar_t wc;
-    int wcl = mbtowc(&wc, utf8, MB_CUR_MAX);
-    if (wcl <= 0) {
+    // wchar_t wc;
+    // int wcl = mbtowc(&wc, utf8, MB_CUR_MAX);
+    // if (wcl <= 0) {
+    //     return false;
+    // }
+    //
+    // return iswalpha(wc);
+    if (utf8 == NULL) {
         return false;
     }
 
-    return iswalpha(wc);
+    uint32_t codepoint;
+    const unsigned char *s = (const unsigned char *)utf8;
+
+    // Decode UTF-8 byte sequence to codepoint
+    if (*s <= 0x7F) {
+        codepoint = *s;  // 1-byte sequence (ASCII)
+    } else if ((*s >> 5) == 0x6) {
+        if ((s[1] & 0xC0) != 0x80) return false;  // Invalid continuation byte
+        codepoint = ((s[0] & 0x1F) << 6) | (s[1] & 0x3F);
+    } else if ((*s >> 4) == 0xE) {
+        if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80)
+            return false;  // Invalid continuation bytes
+        codepoint = ((s[0] & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
+    } else if ((*s >> 3) == 0x1E) {
+        if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80 || (s[3] & 0xC0) != 0x80)
+            return false;  // Invalid continuation bytes
+        codepoint = ((s[0] & 0x07) << 18) | ((s[1] & 0x3F) << 12) | ((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
+    } else {
+        return false;  // Invalid UTF-8 start byte
+    }
+
+    // Convert codepoint to wide character
+    // wchar_t wc = (wchar_t)codepoint;
+    // return iswalpha(wc);
+
+    // Check if the codepoint is alphabetic (manual check for Unicode ranges)
+    if ((codepoint >= 0x41 && codepoint <= 0x5A) ||  // A-Z
+        (codepoint >= 0x61 && codepoint <= 0x7A) ||  // a-z
+        (codepoint >= 0x0600 && codepoint <= 0x06FF) ||  // Arabic alphabet
+        iswalpha(codepoint)) {  // Fallback to iswalpha for other languages
+        return true;
+    }
+
+    return false;
 }
 
 /**
@@ -582,8 +675,8 @@ bool is_utf8_alpha(char *utf8) {
  * @function is_english_digit
  * @brief Check if a UTF-8 string is an Persian/Arabic/English digit
  * @params {char*} utf8 - UTF-8 string
- * @returns {bool} True if the string is a Persian/Arabic/English digit, false
- * otherwise
+ * @returns {bool} True if the string is a Persian/Arabic/English digit,
+ * false otherwise
  *
  */
 bool is_utf8_digit(char *utf8) {

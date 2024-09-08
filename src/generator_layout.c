@@ -23,29 +23,31 @@ string_t *generator_code_layout_block_item(generator_t *generator,
     ast_value_t *repeat_value = NULL;
 
     if (repeat != NULL && repeat->values->length > 1) {
-        error_generator(
-            1, "Include node 'repeat' attribute must have only one value");
+        error_generator(1, "The 'repeat' attribute must have only one value");
     } else if (repeat != NULL && repeat->values->length == 1) {
         repeat_value = array_get(repeat->values, 0);
 
         if (repeat_value->type->kind == AST_TYPE_KIND_STRING) {
             if (string_is_integer(repeat_value->data.string_value) == false) {
                 error_generator(
-                    1, "Include node 'repeat' attribute must be a integer");
+                    1, "The 'repeat' attribute must be an integer value");
             } else {
                 repeat_value_sizet = atoi(repeat_value->data.string_value);
             }
         } else if (repeat_value->type->kind == AST_TYPE_KIND_INT) {
             repeat_value_sizet = repeat_value->data.int_value;
         } else {
-            error_generator(
-                1, "Include node 'repeat' attribute must be a integer");
+            error_generator(1,
+                            "The 'repeat' attribute must be an integer value");
         }
     }
 
     if (repeat_value_sizet < 1) {
+        error_generator(1,
+                        "The 'repeat' attribute value must be greater than 0");
+    } else if (repeat_value_sizet > 1000) {
         error_generator(
-            1, "Include node 'repeat' attribute must be greater than 0");
+            1, "The 'repeat' attribute value must be less or equal to 1000");
     }
 
     if (node->type == AST_LAYOUT_TYPE_INCLUDE) {
@@ -111,14 +113,27 @@ string_t *generator_code_layout_block_item(generator_t *generator,
         for (size_t i = 1; i <= repeat_value_sizet; i++) {
             string_append_char(layout_block_str, '<');
             string_append_str(layout_block_str, node_name);
+
+            if (node->type == AST_LAYOUT_TYPE_INPUT &&
+                node->block->text_content != NULL) {
+                string_append_str(node_attrs_str, " value=\"");
+                string_append_str(
+                    node_attrs_str,
+                    node->block
+                        ->text_content);  // TODO: we need to bypass inner \"
+                string_append_str(node_attrs_str, "\"");
+            }
+
             if (node_attrs_str->length > 0) {
                 string_append_char(layout_block_str, ' ');
                 string_append(layout_block_str, node_attrs_str);
             }
+
             string_append_str(layout_block_str, ">");
 
             if (node->block->children->length > 0 ||
-                node->block->text_content != NULL) {
+                (node->block->text_content != NULL &&
+                 node->type != AST_LAYOUT_TYPE_INPUT)) {
                 bool has_content = false;
 
                 if (node->block->text_content != NULL) {
@@ -448,7 +463,7 @@ void generator_code_head(generator_t *generator, ast_layout_block_t *block,
         return;
     }
 
-    size_t html_tags_length = 0;
+    // size_t html_tags_length = 0;
 
     if (block->attributes != NULL) {
         hashmap_t *attributes = cast(hashmap_t *, block->attributes);
@@ -466,7 +481,7 @@ void generator_code_head(generator_t *generator, ast_layout_block_t *block,
                 } else {
                     generator_code_head_item(attribute, head);
 
-                    html_tags_length++;
+                    // html_tags_length++;
                 }
 
                 entry = cast(hashmap_entry_t *, entry->next);
@@ -959,7 +974,7 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                         char *value =
                             attribute->final_value == NULL
                                 ? array_value_stringify(attribute->values, ", ")
-                                : strdup(attribute->final_value);
+                                : string_strdup(attribute->final_value);
                         string_append_str(generator->media_css, value);
                         memory_destroy(value);
 

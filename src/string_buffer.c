@@ -639,38 +639,35 @@ bool is_utf8_alpha(char *utf8) {
 
     // Decode UTF-8 byte sequence to codepoint
     if (*s <= 0x7F) {
-        // 1-byte sequence (ASCII)
-        codepoint = *s;
+        codepoint = *s;  // 1-byte sequence (ASCII)
     } else if ((*s >> 5) == 0x6) {
-        // 2-byte sequence
         if ((s[1] & 0xC0) != 0x80) return false;  // Invalid continuation byte
         codepoint = ((s[0] & 0x1F) << 6) | (s[1] & 0x3F);
     } else if ((*s >> 4) == 0xE) {
-        // 3-byte sequence
         if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80)
             return false;  // Invalid continuation bytes
-        codepoint =
-            ((s[0] & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
+        codepoint = ((s[0] & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
     } else if ((*s >> 3) == 0x1E) {
-        // 4-byte sequence
-        if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80 ||
-            (s[3] & 0xC0) != 0x80)
+        if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80 || (s[3] & 0xC0) != 0x80)
             return false;  // Invalid continuation bytes
-        codepoint = ((s[0] & 0x07) << 18) | ((s[1] & 0x3F) << 12) |
-                    ((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
+        codepoint = ((s[0] & 0x07) << 18) | ((s[1] & 0x3F) << 12) | ((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
     } else {
         return false;  // Invalid UTF-8 start byte
     }
 
-    // Check if the codepoint is a valid Unicode character and if it's
-    // alphabetic
-    if (codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
-        return false;  // Invalid Unicode codepoint or surrogate pair
+    // Convert codepoint to wide character
+    // wchar_t wc = (wchar_t)codepoint;
+    // return iswalpha(wc);
+
+    // Check if the codepoint is alphabetic (manual check for Unicode ranges)
+    if ((codepoint >= 0x41 && codepoint <= 0x5A) ||  // A-Z
+        (codepoint >= 0x61 && codepoint <= 0x7A) ||  // a-z
+        (codepoint >= 0x0600 && codepoint <= 0x06FF) ||  // Arabic alphabet
+        iswalpha(codepoint)) {  // Fallback to iswalpha for other languages
+        return true;
     }
 
-    // Convert codepoint to wide character
-    wchar_t wc = (wchar_t)codepoint;
-    return iswalpha(wc);
+    return false;
 }
 
 /**

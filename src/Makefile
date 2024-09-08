@@ -8,8 +8,9 @@ INPUT_FILE = ../example/repeat-block.salam
 OUTPUT_DIR = ../out/
 
 CC = gcc
-CFLAGS = -std=c11 -Walloca -Wextra -Wall
+# CFLAGS = -std=c11 -Walloca -Wextra -Wall
 # CFLAGS = -std=c99
+CFLAGS = -std=c11
 # CFLAGS = -g -Walloca -Wextra -Wall -fsanitize=address,undefined -std=c99
 
 TARGET = salam

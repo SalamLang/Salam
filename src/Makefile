@@ -1,4 +1,4 @@
-INPUT_FILE = ../example/input.s
+INPUT_FILE = ../example/input.salam
 INPUT_FILE = ../example/test6.salam
 INPUT_FILE = ../example/testhover.salam
 INPUT_FILE = ../example/testgroup.salam

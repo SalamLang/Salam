@@ -3,11 +3,17 @@
 /**
  *
  * @function run
- * @brief
+ * @brief Running the compiler with the given content and parameters
+ * @params {bool} isCode - Whether the content is code or file
+ * @params {const char*} path - Path of the file
+ * @params {char*} content - Content of the file
+ * @params {char*} build_dir - Build directory
+ * @returns {void}
+ *
  */
-
-void run(bool isCode, const char *path, char *content, char *build_dir)
-{
+void run(bool isCode, const char *path, char *content, char *build_dir) {
+    lexer_t *lexer = lexer_create(path, content);
+    lexer_lex(lexer);
 
     // lexer_debug(lexer);
 
@@ -23,23 +29,17 @@ void run(bool isCode, const char *path, char *content, char *build_dir)
 
     // printf("generate code\n");
 
-  	if (build_dir != NULL)
-	  {
-  		string_set_str(generator->output_dir, build_dir);
-  	}
+    if (build_dir != NULL) {
+        string_set_str(generator->output_dir, build_dir);
+    }
 
-	  // printf("generate code\n");
+    // printf("generate code\n");
 
+    generator_code(generator);
 
     // printf("generate debug\n");
 
     // generator_debug(generator);
-
-    // printf("generate save\n");
-
-    // generator_save(generator, argc > 2 ? argv[2] : "index.html", argc > 3 ?
-    // argv[3] : "style.css", argc > 4 ? argv[4] : "script.js");
-    generator_save(generator, "index.html", "style.css", "script.js");
 
     if (isCode) {
         if (generator->css->length > 0 || generator->media_css->length > 0) {
@@ -61,6 +61,9 @@ void run(bool isCode, const char *path, char *content, char *build_dir)
         if (generator->js->length > 0) {
             printf("%s\n", generator->js->data);
         }
+    } else {
+        // printf("generate save\n");
+        generator_save(generator, "index.html", "style.css", "script.js");
     }
 
     // printf("generate destroy\n");
@@ -75,10 +78,6 @@ void run(bool isCode, const char *path, char *content, char *build_dir)
     lexer_destroy(lexer);
 
     // printf("end lexer destroy\n");
-
-    memory_destroy(content);
-
-    // printf("end content destroy\n");
 
     if (!isCode) {
         printf("END SUCCESS\n");
@@ -114,7 +113,9 @@ void doargs(int argc, char **argv) {
 
         char *content = argv[2];
 
-        run(true, "stdin", content);
+        char *output_dir = argv[3];
+
+        run(true, "stdin", content, output_dir);
     } else {
         if (!file_exists(path)) {
             error(1, "File does not exist: %s\n", path);
@@ -122,9 +123,12 @@ void doargs(int argc, char **argv) {
 
         char *content = file_reads_binary(path, NULL);
 
-        run(false, path, content);
-    }
+        char *output_dir = argv[2];
 
+        run(false, path, content, output_dir);
+
+        memory_destroy(content);
+    }
 }
 
 /**

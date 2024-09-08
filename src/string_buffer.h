@@ -1,5 +1,5 @@
-#ifndef _STRING_H_
-#define _STRING_H_
+#ifndef _STRING_BUFFER_H_
+#define _STRING_BUFFER_H_
 
 #include <ctype.h>
 #include <locale.h>
@@ -464,5 +464,26 @@ bool string_starts(const char *source, const char *search);
  *
  */
 string_t *string_create_from(const char *data, size_t start, size_t end);
+
+/**
+ *
+ * @function string_strdup
+ * @brief My wrapper for strdup function to support old compilers
+ * @params {const char*} source - Source string
+ * @returns {char*}
+ *
+ */
+char *string_strdup(const char *source);
+
+/**
+ *
+ * @function my_strcasecmp
+ * @brief Custom wrapper for strcasecmp function to support old compilers
+ * @params {const char*} s1 - First string
+ * @params {const char*} s2 - Second string
+ * @returns {int} - Comparison result
+ *
+ */
+int my_strcasecmp(const char *s1, const char *s2);
 
 #endif

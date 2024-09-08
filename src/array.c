@@ -1,5 +1,7 @@
 #include "array.h"
 
+#include "string_buffer.h"
+
 /**
  *
  * @function array_create
@@ -154,24 +156,24 @@ void array_destroy(array_t *array) {
 char *array_stringify(array_t *array, char *separator) {
     DEBUG_ME;
     if (array == NULL || array->length == 0) {
-        return strdup("");
+        return NULL;
     }
 
-    string_t *str = string_create(16);
+    string_t *buf = string_create(16);
     for (size_t i = 0; i < array->length; i++) {
         char *item = array_get(array, i);
 
         if (item != NULL) {
-            string_append_str(str, item);
+            string_append_str(buf, item);
 
             if (i < array->length - 1) {
-                string_append_str(str, separator);
+                string_append_str(buf, separator);
             }
         }
     }
 
-    char *buffer = strdup(str->data);
-    string_destroy(str);
+    char *buffer = string_strdup(buf->data);
+    string_destroy(buf);
 
     return buffer;
 }

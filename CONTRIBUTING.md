@@ -23,7 +23,7 @@ Welcome to Salam! We're excited to have you on board and contributing to our ope
 2. **Clone Your Fork**: Clone the repository to your local machine using
 
    ```
-   git clone https://github.com/your-username/Salam.git
+   git clone https://github.com/SalamLang/Salam.git
    ```
 
 3. **Create a Branch**: Create a new branch for your contribution using a descriptive name, such as feature/my-new-feature.

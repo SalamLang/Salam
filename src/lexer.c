@@ -416,7 +416,7 @@ token_t *token_copy(token_t *token) {
         case TOKEN_STRING:
         case TOKEN_IDENTIFIER:
             if (token->data.string != NULL) {
-                copy->data.string = strdup(token->data.string);
+                copy->data.string = string_strdup(token->data.string);
             }
             break;
 
@@ -933,7 +933,7 @@ void lexer_lex_identifier(lexer_t *lexer, char *uc) {
         type, (location_t){lexer->index, 1, lexer->line, lexer->column,
                            lexer->line, lexer->column});
     token->data_type = TOKEN_IDENTIFIER;
-    token->data.string = strdup(value->data);
+    token->data.string = string_strdup(value->data);
 
     string_destroy(value);
 
@@ -990,7 +990,7 @@ void lexer_lex_string(lexer_t *lexer, int type) {
         TOKEN_STRING, (location_t){lexer->index, 1, lexer->line, lexer->column,
                                    lexer->line, lexer->column});
     token->data_type = TOKEN_STRING;
-    token->data.string = strdup(value->data);
+    token->data.string = string_strdup(value->data);
 
     string_destroy(value);
 

@@ -175,11 +175,11 @@ void generator_code_layout_style_value(hashmap_t *styles, hashmap_t *new_styles,
     }
 
     if (attribute->final_key == NULL) {
-        attribute->final_key = strdup(attribute->key);
+        attribute->final_key = string_strdup(attribute->key);
     }
 
     if (attribute->final_value == NULL) {
-        attribute->final_value = strdup(
+        attribute->final_value = string_strdup(
             cast(ast_value_t *, attribute->values->data[0])->data.string_value);
     }
 }

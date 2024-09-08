@@ -9,7 +9,7 @@
 #include "base.h"
 #include "generator.h"
 #include "memory.h"
-#include "string.h"
+#include "string_buffer.h"
 
 /**
  *

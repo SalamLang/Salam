@@ -19,6 +19,10 @@ void panic(const char *message, ...) {
     va_end(args);
     fprintf(stderr, "\n");
 
+#ifdef __EMSCRIPTEN__
+    emscripten_force_exit(EXIT_FAILURE);
+#endif
+
     exit(EXIT_FAILURE);
 }
 
@@ -41,6 +45,10 @@ void error(int code, const char *message, ...) {
     vfprintf(stderr, message, args);
     va_end(args);
     fprintf(stderr, "\n");
+
+#ifdef __EMSCRIPTEN__
+    emscripten_force_exit(code);
+#endif
 
     exit(code);
 }
@@ -65,6 +73,10 @@ void error_generator(int code, const char *message, ...) {
     va_end(args);
     fprintf(stderr, "\n");
 
+#ifdef __EMSCRIPTEN__
+    emscripten_force_exit(code);
+#endif
+
     exit(code);
 }
 
@@ -87,6 +99,10 @@ void error_parser(int code, const char *message, ...) {
     vfprintf(stderr, message, args);
     va_end(args);
     fprintf(stderr, "\n");
+
+#ifdef __EMSCRIPTEN__
+    emscripten_force_exit(code);
+#endif
 
     exit(code);
 }
@@ -111,6 +127,10 @@ void error_lexer(int code, const char *message, ...) {
     va_end(args);
     fprintf(stderr, "\n");
 
+#ifdef __EMSCRIPTEN__
+    emscripten_force_exit(code);
+#endif
+
     exit(code);
 }
 
@@ -133,6 +153,10 @@ void error_ast(int code, const char *message, ...) {
     vfprintf(stderr, message, args);
     va_end(args);
     fprintf(stderr, "\n");
+
+#ifdef __EMSCRIPTEN__
+    emscripten_force_exit(code);
+#endif
 
     exit(code);
 }
@@ -157,6 +181,10 @@ void error_validator(int code, const char *message, ...) {
     va_end(args);
     fprintf(stderr, "\n");
 
+#ifdef __EMSCRIPTEN__
+    emscripten_force_exit(code);
+#endif
+
     exit(code);
 }
 
@@ -179,6 +207,10 @@ void error_interpreter(int code, const char *message, ...) {
     vfprintf(stderr, message, args);
     va_end(args);
     fprintf(stderr, "\n");
+
+#ifdef __EMSCRIPTEN__
+    emscripten_force_exit(code);
+#endif
 
     exit(code);
 }

@@ -218,9 +218,9 @@ int main(int argc, char **argv) {
 
     doargs(argc, argv);
 
-#ifdef __EMSCRIPTEN__
-    emscripten_force_exit(0);
-#endif
+    // #ifdef __EMSCRIPTEN__
+    //     emscripten_force_exit(0);
+    // #endif
 
     return 0;
 }

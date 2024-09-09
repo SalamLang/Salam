@@ -60,7 +60,7 @@ void generator_salam_layout_block(string_t* salam, ast_layout_block_t* block) {
  * @function generator_salam_ident
  * @brief Generate the Salam code for the indentation
  * @params {string_t*} buffer - Buffer
- * @params {size_t} ident - Identation
+ * @params {size_t} ident - Indentation
  * @returns {void}
  *
  */

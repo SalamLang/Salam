@@ -2,6 +2,38 @@
 
 /**
  *
+ * @function lint
+ * @brief Linting the given content and parameters
+ * @params {bool} isCode - Whether the content is code or file
+ * @params {const char*} path - Path of the file
+ * @params {char*} content - Content of the file
+ * @params {char*} build_file - Build file
+ * @returns {void}
+ *
+ */
+void lint(bool isCode, const char *path, char *content, char *build_file) {
+    lexer_t *lexer = lexer_create(path, content);
+    lexer_lex(lexer);
+
+    ast_t *ast = parser_parse(lexer);
+
+    string_t *cleaned_code = generator_salam(ast);
+
+    if (build_file != NULL) {
+        file_writes(build_file, cleaned_code->data);
+    } else {
+        printf("%s\n", cleaned_code->data);
+    }
+
+    string_destroy(cleaned_code);
+
+    if (!isCode) {
+        printf("END SUCCESS\n");
+    }
+}
+
+/**
+ *
  * @function run
  * @brief Running the compiler with the given content and parameters
  * @params {bool} isCode - Whether the content is code or file
@@ -106,9 +138,37 @@ void doargs(int argc, char **argv) {
         exit(1);
     } else if (strcmp(path, "update") == 0) {
         printf("TODO: auto update feature...\n");
+    } else if (strcmp(path, "lint") == 0) {
+        if (argc <= 2) {
+            error(1, "Usage: %s lint <file>\n", argv[0]);
+        }
+
+        if (strcmp(argv[2], "code") == 0) {
+            if (argc <= 3) {
+                error(1, "Usage: %s lint code <content>\n", argv[0]);
+            }
+
+            char *content = argv[3];
+
+            lint(true, "stdin", content, NULL);
+        } else {
+            if (!file_exists(argv[2])) {
+                error(1, "File does not exist: %s\n", argv[2]);
+            }
+
+            if (argc <= 3) {
+                error(1, "Usage: %s lint <file> <output>\n", argv[0]);
+            }
+
+            char *content = file_reads_binary(path, NULL);
+
+            char *output_file = argv[2];
+
+            lint(false, path, content, output_file);
+        }
     } else if (strcmp(path, "code") == 0) {
-        if (argc == 2) {
-            error(1, "You need to pass filename as an extra input!\n");
+        if (argc <= 2) {
+            error(1, "Usage: %s code <content>\n", argv[0]);
         }
 
         char *content = argv[2];
@@ -123,7 +183,11 @@ void doargs(int argc, char **argv) {
 
         char *content = file_reads_binary(path, NULL);
 
-        char *output_dir = argv[2];
+        char *output_dir = NULL;
+
+        if (argc >= 3) {
+            output_dir = argv[2];
+        }
 
         run(false, path, content, output_dir);
 

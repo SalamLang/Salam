@@ -12,6 +12,7 @@
 #include "base.h"
 #include "file.h"
 #include "generator.h"
+#include "generator_salam.h"
 #include "lexer.h"
 #include "log.h"
 #include "memory.h"

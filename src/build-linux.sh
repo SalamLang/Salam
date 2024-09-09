@@ -13,6 +13,7 @@ sources=(
     "parser_layout.c"
     "generator.c"
     "generator_layout.c"
+	"generator_salam.c"
     "generator_layout_style.c"
     "generator_identifier.c"
     "string_buffer.c"

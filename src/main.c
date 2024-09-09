@@ -30,6 +30,10 @@ void lint(bool isCode, const char *path, char *content, char *build_file) {
     if (!isCode) {
         printf("END SUCCESS\n");
     }
+
+    ast_destroy(ast);
+
+    lexer_destroy(lexer);
 }
 
 /**
@@ -165,6 +169,8 @@ void doargs(int argc, char **argv) {
             char *output_file = argv[2];
 
             lint(false, path, content, output_file);
+
+            memory_destroy(content);
         }
     } else if (strcmp(path, "code") == 0) {
         if (argc <= 2) {

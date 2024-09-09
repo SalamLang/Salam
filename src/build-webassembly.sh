@@ -33,7 +33,10 @@ sources=(
 )
 
 echo "Compiling C files to WebAssembly..."
-emcc "${sources[@]}" -o ${OUTPUT_BASE}.html -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s NO_EXIT_RUNTIME=1
+emcc "${sources[@]}" -o ${OUTPUT_BASE}.html \
+    -s ALLOW_MEMORY_GROWTH=1 \
+    -s EXIT_RUNTIME=0 \
+    -s "EXPORTED_FUNCTIONS=['_main']"
 
 if [ $? -eq 0 ]; then
     echo "Compilation successful. Output files:"

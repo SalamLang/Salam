@@ -1,9 +1,9 @@
 #ifndef _MAIN_H_
 #define _MAIN_H_
 
-#ifdef __EMSCRIPTEN__
-#include <emscripten/emscripten.h>
-#endif
+// #ifdef __EMSCRIPTEN__
+// #include <emscripten/emscripten.h>
+// #endif
 
 #define cast(TYPE, VALUE) ((TYPE)VALUE)
 

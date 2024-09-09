@@ -48,19 +48,23 @@ void generator_destroy(generator_t *generator) {
     DEBUG_ME;
     if (generator != NULL) {
         if (generator->html != NULL) {
-            generator->html->destroy(generator->html);
+            string_destroy(generator->html);
         }
 
         if (generator->media_css != NULL) {
-            generator->media_css->destroy(generator->media_css);
+            string_destroy(generator->media_css);
         }
 
         if (generator->css != NULL) {
-            generator->css->destroy(generator->css);
+            string_destroy(generator->css);
         }
 
         if (generator->js != NULL) {
-            generator->js->destroy(generator->js);
+            string_destroy(generator->js);
+        }
+
+        if (generator->output_dir != NULL) {
+            string_destroy(generator->output_dir);
         }
 
         if (generator->identifier != NULL) {

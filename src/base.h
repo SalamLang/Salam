@@ -1,3 +1,10 @@
+#ifndef _MAIN_H_
+#define _MAIN_H_
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+
 #define cast(TYPE, VALUE) ((TYPE)VALUE)
 
 #define _CRT_NONSTDC_NO_DEPRECATE
@@ -33,3 +40,5 @@
 #define SALAM_VERSION "0.1"
 
 #define _XOPEN_SOURCE 700
+
+#endif

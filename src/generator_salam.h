@@ -116,4 +116,16 @@ void generator_salam_layout_attributes_styles(string_t* salam,
  */
 void generator_salam_layout_node(string_t* salam, ast_layout_node_t* node);
 
+/**
+ *
+ * @function generator_salam_layout_children
+ * @brief Generate the Salam code for the layout children
+ * @params {string_t*} salam - Buffer
+ * @params {array_node_layout_t*} children - Children
+ * @returns {void}
+ *
+ */
+void generator_salam_layout_children(string_t* salam,
+                                     array_node_layout_t* children);
+
 #endif

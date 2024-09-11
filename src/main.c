@@ -144,19 +144,25 @@ void doargs(int argc, char **argv) {
             "language.\n");
         printf("\n");
         printf("Usage:\n");
+        printf("%s <filename>                      # Execute a Salam script\n",
+               argv[0]);
         printf(
-            "salam <filename>                      # Execute a Salam script\n");
+            "%s code <content> <output_dir>     # Compile and run Salam "
+            "code\n",
+            argv[0]);
+        printf("%s lint <filename> <output_dir>    # Lint a Salam script\n",
+               argv[0]);
+        printf("%s lint code <content>             # Lint Salam code\n",
+               argv[0]);
         printf(
-            "salam code <content> <output_dir>     # Compile and run Salam "
-            "code\n");
-        printf("salam lint <filename> <output_dir>    # Lint a Salam script\n");
-        printf("salam lint code <content>             # Lint Salam code\n");
+            "%s version                         # Print the version of "
+            "Salam\n",
+            argv[0]);
         printf(
-            "salam version                         # Print the version of "
-            "Salam\n");
-        printf(
-            "salam update                          # Update Salam to the "
-            "latest version\n");
+            "%s update                          # Update Salam to the "
+            "latest version\n",
+            argv[0]);
+
         printf("\n");
         printf("Feel free to explore and create using Salam!\n");
         printf("\n");

@@ -12,17 +12,10 @@
  *
  */
 void lint(bool isCode, const char *path, char *content, char *build_file) {
-    printf("run lint on %s\n", content);
-
     lexer_t *lexer = lexer_create(path, content);
-    printf("before lexer lex\n");
     lexer_lex(lexer);
 
-    printf("after lexer\n");
-
     ast_t *ast = parser_parse(lexer);
-
-    printf("after parser\n");
 
     generator_t *generator = generator_create(ast);
 
@@ -149,8 +142,8 @@ void doargs(int argc, char **argv) {
     }
 
     const char *path = argv[1];
-    printf("path: %s\n", path);
-    printf("Argc: %d\n", argc);
+    // printf("path: %s\n", path);
+    // printf("Argc: %d\n", argc);
 
     if (strcmp(path, "version") == 0) {
         printf("Salam %s\n", SALAM_VERSION);

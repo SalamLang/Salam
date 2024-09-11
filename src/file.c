@@ -14,7 +14,8 @@ char *file_reads(const char *path, size_t *size) {
     // ccs=UTF-8
     FILE *file = fopen(path, "r");
     if (file == NULL) {
-        panic("Failed to open file");
+        printf("Failed to read file %s\n", path);
+        panic("");
 
         return false;
     }
@@ -48,7 +49,8 @@ char *file_reads_binary(const char *path, size_t *size) {
     DEBUG_ME;
     FILE *file = fopen(path, "rb");
     if (file == NULL) {
-        panic("Failed to open file");
+        printf("Failed to open file %s\n", path);
+        panic("");
 
         return false;
     }
@@ -83,7 +85,8 @@ bool file_writes(const char *path, const char *content) {
     // ccs=UTF-8
     FILE *file = fopen(path, "w");
     if (file == NULL) {
-        panic("Failed to write file");
+        printf("Failed to write file %s\n", path);
+        panic("");
 
         return false;
     }
@@ -382,7 +385,8 @@ bool file_appends(const char *path, const char *content) {
     DEBUG_ME;
     FILE *file = fopen(path, "a");
     if (file == NULL) {
-        panic("Failed to append file");
+        printf("Failed to append file %s\n", path);
+        panic("");
 
         return false;
     }

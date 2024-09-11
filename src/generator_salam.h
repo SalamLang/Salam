@@ -105,4 +105,15 @@ void generator_salam_ident(string_t* buffer, size_t ident);
 void generator_salam_layout_attributes_styles(string_t* salam,
                                               hashmap_t* attributes);
 
+/**
+ *
+ * @function generator_salam_layout_node
+ * @brief Generate the Salam code for the layout node
+ * @params {string_t*} salam - Buffer
+ * @params {ast_layout_node_t*} node - Layout node
+ * @returns {void}
+ *
+ */
+void generator_salam_layout_node(string_t* salam, ast_layout_node_t* node);
+
 #endif

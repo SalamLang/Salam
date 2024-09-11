@@ -61,6 +61,51 @@ void generator_salam_layout_block(string_t* salam, ast_layout_block_t* block) {
 
     generator_salam_layout_states(salam, block->states);
 
+    if (block->children != NULL && block->children->length > 0) {
+        for (size_t i = 0; i < block->children->length; i++) {
+            ast_layout_node_t* node = array_get(block->children, i);
+            generator_salam_layout_node(salam, node);
+        }
+    }
+
+    generator_salam_ident_size--;
+
+    IDENT(generator_salam_ident_size);
+    string_append_str(salam, "تمام\n");
+}
+
+/**
+ *
+ * @function generator_salam_layout_node
+ * @brief Generate the Salam code for the layout node
+ * @params {string_t*} salam - Buffer
+ * @params {ast_layout_node_t*} node - Layout node
+ * @returns {void}
+ *
+ */
+void generator_salam_layout_node(string_t* salam, ast_layout_node_t* node) {
+    DEBUG_ME;
+    char* node_name = ast_layout_node_type_to_enduser_name(node->type);
+
+    IDENT(generator_salam_ident_size);
+    string_append_str(salam, node_name);
+    string_append_str(salam, ":\n");
+
+    generator_salam_ident_size++;
+
+    generator_salam_layout_attributes(salam, node->block->attributes);
+
+    generator_salam_layout_styles(salam, node->block->styles);
+
+    generator_salam_layout_states(salam, node->block->states);
+
+    if (node->block->children != NULL && node->block->children->length > 0) {
+        for (size_t i = 0; i < node->block->children->length; i++) {
+            ast_layout_node_t* child = array_get(node->block->children, i);
+            generator_salam_layout_node(salam, child);
+        }
+    }
+
     generator_salam_ident_size--;
 
     IDENT(generator_salam_ident_size);

@@ -412,18 +412,22 @@ void generator_code_head_meta_children(generator_t *generator,
                         char *value =
                             array_value_stringify(attribute->values, ", ");
 
+                        if (attribute->final_key == NULL) {
+                            attribute->final_key = string_strdup(entry->key);
+                        }
+
                         string_append_str(
                             generator->css,
-                            attribute->final_key == NULL
-                                ? entry->key
-                                : attribute
-                                      ->final_key);  // TODO: Why name lowercase
-                                                     // entry->key?
+                            attribute->final_key);  // TODO: Why name lowercase
+                                                    // entry->key?
                         string_append_char(generator->css, ':');
+
+                        if (attribute->final_value == NULL) {
+                            attribute->final_value = string_strdup(value);
+                        }
+
                         string_append_str(generator->css,
-                                          attribute->final_value == NULL
-                                              ? value
-                                              : attribute->final_value);
+                                          attribute->final_value);
 
                         if (value != NULL) {
                             memory_destroy(value);
@@ -699,41 +703,37 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                         attribute->isContent == true ||
                         attribute->isStyle == true) {
                     } else {
-                        char *attribute_values_str =
-                            attribute->final_value != NULL
-                                ? attribute->final_value
-                                : array_value_stringify(attribute->values,
-                                                        ", ");
+                        if (attribute->final_value == NULL) {
+                            attribute->final_value =
+                                array_value_stringify(attribute->values, ", ");
+                        }
+
                         size_t attribute_value_length =
-                            attribute_values_str == NULL
+                            attribute->final_value == NULL
                                 ? 0
-                                : strlen(attribute_values_str);
+                                : strlen(attribute->final_value);
 
                         if (html_attributes_length != 0) {
                             string_append_char(html_attributes, ' ');
                         }
 
+                        if (attribute->final_key == NULL) {
+                            attribute->final_key = string_strdup(entry->key);
+                        }
+
                         string_append_str(
                             html_attributes,
-                            attribute->final_key == NULL
-                                ? entry->key
-                                : attribute
-                                      ->final_key);  // TODO: Why name lowercase
-                                                     // entry->key?
+                            attribute->final_key);  // TODO: Why name lowercase
+                                                    // entry->key?
                         string_append_str(html_attributes, "=");
 
                         if (attribute_value_length > 1) {
                             string_append_str(html_attributes, "\"");
                         }
                         string_append_str(html_attributes,
-                                          attribute_values_str);
+                                          attribute->final_value);
                         if (attribute_value_length > 1) {
                             string_append_str(html_attributes, "\"");
-                        }
-
-                        if (attribute_values_str != NULL) {
-                            memory_destroy(attribute_values_str);
-                            attribute->final_value = NULL;
                         }
 
                         html_attributes_length++;
@@ -966,17 +966,25 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                             string_append_char(generator->media_css, ';');
                         }
 
+                        if (attribute->final_key == NULL) {
+                            attribute->final_key =
+                                string_strdup(attribute->key);
+                        }
+
                         string_append_str(generator->media_css,
-                                          attribute->final_key == NULL
-                                              ? attribute->key
-                                              : attribute->final_key);
+                                          attribute->final_key);
                         string_append_str(generator->media_css, ":");
-                        char *value =
-                            attribute->final_value == NULL
-                                ? array_value_stringify(attribute->values, ", ")
-                                : string_strdup(attribute->final_value);
-                        string_append_str(generator->media_css, value);
-                        memory_destroy(value);
+
+                        if (attribute->final_value == NULL) {
+                            attribute->final_value =
+                                array_value_stringify(attribute->values, ", ");
+                        } else {
+                            attribute->final_value =
+                                string_strdup(attribute->final_value);
+                        }
+
+                        string_append_str(generator->media_css,
+                                          attribute->final_value);
 
                         media_queries_styles_length++;
                     }

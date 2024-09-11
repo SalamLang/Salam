@@ -78,13 +78,11 @@ void generator_salam_layout_block(string_t* salam, ast_layout_block_t* block) {
  */
 void generator_salam_layout_attribute(string_t* salam,
                                       ast_layout_attribute_t* attribute) {
+    DEBUG_ME;
     IDENT(generator_salam_ident_size);
-    char* attribute_name = ast_layout_attribute_type_to_name(attribute->type);
-    char* attribute_value = array_value_stringify(attribute->values, ", ");
-
-    string_append_str(salam, attribute_name);
+    string_append_str(salam, attribute->final_key);
     string_append_str(salam, ": ");
-    string_append_str(salam, attribute_value);
+    string_append_str(salam, attribute->final_value);
     string_append_str(salam, "\n");
 }
 
@@ -98,6 +96,7 @@ void generator_salam_layout_attribute(string_t* salam,
  *
  */
 void generator_salam_layout_attributes(string_t* salam, hashmap_t* attributes) {
+    DEBUG_ME;
     if (attributes != NULL) {
         size_t attribute_capacity = attributes->capacity;
 
@@ -131,7 +130,10 @@ void generator_salam_layout_attributes(string_t* salam, hashmap_t* attributes) {
  */
 void generator_salam_layout_styles(string_t* salam,
                                    ast_layout_style_state_t* styles) {
-    // TODO
+    DEBUG_ME;
+    generator_salam_layout_attributes(salam, styles->normal);
+
+    generator_salam_layout_attributes(salam, styles->new);
 }
 
 /**
@@ -144,6 +146,7 @@ void generator_salam_layout_styles(string_t* salam,
  *
  */
 void generator_salam_layout_states(string_t* salam, hashmap_t* states) {
+    DEBUG_ME;
     // TODO
 }
 

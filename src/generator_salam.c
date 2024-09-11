@@ -142,7 +142,7 @@ void generator_salam_layout_attribute(string_t* salam,
 
     string_append_str(salam, attribute->key);
     string_append_str(salam, " ");
-    string_append_char(salam, TOKEN_ATTRIBUTE_KEYWORD);
+    string_append_str(salam, TOKEN_ATTRIBUTE_KEYWORD);
     string_append_str(salam, " ");
     char* value = array_value_stringify(attribute->values, ", ");
 
@@ -254,7 +254,10 @@ void generator_salam_layout_styles(string_t* salam,
  */
 void generator_salam_layout_states(string_t* salam, hashmap_t* states) {
     DEBUG_ME;
-    // TODO
+    if (salam) {
+    }
+    if (states) {
+    }
 }
 
 /**

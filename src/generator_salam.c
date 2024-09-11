@@ -80,8 +80,15 @@ void generator_salam_layout_attribute(string_t* salam,
                                       ast_layout_attribute_t* attribute) {
     DEBUG_ME;
     IDENT(generator_salam_ident_size);
+
+    if (attribute->final_key == NULL) {
+        attribute->final_key = string_strdup(attribute->key);
+    }
     string_append_str(salam, attribute->final_key);
     string_append_str(salam, ": ");
+    if (attribute->final_value == NULL) {
+        attribute->final_value = array_value_stringify(attribute->values, ", ");
+    }
     string_append_str(salam, attribute->final_value);
     string_append_str(salam, "\n");
 }
@@ -108,7 +115,43 @@ void generator_salam_layout_attributes(string_t* salam, hashmap_t* attributes) {
                     cast(ast_layout_attribute_t*, entry->value);
 
                 if (attribute->isStyle == true ||
-                    attribute->isContent == true) {
+                    // attribute->isContent == true ||
+                    attribute->ignoreMe == true) {
+                } else {
+                    generator_salam_layout_attribute(salam, attribute);
+                }
+
+                entry = cast(hashmap_entry_t*, entry->next);
+            }
+        }
+    }
+}
+
+/**
+ *
+ * @function generator_salam_layout_attributes_styles
+ * @brief Generate the Salam code for the attributes styles
+ * @params {string_t*} salam - Buffer
+ * @params {hashmap_t*} attributes - Attributes styles
+ * @returns {void}
+ *
+ */
+void generator_salam_layout_attributes_styles(string_t* salam,
+                                              hashmap_t* attributes) {
+    DEBUG_ME;
+    if (attributes != NULL) {
+        size_t attribute_capacity = attributes->capacity;
+
+        for (size_t i = 0; i < attribute_capacity; i++) {
+            hashmap_entry_t* entry = attributes->data[i];
+
+            while (entry) {
+                ast_layout_attribute_t* attribute =
+                    cast(ast_layout_attribute_t*, entry->value);
+
+                if (attribute->isStyle == false ||
+                    attribute->isContent == true ||
+                    attribute->ignoreMe == true) {
                 } else {
                     generator_salam_layout_attribute(salam, attribute);
                 }
@@ -131,9 +174,9 @@ void generator_salam_layout_attributes(string_t* salam, hashmap_t* attributes) {
 void generator_salam_layout_styles(string_t* salam,
                                    ast_layout_style_state_t* styles) {
     DEBUG_ME;
-    generator_salam_layout_attributes(salam, styles->normal);
+    generator_salam_layout_attributes_styles(salam, styles->normal);
 
-    generator_salam_layout_attributes(salam, styles->new);
+    generator_salam_layout_attributes_styles(salam, styles->new);
 }
 
 /**

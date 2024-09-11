@@ -646,11 +646,14 @@ bool is_utf8_alpha(char *utf8) {
     } else if ((*s >> 4) == 0xE) {
         if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80)
             return false;  // Invalid continuation bytes
-        codepoint = ((s[0] & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
+        codepoint =
+            ((s[0] & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
     } else if ((*s >> 3) == 0x1E) {
-        if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80 || (s[3] & 0xC0) != 0x80)
+        if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80 ||
+            (s[3] & 0xC0) != 0x80)
             return false;  // Invalid continuation bytes
-        codepoint = ((s[0] & 0x07) << 18) | ((s[1] & 0x3F) << 12) | ((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
+        codepoint = ((s[0] & 0x07) << 18) | ((s[1] & 0x3F) << 12) |
+                    ((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
     } else {
         return false;  // Invalid UTF-8 start byte
     }
@@ -660,8 +663,8 @@ bool is_utf8_alpha(char *utf8) {
     // return iswalpha(wc);
 
     // Check if the codepoint is alphabetic (manual check for Unicode ranges)
-    if ((codepoint >= 0x41 && codepoint <= 0x5A) ||  // A-Z
-        (codepoint >= 0x61 && codepoint <= 0x7A) ||  // a-z
+    if ((codepoint >= 0x41 && codepoint <= 0x5A) ||      // A-Z
+        (codepoint >= 0x61 && codepoint <= 0x7A) ||      // a-z
         (codepoint >= 0x0600 && codepoint <= 0x06FF) ||  // Arabic alphabet
         iswalpha(codepoint)) {  // Fallback to iswalpha for other languages
         return true;

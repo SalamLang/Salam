@@ -93,4 +93,16 @@ void generator_salam_layout_states(string_t* buffer, hashmap_t* states);
  */
 void generator_salam_ident(string_t* buffer, size_t ident);
 
+/**
+ *
+ * @function generator_salam_layout_attributes_styles
+ * @brief Generate the Salam code for the attributes styles
+ * @params {string_t*} salam - Buffer
+ * @params {hashmap_t*} attributes - Attributes styles
+ * @returns {void}
+ *
+ */
+void generator_salam_layout_attributes_styles(string_t* salam,
+                                              hashmap_t* attributes);
+
 #endif

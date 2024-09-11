@@ -51,7 +51,8 @@ void generator_salam_layout_block(string_t* salam, ast_layout_block_t* block) {
 
     IDENT(generator_salam_ident_size);
     string_append_str(salam, block_node_name);
-    string_append_str(salam, ":\n");
+    string_append_str(salam, TOKEN_BEGIN_KEYWORD);
+    string_append_char(salam, '\n');
 
     generator_salam_ident_size++;
 
@@ -71,7 +72,8 @@ void generator_salam_layout_block(string_t* salam, ast_layout_block_t* block) {
     generator_salam_ident_size--;
 
     IDENT(generator_salam_ident_size);
-    string_append_str(salam, "تمام\n");
+    string_append_str(salam, TOKEN_END_KEYWORD);
+    string_append_char(salam, '\n');
 }
 
 /**
@@ -89,7 +91,8 @@ void generator_salam_layout_node(string_t* salam, ast_layout_node_t* node) {
 
     IDENT(generator_salam_ident_size);
     string_append_str(salam, node_name);
-    string_append_str(salam, ":\n");
+    string_append_str(salam, TOKEN_BEGIN_KEYWORD);
+    string_append_char(salam, '\n');
 
     generator_salam_ident_size++;
 
@@ -109,7 +112,8 @@ void generator_salam_layout_node(string_t* salam, ast_layout_node_t* node) {
     generator_salam_ident_size--;
 
     IDENT(generator_salam_ident_size);
-    string_append_str(salam, "تمام\n");
+    string_append_str(salam, TOKEN_END_KEYWORD);
+    string_append_char(salam, '\n');
 }
 
 /**
@@ -127,7 +131,7 @@ void generator_salam_layout_attribute(string_t* salam,
     IDENT(generator_salam_ident_size);
 
     string_append_str(salam, attribute->key);
-    string_append_str(salam, ": ");
+    string_append_str(salam, " = ");
     char* value = array_value_stringify(attribute->values, ", ");
     string_append_str(salam, value);
     memory_destroy(value);

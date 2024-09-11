@@ -141,7 +141,9 @@ void generator_salam_layout_attribute(string_t* salam,
     IDENT(generator_salam_ident_size);
 
     string_append_str(salam, attribute->key);
-    string_append_str(salam, " = ");
+    string_append_str(salam, " ");
+    string_append_char(salam, TOKEN_ATTRIBUTE_KEYWORD);
+    string_append_str(salam, " ");
     char* value = array_value_stringify(attribute->values, ", ");
 
     string_append_char(salam, '"');

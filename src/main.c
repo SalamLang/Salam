@@ -12,10 +12,21 @@
  *
  */
 void lint(bool isCode, const char *path, char *content, char *build_file) {
+    printf("run lint on %s\n", content);
+
     lexer_t *lexer = lexer_create(path, content);
+    printf("before lexer lex\n");
     lexer_lex(lexer);
 
+    printf("after lexer\n");
+
     ast_t *ast = parser_parse(lexer);
+
+    printf("after parser\n");
+
+    generator_t *generator = generator_create(ast);
+
+    generator_code(generator);
 
     string_t *cleaned_code = generator_salam(ast);
 
@@ -24,6 +35,8 @@ void lint(bool isCode, const char *path, char *content, char *build_file) {
     } else {
         printf("%s\n", cleaned_code->data);
     }
+
+    generator_destroy(generator);
 
     string_destroy(cleaned_code);
 
@@ -136,6 +149,8 @@ void doargs(int argc, char **argv) {
     }
 
     const char *path = argv[1];
+    printf("path: %s\n", path);
+    printf("Argc: %d\n", argc);
 
     if (strcmp(path, "version") == 0) {
         printf("Salam %s\n", SALAM_VERSION);
@@ -166,7 +181,7 @@ void doargs(int argc, char **argv) {
 
             char *content = file_reads_binary(path, NULL);
 
-            char *output_file = argv[2];
+            char *output_file = argv[3];
 
             lint(false, path, content, output_file);
 

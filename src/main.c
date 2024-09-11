@@ -138,7 +138,31 @@ void run(bool isCode, const char *path, char *content, char *build_dir) {
 void doargs(int argc, char **argv) {
     DEBUG_ME;
     if (argc < 2) {
-        error(1, "Usage: %s <file>\n", argv[0]);
+        printf("Welcome to Salam Programming Language!\n");
+        printf(
+            "Salam is the first Persian/Iranian computer scripting "
+            "language.\n");
+        printf("\n");
+        printf("Usage:\n");
+        printf(
+            "salam <filename>                      # Execute a Salam script\n");
+        printf(
+            "salam code <content> <output_dir>     # Compile and run Salam "
+            "code\n");
+        printf("salam lint <filename> <output_dir>    # Lint a Salam script\n");
+        printf("salam lint code <content>             # Lint Salam code\n");
+        printf(
+            "salam version                         # Print the version of "
+            "Salam\n");
+        printf(
+            "salam update                          # Update Salam to the "
+            "latest version\n");
+        printf("\n");
+        printf("Feel free to explore and create using Salam!\n");
+        printf("\n");
+        printf("For more information, visit: https://salamlang.ir\n");
+
+        exit(1);
     }
 
     const char *path = argv[1];

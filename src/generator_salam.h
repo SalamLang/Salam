@@ -38,6 +38,52 @@ void generator_salam_layout_block(string_t* salam, ast_layout_block_t* block);
 
 /**
  *
+ * @function generator_salam_layout_attribute
+ * @brief Generate the Salam code for the attribute
+ * @params {string_t*} salam - Buffer
+ * @params {ast_layout_attribute_t*} attribute - Attribute
+ * @returns {void}
+ *
+ */
+void generator_salam_layout_attribute(string_t* salam,
+                                      ast_layout_attribute_t* attribute);
+
+/**
+ *
+ * @function generator_salam_layout_attributes
+ * @brief Generate the Salam code for the attributes
+ * @params {string_t*} salam - Buffer
+ * @params {hashmap_t*} attributes - Attributes
+ * @returns {void}
+ *
+ */
+void generator_salam_layout_attributes(string_t* salam, hashmap_t* attributes);
+
+/**
+ *
+ * @function generator_salam_layout_styles
+ * @brief Generate the Salam code for the styles
+ * @params {string_t*} salam - Buffer
+ * @params {hashmap_t*} styles - Styles
+ * @returns {void}
+ *
+ */
+void generator_salam_layout_styles(string_t* salam,
+                                   ast_layout_style_state_t* styles);
+
+/**
+ *
+ * @function generator_salam_layout_states
+ * @brief Generate the Salam code for the states
+ * @params {string_t*} buffer - Buffer
+ * @params {hashmap_t*} states - States
+ * @returns {void}
+ *
+ */
+void generator_salam_layout_states(string_t* buffer, hashmap_t* states);
+
+/**
+ *
  * @function generator_salam_ident
  * @brief Generate the Salam code for the indentation
  * @params {string_t*} buffer - Buffer

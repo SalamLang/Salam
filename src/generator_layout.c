@@ -409,9 +409,6 @@ void generator_code_head_meta_children(generator_t *generator,
                         ast_layout_attribute_t *attribute =
                             cast(ast_layout_attribute_t *, entry->value);
 
-                        char *value =
-                            array_value_stringify(attribute->values, ", ");
-
                         if (attribute->final_key == NULL) {
                             attribute->final_key = string_strdup(entry->key);
                         }
@@ -423,15 +420,12 @@ void generator_code_head_meta_children(generator_t *generator,
                         string_append_char(generator->css, ':');
 
                         if (attribute->final_value == NULL) {
-                            attribute->final_value = string_strdup(value);
+                            attribute->final_value =
+                                array_value_stringify(attribute->values, ", ");
                         }
 
                         string_append_str(generator->css,
                                           attribute->final_value);
-
-                        if (value != NULL) {
-                            memory_destroy(value);
-                        }
 
                         if (attributes_append_length != attributes_length - 1) {
                             string_append_char(generator->css, ';');
@@ -978,9 +972,6 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                         if (attribute->final_value == NULL) {
                             attribute->final_value =
                                 array_value_stringify(attribute->values, ", ");
-                        } else {
-                            attribute->final_value =
-                                string_strdup(attribute->final_value);
                         }
 
                         string_append_str(generator->media_css,

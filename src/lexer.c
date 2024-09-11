@@ -856,8 +856,6 @@ void lexer_lex_number(lexer_t *lexer, char *uc) {
         memory_destroy(uc);
     }
 
-    LEXER_PREV;
-
     token_type_t type = is_float ? TOKEN_NUMBER_FLOAT : TOKEN_NUMBER_INT;
     token_t *token = token_create(
         type, (location_t){lexer->index, 1, lexer->line, lexer->column,
@@ -1060,6 +1058,8 @@ void lexer_lex(lexer_t *lexer) {
 
     while ((c = LEXER_CURRENT) && c != '\0' &&
            lexer->index < lexer->source_length) {
+        // printf("c: %c, i: %zu, length: %zu\n", c, lexer->index,
+        //        lexer->source_length);
         size_t num_bytes;
         char *uc = char_utf8_decode(lexer->source, &lexer->index, &num_bytes);
 

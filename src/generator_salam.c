@@ -146,9 +146,9 @@ void generator_salam_layout_attribute(string_t* salam,
     string_append_str(salam, " ");
     char* value = array_value_stringify(attribute->values, ", ");
 
-    string_append_char(salam, '"');
+    string_append_str(salam, "«");
     string_append_str(salam, value);
-    string_append_char(salam, '"');
+    string_append_str(salam, "»");
 
     memory_destroy(value);
     string_append_str(salam, "\n");

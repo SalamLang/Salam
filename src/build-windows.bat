@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 
 REM Set the output executable name
 set output=salam
@@ -8,11 +9,28 @@ set sources=log.c file.c memory.c array.c parser.c parser_layout.c generator.c g
 
 REM Compile each source file into an object file
 for %%f in (%sources%) do (
-    gcc -std=c11 -c %%f -o %%~nf.wino
+	echo Compiling %%f...
+	gcc -std=c11 -c %%f -o %%~nf.wino
+	if !errorlevel! neq 0 (
+		echo Error: Compilation failed for %%f with exit code !errorlevel!
+		exit /b !errorlevel!
+	)
 )
 
 REM Link all object files into the final executable
+echo Linking object files...
 gcc -o %output% *.wino
+if errorlevel 1 (
+	echo Error: Linking failed with exit code %errorlevel%
+	exit /b %errorlevel%
+)
 
 REM Run the executable with the provided argument
+echo Running the executable...
 %output% ..\example\test6.salam ..\out\
+if errorlevel 1 (
+	echo Error: Execution failed with exit code %errorlevel%
+	exit /b %errorlevel%
+)
+
+echo Script completed successfully.

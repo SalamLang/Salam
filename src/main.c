@@ -69,11 +69,11 @@ void run(bool isCode, const char *path, char *content, char *build_dir) {
 
 	generator_t *generator = generator_create(ast);
 
-	if (build_dir != NULL) {
+	if (isCode == false && build_dir != NULL) {
 		string_set_str(generator->output_dir, build_dir);
 	}
 
-	if (isCode) {
+	if (isCode == true) {
 		generator->inlineCSS = true;
 		generator->inlineJS = true;
 	}
@@ -82,8 +82,13 @@ void run(bool isCode, const char *path, char *content, char *build_dir) {
 
 	// generator_debug(generator);
 
-	if (isCode) {
-		printf("%s\n", generator->html->data);
+	if (isCode == true) {
+		if (build_dir == NULL) {
+			printf("%s\n", generator->html->data);
+		}
+		else {
+			file_writes(build_dir, generator->html->data);
+		}
 	} else {
 		generator_save(generator, "index.html", "style.css", "script.js");
 	}

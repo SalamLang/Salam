@@ -145,7 +145,7 @@ char *ast_value_data(ast_value_t *value) {
  */
 ast_block_t *ast_block_create(ast_block_type_t type, ast_type_t parent_type) {
     DEBUG_ME;
-    ast_block_t *block = malloc(sizeof(ast_block_t));
+    ast_block_t *block = memory_allocate(sizeof(ast_block_t));
 
     block->type = type;
     block->parent_type = parent_type;

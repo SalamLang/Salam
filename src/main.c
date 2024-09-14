@@ -13,6 +13,7 @@
  */
 void lint(bool isCode, const char *path, char *content, char *build_file) {
     lexer_t *lexer = lexer_create(path, content);
+
     lexer_lex(lexer);
 
     ast_t *ast = parser_parse(lexer);
@@ -55,6 +56,7 @@ void lint(bool isCode, const char *path, char *content, char *build_file) {
  */
 void run(bool isCode, const char *path, char *content, char *build_dir) {
     lexer_t *lexer = lexer_create(path, content);
+
     lexer_lex(lexer);
 
     // lexer_debug(lexer);
@@ -65,61 +67,36 @@ void run(bool isCode, const char *path, char *content, char *build_dir) {
 
     // ast_debug(ast);
 
-    // printf("end ast debug\n");
-
     generator_t *generator = generator_create(ast);
 
-    // printf("generate code\n");
-
-    if (build_dir != NULL) {
+    if (isCode == false && build_dir != NULL) {
         string_set_str(generator->output_dir, build_dir);
     }
 
-    // printf("generate code\n");
+    if (isCode == true) {
+        generator->inlineCSS = true;
+        generator->inlineJS = true;
+    }
 
     generator_code(generator);
 
-    // printf("generate debug\n");
-
     // generator_debug(generator);
 
-    if (isCode) {
-        if (generator->css->length > 0 || generator->media_css->length > 0) {
-            printf("<style>\n");
-
-            if (generator->css->length > 0) {
-                printf("%s\n", generator->css->data);
-            }
-
-            if (generator->media_css->length > 0) {
-                printf("%s\n", generator->media_css->data);
-            }
-
-            printf("</style>\n\n");
-        }
-
-        printf("%s\n", generator->html->data);
-
-        if (generator->js->length > 0) {
-            printf("%s\n", generator->js->data);
+    if (isCode == true) {
+        if (build_dir == NULL) {
+            printf("%s\n", generator->html->data);
+        } else {
+            file_writes(build_dir, generator->html->data);
         }
     } else {
-        // printf("generate save\n");
         generator_save(generator, "index.html", "style.css", "script.js");
     }
 
-    // printf("generate destroy\n");
     generator_destroy(generator);
-
-    // printf("ast destroy\n");
 
     ast_destroy(ast);
 
-    // printf("end ast destroy\n");
-
     lexer_destroy(lexer);
-
-    // printf("end lexer destroy\n");
 
     if (!isCode) {
         printf("END SUCCESS\n");

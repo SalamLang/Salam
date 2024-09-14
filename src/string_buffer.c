@@ -810,7 +810,7 @@ void string_number2number(char *str) {
     size_t len = strlen(str);
     wchar_t wc;
     int wcl;
-    char *temp_str = (char *)malloc((len + 1) * sizeof(char));
+    char *temp_str = (char *)memory_allocate((len + 1) * sizeof(char));
 
     char *src_ptr = str;
     char *dest_ptr = temp_str;

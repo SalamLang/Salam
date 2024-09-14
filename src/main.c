@@ -150,14 +150,17 @@ void doargs(int argc, char **argv) {
             "%s code <content> <output_dir>     # Compile and run Salam "
             "code\n",
             argv[0]);
+        printf("\n");
         printf("%s lint <filename> <output_dir>    # Lint a Salam script\n",
                argv[0]);
         printf("%s lint code <content>             # Lint Salam code\n",
                argv[0]);
+        printf("\n");
         printf(
             "%s version                         # Print the version of "
             "Salam\n",
             argv[0]);
+        printf("\n");
         printf(
             "%s update                          # Update Salam to the "
             "latest version\n",

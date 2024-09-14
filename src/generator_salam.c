@@ -144,11 +144,12 @@ void generator_salam_layout_attribute(string_t* salam,
     string_append_str(salam, " ");
     string_append_str(salam, TOKEN_ATTRIBUTE_KEYWORD);
     string_append_str(salam, " ");
+
     char* value = array_value_stringify(attribute->values, ", ");
 
-    string_append_str(salam, "«");
+    string_append_str(salam, TOKEN_STRING_BEGIN_KEYWORD);
     string_append_str(salam, value);
-    string_append_str(salam, "»");
+    string_append_str(salam, TOKEN_STRING_END_KEYWORD);
 
     memory_destroy(value);
     string_append_str(salam, "\n");

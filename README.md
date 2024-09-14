@@ -26,13 +26,13 @@ Salam is the first Persian/Iranian computer scripting language.
 Usage:
 ./salam <filename>                      # Execute a Salam script
 ./salam code <content> <output_dir>     # Compile and run Salam code
+
 ./salam lint <filename> <output_dir>    # Lint a Salam script
 ./salam lint code <content>             # Lint Salam code
-./salam version                         # Print the version of Salam
-./salam update                          # Update Salam to the latest version
 
-Example:
-  salam my_script.salam         # Run the Salam script 'my_script.salam'
+./salam version                         # Print the version of Salam
+
+./salam update                          # Update Salam to the latest version
 
 Feel free to explore and create using Salam!
 For more information, visit: https://salamlang.ir

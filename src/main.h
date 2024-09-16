@@ -10,6 +10,7 @@
 #include "array.h"
 #include "ast.h"
 #include "base.h"
+#include "downloader.h"
 #include "file.h"
 #include "generator.h"
 #include "generator_salam.h"

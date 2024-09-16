@@ -53,8 +53,6 @@ bool download(FILE *fp, const char *port, const char *hostname,
     char request[1024];
     char buffer[BUFFER_SIZE];
 
-    parse_url(path, hostname, path);
-
     snprintf(request, sizeof(request), "GET %s HTTP/1.0\r\nHost: %s\r\n\r\n",
              path, hostname);
 

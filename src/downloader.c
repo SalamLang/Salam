@@ -135,8 +135,18 @@ bool download(FILE *fp, const char *port, const char *hostname,
         return false;
     }
 
+    int header_found = 0;
     while ((bytes_received = recv(sockfd, buffer, BUFFER_SIZE, 0)) > 0) {
-        fwrite(buffer, 1, bytes_received, fp);
+        if (!header_found) {
+            char *header_end = strstr(buffer, "\r\n\r\n");
+            if (header_end) {
+                header_found = 1;
+                size_t header_length = header_end - buffer + 4;
+                fwrite(header_end + 4, 1, bytes_received - header_length, fp);
+            }
+        } else {
+            fwrite(buffer, 1, bytes_received, fp);
+        }
     }
 
     if (bytes_received == -1) {

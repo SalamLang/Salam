@@ -10,6 +10,7 @@ sources=(
 	"memory.c"
 	"array.c"
 	"parser.c"
+	"downloader.c"
 	"parser_layout.c"
 	"generator.c"
 	"generator_layout.c"

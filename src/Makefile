@@ -15,7 +15,7 @@ CFLAGS = -g -Walloca -Wextra -Wall -fsanitize=address,undefined -std=c99
 
 TARGET = salam
 
-SRCS = log.c file.c memory.c array.c parser.c parser_layout.c generator.c generator_layout.c generator_salam.c generator_layout_style.c generator_identifier.c string_buffer.c validator.c hashmap.c hashmap_custom.c array_custom.c lexer.c ast.c ast_layout.c ast_layout_style.c main.c
+SRCS = log.c file.c memory.c array.c downloader.c parser.c parser_layout.c generator.c generator_layout.c generator_salam.c generator_layout_style.c generator_identifier.c string_buffer.c validator.c hashmap.c hashmap_custom.c array_custom.c lexer.c ast.c ast_layout.c ast_layout_style.c main.c
 
 OBJS = $(SRCS:.c=.o)
 

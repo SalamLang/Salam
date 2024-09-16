@@ -171,7 +171,33 @@ void doargs(int argc, char **argv) {
     } else if (strcmp(path, "help") == 0) {
         help(argv[0]);
     } else if (strcmp(path, "update") == 0) {
-        printf("TODO: auto update feature...\n");
+        printf("Check latest version...\n");
+
+        const char *output_file = "update.tmp";
+        const char *port = "80";
+        const char *hostname = "versions.salamlang.ir";
+
+#ifdef _WIN32
+        const char *path = "/latest/windows";
+#elif __APPLE__
+        const char *path = "/latest/macos";
+#elif __linux__
+        const char *path = "/latest/linux";
+#else
+        printf("Unsupported OS\n");
+        exit(1);
+#endif
+
+        FILE *fp = fopen(output_file, "wb");
+
+        printf("Connecting to the server...\n");
+        bool res = download(fp, port, hostname, path);
+
+        if (res == true) {
+            printf("Download successful.\n");
+        } else {
+            printf("Download failed, something went wrong.\n");
+        }
     } else if (strcmp(path, "lint") == 0) {
         if (argc <= 2) {
             error(1, "Usage: %s lint <file>\n", argv[0]);

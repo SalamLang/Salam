@@ -19,7 +19,7 @@ for %%f in (%sources%) do (
 
 REM Link all object files into the final executable
 echo Linking object files...
-gcc -o %output% *.wino
+gcc -o %output% *.wino -lws2_32
 if errorlevel 1 (
 	echo Error: Linking failed with exit code %errorlevel%
 	exit /b %errorlevel%

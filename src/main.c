@@ -105,6 +105,49 @@ void run(bool isCode, const char *path, char *content, char *build_dir) {
 
 /**
  *
+ * @function help
+ * @brief Display help message
+ * @params {char*} app - Application name
+ * @returns {void}
+ *
+ */
+void help(char *app) {
+    printf("Welcome to Salam Programming Language!\n");
+    printf(
+        "Salam is the first Persian/Iranian computer scripting "
+        "language.\n");
+    printf("\n");
+    printf("Usage:\n");
+    printf("%s <filename>                      # Execute a Salam script\n",
+           app);
+    printf(
+        "%s code <content> <output_dir>     # Compile and run Salam "
+        "code\n",
+        app);
+    printf("\n");
+    printf("%s lint <filename> <output_dir>    # Lint a Salam script\n", app);
+    printf("%s lint code <content>             # Lint Salam code\n", app);
+    printf("\n");
+    printf(
+        "%s version                         # Print the version of "
+        "Salam\n",
+        app);
+    printf("\n");
+    printf(
+        "%s update                          # Update Salam to the "
+        "latest version\n",
+        app);
+
+    printf("\n");
+    printf("Feel free to explore and create using Salam!\n");
+    printf("\n");
+    printf("For more information, visit: https://salamlang.ir\n");
+
+    exit(1);
+}
+
+/**
+ *
  * @function doargs
  * @brief Handle command line arguments
  * @params {int} argc - Number of arguments
@@ -115,40 +158,7 @@ void run(bool isCode, const char *path, char *content, char *build_dir) {
 void doargs(int argc, char **argv) {
     DEBUG_ME;
     if (argc < 2) {
-        printf("Welcome to Salam Programming Language!\n");
-        printf(
-            "Salam is the first Persian/Iranian computer scripting "
-            "language.\n");
-        printf("\n");
-        printf("Usage:\n");
-        printf("%s <filename>                      # Execute a Salam script\n",
-               argv[0]);
-        printf(
-            "%s code <content> <output_dir>     # Compile and run Salam "
-            "code\n",
-            argv[0]);
-        printf("\n");
-        printf("%s lint <filename> <output_dir>    # Lint a Salam script\n",
-               argv[0]);
-        printf("%s lint code <content>             # Lint Salam code\n",
-               argv[0]);
-        printf("\n");
-        printf(
-            "%s version                         # Print the version of "
-            "Salam\n",
-            argv[0]);
-        printf("\n");
-        printf(
-            "%s update                          # Update Salam to the "
-            "latest version\n",
-            argv[0]);
-
-        printf("\n");
-        printf("Feel free to explore and create using Salam!\n");
-        printf("\n");
-        printf("For more information, visit: https://salamlang.ir\n");
-
-        exit(1);
+        help(argv[0]);
     }
 
     const char *path = argv[1];
@@ -158,6 +168,8 @@ void doargs(int argc, char **argv) {
     if (strcmp(path, "version") == 0) {
         printf("Salam %s\n", SALAM_VERSION);
         exit(1);
+    } else if (strcmp(path, "help") == 0) {
+        help(argv[0]);
     } else if (strcmp(path, "update") == 0) {
         printf("TODO: auto update feature...\n");
     } else if (strcmp(path, "lint") == 0) {

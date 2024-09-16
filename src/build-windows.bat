@@ -10,7 +10,7 @@ set sources=log.c file.c memory.c downloader.c array.c parser.c parser_layout.c 
 REM Compile each source file into an object file
 for %%f in (%sources%) do (
 	echo Compiling %%f...
-	gcc -std=c11 -c %%f -o %%~nf.wino
+	gcc -std=c11 -c %%f -o %%~nf.wino -lws2_32
 	if !errorlevel! neq 0 (
 		echo Error: Compilation failed for %%f with exit code !errorlevel!
 		exit /b !errorlevel!

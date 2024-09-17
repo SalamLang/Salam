@@ -860,6 +860,7 @@ const ast_layout_attribute_style_pair_t
         {"دایره‌ای", "circle"},
         {"مستطیل", "square"},
         {"غیر فعال", "none"},
+        {"پنهان", "none"},
         {NULL, NULL},
 };
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_margin[] =

@@ -1731,6 +1731,11 @@ ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(
     "style_align_items", "تراز کردن محتوا", "align-items",
     AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING,
     ast_layout_allowed_style_list_align_items, NULL)
+ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(
+    AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_ALIGN_ITEMS, "STYLE_ALIGN_ITEMS",
+    "style_align_items", "تراز محتوا", "align-items",
+    AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING,
+    ast_layout_allowed_style_list_align_items, NULL)
 
 ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_TEXT_INDENT,
                                 "STYLE_TEXT_INDENT", "style_text_indent",

@@ -486,4 +486,10 @@ char *string_strdup(const char *source);
  */
 int my_strcasecmp(const char *s1, const char *s2);
 
+/**
+ *
+ * @function string_arabic2persian
+ */
+char *string_arabic2persian(const char *arabic);
+
 #endif

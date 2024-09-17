@@ -221,8 +221,6 @@ ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_TABLE_FOOTER, "TABLE_FOOTER",
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_TR, "TABLE_TR", "table_tr", "tr", "ردیف",
                 false)
-ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_TABLE_TR, "TABLE_TR", "table_tr", "tr",
-                       "رديف", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_TD, "TABLE_TD", "table_td", "td", "سلول",
                 false)

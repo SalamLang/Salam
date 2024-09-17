@@ -596,6 +596,7 @@ const ast_layout_attribute_style_pair_t
         {"بلوک خطی", "inline-block"},
         {"پنهان", "none"},
         {"فلکس", "flex"},
+        {"منعطف", "flex"},
         {"محتوا", "contents"},
         {"شبکه", "grid"},
         {"فرعی", "subgrid"},

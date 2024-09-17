@@ -931,7 +931,7 @@ void lexer_lex_identifier(lexer_t *lexer, char *uc) {
         type, (location_t){lexer->index, 1, lexer->line, lexer->column,
                            lexer->line, lexer->column});
     token->data_type = TOKEN_IDENTIFIER;
-    token->data.string = string_strdup(value->data);
+    token->data.string = string_arabic2persian(value->data);
 
     string_destroy(value);
 

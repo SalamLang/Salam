@@ -1062,3 +1062,11 @@ string_t *string_create_from(const char *data, size_t start, size_t end) {
 
     return name;
 }
+
+/**
+ *
+ * @function string_arabic2persian
+ */
+char *string_arabic2persian(const char *arabic) {
+    return replace_all_substrings(arabic, "ي", "ی");
+}

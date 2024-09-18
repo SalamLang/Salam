@@ -593,6 +593,8 @@ bool token_belongs_to_ast_layout_node(
     else if (attribute->parent_node_type == AST_LAYOUT_TYPE_TEXTAREA) {
         ast_layout_attribute_type_t valid_attributes[] = {
             AST_LAYOUT_ATTRIBUTE_TYPE_PLACEHOLDER,
+            AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
+            AST_LAYOUT_ATTRIBUTE_TYPE_VALUE,  // Not needed
         };
 
         size_t valid_attributes_length =
@@ -607,6 +609,7 @@ bool token_belongs_to_ast_layout_node(
     else if (attribute->parent_node_type == AST_LAYOUT_TYPE_INPUT) {
         ast_layout_attribute_type_t valid_attributes[] = {
             AST_LAYOUT_ATTRIBUTE_TYPE_PLACEHOLDER,
+            AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
             AST_LAYOUT_ATTRIBUTE_TYPE_VALUE,
         };
 
@@ -651,6 +654,31 @@ bool token_belongs_to_ast_layout_node(
 
         if (is_attribute_type_in_array(attribute_key_type, valid_attributes,
                                        valid_attributes_length)) {
+            return true;
+        }
+    }
+    // FORM
+    else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FORM) {
+        ast_layout_attribute_type_t valid_attributes[] = {
+            AST_LAYOUT_ATTRIBUTE_TYPE_TYPE,
+            AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
+        };
+
+        size_t valid_attributes_length =
+            sizeof(valid_attributes) / sizeof(valid_attributes[0]);
+
+        if (is_attribute_type_in_array(attribute_key_type, valid_attributes,
+                                       valid_attributes_length)) {
+            if (attribute->final_key != NULL) {
+                memory_destroy(attribute->final_key);
+            }
+
+            if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_TYPE) {
+                attribute->final_key = string_strdup("method");
+            } else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_SRC) {
+                attribute->final_key = string_strdup("action");
+            }
+
             return true;
         }
     }

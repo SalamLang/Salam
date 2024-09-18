@@ -278,6 +278,9 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DIV, "DIV", "div", "div", "جعبه", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LINK, "LINK", "link", "a", "لینک", false)
 
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_LINK, "LINK", "link", "a", "پیوند",
+                       false)
+
 // Our Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_INCLUDE, "INCLUDE", "include", "include",
                 "فراخوانی", true)

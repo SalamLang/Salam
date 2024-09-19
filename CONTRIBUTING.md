@@ -43,7 +43,7 @@ Welcome to Salam! We're excited to have you on board and contributing to our ope
    ```
 
 7. **Push Your Changes**: Push your changes to your fork on GitHub.
-   
+
    ```
    git push origin feature/my-new-feature
    ```
@@ -66,7 +66,7 @@ We encourage the use of formatting and linting tools to maintain code quality:
 - clang-format: We use `clang-format` to maintain consistent code formatting for C/C++ files. Ensure that you run `clang-format` on your code before submitting a pull request. You can configure your editor to apply this automatically.
 
    To format your code using `clang-format`:
-   
+
    ```bash
    clang-format -i <your-file>
    ```

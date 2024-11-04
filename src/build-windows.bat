@@ -11,6 +11,10 @@ REM Ensure the output directory exists
 if not exist "..\out" (
 	echo Creating output directory...
 	mkdir ..\out
+	if errorlevel 1 (
+		echo Error: Failed to create output directory.
+		exit /b %errorlevel%
+	)
 )
 
 REM Compile each source file into an object file

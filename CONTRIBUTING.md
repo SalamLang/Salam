@@ -65,19 +65,19 @@ We encourage the use of formatting and linting tools to maintain code quality:
 
 - clang-format: We use `clang-format` to maintain consistent code formatting for C/C++ files. Ensure that you run `clang-format` on your code before submitting a pull request. You can configure your editor to apply this automatically.
 
-   To format your code using `clang-format`:
+  To format your code using `clang-format`:
 
-   ```bash
-   clang-format -i <your-file>
-   ```
+  ```bash
+  clang-format -i <your-file>
+  ```
 
 - clang-tidy: Use `clang-tidy` to catch common errors, style issues, and potential bugs early in the development process. Running clang-tidy as part of your development workflow is highly recommended.
 
-    To run clang-tidy:
+  To run clang-tidy:
 
-   ```bash
-   clang-tidy <your-file>
-   ```
+  ```bash
+  clang-tidy <your-file>
+  ```
 
 - Other Tools: Feel free to use other linting or static analysis tools, such as `cppcheck` or `valgrind`, to ensure the code is efficient and bug-free.
 
@@ -87,7 +87,7 @@ We recommend using Git hooks or pre-commit hooks to automatically run formatters
 
 1. Install `pre-commit`:
 
-   ``` bash
+   ```bash
    pip install pre-commit
    ```
 

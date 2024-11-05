@@ -8,10 +8,10 @@ INPUT_FILE = ../example/repeat-block.salam
 OUTPUT_DIR = ../out/
 
 CC = gcc
-CFLAGS = -std=c11 -Walloca -Wextra -Wall
-# CFLAGS = -std=c99
-# CFLAGS = -std=c11
-CFLAGS = -g -Walloca -Wextra -Wall -fsanitize=address,undefined -std=c99
+
+CFLAGS = -std=c11 -Wall -O3
+
+DEBUG_FLAGS = -g -Walloca -Wextra -fsanitize=address,undefined
 
 TARGET = salam
 
@@ -24,6 +24,9 @@ all: $(TARGET)
 
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
+
+debug: CFLAGS = -std=c11 -Wall $(DEBUG_FLAGS)
+debug: $(TARGET)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -39,4 +42,4 @@ clean:
 	rm -rf $(OUTPUT_DIR)
 	rm -f $(OBJS) $(WIN_OBJS) $(TARGET)
 
-.PHONY: all clean
+.PHONY: all clean debug

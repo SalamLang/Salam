@@ -20,7 +20,7 @@ Salam Language, inspired by the Persian and Arabic roots of the word `salam`, wh
 
 ```
 $ ./salam
-Welcome to Salam Programming Language.
+Welcome to Salam Programming Language!
 Salam is the first Persian/Iranian computer scripting language.
 
 Usage:

@@ -101,4 +101,4 @@ We recommend using Git hooks or pre-commit hooks to automatically run formatters
 
 If you have any questions or need assistance, feel free to reach out to the project maintainers or the community. We're here to support each other in making Salam the best it can be.
 
-Thank you for your interest in contributing to Salam, We appreciate your help in making this project a success. Happy coding!
+Thank you for your interest in contributing to Salam, We appreciate your help in making this project a success. Happy coding

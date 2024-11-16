@@ -1,5 +1,5 @@
-import os
 import filecmp
+import os
 from pathlib import Path
 
 salam_bin = "/mnt/c/Users/MAX/Salam/src/main"

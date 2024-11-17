@@ -5,7 +5,7 @@ REM Set the output executable name
 set output=salam
 
 REM List of source files
-set sources=log.c file.c memory.c downloader.c array.c parser.c parser_layout.c generator.c generator_layout.c generator_salam.c generator_layout_style.c generator_identifier.c string_buffer.c validator.c hashmap.c hashmap_custom.c array_custom.c lexer.c ast.c ast_layout.c ast_layout_style.c main.c
+set sources=src/log.c src/file.c src/memory.c src/downloader.c src/array.c src/parser.c src/parser_layout.c src/generator.c src/generator_layout.c src/generator_salam.c src/generator_layout_style.c src/generator_identifier.c src/string_buffer.c src/validator.c src/hashmap.c src/hashmap_custom.c src/array_custom.c src/lexer.c src/ast.c src/ast_layout.c src/ast_layout_style.c src/main.c
 
 REM Ensure the output directory exists
 if not exist "..\out" (

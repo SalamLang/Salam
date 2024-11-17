@@ -57,4 +57,8 @@ checkupdate: checkinstall
 
 .PHONY: install
 install:
+	@if ! command -v pip >/dev/null 2>&1; then \
+		echo "Error: pip is not installed. Please install it first."; \
+		exit 1; \
+	fi
 	pip install -r requirements.txt

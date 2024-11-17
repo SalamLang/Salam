@@ -43,3 +43,5 @@ For more information, visit: https://salamlang.ir
 Want to contribute to Salam? Check out our [Contributing Guide](CONTRIBUTING.md) for more information.
 
 All contributors are expected to adhere to our [Code of Conduct](CODE_OF_CONDUCT.md). Please make sure you are familiar with it before participating in this project.
+
+Copyright 2024, Salam Language Team

@@ -28,9 +28,23 @@ char *file_reads(const char *path, size_t *size) {
     fseek(file, 0, SEEK_SET);
 
     char *content = (char *)memory_allocate(file_capacity + 1);
-    fread(content, 1, file_capacity, file);
-    content[file_capacity] = '\0';
+    if (content == NULL) {
+        fclose(file);
+        printf("Failed to allocate memory for file content\n");
+        panic("");
+        return NULL;
+    }
 
+    size_t read_size = fread(content, 1, file_capacity, file);
+    if (read_size != file_capacity) {
+        fclose(file);
+        free(content);
+        printf("Failed to read the entire file content\n");
+        panic("");
+        return NULL;
+    }
+
+    content[file_capacity] = '\0';
     fclose(file);
 
     return content;
@@ -63,9 +77,23 @@ char *file_reads_binary(const char *path, size_t *size) {
     fseek(file, 0, SEEK_SET);
 
     char *content = (char *)memory_allocate(file_capacity + 1);
-    fread(content, 1, file_capacity, file);
-    content[file_capacity] = '\0';
+    if (content == NULL) {
+        fclose(file);
+        printf("Failed to allocate memory for file content\n");
+        panic("");
+        return NULL;
+    }
 
+    size_t read_size = fread(content, 1, file_capacity, file);
+    if (read_size != file_capacity) {
+        fclose(file);
+        free(content);
+        printf("Failed to read the entire file content\n");
+        panic("");
+        return NULL;
+    }
+
+    content[file_capacity] = '\0';
     fclose(file);
 
     return content;

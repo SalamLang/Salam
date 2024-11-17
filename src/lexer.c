@@ -531,14 +531,22 @@ token_type_t token_char_type(char c) {
  * @returns {char*} - String representation of the token
  *
  */
-char *token_stringify(token_t *token) {
+char *token_stringify(token_t *token)
+{
     DEBUG_ME;
-    static char buffer[1024];
+
     const char *type = token_type_stringify(token->type);
     const char *value = token_value_stringify(token);
     const char *location = location_stringify(token->location);
 
-    snprintf(buffer, sizeof(buffer), "%s: %s at %s", type, value, location);
+    size_t size = strlen(type) + strlen(value) + strlen(location) + strlen(":  at ") + 1;
+    char *buffer = malloc(size);
+    if (!buffer) {
+        fprintf(stderr, "Memory allocation failed\n");
+        return NULL;
+    }
+
+    snprintf(buffer, size, "%s: %s at %s", type, value, location);
 
     return buffer;
 }
@@ -551,7 +559,8 @@ char *token_stringify(token_t *token) {
  * @returns {void}
  *
  */
-void token_print(token_t *token) {
+void token_print(token_t *token)
+{
     DEBUG_ME;
     printf("Token: ");
     printf("%s\n", token_stringify(token));

@@ -33,14 +33,26 @@ clean:
 
 .PHONY: check
 check: checkinstall
+	@if ! command -v pre-commit >/dev/null 2>&1; then \
+		echo "Error: pre-commit is not installed. Please install it first."; \
+		exit 1; \
+	fi
 	pre-commit run --all-files
 
 .PHONY: checkinstall
 checkinstall:
+	@if ! command -v pre-commit >/dev/null 2>&1; then \
+		echo "Error: pre-commit is not installed. Please install it first."; \
+		exit 1; \
+	fi
 	pre-commit install
 
 .PHONY: checkupdate
 checkupdate: checkinstall
+	@if ! command -v pre-commit >/dev/null 2>&1; then \
+		echo "Error: pre-commit is not installed. Please install it first."; \
+		exit 1; \
+	fi
 	pre-commit autoupdate
 
 .PHONY: install

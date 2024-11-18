@@ -7,6 +7,7 @@ if ! command -v emcc >/dev/null 2>&1; then
 fi
 
 OUTPUT_BASE="salam-wa"
+EDITOR_DIR="../Salam-Editor/"
 
 sources=(
 	"src/log.c"
@@ -49,6 +50,16 @@ if [ $? -eq 0 ]; then
 	echo "  ${OUTPUT_BASE}.html"
 	echo "  ${OUTPUT_BASE}.js"
 	echo "  ${OUTPUT_BASE}.wasm"
+
+	if [ -d "$EDITOR_DIR" ]; then
+		echo "Copying output files to $EDITOR_DIR"
+		cp ${OUTPUT_BASE}.html "$EDITOR_DIR"
+		cp ${OUTPUT_BASE}.js "$EDITOR_DIR"
+		cp ${OUTPUT_BASE}.wasm "$EDITOR_DIR"
+		echo "Files copied successfully."
+	else
+		echo "Directory $EDITOR_DIR does not exist. Skipping copy."
+	fi
 else
 	echo "Compilation failed."
 	exit 1

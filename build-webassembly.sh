@@ -35,14 +35,14 @@ sources=(
 
 echo "Compiling C files to WebAssembly..."
 emcc "${sources[@]}" -o ${OUTPUT_BASE}.html \
-	-s ALLOW_MEMORY_GROWTH=1 \
-	-s EXIT_RUNTIME=1 \
-	-s VERBOSE=1 \
+	-s "ALLOW_MEMORY_GROWTH=1" \
+	-s "EXIT_RUNTIME=0" \
+	-s "VERBOSE=1" \
 	-s "EXPORTED_RUNTIME_METHODS=['callMain']" \
-	# -s NO_EXIT_RUNTIME=1 \
+	-s "ASSERTIONS=2" \
+	# -s "NO_EXIT_RUNTIME=1" \
 	# -s "EXPORTED_FUNCTIONS=['_main']"
-	-s ASSERTIONS=2 \
-	# -s ASSERTIONS=0 \
+	# -s "ASSERTIONS=0" \
 
 if [ $? -eq 0 ]; then
 	echo "Compilation successful. Output files:"

@@ -1,12 +1,21 @@
 // ----------- BEGIN AUTO GENERATED ----------- //
 AST_TYPE(AST_TYPE_BLOCK, "BLOCK", "block")
+
 AST_TYPE(AST_TYPE_IF, "IF", "if")
+
 AST_TYPE(AST_TYPE_ELSE_IF, "ELSE_IF", "else_if")
+
 AST_TYPE(AST_TYPE_RETURN, "RETURN", "return")
+
 AST_TYPE(AST_TYPE_IMPORT, "IMPORT", "import")
+
 AST_TYPE(AST_TYPE_PRINT, "PRINT", "print")
+
 AST_TYPE(AST_TYPE_FUNCTION, "FUNCTION", "function")
+
 AST_TYPE(AST_TYPE_LAYOUT, "LAYOUT", "layout")
+
 AST_TYPE(AST_TYPE_ERROR, "ERROR", "error")
+
 // ----------- END AUTO GENERATED ----------- //
 

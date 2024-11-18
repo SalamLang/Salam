@@ -37,7 +37,7 @@ bool has_font_extension(char *value, char **out_extension) {
         ".svg", ".svgz", ".woff", ".woff2",
     };
     const char *names[] = {
-        "collection", "collection", "embedded-opentype", "opentype", "opentye",
+        "collection", "collection", "embedded-opentype", "opentype", "opentype",
         "svg",        "svg",        "truetype",          "woff",     "woff2",
     };
 

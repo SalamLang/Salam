@@ -563,7 +563,7 @@ bool token_belongs_to_ast_layout_node(
 
                 return true;
             } else if (attribute_key_type ==
-                       AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_DISPLAY) {
+                       AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FONT_DISPLAY) {
                 if (validate_style_value_string(
                         NULL, NULL, attribute,
                         ast_layout_allowed_style_list_font_display,

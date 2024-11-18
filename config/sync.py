@@ -53,7 +53,7 @@ def printify_layout_attribute_style_type(item):
 	global SELECTED_LANGUAGE
 
 	def command(value):
-		idtext = item["id"].replace("AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_", "")
+		idtext = item["id"].replace("AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", "")
   
 		return (
 			f"({item["id"]}, "

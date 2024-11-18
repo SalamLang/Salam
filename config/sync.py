@@ -16,7 +16,24 @@ def printify_type(item):
 		f"{idtext}, "
 		f"\"{idtext}\", "
 		f"\"{idtext.lower()}\""
-		f")\n\n"
+		f")\n"
+	)
+
+def printify_layout_attribute_style_global_value(item):
+	global SELECTED_LANGUAGE
+	
+	idtext = item['id'].replace('AST_LAYOUT_TYPE_', '')
+	values = item['text'][SELECTED_LANGUAGE]
+
+	if type(values) is not str:
+		return "" # TODO
+
+	return (
+		f"ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE" + 
+  		f"(" + 
+		f"\"{idtext}\", "
+		f"\"{str(values)}\""
+		f")\n"
 	)
 
 def printify_layout_type(item):
@@ -72,6 +89,11 @@ FILES = [
 		"input": "layout/type.yaml",
 		"output": "ast_layout_type.h",
 		"printify": printify_layout_type,
+	},
+	{
+		"input": "layout/attribute/style/global_value.yaml",
+		"output": "ast_layout_attribute_style_global.h",
+		"printify": printify_layout_attribute_style_global_value,
 	},
 ]
 

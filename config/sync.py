@@ -96,22 +96,25 @@ def printify_layout_attribute_style_type(item, group):
 
 def printify_layout_attribute_style_value(key, items):
 	global SELECTED_LANGUAGE
-
-	result = "const ast_layout_attribute_style_pair_t " + key + "[] = {"
+	
+	result = "const ast_layout_attribute_style_pair_t " + key + "[] = {\n"
 
 	if items is not None:
 		for item in items:
+			item["generate_name"] = item["generate_name"].replace("\"", "\\\"")
 			values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
-			
+
 			if values is not None:
 				if type(values) is str:
+					values = values.replace("\"", "\\\"")
 					result += "\t{\"" + values + "\", \"" + item["generate_name"] + "\"},\n"
 				else:
-					for value in enumerate(values):
-						result += "\t{\"" + str(value) + "\", \"" + item["generate_name"] + "\"},\n"
+					for value in values:
+						value = value.replace("\"", "\\\"")
+						result += "\t{\"" + value + "\", \"" + item["generate_name"] + "\"},\n"
 
 	result += "\t{NULL, NULL},\n"
-	result += "}\n"
+	result += "};\n"
 	
 	return result
 

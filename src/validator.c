@@ -48,6 +48,7 @@ bool has_font_extension(char *value, char **out_extension) {
 
         if (len - prefix_len != 0 &&
             my_strcasecmp(value + len - prefix_len, prefixes[i]) == 0) {
+            
             if (out_extension != NULL) {
                 *out_extension = string_strdup(names[i]);
             }

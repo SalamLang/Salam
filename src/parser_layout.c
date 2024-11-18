@@ -162,6 +162,10 @@ void parser_parse_layout_block_children(ast_layout_block_t *block,
     ast_layout_node_t *node = parser_parse_layout_node(lexer, name, last_name);
 
     if (node != NULL) {
+        if (block->parent_node_type == AST_LAYOUT_TYPE_SELECT && node->type == AST_LAYOUT_TYPE_LI) {
+            node->type = AST_LAYOUT_TYPE_OPTION;
+        }
+        
         if (node->type == AST_LAYOUT_TYPE_FONT) {
             if (block->parent_node_type != AST_LAYOUT_TYPE_NONE) {
                 error_parser(2,

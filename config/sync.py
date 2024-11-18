@@ -36,7 +36,6 @@ def printify_block_type(item):
 def printify_layout_attribute_style_global_value(item):
 	global SELECTED_LANGUAGE
 	
-	idtext = item["id"]
 	values = item["text"][SELECTED_LANGUAGE]
 
 	if type(values) is not str:
@@ -45,8 +44,71 @@ def printify_layout_attribute_style_global_value(item):
 	return (
 		f"ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE" + 
   		f"(" + 
-		f"\"{idtext}\", "
+		f"\"{item["id"]}\", "
 		f"\"{str(values)}\""
+		f")\n"
+	)
+ 
+def printify_layout_attribute_style_type(item):
+	global SELECTED_LANGUAGE
+
+	def command(value):
+		idtext = item["id"].replace("AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_", "")
+  
+		return (
+			f"({item["id"]}, "
+			f"\"{idtext}\", "
+			f"\"{idtext.lower()}\", "
+			f"\"{item.get("generate_name", idtext.lower())}\", "
+			f"\"{value}\", "
+			f"{str(item.get("is_mother", False)).lower()}" +
+			f")\n"
+		)
+
+	values = item["text"][SELECTED_LANGUAGE]
+	
+	if "generate_name" not in item:
+		if type(values) is str:
+			return "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE" + command(values)
+		else:
+			result = ""
+			for index, value in enumerate(values):
+				print(index, value)
+				if index == 0:
+					result += "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE" + command(value)
+				else:
+					result += "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT" + command(value)
+			return result
+	else:
+		if type(values) is str:
+			return "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE" + command(values)
+		else:
+			result = ""
+			for index, value in enumerate(values):
+				print(index, value)
+				if index == 0:
+					result += "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE" + command(value)
+				else:
+					result += "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT" + command(value)
+			return result
+ 
+ def printify_layout_attribute_style_state_type(item):
+	global SELECTED_LANGUAGE
+	
+	idtext = item["id"].replace("AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_", "")
+	values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
+
+	if type(values) is not str:
+		return "" # TODO
+
+	return (
+		f"ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE" + 
+  		f"(" + 
+		f"{item["id"]}, "
+		f"\"{idtext}\", "
+		f"\"{idtext.lower()}\", "
+		f"\"{str(values)}\", "
+		f"\"{item.get("generate_name", "")}\""
 		f")\n"
 	)
 
@@ -99,7 +161,12 @@ FILES = [
 		"output": "ast_type.h",
 		"printify": printify_type,
 	},
-	{
+ 	{
+		"input": "block.yaml",
+		"output": "ast_block_type.h",
+		"printify": printify_block_type,
+	},
+  	{
 		"input": "layout/type.yaml",
 		"output": "ast_layout_type.h",
 		"printify": printify_layout_type,
@@ -110,9 +177,14 @@ FILES = [
 		"printify": printify_layout_attribute_style_global_value,
 	},
 	{
-		"input": "block.yaml",
-		"output": "ast_block_type.h",
-		"printify": printify_block_type,
+		"input": "layout/attribute/style/state.yaml",
+		"output": "ast_layout_attribute_style_state_type.h",
+		"printify": printify_layout_attribute_style_state_type,
+	},
+	{
+		"input": "layout/attribute/style/type.yaml",
+		"output": "ast_layout_attribute_style_type.h",
+		"printify": printify_layout_attribute_style_type,
 	},
 ]
 

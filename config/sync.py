@@ -7,10 +7,12 @@ COMMENT_END = "// ----------- END AUTO GENERATED ----------- //"
 
 def printify_type(item):
 	return (
-		f"AST_TYPE({item['id']}, "
+		f"AST_TYPE" + 
+  		f"(" + 
+		f"{item['id']}, "
 		f"\"{item['id'].replace('AST_TYPE_', '')}\", "
 		f"\"{item['id'].replace('AST_TYPE_', '').lower()}\""
-		f")"
+		f")\n"
 	)
 
 def printify_layout_type(item):
@@ -21,26 +23,27 @@ def printify_layout_type(item):
 			f"\"{item['id'].replace('AST_LAYOUT_TYPE_', '').lower()}\", "
 			f"\"{item.get('generate_name', item['id'].replace('AST_LAYOUT_TYPE_', '').lower())}\", "
 			f"\"{value}\", "
-			f"{str(item.get('is_mother', False)).lower()})"
+			f"{str(item.get('is_mother', False)).lower()}" +
+			f")\n"
 		)
 	
 	if 'generate_name' not in item:
-		if type(item['text']) is str:
+		if type(item['text'][SELECTED_LANGUAGE]) is str:
 			return "ADD_LAYOUT_TYPE_HIDE" + command(item['text'])
 		else:
 			result = ""
-			for (index, value) in item['text'][SELECTED_LANGUAGE]:
+			for index, value in enumerate(item['text'][SELECTED_LANGUAGE]):
 				if index == 0:
 					result += "ADD_LAYOUT_TYPE_HIDE" + command(value)
 				else:
 					result += "ADD_LAYOUT_TYPE_REPEAT" + command(value)
 			return result
 	else:
-		if type(item['text']) is str:
+		if type(item['text'][SELECTED_LANGUAGE]) is str:
 			return "ADD_LAYOUT_TYPE" + command(item['text'])
 		else:
 			result = ""
-			for (index, value) in item['text'][SELECTED_LANGUAGE]:
+			for index, value in enumerate(item['text'][SELECTED_LANGUAGE]):
 				if index == 0:
 					result += "ADD_LAYOUT_TYPE" + command(value)
 				else:

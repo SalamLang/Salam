@@ -869,20 +869,20 @@ ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FLOAT,
 
 ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_FAMILY,
                                 "STYLE_FONT_FAMILY", "style_font_family",
-                                "نام فونت", "font-family",
+                                "نام قلم", "font-family",
                                 AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRINGS_ANY,
                                 ast_layout_allowed_style_list_font_family, NULL)
 
 ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(
     AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_FEATURE_SETTINGS,
     "STYLE_FONT_FEATURE_SETTINGS", "style_font_feature_settings",
-    "تنظیمات ویژگی فونت", "font-feature-settings",
+    "تنظیمات ویژگی قلم", "font-feature-settings",
     AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING,
     ast_layout_allowed_style_list_font_feature_settings, NULL)
 
 ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_KERNING,
                                 "STYLE_FONT_KERNING", "style_font_kerning",
-                                "کرنینگ فونت", "font-kerning",
+                                "کرنینگ قلم", "font-kerning",
                                 AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING,
                                 ast_layout_allowed_style_list_font_kerning,
                                 NULL)
@@ -890,59 +890,59 @@ ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_KERNING,
 ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(
     AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_LANGUAGE_OVERRIDE,
     "STYLE_FONT_LANGUAGE_OVERRIDE", "style_font_language_override",
-    "بازنویسی زبان فونت", "font-language-override",
+    "بازنویسی زبان قلم", "font-language-override",
     AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING,
     ast_layout_allowed_style_list_font_language_override, NULL)
 
 ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(
     AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_OPTICAL_SIZING,
     "STYLE_FONT_OPTICAL_SIZING", "style_font_optical_sizing",
-    "اندازه‌گیری اپتیکال فونت", "font-optical-sizing",
+    "اندازه‌گیری اپتیکال قلم", "font-optical-sizing",
     AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING,
     ast_layout_allowed_style_list_font_optical_sizing, NULL)
 ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(
     AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_OPTICAL_SIZING,
     "STYLE_FONT_OPTICAL_SIZING", "style_font_optical_sizing",
-    "اندازه گیری اپتیکال فونت", "font-optical-sizing",
+    "اندازه گیری اپتیکال قلم", "font-optical-sizing",
     AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING,
     ast_layout_allowed_style_list_font_optical_sizing, NULL)
 
 ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_SIZE,
                                 "STYLE_FONT_SIZE", "style_font_size",
-                                "اندازه فونت", "font-size",
+                                "اندازه قلم", "font-size",
                                 AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE, NULL,
                                 NULL)
 
 ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_STRETCH,
                                 "STYLE_FONT_STRETCH", "style_font_stretch",
-                                "کشیدگی فونت", "font-stretch",
+                                "کشیدگی قلم", "font-stretch",
                                 AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING,
                                 ast_layout_allowed_style_list_font_stretch,
                                 NULL)
 
 ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_STYLE,
                                 "STYLE_FONT_STYLE", "style_font_style",
-                                "سبک فونت", "font-style",
+                                "سبک قلم", "font-style",
                                 AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING,
                                 ast_layout_allowed_style_list_font_style, NULL)
 
 ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_VARIANT,
                                 "STYLE_FONT_VARIANT", "style_font_variant",
-                                "نوع فونت", "font-variant",
+                                "نوع قلم", "font-variant",
                                 AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING,
                                 ast_layout_allowed_style_list_font_variant,
                                 NULL)
 
 ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_DISPLAY,
                                 "STYLE_FONT_DISPLAY", "style_font_display",
-                                "نمایش فونت", "font-display",
+                                "نمایش قلم", "font-display",
                                 AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING,
                                 ast_layout_allowed_style_list_font_display,
                                 NULL)
 
 ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(
     AST_LAYOUT_ATTRIBUTE_TYPE_STYLE_FONT_WEIGHT, "STYLE_FONT_WEIGHT",
-    "style_font_weight", "وزن فونت", "font-weight",
+    "style_font_weight", "وزن قلم", "font-weight",
     AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_POSITIVE_INTEGER,
     ast_layout_allowed_style_list_font_weight, NULL)
 

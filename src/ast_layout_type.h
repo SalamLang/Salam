@@ -116,9 +116,8 @@ ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_HGROUP, "HGROUP", "hgroup", "hgroup", "گ
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FIGURE, "FIGURE", "figure", "figure", "{'en': 'figure', 'fa': 'شکل'}", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FIGCAPTION, "FIGCAPTION", "figcaption", "figcaption", "{'en': 'figcaption', 'fa': 'زیرنویس شکل'}", false)
-
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FIGCAPTION, "FIGCAPTION", "figcaption", "figcaption", "{'en': 'figcaption', 'fa': 'زیر نویس شکل'}", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FIGCAPTION, "FIGCAPTION", "figcaption", "figcaption", "زیرنویس شکل", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_FIGCAPTION, "FIGCAPTION", "figcaption", "figcaption", "زیر نویس شکل", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_VIDEO, "VIDEO", "video", "video", "{'en': 'video', 'fa': 'فیلم'}", false)
 
@@ -128,9 +127,8 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_IFRAME, "IFRAME", "iframe", "iframe", "{'en': 'i
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_CANVAS, "CANVAS", "canvas", "canvas", "{'en': 'canvas', 'fa': 'گرافیکی'}", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DETAILS, "DETAILS", "details", "details", "{'en': 'details', 'fa': 'جزئیات'}", false)
-
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DETAILS, "DETAILS", "details", "details", "{'en': 'details', 'fa': 'جزییات'}", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DETAILS, "DETAILS", "details", "details", "جزئیات", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_DETAILS, "DETAILS", "details", "details", "جزییات", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SUMMARY, "SUMMARY", "summary", "summary", "{'en': 'summary', 'fa': 'خلاصه'}", false)
 
@@ -138,15 +136,13 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DIALOG, "DIALOG", "dialog", "dialog", "{'en': 'd
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MENU, "MENU", "menu", "menu", "{'en': 'menu', 'fa': 'منو'}", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MENUITEM, "MENUITEM", "menuitem", "menuitem", "{'en': 'menuitem', 'fa': 'آیتم منو'}", false)
-
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MENUITEM, "MENUITEM", "menuitem", "menuitem", "{'en': 'menuitem', 'fa': 'مورد منو'}", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MENUITEM, "MENUITEM", "menuitem", "menuitem", "آیتم منو", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_MENUITEM, "MENUITEM", "menuitem", "menuitem", "مورد منو", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_COMMAND, "COMMAND", "command", "command", "{'en': 'command', 'fa': 'فرمان'}", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_UL, "UL", "ul", "ul", "{'en': 'ul', 'fa': 'فهرست غیرمرتب'}", false)
-
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_UL, "UL", "ul", "ul", "{'en': 'ul', 'fa': 'فهرست غیر مرتب'}", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_UL, "UL", "ul", "ul", "فهرست غیرمرتب", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_UL, "UL", "ul", "ul", "فهرست غیر مرتب", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_OL, "OL", "ol", "ol", "{'en': 'ol', 'fa': 'فهرست مرتب'}", false)
 
@@ -154,23 +150,20 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LI, "LI", "li", "li", "{'en': 'li', 'fa': 'مو�
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE, "TABLE", "table", "table", "{'en': 'table', 'fa': 'جدول'}", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_HEADER, "TABLE_HEADER", "table_header", "thead", "{'en': 'table-header', 'fa': 'سرجدول'}", false)
-
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_HEADER, "TABLE_HEADER", "table_header", "thead", "{'en': 'table-header', 'fa': 'سر جدول'}", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_HEADER, "TABLE_HEADER", "table_header", "thead", "سرجدول", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_TABLE_HEADER, "TABLE_HEADER", "table_header", "thead", "سر جدول", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_BODY, "TABLE_BODY", "table_body", "tbody", "{'en': 'table-body', 'fa': 'بدنه جدول'}", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_FOOTER, "TABLE_FOOTER", "table_footer", "tfoot", "{'en': 'table-footer', 'fa': 'پاصفحه جدول'}", false)
-
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_FOOTER, "TABLE_FOOTER", "table_footer", "tfoot", "{'en': 'table-footer', 'fa': 'پا صفحه جدول'}", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_FOOTER, "TABLE_FOOTER", "table_footer", "tfoot", "پاصفحه جدول", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_TABLE_FOOTER, "TABLE_FOOTER", "table_footer", "tfoot", "پا صفحه جدول", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_TR, "TABLE_TR", "table_tr", "tr", "{'en': 'table-tr', 'fa': 'ردیف'}", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_TD, "TABLE_TD", "table_td", "td", "{'en': 'table-td', 'fa': 'سلول'}", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_TH, "TABLE_TH", "table_th", "th", "{'en': 'table-th', 'fa': 'سرسلول'}", false)
-
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_TH, "TABLE_TH", "table_th", "th", "{'en': 'th', 'fa': 'سر سلول'}", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TABLE_TH, "TABLE_TH", "table_th", "th", "سرسلول", false)
+ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_TABLE_TH, "TABLE_TH", "table_th", "th", "سر سلول", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_CAPTION, "CAPTION", "caption", "caption", "{'en': 'caption', 'fa': 'عنوان جدول'}", false)
 

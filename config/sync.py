@@ -62,7 +62,7 @@ def printify_layout_attribute_style_type(item):
 			f"\"{value}\", "
 			f"\"{item.get("generate_name", idtext.lower())}\", "
 			f"{str(item.get("type", "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY"))}, " +
-			f"{str(item.get("reserved_values", "NULL")).lower()}, " +
+			f"{str(item.get('reserved_values', 'NULL')).lower() if item.get('reserved_values', '') != '' else 'NULL'}, " +
 			f"NULL" +
 			f")\n"
 		)

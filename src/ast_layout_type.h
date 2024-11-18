@@ -276,7 +276,7 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_STYLE, "STYLE", "style", "style", "ظاهر", fa
 // Special Elements
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DIV, "DIV", "div", "div", "جعبه", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LINK, "LINK", "link", "a", "لینک", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LINK, "LINK", "link", "a", "پیوند", false)
 
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_LINK, "LINK", "link", "a", "پیوند",
                        false)

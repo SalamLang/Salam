@@ -22,9 +22,6 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LABEL, "LABEL", "label", "label", "برچسب",
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_SELECT, "SELECT", "select", "select",
                 "فهرست کشویی", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_OPTION, "OPTION", "option", "option",
-                "مورد کشویی", false)
-
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FIELDSET, "FIELDSET", "fieldset", "fieldset",
                 "گروه‌بندی", false)
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_FIELDSET, "FIELDSET", "fieldset",
@@ -303,6 +300,9 @@ ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_MEDIA, "RESPONSIVE", "responsive",
                        "@media", "واکنش‌گرا", true)
 
 // Utility Elements
+ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_OPTION, "OPTION", "option", "option",
+                "مورد کشویی", false)
+
 ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_NONE, "NONE", "none", "layout", "صفحه",
                      false)
 

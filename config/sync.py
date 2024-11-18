@@ -59,13 +59,15 @@ def printify_layout_attribute_style_type(item):
 			f"({item["id"]}, "
 			f"\"{idtext}\", "
 			f"\"{idtext.lower()}\", "
-			f"\"{item.get("generate_name", idtext.lower())}\", "
 			f"\"{value}\", "
-			f"{str(item.get("is_mother", False)).lower()}" +
+			f"\"{item.get("generate_name", idtext.lower())}\", "
+			f"\"{str(item.get("type", "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY"))}\", " +
+			f"{str(item.get("reserved_values", "NULL")).lower()}," +
+			f"NULL" +
 			f")\n"
 		)
 
-	values = item["text"][SELECTED_LANGUAGE]
+	values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
 	
 	if "generate_name" not in item:
 		if type(values) is str:
@@ -92,7 +94,7 @@ def printify_layout_attribute_style_type(item):
 					result += "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT" + command(value)
 			return result
  
- def printify_layout_attribute_style_state_type(item):
+def printify_layout_attribute_style_state_type(item):
 	global SELECTED_LANGUAGE
 	
 	idtext = item["id"].replace("AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_", "")

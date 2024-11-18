@@ -41,7 +41,7 @@ emcc "${sources[@]}" -o ${OUTPUT_BASE}.html \
 	-s "VERBOSE=1" \
 	-s "EXPORTED_RUNTIME_METHODS=['callMain']" \
 	-s "ASSERTIONS=2" \
-	-s "NO_EXIT_RUNTIME=1" \
+	# -s "NO_EXIT_RUNTIME=1" \
 	# -s "EXPORTED_FUNCTIONS=['_main']"
 	# -s "ASSERTIONS=0" \
 

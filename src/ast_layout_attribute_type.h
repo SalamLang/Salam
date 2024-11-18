@@ -31,6 +31,9 @@ ADD_LAYOUT_ATTRIBUTE_TYPE(AST_LAYOUT_ATTRIBUTE_TYPE_TITLE, "TITLE", "title",
 ADD_LAYOUT_ATTRIBUTE_TYPE(AST_LAYOUT_ATTRIBUTE_TYPE_TYPE, "TYPE", "type",
                           "type", "نوع")
 
+ADD_LAYOUT_ATTRIBUTE_TYPE(AST_LAYOUT_ATTRIBUTE_TYPE_KIND, "KIND", "kind",
+                          "kind", "روش")
+
 ADD_LAYOUT_ATTRIBUTE_TYPE(AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR, "AUTHOR", "author",
                           "author", "نویسنده")
 

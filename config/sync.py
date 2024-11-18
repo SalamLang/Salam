@@ -1,6 +1,6 @@
 import yaml
 
-SELECTED_LANGUAGE = 'fa'
+SELECTED_LANGUAGE = "fa"
 
 COMMENT_BEGIN = "// ----------- BEGIN AUTO GENERATED ----------- //"
 COMMENT_END = "// ----------- END AUTO GENERATED ----------- //"
@@ -8,12 +8,26 @@ COMMENT_END = "// ----------- END AUTO GENERATED ----------- //"
 def printify_type(item):
 	global SELECTED_LANGUAGE
 	
-	idtext = item['id'].replace('AST_LAYOUT_TYPE_', '')
+	idtext = item["id"].replace("AST_TYPE_", "")
 	
 	return (
 		f"ADD_TYPE" + 
   		f"(" + 
-		f"{idtext}, "
+		f"{item["id"]}, "
+		f"\"{idtext}\", "
+		f"\"{idtext.lower()}\""
+		f")\n"
+	)
+
+def printify_block_type(item):
+	global SELECTED_LANGUAGE
+	
+	idtext = item["id"].replace("AST_BLOCK_TYPE_", "")
+	
+	return (
+		f"ADD_BLOCK_TYPE" + 
+  		f"(" + 
+		f"{item["id"]}, "
 		f"\"{idtext}\", "
 		f"\"{idtext.lower()}\""
 		f")\n"
@@ -22,8 +36,8 @@ def printify_type(item):
 def printify_layout_attribute_style_global_value(item):
 	global SELECTED_LANGUAGE
 	
-	idtext = item['id'].replace('AST_LAYOUT_TYPE_', '')
-	values = item['text'][SELECTED_LANGUAGE]
+	idtext = item["id"]
+	values = item["text"][SELECTED_LANGUAGE]
 
 	if type(values) is not str:
 		return "" # TODO
@@ -40,21 +54,21 @@ def printify_layout_type(item):
 	global SELECTED_LANGUAGE
 
 	def command(value):
-		idtext = item['id'].replace('AST_LAYOUT_TYPE_', '')
+		idtext = item["id"].replace("AST_LAYOUT_TYPE_", "")
   
 		return (
-			f"({item['id']}, "
+			f"({item["id"]}, "
 			f"\"{idtext}\", "
 			f"\"{idtext.lower()}\", "
-			f"\"{item.get('generate_name', idtext.lower())}\", "
+			f"\"{item.get("generate_name", idtext.lower())}\", "
 			f"\"{value}\", "
-			f"{str(item.get('is_mother', False)).lower()}" +
+			f"{str(item.get("is_mother", False)).lower()}" +
 			f")\n"
 		)
 
-	values = item['text'][SELECTED_LANGUAGE]
+	values = item["text"][SELECTED_LANGUAGE]
 	
-	if 'generate_name' not in item:
+	if "generate_name" not in item:
 		if type(values) is str:
 			return "ADD_LAYOUT_TYPE_HIDE" + command(values)
 		else:
@@ -94,6 +108,11 @@ FILES = [
 		"input": "layout/attribute/style/global_value.yaml",
 		"output": "ast_layout_attribute_style_global.h",
 		"printify": printify_layout_attribute_style_global_value,
+	},
+	{
+		"input": "block.yaml",
+		"output": "ast_block_type.h",
+		"printify": printify_block_type,
 	},
 ]
 

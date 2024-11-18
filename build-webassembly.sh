@@ -38,7 +38,7 @@ emcc "${sources[@]}" -o ${OUTPUT_BASE}.html \
 	-s ALLOW_MEMORY_GROWTH=1 \
 	-s EXIT_RUNTIME=1 \
 	-s VERBOSE=1 \
-	-s "EXPORTED_RUNTIME_METHODS=['callMain','cwrap']" \
+	-s "EXPORTED_RUNTIME_METHODS=['callMain']" \
 	# -s NO_EXIT_RUNTIME=1 \
 	# -s "EXPORTED_FUNCTIONS=['_main']"
 	# -s ASSERTIONS=0 \

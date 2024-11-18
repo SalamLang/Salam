@@ -6,44 +6,56 @@ COMMENT_BEGIN = "// ----------- BEGIN AUTO GENERATED ----------- //"
 COMMENT_END = "// ----------- END AUTO GENERATED ----------- //"
 
 def printify_type(item):
+	global SELECTED_LANGUAGE
+	
+	idtext = item['id'].replace('AST_LAYOUT_TYPE_', '')
+	
 	return (
-		f"AST_TYPE" + 
+		f"ADD_TYPE" + 
   		f"(" + 
-		f"{item['id']}, "
-		f"\"{item['id'].replace('AST_TYPE_', '')}\", "
-		f"\"{item['id'].replace('AST_TYPE_', '').lower()}\""
+		f"{idtext}, "
+		f"\"{idtext}\", "
+		f"\"{idtext.lower()}\""
 		f")\n"
 	)
 
 def printify_layout_type(item):
+	global SELECTED_LANGUAGE
+
 	def command(value):
+		idtext = item['id'].replace('AST_LAYOUT_TYPE_', '')
+  
 		return (
 			f"({item['id']}, "
-			f"\"{item['id'].replace('AST_LAYOUT_TYPE_', '')}\", "
-			f"\"{item['id'].replace('AST_LAYOUT_TYPE_', '').lower()}\", "
-			f"\"{item.get('generate_name', item['id'].replace('AST_LAYOUT_TYPE_', '').lower())}\", "
+			f"\"{idtext}\", "
+			f"\"{idtext.lower()}\", "
+			f"\"{item.get('generate_name', idtext.lower())}\", "
 			f"\"{value}\", "
 			f"{str(item.get('is_mother', False)).lower()}" +
 			f")\n"
 		)
+
+	values = item['text'][SELECTED_LANGUAGE]
 	
 	if 'generate_name' not in item:
-		if type(item['text'][SELECTED_LANGUAGE]) is str:
-			return "ADD_LAYOUT_TYPE_HIDE" + command(item['text'])
+		if type(values) is str:
+			return "ADD_LAYOUT_TYPE_HIDE" + command(values)
 		else:
 			result = ""
-			for index, value in enumerate(item['text'][SELECTED_LANGUAGE]):
+			for index, value in enumerate(values):
+				print(index, value)
 				if index == 0:
 					result += "ADD_LAYOUT_TYPE_HIDE" + command(value)
 				else:
 					result += "ADD_LAYOUT_TYPE_REPEAT" + command(value)
 			return result
 	else:
-		if type(item['text'][SELECTED_LANGUAGE]) is str:
-			return "ADD_LAYOUT_TYPE" + command(item['text'])
+		if type(values) is str:
+			return "ADD_LAYOUT_TYPE" + command(values)
 		else:
 			result = ""
-			for index, value in enumerate(item['text'][SELECTED_LANGUAGE]):
+			for index, value in enumerate(values):
+				print(index, value)
 				if index == 0:
 					result += "ADD_LAYOUT_TYPE" + command(value)
 				else:
@@ -89,9 +101,9 @@ def sync_file(file):
 				else:
 					f.write(str(item) + "\n")
 		f.write(COMMENT_END + "\n")
-		for line in lines:
-			if COMMENT_END in line:
-				break
+		# for line in lines:
+		# 	if COMMENT_END in line:
+		# 		break
 		f.write("\n")
 
 for file in FILES:

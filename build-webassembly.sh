@@ -50,6 +50,17 @@ if [ $? -eq 0 ]; then
 	echo "  ${OUTPUT_BASE}.js"
 	echo "  ${OUTPUT_BASE}.wasm"
 
+	if command -v npx >/dev/null 2>&1; then
+		echo "Transpiling JavaScript for older browsers..."
+		if npx babel ${OUTPUT_BASE}.js --out-file ${OUTPUT_BASE}.transpiled.js; then
+			mv ${OUTPUT_BASE}.transpiled.js ${OUTPUT_BASE}.js
+		else
+			echo "Warning: Babel transpiling failed. JavaScript was not transpiled."
+		fi
+	else
+		echo "Warning: npx command not found. JavaScript will not be transpiled for older browsers."
+	fi
+
 	if [ -d "$EDITOR_DIR" ]; then
 		echo "Copying output files to $EDITOR_DIR"
 		cp ${OUTPUT_BASE}.html "$EDITOR_DIR"

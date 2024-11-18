@@ -10,7 +10,7 @@ ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_NONE, "NONE", "none", "none", "صفحه", f
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PARAGRAPH, "PARAGRAPH", "paragraph", "p", "پاراگراف", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BUTTON, "BUTTON", "button", "button", "دکمه", true)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BUTTON, "BUTTON", "button", "button", "دکمه", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_TEXTAREA, "TEXTAREA", "textarea", "textarea", "ویرایشگرمتن", false)
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_TEXTAREA, "TEXTAREA", "textarea", "textarea", "ویرایشگر متن", false)
@@ -176,15 +176,15 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_COL, "COL", "col", "th", "ستون", false)
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_COLGROUP, "COLGROUP", "colgroup", "colgroup", "گروه ستون‌ ها", false)
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_COLGROUP, "COLGROUP", "colgroup", "colgroup", "گروه ستون‌ها", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_INCLUDE, "INCLUDE", "include", "include", "فراخوانی", true)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_INCLUDE, "INCLUDE", "include", "include", "فراخوانی", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BR, "BR", "br", "br", "خط بعدی", true)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_BR, "BR", "br", "br", "خط بعدی", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_HR, "HR", "hr", "hr", "خط", true)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_HR, "HR", "hr", "hr", "خط", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_INPUT, "INPUT", "input", "input", "ورودی", true)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_INPUT, "INPUT", "input", "input", "ورودی", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_IMG, "IMG", "img", "img", "تصویر", true)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_IMG, "IMG", "img", "img", "تصویر", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_FONT, "FONT", "font", "font", "قلم", true)
 

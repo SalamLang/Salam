@@ -16,7 +16,7 @@ def printify_type(item):
 		f"{idtext}, "
 		f"\"{idtext}\", "
 		f"\"{idtext.lower()}\""
-		f")\n"
+		f")\n\n"
 	)
 
 def printify_layout_type(item):

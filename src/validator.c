@@ -634,7 +634,7 @@ bool token_belongs_to_ast_layout_node(
 
         if (is_attribute_type_in_array(attribute_key_type, valid_attributes,
                                        valid_attributes_length)) {
-            // rename type to target
+            // rename type/نوع to target
 			if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_TYPE) {
                 if (attribute->final_key != NULL) {
                     memory_destroy(attribute->final_key);
@@ -643,7 +643,7 @@ bool token_belongs_to_ast_layout_node(
                 attribute->final_key = string_strdup("target");
 				
                 return true;
-            // rename src to href
+            // rename src/منبع to href
 			} else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_SRC) {
                 if (attribute->final_key != NULL) {
                     memory_destroy(attribute->final_key);

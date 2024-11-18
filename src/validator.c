@@ -634,18 +634,22 @@ bool token_belongs_to_ast_layout_node(
 
         if (is_attribute_type_in_array(attribute_key_type, valid_attributes,
                                        valid_attributes_length)) {
-            // rename src to href
-            if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_SRC) {
+            // rename type to target
+			if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_TYPE) {
                 if (attribute->final_key != NULL) {
                     memory_destroy(attribute->final_key);
                 }
 
-                if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_TYPE) {
-                    attribute->final_key = string_strdup("target");
-                } else if (attribute_key_type ==
-                           AST_LAYOUT_ATTRIBUTE_TYPE_SRC) {
-                    attribute->final_key = string_strdup("href");
+                attribute->final_key = string_strdup("target");
+				
+                return true;
+            // rename src to href
+			} else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_SRC) {
+                if (attribute->final_key != NULL) {
+                    memory_destroy(attribute->final_key);
                 }
+				
+				attribute->final_key = string_strdup("href");
 
                 return true;
             }
@@ -681,11 +685,16 @@ bool token_belongs_to_ast_layout_node(
                 memory_destroy(attribute->final_key);
             }
 
+			// rename type/نوع to method
             if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_TYPE) {
                 attribute->final_key = string_strdup("method");
+			// rename src/منبع to action
             } else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_SRC) {
                 attribute->final_key = string_strdup("action");
-            }
+			// rename kind/روش to target
+            } else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_KIND) {
+                attribute->final_key = string_strdup("target");
+			}
 
             return true;
         }

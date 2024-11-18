@@ -8,9 +8,9 @@ REM List of source files
 set sources=src/log.c src/file.c src/memory.c src/downloader.c src/array.c src/parser.c src/parser_layout.c src/generator.c src/generator_layout.c src/generator_salam.c src/generator_layout_style.c src/generator_identifier.c src/string_buffer.c src/validator.c src/hashmap.c src/hashmap_custom.c src/array_custom.c src/lexer.c src/ast.c src/ast_layout.c src/ast_layout_style.c src/main.c
 
 REM Ensure the output directory exists
-if not exist "..\out" (
+if not exist "out" (
 	echo Creating output directory...
-	mkdir ..\out
+	mkdir out
 	if errorlevel 1 (
 		echo Error: Failed to create output directory.
 		exit /b %errorlevel%
@@ -37,7 +37,7 @@ if errorlevel 1 (
 
 REM Run the executable with the provided argument
 echo Running the executable...
-%output% ..\example\test6.salam ..\out\
+%output% example\test6.salam out\
 if errorlevel 1 (
 	echo Error: Execution failed with exit code %errorlevel%
 	exit /b %errorlevel%

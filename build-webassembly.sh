@@ -9,6 +9,10 @@ fi
 OUTPUT_BASE="salam-wa"
 EDITOR_DIR="../Salam-Editor/"
 
+MEMORY_FLAGS="-s ALLOW_MEMORY_GROWTH=1"
+RUNTIME_FLAGS="-s EXIT_RUNTIME=0 -s NO_EXIT_RUNTIME=1"
+COMMON_FLAGS="-s EXPORTED_RUNTIME_METHODS=['callMain'] -s TOTAL_STACK=8388608" # 8MB (8 * 1024 * 1024)
+
 sources=(
 	"src/log.c"
 	"src/file.c"
@@ -34,16 +38,23 @@ sources=(
 	"src/main.c"
 )
 
+DEBUG=0
+if [[ "$1" == "debug" ]]; then
+    DEBUG=1
+    echo "Debug mode enabled."
+    DEBUG_FLAGS="-s VERBOSE=1 -s ASSERTIONS=2"
+else
+    DEBUG_FLAGS=""
+    echo "Debug mode not enabled."
+fi
+
 echo "Compiling C files to WebAssembly..."
 emcc "${sources[@]}" -o ${OUTPUT_BASE}.html \
-	-s "ALLOW_MEMORY_GROWTH=1" \
-	-s "EXIT_RUNTIME=0" \
-	-s "NO_EXIT_RUNTIME=1" \
-	-s "VERBOSE=1" \
-	-s "EXPORTED_RUNTIME_METHODS=['callMain']" \
-	-s "ASSERTIONS=2" \
-	-s "EXPORTED_FUNCTIONS=['_main']" \
-    -s "TOTAL_STACK=8388608" # 8MB (8 * 1024 * 1024)
+    ${MEMORY_FLAGS} \
+    ${RUNTIME_FLAGS} \
+    ${COMMON_FLAGS} \
+    ${DEBUG_FLAGS} \
+    -s EXPORTED_FUNCTIONS="['_main']"
 
 if [ $? -eq 0 ]; then
 	echo "Compilation successful. Output files:"

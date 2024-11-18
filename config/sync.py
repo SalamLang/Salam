@@ -5,7 +5,7 @@ SELECTED_LANGUAGE = "fa"
 COMMENT_BEGIN = "// ----------- BEGIN AUTO GENERATED ----------- //"
 COMMENT_END = "// ----------- END AUTO GENERATED ----------- //"
 
-def printify_type(item):
+def printify_type(item, group):
 	global SELECTED_LANGUAGE
 	
 	idtext = item["id"].replace("AST_TYPE_", "")
@@ -19,7 +19,7 @@ def printify_type(item):
 		f")\n"
 	)
 
-def printify_block_type(item):
+def printify_block_type(item, group):
 	global SELECTED_LANGUAGE
 	
 	idtext = item["id"].replace("AST_BLOCK_TYPE_", "")
@@ -33,7 +33,7 @@ def printify_block_type(item):
 		f")\n"
 	)
 
-def printify_layout_attribute_style_global_value(item):
+def printify_layout_attribute_style_global_value(item, group):
 	global SELECTED_LANGUAGE
 	
 	values = item["text"][SELECTED_LANGUAGE]
@@ -49,7 +49,7 @@ def printify_layout_attribute_style_global_value(item):
 		f")\n"
 	)
  
-def printify_layout_attribute_style_type(item):
+def printify_layout_attribute_style_type(item, group):
 	global SELECTED_LANGUAGE
 
 	def command(value):
@@ -93,8 +93,29 @@ def printify_layout_attribute_style_type(item):
 				else:
 					result += "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT" + command(value)
 			return result
- 
-def printify_layout_attribute_style_state_type(item):
+
+def printify_layout_attribute_style_value(key, items):
+	global SELECTED_LANGUAGE
+
+	result = "const ast_layout_attribute_style_pair_t " + key + "[] = {"
+
+	if items is not None:
+		for item in items:
+			values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
+			
+			if values is not None:
+				if type(values) is str:
+					result += "\t{\"" + values + "\", \"" + item["generate_name"] + "\"},\n"
+				else:
+					for value in enumerate(values):
+						result += "\t{\"" + str(value) + "\", \"" + item["generate_name"] + "\"},\n"
+
+	result += "\t{NULL, NULL},\n"
+	result += "}\n"
+	
+	return result
+
+def printify_layout_attribute_style_state_type(item, group):
 	global SELECTED_LANGUAGE
 	
 	idtext = item["id"].replace("AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_", "")
@@ -114,7 +135,7 @@ def printify_layout_attribute_style_state_type(item):
 		f")\n"
 	)
 
-def printify_layout_type(item):
+def printify_layout_type(item, group):
 	global SELECTED_LANGUAGE
 
 	def command(value):
@@ -188,6 +209,11 @@ FILES = [
 		"output": "ast_layout_attribute_style_type.h",
 		"printify": printify_layout_attribute_style_type,
 	},
+	{
+		"input": "layout/attribute/style/value.yaml",
+		"output": "ast_layout_attribute_style_value.h",
+		"printify": printify_layout_attribute_style_value,
+	},
 ]
 
 
@@ -212,7 +238,12 @@ def sync_file(file):
 		for group in content:
 			for item in group["items"]:
 				if "printify" in file:
-					f.write(file["printify"](item) + "\n")
+					if isinstance(group["items"], dict):
+						f.write(file["printify"](item, group["items"][item]) + "\n")
+					elif isinstance(group["items"], list):
+						f.write(file["printify"](item, None) + "\n")
+					else:
+						f.write(file["printify"](item, None) + "\n")
 				else:
 					f.write(str(item) + "\n")
 		f.write(COMMENT_END + "\n")

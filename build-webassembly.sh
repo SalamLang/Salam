@@ -42,7 +42,8 @@ emcc "${sources[@]}" -o ${OUTPUT_BASE}.html \
 	-s "VERBOSE=1" \
 	-s "EXPORTED_RUNTIME_METHODS=['callMain']" \
 	-s "ASSERTIONS=2" \
-	-s "EXPORTED_FUNCTIONS=['_main']"
+	-s "EXPORTED_FUNCTIONS=['_main']" \
+    -s "STACK_SIZE=8388608" # 8MB (8 * 1024 * 1024)
 
 if [ $? -eq 0 ]; then
 	echo "Compilation successful. Output files:"

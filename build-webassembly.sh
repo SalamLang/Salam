@@ -41,6 +41,7 @@ emcc "${sources[@]}" -o ${OUTPUT_BASE}.html \
 	-s "EXPORTED_RUNTIME_METHODS=['callMain']" \
 	# -s NO_EXIT_RUNTIME=1 \
 	# -s "EXPORTED_FUNCTIONS=['_main']"
+	-s ASSERTIONS=2 \
 	# -s ASSERTIONS=0 \
 
 if [ $? -eq 0 ]; then

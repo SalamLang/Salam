@@ -31,7 +31,7 @@ typedef enum {
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_FILTER
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_FILTER(TYPE, NAME, NAME_LOWER) TYPE,
 
-#include "ast_layout_attribute_style_filter.h"
+#include "config/ast_layout_attribute_style_filter.h"
 } ast_layout_attribute_style_filter_t;
 
 typedef struct ast_layout_style_state_t {
@@ -49,7 +49,7 @@ typedef enum ast_layout_attribute_style_state_type {
                                               ENDUSER_NAME, GENERATED_NAME) \
     TYPE,
 
-#include "ast_layout_attribute_style_state_type.h"
+#include "config/ast_layout_attribute_style_state_type.h"
 } ast_layout_attribute_style_state_type;
 
 #include "array.h"

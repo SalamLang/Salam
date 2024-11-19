@@ -41,7 +41,7 @@ typedef enum {
 #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
                                ENDUSER_NAME, IS_MOTHER)
 
-#include "ast_layout_type.h"
+#include "config/ast_layout_type.h"
 } ast_layout_node_type_t;
 
 typedef enum {
@@ -54,7 +54,7 @@ typedef enum {
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, \
                                          GENERATED_NAME, ENDUSER_NAME)
 
-#include "ast_layout_attribute_type.h"
+#include "config/ast_layout_attribute_type.h"
 
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT
@@ -71,7 +71,7 @@ typedef enum {
                                              ENDUSER_NAME, GENERATED_NAME, \
                                              FILTER, ALLOWED_VALUES, SUBTAGS)
 
-#include "ast_layout_attribute_style_type.h"
+#include "config/ast_layout_attribute_style_type.h"
 } ast_layout_attribute_type_t;
 
 #include "array.h"

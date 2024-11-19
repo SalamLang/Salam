@@ -2,7 +2,6 @@ import yaml
 
 FILE = "type.yaml"
 LANGUAGES = ["en", "fa"]
-ALL_ATTRS = ["id", "generate_name", "text"]
 
 file = open(FILE, "r", encoding="utf-8")
 docs = yaml.safe_load_all(file)

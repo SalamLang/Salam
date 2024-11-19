@@ -1,7 +1,6 @@
 import yaml
 
 FILE = "language.yaml"
-LANGUAGES = ["en", "fa"]
 
 file = open(FILE, "r", encoding="utf-8")
 docs = yaml.safe_load_all(file)

@@ -531,7 +531,7 @@ char *ast_value_type_name(ast_value_type_t *type) {
     case TYPE:                                 \
         return NAME;
 
-#include "ast_value_kind.h"
+#include "config/ast_value_kind.h"
     }
 
     return "unknown";
@@ -705,7 +705,7 @@ void ast_node_print(ast_node_t *node) {
         printf("%s\n", NAME);            \
         break;
 
-#include "ast_type.h"
+#include "config/ast_type.h"
     }
 }
 
@@ -725,7 +725,7 @@ char *ast_block_type_name(ast_block_type_t type) {
         printf("%s\n", NAME);                  \
         break;
 
-#include "ast_block_type.h"
+#include "config/ast_block_type.h"
     }
 
     return "unknown block";

@@ -212,42 +212,42 @@ def printify_layout_type(item, group):
 FILES = [
     {
         "input": "type.yaml",
-        "output": "config/ast_type.h",
+        "output": "ast_type.h",
         "printify": printify_type,
     },
      {
         "input": "block.yaml",
-        "output": "config/ast_block_type.h",
+        "output": "ast_block_type.h",
         "printify": printify_block_type,
     },
       {
         "input": "layout/type.yaml",
-        "output": "config/ast_layout_type.h",
+        "output": "ast_layout_type.h",
         "printify": printify_layout_type,
     },
     {
         "input": "layout/attribute/type.yaml",
-        "output": "config/ast_layout_attribute_type.h",
+        "output": "ast_layout_attribute_type.h",
         "printify": printify_layout_attribute_type,
     },
     {
         "input": "layout/attribute/style/global_value.yaml",
-        "output": "config/ast_layout_attribute_style_global.h",
+        "output": "ast_layout_attribute_style_global.h",
         "printify": printify_layout_attribute_style_global_value,
     },
     {
         "input": "layout/attribute/style/state.yaml",
-        "output": "config/ast_layout_attribute_style_state_type.h",
+        "output": "ast_layout_attribute_style_state_type.h",
         "printify": printify_layout_attribute_style_state_type,
     },
     {
         "input": "layout/attribute/style/type.yaml",
-        "output": "config/ast_layout_attribute_style_type.h",
+        "output": "ast_layout_attribute_style_type.h",
         "printify": printify_layout_attribute_style_type,
     },
     {
         "input": "layout/attribute/style/value.yaml",
-        "output": "config/ast_layout_attribute_style_value.h",
+        "output": "ast_layout_attribute_style_value.h",
         "printify": printify_layout_attribute_style_value,
     },
 ]
@@ -256,7 +256,7 @@ FILES = [
 def sync_file(file):
     print("Syncing file: " + file["input"] + " -> " + file["output"])
     
-    output_filename = "../src/" + file["output"]
+    output_filename = "../src/config/" + file["output"]
     input_filename = file["input"]
 
     f = open(input_filename, "r", encoding="utf-8")

@@ -1,6 +1,6 @@
 import yaml
 
-FILE = "global_value.yaml"
+FILE = "type.yaml"
 LANGUAGES = ["en", "fa"]
 
 file = open(FILE, "r", encoding="utf-8")
@@ -19,10 +19,25 @@ if __name__ == "__main__":
 				print(item)
 				error("id is required and missed in an item")
 
-			if "generate_name" not in item:
+			if "type" not in item:
 				print(item)
-				error("generate_name is required")
+				error("type is required")
 
+			if "generate_name" in item:
+				if "reserved_values" not in item:
+					print(item)
+					error("reserved_values is required")
+				if "text" not in item:
+					print(item)
+					error("text is required")
+			else:
+				if "reserved_values" in item:
+					print(item)
+					error("Why reserved_values exists for a non-generate_name item?")
+				if "text" in item:
+					print(item)
+					error("Why text exists for a non-generate_name item?")
+	
 			if "text" in item:
 				for lang in LANGUAGES:
 					if lang not in item["text"]:

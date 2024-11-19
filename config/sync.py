@@ -13,9 +13,9 @@ def printify_type(item, group):
 	return (
 		f"ADD_TYPE" + 
   		f"(" + 
-		f"{item["id"]}, "
-		f"\"{idtext}\", "
-		f"\"{idtext.lower()}\""
+		f"{item["id"]}, " +
+		f"\"{idtext}\", " +
+		f"\"{idtext.lower()}\"" +
 		f")\n"
 	)
 
@@ -27,9 +27,31 @@ def printify_block_type(item, group):
 	return (
 		f"ADD_BLOCK_TYPE" + 
   		f"(" + 
-		f"{item["id"]}, "
-		f"\"{idtext}\", "
-		f"\"{idtext.lower()}\""
+		f"{item["id"]}, " +
+		f"\"{idtext}\", " +
+		f"\"{idtext.lower()}\"" +
+		f")\n"
+	)
+
+def printify_layout_attribute_type(item, group):
+	global SELECTED_LANGUAGE
+	
+	idtext = item["id"].replace("AST_LAYOUT_ATTRIBUTE_TYPE_", "")
+	values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
+ 
+	if type(values) is not str:
+		return "" # TODO
+
+	generate_name = item.get("generate_name", "")
+
+	return (
+		f"ADD_LAYOUT_ATTRIBUTE_TYPE" + 
+  		f"(" + 
+		f"{item["id"]}, " +
+		f"\"{idtext}\", " +
+		f"\"{idtext.lower()}\", " +
+		f"\"{generate_name}\", " +
+		f"\"{str(values)}\"" +
 		f")\n"
 	)
 
@@ -44,8 +66,8 @@ def printify_layout_attribute_style_global_value(item, group):
 	return (
 		f"ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE" + 
   		f"(" + 
-		f"\"{item["id"]}\", "
-		f"\"{str(values)}\""
+		f"\"{item["id"]}\", " +
+		f"\"{str(values)}\"" +
 		f")\n"
 	)
  
@@ -130,11 +152,11 @@ def printify_layout_attribute_style_state_type(item, group):
 	return (
 		f"ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE" + 
   		f"(" + 
-		f"{item["id"]}, "
-		f"\"{idtext}\", "
-		f"\"{idtext.lower()}\", "
-		f"\"{str(values)}\", "
-		f"\"{item.get("generate_name", "")}\""
+		f"{item["id"]}, " +
+		f"\"{idtext}\", " +
+		f"\"{idtext.lower()}\", " +
+		f"\"{str(values)}\", " +
+		f"\"{item.get("generate_name", "")}\"" +
 		f")\n"
 	)
 
@@ -145,11 +167,11 @@ def printify_layout_type(item, group):
 		idtext = item["id"].replace("AST_LAYOUT_TYPE_", "")
   
 		return (
-			f"({item["id"]}, "
-			f"\"{idtext}\", "
-			f"\"{idtext.lower()}\", "
-			f"\"{item.get("generate_name", idtext.lower())}\", "
-			f"\"{value}\", "
+			f"({item["id"]}, " +
+			f"\"{idtext}\", " +
+			f"\"{idtext.lower()}\", " +
+			f"\"{item.get("generate_name", idtext.lower())}\", " +
+			f"\"{value}\", " +
 			f"{str(item.get("is_mother", False)).lower()}" +
 			f")\n"
 		)
@@ -196,6 +218,11 @@ FILES = [
 		"input": "layout/type.yaml",
 		"output": "ast_layout_type.h",
 		"printify": printify_layout_type,
+	},
+	{
+		"input": "layout/attribute/type.yaml",
+		"output": "ast_layout_attribute_type.h",
+		"printify": printify_layout_attribute_type,
 	},
 	{
 		"input": "layout/attribute/style/global_value.yaml",

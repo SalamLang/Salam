@@ -192,4 +192,3 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA, "MEDIA", "media", "@media", "واکنش �
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_MEDIA, "MEDIA", "media", "@media", "واکنش‌گرا", true)
 
 // ----------- END AUTO GENERATED ----------- //
-

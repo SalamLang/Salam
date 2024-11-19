@@ -5,88 +5,101 @@ SELECTED_LANGUAGE = "fa"
 COMMENT_BEGIN = "// ----------- BEGIN AUTO GENERATED ----------- //"
 COMMENT_END = "// ----------- END AUTO GENERATED ----------- //"
 
-def printify_type(item, group):
+
+def prettify_type(item, group):
     global SELECTED_LANGUAGE
 
-    idtext = item["id"].replace("AST_TYPE_", "")
+    itemid = item["id"]
+    idtext = itemid.replace("AST_TYPE_", "")
+
+    return f"ADD_TYPE(" f"{itemid}, " f'"{idtext}", ' f'"{idtext.lower()}"' f")\n"
+
+
+def prettify_block_type(item, group):
+    global SELECTED_LANGUAGE
+
+    itemid = item["id"]
+    idtext = itemid.replace("AST_BLOCK_TYPE_", "")
+    idtextlower = idtext.lower()
 
     return (
-        f"ADD_TYPE" +
-        f"(" +
-        f"{item["id"]}, " +
-        f"\"{idtext}\", " +
-        f"\"{idtext.lower()}\"" +
-        f")\n"
+        f"ADD_BLOCK_TYPE"
+        + f"("
+        + f"{itemid}, "
+        + f'"{idtext}", '
+        + f'"{idtextlower}"'
+        + f")\n"
     )
 
-def printify_block_type(item, group):
+
+def prettify_layout_attribute_type(item, group):
     global SELECTED_LANGUAGE
 
-    idtext = item["id"].replace("AST_BLOCK_TYPE_", "")
+    itemid = item["id"]
+    idtext = itemid.replace("AST_LAYOUT_ATTRIBUTE_TYPE_", "")
+    idtextlower = idtext.lower()
 
-    return (
-        f"ADD_BLOCK_TYPE" +
-          f"(" +
-        f"{item["id"]}, " +
-        f"\"{idtext}\", " +
-        f"\"{idtext.lower()}\"" +
-        f")\n"
-    )
-
-def printify_layout_attribute_type(item, group):
-    global SELECTED_LANGUAGE
-
-    idtext = item["id"].replace("AST_LAYOUT_ATTRIBUTE_TYPE_", "")
     values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
 
     if type(values) is not str:
-        return "" # TODO
+        return ""  # TODO
 
     generate_name = item.get("generate_name", "")
 
     return (
-        f"ADD_LAYOUT_ATTRIBUTE_TYPE" +
-          f"(" +
-        f"{item["id"]}, " +
-        f"\"{idtext}\", " +
-        f"\"{idtext.lower()}\", " +
-        f"\"{generate_name}\", " +
-        f"\"{str(values)}\"" +
-        f")\n"
+        f"ADD_LAYOUT_ATTRIBUTE_TYPE"
+        + f"("
+        + f"{itemid}, "
+        + f'"{idtext}", '
+        + f'"{idtextlower}", '
+        + f'"{generate_name}", '
+        + f'"{str(values)}"'
+        + f")\n"
     )
 
-def printify_layout_attribute_style_global_value(item, group):
+
+def prettify_layout_attribute_style_global_value(item, group):
     global SELECTED_LANGUAGE
+
+    itemid = item["id"]
 
     values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
 
     if type(values) is not str:
-        return "" # TODO
+        return ""  # TODO
 
     return (
-        f"ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE" +
-          f"(" +
-        f"\"{item["id"]}\", " +
-        f"\"{str(values)}\"" +
-        f")\n"
+        f"ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE"
+        + f"("
+        + f'"{itemid}", '
+        + f'"{str(values)}"'
+        + f")\n"
     )
 
-def printify_layout_attribute_style_type(item, group):
+
+def prettify_layout_attribute_style_type(item, group):
     global SELECTED_LANGUAGE
 
     def command(value):
-        idtext = item["id"].replace("AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", "")
+        itemid = item["id"]
+        idtext = itemid.replace("AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", "")
+        idtextlower = idtext.lower()
+
+        generate_name = item.get("generate_name", idtextlower)
+        type = str(item.get("type", "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY"))
+        reserved_values = (
+            str(item.get("reserved_values", "NULL")).lower()
+            if item.get("reserved_values", "") != ""
+            else "NULL"
+        )
 
         return (
-            f"({item["id"]}, "
-            f"\"{idtext}\", "
-            f"\"{idtext.lower()}\", "
-            f"\"{value}\", "
-            f"\"{item.get("generate_name", idtext.lower())}\", "
-            f"{str(item.get("type", "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY"))}, " +
-            f"{str(item.get('reserved_values', 'NULL')).lower() if item.get('reserved_values', '') != '' else 'NULL'}, " +
-            f"NULL" +
-            f")\n"
+            f"({itemid}, "
+            f'"{idtext}", '
+            f'"{idtextlower}", '
+            f'"{value}", '
+            f'"{generate_name}", '
+            f"{type}, " + f"{reserved_values}, " + f"NULL" + f")\n"
         )
 
     values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
@@ -119,64 +132,76 @@ def printify_layout_attribute_style_type(item, group):
                     result += key_repeat + command(value)
             return result
 
-def printify_layout_attribute_style_value(key, items):
+
+def prettify_layout_attribute_style_value(key, items):
     global SELECTED_LANGUAGE
 
     result = "const ast_layout_attribute_style_pair_t " + key + "[] = {\n"
 
     if items is not None:
         for item in items:
-            item["generate_name"] = item["generate_name"].replace("\"", "\\\"")
+            item["generate_name"] = item["generate_name"].replace('"', '\\"')
             values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
 
             if values is not None:
                 if type(values) is str:
-                    values = values.replace("\"", "\\\"")
-                    result += "\t{\"" + values + "\", \"" + item["generate_name"] + "\"},\n"
+                    values = values.replace('"', '\\"')
+                    result += '\t{"' + values + '", "' + item["generate_name"] + '"},\n'
                 else:
                     for value in values:
-                        value = value.replace("\"", "\\\"")
-                        result += "\t{\"" + value + "\", \"" + item["generate_name"] + "\"},\n"
+                        value = value.replace('"', '\\"')
+                        result += (
+                            '\t{"' + value + '", "' + item["generate_name"] + '"},\n'
+                        )
 
     result += "\t{NULL, NULL},\n"
     result += "};\n"
 
     return result
 
-def printify_layout_attribute_style_state_type(item, group):
+
+def prettify_layout_attribute_style_state_type(item, group):
     global SELECTED_LANGUAGE
 
-    idtext = item["id"].replace("AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_", "")
+    itemid = item["id"]
+    idtext = itemid.replace("AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_", "")
+    idtextlower = idtext.lower()
     values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
+    generate_name = item.get("generate_name", "")
 
     if type(values) is not str:
-        return "" # TODO
+        return ""  # TODO
 
     return (
-        f"ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE" +
-          f"(" +
-        f"{item["id"]}, " +
-        f"\"{idtext}\", " +
-        f"\"{idtext.lower()}\", " +
-        f"\"{str(values)}\", " +
-        f"\"{item.get("generate_name", "")}\"" +
-        f")\n"
+        f"ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE"
+        + f"("
+        + f"{itemid}, "
+        + f'"{idtext}", '
+        + f'"{idtextlower}", '
+        + f'"{str(values)}", '
+        + f'"{generate_name}"'
+        + f")\n"
     )
 
-def printify_layout_type(item, group):
+
+def prettify_layout_type(item, group):
     global SELECTED_LANGUAGE
 
     def command(value):
-        idtext = item["id"].replace("AST_LAYOUT_TYPE_", "")
+        itemid = item["id"]
+        idtext = itemid.replace("AST_LAYOUT_TYPE_", "")
+        idtextlower = idtext.lower()
+        generate_name = item.get("generate_name", idtext.lower())
+        is_mother = str(item.get("is_mother", False)).lower()
 
         return (
-            f"({item["id"]}, " +
-            f"\"{idtext}\", " +
-            f"\"{idtext.lower()}\", " +
-            f"\"{item.get("generate_name", idtext.lower())}\", " +
-            f"\"{value}\", " +
-            f"{str(item.get("is_mother", False)).lower()}" +
-            f")\n"
+            f"({itemid}, "
+            + f'"{idtext}", '
+            + f'"{idtextlower}", '
+            + f'"{generate_name}", '
+            + f'"{value}", '
+            + f"{is_mother}"
+            + f")\n"
         )
 
     values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
@@ -209,46 +234,47 @@ def printify_layout_type(item, group):
                     result += key_repeat + command(value)
             return result
 
+
 FILES = [
     {
         "input": "type.yaml",
         "output": "ast_type.h",
-        "printify": printify_type,
+        "pretify": prettify_type,
     },
-     {
+    {
         "input": "block.yaml",
         "output": "ast_block_type.h",
-        "printify": printify_block_type,
+        "prettify": prettify_block_type,
     },
-      {
+    {
         "input": "layout/type.yaml",
         "output": "ast_layout_type.h",
-        "printify": printify_layout_type,
+        "prettify": prettify_layout_type,
     },
     {
         "input": "layout/attribute/type.yaml",
         "output": "ast_layout_attribute_type.h",
-        "printify": printify_layout_attribute_type,
+        "prettify": prettify_layout_attribute_type,
     },
     {
         "input": "layout/attribute/style/global_value.yaml",
         "output": "ast_layout_attribute_style_global.h",
-        "printify": printify_layout_attribute_style_global_value,
+        "prettify": prettify_layout_attribute_style_global_value,
     },
     {
         "input": "layout/attribute/style/state.yaml",
         "output": "ast_layout_attribute_style_state_type.h",
-        "printify": printify_layout_attribute_style_state_type,
+        "prettify": prettify_layout_attribute_style_state_type,
     },
     {
         "input": "layout/attribute/style/type.yaml",
         "output": "ast_layout_attribute_style_type.h",
-        "printify": printify_layout_attribute_style_type,
+        "prettify": prettify_layout_attribute_style_type,
     },
     {
         "input": "layout/attribute/style/value.yaml",
         "output": "ast_layout_attribute_style_value.h",
-        "printify": printify_layout_attribute_style_value,
+        "prettify": prettify_layout_attribute_style_value,
     },
 ]
 
@@ -273,13 +299,13 @@ def sync_file(file):
         f.write(COMMENT_BEGIN + "\n")
         for group in content:
             for item in group["items"]:
-                if "printify" in file:
+                if "prettify" in file:
                     if isinstance(group["items"], dict):
-                        f.write(file["printify"](item, group["items"][item]) + "\n")
+                        f.write(file["prettify"](item, group["items"][item]) + "\n")
                     elif isinstance(group["items"], list):
-                        f.write(file["printify"](item, None) + "\n")
+                        f.write(file["prettify"](item, None) + "\n")
                     else:
-                        f.write(file["printify"](item, None) + "\n")
+                        f.write(file["prettify"](item, None) + "\n")
                 else:
                     f.write(str(item) + "\n")
         f.write(COMMENT_END + "\n")
@@ -287,6 +313,7 @@ def sync_file(file):
         # 	if COMMENT_END in line:
         # 		break
         f.write("\n")
+
 
 for file in FILES:
     print(file)

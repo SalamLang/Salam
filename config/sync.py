@@ -12,7 +12,7 @@ def printify_type(item, group):
 
     return (
         f"ADD_TYPE" +
-          f"(" +
+        f"(" +
         f"{item["id"]}, " +
         f"\"{idtext}\", " +
         f"\"{idtext.lower()}\"" +

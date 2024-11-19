@@ -2,21 +2,21 @@
  * ---------------------------------------------------------------------------
  * Salam Programming Language
  * ---------------------------------------------------------------------------
- * 
- * Welcome to the Salam Programming Language! Salam is a modern, efficient, 
- * and developer-friendly language created to inspire and empower programmers 
- * of all ages. With its unique features and Persian roots, Salam aims to make 
+ *
+ * Welcome to the Salam Programming Language! Salam is a modern, efficient,
+ * and developer-friendly language created to inspire and empower programmers
+ * of all ages. With its unique features and Persian roots, Salam aims to make
  * programming more accessible and enjoyable for everyone.
- * 
- * This file is part of the core implementation of Salam, including its runtime 
- * and compiler components. By contributing to or using this codebase, you are 
- * part of a growing community dedicated to innovation and inclusivity in 
+ *
+ * This file is part of the core implementation of Salam, including its runtime
+ * and compiler components. By contributing to or using this codebase, you are
+ * part of a growing community dedicated to innovation and inclusivity in
  * programming.
- * 
+ *
  * Explore Salam further:
  * - Website: https://www.salamlang.ir/
  * - GitHub: https://github.com/SalamLang/Salam
- * 
+ *
  * Thank you for being part of this journey!
  * ---------------------------------------------------------------------------
  */
@@ -71,7 +71,6 @@ bool has_font_extension(char *value, char **out_extension) {
 
         if (len - prefix_len != 0 &&
             my_strcasecmp(value + len - prefix_len, prefixes[i]) == 0) {
-            
             if (out_extension != NULL) {
                 *out_extension = string_strdup(names[i]);
             }
@@ -658,21 +657,21 @@ bool token_belongs_to_ast_layout_node(
         if (is_attribute_type_in_array(attribute_key_type, valid_attributes,
                                        valid_attributes_length)) {
             // rename type/نوع to target
-			if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_TYPE) {
+            if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_TYPE) {
                 if (attribute->final_key != NULL) {
                     memory_destroy(attribute->final_key);
                 }
 
                 attribute->final_key = string_strdup("target");
-				
+
                 return true;
-            // rename src/منبع to href
-			} else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_SRC) {
+                // rename src/منبع to href
+            } else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_SRC) {
                 if (attribute->final_key != NULL) {
                     memory_destroy(attribute->final_key);
                 }
-				
-				attribute->final_key = string_strdup("href");
+
+                attribute->final_key = string_strdup("href");
 
                 return true;
             }
@@ -708,16 +707,16 @@ bool token_belongs_to_ast_layout_node(
                 memory_destroy(attribute->final_key);
             }
 
-			// rename type/نوع to method
+            // rename type/نوع to method
             if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_TYPE) {
                 attribute->final_key = string_strdup("method");
-			// rename src/منبع to action
+                // rename src/منبع to action
             } else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_SRC) {
                 attribute->final_key = string_strdup("action");
-			// rename kind/روش to target
+                // rename kind/روش to target
             } else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_KIND) {
                 attribute->final_key = string_strdup("target");
-			}
+            }
 
             return true;
         }

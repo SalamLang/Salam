@@ -2,21 +2,21 @@
  * ---------------------------------------------------------------------------
  * Salam Programming Language
  * ---------------------------------------------------------------------------
- * 
- * Welcome to the Salam Programming Language! Salam is a modern, efficient, 
- * and developer-friendly language created to inspire and empower programmers 
- * of all ages. With its unique features and Persian roots, Salam aims to make 
+ *
+ * Welcome to the Salam Programming Language! Salam is a modern, efficient,
+ * and developer-friendly language created to inspire and empower programmers
+ * of all ages. With its unique features and Persian roots, Salam aims to make
  * programming more accessible and enjoyable for everyone.
- * 
- * This file is part of the core implementation of Salam, including its runtime 
- * and compiler components. By contributing to or using this codebase, you are 
- * part of a growing community dedicated to innovation and inclusivity in 
+ *
+ * This file is part of the core implementation of Salam, including its runtime
+ * and compiler components. By contributing to or using this codebase, you are
+ * part of a growing community dedicated to innovation and inclusivity in
  * programming.
- * 
+ *
  * Explore Salam further:
  * - Website: https://www.salamlang.ir/
  * - GitHub: https://github.com/SalamLang/Salam
- * 
+ *
  * Thank you for being part of this journey!
  * ---------------------------------------------------------------------------
  */
@@ -185,10 +185,11 @@ void parser_parse_layout_block_children(ast_layout_block_t *block,
     ast_layout_node_t *node = parser_parse_layout_node(lexer, name, last_name);
 
     if (node != NULL) {
-        if (block->parent_node_type == AST_LAYOUT_TYPE_SELECT && node->type == AST_LAYOUT_TYPE_LI) {
+        if (block->parent_node_type == AST_LAYOUT_TYPE_SELECT &&
+            node->type == AST_LAYOUT_TYPE_LI) {
             node->type = AST_LAYOUT_TYPE_OPTION;
         }
-        
+
         if (node->type == AST_LAYOUT_TYPE_FONT) {
             if (block->parent_node_type != AST_LAYOUT_TYPE_NONE) {
                 error_parser(2,

@@ -13,17 +13,17 @@ def error(msg):
 
 
 if __name__ == "__main__":
-	for doc in docs:
-		for item in doc["items"]:
-			if "id" not in item:
-				print(item)
-				error("id is required and missed in an item")
+    for doc in docs:
+        for item in doc["items"]:
+            if "id" not in item:
+                print(item)
+                error("id is required and missed in an item")
 
-			if "generate_name" not in item:
-				if "text" in item:
-					for lang in LANGUAGES:
-						if lang not in item["text"]:
-							print(item)
-							error("text is required for " + lang + " language")
+            if "generate_name" not in item:
+                if "text" in item:
+                    for lang in LANGUAGES:
+                        if lang not in item["text"]:
+                            print(item)
+                            error("text is required for " + lang + " language")
 
-	print(FILE + ": Validation is successful")
+    print(FILE + ": Validation is successful")

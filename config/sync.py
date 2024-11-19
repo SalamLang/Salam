@@ -90,30 +90,33 @@ def printify_layout_attribute_style_type(item, group):
 		)
 
 	values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
+	key_main = "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE"
+	key_hide = "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE"
+	key_repeat = "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT"
 	
 	if "generate_name" not in item:
 		if type(values) is str:
-			return "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE" + command(values)
+			return key_hide + command(values)
 		else:
 			result = ""
 			for index, value in enumerate(values):
 				print(index, value)
 				if index == 0:
-					result += "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE" + command(value)
+					result += key_hide + command(value)
 				else:
-					result += "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT" + command(value)
+					result += key_repeat + command(value)
 			return result
 	else:
 		if type(values) is str:
-			return "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE" + command(values)
+			return key_main + command(values)
 		else:
 			result = ""
 			for index, value in enumerate(values):
 				print(index, value)
 				if index == 0:
-					result += "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE" + command(value)
+					result += key_main + command(value)
 				else:
-					result += "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT" + command(value)
+					result += key_repeat + command(value)
 			return result
 
 def printify_layout_attribute_style_value(key, items):
@@ -177,30 +180,33 @@ def printify_layout_type(item, group):
 		)
 
 	values = item["text"][SELECTED_LANGUAGE]
-	
+	key_main = "ADD_LAYOUT_TYPE"
+	key_hide = "ADD_LAYOUT_TYPE_HIDE"
+	key_repeat = "ADD_LAYOUT_TYPE_REPEAT"
+
 	if "generate_name" not in item:
 		if type(values) is str:
-			return "ADD_LAYOUT_TYPE_HIDE" + command(values)
+			return key_hide + command(values)
 		else:
 			result = ""
 			for index, value in enumerate(values):
 				print(index, value)
 				if index == 0:
-					result += "ADD_LAYOUT_TYPE_HIDE" + command(value)
+					result += key_hide + command(value)
 				else:
-					result += "ADD_LAYOUT_TYPE_REPEAT" + command(value)
+					result += key_repeat + command(value)
 			return result
 	else:
 		if type(values) is str:
-			return "ADD_LAYOUT_TYPE" + command(values)
+			return key_main + command(values)
 		else:
 			result = ""
 			for index, value in enumerate(values):
 				print(index, value)
 				if index == 0:
-					result += "ADD_LAYOUT_TYPE" + command(value)
+					result += key_main + command(value)
 				else:
-					result += "ADD_LAYOUT_TYPE_REPEAT" + command(value)
+					result += key_repeat + command(value)
 			return result
 
 FILES = [

@@ -5,6 +5,7 @@ SELECTED_LANGUAGE = "fa"
 COMMENT_BEGIN = "// ----------- BEGIN AUTO GENERATED ----------- //"
 COMMENT_END = "// ----------- END AUTO GENERATED ----------- //"
 
+
 def prettify_type(item, group):
     global SELECTED_LANGUAGE
 
@@ -12,6 +13,7 @@ def prettify_type(item, group):
     idtext = itemid.replace("AST_TYPE_", "")
 
     return f"ADD_TYPE(" f"{itemid}, " f'"{idtext}", ' f'"{idtext.lower()}"' f")\n"
+
 
 def prettify_block_type(item, group):
     global SELECTED_LANGUAGE
@@ -28,6 +30,7 @@ def prettify_block_type(item, group):
         + f'"{idtextlower}"'
         + f")\n"
     )
+
 
 def prettify_layout_attribute_type(item, group):
     global SELECTED_LANGUAGE
@@ -53,6 +56,8 @@ def prettify_layout_attribute_type(item, group):
         + f'"{str(values)}"'
         + f")\n"
     )
+
+
 def prettify_layout_attribute_style_global_value(item, group):
     global SELECTED_LANGUAGE
 
@@ -69,6 +74,7 @@ def prettify_layout_attribute_style_global_value(item, group):
         + f'"{str(values)}"'
         + f")\n"
     )
+
 
 def prettify_layout_attribute_style_type(item, group):
     global SELECTED_LANGUAGE
@@ -125,6 +131,7 @@ def prettify_layout_attribute_style_type(item, group):
                     result += key_repeat + command(value)
             return result
 
+
 def prettify_layout_attribute_style_value(key, items):
     global SELECTED_LANGUAGE
 
@@ -151,6 +158,7 @@ def prettify_layout_attribute_style_value(key, items):
 
     return result
 
+
 def prettify_layout_attribute_style_state_type(item, group):
     global SELECTED_LANGUAGE
 
@@ -173,6 +181,7 @@ def prettify_layout_attribute_style_state_type(item, group):
         + f'"{generate_name}"'
         + f")\n"
     )
+
 
 def prettify_layout_type(item, group):
     global SELECTED_LANGUAGE
@@ -267,6 +276,7 @@ FILES = [
         "prettify": prettify_layout_attribute_style_value,
     },
 ]
+
 
 def sync_file(file):
     print("Syncing file: " + file["input"] + " -> " + file["output"])

@@ -7,12 +7,12 @@ COMMENT_END = "// ----------- END AUTO GENERATED ----------- //"
 
 def printify_type(item, group):
     global SELECTED_LANGUAGE
-    
+
     idtext = item["id"].replace("AST_TYPE_", "")
-    
+
     return (
-        f"ADD_TYPE" + 
-          f"(" + 
+        f"ADD_TYPE" +
+          f"(" +
         f"{item["id"]}, " +
         f"\"{idtext}\", " +
         f"\"{idtext.lower()}\"" +
@@ -21,12 +21,12 @@ def printify_type(item, group):
 
 def printify_block_type(item, group):
     global SELECTED_LANGUAGE
-    
+
     idtext = item["id"].replace("AST_BLOCK_TYPE_", "")
-    
+
     return (
-        f"ADD_BLOCK_TYPE" + 
-          f"(" + 
+        f"ADD_BLOCK_TYPE" +
+          f"(" +
         f"{item["id"]}, " +
         f"\"{idtext}\", " +
         f"\"{idtext.lower()}\"" +
@@ -35,18 +35,18 @@ def printify_block_type(item, group):
 
 def printify_layout_attribute_type(item, group):
     global SELECTED_LANGUAGE
-    
+
     idtext = item["id"].replace("AST_LAYOUT_ATTRIBUTE_TYPE_", "")
     values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
- 
+
     if type(values) is not str:
         return "" # TODO
 
     generate_name = item.get("generate_name", "")
 
     return (
-        f"ADD_LAYOUT_ATTRIBUTE_TYPE" + 
-          f"(" + 
+        f"ADD_LAYOUT_ATTRIBUTE_TYPE" +
+          f"(" +
         f"{item["id"]}, " +
         f"\"{idtext}\", " +
         f"\"{idtext.lower()}\", " +
@@ -57,26 +57,26 @@ def printify_layout_attribute_type(item, group):
 
 def printify_layout_attribute_style_global_value(item, group):
     global SELECTED_LANGUAGE
-    
+
     values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
 
     if type(values) is not str:
         return "" # TODO
 
     return (
-        f"ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE" + 
-          f"(" + 
+        f"ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE" +
+          f"(" +
         f"\"{item["id"]}\", " +
         f"\"{str(values)}\"" +
         f")\n"
     )
- 
+
 def printify_layout_attribute_style_type(item, group):
     global SELECTED_LANGUAGE
 
     def command(value):
         idtext = item["id"].replace("AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", "")
-  
+
         return (
             f"({item["id"]}, "
             f"\"{idtext}\", "
@@ -93,7 +93,7 @@ def printify_layout_attribute_style_type(item, group):
     key_main = "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE"
     key_hide = "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE"
     key_repeat = "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT"
-    
+
     if "generate_name" not in item:
         if type(values) is str:
             return key_hide + command(values)
@@ -121,7 +121,7 @@ def printify_layout_attribute_style_type(item, group):
 
 def printify_layout_attribute_style_value(key, items):
     global SELECTED_LANGUAGE
-    
+
     result = "const ast_layout_attribute_style_pair_t " + key + "[] = {\n"
 
     if items is not None:
@@ -140,12 +140,12 @@ def printify_layout_attribute_style_value(key, items):
 
     result += "\t{NULL, NULL},\n"
     result += "};\n"
-    
+
     return result
 
 def printify_layout_attribute_style_state_type(item, group):
     global SELECTED_LANGUAGE
-    
+
     idtext = item["id"].replace("AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_", "")
     values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
 
@@ -153,8 +153,8 @@ def printify_layout_attribute_style_state_type(item, group):
         return "" # TODO
 
     return (
-        f"ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE" + 
-          f"(" + 
+        f"ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE" +
+          f"(" +
         f"{item["id"]}, " +
         f"\"{idtext}\", " +
         f"\"{idtext.lower()}\", " +
@@ -168,7 +168,7 @@ def printify_layout_type(item, group):
 
     def command(value):
         idtext = item["id"].replace("AST_LAYOUT_TYPE_", "")
-  
+
         return (
             f"({item["id"]}, " +
             f"\"{idtext}\", " +
@@ -255,7 +255,7 @@ FILES = [
 
 def sync_file(file):
     print("Syncing file: " + file["input"] + " -> " + file["output"])
-    
+
     output_filename = "../src/config/" + file["output"]
     input_filename = file["input"]
 
@@ -264,7 +264,7 @@ def sync_file(file):
 
     with open(output_filename, "r", encoding="utf-8") as f:
         lines = f.readlines()
-    
+
     with open(output_filename, "w", encoding="utf-8") as f:
         for line in lines:
             if COMMENT_BEGIN in line:
@@ -291,4 +291,3 @@ def sync_file(file):
 for file in FILES:
     print(file)
     sync_file(file)
-

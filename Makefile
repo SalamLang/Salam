@@ -65,8 +65,8 @@ checkupdate cku: checkinstall
 	fi
 	pre-commit autoupdate
 
-.PHONY: install I
-install I:
+.PHONY: install i
+install i:
 	@if ! command -v pip >/dev/null 2>&1; then \
 		echo "Error: pip is not installed. Please install it first."; \
 		exit 1; \

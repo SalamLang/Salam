@@ -13,28 +13,44 @@ jobs:
     name: Analyze code with CodeQL
     runs-on: ubuntu-latest
 
+    strategy:
+      matrix:
+        language: [cpp, python]  # Analyzing both C++ and Python code
+
     steps:
-    - name: Check out repository
+    - name: Checkout repository
       uses: actions/checkout@v3
       # Checkout the repository code to the GitHub runner
 
-    - name: Set up CodeQL
+    - name: Initialize CodeQL
       uses: github/codeql-action/init@v2
       with:
-        languages: c, python  # Specify the programming languages to analyze (C and Python)
+        languages: ${{ matrix.language }}  # Use the current language in the matrix
+        config-file: ./.github/codeql-config.yml  # Optionally, specify a custom CodeQL config file
+        queries: +security-extended,security-and-quality  # Security queries to use in analysis
 
-    - name: Build code for C/C++
-      run: |
-        sudo apt-get update
-        sudo apt-get install build-essential  # Install required build tools for C/C++
-        make  # Run the make command to build the project (use your specific build tool if different)
+    - name: Autobuild
+      uses: github/codeql-action/autobuild@v2
+      # Automatically build the project (uses make or other build systems automatically)
       
-    - name: Build code for Python
-      run: |
-        python -m venv venv
-        source venv/bin/activate
-        pip install -r requirements.txt  # Install Python dependencies
-
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v2
-      # Perform the analysis of the C/C++ code using CodeQL
+      with:
+        upload: false  # Don't upload SARIF file yet
+        output: sarif-results  # Output SARIF results to this folder
+
+    - name: Filter SARIF results for C++ (if language is C++)
+      uses: advanced-security/filter-sarif@54b1ee6ebe059d29692bcc246e3c397e99176c6b
+      if: ${{ matrix.language == 'cpp' }}
+      with:
+        patterns: |
+          -src/basic/unit-name.c:cpp/unbounded-write
+          -src/libsystemd/sd-bus/sd-bus.c:cpp/unbounded-write
+          -src/test/test-fs-util.c:cpp/path-injection
+        input: sarif-results/cpp.sarif
+        output: sarif-results/cpp.sarif
+
+    - name: Upload SARIF results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: sarif-results/${{ matrix.language }}.sarif

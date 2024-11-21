@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# Check if emcc is installed
 if ! command -v emcc >/dev/null 2>&1; then
 	echo 'Error: emcc is not installed.' >&2
 	echo 'Install from https://emscripten.org/docs/getting_started/downloads.html'
@@ -9,9 +10,10 @@ fi
 OUTPUT_BASE="salam-wa"
 EDITOR_DIR="../Salam-Editor/"
 
+# Compilation flags
 MEMORY_FLAGS="-s ALLOW_MEMORY_GROWTH=1"
 RUNTIME_FLAGS="-s EXIT_RUNTIME=0 -s NO_EXIT_RUNTIME=1"
-COMMON_FLAGS="-s EXPORTED_RUNTIME_METHODS=['callMain'] -s TOTAL_STACK=8388608" # 8MB (8 * 1024 * 1024)
+COMMON_FLAGS="-s EXPORTED_RUNTIME_METHODS=['callMain'] -s TOTAL_STACK=8388608" # 8MB
 
 sources=(
 	"src/log.c"
@@ -40,50 +42,51 @@ sources=(
 
 DEBUG=0
 if [[ "$1" == "debug" ]]; then
-    DEBUG=1
-    echo "Debug mode enabled."
-    DEBUG_FLAGS="-s VERBOSE=1 -s ASSERTIONS=2"
+	DEBUG=1
+	echo "Debug mode enabled."
+	DEBUG_FLAGS="-s VERBOSE=1 -s ASSERTIONS=2"
 else
-    DEBUG_FLAGS=""
-    echo "Debug mode not enabled."
+	DEBUG_FLAGS=""
+	echo "Debug mode not enabled."
 fi
 
+# Compile C files to WebAssembly
 echo "Compiling C files to WebAssembly..."
-emcc "${sources[@]}" -o ${OUTPUT_BASE}.html \
-    ${MEMORY_FLAGS} \
-    ${RUNTIME_FLAGS} \
-    ${COMMON_FLAGS} \
-    ${DEBUG_FLAGS} \
-    -s EXPORTED_FUNCTIONS="['_main']"
+if ! emcc "${sources[@]}" -o "${OUTPUT_BASE}.html" \
+	${MEMORY_FLAGS} \
+	${RUNTIME_FLAGS} \
+	${COMMON_FLAGS} \
+	${DEBUG_FLAGS} \
+	-s EXPORTED_FUNCTIONS="['_main']"; then
+	echo "Error: Compilation failed."
+	exit 1
+fi
 
-if [ $? -eq 0 ]; then
-	echo "Compilation successful. Output files:"
-	echo "  ${OUTPUT_BASE}.html"
-	echo "  ${OUTPUT_BASE}.js"
-	echo "  ${OUTPUT_BASE}.wasm"
+echo "Compilation successful. Output files:"
+echo "  ${OUTPUT_BASE}.html"
+echo "  ${OUTPUT_BASE}.js"
+echo "  ${OUTPUT_BASE}.wasm"
 
-	if command -v npx >/dev/null 2>&1; then
-		echo "Transpiling JavaScript for older browsers..."
-
-		if npx --no-install babel ${OUTPUT_BASE}.js --out-file ${OUTPUT_BASE}.transpiled.js --compact false; then
-			mv ${OUTPUT_BASE}.transpiled.js ${OUTPUT_BASE}.js
-		else
-			echo "Warning: Babel transpiling failed. JavaScript was not transpiled."
-		fi
+# Optional: Transpile JavaScript for older browsers
+if command -v npx >/dev/null 2>&1; then
+	echo "Transpiling JavaScript for older browsers..."
+	if ! npx --no-install babel "${OUTPUT_BASE}.js" \
+		--out-file "${OUTPUT_BASE}.transpiled.js" --compact false; then
+		echo "Warning: Babel transpiling failed. JavaScript was not transpiled."
 	else
-		echo "Warning: npx command not found. JavaScript will not be transpiled for older browsers."
-	fi
-
-	if [ -d "$EDITOR_DIR" ]; then
-		echo "Copying output files to $EDITOR_DIR"
-		cp ${OUTPUT_BASE}.html "$EDITOR_DIR"
-		cp ${OUTPUT_BASE}.js "$EDITOR_DIR"
-		cp ${OUTPUT_BASE}.wasm "$EDITOR_DIR"
-		echo "Files copied successfully."
-	else
-		echo "Directory $EDITOR_DIR does not exist. Skipping copy."
+		mv "${OUTPUT_BASE}.transpiled.js" "${OUTPUT_BASE}.js"
 	fi
 else
-	echo "Compilation failed."
-	exit 1
+	echo "Warning: npx command not found. JavaScript will not be transpiled for older browsers."
+fi
+
+# Copy output files to the editor directory
+if [ -d "$EDITOR_DIR" ]; then
+	echo "Copying output files to $EDITOR_DIR"
+	cp "${OUTPUT_BASE}.html" "$EDITOR_DIR"
+	cp "${OUTPUT_BASE}.js" "$EDITOR_DIR"
+	cp "${OUTPUT_BASE}.wasm" "$EDITOR_DIR"
+	echo "Files copied successfully."
+else
+	echo "Directory $EDITOR_DIR does not exist. Skipping copy."
 fi

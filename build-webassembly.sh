@@ -40,21 +40,21 @@ sources=(
 
 DEBUG=0
 if [[ "$1" == "debug" ]]; then
-    DEBUG=1
-    echo "Debug mode enabled."
-    DEBUG_FLAGS="-s VERBOSE=1 -s ASSERTIONS=2"
+	DEBUG=1
+	echo "Debug mode enabled."
+	DEBUG_FLAGS="-s VERBOSE=1 -s ASSERTIONS=2"
 else
-    DEBUG_FLAGS=""
-    echo "Debug mode not enabled."
+	DEBUG_FLAGS=""
+	echo "Debug mode not enabled."
 fi
 
 echo "Compiling C files to WebAssembly..."
 emcc "${sources[@]}" -o ${OUTPUT_BASE}.html \
-    ${MEMORY_FLAGS} \
-    ${RUNTIME_FLAGS} \
-    ${COMMON_FLAGS} \
-    ${DEBUG_FLAGS} \
-    -s EXPORTED_FUNCTIONS="['_main']"
+	${MEMORY_FLAGS} \
+	${RUNTIME_FLAGS} \
+	${COMMON_FLAGS} \
+	${DEBUG_FLAGS} \
+	-s EXPORTED_FUNCTIONS="['_main']"
 
 if [ $? -eq 0 ]; then
 	echo "Compilation successful. Output files:"

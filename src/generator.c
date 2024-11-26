@@ -172,8 +172,15 @@ void generator_save(generator_t *generator, const char *html_output,
             string_append(css_output_file, generator->output_dir);
             string_append_str(css_output_file, css_output);
 
+            size_t content_length =
+                generator->css->length + generator->media_css->length;
+
             file_writes(css_output_file->data, generator->css->data);
             file_appends(css_output_file->data, generator->media_css->data);
+
+            if (content_length > 0) {
+                file_appends(css_output_file->data, "\n");
+            }
 
             string_destroy(css_output_file);
         }

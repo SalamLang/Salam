@@ -1,22 +1,16 @@
-FROM debian:bullseye-slim
+FROM alpine:latest
 
-ENV DEBIAN_FRONTEND=noninteractive \
-	LANG=C.UTF-8 \
+ENV LANG=C.UTF-8 \
 	LC_ALL=C.UTF-8
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-	build-essential \
+RUN apk add --no-cache \
 	gcc \
-	curl \
-	ca-certificates \
+	libc-dev \
 	make \
-	&& apt-get clean \
-	&& rm -rf /var/lib/apt/lists/*
+	curl
 
-WORKDIR /
+WORKDIR /app
 
-COPY . .
+COPY ../ ./
 
-RUN make install && make run
-
-CMD ["./salam"]
+RUN make run

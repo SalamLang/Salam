@@ -42,10 +42,27 @@ For more information, visit: https://salamlang.ir
 
 The Salam programming language can be run inside a Docker container, providing an isolated and consistent environment for development and execution. Follow the steps below to get started.
 
+### Step 1: Pull the Image
+
+To pull the Salam Docker image from Docker Hub, run the following command:
+
+```bash
+docker pull basemax/salam:latest
 ```
-docker build -f docker/Dockerfile -t salam .
-docker run --rm -it salam
+
+This will download the latest version of the Salam image to your system.
+
+### Step 2: Run the Image
+
+After the image has been downloaded, you can run it interactively using this command:
+
+```bash
+docker run --rm -it basemax/salam
 ```
+
+This will start a container and open an interactive session with the Salam programming language. The --rm flag ensures that the container is removed once you exit.
+
+Or, if you'd prefer to build the Docker image locally instead of pulling it from Docker Hub, follow these steps:
 
 ### Step 1: Clone the Salam Repository
 

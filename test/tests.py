@@ -1,6 +1,7 @@
 import filecmp
 import os
 from pathlib import Path
+from typing import Union  # Import Union for type annotations
 
 SALAM_BIN = "salam"
 
@@ -15,7 +16,7 @@ failed_tests = 0
 warnings = 0
 
 
-def run_tests_in_directory(directory):
+def run_tests_in_directory(directory: Path) -> None:
     output_dir = directory / "output"
 
     if "output" in directory.parts:
@@ -34,7 +35,7 @@ def run_tests_in_directory(directory):
         )
 
 
-def compare_output_to_expected(directory):
+def compare_output_to_expected(directory: Path) -> None:
     global total_tests, passed_tests, failed_tests, warnings
 
     output_dir = directory / "output"
@@ -66,7 +67,7 @@ def compare_output_to_expected(directory):
     total_tests += 1
 
 
-def process_directory(directory):
+def process_directory(directory: Path) -> None:
     salam_files = list(directory.glob("*.salam"))
     if not salam_files:
         return
@@ -75,7 +76,7 @@ def process_directory(directory):
     compare_output_to_expected(directory)
 
 
-def iterate_directories(base_dir):
+def iterate_directories(base_dir: Union[str, Path]) -> None:
     for root, dirs, _ in os.walk(base_dir):
         dirs[:] = [d for d in dirs if d != "output"]
 

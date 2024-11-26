@@ -270,9 +270,13 @@ void generator_code_layout_body(generator_t *generator,
     size_t body_text_content_length =
         body_text_content != NULL ? strlen(body_text_content) : 0;
 
+	bool body_text_content_has_lines = (body_text_content != NULL) && (strchr(body_text_content, '\n') != NULL);
+
     string_t *body_child =
         generator_code_layout_block(generator, layout_block->children);
-    if (body_child->length > 0 || body_text_content_length > 0) {
+
+	bool needs_newline = body_child->length > 0 || (body_text_content_length > 0 && body_text_content_has_lines);
+    if (needs_newline) {
         string_append_char(body_tag, '\n');
     }
 
@@ -282,15 +286,18 @@ void generator_code_layout_body(generator_t *generator,
     }
 
     // node content
-    if (body_child->length > 0 && body_text_content != NULL &&
-        body_text_content_length > 0) {
+    if (body_text_content != NULL &&
+        (body_text_content_length > 0 && body_text_content_has_lines)) {
         string_append_char(body_content, '\n');
     }
+	
     if (body_child->length > 0) {
         string_append(body_content, body_child);
     }
 
-    if (body_child != NULL) body_child->destroy(body_child);
+    if (body_child != NULL) {
+		body_child->destroy(body_child);
+	}
 
     string_append(body_tag, body_content);
 

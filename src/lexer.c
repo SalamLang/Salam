@@ -1170,7 +1170,32 @@ void lexer_lex(lexer_t *lexer) {
                                 LEXER_NEXT;
                                 LEXER_NEXT_COLUMN;
                             }
-                        } else {
+                        } else if (LEXER_CURRENT == '*') {
+							LEXER_NEXT;
+							LEXER_NEXT_COLUMN;
+
+							while (1) {
+								if (LEXER_CURRENT == '\0') {
+									error_lexer(2, "Unterminated multiline comment at line %zu, column %zu",
+												lexer->line, lexer->column);
+									break;
+								}
+
+								if (LEXER_CURRENT == '*') {
+									LEXER_NEXT;
+									LEXER_NEXT_COLUMN;
+
+									if (LEXER_CURRENT == '/') {
+										LEXER_NEXT;
+										LEXER_NEXT_COLUMN;
+										break;
+									}
+								} else {
+									LEXER_NEXT;
+									LEXER_NEXT_COLUMN;
+								}
+							}
+						} else {
                             token_type_t type = token_char_type(c);
                             token_t *token = token_create(
                                 type, (location_t){lexer->index, 1, lexer->line,

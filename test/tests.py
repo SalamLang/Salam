@@ -1,19 +1,19 @@
-import filecmp
 import os
+import filecmp
 from pathlib import Path
 
-salam_bin = "/mnt/c/Users/MAX/Salam/src/main"
-
-total_tests = 0
-passed_tests = 0
-failed_tests = 0
-warnings = 0
+# SALAM_BIN = "salam"
+SALAM_BIN = "/mnt/c/Users/MAX/Salam/salam"
 
 COLOR_RESET = "\033[0m"
 COLOR_GREEN = "\033[92m"
 COLOR_RED = "\033[91m"
 COLOR_BLUE = "\033[94m"
 
+total_tests = 0
+passed_tests = 0
+failed_tests = 0
+warnings = 0
 
 def run_tests_in_directory(directory):
     output_dir = directory / "output"
@@ -27,7 +27,7 @@ def run_tests_in_directory(directory):
 
     parent_layout_file = directory / "layout.salam"
     if parent_layout_file.exists():
-        os.system(f"{salam_bin} {parent_layout_file} > /dev/null 2>&1")
+        os.system(f"{SALAM_BIN} {parent_layout_file} > /dev/null 2>&1")
     else:
         print(
             f"{COLOR_RED}{parent_layout_file} does not exist. Skipping salam command.{COLOR_RESET}"
@@ -76,7 +76,7 @@ def process_directory(directory):
 
 
 def iterate_directories(base_dir):
-    for root, dirs, files in os.walk(base_dir):
+    for root, dirs, _ in os.walk(base_dir):
         dirs[:] = [d for d in dirs if d != "output"]
 
         for subdir in dirs:

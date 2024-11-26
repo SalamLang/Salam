@@ -6,11 +6,12 @@ ENV LANG=C.UTF-8 \
 RUN apk add --no-cache \
 	gcc \
 	libc-dev \
-	make \
-	curl
+	make
 
 WORKDIR /app
 
-COPY ../ ./
+COPY . .
+
+RUN make
 
 RUN make run

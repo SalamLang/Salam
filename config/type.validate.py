@@ -1,13 +1,13 @@
 import yaml
+from typing import List, Dict
 
 FILE = "type.yaml"
 LANGUAGES = ["en", "fa"]
 
 file = open(FILE, "r", encoding="utf-8")
-docs = yaml.safe_load_all(file)
+docs: List[Dict] = list(yaml.safe_load_all(file))  # Annotate docs as a list of dictionaries
 
-
-def error(msg):
+def error(msg: str) -> None:
     print("Error: " + msg)
     exit(1)
 

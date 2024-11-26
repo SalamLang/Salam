@@ -1,4 +1,4 @@
-FROM alpine:latest
+FROM alpine:latest AS builder
 
 ENV LANG=C.UTF-8 \
 	LC_ALL=C.UTF-8
@@ -8,10 +8,19 @@ RUN apk add --no-cache \
 	libc-dev \
 	make
 
-WORKDIR /app
+WORKDIR /build
 
 COPY . .
 
 RUN make
 
-RUN make run
+FROM alpine:latest
+
+ENV LANG=C.UTF-8 \
+	LC_ALL=C.UTF-8
+
+WORKDIR /app
+
+COPY --from=builder /build/salam /app/salam
+
+CMD ["./salam"]

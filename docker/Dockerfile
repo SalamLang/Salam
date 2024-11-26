@@ -1,3 +1,4 @@
+# First stage
 FROM alpine:latest AS builder
 
 ENV LANG=C.UTF-8 \
@@ -14,6 +15,7 @@ COPY . .
 
 RUN make
 
+# Second stage
 FROM alpine:latest
 
 ENV LANG=C.UTF-8 \

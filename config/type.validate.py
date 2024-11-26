@@ -1,5 +1,6 @@
+from typing import Dict, List
+
 import yaml
-from typing import List, Dict
 
 FILE = "type.yaml"
 LANGUAGES = ["en", "fa"]

@@ -38,20 +38,15 @@ Feel free to explore and create using Salam!
 For more information, visit: https://salamlang.ir
 ```
 
-## Docker
+### Docker
 
 ```
 git clone https://github.com/SalamLang/Salam
 cd Salam
 
-docker build -t salam .
-docker build --rm -t salam .
-docker system prune -f
-docker images -a
-docker run --rm -it salam ls -l /app
-docker images salam
 docker build -f docker/Dockerfile -t salam .
-
+docker images salam
+docker run --rm -it salam ls -l /app
 docker run --rm -it salam
 ```
 

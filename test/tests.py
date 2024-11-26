@@ -1,5 +1,5 @@
-import os
 import filecmp
+import os
 from pathlib import Path
 
 SALAM_BIN = "salam"
@@ -13,6 +13,7 @@ total_tests = 0
 passed_tests = 0
 failed_tests = 0
 warnings = 0
+
 
 def run_tests_in_directory(directory):
     output_dir = directory / "output"

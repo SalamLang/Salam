@@ -109,7 +109,6 @@ docker run --rm -it -v $(pwd):/scripts salam ./salam /scripts/your_script.salam
 ```
 
 Here:
-
 	- `$(pwd)` mounts the current directory to /scripts inside the container.
 	- Replace `your_script.salam` with the actual filename of your Salam script.
 
@@ -118,33 +117,35 @@ Here:
 You can also use the code command to execute Salam code directly:
 
 ```bash
-docker run --rm -it salam ./salam code "صفحه: محتوا = «سلام دنیا از سلام» تمام" /output
+docker run --rm -it salam ./salam code "صفحه: محتوا = «سلام دنیا از سلام» تمام"
 ```
 
 ### Step 6: Explore Salam Commands
 
 You can access additional Salam commands inside the container:
 
-Check the Salam Version:
+#### Check the Salam Version:
 
 ```bash
 docker run --rm -it salam ./salam version
 ```
 
-Update Salam to the Latest Version:
+#### Update Salam to the Latest Version:
 
 ```bash
 docker run --rm -it salam ./salam update
 ```
 
-Lint Salam Scripts:
+#### Lint Salam Scripts:
 
 Lint a File:
+
 ```bash
 docker run --rm -it -v $(pwd):/scripts salam ./salam lint /scripts/your_script.salam /output
 ```
 
 Lint Inline Code:
+
 ```bash
 docker run --rm -it salam ./salam lint code "some salam code"
 ```

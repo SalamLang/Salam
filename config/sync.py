@@ -1,5 +1,6 @@
+from typing import Any, Dict, List
+
 import yaml
-from typing import List, Dict, Any
 
 SELECTED_LANGUAGE = "fa"
 

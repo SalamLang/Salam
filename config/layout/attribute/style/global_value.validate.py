@@ -7,7 +7,7 @@ file = open(FILE, "r", encoding="utf-8")
 docs = yaml.safe_load_all(file)
 
 
-def error(msg):
+def error(msg: str) -> None:
     print("Error: " + msg)
     exit(1)
 

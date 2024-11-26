@@ -1,3 +1,5 @@
+from typing import Any, Dict, List
+
 import yaml
 
 SELECTED_LANGUAGE = "fa"
@@ -6,7 +8,7 @@ COMMENT_BEGIN = "// ----------- BEGIN AUTO GENERATED ----------- //"
 COMMENT_END = "// ----------- END AUTO GENERATED ----------- //"
 
 
-def prettify_type(item, group):
+def prettify_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     global SELECTED_LANGUAGE
 
     itemid = item["id"]
@@ -15,7 +17,7 @@ def prettify_type(item, group):
     return f"ADD_TYPE(" f"{itemid}, " f'"{idtext}", ' f'"{idtext.lower()}"' f")\n"
 
 
-def prettify_block_type(item, group):
+def prettify_block_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     global SELECTED_LANGUAGE
 
     itemid = item["id"]
@@ -32,7 +34,7 @@ def prettify_block_type(item, group):
     )
 
 
-def prettify_layout_attribute_type(item, group):
+def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     global SELECTED_LANGUAGE
 
     itemid = item["id"]
@@ -58,7 +60,7 @@ def prettify_layout_attribute_type(item, group):
     )
 
 
-def prettify_layout_attribute_style_global_value(item, group):
+def prettify_layout_attribute_style_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     global SELECTED_LANGUAGE
 
     itemid = item["id"]
@@ -76,10 +78,10 @@ def prettify_layout_attribute_style_global_value(item, group):
     )
 
 
-def prettify_layout_attribute_style_type(item, group):
+def prettify_layout_attribute_style_global_value(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     global SELECTED_LANGUAGE
 
-    def command(value):
+    def command(value: str) -> str:
         itemid = item["id"]
         idtext = itemid.replace("AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", "")
         idtextlower = idtext.lower()
@@ -132,7 +134,7 @@ def prettify_layout_attribute_style_type(item, group):
             return result
 
 
-def prettify_layout_attribute_style_value(key, items):
+def prettify_layout_attribute_style_value(key: str, items: List[Dict[str, Any]]) -> str:
     global SELECTED_LANGUAGE
 
     result = "const ast_layout_attribute_style_pair_t " + key + "[] = {\n"
@@ -159,7 +161,7 @@ def prettify_layout_attribute_style_value(key, items):
     return result
 
 
-def prettify_layout_attribute_style_state_type(item, group):
+def prettify_layout_attribute_style_state_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     global SELECTED_LANGUAGE
 
     itemid = item["id"]
@@ -183,10 +185,10 @@ def prettify_layout_attribute_style_state_type(item, group):
     )
 
 
-def prettify_layout_type(item, group):
+def prettify_layout_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     global SELECTED_LANGUAGE
 
-    def command(value):
+    def command(value: str) -> str:
         itemid = item["id"]
         idtext = itemid.replace("AST_LAYOUT_TYPE_", "")
         idtextlower = idtext.lower()
@@ -278,7 +280,7 @@ FILES = [
 ]
 
 
-def sync_file(file):
+def sync_file(file: Dict[str, Any]) -> None:
     print("Syncing file: " + file["input"] + " -> " + file["output"])
 
     output_filename = "../src/config/" + file["output"]

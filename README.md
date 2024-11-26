@@ -38,6 +38,17 @@ Feel free to explore and create using Salam!
 For more information, visit: https://salamlang.ir
 ```
 
+## Docker
+
+```
+git clone https://github.com/SalamLang/Salam
+cd Salam
+
+docker build -f docker/Dockerfile -t salam .
+
+docker run --rm -it salam
+```
+
 ## Contributing
 
 Want to contribute to Salam? Check out our [Contributing Guide](CONTRIBUTING.md) for more information.

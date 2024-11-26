@@ -2,8 +2,7 @@ import os
 import filecmp
 from pathlib import Path
 
-# SALAM_BIN = "salam"
-SALAM_BIN = "/mnt/c/Users/MAX/Salam/salam"
+SALAM_BIN = "salam"
 
 COLOR_RESET = "\033[0m"
 COLOR_GREEN = "\033[92m"

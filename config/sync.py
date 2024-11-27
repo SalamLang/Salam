@@ -8,7 +8,7 @@ COMMENT_BEGIN = "// ----------- BEGIN AUTO GENERATED ----------- //"
 COMMENT_END = "// ----------- END AUTO GENERATED ----------- //"
 
 
-def prettify_type(item, group):
+def prettify_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     global SELECTED_LANGUAGE
 
     itemid = item["id"]

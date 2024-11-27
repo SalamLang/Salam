@@ -363,9 +363,15 @@ bool token_belongs_to_ast_layout_node(
         return true;
     } else if (is_layout_node_a_single_tag(attribute->parent_node_type) &&
                attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
+		printf("is false??\n");
+		// convert attribute->parent_node_type to string
+		printf("--->%s\n", ast_layout_node_type_to_name(attribute->parent_node_type));
+		printf("is %d\n", is_layout_node_a_single_tag(attribute->parent_node_type) ? 1 : 0);
         return false;
     } else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
         return true;
+	} else if (attribute->parent_node_type == AST_LAYOUT_TYPE_DIV && attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
+		return true;
     } else if (attribute->parent_node_type == AST_LAYOUT_TYPE_INCLUDE &&
                (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_SRC ||
                 attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT)) {
@@ -397,7 +403,8 @@ bool token_belongs_to_ast_layout_node(
     else if (attribute->parent_node_type == AST_LAYOUT_TYPE_BR ||
              attribute->parent_node_type == AST_LAYOUT_TYPE_HR) {
         // TODO: Maybe later?
-        return true;
+        // return true;
+        return false;
     }
     // RESPONSIVE
     else if (attribute->parent_node_type == AST_LAYOUT_TYPE_MEDIA) {

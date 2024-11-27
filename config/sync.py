@@ -283,7 +283,7 @@ FILES = [
 def sync_file(file: Dict[str, Any]) -> None:
     print("Syncing file: " + file["input"] + " -> " + file["output"])
 
-    output_filename = "../src/config/" + file["output"]
+    output_filename = "../src/generated-config/" + file["output"]
     input_filename = file["input"]
 
     f = open(input_filename, "r", encoding="utf-8")

@@ -1146,7 +1146,7 @@ char *generator_code_layout_node_type(ast_layout_node_type_t type) {
 #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
                                ENDUSER_NAME, IS_MOTHER)
 
-#include "config/ast_layout_type.h"
+#include "generated-config/ast_layout_type.h"
     }
 
     return "error?";
@@ -1175,7 +1175,7 @@ char *generator_code_layout_attribute_name(ast_layout_attribute_type_t type) {
                                              ENDUSER_NAME, GENERATED_NAME, \
                                              FILTER, ALLOWED_VALUES, SUBTAGS)
 
-#include "config/ast_layout_attribute_style_type.h"
+#include "generated-config/ast_layout_attribute_style_type.h"
 
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
@@ -1187,7 +1187,7 @@ char *generator_code_layout_attribute_name(ast_layout_attribute_type_t type) {
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, \
                                          GENERATED_NAME, ENDUSER_NAME)
 
-#include "config/ast_layout_attribute_type.h"
+#include "generated-config/ast_layout_attribute_type.h"
     }
 
     return "error2????";

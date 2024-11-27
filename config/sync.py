@@ -60,7 +60,7 @@ def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) 
     )
 
 
-def prettify_layout_attribute_style_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+def prettify_layout_attribute_style_global_value(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     global SELECTED_LANGUAGE
 
     itemid = item["id"]
@@ -68,17 +68,17 @@ def prettify_layout_attribute_style_type(item: Dict[str, Any], group: Dict[str, 
 
     if type(values) is not str:
         return ""  # TODO
-
+    
     return (
         f"ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE"
         + f"("
-        + f'"{itemid}", '
+        + f'{itemid}, '
         + f'"{str(values)}"'
         + f")\n"
     )
 
 
-def prettify_layout_attribute_style_global_value(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+def prettify_layout_attribute_style_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     global SELECTED_LANGUAGE
 
     def command(value: str) -> str:

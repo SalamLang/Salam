@@ -8,12 +8,12 @@ COMMENT_BEGIN = "// ----------- BEGIN AUTO GENERATED ----------- //"
 COMMENT_END = "// ----------- END AUTO GENERATED ----------- //"
 
 
-def prettify_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+def prettify_type(item, group):
     global SELECTED_LANGUAGE
 
     itemid = item["id"]
     idtext = itemid.replace("AST_TYPE_", "")
-
+    
     return f"ADD_TYPE(" f"{itemid}, " f'"{idtext}", ' f'"{idtext.lower()}"' f")\n"
 
 
@@ -240,7 +240,7 @@ FILES = [
     {
         "input": "type.yaml",
         "output": "ast_type.h",
-        "pretify": prettify_type,
+        "prettify": prettify_type,
     },
     {
         "input": "block.yaml",
@@ -296,11 +296,20 @@ def sync_file(file: Dict[str, Any]) -> None:
         for line in lines:
             if COMMENT_BEGIN in line:
                 break
+            
             f.write(line)
+        
         f.write(COMMENT_BEGIN + "\n")
+
+        print("file: ", file)
         for group in content:
+            print("group: ", group)
             for item in group["items"]:
+                print("item: ", item)
+                
                 if "prettify" in file:
+                    print("prettify exists in the file")
+                    
                     if isinstance(group["items"], dict):
                         f.write(file["prettify"](item, group["items"][item]) + "\n")
                     elif isinstance(group["items"], list):
@@ -308,11 +317,16 @@ def sync_file(file: Dict[str, Any]) -> None:
                     else:
                         f.write(file["prettify"](item, None) + "\n")
                 else:
+                    print("prettify do not exists in the file")
+                    
                     f.write(str(item) + "\n")
+        
         f.write(COMMENT_END + "\n")
+        
         # for line in lines:
         # 	if COMMENT_END in line:
         # 		break
+        
         f.write("\n")
 
 

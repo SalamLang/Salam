@@ -1,0 +1,2989 @@
+{
+    "items": [
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_WIDTH",
+            "generate_name": "width",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "width",
+                "fa": "عرض"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_HEIGHT",
+            "generate_name": "height",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "height",
+                "fa": "ارتفاع"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_ACCENT_COLOR",
+            "generate_name": "accent-color",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR",
+            "reserved_values": "",
+            "text": {
+                "en": "accent-color",
+                "fa": "رنگ برجسته"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_APPEARANCE",
+            "generate_name": "appearance",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_appearance",
+            "text": {
+                "en": "appearance",
+                "fa": "ظاهر"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_ASPECT_RATIO",
+            "generate_name": "aspect-ratio",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_aspect_ratio",
+            "text": {
+                "en": "aspect-ratio",
+                "fa": "نسبت ابعاد"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BACKDROP_FILTER",
+            "generate_name": "backdrop-filter",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY",
+            "reserved_values": "",
+            "text": {
+                "en": "backdrop-filter",
+                "fa": [
+                    "فیلتر پس‌زمینه",
+                    "فیلتر پس زمینه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BACKFACE_VISIBILITY",
+            "generate_name": "backface-visibility",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_backface_visibility",
+            "text": {
+                "en": "backface-visibility",
+                "fa": [
+                    "مشاهده‌پذیری پشت‌نما",
+                    "مشاهده پذیری پشت‌نما",
+                    "مشاهده پذیری پشت نما"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BLOCK_SIZE",
+            "generate_name": "block-size",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_block_size",
+            "text": {
+                "en": "block-size",
+                "fa": "اندازه بلوک"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BACKGROUND_IMAGE",
+            "generate_name": "background-image",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY",
+            "reserved_values": "ast_layout_allowed_style_list_background_image",
+            "text": {
+                "en": "background-image",
+                "fa": [
+                    "تصویر پس‌زمینه",
+                    "تصویر پس‌ زمینه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BACKGROUND_ATTACHMENT",
+            "generate_name": "background-attachment",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_background_attachment",
+            "text": {
+                "en": "background-attachment",
+                "fa": [
+                    "پیوست تصویر پس‌زمینه",
+                    "پیوست تصویر پس‌ زمینه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BACKGROUND_BLEND_MODE",
+            "generate_name": "background-blend-mode",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_background_blend_mode",
+            "text": {
+                "en": "background-blend-mode",
+                "fa": [
+                    "حالت ترکیب پس‌زمینه",
+                    "حالت ترکیب پس زمینه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BACKGROUND_CLIP",
+            "generate_name": "background-clip",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_background_clip",
+            "text": {
+                "en": "background-clip",
+                "fa": [
+                    "برش پس‌زمینه",
+                    "برش پس زمینه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BACKGROUND_COLOR",
+            "generate_name": "background-color",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR",
+            "reserved_values": "ast_layout_allowed_style_list_background_clip",
+            "text": {
+                "en": "background-color",
+                "fa": [
+                    "رنگ پس‌زمینه",
+                    "رنگ پس زمینه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BACKGROUND_ORIGIN",
+            "generate_name": "background-origin",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_background_origin",
+            "text": {
+                "en": "background-origin",
+                "fa": [
+                    "مبدا پس‌زمینه",
+                    "مبدا پس زمینه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FLEX_BASIS",
+            "generate_name": "flex-basis",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY",
+            "reserved_values": "ast_layout_allowed_style_list_flex_basis",
+            "text": {
+                "en": "flex-basis",
+                "fa": "مبنای انعطاف"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BACKGROUND_POSITION",
+            "generate_name": "background-position",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY",
+            "reserved_values": "ast_layout_allowed_style_list_background_position_x",
+            "text": {
+                "en": "background-position",
+                "fa": [
+                    "موقعیت پس‌زمینه",
+                    "موقعیت پس‌ زمینه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BACKGROUND_POSITION_X",
+            "generate_name": "background-position-x",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY",
+            "reserved_values": "ast_layout_allowed_style_list_background_position_x",
+            "text": {
+                "en": "background-position-x",
+                "fa": [
+                    "موقعیت افقی پس‌زمینه",
+                    "موقعیت افقی پس‌ زمینه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BACKGROUND_POSITION_Y",
+            "generate_name": "background-position-y",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY",
+            "reserved_values": "ast_layout_allowed_style_list_background_position_x",
+            "text": {
+                "en": "background-position-y",
+                "fa": [
+                    "موقعیت عمودی پس‌زمینه",
+                    "موقعیت عمودی پس‌ زمینه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BACKGROUND_REPEAT",
+            "generate_name": "background-repeat",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY",
+            "reserved_values": "ast_layout_allowed_style_list_background_repeat",
+            "text": {
+                "en": "background-repeat",
+                "fa": [
+                    "تکرار پس‌زمینه",
+                    "تکرار پس‌ زمینه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BACKGROUND_SIZE",
+            "generate_name": "background-size",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY",
+            "reserved_values": "ast_layout_allowed_style_list_background_size",
+            "text": {
+                "en": "background-size",
+                "fa": [
+                    "اندازه پس‌زمینه",
+                    "اندازه پس‌ زمینه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_RADIUS",
+            "generate_name": "border-radius",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZES124",
+            "reserved_values": "",
+            "text": {
+                "en": "border-radius",
+                "fa": "گردی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER",
+            "generate_name": "border",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY",
+            "reserved_values": "",
+            "text": {
+                "en": "border",
+                "fa": "مرز"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_BLOCK_END_COLOR",
+            "generate_name": "border-block-end-color",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR",
+            "reserved_values": "",
+            "text": {
+                "en": "border-block-end-color",
+                "fa": "رنگ مرز انتهایی بلوک"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_BLOCK_END_STYLE",
+            "generate_name": "border-block-end-style",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_border_block_end_style",
+            "text": {
+                "en": "border-block-end-style",
+                "fa": "سبک مرز انتهایی بلوک"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_BLOCK_END_WIDTH",
+            "generate_name": "border-block-end-width",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "ast_layout_allowed_style_list_border_block_end_style",
+            "text": {
+                "en": "border-block-end-width",
+                "fa": "عرض مرز انتهایی بلوک"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_BLOCK_START_COLOR",
+            "generate_name": "border-block-start-color",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR",
+            "reserved_values": "",
+            "text": {
+                "en": "border-block-start-color",
+                "fa": "رنگ مرز ابتدایی بلوک"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_BLOCK_START_STYLE",
+            "generate_name": "border-block-start-style",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_border_block_start_style",
+            "text": {
+                "en": "border-block-start-style",
+                "fa": "رنگ مرز ابتدایی بلوک"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_BLOCK_START_WIDTH",
+            "generate_name": "border-block-start-width",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_border_block_start_style",
+            "text": {
+                "en": "border-block-start-width",
+                "fa": "عرض مرز ابتدایی بلوک"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_BOTTOM_COLOR",
+            "generate_name": "border-bottom-color",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR",
+            "reserved_values": "ast_layout_allowed_style_list_border_block_start_style",
+            "text": {
+                "en": "border-bottom-color",
+                "fa": "رنگ مرز پایین"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_BOTTOM_LEFT_RADIUS",
+            "generate_name": "border-bottom-left-radius",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "border-bottom-left-radius",
+                "fa": "گردی پایین چپ"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_BOTTOM_RIGHT_RADIUS",
+            "generate_name": "border-bottom-right-radius",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "border-bottom-right-radius",
+                "fa": "گردی پایین راست"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_BOTTOM_STYLE",
+            "generate_name": "border-bottom-style",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_border_bottom_style",
+            "text": {
+                "en": "border-bottom-style",
+                "fa": "سبک مرز پایین"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_BOTTOM_WIDTH",
+            "generate_name": "border-bottom-width",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "ast_layout_allowed_style_list_border_bottom_style",
+            "text": {
+                "en": "border-bottom-width",
+                "fa": "عرض مرز پایین"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_COLLAPSE",
+            "generate_name": "border-collapse",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_border_collapse",
+            "text": {
+                "en": "border-collapse",
+                "fa": [
+                    "ادغام مرز",
+                    "ادغام مرز ها",
+                    "ادغام مرزها"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_END_END_RADIUS",
+            "generate_name": "border-end-end-radius",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "border-end-end-radius",
+                "fa": "گردی انتها"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_END_START_RADIUS",
+            "generate_name": "border-end-start-radius",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "border-end-start-radius",
+                "fa": "گردی شروع"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_IMAGE_OUTSET",
+            "generate_name": "border-image-outset",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "border-image-outset",
+                "fa": "برآمدگی تصویر مرز"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_IMAGE_REPEAT",
+            "generate_name": "border-image-repeat",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_border_image_repeat",
+            "text": {
+                "en": "border-image-repeat",
+                "fa": "تکرار تصویر مرز"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_IMAGE_SLICE",
+            "generate_name": "border-image-slice",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_NUMBER",
+            "reserved_values": "",
+            "text": {
+                "en": "border-image-slice",
+                "fa": "برش تصویر مرز"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_IMAGE_SOURCE",
+            "generate_name": "border-image-source",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_border_image_source",
+            "text": {
+                "en": "border-image-source",
+                "fa": "منبع تصویر مرز"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_IMAGE_WIDTH",
+            "generate_name": "border-image-width",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "ast_layout_allowed_style_list_border_image_width",
+            "text": {
+                "en": "border-image-width",
+                "fa": "عرض تصویر مرز"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_INLINE_END_COLOR",
+            "generate_name": "border-inline-end-color",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR",
+            "reserved_values": "",
+            "text": {
+                "en": "border-inline-end-color",
+                "fa": "رنگ مرز انتهایی خطی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_INLINE_END_STYLE",
+            "generate_name": "border-inline-end-style",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_border_inline_end_style",
+            "text": {
+                "en": "border-inline-end-style",
+                "fa": "سبک مرز انتهایی خطی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_INLINE_END_WIDTH",
+            "generate_name": "border-inline-end-width",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "border-inline-end-width",
+                "fa": "عرض مرز انتهایی خطی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_INLINE_START_COLOR",
+            "generate_name": "border-inline-start-color",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR",
+            "reserved_values": "",
+            "text": {
+                "en": "border-inline-start-color",
+                "fa": "رنگ مرز ابتدایی خطی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_INLINE_START_STYLE",
+            "generate_name": "border-inline-start-style",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_border_inline_start_style",
+            "text": {
+                "en": "border-inline-start-style",
+                "fa": "سبک مرز ابتدایی خطی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_INLINE_START_WIDTH",
+            "generate_name": "border-inline-start-width",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "border-inline-start-width",
+                "fa": "عرض مرز ابتدایی خطی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_LEFT_COLOR",
+            "generate_name": "border-left-color",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR",
+            "reserved_values": "",
+            "text": {
+                "en": "border-left-color",
+                "fa": "رنگ مرز چپ"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_LEFT_STYLE",
+            "generate_name": "border-left-style",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_border_left_style",
+            "text": {
+                "en": "border-left-style",
+                "fa": "سبک مرز چپ"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_LEFT_WIDTH",
+            "generate_name": "border-left-width",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "border-left-width",
+                "fa": "عرض مرز چپ"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_RIGHT_COLOR",
+            "generate_name": "border-right-color",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR",
+            "reserved_values": "",
+            "text": {
+                "en": "border-right-color",
+                "fa": "رنگ مرز راست"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_RIGHT_STYLE",
+            "generate_name": "border-right-style",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_border_right_style",
+            "text": {
+                "en": "border-right-style",
+                "fa": "سبک مرز راست"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_RIGHT_WIDTH",
+            "generate_name": "border-right-width",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "border-right-width",
+                "fa": "عرض مرز راست"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_SPACING",
+            "generate_name": "border-spacing",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "border-spacing",
+                "fa": "فاصله مرز"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_START_END_RADIUS",
+            "generate_name": "border-start-end-radius",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "border-start-end-radius",
+                "fa": "گردی ابتدا و انتها"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_START_START_RADIUS",
+            "generate_name": "border-start-start-radius",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "border-start-start-radius",
+                "fa": "شعاع ابتدایی شروع مرز"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_TOP_COLOR",
+            "generate_name": "border-top-color",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR",
+            "reserved_values": "",
+            "text": {
+                "en": "border-top-color",
+                "fa": "رنگ مرز بالا"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_TOP_LEFT_RADIUS",
+            "generate_name": "border-top-left-radius",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR",
+            "reserved_values": "",
+            "text": {
+                "en": "border-top-left-radius",
+                "fa": "گردی بالا چپ"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_TOP_RIGHT_RADIUS",
+            "generate_name": "border-top-right-radius",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "border-top-right-radius",
+                "fa": "گردی بالا راست"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_TOP_STYLE",
+            "generate_name": "border-top-style",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_border_top_style",
+            "text": {
+                "en": "border-top-style",
+                "fa": "سبک مرز بالا"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BORDER_TOP_WIDTH",
+            "generate_name": "border-top-width",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "ast_layout_allowed_style_list_border_top_style",
+            "text": {
+                "en": "border-top-width",
+                "fa": "عرض مرز بالا"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BOTTOM",
+            "generate_name": "bottom",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "ast_layout_allowed_style_list_bottom",
+            "text": {
+                "en": "bottom",
+                "fa": "پایین"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BOX_SIZING",
+            "generate_name": "box-sizing",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_box_sizing",
+            "text": {
+                "en": "box-sizing",
+                "fa": [
+                    "نوع اندازه‌گیری جعبه",
+                    "نوع اندازه گیری جعبه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BOX_SHADOW",
+            "generate_name": "box-shadow",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY",
+            "reserved_values": "",
+            "text": {
+                "en": "box-shadow",
+                "fa": "سایه جعبه"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BREAK_INSIDE",
+            "generate_name": "break-inside",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_break_inside",
+            "text": {
+                "en": "break-inside",
+                "fa": "شکست درون"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BREAK_BEFORE",
+            "generate_name": "break-before",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_break_before",
+            "text": {
+                "en": "break-before",
+                "fa": "شکست قبل"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_BREAK_AFTER",
+            "generate_name": "break-after",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_break_after",
+            "text": {
+                "en": "break-after",
+                "fa": "شکست بعد"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_CAPTION_SIDE",
+            "generate_name": "caption-side",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_caption_side",
+            "text": {
+                "en": "caption-side",
+                "fa": "موقعیت عنوان"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_CARET_COLOR",
+            "generate_name": "caret-color",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR",
+            "reserved_values": "",
+            "text": {
+                "en": "caret-color",
+                "fa": "رنگ نشانگر متنی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_CLEAR",
+            "generate_name": "caret-color",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_clear",
+            "text": {
+                "en": "caret-color",
+                "fa": [
+                    "پاک‌سازی",
+                    "پاک سازی"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_CLIP_PATH",
+            "generate_name": "clip-path",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_clip_path",
+            "text": {
+                "en": "clip-path",
+                "fa": "مسیر برش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_CLIP_RULE",
+            "generate_name": "clip-rule",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_clip_rule",
+            "text": {
+                "en": "clip-rule",
+                "fa": "قاعده برش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_COLOR",
+            "generate_name": "color",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR",
+            "reserved_values": "",
+            "text": {
+                "en": "color",
+                "fa": "رنگ"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_COLOR_INTERPOLATION",
+            "generate_name": "color-interpolation",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_color_interpolation",
+            "text": {
+                "en": "color-interpolation",
+                "fa": [
+                    "درهم‌آمیزی رنگ",
+                    "درهم آمیزی رنگ"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_COLOR_INTERPOLATION_FILTERS",
+            "generate_name": "color-interpolation-filters",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_color_interpolation_filters",
+            "text": {
+                "en": "color-interpolation-filters",
+                "fa": [
+                    "درهم‌آمیزی رنگ فیلترها",
+                    "درهم آمیزی رنگ فیلترها"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_COLOR_SCHEME",
+            "generate_name": "color-scheme",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_color_scheme",
+            "text": {
+                "en": "color-scheme",
+                "fa": "طرح رنگ"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_COLUMN_COUNT",
+            "generate_name": "column-count",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_INTEGER",
+            "reserved_values": "ast_layout_allowed_style_list_column_count",
+            "text": {
+                "en": "column-count",
+                "fa": [
+                    "تعداد ستون‌ها",
+                    "تعداد ستون‌ ها"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_COLUMN_FILL",
+            "generate_name": "column-fill",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_column_fill",
+            "text": {
+                "en": "column-fill",
+                "fa": [
+                    "پر کردن ستون‌ها",
+                    "پر کردن ستون ها"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_COLUMN_GAP",
+            "generate_name": "column-gap",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "column-gap",
+                "fa": [
+                    "فاصله بین ستون‌ها",
+                    "فاصله بین ستون‌ ها"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_COLUMN_RULE_COLOR",
+            "generate_name": "column-rule-color",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR",
+            "reserved_values": "",
+            "text": {
+                "en": "column-rule-color",
+                "fa": "رنگ خط افقی ستون"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_COLUMN_RULE_STYLE",
+            "generate_name": "column-rule-style",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_column_rule_style",
+            "text": {
+                "en": "column-rule-style",
+                "fa": "سبک خط افقی ستون"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_COLUMN_RULE_WIDTH",
+            "generate_name": "column-rule-width",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "column-rule-width",
+                "fa": "عرض خط افقی ستون"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_COLUMN_SPAN",
+            "generate_name": "column-span",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_column_span",
+            "text": {
+                "en": "column-span",
+                "fa": [
+                    "گستردگی ستون‌ها",
+                    "گستردگی ستون ها"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_COLUMNS",
+            "generate_name": "columns",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY",
+            "reserved_values": "",
+            "text": {
+                "en": "columns",
+                "fa": [
+                    "ستون‌ها",
+                    "ستون‌ ها"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_CONTAIN",
+            "generate_name": "contain",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_contain",
+            "text": {
+                "en": "contain",
+                "fa": "حاوی بودن"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_CONTAIN_INTRINSIC_BLOCK_SIZE",
+            "generate_name": "contain-intrinsic-block-size",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_contain_intrinsic_block_size",
+            "text": {
+                "en": "contain-intrinsic-block-size",
+                "fa": "اندازه بلوک ذاتی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_CONTAIN_INTRINSIC_HEIGHT",
+            "generate_name": "contain-intrinsic-height",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_contain_intrinsic_height",
+            "text": {
+                "en": "contain-intrinsic-height",
+                "fa": "ارتفاع ذاتی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_CONTAIN_INTRINSIC_INLINE_SIZE",
+            "generate_name": "contain-intrinsic-inline-size",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_contain_intrinsic_inline_size",
+            "text": {
+                "en": "contain-intrinsic-inline-size",
+                "fa": [
+                    "اندازه درون‌خطی ذاتی",
+                    "اندازه درون خطی ذاتی"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_CONTAIN_INTRINSIC_SIZE",
+            "generate_name": "contain-intrinsic-size",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_contain_intrinsic_size",
+            "text": {
+                "en": "contain-intrinsic-size",
+                "fa": "اندازه ذاتی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_CONTAIN_INTRINSIC_WIDTH",
+            "generate_name": "contain-intrinsic-width",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_contain_intrinsic_width",
+            "text": {
+                "en": "contain-intrinsic-width",
+                "fa": "عرض ذاتی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_CONTAINER",
+            "generate_name": "container",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_container",
+            "text": {
+                "en": "container",
+                "fa": "ظرف"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_CONTAINER_NAME",
+            "generate_name": "container-name",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_container_name",
+            "text": {
+                "en": "container-name",
+                "fa": "نام ظرف"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_CONTAINER_TYPE",
+            "generate_name": "container-type",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_container_type",
+            "text": {
+                "en": "container-type",
+                "fa": "نوع ظرف"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_CONTENT",
+            "generate_name": "content",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_content",
+            "text": {
+                "en": "content",
+                "fa": "محتوا"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_CONTENT_VISIBILITY",
+            "generate_name": "content-visibility",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_content_visibility",
+            "text": {
+                "en": "content-visibility",
+                "fa": "مشاهده محتوا"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_COUNTER_INCREMENT",
+            "generate_name": "counter-increment",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_INTEGER",
+            "reserved_values": "ast_layout_allowed_style_list_counter_increment",
+            "text": {
+                "en": "counter-increment",
+                "fa": "افزایش شمارنده"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_COUNTER_RESET",
+            "generate_name": "counter-reset",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_INTEGER",
+            "reserved_values": "",
+            "text": {
+                "en": "counter-reset",
+                "fa": "بازنشانی شمارنده"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_COUNTER_SET",
+            "generate_name": "counter-set",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_INTEGER",
+            "reserved_values": "ast_layout_allowed_style_list_counter_set",
+            "text": {
+                "en": "counter-set",
+                "fa": "تنظیم شمارنده"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_CURSOR",
+            "generate_name": "cursor",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_cursor",
+            "text": {
+                "en": "cursor",
+                "fa": "نشانگر"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_DIRECTION",
+            "generate_name": "direction",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_direction",
+            "text": {
+                "en": "direction",
+                "fa": "جهت"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_DISPLAY",
+            "generate_name": "display",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_display",
+            "text": {
+                "en": "display",
+                "fa": [
+                    "قرارگیری",
+                    "قرار گیری"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_EMPTY_CELLS",
+            "generate_name": "empty-cells",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_empty_cells",
+            "text": {
+                "en": "empty-cells",
+                "fa": [
+                    "سلول‌های خالی",
+                    "سلول های خالی"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FILL",
+            "generate_name": "fill",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_fill",
+            "text": {
+                "en": "fill",
+                "fa": "پر کردن"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FILL_OPACITY",
+            "generate_name": "fill-opacity",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_PERCENTAGE",
+            "reserved_values": "ast_layout_allowed_style_list_fill",
+            "text": {
+                "en": "fill-opacity",
+                "fa": "شفافیت پر کردن"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FILL_RULE",
+            "generate_name": "fill-rule",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_fill_rule",
+            "text": {
+                "en": "fill-rule",
+                "fa": "قاعده پر کردن"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FILTER",
+            "generate_name": "filter",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_filter",
+            "text": {
+                "en": "filter",
+                "fa": "فیلتر"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FLEX",
+            "generate_name": "flex",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_flex",
+            "text": {
+                "en": "flex",
+                "fa": "انعطاف"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FLEX_DIRECTION",
+            "generate_name": "flex-direction",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_flex_direction",
+            "text": {
+                "en": "flex-direction",
+                "fa": "جهت انعطاف"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FLEX_FLOW",
+            "generate_name": "flex-flow",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_flex_flow",
+            "text": {
+                "en": "flex-flow",
+                "fa": "جریان انعطاف"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FLEX_GROW",
+            "generate_name": "flex-grow",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_INTEGER",
+            "reserved_values": "",
+            "text": {
+                "en": "flex-grow",
+                "fa": "رشد انعطاف"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FLEX_SHRINK",
+            "generate_name": "flex-shrink",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_INTEGER",
+            "reserved_values": "",
+            "text": {
+                "en": "flex-shrink",
+                "fa": [
+                    "کوچک‌شدن انعطاف",
+                    "کوچک‌ شدن انعطاف"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FLEX_WRAP",
+            "generate_name": "flex-wrap",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_flex_wrap",
+            "text": {
+                "en": "flex-wrap",
+                "fa": "چینش انعطاف"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FLOAT",
+            "generate_name": "float",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_float",
+            "text": {
+                "en": "float",
+                "fa": "شناور"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FONT_FAMILY",
+            "generate_name": "font-family",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRINGS_ANY",
+            "reserved_values": "ast_layout_allowed_style_list_font_family",
+            "text": {
+                "en": "font-family",
+                "fa": "نام قلم"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FONT_FEATURE_SETTINGS",
+            "generate_name": "font-feature-settings",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_font_feature_settings",
+            "text": {
+                "en": "font-feature-settings",
+                "fa": "تنظیمات ویژگی قلم"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FONT_KERNING",
+            "generate_name": "font-kerning",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_font_kerning",
+            "text": {
+                "en": "font-kerning",
+                "fa": "کرنینگ قلم"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FONT_LANGUAGE_OVERRIDE",
+            "generate_name": "font-language-override",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_font_language_override",
+            "text": {
+                "en": "font-language-override",
+                "fa": "بازنویسی زبان قلم"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FONT_OPTICAL_SIZING",
+            "generate_name": "font-optical-sizing",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_font_optical_sizing",
+            "text": {
+                "en": "font-optical-sizing",
+                "fa": [
+                    "اندازه‌گیری اپتیکال قلم",
+                    "اندازه گیری اپتیکال قلم"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FONT_SIZE",
+            "generate_name": "font-size",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "font-size",
+                "fa": "اندازه قلم"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FONT_STRETCH",
+            "generate_name": "font-stretch",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_font_stretch",
+            "text": {
+                "en": "font-stretch",
+                "fa": "کشیدگی قلم"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FONT_STYLE",
+            "generate_name": "font-style",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_font_style",
+            "text": {
+                "en": "font-style",
+                "fa": "سبک قلم"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FONT_VARIANT",
+            "generate_name": "font-variant",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_font_variant",
+            "text": {
+                "en": "font-variant",
+                "fa": "نوع قلم"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FONT_DISPLAY",
+            "generate_name": "font-display",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_font_display",
+            "text": {
+                "en": "font-display",
+                "fa": "نمایش قلم"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_FONT_WEIGHT",
+            "generate_name": "font-weight",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_POSITIVE_INTEGER",
+            "reserved_values": "ast_layout_allowed_style_list_font_weight",
+            "text": {
+                "en": "font-weight",
+                "fa": "وزن قلم"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_GRID",
+            "generate_name": "grid",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_grid",
+            "text": {
+                "en": "grid",
+                "fa": "شبکه"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_GRID_AREA",
+            "generate_name": "grid-area",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_grid_area",
+            "text": {
+                "en": "grid-area",
+                "fa": "منطقه شبکه"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_GRID_AUTO_COLUMNS",
+            "generate_name": "grid-auto-columns",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_grid_auto_columns",
+            "text": {
+                "en": "grid-auto-columns",
+                "fa": [
+                    "ستون‌های خودکار شبکه",
+                    "ستون های خودکار شبکه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_GRID_AUTO_FLOW",
+            "generate_name": "grid-auto-flow",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_grid_auto_flow",
+            "text": {
+                "en": "grid-auto-flow",
+                "fa": "جریان خودکار شبکه"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_GRID_AUTO_ROWS",
+            "generate_name": "grid-auto-rows",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_grid_auto_rows",
+            "text": {
+                "en": "grid-auto-rows",
+                "fa": [
+                    "ردیف‌های خودکار شبکه",
+                    "ردیف های خودکار شبکه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_GRID_COLUMN",
+            "generate_name": "grid-column",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_grid_column",
+            "text": {
+                "en": "grid-column",
+                "fa": [
+                    "ستون‌های شبکه",
+                    "ستون های شبکه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_GRID_COLUMN_END",
+            "generate_name": "grid-column-end",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_grid_column_end",
+            "text": {
+                "en": "grid-column-end",
+                "fa": "پایان ستون شبکه"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_GRID_COLUMN_START",
+            "generate_name": "grid-column-start",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_grid_column_start",
+            "text": {
+                "en": "grid-column-start",
+                "fa": "شروع ستون شبکه"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_GRID_ROW",
+            "generate_name": "grid-row",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_grid_row",
+            "text": {
+                "en": "grid-row",
+                "fa": [
+                    "ردیف‌های شبکه",
+                    "ردیف های شبکه",
+                    "پایان ردیف شبکه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_GRID_ROW_START",
+            "generate_name": "grid-row-start",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_grid_row_start",
+            "text": {
+                "en": "grid-row-start",
+                "fa": "شروع ردیف شبکه"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_GRID_TEMPLATE",
+            "generate_name": "grid-template",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_grid_template",
+            "text": {
+                "en": "grid-template",
+                "fa": "الگوی شبکه"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_GRID_TEMPLATE_AREAS",
+            "generate_name": "grid-template-areas",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_grid_template_areas",
+            "text": {
+                "en": "grid-template-areas",
+                "fa": "مناطق الگوی شبکه"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_GRID_TEMPLATE_COLUMNS",
+            "generate_name": "grid-template-columns",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_grid_template_columns",
+            "text": {
+                "en": "grid-template-columns",
+                "fa": [
+                    "ستون‌های الگوی شبکه",
+                    "ستون های الگوی شبکه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_GRID_TEMPLATE_ROWS",
+            "generate_name": "grid-template-rows",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_grid_template_rows",
+            "text": {
+                "en": "grid-template-rows",
+                "fa": [
+                    "ردیف‌های الگوی شبکه",
+                    "ردیف های الگوی شبکه"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_JUSTIFY_CONTENT",
+            "generate_name": "justify-content",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_justify_content",
+            "text": {
+                "en": "justify-content",
+                "fa": "توجیه محتوا"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_LEFT",
+            "generate_name": "left",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "ast_layout_allowed_style_list_left",
+            "text": {
+                "en": "left",
+                "fa": "چپ"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_LETTER_SPACING",
+            "generate_name": "letter-spacing",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY",
+            "reserved_values": "",
+            "text": {
+                "en": "letter-spacing",
+                "fa": "فاصله بین حروف"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_LINE_HEIGHT",
+            "generate_name": "line-height",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY",
+            "reserved_values": "",
+            "text": {
+                "en": "line-height",
+                "fa": "ارتفاع خط"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_LIST_STYLE",
+            "generate_name": "list-style",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_list_style",
+            "text": {
+                "en": "list-style",
+                "fa": "سبک فهرست"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_MARGIN",
+            "generate_name": "margin",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZES124",
+            "reserved_values": "ast_layout_allowed_style_list_margin",
+            "text": {
+                "en": "margin",
+                "fa": "فضا"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_MARGIN_BOTTOM",
+            "generate_name": "margin-bottom",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZES124",
+            "reserved_values": "ast_layout_allowed_style_list_margin_bottom",
+            "text": {
+                "en": "margin-bottom",
+                "fa": [
+                    "فضا پایین",
+                    "فضای پایین"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_MARGIN_LEFT",
+            "generate_name": "margin-left",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZES124",
+            "reserved_values": "ast_layout_allowed_style_list_margin_left",
+            "text": {
+                "en": "margin-left",
+                "fa": [
+                    "فضا چپ",
+                    "فضای چپ"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_MARGIN_RIGHT",
+            "generate_name": "margin-right",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZES124",
+            "reserved_values": "ast_layout_allowed_style_list_margin_right",
+            "text": {
+                "en": "margin-right",
+                "fa": [
+                    "فضا راست",
+                    "فضای راست"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_MARGIN_TOP",
+            "generate_name": "margin-top",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZES124",
+            "reserved_values": "ast_layout_allowed_style_list_margin_top",
+            "text": {
+                "en": "margin-top",
+                "fa": [
+                    "فضا بالا",
+                    "فضای بالا"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_MAX_HEIGHT",
+            "generate_name": "max-height",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "max-height",
+                "fa": "حداکثر ارتفاع"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_MAX_WIDTH",
+            "generate_name": "max-width",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "max-width",
+                "fa": "حداکثر عرض"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_MIN_HEIGHT",
+            "generate_name": "min-height",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "min-height",
+                "fa": "حداقل ارتفاع"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_MIN_WIDTH",
+            "generate_name": "min-width",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "min-width",
+                "fa": "حداقل عرض"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_OBJECT_FIT",
+            "generate_name": "object-fit",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_object_fit",
+            "text": {
+                "en": "object-fit",
+                "fa": "تناسب شیء"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_OPACITY",
+            "generate_name": "opacity",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_PERCENTAGE",
+            "reserved_values": "",
+            "text": {
+                "en": "opacity",
+                "fa": "شفافیت"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_OVERFLOW",
+            "generate_name": "overflow",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_overflow",
+            "text": {
+                "en": "overflow",
+                "fa": "بیش از حد"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_OVERFLOW_X",
+            "generate_name": "overflow-x",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_overflow_x",
+            "text": {
+                "en": "overflow-x",
+                "fa": "بیش از حد (X)"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_OVERFLOW_Y",
+            "generate_name": "overflow-y",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_overflow_y",
+            "text": {
+                "en": "overflow-y",
+                "fa": "بیش از حد (Y)"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PADDING",
+            "generate_name": "padding",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZES124",
+            "reserved_values": "ast_layout_allowed_style_list_padding",
+            "text": {
+                "en": "padding",
+                "fa": "فاصله"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PADDING_RIGHT",
+            "generate_name": "padding-right",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZES124",
+            "reserved_values": "ast_layout_allowed_style_list_padding",
+            "text": {
+                "en": "padding-right",
+                "fa": "فاصله راست"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PADDING_LEFT",
+            "generate_name": "padding-left",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZES124",
+            "reserved_values": "ast_layout_allowed_style_list_padding",
+            "text": {
+                "en": "padding-left",
+                "fa": "فاصله چپ"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PADDING_TOP",
+            "generate_name": "padding-top",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZES124",
+            "reserved_values": "ast_layout_allowed_style_list_padding",
+            "text": {
+                "en": "padding-top",
+                "fa": "فاصله بالا"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PADDING_BOTTOM",
+            "generate_name": "padding-bottom",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZES124",
+            "reserved_values": "ast_layout_allowed_style_list_padding",
+            "text": {
+                "en": "padding-bottom",
+                "fa": "فاصله پایین"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_TEXT_DECORATION",
+            "generate_name": "text-decoration",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_text_decoration",
+            "text": {
+                "en": "text-decoration",
+                "fa": "زینت متن"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_TEXT_TRANSFORM",
+            "generate_name": "text-transform",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_text_transform",
+            "text": {
+                "en": "text-transform",
+                "fa": "تبدیل متن"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_VISIBILITY",
+            "generate_name": "visibility",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_visibility",
+            "text": {
+                "en": "visibility",
+                "fa": "قابلیت مشاهده"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_Z_INDEX",
+            "generate_name": "z-index",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_INTEGER",
+            "reserved_values": "ast_layout_allowed_style_list_z_index",
+            "text": {
+                "en": "z-index",
+                "fa": [
+                    "الویت موقعیت",
+                    "ترتیب اولویت"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_OUTLINE_COLOR",
+            "generate_name": "outline-color",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_COLOR",
+            "reserved_values": "ast_layout_allowed_style_list_outline_color",
+            "text": {
+                "en": "outline-color",
+                "fa": "رنگ مرز"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_OUTLINE_OFFSET",
+            "generate_name": "outline-offset",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "outline-offset",
+                "fa": "فاصله حاشیه"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_OUTLINE_STYLE",
+            "generate_name": "outline-style",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_outline_style",
+            "text": {
+                "en": "outline-style",
+                "fa": "سبک حاشیه"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_OUTLINE_WIDTH",
+            "generate_name": "outline-width",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "ast_layout_allowed_style_list_outline_width",
+            "text": {
+                "en": "outline-width",
+                "fa": "عرض حاشیه"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_OVERFLOW_ANCHOR",
+            "generate_name": "overflow-anchor",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_overflow_anchor",
+            "text": {
+                "en": "overflow-anchor",
+                "fa": "لنگر بیش از حد"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_OVERFLOW_BLOCK",
+            "generate_name": "overflow-block",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_overflow_block",
+            "text": {
+                "en": "overflow-block",
+                "fa": "بیش از حد بلوک"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_OVERFLOW_CLIP_MARGIN",
+            "generate_name": "overflow-clip-margin",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "overflow-clip-margin",
+                "fa": "فاصله برش بیش از حد"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_OVERFLOW_INLINE",
+            "generate_name": "overflow-inline",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_overflow_inline",
+            "text": {
+                "en": "overflow-inline",
+                "fa": "بیش از حد درون خطی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_OVERFLOW_WRAP",
+            "generate_name": "overflow-wrap",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_overflow_wrap",
+            "text": {
+                "en": "overflow-wrap",
+                "fa": "پیچش بیش از حد"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PADDING_BLOCK",
+            "generate_name": "padding-block",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "padding-block",
+                "fa": "فاصله بلوک"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PADDING_BLOCK_END",
+            "generate_name": "padding-block-end",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_padding_block_end",
+            "text": {
+                "en": "padding-block-end",
+                "fa": "فاصله انتهای بلوک"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PADDING_BLOCK_START",
+            "generate_name": "padding-block-start",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_padding_block_start",
+            "text": {
+                "en": "padding-block-start",
+                "fa": "فاصله شروع بلوک"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PADDING_INLINE",
+            "generate_name": "padding-inline",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_padding_inline",
+            "text": {
+                "en": "padding-inline",
+                "fa": "فاصله درون خطی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PADDING_INLINE_END",
+            "generate_name": "padding-inline-end",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_padding_inline_end",
+            "text": {
+                "en": "padding-inline-end",
+                "fa": "فاصله انتهای درون خطی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PADDING_INLINE_START",
+            "generate_name": "padding-inline-start",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_padding_inline_start",
+            "text": {
+                "en": "padding-inline-start",
+                "fa": "فاصله شروع درون خطی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PAGE",
+            "generate_name": "page",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_page",
+            "text": {
+                "en": "page",
+                "fa": "صفحه"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PAGE_BREAK_AFTER",
+            "generate_name": "page-break-after",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_page_break_after",
+            "text": {
+                "en": "page-break-after",
+                "fa": "شکست صفحه بعد از"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PAGE_BREAK_BEFORE",
+            "generate_name": "page-break-before",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_page_break_before",
+            "text": {
+                "en": "page-break-before",
+                "fa": "شکست صفحه قبل از"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PAGE_BREAK_INSIDE",
+            "generate_name": "page-break-inside",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_page_break_inside",
+            "text": {
+                "en": "page-break-inside",
+                "fa": "شکست صفحه درون"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PAINT_ORDER",
+            "generate_name": "paint-order",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_paint_order",
+            "text": {
+                "en": "paint-order",
+                "fa": "ترتیب نقاشی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PERSPECTIVE",
+            "generate_name": "perspective",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "ast_layout_allowed_style_list_perspective",
+            "text": {
+                "en": "perspective",
+                "fa": "پرسپکتیو"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PERSPECTIVE_ORIGIN",
+            "generate_name": "perspective-origin",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY",
+            "reserved_values": "ast_layout_allowed_style_list_perspective",
+            "text": {
+                "en": "perspective-origin",
+                "fa": "مبدأ پرسپکتیو"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PLACE_CONTENT",
+            "generate_name": "place-content",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_place_content",
+            "text": {
+                "en": "place-content",
+                "fa": "محتوای مکان"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PLACE_ITEMS",
+            "generate_name": "place-items",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_place_items",
+            "text": {
+                "en": "place-items",
+                "fa": "موارد مکان"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PLACE_SELF",
+            "generate_name": "place-self",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_place_self",
+            "text": {
+                "en": "place-self",
+                "fa": "خود مکان"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_POINTER_EVENTS",
+            "generate_name": "pointer-events",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_pointer_events",
+            "text": {
+                "en": "pointer-events",
+                "fa": [
+                    "رویدادهای اشاره‌گر",
+                    "رویدادهای اشاره گر"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_POSITION",
+            "generate_name": "position",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_position",
+            "text": {
+                "en": "position",
+                "fa": "موقعیت"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_PRINT_COLOR_ADJUST",
+            "generate_name": "print-color-adjust",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_print_color_adjust",
+            "text": {
+                "en": "print-color-adjust",
+                "fa": "تنظیم رنگ چاپ"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_QUOTES",
+            "generate_name": "quotes",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_quotes",
+            "text": {
+                "en": "quotes",
+                "fa": [
+                    "نقل‌قول",
+                    "نقل قول"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_R",
+            "generate_name": "r",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "r",
+                "fa": "شعاع"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_RESIZE",
+            "generate_name": "resize",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_resize",
+            "text": {
+                "en": "resize",
+                "fa": "تغییر اندازه"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_RIGHT",
+            "generate_name": "right",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "ast_layout_allowed_style_list_right",
+            "text": {
+                "en": "right",
+                "fa": "راست"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_ROTATE",
+            "generate_name": "rotate",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_rotate",
+            "text": {
+                "en": "rotate",
+                "fa": "چرخش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_ROW_GAP",
+            "generate_name": "row-gap",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "ast_layout_allowed_style_list_rotate",
+            "text": {
+                "en": "row-gap",
+                "fa": "فاصله ردیف"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_RUBY_ALIGN",
+            "generate_name": "ruby-align",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_ruby_align",
+            "text": {
+                "en": "ruby-align",
+                "fa": [
+                    "هم‌راستایی روبی",
+                    "هم راستایی روبی"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_RUBY_POSITION",
+            "generate_name": "ruby-position",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_ruby_position",
+            "text": {
+                "en": "ruby-position",
+                "fa": "موقعیت روبی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_RX",
+            "generate_name": "rx",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "rx",
+                "fa": "شعاع X"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_RY",
+            "generate_name": "ry",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "ry",
+                "fa": "شعاع Y"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCALE",
+            "generate_name": "scale",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY",
+            "reserved_values": "",
+            "text": {
+                "en": "scale",
+                "fa": "مقیاس"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_BEHAVIOR",
+            "generate_name": "scroll-behavior",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_scroll_behavior",
+            "text": {
+                "en": "scroll-behavior",
+                "fa": "رفتار پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_MARGIN",
+            "generate_name": "scroll-margin",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-margin",
+                "fa": "فاصله پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_MARGIN_BLOCK",
+            "generate_name": "scroll-margin-block",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-margin-block",
+                "fa": "فاصله بلوک پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_MARGIN_BLOCK_END",
+            "generate_name": "scroll-margin-block-end",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-margin-block-end",
+                "fa": "فاصله انتهای بلوک پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_MARGIN_BLOCK_START",
+            "generate_name": "scroll-margin-block-start",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-margin-block-start",
+                "fa": "فاصله شروع بلوک پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_MARGIN_BOTTOM",
+            "generate_name": "scroll-margin-bottom",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-margin-bottom",
+                "fa": "فاصله پایین پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_MARGIN_INLINE",
+            "generate_name": "scroll-margin-inline",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-margin-inline",
+                "fa": "فاصله درون خطی پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_MARGIN_INLINE_END",
+            "generate_name": "scroll-margin-inline-end",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-margin-inline-end",
+                "fa": "فاصله انتهای درون خطی پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_MARGIN_INLINE_START",
+            "generate_name": "scroll-margin-inline-start",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-margin-inline-start",
+                "fa": "فاصله شروع درون خطی پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_MARGIN_LEFT",
+            "generate_name": "scroll-margin-left",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-margin-left",
+                "fa": "فاصله چپ پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_MARGIN_RIGHT",
+            "generate_name": "scroll-margin-right",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-margin-right",
+                "fa": "فاصله راست پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_MARGIN_TOP",
+            "generate_name": "scroll-margin-top",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-margin-top",
+                "fa": "فاصله بالا پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_PADDING",
+            "generate_name": "scroll-padding",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-padding",
+                "fa": "فاصله پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_PADDING_BLOCK",
+            "generate_name": "scroll-padding-block",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-padding-block",
+                "fa": "فاصله بلوک پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_PADDING_BLOCK_END",
+            "generate_name": "scroll-padding-block-end",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-padding-block-end",
+                "fa": "فاصله انتهای بلوک پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_PADDING_BLOCK_START",
+            "generate_name": "scroll-padding-block-start",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-padding-block-start",
+                "fa": "فاصله شروع بلوک پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_PADDING_BOTTOM",
+            "generate_name": "scroll-padding-bottom",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-padding-bottom",
+                "fa": "فاصله پایین پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_PADDING_INLINE",
+            "generate_name": "scroll-padding-inline",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-padding-inline",
+                "fa": "فاصله درون خطی پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_PADDING_INLINE_END",
+            "generate_name": "scroll-padding-inline-end",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-padding-inline-end",
+                "fa": "فاصله انتهای درون خطی پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_PADDING_INLINE_START",
+            "generate_name": "scroll-padding-inline-start",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-padding-inline-start",
+                "fa": "فاصله شروع درون خطی پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_PADDING_LEFT",
+            "generate_name": "scroll-padding-left",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-padding-left",
+                "fa": "فاصله چپ پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_PADDING_RIGHT",
+            "generate_name": "scroll-padding-right",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-padding-right",
+                "fa": "فاصله راست پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_PADDING_TOP",
+            "generate_name": "scroll-padding-top",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "scroll-padding-top",
+                "fa": "فاصله بالا پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_SNAP_ALIGN",
+            "generate_name": "scroll-snap-align",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_scroll_snap_align",
+            "text": {
+                "en": "scroll-snap-align",
+                "fa": "تراز پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SCROLL_SNAP_TYPE",
+            "generate_name": "scroll-snap-type",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_scroll_snap_type",
+            "text": {
+                "en": "scroll-snap-type",
+                "fa": "نوع پیمایش"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_SHAPE_OUTSIDE",
+            "generate_name": "shape-outside",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_shape_outside",
+            "text": {
+                "en": "shape-outside",
+                "fa": "شکل خارج"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_TEXT_ALIGN",
+            "generate_name": "text-align",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_text_align",
+            "text": {
+                "en": "text-align",
+                "fa": "تراز متن"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_TEXT_ALIGN_LAST",
+            "generate_name": "text-align-last",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_text_align_last",
+            "text": {
+                "en": "text-align-last",
+                "fa": "تراز آخرین متن"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_ALIGN_ITEMS",
+            "generate_name": "align-items",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_align_items",
+            "text": {
+                "en": "align-items",
+                "fa": [
+                    "تراز‌کردن‌ اقلام",
+                    "تراز‌ کردن‌ اقلام",
+                    "تراز‌کردن‌ محتوا",
+                    "تراز محتوا"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_TEXT_INDENT",
+            "generate_name": "text-indent",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "ast_layout_allowed_style_list_text_indent",
+            "text": {
+                "en": "text-indent",
+                "fa": [
+                    "تورفتگی متن",
+                    "تو رفتگی متن"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_TOP",
+            "generate_name": "top",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "ast_layout_allowed_style_list_top",
+            "text": {
+                "en": "top",
+                "fa": "بالا"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_TRANSFORM",
+            "generate_name": "transform",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY",
+            "reserved_values": "ast_layout_allowed_style_list_transform",
+            "text": {
+                "en": "transform",
+                "fa": "تبدیل"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_TRANSFORM_ORIGIN",
+            "generate_name": "transform-origin",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_transform_origin",
+            "text": {
+                "en": "transform-origin",
+                "fa": "مرکز تبدیل"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_TRANSLATE",
+            "generate_name": "translate",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "translate",
+                "fa": "ترجمه"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_UNICODE_BIDI",
+            "generate_name": "unicode-bidi",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_unicode_bidi",
+            "text": {
+                "en": "unicode-bidi",
+                "fa": "معکوس یونیکد"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_USER_SELECT",
+            "generate_name": "user-select",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_user_select",
+            "text": {
+                "en": "user-select",
+                "fa": "انتخاب کاربر"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_WILL_CHANGE",
+            "generate_name": "will-change",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_will_change",
+            "text": {
+                "en": "will-change",
+                "fa": "تغییر خواهد کرد"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_TRANSFORM_BOX",
+            "generate_name": "transform-box",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_transform_box",
+            "text": {
+                "en": "transform-box",
+                "fa": "باکس تبدیل"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_TRANSFORM_STYLE",
+            "generate_name": "transform-style",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_transform_style",
+            "text": {
+                "en": "transform-style",
+                "fa": "سبک تبدیل"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_TRANSITION",
+            "generate_name": "transition",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY",
+            "reserved_values": "ast_layout_allowed_style_list_transition",
+            "text": {
+                "en": "transition",
+                "fa": "انتقال"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_TRANSITION_BEHAVIOR",
+            "generate_name": "transition-behavior",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_transition_behavior",
+            "text": {
+                "en": "transition-behavior",
+                "fa": "رفتار انتقال"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_TRANSITION_DELAY",
+            "generate_name": "transition-behavior",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_TIME",
+            "reserved_values": "ast_layout_allowed_style_list_transition_delay",
+            "text": {
+                "en": "transition-delay",
+                "fa": "تاخیر انتقال"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_TRANSITION_DURATION",
+            "generate_name": "transition-behavior",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_TIME",
+            "reserved_values": "ast_layout_allowed_style_list_transition_duration",
+            "text": {
+                "en": "transition-delay",
+                "fa": "مدت انتقال"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_TRANSITION_PROPERTY",
+            "generate_name": "transition-property",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_transition_property",
+            "text": {
+                "en": "transition-property",
+                "fa": "ویژگی انتقال"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_TRANSITION_TIMING_FUNCTION",
+            "generate_name": "transition-timing-function",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_transition_timing_function",
+            "text": {
+                "en": "transition-timing-function",
+                "fa": [
+                    "تابع زمان‌بندی انتقال",
+                    "تابع زمان بندی انتقال"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_VECTOR_EFFECT",
+            "generate_name": "vector-effect",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_vector_effect",
+            "text": {
+                "en": "vector-effect",
+                "fa": "اثر وکتور"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_VERTICAL_ALIGN",
+            "generate_name": "vertical-align",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_vertical_align",
+            "text": {
+                "en": "vertical-align",
+                "fa": "تراز عمودی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_WHITE_SPACE",
+            "generate_name": "white-space",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_white_space",
+            "text": {
+                "en": "white-space",
+                "fa": "فضای سفید"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_WIDOWS",
+            "generate_name": "widows",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "widows",
+                "fa": [
+                    "بیوه‌ها",
+                    "بیوه‌ ها"
+                ]
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_WORD_BREAK",
+            "generate_name": "word-break",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_word_break",
+            "text": {
+                "en": "word-break",
+                "fa": "شکستن کلمه"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_WORD_SPACING",
+            "generate_name": "word-spacing",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_SIZE",
+            "reserved_values": "",
+            "text": {
+                "en": "word-spacing",
+                "fa": "فاصله کلمه"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_WRITING_MODE",
+            "generate_name": "writing-mode",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_writing_mode",
+            "text": {
+                "en": "writing-mode",
+                "fa": "حالت نوشتن"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_ZOOM",
+            "generate_name": "zoom",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING",
+            "reserved_values": "ast_layout_allowed_style_list_zoom",
+            "text": {
+                "en": "zoom",
+                "fa": "بزرگنمایی"
+            },
+            "values": []
+        },
+        {
+            "id": "AST_LAYOUT_ATTRIBUTE_TYPE_ERROR",
+            "type": "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY"
+        }
+    ]
+}

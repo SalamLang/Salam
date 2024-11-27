@@ -23,7 +23,7 @@
 
 #include "validator.h"
 
-#include "config/ast_layout_attribute_style_value.h"
+#include "generated-config/ast_layout_attribute_style_value.h"
 
 /**
  *
@@ -773,7 +773,7 @@ bool is_layout_node_a_single_tag(ast_layout_node_type_t type) {
 #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
                                ENDUSER_NAME, IS_MOTHER)
 
-#include "config/ast_layout_type.h"
+#include "generated-config/ast_layout_type.h"
     }
 
     return false;
@@ -834,7 +834,7 @@ bool is_style_attribute(ast_layout_attribute_type_t type) {
                                         ALLOWED_VALUES, SUBTAGS)              \
     case TYPE:
 
-#include "config/ast_layout_attribute_style_type.h"
+#include "generated-config/ast_layout_attribute_style_type.h"
         return true;
 
         default:
@@ -1610,7 +1610,7 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
         return true;                                                          \
     }
 
-#include "config/ast_layout_attribute_style_global.h"
+#include "generated-config/ast_layout_attribute_style_global.h"
     }
 
     switch (attribute->type) {
@@ -1624,7 +1624,7 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, \
                                          GENERATED_NAME, ENDUSER_NAME)
 
-#include "config/ast_layout_attribute_type.h"
+#include "generated-config/ast_layout_attribute_type.h"
 
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
@@ -1801,7 +1801,7 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
                                              ENDUSER_NAME, GENERATED_NAME, \
                                              FILTER, ALLOWED_VALUES, SUBTAGS)
 
-#include "config/ast_layout_attribute_style_type.h"
+#include "generated-config/ast_layout_attribute_style_type.h"
     }
 
     return false;

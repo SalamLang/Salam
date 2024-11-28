@@ -39,8 +39,6 @@ It is designed for simplicity, accessibility, and inclusivity—bridging the gap
 - 🔧 Linting and code checks for best practices.  
 - 🔄 Built-in commands for versioning and updates.
 
----
-
 ## 🚀 Getting Started
 
 To explore Salam, run the following commands:
@@ -80,8 +78,6 @@ Salam is the first Persian/Iranian computer scripting language.
 
 For a detailed guide, visit our official site: [salamlang.ir](https://salamlang.ir)
 
----
-
 ## 🐳 Using Salam with Docker
 
 Run Salam in an isolated and consistent Docker environment.  
@@ -120,8 +116,6 @@ docker run --rm -it basemax/salam
    docker images salam
    ```
 
----
-
 ### Running Scripts
 
 #### Mount a Local Script
@@ -156,8 +150,6 @@ docker run --rm -it salam ./salam code "صفحه: محتوا = «سلام دنی
   docker run --rm -it salam ./salam lint code "some salam code"
   ```
 
----
-
 ## 🤝 Contributing
 
 We welcome contributions from the community!  
@@ -165,8 +157,6 @@ We welcome contributions from the community!
 - 🌟 Follow our [Code of Conduct](CODE_OF_CONDUCT.md).  
 
 Together, let’s make coding accessible to all.
-
----
 
 © 2024 Salam Language Team  
 For inquiries or feedback, visit: [salamlang.ir](https://salamlang.ir)  

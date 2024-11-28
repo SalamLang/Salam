@@ -348,13 +348,13 @@ def convert_to_json(file: Dict[str, Any]) -> None:
         with open(file["input"], "r", encoding="utf-8") as yaml_file:
             data = yaml.safe_load(yaml_file)
         
-        json_filename = file["input"].replace(".yaml", ".json")
+        json_filename = JSON_DIR + file["input"].replace(".yaml", ".json")
 
-        directory = os.path.dirname(JSON_DIR + json_filename)
+        directory = os.path.dirname(json_filename)
         if not os.path.exists(directory):
             os.makedirs(directory)
         
-        with open(JSON_DIR + json_filename, "w", encoding="utf-8") as json_file:
+        with open(json_filename, "w", encoding="utf-8") as json_file:
             json.dump(data, json_file, ensure_ascii=False, indent=4)
 
         print(f"Converted {file['input']} to {file['output']}")

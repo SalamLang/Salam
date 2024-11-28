@@ -20,6 +20,12 @@ Unlock the joy of coding—accessible, intuitive, and culturally resonant.
 **Salam Language**, inspired by the word *salam* (سلام), meaning *peace*, is the first **Persian/Arabic-based programming language**.  
 It is designed for simplicity, accessibility, and inclusivity—bridging the gap between developers and technology in Persian, Arabic, and related linguistic communities.
 
+### Supported Languages
+
+    - **English**: Fully supported and ready for use.
+    - **Persian (فارسی)**: Fully supported and ready for use.
+    - **Arabic (العربية)**: Currently under development. We need contributions from native Arabic speakers to complete support.
+
 ### Why Choose Salam?
 
 - 🌍 **Localized for Persian and Arabic Speakers**: Write and read code in your native language.  

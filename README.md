@@ -22,9 +22,9 @@ It is designed for simplicity, accessibility, and inclusivity—bridging the gap
 
 ### Supported Languages
 
-    - **English**: Fully supported and ready for use.
-    - **Persian (فارسی)**: Fully supported and ready for use.
-    - **Arabic (العربية)**: Currently under development. We need contributions from native Arabic speakers to complete support.
+- **English**: Fully supported and ready for use.
+- **Persian (فارسی)**: Fully supported and ready for use.
+- **Arabic (العربية)**: Currently under development. We need contributions from native Arabic speakers to complete support.
 
 ### Why Choose Salam?
 

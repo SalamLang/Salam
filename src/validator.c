@@ -364,7 +364,7 @@ bool token_belongs_to_ast_layout_node(
     } else if (is_layout_node_a_single_tag(attribute->parent_node_type) &&
                attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
         return false;
-	} else if (attribute->parent_node_type == AST_LAYOUT_TYPE_INPUT &&
+	} else if (attribute->parent_node_type == AST_LAYOUT_TYPE_LABEL &&
 			attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_FOR) {
 		return true;
     } else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {

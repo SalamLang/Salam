@@ -1,3 +1,4 @@
+import os
 import yaml
 import json
 from typing import Any, Dict, List
@@ -6,7 +7,7 @@ SELECTED_LANGUAGE = "fa"
 
 COMMENT_BEGIN = "// ----------- BEGIN AUTO GENERATED ----------- //"
 COMMENT_END = "// ----------- END AUTO GENERATED ----------- //"
-
+JSON_DIR = "json/"
 
 def prettify_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     """
@@ -342,11 +343,18 @@ def convert_to_json(file: Dict[str, Any]) -> None:
 
     :param file: A dictionary containing 'input' and 'output' file paths.
     """
+    global JSON_DIR
     try:
         with open(file["input"], "r", encoding="utf-8") as yaml_file:
             data = yaml.safe_load(yaml_file)
+        
+        json_filename = file["input"].replace(".yaml", ".json")
 
-        with open(file["output"], "w", encoding="utf-8") as json_file:
+        directory = os.path.dirname(JSON_DIR + json_filename)
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        
+        with open(JSON_DIR + json_filename, "w", encoding="utf-8") as json_file:
             json.dump(data, json_file, ensure_ascii=False, indent=4)
 
         print(f"Converted {file['input']} to {file['output']}")

@@ -61,7 +61,7 @@ ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_style_type(
                                              ENDUSER_NAME, GENERATED_NAME, \
                                              FILTER, ALLOWED_VALUES, SUBTAGS)
 
-#include "config/ast_layout_attribute_style_type.h"
+#include "generated-config/ast_layout_attribute_style_type.h"
 
     return type;
 }
@@ -108,7 +108,7 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_style_type(
         return type;                                                          \
     }
 
-#include "config/ast_layout_attribute_style_type.h"
+#include "generated-config/ast_layout_attribute_style_type.h"
 
     return type;
 }
@@ -139,7 +139,7 @@ enduser_name_to_ast_layout_attribute_style_state_type(char *name) {
 
     if (false) {
     }
-#include "config/ast_layout_attribute_style_state_type.h"
+#include "generated-config/ast_layout_attribute_style_state_type.h"
 
     return type;
 }
@@ -245,7 +245,7 @@ name_to_ast_layout_attribute_style_state_type(char *name) {
 
     if (false) {
     }
-#include "config/ast_layout_attribute_style_state_type.h"
+#include "generated-config/ast_layout_attribute_style_state_type.h"
 
     return type;
 }

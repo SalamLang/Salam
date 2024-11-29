@@ -270,9 +270,17 @@ void generator_code_layout_body(generator_t *generator,
     size_t body_text_content_length =
         body_text_content != NULL ? strlen(body_text_content) : 0;
 
+    bool body_text_content_has_lines =
+        (body_text_content != NULL) &&
+        (strchr(body_text_content, '\n') != NULL);
+
     string_t *body_child =
         generator_code_layout_block(generator, layout_block->children);
-    if (body_child->length > 0 || body_text_content_length > 0) {
+
+    bool needs_newline =
+        body_child->length > 0 ||
+        (body_text_content_length > 0 && body_text_content_has_lines);
+    if (needs_newline) {
         string_append_char(body_tag, '\n');
     }
 
@@ -282,15 +290,18 @@ void generator_code_layout_body(generator_t *generator,
     }
 
     // node content
-    if (body_child->length > 0 && body_text_content != NULL &&
-        body_text_content_length > 0) {
+    if (body_text_content != NULL &&
+        (body_text_content_length > 0 && body_text_content_has_lines)) {
         string_append_char(body_content, '\n');
     }
+
     if (body_child->length > 0) {
         string_append(body_content, body_child);
     }
 
-    if (body_child != NULL) body_child->destroy(body_child);
+    if (body_child != NULL) {
+        body_child->destroy(body_child);
+    }
 
     string_append(body_tag, body_content);
 
@@ -1135,7 +1146,7 @@ char *generator_code_layout_node_type(ast_layout_node_type_t type) {
 #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
                                ENDUSER_NAME, IS_MOTHER)
 
-#include "config/ast_layout_type.h"
+#include "generated-config/ast_layout_type.h"
     }
 
     return "error?";
@@ -1164,7 +1175,7 @@ char *generator_code_layout_attribute_name(ast_layout_attribute_type_t type) {
                                              ENDUSER_NAME, GENERATED_NAME, \
                                              FILTER, ALLOWED_VALUES, SUBTAGS)
 
-#include "config/ast_layout_attribute_style_type.h"
+#include "generated-config/ast_layout_attribute_style_type.h"
 
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
@@ -1176,7 +1187,7 @@ char *generator_code_layout_attribute_name(ast_layout_attribute_type_t type) {
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, \
                                          GENERATED_NAME, ENDUSER_NAME)
 
-#include "config/ast_layout_attribute_type.h"
+#include "generated-config/ast_layout_attribute_type.h"
     }
 
     return "error2????";

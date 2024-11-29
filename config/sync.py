@@ -115,31 +115,9 @@ def prettify_layout_attribute_style_type(item: Dict[str, Any], group: Dict[str, 
 
     :param item: A dictionary representing the style type item.
     :param group: A dictionary representing the group the item belongs to.
-    :return: A formatted string for the style type.
+    :return: A formatted string for the layout attribute style type.
     """
     global SELECTED_LANGUAGE
-
-    def command(value: str) -> str:
-        itemid = item["id"]
-        idtext = itemid.replace("AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", "")
-        idtextlower = idtext.lower()
-
-        generate_name = item.get("generate_name", idtextlower)
-        type = str(item.get("type", "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY"))
-        reserved_values = (
-            str(item.get("reserved_values", "NULL")).lower()
-            if item.get("reserved_values", "") != ""
-            else "NULL"
-        )
-
-        return (
-            f"({itemid}, "
-            f'"{idtext}", '
-            f'"{idtextlower}", '
-            f'"{value}", '
-            f'"{generate_name}", '
-            f"{type}, " + f"{reserved_values}, " + f"NULL" + f")\n"
-        )
 
     values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
     key_main = "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE"
@@ -147,29 +125,28 @@ def prettify_layout_attribute_style_type(item: Dict[str, Any], group: Dict[str, 
     key_repeat = "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT"
 
     if "generate_name" not in item:
-        if type(values) is str:
-            return key_hide + command(values)
+        if isinstance(values, str):
+            return key_hide + command(item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", values)
         else:
             result = ""
             for index, value in enumerate(values):
-                print(index, value)
                 if index == 0:
-                    result += key_hide + command(value)
+                    result += key_hide + command(item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value)
                 else:
-                    result += key_repeat + command(value)
+                    result += key_repeat + command(item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value)
             return result
     else:
-        if type(values) is str:
-            return key_main + command(values)
+        if isinstance(values, str):
+            return key_main + command(item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", values)
         else:
             result = ""
             for index, value in enumerate(values):
-                print(index, value)
                 if index == 0:
-                    result += key_main + command(value)
+                    result += key_main + command(item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value)
                 else:
-                    result += key_repeat + command(value)
+                    result += key_repeat + command(item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value)
             return result
+
 
 
 def prettify_layout_attribute_style_value(key: str, items: List[Dict[str, Any]]) -> str:
@@ -247,52 +224,34 @@ def prettify_layout_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     """
     global SELECTED_LANGUAGE
 
-    def command(value: str) -> str:
-        itemid = item["id"]
-        idtext = itemid.replace("AST_LAYOUT_TYPE_", "")
-        idtextlower = idtext.lower()
-        generate_name = item.get("generate_name", idtext.lower())
-        is_mother = str(item.get("is_mother", False)).lower()
-
-        return (
-            f"({itemid}, "
-            + f'"{idtext}", '
-            + f'"{idtextlower}", '
-            + f'"{generate_name}", '
-            + f'"{value}", '
-            + f"{is_mother}"
-            + f")\n"
-        )
-
     values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
     key_main = "ADD_LAYOUT_TYPE"
     key_hide = "ADD_LAYOUT_TYPE_HIDE"
     key_repeat = "ADD_LAYOUT_TYPE_REPEAT"
 
     if "generate_name" not in item:
-        if type(values) is str:
-            return key_hide + command(values)
+        if isinstance(values, str):
+            return key_hide + command(item, "AST_LAYOUT_TYPE_", values)
         else:
             result = ""
             for index, value in enumerate(values):
-                print(index, value)
                 if index == 0:
-                    result += key_hide + command(value)
+                    result += key_hide + command(item, "AST_LAYOUT_TYPE_", value)
                 else:
-                    result += key_repeat + command(value)
+                    result += key_repeat + command(item, "AST_LAYOUT_TYPE_", value)
             return result
     else:
-        if type(values) is str:
-            return key_main + command(values)
+        if isinstance(values, str):
+            return key_main + command(item, "AST_LAYOUT_TYPE_", values)
         else:
             result = ""
             for index, value in enumerate(values):
-                print(index, value)
                 if index == 0:
-                    result += key_main + command(value)
+                    result += key_main + command(item, "AST_LAYOUT_TYPE_", value)
                 else:
-                    result += key_repeat + command(value)
+                    result += key_repeat + command(item, "AST_LAYOUT_TYPE_", value)
             return result
+
 
 
 FILES = [

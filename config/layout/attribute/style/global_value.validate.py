@@ -5,13 +5,14 @@ sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../module"))
 )
 
-from utils import error, load_yaml, validate_item_structure
+from utils import error, load_yaml
+from validation import validate_item_structure
 
 FILE = os.path.join(os.path.dirname(__file__), "global_value.yaml")
 LANGUAGES = ["en", "fa"]
 
 
-def main():
+if __name__ == "__main__":
     try:
         docs = load_yaml(FILE)
 
@@ -28,6 +29,3 @@ def main():
     except Exception as e:
         error(f"An unexpected error occurred: {e}")
 
-
-if __name__ == "__main__":
-    main()

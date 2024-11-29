@@ -1,5 +1,7 @@
-from typing import Dict, Any, List
+from typing import Any, Dict, List
+
 from utils import error
+
 
 def validate_item_structure(item: Dict[str, Any], languages: List[str]) -> None:
     """

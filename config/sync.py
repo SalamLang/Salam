@@ -1,15 +1,16 @@
-import os
-import yaml
 import json
+import os
 from typing import Any, Dict, List
-from module.utils import command
 
+import yaml
+from module.utils import command
 
 SELECTED_LANGUAGE = "fa"
 
 COMMENT_BEGIN = "// ----------- BEGIN AUTO GENERATED ----------- //"
 COMMENT_END = "// ----------- END AUTO GENERATED ----------- //"
 JSON_DIR = "json/"
+
 
 def prettify_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     """
@@ -23,7 +24,7 @@ def prettify_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
 
     itemid = item["id"]
     idtext = itemid.replace("AST_TYPE_", "")
-    
+
     return f"ADD_TYPE(" f"{itemid}, " f'"{idtext}", ' f'"{idtext.lower()}"' f")\n"
 
 
@@ -84,7 +85,9 @@ def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) 
     )
 
 
-def prettify_layout_attribute_style_global_value(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+def prettify_layout_attribute_style_global_value(
+    item: Dict[str, Any], group: Dict[str, Any]
+) -> str:
     """
     Generates a formatted string for a layout attribute style global value definition.
 
@@ -99,17 +102,19 @@ def prettify_layout_attribute_style_global_value(item: Dict[str, Any], group: Di
 
     if type(values) is not str:
         return ""  # TODO
-    
+
     return (
         f"ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE"
         + f"("
-        + f'{itemid}, '
+        + f"{itemid}, "
         + f'"{str(values)}"'
         + f")\n"
     )
 
 
-def prettify_layout_attribute_style_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+def prettify_layout_attribute_style_type(
+    item: Dict[str, Any], group: Dict[str, Any]
+) -> str:
     """
     Generates a formatted string for a layout attribute style type definition.
 
@@ -131,9 +136,13 @@ def prettify_layout_attribute_style_type(item: Dict[str, Any], group: Dict[str, 
             result = ""
             for index, value in enumerate(values):
                 if index == 0:
-                    result += key_hide + command(item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value)
+                    result += key_hide + command(
+                        item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value
+                    )
                 else:
-                    result += key_repeat + command(item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value)
+                    result += key_repeat + command(
+                        item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value
+                    )
             return result
     else:
         if isinstance(values, str):
@@ -142,11 +151,14 @@ def prettify_layout_attribute_style_type(item: Dict[str, Any], group: Dict[str, 
             result = ""
             for index, value in enumerate(values):
                 if index == 0:
-                    result += key_main + command(item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value)
+                    result += key_main + command(
+                        item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value
+                    )
                 else:
-                    result += key_repeat + command(item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value)
+                    result += key_repeat + command(
+                        item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value
+                    )
             return result
-
 
 
 def prettify_layout_attribute_style_value(key: str, items: List[Dict[str, Any]]) -> str:
@@ -183,7 +195,9 @@ def prettify_layout_attribute_style_value(key: str, items: List[Dict[str, Any]])
     return result
 
 
-def prettify_layout_attribute_style_state_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+def prettify_layout_attribute_style_state_type(
+    item: Dict[str, Any], group: Dict[str, Any]
+) -> str:
     """
     Generates a formatted string for a layout attribute style state type definition.
 
@@ -253,7 +267,6 @@ def prettify_layout_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
             return result
 
 
-
 FILES = [
     {
         "input": "type.yaml",
@@ -308,13 +321,13 @@ def convert_to_json(file: Dict[str, Any]) -> None:
     try:
         with open(file["input"], "r", encoding="utf-8") as yaml_file:
             data = yaml.safe_load(yaml_file)
-        
+
         json_filename = JSON_DIR + file["input"].replace(".yaml", ".json")
 
         directory = os.path.dirname(json_filename)
         if not os.path.exists(directory):
             os.makedirs(directory)
-        
+
         with open(json_filename, "w", encoding="utf-8") as json_file:
             json.dump(data, json_file, ensure_ascii=False, indent=4)
 
@@ -339,9 +352,9 @@ def sync_file(file: Dict[str, Any]) -> None:
         for line in lines:
             if COMMENT_BEGIN in line:
                 break
-            
+
             f.write(line)
-        
+
         f.write(COMMENT_BEGIN + "\n")
 
         print("file: ", file)
@@ -349,10 +362,10 @@ def sync_file(file: Dict[str, Any]) -> None:
             print("group: ", group)
             for item in group["items"]:
                 print("item: ", item)
-                
+
                 if "prettify" in file:
                     print("prettify exists in the file")
-                    
+
                     if isinstance(group["items"], dict):
                         f.write(file["prettify"](item, group["items"][item]) + "\n")
                     elif isinstance(group["items"], list):
@@ -361,11 +374,11 @@ def sync_file(file: Dict[str, Any]) -> None:
                         f.write(file["prettify"](item, None) + "\n")
                 else:
                     print("prettify do not exists in the file")
-                    
+
                     f.write(str(item) + "\n")
-        
+
         f.write(COMMENT_END + "\n")
-        
+
         f.write("\n")
 
 

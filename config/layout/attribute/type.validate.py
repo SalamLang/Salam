@@ -1,10 +1,15 @@
-import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..', 'module')))
+import sys
 
-from utils import load_yaml, error, validate_item_structure
+sys.path.append(
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "../..", "module"))
+)
+
+from utils import error, load_yaml, validate_item_structure
+
 FILE = "type.yaml"
 LANGUAGES = ["en", "fa"]
+
 
 def main():
     try:
@@ -22,6 +27,7 @@ def main():
 
     except Exception as e:
         error(f"An unexpected error occurred: {e}")
+
 
 if __name__ == "__main__":
     main()

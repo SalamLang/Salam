@@ -1,6 +1,5 @@
 import os
 from typing import Any, Dict, List
-
 import yaml
 
 
@@ -17,8 +16,10 @@ def load_yaml(file_path: str) -> List[Dict[str, Any]]:
             return list(yaml.safe_load_all(file))
     except FileNotFoundError:
         error(f"File not found: {file_path}")
+        return []  # Ensure a return value
     except yaml.YAMLError as e:
         error(f"Error parsing YAML file: {file_path}\n{e}")
+        return []  # Ensure a return value
 
 
 def error(msg: str) -> None:
@@ -31,59 +32,28 @@ def error(msg: str) -> None:
     exit(1)
 
 
-def validate_item_structure(item: Dict[str, Any], languages: List[str]) -> None:
-    """
-    Validates the structure of an item against certain rules.
-
-    :param item: The item dictionary to validate.
-    :param languages: List of required language keys to check.
-    """
-    if "id" not in item:
-        raise ValueError("id is required and missed in an item")
-
-    if "generate_name" not in item:
-        raise ValueError("generate_name is required")
-
-    if "text" in item:
-        for lang in languages:
-            if lang not in item["text"]:
-                raise ValueError(f"text is required for {lang} language")
-
-
-def validate_item(item: Dict[str, Any], languages: List[str]) -> None:
-    """
-    Validates an item for required fields and their structure.
-
-    :param item: The item to validate.
-    :param languages: List of languages to check for text.
-    """
-    if "id" not in item:
-        error("id is required and missed in an item")
-
-    if "generate_name" not in item:
-        error("generate_name is required")
-
-    if "text" in item:
-        for lang in languages:
-            if lang not in item["text"]:
-                error(f"text is required for {lang} language")
-
-
 def command(item: Dict[str, Any], prefix: str, value: str) -> str:
     """
     Generates a formatted command string based on the item and value provided.
-
     :param item: Dictionary containing item data.
     :param prefix: Prefix for the item ID replacement.
     :param value: The value to include in the command.
     :return: Formatted string for the command.
     """
-    itemid = item["id"]
+    itemid = item.get("id", "")
+    if not itemid:
+        raise ValueError("Item must contain an 'id' key")
+
     idtext = itemid.replace(prefix, "")
     idtextlower = idtext.lower()
 
+    # Get generate_name or fallback to idtextlower if not found
     generate_name = item.get("generate_name", idtextlower)
-    type = str(item.get("type", "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY"))
+    
+    # Default to "AST_LAYOUT_ATTRIBUTE_STYLE_FILTER_STRING_ANY" if "type" is not found
+    type = str(item.get("type", "AST_LAYOUT_ATTRIBUTE_STYLE_FILTER_STRING_ANY"))
+    
+    # Handle reserved_values, default to "NULL" if empty
     reserved_values = (
         str(item.get("reserved_values", "NULL")).lower()
         if item.get("reserved_values", "") != ""
@@ -98,3 +68,16 @@ def command(item: Dict[str, Any], prefix: str, value: str) -> str:
         f'"{generate_name}", '
         f"{type}, {reserved_values}, NULL)"
     )
+
+
+# # Sample usage:
+# if __name__ == "__main__":
+#     # Example of loading a YAML file
+#     file_path = "example.yaml"  # Replace with your actual YAML file path
+#     items = load_yaml(file_path)
+    
+#     for item in items:
+#         # Example command generation for each item in the loaded YAML
+#         prefix = "prefix_"
+#         value = "some_value"
+#         print(command(item, prefix, value))

@@ -25,3 +25,33 @@ def error(msg: str) -> None:
     """
     print("Error: " + msg)
     exit(1)
+
+def command(item: Dict[str, any], prefix: str, value: str) -> str:
+    """
+    Generates a formatted command string based on the item and value provided.
+
+    :param item: Dictionary containing item data.
+    :param prefix: Prefix for the item ID replacement.
+    :param value: The value to include in the command.
+    :return: Formatted string for the command.
+    """
+    itemid = item["id"]
+    idtext = itemid.replace(prefix, "")
+    idtextlower = idtext.lower()
+
+    generate_name = item.get("generate_name", idtextlower)
+    type = str(item.get("type", "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING_ANY"))
+    reserved_values = (
+        str(item.get("reserved_values", "NULL")).lower()
+        if item.get("reserved_values", "") != ""
+        else "NULL"
+    )
+
+    return (
+        f"({itemid}, "
+        f'"{idtext}", '
+        f'"{idtextlower}", '
+        f'"{value}", '
+        f'"{generate_name}", '
+        f"{type}, {reserved_values}, NULL)"
+    )

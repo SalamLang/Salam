@@ -28,4 +28,3 @@ if __name__ == "__main__":
 
     except Exception as e:
         error(f"An unexpected error occurred: {e}")
-

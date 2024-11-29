@@ -1,5 +1,6 @@
 from typing import Dict, List
-from module.utils import load_yaml, error
+
+from module.utils import error, load_yaml
 from module.validation import validate_item_structure
 
 FILE = "language.yaml"

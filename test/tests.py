@@ -1,6 +1,7 @@
 import filecmp
 import os
 from pathlib import Path
+from typing import Union  # Import Union for type annotations
 
 # salam_bin = "/mnt/c/Users/MAX/Salam/src/main"
 salam_bin = "../salam"
@@ -15,8 +16,13 @@ COLOR_GREEN = "\033[92m"
 COLOR_RED = "\033[91m"
 COLOR_BLUE = "\033[94m"
 
+total_tests = 0
+passed_tests = 0
+failed_tests = 0
+warnings = 0
 
-def run_tests_in_directory(directory):
+
+def run_tests_in_directory(directory: Path) -> None:
     output_dir = directory / "output"
 
     if "output" in directory.parts:
@@ -28,14 +34,14 @@ def run_tests_in_directory(directory):
 
     parent_layout_file = directory / "layout.salam"
     if parent_layout_file.exists():
-        os.system(f"{salam_bin} {parent_layout_file} > /dev/null 2>&1")
+        os.system(f"{SALAM_BIN} {parent_layout_file} > /dev/null 2>&1")
     else:
         print(
             f"{COLOR_RED}{parent_layout_file} does not exist. Skipping salam command.{COLOR_RESET}"
         )
 
 
-def compare_output_to_expected(directory):
+def compare_output_to_expected(directory: Path) -> None:
     global total_tests, passed_tests, failed_tests, warnings
 
     output_dir = directory / "output"
@@ -67,7 +73,7 @@ def compare_output_to_expected(directory):
     total_tests += 1
 
 
-def process_directory(directory):
+def process_directory(directory: Path) -> None:
     salam_files = list(directory.glob("*.salam"))
     if not salam_files:
         return
@@ -76,8 +82,8 @@ def process_directory(directory):
     compare_output_to_expected(directory)
 
 
-def iterate_directories(base_dir):
-    for root, dirs, files in os.walk(base_dir):
+def iterate_directories(base_dir: Union[str, Path]) -> None:
+    for root, dirs, _ in os.walk(base_dir):
         dirs[:] = [d for d in dirs if d != "output"]
 
         for subdir in dirs:

@@ -1,17 +1,10 @@
 from typing import Dict, List
-
-import yaml
+from module.utils import load_yaml, error
 
 FILE = "type.yaml"
 LANGUAGES = ["en", "fa"]
 
-file = open(FILE, "r", encoding="utf-8")
-docs: List[Dict] = list(yaml.safe_load_all(file))  # Annotate docs as a list of dictionaries
-
-def error(msg: str) -> None:
-    print("Error: " + msg)
-    exit(1)
-
+docs: List[Dict] = load_yaml(FILE)
 
 if __name__ == "__main__":
     for doc in docs:

@@ -1,6 +1,7 @@
 from typing import Dict, List, Any
 import yaml
 
+
 def load_yaml(file_path: str) -> List[Dict[str, Any]]:
     """
     Loads a YAML file and returns its contents as a list of dictionaries.
@@ -17,6 +18,7 @@ def load_yaml(file_path: str) -> List[Dict[str, Any]]:
     except yaml.YAMLError as e:
         error(f"Error parsing YAML file: {file_path}\n{e}")
 
+
 def error(msg: str) -> None:
     """
     Prints an error message and exits the program.
@@ -26,7 +28,28 @@ def error(msg: str) -> None:
     print("Error: " + msg)
     exit(1)
 
-def command(item: Dict[str, any], prefix: str, value: str) -> str:
+
+def validate_item_structure(item: Dict[str, Any], languages: List[str]) -> None:
+    """
+    Validates the structure of an item against certain rules.
+
+    :param item: The item dictionary to validate.
+    :param languages: List of required language keys to check.
+    """
+    if "id" not in item:
+        raise ValueError("id is required and missed in an item")
+
+    if "is_mother" in item:
+        if item["is_mother"] not in [True, False]:
+            raise ValueError("is_mother is invalid in an item")
+
+    if "text" in item:
+        for lang in languages:
+            if lang not in item["text"]:
+                raise ValueError(f"text is required for {lang} language")
+
+
+def command(item: Dict[str, Any], prefix: str, value: str) -> str:
     """
     Generates a formatted command string based on the item and value provided.
 

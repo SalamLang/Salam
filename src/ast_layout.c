@@ -417,7 +417,7 @@ ast_layout_node_type_t name_to_ast_layout_node_type(char *name) {
 
     if (false) {
     }
-#include "config/ast_layout_type.h"
+#include "generated-config/ast_layout_type.h"
 
     return type;
 }
@@ -455,7 +455,7 @@ ast_layout_node_type_t enduser_name_to_ast_layout_node_type(char *name) {
 
     if (false) {
     }
-#include "config/ast_layout_type.h"
+#include "generated-config/ast_layout_type.h"
 
     return type;
 }
@@ -516,7 +516,7 @@ char *ast_layout_node_type_to_name(ast_layout_node_type_t type) {
 #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
                                ENDUSER_NAME, IS_MOTHER)
 
-#include "config/ast_layout_type.h"
+#include "generated-config/ast_layout_type.h"
     }
 
     return "error!!!";
@@ -548,7 +548,7 @@ char *ast_layout_node_type_to_enduser_name(ast_layout_node_type_t type) {
 #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
                                ENDUSER_NAME, IS_MOTHER)
 
-#include "config/ast_layout_type.h"
+#include "generated-config/ast_layout_type.h"
     }
 
     return "error!!!";
@@ -585,7 +585,7 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char *name) {
         return type;                                                   \
     }
 
-#include "config/ast_layout_attribute_type.h"
+#include "generated-config/ast_layout_attribute_type.h"
 
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
@@ -605,7 +605,7 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char *name) {
         return type;                                                          \
     }
 
-#include "config/ast_layout_attribute_style_type.h"
+#include "generated-config/ast_layout_attribute_style_type.h"
 
     return type;
 }
@@ -642,7 +642,7 @@ ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_type(
         return type;                                                   \
     }
 
-#include "config/ast_layout_attribute_type.h"
+#include "generated-config/ast_layout_attribute_type.h"
 
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT
@@ -666,7 +666,7 @@ ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_type(
                                              ENDUSER_NAME, GENERATED_NAME, \
                                              FILTER, ALLOWED_VALUES, SUBTAGS)
 
-#include "config/ast_layout_attribute_style_type.h"
+#include "generated-config/ast_layout_attribute_style_type.h"
 
     return type;
 }
@@ -719,7 +719,7 @@ char *ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type) {
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, \
                                          GENERATED_NAME, ENDUSER_NAME)
 
-#include "config/ast_layout_attribute_type.h"
+#include "generated-config/ast_layout_attribute_type.h"
 
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT
@@ -737,7 +737,7 @@ char *ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type) {
                                              ENDUSER_NAME, GENERATED_NAME, \
                                              FILTER, ALLOWED_VALUES, SUBTAGS)
 
-#include "config/ast_layout_attribute_style_type.h"
+#include "generated-config/ast_layout_attribute_style_type.h"
     }
 
     return "error???";

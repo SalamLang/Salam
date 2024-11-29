@@ -1,21 +1,38 @@
+import os
 import yaml
+import json
+from typing import Any, Dict, List
 
 SELECTED_LANGUAGE = "fa"
 
 COMMENT_BEGIN = "// ----------- BEGIN AUTO GENERATED ----------- //"
 COMMENT_END = "// ----------- END AUTO GENERATED ----------- //"
+JSON_DIR = "json/"
 
+def prettify_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+    """
+    Generates a formatted string for a type definition.
 
-def prettify_type(item, group):
+    :param item: A dictionary representing the type item.
+    :param group: A dictionary representing the group the item belongs to.
+    :return: A formatted string for the type.
+    """
     global SELECTED_LANGUAGE
 
     itemid = item["id"]
     idtext = itemid.replace("AST_TYPE_", "")
-
+    
     return f"ADD_TYPE(" f"{itemid}, " f'"{idtext}", ' f'"{idtext.lower()}"' f")\n"
 
 
-def prettify_block_type(item, group):
+def prettify_block_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+    """
+    Generates a formatted string for a block type definition.
+
+    :param item: A dictionary representing the block type item.
+    :param group: A dictionary representing the group the item belongs to.
+    :return: A formatted string for the block type.
+    """
     global SELECTED_LANGUAGE
 
     itemid = item["id"]
@@ -32,7 +49,14 @@ def prettify_block_type(item, group):
     )
 
 
-def prettify_layout_attribute_type(item, group):
+def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+    """
+    Generates a formatted string for a layout attribute type definition.
+
+    :param item: A dictionary representing the layout attribute type item.
+    :param group: A dictionary representing the group the item belongs to.
+    :return: A formatted string for the layout attribute type.
+    """
     global SELECTED_LANGUAGE
 
     itemid = item["id"]
@@ -58,29 +82,42 @@ def prettify_layout_attribute_type(item, group):
     )
 
 
-def prettify_layout_attribute_style_global_value(item, group):
+def prettify_layout_attribute_style_global_value(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+    """
+    Generates a formatted string for a layout attribute style global value definition.
+
+    :param item: A dictionary representing the style global value item.
+    :param group: A dictionary representing the group the item belongs to.
+    :return: A formatted string for the style global value.
+    """
     global SELECTED_LANGUAGE
 
     itemid = item["id"]
-
     values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
 
     if type(values) is not str:
         return ""  # TODO
-
+    
     return (
         f"ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE"
         + f"("
-        + f'"{itemid}", '
+        + f'{itemid}, '
         + f'"{str(values)}"'
         + f")\n"
     )
 
 
-def prettify_layout_attribute_style_type(item, group):
+def prettify_layout_attribute_style_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+    """
+    Generates a formatted string for a layout attribute style type definition.
+
+    :param item: A dictionary representing the style type item.
+    :param group: A dictionary representing the group the item belongs to.
+    :return: A formatted string for the style type.
+    """
     global SELECTED_LANGUAGE
 
-    def command(value):
+    def command(value: str) -> str:
         itemid = item["id"]
         idtext = itemid.replace("AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", "")
         idtextlower = idtext.lower()
@@ -133,7 +170,14 @@ def prettify_layout_attribute_style_type(item, group):
             return result
 
 
-def prettify_layout_attribute_style_value(key, items):
+def prettify_layout_attribute_style_value(key: str, items: List[Dict[str, Any]]) -> str:
+    """
+    Generates a formatted string for layout attribute style values.
+
+    :param key: A string representing the key name.
+    :param items: A list of dictionaries representing the style value items.
+    :return: A formatted string for the style values.
+    """
     global SELECTED_LANGUAGE
 
     result = "const ast_layout_attribute_style_pair_t " + key + "[] = {\n"
@@ -160,7 +204,14 @@ def prettify_layout_attribute_style_value(key, items):
     return result
 
 
-def prettify_layout_attribute_style_state_type(item, group):
+def prettify_layout_attribute_style_state_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+    """
+    Generates a formatted string for a layout attribute style state type definition.
+
+    :param item: A dictionary representing the style state type item.
+    :param group: A dictionary representing the group the item belongs to.
+    :return: A formatted string for the style state type.
+    """
     global SELECTED_LANGUAGE
 
     itemid = item["id"]
@@ -184,10 +235,17 @@ def prettify_layout_attribute_style_state_type(item, group):
     )
 
 
-def prettify_layout_type(item, group):
+def prettify_layout_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+    """
+    Generates a formatted string for a layout type definition.
+
+    :param item: A dictionary representing the layout type item.
+    :param group: A dictionary representing the group the item belongs to.
+    :return: A formatted string for the layout type.
+    """
     global SELECTED_LANGUAGE
 
-    def command(value):
+    def command(value: str) -> str:
         itemid = item["id"]
         idtext = itemid.replace("AST_LAYOUT_TYPE_", "")
         idtextlower = idtext.lower()
@@ -239,7 +297,7 @@ FILES = [
     {
         "input": "type.yaml",
         "output": "ast_type.h",
-        "pretify": prettify_type,
+        "prettify": prettify_type,
     },
     {
         "input": "block.yaml",
@@ -279,10 +337,35 @@ FILES = [
 ]
 
 
-def sync_file(file):
+def convert_to_json(file: Dict[str, Any]) -> None:
+    """
+    Converts a YAML file to a JSON file.
+
+    :param file: A dictionary containing 'input' and 'output' file paths.
+    """
+    global JSON_DIR
+    try:
+        with open(file["input"], "r", encoding="utf-8") as yaml_file:
+            data = yaml.safe_load(yaml_file)
+        
+        json_filename = JSON_DIR + file["input"].replace(".yaml", ".json")
+
+        directory = os.path.dirname(json_filename)
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        
+        with open(json_filename, "w", encoding="utf-8") as json_file:
+            json.dump(data, json_file, ensure_ascii=False, indent=4)
+
+        print(f"Converted {file['input']} to {file['output']}")
+    except Exception as e:
+        print(f"Error converting {file['input']} to {file['output']}: {e}")
+
+
+def sync_file(file: Dict[str, Any]) -> None:
     print("Syncing file: " + file["input"] + " -> " + file["output"])
 
-    output_filename = "../src/config/" + file["output"]
+    output_filename = "../src/generated-config/" + file["output"]
     input_filename = file["input"]
 
     f = open(input_filename, "r", encoding="utf-8")
@@ -295,11 +378,20 @@ def sync_file(file):
         for line in lines:
             if COMMENT_BEGIN in line:
                 break
+            
             f.write(line)
+        
         f.write(COMMENT_BEGIN + "\n")
+
+        print("file: ", file)
         for group in content:
+            print("group: ", group)
             for item in group["items"]:
+                print("item: ", item)
+                
                 if "prettify" in file:
+                    print("prettify exists in the file")
+                    
                     if isinstance(group["items"], dict):
                         f.write(file["prettify"](item, group["items"][item]) + "\n")
                     elif isinstance(group["items"], list):
@@ -307,14 +399,20 @@ def sync_file(file):
                     else:
                         f.write(file["prettify"](item, None) + "\n")
                 else:
+                    print("prettify do not exists in the file")
+                    
                     f.write(str(item) + "\n")
+        
         f.write(COMMENT_END + "\n")
-        # for line in lines:
-        # 	if COMMENT_END in line:
-        # 		break
+        
         f.write("\n")
 
 
-for file in FILES:
-    print(file)
-    sync_file(file)
+if __name__ == "__main__":
+    if len(FILES) == 0:
+        print("No files to sync")
+
+    for file in FILES:
+        print(file)
+        sync_file(file)
+        convert_to_json(file)

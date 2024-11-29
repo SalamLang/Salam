@@ -40,14 +40,14 @@ typedef enum {
 #undef ADD_TYPE
 #define ADD_TYPE(TYPE, NAME, NAME_LOWER) TYPE,
 
-#include "config/ast_type.h"
+#include "generated-config/ast_type.h"
 } ast_type_t;
 
 typedef enum {
 #undef ADD_BLOCK_TYPE
 #define ADD_BLOCK_TYPE(TYPE, NAME, NAME_LOWER) TYPE,
 
-#include "config/ast_block_type.h"
+#include "generated-config/ast_block_type.h"
 } ast_block_type_t;
 
 struct ast_t;
@@ -73,7 +73,7 @@ typedef enum ast_value_kind_t {
 #undef ADD_VALUE_KIND
 #define ADD_VALUE_KIND(TYPE, NAME, NAME_LOWER) TYPE,
 
-#include "config/ast_value_kind.h"
+#include "generated-config/ast_value_kind.h"
 } ast_value_kind_t;
 
 typedef struct ast_value_type_t {

@@ -1,7 +1,7 @@
 import sys
 
 
-def print_hexdump(filename):
+def print_hexdump(filename: str) -> None:
     try:
         with open(filename, "rb") as file:
             offset = 0

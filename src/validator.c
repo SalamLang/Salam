@@ -23,7 +23,7 @@
 
 #include "validator.h"
 
-#include "config/ast_layout_attribute_style_value.h"
+#include "generated-config/ast_layout_attribute_style_value.h"
 
 /**
  *
@@ -364,8 +364,13 @@ bool token_belongs_to_ast_layout_node(
     } else if (is_layout_node_a_single_tag(attribute->parent_node_type) &&
                attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
         return false;
+	} else if (attribute->parent_node_type == AST_LAYOUT_TYPE_LABEL &&
+			attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_FOR) {
+		return true;
     } else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
         return true;
+	} else if (attribute->parent_node_type == AST_LAYOUT_TYPE_DIV && attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
+		return true;
     } else if (attribute->parent_node_type == AST_LAYOUT_TYPE_INCLUDE &&
                (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_SRC ||
                 attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT)) {
@@ -397,7 +402,8 @@ bool token_belongs_to_ast_layout_node(
     else if (attribute->parent_node_type == AST_LAYOUT_TYPE_BR ||
              attribute->parent_node_type == AST_LAYOUT_TYPE_HR) {
         // TODO: Maybe later?
-        return true;
+        // return true;
+        return false;
     }
     // RESPONSIVE
     else if (attribute->parent_node_type == AST_LAYOUT_TYPE_MEDIA) {
@@ -766,7 +772,7 @@ bool is_layout_node_a_single_tag(ast_layout_node_type_t type) {
 #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
                                ENDUSER_NAME, IS_MOTHER)
 
-#include "config/ast_layout_type.h"
+#include "generated-config/ast_layout_type.h"
     }
 
     return false;
@@ -827,7 +833,7 @@ bool is_style_attribute(ast_layout_attribute_type_t type) {
                                         ALLOWED_VALUES, SUBTAGS)              \
     case TYPE:
 
-#include "config/ast_layout_attribute_style_type.h"
+#include "generated-config/ast_layout_attribute_style_type.h"
         return true;
 
         default:
@@ -1603,7 +1609,7 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
         return true;                                                          \
     }
 
-#include "config/ast_layout_attribute_style_global.h"
+#include "generated-config/ast_layout_attribute_style_global.h"
     }
 
     switch (attribute->type) {
@@ -1617,7 +1623,7 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, \
                                          GENERATED_NAME, ENDUSER_NAME)
 
-#include "config/ast_layout_attribute_type.h"
+#include "generated-config/ast_layout_attribute_type.h"
 
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
@@ -1794,7 +1800,7 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
                                              ENDUSER_NAME, GENERATED_NAME, \
                                              FILTER, ALLOWED_VALUES, SUBTAGS)
 
-#include "config/ast_layout_attribute_style_type.h"
+#include "generated-config/ast_layout_attribute_style_type.h"
     }
 
     return false;

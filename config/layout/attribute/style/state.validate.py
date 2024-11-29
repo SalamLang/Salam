@@ -1,32 +1,31 @@
-import yaml
+import os
+import sys
 
-FILE = "global_value.yaml"
+sys.path.append(
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../module"))
+)
+
+from utils import error, load_yaml, validate_item_structure
+
+FILE = os.path.join(os.path.dirname(__file__), "global_value.yaml")
 LANGUAGES = ["en", "fa"]
 
-file = open(FILE, "r", encoding="utf-8")
-docs = yaml.safe_load_all(file)
+def main():
+    try:
+        docs = load_yaml(FILE)
 
+        for doc in docs:
+            for item in doc.get("items", []):
+                try:
+                    validate_item_structure(item, LANGUAGES)
+                except ValueError as e:
+                    print(item)
+                    error(str(e))
 
-def error(msg: str) -> None:
-    print("Error: " + msg)
-    exit(1)
+        print(FILE + ": Validation is successful")
 
+    except Exception as e:
+        error(f"An unexpected error occurred: {e}")
 
 if __name__ == "__main__":
-    for doc in docs:
-        for item in doc["items"]:
-            if "id" not in item:
-                print(item)
-                error("id is required and missed in an item")
-
-            if "generate_name" not in item:
-                print(item)
-                error("generate_name is required")
-
-            if "text" in item:
-                for lang in LANGUAGES:
-                    if lang not in item["text"]:
-                        print(item)
-                        error("text is required for " + lang + " language")
-
-    print(FILE + ": Validation is successful")
+    main()

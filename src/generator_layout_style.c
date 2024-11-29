@@ -230,7 +230,7 @@ char *generator_code_layout_style_name(ast_layout_attribute_type_t type) {
                                              ENDUSER_NAME, GENERATED_NAME, \
                                              FILTER, ALLOWED_VALUES, SUBTAGS)
 
-#include "config/ast_layout_attribute_style_type.h"
+#include "generated-config/ast_layout_attribute_style_type.h"
 
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
@@ -242,7 +242,7 @@ char *generator_code_layout_style_name(ast_layout_attribute_type_t type) {
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, \
                                          GENERATED_NAME, ENDUSER_NAME)
 
-#include "config/ast_layout_attribute_type.h"
+#include "generated-config/ast_layout_attribute_type.h"
     }
 
     return "error????";
@@ -268,7 +268,7 @@ char *generator_code_layout_attribute_style_state_type_to_enduser_name(
     case TYPE:                                                              \
         return ENDUSER_NAME;
 
-#include "config/ast_layout_attribute_style_state_type.h"
+#include "generated-config/ast_layout_attribute_style_state_type.h"
     }
 
     return "unknown style state endusername";
@@ -294,7 +294,7 @@ char *generator_code_layout_attribute_style_state_type_to_name(
     case TYPE:                                                              \
         return NAME;
 
-#include "config/ast_layout_attribute_style_state_type.h"
+#include "generated-config/ast_layout_attribute_style_state_type.h"
     }
 
     return "unknown style state name";
@@ -323,7 +323,7 @@ generator_code_layout_attribute_style_state_enduser_name_to_type(char *name) {
         return TYPE;                                                        \
     }
 
-#include "config/ast_layout_attribute_style_state_type.h"
+#include "generated-config/ast_layout_attribute_style_state_type.h"
 
     return AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR;
 }
@@ -348,7 +348,7 @@ char *generator_code_layout_attribute_style_state_type_to_generated_name(
     case TYPE:                                                              \
         return GENERATED_NAME;
 
-#include "config/ast_layout_attribute_style_state_type.h"
+#include "generated-config/ast_layout_attribute_style_state_type.h"
     }
 
     return "unknown style state generated name";
@@ -377,7 +377,7 @@ generator_code_layout_attribute_style_state_name_to_type(char *name) {
         return TYPE;                                                        \
     }
 
-#include "config/ast_layout_attribute_style_state_type.h"
+#include "generated-config/ast_layout_attribute_style_state_type.h"
 
     return AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR;
 }

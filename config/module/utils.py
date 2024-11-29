@@ -41,9 +41,8 @@ def validate_item_structure(item: Dict[str, Any], languages: List[str]) -> None:
     if "id" not in item:
         raise ValueError("id is required and missed in an item")
 
-    if "is_mother" in item:
-        if item["is_mother"] not in [True, False]:
-            raise ValueError("is_mother is invalid in an item")
+    if "generate_name" not in item:
+        raise ValueError("generate_name is required")
 
     if "text" in item:
         for lang in languages:

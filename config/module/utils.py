@@ -1,5 +1,6 @@
 import os
 from typing import Any, Dict, List
+
 import yaml
 
 
@@ -49,10 +50,10 @@ def command(item: Dict[str, Any], prefix: str, value: str) -> str:
 
     # Get generate_name or fallback to idtextlower if not found
     generate_name = item.get("generate_name", idtextlower)
-    
+
     # Default to "AST_LAYOUT_ATTRIBUTE_STYLE_FILTER_STRING_ANY" if "type" is not found
     type = str(item.get("type", "AST_LAYOUT_ATTRIBUTE_STYLE_FILTER_STRING_ANY"))
-    
+
     # Handle reserved_values, default to "NULL" if empty
     reserved_values = (
         str(item.get("reserved_values", "NULL")).lower()
@@ -75,7 +76,7 @@ def command(item: Dict[str, Any], prefix: str, value: str) -> str:
 #     # Example of loading a YAML file
 #     file_path = "example.yaml"  # Replace with your actual YAML file path
 #     items = load_yaml(file_path)
-    
+
 #     for item in items:
 #         # Example command generation for each item in the loaded YAML
 #         prefix = "prefix_"

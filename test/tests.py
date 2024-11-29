@@ -2,7 +2,8 @@ import filecmp
 import os
 from pathlib import Path
 
-salam_bin = "/mnt/c/Users/MAX/Salam/src/main"
+# salam_bin = "/mnt/c/Users/MAX/Salam/src/main"
+salam_bin = "../salam"
 
 total_tests = 0
 passed_tests = 0

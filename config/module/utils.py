@@ -1,4 +1,6 @@
-from typing import Dict, List, Any
+import os
+from typing import Any, Dict, List
+
 import yaml
 
 
@@ -47,6 +49,25 @@ def validate_item_structure(item: Dict[str, Any], languages: List[str]) -> None:
         for lang in languages:
             if lang not in item["text"]:
                 raise ValueError(f"text is required for {lang} language")
+
+
+def validate_item(item: Dict[str, Any], languages: List[str]) -> None:
+    """
+    Validates an item for required fields and their structure.
+
+    :param item: The item to validate.
+    :param languages: List of languages to check for text.
+    """
+    if "id" not in item:
+        error("id is required and missed in an item")
+
+    if "generate_name" not in item:
+        error("generate_name is required")
+
+    if "text" in item:
+        for lang in languages:
+            if lang not in item["text"]:
+                error(f"text is required for {lang} language")
 
 
 def command(item: Dict[str, Any], prefix: str, value: str) -> str:

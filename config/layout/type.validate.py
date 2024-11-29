@@ -5,7 +5,8 @@ sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "module"))
 )
 
-from utils import error, load_yaml, validate_item_structure
+from utils import error, load_yaml
+from validation import validate_item_structure
 
 FILE = "type.yaml"
 LANGUAGES = ["en", "fa"]

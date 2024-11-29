@@ -2,6 +2,8 @@ import os
 import yaml
 import json
 from typing import Any, Dict, List
+from module.utils import command
+
 
 SELECTED_LANGUAGE = "fa"
 

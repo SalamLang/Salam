@@ -51,27 +51,32 @@ Salam is the first Persian/Iranian computer scripting language.
 
 ### Usage Examples
 
-- **Execute a Script**:  
+- **Execute a Script**:
+  
   ```bash
   ./salam <filename>
   ```
 
-- **Compile and Run Code**:  
+- **Compile and Run Code**:
+
   ```bash
   ./salam code <content> <output_dir>
   ```
 
-- **Lint Scripts**:  
+- **Lint Scripts**:
+
   ```bash
   ./salam lint <filename> <output_dir>
   ```
 
-- **Version Check**:  
+- **Version Check**:
+
   ```bash
   ./salam version
   ```
 
-- **Update Salam**:  
+- **Update Salam**:
+
   ```bash
   ./salam update
   ```
@@ -113,18 +118,21 @@ docker run --rm -it basemax/salam
 
 #### Build Locally (Optional)
 
-1. Clone the Salam repository:  
+1. Clone the Salam repository:
+
    ```bash
    git clone https://github.com/SalamLang/Salam
    cd Salam
    ```
 
-2. Build the Docker image:  
+3. Build the Docker image:
+ 
    ```bash
    docker build -f docker/Dockerfile -t salam .
    ```
 
-3. Verify the image:  
+4. Verify the image:
+
    ```bash
    docker images salam
    ```
@@ -132,33 +140,40 @@ docker run --rm -it basemax/salam
 ### Running Scripts
 
 #### Mount a Local Script
+
 ```bash
 docker run --rm -it -v $(pwd):/scripts salam ./salam /scripts/your_script.salam
 ```
 
 #### Inline Code Execution
+
 ```bash
 docker run --rm -it salam ./salam code "صفحه: محتوا = «سلام دنیا از سلام» تمام"
 ```
 
 ### Explore Salam Commands
 
-- **Check Version**:  
+- **Check Version**:
+
   ```bash
   docker run --rm -it salam ./salam version
   ```
 
-- **Update Salam**:  
+- **Update Salam**:
+ 
   ```bash
   docker run --rm -it salam ./salam update
   ```
 
-- **Lint Scripts**:  
-  Lint a File:  
+- **Lint Scripts**:
+
+  Lint a File:
+  
   ```bash
   docker run --rm -it -v $(pwd):/scripts salam ./salam lint /scripts/your_script.salam /output
   ```  
-  Lint Inline Code:  
+  Lint Inline Code:
+  
   ```bash
   docker run --rm -it salam ./salam lint code "some salam code"
   ```

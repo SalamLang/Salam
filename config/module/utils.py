@@ -1,7 +1,5 @@
-import os
-from typing import Any, Dict, List
-
 import yaml
+from typing import Any, Dict, List
 
 
 def load_yaml(file_path: str) -> List[Dict[str, Any]]:
@@ -33,7 +31,25 @@ def error(msg: str) -> None:
     exit(1)
 
 
-def command(item: Dict[str, Any], prefix: str, value: str) -> str:
+def command_layout_type(item: Dict[str, Any], prefix: str, value: str) -> str:
+	itemid = item["id"]
+	idtext = itemid.replace(prefix, "")
+	idtextlower = idtext.lower()
+	generate_name = item.get("generate_name", idtext.lower())
+	is_mother = str(item.get("is_mother", False)).lower()
+
+	return (
+		f"({itemid}, "
+		+ f'"{idtext}", '
+		+ f'"{idtextlower}", '
+		+ f'"{generate_name}", '
+		+ f'"{value}", '
+		+ f"{is_mother}"
+		+ f")\n"
+	)
+
+
+def command_layout_style_type(item: Dict[str, Any], prefix: str, value: str) -> str:
     """
     Generates a formatted command string based on the item and value provided.
     :param item: Dictionary containing item data.

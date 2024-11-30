@@ -2,6 +2,8 @@
 // ENDUSER_NAME, IS_SINGLE_TAG)
 
 // ----------- BEGIN AUTO GENERATED ----------- //
+ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_INCLUDE, "INCLUDE", "include", "include", "بارگیری", false)
+
 ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_PARAGRAPH_RAW, "PARAGRAPH_RAW", "paragraph_raw", "paragraph_raw", "محتوا", false)
 
 ADD_LAYOUT_TYPE_HIDE(AST_LAYOUT_TYPE_ERROR, "ERROR", "error", "error", "خطا", false)

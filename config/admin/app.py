@@ -6,12 +6,15 @@ app = Flask(__name__)
 app.secret_key = 'your_secret_key'
 
 YAML_DIR = '../'
-YAML_FILES = []
-for root, dirs, files in os.walk(YAML_DIR):
-    for file in files:
-        if file.endswith('.yaml'):
-            YAML_FILES.append(os.path.relpath(os.path.join(root, file), start=YAML_DIR))
-
+def get_yaml_files():
+    files = []
+    for root, _, files in os.walk(YAML_DIR):
+        for file in files:
+            if file.endswith('.yaml'):
+                files.append(os.path.relpath(os.path.join(root, file), start=YAML_DIR))
+    
+    return files
+ 
 
 def read_yaml(file_path):
     with open(file_path, 'r', encoding='utf-8') as file:
@@ -27,11 +30,11 @@ def write_yaml(file_path, data):
 def index():
     error = session.pop('error', None)
     
-    return render_template('index.html', error=error, files=YAML_FILES)
+    return render_template('index.html', error=error, files=get_yaml_files())
 
 
 @app.route('/edit/<path:filepath>', methods=['POST'])
-def edit_file(filepath):
+def edit_file_action(filepath):
     file_path = os.path.join(YAML_DIR, filepath)
 
     if not os.path.exists(file_path):
@@ -59,7 +62,7 @@ def edit_file(filepath):
 
 
 @app.route('/add-file', methods=['POST'])
-def add_file():
+def add_file_action():
     new_file = request.form.get('filename')
 
     if not new_file:
@@ -78,8 +81,8 @@ def add_file():
         new_file += '.yaml'
 
     path = os.path.join(YAML_DIR, new_file)
-
-    if not path.startswith(os.path.abspath(YAML_DIR)):
+    
+    if path.startswith(YAML_DIR + ".."):
         session['error'] = 'Invalid filename or directory traversal attempt.'
         return redirect(url_for('index'))
 
@@ -90,19 +93,17 @@ def add_file():
     try:
         write_yaml(path, {'items': []})
 
-        return redirect(url_for('index'), code=200)
+        return redirect(url_for('index'))
     except Exception as e:
         session['error'] = f'Failed to create file: {e}'
         
-        return redirect(url_for('index'), code=302)
+        return redirect(url_for('index'))
 
 
 @app.route('/delete-file/<path:filepath>', methods=['POST'])
-def delete_file(filepath):
+def delete_file_action(filepath):
     full_path = os.path.join(YAML_DIR, filepath)
     
-    print(full_path)
-
     if os.path.exists(full_path) and os.path.abspath(full_path).startswith(os.path.abspath(YAML_DIR)):
         try:
             os.remove(full_path)

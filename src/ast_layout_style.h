@@ -44,10 +44,14 @@ typedef struct ast_layout_style_state_t {
 
 typedef enum ast_layout_attribute_style_state_type {
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
+#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_REPEAT
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER,       \
                                               ENDUSER_NAME, GENERATED_NAME) \
     TYPE,
+
+#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER,       \
+                                              ENDUSER_NAME, GENERATED_NAME)
 
 #include "generated-config/ast_layout_attribute_style_state_type.h"
 } ast_layout_attribute_style_state_type;

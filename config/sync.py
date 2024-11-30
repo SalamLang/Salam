@@ -224,18 +224,36 @@ def prettify_layout_attribute_style_state_type(
     generate_name = item.get("generate_name", "")
 
     if type(values) is not str:
-        return ""  # TODO
+        result = ""
+        index = 0
+        for value in values:
+            if index == 0:
+                result += "ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE"
+            else:
+                result += "ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_REPEAT"
 
-    return (
-        f"ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE"
-        + f"("
-        + f"{itemid}, "
-        + f'"{idtext}", '
-        + f'"{idtextlower}", '
-        + f'"{str(values)}", '
-        + f'"{generate_name}"'
-        + f")\n"
-    )
+            result += (f"("
+                + f"{itemid}, "
+                + f'"{idtext}", '
+                + f'"{idtextlower}", '
+                + f'"{str(value)}", '
+                + f'"{generate_name}"'
+                + f")\n"
+            )
+            index += 1
+
+        return result
+    else:
+        return (
+            f"ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE"
+            + f"("
+            + f"{itemid}, "
+            + f'"{idtext}", '
+            + f'"{idtextlower}", '
+            + f'"{str(values)}", '
+            + f'"{generate_name}"'
+            + f")\n"
+        )
 
 
 def prettify_layout_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:

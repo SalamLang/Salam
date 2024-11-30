@@ -80,6 +80,15 @@ For a detailed guide, visit our official site: [salamlang.ir](https://salamlang.
 
 ## Control Panel
 
+```bash
+cd config/admin
+pip install -r requirements.txt
+
+python app.py
+or
+python3 app.py
+```
+
 ![Salam Programming Language Panel](assets/panel.jpg)
 
 ## 🐳 Using Salam with Docker

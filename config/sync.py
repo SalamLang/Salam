@@ -161,7 +161,9 @@ def prettify_layout_attribute_style_type(
             return result
 
 
-def prettify_layout_attribute_style_value(key: str, items: List[Dict[str, Any]]) -> str:
+def prettify_layout_attribute_style_value(
+    item: Dict[str, Any], group: Dict[str, Any]
+) -> str:
     """
     Generates a formatted string for layout attribute style values.
 
@@ -170,24 +172,25 @@ def prettify_layout_attribute_style_value(key: str, items: List[Dict[str, Any]])
     :return: A formatted string for the style values.
     """
     global SELECTED_LANGUAGE
-
+    
+    key = item.get("id")
+    
     result = "const ast_layout_attribute_style_pair_t " + key + "[] = {\n"
 
-    if items is not None:
-        for item in items:
-            item["generate_name"] = item["generate_name"].replace('"', '\\"')
-            values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
+    for item in items:
+        item["generate_name"] = item["generate_name"].replace('"', '\\"')
+        values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
 
-            if values is not None:
-                if type(values) is str:
-                    values = values.replace('"', '\\"')
-                    result += '\t{"' + values + '", "' + item["generate_name"] + '"},\n'
-                else:
-                    for value in values:
-                        value = value.replace('"', '\\"')
-                        result += (
-                            '\t{"' + value + '", "' + item["generate_name"] + '"},\n'
-                        )
+        if values is not None:
+            if type(values) is str:
+                values = values.replace('"', '\\"')
+                result += '\t{"' + values + '", "' + item["generate_name"] + '"},\n'
+            else:
+                for value in values:
+                    value = value.replace('"', '\\"')
+                    result += (
+                        '\t{"' + value + '", "' + item["generate_name"] + '"},\n'
+                    )
 
     result += "\t{NULL, NULL},\n"
     result += "};\n"

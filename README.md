@@ -170,6 +170,6 @@ We welcome contributions from the community!
 - 🌟 Follow our [Code of Conduct](CODE_OF_CONDUCT.md).  
 
 Together, let’s make coding accessible to all.
+For inquiries or feedback, visit: [salamlang.ir](https://salamlang.ir)
 
-© 2024 Salam Language Team  
-For inquiries or feedback, visit: [salamlang.ir](https://salamlang.ir)  
+© 2024 Salam Language Team

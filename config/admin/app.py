@@ -13,71 +13,6 @@ YAML_DIR = '../'
 LANGUAEG_FILE = 'language.yaml'
 
 
-def nest_dict(keys, value):
-    """
-    Recursively nests a value in a dictionary based on a list of keys.
-
-    Args:
-        keys (list): A list of keys representing the hierarchy.
-        value: The value to assign at the deepest level.
-
-    Returns:
-        dict: A nested dictionary with the value set.
-    """
-    keys[0] = keys[0].replace("]", "")
-    
-    if len(keys) == 1:
-        return {keys[0]: value}
-    
-    return {keys[0]: nest_dict(keys[1:], value)}
-
-
-def merge_dicts(base, updates):
-    """
-    Merges two dictionaries, updating the base with the updates.
-
-    Args:
-        base (dict): The base dictionary to be updated.
-        updates (dict): The dictionary with updates.
-
-    Returns:
-        dict: The merged dictionary.
-    """
-    for key, value in updates.items():
-        key = key.replace("]", "")
-        
-        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
-            merge_dicts(base[key], value)
-        else:
-            base[key] = value
-    return base
-
-
-def transform_dynamic_form_data(raw_data):
-    """
-    Transforms flat form data into a nested dictionary dynamically.
-
-    Args:
-        raw_data (dict): The flat form data.
-
-    Returns:
-        dict: A nested dictionary.
-    """
-    result = defaultdict(list)
-    for key, values in raw_data.items():
-        for index, value in enumerate(values):
-            # Parse the key into a hierarchy
-            keys = key.replace("[]", "").split("[")
-            nested = nest_dict(keys, value)
-            
-            if len(result) <= index:
-                result[index] = {}
-            
-            merge_dicts(result[index], nested)
-    
-    return list(result.values())
-
-
 def get_dynamic_columns(data):
     """ Extract unique keys from the YAML structure for dynamic columns """
     columns = set()
@@ -188,15 +123,29 @@ def edit_file_action(filepath: str):
 
     data = request.get_json()
 
-    if not data or len(data) == 0:
+    if not data or len(data) == 0 or 'items' not in data:
         session['message'] = "The 'items' field does not exist."
         session['message_type'] = 'error'
         
         return redirect(url_for('edit_file', filepath=filepath))
 
+    print("Original Data:", data)
+
+    # if 'items' in data:
+    #     if isinstance(data['items'], dict):
+    #         data['items'] = list(data['items'].values())
+
+    #     for item in data['items']:
+    #         if isinstance(item, dict) and 'text' in item:
+    #             for key in item['text'].keys():
+    #                 value = item['text'][key].values()
+    #                 item['text'][key] = list(value)
+
+    # print("Updated Data:", data)
+
     try:
-        # write_yaml(file_path, data)
-        write_yaml(file_path + ".new", data)
+        write_yaml(file_path, data)
+        # write_yaml(file_path + ".new", data)
         
         session['message'] = "YAML file has been updated."
         session['message_type'] = 'ok'

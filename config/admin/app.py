@@ -40,6 +40,10 @@ def get_dynamic_columns(data):
         columns.remove('type')
         columns.insert(start, 'type')
         
+    if 'generate_name' in columns:
+        columns.remove('generate_name')
+        columns.append('generate_name')
+
     if 'text' in columns:
         columns.remove('text')
         columns.append('text')

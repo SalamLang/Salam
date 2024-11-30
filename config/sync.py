@@ -3,7 +3,7 @@ import os
 from typing import Any, Dict, List
 
 import yaml
-from module.utils import command
+from module.utils import command_layout_type, command_layout_style_type
 
 SELECTED_LANGUAGE = "fa"
 
@@ -131,31 +131,31 @@ def prettify_layout_attribute_style_type(
 
     if "generate_name" not in item:
         if isinstance(values, str):
-            return key_hide + command(item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", values)
+            return key_hide + command_layout_style_type(item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", values)
         else:
             result = ""
             for index, value in enumerate(values):
                 if index == 0:
-                    result += key_hide + command(
+                    result += key_hide + command_layout_style_type(
                         item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value
                     )
                 else:
-                    result += key_repeat + command(
+                    result += key_repeat + command_layout_style_type(
                         item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value
                     )
             return result
     else:
         if isinstance(values, str):
-            return key_main + command(item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", values)
+            return key_main + command_layout_style_type(item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", values)
         else:
             result = ""
             for index, value in enumerate(values):
                 if index == 0:
-                    result += key_main + command(
+                    result += key_main + command_layout_style_type(
                         item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value
                     )
                 else:
-                    result += key_repeat + command(
+                    result += key_repeat + command_layout_style_type(
                         item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value
                     )
             return result
@@ -245,25 +245,25 @@ def prettify_layout_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
 
     if "generate_name" not in item:
         if isinstance(values, str):
-            return key_hide + command(item, "AST_LAYOUT_TYPE_", values)
+            return key_hide + command_layout_type(item, "AST_LAYOUT_TYPE_", values)
         else:
             result = ""
             for index, value in enumerate(values):
                 if index == 0:
-                    result += key_hide + command(item, "AST_LAYOUT_TYPE_", value)
+                    result += key_hide + command_layout_type(item, "AST_LAYOUT_TYPE_", value)
                 else:
-                    result += key_repeat + command(item, "AST_LAYOUT_TYPE_", value)
+                    result += key_repeat + command_layout_type(item, "AST_LAYOUT_TYPE_", value)
             return result
     else:
         if isinstance(values, str):
-            return key_main + command(item, "AST_LAYOUT_TYPE_", values)
+            return key_main + command_layout_type(item, "AST_LAYOUT_TYPE_", values)
         else:
             result = ""
             for index, value in enumerate(values):
                 if index == 0:
-                    result += key_main + command(item, "AST_LAYOUT_TYPE_", value)
+                    result += key_main + command_layout_type(item, "AST_LAYOUT_TYPE_", value)
                 else:
-                    result += key_repeat + command(item, "AST_LAYOUT_TYPE_", value)
+                    result += key_repeat + command_layout_type(item, "AST_LAYOUT_TYPE_", value)
             return result
 
 

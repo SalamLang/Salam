@@ -78,6 +78,10 @@ Salam is the first Persian/Iranian computer scripting language.
 
 For a detailed guide, visit our official site: [salamlang.ir](https://salamlang.ir)
 
+## Control Panel
+
+![Salam Programming Language Panel](assets/panel.jpg)
+
 ## 🐳 Using Salam with Docker
 
 Run Salam in an isolated and consistent Docker environment.  

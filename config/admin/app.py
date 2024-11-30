@@ -155,11 +155,8 @@ def edit_file_action(filepath: str):
         
         return redirect(url_for('edit_file', filepath=filepath))
 
-    print("Original Data:", data)
-
     try:
         write_yaml(file_path, data)
-        # write_yaml(file_path + ".new", data)
         
         session['message'] = "YAML file has been updated."
         session['message_type'] = 'ok'
@@ -269,7 +266,7 @@ def delete_file_action(filepath: str) -> str:
     """
     full_path = os.path.join(YAML_DIR, filepath)
     
-    if os.path.exists(full_path) and os.path.abspath(full_path).startswith(os.path.abspath(YAML_DIR)):
+    if os.path.exists(full_path) and os.path.isfile(full_path) and os.path.abspath(full_path).startswith(os.path.abspath(YAML_DIR)):
         try:
             os.remove(full_path)
             session['message'] = f"File '{filepath}' has been deleted successfully."

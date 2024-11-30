@@ -50,6 +50,12 @@ def add_file():
         session['error'] = 'Filename is required.'
         return redirect(url_for('index'))
 
+    new_file = new_file.strip()
+    
+    if new_file == "":
+        session['error'] = 'Filename is required.'
+        return redirect(url_for('index'))        
+
     new_file = new_file.lstrip('/')
 
     if not new_file.endswith('.yaml'):
@@ -78,6 +84,25 @@ def redirect_with_error(error_message):
     Helper function to redirect with an error message.
     """
     return redirect(url_for('index', error=error_message))
+
+
+@app.route('/delete-file/<path:filepath>', methods=['POST'])
+def delete_file(filepath):
+    # Construct the full file path
+    full_path = os.path.join(YAML_DIR, filepath)
+
+    # Check if the file exists and is within the allowed directory
+    if os.path.exists(full_path) and os.path.abspath(full_path).startswith(os.path.abspath(YAML_DIR)):
+        try:
+            os.remove(full_path)
+            session['error'] = f"File '{filepath}' has been deleted successfully."
+        except Exception as e:
+            session['error'] = f"Failed to delete file: {e}"
+    else:
+        session['error'] = f"File '{filepath}' not found or invalid path."
+
+    return redirect(url_for('index'))
+
 
 if __name__ == '__main__':
     os.makedirs(YAML_DIR, exist_ok=True)

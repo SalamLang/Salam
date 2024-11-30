@@ -5,8 +5,8 @@ import os
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
 
+PORT = 5000
 YAML_DIR = '../'
-
 
 def get_yaml_files() -> list[str]:
     """
@@ -61,9 +61,10 @@ def index() -> str:
     Returns:
         str: The rendered HTML template for the admin panel.
     """
-    error = session.pop('error', None)
+    message = session.pop('message', None)
+    message_type = session.pop('message_type', None)
     
-    return render_template('index.html', error=error, files=get_yaml_files())
+    return render_template('index.html', message=message, message_type=message_type, files=get_yaml_files())
 
 
 @app.route('/edit/<path:filepath>', methods=['POST'])
@@ -107,9 +108,10 @@ def edit_file(filepath: str) -> str:
 
     data = read_yaml(file_path)
 
-    error = session.pop('error', None)
+    message = session.pop('message', None)
+    message_type = session.pop('message_type', None)
     
-    return render_template('edit.html', error=error, filename=filepath, items=data['items'])
+    return render_template('edit.html', message=message, message_type=message_type, filename=filepath, items=data['items'])
 
 
 @app.route('/add-file', methods=['POST'])
@@ -123,13 +125,15 @@ def add_file_action() -> str:
     new_file = request.form.get('filename')
 
     if not new_file:
-        session['error'] = 'Filename is required.'
+        session['message'] = 'Filename is required.'
+        session['message_type'] = 'error'
         return redirect(url_for('index'))
 
     new_file = new_file.strip()
     
     if new_file == "":
-        session['error'] = 'Filename is required.'
+        session['message'] = 'Filename is required.'
+        session['message_type'] = 'error'
         return redirect(url_for('index'))        
 
     new_file = new_file.lstrip('/')
@@ -140,19 +144,25 @@ def add_file_action() -> str:
     path = os.path.join(YAML_DIR, new_file)
     
     if path.startswith(YAML_DIR + ".."):
-        session['error'] = 'Invalid filename or directory traversal attempt.'
+        session['message'] = 'Invalid filename or directory traversal attempt.'
+        session['message_type'] = 'error'
         return redirect(url_for('index'))
 
     if os.path.exists(path):
-        session['error'] = 'File already exists.'
+        session['message'] = 'File already exists.'
+        session['message_type'] = 'error'
         return redirect(url_for('index'))
 
     try:
         write_yaml(path, {'items': []})
 
+        session['message'] = 'File created.'
+        session['message_type'] = 'ok'
+        
         return redirect(url_for('index'))
     except Exception as e:
-        session['error'] = f'Failed to create file: {e}'
+        session['message'] = f'Failed to create file: {e}'
+        session['message_type'] = 'error'
         
         return redirect(url_for('index'))
 
@@ -173,15 +183,19 @@ def delete_file_action(filepath: str) -> str:
     if os.path.exists(full_path) and os.path.abspath(full_path).startswith(os.path.abspath(YAML_DIR)):
         try:
             os.remove(full_path)
-            session['error'] = f"File '{filepath}' has been deleted successfully."
+            session['message'] = f"File '{filepath}' has been deleted successfully."
+            session['message_type'] = 'ok'
         except Exception as e:
-            session['error'] = f"Failed to delete file: {e}"
+            session['message'] = f"Failed to delete file: {e}"
+            session['message_type'] = 'error'
     else:
-        session['error'] = f"File '{filepath}' not found or invalid path."
+        session['message'] = f"File '{filepath}' not found or invalid path."
+        session['message_type'] = 'error'
 
     return redirect(url_for('index'))
 
 
 if __name__ == '__main__':
     os.makedirs(YAML_DIR, exist_ok=True)
-    app.run(debug=True, port=5000)
+    
+    app.run(debug=True, port=PORT)

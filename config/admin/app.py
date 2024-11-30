@@ -194,10 +194,8 @@ def edit_file(filepath: str) -> str:
     message = session.pop('message', None)
     message_type = session.pop('message_type', None)
     
-    items = []
-    if isinstance(data, dict):
-        items = data.get("items", [])
-    
+    items = data.get("items", []) if isinstance(data, dict) else []
+
     return render_template('edit.html', message=message, message_type=message_type, filename=filepath, data=items, columns=columns, languages=languages)
 
 

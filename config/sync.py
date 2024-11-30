@@ -1,11 +1,16 @@
 import json
 import os
+import sys
 from typing import Any, Dict, List
 
 import yaml
 from module.utils import command_layout_type, command_layout_style_type
 
 SELECTED_LANGUAGE = "fa"
+if len(sys.argv) > 1:
+    SELECTED_LANGUAGE = sys.argv[1]
+
+print(f"Selected Language: {SELECTED_LANGUAGE}")
 
 COMMENT_BEGIN = "// ----------- BEGIN AUTO GENERATED ----------- //"
 COMMENT_END = "// ----------- END AUTO GENERATED ----------- //"
@@ -175,9 +180,11 @@ def prettify_layout_attribute_style_value(
     
     key = item.get("id")
     
+    print(item)
+    
     result = "const ast_layout_attribute_style_pair_t " + key + "[] = {\n"
 
-    for item in items:
+    for item in item.get("childs", []):
         item["generate_name"] = item["generate_name"].replace('"', '\\"')
         values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
 

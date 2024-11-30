@@ -16,12 +16,12 @@ if __name__ == "__main__":
         docs = load_yaml(FILE)
 
         for doc in docs:
-            for key in doc.get("items", {}):
-                items = doc["items"][key]
-
-                if items is not None:
-                    for item in items:
-                        validate_item_structure(item, LANGUAGES)
+            for item in doc.get("items", []):
+                try:
+                    validate_item_structure(item, LANGUAGES)
+                except ValueError as e:
+                    print(item)
+                    error(str(e))
 
         print(FILE + ": Validation is successful")
 

@@ -1,6 +1,7 @@
-from flask import Flask, render_template, request, redirect, url_for, jsonify, session
-import yaml
+from flask import Flask, jsonify, render_template, request, session, url_for, redirect
 import os
+import yaml
+from collections import defaultdict
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
@@ -10,6 +11,64 @@ DEBUG = False
 DEBUG = True
 YAML_DIR = '../'
 LANGUAEG_FILE = 'language.yaml'
+
+
+def nest_dict(keys, value):
+    """
+    Recursively nests a value in a dictionary based on a list of keys.
+
+    Args:
+        keys (list): A list of keys representing the hierarchy.
+        value: The value to assign at the deepest level.
+
+    Returns:
+        dict: A nested dictionary with the value set.
+    """
+    if len(keys) == 1:
+        return {keys[0]: value}
+    return {keys[0]: nest_dict(keys[1:], value)}
+
+
+def merge_dicts(base, updates):
+    """
+    Merges two dictionaries, updating the base with the updates.
+
+    Args:
+        base (dict): The base dictionary to be updated.
+        updates (dict): The dictionary with updates.
+
+    Returns:
+        dict: The merged dictionary.
+    """
+    for key, value in updates.items():
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+            merge_dicts(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def transform_dynamic_form_data(raw_data):
+    """
+    Transforms flat form data into a nested dictionary dynamically.
+
+    Args:
+        raw_data (dict): The flat form data.
+
+    Returns:
+        dict: A nested dictionary.
+    """
+    result = defaultdict(list)
+    for key, values in raw_data.items():
+        for index, value in enumerate(values):
+            # Parse the key into a hierarchy
+            keys = key.replace("[]", "").split("[")
+            nested = nest_dict(keys, value)
+            if len(result) <= index:
+                result[index] = {}
+            merge_dicts(result[index], nested)
+    return list(result.values())
+
 
 def get_dynamic_columns(data):
     """ Extract unique keys from the YAML structure for dynamic columns """
@@ -99,7 +158,7 @@ def index() -> str:
 
 
 @app.route('/edit/<path:filepath>', methods=['POST'])
-def edit_file_action(filepath: str) -> jsonify:
+def edit_file_action(filepath: str):
     """
     Handles editing an existing YAML file by receiving new data via POST request.
     
@@ -107,20 +166,44 @@ def edit_file_action(filepath: str) -> jsonify:
         filepath (str): The relative path of the YAML file to edit.
     
     Returns:
-        jsonify: JSON response indicating success or failure.
+        Union[Response]: Redirect to the edit page.
     """
     file_path = os.path.join(YAML_DIR, filepath)
 
     if not os.path.exists(file_path):
-        return jsonify({'success': False, 'error': 'File not exists'})
+        session['message'] = "File does not exist."
+        session['message_type'] = 'error'
+
+        return redirect(url_for('edit_file', filepath=filepath))
+
+    raw_data = request.form.to_dict(flat=False)
+    print(raw_data)
+
+    if not raw_data or len(raw_data) == 0:
+        session['message'] = "The 'items' field does not exist."
+        session['message_type'] = 'error'
+        
+        return redirect(url_for('edit_file', filepath=filepath))
+
+    data = transform_dynamic_form_data(raw_data)
+    print(data)
+
+    if not data or len(data) == 0:
+        session['message'] = "The 'items' field does not exist."
+        session['message_type'] = 'error'
+        
+        return redirect(url_for('edit_file', filepath=filepath))
 
     try:
-        data = {'items': items}
         write_yaml(file_path, data)
         
-        return jsonify({'success': True})
+        session['message'] = "YAML file has been updated."
+        session['message_type'] = 'ok'
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        session['message'] = str(e)
+        session['message_type'] = 'error'
+        
+    return redirect(url_for('edit_file', filepath=filepath))
 
 
 @app.route('/edit/<path:filepath>', methods=['GET'])

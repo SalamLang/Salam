@@ -25,14 +25,14 @@ def get_dynamic_columns(data):
 def get_language_keys() -> list[str]:
     global LANGUAEG_FILE
     
-    keys = []
-
+    keys = set()
     file_path = os.path.join(YAML_DIR, LANGUAEG_FILE)
+    
     data = read_yaml(file_path)
     
     for item in data.get("items", []):
-        if item.has("id"):
-            keys.append(item.get("id"))
+        if "id" in item:
+            keys.add(item["id"])
     
     return keys
 
@@ -143,6 +143,7 @@ def edit_file(filepath: str) -> str:
     columns = get_dynamic_columns(data)
     
     languages = get_language_keys()
+    print(languages)
     
     message = session.pop('message', None)
     message_type = session.pop('message_type', None)

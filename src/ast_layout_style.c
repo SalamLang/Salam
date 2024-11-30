@@ -129,8 +129,16 @@ enduser_name_to_ast_layout_attribute_style_state_type(char *name) {
         AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR;
 
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
+#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_REPEAT
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER,       \
+                                              ENDUSER_NAME, GENERATED_NAME) \
+    else if (strcmp(name, ENDUSER_NAME) == 0) {                             \
+        type = TYPE;                                                        \
+        return type;                                                        \
+    }
+
+#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER,       \
                                               ENDUSER_NAME, GENERATED_NAME) \
     else if (strcmp(name, ENDUSER_NAME) == 0) {                             \
         type = TYPE;                                                        \
@@ -235,8 +243,16 @@ name_to_ast_layout_attribute_style_state_type(char *name) {
         AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR;
 
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
+#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_REPEAT
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER,       \
+                                              ENDUSER_NAME, GENERATED_NAME) \
+    else if (strcmp(name, NAME) == 0) {                                     \
+        type = TYPE;                                                        \
+        return type;                                                        \
+    }
+
+#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER,       \
                                               ENDUSER_NAME, GENERATED_NAME) \
     else if (strcmp(name, NAME) == 0) {                                     \
         type = TYPE;                                                        \

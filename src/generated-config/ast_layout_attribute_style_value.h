@@ -1233,6 +1233,8 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_ruby_align
 };
 
 const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_ruby_position[] = {
+	{"", "smooth"},
+	{"", "smooth"},
 	{"بالا", "over"},
 	{"روی", "over"},
 	{"پایین", "under"},

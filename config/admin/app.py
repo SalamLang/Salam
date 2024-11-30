@@ -6,35 +6,77 @@ app = Flask(__name__)
 app.secret_key = 'your_secret_key'
 
 YAML_DIR = '../'
-def get_yaml_files():
+
+
+def get_yaml_files() -> list[str]:
+    """
+    Scans the YAML_DIR directory and returns a list of all YAML file paths.
+    
+    Returns:
+        list[str]: A list of file paths relative to the YAML_DIR for all .yaml files found.
+    """
     files = []
-    for root, _, files in os.walk(YAML_DIR):
-        for file in files:
+    for root, _, filenames in os.walk(YAML_DIR):
+        for file in filenames:
             if file.endswith('.yaml'):
                 files.append(os.path.relpath(os.path.join(root, file), start=YAML_DIR))
     
     return files
- 
 
-def read_yaml(file_path):
+
+def read_yaml(file_path: str) -> dict:
+    """
+    Reads a YAML file and returns its contents as a dictionary.
+    
+    Args:
+        file_path (str): The path to the YAML file to read.
+    
+    Returns:
+        dict: The contents of the YAML file.
+    """
     with open(file_path, 'r', encoding='utf-8') as file:
         return yaml.safe_load(file)
 
 
-def write_yaml(file_path, data):
+def write_yaml(file_path: str, data: dict) -> None:
+    """
+    Writes data to a YAML file, overwriting the file contents.
+    
+    Args:
+        file_path (str): The path to the YAML file to write.
+        data (dict): The data to write to the file.
+    
+    Returns:
+        None
+    """
     with open(file_path, 'w', encoding='utf-8') as file:
         yaml.dump(data, file, allow_unicode=True, sort_keys=True)
 
 
 @app.route('/')
-def index():
+def index() -> str:
+    """
+    Displays the main admin panel page with a list of YAML files and error messages if present.
+    
+    Returns:
+        str: The rendered HTML template for the admin panel.
+    """
     error = session.pop('error', None)
     
     return render_template('index.html', error=error, files=get_yaml_files())
 
 
 @app.route('/edit/<path:filepath>', methods=['POST'])
-def edit_file_action(filepath):
+def edit_file_action(filepath: str) -> jsonify:
+    """
+    Handles editing an existing YAML file by receiving new data via POST request.
+    
+    Args:
+        filepath (str): The relative path of the YAML file to edit.
+    
+    Returns:
+        jsonify: JSON response indicating success or failure.
+    """
     file_path = os.path.join(YAML_DIR, filepath)
 
     if not os.path.exists(file_path):
@@ -48,7 +90,16 @@ def edit_file_action(filepath):
 
 
 @app.route('/edit/<path:filepath>', methods=['GET'])
-def edit_file(filepath):
+def edit_file(filepath: str) -> str:
+    """
+    Displays the editing page for a given YAML file, showing the current contents.
+    
+    Args:
+        filepath (str): The relative path of the YAML file to edit.
+    
+    Returns:
+        str: The rendered HTML template for editing the YAML file.
+    """
     file_path = os.path.join(YAML_DIR, filepath)
 
     if not os.path.exists(file_path):
@@ -62,7 +113,13 @@ def edit_file(filepath):
 
 
 @app.route('/add-file', methods=['POST'])
-def add_file_action():
+def add_file_action() -> str:
+    """
+    Handles the action to add a new YAML file via POST request.
+    
+    Returns:
+        str: A redirect URL back to the main admin panel with success or error messages stored in the session.
+    """
     new_file = request.form.get('filename')
 
     if not new_file:
@@ -101,7 +158,16 @@ def add_file_action():
 
 
 @app.route('/delete-file/<path:filepath>', methods=['POST'])
-def delete_file_action(filepath):
+def delete_file_action(filepath: str) -> str:
+    """
+    Handles the deletion of a YAML file based on the provided file path.
+    
+    Args:
+        filepath (str): The relative path of the YAML file to delete.
+    
+    Returns:
+        str: A redirect URL back to the main admin panel with success or error messages stored in the session.
+    """
     full_path = os.path.join(YAML_DIR, filepath)
     
     if os.path.exists(full_path) and os.path.abspath(full_path).startswith(os.path.abspath(YAML_DIR)):

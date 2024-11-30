@@ -12,17 +12,21 @@ for root, dirs, files in os.walk(YAML_DIR):
         if file.endswith('.yaml'):
             YAML_FILES.append(os.path.relpath(os.path.join(root, file), start=YAML_DIR))
 
+
 def read_yaml(file_path):
     with open(file_path, 'r', encoding='utf-8') as file:
         return yaml.safe_load(file)
+
 
 def write_yaml(file_path, data):
     with open(file_path, 'w', encoding='utf-8') as file:
         yaml.dump(data, file, allow_unicode=True, sort_keys=True)
 
+
 @app.route('/')
 def index():
     return render_template('index.html', files=YAML_FILES)
+
 
 @app.route('/edit/<path:filepath>', methods=['GET', 'POST'])
 def edit_file(filepath):
@@ -73,25 +77,18 @@ def add_file():
 
     try:
         write_yaml(path, {'items': []})
+
+        return redirect(url_for('index'), code=200)
     except Exception as e:
         session['error'] = f'Failed to create file: {e}'
-        return redirect(url_for('index'))
-
-    return redirect(url_for('index'))
-
-def redirect_with_error(error_message):
-    """
-    Helper function to redirect with an error message.
-    """
-    return redirect(url_for('index', error=error_message))
+        
+        return redirect(url_for('index'), code=302)
 
 
 @app.route('/delete-file/<path:filepath>', methods=['POST'])
 def delete_file(filepath):
-    # Construct the full file path
     full_path = os.path.join(YAML_DIR, filepath)
 
-    # Check if the file exists and is within the allowed directory
     if os.path.exists(full_path) and os.path.abspath(full_path).startswith(os.path.abspath(YAML_DIR)):
         try:
             os.remove(full_path)

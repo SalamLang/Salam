@@ -186,17 +186,7 @@ def edit_file_action(filepath: str):
 
         return redirect(url_for('edit_file', filepath=filepath))
 
-    raw_data = request.form.to_dict(flat=False)
-    print(raw_data)
-
-    if not raw_data or len(raw_data) == 0:
-        session['message'] = "The 'items' field does not exist."
-        session['message_type'] = 'error'
-        
-        return redirect(url_for('edit_file', filepath=filepath))
-
-    data = transform_dynamic_form_data(raw_data)
-    print(data)
+    data = request.get_json()
 
     if not data or len(data) == 0:
         session['message'] = "The 'items' field does not exist."

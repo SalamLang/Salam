@@ -25,25 +25,37 @@ def write_yaml(file_path, data):
 
 @app.route('/')
 def index():
-    return render_template('index.html', files=YAML_FILES)
+    error = session.pop('error', None)
+    
+    return render_template('index.html', error=error, files=YAML_FILES)
 
 
-@app.route('/edit/<path:filepath>', methods=['GET', 'POST'])
+@app.route('/edit/<path:filepath>', methods=['POST'])
+def edit_file(filepath):
+    file_path = os.path.join(YAML_DIR, filepath)
+
+    if not os.path.exists(file_path):
+        return jsonify({'success': False})
+
+    items = request.json.get('items', [])
+    data = {'items': items}
+    write_yaml(file_path, data)
+    
+    return jsonify({'success': True})
+
+
+@app.route('/edit/<path:filepath>', methods=['GET'])
 def edit_file(filepath):
     file_path = os.path.join(YAML_DIR, filepath)
 
     if not os.path.exists(file_path):
         return f"File {filepath} not found.", 404
 
-    if request.method == 'POST':
-        items = request.json.get('items', [])
-        data = {'items': items}
-        write_yaml(file_path, data)
-        
-        return jsonify({'success': True})
-    
     data = read_yaml(file_path)
-    return render_template('edit.html', filename=filepath, items=data['items'])
+
+    error = session.pop('error', None)
+    
+    return render_template('edit.html', error=error, filename=filepath, items=data['items'])
 
 
 @app.route('/add-file', methods=['POST'])
@@ -88,6 +100,8 @@ def add_file():
 @app.route('/delete-file/<path:filepath>', methods=['POST'])
 def delete_file(filepath):
     full_path = os.path.join(YAML_DIR, filepath)
+    
+    print(full_path)
 
     if os.path.exists(full_path) and os.path.abspath(full_path).startswith(os.path.abspath(YAML_DIR)):
         try:

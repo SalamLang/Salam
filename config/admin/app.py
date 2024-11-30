@@ -141,7 +141,7 @@ def edit_file_action(filepath: str):
     """
     file_path = os.path.join(YAML_DIR, filepath)
 
-    if not os.path.exists(file_path):
+    if not os.path.exists(file_path) or not os.path.isfile(file_path):
         session['message'] = "File does not exist."
         session['message_type'] = 'error'
 
@@ -183,8 +183,8 @@ def edit_file(filepath: str) -> str:
     """
     file_path = os.path.join(YAML_DIR, filepath)
 
-    if not os.path.exists(file_path):
-        return f"File {filepath} not found.", 404
+    if not os.path.exists(file_path) or not os.path.isfile(file_path):
+        return redirect(url_for('index'))
 
     data = read_yaml(file_path)
     columns = get_dynamic_columns(data)

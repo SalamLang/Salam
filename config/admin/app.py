@@ -24,8 +24,11 @@ def nest_dict(keys, value):
     Returns:
         dict: A nested dictionary with the value set.
     """
+    keys[0] = keys[0].replace("]", "")
+    
     if len(keys) == 1:
         return {keys[0]: value}
+    
     return {keys[0]: nest_dict(keys[1:], value)}
 
 
@@ -41,6 +44,8 @@ def merge_dicts(base, updates):
         dict: The merged dictionary.
     """
     for key, value in updates.items():
+        key = key.replace("]", "")
+        
         if key in base and isinstance(base[key], dict) and isinstance(value, dict):
             merge_dicts(base[key], value)
         else:
@@ -64,9 +69,12 @@ def transform_dynamic_form_data(raw_data):
             # Parse the key into a hierarchy
             keys = key.replace("[]", "").split("[")
             nested = nest_dict(keys, value)
+            
             if len(result) <= index:
                 result[index] = {}
+            
             merge_dicts(result[index], nested)
+    
     return list(result.values())
 
 
@@ -74,9 +82,10 @@ def get_dynamic_columns(data):
     """ Extract unique keys from the YAML structure for dynamic columns """
     columns = set()
     
-    for item in data.get('items', []):
-        for key in item:
-            columns.add(key)
+    if isinstance(data, dict):
+        for item in data.get('items', []):
+            for key in item:
+                columns.add(key)
     
     return list(columns)
 
@@ -89,9 +98,10 @@ def get_language_keys() -> list[str]:
     
     data = read_yaml(file_path)
     
-    for item in data.get("items", []):
-        if "id" in item:
-            keys.add(item["id"])
+    if isinstance(data, dict):
+        for item in data.get("items", []):
+            if "id" in item:
+                keys.add(item["id"])
     
     return keys
 
@@ -195,7 +205,8 @@ def edit_file_action(filepath: str):
         return redirect(url_for('edit_file', filepath=filepath))
 
     try:
-        write_yaml(file_path, data)
+        # write_yaml(file_path, data)
+        write_yaml(file_path + ".new", data)
         
         session['message'] = "YAML file has been updated."
         session['message_type'] = 'ok'
@@ -226,12 +237,15 @@ def edit_file(filepath: str) -> str:
     columns = get_dynamic_columns(data)
     
     languages = get_language_keys()
-    print(languages)
     
     message = session.pop('message', None)
     message_type = session.pop('message_type', None)
     
-    return render_template('edit.html', message=message, message_type=message_type, filename=filepath, data=data.get("items", []), columns=columns, languages=languages)
+    items = []
+    if isinstance(data, dict):
+        items = data.get("items", [])
+    
+    return render_template('edit.html', message=message, message_type=message_type, filename=filepath, data=items, columns=columns, languages=languages)
 
 
 @app.route('/add-file', methods=['POST'])

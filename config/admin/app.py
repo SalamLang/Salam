@@ -14,15 +14,37 @@ LANGUAEG_FILE = 'language.yaml'
 
 
 def get_dynamic_columns(data):
-    """ Extract unique keys from the YAML structure for dynamic columns """
+    """
+    Extract unique keys from the YAML structure for dynamic columns.
+    Ensure:
+      - 'id' is the first item if it exists.
+      - 'text' is the last item if it exists.
+      - The resulting list contains unique values in the desired order.
+    """
     columns = set()
-    
+
     if isinstance(data, dict):
         for item in data.get('items', []):
-            for key in item:
-                columns.add(key)
+            if isinstance(item, dict):
+                columns.update(item.keys())
+
+    columns = list(columns)
+
+    start = 0
+    if 'id' in columns:
+        columns.remove('id')
+        columns.insert(0, 'id')
+        start += 1
     
-    return list(columns)
+    if 'type' in columns:
+        columns.remove('type')
+        columns.insert(start, 'type')
+        
+    if 'text' in columns:
+        columns.remove('text')
+        columns.append('text')
+
+    return columns
 
 
 def get_language_keys() -> list[str]:

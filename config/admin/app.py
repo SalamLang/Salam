@@ -6,8 +6,37 @@ app = Flask(__name__)
 app.secret_key = 'your_secret_key'
 
 PORT = 5000
+DEBUG = False
+DEBUG = True
 YAML_DIR = '../'
+LANGUAEG_FILE = 'language.yaml'
 
+def get_dynamic_columns(data):
+    """ Extract unique keys from the YAML structure for dynamic columns """
+    columns = set()
+    
+    for item in data.get('items', []):
+        for key in item:
+            columns.add(key)
+    
+    return list(columns)
+
+
+def get_language_keys() -> list[str]:
+    global LANGUAEG_FILE
+    
+    keys = []
+
+    file_path = os.path.join(YAML_DIR, LANGUAEG_FILE)
+    data = read_yaml(file_path)
+    
+    for item in data.get("items", []):
+        if item.has("id"):
+            keys.append(item.get("id"))
+    
+    return keys
+
+    
 def get_yaml_files() -> list[str]:
     """
     Scans the YAML_DIR directory and returns a list of all YAML file paths.
@@ -36,6 +65,8 @@ def read_yaml(file_path: str) -> dict:
     """
     with open(file_path, 'r', encoding='utf-8') as file:
         return yaml.safe_load(file)
+    
+    return None
 
 
 def write_yaml(file_path: str, data: dict) -> None:
@@ -81,13 +112,15 @@ def edit_file_action(filepath: str) -> jsonify:
     file_path = os.path.join(YAML_DIR, filepath)
 
     if not os.path.exists(file_path):
-        return jsonify({'success': False})
+        return jsonify({'success': False, 'error': 'File not exists'})
 
-    items = request.json.get('items', [])
-    data = {'items': items}
-    write_yaml(file_path, data)
-    
-    return jsonify({'success': True})
+    try:
+        data = {'items': items}
+        write_yaml(file_path, data)
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 
 @app.route('/edit/<path:filepath>', methods=['GET'])
@@ -107,11 +140,14 @@ def edit_file(filepath: str) -> str:
         return f"File {filepath} not found.", 404
 
     data = read_yaml(file_path)
-
+    columns = get_dynamic_columns(data)
+    
+    languages = get_language_keys()
+    
     message = session.pop('message', None)
     message_type = session.pop('message_type', None)
     
-    return render_template('edit.html', message=message, message_type=message_type, filename=filepath, items=data['items'])
+    return render_template('edit.html', message=message, message_type=message_type, filename=filepath, data=data.get("items", []), columns=columns, languages=languages)
 
 
 @app.route('/add-file', methods=['POST'])
@@ -127,6 +163,7 @@ def add_file_action() -> str:
     if not new_file:
         session['message'] = 'Filename is required.'
         session['message_type'] = 'error'
+        
         return redirect(url_for('index'))
 
     new_file = new_file.strip()
@@ -134,6 +171,7 @@ def add_file_action() -> str:
     if new_file == "":
         session['message'] = 'Filename is required.'
         session['message_type'] = 'error'
+        
         return redirect(url_for('index'))        
 
     new_file = new_file.lstrip('/')
@@ -146,11 +184,13 @@ def add_file_action() -> str:
     if path.startswith(YAML_DIR + ".."):
         session['message'] = 'Invalid filename or directory traversal attempt.'
         session['message_type'] = 'error'
+        
         return redirect(url_for('index'))
 
     if os.path.exists(path):
         session['message'] = 'File already exists.'
         session['message_type'] = 'error'
+        
         return redirect(url_for('index'))
 
     try:
@@ -198,4 +238,4 @@ def delete_file_action(filepath: str) -> str:
 if __name__ == '__main__':
     os.makedirs(YAML_DIR, exist_ok=True)
     
-    app.run(debug=True, port=PORT)
+    app.run(debug=DEBUG, port=PORT)

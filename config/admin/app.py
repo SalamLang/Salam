@@ -131,18 +131,6 @@ def edit_file_action(filepath: str):
 
     print("Original Data:", data)
 
-    # if 'items' in data:
-    #     if isinstance(data['items'], dict):
-    #         data['items'] = list(data['items'].values())
-
-    #     for item in data['items']:
-    #         if isinstance(item, dict) and 'text' in item:
-    #             for key in item['text'].keys():
-    #                 value = item['text'][key].values()
-    #                 item['text'][key] = list(value)
-
-    # print("Updated Data:", data)
-
     try:
         write_yaml(file_path, data)
         # write_yaml(file_path + ".new", data)

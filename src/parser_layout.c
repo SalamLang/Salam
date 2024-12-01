@@ -252,8 +252,8 @@ void parser_parse_layout_block_attribute(bool onlyStyle,
     ast_layout_attribute_t *attribute = ast_layout_attribute_create(
         attribute_key_type, name, values, block->parent_node_type,
         PARSER_CURRENT->location, first_value->location);
-    
-	if (!token_belongs_to_ast_layout_node(attribute_key_type, attribute)) {
+
+    if (!token_belongs_to_ast_layout_node(attribute_key_type, attribute)) {
         attribute->destroy(attribute);
 
         error_parser(

@@ -17,7 +17,7 @@ Unlock the joy of coding—accessible, intuitive, and culturally resonant.
 
 ## ✨ Introduction
 
-**Salam Language**, inspired by the word *salam* (سلام), meaning *peace*, is the first **Persian/Arabic-based programming language**.  
+**Salam Language**, inspired by the word _salam_ (سلام), meaning _peace_, is the first **Persian/Arabic-based programming language**.  
 It is designed for simplicity, accessibility, and inclusivity—bridging the gap between developers and technology in Persian, Arabic, and related linguistic communities.
 
 ### Supported Languages
@@ -28,15 +28,15 @@ It is designed for simplicity, accessibility, and inclusivity—bridging the gap
 
 ### Why Choose Salam?
 
-- 🌍 **Localized for Persian and Arabic Speakers**: Write and read code in your native language.  
-- 🧑‍🎓 **Beginner-Friendly**: Salam makes programming approachable for everyone, including students and new developers.  
+- 🌍 **Localized for Persian and Arabic Speakers**: Write and read code in your native language.
+- 🧑‍🎓 **Beginner-Friendly**: Salam makes programming approachable for everyone, including students and new developers.
 - 💻 **Powerful Tools**: Easy to use, but with robust capabilities for all your coding needs.
 
 ### Key Features
 
-- ✏️ Intuitive scripting and code compilation.  
-- 🚀 Docker support for seamless development.  
-- 🔧 Linting and code checks for best practices.  
+- ✏️ Intuitive scripting and code compilation.
+- 🚀 Docker support for seamless development.
+- 🔧 Linting and code checks for best practices.
 - 🔄 Built-in commands for versioning and updates.
 
 ## 🚀 Getting Started
@@ -52,7 +52,7 @@ Salam is the first Persian/Iranian computer scripting language.
 ### Usage Examples
 
 - **Execute a Script**:
-  
+
   ```bash
   ./salam <filename>
   ```
@@ -98,7 +98,7 @@ python3 app.py
 
 ## 🐳 Using Salam with Docker
 
-Run Salam in an isolated and consistent Docker environment.  
+Run Salam in an isolated and consistent Docker environment.
 
 ### Step 1: Pull the Image
 
@@ -125,13 +125,13 @@ docker run --rm -it basemax/salam
    cd Salam
    ```
 
-3. Build the Docker image:
- 
+2. Build the Docker image:
+
    ```bash
    docker build -f docker/Dockerfile -t salam .
    ```
 
-4. Verify the image:
+3. Verify the image:
 
    ```bash
    docker images salam
@@ -160,7 +160,7 @@ docker run --rm -it salam ./salam code "صفحه: محتوا = «سلام دنی
   ```
 
 - **Update Salam**:
- 
+
   ```bash
   docker run --rm -it salam ./salam update
   ```
@@ -168,21 +168,23 @@ docker run --rm -it salam ./salam code "صفحه: محتوا = «سلام دنی
 - **Lint Scripts**:
 
   Lint a File:
-  
+
   ```bash
   docker run --rm -it -v $(pwd):/scripts salam ./salam lint /scripts/your_script.salam /output
-  ```  
+  ```
+
   Lint Inline Code:
-  
+
   ```bash
   docker run --rm -it salam ./salam lint code "some salam code"
   ```
 
 ## 🤝 Contributing
 
-We welcome contributions from the community!  
-- 📖 Read our [Contributing Guide](CONTRIBUTING.md).  
-- 🌟 Follow our [Code of Conduct](CODE_OF_CONDUCT.md).  
+We welcome contributions from the community!
+
+- 📖 Read our [Contributing Guide](CONTRIBUTING.md).
+- 🌟 Follow our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 Together, let’s make coding accessible to all.
 For inquiries or feedback, visit: [salamlang.ir](https://salamlang.ir)

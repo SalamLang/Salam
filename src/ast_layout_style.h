@@ -50,8 +50,8 @@ typedef enum ast_layout_attribute_style_state_type {
                                               ENDUSER_NAME, GENERATED_NAME) \
     TYPE,
 
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER,       \
-                                              ENDUSER_NAME, GENERATED_NAME)
+#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_REPEAT( \
+    TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME)
 
 #include "generated-config/ast_layout_attribute_style_state_type.h"
 } ast_layout_attribute_style_state_type;

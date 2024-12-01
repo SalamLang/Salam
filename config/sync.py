@@ -4,7 +4,7 @@ import sys
 from typing import Any, Dict, List
 
 import yaml
-from module.utils import command_layout_type, command_layout_style_type
+from module.utils import command_layout_style_type, command_layout_type
 
 SELECTED_LANGUAGE = "fa"
 if len(sys.argv) > 1:
@@ -136,7 +136,9 @@ def prettify_layout_attribute_style_type(
 
     if "generate_name" not in item:
         if isinstance(values, str):
-            return key_hide + command_layout_style_type(item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", values)
+            return key_hide + command_layout_style_type(
+                item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", values
+            )
         else:
             result = ""
             for index, value in enumerate(values):
@@ -151,7 +153,9 @@ def prettify_layout_attribute_style_type(
             return result
     else:
         if isinstance(values, str):
-            return key_main + command_layout_style_type(item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", values)
+            return key_main + command_layout_style_type(
+                item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", values
+            )
         else:
             result = ""
             for index, value in enumerate(values):
@@ -177,11 +181,11 @@ def prettify_layout_attribute_style_value(
     :return: A formatted string for the style values.
     """
     global SELECTED_LANGUAGE
-    
+
     key = item.get("id")
-    
+
     print(item)
-    
+
     result = "const ast_layout_attribute_style_pair_t " + key + "[] = {\n"
 
     for item in item.get("childs", []):
@@ -195,9 +199,7 @@ def prettify_layout_attribute_style_value(
             else:
                 for value in values:
                     value = value.replace('"', '\\"')
-                    result += (
-                        '\t{"' + value + '", "' + item["generate_name"] + '"},\n'
-                    )
+                    result += '\t{"' + value + '", "' + item["generate_name"] + '"},\n'
 
     result += "\t{NULL, NULL},\n"
     result += "};\n"
@@ -232,7 +234,8 @@ def prettify_layout_attribute_style_state_type(
             else:
                 result += "ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_REPEAT"
 
-            result += (f"("
+            result += (
+                f"("
                 + f"{itemid}, "
                 + f'"{idtext}", '
                 + f'"{idtextlower}", '
@@ -278,9 +281,13 @@ def prettify_layout_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
             result = ""
             for index, value in enumerate(values):
                 if index == 0:
-                    result += key_hide + command_layout_type(item, "AST_LAYOUT_TYPE_", value)
+                    result += key_hide + command_layout_type(
+                        item, "AST_LAYOUT_TYPE_", value
+                    )
                 else:
-                    result += key_repeat + command_layout_type(item, "AST_LAYOUT_TYPE_", value)
+                    result += key_repeat + command_layout_type(
+                        item, "AST_LAYOUT_TYPE_", value
+                    )
             return result
     else:
         if isinstance(values, str):
@@ -289,9 +296,13 @@ def prettify_layout_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
             result = ""
             for index, value in enumerate(values):
                 if index == 0:
-                    result += key_main + command_layout_type(item, "AST_LAYOUT_TYPE_", value)
+                    result += key_main + command_layout_type(
+                        item, "AST_LAYOUT_TYPE_", value
+                    )
                 else:
-                    result += key_repeat + command_layout_type(item, "AST_LAYOUT_TYPE_", value)
+                    result += key_repeat + command_layout_type(
+                        item, "AST_LAYOUT_TYPE_", value
+                    )
             return result
 
 

@@ -1,5 +1,6 @@
-import yaml
 from typing import Any, Dict, List
+
+import yaml
 
 
 def load_yaml(file_path: str) -> List[Dict[str, Any]]:
@@ -32,21 +33,21 @@ def error(msg: str) -> None:
 
 
 def command_layout_type(item: Dict[str, Any], prefix: str, value: str) -> str:
-	itemid = item["id"]
-	idtext = itemid.replace(prefix, "")
-	idtextlower = idtext.lower()
-	generate_name = item.get("generate_name", idtext.lower())
-	is_mother = str(item.get("is_mother", False)).lower()
+    itemid = item["id"]
+    idtext = itemid.replace(prefix, "")
+    idtextlower = idtext.lower()
+    generate_name = item.get("generate_name", idtext.lower())
+    is_mother = str(item.get("is_mother", False)).lower()
 
-	return (
-		f"({itemid}, "
-		+ f'"{idtext}", '
-		+ f'"{idtextlower}", '
-		+ f'"{generate_name}", '
-		+ f'"{value}", '
-		+ f"{is_mother}"
-		+ f")\n"
-	)
+    return (
+        f"({itemid}, "
+        + f'"{idtext}", '
+        + f'"{idtextlower}", '
+        + f'"{generate_name}", '
+        + f'"{value}", '
+        + f"{is_mother}"
+        + f")\n"
+    )
 
 
 def command_layout_style_type(item: Dict[str, Any], prefix: str, value: str) -> str:

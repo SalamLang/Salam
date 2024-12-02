@@ -706,10 +706,12 @@ ast_layout_attribute_type_t token_to_ast_layout_attribute_type(
  * @returns {char*} name - Name
  *
  */
+// TODO why input type is ast_layout_attribute_type_t for both header files
 char *ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type) {
     DEBUG_ME;
     switch (type) {
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE
+#undef ADD_LAYOUT_ATTRIBUTE_TYPE_HIDE
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
 
 #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
@@ -719,6 +721,11 @@ char *ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type) {
 
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, \
                                          GENERATED_NAME, ENDUSER_NAME)
+
+#define ADD_LAYOUT_ATTRIBUTE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, \
+                                         GENERATED_NAME, ENDUSER_NAME) \
+    case TYPE:                                                            \
+        return NAME_LOWER;
 
 #include "generated-config/ast_layout_attribute_type.h"
 
@@ -738,7 +745,9 @@ char *ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type) {
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER,       \
                                              ENDUSER_NAME, GENERATED_NAME, \
-                                             FILTER, ALLOWED_VALUES, SUBTAGS)
+                                             FILTER, ALLOWED_VALUES, SUBTAGS) \
+    case TYPE:                                                                \
+        return NAME_LOWER;
 
 #include "generated-config/ast_layout_attribute_style_type.h"
     }

@@ -71,29 +71,39 @@ void parse_url(const char *url, char *hostname, char *path) {
  * @returns {bool} - True if the download was successful, false otherwise
  *
  */
-bool download(FILE *fp, const char *port, const char *hostname,
-              const char *path) {
-    char request[1024];
+
+bool download(FILE *fp, const char *port, const char *hostname, const char *path) {
+	#define BUFFER_SIZE 1024
+
+    char *request;
     char buffer[BUFFER_SIZE];
 
-    snprintf(request, sizeof(request), "GET %s HTTP/1.0\r\nHost: %s\r\n\r\n",
-             path, hostname);
-
-    int sockfd;
-#ifdef _WIN32
-    WSADATA wsaData;
-#endif
-    struct addrinfo hints, *servinfo, *p;
-    int rv;
-    int bytes_received;
-
-#ifdef _WIN32
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        fprintf(stderr, "WSAStartup failed.\n");
+    size_t request_size = 1024;
+    request = (char *)malloc(request_size);
+    if (!request) {
+        fprintf(stderr, "Memory allocation failed for request\n");
 
         return false;
     }
-#endif
+
+    int written = snprintf(request, request_size, "GET %s HTTP/1.0\r\nHost: %s\r\n\r\n", path, hostname);
+
+    if (written >= request_size) {
+        request_size = written + 1;
+        request = (char *)realloc(request, request_size);
+        if (!request) {
+            fprintf(stderr, "Memory reallocation failed for request\n");
+
+            return false;
+        }
+
+        snprintf(request, request_size, "GET %s HTTP/1.0\r\nHost: %s\r\n\r\n", path, hostname);
+    }
+
+    int sockfd;
+    struct addrinfo hints, *servinfo, *p;
+    int rv;
+    int bytes_received;
 
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
@@ -101,9 +111,8 @@ bool download(FILE *fp, const char *port, const char *hostname,
 
     if ((rv = getaddrinfo(hostname, port, &hints, &servinfo)) != 0) {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-#ifdef _WIN32
-        WSACleanup();
-#endif
+        free(request);
+
         return false;
     }
 
@@ -111,16 +120,14 @@ bool download(FILE *fp, const char *port, const char *hostname,
         sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
         if (sockfd == -1) {
             perror("socket");
+
             continue;
         }
 
         if (connect(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
             perror("connect");
-#ifdef _WIN32
-            closesocket(sockfd);
-#else
             close(sockfd);
-#endif
+
             continue;
         }
         break;
@@ -128,9 +135,8 @@ bool download(FILE *fp, const char *port, const char *hostname,
 
     if (p == NULL) {
         fprintf(stderr, "Failed to connect.\n");
-#ifdef _WIN32
-        WSACleanup();
-#endif
+        free(request);
+
         return false;
     }
 
@@ -138,23 +144,17 @@ bool download(FILE *fp, const char *port, const char *hostname,
 
     if (send(sockfd, request, strlen(request), 0) == -1) {
         perror("send");
-#ifdef _WIN32
-        closesocket(sockfd);
-        WSACleanup();
-#else
+        free(request);
         close(sockfd);
-#endif
+
         return false;
     }
 
     if (!fp) {
         perror("fopen");
-#ifdef _WIN32
-        closesocket(sockfd);
-        WSACleanup();
-#else
+        free(request);
         close(sockfd);
-#endif
+
         return false;
     }
 
@@ -174,16 +174,14 @@ bool download(FILE *fp, const char *port, const char *hostname,
 
     if (bytes_received == -1) {
         perror("recv");
+        free(request);
+
         return false;
     }
 
     fclose(fp);
-#ifdef _WIN32
-    closesocket(sockfd);
-    WSACleanup();
-#else
+    free(request);
     close(sockfd);
-#endif
 
     return true;
 }

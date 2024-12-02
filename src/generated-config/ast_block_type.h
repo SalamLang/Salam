@@ -10,3 +10,4 @@ ADD_BLOCK_TYPE(AST_BLOCK_TYPE_ELSE_IF, "ELSE_IF", "else_if")
 ADD_BLOCK_TYPE(AST_BLOCK_TYPE_ERROR, "ERROR", "error")
 
 // ----------- END AUTO GENERATED ----------- //
+

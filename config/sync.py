@@ -71,24 +71,44 @@ def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) 
     idtext = itemid.replace("AST_LAYOUT_ATTRIBUTE_TYPE_", "")
     idtextlower = idtext.lower()
 
-    values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
-
-    if type(values) is not str:
-        return ""  # TODO
-
     generate_name = item.get("generate_name", "")
 
-    return (
-        f"ADD_LAYOUT_ATTRIBUTE_TYPE"
-        + f"("
-        + f"{itemid}, "
-        + f'"{idtext}", '
-        + f'"{idtextlower}", '
-        + f'"{generate_name}", '
-        + f'"{str(values)}"'
-        + f")\n"
-    )
+    values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
+    
+    key_normal = "ADD_LAYOUT_ATTRIBUTE_TYPE"
+    key_repeat = "ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT"
 
+    if type(values) is not str:
+        result = ""
+        for index, value in enumerate(values):
+            if index == 0:
+                result += key_normal + f"(" + (
+                    f"{itemid}, "
+                    + f'"{idtext}", '
+                    + f'"{idtextlower}", '
+                    + f'"{generate_name}", '
+                    + f'"{str(value)}"'
+                    + f")\n")
+            else:
+                result += key_repeat + f"(" + (
+                    f"{itemid}, "
+                    + f'"{idtext}", '
+                    + f'"{idtextlower}", '
+                    + f'"{generate_name}", '
+                    + f'"{str(values)}"'
+                    + f")\n")
+        return result
+    else:
+        return (
+            key_normal
+            + f"("
+            + f"{itemid}, "
+            + f'"{idtext}", '
+            + f'"{idtextlower}", '
+            + f'"{generate_name}", '
+            + f'"{str(values)}"'
+            + f")\n"
+        )
 
 def prettify_layout_attribute_style_global_value(
     item: Dict[str, Any], group: Dict[str, Any]
@@ -105,16 +125,30 @@ def prettify_layout_attribute_style_global_value(
     itemid = item["id"]
     values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
 
-    if type(values) is not str:
-        return ""  # TODO
+    key_normal = "ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE"
+    key_repeat = "ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE_REPEAT"
 
-    return (
-        f"ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE"
-        + f"("
-        + f"{itemid}, "
-        + f'"{str(values)}"'
-        + f")\n"
-    )
+    if type(values) is not str:
+        result = ""
+        for index, value in enumerate(values):
+            if index == 0:
+                result += key_normal
+            else:
+                result += key_repeat
+            result += (f"("
+                + f"{itemid}, "
+                + f'"{str(values)}"'
+                + f")\n")
+
+        return result
+    else:
+        return (
+            key_normal
+            + f"("
+            + f"{itemid}, "
+            + f'"{str(values)}"'
+            + f")\n"
+        )
 
 
 def prettify_layout_attribute_style_type(

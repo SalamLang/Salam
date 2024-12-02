@@ -71,15 +71,14 @@ void parse_url(const char *url, char *hostname, char *path) {
  * @returns {bool} - True if the download was successful, false otherwise
  *
  */
-
 bool download(FILE *fp, const char *port, const char *hostname, const char *path) {
 	#define BUFFER_SIZE 1024
 
-    char *request;
     char buffer[BUFFER_SIZE];
 
     size_t request_size = 1024;
-    request = (char *)malloc(request_size);
+    char *request = (char *) malloc(request_size);
+
     if (!request) {
         fprintf(stderr, "Memory allocation failed for request\n");
 
@@ -91,6 +90,7 @@ bool download(FILE *fp, const char *port, const char *hostname, const char *path
     if (written >= request_size) {
         request_size = written + 1;
         request = (char *)realloc(request, request_size);
+
         if (!request) {
             fprintf(stderr, "Memory reallocation failed for request\n");
 
@@ -105,7 +105,7 @@ bool download(FILE *fp, const char *port, const char *hostname, const char *path
     int rv;
     int bytes_received;
 
-    memset(&hints, 0, sizeof(hints));
+    memset_s(&hints, sizeof(hints), 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
 
@@ -118,6 +118,7 @@ bool download(FILE *fp, const char *port, const char *hostname, const char *path
 
     for (p = servinfo; p != NULL; p = p->ai_next) {
         sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+
         if (sockfd == -1) {
             perror("socket");
 
@@ -148,9 +149,7 @@ bool download(FILE *fp, const char *port, const char *hostname, const char *path
         close(sockfd);
 
         return false;
-    }
-
-    if (!fp) {
+    } else if (!fp) {
         perror("fopen");
         free(request);
         close(sockfd);
@@ -162,9 +161,11 @@ bool download(FILE *fp, const char *port, const char *hostname, const char *path
     while ((bytes_received = recv(sockfd, buffer, BUFFER_SIZE, 0)) > 0) {
         if (!header_found) {
             char *header_end = strstr(buffer, "\r\n\r\n");
+			
             if (header_end) {
-                header_found = 1;
                 size_t header_length = header_end - buffer + 4;
+                header_found = 1;
+
                 fwrite(header_end + 4, 1, bytes_received - header_length, fp);
             }
         } else {

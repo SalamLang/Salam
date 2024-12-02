@@ -978,7 +978,8 @@ uint32_t utf8_decode(const char *source, size_t *index) {
 size_t utf8_strlen(const char *str) {
     size_t len = 0;
     mbstate_t state;
-    memset(&state, 0, sizeof(state));
+
+    memset_s(&state, sizeof(state), 0, sizeof(state));
 
     while (*str) {
         wchar_t wc;

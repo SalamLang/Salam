@@ -66,7 +66,7 @@ char *generator_identifier_get(generator_identifier_t *gen) {
         if (i == 0) {
             char *new_current = memory_allocate(length + 2);
 
-            memset(new_current, 'a', length + 1);
+            memset_s(new_current, length + 1, 'a', length + 1);
 
             new_current[length + 1] = '\0';
 

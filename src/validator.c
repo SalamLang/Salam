@@ -1640,6 +1640,7 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
                                   ENDUSER_NAME)                           \
     case TYPE:                                                            \
         return false;
+
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, \
                                          GENERATED_NAME, ENDUSER_NAME)
 
@@ -1649,9 +1650,10 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT
 
-#define layout_attribute_style_type_check(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,  \
+#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,  \
                                         GENERATED_NAME, FILTER,                \
                                         ALLOWED_VALUES, SUBTAGS)               \
+    case TYPE: {                                                               \
         attribute->final_key = string_strdup(GENERATED_NAME);                  \
         const ast_layout_attribute_style_pair_t *values = ALLOWED_VALUES;      \
                                                                                \
@@ -1811,13 +1813,7 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
             }                                                                  \
                                                                                \
             return true;                                                       \
-        }
-
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,  \
-                                        GENERATED_NAME, FILTER,                \
-                                        ALLOWED_VALUES, SUBTAGS)               \
-    case TYPE: {                                                               \
-	    layout_attribute_style_type_check(TYPE, NAME, NAME_LOWER_ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) \
+        } \
     }
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,  \

@@ -64,12 +64,15 @@ typedef enum {
                                         GENERATED_NAME, FILTER,               \
                                         ALLOWED_VALUES, SUBTAGS)              \
     TYPE,
+
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(                   \
     TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
     ALLOWED_VALUES, SUBTAGS)
+
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER,       \
                                              ENDUSER_NAME, GENERATED_NAME, \
-                                             FILTER, ALLOWED_VALUES, SUBTAGS)
+                                             FILTER, ALLOWED_VALUES, SUBTAGS) \
+    TYPE,
 
 #include "generated-config/ast_layout_attribute_style_type.h"
 } ast_layout_attribute_type_t;

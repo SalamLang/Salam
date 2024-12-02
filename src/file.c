@@ -462,7 +462,7 @@ bool file_appends(const char *path, const char *content) {
  */
 bool file_appends_wchar(const char *path, const wchar_t wc) {
     char mb_str[16];
-    memset(mb_str, 0, sizeof(mb_str));
+    memset_s(mb_str, sizeof(mb_str), 0, sizeof(mb_str));
 
     size_t len = wcrtomb(mb_str, wc, NULL);
     if (len == (size_t)-1) {

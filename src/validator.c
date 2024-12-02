@@ -765,11 +765,13 @@ bool is_layout_node_a_single_tag(ast_layout_node_type_t type) {
 #define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, \
                         IS_MOTHER)                                            \
     case TYPE:                                                                \
-        return IS_MOTHER;
+        return IS_MOTHER; \
+
 #define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
                              ENDUSER_NAME, IS_MOTHER)                \
     case TYPE:                                                       \
-        return IS_MOTHER;
+        return IS_MOTHER; \
+
 #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
                                ENDUSER_NAME, IS_MOTHER)
 
@@ -829,10 +831,21 @@ bool is_style_attribute(ast_layout_attribute_type_t type) {
     DEBUG_ME;
     switch (type) {
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
+#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
+#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT
+
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
                                         GENERATED_NAME, FILTER,               \
                                         ALLOWED_VALUES, SUBTAGS)              \
     case TYPE:
+
+#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
+                                        GENERATED_NAME, FILTER,               \
+                                        ALLOWED_VALUES, SUBTAGS)              \
+
+#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
+                                        GENERATED_NAME, FILTER,               \
+                                        ALLOWED_VALUES, SUBTAGS)              \
 
 #include "generated-config/ast_layout_attribute_style_type.h"
         return true;
@@ -1601,15 +1614,21 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
     // Global values
     else if (first->type->kind == AST_TYPE_KIND_STRING &&
              attribute->values->length == 1) {
-        if (false) {
-        }
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE
+#undef ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE_REPEAT
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE(GENERATED_NAME, ENDUSER_NAME) \
     else if (strcmp(value, ENDUSER_NAME) == 0) {                              \
         return true;                                                          \
     }
 
+#define ADD_LAYOUT_ATTRIBUTE_STYLE_GLOBAL_VALUE_REPEAT(GENERATED_NAME, ENDUSER_NAME) \
+    else if (strcmp(value, ENDUSER_NAME) == 0) {                              \
+        return true;                                                          \
+    }
+
+        if (false) {
+        }
 #include "generated-config/ast_layout_attribute_style_global.h"
     }
 
@@ -1628,11 +1647,11 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
 
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
+#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT
 
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,  \
+#define layout_attribute_style_type_check(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,  \
                                         GENERATED_NAME, FILTER,                \
                                         ALLOWED_VALUES, SUBTAGS)               \
-    case TYPE: {                                                               \
         attribute->final_key = string_strdup(GENERATED_NAME);                  \
         const ast_layout_attribute_style_pair_t *values = ALLOWED_VALUES;      \
                                                                                \
@@ -1792,14 +1811,25 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
             }                                                                  \
                                                                                \
             return true;                                                       \
-        }                                                                      \
-    }                                                                          \
-                                                                               \
-        return false;
+        }
+
+#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,  \
+                                        GENERATED_NAME, FILTER,                \
+                                        ALLOWED_VALUES, SUBTAGS)               \
+    case TYPE: {                                                               \
+	    layout_attribute_style_type_check(TYPE, NAME, NAME_LOWER_ENDUSER_NAME, GENERATED_NAME, FILTER, ALLOWED_VALUES, SUBTAGS) \
+    }
+
+#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,  \
+                                        GENERATED_NAME, FILTER,                \
+                                        ALLOWED_VALUES, SUBTAGS)               
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER,       \
                                              ENDUSER_NAME, GENERATED_NAME, \
                                              FILTER, ALLOWED_VALUES, SUBTAGS)
+
+	default:
+        return false;
 
 #include "generated-config/ast_layout_attribute_style_type.h"
     }

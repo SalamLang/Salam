@@ -716,6 +716,7 @@ char *ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type) {
                                   ENDUSER_NAME)                           \
     case TYPE:                                                            \
         return NAME_LOWER;
+
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, \
                                          GENERATED_NAME, ENDUSER_NAME)
 
@@ -730,9 +731,11 @@ char *ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type) {
                                         ALLOWED_VALUES, SUBTAGS)              \
     case TYPE:                                                                \
         return NAME_LOWER;
+
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(                   \
     TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
     ALLOWED_VALUES, SUBTAGS)
+
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER,       \
                                              ENDUSER_NAME, GENERATED_NAME, \
                                              FILTER, ALLOWED_VALUES, SUBTAGS)

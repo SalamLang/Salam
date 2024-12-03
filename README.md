@@ -8,7 +8,7 @@
 
 # Salam Language
 
-A new programming language empowering developers in Persian and Arabic-speaking communities.  
+A new programming language empowering developers in Persian and Arabic-speaking communities.
 Unlock the joy of coding—accessible, intuitive, and culturally resonant.
 
 </div>
@@ -17,7 +17,7 @@ Unlock the joy of coding—accessible, intuitive, and culturally resonant.
 
 ## ✨ Introduction
 
-**Salam Language**, inspired by the word _salam_ (سلام), meaning _peace_, is the first **Persian/Arabic-based programming language**.  
+**Salam Language**, inspired by the word _salam_ (سلام), meaning _peace_, is the first **Persian/Arabic-based programming language**.
 It is designed for simplicity, accessibility, and inclusivity—bridging the gap between developers and technology in Persian, Arabic, and related linguistic communities.
 
 ### Supported Languages
@@ -51,35 +51,35 @@ Salam is the first Persian/Iranian computer scripting language.
 
 ### Usage Examples
 
-- **Execute a Script**:
+#### Execute a Script
 
-  ```bash
-  ./salam <filename>
-  ```
+```bash
+./salam <filename>
+```
 
-- **Compile and Run Code**:
+#### Compile and Run Code
 
-  ```bash
-  ./salam code <content> <output_dir>
-  ```
+```bash
+./salam code <content> <output_dir>
+```
 
-- **Lint Scripts**:
+#### Lint Scripts
 
-  ```bash
-  ./salam lint <filename> <output_dir>
-  ```
+```bash
+./salam lint <filename> <output_dir>
+```
 
-- **Version Check**:
+#### Version Check
 
-  ```bash
-  ./salam version
-  ```
+```bash
+./salam version
+```
 
-- **Update Salam**:
+#### Update Salam
 
-  ```bash
-  ./salam update
-  ```
+```bash
+./salam update
+```
 
 For a detailed guide, visit our official site: [salamlang.ir](https://salamlang.ir)
 

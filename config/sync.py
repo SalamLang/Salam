@@ -576,7 +576,7 @@ def generate_document():
                 docs += f"| {attr_names_str} | {attr_description} | `{attr_generated_name}` |\n"
             docs += "\n"
         
-        docs += "\n</div>\n"
+    docs += "\n</div>\n"
     
     return docs
 

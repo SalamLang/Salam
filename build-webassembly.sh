@@ -28,6 +28,7 @@ sources=(
 	"src/generator_identifier.c"
 	"src/string_buffer.c"
 	"src/validator.c"
+	"src/validator_style.c"
 	"src/hashmap.c"
 	"src/hashmap_custom.c"
 	"src/array_custom.c"

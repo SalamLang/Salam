@@ -4,7 +4,7 @@ DEBUG_FLAGS = -g -Walloca -Wextra -fsanitize=address,undefined
 TARGET = salam
 OUTPUT_DIR = out/
 INPUT_FILE = example/input.salam
-SRCS = src/log.c src/file.c src/memory.c src/array.c src/downloader.c src/parser.c src/parser_layout.c src/generator.c src/generator_layout.c src/generator_salam.c src/generator_layout_style.c src/generator_identifier.c src/string_buffer.c src/validator.c src/hashmap.c src/hashmap_custom.c src/array_custom.c src/lexer.c src/ast.c src/ast_layout.c src/ast_layout_style.c src/main.c
+SRCS = src/log.c src/file.c src/memory.c src/array.c src/downloader.c src/parser.c src/parser_layout.c src/generator.c src/generator_layout.c src/generator_salam.c src/generator_layout_style.c src/generator_identifier.c src/string_buffer.c src/validator.c src/validator_style.c src/hashmap.c src/hashmap_custom.c src/array_custom.c src/lexer.c src/ast.c src/ast_layout.c src/ast_layout_style.c src/main.c
 OBJS = $(SRCS:.c=.o)
 
 PYTHON = $(shell command -v python || command -v python3 || echo python)

@@ -206,7 +206,7 @@ bool token_belongs_to_ast_layout_node(
 
     if (false) {
     }
-#include "generated-config/ast_layout_type_attrs.h"
+#include "generated-config/ast_layout_type_attributes.h"
 
     return false;
 }

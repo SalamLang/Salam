@@ -10,12 +10,12 @@ def convert_yaml(input_file, output_file):
     for key, items in data.get("items", {}).items():
         print(key)
         print(items)
-        childs = {"id": key, "childs": []}
+        childrens = {"id": key, "childrens": []}
         if items is not None:
             for item in items:
-                childs["childs"].append(item)
+                childrens["childrens"].append(item)
 
-        result.append(childs)
+        result.append(childrens)
 
     with open(output_file, "w", encoding="utf-8") as file:
         yaml.dump(result, file, allow_unicode=True, sort_keys=False)

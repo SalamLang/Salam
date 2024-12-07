@@ -70,8 +70,8 @@ typedef enum {
     TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
     ALLOWED_VALUES, SUBTAGS)
 
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER,       \
-                                             ENDUSER_NAME, GENERATED_NAME, \
+#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER,          \
+                                             ENDUSER_NAME, GENERATED_NAME,    \
                                              FILTER, ALLOWED_VALUES, SUBTAGS) \
     TYPE,
 

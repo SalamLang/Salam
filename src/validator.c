@@ -22,13 +22,17 @@
  */
 
 #include "validator.h"
+
 #include "validator_style.h"
 
 // #include "generated-config/ast_layout_attribute_style_value.h"
 
-extern const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_display[];
-extern const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_style[];
-extern const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_weight[];
+extern const ast_layout_attribute_style_pair_t
+    ast_layout_allowed_style_list_font_display[];
+extern const ast_layout_attribute_style_pair_t
+    ast_layout_allowed_style_list_font_style[];
+extern const ast_layout_attribute_style_pair_t
+    ast_layout_allowed_style_list_font_weight[];
 
 /**
  *
@@ -172,25 +176,26 @@ bool token_belongs_to_ast_layout_node(
     } else if (is_layout_node_a_single_tag(attribute->parent_node_type) &&
                attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
         return false;
-    // } else if (attribute->parent_node_type == AST_LAYOUT_TYPE_LABEL &&
-    //            attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_FOR) {
-    //     return true;
-    // } else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
-    //     return true;
-    // } else if (attribute->parent_node_type == AST_LAYOUT_TYPE_DIV &&
-    //            attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
-    //     return true;
-    // } else if (attribute->parent_node_type == AST_LAYOUT_TYPE_INCLUDE &&
-    //            (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_SRC ||
-    //             attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT)) {
-    //     attribute->ignoreMe = true;
-    //     return true;
+        // } else if (attribute->parent_node_type == AST_LAYOUT_TYPE_LABEL &&
+        //            attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_FOR) {
+        //     return true;
+        // } else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
+        //     return true;
+        // } else if (attribute->parent_node_type == AST_LAYOUT_TYPE_DIV &&
+        //            attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
+        //     return true;
+        // } else if (attribute->parent_node_type == AST_LAYOUT_TYPE_INCLUDE &&
+        //            (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_SRC ||
+        //             attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT))
+        //             {
+        //     attribute->ignoreMe = true;
+        //     return true;
     } else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT) {
         // TODO: add validation to only accepts positive integer
         attribute->ignoreMe = true;
         return true;
-    // } else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_GROUP) {
-    //     return true;
+        // } else if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_GROUP) {
+        //     return true;
     } else if (is_style_attribute(attribute_key_type)) {
         attribute->isStyle = true;
 
@@ -199,8 +204,9 @@ bool token_belongs_to_ast_layout_node(
         return true;
     }
 
-    if (false) {}
-    #include "generated-config/ast_layout_type_attrs.h"
+    if (false) {
+    }
+#include "generated-config/ast_layout_type_attrs.h"
 
     return false;
 }

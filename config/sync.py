@@ -74,7 +74,7 @@ def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) 
     generate_name = item.get("generate_name", "")
 
     values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
-    
+
     key_normal = "ADD_LAYOUT_ATTRIBUTE_TYPE"
     key_repeat = "ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT"
 
@@ -222,7 +222,7 @@ def prettify_layout_attribute_style_value(
 
     result = "const ast_layout_attribute_style_pair_t " + key + "[] = {\n"
 
-    for item in item.get("childs", []):
+    for item in item.get("childrens", []):
         item["generate_name"] = item["generate_name"].replace('"', '\\"')
         values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
 
@@ -309,17 +309,17 @@ def prettify_layout_type_attrs(item: Dict[str, Any], group: Dict[str, Any]) -> s
     if "generate_name" in item:
         result = ""
         itemid = item["id"]
-        
+
         result += "else if (attribute->parent_node_type == "+ str(itemid) +") {\n"
-        
+
         if len(attrs) > 0:
             result += "    ast_layout_attribute_type_t valid_attributes[] = {\n"
             for attr in attrs:
                 result += "        " + attr + ",\n"
             result += "    };\n"
-            
+
             result += "    const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);\n"
-            
+
             result += "    if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {\n"
             # result += "        if (attribute->final_key != NULL) {\n"
             # result += "            memory_destroy(attribute->final_key);\n"
@@ -328,9 +328,9 @@ def prettify_layout_type_attrs(item: Dict[str, Any], group: Dict[str, Any]) -> s
             result += "        return true;\n"
             result += "    }\n"
 
-       
+
         result += "}"
-        
+
         return result
     else:
         return ""
@@ -499,7 +499,7 @@ def sync_file(file: Dict[str, Any]) -> None:
                     f.write(str(item) + "\n")
 
         f.write(COMMENT_END + "\n")
-        
+
         started = False
         for line in lines:
             if started:

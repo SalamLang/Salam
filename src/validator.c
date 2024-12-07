@@ -199,7 +199,8 @@ bool token_belongs_to_ast_layout_node(
         return true;
     }
 
-	
+    if (false) {}
+    #include "generated-config/ast_layout_type_attrs.h"
 
     return false;
 }

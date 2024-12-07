@@ -545,7 +545,7 @@ def generate_document():
         generate_name = item.get("generate_name", "")
         is_mother = item.get("is_mother", False)
 
-        docs += f"<h2 id=\"{id}\">دستور <pre>{first_value}</pre></h2>\n"
+        docs += f"<h2 id=\"{id}\">دستور <code>{first_value}</code></h2>\n"
         docs += descriptions.get(SELECTED_LANGUAGE, "") + "\n"
         docs += "این دستور " + ("مادر است و می تواند حامی دستوراتی به عنوان فرزند باشد." if is_mother else "فرزند است.") + "\n\n"
 

@@ -582,17 +582,18 @@ def generate_document():
 
 if __name__ == "__main__":
     print("Start...")
+    
     if len(FILES) == 0:
         print("No files to sync")
-
-    for file in FILES:
-        print(file)
-        sync_file(file)
-        convert_to_json(file)
+    else:
+        for file in FILES:
+            print(file)
+            sync_file(file)
+            convert_to_json(file)
+        
+        docs = generate_document()
+        f = open("docs.md", "w", encoding="utf-8")
+        f.write(docs)
+        f.close()
     
-    docs = generate_document()
-    f = open("docs.md", "w", encoding="utf-8")
-    f.write(docs)
-    f.close()
-    
-    print("Done.")
+        print("Done.")

@@ -293,7 +293,7 @@ def prettify_layout_attribute_style_state_type(
         )
 
 
-def prettify_layout_type_attrs(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+def prettify_layout_type_attributes(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     """
     Generates a formatted string for a layout type definition.
 
@@ -302,9 +302,9 @@ def prettify_layout_type_attrs(item: Dict[str, Any], group: Dict[str, Any]) -> s
     :return: A formatted string for the layout type.
     """
 
-    attrs = item.get("attrs", [])
-    if attrs is None:
-        attrs = []
+    attributes = item.get("attributes", [])
+    if attributes is None:
+        attributes = []
 
     if "generate_name" in item:
         result = ""
@@ -312,9 +312,9 @@ def prettify_layout_type_attrs(item: Dict[str, Any], group: Dict[str, Any]) -> s
 
         result += "else if (attribute->parent_node_type == "+ str(itemid) +") {\n"
 
-        if len(attrs) > 0:
+        if len(attributes) > 0:
             result += "    ast_layout_attribute_type_t valid_attributes[] = {\n"
-            for attr in attrs:
+            for attr in attributes:
                 result += "        " + attr + ",\n"
             result += "    };\n"
 
@@ -401,8 +401,8 @@ FILES = [
     },
     {
         "input": "layout/type.yaml",
-        "output": "ast_layout_type_attrs.h",
-        "prettify": prettify_layout_type_attrs,
+        "output": "ast_layout_type_attributes.h",
+        "prettify": prettify_layout_type_attributes,
     },
     {
         "input": "layout/attribute/type.yaml",
@@ -520,12 +520,12 @@ def generate_document():
 
     f = open(LAYOUT_ATTRIBUTE_TYPE_FILE, "r", encoding="utf-8")
     content = yaml.safe_load(f)
-    attrs = content["items"]
+    attributes = content["items"]
     
     docs = "<div dir=\"rtl\">\n\n# دستورات زبان برنامه نویسی سلام\n\n"
     
-    def get_a_attr(attrs, attr_id):
-        for attr in attrs:
+    def get_a_attr(attributes, attr_id):
+        for attr in attributes:
             # print(attr.get("id"), attr_id, attr.get("id") == attr_id)
             if attr.get("id") == attr_id:
                 return attr
@@ -552,21 +552,21 @@ def generate_document():
         if generate_name != "":
             docs += "نام این دستور معادل دستور `" + generate_name + "` می‌باشد.\n\n"
         
-        allowed_attrs = item.get("attrs", [])
-        if allowed_attrs is None:
-            allowed_attrs = []
+        allowed_attributes = item.get("attributes", [])
+        if allowed_attributes is None:
+            allowed_attributes = []
         
-        if len(allowed_attrs) > 0:
+        if len(allowed_attributes) > 0:
             docs += "این دستور دارای ویژگی‌های زیر می‌باشد:\n"
             docs += "\n"
                         
             docs += "| نام ویژگی | توضیح | تولید |\n"
             docs += "|-----------|------------|-------|\n"
-            for attr in allowed_attrs:
+            for attr in allowed_attributes:
 
-                attr_item = get_a_attr(attrs, attr)
+                attr_item = get_a_attr(attributes, attr)
                 # print("attr_item: ", attr_item, attr)
-                # print(attrs)
+                # print(attributes)
 
                 attr_generated_name = attr_item.get("generate_name", "")
                 attr_names = attr_item.get("text", {}).get(SELECTED_LANGUAGE, [])

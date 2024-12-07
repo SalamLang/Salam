@@ -313,9 +313,9 @@ def prettify_layout_type_attrs(item: Dict[str, Any], group: Dict[str, Any]) -> s
         result += "else if (attribute->parent_node_type == "+ str(itemid) +") {\n"
         
         if len(attrs) > 0:
-            result += "    const ast_layout_attribute_type_t valid_attributes[] = {\n"
+            result += "    ast_layout_attribute_type_t valid_attributes[] = {\n"
             for attr in attrs:
-                result += "        AST_LAYOUT_ATTRIBUTE_TYPE_" + attr + ",\n"
+                result += "        " + attr + ",\n"
             result += "    };\n"
             
             result += "    const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);\n"

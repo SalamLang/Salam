@@ -37,7 +37,7 @@ def command_layout_type(item: Dict[str, Any], prefix: str, value: str) -> str:
     idtext = itemid.replace(prefix, "")
     idtextlower = idtext.lower()
     generate_name = item.get("generate_name", idtext.lower())
-    is_mother = str(item.get("is_mother", 'false')).lower()
+    is_mother = str(item.get("is_mother", "false")).lower()
 
     return (
         f"({itemid}, "

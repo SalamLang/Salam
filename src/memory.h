@@ -31,8 +31,8 @@
 #include "log.h"
 
 #if !defined(__STDC_LIB_EXT1__)
-    #define memset_s(ptr, size, value, len) memset(ptr, value, len)
-    #define memcpy_s(dest, dest_size, src, size) memcpy(dest, src, size)
+#define memset_s(ptr, size, value, len) memset(ptr, value, len)
+#define memcpy_s(dest, dest_size, src, size) memcpy(dest, src, size)
 #endif
 
 /**

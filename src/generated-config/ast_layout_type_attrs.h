@@ -3,8 +3,10 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_INCLUDE) {
     ast_layout_attribute_type_t valid_attributes[] = {
         AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
     };
-    const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+    const size_t valid_attributes_length =
+        sizeof(valid_attributes) / sizeof(valid_attributes[0]);
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes,
+                                   valid_attributes_length)) {
         return true;
     }
 }
@@ -25,8 +27,10 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_NONE) {
         AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH,
         AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT,
     };
-    const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+    const size_t valid_attributes_length =
+        sizeof(valid_attributes) / sizeof(valid_attributes[0]);
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes,
+                                   valid_attributes_length)) {
         return true;
     }
 }
@@ -38,8 +42,10 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_BUTTON) {
     ast_layout_attribute_type_t valid_attributes[] = {
         AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
     };
-    const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+    const size_t valid_attributes_length =
+        sizeof(valid_attributes) / sizeof(valid_attributes[0]);
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes,
+                                   valid_attributes_length)) {
         return true;
     }
 }
@@ -49,8 +55,10 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_TEXTAREA) {
         AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,
         AST_LAYOUT_ATTRIBUTE_TYPE_PLACEHOLDER,
     };
-    const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+    const size_t valid_attributes_length =
+        sizeof(valid_attributes) / sizeof(valid_attributes[0]);
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes,
+                                   valid_attributes_length)) {
         return true;
     }
 }
@@ -60,8 +68,10 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_SELECT) {
     ast_layout_attribute_type_t valid_attributes[] = {
         AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
     };
-    const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+    const size_t valid_attributes_length =
+        sizeof(valid_attributes) / sizeof(valid_attributes[0]);
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes,
+                                   valid_attributes_length)) {
         return true;
     }
 }
@@ -75,8 +85,10 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FORM) {
         AST_LAYOUT_ATTRIBUTE_TYPE_TYPE,
         AST_LAYOUT_ATTRIBUTE_TYPE_KIND,
     };
-    const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+    const size_t valid_attributes_length =
+        sizeof(valid_attributes) / sizeof(valid_attributes[0]);
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes,
+                                   valid_attributes_length)) {
         return true;
     }
 }
@@ -167,7 +179,3 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FONT) {
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_MEDIA) {
 }
 // ----------- END AUTO GENERATED ----------- //
-
-
-
-

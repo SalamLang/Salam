@@ -71,13 +71,14 @@ void parse_url(const char *url, char *hostname, char *path) {
  * @returns {bool} - True if the download was successful, false otherwise
  *
  */
-bool download(FILE *fp, const char *port, const char *hostname, const char *path) {
-	#define BUFFER_SIZE 1024
+bool download(FILE *fp, const char *port, const char *hostname,
+              const char *path) {
+#define BUFFER_SIZE 1024
 
     char buffer[BUFFER_SIZE];
 
     size_t request_size = 1024;
-    char *request = (char *) malloc(request_size);
+    char *request = (char *)malloc(request_size);
 
     if (!request) {
         fprintf(stderr, "Memory allocation failed for request\n");
@@ -85,7 +86,9 @@ bool download(FILE *fp, const char *port, const char *hostname, const char *path
         return false;
     }
 
-    int written = snprintf(request, request_size, "GET %s HTTP/1.0\r\nHost: %s\r\n\r\n", path, hostname);
+    int written =
+        snprintf(request, request_size, "GET %s HTTP/1.0\r\nHost: %s\r\n\r\n",
+                 path, hostname);
 
     if (written >= request_size) {
         request_size = written + 1;
@@ -97,7 +100,8 @@ bool download(FILE *fp, const char *port, const char *hostname, const char *path
             return false;
         }
 
-        snprintf(request, request_size, "GET %s HTTP/1.0\r\nHost: %s\r\n\r\n", path, hostname);
+        snprintf(request, request_size, "GET %s HTTP/1.0\r\nHost: %s\r\n\r\n",
+                 path, hostname);
     }
 
     int sockfd;
@@ -161,7 +165,7 @@ bool download(FILE *fp, const char *port, const char *hostname, const char *path
     while ((bytes_received = recv(sockfd, buffer, BUFFER_SIZE, 0)) > 0) {
         if (!header_found) {
             char *header_end = strstr(buffer, "\r\n\r\n");
-			
+
             if (header_end) {
                 size_t header_length = header_end - buffer + 4;
                 header_found = 1;

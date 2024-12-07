@@ -32,12 +32,11 @@
 #include "array_custom.h"
 #include "ast.h"
 #include "base.h"
+#include "generator.h"
 #include "hashmap.h"
 #include "hashmap_custom.h"
 #include "parser.h"
 #include "string_buffer.h"
-
-#include "generator.h"
 
 /**
  *

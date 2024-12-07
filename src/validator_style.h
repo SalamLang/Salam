@@ -21,8 +21,8 @@
  * ---------------------------------------------------------------------------
  */
 
-#ifndef _VALIDATOR_H_
-#define _VALIDATOR_H_
+#ifndef _VALIDATOR_STYLE_H_
+#define _VALIDATOR_STYLE_H_
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -37,6 +37,12 @@
 #include "hashmap_custom.h"
 #include "parser.h"
 #include "string_buffer.h"
+#include "validator.h"
+
+typedef struct ast_layout_attribute_style_pair_t {
+	char *input;
+	char *output;
+} ast_layout_attribute_style_pair_t;
 
 /**
  *

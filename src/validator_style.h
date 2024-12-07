@@ -40,8 +40,8 @@
 #include "validator.h"
 
 typedef struct ast_layout_attribute_style_pair_t {
-	char *input;
-	char *output;
+    char *input;
+    char *output;
 } ast_layout_attribute_style_pair_t;
 
 /**

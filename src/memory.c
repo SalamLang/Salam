@@ -111,7 +111,7 @@ void *memory_reallocate(void *ptr, size_t size) {
 void memory_zero(void *ptr, size_t size) {
     DEBUG_ME;
     // memset(ptr, 0, size);
-	memset_s(ptr, size, 0, size);
+    memset_s(ptr, size, 0, size);
 }
 
 /**
@@ -127,7 +127,7 @@ void memory_zero(void *ptr, size_t size) {
 void memory_copy(void *dest, const void *src, size_t size) {
     DEBUG_ME;
     // memcpy(dest, src, size);
-	memcpy_s(dest, size, src, size);
+    memcpy_s(dest, size, src, size);
 }
 
 /**
@@ -158,7 +158,7 @@ int memory_compare(void *ptr1, void *ptr2, size_t size) {
 void memory_set(void *ptr, int value, size_t size) {
     DEBUG_ME;
     // memset(ptr, value, size);
-	memset_s(ptr, size, value, size);
+    memset_s(ptr, size, value, size);
 }
 
 /**

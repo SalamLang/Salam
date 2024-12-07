@@ -19,5 +19,6 @@
 #include "memory.h"
 #include "parser.h"
 #include "validator.h"
+#include "validator_style.h"
 
 #endif

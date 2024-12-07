@@ -30,6 +30,7 @@
 #include "base.h"
 #include "lexer.h"
 #include "validator.h"
+#include "validator_style.h"
 
 #define PARSER_NEXT lexer->token_index++
 #define PARSER_PREV lexer->token_index--

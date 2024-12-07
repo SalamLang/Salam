@@ -101,8 +101,6 @@ typedef struct {
     const char *keyword;  // end-user input
 } keyword_t;
 
-// #include "validator.h"
-
 /**
  *
  * @variable token_names

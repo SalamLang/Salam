@@ -563,17 +563,17 @@ def generate_document():
             docs += "| نام ویژگی | توضیح | تولید |\n"
             docs += "|-----------|------------|-------|\n"
             for attr in allowed_attrs:
-                generated_name = item.get("generate_name", "")
 
                 attr_item = get_a_attr(attrs, attr)
                 # print("attr_item: ", attr_item, attr)
                 # print(attrs)
-                
+
+                attr_generated_name = item.get("generate_name", "")                
                 attr_names = attr_item.get("text", {}).get(SELECTED_LANGUAGE, [])
                 attr_description = attr_item.get("attr_description", "")
                 attr_names_str = "<br>".join(f"`{item}`" for item in attr_names)
 
-                docs += f"| {attr_names_str} | {attr_description} | {generated_name} |\n"
+                docs += f"| {attr_names_str} | {attr_description} | {attr_generated_name} |\n"
             docs += "\n"
     
     return docs

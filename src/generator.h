@@ -33,6 +33,7 @@
 #include "memory.h"
 #include "string_buffer.h"
 #include "validator.h"
+#include "validator_style.h"
 
 typedef struct generator_t {
     ast_t *ast;

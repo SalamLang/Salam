@@ -533,7 +533,7 @@ def generate_document():
     
     
     for item in items:
-        id = item.get("id")
+        id = item.get("id").replace("AST_LAYOUT_TYPE_", "").lower()
 
         descriptions = item.get("description", {})
         if descriptions is None or descriptions == "":
@@ -568,7 +568,7 @@ def generate_document():
                 # print("attr_item: ", attr_item, attr)
                 # print(attrs)
 
-                attr_generated_name = attr_item.get("generate_name", "")                
+                attr_generated_name = attr_item.get("generate_name", "")
                 attr_names = attr_item.get("text", {}).get(SELECTED_LANGUAGE, [])
                 attr_description = attr_item.get("description", {}).get(SELECTED_LANGUAGE, "")
                 attr_names_str = "<br>".join(f"`{item}`" for item in attr_names)
@@ -581,6 +581,7 @@ def generate_document():
     return docs
 
 if __name__ == "__main__":
+    print("Start...")
     if len(FILES) == 0:
         print("No files to sync")
 
@@ -593,4 +594,5 @@ if __name__ == "__main__":
     f = open("docs.md", "w", encoding="utf-8")
     f.write(docs)
     f.close()
-
+    
+    print("Done.")

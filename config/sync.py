@@ -570,10 +570,10 @@ def generate_document():
 
                 attr_generated_name = attr_item.get("generate_name", "")                
                 attr_names = attr_item.get("text", {}).get(SELECTED_LANGUAGE, [])
-                attr_description = attr_item.get("attr_description", "")
+                attr_description = attr_item.get("description")
                 attr_names_str = "<br>".join(f"`{item}`" for item in attr_names)
 
-                docs += f"| {attr_names_str} | {attr_description} | {attr_generated_name} |\n"
+                docs += f"| {attr_names_str} | {attr_description} | `{attr_generated_name}` |\n"
             docs += "\n"
         
         docs += "\n</div>\n"

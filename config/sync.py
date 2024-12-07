@@ -451,6 +451,13 @@ def sync_file(file: Dict[str, Any]) -> None:
                     f.write(str(item) + "\n")
 
         f.write(COMMENT_END + "\n")
+        
+        started = False
+        for line in lines:
+            if started:
+                f.write(line)
+            elif COMMENT_END in line:
+                started = True
 
         f.write("\n")
 

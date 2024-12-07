@@ -585,10 +585,10 @@ if __name__ == "__main__":
     if len(FILES) == 0:
         print("No files to sync")
 
-    # for file in FILES:
-    #     print(file)
-    #     sync_file(file)
-    #     convert_to_json(file)
+    for file in FILES:
+        print(file)
+        sync_file(file)
+        convert_to_json(file)
     
     docs = generate_document()
     f = open("docs.md", "w", encoding="utf-8")

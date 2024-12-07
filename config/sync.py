@@ -510,11 +510,85 @@ def sync_file(file: Dict[str, Any]) -> None:
         f.write("\n")
 
 
+def generate_document():
+    LAYOUT_TYPE_FILE = 'layout/type.yaml'
+    LAYOUT_ATTRIBUTE_TYPE_FILE = 'layout/attribute/type.yaml'
+
+    f = open(LAYOUT_TYPE_FILE, "r", encoding="utf-8")
+    content = yaml.safe_load(f)
+    items = content["items"]
+
+    f = open(LAYOUT_ATTRIBUTE_TYPE_FILE, "r", encoding="utf-8")
+    content = yaml.safe_load(f)
+    attrs = content["items"]
+    
+    docs = "# دستورات زبان برنامه نویسی سلام\n\n"
+    
+    def get_a_attr(attrs, attr_id):
+        for attr in attrs:
+            # print(attr.get("id"), attr_id, attr.get("id") == attr_id)
+            if attr.get("id") == attr_id:
+                return attr
+        return None
+    
+    
+    for item in items:
+        id = item.get("id")
+
+        descriptions = item.get("description", {})
+        if descriptions is None or descriptions == "":
+            descriptions = {}
+
+        values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
+        first_value = values[0]
+        
+        generate_name = item.get("generate_name", "")
+        is_mother = item.get("is_mother", False)
+
+        docs += f"<h2 id=\"{id}\">دستور <pre>{first_value}</pre></h2>\n"
+        docs += descriptions.get(SELECTED_LANGUAGE, "") + "\n"
+        docs += "این دستور " + ("مادر است و می تواند حامی دستوراتی به عنوان فرزند باشد." if is_mother else "فرزند است.") + "\n\n"
+
+        if generate_name != "":
+            docs += "نام این دستور معادل دستور `" + generate_name + "` می‌باشد.\n\n"
+        
+        allowed_attrs = item.get("attrs", [])
+        if allowed_attrs is None:
+            allowed_attrs = []
+        
+        if len(allowed_attrs) > 0:
+            docs += "این دستور دارای ویژگی‌های زیر می‌باشد:\n"
+            docs += "\n"
+                        
+            docs += "| نام ویژگی | توضیح | تولید |\n"
+            docs += "|-----------|------------|-------|\n"
+            for attr in allowed_attrs:
+                generated_name = item.get("generate_name", "")
+
+                attr_item = get_a_attr(attrs, attr)
+                # print("attr_item: ", attr_item, attr)
+                # print(attrs)
+                
+                attr_names = attr_item.get("text", {}).get(SELECTED_LANGUAGE, [])
+                attr_description = attr_item.get("attr_description", "")
+                attr_names_str = "<br>".join(f"`{item}`" for item in attr_names)
+
+                docs += f"| {attr_names_str} | {attr_description} | {generated_name} |\n"
+            docs += "\n"
+    
+    return docs
+
 if __name__ == "__main__":
     if len(FILES) == 0:
         print("No files to sync")
 
-    for file in FILES:
-        print(file)
-        sync_file(file)
-        convert_to_json(file)
+    # for file in FILES:
+    #     print(file)
+    #     sync_file(file)
+    #     convert_to_json(file)
+    
+    docs = generate_document()
+    f = open("docs.md", "w", encoding="utf-8")
+    f.write(docs)
+    f.close()
+

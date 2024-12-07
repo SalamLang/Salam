@@ -32,18 +32,12 @@
 #include "array_custom.h"
 #include "ast.h"
 #include "base.h"
-#include "generator.h"
 #include "hashmap.h"
 #include "hashmap_custom.h"
 #include "parser.h"
 #include "string_buffer.h"
 
-typedef struct {
-    const char *input;
-    const char *output;
-} ast_layout_attribute_style_pair_t;
-
-#include "generated-config/ast_layout_attribute_style_value.h"
+#include "generator.h"
 
 /**
  *

@@ -1,3 +1,6 @@
+#ifndef _AST_LAYOUT_ATTRIBUTE_STYLE_VALUE_
+#define _AST_LAYOUT_ATTRIBUTE_STYLE_VALUE_ 
+
 /**
  *
  * @var valid_layout_attributes
@@ -1483,3 +1486,4 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_zoom[] = {
 
 // ----------- END AUTO GENERATED ----------- //
 
+#endif

@@ -293,6 +293,49 @@ def prettify_layout_attribute_style_state_type(
         )
 
 
+def prettify_layout_type_attrs(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+    """
+    Generates a formatted string for a layout type definition.
+
+    :param item: A dictionary representing the layout type item.
+    :param group: A dictionary representing the group the item belongs to.
+    :return: A formatted string for the layout type.
+    """
+
+    attrs = item.get("attrs", [])
+    if attrs is None:
+        attrs = []
+
+    if "generate_name" in item:
+        result = ""
+        itemid = item["id"]
+        
+        result += "else if (attribute->parent_node_type == "+ str(itemid) +") {\n"
+        
+        if len(attrs) > 0:
+            result += "    const ast_layout_attribute_type_t valid_attributes[] = {\n"
+            for attr in attrs:
+                result += "        AST_LAYOUT_ATTRIBUTE_TYPE_" + attr + ",\n"
+            result += "    };\n"
+            
+            result += "    const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);\n"
+            
+            result += "    if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {\n"
+            # result += "        if (attribute->final_key != NULL) {\n"
+            # result += "            memory_destroy(attribute->final_key);\n"
+            # result += "        }\n"
+
+            result += "        return true;\n"
+            result += "    }\n"
+
+       
+        result += "}"
+        
+        return result
+    else:
+        return ""
+
+
 def prettify_layout_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     """
     Generates a formatted string for a layout type definition.
@@ -355,6 +398,11 @@ FILES = [
         "input": "layout/type.yaml",
         "output": "ast_layout_type.h",
         "prettify": prettify_layout_type,
+    },
+    {
+        "input": "layout/type.yaml",
+        "output": "ast_layout_type_attrs.h",
+        "prettify": prettify_layout_type_attrs,
     },
     {
         "input": "layout/attribute/type.yaml",

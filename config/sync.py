@@ -522,7 +522,7 @@ def generate_document():
     content = yaml.safe_load(f)
     attrs = content["items"]
     
-    docs = "# دستورات زبان برنامه نویسی سلام\n\n"
+    docs = "<div dir=\"rtl\">\n\n# دستورات زبان برنامه نویسی سلام\n\n"
     
     def get_a_attr(attrs, attr_id):
         for attr in attrs:
@@ -568,13 +568,15 @@ def generate_document():
                 # print("attr_item: ", attr_item, attr)
                 # print(attrs)
 
-                attr_generated_name = item.get("generate_name", "")                
+                attr_generated_name = attr_item.get("generate_name", "")                
                 attr_names = attr_item.get("text", {}).get(SELECTED_LANGUAGE, [])
                 attr_description = attr_item.get("attr_description", "")
                 attr_names_str = "<br>".join(f"`{item}`" for item in attr_names)
 
                 docs += f"| {attr_names_str} | {attr_description} | {attr_generated_name} |\n"
             docs += "\n"
+        
+        docs += "\n</div>\n"
     
     return docs
 

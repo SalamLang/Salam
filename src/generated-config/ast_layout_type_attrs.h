@@ -1,7 +1,7 @@
 // ----------- BEGIN AUTO GENERATED ----------- //
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_INCLUDE) {
-    const ast_layout_attribute_type_t valid_attributes[] = {
-        AST_LAYOUT_ATTRIBUTE_TYPE_AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
+    ast_layout_attribute_type_t valid_attributes[] = {
+        AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
     };
     const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
     if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
@@ -13,17 +13,17 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_PARAGRAPH_RAW) {
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_ERROR) {
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_NONE) {
-    const ast_layout_attribute_type_t valid_attributes[] = {
-        AST_LAYOUT_ATTRIBUTE_TYPE_AST_LAYOUT_ATTRIBUTE_TYPE_TITLE,
-        AST_LAYOUT_ATTRIBUTE_TYPE_AST_LAYOUT_ATTRIBUTE_TYPE_LANG,
-        AST_LAYOUT_ATTRIBUTE_TYPE_AST_LAYOUT_ATTRIBUTE_TYPE_DIR,
-        AST_LAYOUT_ATTRIBUTE_TYPE_AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR,
-        AST_LAYOUT_ATTRIBUTE_TYPE_AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION,
-        AST_LAYOUT_ATTRIBUTE_TYPE_AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS,
-        AST_LAYOUT_ATTRIBUTE_TYPE_AST_LAYOUT_ATTRIBUTE_TYPE_ICON,
-        AST_LAYOUT_ATTRIBUTE_TYPE_AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
-        AST_LAYOUT_ATTRIBUTE_TYPE_AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH,
-        AST_LAYOUT_ATTRIBUTE_TYPE_AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT,
+    ast_layout_attribute_type_t valid_attributes[] = {
+        AST_LAYOUT_ATTRIBUTE_TYPE_TITLE,
+        AST_LAYOUT_ATTRIBUTE_TYPE_LANG,
+        AST_LAYOUT_ATTRIBUTE_TYPE_DIR,
+        AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR,
+        AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION,
+        AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS,
+        AST_LAYOUT_ATTRIBUTE_TYPE_ICON,
+        AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
+        AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH,
+        AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT,
     };
     const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
     if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
@@ -35,8 +35,8 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_DIV) {
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_PARAGRAPH) {
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_BUTTON) {
-    const ast_layout_attribute_type_t valid_attributes[] = {
-        AST_LAYOUT_ATTRIBUTE_TYPE_AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
+    ast_layout_attribute_type_t valid_attributes[] = {
+        AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
     };
     const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
     if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
@@ -44,10 +44,10 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_BUTTON) {
     }
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_TEXTAREA) {
-    const ast_layout_attribute_type_t valid_attributes[] = {
-        AST_LAYOUT_ATTRIBUTE_TYPE_AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
-        AST_LAYOUT_ATTRIBUTE_TYPE_AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,
-        AST_LAYOUT_ATTRIBUTE_TYPE_AST_LAYOUT_ATTRIBUTE_TYPE_PLACEHOLDER,
+    ast_layout_attribute_type_t valid_attributes[] = {
+        AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
+        AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,
+        AST_LAYOUT_ATTRIBUTE_TYPE_PLACEHOLDER,
     };
     const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
     if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
@@ -57,8 +57,8 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_TEXTAREA) {
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_LABEL) {
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_SELECT) {
-    const ast_layout_attribute_type_t valid_attributes[] = {
-        AST_LAYOUT_ATTRIBUTE_TYPE_AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
+    ast_layout_attribute_type_t valid_attributes[] = {
+        AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
     };
     const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
     if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
@@ -158,4 +158,6 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FONT) {
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_MEDIA) {
 }
 // ----------- END AUTO GENERATED ----------- //
+
+
 

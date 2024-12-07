@@ -35,7 +35,7 @@
 string_t *generator_code_layout_block_item(generator_t *generator,
                                            ast_layout_node_t *node) {
     string_t *layout_block_str = string_create(1024);
-    string_t *node_attrs_str =
+    string_t *node_attributes_str =
         generator_code_layout_attributes(generator, node->block);
     char *node_name = generator_code_layout_node_type(node->type);
 
@@ -139,17 +139,17 @@ string_t *generator_code_layout_block_item(generator_t *generator,
 
             if (node->type == AST_LAYOUT_TYPE_INPUT &&
                 node->block->text_content != NULL) {
-                string_append_str(node_attrs_str, " value=\"");
+                string_append_str(node_attributes_str, " value=\"");
                 string_append_str(
-                    node_attrs_str,
+                    node_attributes_str,
                     node->block
                         ->text_content);  // TODO: we need to bypass inner \"
-                string_append_str(node_attrs_str, "\"");
+                string_append_str(node_attributes_str, "\"");
             }
 
-            if (node_attrs_str->length > 0) {
+            if (node_attributes_str->length > 0) {
                 string_append_char(layout_block_str, ' ');
-                string_append(layout_block_str, node_attrs_str);
+                string_append(layout_block_str, node_attributes_str);
             }
 
             string_append_str(layout_block_str, ">");
@@ -203,8 +203,8 @@ string_t *generator_code_layout_block_item(generator_t *generator,
         }
     }
 
-    if (node_attrs_str != NULL) {
-        node_attrs_str->destroy(node_attrs_str);
+    if (node_attributes_str != NULL) {
+        node_attributes_str->destroy(node_attributes_str);
     }
 
     return layout_block_str;
@@ -257,13 +257,13 @@ void generator_code_layout_body(generator_t *generator,
     string_t *body_content = string_create(1024);
 
     string_append_str(body_tag, "<body");
-    string_t *body_attrs =
+    string_t *body_attributes =
         generator_code_layout_attributes(generator, layout_block);
-    if (body_attrs->length > 0) {
+    if (body_attributes->length > 0) {
         string_append_char(body_tag, ' ');
     }
-    string_append(body_tag, body_attrs);
-    body_attrs->destroy(body_attrs);
+    string_append(body_tag, body_attributes);
+    body_attributes->destroy(body_attributes);
     string_append_str(body_tag, ">");
 
     char *body_text_content = layout_block->text_content;

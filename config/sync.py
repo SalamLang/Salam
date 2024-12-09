@@ -82,21 +82,31 @@ def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) 
         result = ""
         for index, value in enumerate(values):
             if index == 0:
-                result += key_normal + f"(" + (
-                    f"{itemid}, "
-                    + f'"{idtext}", '
-                    + f'"{idtextlower}", '
-                    + f'"{generate_name}", '
-                    + f'"{str(value)}"'
-                    + f")\n")
+                result += (
+                    key_normal
+                    + f"("
+                    + (
+                        f"{itemid}, "
+                        + f'"{idtext}", '
+                        + f'"{idtextlower}", '
+                        + f'"{generate_name}", '
+                        + f'"{str(value)}"'
+                        + f")\n"
+                    )
+                )
             else:
-                result += key_repeat + f"(" + (
-                    f"{itemid}, "
-                    + f'"{idtext}", '
-                    + f'"{idtextlower}", '
-                    + f'"{generate_name}", '
-                    + f'"{str(values)}"'
-                    + f")\n")
+                result += (
+                    key_repeat
+                    + f"("
+                    + (
+                        f"{itemid}, "
+                        + f'"{idtext}", '
+                        + f'"{idtextlower}", '
+                        + f'"{generate_name}", '
+                        + f'"{str(values)}"'
+                        + f")\n"
+                    )
+                )
         return result
     else:
         return (
@@ -109,6 +119,7 @@ def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) 
             + f'"{str(values)}"'
             + f")\n"
         )
+
 
 def prettify_layout_attribute_style_global_value(
     item: Dict[str, Any], group: Dict[str, Any]
@@ -135,20 +146,11 @@ def prettify_layout_attribute_style_global_value(
                 result += key_normal
             else:
                 result += key_repeat
-            result += (f"("
-                + f"{itemid}, "
-                + f'"{str(values)}"'
-                + f")\n")
+            result += f"(" + f"{itemid}, " + f'"{str(values)}"' + f")\n"
 
         return result
     else:
-        return (
-            key_normal
-            + f"("
-            + f"{itemid}, "
-            + f'"{str(values)}"'
-            + f")\n"
-        )
+        return key_normal + f"(" + f"{itemid}, " + f'"{str(values)}"' + f")\n"
 
 
 def prettify_layout_attribute_style_type(
@@ -310,7 +312,7 @@ def prettify_layout_type_attributes(item: Dict[str, Any], group: Dict[str, Any])
         result = ""
         itemid = item["id"]
 
-        result += "else if (attribute->parent_node_type == "+ str(itemid) +") {\n"
+        result += "else if (attribute->parent_node_type == " + str(itemid) + ") {\n"
 
         if len(attributes) > 0:
             result += "    ast_layout_attribute_type_t valid_attributes[] = {\n"
@@ -327,7 +329,6 @@ def prettify_layout_type_attributes(item: Dict[str, Any], group: Dict[str, Any])
 
             result += "        return true;\n"
             result += "    }\n"
-
 
         result += "}"
 
@@ -511,8 +512,8 @@ def sync_file(file: Dict[str, Any]) -> None:
 
 
 def generate_document():
-    LAYOUT_TYPE_FILE = 'layout/type.yaml'
-    LAYOUT_ATTRIBUTE_TYPE_FILE = 'layout/attribute/type.yaml'
+    LAYOUT_TYPE_FILE = "layout/type.yaml"
+    LAYOUT_ATTRIBUTE_TYPE_FILE = "layout/attribute/type.yaml"
 
     f = open(LAYOUT_TYPE_FILE, "r", encoding="utf-8")
     content = yaml.safe_load(f)
@@ -521,17 +522,16 @@ def generate_document():
     f = open(LAYOUT_ATTRIBUTE_TYPE_FILE, "r", encoding="utf-8")
     content = yaml.safe_load(f)
     attributes = content["items"]
-    
-    docs = "<div dir=\"rtl\">\n\n# دستورات زبان برنامه نویسی سلام\n\n"
-    
+
+    docs = '<div dir="rtl">\n\n# دستورات زبان برنامه نویسی سلام\n\n'
+
     def get_a_attr(attributes, attr_id):
         for attr in attributes:
             # print(attr.get("id"), attr_id, attr.get("id") == attr_id)
             if attr.get("id") == attr_id:
                 return attr
         return None
-    
-    
+
     for item in items:
         id = item.get("id").replace("AST_LAYOUT_TYPE_", "").lower()
 
@@ -541,25 +541,33 @@ def generate_document():
 
         values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
         first_value = values[0]
-        
+
         generate_name = item.get("generate_name", "")
         is_mother = item.get("is_mother", False)
 
-        docs += f"<h2 id=\"{id}\">دستور <code>{first_value}</code></h2>\n"
+        docs += f'<h2 id="{id}">دستور <code>{first_value}</code></h2>\n'
         docs += descriptions.get(SELECTED_LANGUAGE, "") + "\n"
-        docs += "این دستور " + ("مادر است و می تواند حامی دستوراتی به عنوان فرزند باشد." if is_mother else "فرزند است.") + "\n\n"
+        docs += (
+            "این دستور "
+            + (
+                "مادر است و می تواند حامی دستوراتی به عنوان فرزند باشد."
+                if is_mother
+                else "فرزند است."
+            )
+            + "\n\n"
+        )
 
         if generate_name != "":
             docs += "نام این دستور معادل دستور `" + generate_name + "` می‌باشد.\n\n"
-        
+
         allowed_attributes = item.get("attributes", [])
         if allowed_attributes is None:
             allowed_attributes = []
-        
+
         if len(allowed_attributes) > 0:
             docs += "این دستور دارای ویژگی‌های زیر می‌باشد:\n"
             docs += "\n"
-                        
+
             docs += "| نام ویژگی | توضیح | تولید |\n"
             docs += "|-----------|------------|-------|\n"
             for attr in allowed_attributes:
@@ -570,19 +578,22 @@ def generate_document():
 
                 attr_generated_name = attr_item.get("generate_name", "")
                 attr_names = attr_item.get("text", {}).get(SELECTED_LANGUAGE, [])
-                attr_description = attr_item.get("description", {}).get(SELECTED_LANGUAGE, "")
+                attr_description = attr_item.get("description", {}).get(
+                    SELECTED_LANGUAGE, ""
+                )
                 attr_names_str = "<br>".join(f"`{item}`" for item in attr_names)
 
                 docs += f"| {attr_names_str} | {attr_description} | `{attr_generated_name}` |\n"
             docs += "\n"
-        
+
     docs += "\n</div>\n"
-    
+
     return docs
+
 
 if __name__ == "__main__":
     print("Start...")
-    
+
     if len(FILES) == 0:
         print("No files to sync")
     else:
@@ -590,10 +601,10 @@ if __name__ == "__main__":
             print(file)
             sync_file(file)
             convert_to_json(file)
-        
+
         docs = generate_document()
         f = open("docs.md", "w", encoding="utf-8")
         f.write(docs)
         f.close()
-    
+
         print("Done.")

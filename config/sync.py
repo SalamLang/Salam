@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import yaml
 from module.utils import command_layout_style_type, command_layout_type
@@ -48,12 +48,12 @@ def prettify_block_type(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     idtextlower = idtext.lower()
 
     return (
-        f"ADD_BLOCK_TYPE"
-        + f"("
+        "ADD_BLOCK_TYPE"
+        + "("
         + f"{itemid}, "
         + f'"{idtext}", '
         + f'"{idtextlower}"'
-        + f")\n"
+        + ")\n"
     )
 
 
@@ -84,40 +84,40 @@ def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) 
             if index == 0:
                 result += (
                     key_normal
-                    + f"("
+                    + "("
                     + (
                         f"{itemid}, "
                         + f'"{idtext}", '
                         + f'"{idtextlower}", '
                         + f'"{generate_name}", '
                         + f'"{str(value)}"'
-                        + f")\n"
+                        + ")\n"
                     )
                 )
             else:
                 result += (
                     key_repeat
-                    + f"("
+                    + "("
                     + (
                         f"{itemid}, "
                         + f'"{idtext}", '
                         + f'"{idtextlower}", '
                         + f'"{generate_name}", '
                         + f'"{str(values)}"'
-                        + f")\n"
+                        + ")\n"
                     )
                 )
         return result
     else:
         return (
             key_normal
-            + f"("
+            + "("
             + f"{itemid}, "
             + f'"{idtext}", '
             + f'"{idtextlower}", '
             + f'"{generate_name}", '
             + f'"{str(values)}"'
-            + f")\n"
+            + ")\n"
         )
 
 
@@ -146,11 +146,11 @@ def prettify_layout_attribute_style_global_value(
                 result += key_normal
             else:
                 result += key_repeat
-            result += f"(" + f"{itemid}, " + f'"{str(values)}"' + f")\n"
+            result += "(" + f"{itemid}, " + f'"{str(values)}"' + ")\n"
 
         return result
     else:
-        return key_normal + f"(" + f"{itemid}, " + f'"{str(values)}"' + f")\n"
+        return key_normal + "(" + f"{itemid}, " + f'"{str(values)}"' + ")\n"
 
 
 def prettify_layout_attribute_style_type(
@@ -271,27 +271,27 @@ def prettify_layout_attribute_style_state_type(
                 result += "ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_REPEAT"
 
             result += (
-                f"("
+                "("
                 + f"{itemid}, "
                 + f'"{idtext}", '
                 + f'"{idtextlower}", '
                 + f'"{str(value)}", '
                 + f'"{generate_name}"'
-                + f")\n"
+                + ")\n"
             )
             index += 1
 
         return result
     else:
         return (
-            f"ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE"
-            + f"("
+            "ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE"
+            + "("
             + f"{itemid}, "
             + f'"{idtext}", '
             + f'"{idtextlower}", '
             + f'"{str(values)}", '
             + f'"{generate_name}"'
-            + f")\n"
+            + ")\n"
         )
 
 
@@ -571,7 +571,6 @@ def generate_document():
             docs += "| نام ویژگی | توضیح | تولید |\n"
             docs += "|-----------|------------|-------|\n"
             for attr in allowed_attributes:
-
                 attr_item = get_a_attr(attributes, attr)
                 # print("attr_item: ", attr_item, attr)
                 # print(attributes)

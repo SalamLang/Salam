@@ -46,7 +46,7 @@ def command_layout_type(item: Dict[str, Any], prefix: str, value: str) -> str:
         + f'"{generate_name}", '
         + f'"{value}", '
         + f"{is_mother}"
-        + f")\n"
+        + ")\n"
     )
 
 

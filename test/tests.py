@@ -34,7 +34,7 @@ def run_tests_in_directory(directory: Path) -> None:
 
     parent_layout_file = directory / "layout.salam"
     if parent_layout_file.exists():
-        os.system(f"{SALAM_BIN} {parent_layout_file} > /dev/null 2>&1")
+        os.system(f"{salam_bin} {parent_layout_file} > /dev/null 2>&1")
     else:
         print(
             f"{COLOR_RED}{parent_layout_file} does not exist. Skipping salam command.{COLOR_RESET}"

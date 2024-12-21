@@ -242,6 +242,42 @@ def prettify_layout_attribute_style_value(
 
     return result
 
+def prettify_layout_attribute_value(
+    item: Dict[str, Any], group: Dict[str, Any]
+) -> str:
+    """
+    Generates a formatted string for layout attribute values.
+
+    :param key: A string representing the key name.
+    :param items: A list of dictionaries representing the value items.
+    :return: A formatted string for the values.
+    """
+    global SELECTED_LANGUAGE
+
+    key = item.get("id")
+
+    print(item)
+
+    result = "const ast_layout_attribute_pair_t " + key + "[] = {\n"
+
+    for item in item.get("childrens", []):
+        item["generate_name"] = item["generate_name"].replace('"', '\\"')
+        values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
+
+        if values is not None:
+            if type(values) is str:
+                values = values.replace('"', '\\"')
+                result += '\t{"' + values + '", "' + item["generate_name"] + '"},\n'
+            else:
+                for value in values:
+                    value = value.replace('"', '\\"')
+                    result += '\t{"' + value + '", "' + item["generate_name"] + '"},\n'
+
+    result += "\t{NULL, NULL},\n"
+    result += "};\n"
+
+    return result
+
 
 def prettify_layout_attribute_style_state_type(
     item: Dict[str, Any], group: Dict[str, Any]
@@ -429,6 +465,11 @@ FILES = [
         "input": "layout/attribute/style/value.yaml",
         "output": "ast_layout_attribute_style_value.h",
         "prettify": prettify_layout_attribute_style_value,
+    },
+    {
+        "input": "layout/attribute/value.yaml",
+        "output": "ast_layout_attribute_value.h",
+        "prettify": prettify_layout_attribute_value,
     },
 ]
 

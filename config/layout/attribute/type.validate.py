@@ -12,7 +12,7 @@ FILE = "type.yaml"
 LANGUAGES = ["en", "fa"]
 
 
-def main() -> None:  # Add the return type annotation here
+def main() -> None:
     try:
         docs = load_yaml(FILE)
 
@@ -31,4 +31,4 @@ def main() -> None:  # Add the return type annotation here
 
 
 if __name__ == "__main__":
-    main()  # Call the main function
+    main()

@@ -8,7 +8,7 @@ sys.path.append(
 from utils import error, load_yaml
 from validation import validate_item_structure
 
-FILE = "type.yaml"
+FILE = "value.yaml"
 LANGUAGES = ["en", "fa"]
 
 

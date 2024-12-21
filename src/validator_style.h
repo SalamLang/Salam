@@ -39,6 +39,11 @@
 #include "string_buffer.h"
 #include "validator.h"
 
+typedef struct ast_layout_attribute_pair_t {
+    char *input;
+    char *output;
+} ast_layout_attribute_pair_t;
+
 typedef struct ast_layout_attribute_style_pair_t {
     char *input;
     char *output;

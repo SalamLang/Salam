@@ -78,46 +78,30 @@ def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) 
     key_normal = "ADD_LAYOUT_ATTRIBUTE_TYPE"
     key_repeat = "ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT"
 
+    reserved_values = item.get("reserved_values", "")
+    type_value = item.get("type", "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING")
+
     if type(values) is not str:
         result = ""
         for index, value in enumerate(values):
             if index == 0:
                 result += (
-                    key_normal
-                    + "("
-                    + (
-                        f"{itemid}, "
-                        + f'"{idtext}", '
-                        + f'"{idtextlower}", '
-                        + f'"{generate_name}", '
-                        + f'"{str(value)}"'
-                        + ")\n"
+                    key_normal + command_layout_style_type(
+                        item, "AST_LAYOUT_ATTRIBUTE_TYPE_", values
                     )
                 )
             else:
                 result += (
-                    key_repeat
-                    + "("
-                    + (
-                        f"{itemid}, "
-                        + f'"{idtext}", '
-                        + f'"{idtextlower}", '
-                        + f'"{generate_name}", '
-                        + f'"{str(values)}"'
-                        + ")\n"
+                    key_repeat + command_layout_style_type(
+                        item, "AST_LAYOUT_ATTRIBUTE_TYPE_", values
                     )
                 )
         return result
     else:
         return (
-            key_normal
-            + "("
-            + f"{itemid}, "
-            + f'"{idtext}", '
-            + f'"{idtextlower}", '
-            + f'"{generate_name}", '
-            + f'"{str(values)}"'
-            + ")\n"
+            key_normal + command_layout_style_type(
+                item, "AST_LAYOUT_ATTRIBUTE_TYPE_", values
+            )
         )
 
 

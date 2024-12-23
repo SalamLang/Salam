@@ -16,10 +16,10 @@ def load_yaml(file_path: str) -> List[Dict[str, Any]]:
             return list(yaml.safe_load_all(file))
     except FileNotFoundError:
         error(f"File not found: {file_path}")
-        return []  # Ensure a return value
+        return []
     except yaml.YAMLError as e:
         error(f"Error parsing YAML file: {file_path}\n{e}")
-        return []  # Ensure a return value
+        return []
 
 
 def error(msg: str) -> None:
@@ -65,13 +65,10 @@ def command_layout_style_type(item: Dict[str, Any], prefix: str, value: str) -> 
     idtext = itemid.replace(prefix, "")
     idtextlower = idtext.lower()
 
-    # Get generate_name or fallback to idtextlower if not found
     generate_name = item.get("generate_name", idtextlower)
 
-    # Default to "AST_LAYOUT_ATTRIBUTE_STYLE_FILTER_STRING_ANY" if "type" is not found
     type = str(item.get("type", "AST_LAYOUT_ATTRIBUTE_STYLE_FILTER_STRING_ANY"))
 
-    # Handle reserved_values, default to "NULL" if empty
     reserved_values = (
         str(item.get("reserved_values", "NULL")).lower()
         if item.get("reserved_values", "") != ""
@@ -88,14 +85,11 @@ def command_layout_style_type(item: Dict[str, Any], prefix: str, value: str) -> 
     )
 
 
-# # Sample usage:
+# Sample usage:
 # if __name__ == "__main__":
-#     # Example of loading a YAML file
-#     file_path = "example.yaml"  # Replace with your actual YAML file path
+#     file_path = "example.yaml"
 #     items = load_yaml(file_path)
-
 #     for item in items:
-#         # Example command generation for each item in the loaded YAML
 #         prefix = "prefix_"
 #         value = "some_value"
 #         print(command(item, prefix, value))

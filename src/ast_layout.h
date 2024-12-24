@@ -48,14 +48,14 @@ typedef enum {
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
 
-#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                        GENERATED_NAME, FILTER,         \
-                                        ALLOWED_VALUES, SUBTAGS)        \
+#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,   \
+                                  GENERATED_NAME, FILTER, ALLOWED_VALUES, \
+                                  SUBTAGS)                                \
     TYPE,
 
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                        GENERATED_NAME, FILTER,         \
-                                        ALLOWED_VALUES, SUBTAGS)        \
+                                         GENERATED_NAME, FILTER,               \
+                                         ALLOWED_VALUES, SUBTAGS)
 
 #include "generated-config/ast_layout_attribute_type.h"
 

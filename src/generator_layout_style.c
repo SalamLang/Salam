@@ -243,15 +243,15 @@ char *generator_code_layout_style_name(ast_layout_attribute_type_t type) {
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
 
-#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                        GENERATED_NAME, FILTER,         \
-                                        ALLOWED_VALUES, SUBTAGS)        \
+#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,   \
+                                  GENERATED_NAME, FILTER, ALLOWED_VALUES, \
+                                  SUBTAGS)                                \
     case TYPE:                                                            \
         return "ERROR";
 
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                        GENERATED_NAME, FILTER,         \
-                                        ALLOWED_VALUES, SUBTAGS)        \
+                                         GENERATED_NAME, FILTER,               \
+                                         ALLOWED_VALUES, SUBTAGS)
 
 #include "generated-config/ast_layout_attribute_type.h"
     }

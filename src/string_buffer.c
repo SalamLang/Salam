@@ -497,7 +497,7 @@ bool string_compare(string_t *str1, string_t *str2) {
 bool is_utf8_continuation_byte(char c) {
     DEBUG_ME;
     return (c & 0xC0) == 0x80;
-    }
+}
 
 /**
  *

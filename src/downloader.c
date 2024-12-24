@@ -34,6 +34,7 @@
  *
  */
 void parse_url(const char *url, char *hostname, char *path) {
+    DEBUG_ME;
     const char *start;
     const char *end;
 
@@ -73,6 +74,7 @@ void parse_url(const char *url, char *hostname, char *path) {
  */
 bool download(FILE *fp, const char *port, const char *hostname,
               const char *path) {
+    DEBUG_ME;
 #define BUFFER_SIZE 1024
 
     char buffer[BUFFER_SIZE];

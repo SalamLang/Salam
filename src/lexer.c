@@ -556,7 +556,6 @@ token_type_t token_char_type(char c) {
  */
 char *token_stringify(token_t *token) {
     DEBUG_ME;
-
     const char *type = token_type_stringify(token->type);
     const char *value = token_value_stringify(token);
     const char *location = location_stringify(token->location);
@@ -914,7 +913,6 @@ void lexer_lex_number(lexer_t *lexer, char *uc) {
  */
 token_type_t type_keyword(const char *string) {
     DEBUG_ME;
-
     for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++) {
         // TODO: keywords[i].length == length
         if (strcmp(string, keywords[i].keyword) == 0) {

@@ -98,7 +98,7 @@ void array_token_print(array_token_t *array) {
     DEBUG_ME;
     printf("Array Token: ");
     printf("%zu\n", array->length);
-    
+
     char *str = array_token_stringify(array);
 
     printf("%s\n", str);

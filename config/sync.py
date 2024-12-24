@@ -85,23 +85,17 @@ def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) 
         result = ""
         for index, value in enumerate(values):
             if index == 0:
-                result += (
-                    key_normal + command_layout_style_type(
-                        item, "AST_LAYOUT_ATTRIBUTE_TYPE_", value
-                    )
+                result += key_normal + command_layout_style_type(
+                    item, "AST_LAYOUT_ATTRIBUTE_TYPE_", value
                 )
             else:
-                result += (
-                    key_repeat + command_layout_style_type(
-                        item, "AST_LAYOUT_ATTRIBUTE_TYPE_", value
-                    )
+                result += key_repeat + command_layout_style_type(
+                    item, "AST_LAYOUT_ATTRIBUTE_TYPE_", value
                 )
         return result
     else:
-        return (
-            key_normal + command_layout_style_type(
-                item, "AST_LAYOUT_ATTRIBUTE_TYPE_", values
-            )
+        return key_normal + command_layout_style_type(
+            item, "AST_LAYOUT_ATTRIBUTE_TYPE_", values
         )
 
 
@@ -226,9 +220,8 @@ def prettify_layout_attribute_style_value(
 
     return result
 
-def prettify_layout_attribute_value(
-    item: Dict[str, Any], group: Dict[str, Any]
-) -> str:
+
+def prettify_layout_attribute_value(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     """
     Generates a formatted string for layout attribute values.
 

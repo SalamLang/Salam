@@ -87,16 +87,16 @@ def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) 
             if index == 0:
                 result += key_normal + command_layout_style_type(
                     item, "AST_LAYOUT_ATTRIBUTE_TYPE_", value
-                )
+                ) + "\n"
             else:
                 result += key_repeat + command_layout_style_type(
                     item, "AST_LAYOUT_ATTRIBUTE_TYPE_", value
-                )
+                ) + "\n"
         return result
     else:
         return key_normal + command_layout_style_type(
             item, "AST_LAYOUT_ATTRIBUTE_TYPE_", values
-        )
+        ) + "\n"
 
 
 def prettify_layout_attribute_style_global_value(
@@ -152,35 +152,35 @@ def prettify_layout_attribute_style_type(
         if isinstance(values, str):
             return key_hide + command_layout_style_type(
                 item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", values
-            )
+            ) + "\n"
         else:
             result = ""
             for index, value in enumerate(values):
                 if index == 0:
                     result += key_hide + command_layout_style_type(
                         item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value
-                    )
+                    ) + "\n"
                 else:
                     result += key_repeat + command_layout_style_type(
                         item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value
-                    )
+                    ) + "\n"
             return result
     else:
         if isinstance(values, str):
             return key_main + command_layout_style_type(
                 item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", values
-            )
+            ) + "\n"
         else:
             result = ""
             for index, value in enumerate(values):
                 if index == 0:
                     result += key_main + command_layout_style_type(
                         item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value
-                    )
+                    ) + "\n"
                 else:
                     result += key_repeat + command_layout_style_type(
                         item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value
-                    )
+                    ) + "\n"
             return result
 
 

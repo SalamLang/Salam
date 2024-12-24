@@ -105,6 +105,7 @@ void generator_salam_layout_block(string_t* salam, ast_layout_block_t* block) {
  */
 void generator_salam_layout_children(string_t* salam,
                                      array_node_layout_t* children) {
+    DEBUG_ME;
     if (children != NULL && children->length > 0) {
         for (size_t i = 0; i < children->length; i++) {
             ast_layout_node_t* node = array_get(children, i);

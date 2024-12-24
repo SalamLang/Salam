@@ -34,6 +34,7 @@
  */
 string_t *generator_code_layout_block_item(generator_t *generator,
                                            ast_layout_node_t *node) {
+    DEBUG_ME;
     string_t *layout_block_str = string_create(1024);
     string_t *node_attributes_str =
         generator_code_layout_attributes(generator, node->block);

@@ -32,6 +32,7 @@
  *
  */
 bool is_begin_block_token(token_t *token) {
+    DEBUG_ME;
     return token->type == TOKEN_LEFT_BRACE;
 }
 
@@ -44,6 +45,7 @@ bool is_begin_block_token(token_t *token) {
  *
  */
 bool is_close_block_token(token_t *token) {
+    DEBUG_ME;
     return token->type == TOKEN_RIGHT_BRACE;
 }
 
@@ -54,7 +56,10 @@ bool is_close_block_token(token_t *token) {
  * @returns {void}
  *
  */
-void expect_open_block(lexer_t *lexer) { expect(lexer, TOKEN_TYPE_OPEN_BLOCK); }
+void expect_open_block(lexer_t *lexer) {
+    DEBUG_ME;
+    expect(lexer, TOKEN_TYPE_OPEN_BLOCK);
+}
 
 /**
  *
@@ -64,6 +69,7 @@ void expect_open_block(lexer_t *lexer) { expect(lexer, TOKEN_TYPE_OPEN_BLOCK); }
  *
  */
 void expect_close_block(lexer_t *lexer) {
+    DEBUG_ME;
     expect(lexer, TOKEN_TYPE_CLOSE_BLOCK);
 }
 
@@ -76,6 +82,7 @@ void expect_close_block(lexer_t *lexer) {
  *
  */
 bool match_next_open_block(lexer_t *lexer) {
+    DEBUG_ME;
     return match_next(lexer, TOKEN_LEFT_BRACE);
 }
 
@@ -88,6 +95,7 @@ bool match_next_open_block(lexer_t *lexer) {
  *
  */
 bool match_open_block(lexer_t *lexer) {
+    DEBUG_ME;
     return match(lexer, TOKEN_TYPE_OPEN_BLOCK);
 }
 
@@ -100,6 +108,7 @@ bool match_open_block(lexer_t *lexer) {
  *
  */
 bool match_close_block(lexer_t *lexer) {
+    DEBUG_ME;
     return match(lexer, TOKEN_TYPE_CLOSE_BLOCK);
 }
 
@@ -112,6 +121,7 @@ bool match_close_block(lexer_t *lexer) {
  *
  */
 bool match_next_close_block(lexer_t *lexer) {
+    DEBUG_ME;
     return match_next(lexer, TOKEN_RIGHT_BRACE);
 }
 

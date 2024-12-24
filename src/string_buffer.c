@@ -32,6 +32,7 @@
  *
  */
 char *string_strdup(const char *source) {
+    DEBUG_ME;
     if (source == NULL) {
         return NULL;
     }
@@ -58,6 +59,7 @@ char *string_strdup(const char *source) {
  *
  */
 int my_strcasecmp(const char *s1, const char *s2) {
+    DEBUG_ME;
     if (s1 == NULL || s2 == NULL) {
         // Handle NULL strings
         if (s1 == NULL && s2 == NULL) return 0;
@@ -492,7 +494,10 @@ bool string_compare(string_t *str1, string_t *str2) {
  * @returns {bool} True if the byte is a continuation byte, false otherwise
  *
  */
-bool is_utf8_continuation_byte(char c) { return (c & 0xC0) == 0x80; }
+bool is_utf8_continuation_byte(char c) {
+    DEBUG_ME;
+    return (c & 0xC0) == 0x80;
+    }
 
 /**
  *
@@ -503,6 +508,7 @@ bool is_utf8_continuation_byte(char c) { return (c & 0xC0) == 0x80; }
  *
  */
 bool is_valid_utf8(const char *str) {
+    DEBUG_ME;
     const unsigned char *bytes = (const unsigned char *)str;
 
     while (*bytes) {
@@ -633,6 +639,7 @@ bool is_wchar_alpha(uint32_t codepoint) {
  *
  */
 bool is_wchar_digit(uint32_t codepoint) {
+    DEBUG_ME;
     return is_english_digit(codepoint) || is_persian_digit(codepoint) ||
            is_arabic_digit(codepoint) || iswdigit(codepoint);
 }
@@ -646,6 +653,7 @@ bool is_wchar_digit(uint32_t codepoint) {
  *
  */
 bool is_utf8_alpha(char *utf8) {
+    DEBUG_ME;
     // wchar_t wc;
     // int wcl = mbtowc(&wc, utf8, MB_CUR_MAX);
     // if (wcl <= 0) {
@@ -706,6 +714,7 @@ bool is_utf8_alpha(char *utf8) {
  *
  */
 bool is_utf8_digit(char *utf8) {
+    DEBUG_ME;
     // Persian digits
     if (strcmp(utf8, "۰") == 0 ||  // Persian 0
         strcmp(utf8, "۱") == 0 ||  // Persian 1
@@ -782,6 +791,7 @@ char convert_to_english_digit(wchar_t ch) {
  *
  */
 char convert_utf8_to_english_digit(char *uc) {
+    DEBUG_ME;
     if (strcmp(uc, "۰") == 0 || strcmp(uc, "٠") == 0 || strcmp(uc, "0") == 0) {
         return '0';
     } else if (strcmp(uc, "۱") == 0 || strcmp(uc, "١") == 0 ||
@@ -976,6 +986,7 @@ uint32_t utf8_decode(const char *source, size_t *index) {
  *
  */
 size_t utf8_strlen(const char *str) {
+    DEBUG_ME;
     size_t len = 0;
     mbstate_t state;
 
@@ -1009,6 +1020,7 @@ size_t utf8_strlen(const char *str) {
  *
  */
 size_t mb2strlen(const char *identifier) {
+    DEBUG_ME;
     size_t wcs_len = mbstowcs(NULL, identifier, 0);
     if (wcs_len == (size_t)-1) {
         printf("MESSAGE_LEXER_STRING_GET_LENGTH_UNICODE\n");
@@ -1092,5 +1104,6 @@ string_t *string_create_from(const char *data, size_t start, size_t end) {
  * @function string_arabic2persian
  */
 char *string_arabic2persian(const char *arabic) {
+    DEBUG_ME;
     return replace_all_substrings(arabic, "ي", "ی");
 }

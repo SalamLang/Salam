@@ -35,6 +35,7 @@
  *
  */
 void lint(bool isCode, const char *path, char *content, char *build_file) {
+    DEBUG_ME;
     lexer_t *lexer = lexer_create(path, content);
 
     lexer_lex(lexer);
@@ -78,6 +79,7 @@ void lint(bool isCode, const char *path, char *content, char *build_file) {
  *
  */
 void run(bool isCode, const char *path, char *content, char *build_dir) {
+    DEBUG_ME;
     lexer_t *lexer = lexer_create(path, content);
 
     lexer_lex(lexer);
@@ -135,6 +137,7 @@ void run(bool isCode, const char *path, char *content, char *build_dir) {
  *
  */
 void help(char *app) {
+    DEBUG_ME;
     printf("Welcome to Salam Programming Language!\n");
     printf(
         "Salam is the first Persian/Iranian computer scripting "

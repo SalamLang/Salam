@@ -199,7 +199,7 @@ void memory_reverse(void *ptr, size_t size) {
     DEBUG_ME;
     size_t i = 0;
     size_t j = size - 1;
-
+    
     while (i < j) {
         memory_swap(ptr + i, ptr + j, 1);
         i++;

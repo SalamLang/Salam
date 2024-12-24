@@ -23,8 +23,8 @@
 
 #include "validator_style.h"
 
-#include "generated-config/ast_layout_attribute_value.h"
 #include "generated-config/ast_layout_attribute_style_value.h"
+#include "generated-config/ast_layout_attribute_value.h"
 
 /**
  *
@@ -1128,15 +1128,15 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
 
-#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                        GENERATED_NAME, FILTER,         \
-                                        ALLOWED_VALUES, SUBTAGS)        \
+#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,   \
+                                  GENERATED_NAME, FILTER, ALLOWED_VALUES, \
+                                  SUBTAGS)                                \
     case TYPE:                                                            \
         return false;
 
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                        GENERATED_NAME, FILTER,         \
-                                        ALLOWED_VALUES, SUBTAGS)        \
+                                         GENERATED_NAME, FILTER,               \
+                                         ALLOWED_VALUES, SUBTAGS)
 
 #include "generated-config/ast_layout_attribute_type.h"
 

@@ -572,20 +572,20 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char *name) {
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
 
-#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                        GENERATED_NAME, FILTER,         \
-                                        ALLOWED_VALUES, SUBTAGS)        \
-    else if (strcmp(name, NAME_LOWER) == 0) {                           \
-        type = TYPE;                                                    \
-        return type;                                                    \
+#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,   \
+                                  GENERATED_NAME, FILTER, ALLOWED_VALUES, \
+                                  SUBTAGS)                                \
+    else if (strcmp(name, NAME_LOWER) == 0) {                             \
+        type = TYPE;                                                      \
+        return type;                                                      \
     }
 
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                        GENERATED_NAME, FILTER,         \
-                                        ALLOWED_VALUES, SUBTAGS)        \
-    else if (strcmp(name, NAME_LOWER) == 0) {                           \
-        type = TYPE;                                                    \
-        return type;                                                    \
+                                         GENERATED_NAME, FILTER,               \
+                                         ALLOWED_VALUES, SUBTAGS)              \
+    else if (strcmp(name, NAME_LOWER) == 0) {                                  \
+        type = TYPE;                                                           \
+        return type;                                                           \
     }
 
 #include "generated-config/ast_layout_attribute_type.h"
@@ -632,20 +632,20 @@ ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_type(
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
 
-#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                        GENERATED_NAME, FILTER,         \
-                                        ALLOWED_VALUES, SUBTAGS)        \
-    else if (strcmp(name, ENDUSER_NAME) == 0) {                         \
-        type = TYPE;                                                    \
-        return type;                                                    \
+#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,   \
+                                  GENERATED_NAME, FILTER, ALLOWED_VALUES, \
+                                  SUBTAGS)                                \
+    else if (strcmp(name, ENDUSER_NAME) == 0) {                           \
+        type = TYPE;                                                      \
+        return type;                                                      \
     }
 
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                        GENERATED_NAME, FILTER,         \
-                                        ALLOWED_VALUES, SUBTAGS)        \
-    else if (strcmp(name, ENDUSER_NAME) == 0) {                         \
-        type = TYPE;                                                    \
-        return type;                                                    \
+                                         GENERATED_NAME, FILTER,               \
+                                         ALLOWED_VALUES, SUBTAGS)              \
+    else if (strcmp(name, ENDUSER_NAME) == 0) {                                \
+        type = TYPE;                                                           \
+        return type;                                                           \
     }
 
 #include "generated-config/ast_layout_attribute_type.h"
@@ -720,20 +720,20 @@ char *ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type) {
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE_HIDE
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
 
-#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                        GENERATED_NAME, FILTER,         \
-                                        ALLOWED_VALUES, SUBTAGS)        \
-    case TYPE:                                                          \
+#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,   \
+                                  GENERATED_NAME, FILTER, ALLOWED_VALUES, \
+                                  SUBTAGS)                                \
+    case TYPE:                                                            \
         return NAME_LOWER;
 
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                        GENERATED_NAME, FILTER,         \
-                                        ALLOWED_VALUES, SUBTAGS)        \
+                                         GENERATED_NAME, FILTER,               \
+                                         ALLOWED_VALUES, SUBTAGS)
 
-#define ADD_LAYOUT_ATTRIBUTE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                        GENERATED_NAME, FILTER,         \
-                                        ALLOWED_VALUES, SUBTAGS)        \
-    case TYPE:                                                          \
+#define ADD_LAYOUT_ATTRIBUTE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,   \
+                                       GENERATED_NAME, FILTER, ALLOWED_VALUES, \
+                                       SUBTAGS)                                \
+    case TYPE:                                                                 \
         return NAME_LOWER;
 
 #include "generated-config/ast_layout_attribute_type.h"

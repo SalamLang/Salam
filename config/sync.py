@@ -558,7 +558,7 @@ def sync_file(file: Dict[str, Any]) -> None:
         f.write("\n")
 
 
-def generate_document():
+def generate_document() -> str:
     LAYOUT_TYPE_FILE = "layout/type.yaml"
     LAYOUT_ATTRIBUTE_TYPE_FILE = "layout/attribute/type.yaml"
 
@@ -572,7 +572,7 @@ def generate_document():
 
     docs = '<div dir="rtl">\n\n# دستورات زبان برنامه نویسی سلام\n\n'
 
-    def get_a_attr(attributes, attr_id):
+    def get_a_attr(attributes: List[Dict], attr_id: str) -> Optional[Dict]:
         for attr in attributes:
             # print(attr.get("id"), attr_id, attr.get("id") == attr_id)
             if attr.get("id") == attr_id:

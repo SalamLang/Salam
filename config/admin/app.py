@@ -1,7 +1,11 @@
 import os
 
+import werkzeug
 import yaml
-from flask import Flask, redirect, render_template, request, session, url_for
+from flask import Flask, redirect, render_template, request, session, url_for, Response
+from typing import List
+
+
 
 app = Flask(__name__)
 app.secret_key = "your_secret_key"
@@ -13,7 +17,7 @@ YAML_DIR = "../"
 LANGUAEG_FILE = "language.yaml"
 
 
-def get_dynamic_columns(data):
+def get_dynamic_columns(data: dict) -> List[str]:
     """
     Extract unique keys from the YAML structure for dynamic columns.
     Ensure:
@@ -21,14 +25,14 @@ def get_dynamic_columns(data):
       - 'text' is the last item if it exists.
       - The resulting list contains unique values in the desired order.
     """
-    columns = set()
+    columns: list[str] = []  # Changed from set to list
 
     if isinstance(data, dict):
         for item in data.get("items", []):
             if isinstance(item, dict):
-                columns.update(item.keys())
+                columns.extend(item.keys())  # Use extend to add multiple items at once
 
-    columns = list(columns)
+    columns = list(set(columns))  # Remove duplicates while maintaining order
 
     start = 0
     if "id" in columns:
@@ -54,7 +58,7 @@ def get_dynamic_columns(data):
 def get_language_keys() -> list[str]:
     global LANGUAEG_FILE
 
-    keys = set()
+    keys = set()  # This can remain a set
     file_path = os.path.join(YAML_DIR, LANGUAEG_FILE)
 
     data = read_yaml(file_path)
@@ -64,7 +68,8 @@ def get_language_keys() -> list[str]:
             if "id" in item:
                 keys.add(item["id"])
 
-    return keys
+    return list(keys)  # Return as list
+
 
 
 def get_yaml_files() -> list[str]:
@@ -131,7 +136,7 @@ def index() -> str:
 
 
 @app.route("/edit/<path:filepath>", methods=["POST"])
-def edit_file_action(filepath: str):
+def edit_file_action(filepath: str) -> werkzeug.Response:
     """
     Handles editing an existing YAML file by receiving new data via POST request.
 
@@ -183,7 +188,7 @@ def edit_file(filepath: str) -> str:
     file_path = os.path.join(YAML_DIR, filepath)
 
     if not os.path.exists(file_path) or not os.path.isfile(file_path):
-        return redirect(url_for("index"))
+        return werkzeug.redirect(url_for("index"))
 
     data = read_yaml(file_path)
     columns = get_dynamic_columns(data)
@@ -220,7 +225,7 @@ def add_file_action() -> str:
         session["message"] = "Filename is required."
         session["message_type"] = "error"
 
-        return redirect(url_for("index"))
+        return werkzeug.redirect(url_for("index"))
 
     new_file = new_file.strip()
 
@@ -228,7 +233,7 @@ def add_file_action() -> str:
         session["message"] = "Filename is required."
         session["message_type"] = "error"
 
-        return redirect(url_for("index"))
+        return werkzeug.redirect(url_for("index"))
 
     new_file = new_file.lstrip("/")
 
@@ -241,13 +246,13 @@ def add_file_action() -> str:
         session["message"] = "Invalid filename or directory traversal attempt."
         session["message_type"] = "error"
 
-        return redirect(url_for("index"))
+        return werkzeug.redirect(url_for("index"))
 
     if os.path.exists(path):
         session["message"] = "File already exists."
         session["message_type"] = "error"
 
-        return redirect(url_for("index"))
+        return werkzeug.redirect(url_for("index"))
 
     try:
         write_yaml(path, {"items": []})
@@ -255,12 +260,12 @@ def add_file_action() -> str:
         session["message"] = "File created."
         session["message_type"] = "ok"
 
-        return redirect(url_for("index"))
+        return werkzeug.redirect(url_for("index"))
     except Exception as e:
         session["message"] = f"Failed to create file: {e}"
         session["message_type"] = "error"
 
-        return redirect(url_for("index"))
+        return werkzeug.redirect(url_for("index"))
 
 
 @app.route("/delete-file/<path:filepath>", methods=["POST"])
@@ -292,7 +297,7 @@ def delete_file_action(filepath: str) -> str:
         session["message"] = f"File '{filepath}' not found or invalid path."
         session["message_type"] = "error"
 
-    return redirect(url_for("index"))
+    return werkzeug.redirect(url_for("index"))
 
 
 if __name__ == "__main__":

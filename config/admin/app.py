@@ -15,7 +15,7 @@ YAML_DIR = "../"
 LANGUAEG_FILE = "language.yaml"
 
 
-def get_dynamic_columns(data):
+def get_dynamic_columns(data: dict) -> List[str]:
     """
     Extract unique keys from the YAML structure for dynamic columns.
     Ensure:
@@ -117,7 +117,7 @@ def write_yaml(file_path: str, data: dict) -> None:
 
 
 @app.route("/")
-def index():
+def index() -> str:
     """
     Displays the main admin panel page with a list of YAML files and error messages if present.
 

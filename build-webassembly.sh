@@ -67,7 +67,7 @@ if [ $? -eq 0 ]; then
 	if command -v npx >/dev/null 2>&1; then
 		echo "Transpiling JavaScript for older browsers..."
 
-		if yes | npx babel ${OUTPUT_BASE}.js --out-file ${OUTPUT_BASE}.transpiled.js --compact false; then
+		if yes | npx bun transpile ${OUTPUT_BASE}.js --out-file ${OUTPUT_BASE}.transpiled.js; then
 			mv ${OUTPUT_BASE}.transpiled.js ${OUTPUT_BASE}.js
 		else
 			echo "Warning: Babel transpiling failed. JavaScript was not transpiled."

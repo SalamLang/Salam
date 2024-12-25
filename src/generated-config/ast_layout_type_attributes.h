@@ -8,8 +8,6 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_INCLUDE) {
         return true;
     }
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_PARAGRAPH_RAW) {
-}
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_ERROR) {
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_NONE) {

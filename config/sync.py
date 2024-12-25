@@ -225,7 +225,7 @@ def prettify_layout_attribute_style_value(
     if key == "unknown_key":
         print("Warning: Missing 'id' in item:", item)
 
-    print(item,"")
+    print(item, "")
 
     result = "const ast_layout_attribute_style_pair_t " + key + "[] = {\n"
 
@@ -565,12 +565,16 @@ def generate_document() -> str:
     # Open and read the first file
     with open(LAYOUT_TYPE_FILE, "r", encoding="utf-8") as f:
         content = yaml.safe_load(f)
-    items = content.get("items", [])  # Safe get with default empty list if "items" is not found or None
+    items = content.get(
+        "items", []
+    )  # Safe get with default empty list if "items" is not found or None
 
     # Open and read the second file
     with open(LAYOUT_ATTRIBUTE_TYPE_FILE, "r", encoding="utf-8") as f:
         content = yaml.safe_load(f)
-    attributes = content.get("items", [])  # Safe get with default empty list if "items" is not found or None
+    attributes = content.get(
+        "items", []
+    )  # Safe get with default empty list if "items" is not found or None
 
     docs = '<div dir="rtl">\n\n# دستورات زبان برنامه نویسی سلام\n\n'
 
@@ -632,8 +636,7 @@ def generate_document() -> str:
             docs += "\n"
 
     docs += "\n</div>\n"
-    
-    return docs
+
     return docs
 
 

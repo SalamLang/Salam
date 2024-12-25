@@ -3,6 +3,8 @@ import os
 import werkzeug
 import yaml
 from flask import Flask, redirect, render_template, request, session, url_for, Response
+from typing import List
+
 
 
 app = Flask(__name__)
@@ -23,14 +25,14 @@ def get_dynamic_columns(data: dict) -> List[str]:
       - 'text' is the last item if it exists.
       - The resulting list contains unique values in the desired order.
     """
-    columns = set()
+    columns: list[str] = []  # Changed from set to list
 
     if isinstance(data, dict):
         for item in data.get("items", []):
             if isinstance(item, dict):
-                columns.update(item.keys())
+                columns.extend(item.keys())  # Use extend to add multiple items at once
 
-    columns = list(columns)
+    columns = list(set(columns))  # Remove duplicates while maintaining order
 
     start = 0
     if "id" in columns:
@@ -56,7 +58,7 @@ def get_dynamic_columns(data: dict) -> List[str]:
 def get_language_keys() -> list[str]:
     global LANGUAEG_FILE
 
-    keys = set()
+    keys = set()  # This can remain a set
     file_path = os.path.join(YAML_DIR, LANGUAEG_FILE)
 
     data = read_yaml(file_path)
@@ -66,7 +68,8 @@ def get_language_keys() -> list[str]:
             if "id" in item:
                 keys.add(item["id"])
 
-    return list(keys)
+    return list(keys)  # Return as list
+
 
 
 def get_yaml_files() -> list[str]:

@@ -562,32 +562,33 @@ def generate_document() -> str:
     LAYOUT_TYPE_FILE = "layout/type.yaml"
     LAYOUT_ATTRIBUTE_TYPE_FILE = "layout/attribute/type.yaml"
 
-    f = open(LAYOUT_TYPE_FILE, "r", encoding="utf-8")
-    content = yaml.safe_load(f)
-    items = content["items"]
+    # Open and read the first file
+    with open(LAYOUT_TYPE_FILE, "r", encoding="utf-8") as f:
+        content = yaml.safe_load(f)
+    items = content.get("items", [])  # Safe get with default empty list if "items" is not found or None
 
-    f = open(LAYOUT_ATTRIBUTE_TYPE_FILE, "r", encoding="utf-8")
-    content = yaml.safe_load(f)
-    attributes = content["items"]
+    # Open and read the second file
+    with open(LAYOUT_ATTRIBUTE_TYPE_FILE, "r", encoding="utf-8") as f:
+        content = yaml.safe_load(f)
+    attributes = content.get("items", [])  # Safe get with default empty list if "items" is not found or None
 
     docs = '<div dir="rtl">\n\n# دستورات زبان برنامه نویسی سلام\n\n'
 
     def get_a_attr(attributes: List[Dict], attr_id: str) -> Optional[Dict]:
         for attr in attributes:
-            # print(attr.get("id"), attr_id, attr.get("id") == attr_id)
             if attr.get("id") == attr_id:
                 return attr
         return None
 
     for item in items:
-        id = item.get("id").replace("AST_LAYOUT_TYPE_", "").lower()
+        id = item.get("id", "").replace("AST_LAYOUT_TYPE_", "").lower()
 
         descriptions = item.get("description", {})
         if descriptions is None or descriptions == "":
             descriptions = {}
 
         values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
-        first_value = values[0]
+        first_value = values[0] if values else ""
 
         generate_name = item.get("generate_name", "")
         is_mother = item.get("is_mother", False)
@@ -619,21 +620,20 @@ def generate_document() -> str:
             docs += "|-----------|------------|-------|\n"
             for attr in allowed_attributes:
                 attr_item = get_a_attr(attributes, attr)
-                # print("attr_item: ", attr_item, attr)
-                # print(attributes)
+                if attr_item is not None:
+                    attr_generated_name = attr_item.get("generate_name", "")
+                    attr_names = attr_item.get("text", {}).get(SELECTED_LANGUAGE, [])
+                    attr_description = attr_item.get("description", {}).get(
+                        SELECTED_LANGUAGE, ""
+                    )
+                    attr_names_str = "<br>".join(f"`{item}`" for item in attr_names)
 
-                attr_generated_name = attr_item.get("generate_name", "")
-                attr_names = attr_item.get("text", {}).get(SELECTED_LANGUAGE, [])
-                attr_description = attr_item.get("description", {}).get(
-                    SELECTED_LANGUAGE, ""
-                )
-                attr_names_str = "<br>".join(f"`{item}`" for item in attr_names)
-
-                docs += f"| {attr_names_str} | {attr_description} | `{attr_generated_name}` |\n"
+                    docs += f"| {attr_names_str} | {attr_description} | `{attr_generated_name}` |\n"
             docs += "\n"
 
     docs += "\n</div>\n"
-
+    
+    return docs
     return docs
 
 

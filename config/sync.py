@@ -68,18 +68,11 @@ def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) 
     global SELECTED_LANGUAGE
 
     itemid = item["id"]
-    idtext = itemid.replace("AST_LAYOUT_ATTRIBUTE_TYPE_", "")
-    # idtextlower = idtext.lower()
-
-    # generate_name = item.get("generate_name", "")
 
     values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
 
     key_normal = "ADD_LAYOUT_ATTRIBUTE_TYPE"
     key_repeat = "ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT"
-
-    # reserved_values = item.get("reserved_values", "")
-    # type_value = item.get("type", "AST_LAYOUY_ATTRIBUTE_STYLE_FILTER_STRING")
 
     if type(values) is not str:
         result = ""

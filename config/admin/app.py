@@ -1,11 +1,9 @@
 import os
+from typing import List
 
 import werkzeug
 import yaml
-from flask import Flask, redirect, render_template, request, session, url_for, Response
-from typing import List
-
-
+from flask import Flask, Response, redirect, render_template, request, session, url_for
 
 app = Flask(__name__)
 app.secret_key = "your_secret_key"
@@ -69,7 +67,6 @@ def get_language_keys() -> list[str]:
                 keys.add(item["id"])
 
     return list(keys)  # Return as list
-
 
 
 def get_yaml_files() -> list[str]:

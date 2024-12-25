@@ -221,9 +221,11 @@ def prettify_layout_attribute_style_value(
     """
     global SELECTED_LANGUAGE
 
-    key = item.get("id")
+    key = item.get("id", "unknown_key")  # Default value if id is missing
+    if key == "unknown_key":
+        print("Warning: Missing 'id' in item:", item)
 
-    print(item)
+    print(item,"")
 
     result = "const ast_layout_attribute_style_pair_t " + key + "[] = {\n"
 
@@ -256,7 +258,9 @@ def prettify_layout_attribute_value(item: Dict[str, Any], group: Dict[str, Any])
     """
     global SELECTED_LANGUAGE
 
-    key = item.get("id")
+    key = item.get("id", "unknown_key")  # Default value if id is missing
+    if key == "unknown_key":
+        print("Warning: Missing 'id' in item:", item)
 
     print(item)
 

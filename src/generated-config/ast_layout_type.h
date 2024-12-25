@@ -4,7 +4,7 @@
 // ----------- BEGIN AUTO GENERATED ----------- //
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_INCLUDE, "INCLUDE", "include", "", "بارگیری", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PARAGRAPH_RAW, "PARAGRAPH_RAW", "paragraph_raw", "", "محتوا", false)
+// ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PARAGRAPH_RAW, "PARAGRAPH_RAW", "paragraph_raw", "", "محتوا", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ERROR, "ERROR", "error", "", "خطا", false)
 

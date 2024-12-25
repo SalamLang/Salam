@@ -67,8 +67,6 @@ def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) 
     """
     global SELECTED_LANGUAGE
 
-    itemid = item["id"]
-
     values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
 
     key_normal = "ADD_LAYOUT_ATTRIBUTE_TYPE"

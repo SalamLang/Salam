@@ -170,9 +170,7 @@ bool token_belongs_to_ast_layout_node(
     ast_layout_attribute_t *attribute) {
     DEBUG_ME;
 
-    if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
-        return is_layout_node_a_single_tag(attribute->parent_node_type) ? false : true;
-    } else if (attribute->parent_node_type == AST_LAYOUT_TYPE_INCLUDE &&
+    if (attribute->parent_node_type == AST_LAYOUT_TYPE_INCLUDE &&
                    (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_SRC ||
                     attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT))
                     {
@@ -195,6 +193,10 @@ bool token_belongs_to_ast_layout_node(
     if (false) {
     }
 #include "generated-config/ast_layout_type_attributes.h"
+    
+    if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
+        return is_layout_node_a_single_tag(attribute->parent_node_type) ? false : true;
+    }
 
     return false;
 }

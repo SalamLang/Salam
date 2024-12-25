@@ -55,7 +55,8 @@ emcc "${sources[@]}" -o ${OUTPUT_BASE}.html \
 	${RUNTIME_FLAGS} \
 	${COMMON_FLAGS} \
 	${DEBUG_FLAGS} \
-	-s EXPORTED_FUNCTIONS="['_main']"
+	# -s EXPORTED_FUNCTIONS="['_main']"
+	# -v\
 
 if [ $? -eq 0 ]; then
 	echo "Compilation successful. Output files:"
@@ -66,7 +67,7 @@ if [ $? -eq 0 ]; then
 	if command -v npx >/dev/null 2>&1; then
 		echo "Transpiling JavaScript for older browsers..."
 
-		if npx --no-install babel ${OUTPUT_BASE}.js --out-file ${OUTPUT_BASE}.transpiled.js --compact false; then
+		if yes | npx babel ${OUTPUT_BASE}.js --out-file ${OUTPUT_BASE}.transpiled.js --compact false; then
 			mv ${OUTPUT_BASE}.transpiled.js ${OUTPUT_BASE}.js
 		else
 			echo "Warning: Babel transpiling failed. JavaScript was not transpiled."

@@ -1,7 +1,7 @@
 import yaml
 
 
-def convert_yaml(input_file, output_file):
+def convert_yaml(input_file: str, output_file: str) -> None:
     with open(input_file, "r", encoding="utf-8") as file:
         data = yaml.safe_load(file)
 

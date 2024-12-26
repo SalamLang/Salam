@@ -32,7 +32,7 @@ typedef enum {
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_FILTER(TYPE, NAME, NAME_LOWER) TYPE,
 
 #include "generated-config/ast_layout_attribute_style_filter.h"
-} ast_layout_attribute_style_filter_t;
+} AST_LAYOUT_ATTRIBUTE_FILTER_t;
 
 typedef struct ast_layout_style_state_t {
     struct hashmap_t *normal;

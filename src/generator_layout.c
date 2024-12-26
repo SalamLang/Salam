@@ -624,6 +624,20 @@ void generator_code_layout(generator_t *generator) {
 void generator_code_layout_html(generator_t* generator, ast_layout_block_t *layout_block,
                                 string_t *html) {
     DEBUG_ME;
+    if (layout_block->attributes != NULL) {
+        size_t attributes_capacity = layout_block->attributes->capacity;
+        for (size_t i = 0; i < attributes_capacity; i++) {
+            hashmap_entry_t *entry = layout_block->attributes->data[i];
+
+            while (entry) {
+                ast_layout_attribute_t *attribute = entry->value;
+
+                generator_code_layout_value(
+                    layout_block->attributes, NULL, attribute);
+            }
+        }
+    }
+
     string_t *str_attributes =
         generator_code_layout_attributes(generator, layout_block, true);
 

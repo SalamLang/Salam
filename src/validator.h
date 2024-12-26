@@ -112,4 +112,17 @@ bool token_belongs_to_ast_layout_node(
  */
 void validate_layout_mainbody(ast_layout_block_t *block);
 
+/**
+ *
+ * @function validate_value
+ * @brief Validate the value
+ * @params {hashmap_t*} attributes - Attributes
+ * @params {hashmap_t*} new_attributes - New Attributes
+ * @params {ast_layout_attribute_t*} attribute - Layout attribute
+ * @returns {bool} - True if the value is valid, false otherwise
+ *
+ */
+bool validate_value(hashmap_t *attributes, hashmap_t *new_attributes,
+                          ast_layout_attribute_t *attribute);
+
 #endif

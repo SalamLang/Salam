@@ -107,12 +107,13 @@ string_t *generator_code_layout_styles(hashmap_layout_attribute_t *styles,
  *
  * @function generator_code_layout_html
  * @brief Generate the HTML code for the layout block
+ * @params {generator_t*} generator
  * @params {ast_layout_block_t*} layout_block - Layout block
  * @params {string_t*} html - HTML string
  * @returns {void}
  *
  */
-void generator_code_layout_html(ast_layout_block_t *layout_block,
+void generator_code_layout_html(generator_t* generator, ast_layout_block_t *layout_block,
                                 string_t *html);
 /**
  *
@@ -120,11 +121,13 @@ void generator_code_layout_html(ast_layout_block_t *layout_block,
  * @brief Generate the HTML code for the layout block attributes
  * @params {generator_t} generator - Generator
  * @params {ast_layout_block_t*} block - Layout block
+ * @params {bool} notIgnoreBelongsToLayout
  * @returns {string_t*}
  *
  */
 string_t *generator_code_layout_attributes(generator_t *generator,
-                                           ast_layout_block_t *block);
+                                           ast_layout_block_t *block, bool notIgnoreBelongsToLayout);
+
 /**
  *
  * @function generator_code_head_meta_children

@@ -37,7 +37,7 @@ string_t *generator_code_layout_block_item(generator_t *generator,
     DEBUG_ME;
     string_t *layout_block_str = string_create(1024);
     string_t *node_attributes_str =
-        generator_code_layout_attributes(generator, node->block);
+        generator_code_layout_attributes(generator, node->block, false);
     char *node_name = generator_code_layout_node_type(node->type);
 
     hashmap_t *attributes = node->block->attributes;
@@ -259,7 +259,7 @@ void generator_code_layout_body(generator_t *generator,
 
     string_append_str(body_tag, "<body");
     string_t *body_attributes =
-        generator_code_layout_attributes(generator, layout_block);
+        generator_code_layout_attributes(generator, layout_block, false);
     if (body_attributes->length > 0) {
         string_append_char(body_tag, ' ');
     }
@@ -554,7 +554,7 @@ void generator_code_layout(generator_t *generator) {
             string_append_str(html, "<!doctype html>\n");
             string_append_str(html, "<html");
 
-            generator_code_layout_html(generator->ast->layout->block, html);
+            generator_code_layout_html(generator, generator->ast->layout->block, html);
 
             string_append_str(html, ">\n");
 
@@ -615,87 +615,27 @@ void generator_code_layout(generator_t *generator) {
  *
  * @function generator_code_layout_html
  * @brief Generate the HTML code for the layout block
+ * @params {generator_t*} generator
  * @params {ast_layout_block_t*} layout_block - Layout block
  * @params {string_t*} html - HTML string
  * @returns {void}
  *
  */
-void generator_code_layout_html(ast_layout_block_t *layout_block,
+void generator_code_layout_html(generator_t* generator, ast_layout_block_t *layout_block,
                                 string_t *html) {
     DEBUG_ME;
-    // LANG
-    ast_layout_attribute_t *html_lang =
-        hashmap_get(cast(hashmap_t *, layout_block->attributes), "lang");
-    char *html_lang_value = NULL;
-    string_append_str(html, " lang=\"");
-    if (html_lang != NULL) {
-        char *values = array_value_stringify(html_lang->values, ", ");
-        html_lang_value = string_lower_str(values);
 
-        if (values != NULL) {
-            memory_destroy(values);
-        }
-    }
-    if (html_lang_value == NULL || strcmp(html_lang_value, "") == 0) {
-        string_append_str(html, "fa-IR");
-    } else if (strcmp(html_lang_value, "fa") == 0 ||
-               strcmp(html_lang_value, "fa-ir") == 0 ||
-               strcmp(html_lang_value, "fa_ir") == 0) {
-        string_append_str(html, "fa-IR");
-    } else if (strcmp(html_lang_value, "en") == 0 ||
-               strcmp(html_lang_value, "en-us") == 0 ||
-               strcmp(html_lang_value, "en_us") == 0) {
-        string_append_str(html, "en-US");
-    } else {
-        if (html_lang_value != NULL) {
-            memory_destroy(html_lang_value);
-        }
+    printf("generator_code_layout_html\n");
+    
+    string_t *str_attributes =
+        generator_code_layout_attributes(generator, layout_block, true);
 
-        error_generator(2, "Invalid value for lang attribute in layout block!");
-    }
-    string_append_str(html, "\"");
-
-    // DIR
-    ast_layout_attribute_t *html_dir =
-        hashmap_get(cast(hashmap_t *, layout_block->attributes), "dir");
-    char *html_dir_value = NULL;
-    string_append_str(html, " dir=\"");
-    if (html_dir != NULL) {
-        char *values = array_value_stringify(html_dir->values, ", ");
-        html_dir_value = string_lower_str(values);
-
-        if (values != NULL) {
-            memory_destroy(values);
-        }
+    if (str_attributes->length > 0) {
+        string_append_char(html, ' ');
+        string_append(html, str_attributes);
     }
 
-    printf("DIR--->%s\n", html_dir_value);
-    printf("LANG--->%s\n", html_lang_value);
-
-    if (html_dir_value == NULL || strcmp(html_dir_value, "") == 0) {
-        string_append_str(html, "rtl");
-    } else if (strcmp(html_dir_value, "ltr") == 0) {
-        string_append_str(html, "ltr");
-    } else if (strcmp(html_dir_value, "rtl") == 0) {
-        string_append_str(html, "rtl");
-    } else {
-        if (html_lang_value != NULL) {
-            memory_destroy(html_lang_value);
-        }
-        if (html_dir_value != NULL) {
-            memory_destroy(html_dir_value);
-        }
-
-        error_generator(2, "Invalid value for dir attribute in layout block!");
-    }
-    string_append_str(html, "\"");
-
-    if (html_lang_value != NULL) {
-        memory_destroy(html_lang_value);
-    }
-    if (html_dir_value != NULL) {
-        memory_destroy(html_dir_value);
-    }
+    string_destroy(str_attributes);
 }
 
 /**
@@ -704,12 +644,14 @@ void generator_code_layout_html(ast_layout_block_t *layout_block,
  * @brief Generate the HTML code for the layout block attributes
  * @params {generator_t} generator - Generator
  * @params {ast_layout_block_t*} block - Layout block
+ * @params {bool} notIgnoreBelongsToLayout
  * @returns {string_t*}
  *
  */
 string_t *generator_code_layout_attributes(generator_t *generator,
-                                           ast_layout_block_t *block) {
+                                           ast_layout_block_t *block, bool notIgnoreBelongsToLayout) {
     DEBUG_ME;
+    printf("generator_code_layout_attributes\n");
     size_t html_attributes_length = 0;
     size_t css_attributes_length = 0;
 
@@ -727,12 +669,15 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                 while (entry) {
                     ast_layout_attribute_t *attribute =
                         cast(ast_layout_attribute_t *, entry->value);
+
                     if (attribute == NULL) {
                         entry = cast(hashmap_entry_t *, entry->next);
                         continue;
                     }
 
-                    if (attribute->ignoreMe == true ||
+                    if (
+                        (notIgnoreBelongsToLayout == true && attribute->ignoreMe == true && attribute->belongsToLayout == false) ||
+                        (notIgnoreBelongsToLayout == false && attribute->ignoreMe == true) ||
                         attribute->isContent == true ||
                         attribute->isStyle == true) {
                     } else {

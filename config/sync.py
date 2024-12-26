@@ -225,7 +225,7 @@ def prettify_layout_attribute_style_value_extern(
     if key == "unknown_key":
         print("Warning: Missing 'id' in item:", item)
 
-    result = "extern const ast_layout_attribute_style_pair_t " + key + ";\n"
+    result = "extern const ast_layout_attribute_style_pair_t " + key + "[];\n"
 
     return result
 
@@ -281,7 +281,7 @@ def prettify_layout_attribute_value_extern(item: Dict[str, Any], group: Dict[str
     if key == "unknown_key":
         print("Warning: Missing 'id' in item:", item)
 
-    result = "extern const ast_layout_attribute_pair_t " + key + ";\n"
+    result = "extern const ast_layout_attribute_pair_t " + key + "[];\n"
 
     return result
 

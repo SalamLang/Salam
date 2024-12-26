@@ -28,11 +28,11 @@
 #include <string.h>
 
 typedef enum {
-#undef ADD_LAYOUT_ATTRIBUTE_STYLE_FILTER
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_FILTER(TYPE, NAME, NAME_LOWER) TYPE,
+#undef ADD_LAYOUT_ATTRIBUTE_FILTER
+#define ADD_LAYOUT_ATTRIBUTE_FILTER(TYPE, NAME, NAME_LOWER) TYPE,
 
-#include "generated-config/ast_layout_attribute_style_filter.h"
-} AST_LAYOUT_ATTRIBUTE_FILTER_t;
+#include "generated-config/ast_layout_attribute_filter.h"
+} ast_layout_attribute_filter_t;
 
 typedef struct ast_layout_style_state_t {
     struct hashmap_t *normal;

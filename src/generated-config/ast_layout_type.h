@@ -6,7 +6,7 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_INCLUDE, "INCLUDE", "include", "", "بارگیر
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ERROR, "ERROR", "error", "", "خطا", false)
 
-ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_NONE, "NONE", "none", "", "صفحه", false)
+ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_LAYOUT, "LAYOUT", "layout", "", "صفحه", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_DIV, "DIV", "div", "div", "جعبه", false)
 
@@ -127,6 +127,13 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA, "MEDIA", "media", "@media", "واکنش �
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_MEDIA, "MEDIA", "media", "@media", "واکنش‌گرا", true)
 
 // ----------- END AUTO GENERATED ----------- //
+
+
+
+
+
+
+
 
 
 

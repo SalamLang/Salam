@@ -337,6 +337,39 @@ def prettify_layout_attribute_style_state_type(
         )
 
 
+def prettify_layout_type_attributes_values(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+    """
+    Generates a formatted string for a layout type definition.
+
+    :param item: A dictionary representing the layout type item.
+    :param group: A dictionary representing the group the item belongs to.
+    :return: A formatted string for the layout type.
+    """
+
+    attributes = item.get("attributes", [])
+    if attributes is None:
+        attributes = []
+
+    if "generate_name" in item:
+        itemid = item["id"]
+        itemid_lower = itemid.replace("AST_LAYOUT_TYPE_", "").lower()
+
+        result = ""
+
+        var_attrs = f"valid_attributes_{itemid_lower}"
+        var_attrs_length = f"valid_attributes_{itemid_lower}_length"
+
+        if len(attributes) > 0:
+            result += f"ast_layout_attribute_type_t {var_attrs}[] = " + "{\n"
+            for attr in attributes:
+                result += "    " + attr + ",\n"
+            result += "};\n"
+            result += f"const size_t {var_attrs_length} = sizeof({var_attrs}) / sizeof({var_attrs}[0]);\n"
+
+        return result
+    else:
+        return ""
+
 def prettify_layout_type_attributes(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     """
     Generates a formatted string for a layout type definition.
@@ -351,24 +384,16 @@ def prettify_layout_type_attributes(item: Dict[str, Any], group: Dict[str, Any])
         attributes = []
 
     if "generate_name" in item:
-        result = ""
         itemid = item["id"]
+        itemid_lower = itemid.replace("AST_LAYOUT_TYPE_", "").lower()
 
-        result += "else if (attribute->parent_node_type == " + str(itemid) + ") {\n"
+        result = f"if (attribute->parent_node_type == {itemid}) " + "{\n"
+
+        var_attrs = f"valid_attributes_{itemid_lower}"
+        var_attrs_length = f"valid_attributes_{itemid_lower}_length"
 
         if len(attributes) > 0:
-            result += "    ast_layout_attribute_type_t valid_attributes[] = {\n"
-            for attr in attributes:
-                result += "        " + attr + ",\n"
-            result += "    };\n"
-
-            result += "    const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);\n"
-
-            result += "    if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {\n"
-            # result += "        if (attribute->final_key != NULL) {\n"
-            # result += "            memory_destroy(attribute->final_key);\n"
-            # result += "        }\n"
-
+            result += f"    if (is_attribute_type_in_array(attribute_key_type, {var_attrs}, {var_attrs_length})) " + "{\n"
             result += "        return true;\n"
             result += "    }\n"
 
@@ -446,6 +471,11 @@ FILES = [
         "input": "layout/type.yaml",
         "output": "ast_layout_type_attributes.h",
         "prettify": prettify_layout_type_attributes,
+    },
+    {
+        "input": "layout/type.yaml",
+        "output": "ast_layout_type_attributes_values.h",
+        "prettify": prettify_layout_type_attributes_values,
     },
     {
         "input": "layout/attribute/type.yaml",

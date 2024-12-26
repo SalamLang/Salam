@@ -23,6 +23,7 @@
 
 #include "validator.h"
 
+#include "generated-config/ast_layout_attribute_style_value.h"
 #include "generated-config/ast_layout_type_attributes_values.h"
 
 /**

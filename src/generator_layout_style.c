@@ -181,7 +181,7 @@ string_t *generator_code_layout_styles(hashmap_layout_attribute_t *styles,
 void generator_code_layout_value(hashmap_t *attrs, hashmap_t *new_attrs,
                                        ast_layout_attribute_t *attribute) {
     DEBUG_ME;
-    bool isValid = validate_style_value(attrs, new_attrs, attribute);
+    bool isValid = validate_value(attrs, new_attrs, attribute);
 
     if (isValid == false) {
         printf("%d\n", attribute->parent_node_type);

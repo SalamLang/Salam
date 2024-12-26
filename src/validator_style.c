@@ -1057,7 +1057,7 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
                strlen(first->data.string_value) == 0) {
         error_validator(
             2,
-            "Empty value for '%s' attribute in '%s' element is "
+            "Empty value for '%s' style attribute in '%s' element is "
             "not allowed at "
             "line %zu column %zu!",
             attribute->key,

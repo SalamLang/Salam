@@ -191,7 +191,7 @@ void parser_parse_layout_block_children(ast_layout_block_t *block,
         }
 
         if (node->type == AST_LAYOUT_TYPE_FONT) {
-            if (block->parent_node_type != AST_LAYOUT_TYPE_NONE) {
+            if (block->parent_node_type != AST_LAYOUT_TYPE_LAYOUT) {
                 error_parser(2,
                              "Font node is not allowed in the '%s' block at "
                              "line %d, column %d",

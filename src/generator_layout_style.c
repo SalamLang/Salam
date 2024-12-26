@@ -170,6 +170,45 @@ string_t *generator_code_layout_styles(hashmap_layout_attribute_t *styles,
 
 /**
  *
+ * @function generator_code_layout_value
+ * @brief Convert AST layout attribute values to attribute values
+ * @params {hashmap_t*} attrs - Attrs
+ * @params {hashmap_t*} new_attrs - New Attrs
+ * @params {ast_layout_attribute_t*} attribute - Layout Attribute
+ * @returns {void}
+ *
+ */
+void generator_code_layout_value(hashmap_t *attrs, hashmap_t *new_attrs,
+                                       ast_layout_attribute_t *attribute) {
+    DEBUG_ME;
+    bool isValid = validate_style_value(attrs, new_attrs, attribute);
+
+    if (isValid == false) {
+        printf("%d\n", attribute->parent_node_type);
+        error_generator(
+            2,
+            "Invalid value for '%s' attribute in '%s' element at line %zu "
+            "column %zu!",
+            attribute->key,
+            ast_layout_node_type_to_enduser_name(attribute->parent_node_type),
+            attribute->value_location.start_line,
+            attribute->value_location.start_column);
+
+        return;
+    }
+
+    if (attribute->final_key == NULL) {
+        attribute->final_key = string_strdup(attribute->key);
+    }
+
+    if (attribute->final_value == NULL) {
+        attribute->final_value = string_strdup(
+            cast(ast_value_t *, attribute->values->data[0])->data.string_value);
+    }
+}
+
+/**
+ *
  * @function generator_code_layout_style_value
  * @brief Convert AST layout attribute values to CSS attribute values
  * @params {hashmap_t*} styles - Styles
@@ -187,7 +226,7 @@ void generator_code_layout_style_value(hashmap_t *styles, hashmap_t *new_styles,
         printf("%d\n", attribute->parent_node_type);
         error_generator(
             2,
-            "Invalid value for '%s' attribute in '%s' element at line %zu "
+            "Invalid value for '%s' style attribute in '%s' element at line %zu "
             "column %zu!",
             attribute->key,
             ast_layout_node_type_to_enduser_name(attribute->parent_node_type),

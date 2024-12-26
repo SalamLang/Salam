@@ -23,7 +23,6 @@
 
 #include "validator.h"
 
-
 #include "generated-config/ast_layout_type_attributes_values.h"
 
 /**
@@ -148,6 +147,7 @@ void validate_layout_mainbody(ast_layout_block_t *block) {
                                 attribute_key_type, valid_attributes_layout,
                                 valid_attributes_layout_length)) {
                             attribute_value->ignoreMe = true;
+                            attribute_value->belongsToLayout = true;
                         }
 
                         entry = cast(hashmap_entry_t *, entry->next);

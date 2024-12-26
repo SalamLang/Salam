@@ -97,6 +97,7 @@ typedef struct ast_layout_block_t {
     char *text_content;
 
     struct hashmap_t *attributes;
+    // struct hashmap_t *new_attributes;
     ast_layout_style_state_t *styles;
     struct hashmap_t *states;
 

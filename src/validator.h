@@ -56,6 +56,16 @@ extern size_t valid_layout_attributes_length;
 
 /**
  *
+ * @function is_layout_node_a_single_tag
+ * @brief Check if the layout node is a single tag
+ * @params {ast_layout_node_type_t} type - Layout node type
+ * @returns {bool} - True if the layout node is a single tag, false otherwise
+ *
+ */
+bool is_layout_node_a_single_tag(ast_layout_node_type_t type);
+
+/**
+ *
  * @function validate_layout_block
  * @brief Validate and modify the layout block
  * @params {ast_layout_block_t*} block - Layout block

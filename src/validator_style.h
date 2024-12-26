@@ -103,16 +103,6 @@ bool is_style_attribute(ast_layout_attribute_type_t type);
 
 /**
  *
- * @function is_layout_node_a_single_tag
- * @brief Check if the layout node is a single tag
- * @params {ast_layout_node_type_t} type - Layout node type
- * @returns {bool} - True if the layout node is a single tag, false otherwise
- *
- */
-bool is_layout_node_a_single_tag(ast_layout_node_type_t type);
-
-/**
- *
  * @function is_attribute_type_a_style
  * @brief Check if the attribute type is a style
  * @params {ast_layout_attribute_type_t} type - Attribute type

@@ -370,6 +370,7 @@ def prettify_layout_type_attributes_values(item: Dict[str, Any], group: Dict[str
     else:
         return ""
 
+
 def prettify_layout_type_attributes(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     """
     Generates a formatted string for a layout type definition.

@@ -28,41 +28,6 @@
 
 /**
  *
- * @function is_layout_node_a_single_tag
- * @brief Check if the layout node is a single tag
- * @params {ast_layout_node_type_t} type - Layout node type
- * @returns {bool} - True if the layout node is a single tag, false
- * otherwise
- *
- */
-bool is_layout_node_a_single_tag(ast_layout_node_type_t type) {
-    DEBUG_ME;
-    switch (type) {
-#undef ADD_LAYOUT_TYPE
-#undef ADD_LAYOUT_TYPE_HIDE
-#undef ADD_LAYOUT_TYPE_REPEAT
-
-#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, \
-                        IS_MOTHER)                                            \
-    case TYPE:                                                                \
-        return IS_MOTHER;
-
-#define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
-                             ENDUSER_NAME, IS_MOTHER)                \
-    case TYPE:                                                       \
-        return IS_MOTHER;
-
-#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
-                               ENDUSER_NAME, IS_MOTHER)
-
-#include "generated-config/ast_layout_type.h"
-    }
-
-    return false;
-}
-
-/**
- *
  * @function has_font_extension
  * @brief Check if the value has a font extension
  * @params {char*} value - Value

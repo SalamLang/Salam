@@ -159,7 +159,8 @@ bool token_belongs_to_ast_layout_node(
         return true;
     }
 
-#include "generated-config/ast_layout_type_attributes.h"
+    if (false) {}
+    #include "generated-config/ast_layout_type_attributes.h"
     
     if (attribute_key_type == AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT) {
         return is_layout_node_a_single_tag(attribute->parent_node_type) ? false : true;

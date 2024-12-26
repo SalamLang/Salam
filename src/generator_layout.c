@@ -140,7 +140,7 @@ string_t *generator_code_layout_block_item(generator_t *generator,
 
             if (node->type == AST_LAYOUT_TYPE_INPUT &&
                 node->block->text_content != NULL) {
-                string_append_str(node_attributes_str, " value=\"");
+                string_append_str(node_attributes_str, "value=\"");
                 string_append_str(
                     node_attributes_str,
                     node->block

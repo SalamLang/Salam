@@ -209,7 +209,7 @@ def prettify_layout_attribute_style_type(
             return result
 
 
-def prettify_layout_attribute_style_value(
+def prettify_layout_attribute_style_value_extern(
     item: Dict[str, Any], group: Dict[str, Any]
 ) -> str:
     """
@@ -225,7 +225,26 @@ def prettify_layout_attribute_style_value(
     if key == "unknown_key":
         print("Warning: Missing 'id' in item:", item)
 
-    print(item, "")
+    result = "extern const ast_layout_attribute_style_pair_t " + key + ";\n"
+
+    return result
+
+
+def prettify_layout_attribute_style_value(
+    item: Dict[str, Any], group: Dict[str, Any]
+) -> str:
+    """
+    Generates a formatted string for layout attribute style values.
+
+    :param key: A string representing the key name.
+    :param items: A list of dictionaries representing the style value items.
+    :return: A formatted string for the style values.
+    """
+    global SELECTED_LANGUAGE
+
+    key = item.get("id", "unknown_key")  # Default value if id is missing
+    if key == "unknown_key":
+        print("Warning: Missing 'id' in item:", item)
 
     result = "const ast_layout_attribute_style_pair_t " + key + "[] = {\n"
 
@@ -248,7 +267,7 @@ def prettify_layout_attribute_style_value(
     return result
 
 
-def prettify_layout_attribute_value(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+def prettify_layout_attribute_value_extern(item: Dict[str, Any], group: Dict[str, Any]) -> str:
     """
     Generates a formatted string for layout attribute values.
 
@@ -262,7 +281,24 @@ def prettify_layout_attribute_value(item: Dict[str, Any], group: Dict[str, Any])
     if key == "unknown_key":
         print("Warning: Missing 'id' in item:", item)
 
-    print(item)
+    result = "extern const ast_layout_attribute_pair_t " + key + ";\n"
+
+    return result
+
+
+def prettify_layout_attribute_value(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+    """
+    Generates a formatted string for layout attribute values.
+
+    :param key: A string representing the key name.
+    :param items: A list of dictionaries representing the value items.
+    :return: A formatted string for the values.
+    """
+    global SELECTED_LANGUAGE
+
+    key = item.get("id", "unknown_key")  # Default value if id is missing
+    if key == "unknown_key":
+        print("Warning: Missing 'id' in item:", item)
 
     result = "const ast_layout_attribute_pair_t " + key + "[] = {\n"
 
@@ -504,9 +540,19 @@ FILES = [
         "prettify": prettify_layout_attribute_style_value,
     },
     {
+        "input": "layout/attribute/style/value.yaml",
+        "output": "ast_layout_attribute_style_value_extern.h",
+        "prettify": prettify_layout_attribute_style_value_extern,
+    },
+    {
         "input": "layout/attribute/value.yaml",
         "output": "ast_layout_attribute_value.h",
         "prettify": prettify_layout_attribute_value,
+    },
+    {
+        "input": "layout/attribute/value.yaml",
+        "output": "ast_layout_attribute_value_extern.h",
+        "prettify": prettify_layout_attribute_value_extern,
     },
 ]
 

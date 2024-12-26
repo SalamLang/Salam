@@ -67,7 +67,7 @@ def command_layout_style_type(item: Dict[str, Any], prefix: str, value: str) -> 
 
     generate_name = item.get("generate_name", idtextlower)
 
-    type = str(item.get("type", "AST_LAYOUT_ATTRIBUTE_STYLE_FILTER_STRING_ANY"))
+    type = str(item.get("type", "AST_LAYOUT_ATTRIBUTE_FILTER_STRING"))
 
     reserved_values = (
         str(item.get("reserved_values", "NULL")).lower()

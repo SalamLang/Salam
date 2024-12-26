@@ -314,4 +314,23 @@ bool validate_style_value_number(
     const ast_layout_attribute_style_pair_t *allowed_values1,
     const ast_layout_attribute_style_pair_t *allowed_values2);
 
+/**
+ *
+ * @function validate_style_value_colors
+ * @brief Validate the style values color
+ * @params {hashmap_t*} styles - Styles
+ * @params {hashmap_t*} new_styles - New styles
+ * @params {ast_layout_attribute_t*} attribute - Layout attribute
+ * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 -
+ * Allowed values 1
+ * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 -
+ * Allowed values 2
+ * @returns {bool} - True if the style value is valid, false otherwise
+ *
+ */
+bool validate_style_value_colors(
+    hashmap_t *styles, hashmap_t *new_styles, ast_layout_attribute_t *attribute,
+    const ast_layout_attribute_style_pair_t *allowed_values1,
+    const ast_layout_attribute_style_pair_t *allowed_values2);
+    
 #endif

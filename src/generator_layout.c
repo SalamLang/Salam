@@ -624,9 +624,6 @@ void generator_code_layout(generator_t *generator) {
 void generator_code_layout_html(generator_t* generator, ast_layout_block_t *layout_block,
                                 string_t *html) {
     DEBUG_ME;
-
-    printf("generator_code_layout_html\n");
-    
     string_t *str_attributes =
         generator_code_layout_attributes(generator, layout_block, true);
 
@@ -651,7 +648,6 @@ void generator_code_layout_html(generator_t* generator, ast_layout_block_t *layo
 string_t *generator_code_layout_attributes(generator_t *generator,
                                            ast_layout_block_t *block, bool notIgnoreBelongsToLayout) {
     DEBUG_ME;
-    printf("generator_code_layout_attributes\n");
     size_t html_attributes_length = 0;
     size_t css_attributes_length = 0;
 

@@ -387,7 +387,7 @@ def prettify_layout_type_attributes(item: Dict[str, Any], group: Dict[str, Any])
         itemid = item["id"]
         itemid_lower = itemid.replace("AST_LAYOUT_TYPE_", "").lower()
 
-        result = f"if (attribute->parent_node_type == {itemid}) " + "{\n"
+        result = f"else if (attribute->parent_node_type == {itemid}) " + "{\n"
 
         var_attrs = f"valid_attributes_{itemid_lower}"
         var_attrs_length = f"valid_attributes_{itemid_lower}_length"

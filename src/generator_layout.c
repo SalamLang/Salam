@@ -668,6 +668,10 @@ void generator_code_layout_html(ast_layout_block_t *layout_block,
             memory_destroy(values);
         }
     }
+
+    printf("DIR--->%s\n", html_dir_value);
+    printf("LANG--->%s\n", html_lang_value);
+
     if (html_dir_value == NULL || strcmp(html_dir_value, "") == 0) {
         string_append_str(html, "rtl");
     } else if (strcmp(html_dir_value, "ltr") == 0) {

@@ -1,180 +1,135 @@
 // ----------- BEGIN AUTO GENERATED ----------- //
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_INCLUDE) {
-    ast_layout_attribute_type_t valid_attributes[] = {
-        AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
-    };
-    const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_INCLUDE) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_include, valid_attributes_include_length)) {
         return true;
     }
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_ERROR) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_ERROR) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_NONE) {
-    ast_layout_attribute_type_t valid_attributes[] = {
-        AST_LAYOUT_ATTRIBUTE_TYPE_TITLE,
-        AST_LAYOUT_ATTRIBUTE_TYPE_LANG,
-        AST_LAYOUT_ATTRIBUTE_TYPE_DIR,
-        AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR,
-        AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION,
-        AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS,
-        AST_LAYOUT_ATTRIBUTE_TYPE_ICON,
-        AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET,
-        AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH,
-        AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT,
-    };
-    const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_LAYOUT) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_layout, valid_attributes_layout_length)) {
         return true;
     }
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_DIV) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_DIV) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_PARAGRAPH) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_PARAGRAPH) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_BUTTON) {
-    ast_layout_attribute_type_t valid_attributes[] = {
-        AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
-    };
-    const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_BUTTON) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_button, valid_attributes_button_length)) {
         return true;
     }
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_TEXTAREA) {
-    ast_layout_attribute_type_t valid_attributes[] = {
-        AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
-        AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,
-        AST_LAYOUT_ATTRIBUTE_TYPE_PLACEHOLDER,
-    };
-    const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_TEXTAREA) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_textarea, valid_attributes_textarea_length)) {
         return true;
     }
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_LABEL) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_LABEL) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_SELECT) {
-    ast_layout_attribute_type_t valid_attributes[] = {
-        AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
-    };
-    const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_SELECT) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_select, valid_attributes_select_length)) {
         return true;
     }
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FIELDSET) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_FIELDSET) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_LEGEND) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_LEGEND) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FORM) {
-    ast_layout_attribute_type_t valid_attributes[] = {
-        AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
-        AST_LAYOUT_ATTRIBUTE_TYPE_TYPE,
-        AST_LAYOUT_ATTRIBUTE_TYPE_KIND,
-    };
-    const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_FORM) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_form, valid_attributes_form_length)) {
         return true;
     }
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_OPTGROUP) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_OPTGROUP) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_DATALIST) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_DATALIST) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_SPAN) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_SPAN) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_STRONG) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_STRONG) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_EM) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_EM) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_ITALIC) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_ITALIC) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_BOLD) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_BOLD) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_UNDERLINE) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_UNDERLINE) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_SUB) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_SUB) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_SUP) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_SUP) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_S) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_S) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_HEADER) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_HEADER) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FOOTER) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_FOOTER) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_NAV) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_NAV) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_SECTION) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_SECTION) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_ARTICLE) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_ARTICLE) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_ASIDE) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_ASIDE) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_MAIN) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_MAIN) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FIGURE) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_FIGURE) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FIGCAPTION) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_FIGCAPTION) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_VIDEO) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_VIDEO) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_AUDIO) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_AUDIO) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_IFRAME) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_IFRAME) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_CANVAS) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_CANVAS) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_UL) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_UL) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_LINK) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_LINK) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_OL) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_OL) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_OPTION) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_OPTION) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_LI) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_LI) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_TABLE) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_TABLE) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_TABLE_HEADER) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_TABLE_HEADER) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_TABLE_FOOTER) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_TABLE_FOOTER) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_TABLE_TR) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_TABLE_TR) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_TABLE_TD) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_TABLE_TD) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_TABLE_TH) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_TABLE_TH) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_CAPTION) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_CAPTION) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_COL) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_COL) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_BR) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_BR) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_HR) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_HR) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_INPUT) {
-    ast_layout_attribute_type_t valid_attributes[] = {
-        AST_LAYOUT_ATTRIBUTE_TYPE_VALUE,
-        AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
-        AST_LAYOUT_ATTRIBUTE_TYPE_PLACEHOLDER,
-    };
-    const size_t valid_attributes_length = sizeof(valid_attributes) / sizeof(valid_attributes[0]);
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes, valid_attributes_length)) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_INPUT) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_input, valid_attributes_input_length)) {
         return true;
     }
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_IMG) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_IMG) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FONT) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_FONT) {
 }
-else if (attribute->parent_node_type == AST_LAYOUT_TYPE_MEDIA) {
+if (attribute->parent_node_type == AST_LAYOUT_TYPE_MEDIA) {
 }
 // ----------- END AUTO GENERATED ----------- //
-
-
 
 

@@ -339,7 +339,7 @@ ast_layout_t *ast_layout_create() {
     ast_layout_t *node = memory_allocate(sizeof(ast_layout_t));
 
     node->block =
-        ast_layout_block_create(AST_TYPE_LAYOUT, AST_LAYOUT_TYPE_NONE);
+        ast_layout_block_create(AST_TYPE_LAYOUT, AST_LAYOUT_TYPE_LAYOUT);
 
     node->print = cast(void (*)(void *), ast_layout_print);
     node->destroy = cast(void (*)(void *), ast_layout_destroy);

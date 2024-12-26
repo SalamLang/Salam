@@ -24,7 +24,7 @@
 #include "validator_style.h"
 
 #include "generated-config/ast_layout_attribute_value_extern.h"
-#include "generated-config/ast_layout_attribute_style_value_extern.h"
+#include "generated-config/ast_layout_attribute_style_value.h"
 
 /**
  *

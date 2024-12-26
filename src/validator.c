@@ -24,6 +24,7 @@
 #include "validator.h"
 
 #include "generated-config/ast_layout_attribute_style_value.h"
+#include "generated-config/ast_layout_attribute_value.h"
 #include "generated-config/ast_layout_type_attributes_values.h"
 
 /**
@@ -241,7 +242,6 @@ bool validate_value(hashmap_t *attributes, hashmap_t *new_attributes,
         return false;
     }
 
-
     switch (attribute->type) {
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE_HIDE
@@ -413,7 +413,7 @@ bool validate_value(hashmap_t *attributes, hashmap_t *new_attributes,
         }                                                                      \
     }
 
-#define ADD_LAYOUT_ATTRIBUTE_TYPE_HIDE_REPEAT(                   \
+#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(                   \
     TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
     ALLOWED_VALUES, SUBTAGS)
 
@@ -421,27 +421,12 @@ bool validate_value(hashmap_t *attributes, hashmap_t *new_attributes,
                                              ENDUSER_NAME, GENERATED_NAME, \
                                              FILTER, ALLOWED_VALUES, SUBTAGS)
 
-        default:
-            return false;
-
 #include "generated-config/ast_layout_attribute_type.h"
 
 
-#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
-#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT
-
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,   \
-                                  GENERATED_NAME, FILTER, ALLOWED_VALUES, \
-                                  SUBTAGS)                                \
-    case TYPE:                                                            \
-        return false;
-
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                         GENERATED_NAME, FILTER,               \
-                                         ALLOWED_VALUES, SUBTAGS)
-
-#include "generated-config/ast_layout_attribute_style_type.h"
+default:
+    return false;
     }
 
-    return false;
+    // return false;
 }

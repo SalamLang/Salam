@@ -4,8 +4,6 @@
 // ----------- BEGIN AUTO GENERATED ----------- //
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_INCLUDE, "INCLUDE", "include", "", "بارگیری", false)
 
-// ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_PARAGRAPH_RAW, "PARAGRAPH_RAW", "paragraph_raw", "", "محتوا", false)
-
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_ERROR, "ERROR", "error", "", "خطا", false)
 
 ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_NONE, "NONE", "none", "", "صفحه", false)
@@ -129,4 +127,7 @@ ADD_LAYOUT_TYPE(AST_LAYOUT_TYPE_MEDIA, "MEDIA", "media", "@media", "واکنش �
 ADD_LAYOUT_TYPE_REPEAT(AST_LAYOUT_TYPE_MEDIA, "MEDIA", "media", "@media", "واکنش‌گرا", true)
 
 // ----------- END AUTO GENERATED ----------- //
+
+
+
 

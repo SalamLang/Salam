@@ -36,32 +36,6 @@
 
 /**
  *
- * @function generator_code_layout_style_value
- * @brief Convert AST layout attribute values to CSS attribute values
- * @params {hashmap_t*} styles - Styles
- * @params {hashmap_t*} new_styles - New Styles
- * @params {ast_layout_attribute_t*} attribute - Layout Attribute
- * @returns {void}
- *
- */
-void generator_code_layout_style_value(hashmap_t *styles, hashmap_t *new_styles,
-                                       ast_layout_attribute_t *attribute);
-
-/**
- *
- * @function generator_code_layout_value
- * @brief Convert AST layout attribute values to attribute values
- * @params {hashmap_t*} attrs - Attrs
- * @params {hashmap_t*} new_attrs - New Attrs
- * @params {ast_layout_attribute_t*} attribute - Layout Attribute
- * @returns {void}
- *
- */
-void generator_code_layout_value(hashmap_t *attrs, hashmap_t *new_attrs,
-                                       ast_layout_attribute_t *attribute);
-
-/**
- *
  * @function generator_code_layout_attribute_style_state_type_to_enduser_name
  * @brief Convert style attribute state type to enduser name
  * @params {ast_layout_attribute_style_state_type} type - Style Attribute State

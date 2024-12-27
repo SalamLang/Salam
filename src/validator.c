@@ -252,7 +252,7 @@ bool validate_value(hashmap_t *attributes, hashmap_t *new_attributes,
                                         ALLOWED_VALUES, SUBTAGS)               \
     case TYPE: {                                                               \
         attribute->final_key = string_strdup(GENERATED_NAME);                  \
-        const ast_layout_attribute_style_pair_t *values = ALLOWED_VALUES;      \
+        const ast_layout_attribute_pair_t *values = ALLOWED_VALUES;      \
                                                                                \
         if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_COLOR) {               \
             if (attribute->values->length > 1) {                               \

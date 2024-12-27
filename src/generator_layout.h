@@ -46,7 +46,7 @@
  *
  */
 void generator_code_layout_value(hashmap_t *styles, hashmap_t *new_styles,
-                                       ast_layout_attribute_t *attribute);
+                                 ast_layout_attribute_t *attribute);
 
 /**
  *
@@ -127,7 +127,8 @@ string_t *generator_code_layout_styles(hashmap_layout_attribute_t *styles,
  * @returns {void}
  *
  */
-void generator_code_layout_html(generator_t* generator, ast_layout_block_t *layout_block,
+void generator_code_layout_html(generator_t *generator,
+                                ast_layout_block_t *layout_block,
                                 string_t *html);
 /**
  *
@@ -140,7 +141,8 @@ void generator_code_layout_html(generator_t* generator, ast_layout_block_t *layo
  *
  */
 string_t *generator_code_layout_attributes(generator_t *generator,
-                                           ast_layout_block_t *block, bool notIgnoreBelongsToLayout);
+                                           ast_layout_block_t *block,
+                                           bool notIgnoreBelongsToLayout);
 
 /**
  *

@@ -123,6 +123,6 @@ void validate_layout_mainbody(ast_layout_block_t *block);
  *
  */
 bool validate_value(hashmap_t *attributes, hashmap_t *new_attributes,
-                          ast_layout_attribute_t *attribute);
+                    ast_layout_attribute_t *attribute);
 
 #endif

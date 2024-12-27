@@ -598,7 +598,8 @@ void generator_code_layout(generator_t *generator) {
             string_append_str(html, "<!doctype html>\n");
             string_append_str(html, "<html");
 
-            generator_code_layout_html(generator, generator->ast->layout->block, html);
+            generator_code_layout_html(generator, generator->ast->layout->block,
+                                       html);
 
             string_append_str(html, ">\n");
 
@@ -665,7 +666,8 @@ void generator_code_layout(generator_t *generator) {
  * @returns {void}
  *
  */
-void generator_code_layout_html(generator_t* generator, ast_layout_block_t *layout_block,
+void generator_code_layout_html(generator_t *generator,
+                                ast_layout_block_t *layout_block,
                                 string_t *html) {
     DEBUG_ME;
     if (layout_block->attributes != NULL) {
@@ -676,8 +678,8 @@ void generator_code_layout_html(generator_t* generator, ast_layout_block_t *layo
             while (entry) {
                 ast_layout_attribute_t *attribute = entry->value;
 
-                generator_code_layout_value(
-                    layout_block->attributes, NULL, attribute);
+                generator_code_layout_value(layout_block->attributes, NULL,
+                                            attribute);
 
                 entry = cast(hashmap_entry_t *, entry->next);
             }
@@ -706,7 +708,8 @@ void generator_code_layout_html(generator_t* generator, ast_layout_block_t *layo
  *
  */
 string_t *generator_code_layout_attributes(generator_t *generator,
-                                           ast_layout_block_t *block, bool notIgnoreBelongsToLayout) {
+                                           ast_layout_block_t *block,
+                                           bool notIgnoreBelongsToLayout) {
     DEBUG_ME;
     size_t html_attributes_length = 0;
     size_t css_attributes_length = 0;
@@ -731,9 +734,11 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                         continue;
                     }
 
-                    if (
-                        (notIgnoreBelongsToLayout == true && attribute->ignoreMe == true && attribute->belongsToLayout == false) ||
-                        (notIgnoreBelongsToLayout == false && attribute->ignoreMe == true) ||
+                    if ((notIgnoreBelongsToLayout == true &&
+                         attribute->ignoreMe == true &&
+                         attribute->belongsToLayout == false) ||
+                        (notIgnoreBelongsToLayout == false &&
+                         attribute->ignoreMe == true) ||
                         attribute->isContent == true ||
                         attribute->isStyle == true) {
                     } else {
@@ -988,9 +993,9 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                     ast_layout_attribute_t *attribute =
                         cast(ast_layout_attribute_t *, entry->value);
 
-                    generator_code_layout_value(
-                        node_block->styles->normal, node_block->styles->new,
-                        attribute);
+                    generator_code_layout_value(node_block->styles->normal,
+                                                node_block->styles->new,
+                                                attribute);
 
                     if (attribute == NULL) {
                     } else if (attribute->isStyle == false ||
@@ -1063,7 +1068,7 @@ string_t *generator_code_layout_attributes(generator_t *generator,
 
     if (notIgnoreBelongsToLayout == false) {
         if (((media_queries_length > 0 || css_attributes_length > 0) &&
-            css_attributes->length > 0) ||
+             css_attributes->length > 0) ||
             has_substate == true) {
             if (html_attributes_length > 0 && html_attributes->length > 0) {
                 string_append_char(html_attributes, ' ');
@@ -1110,8 +1115,9 @@ string_t *generator_code_layout_attributes(generator_t *generator,
             }
 
             if (has_substate == true && first_load == true) {
-                string_t *pseudo_elements = generator_code_layout_pseudo_elements(
-                    generator, block, &css_attributes_length);
+                string_t *pseudo_elements =
+                    generator_code_layout_pseudo_elements(
+                        generator, block, &css_attributes_length);
 
                 if (pseudo_elements != NULL) {
                     string_append(generator->css, pseudo_elements);

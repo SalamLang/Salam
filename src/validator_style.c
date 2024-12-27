@@ -23,8 +23,8 @@
 
 #include "validator_style.h"
 
-#include "generated-config/ast_layout_attribute_value_extern.h"
 #include "generated-config/ast_layout_attribute_style_value.h"
+#include "generated-config/ast_layout_attribute_value_extern.h"
 
 /**
  *
@@ -1114,9 +1114,9 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
                                         ALLOWED_VALUES, SUBTAGS)               \
     case TYPE: {                                                               \
         attribute->final_key = string_strdup(GENERATED_NAME);                  \
-        const ast_layout_attribute_pair_t *values = ALLOWED_VALUES;      \
+        const ast_layout_attribute_pair_t *values = ALLOWED_VALUES;            \
                                                                                \
-        if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_COLOR) {               \
+        if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_COLOR) {                     \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \
@@ -1124,149 +1124,143 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
             return validate_style_value_color(styles, new_styles, attribute,   \
                                               ast_layout_allowed_style_color,  \
                                               values);                         \
-        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_STRING) {       \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_STRING) {             \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \
                                                                                \
             return validate_style_value_string(styles, new_styles, attribute,  \
                                                NULL, values);                  \
-        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_STRING_ANY) {   \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_STRING_ANY) {         \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \
                                                                                \
             return true;                                                       \
-        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_STRINGS_ANY) {  \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_STRINGS_ANY) {        \
             attribute->final_value =                                           \
                 array_value_stringify(attribute->values, ",");                 \
                                                                                \
             return true;                                                       \
-        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_SIZE) {         \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_SIZE) {               \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \
                                                                                \
             return validate_style_value_size(styles, new_styles, attribute,    \
                                              NULL, values);                    \
-        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_SIZE_COLOR) {   \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_SIZE_COLOR) {         \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \
                                                                                \
             return validate_style_value_size_color(styles, new_styles,         \
                                                    attribute, NULL, values);   \
-        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_SIZES) {        \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_SIZES) {              \
             return validate_style_value_sizes(styles, new_styles, attribute,   \
                                               NULL, values, false);            \
-        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_SIZES124) {     \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_SIZES124) {           \
             return validate_style_value_sizes(styles, new_styles, attribute,   \
                                               NULL, values, true);             \
-        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_COLORS) {       \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_COLORS) {             \
             return validate_style_value_colors(styles, new_styles, attribute,  \
                                                NULL, values);                  \
-        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_PERCENTAGE) {   \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_PERCENTAGE) {         \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \
                                                                                \
             return validate_style_value_percentage(styles, new_styles,         \
                                                    attribute, NULL, values);   \
-        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_SIZES_COLORS) { \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_SIZES_COLORS) {       \
             return validate_style_value_sizes_colors(styles, new_styles,       \
                                                      attribute, NULL, values); \
-        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_INTEGER) {      \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_INTEGER) {            \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \
                                                                                \
             return validate_style_value_integer(styles, new_styles, attribute, \
                                                 NULL, values);                 \
-        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_FLOAT) {        \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_FLOAT) {              \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \
                                                                                \
             return validate_style_value_float(styles, new_styles, attribute,   \
                                               NULL, values);                   \
-        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_NUMBER) {       \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_NUMBER) {             \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \
                                                                                \
             return validate_style_value_number(styles, new_styles, attribute,  \
                                                NULL, values);                  \
-        } else if (FILTER ==                                                   \
-                   AST_LAYOUT_ATTRIBUTE_FILTER_POSITIVE_INTEGER) {       \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_POSITIVE_INTEGER) {   \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \
                                                                                \
             return validate_style_value_integer(styles, new_styles, attribute, \
                                                 NULL, values);                 \
-        } else if (FILTER ==                                                   \
-                   AST_LAYOUT_ATTRIBUTE_FILTER_POSITIVE_FLOAT) {         \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_POSITIVE_FLOAT) {     \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \
                                                                                \
             return validate_style_value_float(styles, new_styles, attribute,   \
                                               NULL, values);                   \
-        } else if (FILTER ==                                                   \
-                   AST_LAYOUT_ATTRIBUTE_FILTER_POSITIVE_NUMBER) {        \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_POSITIVE_NUMBER) {    \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \
                                                                                \
             return validate_style_value_number(styles, new_styles, attribute,  \
                                                NULL, values);                  \
-        } else if (FILTER ==                                                   \
-                   AST_LAYOUT_ATTRIBUTE_FILTER_NEGATIVE_INTEGER) {       \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_NEGATIVE_INTEGER) {   \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \
                                                                                \
             return validate_style_value_integer(styles, new_styles, attribute, \
                                                 NULL, values);                 \
-        } else if (FILTER ==                                                   \
-                   AST_LAYOUT_ATTRIBUTE_FILTER_NEGATIVE_FLOAT) {         \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_NEGATIVE_FLOAT) {     \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \
                                                                                \
             return validate_style_value_float(styles, new_styles, attribute,   \
                                               NULL, values);                   \
-        } else if (FILTER ==                                                   \
-                   AST_LAYOUT_ATTRIBUTE_FILTER_NEGATIVE_NUMBER) {        \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_NEGATIVE_NUMBER) {    \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \
                                                                                \
             return validate_style_value_number(styles, new_styles, attribute,  \
                                                NULL, values);                  \
-        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_TIME) {         \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_TIME) {               \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \
                                                                                \
             return true;                                                       \
-        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_PIXEL) {        \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_PIXEL) {              \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \
                                                                                \
             return true;                                                       \
-        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_GROUP) {        \
+        } else if (FILTER == AST_LAYOUT_ATTRIBUTE_FILTER_GROUP) {              \
             return true;                                                       \
         } else if (FILTER ==                                                   \
-                   AST_LAYOUT_ATTRIBUTE_FILTER_POSITIVE_PERCENTAGE) {    \
+                   AST_LAYOUT_ATTRIBUTE_FILTER_POSITIVE_PERCENTAGE) {          \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \
                                                                                \
             return true;                                                       \
         } else if (FILTER ==                                                   \
-                   AST_LAYOUT_ATTRIBUTE_FILTER_NEGATIVE_PERCENTAGE) {    \
+                   AST_LAYOUT_ATTRIBUTE_FILTER_NEGATIVE_PERCENTAGE) {          \
             if (attribute->values->length > 1) {                               \
                 return false;                                                  \
             }                                                                  \

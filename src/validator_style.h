@@ -327,5 +327,5 @@ bool validate_style_value_colors(
     hashmap_t *styles, hashmap_t *new_styles, ast_layout_attribute_t *attribute,
     const ast_layout_attribute_pair_t *allowed_values1,
     const ast_layout_attribute_pair_t *allowed_values2);
-    
+
 #endif

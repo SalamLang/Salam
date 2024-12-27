@@ -130,7 +130,7 @@ string_t *generator_code_layout_styles(hashmap_layout_attribute_t *styles,
                 ast_layout_attribute_t *attribute = entry->value;
 
                 generator_code_layout_value(
-                    block->styles->normal, block->styles->new, attribute, attribute->isStyle);
+                    block->styles->normal, block->styles->new, attribute);
 
                 if (attribute->isStyle == false ||
                     attribute->ignoreMe == true) {

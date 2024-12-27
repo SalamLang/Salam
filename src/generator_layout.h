@@ -42,12 +42,11 @@
  * @params {hashmap_t*} styles - Styles
  * @params {hashmap_t*} new_styles - New Styles
  * @params {ast_layout_attribute_t*} attribute - Layout Attribute
- * @params {bool} isStyle - isStyle
  * @returns {void}
  *
  */
 void generator_code_layout_value(hashmap_t *styles, hashmap_t *new_styles,
-                                       ast_layout_attribute_t *attribute, bool isStyle);
+                                       ast_layout_attribute_t *attribute);
 
 /**
  *

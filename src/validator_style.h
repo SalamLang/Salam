@@ -44,11 +44,6 @@ typedef struct ast_layout_attribute_pair_t {
     char *output;
 } ast_layout_attribute_pair_t;
 
-typedef struct ast_layout_attribute_style_pair_t {
-    char *input;
-    char *output;
-} ast_layout_attribute_style_pair_t;
-
 /**
  *
  * @function has_font_extension
@@ -131,17 +126,17 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
  * @params {hashmap_t*} styles - Styles
  * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values1 - Allowed
  * values 1
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values2 - Allowed
  * values 2
  * @returns {bool} - True if the style value is valid, false otherwise
  *
  */
 bool validate_style_value_sizes(
     hashmap_t *styles, hashmap_t *new_styles, ast_layout_attribute_t *attribute,
-    const ast_layout_attribute_style_pair_t *allowed_values1,
-    const ast_layout_attribute_style_pair_t *allowed_values2, bool length_124);
+    const ast_layout_attribute_pair_t *allowed_values1,
+    const ast_layout_attribute_pair_t *allowed_values2, bool length_124);
 
 /**
  *
@@ -150,17 +145,17 @@ bool validate_style_value_sizes(
  * @params {hashmap_t*} styles - Styles
  * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values1 - Allowed
  * values 1
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values2 - Allowed
  * values 2
  * @returns {bool} - True if the style value is valid, false otherwise
  *
  */
 bool validate_style_value_color(
     hashmap_t *styles, hashmap_t *new_styles, ast_layout_attribute_t *attribute,
-    const ast_layout_attribute_style_pair_t *allowed_values1,
-    const ast_layout_attribute_style_pair_t *allowed_values2);
+    const ast_layout_attribute_pair_t *allowed_values1,
+    const ast_layout_attribute_pair_t *allowed_values2);
 
 /**
  *
@@ -169,17 +164,17 @@ bool validate_style_value_color(
  * @params {hashmap_t*} styles - Styles
  * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values1 - Allowed
  * values 1
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values2 - Allowed
  * values 2
  * @returns {bool} - True if the style value is valid, false otherwise
  *
  */
 bool validate_style_value_size(
     hashmap_t *styles, hashmap_t *new_styles, ast_layout_attribute_t *attribute,
-    const ast_layout_attribute_style_pair_t *allowed_values1,
-    const ast_layout_attribute_style_pair_t *allowed_values2);
+    const ast_layout_attribute_pair_t *allowed_values1,
+    const ast_layout_attribute_pair_t *allowed_values2);
 
 /**
  *
@@ -188,17 +183,17 @@ bool validate_style_value_size(
  * @params {hashmap_t*} styles - Styles
  * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values1 - Allowed
  * values 1
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values2 - Allowed
  * values 2
  * @returns {bool} - True if the style value is valid, false otherwise
  *
  */
 bool validate_style_value_size_color(
     hashmap_t *styles, hashmap_t *new_styles, ast_layout_attribute_t *attribute,
-    const ast_layout_attribute_style_pair_t *allowed_values1,
-    const ast_layout_attribute_style_pair_t *allowed_values2);
+    const ast_layout_attribute_pair_t *allowed_values1,
+    const ast_layout_attribute_pair_t *allowed_values2);
 
 /**
  *
@@ -207,17 +202,17 @@ bool validate_style_value_size_color(
  * @params {hashmap_t*} styles - Styles
  * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values1 - Allowed
  * values 1
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values2 - Allowed
  * values 2
  * @returns {bool} - True if the style value is valid, false otherwise
  *
  */
 bool validate_style_value_string(
     hashmap_t *styles, hashmap_t *new_styles, ast_layout_attribute_t *attribute,
-    const ast_layout_attribute_style_pair_t *allowed_values1,
-    const ast_layout_attribute_style_pair_t *allowed_values2);
+    const ast_layout_attribute_pair_t *allowed_values1,
+    const ast_layout_attribute_pair_t *allowed_values2);
 
 /**
  *
@@ -226,17 +221,17 @@ bool validate_style_value_string(
  * @params {hashmap_t*} styles - Styles
  * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values1 - Allowed
  * values 1
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values2 - Allowed
  * values 2
  * @returns {bool} - True if the style value is valid, false otherwise
  *
  */
 bool validate_style_value_percentage(
     hashmap_t *styles, hashmap_t *new_styles, ast_layout_attribute_t *attribute,
-    const ast_layout_attribute_style_pair_t *allowed_values1,
-    const ast_layout_attribute_style_pair_t *allowed_values2);
+    const ast_layout_attribute_pair_t *allowed_values1,
+    const ast_layout_attribute_pair_t *allowed_values2);
 
 /**
  *
@@ -245,17 +240,17 @@ bool validate_style_value_percentage(
  * @params {hashmap_t*} styles - Styles
  * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values1 - Allowed
  * values 1
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values2 - Allowed
  * values 2
  * @returns {bool} - True if the style value is valid, false otherwise
  *
  */
 bool validate_style_value_integer(
     hashmap_t *styles, hashmap_t *new_styles, ast_layout_attribute_t *attribute,
-    const ast_layout_attribute_style_pair_t *allowed_values1,
-    const ast_layout_attribute_style_pair_t *allowed_values2);
+    const ast_layout_attribute_pair_t *allowed_values1,
+    const ast_layout_attribute_pair_t *allowed_values2);
 
 /**
  *
@@ -264,17 +259,17 @@ bool validate_style_value_integer(
  * @params {hashmap_t*} styles - Styles
  * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values1 - Allowed
  * values 1
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values2 - Allowed
  * values 2
  * @returns {bool} - True if the style value is valid, false otherwise
  *
  */
 bool validate_style_value_sizes_colors(
     hashmap_t *styles, hashmap_t *new_styles, ast_layout_attribute_t *attribute,
-    const ast_layout_attribute_style_pair_t *allowed_values1,
-    const ast_layout_attribute_style_pair_t *allowed_values2);
+    const ast_layout_attribute_pair_t *allowed_values1,
+    const ast_layout_attribute_pair_t *allowed_values2);
 
 /**
  *
@@ -283,17 +278,17 @@ bool validate_style_value_sizes_colors(
  * @params {hashmap_t*} styles - Styles
  * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values1 - Allowed
  * values 1
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values2 - Allowed
  * values 2
  * @returns {bool} - True if the style value is valid, false otherwise
  *
  */
 bool validate_style_value_float(
     hashmap_t *styles, hashmap_t *new_styles, ast_layout_attribute_t *attribute,
-    const ast_layout_attribute_style_pair_t *allowed_values1,
-    const ast_layout_attribute_style_pair_t *allowed_values2);
+    const ast_layout_attribute_pair_t *allowed_values1,
+    const ast_layout_attribute_pair_t *allowed_values2);
 
 /**
  *
@@ -302,17 +297,17 @@ bool validate_style_value_float(
  * @params {hashmap_t*} styles - Styles
  * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values1 - Allowed
  * values 1
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 - Allowed
+ * @params {const ast_layout_attribute_pair_t*} allowed_values2 - Allowed
  * values 2
  * @returns {bool} - True if the style value is valid, false otherwise
  *
  */
 bool validate_style_value_number(
     hashmap_t *styles, hashmap_t *new_styles, ast_layout_attribute_t *attribute,
-    const ast_layout_attribute_style_pair_t *allowed_values1,
-    const ast_layout_attribute_style_pair_t *allowed_values2);
+    const ast_layout_attribute_pair_t *allowed_values1,
+    const ast_layout_attribute_pair_t *allowed_values2);
 
 /**
  *
@@ -321,16 +316,16 @@ bool validate_style_value_number(
  * @params {hashmap_t*} styles - Styles
  * @params {hashmap_t*} new_styles - New styles
  * @params {ast_layout_attribute_t*} attribute - Layout attribute
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values1 -
+ * @params {const ast_layout_attribute_pair_t*} allowed_values1 -
  * Allowed values 1
- * @params {const ast_layout_attribute_style_pair_t*} allowed_values2 -
+ * @params {const ast_layout_attribute_pair_t*} allowed_values2 -
  * Allowed values 2
  * @returns {bool} - True if the style value is valid, false otherwise
  *
  */
 bool validate_style_value_colors(
     hashmap_t *styles, hashmap_t *new_styles, ast_layout_attribute_t *attribute,
-    const ast_layout_attribute_style_pair_t *allowed_values1,
-    const ast_layout_attribute_style_pair_t *allowed_values2);
+    const ast_layout_attribute_pair_t *allowed_values1,
+    const ast_layout_attribute_pair_t *allowed_values2);
     
 #endif

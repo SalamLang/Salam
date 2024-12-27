@@ -1,13 +1,15 @@
 // ----------- BEGIN AUTO GENERATED ----------- //
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_INCLUDE) {
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_include, valid_attributes_include_length)) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_include,
+                                   valid_attributes_include_length)) {
         return true;
     }
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_ERROR) {
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_LAYOUT) {
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_layout, valid_attributes_layout_length)) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_layout,
+                                   valid_attributes_layout_length)) {
         return true;
     }
 }
@@ -16,19 +18,23 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_DIV) {
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_PARAGRAPH) {
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_BUTTON) {
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_button, valid_attributes_button_length)) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_button,
+                                   valid_attributes_button_length)) {
         return true;
     }
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_TEXTAREA) {
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_textarea, valid_attributes_textarea_length)) {
+    if (is_attribute_type_in_array(attribute_key_type,
+                                   valid_attributes_textarea,
+                                   valid_attributes_textarea_length)) {
         return true;
     }
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_LABEL) {
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_SELECT) {
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_select, valid_attributes_select_length)) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_select,
+                                   valid_attributes_select_length)) {
         return true;
     }
 }
@@ -37,7 +43,8 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FIELDSET) {
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_LEGEND) {
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FORM) {
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_form, valid_attributes_form_length)) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_form,
+                                   valid_attributes_form_length)) {
         return true;
     }
 }
@@ -120,7 +127,8 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_BR) {
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_HR) {
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_INPUT) {
-    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_input, valid_attributes_input_length)) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_input,
+                                   valid_attributes_input_length)) {
         return true;
     }
 }
@@ -131,19 +139,3 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FONT) {
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_MEDIA) {
 }
 // ----------- END AUTO GENERATED ----------- //
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

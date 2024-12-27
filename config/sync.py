@@ -267,7 +267,9 @@ def prettify_layout_attribute_style_value(
     return result
 
 
-def prettify_layout_attribute_value_extern(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+def prettify_layout_attribute_value_extern(
+    item: Dict[str, Any], group: Dict[str, Any]
+) -> str:
     """
     Generates a formatted string for layout attribute values.
 
@@ -373,7 +375,9 @@ def prettify_layout_attribute_style_state_type(
         )
 
 
-def prettify_layout_type_attributes_values(item: Dict[str, Any], group: Dict[str, Any]) -> str:
+def prettify_layout_type_attributes_values(
+    item: Dict[str, Any], group: Dict[str, Any]
+) -> str:
     """
     Generates a formatted string for a layout type definition.
 
@@ -430,7 +434,10 @@ def prettify_layout_type_attributes(item: Dict[str, Any], group: Dict[str, Any])
         var_attrs_length = f"valid_attributes_{itemid_lower}_length"
 
         if len(attributes) > 0:
-            result += f"    if (is_attribute_type_in_array(attribute_key_type, {var_attrs}, {var_attrs_length})) " + "{\n"
+            result += (
+                f"    if (is_attribute_type_in_array(attribute_key_type, {var_attrs}, {var_attrs_length})) "
+                + "{\n"
+            )
             result += "        return true;\n"
             result += "    }\n"
 

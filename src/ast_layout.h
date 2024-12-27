@@ -124,8 +124,8 @@ typedef struct ast_layout_attribute_t {
 
     bool isStyle;
     bool isContent;
-    bool ignoreMe; // Default false
-    bool belongsToLayout; // Default false
+    bool ignoreMe;         // Default false
+    bool belongsToLayout;  // Default false
 
     void (*destroy)(void *node);
     void (*print)(void *node);

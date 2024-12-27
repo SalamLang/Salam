@@ -1061,60 +1061,62 @@ string_t *generator_code_layout_attributes(generator_t *generator,
         }
     }
 
-    if (((media_queries_length > 0 || css_attributes_length > 0) &&
-         css_attributes->length > 0) ||
-        has_substate == true) {
-        if (html_attributes_length > 0 && html_attributes->length > 0) {
-            string_append_char(html_attributes, ' ');
-        }
-
-        if (css_attributes->length > 0) {
-            if (generator->inlineCSS == true &&
-                (media_queries_length == 0 && has_substate == false)) {
-                string_append_str(html_attributes, "style=\"");
-                string_append(html_attributes, css_attributes);
-                string_append_str(html_attributes, "\"");
-
-                html_attributes_length++;
-            } else {
-                if (first_load) {
-                    string_append_char(generator->css, STYLE_STYLE_LINKING);
-                    string_append_str(generator->css, block->tag);
-                    string_append_char(generator->css, '{');
-                    string_append(generator->css, css_attributes);
-                    string_append_char(generator->css, '}');
-                }
-            }
-        }
-
-        if (block->tag != NULL) {
-            if (html_attributes_length > 0) {
+    if (notIgnoreBelongsToLayout == false) {
+        if (((media_queries_length > 0 || css_attributes_length > 0) &&
+            css_attributes->length > 0) ||
+            has_substate == true) {
+            if (html_attributes_length > 0 && html_attributes->length > 0) {
                 string_append_char(html_attributes, ' ');
             }
 
-            size_t tag_length = strlen(block->tag);
+            if (css_attributes->length > 0) {
+                if (generator->inlineCSS == true &&
+                    (media_queries_length == 0 && has_substate == false)) {
+                    string_append_str(html_attributes, "style=\"");
+                    string_append(html_attributes, css_attributes);
+                    string_append_str(html_attributes, "\"");
 
-            // string_append_str(html_attributes, "id=");
-            string_append_str(html_attributes, "class=");
-            if (tag_length > 1) {
-                string_append_char(html_attributes, '\"');
+                    html_attributes_length++;
+                } else {
+                    if (first_load) {
+                        string_append_char(generator->css, STYLE_STYLE_LINKING);
+                        string_append_str(generator->css, block->tag);
+                        string_append_char(generator->css, '{');
+                        string_append(generator->css, css_attributes);
+                        string_append_char(generator->css, '}');
+                    }
+                }
             }
 
-            string_append_str(html_attributes, block->tag);
+            if (block->tag != NULL) {
+                if (html_attributes_length > 0) {
+                    string_append_char(html_attributes, ' ');
+                }
 
-            if (tag_length > 1) {
-                string_append_char(html_attributes, '\"');
+                size_t tag_length = strlen(block->tag);
+
+                // string_append_str(html_attributes, "id=");
+                string_append_str(html_attributes, "class=");
+                if (tag_length > 1) {
+                    string_append_char(html_attributes, '\"');
+                }
+
+                string_append_str(html_attributes, block->tag);
+
+                if (tag_length > 1) {
+                    string_append_char(html_attributes, '\"');
+                }
+                html_attributes_length++;
             }
-            html_attributes_length++;
-        }
 
-        if (has_substate == true && first_load == true) {
-            string_t *pseudo_elements = generator_code_layout_pseudo_elements(
-                generator, block, &css_attributes_length);
+            if (has_substate == true && first_load == true) {
+                string_t *pseudo_elements = generator_code_layout_pseudo_elements(
+                    generator, block, &css_attributes_length);
 
-            if (pseudo_elements != NULL) {
-                string_append(generator->css, pseudo_elements);
-                string_destroy(pseudo_elements);
+                if (pseudo_elements != NULL) {
+                    string_append(generator->css, pseudo_elements);
+                    string_destroy(pseudo_elements);
+                }
             }
         }
     }

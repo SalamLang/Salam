@@ -2,7 +2,7 @@
 #define _AST_LAYOUT_ATTRIBUTE_STYLE_VALUE_
 
 // ----------- BEGIN AUTO GENERATED ----------- //
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_size_default[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_size_default[] = {
 	{"خودکار", "auto"},
 	{"حداکثر محتوا", "max-content"},
 	{"حداقل محتوا", "min-content"},
@@ -10,7 +10,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_size_defau
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_appearance[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_appearance[] = {
 	{"مدیر کنترل پیش‌فرض", "auto"},
 	{"دکمه", "button"},
 	{"پیش‌فرض", "default"},
@@ -22,7 +22,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_appearance
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_color[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_color[] = {
 	{"بی‌رنگ", "transparent"},
 	{"بی رنگ", "transparent"},
 	{"شفاف", "transparent"},
@@ -158,7 +158,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_color[] = {
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_width[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_width[] = {
 	{"خودکار", "auto"},
 	{"حداکثر محتوا", "max-content"},
 	{"حداقل محتوا", "min-content"},
@@ -166,7 +166,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_width[] = {
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_height[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_height[] = {
 	{"خودکار", "auto"},
 	{"حداکثر محتوا", "max-content"},
 	{"حداقل محتوا", "min-content"},
@@ -174,18 +174,18 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_height[] = {
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_aspect_ratio[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_aspect_ratio[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_backface_visibility[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_backface_visibility[] = {
 	{"مشاهده‌پذیر", "visible"},
 	{"پنهان", "hidden"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_block_size[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_block_size[] = {
 	{"خودکار", "auto"},
 	{"حداقل با محتوا", "min-content"},
 	{"ماکزیمم محتوا", "max-content"},
@@ -193,19 +193,19 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_block_size
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_background_image[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_background_image[] = {
 	{"هیچ", "none"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_background_attachment[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_background_attachment[] = {
 	{"پیمایش", "scroll"},
 	{"ثابت", "fixed"},
 	{"محلی", "local"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_background_blend_mode[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_background_blend_mode[] = {
 	{"عادی", "normal"},
 	{"معمولی", "normal"},
 	{"محلی", "local"},
@@ -226,35 +226,35 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_background
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_background_clip[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_background_clip[] = {
 	{"محتوا", "content-box"},
 	{"حاشیه", "padding-box"},
 	{"کل عنصر", "border-box"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_background_origin[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_background_origin[] = {
 	{"محتوا", "content-box"},
 	{"حاشیه", "padding-box"},
 	{"کل عنصر", "border-box"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_background_position_x[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_background_position_x[] = {
 	{"چپ", "left"},
 	{"مرکز", "center"},
 	{"راست", "right"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_background_position_y[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_background_position_y[] = {
 	{"بالا", "top"},
 	{"مرکز", "center"},
 	{"پایین", "bottom"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_background_repeat[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_background_repeat[] = {
 	{"تکرار", "repeat"},
 	{"تکرار در محور افقی", "repeat-x"},
 	{"تکرار در محور عمودی", "repeat-y"},
@@ -262,14 +262,14 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_background
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_background_size[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_background_size[] = {
 	{"خودکار", "auto"},
 	{"پوشش", "cover"},
 	{"مناسب با محتوا", "contain"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_block_end_style[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_border_block_end_style[] = {
 	{"پیوسته", "solid"},
 	{"خط‌چین", "dashed"},
 	{"خط چین", "dashed"},
@@ -280,12 +280,12 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_blo
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_block_end_width[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_border_block_end_width[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_block_start_style[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_border_block_start_style[] = {
 	{"پیوسته", "solid"},
 	{"خط‌چین", "dashed"},
 	{"خط چین", "dashed"},
@@ -297,12 +297,12 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_blo
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_block_start_width[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_border_block_start_width[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_bottom_style[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_border_bottom_style[] = {
 	{"پیوسته", "solid"},
 	{"خط چین", "dashed"},
 	{"خط‌چین", "dashed"},
@@ -314,7 +314,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_bot
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_collapse[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_border_collapse[] = {
 	{"بله", "collapse"},
 	{"اره", "collapse"},
 	{"خیر", "separate"},
@@ -322,7 +322,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_col
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_image_repeat[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_border_image_repeat[] = {
 	{"تکرار", "repeat"},
 	{"تکرارافقی", "repeat-x"},
 	{"تکرار افقی", "repeat-x"},
@@ -333,17 +333,17 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_ima
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_image_source[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_border_image_source[] = {
 	{"هیچ", "none"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_image_width[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_border_image_width[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_inline_end_style[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_border_inline_end_style[] = {
 	{"پیوسته", "solid"},
 	{"خط‌چین", "dashed"},
 	{"خط چین", "dashed"},
@@ -355,7 +355,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_inl
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_inline_start_style[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_border_inline_start_style[] = {
 	{"پیوسته", "solid"},
 	{"خط چین", "dashed"},
 	{"خط‌چین", "dashed"},
@@ -367,7 +367,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_inl
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_left_style[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_border_left_style[] = {
 	{"پیوسته", "solid"},
 	{"خط چین", "dashed"},
 	{"خط‌چین", "dashed"},
@@ -379,7 +379,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_lef
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_right_style[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_border_right_style[] = {
 	{"پیوسته", "solid"},
 	{"خط چین", "dashed"},
 	{"خط‌چین", "dashed"},
@@ -391,7 +391,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_rig
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_top_style[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_border_top_style[] = {
 	{"پیوسته", "solid"},
 	{"خط چین", "dashed"},
 	{"خط‌چین", "dashed"},
@@ -403,18 +403,18 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_border_top
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_bottom[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_bottom[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_box_sizing[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_box_sizing[] = {
 	{"محتویات", "content-box"},
 	{"مرزی", "border-box"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_break_inside[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_break_inside[] = {
 	{"اجتناب", "avoid"},
 	{"اجتناب پرچم", "avoid-page"},
 	{"اجتناب صفحه", "avoid-column"},
@@ -422,7 +422,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_break_insi
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_break_before[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_break_before[] = {
 	{"شکست", "auto"},
 	{"صفحه", "page"},
 	{"ستون", "column"},
@@ -430,7 +430,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_break_befo
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_break_after[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_break_after[] = {
 	{"شکست", "auto"},
 	{"صفحه", "page"},
 	{"ستون", "column"},
@@ -438,14 +438,14 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_break_afte
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_caption_side[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_caption_side[] = {
 	{"هیچ", "none"},
 	{"بالا", "top"},
 	{"پایین", "bottom"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_clear[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_clear[] = {
 	{"پایین", "none"},
 	{"راست", "right"},
 	{"چپ", "left"},
@@ -454,7 +454,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_clear[] = 
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_clip_path[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_clip_path[] = {
 	{"هیچ", "none"},
 	{"دایره", "circle()"},
 	{"مستطیل", "rect()"},
@@ -464,13 +464,13 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_clip_path[
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_clip_rule[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_clip_rule[] = {
 	{"تازه", "nonzero"},
 	{"یکسان", "evenodd"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_color_interpolation[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_color_interpolation[] = {
 	{"خودکار", "auto"},
 	{"RGB", "srgb"},
 	{"rgb", "srgb"},
@@ -478,7 +478,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_color_inte
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_color_interpolation_filters[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_color_interpolation_filters[] = {
 	{"خودکار", "auto"},
 	{"RGB", "srgb"},
 	{"rgb", "srgb"},
@@ -486,26 +486,26 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_color_inte
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_color_scheme[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_color_scheme[] = {
 	{"خودکار", "auto"},
 	{"روشن", "light"},
 	{"تاریک", "dark"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_column_count[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_column_count[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_column_fill[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_column_fill[] = {
 	{"خودکار", "auto"},
 	{"بلافاصله", "balance"},
 	{"بلا فاصله", "balance"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_column_rule_style[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_column_rule_style[] = {
 	{"پیوسته", "solid"},
 	{"خط‌چین", "dashed"},
 	{"خط چین", "dashed"},
@@ -517,14 +517,14 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_column_rul
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_column_span[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_column_span[] = {
 	{"یک ستون", "none"},
 	{"بیش از یک ستون", "all"},
 	{"بیش از یک‌ستون", "all"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_contain[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_contain[] = {
 	{"خودکار", "auto"},
 	{"محتوا", "content"},
 	{"لایه", "layout"},
@@ -533,77 +533,77 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_contain[] 
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_contain_intrinsic_block_size[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_contain_intrinsic_block_size[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_contain_intrinsic_height[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_contain_intrinsic_height[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_contain_intrinsic_inline_size[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_contain_intrinsic_inline_size[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_contain_intrinsic_size[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_contain_intrinsic_size[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_contain_intrinsic_width[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_contain_intrinsic_width[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_container[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_container[] = {
 	{"خودکار", "auto"},
 	{"کامل", "inline-size"},
 	{"بیشتر", "block-size"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_container_name[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_container_name[] = {
 	{"نام", "name"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_container_type[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_container_type[] = {
 	{"خودکار", "auto"},
 	{"بزرگ", "inline-size"},
 	{"بیشتر", "block-size"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_content[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_content[] = {
 	{"خالی", "none"},
 	{"محتوا", "content"},
 	{"متغیر", "var()"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_content_visibility[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_content_visibility[] = {
 	{"پنهان", "hidden"},
 	{"معلوم", "visible"},
 	{"مشاهده", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_counter_increment[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_counter_increment[] = {
 	{"عدد", "number"},
 	{"حساب", "counter()"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_counter_set[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_counter_set[] = {
 	{"عدد", "number"},
 	{"شمارنده", "counter()"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_cursor[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_cursor[] = {
 	{"دست", "pointer"},
 	{"نشانگر", "default"},
 	{"مشکل", "not-allowed"},
@@ -612,13 +612,13 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_cursor[] =
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_direction[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_direction[] = {
 	{"چپ به راست", "ltr"},
 	{"راست به چپ", "rtl"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_display[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_display[] = {
 	{"بلوک", "block"},
 	{"خطی", "inline"},
 	{"بلوک خطی", "inline-block"},
@@ -652,7 +652,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_display[] 
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_align_items[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_align_items[] = {
 	{"پنهان", "hide"},
 	{"شروع", "flex-start"},
 	{"مرکز", "center"},
@@ -662,25 +662,25 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_align_item
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_empty_cells[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_empty_cells[] = {
 	{"پنهان", "hide"},
 	{"نمایش", "show"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_fill[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_fill[] = {
 	{"رنگ", "color"},
 	{"تصویر", "image"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_fill_rule[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_fill_rule[] = {
 	{"تازه", "nonzero"},
 	{"یکسان", "evenodd"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_filter[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_filter[] = {
 	{"مات", "blur()"},
 	{"گرم", "blur()"},
 	{"کنتراست", "brightness()"},
@@ -688,17 +688,17 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_filter[] =
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_flex[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_flex[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_flex_basis[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_flex_basis[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_flex_direction[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_flex_direction[] = {
 	{"افقی", "row"},
 	{"عمودی", "column"},
 	{"افقی معکوس", "row-reverse"},
@@ -706,7 +706,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_flex_direc
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_flex_flow[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_flex_flow[] = {
 	{"جهت فلکس و چینش", "row wrap"},
 	{"پخش", "row nowrap"},
 	{"جهت عمودی و چینش", "column wrap"},
@@ -714,25 +714,25 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_flex_flow[
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_flex_wrap[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_flex_wrap[] = {
 	{"پهن", "nowrap"},
 	{"چینش", "wrap"},
 	{"چینش معکوس", "wrap-reverse"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_float[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_float[] = {
 	{"چپ", "left"},
 	{"راست", "right"},
 	{"خالی", "none"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_font[] = {
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_display[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_font_display[] = {
 	{"خودکار", "auto"},
 	{"بلوک", "block"},
 	{"تعویض", "swap"},
@@ -742,11 +742,11 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_displ
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_family[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_font_family[] = {
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_feature_settings[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_font_feature_settings[] = {
 	{"خودکار", "auto"},
 	{"فعال", "normal"},
 	{"غیرفعال", "none"},
@@ -754,14 +754,14 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_featu
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_kerning[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_font_kerning[] = {
 	{"خودکار", "auto"},
 	{"نه", "none"},
 	{"بله", "normal"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_language_override[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_font_language_override[] = {
 	{"خودکار", "auto"},
 	{"غیر فعال", "normal"},
 	{"غیرفعال", "normal"},
@@ -769,21 +769,21 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_langu
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_optical_sizing[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_font_optical_sizing[] = {
 	{"خودکار", "auto"},
 	{"سازگار", "optical"},
 	{"غیر سازگار", "none"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_stretch[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_font_stretch[] = {
 	{"پهن", "ultra-condensed"},
 	{"متوسط", "normal"},
 	{"کشیده", "ultra-expanded"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_style[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_font_style[] = {
 	{"عادی", "normal"},
 	{"معمولی", "normal"},
 	{"خوب", "italic"},
@@ -791,14 +791,14 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_style
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_variant[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_font_variant[] = {
 	{"معمولی", "normal"},
 	{"عادی", "normal"},
 	{"حرف‌های بزرگ", "small-caps"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_weight[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_font_weight[] = {
 	{"معمولی", "normal"},
 	{"عادی", "normal"},
 	{"ضخیم", "bold"},
@@ -808,91 +808,91 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_font_weigh
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_grid[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_grid[] = {
 	{"خودکار", "auto"},
 	{"ستون", "column"},
 	{"ردیف", "row"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_grid_area[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_grid_area[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_grid_auto_columns[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_grid_auto_columns[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_grid_auto_flow[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_grid_auto_flow[] = {
 	{"خودکار", "auto"},
 	{"ستون", "column"},
 	{"ردیف", "row"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_grid_auto_rows[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_grid_auto_rows[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_grid_column[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_grid_column[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_grid_column_end[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_grid_column_end[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_grid_column_start[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_grid_column_start[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_grid_row[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_grid_row[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_grid_row_end[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_grid_row_end[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_grid_row_start[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_grid_row_start[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_grid_template[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_grid_template[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_grid_template_areas[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_grid_template_areas[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_grid_template_columns[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_grid_template_columns[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_grid_template_rows[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_grid_template_rows[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_height[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_height[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_justify_content[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_justify_content[] = {
 	{"چپ", "flex-start"},
 	{"مرکز", "center"},
 	{"راست", "flex-end"},
@@ -900,12 +900,12 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_justify_co
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_left[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_left[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_list_style[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_list_style[] = {
 	{"پوشش", "cover"},
 	{"نشان‌دهنده", "disc"},
 	{"نشان دهنده", "disc"},
@@ -916,44 +916,44 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_list_style
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_margin[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_margin[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_margin_bottom[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_margin_bottom[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_margin_left[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_margin_left[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_margin_right[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_margin_right[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_margin_top[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_margin_top[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_object_fit[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_object_fit[] = {
 	{"پوشش", "cover"},
 	{"پوشش کامل", "contain"},
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_padding[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_padding[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_text_decoration[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_text_decoration[] = {
 	{"زیرخط", "underline"},
 	{"زیر خط", "underline"},
 	{"خط خورده", "line-through"},
@@ -962,16 +962,16 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_text_decor
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_z_index[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_z_index[] = {
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_outline_color[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_outline_color[] = {
 	{"هیچ", "none"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_outline_style[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_outline_style[] = {
 	{"خط‌چین", "dashed"},
 	{"خط چین", "dashed"},
 	{"خط دار", "dotted"},
@@ -989,12 +989,12 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_outline_st
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_outline_width[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_outline_width[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_overflow[] = {
 	{"پنهان", "hidden"},
 	{"غیرفعال", "visible"},
 	{"غیر فعال", "visible"},
@@ -1003,13 +1003,13 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow[]
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow_anchor[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_overflow_anchor[] = {
 	{"بله", "auto"},
 	{"خیر", "none"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow_block[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_overflow_block[] = {
 	{"پنهان", "hidden"},
 	{"غیرفعال", "visible"},
 	{"غیر فعال", "visible"},
@@ -1018,7 +1018,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow_b
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow_inline[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_overflow_inline[] = {
 	{"پنهان", "hidden"},
 	{"غیرفعال", "visible"},
 	{"غیر فعال", "visible"},
@@ -1027,14 +1027,14 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow_i
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow_wrap[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_overflow_wrap[] = {
 	{"خیر", "auto"},
 	{"بله", "break-word"},
 	{"خیر", "normal"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow_x[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_overflow_x[] = {
 	{"پنهان", "hidden"},
 	{"غیر فعال", "visible"},
 	{"غیرفعال", "visible"},
@@ -1043,7 +1043,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow_x
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow_y[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_overflow_y[] = {
 	{"پنهان", "hidden"},
 	{"غیر فعال", "visible"},
 	{"غیرفعال", "visible"},
@@ -1052,80 +1052,80 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_overflow_y
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_padding_block_end[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_padding_block_end[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_padding_block_start[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_padding_block_start[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_padding_bottom[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_padding_bottom[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_padding_inline[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_padding_inline[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_padding_inline_end[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_padding_inline_end[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_padding_inline_start[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_padding_inline_start[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_padding_left[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_padding_left[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_padding_right[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_padding_right[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_padding_top[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_padding_top[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_page[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_page[] = {
 	{"خودکار", "auto"},
 	{"بله", "auto"},
 	{"خیر", "none"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_page_break_after[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_page_break_after[] = {
 	{"همیشه", "always"},
 	{"بله", "always"},
 	{"خیر", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_page_break_before[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_page_break_before[] = {
 	{"همیشه", "always"},
 	{"بله", "always"},
 	{"خیر", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_page_break_inside[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_page_break_inside[] = {
 	{"بله", "auto"},
 	{"خودکار", "auto"},
 	{"خیر", "avoid"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_paint_order[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_paint_order[] = {
 	{"محتوا", "content"},
 	{"مرز", "border"},
 	{"حاشیه", "border"},
@@ -1134,11 +1134,11 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_paint_orde
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_perspective[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_perspective[] = {
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_place_content[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_place_content[] = {
 	{"فضا", "space-between"},
 	{"مرکز", "center"},
 	{"جپ", "start"},
@@ -1146,7 +1146,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_place_cont
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_place_items[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_place_items[] = {
 	{"فضا", "space-between"},
 	{"مرکز", "center"},
 	{"جپ", "start"},
@@ -1154,7 +1154,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_place_item
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_place_self[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_place_self[] = {
 	{"فضا", "space-between"},
 	{"مرکز", "center"},
 	{"جپ", "start"},
@@ -1162,14 +1162,14 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_place_self
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_pointer_events[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_pointer_events[] = {
 	{"فعال", "auto"},
 	{"غیرفعال", "none"},
 	{"غیر فعال", "none"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_position[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_position[] = {
 	{"مطلق", "absolute"},
 	{"ثابت", "fixed"},
 	{"چسبان", "sticky"},
@@ -1178,13 +1178,13 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_position[]
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_print_color_adjust[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_print_color_adjust[] = {
 	{"خودکار", "auto"},
 	{"بهینه", "exact"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_quotes[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_quotes[] = {
 	{"هیچ", "none"},
 	{"خودکار", "auto"},
 	{"تکی", "\"«\" \"»\""},
@@ -1192,7 +1192,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_quotes[] =
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_resize[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_resize[] = {
 	{"افقی", "horizontal"},
 	{"عمودی", "vertical"},
 	{"خودکار", "both"},
@@ -1201,19 +1201,19 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_resize[] =
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_right[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_right[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_rotate[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_rotate[] = {
 	{"درجه", "deg"},
 	{"رادیان", "rad"},
 	{"مدور", "turn"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_ruby_align[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_ruby_align[] = {
 	{"راست", "right"},
 	{"چپ", "left"},
 	{"مرکز", "center"},
@@ -1221,7 +1221,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_ruby_align
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_ruby_position[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_ruby_position[] = {
 	{"", "smooth"},
 	{"", "smooth"},
 	{"بالا", "over"},
@@ -1235,14 +1235,14 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_ruby_posit
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_scroll_behavior[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_scroll_behavior[] = {
 	{"نرم", "smooth"},
 	{"هموار", "smooth"},
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_scroll_snap_align[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_scroll_snap_align[] = {
 	{"چپ", "start"},
 	{"مرکز", "center"},
 	{"راست", "end"},
@@ -1251,7 +1251,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_scroll_sna
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_scroll_snap_type[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_scroll_snap_type[] = {
 	{"دایره", "circle"},
 	{"تک محور", "x"},
 	{"تکمحور", "x"},
@@ -1261,14 +1261,14 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_scroll_sna
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_shape_outside[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_shape_outside[] = {
 	{"دایره", "circle"},
 	{"مستطیل", "rect"},
 	{"بیضی", "ellipse"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_text_align[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_text_align[] = {
 	{"چپ", "left"},
 	{"راست", "right"},
 	{"مرکز", "center"},
@@ -1277,7 +1277,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_text_align
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_text_align_last[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_text_align_last[] = {
 	{"خودکار", "auto"},
 	{"چپ", "left"},
 	{"راست", "right"},
@@ -1288,12 +1288,12 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_text_align
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_text_indent[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_text_indent[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_text_transform[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_text_transform[] = {
 	{"بزرگ", "uppercase"},
 	{"کوچک", "lowercase"},
 	{"بزرگ و کوچک", "capitalize"},
@@ -1301,12 +1301,12 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_text_trans
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_top[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_top[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transform[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_transform[] = {
 	{"چرخش", "rotate"},
 	{"مقیاس", "scale"},
 	{"ترجمه", "translate"},
@@ -1314,13 +1314,13 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transform[
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_unicode_bidi[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_unicode_bidi[] = {
 	{"خودکار", "normal"},
 	{"معکوس", "bidi-override"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_user_select[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_user_select[] = {
 	{"اجازه", "auto"},
 	{"غیرفعال", "none"},
 	{"غیر فعال", "none"},
@@ -1328,19 +1328,19 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_user_selec
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_width[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_width[] = {
 	{"خودکار", "auto"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_will_change[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_will_change[] = {
 	{"خودکار", "auto"},
 	{"شفاف", "transform"},
 	{"کاهش", "opacity"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transform_box[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_transform_box[] = {
 	{"مرز", "border-box"},
 	{"محتوا", "content-box"},
 	{"پوشش", "fill-box"},
@@ -1348,7 +1348,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transform_
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transform_origin[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_transform_origin[] = {
 	{"مرکز", "center"},
 	{"چپ", "left"},
 	{"راست", "right"},
@@ -1357,14 +1357,14 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transform_
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transform_style[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_transform_style[] = {
 	{"مسطح", "flat"},
 	{"سه‌بعدی", "preserve-3d"},
 	{"سه بعدی", "preserve-3d"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_transition[] = {
 	{"مدت", "duration"},
 	{"تاخیر", "delay"},
 	{"ویژگی", "property"},
@@ -1373,27 +1373,27 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition_behavior[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_transition_behavior[] = {
 	{"مسطح", "flat"},
 	{"مناسب", "smooth"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition_delay[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_transition_delay[] = {
 	{"ثانیه", "s"},
 	{"میلی‌ ثانیه", "ms"},
 	{"میلی‌ثانیه", "ms"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition_duration[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_transition_duration[] = {
 	{"ثانیه", "s"},
 	{"میلی‌ ثانیه", "ms"},
 	{"میلی‌ثانیه", "ms"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition_property[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_transition_property[] = {
 	{"همه", "all"},
 	{"عرض", "width"},
 	{"ارتفاع", "height"},
@@ -1401,7 +1401,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition_timing_function[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_transition_timing_function[] = {
 	{"وارد شدن", "ease-in"},
 	{"خارج شدن", "ease-out"},
 	{"وارد و خارج شدن", "ease-in-out"},
@@ -1409,13 +1409,13 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_transition
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_vector_effect[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_vector_effect[] = {
 	{"هیچ", "none"},
 	{"مقیاس", "non-scaling-stroke"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_vertical_align[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_vertical_align[] = {
 	{"بالا", "top"},
 	{"پایین", "bottom"},
 	{"میانه", "middle"},
@@ -1427,7 +1427,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_vertical_a
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_visibility[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_visibility[] = {
 	{"ظاهر", "visible"},
 	{"قابل مشاهده", "visible"},
 	{"پنهان", "hidden"},
@@ -1435,7 +1435,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_visibility
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_white_space[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_white_space[] = {
 	{"عادی", "normal"},
 	{"معمولی", "normal"},
 	{"بدون شکستن", "nowrap"},
@@ -1448,7 +1448,7 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_white_spac
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_word_break[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_word_break[] = {
 	{"عادی", "normal"},
 	{"معمولی", "normal"},
 	{"بشکن", "break-all"},
@@ -1457,14 +1457,14 @@ const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_word_break
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_writing_mode[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_writing_mode[] = {
 	{"افقی", "horizontal-tb"},
 	{"عمودی از راست به چپ", "vertical-rl"},
 	{"عمودی از چپ به راست", "vertical-lr"},
 	{NULL, NULL},
 };
 
-const ast_layout_attribute_style_pair_t ast_layout_allowed_style_list_zoom[] = {
+const ast_layout_attribute_pair_t ast_layout_allowed_style_list_zoom[] = {
 	{"خودکار", "auto"},
 	{"مقیاس", "scale"},
 	{NULL, NULL},

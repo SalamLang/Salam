@@ -225,7 +225,7 @@ def prettify_layout_attribute_style_value_extern(
     if key == "unknown_key":
         print("Warning: Missing 'id' in item:", item)
 
-    result = "extern const ast_layout_attribute_style_pair_t " + key + "[];\n"
+    result = "extern const ast_layout_attribute_pair_t " + key + "[];\n"
 
     return result
 
@@ -246,7 +246,7 @@ def prettify_layout_attribute_style_value(
     if key == "unknown_key":
         print("Warning: Missing 'id' in item:", item)
 
-    result = "const ast_layout_attribute_style_pair_t " + key + "[] = {\n"
+    result = "const ast_layout_attribute_pair_t " + key + "[] = {\n"
 
     for item in item.get("childrens", []):
         item["generate_name"] = item["generate_name"].replace('"', '\\"')

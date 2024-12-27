@@ -30,21 +30,27 @@
  * @params {hashmap_t*} attrs - Attrs
  * @params {hashmap_t*} new_attrs - New Attrs
  * @params {ast_layout_attribute_t*} attribute - Layout Attribute
+ * @params {bool} isStyle - isStyle
  * @returns {void}
  *
  */
 void generator_code_layout_value(hashmap_t *attrs, hashmap_t *new_attrs,
-                                       ast_layout_attribute_t *attribute) {
+                                 ast_layout_attribute_t *attribute, bool isStyle) {
     DEBUG_ME;
-    bool isValid = validate_value(attrs, new_attrs, attribute);
+    bool isValid;
+    if (isStyle) {
+        isValid = validate_style_value(attrs, new_attrs, attribute);
+    } else {
+        isValid = validate_value(attrs, new_attrs, attribute);
+    }
 
     if (isValid == false) {
         printf("%d\n", attribute->parent_node_type);
         error_generator(
             2,
-            "Invalid value for '%s' attribute in '%s' element at line %zu "
-            "column %zu!",
+            "Invalid value for '%s' %s in '%s' element at line %zu column %zu!",
             attribute->key,
+            isStyle ? "style attribute" : "attribute",
             ast_layout_node_type_to_enduser_name(attribute->parent_node_type),
             attribute->value_location.start_line,
             attribute->value_location.start_column);
@@ -672,7 +678,9 @@ void generator_code_layout_html(generator_t* generator, ast_layout_block_t *layo
                 ast_layout_attribute_t *attribute = entry->value;
 
                 generator_code_layout_value(
-                    layout_block->attributes, NULL, attribute);
+                    layout_block->attributes, NULL, attribute, attribute->isStyle);
+
+                entry = cast(hashmap_entry_t *, entry->next);
             }
         }
     }
@@ -983,7 +991,7 @@ string_t *generator_code_layout_attributes(generator_t *generator,
 
                     generator_code_layout_value(
                         node_block->styles->normal, node_block->styles->new,
-                        attribute);
+                        attribute, attribute->isStyle);
 
                     if (attribute == NULL) {
                     } else if (attribute->isStyle == false ||

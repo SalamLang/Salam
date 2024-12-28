@@ -25,7 +25,7 @@
 
 /**
  *
- * @function lint
+ * @function lint_do
  * @brief Linting the given content and parameters
  * @params {bool} isCode - Whether the content is code or file
  * @params {const char*} path - Path of the file
@@ -34,7 +34,7 @@
  * @returns {void}
  *
  */
-void lint(bool isCode, const char *path, char *content, char *build_file) {
+void lint_do(bool isCode, const char *path, char *content, char *build_file) {
     DEBUG_ME;
     lexer_t *lexer = lexer_create(path, content);
 
@@ -165,12 +165,12 @@ void help(char *app) {
 }
 
 /**
- * 
+ *
  * @function update
  * @brief Update and download new version
  * @params {void}
  * @returns {void}
- * 
+ *
  */
 void update()
 {
@@ -205,6 +205,99 @@ void update()
 
 /**
  *
+ * @function lint
+ * @brief Lint a file or code based on arguments
+ * @params {int} argc - Number of arguments
+ * @params {char**} argv - Array of arguments
+ * @returns {void}
+ *
+ */
+void lint(int argc, char **argv) {
+    const char *path = argv[1];
+    if (argc <= 2) {
+        error(1, "Usage: %s lint <file>\n", argv[0]);
+    }
+
+    if (strcmp(argv[2], "code") == 0) {
+        if (argc <= 3) {
+            error(1, "Usage: %s lint code <content>\n", argv[0]);
+        }
+
+        char *content = argv[3];
+
+        lint_do(true, "stdin", content, NULL);
+    } else {
+        if (!file_exists(argv[2])) {
+            error(1, "File does not exist: %s\n", argv[2]);
+        }
+
+        if (argc <= 3) {
+            error(1, "Usage: %s lint <file> <output>\n", argv[0]);
+        }
+
+        char *content = file_reads_binary(path, NULL);
+
+        char *output_file = argv[3];
+
+        lint_do(false, path, content, output_file);
+
+        memory_destroy(content);
+    }
+}
+
+/**
+ *
+ * @function code
+ * @brief Execute code content
+ * @params {int} argc - Number of arguments
+ * @params {char**} argv - Array of arguments
+ * @returns {void}
+ *
+ */
+void code(int argc, char **argv)
+{
+    if (argc <= 2) {
+        error(1, "Usage: %s code <content>\n", argv[0]);
+    }
+
+    char *content = argv[2];
+
+    char *output_dir = argv[3];
+
+    run(true, "stdin", content, output_dir);
+}
+
+/**
+ *
+ * @function execute
+ * @brief Execute a file
+ * @params {int} argc - Number of arguments
+ * @params {char**} argv - Array of arguments
+ * @returns {void}
+ *
+ */
+void execute(int argc, char** argv)
+{
+    const char *path = argv[1];
+    if (!file_exists(path)) {
+        error(1, "File does not exist: %s\n", path);
+    }
+
+    char *content = file_reads_binary(path, NULL);
+
+    char *output_dir = NULL;
+
+    if (argc >= 3) {
+        output_dir = argv[2];
+    }
+
+    run(false, path, content, output_dir);
+
+    memory_destroy(content);
+}
+
+/**
+ *
  * @function doargs
  * @brief Handle command line arguments
  * @params {int} argc - Number of arguments
@@ -219,8 +312,6 @@ void doargs(int argc, char **argv) {
     }
 
     const char *path = argv[1];
-    // printf("path: %s\n", path);
-    // printf("Argc: %d\n", argc);
 
     if (strcmp(path, "version") == 0) {
         printf("Salam %s\n", SALAM_VERSION);
@@ -228,63 +319,13 @@ void doargs(int argc, char **argv) {
     } else if (strcmp(path, "help") == 0) {
         help(argv[0]);
     } else if (strcmp(path, "update") == 0) {
-        update();
+        update(argc, argv);
     } else if (strcmp(path, "lint") == 0) {
-        if (argc <= 2) {
-            error(1, "Usage: %s lint <file>\n", argv[0]);
-        }
-
-        if (strcmp(argv[2], "code") == 0) {
-            if (argc <= 3) {
-                error(1, "Usage: %s lint code <content>\n", argv[0]);
-            }
-
-            char *content = argv[3];
-
-            lint(true, "stdin", content, NULL);
-        } else {
-            if (!file_exists(argv[2])) {
-                error(1, "File does not exist: %s\n", argv[2]);
-            }
-
-            if (argc <= 3) {
-                error(1, "Usage: %s lint <file> <output>\n", argv[0]);
-            }
-
-            char *content = file_reads_binary(path, NULL);
-
-            char *output_file = argv[3];
-
-            lint(false, path, content, output_file);
-
-            memory_destroy(content);
-        }
+        lint(argc, argv);
     } else if (strcmp(path, "code") == 0) {
-        if (argc <= 2) {
-            error(1, "Usage: %s code <content>\n", argv[0]);
-        }
-
-        char *content = argv[2];
-
-        char *output_dir = argv[3];
-
-        run(true, "stdin", content, output_dir);
+        code(argc, argv);
     } else {
-        if (!file_exists(path)) {
-            error(1, "File does not exist: %s\n", path);
-        }
-
-        char *content = file_reads_binary(path, NULL);
-
-        char *output_dir = NULL;
-
-        if (argc >= 3) {
-            output_dir = argv[2];
-        }
-
-        run(false, path, content, output_dir);
-
-        memory_destroy(content);
+        execute(argc, argv);
     }
 }
 

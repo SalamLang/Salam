@@ -398,6 +398,32 @@ def prettify_layout_type_attributes_all(
         return ""
     
 
+def prettify_layout_type_attributes_values_extern(
+    item: Dict[str, Any], group: Dict[str, Any]
+) -> str:
+    """
+    TODO
+    """
+
+    attributes = item.get("attributes", [])
+    if attributes is None:
+        attributes = []
+
+    if "generate_name" in item:
+        itemid = item["id"]
+        itemid_lower = itemid.replace("AST_LAYOUT_TYPE_", "").lower()
+
+        var_attrs = f"valid_attributes_{itemid_lower}"
+        var_attrs_length = f"valid_attributes_{itemid_lower}_length"
+
+        result = f"extern ast_layout_attribute_type_t {var_attrs}[];\n"
+        result += f"extern const size_t {var_attrs_length};\n"
+
+        return result
+    else:
+        return ""
+
+
 def prettify_layout_type_attributes_values(
     item: Dict[str, Any], group: Dict[str, Any]
 ) -> str:
@@ -546,6 +572,11 @@ FILES = [
         "input": "layout/type.yaml",
         "output": "ast_layout_type_attributes_values.h",
         "prettify": prettify_layout_type_attributes_values,
+    },
+    {
+        "input": "layout/type.yaml",
+        "output": "ast_layout_type_attributes_values_extern.h",
+        "prettify": prettify_layout_type_attributes_values_extern,
     },
     {
         "input": "layout/type.yaml",

@@ -44,7 +44,6 @@ void generator_code_layout_value(hashmap_t *attrs, hashmap_t *new_attrs,
     }
 
     if (isValid == false) {
-        printf("%d\n", attribute->parent_node_type);
         error_generator(
             2,
             "Invalid value for '%s' %s in '%s' element at line %zu column %zu!",
@@ -908,7 +907,7 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                                                      media_min_width, NULL,
                                                      NULL) == false) {
                     error_generator(2,
-                                    "Invalid value for responsive_max_width "
+                                    "Invalid value for responsive_min_width "
                                     "attribute in layout block!");
 
                     return NULL;
@@ -935,7 +934,7 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                                                      media_max_height, NULL,
                                                      NULL) == false) {
                     error_generator(2,
-                                    "Invalid value for responsive_max_width "
+                                    "Invalid value for responsive_max_height "
                                     "attribute in layout block!");
 
                     return NULL;
@@ -962,7 +961,7 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                                                      media_min_height, NULL,
                                                      NULL) == false) {
                     error_generator(2,
-                                    "Invalid value for responsive_max_width "
+                                    "Invalid value for responsive_min_height "
                                     "attribute in layout block!");
 
                     return NULL;

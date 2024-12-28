@@ -405,6 +405,9 @@ def prettify_layout_type_attributes_values(
                 result += "    " + attr + ",\n"
             result += "};\n"
             result += f"const size_t {var_attrs_length} = sizeof({var_attrs}) / sizeof({var_attrs}[0]);\n"
+        else:
+            result += f"ast_layout_attribute_type_t {var_attrs}[] = " + "{ AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };\n"
+            result += f"const size_t {var_attrs_length} = 0;\n"
 
         return result
     else:

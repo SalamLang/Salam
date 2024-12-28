@@ -96,16 +96,22 @@ const size_t valid_attributes_input_length = sizeof(valid_attributes_input) / si
 
 
 ast_layout_attribute_type_t valid_attributes_font[] = {
-    AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
-    AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
-    AST_LAYOUT_ATTRIBUTE_TYPE_UNICODE_RANGE,
-    AST_LAYOUT_ATTRIBUTE_TYPE_STYLE,
-    AST_LAYOUT_ATTRIBUTE_TYPE_WEIGHT,
+    AST_LAYOUT_ATTRIBUTE_TYPE_FONT_NAME,
+    AST_LAYOUT_ATTRIBUTE_TYPE_FONT_SRC,
+    AST_LAYOUT_ATTRIBUTE_TYPE_FONT_UNICODE_RANGE,
+    AST_LAYOUT_ATTRIBUTE_TYPE_FONT_STYLE,
+    AST_LAYOUT_ATTRIBUTE_TYPE_FONT_WEIGHT,
 };
 const size_t valid_attributes_font_length = sizeof(valid_attributes_font) / sizeof(valid_attributes_font[0]);
 
 
 // ----------- END AUTO GENERATED ----------- //
+
+
+
+
+
+
 
 
 

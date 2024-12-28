@@ -491,7 +491,7 @@ void generator_code_head_meta_children(generator_t *generator,
                             generator->css,
                             attribute->final_key);  // TODO: Why name lowercase
                                                     // entry->key?
-                        string_append_char(generator->css, '='); // TODO: COLON
+                        string_append_char(generator->css, ':'); // TODO: COLON
 
                         if (attribute->final_value == NULL) {
                             attribute->final_value =
@@ -796,7 +796,7 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                         string_append_char(css_attributes, ';');
                     }
                     string_append_str(css_attributes, attribute->final_key);
-                    string_append_str(css_attributes, ":2");
+                    string_append_str(css_attributes, ":");
                     string_append_str(css_attributes, attribute->final_value);
 
                     css_attributes_length++;
@@ -998,7 +998,7 @@ string_t *generator_code_layout_attributes(generator_t *generator,
 
                         string_append_str(generator->media_css,
                                           attribute->final_key);
-                        string_append_str(generator->media_css, ":3");
+                        string_append_str(generator->media_css, ":");
 
                         if (attribute->final_value == NULL) {
                             attribute->final_value =
@@ -1034,7 +1034,7 @@ string_t *generator_code_layout_attributes(generator_t *generator,
 
                         string_append_str(generator->media_css,
                                           attribute->final_key);
-                        string_append_str(generator->media_css, ":1");
+                        string_append_str(generator->media_css, ":");
                         string_append_str(generator->media_css,
                                           attribute->final_value);
 

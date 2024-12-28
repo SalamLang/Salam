@@ -1,3 +1,26 @@
+/**
+ * ---------------------------------------------------------------------------
+ * Salam Programming Language
+ * ---------------------------------------------------------------------------
+ *
+ * Welcome to the Salam Programming Language! Salam is a modern, efficient,
+ * and developer-friendly language created to inspire and empower programmers
+ * of all ages. With its unique features and Persian roots, Salam aims to make
+ * programming more accessible and enjoyable for everyone.
+ *
+ * This file is part of the core implementation of Salam, including its runtime
+ * and compiler components. By contributing to or using this codebase, you are
+ * part of a growing community dedicated to innovation and inclusivity in
+ * programming.
+ *
+ * Explore Salam further:
+ * - Website: https://www.salamlang.ir/
+ * - GitHub: https://github.com/SalamLang/Salam
+ *
+ * Thank you for being part of this journey!
+ * ---------------------------------------------------------------------------
+ */
+
 #ifndef _MAIN_H
 #define _MAIN_H
 
@@ -21,9 +44,36 @@
 #include "validator.h"
 #include "validator_style.h"
 
+
+
+/**
+ * ---------------------------------------------------------------------------
+ * Salam Programming Language
+ * ---------------------------------------------------------------------------
+ *
+ * Welcome to the Salam Programming Language! Salam is a modern, efficient,
+ * and developer-friendly language created to inspire and empower programmers
+ * of all ages. With its unique features and Persian roots, Salam aims to make
+ * programming more accessible and enjoyable for everyone.
+ *
+ * This file is part of the core implementation of Salam, including its runtime
+ * and compiler components. By contributing to or using this codebase, you are
+ * part of a growing community dedicated to innovation and inclusivity in
+ * programming.
+ *
+ * Explore Salam further:
+ * - Website: https://www.salamlang.ir/
+ * - GitHub: https://github.com/SalamLang/Salam
+ *
+ * Thank you for being part of this journey!
+ * ---------------------------------------------------------------------------
+ */
+
+#include "main.h"
+
 /**
  *
- * @function lint
+ * @function lint_do
  * @brief Linting the given content and parameters
  * @params {bool} isCode - Whether the content is code or file
  * @params {const char*} path - Path of the file
@@ -32,7 +82,7 @@
  * @returns {void}
  *
  */
-void lint(bool isCode, const char *path, char *content, char *build_file);
+void lint_do(bool isCode, const char *path, char *content, char *build_file);
 
 /**
  *
@@ -58,14 +108,47 @@ void run(bool isCode, const char *path, char *content, char *build_dir);
 void help(char *app);
 
 /**
- * 
+ *
  * @function update
  * @brief Update and download new version
  * @params {void}
  * @returns {void}
- * 
+ *
  */
 void update();
+
+/**
+ *
+ * @function lint
+ * @brief Lint a file or code based on arguments
+ * @params {int} argc - Number of arguments
+ * @params {char**} argv - Array of arguments
+ * @returns {void}
+ *
+ */
+void lint(int argc, char **argv);
+
+/**
+ *
+ * @function code
+ * @brief Execute code content
+ * @params {int} argc - Number of arguments
+ * @params {char**} argv - Array of arguments
+ * @returns {void}
+ *
+ */
+void code(int argc, char **argv);
+
+/**
+ *
+ * @function execute
+ * @brief Execute a file
+ * @params {int} argc - Number of arguments
+ * @params {char**} argv - Array of arguments
+ * @returns {void}
+ *
+ */
+void execute(int argc, char** argv);
 
 /**
  *

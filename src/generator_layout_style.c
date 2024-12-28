@@ -170,58 +170,6 @@ string_t *generator_code_layout_styles(hashmap_layout_attribute_t *styles,
 
 /**
  *
- * @function generator_code_layout_style_name
- * @brief Convert AST layout attribute type to CSS attribute name
- * @params {ast_layout_attribute_type_t} type - Layout Attribute Type
- * @returns {char*} name - Name
- *
- */
-char *generator_code_layout_style_name(ast_layout_attribute_type_t type) {
-    DEBUG_ME;
-    switch (type) {
-#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
-#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
-#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT
-
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                        GENERATED_NAME, FILTER,               \
-                                        ALLOWED_VALUES, SUBTAGS)              \
-    case TYPE:                                                                \
-        return GENERATED_NAME;
-
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(                   \
-    TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
-    ALLOWED_VALUES, SUBTAGS)
-
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER,          \
-                                             ENDUSER_NAME, GENERATED_NAME,    \
-                                             FILTER, ALLOWED_VALUES, SUBTAGS) \
-    case TYPE:                                                                \
-        return GENERATED_NAME;
-
-#include "generated-config/ast_layout_attribute_style_type.h"
-
-#undef ADD_LAYOUT_ATTRIBUTE_TYPE
-#undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
-
-#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,   \
-                                  GENERATED_NAME, FILTER, ALLOWED_VALUES, \
-                                  SUBTAGS)                                \
-    case TYPE:                                                            \
-        return "ERROR";
-
-#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                         GENERATED_NAME, FILTER,               \
-                                         ALLOWED_VALUES, SUBTAGS)
-
-#include "generated-config/ast_layout_attribute_type.h"
-    }
-
-    return "error????";
-}
-
-/**
- *
  * @function generator_code_layout_attribute_style_state_enduser_name_to_type
  * @brief Convert style attribute state enduser name to type
  * @params {char*} name - Name

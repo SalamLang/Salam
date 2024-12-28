@@ -140,19 +140,17 @@ string_t *generator_code_layout_block_item(generator_t *generator,
         lexer_t *lexer = lexer_create(path, content);
         lexer_lex(lexer);
 
-        // lexer_save(lexer, "include-tokens.txt");
-
         ast_t *ast = parser_parse(lexer);
 
         if (ast->layout == NULL) {
             error_generator(1, "Include file '%s' does not have a layout block",
                             path);
         }
-        // else if (ast->layout->block->children->length == 0)
-        // {
-        // 	error_generator(1, "Include file '%s' layout block does not have
-        // any children", path);
-        // }
+        else if (ast->layout->block->children->length == 0)
+        {
+        	error_generator(1, "Include file '%s' layout block does not have
+        any children", path);
+        }
         else {
             for (size_t i = 1; i <= repeat_value_sizet; i++) {
                 if (ast->layout->block->text_content != NULL) {
@@ -535,8 +533,6 @@ void generator_code_head(generator_t *generator, ast_layout_block_t *block,
         return;
     }
 
-    // size_t html_tags_length = 0;
-
     if (block->attributes != NULL) {
         hashmap_t *attributes = cast(hashmap_t *, block->attributes);
         size_t attribute_capacity = attributes->capacity;
@@ -552,8 +548,6 @@ void generator_code_head(generator_t *generator, ast_layout_block_t *block,
                     attribute->isContent == true) {
                 } else {
                     generator_code_head_item(attribute, head);
-
-                    // html_tags_length++;
                 }
 
                 entry = cast(hashmap_entry_t *, entry->next);

@@ -150,7 +150,7 @@ string_t *generator_code_layout_styles(hashmap_layout_attribute_t *styles,
                     }
 
                     string_append_str(code, attribute->final_key);
-                    string_append_str(code, ":");
+                    string_append_str(code, ":4");
                     string_append_str(code, attribute->final_value);
 
                     if (css_attributes_length != NULL) {

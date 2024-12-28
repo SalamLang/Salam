@@ -56,9 +56,10 @@ void generator_code_layout_value(hashmap_t *attrs, hashmap_t *new_attrs,
         return;
     }
 
-    if (attribute->final_key == NULL) {
-        attribute->final_key = string_strdup(attribute->key);
-    }
+    // comment it mate
+    // if (attribute->final_key == NULL) {
+    //     attribute->final_key = string_strdup(attribute->key);
+    // }
 
     if (attribute->final_value == NULL) {
         attribute->final_value = string_strdup(
@@ -487,9 +488,14 @@ void generator_code_head_meta_children(generator_t *generator,
                         ast_layout_attribute_t *attribute =
                             cast(ast_layout_attribute_t *, entry->value);
 
-                        if (attribute->final_key == NULL) {
-                            attribute->final_key = string_strdup(attribute->key);
-                        }
+                        generator_code_layout_value(node_block->attributes,
+                                                    node_block->attributes,
+                                                    attribute);
+
+                        // comment it mate
+                        // if (attribute->final_key == NULL) {
+                        //     attribute->final_key = string_strdup(attribute->key);
+                        // }
 
                         string_append_str(
                             generator->css,
@@ -755,9 +761,10 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                             string_append_char(html_attributes, ' ');
                         }
 
-                        if (attribute->final_key == NULL) {
-                            attribute->final_key = string_strdup(attribute->key);
-                        }
+                        // comment it mate
+                        // if (attribute->final_key == NULL) {
+                        //     attribute->final_key = string_strdup(attribute->key);
+                        // }
 
                         string_append_str(
                             html_attributes,
@@ -1004,10 +1011,11 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                             string_append_char(generator->media_css, ';');
                         }
 
-                        if (attribute->final_key == NULL) {
-                            attribute->final_key =
-                                string_strdup(attribute->key);
-                        }
+                        // comment it mate
+                        // if (attribute->final_key == NULL) {
+                        //     attribute->final_key =
+                        //         string_strdup(attribute->key);
+                        // }
 
                         string_append_str(generator->media_css,
                                           attribute->final_key);

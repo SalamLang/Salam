@@ -222,66 +222,6 @@ char *generator_code_layout_style_name(ast_layout_attribute_type_t type) {
 
 /**
  *
- * @function generator_code_layout_attribute_style_state_type_to_enduser_name
- * @brief Convert style attribute state type to enduser name
- * @params {ast_layout_attribute_style_state_type} type - Style Attribute State
- * Type
- * @returns {char*} name - Name
- *
- */
-char *generator_code_layout_attribute_style_state_type_to_enduser_name(
-    ast_layout_attribute_style_state_type type) {
-    DEBUG_ME;
-    switch (type) {
-#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
-#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_REPEAT
-
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER,       \
-                                              ENDUSER_NAME, GENERATED_NAME) \
-    case TYPE:                                                              \
-        return ENDUSER_NAME;
-
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_REPEAT( \
-    TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME)
-
-#include "generated-config/ast_layout_attribute_style_state_type.h"
-    }
-
-    return "unknown style state endusername";
-}
-
-/**
- *
- * @function generator_code_layout_attribute_style_state_type_to_name
- * @brief Convert style attribute state type to name
- * @params {ast_layout_attribute_style_state_type} type - Style Attribute State
- * Type
- * @returns {char*} name - Name
- *
- */
-char *generator_code_layout_attribute_style_state_type_to_name(
-    ast_layout_attribute_style_state_type type) {
-    DEBUG_ME;
-    switch (type) {
-#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
-#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_REPEAT
-
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER,       \
-                                              ENDUSER_NAME, GENERATED_NAME) \
-    case TYPE:                                                              \
-        return NAME;
-
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_REPEAT( \
-    TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME)
-
-#include "generated-config/ast_layout_attribute_style_state_type.h"
-    }
-
-    return "unknown style state name";
-}
-
-/**
- *
  * @function generator_code_layout_attribute_style_state_enduser_name_to_type
  * @brief Convert style attribute state enduser name to type
  * @params {char*} name - Name
@@ -345,38 +285,4 @@ char *generator_code_layout_attribute_style_state_type_to_generated_name(
     }
 
     return "unknown style state generated name";
-}
-
-/**
- *
- * @function generator_code_layout_attribute_style_state_name_to_type
- * @brief Convert style attribute state name to type
- * @params {char*} name - Name
- * @returns {ast_layout_attribute_style_state_type} type - Type
- *
- */
-ast_layout_attribute_style_state_type
-generator_code_layout_attribute_style_state_name_to_type(char *name) {
-    DEBUG_ME;
-    if (name == NULL) {
-        return AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR;
-    }
-
-#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE
-#undef ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_REPEAT
-
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE(TYPE, NAME, NAME_LOWER,       \
-                                              ENDUSER_NAME, GENERATED_NAME) \
-    else if (strcmp(name, NAME) == 0) {                                     \
-        return TYPE;                                                        \
-    }
-
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_REPEAT( \
-    TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME)
-
-    if (false) {
-    }
-#include "generated-config/ast_layout_attribute_style_state_type.h"
-
-    return AST_LAYOUT_ATTRIBUTE_STYLE_STATE_TYPE_ERROR;
 }

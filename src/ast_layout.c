@@ -619,7 +619,7 @@ ast_layout_attribute_type_t ast_layout_attribute_enduser_name_in_node_to_type(ch
         if (layout_map[i].type == parent_node_type) {
             for (int j = 0 ; j < layout_map[i].count_allowed_arguments; j++) {
                 ast_layout_attribute_type_t argument_type = layout_map[i].allowed_arguments[j];
-                char *enduser_name = ast_layout_node_type_to_enduser_name(argument_type);
+                char *enduser_name = ast_layout_attribute_type_to_enduser_name(argument_type);
 
                 if (strcmp(name, enduser_name) == 0) {
                     return argument_type;

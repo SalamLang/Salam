@@ -25,7 +25,7 @@
 
 #include "generated-config/ast_layout_attribute_style_value_extern.h"
 #include "generated-config/ast_layout_attribute_value.h"
-#include "generated-config/ast_layout_type_attributes_values.h"
+#include "generated-config/ast_layout_type_attributes_values_extern.h"
 
 /**
  *

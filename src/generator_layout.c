@@ -114,7 +114,6 @@ string_t *generator_code_layout_block_item(generator_t *generator,
     }
 
     if (node->type == AST_LAYOUT_TYPE_INCLUDE) {
-        hashmap_layout_attribute_print(attributes);
         ast_layout_attribute_t *src = hashmap_get(attributes, "src");
         ast_value_t *src_value = NULL;
 

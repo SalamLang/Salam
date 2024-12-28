@@ -277,13 +277,13 @@ char *attribute_css_size_value(char *attribute_value) {
 
 /**
  *
- * @function is_style_attribute
+ * @function is_attribute_style_type_a_style
  * @brief Check if the attribute type is a CSS attribute
  * @params {ast_layout_attribute_type_t} type - Attribute type
  * @returns {bool} - True if the attribute type is a style, false otherwise
  *
  */
-bool is_style_attribute(ast_layout_attribute_type_t type) {
+bool is_attribute_style_type_a_style(ast_layout_attribute_type_t type) {
     DEBUG_ME;
     switch (type) {
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
@@ -305,26 +305,6 @@ bool is_style_attribute(ast_layout_attribute_type_t type) {
 
 #include "generated-config/ast_layout_attribute_style_type.h"
         return true;
-
-        default:
-            return false;
-    }
-}
-
-/**
- *
- * @function is_attribute_type_a_style
- * @brief Check if the attribute type is a style
- * @params {ast_layout_attribute_type_t} type - Attribute type
- * @returns {bool} - True if the attribute type is a style, false otherwise
- *
- */
-bool is_attribute_type_a_style(ast_layout_attribute_type_t type) {
-    DEBUG_ME;
-    switch (type) {
-        case AST_LAYOUT_ATTRIBUTE_TYPE_CLASS:
-        case AST_LAYOUT_ATTRIBUTE_TYPE_ID:
-            return true;
 
         default:
             return false;

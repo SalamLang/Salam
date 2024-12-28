@@ -105,6 +105,8 @@ string_t *generator_code_layout_block_item(generator_t *generator,
         }
     }
 
+    printf("repeat_value_sizet: %zu\n", repeat_value_sizet);
+
     if (repeat_value_sizet < 1) {
         error_generator(1,
                         "The 'repeat' attribute value must be greater than 0");
@@ -114,11 +116,14 @@ string_t *generator_code_layout_block_item(generator_t *generator,
     }
 
     if (node->type == AST_LAYOUT_TYPE_INCLUDE) {
+        printf("is include\n");
+        hashmap_layout_attribute_print(attributes);
         ast_layout_attribute_t *src = hashmap_get(attributes, "src");
         ast_value_t *src_value = NULL;
 
         if (src == NULL) {
-            error_generator(1, "Include node must have a 'src' attribute");
+            // TODO
+            error_generator(1, "Include node must have a '%s' attribute", "src");
         } else if (src->values->length > 1) {
             error_generator(
                 1, "Include node 'src' attribute must have only one value");

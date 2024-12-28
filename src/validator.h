@@ -125,4 +125,14 @@ void validate_layout_mainbody(ast_layout_block_t *block);
 bool validate_value(hashmap_t *attributes, hashmap_t *new_attributes,
                     ast_layout_attribute_t *attribute);
 
+/**
+ *
+ * @function is_attribute_type_a
+ * @brief Check if the attribute type is
+ * @params {ast_layout_attribute_type_t} type - Attribute type
+ * @returns {bool} - True if the attribute type is, false otherwise
+ *
+ */
+bool is_attribute_type_a(ast_layout_attribute_type_t type);
+
 #endif

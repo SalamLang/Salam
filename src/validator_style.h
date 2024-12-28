@@ -39,11 +39,6 @@
 #include "string_buffer.h"
 #include "validator.h"
 
-typedef struct ast_layout_attribute_pair_t {
-    char *input;
-    char *output;
-} ast_layout_attribute_pair_t;
-
 /**
  *
  * @function has_font_extension
@@ -88,23 +83,13 @@ char *attribute_css_size_value(char *attribute_value);
 
 /**
  *
- * @function is_style_attribute
+ * @function is_attribute_style_type_a_style
  * @brief Check if the attribute type is a CSS attribute
  * @params {ast_layout_attribute_type_t} type - Attribute type
  * @returns {bool} - True if the attribute type is a style, false otherwise
  *
  */
-bool is_style_attribute(ast_layout_attribute_type_t type);
-
-/**
- *
- * @function is_attribute_type_a_style
- * @brief Check if the attribute type is a style
- * @params {ast_layout_attribute_type_t} type - Attribute type
- * @returns {bool} - True if the attribute type is a style, false otherwise
- *
- */
-bool is_attribute_type_a_style(ast_layout_attribute_type_t type);
+bool is_attribute_style_type_a_style(ast_layout_attribute_type_t type);
 
 /**
  *

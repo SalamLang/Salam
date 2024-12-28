@@ -148,8 +148,7 @@ string_t *generator_code_layout_block_item(generator_t *generator,
         }
         else if (ast->layout->block->children->length == 0)
         {
-        	error_generator(1, "Include file '%s' layout block does not have
-        any children", path);
+        	error_generator(1, "Include file '%s' layout block does not have any children", path);
         }
         else {
             for (size_t i = 1; i <= repeat_value_sizet; i++) {

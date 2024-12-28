@@ -643,9 +643,9 @@ bool ast_layout_node_type_is_mother(ast_layout_node_type_t type) {
 
 ast_layout_attribute_type_t ast_layout_attribute_enduser_name_in_node_to_type(char *name, ast_layout_node_type_t parent_node_type)
 {
-    for (int i = 0; i < map_size; i++) {
+    for (size_t i = 0; i < map_size; i++) {
         if (layout_map[i].type == parent_node_type) {
-            for (int j = 0 ; j < layout_map[i].count_allowed_arguments; j++) {
+            for (size_t j = 0 ; j < layout_map[i].count_allowed_arguments; j++) {
                 ast_layout_attribute_type_t argument_type = layout_map[i].allowed_arguments[j];
                 char *enduser_name = ast_layout_attribute_type_to_enduser_name(argument_type);
 

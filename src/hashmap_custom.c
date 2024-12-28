@@ -220,6 +220,30 @@ void hashmap_layout_attribute_print(hashmap_layout_attribute_t *map) {
         printf("Hashmap layout attributes is empty\n");
         return;
     }
+
+    size_t map_capacity = map->capacity;
+
+    for (size_t i = 0; i < map_capacity; i++) {
+        hashmap_entry_t *entry = map->data[i];
+
+        while (entry) {
+            printf("Bucket[%zu]: Key: %s, Value: ", i, entry->key);
+
+            ast_layout_attribute_t *layout_attribute = entry->value;
+
+            if (layout_attribute != NULL) {
+                if (layout_attribute->print) {
+                    layout_attribute->print(layout_attribute);
+                } else {
+                    printf("(No print function defined for this attribute)\n");
+                }
+            } else {
+                printf("NULL\n");
+            }
+
+            entry = cast(hashmap_entry_t *, entry->next);
+        }
+    }
 }
 
 /**

@@ -266,7 +266,7 @@ void parser_parse_layout_block_attribute(bool onlyStyle,
     char *attribute_key_name =
         ast_layout_attribute_type_to_name(attribute_key_type);
 
-    if (is_style_attribute(attribute_key_type)) {
+    if (is_attribute_style_type_a_style(attribute_key_type)) {
         if (hashmap_has(normal, attribute_key_name)) {
             attribute->destroy(attribute);
 

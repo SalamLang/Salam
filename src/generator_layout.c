@@ -348,6 +348,24 @@ void generator_code_layout_body(generator_t *generator,
     body_content->destroy(body_content);
 }
 
+// TODO
+bool is_generator_code_head(ast_layout_attribute_t *attribute)
+{
+    switch (attribute->type) {
+        case AST_LAYOUT_ATTRIBUTE_TYPE_TITLE:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_DESCRIPTION:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_KEYWORDS:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_CHARSET:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT:
+        case AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH:
+            return true;
+    
+    default:
+        return false;
+    }
+}
+
 /**
  *
  * @function generator_code_head_item
@@ -359,6 +377,11 @@ void generator_code_layout_body(generator_t *generator,
 void generator_code_head_item(ast_layout_attribute_t *attribute,
                               string_t *head) {
     DEBUG_ME;
+    if (! is_generator_code_head(attribute))
+    {
+        return;
+    }
+
     if (head == NULL) {
         return;
     }
@@ -669,6 +692,10 @@ void generator_code_layout_html(generator_t *generator,
 
                 generator_code_layout_value(layout_block->attributes, NULL,
                                             attribute);
+                                            
+                if (is_generator_code_head(attribute)) {
+                    attribute->belongsToLayout = false;
+                }
 
                 entry = cast(hashmap_entry_t *, entry->next);
             }

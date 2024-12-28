@@ -115,7 +115,7 @@ void help(char *app);
  * @returns {void}
  *
  */
-void update();
+void update(int argc, char **argv);
 
 /**
  *
@@ -148,7 +148,7 @@ void code(int argc, char **argv);
  * @returns {void}
  *
  */
-void execute(int argc, char** argv);
+void execute(int argc, char **argv);
 
 /**
  *

@@ -172,7 +172,7 @@ void help(char *app) {
  * @returns {void}
  *
  */
-void update()
+void update(int argc, char **argv)
 {
     printf("Check latest version...\n");
 
@@ -180,14 +180,18 @@ void update()
     const char *port = "80";
     const char *hostname = "versions.salamlang.ir";
 
+    const char *path =
 #ifdef _WIN32
-    const char *path = "/latest/windows";
+"/latest/windows";
 #elif __APPLE__
-    const char *path = "/latest/macos";
+"/latest/macos";
 #elif __linux__
-    const char *path = "/latest/linux";
+"/latest/linux";
+#elif __EMSCRIPTEN__
+"/latest/webassembly";
 #else
-    printf("Unsupported OS\n");
+"Unsupported OS";
+    printf("%s\n", path);
     exit(1);
 #endif
 
@@ -276,7 +280,7 @@ void code(int argc, char **argv)
  * @returns {void}
  *
  */
-void execute(int argc, char** argv)
+void execute(int argc, char **argv)
 {
     const char *path = argv[1];
     if (!file_exists(path)) {

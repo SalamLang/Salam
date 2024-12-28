@@ -56,11 +56,6 @@ void generator_code_layout_value(hashmap_t *attrs, hashmap_t *new_attrs,
         return;
     }
 
-    // comment it mate
-    // if (attribute->final_key == NULL) {
-    //     attribute->final_key = string_strdup(attribute->key);
-    // }
-
     if (attribute->final_value == NULL) {
         attribute->final_value = string_strdup(
             cast(ast_value_t *, attribute->values->data[0])->data.string_value);
@@ -492,11 +487,6 @@ void generator_code_head_meta_children(generator_t *generator,
                                                     node_block->attributes,
                                                     attribute);
 
-                        // comment it mate
-                        // if (attribute->final_key == NULL) {
-                        //     attribute->final_key = string_strdup(attribute->key);
-                        // }
-
                         string_append_str(
                             generator->css,
                             attribute->final_key);  // TODO: Why name lowercase
@@ -761,11 +751,6 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                             string_append_char(html_attributes, ' ');
                         }
 
-                        // comment it mate
-                        // if (attribute->final_key == NULL) {
-                        //     attribute->final_key = string_strdup(attribute->key);
-                        // }
-
                         string_append_str(
                             html_attributes,
                             attribute->final_key);  // TODO: Why name lowercase
@@ -1010,12 +995,6 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                         if (media_queries_styles_length != 0) {
                             string_append_char(generator->media_css, ';');
                         }
-
-                        // comment it mate
-                        // if (attribute->final_key == NULL) {
-                        //     attribute->final_key =
-                        //         string_strdup(attribute->key);
-                        // }
 
                         string_append_str(generator->media_css,
                                           attribute->final_key);

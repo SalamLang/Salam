@@ -304,6 +304,7 @@ ast_layout_node_t *ast_layout_node_create(
 void ast_layout_node_print(ast_layout_node_t *value) {
     DEBUG_ME;
     printf("Layout Node: %s\n", value->tag);
+
     value->block->print(value->block);
 }
 
@@ -381,6 +382,7 @@ void ast_layout_destroy(ast_layout_t *value) {
 void ast_layout_print(ast_layout_t *value) {
     DEBUG_ME;
     printf("Layout\n");
+    
     value->block->print(value->block);
 }
 

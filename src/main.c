@@ -84,13 +84,7 @@ void run(bool isCode, const char *path, char *content, char *build_dir) {
 
     lexer_lex(lexer);
 
-    // lexer_debug(lexer);
-
-    // lexer_save(lexer, "tokens.txt");
-
     ast_t *ast = parser_parse(lexer);
-
-    // ast_debug(ast);
 
     generator_t *generator = generator_create(ast);
 
@@ -104,8 +98,6 @@ void run(bool isCode, const char *path, char *content, char *build_dir) {
     }
 
     generator_code(generator);
-
-    // generator_debug(generator);
 
     if (isCode == true) {
         if (build_dir == NULL) {
@@ -173,6 +165,45 @@ void help(char *app) {
 }
 
 /**
+ * 
+ * @function update
+ * @brief Update and download new version
+ * @params {void}
+ * @returns {void}
+ * 
+ */
+void update()
+{
+    printf("Check latest version...\n");
+
+    const char *output_file = "update.tmp";
+    const char *port = "80";
+    const char *hostname = "versions.salamlang.ir";
+
+#ifdef _WIN32
+    const char *path = "/latest/windows";
+#elif __APPLE__
+    const char *path = "/latest/macos";
+#elif __linux__
+    const char *path = "/latest/linux";
+#else
+    printf("Unsupported OS\n");
+    exit(1);
+#endif
+
+    FILE *fp = fopen(output_file, "wb");
+
+    printf("Connecting to the server...\n");
+    bool res = download(fp, port, hostname, path);
+
+    if (res == true) {
+        printf("Download successful.\n");
+    } else {
+        printf("Download failed, something went wrong.\n");
+    }
+}
+
+/**
  *
  * @function doargs
  * @brief Handle command line arguments
@@ -197,33 +228,7 @@ void doargs(int argc, char **argv) {
     } else if (strcmp(path, "help") == 0) {
         help(argv[0]);
     } else if (strcmp(path, "update") == 0) {
-        printf("Check latest version...\n");
-
-        const char *output_file = "update.tmp";
-        const char *port = "80";
-        const char *hostname = "versions.salamlang.ir";
-
-#ifdef _WIN32
-        const char *path = "/latest/windows";
-#elif __APPLE__
-        const char *path = "/latest/macos";
-#elif __linux__
-        const char *path = "/latest/linux";
-#else
-        printf("Unsupported OS\n");
-        exit(1);
-#endif
-
-        FILE *fp = fopen(output_file, "wb");
-
-        printf("Connecting to the server...\n");
-        bool res = download(fp, port, hostname, path);
-
-        if (res == true) {
-            printf("Download successful.\n");
-        } else {
-            printf("Download failed, something went wrong.\n");
-        }
+        update();
     } else if (strcmp(path, "lint") == 0) {
         if (argc <= 2) {
             error(1, "Usage: %s lint <file>\n", argv[0]);

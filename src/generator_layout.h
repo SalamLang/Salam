@@ -157,4 +157,7 @@ void generator_code_head_meta_children(generator_t *generator,
 string_t *generator_code_layout_block_item(generator_t *generator,
                                            ast_layout_node_t *node);
 
+// TODO
+bool is_generator_code_head(ast_layout_attribute_t *attribute);
+
 #endif

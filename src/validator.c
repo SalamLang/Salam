@@ -220,7 +220,6 @@ bool validate_value(hashmap_t *attributes, hashmap_t *new_attributes,
                     ast_layout_attribute_t *attribute) {
     DEBUG_ME;
     ast_value_t *first = attribute->values->data[0];
-    // char *value = first->data.string_value;
 
     if (attribute->values->length < 1) {
         error_validator(

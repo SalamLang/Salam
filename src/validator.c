@@ -162,6 +162,42 @@ void validate_layout_mainbody(ast_layout_block_t *block) {
 
 /**
  *
+ * @function is_attribute_type_a
+ * @brief Check if the attribute type is
+ * @params {ast_layout_attribute_type_t} type - Attribute type
+ * @returns {bool} - True if the attribute type is, false otherwise
+ *
+ */
+bool is_attribute_type_a(ast_layout_attribute_type_t type) {
+    DEBUG_ME;
+    switch (type) {
+#undef ADD_LAYOUT_ATTRIBUTE_TYPE
+#undef ADD_LAYOUT_ATTRIBUTE_TYPE_HIDE
+#undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
+
+#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
+                                        GENERATED_NAME, FILTER,               \
+                                        ALLOWED_VALUES, SUBTAGS)              \
+    case TYPE:
+
+#define ADD_LAYOUT_ATTRIBUTE_TYPE_HIDE(TYPE, NAME, NAME_LOWER,       \
+                                             ENDUSER_NAME, GENERATED_NAME, \
+                                             FILTER, ALLOWED_VALUES, SUBTAGS)
+
+#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(                   \
+    TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
+    ALLOWED_VALUES, SUBTAGS)
+
+#include "generated-config/ast_layout_attribute_type.h"
+        return true;
+
+        default:
+            return false;
+    }
+}
+
+/**
+ *
  * @function token_belongs_to_ast_layout_node
  * @brief Check if the token belongs to the AST layout node
  * @params {ast_layout_attribute_type_t} attribute_key_type - Attribute key type
@@ -186,11 +222,11 @@ bool token_belongs_to_ast_layout_node(
         attribute->ignoreMe = true;
 
         return true;
-    } else if (is_style_attribute(attribute_key_type)) {
+    } else if (is_attribute_style_type_a_style(attribute_key_type)) {
         attribute->isStyle = true;
 
         return true;
-    } else if (is_attribute_type_a_style(attribute_key_type)) {
+    } else if (is_attribute_type_a(attribute_key_type)) {
         return true;
     }
 

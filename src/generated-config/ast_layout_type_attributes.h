@@ -92,6 +92,9 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_CANVAS) {
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_UL) {
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_LINK) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_link, valid_attributes_link_length)) {
+        return true;
+    }
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_OL) {
 }
@@ -134,6 +137,13 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FONT) {
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_MEDIA) {
 }
 // ----------- END AUTO GENERATED ----------- //
+
+
+
+
+
+
+
 
 
 

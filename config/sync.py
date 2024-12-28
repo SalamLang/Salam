@@ -375,6 +375,29 @@ def prettify_layout_attribute_style_state_type(
         )
 
 
+def prettify_layout_type_attributes_all(
+    item: Dict[str, Any], group: Dict[str, Any]
+) -> str:
+    """
+    TODO
+    """
+
+    attributes = item.get("attributes", [])
+    if attributes is None:
+        attributes = []
+
+    if "generate_name" in item:
+        itemid = item["id"]
+        itemid_lower = itemid.replace("AST_LAYOUT_TYPE_", "").lower()
+
+        var_attrs = f"valid_attributes_{itemid_lower}"
+        var_attrs_length = f"valid_attributes_{itemid_lower}_length"
+
+        return "{" + f" {itemid}, {var_attrs}, {var_attrs_length}" + " },\n"
+    else:
+        return ""
+    
+
 def prettify_layout_type_attributes_values(
     item: Dict[str, Any], group: Dict[str, Any]
 ) -> str:
@@ -523,6 +546,11 @@ FILES = [
         "input": "layout/type.yaml",
         "output": "ast_layout_type_attributes_values.h",
         "prettify": prettify_layout_type_attributes_values,
+    },
+    {
+        "input": "layout/type.yaml",
+        "output": "ast_layout_type_attributes_all.h",
+        "prettify": prettify_layout_type_attributes_all,
     },
     {
         "input": "layout/attribute/type.yaml",

@@ -80,6 +80,17 @@ typedef enum {
 #include "generated-config/ast_layout_attribute_style_type.h"
 } ast_layout_attribute_type_t;
 
+typedef struct ast_layout_attribute_pair_t {
+    char *input;
+    char *output;
+} ast_layout_attribute_pair_t;
+
+typedef struct {
+    ast_layout_node_type_t type;
+    const ast_layout_attribute_type_t *allowed_arguments;
+    size_t count_allowed_arguments;
+} layout_map_entry_t;
+
 #include "array.h"
 #include "array_custom.h"
 #include "ast.h"
@@ -303,6 +314,18 @@ ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_type(
 
 /**
  *
+ * @function enduser_name_to_ast_layout_attribute_type_in_node
+ * @brief Convert enduser attribute name in a specific node to AST layout node type
+ * @params {char*} name - Name
+ * @params {ast_layout_node_type_t} parent_node_type - Parent node type
+ * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
+ *
+ */
+ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_type_in_node(
+    char *name, ast_layout_node_type_t parent_node_type);
+
+/**
+ *
  * @function token_to_ast_layout_node_type
  * @brief Convert token to AST layout node type
  * @params {token_t*} token - Token
@@ -397,4 +420,15 @@ ast_layout_node_type_t enduser_name_to_ast_layout_node_type(char *name);
  */
 bool ast_layout_attribute_has_any_sub_value(ast_layout_attribute_t *value);
 
+/**
+ *
+ * @function ast_layout_attribute_type_to_enduser_name
+ * @brief Convert AST layout node type to enduser attribute name
+ * @params {ast_layout_attribute_type_t} type - Layout Attribute Type
+ * @returns {char *} name - Enduser attribute name
+ *
+ */
+char *ast_layout_attribute_type_to_enduser_name(
+    ast_layout_attribute_type_t type);
+    
 #endif

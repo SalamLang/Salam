@@ -103,19 +103,6 @@ void generator_code_head(generator_t *generator, ast_layout_block_t *block,
  *
  */
 void generator_code_layout(generator_t *generator);
-/**
- *
- * @function generator_code_layout_styles
- * @brief Generate the CSS code for the layout block
- * @params {hashmap_layout_attribute_t*} styles - Styles
- * @params {ast_layout_block_t*} block - Layout block
- * @params {size_t*} css_attributes_length - CSS attributes length
- * @returns {string_t*}
- *
- */
-string_t *generator_code_layout_styles(hashmap_layout_attribute_t *styles,
-                                       ast_layout_block_t *block,
-                                       size_t *css_attributes_length);
 
 /**
  *

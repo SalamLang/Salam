@@ -61,6 +61,20 @@ generator_code_layout_attribute_style_state_enduser_name_to_type(char *name);
 
 /**
  *
+ * @function generator_code_layout_styles
+ * @brief Generate the CSS code for the layout block
+ * @params {hashmap_layout_attribute_t*} styles - Styles
+ * @params {ast_layout_block_t*} block - Layout block
+ * @params {size_t*} css_attributes_length - CSS attributes length
+ * @returns {string_t*}
+ *
+ */
+string_t *generator_code_layout_styles(hashmap_layout_attribute_t *styles,
+                                       ast_layout_block_t *block,
+                                       size_t *css_attributes_length);
+
+/**
+ *
  * @function generator_code_layout_attribute_style_state_type_to_generated_name
  * @brief Convert style attribute state type to generated name
  * @params {ast_layout_attribute_style_state_type} type - Style Attribute State

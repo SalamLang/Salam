@@ -674,71 +674,55 @@ ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_type_in_node(
 {
     DEBUG_ME;
     ast_layout_attribute_type_t type = ast_layout_attribute_enduser_name_in_node_to_type(name, parent_node_type);
-    
-    if (parent_node_type == AST_LAYOUT_TYPE_LAYOUT) {
-        if (valid_attributes_layout_length > 0) {
-            for (int i = 0; i < valid_attributes_layout_length; i++) {
-                if (valid_attributes_layout[i] == 
+
+    if (type == AST_LAYOUT_ATTRIBUTE_TYPE_ERROR ) {
+        // #undef ADD_LAYOUT_ATTRIBUTE_TYPE
+        // #undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
+
+        // #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,   \
+        //                                   GENERATED_NAME, FILTER, ALLOWED_VALUES, \
+        //                                   SUBTAGS)                                \
+        //     if (strcmp(name, ENDUSER_NAME) == 0) {                           \
+        //         type = TYPE;                                                      \
+        //         count++;                                                         \
+        //     }
+
+        // #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
+        //                                          GENERATED_NAME, FILTER,               \
+        //                                          ALLOWED_VALUES, SUBTAGS)              \
+        //     if (strcmp(name, ENDUSER_NAME) == 0) {                                \
+        //         type = TYPE;                                                           \
+        //         count++;                                                         \
+        //     }
+
+        // #include "generated-config/ast_layout_attribute_type.h"
+
+        #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
+        #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT
+        #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
+
+        #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
+                                                GENERATED_NAME, FILTER,               \
+                                                ALLOWED_VALUES, SUBTAGS)              \
+            else if (strcmp(name, ENDUSER_NAME) == 0) {                               \
+                type = TYPE;                                                          \
+                return type;                                                          \
             }
-        }
+
+        #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(                   \
+            TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
+            ALLOWED_VALUES, SUBTAGS)                                      \
+            else if (strcmp(name, ENDUSER_NAME) == 0) {                   \
+                type = TYPE;                                              \
+                return type;                                                          \
+            }
+
+        #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER,       \
+                                                    ENDUSER_NAME, GENERATED_NAME, \
+                                                    FILTER, ALLOWED_VALUES, SUBTAGS)
+
+        #include "generated-config/ast_layout_attribute_style_type.h"
     }
-
-    if (false) {
-    }
-
-// #undef ADD_LAYOUT_ATTRIBUTE_TYPE
-// #undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
-
-// #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,   \
-//                                   GENERATED_NAME, FILTER, ALLOWED_VALUES, \
-//                                   SUBTAGS)                                \
-//     if (strcmp(name, ENDUSER_NAME) == 0) {                           \
-//         type = TYPE;                                                      \
-//         count++;                                                         \
-//     }
-
-// #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-//                                          GENERATED_NAME, FILTER,               \
-//                                          ALLOWED_VALUES, SUBTAGS)              \
-//     if (strcmp(name, ENDUSER_NAME) == 0) {                                \
-//         type = TYPE;                                                           \
-//         count++;                                                         \
-//     }
-
-// #include "generated-config/ast_layout_attribute_type.h"
-
-#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE
-#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT
-#undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
-
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                        GENERATED_NAME, FILTER,               \
-                                        ALLOWED_VALUES, SUBTAGS)              \
-    else if (strcmp(name, ENDUSER_NAME) == 0) {                               \
-        type = TYPE;                                                          \
-        return type;                                                          \
-    }
-
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(                   \
-    TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
-    ALLOWED_VALUES, SUBTAGS)                                      \
-    else if (strcmp(name, ENDUSER_NAME) == 0) {                   \
-        type = TYPE;                                              \
-        return type;                                                          \
-    }
-
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER,       \
-                                             ENDUSER_NAME, GENERATED_NAME, \
-                                             FILTER, ALLOWED_VALUES, SUBTAGS)
-
-#include "generated-config/ast_layout_attribute_style_type.h"
-
-    // if (count > 1) {
-    //     error_ast(2,
-    //               "Ambiguous layout attribute '%s' at line %d, column %d for "
-    //               "'%s' element",
-    //               name, 0, 0, ast_layout_node_type_to_enduser_name(parent_node_type));
-    // }
 
     return type;
 }

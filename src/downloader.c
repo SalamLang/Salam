@@ -88,7 +88,7 @@ bool download(FILE *fp, const char *port, const char *hostname,
         return false;
     }
 
-    int written =
+    size_t written =
         snprintf(request, request_size, "GET %s HTTP/1.0\r\nHost: %s\r\n\r\n",
                  path, hostname);
 

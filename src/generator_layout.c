@@ -488,14 +488,14 @@ void generator_code_head_meta_children(generator_t *generator,
                             cast(ast_layout_attribute_t *, entry->value);
 
                         if (attribute->final_key == NULL) {
-                            attribute->final_key = string_strdup(entry->key);
+                            attribute->final_key = string_strdup(attribute->key);
                         }
 
                         string_append_str(
                             generator->css,
                             attribute->final_key);  // TODO: Why name lowercase
                                                     // entry->key?
-                        string_append_char(generator->css, ':');
+                        string_append_char(generator->css, '='); // TODO: COLON
 
                         if (attribute->final_value == NULL) {
                             attribute->final_value =
@@ -756,7 +756,7 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                         }
 
                         if (attribute->final_key == NULL) {
-                            attribute->final_key = string_strdup(entry->key);
+                            attribute->final_key = string_strdup(attribute->key);
                         }
 
                         string_append_str(
@@ -804,7 +804,7 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                         string_append_char(css_attributes, ';');
                     }
                     string_append_str(css_attributes, attribute->final_key);
-                    string_append_str(css_attributes, ":");
+                    string_append_str(css_attributes, ":2");
                     string_append_str(css_attributes, attribute->final_value);
 
                     css_attributes_length++;
@@ -1011,7 +1011,7 @@ string_t *generator_code_layout_attributes(generator_t *generator,
 
                         string_append_str(generator->media_css,
                                           attribute->final_key);
-                        string_append_str(generator->media_css, ":");
+                        string_append_str(generator->media_css, ":3");
 
                         if (attribute->final_value == NULL) {
                             attribute->final_value =
@@ -1047,7 +1047,7 @@ string_t *generator_code_layout_attributes(generator_t *generator,
 
                         string_append_str(generator->media_css,
                                           attribute->final_key);
-                        string_append_str(generator->media_css, ":");
+                        string_append_str(generator->media_css, ":1");
                         string_append_str(generator->media_css,
                                           attribute->final_value);
 

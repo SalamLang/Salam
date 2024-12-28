@@ -613,6 +613,32 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char *name) {
     return type;
 }
 
+// TODO
+bool ast_layout_node_type_is_mother(ast_layout_node_type_t type) {
+    switch (type) {
+#undef ADD_LAYOUT_TYPE
+#undef ADD_LAYOUT_TYPE_HIDE
+#undef ADD_LAYOUT_TYPE_REPEAT
+
+#define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, \
+                        IS_MOTHER)                                            \
+    case TYPE:                                                                \
+        return IS_MOTHER;
+
+#define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
+                             ENDUSER_NAME, IS_MOTHER)                \
+    case TYPE:                                                       \
+        return IS_MOTHER;
+    
+#define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
+                               ENDUSER_NAME, IS_MOTHER)
+
+#include "generated-config/ast_layout_type.h"
+    }
+
+    return false;
+}
+
 ast_layout_attribute_type_t ast_layout_attribute_enduser_name_in_node_to_type(char *name, ast_layout_node_type_t parent_node_type)
 {
     for (int i = 0; i < map_size; i++) {
@@ -625,6 +651,14 @@ ast_layout_attribute_type_t ast_layout_attribute_enduser_name_in_node_to_type(ch
                     return argument_type;
                 }
             }
+        }
+    }
+
+    if (ast_layout_node_type_is_mother(parent_node_type)) {
+        char *enduser_name = ast_layout_attribute_type_to_enduser_name(AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT);
+
+        if (strcmp(name, enduser_name) == 0) {
+            return AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT;
         }
     }
 

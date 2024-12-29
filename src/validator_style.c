@@ -1075,13 +1075,13 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
 
 #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,   \
                                   GENERATED_NAME, FILTER, ALLOWED_VALUES, \
-                                  SUBTAGS)                                \
+                                  SUBTAGS, VALUE_HANDLER)                                \
     case TYPE:                                                            \
         return false;
 
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
                                          GENERATED_NAME, FILTER,               \
-                                         ALLOWED_VALUES, SUBTAGS)
+                                         ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)
 
 #include "generated-config/ast_layout_attribute_type.h"
 

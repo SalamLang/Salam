@@ -50,7 +50,7 @@ def command_layout_type(item: Dict[str, Any], prefix: str, value: str) -> str:
     )
 
 
-def command_layout_style_type(item: Dict[str, Any], prefix: str, value: str) -> str:
+def command_layout_style_type(item: Dict[str, Any], prefix: str, value: str, extra: str = 'none') -> str:
     """
     Generates a formatted command string based on the item and value provided.
     :param item: Dictionary containing item data.
@@ -75,14 +75,33 @@ def command_layout_style_type(item: Dict[str, Any], prefix: str, value: str) -> 
         else "NULL"
     )
 
-    return (
-        f"({itemid}, "
-        f'"{idtext}", '
-        f'"{idtextlower}", '
-        f'"{value}", '
-        f'"{generate_name}", '
-        f"{type}, {reserved_values}, NULL)"
-    )
+    if extra == 'none':
+        return (
+            f"({itemid}, "
+            f'"{idtext}", '
+            f'"{idtextlower}", '
+            f'"{value}", '
+            f'"{generate_name}", '
+            f"{type}, {reserved_values}, NULL)"
+        )
+    elif extra == '':
+        return (
+            f"({itemid}, "
+            f'"{idtext}", '
+            f'"{idtextlower}", '
+            f'"{value}", '
+            f'"{generate_name}", '
+            f"{type}, {reserved_values}, NULL, value_handler_simple)"
+        )
+    else:        
+        return (
+            f"({itemid}, "
+            f'"{idtext}", '
+            f'"{idtextlower}", '
+            f'"{value}", '
+            f'"{generate_name}", '
+            f"{type}, {reserved_values}, NULL, {extra})"
+        )
 
 
 # Sample usage:

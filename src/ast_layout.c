@@ -692,7 +692,7 @@ ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_type_in_node(
 
         #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
                                                 GENERATED_NAME, FILTER,               \
-                                                ALLOWED_VALUES, SUBTAGS)              \
+                                                ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)              \
             else if (strcmp(name, ENDUSER_NAME) == 0) {                               \
                 type = TYPE;                                                          \
                 return type;                                                          \
@@ -700,7 +700,7 @@ ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_type_in_node(
 
         #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(                   \
             TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
-            ALLOWED_VALUES, SUBTAGS)                                      \
+            ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)                                      \
             else if (strcmp(name, ENDUSER_NAME) == 0) {                   \
                 type = TYPE;                                              \
                 return type;                                                          \
@@ -708,7 +708,7 @@ ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_type_in_node(
 
         #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER,       \
                                                     ENDUSER_NAME, GENERATED_NAME, \
-                                                    FILTER, ALLOWED_VALUES, SUBTAGS)
+                                                    FILTER, ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)
 
         #include "generated-config/ast_layout_attribute_style_type.h"
     }
@@ -908,17 +908,17 @@ char *ast_layout_attribute_type_to_name(ast_layout_attribute_type_t type) {
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
                                         GENERATED_NAME, FILTER,               \
-                                        ALLOWED_VALUES, SUBTAGS)              \
+                                        ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)              \
     case TYPE:                                                                \
         return NAME_LOWER;
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(                   \
     TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
-    ALLOWED_VALUES, SUBTAGS)
+    ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER,          \
                                              ENDUSER_NAME, GENERATED_NAME,    \
-                                             FILTER, ALLOWED_VALUES, SUBTAGS) \
+                                             FILTER, ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER) \
     case TYPE:                                                                \
         return NAME_LOWER;
 

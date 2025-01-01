@@ -96,7 +96,7 @@ def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) 
     else:
         return (
             key_normal
-            + command_layout_style_type(item, "AST_LAYOUT_ATTRIBUTE_TYPE_", values)
+            + command_layout_style_type(item, "AST_LAYOUT_ATTRIBUTE_TYPE_", values, value_handler)
             + "\n"
         )
 

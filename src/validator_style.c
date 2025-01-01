@@ -292,16 +292,16 @@ bool is_attribute_style_type_a_style(ast_layout_attribute_type_t type) {
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
                                         GENERATED_NAME, FILTER,               \
-                                        ALLOWED_VALUES, SUBTAGS)              \
+                                        ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)              \
     case TYPE:
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER,       \
                                              ENDUSER_NAME, GENERATED_NAME, \
-                                             FILTER, ALLOWED_VALUES, SUBTAGS)
+                                             FILTER, ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(                   \
     TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
-    ALLOWED_VALUES, SUBTAGS)
+    ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)
 
 #include "generated-config/ast_layout_attribute_style_type.h"
         return true;
@@ -1075,13 +1075,13 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
 
 #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,   \
                                   GENERATED_NAME, FILTER, ALLOWED_VALUES, \
-                                  SUBTAGS)                                \
+                                  SUBTAGS, VALUE_HANDLER)                                \
     case TYPE:                                                            \
         return false;
 
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
                                          GENERATED_NAME, FILTER,               \
-                                         ALLOWED_VALUES, SUBTAGS)
+                                         ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)
 
 #include "generated-config/ast_layout_attribute_type.h"
 
@@ -1091,7 +1091,7 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,  \
                                         GENERATED_NAME, FILTER,                \
-                                        ALLOWED_VALUES, SUBTAGS)               \
+                                        ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)               \
     case TYPE: {                                                               \
         attribute->final_key = string_strdup(GENERATED_NAME);                  \
         const ast_layout_attribute_pair_t *values = ALLOWED_VALUES;            \
@@ -1251,11 +1251,11 @@ bool validate_style_value(hashmap_t *styles, hashmap_t *new_styles,
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(                   \
     TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
-    ALLOWED_VALUES, SUBTAGS)
+    ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER,       \
                                              ENDUSER_NAME, GENERATED_NAME, \
-                                             FILTER, ALLOWED_VALUES, SUBTAGS)
+                                             FILTER, ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)
 
         default:
             return false;

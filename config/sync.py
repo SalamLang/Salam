@@ -68,6 +68,7 @@ def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) 
     global SELECTED_LANGUAGE
 
     values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
+    value_handler = item.get("value_handler", "")
 
     key_normal = "ADD_LAYOUT_ATTRIBUTE_TYPE"
     key_repeat = "ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT"
@@ -79,7 +80,7 @@ def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) 
                 result += (
                     key_normal
                     + command_layout_style_type(
-                        item, "AST_LAYOUT_ATTRIBUTE_TYPE_", value
+                        item, "AST_LAYOUT_ATTRIBUTE_TYPE_", value, value_handler
                     )
                     + "\n"
                 )
@@ -87,7 +88,7 @@ def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) 
                 result += (
                     key_repeat
                     + command_layout_style_type(
-                        item, "AST_LAYOUT_ATTRIBUTE_TYPE_", value
+                        item, "AST_LAYOUT_ATTRIBUTE_TYPE_", value, value_handler
                     )
                     + "\n"
                 )
@@ -95,7 +96,7 @@ def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) 
     else:
         return (
             key_normal
-            + command_layout_style_type(item, "AST_LAYOUT_ATTRIBUTE_TYPE_", values)
+            + command_layout_style_type(item, "AST_LAYOUT_ATTRIBUTE_TYPE_", values, value_handler)
             + "\n"
         )
 
@@ -145,6 +146,8 @@ def prettify_layout_attribute_style_type(
     global SELECTED_LANGUAGE
 
     values = item.get("text", {}).get(SELECTED_LANGUAGE, "")
+    value_handler = item.get("value_handler", "")
+
     key_main = "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE"
     key_hide = "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE"
     key_repeat = "ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT"
@@ -154,7 +157,7 @@ def prettify_layout_attribute_style_type(
             return (
                 key_hide
                 + command_layout_style_type(
-                    item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", values
+                    item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", values, value_handler
                 )
                 + "\n"
             )
@@ -165,7 +168,7 @@ def prettify_layout_attribute_style_type(
                     result += (
                         key_hide
                         + command_layout_style_type(
-                            item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value
+                            item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value, value_handler
                         )
                         + "\n"
                     )
@@ -173,7 +176,7 @@ def prettify_layout_attribute_style_type(
                     result += (
                         key_repeat
                         + command_layout_style_type(
-                            item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value
+                            item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value, value_handler
                         )
                         + "\n"
                     )
@@ -183,7 +186,7 @@ def prettify_layout_attribute_style_type(
             return (
                 key_main
                 + command_layout_style_type(
-                    item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", values
+                    item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", values, value_handler
                 )
                 + "\n"
             )
@@ -194,7 +197,7 @@ def prettify_layout_attribute_style_type(
                     result += (
                         key_main
                         + command_layout_style_type(
-                            item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value
+                            item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value, value_handler
                         )
                         + "\n"
                     )
@@ -202,7 +205,7 @@ def prettify_layout_attribute_style_type(
                     result += (
                         key_repeat
                         + command_layout_style_type(
-                            item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value
+                            item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value, value_handler
                         )
                         + "\n"
                     )

@@ -11,8 +11,6 @@ EDITOR_DIR="../Salam-Editor/"
 
 MEMORY_FLAGS="-s ALLOW_MEMORY_GROWTH=1"
 # RUNTIME_FLAGS="-s EXIT_RUNTIME=0 -s NO_EXIT_RUNTIME=1"
-# RUNTIME_FLAGS="-s NO_EXIT_RUNTIME=1"
-# RUNTIME_FLAGS="-s EXIT_RUNTIME=0"
 RUNTIME_FLAGS="-s NO_EXIT_RUNTIME=1"
 COMMON_FLAGS="-s EXPORTED_RUNTIME_METHODS=['callMain'] -s EXPORTED_FUNCTIONS=['_main'] -s TOTAL_STACK=8388608"
 
@@ -46,7 +44,7 @@ DEBUG=0
 if [[ "$1" == "debug" ]]; then
 	DEBUG=1
 	echo "Debug mode enabled."
-	DEBUG_FLAGS="-s VERBOSE=1 -s ASSERTIONS=2"
+	DEBUG_FLAGS="-s VERBOSE=1 -s ASSERTIONS=2 -v"
 else
 	DEBUG_FLAGS=""
 	echo "Debug mode not enabled."
@@ -59,8 +57,7 @@ emcc "${sources[@]}" -o ${OUTPUT_BASE}.html \
 	${MEMORY_FLAGS} \
 	${RUNTIME_FLAGS} \
 	${COMMON_FLAGS} \
-	${DEBUG_FLAGS} \
-	# -v
+	${DEBUG_FLAGS}
 
 if [ $? -eq 0 ]; then
 	echo "Compilation successful. Output files:"
@@ -79,6 +76,8 @@ if [ $? -eq 0 ]; then
 	else
 		echo "Warning: npx command not found. JavaScript will not be transpiled for older browsers."
 	fi
+	
+	sed -i ':a;N;$!ba;s/\n/\\n/g' ${OUTPUT_BASE}.js
 
 	if [ -d "$EDITOR_DIR" ]; then
 		echo "Copying output files to $EDITOR_DIR"

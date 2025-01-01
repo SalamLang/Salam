@@ -50,12 +50,12 @@ typedef enum {
 
 #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,   \
                                   GENERATED_NAME, FILTER, ALLOWED_VALUES, \
-                                  SUBTAGS)                                \
+                                  SUBTAGS, VALUE_HANDLER)                                \
     TYPE,
 
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
                                          GENERATED_NAME, FILTER,               \
-                                         ALLOWED_VALUES, SUBTAGS)
+                                         ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)
 
 #include "generated-config/ast_layout_attribute_type.h"
 
@@ -65,16 +65,16 @@ typedef enum {
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
                                         GENERATED_NAME, FILTER,               \
-                                        ALLOWED_VALUES, SUBTAGS)              \
+                                        ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)              \
     TYPE,
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(                   \
     TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
-    ALLOWED_VALUES, SUBTAGS)
+    ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER,          \
                                              ENDUSER_NAME, GENERATED_NAME,    \
-                                             FILTER, ALLOWED_VALUES, SUBTAGS) \
+                                             FILTER, ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER) \
     TYPE,
 
 #include "generated-config/ast_layout_attribute_style_type.h"

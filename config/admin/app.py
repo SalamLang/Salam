@@ -1,9 +1,12 @@
 import os
-from typing import List
+from typing import List, Union
 
-import werkzeug
 import yaml
-from flask import Flask, Response, redirect, render_template, request, session, url_for
+from flask import Flask, redirect, render_template, request, session, url_for, Response
+from werkzeug.wrappers import Response as WerkzeugResponse
+
+# Create an alias for the response type to handle both werkzeug and flask Response
+ResponseType = Union[str, Response, WerkzeugResponse]
 
 app = Flask(__name__)
 app.secret_key = "your_secret_key"
@@ -133,7 +136,7 @@ def index() -> str:
 
 
 @app.route("/edit/<path:filepath>", methods=["POST"])
-def edit_file_action(filepath: str) -> werkzeug.Response:
+def edit_file_action(filepath: str) -> ResponseType:
     """
     Handles editing an existing YAML file by receiving new data via POST request.
 
@@ -172,7 +175,7 @@ def edit_file_action(filepath: str) -> werkzeug.Response:
 
 
 @app.route("/edit/<path:filepath>", methods=["GET"])
-def edit_file(filepath: str) -> str:
+def edit_file(filepath: str) -> ResponseType:
     """
     Displays the editing page for a given YAML file, showing the current contents.
 
@@ -185,7 +188,7 @@ def edit_file(filepath: str) -> str:
     file_path = os.path.join(YAML_DIR, filepath)
 
     if not os.path.exists(file_path) or not os.path.isfile(file_path):
-        return werkzeug.redirect(url_for("index"))
+        return redirect(url_for("index"))
 
     data = read_yaml(file_path)
     columns = get_dynamic_columns(data)
@@ -209,7 +212,7 @@ def edit_file(filepath: str) -> str:
 
 
 @app.route("/add-file", methods=["POST"])
-def add_file_action() -> str:
+def add_file_action() -> ResponseType:
     """
     Handles the action to add a new YAML file via POST request.
 
@@ -222,7 +225,7 @@ def add_file_action() -> str:
         session["message"] = "Filename is required."
         session["message_type"] = "error"
 
-        return werkzeug.redirect(url_for("index"))
+        return redirect(url_for("index"))
 
     new_file = new_file.strip()
 
@@ -230,7 +233,7 @@ def add_file_action() -> str:
         session["message"] = "Filename is required."
         session["message_type"] = "error"
 
-        return werkzeug.redirect(url_for("index"))
+        return redirect(url_for("index"))
 
     new_file = new_file.lstrip("/")
 
@@ -243,13 +246,13 @@ def add_file_action() -> str:
         session["message"] = "Invalid filename or directory traversal attempt."
         session["message_type"] = "error"
 
-        return werkzeug.redirect(url_for("index"))
+        return redirect(url_for("index"))
 
     if os.path.exists(path):
         session["message"] = "File already exists."
         session["message_type"] = "error"
 
-        return werkzeug.redirect(url_for("index"))
+        return redirect(url_for("index"))
 
     try:
         write_yaml(path, {"items": []})
@@ -257,16 +260,16 @@ def add_file_action() -> str:
         session["message"] = "File created."
         session["message_type"] = "ok"
 
-        return werkzeug.redirect(url_for("index"))
+        return redirect(url_for("index"))
     except Exception as e:
         session["message"] = f"Failed to create file: {e}"
         session["message_type"] = "error"
 
-        return werkzeug.redirect(url_for("index"))
+        return redirect(url_for("index"))
 
 
 @app.route("/delete-file/<path:filepath>", methods=["POST"])
-def delete_file_action(filepath: str) -> str:
+def delete_file_action(filepath: str) -> ResponseType:
     """
     Handles the deletion of a YAML file based on the provided file path.
 
@@ -294,7 +297,7 @@ def delete_file_action(filepath: str) -> str:
         session["message"] = f"File '{filepath}' not found or invalid path."
         session["message_type"] = "error"
 
-    return werkzeug.redirect(url_for("index"))
+    return redirect(url_for("index"))
 
 
 if __name__ == "__main__":

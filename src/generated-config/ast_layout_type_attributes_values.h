@@ -29,8 +29,10 @@ const size_t valid_attributes_layout_length = sizeof(valid_attributes_layout) / 
 ast_layout_attribute_type_t valid_attributes_div[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
 const size_t valid_attributes_div_length = 0;
 
-ast_layout_attribute_type_t valid_attributes_paragraph[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
-const size_t valid_attributes_paragraph_length = 0;
+ast_layout_attribute_type_t valid_attributes_paragraph[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,
+};
+const size_t valid_attributes_paragraph_length = sizeof(valid_attributes_paragraph) / sizeof(valid_attributes_paragraph[0]);
 
 ast_layout_attribute_type_t valid_attributes_button[] = {
     AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
@@ -210,6 +212,7 @@ const size_t valid_attributes_media_length = 0;
 // ----------- END AUTO GENERATED ----------- //
 
 #endif
+
 
 
 

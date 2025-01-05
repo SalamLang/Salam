@@ -744,7 +744,7 @@ def generate_document() -> str:
         first_value = values[0] if values else ""
 
         generate_name = item.get("generate_name", "")
-        is_mother = item.get("is_mother", False)
+        is_single = item.get("is_single", False)
 
         docs += f'<h2 id="{id}">دستور <code>{first_value}</code></h2>\n'
         docs += descriptions.get(SELECTED_LANGUAGE, "") + "\n"
@@ -752,7 +752,7 @@ def generate_document() -> str:
             "این دستور "
             + (
                 "مادر است و می تواند حامی دستوراتی به عنوان فرزند باشد."
-                if is_mother
+                if is_single
                 else "فرزند است."
             )
             + "\n\n"

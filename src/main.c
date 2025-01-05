@@ -80,6 +80,13 @@ void lint_do(bool isCode, const char *path, char *content, char *build_file) {
  */
 void run(bool isCode, const char *path, char *content, char *build_dir) {
     DEBUG_ME;
+    printf("inside `run` - content: <<<%s>>>\n", content);
+
+    if (content == NULL) {
+        printf("Error: Content is NULL. Please provide valid content.\n");
+        return;
+    }
+
     lexer_t *lexer = lexer_create(path, content);
 
     lexer_lex(lexer);
@@ -236,7 +243,7 @@ void lint(int argc, char **argv) {
         lint_do(true, "stdin", content, NULL);
     } else {
         if (!file_exists(argv[2])) {
-            error(1, "File does not exist: %s\n", argv[2]);
+            error(1, "Lint - File does not exist: %s\n", argv[2]);
         }
 
         if (argc <= 3) {
@@ -270,7 +277,10 @@ void code(int argc, char **argv)
 
     char *content = argv[2];
 
-    char *output_dir = argv[3];
+    char *output_dir = NULL;
+    if (argc > 3) {
+        output_dir = argv[3];
+    }
 
     run(true, "stdin", content, output_dir);
 }
@@ -288,7 +298,7 @@ void execute(int argc, char **argv)
 {
     const char *path = argv[1];
     if (!file_exists(path)) {
-        error(1, "File does not exist: %s\n", path);
+        error(1, "Execute - File does not exist: %s\n", path);
     }
 
     char *content = file_reads_binary(path, NULL);
@@ -315,6 +325,10 @@ void execute(int argc, char **argv)
  */
 void doargs(int argc, char **argv) {
     DEBUG_ME;
+    printf("argc: ---%d\n", argc);
+    printf("---%s\n", argv[0]);
+    printf("---%s\n", argv[1]);
+
     if (argc < 2) {
         help(argv[0]);
     }

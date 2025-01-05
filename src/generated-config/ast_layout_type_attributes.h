@@ -12,6 +12,9 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_LAYOUT) {
     }
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_DIV) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_div, valid_attributes_div_length)) {
+        return true;
+    }
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_PARAGRAPH) {
     if (is_attribute_type_in_array(attribute_key_type, valid_attributes_paragraph, valid_attributes_paragraph_length)) {
@@ -49,6 +52,9 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_OPTGROUP) {
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_DATALIST) {
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_SPAN) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_span, valid_attributes_span_length)) {
+        return true;
+    }
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_STRONG) {
 }
@@ -102,8 +108,14 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_LINK) {
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_OL) {
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_OPTION) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_option, valid_attributes_option_length)) {
+        return true;
+    }
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_LI) {
+    if (is_attribute_type_in_array(attribute_key_type, valid_attributes_li, valid_attributes_li_length)) {
+        return true;
+    }
 }
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_TABLE) {
 }
@@ -140,6 +152,11 @@ else if (attribute->parent_node_type == AST_LAYOUT_TYPE_FONT) {
 else if (attribute->parent_node_type == AST_LAYOUT_TYPE_MEDIA) {
 }
 // ----------- END AUTO GENERATED ----------- //
+
+
+
+
+
 
 
 

@@ -403,19 +403,19 @@ ast_layout_node_type_t name_to_ast_layout_node_type(char *name) {
 #undef ADD_LAYOUT_TYPE_REPEAT
 
 #define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, \
-                        IS_MOTHER)                                            \
+                        IS_SINGLE)                                            \
     else if (strcmp(name, NAME) == 0) {                                       \
         type = TYPE;                                                          \
         return type;                                                          \
     }
 #define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
-                             ENDUSER_NAME, IS_MOTHER)                \
+                             ENDUSER_NAME, IS_SINGLE)                \
     else if (strcmp(name, NAME) == 0) {                              \
         type = TYPE;                                                 \
         return type;                                                 \
     }
 #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
-                               ENDUSER_NAME, IS_MOTHER)                \
+                               ENDUSER_NAME, IS_SINGLE)                \
     else if (strcmp(name, NAME) == 0) {                                \
         type = TYPE;                                                   \
         return type;                                                   \
@@ -445,15 +445,15 @@ ast_layout_node_type_t enduser_name_to_ast_layout_node_type(char *name) {
 #undef ADD_LAYOUT_TYPE_REPEAT
 
 #define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, \
-                        IS_MOTHER)                                            \
+                        IS_SINGLE)                                            \
     else if (strcmp(name, ENDUSER_NAME) == 0) {                               \
         type = TYPE;                                                          \
         return type;                                                          \
     }
 #define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
-                             ENDUSER_NAME, IS_MOTHER)
+                             ENDUSER_NAME, IS_SINGLE)
 #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
-                               ENDUSER_NAME, IS_MOTHER)                \
+                               ENDUSER_NAME, IS_SINGLE)                \
     else if (strcmp(name, ENDUSER_NAME) == 0) {                        \
         type = TYPE;                                                   \
         return type;                                                   \
@@ -512,15 +512,15 @@ char *ast_layout_node_type_to_name(ast_layout_node_type_t type) {
 #undef ADD_LAYOUT_TYPE_REPEAT
 
 #define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, \
-                        IS_MOTHER)                                            \
+                        IS_SINGLE)                                            \
     case TYPE:                                                                \
         return NAME;
 #define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
-                             ENDUSER_NAME, IS_MOTHER)                \
+                             ENDUSER_NAME, IS_SINGLE)                \
     case TYPE:                                                       \
         return NAME;
 #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
-                               ENDUSER_NAME, IS_MOTHER)
+                               ENDUSER_NAME, IS_SINGLE)
 
 #include "generated-config/ast_layout_type.h"
     }
@@ -544,15 +544,15 @@ char *ast_layout_node_type_to_enduser_name(ast_layout_node_type_t type) {
 #undef ADD_LAYOUT_TYPE_REPEAT
 
 #define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, \
-                        IS_MOTHER)                                            \
+                        IS_SINGLE)                                            \
     case TYPE:                                                                \
         return ENDUSER_NAME;
 #define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
-                             ENDUSER_NAME, IS_MOTHER)                \
+                             ENDUSER_NAME, IS_SINGLE)                \
     case TYPE:                                                       \
         return ENDUSER_NAME;
 #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
-                               ENDUSER_NAME, IS_MOTHER)
+                               ENDUSER_NAME, IS_SINGLE)
 
 #include "generated-config/ast_layout_type.h"
     }
@@ -616,24 +616,24 @@ ast_layout_attribute_type_t name_to_ast_layout_attribute_type(char *name) {
 }
 
 // TODO
-bool ast_layout_node_type_is_mother(ast_layout_node_type_t type) {
+bool ast_layout_node_type_is_single(ast_layout_node_type_t type) {
     switch (type) {
 #undef ADD_LAYOUT_TYPE
 #undef ADD_LAYOUT_TYPE_HIDE
 #undef ADD_LAYOUT_TYPE_REPEAT
 
 #define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, \
-                        IS_MOTHER)                                            \
+                        IS_SINGLE)                                            \
     case TYPE:                                                                \
-        return IS_MOTHER;
+        return IS_SINGLE;
 
 #define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
-                             ENDUSER_NAME, IS_MOTHER)                \
+                             ENDUSER_NAME, IS_SINGLE)                \
     case TYPE:                                                       \
-        return IS_MOTHER;
+        return IS_SINGLE;
     
 #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
-                               ENDUSER_NAME, IS_MOTHER)
+                               ENDUSER_NAME, IS_SINGLE)
 
 #include "generated-config/ast_layout_type.h"
     }
@@ -656,7 +656,7 @@ ast_layout_attribute_type_t ast_layout_attribute_enduser_name_in_node_to_type(ch
         }
     }
 
-    if (ast_layout_node_type_is_mother(parent_node_type)) {
+    if (ast_layout_node_type_is_single(parent_node_type)) {
         char *enduser_content = ast_layout_attribute_type_to_enduser_name(AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT);
         if (strcmp(name, enduser_content) == 0) {
             return AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT;

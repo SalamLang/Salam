@@ -33,13 +33,13 @@ typedef enum {
 #undef ADD_LAYOUT_TYPE_REPEAT
 
 #define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, \
-                        IS_MOTHER)                                            \
+                        IS_SINGLE)                                            \
     TYPE,
 #define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
-                             ENDUSER_NAME, IS_MOTHER)                \
+                             ENDUSER_NAME, IS_SINGLE)                \
     TYPE,
 #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
-                               ENDUSER_NAME, IS_MOTHER)
+                               ENDUSER_NAME, IS_SINGLE)
 
 #include "generated-config/ast_layout_type.h"
 } ast_layout_node_type_t;
@@ -432,6 +432,6 @@ char *ast_layout_attribute_type_to_enduser_name(
     ast_layout_attribute_type_t type);
     
 // TODO
-bool ast_layout_node_type_is_mother(ast_layout_node_type_t type);
+bool ast_layout_node_type_is_single(ast_layout_node_type_t type);
 
 #endif

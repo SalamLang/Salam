@@ -80,8 +80,6 @@ void lint_do(bool isCode, const char *path, char *content, char *build_file) {
  */
 void run(bool isCode, const char *path, char *content, char *build_dir) {
     DEBUG_ME;
-    printf("inside `run` - content: <<<%s>>>\n", content);
-
     if (content == NULL) {
         printf("Error: Content is NULL. Please provide valid content.\n");
         return;
@@ -325,9 +323,12 @@ void execute(int argc, char **argv)
  */
 void doargs(int argc, char **argv) {
     DEBUG_ME;
-    printf("argc: ---%d\n", argc);
-    printf("---%s\n", argv[0]);
-    printf("---%s\n", argv[1]);
+    // argc: ---3
+    // ---./this.program
+    // ---code
+    // printf("argc: ---%d\n", argc);
+    // printf("---%s\n", argv[0]);
+    // printf("---%s\n", argv[1]);
 
     if (argc < 2) {
         help(argv[0]);

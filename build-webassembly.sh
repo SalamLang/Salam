@@ -12,7 +12,7 @@ EDITOR_DIR="../Salam-Editor/"
 MEMORY_FLAGS="-s ALLOW_MEMORY_GROWTH=1"
 # RUNTIME_FLAGS="-s EXIT_RUNTIME=0 -s NO_EXIT_RUNTIME=1"
 RUNTIME_FLAGS="-s NO_EXIT_RUNTIME=1"
-COMMON_FLAGS="-s EXPORTED_RUNTIME_METHODS=['callMain'] -s EXPORTED_FUNCTIONS=['_main'] -s TOTAL_STACK=8388608"
+COMMON_FLAGS="-s EXPORTED_FUNCTIONS=['_run'] -s TOTAL_STACK=8388608"
 
 sources=(
 	"src/log.c"
@@ -50,7 +50,7 @@ else
 	echo "Debug mode not enabled."
 fi
 
-echo "${sources[@]} -o ${OUTPUT_BASE}.html ${MEMORY_FLAGS} ${RUNTIME_FLAGS} ${COMMON_FLAGS} ${DEBUG_FLAGS}"
+# echo "${sources[@]} -o ${OUTPUT_BASE}.html ${MEMORY_FLAGS} ${RUNTIME_FLAGS} ${COMMON_FLAGS} ${DEBUG_FLAGS}"
 
 echo "Compiling C files to WebAssembly..."
 emcc "${sources[@]}" -o ${OUTPUT_BASE}.html \

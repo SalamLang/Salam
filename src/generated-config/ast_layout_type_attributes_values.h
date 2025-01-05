@@ -26,23 +26,29 @@ ast_layout_attribute_type_t valid_attributes_layout[] = {
 };
 const size_t valid_attributes_layout_length = sizeof(valid_attributes_layout) / sizeof(valid_attributes_layout[0]);
 
-ast_layout_attribute_type_t valid_attributes_div[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
-const size_t valid_attributes_div_length = 0;
+ast_layout_attribute_type_t valid_attributes_div[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,
+};
+const size_t valid_attributes_div_length = sizeof(valid_attributes_div) / sizeof(valid_attributes_div[0]);
 
 ast_layout_attribute_type_t valid_attributes_paragraph[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT,
     AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,
 };
 const size_t valid_attributes_paragraph_length = sizeof(valid_attributes_paragraph) / sizeof(valid_attributes_paragraph[0]);
 
 ast_layout_attribute_type_t valid_attributes_button[] = {
-    AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
+    AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT,
     AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,
+    AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
 };
 const size_t valid_attributes_button_length = sizeof(valid_attributes_button) / sizeof(valid_attributes_button[0]);
 
 ast_layout_attribute_type_t valid_attributes_textarea[] = {
     AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
     AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,
+    AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT,
     AST_LAYOUT_ATTRIBUTE_TYPE_PLACEHOLDER,
 };
 const size_t valid_attributes_textarea_length = sizeof(valid_attributes_textarea) / sizeof(valid_attributes_textarea[0]);
@@ -52,6 +58,7 @@ const size_t valid_attributes_label_length = 0;
 
 ast_layout_attribute_type_t valid_attributes_select[] = {
     AST_LAYOUT_ATTRIBUTE_TYPE_NAME,
+    AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT,
 };
 const size_t valid_attributes_select_length = sizeof(valid_attributes_select) / sizeof(valid_attributes_select[0]);
 
@@ -65,6 +72,8 @@ ast_layout_attribute_type_t valid_attributes_form[] = {
     AST_LAYOUT_ATTRIBUTE_TYPE_SRC,
     AST_LAYOUT_ATTRIBUTE_TYPE_TYPE,
     AST_LAYOUT_ATTRIBUTE_TYPE_KIND,
+    AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,
 };
 const size_t valid_attributes_form_length = sizeof(valid_attributes_form) / sizeof(valid_attributes_form[0]);
 
@@ -74,8 +83,11 @@ const size_t valid_attributes_optgroup_length = 0;
 ast_layout_attribute_type_t valid_attributes_datalist[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
 const size_t valid_attributes_datalist_length = 0;
 
-ast_layout_attribute_type_t valid_attributes_span[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
-const size_t valid_attributes_span_length = 0;
+ast_layout_attribute_type_t valid_attributes_span[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT,
+    AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,
+};
+const size_t valid_attributes_span_length = sizeof(valid_attributes_span) / sizeof(valid_attributes_span[0]);
 
 ast_layout_attribute_type_t valid_attributes_strong[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
 const size_t valid_attributes_strong_length = 0;
@@ -151,11 +163,17 @@ const size_t valid_attributes_link_length = sizeof(valid_attributes_link) / size
 ast_layout_attribute_type_t valid_attributes_ol[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
 const size_t valid_attributes_ol_length = 0;
 
-ast_layout_attribute_type_t valid_attributes_option[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
-const size_t valid_attributes_option_length = 0;
+ast_layout_attribute_type_t valid_attributes_option[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,
+    AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT,
+};
+const size_t valid_attributes_option_length = sizeof(valid_attributes_option) / sizeof(valid_attributes_option[0]);
 
-ast_layout_attribute_type_t valid_attributes_li[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
-const size_t valid_attributes_li_length = 0;
+ast_layout_attribute_type_t valid_attributes_li[] = {
+    AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT,
+    AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT,
+};
+const size_t valid_attributes_li_length = sizeof(valid_attributes_li) / sizeof(valid_attributes_li[0]);
 
 ast_layout_attribute_type_t valid_attributes_table[] = { AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };
 const size_t valid_attributes_table_length = 0;
@@ -212,6 +230,11 @@ const size_t valid_attributes_media_length = 0;
 // ----------- END AUTO GENERATED ----------- //
 
 #endif
+
+
+
+
+
 
 
 

@@ -1157,15 +1157,15 @@ char *generator_code_layout_node_type(ast_layout_node_type_t type) {
 #undef ADD_LAYOUT_TYPE_REPEAT
 
 #define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, \
-                        IS_MOTHER)                                            \
+                        IS_SINGLE)                                            \
     case TYPE:                                                                \
         return GENERATED_NAME;
 #define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
-                             ENDUSER_NAME, IS_MOTHER)                \
+                             ENDUSER_NAME, IS_SINGLE)                \
     case TYPE:                                                       \
         return GENERATED_NAME;
 #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
-                               ENDUSER_NAME, IS_MOTHER)
+                               ENDUSER_NAME, IS_SINGLE)
 
 #include "generated-config/ast_layout_type.h"
     }

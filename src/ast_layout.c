@@ -657,11 +657,15 @@ ast_layout_attribute_type_t ast_layout_attribute_enduser_name_in_node_to_type(ch
     }
 
     if (ast_layout_node_type_is_mother(parent_node_type)) {
-        char *enduser_name = ast_layout_attribute_type_to_enduser_name(AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT);
-
-        if (strcmp(name, enduser_name) == 0) {
+        char *enduser_content = ast_layout_attribute_type_to_enduser_name(AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT);
+        if (strcmp(name, enduser_content) == 0) {
             return AST_LAYOUT_ATTRIBUTE_TYPE_CONTENT;
         }
+    }
+
+    char *enduser_repeat = ast_layout_attribute_type_to_enduser_name(AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT);
+    if (strcmp(name, enduser_repeat) == 0) {
+        return AST_LAYOUT_ATTRIBUTE_TYPE_REPEAT;
     }
 
     return AST_LAYOUT_ATTRIBUTE_TYPE_ERROR;

@@ -67,7 +67,7 @@ var read_,
 // Normally we don't log exceptions but instead let them bubble out the top
 // level where the embedding environment (e.g. the browser) can handle
 // them.
-// However under v8 and node we sometimes exit the process direcly in which case
+// However under v8 and node we sometimes exit the process directly in which case
 // its up to use us to log the exception before exiting.
 // If we fix https://github.com/emscripten-core/emscripten/issues/15080
 // this may no longer be needed under node.
@@ -1304,7 +1304,7 @@ function initRuntime() {
   assert(!runtimeInitialized);
   runtimeInitialized = true;
 
-  
+
   callRuntimeCallbacks(__ATINIT__);
 }
 
@@ -1464,7 +1464,7 @@ function abort(what) {
   // simply make the program stop.
 
   // Suppress closure compiler warning here. Closure compiler's builtin extern
-  // defintion for WebAssembly.RuntimeError claims it takes no arguments even
+  // definition for WebAssembly.RuntimeError claims it takes no arguments even
   // though it can.
   // TODO(https://github.com/google/closure-compiler/pull/3913): Remove if/when upstream closure gets fixed.
 
@@ -1713,7 +1713,7 @@ var tempI64;
 // === Body ===
 
 var ASM_CONSTS = {
-  
+
 };
 
 
@@ -1820,7 +1820,7 @@ var ASM_CONSTS = {
       if (buffers[1].length) SYSCALLS.printChar(1, 10);
       if (buffers[2].length) SYSCALLS.printChar(2, 10);
     }
-  
+
   var SYSCALLS = {buffers:[null,[],[]],printChar:function(stream, curr) {
         var buffer = SYSCALLS.buffers[stream];
         assert(buffer);
@@ -2331,8 +2331,3 @@ if (Module['preInit']) {
 }
 
 run();
-
-
-
-
-

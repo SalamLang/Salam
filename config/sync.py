@@ -695,7 +695,7 @@ def sync_file(file: Dict[str, Any]) -> None:
 
                     f.write(str(item) + "\n")
 
-        f.write(COMMENT_END + "\n")
+        f.write(COMMENT_END)
 
         started = False
         for line in lines:

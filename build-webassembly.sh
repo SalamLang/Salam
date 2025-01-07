@@ -73,7 +73,7 @@ if [ $? -eq 0 ]; then
 	else
 		echo "Warning: npx command not found. JavaScript will not be transpiled for older browsers."
 	fi
-	
+
 	sed -i ':a;N;$!ba;s/\n/\\n/g' ${OUTPUT_BASE}.js
 
 	if [ -d "$EDITOR_DIR" ]; then

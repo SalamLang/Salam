@@ -177,11 +177,12 @@ void help(char *app) {
  * @returns {void}
  *
  */
-void update(int argc, char **argv)
-{
+void update(int argc, char **argv) {
     DEBUG_ME;
-    if (argc) {}
-    if (argv) {}
+    if (argc) {
+    }
+    if (argv) {
+    }
 
     printf("Check latest version...\n");
 
@@ -191,15 +192,15 @@ void update(int argc, char **argv)
 
     const char *path =
 #ifdef _WIN32
-"/latest/windows";
+        "/latest/windows";
 #elif __APPLE__
-"/latest/macos";
+        "/latest/macos";
 #elif __linux__
-"/latest/linux";
+        "/latest/linux";
 #elif __EMSCRIPTEN__
-"/latest/webassembly";
+        "/latest/webassembly";
 #else
-"Unsupported OS";
+        "Unsupported OS";
     printf("%s\n", path);
     exit(1);
 #endif
@@ -267,8 +268,7 @@ void lint(int argc, char **argv) {
  * @returns {void}
  *
  */
-void code(int argc, char **argv)
-{
+void code(int argc, char **argv) {
     if (argc <= 2) {
         error(1, "Usage: %s code <content>\n", argv[0]);
     }
@@ -292,8 +292,7 @@ void code(int argc, char **argv)
  * @returns {void}
  *
  */
-void execute(int argc, char **argv)
-{
+void execute(int argc, char **argv) {
     const char *path = argv[1];
     if (!file_exists(path)) {
         error(1, "Execute - File does not exist: %s\n", path);

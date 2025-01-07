@@ -96,7 +96,9 @@ def prettify_layout_attribute_type(item: Dict[str, Any], group: Dict[str, Any]) 
     else:
         return (
             key_normal
-            + command_layout_style_type(item, "AST_LAYOUT_ATTRIBUTE_TYPE_", values, value_handler)
+            + command_layout_style_type(
+                item, "AST_LAYOUT_ATTRIBUTE_TYPE_", values, value_handler
+            )
             + "\n"
         )
 
@@ -168,7 +170,10 @@ def prettify_layout_attribute_style_type(
                     result += (
                         key_hide
                         + command_layout_style_type(
-                            item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value, value_handler
+                            item,
+                            "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_",
+                            value,
+                            value_handler,
                         )
                         + "\n"
                     )
@@ -176,7 +181,10 @@ def prettify_layout_attribute_style_type(
                     result += (
                         key_repeat
                         + command_layout_style_type(
-                            item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value, value_handler
+                            item,
+                            "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_",
+                            value,
+                            value_handler,
                         )
                         + "\n"
                     )
@@ -197,7 +205,10 @@ def prettify_layout_attribute_style_type(
                     result += (
                         key_main
                         + command_layout_style_type(
-                            item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value, value_handler
+                            item,
+                            "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_",
+                            value,
+                            value_handler,
                         )
                         + "\n"
                     )
@@ -205,7 +216,10 @@ def prettify_layout_attribute_style_type(
                     result += (
                         key_repeat
                         + command_layout_style_type(
-                            item, "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_", value, value_handler
+                            item,
+                            "AST_LAYOUT_ATTRIBUTE_STYLE_TYPE_",
+                            value,
+                            value_handler,
                         )
                         + "\n"
                     )
@@ -399,7 +413,7 @@ def prettify_layout_type_attributes_all(
         return "{" + f" {itemid}, {var_attrs}, {var_attrs_length}" + " },\n"
     else:
         return ""
-    
+
 
 def prettify_layout_type_attributes_values_extern(
     item: Dict[str, Any], group: Dict[str, Any]
@@ -458,7 +472,10 @@ def prettify_layout_type_attributes_values(
             result += "};\n"
             result += f"const size_t {var_attrs_length} = sizeof({var_attrs}) / sizeof({var_attrs}[0]);\n"
         else:
-            result += f"ast_layout_attribute_type_t {var_attrs}[] = " + "{ AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };\n"
+            result += (
+                f"ast_layout_attribute_type_t {var_attrs}[] = "
+                + "{ AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };\n"
+            )
             result += f"const size_t {var_attrs_length} = 0;\n"
 
         return result

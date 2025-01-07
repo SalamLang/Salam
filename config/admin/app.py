@@ -2,7 +2,7 @@ import os
 from typing import List, Union
 
 import yaml
-from flask import Flask, redirect, render_template, request, session, url_for, Response
+from flask import Flask, Response, redirect, render_template, request, session, url_for
 from werkzeug.wrappers import Response as WerkzeugResponse
 
 # Create an alias for the response type to handle both werkzeug and flask Response

@@ -360,7 +360,7 @@ bool is_generator_code_head(ast_layout_attribute_t *attribute)
         case AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT:
         case AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH:
             return true;
-    
+
     default:
         return false;
     }
@@ -692,7 +692,7 @@ void generator_code_layout_html(generator_t *generator,
 
                 generator_code_layout_value(layout_block->attributes, NULL,
                                             attribute);
-                                            
+
                 if (is_generator_code_head(attribute)) {
                     attribute->belongsToLayout = false;
                 }

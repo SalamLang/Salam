@@ -430,7 +430,7 @@ bool ast_layout_attribute_has_any_sub_value(ast_layout_attribute_t *value);
  */
 char *ast_layout_attribute_type_to_enduser_name(
     ast_layout_attribute_type_t type);
-    
+
 // TODO
 bool ast_layout_node_type_is_single(ast_layout_node_type_t type);
 

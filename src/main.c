@@ -182,7 +182,7 @@ void update(int argc, char **argv)
     DEBUG_ME;
     if (argc) {}
     if (argv) {}
-    
+
     printf("Check latest version...\n");
 
     const char *output_file = "update.tmp";

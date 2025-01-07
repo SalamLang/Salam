@@ -174,7 +174,7 @@ void ast_layout_style_state_print(ast_layout_style_state_t *ast) {
 
         if (ast->new != NULL) {
             printf("New\n");
-            
+
             ast->new->print(ast->new);
         } else {
             printf("New: NULL\n");

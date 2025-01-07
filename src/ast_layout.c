@@ -382,7 +382,7 @@ void ast_layout_destroy(ast_layout_t *value) {
 void ast_layout_print(ast_layout_t *value) {
     DEBUG_ME;
     printf("Layout\n");
-    
+
     value->block->print(value->block);
 }
 
@@ -631,7 +631,7 @@ bool ast_layout_node_type_is_single(ast_layout_node_type_t type) {
                              ENDUSER_NAME, IS_SINGLE)                \
     case TYPE:                                                       \
         return IS_SINGLE;
-    
+
 #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
                                ENDUSER_NAME, IS_SINGLE)
 

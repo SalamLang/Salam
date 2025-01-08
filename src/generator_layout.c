@@ -23,6 +23,15 @@
 
 #include "generator_layout.h"
 
+/**
+ * 
+ * @function attribute_value_handler
+ * @brief Handles the value of a layout attribute and transforms it based on its type.
+ * @param attribute Pointer to the layout attribute structure.
+ * @param value The string value of the attribute to process.
+ * @return A dynamically allocated string containing the processed value, or NULL if the handler type is unsupported.
+ * 
+ */
 char* attribute_value_handler(ast_layout_attribute_t* attribute, char* value)
 {
     switch (attribute->value_handler) {

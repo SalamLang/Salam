@@ -2,16 +2,15 @@ from text import Text
 from type import Type
 
 class Attribute:
-    def __init__(self, generate_name):
-        self.generate_name = generate_name
+    def __init__(self):
         self.text = Text()
-        self.id = "AST_LAYOUT_ATTRIBUTE_" + generate_name.upper()
         self.type = Type.String
         self.reserved_values = []
 
     def set_generate_name(self, generate_name):
         """Set the generate name for the main element."""
         self.generate_name = generate_name
+        self.id = "AST_LAYOUT_ATTRIBUTE_TYPE_" + generate_name.upper().replace(" ", "_").replace("-", "_").replace("__", "_")
         return self
 
     def set_type(self, type):
@@ -32,6 +31,8 @@ class Attribute:
     def validate(self):
         """Check if all languages have a value for the text."""
         self.text.validate()
+        if not self.generate_name:
+            raise ValueError("Attribute generate name is not set.")
         return self
 
     def to_dict(self):
@@ -41,5 +42,7 @@ class Attribute:
             "generate_name": self.generate_name,
             "type": self.type,
             "text": self.text.to_dict(),
-            "reserved_values": self.reserved_values,
+            "reserved_values": [
+                value.to_dict() for value in self.reserved_values
+            ],
         }

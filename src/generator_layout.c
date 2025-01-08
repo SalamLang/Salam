@@ -140,7 +140,8 @@ string_t *generator_code_layout_block_item(generator_t *generator,
 
         if (src == NULL) {
             // TODO
-            error_generator(1, "Include node must have a '%s' attribute", "src");
+            error_generator(1, "Include node must have a '%s' attribute",
+                            "src");
         } else if (src->values->length > 1) {
             error_generator(
                 1, "Include node 'src' attribute must have only one value");
@@ -167,12 +168,11 @@ string_t *generator_code_layout_block_item(generator_t *generator,
         if (ast->layout == NULL) {
             error_generator(1, "Include file '%s' does not have a layout block",
                             path);
-        }
-        else if (ast->layout->block->children->length == 0)
-        {
-        	error_generator(1, "Include file '%s' layout block does not have any children", path);
-        }
-        else {
+        } else if (ast->layout->block->children->length == 0) {
+            error_generator(
+                1, "Include file '%s' layout block does not have any children",
+                path);
+        } else {
             for (size_t i = 1; i <= repeat_value_sizet; i++) {
                 if (ast->layout->block->text_content != NULL) {
                     string_append_str(layout_block_str,
@@ -370,8 +370,7 @@ void generator_code_layout_body(generator_t *generator,
 }
 
 // TODO
-bool is_generator_code_head(ast_layout_attribute_t *attribute)
-{
+bool is_generator_code_head(ast_layout_attribute_t *attribute) {
     switch (attribute->type) {
         case AST_LAYOUT_ATTRIBUTE_TYPE_TITLE:
         case AST_LAYOUT_ATTRIBUTE_TYPE_AUTHOR:
@@ -381,9 +380,9 @@ bool is_generator_code_head(ast_layout_attribute_t *attribute)
         case AST_LAYOUT_ATTRIBUTE_TYPE_VIEWPORT:
         case AST_LAYOUT_ATTRIBUTE_TYPE_REFRESH:
             return true;
-    
-    default:
-        return false;
+
+        default:
+            return false;
     }
 }
 
@@ -398,8 +397,7 @@ bool is_generator_code_head(ast_layout_attribute_t *attribute)
 void generator_code_head_item(ast_layout_attribute_t *attribute,
                               string_t *head) {
     DEBUG_ME;
-    if (! is_generator_code_head(attribute))
-    {
+    if (!is_generator_code_head(attribute)) {
         return;
     }
 
@@ -533,7 +531,7 @@ void generator_code_head_meta_children(generator_t *generator,
                             generator->css,
                             attribute->final_key);  // TODO: Why name lowercase
                                                     // entry->key?
-                        string_append_char(generator->css, ':'); // TODO: COLON
+                        string_append_char(generator->css, ':');  // TODO: COLON
 
                         if (attribute->final_value == NULL) {
                             attribute->final_value =
@@ -716,7 +714,7 @@ void generator_code_layout_html(generator_t *generator,
 
                 generator_code_layout_value(layout_block->attributes, NULL,
                                             attribute);
-                                            
+
                 if (is_generator_code_head(attribute)) {
                     attribute->belongsToLayout = false;
                 }

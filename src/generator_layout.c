@@ -23,6 +23,27 @@
 
 #include "generator_layout.h"
 
+char* attribute_value_handler(ast_layout_attribute_t* attribute, char* value)
+{
+    switch (attribute->value_handler) {
+        case AST_LAYOUT_ATTRIBUTE_VALUE_HANDLER_SIMPLE:
+            return string_strdup(value);
+
+        case AST_LAYOUT_ATTRIBUTE_VALUE_HANDLER_FONT_URL:
+            string_t* buf = string_create(30);
+            string_append_str(buf, "url(");
+            string_append_str(buf, value);
+            string_append_str(buf, ")");
+            
+            char* buf_value = string_strdup(buf->data);
+            string_destroy(buf);
+            return buf_value;
+        
+        default:
+            return NULL;
+    }
+}
+
 /**
  *
  * @function generator_code_layout_value
@@ -519,8 +540,11 @@ void generator_code_head_meta_children(generator_t *generator,
                                 array_value_stringify(attribute->values, ", ");
                         }
 
-                        string_append_str(generator->css,
-                                          attribute->final_value);
+                        char* handler_value = attribute_value_handler(attribute, attribute->final_value);
+
+                        string_append_str(generator->css, handler_value);
+
+                        memory_destroy(handler_value);
 
                         if (attributes_append_length != attributes_length - 1) {
                             string_append_char(generator->css, ';');
@@ -781,8 +805,11 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                         if (attribute_value_length > 1) {
                             string_append_str(html_attributes, "\"");
                         }
-                        string_append_str(html_attributes,
-                                          attribute->final_value);
+
+                        char* handler_value = attribute_value_handler(attribute, attribute->final_value);
+                        string_append_str(html_attributes, handler_value);
+                        memory_destroy(handler_value);
+
                         if (attribute_value_length > 1) {
                             string_append_str(html_attributes, "\"");
                         }
@@ -816,9 +843,14 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                     if (css_attributes_length != 0) {
                         string_append_char(css_attributes, ';');
                     }
+
+                    char* handler_value = attribute_value_handler(attribute, attribute->final_value);
+
                     string_append_str(css_attributes, attribute->final_key);
                     string_append_str(css_attributes, ":");
-                    string_append_str(css_attributes, attribute->final_value);
+                    string_append_str(css_attributes, handler_value);
+
+                    memory_destroy(handler_value);
 
                     css_attributes_length++;
                 }
@@ -901,9 +933,12 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                     string_append_str(generator->media_css, " and ");
                 }
 
+                char* handler_value = attribute_value_handler(media_max_width, media_max_width->final_value);
+
                 string_append_str(generator->media_css, "max-width: ");
-                string_append_str(generator->media_css,
-                                  media_max_width->final_value);
+                string_append_str(generator->media_css, handler_value);
+
+                memory_destroy(handler_value);
 
                 conditions++;
             }
@@ -928,9 +963,12 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                     string_append_str(generator->media_css, " and ");
                 }
 
+                char* handler_value = attribute_value_handler(media_min_width, media_min_width->final_value);
+
                 string_append_str(generator->media_css, "min-width: ");
-                string_append_str(generator->media_css,
-                                  media_min_width->final_value);
+                string_append_str(generator->media_css, handler_value);
+
+                memory_destroy(handler_value);
 
                 conditions++;
             }
@@ -955,9 +993,12 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                     string_append_str(generator->media_css, " and ");
                 }
 
+                char* handler_value = attribute_value_handler(media_max_height, media_max_height->final_value);
+
                 string_append_str(generator->media_css, "max-height: ");
-                string_append_str(generator->media_css,
-                                  media_max_height->final_value);
+                string_append_str(generator->media_css, handler_value);
+
+                memory_destroy(handler_value);
 
                 conditions++;
             }
@@ -982,9 +1023,12 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                     string_append_str(generator->media_css, " and ");
                 }
 
+                char* handler_value = attribute_value_handler(media_min_height, media_min_height->final_value);
+
                 string_append_str(generator->media_css, "min-height: ");
-                string_append_str(generator->media_css,
-                                  media_min_height->final_value);
+                string_append_str(generator->media_css, handler_value);
+
+                memory_destroy(handler_value);
 
                 conditions++;
             }
@@ -1026,8 +1070,11 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                                 array_value_stringify(attribute->values, ", ");
                         }
 
-                        string_append_str(generator->media_css,
-                                          attribute->final_value);
+                        char* handler_value = attribute_value_handler(attribute, attribute->final_value);
+
+                        string_append_str(generator->media_css, handler_value);
+
+                        memory_destroy(handler_value);
 
                         media_queries_styles_length++;
                     }
@@ -1053,11 +1100,14 @@ string_t *generator_code_layout_attributes(generator_t *generator,
                             string_append_char(generator->media_css, ';');
                         }
 
+                        char* handler_value = attribute_value_handler(attribute, attribute->final_value);
+
                         string_append_str(generator->media_css,
                                           attribute->final_key);
                         string_append_str(generator->media_css, ":");
-                        string_append_str(generator->media_css,
-                                          attribute->final_value);
+                        string_append_str(generator->media_css, handler_value);
+
+                        memory_destroy(handler_value);
 
                         media_queries_styles_length++;
                     }
@@ -1157,15 +1207,15 @@ char *generator_code_layout_node_type(ast_layout_node_type_t type) {
 #undef ADD_LAYOUT_TYPE_REPEAT
 
 #define ADD_LAYOUT_TYPE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, ENDUSER_NAME, \
-                        IS_SINGLE)                                            \
+                        IS_MOTHER)                                            \
     case TYPE:                                                                \
         return GENERATED_NAME;
 #define ADD_LAYOUT_TYPE_HIDE(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
-                             ENDUSER_NAME, IS_SINGLE)                \
+                             ENDUSER_NAME, IS_MOTHER)                \
     case TYPE:                                                       \
         return GENERATED_NAME;
 #define ADD_LAYOUT_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, GENERATED_NAME, \
-                               ENDUSER_NAME, IS_SINGLE)
+                               ENDUSER_NAME, IS_MOTHER)
 
 #include "generated-config/ast_layout_type.h"
     }

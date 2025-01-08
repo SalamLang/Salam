@@ -91,7 +91,7 @@ def command_layout_style_type(item: Dict[str, Any], prefix: str, value: str, ext
             f'"{idtextlower}", '
             f'"{value}", '
             f'"{generate_name}", '
-            f"{type}, {reserved_values}, NULL, value_handler_simple)"
+            f"{type}, {reserved_values}, NULL, AST_LAYOUT_ATTRIBUTE_VALUE_HANDLER_SIMPLE)"
         )
     else:        
         return (

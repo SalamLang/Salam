@@ -50,7 +50,9 @@ char* attribute_value_handler(ast_layout_attribute_t* attribute, char* value)
             }
 
             string_append_str(buf, "url(");
-            string_append_str(buf, value);
+            // string_append_char(buf, '\"');
+            string_append_str(buf, value); // TODO: add "" at the begining and the end, and replaces " to \" in the value string
+            // string_append_char(buf, '\"');
             string_append_str(buf, ")");
 
             char* buf_value = string_strdup(buf->data);

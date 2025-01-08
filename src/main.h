@@ -44,8 +44,6 @@
 #include "validator.h"
 #include "validator_style.h"
 
-
-
 /**
  * ---------------------------------------------------------------------------
  * Salam Programming Language

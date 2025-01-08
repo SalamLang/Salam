@@ -175,16 +175,16 @@ bool is_attribute_type_a(ast_layout_attribute_type_t type) {
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE_HIDE
 #undef ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT
 
-#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                        GENERATED_NAME, FILTER,               \
-                                        ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)              \
+#define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,   \
+                                  GENERATED_NAME, FILTER, ALLOWED_VALUES, \
+                                  SUBTAGS, VALUE_HANDLER)                 \
     case TYPE:
 
-#define ADD_LAYOUT_ATTRIBUTE_TYPE_HIDE(TYPE, NAME, NAME_LOWER,       \
-                                             ENDUSER_NAME, GENERATED_NAME, \
-                                             FILTER, ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)
+#define ADD_LAYOUT_ATTRIBUTE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,   \
+                                       GENERATED_NAME, FILTER, ALLOWED_VALUES, \
+                                       SUBTAGS, VALUE_HANDLER)
 
-#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(                   \
+#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(                         \
     TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
     ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)
 
@@ -444,9 +444,9 @@ bool validate_value(hashmap_t *attributes, hashmap_t *new_attributes,
         }                                                                      \
     }
 
-#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                         GENERATED_NAME, FILTER,               \
-                                         ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)
+#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(                         \
+    TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
+    ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)
 
 #define ADD_LAYOUT_ATTRIBUTE_TYPE_HIDE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,   \
                                        GENERATED_NAME, FILTER, ALLOWED_VALUES, \

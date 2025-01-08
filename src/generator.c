@@ -337,7 +337,6 @@ string_t *generator_code_type(generator_t *generator, ast_value_type_t *type) {
 
             return code;
 
-
         case AST_TYPE_KIND_STRUCT:
             string_append_str(code, "struct");
 
@@ -348,15 +347,15 @@ string_t *generator_code_type(generator_t *generator, ast_value_type_t *type) {
 
             return code;
 
-        // case AST_TYPE_KIND_MAP:
-        //     string_append_str(code, "map");
-        //
-        //     return code;
+            // case AST_TYPE_KIND_MAP:
+            //     string_append_str(code, "map");
+            //
+            //     return code;
 
-        // case AST_TYPE_KIND_UNION:
-        //     string_append_str(code, "union");
-        //
-        //     return code;
+            // case AST_TYPE_KIND_UNION:
+            //     string_append_str(code, "union");
+            //
+            //     return code;
 
         case AST_TYPE_KIND_POINTER:
             string_append_str(code, "pointer");

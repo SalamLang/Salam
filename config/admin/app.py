@@ -131,7 +131,7 @@ def index() -> str:
     message_type = session.pop("message_type", None)
 
     return render_template(
-        "index.html", message=message, message_type=message_type, files=get_yaml_files()
+        "index.html.jinja", message=message, message_type=message_type, files=get_yaml_files()
     )
 
 
@@ -201,7 +201,7 @@ def edit_file(filepath: str) -> ResponseType:
     items = data.get("items", []) if isinstance(data, dict) else []
 
     return render_template(
-        "edit.html",
+        "edit.html.jinja",
         message=message,
         message_type=message_type,
         filename=filepath,

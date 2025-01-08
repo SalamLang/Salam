@@ -24,17 +24,17 @@
 #include "generator_layout.h"
 
 /**
- * 
+ *
  * @function attribute_value_handler
- * @brief Processes the value of a layout attribute and transforms it based on its type.
+ * @brief Processes the value of a layout attribute and transforms it based on
+ * its type.
  * @param attribute Pointer to the layout attribute structure.
  * @param value The string value of the attribute to process.
- * @return A dynamically allocated string containing the processed value, 
+ * @return A dynamically allocated string containing the processed value,
  *         or NULL if the handler type is unsupported or on failure.
- * 
+ *
  */
-char* attribute_value_handler(ast_layout_attribute_t* attribute, char* value)
-{
+char *attribute_value_handler(ast_layout_attribute_t *attribute, char *value) {
     if (attribute == NULL || value == NULL) {
         return NULL;
     }
@@ -44,18 +44,20 @@ char* attribute_value_handler(ast_layout_attribute_t* attribute, char* value)
             return string_strdup(value);
 
         case AST_LAYOUT_ATTRIBUTE_VALUE_HANDLER_FONT_URL: {
-            string_t* buf = string_create(30);
+            string_t *buf = string_create(30);
             if (buf == NULL) {
                 return NULL;
             }
 
             string_append_str(buf, "url(");
             // string_append_char(buf, '\"');
-            string_append_str(buf, value); // TODO: add "" at the begining and the end, and replaces " to \" in the value string
+            string_append_str(
+                buf, value);  // TODO: add "" at the begining and the end, and
+                              // replaces " to \" in the value string
             // string_append_char(buf, '\"');
             string_append_str(buf, ")");
 
-            char* buf_value = string_strdup(buf->data);
+            char *buf_value = string_strdup(buf->data);
             string_destroy(buf);
 
             return buf_value;

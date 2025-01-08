@@ -283,7 +283,7 @@ void array_layout_node_print(array_node_layout_t *array) {
         printf("\t");
         ast_layout_node_t *node =
             cast(ast_layout_node_t *, array_get(cast(array_t *, array), i));
-        
+
         if (node != NULL) {
             node->print(node);
         } else {

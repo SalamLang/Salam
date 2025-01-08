@@ -50,12 +50,12 @@ typedef enum {
 
 #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,   \
                                   GENERATED_NAME, FILTER, ALLOWED_VALUES, \
-                                  SUBTAGS, VALUE_HANDLER)                                \
+                                  SUBTAGS, VALUE_HANDLER)                 \
     TYPE,
 
-#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                         GENERATED_NAME, FILTER,               \
-                                         ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)
+#define ADD_LAYOUT_ATTRIBUTE_TYPE_REPEAT(                         \
+    TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
+    ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)
 
 #include "generated-config/ast_layout_attribute_type.h"
 
@@ -63,18 +63,18 @@ typedef enum {
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT
 #undef ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE
 
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME, \
-                                        GENERATED_NAME, FILTER,               \
-                                        ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)              \
+#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE(                          \
+    TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
+    ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)                       \
     TYPE,
 
 #define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_REPEAT(                   \
     TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
     ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)
 
-#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(TYPE, NAME, NAME_LOWER,          \
-                                             ENDUSER_NAME, GENERATED_NAME,    \
-                                             FILTER, ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER) \
+#define ADD_LAYOUT_ATTRIBUTE_STYLE_TYPE_HIDE(                     \
+    TYPE, NAME, NAME_LOWER, ENDUSER_NAME, GENERATED_NAME, FILTER, \
+    ALLOWED_VALUES, SUBTAGS, VALUE_HANDLER)                       \
     TYPE,
 
 #include "generated-config/ast_layout_attribute_style_type.h"
@@ -322,7 +322,8 @@ ast_layout_attribute_type_t enduser_name_to_ast_layout_attribute_type(
 /**
  *
  * @function enduser_name_to_ast_layout_attribute_type_in_node
- * @brief Convert enduser attribute name in a specific node to AST layout node type
+ * @brief Convert enduser attribute name in a specific node to AST layout node
+ * type
  * @params {char*} name - Name
  * @params {ast_layout_node_type_t} parent_node_type - Parent node type
  * @returns {ast_layout_attribute_type_t} type - Layout Attribute Type
@@ -437,7 +438,7 @@ bool ast_layout_attribute_has_any_sub_value(ast_layout_attribute_t *value);
  */
 char *ast_layout_attribute_type_to_enduser_name(
     ast_layout_attribute_type_t type);
-    
+
 // TODO
 bool ast_layout_node_type_is_single(ast_layout_node_type_t type);
 

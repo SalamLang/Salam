@@ -119,6 +119,11 @@ typedef struct ast_layout_block_t {
     void (*print)(void *node);
 } ast_layout_block_t;
 
+typedef enum ast_layout_attribute_value_handler_t {
+    AST_LAYOUT_ATTRIBUTE_VALUE_HANDLER_SIMPLE,
+    AST_LAYOUT_ATTRIBUTE_VALUE_HANDLER_FONT_URL,
+} ast_layout_attribute_value_handler_t;
+
 typedef struct ast_layout_attribute_t {
     ast_layout_attribute_type_t type;
 
@@ -137,6 +142,8 @@ typedef struct ast_layout_attribute_t {
     bool isContent;
     bool ignoreMe;         // Default false
     bool belongsToLayout;  // Default false
+
+    ast_layout_attribute_value_handler_t value_handler;
 
     void (*destroy)(void *node);
     void (*print)(void *node);

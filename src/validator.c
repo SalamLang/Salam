@@ -285,8 +285,9 @@ bool validate_value(hashmap_t *attributes, hashmap_t *new_attributes,
 
 #define ADD_LAYOUT_ATTRIBUTE_TYPE(TYPE, NAME, NAME_LOWER, ENDUSER_NAME,        \
                                   GENERATED_NAME, FILTER, ALLOWED_VALUES,      \
-                                  SUBTAGS, VALUE_HANDLER)                                     \
+                                  SUBTAGS, VALUE_HANDLER)                      \
     case TYPE: {                                                               \
+        attribute->value_handler = VALUE_HANDLER;                              \
         attribute->final_key = string_strdup(GENERATED_NAME);                  \
         const ast_layout_attribute_pair_t *values = ALLOWED_VALUES;            \
                                                                                \

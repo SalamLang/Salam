@@ -7,6 +7,7 @@ sys.path.append(str(parent_dir))
 sys.path.append(os.path.join(parent_dir, "data"))
 
 from lang import Lang
+from build import Build
 from element import Element
 
 if __name__ == "__main__":

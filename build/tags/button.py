@@ -89,9 +89,11 @@ if __name__ == "__main__":
         .set_type(Type.AnyNoEmpty) \
         .add_text(Lang.EN, "popovertargetaction") \
         .add_text(Lang.FA, "popovertargetaction") \
-        .add_reserve_value(Value().set_generate_name("hide").add_text(Lang.EN, "hide").add_text(Lang.FA, "مخفی")) \
-        .add_reserve_value(Value().set_generate_name("show").add_text(Lang.EN, "show").add_text(Lang.FA, "نمایش")) \
-        .add_reserve_value(Value().set_generate_name("toggle").add_text(Lang.EN, "toggle").add_text(Lang.FA, "متغیر بودن")) \
+        .add_reserve_values([
+            Value().set_generate_name("hide").add_text(Lang.EN, "hide").add_text(Lang.FA, "مخفی"),
+            Value().set_generate_name("show").add_text(Lang.EN, "show").add_text(Lang.FA, "نمایش"),
+            Value().set_generate_name("toggle").add_text(Lang.EN, "toggle").add_text(Lang.FA, "متغیر بودن"),
+        ) \
 
     element.add_attribute() \
         .set_generate_name("name") \
@@ -104,10 +106,11 @@ if __name__ == "__main__":
         .set_type(Type.AnyNoEmpty) \
         .add_text(Lang.EN, "type") \
         .add_text(Lang.FA, "نوع") \
-        .add_reserve_value(Value().set_generate_name("button").add_text(Lang.EN, "button").add_text(Lang.FA, "دکمه")) \
-        .add_reserve_value(Value().set_generate_name("reset").add_text(Lang.EN, "reset").add_text(Lang.FA, "ریست")) \
-        .add_reserve_value(Value().set_generate_name("submit").add_text(Lang.EN, "submit").add_text(Lang.FA, "ارسال")) \
-
+        .add_reserve_values([
+            Value().set_generate_name("button").add_text(Lang.EN, "button").add_text(Lang.FA, "دکمه"),
+            Value().set_generate_name("reset").add_text(Lang.EN, "reset").add_text(Lang.FA, "ریست"),
+            Value().set_generate_name("submit").add_text(Lang.EN, "submit").add_text(Lang.FA, "ارسال"),
+        ) \
 
     element.add_attribute() \
         .set_generate_name("value") \

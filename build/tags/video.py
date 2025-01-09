@@ -60,11 +60,11 @@ if __name__ == "__main__":
         .set_type(Type.Url) \
         .add_text(Lang.EN, "preload") \
         .add_text(Lang.FA, "پیش لود") \
-        .reserved_values(
+        .reserved_values([
             Value().set_generate_name("auto").add_text(Lang.EN, "auto").add_text(Lang.FA, "خودکار"),
             Value().set_generate_name("metadata").add_text(Lang.EN, "metadata").add_text(Lang.FA, "متادیتا"),
             Value().set_generate_name("none").add_text(Lang.EN, "none").add_text(Lang.FA, "هیچکدام"),            
-        ) \
+        ]) \
 
     element.add_attribute() \
         .set_generate_name("src") \
@@ -78,7 +78,6 @@ if __name__ == "__main__":
         .set_type(Type.Size) \
         .add_text(Lang.EN, "width") \
         .add_text(Lang.FA, "عرض") \
-
 
     element_dict = element.to_dict()
 

@@ -16,3 +16,7 @@ class Build:
         open(Path(file).stem + ".json", "w", encoding="utf-8").write(
             element_str + "\n"
         )
+
+    @classmethod
+    def idize(self, value):
+        return value.replace(" ", "_").replace("-", "_").replace("/", "_").replace(".", "_").replace("__", "_")

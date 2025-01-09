@@ -6,6 +6,7 @@ class Element:
         self.text = Text()
         self.attributes = []
         self.is_mother = False
+        self.generate_name = None
 
     def set_is_mother(self, value):
         """Set the mother status for the main element."""
@@ -23,7 +24,7 @@ class Element:
 
     def add_attribute(self):
         """Add an attribute with its own text translations."""
-        attribute = Attribute()
+        attribute = Attribute(self)
         self.attributes.append(attribute)
         return attribute
 

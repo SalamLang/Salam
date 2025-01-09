@@ -10,7 +10,8 @@ class Attribute:
     def set_generate_name(self, generate_name):
         """Set the generate name for the main element."""
         self.generate_name = generate_name
-        self.id = "AST_LAYOUT_ATTRIBUTE_TYPE_" + generate_name.upper().replace(" ", "_").replace("-", "_").replace("__", "_")
+        idtok = generate_name.upper().replace(" ", "_").replace("-", "_").replace("/", "_").replace(".", "_").replace("__", "_")
+        self.id = "AST_LAYOUT_ATTRIBUTE_TYPE_" + idtok
         return self
 
     def set_type(self, type):

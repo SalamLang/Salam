@@ -6,12 +6,12 @@ parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 sys.path.append(os.path.join(parent_dir, "data"))
 
-from build import Build
 import targets
 import methods
 import mediatypes
 from type import Type
 from lang import Lang
+from build import Build
 from value import Value
 from element import Element
 

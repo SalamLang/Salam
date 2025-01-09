@@ -2,11 +2,12 @@ from text import Text
 from type import Type
 
 class Attribute:
-    def __init__(self):
+    def __init__(self, parent_element):
         self.text = Text()
         self.type = Type.String
         self.reserved_values = []
         self.is_required = False
+        self.parent_element = parent_element.generate_name
 
     def set_generate_name(self, generate_name):
         """Set the generate name for the main element."""
@@ -48,8 +49,10 @@ class Attribute:
 
     def to_dict(self):
         """Convert the attribute to a dictionary, including all information."""
+        print(self.reserved_values)
         return {
             "id": self.id,
+            "parent_element": self.parent_element,
             "generate_name": self.generate_name,
             "type": self.type,
             "text": self.text.to_dict(),

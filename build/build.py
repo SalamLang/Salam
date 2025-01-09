@@ -4,6 +4,7 @@ from pathlib import Path
 class Build:
     @classmethod
     def to_string(self, element_dict):
+        # return json.dumps(element_dict, indent=0, ensure_ascii=False)
         return json.dumps(element_dict, indent=4, ensure_ascii=False)
 
     @classmethod

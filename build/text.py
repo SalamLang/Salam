@@ -21,5 +21,4 @@ class Text:
     def to_dict(self):
         """Convert translations to dictionary format."""
         self.validate()
-
         return self.translations

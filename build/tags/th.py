@@ -48,7 +48,7 @@ if __name__ == "__main__":
         .set_type(Type.String) \
         .add_text(Lang.EN, "scope") \
         .add_text(Lang.FA, "اسکوپ") \
-        .reserved_values([
+        .add_reserve_values([
             Value().set_generate_name("col").add_text(Lang.EN, "col").add_text(Lang.FA, "ستون"),
             Value().set_generate_name("colgroup").add_text(Lang.EN, "colgroup").add_text(Lang.FA, "گروه ستون"),
             Value().set_generate_name("row").add_text(Lang.EN, "row").add_text(Lang.FA, "ردیف"),

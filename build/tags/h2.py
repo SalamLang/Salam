@@ -16,7 +16,7 @@ if __name__ == "__main__":
     element.set_generate_name("h2")
     element.set_text(Lang.EN, "h2")
     element.set_text(Lang.FA, "هدینگ 2")
-    
+
     element_dict = element.to_dict()
 
     j = json.dumps(element_dict, indent=4, ensure_ascii=False)

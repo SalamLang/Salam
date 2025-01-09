@@ -16,7 +16,7 @@ if __name__ == "__main__":
     element.set_generate_name("header")
     element.set_text(Lang.EN, "header")
     element.set_text(Lang.FA, "هدر")
-    
+
     element_dict = element.to_dict()
 
     j = json.dumps(element_dict, indent=4, ensure_ascii=False)

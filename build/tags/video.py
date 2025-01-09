@@ -63,7 +63,7 @@ if __name__ == "__main__":
         .add_reserve_values([
             Value().set_generate_name("auto").add_text(Lang.EN, "auto").add_text(Lang.FA, "خودکار"),
             Value().set_generate_name("metadata").add_text(Lang.EN, "metadata").add_text(Lang.FA, "متادیتا"),
-            Value().set_generate_name("none").add_text(Lang.EN, "none").add_text(Lang.FA, "هیچکدام"),            
+            Value().set_generate_name("none").add_text(Lang.EN, "none").add_text(Lang.FA, "هیچکدام"),
         ]) \
 
     element.add_attribute() \

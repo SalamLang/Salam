@@ -6,6 +6,7 @@ class Attribute:
         self.text = Text()
         self.type = Type.String
         self.reserved_values = []
+        self.is_required = False
 
     def set_generate_name(self, generate_name):
         """Set the generate name for the main element."""
@@ -13,6 +14,10 @@ class Attribute:
         idtok = generate_name.upper().replace(" ", "_").replace("-", "_").replace("/", "_").replace(".", "_").replace("__", "_")
         self.id = "AST_LAYOUT_ATTRIBUTE_TYPE_" + idtok
         return self
+    
+    def set_is_required(self, value):
+        """Set the is_required value"""
+        self.is_required = value
 
     def set_type(self, type):
         """Set the type of the attribute."""
@@ -48,6 +53,7 @@ class Attribute:
             "generate_name": self.generate_name,
             "type": self.type,
             "text": self.text.to_dict(),
+            "is_required": self.is_required,
             "reserved_values": [
                 value.to_dict() for value in self.reserved_values
             ],

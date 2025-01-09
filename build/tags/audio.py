@@ -48,9 +48,11 @@ if __name__ == "__main__":
         .set_type(Type.String) \
         .add_text(Lang.EN, "preload") \
         .add_text(Lang.FA, "شکل") \
-        .add_reserve_value(Value().set_generate_name("auto").add_text(Lang.EN, "auto").add_text(Lang.FA, "خودکار")) \
-        .add_reserve_value(Value().set_generate_name("metadata").add_text(Lang.EN, "metadata").add_text(Lang.FA, "داده")) \
-        .add_reserve_value(Value().set_generate_name("none").add_text(Lang.EN, "none").add_text(Lang.FA, "پیشفرض")) \
+        .add_reserve_values([
+            Value().set_generate_name("auto").add_text(Lang.EN, "auto").add_text(Lang.FA, "خودکار"),
+            Value().set_generate_name("metadata").add_text(Lang.EN, "metadata").add_text(Lang.FA, "داده"),
+            Value().set_generate_name("none").add_text(Lang.EN, "none").add_text(Lang.FA, "پیشفرض"),
+        ]) \
 
     element.add_attribute() \
         .set_generate_name("src") \

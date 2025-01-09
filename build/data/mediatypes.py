@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 mediatypes = [
     {"name": "3gpdash-qoe-report+xml", "code": "application/3gpdash-qoe-report+xml"},
@@ -1097,4 +1098,6 @@ for mediatype in mediatypes:
     mediatype["code"] = mediatype["code"].lower().strip()
 
 if __name__ == "__main__":
-    print(json.dumps(mediatypes, indent=4, ensure_ascii=False))
+    j = json.dumps(mediatypes, indent=4, ensure_ascii=False)
+    print(j)
+    open(Path(__file__).stem + ".json", "w", encoding="utf-8").write(j)

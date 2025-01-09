@@ -92,10 +92,12 @@ if __name__ == "__main__":
         .set_type(Type.String) \
         .add_text(Lang.EN, "shape") \
         .add_text(Lang.FA, "شکل") \
-        .add_reserve_value(Value().set_generate_name("default").add_text(Lang.EN, "default").add_text(Lang.FA, "پیشفرض")) \
-        .add_reserve_value(Value().set_generate_name("rect").add_text(Lang.EN, "rect").add_text(Lang.FA, "مربع")) \
-        .add_reserve_value(Value().set_generate_name("circle").add_text(Lang.EN, "circle").add_text(Lang.FA, "دایره")) \
-        .add_reserve_value(Value().set_generate_name("poly").add_text(Lang.EN, "poly").add_text(Lang.FA, "چند گونه")) \
+        .add_reserve_values([
+            Value().set_generate_name("default").add_text(Lang.EN, "default").add_text(Lang.FA, "پیشفرض"),
+            Value().set_generate_name("rect").add_text(Lang.EN, "rect").add_text(Lang.FA, "مربع"),
+            Value().set_generate_name("circle").add_text(Lang.EN, "circle").add_text(Lang.FA, "دایره"),
+            Value().set_generate_name("poly").add_text(Lang.EN, "poly").add_text(Lang.FA, "چند گونه"),
+        ) \
 
     element.add_attribute() \
         .set_generate_name("target") \

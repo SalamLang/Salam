@@ -91,7 +91,7 @@ if __name__ == "__main__":
         .set_type(Type.String) \
         .add_text(Lang.EN, "wrap") \
         .add_text(Lang.FA, "رپ") \
-        .reserved_values([
+        .add_reserve_values([
             Value().set_generate_name("soft").add_text(Lang.EN, "soft").add_text(Lang.FA, "نرم"),
             Value().set_generate_name("hard").add_text(Lang.EN, "hard").add_text(Lang.FA, "سخت"),
         ]) \

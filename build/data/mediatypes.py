@@ -1102,4 +1102,4 @@ for mediatype in mediatypes:
 if __name__ == "__main__":
     j = json.dumps(mediatypes, indent=4, ensure_ascii=False)
     print(j)
-    open(Path(__file__).stem + ".json", "w", encoding="utf-8").write(j)
+    open(Path(__file__).stem + ".json", "w", encoding="utf-8").write(j + "\n")

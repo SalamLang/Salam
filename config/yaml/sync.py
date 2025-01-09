@@ -129,7 +129,6 @@ def prettify_layout_attribute_style_global_value(
             else:
                 result += key_repeat
             result += "(" + f"{itemid}, " + f'"{str(value)}"' + ")\n"
-
         return result
     else:
         return key_normal + "(" + f"{itemid}, " + f'"{str(values)}"' + ")\n"
@@ -377,7 +376,6 @@ def prettify_layout_attribute_style_state_type(
                 + ")\n"
             )
             index += 1
-
         return result
     else:
         return (
@@ -409,7 +407,6 @@ def prettify_layout_type_attributes_all(
 
         var_attrs = f"valid_attributes_{itemid_lower}"
         var_attrs_length = f"valid_attributes_{itemid_lower}_length"
-
         return "{" + f" {itemid}, {var_attrs}, {var_attrs_length}" + " },\n"
     else:
         return ""
@@ -435,7 +432,6 @@ def prettify_layout_type_attributes_values_extern(
 
         result = f"extern ast_layout_attribute_type_t {var_attrs}[];\n"
         result += f"extern const size_t {var_attrs_length};\n"
-
         return result
     else:
         return ""
@@ -477,7 +473,6 @@ def prettify_layout_type_attributes_values(
                 + "{ AST_LAYOUT_ATTRIBUTE_TYPE_ERROR };\n"
             )
             result += f"const size_t {var_attrs_length} = 0;\n"
-
         return result
     else:
         return ""
@@ -514,7 +509,6 @@ def prettify_layout_type_attributes(item: Dict[str, Any], group: Dict[str, Any])
             result += "    }\n"
 
         result += "}"
-
         return result
     else:
         return ""

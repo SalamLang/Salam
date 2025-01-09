@@ -1,5 +1,6 @@
 from text import Text
 from type import Type
+from build import Build
 
 class Attribute:
     def __init__(self, parent_element):
@@ -12,7 +13,7 @@ class Attribute:
     def set_generate_name(self, generate_name):
         """Set the generate name for the main element."""
         self.generate_name = generate_name
-        idtok = generate_name.upper().replace(" ", "_").replace("-", "_").replace("/", "_").replace(".", "_").replace("__", "_")
+        idtok = Build.idize(generate_name.upper())
         self.id = "AST_LAYOUT_ATTRIBUTE_TYPE_" + idtok
         return self
 

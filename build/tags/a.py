@@ -93,7 +93,7 @@ if __name__ == "__main__":
                 .set_all_text(mediatype["code"]) \
                 .set_all_text(mediatype["name"]) \
             for mediatype in mediatypes.mediatypes
-        ])
+        ]) \
 
     element_dict = element.to_dict()
 

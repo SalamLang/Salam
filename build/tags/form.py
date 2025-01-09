@@ -22,7 +22,7 @@ if __name__ == "__main__":
     element.set_generate_name("form")
     element.set_text(Lang.EN, "form")
     element.set_text(Lang.FA, "فرم")
-    
+
     element.add_attribute() \
         .set_generate_name("accept-charset") \
         .set_type(Type.Url) \

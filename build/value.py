@@ -28,7 +28,7 @@ class Value:
         else:
             raise ValueError("The text should be a string or a list of strings.")
         return self
-    
+
     def validate(self):
         """Check if all languages have a value for the text."""
         self.text.validate()

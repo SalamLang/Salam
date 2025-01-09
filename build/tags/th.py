@@ -36,7 +36,7 @@ if __name__ == "__main__":
         .set_type(Type.ID) \
         .add_text(Lang.EN, "headers") \
         .add_text(Lang.FA, "هدر") \
-        
+
     element.add_attribute() \
         .set_generate_name("rowspan") \
         .set_type(Type.PositiveInt) \

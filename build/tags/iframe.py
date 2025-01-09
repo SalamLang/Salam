@@ -66,7 +66,7 @@ if __name__ == "__main__":
         .add_text(Lang.EN, "referrerpolicy") \
         .add_text(Lang.FA, "ریفر پالیسی") \
         .add_reserve_values(referrerpolicies.referrerpolicies) \
-        
+
     element.add_attribute() \
         .set_generate_name("sandbox") \
         .set_type(Type.AnyNoEmpty) \

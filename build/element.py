@@ -42,4 +42,3 @@ class Element:
                 attr.to_dict() for attr in self.attributes
             ],
         }
-

@@ -13,9 +13,9 @@ from element import Element
 if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
-    element.set_generate_name("div")
-    element.set_text(Lang.EN, "div")
-    element.set_text(Lang.FA, "باکس")
+    element.set_generate_name("dt")
+    element.set_text(Lang.EN, "dt")
+    element.set_text(Lang.FA, "دی تی")
 
     element_dict = element.to_dict()
 

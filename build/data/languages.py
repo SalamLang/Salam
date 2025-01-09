@@ -205,7 +205,6 @@ languages = [
 
 for language in languages:
     language["name"] = language["name"].lower().strip()
-
     language["code"] = language["code"].lower().strip()
 
 if __name__ == "__main__":

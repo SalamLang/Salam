@@ -30,14 +30,14 @@ if __name__ == "__main__":
         .set_type(Type.Number) \
         .add_text(Lang.EN, "cols") \
         .add_text(Lang.FA, "کول") \
-    
+
     # TODO
     element.add_attribute() \
         .set_generate_name("dirname") \
         .set_type(Type.AnyNoEmpty) \
         .add_text(Lang.EN, "dirname") \
         .add_text(Lang.FA, "نام جهت") \
-        
+
     element.add_attribute() \
         .set_generate_name("disabled") \
         .set_type(Type.Boolean) \

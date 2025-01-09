@@ -74,14 +74,14 @@ if __name__ == "__main__":
         .add_text(Lang.EN, "rel") \
         .add_text(Lang.FA, "رابطه") \
         .add_reserve_values(rels.rels) \
-    
+
     element.add_attribute() \
         .set_generate_name("target") \
         .set_type(Type.String) \
         .add_text(Lang.EN, "target") \
         .add_text(Lang.FA, "هدف") \
         .add_reserve_values(targets.targets) \
-    
+
     element.add_attribute() \
         .set_generate_name("type") \
         .set_type(Type.String) \

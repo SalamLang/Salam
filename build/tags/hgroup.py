@@ -16,7 +16,7 @@ if __name__ == "__main__":
     element.set_generate_name("hgroup")
     element.set_text(Lang.EN, "hgroup")
     element.set_text(Lang.FA, "هدر گروه")
-    
+
     element_dict = element.to_dict()
 
     j = json.dumps(element_dict, indent=4, ensure_ascii=False)

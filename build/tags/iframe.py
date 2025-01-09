@@ -52,14 +52,13 @@ if __name__ == "__main__":
         .add_reserve_values([
             Value().set_generate_name("eager").add_text(Lang.EN, "eager").add_text(Lang.FA, "مشتاق"),
             Value().set_generate_name("lazy").add_text(Lang.EN, "lazy").add_text(Lang.FA, "لیزی"),
-        ])
+        ]) \
 
     element.add_attribute() \
         .set_generate_name("name") \
         .set_type(Type.AnyNoEmpty) \
         .add_text(Lang.EN, "name") \
         .add_text(Lang.FA, "نام") \
-
 
     element.add_attribute() \
         .set_generate_name("referrerpolicy") \

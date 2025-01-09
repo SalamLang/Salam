@@ -28,14 +28,14 @@ if __name__ == "__main__":
         .set_type(Type.Url) \
         .add_text(Lang.EN, "accept charset") \
         .add_text(Lang.FA, "چارست") \
-        .add_reserve_value(
+        .add_reserve_values([
             Value().set_generate_name("UTF-8").set_all_text("utf-8").set_all_text("utf 8").set_all_text("utf"),
             Value().set_generate_name("8859-1").set_all_text("8859-1").set_all_text("8859").set_all_text("ISO-8859-1"),
             Value().set_generate_name("ANSI").set_all_text("ansi").set_all_text("utf"),
             Value().set_generate_name("ASCII").set_all_text("ascii"),
             Value().set_generate_name("Number").set_all_text("number"),
             Value().set_generate_name("Windows-1252").set_all_text("windows-1252").set_all_text("windows 1252").set_all_text("windows"),
-        )
+        ]) \
 
     element.add_attribute() \
         .set_generate_name("action") \
@@ -62,9 +62,9 @@ if __name__ == "__main__":
         .add_text(Lang.EN, "method") \
         .add_text(Lang.FA, "متد") \
         .add_reserve_values(methods.methods) \
-        .add_reserve_value(
+        .add_reserve_values([
             Value().set_generate_name("dialog").add_text(Lang.EN, "dialog").add_text(Lang.FA, "دیالوگ"),
-        ) \
+        ]) \
 
     element.add_attribute() \
         .set_generate_name("name") \

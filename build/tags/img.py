@@ -55,7 +55,7 @@ if __name__ == "__main__":
             Value().set_generate_name("eager").add_text(Lang.EN, "eager").add_text(Lang.FA, "مشتاق"),
             Value().set_generate_name("lazy").add_text(Lang.EN, "lazy").add_text(Lang.FA, "لیزی"),
         ]) \
-    
+
     element.add_attribute() \
         .set_generate_name("longdesc") \
         .set_type(Type.Url) \
@@ -68,7 +68,7 @@ if __name__ == "__main__":
         .add_text(Lang.EN, "referrerpolicy") \
         .add_text(Lang.FA, "ریفر پالیسی") \
         .add_reserve_values(referrerpolicies.referrerpolicies) \
-        
+
     element.add_attribute() \
         .set_generate_name("sizes") \
         .set_type(Type.Sizes) \

@@ -6,6 +6,7 @@ class Type:
     String = "AST_TYPE_STRING"
     Url = "AST_TYPE_URL"
 
+    ID = "AST_TYPE_ANY"
     CSSMedia = "AST_TYPE_ANY"
     Coords = "AST_TYPE_STRING"
     Urls = "AST_TYPE_URLS"

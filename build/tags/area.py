@@ -9,20 +9,38 @@ sys.path.append(os.path.join(parent_dir, "data"))
 
 import rels
 import targets
-import languages
 import mediatypes
 import referrerpolicies
-
 from lang import Lang
 from type import Type
 from value import Value
 from element import Element
+
 if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
-    element.set_generate_name("a")
-    element.set_text(Lang.EN, "link")
-    element.set_text(Lang.FA, "لینک")
+    element.set_generate_name("area")
+    element.set_text(Lang.EN, "area")
+    element.set_text(Lang.FA, "منطقه")
+
+    element.add_attribute() \
+        .set_generate_name("alt") \
+        .set_type(Type.AnyNoEmpty) \
+        .add_text(Lang.EN, "title") \
+        .add_text(Lang.FA, "عنوان") \
+
+    element.add_attribute() \
+        .set_generate_name("coords") \
+        .set_type(Type.Url) \
+        .add_text(Lang.EN, "coords") \
+        .add_text(Lang.FA, "موقعیت") \
+
+    element.add_attribute() \
+        .set_generate_name("download") \
+        .set_type(Type.AnyNoEmpty) \
+        .add_text(Lang.EN, "download") \
+        .add_text(Lang.FA, "دانلود") \
+
 
     element.add_attribute() \
         .set_generate_name("download") \
@@ -33,21 +51,8 @@ if __name__ == "__main__":
     element.add_attribute() \
         .set_generate_name("href") \
         .set_type(Type.Url) \
-        .add_text(Lang.EN, "source") \
-        .add_text(Lang.FA, "منبع")
-
-    element.add_attribute() \
-        .set_generate_name("hreflang") \
-        .set_type(Type.String) \
-        .add_text(Lang.EN, "language") \
-        .add_text(Lang.FA, "زبان") \
-        .add_reserve_values([
-            Value()
-            .set_generate_name(language["code"].upper()) \
-                .set_all_text(language["name"]) \
-                .set_all_text(language["code"]) \
-            for language in languages.languages
-        ]) \
+        .add_text(Lang.EN, "href") \
+        .add_text(Lang.FA, "منبع") \
 
     element.add_attribute() \
         .set_generate_name("media") \
@@ -80,7 +85,7 @@ if __name__ == "__main__":
         .set_type(Type.String) \
         .add_text(Lang.EN, "target") \
         .add_text(Lang.FA, "هدف") \
-        .add_reserve_values(targets.targets) \
+        .add_reserve_values(targets.targets)
     
     element.add_attribute() \
         .set_generate_name("type") \

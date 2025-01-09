@@ -9,6 +9,7 @@ sys.path.append(os.path.join(parent_dir, "data"))
 
 import rels
 import targets
+import languages
 import mediatypes
 import referrerpolicies
 from lang import Lang
@@ -31,7 +32,7 @@ if __name__ == "__main__":
 
     element.add_attribute() \
         .set_generate_name("coords") \
-        .set_type(Type.Url) \
+        .set_type(Type.Coords) \
         .add_text(Lang.EN, "coords") \
         .add_text(Lang.FA, "موقعیت") \
 
@@ -50,7 +51,7 @@ if __name__ == "__main__":
     element.add_attribute() \
         .set_generate_name("href") \
         .set_type(Type.Url) \
-        .add_text(Lang.EN, "href") \
+        .add_text(Lang.EN, "source") \
         .add_text(Lang.FA, "منبع") \
 
     element.add_attribute() \

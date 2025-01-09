@@ -14,7 +14,7 @@ class Attribute:
         idtok = generate_name.upper().replace(" ", "_").replace("-", "_").replace("/", "_").replace(".", "_").replace("__", "_")
         self.id = "AST_LAYOUT_ATTRIBUTE_TYPE_" + idtok
         return self
-    
+
     def set_is_required(self, value):
         """Set the is_required value"""
         self.is_required = value
@@ -28,7 +28,7 @@ class Attribute:
         """Set text for the main element."""
         self.text.add_translation(language_code, text)
         return self
-    
+
     def add_reserve_value(self, value):
         """Add a reserved value for the attribute."""
         self.reserved_values.append(value)

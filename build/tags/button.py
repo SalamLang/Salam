@@ -93,7 +93,7 @@ if __name__ == "__main__":
             Value().set_generate_name("hide").add_text(Lang.EN, "hide").add_text(Lang.FA, "مخفی"),
             Value().set_generate_name("show").add_text(Lang.EN, "show").add_text(Lang.FA, "نمایش"),
             Value().set_generate_name("toggle").add_text(Lang.EN, "toggle").add_text(Lang.FA, "متغیر بودن"),
-        ) \
+        ]) \
 
     element.add_attribute() \
         .set_generate_name("name") \
@@ -110,7 +110,7 @@ if __name__ == "__main__":
             Value().set_generate_name("button").add_text(Lang.EN, "button").add_text(Lang.FA, "دکمه"),
             Value().set_generate_name("reset").add_text(Lang.EN, "reset").add_text(Lang.FA, "ریست"),
             Value().set_generate_name("submit").add_text(Lang.EN, "submit").add_text(Lang.FA, "ارسال"),
-        ) \
+        ]) \
 
     element.add_attribute() \
         .set_generate_name("value") \

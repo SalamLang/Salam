@@ -42,7 +42,7 @@ if __name__ == "__main__":
             Value().set_generate_name("a").set_all_text("a"),
             Value().set_generate_name("A").set_all_text("A"),
             Value().set_generate_name("1").set_all_text("1"),
-        ])
+        ]) \
 
     element_dict = element.to_dict()
 

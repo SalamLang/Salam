@@ -97,7 +97,7 @@ if __name__ == "__main__":
             Value().set_generate_name("rect").add_text(Lang.EN, "rect").add_text(Lang.FA, "مربع"),
             Value().set_generate_name("circle").add_text(Lang.EN, "circle").add_text(Lang.FA, "دایره"),
             Value().set_generate_name("poly").add_text(Lang.EN, "poly").add_text(Lang.FA, "چند گونه"),
-        ) \
+        ]) \
 
     element.add_attribute() \
         .set_generate_name("target") \
@@ -117,7 +117,7 @@ if __name__ == "__main__":
                 .set_all_text(mediatype["code"]) \
                 .set_all_text(mediatype["name"]) \
             for mediatype in mediatypes.mediatypes
-        ])
+        ]) \
 
     element_dict = element.to_dict()
 

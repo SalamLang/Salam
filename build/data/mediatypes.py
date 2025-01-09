@@ -1,6 +1,6 @@
 import json
 
-types = [
+mediatypes = [
     {"name": "3gpdash-qoe-report+xml", "code": "application/3gpdash-qoe-report+xml"},
     {"name": "3gppHalForms+json", "code": "application/3gppHalForms+json"},
     {"name": "A2L", "code": "application/A2L"},
@@ -1092,9 +1092,9 @@ types = [
     {"name": "VP8", "code": "video/VP8"}
 ]
 
-for type in types:
-    type["name"] = type["name"].lower()
-    type["code"] = type["code"].lower()
+for mediatype in mediatypes:
+    mediatype["name"] = mediatype["name"].lower().strip()
+    mediatype["code"] = mediatype["code"].lower().strip()
 
 if __name__ == "__main__":
-    print(json.dumps(types, indent=4, ensure_ascii=False))
+    print(json.dumps(mediatypes, indent=4, ensure_ascii=False))

@@ -7,6 +7,7 @@ parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 sys.path.append(os.path.join(parent_dir, "data"))
 
+import base
 from type import Type
 from lang import Lang
 from element import Element

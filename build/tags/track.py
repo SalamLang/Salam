@@ -6,7 +6,7 @@ parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 sys.path.append(os.path.join(parent_dir, "data"))
 
-import base
+import build
 import languages
 from type import Type
 from lang import Lang
@@ -53,5 +53,5 @@ if __name__ == "__main__":
 
     element_dict = element.to_dict()
 
-    base.print(element_dict)
+    build.print(element_dict)
     base.save(element_dict)

@@ -13,10 +13,10 @@ from element import Element
 if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
-    element.set_generate_name("div")
-    element.set_text(Lang.EN, "div")
-    element.set_text(Lang.FA, "باکس")
-
+    element.set_generate_name("i")
+    element.set_text(Lang.EN, "i")
+    element.set_text(Lang.FA, "ایتالیک")
+    
     element_dict = element.to_dict()
 
     j = json.dumps(element_dict, indent=4, ensure_ascii=False)

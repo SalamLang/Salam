@@ -52,7 +52,7 @@ if __name__ == "__main__":
             Value().set_generate_name("auto").add_text(Lang.EN, "auto").add_text(Lang.FA, "خودکار"),
             Value().set_generate_name("metadata").add_text(Lang.EN, "metadata").add_text(Lang.FA, "داده"),
             Value().set_generate_name("none").add_text(Lang.EN, "none").add_text(Lang.FA, "پیشفرض"),
-        ) \
+        ]) \
 
     element.add_attribute() \
         .set_generate_name("src") \

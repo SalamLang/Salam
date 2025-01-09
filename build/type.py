@@ -15,3 +15,8 @@ class Type:
     Urls = "AST_TYPE_URLS"
     Number = "AST_TYPE_NUMBER"
     Boolean = "AST_TYPE_BOOLEAN"
+
+    # YYYY-MM-DDThh:mm:ssTZD	
+    Date = "AST_TYPE_DATE"
+    Time = "AST_TYPE_TIME"
+    DateTime = "AST_TYPE_DATETIME"

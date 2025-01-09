@@ -181,7 +181,11 @@ if __name__ == "__main__":
         .add_text(Lang.EN, "type") \
         .add_text(Lang.FA, "نوع") \
         .add_reserve_values([
-            Value().set_generate_name(mediatype["code"]).set_all_text(mediatype["code"]).set_all_text(mediatype["name"]) for mediatype in mediatypes.mediatypes
+            Value() \
+                .set_generate_name(mediatype["code"]) \
+                .set_all_text(mediatype["code"]) \
+                .set_all_text(mediatype["name"]) \
+            for mediatype in mediatypes.mediatypes
         ])
 
     element_dict = element.to_dict()

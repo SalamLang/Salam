@@ -9,7 +9,8 @@ class Value:
     def set_generate_name(self, generate_name):
         """Set the generate name for the attribute value"""
         self.generate_name = generate_name
-        self.id = "AST_LAYOUT_ATTRIBUTE_VALUE_TYPE_" + generate_name.upper().replace(" ", "_").replace("-", "_").replace("__", "_")
+        idtok = generate_name.upper().replace(" ", "_").replace("-", "_").replace("/", "_").replace(".", "_").replace("__", "_")
+        self.id = "AST_LAYOUT_ATTRIBUTE_VALUE_TYPE_" + idtok
         return self
 
     def add_text(self, language_code, text):

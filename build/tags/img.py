@@ -7,6 +7,7 @@ parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 sys.path.append(os.path.join(parent_dir, "data"))
 
+import crossorigins
 import referrerpolicies
 from lang import Lang
 from type import Type
@@ -31,10 +32,7 @@ if __name__ == "__main__":
         .set_type(Type.Boolean) \
         .add_text(Lang.EN, "crossorigin") \
         .add_text(Lang.FA, "کراس اوریجن") \
-        .add_reserve_values([
-            Value().set_generate_name("anonymous").add_text(Lang.EN, "anonymous").add_text(Lang.FA, "ناشناس"),
-            Value().set_generate_name("use-credentials").add_text(Lang.EN, "use credentials").add_text(Lang.FA, "یوز کرید"),
-        ])
+        .add_reserve_values(crossorigins.crossorigins) \
 
     element.add_attribute() \
         .set_generate_name("height") \

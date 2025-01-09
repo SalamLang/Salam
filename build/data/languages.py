@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 languages = [
     {"name": "Abkhazian", "code": "ab"},
@@ -208,4 +209,6 @@ for language in languages:
     language["code"] = language["code"].lower().strip()
 
 if __name__ == "__main__":
-    print(json.dumps(languages, indent=4, ensure_ascii=False))
+    j = json.dumps(languages, indent=4, ensure_ascii=False)
+    print(j)
+    open(Path(__file__).stem + ".json", "w", encoding="utf-8").write(j)

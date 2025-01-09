@@ -25,14 +25,12 @@ class Element:
         """Add an attribute with its own text translations."""
         attribute = Attribute()
         self.attributes.append(attribute)
-
         return attribute
 
     def to_dict(self):
         """Convert the element to a dictionary, including all attributes."""
         for attr in self.attributes:
             attr.validate()
-
         return {
             "id": self.id,
             "is_mother": self.is_mother,

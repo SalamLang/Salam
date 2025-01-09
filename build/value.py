@@ -1,4 +1,5 @@
 from text import Text
+from lang import Lang
 
 class Value:
     def __init__(self):
@@ -9,12 +10,22 @@ class Value:
         """Set the generate name for the attribute value"""
         self.generate_name = generate_name
         self.id = "AST_LAYOUT_ATTRIBUTE_VALUE_TYPE_" + generate_name.upper().replace(" ", "_").replace("-", "_").replace("__", "_")
-
         return self
 
     def add_text(self, language_code, text):
         """Set text for the main element."""
         self.text.add_translation(language_code, text)
+        return self
+
+    def set_all_text(self, text):
+        """Set text for all languages."""
+        if isinstance(text, list):
+            for lang in text:
+                self.set_all_text(lang)
+        elif isinstance(text, str):
+            list(map(lambda lang: self.add_text(lang, text), Lang.get_languages().keys()))
+        else:
+            raise ValueError("The text should be a string or a list of strings.")
         return self
     
     def validate(self):

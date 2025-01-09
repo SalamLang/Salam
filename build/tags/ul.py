@@ -18,7 +18,6 @@ if __name__ == "__main__":
     element.set_text(Lang.FA, "لیست")
 
     element_dict = element.to_dict()
-
-    j = json.dumps(element_dict, indent=4, ensure_ascii=False)
-    print(j)
-    open(Path(__file__).stem + ".json", "w", encoding="utf-8").write(j + "\n")
+    
+    base.print(element_dict)
+    base.save(element_dict)

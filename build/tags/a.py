@@ -7,12 +7,12 @@ parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 sys.path.append(os.path.join(parent_dir, "data"))
 
-from element import Element
+import languages
+import mediatypes
 from lang import Lang
 from type import Type
 from value import Value
-import languages
-import mediatypes
+from element import Element
 
 if __name__ == "__main__":
     element = Element()
@@ -23,19 +23,15 @@ if __name__ == "__main__":
 
     element.add_attribute() \
         .set_generate_name("download") \
-        .set_type(Type.String) \
+        .set_type(Type.AnyNoEmpty) \
         .add_text(Lang.EN, "download") \
         .add_text(Lang.FA, "دانلود") \
-        .add_reserve_value(Value().set_generate_name("file") \
-                               .add_text(Lang.EN, "file") \
-                               .add_text(Lang.FA, "فایل")
-        ) \
 
     element.add_attribute() \
         .set_generate_name("href") \
         .set_type(Type.Url) \
-        .add_text(Lang.EN, "href") \
-        .add_text(Lang.FA, "لینک")
+        .add_text(Lang.EN, "source") \
+        .add_text(Lang.FA, "منبع")
 
     element.add_attribute() \
         .set_generate_name("hreflang") \

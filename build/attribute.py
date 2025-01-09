@@ -28,6 +28,11 @@ class Attribute:
         self.reserved_values.append(value)
         return self
 
+    def add_reserve_values(self, values):
+        """Add some reserved values for the attribute."""
+        self.reserved_values.extend(values)
+        return self
+
     def validate(self):
         """Check if all languages have a value for the text."""
         self.text.validate()

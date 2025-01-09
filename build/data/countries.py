@@ -99,6 +99,7 @@ countries = [
     {"name": "ICELAND", "code": "IS"},
     {"name": "INDIA", "code": "IN"},
     {"name": "INDONESIA", "code": "ID"},
+    {"name": "IRAN", "code": "IR"},
     {"name": "IRAN, ISLAMIC REPUBLIC OF", "code": "IR"},
     {"name": "IRAQ", "code": "IQ"},
     {"name": "IRELAND", "code": "IE"},

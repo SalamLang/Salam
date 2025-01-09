@@ -2,18 +2,19 @@ class Lang:
     languages = {}
 
     @classmethod
-    def add_lang(cls, name, full_name, international_name):
+    def add_lang(self, name, full_name, international_name):
         """Add a new language to the list of supported languages."""
-        cls.languages[name] = {
+        self.languages[name] = {
+            "code": name,
             "full_name": full_name,
             "international_name": international_name,
         }
-        setattr(cls, name, name)
+        setattr(self, name, name)
 
     @classmethod
-    def get_languages(cls):
+    def get_languages(self):
         """Get the list of supported languages."""
-        return cls.languages
+        return self.languages
 
     def __getattr__(self, name):
         """Get the object for a specific language."""

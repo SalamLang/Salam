@@ -81,5 +81,6 @@ if __name__ == "__main__":
 
     element_dict = element.to_dict()
 
-    build.print(element_dict)
-    build.save(element_dict)
+    element_str = build.string(element_dict)
+    build.print(element_str)
+    build.save(element_str)

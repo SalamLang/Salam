@@ -58,30 +58,30 @@ if __name__ == "__main__":
         .set_type(Type.Boolean) \
         .add_text(Lang.EN, "method") \
         .add_text(Lang.FA, "شیوه") \
-        .add_reserve_values(methods.methods)
+        .add_reserve_values(methods.methods) \
 
     # TODO
     element.add_attribute() \
         .set_generate_name("formnovalidate") \
         .set_type(Type.Boolean) \
         .add_text(Lang.EN, "formnovalidate") \
-        .add_text(Lang.FA, "formnovalidate") \
-        .add_reserve_values(targets.targets)
+        .add_text(Lang.FA, "بدون اعتبارسنجی فرم") \
+        .add_reserve_values(targets.targets) \
 
     # TODO
     element.add_attribute() \
         .set_generate_name("formtarget") \
         .set_type(Type.String) \
         .add_text(Lang.EN, "formtarget") \
-        .add_text(Lang.FA, "formtarget") \
-        .add_reserve_values(targets.targets)
+        .add_text(Lang.FA, "فرم هدف") \
+        .add_reserve_values(targets.targets) \
 
     # TODO
     element.add_attribute() \
         .set_generate_name("popovertarget") \
         .set_type(Type.ID) \
         .add_text(Lang.EN, "popovertarget") \
-        .add_text(Lang.FA, "popovertarget") \
+        .add_text(Lang.FA, "پاپ روی هدف") \
 
     # TODO
     element.add_attribute() \

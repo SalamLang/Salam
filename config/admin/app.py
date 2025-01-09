@@ -151,7 +151,6 @@ def edit_file_action(filepath: str) -> ResponseType:
     if not os.path.exists(file_path) or not os.path.isfile(file_path):
         session["message"] = "File does not exist."
         session["message_type"] = "error"
-
         return redirect(url_for("edit_file", filepath=filepath))
 
     data = request.get_json()
@@ -159,7 +158,6 @@ def edit_file_action(filepath: str) -> ResponseType:
     if not data or len(data) == 0 or "items" not in data:
         session["message"] = "The 'items' field does not exist."
         session["message_type"] = "error"
-
         return redirect(url_for("edit_file", filepath=filepath))
 
     try:
@@ -224,7 +222,6 @@ def add_file_action() -> ResponseType:
     if not new_file:
         session["message"] = "Filename is required."
         session["message_type"] = "error"
-
         return redirect(url_for("index"))
 
     new_file = new_file.strip()
@@ -232,7 +229,6 @@ def add_file_action() -> ResponseType:
     if new_file == "":
         session["message"] = "Filename is required."
         session["message_type"] = "error"
-
         return redirect(url_for("index"))
 
     new_file = new_file.lstrip("/")
@@ -245,13 +241,11 @@ def add_file_action() -> ResponseType:
     if path.startswith(YAML_DIR + ".."):
         session["message"] = "Invalid filename or directory traversal attempt."
         session["message_type"] = "error"
-
         return redirect(url_for("index"))
 
     if os.path.exists(path):
         session["message"] = "File already exists."
         session["message_type"] = "error"
-
         return redirect(url_for("index"))
 
     try:
@@ -259,12 +253,10 @@ def add_file_action() -> ResponseType:
 
         session["message"] = "File created."
         session["message_type"] = "ok"
-
         return redirect(url_for("index"))
     except Exception as e:
         session["message"] = f"Failed to create file: {e}"
         session["message_type"] = "error"
-
         return redirect(url_for("index"))
 
 

@@ -1,13 +1,12 @@
 import os
 import sys
-import json
 from pathlib import Path
 
 parent_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(parent_dir))
 sys.path.append(os.path.join(parent_dir, "data"))
 
-import languages
+import base
 from type import Type
 from lang import Lang
 from value import Value

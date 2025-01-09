@@ -189,4 +189,4 @@ We welcome contributions from the community!
 Together, let’s make coding accessible to all.
 For inquiries or feedback, visit: [salamlang.ir](https://salamlang.ir)
 
-© 2024 Salam Language Team
+© 2024-2025 Salam Language Team

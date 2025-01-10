@@ -22,8 +22,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("colgroup")
-    element.set_text(Lang.EN, "colgroup")
-    element.set_text(Lang.FA, "کول گروه")
+    element.add_text(Lang.EN, "colgroup")
+    element.add_text(Lang.FA, "کول گروه")
 
     element.add_attribute() \
         .set_generate_name("span") \

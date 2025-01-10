@@ -16,8 +16,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(False)
     element.set_generate_name("param")
-    element.set_text(Lang.EN, "param")
-    element.set_text(Lang.FA, "پارامتر شی")
+    element.add_text(Lang.EN, "param")
+    element.add_text(Lang.FA, "پارامتر شی")
 
     element.add_attribute() \
         .set_generate_name("name") \

@@ -16,8 +16,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("svg")
-    element.set_text(Lang.EN, "svg")
-    element.set_text(Lang.FA, "اس وی جی")
+    element.add_text(Lang.EN, "svg")
+    element.add_text(Lang.FA, "اس وی جی")
 
     element.add_attribute() \
         .set_generate_name("width") \

@@ -16,8 +16,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("dfn")
-    element.set_text(Lang.EN, "dfn")
-    element.set_text(Lang.FA, "دی اف ان")
+    element.add_text(Lang.EN, "dfn")
+    element.add_text(Lang.FA, "دی اف ان")
 
     element.add_attribute() \
         .set_generate_name("title") \

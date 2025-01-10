@@ -17,8 +17,8 @@ from property import Property
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("animation-play-state")
-    property.set_text(Lang.EN, "animation-play-state")
-    property.set_text(Lang.FA, "وضعیت پخش انیمیشن")
+    property.add_text(Lang.EN, "animation-play-state")
+    property.add_text(Lang.FA, "وضعیت پخش انیمیشن")
     property.set_type(Type.Strings)
     property.add_reserve_values(single_animation_play_states.single_animation_play_states)
 

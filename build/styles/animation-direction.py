@@ -17,8 +17,8 @@ from property import Property
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("animation-direction")
-    property.set_text(Lang.EN, "animation-direction")
-    property.set_text(Lang.FA, "جهت انیمیشن")
+    property.add_text(Lang.EN, "animation-direction")
+    property.add_text(Lang.FA, "جهت انیمیشن")
     property.set_type(Type.Strings)
     property.set_values(single_animation_directions.single_animation_directions)
 

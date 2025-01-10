@@ -20,8 +20,8 @@ from property import Property
 if __name__ == "__main__":
     property = Property()
     property.set_generate_name("align-self")
-    property.set_text(Lang.EN, "align-self")
-    property.set_text(Lang.FA, "تراز خود")
+    property.add_text(Lang.EN, "align-self")
+    property.add_text(Lang.FA, "تراز خود")
     property.set_type(Type.String)
     property.add_reserve_values([
         Value().set_generate_name("auto").add_text(Lang.EN, "auto").add_text(Lang.FA, "اتوماتیک"),

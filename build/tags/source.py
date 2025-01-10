@@ -18,8 +18,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("source")
-    element.set_text(Lang.EN, "audio source")
-    element.set_text(Lang.FA, "سورس صدا")
+    element.add_text(Lang.EN, "audio source")
+    element.add_text(Lang.FA, "سورس صدا")
 
     element.add_attribute() \
         .set_generate_name("media") \

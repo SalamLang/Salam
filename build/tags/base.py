@@ -17,8 +17,8 @@ if __name__ == "__main__":
     element = Element()
     element.set_is_mother(True)
     element.set_generate_name("base")
-    element.set_text(Lang.EN, "base")
-    element.set_text(Lang.FA, "پایه")
+    element.add_text(Lang.EN, "base")
+    element.add_text(Lang.FA, "پایه")
 
     element.add_attribute() \
         .set_generate_name("href") \
